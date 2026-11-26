@@ -229,6 +229,23 @@ after them. No callback moved, so none is changed.
    residual of 0.018. In another drawn case a root at 2.6105 came back as 2.6065 (other roots 0.04 to 0.3 away). Not an enclosure claim (the
    solver claims none), but callers (conic intersection, `geom_utility`) take the roots as
    exact; whether they polish them with Newton is for the curve layer's move to check.
+   Pin call sites, read-only at the pin:
+   - `solve_quartic`: one production caller, `curve/conic.rs:645`
+     (`Conic::intersect_implicit_conic`, tolerance `EFF_ZERO`). **No refinement:** the roots
+     are only filtered (an ellipse keeps |s| <= 1 + `EFF_ZERO` with its side shift; a
+     hyperbola clamps and keeps roots inside its natural interval). Its caller
+     `intersect_conic` (`conic.rs:702-708`) inverts each point onto the other conic and
+     **drops** it when the distance exceeds `distance_tol`: a residual check that discards,
+     never polishes. `intersect_conic` has one production caller,
+     `intersect/adv_surface_intersector.rs:1734` (`EFF_ZERO_SQRT * 100`). Tests:
+     `conic.rs:984`, `:987`. So a clustered case like the one above loses intersection
+     points (dropped by the distance check) or keeps them up to `distance_tol` off.
+   - `solve_cubic`: no production caller outside `polynomial.rs` (internal calls at
+     `:201`, `:221`, `:233`, the quartic's resolvent and its fallbacks).
+   - For comparison, `solve_quadratic` callers: `nurbs/b_spline_curve/p1.rs:134`,
+     `curve/conic.rs:71`, `curve/ellipse/p1.rs:134`, `geom/geom_utility/p1.rs:120`,
+     `blend/identify_fillet.rs:54`, `surface/surface/p2.rs:269` (not examined for
+     refinement; the quadratic has no clustered-root defect found).
 3. The libm dependence of section 3.
 
 ## 10. Test counts and timings (server2, final)
@@ -250,3 +267,50 @@ and `GnAreaCells` move with `blend`/`nurbs`, which need the curve and surface ty
 `scx-algo` before `nurbs`: the two local solvers (callback errors), Krawczyk, `hash_table`
 (`&Kernel` to `&Tolerances`). `tree`, `grid`, `solution_array` and `global_solver` need curve
 caches, surfaces and objects, so they wait for those layers or are split there.
+
+## 12. The local solvers' errors (decided by the owner, 2026-11-26)
+
+Built as proposed in section 5 (decision row in `docs/04-decisions.md` section 3).
+`scx_algo::error`:
+
+- `EvalError` (trait on the evaluator's error): `ends_solve` (pin: `Unported`, `Cancelled`,
+  `OutOfFuel`; used where the 1d first evaluation stops and in the nd `eval_outcome`),
+  `passes_through` (those and `PreparationRequired`; the pin's `eval_failed` /
+  `SolidError::geom_call`), `never_ignored` (those, `FaceTrimsUnavailable` and an
+  uncertified blend; the pin's `ignored`), and `defect(operation, why)` so the default
+  `evaluate` / `set_intervals` bodies return what the pin's do.
+- The bad Jacobian is **not** an evaluator class: the pin reads it from
+  `Matrix::solve_linear_system`'s status (`is_bad_jacobian`, `local_solve_nd.rs:60-100`,
+  applied at `:514`), which here is a layer-0 `NumError::Failed`. An evaluator that fails
+  with an `SM_ERR` error is an ordinary failed evaluation in both.
+- `SolveError<E>`: `InvalidInput` and `Failed { SolveFailure }` (the solver's own),
+  `Num(NumError)`, `CallFailed { operation, cause: E }` (pin `Failed` with
+  `GeomFailure::CallFailed { class: cause.kind() }` caused by the cause), `Eval(E)` (the
+  evaluator's error unchanged). Display texts are the pin's.
+- Names: the glossary (`docs/08-glossary.md`) has no solver entries, and its "cause" (a
+  refusal cause) and "bound" (a certified number) mean something else, so the names follow
+  the pin: evaluator, evaluation, termination reason, bracket, call failed. The field
+  `cause` of `CallFailed` is the pin's `source` of a call failure, not a refusal cause.
+- `NotCertified` (an uncertified blend) cannot be built outside the pin crate
+  (`SolidError::blend` is `pub(crate)`), so the difftest drives the other classes; its
+  `never_ignored` row is checked by reading `ignored` (`error.rs`), not by a run.
+
+### Evaluator state (pin, all 27 production impls; 19 more are in test modules)
+
+Every evaluator holding a kernel holds `&Kernel` (shared). Whether evaluation writes the
+kernel's `caches` through interior mutability was not checked.
+
+| state kept between calls | evaluators (pin file:line) |
+|---|---|
+| none (could be `&self`) | `FindStepOff` topology/edgeuse/p1.rs:1616; `FindCurveDistanceExtrema` curve/curve_cache.rs:1620; `CurvePropertyEfo` curve/curve/p4.rs:1389; `CpDistAtEnfo` p4.rs:2226; `FindSilSingEfo` intersect/surface_silhouette.rs:1192; `FindSingularParamWithGivenTangentDir` surface/surface/p1.rs:4449; `FindPsNormalEnfo` surface/surface/p3.rs:2064; `PolyValue` surface/step_window.rs:1264; `FindPvIntersect` surface/volume/p1.rs:1635; `CsNormalizeEnfo`, `SspIntersectEnfo`, `SsiNormalizeEnfo`, `SsNormalizeEnfo` surface/surface/p4.rs:292, 438, 583, 725; `CcTangentIntEnfo` curve/curve/p3.rs:253 |
+| last foot point / last evaluation, read as the next seed or the answer | `ClippedRadiusFn` blend/fillet_solver/p3.rs:822 (`uv`, `other_uv`, `guess_t`, last f, f', found); `SssIntersectEnfo` surface/surface/p3.rs:2181 (last 3 surface points and tangents, read as the solution) |
+| a plane refit to the last solution | `SphereSolveFn` fillet_solver/p3.rs:840; `SphereEval` fillet_solver/p2.rs:287; `SphereEquations` fillet_standard_solver/p2.rs:1354; `GuessSphereEnfo` fillet_standard_solver/p2.rs:1069 |
+| counters, sticky flags, last residual | `FindPcExtremaEfo` curve/curve/p3.rs:1040 (scale chosen on the first call); `FindCcNormalEnfo` p3.rs:238 (`count`, `step_back`); `CsIntersectEnfo` surface/surface/p4.rs:168 (`count`, `do_minimize`, `last_sum`); `SssIntersectEnfo` (`count`) |
+| `solution_size` / `scaled_zero`, and the intervals from `set_intervals` | `CcIntersectEnfo` curve/curve/p3.rs:202; `BestLineFitEnfo` p3.rs:1259 |
+| a cache written through `&mut` to outside data | the 7 fillet ones (`ClippedRadiusFn`, the sphere four, `RailUvEval` p2.rs:295, `RailRailEval` p2.rs:303): offset distances and base-surface extensions on the solver's offset surfaces (`&mut FilletSolver` / `&mut dyn FilletSolverOps`) |
+
+For a later read-only compute phase: the 14 stateless ones can be shared; the counter,
+plane and last-point ones are cheap to clone per worker (their state is per solve); the
+seven fillet ones cannot, since they write the fillet solver's offset caches, so each
+worker needs its own fillet solver (or those caches move behind a per-worker store).
+
