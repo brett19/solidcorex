@@ -718,6 +718,7 @@ pub fn run_tol<A: Args, RX: Bits, RS: Bits>(
     let mut rng = SplitMix64(seed_of(name));
     let cases = A::cases(&mut rng);
     let (mut exact, mut unstable, mut bad) = (0usize, Vec::new(), Vec::new());
+    let mut drift: Option<String> = None;
     for c in &cases {
         let ox = shot(|| xf(c.clone()));
         let ox2 = shot(|| xf(c.clone()));
@@ -727,7 +728,9 @@ pub fn run_tol<A: Args, RX: Bits, RS: Bits>(
         }
         if ox == os {
             exact += 1;
-        } else if !tol.agree(&ox, &os) {
+        } else if tol.agree(&ox, &os) {
+            drift.get_or_insert_with(|| format!("{c:?}\n    scx:       {ox:?}\n    solidcore: {os:?}"));
+        } else {
             bad.push(format!(
                 "{c:?}\n    scx:       {ox:?}\n    solidcore: {os:?}"
             ));
@@ -740,6 +743,9 @@ pub fn run_tol<A: Args, RX: Bits, RS: Bits>(
         bad.len(),
         unstable.len()
     );
+    if let Some(d) = &drift {
+        println!("difftest {name}: first input within tolerance only:\n{d}");
+    }
     assert!(
         unstable.is_empty(),
         "{name}: {} of {} inputs are not deterministic; first:\n{}",
