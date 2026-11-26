@@ -25,6 +25,8 @@
 // `size_estimate_table` and the coincidence test read a `Resolution`;
 // `default_tolerances_are_solidcores` became `default_resolution_is_solidcores`; added
 // `zone_for_size_boundaries_keep_todays_answers` and `small_topo_codes_round_trip`.
+// Then the transcendental functions became `fmath`'s (correctly rounded, the same bits on every
+// platform) in place of the C library's, so results may differ from the pin's in the last bit.
 //! Tolerance policy (`SmTol`), the scalar part: the tolerance constructors, model-size
 //! based default tolerances, zone / intersection / approximation tolerances, the
 //! contact and coincidence rules, scaled zeros and simple tolerance predicates.
@@ -228,7 +230,7 @@ pub fn zone_for_size(size: f64) -> f64 {
     } else if (0.00005..=0.005).contains(&size) {
         1.0e-7
     } else {
-        tol3d(10f64.powf((size.abs().log10() / 2.0).floor()) * 1.0e-5)
+        tol3d(crate::fmath::powf(10.0, (crate::fmath::log10(size.abs()) / 2.0).floor()) * 1.0e-5)
     }
 }
 

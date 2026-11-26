@@ -6,6 +6,8 @@
 // No `SM_UNDEF_DOUBLE` sentinel (`docs/01-architecture.md` §10.1): `UNDEF`, `set_uninitialized`
 // and `is_initialized` are gone (an unset vector is `None`); the test
 // `upstream_my_test_vector2d` drops its unset-vector checks.
+// Then the transcendental functions became `fmath`'s (correctly rounded, the same bits on every
+// platform) in place of the C library's, so results may differ from the pin's in the last bit.
 //! Two-dimensional vectors and points ([`Vec2`] / [`Point2`]), usually surface
 //! parameters `(u, v)`: arithmetic, lengths, distances, unitizing, rotation and angles.
 //!
@@ -192,8 +194,8 @@ impl Vec2 {
     /// The vector rotated counter-clockwise by `ang_rad` about the Z axis (`Rotate`).
     #[must_use]
     pub fn rotate(self, ang_rad: f64) -> Self {
-        let cos = ang_rad.cos();
-        let sin = ang_rad.sin();
+        let cos = crate::fmath::cos(ang_rad);
+        let sin = crate::fmath::sin(ang_rad);
         Self::new(cos * self.x - sin * self.y, sin * self.x + cos * self.y)
     }
 

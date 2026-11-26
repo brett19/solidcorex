@@ -12,7 +12,8 @@
 //! Every module but [`cert`], [`consts`], [`eft`], [`fmath`], [`hash`], [`units`] and
 //! [`error`] is moved from solidcore at commit `03e16c9ee766de5b9b1ced845e5149d62ff493b8`
 //! with its results unchanged bit for bit (`docs/research/52-num-move.md`; the interval
-//! modules, `53-interval-and-algo.md`).
+//! modules, `53-interval-and-algo.md`), except that the transcendental functions are
+//! [`fmath`]'s in place of the C library's, which may differ in the last bit.
 
 pub mod cert;
 pub mod certified;

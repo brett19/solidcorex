@@ -16,6 +16,7 @@ use scx_num::certified::{next_down, next_up};
 use scx_num::extent1d::Extent1d;
 use scx_num::extent2d::Extent2d;
 use scx_num::extent3d::Extent3d;
+use scx_num::fmath;
 use scx_num::math::Transform;
 use scx_num::matrix::Matrix;
 use scx_num::small_matrix::{
@@ -345,8 +346,8 @@ fn zone_follows_the_size_table() {
     for &(lo, hi, zone) in &table {
         for _ in 0..CASES / 5 {
             // Log-uniform strictly inside the range.
-            let s = lo.ln() + r.uniform(0.0, 1.0) * (hi / lo).ln();
-            let s = s.exp().clamp(lo * (1.0 + 1e-12), hi * (1.0 - 1e-12));
+            let s = fmath::ln(lo) + r.uniform(0.0, 1.0) * fmath::ln(hi / lo);
+            let s = fmath::exp(s).clamp(lo * (1.0 + 1e-12), hi * (1.0 - 1e-12));
             assert_eq!(zone_for_size(s), zone, "{s}");
         }
     }
@@ -364,7 +365,7 @@ fn zone_follows_the_size_table() {
 fn unitize_gives_a_parallel_unit_vector() {
     let mut r = Rng::new(9);
     for _ in 0..CASES {
-        let scale = 10f64.powf(r.uniform(-100.0, 100.0));
+        let scale = fmath::powf(10.0, r.uniform(-100.0, 100.0));
         let v = Vec3::new(
             r.uniform(-1.0, 1.0),
             r.uniform(-1.0, 1.0),

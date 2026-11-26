@@ -16,6 +16,8 @@
 // `SM_UNDEF_DOUBLE`); `ObjsInVoxels::add`, `ObjsInVoxels::remove`,
 // `ObjsInVoxels::find_coincident_pairs` and the test helper `point_item_bits` follow.
 // Results unchanged.
+// Then the transcendental functions became `fmath`'s (correctly rounded, the same bits on every
+// platform) in place of the C library's, so results may differ from the pin's in the last bit.
 //! Voxel bucket hash of point-located items for fast coincident-pair searches
 //!
 //! Iteration order is deterministic and documented: [`ObjsInVoxels::find_coincident_pairs`]
@@ -91,7 +93,7 @@ pub fn gap_histogram_index(gap: f64) -> usize {
     if gap > 10.0 {
         10
     } else if gap > 1e-6 {
-        (gap.log10().floor() + 9.0) as usize
+        (scx_num::fmath::log10(gap).floor() + 9.0) as usize
     } else if gap > 1e-8 {
         2
     } else {

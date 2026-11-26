@@ -4,6 +4,8 @@
 // `source/SMLib/inc/SmPolynomial.h`.
 // Changes: paths only (`acos`, `cbrt`, `sqrt` and the constants from `scx-num`). Results
 // unchanged bit for bit.
+// Then the transcendental functions became `fmath`'s (correctly rounded, the same bits on every
+// platform) in place of the C library's, so results may differ from the pin's in the last bit.
 //! Closed-form real roots of quadratic, cubic and quartic polynomials.
 //!
 //! Upstream: `source/SMLib/src/SmPolynomial.cpp`, `source/SMLib/inc/SmPolynomial.h`.
@@ -31,6 +33,7 @@
 
 use core::ops::Deref;
 
+use scx_num::fmath::cos;
 use scx_num::math::{EFF_ZERO_SQRT, PI};
 use scx_num::vector3d::{acos, cbrt, sqrt};
 
@@ -167,9 +170,9 @@ pub fn solve_cubic(coefficients: &[f64; 4], zero_tol: f64) -> Roots {
         let phi = 1.0 / 3.0 * acos(-q / (-cb_p).sqrt());
         let t = 2.0 * sqrt(-p);
 
-        roots.push(t * phi.cos());
-        roots.push(-t * (phi + PI / 3.0).cos());
-        roots.push(-t * (phi - PI / 3.0).cos());
+        roots.push(t * cos(phi));
+        roots.push(-t * cos(phi + PI / 3.0));
+        roots.push(-t * cos(phi - PI / 3.0));
     } else {
         // One real root.
         let sqrt_d = sqrt(d);

@@ -10,6 +10,8 @@
 // `BlendFailure::Defect` -> `NumFailure::Defect`; operation strings unchanged); `Ivl` from
 // `crate::interval`, `sqrt` from `crate::vector3d`; the test of the status code reads the
 // class (the body diff reads that test as part of `update`). Results unchanged bit for bit.
+// Then the transcendental functions became `fmath`'s (correctly rounded, the same bits on every
+// platform) in place of the C library's, so results may differ from the pin's in the last bit.
 //! Truncated power series in two variables, sigma (along the leader's parameter s) and eps
 //! (`tau - 1`), over `f64` (the jets) or [`Ivl`] (their enclosures): `c[i][k]` the
 //! coefficient of `sigma^i eps^k`, kept up to the orders of a [`Trunc`].
@@ -783,7 +785,7 @@ mod tests {
             for k in 0..=MAX_E {
                 if i + k > 0 {
                     v = (v * 7.3 + 0.11) % 2.0 - 1.0;
-                    x.set(i, k, v * 10f64.powi(i as i32 - 3));
+                    x.set(i, k, v * crate::fmath::powi(10.0, i as i32 - 3));
                 }
             }
         }

@@ -71,7 +71,10 @@ diff!(r_ivl, |a: I| {
 // arc cosine and sine/cosine where they are defined, off the edge pool
 diff!(r_ivl_inside, |a: f64, b: f64| {
     use m::ring::TayScalar;
-    let (p, q) = ((a.sin() + 1.0) / 2.0, (b.sin() + 1.0) / 2.0);
+    let (p, q) = (
+        (scx_num::fmath::sin(a) + 1.0) / 2.0,
+        (scx_num::fmath::sin(b) + 1.0) / 2.0,
+    );
     let y = m::interval::Ivl::new(2.0 * p.min(q) - 1.0, 2.0 * p.max(q) - 1.0);
     let t = m::interval::Ivl::new(
         p.min(q) * core::f64::consts::FRAC_PI_2,
@@ -104,7 +107,12 @@ diff!(t_build, |c: List<I>, r: I, p: List<f64>| {
 });
 diff!(t_ranges, |c: List<I>, r: I, x: f64| {
     let t = m::tm(&c, r);
-    (t.poly_range(), t.range(), t.at(x), t.at(x.sin()))
+    (
+        t.poly_range(),
+        t.range(),
+        t.at(x),
+        t.at(scx_num::fmath::sin(x)),
+    )
 });
 diff!(t_arith, |c: List<I>, d: List<I>, r: I| {
     let (a, b) = (m::tm(&c, r), m::tm(&d, [0.0, 0.0]));
@@ -113,7 +121,7 @@ diff!(t_arith, |c: List<I>, d: List<I>, r: I| {
 // models of functions bounded away from 0, where the reciprocal and the root are made
 diff!(t_positive, |p: List<f64>, q: List<f64>, r: I| {
     let lift = |v: &List<f64>| {
-        let mut c: Vec<f64> = v.0.iter().map(|x| x.sin()).collect();
+        let mut c: Vec<f64> = v.0.iter().map(|&x| scx_num::fmath::sin(x)).collect();
         let rest: f64 = c.iter().skip(1).map(|x| x.abs()).sum();
         if let Some(c0) = c.first_mut() {
             *c0 = rest + 1.0 + c0.abs();
@@ -122,7 +130,10 @@ diff!(t_positive, |p: List<f64>, q: List<f64>, r: I| {
     };
     let (a, b) = (
         lift(&p),
-        lift(&q).with_rem(m::iv([r[0].sin() * 0.1, r[0].sin().abs() * 0.1])),
+        lift(&q).with_rem(m::iv([
+            scx_num::fmath::sin(r[0]) * 0.1,
+            scx_num::fmath::sin(r[0]).abs() * 0.1,
+        ])),
     );
     (
         a.recip(),
@@ -249,7 +260,7 @@ diff!(s_inv_sqrt_ivl, |u: List<I>, s: usize, e: usize| {
 // positive constants, where the series is made rather than refused
 diff!(s_inv_sqrt_positive, |u: List<f64>, s: usize, e: usize| {
     let tr = m::trunc(s, e);
-    let mut v: Vec<f64> = u.0.iter().map(|x| x.sin()).collect();
+    let mut v: Vec<f64> = u.0.iter().map(|&x| scx_num::fmath::sin(x)).collect();
     if let Some(v0) = v.first_mut() {
         *v0 = 1.0 + v0.abs();
     }

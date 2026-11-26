@@ -79,7 +79,7 @@ impl Gen for TolR {
             v.push(TolR(b));
         }
         for _ in 0..12 {
-            let z = 10f64.powf(rng.uniform(-8.0, -2.0));
+            let z = scx_num::fmath::powf(10.0, rng.uniform(-8.0, -2.0));
             v.push(TolR([
                 z,
                 2.0 * z,

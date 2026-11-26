@@ -8,6 +8,8 @@
 // `is_invalid` without the sentinel test, and `approx_eq` loses its two-unset-vectors case;
 // the test `upstream_my_test_vector3d` drops its unset-vector checks and
 // `operators_and_predicates` its `UNDEF` cases.
+// Then the transcendental functions became `fmath`'s (correctly rounded, the same bits on every
+// platform) in place of the C library's, so results may differ from the pin's in the last bit.
 //! Three-dimensional vectors and points ([`Vec3`] / [`Point3`]): arithmetic, lengths,
 //! angles, projections, rotation, orthonormal frames and derivatives of unit vectors,
 //! plus the guarded scalar math helpers of `SmMath.cpp`.
@@ -123,7 +125,7 @@ pub fn sqrt(x: f64) -> f64 {
 /// `sm_cbrt` (`smos_CubeRoot`): cube root.
 #[must_use]
 pub fn cbrt(x: f64) -> f64 {
-    x.cbrt()
+    crate::fmath::cbrt(x)
 }
 
 /// `sm_acos` (`smos_ArcCosine`): arc cosine clamped to `0` / `PI` for arguments
@@ -136,7 +138,7 @@ pub fn acos(x: f64) -> f64 {
     if x <= -1.0 {
         return PI;
     }
-    x.acos()
+    crate::fmath::acos(x)
 }
 
 /// `sm_asin` (`smos_ArcSine`): arc sine clamped to `±PI/2` for arguments outside
@@ -149,7 +151,7 @@ pub fn asin(x: f64) -> f64 {
     if x <= -1.0 {
         return -PI / 2.0;
     }
-    x.asin()
+    crate::fmath::asin(x)
 }
 
 /// `SM_DEG2RAD(a)` = `a * (SM_PI / 180.0)`.
@@ -755,8 +757,8 @@ impl Vec3 {
     /// unit length) (`RotateVecAboutAxis`).
     #[must_use]
     pub fn rotate_vec_about_axis(self, axis: Self, ang_rad: f64) -> Self {
-        let cos = ang_rad.cos();
-        let sin = ang_rad.sin();
+        let cos = crate::fmath::cos(ang_rad);
+        let sin = crate::fmath::sin(ang_rad);
 
         // avoid errors - unitize the input (status ignored)
         let z = axis.unitize_or_z();
@@ -916,7 +918,7 @@ impl Vec3 {
         Ok(if cos < 0.0 && sin.abs() < 1e-12 {
             PI
         } else {
-            sin.atan2(cos)
+            crate::fmath::atan2(sin, cos)
         })
     }
 
@@ -1133,7 +1135,7 @@ mod tests {
                 Vec3::Z
                     .signed_unit_angle(Vec3::X, Vec3::new(-1.0, tiny, 0.0))
                     .unwrap(),
-                tiny.atan2(-1.0)
+                crate::fmath::atan2(tiny, -1.0)
             );
         }
     }

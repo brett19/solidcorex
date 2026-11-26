@@ -10,6 +10,8 @@
 // `acos_clamped` moved; the series `Tay`, its functions and `GnAreaCells` (which take the kernel
 // and a surface counter) stay in solidcore. `Ivl` from `crate::interval`, `sqrt` from
 // `crate::vector3d`. Results unchanged bit for bit.
+// Then the transcendental functions became `fmath`'s (correctly rounded, the same bits on every
+// platform) in place of the C library's, so results may differ from the pin's in the last bit.
 //! The scalar rings of the G^n certificate's templates (the fork's `Z` and `S`): `f64`
 //! and [`Ivl`], with the functions a series takes in them (square root, arc cosine, sine
 //! and cosine), the interval ones widened past the C library's error.
@@ -75,7 +77,7 @@ fn smax(a: f64, b: f64) -> f64 {
 /// `sm_Acos(double)`: the arc cosine of x clamped to [-1, 1].
 #[must_use]
 pub fn acos_clamped(x: f64) -> f64 {
-    smax(-1.0, smin(1.0, x)).acos()
+    crate::fmath::acos(smax(-1.0, smin(1.0, x)))
 }
 
 impl TayScalar for f64 {
@@ -86,12 +88,13 @@ impl TayScalar for f64 {
         acos_clamped(self)
     }
     fn sin_cos_s(self) -> (Self, Self) {
-        (self.sin(), self.cos())
+        crate::fmath::sin_cos(self)
     }
 }
 
 /// `sm_Wide`: `[a, b]` widened by `1e-15` relative (the C library's `acos`, `sin` and
-/// `cos` are within an ulp or two), or the whole line if either is NaN.
+/// `cos`, which the pin calls, are within an ulp or two; [`crate::fmath`]'s within half
+/// an ulp), or the whole line if either is NaN.
 #[must_use]
 pub fn wide(a: f64, b: f64) -> Ivl {
     if a.is_nan() || b.is_nan() {
@@ -112,7 +115,7 @@ impl TayScalar for Ivl {
         if !inside {
             return Ivl::whole();
         }
-        wide(self.hi.acos(), self.lo.acos())
+        wide(crate::fmath::acos(self.hi), crate::fmath::acos(self.lo))
     }
     /// On `[0, pi/2]` (the double below pi/2 its top), where sin rises and cos falls; the
     /// whole line elsewhere.
@@ -122,8 +125,8 @@ impl TayScalar for Ivl {
             return (Ivl::whole(), Ivl::whole());
         }
         (
-            wide(self.lo.sin(), self.hi.sin()),
-            wide(self.hi.cos(), self.lo.cos()),
+            wide(crate::fmath::sin(self.lo), crate::fmath::sin(self.hi)),
+            wide(crate::fmath::cos(self.hi), crate::fmath::cos(self.lo)),
         )
     }
 }
