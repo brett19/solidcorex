@@ -27,6 +27,8 @@ it replaces.
 | 11-26 | Research, decisions and analysis are kept in `solidcorex/docs` for future agents | "We should keep all our research, decisions and analysis in docs for future agents" | |
 
 | 11-26 | The coordinating session (Claude) owns the rewrite | "You will own the rewrite, what's next?" | Taken as lifting the stop of 11-25 for rewrite work: local investigation, design and scaffolding. Nothing is published and no solidcore code is copied until the licence question (section 6) is answered |
+| 11-26 | The library is licensed MIT or Apache-2.0; only what that licence allows is published | "This Library will be MIT or Apache 2, so we should only publish things allowed under that license." | solidcore is Apache-2.0 and derived from NVIDIA's Apache-2.0 SMLib, so code moved from it can be published under Apache-2.0 but not offered under MIT by us: see `06-licence-and-source.md`. Which of the two shapes applies is open (section 6) |
+| 11-26 | solidcore is pinned; the pin moves only deliberately | "pin the solid core right now, we can iteratively increase that pin later" | Pinned at 03e16c9ee7 (main, 2026-11-26); `06-licence-and-source.md` |
 
 ## 2. Decided elsewhere, and binding on this work
 
@@ -76,7 +78,7 @@ So nobody proposes them again without new evidence.
 
 ## 6. Open questions
 
-- What is the licence and provenance position for a fork (solidcore is a port of a commercial library)?
+- Licence shape: Apache-2.0 throughout (code may be moved from solidcore), or MIT OR Apache-2.0 with only original code (nothing derived from solidcore or SMLib may be copied)? See `06-licence-and-source.md`.
 - Is a per-body angle tolerance wanted (today the angle tolerance exists only at kernel level)?
 - Should records store offset surfaces and blend definitions exactly (#13789 is open and unscheduled)?
 - Do bodies carry a placement, so that a rigid move changes no geometry (today a transform leaves 0% of faces untouched)?

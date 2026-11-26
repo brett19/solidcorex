@@ -15,6 +15,7 @@ with the date, who decided, and the evidence; status changes go in `05-status.md
 | [02-testing.md](02-testing.md) | How to prove it works quickly: an oracle per layer, properties for operations, work counts as tests, what remains of the goldens |
 | [03-upfront-planning.md](03-upfront-planning.md) | What to settle before moving any code |
 | [04-decisions.md](04-decisions.md) | What was decided, by whom, on what evidence; designs withdrawn; what is still open |
+| [06-licence-and-source.md](06-licence-and-source.md) | The licence decision and what it allows; the pinned solidcore commit |
 | [05-status.md](05-status.md) | Merged work, parked drafts, issues, local branches, clean-up owed, how to resume |
 | [research/](research/README.md) | 47 investigation reports with an index that says which to trust, plus reviews, issue texts and earlier plans |
 

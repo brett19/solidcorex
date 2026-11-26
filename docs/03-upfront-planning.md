@@ -43,8 +43,8 @@ Prototype this one piece and measure it on the largest models before anything is
   of the new crates. Design the shim first.
 - **Do not move dead code.** Run coverage on solidcore before starting.
 - **The 26 compatibility switches.** Decide each one's fate before its code moves.
-- **Provenance and licensing.** solidcore is a port of a commercial library. What that implies for a
-  fork's licence and for publishing it is NOT KNOWN here and needs a clear answer before code is copied.
+- **Provenance and licensing.** Answered in `06-licence-and-source.md`: solidcore is Apache-2.0 and
+  derives from NVIDIA's Apache-2.0 SMLib. One question remains open there.
 
 ## 4. The oracle
 
