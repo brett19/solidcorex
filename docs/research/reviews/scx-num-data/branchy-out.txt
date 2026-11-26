@@ -1,0 +1,32 @@
+ 717 regions  91 unexecuted  matrix.rs:785 sv_decompose  (lines [798, 812, 819, 824, 825, 829, 832, 839, 844, 845])
+ 227 regions  24 unexecuted  matrix.rs:578 jacobi  (lines [586, 592, 593, 594, 605, 616, 617, 637, 639, 640])
+ 189 regions  22 unexecuted  matrix.rs:365 lu_decompose  (lines [383, 396, 398, 400, 407, 409, 411, 413, 423, 424])
+ 149 regions   2 unexecuted  math.rs:385 is_regular  (lines [402, 407])
+ 132 regions   0 unexecuted  extent1d.rs:746 intersect_periodic
+ 122 regions   7 unexecuted  periodic_extent1d.rs:235 add_interval  (lines [269, 270, 271, 272, 318, 323])
+  97 regions   8 unexecuted  matrix.rs:464 solve_with_lu  (lines [480, 481, 482, 485, 490, 495, 497, 506])
+  94 regions   0 unexecuted  extent3d.rs:1146 approximate_unbounded_expanded
+  87 regions   1 unexecuted  extent3d.rs:1042 meets_ray  (lines [1078])
+  86 regions   0 unexecuted  extent2d.rs:770 clip_line
+  83 regions   0 unexecuted  math.rs:294 transformed_box
+  82 regions   1 unexecuted  extent1d.rs:836 contains_periodic_value  (lines [872])
+  79 regions   0 unexecuted  math.rs:493 plane_motion
+  71 regions   2 unexecuted  extent1d.rs:955 clamp_vector  (lines [980, 993])
+  66 regions   0 unexecuted  extent3d.rs:991 intersect_line
+  63 regions   0 unexecuted  math.rs:1257 arc_third_point_2d
+  59 regions   0 unexecuted  small_matrix.rs:85 determinate_4x4
+  56 regions   0 unexecuted  extent2d.rs:820 intersect_with_infinite_line
+  56 regions   7 unexecuted  matrix.rs:746 transpose  (lines [752, 753, 754, 755, 759, 762])
+  54 regions   0 unexecuted  math.rs:1076 inverse
+  52 regions   3 unexecuted  math.rs:879 centroid_and_mean_radius  (lines [902, 919, 927])
+  52 regions   0 unexecuted  vector3d.rs:730 make_unit_ortho_vectors
+  51 regions   0 unexecuted  extent1d.rs:691 periodic_wrap
+  51 regions   3 unexecuted  matrix.rs:1132 sort_eigen_system  (lines [1135, 1138, 1151])
+  50 regions   0 unexecuted  math.rs:573 rigid_plane_axes
+  49 regions   0 unexecuted  math.rs:1044 into_plane_frame
+  49 regions   1 unexecuted  math.rs:1224 three_point_circle_2d  (lines [1234])
+  48 regions   0 unexecuted  math.rs:959 rotation
+  47 regions   0 unexecuted  transform.rs:302 scale_simple
+  46 regions  46 unexecuted  error.rs:156 fmt  (lines [156, 157, 158, 159, 160, 162, 163, 166, 167, 168])
+top 30: 14 of 30 have an unexecuted region
+all functions: 649; with an unexecuted region 75; never entered 23

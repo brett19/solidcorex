@@ -1,0 +1,264 @@
+# crates/scx-num/src/math.rs: 84 same, 3 differ, 1 only at pin, 0 only here
+PIN-ONLY impl Transform::of_placement
+DIFFER impl Transform::transformed_box
+    -        use crate::geom::certified::{next_down, next_up};
+    -        use crate::nurbs::math::gamma;
+    +        use crate::certified::{gamma, next_down, next_up};
+DIFFER impl Transform::rigid_plane_axes
+    -        use crate::error::SolidError;
+    -        use crate::nurbs::math::gamma;
+    +        use crate::certified::gamma;
+    +        use crate::error::NumError;
+    -            return Err(SolidError::invalid_input(
+    +            return Err(NumError::invalid_input(
+    -            return Err(SolidError::invalid_input(
+    +            return Err(NumError::invalid_input(
+DIFFER mod tests::repeated_rigid_turns_keep_plane_axes_square_and_keep_uv_scales
+    -        use crate::nurbs::math::gamma;
+    +        use crate::certified::gamma;
+# crates/scx-num/src/limits.rs: 6 same, 0 differ, 0 only at pin, 0 only here
+# crates/scx-num/src/vector2d.rs: 40 same, 0 differ, 0 only at pin, 0 only here
+# crates/scx-num/src/vector3d.rs: 89 same, 0 differ, 0 only at pin, 0 only here
+# crates/scx-num/src/matrix.rs: 43 same, 2 differ, 0 only at pin, 0 only here
+DIFFER mod tests::solve_errors
+    -            Err(SolidError::InvalidInput { .. })
+    +            Err(NumError::InvalidInput { .. })
+    -            Err(SolidError::InvalidInput { .. })
+    +            Err(NumError::InvalidInput { .. })
+    -        assert_eq!(singular.upstream_status(), Some(1001));
+    +        
+    +        assert!(matches!(singular, NumError::Failed { .. }));
+    -            singular.geom_failure(),
+    -            Some(&GeomFailure::CallFailed {
+    +            singular.failure(),
+    +            Some(&NumFailure::CallFailed {
+    -            Err(SolidError::InvalidInput { .. })
+    +            Err(NumError::InvalidInput { .. })
+DIFFER mod tests::jacobi_symmetric
+    -            Err(e) if e.upstream_status() == Some(1001)
+    +            Err(NumError::Failed { .. })
+# crates/scx-num/src/extent1d.rs: 70 same, 1 differ, 1 only at pin, 0 only here
+PIN-ONLY impl crate::geom::content::Content for Extent1d::content
+DIFFER mod tests::set_operations
+    -            disjoint.geom_failure(),
+    -            Some(&crate::error::geom::GeomFailure::Disjoint {
+    +            disjoint.failure(),
+    +            Some(&crate::error::NumFailure::Disjoint {
+    -        assert_eq!(disjoint.upstream_status(), Some(crate::error::SM_ERR));
+    +        
+    +        assert!(matches!(disjoint, NumError::Failed { .. }));
+# crates/scx-num/src/extent2d.rs: 73 same, 1 differ, 1 only at pin, 0 only here
+PIN-ONLY impl crate::geom::content::Content for Extent2d::content
+DIFFER mod tests::inversion_of_degenerate_side
+    -            outside.geom_failure(),
+    -            Some(&crate::error::geom::GeomFailure::PointOutsideExtent { u: 2.0, v: 0.5 })
+    +            outside.failure(),
+    +            Some(&crate::error::NumFailure::PointOutsideExtent { u: 2.0, v: 0.5 })
+    -        assert_eq!(outside.upstream_status(), Some(crate::error::SM_ERR));
+    +        
+    +        assert!(matches!(outside, NumError::Failed { .. }));
+    -        assert_eq!(mapped.geom_failure(), outside.geom_failure());
+    -        assert_eq!(mapped.upstream_status(), Some(crate::error::SM_ERR));
+    +        assert_eq!(mapped.failure(), outside.failure());
+    +        
+    +        assert!(matches!(mapped, NumError::Failed { .. }));
+# crates/scx-num/src/extent3d.rs: 94 same, 0 differ, 2 only at pin, 0 only here
+PIN-ONLY impl Extent3d::from_pseudo_box
+PIN-ONLY impl Extent3d::circumscribe
+# crates/scx-num/src/periodic_extent1d.rs: 34 same, 0 differ, 0 only at pin, 0 only here
+# crates/scx-num/src/certified.rs: 27 same, 0 differ, 0 only at pin, 2 only here
+SCX-ONLY ::gamma
+SCX-ONLY mod tests::rounding_bounds_keep_the_previous_bits
+# crates/scx-num/src/tol.rs: 48 same, 14 differ, 58 only at pin, 7 only here
+PIN-ONLY ::size_estimate_to_zone_tol_3d
+PIN-ONLY ::context_model_size_estimate
+PIN-ONLY ::set_context_model_size_estimate
+PIN-ONLY ::context_zone_tol_3d
+PIN-ONLY ::context_approx_tol_3d
+PIN-ONLY ::context_xsect_tol_3d
+PIN-ONLY ::calc_face_zone_tol_3d
+PIN-ONLY ::calc_edge_zone_tol_3d
+PIN-ONLY ::calc_vertex_zone_tol_3d
+PIN-ONLY ::calc_gap_zone_tol
+PIN-ONLY ::brep_model_size_estimate
+PIN-ONLY ::set_brep_model_size_estimate
+PIN-ONLY ::brep_size_zone_tol_3d
+PIN-ONLY ::brep_size_calc_gap_zone_tol_3d
+PIN-ONLY ::brep_large_small_size_ratio
+PIN-ONLY ::set_brep_large_small_size_ratio
+PIN-ONLY ::brep_zone_tol_3d
+PIN-ONLY ::brep_approx_tol_3d
+PIN-ONLY ::brep_xsect_tol_3d
+PIN-ONLY ::brep_calc_face_zone_tol_3d
+PIN-ONLY ::brep_calc_edge_zone_tol_3d
+PIN-ONLY ::brep_calc_vertex_zone_tol_3d
+PIN-ONLY ::scaled_zero_of_brep
+PIN-ONLY ::map_to_1d_on_curve
+PIN-ONLY ::zone_tol_3d_of_curve
+PIN-ONLY ::is_degenerate_curve
+PIN-ONLY ::scaled_zero_of_equations
+PIN-ONLY ::scaled_zero_of_volume
+PIN-ONLY ::scaled_zero_of_curve
+PIN-ONLY impl Cardinality::code
+PIN-ONLY impl Cardinality::from_code
+PIN-ONLY impl<A: Ord + Copy, B: Ord + Copy> Default for Relation<A, B>::default
+PIN-ONLY impl<A: Ord + Copy, B: Ord + Copy> Relation<A, B>::new
+PIN-ONLY impl<A: Ord + Copy, B: Ord + Copy> Relation<A, B>::cardinality
+PIN-ONLY impl<A: Ord + Copy, B: Ord + Copy> Relation<A, B>::relate_pair
+PIN-ONLY impl<A: Ord + Copy, B: Ord + Copy> Relation<A, B>::relate_to_many
+PIN-ONLY impl<A: Ord + Copy, B: Ord + Copy> Relation<A, B>::remove_all
+PIN-ONLY impl<A: Ord + Copy, B: Ord + Copy> Relation<A, B>::remove_pair
+PIN-ONLY impl<A: Ord + Copy, B: Ord + Copy> Relation<A, B>::second
+PIN-ONLY impl<A: Ord + Copy, B: Ord + Copy> Relation<A, B>::seconds
+PIN-ONLY impl<A: Ord + Copy, B: Ord + Copy> Relation<A, B>::firsts
+PIN-ONLY impl<A: Ord + Copy, B: Ord + Copy> Relation<A, B>::all_firsts
+PIN-ONLY impl<A: Ord + Copy, B: Ord + Copy> Relation<A, B>::all_seconds
+PIN-ONLY mod tests::brep_zone_tolerances_are_the_brep_tolerance_as_a_zone_tolerance
+PIN-ONLY mod tests::brep_model_size_estimate_and_ratio_chase_the_context
+PIN-ONLY mod tests::brep_gap_zone_tolerances_default_to_the_brep_tolerance
+PIN-ONLY mod tests::brep_scaled_zero_is_that_of_its_bounding_box
+PIN-ONLY mod tests::relation_removal_preserves_other_pairs_and_releases_empty_keys
+PIN-ONLY mod tests::test_line
+PIN-ONLY mod tests::curve_tolerances
+PIN-ONLY mod tests::scaled_zero_of_unbounded_volume
+PIN-ONLY mod tests::kernel
+PIN-ONLY mod tests::gap_zone_tolerances
+PIN-ONLY mod tests::relation_cardinalities
+PIN-ONLY ::ignore_soft
+PIN-ONLY ::face_set_tolerance
+PIN-ONLY ::face_edges
+PIN-ONLY ::update_object_tolerance
+SCX-ONLY impl Default for Tolerances::default
+SCX-ONLY impl Tolerances::ang_tol_rad
+SCX-ONLY ::zone_for_size
+SCX-ONLY mod tests::tolerances
+SCX-ONLY mod tests::zone_for_size_boundaries_keep_todays_answers
+SCX-ONLY mod tests::small_topo_codes_round_trip
+SCX-ONLY mod tests::default_tolerances_are_solidcores
+DIFFER ::zone_tol_3d
+    -fn zone_tol_3d(k: &Kernel, small: SmallTopoType) -> f64 {
+    -    let t: &Tolerances = &k.tolerances;
+    +fn zone_tol_3d(t: &Tolerances, small: SmallTopoType) -> f64 {
+    -        zone_tol3d(k, UNINIT_TOL)
+    +        zone_tol3d(t, UNINIT_TOL)
+    -        zone_tol3d(k, zone_tol3d(k, t.large_small_size_ratio) * t.zone_tol_3d)
+    +        zone_tol3d(t, zone_tol3d(t, t.large_small_size_ratio) * t.zone_tol_3d)
+DIFFER ::approx_tol_3d
+    -fn approx_tol_3d(k: &Kernel, small: SmallTopoType) -> f64 {
+    -    approx_tol3d(k, 0.5 * zone_tol_3d(k, small))
+    +fn approx_tol_3d(t: &Tolerances, small: SmallTopoType) -> f64 {
+    +    approx_tol3d(t, 0.5 * zone_tol_3d(t, small))
+DIFFER ::xsect_tol_3d
+    -fn xsect_tol_3d(k: &Kernel, small: SmallTopoType) -> f64 {
+    -    xsect_tol3d(k, 2.0 * zone_tol_3d(k, small))
+    +fn xsect_tol_3d(t: &Tolerances, small: SmallTopoType) -> f64 {
+    +    xsect_tol3d(t, 2.0 * zone_tol_3d(t, small))
+DIFFER ::xsect_tol_3d_from_zones
+    -fn xsect_tol_3d_from_zones(k: &Kernel, zone1: f64, zone2: f64) -> f64 {
+    -    xsect_tol3d(k, zone1 + zone2)
+    +fn xsect_tol_3d_from_zones(t: &Tolerances, zone1: f64, zone2: f64) -> f64 {
+    +    xsect_tol3d(t, zone1 + zone2)
+DIFFER ::contact_tol_3d
+    -fn contact_tol_3d(k: &Kernel) -> f64 {
+    -    zone_tol_3d(k, SmallTopoType::NormalSize)
+    +fn contact_tol_3d(t: &Tolerances) -> f64 {
+    +    zone_tol_3d(t, SmallTopoType::NormalSize)
+DIFFER ::coincidence_tol_3d
+    -fn coincidence_tol_3d(k: &Kernel, zone1: f64, zone2: f64) -> f64 {
+    +fn coincidence_tol_3d(t: &Tolerances, zone1: f64, zone2: f64) -> f64 {
+    -    contact_tol_3d(k).max(zone1).max(zone2)
+    +    contact_tol_3d(t).max(zone1).max(zone2)
+DIFFER ::coincidence_reach_3d
+    -fn coincidence_reach_3d(k: &Kernel, zone1: f64, zone2: f64, size: f64) -> f64 {
+    -    coincidence_tol_3d(k, zone1, zone2) + rounding_of_copies(size)
+    +fn coincidence_reach_3d(t: &Tolerances, zone1: f64, zone2: f64, size: f64) -> f64 {
+    +    coincidence_tol_3d(t, zone1, zone2) + rounding_of_copies(size)
+DIFFER ::within_coincidence_tol
+    -    k: &Kernel,
+    +    t: &Tolerances,
+    -    distance <= coincidence_reach_3d(k, zone1, zone2, size)
+    +    distance <= coincidence_reach_3d(t, zone1, zone2, size)
+DIFFER ::is_degenerate_vec3
+    -fn is_degenerate_vec3(k: &Kernel, v: Vec3, override_xsect_tol: Option<f64>) -> bool {
+    +fn is_degenerate_vec3(t: &Tolerances, v: Vec3, override_xsect_tol: Option<f64>) -> bool {
+    -        None => xsect_tol_3d(k, SmallTopoType::NormalSize),
+    +        None => xsect_tol_3d(t, SmallTopoType::NormalSize),
+DIFFER mod tests::size_estimate_table
+    -        assert_eq!(size_estimate_to_zone_tol_3d(50.0), 1.0e-5);
+    -        assert_eq!(size_estimate_to_zone_tol_3d(50000.0), 1.0e-4);
+    -        assert_eq!(size_estimate_to_zone_tol_3d(0.005), 1.0e-6);
+    -        assert_eq!(size_estimate_to_zone_tol_3d(USE_DEFAULT), 1.0e-5);
+    -        assert_eq!(size_estimate_to_zone_tol_3d(1.0e8), 1.0e-1);
+    -        assert_eq!(size_estimate_to_zone_tol_3d(0.0), 0.0);
+    +        assert_eq!(zone_for_size(50.0), 1.0e-5);
+    +        assert_eq!(zone_for_size(50000.0), 1.0e-4);
+    +        assert_eq!(zone_for_size(0.005), 1.0e-6);
+    +        assert_eq!(zone_for_size(USE_DEFAULT), 1.0e-5);
+    +        assert_eq!(zone_for_size(1.0e8), 1.0e-1);
+    +        assert_eq!(zone_for_size(0.0), 0.0);
+DIFFER mod tests::system_tolerances
+    -        let k = Kernel::default();
+    +        let k = Tolerances::default();
+    -        assert_eq!(
+    -            context_zone_tol_3d(&k, None, SmallTopoType::ForceSmallSize),
+    -            1.0e-5
+    -        );
+    -        let k = kernel(50000.0, -2.0);
+    +        let k = tolerances(50000.0, -2.0);
+DIFFER mod tests::tol_constructors
+    -        let k = Kernel::default();
+    +        let k = Tolerances::default();
+DIFFER mod tests::in_tol_and_predicates
+    -        let k = Kernel::default();
+    +        let k = Tolerances::default();
+DIFFER mod tests::coincidence_is_the_larger_tolerance_and_a_nan_tolerance_is_apart
+    -        let k = Kernel::default();
+    +        let k = Tolerances::default();
+# crates/scx-num/src/transform.rs: 34 same, 1 differ, 22 only at pin, 3 only here
+PIN-ONLY impl Transform::transform_simple
+PIN-ONLY impl Transform::set_axis2_placement
+PIN-ONLY impl Transform::evaluate_bounding_box_simple
+PIN-ONLY impl Transform::global_point_solve_simple
+PIN-ONLY impl Transform::local_point_solve_simple
+PIN-ONLY impl Transform::has_discontinuities_simple
+PIN-ONLY impl Transform::read_from_db
+PIN-ONLY impl Transform::write_rows_to_db
+PIN-ONLY impl Transform::type_code
+PIN-ONLY impl Transform::type_string
+PIN-ONLY impl Transform::class_string
+PIN-ONLY impl Transform::is_kind_of
+PIN-ONLY mod tests/impl SolutionObject for Vol::kind
+PIN-ONLY mod tests::map_point
+PIN-ONLY mod tests::assert_corner_sets_match
+PIN-ONLY mod tests::aabb_of_points
+PIN-ONLY mod tests::singular_and_solvers
+PIN-ONLY mod tests::predicates_and_stubs
+PIN-ONLY mod tests::wr8_non_uniform_scale_and_translation
+PIN-ONLY mod tests::wr8_three_cycle_param_basis_and_three_cycle_transform
+PIN-ONLY mod tests::wr8_shear_with_translation
+PIN-ONLY mod tests::wr8_partially_unbounded_and_singular_and_volume_dispatch
+SCX-ONLY impl Transform::from_matrix
+SCX-ONLY mod tests::singular_axes_do_not_invert
+SCX-ONLY mod tests::predicates_and_domain
+DIFFER mod tests::concat_invert_scale
+    -        z.transform_simple(&Axis2Placement::IDENTITY, Some(v(1.0, 1.0, 1.0)));
+# crates/scx-num/src/small_matrix.rs: 7 same, 4 differ, 116 only at pin, 0 only here
+DIFFER mod tests::small_matrices
+    -        assert_eq!(copy_3x3(&m), m);
+    -        assert_eq!(copy_4x4(&id4), id4);
+    -        assert_eq!(determinant_3_vectors(Vec3::X, Vec3::Y, Vec3::Z), 1.0);
+    -        assert_eq!(
+    -            &*solve_quadratic_eqn(&[-1.0, 0.0, 1.0], 1e-12),
+    -            &[1.0, -1.0]
+    -        );
+DIFFER ::determinant_3x3
+    -    p1::determinate_3x3(a00, a01, a02, a10, a11, a12, a20, a21, a22)
+    +    determinate_3x3(a00, a01, a02, a10, a11, a12, a20, a21, a22)
+DIFFER mod tests::mult_4x4_identity_and_product
+    +        let zero = mult_4x4(&[[1.0; 4]; 4], &[[0.0; 4]; 4]);
+    +        assert!(inverse_4x4(&zero).is_err());
+DIFFER mod tests::minor_skips_row_and_column
+    -        assert_eq!(
+    -            minor_3x3(&a, 3, 2),
+    -            [[1.0, 2.0, 4.0], [5.0, 6.0, 8.0], [9.0, 10.0, 12.0]]
+    -        );
