@@ -23,8 +23,10 @@
 // accessors. Written here over those variants: `ErrorKind::name` (the four names), the
 // `Display` impls' `fmt`, `NumFailure::kind`, `NumError::invalid_input`, `NumError::failed`,
 // `NumError::call`, `NumError::kind`, `NumError::operation`, `NumError::failure`,
-// `NumError::cause`, `Error::source`, and the test
-// `a_call_failure_takes_its_class_and_message_from_the_cause`.
+// `NumError::cause`, `Error::source`, and the tests
+// `a_call_failure_takes_its_class_and_message_from_the_cause` and
+// `every_variant_prints_the_pins_text` (the texts of the pin's `error/geom.rs` and
+// `error/blend.rs`, for the variants no public input reaches on both sides).
 //! Why a layer-0 routine fails.
 //!
 //! Two shapes, as in solidcore: a check of the caller's argument that fails is
@@ -371,5 +373,101 @@ mod tests {
         assert_eq!(bad.kind(), ErrorKind::InvalidInput);
         assert_eq!(bad.to_string(), "c: invalid input: why");
         assert_eq!(NumError::call("d")(bad).kind(), ErrorKind::InvalidInput);
+    }
+
+    /// Every variant's text, as the pin's `GeomFailure` / `BlendFailure` `Display` writes it
+    /// (`error/geom.rs` and `error/blend.rs` at the pin), and the class names. The
+    /// differential tests compare the texts of the variants public inputs reach; the pin
+    /// builds its failures only inside its crate, so the rest are pinned here.
+    #[test]
+    fn every_variant_prints_the_pins_text() {
+        let cases: [(NumFailure, ErrorKind, &str); 13] = [
+            (
+                NumFailure::CallFailed { class: ErrorKind::Failed },
+                ErrorKind::Failed,
+                "a routine it calls failed",
+            ),
+            (
+                NumFailure::Disjoint { a: [1.0, 2.5], b: [-0.0, 3.0] },
+                ErrorKind::Failed,
+                "the intervals [1, 2.5] and [-0, 3] are disjoint",
+            ),
+            (
+                NumFailure::Defect { why: "why" },
+                ErrorKind::StageFailed,
+                "stage_failed: why",
+            ),
+            (
+                NumFailure::IndexOutOfRange { index: 4, len: 3 },
+                ErrorKind::InvalidInput,
+                "the index 4 is not below the 3 entries",
+            ),
+            (
+                NumFailure::JacobiDidNotConverge { sweeps: 50, off_diagonal: 1.5e-3 },
+                ErrorKind::StageFailed,
+                "stage_failed: the Jacobi sweeps did not converge after 50 sweeps (off-diagonal sum 1.5e-3)",
+            ),
+            (
+                NumFailure::NoPerpendicular,
+                ErrorKind::Degenerate,
+                "no perpendicular vector found",
+            ),
+            (
+                NumFailure::NotSquare { rows: 2, cols: 3 },
+                ErrorKind::InvalidInput,
+                "the 2x3 matrix is not square",
+            ),
+            (
+                NumFailure::NotSymmetric,
+                ErrorKind::InvalidInput,
+                "the matrix is not symmetric",
+            ),
+            (
+                NumFailure::PointOutsideExtent { u: 0.5, v: f64::NAN },
+                ErrorKind::Failed,
+                "the point (0.5, NaN) lies outside the extent",
+            ),
+            (
+                NumFailure::Singular { measure: 0.0 },
+                ErrorKind::Degenerate,
+                "the system is singular (its pivot or determinant is 0e0)",
+            ),
+            (
+                NumFailure::SpanOutsidePeriod { from: -1.0, to: 7.0, period: 6.0 },
+                ErrorKind::InvalidInput,
+                "the span from -1 to 7 does not lie in the period [0, 6]",
+            ),
+            (
+                NumFailure::VectorVanishes,
+                ErrorKind::Degenerate,
+                "degenerate: a vector the section normalises vanishes (a face's normal at a foot, or the leader's tangent)",
+            ),
+            (
+                NumFailure::TooFewRows { rows: 1, cols: 2 },
+                ErrorKind::InvalidInput,
+                "the 1x2 matrix is empty or has fewer rows than columns",
+            ),
+        ];
+        for (failure, class, text) in cases {
+            assert_eq!(failure.kind(), class, "{text}");
+            assert_eq!(failure.to_string(), text);
+            let e = NumError::failed("op", failure.clone());
+            assert_eq!(e.failure(), Some(&failure));
+            assert_eq!(e.to_string(), format!("op: {text}"));
+            assert!(std::error::Error::source(&e).is_none());
+        }
+        let names: Vec<&str> = [
+            ErrorKind::InvalidInput,
+            ErrorKind::Degenerate,
+            ErrorKind::StageFailed,
+            ErrorKind::Failed,
+        ]
+        .into_iter()
+        .map(ErrorKind::name)
+        .collect();
+        assert_eq!(names, ["invalid_input", "degenerate", "stage_failed", "failed"]);
+        let caused = NumError::call("outer")(NumError::invalid_input("inner", "why"));
+        assert!(std::error::Error::source(&caused).is_some());
+        assert_eq!(NumError::invalid_input("x", "y").failure(), None);
     }
 }
