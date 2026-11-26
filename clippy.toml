@@ -6,12 +6,32 @@ allow-panic-in-tests = true
 allow-indexing-slicing-in-tests = true
 doc-valid-idents = ["SMLib", "NLib", "NVIDIA", "SolidCraft", "OpenUSD", ".."]
 
-# docs/01-architecture.md §8.3. The transcendental functions (powi, sin, ...) join this
-# list with `fmath`. HashMap iteration, the sort tie-break and `partial_cmp` on floats are
-# for an xtask scan: a clippy ban on `PartialOrd::partial_cmp` also fires inside
-# `#[derive(PartialOrd)]` (the unit newtypes).
+# docs/01-architecture.md §8.3. The platform's transcendental functions differ between
+# systems: `scx_num::fmath` replaces them, the same bits everywhere. HashMap iteration,
+# the sort tie-break and `partial_cmp` on floats are for an xtask scan: a clippy ban on
+# `PartialOrd::partial_cmp` also fires inside `#[derive(PartialOrd)]` (the unit newtypes).
 disallowed-methods = [
     { path = "f64::mul_add", reason = "eft only: FMA must be explicit (01 §8.3)" },
+    { path = "f64::powi", reason = "libm differs between platforms: use scx_num::fmath::powi (01 §8.3)" },
+    { path = "f64::powf", reason = "libm differs between platforms: use scx_num::fmath::powf (01 §8.3)" },
+    { path = "f64::exp", reason = "libm differs between platforms: use scx_num::fmath::exp (01 §8.3)" },
+    { path = "f64::exp2", reason = "libm differs between platforms: use scx_num::fmath::exp2 (01 §8.3)" },
+    { path = "f64::ln", reason = "libm differs between platforms: use scx_num::fmath::ln (01 §8.3)" },
+    { path = "f64::log2", reason = "libm differs between platforms: use scx_num::fmath::log2 (01 §8.3)" },
+    { path = "f64::log10", reason = "libm differs between platforms: use scx_num::fmath::log10 (01 §8.3)" },
+    { path = "f64::sin", reason = "libm differs between platforms: use scx_num::fmath::sin (01 §8.3)" },
+    { path = "f64::cos", reason = "libm differs between platforms: use scx_num::fmath::cos (01 §8.3)" },
+    { path = "f64::sin_cos", reason = "libm differs between platforms: use scx_num::fmath::sin_cos (01 §8.3)" },
+    { path = "f64::tan", reason = "libm differs between platforms: use scx_num::fmath::tan (01 §8.3)" },
+    { path = "f64::asin", reason = "libm differs between platforms: use scx_num::fmath::asin (01 §8.3)" },
+    { path = "f64::acos", reason = "libm differs between platforms: use scx_num::fmath::acos (01 §8.3)" },
+    { path = "f64::atan", reason = "libm differs between platforms: use scx_num::fmath::atan (01 §8.3)" },
+    { path = "f64::atan2", reason = "libm differs between platforms: use scx_num::fmath::atan2 (01 §8.3)" },
+    { path = "f64::sinh", reason = "libm differs between platforms: use scx_num::fmath::sinh (01 §8.3)" },
+    { path = "f64::cosh", reason = "libm differs between platforms: use scx_num::fmath::cosh (01 §8.3)" },
+    { path = "f64::tanh", reason = "libm differs between platforms: use scx_num::fmath::tanh (01 §8.3)" },
+    { path = "f64::hypot", reason = "libm differs between platforms: use scx_num::fmath::hypot (01 §8.3)" },
+    { path = "f64::cbrt", reason = "libm differs between platforms: use scx_num::fmath::cbrt (01 §8.3)" },
 ]
 disallowed-types = [
     { path = "std::collections::hash_map::DefaultHasher", reason = "seeded per process: use scx_num::hash (tests only)" },
