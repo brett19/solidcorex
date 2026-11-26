@@ -91,6 +91,7 @@ pub fn thresholds() -> Vec<f64> {
         INFINITE_PARAMETER, TWO_PI, UNDEF_DOUBLE,
     };
     use scx_num::tol::ANG_TOL_RAD;
+    // (each one ulp either side too: `threshold_f64`)
     vec![
         EFF_ZERO,
         EFF_ZERO_SQ,
@@ -111,6 +112,7 @@ pub fn thresholds() -> Vec<f64> {
         UNDERFLOW_ROOT,
         BIG_DOUBLE,
         INFINITE_PARAMETER,
+        scx_num::tol::USE_DEFAULT, // the sentinel the `*_tol3d` helpers replace
     ]
 }
 
@@ -148,10 +150,11 @@ impl Gen for bool {
     }
 }
 
-/// Indices and sizes: small, plus one past any 2D/3D/4D component.
+/// Indices and sizes: small (also indexing the fixed case lists, of at most 13), plus one
+/// past any 2D/3D/4D component, and large.
 impl Gen for usize {
     fn pool(_: &mut SplitMix64) -> Vec<Self> {
-        vec![0, 1, 2, 3, 4, 5, 7, 64]
+        (0..=12).chain([64]).collect()
     }
 }
 
