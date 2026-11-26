@@ -25,8 +25,10 @@ type M = [[f64; 4]; 4];
 /// from `ratio` 1e-160 up (156 inputs), and `Undecided`, which is sound, below: it proves
 /// `No` from the rows' lengths with an absolute margin of 1e-320 on their squares, which
 /// decides once `ratio^2 * 4` (the largest scaled row's square is about 4, the smallest
-/// underflows) passes `2e-320`. Below 1e-160 the pin's `Undecided` is the same answer, so
-/// no defect shows there; the check still holds scx to it.
+/// underflows) passes `2e-320`. Below 1e-160 what it measures is inside that margin, so
+/// `Undecided` is the honest answer there, not a miss: the check accepts it only there, and
+/// `Yes` nowhere. The pin's `Undecided` is the same answer below 1e-160, so no defect shows
+/// there; the check still holds scx to it.
 pub fn tr_is_regular() -> PinDefect<(M, f64), Verdict> {
     PinDefect {
         reason: "the pin's scale powi(2, -1024) is 0",
