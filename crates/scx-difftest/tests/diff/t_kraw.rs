@@ -15,7 +15,7 @@ use crate::diff;
 use crate::harness::List;
 use crate::solvers::{pin_error, Class};
 use solidcore::SolidError;
-use std::cell::RefCell;
+use std::sync::Mutex;
 
 /// Whether call `k` of a callback with injection `fail` fails, and how.
 fn inject(fail: usize, k: usize) -> Option<bool> {
@@ -39,10 +39,10 @@ diff!(kz_inverse23, |a: [f64; 4], c: [f64; 6], d: [f64; 3]| {
 
 diff!(kz_newton, |start: [f64; 2], p: [f64; 4], fail: usize| {
     // a circle of radius |p0| about (p1, 0) and the line p2 x + p3 y = 1
-    let log = RefCell::new(Vec::new());
+    let log = Mutex::new(Vec::new());
     let at = |y: [f64; 2]| -> Result<Option<([f64; 2], [[f64; 2]; 2])>, SolidError> {
-        let k = log.borrow().len();
-        log.borrow_mut().push(y);
+        let k = log.lock().unwrap().len();
+        log.lock().unwrap().push(y);
         match inject(fail, k) {
             Some(true) => return Err(pin_error(Class::Cancelled)),
             Some(false) => return Ok(None),
@@ -58,15 +58,15 @@ diff!(kz_newton, |start: [f64; 2], p: [f64; 4], fail: usize| {
         )))
     };
     let r = m::krawczyk::newton(start, &at, &m::krawczyk::inverse_of_columns2);
-    (r.map_err(|e| (e.to_string(), e)), log.into_inner())
+    (r.map_err(|e| (e.to_string(), e)), log.into_inner().unwrap())
 });
 
 diff!(kz_newton3, |start: [f64; 3], fail: usize| {
     // the sphere |y| = 2, the plane y0 + y1 + y2 = 1 and y0 = y1
-    let log = RefCell::new(Vec::new());
+    let log = Mutex::new(Vec::new());
     let at = |y: [f64; 3]| -> Result<Option<([f64; 3], [[f64; 3]; 3])>, SolidError> {
-        let k = log.borrow().len();
-        log.borrow_mut().push(y);
+        let k = log.lock().unwrap().len();
+        log.lock().unwrap().push(y);
         match inject(fail, k) {
             Some(true) => return Err(pin_error(Class::OutOfFuel)),
             Some(false) => return Ok(None),
@@ -86,17 +86,17 @@ diff!(kz_newton3, |start: [f64; 3], fail: usize| {
         )))
     };
     let r = m::krawczyk::newton(start, &at, &m::krawczyk::inverse_of_columns3);
-    (r.map_err(|e| (e.to_string(), e)), log.into_inner())
+    (r.map_err(|e| (e.to_string(), e)), log.into_inner().unwrap())
 });
 
 diff!(kz_krawczyk1, |a: f64, mid: f64, fail: usize| {
     // x^2 - a about `mid`, preconditioned by 1 / (2 mid)
     use m::interval::Ivl;
-    let vlog = RefCell::new(Vec::new());
-    let jlog = RefCell::new(Vec::new());
+    let vlog = Mutex::new(Vec::new());
+    let jlog = Mutex::new(Vec::new());
     let value = |x: [Ivl; 1]| -> Result<Option<[Ivl; 1]>, SolidError> {
-        let k = vlog.borrow().len() + jlog.borrow().len();
-        vlog.borrow_mut().push(x);
+        let k = vlog.lock().unwrap().len() + jlog.lock().unwrap().len();
+        vlog.lock().unwrap().push(x);
         match inject(fail, k) {
             Some(true) => return Err(pin_error(Class::Unported)),
             Some(false) => return Ok(None),
@@ -105,8 +105,8 @@ diff!(kz_krawczyk1, |a: f64, mid: f64, fail: usize| {
         Ok(Some([x[0] * x[0] - Ivl::from(a)]))
     };
     let jacobian = |x: [Ivl; 1]| -> Result<Option<[[Ivl; 1]; 1]>, SolidError> {
-        let k = vlog.borrow().len() + jlog.borrow().len();
-        jlog.borrow_mut().push(x);
+        let k = vlog.lock().unwrap().len() + jlog.lock().unwrap().len();
+        jlog.lock().unwrap().push(x);
         match inject(fail, k) {
             Some(true) => return Err(pin_error(Class::SmErr)),
             Some(false) => return Ok(None),
@@ -120,8 +120,8 @@ diff!(kz_krawczyk1, |a: f64, mid: f64, fail: usize| {
     (
         r.map_err(|e| (e.to_string(), e)),
         r2.map_err(|e| (e.to_string(), e)),
-        vlog.into_inner(),
-        jlog.into_inner(),
+        vlog.into_inner().unwrap(),
+        jlog.into_inner().unwrap(),
     )
 });
 
@@ -145,10 +145,10 @@ diff!(kz_krawczyk2, |start: [f64; 2], p: [f64; 4], fail: usize| {
         return None;
     };
     let c = m::krawczyk::inverse_of_columns2(&jm)?;
-    let log = RefCell::new(Vec::new());
+    let log = Mutex::new(Vec::new());
     let value = |x: [Ivl; 2]| -> Result<Option<[Ivl; 2]>, SolidError> {
-        let k = log.borrow().len();
-        log.borrow_mut().push(x);
+        let k = log.lock().unwrap().len();
+        log.lock().unwrap().push(x);
         match inject(fail, k) {
             Some(true) => return Err(pin_error(Class::PreparationRequired)),
             Some(false) => return Ok(None),
@@ -161,8 +161,8 @@ diff!(kz_krawczyk2, |start: [f64; 2], p: [f64; 4], fail: usize| {
         ]))
     };
     let jacobian = |x: [Ivl; 2]| -> Result<Option<[[Ivl; 2]; 2]>, SolidError> {
-        let k = log.borrow().len();
-        log.borrow_mut().push(x);
+        let k = log.lock().unwrap().len();
+        log.lock().unwrap().push(x);
         match inject(fail, k) {
             Some(true) => return Err(pin_error(Class::FaceTrimsUnavailable)),
             Some(false) => return Ok(None),
@@ -175,7 +175,12 @@ diff!(kz_krawczyk2, |start: [f64; 2], p: [f64; 4], fail: usize| {
         ]))
     };
     let r = m::krawczyk::krawczyk_region(mid, c, &value, &jacobian);
-    Some((mid, c, r.map_err(|e| (e.to_string(), e)), log.into_inner()))
+    Some((
+        mid,
+        c,
+        r.map_err(|e| (e.to_string(), e)),
+        log.into_inner().unwrap(),
+    ))
 });
 
 diff!(kz_operator, |y: [f64; 4],

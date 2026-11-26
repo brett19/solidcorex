@@ -40,7 +40,7 @@ pub fn gamma(n: usize) -> f64 {
 /// `a > b`, false for a NaN: a refusal written `!above(..)` refuses NaN too.
 #[must_use]
 pub fn above(a: f64, b: f64) -> bool {
-    matches!(a.partial_cmp(&b), Some(core::cmp::Ordering::Greater))
+    a > b
 }
 
 /// The next double above `x` (`f64::next_up` needs Rust 1.86; the MSRV is 1.85). The

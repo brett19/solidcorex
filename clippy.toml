@@ -5,3 +5,22 @@ allow-expect-in-tests = true
 allow-panic-in-tests = true
 allow-indexing-slicing-in-tests = true
 doc-valid-idents = ["SMLib", "NLib", "NVIDIA", "SolidCraft", "OpenUSD", ".."]
+
+# docs/01-architecture.md §8.3. The transcendental functions (powi, sin, ...) join this
+# list with `fmath`. HashMap iteration, the sort tie-break and `partial_cmp` on floats are
+# for an xtask scan: a clippy ban on `PartialOrd::partial_cmp` also fires inside
+# `#[derive(PartialOrd)]` (the unit newtypes).
+disallowed-methods = [
+    { path = "f64::mul_add", reason = "eft only: FMA must be explicit (01 §8.3)" },
+]
+disallowed-types = [
+    { path = "std::collections::hash_map::DefaultHasher", reason = "seeded per process: use scx_num::hash (tests only)" },
+    { path = "std::hash::RandomState", reason = "seeded per process: use scx_num::hash::FixedState (tests only)" },
+    { path = "std::cell::Cell", reason = "not Sync: use a OnceLock cell (01 §8.3)" },
+    { path = "std::cell::RefCell", reason = "not Sync: use a OnceLock cell (01 §8.3)" },
+    { path = "std::time::Instant", reason = "a result must not depend on time (tests only)" },
+    { path = "std::time::SystemTime", reason = "a result must not depend on time (tests only)" },
+]
+disallowed-macros = [
+    { path = "std::thread_local", reason = "per-thread state breaks determinism across executors (01 §8.3)" },
+]

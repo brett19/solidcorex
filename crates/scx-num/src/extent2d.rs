@@ -860,14 +860,14 @@ impl Extent2d {
     pub fn u_left_eval(&self, u: f64) -> bool {
         let mid = (self.min.x + self.max.x) / 2.0;
         // upstream: TRUE unless `u > mid` (so NaN gives TRUE)
-        !matches!(u.partial_cmp(&mid), Some(core::cmp::Ordering::Greater))
+        u <= mid || u.is_nan() || mid.is_nan()
     }
 
     /// True when `v` is in the lower half of the v interval (`GetVLeftEval`).
     #[must_use]
     pub fn v_left_eval(&self, v: f64) -> bool {
         let mid = (self.min.y + self.max.y) / 2.0;
-        !matches!(v.partial_cmp(&mid), Some(core::cmp::Ordering::Greater))
+        v <= mid || v.is_nan() || mid.is_nan()
     }
 
     /// Maps `p` from this domain to `other` through normalised coordinates,

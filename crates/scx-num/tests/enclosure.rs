@@ -262,7 +262,7 @@ fn check_corners(
     k: i32,
     exact: impl Fn(f64, f64) -> Exact,
 ) {
-    if r.lo.partial_cmp(&r.hi).is_none_or(|o| o.is_gt()) {
+    if r.lo > r.hi || r.lo.is_nan() || r.hi.is_nan() {
         t.ok(false, || {
             format!("{name}({a:?}, {b:?}) = {r:?}: not an interval")
         });
@@ -282,7 +282,7 @@ fn check_corners(
 /// The quotient's corners: `lo <= x / y <= hi` as `lo y <= x <= hi y` for `y > 0`
 /// (reversed for `y < 0`), scaled by `2^k`.
 fn check_quotient(t: &mut Tally, name: &str, a: Ivl, b: Ivl, r: Ivl, k: i32) {
-    if r.lo.partial_cmp(&r.hi).is_none_or(|o| o.is_gt()) {
+    if r.lo > r.hi || r.lo.is_nan() || r.hi.is_nan() {
         t.ok(false, || {
             format!("{name}({a:?}, {b:?}) = {r:?}: not an interval")
         });
@@ -383,7 +383,7 @@ fn sqrt_bounds_square_around_the_operand() {
     for _ in 0..CASES {
         let x = ivl(&mut rng, -200, 200);
         let r = x.sqrt();
-        if x.hi.partial_cmp(&0.0).is_none_or(|o| o.is_lt()) {
+        if x.hi < 0.0 || x.hi.is_nan() {
             t.ok(r.lo == f64::NEG_INFINITY && r.hi == f64::INFINITY, || {
                 format!("sqrt({x:?}) = {r:?}")
             });

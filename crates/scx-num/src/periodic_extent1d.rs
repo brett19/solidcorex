@@ -50,8 +50,6 @@
 //!   `full_period = false` unless the interval spans the full period (WR-6); upstream
 //!   reads the empty extent's own `max - min` and takes the full period.
 
-use core::cmp::Ordering;
-
 use crate::error::NumFailure;
 use crate::error::{NumError, Result};
 use crate::math::BIG_DOUBLE;
@@ -275,7 +273,7 @@ impl PeriodicExtent1d {
         // upstream case 0) min < max && from < to; 1) min < max && from > to;
         //               2) min > max && from < to; 3) min > max && from > to
         // `!(a <= b)`, i.e. also true for NaN, as upstream's `(a <= b) ? 0 : n`.
-        let not_le = |a: f64, b: f64| matches!(a.partial_cmp(&b), Some(Ordering::Greater) | None);
+        let not_le = |a: f64, b: f64| a > b || a.is_nan() || b.is_nan();
         let case = match (not_le(self.min, self.max), not_le(from, to)) {
             (false, false) => SeamCase::Neither,
             (false, true) => SeamCase::SpanOnly,
