@@ -68,7 +68,7 @@
 //! `powf(-1, ±inf) = 1`, `hypot(inf, NaN) = inf`). Every NaN result is the one quiet NaN
 //! [`f64::NAN`], whatever NaN came in.
 
-mod dd;
+pub(crate) mod dd;
 mod exp;
 mod hyper;
 mod inverse;

@@ -9,17 +9,21 @@
 //! ([`fmath`]).
 //! Depends on nothing.
 //!
-//! Every module but [`cert`], [`consts`], [`eft`], [`fmath`], [`hash`], [`units`] and
-//! [`error`] is moved from solidcore at commit `03e16c9ee766de5b9b1ced845e5149d62ff493b8`
-//! with its results unchanged bit for bit (`docs/research/52-num-move.md`; the interval
-//! modules, `53-interval-and-algo.md`), except that the transcendental functions are
-//! [`fmath`]'s in place of the C library's, which may differ in the last bit.
+//! Every module but [`cert`], [`consts`], [`eft`], [`fmath`], [`hash`], [`units`],
+//! [`error`] and the crate's own `expansion` (exact sums and products) is moved from
+//! solidcore at commit `03e16c9ee766de5b9b1ced845e5149d62ff493b8` with its results
+//! unchanged bit for bit (`docs/research/52-num-move.md`; the interval modules,
+//! `53-interval-and-algo.md`), except that the transcendental functions are [`fmath`]'s in
+//! place of the C library's, which may differ in the last bit, and that
+//! [`math::three_point_circle_2d`] is computed exactly and rounded once, where the pin's
+//! is not.
 
 pub mod cert;
 pub mod certified;
 pub mod consts;
 pub mod eft;
 pub mod error;
+pub(crate) mod expansion;
 pub mod extent1d;
 pub mod extent2d;
 pub mod extent3d;

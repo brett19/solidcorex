@@ -1226,34 +1226,73 @@ pub fn circumcentre_2d(a: [f64; 2], b: [f64; 2], c: [f64; 2]) -> Option<[f64; 2]
 }
 
 /// Not upstream: the circle through `s`, `e` and `t`: its centre, radius and the sweep (radians)
-/// of the arc from `s` to `e` that passes through `t`. `None` for points on one line, a radius
-/// under `1e-9` or coincident ends.
+/// of the arc from `s` to `e` that passes through `t`. `None` for points on one line (twice
+/// the signed area of the triangle under `1e-12`), a chord or radius at most `1e-9`, a
+/// result that is not finite, or an input that is not finite.
+///
+/// Computed exactly from the points, in expansions with unbounded exponents
+/// (`crate::expansion`), each decision exact and each result rounded once at the end (from
+/// a double-double), so every result is within a rounding error or two of the true
+/// circle's however ill-conditioned the points (one at `1e300` beside two at `1e-300`,
+/// three nearly on a line). For `a = s - t`, `b = e - t` and `d = 2 a x b`: the centre is
+/// `(t d + (|a|^2 b - |b|^2 a)^perp) / d`; the radius is `|a| |b| |e - s| / |d|`; the sweep
+/// is twice the angle at `t` away from the chord, `2 atan2(|a x b|, -(a . b))` (the
+/// inscribed angle at `t` subtends the other arc). The pin computes the centre in plain
+/// `f64` and the sweep as `2 asin` of the half chord over the radius, wrong by up to O(1)
+/// on such points (`scx-difftest`'s `pin_defects::three_point_circle_2d`).
 #[must_use]
 pub fn three_point_circle_2d(
     s: [f64; 2],
     e: [f64; 2],
     t: [f64; 2],
 ) -> Option<([f64; 2], f64, f64)> {
-    let centre = circumcentre_2d(s, t, e)?;
-    let r = length_2d(sub_2d(centre, s));
-    let chord = sub_2d(e, s);
-    let n = left_2d(unit_2d(chord)?);
-    if !r.is_finite() || r <= 1e-9 {
+    use crate::expansion::Expansion as X;
+    if !s.iter().chain(&e).chain(&t).all(|v| v.is_finite()) {
         return None;
     }
-    let mid = midpoint_2d(s, e);
-    let minor = 2.0 * crate::fmath::asin((length_2d(chord) / (2.0 * r)).clamp(-1.0, 1.0));
-    // The arc through `t` is the long one when `t` is on the centre's side of the chord.
-    let long = dot_2d(n, sub_2d(t, mid)) * dot_2d(n, sub_2d(centre, mid)) > 0.0;
-    Some((
-        centre,
-        r,
-        if long {
-            core::f64::consts::TAU - minor
-        } else {
-            minor
+    let diff = |p: [f64; 2], q: [f64; 2]| [X::difference(p[0], q[0]), X::difference(p[1], q[1])];
+    let ([ax, ay], [bx, by], [cx, cy]) = (diff(s, t), diff(e, t), diff(e, s));
+    let cross = ax.mul(&by).sub(&ay.mul(&bx));
+    let d = cross.pow2(1);
+    if d.abs().sub(&X::of(1e-12)).sign() < 0 {
+        return None;
+    }
+    let sq = |x: &X, y: &X| x.mul(x).add(&y.mul(y));
+    let (a2, b2, c2) = (sq(&ax, &ay), sq(&bx, &by), sq(&cx, &cy));
+    let floor = X::of(1e-9).mul(&X::of(1e-9));
+    let (a2a, b2a, c2a, da) = (a2.approx(), b2.approx(), c2.approx(), d.approx());
+    // The chord above 1e-9 (|c|^2 above 1e-18 exactly: decided exactly when near it).
+    let chord_long = c2a
+        .clearly_below(floor.approx())
+        .map_or_else(|| c2.sub(&floor).sign() > 0, |below| !below);
+    if !chord_long || !c2a.sqrt().round().is_finite() {
+        return None;
+    }
+    // r^2 = |a|^2 |b|^2 |c|^2 / d^2, above 1e-18 (decided exactly when near it).
+    let r2 = a2a.mul(b2a).mul(c2a).div(da.mul(da));
+    let radius_long = r2.clearly_below(floor.approx()).map_or_else(
+        || {
+            let num = a2.mul(&b2).mul(&c2);
+            num.sub(&floor.mul(&d.mul(&d))).sign() > 0
         },
-    ))
+        |below| !below,
+    );
+    if !radius_long {
+        return None;
+    }
+    let r = r2.sqrt().round();
+    // The centre's offset from t, times d, exactly.
+    let n = [by.mul(&a2).sub(&ay.mul(&b2)), ax.mul(&b2).sub(&bx.mul(&a2))];
+    let mut centre = [0.0; 2];
+    for ((c, &ti), ni) in centre.iter_mut().zip(&t).zip(&n) {
+        *c = X::of(ti).mul(&d).add(ni).approx().div(da).round();
+    }
+    if !(r.is_finite() && centre.iter().all(|v| v.is_finite())) {
+        return None;
+    }
+    let dot = ax.mul(&bx).add(&ay.mul(&by));
+    let (y, x) = cross.abs().approx().together(dot.neg().approx());
+    Some((centre, r, 2.0 * crate::fmath::atan2(y, x)))
 }
 
 /// Not upstream: the third point of the arc from `s` to `e` for the cursor `h` with a radius or a

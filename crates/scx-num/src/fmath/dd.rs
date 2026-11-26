@@ -25,7 +25,7 @@ pub(super) fn pow2(k: i32) -> f64 {
 
 /// `x * 2^k` for finite `x` and any `k`, rounding once: exact whenever the result is
 /// normal, correctly rounded when it is subnormal, infinite when it overflows.
-pub(super) fn scale(x: f64, k: i32) -> f64 {
+pub(crate) fn scale(x: f64, k: i32) -> f64 {
     if let Some(r) = scale_normal(x, k) {
         return r;
     }
@@ -69,7 +69,7 @@ fn scale_normal(x: f64, k: i32) -> Option<f64> {
 /// The double nearest `(hi + lo) * 2^k` (ties to even), for a normalised pair
 /// (`hi = fl(hi + lo)`) with `hi` finite and nonzero and any `k`: one rounding, also
 /// when the result is subnormal or overflows.
-pub(super) fn round_scaled(hi: f64, lo: f64, k: i32) -> f64 {
+pub(crate) fn round_scaled(hi: f64, lo: f64, k: i32) -> f64 {
     if let Some(r) = scale_normal(hi, k) {
         return r;
     }
@@ -102,7 +102,7 @@ pub(super) fn round_scaled(hi: f64, lo: f64, k: i32) -> f64 {
 /// The unbiased binary exponent of a finite nonzero double (`floor(log2 |x|)`), also for
 /// subnormals.
 #[inline]
-pub(super) fn exponent(x: f64) -> i32 {
+pub(crate) fn exponent(x: f64) -> i32 {
     let b = x.to_bits() & 0x7fff_ffff_ffff_ffff;
     let biased = (b >> 52) as i32;
     if biased == 0 {
@@ -115,21 +115,21 @@ pub(super) fn exponent(x: f64) -> i32 {
 
 /// `(a + b)` for two double-doubles, normalised.
 #[inline]
-pub(super) fn add(a: (f64, f64), b: (f64, f64)) -> (f64, f64) {
+pub(crate) fn add(a: (f64, f64), b: (f64, f64)) -> (f64, f64) {
     let (s, e) = two_sum(a.0, b.0);
     fast_two_sum(s, e + a.1 + b.1)
 }
 
 /// `a * b` for two double-doubles, normalised.
 #[inline]
-pub(super) fn mul(a: (f64, f64), b: (f64, f64)) -> (f64, f64) {
+pub(crate) fn mul(a: (f64, f64), b: (f64, f64)) -> (f64, f64) {
     let (p, e) = two_prod(a.0, b.0);
     fast_two_sum(p, e + (a.0 * b.1 + a.1 * b.0))
 }
 
 /// `a / b` for two double-doubles, normalised.
 #[inline]
-pub(super) fn div(a: (f64, f64), b: (f64, f64)) -> (f64, f64) {
+pub(crate) fn div(a: (f64, f64), b: (f64, f64)) -> (f64, f64) {
     let q = a.0 / b.0;
     let (p, e) = two_prod(q, b.0);
     let r = (a.0 - p) - e + a.1 - q * b.1;
@@ -147,7 +147,7 @@ pub(super) fn recip(b: (f64, f64)) -> (f64, f64) {
 
 /// `sqrt(a)` for a positive double-double, normalised.
 #[inline]
-pub(super) fn sqrt(a: (f64, f64)) -> (f64, f64) {
+pub(crate) fn sqrt(a: (f64, f64)) -> (f64, f64) {
     let s = a.0.sqrt();
     let (p, e) = two_prod(s, s);
     let r = (a.0 - p) - e + a.1;
