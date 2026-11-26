@@ -403,13 +403,88 @@ impl Bits for s::extent3d::LineHit {
     }
 }
 
-/// An error: its class, operation and typed failure (by `Debug`, which names the
-/// variant and prints each field; the variants are the same on both sides).
+/// A typed failure, field by field: its variant name, then each field (`f64`s by their
+/// bits, so a NaN payload or a signed zero counts). The variants and fields are the same on
+/// both sides (`NumFailure` here, `GeomFailure` at the pin).
+macro_rules! failure_bits {
+    ($f:expr, $o:expr, $F:path) => {{
+        use $F as F;
+        let o: &mut Out = $o;
+        match $f {
+            F::CallFailed { class } => {
+                o.tag("CallFailed");
+                o.tag(&format!("{class:?}"));
+            }
+            F::Disjoint { a, b } => {
+                o.tag("Disjoint");
+                a.bits(o);
+                b.bits(o);
+            }
+            F::IndexOutOfRange { index, len } => {
+                o.tag("IndexOutOfRange");
+                index.bits(o);
+                len.bits(o);
+            }
+            F::JacobiDidNotConverge { sweeps, off_diagonal } => {
+                o.tag("JacobiDidNotConverge");
+                sweeps.bits(o);
+                off_diagonal.bits(o);
+            }
+            F::NoPerpendicular => o.tag("NoPerpendicular"),
+            F::NotSquare { rows, cols } => {
+                o.tag("NotSquare");
+                rows.bits(o);
+                cols.bits(o);
+            }
+            F::NotSymmetric => o.tag("NotSymmetric"),
+            F::PointOutsideExtent { u, v } => {
+                o.tag("PointOutsideExtent");
+                u.bits(o);
+                v.bits(o);
+            }
+            F::Singular { measure } => {
+                o.tag("Singular");
+                measure.bits(o);
+            }
+            F::SpanOutsidePeriod { from, to, period } => {
+                o.tag("SpanOutsidePeriod");
+                from.bits(o);
+                to.bits(o);
+                period.bits(o);
+            }
+            F::TooFewRows { rows, cols } => {
+                o.tag("TooFewRows");
+                rows.bits(o);
+                cols.bits(o);
+            }
+            #[allow(unreachable_patterns)]
+            other => o.tag(&format!("other {other:?}")),
+        }
+    }};
+}
+
+/// An error: its class, operation, `InvalidInput` reason or typed failure (fields by bits),
+/// its `Display` text, then its cause's.
 impl Bits for scx_num::NumError {
     fn bits(&self, o: &mut Out) {
+        use scx_num::error::NumFailure;
         o.tag(&format!("{:?}", self.kind()));
         o.tag(self.operation());
-        o.tag(&format!("{:?}", self.failure()));
+        match self {
+            scx_num::NumError::InvalidInput { reason, .. } => {
+                o.tag("InvalidInput");
+                o.tag(reason);
+            }
+            scx_num::NumError::Failed { failure, .. } => match failure {
+                NumFailure::VectorVanishes => o.tag("VectorVanishes"),
+                NumFailure::Defect { why } => {
+                    o.tag("Defect");
+                    o.tag(why);
+                }
+                f => failure_bits!(f, o, scx_num::error::NumFailure),
+            },
+        }
+        o.tag(&self.to_string());
         if let Some(c) = self.cause() {
             c.bits(o);
         }
@@ -417,18 +492,28 @@ impl Bits for scx_num::NumError {
 }
 impl Bits for solidcore::SolidError {
     fn bits(&self, o: &mut Out) {
-        o.tag(&format!("{:?}", self.kind()));
-        o.tag(self.operation());
         // The series' blend failures, by the names scx-num gives them (`NumFailure`).
         use solidcore::error::blend::{BlendFailure, SectionDegeneracy};
-        match self.blend_failure() {
-            Some(BlendFailure::SectionDegenerate(SectionDegeneracy::VectorVanishes)) => {
-                o.tag("Some(VectorVanishes)");
+        o.tag(&format!("{:?}", self.kind()));
+        o.tag(self.operation());
+        if let solidcore::SolidError::InvalidInput { reason, .. } = self {
+            o.tag("InvalidInput");
+            o.tag(reason);
+        } else {
+            match (self.blend_failure(), self.geom_failure()) {
+                (Some(BlendFailure::SectionDegenerate(SectionDegeneracy::VectorVanishes)), _) => {
+                    o.tag("VectorVanishes");
+                }
+                (Some(BlendFailure::Defect { why }), _) => {
+                    o.tag("Defect");
+                    o.tag(why);
+                }
+                (Some(other), _) => o.tag(&format!("blend {other:?}")),
+                (None, Some(f)) => failure_bits!(f, o, solidcore::error::geom::GeomFailure),
+                (None, None) => o.tag(&format!("no typed failure: {self:?}")),
             }
-            Some(BlendFailure::Defect { why }) => o.tag(&format!("Some(Defect {{ why: {why:?} }})")),
-            Some(other) => o.tag(&format!("blend {other:?}")),
-            None => o.tag(&format!("{:?}", self.geom_failure())),
         }
+        o.tag(&self.to_string());
         if let Some(c) =
             std::error::Error::source(self).and_then(|c| c.downcast_ref::<solidcore::SolidError>())
         {
