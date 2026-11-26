@@ -52,8 +52,7 @@ diff!(tr_plane_motion, |t: M,
                         y: V,
                         tol: f64,
                         id: f64| m::mt(t)
-    .plane_motion(m::v3(o), m::v3(x), m::v3(y), tol, id)
-    .map(|(r, d)| (r, d)));
+    .plane_motion(m::v3(o), m::v3(x), m::v3(y), tol, id));
 diff!(tr_orthonormal_frame, |a: V, b: V| {
     m::math::Transform::orthonormal_frame(m::v3(a), m::v3(b))
 });

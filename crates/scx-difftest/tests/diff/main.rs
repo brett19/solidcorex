@@ -7,7 +7,8 @@
     missing_docs,
     clippy::pedantic,
     clippy::indexing_slicing,
-    clippy::needless_range_loop
+    clippy::needless_range_loop,
+    clippy::unwrap_used
 )]
 
 mod facade;

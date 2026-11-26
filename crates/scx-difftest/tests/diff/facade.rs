@@ -172,9 +172,10 @@ pub mod s {
     helpers!();
     /// What solidcore's tolerance functions take: a kernel holding the tolerance set.
     pub fn tolk(r: &TolR) -> solidcore::Kernel {
-        let mut k = solidcore::Kernel::default();
-        k.tolerances = tol_set(r);
-        k
+        solidcore::Kernel::new(&solidcore::KernelOptions {
+            tolerances: tol_set(r),
+            ..Default::default()
+        })
     }
 }
 
