@@ -10,8 +10,10 @@
 //!   header (`Moved from solidcore ...` or `Derived from solidcore ...` `at commit <pin>`,
 //!   its `Upstream record` and its `Changes:`) or says it was written for solidcorex. For
 //!   a derivation header, each named pin file must exist at the pin (`git show PIN:path`
-//!   in the pinned checkout, `SCX_PIN` or `../sc-wt/scx-pin`) and its own upstream record
+//!   in the pinned checkout `../sc-wt/scx-pin`) and its own upstream record
 //!   must appear word for word in the quoted record.
+//! - `pin`: the pinned checkout is at the pin commit with no change (the difftest
+//!   crate's build script refuses to build otherwise).
 //! - `fast`: `cargo fmt --check` of every member, clippy with warnings denied, `layers`, `headers` and
 //!   the tier-1 tests (`cargo test -p <crate>` for each crate named, default every
 //!   library).
@@ -36,8 +38,9 @@ fn main() -> ExitCode {
     let result = match args.first().map(String::as_str) {
         Some("layers") => layers(&root),
         Some("headers") => headers(&root),
+        Some("pin") => pin(&root),
         Some("fast") => fast(&root, args.get(1..).unwrap_or(&[])),
-        _ => Err("usage: cargo xtask <layers | headers | fast [crate ...]>".to_string()),
+        _ => Err("usage: cargo xtask <layers | headers | pin | fast [crate ...]>".to_string()),
     };
     match result {
         Ok(msg) => {
@@ -382,27 +385,50 @@ fn pin_record(pin_file: &str) -> Option<String> {
     (!rec.is_empty()).then(|| squash(&rec.join(" ")))
 }
 
-/// The pinned checkout: `SCX_PIN`, else `../sc-wt/scx-pin` beside the repository.
+/// The pinned checkout, `../sc-wt/scx-pin` beside the repository (the difftest crate's
+/// path dependency).
 fn pin_dir(root: &Path) -> PathBuf {
-    std::env::var_os("SCX_PIN").map_or_else(
-        || root.parent().unwrap_or(root).join("sc-wt").join("scx-pin"),
-        PathBuf::from,
-    )
+    root.parent().unwrap_or(root).join("sc-wt").join("scx-pin")
+}
+
+fn git_in(dir: &Path, args: &[&str]) -> Result<String, String> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .map_err(|e| format!("git {}: {e}", args.join(" ")))?;
+    if out.status.success() {
+        String::from_utf8(out.stdout).map_err(|e| e.to_string())
+    } else {
+        Err(format!(
+            "git {} in {}: {}",
+            args.join(" "),
+            dir.display(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        ))
+    }
+}
+
+/// The pinned checkout is at [`PIN`] and clean (the difftest's build script checks the
+/// same before it links solidcore).
+fn pin(root: &Path) -> Result<String, String> {
+    let dir = pin_dir(root);
+    let head = git_in(&dir, &["rev-parse", "HEAD"])?;
+    if head.trim() != PIN {
+        return Err(format!("pin: {} is at {}, not {PIN}", dir.display(), head.trim()));
+    }
+    let dirty = git_in(&dir, &["status", "--porcelain"])?;
+    if !dirty.trim().is_empty() {
+        return Err(format!("pin: {} has changes:\n{dirty}", dir.display()));
+    }
+    Ok(format!("pin: {} at {PIN}, clean", dir.display()))
 }
 
 /// `git show PIN:<path>` in the pinned checkout.
 fn pin_show(root: &Path, path: &str) -> Result<String, String> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(pin_dir(root))
-        .args(["show", &format!("{PIN}:{path}")])
-        .output()
-        .map_err(|e| format!("git show: {e}"))?;
-    if out.status.success() {
-        String::from_utf8(out.stdout).map_err(|e| e.to_string())
-    } else {
-        Err(format!("{path} does not exist at the pin"))
-    }
+    git_in(&pin_dir(root), &["show", &format!("{PIN}:{path}")])
+        .map_err(|_| format!("{path} does not exist at the pin"))
 }
 
 /// What is wrong with a derivation header against the pin: each named file exists at
