@@ -628,7 +628,7 @@ Where each record lives:
   - Feature thresholds (is this edge smooth enough to chain into a blend?) are explicit parameters of
     the operations that use them, with documented defaults in each spec.
   - The pin's literals of 20°, 25° and 3° become named algorithm constants in `consts`.
-  - The `AngleTol` newtype in `scx-num` is removed; `Angle` remains for angles as values.
+  - The `AngleTol` newtype in `scx-num` is removed. Angles as values are plain `f64` radians; an `Angle` newtype is added only if a layer shows unit mix-ups (step 1 built none).
 - Size checks use `LARGE_SMALL_SIZE_RATIO × res`. Body tolerances, `matched_tolerances` and "the
   result takes the larger tolerance" do not exist.
 - Propagation:
@@ -982,7 +982,7 @@ This section is revised after review-architecture-v2 (S7).
   | `f64::mul_add` | `eft` only |
   | `f64::powi`, `powf`, `exp`, `exp2`, `ln`, `log2`, `log10`, `sin`, `cos`, `sin_cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sinh`, `cosh`, `tanh`, `hypot`, `cbrt` | `fmath` only. `powi` is in the list because LLVM gives no precision guarantee for it; it is used today in `scx-num/src/math.rs` (READ, review) |
   | `HashMap` and `HashSet` iteration, `DefaultHasher`, `RandomState` | tests only |
-  | `partial_cmp` on floats | nowhere |
+  | `partial_cmp` on floats | nowhere; enforced by an xtask scan, since a clippy ban also fires inside `#[derive(PartialOrd)]` |
   | `sort_unstable_by`, `sort_unstable_by_key` | only with a key documented as total, checked by an xtask scan for the tie-break |
   | `Cell`, `RefCell`, `thread_local!` | nowhere |
   | `Instant`, `SystemTime` | tests only |
@@ -1086,7 +1086,7 @@ early.
    and `Rng`.
 6. **Solver options:** `LocalSolve1d` becomes an options value and a pure call.
 7. **`hash_table`:** review its iteration order and decide whether it stays public.
-8. **Add the box tree and the `Executor`** to `scx-algo`.
+8. **Add the box tree and the `Executor`** to `scx-algo`. As built: a static tree over `Extent1d/2d/3d` with `overlapping`, `pairs` and `self_pairs` queries returning sorted results, NaN boxes kept outside the tree; `Serial` and `Scoped` executors with an index-ordered `map`. `mul_add` is allowed only in the `eft` module once it exists.
 9. **Error strings** stay matched to the pin while the difftest compares them (5.3).
 10. **The recorded defects** (interval overflow to NaN, Ferrari's quartic on clustered roots) stay
     pinned and reported while layers are being moved, per 04 §3 (11-26, "defects found while moving are pinned"). Each is fixed after its layer

@@ -192,7 +192,7 @@ A certificate is a stored claim, its bound, and what the claim depends on:
 pub struct Cert {
     pub claim: Claim,          // what is bounded
     pub bound: Length,         // proved: true distance <= bound, rounding included
-    pub method: Method,        // Exact, Interval, Bernstein, Taylor, Krawczyk (definitions doc §4.2)
+    pub method: Method,        // Interval, Bernstein, Taylor, Krawczyk (no Exact; see below) (definitions doc §4.2)
     pub reads: Reads,          // the entity versions it was computed from
 }
 
@@ -258,7 +258,7 @@ What each old step's work becomes:
 
 - `Length`, `Accuracy`, `Resolution`, `ParamTol` are `Copy` newtypes with private fields and the
   arithmetic each needs, with no arithmetic between `Accuracy` and `Resolution` except through
-  `coincident(res, a, b) -> Length`. `AngleTol` is removed (01 §4.2); `Angle` stays for angle values.
+  `coincident(res, a, b) -> Length`. `AngleTol` is removed (01 §4.2); angle values are plain `f64` radians (01 §4.2).
 - `num::consts`, holding one definition of each of `ZONE_DEFAULT`, `EPS_LEN`, `EPS_REL`,
   `EPS_PARAM` and `MAX_ACCURACY_RATIO`. The six literal zone copies (07 §6) are replaced by
   references to it.
