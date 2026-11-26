@@ -74,6 +74,9 @@ pinned solidcore with derivation headers (`06-licence-and-source.md`).
 | Layer 0 moved: `scx-num` | `crates/scx-num`, `research/52-num-move.md` | done (to 273768e): 128 unit and 10 property tests; difftest 267 tests, 616,874 inputs, 0 mismatches against the pin; builds for wasm32 |
 | Interval arithmetic into `scx-num`; review fixes | `crates/scx-num`, `research/53-interval-and-algo.md` | done 11-26: 148 unit, 11 enclosure, 10 property, 1 libm-table tests; difftest 303 tests, 0 mismatches, 97.11% of regions; one non-enclosure found (overflow to NaN), not changed |
 | Layer 1 started: `scx-algo` | `crates/scx-algo`, `research/53-interval-and-algo.md` sections 5 and 8 | `polynomial` moved 11-26, bit-identical; the local solvers 11-26 with generic errors (owner's design), 0 mismatches with failures injected at every call; Krawczyk (with `inverse4`) and `hash_table` (over `Tolerances`) 11-26, 0 mismatches. Step 2 done |
+| Difftest: deterministic, and within tolerance of the pin | `crates/scx-difftest/tests/diff/harness.rs` | done 11-26 (1cab726): every case runs scx twice (must match to the bit) and is compared with the pin within `Tol` (1e-12 relative by default; same shape exactly). 317 tests, 766,857 inputs: 766,754 exact, 10 within tolerance (`t_extent::e3_line` 8, `t_rest::tf_inv_evaluate_guess_point_simple` 2; not yet examined), 0 mismatches, 0 nondeterministic. Whole difftest 2.2 s |
+| Architecture redone as solidcorex's own design | `01-architecture.md` | in progress 11-26 (under the no-mirroring rule) |
+| Certified trim-gap bounds for offset and procedural-blend surfaces | `research/55-certified-trim-gap.md`, `prototypes/trim-gap-bound/` | in progress 11-26 |
 
 Builds and tests run on a build server, never on the editing machine. The difftest builds against a
 read-only checkout of solidcore at the pin, `../sc-wt/scx-pin` beside this repository (its build script

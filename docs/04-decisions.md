@@ -56,6 +56,8 @@ it replaces.
 
 These were within its remit as coordinator. Each can be overturned.
 
+From 2026-11-26 the owner's standing instruction is: "You own this and should keep moving forwards whenever you can. If you need a decision from me, start an analysis and adversarial analysis to select the best option you can come up with, and record that decision for me to review and potentially adjust later." Rows made that way say "(For the owner's review)".
+
 | Date | Ruling | Evidence |
 |---|---|---|
 | 11-23 | Gap caches stay; the check's writes of meaning are what should go | Removing gap storage made later passes recompute (research 20) |
@@ -77,6 +79,7 @@ These were within its remit as coordinator. Each can be overturned.
 | 11-26 | Defects found while moving are pinned by a test and reported, not fixed in the move | The overflow-to-NaN interval and the quartic's clustered roots are both the pin's behaviour bit for bit (research 53 section 9) |
 | 11-26 | Layer 1 is `scx-algo`, depending only on `scx-num`; its first file is `polynomial` | Pure, no error type, 6 callers; 0 mismatches over 27,984 root-built polynomials at every pool tolerance (research 53 section 8) |
 | 11-26 | (Decided by the owner, 2026-11-26) The local solvers are generic over the evaluator's error through `scx_algo::error::EvalError`, which classifies it: `ends_solve` (unported, cancelled, out of fuel: stops at once), `passes_through` (those and preparation-required: returned unchanged), `never_ignored` (those, missing face trims and an uncertified blend: never skipped as a failed sample). The solver's error `SolveError<E>` is its own failure (`InvalidInput`, `Failed`, `Num`) or a failed call carrying the evaluator's error as cause (`CallFailed`), or that error unchanged (`Eval`), mapped one for one onto solidcore's errors in the difftest facade. A bad Jacobian is read from the matrix solve's `NumError::Failed`, not from the evaluator. Evaluators keep `&mut self` | `scx-algo` cannot name `SolidError`; the solvers act on its classes; 13 of the 27 pin evaluators keep state between calls (research 53 sections 5 and 12) |
+| 11-26 | (For the owner's review) The difftest's default tolerance is 1e-12 relative (1e-300 absolute), with exact shape (variants, errors, integers, lengths, panics); a test may widen it with `run_tol` and must say why. Exact agreement is still counted and printed | Tight enough that only rounding-order drift passes (an algorithm change or a wrong branch moves results by far more); loose enough that reassociating a sum or using a different but correct formula does not fail. Same shape exactly because a different error or variant is a behaviour change, not drift. Change it if real rewrites need wider tolerances routinely; then per-module tolerances with stated reasons |
 
 ## 4. Designs recommended and then withdrawn
 
