@@ -1,7 +1,26 @@
-// Written for solidcorex. Apache-2.0. Takes the shape of the solidcore errors the moved
-// files return (`SolidError::InvalidInput`, and `SolidError::Failed` with a `GeomFailure`
-// reason, in `error.rs` and `error/geom.rs` at commit
-// 03e16c9ee766de5b9b1ced845e5149d62ff493b8), keeping only the variants these files build.
+// Derived from solidcore `solidcore/crates/solidcore/src/error.rs`,
+// `solidcore/crates/solidcore/src/error/geom.rs` and
+// `solidcore/crates/solidcore/src/error/blend.rs` at commit
+// 03e16c9ee766de5b9b1ced845e5149d62ff493b8.
+// Upstream record (verbatim from those files): error.rs: Upstream:
+// `source/SMLib/inc/SmMessages.h` (`SmStatus`, `SM_SUCCESS`, `SM_ERR_*` codes and the
+// `SE`/`SER`/`NER` error-propagation macros). error/geom.rs: Upstream: none. These describe
+// failures of the geometry utilities (`crate::geom`: vectors, matrices and transforms, boxes
+// and extents, the point-set and plane utilities, the one-dimensional and global solvers,
+// grids, tolerance relations, attributes and object caches). Each also records, for difftest
+// only, the status the C++ reports for it (crate-private `comparison_status`, read through
+// [`crate::SolidError::sm_status`]). error/blend.rs: Upstream: none. These describe failures
+// of the blend subsystem (`crate::blend`: the fillet and feature executives, the fillet
+// geometry, solvers, sections, corners, overflows, intersectors, outlines, removal and the
+// exact and rolling-ball fillets).
+// Changes: only the variants layer 0 builds, renamed: `SolidError` -> `NumError` (its
+// `InvalidInput` and `Failed` shapes), `GeomFailure` -> `NumFailure` (the causes the moved
+// files build, with their classes and `Display` texts); `ErrorKind` keeps the four classes
+// those causes take. Added from the blend error for the interval move: `NumFailure::Defect`
+// (`BlendFailure::Defect`, StageFailed, the same text) and `NumFailure::VectorVanishes`
+// (`BlendFailure::SectionDegenerate(SectionDegeneracy::VectorVanishes)`, Degenerate, the
+// same text). No `Failure` wrapper, site, fit, status numbers or upstream-status
+// accessors.
 //! Why a layer-0 routine fails.
 //!
 //! Two shapes, as in solidcore: a check of the caller's argument that fails is
