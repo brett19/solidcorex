@@ -27,7 +27,7 @@ section 8. READ: read from source. INFERRED: reasoned from the two.
   | Corner cut on corpus parts | 58-89% |
   | Fillet, one box edge | 33% |
   | Fillet, one rim on the 70-face plate | **7%** (63 faces it did not need to touch were rewritten; edges 99% kept) |
-  | Shell, open top | 83-95% (with new ids) |
+  | Shell, open top | 83-95% (box keeps 5 face ids, plate4 only 5 of 22; every edge and vertex gets a new id) |
   | Offset | 0% |
   | Transform | 0% |
 
@@ -161,7 +161,7 @@ operand; the tool operand keeps 0% for cuts, and 2 of 3 faces for a join (its to
 | Fillet: one edge of a box | 6 | 33% / 33% | 58% | 75% | 6 ms |
 | Fillet: one rim of plate8 | 70 | **7% / 7%** | 99% | 99% | 1.49 s* |
 | Fillet: all 64 top rims of plate8 | 70 | 7% / 7% | 37% | 53% | 3.28 s* |
-| Shell: box, top open | 6 | 83% / 0% | 100% / 0% | 100% / 0% | 55 ms |
+| Shell: box, top open | 6 | 83% / 83% | 100% / 0% | 100% / 0% | 55 ms |
 | Shell: plate4, top open | 22 | 95% / 23% | 100% / 0% | 100% / 0% | 2.11 s |
 | Offset: box +1 | 6 | 0% | 0% | 0% | 55 ms |
 | Offset: plate4 +0.5 | 22 | 0% | 0% | 0% | 1.23 s |
@@ -187,7 +187,7 @@ last 15% of each corner box did not reach the material.
   - their tolerances, loops and edges are unchanged, and 202 of 204 edges are kept.
   - For sharing, a re-parameterised face is a new face: its trims and cells are invalid. A kernel
     that wants sharing must not rewrite faces it does not need to (INFERRED).
-  - Shell rewrites everything under new ids but keeps 83-95% of faces by content. The body is copied
+  - Shell gives every edge and vertex a new id, and most plate4 faces too, but keeps 83-95% of faces by content. The body is copied
     first and then edited (READ: `shell_brep` takes `&Brep` and returns a new body), so identity is
     lost although the content survives.
 - **Offset and transform keep nothing, by construction.** A body that stores a placement (a rigid
