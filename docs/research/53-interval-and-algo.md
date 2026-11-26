@@ -1,7 +1,7 @@
 # 53. Interval arithmetic into `scx-num`, and `scx-algo`
 
 Written for solidcorex. This covers solidcore at the pin 03e16c9ee766de5b9b1ced845e5149d62ff493b8 (read-only at
-`../sc-wt/scx-pin`) and solidcorex `main` from 3e868cb onwards. Builds and tests ran on the build server.
+`../sc-wt/scx-pin`) and solidcorex `main` from ad94840 onwards. Builds and tests ran on the build server.
 Trust: counts, coverage and differential results are MEASURED; soundness arguments are argued here and
 tested, not machine-proved; cuts and rulings are JUDGED.
 
@@ -138,27 +138,27 @@ name `SolidError` (it is above). Plan: the solvers are generic over the evaluato
 `AlgoError<E>` is `{ Own(own failure), Callback { operation, cause: E } }`, mapped one for one onto
 the pin's `SolidError` by the difftest's facade.
 
-## 6. Review fixes (the independent review of scx-num, up to 3e868cb)
+## 6. Review fixes (the independent review of scx-num, up to ad94840)
 
 Each its own commit:
 
 1. `layers.txt` gains `[external]`, an allow-list for crates outside the workspace; solidcore may never
-   be listed (9ffe5f7).
+   be listed (0e1268c).
 2. `cargo xtask headers` checks each derivation header against the pin: the named files exist and each
-   file's upstream record is quoted as the pin has it (df048ab). Files written for solidcorex are
+   file's upstream record is quoted as the pin has it (b55cb95). Files written for solidcorex are
    diffed against the pin by `bodydiff` (README review checklist, item 9: no checklist existed in the
    repository before; it is in the README now).
-3. `error.rs` has a derivation header (847765b).
+3. `error.rs` has a derivation header (4b1f100).
 4. The difftest fingerprints an error by class, operation, `InvalidInput` reason or typed failure fields
-   (floats by bits), its text, and its cause (e2bd6d1); the text comparison found
+   (floats by bits), its text, and its cause (98edfa0); the text comparison found
    `VectorVanishes` without its class prefix, fixed. Every variant's text: the unit test above.
-5. The difftest's build script refuses a pin checkout at another commit or with changes (15dca00).
+5. The difftest's build script refuses a pin checkout at another commit or with changes (05df7d0).
 6. Threshold pools and coverage: section 4; a standing rule in the README.
-7. `minor_skips_row_and_column`'s second assertion restored (85021f5); `bodydiff` runs over tests too.
-8. `LARGE_SMALL_SIZE_RATIO` is its own literal (73e961d); a test holds the two ratios equal for now.
+7. `minor_skips_row_and_column`'s second assertion restored (e6f23f0); `bodydiff` runs over tests too.
+8. `LARGE_SMALL_SIZE_RATIO` is its own literal (7e963c8); a test holds the two ratios equal for now.
 9. Standing steps in xtask (`pin`, `bodydiff`, `cov`, `movecheck`), documented in the README.
 10. Report 52 corrected (the det3 claim, the 5e-7 entry), with a det3 test against integer determinants
-    (e2289f4).
+    (5ef2233).
 11. Section 3 and `libm_table.rs`.
 12. NITs: `Changes:` lines name every differing fn; the small_matrix record; the manifest parse; `fast`
     lints the difftest and runs the xtask's tests; the README says dev, not `--release`; `.rs` files

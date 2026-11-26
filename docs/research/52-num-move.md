@@ -1,7 +1,7 @@
 # 52. Moving layer 0 into `scx-num`
 
 Written for solidcorex. This covers solidcore at the pin 03e16c9ee766de5b9b1ced845e5149d62ff493b8, its file
-`crates/solidcore/src` (read-only at `../sc-wt/scx-pin`), and solidcorex `main` from b31f8c7 to 429af2c. Builds and tests ran on the build server.
+`crates/solidcore/src` (read-only at `../sc-wt/scx-pin`), and solidcorex `main` from 3c959d5 to 273768e. Builds and tests ran on the build server.
 Trust: the counts and the differential result were MEASURED; the cuts and rulings were JUDGED.
 
 ## 1. What moved

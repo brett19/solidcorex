@@ -1,11 +1,11 @@
-# Review: scx-num (layer 0) and the workspace skeleton, up to 3e868cb
+# Review: scx-num (layer 0) and the workspace skeleton, up to ad94840
 
 Independent review of the move of solidcore layer 0 into `crates/scx-num`, checked against the pin
 `03e16c9ee766de5b9b1ced845e5149d62ff493b8` (`../sc-wt/scx-pin`). Scope: the workspace skeleton
 (`Cargo.toml`, `xtask/`, lints, `README.md`, `LICENSE`, `NOTICE`), `crates/scx-num`,
 `crates/scx-difftest`, and report `docs/research/52-num-move.md`, read as claims. Every file was
-read from an export of commit 3e868cb, not from the working tree, because a second builder was
-changing that tree during the review. Runs were on the build server, in a worktree at 3e868cb
+read from an export of commit ad94840, not from the working tree, because a second builder was
+changing that tree during the review. Runs were on the build server, in a worktree at ad94840
 (a review worktree).
 
 **Verdict: PASS WITH FIXES.** There is no blocker. The code is a faithful move:
@@ -339,7 +339,7 @@ Weak spots (NIT):
 
 ## 7. Runs on the build server
 
-All runs were at 3e868cb, at low priority on a shared build server.
+All runs were at ad94840, at low priority on a shared build server.
 
 | Step | Result | Wall time |
 |---|---|---|
