@@ -9,6 +9,7 @@
 //! boxes evaluated and the result are compared at every call position. `solve4`'s singular
 //! system is compared by class, operation and failure (`kz_err`; its text differs by design,
 //! report 53 section 8).
+#![allow(clippy::type_complexity)] // the callbacks' types, as the pin writes them
 
 use crate::diff;
 use crate::harness::List;
