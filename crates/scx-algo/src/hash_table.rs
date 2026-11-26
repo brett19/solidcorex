@@ -3,7 +3,9 @@
 // Upstream record (verbatim from that file): Upstream: `source/SMLib/inc/SmHashTable.h`.
 // Changes: `ObjsInVoxels::find_coincident_pairs` takes `&Tolerances` in place of `&Kernel`
 // (it reads only `xsect_tol3d`); `SolidError::InvalidInput` became `NumError::InvalidInput`
-// (same operation, reason and text). The tests that built a kernel
+// (same operation, reason and text). `ObjsInVoxels::map_point_to_voxel` and
+// `ObjsInVoxels::map_voxel_index_to_bbox` read the box's corner by `Extent3d::min()` (the
+// field is the crate's own at the pin). The tests that built a kernel
 // (`add_neighbours_and_find_pairs`,
 // `wr12_single_voxel_clusters_report_all_unique_pairs_without_mutation`,
 // `wr12_voxel_boundary_deduplication_and_limit_index_and_histogram`,
@@ -660,9 +662,9 @@ impl<T: Copy + PartialEq> ObjsInVoxels<T> {
         let dx = self.bbox.x_length() / self.x_cnt as f64;
         let dy = self.bbox.y_length() / self.y_cnt as f64;
         let dz = self.bbox.z_length() / self.z_cnt as f64;
-        let mut ix = ulong_from_f64((p.x - self.bbox.min.x) / dx);
-        let mut iy = ulong_from_f64((p.y - self.bbox.min.y) / dy);
-        let mut iz = ulong_from_f64((p.z - self.bbox.min.z) / dz);
+        let mut ix = ulong_from_f64((p.x - self.bbox.min().x) / dx);
+        let mut iy = ulong_from_f64((p.y - self.bbox.min().y) / dy);
+        let mut iz = ulong_from_f64((p.z - self.bbox.min().z) / dz);
         if ix >= self.x_cnt as u64 {
             ix = self.x_cnt as u64 - 1;
         }
@@ -700,7 +702,7 @@ impl<T: Copy + PartialEq> ObjsInVoxels<T> {
             return e;
         };
         let (ix, iy, iz) = (ix as f64, iy as f64, iz as f64);
-        let m = self.bbox.min;
+        let m = self.bbox.min();
         let _ = e.set_min_max_coords(
             m.x + ix * dx,
             m.y + iy * dy,
