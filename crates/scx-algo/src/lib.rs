@@ -4,6 +4,7 @@
 //! kernel: the solvers are generic over their evaluator's error ([`error::EvalError`]).
 
 pub mod error;
+pub mod krawczyk;
 pub mod local_solve1d;
 pub mod local_solve_nd;
 pub mod polynomial;

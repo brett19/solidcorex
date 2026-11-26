@@ -401,6 +401,29 @@ fn pin_record(pin_file: &str) -> Option<String> {
     (!rec.is_empty()).then(|| squash(&rec.join(" ")))
 }
 
+/// A pin file's first module-doc paragraph, squashed: the record of a file that has no
+/// `Upstream`/`Fork` paragraph (one written for solidcore, saying so there).
+fn pin_first_paragraph(pin_file: &str) -> Option<String> {
+    let mut rec: Vec<&str> = Vec::new();
+    for line in pin_file.lines() {
+        let Some(doc) = line.strip_prefix("//!") else {
+            if rec.is_empty() {
+                continue;
+            }
+            break;
+        };
+        let doc = doc.trim();
+        if doc.is_empty() {
+            if rec.is_empty() {
+                continue;
+            }
+            break;
+        }
+        rec.push(doc);
+    }
+    (!rec.is_empty()).then(|| squash(&rec.join(" ")))
+}
+
 /// The pinned checkout, `../sc-wt/scx-pin` beside the repository (the difftest crate's
 /// path dependency).
 fn pin_dir(root: &Path) -> PathBuf {
@@ -452,7 +475,8 @@ fn pin_show(root: &Path, path: &str) -> Result<String, String> {
 }
 
 /// What is wrong with a derivation header against the pin: each named file exists at
-/// [`PIN`] and its upstream record appears word for word in the quoted record.
+/// [`PIN`] and its upstream record (or, where it has none, its first module-doc paragraph)
+/// appears word for word in the quoted record.
 fn derivation_against_pin(root: &Path, head: &str) -> Vec<String> {
     let sources = pin_sources(head);
     if sources.is_empty() {
@@ -463,7 +487,7 @@ fn derivation_against_pin(root: &Path, head: &str) -> Vec<String> {
     for src in &sources {
         match pin_show(root, src) {
             Err(e) => out.push(e),
-            Ok(text) => match pin_record(&text) {
+            Ok(text) => match pin_record(&text).or_else(|| pin_first_paragraph(&text)) {
                 None => out.push(format!("{src} has no upstream record at the pin")),
                 Some(rec) if !quoted.contains(&rec) => out.push(format!(
                     "the quoted record lacks {src}'s, word for word: \"{rec}\""
