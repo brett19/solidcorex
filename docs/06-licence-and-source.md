@@ -20,7 +20,11 @@ What that allows, from reading solidcore's own notices (pinned commit, `solidcor
   Apache-2.0 only.
 - **Code written here from scratch can be MIT OR Apache-2.0.**
 
-So there are two workable shapes, and the choice is Brett's:
+**Decided by Brett, 2026-11-26: "Apache 2 throughout".** Shape 1 below. The library is Apache-2.0 and
+code may be moved from solidcore, keeping the notices. `LICENSE` and `NOTICE` at the repository root
+carry them.
+
+The two shapes that were on the table:
 
 1. **The library is Apache-2.0.** Everything may be moved from solidcore. This matches solidcore today.
 2. **The library is MIT OR Apache-2.0, and only original code goes in.** Nothing derived from solidcore

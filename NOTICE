@@ -1,0 +1,29 @@
+solidcorex
+Copyright (c) 2026 The solidcorex contributors
+
+Licensed under the Apache License, Version 2.0 (LICENSE).
+
+Parts of this product are derived from solidcore
+(https://github.com/tangency-labs/solidcraft, directory solidcore/, at commit
+03e16c9ee766de5b9b1ced845e5149d62ff493b8 and later pinned commits recorded in
+docs/06-licence-and-source.md), Copyright (c) 2026 The solidcore contributors,
+licensed under the Apache License, Version 2.0.
+
+solidcore is itself a Rust port (a derivative work) of the SMLib and SM_API
+components of USD BRep, https://github.com/NVIDIA-Omniverse/usd-brep
+(v1.0.1, commit 3fd5b95), licensed under the Apache License, Version 2.0.
+The upstream work carries the following notice:
+
+  USD BRep is Copyright (c) 2020-2026, NVIDIA CORPORATION & AFFILIATES. All
+  rights reserved. NVIDIA-authored portions of this product are licensed under
+  the Apache License, Version 2.0, except where otherwise noted.
+
+The upstream SMLib and SM_API source files carry the SPDX header:
+
+  SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+  SPDX-License-Identifier: Apache-2.0
+
+Modifications: code taken from solidcore is rearranged into separate libraries
+and changed as each file's header records. Every file derived from solidcore
+names the solidcore file it derives from, and keeps that file's own record of
+the upstream file it derives from.
