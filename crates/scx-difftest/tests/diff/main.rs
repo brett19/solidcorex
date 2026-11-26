@@ -16,6 +16,7 @@ mod harness;
 mod solvers;
 mod t_algo;
 mod t_extent;
+mod t_hash;
 mod t_interval;
 mod t_kraw;
 mod t_math;

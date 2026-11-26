@@ -179,6 +179,11 @@ macro_rules! helpers {
 /// scx-num and scx-algo, by solidcore's module names.
 pub mod x {
     pub use crate::solvers::x as sv;
+    pub use scx_algo::hash_table;
+    /// What `find_coincident_pairs` reads tolerances from: the default `Tolerances`.
+    pub fn ht_tol() -> scx_num::Tolerances {
+        scx_num::Tolerances::default()
+    }
     pub use scx_algo::krawczyk;
     /// A Krawczyk-module error as (class, operation, failure): `solve4`'s singular system.
     pub fn kz_err(e: &scx_num::NumError) -> (String, &'static str, String) {
@@ -208,6 +213,11 @@ pub mod x {
 /// The pinned solidcore.
 pub mod s {
     pub use crate::solvers::s as sv;
+    pub use solidcore::geom::hash_table;
+    /// What `find_coincident_pairs` reads tolerances from: the default kernel.
+    pub fn ht_tol() -> solidcore::kernel::Kernel {
+        solidcore::kernel::Kernel::default()
+    }
     /// `geom::krawczyk`'s items are `pub(crate)` at the pin: the pin's file, made public by
     /// the build script (`build.rs`, `pin_krawczyk`), over the pin's own types.
     #[allow(clippy::all, clippy::pedantic, dead_code, unused_imports)]
