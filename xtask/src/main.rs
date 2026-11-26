@@ -355,7 +355,7 @@ fn pin_sources(head: &str) -> Vec<String> {
         .step_by(2)
         .filter(|p| {
             p.starts_with("solidcore/")
-                && std::path::Path::new(p).extension().is_some_and(|e| e == "rs")
+                && Path::new(p).extension().is_some_and(|e| e == "rs")
         })
         .map(str::to_string)
         .collect()
