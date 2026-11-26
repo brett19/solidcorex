@@ -5,7 +5,7 @@
 //! Inputs come from a fixed-seed SplitMix64 written out here, so every run draws the
 //! same cases.
 
-#![allow(missing_docs, clippy::pedantic)]
+#![allow(missing_docs, clippy::pedantic, clippy::indexing_slicing, clippy::needless_range_loop)]
 
 use scx_num::certified::{next_down, next_up};
 use scx_num::extent1d::Extent1d;
