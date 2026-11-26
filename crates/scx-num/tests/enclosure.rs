@@ -196,6 +196,7 @@ fn sum(a: f64, b: f64) -> Exact {
 struct Tally {
     checked: usize,
     undecided: usize,
+    undecided_first: Vec<String>,
     failures: Vec<String>,
 }
 
@@ -215,6 +216,9 @@ impl Tally {
             self.undecided,
             self.failures.len()
         );
+        for u in &self.undecided_first {
+            println!("  undecided: {u}");
+        }
         assert!(
             self.failures.is_empty(),
             "{name}: {} failures, first: {:#?}",
@@ -474,7 +478,12 @@ fn near(rng: &mut Rng, lo: f64, hi: f64, points: &[f64]) -> f64 {
 
 fn decide(t: &mut Tally, c: Option<i32>, want: i32, what: impl FnOnce() -> String) {
     match c {
-        None => t.undecided += 1,
+        None => {
+            t.undecided += 1;
+            if t.undecided_first.len() < 3 {
+                t.undecided_first.push(what());
+            }
+        }
         Some(s) => t.ok(s == want || s == 0, what),
     }
 }
