@@ -23,6 +23,7 @@ mod t_interval;
 mod t_kraw;
 mod t_math;
 mod t_rest;
+mod t_rng;
 mod t_solve;
 mod t_tol;
 mod t_vector;

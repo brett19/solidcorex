@@ -168,6 +168,25 @@ impl Gen for usize {
     }
 }
 
+/// Seeds: zero, one, all ones, the default seed and SplitMix64's increment (the state
+/// wraps to zero after one step from its negation), plus random words.
+impl Gen for u64 {
+    fn pool(rng: &mut SplitMix64) -> Vec<Self> {
+        let mut v = vec![
+            0,
+            1,
+            u64::MAX,
+            0x5EED_5EED_5EED_5EED,
+            0x9E37_79B9_7F4A_7C15,
+            0x9E37_79B9_7F4A_7C15_u64.wrapping_neg(),
+        ];
+        for _ in 0..6 {
+            v.push(rng.next_u64());
+        }
+        v
+    }
+}
+
 impl Gen for i32 {
     fn pool(_: &mut SplitMix64) -> Vec<Self> {
         vec![-1, 0, 1, 2, 3, 4, 5, 6, 100, i32::MIN, i32::MAX]

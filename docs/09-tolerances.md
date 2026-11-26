@@ -215,6 +215,14 @@ pub enum Claim {
   never stored. Nothing is set by hand except on import.
 - Exact kinds carry no accuracy and no runtime proof (01 §4.1; this replaces "`Method::Exact` and
   bound 0").
+- As built in `scx-num::cert` (11-26, 01 §10.1 item 5; for owner review). The ids in the sketch
+  above are defined two layers up, so:
+  - `Claim` names what is bounded, not whose. Its variants are `PcurveOnSurface`,
+    `CurveToIntersection`, `NetToDefinition`, `EndsAtVertex(EdgeEnd)` and `Outward`. The owner is
+    wherever the `Recorded` is stored.
+  - `Reads` holds at most four opaque `u64` keys, which the body layer assigns.
+  - `Method` is `Interval`, `Bernstein`, `Taylor` or `Krawczyk`. There is no `Exact`, per the
+    bullet above; the code comment in the sketch still lists it.
 - An operation declares what it preserves: a rigid move keeps every `Cert`, a uniform scale
   multiplies bounds, and a Boolean keeps those of untouched faces.
 
