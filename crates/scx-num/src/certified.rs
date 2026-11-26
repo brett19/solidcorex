@@ -3,7 +3,8 @@
 // Upstream record (verbatim from that file): Not upstream. Deviations: none (no upstream
 // counterpart). No recursion.
 // Changes: `UNIT` and `gamma` moved down from `nurbs/math.rs` with their test; `next_up` and
-// `next_down` made public (callers above use them); paths.
+// `next_down` made public (callers above use them); paths; adds the test
+// `rounding_bounds_keep_the_previous_bits`.
 //! Certified comparisons: a computed quantity with a bound on the rounding of computing
 //! it, and the three-way answer of comparing it with a tolerance. A query that decides
 //! with a tolerance answers [`Verdict::Yes`] or [`Verdict::No`] only when the bound

@@ -2,8 +2,9 @@
 // 03e16c9ee766de5b9b1ced845e5149d62ff493b8.
 // Upstream record (verbatim from that file): Upstream: `source/SMLib/src/SmExtent2d.cpp`,
 // `source/SMLib/inc/SmExtent2d.h`.
-// Changes: the `Content` digest impl stays in solidcore; `min`/`max` fields private; errors are
-// `NumError`; tests check the error variant; paths.
+// Changes: the digest impl `Content::content` stays in solidcore; `min`/`max` fields private;
+// errors are `NumError`; the test `inversion_of_degenerate_side` checks the error variant in
+// place of the status number; paths.
 //! Axis-aligned 2D extents (`[min, max]` rectangles, usually a surface's `(u, v)`
 //! parameter domain): construction, growth, set operations, containment and boundary
 //! classification, periodic containment, normalised evaluation/inversion, line

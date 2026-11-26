@@ -2,8 +2,8 @@
 // 03e16c9ee766de5b9b1ced845e5149d62ff493b8.
 // Upstream record (verbatim from that file): Upstream: `source/SMLib/inc/SmMatrix.h`,
 // `source/SMLib/src/SmMatrix.cpp`.
-// Changes: errors are `NumError`/`NumFailure`; tests check the error variant in place of the
-// status number; paths.
+// Changes: errors are `NumError`/`NumFailure`; the tests `solve_errors` and `jacobi_symmetric`
+// check the error variant in place of the status number; paths.
 //! Dense row-major matrices of `f64` used to solve small equation systems: LU
 //! decomposition with partial pivoting, linear solves, and the Jacobi eigen solver
 //! for real symmetric matrices.

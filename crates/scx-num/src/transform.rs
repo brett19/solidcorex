@@ -4,7 +4,9 @@
 // `source/SMLib/src/SmTransform.cpp`.
 // Changes: the matrix part only (the volume, pseudo-box, solution-array, placement,
 // database and type-code members stay in solidcore); adds `from_matrix`; the 3x3/4x4
-// helpers come from `crate::small_matrix`.
+// helpers come from `crate::small_matrix`. Tests: `concat_invert_scale` drops its
+// `transform_simple` line (needs a placement); added `singular_axes_do_not_invert` and
+// `predicates_and_domain`.
 //! General linear (4x4 matrix) transforms from a `uvw` parameter space to an `xyz`
 //! projection space, the simplest volume map.
 //!

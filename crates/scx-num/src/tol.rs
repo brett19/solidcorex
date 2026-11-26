@@ -10,7 +10,11 @@
 // `SmRelation` overloads, no `update_object_tolerance`); of kernel.rs only the
 // `Tolerances` value; `&Kernel` became `&Tolerances`; `size_estimate_to_zone_tol_3d`
 // renamed `zone_for_size`; constants point at `consts`, and `UNINIT_TOL` is defined as
-// `math::UNDEF_DOUBLE` (the same 1.23456e-61 as the pin's literal); paths.
+// `math::UNDEF_DOUBLE` (the same 1.23456e-61 as the pin's literal); `Tolerances::default`
+// reads the named constants in place of the same literals; paths. Tests: `system_tolerances`
+// drops its `context_zone_tol_3d` assertion (not moved) and builds `tolerances` in place of
+// a kernel; added `tolerances` (helper), `zone_for_size_boundaries_keep_todays_answers`,
+// `small_topo_codes_round_trip` and `default_tolerances_are_solidcores`.
 //! Tolerance policy (`SmTol`), the scalar part: the tolerance constructors, model-size
 //! based default tolerances, zone / intersection / approximation tolerances, the
 //! contact and coincidence rules, scaled zeros and simple tolerance predicates, and the

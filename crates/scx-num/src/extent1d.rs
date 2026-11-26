@@ -3,8 +3,8 @@
 // Upstream record (verbatim from that file): Upstream: `source/SMLib/src/SmExtent1d.cpp`,
 // `source/SMLib/inc/SmExtent1d.h`, `source/SMLib/src/SmExtentNd.cpp`,
 // `source/SMLib/inc/SmExtentNd.h`.
-// Changes: the `Content` digest impl stays in solidcore; errors are `NumError`; tests check the
-// error variant in place of the status number; paths.
+// Changes: the digest impl `Content::content` stays in solidcore; errors are `NumError`; the
+// test `set_operations` checks the error variant in place of the status number; paths.
 //! One-dimensional intervals (`[min, max]`, often a curve's parameter domain) with
 //! clamping, snapping, normalised evaluation/inversion, set operations, predicates,
 //! periodic wrapping/containment/intersection, and N-dimensional interval boxes.

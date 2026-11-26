@@ -6,7 +6,10 @@
 // `source/SMLib/src/SmGeomUtility.cpp`, `source/SMLib/inc/SmGeomUtility.h` (enums from
 // `source/SMLib/inc/SmTypes.h`).
 // Changes: only the 3x3 and 4x4 helpers the transform needs, gathered in one file;
-// `SolidError::geom` became `NumError::failed`; operation strings kept as solidcore's.
+// `SolidError::geom` became `NumError::failed`; operation strings kept as solidcore's. Tests:
+// `small_matrices` keeps only the assertions on the moved helpers (not `copy_3x3`,
+// `copy_4x4`, `determinant_3_vectors`, `solve_quadratic_eqn`); `mult_4x4_identity_and_product`
+// adds a singular `inverse_4x4`.
 //! Small fixed-size matrix helpers of `SmGeomUtility` (`smgu_VecTripleProduct`,
 //! `smgu_3x3Determinate`, `smgu_3x3Inverse`, `smgu_4x4Determinate`, `smgu_4x4Mult`,
 //! `smgu_4x4Inverse`), on row-major arrays.

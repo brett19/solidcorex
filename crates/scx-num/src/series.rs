@@ -9,7 +9,7 @@
 // `BlendFailure::SectionDegenerate(VectorVanishes)` -> `NumFailure::VectorVanishes`,
 // `BlendFailure::Defect` -> `NumFailure::Defect`; operation strings unchanged); `Ivl` from
 // `crate::interval`, `sqrt` from `crate::vector3d`; the test of the status code reads the
-// class. Results unchanged bit for bit.
+// class (the body diff reads that test as part of `update`). Results unchanged bit for bit.
 //! Truncated power series in two variables, sigma (along the leader's parameter s) and eps
 //! (`tau - 1`), over `f64` (the jets) or [`Ivl`] (their enclosures): `c[i][k]` the
 //! coefficient of `sigma^i eps^k`, kept up to the orders of a [`Trunc`].

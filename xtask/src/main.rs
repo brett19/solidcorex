@@ -14,9 +14,17 @@
 //!   must appear word for word in the quoted record.
 //! - `pin`: the pinned checkout is at the pin commit with no change (the difftest
 //!   crate's build script refuses to build otherwise).
-//! - `fast`: `cargo fmt --check` of every member, clippy with warnings denied, `layers`, `headers` and
-//!   the tier-1 tests (`cargo test -p <crate>` for each crate named, default every
-//!   library).
+//! - `bodydiff`: the normalised body diff (`xtask/bodydiff.py`) of every derived file
+//!   against its pin files; each fn that differs, is only here, or (unless the move was
+//!   partial) is only at the pin must be named in the header's `Changes:`; a file written
+//!   for solidcorex may hold no fn body of the pin.
+//! - `cov`: region coverage of the moved libraries (crate names, default `scx_num`) while
+//!   the differential suite runs (`xtask/cov.sh`, written under `target/cov/`).
+//! - `movecheck`: the standing steps of a move, in order: `pin`, `layers`, `headers`,
+//!   `bodydiff`, `cov`.
+//! - `fast`: `cargo fmt --check` of every member, clippy with warnings denied (the default
+//!   members, then the difftest crate), `layers`, `headers`, the tier-1 tests (`cargo test
+//!   -p <crate>` for each crate named, default every library) and xtask's own tests.
 //!
 //! No dependencies: the manifests are read line by line, which is enough for the plain
 //! manifests this repository writes.
@@ -39,8 +47,11 @@ fn main() -> ExitCode {
         Some("layers") => layers(&root),
         Some("headers") => headers(&root),
         Some("pin") => pin(&root),
+        Some("bodydiff") => bodydiff(&root),
+        Some("cov") => cov(&root, args.get(1..).unwrap_or(&[])),
+        Some("movecheck") => movecheck(&root, args.get(1..).unwrap_or(&[])),
         Some("fast") => fast(&root, args.get(1..).unwrap_or(&[])),
-        _ => Err("usage: cargo xtask <layers | headers | pin | fast [crate ...]>".to_string()),
+        _ => Err("usage: cargo xtask <layers | headers | pin | bodydiff | cov [crate ...] | movecheck [crate ...] | fast [crate ...]>".to_string()),
     };
     match result {
         Ok(msg) => {
@@ -490,6 +501,57 @@ fn headers(root: &Path) -> Result<String, String> {
     }
 }
 
+// ---- standing steps of a move ------------------------------------------------------
+
+fn run(root: &Path, program: &str, args: &[&str]) -> Result<(), String> {
+    println!("xtask: {program} {}", args.join(" "));
+    let status = Command::new(program)
+        .args(args)
+        .current_dir(root)
+        .status()
+        .map_err(|e| format!("{program}: {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("{program} {} failed", args.join(" ")))
+    }
+}
+
+fn bodydiff(root: &Path) -> Result<String, String> {
+    println!("{}", pin(root)?);
+    let script = root.join("xtask").join("bodydiff.py");
+    let pin = pin_dir(root);
+    run(
+        root,
+        "python3",
+        &[
+            "-I",
+            &script.to_string_lossy(),
+            &root.to_string_lossy(),
+            &pin.to_string_lossy(),
+        ],
+    )?;
+    Ok("bodydiff: passed".to_string())
+}
+
+fn cov(root: &Path, crates: &[String]) -> Result<String, String> {
+    println!("{}", pin(root)?);
+    let script = root.join("xtask").join("cov.sh");
+    let mut args = vec![script.to_string_lossy().to_string(), root.to_string_lossy().to_string()];
+    args.extend(crates.iter().cloned());
+    run(root, "bash", &args.iter().map(String::as_str).collect::<Vec<_>>())?;
+    Ok("cov: written to target/cov/".to_string())
+}
+
+fn movecheck(root: &Path, crates: &[String]) -> Result<String, String> {
+    println!("{}", pin(root)?);
+    println!("{}", layers(root)?);
+    println!("{}", headers(root)?);
+    println!("{}", bodydiff(root)?);
+    println!("{}", cov(root, crates)?);
+    Ok("movecheck: passed".to_string())
+}
+
 // ---- fast --------------------------------------------------------------------------
 
 fn cargo(root: &Path, args: &[&str]) -> Result<(), String> {
@@ -519,6 +581,11 @@ fn fast(root: &Path, crates: &[String]) -> Result<String, String> {
     }
     cargo(root, &fmt.iter().map(String::as_str).collect::<Vec<_>>())?;
     cargo(root, &["clippy", "--all-targets", "--", "-D", "warnings"])?;
+    // The difftest crate is not a default member (it links solidcore): lint it by name.
+    cargo(
+        root,
+        &["clippy", "-p", "scx-difftest", "--all-targets", "--", "-D", "warnings"],
+    )?;
     println!("{}", layers(root)?);
     println!("{}", headers(root)?);
     let libs: Vec<String> = if crates.is_empty() {
@@ -534,6 +601,7 @@ fn fast(root: &Path, crates: &[String]) -> Result<String, String> {
     for lib in &libs {
         cargo(root, &["test", "-p", lib])?;
     }
+    cargo(root, &["test", "-p", "xtask"])?;
     Ok(format!("fast: passed ({})", libs.join(", ")))
 }
 
