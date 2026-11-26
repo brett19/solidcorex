@@ -44,7 +44,11 @@ diff!(tr_transform_points, |t: M, p: V, q: V| {
 diff!(tr_transformed_box, |t: M, a: V, b: V| m::mt(t)
     .transformed_box(m::v3(a), m::v3(b)));
 diff!(tr_row_lengths, |t: M| m::mt(t).row_lengths());
-diff!(tr_is_regular, |t: M, r: f64| m::mt(t).is_regular(r));
+diff!(
+    tr_is_regular,
+    pin_defect = crate::pin_defects::tr_is_regular,
+    |t: M, r: f64| m::mt(t).is_regular(r)
+);
 diff!(tr_is_rigid, |t: M, a: f64, b: f64| m::mt(t).is_rigid(a, b));
 diff!(tr_plane_motion, |t: M,
                         o: V,

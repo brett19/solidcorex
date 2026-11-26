@@ -17,6 +17,7 @@
 
 mod facade;
 mod harness;
+mod pin_defects;
 mod solvers;
 mod t_algo;
 mod t_extent;
