@@ -120,6 +120,18 @@ diff!(centroid_and_mean_radius, |l: List<P>| {
     let pts: Vec<_> = l.0.iter().map(|&p| m::v2(p)).collect();
     m::math::centroid_and_mean_radius(&pts)
 });
+/// Point sets whose distance sums overflow (the random pools do not draw them).
+const CENTROID_EDGES: &[&[P]] = &[
+    &[[f64::MAX, 0.0], [-f64::MAX, 0.0]],
+    &[[f64::MAX, f64::MAX], [-f64::MAX, -f64::MAX]],
+    &[[f64::MAX, 0.0], [-f64::MAX, 0.0], [0.0, 0.0]],
+];
+diff!(centroid_and_mean_radius_overflow, |i: usize| {
+    CENTROID_EDGES.get(i).map(|l| {
+        let pts: Vec<_> = l.iter().map(|&p| m::v2(p)).collect();
+        m::math::centroid_and_mean_radius(&pts)
+    })
+});
 diff!(unit_2d, |v: P| m::math::unit_2d(v));
 diff!(unit_between_2d, |a: P, b: P| m::math::unit_between_2d(a, b));
 diff!(left_normal_between_2d, |a: P, b: P| {

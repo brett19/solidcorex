@@ -79,6 +79,53 @@ pub fn edge_f64() -> Vec<f64> {
     ]
 }
 
+/// The thresholds scx-num compares against: each tolerance and numerical zero, the
+/// size-relative zeros `EFF_ZERO * (1 + |d|)` at sizes the pools use, the default zone and
+/// its half and double. Standing rule (README, "Differential tests"): every threshold a
+/// moved function compares with is listed here, so the pools hold it and one ulp either side.
+pub fn thresholds() -> Vec<f64> {
+    use scx_num::certified::UNDERFLOW_ROOT;
+    use scx_num::consts::{EPS_PARAM, ZONE_DEFAULT};
+    use scx_num::math::{
+        BIG_DOUBLE, EFF_ZERO, EFF_ZERO_DEG, EFF_ZERO_RAD, EFF_ZERO_SQ, EFF_ZERO_SQRT,
+        INFINITE_PARAMETER, TWO_PI, UNDEF_DOUBLE,
+    };
+    use scx_num::tol::ANG_TOL_RAD;
+    vec![
+        EFF_ZERO,
+        EFF_ZERO_SQ,
+        EFF_ZERO_SQRT,
+        EFF_ZERO_DEG,
+        EFF_ZERO_RAD,
+        EPS_PARAM,
+        EFF_ZERO * (1.0 + 1.0),
+        EFF_ZERO * (1.0 + TWO_PI),
+        EFF_ZERO * (1.0 + 10.0),
+        EFF_ZERO * (1.0 + 50.0),
+        ZONE_DEFAULT,
+        ZONE_DEFAULT / 2.0,
+        2.0 * ZONE_DEFAULT,
+        ANG_TOL_RAD,
+        1.0e-9, // the 2D helpers' length floor (`unit_2d`, `three_point_circle_2d`)
+        UNDEF_DOUBLE,
+        UNDERFLOW_ROOT,
+        BIG_DOUBLE,
+        INFINITE_PARAMETER,
+    ]
+}
+
+/// Each threshold, and one ulp below and above it (the zone and `EFF_ZERO` with both signs).
+pub fn threshold_f64() -> Vec<f64> {
+    let mut v = Vec::new();
+    for t in thresholds() {
+        v.extend([t.next_down(), t, t.next_up()]);
+    }
+    for t in [scx_num::math::EFF_ZERO, scx_num::consts::ZONE_DEFAULT] {
+        v.extend([-t.next_down(), -t, -t.next_up()]);
+    }
+    v
+}
+
 /// A type the harness can draw inputs of.
 pub trait Gen: Sized + Clone + Debug {
     fn pool(rng: &mut SplitMix64) -> Vec<Self>;
@@ -87,6 +134,7 @@ pub trait Gen: Sized + Clone + Debug {
 impl Gen for f64 {
     fn pool(rng: &mut SplitMix64) -> Vec<Self> {
         let mut v = edge_f64();
+        v.extend(threshold_f64());
         for _ in 0..6 {
             v.push(rng.uniform(-10.0, 10.0));
         }
@@ -125,6 +173,13 @@ fn vec_pool<const N: usize>(rng: &mut SplitMix64, special: &[[f64; N]]) -> Vec<[
     let e = edge_f64();
     let mut v: Vec<[f64; N]> = e.iter().map(|&x| [x; N]).collect();
     v.extend_from_slice(special);
+    for t in [scx_num::math::EFF_ZERO, 1.0e-9, scx_num::consts::ZONE_DEFAULT, scx_num::math::EFF_ZERO_SQRT] {
+        for x in [t.next_down(), t, t.next_up()] {
+            let mut a = [0.0; N];
+            a[0] = x;
+            v.push(a);
+        }
+    }
     for _ in 0..40 {
         let mut a = [0.0; N];
         for c in &mut a {
@@ -179,6 +234,9 @@ impl Gen for [f64; 3] {
                 [1.0, 0.0, 1.0e-9],
                 [1.0, 1.0, 1.0],
                 [1.0e-7, 0.0, 0.0],
+                // the empty periodic extent (`min = BIG_DOUBLE`, `max = -BIG_DOUBLE`)
+                [1.0e20, -1.0e20, core::f64::consts::TAU],
+                [1.0e20, -1.0e20, 1.0],
             ],
         )
     }
@@ -242,6 +300,24 @@ impl Gen for [[f64; 4]; 4] {
         let mut tiny = id;
         tiny[0][0] = 1.0e-13;
         v.push(tiny);
+        // an affine map with a zero linear part, one with a subnormal-scaled linear part,
+        // and the identity scaled to EFF_ZERO and one ulp either side
+        let mut zero_linear = [[0.0; 4]; 4];
+        zero_linear[3][3] = 1.0;
+        v.push(zero_linear);
+        for s in [
+            1.0e-310,
+            f64::from_bits(1),
+            scx_num::math::EFF_ZERO.next_down(),
+            scx_num::math::EFF_ZERO,
+            scx_num::math::EFF_ZERO.next_up(),
+        ] {
+            let mut m = id;
+            for (i, row) in m.iter_mut().enumerate().take(3) {
+                row[i] = s;
+            }
+            v.push(m);
+        }
         let e = edge_f64();
         for &x in &e {
             let mut m = id;
@@ -360,7 +436,7 @@ impl<T: Gen> Gen for List<T> {
 }
 
 /// Argument tuples drawn from the pools: every pair for two arguments (when that is
-/// at most 8000 cases), else the diagonal and 3000 seeded draws.
+/// at most 10000 cases), else the diagonal and 3000 seeded draws.
 pub trait Args: Sized + Clone + Debug {
     fn cases(rng: &mut SplitMix64) -> Vec<Self>;
 }
@@ -381,7 +457,7 @@ impl<A: Gen, B: Gen> Args for (A, B) {
     fn cases(rng: &mut SplitMix64) -> Vec<Self> {
         let pa = A::pool(rng);
         let pb = B::pool(rng);
-        if pa.len() * pb.len() <= 8000 {
+        if pa.len() * pb.len() <= 10000 {
             let mut v = Vec::new();
             for a in &pa {
                 for b in &pb {

@@ -455,6 +455,21 @@ diff!(pe_add_interval, |a: V,
     let mut e = m::pe(a, f);
     (e.add_interval(x, y, fw), e)
 });
+/// Spans disjoint from the extent, in each of the four seam cases (the random draws
+/// rarely give one): `(min, max, period, from, to)`.
+const PE_DISJOINT: &[[f64; 5]] = &[
+    [2.0, 3.0, core::f64::consts::TAU, 5.0, 1.0],
+    [5.0, 1.0, core::f64::consts::TAU, 2.0, 3.0],
+    [2.0, 3.0, core::f64::consts::TAU, 4.0, 5.0],
+    [5.0, 1.0, core::f64::consts::TAU, 6.0, 4.0],
+    [1.0e20, -1.0e20, core::f64::consts::TAU, 1.0, 2.0],
+];
+diff!(pe_add_interval_disjoint, |i: usize, fw: bool| {
+    PE_DISJOINT.get(i).map(|&[a, b, p, x, y]| {
+        let mut e = m::pe([a, b, p], false);
+        (e.add_interval(x, y, fw), e)
+    })
+});
 diff!(pe_set_min_max, |a: V,
                        f: bool,
                        x: f64,
