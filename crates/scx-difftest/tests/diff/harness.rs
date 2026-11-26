@@ -9,6 +9,10 @@
 //! - **Agrees with solidcore:** the same shape (variants, errors, integers, lengths,
 //!   panics) and every float within [`Tol`]. Exact agreement is counted separately, so
 //!   drift from the pin is visible even where it is allowed.
+//!
+//! Where the pin itself is wrong, a [`PinDefect`] (listed in `pin_defects.rs`) names the
+//! inputs by a predicate: those are not compared with the pin, and scx's result must pass
+//! the defect's own check against the true value instead.
 
 use std::fmt::Debug;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -721,9 +725,30 @@ pub fn shot<R: Bits>(f: impl FnOnce() -> R) -> Out {
 
 static QUIET: Once = Once::new();
 
+/// A known defect of the pin on some inputs of one test. `applies` picks the inputs (a
+/// predicate, never a list); on those the pin is not compared, and scx's result must pass
+/// `check` against the true value instead. A defect that applies to no input fails the
+/// test, so a stale one cannot stay.
+pub struct PinDefect<A, R> {
+    pub reason: &'static str,
+    pub applies: fn(&A) -> bool,
+    /// `Err` with what is wrong when scx's result is not the true value.
+    pub check: fn(&A, &R) -> Result<(), String>,
+}
+
 /// Run `xf` and `sf` on every case, at the default tolerance.
 pub fn run<A: Args, RX: Bits, RS: Bits>(name: &str, xf: impl Fn(A) -> RX, sf: impl Fn(A) -> RS) {
     run_tol(name, Tol::DEFAULT, xf, sf);
+}
+
+/// [`run`], with a known defect of the pin.
+pub fn run_defect<A: Args, RX: Bits, RS: Bits>(
+    name: &str,
+    defect: &PinDefect<A, RX>,
+    xf: impl Fn(A) -> RX,
+    sf: impl Fn(A) -> RS,
+) {
+    run_with(name, Tol::DEFAULT, Some(defect), xf, sf);
 }
 
 /// Run `xf` twice and `sf` once on every case; fail if `xf` is not deterministic or does
@@ -734,10 +759,21 @@ pub fn run_tol<A: Args, RX: Bits, RS: Bits>(
     xf: impl Fn(A) -> RX,
     sf: impl Fn(A) -> RS,
 ) {
+    run_with(name, tol, None, xf, sf);
+}
+
+fn run_with<A: Args, RX: Bits, RS: Bits>(
+    name: &str,
+    tol: Tol,
+    defect: Option<&PinDefect<A, RX>>,
+    xf: impl Fn(A) -> RX,
+    sf: impl Fn(A) -> RS,
+) {
     QUIET.call_once(|| std::panic::set_hook(Box::new(|_| {})));
     let mut rng = SplitMix64(seed_of(name));
     let cases = A::cases(&mut rng);
     let (mut exact, mut unstable, mut bad) = (0usize, Vec::new(), Vec::new());
+    let (mut defects, mut applied) = (0usize, 0usize);
     let mut drift: Option<String> = None;
     for c in &cases {
         let ox = shot(|| xf(c.clone()));
@@ -746,7 +782,18 @@ pub fn run_tol<A: Args, RX: Bits, RS: Bits>(
         if ox != ox2 {
             unstable.push(format!("{c:?}\n    run 1: {ox:?}\n    run 2: {ox2:?}"));
         }
-        if ox == os {
+        if let Some(d) = defect.filter(|d| (d.applies)(c)) {
+            applied += 1;
+            let checked = catch_unwind(AssertUnwindSafe(|| (d.check)(c, &xf(c.clone()))))
+                .unwrap_or_else(|_| Err("scx panicked".to_owned()));
+            match checked {
+                Ok(()) => defects += 1,
+                Err(why) => bad.push(format!(
+                    "{c:?}\n    pin defect ({}), check failed: {why}\n    scx: {ox:?}",
+                    d.reason
+                )),
+            }
+        } else if ox == os {
             exact += 1;
         } else if tol.agree(&ox, &os) {
             drift.get_or_insert_with(|| {
@@ -759,9 +806,9 @@ pub fn run_tol<A: Args, RX: Bits, RS: Bits>(
         }
     }
     println!(
-        "difftest {name}: {} inputs, {exact} exact, {} within tolerance, {} mismatches, {} nondeterministic",
+        "difftest {name}: {} inputs, {exact} exact, {} within tolerance, {defects} pin defects, {} mismatches, {} nondeterministic",
         cases.len(),
-        cases.len() - exact - bad.len(),
+        cases.len() - exact - defects - bad.len(),
         bad.len(),
         unstable.len()
     );
@@ -780,6 +827,13 @@ pub fn run_tol<A: Args, RX: Bits, RS: Bits>(
             .collect::<Vec<_>>()
             .join("\n")
     );
+    if let Some(d) = defect {
+        assert!(
+            applied > 0,
+            "{name}: the pin defect ({}) applies to no input; remove it",
+            d.reason
+        );
+    }
     assert!(
         bad.is_empty(),
         "{name}: {} of {} inputs differ; first:\n{}",
@@ -791,7 +845,8 @@ pub fn run_tol<A: Args, RX: Bits, RS: Bits>(
 
 /// `diff!(name, |a: T, ...| body)` runs `body` with `m` naming scx-num's modules and again
 /// with `m` naming solidcore's, on the same inputs; `diff!(name, |...| xbody, sbody)`
-/// takes the two bodies separately (for the signatures that changed).
+/// takes the two bodies separately (for the signatures that changed);
+/// `diff!(name, pin_defect = f, |...| body)` excuses the inputs of the [`PinDefect`] `f()`.
 #[macro_export]
 macro_rules! diff {
     ($name:ident, || $body:expr) => {
@@ -802,6 +857,26 @@ macro_rules! diff {
     };
     ($name:ident, |$($a:ident : $t:ty),*| $body:expr) => {
         $crate::diff!($name, |$($a: $t),*| $body, $body);
+    };
+    ($name:ident, pin_defect = $d:path, |$($a:ident : $t:ty),*| $body:expr) => {
+        #[test]
+        #[allow(unused_variables, unused_mut, clippy::redundant_closure_call)]
+        fn $name() {
+            $crate::harness::run_defect::<($($t,)*), _, _>(
+                concat!(module_path!(), "::", stringify!($name)),
+                &$d(),
+                |($($a,)*): ($($t,)*)| {
+                    #[allow(unused_imports)]
+                    use $crate::facade::x as m;
+                    $body
+                },
+                |($($a,)*): ($($t,)*)| {
+                    #[allow(unused_imports)]
+                    use $crate::facade::s as m;
+                    $body
+                },
+            );
+        }
     };
     ($name:ident, |$($a:ident : $t:ty),*| $xb:expr, $sb:expr) => {
         #[test]

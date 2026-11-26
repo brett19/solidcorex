@@ -3,7 +3,9 @@
 //! pinned solidcore, on the same inputs. scx's result must be the same to the bit when run
 //! twice, and must agree with solidcore's within `harness::Tol` (same shape, floats close).
 //! Each test prints `difftest <name>: <n> inputs, <e> exact, <w> within tolerance,
-//! <m> mismatches, <d> nondeterministic`.
+//! <p> pin defects, <m> mismatches, <d> nondeterministic`; a pin defect is an input where
+//! the pin is known wrong and scx passed a check against the true value instead
+//! (`pin_defects.rs`).
 
 #![allow(
     missing_docs,
@@ -29,9 +31,10 @@ mod t_tol;
 mod t_vector;
 
 /// The harness itself: a different function, a nondeterministic one and a change in shape
-/// must each fail; a rounding error of drift must pass; the fingerprint stays bit-exact.
+/// must each fail; a rounding error of drift must pass; the fingerprint stays bit-exact; a
+/// pin defect excuses only inputs whose check passes, and one that applies to none fails.
 mod controls {
-    use crate::harness::{run, shot, Tol};
+    use crate::harness::{run, run_defect, shot, PinDefect, Tol};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     #[test]
@@ -51,6 +54,57 @@ mod controls {
         run::<(f64,), _, _>(
             "control_nondet",
             |(a,)| a + N.fetch_add(1, Ordering::Relaxed) as f64,
+            |(a,)| a,
+        );
+    }
+
+    /// A "pin" that is wrong for negative inputs, excused where scx returns `|a|`.
+    fn wrong_below_zero(check: fn(&(f64,), &f64) -> Result<(), String>) -> PinDefect<(f64,), f64> {
+        PinDefect {
+            reason: "control",
+            applies: |&(a,)| a < 0.0,
+            check,
+        }
+    }
+
+    #[test]
+    fn a_pin_defect_excuses_the_inputs_it_checks() {
+        run_defect::<(f64,), _, _>(
+            "control_defect",
+            &wrong_below_zero(|&(a,), &x| {
+                if x == a.abs() {
+                    Ok(())
+                } else {
+                    Err("not |a|".to_owned())
+                }
+            }),
+            |(a,)| a.abs(),
+            |(a,)| a,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "inputs differ")]
+    fn a_failed_pin_defect_check_is_caught() {
+        run_defect::<(f64,), _, _>(
+            "control_defect_check",
+            &wrong_below_zero(|_, _| Err("never true".to_owned())),
+            |(a,)| a.abs(),
+            |(a,)| a,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "applies to no input")]
+    fn a_stale_pin_defect_is_caught() {
+        run_defect::<(f64,), _, _>(
+            "control_defect_stale",
+            &PinDefect {
+                reason: "control",
+                applies: |_| false,
+                check: |_, _| Ok(()),
+            },
+            |(a,)| a,
             |(a,)| a,
         );
     }
