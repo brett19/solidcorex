@@ -19,8 +19,12 @@
 // those causes take. Added from the blend error for the interval move: `NumFailure::Defect`
 // (`BlendFailure::Defect`, StageFailed, the same text) and `NumFailure::VectorVanishes`
 // (`BlendFailure::SectionDegenerate(SectionDegeneracy::VectorVanishes)`, Degenerate, the
-// same text). No `Failure` wrapper, site, fit, status numbers or upstream-status
-// accessors.
+// same text, class first). No `Failure` wrapper, site, fit, status numbers or upstream-status
+// accessors. Written here over those variants: `ErrorKind::name` (the four names), the
+// `Display` impls' `fmt`, `NumFailure::kind`, `NumError::invalid_input`, `NumError::failed`,
+// `NumError::call`, `NumError::kind`, `NumError::operation`, `NumError::failure`,
+// `NumError::cause`, `Error::source`, and the test
+// `a_call_failure_takes_its_class_and_message_from_the_cause`.
 //! Why a layer-0 routine fails.
 //!
 //! Two shapes, as in solidcore: a check of the caller's argument that fails is
@@ -221,8 +225,11 @@ impl fmt::Display for NumFailure {
                 f,
                 "the span from {from} to {to} does not lie in the period [0, {period}]"
             ),
-            Self::VectorVanishes => f.write_str(
-                "a vector the section normalises vanishes (a face's normal at a foot, or the leader's tangent)",
+            // As solidcore's `BlendFailure::SectionDegenerate`: its class, then what.
+            Self::VectorVanishes => write!(
+                f,
+                "{}: a vector the section normalises vanishes (a face's normal at a foot, or the leader's tangent)",
+                ErrorKind::Degenerate
             ),
             Self::TooFewRows { rows, cols } => write!(
                 f,
