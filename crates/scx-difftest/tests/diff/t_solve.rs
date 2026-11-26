@@ -67,6 +67,8 @@ fn cfgs1(full: bool) -> Vec<Cfg1> {
             for &alg in algs {
                 let guesses: &[f64] = if full {
                     &[0.0, 1.0, 2.5, 1.2]
+                } else if func == 0 {
+                    &[1.0, 1.2]
                 } else if matches!(func, 1 | 9 | 10) {
                     &[0.0, 1.0]
                 } else {
@@ -405,4 +407,32 @@ diff!(solve_nd_sizes, |n: usize| {
         out.push((r.map_err(m::sv::pin), code, ev.log.len()));
     }
     out
+});
+
+diff!(solve1d_settings, |code: i32, lo: f64, hi: f64, acc: f64| {
+    let alg = m::sv::local_solve1d::SolverAlgorithm::from_code(code);
+    let codes = alg.map(|a| (a.code(), a.is_brent()));
+    let d = m::sv::local_solve1d::LocalSolve1d::default();
+    let mut s = m::sv::local_solve1d::LocalSolve1d::with_interval(
+        m::sv::extent1d::Extent1d::from_min_max(-3.0, 3.0),
+        false,
+    );
+    s.set_solution_interval(m::sv::extent1d::Extent1d::from_min_max(lo, hi));
+    s.set_desired_accuracy(acc.abs());
+    let ivl = s.interval();
+    let mut ev = m::sv::Rec1::new(0, usize::MAX, false, Class::SmErr);
+    let r = s.solve_it(&mut ev, 1.0, 1e-3).map(|o| (o.found, o.t));
+    (
+        codes,
+        (d.desired_accuracy(), d.interval().min(), d.interval().max()),
+        (ivl.min(), ivl.max(), s.desired_accuracy()),
+        r.map_err(m::sv::pin),
+        ev.log,
+    )
+});
+
+diff!(solve_nd_defaults, || {
+    use m::sv::local_solve_nd::EvalNFunctions;
+    let ev = m::sv::RecN::new(0, usize::MAX, false, Class::SmErr);
+    (ev.solution_size(), ev.scaled_zero(), ev.is_converged())
 });
