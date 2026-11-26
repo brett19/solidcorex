@@ -61,9 +61,9 @@ use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use crate::error::NumFailure;
 use crate::error::{NumError, Result};
+use crate::math::{Vec3, EFF_ZERO, EFF_ZERO_SQ, PI, UNDEF_DOUBLE};
 use crate::tol;
 use crate::vector3d::{acos as sm_acos, asin as sm_asin, sqrt as sm_sqrt};
-use crate::math::{Vec3, EFF_ZERO, EFF_ZERO_SQ, PI, UNDEF_DOUBLE};
 
 /// A 2D vector (`SmVector2d`), typically a surface parameter `(u, v)`.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]

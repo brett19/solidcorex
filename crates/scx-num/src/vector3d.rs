@@ -94,9 +94,9 @@ use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAss
 
 use crate::error::NumFailure;
 use crate::error::{NumError, Result};
+use crate::math::{BIG_DOUBLE, EFF_ZERO, EFF_ZERO_SQ, PI, UNDEF_DOUBLE};
 use crate::tol;
 use crate::vector2d::{Point2, Vec2};
-use crate::math::{BIG_DOUBLE, EFF_ZERO, EFF_ZERO_SQ, PI, UNDEF_DOUBLE};
 
 /// `NL_NOZ`: the `z` value marking a 2D control point (`+DBL_MAX`).
 /// (Moved down from solidcore `nurbs/math.rs`, where it was `nurbs::math::NOZ`.)

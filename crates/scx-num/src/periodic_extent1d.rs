@@ -54,8 +54,8 @@ use core::cmp::Ordering;
 
 use crate::error::NumFailure;
 use crate::error::{NumError, Result};
-use crate::tol::{self, ScaledZero};
 use crate::math::BIG_DOUBLE;
+use crate::tol::{self, ScaledZero};
 
 /// An interval on the periodic domain `[0, period]` (`SmPeriodicExtent1d`).
 ///

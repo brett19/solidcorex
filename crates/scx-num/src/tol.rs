@@ -158,11 +158,7 @@ pub fn tol3d(d: f64) -> f64 {
 /// `fabs`.
 #[must_use]
 pub fn zone_tol3d(t: &Tolerances, d: f64) -> f64 {
-    tol3d(if d == USE_DEFAULT {
-        t.zone_tol_3d
-    } else {
-        d
-    })
+    tol3d(if d == USE_DEFAULT { t.zone_tol_3d } else { d })
 }
 
 /// `SmXSectTol3d(double)`: [`USE_DEFAULT`] becomes twice the system zone tolerance,
@@ -309,7 +305,6 @@ pub fn zone_tol_3d(t: &Tolerances, small: SmallTopoType) -> f64 {
     }
 }
 
-
 /// The system approximation tolerance, half the zone tolerance
 /// (`SmTol::GetApproxTol3d(SmSmallTopoType)`).
 #[must_use]
@@ -317,14 +312,12 @@ pub fn approx_tol_3d(t: &Tolerances, small: SmallTopoType) -> f64 {
     approx_tol3d(t, 0.5 * zone_tol_3d(t, small))
 }
 
-
 /// The system intersection tolerance, twice the zone tolerance
 /// (`SmTol::GetXSectTol3d(SmSmallTopoType)`).
 #[must_use]
 pub fn xsect_tol_3d(t: &Tolerances, small: SmallTopoType) -> f64 {
     xsect_tol3d(t, 2.0 * zone_tol_3d(t, small))
 }
-
 
 /// The intersection tolerance of two objects with zone tolerances `zone1`, `zone2`:
 /// their sum (`SmTol::GetXSectTol3d(const SmZoneTol3d&, const SmZoneTol3d&)`).
@@ -904,7 +897,10 @@ mod tests {
     #[test]
     fn small_topo_codes_round_trip() {
         for c in 0..5 {
-            assert_eq!(SmallTopoType::from_code(c).map(SmallTopoType::code), Some(c));
+            assert_eq!(
+                SmallTopoType::from_code(c).map(SmallTopoType::code),
+                Some(c)
+            );
         }
         assert_eq!(SmallTopoType::from_code(5), None);
     }
@@ -913,11 +909,20 @@ mod tests {
     fn default_tolerances_are_solidcores() {
         let t = Tolerances::default();
         assert_eq!(
-            (t.zone_tol_3d, t.xsect_tol_3d, t.approx_tol_3d, t.ang_tol_deg),
+            (
+                t.zone_tol_3d,
+                t.xsect_tol_3d,
+                t.approx_tol_3d,
+                t.ang_tol_deg
+            ),
             (1.0e-5, 2.0e-5, 5.0e-6, 0.5)
         );
         assert_eq!(
-            (t.tol_gap_gain, t.model_size_estimate, t.large_small_size_ratio),
+            (
+                t.tol_gap_gain,
+                t.model_size_estimate,
+                t.large_small_size_ratio
+            ),
             (1.1, 50.0, 1000.0)
         );
         assert_eq!(t.ang_tol_rad(), 0.5 * PI / 180.0);

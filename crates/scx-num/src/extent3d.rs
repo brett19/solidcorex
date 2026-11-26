@@ -93,11 +93,11 @@
 
 use crate::error::{NumError, Result};
 use crate::extent1d::Extent1d;
-use crate::vector3d::{asin, sqrt};
 use crate::math::{
     is_infinite_param, max2, max3, min2, min3, Point3, Vec3, BIG_DOUBLE, EFF_ZERO, EFF_ZERO_SQ,
     INFINITE_PARAMETER, PI, UNDEF_DOUBLE,
 };
+use crate::vector3d::{asin, sqrt};
 
 /// Classification of one interval of an extent (`SmBoundaryType`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

@@ -303,7 +303,8 @@ impl fmt::Display for NumError {
 
 impl std::error::Error for NumError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        self.cause().map(|c| c as &(dyn std::error::Error + 'static))
+        self.cause()
+            .map(|c| c as &(dyn std::error::Error + 'static))
     }
 }
 

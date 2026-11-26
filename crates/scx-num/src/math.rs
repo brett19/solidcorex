@@ -1695,11 +1695,7 @@ mod tests {
             for (i, row) in m.m.iter_mut().enumerate().take(3) {
                 row[i] = s;
             }
-            assert_eq!(
-                m.is_regular(1e-9),
-                crate::certified::Verdict::Yes,
-                "{s}"
-            );
+            assert_eq!(m.is_regular(1e-9), crate::certified::Verdict::Yes, "{s}");
         }
     }
 

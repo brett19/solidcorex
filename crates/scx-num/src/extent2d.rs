@@ -91,10 +91,10 @@
 use crate::error::{NumError, Result};
 use crate::extent1d::{Extent1d, ExtentPointType};
 use crate::extent3d::{BoundaryType, Extent3d};
+use crate::math::{is_infinite_param, max2, min2, BIG_DOUBLE, EFF_ZERO, EFF_ZERO_SQRT};
 use crate::tol::{are_same, are_same_to_tol, is_zero_to_tol, tol3d, ScaledZero};
 use crate::vector2d::{Point2, Vec2};
 use crate::vector3d::sqrt;
-use crate::math::{is_infinite_param, max2, min2, BIG_DOUBLE, EFF_ZERO, EFF_ZERO_SQRT};
 
 /// `SM_SS_NONE`: the point is on no boundary ([`Extent2d::point_boundaries`]).
 pub const SS_NONE: u32 = 0;

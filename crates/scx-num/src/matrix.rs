@@ -81,9 +81,9 @@
 
 use crate::error::NumFailure;
 use crate::error::{NumError, Result};
+use crate::math::EFF_ZERO;
 use crate::tol::is_zero;
 use crate::vector3d::{sqrt, Vec3};
-use crate::math::EFF_ZERO;
 
 /// `MAX_MATRIX_SIZE`: the largest system [`Matrix::solve_linear_system`] accepts.
 pub const MAX_MATRIX_SIZE: usize = 1000;

@@ -88,11 +88,11 @@
 
 use crate::error::{NumError, Result};
 use crate::extent3d::BoundaryType;
-use crate::tol::{are_same, are_same_to_tol};
 use crate::math::{
     is_infinite_param, max2, min2, BIG_DOUBLE, EFF_ZERO, EFF_ZERO_DEG, INFINITE_PARAMETER,
     UNDEF_DOUBLE,
 };
+use crate::tol::{are_same, are_same_to_tol};
 
 /// Classification of a value against an interval (`SmExtentPointType`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

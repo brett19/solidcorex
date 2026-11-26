@@ -62,7 +62,6 @@
 //!   `RotateAboutAxis*`, `DecomposeToAngles`, ... listed in
 //!   `harness/callgraph/unused_functions.txt`) are not part of this unit.
 
-
 use crate::error::{NumError, Result};
 use crate::extent3d::Extent3d;
 use crate::math::INFINITE_PARAMETER;
@@ -92,7 +91,6 @@ impl Default for Transform {
 }
 
 impl Transform {
-
     /// The identity transform (`SmTransform()` / `Init`).
     pub const IDENTITY: Self = Self {
         m: [
@@ -268,10 +266,9 @@ impl Transform {
     /// `SM_ERR` when the axes sub-matrix is singular.
     pub fn inv_transform_point(&self, p: Point3) -> Result<Point3> {
         let mid = p - self.to_disp();
-        self.inv_transform_vector(mid)
-            .map_err(NumError::call(
-                "geom::transform::Transform::inv_transform_point",
-            ))
+        self.inv_transform_vector(mid).map_err(NumError::call(
+            "geom::transform::Transform::inv_transform_point",
+        ))
     }
 
     /// Maps a projection-space vector back to parameter space through the inverse
@@ -371,19 +368,16 @@ impl Transform {
         Ok(())
     }
 
-
     /// Inverts the 4x4 matrix in place (`InvertSimple`).
     ///
     /// # Errors
     ///
     /// `SM_ERR` when the matrix is singular; the transform is then unchanged.
     pub fn invert_simple(&mut self) -> Result<()> {
-        self.m = inverse_4x4(&self.m).map_err(NumError::call(
-            "geom::transform::Transform::invert_simple",
-        ))?;
+        self.m = inverse_4x4(&self.m)
+            .map_err(NumError::call("geom::transform::Transform::invert_simple"))?;
         Ok(())
     }
-
 
     /// Position and partial derivatives at `param_point` up to order
     /// `highest_deriv`, as the `(n+1)^3` array `D[u][v][w]` (index
@@ -422,7 +416,6 @@ impl Transform {
         Ok(ders)
     }
 
-
     /// The parameter point mapping to `proj_point`, as the single guess of the
     /// Newton solvers (`InvEvaluateGuessPointSimple`).
     ///
@@ -432,7 +425,6 @@ impl Transform {
     pub fn inv_evaluate_guess_point_simple(&self, proj_point: Point3) -> Result<Vec<Point3>> {
         Ok(vec![self.inv_transform_point(proj_point)?])
     }
-
 
     /// A transform is never bounded (`IsBoundedSimple`).
     #[must_use]
