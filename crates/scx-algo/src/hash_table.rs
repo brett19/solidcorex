@@ -1,16 +1,17 @@
 // Moved from solidcore `solidcore/crates/solidcore/src/geom/hash_table.rs` at commit
 // 03e16c9ee766de5b9b1ced845e5149d62ff493b8.
 // Upstream record (verbatim from that file): Upstream: `source/SMLib/inc/SmHashTable.h`.
-// Changes: `ObjsInVoxels::find_coincident_pairs` takes `&Tolerances` in place of `&Kernel`
-// (it reads only `xsect_tol3d`); `SolidError::InvalidInput` became `NumError::InvalidInput`
+// Changes: `ObjsInVoxels::find_coincident_pairs` takes no `&Kernel` (it read only
+// `xsect_tol3d`, whose one reading of the kernel, the `SM_USE_DEFAULT` sentinel, is gone:
+// the tolerances are `tol3d` of the sums); `SolidError::InvalidInput` became `NumError::InvalidInput`
 // (same operation, reason and text). `ObjsInVoxels::map_point_to_voxel` and
 // `ObjsInVoxels::map_voxel_index_to_bbox` read the box's corner by `Extent3d::min()` (the
 // field is the crate's own at the pin). The tests that built a kernel
 // (`add_neighbours_and_find_pairs`,
 // `wr12_single_voxel_clusters_report_all_unique_pairs_without_mutation`,
 // `wr12_voxel_boundary_deduplication_and_limit_index_and_histogram`,
-// `wr13_auto_growth_and_voxel_reuse`) build the default `Tolerances`. Paths otherwise
-// (`Extent3d`, `xsect_tol3d`, `Point3`, `UNDEF_DOUBLE`, `Vec3` from `scx-num`). Results
+// `wr13_auto_growth_and_voxel_reuse`) build none. Paths otherwise
+// (`Extent3d`, `tol3d`, `Point3`, `UNDEF_DOUBLE`, `Vec3` from `scx-num`). Results
 // unchanged.
 //! Voxel bucket hash of point-located items for fast coincident-pair searches
 //! (`SmObjsInVoxels`), over the linked-bucket hash table it is built on
@@ -64,7 +65,7 @@
 
 use scx_num::extent3d::Extent3d;
 use scx_num::math::{Point3, UNDEF_DOUBLE};
-use scx_num::tol::{xsect_tol3d, Tolerances};
+use scx_num::tol::tol3d;
 use scx_num::{NumError, Result};
 
 /// Number of gap-size histogram buckets (`SM_HISTOGRAM_GAPSIZE_BUCKETCNT`).
@@ -829,11 +830,7 @@ impl<T: Copy + PartialEq> ObjsInVoxels<T> {
     ///
     /// [`NumError::InvalidInput`] when `opts.buckets` names a bucket index past the
     /// table (undefined behaviour upstream).
-    pub fn find_coincident_pairs(
-        &mut self,
-        t: &Tolerances,
-        opts: FindPairsOptions<'_>,
-    ) -> Result<CoincidentPairs> {
+    pub fn find_coincident_pairs(&mut self, opts: FindPairsOptions<'_>) -> Result<CoincidentPairs> {
         let FindPairsOptions {
             limit_index,
             buckets,
@@ -893,8 +890,8 @@ impl<T: Copy + PartialEq> ObjsInVoxels<T> {
                     ) else {
                         continue;
                     };
-                    let xs = xsect_tol3d(t, beg_item.zone_tol + end_item.zone_tol);
-                    let xs_sq = xsect_tol3d(t, xs * xs);
+                    let xs = tol3d(beg_item.zone_tol + end_item.zone_tol);
+                    let xs_sq = tol3d(xs * xs);
                     let gap_sq = (beg_item.point - end_item.point).length_squared();
                     if let Some(h) = histogram.as_deref_mut() {
                         if let Some(c) = h.get_mut(gap_histogram_index(gap_sq.sqrt())) {
@@ -1079,7 +1076,6 @@ mod tests {
 
     #[test]
     fn add_neighbours_and_find_pairs() {
-        let k = Tolerances::default();
         let mut v: ObjsInVoxels<u32> = ObjsInVoxels::new(2, 1, 1, Some(&unit_box()), 0).unwrap();
         let mut upd = Vec::new();
         assert_eq!(
@@ -1093,7 +1089,7 @@ mod tests {
         v.add(2, Vec3::new(0.2, 0.5, 0.5), 1e-3, None).unwrap();
         v.add(3, Vec3::new(0.2005, 0.5, 0.5), 1e-3, None).unwrap();
         let p = v
-            .find_coincident_pairs(&k, FindPairsOptions::default())
+            .find_coincident_pairs(FindPairsOptions::default())
             .unwrap();
         // bucket 0 holds [item1, item3, item2]: every pair is compared, item3 and
         // item2 coincide
@@ -1105,13 +1101,10 @@ mod tests {
         assert_eq!(v.hash_table().used_bucket_count(), 1);
         let mut hist = [0u64; GAP_HISTOGRAM_BUCKETS];
         let p = v
-            .find_coincident_pairs(
-                &k,
-                FindPairsOptions {
-                    histogram: Some(&mut hist),
-                    ..FindPairsOptions::default()
-                },
-            )
+            .find_coincident_pairs(FindPairsOptions {
+                histogram: Some(&mut hist),
+                ..FindPairsOptions::default()
+            })
             .unwrap();
         assert_eq!(p.first.len(), 1);
         assert_eq!(hist.iter().sum::<u64>(), 1);
@@ -1129,8 +1122,6 @@ mod tests {
 
     #[test]
     fn wr12_single_voxel_clusters_report_all_unique_pairs_without_mutation() {
-        let k = Tolerances::default();
-
         // 3 coincident items in a single voxel: bucket 0 holds [10, 30, 20], so
         // (20, 30) does not involve the bucket head 10.
         let mut v3: ObjsInVoxels<u32> = ObjsInVoxels::new(1, 1, 1, Some(&unit_box()), 0).unwrap();
@@ -1146,7 +1137,7 @@ mod tests {
         let before3_items = v3.point_items().to_vec();
         let before3_bits = point_item_bits(&v3);
         let p3 = v3
-            .find_coincident_pairs(&k, FindPairsOptions::default())
+            .find_coincident_pairs(FindPairsOptions::default())
             .unwrap();
         assert_eq!(p3.first, vec![0, 0, 2]);
         assert_eq!(p3.second, vec![2, 1, 1]);
@@ -1171,7 +1162,7 @@ mod tests {
         let before4_items = v4.point_items().to_vec();
         let before4_bits = point_item_bits(&v4);
         let p4 = v4
-            .find_coincident_pairs(&k, FindPairsOptions::default())
+            .find_coincident_pairs(FindPairsOptions::default())
             .unwrap();
         assert_eq!(sorted_item_pairs(&v4, &p4), exp4);
         assert_eq!(v4.point_items(), before4_items.as_slice());
@@ -1185,7 +1176,7 @@ mod tests {
         let before5_items = v5.point_items().to_vec();
         let before5_bits = point_item_bits(&v5);
         let p5 = v5
-            .find_coincident_pairs(&k, FindPairsOptions::default())
+            .find_coincident_pairs(FindPairsOptions::default())
             .unwrap();
         assert_eq!(sorted_item_pairs(&v5, &p5), exp4);
         assert_eq!(v5.point_items(), before5_items.as_slice());
@@ -1194,8 +1185,6 @@ mod tests {
 
     #[test]
     fn wr12_voxel_boundary_deduplication_and_limit_index_and_histogram() {
-        let k = Tolerances::default();
-
         // 3 coincident items straddling x = 0.5 and y = 0.5 on a 2x2x1 grid: each
         // item is placed into 3 buckets, and every pair shares 2 buckets, yet each
         // coincident item pair is reported once while the histogram counts all 6
@@ -1218,51 +1207,39 @@ mod tests {
 
         let mut hist = [0u64; GAP_HISTOGRAM_BUCKETS];
         let all = v
-            .find_coincident_pairs(
-                &k,
-                FindPairsOptions {
-                    histogram: Some(&mut hist),
-                    ..FindPairsOptions::default()
-                },
-            )
+            .find_coincident_pairs(FindPairsOptions {
+                histogram: Some(&mut hist),
+                ..FindPairsOptions::default()
+            })
             .unwrap();
         assert_eq!(sorted_item_pairs(&v, &all), [(1, 2), (1, 3), (2, 3)]);
         assert_eq!(hist, [0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0]);
 
         let subset_buckets = [1, 3];
         let sub = v
-            .find_coincident_pairs(
-                &k,
-                FindPairsOptions {
-                    buckets: Some(&subset_buckets),
-                    histogram: Some(&mut hist),
-                    ..FindPairsOptions::default()
-                },
-            )
+            .find_coincident_pairs(FindPairsOptions {
+                buckets: Some(&subset_buckets),
+                histogram: Some(&mut hist),
+                ..FindPairsOptions::default()
+            })
             .unwrap();
         assert_eq!(sorted_item_pairs(&v, &sub), [(1, 2), (2, 3)]);
         assert_eq!(hist, [0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0]);
 
         let empty = v
-            .find_coincident_pairs(
-                &k,
-                FindPairsOptions {
-                    buckets: Some(&[]),
-                    histogram: Some(&mut hist),
-                    ..FindPairsOptions::default()
-                },
-            )
+            .find_coincident_pairs(FindPairsOptions {
+                buckets: Some(&[]),
+                histogram: Some(&mut hist),
+                ..FindPairsOptions::default()
+            })
             .unwrap();
         assert!(empty.first.is_empty());
         assert_eq!(hist, [0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0]);
         assert!(matches!(
-            v.find_coincident_pairs(
-                &k,
-                FindPairsOptions {
-                    buckets: Some(&[4]),
-                    ..FindPairsOptions::default()
-                },
-            ),
+            v.find_coincident_pairs(FindPairsOptions {
+                buckets: Some(&[4]),
+                ..FindPairsOptions::default()
+            },),
             Err(NumError::InvalidInput {
                 operation: "geom::hash_table::ObjsInVoxels::find_coincident_pairs",
                 reason: "bucket index out of range",
@@ -1287,14 +1264,11 @@ mod tests {
 
         let mut lim_hist = [0u64; GAP_HISTOGRAM_BUCKETS];
         let inc = w
-            .find_coincident_pairs(
-                &k,
-                FindPairsOptions {
-                    limit_index: Some(lim),
-                    histogram: Some(&mut lim_hist),
-                    ..FindPairsOptions::default()
-                },
-            )
+            .find_coincident_pairs(FindPairsOptions {
+                limit_index: Some(lim),
+                histogram: Some(&mut lim_hist),
+                ..FindPairsOptions::default()
+            })
             .unwrap();
         let exp_inc = [(1, 3), (1, 4), (2, 3), (2, 4), (3, 4)];
         assert_eq!(sorted_item_pairs(&w, &inc), exp_inc);
@@ -1302,13 +1276,10 @@ mod tests {
 
         let mut full_hist = [0u64; GAP_HISTOGRAM_BUCKETS];
         let full = w
-            .find_coincident_pairs(
-                &k,
-                FindPairsOptions {
-                    histogram: Some(&mut full_hist),
-                    ..FindPairsOptions::default()
-                },
-            )
+            .find_coincident_pairs(FindPairsOptions {
+                histogram: Some(&mut full_hist),
+                ..FindPairsOptions::default()
+            })
             .unwrap();
         let exp_full = [(1, 2), (1, 3), (1, 4), (2, 3), (2, 4), (3, 4)];
         assert_eq!(sorted_item_pairs(&w, &full), exp_full);
@@ -1466,7 +1437,6 @@ mod tests {
         assert_eq!(ht.remove(&[0]), 0);
         assert_eq!(ht.used_bucket_item_count(), 65);
 
-        let k = Tolerances::default();
         let mut voxels = ObjsInVoxels::<u32>::new(2, 2, 1, Some(&unit_box()), 0).unwrap();
         for id in 0..58 {
             voxels.add(id, Vec3::new(0.2, 0.2, 0.5), 0.0, None).unwrap();
@@ -1482,7 +1452,7 @@ mod tests {
             .unwrap();
         assert_eq!(voxels.point_capacity(), 128);
         let pairs = voxels
-            .find_coincident_pairs(&k, FindPairsOptions::default())
+            .find_coincident_pairs(FindPairsOptions::default())
             .unwrap();
         assert_eq!(sorted_item_pairs(&voxels, &pairs), [(0, 100)]);
         assert_eq!(voxels.find_point_items(0), vec![0, 58]);

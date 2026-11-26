@@ -33,5 +33,4 @@ pub mod vector2d;
 pub mod vector3d;
 
 pub use error::{NumError, NumFailure, Result};
-pub use tol::Tolerances;
-pub use units::{Accuracy, AngleTol, Length, ParamTol, Resolution};
+pub use units::{coincident, Accuracy, Length, ParamTol, Resolution};

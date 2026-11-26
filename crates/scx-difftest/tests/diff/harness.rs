@@ -94,12 +94,11 @@ pub fn edge_f64() -> Vec<f64> {
 /// moved function compares with is listed here, so the pools hold it and one ulp either side.
 pub fn thresholds() -> Vec<f64> {
     use scx_num::certified::UNDERFLOW_ROOT;
-    use scx_num::consts::{EPS_PARAM, ZONE_DEFAULT};
+    use scx_num::consts::{EPS_PARAM, PARALLEL_ANGLE_RAD, ZONE_DEFAULT};
     use scx_num::math::{
         BIG_DOUBLE, EFF_ZERO, EFF_ZERO_DEG, EFF_ZERO_RAD, EFF_ZERO_SQ, EFF_ZERO_SQRT,
         INFINITE_PARAMETER, TWO_PI, UNDEF_DOUBLE,
     };
-    use scx_num::tol::ANG_TOL_RAD;
     // (each one ulp either side too: `threshold_f64`)
     vec![
         EFF_ZERO,
@@ -115,13 +114,14 @@ pub fn thresholds() -> Vec<f64> {
         ZONE_DEFAULT,
         ZONE_DEFAULT / 2.0,
         2.0 * ZONE_DEFAULT,
-        ANG_TOL_RAD,
+        PARALLEL_ANGLE_RAD,
         1.0e-9, // the 2D helpers' length floor (`unit_2d`, `three_point_circle_2d`)
         UNDEF_DOUBLE,
         UNDERFLOW_ROOT,
         BIG_DOUBLE,
         INFINITE_PARAMETER,
-        scx_num::tol::USE_DEFAULT, // the sentinel the `*_tol3d` helpers replace
+        // the pin's `SM_USE_DEFAULT`, which its `*_tol3d` helpers replace (scx: `None`)
+        solidcore::geom::tol::USE_DEFAULT,
     ]
 }
 

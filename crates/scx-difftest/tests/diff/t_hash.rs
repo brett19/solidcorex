@@ -5,7 +5,8 @@
 //! an explicit bucket list (indices past the table included) and the gap histogram;
 //! voxel and box queries; resizes), and every operation's result and the whole model
 //! after it (point items, buckets, bucket items, counts, capacities, box) are compared.
-//! The scx side reads the default `Tolerances`, the pin the default kernel's.
+//! The scx side reads no tolerances (the pairs' tolerances are the zone sums'), the pin
+//! the default kernel's.
 
 use crate::diff;
 
@@ -75,7 +76,6 @@ diff!(ht_voxels, |seed: usize, cnt: [f64; 3], scale: f64| {
     let dims = cnt.map(|c| (c.abs() as usize) % 5);
     let unit = m::e3([0.0, 0.0, 0.0, scale, scale, scale]);
     let bbox = (seed % 4 != 0).then_some(&unit);
-    let tol = m::ht_tol();
     let mut out: Vec<Rec> = Vec::new();
     let mut v = match ObjsInVoxels::<u32>::new(dims[0], dims[1], dims[2], bbox, seed % 70) {
         Ok(v) => v,
@@ -121,7 +121,7 @@ diff!(ht_voxels, |seed: usize, cnt: [f64; 3], scale: f64| {
                     buckets: (mode % 5 == 0).then_some(&bl[..]),
                     histogram: (mode % 2 == 0).then_some(&mut hist),
                 };
-                match v.find_coincident_pairs(&tol, opts) {
+                match m::ht_find_pairs(&mut v, opts) {
                     Ok(p) => (
                         3,
                         [p.first, p.second, hist.map(|h| h as usize).to_vec()].concat(),

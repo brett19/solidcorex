@@ -56,7 +56,9 @@ impl Gen for TfR {
     }
 }
 
-/// A tolerance-set recipe: the seven fields of `Tolerances` in declaration order.
+/// A tolerance-set recipe: the seven fields of the pin's `Tolerances` in declaration
+/// order. scx reads the zone as a `Resolution` where it is one and the other fields hold
+/// their defaults (`t_tol`).
 #[derive(Clone, Debug)]
 pub struct TolR(pub [f64; 7]);
 
@@ -94,7 +96,7 @@ impl Gen for TolR {
 
 macro_rules! helpers {
     () => {
-        use crate::facade::{TfR, TolR};
+        use crate::facade::TfR;
         use crate::harness::{List, MatR};
 
         pub fn v3(a: [f64; 3]) -> vector3d::Vec3 {
@@ -160,19 +162,6 @@ macro_rules! helpers {
                 z: iv(a[2]),
             }
         }
-        pub fn tol_set(r: &TolR) -> Tolerances {
-            let [zone_tol_3d, xsect_tol_3d, approx_tol_3d, ang_tol_deg, tol_gap_gain, model_size_estimate, large_small_size_ratio] =
-                r.0;
-            Tolerances {
-                zone_tol_3d,
-                xsect_tol_3d,
-                approx_tol_3d,
-                ang_tol_deg,
-                tol_gap_gain,
-                model_size_estimate,
-                large_small_size_ratio,
-            }
-        }
     };
 }
 
@@ -180,9 +169,12 @@ macro_rules! helpers {
 pub mod x {
     pub use crate::solvers::x as sv;
     pub use scx_algo::hash_table;
-    /// What `find_coincident_pairs` reads tolerances from: the default `Tolerances`.
-    pub fn ht_tol() -> Tolerances {
-        Tolerances::default()
+    /// `find_coincident_pairs`, which reads no tolerances.
+    pub fn ht_find_pairs(
+        v: &mut hash_table::ObjsInVoxels<u32>,
+        opts: hash_table::FindPairsOptions<'_>,
+    ) -> scx_num::Result<hash_table::CoincidentPairs> {
+        v.find_coincident_pairs(opts)
     }
     pub use scx_algo::krawczyk;
     /// A Krawczyk-module error as (class, operation, failure): `solve4`'s singular system.
@@ -197,26 +189,24 @@ pub mod x {
         (format!("{:?}", e.kind()), e.operation(), f)
     }
     pub use scx_algo::polynomial;
-    pub use scx_num::tol::Tolerances;
     pub use scx_num::{
         certified, extent1d, extent2d, extent3d, interval, interval_vector, limits, math, matrix,
         periodic_extent1d, ring, series, small_matrix, taylor_model, tol, transform, vector2d,
         vector3d,
     };
     helpers!();
-    /// What the moved tolerance functions take: the tolerance set itself.
-    pub fn tolk(r: &TolR) -> Tolerances {
-        tol_set(r)
-    }
 }
 
 /// The pinned solidcore.
 pub mod s {
     pub use crate::solvers::s as sv;
     pub use solidcore::geom::hash_table;
-    /// What `find_coincident_pairs` reads tolerances from: the default kernel.
-    pub fn ht_tol() -> solidcore::kernel::Kernel {
-        solidcore::kernel::Kernel::default()
+    /// `find_coincident_pairs` on the default kernel.
+    pub fn ht_find_pairs(
+        v: &mut hash_table::ObjsInVoxels<u32>,
+        opts: hash_table::FindPairsOptions<'_>,
+    ) -> solidcore::Result<hash_table::CoincidentPairs> {
+        v.find_coincident_pairs(&solidcore::kernel::Kernel::default(), opts)
     }
     /// `geom::krawczyk`'s items are `pub(crate)` at the pin: the pin's file, made public by
     /// the build script (`build.rs`, `pin_krawczyk`), over the pin's own types.
@@ -297,6 +287,21 @@ pub mod s {
         pub use solidcore::geom::geom_utility::p2::{inverse_4x4, mult_4x4};
     }
     helpers!();
+    use crate::facade::TolR;
+    /// The pin's tolerance set of recipe `r` (scx has none: `Tolerances` is retired).
+    pub fn tol_set(r: &TolR) -> Tolerances {
+        let [zone_tol_3d, xsect_tol_3d, approx_tol_3d, ang_tol_deg, tol_gap_gain, model_size_estimate, large_small_size_ratio] =
+            r.0;
+        Tolerances {
+            zone_tol_3d,
+            xsect_tol_3d,
+            approx_tol_3d,
+            ang_tol_deg,
+            tol_gap_gain,
+            model_size_estimate,
+            large_small_size_ratio,
+        }
+    }
     /// What solidcore's tolerance functions take: a kernel holding the tolerance set.
     pub fn tolk(r: &TolR) -> solidcore::Kernel {
         solidcore::Kernel::new(&solidcore::KernelOptions {
@@ -415,15 +420,6 @@ both!(extent1d::ExtentNd => |e, o| {
 both!(extent3d::SphereBound => |e, o| { e.center.bits(o); e.radius.bits(o); e.min_radius.bits(o); });
 both!(certified::Bounded => |e, o| { e.value.bits(o); e.bound.bits(o); });
 both!(math::PointSetSummary => |e, o| { e.centroid.bits(o); e.mean_distance.bits(o); });
-both!(Tolerances => |e, o| {
-    e.zone_tol_3d.bits(o);
-    e.xsect_tol_3d.bits(o);
-    e.approx_tol_3d.bits(o);
-    e.ang_tol_deg.bits(o);
-    e.tol_gap_gain.bits(o);
-    e.model_size_estimate.bits(o);
-    e.large_small_size_ratio.bits(o);
-});
 
 impl Bits for x::extent3d::LineHit {
     fn bits(&self, o: &mut Out) {

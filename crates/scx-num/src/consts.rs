@@ -4,9 +4,9 @@
 //! Shared numeric constants, one definition each.
 //!
 //! Each constant names its unit and who owns the decision it makes. The values are
-//! solidcore's; the older names ([`crate::tol::ZONE_TOL_3D`],
-//! [`crate::math::EFF_ZERO_PARAM`], [`crate::tol::Tolerances::default`]'s zone) are
-//! defined from these, so changing one here changes every reader.
+//! solidcore's; the older names ([`crate::math::EFF_ZERO_PARAM`],
+//! [`crate::units::Resolution::DEFAULT`]) are defined from these, so changing one here
+//! changes every reader.
 //! [`crate::tol::LARGE_SMALL_SIZE_RATIO`] is not one of them: it has the same value as
 //! [`MAX_ACCURACY_RATIO`] but a different owner.
 
@@ -36,6 +36,15 @@ pub const EPS_PARAM: f64 = 1.2e-8;
 /// change the other (a test holds them equal for now).
 pub const MAX_ACCURACY_RATIO: f64 = 1000.0;
 
+/// The largest angle between two directions that are parallel (or, from a right angle,
+/// perpendicular), the default of [`crate::tol::are_parallel`]'s callers. Degrees.
+/// Owner: the tolerance policy. solidcore's `SM_ANG_TOL_DEG`, 0.5.
+pub const PARALLEL_ANGLE_DEG: f64 = 0.5;
+
+/// [`PARALLEL_ANGLE_DEG`] in radians, `0.5 * PI / 180` as solidcore's `SM_ANG_TOL_RAD`
+/// computes it.
+pub const PARALLEL_ANGLE_RAD: f64 = PARALLEL_ANGLE_DEG * crate::math::PI / 180.0;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -47,6 +56,11 @@ mod tests {
         assert_eq!(EPS_REL.to_bits(), 1.0e-12f64.to_bits());
         assert_eq!(EPS_PARAM.to_bits(), 1.2e-8f64.to_bits());
         assert_eq!(MAX_ACCURACY_RATIO, 1000.0);
+        assert_eq!(PARALLEL_ANGLE_DEG, 0.5);
+        assert_eq!(
+            PARALLEL_ANGLE_RAD.to_bits(),
+            (0.5 * crate::math::PI / 180.0).to_bits()
+        );
     }
 
     #[test]
