@@ -423,9 +423,9 @@ mod tests {
                 "the matrix is not symmetric",
             ),
             (
-                NumFailure::PointOutsideExtent { u: 0.5, v: f64::NAN },
+                NumFailure::PointOutsideExtent { u: 0.5, v: -2.5 },
                 ErrorKind::Failed,
-                "the point (0.5, NaN) lies outside the extent",
+                "the point (0.5, -2.5) lies outside the extent",
             ),
             (
                 NumFailure::Singular { measure: 0.0 },
