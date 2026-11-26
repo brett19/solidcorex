@@ -59,6 +59,10 @@ These were within its remit as coordinator. Each can be overturned.
 | 11-26 | Tolerance quantities get newtypes (`Length`, `Accuracy`, `Resolution`, `AngleTol` in radians, `ParamTol`), and each constant has one definition in `scx-num::consts`; values are unchanged | docs 07 and 09; the other zone definitions at the pin are listed in research 52 section 4, to be removed as their layers move |
 | 11-26 | `size_estimate_to_zone_tol_3d` is renamed `zone_for_size`; the half-open rewrite of 09 section 1.2 waits | Bit identity first; a test pins today's answer at every boundary |
 | 11-26 | `math::det3` is public in `scx-num` (it was `pub(crate)`) | Eval and blend use it; there is no `pub(crate)` across crates |
+| 11-26 | The interval arithmetic (`Ivl`, the ring traits, Taylor models, series, interval vectors) is layer 0; `certificate.rs` and `station.rs` stay in solidcore for `nurbs`/`blend` | They need only `f64`; the certificate takes B-splines, the kernel and faces (research 53 sections 1, 11) |
+| 11-26 | Defects found while moving are pinned by a test and reported, not fixed in the move | The overflow-to-NaN interval and the quartic's clustered roots are both the pin's behaviour bit for bit (research 53 section 9) |
+| 11-26 | Layer 1 is `scx-algo`, depending only on `scx-num`; its first file is `polynomial` | Pure, no error type, 6 callers; 0 mismatches over 27,984 root-built polynomials at every pool tolerance (research 53 section 8) |
+| 11-26 | (Proposed, for the owner) The local solvers become generic over the evaluator's error, with a trait saying which errors pass through, which are ignorable and which mark a bad Jacobian; the evaluators keep `&mut self` | `scx-algo` cannot name `SolidError`; the solvers dispatch on its classes; evaluators cache their last foot point (research 53 section 5) |
 
 ## 4. Designs recommended and then withdrawn
 

@@ -172,9 +172,81 @@ Reviewer leftovers on server2, listed rather than removed (no `rm -rf`): `scx-re
 
 ## 7. Heat
 
-(pending: interval operations per certified bound, measured with temporary counters in a scratch clone
-of the pin, not part of any commit.)
+Interval operations per certified bound, counted at the pin with a thread-local counter on
+the nine `Ivl` operations (`sqrt`, the four `*_ulp`, `+ - * /`) in a scratch clone (never
+committed), over the 101 `blend::fillet_section` tests (84.6 s in the dev profile with the
+counter). A bound is one outermost `gn_enclose` or `gn_enclose_over` call.
 
-## 8. Test counts, timings and the differential result
+| bound | calls | min | median | p90 | max | total ops |
+|---|---|---|---|---|---|---|
+| `gn_enclose`, certified | 920 | 737 | 33,077 | 56,291 | 158,775 | 32,280,713 |
+| `gn_enclose_over`, certified | 20 | 2,056 | 16,715 | 70,056 | 90,785 | 551,070 |
+| `gn_enclose_over`, refused | 6 | 290 | 2,095 | 2,095 | 2,095 | 9,330 |
 
-(final run recorded at the end of the step.)
+946 bounds, 32.8 million interval operations: a median of about 33,000 per bound. Time per
+operation was not measured, so where within a bound the time goes is not claimed here.
+
+## 8. Step 2: what moved into `scx-algo`
+
+`crates/scx-algo` (layer 1, depends only on `scx-num`; `layers.txt` lists it second;
+default member; instrumented by `cargo xtask cov` by default):
+
+| scx-algo file | from (pin) | lines pin / here | tests pin / here |
+|---|---|---|---|
+| polynomial.rs | geom/polynomial.rs | 362 / 368 | 6 / 6 |
+
+Bit-identical: `bodydiff` finds 17 fns the same, 0 differing; the `Changes:` line is paths only.
+**API:** unchanged and minimal (`Roots` with `new`, `as_slice`, `Deref<[f64]>`;
+`solve_quadratic`, `solve_cubic`, `solve_quartic`). **Errors:** none (every path returns
+roots, as at the pin), so no error enum yet; the solvers' enum comes with them (section 5).
+**Signatures:** unchanged (`zero_tol: f64`; no kernel).
+
+Tests: the pin's 6 unit tests; 5 property tests (`tests/properties.rs`: every root returned
+is a root, at most `degree` returned, every root at least 0.05 from the others found (0.5
+for the quartic), the quartic and cubic fallbacks equal the lower degree deduplicated, quartic
+roots at least `zero_tol` apart); 5 difftests (`t_algo.rs`: the three solvers over the
+coefficient and threshold pools, the `Roots` type, and 27,984 polynomials built from real
+roots in {-3, -2, -1, -0.5, 0, 1e-9, 0.5, 1, 2, 3} with repeats, a complex pair, the constant
+moved by 0, ±1e-13, ±1e-10, ±1e-7, and leading coefficients 1, -2, 1e-13, 0, at every
+tolerance of the f64 pool): **0 mismatches.** Coverage of polynomial.rs under the difftest:
+278 of 279 regions; the one left is `Roots::push` when four roots are already stored, which
+no solver reaches (the quartic adds at most four).
+
+**Not moved this step:** `local_solve1d` and `local_solve_nd` (2,833 lines) wait on the
+callback-error design of section 5, which changes their signatures and needs an owner
+look before it is built; `krawczyk` waits on `certificate::inverse4`; `hash_table` is next
+after them. No callback moved, so none is changed.
+
+## 9. Found, not changed
+
+1. **Interval overflow to NaN** (section 2), with the counterexample
+   `Ivl::from(f64::MAX) + Ivl::from(f64::MAX)` = `[NaN, inf]`. The only operation found that
+   is not an enclosure. Pinned by `an_overflowing_end_widens_to_nan_found_not_changed`.
+2. **The quartic's accuracy on clustered roots.** Ferrari's method (pin and here, bit for
+   bit) returns, for roots 0.00874, 0.0359, 0.0435, -0.689 (coefficients
+   `[-9.389680767756892e-6, 0.0015388801638414014, -0.05843609829791384, 0.6006785459030644, 1.0]`),
+   the roots 0.00959, 0.0326, 0.0459, -0.689: forward errors up to 3e-3 and a relative
+   residual of 0.018. In another drawn case a root at 2.6105 came back as 2.6065 (other roots 0.04 to 0.3 away). Not an enclosure claim (the
+   solver claims none), but callers (conic intersection, `geom_utility`) take the roots as
+   exact; whether they polish them with Newton is for the curve layer's move to check.
+3. The libm dependence of section 3.
+
+## 10. Test counts and timings (server2, final)
+
+| check | result | wall |
+|---|---|---|
+| `cargo xtask fast` (fmt, clippy x2, layers, headers, tier 1, xtask tests) | passed | 2.2 s warm |
+| tier 1 scx-num | 148 unit, 11 enclosure, 10 property, 1 libm table | 0.85 + 0.94 + 0.02 + 0.01 s |
+| tier 1 scx-algo | 6 unit, 5 property | 0.03 s |
+| difftest (`cargo test -p scx-difftest`, dev) | 303 tests, 0 mismatches (the control mismatches as expected) | 2.7 s run, 5.0 s with the check |
+| wasm32 (`cargo build --target wasm32-unknown-unknown -p scx-num -p scx-algo`) | builds | 0.2 s warm |
+| `cargo xtask movecheck` | pin, layers, headers (41 files, 20 derived), bodydiff, cov: passed | |
+| coverage under the difftest | 10,468 of 10,780 regions (97.11%); scx-num 97.04%; polynomial 99.64% | 4.7 s |
+
+## 11. What remains for `nurbs`
+
+`certificate.rs` (with `inverse4` to `scx-algo` beside Krawczyk), `station.rs`, the `Tay` series
+and `GnAreaCells` move with `blend`/`nurbs`, which need the curve and surface types first. In
+`scx-algo` before `nurbs`: the two local solvers (callback errors), Krawczyk, `hash_table`
+(`&Kernel` to `&Tolerances`). `tree`, `grid`, `solution_array` and `global_solver` need curve
+caches, surfaces and objects, so they wait for those layers or are split there.
