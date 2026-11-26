@@ -7,6 +7,8 @@ use std::fmt::Debug;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Once;
 
+use scx_num::certified::{next_down, next_up};
+
 /// SplitMix64 (Steele, Lea and Flood 2014), written out so the inputs depend on nothing.
 #[derive(Clone)]
 pub struct SplitMix64(pub u64);
@@ -120,10 +122,10 @@ pub fn thresholds() -> Vec<f64> {
 pub fn threshold_f64() -> Vec<f64> {
     let mut v = Vec::new();
     for t in thresholds() {
-        v.extend([t.next_down(), t, t.next_up()]);
+        v.extend([next_down(t), t, next_up(t)]);
     }
     for t in [scx_num::math::EFF_ZERO, scx_num::consts::ZONE_DEFAULT] {
-        v.extend([-t.next_down(), -t, -t.next_up()]);
+        v.extend([-next_down(t), -t, -next_up(t)]);
     }
     v
 }
@@ -182,7 +184,7 @@ fn vec_pool<const N: usize>(rng: &mut SplitMix64, special: &[[f64; N]]) -> Vec<[
         scx_num::consts::ZONE_DEFAULT,
         scx_num::math::EFF_ZERO_SQRT,
     ] {
-        for x in [t.next_down(), t, t.next_up()] {
+        for x in [next_down(t), t, next_up(t)] {
             let mut a = [0.0; N];
             a[0] = x;
             v.push(a);
@@ -316,9 +318,9 @@ impl Gen for [[f64; 4]; 4] {
         for s in [
             1.0e-310,
             f64::from_bits(1),
-            scx_num::math::EFF_ZERO.next_down(),
+            next_down(scx_num::math::EFF_ZERO),
             scx_num::math::EFF_ZERO,
-            scx_num::math::EFF_ZERO.next_up(),
+            next_up(scx_num::math::EFF_ZERO),
         ] {
             let mut m = id;
             for (i, row) in m.iter_mut().enumerate().take(3) {
