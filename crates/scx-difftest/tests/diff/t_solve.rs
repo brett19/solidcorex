@@ -141,13 +141,22 @@ macro_rules! run1 {
         }
         let (a, b) = c.ab;
         let r = match c.entry {
-            0 => s.solve_it(&mut ev, c.guess, c.acc).map(|o| (o.found, o.t, 0.0)),
+            0 => s
+                .solve_it(&mut ev, c.guess, c.acc)
+                .map(|o| (o.found, o.t, 0.0)),
             1 | 2 => s
                 .solve_by_brent(&mut ev, a, c.guess, b, c.acc, c.entry == 2)
                 .map(|(t, f)| (false, t, f)),
             _ => {
-                let (fa, fb) = (crate::solvers::f1(c.func, a).0, crate::solvers::f1(c.func, b).0);
-                let (lo, hi, flo, fhi) = if fa <= fb { (a, b, fa, fb) } else { (b, a, fb, fa) };
+                let (fa, fb) = (
+                    crate::solvers::f1(c.func, a).0,
+                    crate::solvers::f1(c.func, b).0,
+                );
+                let (lo, hi, flo, fhi) = if fa <= fb {
+                    (a, b, fa, fb)
+                } else {
+                    (b, a, fb, fa)
+                };
                 s.solve_by_bisection(&mut ev, c.levels, lo, hi, flo, fhi)
                     .map(|(t, f)| (false, t, f))
             }
@@ -209,14 +218,20 @@ diff!(solve1d_default_evaluate, || {
         m::sv::extent1d::Extent1d::from_min_max(0.0, 1.0),
         false,
     );
-    let a = s.solve_it(&mut m::sv::Base1, 0.5, 1e-9).map(|o| (o.found, o.t));
+    let a = s
+        .solve_it(&mut m::sv::Base1, 0.5, 1e-9)
+        .map(|o| (o.found, o.t));
     let b = s
         .solve_by_brent(&mut m::sv::Base1, 0.0, 0.5, 1.0, 1e-9, false)
         .map(|_| ());
     let c = m::sv::local_solve1d::LocalSolve1d::new()
         .solve_it(&mut m::sv::Base1, 0.5, 1e-9)
         .map(|o| (o.found, o.t));
-    (a.map_err(m::sv::pin), b.map_err(m::sv::pin), c.map_err(m::sv::pin))
+    (
+        a.map_err(m::sv::pin),
+        b.map_err(m::sv::pin),
+        c.map_err(m::sv::pin),
+    )
 });
 
 diff!(solve1d_queue, |size: usize| {
@@ -252,7 +267,11 @@ struct CfgN {
 fn cfgsn(full: bool) -> Vec<CfgN> {
     let mut out = Vec::new();
     let ivls: &[Option<[[f64; 2]; 2]>] = if full {
-        &[None, Some([[0.0, 1.5], [0.0, 1.0]]), Some([[-2.0, 2.0], [-2.0, 2.0]])]
+        &[
+            None,
+            Some([[0.0, 1.5], [0.0, 1.0]]),
+            Some([[-2.0, 2.0], [-2.0, 2.0]]),
+        ]
     } else {
         &[None, Some([[0.0, 1.5], [0.0, 1.0]])]
     };
@@ -367,7 +386,11 @@ diff!(solve_nd_fail, |share: usize| {
 diff!(solve_nd_jacobian, |a: f64, b: f64| {
     let mut ev = m::sv::RecN::new(0, usize::MAX, false, Class::SmErr);
     let mut out = Vec::new();
-    for ivl in [None, Some([[-2.0, 2.0], [-2.0, 2.0]]), Some([[a, a], [b, b]])] {
+    for ivl in [
+        None,
+        Some([[-2.0, 2.0], [-2.0, 2.0]]),
+        Some([[a, a], [b, b]]),
+    ] {
         let e = ivl.map(|v: [[f64; 2]; 2]| {
             v.map(|[lo, hi]| m::sv::extent1d::Extent1d::from_min_max(lo, hi))
         });
@@ -381,7 +404,9 @@ diff!(solve_nd_jacobian, |a: f64, b: f64| {
             &mut j,
             e.as_ref().map(|v| &v[..]),
         );
-        let ja: Vec<f64> = (0..4).map(|i| j.at(i / 2, i % 2).unwrap_or(f64::NAN)).collect();
+        let ja: Vec<f64> = (0..4)
+            .map(|i| j.at(i / 2, i % 2).unwrap_or(f64::NAN))
+            .collect();
         out.push((r.map_err(m::sv::pin), x, ja));
     }
     (out, ev.log)
@@ -400,8 +425,7 @@ diff!(solve_nd_sizes, |n: usize| {
         }
         let per = per_len.map(|k| vec![false; k]);
         let guess = vec![0.25; n];
-        let mut s =
-            m::sv::local_solve_nd::LocalSolveNd::new(&mut ev, Some(&e), per.as_deref());
+        let mut s = m::sv::local_solve_nd::LocalSolveNd::new(&mut ev, Some(&e), per.as_deref());
         let r = s.solve_it(&guess, 1e-9).map(|o| (o.found, o.x));
         let code = s.termination_reason().code();
         out.push((r.map_err(m::sv::pin), code, ev.log.len()));

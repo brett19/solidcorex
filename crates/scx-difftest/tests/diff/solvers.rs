@@ -101,14 +101,17 @@ impl EvalError for XErr {
     fn ends_solve(&self) -> bool {
         matches!(
             self.0,
-            SolidError::Unported { .. } | SolidError::Cancelled { .. } | SolidError::OutOfFuel { .. }
+            SolidError::Unported { .. }
+                | SolidError::Cancelled { .. }
+                | SolidError::OutOfFuel { .. }
         )
     }
     fn passes_through(&self) -> bool {
         self.ends_solve() || matches!(self.0, SolidError::PreparationRequired { .. })
     }
     fn never_ignored(&self) -> bool {
-        self.0.is_unported_or_cancelled() || matches!(self.0, SolidError::PreparationRequired { .. })
+        self.0.is_unported_or_cancelled()
+            || matches!(self.0, SolidError::PreparationRequired { .. })
     }
     fn defect(operation: &'static str, why: &'static str) -> Self {
         XErr(Failure::new(operation, GeomFailure::Defect { why }).into_error())
@@ -226,7 +229,10 @@ pub const F1: usize = 14;
 /// The N-D test equation sets (two unknowns): values, row-major Jacobian, and whether the
 /// evaluator computes the Jacobian by differences, with which intervals.
 pub fn fn_n(func: usize, x: &[f64]) -> ([f64; 2], [f64; 4]) {
-    let (a, b) = (x.first().copied().unwrap_or(0.0), x.get(1).copied().unwrap_or(0.0));
+    let (a, b) = (
+        x.first().copied().unwrap_or(0.0),
+        x.get(1).copied().unwrap_or(0.0),
+    );
     match func {
         0 | 1 | 6 | 7 | 8 => (
             [
@@ -396,7 +402,9 @@ pub mod x {
     pub fn pin(e: scx_algo::error::SolveError<EvErr>) -> (String, solidcore::SolidError) {
         (e.to_string(), super::solve_pin(e))
     }
-    evaluators!(type Error = EvErr;);
+    evaluators!(
+        type Error = EvErr;
+    );
 }
 
 /// The pin's side.
