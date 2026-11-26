@@ -126,3 +126,4 @@ impl TayScalar for Ivl {
             wide(self.hi.cos(), self.lo.cos()),
         )
     }
+}
