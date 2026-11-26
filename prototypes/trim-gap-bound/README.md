@@ -40,6 +40,10 @@ separately (see `docs/research/55-certified-trim-gap.md`).
   value at most it, the tight bound within the stated ratio, the within-stop bound between the
   sampled maximum and the tolerance; near the pole the bound certifies and at it refuses; the
   composed blend bound (net gap plus `eps`) is at least the sampled gap on the definition.
+- `tests/patch_lines.rs`: pieces that cross a C^1 patch line of a Hermite net (review 55's
+  counter-example, the same with its peak near the line, and an offset of the net, whose
+  normal is only C^0 there), each piece's bound at least the densely sampled gap; and a trim
+  that touches the domain's boundary off an iso line still resolves.
 
 ## Running
 

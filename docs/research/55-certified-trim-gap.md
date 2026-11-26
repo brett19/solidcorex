@@ -35,8 +35,11 @@ T accepts a trim when its certified B is at most L (35).
 ## Verdict
 
 **Recommended method: an interval Taylor model with adaptive bisection, in centred
-second-order form, through the offset formula; for a blend, the same bound on its net plus the
-blend's stored certificate eps.**
+second-order form on pieces within one C^2 patch of the surface, through the offset formula;
+for a blend, the same bound on its net plus the blend's stored certificate eps.** On a piece
+that crosses a patch line where the surface is only C^1, the centred form is not valid: the
+plain second-order form is used there for the surface itself, and the first-order form for an
+offset of it (see "Corrections after review").
 
 - **Offsets.** Bound `g(t) = Q(c(t)) - C(t)`, with `Q = S + d N` and
   `N = S_u x S_v / |S_u x S_v|`, piece by piece. On a piece `[a, b]` of width `h`, take
@@ -66,9 +69,12 @@ blend's stored certificate eps.**
     direct route needs a certified section solver and is not recommended now (JUDGED).
 
 **On the 24 refusals of report 35, the two changes certify all 24.** The offsets give G at
-1.0004 to 1.0010 and B at 1.0003 to 1.0005 of sampled, at 0.91 L. The blends give B at 0.3%
-to 1.6% of L. Each bound costs 14 to 415 ms tight, and 13 to 54 ms when asked only whether
-it is within L (MEASURED, section 2).
+1.0004 to 1.0010 and B at 1.0003 to 1.0005 of sampled. B sits at 0.91 L, but that figure is
+fixed by the setup (L was set at 1.1 times the sampled G, and B tracks G), not a measure of
+headroom. The blends give B at 0.3%
+to 1.6% of L. In the kernel probe each bound costs 14 to 415 ms tight, and 13 to 54 ms when
+asked only whether it is within L (MEASURED, section 2; these are solidcore timings, not the
+prototype's).
 
 **Rejected.**
 
@@ -83,6 +89,57 @@ it is within L (MEASURED, section 2).
   `|dN| <= |II| / |S_u x S_v|_min` times the base derivatives). It is valid but is the
   worst case over the whole face, which is the plain Lipschitz form with a looser constant
   (JUDGED from the Lipschitz rows).
+
+## Corrections after review
+
+Review 55 found four faults in the prototype and two in this report. Fixed in the
+prototype (`src/gap.rs`, tests in `tests/patch_lines.rs`) and here.
+
+- **C1. The centred form needs C^2 on the piece.** `|g''(m)| + h/2 sup|g'''|` bounds
+  `sup|g''|` only where `g''` is continuous. Across a C^1 patch line of a net it is not: on
+  a piece whose middle is on the flat side, `g''(m) = 0` while the far side bends. The
+  prototype now marks a piece whose trim enclosure meets a patch line, and there takes the
+  plain `sup|g''|` (`d = 0`). The review's own example (true gap 0.4865) did not break the
+  old code: the jets' overestimation of `g'''` covered the jump. The same construction
+  with the peak 0.001 past the line did: the old centred bound on `[1.0975, 1.1015]` was
+  0.0022008, below the sampled 0.0022010. With the fix, every tested piece holds and the
+  bound resolves within 1.01 (MEASURED). Decision row 11-26 asks for pieces to be cut at
+  the lines. The prototype uses the per-piece fallback instead; both are sound, and cutting
+  is tighter near a line (JUDGED).
+- **C2. An offset across a C^1 line is only Lipschitz.** The normal is only C^0 there, so
+  `g'` jumps, and no second-order form holds, the plain one included. Old code, on an offset
+  at `d = 2` of a net with `z_uu` jumping by 0.2: on `[1.099, 1.101]` the centred bound was
+  0.204292 and the plain one 0.204310, both below the sampled 0.204478 (MEASURED). A piece
+  that crosses a line now takes the first-order form `|g(m)| + h/2 sup|g'|`, and the bound
+  then holds and resolves within 1.01 (MEASURED). This also corrects decision row 11-26,
+  which gives the plain second-order form across a C^1 line. That is right for the surface,
+  not for an offset of it (JUDGED).
+- **C3. What a capped run returns.** The code returned the largest piece bound with
+  `resolved = false`, and its documentation said infinite. The documentation now matches
+  the code. The value is proved but did not meet the stop. Section 3, point 5 says why it is
+  kept finite (JUDGED).
+- **C4. Trims that touch the domain's boundary.** The interval enclosure of such a trim
+  crossed the edge at every depth, so the old code never resolved. On a trim from `u = 0` to
+  `u = 1` of the wavy patch it reached 995 pieces and stopped with the bound infinite
+  (MEASURED). A uv coordinate proved monotone on a piece is now narrowed to the range of
+  its end values, which is exact. That trim now resolves within 1.01. The sphere's pole rows
+  moved with this fix (section 1).
+- **C5. B/L = 0.91 is 1/1.1 by construction** (section 2). The edges' L was set at 1.1
+  times the sampled G, and B tracks G. The ratio shows the bound is tight; it is not room
+  under L (JUDGED).
+- **C6. Which cost is which.** "Within is barely cheaper (2 to 16%)" is the prototype, with
+  the tolerance at 1.1 times the gap. "Within is 9 to 12 times cheaper" (owner question 3) is
+  the kernel probe on the vase offsets, against L. Both are now labelled.
+
+Re-run of `gap-bench` after the fixes (MEASURED):
+- Offset section: identical to every printed digit except time. None of these cases has a
+  patch line or touches the boundary.
+- Pole section: changed by C4 (section 1's table).
+- Blend section: net bounds, eps and the composed figures unchanged. Net pieces rose 9 to
+  25% (282, 579, 1301 to 307, 660, 1625), because torus-net pieces that touch a line no
+  longer take the centred form.
+- Section 2's kernel figures come from the solidcore probe, not the prototype, so these
+  fixes leave them unchanged.
 
 ## 1. Methods per surface kind
 
@@ -110,14 +167,21 @@ that bound, or a refusal.
   about 1.8 times the interval operations (third-order jets), so the wall time is lower
   except on the two 5-span Bézier cases, where it is about 1.45 times higher (MEASURED).
 - **Within** the tolerance is barely cheaper than tight at 1.1 times the sampled gap (2 to 16%
-  fewer pieces with Centred). At 10 times it saves 16 to 50% (MEASURED, the `within:` rows of the bench).
+  fewer pieces with Centred). At 10 times it saves 16 to 50% (MEASURED, the `within:` rows of
+  the prototype's bench). This is the prototype, with the tolerance at 1.1 times the gap. The
+  "9 to 12 times cheaper" of owner question 3 is the kernel's bound on the vase trims, where
+  the within stop is asked about L and the kernel's tight bound spends most of its time past
+  that point; the two figures measure different code at different settings.
   The saving is small because the bisection spends most of its pieces near the maximum,
   where both stops need them (JUDGED).
 - **Assumptions.**
   - The trim and the edge are polynomial on each piece: the pieces are cut at both curves'
     knots.
-  - The surface is C^2 on each piece. Across a C^1 net's patch lines `g''` jumps but stays
-    bounded, and the enclosure over the piece takes both sides.
+  - The surface is C^2 on each piece where the centred form is used. A piece that crosses a
+    C^1 patch line takes the plain second-order form (`g''` jumps but stays bounded, and
+    the enclosure over the piece takes both sides), or the first-order form for an offset
+    (the normal is only C^0 there, so `g'` jumps). The first version of this report said
+    the centred form held across such lines; it does not (corrections, C1).
   - The offset is evaluated by the formula enclosed, `S + d N`. In solidcore that is
     `EvaluatePlainOrSimple`, and `of_exact` refuses every offset that may evaluate otherwise:
     an offset of an offset, an extended base, `allow_extension` (READ, csg.rs:139-177).
@@ -129,12 +193,18 @@ that bound, or a refusal.
     | `delta` from pole | Centred | Second |
     |---|---|---|
     | 1e-1 | 1.0009; 507 pieces | 1.0010; 698 |
-    | 1e-3 | 1.0003; 2081 | 1.0006; 2550 |
-    | 1e-4 | 1.0008; 4680 | 1.0010; 5421 |
-    | 1e-6 | 6.08 at cap | 19.1 at cap |
+    | 1e-3 | 1.0002; 1145 | 1.0006; 1595 |
+    | 1e-4 | 1.0008; 1338 | 1.0010; 1954 |
+    | 1e-6 | 1.0008; 1891 | 1.0009; 2727 |
     | 0 (through the pole) | refused | refused |
 
-    The piece count about doubles per decade of `delta` until the cap (MEASURED). solidcore refuses
+    The piece count grows slowly, by a few hundred per decade of `delta`, and every row off
+    the pole resolves (MEASURED). The first version of this table doubled per decade and hit
+    the cap at 1e-6. That measured mostly something else: the trim rises to
+    `v = pi/2 - delta`, next to the domain's edge, and its interval enclosure crossed the
+    edge, which the prototype then treated as not enclosed (corrections, C4). At `delta = 0`
+    the trim meets the pole at its turning point, where the normal is degenerate and the
+    enclosure cannot be narrowed, and both forms refuse. solidcore refuses
     such a box outright when the base's first partials might be a pole's
     (`10 EFF_ZERO (1 + |S|)` scaled, csg.rs:371-411), because the offset's evaluator then
     steps off the pole and no longer follows the formula (READ). That refusal is correct and
@@ -145,8 +215,8 @@ that bound, or a refusal.
     a cusp is the face, not the bound: past it the offset turns inside out. That is a
     modelling refusal for the offset builder, not for this bound.
   - *Near-singular parametrisations* (base partials nearly parallel, but not a pole). These
-    are the pole case with a small `|S_u x S_v|`. They cost more pieces as the angle shrinks and
-    succeed until the cap (JUDGED from the pole rows).
+    are the pole case with a small `|S_u x S_v|`. They cost more pieces as the angle shrinks,
+    slowly on the sphere's rows (JUDGED from the pole rows).
   - *Large offset distance on a fine base.* `d` multiplies the normal's enclosure width, so a
     large `|d| kappa` needs more pieces (the torus `d = -0.99` row against `d = 0.5`). It
     stays resolved (MEASURED).
@@ -241,8 +311,10 @@ certified G.
   - The edges' tolerances were set at 1.1 times the sampled G (35). So the certified G sits at
     0.909 to 0.910 of L, and T's budget is about 6% of the fit tolerance.
   - The trim built at that budget has B at 1.0003 to 1.0005 times its sampled Hausdorff gap,
-    and at 0.909 to 0.910 of L. The tight bound costs 133 to 243 ms. Asking only "within L"
-    costs 13 to 20 ms.
+    and at 0.909 to 0.910 of L. That B/L is 1/1.1 by construction: B tracks G to within
+    5e-4, and G was placed at L/1.1. It shows the bound is tight, not that there is room
+    under L (JUDGED). The tight bound costs 133 to 243 ms. Asking only "within L"
+    costs 13 to 20 ms. (These are kernel timings, from the probe.)
   - For context, main's trim (built at the full fit) certifies at B above L on 8 of the 20:
     vase2 x4 (1.015 to 1.033 L) and the smaller-L vase3 x4 (1.048 L). It is accepted on the
     other 12. T's budget, possible only with a certified G, is what brings those 8 within L.
@@ -284,10 +356,15 @@ certified G.
    holds over and the parameter map to the definition. This is 54's point 1. A blend without one
    is "unproven" by construction. The certificate should be stored per span, not only as one
    worst case, so a trim crossing a few spans can take theirs (JUDGED).
-5. **Caps and a distinct refusal.** A piece cap (the pin's `MAX_PIECES`, 2^15, csg.rs:66) and
-   a depth cap. Hitting either is "unproven", never a large number taken as proved. The
-   prototype's pole rows show why: at the cap the bound is still valid but six to nineteen
-   times loose (MEASURED).
+5. **Caps and a distinct flag.** A piece cap (the pin's `MAX_PIECES`, 2^15, csg.rs:66) and
+   a depth cap. Hitting either returns the bound reached, which is still proved, with a flag
+   that the stop was not met (the prototype's `resolved = false`). The flag decides: under
+   the within stop it means "not shown to be at most L", so T refuses; under the tight stop
+   the value may be recorded only as a proved but loose bound, never as the tight figure. The
+   prototype's capped rows show why the flag matters: the Lipschitz and Direct rows of
+   section 1 stop at the cap with valid bounds 2.9 to 50 000 times the sample (MEASURED). Returning the finite value rather than infinity keeps
+   what callers need: 54's point 4 asks for the accuracy reached, and a proved loose bound
+   is a truthful record of it, where infinity would discard it (JUDGED).
 6. **Within-tolerance stopping.** The caller needs "is it at most L", not the tight value.
    The saving is small near L (above), but it lets an easy trim stop after a few pieces
    (JUDGED).
@@ -304,8 +381,9 @@ certified G.
    20 of the 24 refusals. It changes no accepted result, because B already uses it. That makes
    it a candidate fix upstream of solidcorex, filed or not as the owner decides.
 3. **Tight or within?** T needs only "B <= L". The within stop is 9 to 12 times cheaper on the
-   offset trims here (MEASURED). But it records a bound up to L, not the tight figure. Should
-   the record carry the tight value (the honest accuracy, 54's point 4) or only the pass?
+   offset trims here (MEASURED in the kernel probe, section 2; the prototype's 2 to 16% of
+   section 1 is a different setting, tolerance at 1.1 times the gap). But it records a
+   bound up to L, not the tight figure. Should the record carry the tight value (the honest accuracy, 54's point 4) or only the pass?
 4. **Trim-local eps.** Whether to build the 1D eps bound along the trim, which needs the
    section solve in interval arithmetic. On this corpus the stored eps is already 300 times
    below L, so nothing here needs it (MEASURED); it would matter only for coarse blends.
