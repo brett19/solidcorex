@@ -1,7 +1,7 @@
 # Written for solidcorex.
 [package]
 name = "scx-difftest"
-description = "Differential tests: scx-num against the pinned solidcore, bit for bit"
+description = "Differential tests: scx-num and scx-algo against the pinned solidcore, bit for bit"
 edition.workspace = true
 license.workspace = true
 version.workspace = true
@@ -10,6 +10,7 @@ publish.workspace = true
 
 [dependencies]
 scx-num = { path = "../scx-num" }
+scx-algo = { path = "../scx-algo" }
 # The pinned solidcore (commit 03e16c9ee766de5b9b1ced845e5149d62ff493b8), a read-only
 # worktree beside this repository: `<parent>/sc-wt/scx-pin`.
 solidcore = { path = "../../../sc-wt/scx-pin/solidcore/crates/solidcore" }
