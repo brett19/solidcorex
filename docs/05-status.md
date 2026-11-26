@@ -88,14 +88,16 @@ successor, `cache-nogapfix` (the welding experiment), `cache-tanfield`, and the 
 
 ## 7. The rewrite: phase 0 (started 2026-11-26)
 
-Local only. No solidcore code is copied into this repository until the licence question is answered.
+Local only (no GitHub remote). Licence: Apache-2.0 throughout, decided 11-26; code is moved from the
+pinned solidcore with derivation headers (`06-licence-and-source.md`).
 
 | Item | Output | State |
 |---|---|---|
 | Module dependency and cycle map of solidcore | `research/49-module-dependencies.md` | done; corrections folded into `01-architecture.md` section 13 |
 | Coverage of solidcore over its goldens, tests and the app corpus | `research/50-coverage.md` | started |
 | The body's data structure: design and a measured prototype | `research/51-body-structure.md`, `prototypes/body-structure/` | done; representation decided (`04-decisions.md` section 3); not measured on a large STEP part |
-| Conventions, tolerance model, error taxonomy, glossary | to be written as design documents | not started |
+| Conventions, glossary, tolerance model | `07-conventions.md`, `08-glossary.md`, `09-tolerances.md` | written 11-26; owner questions listed at the end of each |
+| Error taxonomy | to be written | not started |
 | Workspace skeleton, layering check, test tiers | `Cargo.toml`, `layers.txt`, `xtask/` (`cargo xtask fast`: fmt, clippy, layers, headers, tier-1 tests), `crates/scx-difftest` (tier 2) | done; tier 1 passes in 1.4 s cold, 0.2 s warm |
 | Layer 0 moved: `scx-num` | `crates/scx-num`, `research/52-num-move.md` | done (to 429af2c): 128 unit and 10 property tests; difftest 267 tests, 616,874 inputs, 0 mismatches against the pin; builds for wasm32 |
 
