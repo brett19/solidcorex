@@ -3,7 +3,12 @@
 //! pinned solidcore, on the same inputs, compared bit for bit (`f64::to_bits`).
 //! Each test prints `difftest <name>: <n> inputs, <m> mismatches`.
 
-#![allow(missing_docs, clippy::pedantic, clippy::indexing_slicing, clippy::needless_range_loop)]
+#![allow(
+    missing_docs,
+    clippy::pedantic,
+    clippy::indexing_slicing,
+    clippy::needless_range_loop
+)]
 
 mod facade;
 mod harness;
