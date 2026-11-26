@@ -103,7 +103,12 @@ diff!(ht_voxels, |seed: usize, cnt: [f64; 3], scale: f64| {
             }
             5 | 6 => {
                 let id = (next(&mut r) % 40) as u32;
-                (2, vec![v.remove(id), v.find_point_items(id).len()], Vec::new(), None)
+                (
+                    2,
+                    vec![v.remove(id), v.find_point_items(id).len()],
+                    Vec::new(),
+                    None,
+                )
             }
             7 | 8 => {
                 let mut hist = [0u64; GAP_HISTOGRAM_BUCKETS];
@@ -161,7 +166,12 @@ diff!(ht_voxels, |seed: usize, cnt: [f64; 3], scale: f64| {
             _ => {
                 let gaps = [0.0, 1e-9, 1e-6, 1e-3, 0.5, 2.0, f64::NAN];
                 let g = gaps[(next(&mut r) % 7) as usize];
-                (6, vec![m::hash_table::gap_histogram_index(g)], Vec::new(), None)
+                (
+                    6,
+                    vec![m::hash_table::gap_histogram_index(g)],
+                    Vec::new(),
+                    None,
+                )
             }
         };
         out.push(rec);
@@ -215,7 +225,13 @@ diff!(ht_table, |seed: usize, estimate: usize, buckets: usize| {
         ];
         s.extend(h.buckets().iter().map(|&b| o(b)));
         for b in h.bucket_items() {
-            s.extend([o(b.next_used_bucket), o(b.next_bucket_item), o(b.bucket_index), o(b.item), b.item_id]);
+            s.extend([
+                o(b.next_used_bucket),
+                o(b.next_bucket_item),
+                o(b.bucket_index),
+                o(b.item),
+                b.item_id,
+            ]);
         }
         out.push((s, res));
     }
