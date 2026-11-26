@@ -49,7 +49,10 @@ diff!(kz_newton, |start: [f64; 2], p: [f64; 4], fail: usize| {
         }
         let dx = y[0] - p[1];
         Ok(Some((
-            [dx * dx + y[1] * y[1] - p[0] * p[0], p[2] * y[0] + p[3] * y[1] - 1.0],
+            [
+                dx * dx + y[1] * y[1] - p[0] * p[0],
+                p[2] * y[0] + p[3] * y[1] - 1.0,
+            ],
             [[2.0 * dx, p[2]], [2.0 * y[1], p[3]]],
         )))
     };
@@ -127,12 +130,14 @@ diff!(kz_krawczyk2, |start: [f64; 2], p: [f64; 4], fail: usize| {
     let at = |y: [f64; 2]| -> Result<Option<([f64; 2], [[f64; 2]; 2])>, SolidError> {
         let dx = y[0] - p[1];
         Ok(Some((
-            [dx * dx + y[1] * y[1] - p[0] * p[0], p[2] * y[0] + p[3] * y[1] - 1.0],
+            [
+                dx * dx + y[1] * y[1] - p[0] * p[0],
+                p[2] * y[0] + p[3] * y[1] - 1.0,
+            ],
             [[2.0 * dx, p[2]], [2.0 * y[1], p[3]]],
         )))
     };
-    let Ok(Some(mid)) = m::krawczyk::newton(start, &at, &m::krawczyk::inverse_of_columns2)
-    else {
+    let Ok(Some(mid)) = m::krawczyk::newton(start, &at, &m::krawczyk::inverse_of_columns2) else {
         return None;
     };
     let Ok(Some((_, jm))) = at(mid) else {
@@ -172,14 +177,23 @@ diff!(kz_krawczyk2, |start: [f64; 2], p: [f64; 4], fail: usize| {
     Some((mid, c, r.map_err(|e| (e.to_string(), e)), log.into_inner()))
 });
 
-diff!(kz_operator, |y: [f64; 4], jl: [f64; 4], jw: [f64; 4], x: [f64; 6]| {
+diff!(kz_operator, |y: [f64; 4],
+                    jl: [f64; 4],
+                    jw: [f64; 4],
+                    x: [f64; 6]| {
     use m::interval::Ivl;
     let y = [[y[0], y[1]], [y[2], y[3]]];
     let iv = |a: f64, w: f64| Ivl::new(a, a + w.abs());
-    let jac = [[iv(jl[0], jw[0]), iv(jl[1], jw[1])], [iv(jl[2], jw[2]), iv(jl[3], jw[3])]];
+    let jac = [
+        [iv(jl[0], jw[0]), iv(jl[1], jw[1])],
+        [iv(jl[2], jw[2]), iv(jl[3], jw[3])],
+    ];
     let mid = [x[0], x[1]];
     let g = [iv(x[2], 0.0), iv(x[3], 0.0)];
-    let bx = [iv(x[0] - x[4].abs(), 2.0 * x[4]), iv(x[1] - x[5].abs(), 2.0 * x[5])];
+    let bx = [
+        iv(x[0] - x[4].abs(), 2.0 * x[4]),
+        iv(x[1] - x[5].abs(), 2.0 * x[5]),
+    ];
     let (c, q) = m::krawczyk::contraction(&y, &jac);
     (
         (c, q),
@@ -189,7 +203,10 @@ diff!(kz_operator, |y: [f64; 4], jl: [f64; 4], jw: [f64; 4], x: [f64; 6]| {
     )
 });
 
-diff!(kz_taylor, |c: List<[f64; 2]>, rem: [f64; 2], y: f64, d: [f64; 2]| {
+diff!(kz_taylor, |c: List<[f64; 2]>,
+                  rem: [f64; 2],
+                  y: f64,
+                  d: [f64; 2]| {
     use m::krawczyk::KNumber;
     let t = m::tm(&c, rem);
     let i = m::iv(d);

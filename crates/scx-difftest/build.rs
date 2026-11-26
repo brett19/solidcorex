@@ -72,7 +72,8 @@ fn check() -> Result<(), String> {
 /// Every other line is the pin's, unchanged.
 fn pin_krawczyk() -> Result<(), String> {
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").map_err(|e| e.to_string())?);
-    let src = manifest.join("../../../sc-wt/scx-pin/solidcore/crates/solidcore/src/geom/krawczyk.rs");
+    let src =
+        manifest.join("../../../sc-wt/scx-pin/solidcore/crates/solidcore/src/geom/krawczyk.rs");
     let text = std::fs::read_to_string(&src).map_err(|e| format!("{}: {e}", src.display()))?;
     let body = text.split("#[cfg(test)]").next().unwrap_or("");
     let out: Vec<String> = body
