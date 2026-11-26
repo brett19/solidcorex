@@ -51,16 +51,16 @@ diff!(l_consts, || (
     m::limits::MAX_COORDINATE_MAGNITUDE
 ));
 diff!(l_exceeds_coordinate_bound, |x: f64| m::limits::exceeds_coordinate_bound(x));
-diff!(l_fits, |k: u32| {
-    let n = [0usize, 1, 1000, 1 << 27, (1 << 27) + 1, 1 << 30, usize::MAX][k as usize % 7];
+diff!(l_fits, |k: usize| {
+    let n = [0usize, 1, 1000, 1 << 27, (1 << 27) + 1, 1 << 30, usize::MAX][k % 7];
     (m::limits::fits::<f64>(n), m::limits::fits::<u8>(n), m::limits::fits::<[f64; 4]>(n))
 });
-diff!(l_try_filled, |k: u32, x: f64| {
-    let n = [0usize, 1, 7, 1000, 1 << 28, usize::MAX][k as usize % 6];
+diff!(l_try_filled, |k: usize, x: f64| {
+    let n = [0usize, 1, 7, 1000, 1 << 28, usize::MAX][k % 6];
     m::limits::try_filled(n, x).map(|v| (v.len(), v.first().copied()))
 });
-diff!(l_try_reserve_total, |k: u32, pre: usize| {
-    let n = [0usize, 1, 7, 1000, 1 << 28, usize::MAX][k as usize % 6];
+diff!(l_try_reserve_total, |k: usize, pre: usize| {
+    let n = [0usize, 1, 7, 1000, 1 << 28, usize::MAX][k % 6];
     let mut v = vec![0.0f64; pre];
     (m::limits::try_reserve_total(&mut v, n), v.len())
 });

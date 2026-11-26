@@ -115,7 +115,7 @@ macro_rules! helpers {
 pub mod x {
     pub use scx_num::tol::Tolerances;
     pub use scx_num::{
-        certified, error, extent1d, extent2d, extent3d, limits, math, matrix,
+        certified, extent1d, extent2d, extent3d, limits, math, matrix,
         periodic_extent1d, small_matrix, tol, transform, vector2d, vector3d,
     };
     helpers!();
@@ -132,7 +132,7 @@ pub mod s {
         vector2d, vector3d,
     };
     pub use solidcore::kernel::Tolerances;
-    pub use solidcore::{error, limits, math};
+    pub use solidcore::{limits, math};
     /// `smgu_*` small-matrix helpers, where solidcore keeps them.
     pub mod small_matrix {
         pub use solidcore::geom::geom_utility::p1::{

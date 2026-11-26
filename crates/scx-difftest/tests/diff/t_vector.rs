@@ -15,15 +15,13 @@ diff!(
     || [scx_num::vector3d::NOZ, scx_num::vector3d::NOW],
     [solidcore::nurbs::math::NOZ, solidcore::nurbs::math::NOW]
 );
-diff!(v3_consts, || (
-    [
+diff!(v3_consts, || [
         m::vector3d::Vec3::ZERO,
         m::vector3d::Vec3::X,
         m::vector3d::Vec3::Y,
         m::vector3d::Vec3::Z,
         m::vector3d::Vec3::UNDEF
-    ]
-));
+]);
 diff!(v3_canonical_axis_direction, |a: V| m::v3(a).canonical_axis_direction());
 diff!(v3_unit_axis_direction, |a: V, t: f64| m::v3(a).unit_axis_direction(t));
 diff!(v3_from_array, |a: V| m::vector3d::Vec3::from_array(a).to_array());
