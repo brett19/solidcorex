@@ -32,6 +32,11 @@ it replaces.
 | 11-26 | Apache-2.0 throughout | "Apache 2 throughout" | Code may be moved from solidcore with its notices and derivation headers; no MIT offer. `06-licence-and-source.md` |
 | 11-26 | Profiling tools, new Rust versions and Rust tooling may be installed | "You can install tools for profiling, or new rust versions or it's tooling." | Read as: on the machines already in use; not general system packages |
 | 11-26 | solidcorex is published publicly at github.com/brett19/solidcorex; the work is public, the environment is not | "Publish publicly, but let's move details that aren't at all about solidcorex, but rather are about our environment outside the solidcorex directory, we want to be public about the work in solidcorex, but private about our own environement-specific details." | Machines, logins, local paths, local branches, logs and clean-up are kept outside this repository. Threading may be named here. The published history is rewritten to drop the same details from old commits |
+| 11-26 | Results need not match solidcore bit for bit; they must be correct and deterministic | "we do not need to maintain bit-perfect accuracy compared to solidcore … As long as the results are correct and the same operation executed twice always yields the same answer, this is acceptable." Also: "strive to provide consistent results across all platforms and across builds of the same objects" | The difftest compares with the pin within a stated tolerance, not by bits, and every case also runs twice and must agree exactly. Cross-platform agreement is a goal, so `num` ships its own transcendental functions rather than the platform's |
+| 11-26 | The testing approach is the one that answers fastest without giving up much checking | "We want to be able to iterate quickly." | A fast tier (seconds) on every change; corpora and the full difftest in CI. Bit-exact goldens are not adopted |
+| 11-26 | The solidcore cache work is ignored; solidcorex finds its own approach | "Ignore the cache work our solidcraft architect was working on, we should independently identify the best approach." | Section 5's leaf-split, corner-welding and prove-once rows are withdrawn from this plan. The research reports stay as knowledge of solidcore, not as a plan |
+| 11-26 | solidcorex uses solidcore's code and knowledge but is 100% idiomatic Rust, owned by the coordinating session | "strive for a 100% Rust idiomatic codebase. You own solidcorex, so you own making sure that we achieve it being idiomatic." | |
+| 11-26 | solidcore's architecture is not mirrored unless it makes sense on its own | "We MUST NOT attempt to mirror the solidcore architecture unless it independently makes sense to do so. The cacheing patterns, project layout, interface definitions, etc... Should all be our own idiomatic approach." | `01-architecture.md` is a plan to restructure solidcore in place (its crate table maps today's modules, its steps A to K keep solidcore's goldens green) and is to be redone as solidcorex's own design |
 
 ## 2. Decided elsewhere, and binding on this work
 
@@ -81,6 +86,8 @@ So nobody proposes them again without new evidence.
 | Read-form-plus-fallback pairs (`*_prepared`, `read_else_edit`) | They leave two entry points per operation; on hold, to be collapsed. One pair merged (#21107) | Decision of 11-23 |
 
 ## 5. Recommended, not yet decided
+
+The first four rows concern solidcore and are withdrawn by the decision of 11-26 to ignore the cache work; kept for the record.
 
 | Recommendation | Evidence | Depends on |
 |---|---|---|
