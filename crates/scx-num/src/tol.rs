@@ -9,7 +9,7 @@
 // Changes: the scalar part only (no context, B-rep, curve, volume, equation-set or
 // `SmRelation` overloads, no `update_object_tolerance`); of kernel.rs only the
 // `Tolerances` value; `&Kernel` became `&Tolerances`; `size_estimate_to_zone_tol_3d`
-// renamed `zone_for_size`; constants point at `consts`, and `UNINIT_TOL` is defined as
+// renamed `zone_for_size`; the zone constant points at `consts`, and `UNINIT_TOL` is defined as
 // `math::UNDEF_DOUBLE` (the same 1.23456e-61 as the pin's literal); `Tolerances::default`
 // reads the named constants in place of the same literals; paths. Tests: `system_tolerances`
 // drops its `context_zone_tol_3d` assertion (not moved) and builds `tolerances` in place of
@@ -81,7 +81,7 @@
 //!   not change results in the release build).
 
 use crate::certified::gamma;
-use crate::consts::{MAX_ACCURACY_RATIO, ZONE_DEFAULT};
+use crate::consts::ZONE_DEFAULT;
 use crate::extent1d::Extent1d;
 use crate::extent3d::Extent3d;
 use crate::math::{
@@ -143,8 +143,11 @@ pub const USE_DEFAULT: f64 = 9876543.21;
 pub const UNINIT_TOL: f64 = UNDEF_DOUBLE;
 /// `SM_MODEL_SIZE_ESTIMATE`: default model size estimate.
 pub const MODEL_SIZE_ESTIMATE: f64 = 50.0;
-/// `SM_LARGE_SMALL_SIZE_RATIO`: default large/small topology size ratio.
-pub const LARGE_SMALL_SIZE_RATIO: f64 = MAX_ACCURACY_RATIO;
+/// `SM_LARGE_SMALL_SIZE_RATIO`: default large/small topology size ratio. Owner: the
+/// tolerance policy (the default of [`Tolerances::large_small_size_ratio`]). Its own
+/// literal, as at the pin: the validity limit [`crate::consts::MAX_ACCURACY_RATIO`] has
+/// the same value but is a separate decision.
+pub const LARGE_SMALL_SIZE_RATIO: f64 = 1000.0;
 /// `SM_ZONE_TOL_3D`: default zone tolerance.
 pub const ZONE_TOL_3D: f64 = ZONE_DEFAULT;
 /// `SM_TOL_GAP_GAIN`: over-size factor above an object's largest gap.

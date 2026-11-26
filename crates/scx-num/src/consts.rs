@@ -5,9 +5,10 @@
 //!
 //! Each constant names its unit and who owns the decision it makes. The values are
 //! solidcore's; the older names ([`crate::tol::ZONE_TOL_3D`],
-//! [`crate::tol::LARGE_SMALL_SIZE_RATIO`], [`crate::math::EFF_ZERO_PARAM`],
-//! [`crate::tol::Tolerances::default`]) are defined from these, so changing one here
-//! changes every reader.
+//! [`crate::math::EFF_ZERO_PARAM`], [`crate::tol::Tolerances::default`]'s zone) are
+//! defined from these, so changing one here changes every reader.
+//! [`crate::tol::LARGE_SMALL_SIZE_RATIO`] is not one of them: it has the same value as
+//! [`MAX_ACCURACY_RATIO`] but a different owner.
 
 /// The default zone (resolution): two points closer than this are one point.
 /// Millimetres. Owner: the tolerance policy (`docs/09-tolerances.md`); solidcore's
@@ -29,7 +30,10 @@ pub const EPS_REL: f64 = crate::math::EFF_ZERO;
 pub const EPS_PARAM: f64 = 1.2e-8;
 
 /// The largest ratio of an entity's tolerance to the body's, a validity limit (Test 82
-/// of the validity spec). Unitless. solidcore's `SM_LARGE_SMALL_SIZE_RATIO`, 1000.
+/// of the validity spec). Unitless. Owner: the validity checks. The value of solidcore's
+/// `SM_LARGE_SMALL_SIZE_RATIO`, 1000, but not that constant: the tolerance default
+/// [`crate::tol::LARGE_SMALL_SIZE_RATIO`] is its own literal, and changing one does not
+/// change the other (a test holds them equal for now).
 pub const MAX_ACCURACY_RATIO: f64 = 1000.0;
 
 #[cfg(test)]
@@ -43,5 +47,12 @@ mod tests {
         assert_eq!(EPS_REL.to_bits(), 1.0e-12f64.to_bits());
         assert_eq!(EPS_PARAM.to_bits(), 1.2e-8f64.to_bits());
         assert_eq!(MAX_ACCURACY_RATIO, 1000.0);
+    }
+
+    #[test]
+    fn the_validity_ratio_and_the_size_ratio_default_agree_for_now() {
+        // Two decisions with two owners that happen to share a value at the pin; when one
+        // moves, this test is where that is decided.
+        assert_eq!(MAX_ACCURACY_RATIO, crate::tol::LARGE_SMALL_SIZE_RATIO);
     }
 }
