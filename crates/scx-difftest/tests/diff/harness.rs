@@ -729,7 +729,9 @@ pub fn run_tol<A: Args, RX: Bits, RS: Bits>(
         if ox == os {
             exact += 1;
         } else if tol.agree(&ox, &os) {
-            drift.get_or_insert_with(|| format!("{c:?}\n    scx:       {ox:?}\n    solidcore: {os:?}"));
+            drift.get_or_insert_with(|| {
+                format!("{c:?}\n    scx:       {ox:?}\n    solidcore: {os:?}")
+            });
         } else {
             bad.push(format!(
                 "{c:?}\n    scx:       {ox:?}\n    solidcore: {os:?}"
