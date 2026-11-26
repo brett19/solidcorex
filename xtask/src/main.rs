@@ -2,8 +2,10 @@
 //! Repository checks, run as `cargo xtask <command>`:
 //!
 //! - `layers`: every workspace crate is listed in `layers.txt`, and a library depends
-//!   (normal, build or dev) only on libraries listed above it. The differential-test
-//!   crates may depend on any library; tool crates depend on no workspace crate.
+//!   (normal, build or dev) only on libraries listed above it and on the external crates
+//!   `layers.txt` `[external]` names (none today). The differential-test crates may
+//!   depend on any library and alone on the pinned solidcore; tool crates depend on no
+//!   workspace crate.
 //! - `headers`: every `.rs` file under `crates/` and `xtask/` opens with a derivation
 //!   header (`Moved from solidcore ... at commit <pin>`, its `Upstream record` and its
 //!   `Changes:`) or says it was written for solidcorex.
@@ -70,13 +72,28 @@ enum Role {
     Tool,
 }
 
-fn layer_roles(root: &Path) -> Result<Vec<(String, Role)>, String> {
-    let text = read(&root.join("layers.txt"))?;
+/// `layers.txt`: the crates in order and the external crates libraries may use.
+struct Layers {
+    roles: Vec<(String, Role)>,
+    /// `[external]`: crates outside the workspace a library or tool may depend on
+    /// (empty today).
+    external: Vec<String>,
+}
+
+/// The crate the differential crate may (alone) depend on: the pinned solidcore.
+const PINNED: &str = "solidcore";
+
+fn layer_roles(root: &Path) -> Result<Layers, String> {
+    parse_layers(&read(&root.join("layers.txt"))?)
+}
+
+fn parse_layers(text: &str) -> Result<Layers, String> {
     let mut section = String::new();
     let mut out: Vec<(String, Role)> = Vec::new();
+    let mut external = Vec::new();
     let mut libs = 0;
     for line in text.lines() {
-        let line = line.split('#').next().unwrap_or("").trim();
+        let line = strip_comment(line).trim();
         if line.is_empty() {
             continue;
         }
@@ -91,6 +108,15 @@ fn layer_roles(root: &Path) -> Result<Vec<(String, Role)>, String> {
             }
             "difftest" => Role::Difftest,
             "tool" => Role::Tool,
+            "external" => {
+                if line == PINNED {
+                    return Err(format!(
+                        "layers.txt: [external] may not name {PINNED} (only the difftest crate uses it)"
+                    ));
+                }
+                external.push(line.to_string());
+                continue;
+            }
             other => return Err(format!("layers.txt: unknown section [{other}]")),
         };
         if out.iter().any(|(n, _)| n == line) {
@@ -98,7 +124,29 @@ fn layer_roles(root: &Path) -> Result<Vec<(String, Role)>, String> {
         }
         out.push((line.to_string(), role));
     }
-    Ok(out)
+    Ok(Layers {
+        roles: out,
+        external,
+    })
+}
+
+/// A line without its `#` comment; a `#` inside a quoted string is kept.
+fn strip_comment(line: &str) -> &str {
+    let mut quoted = false;
+    let mut escaped = false;
+    for (i, c) in line.char_indices() {
+        match c {
+            '\\' if quoted && !escaped => {
+                escaped = true;
+                continue;
+            }
+            '"' if !escaped => quoted = !quoted,
+            '#' if !quoted => return line.get(..i).unwrap_or(line),
+            _ => {}
+        }
+        escaped = false;
+    }
+    line
 }
 
 /// The `members = [...]` of the workspace manifest.
@@ -111,11 +159,21 @@ fn workspace_members(root: &Path) -> Result<Vec<String>, String> {
     let open = rest.find('[').ok_or("members has no list")?;
     let close = rest.find(']').ok_or("members list is not closed")?;
     let list = rest.get(open + 1..close).unwrap_or("");
-    Ok(list
+    let members: Vec<String> = list
+        .lines()
+        .map(strip_comment)
+        .collect::<Vec<_>>()
+        .join(",")
         .split(',')
         .map(|s| s.trim().trim_matches('"').to_string())
         .filter(|s| !s.is_empty())
-        .collect())
+        .collect();
+    if let Some(glob) = members.iter().find(|m| m.contains(['*', '?', '['])) {
+        return Err(format!(
+            "Cargo.toml: workspace member `{glob}` is a glob; xtask reads members literally, so list each crate"
+        ));
+    }
+    Ok(members)
 }
 
 /// A member's package name and the crate names it depends on (every dependency table).
@@ -124,7 +182,7 @@ fn manifest_deps(manifest: &str) -> (Option<String>, Vec<String>) {
     let mut name = None;
     let mut deps = Vec::new();
     for raw in manifest.lines() {
-        let line = raw.split('#').next().unwrap_or("").trim();
+        let line = strip_comment(raw).trim();
         if line.is_empty() {
             continue;
         }
@@ -160,8 +218,7 @@ fn manifest_deps(manifest: &str) -> (Option<String>, Vec<String>) {
 }
 
 fn layers(root: &Path) -> Result<String, String> {
-    let roles = layer_roles(root)?;
-    let role_of = |n: &str| roles.iter().find(|(m, _)| m == n).map(|(_, r)| *r);
+    let layers = layer_roles(root)?;
     let mut crates = Vec::new();
     for member in workspace_members(root)? {
         let text = read(&root.join(&member).join("Cargo.toml"))?;
@@ -169,34 +226,57 @@ fn layers(root: &Path) -> Result<String, String> {
         let name = name.ok_or_else(|| format!("{member}/Cargo.toml has no package name"))?;
         crates.push((name, deps));
     }
-    let names: Vec<&str> = crates.iter().map(|(n, _)| n.as_str()).collect();
-    let mut errors = String::new();
-    for (name, deps) in &crates {
-        let Some(role) = role_of(name) else {
-            let _ = writeln!(errors, "{name} is not listed in layers.txt");
-            continue;
-        };
-        for dep in deps.iter().filter(|d| names.contains(&d.as_str())) {
-            let ok = match (role, role_of(dep)) {
-                (Role::Library(me), Some(Role::Library(it))) => it < me,
-                (Role::Difftest, Some(Role::Library(_))) => true,
-                _ => false,
-            };
-            if !ok {
-                let _ = writeln!(errors, "{name} may not depend on {dep}");
-            }
-        }
-    }
-    for (listed, _) in &roles {
-        if !names.contains(&listed.as_str()) {
-            let _ = writeln!(errors, "layers.txt lists {listed}, not a workspace crate");
-        }
-    }
+    let errors = check_layers(&layers, &crates);
     if errors.is_empty() {
         Ok(format!("layers: {} crates in order", crates.len()))
     } else {
         Err(format!("layers:\n{errors}"))
     }
+}
+
+/// Every breach of the order, one per line (empty when there is none). A library depends
+/// only on libraries above it in `layers.txt` and on crates `[external]` names; the
+/// difftest crates also on the libraries and on the pinned solidcore; a tool on no
+/// workspace crate and only on `[external]` crates.
+fn check_layers(layers: &Layers, crates: &[(String, Vec<String>)]) -> String {
+    let role_of = |n: &str| layers.roles.iter().find(|(m, _)| m == n).map(|(_, r)| *r);
+    let names: Vec<&str> = crates.iter().map(|(n, _)| n.as_str()).collect();
+    let mut errors = String::new();
+    for (name, deps) in crates {
+        let Some(role) = role_of(name) else {
+            let _ = writeln!(errors, "{name} is not listed in layers.txt");
+            continue;
+        };
+        for dep in deps {
+            let ok = if names.contains(&dep.as_str()) {
+                match (role, role_of(dep)) {
+                    (Role::Library(me), Some(Role::Library(it))) => it < me,
+                    (Role::Difftest, Some(Role::Library(_))) => true,
+                    _ => false,
+                }
+            } else if dep == PINNED {
+                role == Role::Difftest
+            } else {
+                layers.external.iter().any(|e| e == dep)
+            };
+            if !ok {
+                let why = if names.contains(&dep.as_str()) {
+                    ""
+                } else if dep == PINNED {
+                    " (only the difftest crate may use the pinned solidcore)"
+                } else {
+                    " (an external crate not in layers.txt [external])"
+                };
+                let _ = writeln!(errors, "{name} may not depend on {dep}{why}");
+            }
+        }
+    }
+    for (listed, _) in &layers.roles {
+        if !names.contains(&listed.as_str()) {
+            let _ = writeln!(errors, "layers.txt lists {listed}, not a workspace crate");
+        }
+    }
+    errors
 }
 
 // ---- headers -----------------------------------------------------------------------
@@ -297,6 +377,7 @@ fn fast(root: &Path, crates: &[String]) -> Result<String, String> {
     println!("{}", headers(root)?);
     let libs: Vec<String> = if crates.is_empty() {
         layer_roles(root)?
+            .roles
             .into_iter()
             .filter(|(_, r)| matches!(r, Role::Library(_)))
             .map(|(n, _)| n)
@@ -322,6 +403,46 @@ mod tests {
         let (name, deps) = manifest_deps(m);
         assert_eq!(name.as_deref(), Some("a"));
         assert_eq!(deps, ["b", "c", "d", "e"]);
+    }
+
+    fn crates(list: &[(&str, &[&str])]) -> Vec<(String, Vec<String>)> {
+        list.iter()
+            .map(|(n, d)| ((*n).to_string(), d.iter().map(|s| (*s).to_string()).collect()))
+            .collect()
+    }
+
+    const LAYERS: &str = "a\nb # above a\n[difftest]\nd\n[tool]\nt\n[external]\n";
+
+    #[test]
+    fn the_order_holds() {
+        let l = parse_layers(LAYERS).unwrap();
+        let ok = crates(&[("a", &[]), ("b", &["a"]), ("d", &["a", "b", "solidcore"]), ("t", &[])]);
+        assert_eq!(check_layers(&l, &ok), "");
+    }
+
+    #[test]
+    fn a_library_may_not_depend_outside_the_workspace() {
+        let l = parse_layers(LAYERS).unwrap();
+        // The breaking case: a library on the pinned solidcore, or on any crate the
+        // (empty) allow-list does not name; a library below on one above.
+        let bad = crates(&[("a", &["solidcore", "b"]), ("b", &["rand"]), ("d", &[]), ("t", &["a"])]);
+        let e = check_layers(&l, &bad);
+        assert!(e.contains("a may not depend on solidcore (only the difftest"), "{e}");
+        assert!(e.contains("a may not depend on b\n"), "{e}");
+        assert!(e.contains("b may not depend on rand (an external crate"), "{e}");
+        assert!(e.contains("t may not depend on a\n"), "{e}");
+        let allowed = parse_layers(&format!("{LAYERS}rand\n")).unwrap();
+        let e = check_layers(&allowed, &crates(&[("a", &[]), ("b", &["rand"]), ("d", &[]), ("t", &[])]));
+        assert_eq!(e, "");
+        assert!(parse_layers(&format!("{LAYERS}solidcore\n")).is_err());
+    }
+
+    #[test]
+    fn comments_and_quotes() {
+        assert_eq!(strip_comment("a = \"x#y\" # c"), "a = \"x#y\" ");
+        assert_eq!(strip_comment("a = \"x\\\"#\" # c"), "a = \"x\\\"#\" ");
+        let (_, deps) = manifest_deps("[package]\nname = \"a\"\n[dependencies]\nb = { path = \"../b#1\" } # c\n");
+        assert_eq!(deps, ["b"]);
     }
 
     #[test]

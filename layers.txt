@@ -8,3 +8,8 @@ scx-num
 scx-difftest
 [tool]
 xtask
+
+# Crates outside the workspace that a library or tool may depend on, one per line. Empty:
+# the libraries use only the standard library. The pinned solidcore may never be listed
+# here; only a [difftest] crate may depend on it.
+[external]
