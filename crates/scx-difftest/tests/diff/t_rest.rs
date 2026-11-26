@@ -13,9 +13,14 @@ type M = [[f64; 4]; 4];
 diff!(
     unit_and_gamma,
     |n: usize| (scx_num::certified::UNIT, scx_num::certified::gamma(n)),
-    (solidcore::nurbs::math::UNIT, solidcore::geom::certified::gamma(n))
+    (
+        solidcore::nurbs::math::UNIT,
+        solidcore::geom::certified::gamma(n)
+    )
 );
-diff!(gamma_large, |n: f64| m::certified::gamma((n.abs() * 1.0e6) as usize));
+diff!(gamma_large, |n: f64| m::certified::gamma(
+    (n.abs() * 1.0e6) as usize
+));
 // `next_up` and `next_down` are `pub(crate)` at the pin: no counterpart to call; they are
 // covered through `distance`, `difference`, `dot` and the scx-num property test.
 diff!(c_above, |a: f64, b: f64| m::certified::above(a, b));
@@ -25,7 +30,10 @@ diff!(c_verdict, |a: f64, b: f64, t: f64| {
     let (p, q) = (x.at_most(t), x.above(t));
     (p, q, p.and(q), q.and(p), p.is_yes(), q.is_yes())
 });
-diff!(c_distance, |a: V, b: V| m::certified::distance(m::v3(a), m::v3(b)));
+diff!(c_distance, |a: V, b: V| m::certified::distance(
+    m::v3(a),
+    m::v3(b)
+));
 diff!(c_unit, |a: V| m::certified::unit(m::v3(a)));
 diff!(c_errors, |a: f64, b: f64| (
     m::certified::unit_error(),
@@ -50,10 +58,16 @@ diff!(l_consts, || (
     m::limits::MAX_ALLOC_BYTES,
     m::limits::MAX_COORDINATE_MAGNITUDE
 ));
-diff!(l_exceeds_coordinate_bound, |x: f64| m::limits::exceeds_coordinate_bound(x));
+diff!(l_exceeds_coordinate_bound, |x: f64| {
+    m::limits::exceeds_coordinate_bound(x)
+});
 diff!(l_fits, |k: usize| {
     let n = [0usize, 1, 1000, 1 << 27, (1 << 27) + 1, 1 << 30, usize::MAX][k % 7];
-    (m::limits::fits::<f64>(n), m::limits::fits::<u8>(n), m::limits::fits::<[f64; 4]>(n))
+    (
+        m::limits::fits::<f64>(n),
+        m::limits::fits::<u8>(n),
+        m::limits::fits::<[f64; 4]>(n),
+    )
 });
 diff!(l_try_filled, |k: usize, x: f64| {
     let n = [0usize, 1, 7, 1000, 1 << 28, usize::MAX][k % 6];
@@ -66,7 +80,10 @@ diff!(l_try_reserve_total, |k: usize, pre: usize| {
 });
 
 // --- matrix
-diff!(mx_consts, || (m::matrix::MAX_MATRIX_SIZE, m::matrix::SVD_MAX_ITERATIONS));
+diff!(mx_consts, || (
+    m::matrix::MAX_MATRIX_SIZE,
+    m::matrix::SVD_MAX_ITERATIONS
+));
 diff!(mx_new, |r: usize, c: usize| (
     m::matrix::Matrix::new(r, c),
     m::matrix::Matrix::try_new(r, c),
@@ -108,12 +125,18 @@ diff!(mx_lu, |a: MatR, b: List<f64>| {
     let solved = lu.as_ref().ok().map(|d| p.solve_with_lu(&d.index, &b.0));
     (lu, p, solved)
 });
-diff!(mx_solve_with_lu_index, |a: MatR, b: List<f64>, idx: List<usize>| m::mat(&a)
-    .solve_with_lu(&idx.0, &b.0));
-diff!(mx_solve_linear_system, |a: MatR, b: List<f64>| m::mat(&a).solve_linear_system(&b.0));
+diff!(
+    mx_solve_with_lu_index,
+    |a: MatR, b: List<f64>, idx: List<usize>| m::mat(&a).solve_with_lu(&idx.0, &b.0)
+);
+diff!(mx_solve_linear_system, |a: MatR, b: List<f64>| m::mat(&a)
+    .solve_linear_system(&b.0));
 diff!(mx_eigen, |a: MatR| {
     let (mut p, mut q) = (m::mat(&a), m::mat(&a));
-    ((p.eigen_system_jacobi(), p), (q.compute_3x3_eigen_vectors(), q))
+    (
+        (p.eigen_system_jacobi(), p),
+        (q.compute_3x3_eigen_vectors(), q),
+    )
 });
 diff!(mx_svd, |a: MatR| {
     let mut p = m::mat(&a);
@@ -121,14 +144,18 @@ diff!(mx_svd, |a: MatR| {
 });
 
 // --- small matrices (geom_utility)
-diff!(sm_vec_triple_product, |a: V, b: V, c: V| m::small_matrix::vec_triple_product(
-    &a, &b, &c
-));
+diff!(sm_vec_triple_product, |a: V, b: V, c: V| {
+    m::small_matrix::vec_triple_product(&a, &b, &c)
+});
 diff!(sm_determinate_3x3, |a: V, b: V, c: V| {
     m::small_matrix::determinate_3x3(a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2])
 });
-diff!(sm_inverse_3x3, |a: V, b: V, c: V| m::small_matrix::inverse_3x3(&a, &b, &c));
-diff!(sm_determinate_4x4, |a: M| m::small_matrix::determinate_4x4(&a));
+diff!(sm_inverse_3x3, |a: V, b: V, c: V| {
+    m::small_matrix::inverse_3x3(&a, &b, &c)
+});
+diff!(sm_determinate_4x4, |a: M| m::small_matrix::determinate_4x4(
+    &a
+));
 diff!(sm_mult_4x4, |a: M, b: M| m::small_matrix::mult_4x4(&a, &b));
 diff!(sm_inverse_4x4, |a: M| m::small_matrix::inverse_4x4(&a));
 
@@ -142,11 +169,22 @@ diff!(tf_new, |r: TfR| m::tf(&r));
 diff!(tf_queries, |r: TfR| {
     let t = m::tf(&r);
     (
-        (t.natural_param_domain(), t.to_origin(), t.to_x_axis(), t.to_y_axis()),
-        (t.to_z_axis(), t.to_disp(), t.is_bounded_simple(), t.is_curve_in_param_domain_simple()),
+        (
+            t.natural_param_domain(),
+            t.to_origin(),
+            t.to_x_axis(),
+            t.to_y_axis(),
+        ),
+        (
+            t.to_z_axis(),
+            t.to_disp(),
+            t.is_bounded_simple(),
+            t.is_curve_in_param_domain_simple(),
+        ),
     )
 });
-diff!(tf_approx_eq, |a: TfR, b: TfR| m::tf(&a).approx_eq(&m::tf(&b)));
+diff!(tf_approx_eq, |a: TfR, b: TfR| m::tf(&a)
+    .approx_eq(&m::tf(&b)));
 diff!(tf_init, |r: TfR| {
     let (mut p, mut q) = (m::tf(&r), m::tf(&r));
     p.init_ext();
@@ -193,6 +231,7 @@ diff!(tf_invert_simple, |r: TfR| {
     let mut t = m::tf(&r);
     (t.invert_simple(), t)
 });
-diff!(tf_evaluate_simple, |r: TfR, p: V, d: usize| m::tf(&r).evaluate_simple(m::v3(p), d));
+diff!(tf_evaluate_simple, |r: TfR, p: V, d: usize| m::tf(&r)
+    .evaluate_simple(m::v3(p), d));
 diff!(tf_inv_evaluate_guess_point_simple, |r: TfR, p: V| m::tf(&r)
     .inv_evaluate_guess_point_simple(m::v3(p)));

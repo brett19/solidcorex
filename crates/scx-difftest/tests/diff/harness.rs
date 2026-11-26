@@ -44,7 +44,7 @@ pub fn edge_f64() -> Vec<f64> {
     vec![
         0.0,
         -0.0,
-        f64::from_bits(1),          // smallest denormal
+        f64::from_bits(1), // smallest denormal
         -f64::from_bits(1),
         f64::from_bits(0x000F_FFFF_FFFF_FFFF), // largest denormal
         f64::MIN_POSITIVE,
@@ -280,7 +280,11 @@ pub struct MatR(pub usize, pub usize, pub Vec<f64>);
 
 impl Gen for MatR {
     fn pool(rng: &mut SplitMix64) -> Vec<Self> {
-        let mut v = vec![MatR(0, 0, vec![]), MatR(1, 1, vec![0.0]), MatR(1, 1, vec![2.0])];
+        let mut v = vec![
+            MatR(0, 0, vec![]),
+            MatR(1, 1, vec![0.0]),
+            MatR(1, 1, vec![2.0]),
+        ];
         for n in 1..=4 {
             let mut id = vec![0.0; n * n];
             for i in 0..n {
@@ -289,9 +293,21 @@ impl Gen for MatR {
             v.push(MatR(n, n, id));
             v.push(MatR(n, n, vec![1.0; n * n]));
         }
-        v.push(MatR(3, 3, vec![2.0, 1.0, 0.0, 1.0, 3.0, 1.0, 0.0, 1.0, 4.0]));
-        v.push(MatR(3, 3, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 10.0]));
-        v.push(MatR(3, 3, vec![1.0, 2.0, 3.0, 2.0, 4.0, 6.0, 1.0, 0.0, 1.0]));
+        v.push(MatR(
+            3,
+            3,
+            vec![2.0, 1.0, 0.0, 1.0, 3.0, 1.0, 0.0, 1.0, 4.0],
+        ));
+        v.push(MatR(
+            3,
+            3,
+            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 10.0],
+        ));
+        v.push(MatR(
+            3,
+            3,
+            vec![1.0, 2.0, 3.0, 2.0, 4.0, 6.0, 1.0, 0.0, 1.0],
+        ));
         v.push(MatR(2, 3, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]));
         v.push(MatR(3, 2, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]));
         v.push(MatR(4, 2, vec![1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 2.0, -1.0]));
@@ -335,7 +351,9 @@ impl<T: Gen> Gen for List<T> {
         }
         for _ in 0..40 {
             let n = 1 + rng.below(6);
-            v.push(List((0..n).map(|_| p[rng.below(p.len())].clone()).collect()));
+            v.push(List(
+                (0..n).map(|_| p[rng.below(p.len())].clone()).collect(),
+            ));
         }
         v
     }
@@ -377,7 +395,10 @@ impl<A: Gen, B: Gen> Args for (A, B) {
                 .map(|i| (pa[i % pa.len()].clone(), pb[i % pb.len()].clone()))
                 .collect();
             for _ in 0..3000 {
-                v.push((pa[rng.below(pa.len())].clone(), pb[rng.below(pb.len())].clone()));
+                v.push((
+                    pa[rng.below(pa.len())].clone(),
+                    pb[rng.below(pb.len())].clone(),
+                ));
             }
             v
         }
@@ -530,11 +551,7 @@ pub fn shot<R: Bits>(f: impl FnOnce() -> R) -> Out {
 static QUIET: Once = Once::new();
 
 /// Run `xf` and `sf` on every case and fail with the first mismatches.
-pub fn run<A: Args, RX: Bits, RS: Bits>(
-    name: &str,
-    xf: impl Fn(A) -> RX,
-    sf: impl Fn(A) -> RS,
-) {
+pub fn run<A: Args, RX: Bits, RS: Bits>(name: &str, xf: impl Fn(A) -> RX, sf: impl Fn(A) -> RS) {
     QUIET.call_once(|| std::panic::set_hook(Box::new(|_| {})));
     let mut rng = SplitMix64(seed_of(name));
     let cases = A::cases(&mut rng);
@@ -543,7 +560,9 @@ pub fn run<A: Args, RX: Bits, RS: Bits>(
         let ox = shot(|| xf(c.clone()));
         let os = shot(|| sf(c.clone()));
         if ox != os {
-            bad.push(format!("{c:?}\n    scx-num:   {ox:?}\n    solidcore: {os:?}"));
+            bad.push(format!(
+                "{c:?}\n    scx-num:   {ox:?}\n    solidcore: {os:?}"
+            ));
         }
     }
     println!(

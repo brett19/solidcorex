@@ -94,7 +94,11 @@ fn next_up_and_down_step_one_bit_pattern() {
 fn products_match_integer_arithmetic() {
     let mut r = Rng::new(2);
     for _ in 0..CASES {
-        let (a, b, c) = (ivec(&mut r, 1 << 15), ivec(&mut r, 1 << 15), ivec(&mut r, 1 << 15));
+        let (a, b, c) = (
+            ivec(&mut r, 1 << 15),
+            ivec(&mut r, 1 << 15),
+            ivec(&mut r, 1 << 15),
+        );
         let w = |v: [i64; 3]| v.map(i128::from);
         let (a2, b2, c2) = (w(a), w(b), w(c));
         let dot = a2[0] * b2[0] + a2[1] * b2[1] + a2[2] * b2[2];
@@ -270,7 +274,11 @@ fn intervals_union_and_intersect() {
         }
         let v = r.uniform(-1.1e3, 1.1e3);
         if (v - alo).abs() > 1e-6 && (v - ahi).abs() > 1e-6 {
-            assert_eq!(a.contains_value(v, 0.0), alo < v && v < ahi, "{v} in [{alo}, {ahi}]");
+            assert_eq!(
+                a.contains_value(v, 0.0),
+                alo < v && v < ahi,
+                "{v} in [{alo}, {ahi}]"
+            );
         }
     }
 }
@@ -283,7 +291,13 @@ fn boxes_bound_their_points() {
     for _ in 0..CASES / 4 {
         let n = 1 + (r.next_u64() % 8) as usize;
         let pts: Vec<Vec3> = (0..n)
-            .map(|_| Vec3::new(r.uniform(-1e3, 1e3), r.uniform(-1e3, 1e3), r.uniform(-1e3, 1e3)))
+            .map(|_| {
+                Vec3::new(
+                    r.uniform(-1e3, 1e3),
+                    r.uniform(-1e3, 1e3),
+                    r.uniform(-1e3, 1e3),
+                )
+            })
             .collect();
         let mut e = Extent3d::new();
         for &p in &pts {
@@ -346,8 +360,11 @@ fn unitize_gives_a_parallel_unit_vector() {
     let mut r = Rng::new(9);
     for _ in 0..CASES {
         let scale = 10f64.powf(r.uniform(-100.0, 100.0));
-        let v = Vec3::new(r.uniform(-1.0, 1.0), r.uniform(-1.0, 1.0), r.uniform(-1.0, 1.0))
-            * scale;
+        let v = Vec3::new(
+            r.uniform(-1.0, 1.0),
+            r.uniform(-1.0, 1.0),
+            r.uniform(-1.0, 1.0),
+        ) * scale;
         let Ok(u) = v.unitize() else {
             continue;
         };

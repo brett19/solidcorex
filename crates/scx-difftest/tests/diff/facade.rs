@@ -7,7 +7,12 @@ use crate::harness::{Bits, Gen, MatR, Out, SplitMix64};
 
 /// A frame recipe for `transform::Transform::new(origin, x, y, z)`.
 #[derive(Clone, Debug)]
-pub struct TfR(pub [f64; 3], pub [f64; 3], pub [f64; 3], pub Option<[f64; 3]>);
+pub struct TfR(
+    pub [f64; 3],
+    pub [f64; 3],
+    pub [f64; 3],
+    pub Option<[f64; 3]>,
+);
 
 impl Gen for TfR {
     fn pool(rng: &mut SplitMix64) -> Vec<Self> {
@@ -15,16 +20,32 @@ impl Gen for TfR {
         let mut v = vec![
             TfR([0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], None),
             TfR([1.0, 2.0, 3.0], [0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], None),
-            TfR([0.0; 3], [2.0, 0.0, 0.0], [0.0, 3.0, 0.0], Some([0.0, 0.0, 4.0])),
+            TfR(
+                [0.0; 3],
+                [2.0, 0.0, 0.0],
+                [0.0, 3.0, 0.0],
+                Some([0.0, 0.0, 4.0]),
+            ),
             TfR([0.0; 3], [1.0, 0.0, 0.0], [1.0, 0.0, 0.0], None),
-            TfR([0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], Some([0.0, 0.0, 0.0])),
+            TfR(
+                [0.0; 3],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                Some([0.0, 0.0, 0.0]),
+            ),
             TfR([0.0; 3], [0.0; 3], [0.0; 3], None),
         ];
         for &x in &e {
             v.push(TfR([x, 0.0, 1.0], [1.0, x, 0.0], [0.0, 1.0, 0.0], None));
         }
         for _ in 0..30 {
-            let mut r = || [rng.uniform(-3.0, 3.0), rng.uniform(-3.0, 3.0), rng.uniform(-3.0, 3.0)];
+            let mut r = || {
+                [
+                    rng.uniform(-3.0, 3.0),
+                    rng.uniform(-3.0, 3.0),
+                    rng.uniform(-3.0, 3.0),
+                ]
+            };
             let o = r();
             let x = r();
             let y = r();
@@ -57,7 +78,15 @@ impl Gen for TolR {
         }
         for _ in 0..12 {
             let z = 10f64.powf(rng.uniform(-8.0, -2.0));
-            v.push(TolR([z, 2.0 * z, z / 2.0, rng.uniform(0.0, 2.0), 1.1, 50.0, 1000.0]));
+            v.push(TolR([
+                z,
+                2.0 * z,
+                z / 2.0,
+                rng.uniform(0.0, 2.0),
+                1.1,
+                50.0,
+                1000.0,
+            ]));
         }
         v
     }
@@ -115,8 +144,8 @@ macro_rules! helpers {
 pub mod x {
     pub use scx_num::tol::Tolerances;
     pub use scx_num::{
-        certified, extent1d, extent2d, extent3d, limits, math, matrix,
-        periodic_extent1d, small_matrix, tol, transform, vector2d, vector3d,
+        certified, extent1d, extent2d, extent3d, limits, math, matrix, periodic_extent1d,
+        small_matrix, tol, transform, vector2d, vector3d,
     };
     helpers!();
     /// What the moved tolerance functions take: the tolerance set itself.
@@ -281,8 +310,8 @@ impl Bits for solidcore::SolidError {
         o.tag(&format!("{:?}", self.kind()));
         o.tag(self.operation());
         o.tag(&format!("{:?}", self.geom_failure()));
-        if let Some(c) = std::error::Error::source(self)
-            .and_then(|c| c.downcast_ref::<solidcore::SolidError>())
+        if let Some(c) =
+            std::error::Error::source(self).and_then(|c| c.downcast_ref::<solidcore::SolidError>())
         {
             c.bits(o);
         }
