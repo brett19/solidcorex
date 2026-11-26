@@ -77,6 +77,7 @@ const ZERO: Ivl = Ivl::new(0.0, 0.0);
 pub trait KNumber: Ring {
     /// `self` times the number `y`, as each caller's copy formed it: [`Ivl`]'s product
     /// `y · self`, [`TmN::scale`].
+    #[must_use]
     fn scaled(self, y: f64) -> Self;
     /// The range of values `self` encloses: an [`Ivl`] itself, a [`TmN`]'s
     /// [`TmN::range`] over `[-1, 1]`.
@@ -126,6 +127,7 @@ pub fn inverse3(c: [Vec3; 3]) -> Option<[[f64; 3]; 3]> {
 /// # Errors
 ///
 /// Those of `value` and `jacobian` (in solidcore, a cancel).
+#[allow(clippy::type_complexity)] // the closures' types, as at the pin
 pub fn krawczyk<E, const N: usize>(
     mid: [f64; N],
     c: [[f64; N]; N],
@@ -141,6 +143,7 @@ pub fn krawczyk<E, const N: usize>(
 /// # Errors
 ///
 /// As [`krawczyk`].
+#[allow(clippy::type_complexity)] // the closures' types, as at the pin
 pub fn krawczyk_region<E, const N: usize>(
     mid: [f64; N],
     c: [[f64; N]; N],
