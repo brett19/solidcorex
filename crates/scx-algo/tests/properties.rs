@@ -72,12 +72,7 @@ fn separated(roots: &[f64], gap: f64) -> bool {
 /// `gap`: how far apart the known roots must be for each to be required. The quartic needs
 /// 0.5: Ferrari's method loses about 4e-3 on roots 0.04 apart near 2.4 (report 53,
 /// "found, not changed"), though its residual stays small.
-fn check(
-    deg: usize,
-    gap: f64,
-    solve: impl Fn(&[f64]) -> Vec<f64>,
-    seed: u64,
-) -> (usize, usize) {
+fn check(deg: usize, gap: f64, solve: impl Fn(&[f64]) -> Vec<f64>, seed: u64) -> (usize, usize) {
     let mut rng = Rng(seed);
     let (mut cases, mut separated_cases) = (0, 0);
     for _ in 0..20_000 {
