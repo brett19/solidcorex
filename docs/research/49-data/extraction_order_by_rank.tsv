@@ -1,0 +1,27 @@
+step	library	structural_refs_to_not_yet_extracted	umbrella_refs	detail
+1	num	54	66	brep:20; nurbs:8; surface:8; algo:7; topo:5; record_convert:3; blend:2; curve:1
+2	profile	0	0	
+3	algo	10	21	curve:3; surface:3; brep:2; nurbs:1; blend:1
+4	nurbs	5	108	brep:3; surface:2
+5	evalrec	4	6	planar:4
+6	planar	10	13	curve:7; sweep:1; brep:1; topo:1
+7	curve	194	182	record_convert:52; surface:48; topo:46; brep:30; prism:9; blend:9
+8	surface	349	418	topo:86; blend:82; record_convert:75; brep:56; geomq:24; sweep:17; offset:9
+9	geomq	83	168	blend:44; brep:22; topo:14; record_convert:1; sweep:1; offset:1
+10	brep	463	276	topo:416; heal:19; record_convert:15; boolean:10; blend:3
+11	topo	60	400	blend:40; record_convert:8; boolean:4; primitive:3; heal:2; offset:2; hlr:1
+12	blend	91	699	record_convert:38; boolean:29; heal:11; offset:4; sweep:4; primitive:3; defeature:2
+13	boolean	16	228	record_convert:10; primitive:5; sweep:1
+14	cell_grid	0	0	
+15	defeature	4	16	record_convert:2; primitive:1; sweep:1
+16	develop	0	0	
+17	hatch	0	0	
+18	heal	2	43	record_convert:2
+19	hlr	2	15	record_convert:2
+20	mesh_reduce	0	4	
+21	offset	28	147	record_convert:19; sweep:5; primitive:4
+22	primitive	53	119	sweep:36; record_convert:17
+23	prism	0	5	
+24	sweep	6	107	record_convert:6
+25	record_convert	0	75	
+26	umbrella	0	0	

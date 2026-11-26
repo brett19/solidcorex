@@ -92,7 +92,7 @@ Local only. No solidcore code is copied into this repository until the licence q
 
 | Item | Output | State |
 |---|---|---|
-| Module dependency and cycle map of solidcore | `research/49-module-dependencies.md` | started |
+| Module dependency and cycle map of solidcore | `research/49-module-dependencies.md` | done; corrections folded into `01-architecture.md` section 13 |
 | Coverage of solidcore over its goldens, tests and the app corpus | `research/50-coverage.md` | started |
 | The body's data structure: design and a measured prototype | `research/51-body-structure.md` | started |
 | Conventions, tolerance model, error taxonomy, glossary | to be written as design documents | not started |

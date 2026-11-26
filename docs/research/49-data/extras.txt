@@ -1,0 +1,32 @@
+LIB-LEVEL SCCs today (error area and umbrella excluded): [['algo', 'blend', 'boolean', 'brep', 'curve', 'defeature', 'evalrec', 'geomq', 'heal', 'hlr', 'num', 'nurbs', 'offset', 'planar', 'primitive', 'prism', 'record_convert', 'surface', 'sweep', 'topo']]
+after removing upward edges: [['curve', 'surface'], ['blend', 'boolean', 'defeature', 'heal', 'hlr', 'offset', 'primitive', 'sweep']]
+brep+topo merged: upward refs by target lib (all, incl umbrella): {'umbrella': 676, 'record_convert': 23, 'heal': 21, 'boolean': 14, 'blend': 43, 'primitive': 3, 'hlr': 1, 'offset': 2} total 783
+brep+topo merged upward excl umbrella: 107
+brep<->topo refs: {('brep', 'topo'): 416, ('topo', 'brep'): 1616}
+LIB MATRIX (refs, error area and umbrella excluded)
+from\to	num	profile	algo	nurbs	evalrec	planar	curve	surface	geomq	brep	topo	blend	boolean	cell_grid	defeature	develop	hatch	heal	hlr	mesh_reduce	offset	primitive	prism	sweep	record_convert
+num			7	8			1	8		20	5														3
+profile																									
+algo	80			1			3	3		2		1													
+nurbs	93							2		3															
+evalrec	22			19		4																			
+planar	31			4	4		7			1	1													1	
+curve	577		195	144	8	6		48		30	46	9											9		52
+surface	1012	4	292	302	11		311		23	56	86	81									9			17	75
+geomq	315	3	103	45			103	173		22	14	44									1			1	1
+brep	320		56	30			116	170	3		416	3	10					19							15
+topo	713	1	165	71	7		195	281	29	1603		40	4						1			3			8
+blend	932	42	138	98			347	561	91	3143	338		29		2			11			4	3		4	38
+boolean	154	3	32	23			57	75	4	667	202											5		1	10
+cell_grid	7					9																			
+defeature	24		1				4	9		93	33	2	2									1		1	2
+develop	16				11	22																			
+hatch	16					10																			
+heal	53		10	9			20	16	2	471	59	7	3												2
+hlr	35		8	4	29	1	12	12	3	77	19	1													2
+mesh_reduce																									
+offset	285	2	32	53			48	150	3	873	119	36	15		5			18				4		5	19
+primitive	155		12	27			114	57		240	37		23					8	2					36	17
+prism	10			4	3	28	6	5		14	10														
+sweep	113	5	4	40	1	5	64	58	2	332	40	2	18					8	4		3	12			6
+record_convert	82		7	22	14		41	65		332	58	4	8												

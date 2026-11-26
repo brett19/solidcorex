@@ -7,7 +7,9 @@ here is started. Numbers are measurements of solidcore as of 2026-11-26 (private
 ## 0. What is wrong today, in one place
 
 - One crate of 1.16 M lines (about 25,300 non-test functions). Everything can reach everything.
-- Geometry depends on topology: 26 surface files and 19 curve files import the body; a surface holds a
+- Geometry depends on topology, though less directly than first counted: 26 surface and 19 curve files
+  import the topology module, but only 5 surface files and no curve file name the body or an entity id;
+  the rest reach the database reader and writer, which live there (research 49). A surface does hold a
   link to its owning face (set at 175 sites) and can build that face's trims when asked for a cache.
 - A read can edit: no read entry point of 32 sized had a real edit under it, yet none could take
   `&Brep`. 1,667 parameters take the body writable against 1,473 shared.
@@ -208,3 +210,31 @@ goes last and on its own.
 - What fraction of a body an operation changes (2.8% of edge uses after a Boolean, by proxy).
 - Whether batched evaluation pays, without a profile of the release build by leaf routine.
 - The effort. A to D are weeks of builder time; E, G and H are months; I would not put a number on K.
+
+## 13. Corrections from the dependency map (research 49, 2026-11-26)
+
+Measured on the module graph; these change the plan above.
+
+- **Everything is one cycle today.** 19 of 26 top-level areas form a single strongly connected
+  component, including `geom`, `math`, `nurbs` and `curve`. No library can be extracted without cuts.
+  There are 1,158 upward references across 47 pairs of areas, not counting errors and the kernel object.
+- **Interval arithmetic and the certified spline enclosures live inside blending**
+  (`blend/fillet_section`: about 9,000 lines) and are used by surface, query, intersect and mass. They
+  belong in `num` and `nurbs`. Moving them removes most references to blending from below.
+- **`geom/tol.rs` must be split.** Its scalar comparisons are the most-called functions in the kernel;
+  the same file holds entity-tolerance helpers that name bodies.
+- **`brep` and `topo` should be planned as one library first.** Split by file they have 416 references
+  the wrong way; the data structure can be separated from its algorithms later.
+- **Two more libraries are needed:** one for the evaluation records (`eval/`, 13,000 lines) and one for
+  the planar core of prisms (5,500 lines).
+- **`curve` and `surface` are peers, not layers** (surface refers to curve 314 times, curve to surface
+  48), and the operation crates refer to each other 38 times in the best order found.
+- **Three items are a cut in every step:** `Result`, `SolidError` and `Kernel` are referenced from 635,
+  559 and 486 files. The error and calling-convention work (sections 6, 7) cannot wait until last.
+- **Proposed order,** with cuts per step: `num` (54), `algo` (10), `nurbs` (5), evaluation records (4),
+  planar (10), `curve` (194), `surface` (349), `geomq` (83), `brep` with `topo`, then leaf operation
+  crates, then Boolean, heal, hidden-line, sweep, primitives, blending, offset, conversion.
+
+An earlier count in this session treated everything after a file's first `#[cfg(test)]` as test code.
+49 files have 46,000 lines of non-test code after that point, so the earlier test-share and
+function counts are slightly too low for non-test code.

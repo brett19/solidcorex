@@ -76,6 +76,10 @@ counts are exact. Raw data, probes and logs are NOT copied here: they are under
 | 40 | One body at 5e-7 | The record stores a spline stand-in for an offset surface | Measured |
 | 41 | What records cannot hold | Offset and some procedural kinds; an unfilled gap, not a design rule | Read and measured; filed as #21926 |
 
+## Rewrite, phase 0
+
+- [49-module-dependencies.md](49-module-dependencies.md): who refers to whom in the 1.16 M-line crate (commit 53a7f148, measured by script, data in `49-data/`): the area graph, one 19-area cycle (17 without `error`/`kernel`), 1,158 upward references between areas with the items behind them, a proposed file-to-library mapping with upward references per library and an extraction order with the cuts at each step, the files that mix layers (`geom/`, `error/`, `kernel.rs`, `query/`), the crates outside the kernel (smlib 651 and geom 20 paths into it, as the xtask caps say), and the twenty most-shared items. Trust: counts MEASURED, mapping and order JUDGED.
+
 ## Not produced
 
 - Report 48 (why the certified bound is 38% of regeneration: what each caller proves, how often a proof

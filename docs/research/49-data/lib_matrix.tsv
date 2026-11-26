@@ -1,0 +1,27 @@
+from\to	num	profile	algo	nurbs	evalrec	planar	curve	surface	geomq	brep	topo	blend	boolean	cell_grid	defeature	develop	hatch	heal	hlr	mesh_reduce	offset	primitive	prism	sweep	record_convert	umbrella
+num			7	8			1	8		20	5	2													3	66
+profile																										
+algo	84			1			3	3		2		1														21
+nurbs	95							2		3																108
+evalrec	22			19		4																				6
+planar	31			4	4		7			1	1													1		13
+curve	578		195	150	8	6		48		30	46	9											9		52	182
+surface	1013	4	292	310	11		314		24	56	86	82									9			17	75	418
+geomq	319	3	103	45			103	173		22	14	44									1			1	1	168
+brep	322		56	30			116	170	3		416	3	10					19							15	276
+topo	729	1	165	71	7		195	281	44	1616		40	4					2	1		2	3			8	400
+blend	932	42	138	98			347	562	91	3148	338		29		2			11			4	3		4	38	699
+boolean	155	3	32	23			57	75	4	672	202											5		1	10	228
+cell_grid	7					9																				
+defeature	24		1				4	9		93	33	4	2									1		1	2	16
+develop	16				11	22																				
+hatch	16					10																				
+heal	53		10	9			20	16	2	472	59	7	3												2	43
+hlr	35		8	4	29	1	12	12	3	78	19	2													2	15
+mesh_reduce																										4
+offset	285	2	32	53			48	150	4	874	119	36	15		5			18				4		5	19	147
+primitive	155		12	27			114	57		240	37		23					8	2					36	17	119
+prism	10			4	3	28	6	5		14	10															5
+sweep	113	5	4	40	1	5	64	58	2	332	40	2	18					8	4		3	12			6	107
+record_convert	82		7	23	14		41	66		340	58	4	8													75
+umbrella	8	3		4			4	10	3	20	4	22	3		3			3			5	3		3		

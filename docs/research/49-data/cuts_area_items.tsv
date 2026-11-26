@@ -1,0 +1,582 @@
+lower_area	upper_area	target_module	item	item_kind	references	name_use_sites	main_use_classes
+curve	blend	blend::fillet_section::interval	Ivl	struct	6	203	type associated fn/const/variant (Name::x): 120; type in fn parameter: 41; type in fn return type: 29
+curve	blend	blend::fillet_section::series	V3	struct	4	47	type associated fn/const/variant (Name::x): 17; type in fn parameter: 15; type in fn return type: 9
+curve	blend	blend::fillet_section::certificate	curve_derivs_over	fn	2	2	function call: 2
+curve	blend	blend::fillet_section::certificate	NurbsCurve	struct	1	2	type in struct/enum field: 1; type struct literal/pattern: 1
+curve	intersect	intersect::curve_class::p8	volume_discontinuity_intervals	fn	1	1	function call: 1
+curve	intersect	intersect::curve_class::p8	uv_discontinuity_intervals	fn	1	0	
+curve	mass	mass::integrator	integrate_rounded_with_kernel	fn	1	0	
+curve	prism	prism::read	PlanarPiece	enum	2	18	type associated fn/const/variant (Name::x): 13; type in fn parameter: 2; type in fn return type: 2
+curve	prism	prism::read	PlanarSpline	struct	3	11	type struct literal/pattern: 4; type in fn return type: 3; type in a type annotation in body: 2
+curve	prism	prism::profile	Seg2	enum	1	7	type associated fn/const/variant (Name::x): 6; type in struct/enum field: 1
+curve	prism	prism::profile	to_local	fn	2	6	function call: 6
+curve	prism	prism::read	Run	struct	1	4	type struct literal/pattern: 4
+curve	prism	prism::profile	to_world	fn	1	4	function call: 4
+curve	prism	prism::profile	frame_is_orthonormal	fn	2	0	
+curve	prism	prism::read	planar_curves	fn	1	0	
+curve	prism	prism::read	parallel_curves	fn	1	0	
+curve	prism	prism::read	circular_boundary	fn	1	0	
+curve	topology	topology::database_io	FileType	enum	13	46	type associated fn/const/variant (Name::x): 45; type in a type annotation in body: 1
+curve	topology	topology::database_io	DatabaseReader	struct	14	42	type in fn parameter: 26; type associated fn/const/variant (Name::x): 14; type struct literal/pattern: 1
+curve	topology	topology::database_io	InputStream	struct	8	27	type associated fn/const/variant (Name::x): 25; type in fn parameter: 2
+curve	topology	topology::database_io	DatabaseWriter	struct	6	10	type in fn parameter: 8; type associated fn/const/variant (Name::x): 1; type in a type annotation in body: 1
+curve	topology	topology::geometry_write	write_curve_at	fn	3	2	function call: 2
+curve	topology	topology::brep_constructor	drop_limit	fn	1	1	function call: 1
+eval	prism	prism::profile	Seg2	enum	1	6	type associated fn/const/variant (Name::x): 4; type in a type annotation in body: 1; type in fn return type: 1
+eval	prism	prism::profile	MAX_BEZIER_DEGREE	const	1	1	constant: 1
+eval	prism	prism::profile	MAX_BEZIER_CTRL	const	1	1	constant: 1
+eval	prism	prism::profile	Loop2	struct	1	1	type struct literal/pattern: 1
+geom	blend	blend::fillet_section::interval	Ivl	struct	2	57	type in fn parameter: 18; type associated fn/const/variant (Name::x): 14; type in fn return type: 12
+geom	blend	blend::fillet_section::interval	round_up	fn	1	3	function call: 3
+geom	blend	blend::fillet_section::tay	Ring	trait	1	2	trait struct literal/pattern: 1; trait in fn generics/where: 1
+geom	blend	blend::fillet_section::interval	cmax	fn	1	1	function call: 1
+geom	blend	blend::fillet_section::certificate	inverse4	fn	1	1	function call: 1
+geom	blend	blend::fillet_section::taylor_model	TmN	struct	1	1	type in alias/const type: 1
+geom	boolean	boolean::topology_intersector::p1	Growth	struct	1	1	type struct literal/pattern: 1
+geom	boolean	boolean::topology_intersector::p1	covers_staying_clear	fn	1	1	function call: 1
+geom	curve	curve::curve::p2	Curve	struct	2	16	type in fn parameter: 7; type associated fn/const/variant (Name::x): 6; type struct literal/pattern: 1
+geom	curve	curve::curve_cache	BezierSpan	struct	1	6	type in fn return type: 2; type struct literal/pattern: 2; type in struct/enum field: 1
+geom	curve	curve::curve_cache	BezierAux1d	struct	1	5	type in fn return type: 2; type in struct/enum field: 1; type in fn parameter: 1
+geom	curve	curve::crv_on_surf	CrvOnSurf	struct	1	1	type in fn parameter: 1
+geom	curve	curve::curve::p5	validate_curve_cache	fn	1	0	
+geom	heal	heal::gap	Gap	enum	2	0	
+geom	intersect	intersect::curve_class::p1	SourceReach	enum	1	4	type associated fn/const/variant (Name::x): 3; type in a type annotation in body: 1
+geom	intersect	intersect::topology_solver::p2	TopologySolveOptions	struct	1	1	type struct literal/pattern: 1
+geom	nurbs	nurbs::math	gamma	fn	3	16	function call: 16
+geom	nurbs	nurbs::math	CPoint	struct	2	10	type associated fn/const/variant (Name::x): 6; type in fn parameter: 3; type in fn return type: 1
+geom	nurbs	nurbs::math	NOZ	const	2	5	constant: 5
+geom	nurbs	nurbs::math	NOW	const	2	4	constant: 4
+geom	nurbs	nurbs::knots	Side	enum	1	4	type associated fn/const/variant (Name::x): 4
+geom	nurbs	nurbs::b_spline_curve::p2	BoundingBoxRequest	struct	1	2	type in alias/const type: 2
+geom	nurbs	nurbs::b_spline_surface_n_lib::p2	EvaluateFlags	struct	1	1	type struct literal/pattern: 1
+geom	query	query::brep	BoundingBoxOptions	struct	2	1	type associated fn/const/variant (Name::x): 1
+geom	query	query::face::p1	calculate_bounding_box	fn	2	0	
+geom	query	query::brep	calculate_bounding_box	fn	2	0	
+geom	query	query::brep::ray::live	solve_mutable_brep_point	fn	1	1	function call: 1
+geom	query	query::face::p2	face_vertices	fn	1	1	function call: 1
+geom	query	query::brep	BrepIdentity	struct	1	1	type struct literal/pattern: 1
+geom	query	query::brep	QuadricEdgeData	struct	1	0	
+geom	query	query::brep	DecimateVertexData	struct	1	0	
+geom	query	query::brep	QuadricVertexData	struct	1	0	
+geom	query	query::edge	calculate_bounding_box	fn	1	0	
+geom	surface	surface::volume::p1	Volume	struct	2	7	type associated fn/const/variant (Name::x): 5; type in fn parameter: 1; type in fn return type: 1
+geom	surface	surface::surface_cache::p1	SurfaceCache	struct	1	8	type in fn parameter: 5; type value/pattern in body: 1; type in a type annotation in body: 1
+geom	surface	surface::surface::p2	Surface	struct	2	5	type in fn parameter: 2; type in struct/enum field: 1; type struct literal/pattern: 1
+geom	surface	surface::volume::p1	Discontinuities3d	struct	1	3	type associated fn/const/variant (Name::x): 2; type in fn parameter: 1
+geom	surface	surface::volume::p1	VolumeKind	enum	1	3	type associated fn/const/variant (Name::x): 3
+geom	surface	surface::volume::p2	ignore_read	fn	2	1	function call: 1
+geom	surface	surface::normal_cone	intersection_reach	fn	1	1	function call: 1
+geom	surface	surface::volume::p1	is_kind_of	fn	1	1	function call: 1
+geom	surface	surface::surface::p1	validate_surface_cache	fn	1	0	
+geom	topology	topology	Brep	struct	3	54	type in fn parameter: 40; type associated fn/const/variant (Name::x): 9; type in fn return type: 3
+geom	topology	topology	BrepId	struct	3	20	type in fn parameter: 8; type associated fn/const/variant (Name::x): 7; type in alias/const type: 3
+geom	topology	topology	EdgeId	struct	3	18	type in fn parameter: 12; type in fn return type: 2; type in struct/enum field: 2
+geom	topology	topology	VertexId	struct	3	13	type in struct/enum field: 3; type in fn parameter: 3; type in a type annotation in body: 2
+geom	topology	topology	FaceId	struct	3	11	type in fn parameter: 4; type associated fn/const/variant (Name::x): 2; type in fn return type: 2
+geom	topology	topology::shell	RegionLookup	trait	12	0	
+geom	topology	topology::database_io	DatabaseReader	struct	2	8	type associated fn/const/variant (Name::x): 5; type in fn parameter: 3
+geom	topology	topology::database_io	FileType	enum	2	8	type associated fn/const/variant (Name::x): 8
+geom	topology	topology::database_io	InputStream	struct	1	8	type associated fn/const/variant (Name::x): 7; type in fn parameter: 1
+geom	topology	topology::brep_cache	CacheObject	enum	1	3	type in fn parameter: 2; type associated fn/const/variant (Name::x): 1
+geom	topology	topology::topology	TopologyRecords	trait	1	2	trait in fn generics/where: 2
+geom	topology	topology::face::p2	tolerance	fn	3	0	
+geom	topology	topology::vertex	point	fn	2	0	
+geom	topology	topology::brep_cache	make_brep_cache	fn	1	1	function call: 1
+geom	topology	topology::edge	EdgeGap	enum	2	0	
+geom	topology	topology::edge	start_vertex	fn	2	0	
+geom	topology	topology::edge	set_tolerance	fn	2	0	
+geom	topology	topology::brep::p1	edges	fn	2	0	
+geom	topology	topology::database_io	DatabaseWriter	struct	1	1	type in fn parameter: 1
+geom	topology	topology::vertex	VertexGap	enum	2	0	
+geom	topology	topology::topology_traverser	face_edges	fn	2	0	
+geom	topology	topology::edge	other_vertex	fn	2	0	
+geom	topology	topology::brep_cache	CacheSource	enum	1	1	type associated fn/const/variant (Name::x): 1
+geom	topology	topology::vertex	tolerance	fn	1	0	
+geom	topology	topology::face::p4	edges	fn	1	0	
+geom	topology	topology::brep::p1	vertices	fn	1	0	
+geom	topology	topology::face::p2	surface	fn	1	0	
+geom	topology	topology::shell	RegionRef	struct	1	0	
+geom	topology	topology::vertex	max_gap_3d	fn	1	0	
+geom	topology	topology::edge	end_vertex	fn	1	0	
+geom	topology	topology::edge	vertex	fn	1	0	
+geom	topology	topology::vertex	edges	fn	1	0	
+geom	topology	topology::edge	interval	fn	1	0	
+geom	topology	topology::edge	curve	fn	1	0	
+geom	topology	topology::edge	tolerance	fn	1	0	
+geom	topology	topology::edge	vertices	fn	1	0	
+geom	topology	topology::brep::p1	faces	fn	1	0	
+geom	topology	topology::vertex	set_tolerance	fn	1	0	
+geom	topology	topology::face::p3	set_tolerance	fn	1	0	
+geom	topology	topology::edge	face_on_both_sides	fn	1	0	
+geom	topology	topology::edge	max_gap_3d	fn	1	0	
+geom	topology	topology::topology	notify_with_regions	fn	1	0	
+intersect	blend	blend::fillet_section::interval	Ivl	struct	10	350	type associated fn/const/variant (Name::x): 225; type in fn parameter: 64; type in fn return type: 40
+intersect	blend	blend::fillet_section::series	V3	struct	6	61	type in fn parameter: 16; type struct literal/pattern: 16; type associated fn/const/variant (Name::x): 12
+intersect	blend	blend::fillet_section::station	Nurbs	struct	7	42	type associated fn/const/variant (Name::x): 15; type struct literal/pattern: 11; type in fn parameter: 7
+intersect	blend	blend::fillet_section::interval	round_up	fn	3	26	function call: 26
+intersect	blend	blend::fillet_standard_solver::p1	FilletLaw	struct	4	10	type in fn parameter: 8; type associated fn/const/variant (Name::x): 2
+intersect	blend	blend::fillet_section::certificate	knot_cuts	fn	2	6	function call: 6
+intersect	blend	blend::fillet_section::certificate	NurbsCurve	struct	3	5	type in struct/enum field: 2; type associated fn/const/variant (Name::x): 2; type struct literal/pattern: 1
+intersect	blend	blend::fillet_section::certificate	curve_derivs_over	fn	3	4	function call: 4
+intersect	blend	blend::fillet_section::series	v_scale	fn	1	5	function call: 5
+intersect	blend	blend::fillet_section::interval	round_down	fn	1	5	function call: 5
+intersect	blend	blend::fillet_section::series	GnScalar	trait	1	5	trait in fn generics/where: 5
+intersect	blend	blend::fillet_section::series	v_add	fn	1	3	function call: 3
+intersect	blend	blend::fillet_section::certificate	nurbs_partials_over_box	fn	2	2	function call: 2
+intersect	blend	blend::blend_corner::on_face	bezier_pieces	fn	1	2	function call: 2
+intersect	blend	blend::fillet_section::station	ders_basis	fn	1	2	function call: 2
+intersect	blend	blend::blend_corner::on_face	pieces_rounding	fn	1	2	function call: 2
+intersect	blend	blend::blend_corner::on_face	Hom	type	1	1	type alias in fn parameter: 1
+intersect	blend	blend::fillet_section::station	as_b_spline	fn	1	1	function call: 1
+intersect	blend	blend::fillet_section::station	span	fn	1	1	function call: 1
+intersect	blend	blend::fillet_section::certificate	nurbs_partials_over_piece	fn	1	1	function call: 1
+intersect	heal	heal::face_props	FaceProps	struct	1	21	type in fn parameter: 13; type associated fn/const/variant (Name::x): 4; type in a type annotation in body: 4
+intersect	heal	heal::face_props	LoopObject	trait	1	13	trait in fn return type: 9; trait in fn generics/where: 4
+intersect	heal	heal::face_props	Tri	enum	1	8	type associated fn/const/variant (Name::x): 8
+intersect	heal	heal::face_props	HealerOpType	enum	1	2	type associated fn/const/variant (Name::x): 2
+intersect	heal	heal::face_props	PropStage	enum	1	2	type associated fn/const/variant (Name::x): 2
+intersect	heal	heal::face_props	UNDEF_ULONG	const	1	2	constant: 2
+intersect	mass	mass::enclosure	partials_over	fn	2	2	function call: 2
+intersect	query	query::face::p2	PointClassifyOptions	struct	8	2	type struct literal/pattern: 2
+intersect	query	query::poly	PolyBrep	struct	1	7	type in fn parameter: 2; type in struct/enum field: 1; type in fn return type: 1
+intersect	query	query::poly	PolyFaceId	struct	1	5	type in struct/enum field: 1; type value/pattern in body: 1; type in fn parameter: 1
+intersect	query	query::brep::ray::live	BrepFaceServices	struct	1	4	type in fn parameter: 2; type associated fn/const/variant (Name::x): 2
+intersect	query	query::face::p1	point_3d_classify	fn	3	1	function call: 1
+intersect	query	query::face::p2	point_classify	fn	3	1	function call: 1
+intersect	query	query::face::p2	point_classify_prepared	fn	3	1	function call: 1
+intersect	query	query::face::p1	Point3dClassifyOptions	struct	3	1	type associated fn/const/variant (Name::x): 1
+intersect	query	query::brep::ray::live	CurveFaceObject	enum	1	2	type associated fn/const/variant (Name::x): 2
+intersect	query	query::poly	PolyNotifyEnv	struct	1	2	type in fn parameter: 1; type struct literal/pattern: 1
+intersect	query	query::face::p2	BrepCacheFace	struct	1	1	type struct literal/pattern: 1
+intersect	query	query::face::p2	point_classify_requested	fn	1	1	function call: 1
+intersect	query	query::brep::ray::live	CurveFaceServices	struct	1	1	type constructor/variant call: 1
+intersect	query	query::face::p2	face_surface_cache	fn	1	0	
+intersect	query	query::face::p1	EdgeCurveOnOptions	struct	1	0	
+intersect	query	query::face::p1	edge_curve_on_classify	fn	1	0	
+intersect	query	query::face::p2	curve_on_classify_mut	fn	1	0	
+intersect	query	query::curve_surface_gap	trim_image_gap_bound_within	fn	1	0	
+intersect	query	query::brep::ray	RayPreparation	struct	1	0	
+intersect	query	query::face::p2	curve_on_classify	fn	1	0	
+intersect	sweep	sweep::api_surfaces	create_extrude	fn	1	1	function call: 1
+intersect	topology	topology	Brep	struct	18	64	type in fn parameter: 28; type in fn return type: 18; type in struct/enum field: 11
+intersect	topology	topology	FaceId	struct	13	25	type in fn parameter: 17; type in fn return type: 5; type in a type annotation in body: 2
+intersect	topology	topology	EdgeId	struct	10	10	type in fn return type: 4; type in struct/enum field: 3; type in fn parameter: 2
+intersect	topology	topology::face::p2	surface	fn	14	0	
+intersect	topology	topology::edge	curve	fn	14	0	
+intersect	topology	topology	VertexId	struct	5	9	type in fn return type: 3; type in struct/enum field: 2; type in a type annotation in body: 2
+intersect	topology	topology::edge	interval	fn	12	0	
+intersect	topology	topology	VertexuseId	struct	2	7	type in fn return type: 4; type in fn parameter: 3
+intersect	topology	topology	EdgeuseId	struct	3	5	type in struct/enum field: 1; type in fn return type: 1; type in a type annotation in body: 1
+intersect	topology	topology::vertex	point	fn	7	0	
+intersect	topology	topology	ObjectHandle	struct	3	4	type in a type annotation in body: 4
+intersect	topology	topology::brep_cache	CacheObject	enum	2	4	type associated fn/const/variant (Name::x): 3; type in fn parameter: 1
+intersect	topology	topology::edge	faces	fn	6	0	
+intersect	topology	topology::edge	NotifyEnv	struct	6	0	
+intersect	topology	topology	BrepId	struct	1	5	type in fn return type: 3; type in fn parameter: 1; type in a type annotation in body: 1
+intersect	topology	topology::face::p2	tolerance	fn	6	0	
+intersect	topology	topology::face::p3	FaceBreps	enum	1	4	type associated fn/const/variant (Name::x): 4
+intersect	topology	topology::edge	tolerance	fn	5	0	
+intersect	topology	topology::face::p2	uv_domain	fn	5	0	
+intersect	topology	topology::edgeuse::p1	edge	fn	4	0	
+intersect	topology	topology::vertex	edges	fn	4	0	
+intersect	topology	topology::edge	edgeuses	fn	4	0	
+intersect	topology	topology::edge	start_vertex	fn	4	0	
+intersect	topology	topology::brep::p9	CurveIdentity	enum	4	0	
+intersect	topology	topology::vertex	tolerance	fn	3	0	
+intersect	topology	topology::face::p4	FindVertexSectorArgs	struct	2	1	type struct literal/pattern: 1
+intersect	topology	topology::vertex	set_point	fn	3	0	
+intersect	topology	topology::edge	vertex	fn	3	0	
+intersect	topology	topology::face::p4	brep	fn	3	0	
+intersect	topology	topology::edge	end_vertex	fn	3	0	
+intersect	topology	topology::edgeuse::p1	orientation	fn	3	0	
+intersect	topology	topology::brep_cache	BrepCache	struct	2	1	type in struct/enum field: 1
+intersect	topology	topology::edge	other_vertex	fn	3	0	
+intersect	topology	topology::edgeuse::p1	face	fn	2	0	
+intersect	topology	topology::edgeuse::p1	is_connected_to	fn	2	0	
+intersect	topology	topology::vertexuse	vertexuse_type	fn	2	0	
+intersect	topology	topology::brep::planar_section	PlanarSectionOptions	struct	1	1	type struct literal/pattern: 1
+intersect	topology	topology::face::p3	IntersectObjects	struct	1	1	type struct literal/pattern: 1
+intersect	topology	topology::edge	is_connected_to	fn	2	0	
+intersect	topology	topology::brep::p9	EdgeInFaceInput	struct	1	1	type struct literal/pattern: 1
+intersect	topology	topology::brep::planar_section	SectionOutputs	struct	1	1	type struct literal/pattern: 1
+intersect	topology	topology::edgeuse::p1	uv_trim_curve	fn	2	0	
+intersect	topology	topology::edge	edgeuse_of_face	fn	2	0	
+intersect	topology	topology::vertex	is_connected_to	fn	2	0	
+intersect	topology	topology::brep::p1	is_live_topology_member	fn	1	1	function call: 1
+intersect	topology	topology::face::p4	has_loopuses	fn	2	0	
+intersect	topology	topology::vertexuse	compute_t_point	fn	2	0	
+intersect	topology	topology::edgeuse::p1	edge_brep	fn	2	0	
+intersect	topology	topology::edgeuse::p1	delete_uv_trim_curve	fn	2	0	
+intersect	topology	topology::face::p3	IntersectObject	enum	1	1	type associated fn/const/variant (Name::x): 1
+intersect	topology	topology::edge	start_end_vertices	fn	2	0	
+intersect	topology	topology::topology	TopologyRecords	trait	1	1	trait in fn generics/where: 1
+intersect	topology	topology::face::p2	create_curves_by_trimming_snapshot	fn	1	1	function call: 1
+intersect	topology	topology::vertex	set_tolerance	fn	2	0	
+intersect	topology	topology::vertex	brep	fn	2	0	
+intersect	topology	topology::brep_cache	make_brep_cache	fn	1	1	function call: 1
+intersect	topology	topology::vertex	set_exact	fn	2	0	
+intersect	topology	topology::edgeuse::p1	set_uv_trim_curve	fn	1	1	function call: 1
+intersect	topology	topology::face::p3	face_intersect_breps	fn	1	1	function call: 1
+intersect	topology	topology::edgeuse::p1	UvTrimCurveArg	enum	1	1	type associated fn/const/variant (Name::x): 1
+intersect	topology	topology::face::p3	IntersectObjectsMut	struct	1	1	type associated fn/const/variant (Name::x): 1
+intersect	topology	topology::edgeuse::p1	cw_edgeuse	fn	2	0	
+intersect	topology	topology::face::p3	FaceIntersectOptions	struct	1	1	type struct literal/pattern: 1
+intersect	topology	topology::brep_cache	CacheSource	enum	1	1	type associated fn/const/variant (Name::x): 1
+intersect	topology	topology::brep::planar_section	create_planar_section_curves	fn	1	1	function call: 1
+intersect	topology	topology::face::p4	find_vertex_sector	fn	2	0	
+intersect	topology	topology::trimming_tools	face_uv_curves_present	fn	1	0	
+intersect	topology	topology::edgeuse::p1	vertexuse	fn	1	0	
+intersect	topology	topology::face::p4	is_connected_to	fn	1	0	
+intersect	topology	topology::vertexuse	edgeuse	fn	1	0	
+intersect	topology	topology::vertexuse	compute_uv_sector	fn	1	0	
+intersect	topology	topology::face::p2	upward_faceuse	fn	1	0	
+intersect	topology	topology::edgeuse::p1	mate	fn	1	0	
+intersect	topology	topology::loopuse	is_connected_to	fn	1	0	
+intersect	topology	topology::edge	set_tolerance	fn	1	0	
+intersect	topology	topology::vertex	carry_far_edge_ends	fn	1	0	
+intersect	topology	topology::vertex	cover_merged_ends	fn	1	0	
+intersect	topology	topology::vertex	regular_periodic_trim_edge	fn	1	0	
+intersect	topology	topology::brep::p3	topology_ref	fn	1	0	
+intersect	topology	topology::edgeuse::p3	evaluate_binormal_mut	fn	1	0	
+intersect	topology	topology::brep::p9	make_edge_in_face_with_vu_with_curve_identity	fn	1	0	
+intersect	topology	topology::brep::p1	brep_intersect_self_with_partial	fn	1	0	
+intersect	topology	topology::brep::p1	brep_intersect_mut_with_partial	fn	1	0	
+intersect	topology	topology::vertex	faces	fn	1	0	
+intersect	topology	topology::vertexuse	LOOPUSE_TYPE	const	1	0	
+intersect	topology	topology::loopuse	loop_face	fn	1	0	
+intersect	topology	topology::vertex	inside_face	fn	1	0	
+intersect	topology	topology::brep::p1	faces	fn	1	0	
+intersect	topology	topology::edgeuse::p3	BinormalOptions	struct	1	0	
+intersect	topology	topology::edgeuse::p1	is_loop_edgeuse	fn	1	0	
+intersect	topology	topology::brep_cache	arena_identity	fn	1	0	
+intersect	topology	topology::edge	face_on_both_sides	fn	1	0	
+intersect	topology	topology::vertex::corner	xsect_tol_3d_of_brep	fn	1	0	
+intersect	topology	topology::edgeuse::p1	brep	fn	1	0	
+intersect	topology	topology::brep::p1	default_face_owner	fn	1	0	
+intersect	topology	topology::brep::p9	make_vertex_loop	fn	1	0	
+intersect	topology	topology::face::p1	OrientedTrimBoundary	struct	1	0	
+intersect	topology	topology::face::p1	create_oriented_trim_boundary	fn	1	0	
+intersect	topology	topology::edgeuse::p1	tolerance	fn	1	0	
+intersect	topology	topology::vertex	vertexuses_of_face	fn	1	0	
+intersect	topology	topology::api_projection	plane_projection	fn	1	0	
+intersect	topology	topology::vertex	refresh_tolerance	fn	1	0	
+intersect	topology	topology::vertexuse	compute_uv_sector_read_only	fn	1	0	
+intersect	topology	topology::vertexuse	EDGEUSE_TYPE	const	1	0	
+intersect	topology	topology::brep::p3	make_wire_edge	fn	1	0	
+intersect	topology	topology::brep::p9	make_shell_vertex	fn	1	0	
+intersect	topology	topology::brep::p9	make_vertex_split_edge_with_curve_identity	fn	1	0	
+intersect	topology	topology::edgeuse::p1	ccw_edgeuse	fn	1	0	
+intersect	topology	topology::brep::p5	glue_vertices	fn	1	0	
+intersect	topology	topology::vertexuse	is_connected_to	fn	1	0	
+intersect	topology	topology::loopuse	loop_is_connected_to	fn	1	0	
+mass	blend	blend::fillet_section::interval	Ivl	struct	4	412	type associated fn/const/variant (Name::x): 266; type in fn parameter: 61; type in fn return type: 41
+mass	blend	blend::fillet_section::certificate	NurbsCurve	struct	4	42	type in fn parameter: 17; type in a type annotation in body: 11; type struct literal/pattern: 5
+mass	blend	blend::fillet_section::station	knot	fn	2	22	function call: 22
+mass	blend	blend::fillet_section::certificate	curve_derivs_over	fn	2	14	function call: 14
+mass	blend	blend::fillet_section::station	Nurbs	struct	2	13	type in fn parameter: 8; type associated fn/const/variant (Name::x): 2; type in a type annotation in body: 2
+mass	blend	blend::fillet_section::station	span	fn	1	11	function call: 11
+mass	blend	blend::fillet_section::station	Partials	struct	1	8	type in fn parameter: 3; type in fn return type: 3; type in a type annotation in body: 2
+mass	blend	blend::fillet_section::series	V3	struct	2	7	type in fn parameter: 4; type in a type annotation in body: 2; type value/pattern in body: 1
+mass	blend	blend::fillet_section::certificate	partials_hull	fn	1	1	function call: 1
+mass	blend	blend::fillet_section::station	as_b_spline	fn	1	1	function call: 1
+mass	blend	blend::fillet_section::certificate	nurbs_partials_within_span_centred	fn	1	1	function call: 1
+math	nurbs	nurbs::math	gamma	fn	3	9	function call: 9
+nurbs	blend	blend::fillet_section::interval	Ivl	struct	2	119	type associated fn/const/variant (Name::x): 88; type in fn parameter: 12; type in a type annotation in body: 8
+nurbs	blend	blend::fillet_section::station	Nurbs	struct	1	5	type in fn parameter: 3; type associated fn/const/variant (Name::x): 2
+nurbs	blend	blend::fillet_section::certificate	NurbsCurve	struct	1	5	type in fn parameter: 3; type associated fn/const/variant (Name::x): 2
+nurbs	blend	blend::fillet_section::station	ders_basis	fn	1	4	function call: 4
+nurbs	blend	blend::fillet_section::certificate	curve_derivs_over	fn	1	3	function call: 3
+nurbs	blend	blend::fillet_section::series	V3	struct	1	2	type in a type annotation in body: 2
+nurbs	blend	blend::fillet_section::interval	round_up	fn	1	2	function call: 2
+nurbs	blend	blend::fillet_section::station	span	fn	1	2	function call: 2
+nurbs	blend	blend::fillet_section::station	as_b_spline	fn	1	2	function call: 2
+nurbs	curve	curve::curve::p2	Curve	struct	8	40	type associated fn/const/variant (Name::x): 17; type in fn parameter: 10; type in a type annotation in body: 5
+nurbs	curve	curve::curve::p2	CurveKind	enum	5	18	type associated fn/const/variant (Name::x): 18
+nurbs	curve	curve::tangent_field	TangentField	struct	1	4	type associated fn/const/variant (Name::x): 2; type in struct/enum field: 1; type in fn parameter: 1
+nurbs	curve	curve::ellipse::p2	Ellipse	struct	1	3	type associated fn/const/variant (Name::x): 2; type in struct/enum field: 1
+nurbs	curve	curve::line	Line	struct	1	3	type in struct/enum field: 2; type associated fn/const/variant (Name::x): 1
+nurbs	curve	curve::curve::p2	approximate_length	fn	4	0	
+nurbs	curve	curve::tangent_field	CurveEnd	struct	1	2	type struct literal/pattern: 2
+nurbs	curve	curve::curve::p4	is_degenerate_base	fn	2	1	function call: 1
+nurbs	curve	curve::curve::p2	CurvePropertyType	enum	1	2	type associated fn/const/variant (Name::x): 2
+nurbs	curve	curve::curve::p2	push_point	fn	1	2	function call: 2
+nurbs	curve	curve::curve::p1	SpanAccuracy	struct	1	2	type in fn return type: 1; type struct literal/pattern: 1
+nurbs	curve	curve::curve::p7	PropertyAnalysisOptions	struct	1	2	type in a type annotation in body: 1; type associated fn/const/variant (Name::x): 1
+nurbs	curve	curve::iso_curve	IsoCurve	struct	1	1	type associated fn/const/variant (Name::x): 1
+nurbs	curve	curve::curve::p2	CurveEvaluate	trait	1	1	impl header (trait or inherent target): 1
+nurbs	curve	curve::curve::p2	flush_crv	fn	1	1	function call: 1
+nurbs	curve	curve::tangent_field	TangentDirType	enum	1	1	type associated fn/const/variant (Name::x): 1
+nurbs	curve	curve::curve::p2	BSPLINE_CURVE_TYPE	const	1	1	constant: 1
+nurbs	curve	curve::hermite_curve	HermiteCurve	struct	1	1	type associated fn/const/variant (Name::x): 1
+nurbs	curve	curve::offset_curve	OffsetCurve	struct	1	1	type associated fn/const/variant (Name::x): 1
+nurbs	curve	curve::curve::p8	CurveIntersectOptions	struct	1	1	type struct literal/pattern: 1
+nurbs	curve	curve::curve::p1	MAX_APPROX_SPANS	const	1	1	constant: 1
+nurbs	curve	curve::curve::p2	stack_look	fn	1	1	function call: 1
+nurbs	curve	curve::line	BoundedLineOptions	struct	1	1	type struct literal/pattern: 1
+nurbs	curve	curve::ellipse::p2	EllipseOptions	struct	1	1	type struct literal/pattern: 1
+nurbs	curve	curve::curve::p7	PropertyAnalysis	struct	1	1	type struct literal/pattern: 1
+nurbs	curve	curve::curve::p2	CRV_ON_SURF_TYPE	const	1	1	constant: 1
+nurbs	curve	curve::curve::p2	pop_stack	fn	1	1	function call: 1
+nurbs	curve	curve::curve::p2	add_to_curve	fn	1	1	function call: 1
+nurbs	curve	curve::curve::p3	PointSolveOptions	struct	1	1	type associated fn/const/variant (Name::x): 1
+nurbs	curve	curve::curve::p2	evaluate_continuity	fn	1	0	
+nurbs	curve	curve::curve::p1	ApproximateCurveOptions	struct	1	0	
+nurbs	curve	curve::curve::p2	is_kind_of	fn	1	0	
+nurbs	curve	curve::curve::p5	is_arc_base	fn	1	0	
+nurbs	curve	curve::curve::p3	local_curve_intersect	fn	1	0	
+nurbs	curve	curve::curve::p4	is_closed_base	fn	1	0	
+nurbs	curve	curve::curve::p5	is_line_base	fn	1	0	
+nurbs	curve	curve::curve::p4	assert_valid_base	fn	1	0	
+nurbs	intersect	intersect::surface_drop_lib::p3	DropSolveContext	struct	3	1	type struct literal/pattern: 1
+nurbs	intersect	intersect::api_intersectors	intersect_curves	fn	1	1	function call: 1
+nurbs	mass	mass::integrator	gamma	fn	1	1	function call: 1
+nurbs	offset	offset::construction::bernstein	Bernstein2	struct	1	46	type in fn parameter: 20; type in a type annotation in body: 8; type associated fn/const/variant (Name::x): 7
+nurbs	offset	offset::construction::bernstein	Binomials	struct	1	13	type in fn parameter: 9; type associated fn/const/variant (Name::x): 4
+nurbs	offset	offset::construction::bernstein	MAX_DEGREE	const	1	2	constant: 2
+nurbs	query	query::distance_bound	Piece	struct	1	3	type in fn parameter: 2; type struct literal/pattern: 1
+nurbs	query	query::distance_bound	pieces_about	fn	1	1	function call: 1
+nurbs	query	query::seam_bound	curve_b_spline	fn	2	0	
+nurbs	query	query::seam_bound	seam_angle_lower_bound	fn	1	0	
+nurbs	query	query::api_queries	surface_closest_point	fn	1	0	
+nurbs	query	query::continuity	seam_normal_angle	fn	1	0	
+nurbs	query	query::seam_bound	seam_angle_within	fn	1	0	
+nurbs	surface	surface::surface::p2	Surface	struct	23	76	type associated fn/const/variant (Name::x): 34; type in fn parameter: 28; type in struct/enum field: 4
+nurbs	surface	surface::surface::p1	SurfaceSolveContext	trait	3	3	trait in fn parameter: 3
+nurbs	surface	surface::surface::p2	SurfaceKind	enum	2	2	type associated fn/const/variant (Name::x): 2
+nurbs	surface	surface::surface::p4	NoObject	struct	4	0	
+nurbs	surface	surface::surface::p2	SurfaceEvaluate	trait	1	3	trait in fn generics/where: 3
+nurbs	surface	surface::plane::p1	Plane	struct	1	2	type associated fn/const/variant (Name::x): 2
+nurbs	surface	surface::extend	ExtendRefusal	enum	1	2	type in alias/const type: 1; type associated fn/const/variant (Name::x): 1
+nurbs	surface	surface::surface::p1	evaluate_1st_derivatives	fn	3	0	
+nurbs	surface	surface::surf_of_extrusion::p1	SurfOfExtrusion	struct	1	1	type associated fn/const/variant (Name::x): 1
+nurbs	surface	surface::surface::p2	drop_vectors	fn	1	1	function call: 1
+nurbs	surface	surface::surface::p7	base_is_closed	fn	2	0	
+nurbs	surface	surface::surf_of_revolution::p1	SurfOfRevolution	struct	1	1	type associated fn/const/variant (Name::x): 1
+nurbs	surface	surface::cone::p1	Cone	struct	1	0	
+nurbs	surface	surface::surface::p1	base_is_degenerate_curve	fn	1	0	
+nurbs	surface	surface::surface::p4	global_point_solve_starts	fn	1	0	
+nurbs	surface	surface::surface::p7	b_spline_is_planar	fn	1	0	
+nurbs	surface	surface::offset_surface	SS_UNKNOWN	const	1	0	
+nurbs	surface	surface::sphere	Sphere	struct	1	0	
+nurbs	surface	surface::surface::replay	choose	fn	1	0	
+nurbs	surface	surface::offset_surface	OffsetSurface	struct	1	0	
+nurbs	surface	surface::surface::p2	derivative_limit	fn	1	0	
+nurbs	surface	surface::surface::replay	Seam	enum	1	0	
+nurbs	surface	surface::surface::p2	is_kind_of	fn	1	0	
+nurbs	surface	surface::surface::p7	base_evaluate_normal	fn	1	0	
+nurbs	surface	surface::surface::p1	base_is_degenerate_point	fn	1	0	
+nurbs	topology	topology::database_io	InputStream	struct	5	7	type associated fn/const/variant (Name::x): 7
+nurbs	topology	topology::database_io	FileType	enum	2	9	type associated fn/const/variant (Name::x): 9
+nurbs	topology	topology::database_io	DatabaseReader	struct	2	7	type associated fn/const/variant (Name::x): 5; type in fn parameter: 2
+nurbs	topology	topology::database_io	DatabaseWriter	struct	2	2	type in fn parameter: 2
+query	blend	blend::fillet_section::interval	Ivl	struct	8	866	type associated fn/const/variant (Name::x): 532; type in fn parameter: 146; type in fn return type: 81
+query	blend	blend::fillet_section::certificate	NurbsCurve	struct	4	99	type in fn parameter: 40; type associated fn/const/variant (Name::x): 21; type in a type annotation in body: 13
+query	blend	blend::fillet_section::series	V3	struct	3	95	type in fn parameter: 40; type struct literal/pattern: 30; type in fn return type: 14
+query	blend	blend::fillet_section::interval	round_up	fn	6	41	function call: 41
+query	blend	blend::fillet_section::station	knot	fn	2	27	function call: 27
+query	blend	blend::fillet_section::certificate	curve_derivs_over	fn	3	25	function call: 25
+query	blend	blend::fillet_section::station	Nurbs	struct	4	21	type in fn parameter: 8; type associated fn/const/variant (Name::x): 4; type struct literal/pattern: 4
+query	blend	blend::fillet_section::station	span	fn	3	17	function call: 17
+query	blend	blend::fillet_section::station	Partials	struct	2	10	type in fn return type: 4; type in fn parameter: 4; type in a type annotation in body: 2
+query	blend	blend::fillet_section::interval	round_down	fn	2	9	function call: 9
+query	blend	blend::fillet_section::station	as_b_spline	fn	4	7	function call: 7
+query	blend	blend::fillet_section::definition_box	gn_def_face_of	fn	2	4	function call: 4
+query	blend	blend::fillet_section::station	ders_basis	fn	1	4	function call: 4
+query	blend	blend::fillet_section::certificate	EndContinuation	struct	1	4	type associated fn/const/variant (Name::x): 3; type in struct/enum field: 1
+query	blend	blend::fillet_section::interval	cmax	fn	2	3	function call: 3
+query	blend	blend::fillet_section::certificate	past_one_low_line	fn	1	3	function call: 3
+query	blend	blend::fillet_section::definition_box	definition_partials_over_box	fn	1	3	function call: 3
+query	blend	blend::fillet_section::certificate	partials_hull	fn	2	1	function call: 1
+query	blend	blend::fillet_section::offset_box	offset_and_base_partials_over_piece	fn	1	2	function call: 2
+query	blend	blend::fillet_section::definition_box	definition_partials_naive	fn	1	1	function call: 1
+query	blend	blend::fillet_section::certificate	knot_cuts	fn	1	1	function call: 1
+query	blend	blend::fillet_section::certificate	nurbs_partials_over_piece	fn	1	1	function call: 1
+query	blend	blend::fillet_section::certificate	below_continuity	fn	1	1	function call: 1
+query	blend	blend::fillet_section::station	nurbs_partials	fn	1	1	function call: 1
+query	heal	heal::face_props	ContainmentType	enum	2	21	type associated fn/const/variant (Name::x): 20; type in alias/const type: 1
+query	heal	heal::face_props	FaceProps	struct	2	19	type in fn parameter: 8; type in a type annotation in body: 6; type associated fn/const/variant (Name::x): 4
+query	heal	heal::face_props	ClassifyLoopIo	struct	2	17	type in fn parameter: 10; type in fn return type: 4; type in alias/const type: 2
+query	heal	heal::face_props	LoopObject	trait	2	17	trait in fn generics/where: 10; impl header (trait or inherent target): 5; trait associated fn/const/variant (Name::x): 1
+query	heal	heal::face_props	Tri	enum	1	16	type associated fn/const/variant (Name::x): 12; type in alias/const type: 3; type in fn parameter: 1
+query	heal	heal::face_props	HealNotYetFaceType	enum	1	14	type associated fn/const/variant (Name::x): 14
+query	heal	heal::face_props	ClassifyLoopsOut	struct	1	8	type in fn parameter: 4; type in a type annotation in body: 1; type value/pattern in body: 1
+query	heal	heal::face_props	SS_UMIN	const	2	7	constant: 7
+query	heal	heal::face_props	LoopuseType	enum	1	7	type associated fn/const/variant (Name::x): 5; type in alias/const type: 1; type in fn return type: 1
+query	heal	heal::face_props	SS_VMAX	const	2	5	constant: 5
+query	heal	heal::face_props	SS_VMIN	const	2	5	constant: 5
+query	heal	heal::face_props	SS_UMAX	const	2	4	constant: 4
+query	heal	heal::face_props	LooptreeItem	struct	1	2	type associated fn/const/variant (Name::x): 2
+query	heal	heal::face_props	PropStage	enum	1	2	type associated fn/const/variant (Name::x): 2
+query	heal	heal::face_props	Looptree	struct	1	2	type in a type annotation in body: 1; type associated fn/const/variant (Name::x): 1
+query	heal	heal::face_props	SS_NONE	const	1	2	constant: 2
+query	heal	heal::face_props	UNDEF_ULONG	const	1	2	constant: 2
+query	heal	heal::gap	GapFunction	struct	1	1	type associated fn/const/variant (Name::x): 1
+query	heal	heal::face_props	ItemId	struct	1	1	type in a type annotation in body: 1
+query	heal	heal::face_props	HealerOpType	enum	1	1	type associated fn/const/variant (Name::x): 1
+query	offset	offset::construction::bernstein	Bernstein2	struct	1	16	type associated fn/const/variant (Name::x): 8; type in fn parameter: 4; type in a type annotation in body: 3
+query	primitive	primitive::api_curves	create_line_segment	fn	1	1	function call: 1
+surface	blend	blend::fillet_section::interval	Ivl	struct	5	215	type associated fn/const/variant (Name::x): 135; type in fn parameter: 29; type in fn return type: 16
+surface	blend	blend::fillet_section::series	V3	struct	1	42	type in struct/enum field: 13; type struct literal/pattern: 9; type in fn parameter: 8
+surface	blend	blend::fillet_section::series	v_scale	fn	1	32	function call: 32
+surface	blend	blend::fillet_section::series	v_sub	fn	1	25	function call: 25
+surface	blend	blend::fillet_section::station	as_b_spline	fn	16	9	function call: 9
+surface	blend	blend::fillet_section::series	v_add	fn	1	24	function call: 24
+surface	blend	blend::fillet_section::station	Nurbs	struct	1	14	type in fn parameter: 6; type associated fn/const/variant (Name::x): 3; type in struct/enum field: 2
+surface	blend	blend::fillet_section::series	VZ	const	1	13	constant: 13
+surface	blend	blend::fillet_section::offset_box	offset_partials_over_parts	fn	1	12	function call: 12
+surface	blend	blend::fillet_section::interval	cmax	fn	1	11	function call: 11
+surface	blend	blend::fillet_exact	BlendSpine	enum	2	10	type associated fn/const/variant (Name::x): 9; type in fn parameter: 1
+surface	blend	blend::fillet_section::interval	cmin	fn	1	10	function call: 10
+surface	blend	blend::blend_corner::mixed::algebra	Side	struct	2	8	type in fn parameter: 2; type in fn return type: 2; type in a type annotation in body: 1
+surface	blend	blend::fillet_section::section	param	fn	1	8	function call: 8
+surface	blend	blend::blend_setback	Face	struct	2	7	type in fn parameter: 2; type in a type annotation in body: 1; type in fn return type: 1
+surface	blend	blend::blend_setback	FaceKind	enum	1	7	type associated fn/const/variant (Name::x): 7
+surface	blend	blend::blend_corner::mixed::algebra	Crv	struct	2	6	type in fn parameter: 2; type in fn return type: 1; type struct literal/pattern: 1
+surface	blend	blend::fillet_section::interval	round_up	fn	2	5	function call: 5
+surface	blend	blend::fillet_exact	classify_supports	fn	3	4	function call: 4
+surface	blend	blend::fillet_section::section	GnSectionFsg	struct	3	4	type associated fn/const/variant (Name::x): 4
+surface	blend	blend::fillet_section::station	Partials	struct	1	6	type in fn parameter: 3; type in fn return type: 2; type in a type annotation in body: 1
+surface	blend	blend::fillet_exact	ClassInputs	struct	2	5	type in fn parameter: 2; type struct literal/pattern: 1; type in struct/enum field: 1
+surface	blend	blend::blend_setback	Round	struct	2	5	type in a type annotation in body: 2; type struct literal/pattern: 2; type in fn parameter: 1
+surface	blend	blend::fillet_section::recertify	DefinitionSpan	struct	1	5	type in fn parameter: 3; type in struct/enum field: 1; type in fn return type: 1
+surface	blend	blend::fillet_section::station	knot	fn	1	4	function call: 4
+surface	blend	blend::fillet_section::series	v_hull	fn	1	4	function call: 4
+surface	blend	blend::fillet_section::station	GnStation	struct	1	4	type in a type annotation in body: 3; type in fn parameter: 1
+surface	blend	blend::fillet_exact	class_surface	fn	2	3	function call: 3
+surface	blend	blend::fillet_section::certificate	NurbsCurve	struct	1	3	type in fn return type: 1; type struct literal/pattern: 1; type in a type annotation in body: 1
+surface	blend	blend::fillet_section::section	param_in	fn	1	2	function call: 2
+surface	blend	blend::fillet_section::certificate	curve_derivs_over	fn	1	2	function call: 2
+surface	blend	blend::fillet_section::station	span	fn	1	2	function call: 2
+surface	blend	blend::blend_setback	Fill	struct	1	2	type in fn return type: 1; type in fn parameter: 1
+surface	blend	blend::blend_corner::mixed::algebra	breaks_merge	fn	2	1	function call: 1
+surface	blend	blend::fillet_section::recertify	transform_rounding	fn	2	1	function call: 1
+surface	blend	blend::fillet_section::recertify	precision_floor	fn	2	1	function call: 1
+surface	blend	blend::fillet_section::continuation	net_weights	fn	1	2	function call: 2
+surface	blend	blend::blend_setback	fill_hole_counted	fn	1	1	function call: 1
+surface	blend	blend::blend_corner::mixed::algebra	V4	type	1	1	type alias in a type annotation in body: 1
+surface	blend	blend::fillet_exact	QuadricKind	enum	1	1	type associated fn/const/variant (Name::x): 1
+surface	blend	blend::blend_corner::mixed::algebra	project	fn	2	0	
+surface	blend	blend::fillet_exact	arc_section_implicit	fn	1	1	function call: 1
+surface	blend	blend::fillet_section::recertify	recertify_with_thumbweight	fn	1	1	function call: 1
+surface	blend	blend::fillet_section::offset_box	offset_crossed_knot_jumps	fn	1	1	function call: 1
+surface	blend	blend::blend_corner::mixed::algebra	breaks_coincide	fn	1	1	function call: 1
+surface	blend	blend::fillet_section::recertify	net_distance	fn	1	1	function call: 1
+surface	blend	blend::blend_setback	FillStats	struct	1	1	type associated fn/const/variant (Name::x): 1
+surface	blend	blend::fillet_section::continuation	growth	fn	1	1	function call: 1
+surface	blend	blend::fillet_section::recertify	net_of_definition	fn	1	1	function call: 1
+surface	blend	blend::fillet_section::certificate	nurbs_partials_over_piece	fn	1	1	function call: 1
+surface	blend	blend::fillet_section::continuation	section_weight_range	fn	1	1	function call: 1
+surface	blend	blend::fillet_section::recertify	span_of_definition	fn	1	1	function call: 1
+surface	blend	blend::fillet_section::certificate	partials_hull	fn	1	1	function call: 1
+surface	blend	blend::fillet_section::section	GN_THUMBWEIGHT_EQUAL_AREA	const	1	1	constant: 1
+surface	blend	blend::fillet_executive::p3	NoRoomReason	enum	1	1	type associated fn/const/variant (Name::x): 1
+surface	blend	blend::fillet_section::continuation	section_degree	fn	1	1	function call: 1
+surface	blend	blend::blend_corner::mixed::algebra	eval	fn	2	0	
+surface	blend	blend::blend_setback	containment_kept	fn	1	1	function call: 1
+surface	blend	blend::fillet_section::definition	evaluate_definition	fn	1	0	
+surface	blend	blend::blend_corner::mixed::algebra	srf_to_bspline	fn	1	0	
+surface	blend	blend::blend_corner::mixed::algebra	coons	fn	1	0	
+surface	blend	blend::blend_corner::mixed::algebra	srf_transpose	fn	1	0	
+surface	blend	blend::fillet_section::recertify	recertify	fn	1	0	
+surface	blend	blend::blend_corner::mixed::algebra	coons_chamfer	fn	1	0	
+surface	intersect	intersect::surface_drop_lib::p3	DropSolveContext	struct	3	13	type struct literal/pattern: 7; type in fn parameter: 5; type in a type annotation in body: 1
+surface	intersect	intersect::point_class	PointClassType	enum	2	7	type associated fn/const/variant (Name::x): 7
+surface	intersect	intersect::curve_class::p1	CurveClassification	struct	2	4	type associated fn/const/variant (Name::x): 2; type in fn parameter: 1; type value/pattern in body: 1
+surface	intersect	intersect::point_class	ClassObjectKind	enum	1	5	type associated fn/const/variant (Name::x): 2; type in struct/enum field: 1; type in fn return type: 1
+surface	intersect	intersect::point_class	ClassGeometry	trait	2	3	impl header (trait or inherent target): 1; trait in fn parameter: 1; trait value/pattern in body: 1
+surface	intersect	intersect::point_class	ClassObject	trait	2	3	impl header (trait or inherent target): 1; trait in fn generics/where: 1; trait value/pattern in body: 1
+surface	intersect	intersect::adv_surface_intersector	AdvSurfaceIntersector	struct	1	2	type in a type annotation in body: 1; type associated fn/const/variant (Name::x): 1
+surface	intersect	intersect::surface_intersector::p1	SrfIndex	enum	1	2	type associated fn/const/variant (Name::x): 2
+surface	intersect	intersect::surface_intersector::p5	do_intersection	fn	3	0	
+surface	intersect	intersect::point_class	PointClassification	struct	1	1	type associated fn/const/variant (Name::x): 1
+surface	intersect	intersect::surface_silhouette	SurfaceSilhouette	struct	1	1	type associated fn/const/variant (Name::x): 1
+surface	intersect	intersect::adv_surface_intersector	NoSurfaceHandle	struct	1	1	type value/pattern in body: 1
+surface	intersect	intersect::surface_intersector::p1	TsectId	struct	1	1	type in a type annotation in body: 1
+surface	intersect	intersect::surface_intersector::p5	do_intersection_with_context	fn	2	0	
+surface	intersect	intersect::curve_class::p2	ResetOptions	struct	1	1	type associated fn/const/variant (Name::x): 1
+surface	intersect	intersect::surface_intersector::p1	TsectPnt	struct	1	1	type associated fn/const/variant (Name::x): 1
+surface	intersect	intersect::surface_intersector::p4	PointIntersectionOptions	struct	1	1	type struct literal/pattern: 1
+surface	intersect	intersect::surface_tracer	SurfaceTrace	trait	1	0	
+surface	mass	mass::integrator	integrate_with_kernel	fn	1	0	
+surface	offset	offset::construction::bernstein	Bernstein2	struct	1	24	type associated fn/const/variant (Name::x): 15; type in struct/enum field: 5; type in fn parameter: 2
+surface	offset	offset::construction::bernstein	Binomials	struct	1	5	type in fn parameter: 4; type associated fn/const/variant (Name::x): 1
+surface	offset	offset::draft	DraftDefinition	struct	5	0	
+surface	offset	offset::construction::bernstein	MAX_DEGREE	const	1	2	constant: 2
+surface	offset	offset::draft	Draft	struct	1	0	
+surface	query	query::face::p2	BrepCacheFace	struct	1	3	type in struct/enum field: 1; type in fn parameter: 1; type struct literal/pattern: 1
+surface	query	query::face::p2	PointClassifyOptions	struct	1	1	type struct literal/pattern: 1
+surface	query	query::face::p2	point_classify_prepared	fn	1	1	function call: 1
+surface	sweep	sweep::section_blend	EndOrder	enum	2	9	type associated fn/const/variant (Name::x): 8; type in a type annotation in body: 1
+surface	sweep	sweep::section_blend	SectionBlendDefinition	struct	5	1	type associated fn/const/variant (Name::x): 1
+surface	sweep	sweep::section_blend	SectionFrame	struct	1	1	type struct literal/pattern: 1
+surface	sweep	sweep::section_blend	Motion	struct	1	1	type struct literal/pattern: 1
+surface	topology	topology::database_io	DatabaseReader	struct	17	54	type in fn parameter: 32; type associated fn/const/variant (Name::x): 13; type in a type annotation in body: 6
+surface	topology	topology::database_io	FileType	enum	16	42	type associated fn/const/variant (Name::x): 38; type in a type annotation in body: 3; type in alias/const type: 1
+surface	topology	topology::database_io	InputStream	struct	13	18	type associated fn/const/variant (Name::x): 14; type in alias/const type: 2; type in fn parameter: 2
+surface	topology	topology::database_io	DatabaseWriter	struct	9	13	type in fn parameter: 11; type associated fn/const/variant (Name::x): 2
+surface	topology	topology	FaceId	struct	3	14	type in fn parameter: 8; type in struct/enum field: 2; type value/pattern in body: 2
+surface	topology	topology::geometry_write	write_surface_at	fn	4	5	function call: 5
+surface	topology	topology	Brep	struct	3	5	type in fn parameter: 4; type in struct/enum field: 1
+surface	topology	topology::brep_cache	CacheObject	enum	1	4	type in alias/const type: 2; type in fn parameter: 2
+surface	topology	topology::database_io	MAX_READ_NESTING	const	1	2	constant: 2
+surface	topology	topology::geometry_write	write_curve_at	fn	1	2	function call: 2
+surface	topology	topology::database_io	NESTING_LIMIT_REASON	const	1	2	constant: 2
+surface	topology	topology	BrepId	struct	1	1	type in fn return type: 1
+surface	topology	topology	ObjectHandle	struct	1	1	type in a type annotation in body: 1
+surface	topology	topology::brep::validation::assert_valid	standalone_curve_assert_valid	fn	1	0	
+surface	topology	topology::face::p4	has_loopuses	fn	1	0	
+surface	topology	topology::trimming_tools	order_curves_into_loops	fn	1	0	
+surface	topology	topology::face::p1	set_surface	fn	1	0	
+surface	topology	topology::face::p2	tolerance	fn	1	0	
+surface	topology	topology::trimming_tools	find_outer_loops	fn	1	0	
+surface	topology	topology::trimming_tools	OrderedLoops	struct	1	0	
+topology	blend	blend::fillet_section::interval	Ivl	struct	2	186	type associated fn/const/variant (Name::x): 90; type in fn parameter: 25; type in struct/enum field: 19
+topology	blend	blend::fillet_section::certificate	NurbsCurve	struct	5	9	type associated fn/const/variant (Name::x): 3; type in fn parameter: 3; type in fn return type: 2
+topology	blend	blend::fillet_section::station	Nurbs	struct	1	6	type associated fn/const/variant (Name::x): 3; type in fn parameter: 2; type in alias/const type: 1
+topology	blend	blend::fillet_section::station	as_b_spline	fn	2	3	function call: 3
+topology	blend	blend::hcr	Hcr	struct	1	2	type associated fn/const/variant (Name::x): 2
+topology	blend	blend::hcr	HcrOptions	struct	1	1	type struct literal/pattern: 1
+topology	blend	blend::fillet_corner::p1	test_g1_continuity	fn	1	0	
+topology	boolean	boolean::merge::p2	MergeOperand	enum	1	6	type associated fn/const/variant (Name::x): 4; type in a type annotation in body: 2
+topology	boolean	boolean::merge::p2	MergeContext	enum	1	4	type in fn parameter: 2; type associated fn/const/variant (Name::x): 2
+topology	boolean	boolean::merge::p2	TopologyCopy	struct	1	3	type in fn parameter: 2; type struct literal/pattern: 1
+topology	boolean	boolean::topology_intersector::p1	Relations	struct	1	3	type in fn parameter: 2; type associated fn/const/variant (Name::x): 1
+topology	boolean	boolean::topology_intersector::p1	TopologyIntersector	struct	1	2	type in a type annotation in body: 2
+topology	boolean	boolean::merge::p1	MergeState	struct	1	2	type associated fn/const/variant (Name::x): 2
+topology	boolean	boolean::topology_intersector::p1	first_reaching	fn	1	1	function call: 1
+topology	boolean	boolean::merge::p1	VertexCopy	struct	1	1	type struct literal/pattern: 1
+topology	boolean	boolean::topology_intersector::p1	Growth	struct	1	1	type struct literal/pattern: 1
+topology	boolean	boolean::merge::p2	make_faceuse_with	fn	1	1	function call: 1
+topology	boolean	boolean::api_brep	boolean_difference	fn	1	0	
+topology	boolean	boolean::merge::p3	copy_component	fn	1	0	
+topology	heal	heal::face_props	LoopObject	trait	4	37	trait in fn generics/where: 25; impl header (trait or inherent target): 9; trait value/pattern in body: 2
+topology	heal	heal::gap	VertexEdgeGap	struct	5	13	type associated fn/const/variant (Name::x): 7; type in struct/enum field: 3; type in fn return type: 3
+topology	heal	heal::face_props	FaceProps	struct	3	15	type in fn parameter: 9; type associated fn/const/variant (Name::x): 3; type in a type annotation in body: 2
+topology	heal	heal::face_props	Tri	enum	7	8	type associated fn/const/variant (Name::x): 7; type in a type annotation in body: 1
+topology	heal	heal::gap	EdgeEdgeGap	struct	5	10	type associated fn/const/variant (Name::x): 7; type in fn return type: 2; type in struct/enum field: 1
+topology	heal	heal::gap	EdgeFaceGap	struct	4	9	type associated fn/const/variant (Name::x): 4; type in fn return type: 3; type in struct/enum field: 2
+topology	heal	heal::gap	VertexFaceGap	struct	3	9	type associated fn/const/variant (Name::x): 4; type in fn return type: 3; type in struct/enum field: 2
+topology	heal	heal::stitch::p1	DefaultStitchCallback	struct	4	4	type associated fn/const/variant (Name::x): 3; type value/pattern in body: 1
+topology	heal	heal::stitch::p1	Stitch	struct	4	4	type associated fn/const/variant (Name::x): 3; type in fn parameter: 1
+topology	heal	heal::face_props	HealerOpType	enum	3	4	type associated fn/const/variant (Name::x): 3; type in fn parameter: 1
+topology	heal	heal::stitch::p2	ClosedGap	struct	2	4	type in fn return type: 3; type in fn parameter: 1
+topology	heal	heal::stitch::p2	MinGapRequest	struct	3	2	type associated fn/const/variant (Name::x): 2
+topology	heal	heal::face_props	PropStage	enum	2	2	type associated fn/const/variant (Name::x): 2
+topology	heal	heal::stitch::p1	StitchEditContext	trait	4	0	
+topology	heal	heal::stitch::p1	StitchCallback	trait	1	2	trait in fn generics/where: 2
+topology	heal	heal::gap	Gap	enum	1	1	type associated fn/const/variant (Name::x): 1
+topology	heal	heal::gap	GapFunction	struct	1	1	type associated fn/const/variant (Name::x): 1
+topology	heal	heal::stitch::p1	BorrowedStitchEdits	struct	2	0	
+topology	heal	heal::heal_data::p2	HealData	struct	1	1	type associated fn/const/variant (Name::x): 1
+topology	heal	heal::heal_data::p1	HealBrepTargets	struct	1	1	type struct literal/pattern: 1
+topology	heal	heal::face_props	UNDEF_ULONG	const	1	0	
+topology	heal	heal::stitch::p2	find_and_set_infinite_region	fn	1	0	
+topology	heal	heal::face_props	SeamProblem	struct	1	0	
+topology	offset	offset::offset_executive::p2	OffsetNotifications	struct	1	4	type in fn parameter: 2; type in a type annotation in body: 1; type struct literal/pattern: 1
+topology	offset	offset::offset_executive::p1	OffsetExecutive	struct	1	1	type associated fn/const/variant (Name::x): 1
+topology	offset	offset::offset_executive::p1	OffsetOperation	enum	1	1	type associated fn/const/variant (Name::x): 1
+topology	offset	offset::draft	net_sense	fn	1	0	
+topology	offset	offset::offset_executive::p2	copy_local_sweep_attributes	fn	1	0	
+topology	offset	offset::offset_executive::p2	local_operation_simple	fn	1	0	
+topology	primitive	primitive::api_curves	create_line_segment	fn	1	4	function call: 4
+topology	primitive	primitive::api_curve_ops	make_curves_compatible	fn	1	1	function call: 1

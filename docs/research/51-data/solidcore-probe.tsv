@@ -1,0 +1,100 @@
+# size	name	faces	edges	verts	edgeuses	shells	faces_arena	loops	edges_arena	verts_arena	regions	faceuses	loopuses	edgeuses_arena	vertexuses	attributes	surfaces	curves	trims	n_trims	whole_clone	trims_made_live	trees_live
+size	box	6	12	8	48	600	5304	432	11232	1728	72	912	480	38880	5184	0	4800	5664	19392	24	56288	0	44608
+size	cylinder	3	3	2	12	336	4380	168	2968	304	72	456	240	7944	1440	0	4456	2304	5232	6	20252	0	38175
+size	sphere	1	1	2	4	160	2718	56	626	144	72	152	80	2160	480	0	3618	1562	1616	2	9132	0	1080
+size	plate4_drilled	22	60	40	240	2008	60280	4400	63456	4544	584	8208	6880	248032	35904	3104	45248	37152	103104	120	388712	0	2907168
+size	plate8_drilled	70	204	136	816	6232	225208	16304	220128	12992	2120	30096	26080	875488	128064	10400	166592	131616	354240	408	1384528	0	11515968
+size	plate8_drilled_filleted	134	332	200	1328	16544	514232	28592	408800	31424	2152	58256	46560	1639744	263232	0	328896	210720	561088	664	2817176	0	23568496
+size	Fillet/blade_hub_3.smb	46	126	84	504	880	59760	1920	106776	7392	72	7008	3840	507776	48384	0	55888	97704	277232	252	633512	0	11696664
+size	Fillet/vase3.smb	19	48	32	192	448	59560	800	82736	2816	72	2896	1600	217232	18432	0	57960	79280	149000	85	367172	11812	6452319
+size	Fillet/vase1.smb	19	48	32	192	448	57856	800	76112	2816	72	2896	1600	221208	18432	0	56256	72656	144336	95	352700	192	6489620
+size	Fillet/cliff_1.smb	43	117	78	468	832	63276	1800	94992	6864	72	6552	3600	457904	44928	0	59656	86568	249536	234	590860	0	11230274
+size	Fillet/blade_hub_1.smb	43	117	78	468	832	63276	1800	94992	6864	72	6552	3600	457904	44928	0	59656	86568	249536	234	590860	0	11230274
+size	Fillet/cliff_2.smb	30	81	54	324	624	47396	1240	79512	4752	72	4568	2480	341584	31104	0	44872	73680	198160	162	447088	0	9428309
+size	Fillet/test8.smb	2	7	5	20	96	21728	160	30608	400	36	320	320	56376	1920	0	22208	30136	49336	10	110588	0	17747780
+size	Fillet/nurb_box1.smb	5	9	6	36	224	4484	200	5112	528	72	760	400	27376	3456	0	4064	4464	17080	18	41884	0	301428
+size	Fillet/bottle.smb	16	40	26	160	400	22440	640	27680	2304	72	2432	1280	151216	15360	0	21096	24800	87336	80	205400	0	2758139
+size	Fillet/crown.smb	13	36	24	144	352	19992	560	86152	2112	72	1984	1120	241424	13824	0	18896	83560	187280	72	355596	0	1713833
+size	Platte.smb	122	327	218	1308	2672	215084	5880	181216	19184	232	18744	11760	1062976	125568	0	204736	157672	558928	654	1600544	0	14003876
+size	tiny_rounds_coarse_tolerance.step	3	11	11	22	252	9836	208	6337	792	44	456	240	11880	2112	0	6672	5633	8888	11	36994	0	415816
+size	cylinder_spline_rims.step	3	4	3	16	192	5460	184	2649	256	72	456	240	8912	1536	0	4456	2361	6736	8	22902	0	272175
+# copy	name	faces	brep_copy_us	bytes	standing_us	bytes	sharing_caches_us	bytes	snapshot_rollback_us	bytes
+copy	box	6	50.7	207456	15.6	56352	2.6	15840	15.0	53520
+copy	cylinder	3	18.4	66892	6.9	20316	1.9	7796	7.6	20468
+copy	sphere	1	8.9	27542	2.8	9052	1.0	4246	4.1	9766
+copy	plate4_drilled	22	359.7	1109520	93.3	388776	21.9	131816	105.3	386072
+copy	plate8_drilled	70	1262.7	4096904	331.8	1384592	74.6	478288	377.7	1382272
+copy	plate8_drilled_filleted	134	2288.9	7253136	579.3	2802696	146.7	948168	631.4	2763000
+copy	Fillet/blade_hub_3.smb	46	691.1	2089560	160.5	633576	28.1	165312	170.3	624920
+copy	Fillet/vase3.smb	19	298.2	1038344	77.0	367236	15.0	100188	79.4	362348
+copy	Fillet/vase1.smb	19	297.7	1028344	76.3	352764	14.9	99044	80.5	349916
+copy	Fillet/cliff_1.smb	43	642.3	1997256	151.3	590924	29.2	161996	164.5	585780
+copy	Fillet/blade_hub_1.smb	43	639.9	1997256	150.1	590924	28.9	161996	163.7	585780
+copy	Fillet/cliff_2.smb	30	449.9	1618848	106.2	447152	18.4	115128	113.3	441424
+copy	Fillet/test8.smb	2	29.5	183168	15.0	110652	3.2	26612	15.6	109708
+copy	Fillet/nurb_box1.smb	5	35.8	184992	12.3	41948	2.3	12628	12.1	40268
+copy	Fillet/bottle.smb	16	213.4	771480	54.4	205464	10.0	56368	55.6	200448
+copy	Fillet/crown.smb	13	183.6	885336	69.9	355660	8.8	49836	72.0	355964
+copy	Platte.smb	122	1845.1	6227872	460.1	1600608	93.6	488408	481.0	1561640
+copy	tiny_rounds_coarse_tolerance.step	3	35.3	128472	12.6	37058	2.9	12656	14.9	37082
+copy	cylinder_spline_rims.step	3	21.5	75404	6.9	22966	2.0	8660	8.1	23094
+# untouched	op	input	ms	faces	faces_kept_geo	faces_kept_id	edges	edges_kept_geo	edges_kept_id	verts	verts_kept_geo	verts_kept_id	out_faces
+untouched	boolean_hole_in_box	0	8.2	6	4	4	12	12	12	8	8	8	7
+untouched	boolean_hole_in_box	1	8.2	3	0	0	3	0	0	2	0	0	7
+untouched	pattern_17th_hole_plate4	0	218.8	22	20	20	60	60	60	40	40	40	23
+untouched	pattern_17th_hole_plate4	1	218.8	3	0	0	3	0	0	2	0	0	23
+untouched	pattern_65th_hole_plate8	0	1454.3	70	68	68	204	204	204	136	136	136	71
+untouched	pattern_65th_hole_plate8	1	1454.3	3	0	0	3	0	0	2	0	0	71
+untouched	boolean_hole_in_filleted_plate8	0	3291.9	134	132	132	332	332	332	200	200	200	135
+untouched	boolean_hole_in_filleted_plate8	1	3291.9	3	0	0	3	0	0	2	0	0	135
+untouched	extrude_join_boss_box	0	5.3	6	5	5	12	12	12	8	8	8	8
+untouched	extrude_join_boss_box	1	5.3	3	2	0	3	3	0	2	2	0	8
+untouched	extrude_join_boss_plate8	0	1457.1	70	69	69	204	204	204	136	136	136	72
+untouched	extrude_join_boss_plate8	1	1457.1	3	2	0	3	3	0	2	2	0	72
+untouched	fillet_one_edge_box	0	5.9	6	2	2	12	7	7	8	6	6	7
+untouched	fillet_one_rim_plate8	0	1485.1	70	5	5	204	202	202	136	135	135	71
+untouched	fillet_all_rims_plate8	0	3280.1	70	5	5	204	76	76	136	72	72	134
+untouched	shell_box_open_top	0	54.6	6	5	5	12	12	0	8	8	0	11
+untouched	shell_plate4_open_top	0	2101.7	22	21	5	60	60	0	40	40	0	59
+untouched	offset_box	0	53.4	6	0	0	12	0	0	8	0	0	6
+untouched	offset_plate4	0	1224.2	22	0	0	60	0	0	40	0	0	22
+untouched	transform_plate8	0	1630.1	70	0	0	204	0	0	136	0	0	70
+untouched	corner_cut:Fillet/blade_hub_3.smb	0	152.3	46	0	0	126	119	119	84	81	81	47
+untouched	transform:Fillet/blade_hub_3.smb	0	0.0	46	0	0	126	0	0	84	0	0	46
+untouched	control_copy:Fillet/blade_hub_3.smb	0	0.0	46	0	0	126	126	126	84	84	84	46
+untouched	corner_cut:Fillet/vase3.smb	0	316.7	19	0	0	48	37	37	32	28	28	22
+untouched	transform:Fillet/vase3.smb	0	0.0	19	0	0	48	0	0	32	0	0	19
+untouched	control_copy:Fillet/vase3.smb	0	0.0	19	0	0	48	48	48	32	32	32	19
+untouched	corner_cut:Fillet/vase1.smb	0	215.6	19	0	0	48	40	40	32	28	28	22
+untouched	transform:Fillet/vase1.smb	0	0.0	19	0	0	48	0	0	32	0	0	19
+untouched	control_copy:Fillet/vase1.smb	0	0.0	19	0	0	48	48	48	32	32	32	19
+untouched	corner_cut:Fillet/cliff_1.smb	0	111.0	43	0	0	117	110	110	78	75	75	45
+untouched	transform:Fillet/cliff_1.smb	0	0.0	43	0	0	117	0	0	78	0	0	43
+untouched	control_copy:Fillet/cliff_1.smb	0	0.0	43	0	0	117	117	117	78	78	78	43
+untouched	corner_cut:Fillet/blade_hub_1.smb	0	111.5	43	0	0	117	110	110	78	75	75	45
+untouched	transform:Fillet/blade_hub_1.smb	0	0.0	43	0	0	117	0	0	78	0	0	43
+untouched	control_copy:Fillet/blade_hub_1.smb	0	0.0	43	0	0	117	117	117	78	78	78	43
+untouched	corner_cut:Fillet/cliff_2.smb	0	124.6	30	0	0	81	59	59	54	43	43	32
+untouched	transform:Fillet/cliff_2.smb	0	0.0	30	0	0	81	0	0	54	0	0	30
+untouched	control_copy:Fillet/cliff_2.smb	0	0.0	30	0	0	81	81	81	54	54	54	30
+untouched	corner_cut:Fillet/test8.smb	0	63.5	2	0	0	7	5	5	5	4	4	2
+untouched	transform:Fillet/test8.smb	0	0.0	2	0	0	7	0	0	5	0	0	2
+untouched	control_copy:Fillet/test8.smb	0	0.0	2	0	0	7	7	7	5	5	5	2
+untouched	corner_cut:Fillet/nurb_box1.smb	0	208.6	5	0	0	9	6	6	6	5	5	8
+untouched	transform:Fillet/nurb_box1.smb	0	0.0	5	0	0	9	0	0	6	0	0	5
+untouched	control_copy:Fillet/nurb_box1.smb	0	0.0	5	0	0	9	9	9	6	6	6	5
+untouched	corner_cut:Fillet/bottle.smb	0	123.2	16	0	0	40	37	37	26	25	25	19
+untouched	transform:Fillet/bottle.smb	0	0.0	16	0	0	40	0	0	26	0	0	16
+untouched	control_copy:Fillet/bottle.smb	0	0.0	16	0	0	40	40	40	26	26	26	16
+untouched	corner_cut:Fillet/crown.smb	0	21.0	13	0	0	36	35	35	24	24	24	16
+untouched	transform:Fillet/crown.smb	0	0.0	13	0	0	36	0	0	24	0	0	13
+untouched	control_copy:Fillet/crown.smb	0	0.0	13	0	0	36	36	36	24	24	24	13
+untouched	corner_cut:Platte.smb	0	16.0	122	0	0	327	327	327	218	218	218	122
+untouched	transform:Platte.smb	0	0.0	122	0	0	327	0	0	218	0	0	122
+untouched	control_copy:Platte.smb	0	0.0	122	0	0	327	327	327	218	218	218	122
+untouched	corner_cut:tiny_rounds_coarse_tolerance.step	0	23.6	3	3	3	11	11	11	11	11	11	3
+untouched	transform:tiny_rounds_coarse_tolerance.step	0	0.0	3	0	0	11	1	0	11	2	0	3
+untouched	control_copy:tiny_rounds_coarse_tolerance.step	0	0.0	3	3	3	11	11	11	11	11	11	3
+untouched	corner_cut:cylinder_spline_rims.step	0	14.3	3	3	3	4	4	4	3	3	3	3
+untouched	transform:cylinder_spline_rims.step	0	0.0	3	0	0	4	0	0	3	0	0	3
+untouched	control_copy:cylinder_spline_rims.step	0	0.0	3	3	3	4	4	4	3	3	3	3

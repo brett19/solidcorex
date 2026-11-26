@@ -1,0 +1,69 @@
+crate | paths | src | tests/benches/examples | root-name | module-path | numbered-or-deep | files | in cfg(test) tail
+solidcore/crates/goldens | 11365 | 11064 | 301 | 1165 | 10200 | 2049 | 433 | 886
+solidcore/crates/solidcore-ops | 1915 | 1460 | 455 | 431 | 1484 | 208 | 128 | 82
+crates/smlib | 651 | 651 | 0 | 114 | 537 | 139 | 27 | 37
+solidcore/crates/solidcore-convert | 173 | 92 | 81 | 27 | 146 | 20 | 12 | 0
+solidcore/crates/solidcore-step | 96 | 46 | 50 | 5 | 91 | 9 | 12 | 7
+solidcore/crates/step-export | 82 | 47 | 35 | 0 | 82 | 22 | 2 | 15
+solidcore/crates/solidcore-tess | 75 | 75 | 0 | 17 | 58 | 0 | 19 | 18
+solidcore/crates/solidcore-ssi | 44 | 44 | 0 | 1 | 43 | 8 | 3 | 17
+crates/geom | 20 | 20 | 0 | 6 | 14 | 0 | 2 | 4
+solidcore/crates/diagnostics | 16 | 16 | 0 | 5 | 11 | 3 | 2 | 2
+solidcore/crates/solidcore-cadir | 6 | 6 | 0 | 4 | 2 | 0 | 5 | 0
+
+solidcore/crates/goldens areas: topology 2507(401), geom 2046(211), error 1645(33), nurbs 1526(244), surface 896(244), curve 681(137), blend 471(181), intersect 368(124), kernel 362(10), math 298(23), query 135(76), heal 99(59), primitive 92(25), mass 87(25), boolean 65(36), sweep 50(28), offset 33(17), eval 3(3), limits 1(1)
+solidcore/crates/solidcore-ops areas: topology 412(146), error 307(44), geom 242(61), kernel 152(15), query 124(81), nurbs 96(63), curve 94(46), blend 76(49), surface 72(44), sweep 65(48), prism 46(37), primitive 37(11), math 35(14), eval 29(23), mass 27(21), heal 25(9), boolean 25(11), offset 17(15), develop 12(12), cell_grid 8(8), intersect 6(5), hatch 3(2), mesh_reduce 2(2), profile 2(2), hlr 1(1)
+crates/smlib areas: topology 210(103), error 129(25), geom 103(33), nurbs 45(24), surface 37(17), query 31(17), kernel 23(6), curve 20(8), primitive 14(7), sweep 11(9), mass 7(6), offset 7(7), boolean 6(5), blend 3(2), intersect 2(2), heal 2(2), math 1(1)
+solidcore/crates/solidcore-convert areas: topology 68(54), geom 30(11), surface 15(12), kernel 14(3), curve 8(8), eval 8(7), prism 5(3), math 5(3), boolean 5(2), blend 3(3), nurbs 3(2), error 2(2), mass 2(2), primitive 2(2), cell_grid 1(1), develop 1(1), query 1(1)
+solidcore/crates/solidcore-step areas: eval 15(9), surface 14(10), kernel 12(6), curve 10(6), topology 9(8), geom 8(8), nurbs 7(6), mass 5(5), blend 4(4), error 3(3), sweep 3(3), boolean 2(2), math 2(2), primitive 2(2)
+solidcore/crates/step-export areas: surface 19(11), topology 15(10), curve 10(6), geom 10(7), nurbs 10(7), math 7(2), kernel 3(1), primitive 3(2), sweep 3(3), boolean 2(2)
+solidcore/crates/solidcore-tess areas: eval 57(25), geom 17(1), nurbs 1(1)
+solidcore/crates/solidcore-ssi areas: surface 18(10), geom 11(4), nurbs 9(9), kernel 3(1), curve 2(1), error 1(1)
+crates/geom areas: eval 14(12), geom 6(2)
+solidcore/crates/diagnostics areas: topology 8(8), kernel 3(3), boolean 1(1), geom 1(1), query 1(1), surface 1(1), error 1(1)
+solidcore/crates/solidcore-cadir areas: geom 4(2), eval 1(1), kernel 1(1)
+
+kernel area | paths | crates
+topology | 3229 | 7
+geom | 2478 | 11
+error | 2088 | 7
+nurbs | 1697 | 8
+surface | 1072 | 8
+curve | 825 | 7
+kernel | 573 | 9
+blend | 557 | 5
+intersect | 376 | 3
+math | 348 | 6
+query | 292 | 5
+primitive | 150 | 6
+sweep | 132 | 5
+mass | 128 | 5
+eval | 127 | 7
+heal | 126 | 3
+boolean | 106 | 7
+offset | 57 | 3
+prism | 51 | 2
+develop | 13 | 2
+cell_grid | 9 | 2
+hatch | 3 | 1
+mesh_reduce | 2 | 1
+profile | 2 | 1
+limits | 1 | 1
+hlr | 1 | 1
+
+app crates: paths into facade crates
+kernel {'solidcore_record': 956, 'solidcore_ops': 228, 'solidcore_step': 57, 'solidcore_tess': 41}
+engine {'solidcore_record': 1057}
+ui-egui {'solidcore_record': 650}
+doc {'solidcore_record': 524}
+smlib {'solidcore_record': 84, 'solidcore_ops': 162}
+geom {'solidcore_record': 153, 'solidcore_tess': 9, 'solidcore_ops': 23}
+io {'solidcore_record': 175, 'solidcore_cadir': 4}
+sketch {'solidcore_record': 137}
+render {'solidcore_record': 89}
+viewport-gpu {'solidcore_record': 13, 'solidcore_tess': 43}
+develop {'solidcore_record': 33}
+gpu {'solidcore_record': 21}
+viewport {'solidcore_record': 13, 'solidcore_tess': 2}
+kernel-api {'solidcore_record': 6}
+dynamics {'solidcore_record': 5}

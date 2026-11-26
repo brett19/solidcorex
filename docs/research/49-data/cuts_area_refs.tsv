@@ -1,0 +1,1159 @@
+file	line	from_area	to_area	target_module	item	item_kind	ref_kind	classification
+curve/contact.rs	13	curve	blend	blend::fillet_section::interval	Ivl	struct	use	import of type
+curve/curve/projected_pair.rs	11	curve	blend	blend::fillet_section::certificate	curve_derivs_over	fn	use	function call
+curve/curve/projected_pair.rs	11	curve	blend	blend::fillet_section::certificate	NurbsCurve	struct	use	import of type
+curve/curve/projected_pair.rs	12	curve	blend	blend::fillet_section::interval	Ivl	struct	use	import of type
+curve/curve/projected_pair.rs	13	curve	blend	blend::fillet_section::series	V3	struct	use	import of type
+curve/curve/projected_pair_all.rs	16	curve	blend	blend::fillet_section::interval	Ivl	struct	use	import of type
+curve/curve/projected_pair_all.rs	17	curve	blend	blend::fillet_section::series	V3	struct	use	import of type
+curve/curve/projected_pair_ellipse.rs	15	curve	blend	blend::fillet_section::certificate	curve_derivs_over	fn	use	function call
+curve/curve/projected_pair_ellipse.rs	16	curve	blend	blend::fillet_section::interval	Ivl	struct	use	import of type
+curve/curve/projected_pair_ellipse.rs	17	curve	blend	blend::fillet_section::series	V3	struct	use	import of type
+curve/curve/projected_pair_monotone.rs	12	curve	blend	blend::fillet_section::interval	Ivl	struct	use	import of type
+curve/curve/projected_pair_monotone.rs	13	curve	blend	blend::fillet_section::series	V3	struct	use	import of type
+curve/native_affine.rs	8	curve	blend	blend::fillet_section::interval	Ivl	struct	use	import of type
+curve/crv_in_volume.rs	137	curve	intersect	intersect::curve_class::p8	volume_discontinuity_intervals	fn	use	function call
+curve/crv_on_surf.rs	205	curve	intersect	intersect::curve_class::p8	uv_discontinuity_intervals	fn	expr	function call
+curve/curve/p5.rs	1901	curve	mass	mass::integrator	integrate_rounded_with_kernel	fn	expr	function call
+curve/conic_projection.rs	11	curve	prism	prism::profile	to_local	fn	use	function call
+curve/conic_projection.rs	11	curve	prism	prism::profile	to_world	fn	use	function call
+curve/conic_projection.rs	11	curve	prism	prism::profile	Seg2	enum	use	import of type
+curve/conic_projection.rs	12	curve	prism	prism::read	PlanarPiece	enum	use	import of type
+curve/conic_projection.rs	12	curve	prism	prism::read	PlanarSpline	struct	use	import of type
+curve/fit_projection.rs	10	curve	prism	prism::read	PlanarSpline	struct	use	import of type
+curve/spline_projection.rs	11	curve	prism	prism::read	PlanarPiece	enum	use	import of type
+curve/spline_projection.rs	11	curve	prism	prism::read	PlanarSpline	struct	use	import of type
+curve/spline_projection.rs	11	curve	prism	prism::read	Run	struct	use	import of type
+curve/spline_projection.rs	342	curve	prism	prism::read	planar_curves	fn	expr	function call
+curve/spline_projection.rs	357	curve	prism	prism::profile	frame_is_orthonormal	fn	expr	function call
+curve/spline_projection.rs	358	curve	prism	prism::profile	frame_is_orthonormal	fn	expr	function call
+curve/spline_projection.rs	381	curve	prism	prism::read	circular_boundary	fn	expr	function call
+curve/spline_projection.rs	385	curve	prism	prism::profile	to_local	fn	expr	function call
+curve/spline_projection.rs	412	curve	prism	prism::read	parallel_curves	fn	expr	function call
+curve/composite_curve/p2.rs	98	curve	topology	topology::database_io	DatabaseReader	struct	use	import of type
+curve/composite_curve/p2.rs	98	curve	topology	topology::database_io	DatabaseWriter	struct	use	import of type
+curve/composite_curve/p2.rs	98	curve	topology	topology::database_io	FileType	enum	use	import of type
+curve/composite_curve/p2.rs	98	curve	topology	topology::database_io	InputStream	struct	use	import of type
+curve/composite_curve/p2.rs	99	curve	topology	topology::geometry_write	write_curve_at	fn	use	function call
+curve/conic.rs	76	curve	topology	topology::database_io	DatabaseReader	struct	use	import of type
+curve/conic.rs	76	curve	topology	topology::database_io	FileType	enum	use	import of type
+curve/conic.rs	76	curve	topology	topology::database_io	InputStream	struct	use	import of type
+curve/crv_in_volume.rs	147	curve	topology	topology::database_io	DatabaseReader	struct	use	import of type
+curve/crv_in_volume.rs	147	curve	topology	topology::database_io	FileType	enum	use	import of type
+curve/crv_on_surf.rs	160	curve	topology	topology::database_io	DatabaseReader	struct	use	import of type
+curve/crv_on_surf.rs	160	curve	topology	topology::database_io	FileType	enum	use	import of type
+curve/curve/p2.rs	233	curve	topology	topology::database_io	DatabaseReader	struct	use	import of type
+curve/ellipse/p1.rs	150	curve	topology	topology::database_io	DatabaseReader	struct	use	import of type
+curve/ellipse/p1.rs	150	curve	topology	topology::database_io	DatabaseWriter	struct	use	import of type
+curve/ellipse/p1.rs	150	curve	topology	topology::database_io	FileType	enum	use	import of type
+curve/ellipse/p1.rs	150	curve	topology	topology::database_io	InputStream	struct	use	import of type
+curve/ellipse/p1.rs	712	curve	topology	topology::geometry_write	write_curve_at	fn	expr	function call
+curve/hermite_curve.rs	80	curve	topology	topology::database_io	DatabaseReader	struct	use	import of type
+curve/hermite_curve.rs	80	curve	topology	topology::database_io	DatabaseWriter	struct	use	import of type
+curve/hermite_curve.rs	80	curve	topology	topology::database_io	FileType	enum	use	import of type
+curve/hyperbola.rs	85	curve	topology	topology::database_io	DatabaseReader	struct	use	import of type
+curve/hyperbola.rs	85	curve	topology	topology::database_io	DatabaseWriter	struct	use	import of type
+curve/hyperbola.rs	85	curve	topology	topology::database_io	FileType	enum	use	import of type
+curve/hyperbola.rs	85	curve	topology	topology::database_io	InputStream	struct	use	import of type
+curve/iso_curve.rs	79	curve	topology	topology::database_io	DatabaseReader	struct	use	import of type
+curve/iso_curve.rs	79	curve	topology	topology::database_io	FileType	enum	use	import of type
+curve/iso_curve.rs	79	curve	topology	topology::database_io	InputStream	struct	use	import of type
+curve/line.rs	145	curve	topology	topology::database_io	DatabaseReader	struct	use	import of type
+curve/line.rs	145	curve	topology	topology::database_io	DatabaseWriter	struct	use	import of type
+curve/line.rs	145	curve	topology	topology::database_io	FileType	enum	use	import of type
+curve/line.rs	145	curve	topology	topology::database_io	InputStream	struct	use	import of type
+curve/offset_curve.rs	90	curve	topology	topology::database_io	DatabaseReader	struct	use	import of type
+curve/offset_curve.rs	90	curve	topology	topology::database_io	DatabaseWriter	struct	use	import of type
+curve/offset_curve.rs	90	curve	topology	topology::database_io	FileType	enum	use	import of type
+curve/offset_curve.rs	90	curve	topology	topology::database_io	InputStream	struct	use	import of type
+curve/offset_curve.rs	91	curve	topology	topology::geometry_write	write_curve_at	fn	use	function call
+curve/parabola.rs	86	curve	topology	topology::database_io	DatabaseReader	struct	use	import of type
+curve/parabola.rs	86	curve	topology	topology::database_io	FileType	enum	use	import of type
+curve/projected_curve.rs	89	curve	topology	topology::database_io	DatabaseReader	struct	use	import of type
+curve/projected_curve.rs	89	curve	topology	topology::database_io	FileType	enum	use	import of type
+curve/projected_curve.rs	89	curve	topology	topology::database_io	InputStream	struct	use	import of type
+curve/step_edge.rs	29	curve	topology	topology::brep_constructor	drop_limit	fn	use	function call
+curve/tangent_field.rs	83	curve	topology	topology::database_io	DatabaseReader	struct	use	import of type
+curve/tangent_field.rs	83	curve	topology	topology::database_io	FileType	enum	use	import of type
+eval/query.rs	35	eval	prism	prism::profile	Loop2	struct	use	import of type
+eval/query.rs	35	eval	prism	prism::profile	Seg2	enum	use	import of type
+eval/query.rs	35	eval	prism	prism::profile	MAX_BEZIER_CTRL	const	use	constant
+eval/query.rs	35	eval	prism	prism::profile	MAX_BEZIER_DEGREE	const	use	constant
+geom/interval_vector.rs	11	geom	blend	blend::fillet_section::interval	Ivl	struct	use	import of type
+geom/krawczyk.rs	32	geom	blend	blend::fillet_section::certificate	inverse4	fn	use	function call
+geom/krawczyk.rs	33	geom	blend	blend::fillet_section::interval	cmax	fn	use	function call
+geom/krawczyk.rs	33	geom	blend	blend::fillet_section::interval	round_up	fn	use	function call
+geom/krawczyk.rs	33	geom	blend	blend::fillet_section::interval	Ivl	struct	use	import of type
+geom/krawczyk.rs	34	geom	blend	blend::fillet_section::tay	Ring	trait	use	import of trait
+geom/krawczyk.rs	35	geom	blend	blend::fillet_section::taylor_model	TmN	struct	use	import of type
+geom/tools.rs	447	geom	boolean	boolean::topology_intersector::p1	covers_staying_clear	fn	use	function call
+geom/tools.rs	447	geom	boolean	boolean::topology_intersector::p1	Growth	struct	use	import of type
+geom/a_object.rs	1044	geom	curve	curve::curve::p5	validate_curve_cache	fn	expr	function call
+geom/global_solver.rs	113	geom	curve	curve::crv_on_surf	CrvOnSurf	struct	use	import of type
+geom/tol.rs	119	geom	curve	curve::curve::p2	Curve	struct	use	import of type
+geom/tools.rs	35	geom	curve	curve::curve::p2	Curve	struct	use	import of type
+geom/tree.rs	95	geom	curve	curve::curve_cache	BezierAux1d	struct	use	import of type
+geom/tree.rs	95	geom	curve	curve::curve_cache	BezierSpan	struct	use	import of type
+geom/tol.rs	1894	geom	heal	heal::gap	Gap	enum	expr	type value/pattern in body
+geom/tol.rs	1953	geom	heal	heal::gap	Gap	enum	expr	type value/pattern in body
+geom/tools.rs	42	geom	intersect	intersect::curve_class::p1	SourceReach	enum	use	import of type
+geom/tools.rs	703	geom	intersect	intersect::topology_solver::p2	TopologySolveOptions	struct	use	import of type
+geom/a_object.rs	84	geom	nurbs	nurbs::math	CPoint	struct	use	import of type
+geom/a_object.rs	84	geom	nurbs	nurbs::math	NOW	const	use	constant
+geom/a_object.rs	84	geom	nurbs	nurbs::math	NOZ	const	use	constant
+geom/certified.rs	18	geom	nurbs	nurbs::math	gamma	fn	use	function call
+geom/content.rs	124	geom	nurbs	nurbs::math	CPoint	struct	expr	trait impl for type
+geom/grid.rs	110	geom	nurbs	nurbs::b_spline_surface_n_lib::p2	EvaluateFlags	struct	use	import of type
+geom/grid.rs	111	geom	nurbs	nurbs::knots	Side	enum	use	import of type
+geom/object.rs	80	geom	nurbs	nurbs::b_spline_curve::p2	BoundingBoxRequest	struct	use	import of type
+geom/tol.rs	133	geom	nurbs	nurbs::math	gamma	fn	use	function call
+geom/tools.rs	45	geom	nurbs	nurbs::math	gamma	fn	use	function call
+geom/vector3d.rs	93	geom	nurbs	nurbs::math	NOW	const	use	constant
+geom/vector3d.rs	93	geom	nurbs	nurbs::math	NOZ	const	use	constant
+geom/attribute.rs	597	geom	query	query::brep	DecimateVertexData	struct	expr	type in struct/enum field
+geom/attribute.rs	599	geom	query	query::brep	QuadricVertexData	struct	expr	type in struct/enum field
+geom/attribute.rs	601	geom	query	query::brep	QuadricEdgeData	struct	expr	type in struct/enum field
+geom/object.rs	82	geom	query	query::brep	BoundingBoxOptions	struct	use	import of type
+geom/object.rs	85	geom	query	query::face::p2	face_vertices	fn	use	function call
+geom/object.rs	451	geom	query	query::brep	calculate_bounding_box	fn	expr	function call
+geom/object.rs	467	geom	query	query::face::p1	calculate_bounding_box	fn	expr	function call
+geom/object.rs	815	geom	query	query::face::p1	calculate_bounding_box	fn	expr	function call
+geom/object.rs	841	geom	query	query::edge	calculate_bounding_box	fn	expr	function call
+geom/tol.rs	795	geom	query	query::brep	calculate_bounding_box	fn	expr	function call
+geom/tol.rs	798	geom	query	query::brep	BoundingBoxOptions	struct	expr	type constructor/variant call
+geom/tools.rs	704	geom	query	query::brep::ray::live	solve_mutable_brep_point	fn	use	function call
+geom/tools.rs	704	geom	query	query::brep	BrepIdentity	struct	use	import of type
+geom/a_object.rs	1060	geom	surface	surface::surface::p1	validate_surface_cache	fn	expr	function call
+geom/grid.rs	112	geom	surface	surface::surface::p2	Surface	struct	use	import of type
+geom/grid.rs	113	geom	surface	surface::surface_cache::p1	SurfaceCache	struct	use	import of type
+geom/tol.rs	134	geom	surface	surface::volume::p1	Volume	struct	use	import of type
+geom/tol.rs	1082	geom	surface	surface::volume::p2	ignore_read	fn	expr	function call
+geom/tools.rs	46	geom	surface	surface::normal_cone	intersection_reach	fn	use	function call
+geom/tools.rs	47	geom	surface	surface::surface::p2	Surface	struct	use	import of type
+geom/transform.rs	95	geom	surface	surface::volume::p1	is_kind_of	fn	use	function call
+geom/transform.rs	95	geom	surface	surface::volume::p1	Discontinuities3d	struct	use	import of type
+geom/transform.rs	95	geom	surface	surface::volume::p1	Volume	struct	use	import of type
+geom/transform.rs	95	geom	surface	surface::volume::p1	VolumeKind	enum	use	import of type
+geom/transform.rs	98	geom	surface	surface::volume::p2	ignore_read	fn	use	function call
+geom/a_object.rs	86	geom	topology	topology::topology	TopologyRecords	trait	use	import of trait
+geom/a_object.rs	212	geom	topology	topology::shell	RegionLookup	trait	expr	trait in fn parameter
+geom/a_object.rs	297	geom	topology	topology::shell	RegionLookup	trait	expr	trait in fn parameter
+geom/a_object.rs	437	geom	topology	topology::shell	RegionLookup	trait	expr	trait in fn parameter
+geom/a_object.rs	619	geom	topology	topology::shell	RegionLookup	trait	expr	trait in fn parameter
+geom/a_object.rs	688	geom	topology	topology::shell	RegionLookup	trait	expr	trait in fn parameter
+geom/a_object.rs	690	geom	topology	topology::topology	notify_with_regions	fn	expr	function call
+geom/attribute.rs	117	geom	topology	topology::database_io	DatabaseReader	struct	use	import of type
+geom/attribute.rs	117	geom	topology	topology::database_io	FileType	enum	use	import of type
+geom/attribute.rs	117	geom	topology	topology::database_io	InputStream	struct	use	import of type
+geom/attribute.rs	1638	geom	topology	topology::shell	RegionLookup	trait	expr	trait in fn parameter
+geom/attribute.rs	1649	geom	topology	topology::shell	RegionLookup	trait	expr	trait in fn parameter
+geom/attribute.rs	1828	geom	topology	topology::shell	RegionLookup	trait	expr	trait in fn parameter
+geom/attribute.rs	2107	geom	topology	topology::shell	RegionLookup	trait	expr	trait in fn parameter
+geom/attribute.rs	2109	geom	topology	topology::shell	RegionRef	struct	expr	type in fn return type
+geom/attribute.rs	2127	geom	topology	topology::shell	RegionLookup	trait	expr	trait in fn parameter
+geom/attribute.rs	2128	geom	topology	topology	BrepId	struct	expr	type in fn return type
+geom/attribute.rs	2135	geom	topology	topology::shell	RegionLookup	trait	expr	trait in fn parameter
+geom/attribute.rs	2143	geom	topology	topology::shell	RegionLookup	trait	expr	trait in fn parameter
+geom/object.rs	88	geom	topology	topology	Brep	struct	use	import of type
+geom/object.rs	88	geom	topology	topology	BrepId	struct	use	import of type
+geom/object.rs	88	geom	topology	topology	EdgeId	struct	use	import of type
+geom/object.rs	88	geom	topology	topology	FaceId	struct	use	import of type
+geom/object.rs	88	geom	topology	topology	VertexId	struct	use	import of type
+geom/object.rs	471	geom	topology	topology::topology_traverser	face_edges	fn	expr	function call
+geom/object.rs	491	geom	topology	topology::vertex	point	fn	expr	function call
+geom/object.rs	561	geom	topology	topology::brep::p1	vertices	fn	expr	function call
+geom/object.rs	568	geom	topology	topology::brep::p1	edges	fn	expr	function call
+geom/object.rs	575	geom	topology	topology::brep::p1	faces	fn	expr	function call
+geom/object.rs	591	geom	topology	topology::topology_traverser	face_edges	fn	expr	function call
+geom/object.rs	614	geom	topology	topology::edge	vertices	fn	expr	function call
+geom/object.rs	785	geom	topology	topology::vertex	point	fn	expr	function call
+geom/tol.rs	135	geom	topology	topology	Brep	struct	use	import of type
+geom/tol.rs	135	geom	topology	topology	EdgeId	struct	use	import of type
+geom/tol.rs	135	geom	topology	topology	FaceId	struct	use	import of type
+geom/tol.rs	135	geom	topology	topology	VertexId	struct	use	import of type
+geom/tol.rs	1807	geom	topology	topology::face::p3	set_tolerance	fn	expr	function call
+geom/tol.rs	1818	geom	topology	topology::face::p4	edges	fn	expr	function call
+geom/tol.rs	1878	geom	topology	topology::vertex	set_tolerance	fn	expr	function call
+geom/tol.rs	1884	geom	topology	topology::vertex	max_gap_3d	fn	expr	function call
+geom/tol.rs	1895	geom	topology	topology::vertex	VertexGap	enum	expr	type constructor/variant call
+geom/tol.rs	1896	geom	topology	topology::vertex	VertexGap	enum	expr	type constructor/variant call
+geom/tol.rs	1904	geom	topology	topology::edge	set_tolerance	fn	expr	function call
+geom/tol.rs	1915	geom	topology	topology::face::p2	tolerance	fn	expr	function call
+geom/tol.rs	1924	geom	topology	topology::edge	set_tolerance	fn	expr	function call
+geom/tol.rs	1928	geom	topology	topology::edge	start_vertex	fn	expr	function call
+geom/tol.rs	1937	geom	topology	topology::edge	other_vertex	fn	expr	function call
+geom/tol.rs	1949	geom	topology	topology::edge	max_gap_3d	fn	expr	function call
+geom/tol.rs	1954	geom	topology	topology::edge	EdgeGap	enum	expr	type constructor/variant call
+geom/tol.rs	1955	geom	topology	topology::edge	EdgeGap	enum	expr	type constructor/variant call
+geom/tol.rs	1960	geom	topology	topology::face::p2	tolerance	fn	expr	function call
+geom/tol.rs	1975	geom	topology	topology::face::p2	tolerance	fn	expr	function call
+geom/tools.rs	48	geom	topology	topology::brep_cache	CacheObject	enum	use	import of type
+geom/tools.rs	49	geom	topology	topology	Brep	struct	use	import of type
+geom/tools.rs	49	geom	topology	topology	BrepId	struct	use	import of type
+geom/tools.rs	49	geom	topology	topology	EdgeId	struct	use	import of type
+geom/tools.rs	49	geom	topology	topology	FaceId	struct	use	import of type
+geom/tools.rs	49	geom	topology	topology	VertexId	struct	use	import of type
+geom/tools.rs	379	geom	topology	topology::edge	face_on_both_sides	fn	expr	function call
+geom/tools.rs	383	geom	topology	topology::face::p2	surface	fn	expr	function call
+geom/tools.rs	471	geom	topology	topology::vertex	edges	fn	expr	function call
+geom/tools.rs	472	geom	topology	topology::edge	start_vertex	fn	expr	function call
+geom/tools.rs	473	geom	topology	topology::edge	end_vertex	fn	expr	function call
+geom/tools.rs	557	geom	topology	topology::vertex	tolerance	fn	expr	function call
+geom/tools.rs	562	geom	topology	topology::edge	vertex	fn	expr	function call
+geom/tools.rs	567	geom	topology	topology::edge	other_vertex	fn	expr	function call
+geom/tools.rs	572	geom	topology	topology::edge	tolerance	fn	expr	function call
+geom/tools.rs	577	geom	topology	topology::edge	interval	fn	expr	function call
+geom/tools.rs	582	geom	topology	topology::edge	curve	fn	expr	function call
+geom/tools.rs	688	geom	topology	topology::brep::p1	edges	fn	expr	function call
+geom/tools.rs	705	geom	topology	topology::brep_cache	make_brep_cache	fn	use	function call
+geom/tools.rs	705	geom	topology	topology::brep_cache	CacheSource	enum	use	import of type
+geom/transform.rs	99	geom	topology	topology::database_io	DatabaseReader	struct	use	import of type
+geom/transform.rs	99	geom	topology	topology::database_io	DatabaseWriter	struct	use	import of type
+geom/transform.rs	99	geom	topology	topology::database_io	FileType	enum	use	import of type
+intersect/adv_surface_intersector/contact_identity.rs	13	intersect	blend	blend::fillet_section::certificate	nurbs_partials_over_box	fn	use	function call
+intersect/adv_surface_intersector/contact_identity.rs	14	intersect	blend	blend::fillet_section::interval	round_up	fn	use	function call
+intersect/adv_surface_intersector/contact_identity.rs	14	intersect	blend	blend::fillet_section::interval	Ivl	struct	use	import of type
+intersect/adv_surface_intersector/contact_identity.rs	15	intersect	blend	blend::fillet_section::series	v_add	fn	use	function call
+intersect/adv_surface_intersector/contact_identity.rs	15	intersect	blend	blend::fillet_section::series	v_scale	fn	use	function call
+intersect/adv_surface_intersector/contact_identity.rs	15	intersect	blend	blend::fillet_section::series	V3	struct	use	import of type
+intersect/adv_surface_intersector/contact_identity.rs	16	intersect	blend	blend::fillet_section::station	Nurbs	struct	use	import of type
+intersect/adv_surface_intersector/tangent_contacts.rs	39	intersect	blend	blend::fillet_section::series	GnScalar	trait	use	import of trait
+intersect/adv_surface_intersector/tangent_contacts.rs	39	intersect	blend	blend::fillet_section::series	V3	struct	use	import of type
+intersect/curve_class/p7.rs	128	intersect	blend	blend::fillet_section::certificate	curve_derivs_over	fn	use	function call
+intersect/curve_class/p7.rs	128	intersect	blend	blend::fillet_section::certificate	nurbs_partials_over_box	fn	use	function call
+intersect/curve_class/p7.rs	128	intersect	blend	blend::fillet_section::certificate	NurbsCurve	struct	use	import of type
+intersect/curve_class/p7.rs	131	intersect	blend	blend::fillet_section::interval	Ivl	struct	use	import of type
+intersect/curve_class/p7.rs	132	intersect	blend	blend::fillet_section::station	span	fn	use	function call
+intersect/curve_class/p7.rs	132	intersect	blend	blend::fillet_section::station	Nurbs	struct	use	import of type
+intersect/surface_drop_lib/boundary_moves.rs	89	intersect	blend	blend::fillet_section::interval	round_down	fn	use	function call
+intersect/surface_drop_lib/boundary_moves.rs	89	intersect	blend	blend::fillet_section::interval	round_up	fn	use	function call
+intersect/surface_drop_lib/boundary_moves.rs	89	intersect	blend	blend::fillet_section::interval	Ivl	struct	use	import of type
+intersect/surface_drop_lib/boundary_moves.rs	90	intersect	blend	blend::fillet_section::series	V3	struct	use	import of type
+intersect/surface_drop_lib/boundary_moves.rs	91	intersect	blend	blend::fillet_section::station	Nurbs	struct	use	import of type
+intersect/surface_drop_lib/clamped_sliver.rs	97	intersect	blend	blend::fillet_section::certificate	curve_derivs_over	fn	use	function call
+intersect/surface_drop_lib/clamped_sliver.rs	97	intersect	blend	blend::fillet_section::certificate	NurbsCurve	struct	use	import of type
+intersect/surface_drop_lib/clamped_sliver.rs	98	intersect	blend	blend::fillet_section::interval	round_up	fn	use	function call
+intersect/surface_drop_lib/clamped_sliver.rs	98	intersect	blend	blend::fillet_section::interval	Ivl	struct	use	import of type
+intersect/surface_drop_lib/clamped_sliver.rs	99	intersect	blend	blend::fillet_section::series	V3	struct	use	import of type
+intersect/surface_drop_lib/clamped_sliver.rs	100	intersect	blend	blend::fillet_section::station	Nurbs	struct	use	import of type
+intersect/surface_intersector/p1.rs	121	intersect	blend	blend::fillet_standard_solver::p1	FilletLaw	struct	use	import of type
+intersect/surface_intersector/p2.rs	73	intersect	blend	blend::fillet_standard_solver::p1	FilletLaw	struct	use	import of type
+intersect/surface_intersector/p3.rs	99	intersect	blend	blend::blend_corner::on_face	bezier_pieces	fn	use	function call
+intersect/surface_intersector/p3.rs	99	intersect	blend	blend::blend_corner::on_face	pieces_rounding	fn	use	function call
+intersect/surface_intersector/p3.rs	99	intersect	blend	blend::blend_corner::on_face	Hom	type	use	import of type alias
+intersect/surface_intersector/p3.rs	100	intersect	blend	blend::fillet_standard_solver::p1	FilletLaw	struct	use	import of type
+intersect/surface_intersector/p4.rs	111	intersect	blend	blend::fillet_standard_solver::p1	FilletLaw	struct	use	import of type
+intersect/surface_intersector/singular_splits.rs	26	intersect	blend	blend::fillet_section::interval	Ivl	struct	use	import of type
+intersect/surface_intersector/sphere_span.rs	35	intersect	blend	blend::fillet_section::interval	Ivl	struct	use	import of type
+intersect/surface_intersector/sphere_span.rs	36	intersect	blend	blend::fillet_section::station	ders_basis	fn	use	function call
+intersect/surface_intersector/sphere_span.rs	36	intersect	blend	blend::fillet_section::station	Nurbs	struct	use	import of type
+intersect/topology_solver/p1.rs	105	intersect	blend	blend::fillet_section::interval	Ivl	struct	use	import of type
+intersect/topology_solver/projected_bound.rs	12	intersect	blend	blend::fillet_section::certificate	knot_cuts	fn	use	function call
+intersect/topology_solver/projected_bound.rs	12	intersect	blend	blend::fillet_section::certificate	nurbs_partials_over_piece	fn	use	function call
+intersect/topology_solver/projected_bound.rs	13	intersect	blend	blend::fillet_section::interval	Ivl	struct	use	import of type
+intersect/topology_solver/projected_bound.rs	14	intersect	blend	blend::fillet_section::series	V3	struct	use	import of type
+intersect/topology_solver/projected_bound.rs	15	intersect	blend	blend::fillet_section::station	Nurbs	struct	use	import of type
+intersect/topology_solver/projected_bound.rs	396	intersect	blend	blend::fillet_section::station	as_b_spline	fn	use	function call
+intersect/topology_solver/projected_bound.rs	557	intersect	blend	blend::fillet_section::certificate	curve_derivs_over	fn	use	function call
+intersect/topology_solver/projected_bound.rs	557	intersect	blend	blend::fillet_section::certificate	NurbsCurve	struct	use	import of type
+intersect/topology_solver/projected_metric.rs	15	intersect	blend	blend::fillet_section::interval	Ivl	struct	use	import of type
+intersect/topology_solver/projected_metric.rs	16	intersect	blend	blend::fillet_section::series	V3	struct	use	import of type
+intersect/topology_solver/projected_residual.rs	13	intersect	blend	blend::fillet_section::certificate	knot_cuts	fn	use	function call
+intersect/topology_solver/projected_residual.rs	14	intersect	blend	blend::fillet_section::interval	Ivl	struct	use	import of type
+intersect/topology_solver/projected_residual.rs	15	intersect	blend	blend::fillet_section::station	Nurbs	struct	use	import of type
+intersect/curve_class/p4.rs	98	intersect	heal	heal::face_props	FaceProps	struct	use	import of type
+intersect/curve_class/p4.rs	98	intersect	heal	heal::face_props	HealerOpType	enum	use	import of type
+intersect/curve_class/p4.rs	98	intersect	heal	heal::face_props	LoopObject	trait	use	import of trait
+intersect/curve_class/p4.rs	98	intersect	heal	heal::face_props	PropStage	enum	use	import of type
+intersect/curve_class/p4.rs	98	intersect	heal	heal::face_props	Tri	enum	use	import of type
+intersect/curve_class/p4.rs	98	intersect	heal	heal::face_props	UNDEF_ULONG	const	use	constant
+intersect/surface_drop_lib/boundary_moves.rs	97	intersect	mass	mass::enclosure	partials_over	fn	use	function call
+intersect/surface_drop_lib/clamped_sliver.rs	111	intersect	mass	mass::enclosure	partials_over	fn	use	function call
+intersect/api_intersectors.rs	78	intersect	query	query::brep::ray::live	BrepFaceServices	struct	use	import of type
+intersect/api_intersectors.rs	78	intersect	query	query::brep::ray::live	CurveFaceObject	enum	use	import of type
+intersect/api_intersectors.rs	78	intersect	query	query::brep::ray::live	CurveFaceServices	struct	use	import of type
+intersect/curve_class/p1.rs	3080	intersect	query	query::face::p2	point_classify	fn	use	function call
+intersect/curve_class/p1.rs	3080	intersect	query	query::face::p2	BrepCacheFace	struct	use	import of type
+intersect/curve_class/p1.rs	3080	intersect	query	query::face::p2	PointClassifyOptions	struct	use	import of type
+intersect/curve_class/p3.rs	2734	intersect	query	query::curve_surface_gap	trim_image_gap_bound_within	fn	expr	function call
+intersect/curve_class/p7.rs	2691	intersect	query	query::face::p2	point_classify_prepared	fn	expr	function call
+intersect/curve_class/p7.rs	2877	intersect	query	query::face::p2	point_classify	fn	expr	function call
+intersect/curve_class/p7.rs	2917	intersect	query	query::face::p1	point_3d_classify	fn	expr	function call
+intersect/curve_class/p7.rs	2925	intersect	query	query::face::p1	Point3dClassifyOptions	struct	expr	type constructor/variant call
+intersect/curve_class/p7.rs	3067	intersect	query	query::face::p1	edge_curve_on_classify	fn	expr	function call
+intersect/curve_class/p7.rs	3073	intersect	query	query::face::p1	EdgeCurveOnOptions	struct	expr	type struct literal/pattern
+intersect/curve_class/p7.rs	3110	intersect	query	query::face::p2	PointClassifyOptions	struct	expr	type in fn return type
+intersect/curve_class/p7.rs	3111	intersect	query	query::face::p2	PointClassifyOptions	struct	expr	type struct literal/pattern
+intersect/curve_class/p7.rs	3115	intersect	query	query::face::p2	PointClassifyOptions	struct	expr	type constructor/variant call
+intersect/curve_class/p7.rs	3141	intersect	query	query::face::p1	point_3d_classify	fn	expr	function call
+intersect/curve_class/p7.rs	3149	intersect	query	query::face::p1	Point3dClassifyOptions	struct	expr	type constructor/variant call
+intersect/point_class.rs	2268	intersect	query	query::face::p2	point_classify_prepared	fn	expr	function call
+intersect/point_class.rs	2305	intersect	query	query::face::p2	face_surface_cache	fn	expr	function call
+intersect/point_class.rs	2319	intersect	query	query::face::p2	point_classify	fn	expr	function call
+intersect/point_class.rs	2425	intersect	query	query::face::p2	PointClassifyOptions	struct	expr	type in fn return type
+intersect/point_class.rs	2426	intersect	query	query::face::p2	PointClassifyOptions	struct	expr	type struct literal/pattern
+intersect/point_class.rs	2430	intersect	query	query::face::p2	PointClassifyOptions	struct	expr	type constructor/variant call
+intersect/ray_tracer.rs	123	intersect	query	query::poly	PolyBrep	struct	use	import of type
+intersect/ray_tracer.rs	123	intersect	query	query::poly	PolyFaceId	struct	use	import of type
+intersect/ray_tracer.rs	123	intersect	query	query::poly	PolyNotifyEnv	struct	use	import of type
+intersect/topology_solver/p1.rs	131	intersect	query	query::face::p2	point_classify_prepared	fn	use	function call
+intersect/topology_solver/p1.rs	131	intersect	query	query::face::p2	point_classify_requested	fn	use	function call
+intersect/topology_solver/p1.rs	131	intersect	query	query::face::p2	PointClassifyOptions	struct	use	import of type
+intersect/topology_solver/p1.rs	203	intersect	query	query::brep::ray	RayPreparation	struct	expr	type in fn return type
+intersect/topology_solver/p1.rs	2518	intersect	query	query::face::p1	point_3d_classify	fn	use	function call
+intersect/topology_solver/p1.rs	2518	intersect	query	query::face::p1	Point3dClassifyOptions	struct	use	import of type
+intersect/topology_solver/p2.rs	260	intersect	query	query::face::p2	curve_on_classify_mut	fn	expr	function call
+intersect/topology_solver/p2.rs	292	intersect	query	query::face::p2	curve_on_classify	fn	expr	function call
+intersect/views.rs	44	intersect	sweep	sweep::api_surfaces	create_extrude	fn	use	function call
+intersect/api_intersectors.rs	82	intersect	topology	topology::brep::planar_section	create_planar_section_curves	fn	use	function call
+intersect/api_intersectors.rs	82	intersect	topology	topology::brep::planar_section	PlanarSectionOptions	struct	use	import of type
+intersect/api_intersectors.rs	82	intersect	topology	topology::brep::planar_section	SectionOutputs	struct	use	import of type
+intersect/api_intersectors.rs	85	intersect	topology	topology::brep_cache	CacheObject	enum	use	import of type
+intersect/api_intersectors.rs	86	intersect	topology	topology::face::p3	face_intersect_breps	fn	use	function call
+intersect/api_intersectors.rs	86	intersect	topology	topology::face::p3	FaceBreps	enum	use	import of type
+intersect/api_intersectors.rs	86	intersect	topology	topology::face::p3	FaceIntersectOptions	struct	use	import of type
+intersect/api_intersectors.rs	87	intersect	topology	topology	Brep	struct	use	import of type
+intersect/api_intersectors.rs	88	intersect	topology	topology	FaceId	struct	use	import of type
+intersect/api_intersectors.rs	227	intersect	topology	topology::api_projection	plane_projection	fn	expr	function call
+intersect/api_intersectors.rs	537	intersect	topology	topology::face::p2	tolerance	fn	expr	function call
+intersect/api_intersectors.rs	621	intersect	topology	topology::brep::p1	brep_intersect_self_with_partial	fn	expr	function call
+intersect/api_intersectors.rs	631	intersect	topology	topology::brep::p1	brep_intersect_mut_with_partial	fn	expr	function call
+intersect/api_intersectors.rs	983	intersect	topology	topology::face::p2	surface	fn	expr	function call
+intersect/api_intersectors.rs	991	intersect	topology	topology::face::p2	uv_domain	fn	expr	function call
+intersect/api_intersectors.rs	1009	intersect	topology	topology::brep::p1	faces	fn	expr	function call
+intersect/api_intersectors.rs	1017	intersect	topology	topology::face::p2	surface	fn	expr	function call
+intersect/api_intersectors.rs	1022	intersect	topology	topology::face::p2	uv_domain	fn	expr	function call
+intersect/curve_class/p1.rs	1925	intersect	topology	topology	Brep	struct	expr	type in fn parameter
+intersect/curve_class/p1.rs	1926	intersect	topology	topology	EdgeId	struct	expr	type in fn parameter
+intersect/curve_class/p1.rs	1933	intersect	topology	topology::edgeuse::p1	set_uv_trim_curve	fn	use	function call
+intersect/curve_class/p1.rs	1933	intersect	topology	topology::edgeuse::p1	UvTrimCurveArg	enum	use	import of type
+intersect/curve_class/p1.rs	1947	intersect	topology	topology::edge	tolerance	fn	expr	function call
+intersect/curve_class/p1.rs	1949	intersect	topology	topology::edge	faces	fn	expr	function call
+intersect/curve_class/p1.rs	1950	intersect	topology	topology::edge	interval	fn	expr	function call
+intersect/curve_class/p1.rs	1951	intersect	topology	topology::edge	curve	fn	expr	function call
+intersect/curve_class/p1.rs	1972	intersect	topology	topology::edge	curve	fn	expr	function call
+intersect/curve_class/p1.rs	1994	intersect	topology	topology::edge	curve	fn	expr	function call
+intersect/curve_class/p1.rs	2109	intersect	topology	topology::edge	interval	fn	expr	function call
+intersect/curve_class/p1.rs	2110	intersect	topology	topology::edge	curve	fn	expr	function call
+intersect/curve_class/p1.rs	2134	intersect	topology	topology::edge	edgeuses	fn	expr	function call
+intersect/curve_class/p1.rs	2269	intersect	topology	topology	EdgeuseId	struct	expr	type in struct/enum field
+intersect/curve_class/p1.rs	2343	intersect	topology	topology	Brep	struct	expr	type value/pattern in body
+intersect/curve_class/p1.rs	2344	intersect	topology	topology	EdgeId	struct	expr	type value/pattern in body
+intersect/curve_class/p1.rs	2345	intersect	topology	topology	FaceId	struct	expr	type value/pattern in body
+intersect/curve_class/p1.rs	2346	intersect	topology	topology::edge	faces	fn	expr	function call
+intersect/curve_class/p1.rs	2374	intersect	topology	topology::edge	faces	fn	expr	function call
+intersect/curve_class/p1.rs	2383	intersect	topology	topology::face::p2	surface	fn	expr	function call
+intersect/curve_class/p1.rs	2389	intersect	topology	topology::edge	edgeuse_of_face	fn	expr	function call
+intersect/curve_class/p1.rs	2396	intersect	topology	topology::edgeuse::p1	uv_trim_curve	fn	expr	function call
+intersect/curve_class/p1.rs	2421	intersect	topology	topology::face::p2	surface	fn	expr	function call
+intersect/curve_class/p1.rs	2423	intersect	topology	topology::edge	edgeuse_of_face	fn	expr	function call
+intersect/curve_class/p1.rs	2429	intersect	topology	topology::edgeuse::p1	uv_trim_curve	fn	expr	function call
+intersect/curve_class/p1.rs	2445	intersect	topology	topology	Brep	struct	expr	type in fn return type
+intersect/curve_class/p1.rs	2445	intersect	topology	topology	EdgeId	struct	expr	type in fn return type
+intersect/curve_class/p1.rs	2541	intersect	topology	topology	Brep	struct	expr	type in struct/enum field
+intersect/curve_class/p1.rs	2543	intersect	topology	topology	EdgeId	struct	expr	type in struct/enum field
+intersect/curve_class/p1.rs	2546	intersect	topology	topology	Brep	struct	expr	type in struct/enum field
+intersect/curve_class/p1.rs	2547	intersect	topology	topology	EdgeId	struct	expr	type in struct/enum field
+intersect/curve_class/p1.rs	2707	intersect	topology	topology::edge	interval	fn	expr	function call
+intersect/curve_class/p1.rs	2716	intersect	topology	topology::edge	interval	fn	expr	function call
+intersect/curve_class/p1.rs	2865	intersect	topology	topology::vertex	edges	fn	expr	function call
+intersect/curve_class/p1.rs	3074	intersect	topology	topology	Brep	struct	expr	type in fn parameter
+intersect/curve_class/p1.rs	3075	intersect	topology	topology	FaceId	struct	expr	type in fn parameter
+intersect/curve_class/p1.rs	3087	intersect	topology	topology::face::p2	surface	fn	expr	function call
+intersect/curve_class/p1.rs	3090	intersect	topology	topology::face::p2	uv_domain	fn	expr	function call
+intersect/curve_class/p1.rs	3091	intersect	topology	topology::face::p2	tolerance	fn	expr	function call
+intersect/curve_class/p2.rs	106	intersect	topology	topology::brep::p1	is_live_topology_member	fn	use	function call
+intersect/curve_class/p2.rs	108	intersect	topology	topology	Brep	struct	use	import of type
+intersect/curve_class/p2.rs	108	intersect	topology	topology	EdgeuseId	struct	use	import of type
+intersect/curve_class/p2.rs	860	intersect	topology	topology::face::p2	surface	fn	expr	function call
+intersect/curve_class/p2.rs	1258	intersect	topology	topology::edge	interval	fn	expr	function call
+intersect/curve_class/p2.rs	1272	intersect	topology	topology	FaceId	struct	expr	type in fn parameter
+intersect/curve_class/p2.rs	1279	intersect	topology	topology::brep::p3	topology_ref	fn	expr	function call
+intersect/curve_class/p2.rs	1281	intersect	topology	topology::brep::p1	default_face_owner	fn	expr	function call
+intersect/curve_class/p2.rs	1412	intersect	topology	topology::edgeuse::p1	delete_uv_trim_curve	fn	expr	function call
+intersect/curve_class/p2.rs	1847	intersect	topology	topology::edge	faces	fn	expr	function call
+intersect/curve_class/p3.rs	131	intersect	topology	topology	VertexId	struct	use	import of type
+intersect/curve_class/p3.rs	194	intersect	topology	topology::edge	vertex	fn	expr	function call
+intersect/curve_class/p3.rs	195	intersect	topology	topology::edge	other_vertex	fn	expr	function call
+intersect/curve_class/p3.rs	211	intersect	topology	topology::edge	interval	fn	expr	function call
+intersect/curve_class/p3.rs	220	intersect	topology	topology::edge	curve	fn	expr	function call
+intersect/curve_class/p3.rs	229	intersect	topology	topology::vertex	point	fn	expr	function call
+intersect/curve_class/p3.rs	2344	intersect	topology	topology::vertex	edges	fn	expr	function call
+intersect/curve_class/p3.rs	2480	intersect	topology	topology::edge	start_vertex	fn	expr	function call
+intersect/curve_class/p3.rs	2481	intersect	topology	topology::edge	end_vertex	fn	expr	function call
+intersect/curve_class/p3.rs	2516	intersect	topology	topology::vertex	point	fn	expr	function call
+intersect/curve_class/p3.rs	3777	intersect	topology	topology::edge	start_vertex	fn	expr	function call
+intersect/curve_class/p3.rs	3778	intersect	topology	topology::edge	end_vertex	fn	expr	function call
+intersect/curve_class/p3.rs	3836	intersect	topology	topology::edge	start_vertex	fn	expr	function call
+intersect/curve_class/p3.rs	3837	intersect	topology	topology::edge	end_vertex	fn	expr	function call
+intersect/curve_class/p3.rs	3842	intersect	topology	topology::vertex	tolerance	fn	expr	function call
+intersect/curve_class/p3.rs	3842	intersect	topology	topology::vertex	point	fn	expr	function call
+intersect/curve_class/p4.rs	124	intersect	topology	topology	Brep	struct	use	import of type
+intersect/curve_class/p4.rs	124	intersect	topology	topology	EdgeId	struct	use	import of type
+intersect/curve_class/p4.rs	124	intersect	topology	topology	EdgeuseId	struct	use	import of type
+intersect/curve_class/p4.rs	124	intersect	topology	topology	FaceId	struct	use	import of type
+intersect/curve_class/p4.rs	124	intersect	topology	topology	VertexuseId	struct	use	import of type
+intersect/curve_class/p4.rs	424	intersect	topology	topology::loopuse	loop_face	fn	expr	function call
+intersect/curve_class/p4.rs	436	intersect	topology	topology::face::p2	upward_faceuse	fn	expr	function call
+intersect/curve_class/p4.rs	470	intersect	topology	topology::edge	edgeuses	fn	expr	function call
+intersect/curve_class/p4.rs	479	intersect	topology	topology::edge	curve	fn	expr	function call
+intersect/curve_class/p4.rs	485	intersect	topology	topology::edge	interval	fn	expr	function call
+intersect/curve_class/p4.rs	491	intersect	topology	topology::edgeuse::p1	edge	fn	expr	function call
+intersect/curve_class/p4.rs	502	intersect	topology	topology::edgeuse::p1	orientation	fn	expr	function call
+intersect/curve_class/p4.rs	530	intersect	topology	topology::edgeuse::p1	is_loop_edgeuse	fn	expr	function call
+intersect/curve_class/p4.rs	534	intersect	topology	topology::edgeuse::p3	evaluate_binormal_mut	fn	expr	function call
+intersect/curve_class/p4.rs	540	intersect	topology	topology::edgeuse::p3	BinormalOptions	struct	expr	type constructor/variant call
+intersect/curve_class/p4.rs	574	intersect	topology	topology::vertex	vertexuses_of_face	fn	expr	function call
+intersect/curve_class/p4.rs	586	intersect	topology	topology::vertexuse	vertexuse_type	fn	expr	function call
+intersect/curve_class/p4.rs	586	intersect	topology	topology::vertexuse	LOOPUSE_TYPE	const	expr	constant
+intersect/curve_class/p4.rs	602	intersect	topology	topology::vertexuse	compute_uv_sector_read_only	fn	expr	function call
+intersect/curve_class/p4.rs	606	intersect	topology	topology::vertexuse	compute_uv_sector	fn	expr	function call
+intersect/curve_class/p4.rs	659	intersect	topology	topology::edgeuse::p1	edge	fn	expr	function call
+intersect/curve_class/p4.rs	660	intersect	topology	topology::edge	curve	fn	expr	function call
+intersect/curve_class/p4.rs	661	intersect	topology	topology::edge	interval	fn	expr	function call
+intersect/curve_class/p4.rs	662	intersect	topology	topology::edgeuse::p1	orientation	fn	expr	function call
+intersect/curve_class/p4.rs	716	intersect	topology	topology::edgeuse::p1	ccw_edgeuse	fn	expr	function call
+intersect/curve_class/p4.rs	718	intersect	topology	topology::edgeuse::p1	cw_edgeuse	fn	expr	function call
+intersect/curve_class/p4.rs	1904	intersect	topology	topology::vertexuse	vertexuse_type	fn	expr	function call
+intersect/curve_class/p4.rs	1904	intersect	topology	topology::vertexuse	EDGEUSE_TYPE	const	expr	constant
+intersect/curve_class/p4.rs	1907	intersect	topology	topology::vertexuse	edgeuse	fn	expr	function call
+intersect/curve_class/p4.rs	1908	intersect	topology	topology::vertexuse	compute_t_point	fn	expr	function call
+intersect/curve_class/p4.rs	1917	intersect	topology	topology::edgeuse::p1	cw_edgeuse	fn	expr	function call
+intersect/curve_class/p4.rs	1919	intersect	topology	topology::edgeuse::p1	mate	fn	expr	function call
+intersect/curve_class/p4.rs	1926	intersect	topology	topology::edgeuse::p1	vertexuse	fn	expr	function call
+intersect/curve_class/p4.rs	1933	intersect	topology	topology::vertexuse	compute_t_point	fn	expr	function call
+intersect/curve_class/p4.rs	1939	intersect	topology	topology::edgeuse::p1	is_connected_to	fn	expr	function call
+intersect/curve_class/p4.rs	1967	intersect	topology	topology::edgeuse::p1	edge	fn	expr	function call
+intersect/curve_class/p4.rs	1968	intersect	topology	topology::edge	curve	fn	expr	function call
+intersect/curve_class/p4.rs	1974	intersect	topology	topology::edgeuse::p1	orientation	fn	expr	function call
+intersect/curve_class/p5.rs	93	intersect	topology	topology	Brep	struct	use	import of type
+intersect/curve_class/p5.rs	207	intersect	topology	topology::vertex	set_tolerance	fn	expr	function call
+intersect/curve_class/p5.rs	220	intersect	topology	topology::edgeuse::p1	delete_uv_trim_curve	fn	expr	function call
+intersect/curve_class/p5.rs	530	intersect	topology	topology::vertex	inside_face	fn	expr	function call
+intersect/curve_class/p5.rs	961	intersect	topology	topology::vertex::corner	xsect_tol_3d_of_brep	fn	expr	function call
+intersect/curve_class/p5.rs	1388	intersect	topology	topology::vertex	edges	fn	expr	function call
+intersect/curve_class/p5.rs	1389	intersect	topology	topology::edge	edgeuses	fn	expr	function call
+intersect/curve_class/p5.rs	1410	intersect	topology	topology::edge	edgeuses	fn	expr	function call
+intersect/curve_class/p5.rs	1996	intersect	topology	topology::edge	start_vertex	fn	expr	function call
+intersect/curve_class/p5.rs	2013	intersect	topology	topology::edge	other_vertex	fn	expr	function call
+intersect/curve_class/p6.rs	82	intersect	topology	topology::brep::p9	EdgeInFaceInput	struct	use	import of type
+intersect/curve_class/p6.rs	83	intersect	topology	topology::face::p4	FindVertexSectorArgs	struct	use	import of type
+intersect/curve_class/p6.rs	84	intersect	topology	topology	Brep	struct	use	import of type
+intersect/curve_class/p6.rs	84	intersect	topology	topology	EdgeId	struct	use	import of type
+intersect/curve_class/p6.rs	84	intersect	topology	topology	VertexId	struct	use	import of type
+intersect/curve_class/p6.rs	84	intersect	topology	topology	VertexuseId	struct	use	import of type
+intersect/curve_class/p6.rs	1395	intersect	topology	topology::edge	NotifyEnv	struct	expr	type in struct/enum field
+intersect/curve_class/p6.rs	1410	intersect	topology	topology::edge	NotifyEnv	struct	expr	type in struct/enum field
+intersect/curve_class/p6.rs	1412	intersect	topology	topology::brep::p9	CurveIdentity	enum	expr	type in struct/enum field
+intersect/curve_class/p6.rs	1421	intersect	topology	topology::brep::p9	CurveIdentity	enum	expr	type constructor/variant call
+intersect/curve_class/p6.rs	1867	intersect	topology	topology::brep::p5	glue_vertices	fn	expr	function call
+intersect/curve_class/p6.rs	1883	intersect	topology	topology::brep::p3	make_wire_edge	fn	expr	function call
+intersect/curve_class/p6.rs	1910	intersect	topology	topology::face::p4	find_vertex_sector	fn	expr	function call
+intersect/curve_class/p6.rs	1942	intersect	topology	topology::brep::p9	make_edge_in_face_with_vu_with_curve_identity	fn	expr	function call
+intersect/curve_class/p6.rs	1968	intersect	topology	topology::edge	set_tolerance	fn	expr	function call
+intersect/curve_class/p6.rs	1975	intersect	topology	topology::vertex	set_exact	fn	expr	function call
+intersect/curve_class/p6.rs	1982	intersect	topology	topology::vertex	refresh_tolerance	fn	expr	function call
+intersect/curve_class/p6.rs	1999	intersect	topology	topology::vertex	set_point	fn	expr	function call
+intersect/curve_class/p6.rs	2098	intersect	topology	topology::vertex	point	fn	expr	function call
+intersect/curve_class/p6.rs	2106	intersect	topology	topology::vertex	brep	fn	expr	function call
+intersect/curve_class/p6.rs	2122	intersect	topology	topology::face::p4	brep	fn	expr	function call
+intersect/curve_class/p6.rs	2138	intersect	topology	topology::face::p2	surface	fn	expr	function call
+intersect/curve_class/p6.rs	2147	intersect	topology	topology::vertex	faces	fn	expr	function call
+intersect/curve_class/p6.rs	2177	intersect	topology	topology::edge	vertex	fn	expr	function call
+intersect/curve_class/p6.rs	2189	intersect	topology	topology::edge	vertex	fn	expr	function call
+intersect/curve_class/p6.rs	2190	intersect	topology	topology::edge	other_vertex	fn	expr	function call
+intersect/curve_class/p7.rs	158	intersect	topology	topology	Brep	struct	use	import of type
+intersect/curve_class/p7.rs	158	intersect	topology	topology	EdgeId	struct	use	import of type
+intersect/curve_class/p7.rs	158	intersect	topology	topology	FaceId	struct	use	import of type
+intersect/curve_class/p7.rs	158	intersect	topology	topology	VertexId	struct	use	import of type
+intersect/curve_class/p7.rs	879	intersect	topology	topology::edgeuse::p1	face	fn	expr	function call
+intersect/curve_class/p7.rs	990	intersect	topology	topology::edgeuse::p1	face	fn	expr	function call
+intersect/curve_class/p7.rs	1000	intersect	topology	topology::vertex	edges	fn	expr	function call
+intersect/curve_class/p7.rs	2430	intersect	topology	topology::edge	curve	fn	expr	function call
+intersect/curve_class/p7.rs	2443	intersect	topology	topology::edge	interval	fn	expr	function call
+intersect/curve_class/p7.rs	2459	intersect	topology	topology::edge	is_connected_to	fn	expr	function call
+intersect/curve_class/p7.rs	2477	intersect	topology	topology::vertex	is_connected_to	fn	expr	function call
+intersect/curve_class/p7.rs	2485	intersect	topology	topology::vertex	point	fn	expr	function call
+intersect/curve_class/p7.rs	3029	intersect	topology	topology::face::p4	find_vertex_sector	fn	expr	function call
+intersect/curve_class/p7.rs	3033	intersect	topology	topology::face::p4	FindVertexSectorArgs	struct	expr	type struct literal/pattern
+intersect/curve_class/p7.rs	3859	intersect	topology	topology::edge	faces	fn	expr	function call
+intersect/curve_class/p7.rs	3860	intersect	topology	topology::edge	face_on_both_sides	fn	expr	function call
+intersect/curve_class/p9.rs	485	intersect	topology	topology::edge	start_end_vertices	fn	expr	function call
+intersect/curve_class/witness.rs	61	intersect	topology	topology	Brep	struct	use	import of type
+intersect/curve_class/witness.rs	61	intersect	topology	topology	FaceId	struct	use	import of type
+intersect/curve_class/witness.rs	61	intersect	topology	topology	VertexId	struct	use	import of type
+intersect/curve_class/witness.rs	457	intersect	topology	topology::face::p2	surface	fn	expr	function call
+intersect/curve_class/witness.rs	461	intersect	topology	topology::face::p2	tolerance	fn	expr	function call
+intersect/curve_class/witness.rs	462	intersect	topology	topology::face::p2	uv_domain	fn	expr	function call
+intersect/curve_class/witness.rs	615	intersect	topology	topology::edge	start_end_vertices	fn	expr	function call
+intersect/curve_class/witness.rs	659	intersect	topology	topology::edge	faces	fn	expr	function call
+intersect/curve_class/witness.rs	714	intersect	topology	topology::face::p2	tolerance	fn	expr	function call
+intersect/point_class.rs	204	intersect	topology	topology	Brep	struct	use	import of type
+intersect/point_class.rs	204	intersect	topology	topology	BrepId	struct	use	import of type
+intersect/point_class.rs	204	intersect	topology	topology	EdgeId	struct	use	import of type
+intersect/point_class.rs	204	intersect	topology	topology	FaceId	struct	use	import of type
+intersect/point_class.rs	220	intersect	topology	topology::edge	NotifyEnv	struct	expr	type in struct/enum field
+intersect/point_class.rs	234	intersect	topology	topology::edge	NotifyEnv	struct	expr	type in struct/enum field
+intersect/point_class.rs	236	intersect	topology	topology::brep::p9	CurveIdentity	enum	expr	type in struct/enum field
+intersect/point_class.rs	245	intersect	topology	topology::brep::p9	CurveIdentity	enum	expr	type constructor/variant call
+intersect/point_class.rs	260	intersect	topology	topology::edge	NotifyEnv	struct	expr	type in struct/enum field
+intersect/point_class.rs	609	intersect	topology	topology::vertex	regular_periodic_trim_edge	fn	expr	function call
+intersect/point_class.rs	612	intersect	topology	topology::edge	curve	fn	expr	function call
+intersect/point_class.rs	616	intersect	topology	topology::edge	tolerance	fn	expr	function call
+intersect/point_class.rs	618	intersect	topology	topology::vertex	point	fn	expr	function call
+intersect/point_class.rs	621	intersect	topology	topology::edge	interval	fn	expr	function call
+intersect/point_class.rs	741	intersect	topology	topology::vertex	brep	fn	expr	function call
+intersect/point_class.rs	748	intersect	topology	topology::edgeuse::p1	edge_brep	fn	expr	function call
+intersect/point_class.rs	755	intersect	topology	topology::face::p4	brep	fn	expr	function call
+intersect/point_class.rs	762	intersect	topology	topology::edgeuse::p1	brep	fn	expr	function call
+intersect/point_class.rs	773	intersect	topology	topology::edgeuse::p1	edge_brep	fn	expr	function call
+intersect/point_class.rs	794	intersect	topology	topology::face::p4	brep	fn	expr	function call
+intersect/point_class.rs	891	intersect	topology	topology::edge	curve	fn	expr	function call
+intersect/point_class.rs	921	intersect	topology	topology::face::p2	surface	fn	expr	function call
+intersect/point_class.rs	1081	intersect	topology	topology::vertex	is_connected_to	fn	expr	function call
+intersect/point_class.rs	1082	intersect	topology	topology::edge	is_connected_to	fn	expr	function call
+intersect/point_class.rs	1083	intersect	topology	topology::face::p4	is_connected_to	fn	expr	function call
+intersect/point_class.rs	1084	intersect	topology	topology::loopuse	loop_is_connected_to	fn	expr	function call
+intersect/point_class.rs	1085	intersect	topology	topology::vertexuse	is_connected_to	fn	expr	function call
+intersect/point_class.rs	1086	intersect	topology	topology::edgeuse::p1	is_connected_to	fn	expr	function call
+intersect/point_class.rs	1087	intersect	topology	topology::loopuse	is_connected_to	fn	expr	function call
+intersect/point_class.rs	1266	intersect	topology	topology::vertex	set_point	fn	expr	function call
+intersect/point_class.rs	1462	intersect	topology	topology::edge	curve	fn	expr	function call
+intersect/point_class.rs	1463	intersect	topology	topology::edge	interval	fn	expr	function call
+intersect/point_class.rs	1469	intersect	topology	topology::face::p2	surface	fn	expr	function call
+intersect/point_class.rs	1470	intersect	topology	topology::face::p2	uv_domain	fn	expr	function call
+intersect/point_class.rs	1618	intersect	topology	topology::vertex	point	fn	expr	function call
+intersect/point_class.rs	1629	intersect	topology	topology::edge	curve	fn	expr	function call
+intersect/point_class.rs	1635	intersect	topology	topology::face::p2	surface	fn	expr	function call
+intersect/point_class.rs	1798	intersect	topology	topology::brep::p9	make_shell_vertex	fn	expr	function call
+intersect/point_class.rs	1804	intersect	topology	topology::brep::p9	make_vertex_loop	fn	expr	function call
+intersect/point_class.rs	1818	intersect	topology	topology::brep::p9	make_vertex_split_edge_with_curve_identity	fn	expr	function call
+intersect/point_class.rs	1864	intersect	topology	topology::edge	NotifyEnv	struct	expr	type value/pattern in body
+intersect/point_class.rs	1866	intersect	topology	topology::vertex	set_point	fn	expr	function call
+intersect/point_class.rs	1885	intersect	topology	topology::vertex	tolerance	fn	expr	function call
+intersect/point_class.rs	1888	intersect	topology	topology::vertex	set_exact	fn	expr	function call
+intersect/point_class.rs	1890	intersect	topology	topology::vertex	set_tolerance	fn	expr	function call
+intersect/point_class.rs	1903	intersect	topology	topology::vertex	carry_far_edge_ends	fn	expr	function call
+intersect/point_class.rs	1905	intersect	topology	topology::vertex	cover_merged_ends	fn	expr	function call
+intersect/point_class.rs	2043	intersect	topology	topology::vertex	tolerance	fn	expr	function call
+intersect/point_class.rs	2049	intersect	topology	topology::edge	tolerance	fn	expr	function call
+intersect/point_class.rs	2055	intersect	topology	topology::face::p2	tolerance	fn	expr	function call
+intersect/point_class.rs	2066	intersect	topology	topology::edgeuse::p1	tolerance	fn	expr	function call
+intersect/point_class.rs	2086	intersect	topology	topology::face::p2	tolerance	fn	expr	function call
+intersect/point_class.rs	2107	intersect	topology	topology::edge	tolerance	fn	expr	function call
+intersect/point_class.rs	2144	intersect	topology	topology::edge	curve	fn	expr	function call
+intersect/point_class.rs	2147	intersect	topology	topology::edge	interval	fn	expr	function call
+intersect/point_class.rs	2159	intersect	topology	topology::edge	tolerance	fn	expr	function call
+intersect/point_class.rs	2310	intersect	topology	topology::face::p4	has_loopuses	fn	expr	function call
+intersect/point_class.rs	2348	intersect	topology	topology::face::p2	surface	fn	expr	function call
+intersect/point_class.rs	2479	intersect	topology	topology::face::p2	surface	fn	expr	function call
+intersect/point_class.rs	2551	intersect	topology	topology::face::p2	surface	fn	expr	function call
+intersect/point_class.rs	2626	intersect	topology	topology::face::p4	has_loopuses	fn	expr	function call
+intersect/point_class.rs	2801	intersect	topology	topology::edgeuse::p1	edge	fn	expr	function call
+intersect/ray_tracer.rs	128	intersect	topology	topology::brep_cache	arena_identity	fn	use	function call
+intersect/ray_tracer.rs	128	intersect	topology	topology::brep_cache	make_brep_cache	fn	use	function call
+intersect/ray_tracer.rs	128	intersect	topology	topology::brep_cache	BrepCache	struct	use	import of type
+intersect/ray_tracer.rs	128	intersect	topology	topology::brep_cache	CacheObject	enum	use	import of type
+intersect/ray_tracer.rs	128	intersect	topology	topology::brep_cache	CacheSource	enum	use	import of type
+intersect/ray_tracer.rs	131	intersect	topology	topology::topology	TopologyRecords	trait	use	import of trait
+intersect/ray_tracer.rs	132	intersect	topology	topology	EdgeId	struct	use	import of type
+intersect/ray_tracer.rs	132	intersect	topology	topology	FaceId	struct	use	import of type
+intersect/ray_tracer.rs	132	intersect	topology	topology	VertexId	struct	use	import of type
+intersect/surface_drop_lib/p2.rs	101	intersect	topology	topology	ObjectHandle	struct	use	import of type
+intersect/surface_drop_lib/p3.rs	167	intersect	topology	topology	ObjectHandle	struct	use	import of type
+intersect/surface_intersector/p3.rs	128	intersect	topology	topology	ObjectHandle	struct	use	import of type
+intersect/topology_solver/p1.rs	137	intersect	topology	topology::face::p2	create_curves_by_trimming_snapshot	fn	use	function call
+intersect/topology_solver/p1.rs	209	intersect	topology	topology::brep_cache	BrepCache	struct	expr	type in fn return type
+intersect/topology_solver/p1.rs	305	intersect	topology	topology	Brep	struct	expr	type in fn return type
+intersect/topology_solver/p1.rs	305	intersect	topology	topology	FaceId	struct	expr	type in fn return type
+intersect/topology_solver/p1.rs	317	intersect	topology	topology	Brep	struct	expr	type in fn parameter
+intersect/topology_solver/p1.rs	317	intersect	topology	topology	FaceId	struct	expr	type in fn parameter
+intersect/topology_solver/p2.rs	68	intersect	topology	topology::face::p3	IntersectObject	enum	use	import of type
+intersect/topology_solver/p2.rs	68	intersect	topology	topology::face::p3	IntersectObjects	struct	use	import of type
+intersect/topology_solver/p2.rs	68	intersect	topology	topology::face::p3	IntersectObjectsMut	struct	use	import of type
+intersect/topology_solver/projected_bound.rs	644	intersect	topology	topology	Brep	struct	expr	type in fn parameter
+intersect/topology_solver/projected_bound.rs	645	intersect	topology	topology	FaceId	struct	expr	type in fn parameter
+intersect/topology_solver/projected_bound.rs	654	intersect	topology	topology	Brep	struct	expr	type in fn parameter
+intersect/topology_solver/projected_bound.rs	655	intersect	topology	topology	FaceId	struct	expr	type in fn parameter
+intersect/topology_solver/projected_bound.rs	658	intersect	topology	topology::trimming_tools	face_uv_curves_present	fn	expr	function call
+intersect/topology_solver/projected_bound.rs	661	intersect	topology	topology::face::p1	create_oriented_trim_boundary	fn	expr	function call
+intersect/topology_solver/projected_bound.rs	674	intersect	topology	topology::face::p1	OrientedTrimBoundary	struct	expr	type in fn parameter
+mass/enclosure.rs	73	mass	blend	blend::fillet_section::certificate	curve_derivs_over	fn	use	function call
+mass/enclosure.rs	73	mass	blend	blend::fillet_section::certificate	nurbs_partials_within_span_centred	fn	use	function call
+mass/enclosure.rs	73	mass	blend	blend::fillet_section::certificate	partials_hull	fn	use	function call
+mass/enclosure.rs	73	mass	blend	blend::fillet_section::certificate	NurbsCurve	struct	use	import of type
+mass/enclosure.rs	76	mass	blend	blend::fillet_section::interval	Ivl	struct	use	import of type
+mass/enclosure.rs	77	mass	blend	blend::fillet_section::series	V3	struct	use	import of type
+mass/enclosure.rs	78	mass	blend	blend::fillet_section::station	as_b_spline	fn	use	function call
+mass/enclosure.rs	78	mass	blend	blend::fillet_section::station	knot	fn	use	function call
+mass/enclosure.rs	78	mass	blend	blend::fillet_section::station	span	fn	use	function call
+mass/enclosure.rs	78	mass	blend	blend::fillet_section::station	Nurbs	struct	use	import of type
+mass/enclosure.rs	78	mass	blend	blend::fillet_section::station	Partials	struct	use	import of type
+mass/integrator/properties.rs	428	mass	blend	blend::fillet_section::certificate	NurbsCurve	struct	use	import of type
+mass/integrator/properties.rs	429	mass	blend	blend::fillet_section::interval	Ivl	struct	use	import of type
+mass/integrator/properties.rs	578	mass	blend	blend::fillet_section::interval	Ivl	struct	use	import of type
+mass/integrator/properties.rs	579	mass	blend	blend::fillet_section::station	Nurbs	struct	use	import of type
+mass/integrator/properties.rs	740	mass	blend	blend::fillet_section::certificate	NurbsCurve	struct	expr	type constructor/variant call
+mass/loop_area.rs	48	mass	blend	blend::fillet_section::certificate	curve_derivs_over	fn	use	function call
+mass/loop_area.rs	48	mass	blend	blend::fillet_section::certificate	NurbsCurve	struct	use	import of type
+mass/loop_area.rs	49	mass	blend	blend::fillet_section::interval	Ivl	struct	use	import of type
+mass/loop_area.rs	50	mass	blend	blend::fillet_section::series	V3	struct	use	import of type
+mass/loop_area.rs	51	mass	blend	blend::fillet_section::station	knot	fn	use	function call
+math.rs	288	math	nurbs	nurbs::math	gamma	fn	use	function call
+math.rs	386	math	nurbs	nurbs::math	gamma	fn	use	function call
+math.rs	511	math	nurbs	nurbs::math	gamma	fn	use	function call
+nurbs/b_spline_curve/trim_image.rs	76	nurbs	blend	blend::fillet_section::certificate	curve_derivs_over	fn	use	function call
+nurbs/b_spline_curve/trim_image.rs	76	nurbs	blend	blend::fillet_section::certificate	NurbsCurve	struct	use	import of type
+nurbs/b_spline_curve/trim_image.rs	77	nurbs	blend	blend::fillet_section::interval	round_up	fn	use	function call
+nurbs/b_spline_curve/trim_image.rs	77	nurbs	blend	blend::fillet_section::interval	Ivl	struct	use	import of type
+nurbs/b_spline_curve/trim_image.rs	78	nurbs	blend	blend::fillet_section::series	V3	struct	use	import of type
+nurbs/b_spline_curve/trim_image.rs	79	nurbs	blend	blend::fillet_section::station	as_b_spline	fn	use	function call
+nurbs/b_spline_curve/trim_image.rs	79	nurbs	blend	blend::fillet_section::station	ders_basis	fn	use	function call
+nurbs/b_spline_curve/trim_image.rs	79	nurbs	blend	blend::fillet_section::station	span	fn	use	function call
+nurbs/b_spline_curve/trim_image.rs	79	nurbs	blend	blend::fillet_section::station	Nurbs	struct	use	import of type
+nurbs/b_spline_curve_n_lib.rs	134	nurbs	blend	blend::fillet_section::interval	Ivl	struct	use	import of type
+nurbs/b_spline_curve/p1.rs	127	nurbs	curve	curve::curve::p2	BSPLINE_CURVE_TYPE	const	use	constant
+nurbs/b_spline_curve/p1.rs	407	nurbs	curve	curve::curve::p2	evaluate_continuity	fn	expr	function call
+nurbs/b_spline_curve/p1.rs	427	nurbs	curve	curve::curve::p2	approximate_length	fn	expr	function call
+nurbs/b_spline_curve/p1.rs	440	nurbs	curve	curve::curve::p2	Curve	struct	expr	type constructor/variant call
+nurbs/b_spline_curve/p1.rs	731	nurbs	curve	curve::curve::p2	is_kind_of	fn	expr	function call
+nurbs/b_spline_curve/p2.rs	98	nurbs	curve	curve::curve::p2	Curve	struct	use	import of type
+nurbs/b_spline_curve/p2.rs	98	nurbs	curve	curve::curve::p2	CurveKind	enum	use	import of type
+nurbs/b_spline_curve/p2.rs	99	nurbs	curve	curve::ellipse::p2	Ellipse	struct	use	import of type
+nurbs/b_spline_curve/p2.rs	99	nurbs	curve	curve::ellipse::p2	EllipseOptions	struct	use	import of type
+nurbs/b_spline_curve/p2.rs	100	nurbs	curve	curve::line	BoundedLineOptions	struct	use	import of type
+nurbs/b_spline_curve/p2.rs	100	nurbs	curve	curve::line	Line	struct	use	import of type
+nurbs/b_spline_curve/p2.rs	101	nurbs	curve	curve::offset_curve	OffsetCurve	struct	use	import of type
+nurbs/b_spline_curve/p2.rs	219	nurbs	curve	curve::curve::p5	is_line_base	fn	expr	function call
+nurbs/b_spline_curve/p2.rs	229	nurbs	curve	curve::curve::p4	is_degenerate_base	fn	expr	function call
+nurbs/b_spline_curve/p2.rs	234	nurbs	curve	curve::curve::p4	is_closed_base	fn	expr	function call
+nurbs/b_spline_curve/p2.rs	253	nurbs	curve	curve::curve::p5	is_arc_base	fn	expr	function call
+nurbs/b_spline_curve/p2.rs	305	nurbs	curve	curve::curve::p1	ApproximateCurveOptions	struct	expr	type struct literal/pattern
+nurbs/b_spline_curve/p3.rs	112	nurbs	curve	curve::curve::p2	Curve	struct	use	import of type
+nurbs/b_spline_curve/p3.rs	112	nurbs	curve	curve::curve::p2	CurvePropertyType	enum	use	import of type
+nurbs/b_spline_curve/p3.rs	113	nurbs	curve	curve::curve::p7	PropertyAnalysis	struct	use	import of type
+nurbs/b_spline_curve/p3.rs	113	nurbs	curve	curve::curve::p7	PropertyAnalysisOptions	struct	use	import of type
+nurbs/b_spline_curve/p3.rs	114	nurbs	curve	curve::curve::p8	CurveIntersectOptions	struct	use	import of type
+nurbs/b_spline_curve/p3.rs	204	nurbs	curve	curve::curve::p2	approximate_length	fn	expr	function call
+nurbs/b_spline_curve/p3.rs	401	nurbs	curve	curve::curve::p4	assert_valid_base	fn	expr	function call
+nurbs/b_spline_curve/p3.rs	2412	nurbs	curve	curve::curve::p2	CurveKind	enum	use	import of type
+nurbs/b_spline_curve_n_lib.rs	569	nurbs	curve	curve::curve::p2	approximate_length	fn	expr	function call
+nurbs/b_spline_surface/p2.rs	97	nurbs	curve	curve::curve::p2	CRV_ON_SURF_TYPE	const	use	constant
+nurbs/b_spline_surface/p2.rs	98	nurbs	curve	curve::curve::p2	Curve	struct	use	import of type
+nurbs/b_spline_surface/p2.rs	99	nurbs	curve	curve::curve::p2	CurveKind	enum	use	import of type
+nurbs/b_spline_surface/p2.rs	100	nurbs	curve	curve::iso_curve	IsoCurve	struct	use	import of type
+nurbs/b_spline_surface_n_lib/p1.rs	223	nurbs	curve	curve::curve::p2	Curve	struct	use	import of type
+nurbs/b_spline_surface_n_lib/p1.rs	223	nurbs	curve	curve::curve::p2	CurveKind	enum	use	import of type
+nurbs/b_spline_surface_n_lib/p2.rs	81	nurbs	curve	curve::curve::p1	SpanAccuracy	struct	use	import of type
+nurbs/b_spline_surface_n_lib/p2.rs	81	nurbs	curve	curve::curve::p1	MAX_APPROX_SPANS	const	use	constant
+nurbs/b_spline_surface_n_lib/p2.rs	82	nurbs	curve	curve::curve::p2	Curve	struct	use	import of type
+nurbs/b_spline_surface_n_lib/p2.rs	83	nurbs	curve	curve::curve::p2	add_to_curve	fn	use	function call
+nurbs/b_spline_surface_n_lib/p2.rs	83	nurbs	curve	curve::curve::p2	flush_crv	fn	use	function call
+nurbs/b_spline_surface_n_lib/p2.rs	83	nurbs	curve	curve::curve::p2	pop_stack	fn	use	function call
+nurbs/b_spline_surface_n_lib/p2.rs	83	nurbs	curve	curve::curve::p2	push_point	fn	use	function call
+nurbs/b_spline_surface_n_lib/p2.rs	83	nurbs	curve	curve::curve::p2	stack_look	fn	use	function call
+nurbs/b_spline_surface_n_lib/p2.rs	83	nurbs	curve	curve::curve::p2	CurveEvaluate	trait	use	import of trait
+nurbs/b_spline_surface_n_lib/p2.rs	83	nurbs	curve	curve::curve::p2	CurveKind	enum	use	import of type
+nurbs/b_spline_surface_n_lib/p2.rs	86	nurbs	curve	curve::curve::p3	PointSolveOptions	struct	use	import of type
+nurbs/b_spline_surface_n_lib/p2.rs	87	nurbs	curve	curve::curve::p4	is_degenerate_base	fn	use	function call
+nurbs/b_spline_surface_n_lib/p2.rs	88	nurbs	curve	curve::hermite_curve	HermiteCurve	struct	use	import of type
+nurbs/b_spline_surface_n_lib/p2.rs	89	nurbs	curve	curve::tangent_field	CurveEnd	struct	use	import of type
+nurbs/b_spline_surface_n_lib/p2.rs	89	nurbs	curve	curve::tangent_field	TangentDirType	enum	use	import of type
+nurbs/b_spline_surface_n_lib/p2.rs	89	nurbs	curve	curve::tangent_field	TangentField	struct	use	import of type
+nurbs/b_spline_surface_n_lib/p2.rs	701	nurbs	curve	curve::curve::p3	local_curve_intersect	fn	expr	function call
+nurbs/b_spline_surface_n_lib/p2.rs	1115	nurbs	curve	curve::curve::p2	approximate_length	fn	expr	function call
+nurbs/certificate.rs	461	nurbs	curve	curve::curve::p2	Curve	struct	expr	type in fn parameter
+nurbs/gordon.rs	47	nurbs	curve	curve::curve::p2	Curve	struct	use	import of type
+nurbs/b_spline_surface_n_lib/p1.rs	221	nurbs	intersect	intersect::surface_drop_lib::p3	DropSolveContext	struct	expr	type in fn parameter
+nurbs/b_spline_surface_n_lib/p1.rs	1029	nurbs	intersect	intersect::surface_drop_lib::p3	DropSolveContext	struct	expr	type in fn parameter
+nurbs/b_spline_surface_n_lib/p2.rs	128	nurbs	intersect	intersect::surface_drop_lib::p3	DropSolveContext	struct	use	import of type
+nurbs/gordon.rs	51	nurbs	intersect	intersect::api_intersectors	intersect_curves	fn	use	function call
+nurbs/b_spline_curve/speed.rs	14	nurbs	mass	mass::integrator	gamma	fn	use	function call
+nurbs/certificate.rs	86	nurbs	offset	offset::construction::bernstein	Bernstein2	struct	use	import of type
+nurbs/certificate.rs	86	nurbs	offset	offset::construction::bernstein	Binomials	struct	use	import of type
+nurbs/certificate.rs	86	nurbs	offset	offset::construction::bernstein	MAX_DEGREE	const	use	constant
+nurbs/b_spline_surface_n_lib/p2.rs	3633	nurbs	query	query::continuity	seam_normal_angle	fn	expr	function call
+nurbs/b_spline_surface_n_lib/p2.rs	3685	nurbs	query	query::seam_bound	curve_b_spline	fn	expr	function call
+nurbs/b_spline_surface_n_lib/p2.rs	3688	nurbs	query	query::seam_bound	seam_angle_within	fn	expr	function call
+nurbs/b_spline_surface_n_lib/p2.rs	3716	nurbs	query	query::seam_bound	curve_b_spline	fn	expr	function call
+nurbs/b_spline_surface_n_lib/p2.rs	3719	nurbs	query	query::seam_bound	seam_angle_lower_bound	fn	expr	function call
+nurbs/certificate.rs	87	nurbs	query	query::distance_bound	pieces_about	fn	use	function call
+nurbs/certificate.rs	87	nurbs	query	query::distance_bound	Piece	struct	use	import of type
+nurbs/certificate.rs	549	nurbs	query	query::api_queries	surface_closest_point	fn	expr	function call
+nurbs/b_spline_curve/p3.rs	141	nurbs	surface	surface::surface::p2	Surface	struct	use	import of type
+nurbs/b_spline_curve/trim_image.rs	83	nurbs	surface	surface::surface::p2	Surface	struct	use	import of type
+nurbs/b_spline_curve/trim_image.rs	83	nurbs	surface	surface::surface::p2	SurfaceKind	enum	use	import of type
+nurbs/b_spline_curve_n_lib.rs	171	nurbs	surface	surface::surface::p2	drop_vectors	fn	use	function call
+nurbs/b_spline_curve_n_lib.rs	171	nurbs	surface	surface::surface::p2	SurfaceEvaluate	trait	use	import of trait
+nurbs/b_spline_surface/p1.rs	160	nurbs	surface	surface::surface::p1	SurfaceSolveContext	trait	use	import of trait
+nurbs/b_spline_surface/p1.rs	595	nurbs	surface	surface::surface::p7	base_evaluate_normal	fn	expr	function call
+nurbs/b_spline_surface/p1.rs	628	nurbs	surface	surface::surface::p2	Surface	struct	expr	type constructor/variant call
+nurbs/b_spline_surface/p1.rs	629	nurbs	surface	surface::surface::p1	base_is_degenerate_curve	fn	expr	function call
+nurbs/b_spline_surface/p1.rs	636	nurbs	surface	surface::surface::p2	Surface	struct	expr	type in fn parameter
+nurbs/b_spline_surface/p1.rs	642	nurbs	surface	surface::surface::p4	NoObject	struct	expr	type value/pattern in body
+nurbs/b_spline_surface/p1.rs	662	nurbs	surface	surface::surface::p2	Surface	struct	expr	type in fn parameter
+nurbs/b_spline_surface/p1.rs	697	nurbs	surface	surface::surface::p2	Surface	struct	expr	type in fn parameter
+nurbs/b_spline_surface/p1.rs	702	nurbs	surface	surface::surface::p4	global_point_solve_starts	fn	expr	function call
+nurbs/b_spline_surface/p1.rs	725	nurbs	surface	surface::surface::p2	Surface	struct	expr	type in fn parameter
+nurbs/b_spline_surface/p1.rs	736	nurbs	surface	surface::surface::p2	Surface	struct	expr	type in fn parameter
+nurbs/b_spline_surface/p1.rs	741	nurbs	surface	surface::surface::p2	SurfaceKind	enum	expr	type constructor/variant call
+nurbs/b_spline_surface/p1.rs	744	nurbs	surface	surface::surface::p7	base_is_closed	fn	expr	function call
+nurbs/b_spline_surface/p1.rs	1077	nurbs	surface	surface::surface::p2	is_kind_of	fn	expr	function call
+nurbs/b_spline_surface/p1.rs	1405	nurbs	surface	surface::surface::p2	Surface	struct	expr	type in fn parameter
+nurbs/b_spline_surface/p1.rs	1970	nurbs	surface	surface::surface::p2	Surface	struct	expr	type in fn return type
+nurbs/b_spline_surface/p1.rs	1974	nurbs	surface	surface::surface::p2	Surface	struct	expr	type constructor/variant call
+nurbs/b_spline_surface/p1.rs	1975	nurbs	surface	surface::surface::p2	Surface	struct	expr	type constructor/variant call
+nurbs/b_spline_surface/p1.rs	1976	nurbs	surface	surface::offset_surface	OffsetSurface	struct	expr	type constructor/variant call
+nurbs/b_spline_surface/p1.rs	1981	nurbs	surface	surface::offset_surface	SS_UNKNOWN	const	expr	constant
+nurbs/b_spline_surface/p1.rs	2095	nurbs	surface	surface::surface::p2	Surface	struct	expr	type constructor/variant call
+nurbs/b_spline_surface/p1.rs	2108	nurbs	surface	surface::surface::p2	Surface	struct	expr	type in fn parameter
+nurbs/b_spline_surface/p1.rs	2114	nurbs	surface	surface::surface::p4	NoObject	struct	expr	type value/pattern in body
+nurbs/b_spline_surface/p1.rs	2137	nurbs	surface	surface::surface::p2	Surface	struct	expr	type in fn parameter
+nurbs/b_spline_surface/p1.rs	2159	nurbs	surface	surface::surface::p2	Surface	struct	expr	type in fn parameter
+nurbs/b_spline_surface/p2.rs	124	nurbs	surface	surface::plane::p1	Plane	struct	use	import of type
+nurbs/b_spline_surface/p2.rs	125	nurbs	surface	surface::surf_of_extrusion::p1	SurfOfExtrusion	struct	use	import of type
+nurbs/b_spline_surface/p2.rs	126	nurbs	surface	surface::surf_of_revolution::p1	SurfOfRevolution	struct	use	import of type
+nurbs/b_spline_surface/p2.rs	127	nurbs	surface	surface::surface::p2	Surface	struct	use	import of type
+nurbs/b_spline_surface/p2.rs	252	nurbs	surface	surface::cone::p1	Cone	struct	expr	type constructor/variant call
+nurbs/b_spline_surface/p2.rs	255	nurbs	surface	surface::sphere	Sphere	struct	expr	type constructor/variant call
+nurbs/b_spline_surface/p2.rs	306	nurbs	surface	surface::surface::p1	evaluate_1st_derivatives	fn	expr	function call
+nurbs/b_spline_surface/p2.rs	366	nurbs	surface	surface::surface::p1	base_is_degenerate_point	fn	expr	function call
+nurbs/b_spline_surface/p2.rs	372	nurbs	surface	surface::surface::p7	b_spline_is_planar	fn	expr	function call
+nurbs/b_spline_surface/p2.rs	382	nurbs	surface	surface::surface::p7	base_is_closed	fn	expr	function call
+nurbs/b_spline_surface/p2.rs	435	nurbs	surface	surface::surface::replay	choose	fn	expr	function call
+nurbs/b_spline_surface/p2.rs	438	nurbs	surface	surface::surface::replay	Seam	enum	expr	type value/pattern in body
+nurbs/b_spline_surface_n_lib/p1.rs	216	nurbs	surface	surface::surface::p2	Surface	struct	expr	type in fn parameter
+nurbs/b_spline_surface_n_lib/p1.rs	1004	nurbs	surface	surface::surface::p2	Surface	struct	expr	type in fn parameter
+nurbs/b_spline_surface_n_lib/p1.rs	1007	nurbs	surface	surface::surface::p4	NoObject	struct	expr	type value/pattern in body
+nurbs/b_spline_surface_n_lib/p1.rs	1027	nurbs	surface	surface::surface::p2	Surface	struct	expr	type in fn parameter
+nurbs/b_spline_surface_n_lib/p2.rs	122	nurbs	surface	surface::surface::p2	Surface	struct	use	import of type
+nurbs/b_spline_surface_n_lib/p2.rs	678	nurbs	surface	surface::surface::p1	evaluate_1st_derivatives	fn	expr	function call
+nurbs/b_spline_surface_n_lib/p2.rs	816	nurbs	surface	surface::surface::p4	NoObject	struct	expr	type value/pattern in body
+nurbs/b_spline_surface_n_lib/p2.rs	850	nurbs	surface	surface::surface::p1	SurfaceSolveContext	trait	expr	trait in fn parameter
+nurbs/b_spline_surface_n_lib/p2.rs	890	nurbs	surface	surface::surface::p1	SurfaceSolveContext	trait	expr	trait in fn parameter
+nurbs/b_spline_surface_n_lib/p2.rs	1840	nurbs	surface	surface::surface::p2	derivative_limit	fn	expr	function call
+nurbs/b_spline_surface_n_lib/p2.rs	2357	nurbs	surface	surface::surface::p1	evaluate_1st_derivatives	fn	expr	function call
+nurbs/certificate.rs	88	nurbs	surface	surface::surface::p2	Surface	struct	use	import of type
+nurbs/crv_proportion.rs	47	nurbs	surface	surface::extend	ExtendRefusal	enum	use	import of type
+nurbs/gordon.rs	799	nurbs	surface	surface::surface::p2	Surface	struct	expr	type constructor/variant call
+nurbs/b_spline_curve/p2.rs	124	nurbs	topology	topology::database_io	DatabaseReader	struct	use	import of type
+nurbs/b_spline_curve/p2.rs	124	nurbs	topology	topology::database_io	DatabaseWriter	struct	use	import of type
+nurbs/b_spline_curve/p2.rs	124	nurbs	topology	topology::database_io	FileType	enum	use	import of type
+nurbs/b_spline_curve/p2.rs	124	nurbs	topology	topology::database_io	InputStream	struct	use	import of type
+nurbs/b_spline_surface/p1.rs	161	nurbs	topology	topology::database_io	DatabaseReader	struct	use	import of type
+nurbs/b_spline_surface/p1.rs	161	nurbs	topology	topology::database_io	DatabaseWriter	struct	use	import of type
+nurbs/b_spline_surface/p1.rs	161	nurbs	topology	topology::database_io	FileType	enum	use	import of type
+nurbs/b_spline_surface/p1.rs	2273	nurbs	topology	topology::database_io	InputStream	struct	expr	type value/pattern in body
+nurbs/b_spline_surface/p1.rs	2280	nurbs	topology	topology::database_io	InputStream	struct	expr	type value/pattern in body
+nurbs/b_spline_surface/p1.rs	2418	nurbs	topology	topology::database_io	InputStream	struct	expr	type value/pattern in body
+nurbs/b_spline_surface/p1.rs	2435	nurbs	topology	topology::database_io	InputStream	struct	expr	type value/pattern in body
+query/api_queries.rs	1679	query	blend	blend::fillet_section::interval	cmax	fn	use	function call
+query/api_queries.rs	1679	query	blend	blend::fillet_section::interval	round_up	fn	use	function call
+query/api_queries.rs	1679	query	blend	blend::fillet_section::interval	Ivl	struct	use	import of type
+query/api_queries.rs	2429	query	blend	blend::fillet_section::interval	cmax	fn	use	function call
+query/api_queries.rs	2429	query	blend	blend::fillet_section::interval	round_up	fn	use	function call
+query/api_queries.rs	2429	query	blend	blend::fillet_section::interval	Ivl	struct	use	import of type
+query/curve_surface_gap.rs	35	query	blend	blend::fillet_section::certificate	below_continuity	fn	use	function call
+query/curve_surface_gap.rs	35	query	blend	blend::fillet_section::certificate	curve_derivs_over	fn	use	function call
+query/curve_surface_gap.rs	35	query	blend	blend::fillet_section::certificate	knot_cuts	fn	use	function call
+query/curve_surface_gap.rs	35	query	blend	blend::fillet_section::certificate	nurbs_partials_over_piece	fn	use	function call
+query/curve_surface_gap.rs	35	query	blend	blend::fillet_section::certificate	partials_hull	fn	use	function call
+query/curve_surface_gap.rs	35	query	blend	blend::fillet_section::certificate	past_one_low_line	fn	use	function call
+query/curve_surface_gap.rs	35	query	blend	blend::fillet_section::certificate	EndContinuation	struct	use	import of type
+query/curve_surface_gap.rs	35	query	blend	blend::fillet_section::certificate	NurbsCurve	struct	use	import of type
+query/curve_surface_gap.rs	39	query	blend	blend::fillet_section::interval	Ivl	struct	use	import of type
+query/curve_surface_gap.rs	40	query	blend	blend::fillet_section::offset_box	offset_and_base_partials_over_piece	fn	use	function call
+query/curve_surface_gap.rs	41	query	blend	blend::fillet_section::series	V3	struct	use	import of type
+query/curve_surface_gap.rs	42	query	blend	blend::fillet_section::station	as_b_spline	fn	use	function call
+query/curve_surface_gap.rs	42	query	blend	blend::fillet_section::station	knot	fn	use	function call
+query/curve_surface_gap.rs	42	query	blend	blend::fillet_section::station	nurbs_partials	fn	use	function call
+query/curve_surface_gap.rs	42	query	blend	blend::fillet_section::station	span	fn	use	function call
+query/curve_surface_gap.rs	42	query	blend	blend::fillet_section::station	Nurbs	struct	use	import of type
+query/curve_surface_gap.rs	42	query	blend	blend::fillet_section::station	Partials	struct	use	import of type
+query/curve_surface_gap/polynomial_pieces.rs	49	query	blend	blend::fillet_section::certificate	NurbsCurve	struct	use	import of type
+query/curve_surface_gap/polynomial_pieces.rs	50	query	blend	blend::fillet_section::interval	Ivl	struct	use	import of type
+query/curve_surface_gap/polynomial_pieces.rs	51	query	blend	blend::fillet_section::series	V3	struct	use	import of type
+query/curve_surface_gap/polynomial_pieces.rs	52	query	blend	blend::fillet_section::station	ders_basis	fn	use	function call
+query/curve_surface_gap/polynomial_pieces.rs	52	query	blend	blend::fillet_section::station	knot	fn	use	function call
+query/curve_surface_gap/polynomial_pieces.rs	52	query	blend	blend::fillet_section::station	span	fn	use	function call
+query/curve_surface_gap/polynomial_pieces.rs	52	query	blend	blend::fillet_section::station	Nurbs	struct	use	import of type
+query/distance_bound.rs	26	query	blend	blend::fillet_section::station	as_b_spline	fn	use	function call
+query/edge_turn.rs	16	query	blend	blend::fillet_section::interval	Ivl	struct	use	import of type
+query/face/p3.rs	131	query	blend	blend::fillet_section::interval	round_up	fn	use	function call
+query/normal.rs	63	query	blend	blend::fillet_section::definition_box	definition_partials_naive	fn	use	function call
+query/normal.rs	63	query	blend	blend::fillet_section::definition_box	gn_def_face_of	fn	use	function call
+query/normal.rs	64	query	blend	blend::fillet_section::interval	round_up	fn	use	function call
+query/normal.rs	64	query	blend	blend::fillet_section::interval	Ivl	struct	use	import of type
+query/normal.rs	65	query	blend	blend::fillet_section::station	as_b_spline	fn	use	function call
+query/normal.rs	65	query	blend	blend::fillet_section::station	Nurbs	struct	use	import of type
+query/seam_bound.rs	99	query	blend	blend::fillet_section::certificate	curve_derivs_over	fn	use	function call
+query/seam_bound.rs	99	query	blend	blend::fillet_section::certificate	NurbsCurve	struct	use	import of type
+query/seam_bound.rs	100	query	blend	blend::fillet_section::interval	round_down	fn	use	function call
+query/seam_bound.rs	100	query	blend	blend::fillet_section::interval	round_up	fn	use	function call
+query/seam_bound.rs	100	query	blend	blend::fillet_section::interval	Ivl	struct	use	import of type
+query/seam_bound.rs	101	query	blend	blend::fillet_section::series	V3	struct	use	import of type
+query/seam_bound.rs	102	query	blend	blend::fillet_section::station	Partials	struct	use	import of type
+query/seam_bound.rs	697	query	blend	blend::fillet_section::certificate	partials_hull	fn	expr	function call
+query/tangent_edge.rs	236	query	blend	blend::fillet_section::certificate	curve_derivs_over	fn	use	function call
+query/tangent_edge.rs	236	query	blend	blend::fillet_section::certificate	NurbsCurve	struct	use	import of type
+query/tangent_edge.rs	237	query	blend	blend::fillet_section::definition_box	definition_partials_over_box	fn	use	function call
+query/tangent_edge.rs	237	query	blend	blend::fillet_section::definition_box	gn_def_face_of	fn	use	function call
+query/tangent_edge.rs	238	query	blend	blend::fillet_section::interval	Ivl	struct	use	import of type
+query/tangent_edge.rs	239	query	blend	blend::fillet_section::station	as_b_spline	fn	use	function call
+query/tangent_edge.rs	239	query	blend	blend::fillet_section::station	span	fn	use	function call
+query/tangent_edge.rs	239	query	blend	blend::fillet_section::station	Nurbs	struct	use	import of type
+query/tangent_edge.rs	1121	query	blend	blend::fillet_section::interval	round_down	fn	expr	function call
+query/tangent_edge.rs	1122	query	blend	blend::fillet_section::interval	round_up	fn	expr	function call
+query/api_queries.rs	71	query	heal	heal::gap	GapFunction	struct	use	import of type
+query/face/p3.rs	147	query	heal	heal::face_props	ClassifyLoopIo	struct	use	import of type
+query/face/p3.rs	147	query	heal	heal::face_props	ContainmentType	enum	use	import of type
+query/face/p3.rs	147	query	heal	heal::face_props	FaceProps	struct	use	import of type
+query/face/p3.rs	147	query	heal	heal::face_props	LoopObject	trait	use	import of trait
+query/face/p3.rs	147	query	heal	heal::face_props	SS_NONE	const	use	constant
+query/face/p3.rs	148	query	heal	heal::face_props	SS_UMAX	const	use	constant
+query/face/p3.rs	148	query	heal	heal::face_props	SS_UMIN	const	use	constant
+query/face/p3.rs	148	query	heal	heal::face_props	SS_VMAX	const	use	constant
+query/face/p3.rs	148	query	heal	heal::face_props	SS_VMIN	const	use	constant
+query/face/p4.rs	78	query	heal	heal::face_props	ClassifyLoopIo	struct	use	import of type
+query/face/p4.rs	78	query	heal	heal::face_props	ClassifyLoopsOut	struct	use	import of type
+query/face/p4.rs	78	query	heal	heal::face_props	ContainmentType	enum	use	import of type
+query/face/p4.rs	78	query	heal	heal::face_props	FaceProps	struct	use	import of type
+query/face/p4.rs	78	query	heal	heal::face_props	HealNotYetFaceType	enum	use	import of type
+query/face/p4.rs	78	query	heal	heal::face_props	HealerOpType	enum	use	import of type
+query/face/p4.rs	78	query	heal	heal::face_props	ItemId	struct	use	import of type
+query/face/p4.rs	78	query	heal	heal::face_props	LoopObject	trait	use	import of trait
+query/face/p4.rs	78	query	heal	heal::face_props	Looptree	struct	use	import of type
+query/face/p4.rs	78	query	heal	heal::face_props	LooptreeItem	struct	use	import of type
+query/face/p4.rs	78	query	heal	heal::face_props	LoopuseType	enum	use	import of type
+query/face/p4.rs	78	query	heal	heal::face_props	PropStage	enum	use	import of type
+query/face/p4.rs	78	query	heal	heal::face_props	Tri	enum	use	import of type
+query/face/p4.rs	78	query	heal	heal::face_props	SS_UMAX	const	use	constant
+query/face/p4.rs	78	query	heal	heal::face_props	SS_UMIN	const	use	constant
+query/face/p4.rs	78	query	heal	heal::face_props	SS_VMAX	const	use	constant
+query/face/p4.rs	78	query	heal	heal::face_props	SS_VMIN	const	use	constant
+query/face/p4.rs	78	query	heal	heal::face_props	UNDEF_ULONG	const	use	constant
+query/distance_bound.rs	34	query	offset	offset::construction::bernstein	Bernstein2	struct	use	import of type
+query/brep.rs	116	query	primitive	primitive::api_curves	create_line_segment	fn	use	function call
+surface/extend.rs	316	surface	blend	blend::fillet_section::station	as_b_spline	fn	expr	function call
+surface/extend/analytic.rs	181	surface	blend	blend::fillet_section::station	as_b_spline	fn	expr	function call
+surface/extend/analytic.rs	442	surface	blend	blend::fillet_section::station	as_b_spline	fn	expr	function call
+surface/extend/blend.rs	62	surface	blend	blend::fillet_section::continuation	growth	fn	use	function call
+surface/extend/blend.rs	62	surface	blend	blend::fillet_section::continuation	net_weights	fn	use	function call
+surface/extend/blend.rs	62	surface	blend	blend::fillet_section::continuation	section_degree	fn	use	function call
+surface/extend/blend.rs	62	surface	blend	blend::fillet_section::continuation	section_weight_range	fn	use	function call
+surface/extend/blend.rs	65	surface	blend	blend::fillet_section::recertify	recertify_with_thumbweight	fn	use	function call
+surface/extend/blend.rs	66	surface	blend	blend::fillet_section::recertify	net_distance	fn	use	function call
+surface/extend/blend.rs	66	surface	blend	blend::fillet_section::recertify	precision_floor	fn	use	function call
+surface/extend/blend.rs	66	surface	blend	blend::fillet_section::recertify	span_of_definition	fn	use	function call
+surface/extend/blend.rs	66	surface	blend	blend::fillet_section::recertify	DefinitionSpan	struct	use	import of type
+surface/extend/blend.rs	69	surface	blend	blend::fillet_section::section	param	fn	use	function call
+surface/extend/blend.rs	69	surface	blend	blend::fillet_section::section	param_in	fn	use	function call
+surface/extend/blend.rs	69	surface	blend	blend::fillet_section::section	GN_THUMBWEIGHT_EQUAL_AREA	const	use	constant
+surface/extend/blend.rs	70	surface	blend	blend::fillet_section::station	GnStation	struct	use	import of type
+surface/extend/sides.rs	163	surface	blend	blend::fillet_section::station	as_b_spline	fn	expr	function call
+surface/face_evaluation.rs	18	surface	blend	blend::fillet_exact	class_surface	fn	use	function call
+surface/face_evaluation.rs	18	surface	blend	blend::fillet_exact	classify_supports	fn	use	function call
+surface/face_surface.rs	392	surface	blend	blend::fillet_section::station	as_b_spline	fn	use	function call
+surface/from_parameters.rs	276	surface	blend	blend::fillet_section::station	as_b_spline	fn	expr	function call
+surface/implicit.rs	11	surface	blend	blend::fillet_section::interval	Ivl	struct	use	import of type
+surface/implicit.rs	937	surface	blend	blend::fillet_section::station	as_b_spline	fn	expr	function call
+surface/implicit.rs	1614	surface	blend	blend::fillet_section::station	as_b_spline	fn	expr	function call
+surface/implicit.rs	1635	surface	blend	blend::fillet_section::station	as_b_spline	fn	expr	function call
+surface/plane/p1.rs	104	surface	blend	blend::fillet_section::interval	Ivl	struct	use	import of type
+surface/procedural_blend.rs	69	surface	blend	blend::fillet_section::section	GnSectionFsg	struct	use	import of type
+surface/procedural_blend.rs	954	surface	blend	blend::fillet_section::definition	evaluate_definition	fn	expr	function call
+surface/procedural_blend.rs	1147	surface	blend	blend::fillet_section::recertify	recertify	fn	expr	function call
+surface/procedural_blend.rs	1158	surface	blend	blend::fillet_section::recertify	precision_floor	fn	expr	function call
+surface/procedural_blend.rs	1532	surface	blend	blend::fillet_section::recertify	transform_rounding	fn	expr	function call
+surface/procedural_blend/bead.rs	32	surface	blend	blend::fillet_executive::p3	NoRoomReason	enum	use	import of type
+surface/procedural_blend/convert.rs	28	surface	blend	blend::blend_corner::mixed::algebra	Crv	struct	use	import of type
+surface/procedural_blend/convert.rs	28	surface	blend	blend::blend_corner::mixed::algebra	Side	struct	use	import of type
+surface/procedural_blend/convert.rs	29	surface	blend	blend::blend_setback	Face	struct	use	import of type
+surface/procedural_blend/convert.rs	29	surface	blend	blend::blend_setback	FaceKind	enum	use	import of type
+surface/procedural_blend/convert.rs	29	surface	blend	blend::blend_setback	Round	struct	use	import of type
+surface/procedural_blend/convert.rs	30	surface	blend	blend::fillet_exact	classify_supports	fn	use	function call
+surface/procedural_blend/convert.rs	30	surface	blend	blend::fillet_exact	BlendSpine	enum	use	import of type
+surface/procedural_blend/convert.rs	30	surface	blend	blend::fillet_exact	ClassInputs	struct	use	import of type
+surface/procedural_blend/convert.rs	31	surface	blend	blend::fillet_section::section	GnSectionFsg	struct	use	import of type
+surface/procedural_blend/convert.rs	32	surface	blend	blend::fillet_section::station	as_b_spline	fn	use	function call
+surface/procedural_blend/corner.rs	55	surface	blend	blend::blend_corner::mixed::algebra	Crv	struct	use	import of type
+surface/procedural_blend/corner.rs	55	surface	blend	blend::blend_corner::mixed::algebra	Side	struct	use	import of type
+surface/procedural_blend/corner.rs	55	surface	blend	blend::blend_corner::mixed::algebra	V4	type	use	import of type alias
+surface/procedural_blend/corner.rs	56	surface	blend	blend::blend_setback	containment_kept	fn	use	function call
+surface/procedural_blend/corner.rs	56	surface	blend	blend::blend_setback	fill_hole_counted	fn	use	function call
+surface/procedural_blend/corner.rs	56	surface	blend	blend::blend_setback	Face	struct	use	import of type
+surface/procedural_blend/corner.rs	56	surface	blend	blend::blend_setback	Fill	struct	use	import of type
+surface/procedural_blend/corner.rs	56	surface	blend	blend::blend_setback	FillStats	struct	use	import of type
+surface/procedural_blend/corner.rs	56	surface	blend	blend::blend_setback	Round	struct	use	import of type
+surface/procedural_blend/corner.rs	252	surface	blend	blend::fillet_section::station	as_b_spline	fn	expr	function call
+surface/procedural_blend/corner.rs	655	surface	blend	blend::blend_corner::mixed::algebra	coons_chamfer	fn	expr	function call
+surface/procedural_blend/corner.rs	657	surface	blend	blend::blend_corner::mixed::algebra	coons	fn	expr	function call
+surface/procedural_blend/corner.rs	660	surface	blend	blend::blend_corner::mixed::algebra	srf_transpose	fn	expr	function call
+surface/procedural_blend/corner.rs	662	surface	blend	blend::blend_corner::mixed::algebra	srf_to_bspline	fn	expr	function call
+surface/procedural_blend/corner.rs	685	surface	blend	blend::blend_corner::mixed::algebra	eval	fn	expr	function call
+surface/procedural_blend/corner.rs	688	surface	blend	blend::blend_corner::mixed::algebra	project	fn	expr	function call
+surface/procedural_blend/corner.rs	688	surface	blend	blend::blend_corner::mixed::algebra	eval	fn	expr	function call
+surface/procedural_blend/corner.rs	699	surface	blend	blend::blend_corner::mixed::algebra	project	fn	expr	function call
+surface/procedural_blend/exact.rs	34	surface	blend	blend::fillet_exact	arc_section_implicit	fn	use	function call
+surface/procedural_blend/exact.rs	34	surface	blend	blend::fillet_exact	class_surface	fn	use	function call
+surface/procedural_blend/exact.rs	34	surface	blend	blend::fillet_exact	classify_supports	fn	use	function call
+surface/procedural_blend/exact.rs	34	surface	blend	blend::fillet_exact	BlendSpine	enum	use	import of type
+surface/procedural_blend/exact.rs	34	surface	blend	blend::fillet_exact	ClassInputs	struct	use	import of type
+surface/procedural_blend/exact.rs	34	surface	blend	blend::fillet_exact	QuadricKind	enum	use	import of type
+surface/procedural_blend/exact.rs	482	surface	blend	blend::fillet_section::station	as_b_spline	fn	expr	function call
+surface/procedural_blend/offset.rs	39	surface	blend	blend::fillet_section::recertify	net_of_definition	fn	use	function call
+surface/procedural_blend/offset.rs	40	surface	blend	blend::fillet_section::section	GnSectionFsg	struct	use	import of type
+surface/procedural_blend/offset.rs	41	surface	blend	blend::fillet_section::station	as_b_spline	fn	use	function call
+surface/procedural_blend/record.rs	897	surface	blend	blend::blend_corner::mixed::algebra	breaks_merge	fn	expr	function call
+surface/procedural_blend/record.rs	926	surface	blend	blend::blend_corner::mixed::algebra	breaks_coincide	fn	use	function call
+surface/procedural_blend/record.rs	926	surface	blend	blend::blend_corner::mixed::algebra	breaks_merge	fn	use	function call
+surface/procedural_sweep.rs	62	surface	blend	blend::fillet_section::interval	round_up	fn	use	function call
+surface/procedural_sweep.rs	62	surface	blend	blend::fillet_section::interval	Ivl	struct	use	import of type
+surface/procedural_sweep.rs	63	surface	blend	blend::fillet_section::recertify	transform_rounding	fn	use	function call
+surface/procedural_sweep/path.rs	63	surface	blend	blend::fillet_section::interval	round_up	fn	use	function call
+surface/recognise.rs	126	surface	blend	blend::fillet_section::station	as_b_spline	fn	expr	function call
+surface/side.rs	388	surface	blend	blend::fillet_section::station	as_b_spline	fn	expr	function call
+surface/surface/exact_pieces.rs	29	surface	blend	blend::fillet_section::certificate	curve_derivs_over	fn	use	function call
+surface/surface/exact_pieces.rs	29	surface	blend	blend::fillet_section::certificate	nurbs_partials_over_piece	fn	use	function call
+surface/surface/exact_pieces.rs	29	surface	blend	blend::fillet_section::certificate	partials_hull	fn	use	function call
+surface/surface/exact_pieces.rs	29	surface	blend	blend::fillet_section::certificate	NurbsCurve	struct	use	import of type
+surface/surface/exact_pieces.rs	32	surface	blend	blend::fillet_section::interval	cmax	fn	use	function call
+surface/surface/exact_pieces.rs	32	surface	blend	blend::fillet_section::interval	cmin	fn	use	function call
+surface/surface/exact_pieces.rs	32	surface	blend	blend::fillet_section::interval	Ivl	struct	use	import of type
+surface/surface/exact_pieces.rs	33	surface	blend	blend::fillet_section::offset_box	offset_crossed_knot_jumps	fn	use	function call
+surface/surface/exact_pieces.rs	33	surface	blend	blend::fillet_section::offset_box	offset_partials_over_parts	fn	use	function call
+surface/surface/exact_pieces.rs	36	surface	blend	blend::fillet_section::series	v_add	fn	use	function call
+surface/surface/exact_pieces.rs	36	surface	blend	blend::fillet_section::series	v_hull	fn	use	function call
+surface/surface/exact_pieces.rs	36	surface	blend	blend::fillet_section::series	v_scale	fn	use	function call
+surface/surface/exact_pieces.rs	36	surface	blend	blend::fillet_section::series	v_sub	fn	use	function call
+surface/surface/exact_pieces.rs	36	surface	blend	blend::fillet_section::series	V3	struct	use	import of type
+surface/surface/exact_pieces.rs	36	surface	blend	blend::fillet_section::series	VZ	const	use	constant
+surface/surface/exact_pieces.rs	37	surface	blend	blend::fillet_section::station	as_b_spline	fn	use	function call
+surface/surface/exact_pieces.rs	37	surface	blend	blend::fillet_section::station	knot	fn	use	function call
+surface/surface/exact_pieces.rs	37	surface	blend	blend::fillet_section::station	span	fn	use	function call
+surface/surface/exact_pieces.rs	37	surface	blend	blend::fillet_section::station	Nurbs	struct	use	import of type
+surface/surface/exact_pieces.rs	37	surface	blend	blend::fillet_section::station	Partials	struct	use	import of type
+surface/surface/p2.rs	4582	surface	blend	blend::fillet_section::interval	Ivl	struct	use	import of type
+surface/plane/p1.rs	128	surface	intersect	intersect::surface_drop_lib::p3	DropSolveContext	struct	use	import of type
+surface/surf_of_extrusion/p2.rs	102	surface	intersect	intersect::curve_class::p1	CurveClassification	struct	use	import of type
+surface/surf_of_extrusion/p2.rs	103	surface	intersect	intersect::point_class	ClassGeometry	trait	use	import of trait
+surface/surf_of_extrusion/p2.rs	103	surface	intersect	intersect::point_class	ClassObject	trait	use	import of trait
+surface/surf_of_extrusion/p2.rs	103	surface	intersect	intersect::point_class	ClassObjectKind	enum	use	import of type
+surface/surf_of_extrusion/p2.rs	103	surface	intersect	intersect::point_class	PointClassType	enum	use	import of type
+surface/surface/exact_pieces.rs	45	surface	intersect	intersect::surface_drop_lib::p3	DropSolveContext	struct	use	import of type
+surface/surface/p1.rs	179	surface	intersect	intersect::surface_silhouette	SurfaceSilhouette	struct	use	import of type
+surface/surface/p1.rs	180	surface	intersect	intersect::surface_tracer	SurfaceTrace	trait	use	import of trait
+surface/surface/p2.rs	275	surface	intersect	intersect::adv_surface_intersector	AdvSurfaceIntersector	struct	use	import of type
+surface/surface/p2.rs	275	surface	intersect	intersect::adv_surface_intersector	NoSurfaceHandle	struct	use	import of type
+surface/surface/p2.rs	276	surface	intersect	intersect::curve_class::p1	CurveClassification	struct	use	import of type
+surface/surface/p2.rs	276	surface	intersect	intersect::curve_class::p2	ResetOptions	struct	use	import of type
+surface/surface/p2.rs	277	surface	intersect	intersect::point_class	ClassGeometry	trait	use	import of trait
+surface/surface/p2.rs	277	surface	intersect	intersect::point_class	ClassObject	trait	use	import of trait
+surface/surface/p2.rs	277	surface	intersect	intersect::point_class	PointClassType	enum	use	import of type
+surface/surface/p2.rs	278	surface	intersect	intersect::surface_intersector::p1	SrfIndex	enum	use	import of type
+surface/surface/p2.rs	278	surface	intersect	intersect::surface_intersector::p1	TsectId	struct	use	import of type
+surface/surface/p2.rs	278	surface	intersect	intersect::surface_intersector::p1	TsectPnt	struct	use	import of type
+surface/surface/p2.rs	279	surface	intersect	intersect::surface_intersector::p4	PointIntersectionOptions	struct	use	import of type
+surface/surface/p2.rs	5217	surface	intersect	intersect::surface_intersector::p5	do_intersection	fn	expr	function call
+surface/surface/p2.rs	5244	surface	intersect	intersect::surface_intersector::p5	do_intersection_with_context	fn	expr	function call
+surface/surface/p2.rs	5256	surface	intersect	intersect::surface_intersector::p5	do_intersection	fn	expr	function call
+surface/surface/p7.rs	2450	surface	intersect	intersect::surface_intersector::p5	do_intersection_with_context	fn	expr	function call
+surface/surface/p7.rs	2463	surface	intersect	intersect::surface_intersector::p5	do_intersection	fn	expr	function call
+surface/surface/p8.rs	106	surface	intersect	intersect::surface_drop_lib::p3	DropSolveContext	struct	use	import of type
+surface/surface_cache/face_context.rs	22	surface	intersect	intersect::point_class	PointClassification	struct	use	import of type
+surface/surface/p1.rs	4278	surface	mass	mass::integrator	integrate_with_kernel	fn	expr	function call
+surface/procedural_blend.rs	1601	surface	offset	offset::draft	DraftDefinition	struct	expr	type value/pattern in body
+surface/procedural_blend.rs	1627	surface	offset	offset::draft	DraftDefinition	struct	expr	type in struct/enum field
+surface/procedural_blend.rs	1789	surface	offset	offset::draft	DraftDefinition	struct	expr	type in fn return type
+surface/procedural_blend/convert.rs	1440	surface	offset	offset::draft	Draft	struct	expr	type constructor/variant call
+surface/procedural_blend/convert.rs	1447	surface	offset	offset::draft	DraftDefinition	struct	expr	type constructor/variant call
+surface/surface/fold_certificate.rs	113	surface	offset	offset::construction::bernstein	Bernstein2	struct	use	import of type
+surface/surface/fold_certificate.rs	113	surface	offset	offset::construction::bernstein	Binomials	struct	use	import of type
+surface/surface/fold_certificate.rs	113	surface	offset	offset::construction::bernstein	MAX_DEGREE	const	use	constant
+surface/surface/p2.rs	1347	surface	offset	offset::draft	DraftDefinition	struct	expr	type in fn parameter
+surface/surface_cache/face_context.rs	26	surface	query	query::face::p2	point_classify_prepared	fn	use	function call
+surface/surface_cache/face_context.rs	26	surface	query	query::face::p2	BrepCacheFace	struct	use	import of type
+surface/surface_cache/face_context.rs	26	surface	query	query::face::p2	PointClassifyOptions	struct	use	import of type
+surface/procedural_blend.rs	1609	surface	sweep	sweep::section_blend	SectionBlendDefinition	struct	expr	type value/pattern in body
+surface/procedural_blend.rs	1629	surface	sweep	sweep::section_blend	SectionBlendDefinition	struct	expr	type in struct/enum field
+surface/procedural_blend.rs	1803	surface	sweep	sweep::section_blend	SectionBlendDefinition	struct	expr	type in fn return type
+surface/procedural_blend/convert.rs	1478	surface	sweep	sweep::section_blend	EndOrder	enum	use	import of type
+surface/procedural_blend/convert.rs	1540	surface	sweep	sweep::section_blend	EndOrder	enum	use	import of type
+surface/procedural_blend/convert.rs	1540	surface	sweep	sweep::section_blend	Motion	struct	use	import of type
+surface/procedural_blend/convert.rs	1540	surface	sweep	sweep::section_blend	SectionBlendDefinition	struct	use	import of type
+surface/procedural_blend/convert.rs	1540	surface	sweep	sweep::section_blend	SectionFrame	struct	use	import of type
+surface/surface/p2.rs	1355	surface	sweep	sweep::section_blend	SectionBlendDefinition	struct	expr	type in fn parameter
+surface/ball_patch.rs	60	surface	topology	topology::database_io	DatabaseReader	struct	use	import of type
+surface/ball_patch.rs	60	surface	topology	topology::database_io	FileType	enum	use	import of type
+surface/ball_patch.rs	60	surface	topology	topology::database_io	InputStream	struct	use	import of type
+surface/bend_volume.rs	143	surface	topology	topology::database_io	DatabaseReader	struct	use	import of type
+surface/bend_volume.rs	143	surface	topology	topology::database_io	DatabaseWriter	struct	use	import of type
+surface/bend_volume.rs	143	surface	topology	topology::database_io	FileType	enum	use	import of type
+surface/cone/p1.rs	159	surface	topology	topology::database_io	DatabaseReader	struct	use	import of type
+surface/cone/p1.rs	159	surface	topology	topology::database_io	FileType	enum	use	import of type
+surface/cone/p1.rs	2061	surface	topology	topology::database_io	InputStream	struct	expr	type value/pattern in body
+surface/cone/p1.rs	2068	surface	topology	topology::database_io	InputStream	struct	expr	type value/pattern in body
+surface/cone/p1.rs	2075	surface	topology	topology::database_io	InputStream	struct	expr	type value/pattern in body
+surface/curve_bounded_surface.rs	79	surface	topology	topology::database_io	DatabaseReader	struct	use	import of type
+surface/curve_bounded_surface.rs	79	surface	topology	topology::database_io	DatabaseWriter	struct	use	import of type
+surface/curve_bounded_surface.rs	79	surface	topology	topology::database_io	FileType	enum	use	import of type
+surface/curve_bounded_surface.rs	79	surface	topology	topology::database_io	InputStream	struct	use	import of type
+surface/curve_bounded_surface.rs	80	surface	topology	topology::geometry_write	write_curve_at	fn	use	function call
+surface/curve_bounded_surface.rs	80	surface	topology	topology::geometry_write	write_surface_at	fn	use	function call
+surface/offset_surface.rs	156	surface	topology	topology::database_io	DatabaseReader	struct	use	import of type
+surface/offset_surface.rs	156	surface	topology	topology::database_io	DatabaseWriter	struct	use	import of type
+surface/offset_surface.rs	156	surface	topology	topology::database_io	FileType	enum	use	import of type
+surface/offset_surface.rs	156	surface	topology	topology::database_io	InputStream	struct	use	import of type
+surface/offset_surface.rs	157	surface	topology	topology::geometry_write	write_surface_at	fn	use	function call
+surface/plane/p2.rs	114	surface	topology	topology::database_io	DatabaseReader	struct	use	import of type
+surface/plane/p2.rs	114	surface	topology	topology::database_io	DatabaseWriter	struct	use	import of type
+surface/plane/p2.rs	114	surface	topology	topology::database_io	FileType	enum	use	import of type
+surface/plane/p2.rs	114	surface	topology	topology::database_io	InputStream	struct	use	import of type
+surface/procedural_blend.rs	87	surface	topology	topology::database_io	DatabaseReader	struct	use	import of type
+surface/procedural_blend.rs	87	surface	topology	topology::database_io	FileType	enum	use	import of type
+surface/procedural_blend.rs	87	surface	topology	topology::database_io	InputStream	struct	use	import of type
+surface/procedural_blend.rs	1545	surface	topology	topology	Brep	struct	expr	type in fn parameter
+surface/procedural_blend/convert.rs	49	surface	topology	topology	FaceId	struct	use	import of type
+surface/procedural_blend/convert.rs	1007	surface	topology	topology	Brep	struct	expr	type in fn parameter
+surface/procedural_blend/convert.rs	1025	surface	topology	topology::face::p1	set_surface	fn	expr	function call
+surface/sphere.rs	169	surface	topology	topology::database_io	DatabaseReader	struct	use	import of type
+surface/sphere.rs	169	surface	topology	topology::database_io	FileType	enum	use	import of type
+surface/sphere.rs	169	surface	topology	topology::database_io	InputStream	struct	use	import of type
+surface/srf_in_volume.rs	125	surface	topology	topology::database_io	DatabaseReader	struct	use	import of type
+surface/srf_in_volume.rs	125	surface	topology	topology::database_io	DatabaseWriter	struct	use	import of type
+surface/srf_in_volume.rs	125	surface	topology	topology::database_io	FileType	enum	use	import of type
+surface/srf_in_volume.rs	126	surface	topology	topology::geometry_write	write_surface_at	fn	use	function call
+surface/surf_of_extrusion/p2.rs	122	surface	topology	topology::database_io	DatabaseReader	struct	use	import of type
+surface/surf_of_extrusion/p2.rs	122	surface	topology	topology::database_io	FileType	enum	use	import of type
+surface/surf_of_extrusion/p2.rs	122	surface	topology	topology::database_io	InputStream	struct	use	import of type
+surface/surf_of_revolution/p3.rs	103	surface	topology	topology::database_io	DatabaseReader	struct	use	import of type
+surface/surf_of_revolution/p3.rs	103	surface	topology	topology::database_io	FileType	enum	use	import of type
+surface/surf_of_revolution/p3.rs	103	surface	topology	topology::database_io	InputStream	struct	use	import of type
+surface/surface/assert_valid.rs	163	surface	topology	topology::brep_cache	CacheObject	enum	use	import of type
+surface/surface/assert_valid.rs	495	surface	topology	topology::brep::validation::assert_valid	standalone_curve_assert_valid	fn	expr	function call
+surface/surface/p1.rs	198	surface	topology	topology::database_io	DatabaseReader	struct	use	import of type
+surface/surface/p1.rs	198	surface	topology	topology::database_io	DatabaseWriter	struct	use	import of type
+surface/surface/p1.rs	198	surface	topology	topology::database_io	FileType	enum	use	import of type
+surface/surface/p1.rs	199	surface	topology	topology::geometry_write	write_surface_at	fn	use	function call
+surface/surface/p10.rs	77	surface	topology	topology	ObjectHandle	struct	use	import of type
+surface/surface/p2.rs	314	surface	topology	topology::database_io	DatabaseReader	struct	use	import of type
+surface/surface/p2.rs	316	surface	topology	topology	FaceId	struct	use	import of type
+surface/surface/p2.rs	4480	surface	topology	topology::trimming_tools	order_curves_into_loops	fn	expr	function call
+surface/surface/p2.rs	4482	surface	topology	topology::trimming_tools	OrderedLoops	struct	expr	type struct literal/pattern
+surface/surface/p2.rs	4492	surface	topology	topology::trimming_tools	find_outer_loops	fn	expr	function call
+surface/surface/p7.rs	186	surface	topology	topology	BrepId	struct	use	import of type
+surface/surface_cache/face_context.rs	30	surface	topology	topology	Brep	struct	use	import of type
+surface/surface_cache/face_context.rs	30	surface	topology	topology	FaceId	struct	use	import of type
+surface/surface_cache/face_context.rs	309	surface	topology	topology::face::p2	tolerance	fn	expr	function call
+surface/surface_cache/face_context.rs	314	surface	topology	topology::face::p4	has_loopuses	fn	expr	function call
+surface/torus.rs	136	surface	topology	topology::database_io	DatabaseReader	struct	use	import of type
+surface/torus.rs	136	surface	topology	topology::database_io	FileType	enum	use	import of type
+surface/torus.rs	136	surface	topology	topology::database_io	InputStream	struct	use	import of type
+surface/twist_volume.rs	114	surface	topology	topology::database_io	DatabaseReader	struct	use	import of type
+surface/twist_volume.rs	114	surface	topology	topology::database_io	DatabaseWriter	struct	use	import of type
+surface/twist_volume.rs	114	surface	topology	topology::database_io	FileType	enum	use	import of type
+surface/unbend_volume.rs	140	surface	topology	topology::database_io	DatabaseReader	struct	use	import of type
+surface/unbend_volume.rs	140	surface	topology	topology::database_io	DatabaseWriter	struct	use	import of type
+surface/unbend_volume.rs	140	surface	topology	topology::database_io	FileType	enum	use	import of type
+surface/volume/p2.rs	85	surface	topology	topology::database_io	DatabaseReader	struct	use	import of type
+surface/volume/p2.rs	85	surface	topology	topology::database_io	DatabaseWriter	struct	use	import of type
+surface/volume/p2.rs	85	surface	topology	topology::database_io	FileType	enum	use	import of type
+surface/volume/p2.rs	85	surface	topology	topology::database_io	InputStream	struct	use	import of type
+surface/volume/p2.rs	85	surface	topology	topology::database_io	MAX_READ_NESTING	const	use	constant
+surface/volume/p2.rs	85	surface	topology	topology::database_io	NESTING_LIMIT_REASON	const	use	constant
+topology/api_projection.rs	59	topology	blend	blend::hcr	Hcr	struct	use	import of type
+topology/api_projection.rs	59	topology	blend	blend::hcr	HcrOptions	struct	use	import of type
+topology/brep/local_operation.rs	1282	topology	blend	blend::fillet_section::station	as_b_spline	fn	expr	function call
+topology/brep/p9.rs	2808	topology	blend	blend::fillet_section::certificate	NurbsCurve	struct	use	import of type
+topology/brep/p9.rs	2895	topology	blend	blend::fillet_section::certificate	NurbsCurve	struct	expr	type in struct/enum field
+topology/brep/p9.rs	2915	topology	blend	blend::fillet_section::interval	Ivl	struct	use	import of type
+topology/brep/p9.rs	2968	topology	blend	blend::fillet_section::certificate	NurbsCurve	struct	expr	type value/pattern in body
+topology/brep/primitive_outward.rs	50	topology	blend	blend::fillet_section::certificate	NurbsCurve	struct	use	import of type
+topology/brep/primitive_outward.rs	51	topology	blend	blend::fillet_section::interval	Ivl	struct	use	import of type
+topology/brep/primitive_outward.rs	52	topology	blend	blend::fillet_section::station	as_b_spline	fn	use	function call
+topology/brep/primitive_outward.rs	52	topology	blend	blend::fillet_section::station	Nurbs	struct	use	import of type
+topology/brep/seam_turn.rs	105	topology	blend	blend::fillet_corner::p1	test_g1_continuity	fn	expr	function call
+topology/face/p3.rs	106	topology	blend	blend::fillet_section::certificate	NurbsCurve	struct	use	import of type
+topology/brep/local_operation.rs	189	topology	boolean	boolean::api_brep	boolean_difference	fn	expr	function call
+topology/brep/local_operation.rs	2001	topology	boolean	boolean::merge::p3	copy_component	fn	expr	function call
+topology/brep/p5.rs	1135	topology	boolean	boolean::topology_intersector::p1	first_reaching	fn	use	function call
+topology/brep/p5.rs	1135	topology	boolean	boolean::topology_intersector::p1	Growth	struct	use	import of type
+topology/brep/p7.rs	128	topology	boolean	boolean::merge::p1	MergeState	struct	use	import of type
+topology/brep/p7.rs	128	topology	boolean	boolean::merge::p1	VertexCopy	struct	use	import of type
+topology/brep/p7.rs	129	topology	boolean	boolean::merge::p2	make_faceuse_with	fn	use	function call
+topology/brep/p7.rs	129	topology	boolean	boolean::merge::p2	MergeContext	enum	use	import of type
+topology/brep/p7.rs	129	topology	boolean	boolean::merge::p2	MergeOperand	enum	use	import of type
+topology/brep/p7.rs	129	topology	boolean	boolean::merge::p2	TopologyCopy	struct	use	import of type
+topology/brep/p7.rs	130	topology	boolean	boolean::topology_intersector::p1	Relations	struct	use	import of type
+topology/brep/p7.rs	130	topology	boolean	boolean::topology_intersector::p1	TopologyIntersector	struct	use	import of type
+topology.rs	81	topology	heal	heal::gap	EdgeEdgeGap	struct	use	import of type
+topology.rs	81	topology	heal	heal::gap	EdgeFaceGap	struct	use	import of type
+topology.rs	81	topology	heal	heal::gap	VertexEdgeGap	struct	use	import of type
+topology.rs	81	topology	heal	heal::gap	VertexFaceGap	struct	use	import of type
+topology/brep/local_operation.rs	423	topology	heal	heal::stitch::p1	DefaultStitchCallback	struct	expr	type constructor/variant call
+topology/brep/local_operation.rs	424	topology	heal	heal::stitch::p1	Stitch	struct	expr	type constructor/variant call
+topology/brep/local_operation.rs	431	topology	heal	heal::stitch::p2	MinGapRequest	struct	expr	type constructor/variant call
+topology/brep/local_operation.rs	434	topology	heal	heal::stitch::p2	find_and_set_infinite_region	fn	expr	function call
+topology/brep/p1.rs	134	topology	heal	heal::face_props	HealerOpType	enum	use	import of type
+topology/brep/p1.rs	134	topology	heal	heal::face_props	LoopObject	trait	use	import of trait
+topology/brep/p1.rs	135	topology	heal	heal::heal_data::p1	HealBrepTargets	struct	use	import of type
+topology/brep/p1.rs	136	topology	heal	heal::heal_data::p2	HealData	struct	use	import of type
+topology/brep/p10.rs	112	topology	heal	heal::face_props	HealerOpType	enum	use	import of type
+topology/brep/p2.rs	99	topology	heal	heal::gap	EdgeEdgeGap	struct	use	import of type
+topology/brep/p2.rs	99	topology	heal	heal::gap	VertexEdgeGap	struct	use	import of type
+topology/brep/p4.rs	103	topology	heal	heal::stitch::p1	DefaultStitchCallback	struct	use	import of type
+topology/brep/p4.rs	103	topology	heal	heal::stitch::p1	Stitch	struct	use	import of type
+topology/brep/p4.rs	103	topology	heal	heal::stitch::p1	StitchCallback	trait	use	import of trait
+topology/brep/p4.rs	104	topology	heal	heal::stitch::p2	ClosedGap	struct	use	import of type
+topology/brep/p4.rs	104	topology	heal	heal::stitch::p2	MinGapRequest	struct	use	import of type
+topology/brep/p4.rs	1869	topology	heal	heal::stitch::p1	StitchEditContext	trait	expr	trait in fn parameter
+topology/brep/p4.rs	1901	topology	heal	heal::stitch::p1	StitchEditContext	trait	expr	trait in fn parameter
+topology/brep/p4.rs	1927	topology	heal	heal::stitch::p1	StitchEditContext	trait	expr	trait in fn parameter
+topology/brep/p4.rs	1941	topology	heal	heal::stitch::p1	StitchEditContext	trait	expr	trait value/pattern in body
+topology/brep/p5.rs	96	topology	heal	heal::stitch::p2	ClosedGap	struct	use	import of type
+topology/brep/p5.rs	3352	topology	heal	heal::stitch::p1	BorrowedStitchEdits	struct	expr	type struct literal/pattern
+topology/brep/p5.rs	3583	topology	heal	heal::stitch::p1	DefaultStitchCallback	struct	expr	type constructor/variant call
+topology/brep/p5.rs	3585	topology	heal	heal::stitch::p1	Stitch	struct	expr	type constructor/variant call
+topology/brep/p5.rs	3625	topology	heal	heal::stitch::p1	BorrowedStitchEdits	struct	expr	type struct literal/pattern
+topology/brep/p5.rs	3861	topology	heal	heal::gap	EdgeFaceGap	struct	expr	type constructor/variant call
+topology/brep/p5.rs	3862	topology	heal	heal::gap	EdgeEdgeGap	struct	expr	type constructor/variant call
+topology/brep/validation/wide_vertices.rs	78	topology	heal	heal::gap	Gap	enum	use	import of type
+topology/brep_constructor.rs	86	topology	heal	heal::stitch::p1	DefaultStitchCallback	struct	use	import of type
+topology/brep_constructor.rs	86	topology	heal	heal::stitch::p1	Stitch	struct	use	import of type
+topology/brep_constructor.rs	87	topology	heal	heal::stitch::p2	MinGapRequest	struct	use	import of type
+topology/edge.rs	139	topology	heal	heal::gap	EdgeEdgeGap	struct	use	import of type
+topology/edge.rs	139	topology	heal	heal::gap	EdgeFaceGap	struct	use	import of type
+topology/edge.rs	139	topology	heal	heal::gap	VertexEdgeGap	struct	use	import of type
+topology/edgeuse/p1.rs	104	topology	heal	heal::gap	EdgeEdgeGap	struct	use	import of type
+topology/edgeuse/p1.rs	104	topology	heal	heal::gap	EdgeFaceGap	struct	use	import of type
+topology/edgeuse/p1.rs	104	topology	heal	heal::gap	GapFunction	struct	use	import of type
+topology/face/p1.rs	192	topology	heal	heal::face_props	FaceProps	struct	use	import of type
+topology/face/p1.rs	192	topology	heal	heal::face_props	LoopObject	trait	use	import of trait
+topology/face/p1.rs	192	topology	heal	heal::face_props	Tri	enum	use	import of type
+topology/face/p3.rs	119	topology	heal	heal::face_props	FaceProps	struct	use	import of type
+topology/face/p3.rs	119	topology	heal	heal::face_props	LoopObject	trait	use	import of trait
+topology/face/p3.rs	119	topology	heal	heal::face_props	PropStage	enum	use	import of type
+topology/face/p3.rs	119	topology	heal	heal::face_props	Tri	enum	use	import of type
+topology/face/p4.rs	133	topology	heal	heal::face_props	FaceProps	struct	use	import of type
+topology/face/p4.rs	133	topology	heal	heal::face_props	HealerOpType	enum	use	import of type
+topology/face/p4.rs	133	topology	heal	heal::face_props	LoopObject	trait	use	import of trait
+topology/face/p4.rs	133	topology	heal	heal::face_props	PropStage	enum	use	import of type
+topology/face/p4.rs	133	topology	heal	heal::face_props	Tri	enum	use	import of type
+topology/face/p4.rs	2343	topology	heal	heal::face_props	UNDEF_ULONG	const	expr	constant
+topology/face/p4.rs	2371	topology	heal	heal::face_props	SeamProblem	struct	expr	type struct literal/pattern
+topology/shell.rs	371	topology	heal	heal::face_props	Tri	enum	expr	type in fn return type
+topology/shell.rs	372	topology	heal	heal::face_props	Tri	enum	expr	type constructor/variant call
+topology/shell.rs	1622	topology	heal	heal::face_props	Tri	enum	expr	type in fn return type
+topology/shell.rs	1623	topology	heal	heal::face_props	Tri	enum	expr	type constructor/variant call
+topology/vertex.rs	117	topology	heal	heal::gap	VertexEdgeGap	struct	use	import of type
+topology/vertex.rs	117	topology	heal	heal::gap	VertexFaceGap	struct	use	import of type
+topology/vertexuse.rs	102	topology	heal	heal::gap	VertexEdgeGap	struct	use	import of type
+topology/vertexuse.rs	102	topology	heal	heal::gap	VertexFaceGap	struct	use	import of type
+topology/brep/local_operation.rs	55	topology	offset	offset::offset_executive::p1	OffsetExecutive	struct	use	import of type
+topology/brep/local_operation.rs	55	topology	offset	offset::offset_executive::p1	OffsetOperation	enum	use	import of type
+topology/brep/local_operation.rs	56	topology	offset	offset::offset_executive::p2	OffsetNotifications	struct	use	import of type
+topology/brep/local_operation.rs	72	topology	offset	offset::offset_executive::p2	local_operation_simple	fn	use	function call
+topology/brep/local_operation.rs	113	topology	offset	offset::draft	net_sense	fn	expr	function call
+topology/brep/local_operation.rs	182	topology	offset	offset::offset_executive::p2	copy_local_sweep_attributes	fn	expr	function call
+topology/brep/sheet.rs	40	topology	primitive	primitive::api_curve_ops	make_curves_compatible	fn	use	function call
+topology/brep/trim_extend.rs	30	topology	primitive	primitive::api_curves	create_line_segment	fn	use	function call

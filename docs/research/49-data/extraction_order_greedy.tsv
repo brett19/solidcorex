@@ -1,0 +1,26 @@
+step	library	structural_refs_to_not_yet_extracted	umbrella_refs	detail
+1	profile	0	0	
+2	mesh_reduce	0	4	
+3	cell_grid	16	0	planar:9; num:7
+4	hatch	26	0	num:16; planar:10
+5	evalrec	45	6	num:22; nurbs:19; planar:4
+6	develop	38	0	planar:22; num:16
+7	planar	45	13	num:31; curve:7; nurbs:4; sweep:1; brep:1; topo:1
+8	prism	49	5	brep:14; num:10; topo:10; curve:6; surface:5; nurbs:4
+9	num	54	66	brep:20; nurbs:8; surface:8; algo:7; topo:5; record_convert:3; blend:2; curve:1
+10	nurbs	5	108	brep:3; surface:2
+11	algo	9	21	curve:3; surface:3; brep:2; blend:1
+12	hlr	128	15	brep:78; topo:19; curve:12; surface:12; geomq:3; record_convert:2; blend:2
+13	defeature	149	16	brep:93; topo:33; surface:9; curve:4; blend:4; boolean:2; record_convert:2; primitive:1; sweep:1
+14	curve	185	182	record_convert:52; surface:48; topo:46; brep:30; blend:9
+15	geomq	256	168	surface:173; blend:44; brep:22; topo:14; record_convert:1; sweep:1; offset:1
+16	surface	325	418	topo:86; blend:82; record_convert:75; brep:56; sweep:17; offset:9
+17	primitive	361	119	brep:240; topo:37; sweep:36; boolean:23; record_convert:17; heal:8
+18	sweep	409	107	brep:332; topo:40; boolean:18; heal:8; record_convert:6; offset:3; blend:2
+19	record_convert	410	75	brep:340; topo:58; boolean:8; blend:4
+20	brep	448	276	topo:416; heal:19; boolean:10; blend:3
+21	topo	48	400	blend:40; boolean:4; heal:2; offset:2
+22	boolean	0	228	
+23	heal	7	43	blend:7
+24	blend	4	699	offset:4
+25	offset	0	147	

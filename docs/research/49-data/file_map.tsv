@@ -1,0 +1,824 @@
+file	library	confidence	nontest_lines	nontest_fns	note
+blend.rs	blend	H	35	0	blends
+blend/band_room.rs	blend	H	645	16	blends
+blend/blend_corner.rs	blend	H	1172	35	blends
+blend/blend_corner/ball.rs	blend	H	1570	44	blends
+blend/blend_corner/chamfer.rs	blend	H	1590	41	blends
+blend/blend_corner/end.rs	blend	H	3025	56	blends
+blend/blend_corner/join_gap.rs	blend	H	790	11	blends
+blend/blend_corner/mixed.rs	blend	H	1928	43	blends
+blend/blend_corner/mixed/algebra.rs	blend	H	1630	65	blends
+blend/blend_corner/on_face.rs	blend	H	413	12	blends
+blend/blend_corner/piece.rs	blend	H	544	12	blends
+blend/blend_corner/rollover.rs	blend	H	864	18	blends
+blend/blend_corner/rollover/crease.rs	blend	H	488	21	blends
+blend/blend_corner/rollover/geometry.rs	blend	H	777	19	blends
+blend/blend_corner/separate_ends.rs	blend	H	535	11	blends
+blend/blend_corner/separate_ends/corridor.rs	blend	H	441	20	blends
+blend/blend_corner/separate_ends/selection.rs	blend	H	250	4	blends
+blend/blend_corner/setback.rs	blend	H	3435	56	blends
+blend/blend_corner/swept.rs	blend	H	800	18	blends
+blend/blend_refusal.rs	blend	H	466	10	blends
+blend/blend_setback.rs	blend	H	3382	69	blends
+blend/blend_setback/certify.rs	blend	H	722	28	blends
+blend/blend_setback/convexity.rs	blend	H	545	10	blends
+blend/blend_setback/curved.rs	blend	H	2302	22	blends
+blend/blend_setback/face_plane.rs	blend	H	271	5	blends
+blend/blend_setback/graph.rs	blend	H	1007	7	blends
+blend/blend_setback/qp.rs	blend	H	567	15	blends
+blend/blend_setback/saddle.rs	blend	H	292	9	blends
+blend/blend_setback/scale.rs	blend	H	315	5	blends
+blend/blend_setback/spring.rs	blend	H	219	1	blends
+blend/carried_face.rs	blend	H	341	7	blends
+blend/chamfer_side.rs	blend	H	385	17	blends
+blend/definition_check.rs	blend	H	344	14	blends
+blend/feature_executive.rs	defeature	M	2978	94	defeaturing executive
+blend/feature_executive/annular.rs	defeature	M	542	12	defeaturing executive
+blend/fillet_classification.rs	blend	H	181	26	blends
+blend/fillet_cliff_overflow.rs	blend	H	866	22	blends
+blend/fillet_corner.rs	blend	H	11	0	blends
+blend/fillet_corner/p1.rs	blend	H	3904	100	blends
+blend/fillet_corner/p2.rs	blend	H	2155	40	blends
+blend/fillet_corner/p3.rs	blend	H	2806	59	blends
+blend/fillet_corner/topology.rs	blend	H	1585	28	blends
+blend/fillet_corner/topology/ball.rs	blend	H	178	2	blends
+blend/fillet_corner/topology/closed_turn.rs	blend	H	281	3	blends
+blend/fillet_corner/topology/concave_4x2.rs	blend	H	286	5	blends
+blend/fillet_corner/topology/concave_nxn.rs	blend	H	253	2	blends
+blend/fillet_corner/topology/end_corners.rs	blend	H	533	9	blends
+blend/fillet_corner/topology/end_smooth.rs	blend	H	418	3	blends
+blend/fillet_corner/topology/join.rs	blend	H	923	12	blends
+blend/fillet_corner/topology/mixed.rs	blend	H	211	2	blends
+blend/fillet_corner/topology/mixed_3x2.rs	blend	H	384	5	blends
+blend/fillet_corner/topology/nx1_end.rs	blend	H	1386	19	blends
+blend/fillet_corner/topology/swept_turn.rs	blend	H	196	2	blends
+blend/fillet_custom_solver.rs	blend	H	2306	87	blends
+blend/fillet_exact.rs	blend	H	3660	68	blends
+blend/fillet_exact/past_end.rs	blend	H	573	23	blends
+blend/fillet_exact/rational.rs	blend	H	1567	35	blends
+blend/fillet_executive.rs	blend	H	17	0	blends
+blend/fillet_executive/api.rs	blend	H	801	23	blends
+blend/fillet_executive/law_radii.rs	blend	H	78	1	blends
+blend/fillet_executive/p1.rs	blend	H	1887	81	blends
+blend/fillet_executive/p2.rs	blend	H	2229	74	blends
+blend/fillet_executive/p3.rs	blend	H	5194	338	blends
+blend/fillet_executive/session.rs	blend	H	9108	295	blends
+blend/fillet_executive/session/ball_regular.rs	blend	H	1334	19	blends
+blend/fillet_executive/session/band_cuts.rs	blend	H	2229	40	blends
+blend/fillet_executive/session/blend_face_log.rs	blend	H	258	7	blends
+blend/fillet_executive/session/classification.rs	blend	H	271	30	blends
+blend/fillet_executive/session/cliff_overflow.rs	blend	H	248	7	blends
+blend/fillet_executive/session/concave_nxn.rs	blend	H	92	1	blends
+blend/fillet_executive/session/corner_marks.rs	blend	H	149	4	blends
+blend/fillet_executive/session/ease.rs	blend	H	530	9	blends
+blend/fillet_executive/session/edge_refusals.rs	blend	H	178	4	blends
+blend/fillet_executive/session/finish.rs	blend	H	1352	40	blends
+blend/fillet_executive/session/fit_size.rs	blend	H	1585	25	blends
+blend/fillet_executive/session/insertion.rs	blend	H	429	18	blends
+blend/fillet_executive/session/insertion/corner.rs	blend	H	141	12	blends
+blend/fillet_executive/session/insertion/curves.rs	blend	H	132	7	blends
+blend/fillet_executive/session/insertion/geometry.rs	blend	H	1029	62	blends
+blend/fillet_executive/session/insertion/geometry/edits.rs	blend	H	221	9	blends
+blend/fillet_executive/session/insertion/geometry/intersector.rs	blend	H	774	53	blends
+blend/fillet_executive/session/insertion/geometry/proto.rs	blend	H	224	22	blends
+blend/fillet_executive/session/insertion/geometry/query.rs	blend	H	176	25	blends
+blend/fillet_executive/session/insertion/geometry/topology_objects.rs	blend	H	242	19	blends
+blend/fillet_executive/session/insertion/live.rs	blend	H	710	31	blends
+blend/fillet_executive/session/keep_features.rs	blend	H	1166	21	blends
+blend/fillet_executive/session/law_corners.rs	blend	H	875	12	blends
+blend/fillet_executive/session/original_merge.rs	blend	H	197	8	blends
+blend/fillet_executive/session/original_trim.rs	blend	H	495	14	blends
+blend/fillet_executive/session/overflow_first.rs	blend	H	102	5	blends
+blend/fillet_executive/session/piecewise.rs	blend	H	712	21	blends
+blend/fillet_executive/session/planar_bands.rs	blend	H	740	17	blends
+blend/fillet_executive/session/planar_bands/family.rs	blend	H	371	17	blends
+blend/fillet_executive/session/planar_bands/interval.rs	blend	H	343	16	blends
+blend/fillet_executive/session/planar_bands/opposing.rs	blend	H	722	15	blends
+blend/fillet_executive/session/surface.rs	blend	H	663	19	blends
+blend/fillet_executive/session/tangent_rollover.rs	blend	H	1565	27	blends
+blend/fillet_executive/session/trace_reach.rs	blend	H	246	4	blends
+blend/fillet_executive/session/trim_at_creases.rs	blend	H	3018	47	blends
+blend/fillet_executive/session/two_offsets.rs	blend	H	680	14	blends
+blend/fillet_executive/topology_changes.rs	blend	H	94	7	blends
+blend/fillet_geom.rs	blend	H	19	0	blends
+blend/fillet_geom/p1.rs	blend	H	4571	177	blends
+blend/fillet_geom/p2.rs	blend	H	5097	95	blends
+blend/fillet_geom/p3.rs	blend	H	2109	39	blends
+blend/fillet_geom/p4.rs	blend	H	3324	65	blends
+blend/fillet_geom/p5.rs	blend	H	3971	76	blends
+blend/fillet_geom/p6.rs	blend	H	3397	61	blends
+blend/fillet_geom/surface_plane_curve.rs	blend	H	719	12	blends
+blend/fillet_geom/tangent_end_rib.rs	blend	H	1175	15	blends
+blend/fillet_geom/tangent_end_rib/certificate.rs	blend	H	1201	37	blends
+blend/fillet_intersector.rs	blend	H	3344	101	blends
+blend/fillet_intersector/skin_bound.rs	blend	H	937	27	blends
+blend/fillet_overflow.rs	blend	H	1432	32	blends
+blend/fillet_removal.rs	blend	H	2189	53	blends
+blend/fillet_removal/chain.rs	blend	H	358	8	blends
+blend/fillet_removal/chain_edit.rs	blend	H	589	9	blends
+blend/fillet_removal/ring.rs	blend	H	1292	29	blends
+blend/fillet_section.rs	blend	H	126	0	blends
+blend/fillet_section/certificate.rs	blend	H	4951	104	blends
+blend/fillet_section/continuation.rs	blend	H	185	6	blends
+blend/fillet_section/definition.rs	blend	H	830	27	blends
+blend/fillet_section/definition_box.rs	blend	H	794	11	blends
+blend/fillet_section/feet_tm.rs	blend	H	743	11	blends
+blend/fillet_section/form.rs	blend	H	181	8	blends
+blend/fillet_section/interval.rs	num	M	424	30	interval arithmetic and Taylor models now inside blend/fillet_section
+blend/fillet_section/offset_box.rs	blend	H	293	8	blends
+blend/fillet_section/recertify.rs	blend	H	1249	24	blends
+blend/fillet_section/section.rs	blend	H	2448	47	blends
+blend/fillet_section/series.rs	num	M	686	54	interval arithmetic and Taylor models now inside blend/fillet_section
+blend/fillet_section/smooth_interior.rs	blend	H	88	1	blends
+blend/fillet_section/smooth_interior_plan.rs	blend	H	355	11	blends
+blend/fillet_section/station.rs	blend	H	2064	51	blends
+blend/fillet_section/tay.rs	num	M	487	38	interval arithmetic and Taylor models now inside blend/fillet_section
+blend/fillet_section/taylor_model.rs	num	M	452	32	interval arithmetic and Taylor models now inside blend/fillet_section
+blend/fillet_solver.rs	blend	H	19	0	blends
+blend/fillet_solver/curve_blend_sih.rs	blend	H	953	28	blends
+blend/fillet_solver/edge_section.rs	blend	H	102	1	blends
+blend/fillet_solver/p1.rs	blend	H	3810	143	blends
+blend/fillet_solver/p1/rails.rs	blend	H	680	22	blends
+blend/fillet_solver/p2.rs	blend	H	3600	67	blends
+blend/fillet_solver/p3.rs	blend	H	1852	28	blends
+blend/fillet_solver/p4.rs	blend	H	3388	108	blends
+blend/fillet_solver/p5.rs	blend	H	609	33	blends
+blend/fillet_solver/p5/end_sections_fit.rs	blend	H	869	16	blends
+blend/fillet_solver/p5/rails_fit.rs	blend	H	1187	26	blends
+blend/fillet_solver/p5/recovery.rs	blend	H	1501	42	blends
+blend/fillet_solver/surfaces.rs	blend	H	332	20	blends
+blend/fillet_solver/trace_reach.rs	blend	H	296	9	blends
+blend/fillet_standard_solver.rs	blend	H	12	0	blends
+blend/fillet_standard_solver/p1.rs	blend	H	3540	113	blends
+blend/fillet_standard_solver/p2.rs	blend	H	4062	97	blends
+blend/fillet_standard_solver/surface_surface.rs	blend	H	343	17	blends
+blend/fillet_standard_solver/touch_circle.rs	blend	H	95	3	blends
+blend/fillet_tangent_rollover.rs	blend	H	1125	19	blends
+blend/hcr.rs	hlr	M	2089	76	hidden curve removal / projections
+blend/identify_fillet.rs	blend	H	1043	16	blends
+blend/law_corners.rs	blend	H	420	7	blends
+blend/round_room.rs	blend	H	190	5	blends
+blend/weld_bead.rs	blend	H	779	11	blends
+boolean.rs	boolean	M	10	0	boolean and its proto topology; planar cut
+boolean/api_brep.rs	boolean	M	976	25	boolean and its proto topology; planar cut
+boolean/merge.rs	boolean	M	20	0	boolean and its proto topology; planar cut
+boolean/merge/coincident_edges.rs	boolean	M	199	3	boolean and its proto topology; planar cut
+boolean/merge/p1.rs	boolean	M	1427	35	boolean and its proto topology; planar cut
+boolean/merge/p2.rs	boolean	M	2081	43	boolean and its proto topology; planar cut
+boolean/merge/p3.rs	boolean	M	1282	50	boolean and its proto topology; planar cut
+boolean/merge/p4.rs	boolean	M	2580	77	boolean and its proto topology; planar cut
+boolean/merge/p4/arena_pair.rs	boolean	M	2451	182	boolean and its proto topology; planar cut
+boolean/merge/p4/kernel_adapter.rs	boolean	M	1572	63	boolean and its proto topology; planar cut
+boolean/merge/p4/notification_keys.rs	boolean	M	92	4	boolean and its proto topology; planar cut
+boolean/merge/p5.rs	boolean	M	587	26	boolean and its proto topology; planar cut
+boolean/operand_tolerances.rs	boolean	M	110	3	boolean and its proto topology; planar cut
+boolean/topology_intersector.rs	boolean	M	27	0	boolean and its proto topology; planar cut
+boolean/topology_intersector/coincident_strip.rs	boolean	M	804	21	boolean and its proto topology; planar cut
+boolean/topology_intersector/curved_strip.rs	boolean	M	1253	31	boolean and its proto topology; planar cut
+boolean/topology_intersector/duplicate_edge_run.rs	boolean	M	362	10	boolean and its proto topology; planar cut
+boolean/topology_intersector/p1.rs	boolean	M	5915	191	boolean and its proto topology; planar cut
+boolean/topology_intersector/p2.rs	boolean	M	3138	48	boolean and its proto topology; planar cut
+boolean/topology_intersector/p3.rs	boolean	M	2142	47	boolean and its proto topology; planar cut
+cell_grid.rs	cell_grid	H	927	13	cell grids
+cell_grid/exact.rs	cell_grid	H	556	19	cell grids
+cell_grid/free.rs	cell_grid	H	338	9	cell grids
+cell_grid/lattice.rs	cell_grid	H	596	23	cell grids
+cell_grid/region.rs	cell_grid	H	1082	52	cell grids
+cell_grid/snap.rs	cell_grid	H	556	18	cell grids
+cell_grid/vec.rs	cell_grid	H	40	6	cell grids
+curve.rs	curve	H	74	1	curve kinds
+curve/arc.rs	curve	H	493	13	curve kinds
+curve/arc_of.rs	record_convert	M	94	2	constructors from record numbers / STEP intervals
+curve/blend.rs	curve	H	299	7	curve kinds
+curve/composite_curve.rs	curve	H	18	0	curve kinds
+curve/composite_curve/p1.rs	curve	H	2247	66	curve kinds
+curve/composite_curve/p2.rs	curve	H	1477	24	curve kinds
+curve/conic.rs	curve	H	905	28	curve kinds
+curve/conic_projection.rs	curve	H	532	18	curve kinds
+curve/contact.rs	curve	H	282	10	curve kinds
+curve/crv_in_volume.rs	surface	M	1593	63	volume maps live with surfaces
+curve/crv_on_surf.rs	curve	H	2306	84	curve kinds
+curve/curve.rs	curve	H	32	0	curve kinds
+curve/curve/p1.rs	curve	H	2559	25	curve kinds
+curve/curve/p2.rs	curve	H	4609	196	curve kinds
+curve/curve/p3.rs	curve	H	2607	44	curve kinds
+curve/curve/p4.rs	curve	H	2298	42	curve kinds
+curve/curve/p5.rs	curve	H	2864	44	curve kinds
+curve/curve/p6.rs	curve	H	2501	32	curve kinds
+curve/curve/p7.rs	curve	H	1459	10	curve kinds
+curve/curve/p8.rs	curve	H	4311	62	curve kinds
+curve/curve/p9.rs	curve	H	2068	28	curve kinds
+curve/curve/projected_pair.rs	curve	H	521	19	curve kinds
+curve/curve/projected_pair_all.rs	curve	H	405	11	curve kinds
+curve/curve/projected_pair_ellipse.rs	curve	H	630	14	curve kinds
+curve/curve/projected_pair_monotone.rs	curve	H	230	6	curve kinds
+curve/curve/turning.rs	curve	H	840	11	curve kinds
+curve/curve_cache.rs	curve	H	1641	44	curve kinds
+curve/ellipse.rs	curve	H	100	4	curve kinds
+curve/ellipse/p1.rs	curve	H	2558	48	curve kinds
+curve/ellipse/p2.rs	curve	H	2793	80	curve kinds
+curve/fit_projection.rs	curve	H	697	22	curve kinds
+curve/from_parameters.rs	record_convert	M	857	24	constructors from record numbers / STEP intervals
+curve/geodesic_offset.rs	surface	M	354	8	volume maps live with surfaces
+curve/hermite_curve.rs	curve	H	739	33	curve kinds
+curve/hyperbola.rs	curve	H	823	32	curve kinds
+curve/iso_curve.rs	curve	H	524	29	curve kinds
+curve/length_bound.rs	curve	H	959	22	curve kinds
+curve/line.rs	curve	H	2461	92	curve kinds
+curve/native_affine.rs	curve	H	232	11	curve kinds
+curve/offset_curve.rs	curve	H	904	33	curve kinds
+curve/parabola.rs	curve	H	814	34	curve kinds
+curve/path.rs	curve	H	748	24	curve kinds
+curve/plane_of.rs	curve	H	183	3	curve kinds
+curve/projected_curve.rs	curve	H	816	34	curve kinds
+curve/proximity.rs	curve	H	1021	21	curve kinds
+curve/spline_projection.rs	curve	H	503	13	curve kinds
+curve/step_edge.rs	record_convert	M	359	12	constructors from record numbers / STEP intervals
+curve/stretch.rs	curve	H	103	4	curve kinds
+curve/tangent_field.rs	surface	M	923	53	volume maps live with surfaces
+develop.rs	develop	H	96	0	sheet-metal development
+develop/bead.rs	develop	H	1187	29	sheet-metal development
+develop/chart.rs	develop	H	338	11	sheet-metal development
+develop/flat.rs	develop	H	102	0	sheet-metal development
+develop/fold.rs	develop	H	512	24	sheet-metal development
+develop/hermite.rs	develop	H	439	18	sheet-metal development
+develop/layout.rs	develop	H	2884	68	sheet-metal development
+develop/plane.rs	develop	H	178	29	sheet-metal development
+develop/refusal.rs	develop	H	119	1	sheet-metal development
+develop/rigid.rs	develop	H	254	16	sheet-metal development
+develop/seg.rs	develop	H	483	22	sheet-metal development
+develop/sheet.rs	develop	H	358	3	sheet-metal development
+error.rs	umbrella	M	2105	101	SolidError / Result / EntityRef umbrella (each crate gets its own enum; this wraps them)
+error/blend.rs	blend	H	2865	14	error type
+error/blend/band.rs	blend	H	70	1	error type
+error/blend/cliff.rs	blend	H	26	1	error type
+error/blend/corner.rs	blend	H	936	8	error type
+error/blend/crease_trim.rs	blend	H	90	2	error type
+error/blend/crossing.rs	blend	H	34	1	error type
+error/blend/ease.rs	blend	H	223	4	error type
+error/blend/input.rs	blend	H	53	1	error type
+error/blend/keep.rs	blend	H	60	2	error type
+error/blend/law_corner.rs	blend	H	33	1	error type
+error/blend/no_room.rs	blend	H	74	1	error type
+error/blend/overflow.rs	blend	H	65	2	error type
+error/blend/rational.rs	blend	H	89	2	error type
+error/blend/removal.rs	blend	H	403	5	error type
+error/blend/rib.rs	blend	H	30	1	error type
+error/blend/section.rs	blend	H	141	3	error type
+error/blend/set_up.rs	blend	H	172	1	error type
+error/blend/solver.rs	blend	H	968	3	error type
+error/blend/trace.rs	blend	H	373	5	error type
+error/blend/weld.rs	blend	H	25	0	error type
+error/boolean.rs	boolean	M	753	12	error type
+error/curve.rs	curve	H	1257	13	error type
+error/defeature.rs	defeature	M	177	3	defeaturing executive
+error/geom.rs	num	H	515	7	error type of geometry utilities
+error/heal.rs	heal	H	261	5	error type
+error/intersect.rs	geomq	M	906	7	error type
+error/mass.rs	topo	M	194	5	error type
+error/nurbs.rs	nurbs	H	987	14	error type
+error/offset.rs	offset	H	1942	16	error type
+error/primitive.rs	primitive	H	652	7	error type
+error/query.rs	num	L	377	5	query failure type is used from nurbs upward; lowest user decides
+error/surface.rs	surface	H	1385	10	error type
+error/sweep.rs	sweep	H	628	13	error type
+error/topology.rs	brep	M	1921	8	error type
+eval.rs	evalrec	M	78	0	evaluators on plain records
+eval/agreement.rs	evalrec	M	459	7	evaluators on plain records
+eval/check.rs	evalrec	M	89	4	evaluators on plain records
+eval/collapse.rs	evalrec	M	1870	35	evaluators on plain records
+eval/curve.rs	evalrec	M	331	12	evaluators on plain records
+eval/folded.rs	evalrec	M	326	6	evaluators on plain records
+eval/form.rs	evalrec	M	1575	49	evaluators on plain records
+eval/geometry.rs	evalrec	M	237	2	evaluators on plain records
+eval/hole_stacks.rs	evalrec	M	1010	22	evaluators on plain records
+eval/label.rs	evalrec	M	178	5	evaluators on plain records
+eval/normal_section.rs	evalrec	M	134	6	evaluators on plain records
+eval/outline.rs	evalrec	M	225	1	evaluators on plain records
+eval/outline/pieces.rs	evalrec	M	499	16	evaluators on plain records
+eval/pcurve.rs	evalrec	M	1616	40	evaluators on plain records
+eval/plan.rs	evalrec	M	461	24	evaluators on plain records
+eval/plan/basis.rs	evalrec	M	97	4	evaluators on plain records
+eval/plan/partials.rs	evalrec	M	213	11	evaluators on plain records
+eval/plan/uv.rs	evalrec	M	350	17	evaluators on plain records
+eval/pole.rs	evalrec	M	150	6	evaluators on plain records
+eval/query.rs	evalrec	M	915	29	evaluators on plain records
+eval/ruling.rs	evalrec	M	108	2	evaluators on plain records
+eval/sphere.rs	evalrec	M	471	15	evaluators on plain records
+eval/spline.rs	evalrec	M	745	38	evaluators on plain records
+eval/surface.rs	evalrec	M	723	21	evaluators on plain records
+eval/uv.rs	evalrec	M	433	18	evaluators on plain records
+eval/vec.rs	evalrec	M	47	11	evaluators on plain records
+geom.rs	num	H	45	0	vector/extent/box value types
+geom/a_object.rs	brep	M	1190	47	attributes, change notification, per-session context, tolerance policy
+geom/assert_array.rs	topo	L	630	25	selection tools and AssertValid bookkeeping on bodies
+geom/assert_array/labels.rs	topo	L	3207	3	selection tools and AssertValid bookkeeping on bodies
+geom/attribute.rs	brep	M	2147	116	attributes, change notification, per-session context, tolerance policy
+geom/axial_section.rs	num	L	410	8	content digest; section helpers; unclear home
+geom/axis2_placement.rs	num	H	533	31	vector/extent/box value types
+geom/certified.rs	num	H	234	17	vector/extent/box value types
+geom/content.rs	num	L	164	18	content digest; section helpers; unclear home
+geom/context.rs	brep	M	1264	82	attributes, change notification, per-session context, tolerance policy
+geom/expansion.rs	num	H	134	12	vector/extent/box value types
+geom/extent1d.rs	num	H	1011	62	vector/extent/box value types
+geom/extent2d.rs	num	H	898	67	vector/extent/box value types
+geom/extent3d.rs	num	H	1214	78	vector/extent/box value types
+geom/facing_trough.rs	num	L	118	1	content digest; section helpers; unclear home
+geom/geom_utility.rs	num	M	13	0	transform / geometric utilities / limits / dense matrices
+geom/geom_utility/p1.rs	num	M	1973	54	transform / geometric utilities / limits / dense matrices
+geom/geom_utility/p2.rs	num	M	1395	28	transform / geometric utilities / limits / dense matrices
+geom/global_solver.rs	algo	H	2315	70	solvers, trees, grids
+geom/grid.rs	algo	H	1292	53	solvers, trees, grids
+geom/hash_table.rs	algo	H	921	43	solvers, trees, grids
+geom/interval_vector.rs	num	H	46	5	vector/extent/box value types
+geom/krawczyk.rs	algo	H	320	17	solvers, trees, grids
+geom/local_solve1d.rs	algo	H	1171	29	solvers, trees, grids
+geom/local_solve_nd.rs	algo	H	798	25	solvers, trees, grids
+geom/matrix.rs	num	M	1152	33	transform / geometric utilities / limits / dense matrices
+geom/object.rs	brep	M	846	40	attributes, change notification, per-session context, tolerance policy
+geom/periodic_extent1d.rs	num	H	531	20	vector/extent/box value types
+geom/plane_height.rs	num	M	108	5	transform / geometric utilities / limits / dense matrices
+geom/point_set.rs	num	H	803	23	vector/extent/box value types
+geom/polar_box.rs	num	H	877	32	vector/extent/box value types
+geom/polynomial.rs	algo	H	271	9	solvers, trees, grids
+geom/pseudo_box.rs	num	H	1239	56	vector/extent/box value types
+geom/solution_array.rs	algo	H	1862	94	solvers, trees, grids
+geom/step_matrix.rs	num	H	144	5	vector/extent/box value types
+geom/tol.rs	num	M	1625	103	tolerance comparisons (are_same, is_zero, tol3d, constants) are scalar; the entity-tolerance helpers in the same file refer to bodies and must move to brep
+geom/tools.rs	topo	L	737	21	selection tools and AssertValid bookkeeping on bodies
+geom/transform.rs	num	M	804	43	transform / geometric utilities / limits / dense matrices
+geom/tree.rs	algo	H	1612	70	solvers, trees, grids
+geom/vector2d.rs	num	H	382	34	vector/extent/box value types
+geom/vector3d.rs	num	H	1064	71	vector/extent/box value types
+hatch.rs	hatch	H	194	7	hatching
+hatch/budget.rs	hatch	H	120	10	hatching
+hatch/clip.rs	hatch	H	867	39	hatching
+hatch/clip/circle.rs	hatch	H	257	8	hatching
+hatch/generate.rs	hatch	H	356	10	hatching
+hatch/phase.rs	hatch	H	276	15	hatching
+hatch/support.rs	hatch	H	104	11	hatching
+heal.rs	heal	H	11	0	heal and stitch
+heal/face_props.rs	topo	M	2784	99	healer property/gap records are used by topology, query and intersect (63+28+6 refs), so they sit with the body algorithms
+heal/gap.rs	topo	M	2753	149	healer property/gap records are used by topology, query and intersect (63+28+6 refs), so they sit with the body algorithms
+heal/heal_data.rs	heal	H	13	0	heal and stitch
+heal/heal_data/p1.rs	heal	H	882	24	heal and stitch
+heal/heal_data/p2.rs	heal	H	3618	149	heal and stitch
+heal/heal_data/p3.rs	heal	H	1389	46	heal and stitch
+heal/stitch.rs	heal	H	15	0	heal and stitch
+heal/stitch/bounds.rs	heal	H	1547	56	heal and stitch
+heal/stitch/p1.rs	heal	H	2973	84	heal and stitch
+heal/stitch/p2.rs	heal	H	1997	31	heal and stitch
+heal/tolerance_defects.rs	heal	H	1231	27	heal and stitch
+hlr.rs	hlr	M	3075	55	hidden curve removal / projections
+hlr/body.rs	hlr	M	345	12	hidden curve removal / projections
+hlr/curve.rs	hlr	M	674	20	hidden curve removal / projections
+hlr/silhouette.rs	hlr	M	627	12	hidden curve removal / projections
+hlr/spline.rs	hlr	M	158	13	hidden curve removal / projections
+hlr/surface.rs	hlr	M	2003	49	hidden curve removal / projections
+hlr/trim.rs	hlr	M	543	15	hidden curve removal / projections
+hlr/vec.rs	hlr	M	100	23	hidden curve removal / projections
+intersect.rs	geomq	M	19	0	surface/surface intersection, tracing, dropping, ray tracing
+intersect/adv_surface_intersector.rs	geomq	M	1932	41	surface/surface intersection, tracing, dropping, ray tracing
+intersect/adv_surface_intersector/contact_identity.rs	geomq	M	388	17	surface/surface intersection, tracing, dropping, ray tracing
+intersect/adv_surface_intersector/tangent_contacts.rs	geomq	M	577	14	surface/surface intersection, tracing, dropping, ray tracing
+intersect/api_intersectors.rs	topo	M	1077	25	classification and solving against topology
+intersect/curve_class.rs	topo	M	40	0	classification and solving against topology
+intersect/curve_class/p1.rs	topo	M	3339	121	classification and solving against topology
+intersect/curve_class/p2.rs	topo	M	2154	38	classification and solving against topology
+intersect/curve_class/p3.rs	topo	M	4003	72	classification and solving against topology
+intersect/curve_class/p4.rs	topo	M	2480	59	classification and solving against topology
+intersect/curve_class/p5.rs	topo	M	2152	61	classification and solving against topology
+intersect/curve_class/p6.rs	topo	M	2329	97	classification and solving against topology
+intersect/curve_class/p7.rs	topo	M	3866	104	classification and solving against topology
+intersect/curve_class/p8.rs	topo	M	1263	46	classification and solving against topology
+intersect/curve_class/p9.rs	topo	M	1033	17	classification and solving against topology
+intersect/curve_class/witness.rs	topo	M	746	12	classification and solving against topology
+intersect/point_class.rs	topo	M	2911	121	classification and solving against topology
+intersect/ray_tracer.rs	geomq	M	1782	43	surface/surface intersection, tracing, dropping, ray tracing
+intersect/surface_drop_curve.rs	geomq	M	2279	55	surface/surface intersection, tracing, dropping, ray tracing
+intersect/surface_drop_lib.rs	geomq	M	17	0	surface/surface intersection, tracing, dropping, ray tracing
+intersect/surface_drop_lib/boundary_moves.rs	geomq	M	630	17	surface/surface intersection, tracing, dropping, ray tracing
+intersect/surface_drop_lib/clamped_sliver.rs	geomq	M	712	23	surface/surface intersection, tracing, dropping, ray tracing
+intersect/surface_drop_lib/cylinder_section.rs	geomq	M	848	20	surface/surface intersection, tracing, dropping, ray tracing
+intersect/surface_drop_lib/knot_lines.rs	geomq	M	255	8	surface/surface intersection, tracing, dropping, ray tracing
+intersect/surface_drop_lib/p1.rs	geomq	M	1625	28	surface/surface intersection, tracing, dropping, ray tracing
+intersect/surface_drop_lib/p2.rs	geomq	M	1591	30	surface/surface intersection, tracing, dropping, ray tracing
+intersect/surface_drop_lib/p3.rs	geomq	M	3591	33	surface/surface intersection, tracing, dropping, ray tracing
+intersect/surface_intersector.rs	geomq	M	19	0	surface/surface intersection, tracing, dropping, ray tracing
+intersect/surface_intersector/p1.rs	geomq	M	2720	95	surface/surface intersection, tracing, dropping, ray tracing
+intersect/surface_intersector/p2.rs	geomq	M	1913	34	surface/surface intersection, tracing, dropping, ray tracing
+intersect/surface_intersector/p3.rs	geomq	M	2259	46	surface/surface intersection, tracing, dropping, ray tracing
+intersect/surface_intersector/p4.rs	geomq	M	2288	46	surface/surface intersection, tracing, dropping, ray tracing
+intersect/surface_intersector/p5.rs	geomq	M	1091	14	surface/surface intersection, tracing, dropping, ray tracing
+intersect/surface_intersector/singular_splits.rs	geomq	M	336	4	surface/surface intersection, tracing, dropping, ray tracing
+intersect/surface_intersector/sphere_span.rs	geomq	M	1152	31	surface/surface intersection, tracing, dropping, ray tracing
+intersect/surface_intersector/tangent_curves.rs	geomq	M	873	14	surface/surface intersection, tracing, dropping, ray tracing
+intersect/surface_intersector/tangent_tracer.rs	geomq	M	1298	32	surface/surface intersection, tracing, dropping, ray tracing
+intersect/surface_silhouette.rs	geomq	M	1199	25	surface/surface intersection, tracing, dropping, ray tracing
+intersect/surface_tracer.rs	geomq	M	2183	64	surface/surface intersection, tracing, dropping, ray tracing
+intersect/topology_solver.rs	topo	M	15	0	classification and solving against topology
+intersect/topology_solver/p1.rs	topo	M	2553	77	classification and solving against topology
+intersect/topology_solver/p2.rs	topo	M	1192	30	classification and solving against topology
+intersect/topology_solver/projected_bound.rs	topo	M	779	16	classification and solving against topology
+intersect/topology_solver/projected_metric.rs	topo	M	108	7	classification and solving against topology
+intersect/topology_solver/projected_residual.rs	topo	M	391	9	classification and solving against topology
+intersect/views.rs	geomq	M	157	5	surface/surface intersection, tracing, dropping, ray tracing
+kernel.rs	umbrella	L	1200	91	Kernel object (settings, rng, cancel, caches, counters); must be split: Tolerances/Rng/CancelToken low, Caches/Counters high
+lib.rs	umbrella	H	92	0	
+limits.rs	num	M	79	4	transform / geometric utilities / limits / dense matrices
+mass.rs	topo	M	10	0	mass properties and bounds (quadrature core could go to algo)
+mass/enclosure.rs	topo	M	2581	82	mass properties and bounds (quadrature core could go to algo)
+mass/integrator.rs	topo	M	889	25	mass properties and bounds (quadrature core could go to algo)
+mass/integrator/properties.rs	topo	M	3392	89	mass properties and bounds (quadrature core could go to algo)
+mass/loop_area.rs	topo	M	467	16	mass properties and bounds (quadrature core could go to algo)
+math.rs	num	H	903	41	vector/extent/box value types
+mesh_reduce.rs	mesh_reduce	H	939	26	mesh reduction (depends on nothing but error)
+mesh_reduce/collision.rs	mesh_reduce	H	749	25	mesh reduction (depends on nothing but error)
+mesh_reduce/quadric.rs	mesh_reduce	H	89	3	mesh reduction (depends on nothing but error)
+mesh_reduce/topology.rs	mesh_reduce	H	197	3	mesh reduction (depends on nothing but error)
+nurbs.rs	nurbs	H	49	0	NLib routines
+nurbs/b_spline_curve.rs	curve	H	22	0	SmBSplineCurve kernel-geometry wrapper
+nurbs/b_spline_curve/affine.rs	curve	H	88	1	SmBSplineCurve kernel-geometry wrapper
+nurbs/b_spline_curve/analysis.rs	curve	H	107	3	SmBSplineCurve kernel-geometry wrapper
+nurbs/b_spline_curve/p1.rs	curve	H	2063	83	SmBSplineCurve kernel-geometry wrapper
+nurbs/b_spline_curve/p2.rs	curve	H	2156	43	SmBSplineCurve kernel-geometry wrapper
+nurbs/b_spline_curve/p3.rs	curve	H	2428	38	SmBSplineCurve kernel-geometry wrapper
+nurbs/b_spline_curve/speed.rs	curve	H	397	12	SmBSplineCurve kernel-geometry wrapper
+nurbs/b_spline_curve/trim_image.rs	curve	H	779	14	SmBSplineCurve kernel-geometry wrapper
+nurbs/b_spline_curve_n_lib.rs	curve	H	3030	61	SmBSplineCurve kernel-geometry wrapper
+nurbs/b_spline_surface.rs	surface	H	22	0	SmBSplineSurface kernel-geometry wrapper
+nurbs/b_spline_surface/closure.rs	surface	H	266	4	SmBSplineSurface kernel-geometry wrapper
+nurbs/b_spline_surface/net_ties.rs	surface	H	158	5	SmBSplineSurface kernel-geometry wrapper
+nurbs/b_spline_surface/p1.rs	surface	H	2578	90	SmBSplineSurface kernel-geometry wrapper
+nurbs/b_spline_surface/p2.rs	surface	H	1860	35	SmBSplineSurface kernel-geometry wrapper
+nurbs/b_spline_surface_n_lib.rs	surface	H	16	0	SmBSplineSurface kernel-geometry wrapper
+nurbs/b_spline_surface_n_lib/approx.rs	surface	H	110	1	SmBSplineSurface kernel-geometry wrapper
+nurbs/b_spline_surface_n_lib/p1.rs	surface	H	1935	41	SmBSplineSurface kernel-geometry wrapper
+nurbs/b_spline_surface_n_lib/p2.rs	surface	H	4025	71	SmBSplineSurface kernel-geometry wrapper
+nurbs/basis_adv.rs	nurbs	H	580	15	NLib routines
+nurbs/basis_basic.rs	nurbs	H	857	22	NLib routines
+nurbs/bezier.rs	nurbs	H	901	33	NLib routines
+nurbs/certificate.rs	sweep	M	1559	27	certificate of a railed loft edge (refs offset, query)
+nurbs/crv_adv.rs	nurbs	H	10	0	NLib routines
+nurbs/crv_adv/p1.rs	nurbs	H	1507	26	NLib routines
+nurbs/crv_adv/p2.rs	nurbs	H	1096	25	NLib routines
+nurbs/crv_approx.rs	nurbs	H	619	7	NLib routines
+nurbs/crv_basic.rs	nurbs	H	1377	61	NLib routines
+nurbs/crv_common.rs	nurbs	H	668	13	NLib routines
+nurbs/crv_deviation.rs	nurbs	H	416	11	NLib routines
+nurbs/crv_fit.rs	nurbs	H	13	0	NLib routines
+nurbs/crv_fit/end_directions.rs	nurbs	H	144	2	NLib routines
+nurbs/crv_fit/p1.rs	nurbs	H	1020	33	NLib routines
+nurbs/crv_fit/p2.rs	nurbs	H	909	17	NLib routines
+nurbs/crv_fit/p3.rs	nurbs	H	1062	19	NLib routines
+nurbs/crv_fit/p4.rs	nurbs	H	359	5	NLib routines
+nurbs/crv_geom.rs	nurbs	H	586	6	NLib routines
+nurbs/crv_nurb.rs	nurbs	H	1372	29	NLib routines
+nurbs/crv_offset.rs	nurbs	H	386	6	NLib routines
+nurbs/crv_proportion.rs	nurbs	H	721	17	NLib routines
+nurbs/crv_tool.rs	nurbs	H	9	0	NLib routines
+nurbs/crv_tool/p1.rs	nurbs	H	1074	16	NLib routines
+nurbs/crv_tool/p2.rs	nurbs	H	1609	24	NLib routines
+nurbs/fit_arrays.rs	nurbs	H	258	27	NLib routines
+nurbs/funcs_adv.rs	nurbs	H	708	32	NLib routines
+nurbs/funcs_basic.rs	nurbs	H	672	41	NLib routines
+nurbs/geom.rs	nurbs	H	902	40	NLib routines
+nurbs/gordon.rs	surface	M	836	21	builds surfaces from curve networks
+nurbs/iges.rs	record_convert	M	722	19	constructors from record numbers / STEP intervals
+nurbs/index.rs	nurbs	H	125	12	NLib routines
+nurbs/knots.rs	nurbs	H	922	28	NLib routines
+nurbs/math.rs	nurbs	H	2233	94	NLib routines
+nurbs/n_sided.rs	surface	M	243	5	builds surfaces from curve networks
+nurbs/nurbs_crv.rs	nurbs	H	2724	58	NLib routines
+nurbs/nurbs_srf.rs	nurbs	H	1204	22	NLib routines
+nurbs/spiral.rs	nurbs	H	460	19	NLib routines
+nurbs/srf_adv.rs	nurbs	H	55	3	NLib routines
+nurbs/srf_adv/p1.rs	nurbs	H	874	9	NLib routines
+nurbs/srf_adv/p2.rs	nurbs	H	138	1	NLib routines
+nurbs/srf_adv/p3.rs	nurbs	H	1451	23	NLib routines
+nurbs/srf_adv/p4.rs	nurbs	H	1386	20	NLib routines
+nurbs/srf_adv/p5.rs	nurbs	H	1320	23	NLib routines
+nurbs/srf_adv/p6.rs	nurbs	H	1642	25	NLib routines
+nurbs/srf_basic.rs	nurbs	H	1259	61	NLib routines
+nurbs/srf_common.rs	nurbs	H	402	9	NLib routines
+nurbs/srf_deviation.rs	nurbs	H	243	6	NLib routines
+nurbs/srf_fit.rs	nurbs	H	749	13	NLib routines
+nurbs/srf_match.rs	nurbs	H	891	37	NLib routines
+nurbs/srf_nurb.rs	nurbs	H	2565	59	NLib routines
+nurbs/srf_offset.rs	nurbs	H	872	15	NLib routines
+nurbs/srf_seam.rs	nurbs	H	278	6	NLib routines
+nurbs/srf_tool.rs	nurbs	H	12	0	NLib routines
+nurbs/srf_tool/p1.rs	nurbs	H	1463	28	NLib routines
+nurbs/srf_tool/p2.rs	nurbs	H	922	9	NLib routines
+nurbs/srf_tool/p3.rs	nurbs	H	1068	20	NLib routines
+nurbs/srf_tool/p4.rs	nurbs	H	71	2	NLib routines
+offset.rs	offset	H	14	0	offset, shell, thicken
+offset/construction.rs	offset	H	25	0	offset, shell, thicken
+offset/construction/bernstein.rs	offset	H	503	35	offset, shell, thicken
+offset/construction/sheets.rs	offset	H	1402	41	offset, shell, thicken
+offset/curve_on_surfaces.rs	offset	H	724	21	offset, shell, thicken
+offset/curve_on_surfaces/analytic.rs	offset	H	447	11	offset, shell, thicken
+offset/draft.rs	offset	H	1238	32	offset, shell, thicken
+offset/offset_executive.rs	offset	H	30	0	offset, shell, thicken
+offset/offset_executive/attributes.rs	offset	H	363	24	offset, shell, thicken
+offset/offset_executive/cavity.rs	offset	H	159	3	offset, shell, thicken
+offset/offset_executive/crossing_loops.rs	offset	H	2336	36	offset, shell, thicken
+offset/offset_executive/edgeuse.rs	offset	H	1547	119	offset, shell, thicken
+offset/offset_executive/extinct_branches.rs	offset	H	417	9	offset, shell, thicken
+offset/offset_executive/extinct_branches/cell.rs	offset	H	223	12	offset, shell, thicken
+offset/offset_executive/face.rs	offset	H	209	10	offset, shell, thicken
+offset/offset_executive/merge.rs	offset	H	236	7	offset, shell, thicken
+offset/offset_executive/p1.rs	offset	H	3874	113	offset, shell, thicken
+offset/offset_executive/p2.rs	offset	H	3205	62	offset, shell, thicken
+offset/offset_executive/periodic_boundary.rs	offset	H	846	13	offset, shell, thicken
+offset/offset_executive/reach.rs	offset	H	3619	89	offset, shell, thicken
+offset/offset_executive/reach/net.rs	offset	H	1269	36	offset, shell, thicken
+offset/offset_executive/reach/quadric.rs	offset	H	392	14	offset, shell, thicken
+offset/offset_executive/step_gaps.rs	offset	H	2758	50	offset, shell, thicken
+offset/offset_executive/vertex.rs	offset	H	189	13	offset, shell, thicken
+offset/offset_faces.rs	offset	H	1548	38	offset, shell, thicken
+offset/offset_geometry_creation.rs	offset	H	8664	230	offset, shell, thicken
+offset/thin_features.rs	offset	H	252	7	offset, shell, thicken
+offset/wall_room.rs	offset	H	387	7	offset, shell, thicken
+primitive.rs	primitive	H	12	0	primitives and SM_API creators
+primitive/api_curve_ops.rs	primitive	H	213	5	primitives and SM_API creators
+primitive/api_curves.rs	primitive	H	710	19	primitives and SM_API creators
+primitive/api_primitives.rs	primitive	H	986	36	primitives and SM_API creators
+primitive/api_surface_ops.rs	primitive	H	259	6	primitives and SM_API creators
+primitive/api_trim_ops.rs	primitive	H	279	7	primitives and SM_API creators
+primitive/primitive_creation.rs	primitive	H	58	0	primitives and SM_API creators
+primitive/primitive_creation/model.rs	primitive	H	852	51	primitives and SM_API creators
+primitive/primitive_creation/model/attributes.rs	primitive	H	148	12	primitives and SM_API creators
+primitive/primitive_creation/model/merge.rs	primitive	H	802	42	primitives and SM_API creators
+primitive/primitive_creation/p1.rs	primitive	H	364	13	primitives and SM_API creators
+primitive/primitive_creation/p1/boolean.rs	primitive	H	362	4	primitives and SM_API creators
+primitive/primitive_creation/p1/offset_profile.rs	primitive	H	182	3	primitives and SM_API creators
+primitive/primitive_creation/p1/primitives.rs	primitive	H	1993	57	primitives and SM_API creators
+primitive/primitive_creation/p2.rs	primitive	H	60	1	primitives and SM_API creators
+primitive/primitive_creation/p2/access.rs	primitive	H	242	13	primitives and SM_API creators
+primitive/primitive_creation/p2/blend.rs	primitive	H	78	1	primitives and SM_API creators
+primitive/primitive_creation/p2/curve_sweeps.rs	primitive	H	235	4	primitives and SM_API creators
+primitive/primitive_creation/p2/planar_path.rs	primitive	H	743	12	primitives and SM_API creators
+primitive/primitive_creation/p2/rotational.rs	primitive	H	338	7	primitives and SM_API creators
+primitive/primitive_creation/p2/skin.rs	primitive	H	583	8	primitives and SM_API creators
+primitive/primitive_creation/p2/taper.rs	primitive	H	837	11	primitives and SM_API creators
+primitive/primitive_creation/p2/taper_walls.rs	primitive	H	2235	46	primitives and SM_API creators
+primitive/primitive_creation/p3.rs	primitive	H	37	0	primitives and SM_API creators
+primitive/primitive_creation/p3/access.rs	primitive	H	304	17	primitives and SM_API creators
+primitive/primitive_creation/p3/construct.rs	primitive	H	1481	26	primitives and SM_API creators
+primitive/primitive_creation/p3/geometry.rs	primitive	H	391	7	primitives and SM_API creators
+primitive/primitive_creation/p3/ruled.rs	primitive	H	249	3	primitives and SM_API creators
+primitive/primitive_creation/p3/skin_sources.rs	primitive	H	197	3	primitives and SM_API creators
+primitive/primitive_creation/p3/sweeps.rs	primitive	H	728	13	primitives and SM_API creators
+prism.rs	prism	M	27	0	prism operations on bodies
+prism/export_geometry.rs	planar	M	153	16	planar profile core
+prism/export_geometry/bulges.rs	planar	M	263	18	planar profile core
+prism/extrude.rs	planar	M	80	3	planar profile core
+prism/fit.rs	planar	M	199	7	planar profile core
+prism/gusset.rs	planar	M	502	20	planar profile core
+prism/import_geometry.rs	planar	M	86	6	planar profile core
+prism/measure.rs	prism	M	1129	25	prism operations on bodies
+prism/member.rs	planar	M	384	9	planar profile core
+prism/path_export.rs	planar	M	1248	54	planar profile core
+prism/placement.rs	planar	M	311	11	planar profile core
+prism/profile.rs	planar	M	1275	44	planar profile core
+prism/read.rs	prism	M	953	28	prism operations on bodies
+prism/recognition.rs	planar	M	1019	55	planar profile core
+prism/sheet.rs	prism	M	300	8	prism operations on bodies
+profile.rs	profile	H	560	19	opt-in profiler
+query.rs	topo	M	39	0	queries on bodies
+query/api_queries.rs	topo	M	2359	82	queries on bodies
+query/brep.rs	topo	M	1676	67	queries on bodies
+query/brep/ray.rs	topo	M	441	22	queries on bodies
+query/brep/ray/live.rs	topo	M	1190	98	queries on bodies
+query/contact.rs	topo	M	728	22	queries on bodies
+query/continuity.rs	topo	M	821	26	queries on bodies
+query/curve.rs	geomq	M	127	1	geometry-only queries
+query/curve_surface_gap.rs	geomq	M	4433	89	geometry-only queries
+query/curve_surface_gap/polynomial_pieces.rs	geomq	M	962	24	geometry-only queries
+query/deviation.rs	geomq	M	215	8	geometry-only queries
+query/distance_bound.rs	geomq	M	626	16	geometry-only queries
+query/edge.rs	topo	M	1457	26	queries on bodies
+query/edge_turn.rs	topo	M	249	8	queries on bodies
+query/face.rs	topo	M	22	0	queries on bodies
+query/face/p1.rs	topo	M	1446	43	queries on bodies
+query/face/p2.rs	topo	M	2739	148	queries on bodies
+query/face/p3.rs	topo	M	3400	79	queries on bodies
+query/face/p4.rs	topo	M	1043	25	queries on bodies
+query/face_surface.rs	topo	M	275	7	queries on bodies
+query/faces_continue.rs	topo	M	129	3	queries on bodies
+query/flush_contact.rs	topo	M	138	4	queries on bodies
+query/line_meeting.rs	geomq	M	59	5	geometry-only queries
+query/loop.rs	topo	M	1252	25	queries on bodies
+query/member_turn.rs	topo	M	58	1	queries on bodies
+query/normal.rs	geomq	M	539	21	geometry-only queries
+query/point_identity.rs	geomq	M	86	1	geometry-only queries
+query/poly.rs	topo	M	3446	150	queries on bodies
+query/poly/copy.rs	topo	M	521	8	queries on bodies
+query/poly_properties.rs	topo	M	459	7	queries on bodies
+query/seam_bound.rs	geomq	M	1412	45	geometry-only queries
+query/tangent_edge.rs	topo	M	2995	73	queries on bodies
+query/tess.rs	surface	M	1158	42	tessellation cache of a trimmed surface
+query/vertex_meet.rs	geomq	M	34	1	geometry-only queries
+surface.rs	surface	H	48	0	surface kinds
+surface/b_spline_volume.rs	surface	H	584	22	surface kinds
+surface/b_spline_volume_n_lib.rs	surface	H	384	7	surface kinds
+surface/ball_patch.rs	surface	H	509	26	surface kinds
+surface/bend_volume.rs	surface	H	1539	36	surface kinds
+surface/cone.rs	surface	H	19	0	surface kinds
+surface/cone/continued.rs	surface	H	119	1	surface kinds
+surface/cone/p1.rs	surface	H	2258	64	surface kinds
+surface/cone/p2.rs	surface	H	2430	30	surface kinds
+surface/cone/p3.rs	surface	H	1409	24	surface kinds
+surface/continued.rs	surface	H	308	8	surface kinds
+surface/curve_bounded_surface.rs	surface	H	681	35	surface kinds
+surface/cylinder_wall.rs	record_convert	M	74	5	constructors from record numbers / STEP intervals
+surface/extend.rs	surface	H	2196	60	surface kinds
+surface/extend/analytic.rs	surface	H	1285	15	surface kinds
+surface/extend/ball.rs	surface	H	1024	15	surface kinds
+surface/extend/blend.rs	surface	H	723	12	surface kinds
+surface/extend/local_iso.rs	surface	H	100	1	surface kinds
+surface/extend/measure.rs	surface	H	256	9	surface kinds
+surface/extend/sides.rs	surface	H	355	5	surface kinds
+surface/face_evaluation.rs	record_convert	M	240	7	constructors from record numbers / STEP intervals
+surface/face_pair.rs	record_convert	M	92	2	constructors from record numbers / STEP intervals
+surface/face_pair_cylinder.rs	record_convert	M	206	5	constructors from record numbers / STEP intervals
+surface/face_surface.rs	record_convert	M	614	12	constructors from record numbers / STEP intervals
+surface/from_parameters.rs	record_convert	M	533	9	constructors from record numbers / STEP intervals
+surface/implicit.rs	surface	H	2969	60	surface kinds
+surface/mid_joint.rs	offset	M	203	6	sheet mid-surface helpers
+surface/mid_sheet.rs	offset	M	221	7	sheet mid-surface helpers
+surface/normal_cone.rs	surface	H	273	6	surface kinds
+surface/offset_surface.rs	surface	H	3626	129	surface kinds
+surface/plane.rs	surface	H	12	0	surface kinds
+surface/plane/cover.rs	surface	H	81	1	surface kinds
+surface/plane/p1.rs	surface	H	2589	81	surface kinds
+surface/plane/p2.rs	surface	H	1828	22	surface kinds
+surface/procedural_blend.rs	surface	H	2051	98	surface kinds
+surface/procedural_blend/bead.rs	surface	H	400	20	surface kinds
+surface/procedural_blend/chamfer.rs	surface	H	223	10	surface kinds
+surface/procedural_blend/convert.rs	surface	H	1595	50	surface kinds
+surface/procedural_blend/corner.rs	surface	H	1066	40	surface kinds
+surface/procedural_blend/exact.rs	surface	H	558	23	surface kinds
+surface/procedural_blend/offset.rs	surface	H	340	8	surface kinds
+surface/procedural_blend/record.rs	surface	H	1269	21	surface kinds
+surface/procedural_sweep.rs	surface	H	1189	64	surface kinds
+surface/procedural_sweep/path.rs	surface	H	1353	43	surface kinds
+surface/recognise.rs	surface	H	452	17	surface kinds
+surface/side.rs	surface	H	1232	32	surface kinds
+surface/sphere.rs	surface	H	3230	68	surface kinds
+surface/srf_in_volume.rs	surface	H	1304	55	surface kinds
+surface/step_seam.rs	record_convert	M	367	9	constructors from record numbers / STEP intervals
+surface/step_window.rs	record_convert	M	1670	66	constructors from record numbers / STEP intervals
+surface/surf_of_extrusion.rs	surface	H	14	0	surface kinds
+surface/surf_of_extrusion/p1.rs	surface	H	2399	73	surface kinds
+surface/surf_of_extrusion/p2.rs	surface	H	1896	29	surface kinds
+surface/surf_of_extrusion/plane_patch.rs	surface	H	2287	52	surface kinds
+surface/surf_of_revolution.rs	surface	H	18	0	surface kinds
+surface/surf_of_revolution/p1.rs	surface	H	2295	72	surface kinds
+surface/surf_of_revolution/p2.rs	surface	H	1257	23	surface kinds
+surface/surf_of_revolution/p3.rs	surface	H	1632	34	surface kinds
+surface/surface.rs	surface	H	30	0	surface kinds
+surface/surface/approximate.rs	surface	H	836	10	surface kinds
+surface/surface/assert_valid.rs	surface	H	2721	63	surface kinds
+surface/surface/assert_valid/wrapped.rs	surface	H	182	4	surface kinds
+surface/surface/exact_pieces.rs	surface	H	2039	48	surface kinds
+surface/surface/fold_certificate.rs	surface	H	1418	26	surface kinds
+surface/surface/p1.rs	surface	H	5081	158	surface kinds
+surface/surface/p10.rs	surface	H	1664	26	surface kinds
+surface/surface/p11.rs	surface	H	2214	29	surface kinds
+surface/surface/p2.rs	surface	H	7965	283	surface kinds
+surface/surface/p3.rs	surface	H	2298	39	surface kinds
+surface/surface/p4.rs	surface	H	2513	30	surface kinds
+surface/surface/p5.rs	surface	H	2660	37	surface kinds
+surface/surface/p6.rs	surface	H	2577	39	surface kinds
+surface/surface/p7.rs	surface	H	4172	69	surface kinds
+surface/surface/p8.rs	surface	H	4650	75	surface kinds
+surface/surface/p9.rs	surface	H	1266	24	surface kinds
+surface/surface/replay.rs	surface	H	308	12	surface kinds
+surface/surface_cache.rs	surface	H	18	0	surface kinds
+surface/surface_cache/face_context.rs	surface	H	413	38	surface kinds
+surface/surface_cache/p1.rs	surface	H	3635	137	surface kinds
+surface/surface_cache/p2.rs	surface	H	1194	13	surface kinds
+surface/surface_cache/p3.rs	surface	H	1335	29	surface kinds
+surface/surface_point_solve.rs	surface	H	14	0	surface kinds
+surface/surface_point_solve/p1.rs	surface	H	2073	66	surface kinds
+surface/surface_point_solve/p2.rs	surface	H	2194	27	surface kinds
+surface/surface_point_solve/p3.rs	surface	H	690	10	surface kinds
+surface/torus.rs	surface	H	2113	54	surface kinds
+surface/trim_srf_cache.rs	surface	H	1695	63	surface kinds
+surface/twist_volume.rs	surface	H	1050	34	surface kinds
+surface/unbend_volume.rs	surface	H	1459	34	surface kinds
+surface/volume.rs	surface	H	14	0	surface kinds
+surface/volume/assert_valid.rs	surface	H	395	6	surface kinds
+surface/volume/p1.rs	surface	H	2366	80	surface kinds
+surface/volume/p2.rs	surface	H	1712	41	surface kinds
+sweep.rs	sweep	H	25	0	sweeps
+sweep/analytic_revolution.rs	sweep	H	581	12	sweeps
+sweep/api_brep.rs	sweep	H	1089	27	sweeps
+sweep/api_surfaces.rs	sweep	H	529	12	sweeps
+sweep/cornered.rs	sweep	H	345	9	sweeps
+sweep/directed.rs	sweep	H	113	5	sweeps
+sweep/extrude.rs	sweep	H	126	1	sweeps
+sweep/loft_rails.rs	sweep	H	1171	29	sweeps
+sweep/loft_sections.rs	sweep	H	2188	84	sweeps
+sweep/member.rs	sweep	H	475	16	sweeps
+sweep/rotational_sweep_geometry.rs	sweep	H	1298	31	sweeps
+sweep/screw.rs	sweep	H	922	33	sweeps
+sweep/section_blend.rs	sweep	H	1363	29	sweeps
+sweep/segments.rs	sweep	H	210	6	sweeps
+sweep/skin_ends.rs	sweep	H	349	3	sweeps
+sweep/skin_flat_walls.rs	sweep	H	115	3	sweeps
+sweep/stations.rs	sweep	H	1024	32	sweeps
+sweep/topology_sweep.rs	sweep	H	338	17	sweeps
+sweep/topology_sweep/access.rs	sweep	H	790	61	sweeps
+sweep/topology_sweep/engine.rs	sweep	H	1421	35	sweeps
+sweep/topology_sweep/geometry.rs	sweep	H	171	11	sweeps
+sweep/topology_sweep/regularize.rs	sweep	H	126	2	sweeps
+sweep/topology_sweep/store.rs	sweep	H	1420	88	sweeps
+sweep/topology_sweep/store/classification.rs	sweep	H	229	25	sweeps
+sweep/topology_sweep/store/merge.rs	sweep	H	882	37	sweeps
+sweep/trans_sweep_geometry.rs	sweep	H	375	12	sweeps
+topology.rs	brep	M	2393	156	the body: ids, arenas, entity accessors and edit primitives
+topology/api_files.rs	record_convert	M	333	7	serialized B-rep data and database I/O
+topology/api_projection.rs	hlr	M	563	12	hidden curve removal / projections
+topology/brep.rs	brep	M	249	7	the body: ids, arenas, entity accessors and edit primitives
+topology/brep/cutting.rs	boolean	M	782	11	boolean and its proto topology; planar cut
+topology/brep/enclosing.rs	topo	M	108	2	trims, validity, section, traversal, trees on bodies
+topology/brep/local_operation.rs	offset	H	2012	33	offset, shell, thicken
+topology/brep/mirror.rs	topo	M	613	8	trims, validity, section, traversal, trees on bodies
+topology/brep/outer_shells.rs	topo	M	73	2	trims, validity, section, traversal, trees on bodies
+topology/brep/p1.rs	brep	M	3843	111	the body: ids, arenas, entity accessors and edit primitives
+topology/brep/p10.rs	record_convert	M	3153	105	serialized B-rep data and database I/O
+topology/brep/p2.rs	brep	M	3625	111	the body: ids, arenas, entity accessors and edit primitives
+topology/brep/p3.rs	brep	M	5426	129	the body: ids, arenas, entity accessors and edit primitives
+topology/brep/p4.rs	brep	M	2174	73	the body: ids, arenas, entity accessors and edit primitives
+topology/brep/p5.rs	brep	M	4110	145	the body: ids, arenas, entity accessors and edit primitives
+topology/brep/p6.rs	brep	M	2595	52	the body: ids, arenas, entity accessors and edit primitives
+topology/brep/p7.rs	record_convert	M	3010	83	serialized B-rep data and database I/O
+topology/brep/p8.rs	brep	M	1444	20	the body: ids, arenas, entity accessors and edit primitives
+topology/brep/p9.rs	brep	M	3251	77	the body: ids, arenas, entity accessors and edit primitives
+topology/brep/planar_section.rs	topo	M	821	10	trims, validity, section, traversal, trees on bodies
+topology/brep/primitive_outward.rs	topo	M	1447	36	trims, validity, section, traversal, trees on bodies
+topology/brep/seam_turn.rs	topo	M	129	1	trims, validity, section, traversal, trees on bodies
+topology/brep/sheet.rs	topo	M	909	24	trims, validity, section, traversal, trees on bodies
+topology/brep/side_extend.rs	topo	M	377	12	trims, validity, section, traversal, trees on bodies
+topology/brep/trim_extend.rs	topo	M	724	15	trims, validity, section, traversal, trees on bodies
+topology/brep/validation.rs	topo	M	185	9	trims, validity, section, traversal, trees on bodies
+topology/brep/validation/assert_valid.rs	topo	M	870	34	trims, validity, section, traversal, trees on bodies
+topology/brep/validation/assert_valid/base.rs	topo	M	293	8	trims, validity, section, traversal, trees on bodies
+topology/brep/validation/assert_valid/brep.rs	topo	M	643	8	trims, validity, section, traversal, trees on bodies
+topology/brep/validation/assert_valid/curves.rs	topo	M	532	12	trims, validity, section, traversal, trees on bodies
+topology/brep/validation/assert_valid/edge.rs	topo	M	1001	15	trims, validity, section, traversal, trees on bodies
+topology/brep/validation/assert_valid/face.rs	topo	M	497	7	trims, validity, section, traversal, trees on bodies
+topology/brep/validation/assert_valid/loops.rs	topo	M	238	4	trims, validity, section, traversal, trees on bodies
+topology/brep/validation/assert_valid/seams.rs	topo	M	209	13	trims, validity, section, traversal, trees on bodies
+topology/brep/validation/assert_valid/shell.rs	topo	M	290	7	trims, validity, section, traversal, trees on bodies
+topology/brep/validation/assert_valid/tangent_sections.rs	topo	M	726	19	trims, validity, section, traversal, trees on bodies
+topology/brep/validation/assert_valid/vertex.rs	topo	M	110	2	trims, validity, section, traversal, trees on bodies
+topology/brep/validation/pointers.rs	topo	M	2366	45	trims, validity, section, traversal, trees on bodies
+topology/brep/validation/soundness.rs	topo	M	182	5	trims, validity, section, traversal, trees on bodies
+topology/brep/validation/spatial.rs	topo	M	156	5	trims, validity, section, traversal, trees on bodies
+topology/brep/validation/wide_vertices.rs	topo	M	241	7	trims, validity, section, traversal, trees on bodies
+topology/brep/vertex_fans.rs	topo	M	229	4	trims, validity, section, traversal, trees on bodies
+topology/brep_cache.rs	topo	M	813	45	trims, validity, section, traversal, trees on bodies
+topology/brep_constructor.rs	brep	M	1408	45	the body: ids, arenas, entity accessors and edit primitives
+topology/brep_data.rs	record_convert	M	2024	55	serialized B-rep data and database I/O
+topology/brep_data_write.rs	record_convert	M	1609	38	serialized B-rep data and database I/O
+topology/database_io.rs	record_convert	M	1362	102	serialized B-rep data and database I/O
+topology/edge.rs	brep	M	3248	103	the body: ids, arenas, entity accessors and edit primitives
+topology/edge/edge_form.rs	topo	M	84	2	trims, validity, section, traversal, trees on bodies
+topology/edgeuse.rs	brep	M	16	0	the body: ids, arenas, entity accessors and edit primitives
+topology/edgeuse/p1.rs	brep	M	1678	69	the body: ids, arenas, entity accessors and edit primitives
+topology/edgeuse/p2.rs	brep	M	1470	21	the body: ids, arenas, entity accessors and edit primitives
+topology/edgeuse/p3.rs	topo	M	4090	70	trims, validity, section, traversal, trees on bodies
+topology/face.rs	brep	M	17	0	the body: ids, arenas, entity accessors and edit primitives
+topology/face/assert_tests.rs	topo	M	646	21	trims, validity, section, traversal, trees on bodies
+topology/face/curve_on.rs	topo	M	87	1	trims, validity, section, traversal, trees on bodies
+topology/face/p1.rs	brep	M	3771	93	the body: ids, arenas, entity accessors and edit primitives
+topology/face/p2.rs	brep	M	3926	131	the body: ids, arenas, entity accessors and edit primitives
+topology/face/p3.rs	topo	M	3077	113	trims, validity, section, traversal, trees on bodies
+topology/face/p4.rs	brep	M	3131	116	the body: ids, arenas, entity accessors and edit primitives
+topology/geometry_write.rs	record_convert	M	562	17	serialized B-rep data and database I/O
+topology/integrity.rs	brep	M	438	9	the body: ids, arenas, entity accessors and edit primitives
+topology/loopuse.rs	brep	M	1687	62	the body: ids, arenas, entity accessors and edit primitives
+topology/part_file.rs	record_convert	M	809	19	serialized B-rep data and database I/O
+topology/proto_topology.rs	boolean	M	20	0	boolean and its proto topology; planar cut
+topology/proto_topology/p1.rs	boolean	M	191	0	boolean and its proto topology; planar cut
+topology/proto_topology/p1/api_transform.rs	boolean	M	304	11	boolean and its proto topology; planar cut
+topology/proto_topology/p1/assembly.rs	boolean	M	314	20	boolean and its proto topology; planar cut
+topology/proto_topology/p1/copy_brep_map.rs	boolean	M	99	10	boolean and its proto topology; planar cut
+topology/proto_topology/p1/owning_topology.rs	boolean	M	550	28	boolean and its proto topology; planar cut
+topology/proto_topology/p1/proto.rs	boolean	M	4816	253	boolean and its proto topology; planar cut
+topology/proto_topology/p2.rs	boolean	M	4102	97	boolean and its proto topology; planar cut
+topology/proto_topology/p2/imprint_ends.rs	boolean	M	1222	15	boolean and its proto topology; planar cut
+topology/proto_topology/p3.rs	boolean	M	3043	53	boolean and its proto topology; planar cut
+topology/shell.rs	brep	M	2025	76	the body: ids, arenas, entity accessors and edit primitives
+topology/stamped.rs	brep	M	96	8	the body: ids, arenas, entity accessors and edit primitives
+topology/topology.rs	brep	M	1416	91	the body: ids, arenas, entity accessors and edit primitives
+topology/topology_traverser.rs	topo	M	845	31	trims, validity, section, traversal, trees on bodies
+topology/trimming_tools.rs	topo	M	2901	68	trims, validity, section, traversal, trees on bodies
+topology/trimming_tools/curve_loops.rs	topo	M	770	25	trims, validity, section, traversal, trees on bodies
+topology/vertex.rs	brep	M	2142	64	the body: ids, arenas, entity accessors and edit primitives
+topology/vertex/corner.rs	brep	M	602	12	the body: ids, arenas, entity accessors and edit primitives
+topology/vertexuse.rs	brep	M	2145	66	the body: ids, arenas, entity accessors and edit primitives
