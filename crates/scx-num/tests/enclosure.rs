@@ -619,10 +619,12 @@ fn taylor_models<const N: usize>(seed: u64, name: &str) {
     let mut t = Tally::default();
     for _ in 0..400 {
         let deg = rng.below(N as u64 + 3) as usize;
+        let deg_b = rng.below(N as u64 + 3) as usize;
+        let deg_q = rng.below(N as u64 + 3) as usize;
         let a = picked::<N>(&mut rng, deg, false);
-        let b = picked::<N>(&mut rng, rng.below(N as u64 + 3) as usize, false);
+        let b = picked::<N>(&mut rng, deg_b, false);
         let p = picked::<N>(&mut rng, deg, true);
-        let q = picked::<N>(&mut rng, rng.below(N as u64 + 3) as usize, true);
+        let q = picked::<N>(&mut rng, deg_q, true);
         let x = dyadic(&mut rng, 64, 4);
         let models = [
             ("at", a.tm),
