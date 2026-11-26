@@ -6,6 +6,8 @@
 // Changes: `Transform::of_placement` stays in solidcore (it needs `Axis2Placement`); `det3`
 // public (eval and blend use it); `EFF_ZERO_PARAM` defined from `consts::EPS_PARAM`;
 // `gamma` from `crate::certified`; paths; adds the test `det3_is_the_integer_determinant`.
+// No `UNDEF_DOUBLE` (`SM_UNDEF_DOUBLE`, `docs/01-architecture.md` §10.1): an unset value is
+// an `Option`.
 //! Small `f64` linear-algebra types: [`Vec3`]/[`Point3`], [`Vec2`]/[`Point2`],
 //! [`Transform`], and the numeric constants of `SmMath.h`.
 //!
@@ -61,8 +63,6 @@ pub const EFF_ZERO_PARAM: f64 = crate::consts::EPS_PARAM;
 pub const EFF_ZERO_DEG: f64 = 1.0e-4;
 /// `SM_EFF_ZERO_RAD`: numeric zero tolerance for angles in radians.
 pub const EFF_ZERO_RAD: f64 = EFF_ZERO_DEG * PI / 180.0;
-/// `SM_UNDEF_DOUBLE`: upstream's sentinel for an unset double.
-pub const UNDEF_DOUBLE: f64 = 1.23456e-61;
 /// `SM_BIG_DOUBLE`: a value larger than any coordinate (used for "inside out" extents).
 pub const BIG_DOUBLE: f64 = 1.0e20;
 /// `SM_INFINITE_PARAMETER`: the value that marks an unbounded interval end.

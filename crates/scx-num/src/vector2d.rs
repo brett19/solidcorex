@@ -3,6 +3,9 @@
 // Upstream record (verbatim from that file): Upstream: `source/SMLib/inc/SmVector2d.h`,
 // `source/SMLib/src/SmVector2d.cpp`.
 // Changes: errors are `NumError` / `NumFailure` (`SolidError`, `GeomFailure` at the pin); paths.
+// No `SM_UNDEF_DOUBLE` sentinel (`docs/01-architecture.md` §10.1): `UNDEF`, `set_uninitialized`
+// and `is_initialized` are gone (an unset vector is `None`); the test
+// `upstream_my_test_vector2d` drops its unset-vector checks.
 //! Two-dimensional vectors and points ([`Vec2`] / [`Point2`]), usually surface
 //! parameters `(u, v)`: arithmetic, lengths, distances, unitizing, rotation and angles.
 //!
@@ -16,8 +19,6 @@
 //! | [`Vec2::from_array`], `From<[f64; 2]>` | `SmVector2d(double *)`                           |
 //! | `Copy` / assignment                    | copy constructor, `operator=(const SmVector2d&)`, `Copy` |
 //! | [`Vec2::from_xy`]                      | `operator=(const SmVector3d&)`                   |
-//! | [`Vec2::UNDEF`], [`Vec2::set_uninitialized`] | `SmVector2d()` (default ctor), `SetUninitialized` |
-//! | [`Vec2::is_initialized`]               | `IsInitialized`                                  |
 //! | [`Vec2::is_zero`]                      | `IsZero`                                         |
 //! | [`Vec2::length_squared`]               | `LengthSquared`                                  |
 //! | [`Vec2::length`]                       | `Length`                                         |
@@ -47,8 +48,8 @@
 //!   updating `self`; on error upstream leaves the vector unchanged.
 //! - Upstream's tolerant `operator==` / `operator!=` are [`Vec2::approx_eq`] /
 //!   [`Vec2::approx_ne`]; Rust `==` (`PartialEq`) is exact component equality.
-//! - `Default` is the zero vector; upstream's default constructor gives
-//!   [`Vec2::UNDEF`] (both components `SM_UNDEF_DOUBLE`).
+//! - `Default` is the zero vector. Upstream's default constructor gives an unset vector
+//!   (both components `SM_UNDEF_DOUBLE`); here an unset vector is an `Option<Vec2>`.
 //! - `operator[]` with an index other than 0 or 1 returns `0.0` (const) or
 //!   dereferences `NULL` (non-const) after logging `SM_ERR`; Rust returns
 //!   a [`NumFailure`](crate::error::NumFailure) with status 1001 (`SM_ERR`) for both.
@@ -61,7 +62,7 @@ use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use crate::error::NumFailure;
 use crate::error::{NumError, Result};
-use crate::math::{Vec3, EFF_ZERO, EFF_ZERO_SQ, PI, UNDEF_DOUBLE};
+use crate::math::{Vec3, EFF_ZERO, EFF_ZERO_SQ, PI};
 use crate::tol;
 use crate::vector3d::{acos as sm_acos, asin as sm_asin, sqrt as sm_sqrt};
 
@@ -80,10 +81,6 @@ pub type Point2 = Vec2;
 impl Vec2 {
     /// The zero vector.
     pub const ZERO: Self = Self::new(0.0, 0.0);
-
-    /// The uninitialized vector: both components `SM_UNDEF_DOUBLE` (upstream's
-    /// default constructor).
-    pub const UNDEF: Self = Self::new(UNDEF_DOUBLE, UNDEF_DOUBLE);
 
     /// Creates a vector from its components (`SmVector2d(dX, dY)`, `Set`).
     #[must_use]
@@ -108,17 +105,6 @@ impl Vec2 {
     #[must_use]
     pub const fn from_xy(v: Vec3) -> Self {
         Self::new(v.x, v.y)
-    }
-
-    /// Sets both components to `SM_UNDEF_DOUBLE` (`SetUninitialized`).
-    pub fn set_uninitialized(&mut self) {
-        *self = Self::UNDEF;
-    }
-
-    /// True when neither component is `SM_UNDEF_DOUBLE` (`IsInitialized`).
-    #[must_use]
-    pub fn is_initialized(self) -> bool {
-        self.x != UNDEF_DOUBLE && self.y != UNDEF_DOUBLE
     }
 
     /// True when the length is below `tol` (`IsZero`; upstream default
@@ -396,16 +382,9 @@ mod tests {
     /// `my_test_vector2d` (`tests/prog_test/src/smCurveTest.cpp:1758`), owned parts.
     #[test]
     fn upstream_my_test_vector2d() {
-        let mut v2 = Vec2::new(0.5, 1.2);
-        assert!(v2.is_initialized());
-        v2.set_uninitialized();
-        assert!(!v2.is_initialized());
-
         let mut v3 = Vec2::from([1.0, 2.0]);
         assert!(close(v3.length_squared(), 5.0));
-        let mut v4 = Vec2::UNDEF;
-        assert!(!v4.is_initialized());
-        v4 = Vec2::new(3.0, 4.0);
+        let mut v4 = Vec2::new(3.0, 4.0);
         assert!(close(v4.length(), 5.0));
         let v5 = v4;
         v4 = -v4;

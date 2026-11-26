@@ -3,7 +3,10 @@
 // Upstream record (verbatim from that file): Upstream: `source/SMLib/src/SmExtent3d.cpp`,
 // `source/SMLib/inc/SmExtent3d.h`.
 // Changes: `from_pseudo_box` and `circumscribe` stay in solidcore (they need `PseudoBox`);
-// `min`/`max` fields private; errors are `NumError`; paths.
+// `min`/`max` fields private; errors are `NumError`; paths. `is_defined` (`AssertDefined`, the
+// destructor's `SM_UNDEF_DOUBLE` sentinel) is gone (`docs/01-architecture.md` §10.1), so
+// `intersect_line` no longer refuses a box holding that value; the test `predicates` drops its
+// check.
 //! Axis-aligned 3D extents (bounding boxes): construction, growth, set operations,
 //! distances, containment and classification predicates, line clipping, and
 //! approximation of unbounded extents.
@@ -19,7 +22,6 @@
 //! | [`Extent3d::from_point`]               | `SmExtent3d(const SmPoint3d&)`                 |
 //! | [`Extent3d::from_bounds`]              | `SmExtent3d(double x6)`                        |
 //! | `Clone`/`Copy`                         | copy constructor, `operator=`, destructor      |
-//! | [`Extent3d::is_defined`]               | `AssertDefined`                                |
 //! | [`Extent3d::set_unbounded`]            | `SetUnbounded`                                 |
 //! | [`Extent3d::min`], [`Extent3d::max`], [`Extent3d::mid`] | `GetMin()`, `GetMax()`, `GetMid()` |
 //! | [`Extent3d::u_min`] .. [`Extent3d::w_max`] | `GetUMin` .. `GetWMax`                     |
@@ -84,7 +86,7 @@
 //!   `SM_DEBUG_CODE`; in the release build they always succeed, so the Rust methods
 //!   return nothing.
 //! - The destructor's "undefined" sentinel values have no Rust counterpart (a dropped
-//!   value cannot be used); [`Extent3d::is_defined`] still checks for them.
+//!   value cannot be used), nor has `AssertDefined`.
 //! - `SM_ASSERT*` debug checks are not ported (they do not change results).
 //! - Upstream bug kept: `ContainsLineSeg3d` returns true when *either* end point is
 //!   inside (it ORs the two tests). See `plan/findings.md`.
@@ -95,7 +97,7 @@ use crate::error::{NumError, Result};
 use crate::extent1d::Extent1d;
 use crate::math::{
     is_infinite_param, max2, max3, min2, min3, Point3, Vec3, BIG_DOUBLE, EFF_ZERO, EFF_ZERO_SQ,
-    INFINITE_PARAMETER, PI, UNDEF_DOUBLE,
+    INFINITE_PARAMETER, PI,
 };
 use crate::vector3d::{asin, sqrt};
 
@@ -334,18 +336,6 @@ impl Extent3d {
     /// Resets to the "inside out" state of [`Extent3d::new`] (`Init`).
     pub fn init(&mut self) {
         *self = Self::new();
-    }
-
-    /// True unless a coordinate holds upstream's destructor sentinel
-    /// (`±UNDEF_DOUBLE`) (`AssertDefined`).
-    #[must_use]
-    pub fn is_defined(&self) -> bool {
-        self.min.x != UNDEF_DOUBLE
-            && self.min.y != UNDEF_DOUBLE
-            && self.min.z != UNDEF_DOUBLE
-            && self.max.x != -UNDEF_DOUBLE
-            && self.max.y != -UNDEF_DOUBLE
-            && self.max.z != -UNDEF_DOUBLE
     }
 
     /// Makes every interval `[-INFINITE_PARAMETER, INFINITE_PARAMETER]` (`SetUnbounded`).
@@ -986,10 +976,9 @@ impl Extent3d {
     /// Clips the line `point + t * dir` against the box (any mix of unbounded
     /// intervals is allowed) (`IntersectLine`).
     ///
-    /// Fails when `dir` is shorter than `EFF_ZERO` or the extent is not
-    /// [defined](Extent3d::is_defined).
+    /// Fails when `dir` is shorter than `EFF_ZERO`.
     pub fn intersect_line(&self, point: Point3, dir: Vec3) -> Result<LineHit> {
-        if dir.length_squared() < EFF_ZERO_SQ || !self.is_defined() {
+        if dir.length_squared() < EFF_ZERO_SQ {
             return Err(NumError::InvalidInput {
                 operation: "geom::extent3d::Extent3d::intersect_line",
                 reason: "zero-length line direction or undefined extent",
@@ -1392,7 +1381,6 @@ mod tests {
         assert_eq!(bn, p(1.0, -1.0, 0.0));
         assert!(Extent3d::from_point(p(1.0, 1.0, 1.0)).is_point_sized(EFF_ZERO));
         assert!(e.is_contained_by(&e, 0.0));
-        assert!(e.is_defined());
         let mut g = e;
         g.expand_absolute(1.0);
         assert_eq!(g.min(), p(-1.0, -1.0, -1.0));

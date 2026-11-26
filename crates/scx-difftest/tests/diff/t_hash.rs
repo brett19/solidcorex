@@ -62,7 +62,13 @@ macro_rules! state {
         let mut nums = Vec::new();
         for p in v.point_items() {
             ints.push(p.item as usize);
-            nums.extend([p.point.x, p.point.y, p.point.z, p.zone_tol]);
+            match m::ht_placed(p) {
+                Some(q) => {
+                    ints.push(1);
+                    nums.extend(q);
+                }
+                None => ints.push(0),
+            }
         }
         let (lo, hi) = (v.bbox().min(), v.bbox().max());
         nums.extend([lo.x, lo.y, lo.z, hi.x, hi.y, hi.z]);

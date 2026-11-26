@@ -5,6 +5,8 @@
 // `source/SMLib/inc/SmExtentNd.h`.
 // Changes: the digest impl `Content::content` stays in solidcore; errors are `NumError`; the
 // test `set_operations` checks the error variant in place of the status number; paths.
+// `is_defined` (`AssertDefined`, the destructor's `SM_UNDEF_DOUBLE` sentinel) is gone
+// (`docs/01-architecture.md` §10.1); the test `construct_and_access` drops its two checks.
 //! One-dimensional intervals (`[min, max]`, often a curve's parameter domain) with
 //! clamping, snapping, normalised evaluation/inversion, set operations, predicates,
 //! periodic wrapping/containment/intersection, and N-dimensional interval boxes.
@@ -20,7 +22,6 @@
 //! | [`Extent1d::from_min_max`]                   | `SmExtent1d(double, double)`                 |
 //! | [`Extent1d::from_raw`]                       | (direct member assignment)                   |
 //! | `Clone`/`Copy`                               | copy constructor, `operator=`, destructor    |
-//! | [`Extent1d::is_defined`]                     | `AssertDefined`                              |
 //! | [`Extent1d::set_unbounded`]                  | `SetUnbounded`                               |
 //! | [`Extent1d::negate`]                         | `Negate`                                     |
 //! | [`Extent1d::translate`]                      | `Translate`                                  |
@@ -84,13 +85,12 @@
 //!   instead of setting it to the start (WR-509, #1518; tangency-labs/smlib#46).
 //! - `SM_ASSERT*` debug checks and the error-log side effect of `SE(...)` are not
 //!   ported (they do not change results). The destructor's "undefined" sentinel has
-//!   no Rust counterpart; [`Extent1d::is_defined`] still checks for it.
+//!   no Rust counterpart (a dropped value cannot be used), nor has `AssertDefined`.
 
 use crate::error::{NumError, Result};
 use crate::extent3d::BoundaryType;
 use crate::math::{
     is_infinite_param, max2, min2, BIG_DOUBLE, EFF_ZERO, EFF_ZERO_DEG, INFINITE_PARAMETER,
-    UNDEF_DOUBLE,
 };
 use crate::tol::{are_same, are_same_to_tol};
 
@@ -215,12 +215,6 @@ impl Extent1d {
     /// Resets to the "inside out" state of [`Extent1d::new`] (`Init`).
     pub fn init(&mut self) {
         *self = Self::new();
-    }
-
-    /// True unless an end holds upstream's destructor sentinel (`AssertDefined`).
-    #[must_use]
-    pub fn is_defined(&self) -> bool {
-        self.min != UNDEF_DOUBLE && self.max != -UNDEF_DOUBLE
     }
 
     /// Makes the interval `[-INFINITE_PARAMETER, INFINITE_PARAMETER]` (`SetUnbounded`).
@@ -1020,8 +1014,6 @@ mod tests {
         assert_eq!(Extent1d::from_min_max(-5.0, 1.0).max_dimension(), 5.0);
         assert!(Extent1d::new().is_init());
         assert!(Extent1d::new().has_negative_length());
-        assert!(e.is_defined());
-        assert!(!Extent1d::from_raw(UNDEF_DOUBLE, 0.0).is_defined());
         assert!(e.t_left_eval(2.0));
         assert!(!e.t_left_eval(2.5));
     }

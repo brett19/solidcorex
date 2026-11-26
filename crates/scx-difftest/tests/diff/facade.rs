@@ -176,6 +176,11 @@ pub mod x {
     ) -> scx_num::Result<hash_table::CoincidentPairs> {
         v.find_coincident_pairs(opts)
     }
+    /// A point item's position and tolerance, `None` once removed.
+    pub fn ht_placed(p: &hash_table::PointItem<u32>) -> Option<[f64; 4]> {
+        p.placed
+            .map(|q| [q.point.x, q.point.y, q.point.z, q.zone_tol])
+    }
     pub use scx_algo::krawczyk;
     /// A Krawczyk-module error as (class, operation, failure): `solve4`'s singular system.
     pub fn kz_err(e: &scx_num::NumError) -> (String, &'static str, String) {
@@ -207,6 +212,13 @@ pub mod s {
         opts: hash_table::FindPairsOptions<'_>,
     ) -> solidcore::Result<hash_table::CoincidentPairs> {
         v.find_coincident_pairs(&solidcore::kernel::Kernel::default(), opts)
+    }
+    /// A point item's position and tolerance, `None` once removed: the pin marks a
+    /// removed item by `SM_UNDEF_DOUBLE` in all four (scx: `placed: None`).
+    pub fn ht_placed(p: &hash_table::PointItem<u32>) -> Option<[f64; 4]> {
+        let u = math::UNDEF_DOUBLE;
+        let n = [p.point.x, p.point.y, p.point.z, p.zone_tol];
+        (n != [u; 4]).then_some(n)
     }
     /// `geom::krawczyk`'s items are `pub(crate)` at the pin: the pin's file, made public by
     /// the build script (`build.rs`, `pin_krawczyk`), over the pin's own types.

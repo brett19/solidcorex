@@ -97,7 +97,7 @@ pub fn thresholds() -> Vec<f64> {
     use scx_num::consts::{EPS_PARAM, PARALLEL_ANGLE_RAD, ZONE_DEFAULT};
     use scx_num::math::{
         BIG_DOUBLE, EFF_ZERO, EFF_ZERO_DEG, EFF_ZERO_RAD, EFF_ZERO_SQ, EFF_ZERO_SQRT,
-        INFINITE_PARAMETER, TWO_PI, UNDEF_DOUBLE,
+        INFINITE_PARAMETER, TWO_PI,
     };
     // (each one ulp either side too: `threshold_f64`)
     vec![
@@ -116,7 +116,8 @@ pub fn thresholds() -> Vec<f64> {
         2.0 * ZONE_DEFAULT,
         PARALLEL_ANGLE_RAD,
         1.0e-9, // the 2D helpers' length floor (`unit_2d`, `three_point_circle_2d`)
-        UNDEF_DOUBLE,
+        // the pin's `SM_UNDEF_DOUBLE` sentinel (scx: none; an unset value is an `Option`)
+        solidcore::math::UNDEF_DOUBLE,
         UNDERFLOW_ROOT,
         BIG_DOUBLE,
         INFINITE_PARAMETER,

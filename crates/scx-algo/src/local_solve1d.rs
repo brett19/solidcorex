@@ -14,7 +14,8 @@
 // `tests::failed_interior_samples_cannot_create_a_bracket`,
 // `tests::successful_sample_after_a_failure_can_still_bracket_a_root`, `tests::errors` and
 // `tests::wr19_failed_first_evaluation_and_valid_start` match it. Paths otherwise. Results and every error's class, text and cause
-// unchanged.
+// unchanged. `UNDEF_DOUBLE` is a private constant here (`scx_num::math` no longer has
+// one).
 //! One-dimensional local root finding (damped Newton iteration with oscillation
 //! detection, regula-falsi bisection fallback) and Brent-like minimisation /
 //! maximisation, driven by a caller-supplied function evaluator.
@@ -83,7 +84,13 @@ use crate::error::{ignored, EvalError, SolveError, SolveFailure};
 pub use crate::local_solve_nd::TerminationReason;
 use scx_num::extent1d::Extent1d;
 use scx_num::limits::try_filled;
-use scx_num::math::{BIG_DOUBLE, EFF_ZERO, EFF_ZERO_SQ, UNDEF_DOUBLE};
+use scx_num::math::{BIG_DOUBLE, EFF_ZERO, EFF_ZERO_SQ};
+
+/// Upstream `SM_UNDEF_DOUBLE`, the solver state's value before it is first written. The
+/// solver reads it in one case (a bracket flagged by `F <= -SM_BIG_DOUBLE` before its
+/// parameter is recorded), so it stays here, private, until that defect is fixed on
+/// purpose (`docs/01-architecture.md` §10.1 item 10).
+const UNDEF_DOUBLE: f64 = 1.23456e-61;
 use scx_num::tol::{in_tol, scaled_zero};
 use scx_num::NumError;
 

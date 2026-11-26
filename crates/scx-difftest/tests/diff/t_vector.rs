@@ -19,8 +19,7 @@ diff!(v3_consts, || [
     m::vector3d::Vec3::ZERO,
     m::vector3d::Vec3::X,
     m::vector3d::Vec3::Y,
-    m::vector3d::Vec3::Z,
-    m::vector3d::Vec3::UNDEF
+    m::vector3d::Vec3::Z
 ]);
 diff!(v3_canonical_axis_direction, |a: V| m::v3(a)
     .canonical_axis_direction());
@@ -33,15 +32,22 @@ diff!(v3_between, |a: V, b: V| m::vector3d::Vec3::between(
     m::v3(a),
     m::v3(b)
 ));
-diff!(v3_set_uninitialized, |a: V| {
-    let mut v = m::v3(a);
-    v.set_uninitialized();
-    v
-});
-diff!(v3_predicates, |a: V| {
-    let v = m::v3(a);
-    (v.is_initialized(), v.is_undef(), v.is_2d())
-});
+/// A vector holding the pin's `SM_UNDEF_DOUBLE` sentinel, which its `IsUndef` and
+/// `operator==` test for (scx: no sentinel). Those two are compared on other vectors only.
+fn pin_unset(a: &[f64]) -> bool {
+    a.contains(&solidcore::math::UNDEF_DOUBLE)
+}
+diff!(
+    v3_predicates,
+    |a: V| {
+        let v = m::v3(a);
+        ((!pin_unset(&a)).then(|| v.is_invalid()), v.is_2d())
+    },
+    {
+        let v = m::v3(a);
+        ((!pin_unset(&a)).then(|| v.is_undef()), v.is_2d())
+    }
+);
 diff!(v3_is_zero, |a: V, t: f64| m::v3(a).is_zero(t));
 diff!(v3_lengths, |a: V| {
     let v = m::v3(a);
@@ -116,7 +122,9 @@ diff!(v3_component_mut, |a: V, i: usize, x: f64| {
     let r = v.component_mut(i).map(|c| *c = x);
     (r, v)
 });
-diff!(v3_approx_eq, |a: V, b: V| m::v3(a).approx_eq(m::v3(b)));
+diff!(v3_approx_eq, |a: V, b: V| (!pin_unset(&a)
+    && !pin_unset(&b))
+.then(|| m::v3(a).approx_eq(m::v3(b))));
 diff!(v3_is_inside_sector, |a: V, b: V, c: V, d: V| m::v3(a)
     .is_inside_sector(m::v3(b), m::v3(c), m::v3(d)));
 diff!(v3_make_unit_ortho_vectors, |a: V, b: Option<V>| m::v3(a)
@@ -182,18 +190,10 @@ diff!(v3_scalar_ops, |a: V, s: f64| {
     (x * s, s * x, x / s, [p, q, r, t])
 });
 
-diff!(v2_consts, || [
-    m::vector2d::Vec2::ZERO,
-    m::vector2d::Vec2::UNDEF
-]);
+diff!(v2_consts, || [m::vector2d::Vec2::ZERO]);
 diff!(v2_from_to_array, |a: P| m::vector2d::Vec2::from_array(a)
     .to_array());
 diff!(v2_from_xy, |a: V| m::vector2d::Vec2::from_xy(m::v3(a)));
-diff!(v2_set_uninitialized, |a: P| {
-    let mut v = m::v2(a);
-    v.set_uninitialized();
-    (v, v.is_initialized(), m::v2(a).is_initialized())
-});
 diff!(v2_is_zero, |a: P, t: f64| m::v2(a).is_zero(t));
 diff!(v2_lengths, |a: P| {
     let v = m::v2(a);

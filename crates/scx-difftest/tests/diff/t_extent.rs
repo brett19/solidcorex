@@ -27,7 +27,7 @@ diff!(e1_init_unbounded, |a: I| {
 diff!(e1_queries, |a: I| {
     let e = m::e1(a);
     (
-        (e.is_defined(), e.mid(), e.length(), e.max_dimension()),
+        (e.mid(), e.length(), e.max_dimension()),
         (
             e.has_negative_length(),
             e.is_init(),
@@ -303,14 +303,7 @@ diff!(e3_init_unbounded, |a: B| {
 diff!(e3_queries, |a: B| {
     let e = m::e3(a);
     (
-        (
-            e.is_defined(),
-            e.mid(),
-            e.u_min(),
-            e.u_max(),
-            e.v_min(),
-            e.v_max(),
-        ),
+        (e.mid(), e.u_min(), e.u_max(), e.v_min(), e.v_max()),
         (
             e.w_min(),
             e.w_max(),
@@ -396,17 +389,24 @@ diff!(e3_point_tol, |a: B, p: V, t: f64| {
         e.is_point_on_boundary(m::v3(p), t),
     )
 });
+/// A box the pin's `is_defined` refuses: a minimum at `SM_UNDEF_DOUBLE` or a maximum at its
+/// negation. scx has no such sentinel, so `intersect_line` is compared on other boxes only.
+fn pin_undefined(a: B) -> bool {
+    let u = solidcore::math::UNDEF_DOUBLE;
+    a[..3].contains(&u) || a[3..].contains(&-u)
+}
 diff!(e3_line, |a: B, p: V, d: V| {
     let e = m::e3(a);
     (
         e.span_along(m::v3(p), m::v3(d)),
         e.distance_to_plane(m::v3(p), m::v3(d)),
-        e.intersect_line(m::v3(p), m::v3(d)),
+        (!pin_undefined(a)).then(|| e.intersect_line(m::v3(p), m::v3(d))),
     )
 });
-diff!(e3_line_hit_count, |a: B, p: V, d: V| m::e3(a)
-    .intersect_line(m::v3(p), m::v3(d))
-    .map(m::extent3d::LineHit::count));
+diff!(e3_line_hit_count, |a: B, p: V, d: V| (!pin_undefined(a))
+    .then(|| m::e3(a)
+        .intersect_line(m::v3(p), m::v3(d))
+        .map(m::extent3d::LineHit::count)));
 diff!(e3_line_tol, |a: B, p: V, d: V, t: f64| {
     let e = m::e3(a);
     (

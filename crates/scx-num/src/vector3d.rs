@@ -3,7 +3,11 @@
 // Upstream record (verbatim from that file): Upstream: `source/SMLib/inc/SmVector3d.h`,
 // `source/SMLib/src/SmVector3d.cpp`, `source/SMLib/src/SmMath.cpp`.
 // Changes: `NOZ` and `NOW` moved down from `nurbs/math.rs`; `is_valid_double` private; errors
-// are `NumError`; paths.
+// are `NumError`; paths. No `SM_UNDEF_DOUBLE` sentinel (`docs/01-architecture.md` §10.1): `UNDEF`,
+// `set_uninitialized` and `is_initialized` are gone (an unset vector is `None`), `is_undef` is
+// `is_invalid` without the sentinel test, and `approx_eq` loses its two-unset-vectors case;
+// the test `upstream_my_test_vector3d` drops its unset-vector checks and
+// `operators_and_predicates` its `UNDEF` cases.
 //! Three-dimensional vectors and points ([`Vec3`] / [`Point3`]): arithmetic, lengths,
 //! angles, projections, rotation, orthonormal frames and derivatives of unit vectors,
 //! plus the guarded scalar math helpers of `SmMath.cpp`.
@@ -21,9 +25,7 @@
 //! | [`Vec3::between`]                            | `SmVector3d(const SmPoint3d&, const SmPoint3d&)` |
 //! | `From<Vec2>`                                 | `SmVector3d(const SmVector2d&)`                  |
 //! | `Copy` / assignment, `core::mem::swap`       | copy constructor, `operator=`, `Copy`, `Swap`    |
-//! | [`Vec3::UNDEF`], [`Vec3::set_uninitialized`] | `SmVector3d()` (default ctor), `SetUninitialized` |
-//! | [`Vec3::is_initialized`]                     | `IsInitialized`                                  |
-//! | [`Vec3::is_undef`]                           | `IsUndef`                                        |
+//! | [`Vec3::is_invalid`]                         | `IsUndef` (without `SM_UNDEF_DOUBLE`)            |
 //! | [`Vec3::is_zero`]                            | `IsZero`                                         |
 //! | [`Vec3::is_2d`]                              | `Is2d`                                           |
 //! | [`Vec3::length_squared`], [`Vec3::length`]   | `LengthSquared`, `Length`                        |
@@ -77,8 +79,8 @@
 //! - `IsParallelTo`'s optional anti-parallel out-flag is [`Vec3::parallel_sense`].
 //! - Upstream's tolerant `operator==` is [`Vec3::approx_eq`]; Rust `==`
 //!   (`PartialEq`) is exact component equality.
-//! - `Default` is the zero vector; upstream's default constructor gives
-//!   [`Vec3::UNDEF`] (all components `SM_UNDEF_DOUBLE`).
+//! - `Default` is the zero vector. Upstream's default constructor gives an unset vector
+//!   (all components `SM_UNDEF_DOUBLE`); here an unset vector is an `Option<Vec3>`.
 //! - `operator[] const` with an index above 2 returns `0.0` (its `SE(SM_ERR)` is a no-op
 //!   in the release build), as [`Vec3::component`] does. The non-const `operator[]`
 //!   dereferences `NULL`; [`Vec3::component_mut`] returns `SM_ERR` instead.
@@ -94,7 +96,7 @@ use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAss
 
 use crate::error::NumFailure;
 use crate::error::{NumError, Result};
-use crate::math::{BIG_DOUBLE, EFF_ZERO, EFF_ZERO_SQ, PI, UNDEF_DOUBLE};
+use crate::math::{BIG_DOUBLE, EFF_ZERO, EFF_ZERO_SQ, PI};
 use crate::tol;
 use crate::vector2d::{Point2, Vec2};
 
@@ -189,9 +191,6 @@ impl Vec3 {
     pub const Y: Self = Self::new(0.0, 1.0, 0.0);
     /// Unit Z axis.
     pub const Z: Self = Self::new(0.0, 0.0, 1.0);
-    /// The uninitialized vector: all components `SM_UNDEF_DOUBLE` (upstream's default
-    /// constructor).
-    pub const UNDEF: Self = Self::new(UNDEF_DOUBLE, UNDEF_DOUBLE, UNDEF_DOUBLE);
 
     /// Orient an undirected axis toward the positive side of its largest component, keeping
     /// its length. Components within a relative 1e-9 of the largest magnitude tie in X, Y, Z
@@ -260,27 +259,11 @@ impl Vec3 {
         [self.x, self.y, self.z]
     }
 
-    /// Sets all components to `SM_UNDEF_DOUBLE` (`SetUninitialized`).
-    pub fn set_uninitialized(&mut self) {
-        *self = Self::UNDEF;
-    }
-
-    /// True when no component is `SM_UNDEF_DOUBLE` (`IsInitialized`).
+    /// True when any component is NaN, infinite or beyond `±SM_BIG_DOUBLE / 100`
+    /// (`IsUndef`, less its `SM_UNDEF_DOUBLE` test).
     #[must_use]
-    pub fn is_initialized(self) -> bool {
-        self.x != UNDEF_DOUBLE && self.y != UNDEF_DOUBLE && self.z != UNDEF_DOUBLE
-    }
-
-    /// True when any component is `SM_UNDEF_DOUBLE`, NaN, infinite or beyond
-    /// `±SM_BIG_DOUBLE / 100` (`IsUndef`).
-    #[must_use]
-    pub fn is_undef(self) -> bool {
-        self.x == UNDEF_DOUBLE
-            || !is_valid_double(self.x)
-            || self.y == UNDEF_DOUBLE
-            || !is_valid_double(self.y)
-            || self.z == UNDEF_DOUBLE
-            || !is_valid_double(self.z)
+    pub fn is_invalid(self) -> bool {
+        !is_valid_double(self.x) || !is_valid_double(self.y) || !is_valid_double(self.z)
     }
 
     /// True when the length is below `tol` (`IsZero`; upstream default `tol` is
@@ -670,19 +653,10 @@ impl Vec3 {
         }
     }
 
-    /// Upstream's tolerant equality (`operator==`): two uninitialized vectors are
-    /// equal, one uninitialized vector equals nothing, otherwise the L1 distance must be
-    /// below `EFF_ZERO * (1 + self.max_dimension())`. Not symmetric in general.
+    /// Upstream's tolerant equality (`operator==`): the L1 distance is below
+    /// `EFF_ZERO * (1 + self.max_dimension())`. Not symmetric in general.
     #[must_use]
     pub fn approx_eq(self, o: Self) -> bool {
-        let init1 = self.is_initialized();
-        let init2 = o.is_initialized();
-        if !init1 && !init2 {
-            return true;
-        }
-        if !init1 || !init2 {
-            return false;
-        }
         let scaled_zero = EFF_ZERO * (1.0 + self.max_dimension());
         let dist = (self.x - o.x).abs() + (self.y - o.y).abs() + (self.z - o.z).abs();
         dist < scaled_zero
@@ -1277,16 +1251,9 @@ mod tests {
     /// `my_test_vector3d` (`tests/prog_test/src/smCurveTest.cpp:1907`), owned parts.
     #[test]
     fn upstream_my_test_vector3d() {
-        let mut v2 = Vec3::new(0.5, 1.2, 2.2);
-        assert!(v2.is_initialized());
-        v2.set_uninitialized();
-        assert!(!v2.is_initialized());
-
         let mut v3 = Vec3::from([1.0, 2.0, 2.0]);
         assert!(close(v3.length_squared(), 9.0));
-        let mut v4 = Vec3::UNDEF;
-        assert!(!v4.is_initialized());
-        v4 = Vec3::new(3.0, 4.0, 0.0);
+        let mut v4 = Vec3::new(3.0, 4.0, 0.0);
         assert!(close(v4.length(), 5.0));
         let mut v5 = v4;
         v4 = -v4;
@@ -1335,7 +1302,7 @@ mod tests {
         assert!(close3(v21, 0.0, 1.0, -1.0));
         let mut v22 = Vec3::from(Vec2::new(1.0, 0.0));
         assert!(close3(v22, 1.0, 0.0, 0.0));
-        assert!(!v21.is_undef());
+        assert!(!v21.is_invalid());
 
         tmp0 = Vec3::new(1.0, 1.0, 1.0);
         tmp1 = Vec3::new(3.0, 3.0, 3.0);
@@ -1527,11 +1494,9 @@ mod tests {
         assert!((Vec3::ZERO / 0.0).x.is_nan());
         assert_eq!(v.component(3), 0.0);
         assert!(v.component_mut(3).is_err());
-        assert!(Vec3::UNDEF.approx_eq(Vec3::UNDEF));
-        assert!(!Vec3::UNDEF.approx_eq(v));
-        assert!(Vec3::new(f64::NAN, 0.0, 0.0).is_undef());
-        assert!(Vec3::new(1e19, 0.0, 0.0).is_undef());
-        assert!(!Vec3::new(1e17, 0.0, 0.0).is_undef());
+        assert!(Vec3::new(f64::NAN, 0.0, 0.0).is_invalid());
+        assert!(Vec3::new(1e19, 0.0, 0.0).is_invalid());
+        assert!(!Vec3::new(1e17, 0.0, 0.0).is_invalid());
         assert!(Vec3::new(0.0, 0.0, NOZ).is_2d());
         assert_eq!(
             Vec3::from_nl([2.0, 4.0, NOZ, 2.0]),

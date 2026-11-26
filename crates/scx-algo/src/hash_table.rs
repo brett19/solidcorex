@@ -11,9 +11,19 @@
 // `wr12_single_voxel_clusters_report_all_unique_pairs_without_mutation`,
 // `wr12_voxel_boundary_deduplication_and_limit_index_and_histogram`,
 // `wr13_auto_growth_and_voxel_reuse`) build none. Paths otherwise
-// (`Extent3d`, `tol3d`, `Point3`, `UNDEF_DOUBLE`, `Vec3` from `scx-num`). Results
-// unchanged.
+// (`Extent3d`, `tol3d`, `Point3`, `Vec3` from `scx-num`). A `PointItem`'s position and
+// tolerance are one `Option<Placed>`, `None` once removed (upstream: `Vec3::UNDEF` and
+// `SM_UNDEF_DOUBLE`); `ObjsInVoxels::add`, `ObjsInVoxels::remove`,
+// `ObjsInVoxels::find_coincident_pairs` and the test helper `point_item_bits` follow.
+// Results unchanged.
 //! Voxel bucket hash of point-located items for fast coincident-pair searches
+//!
+//! Iteration order is deterministic and documented: [`ObjsInVoxels::find_coincident_pairs`]
+//! walks the used buckets in the order they were first used, and each bucket's chain in
+//! insertion order (a removal unlinks, it never reorders). Nothing is hashed by address
+//! or by a seeded hasher, so the same calls give the same pairs in the same order on
+//! every run and platform. The module stays public: the healing passes that find
+//! coincident vertices and edges build on it.
 //! (`SmObjsInVoxels`), over the linked-bucket hash table it is built on
 //! (`SmHashTable`).
 //!
@@ -64,7 +74,7 @@
 //!   covers assignment).
 
 use scx_num::extent3d::Extent3d;
-use scx_num::math::{Point3, UNDEF_DOUBLE};
+use scx_num::math::Point3;
 use scx_num::tol::tol3d;
 use scx_num::{NumError, Result};
 
@@ -412,9 +422,16 @@ impl HashTable {
 pub struct PointItem<T> {
     /// The hashed object (`m_sTgtItem`).
     pub item: T,
-    /// Its position (`m_sTgtPoint3d`; `Vec3::UNDEF` once removed).
+    /// Where it was placed; `None` once [removed](ObjsInVoxels::remove).
+    pub placed: Option<Placed>,
+}
+
+/// A point item's position and tolerance (`m_sTgtPoint3d`, `m_sTgtZoneTol3d`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Placed {
+    /// Its position.
     pub point: Point3,
-    /// Its zone tolerance (`m_sTgtZoneTol3d`; `SM_UNDEF_DOUBLE` once removed).
+    /// Its zone tolerance.
     pub zone_tol: f64,
 }
 
@@ -756,8 +773,7 @@ impl<T: Copy + PartialEq> ObjsInVoxels<T> {
         let v = hit.index;
         let pi = PointItem {
             item,
-            point,
-            zone_tol,
+            placed: Some(Placed { point, zone_tol }),
         };
         self.place(pi, v, &mut updated)?;
         let (on_boundary, inward) = hit.extent.is_point_on_boundary(point, zone_tol);
@@ -802,8 +818,8 @@ impl<T: Copy + PartialEq> ObjsInVoxels<T> {
     }
 
     /// Takes every placement of `item` out of its voxel and marks its point
-    /// items removed (point `Vec3::UNDEF`, tolerance `SM_UNDEF_DOUBLE`); the
-    /// records stay in place (`Remove`). Returns the number of bucket items
+    /// items removed (their [`PointItem::placed`] becomes `None`); the records stay in
+    /// place (`Remove`). Returns the number of bucket items
     /// removed.
     pub fn remove(&mut self, item: T) -> usize {
         let found = self.find_point_items(item);
@@ -811,8 +827,7 @@ impl<T: Copy + PartialEq> ObjsInVoxels<T> {
         self.removed_point_item_count = self.removed_point_item_count.wrapping_add(n);
         for i in found {
             if let Some(pi) = self.point_items.get_mut(i) {
-                pi.point.set_uninitialized();
-                pi.zone_tol = UNDEF_DOUBLE;
+                pi.placed = None;
             }
         }
         n
@@ -884,15 +899,19 @@ impl<T: Copy + PartialEq> ObjsInVoxels<T> {
                     let Some(end_pi) = e.item else {
                         continue;
                     };
+                    // (a removed item is unlinked from its bucket, so both are placed)
                     let (Some(end_item), Some(beg_item)) = (
                         self.point_items.get(end_pi).copied(),
                         self.point_items.get(beg_pi).copied(),
                     ) else {
                         continue;
                     };
-                    let xs = tol3d(beg_item.zone_tol + end_item.zone_tol);
+                    let (Some(end_at), Some(beg_at)) = (end_item.placed, beg_item.placed) else {
+                        continue;
+                    };
+                    let xs = tol3d(beg_at.zone_tol + end_at.zone_tol);
                     let xs_sq = tol3d(xs * xs);
-                    let gap_sq = (beg_item.point - end_item.point).length_squared();
+                    let gap_sq = (beg_at.point - end_at.point).length_squared();
                     if let Some(h) = histogram.as_deref_mut() {
                         if let Some(c) = h.get_mut(gap_histogram_index(gap_sq.sqrt())) {
                             *c = c.wrapping_add(1);
@@ -954,10 +973,14 @@ mod tests {
     fn point_item_bits(v: &ObjsInVoxels<u32>) -> Vec<[u64; 4]> {
         let mut out = Vec::new();
         for pi in v.point_items() {
-            let x = pi.point.x.to_bits();
-            let y = pi.point.y.to_bits();
-            let z = pi.point.z.to_bits();
-            let t = pi.zone_tol.to_bits();
+            let Some(p) = pi.placed else {
+                out.push([0; 4]);
+                continue;
+            };
+            let x = p.point.x.to_bits();
+            let y = p.point.y.to_bits();
+            let z = p.point.z.to_bits();
+            let t = p.zone_tol.to_bits();
             out.push([x, y, z, t]);
         }
         out

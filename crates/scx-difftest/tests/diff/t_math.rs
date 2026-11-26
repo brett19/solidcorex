@@ -172,7 +172,6 @@ diff!(constants, || [
     m::math::EFF_ZERO_PARAM,
     m::math::EFF_ZERO_DEG,
     m::math::EFF_ZERO_RAD,
-    m::math::UNDEF_DOUBLE,
     m::math::BIG_DOUBLE,
     m::math::INFINITE_PARAMETER,
     m::math::INFINITE_PARAMETER_SQRT,
