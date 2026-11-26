@@ -451,7 +451,7 @@ mod tests {
         for (failure, class, text) in cases {
             assert_eq!(failure.kind(), class, "{text}");
             assert_eq!(failure.to_string(), text);
-            let e = NumError::failed("op", failure.clone());
+            let e = NumError::failed("op", failure);
             assert_eq!(e.failure(), Some(&failure));
             assert_eq!(e.to_string(), format!("op: {text}"));
             assert!(std::error::Error::source(&e).is_none());

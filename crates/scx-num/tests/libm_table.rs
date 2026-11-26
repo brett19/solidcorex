@@ -1,7 +1,7 @@
 // Written for solidcorex. Apache-2.0.
 //! The results of the functions scx-num calls that are not correctly rounded (libm's
 //! transcendentals, `powi`, `hypot`, `cbrt`), pinned bit for bit on the build platform
-//! (x86_64 Linux, Rust 1.99.1, the table below). Each function's results at a fixed set of
+//! (`x86_64` Linux, Rust 1.99.1, the table below). Each function's results at a fixed set of
 //! inputs are hashed (FNV-1a over the result bits) and compared with the pinned hash. On
 //! another platform the test is ignored; run with `--ignored` there and it names each
 //! function whose libm differs: bit-identity across platforms is not shown for these
@@ -24,15 +24,15 @@ fn inputs() -> Vec<f64> {
         1e-8,
         0.1,
         0.5,
-        0.7071067811865476,
+        core::f64::consts::FRAC_1_SQRT_2,
         0.9999999999999999,
         1.0,
         1.0000000000000002,
-        1.5707963267948966,
+        core::f64::consts::FRAC_PI_2,
         2.0,
-        3.141592653589793,
+        core::f64::consts::PI,
         4.71238898038469,
-        6.283185307179586,
+        core::f64::consts::TAU,
         10.0,
         50.0,
         1e5,
@@ -65,8 +65,10 @@ fn fnv(h: &mut u64, bits: u64) {
     }
 }
 
+type F1 = fn(f64) -> f64;
+type F2 = fn(f64, f64) -> f64;
+
 fn table() -> Vec<(&'static str, u64)> {
-    type F1 = fn(f64) -> f64;
     let unary: [(&str, F1); 12] = [
         ("sin", f64::sin),
         ("cos", f64::cos),
@@ -90,7 +92,6 @@ fn table() -> Vec<(&'static str, u64)> {
         }
         out.push((name, h));
     }
-    type F2 = fn(f64, f64) -> f64;
     let binary: [(&str, F2); 4] = [
         ("atan2", f64::atan2),
         ("hypot", f64::hypot),
