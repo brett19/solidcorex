@@ -83,7 +83,7 @@ Each public function, constant and operator is called on both sides with the sam
 
 **Coverage:** 470 public functions were found by script, and 466 are diffed. The remaining four have no public counterpart at the pin:
 - `certified::next_up`/`next_down` are `pub(crate)` there. They are covered by the property test and indirectly through `certified`.
-- `math::det3` is `pub(crate)` there. It is covered through the determinants that use it.
+- `math::det3` is `pub(crate)` there. (Corrected 2026-11-26: an earlier version said it was covered through the determinants that use it; nothing in scx-num calls it. It now has a unit test, `det3_is_the_integer_determinant`, against the determinant computed in integers.)
 - `Transform::from_matrix` is new, and unit-tested.
 
 Pin paths that differ:
@@ -103,9 +103,9 @@ Pin paths that differ:
 - topology/vertexuse.rs:143;
 - DEGENERATE at surface/surface/p1.rs:229 and topology/brep/p7.rs:205;
 - prism/tests.rs:40 (a test);
-- mesh_reconstruction/topology.rs:64, which uses a different value, 5e-7.
+- mesh_reconstruction/topology.rs:64 is not one of them (corrected 2026-11-26): it is a separate, deliberate constant of 5e-7 for mesh reconstruction, not a copy of the zone. Keep it.
 
-These are replaced as their layers move.
+The others are replaced as their layers move.
 
 **`EFF_ZERO`.** It is used about 157 times, for lengths and for ratios alike. `EPS_LEN` and `EPS_REL` both equal it for now, and splitting the uses is deferred to the layers that use them.
 

@@ -5,7 +5,7 @@
 // `smgu_4x4Mult` in `src/SmGeomUtility.cpp`.
 // Changes: `Transform::of_placement` stays in solidcore (it needs `Axis2Placement`); `det3`
 // public (eval and blend use it); `EFF_ZERO_PARAM` defined from `consts::EPS_PARAM`;
-// `gamma` from `crate::certified`; paths.
+// `gamma` from `crate::certified`; paths; adds the test `det3_is_the_integer_determinant`.
 //! Small `f64` linear-algebra types: [`Vec3`]/[`Point3`], [`Vec2`]/[`Point2`],
 //! [`Transform`], and the numeric constants of `SmMath.h`.
 //!
@@ -1296,6 +1296,34 @@ pub fn arc_third_point_2d(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn det3_is_the_integer_determinant() {
+        // Small integer entries: every product and sum is exact, so `det3` must equal the
+        // determinant computed in integers, whatever the order of its terms. The fourth
+        // column is ignored.
+        let mut seed = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % 41) as i64 - 20
+        };
+        for _ in 0..2000 {
+            let a: [[i64; 4]; 3] = core::array::from_fn(|_| core::array::from_fn(|_| next()));
+            let exact = a[0][0] * (a[1][1] * a[2][2] - a[1][2] * a[2][1])
+                - a[0][1] * (a[1][0] * a[2][2] - a[1][2] * a[2][0])
+                + a[0][2] * (a[1][0] * a[2][1] - a[1][1] * a[2][0]);
+            let m = a.map(|r| r.map(|x| x as f64));
+            assert_eq!(super::det3(&m), exact as f64, "{a:?}");
+        }
+        let id = [[1.0, 0.0, 0.0, 9.0], [0.0, 1.0, 0.0, 9.0], [0.0, 0.0, 1.0, 9.0]];
+        assert_eq!(super::det3(&id), 1.0);
+        let swapped = [[0.0, 1.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]];
+        assert_eq!(super::det3(&swapped), -1.0);
+        let singular = [[1.0, 2.0, 3.0, 0.0], [2.0, 4.0, 6.0, 0.0], [7.0, 8.0, 9.0, 0.0]];
+        assert_eq!(super::det3(&singular), 0.0);
+    }
+
     use super::*;
 
     /// Rounding below `noise` along a world axis is dropped and the axes come back unit; a plane
