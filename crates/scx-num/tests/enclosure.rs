@@ -505,7 +505,14 @@ fn acos_encloses_through_the_cosine_of_its_bounds() {
             let omc = dd_mul(Dd(2.0, 0.0), dd_mul(s, s));
             let (a, b) = two_sum(1.0, -y.hi);
             let c = cmp_dd(Dd(a, b), omc);
-            let c = if l > PI.0 { Some(-1) } else { c };
+            // acos(-1) = pi: the cosine is flat there, so decide by l <= pi directly
+            let c = if l > PI.0 {
+                Some(-1)
+            } else if y.hi == -1.0 {
+                Some(1)
+            } else {
+                c
+            };
             decide(&mut t, c, 1, || format!("acos({y:?}) = {r:?}: the lower end is above acos({:e})", y.hi));
         } else {
             t.ok(true, String::new);
@@ -521,7 +528,14 @@ fn acos_encloses_through_the_cosine_of_its_bounds() {
                 let (a, b) = two_sum(1.0, y.lo);
                 cmp_dd(Dd(a, b), opc)
             };
-            let c = if h < 0.0 { Some(-1) } else { c };
+            // acos(1) = 0: decide by h >= 0 directly
+            let c = if h < 0.0 {
+                Some(-1)
+            } else if y.lo == 1.0 {
+                Some(1)
+            } else {
+                c
+            };
             decide(&mut t, c, 1, || format!("acos({y:?}) = {r:?}: the upper end is below acos({:e})", y.lo));
         } else {
             t.ok(true, String::new);
