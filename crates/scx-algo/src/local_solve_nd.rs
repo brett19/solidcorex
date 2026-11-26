@@ -9,7 +9,12 @@
 // `LocalSolveNd::clamp` and `LocalSolveNd::solve_it` return `SolveError` (or `NumError`)
 // and test the class where the pin matched `SolidError` variants; `is_bad_jacobian`
 // reads a layer-0 `NumError::Failed` (status `SM_ERR`) where the pin read the status.
-// The tests use a test error; `tests::tol_scaled_zero_of_equations` stays with the
+// The tests use a test error (`TestErr`, with `fmt`, `ends_solve`, `passes_through`,
+// `never_ignored`, `defect` and two `from`), so the test equation sets' `evaluate`,
+// `tests::oversized_jacobian_fails_before_evaluation`, `tests::unported_propagates`,
+// `tests::set_intervals_default_fails`, `tests::jacobian_on_degenerate_interval_fails`
+// and `tests::bad_jacobian_reads_the_status_of_a_typed_failure` (layer-0 errors in place
+// of the pin's replaced-upstream samples) match it; `tests::tol_scaled_zero_of_equations` stays with the
 // kernel's `tol::scaled_zero_of_equations` (not moved). Paths otherwise. Results and every error's class, text
 // and cause unchanged.
 //! Multi-variable Newton-Raphson solver for square systems of equations near a good

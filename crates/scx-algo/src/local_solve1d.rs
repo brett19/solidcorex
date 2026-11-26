@@ -8,8 +8,12 @@
 // `LocalSolve1d::solve_by_brent`, `LocalSolve1d::solve_by_bisection`,
 // `LocalSolve1d::eval_into` (the evaluator's error unchanged),
 // `LocalSolve1d::solve_oscillating` and `LocalSolve1d::solve_it` return `SolveError` and
-// test the class where the pin matched `SolidError` variants; the tests use a test
-// evaluator error. Paths otherwise. Results and every error's class, text and cause
+// test the class where the pin matched `SolidError` variants. The tests use a test
+// evaluator error (`TestErr`, with `fmt`, `ends_solve`, `passes_through`, `never_ignored`,
+// `defect`), so `tests::failed_first_evaluation_without_interval_has_no_value`,
+// `tests::failed_interior_samples_cannot_create_a_bracket`,
+// `tests::successful_sample_after_a_failure_can_still_bracket_a_root`, `tests::errors` and
+// `tests::wr19_failed_first_evaluation_and_valid_start` match it. Paths otherwise. Results and every error's class, text and cause
 // unchanged.
 //! One-dimensional local root finding (damped Newton iteration with oscillation
 //! detection, regula-falsi bisection fallback) and Brent-like minimisation /
