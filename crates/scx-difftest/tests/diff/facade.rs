@@ -213,7 +213,15 @@ pub mod s {
     #[allow(clippy::all, clippy::pedantic, dead_code, unused_imports)]
     pub mod krawczyk {
         pub use solidcore::blend::fillet_section::certificate::inverse4;
-        use solidcore::blend::fillet_section::interval::{cmax, round_up, Ivl};
+        use solidcore::blend::fillet_section::interval::{round_up, Ivl};
+        /// The pin's `interval::cmax` (`pub(crate)` there), as its file writes it.
+        fn cmax(a: f64, b: f64) -> f64 {
+            if a < b {
+                b
+            } else {
+                a
+            }
+        }
         pub use solidcore::blend::fillet_section::station::solve4;
         use solidcore::blend::fillet_section::tay::Ring;
         use solidcore::blend::fillet_section::taylor_model::TmN;

@@ -196,7 +196,7 @@ diff!(kz_taylor, |c: List<[f64; 2]>, rem: [f64; 2], y: f64, d: [f64; 2]| {
     let (cm, q) = m::krawczyk::contraction(&[[y]], &[[t]]);
     let (ci, qi) = m::krawczyk::contraction(&[[y]], &[[i]]);
     (
-        (t.scaled(y), t.hull(), i.scaled(y), i.hull()),
+        (t.scaled(y), KNumber::hull(t), i.scaled(y), KNumber::hull(i)),
         (cm, q, ci, qi),
         m::krawczyk::start_minus_y([t], &[[y]], &[t]),
         m::krawczyk::plus_c_times([t], &cm, &[t]),
