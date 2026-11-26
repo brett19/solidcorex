@@ -1,0 +1,329 @@
+// Written for solidcorex. Apache-2.0. Takes the shape of the solidcore errors the moved
+// files return (`SolidError::InvalidInput`, and `SolidError::Failed` with a `GeomFailure`
+// reason, in `error.rs` and `error/geom.rs` at commit
+// 03e16c9ee766de5b9b1ced845e5149d62ff493b8), keeping only the variants these files build.
+//! Why a layer-0 routine fails.
+//!
+//! Two shapes, as in solidcore: a check of the caller's argument that fails is
+//! [`NumError::InvalidInput`]; a computation that cannot go on is [`NumError::Failed`],
+//! with a typed [`NumFailure`] carrying the numbers the check computed. The operation
+//! strings are solidcore's, unchanged, so a message reads as it did there.
+//!
+//! | solidcore at the pin                               | here                                  |
+//! |----------------------------------------------------|---------------------------------------|
+//! | `SolidError::InvalidInput { operation, reason }`   | [`NumError::InvalidInput`]            |
+//! | `SolidError::Failed` with `Reason::Geom(g)`        | [`NumError::Failed`] with the same-named [`NumFailure`] |
+//! | `SolidError::geom(op, g)`                          | [`NumError::failed`]                  |
+//! | `SolidError::geom_call(op)`                        | [`NumError::call`]                    |
+//! | `ErrorKind` (the classes used here)                | [`ErrorKind`]                         |
+//!
+//! Every failure here has upstream status `SM_ERR` (1001) and every invalid input
+//! `SM_ERR_INVALID_INPUT` (1007), as in solidcore; the status is not kept (only the
+//! differential tests compare it, from the variant).
+
+use core::fmt;
+
+/// `Result` with [`NumError`].
+pub type Result<T, E = NumError> = core::result::Result<T, E>;
+
+/// The class of an error, as solidcore's `ErrorKind` names it (the classes layer 0 has).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ErrorKind {
+    /// The caller's argument was out of range, malformed or inconsistent.
+    InvalidInput,
+    /// Geometry is degenerate where the routine needs it not to be.
+    Degenerate,
+    /// A stage failed through the kernel's own fault (an unconverged solve).
+    StageFailed,
+    /// A generic failure (`SM_ERR`).
+    Failed,
+}
+
+impl ErrorKind {
+    /// solidcore's name of the class.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::InvalidInput => "invalid_input",
+            Self::Degenerate => "degenerate",
+            Self::StageFailed => "stage_failed",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+impl fmt::Display for ErrorKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+/// What failed, with the numbers the check computed (the `GeomFailure` variants the
+/// layer-0 files build, same names and fields).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum NumFailure {
+    /// A routine this one calls failed; the error keeps that routine's error as its
+    /// cause and takes its class from it.
+    CallFailed {
+        /// The class of the callee's error, the cause.
+        class: ErrorKind,
+    },
+    /// Two intervals to intersect (or to join) are disjoint.
+    Disjoint {
+        /// The first interval, `[min, max]`.
+        a: [f64; 2],
+        /// The second interval, `[min, max]`.
+        b: [f64; 2],
+    },
+    /// An index is not below the number of entries. [`ErrorKind::InvalidInput`].
+    IndexOutOfRange {
+        /// The index given.
+        index: usize,
+        /// The number of entries.
+        len: usize,
+    },
+    /// The Jacobi eigen-solver stopped after `sweeps` sweeps with the off-diagonal sum
+    /// still not below the kernel's zero ([`ErrorKind::StageFailed`]).
+    JacobiDidNotConverge {
+        /// The sweeps run.
+        sweeps: usize,
+        /// The off-diagonal sum measured at the last sweep.
+        off_diagonal: f64,
+    },
+    /// No vector perpendicular to the given one was found. [`ErrorKind::Degenerate`].
+    NoPerpendicular,
+    /// A matrix the routine needs square is not. [`ErrorKind::InvalidInput`].
+    NotSquare {
+        /// The matrix's rows.
+        rows: usize,
+        /// The matrix's columns.
+        cols: usize,
+    },
+    /// A matrix the routine needs symmetric is not. [`ErrorKind::InvalidInput`].
+    NotSymmetric,
+    /// A point to normalise lies outside the extent (or off a degenerate side of it).
+    PointOutsideExtent {
+        /// The point's `u`.
+        u: f64,
+        /// The point's `v`.
+        v: f64,
+    },
+    /// A linear system or matrix is singular: its pivot or determinant, `measure`, is
+    /// below the kernel's zero for it. [`ErrorKind::Degenerate`].
+    Singular {
+        /// The pivot or determinant that fell below the kernel's zero.
+        measure: f64,
+    },
+    /// A span to add to a periodic extent does not lie in `[0, period]`.
+    /// [`ErrorKind::InvalidInput`].
+    SpanOutsidePeriod {
+        /// The span's start.
+        from: f64,
+        /// The span's end.
+        to: f64,
+        /// The extent's period.
+        period: f64,
+    },
+    /// A matrix to decompose by singular values is empty or has fewer rows than columns.
+    /// [`ErrorKind::InvalidInput`].
+    TooFewRows {
+        /// The matrix's rows.
+        rows: usize,
+        /// The matrix's columns.
+        cols: usize,
+    },
+}
+
+impl NumFailure {
+    /// The failure's class, as solidcore's `GeomFailure::kind`.
+    #[must_use]
+    pub const fn kind(&self) -> ErrorKind {
+        match self {
+            Self::IndexOutOfRange { .. }
+            | Self::NotSquare { .. }
+            | Self::NotSymmetric
+            | Self::SpanOutsidePeriod { .. }
+            | Self::TooFewRows { .. } => ErrorKind::InvalidInput,
+            Self::JacobiDidNotConverge { .. } => ErrorKind::StageFailed,
+            Self::CallFailed { class } => *class,
+            Self::NoPerpendicular | Self::Singular { .. } => ErrorKind::Degenerate,
+            Self::Disjoint { .. } | Self::PointOutsideExtent { .. } => ErrorKind::Failed,
+        }
+    }
+}
+
+impl fmt::Display for NumFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::CallFailed { .. } => f.write_str("a routine it calls failed"),
+            Self::Disjoint { a: [a0, a1], b: [b0, b1] } => {
+                write!(f, "the intervals [{a0}, {a1}] and [{b0}, {b1}] are disjoint")
+            }
+            Self::IndexOutOfRange { index, len } => {
+                write!(f, "the index {index} is not below the {len} entries")
+            }
+            Self::JacobiDidNotConverge {
+                sweeps,
+                off_diagonal,
+            } => write!(
+                f,
+                "{}: the Jacobi sweeps did not converge after {sweeps} sweeps (off-diagonal sum {off_diagonal:e})",
+                ErrorKind::StageFailed
+            ),
+            Self::NoPerpendicular => f.write_str("no perpendicular vector found"),
+            Self::NotSquare { rows, cols } => {
+                write!(f, "the {rows}x{cols} matrix is not square")
+            }
+            Self::NotSymmetric => f.write_str("the matrix is not symmetric"),
+            Self::PointOutsideExtent { u, v } => {
+                write!(f, "the point ({u}, {v}) lies outside the extent")
+            }
+            Self::Singular { measure } => write!(
+                f,
+                "the system is singular (its pivot or determinant is {measure:e})"
+            ),
+            Self::SpanOutsidePeriod { from, to, period } => write!(
+                f,
+                "the span from {from} to {to} does not lie in the period [0, {period}]"
+            ),
+            Self::TooFewRows { rows, cols } => write!(
+                f,
+                "the {rows}x{cols} matrix is empty or has fewer rows than columns"
+            ),
+        }
+    }
+}
+
+/// A layer-0 error.
+#[derive(Debug, Clone, PartialEq)]
+pub enum NumError {
+    /// An argument was out of range, malformed or inconsistent (upstream
+    /// `SM_ERR_INVALID_INPUT`).
+    InvalidInput {
+        /// Operation that rejected the input.
+        operation: &'static str,
+        /// Human-readable description of what was wrong.
+        reason: &'static str,
+    },
+    /// A computation could not go on (upstream `SM_ERR`).
+    Failed {
+        /// The solidcore path of the failing routine.
+        operation: &'static str,
+        /// What failed.
+        failure: NumFailure,
+        /// The callee's error, for [`NumFailure::CallFailed`].
+        cause: Option<Box<NumError>>,
+    },
+}
+
+impl NumError {
+    /// [`NumError::InvalidInput`].
+    #[must_use]
+    pub const fn invalid_input(operation: &'static str, reason: &'static str) -> Self {
+        Self::InvalidInput { operation, reason }
+    }
+
+    /// [`NumError::Failed`] of `operation` for `failure`, with no cause.
+    #[must_use]
+    pub const fn failed(operation: &'static str, failure: NumFailure) -> Self {
+        Self::Failed {
+            operation,
+            failure,
+            cause: None,
+        }
+    }
+
+    /// A map from a callee's error to the failure of `operation` that keeps it as its
+    /// cause ([`NumFailure::CallFailed`] with the callee's class). Use as
+    /// `.map_err(NumError::call(OP))`.
+    pub fn call(operation: &'static str) -> impl Fn(Self) -> Self {
+        move |e| Self::Failed {
+            operation,
+            failure: NumFailure::CallFailed { class: e.kind() },
+            cause: Some(Box::new(e)),
+        }
+    }
+
+    /// The error's class.
+    #[must_use]
+    pub const fn kind(&self) -> ErrorKind {
+        match self {
+            Self::InvalidInput { .. } => ErrorKind::InvalidInput,
+            Self::Failed { failure, .. } => failure.kind(),
+        }
+    }
+
+    /// The operation that failed.
+    #[must_use]
+    pub const fn operation(&self) -> &'static str {
+        match self {
+            Self::InvalidInput { operation, .. } | Self::Failed { operation, .. } => operation,
+        }
+    }
+
+    /// The typed failure, for [`NumError::Failed`].
+    #[must_use]
+    pub const fn failure(&self) -> Option<&NumFailure> {
+        match self {
+            Self::InvalidInput { .. } => None,
+            Self::Failed { failure, .. } => Some(failure),
+        }
+    }
+
+    /// The callee's error a [`NumFailure::CallFailed`] keeps.
+    #[must_use]
+    pub fn cause(&self) -> Option<&Self> {
+        match self {
+            Self::InvalidInput { .. } => None,
+            Self::Failed { cause, .. } => cause.as_deref(),
+        }
+    }
+}
+
+impl fmt::Display for NumError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidInput { operation, reason } => {
+                write!(f, "{operation}: invalid input: {reason}")
+            }
+            Self::Failed {
+                operation,
+                failure,
+                cause,
+            } => {
+                write!(f, "{operation}: {failure}")?;
+                if let Some(c) = cause {
+                    write!(f, "; caused by {c}")?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+impl std::error::Error for NumError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.cause().map(|c| c as &(dyn std::error::Error + 'static))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_call_failure_takes_its_class_and_message_from_the_cause() {
+        let inner = NumError::failed("a", NumFailure::Singular { measure: 0.0 });
+        let outer = NumError::call("b")(inner.clone());
+        assert_eq!(outer.kind(), ErrorKind::Degenerate);
+        assert_eq!(outer.cause(), Some(&inner));
+        assert_eq!(
+            outer.to_string(),
+            "b: a routine it calls failed; caused by a: the system is singular (its pivot or determinant is 0e0)"
+        );
+        let bad = NumError::invalid_input("c", "why");
+        assert_eq!(bad.kind(), ErrorKind::InvalidInput);
+        assert_eq!(bad.to_string(), "c: invalid input: why");
+        assert_eq!(NumError::call("d")(bad).kind(), ErrorKind::InvalidInput);
+    }
+}
