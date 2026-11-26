@@ -154,9 +154,11 @@ diff!(
     circumcentre_2d,
     |a: P, b: P, c: P| m::math::circumcentre_2d(a, b, c)
 );
-diff!(three_point_circle_2d, |a: P, b: P, c: P| {
-    m::math::three_point_circle_2d(a, b, c)
-});
+diff!(
+    three_point_circle_2d,
+    pin_defect = crate::pin_defects::three_point_circle_2d,
+    |a: P, b: P, c: P| m::math::three_point_circle_2d(a, b, c)
+);
 diff!(
     arc_third_point_2d,
     |a: P, b: P, h: P, r: Option<f64>, sw: Option<f64>| {

@@ -64,3 +64,284 @@ pub fn tr_is_regular() -> PinDefect<(M, f64), Verdict> {
 fn linear(t: &M) -> impl Iterator<Item = f64> + '_ {
     t.iter().take(3).flat_map(|r| r.iter().take(3).copied())
 }
+
+type P = [f64; 2];
+type Circle = Option<([f64; 2], f64, f64)>;
+
+/// `three_point_circle_2d(s, e, t)` where the pin's plain-`f64` evaluation is ill-conditioned:
+/// the forward error bound of its every step ([`PinError`], each rounding a relative `2^-53`
+/// plus an absolute `2^-1074`, through the pin's own formulas), on the centre, the radius or
+/// the sweep, passes a quarter of `Tol::DEFAULT`, or a decision it takes (the area against
+/// `1e-12`, the chord and the radius against `1e-9`, the long or short arc) is within its
+/// bound of the other side, or a step overflows.
+///
+/// The pin computes `t - s` and `e - s` (exact to a rounding each), then the centre
+/// `s + (perp numerators) / d` in `f64`: the numerators and `d` cancel when the points are
+/// nearly on one line or of very different sizes (`1e20` beside unit or subnormal points),
+/// with a condition number up to `1e30` on the pool. The radius is the distance from that
+/// centre, and the sweep `2 asin(chord / 2r)` multiplies the radius's error by
+/// `1 / sqrt(1 - q^2)` as `q` nears 1. Its squares of differences overflow from about
+/// `1e154`, where the circle is finite and the pin answers `None`.
+///
+/// The true value is computed in the check, exactly in integers ([`crate::exact`]): the
+/// area and the decisions exactly, the centre `t + N / (2 a x b)` and the radius
+/// `|s - centre|` from exact numerators each rounded once (within `2^-51`; whether each is
+/// finite decided exactly, against `2^1024 - 2^970`), and the sweep as
+/// `atan2` of the exact cross and dot products of `s - centre` and `e - centre` with the long
+/// or short arc by the exact side of the chord `t` and the centre are on: a different route
+/// from scx's (the inscribed angle at `t`, in expansions with unbounded exponents). scx must
+/// match it within `Tol::DEFAULT`, on every input.
+///
+/// The worst input before scx was exact: `(1, 0)`, `(1e-13, 1)`, `(1e-6, 1e-6)`: true sweep
+/// `3.1415886535859934`, the pin's off by `1.7e-10` relative and the old scx's (the pin's
+/// method with a correctly rounded `hypot`) by `1.5e-11`; on the pool's ill-conditioned
+/// inputs both were off by up to O(1), and agreed only where they ran the same steps.
+pub fn three_point_circle_2d() -> PinDefect<(P, P, P), Circle> {
+    PinDefect {
+        reason: "the pin's f64 circumcentre and asin sweep are ill-conditioned here",
+        applies: |&(s, e, t)| pin_ill_conditioned(s, e, t),
+        check: |&(s, e, t), got| {
+            let want = true_circle(s, e, t);
+            let tol = crate::harness::Tol::DEFAULT;
+            let agree = match (want, *got) {
+                (None, None) => true,
+                (Some((wc, wr, ws)), Some((gc, gr, gs))) => {
+                    tol.floats_agree(wc[0], gc[0])
+                        && tol.floats_agree(wc[1], gc[1])
+                        && tol.floats_agree(wr, gr)
+                        && tol.floats_agree(ws, gs)
+                }
+                _ => false,
+            };
+            if agree {
+                Ok(())
+            } else {
+                Err(format!("true circle {want:?}, scx {got:?}"))
+            }
+        },
+    }
+}
+
+/// A double the pin computed and a bound on its distance from the true value of the step.
+#[derive(Clone, Copy, Debug)]
+struct PinError {
+    v: f64,
+    e: f64,
+}
+
+/// `2^-53`, the relative rounding error, and `2^-1074`, the absolute one in the subnormals.
+const U: f64 = 1.1102230246251565e-16;
+const ETA: f64 = 4.9406564584124654e-324;
+
+impl PinError {
+    fn exact(v: f64) -> Self {
+        PinError { v, e: 0.0 }
+    }
+
+    /// `v`, rounded once from a value within `e` of the truth.
+    fn rounded(v: f64, e: f64) -> Self {
+        let e = if v.is_finite() {
+            e + U * v.abs() + ETA
+        } else {
+            f64::INFINITY
+        };
+        PinError { v, e }
+    }
+
+    fn add(self, o: Self) -> Self {
+        Self::rounded(self.v + o.v, self.e + o.e)
+    }
+
+    fn sub(self, o: Self) -> Self {
+        Self::rounded(self.v - o.v, self.e + o.e)
+    }
+
+    fn mul(self, o: Self) -> Self {
+        Self::rounded(
+            self.v * o.v,
+            self.v.abs() * o.e + o.v.abs() * self.e + self.e * o.e,
+        )
+    }
+
+    fn div(self, o: Self) -> Self {
+        let q = self.v / o.v;
+        let room = o.v.abs() - o.e;
+        if room > 0.0 {
+            Self::rounded(q, (self.e + q.abs() * o.e) / room)
+        } else {
+            PinError {
+                v: q,
+                e: f64::INFINITY,
+            }
+        }
+    }
+
+    fn hypot(x: Self, y: Self) -> Self {
+        Self::rounded(scx_num::fmath::hypot(x.v, y.v), x.e + y.e)
+    }
+
+    /// Whether the true value may be on the other side of `at` (or on it).
+    fn straddles(self, at: f64) -> bool {
+        (self.v - at).abs() <= self.e + 8.0 * U * self.v.abs()
+    }
+
+    /// Whether the bound passes a quarter of `Tol::DEFAULT` on this value.
+    fn loose(self) -> bool {
+        let tol = crate::harness::Tol::DEFAULT;
+        self.e.is_nan() || self.e > 0.25 * tol.abs.max(tol.rel * self.v.abs())
+    }
+}
+
+/// Whether the pin's evaluation (its steps, one by one, as `scx_num::math` had them before
+/// it was made exact) cannot be trusted to `Tol::DEFAULT / 4` on these points.
+fn pin_ill_conditioned(s: P, e: P, t: P) -> bool {
+    type E = PinError;
+    if !s.iter().chain(&e).chain(&t).all(|v| v.is_finite()) {
+        return false;
+    }
+    let [sx, sy] = s.map(E::exact);
+    let [ex, ey] = e.map(E::exact);
+    let [tx, ty] = t.map(E::exact);
+    // circumcentre_2d(s, t, e)
+    let (abx, aby) = (tx.sub(sx), ty.sub(sy));
+    let (acx, acy) = (ex.sub(sx), ey.sub(sy));
+    let ab2 = abx.mul(abx).add(aby.mul(aby));
+    let ac2 = acx.mul(acx).add(acy.mul(acy));
+    let d = E::exact(2.0).mul(abx.mul(acy).sub(aby.mul(acx)));
+    if !d.v.is_finite() {
+        return true;
+    }
+    let abs_d = E {
+        v: d.v.abs(),
+        e: d.e,
+    };
+    if d.v.abs() < 1e-12 && !abs_d.straddles(1e-12) {
+        return false;
+    }
+    let cx = sx.add(acy.mul(ab2).sub(aby.mul(ac2)).div(d));
+    let cy = sy.add(abx.mul(ac2).sub(acx.mul(ab2)).div(d));
+    if !(cx.v.is_finite() && cy.v.is_finite()) || d.straddles(1e-12) || d.straddles(-1e-12) {
+        return true;
+    }
+    // three_point_circle_2d
+    let r = E::hypot(cx.sub(sx), cy.sub(sy));
+    let (chx, chy) = (ex.sub(sx), ey.sub(sy));
+    let len = E::hypot(chx, chy);
+    if !(r.v.is_finite() && len.v.is_finite()) {
+        return true;
+    }
+    if len.straddles(1e-9) || r.straddles(1e-9) {
+        return true;
+    }
+    if len.v <= 1e-9 || r.v <= 1e-9 {
+        return false;
+    }
+    let (nx, ny) = (E::exact(0.0).sub(chy.div(len)), chx.div(len));
+    let half = E::exact(0.5);
+    let (mx, my) = (sx.add(ex).mul(half), sy.add(ey).mul(half));
+    let side_t = nx.mul(tx.sub(mx)).add(ny.mul(ty.sub(my)));
+    let side_c = nx.mul(cx.sub(mx)).add(ny.mul(cy.sub(my)));
+    if side_t.straddles(0.0) || side_c.straddles(0.0) {
+        return true;
+    }
+    let q = len.div(E::exact(2.0).mul(r));
+    let asin = |x: f64| scx_num::fmath::asin(x.clamp(-1.0, 1.0));
+    let mv = 2.0 * asin(q.v);
+    let me = 2.0 * (asin(q.v + q.e) - asin(q.v)).max(asin(q.v) - asin(q.v - q.e));
+    let minor = E::rounded(mv, me);
+    let long = side_t.v * side_c.v > 0.0;
+    // TAU itself is 2.4e-16 from 2 pi
+    let sweep = if long {
+        E::rounded(core::f64::consts::TAU - minor.v, minor.e + 2.5e-16)
+    } else {
+        minor
+    };
+    cx.loose() || cy.loose() || r.loose() || sweep.loose()
+}
+
+/// The true `three_point_circle_2d(s, e, t)`, in exact integers, each result rounded once
+/// (within `2^-51`): see [`three_point_circle_2d`].
+fn true_circle(s: P, e: P, t: P) -> Circle {
+    use crate::exact::{ldexp, ratio, sqrt_ratio, Int};
+    use core::cmp::Ordering::{Greater, Less};
+    if !s.iter().chain(&e).chain(&t).all(|v| v.is_finite()) {
+        return None;
+    }
+    let ([sx, sy, ex, ey, tx, ty], u) = Int::of_doubles([s[0], s[1], e[0], e[1], t[0], t[1]]);
+    let ([thr_d, thr_l], v) = Int::of_doubles([1e-12, 1e-9]);
+    let (ax, ay) = (sx.sub(&tx), sy.sub(&ty));
+    let (bx, by) = (ex.sub(&tx), ey.sub(&ty));
+    let (cx, cy) = (ex.sub(&sx), ey.sub(&sy));
+    let cross = ax.mul(&by).sub(&ay.mul(&bx));
+    let d = cross.add(&cross);
+    // twice the area at least 1e-12
+    if d.cmp_scaled(2 * u, &thr_d, v) == Less {
+        return None;
+    }
+    let sq = |x: &Int, y: &Int| x.mul(x).add(&y.mul(y));
+    let (a2, b2, c2) = (sq(&ax, &ay), sq(&bx, &by), sq(&cx, &cy));
+    // the chord above 1e-9, and finite
+    let thr_l2 = thr_l.mul(&thr_l);
+    // A result is finite when below 2^1024 - 2^970 (halfway past the largest double), in
+    // units of 2^w: decided exactly, as the rounding near it is not.
+    let ([max, half], w) = Int::of_doubles([f64::MAX, ldexp(1.0, 970)]);
+    let top = max.add(&half);
+    let top2 = top.mul(&top);
+    let clamp = |x: f64| x.clamp(-f64::MAX, f64::MAX);
+    if c2.cmp_scaled(2 * u, &thr_l2, 2 * v) != Greater || c2.cmp_scaled(2 * u, &top2, 2 * w) != Less
+    {
+        return None;
+    }
+    // the centre's offset from t is N / d
+    let nx = by.mul(&a2).sub(&ay.mul(&b2));
+    let ny = ax.mul(&b2).sub(&bx.mul(&a2));
+    // s - centre = (a d - N) / d, e - centre = (b d - N) / d
+    let (px, py) = (ax.mul(&d).sub(&nx), ay.mul(&d).sub(&ny));
+    let (qx, qy) = (bx.mul(&d).sub(&nx), by.mul(&d).sub(&ny));
+    // the radius above 1e-9, and finite: |p|^2 > 1e-18 d^2
+    let p2 = sq(&px, &py);
+    if p2.cmp_scaled(2 * u, &thr_l2.mul(&d.mul(&d)), 2 * v) != Greater {
+        return None;
+    }
+    if p2.cmp_scaled(2 * u, &top2.mul(&d.mul(&d)), 2 * w) != Less {
+        return None;
+    }
+    let r = clamp(sqrt_ratio(&p2, &d.mul(&d), 2 * u));
+    let (cnx, cny) = (tx.mul(&d).add(&nx), ty.mul(&d).add(&ny));
+    let centre = [clamp(ratio(&cnx, &d, u)), clamp(ratio(&cny, &d, u))];
+    if [&cnx, &cny]
+        .iter()
+        .any(|c| c.cmp_scaled(u, &top.mul(&d), w) != Less)
+    {
+        return None;
+    }
+    // p x q = d (d cross + (b - a) x N), exactly; p . q from rounded parts (no cancellation
+    // that matters: its error moves the angle by a relative 2^-51).
+    let bma = (bx.sub(&ax), by.sub(&ay));
+    let pxq = d.mul(&d.mul(&cross).add(&bma.0.mul(&ny).sub(&bma.1.mul(&nx))));
+    let f = |x: &Int| x.approx();
+    let ((mpx, kpx), (mpy, kpy), (mqx, kqx), (mqy, kqy)) = (f(&px), f(&py), f(&qx), f(&qy));
+    let top = [kpx, kpy, kqx, kqy].into_iter().max().unwrap_or(0);
+    let g = |m: f64, k: i64| ldexp(m, k - top);
+    let dot = g(mpx, kpx) * g(mqx, kqx) + g(mpy, kpy) * g(mqy, kqy);
+    let (mc, kc) = pxq.approx();
+    let crs = ldexp(mc.abs(), kc - 2 * top);
+    let minor = scx_num::fmath::atan2(crs, dot);
+    // long when t and the centre are on one side of the chord: n = (-cy, cx),
+    // side_t ~ n . (2t - s - e), side_c ~ n . (2 N + (2t - s - e) d) / d
+    let w = (tx.add(&tx).sub(&sx).sub(&ex), ty.add(&ty).sub(&sy).sub(&ey));
+    let side = |x: &Int, y: &Int| cy.neg().mul(x).add(&cx.mul(y));
+    let side_t = side(&w.0, &w.1).signum();
+    let side_c = side(
+        &nx.add(&nx).add(&w.0.mul(&d)),
+        &ny.add(&ny).add(&w.1.mul(&d)),
+    )
+    .signum()
+        * d.signum();
+    let sweep = if side_t * side_c > 0 {
+        core::f64::consts::TAU - minor
+    } else {
+        minor
+    };
+    Some((centre, r, sweep))
+}
