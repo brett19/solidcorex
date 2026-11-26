@@ -178,6 +178,7 @@ macro_rules! helpers {
 
 /// scx-num and scx-algo, by solidcore's module names.
 pub mod x {
+    pub use crate::solvers::x as sv;
     pub use scx_algo::polynomial;
     pub use scx_num::tol::Tolerances;
     pub use scx_num::{
@@ -194,6 +195,7 @@ pub mod x {
 
 /// The pinned solidcore.
 pub mod s {
+    pub use crate::solvers::s as sv;
     pub use solidcore::blend::fillet_section::tay as ring;
     pub use solidcore::blend::fillet_section::{interval, series, taylor_model};
     pub use solidcore::geom::{
