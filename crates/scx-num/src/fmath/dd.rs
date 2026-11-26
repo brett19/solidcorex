@@ -1,0 +1,204 @@
+// Written for solidcorex. Apache-2.0.
+//! Double-double helpers for `fmath`: a value `hi + lo` with `|lo| <= ulp(hi)/2` once
+//! normalised, built only from the error-free transformations in [`crate::eft`].
+//!
+//! Each operation's relative error is a few units of `2^-104` unless noted; none is a
+//! correctly rounded double-double operation, which `fmath` does not need.
+
+use crate::eft::{fast_two_sum, two_prod, two_sum};
+
+/// `1.5 * 2^52`: adding and subtracting it rounds a double of magnitude below `2^51` to
+/// the nearest integer, ties to even.
+pub(super) const ROUND_SHIFT: f64 = 6_755_399_441_055_744.0;
+
+/// `x` rounded to the nearest integer (ties to even), for `|x| < 2^51`.
+#[inline]
+pub(super) fn round_int(x: f64) -> f64 {
+    (x + ROUND_SHIFT) - ROUND_SHIFT
+}
+
+/// `2^k` for `k` in `-1022..=1023` (a normal power of two).
+#[inline]
+pub(super) fn pow2(k: i32) -> f64 {
+    f64::from_bits(((1023 + i64::from(k)) as u64) << 52)
+}
+
+/// `x * 2^k` for finite `x` and any `k`, rounding once: exact whenever the result is
+/// normal, correctly rounded when it is subnormal, infinite when it overflows.
+pub(super) fn scale(x: f64, k: i32) -> f64 {
+    if let Some(r) = scale_normal(x, k) {
+        return r;
+    }
+    if x == 0.0 {
+        return x;
+    }
+    // x = m * 2^ex with m in [1, 2), exactly.
+    let ex = exponent(x);
+    let m = if ex >= -1022 {
+        x * pow2(-ex)
+    } else {
+        x * pow2(1023) * pow2(-ex - 1023)
+    };
+    let t = ex.saturating_add(k);
+    if t > 1023 {
+        f64::INFINITY.copysign(x)
+    } else if t >= -1022 {
+        m * pow2(t)
+    } else if t >= -1080 {
+        // m * 2^-1022 is exact; the second product rounds once into the subnormals.
+        m * pow2(-1022) * pow2(t + 1022)
+    } else {
+        0.0f64.copysign(x)
+    }
+}
+
+/// `x * 2^k` by moving the exponent field, when `x` and the result are both normal (the
+/// common case, and exact); `None` otherwise.
+#[inline]
+fn scale_normal(x: f64, k: i32) -> Option<f64> {
+    let b = x.to_bits();
+    let field = ((b >> 52) & 0x7ff) as i32;
+    let t = field.wrapping_add(k);
+    if field != 0 && field != 0x7ff && (1..=0x7fe).contains(&t) {
+        Some(f64::from_bits(b.wrapping_add((i64::from(k) as u64) << 52)))
+    } else {
+        None
+    }
+}
+
+/// The double nearest `(hi + lo) * 2^k` (ties to even), for a normalised pair
+/// (`hi = fl(hi + lo)`) with `hi` finite and nonzero and any `k`: one rounding, also
+/// when the result is subnormal or overflows.
+pub(super) fn round_scaled(hi: f64, lo: f64, k: i32) -> f64 {
+    if let Some(r) = scale_normal(hi, k) {
+        return r;
+    }
+    let e = exponent(hi).saturating_add(k);
+    if e >= -1022 {
+        // Normal or overflowing: hi already is the rounded sum, and the scaling is exact.
+        return scale(hi, k);
+    }
+    if e < -1076 {
+        // Below half the least subnormal: rounds to zero.
+        return 0.0f64.copysign(hi);
+    }
+    // Subnormal. Round hi alone onto the subnormal grid, then correct the one case where
+    // lo decides: hi exactly half-way between two grid points.
+    let r = scale(hi, k);
+    let d = hi - scale(r, -k);
+    let half = scale(1.0, -1075 - k).copysign(hi);
+    let step = f64::from_bits(1).copysign(hi);
+    if d == half && lo * hi > 0.0 {
+        // hi lay half-way and rounded toward zero; lo is beyond the half.
+        r + step
+    } else if d == -half && lo * hi < 0.0 {
+        // hi lay half-way and rounded away from zero; lo is short of the half.
+        r - step
+    } else {
+        r
+    }
+}
+
+/// The unbiased binary exponent of a finite nonzero double (`floor(log2 |x|)`), also for
+/// subnormals.
+#[inline]
+pub(super) fn exponent(x: f64) -> i32 {
+    let b = x.to_bits() & 0x7fff_ffff_ffff_ffff;
+    let biased = (b >> 52) as i32;
+    if biased == 0 {
+        // Subnormal: position of the leading bit.
+        -1011 - b.leading_zeros() as i32
+    } else {
+        biased - 1023
+    }
+}
+
+/// `(a + b)` for two double-doubles, normalised.
+#[inline]
+pub(super) fn add(a: (f64, f64), b: (f64, f64)) -> (f64, f64) {
+    let (s, e) = two_sum(a.0, b.0);
+    fast_two_sum(s, e + a.1 + b.1)
+}
+
+/// `a * b` for two double-doubles, normalised.
+#[inline]
+pub(super) fn mul(a: (f64, f64), b: (f64, f64)) -> (f64, f64) {
+    let (p, e) = two_prod(a.0, b.0);
+    fast_two_sum(p, e + (a.0 * b.1 + a.1 * b.0))
+}
+
+/// `a / b` for two double-doubles, normalised.
+#[inline]
+pub(super) fn div(a: (f64, f64), b: (f64, f64)) -> (f64, f64) {
+    let q = a.0 / b.0;
+    let (p, e) = two_prod(q, b.0);
+    let r = (a.0 - p) - e + a.1 - q * b.1;
+    fast_two_sum(q, r / b.0)
+}
+
+/// `1 / b` for a double-double, normalised.
+#[inline]
+pub(super) fn recip(b: (f64, f64)) -> (f64, f64) {
+    let q = 1.0 / b.0;
+    let (p, e) = two_prod(q, b.0);
+    let r = (1.0 - p) - e - q * b.1;
+    fast_two_sum(q, r / b.0)
+}
+
+/// `sqrt(a)` for a positive double-double, normalised.
+#[inline]
+pub(super) fn sqrt(a: (f64, f64)) -> (f64, f64) {
+    let s = a.0.sqrt();
+    let (p, e) = two_prod(s, s);
+    let r = (a.0 - p) - e + a.1;
+    fast_two_sum(s, r / (2.0 * s))
+}
+
+/// A table entry, with a zero fallback that a masked index never reaches (library code
+/// may not index unchecked).
+#[inline]
+pub(super) fn at<T: Copy + Default, const N: usize>(table: &[T; N], i: usize) -> T {
+    table.get(i).copied().unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rounding_and_powers() {
+        assert_eq!(round_int(2.5), 2.0);
+        assert_eq!(round_int(3.5), 4.0);
+        assert_eq!(round_int(-2.5), -2.0);
+        assert_eq!(pow2(-1022), f64::MIN_POSITIVE);
+        assert_eq!(pow2(0), 1.0);
+        assert_eq!(exponent(1.0), 0);
+        assert_eq!(exponent(f64::from_bits(1)), -1074);
+        assert_eq!(exponent(f64::MIN_POSITIVE), -1022);
+        assert_eq!(exponent(-3.0), 1);
+    }
+
+    #[test]
+    fn scaling_rounds_once() {
+        let tiny = f64::from_bits(1);
+        assert_eq!(scale(1.0, -1074), tiny);
+        assert_eq!(scale(1.5, -1075), tiny);
+        assert_eq!(scale(f64::from_bits(3), 1074), 3.0);
+        assert_eq!(scale(f64::MAX, -2099), 0.0);
+        assert_eq!(scale(1.0, -1076), 0.0);
+        assert_eq!(scale(1.0, 1024), f64::INFINITY);
+        assert_eq!(scale(0.75, 1024), 0.75 * pow2(1023) * 2.0);
+        assert_eq!(scale(3.0, -2000), 0.0);
+        // A half-way hi that lo pushes up, and one it pushes down.
+        assert_eq!(round_scaled(1.0, 1e-20, -1075), tiny);
+        assert_eq!(round_scaled(1.0, -1e-20, -1075), 0.0);
+        assert_eq!(round_scaled(1.0, 0.0, -1075), 0.0);
+        assert_eq!(round_scaled(1.5, 0.0, -1074), 2.0 * tiny);
+        assert_eq!(round_scaled(1.5, -1e-20, -1074), tiny);
+        assert_eq!(round_scaled(-1.5, 1e-20, -1074), -tiny);
+        assert_eq!(round_scaled(1.25, 1e-20, -1073), 3.0 * tiny);
+        assert_eq!(round_scaled(1.0, 0.0, 1024), f64::INFINITY);
+        assert_eq!(round_scaled(1.5, 0.0, 1023), 1.5 * pow2(1023));
+        assert_eq!(round_scaled(1.0, 0.0, -1022), f64::MIN_POSITIVE);
+    }
+}

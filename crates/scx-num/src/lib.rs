@@ -5,12 +5,14 @@
 //! rounding (intervals, interval vectors, Taylor models and the certificate's series,
 //! [`interval`], [`interval_vector`], [`taylor_model`], [`series`], [`ring`]), the
 //! certificate types ([`cert`]), the one fixed hash and random generator ([`hash`]), and the
-//! error-free transformations ([`eft`]).
+//! error-free transformations ([`eft`]) and the transcendental functions on them
+//! ([`fmath`]).
 //! Depends on nothing.
 //!
-//! Every module but [`cert`], [`consts`], [`eft`], [`hash`], [`units`] and [`error`] is moved from solidcore at
-//! commit `03e16c9ee766de5b9b1ced845e5149d62ff493b8` with its results unchanged bit for
-//! bit (`docs/research/52-num-move.md`; the interval modules, `53-interval-and-algo.md`).
+//! Every module but [`cert`], [`consts`], [`eft`], [`fmath`], [`hash`], [`units`] and
+//! [`error`] is moved from solidcore at commit `03e16c9ee766de5b9b1ced845e5149d62ff493b8`
+//! with its results unchanged bit for bit (`docs/research/52-num-move.md`; the interval
+//! modules, `53-interval-and-algo.md`).
 
 pub mod cert;
 pub mod certified;
@@ -20,6 +22,7 @@ pub mod error;
 pub mod extent1d;
 pub mod extent2d;
 pub mod extent3d;
+pub mod fmath;
 pub mod hash;
 pub mod interval;
 pub mod interval_vector;
