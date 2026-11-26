@@ -250,7 +250,11 @@ fn headers(root: &Path) -> Result<String, String> {
     for f in &files {
         if !header_ok(&read(f)?) {
             let shown = f.strip_prefix(root).unwrap_or(f);
-            let _ = writeln!(bad, "{} has no derivation or solidcorex header", shown.display());
+            let _ = writeln!(
+                bad,
+                "{} has no derivation or solidcorex header",
+                shown.display()
+            );
         }
     }
     if bad.is_empty() {
@@ -328,6 +332,8 @@ mod tests {
         );
         assert!(header_ok(&moved));
         assert!(!header_ok("//! doc only\n"));
-        assert!(!header_ok("// Moved from solidcore `x.rs` at commit deadbeef.\n// Changes: z.\n"));
+        assert!(!header_ok(
+            "// Moved from solidcore `x.rs` at commit deadbeef.\n// Changes: z.\n"
+        ));
     }
 }
