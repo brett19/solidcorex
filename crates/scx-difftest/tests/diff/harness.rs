@@ -1,7 +1,14 @@
 // Written for solidcorex. Apache-2.0.
-//! The differential harness: input pools, a seeded generator, a bit-level fingerprint of
-//! every result, and the `diff!` macro that runs one expression against scx-num and
-//! against the pinned solidcore and compares the fingerprints.
+//! The differential harness: input pools, a seeded generator, a fingerprint of every
+//! result, and the `diff!` macro that runs one expression against scx-num and against the
+//! pinned solidcore.
+//!
+//! Two checks per input (owner's rule of 2026-11-26: correct and deterministic, not bit
+//! for bit with solidcore):
+//! - **Deterministic:** scx-num's result, computed twice, is the same to the bit.
+//! - **Agrees with solidcore:** the same shape (variants, errors, integers, lengths,
+//!   panics) and every float within [`Tol`]. Exact agreement is counted separately, so
+//!   drift from the pin is visible even where it is allowed.
 
 use std::fmt::Debug;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -512,12 +519,68 @@ args_tuple!(A a, B b, C c, D d, E e);
 args_tuple!(A a, B b, C c, D d, E e, F f);
 args_tuple!(A a, B b, C c, D d, E e, F f, G g);
 
-/// The fingerprint of a result: the bits of every `f64` in it, in order, plus text for
+/// One scalar of a fingerprint: a float (by its bits) or an integer.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Item {
+    F(u64),
+    I(u64),
+}
+
+impl Debug for Item {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Item::F(b) => write!(f, "{:e}", f64::from_bits(*b)),
+            Item::I(i) => write!(f, "{i}"),
+        }
+    }
+}
+
+/// The fingerprint of a result: every float and integer in it, in order, plus text for
 /// the parts that are not numbers (enum variants, error classes and operations).
+/// `==` is bit-exact.
 #[derive(Default, PartialEq, Eq, Debug)]
 pub struct Out {
-    pub bits: Vec<u64>,
+    pub bits: Vec<Item>,
     pub text: String,
+}
+
+/// How far a float may move from the pinned solidcore's. Two floats agree when they are
+/// equal as numbers (so `0.0` and `-0.0` agree), are both NaN (any payload), or are both
+/// finite and differ by at most `max(abs, rel * max(|a|, |b|))`. Infinities agree only
+/// with the same infinity.
+#[derive(Clone, Copy, Debug)]
+pub struct Tol {
+    pub rel: f64,
+    pub abs: f64,
+}
+
+impl Tol {
+    /// The default: a few rounding errors of drift, no more.
+    pub const DEFAULT: Tol = Tol {
+        rel: 1e-12,
+        abs: 1e-300,
+    };
+
+    pub fn floats_agree(self, a: f64, b: f64) -> bool {
+        if a == b || (a.is_nan() && b.is_nan()) {
+            return true;
+        }
+        if !a.is_finite() || !b.is_finite() {
+            return false;
+        }
+        (a - b).abs() <= self.abs.max(self.rel * a.abs().max(b.abs()))
+    }
+
+    /// Same shape and every float within the tolerance.
+    pub fn agree(self, x: &Out, s: &Out) -> bool {
+        x.text == s.text
+            && x.bits.len() == s.bits.len()
+            && x.bits.iter().zip(&s.bits).all(|p| match p {
+                (Item::F(a), Item::F(b)) => self.floats_agree(f64::from_bits(*a), f64::from_bits(*b)),
+                (Item::I(a), Item::I(b)) => a == b,
+                _ => false,
+            })
+    }
 }
 
 impl Out {
@@ -533,14 +596,14 @@ pub trait Bits {
 
 impl Bits for f64 {
     fn bits(&self, o: &mut Out) {
-        o.bits.push(self.to_bits());
+        o.bits.push(Item::F(self.to_bits()));
     }
 }
 macro_rules! int_bits {
     ($($t:ty),*) => {$(
         impl Bits for $t {
             fn bits(&self, o: &mut Out) {
-                o.bits.push(*self as u64);
+                o.bits.push(Item::I(*self as u64));
             }
         }
     )*};
@@ -591,7 +654,7 @@ impl<T: Bits, E: Bits> Bits for Result<T, E> {
 }
 impl<T: Bits> Bits for [T] {
     fn bits(&self, o: &mut Out) {
-        o.bits.push(self.len() as u64);
+        o.bits.push(Item::I(self.len() as u64));
         for x in self {
             x.bits(o);
         }
@@ -636,25 +699,51 @@ pub fn shot<R: Bits>(f: impl FnOnce() -> R) -> Out {
 
 static QUIET: Once = Once::new();
 
-/// Run `xf` and `sf` on every case and fail with the first mismatches.
+/// Run `xf` and `sf` on every case, at the default tolerance.
 pub fn run<A: Args, RX: Bits, RS: Bits>(name: &str, xf: impl Fn(A) -> RX, sf: impl Fn(A) -> RS) {
+    run_tol(name, Tol::DEFAULT, xf, sf);
+}
+
+/// Run `xf` twice and `sf` once on every case; fail if `xf` is not deterministic or does
+/// not agree with `sf` within `tol`.
+pub fn run_tol<A: Args, RX: Bits, RS: Bits>(
+    name: &str,
+    tol: Tol,
+    xf: impl Fn(A) -> RX,
+    sf: impl Fn(A) -> RS,
+) {
     QUIET.call_once(|| std::panic::set_hook(Box::new(|_| {})));
     let mut rng = SplitMix64(seed_of(name));
     let cases = A::cases(&mut rng);
-    let mut bad = Vec::new();
+    let (mut exact, mut unstable, mut bad) = (0usize, Vec::new(), Vec::new());
     for c in &cases {
         let ox = shot(|| xf(c.clone()));
+        let ox2 = shot(|| xf(c.clone()));
         let os = shot(|| sf(c.clone()));
-        if ox != os {
+        if ox != ox2 {
+            unstable.push(format!("{c:?}\n    run 1: {ox:?}\n    run 2: {ox2:?}"));
+        }
+        if ox == os {
+            exact += 1;
+        } else if !tol.agree(&ox, &os) {
             bad.push(format!(
-                "{c:?}\n    scx-num:   {ox:?}\n    solidcore: {os:?}"
+                "{c:?}\n    scx:       {ox:?}\n    solidcore: {os:?}"
             ));
         }
     }
     println!(
-        "difftest {name}: {} inputs, {} mismatches",
+        "difftest {name}: {} inputs, {exact} exact, {} within tolerance, {} mismatches, {} nondeterministic",
         cases.len(),
-        bad.len()
+        cases.len() - exact - bad.len(),
+        bad.len(),
+        unstable.len()
+    );
+    assert!(
+        unstable.is_empty(),
+        "{name}: {} of {} inputs are not deterministic; first:\n{}",
+        unstable.len(),
+        cases.len(),
+        unstable.iter().take(3).cloned().collect::<Vec<_>>().join("\n")
     );
     assert!(
         bad.is_empty(),

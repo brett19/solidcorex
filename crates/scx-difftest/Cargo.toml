@@ -1,7 +1,7 @@
 # Written for solidcorex.
 [package]
 name = "scx-difftest"
-description = "Differential tests: scx-num and scx-algo against the pinned solidcore, bit for bit"
+description = "Differential tests: scx-num and scx-algo against the pinned solidcore: deterministic, and within tolerance of the pin"
 edition.workspace = true
 license.workspace = true
 version.workspace = true
