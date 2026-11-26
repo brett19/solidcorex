@@ -181,8 +181,8 @@ pub mod x {
     pub use crate::solvers::x as sv;
     pub use scx_algo::hash_table;
     /// What `find_coincident_pairs` reads tolerances from: the default `Tolerances`.
-    pub fn ht_tol() -> scx_num::Tolerances {
-        scx_num::Tolerances::default()
+    pub fn ht_tol() -> Tolerances {
+        Tolerances::default()
     }
     pub use scx_algo::krawczyk;
     /// A Krawczyk-module error as (class, operation, failure): `solve4`'s singular system.

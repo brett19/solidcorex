@@ -24,7 +24,7 @@ fn o(x: Option<usize>) -> usize {
 }
 
 /// One operation's record: (operation, integers, numbers, error text).
-type Rec = (u8, Vec<usize>, Vec<f64>, Option<String>);
+type Rec = (usize, Vec<usize>, Vec<f64>, Option<String>);
 
 /// The model's state, as a record.
 macro_rules! state {
@@ -65,7 +65,7 @@ macro_rules! state {
         }
         let (lo, hi) = (v.bbox().min(), v.bbox().max());
         nums.extend([lo.x, lo.y, lo.z, hi.x, hi.y, hi.z]);
-        (255u8, ints, nums, None::<String>)
+        (255usize, ints, nums, None::<String>)
     }};
 }
 
