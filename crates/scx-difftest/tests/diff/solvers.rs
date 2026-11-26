@@ -259,7 +259,7 @@ macro_rules! evaluators {
         use self::local_solve_nd::{compute_jacobian, EvalNFunctions};
         use self::matrix::Matrix;
         use self::extent1d::Extent1d;
-        use crate::solvers::{f1, fd, fn_n, found_n, pin_error, wants_intervals, Class};
+        use crate::solvers::{f1, fd, fn_n, found_n, wants_intervals, Class};
 
         /// A 1-D evaluator that logs `(t, signal_errors, failed)` per call and fails at call
         /// `fail_at` (and every later call when `persist`) with class `class`.
@@ -366,7 +366,7 @@ pub mod x {
     pub use scx_algo::{local_solve1d, local_solve_nd};
     pub use scx_num::{extent1d, matrix};
     pub type EvErr = super::XErr;
-    pub fn err(c: super::Class) -> EvErr {
+    pub fn err(c: Class) -> EvErr {
         super::XErr(super::pin_error(c))
     }
     fn num_err(e: scx_num::NumError) -> EvErr {
@@ -386,7 +386,7 @@ pub mod x {
 pub mod s {
     pub use solidcore::geom::{extent1d, local_solve1d, local_solve_nd, matrix};
     pub type EvErr = solidcore::SolidError;
-    pub fn err(c: super::Class) -> EvErr {
+    pub fn err(c: Class) -> EvErr {
         super::pin_error(c)
     }
     fn num_err(e: EvErr) -> EvErr {
