@@ -94,6 +94,6 @@ Local only. No solidcore code is copied into this repository until the licence q
 |---|---|---|
 | Module dependency and cycle map of solidcore | `research/49-module-dependencies.md` | done; corrections folded into `01-architecture.md` section 13 |
 | Coverage of solidcore over its goldens, tests and the app corpus | `research/50-coverage.md` | started |
-| The body's data structure: design and a measured prototype | `research/51-body-structure.md` | started |
+| The body's data structure: design and a measured prototype | `research/51-body-structure.md`, `prototypes/body-structure/` | done; representation decided (`04-decisions.md` section 3); not measured on a large STEP part |
 | Conventions, tolerance model, error taxonomy, glossary | to be written as design documents | not started |
 | Workspace skeleton, layering check, test tiers | in this repository | not started |

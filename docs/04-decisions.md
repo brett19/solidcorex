@@ -46,6 +46,8 @@ These were within its remit as coordinator. Each can be overturned.
 | 11-25 | A test is not edited to make a change pass | The tangent-field fillet test passed on main only through a tolerance of 53 on a 20 mm box (research 46) |
 | 11-25 | A fuzzed, already-invalid body's moved row is described as "findings now reported, not hidden", not as "still covered" | research 46 section C |
 | 11-25 | The mutable path of a split leaf must preserve main's order of read and write exactly | A naive ensure-then-read moved a point by 2e-6 (research 43, review) |
+| 11-26 | (As owner of the rewrite) The body is represented as per-face shared records (a face with its loops, uses, trims, surface and fill-once cells behind one reference count), edges and vertices in tables, dense ids never reused, all behind one table interface; whole-table copy-on-write first, chunked tables as a drop-in change when bodies exceed about 10,000 faces. Invalidation goes through the draft, which marks the faces on any changed edge or vertex. | research 51: app bodies are small (p99 94 faces); the real cost today is that every copy drops face caches 5 to 160 times the body's size; chunking only pays at about 10,000 faces; validating a cell by content costs 13 to 34 times a plain read |
+| 11-26 | (As owner) Ported operations must not rewrite what they do not change | A one-rim fillet on a 70-face plate left 7% of faces untouched because it re-parameterised 63 faces it did not alter; a shell renumbers every edge and vertex. Sharing is worthless if operations churn (research 51) |
 
 ## 4. Designs recommended and then withdrawn
 
@@ -77,4 +79,7 @@ So nobody proposes them again without new evidence.
 - What is the licence and provenance position for a fork (solidcore is a port of a commercial library)?
 - Is a per-body angle tolerance wanted (today the angle tolerance exists only at kernel level)?
 - Should records store offset surfaces and blend definitions exactly (#13789 is open and unscheduled)?
-- Does the stop of 11-25 still stand, and if not, what resumes first?
+- Do bodies carry a placement, so that a rigid move changes no geometry (today a transform leaves 0% of faces untouched)?
+- Which edge and vertex fields may a face's cached values read? That set defines invalidation.
+- The layout of the use records (71 to 80% of a body's bytes today) and where gap data lives.
+- The type an operation returns to say what became of each input face and edge.
