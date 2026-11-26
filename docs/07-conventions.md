@@ -304,7 +304,20 @@ Comparison helpers in `k/geom/tol.rs`:
 - `above(a, b)` is false for NaN, "so a refusal written `!above(..)` refuses NaN too"
   (`k/geom/certified.rs`).
 
-Floating types: `f32` appears on 10 lines in the kernel, none of them in geometry.
+Floating types: the kernel has no `f32` in code (three comments about STL input). The record uses
+`f32` only for colour and opacity and its binary serialiser (`rec/brep/envelope.rs:10`,
+`rec/native/binary.rs:431`).
+
+Duplicated tolerance constants (determinism audit, 11-26):
+
+- `XSECT_TOL_3D` is written as the literal `2.0 * 1.0e-5` (`k/heal/gap.rs:90`) and again privately
+  (`k/surface/surface/p5.rs:131`).
+- `APPROX_TOL_3D` is written as `1.0e-5 / 2.0` (`k/curve/crv_on_surf.rs:178`), with private copies
+  at `k/topology/vertexuse.rs:143` and `k/topology/brep_data.rs:114`.
+- Private copies of `ZONE_TOL_3D` exist at `k/nurbs/b_spline_surface_n_lib/p2.rs:131`,
+  `k/topology/brep_data.rs:112` and `k/surface/trim_srf_cache.rs:136`.
+- `DEGENERATE_TOL_3D = ZONE_TOL_3D / 10` exists twice (`k/surface/surface/p1.rs:229`,
+  `k/topology/brep/p7.rs:205`).
 
 **Inconsistent**
 
@@ -314,6 +327,8 @@ Floating types: `f32` appears on 10 lines in the kernel, none of them in geometr
   references do not say which.
 - The `ZONE/10` guards and `LARGE_SMALL_SIZE_RATIO * b.tolerance()` multiply by the constant,
   never by the stored per-body ratio, which is never read (research 31).
+- The zone is defined in at least six places (above). Changing `Tolerances::zone_tol_3d` would not
+  change the literal copies.
 
 **Rule (JUDGED)**
 
@@ -327,8 +342,12 @@ Floating types: `f32` appears on 10 lines in the kernel, none of them in geometr
 4. **No sentinels.** `Option`, `Extent::EMPTY` or a typed `Unset` replace them.
 5. **NaN.** Every comparison that decides is written so that NaN takes the refusing branch (the
    `above` pattern). Sorting uses `f64::total_cmp`.
-   - Today: 300 `total_cmp` and 171 `partial_cmp` lines in the kernel.
-   - A `partial_cmp(..).unwrap()` or `unwrap_or(Equal)` in a sort is a clippy-disallowed method in
+   - Today the kernel has 227 non-test `total_cmp` lines and 8 sorts whose comparator is
+     `partial_cmp(..).unwrap_or(Equal)`, for example `k/blend/fillet_section/section.rs:1467`
+     (where a NaN is pushed and then sorted, at `:1465`), `k/topology/brep/enclosing.rs:74` and
+     `k/topology/face/p1.rs:2471`. Since Rust 1.81 a non-total comparator may panic in `sort_by`,
+     so these are possible panic sites as well as meaningless orders.
+   - A `partial_cmp(..).unwrap()` or `unwrap_or(Equal)` in a sort is disallowed (clippy) in
      every crate.
 6. **Signed zero.** It is not normalised. Code that keys on bits (memos, hashes) uses
    `num::key_bits(x)`, which maps -0.0 to +0.0 and every NaN to one bit pattern.
@@ -341,39 +360,57 @@ Floating types: `f32` appears on 10 lines in the kernel, none of them in geometr
 **READ**
 
 - **Random numbers.** The kernel's random draws come from `Rng`, a SplitMix64 generator
-  (`k/kernel.rs` ~l.91-127). Every call starts a fresh generator from the configured seed
-  (`Kernel::seeded_rng`, `k/kernel.rs:1611`; field `seed`, `k/kernel.rs:1315` on), so a call's
-  draws do not depend on what ran before. One production caller: `k/topology/topology_traverser.rs:797`.
-- **Fused multiply-add.** `mul_add` appears on 38 lines in the kernel. It is used deliberately in
-  error-free products:
-  - `k/nurbs/b_spline_curve/speed.rs:388-396`
-  - `k/mesh_reduce.rs:146`
-  - `k/offset/construction/sheets.rs:398`
+  (`k/kernel.rs:97`; `DEFAULT_SEED` at `:103`). Every call starts a fresh generator from the
+  configured seed (`Kernel::seeded_rng`, `k/kernel.rs:1611`; field `seed`, doc at `:1318-1321`),
+  so a call's draws do not depend on what ran before. This was made so on 11-23 (bad95c31f7,
+  #20942). Three production callers:
+  - `points_in_face` (`k/topology/face/p2.rs:1719`)
+  - `is_inner_shell` (`k/topology/topology_traverser.rs:797`)
+  - the inner-shell test's ray directions (`k/topology/shell.rs:1732`)
 
-  Rust's `mul_add` is correctly rounded on every target (a software fallback where there is no
+  Every kernel in the ops pool is built with default options (`ops/session.rs:201`), so all share
+  one seed. There is no `rand` crate, no clock seeding, and no hashing of addresses.
+- **Fused multiply-add.** `mul_add` appears at 34 non-test sites, all in the kernel:
+  - 15 compute the exact error of a product (error-free arithmetic, Kahan's `ab - cd`):
+    `k/nurbs/b_spline_curve/speed.rs:388-396`, `k/geom/expansion.rs:70`, `k/query/exact.rs:27`,
+    `k/curve/length_bound.rs:446` and others.
+  - 19 are ordinary fused evaluations: `k/prism/transform.rs:51-60`,
+    `k/surface/extend/ball.rs:960-962`, `k/surface/extend/local_iso.rs:26-71`,
+    `k/surface/surf_of_extrusion/p2.rs:781-783`, `k/offset/construction/sheets.rs:398` and others.
+
+  Rust's `mul_add` is correctly rounded on every target (it falls back to libm `fma` without the
   instruction), and Rust never contracts `a*b+c` by itself. These sites are therefore
-  deterministic. The ops crate disallows `mul_add` because ops must not compute geometry
-  (`solidcore/crates/solidcore-ops/clippy.toml:41`, `:72`).
-- **Hash maps.** `HashMap` / `HashSet` appear in 9 kernel files, for example:
-  - `k/mass/loop_area.rs`
-  - `k/geom/check_memo.rs`
-  - `k/blend/feature_executive.rs`
-  - `k/prism/sheet.rs`
-  - `k/surface/procedural_blend/convert.rs`
+  deterministic, given a correct libm `fma`. There is no SIMD, `std::arch` or `target_feature`, and
+  `unsafe` is forbidden workspace-wide. The ops crate disallows `mul_add` because ops must not
+  compute geometry (`solidcore/crates/solidcore-ops/clippy.toml:41`, `:72`).
+- **Hash maps.** Every `HashMap` / `HashSet` uses std `RandomState`, so its iteration order
+  changes from one process run to the next. BTree containers outnumber hash ones about 23 to 1 in
+  the kernel (647 lines against 28). An audit of every iteration found:
+  - no site where hash order reaches a geometric result
+  - three in ops where order can decide Ok against Err, because a `?` inside the loop fails on
+    whichever entity is visited first (`ops/blend.rs:2307`, `:2321`, `:2395`)
 
-  convert uses one in record export (`cv/brep/record.rs:31`). Raise records use `BTreeMap`
-  (`k/topology.rs:869`, `TrimCoverRaises`).
-- **Thread-locals.** `thread_local!` appears in 6 non-test places:
-  - `k/teeth/bspline.rs:218`
-  - `k/teeth/fit.rs:1255`
-  - `k/topology/face/p1.rs:2901`
-  - `k/topology/face/p3.rs:3272`
-  - `k/query/api_queries.rs:1166`
-  - `k/blend/blend_setback/certify.rs:730`
+  Raise records use `BTreeMap` (`k/topology.rs:869`, `TrimCoverRaises`).
+- **Thread-locals and statics.**
+  - The kernel has no `thread_local!`, `static mut` or `LazyLock` outside tests. Its one static
+    holds error-site source text (`k/error/site_scan.rs:898`).
+  - ops carries per-call context in `thread_local!`s (`ops/session.rs:250-276`, `:314`, `:321`;
+    `ops/cancel.rs:25`; `ops/fuel.rs:75`). It also has process statics: the kernel pool `IDLE`
+    (`ops/session.rs:59`), `FIXES` (`:60`) and `HOOK` (`:82`).
+- **Threads.** The kernel starts no threads. HLR runs a caller-provided `Workers`
+  (`k/hlr.rs:663-677`). Results come back in item order, but the error returned is the first
+  failure in time (`:915-919`), and a ray budget is shared through atomics (`:2920`). So which
+  error comes back can depend on scheduling.
 - **Interior mutability.** The kernel carries several memos as `Cell` / `RefCell` behind `&Kernel`:
-  - `blend_station_memo`, `blend_w_memo`, `loop_area_memo`, `check_memo`
+  - `blend_station_memo`, `blend_w_memo`, `loop_area_memo`, `check_memo`, plus `Mutex` and
+    `OnceLock` caches inside curve and surface values (`k/curve/crv_on_surf.rs:328`,
+    `k/surface/surface/p2.rs:515`, ...)
   - `blend_net_tolerance`, a `Cell<f64>` that changes how a blend surface evaluates
     (`k/kernel.rs` ~l.1365)
+- **Sums.** Mass properties sum face by face in list order, left to right, with no compensation
+  (`k/mass/integrator/properties.rs:2376`, `:1615-1650`). Renumbering faces changes the low bits.
+  Error-free arithmetic exists only for predicates and bounds (`k/query/exact.rs:17`,
+  `k/geom/expansion.rs`).
 - **History dependence.** Main on raw bodies is history-dependent at round-off level, up to 3.6e-14
   in a ray t (research 33).
   - Reversing face order changes 380 of 474 exports (research 39).
@@ -383,7 +420,8 @@ Floating types: `f32` appears on 10 lines in the kernel, none of them in geometr
 
 - Most memos claim "a hit returns what a fresh solve returns". `blend_net_tolerance` is different:
   it is a scope that changes results, carried on the same `&Kernel` as the memos.
-- Iteration order of the 9 hash containers has not been audited site by site.
+- The kernel holds no random state, but the ops layer holds per-call state in thread-locals and a
+  process-wide fix table.
 - Research 33 and 39 show that order of construction leaks into results.
 
 **Rule (JUDGED)**
@@ -397,17 +435,25 @@ Floating types: `f32` appears on 10 lines in the kernel, none of them in geometr
    used for lookup only. Iteration that matters uses `BTreeMap`, an id-indexed `Vec`, or a sort by
    id. Enforced by a clippy lint on `HashMap::iter` / `keys` / `values` / `into_iter` / `drain`
    outside `#[cfg(test)]`.
-4. **`mul_add`** is allowed only in named error-free-transform helpers in `num::eft` (`two_prod`,
-   `two_sum`, `fma_exact`). It is disallowed elsewhere. Batched code (01 §9) never fuses, so the
-   scalar and lane results agree.
+4. **`mul_add`** is allowed only in named helpers in `num::eft`, of two kinds:
+   - the error-free helpers (`two_prod`, `two_sum`), which keep the 15 error-term sites
+   - `fma(a, b, c)`, for a deliberate fused evaluation
+
+   It is disallowed elsewhere by clippy. The batched code of 01 §9 uses the same helper in scalar
+   and lane code, so the two agree. The 19 evaluation sites either move into `num::eft::fma`
+   unchanged (no result moves) or are unfused in step K (moves those results by a rounding). The
+   default is to move them unchanged.
 5. **Sums.** Every reduction over a variable-length set runs in id order, left to right. A parallel
    reduction collects per-item values and sums them in that order afterwards. There are no
    cross-lane horizontal sums.
-6. **No `thread_local!` and no `static` mutable state** in any crate. The 6 sites become fields of
-   `Scratch`.
-7. **Scratch may memoise, but must never change a result.** A value that changes results (like
+6. **No `thread_local!` and no `static` mutable state** in any crate. The kernel already has none.
+   The ops thread-locals (call context, cancel, fuel, fixes) become the explicit `&Cancel`,
+   `&mut Report` and `&Settings` arguments, and the kernel pool becomes a pool of `Scratch`.
+7. **Errors from workers.** When several workers fail, the error reported is the one for the
+   lowest item index, never the first in time. A shared budget is split per item in advance.
+8. **Scratch may memoise, but must never change a result.** A value that changes results (like
    `blend_net_tolerance`) is an explicit argument, not scratch.
-8. **Transcendental functions.** `sin`, `cos`, `atan2`, `exp` and `ln` are not correctly rounded by
+9. **Transcendental functions.** `sin`, `cos`, `atan2`, `exp` and `ln` are not correctly rounded by
    the platform libm. Either `num` ships its own (a correctly rounded or fixed polynomial
    implementation, the same on every target including wasm), or results are allowed to differ
    across platforms in the last bit of a transcendental. **This is an owner decision** (see the

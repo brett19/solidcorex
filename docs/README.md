@@ -16,6 +16,9 @@ with the date, who decided, and the evidence; status changes go in `05-status.md
 | [03-upfront-planning.md](03-upfront-planning.md) | What to settle before moving any code |
 | [04-decisions.md](04-decisions.md) | What was decided, by whom, on what evidence; designs withdrawn; what is still open |
 | [06-licence-and-source.md](06-licence-and-source.md) | The licence decision and what it allows; the pinned solidcore commit |
+| [07-conventions.md](07-conventions.md) | Units, angles, parameter domains, orientation, frames, numbers, determinism, ids and naming: what solidcore does, where it disagrees with itself, one rule each |
+| [08-glossary.md](08-glossary.md) | One meaning per word: the body types, entities and uses (with the radial-edge picture), today's loose terms and the architecture's terms |
+| [09-tolerances.md](09-tolerances.md) | Tolerances today and against solidcore's own spec; accuracy per entity and resolution per operation; certificates as data; legitimate raises; migration and what moves |
 | [05-status.md](05-status.md) | Merged work, parked drafts, issues, local branches, clean-up owed, how to resume |
 | [research/](research/README.md) | 47 investigation reports with an index that says which to trust, plus reviews, issue texts and earlier plans |
 
