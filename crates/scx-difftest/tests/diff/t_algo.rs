@@ -93,8 +93,12 @@ fn arr<const N: usize>(c: &[f64]) -> [f64; N] {
     a
 }
 
-diff!(poly_quadratic, |c: [f64; 3], tol: f64| m::polynomial::solve_quadratic(&c, tol).to_vec());
-diff!(poly_cubic, |c: [f64; 4], tol: f64| m::polynomial::solve_cubic(&c, tol).to_vec());
+diff!(poly_quadratic, |c: [f64; 3], tol: f64| {
+    m::polynomial::solve_quadratic(&c, tol).to_vec()
+});
+diff!(poly_cubic, |c: [f64; 4], tol: f64| {
+    m::polynomial::solve_cubic(&c, tol).to_vec()
+});
 diff!(poly_quartic, |c: [f64; 4], e: f64, tol: f64| {
     let [a, b, d, f] = c;
     m::polynomial::solve_quartic(&[a, b, d, f, e], tol).to_vec()
@@ -102,7 +106,12 @@ diff!(poly_quartic, |c: [f64; 4], e: f64, tol: f64| {
 diff!(poly_roots_type, || {
     let r = m::polynomial::Roots::new();
     let d = m::polynomial::Roots::default();
-    (r.as_slice().to_vec(), r.len(), r == d, format!("{r:?}") == format!("{d:?}"))
+    (
+        r.as_slice().to_vec(),
+        r.len(),
+        r == d,
+        format!("{r:?}") == format!("{d:?}"),
+    )
 });
 diff!(poly_from_roots, |tol: f64| {
     let mut out: Vec<Vec<f64>> = Vec::new();

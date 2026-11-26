@@ -74,7 +74,11 @@ fn check(deg: usize, solve: impl Fn(&[f64]) -> Vec<f64>, seed: u64) -> (usize, u
     let (mut cases, mut separated_cases) = (0, 0);
     for _ in 0..20_000 {
         let roots: Vec<f64> = (0..deg).map(|_| rng.root()).collect();
-        let lead = if rng.next() < 0.5 { 1.0 } else { -0.5 - rng.next() * 3.0 };
+        let lead = if rng.next() < 0.5 {
+            1.0
+        } else {
+            -0.5 - rng.next() * 3.0
+        };
         let c = from_roots(&roots, lead);
         let got = solve(&c);
         cases += 1;
@@ -106,21 +110,13 @@ fn quadratic_roots_are_roots_and_all_are_found() {
 
 #[test]
 fn cubic_roots_are_roots_and_all_are_found() {
-    let (n, s) = check(
-        3,
-        |c| solve_cubic(&arr(c), EFF_ZERO).to_vec(),
-        11,
-    );
+    let (n, s) = check(3, |c| solve_cubic(&arr(c), EFF_ZERO).to_vec(), 11);
     assert!(n == 20_000 && s > 10_000);
 }
 
 #[test]
 fn quartic_roots_are_roots_and_all_are_found() {
-    let (n, s) = check(
-        4,
-        |c| solve_quartic(&arr(c), EFF_ZERO).to_vec(),
-        13,
-    );
+    let (n, s) = check(4, |c| solve_quartic(&arr(c), EFF_ZERO).to_vec(), 13);
     assert!(n == 20_000 && s > 5_000);
 }
 

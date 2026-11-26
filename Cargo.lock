@@ -71,9 +71,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e27ee8bb91ca0adcf0ecb116293afa12d393f9c2b9b9cd54d33e8078fe19839"
 
 [[package]]
+name = "scx-algo"
+version = "0.1.0"
+dependencies = [
+ "scx-num",
+]
+
+[[package]]
 name = "scx-difftest"
 version = "0.1.0"
 dependencies = [
+ "scx-algo",
  "scx-num",
  "solidcore",
 ]

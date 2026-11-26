@@ -12,8 +12,8 @@
 )]
 
 mod facade;
-mod t_algo;
 mod harness;
+mod t_algo;
 mod t_extent;
 mod t_interval;
 mod t_math;

@@ -178,13 +178,13 @@ macro_rules! helpers {
 
 /// scx-num and scx-algo, by solidcore's module names.
 pub mod x {
+    pub use scx_algo::polynomial;
     pub use scx_num::tol::Tolerances;
     pub use scx_num::{
         certified, extent1d, extent2d, extent3d, interval, interval_vector, limits, math, matrix,
         periodic_extent1d, ring, series, small_matrix, taylor_model, tol, transform, vector2d,
         vector3d,
     };
-    pub use scx_algo::polynomial;
     helpers!();
     /// What the moved tolerance functions take: the tolerance set itself.
     pub fn tolk(r: &TolR) -> Tolerances {
@@ -197,9 +197,8 @@ pub mod s {
     pub use solidcore::blend::fillet_section::tay as ring;
     pub use solidcore::blend::fillet_section::{interval, series, taylor_model};
     pub use solidcore::geom::{
-        polynomial,
-        certified, extent1d, extent2d, extent3d, matrix, periodic_extent1d, tol, transform,
-        vector2d, vector3d,
+        certified, extent1d, extent2d, extent3d, matrix, periodic_extent1d, polynomial, tol,
+        transform, vector2d, vector3d,
     };
     pub use solidcore::kernel::Tolerances;
     pub use solidcore::{limits, math};
