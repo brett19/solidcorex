@@ -96,4 +96,7 @@ Local only. No solidcore code is copied into this repository until the licence q
 | Coverage of solidcore over its goldens, tests and the app corpus | `research/50-coverage.md` | started |
 | The body's data structure: design and a measured prototype | `research/51-body-structure.md`, `prototypes/body-structure/` | done; representation decided (`04-decisions.md` section 3); not measured on a large STEP part |
 | Conventions, tolerance model, error taxonomy, glossary | to be written as design documents | not started |
-| Workspace skeleton, layering check, test tiers | in this repository | not started |
+| Workspace skeleton, layering check, test tiers | `Cargo.toml`, `layers.txt`, `xtask/` (`cargo xtask fast`: fmt, clippy, layers, headers, tier-1 tests), `crates/scx-difftest` (tier 2) | done; tier 1 passes in 1.4 s cold, 0.2 s warm |
+| Layer 0 moved: `scx-num` | `crates/scx-num`, `research/52-num-move.md` | done (to 429af2c): 128 unit and 10 property tests; difftest 267 tests, 616,874 inputs, 0 mismatches against the pin; builds for wasm32 |
+
+Builds and tests run on server2, never on the editing machine. The clone is `solidcorex`, the git remote is `server2`, and pushes use updateInstead, so the server tree must be clean. Every cargo command goes through `coord/sc-slot.sh <name> nice -n 10 cargo ...`. Format fixes are made by `cargo fmt` there, brought back as a patch and committed here. `Cargo.lock` is committed. The pinned solidcore that the difftest builds against is `sc-wt/scx-pin` on both machines.
