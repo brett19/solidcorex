@@ -193,12 +193,12 @@ pub mod x {
 
 /// The pinned solidcore.
 pub mod s {
+    pub use solidcore::blend::fillet_section::tay as ring;
+    pub use solidcore::blend::fillet_section::{interval, series, taylor_model};
     pub use solidcore::geom::{
         certified, extent1d, extent2d, extent3d, matrix, periodic_extent1d, tol, transform,
         vector2d, vector3d,
     };
-    pub use solidcore::blend::fillet_section::tay as ring;
-    pub use solidcore::blend::fillet_section::{interval, series, taylor_model};
     pub use solidcore::kernel::Tolerances;
     pub use solidcore::{limits, math};
     /// `geom::interval_vector` is `pub(crate)` at the pin: no function to call. Its five
@@ -425,7 +425,10 @@ macro_rules! failure_bits {
                 index.bits(o);
                 len.bits(o);
             }
-            F::JacobiDidNotConverge { sweeps, off_diagonal } => {
+            F::JacobiDidNotConverge {
+                sweeps,
+                off_diagonal,
+            } => {
                 o.tag("JacobiDidNotConverge");
                 sweeps.bits(o);
                 off_diagonal.bits(o);

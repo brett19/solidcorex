@@ -176,7 +176,12 @@ fn vec_pool<const N: usize>(rng: &mut SplitMix64, special: &[[f64; N]]) -> Vec<[
     let e = edge_f64();
     let mut v: Vec<[f64; N]> = e.iter().map(|&x| [x; N]).collect();
     v.extend_from_slice(special);
-    for t in [scx_num::math::EFF_ZERO, 1.0e-9, scx_num::consts::ZONE_DEFAULT, scx_num::math::EFF_ZERO_SQRT] {
+    for t in [
+        scx_num::math::EFF_ZERO,
+        1.0e-9,
+        scx_num::consts::ZONE_DEFAULT,
+        scx_num::math::EFF_ZERO_SQRT,
+    ] {
         for x in [t.next_down(), t, t.next_up()] {
             let mut a = [0.0; N];
             a[0] = x;

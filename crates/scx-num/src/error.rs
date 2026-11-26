@@ -465,7 +465,10 @@ mod tests {
         .into_iter()
         .map(ErrorKind::name)
         .collect();
-        assert_eq!(names, ["invalid_input", "degenerate", "stage_failed", "failed"]);
+        assert_eq!(
+            names,
+            ["invalid_input", "degenerate", "stage_failed", "failed"]
+        );
         let caused = NumError::call("outer")(NumError::invalid_input("inner", "why"));
         assert!(std::error::Error::source(&caused).is_some());
         assert_eq!(NumError::invalid_input("x", "y").failure(), None);

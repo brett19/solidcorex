@@ -35,7 +35,11 @@ fn check() -> Result<(), String> {
     for what in ["HEAD", "index"] {
         let path = git(&pin, &["rev-parse", "--git-path", what])?;
         let path = PathBuf::from(path.trim());
-        let path = if path.is_absolute() { path } else { pin.join(path) };
+        let path = if path.is_absolute() {
+            path
+        } else {
+            pin.join(path)
+        };
         println!("cargo:rerun-if-changed={}", path.display());
     }
     println!(

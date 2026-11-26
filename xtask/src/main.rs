@@ -353,7 +353,10 @@ fn pin_sources(head: &str) -> Vec<String> {
         .split('`')
         .skip(1)
         .step_by(2)
-        .filter(|p| p.starts_with("solidcore/") && p.ends_with(".rs"))
+        .filter(|p| {
+            p.starts_with("solidcore/")
+                && std::path::Path::new(p).extension().is_some_and(|e| e == "rs")
+        })
         .map(str::to_string)
         .collect()
 }
@@ -384,7 +387,10 @@ fn pin_record(pin_file: &str) -> Option<String> {
         };
         let doc = doc.trim();
         if rec.is_empty() {
-            if doc.starts_with("Upstream") || doc.starts_with("Fork") || doc.starts_with("Not upstream") {
+            if doc.starts_with("Upstream")
+                || doc.starts_with("Fork")
+                || doc.starts_with("Not upstream")
+            {
                 rec.push(doc);
             }
         } else if doc.is_empty() {
@@ -427,7 +433,11 @@ fn pin(root: &Path) -> Result<String, String> {
     let dir = pin_dir(root);
     let head = git_in(&dir, &["rev-parse", "HEAD"])?;
     if head.trim() != PIN {
-        return Err(format!("pin: {} is at {}, not {PIN}", dir.display(), head.trim()));
+        return Err(format!(
+            "pin: {} is at {}, not {PIN}",
+            dir.display(),
+            head.trim()
+        ));
     }
     let dirty = git_in(&dir, &["status", "--porcelain"])?;
     if !dirty.trim().is_empty() {
@@ -537,9 +547,16 @@ fn bodydiff(root: &Path) -> Result<String, String> {
 fn cov(root: &Path, crates: &[String]) -> Result<String, String> {
     println!("{}", pin(root)?);
     let script = root.join("xtask").join("cov.sh");
-    let mut args = vec![script.to_string_lossy().to_string(), root.to_string_lossy().to_string()];
+    let mut args = vec![
+        script.to_string_lossy().to_string(),
+        root.to_string_lossy().to_string(),
+    ];
     args.extend(crates.iter().cloned());
-    run(root, "bash", &args.iter().map(String::as_str).collect::<Vec<_>>())?;
+    run(
+        root,
+        "bash",
+        &args.iter().map(String::as_str).collect::<Vec<_>>(),
+    )?;
     Ok("cov: written to target/cov/".to_string())
 }
 
@@ -584,7 +601,15 @@ fn fast(root: &Path, crates: &[String]) -> Result<String, String> {
     // The difftest crate is not a default member (it links solidcore): lint it by name.
     cargo(
         root,
-        &["clippy", "-p", "scx-difftest", "--all-targets", "--", "-D", "warnings"],
+        &[
+            "clippy",
+            "-p",
+            "scx-difftest",
+            "--all-targets",
+            "--",
+            "-D",
+            "warnings",
+        ],
     )?;
     println!("{}", layers(root)?);
     println!("{}", headers(root)?);
@@ -621,7 +646,12 @@ mod tests {
 
     fn crates(list: &[(&str, &[&str])]) -> Vec<(String, Vec<String>)> {
         list.iter()
-            .map(|(n, d)| ((*n).to_string(), d.iter().map(|s| (*s).to_string()).collect()))
+            .map(|(n, d)| {
+                (
+                    (*n).to_string(),
+                    d.iter().map(|s| (*s).to_string()).collect(),
+                )
+            })
             .collect()
     }
 
@@ -630,7 +660,12 @@ mod tests {
     #[test]
     fn the_order_holds() {
         let l = parse_layers(LAYERS).unwrap();
-        let ok = crates(&[("a", &[]), ("b", &["a"]), ("d", &["a", "b", "solidcore"]), ("t", &[])]);
+        let ok = crates(&[
+            ("a", &[]),
+            ("b", &["a"]),
+            ("d", &["a", "b", "solidcore"]),
+            ("t", &[]),
+        ]);
         assert_eq!(check_layers(&l, &ok), "");
     }
 
@@ -639,14 +674,28 @@ mod tests {
         let l = parse_layers(LAYERS).unwrap();
         // The breaking case: a library on the pinned solidcore, or on any crate the
         // (empty) allow-list does not name; a library below on one above.
-        let bad = crates(&[("a", &["solidcore", "b"]), ("b", &["rand"]), ("d", &[]), ("t", &["a"])]);
+        let bad = crates(&[
+            ("a", &["solidcore", "b"]),
+            ("b", &["rand"]),
+            ("d", &[]),
+            ("t", &["a"]),
+        ]);
         let e = check_layers(&l, &bad);
-        assert!(e.contains("a may not depend on solidcore (only the difftest"), "{e}");
+        assert!(
+            e.contains("a may not depend on solidcore (only the difftest"),
+            "{e}"
+        );
         assert!(e.contains("a may not depend on b\n"), "{e}");
-        assert!(e.contains("b may not depend on rand (an external crate"), "{e}");
+        assert!(
+            e.contains("b may not depend on rand (an external crate"),
+            "{e}"
+        );
         assert!(e.contains("t may not depend on a\n"), "{e}");
         let allowed = parse_layers(&format!("{LAYERS}rand\n")).unwrap();
-        let e = check_layers(&allowed, &crates(&[("a", &[]), ("b", &["rand"]), ("d", &[]), ("t", &[])]));
+        let e = check_layers(
+            &allowed,
+            &crates(&[("a", &[]), ("b", &["rand"]), ("d", &[]), ("t", &[])]),
+        );
         assert_eq!(e, "");
         assert!(parse_layers(&format!("{LAYERS}solidcore\n")).is_err());
     }
@@ -655,7 +704,9 @@ mod tests {
     fn comments_and_quotes() {
         assert_eq!(strip_comment("a = \"x#y\" # c"), "a = \"x#y\" ");
         assert_eq!(strip_comment("a = \"x\\\"#\" # c"), "a = \"x\\\"#\" ");
-        let (_, deps) = manifest_deps("[package]\nname = \"a\"\n[dependencies]\nb = { path = \"../b#1\" } # c\n");
+        let (_, deps) = manifest_deps(
+            "[package]\nname = \"a\"\n[dependencies]\nb = { path = \"../b#1\" } # c\n",
+        );
         assert_eq!(deps, ["b"]);
     }
 
@@ -679,8 +730,12 @@ mod tests {
                     // `A.h`. Fork: b.\n// Changes: none.";
         assert_eq!(pin_sources(head), ["solidcore/a.rs", "solidcore/b.rs"]);
         assert_eq!(quoted_record(head), "Upstream: `A.cpp`, `A.h`. Fork: b.");
-        let pin = "//! Title.\n//!\n//! Upstream: `A.cpp`,\n//! `A.h`.\n//!\n//! | table |\nuse x;\n";
-        assert_eq!(pin_record(pin).as_deref(), Some("Upstream: `A.cpp`, `A.h`."));
+        let pin =
+            "//! Title.\n//!\n//! Upstream: `A.cpp`,\n//! `A.h`.\n//!\n//! | table |\nuse x;\n";
+        assert_eq!(
+            pin_record(pin).as_deref(),
+            Some("Upstream: `A.cpp`, `A.h`.")
+        );
         assert_eq!(pin_record("//! No record.\n"), None);
     }
 }

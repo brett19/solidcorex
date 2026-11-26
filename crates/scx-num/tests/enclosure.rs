@@ -59,7 +59,11 @@ impl Rng {
     /// A double with a random 53-bit significand, sign and binary exponent in `[lo, hi]`.
     fn normal(&mut self, lo: i32, hi: i32) -> f64 {
         let m = (1.0 + self.unit()) * pow2(lo + self.below((hi - lo + 1) as u64) as i32);
-        if self.next_u64() & 1 == 0 { m } else { -m }
+        if self.next_u64() & 1 == 0 {
+            m
+        } else {
+            -m
+        }
     }
     /// An operand: mostly normal doubles of moderate size, sometimes 0, -0, 1, an integer,
     /// or a short-significand dyadic (so sums and products are often exact).
@@ -234,7 +238,11 @@ fn ivl(rng: &mut Rng, lo: i32, hi: i32) -> Ivl {
         0 => Ivl::from(a),
         _ => {
             let b = rng.operand(lo, hi);
-            if a <= b { Ivl::new(a, b) } else { Ivl::new(b, a) }
+            if a <= b {
+                Ivl::new(a, b)
+            } else {
+                Ivl::new(b, a)
+            }
         }
     }
 }
@@ -255,14 +263,19 @@ fn check_corners(
     exact: impl Fn(f64, f64) -> Exact,
 ) {
     if !(r.lo <= r.hi) {
-        t.ok(false, || format!("{name}({a:?}, {b:?}) = {r:?}: not an interval"));
+        t.ok(false, || {
+            format!("{name}({a:?}, {b:?}) = {r:?}: not an interval")
+        });
         return;
     }
     let (rlo, rhi) = (r.lo * pow2(k), r.hi * pow2(k));
     for (x, y) in corners(a, b) {
         let v = exact(x, y);
-        let holds = (r.lo == f64::NEG_INFINITY || v.ge(rlo)) && (r.hi == f64::INFINITY || v.le(rhi));
-        t.ok(holds, || format!("{name}({a:?}, {b:?}) = {r:?} misses the corner ({x:e}, {y:e})"));
+        let holds =
+            (r.lo == f64::NEG_INFINITY || v.ge(rlo)) && (r.hi == f64::INFINITY || v.le(rhi));
+        t.ok(holds, || {
+            format!("{name}({a:?}, {b:?}) = {r:?} misses the corner ({x:e}, {y:e})")
+        });
     }
 }
 
@@ -270,18 +283,28 @@ fn check_corners(
 /// (reversed for `y < 0`), scaled by `2^k`.
 fn check_quotient(t: &mut Tally, name: &str, a: Ivl, b: Ivl, r: Ivl, k: i32) {
     if !(r.lo <= r.hi) {
-        t.ok(false, || format!("{name}({a:?}, {b:?}) = {r:?}: not an interval"));
+        t.ok(false, || {
+            format!("{name}({a:?}, {b:?}) = {r:?}: not an interval")
+        });
         return;
     }
     for (x, y) in corners(a, b) {
         let xs = x * pow2(k);
         let below = r.lo == f64::NEG_INFINITY || {
             let ly = prod(r.lo, y);
-            if y > 0.0 { ly.le(xs) } else { ly.ge(xs) }
+            if y > 0.0 {
+                ly.le(xs)
+            } else {
+                ly.ge(xs)
+            }
         };
         let above = r.hi == f64::INFINITY || {
             let hy = prod(r.hi, y);
-            if y > 0.0 { hy.ge(xs) } else { hy.le(xs) }
+            if y > 0.0 {
+                hy.ge(xs)
+            } else {
+                hy.le(xs)
+            }
         };
         t.ok(below && above, || {
             format!("{name}({a:?}, {b:?}) = {r:?} misses the corner ({x:e}, {y:e})")
@@ -315,15 +338,23 @@ fn arithmetic(ops: Ops, seed: u64, name: &str) {
         // moderate operands, then operands whose results fall below the normal range
         // (scaled by 2^600 for the oracle)
         let tiny = case % 4 == 3;
-        let (lo, hi, k, s) = if tiny { (-540, -500, 600, 300) } else { (-100, 100, 0, 0) };
+        let (lo, hi, k, s) = if tiny {
+            (-540, -500, 600, 300)
+        } else {
+            (-100, 100, 0, 0)
+        };
         let a = ivl(&mut rng, lo, hi);
         let b = ivl(&mut rng, lo, hi);
         let up = |x: f64| x * pow2(s);
         for (i, (op, f)) in ops.iter().enumerate() {
             let r = f(a, b);
             match i {
-                0 => check_corners(&mut t, op, a, b, r, k, |x, y| sum(up(x), up(y)).scale(pow2(k - s))),
-                1 => check_corners(&mut t, op, a, b, r, k, |x, y| sum(up(x), -up(y)).scale(pow2(k - s))),
+                0 => check_corners(&mut t, op, a, b, r, k, |x, y| {
+                    sum(up(x), up(y)).scale(pow2(k - s))
+                }),
+                1 => check_corners(&mut t, op, a, b, r, k, |x, y| {
+                    sum(up(x), -up(y)).scale(pow2(k - s))
+                }),
                 2 => check_corners(&mut t, op, a, b, r, k, |x, y| prod(up(x), up(y))),
                 _ if excludes_zero(b) => check_quotient(&mut t, op, a, b, r, 0),
                 _ => t.ok(r.lo == f64::NEG_INFINITY && r.hi == f64::INFINITY, || {
@@ -353,7 +384,9 @@ fn sqrt_bounds_square_around_the_operand() {
         let x = ivl(&mut rng, -200, 200);
         let r = x.sqrt();
         if !(x.hi >= 0.0) {
-            t.ok(r.lo == f64::NEG_INFINITY && r.hi == f64::INFINITY, || format!("sqrt({x:?}) = {r:?}"));
+            t.ok(r.lo == f64::NEG_INFINITY && r.hi == f64::INFINITY, || {
+                format!("sqrt({x:?}) = {r:?}")
+            });
             continue;
         }
         // lo^2 <= max(x.lo, 0) and x.hi <= hi^2, lo >= 0 or below
@@ -377,11 +410,15 @@ fn interval_vectors_enclose_exact_dot_cross_and_norm() {
         for i in 0..3 {
             e.add_prod(a[i], b[i]);
         }
-        t.ok(e.ge(d.lo) && e.le(d.hi), || format!("dot({a:?}, {b:?}) = {d:?}"));
+        t.ok(e.ge(d.lo) && e.le(d.hi), || {
+            format!("dot({a:?}, {b:?}) = {d:?}")
+        });
         let c = interval_vector::cross(ia, ib);
         for (i, (p, q)) in [(1, 2), (2, 0), (0, 1)].into_iter().enumerate() {
             let v = prod(a[p], b[q]).minus(&prod(a[q], b[p]));
-            t.ok(v.ge(c[i].lo) && v.le(c[i].hi), || format!("cross({a:?}, {b:?})[{i}] = {:?}", c[i]));
+            t.ok(v.ge(c[i].lo) && v.le(c[i].hi), || {
+                format!("cross({a:?}, {b:?})[{i}] = {:?}", c[i])
+            });
         }
         let n = interval_vector::norm(ia);
         let mut sq = Exact::default();
@@ -468,7 +505,11 @@ fn near(rng: &mut Rng, lo: f64, hi: f64, points: &[f64]) -> f64 {
         0 => {
             let p = points[rng.below(points.len() as u64) as usize];
             let d = pow2(-(rng.below(60) as i32)) * rng.unit();
-            if rng.next_u64() & 1 == 0 { p + d } else { p - d }
+            if rng.next_u64() & 1 == 0 {
+                p + d
+            } else {
+                p - d
+            }
         }
         1 => points[rng.below(points.len() as u64) as usize],
         _ => lo + (hi - lo) * rng.unit(),
@@ -513,7 +554,12 @@ fn acos_encloses_through_the_cosine_of_its_bounds() {
             } else {
                 c
             };
-            decide(&mut t, c, 1, || format!("acos({y:?}) = {r:?}: the lower end is above acos({:e})", y.hi));
+            decide(&mut t, c, 1, || {
+                format!(
+                    "acos({y:?}) = {r:?}: the lower end is above acos({:e})",
+                    y.hi
+                )
+            });
         } else {
             t.ok(true, String::new);
         }
@@ -536,15 +582,26 @@ fn acos_encloses_through_the_cosine_of_its_bounds() {
             } else {
                 c
             };
-            decide(&mut t, c, 1, || format!("acos({y:?}) = {r:?}: the upper end is below acos({:e})", y.lo));
+            decide(&mut t, c, 1, || {
+                format!(
+                    "acos({y:?}) = {r:?}: the upper end is below acos({:e})",
+                    y.lo
+                )
+            });
         } else {
             t.ok(true, String::new);
         }
     }
     // outside [-1, 1]: the whole line
-    for y in [Ivl::new(-1.5, 0.0), Ivl::new(0.0, 1.0 + 1e-16 * 3.0), Ivl::new(f64::NAN, 0.0)] {
+    for y in [
+        Ivl::new(-1.5, 0.0),
+        Ivl::new(0.0, 1.0 + 1e-16 * 3.0),
+        Ivl::new(f64::NAN, 0.0),
+    ] {
         let r = y.acos_s();
-        t.ok(r.lo == f64::NEG_INFINITY && r.hi == f64::INFINITY, || format!("acos({y:?}) = {r:?}"));
+        t.ok(r.lo == f64::NEG_INFINITY && r.hi == f64::INFINITY, || {
+            format!("acos({y:?}) = {r:?}")
+        });
     }
     t.finish("acos");
 }
@@ -562,15 +619,29 @@ fn sin_cos_enclose_on_the_first_quadrant() {
         let (s, c) = x.sin_cos_s();
         let sin = |v: f64| dd_sin(Dd(v, 0.0));
         let cos = |v: f64| dd_sin(dd_add(PIO2, Dd(-v, 0.0)));
-        decide(&mut t, cmp(sin(x.lo), s.lo), 1, || format!("sin({x:?}) = {s:?}: low"));
-        decide(&mut t, cmp(sin(x.hi), s.hi), -1, || format!("sin({x:?}) = {s:?}: high"));
-        decide(&mut t, cmp(cos(x.hi), c.lo), 1, || format!("cos({x:?}) = {c:?}: low"));
-        decide(&mut t, cmp(cos(x.lo), c.hi), -1, || format!("cos({x:?}) = {c:?}: high"));
+        decide(&mut t, cmp(sin(x.lo), s.lo), 1, || {
+            format!("sin({x:?}) = {s:?}: low")
+        });
+        decide(&mut t, cmp(sin(x.hi), s.hi), -1, || {
+            format!("sin({x:?}) = {s:?}: high")
+        });
+        decide(&mut t, cmp(cos(x.hi), c.lo), 1, || {
+            format!("cos({x:?}) = {c:?}: low")
+        });
+        decide(&mut t, cmp(cos(x.lo), c.hi), -1, || {
+            format!("cos({x:?}) = {c:?}: high")
+        });
     }
-    for x in [Ivl::new(-1e-300, 0.5), Ivl::new(0.5, 1.6), Ivl::new(f64::NAN, 1.0)] {
+    for x in [
+        Ivl::new(-1e-300, 0.5),
+        Ivl::new(0.5, 1.6),
+        Ivl::new(f64::NAN, 1.0),
+    ] {
         let (s, c) = x.sin_cos_s();
         let whole = |r: Ivl| r.lo == f64::NEG_INFINITY && r.hi == f64::INFINITY;
-        t.ok(whole(s) && whole(c), || format!("sin_cos({x:?}) = {s:?} {c:?}"));
+        t.ok(whole(s) && whole(c), || {
+            format!("sin_cos({x:?}) = {s:?} {c:?}")
+        });
     }
     t.finish("sin and cos");
 }
@@ -607,15 +678,34 @@ fn dyadic(rng: &mut Rng, k: i64, bits: i32) -> f64 {
 fn picked<const N: usize>(rng: &mut Rng, deg: usize, positive: bool) -> Picked<N> {
     let mut lo: Vec<f64> = (0..=deg).map(|_| dyadic(rng, 64, 6)).collect();
     let mut width: Vec<f64> = (0..=deg)
-        .map(|_| if rng.below(2) == 0 { 0.0 } else { dyadic(rng, 4, 8).abs() })
+        .map(|_| {
+            if rng.below(2) == 0 {
+                0.0
+            } else {
+                dyadic(rng, 4, 8).abs()
+            }
+        })
         .collect();
     if rng.below(5) == 0 {
         width.iter_mut().for_each(|w| *w = 0.0);
     }
-    let rem_lo = if rng.below(3) == 0 { 0.0 } else { dyadic(rng, 4, 10) };
-    let rem_w = if rem_lo == 0.0 { 0.0 } else { dyadic(rng, 4, 10).abs() };
+    let rem_lo = if rng.below(3) == 0 {
+        0.0
+    } else {
+        dyadic(rng, 4, 10)
+    };
+    let rem_w = if rem_lo == 0.0 {
+        0.0
+    } else {
+        dyadic(rng, 4, 10).abs()
+    };
     if positive {
-        let rest: f64 = lo.iter().zip(&width).skip(1).map(|(c, w)| c.abs() + w).sum();
+        let rest: f64 = lo
+            .iter()
+            .zip(&width)
+            .skip(1)
+            .map(|(c, w)| c.abs() + w)
+            .sum();
         lo[0] = rest + 1.0 + rem_lo.abs() + rem_w;
     }
     let coeffs: Vec<f64> = lo
@@ -627,10 +717,18 @@ fn picked<const N: usize>(rng: &mut Rng, deg: usize, positive: bool) -> Picked<N
             _ => c + (w / 2.0),
         })
         .collect();
-    let ivls: Vec<Ivl> = lo.iter().zip(&width).map(|(&c, &w)| Ivl::new(c, c + w)).collect();
+    let ivls: Vec<Ivl> = lo
+        .iter()
+        .zip(&width)
+        .map(|(&c, &w)| Ivl::new(c, c + w))
+        .collect();
     let rem = Ivl::new(rem_lo, rem_lo + rem_w);
     let e = if rng.below(2) == 0 { rem.lo } else { rem.hi };
-    Picked { tm: TmN::<N>::from_poly(&ivls, rem), coeffs, e }
+    Picked {
+        tm: TmN::<N>::from_poly(&ivls, rem),
+        coeffs,
+        e,
+    }
 }
 
 fn holds(r: Ivl, v: &Exact) -> bool {
@@ -671,21 +769,30 @@ fn taylor_models<const N: usize>(seed: u64, name: &str) {
             ];
             for ((op, m), v) in models.iter().zip(&truth) {
                 let r = m.at(s);
-                t.ok(holds(r, v), || format!("{op} at {s}: {r:?} misses {:?}", v.0));
+                t.ok(holds(r, v), || {
+                    format!("{op} at {s}: {r:?} misses {:?}", v.0)
+                });
             }
-            t.ok(holds(range, &fa), || format!("range {range:?} misses the value at {s}"));
+            t.ok(holds(range, &fa), || {
+                format!("range {range:?} misses the value at {s}")
+            });
             // 1/p: lo p <= 1 <= hi p (p >= 1)
             let r = p.tm.recip().at(s);
-            t.ok(fp.scale(r.lo).le(1.0) && fp.scale(r.hi).ge(1.0), || format!("recip at {s}: {r:?}"));
+            t.ok(fp.scale(r.lo).le(1.0) && fp.scale(r.hi).ge(1.0), || {
+                format!("recip at {s}: {r:?}")
+            });
             // sqrt p: lo^2 <= p <= hi^2
             let r = p.tm.sqrt_tm().at(s);
             let lo_ok = r.lo <= 0.0 || prod(r.lo, r.lo).minus(&fp).sign() <= 0;
-            t.ok(lo_ok && prod(r.hi, r.hi).minus(&fp).sign() >= 0, || format!("sqrt at {s}: {r:?}"));
+            t.ok(lo_ok && prod(r.hi, r.hi).minus(&fp).sign() >= 0, || {
+                format!("sqrt at {s}: {r:?}")
+            });
             // a/q: lo q <= a <= hi q (q >= 1)
             let r = (a.tm / q.tm).at(s);
-            t.ok(fq.scale(r.lo).minus(&fa).sign() <= 0 && fq.scale(r.hi).minus(&fa).sign() >= 0, || {
-                format!("/ at {s}: {r:?}")
-            });
+            t.ok(
+                fq.scale(r.lo).minus(&fa).sign() <= 0 && fq.scale(r.hi).minus(&fa).sign() >= 0,
+                || format!("/ at {s}: {r:?}"),
+            );
         }
     }
     t.finish(name);
@@ -738,9 +845,15 @@ fn interval_series_enclose_exact_products_and_sums() {
                         v.add_prod(a[i1][k1], b[i - i1][k - k1]);
                     }
                 }
-                t.ok(holds(m.at(i, k), &v), || format!("mul c[{i}][{k}] = {:?}", m.at(i, k)));
-                t.ok(holds(ad.at(i, k), &sum(a[i][k], b[i][k])), || format!("add c[{i}][{k}]"));
-                t.ok(holds(sd.at(i, k), &sum(a[i][k], -b[i][k])), || format!("sub c[{i}][{k}]"));
+                t.ok(holds(m.at(i, k), &v), || {
+                    format!("mul c[{i}][{k}] = {:?}", m.at(i, k))
+                });
+                t.ok(holds(ad.at(i, k), &sum(a[i][k], b[i][k])), || {
+                    format!("add c[{i}][{k}]")
+                });
+                t.ok(holds(sd.at(i, k), &sum(a[i][k], -b[i][k])), || {
+                    format!("sub c[{i}][{k}]")
+                });
             }
         }
     }
@@ -799,7 +912,9 @@ fn inverse_square_root_series_enclose_the_binomial_series() {
                             && lift(r.lo).minus(&a2).sign() >= 0
                     }
                 };
-                t.ok(ok, || format!("inv_sqrt({c0}, {c1}, {c2}) c[{i}][{k}] = {r:?}"));
+                t.ok(ok, || {
+                    format!("inv_sqrt({c0}, {c1}, {c2}) c[{i}][{k}] = {r:?}")
+                });
             }
         }
     }

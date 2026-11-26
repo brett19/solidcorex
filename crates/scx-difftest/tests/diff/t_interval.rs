@@ -82,12 +82,20 @@ diff!(r_ivl_inside, |a: f64, b: f64| {
 diff!(r_wide, |a: f64, b: f64| m::ring::wide(a, b));
 
 // --- taylor_model
-diff!(t_consts, || (m::taylor_model::TM_DEG, m::taylor_model::TM_MAX));
+diff!(t_consts, || (
+    m::taylor_model::TM_DEG,
+    m::taylor_model::TM_MAX
+));
 diff!(t_build, |c: List<I>, r: I, p: List<f64>| {
     use m::taylor_model::Tm;
     let t = m::tm(&c, r);
     (
-        (Tm::constant(m::iv(r)), Tm::whole(), t, Tm::from_points(&p.0)),
+        (
+            Tm::constant(m::iv(r)),
+            Tm::whole(),
+            t,
+            Tm::from_points(&p.0),
+        ),
         t.mid_poly(),
         t.with_rem(m::iv(r)),
         t.scale(m::iv(r)),
@@ -112,8 +120,18 @@ diff!(t_positive, |p: List<f64>, q: List<f64>, r: I| {
         }
         m::taylor_model::Tm::from_points(&c)
     };
-    let (a, b) = (lift(&p), lift(&q).with_rem(m::iv([r[0].sin() * 0.1, r[0].sin().abs() * 0.1])));
-    (a.recip(), a.sqrt_tm(), b.recip(), b.sqrt_tm(), a / b, (a * b).sqrt_tm())
+    let (a, b) = (
+        lift(&p),
+        lift(&q).with_rem(m::iv([r[0].sin() * 0.1, r[0].sin().abs() * 0.1])),
+    );
+    (
+        a.recip(),
+        a.sqrt_tm(),
+        b.recip(),
+        b.sqrt_tm(),
+        a / b,
+        (a * b).sqrt_tm(),
+    )
 });
 diff!(t_scalar_traits, |c: List<I>, r: I, x: f64| {
     use m::ring::{Ring, TayScalar};
@@ -169,7 +187,10 @@ diff!(s_gn_scalars, |x: f64, a: I| {
         <m::interval::Ivl as GnScalar>::JOINT_OFFSET,
     )
 });
-diff!(s_f64_ops, |u: List<f64>, v: List<f64>, s: usize, e: usize| {
+diff!(s_f64_ops, |u: List<f64>,
+                  v: List<f64>,
+                  s: usize,
+                  e: usize| {
     let tr = m::trunc(s, e);
     let (a, b) = (m::ser(&u.0, tr), m::ser(&v.0, tr));
     let f = v.0.first().copied().unwrap_or(0.5);
@@ -191,7 +212,10 @@ diff!(s_f64_ops, |u: List<f64>, v: List<f64>, s: usize, e: usize| {
 diff!(s_ivl_ops, |u: List<I>, v: List<I>, s: usize, e: usize| {
     let tr = m::trunc(s, e);
     let (a, b) = (m::ser(&m::ivs(&u), tr), m::ser(&m::ivs(&v), tr));
-    let f = m::ivs(&v).first().copied().unwrap_or(m::interval::Ivl::from(0.5));
+    let f = m::ivs(&v)
+        .first()
+        .copied()
+        .unwrap_or(m::interval::Ivl::from(0.5));
     let mut acc = a.clone();
     acc.add_scaled(&b, f, tr);
     let mut from = a.clone();
@@ -230,7 +254,12 @@ diff!(s_inv_sqrt_positive, |u: List<f64>, s: usize, e: usize| {
         *v0 = 1.0 + v0.abs();
     }
     let a = m::ser(&v, tr);
-    let ai = m::ser(&v.iter().map(|&x| m::interval::Ivl::from(x)).collect::<Vec<_>>(), tr);
+    let ai = m::ser(
+        &v.iter()
+            .map(|&x| m::interval::Ivl::from(x))
+            .collect::<Vec<_>>(),
+        tr,
+    );
     (a.inv_sqrt(tr), ai.inv_sqrt(tr))
 });
 diff!(s_vectors, |a: [f64; 3], p: [f64; 6], q: [f64; 6], x: I| {
@@ -245,24 +274,50 @@ diff!(s_vectors, |a: [f64; 3], p: [f64; 6], q: [f64; 6], x: I| {
         v_hull(p, q),
     )
 });
-diff!(s_vector_series, |u: List<f64>, v: List<f64>, s: usize, e: usize| {
+diff!(s_vector_series, |u: List<f64>,
+                        v: List<f64>,
+                        s: usize,
+                        e: usize| {
     use m::series::{VSer, V3};
     let tr = m::trunc(s, e);
     let w = |k: usize| u.0.get(k).copied().unwrap_or(1.0);
-    let a = VSer::<f64>::constant(V3 { x: w(0), y: w(1), z: w(2) });
-    let mut b = VSer::<f64>::constant(V3 { x: w(2), y: w(0), z: w(1) });
+    let a = VSer::<f64>::constant(V3 {
+        x: w(0),
+        y: w(1),
+        z: w(2),
+    });
+    let mut b = VSer::<f64>::constant(V3 {
+        x: w(2),
+        y: w(0),
+        z: w(1),
+    });
     b.a[0] = m::ser(&v.0, tr);
     let k = m::ser(&u.0, tr);
-    (a.add(&b, tr), a.sub(&b, tr), b.times(&k, tr), a.dot(&b, tr), a.cross(&b, tr))
+    (
+        a.add(&b, tr),
+        a.sub(&b, tr),
+        b.times(&k, tr),
+        a.dot(&b, tr),
+        a.cross(&b, tr),
+    )
 });
-diff!(s_vector_series_ivl, |p: [f64; 6], u: List<I>, s: usize, e: usize| {
+diff!(s_vector_series_ivl, |p: [f64; 6],
+                            u: List<I>,
+                            s: usize,
+                            e: usize| {
     use m::series::VSer;
     let tr = m::trunc(s, e);
     let a = VSer::<m::interval::Ivl>::constant(m::v3i(six(p)));
     let mut b = a.clone();
     b.a[1] = m::ser(&m::ivs(&u), tr);
     let k = m::ser(&m::ivs(&u), tr);
-    (a.add(&b, tr), a.sub(&b, tr), b.times(&k, tr), a.dot(&b, tr), a.cross(&b, tr))
+    (
+        a.add(&b, tr),
+        a.sub(&b, tr),
+        b.times(&k, tr),
+        a.dot(&b, tr),
+        a.cross(&b, tr),
+    )
 });
 
 // --- interval_vector (scx-num's public functions against the pin's bodies)
