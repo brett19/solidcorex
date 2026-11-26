@@ -329,7 +329,7 @@ fn boxes_bound_their_points() {
 /// `zone_for_size` against the size table of `SmTol::SizeEstimateToZoneTol3d`.
 #[test]
 fn zone_follows_the_size_table() {
-    let table = [
+    let table: [(f64, f64, f64); 5] = [
         (0.00005, 0.005, 1e-7),
         (0.005, 0.5, 1e-6),
         (0.5, 500.0, 1e-5),
@@ -340,7 +340,7 @@ fn zone_follows_the_size_table() {
     for &(lo, hi, zone) in &table {
         for _ in 0..CASES / 5 {
             // Log-uniform strictly inside the range.
-            let s = (lo as f64).ln() + r.uniform(0.0, 1.0) * (hi / lo).ln();
+            let s = lo.ln() + r.uniform(0.0, 1.0) * (hi / lo).ln();
             let s = s.exp().clamp(lo * (1.0 + 1e-12), hi * (1.0 - 1e-12));
             assert_eq!(zone_for_size(s), zone, "{s}");
         }
