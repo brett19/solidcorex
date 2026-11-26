@@ -15,6 +15,8 @@
 //! | `SolidError::Failed` with `Reason::Geom(g)`        | [`NumError::Failed`] with the same-named [`NumFailure`] |
 //! | `SolidError::geom(op, g)`                          | [`NumError::failed`]                  |
 //! | `SolidError::geom_call(op)`                        | [`NumError::call`]                    |
+//! | `SolidError::blend(op, BlendFailure::Defect { why })` (series) | [`NumError::failed`] with [`NumFailure::Defect`] |
+//! | `SolidError::blend(op, BlendFailure::SectionDegenerate(SectionDegeneracy::VectorVanishes))` (series) | [`NumError::failed`] with [`NumFailure::VectorVanishes`] |
 //! | `ErrorKind` (the classes used here)                | [`ErrorKind`]                         |
 //!
 //! Every failure here has upstream status `SM_ERR` (1001) and every invalid input
@@ -75,6 +77,13 @@ pub enum NumFailure {
         /// The second interval, `[min, max]`.
         b: [f64; 2],
     },
+    /// A step failed through the kernel's own fault, with why that is so
+    /// ([`ErrorKind::StageFailed`]). solidcore's `BlendFailure::Defect` (the series of
+    /// [`crate::series`]).
+    Defect {
+        /// The step that failed, and why that is the kernel's fault.
+        why: &'static str,
+    },
     /// An index is not below the number of entries. [`ErrorKind::InvalidInput`].
     IndexOutOfRange {
         /// The index given.
@@ -124,6 +133,10 @@ pub enum NumFailure {
         /// The extent's period.
         period: f64,
     },
+    /// A vector a series normalises vanishes (a face's normal at a foot, or the leader's
+    /// tangent): solidcore's `BlendFailure::SectionDegenerate(SectionDegeneracy::VectorVanishes)`
+    /// ([`crate::series`]). [`ErrorKind::Degenerate`].
+    VectorVanishes,
     /// A matrix to decompose by singular values is empty or has fewer rows than columns.
     /// [`ErrorKind::InvalidInput`].
     TooFewRows {
@@ -144,9 +157,11 @@ impl NumFailure {
             | Self::NotSymmetric
             | Self::SpanOutsidePeriod { .. }
             | Self::TooFewRows { .. } => ErrorKind::InvalidInput,
-            Self::JacobiDidNotConverge { .. } => ErrorKind::StageFailed,
+            Self::JacobiDidNotConverge { .. } | Self::Defect { .. } => ErrorKind::StageFailed,
             Self::CallFailed { class } => *class,
-            Self::NoPerpendicular | Self::Singular { .. } => ErrorKind::Degenerate,
+            Self::NoPerpendicular | Self::Singular { .. } | Self::VectorVanishes => {
+                ErrorKind::Degenerate
+            }
             Self::Disjoint { .. } | Self::PointOutsideExtent { .. } => ErrorKind::Failed,
         }
     }
@@ -159,6 +174,7 @@ impl fmt::Display for NumFailure {
             Self::Disjoint { a: [a0, a1], b: [b0, b1] } => {
                 write!(f, "the intervals [{a0}, {a1}] and [{b0}, {b1}] are disjoint")
             }
+            Self::Defect { why } => write!(f, "{}: {why}", ErrorKind::StageFailed),
             Self::IndexOutOfRange { index, len } => {
                 write!(f, "the index {index} is not below the {len} entries")
             }
@@ -185,6 +201,9 @@ impl fmt::Display for NumFailure {
             Self::SpanOutsidePeriod { from, to, period } => write!(
                 f,
                 "the span from {from} to {to} does not lie in the period [0, {period}]"
+            ),
+            Self::VectorVanishes => f.write_str(
+                "a vector the section normalises vanishes (a face's normal at a foot, or the leader's tangent)",
             ),
             Self::TooFewRows { rows, cols } => write!(
                 f,

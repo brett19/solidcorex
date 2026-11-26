@@ -1,7 +1,7 @@
 # Written for solidcorex.
 [package]
 name = "scx-num"
-description = "solidcorex layer 0: scalars, vectors, small matrices, transforms, extents and scalar tolerances"
+description = "solidcorex layer 0: scalars, vectors, small matrices, transforms, extents, scalar tolerances and interval arithmetic"
 edition.workspace = true
 license.workspace = true
 version.workspace = true
