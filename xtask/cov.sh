@@ -2,14 +2,14 @@
 # Written for solidcorex. Apache-2.0. `cargo xtask cov`: region coverage of the moved
 # libraries while the differential suite runs (the recipe of the scx-num review,
 # docs/research/reviews/scx-num-data). Instruments the libraries named (crate names,
-# default scx_num) and the difftest binary `diff`, runs the suite once in the dev profile,
+# default every library: scx_num scx_algo) and the difftest binary `diff`, runs the suite once in the dev profile,
 # and writes under target/cov/: cov.json (llvm-cov export), report.txt (per file),
 # branchy.txt (the 30 functions with the most regions, and every function with a region
 # the suite never ran, with its lines).
 # Usage: cov.sh REPO_ROOT [crate ...]
 set -eu
 ROOT=$1; shift
-CRATES="${*:-scx_num}"
+CRATES="${*:-scx_num scx_algo}"
 OUT=$ROOT/target/cov
 mkdir -p "$OUT/prof"
 rm -f "$OUT"/prof/*.profraw

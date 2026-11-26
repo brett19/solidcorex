@@ -18,7 +18,7 @@
 //!   against its pin files; each fn that differs, is only here, or (unless the move was
 //!   partial) is only at the pin must be named in the header's `Changes:`; a file written
 //!   for solidcorex may hold no fn body of the pin.
-//! - `cov`: region coverage of the moved libraries (crate names, default `scx_num`) while
+//! - `cov`: region coverage of the moved libraries (crate names, default every library) while
 //!   the differential suite runs (`xtask/cov.sh`, written under `target/cov/`).
 //! - `movecheck`: the standing steps of a move, in order: `pin`, `layers`, `headers`,
 //!   `bodydiff`, `cov`.
