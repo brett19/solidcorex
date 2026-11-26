@@ -576,7 +576,9 @@ impl Tol {
         x.text == s.text
             && x.bits.len() == s.bits.len()
             && x.bits.iter().zip(&s.bits).all(|p| match p {
-                (Item::F(a), Item::F(b)) => self.floats_agree(f64::from_bits(*a), f64::from_bits(*b)),
+                (Item::F(a), Item::F(b)) => {
+                    self.floats_agree(f64::from_bits(*a), f64::from_bits(*b))
+                }
                 (Item::I(a), Item::I(b)) => a == b,
                 _ => false,
             })
@@ -743,7 +745,12 @@ pub fn run_tol<A: Args, RX: Bits, RS: Bits>(
         "{name}: {} of {} inputs are not deterministic; first:\n{}",
         unstable.len(),
         cases.len(),
-        unstable.iter().take(3).cloned().collect::<Vec<_>>().join("\n")
+        unstable
+            .iter()
+            .take(3)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n")
     );
     assert!(
         bad.is_empty(),
