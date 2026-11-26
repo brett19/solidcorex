@@ -1,6 +1,20 @@
 // Moved from solidcore `solidcore/crates/solidcore/src/blend/fillet_section/taylor_model.rs` at
 // commit 03e16c9ee766de5b9b1ced845e5149d62ff493b8.
-// Upstream record (verbatim from that file): Not upstream (#14405).
+// Upstream record (verbatim from that file): Not upstream (#14405). A [`Tm`] encloses a
+// function `f` on `T = [-1, 1]`: for every t in T there are numbers `c_j` in [`Tm::c`] and `e`
+// in [`Tm::rem`] with `f(t) = sum_j c_j t^j + e`. Every operation's result encloses the
+// operation on any functions its operands enclose, by construction: - **Sum, difference.**
+// Coefficient by coefficient, the remainders added. - **Product.** The coefficients' products
+// to degree [`TM_DEG`]; each product term of a higher degree n is bounded over T (`t^n` lies
+// in `[-1, 1]`, or in `[0, 1]` for even n) into the remainder, as are the remainders times the
+// other factor's polynomial bounded over T, and the remainders' product. - **Reciprocal.**
+// `q`, the Taylor polynomial of `1 / f` at `t = 0` from the coefficients' middles (any
+// polynomial would do), and the exact identity `1 / f = q + (1 - f q) / f`: the remainder is
+// `1 - f q`, a Taylor model whose polynomial part cancels to rounding, bounded over T and
+// divided by f's range there, which must exclude 0. - **Square root.** `S`, the Taylor
+// polynomial of `sqrt(f)` at `t = 0` from the middles, and `sqrt(f) = S + (f - S^2) /
+// (sqrt(f) + S)`, both bounded over T; f's range must be positive (otherwise the result is
+// the square roots of its range's non-negative part, as [`Ivl::sqrt`], a constant).
 // Changes: `Ivl` from `crate::interval`, `GnScalar` from `crate::series`, `Ring` and
 // `TayScalar` from `crate::ring` (moved down from `tay.rs`), `sqrt` from `crate::vector3d`.
 // Results unchanged bit for bit.

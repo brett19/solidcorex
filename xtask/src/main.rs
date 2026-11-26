@@ -7,8 +7,11 @@
 //!   depend on any library and alone on the pinned solidcore; tool crates depend on no
 //!   workspace crate.
 //! - `headers`: every `.rs` file under `crates/` and `xtask/` opens with a derivation
-//!   header (`Moved from solidcore ... at commit <pin>`, its `Upstream record` and its
-//!   `Changes:`) or says it was written for solidcorex.
+//!   header (`Moved from solidcore ...` or `Derived from solidcore ...` `at commit <pin>`,
+//!   its `Upstream record` and its `Changes:`) or says it was written for solidcorex. For
+//!   a derivation header, each named pin file must exist at the pin (`git show PIN:path`
+//!   in the pinned checkout, `SCX_PIN` or `../sc-wt/scx-pin`) and its own upstream record
+//!   must appear word for word in the quoted record.
 //! - `fast`: `cargo fmt --check` of every member, clippy with warnings denied, `layers`, `headers` and
 //!   the tier-1 tests (`cargo test -p <crate>` for each crate named, default every
 //!   library).
@@ -287,7 +290,7 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
         let path = entry.map_err(|e| e.to_string())?.path();
         let skip = path
             .file_name()
-            .is_some_and(|n| n == "target" || n == "bin" || n.to_string_lossy().starts_with('.'));
+            .is_some_and(|n| n == "target" || n.to_string_lossy().starts_with('.'));
         if skip {
             continue;
         }
@@ -308,14 +311,122 @@ fn opening_comment(text: &str) -> String {
         .join("\n")
 }
 
+/// Whitespace runs as one space.
+fn squash(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// A derivation header names its pin files and quotes their upstream records.
+fn is_derived(head: &str) -> bool {
+    head.contains("Moved from solidcore") || head.contains("Derived from solidcore")
+}
+
 fn header_ok(text: &str) -> bool {
     let head = opening_comment(text);
     let written = head.to_lowercase().contains("written for solidcorex");
-    let moved = head.contains("Moved from solidcore")
+    let moved = is_derived(&head)
         && head.contains(PIN)
         && head.contains("Upstream record")
         && head.contains("Changes:");
     written || moved
+}
+
+/// The pin files a derivation header names: the backquoted `solidcore/...` paths before
+/// its `Upstream record`.
+fn pin_sources(head: &str) -> Vec<String> {
+    let before = head.split("Upstream record").next().unwrap_or("");
+    before
+        .split('`')
+        .skip(1)
+        .step_by(2)
+        .filter(|p| p.starts_with("solidcore/") && p.ends_with(".rs"))
+        .map(str::to_string)
+        .collect()
+}
+
+/// The header's quoted record: from `Upstream record (...):` to `Changes:`, squashed,
+/// without the `//` comment markers.
+fn quoted_record(head: &str) -> String {
+    let plain: String = head
+        .lines()
+        .map(|l| l.strip_prefix("//").unwrap_or(l))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let after = plain.split_once("Upstream record").map_or("", |(_, a)| a);
+    let after = after.split_once("):").map_or(after, |(_, a)| a);
+    squash(after.split("Changes:").next().unwrap_or(""))
+}
+
+/// A pin file's upstream record: the paragraph of its module doc that opens with
+/// `Upstream`, `Fork` or `Not upstream`, squashed.
+fn pin_record(pin_file: &str) -> Option<String> {
+    let mut rec: Vec<&str> = Vec::new();
+    for line in pin_file.lines() {
+        let Some(doc) = line.strip_prefix("//!") else {
+            if rec.is_empty() {
+                continue;
+            }
+            break;
+        };
+        let doc = doc.trim();
+        if rec.is_empty() {
+            if doc.starts_with("Upstream") || doc.starts_with("Fork") || doc.starts_with("Not upstream") {
+                rec.push(doc);
+            }
+        } else if doc.is_empty() {
+            break;
+        } else {
+            rec.push(doc);
+        }
+    }
+    (!rec.is_empty()).then(|| squash(&rec.join(" ")))
+}
+
+/// The pinned checkout: `SCX_PIN`, else `../sc-wt/scx-pin` beside the repository.
+fn pin_dir(root: &Path) -> PathBuf {
+    std::env::var_os("SCX_PIN").map_or_else(
+        || root.parent().unwrap_or(root).join("sc-wt").join("scx-pin"),
+        PathBuf::from,
+    )
+}
+
+/// `git show PIN:<path>` in the pinned checkout.
+fn pin_show(root: &Path, path: &str) -> Result<String, String> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(pin_dir(root))
+        .args(["show", &format!("{PIN}:{path}")])
+        .output()
+        .map_err(|e| format!("git show: {e}"))?;
+    if out.status.success() {
+        String::from_utf8(out.stdout).map_err(|e| e.to_string())
+    } else {
+        Err(format!("{path} does not exist at the pin"))
+    }
+}
+
+/// What is wrong with a derivation header against the pin: each named file exists at
+/// [`PIN`] and its upstream record appears word for word in the quoted record.
+fn derivation_against_pin(root: &Path, head: &str) -> Vec<String> {
+    let sources = pin_sources(head);
+    if sources.is_empty() {
+        return vec!["names no `solidcore/...` pin file".to_string()];
+    }
+    let quoted = quoted_record(head);
+    let mut out = Vec::new();
+    for src in &sources {
+        match pin_show(root, src) {
+            Err(e) => out.push(e),
+            Ok(text) => match pin_record(&text) {
+                None => out.push(format!("{src} has no upstream record at the pin")),
+                Some(rec) if !quoted.contains(&rec) => out.push(format!(
+                    "the quoted record lacks {src}'s, word for word: \"{rec}\""
+                )),
+                Some(_) => {}
+            },
+        }
+    }
+    out
 }
 
 fn headers(root: &Path) -> Result<String, String> {
@@ -327,18 +438,27 @@ fn headers(root: &Path) -> Result<String, String> {
         }
     }
     let mut bad = String::new();
+    let mut derived = 0;
     for f in &files {
-        if !header_ok(&read(f)?) {
-            let shown = f.strip_prefix(root).unwrap_or(f);
-            let _ = writeln!(
-                bad,
-                "{} has no derivation or solidcorex header",
-                shown.display()
-            );
+        let text = read(f)?;
+        let shown = f.strip_prefix(root).unwrap_or(f).display().to_string();
+        if !header_ok(&text) {
+            let _ = writeln!(bad, "{shown} has no derivation or solidcorex header");
+            continue;
+        }
+        let head = opening_comment(&text);
+        if is_derived(&head) {
+            derived += 1;
+            for e in derivation_against_pin(root, &head) {
+                let _ = writeln!(bad, "{shown}: {e}");
+            }
         }
     }
     if bad.is_empty() {
-        Ok(format!("headers: {} files", files.len()))
+        Ok(format!(
+            "headers: {} files ({derived} derived, records match the pin)",
+            files.len()
+        ))
     } else {
         Err(format!("headers:\n{bad}"))
     }
@@ -456,5 +576,17 @@ mod tests {
         assert!(!header_ok(
             "// Moved from solidcore `x.rs` at commit deadbeef.\n// Changes: z.\n"
         ));
+    }
+
+    #[test]
+    fn records_are_read_from_both_sides() {
+        let head = "// Moved from solidcore `solidcore/a.rs` and `solidcore/b.rs` at commit x.\n\
+                    // Upstream record (verbatim from those files): Upstream: `A.cpp`,\n\
+                    // `A.h`. Fork: b.\n// Changes: none.";
+        assert_eq!(pin_sources(head), ["solidcore/a.rs", "solidcore/b.rs"]);
+        assert_eq!(quoted_record(head), "Upstream: `A.cpp`, `A.h`. Fork: b.");
+        let pin = "//! Title.\n//!\n//! Upstream: `A.cpp`,\n//! `A.h`.\n//!\n//! | table |\nuse x;\n";
+        assert_eq!(pin_record(pin).as_deref(), Some("Upstream: `A.cpp`, `A.h`."));
+        assert_eq!(pin_record("//! No record.\n"), None);
     }
 }

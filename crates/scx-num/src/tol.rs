@@ -1,11 +1,16 @@
 // Moved from solidcore `solidcore/crates/solidcore/src/geom/tol.rs` at commit
 // 03e16c9ee766de5b9b1ced845e5149d62ff493b8, with `Tolerances` from
 // `solidcore/crates/solidcore/src/kernel.rs` (l.46-89) at the same commit.
-// Upstream record (verbatim from that file): Upstream: `source/SMLib/inc/SmTol.h`,
-// `source/SMLib/src/SmTol.cpp`, `source/SMLib/inc/SmRelation.h`.
+// Upstream record (verbatim from those files): tol.rs: Upstream: `source/SMLib/inc/SmTol.h`,
+// `source/SMLib/src/SmTol.cpp`, `source/SMLib/inc/SmRelation.h`. kernel.rs: Upstream:
+// `source/SMLib/inc/SmContext.h` (`SmContext`), `SmTol.h` (`SmTol`, `SmTol3d`), the
+// tolerance defaults of `SmMath.h`, the `SmCacheMgr*` classes, and `SM_API`'s
+// `SmApiGetOrCreateContext()`.
 // Changes: the scalar part only (no context, B-rep, curve, volume, equation-set or
-// `SmRelation` overloads, no `update_object_tolerance`); `&Kernel` became `&Tolerances`;
-// `size_estimate_to_zone_tol_3d` renamed `zone_for_size`; constants point at `consts`.
+// `SmRelation` overloads, no `update_object_tolerance`); of kernel.rs only the
+// `Tolerances` value; `&Kernel` became `&Tolerances`; `size_estimate_to_zone_tol_3d`
+// renamed `zone_for_size`; constants point at `consts`, and `UNINIT_TOL` is defined as
+// `math::UNDEF_DOUBLE` (the same 1.23456e-61 as the pin's literal); paths.
 //! Tolerance policy (`SmTol`), the scalar part: the tolerance constructors, model-size
 //! based default tolerances, zone / intersection / approximation tolerances, the
 //! contact and coincidence rules, scaled zeros and simple tolerance predicates, and the

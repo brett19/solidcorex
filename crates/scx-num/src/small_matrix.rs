@@ -1,8 +1,10 @@
 // Moved from solidcore `solidcore/crates/solidcore/src/geom/geom_utility/p1.rs` (l.1652-1758)
 // and `solidcore/crates/solidcore/src/geom/geom_utility/p2.rs` (l.318-323, l.1041-1102) at
 // commit 03e16c9ee766de5b9b1ced845e5149d62ff493b8.
-// Upstream record (verbatim from those files): Upstream: `source/SMLib/src/SmGeomUtility.cpp`,
-// `source/SMLib/inc/SmGeomUtility.h`.
+// Upstream record (verbatim from those files): p1.rs: Upstream:
+// `source/SMLib/src/SmGeomUtility.cpp`, `source/SMLib/inc/SmGeomUtility.h`. p2.rs: Upstream:
+// `source/SMLib/src/SmGeomUtility.cpp`, `source/SMLib/inc/SmGeomUtility.h` (enums from
+// `source/SMLib/inc/SmTypes.h`).
 // Changes: only the 3x3 and 4x4 helpers the transform needs, gathered in one file;
 // `SolidError::geom` became `NumError::failed`; operation strings kept as solidcore's.
 //! Small fixed-size matrix helpers of `SmGeomUtility` (`smgu_VecTripleProduct`,

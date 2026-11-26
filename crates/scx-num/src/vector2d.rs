@@ -2,7 +2,7 @@
 // 03e16c9ee766de5b9b1ced845e5149d62ff493b8.
 // Upstream record (verbatim from that file): Upstream: `source/SMLib/inc/SmVector2d.h`,
 // `source/SMLib/src/SmVector2d.cpp`.
-// Changes: paths only.
+// Changes: errors are `NumError` / `NumFailure` (`SolidError`, `GeomFailure` at the pin); paths.
 //! Two-dimensional vectors and points ([`Vec2`] / [`Point2`]), usually surface
 //! parameters `(u, v)`: arithmetic, lengths, distances, unitizing, rotation and angles.
 //!
