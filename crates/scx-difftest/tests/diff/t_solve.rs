@@ -129,24 +129,18 @@ macro_rules! run1 {
     ($c:expr, $k:expr, $persist:expr, $class:expr) => {{
         let c: Cfg1 = $c;
         let mut ev = m::sv::Rec1::new(c.func, $k, $persist, $class);
-        let mut s = match c.ivl {
-            None => m::sv::local_solve1d::LocalSolve1d::new(),
-            Some((a, b, p)) => m::sv::local_solve1d::LocalSolve1d::with_interval(
-                m::sv::extent1d::Extent1d::from_min_max(a, b),
-                p,
-            ),
-        };
-        if let Some(alg) = m::sv::local_solve1d::SolverAlgorithm::from_code(c.alg) {
-            s.set_solver_algorithm(alg);
-        }
+        let mut s = m::sv::solver1d(c.ivl, c.alg);
         let (a, b) = c.ab;
-        let r = match c.entry {
-            0 => s
-                .solve_it(&mut ev, c.guess, c.acc)
-                .map(|o| (o.found, o.t, 0.0)),
-            1 | 2 => s
-                .solve_by_brent(&mut ev, a, c.guess, b, c.acc, c.entry == 2)
-                .map(|(t, f)| (false, t, f)),
+        let (r, state) = match c.entry {
+            0 => {
+                let (r, st) = m::sv::solve1d(&mut s, &mut ev, c.guess, c.acc);
+                (r.map(|o| (o.found, o.t, 0.0)), Some(st))
+            }
+            1 | 2 => (
+                s.solve_by_brent(&mut ev, a, c.guess, b, c.acc, c.entry == 2)
+                    .map(|(t, f)| (false, t, f)),
+                None,
+            ),
             _ => {
                 let (fa, fb) = (
                     crate::solvers::f1(c.func, a).0,
@@ -157,28 +151,13 @@ macro_rules! run1 {
                 } else {
                     (b, a, fb, fa)
                 };
-                s.solve_by_bisection(&mut ev, c.levels, lo, hi, flo, fhi)
-                    .map(|(t, f)| (false, t, f))
+                (
+                    s.solve_by_bisection(&mut ev, c.levels, lo, hi, flo, fhi)
+                        .map(|(t, f)| (false, t, f)),
+                    None,
+                )
             }
         };
-        let iv = |v: &m::sv::local_solve1d::IterationValue| (v.t, v.f, v.f_prime, v.prev_step);
-        let state = (
-            (s.iter, iv(&s.curr), iv(&s.prev1), iv(&s.prev2)),
-            (
-                s.have_lower_bracket,
-                s.lower_bracket_t,
-                s.lower_bracket_f,
-                s.have_upper_bracket,
-                s.upper_bracket_t,
-                s.upper_bracket_f,
-            ),
-            (
-                s.found_accuracy(),
-                s.lower_bound_hits(),
-                s.upper_bound_hits(),
-                s.termination_reason().code(),
-            ),
-        );
         (r.map_err(m::sv::pin), ev.log, state)
     }};
 }
@@ -433,27 +412,55 @@ diff!(solve_nd_sizes, |n: usize| {
     out
 });
 
-diff!(solve1d_settings, |code: i32, lo: f64, hi: f64, acc: f64| {
-    let alg = m::sv::local_solve1d::SolverAlgorithm::from_code(code);
-    let codes = alg.map(|a| (a.code(), a.is_brent()));
-    let d = m::sv::local_solve1d::LocalSolve1d::default();
-    let mut s = m::sv::local_solve1d::LocalSolve1d::with_interval(
-        m::sv::extent1d::Extent1d::from_min_max(-3.0, 3.0),
-        false,
-    );
-    s.set_solution_interval(m::sv::extent1d::Extent1d::from_min_max(lo, hi));
-    s.set_desired_accuracy(acc.abs());
-    let ivl = s.interval();
-    let mut ev = m::sv::Rec1::new(0, usize::MAX, false, Class::SmErr);
-    let r = s.solve_it(&mut ev, 1.0, 1e-3).map(|o| (o.found, o.t));
-    (
-        codes,
-        (d.desired_accuracy(), d.interval().min(), d.interval().max()),
-        (ivl.min(), ivl.max(), s.desired_accuracy()),
-        r.map_err(m::sv::pin),
-        ev.log,
-    )
-});
+// The default's interval is not compared: scx's default domain is the whole line, with
+// no interval to read (the pin's is the unused inside-out `Extent1d::new()`).
+diff!(
+    solve1d_settings,
+    |code: i32, lo: f64, hi: f64, acc: f64| {
+        let alg = m::sv::local_solve1d::SolverAlgorithm::from_code(code);
+        let codes = alg.map(|a| (a.code(), a.is_brent()));
+        let d = m::sv::local_solve1d::LocalSolve1d::default();
+        let mut s = m::sv::local_solve1d::LocalSolve1d::with_interval(
+            m::sv::extent1d::Extent1d::from_min_max(-3.0, 3.0),
+            false,
+        );
+        s.domain = m::sv::local_solve1d::Domain1d::Bounded(
+            m::sv::extent1d::Extent1d::from_min_max(lo, hi),
+        );
+        s.desired_accuracy = acc.abs();
+        let ivl = s.domain.interval().unwrap_or_default();
+        let mut ev = m::sv::Rec1::new(0, usize::MAX, false, Class::SmErr);
+        let r = s.solve_it(&mut ev, 1.0, 1e-3).map(|o| (o.found, o.t));
+        (
+            codes,
+            d.desired_accuracy,
+            (ivl.min(), ivl.max(), s.desired_accuracy),
+            r.map_err(m::sv::pin),
+            ev.log,
+        )
+    },
+    {
+        let alg = m::sv::local_solve1d::SolverAlgorithm::from_code(code);
+        let codes = alg.map(|a| (a.code(), a.is_brent()));
+        let d = m::sv::local_solve1d::LocalSolve1d::default();
+        let mut s = m::sv::local_solve1d::LocalSolve1d::with_interval(
+            m::sv::extent1d::Extent1d::from_min_max(-3.0, 3.0),
+            false,
+        );
+        s.set_solution_interval(m::sv::extent1d::Extent1d::from_min_max(lo, hi));
+        s.set_desired_accuracy(acc.abs());
+        let ivl = s.interval();
+        let mut ev = m::sv::Rec1::new(0, usize::MAX, false, Class::SmErr);
+        let r = s.solve_it(&mut ev, 1.0, 1e-3).map(|o| (o.found, o.t));
+        (
+            codes,
+            d.desired_accuracy(),
+            (ivl.min(), ivl.max(), s.desired_accuracy()),
+            r.map_err(m::sv::pin),
+            ev.log,
+        )
+    }
+);
 
 diff!(solve_nd_defaults, || {
     use m::sv::local_solve_nd::EvalNFunctions;

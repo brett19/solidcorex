@@ -384,6 +384,17 @@ macro_rules! evaluators {
     };
 }
 
+/// An iterate: `(t, F, F', step)`.
+pub type Iv1 = (f64, f64, f64, f64);
+/// A 1-D solve's final state: `((iter, curr, prev1, prev2), (lower bracket: have, t, F;
+/// upper bracket: have, t, F), (found accuracy, lower and upper bound hits, termination
+/// code))`.
+pub type St1 = (
+    (u64, Iv1, Iv1, Iv1),
+    (bool, f64, f64, bool, f64, f64),
+    (Option<f64>, u64, u64, i32),
+);
+
 /// The scx side.
 pub mod x {
     pub use scx_algo::{local_solve1d, local_solve_nd};
@@ -405,6 +416,52 @@ pub mod x {
     evaluators!(
         type Error = EvErr;
     );
+
+    use local_solve1d::{IterationValue, LocalSolve1d, SolveOutcome};
+
+    /// Options for `ivl` (`(min, max, periodic)`) and the algorithm of `alg`, if any.
+    pub fn solver1d(ivl: Option<(f64, f64, bool)>, alg: i32) -> LocalSolve1d {
+        let mut s = match ivl {
+            None => LocalSolve1d::new(),
+            Some((a, b, p)) => LocalSolve1d::with_interval(Extent1d::from_min_max(a, b), p),
+        };
+        if let Some(a) = local_solve1d::SolverAlgorithm::from_code(alg) {
+            s.algorithm = a;
+        }
+        s
+    }
+
+    /// `solve_it`, with the state it left.
+    pub fn solve1d<E: EvalFunction>(
+        s: &LocalSolve1d,
+        ev: &mut E,
+        guess: f64,
+        acc: f64,
+    ) -> (
+        Result<SolveOutcome, scx_algo::error::SolveError<E::Error>>,
+        super::St1,
+    ) {
+        let iv = |v: &IterationValue| (v.t, v.f, v.f_prime, v.prev_step);
+        let (r, st) = s.solve_traced(ev, guess, acc);
+        let state = (
+            (st.iter, iv(&st.curr), iv(&st.prev1), iv(&st.prev2)),
+            (
+                st.have_lower_bracket,
+                st.lower_bracket_t,
+                st.lower_bracket_f,
+                st.have_upper_bracket,
+                st.upper_bracket_t,
+                st.upper_bracket_f,
+            ),
+            (
+                st.found_accuracy,
+                st.lower_bound_hits,
+                st.upper_bound_hits,
+                st.termination_reason.code(),
+            ),
+        );
+        (r, state)
+    }
 }
 
 /// The pin's side.
@@ -425,4 +482,49 @@ pub mod s {
         (e.to_string(), e)
     }
     evaluators!();
+
+    use local_solve1d::{IterationValue, LocalSolve1d, SolveOutcome};
+
+    /// A solver on `ivl` (`(min, max, periodic)`) with the algorithm of `alg`, if any.
+    pub fn solver1d(ivl: Option<(f64, f64, bool)>, alg: i32) -> LocalSolve1d {
+        let mut s = match ivl {
+            None => LocalSolve1d::new(),
+            Some((a, b, p)) => LocalSolve1d::with_interval(Extent1d::from_min_max(a, b), p),
+        };
+        if let Some(a) = local_solve1d::SolverAlgorithm::from_code(alg) {
+            s.set_solver_algorithm(a);
+        }
+        s
+    }
+
+    /// `solve_it`, with the members it left. The found accuracy is `None` where the solve
+    /// left it at `SM_UNDEF_DOUBLE` (not written).
+    pub fn solve1d<E: EvalFunction>(
+        s: &mut LocalSolve1d,
+        ev: &mut E,
+        guess: f64,
+        acc: f64,
+    ) -> (Result<SolveOutcome, EvErr>, super::St1) {
+        let iv = |v: &IterationValue| (v.t, v.f, v.f_prime, v.prev_step);
+        let r = s.solve_it(ev, guess, acc);
+        let fa = s.found_accuracy();
+        let state = (
+            (s.iter, iv(&s.curr), iv(&s.prev1), iv(&s.prev2)),
+            (
+                s.have_lower_bracket,
+                s.lower_bracket_t,
+                s.lower_bracket_f,
+                s.have_upper_bracket,
+                s.upper_bracket_t,
+                s.upper_bracket_f,
+            ),
+            (
+                (fa.to_bits() != solidcore::math::UNDEF_DOUBLE.to_bits()).then_some(fa),
+                s.lower_bound_hits(),
+                s.upper_bound_hits(),
+                s.termination_reason().code(),
+            ),
+        );
+        (r, state)
+    }
 }

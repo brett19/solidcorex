@@ -15,7 +15,27 @@
 // `tests::successful_sample_after_a_failure_can_still_bracket_a_root`, `tests::errors` and
 // `tests::wr19_failed_first_evaluation_and_valid_start` match it. Paths otherwise. Results and every error's class, text and cause
 // unchanged. `UNDEF_DOUBLE` is a private constant here (`scx_num::math` no longer has
-// one).
+// one). The solver is an options value and a pure call (`docs/01-architecture.md` §10.1
+// item 6): `LocalSolve1d` holds only the options (`Domain1d` replaces `use_interval`,
+// `interval` and `is_periodic`); `LocalSolve1d::new` and `LocalSolve1d::with_interval`
+// are `const`; `LocalSolve1d::solve_it` takes `&self` and starts from
+// `Solve1dState::START` every call; the new `LocalSolve1d::solve_traced` returns the state
+// (`Solve1dState`, the former public members; `found_accuracy` is an `Option`); the
+// iteration is the private `Run::solve`, with `Run::solve_oscillating`, `Run::eval_into`
+// and `Run::reason_for` moved from `LocalSolve1d`; `max_boundary_hits` is the constant
+// `MAX_BOUNDARY_HITS` and the bound hits start at 0; `UNDEF_ULONG`,
+// `LocalSolve1d::found_accuracy`, `LocalSolve1d::termination_reason`,
+// `LocalSolve1d::lower_bound_hits`, `LocalSolve1d::upper_bound_hits`,
+// `LocalSolve1d::interval`, `LocalSolve1d::set_solution_interval`,
+// `LocalSolve1d::set_solver_algorithm`, `LocalSolve1d::set_desired_accuracy` and
+// `LocalSolve1d::desired_accuracy` are removed (the fields are public);
+// `IterationValue::UNSET` is new. The tests `tests::newton_sqrt2`,
+// `tests::issue_481_failed_guess_is_no_sign_change`,
+// `tests::failed_guess_does_not_supply_a_sign_change`,
+// `tests::failed_interior_samples_cannot_create_a_bracket`,
+// `tests::successful_sample_after_a_failure_can_still_bracket_a_root`,
+// `tests::wr19_unbounded_newton_converges_positive_and_negative_roots` and every test that
+// made its solver `mut` read the state from `solve_traced` or a test `Run::fresh`.
 //! One-dimensional local root finding (damped Newton iteration with oscillation
 //! detection, regula-falsi bisection fallback) and Brent-like minimisation /
 //! maximisation, driven by a caller-supplied function evaluator.
@@ -32,23 +52,27 @@
 //! | [`IterQueue1d`], [`IterQueue1d::new`], [`IterQueue1d::try_new`] | `SmIterQueue1d`, `SmIterQueue1d(ULONG)` |
 //! | [`IterQueue1d::add`]                         | `SmIterQueue1d::Add`                           |
 //! | [`IterQueue1d::is_oscillating`]              | `SmIterQueue1d::IsOscillating`                 |
-//! | [`LocalSolve1d`]                             | `SmLocalSolve1d`                               |
+//! | [`LocalSolve1d`] (the options), [`Domain1d`] | `SmLocalSolve1d`'s settings                    |
 //! | [`LocalSolve1d::new`] | `SmLocalSolve1d(SmEvalFunctionObject&)` |
 //! | [`LocalSolve1d::with_interval`] | `SmLocalSolve1d(SmEvalFunctionObject&, const SmExtent1d&, SmBoolean)` |
-//! | `Drop` (implicit)                            | `~SmLocalSolve1d`                              |
-//! | [`LocalSolve1d::found_accuracy`] etc.        | `GetFoundAccuracy`, `GetTerminationReason`, `GetLowerBoundHits`, `GetUpperBoundHits` |
-//! | [`LocalSolve1d::set_solution_interval`]      | `SetSolutionInterval`                          |
-//! | [`LocalSolve1d::set_solver_algorithm`]       | `SetSolverAlgorithm`                           |
-//! | [`LocalSolve1d::set_desired_accuracy`]       | `SetDesiredAccuracy`                           |
-//! | [`LocalSolve1d::solve_it`], [`SolveOutcome`] | `SolveIt`                                      |
+//! | [`Solve1dState`]                             | `SmLocalSolve1d`'s members after a solve       |
+//! | [`Solve1dState`]'s fields                    | `GetFoundAccuracy`, `GetTerminationReason`, `GetLowerBoundHits`, `GetUpperBoundHits` |
+//! | [`LocalSolve1d::domain`] etc. (public fields) | `SetSolutionInterval`, `SetSolverAlgorithm`, `SetDesiredAccuracy` |
+//! | [`LocalSolve1d::solve_it`], [`LocalSolve1d::solve_traced`], [`SolveOutcome`] | `SolveIt` |
 //! | [`LocalSolve1d::solve_by_bisection`]         | `SolveByBisection`                             |
 //! | [`LocalSolve1d::solve_by_brent`]             | `SolveByBrent`                                 |
 //! | `solve_oscillating` (private)                | `SolveOscillating`                             |
 //!
 //! Deviations:
-//! - The evaluator is passed to each solve call instead of being stored as a
-//!   reference in the solver (Rust borrowing); everything else in the solver state
-//!   (brackets, iteration values, counters) is kept and public as upstream.
+//! - The solver is a value of options and each solve a pure call
+//!   (`docs/01-architecture.md` §10.1 item 6): the evaluator is passed to each call,
+//!   every [`LocalSolve1d::solve_it`] starts from the same state, and the state it
+//!   leaves (upstream's members) is returned by [`LocalSolve1d::solve_traced`]. Upstream
+//!   carries the members from one `SolveIt` to the next, but `SolveIt` resets every one
+//!   it reads before reading it except the iterates and bracket parameters, which it
+//!   writes first on every path but the one in [`UNDEF_DOUBLE`]'s note. `SetSolutionInterval`
+//!   on a solver built without one changes nothing upstream; [`Domain1d::Line`] has no
+//!   interval to change.
 //! - [`EvalFunction::evaluate`] keeps upstream's out-parameter shape: the solver
 //!   hands it the destination values and keeps whatever the evaluator wrote even
 //!   when it fails, because upstream reads such values afterwards (e.g. the
@@ -93,9 +117,6 @@ use scx_num::math::{BIG_DOUBLE, EFF_ZERO, EFF_ZERO_SQ};
 const UNDEF_DOUBLE: f64 = 1.23456e-61;
 use scx_num::tol::{in_tol, scaled_zero};
 use scx_num::NumError;
-
-/// Upstream `SM_UNDEF_ULONG`.
-pub const UNDEF_ULONG: u64 = 123456789;
 
 /// `ZEPS` of `SolveByBrent`.
 const ZEPS: f64 = 1.0e-12;
@@ -211,14 +232,19 @@ pub struct IterationValue {
     pub prev_step: f64,
 }
 
+impl IterationValue {
+    /// Every value upstream's `SM_UNDEF_DOUBLE` ([`UNDEF_DOUBLE`]): not yet written.
+    pub const UNSET: Self = Self {
+        t: UNDEF_DOUBLE,
+        f: UNDEF_DOUBLE,
+        f_prime: UNDEF_DOUBLE,
+        prev_step: UNDEF_DOUBLE,
+    };
+}
+
 impl Default for IterationValue {
     fn default() -> Self {
-        Self {
-            t: UNDEF_DOUBLE,
-            f: UNDEF_DOUBLE,
-            f_prime: UNDEF_DOUBLE,
-            prev_step: UNDEF_DOUBLE,
-        }
+        Self::UNSET
     }
 }
 
@@ -327,19 +353,64 @@ pub struct SolveOutcome {
     pub t: f64,
 }
 
-/// Local solver for one-dimensional equations `F(t) = 0` and min/max problems
-/// (`SmLocalSolve1d`).
-#[derive(Debug, Clone, PartialEq)]
-#[allow(clippy::struct_excessive_bools)] // upstream's SmBoolean members, kept public
+/// Where a solve looks for `t`.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum Domain1d {
+    /// The whole real line: Newton steps are not limited or clamped (WR-19).
+    #[default]
+    Line,
+    /// `interval`: the guess is clamped into it, each Newton step is limited to 8% of its
+    /// length, and a step that leaves it is clamped at the end it crosses.
+    Bounded(Extent1d),
+    /// `interval` as one period: as [`Domain1d::Bounded`], but a step that leaves it
+    /// wraps.
+    Periodic(Extent1d),
+}
+
+impl Domain1d {
+    /// The interval, if the domain has one.
+    #[must_use]
+    pub const fn interval(self) -> Option<Extent1d> {
+        match self {
+            Self::Line => None,
+            Self::Bounded(e) | Self::Periodic(e) => Some(e),
+        }
+    }
+}
+
+/// Consecutive clamps at one end of the interval after which a solve stops
+/// [out of bounds](TerminationReason::OutOfBounds) (upstream sets `m_lMaxBoundaryHits`
+/// to 2 in every `SolveIt`).
+const MAX_BOUNDARY_HITS: u64 = 2;
+
+/// The options of a one-dimensional local solve (`SmLocalSolve1d`'s settings). A value:
+/// every solve ([`LocalSolve1d::solve_it`], [`LocalSolve1d::solve_by_brent`],
+/// [`LocalSolve1d::solve_by_bisection`]) reads it and changes nothing, so one value may
+/// serve any number of solves, in any order.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LocalSolve1d {
-    use_interval: bool,
-    interval: Extent1d,
-    algorithm: SolverAlgorithm,
-    desired_accuracy: f64,
-    acceptable_accuracy: f64,
-    max_iter: u64,
-    max_boundary_hits: u64,
-    is_periodic: bool,
+    /// Where `t` is looked for (default: the whole line).
+    pub domain: Domain1d,
+    /// The algorithm (default: Newton).
+    pub algorithm: SolverAlgorithm,
+    /// `|F|` below which iteration stops as converged (default `SM_EFF_ZERO`).
+    pub desired_accuracy: f64,
+    /// The iteration limit (default 100).
+    pub max_iter: u64,
+}
+
+impl Default for LocalSolve1d {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// What one [`LocalSolve1d::solve_traced`] left behind: its brackets, last iterates,
+/// counters and why it stopped. Every solve starts from the same state; none reads a
+/// previous one's.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[allow(clippy::struct_excessive_bools)] // upstream's SmBoolean members
+pub struct Solve1dState {
     /// A zero crossing's lower (`F < 0`) side is known.
     pub have_lower_bracket: bool,
     /// `F` at the lower bracket.
@@ -356,119 +427,110 @@ pub struct LocalSolve1d {
     pub prev2: IterationValue,
     /// Values one iteration ago (`m_v1Prev`).
     pub prev1: IterationValue,
-    /// Current values (`m_vCurr`); holds the final `t`/`F` after a solve.
+    /// Current values (`m_vCurr`): the final `t` and `F`.
     pub curr: IterationValue,
     /// Iteration counter (`m_lIter`).
     pub iter: u64,
-    /// `F` at the returned parameter (`m_dFoundAccuracy`).
-    pub found_accuracy: f64,
+    /// `F` at the returned parameter (`m_dFoundAccuracy`), where the solve recorded one.
+    pub found_accuracy: Option<f64>,
     /// Consecutive clamps at the interval minimum.
     pub lower_bound_hits: u64,
     /// Consecutive clamps at the interval maximum.
     pub upper_bound_hits: u64,
-    /// Why the last solve stopped.
+    /// Why the solve stopped.
     pub termination_reason: TerminationReason,
 }
 
-impl Default for LocalSolve1d {
-    fn default() -> Self {
-        Self::new()
-    }
+impl Solve1dState {
+    /// The state every solve starts from (upstream's resets at the top of `SolveIt`).
+    /// The bracket parameters and iterates hold upstream's `SM_UNDEF_DOUBLE` until
+    /// written; see [`UNDEF_DOUBLE`].
+    const START: Self = Self {
+        have_lower_bracket: false,
+        lower_bracket_f: -BIG_DOUBLE,
+        lower_bracket_t: UNDEF_DOUBLE,
+        have_upper_bracket: false,
+        upper_bracket_f: BIG_DOUBLE,
+        upper_bracket_t: UNDEF_DOUBLE,
+        prev2: IterationValue::UNSET,
+        prev1: IterationValue::UNSET,
+        curr: IterationValue {
+            prev_step: 0.0,
+            ..IterationValue::UNSET
+        },
+        iter: 0,
+        found_accuracy: None,
+        lower_bound_hits: 0,
+        upper_bound_hits: 0,
+        termination_reason: TerminationReason::UnableToConverge,
+    };
 }
 
 impl LocalSolve1d {
-    /// A Newton solver on the whole real line (`SmLocalSolve1d(rFunctionEvaluator)`).
+    /// Newton on the whole real line (`SmLocalSolve1d(rFunctionEvaluator)`).
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
-            use_interval: false,
-            interval: Extent1d::new(),
+            domain: Domain1d::Line,
             algorithm: SolverAlgorithm::Newton,
             desired_accuracy: EFF_ZERO,
-            acceptable_accuracy: UNDEF_DOUBLE,
             max_iter: 100,
-            max_boundary_hits: UNDEF_ULONG,
-            is_periodic: false,
-            have_lower_bracket: false,
-            lower_bracket_f: UNDEF_DOUBLE,
-            lower_bracket_t: UNDEF_DOUBLE,
-            have_upper_bracket: false,
-            upper_bracket_f: UNDEF_DOUBLE,
-            upper_bracket_t: UNDEF_DOUBLE,
-            prev2: IterationValue::default(),
-            prev1: IterationValue::default(),
-            curr: IterationValue::default(),
-            iter: 0,
-            found_accuracy: UNDEF_DOUBLE,
-            lower_bound_hits: UNDEF_ULONG,
-            upper_bound_hits: UNDEF_ULONG,
-            termination_reason: TerminationReason::Undefined,
         }
     }
 
-    /// A Newton solver restricted to `interval`, wrapping instead of clamping when
-    /// `is_periodic` (`SmLocalSolve1d(rFunctionEvaluator, crInterval, bIsPeriodic)`).
+    /// Newton restricted to `interval`, wrapping instead of clamping when `is_periodic`
+    /// (`SmLocalSolve1d(rFunctionEvaluator, crInterval, bIsPeriodic)`).
     #[must_use]
-    pub fn with_interval(interval: Extent1d, is_periodic: bool) -> Self {
+    pub const fn with_interval(interval: Extent1d, is_periodic: bool) -> Self {
         Self {
-            use_interval: true,
-            interval,
-            is_periodic,
+            domain: if is_periodic {
+                Domain1d::Periodic(interval)
+            } else {
+                Domain1d::Bounded(interval)
+            },
             ..Self::new()
         }
     }
 
-    /// `F` at the returned parameter (`GetFoundAccuracy`).
-    #[must_use]
-    pub fn found_accuracy(&self) -> f64 {
-        self.found_accuracy
+    /// Finds a root of `F` near `guess_t` by damped Newton iteration, falling back
+    /// to oscillation handling, bisection on a bracket, or Brent min/max for the
+    /// `Brent*` algorithms (`SolveIt`). `found` is set when `|F| < desired` or
+    /// within `acceptable_accuracy`. Succeeds even when no solution is found; fails
+    /// only when an evaluation fails (`SM_ERR` or the evaluator's status). The
+    /// state it leaves is [`LocalSolve1d::solve_traced`]'s.
+    ///
+    /// Without an interval ([`Self::new`]) the Newton steps are not clamped; upstream
+    /// still clamps each against the default inside-out `[1e20, -1e20]` interval (WR-19),
+    /// replacing every step with `±1.584e19` opposite to Newton.
+    ///
+    /// # Errors
+    ///
+    /// An evaluation's failure, as [`SolveError`].
+    pub fn solve_it<E: EvalFunction + ?Sized>(
+        &self,
+        eval: &mut E,
+        guess_t: f64,
+        acceptable_accuracy: f64,
+    ) -> Result<SolveOutcome, SolveError<E::Error>> {
+        self.solve_traced(eval, guess_t, acceptable_accuracy).0
     }
 
-    /// Why the last solve stopped (`GetTerminationReason`).
-    #[must_use]
-    pub fn termination_reason(&self) -> TerminationReason {
-        self.termination_reason
-    }
-
-    /// Consecutive clamps at the interval minimum (`GetLowerBoundHits`).
-    #[must_use]
-    pub fn lower_bound_hits(&self) -> u64 {
-        self.lower_bound_hits
-    }
-
-    /// Consecutive clamps at the interval maximum (`GetUpperBoundHits`).
-    #[must_use]
-    pub fn upper_bound_hits(&self) -> u64 {
-        self.upper_bound_hits
-    }
-
-    /// The problem interval (without changing whether it is used).
-    #[must_use]
-    pub fn interval(&self) -> Extent1d {
-        self.interval
-    }
-
-    /// Replaces the problem interval; whether it limits the solution is unchanged
-    /// (`SetSolutionInterval`).
-    pub fn set_solution_interval(&mut self, interval: Extent1d) {
-        self.interval = interval;
-    }
-
-    /// Selects the algorithm (`SetSolverAlgorithm`).
-    pub fn set_solver_algorithm(&mut self, algorithm: SolverAlgorithm) {
-        self.algorithm = algorithm;
-    }
-
-    /// Sets the accuracy at which iteration stops as converged (`SetDesiredAccuracy`;
-    /// default `SM_EFF_ZERO`).
-    pub fn set_desired_accuracy(&mut self, accuracy: f64) {
-        self.desired_accuracy = accuracy;
-    }
-
-    /// The accuracy at which iteration stops as converged.
-    #[must_use]
-    pub fn desired_accuracy(&self) -> f64 {
-        self.desired_accuracy
+    /// [`LocalSolve1d::solve_it`], with the state the solve left: brackets, iterates,
+    /// counters, the found accuracy and the termination reason (upstream's members after
+    /// `SolveIt`).
+    pub fn solve_traced<E: EvalFunction + ?Sized>(
+        &self,
+        eval: &mut E,
+        guess_t: f64,
+        acceptable_accuracy: f64,
+    ) -> (Result<SolveOutcome, SolveError<E::Error>>, Solve1dState) {
+        let mut run = Run {
+            o: *self,
+            acceptable_accuracy,
+            st: Solve1dState::START,
+        };
+        let r = run.solve(eval, guess_t);
+        (r, run.st)
     }
 
     /// Minimises (or, with `maximize`, maximises) `F` on the bracket `ax`..`cx`
@@ -721,7 +783,16 @@ impl LocalSolve1d {
             level -= 1;
         }
     }
+}
 
+/// One solve in progress: the options, the accuracy the call accepts, and the state.
+struct Run {
+    o: LocalSolve1d,
+    acceptable_accuracy: f64,
+    st: Solve1dState,
+}
+
+impl Run {
     /// Evaluates at `value.t` into `value.f` / `value.f_prime` and `found`. A failed
     /// evaluation has no value, so `value` and `found` keep what they held.
     ///
@@ -759,7 +830,7 @@ impl LocalSolve1d {
         let mut found_answer = false;
 
         let mut temp = IterationValue {
-            t: 0.5 * (self.prev1.t + self.curr.t),
+            t: 0.5 * (self.st.prev1.t + self.st.curr.t),
             ..IterationValue::default()
         };
         Self::eval_into(eval, &mut temp, &mut found_answer, true).map_err(SolveError::Eval)?;
@@ -768,10 +839,10 @@ impl LocalSolve1d {
         let mut best_interior_f = temp.f;
 
         // Not bracketed: look for a sign change between prev1 and curr.
-        if !self.have_lower_bracket || !self.have_upper_bracket {
-            let curr_t = self.curr.t;
-            let prev_t = self.prev1.t;
-            let curr_f = self.curr.f;
+        if !self.st.have_lower_bracket || !self.st.have_upper_bracket {
+            let curr_t = self.st.curr.t;
+            let prev_t = self.st.prev1.t;
+            let curr_f = self.st.curr.f;
 
             let mut evaluated_sign_change = false;
             for g in GUESSES {
@@ -805,7 +876,7 @@ impl LocalSolve1d {
                 let end = if pick_curr {
                     (curr_t, curr_f)
                 } else {
-                    (prev_t, self.prev1.f)
+                    (prev_t, self.st.prev1.f)
                 };
                 let ((mut new_lo_t, mut new_lo_f), (mut new_hi_t, mut new_hi_f)) = if temp.f > 0.0 {
                     (end, (temp.t, temp.f))
@@ -814,141 +885,122 @@ impl LocalSolve1d {
                 };
 
                 // Prefer an existing bracket when it is closer.
-                if self.have_lower_bracket
-                    && (self.lower_bracket_t - new_hi_t).abs() < (new_lo_t - new_hi_t).abs()
+                if self.st.have_lower_bracket
+                    && (self.st.lower_bracket_t - new_hi_t).abs() < (new_lo_t - new_hi_t).abs()
                 {
-                    new_lo_t = self.lower_bracket_t;
-                    new_lo_f = self.lower_bracket_f;
+                    new_lo_t = self.st.lower_bracket_t;
+                    new_lo_f = self.st.lower_bracket_f;
                 }
-                if self.have_upper_bracket
-                    && (self.upper_bracket_t - new_lo_t).abs() < (new_hi_t - new_lo_t).abs()
+                if self.st.have_upper_bracket
+                    && (self.st.upper_bracket_t - new_lo_t).abs() < (new_hi_t - new_lo_t).abs()
                 {
-                    new_hi_t = self.upper_bracket_t;
-                    new_hi_f = self.upper_bracket_f;
+                    new_hi_t = self.st.upper_bracket_t;
+                    new_hi_f = self.st.upper_bracket_f;
                 }
 
-                self.have_lower_bracket = true;
-                self.lower_bracket_t = new_lo_t;
-                self.lower_bracket_f = new_lo_f;
-                self.have_upper_bracket = true;
-                self.upper_bracket_t = new_hi_t;
-                self.upper_bracket_f = new_hi_f;
+                self.st.have_lower_bracket = true;
+                self.st.lower_bracket_t = new_lo_t;
+                self.st.lower_bracket_f = new_lo_f;
+                self.st.have_upper_bracket = true;
+                self.st.upper_bracket_t = new_hi_t;
+                self.st.upper_bracket_f = new_hi_f;
             }
         }
 
         // Bracketed: bisect (deeper, we might not be close). Success even if F is
         // too big: at a discontinuity the caller wants the best solution.
-        if self.have_lower_bracket && self.have_upper_bracket {
-            let r = self.solve_by_bisection(
+        if self.st.have_lower_bracket && self.st.have_upper_bracket {
+            let r = self.o.solve_by_bisection(
                 eval,
                 40,
-                self.lower_bracket_t,
-                self.upper_bracket_t,
-                self.lower_bracket_f,
-                self.upper_bracket_f,
+                self.st.lower_bracket_t,
+                self.st.upper_bracket_t,
+                self.st.lower_bracket_f,
+                self.st.upper_bracket_f,
             );
             if let Some((t, f)) = ignored(r)? {
-                self.curr.t = t;
-                self.curr.f = f;
-                self.found_accuracy = self.curr.f;
-                self.termination_reason = if self.curr.f.abs() < self.desired_accuracy {
+                self.st.curr.t = t;
+                self.st.curr.f = f;
+                self.st.found_accuracy = Some(self.st.curr.f);
+                self.st.termination_reason = if self.st.curr.f.abs() < self.o.desired_accuracy {
                     TerminationReason::FoundAnswerConverged
                 } else {
                     TerminationReason::FoundAnswerClose
                 };
                 return Ok(SolveOutcome {
                     found: true,
-                    t: self.curr.t,
+                    t: self.st.curr.t,
                 });
             }
         }
 
         // No bracket: oscillating between two values of the same sign.
-        if self.algorithm.is_brent() {
-            let maximize = self.algorithm == SolverAlgorithm::BrentMaximize;
-            let (t, _) = self.solve_by_brent(
+        if self.o.algorithm.is_brent() {
+            let maximize = self.o.algorithm == SolverAlgorithm::BrentMaximize;
+            let (t, _) = self.o.solve_by_brent(
                 eval,
-                self.prev1.t,
+                self.st.prev1.t,
                 best_interior_t,
-                self.curr.t,
-                self.desired_accuracy,
+                self.st.curr.t,
+                self.o.desired_accuracy,
                 maximize,
             )?;
-            self.curr.t = t;
-        } else if best_interior_f.abs() < self.curr.f.abs() {
-            self.curr.t = best_interior_t;
+            self.st.curr.t = t;
+        } else if best_interior_f.abs() < self.st.curr.f.abs() {
+            self.st.curr.t = best_interior_t;
         } else {
             // just try the midpoint
-            self.curr.t = 0.5 * (self.prev1.t + self.curr.t);
+            self.st.curr.t = 0.5 * (self.st.prev1.t + self.st.curr.t);
         }
 
         // The caller expects the solution in curr.
-        Self::eval_into(eval, &mut self.curr, &mut found_answer, true).map_err(SolveError::Eval)?;
+        Self::eval_into(eval, &mut self.st.curr, &mut found_answer, true)
+            .map_err(SolveError::Eval)?;
 
-        let found = if self.algorithm.is_brent() {
+        let found = if self.o.algorithm.is_brent() {
             true // for min/max the tolerance does not matter
         } else {
-            found_answer || self.curr.f.abs() <= self.acceptable_accuracy
+            found_answer || self.st.curr.f.abs() <= self.acceptable_accuracy
         };
         Ok(SolveOutcome {
             found,
-            t: self.curr.t,
+            t: self.st.curr.t,
         })
     }
 
-    /// Finds a root of `F` near `guess_t` by damped Newton iteration, falling back
-    /// to oscillation handling, bisection on a bracket, or Brent min/max for the
-    /// `Brent*` algorithms (`SolveIt`). `found` is set when `|F| < desired` or
-    /// within `acceptable_accuracy`. Succeeds even when no solution is found; fails
-    /// only when an evaluation fails (`SM_ERR` or the evaluator's status). The
-    /// final values are also left in [`LocalSolve1d::curr`].
-    ///
-    /// Without an interval ([`Self::new`]) the Newton steps are not clamped; upstream
-    /// still clamps each against the default inside-out `[1e20, -1e20]` interval (WR-19),
-    /// replacing every step with `±1.584e19` opposite to Newton.
-    pub fn solve_it<E: EvalFunction + ?Sized>(
+    /// [`LocalSolve1d::solve_it`]'s iteration.
+    fn solve<E: EvalFunction + ?Sized>(
         &mut self,
         eval: &mut E,
         guess_t: f64,
-        acceptable_accuracy: f64,
     ) -> Result<SolveOutcome, SolveError<E::Error>> {
         const OP: &str = "geom::local_solve1d::LocalSolve1d::solve_it";
 
-        self.have_lower_bracket = false;
-        self.have_upper_bracket = false;
-        self.lower_bracket_f = -BIG_DOUBLE;
-        self.upper_bracket_f = BIG_DOUBLE;
-        self.iter = 0;
-        self.lower_bound_hits = 0;
-        self.upper_bound_hits = 0;
-        self.max_boundary_hits = 2;
-        self.termination_reason = TerminationReason::UnableToConverge;
-        self.acceptable_accuracy = acceptable_accuracy;
-        self.curr.prev_step = 0.0;
-
         // The initial guess must be within the problem interval (clamped if not).
         let mut guess_t = guess_t;
-        if self.use_interval && !self.interval.contains_value(guess_t, 0.0) {
-            // (upstream only logs SM_ERR_INVALID_INPUT beyond EFF_ZERO_SQRT and goes on)
-            guess_t = self.interval.clamp_value(guess_t);
+        if let Some(ivl) = self.o.domain.interval() {
+            if !ivl.contains_value(guess_t, 0.0) {
+                // (upstream only logs SM_ERR_INVALID_INPUT beyond EFF_ZERO_SQRT and goes on)
+                guess_t = ivl.clamp_value(guess_t);
+            }
         }
 
         // Evaluate at the guess.
-        self.curr.t = guess_t;
+        self.st.curr.t = guess_t;
         let mut found_answer = false;
-        let r = Self::eval_into(eval, &mut self.curr, &mut found_answer, false);
+        let r = Self::eval_into(eval, &mut self.st.curr, &mut found_answer, false);
         if let Err(e) = r {
             if e.ends_solve() {
                 return Err(SolveError::Eval(e));
             }
             // Bad start point: within an interval, tweak it by 1/1000 of the interval.
-            if self.use_interval {
-                let size = self.interval.length();
-                self.curr.t = guess_t + size / 1000.0;
-                if !self.interval.contains_value(self.curr.t, 0.0) {
-                    self.curr.t = guess_t - size / 1000.0;
+            if let Some(ivl) = self.o.domain.interval() {
+                let size = ivl.length();
+                self.st.curr.t = guess_t + size / 1000.0;
+                if !ivl.contains_value(self.st.curr.t, 0.0) {
+                    self.st.curr.t = guess_t - size / 1000.0;
                 }
-                Self::eval_into(eval, &mut self.curr, &mut found_answer, true)
+                Self::eval_into(eval, &mut self.st.curr, &mut found_answer, true)
                     .map_err(|err| eval_failed(err, OP))?;
             } else {
                 // No other start point: the failed evaluation left `curr` with no
@@ -960,44 +1012,44 @@ impl LocalSolve1d {
 
         // Serendipity: the guess is a solution.
         if found_answer {
-            self.found_accuracy = self.curr.f;
-            self.termination_reason = TerminationReason::FoundAnswerConverged;
+            self.st.found_accuracy = Some(self.st.curr.f);
+            self.st.termination_reason = TerminationReason::FoundAnswerConverged;
             return Ok(SolveOutcome {
                 found: true,
-                t: self.curr.t,
+                t: self.st.curr.t,
             });
         }
 
         let mut cut_factor = 1.0;
-        let mut minimum = self.curr.f.abs();
+        let mut minimum = self.st.curr.f.abs();
         let mut min_count: u64 = 0;
         let mut queue = IterQueue1d::new(8);
 
-        self.iter = 0;
-        while self.iter < self.max_iter {
+        self.st.iter = 0;
+        while self.st.iter < self.o.max_iter {
             // Brackets of zero crossings (used for bisection after Newton).
-            if self.curr.f < 0.0 {
-                self.have_lower_bracket = true;
-                if self.curr.f > self.lower_bracket_f {
-                    self.lower_bracket_t = self.curr.t;
-                    self.lower_bracket_f = self.curr.f;
+            if self.st.curr.f < 0.0 {
+                self.st.have_lower_bracket = true;
+                if self.st.curr.f > self.st.lower_bracket_f {
+                    self.st.lower_bracket_t = self.st.curr.t;
+                    self.st.lower_bracket_f = self.st.curr.f;
                 }
             }
-            if self.curr.f > 0.0 {
-                self.have_upper_bracket = true;
-                if self.curr.f < self.upper_bracket_f {
-                    self.upper_bracket_t = self.curr.t;
-                    self.upper_bracket_f = self.curr.f;
+            if self.st.curr.f > 0.0 {
+                self.st.have_upper_bracket = true;
+                if self.st.curr.f < self.st.upper_bracket_f {
+                    self.st.upper_bracket_t = self.st.curr.t;
+                    self.st.upper_bracket_f = self.st.curr.f;
                 }
             }
 
             // Converged.
-            if self.curr.f.abs() < self.desired_accuracy {
-                self.found_accuracy = self.curr.f;
-                self.termination_reason = TerminationReason::FoundAnswerConverged;
+            if self.st.curr.f.abs() < self.o.desired_accuracy {
+                self.st.found_accuracy = Some(self.st.curr.f);
+                self.st.termination_reason = TerminationReason::FoundAnswerConverged;
                 return Ok(SolveOutcome {
                     found: true,
-                    t: self.curr.t,
+                    t: self.st.curr.t,
                 });
             }
 
@@ -1006,14 +1058,18 @@ impl LocalSolve1d {
             }
 
             // f'(t) near zero: use +/-1 to nudge in the right direction.
-            if in_tol(self.curr.f_prime, scaled_zero()) {
-                self.curr.f_prime = if self.curr.f_prime < 0.0 { -1.0 } else { 1.0 };
+            if in_tol(self.st.curr.f_prime, scaled_zero()) {
+                self.st.curr.f_prime = if self.st.curr.f_prime < 0.0 {
+                    -1.0
+                } else {
+                    1.0
+                };
             }
 
             // Newton step, never huge (even 0.10 can be too big).
-            let mut delta_t = -self.curr.f / self.curr.f_prime;
-            if self.use_interval {
-                let mut step_limit = self.interval.length() * 0.08 + EFF_ZERO;
+            let mut delta_t = -self.st.curr.f / self.st.curr.f_prime;
+            if let Some(ivl) = self.o.domain.interval() {
+                let mut step_limit = ivl.length() * 0.08 + EFF_ZERO;
                 if delta_t.abs() > step_limit {
                     step_limit *= 0.99; // just to avoid exact half
                     if delta_t < 0.0 {
@@ -1024,94 +1080,104 @@ impl LocalSolve1d {
             }
 
             // Before giving up, cut the step size and allow 20 more tries.
-            if self.iter > 20 && self.iter >= self.max_iter - 1 {
+            if self.st.iter > 20 && self.st.iter >= self.o.max_iter - 1 {
                 cut_factor *= 0.5;
                 if cut_factor > 0.0001 {
-                    self.iter -= 20;
+                    self.st.iter -= 20;
                 }
             }
 
             delta_t *= cut_factor;
-            let mut new_t = self.curr.t + delta_t;
+            let mut new_t = self.st.curr.t + delta_t;
 
             // The next guess leaves the problem domain.
-            if self.use_interval && !self.interval.contains_value(new_t, 0.0) {
-                if self.is_periodic {
-                    new_t = self.interval.periodic_wrap(new_t);
+            let left = self
+                .o
+                .domain
+                .interval()
+                .filter(|ivl| !ivl.contains_value(new_t, 0.0));
+            if let Some(ivl) = left {
+                if matches!(self.o.domain, Domain1d::Periodic(_)) {
+                    new_t = ivl.periodic_wrap(new_t);
                 } else {
                     // Clamp and count boundary hits; reset the other side's count.
-                    if new_t < self.interval.min() {
-                        new_t = self.interval.min();
-                        self.lower_bound_hits += 1;
-                        self.upper_bound_hits = 0;
-                    } else if new_t > self.interval.max() {
-                        new_t = self.interval.max();
-                        self.upper_bound_hits += 1;
-                        self.lower_bound_hits = 0;
+                    if new_t < ivl.min() {
+                        new_t = ivl.min();
+                        self.st.lower_bound_hits += 1;
+                        self.st.upper_bound_hits = 0;
+                    } else if new_t > ivl.max() {
+                        new_t = ivl.max();
+                        self.st.upper_bound_hits += 1;
+                        self.st.lower_bound_hits = 0;
                     }
-                    if self.lower_bound_hits > self.max_boundary_hits
-                        || self.upper_bound_hits > self.max_boundary_hits
+                    if self.st.lower_bound_hits > MAX_BOUNDARY_HITS
+                        || self.st.upper_bound_hits > MAX_BOUNDARY_HITS
                     {
                         // (upstream also sets rdFoundT = new_t, overwritten below)
-                        self.termination_reason = TerminationReason::OutOfBounds;
+                        self.st.termination_reason = TerminationReason::OutOfBounds;
                         break;
                     }
                 }
             } else {
-                self.lower_bound_hits = 0;
-                self.upper_bound_hits = 0;
+                self.st.lower_bound_hits = 0;
+                self.st.upper_bound_hits = 0;
             }
 
             // Save the last two iterations.
-            self.curr.prev_step = if self.iter > 0 {
-                self.curr.t - self.prev1.t
+            self.st.curr.prev_step = if self.st.iter > 0 {
+                self.st.curr.t - self.st.prev1.t
             } else {
                 0.0
             };
-            self.prev2 = if self.iter > 1 { self.prev1 } else { self.curr };
-            self.prev1 = self.curr;
-            queue.add(&self.prev1);
+            self.st.prev2 = if self.st.iter > 1 {
+                self.st.prev1
+            } else {
+                self.st.curr
+            };
+            self.st.prev1 = self.st.curr;
+            queue.add(&self.st.prev1);
 
             // Evaluate into curr.
-            self.curr.t = new_t;
-            Self::eval_into(eval, &mut self.curr, &mut found_answer, true)
+            self.st.curr.t = new_t;
+            Self::eval_into(eval, &mut self.st.curr, &mut found_answer, true)
                 .map_err(|err| eval_failed(err, OP))?;
 
-            if found_answer || self.curr.f.abs() < self.desired_accuracy {
-                self.found_accuracy = self.curr.f;
-                self.termination_reason = TerminationReason::FoundAnswerConverged;
+            if found_answer || self.st.curr.f.abs() < self.o.desired_accuracy {
+                self.st.found_accuracy = Some(self.st.curr.f);
+                self.st.termination_reason = TerminationReason::FoundAnswerConverged;
                 return Ok(SolveOutcome {
                     found: true,
-                    t: self.curr.t,
+                    t: self.st.curr.t,
                 });
             }
 
             // No decrease for 4 iterations: stuck, try bisection.
-            if self.curr.f.abs() >= minimum {
+            if self.st.curr.f.abs() >= minimum {
                 min_count += 1;
-                if min_count >= 4 && self.curr.f.abs() < self.acceptable_accuracy {
+                if min_count >= 4 && self.st.curr.f.abs() < self.acceptable_accuracy {
                     break;
                 }
             } else {
                 min_count = 0;
-                minimum = self.curr.f.abs();
+                minimum = self.st.curr.f.abs();
             }
 
             // Brent min/max once the extremum is roughly bracketed: curr beats both
             // previous values.
-            if self.algorithm.is_brent() && self.iter > 1 {
-                let maximize = self.algorithm == SolverAlgorithm::BrentMaximize;
+            if self.o.algorithm.is_brent() && self.st.iter > 1 {
+                let maximize = self.o.algorithm == SolverAlgorithm::BrentMaximize;
                 let beats = |a: f64, b: f64| if maximize { a > b } else { a < b };
-                if beats(self.curr.f, self.prev1.f) && beats(self.curr.f, self.prev2.f) {
-                    let mut ext = Extent1d::from_value(self.prev1.t);
-                    ext.add_value(self.prev2.t);
-                    if ext.contains_value(self.curr.t, 0.0) {
-                        let (t, _) = self.solve_by_brent(
+                if beats(self.st.curr.f, self.st.prev1.f) && beats(self.st.curr.f, self.st.prev2.f)
+                {
+                    let mut ext = Extent1d::from_value(self.st.prev1.t);
+                    ext.add_value(self.st.prev2.t);
+                    if ext.contains_value(self.st.curr.t, 0.0) {
+                        let (t, _) = self.o.solve_by_brent(
                             eval,
-                            self.prev1.t,
-                            self.curr.t,
-                            self.prev2.t,
-                            self.desired_accuracy,
+                            self.st.prev1.t,
+                            self.st.curr.t,
+                            self.st.prev2.t,
+                            self.o.desired_accuracy,
                             maximize,
                         )?;
                         return Ok(SolveOutcome { found: true, t });
@@ -1120,67 +1186,69 @@ impl LocalSolve1d {
             }
 
             // Getting larger on the same side of the answer.
-            if self.curr.f.abs() >= self.prev1.f.abs() && self.curr.f * self.prev1.f > 0.0 {
-                if self.curr.f != self.prev1.f
-                    && self.curr.t != self.prev1.t
-                    && self.have_lower_bracket
-                    && self.have_upper_bracket
+            if self.st.curr.f.abs() >= self.st.prev1.f.abs()
+                && self.st.curr.f * self.st.prev1.f > 0.0
+            {
+                if self.st.curr.f != self.st.prev1.f
+                    && self.st.curr.t != self.st.prev1.t
+                    && self.st.have_lower_bracket
+                    && self.st.have_upper_bracket
                 {
                     break; // bracketed: try bisection
                 }
 
                 // The step went to zero: exit with or without a solution.
                 if delta_t.abs() < EFF_ZERO {
-                    let f_mag = self.curr.f.abs();
-                    self.found_accuracy = self.curr.f;
-                    self.termination_reason = self.reason_for(f_mag);
+                    let f_mag = self.st.curr.f.abs();
+                    self.st.found_accuracy = Some(self.st.curr.f);
+                    self.st.termination_reason = self.reason_for(f_mag);
                     return Ok(SolveOutcome {
                         found: f_mag < self.acceptable_accuracy,
-                        t: self.curr.t,
+                        t: self.st.curr.t,
                     });
                 }
             }
-            self.iter += 1;
+            self.st.iter += 1;
         }
 
         // Not converged (iteration limit, out of bounds, or diverging): try
         // bisection on a bracket.
-        if self.have_lower_bracket && self.have_upper_bracket {
-            let r = self.solve_by_bisection(
+        if self.st.have_lower_bracket && self.st.have_upper_bracket {
+            let r = self.o.solve_by_bisection(
                 eval,
                 20,
-                self.lower_bracket_t,
-                self.upper_bracket_t,
-                self.lower_bracket_f,
-                self.upper_bracket_f,
+                self.st.lower_bracket_t,
+                self.st.upper_bracket_t,
+                self.st.lower_bracket_f,
+                self.st.upper_bracket_f,
             );
             if let Some((t, f)) = ignored(r)? {
-                self.curr.t = t;
-                self.curr.f = f;
+                self.st.curr.t = t;
+                self.st.curr.f = f;
             }
         }
 
-        if self.curr.f.abs() < self.acceptable_accuracy {
-            self.found_accuracy = self.curr.f;
-            let f_mag = self.curr.f.abs();
-            self.termination_reason = self.reason_for(f_mag);
+        if self.st.curr.f.abs() < self.acceptable_accuracy {
+            self.st.found_accuracy = Some(self.st.curr.f);
+            let f_mag = self.st.curr.f.abs();
+            self.st.termination_reason = self.reason_for(f_mag);
             return Ok(SolveOutcome {
                 found: true,
-                t: self.curr.t,
+                t: self.st.curr.t,
             });
         }
 
         // Best answer anyway, so that min/max works without convergence.
-        self.found_accuracy = self.curr.f;
+        self.st.found_accuracy = Some(self.st.curr.f);
         Ok(SolveOutcome {
             found: false,
-            t: self.curr.t,
+            t: self.st.curr.t,
         })
     }
 
     /// Termination reason for a final `|F|` of `f_mag`.
     fn reason_for(&self, f_mag: f64) -> TerminationReason {
-        if f_mag < self.desired_accuracy {
+        if f_mag < self.o.desired_accuracy {
             TerminationReason::FoundAnswerConverged
         } else if f_mag < self.acceptable_accuracy {
             TerminationReason::FoundAnswerClose
@@ -1193,6 +1261,18 @@ impl LocalSolve1d {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    impl Run {
+        /// A run that no solve has started: what `solve_oscillating` sees when a test
+        /// sets the iterates by hand. Nothing is accepted short of a found answer.
+        fn fresh(o: LocalSolve1d) -> Self {
+            Self {
+                o,
+                acceptable_accuracy: 0.0,
+                st: Solve1dState::START,
+            }
+        }
+    }
 
     /// The test evaluators' error: the classes the pin's tests use.
     #[derive(Debug, Clone, PartialEq)]
@@ -1292,7 +1372,7 @@ mod tests {
     /// `t^2 - 2`. A good start is unaffected.
     #[test]
     fn failed_first_evaluation_without_interval_has_no_value() {
-        let mut s = LocalSolve1d::new();
+        let s = LocalSolve1d::new();
         let e = s.solve_it(&mut SqFailingAtOne, 1.0, 1e-9).unwrap_err();
         assert!(
             matches!(e, SolveError::Eval(TestErr::Sm("test: no value here"))),
@@ -1320,19 +1400,20 @@ mod tests {
 
     #[test]
     fn newton_sqrt2() {
-        let mut s = LocalSolve1d::with_interval(Extent1d::from_min_max(0.0, 3.0), false);
-        let r = s.solve_it(&mut Sq, 1.0, 1e-9).unwrap();
+        let s = LocalSolve1d::with_interval(Extent1d::from_min_max(0.0, 3.0), false);
+        let (r, st) = s.solve_traced(&mut Sq, 1.0, 1e-9);
+        let r = r.unwrap();
         assert!(r.found);
         assert!((r.t - 2f64.sqrt()).abs() < 1e-10);
         assert_eq!(
-            s.termination_reason(),
+            st.termination_reason,
             TerminationReason::FoundAnswerConverged
         );
     }
 
     #[test]
     fn oscillation_is_resolved() {
-        let mut s = LocalSolve1d::with_interval(Extent1d::from_min_max(-3.0, 3.0), false);
+        let s = LocalSolve1d::with_interval(Extent1d::from_min_max(-3.0, 3.0), false);
         let r = s.solve_it(&mut Cycle, 0.0, 1e-9).unwrap();
         assert!(r.t.is_finite());
     }
@@ -1344,21 +1425,20 @@ mod tests {
     /// there, although `F` is about 0.95 at that parameter.
     #[test]
     fn issue_481_failed_guess_is_no_sign_change() {
-        let mut clean_solver =
-            LocalSolve1d::with_interval(Extent1d::from_min_max(-3.0, 3.0), false);
-        let clean = clean_solver.solve_it(&mut Cycle, 0.0, 1e-9).unwrap();
-        assert!(!clean.found);
+        let s = LocalSolve1d::with_interval(Extent1d::from_min_max(-3.0, 3.0), false);
+        let (clean, clean_st) = s.solve_traced(&mut Cycle, 0.0, 1e-9);
+        assert!(!clean.unwrap().found);
         assert_eq!(
-            clean_solver.termination_reason(),
+            clean_st.termination_reason,
             TerminationReason::UnableToConverge
         );
 
-        let mut s = LocalSolve1d::with_interval(Extent1d::from_min_max(-3.0, 3.0), false);
-        let r = s.solve_it(&mut CycleFailingAtLastGuess, 0.0, 1e-9).unwrap();
+        let (r, st) = s.solve_traced(&mut CycleFailingAtLastGuess, 0.0, 1e-9);
+        let r = r.unwrap();
         assert!(!r.found, "{r:?}");
         assert_ne!(r.t.to_bits(), LAST_GUESS.to_bits());
-        assert_ne!(s.lower_bracket_t.to_bits(), LAST_GUESS.to_bits());
-        assert_eq!(s.termination_reason(), TerminationReason::UnableToConverge);
+        assert_ne!(st.lower_bracket_t.to_bits(), LAST_GUESS.to_bits());
+        assert_eq!(st.termination_reason, TerminationReason::UnableToConverge);
 
         // F really is about 0.95 there.
         let mut out = FunctionValue::default();
@@ -1371,22 +1451,18 @@ mod tests {
     #[test]
     fn failed_guess_does_not_supply_a_sign_change() {
         let interval = Extent1d::from_min_max(-3.0, 3.0);
-        let mut clean_solver = LocalSolve1d::with_interval(interval, false);
-        let clean = clean_solver.solve_it(&mut Cycle, 0.0, 1e-9).unwrap();
+        let solver = LocalSolve1d::with_interval(interval, false);
+        let (clean, clean_st) = solver.solve_traced(&mut Cycle, 0.0, 1e-9);
+        let clean = clean.unwrap();
         assert!(!clean.found);
-        let mut solver = LocalSolve1d::with_interval(interval, false);
-        let result = solver
-            .solve_it(&mut CycleFailingAtLastGuess, 0.0, 1e-9)
-            .unwrap();
+        let (result, st) = solver.solve_traced(&mut CycleFailingAtLastGuess, 0.0, 1e-9);
+        let result = result.unwrap();
         assert!(!result.found);
         assert_eq!(result.t.to_bits(), clean.t.to_bits());
-        assert_eq!(solver.curr.f, clean_solver.curr.f);
-        assert_eq!(
-            solver.termination_reason(),
-            TerminationReason::UnableToConverge
-        );
-        assert_eq!(solver.have_lower_bracket, clean_solver.have_lower_bracket);
-        assert_eq!(solver.have_upper_bracket, clean_solver.have_upper_bracket);
+        assert_eq!(st.curr.f, clean_st.curr.f);
+        assert_eq!(st.termination_reason, TerminationReason::UnableToConverge);
+        assert_eq!(st.have_lower_bracket, clean_st.have_lower_bracket);
+        assert_eq!(st.have_upper_bracket, clean_st.have_upper_bracket);
     }
 
     #[test]
@@ -1411,13 +1487,13 @@ mod tests {
             }
         }
         for failed_value in [0.0, -1.0] {
-            let mut solver = LocalSolve1d::new();
-            solver.prev1 = IterationValue {
+            let mut solver = Run::fresh(LocalSolve1d::new());
+            solver.st.prev1 = IterationValue {
                 t: 0.0,
                 f: 1.0,
                 ..IterationValue::default()
             };
-            solver.curr = IterationValue {
+            solver.st.curr = IterationValue {
                 t: 1.0,
                 f: 2.0,
                 ..IterationValue::default()
@@ -1426,9 +1502,9 @@ mod tests {
                 .solve_oscillating(&mut FailedSamples(failed_value), 0.9)
                 .unwrap();
             assert!(!result.found);
-            assert_eq!(solver.curr.f, result.t * result.t + 1.0);
-            assert!(!solver.have_lower_bracket);
-            assert!(!solver.have_upper_bracket);
+            assert_eq!(solver.st.curr.f, result.t * result.t + 1.0);
+            assert!(!solver.st.have_lower_bracket);
+            assert!(!solver.st.have_upper_bracket);
         }
     }
 
@@ -1453,22 +1529,24 @@ mod tests {
                 Ok(())
             }
         }
-        let mut solver = LocalSolve1d::new();
-        solver.prev1 = IterationValue {
+        let mut solver = Run::fresh(LocalSolve1d {
+            desired_accuracy: 1e-10,
+            ..LocalSolve1d::new()
+        });
+        solver.st.prev1 = IterationValue {
             t: 0.0,
             f: 0.5525,
             ..IterationValue::default()
         };
-        solver.curr = IterationValue {
+        solver.st.curr = IterationValue {
             t: 1.0,
             f: 0.0525,
             ..IterationValue::default()
         };
-        solver.set_desired_accuracy(1e-10);
         let result = solver.solve_oscillating(&mut FailedQuarter, 0.9).unwrap();
         assert!(result.found);
         assert!((result.t - 0.85).abs() < 1e-8);
-        assert!(solver.curr.f.abs() < 1e-10);
+        assert!(solver.st.curr.f.abs() < 1e-10);
     }
 
     #[test]
@@ -1516,7 +1594,7 @@ mod tests {
 
     #[test]
     fn errors() {
-        let mut s = LocalSolve1d::with_interval(Extent1d::from_min_max(0.0, 1.0), false);
+        let s = LocalSolve1d::with_interval(Extent1d::from_min_max(0.0, 1.0), false);
         assert!(matches!(
             s.solve_it(&mut Unp, 0.5, 1e-9),
             Err(SolveError::Eval(TestErr::Unported))
@@ -1568,19 +1646,20 @@ mod tests {
     #[test]
     fn wr19_unbounded_newton_converges_positive_and_negative_roots() {
         // Linear `f(t) = t - 3.0` from `guess_t = 0.0` converges in 1 Newton step.
-        let mut s_lin = LocalSolve1d::new();
+        let s_lin = LocalSolve1d::new();
         let mut eval_lin = RecordingEval::new(|t| (t - 3.0, 1.0));
-        let out_lin = s_lin.solve_it(&mut eval_lin, 0.0, 1e-9).unwrap();
+        let (out_lin, st_lin) = s_lin.solve_traced(&mut eval_lin, 0.0, 1e-9);
+        let out_lin = out_lin.unwrap();
         assert!(out_lin.found);
         assert!((out_lin.t - 3.0).abs() < 1e-12);
         assert_eq!(eval_lin.evaluated_ts, vec![0.0, 3.0]);
         assert_eq!(
-            s_lin.termination_reason(),
+            st_lin.termination_reason,
             TerminationReason::FoundAnswerConverged
         );
 
         // Nonlinear positive root `f(t) = t^3 - 27.0` from `guess_t = 10.0`.
-        let mut s_pos = LocalSolve1d::new();
+        let s_pos = LocalSolve1d::new();
         let mut eval_pos = RecordingEval::new(|t| (t * t * t - 27.0, 3.0 * t * t));
         let out_pos = s_pos.solve_it(&mut eval_pos, 10.0, 1e-9).unwrap();
         assert!(out_pos.found);
@@ -1588,7 +1667,7 @@ mod tests {
         assert!(eval_pos.evaluated_ts.len() <= 10);
 
         // Nonlinear negative root `f(t) = t^3 + 125.0` from `guess_t = -10.0`
-        let mut s_neg = LocalSolve1d::new();
+        let s_neg = LocalSolve1d::new();
         let mut eval_neg = RecordingEval::new(|t| (t * t * t + 125.0, 3.0 * t * t));
         let out_neg = s_neg.solve_it(&mut eval_neg, -10.0, 1e-9).unwrap();
         assert!(out_neg.found);
@@ -1596,7 +1675,7 @@ mod tests {
         assert!(eval_neg.evaluated_ts.len() <= 10);
 
         // Large-scale root `f(t) = t - 1.0e6` from `guess_t = 0.0` without step clamping.
-        let mut s_large = LocalSolve1d::new();
+        let s_large = LocalSolve1d::new();
         let mut eval_large = RecordingEval::new(|t| (t - 1.0e6, 1.0));
         let out_large = s_large.solve_it(&mut eval_large, 0.0, 1e-9).unwrap();
         assert!(out_large.found);
@@ -1613,7 +1692,7 @@ mod tests {
         let expected_clamped_step = (interval.length() * 0.08 + EFF_ZERO) * 0.99;
 
         // Positive step (`delta_t = +9.0 > 0.8` from `guess_t = 0.0`): first step `0.792`.
-        let mut s_on = LocalSolve1d::with_interval(interval, false);
+        let s_on = LocalSolve1d::with_interval(interval, false);
         let mut eval_on = RecordingEval::new(|t| (t - 9.0, 1.0));
         let out_on = s_on.solve_it(&mut eval_on, 0.0, 1e-9).unwrap();
         assert_eq!(eval_on.evaluated_ts[1], expected_clamped_step);
@@ -1622,7 +1701,7 @@ mod tests {
         assert!((out_on.t - 9.0).abs() < 1e-12);
 
         // Negative step (`delta_t = -9.0 < -0.8` from `guess_t = 10.0`): first step `9.208`.
-        let mut s_on_neg = LocalSolve1d::with_interval(interval, false);
+        let s_on_neg = LocalSolve1d::with_interval(interval, false);
         let mut eval_on_neg = RecordingEval::new(|t| (t - 1.0, 1.0));
         let out_on_neg = s_on_neg.solve_it(&mut eval_on_neg, 10.0, 1e-9).unwrap();
         assert_eq!(eval_on_neg.evaluated_ts[1], 10.0 - expected_clamped_step);
@@ -1635,7 +1714,7 @@ mod tests {
     /// steps without an interval.
     #[test]
     fn wr19_failed_first_evaluation_and_valid_start() {
-        let mut s = LocalSolve1d::new();
+        let s = LocalSolve1d::new();
 
         // Failed first evaluation without an interval returns `Err` (WR-253), and a
         // valid start now converges to `sqrt(2)` instead of stepping `-1.584e19` (WR-19).
@@ -1649,7 +1728,7 @@ mod tests {
         assert!((ok.t - 2.0_f64.sqrt()).abs() < 1e-12);
 
         // With an interval, WR-253's rule holds too.
-        let mut s_ivl = LocalSolve1d::with_interval(Extent1d::from_min_max(-3.0, 3.0), false);
+        let s_ivl = LocalSolve1d::with_interval(Extent1d::from_min_max(-3.0, 3.0), false);
         let r_ivl = s_ivl
             .solve_it(&mut CycleFailingAtLastGuess, 0.0, 1e-9)
             .unwrap();
