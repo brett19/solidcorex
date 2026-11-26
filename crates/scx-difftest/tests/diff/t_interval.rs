@@ -215,7 +215,7 @@ diff!(s_ivl_ops, |u: List<I>, v: List<I>, s: usize, e: usize| {
     let f = m::ivs(&v)
         .first()
         .copied()
-        .unwrap_or(m::interval::Ivl::from(0.5));
+        .unwrap_or_else(|| m::interval::Ivl::from(0.5));
     let mut acc = a.clone();
     acc.add_scaled(&b, f, tr);
     let mut from = a.clone();
