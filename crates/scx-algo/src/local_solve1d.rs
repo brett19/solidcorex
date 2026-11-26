@@ -1288,10 +1288,7 @@ mod tests {
         let mut s = LocalSolve1d::new();
         let e = s.solve_it(&mut SqFailingAtOne, 1.0, 1e-9).unwrap_err();
         assert!(
-            matches!(
-                e,
-                SolveError::Eval(TestErr::Sm("test: no value here"))
-            ),
+            matches!(e, SolveError::Eval(TestErr::Sm("test: no value here"))),
             "{e:?}"
         );
 
@@ -1390,7 +1387,12 @@ mod tests {
         struct FailedSamples(f64);
         impl EvalFunction for FailedSamples {
             type Error = TestErr;
-            fn evaluate(&mut self, t: f64, out: &mut FunctionValue, _: bool) -> Result<(), TestErr> {
+            fn evaluate(
+                &mut self,
+                t: f64,
+                out: &mut FunctionValue,
+                _: bool,
+            ) -> Result<(), TestErr> {
                 if [0.25, 0.75, 0.13, 0.38, 0.82, 0.87, 0.01, 0.99].contains(&t) {
                     out.f = self.0;
                     return Err(TestErr::Sm("test: failed interior sample"));
@@ -1428,7 +1430,12 @@ mod tests {
         struct FailedQuarter;
         impl EvalFunction for FailedQuarter {
             type Error = TestErr;
-            fn evaluate(&mut self, t: f64, out: &mut FunctionValue, _: bool) -> Result<(), TestErr> {
+            fn evaluate(
+                &mut self,
+                t: f64,
+                out: &mut FunctionValue,
+                _: bool,
+            ) -> Result<(), TestErr> {
                 if t == 0.25 {
                     *out = FunctionValue::default();
                     return Err(TestErr::Sm("test: failed quarter sample"));
@@ -1627,10 +1634,7 @@ mod tests {
         // valid start now converges to `sqrt(2)` instead of stepping `-1.584e19` (WR-19).
         let err = s.solve_it(&mut SqFailingAtOne, 1.0, 1e-9).unwrap_err();
         assert!(
-            matches!(
-                err,
-                SolveError::Eval(TestErr::Sm("test: no value here"))
-            ),
+            matches!(err, SolveError::Eval(TestErr::Sm("test: no value here"))),
             "{err:?}"
         );
         let ok = s.solve_it(&mut SqFailingAtOne, 1.5, 1e-9).unwrap();

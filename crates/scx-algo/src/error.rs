@@ -172,7 +172,10 @@ impl<E: fmt::Display> fmt::Display for SolveError<E> {
             Self::Failed { operation, failure } => write!(f, "{operation}: {failure}"),
             Self::Num(e) => e.fmt(f),
             Self::CallFailed { operation, cause } => {
-                write!(f, "{operation}: a routine it calls failed; caused by {cause}")
+                write!(
+                    f,
+                    "{operation}: a routine it calls failed; caused by {cause}"
+                )
             }
             Self::Eval(e) => e.fmt(f),
         }
@@ -189,7 +192,9 @@ impl<E> From<NumError> for SolveError<E> {
 
 /// The value of a step whose failure the solver may skip: `Some` on success, `None` on an
 /// [ignorable](SolveError::is_ignorable) error, the error otherwise (solidcore `ignored`).
-pub(crate) fn ignored<T, E: EvalError>(r: Result<T, SolveError<E>>) -> Result<Option<T>, SolveError<E>> {
+pub(crate) fn ignored<T, E: EvalError>(
+    r: Result<T, SolveError<E>>,
+) -> Result<Option<T>, SolveError<E>> {
     match r {
         Ok(v) => Ok(Some(v)),
         Err(e) if !e.is_ignorable() => Err(e),

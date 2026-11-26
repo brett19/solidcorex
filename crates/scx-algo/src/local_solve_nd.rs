@@ -246,10 +246,12 @@ pub fn compute_jacobian<E: EvalNFunctions + ?Sized>(
 
         // evaluate all equations at low and high t -- no Jacobian
         set(x, jj, lo_t, OP)?;
-        eval.evaluate(x, &mut f_lo, None).map_err(SolveError::Eval)?;
+        eval.evaluate(x, &mut f_lo, None)
+            .map_err(SolveError::Eval)?;
 
         set(x, jj, hi_t, OP)?;
-        eval.evaluate(x, &mut f_hi, None).map_err(SolveError::Eval)?;
+        eval.evaluate(x, &mut f_hi, None)
+            .map_err(SolveError::Eval)?;
 
         delta = hi_t - lo_t; // use the actual difference, whatever happened
 
@@ -1018,7 +1020,12 @@ mod tests {
     impl EvalNFunctions for Failing {
         type Error = TestErr;
 
-        fn evaluate(&mut self, _: &[f64], _: &mut [f64], _: Option<&mut Matrix>) -> Result<bool, TestErr> {
+        fn evaluate(
+            &mut self,
+            _: &[f64],
+            _: &mut [f64],
+            _: Option<&mut Matrix>,
+        ) -> Result<bool, TestErr> {
             Err(TestErr::Sm("test"))
         }
     }
@@ -1220,7 +1227,12 @@ mod tests {
     impl EvalNFunctions for Unported {
         type Error = TestErr;
 
-        fn evaluate(&mut self, _: &[f64], _: &mut [f64], _: Option<&mut Matrix>) -> Result<bool, TestErr> {
+        fn evaluate(
+            &mut self,
+            _: &[f64],
+            _: &mut [f64],
+            _: Option<&mut Matrix>,
+        ) -> Result<bool, TestErr> {
             Err(TestErr::Unported)
         }
     }
