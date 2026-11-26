@@ -4,8 +4,8 @@
 // `SmVector2d.h`, `SmCoreTypes.h`, `SmMath.h`, `SmTransform.h` / `src/SmTransform.cpp`, and
 // `smgu_4x4Mult` in `src/SmGeomUtility.cpp`.
 // Changes: `Transform::of_placement` stays in solidcore (it needs `Axis2Placement`); `det3`
-// private; `EFF_ZERO_PARAM` defined from `consts::EPS_PARAM`; `gamma` from `crate::certified`;
-// paths.
+// public (eval and blend use it); `EFF_ZERO_PARAM` defined from `consts::EPS_PARAM`;
+// `gamma` from `crate::certified`; paths.
 //! Small `f64` linear-algebra types: [`Vec3`]/[`Point3`], [`Vec2`]/[`Point2`],
 //! [`Transform`], and the numeric constants of `SmMath.h`.
 //!
@@ -158,7 +158,7 @@ pub fn rad_to_deg(a: f64) -> f64 {
 /// The determinant of the 3×3 matrix of the first three entries of `m`'s rows, expanded
 /// along the first row.
 #[must_use]
-fn det3(m: &[[f64; 4]; 3]) -> f64 {
+pub fn det3(m: &[[f64; 4]; 3]) -> f64 {
     m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
         - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
         + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])

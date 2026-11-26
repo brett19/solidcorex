@@ -773,13 +773,14 @@ mod tests {
             model
         };
         let zone = zone_for_size(model);
-        let mut o = Tolerances::default();
-        o.model_size_estimate = model;
-        o.zone_tol_3d = zone;
-        o.xsect_tol_3d = zone * 2.0;
-        o.approx_tol_3d = zone / 2.0;
-        o.large_small_size_ratio = ratio;
-        o
+        Tolerances {
+            model_size_estimate: model,
+            zone_tol_3d: zone,
+            xsect_tol_3d: zone * 2.0,
+            approx_tol_3d: zone / 2.0,
+            large_small_size_ratio: ratio,
+            ..Tolerances::default()
+        }
     }
 
     #[test]
