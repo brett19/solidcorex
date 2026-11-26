@@ -194,6 +194,9 @@ default member; instrumented by `cargo xtask cov` by default):
 | scx-algo file | from (pin) | lines pin / here | tests pin / here |
 |---|---|---|---|
 | polynomial.rs | geom/polynomial.rs | 362 / 368 | 6 / 6 |
+| local_solve1d.rs | geom/local_solve1d.rs | 1602 / 1652 | 13 / 13 |
+| local_solve_nd.rs | geom/local_solve_nd.rs | 1231 / 1333 | 16 / 15 |
+| error.rs | (new; section 12) | - / 203 | - |
 
 Bit-identical: `bodydiff` finds 17 fns the same, 0 differing; the `Changes:` line is paths only.
 **API:** unchanged and minimal (`Roots` with `new`, `as_slice`, `Deref<[f64]>`;
@@ -212,10 +215,35 @@ tolerance of the f64 pool): **0 mismatches.** Coverage of polynomial.rs under th
 278 of 279 regions; the one left is `Roots::push` when four roots are already stored, which
 no solver reaches (the quartic adds at most four).
 
-**Not moved this step:** `local_solve1d` and `local_solve_nd` (2,833 lines) wait on the
-callback-error design of section 5, which changes their signatures and needs an owner
-look before it is built; `krawczyk` waits on `certificate::inverse4`; `hash_table` is next
-after them. No callback moved, so none is changed.
+**The local solvers** moved with the error design of section 12. `bodydiff`: 1d 30 fns the
+same, 19 differing; nd 29 the same, 19 differing; every difference is named in `Changes:`
+(the error type, `type Error` on the evaluator traits, and the tests' evaluators).
+`tests::tol_scaled_zero_of_equations` is dropped (it tested a kernel tolerance helper, not the
+solver); the bad-Jacobian test is rewritten over `NumError`. Behaviour is otherwise unchanged.
+
+Difftests (`t_solve.rs`, facade in `solvers.rs`), per the owner's condition: both sides run
+the same recording evaluators, whose errors are the pin's own `SolidError` (wrapped as
+`XErr` here); the scx error is mapped one for one onto the pin's (`solve_pin`) and compared
+with its `Display` text, kind, operation, typed failure and cause. Each run also compares
+the evaluator's log (every point evaluated, in order; `signal_errors` or whether a Jacobian
+was asked; whether that call failed) and the solver state after it (iteration counter,
+current and two previous values, brackets, found accuracy, boundary hits, termination
+reason). `*_clean`: every configuration (14 functions incl. a Newton two-cycle, a divergent
+bracketed one, vanishing steps and NaN; 5 intervals incl. periodic; the 4 algorithms;
+`solve_by_brent` both ways; `solve_by_bisection`; 12 equation sets incl. analytic and
+finite-difference Jacobians, a degenerate interval, singular, rootless, triple root;
+3 boundary handlers; step cutting; iteration limits). `*_fail`: a reduced set, failing at
+each call of the clean run in turn (up to 48: first evaluation, Newton steps, oscillation
+guesses, bisection and Brent at the bracket ends, the finite-difference Jacobian's
+evaluations, the scaled candidate, the reevaluation), once and from there on, with each of
+7 classes (Unported, Cancelled, OutOfFuel, PreparationRequired, FaceTrimsUnavailable, an
+upstream code, InvalidInput): over 70,000 runs. Plus the default `evaluate`,
+`compute_jacobian` direct, size mismatches, settings, `IterQueue1d`. **0 mismatches.**
+Coverage under the difftest: local_solve1d 98.26% of regions, local_solve_nd 92.48%
+(the rest are `?` on infallible matrix and clamp calls, and the tiny-step exits), error.rs
+82%.
+
+**Not moved this step:** `krawczyk` waits on `certificate::inverse4`; `hash_table` after.
 
 ## 9. Found, not changed
 
@@ -254,17 +282,17 @@ after them. No callback moved, so none is changed.
 |---|---|---|
 | `cargo xtask fast` (fmt, clippy x2, layers, headers, tier 1, xtask tests) | passed | 2.2 s warm |
 | tier 1 scx-num | 148 unit, 11 enclosure, 10 property, 1 libm table | 0.85 + 0.94 + 0.02 + 0.01 s |
-| tier 1 scx-algo | 6 unit, 5 property | 0.03 s |
-| difftest (`cargo test -p scx-difftest`, dev) | 303 tests, 0 mismatches (the control mismatches as expected) | 2.7 s run, 5.0 s with the check |
+| tier 1 scx-algo | 34 unit, 5 property | 0.03 s |
+| difftest (`cargo test -p scx-difftest`, dev) | 313 tests, 0 mismatches (the control mismatches as expected) | 2.7 s run |
 | wasm32 (`cargo build --target wasm32-unknown-unknown -p scx-num -p scx-algo`) | builds | 0.2 s warm |
-| `cargo xtask movecheck` | pin, layers, headers (41 files, 20 derived), bodydiff, cov: passed | |
-| coverage under the difftest | 10,468 of 10,780 regions (97.11%); scx-num 97.04%; polynomial 99.64% | 4.7 s |
+| `cargo xtask movecheck` | pin, layers, headers (46 files, 22 derived), bodydiff, cov: passed | |
+| coverage under the difftest | 11,937 of 12,321 regions (96.88%), lines 97.60%; local_solve1d 98.26%, local_solve_nd 92.48% | 4.0 s |
 
 ## 11. What remains for `nurbs`
 
 `certificate.rs` (with `inverse4` to `scx-algo` beside Krawczyk), `station.rs`, the `Tay` series
 and `GnAreaCells` move with `blend`/`nurbs`, which need the curve and surface types first. In
-`scx-algo` before `nurbs`: the two local solvers (callback errors), Krawczyk, `hash_table`
+`scx-algo` before `nurbs`: Krawczyk, `hash_table`
 (`&Kernel` to `&Tolerances`). `tree`, `grid`, `solution_array` and `global_solver` need curve
 caches, surfaces and objects, so they wait for those layers or are split there.
 
