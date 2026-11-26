@@ -1,0 +1,15 @@
+[package]
+name = "scx-body-structure"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Design-study prototype: immutable B-rep bodies with cheap edits (research report 51)"
+
+[dependencies]
+
+[profile.release]
+debug = "line-tables-only"
+
+[[bin]]
+name = "body-bench"
+path = "src/bin/body_bench.rs"
