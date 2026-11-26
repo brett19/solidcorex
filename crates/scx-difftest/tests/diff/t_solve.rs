@@ -57,11 +57,21 @@ fn cfgs1(full: bool) -> Vec<Cfg1> {
         levels: 40,
     };
     for func in 0..F1 {
-        let ivls: &[_] = if full { &IVLS } else { &IVLS[..4] };
+        let ivls: &[_] = if full || func == 0 { &IVLS } else { &IVLS[..4] };
         for &ivl in ivls {
-            let algs: &[i32] = if full { &[0, 1, 2, 3] } else { &[0, 3] };
+            let algs: &[i32] = if full || matches!(func, 1 | 9) {
+                &[0, 1, 2, 3]
+            } else {
+                &[0, 3]
+            };
             for &alg in algs {
-                let guesses: &[f64] = if full { &[0.0, 1.0, 2.5] } else { &[1.0] };
+                let guesses: &[f64] = if full {
+                    &[0.0, 1.0, 2.5, 1.2]
+                } else if matches!(func, 1 | 9 | 10) {
+                    &[0.0, 1.0]
+                } else {
+                    &[1.0]
+                };
                 for &guess in guesses {
                     let accs: &[f64] = if full { &[1e-9, 1e-3] } else { &[1e-3] };
                     for &acc in accs {
@@ -256,7 +266,7 @@ fn cfgsn(full: bool) -> Vec<CfgN> {
                     }
                     for cutting in [false, true] {
                         let guesses: &[[f64; 2]] = if full {
-                            &[[0.0, 0.0], [0.5, 0.0], [1.2, -0.7]]
+                            &[[0.0, 0.0], [0.5, 0.0], [1.2, -0.7], [1.0, 4.0]]
                         } else {
                             &[[0.0, 0.0], [0.5, 0.0]]
                         };
@@ -373,4 +383,26 @@ diff!(solve_nd_jacobian, |a: f64, b: f64| {
         out.push((r.map_err(m::sv::pin), x, ja));
     }
     (out, ev.log)
+});
+
+diff!(solve_nd_sizes, |n: usize| {
+    let n = n % 5;
+    let mut out = Vec::new();
+    for (ivl_dim, per_len) in [(2, None), (n, None), (2, Some(n)), (n, Some(1))] {
+        let mut ev = m::sv::RecN::new(0, usize::MAX, false, Class::SmErr);
+        let mut e = m::sv::extent1d::ExtentNd::new(ivl_dim);
+        for i in 0..ivl_dim {
+            if let Some(s) = e.get_mut(i) {
+                *s = m::sv::extent1d::Extent1d::from_min_max(-2.0, 2.0);
+            }
+        }
+        let per = per_len.map(|k| vec![false; k]);
+        let guess = vec![0.25; n];
+        let mut s =
+            m::sv::local_solve_nd::LocalSolveNd::new(&mut ev, Some(&e), per.as_deref());
+        let r = s.solve_it(&guess, 1e-9).map(|o| (o.found, o.x));
+        let code = s.termination_reason().code();
+        out.push((r.map_err(m::sv::pin), code, ev.log.len()));
+    }
+    out
 });

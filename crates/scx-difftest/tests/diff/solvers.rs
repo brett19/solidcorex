@@ -203,12 +203,25 @@ pub fn f1(func: usize, t: f64) -> (f64, f64, bool) {
             let d = 1.0 + t.abs();
             (t / d - 0.5, 1.0 / (d * d), false)
         }
-        _ => (t * t - 2.0, 2.0 * t, (t * t - 2.0).abs() < 1e-3),
+        8 => (t * t - 2.0, 2.0 * t, (t * t - 2.0).abs() < 1e-3),
+        // a reported slope that sends Newton from t to -t: a two-cycle of equal-sign
+        // values around the roots +-0.5
+        9 => {
+            let f = t * t - 0.25;
+            (f, if t == 0.0 { 1.0 } else { f / (2.0 * t) }, false)
+        }
+        // a slope that overshoots below 0.5 and points the wrong way above: diverges
+        // with the root bracketed
+        10 => (t - 0.3, if t < 0.5 { 0.25 } else { -1.0 }, false),
+        // a constant with a huge slope: the Newton step vanishes
+        11 => (1.0, 1e30, false),
+        12 => (2e-4, 1e30, false),
+        _ => (f64::NAN, f64::NAN, false),
     }
 }
 
 /// Number of 1-D test functions.
-pub const F1: usize = 9;
+pub const F1: usize = 14;
 
 /// The N-D test equation sets (two unknowns): values, row-major Jacobian, and whether the
 /// evaluator computes the Jacobian by differences, with which intervals.
@@ -225,12 +238,16 @@ pub fn fn_n(func: usize, x: &[f64]) -> ([f64; 2], [f64; 4]) {
         2 => ([a * a - 1.0, b - 4.0], [2.0 * a, 0.0, 0.0, 1.0]),
         3 => ([10.0 * (b - a * a), 1.0 - a], [-20.0 * a, 10.0, -1.0, 0.0]),
         4 => ([a + b - 1.0, -2.0], [1.0, 1.0, 0.0, 0.0]),
+        // a root of multiplicity three: the steps shrink by a third
+        10 => ([a * a * a, b * b * b], [3.0 * a * a, 0.0, 0.0, 3.0 * b * b]),
+        // no root, and a Jacobian that makes every step vanish
+        11 => ([1.0 + 0.0 * a, b], [1e10, 0.0, 0.0, 1.0]),
         _ => ([a * a + 1.0, b], [2.0 * a, 0.0, 0.0, 1.0]),
     }
 }
 
 /// Number of N-D test equation sets.
-pub const FN: usize = 10;
+pub const FN: usize = 12;
 
 /// `Some(intervals)` when equation set `func` computes its Jacobian by differences.
 pub fn fd(func: usize) -> Option<Option<[[f64; 2]; 2]>> {
