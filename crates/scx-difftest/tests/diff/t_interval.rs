@@ -9,6 +9,11 @@ use crate::harness::List;
 
 type I = [f64; 2];
 
+/// Three intervals from six numbers.
+fn six(a: [f64; 6]) -> [I; 3] {
+    [[a[0], a[1]], [a[2], a[3]], [a[4], a[5]]]
+}
+
 // --- interval
 diff!(i_rounding, |x: f64| (
     m::interval::round_down(x),
@@ -82,10 +87,7 @@ diff!(t_build, |c: List<I>, r: I, p: List<f64>| {
     use m::taylor_model::Tm;
     let t = m::tm(&c, r);
     (
-        Tm::constant(m::iv(r)),
-        Tm::whole(),
-        t,
-        Tm::from_points(&p.0),
+        (Tm::constant(m::iv(r)), Tm::whole(), t, Tm::from_points(&p.0)),
         t.mid_poly(),
         t.with_rem(m::iv(r)),
         t.scale(m::iv(r)),
@@ -119,10 +121,7 @@ diff!(t_scalar_traits, |c: List<I>, r: I, x: f64| {
     use m::taylor_model::Tm;
     let t = m::tm(&c, r);
     (
-        <Tm as Ring>::lift(x),
-        t.sqrt_s(),
-        t.acos_s(),
-        t.sin_cos_s(),
+        (<Tm as Ring>::lift(x), t.sqrt_s(), t.acos_s(), t.sin_cos_s()),
         <Tm as GnScalar>::of(x),
         GnScalar::is_positive(t),
         GnScalar::sqrt(t),
@@ -146,10 +145,7 @@ diff!(s_trunc, |s: usize, e: usize, d: usize, p: usize| {
         let c = t.computing(d, p);
         let k = c.skipping(Trunc::bit(d % 8, p % 6) | Trunc::bit(0, 0));
         (
-            c,
-            k,
-            k.computes(d % 8, p % 6),
-            k.computes(1, 1),
+            (c, k, k.computes(d % 8, p % 6), k.computes(1, 1)),
             t.degree(),
             t.s(),
             t.e(),
@@ -161,10 +157,12 @@ diff!(s_trunc, |s: usize, e: usize, d: usize, p: usize| {
 diff!(s_gn_scalars, |x: f64, a: I| {
     use m::series::GnScalar;
     (
-        <f64 as GnScalar>::of(x),
-        GnScalar::is_positive(x),
-        GnScalar::sqrt(x),
-        <f64 as GnScalar>::JOINT_OFFSET,
+        (
+            <f64 as GnScalar>::of(x),
+            GnScalar::is_positive(x),
+            GnScalar::sqrt(x),
+            <f64 as GnScalar>::JOINT_OFFSET,
+        ),
         <m::interval::Ivl as GnScalar>::of(x),
         GnScalar::is_positive(m::iv(a)),
         GnScalar::sqrt(m::iv(a)),
@@ -182,17 +180,12 @@ diff!(s_f64_ops, |u: List<f64>, v: List<f64>, s: usize, e: usize| {
     let mut merged = b;
     merged.merge_computed(&a, tr.computing(s % 3, e % 2));
     (
-        a.add(&b, tr),
-        a.sub(&b, tr),
-        acc,
-        from,
-        merged,
+        (a.add(&b, tr), a.sub(&b, tr), acc, from, merged),
         a.masked(tr.computing(2, 1)),
         a.scale(f, tr),
         a.mul(&b, tr),
         a.mul_valued(&b, s % 3, e % 2, tr),
-        a.at(s, e),
-        a.at(9, 9),
+        (a.at(s, e), a.at(9, 9)),
     )
 });
 diff!(s_ivl_ops, |u: List<I>, v: List<I>, s: usize, e: usize| {
@@ -206,11 +199,7 @@ diff!(s_ivl_ops, |u: List<I>, v: List<I>, s: usize, e: usize| {
     let mut merged = b.clone();
     merged.merge_computed(&a, tr.computing(s % 3, e % 2));
     (
-        a.add(&b, tr),
-        a.sub(&b, tr),
-        acc,
-        from,
-        merged,
+        (a.add(&b, tr), a.sub(&b, tr), acc, from, merged),
         a.masked(tr.computing(2, 1)),
         a.scale(f, tr),
         a.mul(&b, tr),
@@ -244,9 +233,9 @@ diff!(s_inv_sqrt_positive, |u: List<f64>, s: usize, e: usize| {
     let ai = m::ser(&v.iter().map(|&x| m::interval::Ivl::from(x)).collect::<Vec<_>>(), tr);
     (a.inv_sqrt(tr), ai.inv_sqrt(tr))
 });
-diff!(s_vectors, |a: [f64; 3], p: [I; 3], q: [I; 3], x: I| {
+diff!(s_vectors, |a: [f64; 3], p: [f64; 6], q: [f64; 6], x: I| {
     use m::series::{v_add, v_hull, v_scale, v_sub, V3};
-    let (p, q) = (m::v3i(p), m::v3i(q));
+    let (p, q) = (m::v3i(six(p)), m::v3i(six(q)));
     (
         V3::<f64>::from_vec3(m::v3(a)),
         V3::<m::interval::Ivl>::from_vec3(m::v3(a)),
@@ -266,10 +255,10 @@ diff!(s_vector_series, |u: List<f64>, v: List<f64>, s: usize, e: usize| {
     let k = m::ser(&u.0, tr);
     (a.add(&b, tr), a.sub(&b, tr), b.times(&k, tr), a.dot(&b, tr), a.cross(&b, tr))
 });
-diff!(s_vector_series_ivl, |p: [I; 3], u: List<I>, s: usize, e: usize| {
+diff!(s_vector_series_ivl, |p: [f64; 6], u: List<I>, s: usize, e: usize| {
     use m::series::VSer;
     let tr = m::trunc(s, e);
-    let a = VSer::<m::interval::Ivl>::constant(m::v3i(p));
+    let a = VSer::<m::interval::Ivl>::constant(m::v3i(six(p)));
     let mut b = a.clone();
     b.a[1] = m::ser(&m::ivs(&u), tr);
     let k = m::ser(&m::ivs(&u), tr);
@@ -277,8 +266,8 @@ diff!(s_vector_series_ivl, |p: [I; 3], u: List<I>, s: usize, e: usize| {
 });
 
 // --- interval_vector (scx-num's public functions against the pin's bodies)
-diff!(v_ops, |p: [I; 3], q: [I; 3]| {
-    let (a, b) = (p.map(m::iv), q.map(m::iv));
+diff!(v_ops, |p: [f64; 6], q: [f64; 6]| {
+    let (a, b) = (six(p).map(m::iv), six(q).map(m::iv));
     (
         m::interval_vector::cross(a, b),
         m::interval_vector::dot(a, b),
