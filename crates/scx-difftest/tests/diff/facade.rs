@@ -179,6 +179,18 @@ macro_rules! helpers {
 /// scx-num and scx-algo, by solidcore's module names.
 pub mod x {
     pub use crate::solvers::x as sv;
+    pub use scx_algo::krawczyk;
+    /// A Krawczyk-module error as (class, operation, failure): `solve4`'s singular system.
+    pub fn kz_err(e: &scx_num::NumError) -> (String, &'static str, String) {
+        let f = match e {
+            scx_num::NumError::Failed {
+                failure: scx_num::error::NumFailure::Singular { .. },
+                ..
+            } => "singular".to_string(),
+            other => format!("{other:?}"),
+        };
+        (format!("{:?}", e.kind()), e.operation(), f)
+    }
     pub use scx_algo::polynomial;
     pub use scx_num::tol::Tolerances;
     pub use scx_num::{
@@ -196,6 +208,30 @@ pub mod x {
 /// The pinned solidcore.
 pub mod s {
     pub use crate::solvers::s as sv;
+    /// `geom::krawczyk`'s items are `pub(crate)` at the pin: the pin's file, made public by
+    /// the build script (`build.rs`, `pin_krawczyk`), over the pin's own types.
+    #[allow(clippy::all, clippy::pedantic, dead_code, unused_imports)]
+    pub mod krawczyk {
+        pub use solidcore::blend::fillet_section::certificate::inverse4;
+        use solidcore::blend::fillet_section::interval::{cmax, round_up, Ivl};
+        pub use solidcore::blend::fillet_section::station::solve4;
+        use solidcore::blend::fillet_section::tay::Ring;
+        use solidcore::blend::fillet_section::taylor_model::TmN;
+        use solidcore::error::Result;
+        use solidcore::geom::vector3d::Vec3;
+        include!(concat!(env!("OUT_DIR"), "/pin_krawczyk.rs"));
+    }
+    /// A Krawczyk-module error as (class, operation, failure): `solve4`'s singular system.
+    pub fn kz_err(e: &solidcore::SolidError) -> (String, &'static str, String) {
+        use solidcore::error::blend::{BlendFailure, SectionDegeneracy};
+        let f = match e.blend_failure() {
+            Some(BlendFailure::SectionDegenerate(SectionDegeneracy::NormalsAgree)) => {
+                "singular".to_string()
+            }
+            _ => format!("{e:?}"),
+        };
+        (format!("{:?}", e.kind()), e.operation(), f)
+    }
     pub use solidcore::blend::fillet_section::tay as ring;
     pub use solidcore::blend::fillet_section::{interval, series, taylor_model};
     pub use solidcore::geom::{
