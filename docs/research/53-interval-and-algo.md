@@ -243,7 +243,30 @@ Coverage under the difftest: local_solve1d 98.26% of regions, local_solve_nd 92.
 (the rest are `?` on infallible matrix and clamp calls, and the tiny-step exits), error.rs
 82%.
 
-**Not moved this step:** `krawczyk` waits on `certificate::inverse4`; `hash_table` after.
+**Krawczyk** (`krawczyk.rs`, with `certificate::inverse4` and `station::solve4`/`smax`/`Mat`
+beside it): `krawczyk`, `krawczyk_region` and `newton` are generic over the callbacks' error
+`E`; `solve4`'s singular system is `NumError::failed("blend::fillet_section::station",
+Singular { measure })` in place of the blend's `SectionDegenerate(NormalsAgree)`: same class,
+operation and failing inputs, different `Display` text (by design: the pin's text names the
+blend). Bodydiff: 22 same, 3 differ, 7 only at the pin (the unmoved `station`/`certificate`
+items), 2 only here. The pin's items are `pub(crate)`, so the difftest compares against the
+pin file itself, made public by `scx-difftest`'s build script (`pin_krawczyk.rs`).
+`t_kraw.rs`: `inverse4`/`solve4`, the 2x2/3x3 inverses, `newton` in 2 and 3 unknowns, the
+Krawczyk test in 1 and 2 unknowns, the operator's parts, Taylor-model entries; every callback
+logs its calls and fails at a chosen call with the pin's own error or a `None`, so call counts,
+points, boxes and the whole error are compared at each call position. 0 mismatches;
+`krawczyk_region` and `solve4` fully covered.
+
+**`hash_table`** (`HashTable`, `ObjsInVoxels`): `find_coincident_pairs` takes `&Tolerances` in
+place of `&Kernel` (it read only `xsect_tol3d`); `SolidError::InvalidInput` is
+`NumError::InvalidInput` with the same operation and text; the box corner is read through
+`Extent3d::min()`. Bodydiff: 57 same, 5 differ, all named. `t_hash.rs`: seeded scripts of up to
+160 operations (adds at quantised, often coincident points, with and without the updated
+list; removes; pair searches with limit index, explicit bucket lists past the table and the
+gap histogram; voxel and box queries; resizes), comparing every result, error text and the
+whole model after each step; and 200-step scripts on the bare bucket table. 0 mismatches. The
+uncovered regions are `?` on `place` inside `add` and defensive `break`/`continue` in `remove`
+and the pair walk.
 
 ## 9. Found, not changed
 
@@ -282,18 +305,17 @@ Coverage under the difftest: local_solve1d 98.26% of regions, local_solve_nd 92.
 |---|---|---|
 | `cargo xtask fast` (fmt, clippy x2, layers, headers, tier 1, xtask tests) | passed | 2.2 s warm |
 | tier 1 scx-num | 148 unit, 11 enclosure, 10 property, 1 libm table | 0.85 + 0.94 + 0.02 + 0.01 s |
-| tier 1 scx-algo | 34 unit, 5 property | 0.03 s |
-| difftest (`cargo test -p scx-difftest`, dev) | 313 tests, 0 mismatches (the control mismatches as expected) | 2.7 s run |
+| tier 1 scx-algo | 53 unit, 5 property | 0.03 s |
+| difftest (`cargo test -p scx-difftest`, dev) | 324 tests, 0 mismatches (the control mismatches as expected) | 2.7 s run |
 | wasm32 (`cargo build --target wasm32-unknown-unknown -p scx-num -p scx-algo`) | builds | 0.2 s warm |
-| `cargo xtask movecheck` | pin, layers, headers (46 files, 22 derived), bodydiff, cov: passed | |
-| coverage under the difftest | 11,937 of 12,321 regions (96.88%), lines 97.60%; local_solve1d 98.26%, local_solve_nd 92.48% | 4.0 s |
+| `cargo xtask movecheck` | pin, layers, headers (50 files, 24 derived), bodydiff, cov: passed | |
+| coverage under the difftest | 13,325 of 13,751 regions (96.90%), lines 97.72%; local_solve1d 98.26%, local_solve_nd 92.48%, krawczyk 98.62% | 4.0 s |
 
 ## 11. What remains for `nurbs`
 
 `certificate.rs` (with `inverse4` to `scx-algo` beside Krawczyk), `station.rs`, the `Tay` series
-and `GnAreaCells` move with `blend`/`nurbs`, which need the curve and surface types first. In
-`scx-algo` before `nurbs`: Krawczyk, `hash_table`
-(`&Kernel` to `&Tolerances`). `tree`, `grid`, `solution_array` and `global_solver` need curve
+and `GnAreaCells` move with `blend`/`nurbs`, which need the curve and surface types first. Krawczyk
+and `hash_table` are in `scx-algo` (11-26). `tree`, `grid`, `solution_array` and `global_solver` need curve
 caches, surfaces and objects, so they wait for those layers or are split there.
 
 ## 12. The local solvers' errors (decided by the owner, 2026-11-26)
