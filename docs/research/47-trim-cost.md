@@ -1,6 +1,6 @@
 # 47. What a UV trim costs
 
-Date: 2026-11-26. Base: origin/main `bbb925608b`. A local benchmark with temporary instrumentation. Nothing was pushed upstream and no issue or PR was touched. The scratch commits lived only on server2 side refs, which have been deleted.
+Date: 2026-11-26. Base: origin/main `bbb925608b`. A local benchmark with temporary instrumentation. Nothing was pushed upstream and no issue or PR was touched. The scratch commits lived only on the build server side refs, which have been deleted.
 
 **Labels.**
 - **MEASURED** means the probe measured it on the stated corpus; the precision is given beside it.
@@ -9,7 +9,7 @@ Date: 2026-11-26. Base: origin/main `bbb925608b`. A local benchmark with tempora
 
 **Counts and timings.**
 - Counts (builds, bounds, pieces, calls) are deterministic: they were identical across reps and modes, and are exact.
-- Kernel timings are from server2 (24 cores) at a 1-minute load of 1.0–4.6, below the limit of 8. They are the median of 5 reps after one warm-up. The spread (max/min) of op time was ≤ 1.02 for 74 of 78 scenarios, and ≤ 1.15 for sub-millisecond ops.
+- Kernel timings are from the build server (24 cores) at a 1-minute load of 1.0–4.6, below the limit of 8. They are the median of 5 reps after one warm-up. The spread (max/min) of op time was ≤ 1.02 for 74 of 78 scenarios, and ≤ 1.15 for sub-millisecond ops.
 
 **Profiles.**
 - The app's cost is the **release** number. Release is the root workspace profile the app ships with: opt 3, thin LTO, 16 codegen units. The kernel probe was built with the same flags (`--release --config profile.release.lto="thin" --config profile.release.codegen-units=16`). The app CLI was built in the root workspace with `--release`.

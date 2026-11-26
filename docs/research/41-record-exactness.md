@@ -1,7 +1,7 @@
 # 41: what the B-rep record cannot hold exactly, and why
 
 Scratch branch `cache-recexact-m` (base da240580a4 + the report-39/40 probe + an `ZZ_EXACT` census and
-deviation probe). It is local only and on the server2 side ref only; it was never pushed to GitHub or
+deviation probe). It is local only and on the build server side ref only; it was never pushed to GitHub or
 the fork. Data: `count-kit/41-data/` (`out.jsonl` corpus, `smoke.jsonl`, `an.py`, `an2.py`, `run.sh`).
 Labels: MEASURED (this probe), READ (code/docs/git/issues, with file:line or number), INFERRED.
 
@@ -145,7 +145,7 @@ A surface may also carry a `KeptDefinition` (procedural_blend.rs:1619): Round, C
 
 **Run.**
 - 63 designs (66 ran; 3 fuzz seeds exited rc=1), giving 58 labels with exports.
-- 474 record exports. Total 256 s on server2, one process per design.
+- 474 record exports. Total 256 s on the build server, one process per design.
 - Hook: `body_from_smlib_ordered` → `export_check` (as in 39).
 
 **Faces, 7465 in all** (live kind/definition → written kind (+ nurbs form) → rebuilt kind):
@@ -289,6 +289,4 @@ With exact storage and a copying import, would live and rebuilt be the same obje
 
 ## Cleanup
 
-- The server2 worktree was removed with `xtask worktree-rm`; server logs and temporary files were deleted.
-- The local worktree was removed the same way; the `cache-recexact-m` branch is kept locally (scratch, never committed upstream).
-- `df -h /`: server2 879G, 398G used, 437G free (48%); local 1.7T, 997G used, 643G free (61%).
+Scratch branches, logs and their clean-up are recorded outside this repository.

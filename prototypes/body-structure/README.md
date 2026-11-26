@@ -42,7 +42,6 @@ measured separately (see `docs/research/51-body-structure.md`).
 
 Never build on the workstation: build on a build server with a scratch target directory.
 
-    rsync -a --exclude target ./ server:sc-trash/scx-body/body-structure/
     cargo test  --release --manifest-path .../body-structure/Cargo.toml --target-dir .../target
     cargo run   --release --manifest-path .../body-structure/Cargo.toml --target-dir .../target \
                 --bin body-bench -- all > bench.tsv

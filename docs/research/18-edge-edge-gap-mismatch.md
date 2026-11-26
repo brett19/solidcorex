@@ -1,6 +1,6 @@
 # 18 - edge-to-next-edge gap mismatch, Fillet/open_shell.smb (read-only code investigation)
 
-Tree: sc-wt/cache-a2-gaps, solidcore/crates/solidcore/src (paths below relative to it). Nothing was run.
+Tree: a local worktree of solidcore, solidcore/crates/solidcore/src (paths below relative to it). Nothing was run.
 V = verified in code, I = inferred.
 
 ## Verdict: (a) a real stale cache. (b) is refuted. The write that made it stale is NOT pinned down.

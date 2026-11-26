@@ -1,6 +1,6 @@
 # 32. Why the tight body box costs 70 to 90 s on the vase bodies
 
-Local investigation with temporary instrumentation. Scratch branch `cache-tightbox-probe` from origin/main c2e0ba3f21. Built and run on server2, `--profile goldens`. Nothing was pushed to GitHub or the fork.
+Local investigation with temporary instrumentation. Scratch branch `cache-tightbox-probe` from origin/main c2e0ba3f21. Built and run on the build server, `--profile goldens`. Nothing was pushed to GitHub or the fork.
 
 ## Answer first
 
@@ -33,7 +33,7 @@ So this is not only slow. **On main, the body tight box of vase1, vase2 and vase
   - An optional `/stripped` twin has every UV trim removed and then recreated.
 - Line numbers are those of the probe branch. The lines named in the answer above (p3.rs:1433 and so on) are those of main c2e0ba3f21.
 
-## 1. Timing (MEASURED, server2 under shared load, ±10–15%)
+## 1. Timing (MEASURED, the build server under shared load, ±10–15%)
 
 ### Vase bodies
 
@@ -228,5 +228,3 @@ Callers were not changed.
 
 ## Housekeeping
 
-- Server worktree `sc-wt/cache-tightbox-probe` is kept, as the only worktree. Its build output is trimmed: 3.4 G freed, 392 M left.
-- `df -h /`: server2 has 178G free of 879G (79%); this machine has 344G free of 1.7T (80%).

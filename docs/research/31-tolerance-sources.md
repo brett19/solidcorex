@@ -1,6 +1,6 @@
 # 31 - Where tolerances live: kernel, context, body, entity
 
-Read-only inventory of sc-wt/cache-tree-slot (solidcore main). Paths are relative to
+Read-only inventory of a local worktree (solidcore main). Paths are relative to
 solidcore/crates/solidcore/src (`K/`) unless noted. READ = verified in code; INFERRED = deduced.
 Counts are regex counts over non-test library code (see "Method"); treat them as +-10%.
 

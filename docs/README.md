@@ -2,7 +2,7 @@
 
 Everything known and decided about rearranging solidcore into separate libraries: the plan, the
 decisions, the state of the work it grew from, and the research behind it. Written for whoever picks
-this up next, human or agent. There is no code in this directory yet.
+this up next, human or agent. 
 
 **If you are an agent starting here: read `04-decisions.md` and `05-status.md` before proposing or
 doing anything, then the index in `research/README.md`. Keep these files current as you work:** new
@@ -37,14 +37,14 @@ with the date, who decided, and the evidence; status changes go in `05-status.md
 ## Rules that apply to anything published from this work
 
 - The wish to use threads inside the kernel is never named in an issue, PR, commit or code comment.
-  Each public change stands on a defect it fixes. (These documents are private and may say it.)
+  Each public change stands on a defect it fixes. (This repository may say it.)
 - Investigate and build locally first; publish only objective improvements.
 - Every change is checked for added work, with counts, before it is proposed.
 - No result may move without a derivation; a claim that nothing moves needs an independent review.
 
-## Where things are on disk
+## Where things are
 
-- This directory: `solidcorex/docs`. It is **not under version control**.
-- Raw data, probes, logs and builder briefs: `reports/cache-arch/` (the reports
-  here are copies of the ones there; the data is not copied).
-- Worktrees: `sc-wt/`.
+- This repository: code in `crates/`, `xtask/` and `prototypes/`; these documents in `docs/`.
+- The difftest's pinned solidcore: a read-only checkout at `../sc-wt/scx-pin` beside this repository.
+- Raw data, probes and logs behind the research reports, and anything about the machines the work runs
+  on, are kept outside this repository; the reports here say what was measured and how.

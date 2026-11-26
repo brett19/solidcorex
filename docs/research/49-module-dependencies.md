@@ -6,7 +6,7 @@ the scripts in `49-data/`) or **JUDGED** (my reading; the evidence is given). No
 
 ## 1. What was analysed (MEASURED)
 
-- Source: `sc-wt/cache-leaf-split-2/solidcore/crates/solidcore/src`, branch `cache-leaf-split-2`, commit
+- Source: a local worktree, branch `cache-leaf-split-2`, commit
   `53a7f148562b5c83c8798d6314cbda9060987fdd` ("solidcore: format the normalised evaluation's calls after the rename", 2026-11-25),
   working tree clean (`git status --short` empty). No fetch was done; this is what was checked out.
 - 855 `.rs` files, all reachable from `lib.rs` through `mod` declarations (0 orphans); 32 of them are test-only (38,865 lines).

@@ -1,7 +1,7 @@
 # 09: Whole surface-cache copies: where they come from and how to remove them
 
-Repo `sc-wt/cache-arch` @ 782ef9afc. Paths are relative to `solidcore/crates/solidcore/src`.
-Counts come from `reports/cache-arch/m1-cache-counts-2.log` (probe `tests/zz_cache_count_probe.rs` in `sc-wt/cache-measure`).
+Repo a local worktree @ 782ef9afc. Paths are relative to `solidcore/crates/solidcore/src`.
+Counts come from raw data kept outside this repository (probe `tests/zz_cache_count_probe.rs` in a local worktree).
 
 The counts measured in that log:
 

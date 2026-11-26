@@ -1,6 +1,6 @@
 # 23 Performance follow-up: the three things report 19 left unmeasured
 
-Method as in report 19: temporary counters, scratch commits only (local worktree `sc-wt/cache-perf-x`, branches `cache-perf2-{a0,a1,e0,e1,f0,f1}`, never pushed to GitHub), built `--profile goldens` on server2, tests `--test-threads 1`. Kit: `perf-kit2/` (`zz_probe_counts.rs`, `zz_stale.rs`, `instr_a2.py`, `instr_e2.py`, `instr_f2.py`, probes `zz_perf2_{a,e,ops}_probe.rs`, `mkstate2.sh`, `run-state2.sh`, tables `tab_{a,e,f}.py`; it applies `perf-kit/instr.py` first). Raw logs: `perf-out2/` (`a0 a1 e0 e1 f0 f1 .run1.log` clean counts; `a0/a1 .stale.log` the same tests with the stale classification on; `a1.dump.log` the stale records). Counts were identical in the clean and the classified runs. Timings are indicative only (nothing moved beyond noise: corpus plain read 3.92 s e0 / 3.87-3.97 s e1).
+Method as in report 19: temporary counters, scratch commits only (local a local worktree, branches `cache-perf2-{a0,a1,e0,e1,f0,f1}`, never pushed to GitHub), built `--profile goldens` on the build server, tests `--test-threads 1`. Kit: `perf-kit2/` (`zz_probe_counts.rs`, `zz_stale.rs`, `instr_a2.py`, `instr_e2.py`, `instr_f2.py`, probes `zz_perf2_{a,e,ops}_probe.rs`, `mkstate2.sh`, `run-state2.sh`, tables `tab_{a,e,f}.py`; it applies `perf-kit/instr.py` first). Raw logs: `perf-out2/` (`a0 a1 e0 e1 f0 f1 .run1.log` clean counts; `a0/a1 .stale.log` the same tests with the stale classification on; `a1.dump.log` the stale records). Counts were identical in the clean and the classified runs. Timings are indicative only (nothing moved beyond noise: corpus plain read 3.92 s e0 / 3.87-3.97 s e1).
 
 States: A a4fba8af9c (a0) -> 8e0a9595dd (a1); F 5b1dc25542 (f0) -> 1562e5f516 (f1); E merge-base b039c29b90 (e0) -> b3358de953 (e1, head of cache-b3-lend).
 
@@ -111,4 +111,5 @@ Judgement: making the scan lazy (scan on the second lend of a face) would remove
 - E: peak memory; scan time is a wall-clock sum with a clock per scan (about 1 us of the measured 0.4-0.6 us may be clock overhead); the Boolean rows are the kernel API on 49 scenarios, not the ops layer.
 
 ## Scratch state left
-Server worktree `sc-wt/cache-perf2-x`, its branch, its `bin` build output, the side refs `push/cache-perf2-*` and the logs/scripts under `~/cache-perf2-*` removed (`cargo xtask rm bin/*` then `git worktree remove`; `df -h /`: server2 76 % used, 204 G free; main machine `/` 47 % used, 885 G free). Remaining: local worktree `sc-wt/cache-perf-x` (no build output; branches `cache-perf-*` from report 19 and `cache-perf2-{a0,a1,e0,e1,f0,f1}`, never pushed to GitHub), `perf-kit2/`, `perf-out2/`. Nothing on GitHub touched.
+
+Scratch branches, logs and their clean-up are recorded outside this repository.

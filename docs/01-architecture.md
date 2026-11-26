@@ -2,7 +2,7 @@
 
 A design proposal for a fork of solidcore, rearranged into separate libraries. Not a schedule; nothing
 here is started. Numbers are measurements of solidcore as of 2026-11-26 (private reports 19 to 47 under
-`reports/cache-arch/`) unless marked as judgement.
+the raw data (kept outside this repository)) unless marked as judgement.
 
 ## 0. What is wrong today, in one place
 

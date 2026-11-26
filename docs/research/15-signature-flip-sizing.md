@@ -1,6 +1,6 @@
 # Signature-flip sizing: which callees force `&mut Brep` on four read entry points
 
-Method: flip an entry point to `&Brep`, `cargo check -p solidcore --lib` on server2, read the errors, push `&` one
+Method: flip an entry point to `&Brep`, `cargo check -p solidcore --lib` on the build server, read the errors, push `&` one
 level down into each errored callee, repeat. Final state of every tree is on branch `cache-size-probe` (tags
 `e1-done`, `e2-done`, `e3-done`; the work is cumulative). Check time per round about 30 s (warm), 30 rounds in all.
 
@@ -136,5 +136,5 @@ Needed on a body for E1/E2/E4 reads to write nothing: every edgeuse has its UV t
 
 ## State
 
-Local worktree `sc-wt/cache-size-probe`, branch `cache-size-probe` (about 31 local scratch commits "probe rN", tags
-base, e1-done, e2-done, e3-done), never pushed to fork/origin; side ref `push/cache-size-probe` on server2's sc-main. Server worktree removed (see final message).
+Local a local worktree, branch `cache-size-probe` (about 31 local scratch commits "probe rN", tags
+base, e1-done, e2-done, e3-done), never pushed to fork/origin; side ref `push/cache-size-probe` on the build server's solidcore clone. Server worktree removed (see final message).

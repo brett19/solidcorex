@@ -2,7 +2,7 @@
 
 2026-11-22, on `origin/main` 782ef9afc. Replaces plan v3, which its adversarial review
 (`plan-v3-review.md`) sent back as "rethink". Built from that review, the Boolean study
-(`07-boolean-gather-apply.md`) and four measurement runs on server2 (logs `m4-*`, `m5-*`, `m1-*`).
+(`07-boolean-gather-apply.md`) and four measurement runs on the build server (logs `m4-*`, `m5-*`, `m1-*`).
 
 Private note: the end goal is correctness first, then performance and maintainability, and a kernel
 that work inside one operation can later be spread over threads. No threading is added here and none

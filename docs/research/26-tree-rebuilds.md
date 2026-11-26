@@ -7,8 +7,8 @@ This is a scratch investigation. Nothing here was committed to a PR branch or pu
 head" are the same kernel code for this question: one measurement covers both (READ). The PR branch
 `cache-b3-lend` (`b3358de953`) is an older main plus the same change. I did not measure the kernel before #21019.
 
-**Setup.** Scratch worktree `sc-wt/cache-cls-count`, branch `cache-tree-why`: report 25's 4 scratch commits, then 5
-more. Built on server2 with `sc-slot.sh` (`--profile goldens`, `CARGO_PROFILE_GOLDENS_DEBUG=line-tables-only` so the
+**Setup.** Scratch a local worktree, branch `cache-tree-why`: report 25's 4 scratch commits, then 5
+more. Built on the build server (`--profile goldens`, `CARGO_PROFILE_GOLDENS_DEBUG=line-tables-only` so the
 backtraces carry file:line). The built test binary ran under `nice` with `--test-threads 1`.
 
 **Raw logs** (`logs/`):
@@ -19,7 +19,7 @@ backtraces carry file:line). The built test binary ran under `nice` with `--test
 - `26-proto-eq-A.log` and `26-proto-eq-B.log`: the bit-for-bit comparisons.
 
 **Labels and timings.** Every claim is labelled MEASURED, READ or INFERRED. Counts are exact. Times are indicative
-only: server2 ran at load 27-30 on 24 threads throughout, and the same cell varies up to 1.7x between runs. So every
+only: the build server ran at load 27-30 on 24 threads throughout, and the same cell varies up to 1.7x between runs. So every
 timing comparison below is between main and the prototype **in the same run**, one after the other.
 
 ## 0. Answers first

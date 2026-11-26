@@ -1,6 +1,6 @@
 # 03 — Kernel ambient state and existing threading
 
-Read-only investigation of `sc-wt/cache-arch` at `782ef9afc`. Nothing was built or run; every claim comes from reading source.
+Read-only investigation of a local worktree at `782ef9afc`. Nothing was built or run; every claim comes from reading source.
 
 **Path shorthand.** `K/` = `solidcore/crates/solidcore/src/`, `OPS/` = `solidcore/crates/solidcore-ops/src/`, `TESS/` = `solidcore/crates/solidcore-tess/src/`. App-side files (`crates/…`, `.agents/…`) are outside the worktree's sparse checkout and were read with `git show HEAD:<path>`.
 

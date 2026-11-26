@@ -2,7 +2,7 @@
 
 Design `fins_joined_into_their_hub`, the 8-face body from Thicken1 (hash 9790652661782265372).
 Live volume 278.1046829948353; rebuilt from its record 278.1045515436817 (relative 4.7e-7).
-Probe: scratch branch `cache-finsvol-m` (off `cache-massreload-m`), run on server2. Raw output is in
+Probe: scratch branch `cache-finsvol-m` (off `cache-massreload-m`), run on the build server. Raw output is in
 `count-kit/40-data/fins.jsonl`. Labels: MEASURED (this probe or 39's data), READ (code), INFERRED.
 
 ## Cause
@@ -92,5 +92,5 @@ hold. Such a body's measured properties change within tolerance on reload, and i
 change by far more than tolerance (0.5 mm here). Either compare cached mass values with a tolerance
 scaled by face tolerance × area, or make the record carry the offset definition.
 
-Scratch: branch `cache-finsvol-m` (local and the server2 side ref only; never pushed to GitHub or
-the fork). The server2 worktree has been removed.
+Scratch: branch `cache-finsvol-m` (local and the build server side ref only; never pushed to GitHub or
+the fork). The build-server worktree has been removed.

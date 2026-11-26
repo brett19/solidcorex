@@ -1,8 +1,8 @@
 # 37. Why the app's record round trip loses UV trims, and what carrying them would take
 
-Date: 2026-11-24. Base: `da240580a4` plus the scratch probe of report 36. Local investigation only: nothing pushed upstream or to the fork, no issue, PR or comment touched. Scratch branch `cache-rectrims-m` (local worktree `sc-wt/cache-rectrims-m`, no build output; the server worktree, branch and side ref were removed).
+Date: 2026-11-24. Base: `da240580a4` plus the scratch probe of report 36. Local investigation only: nothing pushed upstream or to the fork, no issue, PR or comment touched. Scratch branch `cache-rectrims-m` (local a local worktree, no build output; the server worktree, branch and side ref were removed).
 
-Labels: MEASURED = counted by the probe on the 63-design corpus of report 36. READ = read from the code (file:line in the unprobed tree `sc-wt/cache-bodies-m`). INFERRED = drawn from the two.
+Labels: MEASURED = counted by the probe on the 63-design corpus of report 36. READ = read from the code (file:line in the unprobed tree a local worktree). INFERRED = drawn from the two.
 
 Units. "SMLib edge use" is what the probe counts: every face edge has two (one per side of the face) and the pair shares one trim, so trims BUILT = half the edge uses lacking one. A "record use" is one oriented edge of the stored record (one per pair). Counts are exact and the same on every run; times are indicative (shared server; this run's bound time was 12.1 s where report 36 saw 15.5 s).
 
@@ -155,4 +155,3 @@ Per source (MEASURED, this run; report 36's 15.5 s was the same counts on a busi
 - "Call frame" is the top two probe frames; rebuilds happen outside any frame, so they are not attributed to a caller.
 - Not examined: the structure mismatch in 1 of 462; healed (untrusted) records; non-unit plane axes; carried answers beyond topology counts (the three designs that fail in the app fail in both runs, errors alike); wall-clock gains.
 - The corpus is mostly small regression parts (as in report 36), so absolute build counts will not carry to large assemblies; the plane share (90% of builds, 99.8% of lost trims) is the portable result.
-- Disk (`df -h /`) after cleanup: server2 879G, 599G used, 236G free (72%); local 1.7T, 87% used, 225G free. The server worktree was removed with `cargo xtask worktree-rm`; the local scratch worktree `sc-wt/cache-rectrims-m` is kept without build output.

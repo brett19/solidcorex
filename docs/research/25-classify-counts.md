@@ -1,8 +1,8 @@
 # 25 — Point classification, bounds and ray queries: measured counts (settles U1-U9 of report 24)
 
 Scratch measurement, nothing committed or pushed. Base: origin/main 562396937b (includes #21107). Scratch worktree
-`sc-wt/cache-cls-count` (local, branch `cache-cls-count`, 3 scratch commits) and the same on server2. Built and run on
-server2 through `sc-slot.sh` (`--profile goldens`, one run per cell, shared machine: times are indicative only).
+a local worktree (local, branch `cache-cls-count`, 3 scratch commits) and the same on the build server. Built and run on
+the build server (`--profile goldens`, one run per cell, shared machine: times are indicative only).
 Raw logs: `logs/25-cls-per_call.log` (846 rows), `logs/25-cls-c2.log` (629 comparisons), `logs/25-cls-repeated.log`.
 Marks: MEASURED unless stated.
 
@@ -212,7 +212,4 @@ Time of the `BrepCache` build alone was not measured (count only).
 
 ## 8. Scratch state
 
-Local: worktree `sc-wt/cache-cls-count`, branch `cache-cls-count` (3 scratch commits, never pushed to
-GitHub; also pushed as side ref `push/cache-cls-count` to the server's `sc-main` clone). Server: worktree removed (below), its side ref and branch remain in
-`sc-main`, logs `~/cls-*.log` in the server's home. Local copies of the logs: `reports/cache-arch/logs/25-cls-*.log`.
-Task `cache-cls-count` registered with `sc-task`.
+Scratch branches, logs and their clean-up are recorded outside this repository.

@@ -1,7 +1,7 @@
 # 53. Interval arithmetic into `scx-num`, and `scx-algo`
 
 Written for solidcorex. This covers solidcore at the pin 03e16c9ee766de5b9b1ced845e5149d62ff493b8 (read-only at
-`sc-wt/scx-pin`) and solidcorex `main` from 3e868cb onwards. Builds and tests ran on server2.
+`../sc-wt/scx-pin`) and solidcorex `main` from 3e868cb onwards. Builds and tests ran on the build server.
 Trust: counts, coverage and differential results are MEASURED; soundness arguments are argued here and
 tested, not machine-proved; cuts and rulings are JUDGED.
 
@@ -166,9 +166,6 @@ Each its own commit:
     (they are public at the pin; making them private changes every caller) is a design question for the
     owner.
 
-Reviewer leftovers on server2, listed rather than removed (no `rm -rf`): `scx-review-3e868cb`
-(a registered git worktree: `git worktree remove` would take it), `scx-review`,
-`/tmp/scxbreak-1`.
 
 ## 7. Heat
 
@@ -299,7 +296,7 @@ and the pair walk.
      refinement; the quadratic has no clustered-root defect found).
 3. The libm dependence of section 3.
 
-## 10. Test counts and timings (server2, final)
+## 10. Test counts and timings (the build server, final)
 
 | check | result | wall |
 |---|---|---|

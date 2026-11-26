@@ -88,8 +88,8 @@ cache miss that is re-evaluated (solidcore `docs/native-brep.md`).
   result change that a 49-unit run reported as clean (research 43).
 - **Checkpoints with stop conditions.** For example: if the first operation crate cannot match the old
   kernel on the corpus within a set effort, reassess before moving the next.
-- **Machine discipline.** Build output filled a disk quota and blocked all work once; scratch build
-  directories need an owner and a clean-up rule.
+- **Machine discipline.** Scratch build directories need an owner and a clean-up rule; unowned build
+  output once filled a disk and blocked all work.
 
 ## 8. Worth measuring before committing
 

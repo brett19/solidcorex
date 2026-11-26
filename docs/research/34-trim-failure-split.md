@@ -2,9 +2,9 @@
 
 Local measurement only. Nothing was pushed to GitHub or the fork, nothing was filed or commented.
 - Base: `zz-tree-slot-s` (it has the per-test, thread-local switch `zz_lazy::set` and counters; `zz-lazytrim` has process-wide statics). It descends from `zz-lazytrim` (variant L's acceptance and the item-1 Line-on-Plane carry).
-- Branch `cache-trimsplit-a` (local, worktree `sc-wt/cache-trimsplit-a`, head 50a78ecab7); server side ref `push/cache-trimsplit-a`, server worktree of the same name (build output trimmed).
-- Labels: MEASURED (counted on server2), READ (from the code, file:line), INFERRED (reasoned).
-- Raw logs and the classifier: `reports/cache-arch/scratch34/` (`ts-*.log` one line per trim, `an.py`).
+- Branch `cache-trimsplit-a` (local, a local worktree, head 50a78ecab7); server side ref `push/cache-trimsplit-a`, server worktree of the same name (build output trimmed).
+- Labels: MEASURED (counted on the build server), READ (from the code, file:line), INFERRED (reasoned).
+- Raw logs and the classifier: kept outside this repository (`ts-*.log` one line per trim, `an.py`).
 - Code of the probe (all scratch, gated behind the probe's own calls): `solidcore/src/zz_split.rs`, hooks in `topology/edgeuse/p3.rs`, test `solidcore-convert/tests/zz_split_probe.rs`.
 
 ## Answer
@@ -25,7 +25,7 @@ The main finding is not in that table. The fitter's target tolerance (`fit_toler
 
 ## Method (MEASURED)
 
-Corpus: the prototype's set, 5 primitives, 47 Boolean scenarios, 11 fillet/offset/shell/sweep/revolve bodies, 28 corpus files (26 distinct: blade_hub_1 = cliff_1 and blade_hub_2 = cliff_2, dropped as duplicates), record round trips of the kernel bodies; each as built and with every stored trim stripped. Rows: 10,967 distinct (label, variant, edge use pair). Each edge use pair is measured once (a trim serves an edge use and its mate). Stripped: 5,485 trims; as built: the stored ones (analysed as `Stored`) and the missing ones (as `Accepted` or a refusal). All with the lazy switch on (item-1 carry), per test thread. Serial per test, four test processes in parallel on server2.
+Corpus: the prototype's set, 5 primitives, 47 Boolean scenarios, 11 fillet/offset/shell/sweep/revolve bodies, 28 corpus files (26 distinct: blade_hub_1 = cliff_1 and blade_hub_2 = cliff_2, dropped as duplicates), record round trips of the kernel bodies; each as built and with every stored trim stripped. Rows: 10,967 distinct (label, variant, edge use pair). Each edge use pair is measured once (a trim serves an edge use and its mate). Stripped: 5,485 trims; as built: the stored ones (analysed as `Stored`) and the missing ones (as `Accepted` or a refusal). All with the lazy switch on (item-1 carry), per test thread. Serial per test, four test processes in parallel on the build server.
 
 Per trim, the probe (`zz_split::probe_eu`):
 1. Builds the trim as `lazy_uv_trim_curve` does (`build_lazy_trim`, Lazy mode, acceptance bound with enough = over = L). The outcome is Accepted, BoundExceeds, NoCertifiedBound, or a write refusal (FitLoosened, IntervalRecovery, BruteForce).
@@ -171,4 +171,3 @@ Net (INFERRED): the common UV point could be had from vertex plus surface for a 
 - Seam, pole and crease flags are heuristics; they were false on all 24 failing trims, so the SINGULAR class is empty by that test, not proved empty.
 - Not measured: trims in bodies outside this variant set, the stage-2 reads, the cost of a refit on main.
 
-Disk: server2 `df -h /` after trimming: 235 GB free (72% used); local 265 GB free (84% used). Build output of the server worktree trimmed (387 MB left); the local worktree has no build output.

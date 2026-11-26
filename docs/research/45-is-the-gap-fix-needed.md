@@ -13,7 +13,7 @@ Modes:
 - 3: variant (ii), fix only where an end lies outside the vertex tolerance.
 - 4: variant (iii), the tree implants a fixed copy and the body is put back.
 
-The goldens are all 283 units, run forwards with `--profile goldens` on server2.
+The goldens are all 283 units, run forwards with `--profile goldens` on the build server.
 
 ## Answer
 

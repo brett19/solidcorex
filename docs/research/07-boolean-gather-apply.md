@@ -1,6 +1,6 @@
 # 07 — The Boolean as gather / apply: what one operation's plan really costs
 
-Read-only study on 782ef9afc (`sc-wt/cache-arch`). Nothing was built or run.
+Read-only study on 782ef9afc (a local worktree). Nothing was built or run.
 Paths are relative to `solidcore/crates/solidcore/src` unless they start with `OPS/` (`solidcore/crates/solidcore-ops/src`).
 
 Evidence marks:

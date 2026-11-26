@@ -3,12 +3,12 @@
 Local prototype and measurement only. Nothing was pushed to GitHub or the fork, and nothing was filed or commented.
 
 - Branch: `cache-fitbudget-a`, local, off `cache-trimsplit-a` (50a78ecab7). Head: 145b456b8d.
-- Server side ref: `push/cache-fitbudget-a`. Server worktree: `sc-wt/cache-trimsplit-a`, reset to that ref.
-- Labels: MEASURED (counted on server2), READ (from the code), INFERRED (reasoned).
+- Server side ref: `push/cache-fitbudget-a`. Server worktree: a local worktree, reset to that ref.
+- Labels: MEASURED (counted on the build server), READ (from the code), INFERRED (reasoned).
 - Raw logs are in `scratch35/`:
   - `t35-full.log`: the full run, 298 body variants, 674 s.
   - `t35-diag.log`: the rerun with refusal diagnostics. It hit the 30-minute cap at 271 of 298 variants because the tight-G timing is slow.
-- Golden logs are on server2 at `sc-wt/g35-<unit>-<base|T>.log`.
+- Golden logs are on the build server at a local worktree.
 
 ## Verdict
 
@@ -165,7 +165,7 @@ No pass is needed for vertex consistency.
 - **shell_cyl.** Analytic area 798π = 2506.990938. Main 2506.990840, T 2506.990840 (they differ by 4.7e-9). The integration error dominates, so the two cannot be told apart.
 - **slot_through_holes.** Area differs by 2e-13 relative.
 
-## (f) Cost (MEASURED, full run, wall time per test thread on server2, 6 threads)
+## (f) Cost (MEASURED, full run, wall time per test thread on the build server, 6 threads)
 
 **Excluding variable_round.**
 - Main's creation takes 38.4 s; T takes 125.5 s (3.3x).

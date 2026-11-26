@@ -1,6 +1,6 @@
 # 38. Why 1,275 of 2,104 bodies are intermediate
 
-Base `da240580a4`. Probe: report 36's scratch probe (commits `2808b8d737`, `b264bd9d3a`, `0eb6d15fcf`) plus one scratch commit `e1e9a0dea3` (local branch `cache-whybodies-m`, never pushed to GitHub or the fork). Run: server2, 69 processes (the report-36 corpus: 63 designs with bodies), `SOLIDCRAFT_NO_MODEL_CACHE=1`, no counterfactual builds. Data, runner and scripts: `count-kit/38-data/` (`bodies.jsonl.gz`, `run.log`, `run.sh`, `why.py`, `fate.py`).
+Base `da240580a4`. Probe: report 36's scratch probe (commits `2808b8d737`, `b264bd9d3a`, `0eb6d15fcf`) plus one scratch commit `e1e9a0dea3` (local branch `cache-whybodies-m`, never pushed to GitHub or the fork). Run: the build server, 69 processes (the report-36 corpus: 63 designs with bodies), `SOLIDCRAFT_NO_MODEL_CACHE=1`, no counterfactual builds. Data, runner and scripts: `count-kit/38-data/` (`bodies.jsonl.gz`, `run.log`, `run.sh`, `why.py`, `fate.py`).
 
 Labels: **MEASURED** means from this run's logs. **READ** means from the code at the base commit. **INFERRED** means reasoned from both.
 

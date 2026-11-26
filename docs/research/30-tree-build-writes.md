@@ -2,7 +2,7 @@
 
 Labels: **MEASURED** (probe output), **READ** (from code), **INFERRED** (reasoning on the two).
 
-Scratch only. Worktree `sc-wt/cache-tree-slot-probe`, branch `zz-tree-slot-probe`, side ref `push/cache-tree-slot-probe-3` (`ed0b8f5d3a`). Run on server2 in 176 s. Nothing is on the `cache-tree-slot` branch and nothing was pushed to the fork.
+Scratch only. A local worktree, branch `zz-tree-slot-probe`, side ref `push/cache-tree-slot-probe-3` (`ed0b8f5d3a`). Run on the build server in 176 s. Nothing is on the `cache-tree-slot` branch and nothing was pushed to the fork.
 
 ## Method
 
@@ -190,12 +190,12 @@ If (B) cannot be made sound (a stamp-keyed reader inside the bracket), fall back
 
 ## Evidence files
 
-- probe log: `/tmp/claude-zzv-full.log` (main box)
-- analysis scripts: `sc-trash/zzv/an.py`, `sc-trash/zzv/an2.py`
+- probe log: a local log (main box)
+- analysis scripts: scratch space on the build server, scratch space on the build server
 
 ## Tolerance creep (scratch measurement)
 
-Scratch branch `zz-tree-slot-s`, side ref `push/cache-tree-slot-probe-7` (`d3233d30f7`). Run on server2: 6 tests, all ok, 436 s. Nothing was pushed to the fork.
+Scratch branch `zz-tree-slot-s`, side ref `push/cache-tree-slot-probe-7` (`d3233d30f7`). Run on the build server: 6 tests, all ok, 436 s. Nothing was pushed to the fork.
 
 ### Method
 
@@ -344,11 +344,11 @@ On these chains settle converged in at most two rounds every time:
 - (b) with round trip reports 115 "unlogged" changes. These are value changes seen by the snapshot but not by the log. They are likely ids renumbered by `from_record`, not writes. Unverified.
 - Proofs: 4 steps on blade_hub_1 do not prove, and vase1 never proves (`Unsupported`). This is the same in main and S.
 
-Evidence: run log `/tmp/claude-zzt-run.log` (main box); scripts `sc-trash/zzv/patch_tol.py` (the instrumentation) and `sc-trash/zzv/an_tol.py`.
+Evidence: run log a local log (main box); scripts scratch space on the build server (the instrumentation) and scratch space on the build server.
 
 ## 5. Design S (scratch measurement)
 
-The run is complete: 24 shards, all ok, in 4024 s on server2. 298 variant-states, plus 10 skipped as unbuildable. Branch `zz-tree-slot-s`, side ref probe-7 (`d3233d30f7`). Log: `/tmp/claude-zzs-full.log`. Comparisons: M0 = main on the raw body in its own lazy order; MS = main on the settled body; S = design S.
+The run is complete: 24 shards, all ok, in 4024 s on the build server. 298 variant-states, plus 10 skipped as unbuildable. Branch `zz-tree-slot-s`, side ref probe-7 (`d3233d30f7`). Log: a local log. Comparisons: M0 = main on the raw body in its own lazy order; MS = main on the settled body; S = design S.
 
 **1. Read-only tree vs main's second-pass tree (MEASURED).**
 - 2640 of 2644 faces have the same hash, and 0 differ.
@@ -445,7 +445,7 @@ S still builds trees and copies in the scratch prototype, through families not y
 
 ### 6.0 Clean rerun of section 5 (MEASURED)
 
-The rerun was at probe-9: per-test switches and counters, the edge and vertex radial sectors routed (6.2), and the read-only global solve off on the read path. 298 variant-states. Log: `/tmp/claude-zzs3-full.log`.
+The rerun was at probe-9: per-test switches and counters, the edge and vertex radial sectors routed (6.2), and the read-only global solve off on the read path. 298 variant-states. Log: a local log.
 
 - **Tree:** 2640 of 2644 faces are the same and 0 differ. The 4 refusals are the `sphere_tangent_box_union` face, because this read path had the read-only solve off. With it on (6.1), 2644 of 2644 are the same.
 - **Bodies:** every body was still settled after its reads, and the twins were equal.
@@ -639,7 +639,7 @@ This is the full zz_s and zz_s4 run at scratch probe-11, which keeps the body bo
 - The 28 cls and 34 ray `REFUSE:Tree` on `sphere_tangent_box_union` are gone.
 - Idempotence 298 of 298; order 596 of 596; every body converged (274 in one round, 24 in two).
 
-**Read phase as in 6.0 (M0 against S).** Server2 was more loaded than in 6.0, so compare within this run only.
+**Read phase as in 6.0 (M0 against S).** The build server was more loaded than in 6.0, so compare within this run only.
 - main 694 s, main again 719 s.
 - S 525 s, S again 47.5 s.
 

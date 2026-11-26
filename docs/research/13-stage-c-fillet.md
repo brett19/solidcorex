@@ -1,6 +1,6 @@
 # 13. Stage C study: the fillet (constant and variable radius rounds, with their corners)
 
-2026-11-22, read-only, on `782ef9afc` (worktree `sc-wt/cache-arch`). This study uses the method and vocabulary of
+2026-11-22, read-only, on `782ef9afc` (a local worktree). This study uses the method and vocabulary of
 report 07 (Boolean gather/apply): P preparable, R requestable, C coupled, S scratch; a prepared view; a phase table
 with no key; typed requests; the fulfil loop; a kernel per worker.
 

@@ -271,27 +271,8 @@ Checks on a copy, which never warm anything a later pass reads:
 - `solidcore-ops/src/blend.rs:2330`: copy
 
 ## (c) Branch and scratch state
-Branch `cache-c3-check-gaps` (both machines, `sc-wt/cache-c3-check-gaps`; the server copy is at fc3ea32243 and lacks the last commit). Commits:
-- 8865da5c27: empty claim commit, the only commit on the fork (draft PR #21106).
-- ec60509eaf "wip: check-owned gap table":
-  - `CheckGaps` (heal/gap.rs) and the stamped field `Brep::check_gaps` with `with_check_gaps` / `check_gaps` / `check_gaps_mut` (topology.rs)
-  - cache accessors, store helpers and reset helpers for the four caches (vertexuse.rs, edgeuse/p1.rs), with the calculators storing through them
-  - notify and `set_uv_trim_curve` also reset the table entries (edgeuse/p2.rs, p1.rs)
-  - the readers in vertex.rs `read_gap`, face/p4.rs and assert_valid/brep.rs read through the accessors
-  - query/face/p2.rs `apply_gap_updates` copies the table back
-  - `validate_and_update` (validate-only), `check_with_keys_counted` and `assert_valid_with` run under `with_check_gaps`
-  - update mode is unchanged
-- fc3ea32243 "wip tests": `a_check_leaves_the_gap_caches_as_it_found_them` and `a_check_computes_a_stored_gap_afresh` in tests/issue_1419_brep_check.rs. Both fail on main's source and pass on this head.
-- 2d1af8dba2 (local only): `fit_tolerance` caches into the check's table under a check.
 
-Results on this head: clippy `--all-targets -D warnings` clean on ec60509eaf, panic sites pass. Goldens forwards, on 17 units: 0 changed. The units were topology.assert_valid, brep_validation, edgeuse_p1-3, vertexuse, vertex, edge and brep_mirror; corpus.parity; boolean.api_brep; heal.stitch_p1; primitive.api_primitives; query.face_p3; offset.offset_executive_p2; blend.fillet_executive_p1 and p3. The reverse run passed its first 10 units unchanged and was then stopped.
-
-Scratch worktree `sc-wt/cache-c3-scratch` (local; the server has the same path, detached at side ref push/cache-c3-scratch-9). It is never pushed to the fork, and the tree is clean. Branches:
-- `cache-c3-scratch` (on main): 73cbe10f79 probe, then sites, report hash, the sequence probe and the Level 0 probe (head 61c5b7602e)
-- `cache-c3-scratch2` (on fc3ea32243): the probe ported, the fit_tolerance edit, the warm toggle, the sequences and Level 0 (head 631e40f067)
-- `c3-revert-test`: main plus the new test file (e82c8c1418), for the revert run
-
-Probe test: `tests/zz_check_gap_probe.rs`, with a scratch-only `[[test]]` entry. It runs `zz_check_gap_probe` (sites, cached against fresh, two checks), `zz_sequences` and `zz_level0`.
+Scratch branches, logs and their clean-up are recorded outside this repository.
 
 ## 3. The stale vertex/face gap finding
 - Reproduction: no kernel operation left the cache stale. The test set it by hand, on `ap::create_box(k, origin(), 1.0, 2.0, 3.0)`:

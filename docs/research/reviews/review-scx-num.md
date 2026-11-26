@@ -1,12 +1,12 @@
 # Review: scx-num (layer 0) and the workspace skeleton, up to 3e868cb
 
 Independent review of the move of solidcore layer 0 into `crates/scx-num`, checked against the pin
-`03e16c9ee766de5b9b1ced845e5149d62ff493b8` (`sc-wt/scx-pin`). Scope: the workspace skeleton
+`03e16c9ee766de5b9b1ced845e5149d62ff493b8` (`../sc-wt/scx-pin`). Scope: the workspace skeleton
 (`Cargo.toml`, `xtask/`, lints, `README.md`, `LICENSE`, `NOTICE`), `crates/scx-num`,
 `crates/scx-difftest`, and report `docs/research/52-num-move.md`, read as claims. Every file was
 read from an export of commit 3e868cb, not from the working tree, because a second builder was
-changing that tree during the review. Runs were on server2, in a worktree at 3e868cb
-(`scx-review-3e868cb`).
+changing that tree during the review. Runs were on the build server, in a worktree at 3e868cb
+(a review worktree).
 
 **Verdict: PASS WITH FIXES.** There is no blocker. The code is a faithful move:
 - No function body differs at the pin apart from paths, error names and the `&Kernel` to
@@ -123,7 +123,7 @@ Nothing left behind is something that layer 0 needs, and nothing moved needs a h
 
 ## 3. Harness
 
-**It runs.** On server2, `cargo test -p scx-difftest` passes 267 tests:
+**It runs.** On the build server, `cargo test -p scx-difftest` passes 267 tests:
 - 265 diffs with 0 mismatches;
 - 2 controls.
 
@@ -189,7 +189,7 @@ the f64 fields of the failure by bits.
 - `from_matrix` is new and unit-tested.
 
 **SHOULD-FIX: nothing checks the pin commit.** `scx-difftest/Cargo.toml:15` is a path dependency on
-`../../../sc-wt/scx-pin/...`, and the commit appears only in a comment. On server2 the worktree is
+`../../../sc-wt/scx-pin/...`, and the commit appears only in a comment. On the build server the worktree is
 at 03e16c9e and clean, which I checked by hand. If someone moves or dirties it, the difftest
 compares against a different solidcore and still reports PASS. Either:
 - add a `build.rs` that reads that worktree's HEAD with `git rev-parse` and `git status
@@ -260,8 +260,8 @@ I tried to break each check.
 
 **`layers`** has holes:
 - **SHOULD-FIX: dependencies outside the workspace are not checked.** `xtask/src/main.rs:179`
-  checks only dependencies whose names are workspace members. I demonstrated this on server2 in a
-  scratch copy (`/tmp/scxbreak-1`). I added
+  checks only dependencies whose names are workspace members. I demonstrated this on the build server in a
+  scratch copy (a local log). I added
   `solidcore = { path = ".../sc-wt/scx-pin/solidcore/crates/solidcore" }` to
   `crates/scx-num/Cargo.toml`, and **`cargo xtask layers` printed "layers: 3 crates in order"**.
 
@@ -337,10 +337,9 @@ Weak spots (NIT):
 - The `contains_*` checks skip inputs within 1e-6 of a side. That excludes exactly the
   tolerance boundaries noted in §3; the difftest has to cover them.
 
-## 7. Runs on server2
+## 7. Runs on the build server
 
-All runs used `sc-slot`, `SC_BG=1` and `nice -n 10`, at 3e868cb. Logs are in
-`scx-review/logs/`.
+All runs were at 3e868cb, at low priority on a shared build server.
 
 | Step | Result | Wall time |
 |---|---|---|

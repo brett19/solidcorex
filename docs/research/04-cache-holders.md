@@ -1,6 +1,6 @@
 # 04 — Cache holders and consumers
 
-Checkout: `sc-wt/cache-arch` at 782ef9afc. Paths are relative to `solidcore/crates/solidcore/src`.
+Checkout: a local worktree at 782ef9afc. Paths are relative to `solidcore/crates/solidcore/src`.
 Read-only investigation by grep and line-range reads; nothing was built or run.
 Anything inferred from the code but not confirmed by following every path is marked **UNVERIFIED**.
 Counts come from grep and exclude `#[cfg(test)] mod` tails and `*_tests.rs`; treat them as ±10%.

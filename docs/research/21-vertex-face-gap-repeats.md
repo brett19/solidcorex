@@ -1,8 +1,8 @@
 # Vertex/face gap repeats inside one `check_brep`: are they redundant?
 
 Date 2026-11-23. Measurement only, temporary counters on main b039c29b90 in the scratch worktree
-`sc-wt/cache-vfgap-scratch` (branch `cache-vfgap-scratch`, local plus one side ref on the server, never on
-the fork, no PR or issue touched). Raw logs: `/tmp/vfgap-run4.log` (main box) and `~/vfgap-run4.log` on server2; the probe
+a local worktree (branch `cache-vfgap-scratch`, local plus one side ref on the server, never on
+the fork, no PR or issue touched). Raw logs are kept outside this repository; the probe
 test is `solidcore/crates/solidcore/tests/zz_vfgap_probe.rs`.
 
 ## Plain statement
@@ -229,6 +229,4 @@ and `assert_valid/brep.rs:376-378` read it without a refresh call).
 
 ## Scratch state left
 
-- Local: worktree `sc-wt/cache-vfgap-scratch`, branch `cache-vfgap-scratch` (5 local commits, the count kit applied, never pushed
-  to fork or origin), and the side ref on the server's sc-main `push/cache-vfgap-scratch`. Nothing in the main clone changed (`git worktree add` only).
-- Server: the worktree is removed (see the hand-back); logs `~/vfgap-run1.log` to `~/vfgap-run5.log` remain in the home directory.
+Scratch branches, logs and their clean-up are recorded outside this repository.

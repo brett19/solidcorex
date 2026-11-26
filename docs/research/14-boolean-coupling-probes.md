@@ -1,6 +1,6 @@
 # 14: Boolean coupling probes (local, never pushed)
 
-Worktree `sc-wt/cache-measure` (branch `cache-measure`). Crate `solidcore/crates/solidcore`.
+A local worktree (branch `cache-measure`). Crate `solidcore/crates/solidcore`.
 Nothing here has been compiled: by instruction, no builds were run while writing it.
 
 ## Run

@@ -1,6 +1,6 @@
 # 01 - Geometry-side caches (Surface, Curve, nurbs/)
 
-Checkout: `sc-wt/cache-arch` at 782ef9afc. Paths are relative to `solidcore/crates/solidcore/src`.
+Checkout: a local worktree at 782ef9afc. Paths are relative to `solidcore/crates/solidcore/src`.
 Read-only investigation by grep and line-range reads; nothing was built or run. Anything not confirmed in code is marked **UNVERIFIED**.
 
 Classification used throughout:

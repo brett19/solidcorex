@@ -31,6 +31,7 @@ it replaces.
 | 11-26 | solidcore is pinned; the pin moves only deliberately | "pin the solid core right now, we can iteratively increase that pin later" | Pinned at 03e16c9ee7 (main, 2026-11-26); `06-licence-and-source.md` |
 | 11-26 | Apache-2.0 throughout | "Apache 2 throughout" | Code may be moved from solidcore with its notices and derivation headers; no MIT offer. `06-licence-and-source.md` |
 | 11-26 | Profiling tools, new Rust versions and Rust tooling may be installed | "You can install tools for profiling, or new rust versions or it's tooling." | Read as: on the machines already in use; not general system packages |
+| 11-26 | solidcorex is published publicly at github.com/brett19/solidcorex; the work is public, the environment is not | "Publish publicly, but let's move details that aren't at all about solidcorex, but rather are about our environment outside the solidcorex directory, we want to be public about the work in solidcorex, but private about our own environement-specific details." | Machines, logins, local paths, local branches, logs and clean-up are kept outside this repository. Threading may be named here. The published history is rewritten to drop the same details from old commits |
 
 ## 2. Decided elsewhere, and binding on this work
 

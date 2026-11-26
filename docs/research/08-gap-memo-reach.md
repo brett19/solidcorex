@@ -1,6 +1,6 @@
 # 08 — Can an operation reach a stale gap memo?
 
-Source: `sc-wt/cache-arch` at 782ef9afc. Paths are relative to
+Source: a local worktree at 782ef9afc. Paths are relative to
 `solidcore/crates/solidcore/src` unless they start with `solidcore-ops/` or `solidcore-convert/`.
 Nothing was built or run. "Verified" means I read the code at the cited lines; "inferred" means
 I read one side of the link, or the condition that makes it fire could not be established by
@@ -228,7 +228,7 @@ is wrong by more than a tolerance.
 ## 4. Reproduction
 
 Added `probe_8_stale_gap_reached_by_an_operation` (and helpers) at the end of
-`sc-wt/cache-measure/solidcore/crates/solidcore/tests/zz_cache_history_probe.rs`.
+a local worktree.
 Not built, not run.
 
 For each of four bodies (`ball_less_corner`, `bar_into_post`, new `crossed_cylinders`, new

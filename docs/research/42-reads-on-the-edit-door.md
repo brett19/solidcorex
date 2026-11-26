@@ -1,9 +1,9 @@
 # 42: reads on the edit door
 
 Date: 2026-11-25. Base: origin/main `b57f0e0323`. Nothing pushed to GitHub or the fork, nothing filed.
-Scratch branches (local and on the server2 side refs only): `cache-reads23-probe` (the compile walk,
+Scratch branches (local and on the build server side refs only): `cache-reads23-probe` (the compile walk,
 commits "probe r0" to "probe r12") and `cache-reads23-measure` (the measuring probe). Server worktree:
-`sc-wt/cache-reads23-probe`, trimmed with `sc-trim-bin.sh`.
+a local worktree, trimmed with `sc-trim-bin.sh`.
 Raw data: `scratch42/measure3.log`, probe source `scratch42/zz_reads_probe.rs`, walk tools
 `scratch42/{flip.py,round.sh,graph.py}`.
 
@@ -167,7 +167,7 @@ moves 6 entry points to READY. With 2 it makes about 23 of the 32 READY.
 ## 6. What was built
 
 Nothing on `cache-reads23`: no entry point is class (i). The scratch branches hold only probe code
-(`zz_leaf` stubs, the `ZZ_DIRECT` switch, `write_stamps` made pub). They stay local and on the server2
+(`zz_leaf` stubs, the `ZZ_DIRECT` switch, `write_stamps` made pub). They stay local and on the build server
 side refs `push/cache-reads23-probe` and `push/cache-reads23-measure`.
 
 ## 7. Limits

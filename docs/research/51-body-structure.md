@@ -8,11 +8,11 @@ What does solidcore do today, and how much of a body does each kind of operation
 section 8. READ: read from source. INFERRED: reasoned from the two.
 
 **Where the numbers come from.**
-- solidcore numbers come from a scratch probe on server2. The tree is solidcore main e3b1b2dbb6, and
+- solidcore numbers come from a scratch probe on the build server. The tree is solidcore main e3b1b2dbb6, and
   the probe is a test file that was never committed.
 - Prototype numbers come from `prototypes/body-structure/`, written from scratch with std only. No
   solidcore code is in it.
-- Times are wall-clock on server2 under `nice 10`, release build, single thread. Read the times as
+- Times are wall-clock on the build server under `nice 10`, release build, single thread. Read the times as
   ratios. The bytes are exact.
 
 ## Summary
@@ -101,7 +101,7 @@ cylinder_spline_rims.step are in `51-data/solidcore-probe.tsv`.
 - **Attributes are small.** Bodies built by Booleans carry about 3-10 KB; the others carry none.
 - **The app corpus is small (MEASURED, research 36 data):** 2,104 bodies, a median of 8 faces, a
   mean of 15, a p90 of 36, a p99 of 94 and a maximum of 123.
-- **No large STEP part was measured.** The public NIST set could not be fetched: server2 has no
+- **No large STEP part was measured.** The public NIST set could not be fetched: the build server has no
   `unzip`, and the rules forbid installing packages. The largest STEP regression,
   `rod_doubled_edge.step`, gave no body through `Body::from_record`. Bodies of 10,000 faces or more
   are therefore covered only by the prototype. This is an open risk (section 7).
@@ -433,13 +433,11 @@ pub enum Origin { FromEdge(EdgeId), FromVertex(VertexId), FromFace(OperandFace),
 
 ## 8. How to rerun
 
-- **Prototype** (std only; about 2 minutes on server2):
+- **Prototype** (std only; about 2 minutes on the build server):
 
-      rsync -a --exclude target prototypes/body-structure/ server2:sc-trash/scx-body/body-structure/
-      SC_BG=1 coord/sc-slot.sh scx-body nice -n 10 cargo test --release \
-          --manifest-path sc-trash/scx-body/body-structure/Cargo.toml --target-dir sc-trash/scx-body/target
-      SC_BG=1 coord/sc-slot.sh scx-body nice -n 10 cargo run --release --bin body-bench \
-          --manifest-path ... --target-dir ... -- all > prototype-bench.tsv
+      cargo test --release --manifest-path prototypes/body-structure/Cargo.toml
+      cargo run --release --manifest-path prototypes/body-structure/Cargo.toml --bin body-bench \
+          -- all > prototype-bench.tsv
 
   The output is `51-data/prototype-bench.tsv`, with a header per section. Its `shared_frac` column
   is 1 - (bytes retained by the new body) / (bytes of the old body).
@@ -447,7 +445,7 @@ pub enum Origin { FromEdge(EdgeId), FromVertex(VertexId), FromFace(OperandFace),
   - Take a scratch worktree of solidcore main (e3b1b2dbb6) with `upstream` linked.
   - In `crates/solidcore-step/Cargo.toml`, change `unsafe_code` from forbid to deny, for the counting
     allocator.
-  - Place the probe at `crates/solidcore-step/tests/scx_body_probe.rs`. It is kept only on server2
+  - Place the probe at `crates/solidcore-step/tests/scx_body_probe.rs`. It is kept only on the build server
     and was never committed (the licence position forbids copying solidcore-adjacent code into this
     repository).
   - Run it with `SCX_OUT=dir SCX_STEP=a.step,b.step`, plus optionally `SCX_ONLY=sizes,copies,untouched`.

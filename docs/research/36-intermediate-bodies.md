@@ -23,7 +23,7 @@ Labels: MEASURED means counted by the probe on the corpus below. READ means read
 
 ## What was driven, and what was not
 
-- **MEASURED.** The driver was `solidcraft-cli run` with `SOLIDCRAFT_NO_MODEL_CACHE=1`, one process per design, through the release CLI built on server2. This is option (1) of the brief: app regeneration of real designs. The inputs were:
+- **MEASURED.** The driver was `solidcraft-cli run` with `SOLIDCRAFT_NO_MODEL_CACHE=1`, one process per design, through the release CLI built on the build server. This is option (1) of the brief: app regeneration of real designs. The inputs were:
   - 10 action-matrix JSON recipes;
   - 37 regression recipes from `examples/regressions`;
   - 2 acceptance recipes;
@@ -196,8 +196,5 @@ Per feature kind (MEASURED; the tag is the feature being evaluated on that threa
   - `probe.patch`: the scratch instrumentation; never commit it.
 - `count-kit/zz_bodies_agg.py`: the aggregator. The fate split in section 1 was refined beyond that script by a one-off pass that sorts dropped bodies by which calls touched them.
 
-Disk (`df -h /`) at hand-back:
-- server2: 879G, 579G used, 256G free (70%).
-- local: 1.7T, 1.4T used, 294G free (83%).
 
-The server worktree, its branch and its push ref were removed, and the server `/tmp` logs deleted. The local scratch worktree `sc-wt/cache-bodies-m` was kept; it has no build output.
+The server worktree, its branch and its push ref were removed, and the server `/tmp` logs deleted. The local scratch a local worktree was kept; it has no build output.

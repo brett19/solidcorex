@@ -1,6 +1,6 @@
 # 22. Where the first `check_brep` time goes (blade_hub_1 / blade_hub_3 / cliff_1)
 
-Measured on server2 (`--profile goldens`), scratch worktree `cache-chk1-time` (branch `cache-chk1-time`, off
+Measured on the build server (`--profile goldens`), scratch worktree `cache-chk1-time` (branch `cache-chk1-time`, off
 `cache-vfgap-scratch` f5cb999796). Nothing here is committed to a PR branch or pushed to GitHub.
 Counts are exact. Timings are indicative (shared server, load 3 to 6; spans-on runs cost about 5 to 8% more than
 spans-off runs: blade_hub_1 L2 check 1 is 3.69 s spans off, 3.84 to 4.0 s spans on).
@@ -233,11 +233,4 @@ each; there are 306,508 of them (193,214 pieces + 113,294 new endpoints).
 
 ## 7. Scratch state added (nothing removed from the existing scratch worktree)
 
-Local: worktree `sc-wt/cache-chk1-time`, branch `cache-chk1-time` (7 local commits on top of
-f5cb999796; never pushed to GitHub). Server2: worktree `sc-wt/cache-chk1-time` (branch `cache-chk1-time`,
-refreshed from side ref `push/cache-chk1-time` in `sc-main`), with its own `solidcore/bin` (copied from
-`cache-vfgap-scratch` and rebuilt, about 3.4 GB), logs `~/chk1-build.log`, `~/chk1-ph1..ph7.log`,
-`~/chk1-time1.log`, `~/chk1-use1.log`, `~/chk1-ph6.log`. The `cache-vfgap-scratch` worktrees, local and on
-server2, are untouched. To rerun: `CHK_SCEN=<substring> CHK_RUNS=5 cargo test --profile goldens -p solidcore
---test zz_chk1_probe -- --nocapture --test-threads 1 zz_chk_phases|zz_chk_timing|zz_chk_firstuse` through the slot
-wrapper (`CHK_SLOWN`, `CHK_SLOWONLY` select the slow-call list).
+Scratch branches, logs and their clean-up are recorded outside this repository.

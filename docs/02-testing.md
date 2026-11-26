@@ -1,7 +1,7 @@
 # solidcorex: testing
 
-How a fork would prove it works as fast as possible. A design proposal. The time the current suites
-take end to end has not been measured, so claims about speed here are about structure, not numbers.
+How a fork would prove it works as fast as possible. A design proposal. The goldens' size and run time
+were measured on 2026-11-25 (section 1.1); the other suites' times were not.
 
 ## 1. What the golden runs cost today
 
@@ -19,6 +19,24 @@ effort on every results-changing change went into rows where nothing a user coul
 
 They are also coarse about meaning: a run of 49 chosen units reported "nothing moved" for a change that
 did move a point by 2e-6. It took all 283 to see it.
+
+### 1.1 Measured, 2026-11-25 (solidcore main d476017e2)
+
+- **Size.** 283 units, 591,833 golden rows (168 MB in `expected/`), plus 302 known-failing cases in 12
+  units that run but are not compared. About 381k rows (64%) are seeded generated cases. 3,356 rows record
+  an error as the expected result and 189 a rejected input.
+- **Mostly hashed.** About 206M numbers are recorded; about 200M (97%) only as per-256-entry block sums,
+  which a non-finite entry makes uninformative (solidcraft #17001: 117 of 141 real changes invisible).
+- **Time.** CI (16 vCPU): 4 min 15 s for every unit, after about 3 min building the binary from cache.
+  Serial: 74 to 81 CPU-minutes (`reports/goldens/times.tsv` from two worktrees). 163 units take under a
+  second; the 20 slowest take 70% (`blend.fillet_executive_p3` 350 to 550 s, `intersect.curve_class_p4`
+  190 to 340 s, `blend.feature_executive` about 300 s).
+- **Churn.** In the month to 11-25, 265 of 2,921 commits changed `expected/` (+646k / -53k lines). The
+  cost is the bless, justify and review cycle and the rebase conflicts, not the run.
+- **No oracle.** The goldens were seeded from Rust's output on 2026-11-06, when the C++ comparison was
+  removed (#2816). They bless invalid bodies (#14676, #17716), and some generators redraw inputs until
+  the kernel accepts them (#15395). The cases with real expected answers (`--solidcraft-cases`,
+  `--ssi-corpus`) are report-only, not gated.
 
 ## 2. Principle
 
@@ -118,6 +136,6 @@ The existing goldens encode behaviour nobody wrote a property for. Convert, do n
 
 ## 11. Not known
 
-- How long the current suites take, by tier.
-- How many cases the 283 units hold, and how many have an analytic answer.
+- How long the suites other than the goldens take, by tier (the goldens: section 1.1).
+- How many of the 591,833 golden rows have an analytic answer.
 - How much of the kernel no test reaches.

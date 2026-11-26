@@ -1,7 +1,7 @@
 # 24 — Stage C: point classification and ray queries on a body held by shared reference
 
 Read-only study, same method and vocabulary as report 07. Code read: worktree
-`sc-wt/cache-chk-trims-once` (main at 21699e974a plus an unrelated validation change). Paths are
+a local worktree (main at 21699e974a plus an unrelated validation change). Paths are
 relative to `solidcore/crates/solidcore/src`; `OPS/` = `solidcore/crates/solidcore-ops/src`.
 Marks: **[V]** read in code for this report, **[A]** taken from an earlier report or PR body,
 **[I]** inferred, not checked line by line.

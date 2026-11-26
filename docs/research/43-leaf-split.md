@@ -4,7 +4,7 @@ Branch `cache-leaf-split` (local only, from main `dd955acde5`), five commits:
 `4aee8129ce` (the split), `1e1f9429fe` (unused imports), `c81dbcf933` (shared borrows at calls clippy flagged;
 options by value), `6531c0bcda` (named bindings, fmt of three golden units) and, after the independent review
 (`reviews/review-leaf-split.md`), `a2bbe62eed` (two-stage read in upstream's order, one mutable helper at every
-site, contract tests). Server2 side refs `push/cache-leaf-split-1` .. `-5` (tip `-5`). Scratch, never on the
+site, contract tests). Build-server side refs `push/cache-leaf-split-1` .. `-5` (tip `-5`). Scratch, never on the
 branch: `push/cache-leaf-split-m2` (instrumented main), `-mb2` (instrumented `4aee8129ce`) and `-mc1`
 (instrumented `a2bbe62eed`, interval edits).
 
@@ -110,7 +110,7 @@ goldens run, 2.0e-6 in the edge point. `a2bbe62eed` removes it by restoring upst
     because the function took `&mut`. No app crate or solidcore-tess/-convert calls the binormal.
   - The lazy form is deleted.
 
-## 2. No result moved (MEASURED, server2, `--profile goldens`)
+## 2. No result moved (MEASURED, the build server, `--profile goldens`)
 
 - **Goldens.** 49 units, forwards and `--reverse`: 98 of 98 `PASS changed=0 added=0 removed=0 broken=0`. The
   units: all 25 blend, all 8 boolean, corpus.parity, heal.stitch_p1/p2, mass.integrator, all 3 offset,
@@ -269,7 +269,7 @@ Commits on local `cache-leaf-split-2`, based on `cache-leaf-split` 6531c0bcda:
 - `a8fd01bdfa` merge of `cache-leaf-split` a2bbe62eed (no rebase), which takes the binormal's shape;
 - `53a7f14856` rustfmt.
 
-Server2 ref: `push/cache-leaf-split-2-4`.
+Build-server ref: `push/cache-leaf-split-2-4`.
 
 - `normalized_evaluate(k, &Brep, eu, t, parameter_space, want_first_deriv, uv_trim_required)` is the
   shared form.
@@ -292,7 +292,7 @@ Server2 ref: `push/cache-leaf-split-2-4`.
   `true` to `false`, which has no effect.
 - No callers in ops, convert, tess or the app crates. The lazy form is gone.
 
-### 6.2 No result moved (MEASURED, server2, `--profile goldens`, at a8fd01bdfa; 53a7f14856 is fmt only)
+### 6.2 No result moved (MEASURED, the build server, `--profile goldens`, at a8fd01bdfa; 53a7f14856 is fmt only)
 
 - **Goldens:** all 283 units, forwards and `--reverse`: 283 passed, every line changed=0 added=0
   removed=0 broken=0. The same held at 2003038882, before the merge.

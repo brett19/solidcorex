@@ -248,13 +248,11 @@ becomes fully `&Brep` from L3 alone. The 4 binormal-only entries were already T-
 
 ## 5. Evidence and scratch
 
-**Local branches** (worktree `sc-wt/cache-leaf3-walk`):
+**Local branches** (a local worktree):
 - `cache-leaf3-walk` (the split);
 - `cache-leaf3-vl` and `cache-leaf3-vf` (variant b);
 - `cache-leaf3-b` (base log) and `cache-leaf3-p` (split log);
 - `cache-leaf3-m` (walk log).
-
-**Server side refs:** `push/cache-leaf3-*`.
 
 **Scripts:** `scratch44/{measure,ops,chain,rows,cmp}.sh`, `walks.py`.
 

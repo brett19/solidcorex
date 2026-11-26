@@ -1,6 +1,6 @@
 # 12. Stage C study: the validity check of a body
 
-2026-11-22, read-only, on `main` 782ef9afc (`sc-wt/cache-arch`). Method and vocabulary
+2026-11-22, read-only, on `main` 782ef9afc (a local worktree). Method and vocabulary
 as in 07-boolean-gather-apply.md. Paths are relative to `solidcore/crates/solidcore/src`, OPS/ =
 `solidcore/crates/solidcore-ops/src`. Evidence: **[V]** read myself, **[A]** taken from an earlier report
 (02, 05, 08, 09) without re-reading, **[I]** inferred. Nothing was built or run.

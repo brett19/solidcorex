@@ -1,6 +1,6 @@
 # 05 — Parallel sites in kernel operations
 
-Checkout: `sc-wt/cache-arch` (main, 782ef9afc). Read-only investigation: nothing was built or run.
+Checkout: a local worktree (main, 782ef9afc). Read-only investigation: nothing was built or run.
 
 **Path convention.** `K/` stands for `solidcore/crates/solidcore/src/`. Other crates are written from `solidcore/crates/` (e.g. `solidcore-tess/src/par.rs`). Line numbers are those of this checkout.
 

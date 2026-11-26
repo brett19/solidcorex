@@ -13,8 +13,8 @@ environment:
   optionally with a backtrace. `ZZ_VT`: log every vertex tolerance set above 1. `ZZ_ST`: stitch
   lamina detail. `ZZ_CHK`: a check at L2 in the `topology.brep_p10` runner.
 
-Builds and runs: server2, `--profile goldens`, through `sc-slot.sh cache-tanfield`. Scripts are in
-`scratch46/`; logs are in `server2:sc-trash/l46/` and `tf-t*.log`.
+Builds and runs: the build server, `--profile goldens`, Scripts are in
+`scratch46/`; logs are in scratch space on the build server and `tf-t*.log`.
 
 Labels: MEASURED (run here), READ (from code or docs), INFERRED (reasoned, not run).
 

@@ -1,9 +1,9 @@
 # 29 — Lazy fill-once UV trim behind `&Brep`: prototype and measurement
 
 Local prototype only. Nothing was pushed to GitHub or the fork, and nothing was filed or commented.
-- Branch `zz-lazytrim` (3 commits on origin/main 026e4aabc6), worktree `sc-wt/cache-lazytrim-a`.
+- Branch `zz-lazytrim` (3 commits on origin/main 026e4aabc6), a local worktree.
 - Server side ref `push/cache-lazytrim-a`, with the server worktree of the same name.
-- Labels: MEASURED (counted on server2), READ (from the code), INFERRED (reasoned, not counted).
+- Labels: MEASURED (counted on the build server), READ (from the code), INFERRED (reasoned, not counted).
 - Counts come first. The only timing is the probe's total wall time (1047 s, serial), and it is indicative only.
 
 ## Verdict
@@ -76,7 +76,7 @@ MEASURED: on 298 body variants, settling after any lazy reads gave the same stor
 
 ## Item 4: measurements (MEASURED)
 
-Probe: `solidcore-convert/tests/zz_lazy_probe.rs`, run serially (`--test-threads 1`, because the switch and counters are process-wide; a parallel first run was discarded). Logs are on server2 at `sc-wt/cache-lazytrim-a.probe3.log`.
+Probe: `solidcore-convert/tests/zz_lazy_probe.rs`, run serially (`--test-threads 1`, because the switch and counters are process-wide; a parallel first run was discarded). Logs are on the build server at a local worktree.
 
 Bodies:
 - 5 primitives;
@@ -183,14 +183,14 @@ Draft tolerance-doc sentence:
 - Refusals travel as `PreparationRequired` strings.
 - Counters are process-global statics (`zz_lazy.rs`), so measurement must be serial.
 
-Disk: local worktree 759 MB; server2 `cache-lazytrim-a/solidcore/bin` 4.4 GB. Both are kept.
+Disk: local worktree 759 MB; the build server `cache-lazytrim-a/solidcore/bin` 4.4 GB. Both are kept.
 
 ---
 
 # Stage 2: lazy fill-once cache tree; variant P (stored trims) and L (lazy trims)
 
 Status at hand-back (2026-11-24 00:15 CET). Branch zz-lazytrim, local commits 6eca8faa0d, 008744f304, 9c39b4a73b. Nothing was pushed except the side ref to the build server.
-Measured so far: the corpus part only (46 variants: import files, as-is and stripped). The kernel-body and round-trip variants of the same run were still going on server2 at hand-back. Log: server sc-wt/cache-lazytrim-a.p1.log; local copy /tmp/zzp.keep.log.
+Measured so far: the corpus part only (46 variants: import files, as-is and stripped). The kernel-body and round-trip variants of the same run were still going on the build server at hand-back. Log: server a local worktree; local copy a local log
 
 ## Verdict so far (MEASURED on 46 corpus variants)
 
@@ -231,7 +231,7 @@ Measured so far: the corpus part only (46 variants: import files, as-is and stri
 
 ## Stage 2b: the cost of preparing every trim ahead (variant P) (MEASURED)
 
-Probe: `zz_c_kernel_bodies` + `zz_c_corpus` (182 variants: kernel bodies, operation results and import files, each as-is and stripped). Server log: sc-wt/cache-lazytrim-a.c1.log; local copy /tmp/zzc.keep.log. Commits up to the "PREP operation names" commit on zz-lazytrim, local only.
+Probe: `zz_c_kernel_bodies` + `zz_c_corpus` (182 variants: kernel bodies, operation results and import files, each as-is and stripped). Server log: a local worktree; local copy a local log Commits up to the "PREP operation names" commit on zz-lazytrim, local only.
 
 **Method.**
 - Settle makes every missing trim. A side-channel log records each edge-use pair's settle cost: its build time, the certified bounds inside the build, and any bound computed outside a build. The log counts each pair once: a trim serves an edge use and its mate.

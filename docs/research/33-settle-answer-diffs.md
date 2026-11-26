@@ -175,4 +175,3 @@ So main on raw bodies is history-dependent at round-off level; settled is not.
 - The clean log reverses the brief's numbers. It shows open_shell as_is mass maxrel 6.506e-9 and RO:shared_face_overlap1e-6_union 1.000e-7.
 - O:shared_face_overlap1e-6_union shows no mass difference only because main refuses all 13 face reads on the raw (non-round-tripped) body.
 - The vase tight box was never called; the per-face reads alone covered vase2.
-- Disk at the end: this machine `/` 202G free (88% used). server2 `/` 270G free (68% used), after `sc-trim-bin.sh` freed 1.7G.

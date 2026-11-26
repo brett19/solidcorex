@@ -1,9 +1,9 @@
 # 28 - How often is a UV trim acceptable without a raise? (D2 reach, measured)
 
 Local measurement, nothing pushed. Settles report 27's "first step 3" and its UNVERIFIED items. Base: branch
-`zz-trim-raise-chk` at d981bb2c37 plus probe commits (local worktree `sc-wt/cache-trim-reach-a`, branch
+`zz-trim-raise-chk` at d981bb2c37 plus probe commits (local a local worktree, branch
 `zz-trim-reach`). Counts are exact; timings are the min of 3 (one run when the first exceeds 0.3 s). Server runs
-on server2, goldens profile. Raw logs and tally script: `reports/cache-arch/28-trim-reach-data/`
+on the build server, goldens profile. Raw logs and tally script: the raw data (kept outside this repository)
 (`A.log` bounds+timing, `B.log` bounds+curve-dependence, `C.log` bounds+item 4; `tally.py`; `A.md` = every
 per-body table).
 
@@ -200,8 +200,4 @@ and not `Sync`") is stale: `CurveMemo` holds `OnceLock<Arc<Mutex<..>>>`, which i
 
 ## 9. Scratch
 
-Local: worktree `sc-wt/cache-trim-reach-a` (branch `zz-trim-reach`, 2 commits over `zz-trim-raise-chk`), `/tmp/zzr`,
-`reports/cache-arch/28-trim-reach-data/` (21 MB of logs). Server: worktree removed, side ref deleted; the build
-output (3.8 GB: `target` and `solidcore/bin`) was MOVED (no rm) to `sc-trash/reach-a` on server2, because `cargo xtask rm`
-does not exist in this tree; it can be deleted by whoever empties sc-trash. Server `df /`: 334 GB free of 879 GB; main
-machine `/` unchanged (no local build output).
+The probe commits and logs are kept outside this repository.

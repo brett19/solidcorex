@@ -1,6 +1,6 @@
 # 02 — Body side: lazy writes, memo fields and copies made for reads
 
-Checkout: `sc-wt/cache-arch` at `782ef9afc`. Read-only investigation (grep and
+Checkout: a local worktree at `782ef9afc`. Read-only investigation (grep and
 line-range reads; nothing built or run). Paths are relative to `solidcore/crates/solidcore/src`
 unless another crate is named. Counts come from `rg` and a small script over non-test code (text
 up to the first `#[cfg(test)] mod`, files with `test` in the name skipped); treat them as

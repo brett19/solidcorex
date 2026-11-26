@@ -1,6 +1,6 @@
 # 10 — The face-level UV trim pass: idempotence, callers, cost, scaling
 
-Checkout: `sc-wt/cache-arch`, main at 782ef9afc. Paths are relative to
+Checkout: a local worktree, main at 782ef9afc. Paths are relative to
 `solidcore/crates/solidcore/src`. Read-only analysis: nothing was built or run for this report. The
 only numbers quoted come from logs already in this folder (`m1-cache-counts*.log`, produced by
 `cache-measure-local.patch`, which bumps `FACE_TRIM_PASSES` at the top of

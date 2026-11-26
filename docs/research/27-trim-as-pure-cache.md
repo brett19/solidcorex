@@ -1,6 +1,6 @@
 # 27 — Can a UV trim be a pure fill-once cache behind `&Brep`?
 
-Read-only design study. Base: `sc-wt/cache-chk-trims-once` at 82f12a5bfe. Paths are relative to
+Read-only design study. Base: a local worktree at 82f12a5bfe. Paths are relative to
 `solidcore/crates/solidcore/src` unless they name another crate. Nothing was built or run. Labels:
 **VERIFIED** means read in the code at the cited lines. **INFERRED** means reasoned from the code or from
 earlier reports' measurements and not checked by a run. **UNVERIFIED** items list the count that would
