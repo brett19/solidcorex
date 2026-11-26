@@ -1012,14 +1012,14 @@ Doc 02 holds the testing plan. This section is how it fits the architecture.
 ### 9.1 Against solidcore
 
 - **Layers 0-4 are compared function by function.** `scx-difftest` does this today for `scx-num` and
-  `scx-algo`: 324 tests, 0 mismatches, with a default tolerance of 1e-12 relative (READ, 04).
+  `scx-algo`: 317 tests, 0 mismatches, with a default tolerance of 1e-12 relative (MEASURED, 05 §6).
 - **Bodies are compared by outcome**, through the pin-record converter in `scx-difftest`:
   - topology up to isomorphism;
   - area and volume within tolerance;
   - the two-way distance between results under resolution plus recorded accuracy;
   - validity.
 - **This starts with the vertical slice** (10.2), not after every layer.
-- Bit-for-bit agreement is not a goal past layer 2 (owner, 11-26). Each difference is traced to a
+- Bit-for-bit agreement with solidcore is not a goal at any layer (owner, 11-26); bit-for-bit determinism of our own results is. Each difference is traced to a
   pin defect, which is recorded, or to ours, which is fixed.
 - **When `fmath` lands**, layer 0's agreement becomes tolerance agreement.
 
@@ -1089,7 +1089,7 @@ early.
 8. **Add the box tree and the `Executor`** to `scx-algo`.
 9. **Error strings** stay matched to the pin while the difftest compares them (5.3).
 10. **The recorded defects** (interval overflow to NaN, Ferrari's quartic on clustered roots) stay
-    pinned and reported while layers are being moved, per 04 row 79. Each is fixed after its layer
+    pinned and reported while layers are being moved, per 04 §3 (11-26, "defects found while moving are pinned"). Each is fixed after its layer
     is complete, as its own change, with the difftest recording the difference on purpose.
 
 ### 10.2 Layers in order
@@ -1169,20 +1169,20 @@ early.
 
 Each of these needs a 04 row when this design is accepted.
 
-1. **04 row 73, "Tolerance functions take a `Tolerances` value".** Kept for the difftest era. The end
+1. **04 §3, the 11-26 `Tolerances` row, "Tolerance functions take a `Tolerances` value".** Kept for the difftest era. The end
    state retires the struct (10.1 item 1).
-2. **04 row 72, `NumError` strings matching solidcore.** Kept while the difftest compares them, then
+2. **04 §3, the 11-26 `NumError` row, `NumError` strings matching solidcore.** Kept while the difftest compares them, then
    free (5.3).
-3. **04 row 79, "Defects found while moving are pinned by a test and reported, not fixed in the
+3. **04 §3, the 11-26 defects row, "Defects found while moving are pinned by a test and reported, not fixed in the
    move".** Kept. Fixes come after a layer is complete, as their own changes (10.1 item 10). The
    earlier draft scheduled them in step 1. This is revised after review-architecture-v2 (S13).
-4. **04 row 42, "no per-body tolerance or angle tolerance".** Read as "no angle tolerance at all".
+4. **04 §1, the 11-26 tolerance row, "no per-body tolerance or angle tolerance".** Read as "no angle tolerance at all".
    `AngleTol` is removed, and feature thresholds become operation parameters (4.2).
    - Research 54 change 5 had kept an angle in settings for feature thresholds. This design does not.
-   - Change if: the owner reads row 42 as "no per-body angle tolerance" only. A settings-level feature
+   - Change if: the owner reads that row as "no per-body angle tolerance" only. A settings-level feature
      threshold would then be allowed, but parameters are still preferred: each operation's threshold
      means something different.
-5. **04 rows 42 and 11-26: "no per-body tolerance", against the resolution stamp on `Brep` (C7).** The
+5. **04 §1 (11-26 tolerance row): "no per-body tolerance", against the resolution stamp on `Brep` (C7).** The
    stamp is a check copy of the document's resolution, not a tolerance, and cannot be set apart from
    the document except by `rebase`.
 6. **Doc 07: the seed in `Settings`.** Kept (6.3). The earlier draft had moved it to `Document`.

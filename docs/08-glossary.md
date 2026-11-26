@@ -10,6 +10,10 @@ One meaning per word. Each entry gives:
 Path prefixes are as in [07-conventions.md](07-conventions.md): `k/` is the kernel, `rec/` the
 record, `cv/` convert, `ops/` solidcore-ops, and `app/` the application's `crates/`.
 
+Brought in line 11-26 with `01-architecture.md` v2 and `04-decisions.md`. Entries that v2 overrides are
+edited and marked "(changed 11-26, see 01 §N)". Crate names are v2's: `scx-brep`, `scx-bodyq`,
+`scx-record`, `scx-fates` and so on.
+
 ---
 
 ## 1. The five body types
@@ -36,14 +40,14 @@ Others share the names but are not bodies of the model:
 
 | solidcorex | Crate | Is | Replaces |
 |---|---|---|---|
-| `Brep` | `brep` | A **finished body**: immutable, shared per face (`Arc<FaceRecord>`), every derived cell fillable once. | 1, and the immutability promise of 4 and 5 |
-| `Draft` | `brep` | The only mutable body. Made from a `Brep` (`Brep::edit`) or empty, and ended by `Draft::finish(&Settings) -> Result<Brep>`. | the mutating half of 1 |
-| `Record` | `record` | The stored form, exact, with no maths. Import copies it into a `Draft`. | 2 (renamed so it is never confused with a `Brep`) |
+| `Brep` | `scx-brep` | A **finished body**: immutable, shared per face (`Arc<FaceRecord>`), every derived cell fillable once, carrying a stamp of the document's resolution (01 C7). | 1, and the immutability promise of 4 and 5 |
+| `Draft` | `scx-brep` | The only mutable body. Made from a `Brep` (`Brep::edit`, `into_draft`) or empty, and ended by `Draft::finish(self, &Document) -> Result<(Brep, Changes), Box<Unfinished>>` (changed 11-26, see 01 §2.3). | the mutating half of 1 |
+| `Record` | `scx-record` | The stored form, exact, with no maths. Import copies it into a `Draft`. | 2 (renamed so it is never confused with a `Brep`) |
 
-`ops::Body` survives only as the session's handle (a `BodyId` plus an `Arc<Brep>`), with no lock and
-no proof field: the proof lives in the `Brep`'s cells. The bridge `Brep` and the app's lazily built
-kernel form disappear once the app keeps live bodies (01, step G and I). The app's `Body` then
-holds an `ops::Body`, not a record.
+`ops::Body` does not survive (changed 11-26, see 01 §2.2 and §6.2): there is no session and no
+`BodyId`. A body is a value, and the app names its bodies as it likes; the proof lives in the `Brep`'s
+cells. The bridge `Brep` and the app's lazily built kernel form disappear at the app switch (01 §10.2
+step 13). The app's `Body` then holds a `Brep`, not a record.
 
 Hidden-line, STEP and mesh types are renamed so that none is called `Brep` or `Body`: `HlrView`,
 `StepBody` and `ToothMesh`.
@@ -56,75 +60,40 @@ type name. Ids are `VertexId`, `EdgeId` and so on, as today.
 | Term | Definition | solidcore | Not | solidcorex |
 |---|---|---|---|---|
 | **vertex** | A point of the body, with an accuracy (a ball). | `Vertex`, `k/topology.rs:386`: point, tolerance (default 0 there, `ZONE_TOL_3D` in the builder), its uses. | Not a curve end parameter. Not a UV point (that is on the vertex use). | `Vertex` |
-| **edge** | A bounded piece of one 3D curve between two vertices (equal for a closed edge), with an accuracy (a tube). It is shared by every face that meets along it. | `Edge`, `k/topology.rs:413`: `vertices`, `edgeuses` in radial order (the first is primary), `interval`, `tolerance`, `curve`. | Not a trim. Not a side of one face; that is an edge use. | `Edge` |
-| **loop** | A closed chain bounding one face: one outer loop, then any holes. | `Loop`, `k/topology.rs:443`. `LoopEdge` (`:434`) is an oriented edge in it. | Not a wire. Not a loop *use*: a loop has two uses, one per face side. | `Loop` |
-| **face** | A bounded piece of one surface: its loops, a side bit, an accuracy. | `Face`, `k/topology.rs:458`: shell, loops, surface, primary face use, `uv_domain` (the surface's domain), `rectangular_trim`, tolerance (default 0). | Not a surface. Not one side of itself; that is a face use. | `Face` (in a `FaceRecord`, shared by `Arc`) |
-| **shell** | A connected set of faces (or wire edges, or a lone vertex) forming one boundary between regions. | `Shell`, `k/topology.rs:502`. A closed boundary is two runtime shells, one per side; the record makes them one (`cv/brep/record.rs:20-22`). | Not a solid. Not a region. | `Shell` |
-| **region** | A connected volume of space: the infinite region, or a bounded one that is material or a void. | `Region`, `k/topology.rs:517`, with `is_void` as `i32`. In the record, `regions[0]` is the infinite region (`rec/brep.rs` `Region`). | Not a lump of material; a void is a region too. | `Region`, with `is_void: bool` |
+| **edge** | A bounded piece of one 3D curve between two vertices (equal for a closed edge), with an accuracy (a tube). It is shared by every face that meets along it. It has a geometry part and an adjacency part (the face sides around it in radial order; 01 §2.1). | `Edge`, `k/topology.rs:413`: `vertices`, `edgeuses` in radial order (the first is primary), `interval`, `tolerance`, `curve`. | Not a trim. Not a side of one face; that is an edge use. | `Edge` |
+| **loop** | A closed chain bounding one face: one outer loop, then any holes. Changed 11-26 (01 §2.1): a list of `EdgeUse`s inside the face record. | `Loop`, `k/topology.rs:443`. `LoopEdge` (`:434`) is an oriented edge in it. | Not a wire. | a loop list in `FaceRecord` (no type of its own is needed) |
+| **face** | A bounded piece of one surface: its loops and its two sides (`sides: [ShellId; 2]`). Its accuracy is derived, not stored (01 §4.1). | `Face`, `k/topology.rs:458`: shell, loops, surface, primary face use, `uv_domain` (the surface's domain), `rectangular_trim`, tolerance (default 0). | Not a surface. Not one side of itself; that is a face side. | `Face` (in a `FaceRecord`, shared by `Arc`) |
+| **shell** | A connected set of face sides (or wire edges, or a lone vertex) bounding one region. Changed 11-26 (01 §2.1): a closed boundary is two shells, one per side, as at the pin's runtime. | `Shell`, `k/topology.rs:502`. A closed boundary is two runtime shells, one per side; the record makes them one (`cv/brep/record.rs:20-22`). | Not a solid. Not a region. | `Shell` |
+| **region** | A connected volume of space: the infinite region, or a bounded one that is material or a void. | `Region`, `k/topology.rs:517`, with `is_void` as `i32`. In the record, `regions[0]` is the infinite region (`rec/brep.rs` `Region`). | Not a lump of material; a void is a region too. | `Region`, with `solid: bool`; `RegionId(0)` is the infinite region (01 §2.1). A sheet or lamina face has both sides in one region |
 
-### The four uses
+### The uses and the radial order
 
-A **use** is an entity seen from one side, or by one owner. Uses carry the orientation and the
-links. The entities carry geometry and accuracy.
+Changed 11-26 (01 §2.1 and choice C4; this replaces the four-uses picture and the use table). At the pin
+a manifold edge has four edge uses, and use records are 71 to 80% of a body's bytes (research 51).
+solidcorex keeps loop lists inside the face record, two sides per face, and the radial order on the
+edge. A manifold edge then has two uses, one per face per pass of the edge, and no pointers span
+records.
 
-| Use | Definition | solidcore | Not | solidcorex |
-|---|---|---|---|---|
-| **face use** | A face seen from one of its two sides. `Same` when its normal is the surface's natural normal. The two uses are mates. | `Faceuse`, `k/topology.rs:529`: shell, face, mate, orientation, loop uses (outer first). | Not a face. Not the material side; which use faces material is a property of the shell. | `FaceSide` (two per face, held inside `FaceRecord`) |
-| **loop use** | A loop as used by one face use. `Same` for outer, `Opposite` for inner. | `Loopuse`, `k/topology.rs:560`: face use, loop, mate, start, orientation. | Not a direction of travel. | `LoopSide` |
-| **edge use** | An edge as used by one loop use: a direction along the edge, links to the next and previous uses in the loop (`ccw` / `cw`), its start vertex use, and on the `Same` member of a mate pair, the UV trim (pcurve). | `Edgeuse`, `k/topology.rs:589`, with inline gap caches (`max_edge_face_gap`, `edge_ccw_edge_gap`) and `drop_curve_fail`. | Not an edge. Not a trim, though it holds one. | `EdgeUse` (in tables, per research 51) |
-| **vertex use** | A vertex as used at the start of one edge use, or as a vertex loop, or alone in a shell. Holds the UV point on that face. | `Vertexuse`, `k/topology.rs:650`: vertex, owner, vertex/edge and vertex/face gap caches, `uv_point` (default `BIG_DOUBLE`). | Not a vertex. | `VertexUse` |
+| Use | Definition | solidcore | solidcorex |
+|---|---|---|---|
+| **face side** | A face seen from one of its two sides, the front or back taken about the natural normal. Each side names the shell, and so the region, on it. Not the material side; which side faces material is a property of the region. | `Faceuse`, `k/topology.rs:529` | `FaceSide`, an index into the face's `sides` (01 §12 item 12). No record of its own |
+| **loop use** | not needed | `Loopuse`, `k/topology.rs:560` | none (`LoopSide` dropped) |
+| **edge use** | An edge as used by one face in one pass of its loop: the edge, the sense, the pcurve (a 2-D curve and interval on the face's surface) and the pcurve's recorded bound. Not an edge. Not a trim, though it holds one. | `Edgeuse`, `k/topology.rs:589`, with inline gap caches | `EdgeUse`, inside its face's loop |
+| **vertex use** | not needed: a vertex is named by id, and the uv point comes from the pcurve | `Vertexuse`, `k/topology.rs:650` | none (`VertexUse` dropped) |
 
-Research 51 measured use records at 71 to 80% of a body's bytes. Their layout is open (04 §6).
+The edge's **adjacency part** lists the face sides around it in radial order. A seam edge appears twice
+in one face's loop and lists the face twice, told apart by sense. A wire edge has no face sides and
+belongs to its shell's wire list. A lone vertex inside a face (a cone apex) is a loop of one `EdgeUse`
+on an edge collapsed to that vertex. Mates (the same edge's use on the other face) are found by scanning
+the other face's loops, not by a stored link.
 
-### The radial-edge structure
+Each face has two sides, and each side names a shell and so a region. A solid's boundary face has its
+outer side in `RegionId(0)` or a void and its inner side in the solid. A face between two solid regions
+has a region on each side, which the Boolean's cellular merge needs. A lamina has both sides in one
+region.
 
-An edge in a manifold solid is shared by two faces. Each face has two sides, so the edge has
-**four edge uses**. Each pair of faces meeting at the edge contributes two uses, one on each side of
-each face. The edge keeps its uses in **radial order** around it, starting with the primary use
-(`Edge::edgeuses`, `k/topology.rs` ~l.421).
-
-Two links connect the uses:
-
-- **Mate.** `mate` gives "the oppositely oriented edge use on the face's other side": the same face,
-  flipped.
-- **Radial.** `radial` gives "the oppositely oriented edge use on the adjacent face": across the
-  edge, in the same shell.
-
-Both are read off that radial list, by whether a use's orientation matches the primary's
-(`k/topology/edgeuse/p1.rs:504`, `:521`). Orientations alternate `Same`, `Opposite` around the edge
-(validity doc §9 invariant 3). A non-manifold edge where k faces meet has 2k uses, in the same
-alternating order.
-
-```
-                          outside (empty region)
-                                   ^
-                       A_out       |       B_out
-   face A  ==================>  [edge e]  <==================  face B
-           <==================     |     ==================>
-                       A_in        |       B_in
-                                   v
-                          inside (material)
-
-   e is seen end-on; curve C(t) runs out of the page.
-   A_out : A's outside side, runs with C (Same)      <- holds A's pcurve
-   A_in  : A's material side, runs against C (Opposite)
-   B_in  : B's material side, runs with C (Same)     <- holds B's pcurve
-   B_out : B's outside side, runs against C (Opposite)
-
-   radial order round e : A_out -> A_in -> B_in -> B_out -> (A_out)
-                          Same     Opp     Same    Opp       alternating
-   mate   : A_out <-> A_in,  B_in <-> B_out     (one face, its two sides)
-   radial : A_out <-> B_out, A_in <-> B_in      (adjacent faces, one shell)
-```
-
-Read the picture this way. The boundary between material and empty space is two shells, one seen
-from each side. `A_out` and `B_out` lie in the shell facing the empty region; `A_in` and `B_in` lie
-in the shell facing the material. A loop on face A's outer side runs along `A_out`. Crossing the
-edge within the same shell reaches `B_out` by the radial link, and that use runs the other way, as
-adjacent loops always do. The `Same` member of each mate pair holds its face's pcurve (`A_out` for
-A, `B_in` for B), so an edge between two faces has exactly two pcurves. The record collapses the two
-runtime shells of a closed boundary into one (`cv/brep/record.rs:20-22`) and keeps one oriented edge
-per face, with `upper = !forward`.
+Research 51's layout question is answered by C4. The old end-on picture of `A_out`, `A_in`, `B_in` and
+`B_out` is withdrawn with the four uses.
 
 ## 3. Loose terms in today's code
 
@@ -137,11 +106,11 @@ retires the word.
 | **trim** | (a) A UV trim curve or pcurve on an edge use (`Edgeuse::uv_trim_curve`). (b) A face's loops as a whole (`rectangular_trim`, "trimmed surface"). (c) `Curve::trim`, cutting a curve's interval. | Not the loops. Not an interval cut. | **pcurve**: the 2D curve of an edge use in its face's parameters. **boundary**: a face's loops. `Curve::restrict` cuts an interval. |
 | **tolerance** | Body zone, entity zone, xsect, approx, angle, contact, coincidence, fit tolerance (see [09-tolerances.md](09-tolerances.md) §1). | Not one number. | **accuracy** (per entity) or **resolution** (per operation). There is no bare `tolerance` identifier. |
 | **gap** | A measured distance between an entity and one it bounds (edge/face, vertex/edge, edge/edge), sampled at 20 points (`calc_max_edge_face_gap`; validity doc §5.2). Cached on uses. | Not a bound, and not an accuracy. | **gap**: a measured distance, as a diagnostic only. A proved one is a **bound** (below). |
-| **use** | A topology use (above), and also ordinary English. | Not a verb in identifiers (`uses_face`). | Only `FaceSide`, `LoopSide`, `EdgeUse`, `VertexUse`. |
+| **use** | A topology use (above), and also ordinary English. | Not a verb in identifiers (`uses_face`). | Only `FaceSide` and `EdgeUse`. |
 | **settled / prepared / finished** | "Prepared" bodies have their UV trims made (`create_missing_uv_trim_curves`, `PreparationRequired` error, `k/topology/edgeuse/p3.rs` ~l.3960). "Settled" tolerances follow the tolerance pass. "Finished" is used for `Assembly::finish` in the app. | Not three states of one type. | **finished** only: a `Brep`, as returned by `Draft::finish`. There is no unprepared `Brep`, so "prepared" and "settled" are retired. |
 | **certificate / proof / bound** | Certificate: ε with a proof that a net is within ε of its definition (solidcore `docs/definitions-and-certificates.md` §4.1). Proof: ops' `Outward`, a proof the body is valid and faces out (`ops/body.rs:62`). Bound: a certified number, `Verdict` answers (`k/geom/certified.rs:56`). | Not a sampled check. | **bound**: an `f64` proved to be above a quantity. **certificate**: a stored bound together with what it is about and the inputs it depends on (09 §5). **proof**: a certificate whose claim is a predicate (valid, outward) rather than a distance. |
-| **record** | (a) The stored form `solidcore_record::brep::Brep`. (b) The kernel's "notify records" (`k/kernel.rs` `notify_records`). (c) An arena slot ("face record"). | Not a notification log. | **Record**: the stored form only. Arena slots are **entries**. Notify maps become `Outcome`. |
-| **draft** | (a) A draft-angle feature (`Draft` blend definitions, research 41). (b) The architecture's mutable body (01). | | **`Draft`**: the mutable body. The feature is **taper** (`TaperDef`, `ops::taper`). |
+| **record** | (a) The stored form `solidcore_record::brep::Brep`. (b) The kernel's "notify records" (`k/kernel.rs` `notify_records`). (c) An arena slot ("face record"). | Not a notification log. | **Record**: the stored form only. Arena slots are **entries**. Notify maps become `Changes` (01 §2.6). |
+| **draft** | (a) A draft-angle feature (`Draft` blend definitions, research 41). (b) The architecture's mutable body (01 §2.3). | | **`Draft`**: the mutable body. The feature is **taper** (`TaperDef`, `ops::taper`). |
 
 ## 4. Architecture terms
 
@@ -151,14 +120,19 @@ page holds every meaning.
 | Term | Definition | solidcore today | Not | solidcorex |
 |---|---|---|---|---|
 | **finished body** | A `Brep`. All pcurves exist, accuracies are final, every invariant of validity doc §9 holds, and every later computation on it is a pure function of it. | No such type. `Brep` is mutated by readers (research 45: the tree build writes in 393 builds). | Not "valid and outward", which is a proof stored in a cell. | `brep::Brep` |
-| **draft** | The only mutable body. Operations prepare, compute, then apply onto it. `finish` checks invariants, fits what remains, and seals. | `&mut Brep` everywhere. | Not a copy that is thrown away on error. A failed `finish` returns the draft's error and no body. | `brep::Draft` |
-| **fill-once cell** | A slot on a `Brep` entity holding a derived value: a box, a tree, a pcurve's bound, a proof. Filled at most once, by a pure function of declared inputs. Shared reads, no invalidation (a changed entity is a new entity). | Lazy caches cleared by notification (`notify_records`, research 51). | Not a memo; it is never evicted. Not a field a draft writes. | `brep::Cell<T>` (`OnceLock`-like, with the declared reads in its type) |
-| **certificate** | See §3 and 09 §5. | ε on procedural faces; `TrimCoverRaises` (`k/topology.rs:869`) records some raises. | | `brep::Cert` |
+| **draft** | The only mutable body. Operations prepare, compute, then apply onto it. `finish` checks the structure of what the draft touched, stamps the document's resolution, rebuilds the body cells, and seals. Geometric validity is `scx-bodyq::check`, which only reads. | `&mut Brep` everywhere. | Not a copy that is thrown away on error. A failed `finish` returns the draft's error and no body. | `brep::Draft` |
+| **fill-once cell** | A slot holding a derived value: a box, a tree, a derived face accuracy. Filled at most once, by a pure function of declared inputs. Changed 11-26 (01 §3): cells are emptied by every write path (a new or rewritten record starts empty), and a write to an edge's geometry part or a vertex replaces the records of the faces that use it. | Lazy caches cleared by notification (`notify_records`, research 51). | Not a memo; it is never evicted. Not a field a draft writes. | geometry cells: `OnceLock` in the geometry payload; face cells: `FaceCells` in `FaceRecord`, filled by `FaceCell::fill` (its read set is in its type); body cells: `Brep::cells` |
+| **certificate** | See §3 and 09 §5. | ε on procedural faces; `TrimCoverRaises` (`k/topology.rs:869`) records some raises. | | `scx_num::Cert` (01 §4.1) |
 | **accuracy** | Per entity: a proved bound on how far the stored entity is from the exact one it stands for. | Entity `tolerance` fields, which also serve as resolutions. | Not a coincidence threshold. | `num::Accuracy` |
-| **resolution** | Per operation: how close two things must be to count as the same. A parameter, from `Settings`, scaled to the model. | `zone_tol_3d`, `contact_tol_3d`, `coincidence_tol_3d` (`k/geom/tol.rs:450`, `:519`). | Not a property of an entity. Never stored on a body. | `num::Resolution` |
-| **refusal** | An operation's typed answer that the input cannot be handled, with a cause from a closed list and the entities involved. | `SolidError` variants plus upstream status numbers (research 35: status 0→1001). | Not a kernel bug. | `Refused<Cause>` |
+| **resolution** | Per operation: how close two things must be to count as the same. One per document, chosen at creation from units and a size class. Changed 11-26 (01 §4.3): not a per-operation parameter. | `zone_tol_3d`, `contact_tol_3d`, `coincidence_tol_3d` (`k/geom/tol.rs:450`, `:519`). | Not a property of an entity. Not a tolerance a body sets: a `Brep` carries only a check stamp of it, and a mismatch is `Refused(ResolutionMismatch)`. | `num::Resolution` |
+| **refusal** | An operation's typed answer that the input is not valid, with a cause from a closed list and the entities involved. `Unsupported` is the separate answer for valid input the method cannot complete (01 §5.1). | `SolidError` variants plus upstream status numbers (research 35: status 0→1001). | Not a kernel bug. | `Refused<Cause>` |
 | **defect** | An internal invariant failed: a kernel bug. | Mixed into `SolidError` with refusals. | Never shown as the user's fault. Never a reason to widen an accuracy (validity doc §8). | `Defect` |
-| **settings** | The immutable per-session value: resolution policy, angle policy, seed. No fix switches. | `Kernel.tolerances`, `Kernel.context`, `Kernel.fixes` (26 switches), `Kernel.seed` (`k/kernel.rs:1315` on). | Not mutable mid-operation; nothing is set and restored. | `Settings` (in `num` for the numeric part, assembled in `ops`) |
+| **settings** | A value passed in `Cx`, immutable for a call: algorithm choices, the random seed, the work budget and the `Executor`. Changed 11-26 (01 §6.3, §12 item 8): there is no session, and the resolution is in the `Document`, not here. No angle policy, no fix switches. | `Kernel.tolerances`, `Kernel.context`, `Kernel.fixes` (26 switches), `Kernel.seed` (`k/kernel.rs:1315` on). | Not mutable mid-operation; nothing is set and restored. | `Settings` (`scx-algo`) |
+| **document** | A value describing the space bodies live in: resolution, units, size class. It holds no bodies (01 §6.2). | `Kernel` and `Context` tolerances. | Not a session; not the app's design file. | `Document` (`scx-brep`) |
+| **cx** | The calling convention of operations: the document, settings, `&mut Scratch`, `&Stop` and a trace (01 §6.3). Layers 0 to 4 take only what they read. | The `&mut Kernel` passed through 89% of the time. | | `Cx<'_>` |
+| **changes** | The events a `Draft` records as it edits (replaced, created with origins, merged, coincident, removed) and returns from `finish`. | Notify records, provenance hooks. | Not a fates record. | `Changes` (`scx-brep`; 01 §2.6) |
+| **carry** | Propagating application data held outside the body (names, colours) through `Changes` by a rule for split, merge and coincidence. | `solidcore-ops/src/provenance.rs`. | | `carry` and the `Carry` trait (`scx-brep`) |
+| **placed** | An operand given with a rigid frame, so a move of a tool body costs nothing. A `Brep` has no placement (01 C14). | A transform that leaves 0% of faces untouched. | | `Placed<'_> { body, frame }` |
 | **scratch** | Per-worker reusable buffers and memos. Never changes a result. | The `Cell`/`RefCell` memos on `Kernel`, the ops kernel pool, and the ops per-call `thread_local!`s ([07](07-conventions.md) §7). | Not a place for a value that changes results (`blend_net_tolerance`). | `Scratch` |
 
 ## 5. Smaller terms a builder meets
@@ -166,13 +140,13 @@ page holds every meaning.
 | Term | Meaning in solidcorex | solidcore |
 |---|---|---|
 | **natural normal** | ∂S/∂u × ∂S/∂v. Loops are stored about it ([07](07-conventions.md) §4). | Same (`k/topology/face/p1.rs:1383`) |
-| **primary** | The first use in an edge's radial list. The face's `Same` face use. | `GetPrimaryEdgeuse` |
+| **primary** | The first face side in an edge's radial list. | `GetPrimaryEdgeuse` |
 | **seam** | An edge where a periodic surface's parameter wraps. Always an edge. | Validity doc §6 |
 | **pole** | A point where a surface's parameter line collapses. Always a vertex. | Validity doc §6 |
 | **net** | The NURBS approximation stored for a procedural face, with its certificate. | Definitions doc §3 |
 | **definition** | The exact construction a procedural face stands for (offset, blend, sweep, corner). | Definitions doc §3 |
 | **stored form** | The `Record`. | "record", "native brep" |
-| **outcome** | What an operation reports became of each input face and edge (kept, modified, split, deleted, new). | Notify records; open in 04 §6 |
+| **outcome** | What an operation reports became of each input face and edge (kept, modified, split, deleted, new). Changed 11-26 (01 §2.6): `Changes` and `carry` in the core, the typed record in `scx-fates`. | Notify records |
 
 ---
 
@@ -180,12 +154,10 @@ page holds every meaning.
 
 1. **Names.** Accept the three body names: `Brep` (finished), `Draft` (mutable), `Record` (stored)?
    Should the app's `Body` keep its name, since users and app code already say "body"?
-2. **Uses.** Rename `Faceuse`/`Loopuse` to `FaceSide`/`LoopSide`, or keep the radial-edge
-   literature's "use" for all four? Keeping it is more familiar to readers of the papers. Renaming
-   reads better in code.
+2. **Uses.** Answered by v2 (01 §12 item 12): `FaceSide` is an index into a face's sides, `EdgeUse` is
+   kept, and `LoopSide` and `VertexUse` are not needed.
 3. **Taper.** Rename the draft-angle feature to "taper" internally, so that `Draft` is free, even
    though users will say "draft"?
 4. **Trim.** Retire "trim" as an identifier in favour of "pcurve" and "boundary"? Golden unit names
    and many docs use it.
-5. **Region voids.** Is a void region a first-class region (as today), or should solidcorex model a
-   void as a shell attribute?
+5. **Region voids.** Answered by v2 (01 §2.1): a region is first-class, with `solid: bool`.

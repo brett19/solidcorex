@@ -3,6 +3,10 @@
 The rules every solidcorex crate follows for units, angles, parameters, orientation, frames, numbers,
 determinism, identity and naming.
 
+Brought in line 11-26 with `01-architecture.md` v2 and `04-decisions.md`. Where v2 overrides a rule
+below, the rule is edited to v2's position and marked "(changed 11-26, see 01 §N)". The old steps A to K
+this document cited no longer exist; each reference now names the v2 step (01 §10).
+
 For each item there are three parts:
 
 - **READ**: what solidcore does today, cited at the pinned commit (03e16c9ee7).
@@ -58,13 +62,13 @@ Path abbreviations used below:
 
 **Rule (JUDGED)**
 
-Use millimetres, `f64` and absolute lengths. A length that decides anything comes from `&Settings`,
-from an entity's accuracy, or from a named constant in `num`. None is written inline.
+Use millimetres, `f64` and absolute lengths. A length that decides anything comes from the
+`Document`'s resolution (changed 11-26, see 01 §4.3; not `Settings`), from an entity's accuracy, or from a named constant in `num`. None is written inline.
 
 - **Why.** The record and the app are already in millimetres, and every golden row is measured at
   1e-5.
 - **Alternatives rejected:**
-  - Unitless with a per-session scale: the scale would have to flow to every guard, and today
+  - Unitless with a per-document scale: the scale would have to flow to every guard, and today
     nobody sets it.
   - Relative tolerances only: they break near the origin and for long, thin parts.
 
@@ -112,7 +116,8 @@ Sentinels such as `BIG_DOUBLE`, `UNDEF_DOUBLE` and `USE_DEFAULT` do not cross a 
 **Rule (JUDGED)**
 
 Use radians everywhere inside solidcorex, held as `num::Angle(f64)` where a value is an angle
-parameter, and as `num::AngleTol` for a tolerance. Degrees appear only:
+parameter. There is no angle tolerance (changed 11-26, see 01 §4.2; `AngleTol` is removed). Degrees
+appear only:
 
 - in `step` (the file format)
 - in `ops` parameters the user typed
@@ -123,9 +128,11 @@ They are converted once there and never snapped.
   - It removes 692 conversion lines and a source of rounding on the round trip.
   - It makes "exact stored form" (principle 7) possible for conics.
 - **Alternative:** keep upstream's degree domains for conics, for fidelity. Rejected: fidelity is
-  kept by the external comparison harness (01 §8), not by the internal unit.
+  kept by the external comparison harness (01 §9.1), not by the internal unit.
 - **Results move.** Every conic whose domain was stored in degrees moves by up to one rounding per
-  conversion. This belongs in step K or G, not in a mechanical step.
+  conversion. Changed 11-26: there is no separate step for this. solidcorex is written in radians from
+  the start (01 §10.2 step 2 for `scx-geom`, step 3 for `scx-record`), and the difference from the pin
+  is within the difftest's tolerance (02 §3).
 
 ## 3. Parameter domains
 
@@ -221,7 +228,7 @@ They are converted once there and never snapped.
 4. **Planes.** A plane never has scales of opposite signs. Its frame is right-handed by
    construction (see §5).
 
-- **Why:** it is what both the kernel and the record already store, so step E moves nothing.
+- **Why:** it is what both the kernel and the record already store, so `scx-brep` and `scx-record` (01 §10.2 step 3) move nothing.
 - **Alternative:** store loops relative to the outward normal (as STEP's `FACE_BOUND` orientation
   reads). Rejected: every face turn-over would rewrite its loops, and research 51 wants untouched
   faces shared.
@@ -338,7 +345,7 @@ Duplicated tolerance constants (determinism audit, 11-26):
    - who owns the decision it makes
 3. **Absolute and relative zeros** are two names: `num::EPS_LEN` (absolute, mm) and `num::EPS_REL`
    (relative, applied by `scaled(x)`). Each of the 282 `EFF_ZERO` sites is classified when its file
-   moves (step B or C), not before.
+   is rewritten (01 §10.1 step 1 for `scx-num`, step 2 for geometry), not before.
 4. **No sentinels.** `Option`, `Extent::EMPTY` or a typed `Unset` replace them.
 5. **NaN.** Every comparison that decides is written so that NaN takes the refusing branch (the
    `above` pattern). Sorting uses `f64::total_cmp`.
@@ -426,12 +433,16 @@ Duplicated tolerance constants (determinism audit, 11-26):
 
 **Rule (JUDGED)**
 
-1. **Same bits.** Same input and same `Settings` give the same bits on every target and for any
-   number of workers.
-2. **Random numbers.** The seed is in `Settings`. Each operation derives its generator as
-   `Rng::new(hash(settings.seed, op_id, entity_id))`, never a shared stream. This makes draws
+1. **Same bits.** Same input, `Document` and `Settings` give the same bits for any number of workers,
+   cache state, call order, or save and load. On every target too, verified late (04, 11-26; 01 §8.1).
+   Agreement with solidcore is within a tolerance, not bit for bit (02 §3).
+2. **Random numbers.** The seed is in `Settings` (kept, changed back 11-26, see 01 §6.3 and §12 item
+   6; an earlier draft had moved it to `Document`). Each operation derives its generator as
+   `Rng::new(mix(settings.seed, op_id, entity_id))`, never a shared stream, where `mix` is the one
+   fixed SplitMix64 hash in `scx-num::hash` (01 §8.1). This makes draws
    independent of worker scheduling.
-3. **Iteration.** No iteration over `HashMap` / `HashSet` reaches a result. A hash container may be
+3. **Iteration.** (01 §8.1 adds: every hash that reaches a result is that fixed hash, every sort key
+   breaks ties by id, and `DefaultHasher` and `RandomState` are test-only.) No iteration over `HashMap` / `HashSet` reaches a result. A hash container may be
    used for lookup only. Iteration that matters uses `BTreeMap`, an id-indexed `Vec`, or a sort by
    id. Enforced by a clippy lint on `HashMap::iter` / `keys` / `values` / `into_iter` / `drain`
    outside `#[cfg(test)]`.
@@ -439,25 +450,25 @@ Duplicated tolerance constants (determinism audit, 11-26):
    - the error-free helpers (`two_prod`, `two_sum`), which keep the 15 error-term sites
    - `fma(a, b, c)`, for a deliberate fused evaluation
 
-   It is disallowed elsewhere by clippy. The batched code of 01 §9 uses the same helper in scalar
-   and lane code, so the two agree. The 19 evaluation sites either move into `num::eft::fma`
-   unchanged (no result moves) or are unfused in step K (moves those results by a rounding). The
-   default is to move them unchanged.
+   It is disallowed elsewhere by clippy (01 §8.3). Changed 11-26: batched evaluation is out of the
+   first design (01 §9.4), so there is no lane code yet. The 19 evaluation sites either move into
+   `num::eft::fma` unchanged (no result moves) or are unfused (moves those results by a rounding),
+   decided as each is ported, with any difference recorded in the difftest. The default is to move
+   them unchanged. v2 does not say which; see the report.
 5. **Sums.** Every reduction over a variable-length set runs in id order, left to right. A parallel
    reduction collects per-item values and sums them in that order afterwards. There are no
    cross-lane horizontal sums.
 6. **No `thread_local!` and no `static` mutable state** in any crate. The kernel already has none.
-   The ops thread-locals (call context, cancel, fuel, fixes) become the explicit `&Cancel`,
-   `&mut Report` and `&Settings` arguments, and the kernel pool becomes a pool of `Scratch`.
+   The ops thread-locals (call context, cancel, fuel, fixes) become the explicit `Cx` (document,
+   settings, `&mut Scratch`, `&Stop`, trace; 01 §6.3), and the kernel pool becomes a pool of `Scratch`.
+   The idle pool, fix switches and hook are not carried over.
 7. **Errors from workers.** When several workers fail, the error reported is the one for the
    lowest item index, never the first in time. A shared budget is split per item in advance.
 8. **Scratch may memoise, but must never change a result.** A value that changes results (like
    `blend_net_tolerance`) is an explicit argument, not scratch.
 9. **Transcendental functions.** `sin`, `cos`, `atan2`, `exp` and `ln` are not correctly rounded by
-   the platform libm. Either `num` ships its own (a correctly rounded or fixed polynomial
-   implementation, the same on every target including wasm), or results are allowed to differ
-   across platforms in the last bit of a transcendental. **This is an owner decision** (see the
-   questions).
+   the platform libm. Decided 11-26 (04): `scx-num` ships its own, `fmath`, the same on every target
+   including wasm, covering the list in 01 §8.3; the platform's are banned outside it.
 
 - **Why:** principle 6 is stated in 01 but is not yet true, and each item above is a known way it
   fails.
@@ -495,14 +506,15 @@ Duplicated tolerance constants (determinism audit, 11-26):
 
 1. **Dense ids.** Ids are `u32`, typed per entity kind, and never reused within a body's lifetime.
    A draft appends and marks removed.
-2. **Compaction** happens only when writing the stored form, and returns an old-to-new map.
-3. **Canonical order** is a function of the stored form alone (the canonical walk), so writing a
-   body twice gives the same indices.
-4. **Body identity** is a `BodyId(u64)` assigned by `ops` from a counter in the session. It is
-   never derived from addresses or hashes. `brep` itself has no notion of a body's identity (no
-   `ObjectKey` in `brep`).
-5. **Naming** (which face of the previous version is this) belongs to `ops`, using the outcome map
-   each operation returns (04 §6, the "Outcome" type).
+2. **Compaction** is an explicit operation, `Brep::compact(&self) -> (Brep, IdMap)`, never a side
+   effect, and never done by saving. Changed 11-26 (01 §2.2, replacing research 51's "the stored form
+   compacts ids"): the stored form keeps ids as they are, with runs of deleted slots written as counts.
+3. **Canonical order** is id order, a function of the stored form alone, so writing a body twice gives
+   the same bytes.
+4. **Body identity.** Changed 11-26 (01 §2.2, §6.2): there is no `BodyId` and no session. A body is a
+   value, and the app names its bodies as it likes. There is no `ObjectKey` in `scx-brep`.
+5. **Naming** (which face of the previous version is this) comes from `Changes` and `carry` in the
+   core and `scx-fates` in a helper (01 §2.6), not from an outcome map returned by `ops`.
 
 ## 9. Naming of files and functions
 
@@ -537,8 +549,8 @@ Duplicated tolerance constants (determinism audit, 11-26):
    (`/// Upstream: SmBrep::DeleteEdge`), so a search finds it. A generated table
    `docs/upstream-map.md` lists upstream name → solidcorex path, made by a script from those doc
    lines.
-3. **Golden units** keep their old names until step K. They are renamed in one commit with a
-   mapping file, so the oracle's history stays readable.
+3. **Test units.** Changed 11-26: solidcorex has no golden units (02 §9). A `scx-difftest` case is
+   named after the pin's unit it compares, so the oracle's history stays readable.
 4. **One function per meaning.** A reader takes `&Brep` and returns a value. There are no
    `_read_only` / `_existing` twins: the draft-time version is a different function on `Draft`,
    with a different name (`fit_trim` against `trim`).
@@ -550,18 +562,15 @@ Duplicated tolerance constants (determinism audit, 11-26):
 
 ## Questions for the owner
 
-1. **Transcendental functions.** Ship `num`'s own `sin`/`cos`/`atan2`/`exp`/`ln` so bits are the
-   same across platforms (including wasm), or accept last-bit platform differences and pin goldens
-   per platform?
-2. **Degrees.** Convert the conic and revolve degree domains to radians in step G (with records),
-   accepting one rounding of movement per conic? Or keep degrees until step K?
-3. **Placement.** Should a body carry a placement (`Frame`), so that a rigid move changes no
-   geometry and shares every face (04 §6)? This changes what "a face's surface" means to every
-   reader.
+1. **Transcendental functions.** Answered 11-26 (04): `fmath`, own implementations (rule 9 of §7).
+2. **Degrees.** Answered by v2: radians from the start, with the difference from the pin inside the
+   difftest tolerance (§2).
+3. **Placement.** Answered by 01 C14 (for the owner's review): no placement on a `Brep`. `transform`
+   rewrites geometry and keeps ids, and operations that take a second body accept `Placed` operands.
 4. **Face domain.** Replace `Face::uv_domain` (the surface's domain) with a derived `uv_box` (the
    trims' hull)? This moves the tight box of offset faces (research 32) and every result that reads
    the domain.
-5. **Upstream names.** Keep the upstream name in every doc comment indefinitely, or only until
-   step K?
-6. **Size table.** Is `size_estimate_to_zone_tol_3d` kept at all? Production never uses it, but it
-   is the only scaling rule solidcore has.
+5. **Upstream names.** Keep the upstream name in every doc comment indefinitely, or only until the
+   port of that layer is complete and the pin moves on?
+6. **Size table.** Answered by 01 §4.3: kept as `zone_for_size`, the rule that picks the size class at
+   `Document` creation, not a per-operation call.

@@ -11,8 +11,8 @@ with the date, who decided, and the evidence; status changes go in `05-status.md
 
 | File | What it is |
 |---|---|
-| [01-architecture.md](01-architecture.md) | The restructuring: what is wrong today, principles, the libraries, immutable finished bodies, caches, proofs and tolerances, the calling convention, errors, what to delete, speed, order of work, risks |
-| [02-testing.md](02-testing.md) | How to prove it works quickly: an oracle per layer, properties for operations, work counts as tests, what remains of the goldens |
+| [01-architecture.md](01-architecture.md) | solidcorex's own design (v2, 11-26): principles, the crates, the body model, caches, tolerances as data, errors, settings, interface style, determinism, validation, order of work, faults avoided, differences from earlier documents |
+| [02-testing.md](02-testing.md) | How to prove it works quickly: the pin comparison within tolerance, properties for operations, determinism checks, the work gate, tiers |
 | [03-upfront-planning.md](03-upfront-planning.md) | What to settle before moving any code |
 | [04-decisions.md](04-decisions.md) | What was decided, by whom, on what evidence; designs withdrawn; what is still open |
 | [06-licence-and-source.md](06-licence-and-source.md) | The licence decision and what it allows; the pinned solidcore commit |
