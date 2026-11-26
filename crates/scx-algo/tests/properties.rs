@@ -92,7 +92,10 @@ fn check(deg: usize, gap: f64, solve: impl Fn(&[f64]) -> Vec<f64>, seed: u64) ->
         let checked = deg < 4 || separated(&roots, gap);
         for &x in &got {
             assert!(x.is_finite(), "{c:?}: {got:?}");
-            assert!(!checked || rel_residual(&c, x) < 1e-6, "{c:?}: {x} of {got:?}");
+            assert!(
+                !checked || rel_residual(&c, x) < 1e-6,
+                "{c:?}: {x} of {got:?}"
+            );
         }
         if separated(&roots, gap) {
             separated_cases += 1;
