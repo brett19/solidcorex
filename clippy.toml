@@ -1,0 +1,7 @@
+# Written for solidcorex: solidcore's settings at the pinned commit.
+# Tests may use unwrap/expect/panic/indexing; library code may not (see [workspace.lints]).
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true
+doc-valid-idents = ["SMLib", "NLib", "NVIDIA", "SolidCraft", "OpenUSD", ".."]

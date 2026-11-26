@@ -1,0 +1,15 @@
+# Written for solidcorex.
+[package]
+name = "scx-num"
+description = "solidcorex layer 0: scalars, vectors, small matrices, transforms, extents and scalar tolerances"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# No dependencies: the bottom layer depends on nothing in the workspace and nothing outside it.
+[dependencies]
+
+[lints]
+workspace = true

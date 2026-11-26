@@ -1,0 +1,6 @@
+# Written for solidcorex: solidcore's toolchain at the pinned commit.
+[toolchain]
+channel = "1.99.1"
+components = ["rustfmt", "clippy"]
+targets = ["wasm32-unknown-unknown"]
+profile = "minimal"

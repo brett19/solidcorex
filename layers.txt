@@ -1,0 +1,10 @@
+# Written for solidcorex. The libraries, bottom to top: a crate may depend (normal, build or
+# dev) only on crates listed above it. Checked by `cargo xtask layers`.
+scx-num
+
+# Crates outside the order. `difftest` may depend on any library (and on the pinned
+# solidcore); `tool` crates depend on no workspace crate. Nothing may depend on either.
+[difftest]
+scx-difftest
+[tool]
+xtask

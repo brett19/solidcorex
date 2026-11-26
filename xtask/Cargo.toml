@@ -1,0 +1,14 @@
+# Written for solidcorex.
+[package]
+name = "xtask"
+description = "Repository checks: layering, file headers, the fast tier"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true
