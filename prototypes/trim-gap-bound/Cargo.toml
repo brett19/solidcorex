@@ -1,0 +1,19 @@
+[package]
+name = "scx-trim-gap-bound"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Research prototype: certified trim-to-edge gap bounds on offset and net-approximated surfaces (research report 55)"
+
+# Not a member of the solidcorex workspace: built on its own.
+[workspace]
+
+[dependencies]
+scx-num = { path = "../../crates/scx-num" }
+
+[profile.release]
+debug = "line-tables-only"
+
+[[bin]]
+name = "gap-bench"
+path = "src/bin/gap_bench.rs"
