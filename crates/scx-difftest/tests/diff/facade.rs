@@ -95,7 +95,7 @@ impl Gen for TolR {
 macro_rules! helpers {
     () => {
         use crate::facade::{TfR, TolR};
-        use crate::harness::MatR;
+        use crate::harness::{List, MatR};
 
         pub fn v3(a: [f64; 3]) -> vector3d::Vec3 {
             vector3d::Vec3::new(a[0], a[1], a[2])
@@ -124,6 +124,42 @@ macro_rules! helpers {
         pub fn mat(r: &MatR) -> matrix::Matrix {
             matrix::Matrix::from_row_major(r.0, r.1, r.2.clone()).unwrap()
         }
+        pub fn iv(a: [f64; 2]) -> interval::Ivl {
+            interval::Ivl::new(a[0], a[1])
+        }
+        pub fn ivs(a: &List<[f64; 2]>) -> Vec<interval::Ivl> {
+            a.0.iter().map(|&x| iv(x)).collect()
+        }
+        /// A Taylor model from interval coefficients and a remainder.
+        pub fn tm(c: &List<[f64; 2]>, rem: [f64; 2]) -> taylor_model::Tm {
+            taylor_model::Tm::from_poly(&ivs(c), iv(rem))
+        }
+        /// A truncation from two small numbers (orders past the table refuse).
+        pub fn trunc(s: usize, e: usize) -> series::Trunc {
+            series::Trunc::new(s % 8, e % 5).unwrap()
+        }
+        /// A series of `tr`'s size with its coefficients drawn cyclically from `v`.
+        pub fn ser<T: series::GnScalar>(v: &[T], tr: series::Trunc) -> series::Ser<T> {
+            let mut r = series::Ser::constant(<T as series::GnScalar>::of(0.0));
+            if v.is_empty() {
+                return r;
+            }
+            let mut n = 0;
+            for i in 0..=tr.s() {
+                for k in 0..=tr.e() {
+                    r.set(i, k, v[n % v.len()]);
+                    n += 1;
+                }
+            }
+            r
+        }
+        pub fn v3i(a: [[f64; 2]; 3]) -> series::V3<interval::Ivl> {
+            series::V3 {
+                x: iv(a[0]),
+                y: iv(a[1]),
+                z: iv(a[2]),
+            }
+        }
         pub fn tol_set(r: &TolR) -> Tolerances {
             let [zone_tol_3d, xsect_tol_3d, approx_tol_3d, ang_tol_deg, tol_gap_gain, model_size_estimate, large_small_size_ratio] =
                 r.0;
@@ -144,8 +180,9 @@ macro_rules! helpers {
 pub mod x {
     pub use scx_num::tol::Tolerances;
     pub use scx_num::{
-        certified, extent1d, extent2d, extent3d, limits, math, matrix, periodic_extent1d,
-        small_matrix, tol, transform, vector2d, vector3d,
+        certified, extent1d, extent2d, extent3d, interval, interval_vector, limits, math, matrix,
+        periodic_extent1d, ring, series, small_matrix, taylor_model, tol, transform, vector2d,
+        vector3d,
     };
     helpers!();
     /// What the moved tolerance functions take: the tolerance set itself.
@@ -160,8 +197,41 @@ pub mod s {
         certified, extent1d, extent2d, extent3d, matrix, periodic_extent1d, tol, transform,
         vector2d, vector3d,
     };
+    pub use solidcore::blend::fillet_section::tay as ring;
+    pub use solidcore::blend::fillet_section::{interval, series, taylor_model};
     pub use solidcore::kernel::Tolerances;
     pub use solidcore::{limits, math};
+    /// `geom::interval_vector` is `pub(crate)` at the pin: no function to call. Its five
+    /// bodies, as the pin's file writes them, over the pin's `Ivl`, so the moved file is
+    /// compared with the operations it is made of.
+    pub mod interval_vector {
+        use super::interval::Ivl;
+        pub fn cross(a: [Ivl; 3], b: [Ivl; 3]) -> [Ivl; 3] {
+            let [ax, ay, az] = a;
+            let [bx, by, bz] = b;
+            [ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx]
+        }
+        pub fn dot(a: [Ivl; 3], b: [Ivl; 3]) -> Ivl {
+            let [ax, ay, az] = a;
+            let [bx, by, bz] = b;
+            ax * bx + ay * by + az * bz
+        }
+        pub fn square(x: Ivl) -> Ivl {
+            let s = x * x;
+            Ivl::new(s.lo.max(0.0), s.hi)
+        }
+        pub fn norm(a: [Ivl; 3]) -> Ivl {
+            let [x, y, z] = a;
+            (square(x) + square(y) + square(z)).sqrt()
+        }
+        pub fn unit(a: [Ivl; 3]) -> Option<[Ivl; 3]> {
+            let length = norm(a);
+            if !length.is_finite() || length.lo <= 0.0 {
+                return None;
+            }
+            Some(a.map(|v| v / length))
+        }
+    }
     /// `smgu_*` small-matrix helpers, where solidcore keeps them.
     pub mod small_matrix {
         pub use solidcore::geom::geom_utility::p1::{
@@ -211,6 +281,45 @@ by_debug!(
     tol::SmallTopoType,
     math::AxisRefusal,
 );
+
+both!(interval::Ivl => |e, o| { e.lo.bits(o); e.hi.bits(o); });
+both!(taylor_model::Tm => |e, o| { e.c.bits(o); e.rem.bits(o); });
+both!(series::Trunc => |e, o| {
+    e.s().bits(o);
+    e.e().bits(o);
+    e.degree().bits(o);
+    e.computed_mask().bits(o);
+});
+
+/// The series types, generic over the scalar, on one side.
+macro_rules! series_bits {
+    ($m:ident) => {
+        impl<T: $m::series::GnScalar + Bits> Bits for $m::series::Ser<T> {
+            fn bits(&self, o: &mut Out) {
+                use $m::series::SeriesStorage;
+                for row in self.c.rows() {
+                    row.bits(o);
+                }
+            }
+        }
+        impl<T: $m::series::GnScalar + Bits> Bits for $m::series::VSer<T> {
+            fn bits(&self, o: &mut Out) {
+                for s in &self.a {
+                    s.bits(o);
+                }
+            }
+        }
+        impl<T: Bits> Bits for $m::series::V3<T> {
+            fn bits(&self, o: &mut Out) {
+                self.x.bits(o);
+                self.y.bits(o);
+                self.z.bits(o);
+            }
+        }
+    };
+}
+series_bits!(x);
+series_bits!(s);
 
 both!(vector3d::Vec3 => |e, o| { e.x.bits(o); e.y.bits(o); e.z.bits(o); });
 both!(vector2d::Vec2 => |e, o| { e.x.bits(o); e.y.bits(o); });
@@ -310,7 +419,16 @@ impl Bits for solidcore::SolidError {
     fn bits(&self, o: &mut Out) {
         o.tag(&format!("{:?}", self.kind()));
         o.tag(self.operation());
-        o.tag(&format!("{:?}", self.geom_failure()));
+        // The series' blend failures, by the names scx-num gives them (`NumFailure`).
+        use solidcore::error::blend::{BlendFailure, SectionDegeneracy};
+        match self.blend_failure() {
+            Some(BlendFailure::SectionDegenerate(SectionDegeneracy::VectorVanishes)) => {
+                o.tag("Some(VectorVanishes)");
+            }
+            Some(BlendFailure::Defect { why }) => o.tag(&format!("Some(Defect {{ why: {why:?} }})")),
+            Some(other) => o.tag(&format!("blend {other:?}")),
+            None => o.tag(&format!("{:?}", self.geom_failure())),
+        }
         if let Some(c) =
             std::error::Error::source(self).and_then(|c| c.downcast_ref::<solidcore::SolidError>())
         {
