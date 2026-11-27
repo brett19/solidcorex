@@ -709,6 +709,11 @@ spiric sections with the figure eight and the touch), `torus_villarceau`. Boolea
 **Not done here.** The perturbed variants with the tolerance's expected answer (§7 SM0) wait for
 the tolerance model of SM3; the NURBS-sphere form of `c7_tiny_loop_*` is SM5's test. No truth for
 sphere-cylinder with the sphere centre off the plane of the axes (not a closed form of this kind).
-`nearest` samples 4096 parameters and refines the six lowest local minima: a crossing needs more
-than one (a first version with one missed a point near a node by 2.6e-3). The test file takes about
-80 s on a busy machine (three CPU minutes): `nearest` is called about 12,000 times per case.
+`nearest` samples 512 parameters and narrows the six lowest local minima by golden section (about
+800 evaluations; a crossing needs more than one minimum: a first version with one missed a point
+near a node by 2.6e-3). Test time: the first version took 78 s wall (3 CPU minutes) because
+`nearest` (4096 samples) was called about 12,000 times per case; now the default run is 1.1 s
+(8 s with the build) and the `_full` sweeps (`-- --ignored`: all five radius pairs, 40 sphere
+pairs, 8 rigid motions, every naive vertex and 600 truth samples per comparison) are 12.7 s. The
+default run checks every 16th naive vertex against the same tolerance and 150 truth samples. CI
+runs the ignored sweeps next to the nurbs ones.

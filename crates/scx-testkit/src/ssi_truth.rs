@@ -362,13 +362,14 @@ impl TruthCurve {
             .collect()
     }
 
-    /// The nearest point of the curve to `p`: its parameter and distance. Sampled at 4096
+    /// The nearest point of the curve to `p`: its parameter and distance. Sampled at 512
     /// parameters; the six lowest local minima of the sampled distance (a crossing makes two
-    /// close ones) are each refined by golden-section search on the distance itself (not its
-    /// square: a point on the curve gives a corner, found to rounding).
+    /// close ones) are each narrowed by 30 golden-section steps on the distance itself (not
+    /// its square: a point on the curve gives a corner, found to rounding), and the best one
+    /// is refined to the parameter's last digits. About 800 evaluations.
     #[must_use]
     pub fn nearest(&self, p: P3) -> (f64, f64) {
-        const N: usize = 4096;
+        const N: usize = 512;
         let (a, b) = self.domain;
         let h = (b - a) / (N as f64);
         let ds: Vec<f64> = (0..N)
@@ -389,18 +390,13 @@ impl TruthCurve {
             .collect();
         minima.sort_by(|&x, &y| ds[x].total_cmp(&ds[y]));
         minima.truncate(6);
-        let g = 0.5 * (5.0_f64.sqrt() - 1.0);
         let f = |t: f64| dist(self.point(t), p);
-        let mut best = (a, f64::INFINITY);
-        for i in minima {
-            let c = a + h * (i as f64);
-            if ds[i] < best.1 {
-                best = (c, ds[i]);
-            }
-            let (mut lo, mut hi) = (c - h, c + h);
+        // Golden-section on `[lo, hi]` for `steps` steps: the narrowed bracket and its best.
+        let golden = |mut lo: f64, mut hi: f64, steps: usize| -> (f64, f64, f64, f64) {
+            let g = 0.5 * (5.0_f64.sqrt() - 1.0);
             let (mut x1, mut x2) = (hi - g * (hi - lo), lo + g * (hi - lo));
             let (mut f1, mut f2) = (f(x1), f(x2));
-            for _ in 0..80 {
+            for _ in 0..steps {
                 if f1 < f2 {
                     hi = x2;
                     x2 = x1;
@@ -415,12 +411,23 @@ impl TruthCurve {
                     f2 = f(x2);
                 }
             }
-            let (t, d) = if f1 < f2 { (x1, f1) } else { (x2, f2) };
-            if d < best.1 {
-                best = (t, d);
+            (lo, hi, if f1 < f2 { x1 } else { x2 }, f1.min(f2))
+        };
+        let mut best: Option<(f64, f64, f64, f64)> = None;
+        for i in minima {
+            let c = a + h * (i as f64);
+            let r = golden(c - h, c + h, 30);
+            if best.is_none_or(|b| r.3 < b.3) {
+                best = Some(r);
             }
         }
-        best
+        match best {
+            Some((lo, hi, _, _)) => {
+                let (_, _, t, d) = golden(lo, hi, 60);
+                (t, d)
+            }
+            None => (a, f64::INFINITY),
+        }
     }
 
     fn placed(&self, m: &Rigid) -> TruthCurve {
@@ -528,18 +535,21 @@ impl Truth {
         best
     }
 
-    /// The Hausdorff distances between the candidate polylines and the curves, the truth
-    /// sampled at `n` parameters per curve. A loop in the candidate is a polyline whose last
-    /// point repeats its first.
+    /// The farthest a vertex of the candidate polylines lies from the curves.
     #[must_use]
-    pub fn hausdorff(&self, candidate: &[Vec<P3>], n: usize) -> Hausdorff {
-        let to_truth = candidate
+    pub fn to_truth(&self, candidate: &[Vec<P3>]) -> f64 {
+        candidate
             .iter()
             .flatten()
             .filter_map(|&p| self.nearest(p).map(|b| b.2))
-            .fold(0.0, f64::max);
-        let from_truth = self
-            .curves
+            .fold(0.0, f64::max)
+    }
+
+    /// The farthest one of `n` samples per curve lies from the candidate polylines' chords
+    /// (so a coarse candidate shows its chord sag here).
+    #[must_use]
+    pub fn from_truth(&self, candidate: &[Vec<P3>], n: usize) -> f64 {
+        self.curves
             .iter()
             .flat_map(|c| c.samples(n))
             .map(|p| {
@@ -548,10 +558,17 @@ impl Truth {
                     .flat_map(|pl| pl.windows(2).map(|w| point_segment(p, w[0], w[1])))
                     .fold(f64::INFINITY, f64::min)
             })
-            .fold(0.0, f64::max);
+            .fold(0.0, f64::max)
+    }
+
+    /// The Hausdorff distances between the candidate polylines and the curves, the truth
+    /// sampled at `n` parameters per curve. A loop in the candidate is a polyline whose last
+    /// point repeats its first.
+    #[must_use]
+    pub fn hausdorff(&self, candidate: &[Vec<P3>], n: usize) -> Hausdorff {
         Hausdorff {
-            to_truth,
-            from_truth,
+            to_truth: self.to_truth(candidate),
+            from_truth: self.from_truth(candidate, n),
         }
     }
 

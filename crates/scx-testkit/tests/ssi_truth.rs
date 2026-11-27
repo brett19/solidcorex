@@ -212,8 +212,7 @@ fn bicylinder_by_x(r: f64, big: f64) -> f64 {
     )
 }
 
-#[test]
-fn bicylinder_volume_and_area() {
+fn bicylinder_volume_and_area_body(full: bool) {
     for r in [1.0, 2.5, 7.0] {
         let v = bicylinder_volume(r, r).unwrap();
         assert!((v - 16.0 * r * r * r / 3.0).abs() <= 1e-15 * v);
@@ -221,7 +220,12 @@ fn bicylinder_volume_and_area() {
     }
     let v = bicylinder_volume(1.5, 2.0).unwrap();
     assert!((v - 26.1131656).abs() < 5e-8, "{v}");
-    for (r, big) in [(1.5, 2.0), (0.3, 1.0), (1.0, 1.01), (4.0, 9.0), (0.01, 3.0)] {
+    let pairs: &[(f64, f64)] = if full {
+        &[(1.5, 2.0), (0.3, 1.0), (1.0, 1.01), (4.0, 9.0), (0.01, 3.0)]
+    } else {
+        &[(1.5, 2.0), (0.01, 3.0)]
+    };
+    for &(r, big) in pairs {
         let v = bicylinder_volume(r, big).unwrap();
         let (qy, qx) = (bicylinder_by_y(r, big), bicylinder_by_x(r, big));
         assert!(
@@ -320,10 +324,9 @@ fn unit_spheres_meet_in_the_plane_x_half() {
     }
 }
 
-#[test]
-fn sphere_sphere_cases() {
+fn sphere_sphere_cases_body(full: bool) {
     let mut rng = Rng::new(0x55_a1);
-    for _ in 0..40 {
+    for _ in 0..(if full { 40 } else { 8 }) {
         let v = |rng: &mut Rng| {
             [
                 rng.next_signed_unit(),
@@ -508,19 +511,21 @@ fn naive_angle(xy: impl Fn(f64) -> (f64, f64), g: impl Fn(f64) -> f64, n: usize)
 /// The naive candidate against the truth: every candidate vertex on a truth curve to
 /// `tight`, every truth sample within `loose` of the candidate's chords (the chord sag at a
 /// square-root end).
-fn compare(t: &Truth, naive: &[Vec<P3>], tight: f64, loose: f64) {
-    let h = t.hausdorff(naive, 600);
+fn compare(t: &Truth, naive: &[Vec<P3>], tight: f64, loose: f64, full: bool) {
+    // The default run checks every 16th candidate vertex (the same `tight`) and 150 truth
+    // samples; the full run every vertex and 600 samples.
+    let (step, n) = if full { (1, 600) } else { (16, 150) };
+    let thinned: Vec<Vec<P3>> = naive
+        .iter()
+        .map(|pl| pl.iter().copied().step_by(step).collect())
+        .collect();
+    let to = t.to_truth(&thinned);
+    assert!(to <= tight, "{}: candidate off the truth by {to}", t.name);
+    let from = t.from_truth(naive, n);
     assert!(
-        h.to_truth <= tight,
-        "{}: candidate off the truth by {}",
-        t.name,
-        h.to_truth
-    );
-    assert!(
-        h.from_truth <= loose,
-        "{}: truth off the candidate by {}",
-        t.name,
-        h.from_truth
+        from <= loose,
+        "{}: truth off the candidate by {from}",
+        t.name
     );
 }
 
@@ -560,8 +565,7 @@ fn four_roots(b: f64, c: f64) -> [Option<f64>; 4] {
 
 // --- perpendicular cylinders ------------------------------------------------------------------
 
-#[test]
-fn perpendicular_cylinders_by_offset() {
+fn perpendicular_cylinders_by_offset_body(full: bool) {
     // (r, R, e, loops, nodes, touches)
     let cases = [
         (1.5, 2.0, 0.0, 2, 0, 0),
@@ -606,7 +610,7 @@ fn perpendicular_cylinders_by_offset() {
                 }
                 v
             }));
-            compare(&t, &all, 1e-9, 2e-3 * big);
+            compare(&t, &all, 1e-9, 2e-3 * big, full);
         }
     }
     // One figure eight is one curve visited twice at its node.
@@ -735,8 +739,7 @@ fn viviani_curve_and_its_node() {
     }
 }
 
-#[test]
-fn sphere_cylinder_cases() {
+fn sphere_cylinder_cases_body(full: bool) {
     // (rho, r, e, loops, nodes, touches)
     let cases = [
         (3.0, 1.0, 1.0, 2, 0, 0),
@@ -779,7 +782,7 @@ fn sphere_cylinder_cases() {
                     .map(|s| (y2 >= 0.0).then(|| [x, s * y2.sqrt(), z]))
                     .collect()
             }));
-            compare(&t, &all, 1e-9, 2e-3 * rho);
+            compare(&t, &all, 1e-9, 2e-3 * rho, full);
         }
     }
     assert!(sphere_cylinder(1.0, 1.0, 0.0).unwrap().tangent);
@@ -791,8 +794,7 @@ fn sphere_cylinder_cases() {
 
 // --- torus and plane --------------------------------------------------------------------------
 
-#[test]
-fn torus_plane_spiric_sections() {
+fn torus_plane_spiric_sections_body(full: bool) {
     let (big, small) = (3.0, 1.0);
     // (d, loops, nodes, touches)
     let cases = [
@@ -840,7 +842,7 @@ fn torus_plane_spiric_sections() {
                     .map(|x| x.map(|x| [x, d, z]))
                     .collect()
             }));
-            compare(&t, &all, 1e-6, 4e-3);
+            compare(&t, &all, 1e-6, 4e-3, full);
         }
     }
     // d = 0 is two tube circles.
@@ -873,8 +875,7 @@ fn torus_plane_spiric_sections() {
     }
 }
 
-#[test]
-fn villarceau_circles() {
+fn villarceau_circles_body(full: bool) {
     for (big, small) in [(3.0, 1.0), (2.0, 1.5), (10.0, 0.1)] {
         let t = torus_villarceau(big, small).unwrap();
         assert_eq!(counts(&t), (2, 2, 0));
@@ -928,15 +929,14 @@ fn villarceau_circles() {
             .map(|x| x.map(|x| [x, u * c2.sqrt(), u * (small / big)]))
             .collect()
         }));
-        compare(&t, &all, 1e-5 * big, 4e-3 * big);
+        compare(&t, &all, 1e-5 * big, 4e-3 * big, full);
     }
     assert!(torus_villarceau(1.0, 1.0).is_none());
 }
 
 // --- placement and the Hausdorff measure ------------------------------------------------------
 
-#[test]
-fn placement_keeps_every_claim() {
+fn placement_keeps_every_claim_body(full: bool) {
     let mut rng = Rng::new(0x73_01);
     let truths = [
         cylinders_perpendicular(1.0, 1.0, 0.0).unwrap(),
@@ -948,7 +948,8 @@ fn placement_keeps_every_claim() {
         sphere_cylinder(2.0, 1.0, 0.0).unwrap(),
         tiny_loop(1.0, 1e-3).unwrap(),
     ];
-    for t in &truths {
+    let used = if full { truths.len() } else { 3 };
+    for t in &truths[..used] {
         let m = Rigid::turn(
             [
                 rng.next_signed_unit(),
@@ -1009,4 +1010,81 @@ fn hausdorff_measures_both_directions() {
     let p = c.point(1.234);
     let (u, d) = c.nearest(p);
     assert!((u - 1.234).abs() < 1e-9 && d < 1e-15);
+}
+
+#[test]
+fn perpendicular_cylinders_by_offset() {
+    perpendicular_cylinders_by_offset_body(false);
+}
+
+#[test]
+#[ignore = "slow exhaustive sweep"]
+fn perpendicular_cylinders_by_offset_full() {
+    perpendicular_cylinders_by_offset_body(true);
+}
+
+#[test]
+fn sphere_cylinder_cases() {
+    sphere_cylinder_cases_body(false);
+}
+
+#[test]
+#[ignore = "slow exhaustive sweep"]
+fn sphere_cylinder_cases_full() {
+    sphere_cylinder_cases_body(true);
+}
+
+#[test]
+fn torus_plane_spiric_sections() {
+    torus_plane_spiric_sections_body(false);
+}
+
+#[test]
+#[ignore = "slow exhaustive sweep"]
+fn torus_plane_spiric_sections_full() {
+    torus_plane_spiric_sections_body(true);
+}
+
+#[test]
+fn villarceau_circles() {
+    villarceau_circles_body(false);
+}
+
+#[test]
+#[ignore = "slow exhaustive sweep"]
+fn villarceau_circles_full() {
+    villarceau_circles_body(true);
+}
+
+#[test]
+fn bicylinder_volume_and_area() {
+    bicylinder_volume_and_area_body(false);
+}
+
+#[test]
+#[ignore = "slow exhaustive sweep"]
+fn bicylinder_volume_and_area_full() {
+    bicylinder_volume_and_area_body(true);
+}
+
+#[test]
+fn sphere_sphere_cases() {
+    sphere_sphere_cases_body(false);
+}
+
+#[test]
+#[ignore = "slow exhaustive sweep"]
+fn sphere_sphere_cases_full() {
+    sphere_sphere_cases_body(true);
+}
+
+#[test]
+fn placement_keeps_every_claim() {
+    placement_keeps_every_claim_body(false);
+}
+
+#[test]
+#[ignore = "slow exhaustive sweep"]
+fn placement_keeps_every_claim_full() {
+    placement_keeps_every_claim_body(true);
 }
