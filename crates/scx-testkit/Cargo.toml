@@ -1,0 +1,16 @@
+# Written for solidcorex.
+[package]
+name = "scx-testkit"
+description = "solidcorex truth references for tests: exact rational B-spline and NURBS evaluation, knot insertion and degree elevation, double-double analytic curves and surfaces, seeded generators"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+rust-version.workspace = true
+# Never published: a dev-dependency only (layers.txt [testkit]). Said here, not inherited.
+publish = false
+
+[dependencies]
+scx-num = { path = "../scx-num" }
+
+[lints]
+workspace = true

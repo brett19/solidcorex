@@ -15,7 +15,6 @@
     clippy::unwrap_used
 )]
 
-mod exact;
 mod facade;
 mod harness;
 mod pin_defects;

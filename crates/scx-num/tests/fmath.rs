@@ -1,5 +1,6 @@
 // Written for solidcorex. Apache-2.0.
-//! `fmath` against references computed here in double-double (about 104 bits), at
+//! `fmath` against references computed in double-double (about 104 bits, by
+//! `scx_testkit::dd`), at
 //! fixed-seed random inputs over each function's domain, and at hard cases whose
 //! references were computed once at 90 digits with Python's `decimal` (the table at the
 //! end: huge trigonometric arguments, the edges of overflow and underflow, subnormals,
@@ -14,9 +15,12 @@
 
 #![allow(missing_docs, clippy::pedantic, clippy::indexing_slicing)]
 
-use scx_num::eft::{fast_two_sum, two_prod, two_sum};
+use core::ops::{Add, Div, Mul, Neg, Sub};
+
+use scx_num::eft::{two_prod, two_sum};
 use scx_num::fmath;
 use scx_num::hash::Rng;
+use scx_testkit::dd::{self, consts, exponent, pow2, scale, ulp_err, Consts as K, Dd};
 
 /// The largest error allowed, in ulps of the reference. `fmath` measures at or below
 /// 0.5 ulp (correctly rounded) on every input checked; the margin covers only the
@@ -26,305 +30,35 @@ const BOUND: f64 = 0.501;
 /// Random inputs per function.
 const CASES: usize = 4000;
 
-// ---------------------------------------------------------------- double-double
-
-#[derive(Clone, Copy, Debug)]
-struct Dd(f64, f64);
-
-impl Dd {
-    fn new(x: f64) -> Self {
-        Dd(x, 0.0)
-    }
-    fn of(p: (f64, f64)) -> Self {
-        Dd(p.0, p.1)
-    }
-    fn add(self, o: Dd) -> Dd {
-        let (s, e) = two_sum(self.0, o.0);
-        let (t, f) = two_sum(self.1, o.1);
-        let (s, e) = fast_two_sum(s, e + t);
-        Dd::of(fast_two_sum(s, e + f))
-    }
-    fn neg(self) -> Dd {
-        Dd(-self.0, -self.1)
-    }
-    fn sub(self, o: Dd) -> Dd {
-        self.add(o.neg())
-    }
-    fn mul(self, o: Dd) -> Dd {
-        let (p, e) = two_prod(self.0, o.0);
-        Dd::of(fast_two_sum(p, e + (self.0 * o.1 + self.1 * o.0)))
-    }
-    fn mulf(self, f: f64) -> Dd {
-        self.mul(Dd::new(f))
-    }
-    fn div(self, o: Dd) -> Dd {
-        let q1 = self.0 / o.0;
-        let r = self.sub(o.mulf(q1));
-        let q2 = r.0 / o.0;
-        let r = r.sub(o.mulf(q2));
-        let q3 = r.0 / o.0;
-        Dd::of(fast_two_sum(q1, q2)).add(Dd::new(q3))
-    }
-    fn divf(self, f: f64) -> Dd {
-        self.div(Dd::new(f))
-    }
-    fn sqrt(self) -> Dd {
-        if self.0 <= 0.0 {
-            return Dd::new(0.0);
-        }
-        let s = self.0.sqrt();
-        let r = self.sub(Dd::of(two_prod(s, s)));
-        Dd::of(fast_two_sum(s, r.0 / (2.0 * s)))
-    }
-    fn abs(self) -> Dd {
-        if self.0 < 0.0 {
-            self.neg()
-        } else {
-            self
-        }
-    }
-    fn scale(self, k: i32) -> Dd {
-        Dd(scale(self.0, k), scale(self.1, k))
-    }
-}
-
-/// A series term `t` is spent once it is not above `bound`; a NaN term (from a NaN input)
-/// counts as spent, so no loop runs on forever.
-fn spent(t: f64, bound: f64) -> bool {
-    t.partial_cmp(&bound) != Some(std::cmp::Ordering::Greater)
-}
-
-/// `2^k` for `k` in `[-1022, 1023]`.
-fn pow2(k: i32) -> f64 {
-    f64::from_bits(((k + 1023) as u64) << 52)
-}
-
-/// `x 2^k`, exact whenever the result is normal.
-fn scale(mut x: f64, mut k: i32) -> f64 {
-    while k > 1000 {
-        x *= pow2(1000);
-        k -= 1000;
-    }
-    while k < -1000 {
-        x *= pow2(-1000);
-        k += 1000;
-    }
-    x * pow2(k)
-}
-
-/// `floor(log2 |x|)` for a finite nonzero `x`.
-fn exponent(x: f64) -> i32 {
-    let f = ((x.to_bits() >> 52) & 0x7ff) as i32;
-    if f == 0 {
-        exponent(x * pow2(64)) - 64
-    } else {
-        f - 1023
-    }
-}
-
-/// `|c - r 2^k|` in ulps of `r 2^k` (the ulp of its binade, floored at the subnormal
-/// spacing); an infinite `c` counts as `2^1024`.
-fn ulp_err(c: f64, r: Dd, k: i32) -> f64 {
-    if c.is_nan() {
-        return f64::INFINITY;
-    }
-    if r.0 == 0.0 {
-        return if c == 0.0 { 0.0 } else { f64::INFINITY };
-    }
-    let mut e = exponent(r.0) + k;
-    // hi a power of two and lo against it: the binade below.
-    if r.0.to_bits() & 0x000f_ffff_ffff_ffff == 0 && r.1 != 0.0 && (r.1 < 0.0) != (r.0 < 0.0) {
-        e -= 1;
-    }
-    if (c < 0.0) != (r.0 < 0.0) && c != 0.0 {
-        return f64::INFINITY;
-    }
-    if e >= 1024 {
-        return if c.is_infinite() { 0.0 } else { f64::INFINITY };
-    }
-    let u = (e - 52).max(-1074);
-    let rs = r.abs().scale(k - u);
-    let cs = if c.is_infinite() {
-        scale(1.0, 1024 - u)
-    } else {
-        scale(c.abs(), -u)
-    };
-    ((cs - rs.0) - rs.1).abs()
-}
-
-// ---------------------------------------------------------------- constants
-
-/// `atanh(s)` (`alt = false`) or `atan(s)` (`alt = true`) by their series, `|s| <= 1/3`.
-fn series(s: Dd, alt: bool) -> Dd {
-    let s2 = s.mul(s);
-    let (mut term, mut sum, mut n) = (s, s, 1.0);
-    loop {
-        term = term.mul(s2);
-        n += 2.0;
-        let mut t = term.divf(n);
-        if alt && (n as i64 / 2) % 2 == 1 {
-            t = t.neg();
-        }
-        sum = sum.add(t);
-        if spent(t.0.abs(), sum.0.abs() * 1e-34) {
-            return sum;
-        }
-    }
-}
-
-struct K {
-    ln2: Dd,
-    ln10: Dd,
-    pi: Dd,
-    pio2: Dd,
-}
-
-fn consts() -> K {
-    let third = Dd::new(1.0).divf(3.0);
-    let ln2 = series(third, false).mulf(2.0);
-    // ln 10 = 3 ln 2 + ln(5/4), ln(5/4) = 2 atanh(1/9).
-    let ln10 = ln2
-        .mulf(3.0)
-        .add(series(Dd::new(1.0).divf(9.0), false).mulf(2.0));
-    // Machin: pi/4 = 4 atan(1/5) - atan(1/239).
-    let a5 = series(Dd::new(1.0).divf(5.0), true);
-    let a239 = series(Dd::new(1.0).divf(239.0), true);
-    let pi = a5.mulf(16.0).sub(a239.mulf(4.0));
-    K {
-        ln2,
-        ln10,
-        pi,
-        pio2: pi.mulf(0.5),
-    }
-}
-
-// ---------------------------------------------------------------- references
-
-/// `ln(x)` for a finite positive `x`: `e ln 2 + 2 atanh((m - 1)/(m + 1))`.
-fn ln_ref(k: &K, x: f64) -> Dd {
-    let mut e = exponent(x);
-    let mut m = scale(x, -e);
-    if m > core::f64::consts::SQRT_2 {
-        m *= 0.5;
-        e += 1;
-    }
-    // m - 1 is exact (Sterbenz); m + 1 as a double-double.
-    let s = Dd::new(m - 1.0).div(Dd::of(two_sum(m, 1.0)));
-    k.ln2.mulf(f64::from(e)).add(series(s, false).mulf(2.0))
-}
-
-/// `e^z` as `(d, n)`, meaning `d 2^n`.
-fn exp_ref(k: &K, z: Dd) -> (Dd, i32) {
-    let n = (z.0 / k.ln2.0).round();
-    let r = z.sub(k.ln2.mulf(n)).scale(-10);
-    // expm1(r) by its series, then (1 + t)^1024 as t <- 2t + t^2, ten times.
-    let (mut term, mut t, mut i) = (r, r, 1.0);
-    while r.0 != 0.0 && r.0.is_finite() {
-        i += 1.0;
-        term = term.mul(r).divf(i);
-        t = t.add(term);
-        if spent(term.0.abs(), t.0.abs() * 1e-34) {
-            break;
-        }
-    }
-    for _ in 0..10 {
-        t = t.mulf(2.0).add(t.mul(t));
-    }
-    (Dd::new(1.0).add(t), n as i32)
-}
-
-/// `(sin x, cos x)` for `|x| < 2^20`.
-fn sincos_ref(k: &K, x: Dd) -> (Dd, Dd) {
-    let n = (x.0 / k.pio2.0).round();
-    let y = x.sub(k.pio2.mulf(n));
-    let y2 = y.mul(y);
-    let (mut ts, mut s, mut i) = (y, y, 1.0);
-    while y.0 != 0.0 && y.0.is_finite() {
-        ts = ts.mul(y2).divf(-(i + 1.0) * (i + 2.0));
-        i += 2.0;
-        s = s.add(ts);
-        if spent(ts.0.abs(), s.0.abs() * 1e-34) {
-            break;
-        }
-    }
-    let (mut tc, mut c, mut i) = (Dd::new(1.0), Dd::new(1.0), 0.0);
-    loop {
-        tc = tc.mul(y2).divf(-(i + 1.0) * (i + 2.0));
-        i += 2.0;
-        c = c.add(tc);
-        if spent(tc.0.abs(), 1e-34) {
-            break;
-        }
-    }
-    match (n as i64).rem_euclid(4) {
-        0 => (s, c),
-        1 => (c, s.neg()),
-        2 => (s.neg(), c.neg()),
-        _ => (c.neg(), s),
-    }
-}
-
-/// `atan(t)` by Newton's method on `tan y = t` from `fmath`'s result, for `|t| <= 1`
-/// (above, `pi/2 - atan(1/t)`: Newton's step is ill-conditioned next to `pi/2`).
-fn atan_ref(k: &K, t: Dd) -> Dd {
-    if t.0.abs() > 1.0 {
-        let r = atan_ref(k, Dd::new(1.0).div(t));
-        let h = if t.0 > 0.0 { k.pio2 } else { k.pio2.neg() };
-        return h.sub(r);
-    }
-    let mut y = Dd::new(fmath::atan(t.0));
-    for _ in 0..2 {
-        let (s, c) = sincos_ref(k, y);
-        y = y.add(t.mul(c).sub(s).mul(c));
-    }
-    y
-}
-
-fn sinh_cosh_series(x: f64) -> (Dd, Dd) {
-    let x = Dd::new(x);
-    let x2 = x.mul(x);
-    let (mut ts, mut s, mut tc, mut c, mut i) = (x, x, Dd::new(1.0), Dd::new(1.0), 0.0);
-    loop {
-        tc = tc.mul(x2).divf((i + 1.0) * (i + 2.0));
-        ts = ts.mul(x2).divf((i + 2.0) * (i + 3.0));
-        i += 2.0;
-        c = c.add(tc);
-        s = s.add(ts);
-        if spent(tc.0, 1e-34) {
-            return (s, c);
-        }
-    }
-}
-
 /// The reference for `f` at `(x, y)`, as `(d, n)` meaning `d 2^n`.
 fn reference(k: &K, f: &str, x: f64, y: f64) -> (Dd, i32) {
     let plain = |d: Dd| (d, 0);
     match f {
-        "exp" => exp_ref(k, Dd::new(x)),
-        "exp2" => exp_ref(k, k.ln2.mulf(x)),
-        "ln" => plain(ln_ref(k, x)),
-        "log2" => plain(ln_ref(k, x).div(k.ln2)),
-        "log10" => plain(ln_ref(k, x).div(k.ln10)),
-        "sin" => plain(sincos_ref(k, Dd::new(x)).0),
-        "cos" => plain(sincos_ref(k, Dd::new(x)).1),
+        "exp" => dd::exp(Dd::new(x)),
+        "exp2" => dd::exp(k.ln2.mul(x)),
+        "ln" => plain(dd::ln(x)),
+        "log2" => plain(dd::ln(x).div(k.ln2)),
+        "log10" => plain(dd::ln(x).div(k.ln10)),
+        "sin" => plain(dd::sin_cos(Dd::new(x)).0),
+        "cos" => plain(dd::sin_cos(Dd::new(x)).1),
         "tan" => {
-            let (s, c) = sincos_ref(k, Dd::new(x));
+            let (s, c) = dd::sin_cos(Dd::new(x));
             plain(s.div(c))
         }
-        "atan" => plain(atan_ref(k, Dd::new(x))),
-        "asin" if x.abs() == 1.0 => plain(k.pio2.mulf(x)),
+        "atan" => plain(dd::atan(Dd::new(x))),
+        "asin" if x.abs() == 1.0 => plain(k.pio2.mul(x)),
         "acos" if x == -1.0 => plain(k.pi),
         "asin" => {
             let c = Dd::of(two_sum(1.0, -x)).mul(Dd::of(two_sum(1.0, x))).sqrt();
-            plain(atan_ref(k, Dd::new(x).div(c)))
+            plain(dd::atan(Dd::new(x).div(c)))
         }
         "acos" => {
             let t = Dd::of(two_sum(1.0, -x)).div(Dd::of(two_sum(1.0, x))).sqrt();
-            plain(atan_ref(k, t).mulf(2.0))
+            plain(dd::atan(t).mul(2.0))
         }
         "atan2" => {
             // atan2(x, y): x is the ordinate.
-            let a = atan_ref(k, Dd::new(x).div(Dd::new(y)).abs());
+            let a = dd::atan(Dd::new(x).div(Dd::new(y)).abs());
             let a = if y > 0.0 { a } else { k.pi.sub(a) };
             plain(if x < 0.0 { a.neg() } else { a })
         }
@@ -332,7 +66,7 @@ fn reference(k: &K, f: &str, x: f64, y: f64) -> (Dd, i32) {
             let a = x.abs();
             let sg = |d: Dd| if x < 0.0 && f != "cosh" { d.neg() } else { d };
             if a < 0.5 {
-                let (s, c) = sinh_cosh_series(a);
+                let (s, c) = dd::sinh_cosh_series(a);
                 return plain(sg(match f {
                     "sinh" => s,
                     "cosh" => c,
@@ -340,20 +74,20 @@ fn reference(k: &K, f: &str, x: f64, y: f64) -> (Dd, i32) {
                 }));
             }
             if a > 40.0 && f != "tanh" {
-                let (d, n) = exp_ref(k, Dd::new(a));
+                let (d, n) = dd::exp(Dd::new(a));
                 return (sg(d), n - 1);
             }
             if a > 40.0 {
                 // 1 - 2 e^(-2a).
-                let (d, n) = exp_ref(k, Dd::new(-2.0 * a));
+                let (d, n) = dd::exp(Dd::new(-2.0 * a));
                 return plain(sg(Dd::new(1.0).sub(d.scale(n + 1))));
             }
-            let (d, n) = exp_ref(k, Dd::new(a));
+            let (d, n) = dd::exp(Dd::new(a));
             let e = d.scale(n);
             let r = Dd::new(1.0).div(e);
             plain(sg(match f {
-                "sinh" => e.sub(r).mulf(0.5),
-                "cosh" => e.add(r).mulf(0.5),
+                "sinh" => e.sub(r).mul(0.5),
+                "cosh" => e.add(r).mul(0.5),
                 _ => e.sub(r).div(e.add(r)),
             }))
         }
@@ -364,7 +98,7 @@ fn reference(k: &K, f: &str, x: f64, y: f64) -> (Dd, i32) {
             let mut r = Dd::new(fmath::cbrt(a));
             for _ in 0..2 {
                 let res = r.mul(r).mul(r).sub(Dd::new(a));
-                r = r.sub(res.div(r.mul(r).mulf(3.0)));
+                r = r.sub(res.div(r.mul(r).mul(3.0)));
             }
             (if x < 0.0 { r.neg() } else { r }, q)
         }
@@ -375,7 +109,7 @@ fn reference(k: &K, f: &str, x: f64, y: f64) -> (Dd, i32) {
             (s.sqrt(), e)
         }
         "powf" | "powi" => {
-            let (d, n) = exp_ref(k, ln_ref(k, x.abs()).mulf(y));
+            let (d, n) = dd::exp(dd::ln(x.abs()).mul(y));
             let odd = y == y.trunc() && y.abs() < 9.0e15 && (y as i64) & 1 == 1;
             (if x < 0.0 && odd { d.neg() } else { d }, n)
         }
@@ -561,7 +295,7 @@ fn random_inputs_within_bound() {
         let mut worst = (0.0, 0.0, 0.0);
         for i in 0..CASES {
             let (x, y) = input(f, &mut rng, i);
-            let (d, n) = reference(&k, ref_name(f), x, y);
+            let (d, n) = reference(k, ref_name(f), x, y);
             let err = ulp_err(call(f, x, y), d, n);
             if err > worst.0 {
                 worst = (err, x, y);
@@ -582,7 +316,10 @@ fn hard_cases_within_bound() {
     let mut failures = Vec::new();
     for &(f, x, y, hi, lo, n) in HARD {
         let (x, y) = (f64::from_bits(x), f64::from_bits(y));
-        let r = Dd(f64::from_bits(hi), f64::from_bits(lo));
+        let r = Dd {
+            hi: f64::from_bits(hi),
+            lo: f64::from_bits(lo),
+        };
         let fs: &[&str] = match f {
             "sin" => &["sin", "sin_cos.sin"],
             "cos" => &["cos", "sin_cos.cos"],
@@ -604,7 +341,7 @@ fn hard_cases_within_bound() {
 fn references_at_known_values() {
     let k = consts();
     let exact = |f: &str, x: f64, y: f64, v: f64| {
-        let (d, n) = reference(&k, f, x, y);
+        let (d, n) = reference(k, f, x, y);
         assert!(ulp_err(v, d, n) < 1e-6, "{f}({x}, {y}) reference");
         assert_eq!(call(f, x, y), v, "{f}({x}, {y})");
     };
@@ -623,7 +360,7 @@ fn references_at_known_values() {
     exact("powf", 4.0, 0.5, 2.0);
     exact("powf", 10.0, 22.0, 1e22);
     // pi/4, pi, and pi/2 rounded.
-    let (d, _) = reference(&k, "atan", 1.0, 0.0);
+    let (d, _) = reference(k, "atan", 1.0, 0.0);
     assert!(ulp_err(core::f64::consts::FRAC_PI_4, d, 0) <= 0.5);
     assert!(ulp_err(core::f64::consts::PI, k.pi, 0) <= 0.5);
     assert!(ulp_err(core::f64::consts::LN_2, k.ln2, 0) <= 0.5);
