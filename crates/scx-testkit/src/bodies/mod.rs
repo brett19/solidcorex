@@ -28,6 +28,7 @@
 pub mod check;
 mod curved;
 mod loose;
+pub mod made;
 mod mesh;
 mod planar;
 mod shell;

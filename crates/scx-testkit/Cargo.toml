@@ -16,11 +16,12 @@ scx-num = { path = "../scx-num" }
 scx-brep = { path = "../scx-brep", optional = true }
 scx-curve = { path = "../scx-curve", optional = true }
 scx-nurbs = { path = "../scx-nurbs", optional = true }
+scx-planar = { path = "../scx-planar", optional = true }
 scx-surface = { path = "../scx-surface", optional = true }
 
 [features]
 # Seeded valid and broken bodies, built through `scx-brep`'s `Draft`.
-bodies = ["dep:scx-brep", "dep:scx-curve", "dep:scx-nurbs", "dep:scx-surface"]
+bodies = ["dep:scx-brep", "dep:scx-curve", "dep:scx-nurbs", "dep:scx-surface", "dep:scx-planar"]
 
 [lints]
 workspace = true

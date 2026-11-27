@@ -12,12 +12,12 @@ use std::f64::consts::PI;
 
 use scx_brep::op::{Cx, Done, NoTrace, Scratch, Settings};
 use scx_brep::{Brep, Changes, Document, EdgeId, Entity, FaceId, Origin};
-use scx_make::torus;
 use scx_mass::RelAccuracy;
 use scx_num::budget::{Budget, Stop};
 use scx_num::frame::Frame;
 use scx_num::units::Length;
 use scx_num::vector3d::Vec3;
+use scx_testkit::bodies::made::torus;
 
 use super::face_face::{X, Z, ball, cyl};
 use super::{cuboid, pt};
@@ -528,7 +528,9 @@ fn crease(d: f64, doc: Document) -> Brep {
     )
     .unwrap();
     let size = [10.0, 10.0, 20.0].map(Length::from_mm);
-    scx_make::block(&frame, size, &doc).unwrap().body
+    scx_testkit::bodies::made::block(&frame, size, &doc)
+        .unwrap()
+        .body
 }
 
 #[test]
