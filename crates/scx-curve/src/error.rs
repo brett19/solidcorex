@@ -3,8 +3,9 @@
 //!
 //! Errors follow research 62 §10: every cause has a kind ([`CurveError::kind`]), a stable
 //! name ([`CurveError::name`]) and a Display of one frame. A construction cause is the
-//! caller's data, kind `Refused` (63 X13); a query no arm answers yet is `Unsupported`. Evaluation of these kinds never fails: a point and a jet
-//! are closed forms, total over `f64` (a NaN parameter gives NaN coordinates).
+//! caller's data, kind `Refused` (63 X13); a query no arm answers yet is `Unsupported`.
+//! Evaluation of these kinds never fails: a point and a jet are closed forms, total over
+//! `f64` (a NaN parameter gives NaN coordinates).
 //!
 //! | solidcore at the pin | here |
 //! |---|---|
@@ -14,7 +15,6 @@
 //! | none: an infinite radius builds | [`CurveError::NotFinite`] |
 //! | none: `Ellipse::new` builds any radii | [`Degenerate::SemiAxis`], [`CurveError::NotFinite`] |
 //! | none: non-finite points and vectors build | [`CurveError::NotFinite`] (a [`Frame`](scx_num::frame::Frame) refuses them itself) |
-//!
 //! | none: a NURBS curve's inversion runs the general solver | [`Unsupported::NurbsInversion`] |
 //!
 //! `OutsideDomain`, `TooLarge` and `Solve` (63 §3.2) join with the first operation that can

@@ -2,9 +2,10 @@
 // `solidcore/crates/solidcore/src/curve/ellipse/p2.rs` and
 // `solidcore/crates/solidcore/src/geom/geom_utility/p1.rs` at commit
 // 03e16c9ee766de5b9b1ced845e5149d62ff493b8.
-// Upstream record (verbatim from those files): Upstream: `source/SMLib/src/SmLine.cpp`.
-// Upstream: `source/SMLib/src/SmEllipse.cpp`, `source/SMLib/src/SmCircle.cpp`. Upstream:
-// `source/SMLib/src/SmGeomUtility.cpp`.
+// Upstream record (verbatim from those files): Upstream: `source/SMLib/src/SmLine.cpp`,
+// `source/SMLib/inc/SmLine.h`. Upstream: `source/SMLib/src/SmEllipse.cpp`,
+// `source/SMLib/inc/SmEllipse.h`. Upstream: `source/SMLib/src/SmGeomUtility.cpp`,
+// `source/SMLib/inc/SmGeomUtility.h`.
 // Changes: one closest-point routine per kind and one inversion against a domain, as values
 // (63 X8, D7): `Closest` and 57 F6's `Inversion { Inside, Outside }` of a `Foot`, with no
 // `Failed`, status number or out-parameter. The line keeps `line_closest_point`'s projection

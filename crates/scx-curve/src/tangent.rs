@@ -1,6 +1,7 @@
 // Derived from solidcore `solidcore/crates/solidcore/src/nurbs/b_spline_curve/p1.rs` at commit
 // 03e16c9ee766de5b9b1ced845e5149d62ff493b8.
-// Upstream record (verbatim from that file): Upstream: `source/SMLib/src/SmBSplineCurve.cpp`.
+// Upstream record (verbatim from that file): Upstream: `source/SMLib/src/SmBSplineCurve.cpp`,
+// `source/SMLib/inc/SmBSplineCurve.h`.
 // Changes: `Evaluate`'s `bNonZeroTangents` flag is dropped (63 X5, A2): derivatives stay the
 // true ones, and the limiting direction is its own call. The pin's floor for a vanishing first
 // derivative (`1.1 SM_EFF_ZERO (1 + max|P|)`) is kept, and applied to each derivative in turn
