@@ -14,7 +14,7 @@ use scx_surface::{Closed, Cone, Cylinder, Plane, Sphere, Surface, Torus};
 
 use super::Contact::{Tangent, Transversal};
 use super::Intersection;
-use super::clip::{Axes, Clip, Raw, Shape, Side, step_bounds};
+use super::clip::{Axes, Clip, Part, Raw, Shape, Side, step_bounds};
 
 /// A conic's semi-axis longer than this many units of its last place past the tolerance is
 /// beyond the precision of the closed form: [`Closed::General`]. `2^-50`, a few units of
@@ -41,19 +41,34 @@ impl Found {
     }
 }
 
-/// The section of `s` over `se` by `plane` over `pe` within `tol`, its curves along
-/// `sign (n_s x n_plane)`.
+/// Which of the pair the plane is: its curves run along the first's normal across the
+/// second's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Order {
+    /// `n_s x n_plane`.
+    PlaneSecond,
+    /// `n_plane x n_s`.
+    PlaneFirst,
+}
+
+/// The section of `s` over `se` by `plane` over `pe` within `tol`, its curves oriented by
+/// `order`.
 pub(super) fn section(
     s: &Surface,
     se: &Extent2d,
     plane: &Plane,
     pe: &Extent2d,
     tol: Length,
-    sign: f64,
+    order: Order,
 ) -> Closed<Intersection> {
     let tol = tol.mm();
-    let Some(clip) = Clip::new(s, se, plane, pe, tol, sign) else {
+    let Some(part) = Part::of(s, se) else {
         return Closed::General;
+    };
+    let flat = Part::plane(plane, pe);
+    let clip = match order {
+        Order::PlaneSecond => Clip::new(part, flat, tol),
+        Order::PlaneFirst => Clip::new(flat, part, tol),
     };
     let n = *plane.frame().z();
     let p0 = plane.frame().origin();

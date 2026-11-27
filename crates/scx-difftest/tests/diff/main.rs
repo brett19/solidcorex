@@ -53,6 +53,7 @@ mod t_rest;
 mod t_rng;
 mod t_solve;
 mod t_ssi;
+mod t_ssi_coaxial;
 mod t_surface;
 mod t_tol;
 mod t_vector;

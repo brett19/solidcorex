@@ -4870,3 +4870,25 @@ pub fn ssi_section_by_plane() -> PinDefect<(crate::t_ssi::Case,), crate::t_ssi::
         check: |(c,), _| crate::t_ssi::truth::check(c),
     }
 }
+
+/// The sphere and coaxial pairs of `analytic::intersect` against the pin's
+/// `intersect_with_sphere` and `intersect_with_cone` (`t_ssi_coaxial`): the inputs where the
+/// two answers differ past the tolerance, each judged against the exact section (testkit
+/// T5) by `t_ssi_coaxial::truth::check`. They fall in these classes (the counts are of the
+/// pool):
+///
+/// - Two cones on one axis, or a cylinder and a cone: the pin answers general; scx answers
+///   the circle where the meridians cross (41 and 64), empty where they do not meet within
+///   both heights (58 and 28), or coincident (6, two cones of one apex and angle).
+/// - Two cylinders of one radius over shared heights (46): the pin answers coincident or
+///   tangent arcs and lines along the overlap; scx answers coincident.
+/// - A sphere and a cylinder of its radius (27): the pin answers the equator as a crossing
+///   circle; scx answers it tangent, as the truth does (the surfaces share their normal
+///   there).
+pub fn ssi_coaxial() -> PinDefect<(crate::t_ssi_coaxial::Case,), crate::t_ssi::Print> {
+    PinDefect {
+        reason: "the pin leaves coaxial and coincident pairs to the general intersector",
+        applies: Applies::Disagreeing,
+        check: |(c,), _| crate::t_ssi_coaxial::truth::check(c),
+    }
+}

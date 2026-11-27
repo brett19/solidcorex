@@ -17,7 +17,8 @@
 //! world circle when the frame is orthonormal.
 //!
 //! Two curved surfaces are a closed-form pair here when they share their axes (`X`, `Y`
-//! and `Z` equal bit for bit) so they share `L` up to a shift: spheres anywhere (their
+//! and `Z` equal bit for bit, or a signed permutation of them keeping `Z` the axis: a
+//! reversed axis, a quarter turn) so they share `L` up to a shift: spheres anywhere (their
 //! radical plane against one of them), and coaxial pairs, the shift along `Z` only, whose
 //! meridians meet at circle heights from a polynomial in the axial coordinate. A plane
 //! meets a torus here only across its axis. Any other pair is [`Error::NoClosedForm`].
@@ -341,8 +342,34 @@ fn sampled(s: [&Space; 2], pieces: Vec<(Curve, Contact)>) -> Section {
     )
 }
 
-fn same_axes(a: &Frame, b: &Frame) -> bool {
-    a.x == b.x && a.y == b.y && a.z == b.z
+/// The second frame's axial direction against the first's, `1` or `-1`, when the frames
+/// share their axes up to a signed permutation that keeps the axis an axis: `Z_b = +-Z_a`
+/// and `X_b`, `Y_b` each `+-X_a` or `+-Y_a`, one of each, bit for bit. Then
+/// `L_b = P (L_a - o)` for that permutation `P`, which keeps `x^2 + y^2` and `|L|^2` and
+/// at most negates `z`: the forms of revolution are shared exactly, a cone's slope negated
+/// with the axis.
+fn shared_axes(a: &Frame, b: &Frame) -> Option<i64> {
+    let neg = |v: [f64; 3]| v.map(|x| -x);
+    let dir = if b.z == a.z {
+        1
+    } else if b.z == neg(a.z) {
+        -1
+    } else {
+        return None;
+    };
+    let which = |v: [f64; 3]| {
+        if v == a.x || v == neg(a.x) {
+            Some(0)
+        } else if v == a.y || v == neg(a.y) {
+            Some(1)
+        } else {
+            None
+        }
+    };
+    match (which(b.x)?, which(b.y)?) {
+        (0, 1) | (1, 0) => Some(dir),
+        _ => None,
+    }
 }
 
 // ---------------------------------------------------------------- the cone's slope
@@ -833,11 +860,15 @@ pub fn intersect(s1: &SurfaceKind, s2: &SurfaceKind) -> Result<Section, Error> {
         (SurfaceKind::Plane(_), SurfaceKind::Plane(p)) => planes(&a, &b, p),
         (SurfaceKind::Plane(p), _) => plane_surface(&b, [&a, &b], p),
         (_, SurfaceKind::Plane(p)) => plane_surface(&a, [&a, &b], p),
-        (SurfaceKind::Sphere(_), SurfaceKind::Sphere(_)) if same_axes(frame(s1), frame(s2)) => {
-            spheres(&a, &b)
-        }
-        _ if same_axes(frame(s1), frame(s2)) => revolved(&a, &b),
-        _ => Err(Error::NoClosedForm),
+        _ => match shared_axes(frame(s1), frame(s2)) {
+            Some(_)
+                if matches!(s1, SurfaceKind::Sphere(_)) && matches!(s2, SurfaceKind::Sphere(_)) =>
+            {
+                spheres(&a, &b)
+            }
+            Some(dir) => revolved(&a, &b, &Rat::from(dir)),
+            None => Err(Error::NoClosedForm),
+        },
     }
 }
 
@@ -905,8 +936,9 @@ fn spheres(a: &Space, b: &Space) -> Result<Section, Error> {
     Ok(sampled([a, b], pieces))
 }
 
-/// Two surfaces of revolution on one axis, in the first's axial coordinate.
-fn revolved(a: &Space, b: &Space) -> Result<Section, Error> {
+/// Two surfaces of revolution on one axis, in the first's axial coordinate; the second's
+/// axis runs `dir` (`+-1`) times the first's.
+fn revolved(a: &Space, b: &Space, dir: &Rat) -> Result<Section, Error> {
     let o = a.exact.local(&b.exact.origin);
     let [ox, oy, oz] = &o;
     if !(ox.is_zero() && oy.is_zero()) {
@@ -915,8 +947,8 @@ fn revolved(a: &Space, b: &Space) -> Result<Section, Error> {
     let (sa, sb) = (&a.exact.shape, &b.exact.shape);
     let (ka, kb) = (Slope::of(sa), Slope::of(sb));
     let m1 = meridian(sa, &Rat::zero(), &ka.k).ok_or(Error::NoClosedForm)?;
-    let m2 = meridian(sb, oz, &kb.k).ok_or(Error::NoClosedForm)?;
-    banded::prove(sa, sb, oz)?;
+    let m2 = meridian(sb, oz, &(&kb.k * dir)).ok_or(Error::NoClosedForm)?;
+    banded::prove(sa, sb, oz, dir)?;
     Ok(rings([a, b], a, coaxial(&m1, &m2)))
 }
 
@@ -1160,11 +1192,11 @@ mod banded {
     /// A cone against a torus coaxially: the quartic's resultant with its derivative (its
     /// degree and square-freeness) and its value at the apex, as polynomials in the one
     /// slope `k`, keep their signs over the band (the slope's [`super::Slope::sign`]).
-    fn torus(a: &Shape, b: &Shape, oz: &Rat, slope: &super::Slope) -> Result<(), Error> {
+    fn torus(a: &Shape, b: &Shape, oz: &Rat, dir: &Rat, slope: &super::Slope) -> Result<(), Error> {
         const D: usize = 4;
         let quartic = |k: &Rat| -> Vec<Rat> {
             let m1 = super::meridian(a, &Rat::zero(), k);
-            let m2 = super::meridian(b, oz, k);
+            let m2 = super::meridian(b, oz, &(k * dir));
             let g = match (m1, m2) {
                 (Some(Meridian::RhoSq(p)), Some(Meridian::Torus { big2, small2, h0 }))
                 | (Some(Meridian::Torus { big2, small2, h0 }), Some(Meridian::RhoSq(p))) => {
@@ -1180,7 +1212,10 @@ mod banded {
             // rho = r + k (h - h0): (r - k h0, k)
             match (a, b) {
                 (Shape::Cone { r, .. }, _) => (r.clone(), k.clone()),
-                (_, Shape::Cone { r, .. }) => (r - &(k * oz), k.clone()),
+                (_, Shape::Cone { r, .. }) => {
+                    let k = k * dir;
+                    (r - &(&k * oz), k)
+                }
                 _ => (Rat::zero(), Rat::zero()),
             }
         };
@@ -1215,9 +1250,10 @@ mod banded {
         Ok(())
     }
 
-    /// Proves the coaxial answer of `a` and `b` (at axial offset `oz`) at the slopes'
-    /// values holds over their bands (module docs); `Ok` too when neither is a cone.
-    pub(super) fn prove(a: &Shape, b: &Shape, oz: &Rat) -> Result<(), Error> {
+    /// Proves the coaxial answer of `a` and `b` (at axial offset `oz`, `b`'s axis running
+    /// `dir` times `a`'s) at the slopes' values holds over their bands (module docs); `Ok`
+    /// too when neither is a cone.
+    pub(super) fn prove(a: &Shape, b: &Shape, oz: &Rat, dir: &Rat) -> Result<(), Error> {
         let (ka, kb) = (super::Slope::of(a), super::Slope::of(b));
         if ka.band.is_none() && kb.band.is_none() {
             return Ok(());
@@ -1233,11 +1269,13 @@ mod banded {
             },
         ];
         let ea = E::slope(&ka.k, 0);
-        let eb = E::slope(&kb.k, usize::from(ka.band.is_some() && !shared));
+        // `b`'s own slope, negated with its axis: `dir (k_b + e)`.
+        let eb = E::slope(&kb.k, usize::from(ka.band.is_some() && !shared))
+            .mul(&E::constant(dir.clone()));
         let (Some((p1, l1)), Some((p2, l2))) =
             (meridian(a, &Rat::zero(), &ea), meridian(b, oz, &eb))
         else {
-            return torus(a, b, oz, if ka.band.is_some() { &ka } else { &kb });
+            return torus(a, b, oz, dir, if ka.band.is_some() { &ka } else { &kb });
         };
         let proved = |e: &E| e.sign(&w).ok_or(Error::Undecided);
         let mut g = hadd(&p1, &hneg(&p2));
