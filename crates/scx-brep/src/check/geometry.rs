@@ -171,11 +171,13 @@ fn edge_check(
     Ok(())
 }
 
-/// A use's uv ends, in its own direction, and its end's 3-D budget.
+/// A use's uv ends, in its own direction, and the 3-D budget of each: its bound's reach,
+/// its edge's and the reach of the vertex that end stands at.
 struct Joint {
     start: Point2,
     end: Point2,
-    budget: f64,
+    start_budget: f64,
+    end_budget: f64,
 }
 
 fn face_check(
@@ -255,9 +257,10 @@ fn shoelace(ring: &[Point2]) -> f64 {
         .sum()
 }
 
-/// Each use ends where the next starts in uv, within the two ends' budgets taken to uv by
-/// the surface's larger speed there: the tighter of the two, so a pole's line is crossed
-/// only by a pcurve along it.
+/// Each use ends where the next starts in uv, within the budgets of the two ends that meet
+/// (`a`'s end and `b`'s start, both at the vertex they share) taken to uv by the surface's
+/// larger speed there: the tighter of the two, so a pole's line is crossed only by a
+/// pcurve along it.
 fn closure(
     surface: &Surface,
     id: FaceId,
@@ -276,7 +279,7 @@ fn closure(
         let (su, sv) = speeds(surface, a.end);
         let speed = su.max(sv);
         let allowed = if speed > 0.0 {
-            (a.budget + b.budget) / speed
+            (a.end_budget + b.start_budget) / speed
         } else {
             0.0
         };
@@ -353,13 +356,14 @@ fn use_check(
     let (curve, interval) = match &u.geom {
         UseGeom::Point(p) => {
             off_domain(*p, 0.0)?;
-            end_off(*p, first, 0.0)?;
-            let budget = end_off(*p, last, 0.0)?;
+            let start_budget = end_off(*p, first, 0.0)?;
+            let end_budget = end_off(*p, last, 0.0)?;
             ring.push(*p);
             return Ok(Joint {
                 start: *p,
                 end: *p,
-                budget,
+                start_budget,
+                end_budget,
             });
         }
         UseGeom::Pcurve { curve, interval } => (curve, *interval),
@@ -370,8 +374,8 @@ fn use_check(
         Sense::Forward => (ts[0], uvs[0], ts[SEGMENTS], uvs[SEGMENTS]),
         Sense::Reversed => (ts[SEGMENTS], uvs[SEGMENTS], ts[0], uvs[0]),
     };
-    end_off(uv_first, first, t_first)?;
-    let budget = end_off(uv_last, last, t_last)?;
+    let start_budget = end_off(uv_first, first, t_first)?;
+    let end_budget = end_off(uv_last, last, t_last)?;
     for (&s, &uv) in ts.iter().zip(&uvs) {
         off_domain(uv, s)?;
         let lift = surface.point(uv);
@@ -427,7 +431,8 @@ fn use_check(
     Ok(Joint {
         start: uv_first,
         end: uv_last,
-        budget,
+        start_budget,
+        end_budget,
     })
 }
 
@@ -545,6 +550,39 @@ mod tests {
             dog_leg(&uv, 1.0, 1e-12, 1e-12).is_some(),
             passes_pole(&uv, 1.0, 1e-12).is_some(),
         )
+    }
+
+    /// Two uses meeting at the origin of the world plane (speed 1). `a` ends there within
+    /// `a_end`; `b` starts `gap` along u within `b_start` and ends far off within `b_end`.
+    fn joint(gap: f64, a_end: f64, b_start: f64, b_end: f64) -> Result<(), GeometryCause> {
+        let plane = Surface::Plane(scx_surface::Plane::new(Frame::WORLD));
+        let at = |x: f64| Point2::new(x, 0.0);
+        let joints = [
+            Joint {
+                start: at(-1.0),
+                end: at(0.0),
+                start_budget: 0.0,
+                end_budget: a_end,
+            },
+            Joint {
+                start: at(gap),
+                end: at(-1.0),
+                start_budget: b_start,
+                end_budget: b_end,
+            },
+        ];
+        closure(&plane, FaceId::from_raw(0), 0, &joints)
+    }
+
+    #[test]
+    fn a_joint_is_measured_by_the_ends_that_meet() {
+        // The joint is between `a`'s end and `b`'s start, which stand at one vertex: its
+        // budgets are theirs. `b`'s far end, at another vertex, does not count.
+        assert_eq!(joint(1.5e-4, 1e-4, 1e-4, 1e-6), Ok(()));
+        assert!(matches!(
+            joint(1.5e-4, 1e-4, 1e-6, 1e-4),
+            Err(GeometryCause::LoopOpenInUv { at: 0, .. })
+        ));
     }
 
     #[test]

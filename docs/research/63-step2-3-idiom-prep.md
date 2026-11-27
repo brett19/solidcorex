@@ -5196,7 +5196,8 @@ segment over `[0, 1]`, one collapsed edge per pole per face, as the generator ma
 
 1. `finish`'s closure check measures the joint between uses `a` and `b` with `b`'s *end*
    budget (BR2, `check/geometry.rs`). The writer uses `b`'s start budget. These agree
-   unless a vertex's reach differs at the two ends of one edge. Is BR2's choice intended?
+   unless a vertex's reach differs at the two ends of one edge. Is BR2's choice intended? (Answered in §6.14: no;
+   both now use `b`'s start budget.)
 2. `pcurve_of`'s `NotOnSurface` could report the largest sampled miss rather than the first
    one, so the writer could split `NeedsFit` from `OffSurface` exactly.
 3. Should a degenerate face at a pole (decision 4) ever be built? If so, it needs a
@@ -5729,15 +5730,15 @@ Determinism: the seeded or shared boxes are equal to a fresh build of the same t
 
 **Tests.** `tests/touched.rs` runs BR8's 11 kinds × 32 seeds × up to 4 rounds. Each round
 fills a random subset of the base cells, then makes an `edit` or `into_draft` and applies
-1–3 of 35 random edits. Eleven are valid (nudge a vertex, loosen a vertex's or an edge's
+1–3 of 37 random edits. Thirteen are valid (nudge a vertex, loosen a vertex's or an edge's
 accuracy, replace a face, add or remove a wire, touch an edge, face or shell unchanged, and
 merge a base vertex or face into a new copy of it, the BR7 case of a kept entity gone into a
-new one).
+new one, and BR6's rigid move and mirror).
 The others each break one rule (move a wire to another shell, leave a curve pending, drop a
 fin, remove a vertex in use, and so on). The test compares `finish` with
 `finish_checking_all`, cause for cause. When both are `Ok`, it compares the two bodies'
 boxes with each other and with a fresh body's. It asserts every edit ran and at least 12
-outcome kinds came up. A default run has 403 finished bodies. A 400-seed release run had 4,622
+outcome kinds came up. A default run has 396 finished bodies. A 400-seed release run had 4,991
 finished, 0 mismatches.
 
 The test was checked by sabotage. Each of these, made in turn, failed it:
@@ -5801,20 +5802,43 @@ The test was checked by sabotage. Each of these, made in turn, failed it:
    through `drop_face`/`drop_edge`, and `merge_vertex` calls the removed-vertex hook, so the
    absorbed base record is covered as any removal is: its readers are marked, a removed
    vertex's star joins the plan edges, and the new survivor is created and always checked.
-5. *Whole fallbacks.*
+5. *BR6's transform writes through the hooks.* `Draft::transform` writes vertices and edges
+   through `vertex_mut`/`edge_mut`. Its two direct writes, a mirror's reversed fins and
+   `put_face`, now call the fins and face hooks. The property test cannot tell these two
+   hooks apart from their absence: a transform writes every vertex and edge, whose hooks
+   already mark every face. They are kept so that every write path keeps the contract.
+6. *The uv joint budget (BR5's question).* `finish` measured the joint between uses `a` and
+   `b` with `a`'s end budget plus `b`'s *end* budget; BR5's writer used `b`'s *start*.
+   - For the start (chosen): `a`'s end and `b`'s start stand at the vertex `V` they share.
+     Each lifts within its own budget of `V` (`UseEndOffVertex` checks exactly that: bound
+     reach plus edge reach plus `V`'s reach). By the triangle inequality the two lifts are
+     within the sum, which is the 3-D gap the joint may have. `b`'s end stands at another
+     vertex `W`, whose reach says nothing about `V`.
+   - Against: the end budget was BR2's choice and every existing body passed it. The two
+     differ only when `V` and `W` have different reaches, which no test body had, so no
+     result depended on it. With `W` loose and `V` tight the old rule let a joint open by
+     `W`'s reach; with `V` loose it refused a joint the vertex allows.
+   - Done: `Joint` holds `start_budget` and `end_budget`, and `closure` uses
+     `a.end_budget + b.start_budget`. The writer already did, except after a collapsed or
+     point use, where it carried the previous curve use's end budget forward. It now takes
+     that use's own end budget, as `finish` does. A unit test
+     (`a_joint_is_measured_by_the_ends_that_meet`) fails under the old rule.
+   - The touched closure is unchanged: the joint reads the shared vertex, already among a
+     face's used edges' ends.
+7. *Whole fallbacks.*
    - A `Draft::new` has no base.
    - Another resolution changes every geometry verdict.
    - A removed base shell: faces name their shell and nothing names a shell's faces.
-6. *`wire_touched` sends `shells` to the full rule.* A wire joins vertices without a face,
+8. *`wire_touched` sends `shells` to the full rule.* A wire joins vertices without a face,
    and the fast path's hubs are faces' hubs.
-7. *The final wires of touched shells are not added to the plan.* Each such wire is a base
+9. *The final wires of touched shells are not added to the plan.* Each such wire is a base
    wire (marked by the shell hook), a created edge, or an edge whose fins were written. One
    with fins is refused first by `WireWithFins`. The extension was redundant, and the
    sabotage confirmed it changed nothing.
-8. *The seed keeps the base's boxes alive until the first box read.* That is one `Arc`. A
+10. *The seed keeps the base's boxes alive until the first box read.* That is one `Arc`. A
    body never read for boxes holds them until dropped.
-9. *Adjacency rows are not incremental.* They are rebuilt on first read, as before.
-10. *The body union stays a full pass.* It reads vertex and edge boxes too; making it
+11. *Adjacency rows are not incremental.* They are rebuilt on first read, as before.
+12. *The body union stays a full pass.* It reads vertex and edge boxes too; making it
    incremental needs the union of what was removed.
 
 **Deviations from §6.2–§6.5.** None in surface. The touched sets are BR3's first-write

@@ -24,8 +24,9 @@ use scx_brep::{
 use scx_num::cert::{Basis, Recorded};
 use scx_num::frame::Sense;
 use scx_num::hash::Rng;
+use scx_num::math::Affine;
 use scx_num::units::{Accuracy, Length};
-use scx_num::vector3d::Vec3;
+use scx_num::vector3d::{Point3, Vec3};
 use scx_testkit::bodies::{Kind, generate};
 
 struct Dice(Rng);
@@ -58,7 +59,7 @@ fn shells(d: &Draft) -> Vec<ShellId> {
 }
 
 /// The ops, by name; the first `VALID` keep a valid body valid.
-const OPS: [&str; 35] = [
+const OPS: [&str; 37] = [
     "nudge vertex",
     "loosen vertex",
     "loosen edge",
@@ -70,6 +71,8 @@ const OPS: [&str; 35] = [
     "touch shell",
     "vertex into new",
     "face into new",
+    "move rigidly",
+    "mirror",
     "move vertex",
     "remove face",
     "remove edge",
@@ -95,7 +98,7 @@ const OPS: [&str; 35] = [
     "pending edge",
     "move wire",
 ];
-const VALID: usize = 11;
+const VALID: usize = 13;
 
 /// A recorded accuracy far inside any check's reach, but enough to grow boxes.
 fn loose(dice: &mut Dice) -> Arc<Recorded> {
@@ -182,6 +185,20 @@ fn apply(d: &mut Draft, op: usize, dice: &mut Dice) -> Option<()> {
             let copy = d.face(f)?.record().clone();
             let n = d.add_face(copy).ok()?;
             d.merge_face(f, n)?;
+        }
+        "move rigidly" => {
+            // Every record written at once, through the transform's own writes.
+            let turn =
+                Affine::rotation(Point3::new(0.3, -1.2, 0.7), Vec3::new(1.0, 2.0, -0.5), 0.9)
+                    .ok()?;
+            let a = Affine::translation(Vec3::new(4.0, -3.5, 12.25)) * turn;
+            d.transform(&a, &Document::default()).ok()?;
+        }
+        "mirror" => {
+            // As a move, and every edge's fins reversed.
+            let a =
+                Affine::reflection(Point3::new(0.5, 1.0, -2.0), Vec3::new(0.3, -1.0, 0.8)).ok()?;
+            d.transform(&a, &Document::default()).ok()?;
         }
         "touch edge" => {
             let e = dice.pick(&edges(d))?;

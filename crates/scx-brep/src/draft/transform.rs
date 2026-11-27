@@ -417,6 +417,9 @@ impl Draft {
                 g.shape = e.shape;
                 g.accuracy = e.accuracy;
             }
+            if mirror {
+                self.touched.fins(&self.t, e.id);
+            }
             if mirror && let Some(adj) = self.t.adjacency.get_mut(e.id) {
                 adj.fins.reverse();
             }
@@ -430,6 +433,7 @@ impl Draft {
     /// Puts `record` in the face's place as [`Draft::face_mut`] writes it, logged, with fresh
     /// cells, but without copying the record it replaces.
     fn put_face(&mut self, id: FaceId, record: FaceRecord) {
+        self.touched.face(&self.t, id);
         if let Some(face) = self.t.faces.get_mut(id) {
             self.log.face_written(id, face);
             *face = Arc::new(record);
