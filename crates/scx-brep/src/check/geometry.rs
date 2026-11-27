@@ -54,7 +54,7 @@ const PROBES: usize = 10;
 const WRAP_SLACK: f64 = 1e-9;
 
 /// How far an entity may stand from what it stands for.
-fn reach(recorded: Option<&Arc<Recorded>>, res: Resolution) -> f64 {
+pub(super) fn reach(recorded: Option<&Arc<Recorded>>, res: Resolution) -> f64 {
     let zone = res.zone().mm();
     recorded.map_or(zone, |r| r.acc.length().mm().max(zone))
 }

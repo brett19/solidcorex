@@ -9,7 +9,14 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+scx-curve = { path = "../scx-curve" }
 scx-num = { path = "../scx-num" }
+scx-nurbs = { path = "../scx-nurbs" }
+scx-nurbs-surface = { path = "../scx-nurbs-surface" }
+scx-surface = { path = "../scx-surface" }
+
+[dev-dependencies]
+scx-testkit = { path = "../scx-testkit" }
 
 [lints]
 workspace = true

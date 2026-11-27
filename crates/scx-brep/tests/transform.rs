@@ -411,6 +411,8 @@ fn a_planar_body_takes_any_regular_map() {
         Kind::Holed,
         Kind::Cavity,
         Kind::Stack,
+        Kind::Checker,
+        Kind::Touching,
         Kind::QuadSheet,
     ] {
         let b = body(kind, 2, 2);
