@@ -481,6 +481,7 @@ impl Extent3d {
     /// Squared diagonal of the union: the largest squared distance between two
     /// points of the two boxes (`MaximumDistanceSquared`).
     #[must_use]
+    #[inline]
     pub fn max_distance_squared(&self, other: &Self) -> f64 {
         let u = self.union(*other);
         (u.max - u.min).length_squared()
@@ -489,27 +490,24 @@ impl Extent3d {
     /// Smallest squared distance between a point of each box; `0` when they touch
     /// or overlap (`MinimumDistanceSquared`).
     #[must_use]
+    #[inline]
     pub fn min_distance_squared(&self, other: &Self) -> f64 {
-        let mut d = Vec3::ZERO;
-        if self.min.x > other.max.x {
-            d.x += self.min.x - other.max.x;
-        }
-        if self.max.x < other.min.x {
-            d.x += other.min.x - self.max.x;
-        }
-        if self.min.y > other.max.y {
-            d.y += self.min.y - other.max.y;
-        }
-        if self.max.y < other.min.y {
-            d.y += other.min.y - self.max.y;
-        }
-        if self.min.z > other.max.z {
-            d.z += self.min.z - other.max.z;
-        }
-        if self.max.z < other.min.z {
-            d.z += other.min.z - self.max.z;
-        }
-        d.length_squared()
+        // the gap on one axis, as selects rather than branches: the boxes are ordered, so
+        // at most one of the two differences is positive, and a positive one is the gap
+        let gap = |lo: f64, hi: f64, other_lo: f64, other_hi: f64| {
+            let below = other_lo - hi;
+            let above = lo - other_hi;
+            let below = if below > 0.0 { below } else { 0.0 };
+            let above = if above > 0.0 { above } else { 0.0 };
+            above + below
+        };
+        let (a, b) = (self, other);
+        Vec3::new(
+            gap(a.min.x, a.max.x, b.min.x, b.max.x),
+            gap(a.min.y, a.max.y, b.min.y, b.max.y),
+            gap(a.min.z, a.max.z, b.min.z, b.max.z),
+        )
+        .length_squared()
     }
 
     /// Square root of [`Extent3d::max_distance_squared`] (`MaximumDistance`).

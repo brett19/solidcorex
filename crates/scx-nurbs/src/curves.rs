@@ -241,16 +241,33 @@ impl<const D: usize> CompatibleCurves<D> {
         let n = full.knots.point_count();
         let left_count = left_knots.point_count();
         let right_from = n - right_knots.point_count();
-        let piece = |knots: KnotVector, range: core::ops::Range<usize>| match &full.rational {
-            None => {
-                let points = slice_each(&full.points, n, range)?;
-                Self::new(knots, self.count, points, None)
-            }
-            Some((weights, weighted)) => {
-                let weighted = slice_each(weighted, n, range.clone())?;
-                let weights = slice_each(weights, n, range)?;
-                Self::from_homogeneous(knots, self.count, weighted, weights)
-            }
+        // Each piece is a run of every curve of `full`, which is checked, so the knots,
+        // counts, weights and `w P` need no checks (the interior knots are some of
+        // `full`'s). A rational piece's points are its `w P / w`, as `from_homogeneous`
+        // gives them and checks them: `full` keeps the input's points when nothing was
+        // inserted.
+        let piece = |knots: KnotVector, range: core::ops::Range<usize>| -> Result<Self> {
+            let range_len = range.len();
+            let (points, rational) = match &full.rational {
+                None => (slice_each(&full.points, n, range)?, None),
+                Some((weights, weighted)) => {
+                    let weighted = slice_each(weighted, n, range.clone())?;
+                    let weights = slice_each(weights, n, range)?;
+                    let points = weighted
+                        .iter()
+                        .zip(&weights)
+                        .map(|(p, &w)| p.map(|x| x / w))
+                        .collect::<Vec<_>>();
+                    each_curve(&points, range_len, check_finite)?;
+                    (points, Some((weights, weighted)))
+                }
+            };
+            Ok(Self {
+                knots,
+                count: self.count,
+                points,
+                rational,
+            })
         };
         Ok((
             piece(left_knots, 0..left_count)?,
@@ -363,14 +380,14 @@ fn elevate_each<P: Control>(
     let mut out = Vec::new();
     let mut knots = None;
     for polygon in lines(polygons, n) {
-        let (points, k) = plan.points(polygon).ok_or(MISSING_POINT)?;
+        let (points, k) = plan.points(polygon)?;
         out.extend(points);
         knots.get_or_insert(k);
     }
     let knots = match knots {
         Some(k) => k,
         // No curves: the knots of the elevation of any polygon.
-        None => plan.points(&vec![P::ZERO; n]).ok_or(MISSING_POINT)?.1,
+        None => plan.points(&vec![P::ZERO; n])?.1,
     };
     Ok((out, knots))
 }

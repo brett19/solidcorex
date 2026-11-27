@@ -56,9 +56,9 @@ impl<const D: usize> NurbsSurface<D> {
     ///
     /// Errs with [`NurbsSurfaceError::Edit`] over the curve's cause
     /// ([`NurbsCurve::elevate`]): `Exhausted` above [`scx_nurbs::MAX_DEGREE`], `Refused`
-    /// for unclamped knots, `Unsupported` where near-coincident knots lost the surface. The
-    /// accuracy is the curve's: rounding grows with the ratio of a span's neighbours to its
-    /// length. `times == 0` checks and returns a copy.
+    /// for unclamped knots, `Unsupported` where a line's rounding bound would pass
+    /// [`scx_num::consts::ELEVATION_ERROR`]. The accuracy is the curve's. `times == 0` checks
+    /// and returns a copy.
     pub fn elevate(&self, axis: ParamAxis, times: usize) -> Result<Self> {
         let [s] = self.edit_lines(axis, |c| Ok([c.elevate(times)?]))?;
         Ok(if times == 0 { self.clone() } else { s })
@@ -420,12 +420,6 @@ mod tests {
         out
     }
 
-    fn well_spaced(knots: &[f64]) -> bool {
-        knots
-            .windows(2)
-            .all(|w| w[1] == w[0] || w[1] - w[0] >= 1e-6)
-    }
-
     fn exact_edit<T>(
         axis: ParamAxis,
         u: impl FnOnce() -> core::result::Result<T, tk::Error>,
@@ -488,24 +482,19 @@ mod tests {
         assert!(edits > 20, "{edits}");
     }
 
-    /// Well-spaced knots only: near-coincident knots lose accuracy as for curves (see
-    /// `scx-nurbs`'s `elevation_of_near_coincident_knots`).
+    /// Near-coincident knots among them (the curve elevation's knot removal no longer
+    /// loses them).
     #[test]
     fn elevation_is_the_exact_elevation() {
         let mut edits = 0;
         for d in surfaces(3).iter().step_by(4) {
             let (s, truth) = (build(d), d.exact().unwrap());
             for axis in AXES {
-                if !well_spaced(s.knots(axis)) {
-                    continue;
-                }
                 let e = s.elevate(axis, 1).unwrap();
                 assert_eq!(e.degree(axis), s.degree(axis) + 1);
                 let want = exact_edit(axis, || truth.elevate_u(1), || truth.elevate_v(1));
                 let what = format!("{s} elevated along {axis}");
-                // Degree 9 and up: the curve elevation's known error of a few 1e-12
-                // (scx-nurbs, step 5 of 05), passed through unchanged.
-                let tol = if s.degree(axis) >= 9 { 1e-11 } else { 1e-12 };
+                let tol = 1e-12;
                 matches(&e, &want.rounded(), tol, &what);
                 same_surface(&e, &truth, tol, &what);
                 edits += 1;

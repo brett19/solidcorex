@@ -91,3 +91,12 @@ pub(crate) fn linear(x: f64, n: usize) -> f64 {
         _ => 0.0,
     }
 }
+
+/// `eval_many`'s one check: as many outputs as parameters.
+pub(crate) fn check_lengths(uv: &[scx_num::vector2d::Point2], out: &[Point3]) {
+    assert_eq!(
+        uv.len(),
+        out.len(),
+        "eval_many: uv and out differ in length"
+    );
+}

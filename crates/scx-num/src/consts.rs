@@ -45,6 +45,14 @@ pub const PARALLEL_ANGLE_DEG: f64 = 0.5;
 /// computes it.
 pub const PARALLEL_ANGLE_RAD: f64 = PARALLEL_ANGLE_DEG * crate::math::PI / 180.0;
 
+/// The largest error bound a NURBS degree elevation answers with: past it the elevation
+/// is refused as unstable. Relative, to the largest homogeneous coordinate of the control
+/// points. Owner: `scx-nurbs` degree elevation (`docs/05-status.md` §6); not solidcore's,
+/// whose A5.9 has no bound. Between what the seeded truths need (a bound of `9e-9` at
+/// degree 23, with the result `4e-11` off) and what it refuses (uniform knots raised to
+/// degree 28 or more, where the result would be `3e-8` off or more).
+pub const ELEVATION_ERROR: f64 = 1.0e-7;
+
 #[cfg(test)]
 mod tests {
     use super::*;
