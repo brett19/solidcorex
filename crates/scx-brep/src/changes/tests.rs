@@ -18,6 +18,8 @@ use scx_surface::{Plane, Surface};
 
 use crate::*;
 
+mod ports;
+
 fn unit() -> Extent1d {
     Extent1d::new(0.0, 1.0).unwrap()
 }
@@ -409,6 +411,7 @@ fn merges_name_the_survivor_through_chains() {
         [Merge {
             survivor: f2,
             absorbed: vec![f0, f1],
+            taken: vec![],
         }]
     );
     assert_eq!(changes.faces.removed, [f3]);
@@ -417,6 +420,7 @@ fn merges_name_the_survivor_through_chains() {
         [Merge {
             survivor: s.rungs[2],
             absorbed: vec![s.rungs[1]],
+            taken: vec![],
         }]
     );
     let mut es = vec![s.rungs[0], s.bottom[0], s.top[0]];
@@ -538,6 +542,10 @@ impl Carry<Vec<u32>> for Join {
         all.sort_unstable();
         all.dedup();
         Some(all)
+    }
+
+    fn offset(&self, from: &Vec<u32>) -> Option<Vec<u32>> {
+        Some(from.clone())
     }
 }
 

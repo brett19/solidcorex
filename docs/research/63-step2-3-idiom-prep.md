@@ -4559,7 +4559,7 @@ Decided by analysis and an adversarial pass. Proposed for review; not yet ruled.
    absent origin, is refused (`LineageError::NotCreated`, `UnknownOrigin`).
 8. *A created entity absorbed into a before-id drops its lineage*; one absorbed into a created id
    adds its origins. A chain of merges is followed to the end; an absorbed entity whose survivor is
-   gone counts as removed.
+   gone counts as removed. (Superseded by §6.13 decisions 3 and 4: lineage is kept whichever survives.)
 9. *`Carry` rules return `Option`* (01 has `T`), so "no value" is expressible, as the pin's
    attribute handlers allow (`issue_1730_application_attribute_handlers`). Cross-kind origins carry
    nothing.
@@ -4792,6 +4792,221 @@ in ns per face.
 5. `EdgeAdj` has only `Default`, so a builder fills its fins through `adjacency_mut`.
    `Draft::add_face` appends fins loop by loop, which is enough for the generators. No API
    was added to `scx-brep`.
+
+### 6.13 BR7 as built (11-27)
+
+Decided by analysis and an adversarial pass. Proposed for review; not yet ruled.
+
+**What was built.** The pin's provenance, history and attribute tests are ported onto BR3's
+`Changes`, `Origin`, `Carry` and `carry`, in `crates/scx-brep/src/changes/tests/ports.rs`. The
+operations are not in scx yet, so each test builds by hand the edit the pin's operation makes,
+declares the lineage that operation would declare, and checks what the pin checks. These are
+bookkeeping edits, finished through the references-only check. Each test names the pin tests it
+ports.
+
+The ports found two lineage bugs in BR3 and settled its open questions. The API changes in
+`changes.rs` are:
+
+- `Carry::offset(&self, from: &T) -> Option<T>`, a required method. It gives what an offset copy
+  holds (decision 1).
+- `Merge<I>` gains `pub taken: Vec<Origin>`: the lineage of the new entities this edit made and
+  then merged into a kept survivor. It is sorted, without `Free`. A `Merge` may now have an
+  empty `absorbed` (decision 3).
+- A kept entity merged into a new one is listed in `removed`, and is an origin of the new entity
+  (decision 4).
+- The split piece key for edges gains the lineage of the faces each piece bounds, between
+  `bound` and `at` (decision 2).
+- `Origin::Edge` and `Origin::Vertex` doc: for a new entity of the same kind it always means a
+  piece. A blend's rail, made along an edge but not lying on it, names the faces it lies on, or
+  nothing (decision 6).
+
+**Decisions**, each with the case for and against:
+
+1. *Offset's carry rule: a required `Carry::offset`.*
+   - For:
+     - SMLib's `Temp` behaviour is "not copied". It must be able to drop an offset copy, and
+       with the same-kind rule it could not.
+     - Every path that puts a value on a new entity now goes through the rule, as a split does.
+   - Against: one more method on every rule. A provided default (copy) was rejected because it
+     hides the choice.
+
+   The ports `an_offset_reads_as_the_pins_history` and
+   `a_thickened_sheet_marks_its_edges_and_their_offsets` check both: a copied mark goes to the
+   offset, a temporary one does not.
+2. *Equal-bounds piece order: by the faces each edge piece bounds.*
+   - The case: two pieces of an edge with the same ends and the same interval, such as an edge
+     two solids touch along, cut into one edge per solid (`order_pieces.rs`).
+   - Before this change they tied on `bound` and `at`, and fell to the id. That is the order
+     the operation happened to create them in, so the order depended on which piece kept the
+     id.
+   - The key now compares the sorted lineage of the faces of each piece's fins:
+     - `Face(..)`, the edited body's, sorts before `Operand(..)`, the tool's;
+     - a created face's own declared origins are used.
+
+   For: deterministic and independent of the id kept; it is computed only for split pieces.
+   Against: it uses the created faces' declared origins, not their final lineage, because the
+   faces' lineage is resolved after the edges'. Face pieces still tie to the id when bound and
+   place agree; no pin test reaches that.
+3. *A merge keeps lineage whichever entity survives* (`Merge::taken`, and `Log::held` in the
+   recording).
+   - The bug, found by the port of `stitch_and_orient_splits_a_long_edge_onto_both_pieces`:
+     - BR3 dropped the lineage of a new entity absorbed into a kept one (BR3 decision 8).
+     - So a stitch that cut a long edge and glued the new piece to a short edge kept the long
+       edge's origin only if it kept the piece's id.
+     - The answer (the pin's 2 edges carrying, or 1) depended on the operation's choice of
+       survivor.
+   - Now:
+     - the survivor holds what it took in, and a piece derived from it later in the same edit
+       stands for that too;
+     - `lineage` reports what came from new entities as `Merge::taken`;
+     - the split map counts a kept survivor that took in a new piece of `f` as a piece of `f`;
+     - `carry` merges `taken`'s values into the survivor.
+   - For: survivor choice is an executor detail and must not change results. Against: a `Merge`
+     with an empty `absorbed` is a new shape for readers to handle.
+4. *A kept entity merged into a new one is `removed`.*
+   - The bug: BR3 made it an origin of the new entity and listed it nowhere else, so `carry`
+     kept its value on an id no longer in the body.
+   - Found by the port of `coplanar_faces_merged_by_the_cleanup_keep_both_origins`, run with the
+     tool's face as the survivor.
+   - For: `removed` now means every before-entity that is gone except those a kept survivor
+     absorbed.
+   - Against: none found. The entity is still named, as an origin.
+5. *Regions and shells: not needed.* No pin provenance, history or attribute test reads a value
+   on a region or a shell. Kept out until one does (`Changes` is `#[non_exhaustive]`).
+6. *Rails are not pieces.*
+   - The fillet ports show that declaring a blend's rails `Origin::Edge(e)` makes them pieces of
+     `e`, and hands them `e`'s value, which the pin forbids.
+   - The doc now says so. The counter-case is in
+     `a_blend_keeps_the_faces_and_drops_the_blended_edge`.
+   - For: one meaning for a same-kind origin. Against: an operation must know which faces a rail
+     lies on; it does.
+7. *The temporary mark on trimmed faces.*
+   - The pin keeps `Temp` only on faces its union leaves whole. SMLib trims by splitting and
+     deleting the waste, and a split drops the mark.
+   - In scx a trimmed face keeps its id and is `replaced`. `carry` keeps the mark, and an
+     application that wants "not persistent" filters on `replaced`. The port checks both.
+   - This is truth over pin: the face is the same face, trimmed.
+   - Open: a `Carry::replaced` hook, if an application wants the rule to decide.
+8. *The id-keeping piece.* `imprint_splits_run_the_application_split_handler` gives the piece
+   that keeps the id a different value. `Carry::split` stays symmetric: it is told nothing
+   about the piece. An application finds the kept piece as `Split::from` among `pieces`.
+   - For: a split's pieces are peers, and which piece keeps the id is an executor detail.
+   - Against: the application does a second pass.
+9. *`Changes::then` is not built.*
+   - Carrying edit by edit is exact. `carry` folds over a sequence of `Changes`, and every pin
+     test with two operations (`remove_topological_vertices_unions_the_merged_edges`,
+     `a_copy_faces_copy_merged_keeps_its_attributes`, the boolean tree) ports as two edits.
+   - A composition cannot be exact:
+     - One `EntityChanges` cannot say whether a merge came before or after a split.
+     - For a rule whose split shares a quantity out (`Halve`: a split halves, a merge sums),
+       merge f1 into f0 and then cut f0. As two edits each piece gets 1. As one edit, which is
+       what `then` would report, each piece gets 1.5
+       (`a_merge_then_a_cut_is_carried_edit_by_edit`).
+   - For every copy-like rule the two agree. That includes the pin's `Copy`, `Reference` and
+     `Temp`.
+   - The rule for a split of a merged entity, had `then` been built: each piece inherits the
+     survivor's merged lineage. This is decision 3's "a piece of a survivor stands for what it
+     took in", so it already holds within one edit.
+   - For not building it: no test needs it, and it would be wrong for quantity rules. Against:
+     63 §6.3's composition oracle has no `then` to test. The oracle can compare a carry over
+     two edits with the carry over the same events in one, for copy-like rules, as the port
+     does.
+   - Within one edit `carry` applies splits before merges (module doc). An edit whose result
+     depends on the order is two edits.
+10. *No difftest.* The pin's history is callbacks into its attribute store; there is no
+    `Changes` equivalent to compare against (as BR3 decision 13).
+11. Research 66 has nothing on provenance.
+
+**Ports** (20 tests). Pin paths are under `solidcore/crates/`, and `solidcore/tests/` is
+abbreviated `t/`.
+
+| scx test | Pin tests ported |
+|---|---|
+| `a_cut_hands_its_origin_to_both_pieces` | `solidcore-ops/src/tests.rs::provenance_goes_through_splits_and_merges`; `t/issue_1462_split_attributes.rs::{slice_by_a_sheet_keeps_the_origins_of_the_trimmed_faces, imprint_of_a_box_by_a_plate_keeps_the_origin_on_both_pieces, imprint_of_a_copy_keeps_the_copied_origins, merge_curves_on_surface_splits_a_face_onto_both_pieces}`; `t/issue_1462_fillet_attributes.rs::issue_1462_a_surface_fillet_splits_the_base_faces_with_their_origins`; `t/issue_1462_boolean_family_attributes.rs::plain_edits_split_and_delete_as_upstream`; `t/issue_1462_boolean_2d_attributes.rs::{boolean_2d_union_keeps_both_pieces_of_a_split_edge_marked, boolean_2d_intersection_keeps_the_split_edges_marks}` |
+| `a_boolean_gives_each_face_one_origin` | `t/issue_1462_boolean_attributes.rs::{union_of_overlapping_boxes_keeps_one_origin_per_face, difference_of_overlapping_boxes, intersection_of_overlapping_boxes}`; `t/issue_1462_boolean_2d_attributes.rs::{boolean_2d_difference_keeps_the_face_and_edge_marks, boolean_2d_preserves_attributes_from_both_operands}`; `t/issue_1462_boolean_family_attributes.rs::boolean_lists_carry_list_attributes_to_every_component` |
+| `a_reference_stays_shared_and_a_temporary_mark_stays_put` | `t/issue_1462_boolean_attributes.rs::temporary_attributes_are_not_propagated_and_references_stay_shared` (truth over pin, decision 7) |
+| `a_coplanar_merge_keeps_both_origins` | `t/issue_1462_boolean_attributes.rs::coplanar_faces_merged_by_the_cleanup_keep_both_origins`; `solidcore-ops/src/tests.rs::{a_union_keeps_both_boxes_provenance_on_what_it_merges, a_face_merge_by_delete_edge_keeps_both_faces_provenance}` |
+| `a_coincident_edge_adds_its_source_once` | `t/issue_1462_boolean_2d_attributes.rs::{boolean_2d_coincident_edges_keep_both_sources, boolean_2d_coincident_edges_with_the_same_id_keep_one_value}` (the pin accepts 1 or 2 values; scx's rule decides, so 1 exactly); `solidcore-ops/src/tests.rs::provenance_goes_through_merges_and_coincidences` |
+| `a_body_made_of_operands_keeps_each_operand_apart` | `t/issue_1462_boolean_family_attributes.rs::{merge_breps_fold_of_three_boxes_keeps_each_face_origin, boolean_tree_union_then_difference}` |
+| `a_stitch_unions_the_glued_edges` | `t/issue_1462_split_attributes.rs::stitch_and_orient_unions_the_glued_edges` |
+| `a_stitch_cuts_a_long_edge_onto_both_glued_pieces` | `t/issue_1462_split_attributes.rs::stitch_and_orient_splits_a_long_edge_onto_both_pieces` (both survivor choices; decision 3) |
+| `a_cut_edge_merged_back_holds_every_tag` | `t/issue_1462_split_attributes.rs::remove_topological_vertices_unions_the_merged_edges` (two edits) |
+| `a_blend_keeps_the_faces_and_drops_the_blended_edge` | `t/issue_1462_fillet_attributes.rs::{issue_1462_a_rounded_box_edge_keeps_the_box_origins, issue_1462_per_edge_and_variable_radius_rounds_keep_the_box_origins, issue_1462_chamfered_and_circular_rounded_boxes_keep_the_face_origins}`; `t/issue_1462_boolean_attributes.rs::edges_crossed_by_the_other_operand_keep_their_origin_on_the_surviving_piece` (a trimmed edge keeps id and value) |
+| `an_offset_reads_as_the_pins_history` | `solidcore-ops/tests/offset_history.rs::{a_shelled_box_s_inner_walls_are_its_faces_offsets, a_thickened_sheet_s_walls_stand_on_its_edges, a_moved_face_is_modified}`; `t/issue_1462_offset_attributes.rs::{offset_box_faces_copy_their_source_faces, shell_box_inner_faces_carry_their_sources}` |
+| `an_offset_made_anew_keeps_no_face` | `solidcore-ops/tests/offset_history.rs::an_offset_whose_loops_cross_keeps_the_rebuilt_faces_roles` |
+| `a_thickened_sheet_marks_its_edges_and_their_offsets` | `t/issue_1973_thicken_sheet_edge_attributes.rs::{issue_1973_a_thickened_flat_sheet_keeps_its_edges_marks_on_both_sides, issue_1973_a_thickened_l_of_two_flat_faces_keeps_its_edges_marks, issue_1973_a_thickened_curved_sheet_keeps_its_edges_marks}`; `t/issue_1973_thicken_flat_sheet_edge_attributes.rs::thicken_of_a_flat_sheet_keeps_the_sheet_edges_marks` (the pin's 12 edges, 8 carrying) |
+| `a_rounded_offset_puts_each_edge_on_both_copies` | `t/issue_1462_offset_attributes.rs::rounded_offset_edges_keep_their_sources_through_the_stitch` |
+| `pieces_with_the_same_ends_are_ordered_by_their_faces` | `solidcore-convert/tests/order_pieces.rs::an_edge_solids_touch_along_is_two_pieces` (decision 2); `::a_box_has_no_pieces` is BR3's `an_edit_that_touches_nothing_changes_nothing` |
+| `the_application_rule_runs_once_per_event` | `t/issue_1730_application_attribute_handlers.rs::{issue_minimal_test_split_merge_coincident_copy, copy_onto_a_tagged_target_keeps_the_targets_tag, merge_runs_once_per_attribute_id, imprint_splits_run_the_application_split_handler}` (decision 8) |
+| `copied_faces_merged_later_hold_both` | `t/merge_after_copy_faces_keeps_attributes.rs::a_copy_faces_copy_merged_keeps_its_attributes`; `t/issue_1462_split_attributes.rs::copy_faces_with_a_merge_copies_the_face_attributes` (two edits) |
+| `a_local_operation_keeps_every_mark` | `t/issue_1875_local_operation_marks.rs::{the_moved_face_keeps_the_mark_of_the_face_it_moves, each_moved_face_keeps_its_own_mark}`; `t/issue_1462_split_attributes.rs::local_operation_keeps_every_face_origin`; `t/issue_1980_cliff_overflow_edge_attributes.rs::an_edge_tag_crosses_a_cliff_overflow`; `t/issue_1462_sweep_attributes.rs::{linear_sweep_of_a_tagged_face_carries_its_origins, revolve_of_a_tagged_face_carries_its_origins}` (in place: the box keeps its marks, the swept block is bare) |
+| `a_removed_face_drops_its_value_and_a_copy_keeps_all` | `t/issue_1462_boolean_family_attributes.rs::plain_remove_faces_clears_the_deleted_face_attributes`; `t/issue_1462_boolean_attributes.rs::clone_copies_attributes_and_dead_entities_have_none`; `solidcore-ops/src/tests.rs::{a_copy_keeps_the_provenance_on_its_faces_and_edges, attached_provenance_reads_back_by_record_index, a_copy_maps_record_order_through_renumbered_entities}`; `t/copy_faces_merge_key_aliasing.rs::copies_through_the_merge_carry_only_their_own_sources_attributes`; `t/issue_2010_plain_brep_copy.rs` |
+| `a_merge_then_a_cut_is_carried_edit_by_edit` | none: the evidence for decision 9 |
+
+**Cannot port yet:**
+
+- `t/issue_1462_sweep_attributes.rs::tag_ordinals_step_by_sweep_step_delta` needs a repeated
+  sweep. Each step's ordinal is the application's naming from the step's `Origin::Edge` side
+  faces; port it with the sweep.
+- Every port above is a hand-made edit. When an operation lands, its own test should replace the
+  hand edit and assert the same lineage, using the same tables and rules.
+
+**Not applicable** (no lineage question; the attribute store's own plumbing, which scx has no
+counterpart for):
+
+- `t/brep_file_round_trip.rs`, `t/panic_fuzz.rs`, `t/subdivide_face_v_knots.rs`,
+  `t/issue_1937_bottle_sweep.rs`, the `t/issue_16735_*` tests, `t/fork_69c5198_closure_both_sides.rs`,
+  and the attribute parts of `solidcore-convert`'s `brep.rs` tests and the fillet session's
+  executive tests. These test store serialisation, the store under fuzzing, or marks used as
+  test probes for geometry fixes.
+- `solidcore-ops/src/tests.rs::one_provenance_type_per_id`: one registered provenance type per
+  id. scx's `carry` is generic, with no registry.
+- `solidcore-ops/src/tests.rs::a_copy_refuses_an_order_entry_without_a_copy`: the copy order
+  table. In scx a copy has the same ids, and `compact` gives an `IdMap`.
+- `solidcore-ops/src/tests.rs::an_unmatched_ring_does_not_export_the_input_for_history`: the
+  history export's buffer. `Changes` comes from `finish`, so nothing is exported.
+- `solidcore-ops/src/offset/tests.rs::the_moved_marks_live_inside_the_call`: the pin's marks
+  scoped to one call. scx keeps no marks on entities.
+- `t/issue_1440_identity_of_copy.rs`, `t/issue_1628_copy_faces_into_nonempty_brep.rs`,
+  `t/issue_1869_copy_faces_merge_into_empty.rs`: copy-face plumbing (identity keys, notify
+  objects, an empty destination).
+- `t/issue_1176_fillet_cleanup_keeps_by_identity.rs`: a heap address reused for a new edge. scx
+  ids are never reused.
+- `t/copy_keeps_attributes_default_naming.rs` (its five tests) and
+  `t/copy_faces_merge_key_aliasing.rs::{one_naming_for_both_breps_is_refused_where_the_source_has_attributes, one_naming_for_both_breps_without_attributes_still_copies}`:
+  the store's naming of owners.
+- `t/issue_1730_application_attribute_handlers.rs::{join_replaces_a_foreign_attribute_of_the_tag_id, application_values_clone_and_compare_through_the_box}`:
+  the store's boxed value types. A `Carry<T>` is typed.
+- `t/issue_1462_boolean_family_attributes.rs::{api_brep_copy_keeps_copy_and_reference_and_drops_temp, boolean_lists_reference_users_are_the_result_objects}`:
+  a body copy is `Clone` with the same ids, so whether a mark is copied is the application's
+  choice for its own table, and reference-user lists are the store's.
+
+**Cost** (MEASURED, throwaway timer, not committed). The edit is a 10,000-face strip with 5,000
+face merges, 5,000 face splits and 5,000 edge splits. Each figure is the minimum of 31
+`finish` calls, from three runs each; the host load was about 9.
+
+| | Before | After |
+|---|---|---|
+| `finish` | 11.5–18.8 ms | 12.6–14.5 ms |
+
+The added work:
+
+- one map move per merge (`held`);
+- a fin-face lookup and a small sorted `Vec` per edge piece (`sides`), computed only for split
+  pieces;
+- a filter over `held` at `finish`.
+
+The best-case difference is about 1 ms on 15,000 events, inside the noise of the loaded host.
+Edits with no merges or splits do no new work.
+
+**Open**:
+
+- A `Carry::replaced` hook, if an application wants the rule to decide a temporary mark on a
+  written entity (decision 7).
+- The within-edit order of splits before merges (decision 9), if an operation needs a
+  quantity-like rule exact in one edit.
+- Face pieces that tie on bound and place still fall to the id (decision 2).
+- Touches through moved vertices (BR3 decision 1), unchanged.
 
 ## 7. `scx-record`
 
