@@ -152,7 +152,9 @@ fn the_makers_bodies() {
             BALL,
         ),
         (
-            scx_testkit::bodies::made::cylinder(&f, mm(1.0), mm(2.0), &doc).unwrap().body,
+            scx_testkit::bodies::made::cylinder(&f, mm(1.0), mm(2.0), &doc)
+                .unwrap()
+                .body,
             BALL,
         ),
         (
@@ -167,9 +169,16 @@ fn the_makers_bodies() {
                 .body,
             BALL,
         ),
-        (scx_testkit::bodies::made::sphere(&f, mm(1.0), &doc).unwrap().body, BALL),
         (
-            scx_testkit::bodies::made::torus(&f, mm(3.0), mm(1.0), &doc).unwrap().body,
+            scx_testkit::bodies::made::sphere(&f, mm(1.0), &doc)
+                .unwrap()
+                .body,
+            BALL,
+        ),
+        (
+            scx_testkit::bodies::made::torus(&f, mm(3.0), mm(1.0), &doc)
+                .unwrap()
+                .body,
             TORUS,
         ),
     ];
