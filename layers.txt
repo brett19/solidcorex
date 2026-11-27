@@ -6,6 +6,7 @@ scx-p21
 scx-algo
 scx-nurbs-surface
 scx-curve
+scx-planar
 scx-surface
 scx-ssi
 scx-brep

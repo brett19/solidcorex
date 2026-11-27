@@ -1,0 +1,21 @@
+# Written for solidcorex.
+[package]
+name = "scx-planar"
+description = "solidcorex layer 2: planar profiles of lines and circular arcs: validated regions (closed, apart, nested, oriented loops) decided by exact and interval-certified tests"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+# scx-algo (layers.txt): the box tree that finds the pairs of segments to test.
+scx-algo = { path = "../scx-algo" }
+scx-num = { path = "../scx-num" }
+
+# The profile fixtures the region tests adapt (layers.txt [testkit]).
+[dev-dependencies]
+scx-testkit = { path = "../scx-testkit" }
+
+[lints]
+workspace = true

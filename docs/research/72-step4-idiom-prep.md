@@ -1648,3 +1648,101 @@ for these shapes is T10's, not here: the tests carry their own small ones.
 - **Not covered:** self-intersection of non-adjacent triangles (a test needs a triangle-triangle
   intersection oracle; deferred to TS3 if wanted), and multiple shells or genus (the oracle
   takes the whole mesh as one surface; `NonManifoldVertex` is per vertex).
+
+### 14.6 PL1 as built (11-27)
+
+`scx-planar` (`crates/scx-planar`, layer after `scx-curve`; depends on `scx-num` and `scx-algo`).
+Tests: `tests/fixtures.rs` (T11 through one adapter), `tests/pin_ports.rs` (the pin's
+`prism/tests.rs` line-and-arc cases as outcomes), `tests/profiles.rs`, and unit tests in `cert`.
+
+- **Shape.** `#[non_exhaustive] enum Segment { Line { start, end }, Arc { centre, start, end,
+  sense: Sense } }` with `line`, `arc`, `start`, `end`, `reversed`. `Loop` (closed, oriented, by
+  construction) with `segments` and `signed_area`. `Region::new(outer: Vec<Segment>, holes:
+  Vec<Vec<Segment>>, res: Resolution) -> Result<Region, PlanarError>`, with `outer`, `holes`,
+  `resolution`, `outer_reversed`, `holes_reversed`, `area` and `classify(p) -> Result<Place,
+  PlanarError>` (`Inside`, `Outside`, `Boundary`).
+- **Errors.** `PlanarError` (`non_exhaustive`), one cause per refusal: `NotFinite`, `OutOfRange`,
+  `Empty`, `Open { in_loop, joint, gap }`, `Degenerate { at, why: Short | Radius | EndOffCircle }`,
+  `Crossing { a, b }`, `Touching { a, b }`, `HoleOutside`, `HoleInHole { outer, inner }` are
+  `Refused`; `Undecided { in_loop }` (an interval test that could not decide) is `Unsupported`.
+  Segments are named by `SegmentRef { in_loop: LoopId, segment }`.
+- **Order of checks.** Numbers (finite, in range) and empty loops; closure; degenerate segments;
+  contacts; nesting; orientation. The first failing check is the cause, and within contacts
+  `Crossing` beats `Touching` and the least `(a, b)` pair is reported, so the verdict does not
+  depend on loop order (tested over rotations, reversal and permuted holes on every fixture).
+- **Results.** All 23 T11 fixtures give their verdict, accepted areas within 1e-12 relative and
+  the reversal flags as stated; the Open fixture's gap is reported exactly.
+- **Decision: segments are endpoint data, not 72 §4.3's `Arc(Circle2, Extent1d)`.** For: joints
+  are then exact points that two segments share bit for bit (closure and adjacency are equalities
+  after snapping), T11's `Seg` maps one to one, and no angle is ever rounded into the input.
+  Against: a consumer wanting the circle and the parameter range has to derive them (one atan2 per
+  end), and MK3 will want `AngleLine2` pcurves. The derivation is cheap and the input stays exact;
+  a `Circle2` view can be added when MK3 needs it.
+- **Decision: reuse `scx_num::frame::Sense`** for an arc's direction (`Forward` is
+  counter-clockwise). For: one direction type in the workspace. Against: `ccw: bool` reads more
+  plainly; but a bool invites the wrong default.
+- **Decision: NotFinite and OutOfRange before Open.** "An open loop is judged first" holds among
+  geometric causes; a NaN makes every later test meaningless, including the gap. Against: a NaN in
+  an open loop reports NotFinite, not Open. Tested (`the_checks_run_in_order`).
+- **Decision: closure snaps.** A gap proved at most the resolution (interval test on `gap^2 <=
+  res^2`) is closed by moving each segment's end onto the next segment's start, so later tests see
+  exactly shared joints. For: adjacency is then an equality, and the joint's contact is not
+  re-decided by tolerance. Against: an arc's end moves by up to the resolution off its circle; the
+  EndOffCircle test allows exactly that.
+- **Decision: contacts are decided by events, certified.** Lines use an exact orient2d (Shewchuk's
+  filter, then 16 error-free products summed as an expansion); arcs use interval arithmetic with
+  one-ulp outward rounding over a radius band (the hull of the two end distances). A pair is
+  Crossing only when a proper crossing is proved, Apart only when every event (end distances,
+  meeting points, the critical pairs on the line of centres) is proved more than the resolution
+  apart; anything else is Touching. No fixed epsilon: the only length is the resolution.
+  Against: an undecidable near-tangent case is refused as Touching rather than accepted; this is
+  the conservative side, and such profiles are within the resolution of touching anyway.
+- **Decision: a joint neighbourhood for adjacent segments.** Events within `rho = 4 sqrt(R_max
+  res) + 4 res` of a shared joint are ignored, since two segments tangent at a joint (a fillet, a
+  slot) come within the resolution of each other over a length of about `sqrt(R res)`. For:
+  tangent joints are accepted (rounded rectangle, slot, S-bend tested). Against: a real fold-back
+  shorter than `rho` beside a joint is missed; a fold along a whole segment is still found
+  (`collinear_edges_apart_are_apart`'s spike).
+- **Decision: concentric only when the centres are bit-equal.** Arcs on one circle then overlap by
+  mid-direction tests (four quarter arcs accepted, a retraced arc Touching). Distinct but
+  near-equal centres go through the general path, which may answer Touching where the truth is
+  Apart by less than the band. Against: an exact-but-different representation of one centre is
+  conservative, never wrong.
+- **Decision: coordinates are 0 or of magnitude in `[1e-100, 1e9]`** (`OutOfRange` otherwise), so
+  every `two_prod` in orient2d is error-free and the line tests are exact. Against: a profile in
+  metres at 1e-100 resolution is impossible anyway; 1e9 mm is 1000 km.
+- **Decision: `classify` answers `Boundary` within the resolution** of any segment (certified),
+  else the winding number decides. The pin's `holds` returned `None` only exactly on the loop; here
+  a point within the resolution is not decided either way, which is what the resolution means.
+  The pin ports use a resolution below each case's distance.
+- **Decision: winding by angle sum**, not ray casting. Each arc adds its chord's angle plus a full
+  turn when the point is in the circular segment, read from the same float cross that atan2 reads
+  so a point on the chord line is consistent. No ray means no half-open vertex rule.
+- **Decision: orientation by signed area with a bound.** Shoelace about the first vertex plus
+  `r^2 (t - sin t) / 2` per arc (series below `|t| = 1e-2`), compensated, with a bound of `16 eps`
+  times the sum of the terms' magnitudes and the arcs' angle sensitivity. A loop whose area is
+  not proved non-zero is `Undecided` (a region of zero area is degenerate in practice).
+- **Decision: candidate pairs from `scx-algo`'s box tree** (`BoxTree<Extent2d>::self_pairs`), not a
+  sort-and-sweep and not brute force. Measured (release, throwaway timer, medians of 7, whole
+  `Region::new`): 1000-gon 0.7-1.1 ms, 10000-gon 6.9 ms; comb of 1001 / 10001 segments 0.60 /
+  6.4 ms upright and 0.61 / 6.4 ms on its side; 2500 round holes in a square 5.0 ms. A sweep on `x`
+  was the same or slightly faster upright (comb 10001: 5.3 ms) but 64 ms on its side, where every
+  box spans the same `x` (`O(n^2)`); brute-force box pairs were 53-62 ms at 10000 segments
+  everywhere. The tree is `O(n log n)` to build and its self-join follows the overlapping pairs in
+  both axes, so no orientation of the profile is a worst case. Nested holes use the same tree.
+- **Complexity, open:** the hole-inside-outer test is one winding number per hole over the whole
+  outer loop, `O(h n)`: a 1000-gon with 2388 round holes takes 47 ms (with 488 holes, 10 ms).
+  One point per hole suffices because contacts are already excluded. A ray test against the
+  tree would make it `O(h log n)`; not done, since profiles of thousands of holes in a
+  thousand-segment outer loop are rare.
+- **Decision: no segment-count limit.** The costs above are near linear; a limit would refuse
+  valid input.
+- **Deviation:** 72 §4.2's `Unsupported { segment }` for ellipse and NURBS segments is not a
+  variant: `Segment` has no such kinds yet and is `non_exhaustive`, so step 5 adds the variants
+  and their refusal together.
+- **Open:** a full circle as one arc (start equal to end) is refused as `Degenerate::Short`;
+  T11 and the ports use two half arcs. Accepting it needs an explicit full-turn flag on `Arc`.
+- **Pin cases not ported** (not line-and-arc regions or not this layer): chord coordinates;
+  ellipse, conic, Bezier and hyperbola areas and holds (step 5); the distance query; placement
+  between regions; readers, sheets, prisms, arc building, circle and ellipse recognition.
+- **Removed tests:** none.
