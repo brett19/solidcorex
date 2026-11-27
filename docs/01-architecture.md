@@ -77,7 +77,7 @@ column says; "—" means the crate takes no kernel code. The figures move as cra
 
 | Layer | Crate | Holds | Depends on | Kernel lines |
 |---:|---|---|---|---:|
-| 0 | `scx-num` | vectors, points, frames, rigid and affine transforms, extents, intervals and Taylor models (with the certified section's intervals and series), pseudo-boxes, placements, units and tolerance newtypes, `Cert` and `Basis`, constants, platform-independent transcendentals (`fmath`), error-free transforms, the fixed hash and `Rng` | std | 16,992 |
+| 0 | `scx-num` | vectors, points, frames, rigid and affine transforms, extents (finite by construction) and parameter domains, intervals and Taylor models (with the certified section's intervals and series), pseudo-boxes, placements, units and tolerance newtypes, `Cert` and `Basis`, constants, platform-independent transcendentals (`fmath`), error-free transforms, the fixed hash and `Rng` | std | 16,992 |
 | 1 | `scx-algo` | polynomials and root isolation (with `bernstein_roots`), 1-D and n-D local solvers, Krawczyk, the global solver, the ODE core of the mass integrator, deterministic sorting and grouping, a box tree over `Extent`, point sets, the `Executor` trait | num | 17,515 |
 | 1 | `scx-nurbs` | knots, basis, Bézier, NURBS curves as plain data: evaluation, splitting, degree change, curve fitting and approximation, curve enclosures and deviations, IGES entity 126 | num | 28,669 |
 | 1 | `scx-p21` | STEP Part 21 read and write, Part 42 entities as data, units, product structure | num | — (part of `solidcore-step`) |
@@ -377,7 +377,7 @@ This section is revised after review-architecture-v2 (B1, S11, K5).
 | `Region` | a volume: `RegionId(0)` is the infinite region outside everything; others are solid or void, with a `solid: bool` | region table |
 | `Shell` | a connected set of face sides bounding one region, plus its wire edges and lone vertices; the region it bounds | shell table |
 | `Face` | surface, `sides: [ShellId; 2]` (front, back, front taken about the natural normal), loops of `EdgeUse`s, cells | `Arc<FaceRecord>` per face |
-| `EdgeUse` | the edge, sense, pcurve (a 2-D curve and interval on the face's surface), the pcurve's recorded bound | inside its face's loop |
+| `EdgeUse` | the edge, sense, pcurve (a 2-D curve and interval on the face's surface; a uv point for a lone vertex), the pcurve's recorded bound | inside its face's loop |
 | `Edge` | **geometry part:** curve and interval (none for an edge collapsed to a point), end vertices, recorded accuracy. **Adjacency part:** the face sides around it in radial order | edge table, two parts |
 | `Vertex` | point, recorded accuracy | vertex table |
 
@@ -398,6 +398,16 @@ The pin's Boolean labels regions in one cellular body and then keeps or deletes 
 - **A wire edge** has no face sides. It belongs to its shell's wire list.
 - **A lone vertex inside a face** (a cone apex, an imprinted point) is a loop of one `EdgeUse` on an
   edge collapsed to that vertex.
+- **A collapsed edge** has no curve and is valid. A non-collapsed edge without a curve can exist
+  only in a draft: at `finish` it is a `Defect`, since only our own operations build drafts that
+  way, and a caller's input without one is refused before `finish` (research 63 D8, review-63 M1).
+
+**Pcurves** (research 63 D10, review-63 H3): exact where a closed form exists. Otherwise the
+writer fits them eagerly before `finish`, to the body's claimed accuracy (never raised in advance),
+accepting within edge accuracy + face accuracy + the existing gap, and records an accuracy only
+when worse than the resolution. Every pcurve keeps the pole and seam rules: no jump across a
+period, no dog-leg at a pole, a pole is a vertex. The fitter comes in step 5 (10.2); until then a
+writer that needs one returns `Unsupported`.
 
 **C4. The layout of use records.** This choice is revised after review-architecture-v2 (B1, S11).
 
@@ -1094,8 +1104,17 @@ review-architecture-v2 (S10, K1).
 **The kind set** is settled when `scx-curve` and `scx-surface` start, from the pin's kinds and their uses. Starting
 points (JUDGED):
 
-- line, circle, ellipse, parabola and hyperbola stay separate, each with its natural
-  parameterisation;
+- line, circle, ellipse, parabola and hyperbola stay separate;
+- every kind keeps the pin's analytic, NURBS-compatible parameterisation, in closed form with no
+  carried NURB, so oblique sections stay exact and converters need no uv mapping (research 63 D13,
+  review-63 H2; this replaces "each with its natural parameterisation");
+- a parameter's domain is a `ParamDomain` (periodic, bounded, half-open or unbounded); extents are
+  finite and no ±inf or sentinel is stored; numeric work runs on an explicit working extent
+  (research 63 D1);
+- placed kinds hold a right-handed `Frame` (x and z stored) and a sense; a mirror reverses the
+  sense, never the frame's handedness (research 63 D12, D14);
+- a non-similarity on an analytic surface gives NURBS over an extent; its pcurves are refit in
+  step 5, and until then the face is `Unsupported` under that map (research 63 D4);
 - Hermite and composite curves become NURBS if they exist only for fitting; if they stay, they are
   in `scx-curve`;
 - the pin's `CrvInVolume` and `SrfInVolume` become images under the volume maps, all in
@@ -1310,6 +1329,8 @@ early.
 2. **Private newtype fields**, with the arithmetic each newtype needs. Remove `AngleTol` (4.2).
 3. **Remove sentinels** (`UNDEF_DOUBLE`, `Vector3::UNDEF`, `USE_DEFAULT`, `UNINIT_TOL`,
    `INFINITE_PARAMETER`, READ) in favour of `Option`, typed defaults or named bounds.
+   `INFINITE_PARAMETER` goes in research 63's task P0: extent ends become finite by construction,
+   unboundedness is a `ParamDomain` variant, and the pin's clamps become named rules.
 4. **Add `fmath`**, covering every function in the 8.3 list.
 5. **Move `Cert`, `Claim`, `Method`, `Basis` and `Recorded` into `scx-num`**, and add the fixed hash
    and `Rng`.
@@ -1328,9 +1349,9 @@ early.
 |---|---|---|
 | 1 | 10.1 | `cargo xtask fast` clean; difftest 0 mismatches, or each explained |
 | 2 | **Vertical slice, geometry:** `scx-nurbs` evaluation and knots; `scx-nurbs-surface` evaluation and the `Nurbs` record; `scx-curve` for line, circle, ellipse, B-spline curve; `scx-surface` for plane, cylinder, cone, sphere, torus, B-spline surface, with point inversion, closed-form analytic projection and curve-surface intersection; the analytic part of `scx-ssi` | function-by-function difftest on those |
-| 3 | **Vertical slice, body:** `scx-brep` (regions, sides, cells, `Changes`, `carry`, stamp); the provenance and history tests ported; `scx-record`; the pin-record converter | round trip keeps ids and bytes; cells empty after both edit paths; provenance tests pass |
+| 3 | **Vertical slice, body:** `scx-brep` (regions, sides, cells, `Changes`, `carry`, stamp; exact pcurves only, research 63 D10); the provenance and history tests ported; `scx-record`; the pin-record converter | round trip keeps ids and bytes; cells empty after both edit paths; provenance tests pass |
 | 4 | **Vertical slice, end to end:** `scx-mass`; `scx-bodyq` classification; `scx-make` primitives and extrude; `scx-boolean` on analytic bodies; `scx-tess`. The crates these depend on (`scx-planar`, `scx-check`, `scx-stitch`, `scx-hlr`) exist from here, holding what the slice calls | **the end-to-end difftest by outcome runs from here on**; first performance measurement (9.4) |
-| 5 | Widen geometry (layers 1-4): all NURBS work, fitting with per-span certificates, procedural kinds (the blend definition with the one section generator: chord, circle, Gⁿ G2-G4 with `Fullness`, and the conic, with their exact classes; research 61 §7), the volume maps, B-spline SSI, `scx-planar`, `scx-sketch`, `scx-teeth`, `scx-dxf`, `scx-p21` | difftest per function; certified bounds checked; the section truth checks of research 61 §4.4; DXF corpus |
+| 5 | Widen geometry (layers 1-4): all NURBS work, fitting with per-span certificates, the writer's pcurve fitter and the refit after a non-similarity (research 63 D4, D10), procedural kinds (the blend definition with the one section generator: chord, circle, Gⁿ G2-G4 with `Fullness`, and the conic, with their exact classes; research 61 §7), the volume maps, B-spline SSI, `scx-planar`, `scx-sketch`, `scx-teeth`, `scx-dxf`, `scx-p21` | difftest per function; certified bounds checked; the section truth checks of research 61 §4.4; DXF corpus |
 | 6 | Widen bodies (layers 5-7 without Booleans): full `scx-bodyq` (contact, continuity, pick), `scx-check`, `scx-stitch`, `scx-hlr`, `scx-step` | the STEP corpus imports and passes the check; drawings |
 | 7 | Layers 7-8: `scx-boolean` full, `scx-deform`, `scx-make` full, `scx-repair` | Boolean suite, algebra properties, difftest by outcome |
 | 8 | Layer 9: `scx-local`, `scx-mesh`, `scx-sheetmetal`, `scx-taper` | each family by outcome, kept-face counts; mesh round trips |
