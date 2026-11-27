@@ -50,7 +50,7 @@ pub fn resolve(
     context_id: Option<u64>,
     assume: Option<Units>,
 ) -> Result<Resolved, UnitsFault> {
-    let c = context_id.map(|id| context(ex, id)).unwrap_or_default();
+    let c = context_id.map_or_else(Default::default, |id| context(ex, id));
     let (units, assumed) = c.units(assume)?;
     let u = c.uncertainty(units.len);
     Ok(Resolved {

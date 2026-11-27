@@ -214,8 +214,8 @@ impl Context {
             angle: self.angle == Unit::Missing,
         };
         match (
-            self.length.named().or(assume.map(|a| a.len)),
-            self.angle.named().or(assume.map(|a| a.ang)),
+            self.length.named().or_else(|| assume.map(|a| a.len)),
+            self.angle.named().or_else(|| assume.map(|a| a.ang)),
         ) {
             (Some(len), Some(ang)) => Ok((Units { len, ang }, missing)),
             _ => Err(UnitsFault::Missing(missing)),
