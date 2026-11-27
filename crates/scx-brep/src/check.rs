@@ -71,13 +71,27 @@ pub(crate) fn references(t: &Tables) -> Result<(), StructureCause> {
             return Err(dangling(id.into(), v.into()));
         }
     }
+    // Every use as `(face, edge, forward)`, sorted once, so each fin finds its use by a
+    // binary search: linear in the body up to a log, where scanning the face's uses for
+    // each fin is quadratic in a long loop's length.
+    let mut uses: Vec<(FaceId, EdgeId, bool)> = t
+        .faces
+        .iter()
+        .flat_map(|(id, face)| {
+            face.loops
+                .iter()
+                .flat_map(|l| &l.uses)
+                .map(move |u| (id, u.edge, u.sense == Sense::Forward))
+        })
+        .collect();
+    uses.sort_unstable();
     for (id, adj) in t.adjacency.iter() {
         for &fin in &adj.fins {
-            let Some(face) = t.faces.get(fin.face) else {
+            if t.faces.get(fin.face).is_none() {
                 return Err(dangling(id.into(), fin.face.into()));
-            };
-            let mut uses = face.loops.iter().flat_map(|l| &l.uses);
-            if !uses.any(|u| u.edge == id && u.sense == fin.sense) {
+            }
+            let key = (fin.face, id, fin.sense == Sense::Forward);
+            if uses.binary_search(&key).is_err() {
                 return Err(StructureCause::FinWithoutUse { edge: id, fin });
             }
         }

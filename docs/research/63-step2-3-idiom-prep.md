@@ -4406,6 +4406,21 @@ Decisions, each with the case for and against:
   - *Against:* the pin accepts a loop that jumps a seam at a vertex, where the 3-D gap is zero. That
     body is refused here.
   - *Change if:* a writer needs it; the jump would be recorded as a uv shift on the use.
+- **A pole is one collapsed edge per face, each with one fin and a pcurve along the pole's line**
+  (BR8's form, asked of BR2). The pcurve's interval is its own: a collapsed edge has no
+  parameter, so the `pcurve_interval` rule compares nothing there, and `[0, 1]` is a convention,
+  not an assumption the check makes.
+  - *For:* strict closure needs the pole's line in the loop's uv (a `UseGeom::Point` leaves a jump
+    from the meridian's end to the next one's start, refused as `loop_open_in_uv`); faces round a
+    pole stay independent, so editing one lune touches no record of another; the use carries the
+    pcurve, so nothing needs an interval on the edge.
+  - *Against, shared edge with n fins:* one edge per pole is closer to the 3-D truth (one point),
+    but its fins have no radial order (see above), so their list order is a convention to keep
+    deterministic and every edit round the pole rewrites it. *Against, an interval on
+    `Collapsed`:* a field with no 3-D meaning, there only to repeat what the pcurve already holds.
+  - *Change if:* a body needs the faces round a pole joined topologically (a double cone's apex);
+    then a shared edge with its fins paired by angle, as the radial rule's change-if says.
+  The check does not refuse a shared pole edge; the generators and writers use this form.
 - **Face 24 by the pole check plus closure**: a pole inside a face's interior (no edge through it)
   is the case the shoelace and the domain catch together, since a loop round a pole on a sphere
   must cross the pole's line, which closure allows only along a collapsed edge's pcurve.
@@ -4461,6 +4476,13 @@ The added work is about 1.1 µs per face, three quarters of it geometry: 8 sampl
 endpoint evaluations, and on a sphere the pole probes and trigonometry. It is linear in the body, so
 a large body pays it in full on every finish until finish checks only what the draft touched
 (open: BR3's touched sets, §6.8, make that possible).
+
+**Long loops (after BR8).** BR1's fin-to-use test scanned the face's uses for each fin, quadratic
+in a loop's length (BR8 saw 78 to 170 µs per face on long-loop bodies). It now sorts every use
+once as `(face, edge, sense)` and finds each fin's by binary search. On an n-gon prism (two caps
+of n uses), release, best of 3: n = 1,000: 1.79 to 1.74 ms; n = 4,000: 9.69 to 6.75 ms; n =
+16,000: 86.7 to 26.5 ms (5.4 to 1.66 µs per face, now flat in n). The 600-face blocks body is
+unchanged (1.09 µs per face).
 
 **Merged with BR3.** Eight of BR3's `Changes` tests make bookkeeping edits that leave no valid
 body (a removed face's edges left loose, a lone vertex in a shell with faces, an edge's ends
