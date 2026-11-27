@@ -493,6 +493,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "scx-bodyq"
+version = "0.1.0"
+dependencies = [
+ "scx-brep",
+ "scx-curve",
+ "scx-make",
+ "scx-num",
+ "scx-nurbs",
+ "scx-surface",
+ "scx-testkit",
+]
+
+[[package]]
 name = "scx-brep"
 version = "0.1.0"
 dependencies = [
@@ -521,11 +534,13 @@ dependencies = [
  "scx-algo",
  "scx-brep",
  "scx-curve",
+ "scx-make",
  "scx-mass",
  "scx-num",
  "scx-nurbs",
  "scx-nurbs-surface",
  "scx-p21",
+ "scx-record",
  "scx-ssi",
  "scx-surface",
  "scx-testkit",
