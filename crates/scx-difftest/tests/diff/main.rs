@@ -46,6 +46,7 @@ mod t_nurbs_surface_enclose;
 mod t_nurbs_surface_eval;
 mod t_nurbs_surface_iges;
 mod t_ode;
+mod t_open_conic;
 mod t_p21;
 mod t_pbox;
 mod t_pcurve;

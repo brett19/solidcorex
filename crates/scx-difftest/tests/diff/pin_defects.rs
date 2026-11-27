@@ -4863,9 +4863,17 @@ fn curve_surface_truth(c: &crate::t_curve_surface::Case) -> Result<(), String> {
 /// - Plane missing a bounded cylinder or cone (8) or a torus (15): the pin answers general;
 ///   scx answers empty from the rims' hull or the torus's support, and every point of the
 ///   surface's grid is off the plane by more than the snap.
+/// - Plane and cone cutting a hyperbola whose branch on the nappe misses the extent (2):
+///   the pin answers general; scx clips the branch to nothing and answers empty.
+/// - Plane and cone cutting a hyperbola (19 in one piece, 12 in two): the pin answers
+///   general; scx answers the branch on the nappe, clipped to the extent.
+/// - Plane and cone parallel to a generator, a parabola (13 in one piece, 5 in two): the
+///   pin answers general; scx answers the parabola, clipped.
+/// - Plane aimed along a generator but off the apex (4): the pin answers general; scx
+///   answers empty, the parabola on the other nappe or outside the extent.
 pub fn ssi_section_by_plane() -> PinDefect<(crate::t_ssi::Case,), crate::t_ssi::Print> {
     PinDefect {
-        reason: "the pin leaves closed forms to the general intersector, splits pieces at a seam, or answers outside the extent",
+        reason: "the pin leaves closed forms (parabolas and hyperbolas among them) to the general intersector, splits pieces at a seam, or answers outside the extent",
         applies: Applies::Disagreeing,
         check: |(c,), _| crate::t_ssi::truth::check(c),
     }

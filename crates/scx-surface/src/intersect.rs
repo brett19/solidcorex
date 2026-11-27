@@ -1,6 +1,6 @@
 // Written for solidcorex. Apache-2.0.
-//! Where a line, circle or ellipse meets a plane, cylinder, cone, sphere or torus (research
-//! 63 §4.2, SU6; §4.13 and §4.14 have the decisions).
+//! Where a line, circle, ellipse, parabola or hyperbola meets a plane, cylinder, cone,
+//! sphere or torus (research 63 §4.2, SU6; §4.13, §4.14 and §3.12 have the decisions).
 //!
 //! **The equation.** The curve is taken into the surface's axes (its frame, z times its
 //! sense) as a polynomial in a parameter `u` on `[0, 1]`, in Bernstein form and homogeneous:
@@ -13,6 +13,14 @@
 //!   half): `w = 2u - 1 = tan((t - t0) / 2)`, `t0` zero or `pi`. The halves meet at the
 //!   same control point, so an end coefficient is the same bits in both and a sign change at
 //!   the seam is seen by exactly one of them.
+//! - A parabola `V + F s^2 X + 2 F s Y` over `[lo, hi]` is the polynomial quadratic
+//!   `[P(lo), V + A lo hi + B (lo + hi) / 2, P(hi)]` over `[1, 1, 1]` (`A = F X`,
+//!   `B = 2 F Y`), `s` affine in `u` as a line's `t`.
+//! - A hyperbola `C + a cosh t X + b sinh t Y` over `[lo, hi]` is the rational quadratic
+//!   whose control points are the ends and the meeting point of their tangents,
+//!   `C + (A cosh m + B sinh m) / cosh w`, over `[1, cosh w, 1]` (`m` the middle and `w`
+//!   the half width): `2u - 1 = tanh((t - m) / 2) / tanh(w / 2)`, the conic's map with the
+//!   hyperbolic functions.
 //!
 //! The surface is the zero set of a homogeneous polynomial in the axes' coordinates: plane
 //! `Z`; cylinder `X^2 + Y^2 - r^2 H^2`; cone `X^2 + Y^2 - (r H + k Z)^2` (both nappes; the
@@ -298,6 +306,11 @@ enum Map {
     Segment { lo: f64, hi: f64 },
     /// `t = t0 + 2 atan(2u - 1)`.
     Half { t0: f64 },
+    /// `t = m + 2 atanh(k (2u - 1))`, `k = tanh(w / 2)`, `m` and `w` the middle and half
+    /// width of `[lo, hi]`; the ends are `lo` and `hi` to the bit. Kept as `k` and
+    /// `c = 1 - k = 2 / (1 + e^w)`, so `1 +- k (2u - 1)` are sums of positive terms,
+    /// `c + 2 k u` and `c + 2 k (1 - u)`, with no cancellation however near one `k` is.
+    Hyper { lo: f64, hi: f64, k: f64, c: f64 },
 }
 
 impl Map {
@@ -305,6 +318,16 @@ impl Map {
         match self {
             Self::Segment { lo, hi } => (1.0 - u) * lo + u * hi,
             Self::Half { t0 } => t0 + 2.0 * fmath::atan(2.0 * u - 1.0),
+            // 2 atanh x = ln((1 + x) / (1 - x)), to a few ulps of `t`'s size; the root's
+            // polish on the curve's own point refines it.
+            Self::Hyper { lo, hi, k, c } => match u {
+                0.0 => lo,
+                1.0 => hi,
+                _ => {
+                    let r = (c + 2.0 * k * u) / (c + 2.0 * k * (1.0 - u));
+                    (0.5 * (lo + hi) + fmath::ln(r)).clamp(lo, hi)
+                }
+            },
         }
     }
 }
@@ -328,7 +351,7 @@ impl Piece {
     fn turns(&self, g: &Bern) -> Bern {
         match self.map {
             Map::Segment { .. } => g.derivative(),
-            Map::Half { .. } => {
+            Map::Half { .. } | Map::Hyper { .. } => {
                 let d = (g.n / self.h.n) as f64;
                 self.h
                     .mul(&g.derivative())
@@ -349,8 +372,27 @@ struct Path {
 
 #[derive(Clone, Copy, Debug)]
 enum PathKind {
-    Line { origin: Point3, direction: Vec3 },
-    Conic { centre: Point3, a: Vec3, b: Vec3 },
+    Line {
+        origin: Point3,
+        direction: Vec3,
+    },
+    Conic {
+        centre: Point3,
+        a: Vec3,
+        b: Vec3,
+    },
+    /// `vertex + a s^2 + b s`.
+    Parabola {
+        vertex: Point3,
+        a: Vec3,
+        b: Vec3,
+    },
+    /// `centre + a cosh t + b sinh t`.
+    Hyperbola {
+        centre: Point3,
+        a: Vec3,
+        b: Vec3,
+    },
 }
 
 impl Path {
@@ -374,6 +416,19 @@ impl Path {
                 e.semi_x().mm(),
                 e.semi_y().mm() * e.sense().sign(),
             ),
+            Curve::Parabola(p) => {
+                let (f, sign) = (p.focal().mm(), p.sense().sign());
+                PathKind::Parabola {
+                    vertex: p.frame().origin(),
+                    a: p.frame().x().as_vec() * f,
+                    b: p.frame().y().as_vec() * (2.0 * f * sign),
+                }
+            }
+            Curve::Hyperbola(h) => PathKind::Hyperbola {
+                centre: h.frame().origin(),
+                a: h.frame().x().as_vec() * h.semi_x().mm(),
+                b: h.frame().y().as_vec() * (h.semi_y().mm() * h.sense().sign()),
+            },
             _ => return None,
         };
         let closed = matches!(kind, PathKind::Conic { .. }) && ce.length() >= TAU;
@@ -384,7 +439,8 @@ impl Path {
         })
     }
 
-    /// The pieces in the target's axes: the segment, or the two half turns.
+    /// The pieces in the target's axes: the segment, the two half turns, or the open
+    /// conic's arc.
     fn pieces(&self, target: &Target) -> impl Iterator<Item = Piece> {
         let ax = &target.axes;
         let lin = |p: [f64; 3], q: [f64; 3], map| Piece {
@@ -401,6 +457,15 @@ impl Path {
             h: Bern::new(&[1.0, 0.0, 1.0]),
             map,
         };
+        let quad3 = |p: [f64; 3], m: [f64; 3], q: [f64; 3], w: f64, map| Piece {
+            x: Bern::new(&[p[0], m[0] * w, q[0]]),
+            y: Bern::new(&[p[1], m[1] * w, q[1]]),
+            z: Bern::new(&[p[2], m[2] * w, q[2]]),
+            h: Bern::new(&[1.0, w, 1.0]),
+            map,
+        };
+        let local = |p: Point3| tuple(ax.local(p));
+        let (lo, hi) = (self.extent.min(), self.extent.max());
         let mut out = [None, None];
         match self.kind {
             PathKind::Line { origin, direction } => {
@@ -424,6 +489,30 @@ impl Path {
                     ));
                 }
             }
+            PathKind::Parabola { vertex, a, b } => {
+                let at = |s: f64| vertex + a * (s * s) + b * s;
+                let mid = vertex + a * (lo * hi) + b * (0.5 * (lo + hi));
+                let map = Map::Segment { lo, hi };
+                out[0] = Some(quad3(local(at(lo)), local(mid), local(at(hi)), 1.0, map));
+            }
+            PathKind::Hyperbola { centre, a, b } => {
+                let at = |t: f64| {
+                    let (sh, ch) = fmath::sinh_cosh(t);
+                    centre + a * ch + b * sh
+                };
+                // The middle and half width; the tangents at the ends meet at `mid`.
+                let (m, w) = (0.5 * (lo + hi), 0.5 * (hi - lo));
+                let (sh, ch) = fmath::sinh_cosh(m);
+                let cw = fmath::cosh(w);
+                let mid = centre + (a * ch + b * sh) / cw;
+                let map = Map::Hyper {
+                    lo,
+                    hi,
+                    k: fmath::tanh(0.5 * w),
+                    c: 2.0 / (1.0 + fmath::exp(w)),
+                };
+                out[0] = Some(quad3(local(at(lo)), local(mid), local(at(hi)), cw, map));
+            }
         }
         out.into_iter().flatten()
     }
@@ -438,6 +527,13 @@ impl Path {
                 let (sin, cos) = (fmath::sin(t), fmath::cos(t));
                 (centre + a * cos + b * sin, b * cos - a * sin)
             }
+            PathKind::Parabola { vertex, a, b } => {
+                (vertex + a * (t * t) + b * t, a * (2.0 * t) + b)
+            }
+            PathKind::Hyperbola { centre, a, b } => {
+                let (sh, ch) = fmath::sinh_cosh(t);
+                (centre + a * ch + b * sh, a * sh + b * ch)
+            }
         };
         (tuple(ax.local(p)), along(d))
     }
@@ -449,7 +545,8 @@ impl Path {
     fn polish(&self, target: &Target, mut t: f64) -> f64 {
         let reach = match self.kind {
             PathKind::Line { .. } => 1e-6 * (self.extent.length() + t.abs()),
-            PathKind::Conic { .. } => 1e-6,
+            PathKind::Conic { .. } | PathKind::Hyperbola { .. } => 1e-6,
+            PathKind::Parabola { .. } => 1e-6 * (1.0 + t.abs()),
         };
         let (l, mut d) = self.local(target, t);
         let (mut f, mut grad) = target.implicit(l);
@@ -477,7 +574,8 @@ impl Path {
     /// height `z` for a cylinder's or cone's `v`, a sphere's latitude (`r sin`) or a torus's
     /// tube angle (the minor radius times its sine); and for an angle `u` the plane through
     /// the axis at that azimuth (both its halves). On a plane, the curve's signed distance
-    /// is affine in a line's `t` and `alpha cos t + beta sin t + gamma` on a conic, so the
+    /// is affine in a line's `t`, `alpha cos t + beta sin t + gamma` on a conic, quadratic in
+    /// a parabola's `t` and `alpha cosh t + beta sinh t + gamma` on a hyperbola, so the
     /// meeting parameters are closed forms. Between neighbours the uv is wholly in or out
     /// of `se`, which the midpoint decides; neighbouring pieces inside merge, and on a
     /// closed curve the pieces at the turn's two ends join across it. A piece of zero
@@ -530,7 +628,8 @@ impl Path {
 
     /// The parameters where the curve meets the plane `normal . l = offset` in the
     /// target's axes, unplaced: a line's one (none when parallel), a conic's two (none
-    /// when it misses or lies in a parallel plane).
+    /// when it misses or lies in a parallel plane), a parabola's up to two (the roots of a
+    /// quadratic in `t`) and a hyperbola's up to two (of a quadratic in `e^t`).
     fn meets(&self, target: &Target, normal: [f64; 3], offset: f64) -> [Option<f64>; 2] {
         let ax = &target.axes;
         let dot = |l: [f64; 3]| normal[0] * l[0] + normal[1] * l[1] + normal[2] * l[2];
@@ -552,6 +651,17 @@ impl Path {
                 let (psi, half) = (fmath::atan2(beta, alpha), fmath::acos(cos));
                 [Some(psi - half), Some(psi + half)]
             }
+            PathKind::Parabola { vertex, a, b } => {
+                let gamma = dot(tuple(ax.local(vertex))) - offset;
+                quadratic_roots(along(a), along(b), gamma)
+            }
+            PathKind::Hyperbola { centre, a, b } => {
+                // `alpha cosh t + beta sinh t + gamma` times `2 e^t`, in `u = e^t > 0`.
+                let (alpha, beta) = (along(a), along(b));
+                let gamma = dot(tuple(ax.local(centre))) - offset;
+                quadratic_roots(alpha + beta, 2.0 * gamma, alpha - beta)
+                    .map(|u| u.filter(|u| *u > 0.0).map(fmath::ln))
+            }
         }
     }
 
@@ -560,7 +670,7 @@ impl Path {
     fn place(&self, t: f64) -> Option<f64> {
         let (lo, hi) = (self.extent.min(), self.extent.max());
         let t = match self.kind {
-            PathKind::Line { .. } => t,
+            PathKind::Line { .. } | PathKind::Parabola { .. } | PathKind::Hyperbola { .. } => t,
             PathKind::Conic { .. } => {
                 let mut t = t + TAU * ((lo - t) / TAU).ceil();
                 if t < lo {
@@ -578,6 +688,24 @@ impl Path {
             (lo..=hi).contains(&t).then_some(t)
         }
     }
+}
+
+/// The real roots of `a x^2 + b x + c` (one when `a` is zero; none when both are), by the
+/// stable form that never subtracts nearly equal terms.
+fn quadratic_roots(a: f64, b: f64, c: f64) -> [Option<f64>; 2] {
+    let fin = |x: f64| x.is_finite().then_some(x);
+    if a == 0.0 {
+        return [fin(-c / b), None];
+    }
+    let disc = b * b - 4.0 * a * c;
+    if disc.is_nan() || disc < 0.0 {
+        return [None, None];
+    }
+    let q = -0.5 * (b + disc.sqrt().copysign(b));
+    if q == 0.0 {
+        return [Some(0.0), None];
+    }
+    [fin(q / a), fin(c / q)]
 }
 
 fn tuple((x, y, z): (f64, f64, f64)) -> [f64; 3] {
@@ -817,8 +945,8 @@ fn wrap(x: f64, period: Option<f64>, lo: f64, hi: f64) -> Option<f64> {
 
 // ---------------------------------------------------------------- Bernstein polynomials
 
-/// The most degree a polynomial here reaches: a conic against the torus is 8, its turning
-/// points 9.
+/// The most degree a polynomial here reaches: a conic (closed or open) against the torus is
+/// 8, its turning points 9.
 const MAX: usize = 9;
 
 /// `C(n, k)` for `n <= MAX` (Pascal's triangle, exact).

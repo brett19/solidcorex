@@ -14,8 +14,8 @@
 //! that is not finite, a value that overflows, a jet past [`scx_nurbs::MAX_ORDER`]) every
 //! coordinate is NaN, as a conic's are at an infinite angle.
 //!
-//! The enums are `#[non_exhaustive]` (01 C10): `Parabola`, `Hyperbola` and `Procedural`
-//! join in step 5, so a match outside this crate keeps a wildcard arm. They are not `Copy`:
+//! The enums are `#[non_exhaustive]` (01 C10): `Procedural` joins in step 5, so a match
+//! outside this crate keeps a wildcard arm. They are not `Copy`:
 //! the `Nurbs` arm holds an `Arc`.
 
 use std::sync::Arc;
@@ -30,6 +30,7 @@ use scx_nurbs::{Approach, NurbsCurve};
 use crate::angle_line::{AngleLine2, AngleWave2};
 use crate::conic::{Circle, Circle2, Ellipse, Ellipse2};
 use crate::line::{Line, Line2};
+use crate::open_conic::{Hyperbola, Hyperbola2, Parabola, Parabola2};
 
 /// A curve in space: one of the kinds.
 #[derive(Debug, Clone, PartialEq)]
@@ -41,6 +42,10 @@ pub enum Curve {
     Circle(Circle),
     /// An ellipse, `t` the angle in radians.
     Ellipse(Ellipse),
+    /// A parabola, over every `t`.
+    Parabola(Parabola),
+    /// A hyperbola's branch, over every `t`.
+    Hyperbola(Hyperbola),
     /// A NURBS curve, over its knots' domain and continuing its end pieces past it.
     Nurbs(Arc<NurbsCurve<3>>),
 }
@@ -55,6 +60,10 @@ pub enum Curve2 {
     Circle(Circle2),
     /// An ellipse, `t` the angle in radians.
     Ellipse(Ellipse2),
+    /// A parabola, over every `t`.
+    Parabola(Parabola2),
+    /// A hyperbola's branch, over every `t`.
+    Hyperbola(Hyperbola2),
     /// A NURBS curve, as [`Curve::Nurbs`].
     Nurbs(Arc<NurbsCurve<2>>),
     /// A line in angle and height in the NURBS-compatible uv, `t` the angle in radians: a
@@ -79,6 +88,8 @@ macro_rules! dispatch {
             Self::Line($c) => $call,
             Self::Circle($c) => $call,
             Self::Ellipse($c) => $call,
+            Self::Parabola($c) => $call,
+            Self::Hyperbola($c) => $call,
             Self::Nurbs($n) => $nurbs,
         }
     };
@@ -87,6 +98,8 @@ macro_rules! dispatch {
             Self::Line($c) => $call,
             Self::Circle($c) => $call,
             Self::Ellipse($c) => $call,
+            Self::Parabola($c) => $call,
+            Self::Hyperbola($c) => $call,
             Self::Nurbs($n) => $nurbs,
             Self::AngleLine($a) => $angle,
             Self::AngleWave($a) => $angle,
@@ -135,8 +148,8 @@ fn jet2<T, const D: usize>((p, d): ([T; 2], [[T; 2]; D])) -> CurveJet2<D, T> {
 }
 
 impl Curve {
-    /// The parameter's domain: [`ParamDomain::Unbounded`] for a line,
-    /// [`ParamDomain::TURN`] for a conic, [`ParamDomain::Bounded`] by its knots for a NURBS
+    /// The parameter's domain: [`ParamDomain::Unbounded`] for a line, a parabola and a
+    /// hyperbola, [`ParamDomain::TURN`] for a circle and an ellipse, [`ParamDomain::Bounded`] by its knots for a NURBS
     /// curve.
     #[inline]
     #[must_use]
@@ -196,6 +209,8 @@ impl Curve {
             }
             Self::Circle(c) => c.fill(ts, out),
             Self::Ellipse(e) => e.fill(ts, out),
+            Self::Parabola(c) => c.fill(ts, out),
+            Self::Hyperbola(c) => c.fill(ts, out),
             Self::Nurbs(n) => {
                 for (p, &t) in out.iter_mut().zip(ts) {
                     *p = point3(nurbs_point(n, t));
@@ -271,6 +286,8 @@ impl Curve2 {
             }
             Self::Circle(c) => c.fill(ts, out),
             Self::Ellipse(e) => e.fill(ts, out),
+            Self::Parabola(c) => c.fill(ts, out),
+            Self::Hyperbola(c) => c.fill(ts, out),
             Self::Nurbs(n) => {
                 for (p, &t) in out.iter_mut().zip(ts) {
                     *p = point2(nurbs_point(n, t));
@@ -292,8 +309,8 @@ macro_rules! from_kind {
     )*};
 }
 
-from_kind!(Curve: Line => Line, Circle => Circle, Ellipse => Ellipse);
-from_kind!(Curve2: Line2 => Line, Circle2 => Circle, Ellipse2 => Ellipse, AngleLine2 => AngleLine, AngleWave2 => AngleWave);
+from_kind!(Curve: Line => Line, Circle => Circle, Ellipse => Ellipse, Parabola => Parabola, Hyperbola => Hyperbola);
+from_kind!(Curve2: Line2 => Line, Circle2 => Circle, Ellipse2 => Ellipse, Parabola2 => Parabola, Hyperbola2 => Hyperbola, AngleLine2 => AngleLine, AngleWave2 => AngleWave);
 
 macro_rules! from_nurbs {
     ($enum:ident, $d:literal) => {
@@ -381,6 +398,8 @@ pub(crate) mod tests {
             if let Some(f) = Frame::new(p, v, x) {
                 out.push(Circle::new(f, a, sense(i)).unwrap().into());
                 out.push(Ellipse::new(f, a, b, sense(i)).unwrap().into());
+                out.push(Parabola::new(f, a, sense(i)).unwrap().into());
+                out.push(Hyperbola::new(f, a, b, sense(i)).unwrap().into());
             }
         }
         out
@@ -402,6 +421,8 @@ pub(crate) mod tests {
             if let Some(f) = Frame2::new(p, v) {
                 out.push(Circle2::new(f, a, sense(i)).unwrap().into());
                 out.push(Ellipse2::new(f, a, b, sense(i)).unwrap().into());
+                out.push(Parabola2::new(f, a, sense(i)).unwrap().into());
+                out.push(Hyperbola2::new(f, a, b, sense(i)).unwrap().into());
             }
         }
         out
@@ -521,6 +542,8 @@ pub(crate) mod tests {
             Curve::Line(k) => of!(k),
             Curve::Circle(k) => of!(k),
             Curve::Ellipse(k) => of!(k),
+            Curve::Parabola(k) => of!(k),
+            Curve::Hyperbola(k) => of!(k),
             // The curve's own calls: the jet as `derivs`, the order and the point together.
             Curve::Nurbs(n) => {
                 let jet = |d: &[[f64; 3]]| CurveJet {
@@ -634,6 +657,8 @@ pub(crate) mod tests {
                         Curve2::Line(k) => check!(k),
                         Curve2::Circle(k) => check!(k),
                         Curve2::Ellipse(k) => check!(k),
+                        Curve2::Parabola(k) => check!(k),
+                        Curve2::Hyperbola(k) => check!(k),
                         Curve2::AngleLine(a) => angle_check!(a),
                         Curve2::AngleWave(a) => angle_check!(a),
                         Curve2::Nurbs(n) => {
@@ -712,6 +737,11 @@ pub(crate) mod tests {
         assert_eq!(Curve::from(e), Curve::Ellipse(e));
         assert_eq!(Curve::from(l).domain(), ParamDomain::Unbounded);
         assert_eq!(Curve::from(e).domain(), ParamDomain::TURN);
+        let p = Parabola::new(f, r, Sense::Forward).unwrap();
+        let h = Hyperbola::new(f, r, Length::from_mm(1.0), Sense::Reversed).unwrap();
+        assert_eq!(Curve::from(p), Curve::Parabola(p));
+        assert_eq!(Curve::from(h), Curve::Hyperbola(h));
+        assert_eq!(Curve::from(h).domain(), ParamDomain::Unbounded);
         let f2 = Frame2::new(Point2::ORIGIN, Vec2::new(1.0, 0.0)).unwrap();
         let l2 = Line2::new(Point2::ORIGIN, Vec2::new(0.0, 1.0)).unwrap();
         let c2 = Circle2::new(f2, r, Sense::Forward).unwrap();
@@ -719,6 +749,10 @@ pub(crate) mod tests {
         assert_eq!(Curve2::from(l2), Curve2::Line(l2));
         assert_eq!(Curve2::from(c2), Curve2::Circle(c2));
         assert_eq!(Curve2::from(e2), Curve2::Ellipse(e2));
+        let p2 = Parabola2::new(f2, r, Sense::Forward).unwrap();
+        let h2 = Hyperbola2::new(f2, r, r, Sense::Forward).unwrap();
+        assert_eq!(Curve2::from(p2), Curve2::Parabola(p2));
+        assert_eq!(Curve2::from(h2), Curve2::Hyperbola(h2));
         assert_ne!(
             Curve::from(c),
             Curve::from(Ellipse::new(f, r, r, Sense::Forward).unwrap())
