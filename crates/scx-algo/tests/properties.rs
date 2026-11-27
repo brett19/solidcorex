@@ -1,9 +1,9 @@
 // Written for solidcorex. Apache-2.0.
-//! Properties of the closed-form polynomial solvers over seeded random polynomials built
-//! from known real roots: every root returned is a root (small residual against the
-//! size of the terms), at most `degree` are returned, every well-separated known root is
-//! found, a quartic with a vanishing leading term gives its cubic's roots without
-//! duplicates, and no two quartic roots lie within the tolerance of each other.
+//! Properties of the polynomial solvers over seeded random polynomials built from known
+//! real roots: every root returned is a root (small residual against the size of the
+//! terms), at most `degree` are returned, every well-separated known root is found, a
+//! quartic with a vanishing leading term gives its cubic's roots, and the cubic's and
+//! quartic's roots are distinct and ascending.
 
 use scx_algo::polynomial::{solve_cubic, solve_quadratic, solve_quartic};
 use scx_num::math::EFF_ZERO;
@@ -65,9 +65,9 @@ fn separated(roots: &[f64], gap: f64) -> bool {
         .all(|(i, a)| roots.iter().skip(i + 1).all(|b| (a - b).abs() > gap))
 }
 
-/// `gap`: how far apart the known roots must be for each to be required. The quartic needs
-/// 0.5: Ferrari's method returned 2.6065 for a root at 2.6105 with others 0.04 to 0.3 away
-/// (report 53, "found, not changed").
+/// `gap`: how far apart the known roots must be for each to be required (before research 70
+/// the quartic needed 0.5: Ferrari's method returned 2.6065 for a root at 2.6105 with
+/// others 0.04 to 0.3 away, report 53).
 fn check(deg: usize, gap: f64, solve: impl Fn(&[f64]) -> Vec<f64>, seed: u64) -> (usize, usize) {
     let mut rng = Rng(seed);
     let (mut cases, mut separated_cases) = (0, 0);
@@ -82,16 +82,9 @@ fn check(deg: usize, gap: f64, solve: impl Fn(&[f64]) -> Vec<f64>, seed: u64) ->
         let got = solve(&c);
         cases += 1;
         assert!(got.len() <= deg, "{c:?}: {got:?}");
-        // The quartic's residual is bounded only on separated roots: on a cluster near 0
-        // (0.0087, 0.0359, 0.0435) it returns 0.0096 with relative residual 0.018 (report
-        // 53, "found, not changed").
-        let checked = deg < 4 || separated(&roots, gap);
         for &x in &got {
             assert!(x.is_finite(), "{c:?}: {got:?}");
-            assert!(
-                !checked || rel_residual(&c, x) < 1e-6,
-                "{c:?}: {x} of {got:?}"
-            );
+            assert!(rel_residual(&c, x) < 1e-6, "{c:?}: {x} of {got:?}");
         }
         if separated(&roots, gap) {
             separated_cases += 1;
@@ -120,12 +113,12 @@ fn cubic_roots_are_roots_and_all_are_found() {
 
 #[test]
 fn quartic_roots_are_roots_and_all_are_found() {
-    let (n, s) = check(4, 0.5, |c| solve_quartic(&arr(c), EFF_ZERO).to_vec(), 13);
-    assert!(n == 20_000 && s > 2_000);
+    let (n, s) = check(4, 0.05, |c| solve_quartic(&arr(c), EFF_ZERO).to_vec(), 13);
+    assert!(n == 20_000 && s > 5_000);
 }
 
 #[test]
-fn a_vanishing_leading_term_falls_back_without_duplicates() {
+fn a_vanishing_leading_term_falls_back() {
     let mut rng = Rng(17);
     for _ in 0..5_000 {
         let roots: Vec<f64> = (0..3).map(|_| (rng.root() * 2.0).round() / 2.0).collect();
@@ -133,13 +126,7 @@ fn a_vanishing_leading_term_falls_back_without_duplicates() {
         let [c0, c1, c2, c3] = arr(&c);
         let q = solve_quartic(&[c0, c1, c2, c3, 0.0], EFF_ZERO).to_vec();
         let cubic = solve_cubic(&[c0, c1, c2, c3], EFF_ZERO).to_vec();
-        let mut dedup: Vec<f64> = Vec::new();
-        for x in cubic {
-            if !dedup.iter().any(|y| (x - y).abs() < EFF_ZERO) {
-                dedup.push(x);
-            }
-        }
-        assert_eq!(q, dedup, "{c:?}");
+        assert_eq!(q, cubic, "{c:?}");
         // the cubic itself also falls back when its leading term vanishes
         let a = solve_cubic(&[c0, c1, c2, 0.0], EFF_ZERO).to_vec();
         let b = solve_quadratic(&[c0, c1, c2], EFF_ZERO).to_vec();
@@ -148,7 +135,7 @@ fn a_vanishing_leading_term_falls_back_without_duplicates() {
 }
 
 #[test]
-fn quartic_roots_are_distinct_within_the_tolerance() {
+fn roots_are_distinct_and_ascending_at_any_tolerance() {
     let mut rng = Rng(19);
     for _ in 0..20_000 {
         let tol = match (rng.next() * 3.0) as usize {
@@ -156,13 +143,22 @@ fn quartic_roots_are_distinct_within_the_tolerance() {
             1 => 1e-8,
             _ => 1e-4,
         };
+        // exact double and triple roots are common on this grid
         let roots: Vec<f64> = (0..4).map(|_| (rng.root() * 4.0).round() / 4.0).collect();
         let c = from_roots(&roots, 1.0);
+        // the coefficients are exact, so each multiple root is too, and is found within
+        // its pseudo-zero radius (about 1e-7 for a fourfold root)
+        let found = |q: &[f64], roots: &[f64]| {
+            roots
+                .iter()
+                .all(|r| q.iter().any(|x| (x - r).abs() < 1e-6 * (1.0 + r.abs())))
+        };
         let q = solve_quartic(&arr(&c), tol).to_vec();
-        let distinct = q
-            .iter()
-            .enumerate()
-            .all(|(i, a)| q.iter().skip(i + 1).all(|b| (a - b).abs() >= tol));
-        assert!(distinct, "{c:?} {tol}: {q:?}");
+        assert!(q.windows(2).all(|w| w[0] < w[1]), "{c:?} {tol}: {q:?}");
+        assert!(found(&q, &roots), "{c:?} {tol}: {q:?}");
+        let c = from_roots(&roots[..3], 1.0);
+        let q = solve_cubic(&arr(&c), tol).to_vec();
+        assert!(q.windows(2).all(|w| w[0] < w[1]), "{c:?} {tol}: {q:?}");
+        assert!(found(&q, &roots[..3]), "{c:?} {tol}: {q:?}");
     }
 }

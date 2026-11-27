@@ -122,49 +122,100 @@ fn case(name: impl Into<String>, p: &Poly) -> Case {
 }
 
 fn solve(c: &[f64]) -> Vec<f64> {
+    solve_at(c, EFF_ZERO)
+}
+
+fn solve_at(c: &[f64], zero_tol: f64) -> Vec<f64> {
     match c.len() {
-        4 => solve_cubic(&[c[0], c[1], c[2], c[3]], EFF_ZERO).to_vec(),
-        5 => solve_quartic(&[c[0], c[1], c[2], c[3], c[4]], EFF_ZERO).to_vec(),
+        4 => solve_cubic(&[c[0], c[1], c[2], c[3]], zero_tol).to_vec(),
+        5 => solve_quartic(&[c[0], c[1], c[2], c[3], c[4]], zero_tol).to_vec(),
         n => panic!("degree {}", n - 1),
     }
 }
 
-/// What a closed-form case gave: per returned root, ulps from the nearest true root, and
-/// that root's gap to the next true root (relative), with the counts.
-struct Measured {
-    ulps: Vec<(f64, f64)>,
-    returned: usize,
-    true_roots: usize,
+/// The contract's `η` (module docs of `scx_algo::polynomial`).
+const ETA: f64 = 8.077935669463161e-28; // 2^-90
+
+/// `Σ |c_i| |x|^i`.
+fn size(c: &[f64], x: f64) -> f64 {
+    c.iter().rev().fold(0.0, |s, a| s * x.abs() + a.abs())
 }
 
-fn measure(k: &Case) -> Measured {
+/// `(k! η S(r) / |p^(k)(r)|)^(1/k)`, least over `k`: the pseudo-zero radius at `r`.
+fn radius(p: &Poly, c: &[f64], r: &Rat) -> f64 {
+    let s = size(c, r.to_f64());
+    let (mut d, mut fact, mut best) = (p.clone(), 1.0, f64::INFINITY);
+    for k in 1..c.len() {
+        d = d.derivative();
+        fact *= k as f64;
+        let v = d.eval(r).to_f64().abs();
+        if v > 0.0 {
+            let x = fact * ETA * s / v;
+            let root = match k {
+                1 => x,
+                2 => x.sqrt(),
+                3 => scx_num::fmath::cbrt(x),
+                _ => x.sqrt().sqrt(),
+            };
+            best = best.min(root);
+        }
+    }
+    best
+}
+
+/// The contract's bound at the true root `r`: half an ulp plus the pseudo-zero radius.
+fn root_bound(p: &Poly, c: &[f64], r: &Rat) -> f64 {
+    0.5 * ulp(r.to_f64()) + radius(p, c, r)
+}
+
+/// Every way `solve` breaks the contract on `c`, and the returned roots.
+fn breaches(name: &str, c: &[f64]) -> (Vec<String>, Vec<f64>) {
+    let p = exact(c);
+    let t = truth(&p);
+    let got = solve(c);
+    let mut out = Vec::new();
+    if got.len() > c.len() - 1 || got.windows(2).any(|w| !(w[0] < w[1])) {
+        out.push(format!("{name}: not distinct and ascending: {got:?}"));
+    }
+    let dist = |x: f64, r: &Rat| (&rat(x) - r).abs().to_f64();
+    for (r, m) in &t {
+        let b = root_bound(&p, c, r);
+        let near = got.iter().map(|&x| dist(x, r)).fold(f64::INFINITY, f64::min);
+        if near > b {
+            out.push(format!(
+                "{name}: true root {:e} (multiplicity {m}) has none within {b:.3e} (nearest {near:.3e})",
+                r.to_f64()
+            ));
+        }
+    }
+    for &x in &got {
+        if !x.is_finite() {
+            out.push(format!("{name}: returned {x}"));
+            continue;
+        }
+        let near = t.iter().any(|(r, _)| dist(x, r) <= root_bound(&p, c, r));
+        let small = p.eval(&rat(x)).to_f64().abs() <= ETA * size(c, x);
+        if !(near || small) {
+            out.push(format!("{name}: returned {x:e} is no root"));
+        }
+    }
+    (out, got)
+}
+
+fn print_case(k: &Case) {
     let t = truth(&exact(&k.c));
     let got = solve(&k.c);
-    let mut ulps = Vec::new();
-    for &x in &got {
-        assert!(x.is_finite(), "{}: {x}", k.name);
-        let Some((d, r, _)) = nearest(x, &t) else {
-            panic!("{}: root {x:e} but no true real root", k.name)
-        };
-        let gap = t
-            .iter()
-            .map(|(s, _)| (s.to_f64() - r).abs())
-            .filter(|g| *g > 0.0)
-            .fold(f64::INFINITY, f64::min)
-            / r.abs().max(f64::MIN_POSITIVE);
-        ulps.push((d / ulp(r), gap));
-    }
-    if printing() {
-        let tv: Vec<f64> = t.iter().map(|(r, _)| r.to_f64()).collect();
-        println!("{}: true {tv:?}", k.name);
-        println!("    got {got:?}");
-        println!("    ulps/gap {ulps:.3?}");
-    }
-    Measured {
-        ulps,
-        returned: got.len(),
-        true_roots: t.len(),
-    }
+    let tv: Vec<(f64, u32)> = t.iter().map(|(r, m)| (r.to_f64(), *m)).collect();
+    let ulps: Vec<f64> = got
+        .iter()
+        .map(|&x| match nearest(x, &t) {
+            Some((d, r, _)) => d / ulp(r),
+            None => f64::NAN,
+        })
+        .collect();
+    println!("{}: true {tv:?}", k.name);
+    println!("    got {got:?}");
+    println!("    ulps {ulps:.3?}");
 }
 
 fn wilkinson(n: i64) -> Poly {
@@ -204,25 +255,24 @@ const R53_QUARTIC: [f64; 5] = [
     1.0,
 ];
 
-fn closed_cases() -> (Vec<Case>, Vec<Case>) {
-    let mut separated = Vec::new();
-    let mut close = Vec::new();
+fn closed_cases() -> Vec<Case> {
+    let mut cases = Vec::new();
     for n in [3, 4] {
-        separated.push(case(format!("wilkinson {n}"), &wilkinson(n)));
-        separated.push(case(format!("chebyshev {n}"), &chebyshev(n as usize)));
+        cases.push(case(format!("wilkinson {n}"), &wilkinson(n)));
+        cases.push(case(format!("chebyshev {n}"), &chebyshev(n as usize)));
         // Wilkinson's second: roots 2^-1 .. 2^-n, exact
         let r: Vec<Rat> = (1..=n).map(|k| Rat::one().scale(-k)).collect();
-        separated.push(case(format!("geometric {n}"), &from_roots(&r, &Rat::one())));
+        cases.push(case(format!("geometric {n}"), &from_roots(&r, &Rat::one())));
         // roots k/n scaled to 10^s
         for s in [-6, 0, 6] {
             let r: Vec<Rat> = (1..=n).map(|k| &q(k, n) * &rat(ten(s))).collect();
-            separated.push(case(
+            cases.push(case(
                 format!("wilkinson {n} at 1e{s}"),
                 &from_roots(&r, &Rat::one()),
             ));
         }
         for a in [10, 100, 1000] {
-            close.push(case(
+            cases.push(case(
                 format!("mignotte {n}, a = {a}"),
                 &mignotte(n as usize, &int(a)),
             ));
@@ -230,7 +280,7 @@ fn closed_cases() -> (Vec<Case>, Vec<Case>) {
         for j in [2, 4, 6] {
             let d = rat(ten(-j));
             let r: Vec<Rat> = (0..n).map(|k| &int(1) + &(&int(k) * &d)).collect();
-            close.push(case(
+            cases.push(case(
                 format!("cluster {n} at 1, step 1e-{j}"),
                 &from_roots(&r, &Rat::one()),
             ));
@@ -240,107 +290,113 @@ fn closed_cases() -> (Vec<Case>, Vec<Case>) {
             let r1 = &r0 * &(&Rat::one() + &Rat::one().scale(-k));
             let mut r = vec![r0, r1];
             r.extend((3..=n).map(|i| int(-i)));
-            close.push(case(
+            cases.push(case(
                 format!("near-double {n}, 2^-{k}"),
                 &from_roots(&r, &Rat::one()),
             ));
         }
     }
-    separated.push(Case {
+    cases.push(Case {
         name: "research 53 quartic".into(),
         c: R53_QUARTIC.to_vec(),
     });
-    (separated, close)
+    // exact multiple roots, and complex pairs near the axis
+    let x2 = |r: Rat| Poly::linear(-r, Rat::one()).pow(2);
+    let quad = |a: Rat, b2: Rat| {
+        // (x - a)^2 + b2
+        x2(a).add(&Poly::constant(b2))
+    };
+    let lin = |r: Rat| Poly::linear(-r, Rat::one());
+    let multiple: [(&str, Poly); 11] = [
+        ("(x - 1)^2 (x + 2)", x2(int(1)).mul(&lin(int(-2)))),
+        ("(x - 1)^3", lin(int(1)).pow(3)),
+        ("(x - 0.1)^3", lin(q(1, 10)).pow(3)),
+        ("(x - 1/3)^2 (x - 3)", x2(q(1, 3)).mul(&lin(int(3)))),
+        ("(x - 1)^4", lin(int(1)).pow(4)),
+        ("(x - 1)^2 (x + 2)^2", x2(int(1)).mul(&x2(int(-2)))),
+        ("(x - 0.5)^3 (x + 3)", lin(q(1, 2)).pow(3).mul(&lin(int(-3)))),
+        ("(x - 0.7)^2 (x - 2) (x + 1)", x2(q(7, 10)).mul(&lin(int(2))).mul(&lin(int(-1)))),
+        ("((x - 1)^2 + 2^-60) (x + 2)", quad(int(1), Rat::one().scale(-60)).mul(&lin(int(-2)))),
+        ("((x - 1)^2 + 2^-60) (x - 3)^2", quad(int(1), Rat::one().scale(-60)).mul(&x2(int(3)))),
+        ("((x - 1)^2 + 2^-30) ((x + 1)^2 + 2^-30)", quad(int(1), Rat::one().scale(-30)).mul(&quad(int(-1), Rat::one().scale(-30)))),
+    ];
+    for (name, p) in multiple {
+        cases.push(case(name, &p));
+    }
+    cases
 }
 
-/// What each closed-form case gives: `(roots returned, of them within half an ulp of a
-/// true root, true real roots)`. A row marked `ok` meets the module's claim (every root
-/// returned, each the true one correctly rounded); every other row is a known bug, pinned
-/// (see the notes above `closed_forms_on_the_families`). A fix that brings a row to
-/// `(n, n, n)` marks it `ok`; any other change fails.
-const CLOSED: &[(&str, (usize, usize, usize), bool)] = &[
-    ("wilkinson 3", (3, 3, 3), OK),
-    ("chebyshev 3", (3, 3, 3), OK),
-    ("geometric 3", (3, 3, 3), OK),
-    ("wilkinson 3 at 1e-6", (1, 1, 3), BUG),
-    ("wilkinson 3 at 1e0", (3, 3, 3), OK),
-    ("wilkinson 3 at 1e6", (3, 3, 3), OK),
-    ("mignotte 3, a = 10", (3, 3, 3), OK),
-    ("mignotte 3, a = 100", (1, 1, 3), BUG),
-    ("mignotte 3, a = 1000", (1, 1, 3), BUG),
-    ("cluster 3 at 1, step 1e-2", (1, 1, 3), BUG),
-    ("cluster 3 at 1, step 1e-4", (1, 1, 3), BUG),
-    ("cluster 3 at 1, step 1e-6", (1, 0, 1), BUG),
-    ("near-double 3, 2^-10", (3, 3, 3), OK),
-    ("near-double 3, 2^-20", (2, 1, 3), BUG),
-    ("near-double 3, 2^-30", (2, 1, 3), BUG),
-    // one real root: the pair is complex once rounded, reported as a grazing double root
-    ("near-double 3, 2^-40", (2, 1, 1), OK),
-    ("wilkinson 4", (4, 4, 4), OK),
-    ("chebyshev 4", (4, 4, 4), OK),
-    ("geometric 4", (4, 0, 4), BUG),
-    ("wilkinson 4 at 1e-6", (1, 0, 4), BUG),
-    ("wilkinson 4 at 1e0", (4, 4, 4), OK),
-    ("wilkinson 4 at 1e6", (0, 0, 4), BUG),
-    ("mignotte 4, a = 10", (4, 4, 4), OK),
-    ("mignotte 4, a = 100", (4, 2, 4), BUG),
-    ("mignotte 4, a = 1000", (3, 2, 4), BUG),
-    ("cluster 4 at 1, step 1e-2", (0, 0, 4), BUG),
-    ("cluster 4 at 1, step 1e-4", (1, 0, 2), BUG),
-    ("cluster 4 at 1, step 1e-6", (1, 0, 1), BUG),
-    ("near-double 4, 2^-10", (4, 4, 4), OK),
-    ("near-double 4, 2^-20", (3, 2, 4), BUG),
-    ("near-double 4, 2^-30", (3, 2, 4), BUG),
-    ("near-double 4, 2^-40", (3, 2, 4), BUG),
-    ("research 53 quartic", (4, 1, 4), BUG),
-];
-
-const OK: bool = true;
-const BUG: bool = false;
-
-// Known bug (solve_cubic, solve_quartic; found 11-27 by this test): the module docs say a
-// polished simple root is within half an ulp of the true one, but the closed forms decide
-// on absolute tolerances. Callers pass `zero_tol = EFF_ZERO = 1e-12`. It is compared with
-// the cubic's discriminant `q^2 + p^3` (of the sixth power of the roots' scale) and with
-// Ferrari's `u = z^2 - r` and `v = 2 z - p`. Where they fall below it, roots merge,
-// vanish or move. Examples: the cubic and quartic with roots 1, 1.01, 1.02(, 1.03) return
-// 1 and 0 roots; the quartic with roots 1/16, 1/8, 1/4, 1/2 (exact coefficients) returns
-// 0.1524 for 1/8; research 53's quartic (roots 0.00874, 0.0359, 0.0435, -0.689) still
-// returns 0.0326 for 0.0359 after polishing (error 3.3e-3; its other small roots are off
-// by 4e-5 and 2e-7).
-// Polishing cannot repair these: it keeps the count and moves no root past a quarter of
-// the gap to another. With `zero_tol = 0` the cubic clusters, the geometric quartic and
-// research 53's quartic come out right (within 0.5 ulp), but Wilkinson's quartic and the
-// quartic with roots 1 to 1.03 then return no roots. At either tolerance, the quartic
-// with roots 250000 to 10^6 returns none (an early `return` when `u` or `v` is below 0),
-// and the cubic `x^3 - 2 (100 x - 1)^2` (exact coefficients) loses its two roots near
-// 0.01, 1.4e-3 apart relative. A fix needs scale-aware decisions or another method: not
-// small.
+// Every case meets the contract of `scx_algo::polynomial` (module docs) against the exact
+// truth: each true root has a returned root within half an ulp plus its pseudo-zero radius,
+// each returned root is that near a true root or a pseudo-zero, and the roots are
+// distinct and ascending. Before research 70 the closed forms broke it on 20 of the 33
+// family cases (absolute tolerances on Cardano's discriminant and Ferrari's `u`, `v`).
 #[test]
-fn closed_forms_on_the_families() {
-    let (separated, close) = closed_cases();
-    let cases: Vec<Case> = separated.into_iter().chain(close).collect();
-    assert_eq!(cases.len(), CLOSED.len());
-    let mut changed = Vec::new();
-    for k in &cases {
-        let m = measure(k);
-        let half = m.ulps.iter().filter(|u| u.0 <= 0.5).count();
-        let got = (m.returned, half, m.true_roots);
-        let Some(&(_, want, ok)) = CLOSED.iter().find(|r| r.0 == k.name) else {
-            panic!("{}: no row", k.name)
-        };
-        if ok && k.name != "near-double 3, 2^-40" {
-            assert!(
-                got.0 == got.2 && got.1 == got.2,
-                "{}: an ok row {got:?}",
-                k.name
-            );
+fn closed_forms_meet_the_contract() {
+    let mut failed = Vec::new();
+    for k in &closed_cases() {
+        if printing() {
+            print_case(k);
         }
-        if got != want {
-            changed.push(format!("{}: {got:?}, pinned {want:?}", k.name));
+        failed.extend(breaches(&k.name, &k.c).0);
+    }
+    assert!(failed.is_empty(), "{}", failed.join("\n"));
+}
+
+// A simple, separated root is the true root correctly rounded (within half an ulp), not
+// only within the contract's bound.
+#[test]
+fn separated_roots_are_correctly_rounded() {
+    let names = [
+        "wilkinson 3",
+        "chebyshev 3",
+        "geometric 3",
+        "wilkinson 3 at 1e-6",
+        "wilkinson 3 at 1e0",
+        "wilkinson 3 at 1e6",
+        "wilkinson 4",
+        "chebyshev 4",
+        "geometric 4",
+        "wilkinson 4 at 1e-6",
+        "wilkinson 4 at 1e0",
+        "wilkinson 4 at 1e6",
+        "research 53 quartic",
+        "mignotte 3, a = 10",
+        "mignotte 4, a = 10",
+    ];
+    for k in closed_cases().iter().filter(|k| names.contains(&k.name.as_str())) {
+        let t = truth(&exact(&k.c));
+        let got = solve(&k.c);
+        assert_eq!(got.len(), t.len(), "{}", k.name);
+        for (&x, (r, _)) in got.iter().zip(&t) {
+            let d = (&rat(x) - r).abs().to_f64();
+            assert!(d <= 0.5 * ulp(r.to_f64()), "{}: {x:e} is {d:e} from {:e}", k.name, r.to_f64());
         }
     }
-    assert!(changed.is_empty(), "rows changed:\n{}", changed.join("\n"));
+}
+
+/// `2^k`, for `k` in the normal range.
+fn pow2(k: i32) -> f64 {
+    f64::from_bits(((1023 + k) as u64) << 52)
+}
+
+// No absolute threshold past the degree drop: `2^a p(x / 2^b)` has the roots of `p` times
+// `2^b`, bit for bit (at `zero_tol = 0`, so that the degree stays).
+#[test]
+fn closed_forms_scale_exactly() {
+    for k in &closed_cases() {
+        let base = solve(&k.c);
+        for (a, b) in [(-40, 3), (25, -7), (0, 20), (300, -60), (-500, 40)] {
+            let c: Vec<f64> = k
+                .c
+                .iter()
+                .enumerate()
+                .map(|(i, &v)| v * pow2(a - b * i as i32))
+                .collect();
+            let scaled: Vec<f64> = solve_at(&c, 0.0).iter().map(|&x| x * pow2(-b)).collect();
+            assert_eq!(scaled, base, "{} at 2^{a}, 2^{b}", k.name);
+        }
+    }
 }
 
 // ---- Bernstein basis: bernstein_roots on [0, 1] ----
