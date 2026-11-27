@@ -11,8 +11,8 @@ scx-surface
 scx-ssi
 scx-brep
 scx-record
-scx-make
 scx-mass
+scx-make
 
 # Crates outside the order. `difftest` may depend on any library (and on the pinned
 # solidcore's `solidcore` and `solidcore-record`); `tool` crates depend on no workspace
