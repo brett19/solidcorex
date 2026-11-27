@@ -68,7 +68,7 @@
 //!   `RotateAboutAxis*`, `DecomposeToAngles`, ... listed in
 //!   `harness/callgraph/unused_functions.txt`) are not part of this unit.
 
-use crate::error::{Limit, NumError, Result};
+use crate::error::{Invalid, Limit, NumError, Result};
 use crate::extent3d::Extent3d;
 use crate::small_matrix::{inverse_3x3, inverse_4x4, mult_4x4};
 use crate::tol::is_zero;
@@ -343,7 +343,7 @@ impl Transform {
         // unitize Plane Normal
         let n = plane_normal.normalized().ok_or(NumError::InvalidInput {
             operation: "geom::transform::Transform::mirror_simple",
-            reason: "zero-length or non-finite normal",
+            reason: Invalid::NoDirection,
         })?;
 
         // Build mirror transform            = [1-2NxNx  -2NxNy  -2NxNz  0]
@@ -383,7 +383,7 @@ impl Transform {
         if !mirrored.m.iter().flatten().all(|v| v.is_finite()) {
             return Err(NumError::InvalidInput {
                 operation: "geom::transform::Transform::mirror_simple",
-                reason: "a mirror too large to represent",
+                reason: Invalid::Unrepresentable,
             });
         }
         *self = mirrored;

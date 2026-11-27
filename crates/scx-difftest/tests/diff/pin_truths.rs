@@ -485,7 +485,7 @@ pub fn pe_set_min_max() -> TruthDefect<(V, bool, f64, f64, Option<f64>, bool)> {
         let r = if x < 0.0 || x > p || y < 0.0 || y > p {
             Err(scx_num::NumError::InvalidInput {
                 operation: "geom::periodic_extent1d::PeriodicExtent1d::set_min_max",
-                reason: "min and max are not both within [0, period]",
+                reason: scx_num::error::Invalid::OutsidePeriod,
             })
         } else {
             Ok(())

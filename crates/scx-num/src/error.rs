@@ -29,7 +29,8 @@
 // allocation failures solidcore reports as `InvalidInput`), `NumError::kind`,
 // `NumError::limit`, `NumError::operation`, `NumError::failure`,
 // `NumError::cause`, `Error::source`, `chain` (research 62 §2.4: each `Display` prints
-// one frame, where solidcore's `CallFailed` printed its cause too), and the tests.
+// one frame, where solidcore's `CallFailed` printed its cause too), `Invalid` (62 T4: the
+// typed reason of an invalid input, where solidcore's is text), and the tests.
 //! Why a layer-0 routine fails.
 //!
 //! A check of the caller's argument that fails is [`NumError::InvalidInput`]; a
@@ -41,7 +42,7 @@
 //!
 //! | solidcore at the pin                               | here                                  |
 //! |----------------------------------------------------|---------------------------------------|
-//! | `SolidError::InvalidInput { operation, reason }`   | [`NumError::InvalidInput`]            |
+//! | `SolidError::InvalidInput { operation, reason }` (text reason) | [`NumError::InvalidInput`] with a typed [`Invalid`] |
 //! | `SolidError::InvalidInput` for a fixed cap or a failed allocation | [`NumError::Exhausted`] with a [`Limit`] |
 //! | `SolidError::Failed` with `Reason::Geom(g)`        | [`NumError::Failed`] with the same-named [`NumFailure`] |
 //! | `SolidError::geom(op, g)`                          | [`NumError::failed`]                  |
@@ -314,6 +315,115 @@ impl fmt::Display for Limit {
     }
 }
 
+/// What was wrong with an argument a routine refused ([`NumError::InvalidInput`]).
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Invalid {
+    /// A number in the argument is infinite or NaN.
+    NotFinite,
+    /// A vector or axis that needs a length has none.
+    ZeroLength,
+    /// A direction is of no length or not finite.
+    NoDirection,
+    /// A scale's numbers are not finite, or a factor is zero.
+    ScaleFactor,
+    /// A plane's axes are of no length or along one line.
+    DependentAxes,
+    /// The map built from the arguments is too large to represent.
+    Unrepresentable,
+    /// An axis has no finite point and direction.
+    NoFiniteAxis,
+    /// A plane's axes or the motion applied to it are not usable.
+    PlaneAxesOrMotion,
+    /// A map has a projective column where an affine one is needed.
+    Projective,
+    /// A set that must hold something is empty.
+    Empty,
+    /// A value computed from finite arguments overflows or is not finite.
+    Overflows,
+    /// The matrix is not square.
+    MatrixNotSquare {
+        /// The matrix's rows.
+        rows: usize,
+        /// The matrix's columns.
+        cols: usize,
+    },
+    /// The matrix is not 3x3.
+    MatrixNot3x3 {
+        /// The matrix's rows.
+        rows: usize,
+        /// The matrix's columns.
+        cols: usize,
+    },
+    /// The element count is not `rows * cols`.
+    ElementCount {
+        /// The rows asked for.
+        rows: usize,
+        /// The columns asked for.
+        cols: usize,
+        /// The elements given.
+        len: usize,
+    },
+    /// A right-hand side's length differs from the matrix's rows.
+    RhsSize {
+        /// The matrix's rows.
+        rows: usize,
+        /// The right-hand side's length.
+        len: usize,
+    },
+    /// Two arguments' sizes do not match.
+    SizeMismatch,
+    /// An index is outside the container.
+    IndexOutside,
+    /// An interval is not within `[0, period]`.
+    OutsidePeriod,
+    /// A vector lies along the axis it must not.
+    AlongAxis,
+    /// Directions are not unit and perpendicular to a unit normal.
+    NotPerpendicular,
+    /// A line of no length, or an undefined box or line.
+    UndefinedLine,
+    /// A voxel model has no voxels.
+    NoVoxels,
+}
+
+impl fmt::Display for Invalid {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotFinite => f.write_str("a number is not finite"),
+            Self::ZeroLength => f.write_str("a vector of no length"),
+            Self::NoDirection => f.write_str("a direction of no length or not finite"),
+            Self::ScaleFactor => f.write_str("a scale not finite or of factor zero"),
+            Self::DependentAxes => f.write_str("axes of no length or along one line"),
+            Self::Unrepresentable => f.write_str("a map too large to represent"),
+            Self::NoFiniteAxis => f.write_str("the axis has no finite point and direction"),
+            Self::PlaneAxesOrMotion => f.write_str("invalid plane axes or motion"),
+            Self::Projective => f.write_str("a projective column"),
+            Self::Empty => f.write_str("an empty set"),
+            Self::Overflows => f.write_str("a computed value overflows"),
+            Self::MatrixNotSquare { rows, cols } => {
+                write!(f, "the {rows}x{cols} matrix is not square")
+            }
+            Self::MatrixNot3x3 { rows, cols } => write!(f, "the {rows}x{cols} matrix is not 3x3"),
+            Self::ElementCount { rows, cols, len } => {
+                write!(f, "{len} elements for a {rows}x{cols} matrix")
+            }
+            Self::RhsSize { rows, len } => {
+                write!(f, "a right-hand side of {len} for {rows} rows")
+            }
+            Self::SizeMismatch => f.write_str("sizes do not match"),
+            Self::IndexOutside => f.write_str("an index out of range"),
+            Self::OutsidePeriod => f.write_str("min and max are not both within [0, period]"),
+            Self::AlongAxis => f.write_str("a vector along the axis"),
+            Self::NotPerpendicular => {
+                f.write_str("expected unit directions perpendicular to a unit normal")
+            }
+            Self::UndefinedLine => f.write_str("a line of no length, or an undefined box or line"),
+            Self::NoVoxels => f.write_str("no voxels"),
+        }
+    }
+}
+
 /// A layer-0 error.
 #[derive(Debug, Clone, PartialEq)]
 pub enum NumError {
@@ -322,8 +432,8 @@ pub enum NumError {
     InvalidInput {
         /// Operation that rejected the input.
         operation: &'static str,
-        /// Human-readable description of what was wrong.
-        reason: &'static str,
+        /// What was wrong.
+        reason: Invalid,
     },
     /// A computation could not go on (upstream `SM_ERR`). Its kind is the failure's.
     Failed {
@@ -354,7 +464,7 @@ pub enum NumError {
 impl NumError {
     /// [`NumError::InvalidInput`].
     #[must_use]
-    pub const fn invalid_input(operation: &'static str, reason: &'static str) -> Self {
+    pub const fn invalid_input(operation: &'static str, reason: Invalid) -> Self {
         Self::InvalidInput { operation, reason }
     }
 
@@ -487,7 +597,7 @@ mod tests {
         assert_eq!(outer.failure(), None);
         let defect = NumError::failed("a", NumFailure::Defect { why: "why" });
         assert_eq!(NumError::call("b")(defect).kind(), ErrorKind::Defect);
-        let bad = NumError::invalid_input("c", "why");
+        let bad = NumError::invalid_input("c", Invalid::Empty);
         assert_eq!(bad.kind(), ErrorKind::Refused);
         assert_eq!(NumError::call("d")(bad).kind(), ErrorKind::Refused);
     }
@@ -568,14 +678,14 @@ mod tests {
         assert_eq!(full.kind(), ErrorKind::Exhausted);
         assert_eq!(full.limit(), Some(&Limit::Allocation { count: 7 }));
         assert_eq!(NumError::call("outer")(full).kind(), ErrorKind::Exhausted);
-        let caused = NumError::call("outer")(NumError::invalid_input("inner", "why"));
+        let caused = NumError::call("outer")(NumError::invalid_input("inner", Invalid::Empty));
         assert!(std::error::Error::source(&caused).is_some());
         // One frame per Display; `chain` joins them.
         assert_eq!(caused.to_string(), "outer: a routine it calls failed");
         assert_eq!(
             chain(&NumError::call("top")(caused)).to_string(),
-            "top: a routine it calls failed: outer: a routine it calls failed: inner: invalid input: why"
+            "top: a routine it calls failed: outer: a routine it calls failed: inner: invalid input: an empty set"
         );
-        assert_eq!(NumError::invalid_input("x", "y").failure(), None);
+        assert_eq!(NumError::invalid_input("x", Invalid::Empty).failure(), None);
     }
 }

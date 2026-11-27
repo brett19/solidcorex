@@ -190,6 +190,10 @@ fn affine_bits(m: &[[f64; 4]; 4], o: &mut Out) {
 pub mod x {
     pub use crate::solvers::x as sv;
     pub use scx_algo::hash_table;
+    /// An error's text as the difftest compares it ([`crate::facade::pin_text`]).
+    pub fn err_text(e: &scx_num::NumError) -> String {
+        crate::facade::pin_text(&crate::facade::num_as_pin(e))
+    }
     /// `find_coincident_pairs`, which reads no tolerances.
     pub fn ht_find_pairs(
         v: &mut hash_table::ObjsInVoxels<u32>,
@@ -503,6 +507,10 @@ pub mod x {
 pub mod s {
     pub use crate::solvers::s as sv;
     pub use solidcore::geom::hash_table;
+    /// An error's text as the difftest compares it ([`crate::facade::pin_text`]).
+    pub fn err_text(e: &solidcore::SolidError) -> String {
+        crate::facade::pin_text(e)
+    }
     /// `find_coincident_pairs` on the default kernel.
     pub fn ht_find_pairs(
         v: &mut hash_table::ObjsInVoxels<u32>,
@@ -995,9 +1003,13 @@ pub fn num_as_pin(e: &scx_num::NumError) -> solidcore::SolidError {
     use solidcore::error::Failure;
     use solidcore::SolidError;
     match e {
-        NumError::InvalidInput { operation, reason } => {
-            SolidError::InvalidInput { operation, reason }
-        }
+        // scx's reason is typed (`scx_num::error::Invalid`); the pin's is text. An
+        // invalid input compares by class only (research 62 T4), so every reason maps
+        // to one text, and `pin_text` leaves it out.
+        NumError::InvalidInput { operation, .. } => SolidError::InvalidInput {
+            operation,
+            reason: "a typed layer-0 reason",
+        },
         // The pin reports a limit as invalid input, with these reasons.
         NumError::Exhausted { operation, limit } => {
             use scx_num::error::Limit as L;
@@ -1104,13 +1116,46 @@ impl Bits for solidcore::SolidError {
                 (None, None) => o.tag(&format!("no typed failure: {self:?}")),
             }
         }
-        o.tag(&self.to_string());
-        if let Some(c) =
-            std::error::Error::source(self).and_then(|c| c.downcast_ref::<solidcore::SolidError>())
-        {
+        o.tag(&pin_frame(self));
+        if let Some(c) = pin_source(self) {
             c.bits(o);
         }
     }
+}
+
+/// A pin error's cause, when it is a pin error.
+fn pin_source(e: &solidcore::SolidError) -> Option<&solidcore::SolidError> {
+    std::error::Error::source(e).and_then(|c| c.downcast_ref::<solidcore::SolidError>())
+}
+
+/// One frame of a pin error's text: its own words, without the "; caused by" text of
+/// its cause, and an invalid input's operation without its reason (compared by class
+/// only, research 62 T4).
+fn pin_frame(e: &solidcore::SolidError) -> String {
+    if let solidcore::SolidError::InvalidInput { operation, .. } = e {
+        return format!("{operation}: invalid input");
+    }
+    let full = e.to_string();
+    match pin_source(e) {
+        Some(c) => full
+            .strip_suffix(&format!("; caused by {c}"))
+            .map_or_else(|| full.clone(), str::to_owned),
+        None => full,
+    }
+}
+
+/// A pin error's text frame by frame, each as [`pin_frame`] gives it. The difftest
+/// compares errors' texts with this, on both sides, so an invalid input's reason,
+/// typed in scx and text in the pin, is never compared.
+pub fn pin_text(e: &solidcore::SolidError) -> String {
+    let mut text = pin_frame(e);
+    let mut at = e;
+    while let Some(c) = pin_source(at) {
+        text.push_str(": ");
+        text.push_str(&pin_frame(c));
+        at = c;
+    }
+    text
 }
 
 /// Unused-import guard: both facades are used by the test modules.

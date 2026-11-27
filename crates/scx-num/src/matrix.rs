@@ -80,7 +80,7 @@
 //!   by `lMaxIters` (30) per singular value, as upstream; no recursion.
 
 use crate::error::NumFailure;
-use crate::error::{Limit, NumError, Result};
+use crate::error::{Invalid, Limit, NumError, Result};
 use crate::math::EFF_ZERO;
 use crate::tol::is_zero;
 use crate::vector3d::{sqrt, Vec3};
@@ -94,7 +94,7 @@ const JACOBI_MAX_SWEEPS: usize = 50;
 fn out_of_range(operation: &'static str) -> NumError {
     NumError::InvalidInput {
         operation,
-        reason: "matrix index out of range",
+        reason: Invalid::IndexOutside,
     }
 }
 
@@ -201,7 +201,7 @@ impl Matrix {
         const OP: &str = "geom::matrix::Matrix::try_new";
         let len = rows.checked_mul(cols).ok_or(NumError::InvalidInput {
             operation: OP,
-            reason: "element count overflows",
+            reason: Invalid::Overflows,
         })?;
         let data = crate::limits::try_filled(len, 0.0).ok_or(NumError::Exhausted {
             operation: OP,
@@ -216,7 +216,11 @@ impl Matrix {
         if rows.checked_mul(cols) != Some(data.len()) {
             return Err(NumError::InvalidInput {
                 operation: "geom::matrix::Matrix::from_row_major",
-                reason: "element count is not rows * cols",
+                reason: Invalid::ElementCount {
+                    rows,
+                    cols,
+                    len: data.len(),
+                },
             });
         }
         Ok(Self { rows, cols, data })
@@ -368,7 +372,10 @@ impl Matrix {
         if self.rows != self.cols {
             return Err(NumError::InvalidInput {
                 operation: OP,
-                reason: "matrix is not square",
+                reason: Invalid::MatrixNotSquare {
+                    rows: self.rows,
+                    cols: self.cols,
+                },
             });
         }
         let n = self.rows;
@@ -468,7 +475,7 @@ impl Matrix {
         if index.len() < n || rhs.len() < n || index.iter().take(n).any(|&i| i >= n) {
             return Err(NumError::InvalidInput {
                 operation: OP,
-                reason: "index or right-hand side does not match the matrix",
+                reason: Invalid::SizeMismatch,
             });
         }
         let zero_tol = EFF_ZERO;
@@ -521,13 +528,19 @@ impl Matrix {
         if self.rows != self.cols {
             return Err(NumError::InvalidInput {
                 operation: OP,
-                reason: "matrix is not square",
+                reason: Invalid::MatrixNotSquare {
+                    rows: self.rows,
+                    cols: self.cols,
+                },
             });
         }
         if rhs.len() != self.rows {
             return Err(NumError::InvalidInput {
                 operation: OP,
-                reason: "right-hand side size differs from the matrix size",
+                reason: Invalid::RhsSize {
+                    rows: self.rows,
+                    len: rhs.len(),
+                },
             });
         }
         if self.rows > MAX_MATRIX_SIZE {
@@ -591,7 +604,7 @@ impl Matrix {
         if !self.data.iter().all(|x| x.is_finite()) {
             return Err(NumError::InvalidInput {
                 operation: OP,
-                reason: "matrix not finite",
+                reason: Invalid::NotFinite,
             });
         }
         let n = self.rows;
@@ -736,7 +749,10 @@ impl Matrix {
         if self.rows != 3 || self.cols != 3 {
             return Err(NumError::InvalidInput {
                 operation: OP,
-                reason: "matrix is not 3x3",
+                reason: Invalid::MatrixNot3x3 {
+                    rows: self.rows,
+                    cols: self.cols,
+                },
             });
         }
         let st = self
@@ -1331,7 +1347,7 @@ mod tests {
             Matrix::try_new(usize::MAX, 2),
             Err(NumError::InvalidInput {
                 operation: "geom::matrix::Matrix::try_new",
-                reason: "element count overflows",
+                reason: Invalid::Overflows,
             })
         ));
     }

@@ -108,7 +108,7 @@
 
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use crate::error::{NumError, NumFailure, Result};
+use crate::error::{Invalid, NumError, NumFailure, Result};
 use crate::interval::Ivl;
 use crate::math::{BIG_DOUBLE, EFF_ZERO, EFF_ZERO_SQ, PI};
 use crate::tol;
@@ -979,7 +979,7 @@ impl Vec3 {
     pub fn make_unit_ortho_vectors(self, y_reference: Option<Self>) -> Result<[UnitVec3; 3]> {
         let x_axis = self.normalized().ok_or(NumError::InvalidInput {
             operation: "geom::vector3d::Vec3::make_unit_ortho_vectors",
-            reason: "zero-length or non-finite vector",
+            reason: Invalid::NoDirection,
         })?;
         let frame = |z_axis: UnitVec3| {
             let y_axis = UnitVec3(z_axis.cross(*x_axis).unit_or_z());
@@ -1125,7 +1125,7 @@ impl Vec3 {
         if tol::is_zero_squared(v1_len_sq) || tol::is_zero_squared(v2_len_sq) {
             return Err(NumError::InvalidInput {
                 operation: "geom::vector3d::Vec3::angle_between",
-                reason: "zero-length vector",
+                reason: Invalid::ZeroLength,
             });
         }
         let dot_prep = self.dot(o);
@@ -1159,7 +1159,7 @@ impl Vec3 {
         {
             return Err(NumError::InvalidInput {
                 operation: "geom::vector3d::Vec3::signed_unit_angle",
-                reason: "expected unit directions perpendicular to a unit normal",
+                reason: Invalid::NotPerpendicular,
             });
         }
         let sin = self.dot(start.cross(end));
@@ -1209,7 +1209,7 @@ impl Vec3 {
         if !(self.is_finite() && normal.is_finite() && line.is_finite()) {
             return Err(NumError::InvalidInput {
                 operation: "geom::vector3d::Vec3::square_turn",
-                reason: "non-finite vector",
+                reason: Invalid::NotFinite,
             });
         }
         // Only their directions count: scaled to a largest component of 1, so squaring a huge
@@ -1229,7 +1229,7 @@ impl Vec3 {
         {
             return Err(NumError::InvalidInput {
                 operation: "geom::vector3d::Vec3::square_turn",
-                reason: "a vector along the axis",
+                reason: Invalid::AlongAxis,
             });
         }
         let turn = self.ccw_angle_between(normal, target)?;

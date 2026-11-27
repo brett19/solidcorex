@@ -774,7 +774,7 @@ impl<const N: usize, C: ConvergedNd<N>> LocalSolveNd<N, C> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use scx_num::error::NumFailure;
+    use scx_num::error::{Invalid, NumFailure};
     use scx_num::extent1d::Extent1d;
 
     /// The test equation sets' error: the classes the pin's tests use.
@@ -1155,7 +1155,7 @@ mod tests {
         assert!(is_bad_jacobian(&NumError::call(op)(singular)));
         assert!(!is_bad_jacobian(&NumError::InvalidInput {
             operation: op,
-            reason: "rhs size differs",
+            reason: Invalid::SizeMismatch,
         }));
     }
 }

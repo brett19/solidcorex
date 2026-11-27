@@ -370,7 +370,7 @@ pub mod x {
     /// error the solver's causes map to (research 62 D5; scx's own text is its own).
     pub fn pin(e: SolveError<XErr>) -> PinErr {
         let p = solve_pin(e);
-        (p.to_string(), p)
+        (crate::facade::pin_text(&p), p)
     }
 
     /// The pin's `SmLocalSolverAlgorithmType` code `code` (`SM_SA_BISECTION` solves as
@@ -690,7 +690,7 @@ pub mod s {
 
     /// A solver error as `(Display, the error)`.
     pub fn pin(e: SolidError) -> PinErr {
-        (e.to_string(), e)
+        (crate::facade::pin_text(&e), e)
     }
 
     impl EvalFunction for Rec1 {
