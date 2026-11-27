@@ -8,7 +8,7 @@
 //! N-D local solver on a circle and a line (`solve_nd`); and, on the same circle and line,
 //! Newton's root (`newton2`) and Krawczyk's test (`krawczyk2`), with Krawczyk's test of
 //! `x^2 - a` (`krawczyk1`) besides. The global solver's cases are
-//! [`crate::algo_gsolve`]'s.
+//! [`crate::algo_gsolve`]'s; the integrators' and Bernstein roots' are `algo_ode`'s.
 
 use crate::case::{same, Case};
 use crate::{edges, pin, seeded, NoError, Rng};
@@ -395,5 +395,6 @@ pub fn cases() -> Vec<Case> {
     solvers(&mut out);
     krawczyks(&mut out);
     crate::algo_gsolve::cases(&mut out);
+    crate::algo_ode::cases(&mut out);
     out
 }
