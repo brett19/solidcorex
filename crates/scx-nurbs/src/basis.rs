@@ -23,7 +23,7 @@ pub(crate) const MISSING_KNOT: NurbsError = NurbsError::Defect {
 };
 
 /// The `p + 1` basis values `N[span-p..=span]` at `u` into `n[..=p]`, for `p < N` and the
-/// window of [`KnotVector::window`].
+/// window of [`KnotVector::window`]. The rest of `n` is left as it is.
 pub(crate) fn values_into<const N: usize>(window: (&[f64], &[f64]), u: f64, n: &mut [f64; N]) {
     // The scratch is [`SMALL`] wide below that degree whatever `N` is (a `Basis` holds `FULL`
     // values): the arithmetic is the same, and clearing `FULL`-wide scratch for a cubic costs
@@ -50,22 +50,27 @@ fn values_with<const M: usize, const N: usize>(
     for (r, k) in right.iter_mut().zip(above) {
         *r = k - u;
     }
-    *n = [0.0; N];
+    // n[..=p] is written below before it is read; the rest is left as it is.
     if let Some(first) = n.first_mut() {
         *first = 1.0;
     }
+    // Indexed rather than zipped: a cubic's loop is short enough that the adapters cost more
+    // than the arithmetic. Every index is below `p + 1 <= min(M, N)`.
     for j in 1..=above.len() {
         let mut saved = 0.0;
-        let mut pairs = right.iter().zip(left.iter().take(j).rev());
-        for value in n.iter_mut().take(j + 1) {
-            if let Some((&rr, &ll)) = pairs.next() {
-                let delta = rr + ll;
-                let temp = *value;
-                *value = saved + temp * (rr / delta);
-                saved = temp * (ll / delta);
-            } else {
-                *value = saved;
-            }
+        for r in 0..j {
+            let (Some(&rr), Some(&ll), Some(value)) =
+                (right.get(r), left.get(j - 1 - r), n.get_mut(r))
+            else {
+                break;
+            };
+            let delta = rr + ll;
+            let temp = *value;
+            *value = saved + temp * (rr / delta);
+            saved = temp * (ll / delta);
+        }
+        if let Some(value) = n.get_mut(j) {
+            *value = saved;
         }
     }
 }
@@ -195,19 +200,20 @@ pub struct Basis {
 
 impl Basis {
     /// The basis functions of `knots` at `u`, in the span `side` picks ([`KnotVector::span`]).
+    #[inline]
     pub(crate) fn at(knots: &KnotVector, u: f64, side: Approach) -> Result<Self> {
         let span = knots.span(u, side)?;
         let window = knots.window(span).ok_or(MISSING_KNOT)?;
-        let mut values = [0.0; FULL];
-        values_into(window, u, &mut values);
-        if values.iter().any(|v| !v.is_finite()) {
-            return Err(NurbsError::Degenerate { parameter: u });
-        }
-        Ok(Self {
+        let mut basis = Self {
             span,
             degree: knots.degree(),
-            values,
-        })
+            values: [0.0; FULL],
+        };
+        values_into(window, u, &mut basis.values);
+        if basis.values().iter().any(|v| !v.is_finite()) {
+            return Err(NurbsError::Degenerate { parameter: u });
+        }
+        Ok(basis)
     }
 
     /// The span index `i` ([`KnotVector::span`]).
@@ -218,12 +224,14 @@ impl Basis {
 
     /// The index of the first non-vanishing function, `span - degree`.
     #[must_use]
+    #[inline]
     pub const fn first(&self) -> usize {
         self.span - self.degree
     }
 
     /// The `degree + 1` values. They are non-negative and sum to one inside the domain.
     #[must_use]
+    #[inline]
     pub fn values(&self) -> &[f64] {
         // degree <= MAX_DEGREE < FULL, by KnotVector::new.
         self.values.split_at(self.degree + 1).0
@@ -357,6 +365,7 @@ impl KnotVector {
     ///
     /// Errors when `u` is not finite, or when a knot difference rounds to zero or a value
     /// overflows ([`NurbsError::Degenerate`]).
+    #[inline]
     pub fn basis(&self, u: f64, side: Approach) -> Result<Basis> {
         Basis::at(self, u, side)
     }

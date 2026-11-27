@@ -3905,7 +3905,7 @@ pub fn bern_roots_shapes() -> PinDefect<(BernR, usize), (RootsOut, RootsOut, Roo
 
 // ---- scx-nurbs-surface evaluation ----
 
-use crate::t_nurbs_surface_eval::{At as SurfaceAt, JetAt, Sides, Tri, batch};
+use crate::t_nurbs_surface_eval::{At as SurfaceAt, JetAt, Sides, Tri, batch, grid_points};
 
 /// The largest coordinate of the control points, at least 1.
 fn net_scale(r: &Raw) -> f64 {
@@ -4213,36 +4213,54 @@ pub fn nurbs_surface_eval_many() -> PinDefect<(SurfaceAt,), Option<Vec<[f64; 3]>
     PinDefect {
         reason: "as nurbs_surface_point",
         applies: Applies::Disagreeing,
-        check: |(a,), r| {
-            let each: Option<Vec<[f64; 3]>> = batch(a)
-                .into_iter()
-                .map(|uv| {
-                    let at = SurfaceAt {
-                        raw: a.raw.clone(),
-                        uv,
-                        sides: a.sides,
-                    };
-                    crate::t_nurbs_surface_eval::x::point(&at)
-                })
-                .collect();
-            let bits = |v: &Option<Vec<[f64; 3]>>| {
-                v.as_ref()
-                    .map(|v| v.iter().flatten().map(|x| x.to_bits()).collect::<Vec<_>>())
-            };
-            if bits(r) != bits(&each) {
-                return Err(format!("the batch {r:?} is not point at each, {each:?}"));
-            }
-            // a refused batch is right when a point of it is (the point test judges that);
-            // an answered one must have no point that is not one
-            let wrong = batch(a).into_iter().find_map(|uv| {
-                let at = SurfaceAt {
-                    raw: a.raw.clone(),
-                    uv,
-                    sides: a.sides,
-                };
-                eval_refused(&at, true).filter(|_| r.is_some())
-            });
-            wrong.unwrap_or(Ok(()))
-        },
+        check: |(a,), r| batch_is_point_each(a, &batch(a), r),
     }
+}
+
+/// `NurbsSurface::eval_grid` where scx and the pin disagree, checked as
+/// [`nurbs_surface_eval_many`] over the grid's points row by row.
+pub fn nurbs_surface_eval_grid() -> PinDefect<(SurfaceAt,), Option<Vec<[f64; 3]>>> {
+    PinDefect {
+        reason: "as nurbs_surface_point",
+        applies: Applies::Disagreeing,
+        check: |(a,), r| batch_is_point_each(a, &grid_points(a), r),
+    }
+}
+
+/// The check of [`nurbs_surface_eval_many`]: `r` is scx's `point` at each of `uvs`.
+fn batch_is_point_each(
+    a: &SurfaceAt,
+    uvs: &[[f64; 2]],
+    r: &Option<Vec<[f64; 3]>>,
+) -> Result<(), String> {
+    let each: Option<Vec<[f64; 3]>> = uvs
+        .iter()
+        .copied()
+        .map(|uv| {
+            let at = SurfaceAt {
+                raw: a.raw.clone(),
+                uv,
+                sides: a.sides,
+            };
+            crate::t_nurbs_surface_eval::x::point(&at)
+        })
+        .collect();
+    let bits = |v: &Option<Vec<[f64; 3]>>| {
+        v.as_ref()
+            .map(|v| v.iter().flatten().map(|x| x.to_bits()).collect::<Vec<_>>())
+    };
+    if bits(r) != bits(&each) {
+        return Err(format!("the batch {r:?} is not point at each, {each:?}"));
+    }
+    // a refused batch is right when a point of it is (the point test judges that);
+    // an answered one must have no point that is not one
+    let wrong = uvs.iter().copied().find_map(|uv| {
+        let at = SurfaceAt {
+            raw: a.raw.clone(),
+            uv,
+            sides: a.sides,
+        };
+        eval_refused(&at, true).filter(|_| r.is_some())
+    });
+    wrong.unwrap_or(Ok(()))
 }

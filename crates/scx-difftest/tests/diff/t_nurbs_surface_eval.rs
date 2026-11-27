@@ -126,6 +126,25 @@ pub fn batch(a: &At) -> Vec<[f64; 2]> {
     ]
 }
 
+/// A small grid for `eval_grid`: `us` holds the pool's `u` and a knot, `vs` the pool's `v`, a
+/// knot and `v` again.
+pub fn grid(a: &At) -> (Vec<f64>, Vec<f64>) {
+    let [u, v] = a.uv;
+    let knot = |k: &[f64], t: usize| k[t.min(k.len() - 1)];
+    (
+        vec![u, knot(&a.raw.knots_u, a.raw.degrees.0 + 1)],
+        vec![v, knot(&a.raw.knots_v, a.raw.degrees.1 + 1), v],
+    )
+}
+
+/// The points of [`grid`] row by row (`u` outer).
+pub fn grid_points(a: &At) -> Vec<[f64; 2]> {
+    let (us, vs) = grid(a);
+    us.iter()
+        .flat_map(|&u| vs.iter().map(move |&v| [u, v]))
+        .collect()
+}
+
 /// The triangle `k + l <= N` of partials, row by row (`k` outer).
 pub type Tri = Vec<[f64; 3]>;
 
@@ -164,7 +183,19 @@ pub mod x {
     }
 
     pub fn eval_many(a: &At) -> Option<Vec<[f64; 3]>> {
-        surface(a)?.eval_many(&super::batch(a), side(a.sides)).ok()
+        let uv = super::batch(a);
+        let mut out = vec![[0.0; 3]; uv.len()];
+        surface(a)?.eval_many(&uv, side(a.sides), &mut out).ok()?;
+        Some(out)
+    }
+
+    pub fn eval_grid(a: &At) -> Option<Vec<[f64; 3]>> {
+        let (us, vs) = super::grid(a);
+        let mut out = vec![[0.0; 3]; us.len() * vs.len()];
+        surface(a)?
+            .eval_grid(&us, &vs, side(a.sides), &mut out)
+            .ok()?;
+        Some(out)
     }
 }
 
@@ -236,6 +267,15 @@ pub mod s {
             .map(|uv| eval(&s, uv, a.sides))
             .collect()
     }
+
+    /// The pin has no grid evaluation: `eval` at each grid point.
+    pub fn eval_grid(a: &At) -> Option<Vec<[f64; 3]>> {
+        let s = surface(a)?;
+        super::grid_points(a)
+            .into_iter()
+            .map(|uv| eval(&s, uv, a.sides))
+            .collect()
+    }
 }
 
 diff!(
@@ -261,4 +301,10 @@ diff!(
     pin_defect = pin_defects::nurbs_surface_eval_many,
     |a: At| x::eval_many(&a),
     s::eval_many(&a)
+);
+diff!(
+    nurbs_surface_eval_grid,
+    pin_defect = pin_defects::nurbs_surface_eval_grid,
+    |a: At| x::eval_grid(&a),
+    s::eval_grid(&a)
 );
