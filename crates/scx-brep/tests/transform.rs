@@ -16,7 +16,6 @@ use scx_num::error::ErrorKind;
 use scx_num::extent3d::Extent3d;
 use scx_num::math::Affine;
 use scx_num::vector3d::{Point3, Vec3};
-use scx_surface::Surface;
 use scx_testkit::bodies::{Kind, generate};
 
 fn doc() -> Document {
@@ -250,28 +249,13 @@ fn the_identity_writes_nothing() {
 fn same_records(b: &Brep, c: &Brep) -> bool {
     b.faces().zip(c.faces()).all(|(f, g)| {
         let (f, g) = (f.record(), g.record());
-        same_surface(&f.surface, &g.surface) && f.sides == g.sides && f.loops == g.loops
+        f.surface == g.surface && f.sides == g.sides && f.loops == g.loops
     }) && b.edges().zip(c.edges()).all(|(e, g)| {
         e.shape() == g.shape() && e.accuracy() == g.accuracy() && e.fins().eq(g.fins())
     }) && b
         .vertices()
         .zip(c.vertices())
         .all(|(v, w)| v.point() == w.point() && v.accuracy() == w.accuracy())
-}
-
-/// The same surface, but for a plane's normal: `Plane::transformed` makes it again from the
-/// images of the plane's axes, `A x × A y`, so a plane whose axes are not on the world's
-/// axes keeps its origin and x to the bit and its normal within a few roundings.
-fn same_surface(s: &Surface, t: &Surface) -> bool {
-    match (s, t) {
-        (Surface::Plane(p), Surface::Plane(q)) => {
-            let (f, g) = (p.frame(), q.frame());
-            f.origin() == g.origin()
-                && f.x() == g.x()
-                && (f.z().as_vec() - g.z().as_vec()).length() <= 4.0 * f64::EPSILON
-        }
-        _ => s == t,
-    }
 }
 
 #[test]
@@ -296,18 +280,25 @@ fn a_map_and_its_inverse_return_the_body() {
 
 #[test]
 fn exact_maps_return_the_body_to_the_bit() {
-    // On the canonical bodies (the world frame, round sizes) a mirror in a coordinate
-    // plane through the origin and a scale by a power of two about the origin are exact.
-    let quadruple = Affine::uniform_scaling(Point3::new(0.0, 0.0, 0.0), 4.0).unwrap();
-    let flip = Affine::reflection(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0)).unwrap();
+    // On the canonical bodies (round sizes; the planes of the prism, holed and stack kinds
+    // on no world axis) a mirror in a coordinate plane through the origin, a scale by a power
+    // of two about the origin and a quarter turn about a coordinate axis are exact, and so
+    // is every record after the map and its inverse, planes' normals included (FU1).
+    let o = Point3::new(0.0, 0.0, 0.0);
+    let quadruple = Affine::uniform_scaling(o, 4.0).unwrap();
+    let flip = Affine::reflection(o, Vec3::new(0.0, 1.0, 0.0)).unwrap();
+    let quarter = Affine::from_axes(Vec3::Y, -Vec3::X, Vec3::Z, o);
+    // Up first: a scale down takes a `None` bound to half the zone, which stays `None`, and
+    // the way back up then widens it past the zone (`bounds_scale_with_the_map`).
+    let double_flip =
+        Affine::uniform_scaling(o, 2.0).unwrap() * Affine::reflection(o, Vec3::Z).unwrap();
     for kind in Kind::ALL {
         let b = body(kind, 0, 2);
-        let (m, _) = moved(&b, &flip);
-        let (r, _) = moved(&m, &flip);
-        assert!(same_records(&b, &r), "{}: mirror twice", kind.name());
-        let (m, _) = moved(&b, &quadruple);
-        let (r, _) = moved(&m, &quadruple.inverse().unwrap());
-        assert!(same_records(&b, &r), "{}: scale and back", kind.name());
+        for a in [flip, quadruple, quarter, double_flip] {
+            let (m, _) = moved(&b, &a);
+            let (r, _) = moved(&m, &a.inverse().unwrap());
+            assert!(same_records(&b, &r), "{}: {a:?} and back", kind.name());
+        }
     }
 }
 

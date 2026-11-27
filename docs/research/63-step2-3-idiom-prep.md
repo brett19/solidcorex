@@ -5403,6 +5403,48 @@ Throwaway timer, not committed; test profile, one machine, 20 repetitions, seed 
 5. **A free function.** A `transform(&Brep, …) -> (Brep, Changes)` helper could be added if
    callers want it (see the deviation above).
 
+**FU1 (11-27): open questions 1 and 2.**
+
+*1. Exact frames under exact maps.* The fix is in `scx_num::Frame::transformed`, which every
+surface kind's transform goes through. It was not only the plane: a cylinder, cone, sphere
+or torus on a skewed frame also missed by an ulp or two, because `Frame::new` renormalised
+both axes. BR6's bodies sit on world frames, which is why only the plane showed it.
+
+- Where the map keeps the axes square, the image axes are the images scaled back by their
+  own stretch: `x' = A x · |x| / |A x|` and `z' = ±A z · |z| / |A z|`, with the sign the
+  sense's. They are stored as they are, without a second normalisation, when they are unit
+  and square to 8 roundings and `A y` lies in their plane to the same. Otherwise z comes
+  from `A x × A y`, normalised, as before.
+- The lengths are summed smallest first (`Vec3::length_any_order`, new), so a signed
+  permutation keeps them to the bit. Under a scale by a power of two, a mirror in a
+  coordinate plane or a quarter turn about a world axis, the stretch is then exact, and so
+  is each axis.
+- The scales use the same stretch. A surface's `k` is the mean of `|A v| / |v|` over its
+  three axes, not the mean of `|A v|`, so a stored axis an ulp off unit still gives an exact
+  `k`. The plane's `UvMap` takes `|A x| / |x|` as its `u` scale. The plane now gets its
+  frame from `Frame::transformed`, and falls back to `A x × A y` only for a map that takes
+  z into the plane.
+- *For:* exact maps now round-trip to the bit for every kind on any frame, and the stored
+  axes are at least as accurate as the renormalised ones.
+- *Against:* a frame's axes may now be unit to 8 roundings rather than 1 to 2. Repeated
+  rigid moves would let that drift grow, so past 8 roundings the axes are renormalised,
+  which bounds it. Taking `±A z / k` with one `k` from the map, as the open question
+  suggested, would not be exact under a permutation, because the length is summed in a
+  different order.
+- *Tests.*
+  - `exact_maps_and_their_inverses_return_the_frame_to_the_bit` (scx-num): 2,000 random
+    frames under 6 maps.
+  - `exact_maps_return_every_surface_to_the_bit` (scx-surface): every analytic kind on
+    random frames, with the surface and the composed `UvMap` both bit-equal.
+  - In `crates/scx-brep/tests/transform.rs`, `exact_maps_return_the_body_to_the_bit` now
+    compares surfaces with `==`, so the 4 ε exception for a plane's z is gone. It also adds
+    a quarter turn and a mirror times two. On main the prism already fails under the plain
+    mirror.
+  - `t_transform` is unchanged at 0 mismatches.
+- Still open: CU5's conics (`scx-curve`, `conic.rs`) build their image frame the old way,
+  so a circle on a skewed frame is not bit-exact under an exact map either. None of the
+  generated bodies has one.
+
 ### 6.13 BR7 as built (11-27)
 
 Decided by analysis and an adversarial pass. Proposed for review; not yet ruled.
