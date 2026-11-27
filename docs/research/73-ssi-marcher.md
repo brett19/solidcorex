@@ -780,3 +780,142 @@ from §4.10 and §4.11, and the case for and against each choice.
 - `apart` returns a box it already held instead of a `bool`. The refusal path builds one
   `SsiError` (a midpoint and a longest side) once per refused Boolean.
 - No loop gained work.
+
+## 16. SM10 as built (11-27)
+
+SM10 is the corpus scorer: a test target, `crates/scx-ssi/tests/corpus/` (`cargo test -p scx-ssi
+--test corpus`), in new files only. It does not touch the algorithm. It runs `scx_ssi::intersect` on
+each case of the ssi-corpus and judges the answer against the truth stored with the case. SM5
+onward measure progress with it.
+
+### 16.1 What it does
+
+- **Data.** The corpus (jyviko/ssi-corpus, MIT OR Apache-2.0) is not in the repository.
+  `SCX_SSI_CORPUS` names the folder that holds `cases/` (each case `.json` or `.json.gz`, read
+  through `gzip -dc`). The six cases built from Yang et al.'s published data (`y23_appendix_ex2`,
+  `y23_t3_ex1` to `ex5`) are excluded by id (04 R73 row); 113 cases run.
+- **Surfaces.** Each case surface becomes a `Surface` over an `Extent2d`: the analytic kinds
+  through their frame and `from_step` (degrees to radians; the cone's frame at its apex with
+  radius 0, so `v` is the height from the apex), a NURBS surface through `KnotVector` and
+  `Net` over its knot domain. Every case checks itself: the `surf` column is the largest distance
+  from a few of the truth's points to either built surface, by `Surface::invert`. It is at most
+  3e-9 over the 113 cases, so the loader's conventions are right.
+- **Run.** One call per case at a fixed tolerance, `min(1e-6 mm, feature_size / 10)` for the
+  resolution and both accuracies, and a fixed `Budget` of 2,000,000 units. `acc_tol` is ten
+  times the tolerance; the coverage tolerance is the corpus's rule,
+  `max(cov_tol, min(0.5, 2 acc_tol ill_cond))`.
+- **Scoring.** Verdicts, most severe first: `REFUSED <name>`, `INCOMPLETE`, `WRONG TOPOLOGY`,
+  `BAD CERT`, `INACCURATE`, `PASS`.
+  - Refusals are their own verdict, counted by the error's stable name (`ssi_unresolved`, ...),
+    and are not failures. The total reads `pass P of N; refused R (by kind); failed F`.
+  - `INCOMPLETE`: a truth vertex (branch, isolated point, region boundary) farther than the
+    coverage tolerance from the output. `h_truth` is that distance.
+  - `WRONG TOPOLOGY`: output farther than the coverage from the truth (`h_out`); or the
+    components differ (curves joined at ends within the coverage, points joined to what they lie
+    on, compared as a sorted list of free-end counts); or a truth singular point has no output
+    curve, node or touch within the coverage; or a non-finite sample.
+  - `BAD CERT`: a traced branch's certificate is not borne out. Its `to_intersection` must be at
+    least the observed distance from its samples to the truth (less the truth polyline's own chord
+    error, measured from its turning angles); each pcurve's observed residual `|S(p(t)) - c(t)|`
+    must not exceed its `Within` bound, and an `Exact` pcurve's must be under 1e-9.
+  - `INACCURATE`: `h_out` above `acc_tol` (plus the chord error).
+  - Topology is reported as truth and output counts `branches/nodes/touches`.
+  - A coincident answer's pieces are drawn on the first surface (edges in 32 steps). Where the
+    truth has a region, its boundary must be covered; where it has none, the pieces are held to
+    the truth like any curve (a piece of no width along a seam is then a curve). The check is
+    one-sided for regions (the cuts between pieces are not on the truth's boundary).
+- **Hausdorff** is both ways, point to polyline segment: output samples (720 a closed-form
+  conic, 32 a knot span of a traced branch) to the truth's polylines, and the truth's vertices to
+  the output's segments.
+- **Time.** Measured around the call and printed after the table, apart from it, because a time
+  is not deterministic. `SCX_SSI_TIMES=1` adds a time column. The table has no time otherwise, so
+  two runs print the same bytes.
+
+Running it: `SCX_SSI_CORPUS=<dir> cargo test -p scx-ssi --test corpus -- --ignored --nocapture
+score_corpus` (the full run, about 11 s in a debug build; `SCX_SSI_CASES=a,b` limits it,
+`SCX_SSI_OUT=<file>` also writes the table). Without `SCX_SSI_CORPUS` the tests that run by
+default are the scorer's own, on inline cases (no corpus file): verdicts for each kind of answer,
+a bad certificate, a refusal scored by kind, a deterministic table. With it, a smoke subset
+(four cases, one of them refused) also runs, and the surfaces are checked against the truth.
+
+### 16.2 Today's score (113 cases, closed forms only)
+
+```
+pass 35 of 113; refused 72 (ssi_unresolved 72); failed 6
+  (incomplete 1, wrong topology 5, bad cert 0, inaccurate 0, setup 0)
+for comparison, over all 119: the pin crate passes 118, the SMLib port 78
+```
+
+Not "almost every case Unresolved": the closed forms answer every pair of a plane with an
+analytic surface, the coaxial pairs and the coincident ones, which is 41 of the 113. They score 35;
+the other 72 are refused `ssi_unresolved` (every NURBS pair, and the analytic pairs with no closed
+form: two cylinders, a sphere and a cylinder, the tori).
+
+| class | pass | refused | failed |
+|---|---|---|---|
+| c1 transversal (8) | 6 | 2 | 0 |
+| c1n (6) | 0 | 6 | 0 |
+| c2, c2n (10) | 3 | 7 | 0 |
+| c3, c3n (7) | 3 | 4 | 0 |
+| c4, c4n (6) | 1 | 5 | 0 |
+| c5, c5n (8) | 6 | 2 | 0 |
+| c6, c6n (7) | 4 | 3 | 0 |
+| c7 (24) | 5 | 13 | 6 |
+| c8, c8n (12) | 7 | 5 | 0 |
+| c9n (6) | 0 | 6 | 0 |
+| y23, the 19 reconstructions | 0 | 19 | 0 |
+| total (113) | 35 | 72 | 6 |
+
+Total time of the run, in a debug build: about 150 ms.
+
+### 16.3 What the six failures say (not scorer faults)
+
+All six are class 7, and all six are the closed forms' tolerance rule, not the scorer: the truth
+points lie on both built surfaces, and the answer is a legitimate one at the tolerance used.
+
+- `c7_sunk_cyl_1e-3` to `1e-6` (truth: two lines): the plane cuts the cylinder so shallowly
+  (the first case: 5e-7 deep, the lines 2e-3 apart) that the strip between the lines is no
+  deeper than the tolerance. The rule of 63 (such a strip is one tangent line) answers one line,
+  the case's own size from the truth. The corpus counts the lines' separation as the feature.
+- `c7_tiny_loop_sphere_1e-4`, `1e-5` (truth: a closed loop of that radius): the cap is
+  about 5e-9 deep, so the rule answers a touch point.
+
+These are the case 73 §4.6 and §10 already name (depth against width). They are SM2's to settle:
+either the corpus's width is the measure for a closed form's answer, or these cases are N/A at
+the tolerance used. Change the tolerance rule only with a decision on that, not to move the score.
+
+### 16.4 Decisions, for and against
+
+1. **The corpus is read from a folder, not vendored.**
+   - For: 9 MB of gzip would sit in a repository the other corpora do not weigh; the licence is
+     permissive, so nothing stops a later copy; the table is the same either way.
+   - Against: a clean checkout runs only the inline tests until `SCX_SSI_CORPUS` is set, so CI
+     does not run the full score. Held: SM11 and the status row name the variable.
+2. **Decompress with `gzip -dc`, not a built-in inflate.**
+   - For: no external crate (layers.txt `[external]` is empty) and no 300-line inflate to get
+     wrong.
+   - Against: a tool outside the build (every machine here has it). A `.json` folder needs none.
+3. **The tolerance is per case, `min(1e-6, feature_size / 10)`.**
+   - For: a feature below the tolerance is not resolvable by any method, so the corpus's tiny
+     cases would be N/A; this resolves them and leaves the others at the pin's default zone.
+   - Against: a case-dependent knob. Held: it is one line (`Case::tol`) and the cases that
+     change are the 24 with a feature size, all in class 7.
+4. **Component comparison joins at ends, not along curves.**
+   - For: it is the corpus's "free-end count" notion and cheap.
+   - Against: two curves that cross mid-way without a node are two components in both truth and
+     output, which agrees, but a truth curve that touches another mid-way would not join.
+     Not met in the corpus.
+5. **A coincident answer's pieces are drawn on the first surface and held to the truth only
+   where the truth has no region.**
+   - For: it scores a piece of no width along a seam (the closed forms' answer for
+     `c5_cyl_quilt_seam`) as the curve it is, and checks a region's boundary is covered.
+   - Against: the cuts between pieces are not checked, so extra area outside the truth's region
+     passes. An overlap's area test needs the polygon in both uv and is SM9's.
+6. **Certificate soundness is judged against the truth polylines, with their chord error.**
+   - For: it needs no implicit form for each truth kind (`param`, `heightfield`).
+   - Against: a truth polyline is itself an approximation, so a claim tighter than its chord
+     error cannot be refuted; the chord error is measured and subtracted, and is at most the
+     coverage. Nothing here is a certificate until SM8, so this path is exercised only by the
+     inline tests.
+7. **Zero cost on `xtask fast`.** The full run is `#[ignore]`d. The inline tests take 0.7 s
+   in a debug build; with a corpus the smoke subset adds four cases and the surface checks.

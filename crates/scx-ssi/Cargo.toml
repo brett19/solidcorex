@@ -17,6 +17,7 @@ scx-surface = { path = "../scx-surface" }
 # The exact references the tests check against (layers.txt [testkit]).
 [dev-dependencies]
 scx-testkit = { path = "../scx-testkit" }
+scx-nurbs-surface = { path = "../scx-nurbs-surface" }
 
 [lints]
 workspace = true
