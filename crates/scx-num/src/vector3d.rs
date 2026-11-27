@@ -495,6 +495,12 @@ impl<T> core::ops::IndexMut<Axis> for Point3<T> {
 }
 
 impl UnitVec3 {
+    /// `v` as a direction, unchanged: for a caller that has checked it is unit within
+    /// rounding ([`Frame::from_axes`](crate::frame::Frame::from_axes)).
+    pub(crate) const fn from_unit(v: Vec3) -> Self {
+        Self(v)
+    }
+
     /// `self × other` for two square unit vectors, which is unit within rounding.
     pub(crate) fn cross_square(self, other: Self) -> Self {
         Self(self.0.cross(other.0))

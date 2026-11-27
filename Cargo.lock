@@ -567,7 +567,12 @@ dependencies = [
 name = "scx-record"
 version = "0.1.0"
 dependencies = [
+ "scx-curve",
  "scx-num",
+ "scx-nurbs",
+ "scx-nurbs-surface",
+ "scx-surface",
+ "scx-testkit",
 ]
 
 [[package]]
