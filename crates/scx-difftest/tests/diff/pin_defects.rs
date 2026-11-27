@@ -1074,19 +1074,25 @@ type Periodic = Option<scx_num::Result<Vec<scx_num::extent1d::Extent1d>>>;
 /// `Extent1d::intersect_periodic` at period 0 of intervals that are apart (`b` wholly above
 /// or below `a`): the plain intersection, which has none. The pin's error names its inner
 /// `intersect` as the failing routine; scx names the routine called. The check holds scx to
-/// a `Disjoint` failure of `intersect_periodic` that carries the two intervals. With a NaN
-/// bound, the pin's overlap is NaN or not by operand order; scx's is the overlap of the
-/// bounds that are not NaN (as `e1_union_intersect` checks), which the check recomputes.
+/// a `Disjoint` failure of `intersect_periodic` that carries the two intervals.
+///
+/// A period that is not finite (NaN, ±inf) is no period, so no periodic intersection is
+/// defined: scx refuses it (`InvalidInput`). The pin answers on: an empty list for NaN, and
+/// for ±inf the first interval whole, even when the two are apart.
 pub fn e1_intersect_periodic() -> PinDefect<([f64; 2], [f64; 2], f64, bool), Periodic> {
     PinDefect {
-        reason: "the pin names its inner intersect as the failing routine, and takes the \
-                 overlap with a NaN bound by operand order (scx skips the NaN)",
+        reason: "the pin names its inner intersect as the failing routine, and intersects \
+                 at a period that is not finite (scx refuses it)",
         applies: Applies::Inputs(|(a, b, p, _)| {
             let ordered = |e: &[f64; 2]| not_inverted(e[0], e[1]);
-            let nan = a.iter().chain(b).any(|x| x.is_nan());
-            *p == 0.0 && ordered(a) && ordered(b) && (nan || apart(a, b))
+            let plain = crate::facade::plain_ends(a) && crate::facade::plain_ends(b);
+            plain && ordered(a) && ordered(b) && (!p.is_finite() || (*p == 0.0 && apart(a, b)))
         }),
-        check: |(a, b, ..), r| match r {
+        check: |(a, b, p, _), r| match r {
+            Some(Err(scx_num::NumError::InvalidInput {
+                operation: "geom::extent1d::Extent1d::intersect_periodic",
+                ..
+            })) if !p.is_finite() => Ok(()),
             Some(Err(scx_num::NumError::Failed {
                 operation: "geom::extent1d::Extent1d::intersect_periodic",
                 failure: scx_num::error::NumFailure::Disjoint { a: x, b: y },
@@ -1097,28 +1103,19 @@ pub fn e1_intersect_periodic() -> PinDefect<([f64; 2], [f64; 2], f64, bool), Per
             {
                 Ok(())
             }
-            // With a NaN bound: the overlap of the bounds that are not NaN, one interval.
-            Some(Ok(v)) if !apart(a, b) && v.len() == 1 => {
-                let w = [a[0].max(b[0]), a[1].min(b[1])];
-                let got = [v[0].min(), v[0].max()];
-                if got.map(f64::to_bits) == w.map(f64::to_bits) {
-                    Ok(())
-                } else {
-                    Err(format!("the overlap is {w:?}, not {got:?}"))
-                }
-            }
-            _ => Err(format!("{a:?} and {b:?}: not {r:?}")),
+            _ => Err(format!("{a:?} and {b:?} at period {p}: not {r:?}")),
         },
     }
 }
 
-/// A box with a NaN bound has no defined extent along that axis, and a line through a point
-/// or along a direction that is not finite is no line, so no clip is defined: scx refuses
-/// them (`InvalidInput`). The pin clips on, its slab extremes NaN or not by operand order
-/// and its parameters `inf - inf`, and answers a miss, a touch or a crossing.
+/// A line through a point or along a direction that is not finite is no line, so no clip is
+/// defined: scx refuses it (`InvalidInput`). The pin clips on, its parameters `inf - inf`, and
+/// answers a miss, a touch or a crossing. (A box with an end that is not finite is no box on
+/// either side: the facade builds none.)
 fn nan_line(a: &[f64; 6], p: &V, d: &V) -> bool {
-    let undefined = a.iter().any(|x| x.is_nan()) || !p.iter().chain(d).all(|x| x.is_finite());
-    undefined && (0..3).all(|i| not_inverted(a[i], a[i + 3]))
+    let undefined = !p.iter().chain(d).all(|x| x.is_finite());
+    let boxed = crate::facade::plain_ends(a) && (0..3).all(|i| a[i] <= a[i + 3]);
+    undefined && boxed
 }
 fn refused_line<T: std::fmt::Debug>(r: &Option<scx_num::Result<T>>) -> Result<(), String> {
     match r {
@@ -1139,6 +1136,25 @@ pub fn e3_line_hit_count() -> PinDefect<([f64; 6], V, V), Option<scx_num::Result
         reason: "the pin clips an undefined line or box",
         applies: Applies::Inputs(|(a, p, d)| nan_line(a, p, d)),
         check: |_, r| refused_line(r),
+    }
+}
+
+/// One operation's record in `t_hash::ht_voxels`: kind, integers, numbers, error text.
+type VoxelRec = (usize, Vec<usize>, Vec<f64>, Option<String>);
+
+/// The voxel model over a box that reaches the end of the `f64` range: the voxel grid's
+/// ends `min + i * step` round past it. The pin stores those ends as infinity (the last
+/// voxel of the box itself among them); an extent's ends are finite in scx, so its last
+/// voxel closes on the box's max and a voxel past the counts with an end past the range has
+/// no box. The check holds scx to finite numbers throughout.
+pub fn ht_voxels() -> PinDefect<(usize, [f64; 3], f64), Vec<VoxelRec>> {
+    PinDefect {
+        reason: "the pin's voxel boxes at the end of the f64 range have infinite ends",
+        applies: Applies::Inputs(|(_, _, scale)| scale.abs() > f64::MAX / 4.0),
+        check: |_, r| match r.iter().flat_map(|rec| &rec.2).find(|x| !x.is_finite()) {
+            None => Ok(()),
+            Some(x) => Err(format!("scx records {x}")),
+        },
     }
 }
 
@@ -1740,6 +1756,93 @@ pub fn nurbs_bezier_split() -> PinDefect<(At,), Pieces> {
     }
 }
 
+// ---- Parameter domains and frames (`t_math`) ------------------------------------------------
+
+/// A domain kind, its ends, the reach and whether the rule is `Clamp::Sample`.
+type DomainIn = (usize, f64, f64, f64, bool);
+/// A frame's axes and a mapped point.
+type FrameOut = Option<([V; 3], V)>;
+
+/// `ParamDomain::working`: where the pin's marked extent cannot hold the domain (a one-sided
+/// end past the marker `±1234567` swaps with it) or its window end overflows (`a + 2h` past
+/// `f64::MAX` is infinite), the check computes the window from the rule: `[a, a + 2h]` from
+/// `a > -h`, `[b - 2h, b]` up to `b < h`, `[-h, h]` otherwise, ends saturated at `±f64::MAX`.
+pub fn domain_working() -> PinDefect<DomainIn, Option<(f64, f64)>> {
+    PinDefect {
+        reason: "the pin's marked extent swaps an end past its marker and overflows a window",
+        applies: Applies::Disagreeing,
+        check: |&(kind, a, b, h, sample), r| {
+            let h = if sample { 33.0 } else { h };
+            let sat = |x: f64| x.clamp(-f64::MAX, f64::MAX);
+            let want = match kind % 4 {
+                0 => (-h, h),
+                1 if a > -h => (a, sat(a + 2.0 * h)),
+                2 if a < h => (sat(a - 2.0 * h), a),
+                1 | 2 => (-h, h),
+                _ => (a, b),
+            };
+            match r {
+                Some(got) if *got == want => Ok(()),
+                _ => Err(format!("want {want:?}, not {r:?}")),
+            }
+        },
+    }
+}
+
+/// `Frame::new(origin, z, x_hint)` against `SetSTEPCanonical`: the pin keeps an origin that
+/// is not finite, and picks an arbitrary x where the hint has no direction off z (scx
+/// refuses: there is no x to take), and crosses the hint as given, so one too short passes
+/// for parallel and one too long overflows; it refuses an axis whose squared length
+/// overflows, and keeps NaN axes for one that is not finite. The check: no frame where the origin is not finite, z or the hint has no
+/// direction, or the hint lies along z; otherwise unit square axes with x the hint's part
+/// square to z, `y = z × x`, and the point mapped by those axes.
+pub fn frame_new() -> PinDefect<(V, V, V, V), FrameOut> {
+    PinDefect {
+        reason: "the pin frames no direction, overflows on long axes and keeps a non-finite origin",
+        applies: Applies::Disagreeing,
+        check: |&(o, z, h, q), r| {
+            let (Some(zd), Some(hd)) = (dir3(z), dir3(h)) else {
+                return match r {
+                    None => Ok(()),
+                    Some(_) => Err("no direction: no frame".into()),
+                };
+            };
+            let lc = len3(cross3(zd, hd));
+            if !finite(&o) || lc < NO_LENGTH / 2.0 {
+                return match r {
+                    None => Ok(()),
+                    Some(_) => Err("no x direction or origin: no frame".into()),
+                };
+            }
+            let Some(([x, y, zz], p)) = r else {
+                return if lc < 2.0 * NO_LENGTH {
+                    Ok(())
+                } else {
+                    Err("a frame exists".into())
+                };
+            };
+            near3("z", *zz, zd, 8.0 * f64::EPSILON)?;
+            let want_x = direction(sub3(hd, scale3(zd, dot3(hd, zd))));
+            near3("x", *x, want_x, 16.0 * f64::EPSILON / lc)?;
+            near3("y", *y, cross3(zd, want_x), 32.0 * f64::EPSILON / lc)?;
+            let want_p = add3(
+                o,
+                add3(scale3(*x, q[0]), add3(scale3(*y, q[1]), scale3(*zz, q[2]))),
+            );
+            if !finite(&q) || !finite(&want_p) {
+                return Ok(());
+            }
+            let size = biggest(&o) + biggest(&q);
+            near3(
+                "the point",
+                *p,
+                want_p,
+                16.0 * f64::EPSILON * size.max(f64::MIN_POSITIVE),
+            )
+        },
+    }
+}
+
 // ---- scx-nurbs-surface ----------------------------------------------------------------------
 
 use crate::t_nurbs_surface::{Homog, Raw, Read};
@@ -1868,6 +1971,170 @@ pub fn nurbs_surface_from_homogeneous() -> PinDefect<(Homog,), Option<Read>> {
         reason: "as nurbs_surface_new",
         applies: Applies::Disagreeing,
         check: |(h,), b| surface_answer(&h.0, b),
+    }
+}
+
+// ---- scx-nurbs-surface: IGES 128 ----------------------------------------------------------
+
+use crate::t_nurbs_surface_iges::Ent;
+
+/// Why `e` is not IGES 128 data for a surface, or `None` when it is: the entity's definition,
+/// as scx's rulings read it.
+///
+/// The net is a whole rectangle with one weight per point; no knot strictly inside the bounds
+/// repeats `p + 1` times (a break: two surfaces); each degree is from 1 to 31 and
+/// the knots number `points + degree + 1` along it, finite and non-decreasing; the bounds
+/// satisfy `U[p] <= U(0) < U(1) <= U[m - p]` (and the same in v); every point is finite, every
+/// weight finite and positive, and `w P` finite when the weights differ.
+fn not_an_entity(e: &Ent) -> Option<String> {
+    if !e.net_is_whole() {
+        return Some("the net is not a rectangle with a weight per point".to_owned());
+    }
+    let rows = e.rows();
+    let axes = [
+        ("u", e.degrees.0, &e.knots_u, rows, e.u),
+        ("v", e.degrees.1, &e.knots_v, e.cols, e.v),
+    ];
+    for (axis, d, k, count, b) in axes {
+        if !(1..=31).contains(&d) {
+            return Some(format!("{axis} degree {d}"));
+        }
+        if k.len() != count + d + 1 {
+            return Some(format!(
+                "{} {axis} knots for {count} points of degree {d}",
+                k.len()
+            ));
+        }
+        if k.iter().any(|x| !x.is_finite()) || k.windows(2).any(|w| w[1] < w[0]) {
+            return Some(format!("{axis} knots not finite and non-decreasing"));
+        }
+        if !(k[d] <= b[0] && b[0] < b[1] && b[1] <= k[k.len() - 1 - d]) {
+            return Some(format!("{axis} bounds {b:?} outside the domain"));
+        }
+        let run = |x: f64| k.iter().filter(|&&y| y == x).count();
+        if k.iter().any(|&x| b[0] < x && x < b[1] && run(x) > d) {
+            return Some(format!("a break in the {axis} domain"));
+        }
+    }
+    if e.points.iter().flatten().any(|x| !x.is_finite()) {
+        return Some("a control point is not finite".to_owned());
+    }
+    if e.weights.iter().any(|w| !(w.is_finite() && *w > 0.0)) {
+        return Some("a weight is not finite and positive".to_owned());
+    }
+    let w0 = e.weights[0];
+    if e.weights.iter().any(|&w| w != w0)
+        && e.points
+            .iter()
+            .zip(&e.weights)
+            .any(|(p, &w)| p.iter().any(|x| !(x * w).is_finite()))
+    {
+        return Some("a weighted point w P is not finite".to_owned());
+    }
+    None
+}
+
+/// Whether an end knot of `e` is repeated more than `p + 1` times. scx drops the surplus
+/// knots with their rows and columns (exact: the dropped basis functions are zero on the
+/// domain, proved by the unit test `surplus_end_knots_drop_exactly`); the testkit's exact model
+/// takes no such knots, so these are checked structurally here.
+fn has_surplus_end_knots(e: &Ent) -> bool {
+    [(e.degrees.0, &e.knots_u), (e.degrees.1, &e.knots_v)]
+        .into_iter()
+        .any(|(p, k)| {
+            let run = |x: Option<&f64>| k.iter().filter(|&&y| Some(&y) == x).count();
+            run(k.first()) > p + 1 || run(k.last()) > p + 1
+        })
+}
+
+/// Checks scx's answer on `e` against [`not_an_entity`]: refused exactly when `e` is not an
+/// entity; otherwise a surface of the entity's degrees clamped to its bounds, and (when the
+/// repairs keep the surface) the entity's own surface on the bounds, by the testkit's exact
+/// evaluation, to rounding.
+fn iges_answer(e: &Ent, built: &Option<Read>) -> Result<(), String> {
+    use scx_testkit::nurbs::{Side, Surface};
+    match (not_an_entity(e), built) {
+        (Some(_), None) => return Ok(()),
+        (Some(why), Some(_)) => return Err(format!("scx built a surface from {}: {why}", e.edit)),
+        (None, None) => return Err(format!("scx refused an entity ({})", e.edit)),
+        (None, Some(_)) => {}
+    }
+    let Some((p, q, ku, kv, hom)) = built else {
+        return Ok(());
+    };
+    if (*p, *q) != e.degrees {
+        return Err("the degrees changed".to_owned());
+    }
+    for (d, k, b) in [(*p, ku, e.u), (*q, kv, e.v)] {
+        let clamped = k.len() > 2 * d + 1
+            && k.iter().take(d + 1).all(|&x| x == b[0])
+            && k.iter().rev().take(d + 1).all(|&x| x == b[1])
+            && k.windows(2).all(|w| w[0] <= w[1]);
+        if !clamped {
+            return Err(format!("knots {k:?} are not clamped to {b:?}"));
+        }
+    }
+    if hom.len() != (ku.len() - p - 1) * (kv.len() - q - 1) {
+        return Err("the net does not fit the knots".to_owned());
+    }
+    // The exact evaluation is rational arithmetic on doubles of every exponent: small nets of
+    // moderate weights only (the rest are checked structurally above).
+    let moderate = e.weights.iter().all(|w| (1e-3..=1e3).contains(w));
+    if has_surplus_end_knots(e) || e.points.len() > 20 || !moderate {
+        return Ok(());
+    }
+    let want = Surface::<3>::new(
+        (*p, *q),
+        &e.knots_u,
+        &e.knots_v,
+        &e.points,
+        Some(&e.weights),
+    )
+    .map_err(|x| format!("the exact model refuses the entity: {x:?}"))?;
+    let (weighted, weights): (Vec<[f64; 3]>, Vec<f64>) =
+        hom.iter().map(|h| ([h[0], h[1], h[2]], h[3])).unzip();
+    let got = Surface::<3>::from_homogeneous((*p, *q), ku, kv, &weighted, &weights)
+        .map_err(|x| format!("the exact model refuses the result: {x:?}"))?;
+    // Two samples per direction: the exact evaluation is rational arithmetic.
+    for i in 0..2 {
+        for j in 0..2 {
+            let uv = (
+                e.u[0] + (e.u[1] - e.u[0]) * (0.13 + 0.5 * f64::from(i)),
+                e.v[0] + (e.v[1] - e.v[0]) * (0.27 + 0.4 * f64::from(j)),
+            );
+            let side = (Side::Above, Side::Above);
+            let (a, b) = (
+                want.point(uv, side).map_err(|x| format!("{x:?}"))?,
+                got.point(uv, side).map_err(|x| format!("{x:?}"))?,
+            );
+            for (x, y) in a.rounded.iter().zip(&b.rounded) {
+                if (x - y).abs() > 1e-6 * (1.0 + x.abs()) {
+                    return Err(format!("{} differs at {uv:?}: {x} against {y}", e.edit));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `from_iges` where scx and the pin disagree. The pin's `N_Iges128Srf` refuses what is an
+/// entity: degrees 18 to 31 (its cap is 17) and weights outside `[1e-3, 100]` (the surface
+/// does not change when every weight is scaled). It reads a prefix of arrays longer than its
+/// counts say, builds from NaN weights, knots, bounds and points and from `w P` that overflows
+/// (`w < 1e-3 || w > 100` and `up > v[0]` are false for NaN; nothing checks a coordinate), and
+/// "repairs" by averaging control points: a break (an interior knot repeated `p + 1` times, two
+/// surfaces) and a surplus end knot (it drops the point after the first, where the first is the
+/// one whose basis function is zero on the domain). Both change the surface. Truth: the
+/// definition ([`not_an_entity`]): scx refuses the break and drops the surplus end knot with its
+/// row or column, exactly; a surface it builds is clamped to the bounds and is the entity's
+/// surface on them ([`iges_answer`]).
+pub fn iges_128_surface() -> PinDefect<(Ent,), Option<Read>> {
+    PinDefect {
+        reason: "the pin refuses degrees above 17 and weights outside [1e-3, 100], reads a \
+                 prefix of long arrays, passes NaN weights, knots, bounds and points, and \
+                 averages away breaks and surplus end knots, changing the surface",
+        applies: Applies::Disagreeing,
+        check: |(e,), b| iges_answer(e, b),
     }
 }
 

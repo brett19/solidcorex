@@ -32,6 +32,7 @@ mod t_math;
 mod t_nurbs;
 mod t_nurbs_surface;
 mod t_nurbs_surface_edit;
+mod t_nurbs_surface_iges;
 mod t_p21;
 mod t_rest;
 mod t_rng;

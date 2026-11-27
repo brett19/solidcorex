@@ -17,6 +17,7 @@
 
 mod edit;
 mod error;
+pub mod iges;
 mod net;
 mod surface;
 

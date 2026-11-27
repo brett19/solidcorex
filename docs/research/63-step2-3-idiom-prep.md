@@ -1365,6 +1365,49 @@ pub struct ReadError { pub at: usize, pub cause: ReadCause }
     The bound is sized from the model, not fixed, because the pin's 1.2e6 rounds by 3.4e-11 in
     double (#18922).
   - Neither ±inf nor a sentinel is ever stored.
+  - **Built 11-27 (builder K).** Decisions taken in the build, for review:
+    - `Extent1d::from_bounds` is now `Extent1d::new(min, max) -> Option<Extent1d>`: `None` for
+      a non-finite or reversed end. `Extent2d`/`Extent3d::from_bounds` keep their names (they
+      take per-axis ends) and refuse the same.
+    - Every constructor or transform whose result could leave the finite range returns
+      `Option`: `point`, `spanning`, `translated`, `scaled`, `expanded`, `expanded_relative`
+      on `Extent1d`; `from_point`, `spanning`, `expanded`, `expanded_vec`,
+      `expanded_relative`, `scaled`, `scaled_xy` on `Extent2d`; `spanning`, `from_point`,
+      `expanded`, `expanded_relative` on `Extent3d`. `None` means an end overflowed (or an
+      input was not finite); no caller in the workspace reaches it on its data. `Hull`'s
+      finish is `None` when a fed value is infinite.
+    - `Extent1d::intersect_periodic` refuses a period that is not finite (`InvalidInput`).
+      The pin answers on (NaN: no pieces; ±inf: the first interval whole, even when the two
+      are apart); pin defect `e1_intersect_periodic` holds scx to the refusal.
+    - Removed: `UNBOUNDED`, `BoundaryType`, `boundary_type(s)`, `is_bounded`, `any_bounds`,
+      `approximate_unbounded*` (the half-size of 12 for an unbounded end; P2's
+      `ParamDomain::working` replaces it with a named rule), `math::{INFINITE_PARAMETER,
+      INFINITE_PARAMETER_SQRT, BOUNDED_INFINITE_PARAM, is_infinite_param}` and
+      `Transform::natural_param_domain` (it answered an all-unbounded box; P2 brings it back
+      as one `ParamDomain` per direction).
+    - `scx_num::domain::{Clamp, Reach}`: `Clamp::Sample` (33), `Clamp::Squared(Reach)` (the
+      root of the reach, rounded down so its square never exceeds the reach; at reach 1234567
+      it is the pin's 1111.111 to 1e-3) and, beyond the brief, **`Clamp::Linear(Reach)`** for
+      the kinds whose point is linear in the parameter (the pin's 1234567 used as a bound).
+      `Reach::covering(model_box, origin)` is twice the farthest-corner distance. *For
+      ruling:* whether `Linear` should exist, and whether `Reach` comes from the model box
+      (proposed) or the resolution.
+    - `scx-algo`: `ObjsInVoxels::map_voxel_index_to_bbox` closes the last voxel on each axis
+      on the box's max where the pin's `min + n * step` rounds to infinity (a box reaching the
+      end of the `f64` range); other ends are the pin's bits. `local_solve_nd`'s clamp lost
+      its `is_bounded` guards (a bounded domain is always bounded).
+    - Difftest: the facade maps the pin's extents with a non-finite or `±SM_INFINITE_PARAMETER`
+      end (`plain_ends`) to no extent on both sides. Nine truth defects whose disagreements
+      were NaN-bound extents now apply to no input and were removed (`e1_max_dimension`,
+      `e1_union_intersect`, `e1_periodic_boundary`, `e2_max_dimension`, `e2_union_intersect`,
+      `e3_max_length`, `e3_sphere_min_radius`, `e3_union_intersect_far`,
+      `scaled_zero_of_boxes`); pin defect `ht_voxels` is new (the pin's voxel boxes at the
+      `f64` range end have infinite ends); `e3_intersect_line`/`e3_line_hit_count` now cover
+      only a line that is not finite through a real box. Totals after the rebase onto the
+      landed `scx-nurbs` and `scx-bench`: 356 diffs, 830,314 inputs, 0 mismatches.
+    - Migrations from the rebase: `scx_nurbs::KnotVector` holds its domain as one `Extent1d`
+      (built once in `new`; `domain()` is now `const`); `scx-bench` calls `Extent1d::new`, and its edge intervals and boxes reach to `f64::MAX` where
+      they reached to infinity.
 - **P1. `Frame` (and `Rigid`) in `scx-num`.**
   - Every analytic kind is a frame plus sizes. 01 §1.1 promises frames in `scx-num`, and 57 §5.2
     lists `From<Frame> for Rigid`.
@@ -1379,11 +1422,53 @@ pub struct ReadError { pub at: usize, pub cause: ReadCause }
     reversed `sense` on the kind, so no left-handed frame is ever stored (D14). [Ruled 11-27, D12.
     The first proposal stored x and y.]
   - This is a small `scx-num` task and blocks CU1 and SU1.
+  - **Built 11-27 (builder K).** Decisions taken in the build, for review:
+    - `scx_num::frame::Frame { origin, x, z }` (private), `Frame::WORLD`, accessors `origin`,
+      `x`, `y`, `z`, and `to_affine()` (`Affine::from_axes(x, y, z, origin)`).
+    - `Frame::new(origin, z, x_hint) -> Option<Frame>`: `None` when the origin is not finite,
+      when `z` or the hint has no direction (`Vec3::normalized`), or when the hint lies along
+      `z`. x is the hint's part square to `z`. It is the pin's `SetSTEPCanonical` (through
+      `MakeUnitOrthoVectors`) without its arbitrary x for a parallel or zero hint and without
+      keeping a non-finite origin: pin defect `frame_new`.
+    - `y()` is `z × x` of the two stored unit vectors, not renormalised (square within
+      rounding; the property test holds lengths and dots to 8 ε). *For ruling:* whether to renormalise or
+      store y if CU1/SU1 measure it.
+    - `Frame::transformed(&Affine) -> Option<(Frame, Sense)>`: the image origin, x along the
+      image of x, z the right-handed normal of the image xy plane, and `Sense::Reversed` when
+      the image of z points against it (a mirror; D14). `None` when the map flattens the
+      frame or the image is not finite. `scx_num::frame::Sense { Forward, Reversed }` with
+      `reversed()` and `sign()`. *For ruling:* the name `Sense` and its home in `scx-num`
+      (the kinds in `scx-curve`/`scx-surface` carry it).
+    - **No `Rigid` exists** in `scx-num` (only `Affine`), so there is no `From<Frame> for
+      Rigid`; 57 §5.2's conversion waits for a `Rigid` type.
+    - `Vec3::make_unit_ortho_vectors` now shares its non-arbitrary path with the crate-private
+      `unit_ortho_toward`; its results are unchanged.
 - **P2. `ParamDomain`.** A shared type for a parameter's domain: `Periodic { period, base }`,
   `Bounded(Extent1d)`, `AtLeast(f64)`, `AtMost(f64)` or `Unbounded`. It is placed in `scx-num`
   beside `PeriodicExtent1d` so curves and surfaces share it; a `UvDomain` is one per direction.
   `ParamDomain::working(&self, rule: Clamp) -> Extent1d` gives the finite extent numeric work
   runs on. It depends on P0.
+  - **Built 11-27 (builder K).** Decisions taken in the build, for review:
+    - `scx_num::domain::ParamDomain`: `Periodic { period, base }`, `Bounded(Extent1d)`,
+      `AtLeast { from }`, `AtMost { to }`, `Unbounded`. The variants that carry numbers are
+      `#[non_exhaustive]` struct variants, so outside `scx-num` they are built only through
+      `periodic(period, base)`, `at_least(from)`, `at_most(to)` (each `-> Option`: ends finite,
+      period finite and above zero, `base + period` finite) and matched with `..`. *For
+      ruling:* struct variants where the brief wrote `AtLeast(f64)`; a `#[non_exhaustive]`
+      tuple variant cannot be matched outside its crate at all.
+    - `working(&self, rule: Clamp) -> Extent1d` is total. With `h = rule.half_width()`:
+      bounded gives its range, periodic `[base, base + period]`, unbounded `[-h, h]`; from
+      `a`, `[a, a + 2h]` when `a > -h`, else `[-h, h]`; up to `b`, `[b - 2h, b]` when `b < h`,
+      else `[-h, h]`. This is the pin's `ApproximateUnbounded(center = 0, half)`; the window
+      end saturates at `±f64::MAX` where the pin's overflows to infinity. No arithmetic is done
+      on a missing end, and a real end equal to `1234567` is not taken for a missing one
+      (the pin swaps such an end with its marker): pin defect `domain_working`.
+    - `UvDomain { u, v }` with `working(&self, u: Clamp, v: Clamp) -> Extent2d`: one rule
+      per direction, since a kind can grow linearly in one and as a square in the other.
+    - `Transform::natural_param_domain` is back as `[ParamDomain; 3]`, all `Unbounded`.
+    - *For ruling:* `scx-algo`'s `local_solve1d::Domain1d { Line, Bounded, Periodic }` overlaps
+      `ParamDomain` (a solver's search range, not a kind's domain); left as it is.
+    - `period()` is the only accessor; a kind's domain is matched, not queried.
 - **Testkit additions (T1-T8)**, from the sections above. Each is an independent builder task on
   `scx-testkit`:
 
@@ -1755,3 +1840,55 @@ The coordinating session ruled this research on 2026-11-27, adopting the correct
   replaced by 01's `solid: bool`; the clashing `EvalError` is renamed; one `Side` enum per meaning,
   named apart (`Approach`, `BoundSide`); inversion uses 57 F6's `Inversion`; D11 cites 01 §7.4.
 - **Held:** D2, D5, D6, D7 (reconciled with 57 F6), D9 and D11.
+
+### 2.7 NS5 as built: IGES 128 (11-27)
+
+Decided by analysis and an adversarial pass; proposed for review, not yet ruled. scx-nurbs has no
+IGES 126 yet, so this sets the shape that 126 should mirror.
+
+- **What the pin has.** `nurbs/iges.rs`: `N_Iges128Srf` takes the entity's counts, degrees,
+  knots, weights, points and bounds (not the flags, not a file), clamps the knots to the bounds
+  (`N_IgesClampSrf`) and reduces the multiplicities (`N_IgesCorrectSrfKnots`). Only that
+  parameter-list to surface mapping is ported; the reverse direction (`to_iges`) is new.
+- **Shape.** Module `scx_nurbs_surface::iges`: `Iges128 { m1, m2, s, t, weights: Net<f64>,
+  points: Net<[f64; 3]>, u, v }`, `from_iges(&Iges128) -> Result<NurbsSurface<3>, IgesError>`,
+  `to_iges(&NurbsSurface<3>) -> Iges128`. `K1`, `K2` are the nets' shape, so a short or ragged
+  array cannot be expressed; knot arrays must have exactly `K + M + 2` values (the pin reads a
+  prefix of a longer one).
+- **Flags `PROP1..5` are not read** (the pin does not take them; writers set them wrongly).
+  Polynomial is every weight equal to the first, as the pin; closed and periodic are not
+  surface data here.
+- **Checks.** Degrees `1..=31`; knot count, finite, non-decreasing; points finite; weights
+  finite and positive (no `[1e-3, 100]`); `w P` finite; bounds `U[p] <= U(0) < U(1) <= U[m-p]`
+  written to refuse NaN. All `Refused`; an index outside an array in the ported loops is a
+  `Defect` (never reached by the difftest pool).
+- **Repairs: ruled 11-27 (coordinator), for Brett's review.** scx does not port the pin's
+  averaging reduction (`N_IgesCorrectSrfKnots`): it changes the surface, and a result must be
+  the surface the data defines. Clamping to the bounds is the pin's, on homogeneous points, in
+  its arithmetic order, and keeps the surface on the bounds.
+  - An interior knot repeated `p + 1` times is a break (two surfaces): refused through the
+    surface's own check (`BadKnots` over `NurbsError::Multiplicity`), Refused. Bounds that leave
+    the break outside the domain are fine.
+  - An end knot repeated more than `p + 1` times is dropped with its row or column of points,
+    exactly: its basis function is zero on the domain, so the points cannot matter (the pin
+    keeps the point whose function is zero and drops the next, which is wrong). The drop runs
+    first, on the points given, so those kept are exact and rationality is decided on the
+    surviving weights. The testkit's exact model takes no such knots, so the unit test
+    `surplus_end_knots_drop_exactly` proves it by construction: a surface with its end knots
+    repeated once more and rows and columns of arbitrary points added returns as the surface,
+    equal exactly.
+  - A surface that needs no clamping keeps its points and weights exactly.
+- **Round trip.** `from_iges(&to_iges(s)) == s` exactly for clamped `s`. Exceptions, by
+  design: a rational surface of all-equal weights returns as its polynomial form; an unclamped
+  surface returns clamped to its domain (the same surface there).
+- **Adversarial pass.** Porting the averaging as the pin does would make the pair total on
+  malformed files, but returns a different surface than the data defines; rejected (ruling
+  above). Keeping weights whenever given (so equal weights round-trip) would
+  differ from the pin's stored form for no gain in the surface; rejected. `to_iges` refusing
+  unclamped surfaces would make the pair total only on clamped data; rejected, since the IGES
+  entity allows unclamped knots and `from_iges` defines what they mean.
+- **Pin defect `iges_128_surface`** (`pin_defects.rs`): the pin refuses degrees 18 to 31 and
+  weights outside `[1e-3, 100]`, reads a prefix of long knot arrays, and builds from NaN
+  weights, knots, bounds and points and from overflowing `w P`, and averages away breaks and
+  surplus end knots; scx answers by the definition.
+

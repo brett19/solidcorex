@@ -42,7 +42,7 @@
 //! | [`Affine::apply_vec`]        | `SmTransform::TransformVector`                 |
 //! | [`Affine::rotation`], [`Affine::uniform_scaling`], [`Affine::reflection`] | (not upstream) |
 //! | [`EFF_ZERO`] etc.            | `SM_EFF_ZERO` etc.                             |
-//! | [`is_infinite_param`]        | `SM_IS_INFINITE`                               |
+//! | [`Clamp`](crate::domain::Clamp) | `SM_INFINITE_PARAMETER`, `SM_INFINITE_PARAMETER_SQRT`, `SM_BOUNDED_INFINITE_PARAM` (as bounds; no end marker, so no `SM_IS_INFINITE`) |
 //! | `f64::max`, `f64::min`       | `smos_Max`, `smos_Min`, `smos_3Max` etc. (a NaN operand is dropped) |
 //! | [`rad_to_deg`]               | `SM_RAD2DEG`                                   |
 //!
@@ -84,23 +84,6 @@ pub const EFF_ZERO_DEG: f64 = 1.0e-4;
 pub const EFF_ZERO_RAD: f64 = EFF_ZERO_DEG * PI / 180.0;
 /// `SM_BIG_DOUBLE`: a value larger than any coordinate (used for "inside out" extents).
 pub const BIG_DOUBLE: f64 = 1.0e20;
-/// `SM_INFINITE_PARAMETER`: the value that marks an unbounded interval end.
-pub const INFINITE_PARAMETER: f64 = 1234567.0;
-/// `SM_INFINITE_PARAMETER_SQRT`: unbounded marker for representations that square it.
-pub const INFINITE_PARAMETER_SQRT: f64 = 1111.111;
-/// `SM_BOUNDED_INFINITE_PARAM`: half size used to approximate an unbounded interval.
-pub const BOUNDED_INFINITE_PARAM: f64 = 33.0;
-
-/// `SM_IS_INFINITE(a)`: true when `a` is `±INFINITE_PARAMETER` or
-/// `±INFINITE_PARAMETER_SQRT` (exact comparison, as upstream).
-#[must_use]
-pub fn is_infinite_param(a: f64) -> bool {
-    a == INFINITE_PARAMETER
-        || a == -INFINITE_PARAMETER
-        || a == INFINITE_PARAMETER_SQRT
-        || a == -INFINITE_PARAMETER_SQRT
-}
-
 /// `SM_RAD2DEG(a)` = `a * (180.0 / SM_PI)`: radians to degrees.
 #[must_use]
 pub fn rad_to_deg(a: f64) -> f64 {
@@ -619,14 +602,14 @@ impl Affine {
                 size(td.y, tx.y, ty.y, tz.y),
                 size(td.z, tx.z, ty.z, tz.z),
             );
-            let (down, up) = ((p - e).map(f64::next_down), (p + e).map(f64::next_up));
+            let (down, up) = ((p - e).map(step_down), (p + e).map(step_up));
             min = Point3::new(min.x.min(down.x), min.y.min(down.y), min.z.min(down.z));
             max = Point3::new(max.x.max(up.x), max.y.max(up.y), max.z.max(up.z));
         }
         Some(Extent3d::from_intervals(
-            Extent1d::from_bounds(min.x, max.x)?,
-            Extent1d::from_bounds(min.y, max.y)?,
-            Extent1d::from_bounds(min.z, max.z)?,
+            Extent1d::new(min.x, max.x)?,
+            Extent1d::new(min.y, max.y)?,
+            Extent1d::new(min.z, max.z)?,
         ))
     }
 
@@ -1299,6 +1282,32 @@ pub fn arc_third_point_2d(
         .min_by(|x, y| length_2d(sub_2d(*x, h)).total_cmp(&length_2d(sub_2d(*y, h))))
 }
 
+/// [`f64::next_up`], bit for bit, tested with float comparisons. std tests the bits as 64-bit
+/// integers, and baseline x86-64 (SSE2) has no 64-bit integer equality on vectors: each test
+/// becomes three or four instructions per pair of lanes, which made [`Affine::transformed_box`]
+/// a third slower (1,372 to 1,859 instructions a box). For `x` neither NaN nor `+inf`, the
+/// float tests decide the same cases as std's bit tests: `x == 0.0` holds for both zeros,
+/// `x > 0.0` for the positive bits, and the rest are negative and nonzero.
+#[inline]
+fn step_up(x: f64) -> f64 {
+    if x.is_nan() || x == f64::INFINITY {
+        x
+    } else if x == 0.0 {
+        f64::from_bits(1)
+    } else if x > 0.0 {
+        f64::from_bits(x.to_bits() + 1)
+    } else {
+        f64::from_bits(x.to_bits() - 1)
+    }
+}
+
+/// [`f64::next_down`], bit for bit, by [`step_up`]'s float tests: `-step_up(-x)`, NaN
+/// returned as is.
+#[inline]
+fn step_down(x: f64) -> f64 {
+    if x.is_nan() { x } else { -step_up(-x) }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -1452,10 +1461,43 @@ mod tests {
     }
 
     #[test]
+    fn steps_are_std_next_up_and_next_down() {
+        let tiny = f64::from_bits(1);
+        let special = [
+            0.0,
+            -0.0,
+            tiny,
+            -tiny,
+            1.0,
+            -1.0,
+            f64::MIN_POSITIVE,
+            -f64::MIN_POSITIVE,
+            f64::MAX,
+            -f64::MAX,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NAN,
+            -f64::NAN,
+            f64::from_bits(0x7ff8_0000_dead_beef),
+        ];
+        let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+        let random = (0..100_000).map(|_| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            f64::from_bits(state)
+        });
+        for x in special.into_iter().chain(random) {
+            assert_eq!(step_up(x).to_bits(), x.next_up().to_bits(), "{x:e}");
+            assert_eq!(step_down(x).to_bits(), x.next_down().to_bits(), "{x:e}");
+        }
+    }
+
+    #[test]
     fn transformed_box_holds_its_moved_corners() {
         // A quarter turn about z, then a move by (10, 20, 30): x goes to y, y to -x.
         let map = Affine::from_axes(Vec3::Y, -Vec3::X, Vec3::Z, Point3::new(10.0, 20.0, 30.0));
-        let b = Extent3d::spanning(Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 2.0, 3.0));
+        let b = Extent3d::spanning(Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 2.0, 3.0)).unwrap();
         let image = map.transformed_box(b).unwrap();
         let (lo, hi) = (image.min(), image.max());
         let (want_lo, want_hi) = (Point3::new(8.0, 20.0, 30.0), Point3::new(10.0, 21.0, 33.0));
@@ -1474,7 +1516,9 @@ mod tests {
         let tiny = crate::fmath::powi(2.0, -53);
         let shift = Affine::translation(Vec3::new(1.0, 0.0, 0.0));
         let p = Point3::new(tiny, 0.0, 0.0);
-        let image = shift.transformed_box(Extent3d::from_point(p)).unwrap();
+        let image = shift
+            .transformed_box(Extent3d::from_point(p).unwrap())
+            .unwrap();
         let (lo, hi) = (image.min(), image.max());
         assert!(lo.x < 1.0 && hi.x > 1.0 && hi.x - lo.x < 1e-14);
     }

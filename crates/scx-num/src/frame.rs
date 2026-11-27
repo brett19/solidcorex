@@ -1,0 +1,370 @@
+// Written for solidcorex. Apache-2.0.
+//! A placement: an origin and a right-handed orthonormal basis.
+//!
+//! Every placed analytic kind (plane, cylinder, cone, sphere, torus, circle, ellipse) is a
+//! [`Frame`] plus its sizes. The frame stores its origin, its x axis and its z axis (the kind's
+//! axis); y is derived as `z × x`, so the basis is right-handed by construction and no
+//! left-handed frame can be stored.
+//!
+//! | Rust                 | Upstream                                                    |
+//! |----------------------|-------------------------------------------------------------|
+//! | [`Frame`]            | `SmAxis2Placement3d` (location, axis, ref direction)         |
+//! | [`Frame::new`]       | its constructor from a location, axis and ref direction     |
+//! | [`Frame::to_affine`] | `GetTransform` (local to world)                              |
+//! | [`Frame::transformed`] | `Transform`, with the handedness returned as a [`Sense`] |
+//!
+//! Deviations:
+//! - The axes are unit and orthogonal by construction: [`Frame::new`] refuses an axis or a
+//!   reference direction with no direction, or a reference direction along the axis, where
+//!   upstream stores what it is given.
+//! - A map that reverses orientation (a mirror) gives a right-handed frame and
+//!   [`Sense::Reversed`] (research 63 D14): the images of x and y are kept, so a kind's
+//!   `(u, v)` map is unchanged, and the image of z is the reverse of the stored z. The kind
+//!   carries the sense and evaluates with the axis `sense · z`.
+
+use crate::math::Affine;
+use crate::vector3d::{Point3, UnitVec3, Vec3};
+
+/// Whether a placed kind runs with its frame or against it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Sense {
+    /// Along the frame's z axis.
+    #[default]
+    Forward,
+    /// Against the frame's z axis: the image of a forward kind under a mirror.
+    Reversed,
+}
+
+impl Sense {
+    /// The other sense.
+    #[must_use]
+    pub const fn reversed(self) -> Self {
+        match self {
+            Self::Forward => Self::Reversed,
+            Self::Reversed => Self::Forward,
+        }
+    }
+
+    /// `1.0` for [`Sense::Forward`], `-1.0` for [`Sense::Reversed`].
+    #[must_use]
+    pub const fn sign(self) -> f64 {
+        match self {
+            Self::Forward => 1.0,
+            Self::Reversed => -1.0,
+        }
+    }
+}
+
+/// An origin and a right-handed orthonormal basis: x and z stored, `y = z × x`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Frame {
+    origin: Point3,
+    x: UnitVec3,
+    z: UnitVec3,
+}
+
+impl Frame {
+    /// The world frame: the origin and the X, Y and Z axes.
+    pub const WORLD: Self = Self {
+        origin: Point3::new(0.0, 0.0, 0.0),
+        x: UnitVec3::X,
+        z: UnitVec3::Z,
+    };
+
+    /// The frame at `origin` with axis `z`, its x axis the part of `x_hint` square to `z`.
+    /// `None` when `origin` is not finite, when `z` or `x_hint` has no direction
+    /// ([`Vec3::normalized`]), or when `x_hint` lies along `z` (its part square to `z` has no
+    /// direction).
+    #[must_use]
+    pub fn new(origin: Point3, z: Vec3, x_hint: Vec3) -> Option<Self> {
+        if !(origin.x.is_finite() && origin.y.is_finite() && origin.z.is_finite()) {
+            return None;
+        }
+        // `MakeUnitOrthoVectors(z, x_hint)` without its arbitrary pick: y = z × x_hint made
+        // unit, then x = y × z.
+        let [z, x, _] = z.unit_ortho_toward(x_hint)?;
+        Some(Self { origin, x, z })
+    }
+
+    /// The origin.
+    #[must_use]
+    pub const fn origin(&self) -> Point3 {
+        self.origin
+    }
+
+    /// The x axis: where a kind's angle parameter starts.
+    #[must_use]
+    pub const fn x(&self) -> UnitVec3 {
+        self.x
+    }
+
+    /// The y axis, `z × x`.
+    #[must_use]
+    pub fn y(&self) -> UnitVec3 {
+        self.z.cross_square(self.x)
+    }
+
+    /// The z axis: a kind's axis or normal.
+    #[must_use]
+    pub const fn z(&self) -> UnitVec3 {
+        self.z
+    }
+
+    /// The map from frame coordinates to world coordinates: the X, Y and Z axes to x, y and
+    /// z, the origin to [`Frame::origin`].
+    #[must_use]
+    pub fn to_affine(&self) -> Affine {
+        Affine::from_axes(*self.x, *self.y(), *self.z, self.origin)
+    }
+
+    /// The frame `a` maps this one to, and whether `a` reverses orientation.
+    ///
+    /// The image's origin is the image of the origin, its x axis the direction of the image
+    /// of x, and its xy plane the image of the xy plane; its z is that plane's right-handed
+    /// normal. Where `a` reverses orientation (its linear part has a negative determinant,
+    /// as a mirror's has) the image of z points against that normal, and the sense is
+    /// [`Sense::Reversed`]. For a rigid map the image frame's axes are the images of the
+    /// axes, z reversed under a mirror; a map that is not a similarity changes the angles in
+    /// the plane, which the kind accounts for (research 63, 3.2).
+    ///
+    /// `None` when the image is not finite or `a` flattens the frame (its linear part is
+    /// singular on the frame's axes).
+    #[must_use]
+    pub fn transformed(&self, a: &Affine) -> Option<(Self, Sense)> {
+        let ax = a.apply_vec(*self.x);
+        let ay = a.apply_vec(*self.y());
+        let az = a.apply_vec(*self.z);
+        let normal = ax.cross(ay);
+        let frame = Self::new(a.apply(self.origin), normal, ax)?;
+        let side = az.dot(normal);
+        let sense = if side > 0.0 {
+            Sense::Forward
+        } else if side < 0.0 {
+            Sense::Reversed
+        } else {
+            // z maps into the image plane (or the image is not finite).
+            return None;
+        };
+        Some((frame, sense))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hash::Rng;
+
+    const TIGHT: f64 = 8.0 * f64::EPSILON;
+
+    fn v(r: &mut Rng, s: f64) -> Vec3 {
+        Vec3::new(
+            r.next_signed_unit() * s,
+            r.next_signed_unit() * s,
+            r.next_signed_unit() * s,
+        )
+    }
+    fn p(r: &mut Rng, s: f64) -> Point3 {
+        let a = v(r, s);
+        Point3::new(a.x, a.y, a.z)
+    }
+    fn near(a: Vec3, b: Vec3, tol: f64) -> bool {
+        (a - b).length() <= tol
+    }
+    fn near_p(a: Point3, b: Point3, tol: f64) -> bool {
+        near(Vec3::new(a.x - b.x, a.y - b.y, a.z - b.z), Vec3::ZERO, tol)
+    }
+    /// Unit, square and right-handed axes.
+    fn orthonormal(f: &Frame) -> bool {
+        let (x, y, z) = (*f.x(), *f.y(), *f.z());
+        [x, y, z].iter().all(|a| (a.length() - 1.0).abs() <= TIGHT)
+            && x.dot(y).abs() <= TIGHT
+            && y.dot(z).abs() <= TIGHT
+            && z.dot(x).abs() <= TIGHT
+            && near(x.cross(y), z, 4.0 * TIGHT)
+    }
+    fn random_frame(r: &mut Rng) -> Frame {
+        loop {
+            if let Some(f) = Frame::new(p(r, 100.0), v(r, 1.0), v(r, 1.0)) {
+                return f;
+            }
+        }
+    }
+
+    #[test]
+    fn world_frame_is_the_identity_map() {
+        let f = Frame::WORLD;
+        assert_eq!(*f.y(), Vec3::Y);
+        assert_eq!(f.to_affine(), Affine::IDENTITY);
+        assert_eq!(
+            Frame::new(Point3::ORIGIN, Vec3::Z * 3.0, Vec3::X * 0.5),
+            Some(f)
+        );
+    }
+
+    #[test]
+    fn new_takes_the_hint_square_to_the_axis() {
+        let f = Frame::new(
+            Point3::new(1.0, 2.0, 3.0),
+            Vec3::Z,
+            Vec3::new(1.0, 1.0, 5.0),
+        )
+        .unwrap();
+        assert!(near(
+            *f.x(),
+            Vec3::new(1.0, 1.0, 0.0) / 2.0_f64.sqrt(),
+            TIGHT
+        ));
+        assert!(near(
+            *f.y(),
+            Vec3::new(-1.0, 1.0, 0.0) / 2.0_f64.sqrt(),
+            TIGHT
+        ));
+        assert_eq!(*f.z(), Vec3::Z);
+        assert_eq!(f.origin(), Point3::new(1.0, 2.0, 3.0));
+    }
+
+    #[test]
+    fn new_refuses_what_has_no_frame() {
+        let o = Point3::ORIGIN;
+        assert_eq!(Frame::new(o, Vec3::ZERO, Vec3::X), None, "no axis");
+        assert_eq!(Frame::new(o, Vec3::Z, Vec3::ZERO), None, "no hint");
+        assert_eq!(
+            Frame::new(o, Vec3::Z, Vec3::Z * -2.0),
+            None,
+            "hint along the axis"
+        );
+        assert_eq!(Frame::new(o, Vec3::new(f64::NAN, 0.0, 1.0), Vec3::X), None);
+        assert_eq!(
+            Frame::new(Point3::new(f64::INFINITY, 0.0, 0.0), Vec3::Z, Vec3::X),
+            None
+        );
+        // A hint shorter than `Vec3::normalized` takes for a direction gives no frame; a
+        // short or huge one above that is still a direction.
+        assert_eq!(Frame::new(o, Vec3::Z, Vec3::X * 1e-300), None);
+        assert!(Frame::new(o, Vec3::Z, Vec3::X * 1e-9).is_some());
+        assert!(Frame::new(o, Vec3::Z * 1e300, Vec3::X * 1e300).is_some());
+    }
+
+    /// Property: every frame `new` builds is orthonormal and right-handed, its x lies in the
+    /// plane of z and the hint on the hint's side, and `to_affine` maps the unit axes to it.
+    #[test]
+    fn new_frames_are_orthonormal_and_right_handed() {
+        let mut r = Rng::new(0xf4a3_e001);
+        let mut built = 0;
+        for i in 0..20_000 {
+            // Scales 1e-10 .. 1e190: above the length `normalized` takes for a direction.
+            let s = crate::fmath::powf(10.0, r.next_f64() * 200.0 - 10.0);
+            let (o, z, h) = (
+                p(&mut r, 1e3),
+                v(&mut r, s),
+                v(&mut r, if i % 2 == 0 { s } else { 1.0 }),
+            );
+            let Some(f) = Frame::new(o, z, h) else {
+                continue;
+            };
+            built += 1;
+            assert!(orthonormal(&f), "{f:?}");
+            let hn = *h.normalized().unwrap();
+            assert!(f.x().dot(hn) >= -TIGHT, "x on the hint's side");
+            assert!(f.y().dot(hn).abs() <= 4.0 * TIGHT, "hint in the xz plane");
+            let a = f.to_affine();
+            assert_eq!(a.apply(Point3::ORIGIN), o);
+            assert_eq!(a.apply_vec(Vec3::X), *f.x());
+            assert_eq!(a.apply_vec(Vec3::Z), *f.z());
+        }
+        assert!(built > 19_000, "{built}");
+    }
+
+    /// Property: a rotation and translation carry a frame to the frame of the images, with
+    /// the sense kept: mapping the frame's local point equals mapping its image.
+    #[test]
+    fn rigid_maps_carry_the_frame() {
+        let mut r = Rng::new(0xf4a3_e002);
+        for _ in 0..2_000 {
+            let f = random_frame(&mut r);
+            let rot = Affine::rotation(p(&mut r, 50.0), v(&mut r, 1.0), r.next_signed_unit() * 7.0);
+            let Ok(rot) = rot else { continue };
+            let a = Affine::translation(v(&mut r, 20.0)) * rot;
+            let (g, sense) = f.transformed(&a).unwrap();
+            assert_eq!(sense, Sense::Forward);
+            assert!(orthonormal(&g));
+            let (lhs, rhs) = (a * f.to_affine(), g.to_affine());
+            for q in [Vec3::X, Vec3::Y, Vec3::Z, Vec3::new(3.0, -2.0, 5.0)] {
+                assert!(near(lhs.apply_vec(q), rhs.apply_vec(q), 1e-13), "{q:?}");
+            }
+            assert!(near_p(
+                lhs.apply(Point3::ORIGIN),
+                rhs.apply(Point3::ORIGIN),
+                1e-11
+            ));
+        }
+    }
+
+    /// Property (D14): a mirror gives a right-handed frame and the reversed sense. The images
+    /// of x and y are kept, so the `(u, v)` map is unchanged, and the stored z is the reverse
+    /// of the image of z: `mirror ∘ F` is `G ∘ (u, v, w) ↦ (u, v, -w)`.
+    #[test]
+    fn mirror_then_frame_is_right_handed_and_reversed() {
+        let mut r = Rng::new(0xf4a3_e003);
+        let flip = Affine::from_axes(Vec3::X, Vec3::Y, -Vec3::Z, Point3::ORIGIN);
+        for _ in 0..2_000 {
+            let f = random_frame(&mut r);
+            let Ok(m) = Affine::reflection(p(&mut r, 50.0), v(&mut r, 1.0)) else {
+                continue;
+            };
+            let (g, sense) = f.transformed(&m).unwrap();
+            assert_eq!(sense, Sense::Reversed);
+            assert!(orthonormal(&g), "a stored frame is right-handed");
+            assert!(near(*g.x(), m.apply_vec(*f.x()), 1e-14));
+            assert!(near(*g.y(), m.apply_vec(*f.y()), 1e-14));
+            assert!(near(*g.z(), -m.apply_vec(*f.z()), 1e-14));
+            let (lhs, rhs) = (m * f.to_affine(), g.to_affine() * flip);
+            for q in [Vec3::X, Vec3::Y, Vec3::Z, Vec3::new(3.0, -2.0, 5.0)] {
+                assert!(near(lhs.apply_vec(q), rhs.apply_vec(q), 1e-13), "{q:?}");
+            }
+            assert!(near_p(
+                lhs.apply(Point3::ORIGIN),
+                rhs.apply(Point3::ORIGIN),
+                1e-11
+            ));
+            // Mirroring back restores the frame and the sense.
+            let (h, back) = g.transformed(&m).unwrap();
+            assert_eq!(back, Sense::Reversed, "each mirror reverses once more");
+            assert!(near(*h.x(), *f.x(), 1e-13) && near(*h.z(), *f.z(), 1e-13));
+        }
+    }
+
+    /// A uniform scale keeps the axes; a non-uniform one keeps x's direction and the image
+    /// plane of x and y; a map that flattens that plane gives no frame.
+    #[test]
+    fn scales_and_flattening() {
+        let f = Frame::new(
+            Point3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 1.0),
+            Vec3::X,
+        )
+        .unwrap();
+        let s = Affine::uniform_scaling(Point3::ORIGIN, 3.0).unwrap();
+        let (g, sense) = f.transformed(&s).unwrap();
+        assert_eq!(sense, Sense::Forward);
+        assert!(near(*g.x(), *f.x(), TIGHT) && near(*g.z(), *f.z(), TIGHT));
+        assert_eq!(g.origin(), Point3::new(3.0, 0.0, 0.0));
+        let squash = Affine::from_axes(Vec3::X, Vec3::Y * 2.0, Vec3::Z * 0.5, Point3::ORIGIN);
+        let (g, sense) = f.transformed(&squash).unwrap();
+        assert_eq!(sense, Sense::Forward);
+        assert!(orthonormal(&g));
+        assert!(near(*g.x(), Vec3::X, TIGHT));
+        let flat = Affine::from_axes(Vec3::X, Vec3::ZERO, Vec3::ZERO, Point3::ORIGIN);
+        assert_eq!(f.transformed(&flat), None);
+        let nan = Affine::translation(Vec3::new(f64::NAN, 0.0, 0.0));
+        assert_eq!(f.transformed(&nan), None);
+    }
+
+    #[test]
+    fn sense_signs() {
+        assert_eq!(Sense::default(), Sense::Forward);
+        assert_eq!(Sense::Forward.sign(), 1.0);
+        assert_eq!(Sense::Reversed.sign(), -1.0);
+        assert_eq!(Sense::Forward.reversed(), Sense::Reversed);
+    }
+}
