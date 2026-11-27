@@ -17,14 +17,14 @@ use scx_num::extent1d::Extent1d;
 use scx_num::extent2d::Extent2d;
 use scx_num::extent3d::Extent3d;
 use scx_num::fmath;
-use scx_num::math::Transform;
+use scx_num::math::Affine;
 use scx_num::matrix::Matrix;
 use scx_num::small_matrix::{
     determinate_3x3, determinate_4x4, inverse_3x3, inverse_4x4, mult_4x4, vec_triple_product,
 };
 use scx_num::tol::zone_for_size;
-use scx_num::vector2d::Vec2;
-use scx_num::vector3d::Vec3;
+use scx_num::vector2d::Point2;
+use scx_num::vector3d::{Point3, Vec3};
 
 const CASES: usize = 2000;
 
@@ -242,11 +242,11 @@ fn translation_round_trip_is_exact() {
     let mut r = Rng::new(5);
     for _ in 0..CASES {
         let d = fvec(ivec(&mut r, 1 << 20));
-        let p = fvec(ivec(&mut r, 1 << 20));
-        let t = Transform::translation(d);
-        let q = t.transform_point(p);
+        let p = fvec(ivec(&mut r, 1 << 20)).to_point();
+        let t = Affine::translation(d);
+        let q = t.apply(p);
         assert_eq!(q.to_array(), (p + d).to_array());
-        let back = t.inverse().unwrap().transform_point(q);
+        let back = t.inverse().unwrap().apply(q);
         assert_eq!(back.to_array(), p.to_array());
     }
 }
@@ -262,21 +262,21 @@ fn intervals_union_and_intersect() {
             r.uniform(-1e3, 1e3),
             r.uniform(-1e3, 1e3),
         );
-        let a = Extent1d::from_min_max(a0, a1);
-        let b = Extent1d::from_min_max(b0, b1);
+        let a = Extent1d::spanning(a0, a1);
+        let b = Extent1d::spanning(b0, b1);
         let (alo, ahi) = (a0.min(a1), a0.max(a1));
         let (blo, bhi) = (b0.min(b1), b0.max(b1));
         assert_eq!((a.min(), a.max()), (alo, ahi));
-        let u = a.union(&b);
+        let u = a.union(b);
         assert_eq!((u.min(), u.max()), (alo.min(blo), ahi.max(bhi)));
         let lo = alo.max(blo);
         let hi = ahi.min(bhi);
-        match a.intersect(&b) {
-            Ok(i) => {
+        match a.intersect(b) {
+            Some(i) => {
                 assert!(lo <= hi);
                 assert_eq!((i.min(), i.max()), (lo, hi));
             }
-            Err(_) => assert!(lo > hi),
+            None => assert!(lo > hi),
         }
         let v = r.uniform(-1.1e3, 1.1e3);
         if (v - alo).abs() > 1e-6 && (v - ahi).abs() > 1e-6 {
@@ -296,19 +296,16 @@ fn boxes_bound_their_points() {
     let mut r = Rng::new(7);
     for _ in 0..CASES / 4 {
         let n = 1 + (r.next_u64() % 8) as usize;
-        let pts: Vec<Vec3> = (0..n)
+        let pts: Vec<Point3> = (0..n)
             .map(|_| {
-                Vec3::new(
+                Point3::new(
                     r.uniform(-1e3, 1e3),
                     r.uniform(-1e3, 1e3),
                     r.uniform(-1e3, 1e3),
                 )
             })
             .collect();
-        let mut e = Extent3d::new();
-        for &p in &pts {
-            e.add_point(p);
-        }
+        let e = Extent3d::hull(pts.iter().copied()).unwrap();
         let lo = pts.iter().fold([f64::INFINITY; 3], |m, p| {
             [m[0].min(p.x), m[1].min(p.y), m[2].min(p.z)]
         });
@@ -320,8 +317,8 @@ fn boxes_bound_their_points() {
 
         let (u0, u1) = (r.uniform(-10.0, 10.0), r.uniform(-10.0, 10.0));
         let (v0, v1) = (r.uniform(-10.0, 10.0), r.uniform(-10.0, 10.0));
-        let b = Extent2d::from_points(Vec2::new(u0, v0), Vec2::new(u1, v1));
-        let p = Vec2::new(r.uniform(-12.0, 12.0), r.uniform(-12.0, 12.0));
+        let b = Extent2d::spanning(Point2::new(u0, v0), Point2::new(u1, v1));
+        let p = Point2::new(r.uniform(-12.0, 12.0), r.uniform(-12.0, 12.0));
         let away = [u0, u1].iter().all(|s| (p.x - s).abs() > 1e-6)
             && [v0, v1].iter().all(|s| (p.y - s).abs() > 1e-6);
         if away {
@@ -371,7 +368,7 @@ fn unitize_gives_a_parallel_unit_vector() {
             r.uniform(-1.0, 1.0),
             r.uniform(-1.0, 1.0),
         ) * scale;
-        let Ok(u) = v.unitize() else {
+        let Some(u) = v.normalized() else {
             continue;
         };
         let len = (u.x * u.x + u.y * u.y + u.z * u.z).sqrt();

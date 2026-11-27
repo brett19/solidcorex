@@ -19,15 +19,19 @@
 use scx_num::extent1d::Extent1d;
 use scx_num::extent2d::Extent2d;
 use scx_num::extent3d::Extent3d;
+use scx_num::vector2d::Axis2;
+use scx_num::vector3d::Axis;
 
 /// An axis-aligned box the tree can hold: [`Extent1d`], [`Extent2d`] or [`Extent3d`].
 pub trait Bounds: Copy {
-    /// The number of axes.
-    const AXES: usize;
-    /// The lower bound on `axis` (below [`Bounds::AXES`]).
-    fn lo(&self, axis: usize) -> f64;
+    /// An axis of the box.
+    type Axis: Copy + 'static;
+    /// Every axis, in order.
+    const AXES: &'static [Self::Axis];
+    /// The lower bound on `axis`.
+    fn lo(&self, axis: Self::Axis) -> f64;
     /// The upper bound on `axis`.
-    fn hi(&self, axis: usize) -> f64;
+    fn hi(&self, axis: Self::Axis) -> f64;
     /// The smallest box holding both.
     #[must_use]
     fn union(&self, other: &Self) -> Self;
@@ -36,15 +40,16 @@ pub trait Bounds: Copy {
 }
 
 impl Bounds for Extent1d {
-    const AXES: usize = 1;
-    fn lo(&self, _: usize) -> f64 {
+    type Axis = ();
+    const AXES: &'static [()] = &[()];
+    fn lo(&self, (): ()) -> f64 {
         self.min()
     }
-    fn hi(&self, _: usize) -> f64 {
+    fn hi(&self, (): ()) -> f64 {
         self.max()
     }
     fn union(&self, other: &Self) -> Self {
-        Extent1d::union(self, other)
+        Extent1d::union(*self, *other)
     }
     fn are_disjoint(&self, other: &Self, tol: f64) -> bool {
         Extent1d::are_disjoint(self, other, tol)
@@ -52,23 +57,22 @@ impl Bounds for Extent1d {
 }
 
 impl Bounds for Extent2d {
-    const AXES: usize = 2;
-    fn lo(&self, axis: usize) -> f64 {
-        if axis == 0 {
-            self.u_min()
-        } else {
-            self.v_min()
+    type Axis = Axis2;
+    const AXES: &'static [Axis2] = &Axis2::ALL;
+    fn lo(&self, axis: Axis2) -> f64 {
+        match axis {
+            Axis2::X => self.x_min(),
+            Axis2::Y => self.y_min(),
         }
     }
-    fn hi(&self, axis: usize) -> f64 {
-        if axis == 0 {
-            self.u_max()
-        } else {
-            self.v_max()
+    fn hi(&self, axis: Axis2) -> f64 {
+        match axis {
+            Axis2::X => self.x_max(),
+            Axis2::Y => self.y_max(),
         }
     }
     fn union(&self, other: &Self) -> Self {
-        Extent2d::union(self, other)
+        Extent2d::union(*self, *other)
     }
     fn are_disjoint(&self, other: &Self, tol: f64) -> bool {
         Extent2d::are_disjoint(self, other, tol)
@@ -76,15 +80,16 @@ impl Bounds for Extent2d {
 }
 
 impl Bounds for Extent3d {
-    const AXES: usize = 3;
-    fn lo(&self, axis: usize) -> f64 {
+    type Axis = Axis;
+    const AXES: &'static [Axis] = &Axis::ALL;
+    fn lo(&self, axis: Axis) -> f64 {
         self.min_at(axis)
     }
-    fn hi(&self, axis: usize) -> f64 {
+    fn hi(&self, axis: Axis) -> f64 {
         self.max_at(axis)
     }
     fn union(&self, other: &Self) -> Self {
-        Extent3d::union(self, other)
+        Extent3d::union(*self, *other)
     }
     fn are_disjoint(&self, other: &Self, tol: f64) -> bool {
         Extent3d::are_disjoint(self, other, tol)
@@ -117,10 +122,12 @@ pub struct BoxTree<B> {
 }
 
 fn has_nan<B: Bounds>(b: &B) -> bool {
-    (0..B::AXES).any(|a| b.lo(a).is_nan() || b.hi(a).is_nan())
+    B::AXES
+        .iter()
+        .any(|&a| b.lo(a).is_nan() || b.hi(a).is_nan())
 }
 
-fn centre<B: Bounds>(b: &B, axis: usize) -> f64 {
+fn centre<B: Bounds>(b: &B, axis: B::Axis) -> f64 {
     0.5 * (b.lo(axis) + b.hi(axis))
 }
 
@@ -188,9 +195,9 @@ impl<B: Bounds> BoxTree<B> {
         }
         let boxes = &self.boxes;
         let items = self.order.get_mut(start..end)?;
-        let mut axis = 0;
+        let mut axis = *B::AXES.first()?;
         let mut spread = f64::NEG_INFINITY;
-        for a in 0..B::AXES {
+        for &a in B::AXES {
             let (lo, hi) = items
                 .iter()
                 .filter_map(|&i| boxes.get(i))
@@ -344,18 +351,19 @@ impl<B: Bounds> BoxTree<B> {
 mod tests {
     use super::*;
     use scx_num::hash::Rng;
-    use scx_num::vector3d::Vec3;
+    use scx_num::vector2d::Point2;
+    use scx_num::vector3d::{Point3, Vec3};
 
     fn random_boxes(rng: &mut Rng, n: usize) -> Vec<Extent3d> {
         (0..n)
             .map(|_| {
-                let c = Vec3::new(
+                let c = Point3::new(
                     10.0 * rng.next_signed_unit(),
                     10.0 * rng.next_signed_unit(),
                     rng.next_signed_unit(),
                 );
                 let h = Vec3::new(rng.next_f64(), rng.next_f64(), 0.1 * rng.next_f64());
-                Extent3d::from_points(c - h, c + h)
+                Extent3d::spanning(c - h, c + h)
             })
             .collect()
     }
@@ -384,10 +392,11 @@ mod tests {
         for n in [0, 1, 3, 4, 5, 17, 200] {
             let mut boxes = random_boxes(&mut rng, n);
             if n > 3 {
-                boxes[1] = Extent3d::new(); // inside out
-                boxes[2] = Extent3d::from_bounds(f64::NAN, 0.0, 0.0, 1.0, 1.0, 1.0);
+                boxes[1] = Extent3d::from_point(Point3::new(0.0, 0.0, 0.0));
+                boxes[2] = Extent3d::from_bounds(f64::NAN, 0.0, 0.0, 1.0, 1.0, 1.0).unwrap();
                 boxes[3] =
-                    Extent3d::from_bounds(f64::NEG_INFINITY, -1.0, -1.0, f64::INFINITY, 1.0, 1.0);
+                    Extent3d::from_bounds(f64::NEG_INFINITY, -1.0, -1.0, f64::INFINITY, 1.0, 1.0)
+                        .unwrap();
             }
             let tree = BoxTree::new(&boxes);
             assert_eq!(tree.len(), n);
@@ -416,22 +425,25 @@ mod tests {
     #[test]
     fn other_dimensions() {
         let ivls: Vec<Extent1d> = (0..20)
-            .map(|i| Extent1d::from_min_max(f64::from(i), f64::from(i) + 1.5))
+            .map(|i| Extent1d::spanning(f64::from(i), f64::from(i) + 1.5))
             .collect();
         let t = BoxTree::new(&ivls);
         assert_eq!(
-            t.overlapping(&Extent1d::from_min_max(4.2, 4.3), 0.0),
+            t.overlapping(&Extent1d::spanning(4.2, 4.3), 0.0),
             vec![3, 4]
         );
         let rects: Vec<Extent2d> = (0..20)
             .map(|i| {
                 let x = f64::from(i);
-                Extent2d::from_bounds(x, -x, x + 1.0, -x + 1.0)
+                Extent2d::spanning(Point2::new(x, -x), Point2::new(x + 1.0, -x + 1.0))
             })
             .collect();
         let t = BoxTree::new(&rects);
         assert_eq!(
-            t.overlapping(&Extent2d::from_bounds(5.5, -4.5, 5.6, -4.4), 0.0),
+            t.overlapping(
+                &Extent2d::spanning(Point2::new(5.5, -4.5), Point2::new(5.6, -4.4)),
+                0.0
+            ),
             vec![5]
         );
         assert_eq!(t.self_pairs(0.0).len(), 19);

@@ -3,7 +3,7 @@
 //! general matrices, the two transforms, 1D/2D/3D and periodic extents, rounding
 //! bounds, the scalar tolerance functions, and interval arithmetic with outward
 //! rounding (intervals, interval vectors, Taylor models and the certificate's series,
-//! [`interval`], [`interval_vector`], [`taylor_model`], [`series`], [`ring`]), the
+//! [`interval`], [`taylor_model`], [`series`], [`ring`]; an interval vector is a `Vec3<Ivl>`), the
 //! certificate types ([`cert`]), the one fixed hash and random generator ([`hash`]), and the
 //! error-free transformations ([`eft`]) and the transcendental functions on them
 //! ([`fmath`]).
@@ -30,7 +30,6 @@ pub mod extent3d;
 pub mod fmath;
 pub mod hash;
 pub mod interval;
-pub mod interval_vector;
 pub mod limits;
 pub mod math;
 pub mod matrix;

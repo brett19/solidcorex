@@ -170,14 +170,15 @@ pub fn difference(a: f64, b: f64) -> Bounded {
     }
 }
 
-/// `v` made unit by [`Vec3::unitize`], or `None` for a vector not finite or one it refuses
-/// (shorter than `1e-12`): each component within [`unit_error`] of `v / |v|`.
+/// `v` made unit by [`Vec3::normalized`], or `None` for a vector it refuses (not finite,
+/// or shorter than `1e-12`) or whose squared length overflows (which `normalized` scales
+/// first, outside this bound): each component within [`unit_error`] of `v / |v|`.
 #[must_use]
 pub fn unit(v: Vec3) -> Option<Vec3> {
-    if !(v.x.is_finite() && v.y.is_finite() && v.z.is_finite()) {
+    if !v.length_squared().is_finite() {
         return None;
     }
-    v.unitize().ok()
+    v.normalized().map(crate::vector3d::UnitVec3::as_vec)
 }
 
 /// The error of each component of a unit vector made by [`unit`] from a given `v`:
@@ -371,14 +372,14 @@ mod tests {
     /// 1e-160 apart: a computed distance off by about 1e-4 relatively, within the bound.
     #[test]
     fn an_underflowing_distance_keeps_an_absolute_bound() {
-        let d = distance(Point3::new(1e-170, 0.0, 0.0), Point3::ZERO);
+        let d = distance(Point3::new(1e-170, 0.0, 0.0), Point3::ORIGIN);
         assert_eq!(d.value, 0.0);
         assert_eq!(d.above(0.0), Verdict::Undecided);
-        let d = distance(Point3::new(1e-160, 1e-160, 0.0), Point3::ZERO);
+        let d = distance(Point3::new(1e-160, 1e-160, 0.0), Point3::ORIGIN);
         assert!((d.value - 2.0_f64.sqrt() * 1e-160).abs() <= d.bound);
         assert_eq!(d.above(0.0), Verdict::Yes);
         assert_eq!(
-            distance(Point3::new(1.0, 0.0, 0.0), Point3::ZERO).above(0.5),
+            distance(Point3::new(1.0, 0.0, 0.0), Point3::ORIGIN).above(0.5),
             Verdict::Yes
         );
     }
@@ -393,7 +394,7 @@ mod tests {
 
     #[test]
     fn the_distance_of_a_3_4_5_triangle_is_exact() {
-        let d = distance(Point3::new(3.0, 4.0, 0.0), Point3::ZERO);
+        let d = distance(Point3::new(3.0, 4.0, 0.0), Point3::ORIGIN);
         assert_eq!(d.value, 5.0);
         assert!(d.bound > 0.0 && d.bound < 1e-14);
     }
@@ -406,7 +407,9 @@ mod tests {
         );
         assert_eq!(
             unit(Vec3::new(3.0, 4.0, 0.0)),
-            Vec3::new(3.0, 4.0, 0.0).unitize().ok()
+            Vec3::new(3.0, 4.0, 0.0)
+                .normalized()
+                .map(crate::vector3d::UnitVec3::as_vec)
         );
         assert_eq!(unit(Vec3::new(f64::NAN, 0.0, 1.0)), None);
         assert_eq!(unit(Vec3::new(f64::INFINITY, 0.0, 1.0)), None);

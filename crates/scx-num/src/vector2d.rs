@@ -8,6 +8,8 @@
 // `upstream_my_test_vector2d` drops its unset-vector checks.
 // Then the transcendental functions became `fmath`'s (correctly rounded, the same bits on every
 // platform) in place of the C library's, so results may differ from the pin's in the last bit.
+// Then `component(usize) -> Result<f64>` and `component_mut` became `Index<Axis2>` and
+// `IndexMut<Axis2>`, so no index is out of range; their failure tests went with them.
 //! Two-dimensional vectors and points ([`Vec2`] / [`Point2`]), usually surface
 //! parameters `(u, v)`: arithmetic, lengths, distances, unitizing, rotation and angles.
 //!
@@ -16,7 +18,8 @@
 //! | Rust                                   | Upstream                                         |
 //! |----------------------------------------|--------------------------------------------------|
 //! | [`Vec2`]                               | `SmVector2d`                                     |
-//! | [`Point2`]                             | `SmPoint2d` (same class upstream)                |
+//! | [`Point2`]                             | `SmPoint2d` (same class upstream; here distinct) |
+//! | [`UnitVec2`]                           | a unitized `SmVector2d`                          |
 //! | [`Vec2::new`]                          | `SmVector2d(double, double)`, `Set`              |
 //! | [`Vec2::from_array`], `From<[f64; 2]>` | `SmVector2d(double *)`                           |
 //! | `Copy` / assignment                    | copy constructor, `operator=(const SmVector2d&)`, `Copy` |
@@ -29,32 +32,34 @@
 //! | `Mul<f64>`, `f64 * Vec2`               | `operator*(v, d)`, `operator*(d, v)`             |
 //! | `Div<f64>`                             | `operator/(v, d)`                                |
 //! | `AddAssign`, `SubAssign`, `MulAssign`  | `operator+=`, `operator-=`, `operator*=`         |
-//! | [`Vec2::unitize`]                      | `Unitize`                                        |
-//! | [`Vec2::distance`]                     | `DistanceBetween`                                |
-//! | [`Vec2::distance_squared`]             | `DistanceBetweenSquared`                         |
-//! | [`Vec2::closer_than`]                  | `CloserThan`                                     |
+//! | [`Vec2::normalized`]                   | `Unitize`                                        |
+//! | [`Point2::distance`]                   | `DistanceBetween`                                |
+//! | [`Point2::distance_squared`]           | `DistanceBetweenSquared`                         |
+//! | [`Point2::closer_than`]                | `CloserThan`                                     |
 //! | [`Vec2::max_dimension`]                | `GetMaxDimension`                                |
 //! | [`Vec2::swap_xy`]                      | `SwapXY`                                         |
 //! | [`Vec2::rotate`]                       | `Rotate`                                         |
 //! | [`Vec2::approx_eq`]                    | `operator==`                                     |
 //! | [`Vec2::approx_ne`]                    | `operator!=`                                     |
-//! | [`Vec2::component`]                    | `operator[](ULONG) const`                        |
-//! | [`Vec2::component_mut`]                | `operator[](ULONG)`                              |
+//! | `v[Axis2::X]` ([`Axis2`], `Index`/`IndexMut`) | `operator[](ULONG) const`, `operator[](ULONG)` |
 //! | [`Vec2::angle_between`]                | `AngleBetween`                                   |
 //! | [`Vec2::ccw_angle_between`]            | `CCWAngleBetween`                                |
 //!
 //! Deviations:
-//! - Out-params and `SmStatus` become return values: `unitize`, `angle_between` and
+//! - Out-params and `SmStatus` become return values: `angle_between` and
 //!   `ccw_angle_between` return `Result`; `SM_ERR_INVALID_INPUT` is
-//!   [`NumError::InvalidInput`]. `unitize` returns the new vector instead of
-//!   updating `self`; on error upstream leaves the vector unchanged.
+//!   [`NumError::InvalidInput`]. `Unitize` is [`Vec2::normalized`], an `Option` of a
+//!   [`UnitVec2`]: `None` where upstream fails (and leaves the vector unchanged), and also
+//!   for a non-finite vector, which upstream "unitizes" to NaN. An overflowing square is
+//!   scaled first.
+//! - Points and vectors are distinct types (upstream: one class): distances are on
+//!   [`Point2`], lengths and angles on [`Vec2`].
 //! - Upstream's tolerant `operator==` / `operator!=` are [`Vec2::approx_eq`] /
 //!   [`Vec2::approx_ne`]; Rust `==` (`PartialEq`) is exact component equality.
 //! - `Default` is the zero vector. Upstream's default constructor gives an unset vector
 //!   (both components `SM_UNDEF_DOUBLE`); here an unset vector is an `Option<Vec2>`.
-//! - `operator[]` with an index other than 0 or 1 returns `0.0` (const) or
-//!   dereferences `NULL` (non-const) after logging `SM_ERR`; Rust returns
-//!   a [`NumFailure`](crate::error::NumFailure) with status 1001 (`SM_ERR`) for both.
+//! - `operator[]` takes an [`Axis2`], so no index is out of range. Upstream's answered `0.0`
+//!   (const) or dereferenced `NULL` (non-const) for an index other than 0 or 1.
 //! - `SM_ASSERT_BREAK` checks are compiled out upstream (release build) and omitted.
 //! - `sm_sqrt`, `sm_acos`, `sm_asin` (`SmMath.cpp`) come from [`crate::vector3d`];
 //!   `SM_IS_ZERO_SQUARED` = `SmTol::InTol(a, SmTol::GetScaledZeroSq())` calls
@@ -62,13 +67,13 @@
 
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use crate::error::NumFailure;
 use crate::error::{NumError, Result};
 use crate::math::{Vec3, EFF_ZERO, EFF_ZERO_SQ, PI};
 use crate::tol;
 use crate::vector3d::{acos as sm_acos, asin as sm_asin, sqrt as sm_sqrt};
 
-/// A 2D vector (`SmVector2d`), typically a surface parameter `(u, v)`.
+/// A 2D displacement or direction (`SmVector2d` in its vector role), such as a step in a
+/// surface's parameters. A position is a [`Point2`].
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Vec2 {
     /// X (or `u`) component.
@@ -77,8 +82,94 @@ pub struct Vec2 {
     pub y: f64,
 }
 
-/// A 2D point (`SmPoint2d`, an alias of `SmVector2d` upstream).
-pub type Point2 = Vec2;
+/// A 2D position (`SmPoint2d`, an alias of `SmVector2d` upstream), typically a surface
+/// parameter pair `(u, v)`. Affine as [`Point3`](crate::vector3d::Point3) is: `point - point`
+/// is a [`Vec2`], `point ± vec` a point.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Point2 {
+    /// X (or `u`) coordinate.
+    pub x: f64,
+    /// Y (or `v`) coordinate.
+    pub y: f64,
+}
+
+/// A coordinate axis of the plane: what indexes a [`Vec2`] or a [`Point2`] (`v[Axis2::Y]`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Axis2 {
+    /// The x (or `u`) axis.
+    X,
+    /// The y (or `v`) axis.
+    Y,
+}
+
+impl Axis2 {
+    /// Both axes, x first.
+    pub const ALL: [Self; 2] = [Self::X, Self::Y];
+}
+
+impl core::ops::Index<Axis2> for Vec2 {
+    type Output = f64;
+    fn index(&self, axis: Axis2) -> &f64 {
+        match axis {
+            Axis2::X => &self.x,
+            Axis2::Y => &self.y,
+        }
+    }
+}
+
+impl core::ops::IndexMut<Axis2> for Vec2 {
+    fn index_mut(&mut self, axis: Axis2) -> &mut f64 {
+        match axis {
+            Axis2::X => &mut self.x,
+            Axis2::Y => &mut self.y,
+        }
+    }
+}
+
+impl core::ops::Index<Axis2> for Point2 {
+    type Output = f64;
+    fn index(&self, axis: Axis2) -> &f64 {
+        match axis {
+            Axis2::X => &self.x,
+            Axis2::Y => &self.y,
+        }
+    }
+}
+
+impl core::ops::IndexMut<Axis2> for Point2 {
+    fn index_mut(&mut self, axis: Axis2) -> &mut f64 {
+        match axis {
+            Axis2::X => &mut self.x,
+            Axis2::Y => &mut self.y,
+        }
+    }
+}
+
+/// A 2D direction: a [`Vec2`] of length 1 (its square within [`EFF_ZERO_SQ`] of 1), both
+/// components finite. Made by [`Vec2::normalized`]; read through `Deref`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct UnitVec2(Vec2);
+
+impl UnitVec2 {
+    /// The direction as a plain vector.
+    #[must_use]
+    pub const fn as_vec(self) -> Vec2 {
+        self.0
+    }
+}
+
+impl core::ops::Deref for UnitVec2 {
+    type Target = Vec2;
+    fn deref(&self) -> &Vec2 {
+        &self.0
+    }
+}
+
+impl From<UnitVec2> for Vec2 {
+    fn from(u: UnitVec2) -> Self {
+        u.0
+    }
+}
 
 impl Vec2 {
     /// The zero vector.
@@ -109,6 +200,12 @@ impl Vec2 {
         Self::new(v.x, v.y)
     }
 
+    /// The point this displacement reaches from the origin: the same coordinates.
+    #[must_use]
+    pub const fn to_point(self) -> Point2 {
+        Point2::new(self.x, self.y)
+    }
+
     /// True when the length is below `tol` (`IsZero`; upstream default
     /// `tol` is [`EFF_ZERO`]).
     #[must_use]
@@ -134,45 +231,25 @@ impl Vec2 {
         (self.x * o.x) + (self.y * o.y)
     }
 
-    /// Unit vector in the same direction (`Unitize`).
+    /// The unit vector in this direction (`Unitize`): `None` for a vector whose squared
+    /// length is below [`EFF_ZERO_SQ`] or is not finite.
     ///
-    /// A vector whose squared length is within [`EFF_ZERO_SQ`] of 1 is returned
-    /// unchanged; one with squared length below [`EFF_ZERO_SQ`] is an error.
-    pub fn unitize(self) -> Result<Self> {
+    /// A vector whose squared length is within [`EFF_ZERO_SQ`] of 1 is returned unchanged.
+    /// One whose squared length overflows is first divided by its largest coordinate.
+    #[must_use]
+    pub fn normalized(self) -> Option<UnitVec2> {
         let len_sq = self.length_squared();
-        if len_sq < EFF_ZERO_SQ {
-            return Err(NumError::InvalidInput {
-                operation: "geom::vector2d::Vec2::unitize",
-                reason: "zero-length vector",
-            });
+        if len_sq.is_infinite() && self.x.is_finite() && self.y.is_finite() {
+            return (self / self.max_dimension()).normalized();
+        }
+        if !(len_sq >= EFF_ZERO_SQ && len_sq.is_finite()) {
+            return None;
         }
         if (len_sq - 1.0).abs() > EFF_ZERO_SQ {
             let len = sm_sqrt(len_sq);
-            return Ok(Self::new(self.x / len, self.y / len));
+            return Some(UnitVec2(Self::new(self.x / len, self.y / len)));
         }
-        Ok(self)
-    }
-
-    /// Distance between two points (`DistanceBetween`).
-    #[must_use]
-    pub fn distance(self, o: Self) -> f64 {
-        (self - o).length()
-    }
-
-    /// Squared distance between two points (`DistanceBetweenSquared`).
-    #[must_use]
-    pub fn distance_squared(self, o: Self) -> f64 {
-        (self - o).length_squared()
-    }
-
-    /// True when the distance to `o` is at most `max` (`CloserThan`).
-    ///
-    /// Rejects early when either coordinate difference alone exceeds `max`.
-    #[must_use]
-    pub fn closer_than(self, max: f64, o: Self) -> bool {
-        !((self.x - o.x).abs() > max
-            || (self.y - o.y).abs() > max
-            || ((self.x - o.x) * (self.x - o.x) + (self.y - o.y) * (self.y - o.y)) > max * max)
+        Some(UnitVec2(self))
     }
 
     /// Largest absolute coordinate (`GetMaxDimension`).
@@ -216,31 +293,6 @@ impl Vec2 {
         let scale = 1.0 + self.max_dimension();
         let dist = (self.x - o.x).abs() + (self.y - o.y).abs();
         dist >= EFF_ZERO * scale
-    }
-
-    /// Component `0` (`x`) or `1` (`y`) (`operator[] const`).
-    pub fn component(self, index: usize) -> Result<f64> {
-        match index {
-            0 => Ok(self.x),
-            1 => Ok(self.y),
-            _ => Err(Self::bad_index(index)),
-        }
-    }
-
-    /// Mutable component `0` (`x`) or `1` (`y`) (`operator[]`).
-    pub fn component_mut(&mut self, index: usize) -> Result<&mut f64> {
-        match index {
-            0 => Ok(&mut self.x),
-            1 => Ok(&mut self.y),
-            _ => Err(Self::bad_index(index)),
-        }
-    }
-
-    fn bad_index(index: usize) -> NumError {
-        NumError::failed(
-            "geom::vector2d::Vec2::component",
-            NumFailure::IndexOutOfRange { index, len: 2 },
-        )
     }
 
     /// Angle between two vectors in radians, in `[0, PI]` (`AngleBetween`).
@@ -296,7 +348,94 @@ impl Vec2 {
     }
 }
 
+impl Point2 {
+    /// The origin.
+    pub const ORIGIN: Self = Self::new(0.0, 0.0);
+
+    /// Creates a point from its coordinates.
+    #[must_use]
+    pub const fn new(x: f64, y: f64) -> Self {
+        Self { x, y }
+    }
+
+    /// Creates a point from `[x, y]`.
+    #[must_use]
+    pub const fn from_array(a: [f64; 2]) -> Self {
+        Self::new(a[0], a[1])
+    }
+
+    /// Coordinates as an array `[x, y]`.
+    #[must_use]
+    pub const fn to_array(self) -> [f64; 2] {
+        [self.x, self.y]
+    }
+
+    /// The displacement from the origin to this point: the same coordinates.
+    #[must_use]
+    pub const fn to_vec(self) -> Vec2 {
+        Vec2::new(self.x, self.y)
+    }
+
+    /// Distance between two points (`DistanceBetween`).
+    #[must_use]
+    pub fn distance(self, o: Self) -> f64 {
+        (self - o).length()
+    }
+
+    /// Squared distance between two points (`DistanceBetweenSquared`).
+    #[must_use]
+    pub fn distance_squared(self, o: Self) -> f64 {
+        (self - o).length_squared()
+    }
+
+    /// True when the distance to `o` is at most `max` (`CloserThan`).
+    ///
+    /// Rejects early when either coordinate difference alone exceeds `max`.
+    #[must_use]
+    pub fn closer_than(self, max: f64, o: Self) -> bool {
+        !((self.x - o.x).abs() > max
+            || (self.y - o.y).abs() > max
+            || ((self.x - o.x) * (self.x - o.x) + (self.y - o.y) * (self.y - o.y)) > max * max)
+    }
+
+    /// Largest absolute coordinate (`GetMaxDimension`).
+    #[must_use]
+    pub fn max_dimension(self) -> f64 {
+        self.to_vec().max_dimension()
+    }
+
+    /// The point with `x` and `y` exchanged (`SwapXY`).
+    #[must_use]
+    pub const fn swap_xy(self) -> Self {
+        Self::new(self.y, self.x)
+    }
+
+    /// The point halfway between `self` and `q`: `(self + q) / 2`, coordinate by coordinate.
+    #[must_use]
+    pub fn midpoint(self, q: Self) -> Self {
+        Self::new((self.x + q.x) * 0.5, (self.y + q.y) * 0.5)
+    }
+
+    /// Upstream's tolerant equality (`operator==`) on points, as [`Vec2::approx_eq`].
+    #[must_use]
+    pub fn approx_eq(self, o: Self) -> bool {
+        self.to_vec().approx_eq(o.to_vec())
+    }
+
+    /// Upstream's tolerant inequality (`operator!=`) on points, as [`Vec2::approx_ne`].
+    #[must_use]
+    pub fn approx_ne(self, o: Self) -> bool {
+        self.to_vec().approx_ne(o.to_vec())
+    }
+}
+
 impl From<[f64; 2]> for Vec2 {
+    fn from(a: [f64; 2]) -> Self {
+        Self::from_array(a)
+    }
+}
+
+impl From<[f64; 2]> for Point2 {
     fn from(a: [f64; 2]) -> Self {
         Self::from_array(a)
     }
@@ -373,6 +512,44 @@ impl MulAssign<f64> for Vec2 {
     }
 }
 
+/// A point moved by a displacement.
+impl Add<Vec2> for Point2 {
+    type Output = Self;
+    fn add(self, v: Vec2) -> Self {
+        Self::new(self.x + v.x, self.y + v.y)
+    }
+}
+
+/// A point moved back by a displacement.
+impl Sub<Vec2> for Point2 {
+    type Output = Self;
+    fn sub(self, v: Vec2) -> Self {
+        Self::new(self.x - v.x, self.y - v.y)
+    }
+}
+
+/// The displacement from `o` to `self`.
+impl Sub for Point2 {
+    type Output = Vec2;
+    fn sub(self, o: Self) -> Vec2 {
+        Vec2::new(self.x - o.x, self.y - o.y)
+    }
+}
+
+impl AddAssign<Vec2> for Point2 {
+    fn add_assign(&mut self, v: Vec2) {
+        self.x += v.x;
+        self.y += v.y;
+    }
+}
+
+impl SubAssign<Vec2> for Point2 {
+    fn sub_assign(&mut self, v: Vec2) {
+        self.x -= v.x;
+        self.y -= v.y;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -394,17 +571,17 @@ mod tests {
         v6 += v4;
         assert_eq!(v6, Vec2::ZERO);
 
-        v3 = v3.unitize().unwrap();
+        v3 = v3.normalized().unwrap().as_vec();
         assert!(close(v3.length(), 1.0));
         assert!(close(v3.dot(v3), 1.0));
 
         let v8 = Vec2::new(5.0, 1.0);
         let v9 = Vec2::new(1.0, 4.0);
-        assert!(close(v8.distance(v9), 5.0));
+        assert!(close(v8.to_point().distance(v9.to_point()), 5.0));
         assert!(close(v8.angle_between(v9).unwrap(), 1.1284221038181517));
         assert!(close(v9.ccw_angle_between(v8).unwrap(), 5.1547632033614343));
-        assert!(close(v8.distance_squared(v4), 89.0));
-        assert!(!v8.closer_than(1.0, v9));
+        assert!(close(v8.to_point().distance_squared(v4.to_point()), 89.0));
+        assert!(!v8.to_point().closer_than(1.0, v9.to_point()));
         assert!(close(v8.max_dimension(), 5.0));
 
         let v10 = -v8;
@@ -416,28 +593,33 @@ mod tests {
         assert_eq!(v11, Vec2::new(30.0, 6.0));
         assert_eq!(v8 / 2.0, Vec2::new(2.5, 0.5));
         assert_eq!(2.0 * v8, v8 * 2.0);
-        assert_eq!(v8.component(0).unwrap(), 5.0);
-        *v11.component_mut(1).unwrap() = 6.0;
+        assert_eq!(v8[Axis2::X], 5.0);
+        v11[Axis2::Y] = 6.0;
         assert_eq!(v11.y, 6.0);
+        let mut p = Point2::new(1.0, 2.0);
+        p[Axis2::X] = 3.0;
+        assert_eq!(Axis2::ALL.map(|a| p[a]), [3.0, 2.0]);
 
         let r = v5.rotate(PI / 2.0);
         assert!(close(r.x, -4.0) && close(r.y, 3.0));
     }
 
     #[test]
-    fn unitize_edge_cases() {
-        assert!(matches!(
-            Vec2::ZERO.unitize(),
-            Err(NumError::InvalidInput { .. })
-        ));
-        assert!(Vec2::new(1e-13, 0.0).unitize().is_err());
+    fn normalized_edge_cases() {
+        assert_eq!(Vec2::ZERO.normalized(), None);
+        assert_eq!(Vec2::new(1e-13, 0.0).normalized(), None);
         // Nearly-unit vectors are returned bit for bit.
         let n = Vec2::new(0.6, 0.8);
-        assert_eq!(n.unitize().unwrap(), n);
+        assert_eq!(n.normalized().unwrap().as_vec(), n);
         assert_eq!(
-            Vec2::new(0.0, -7.0).unitize().unwrap(),
+            Vec2::new(0.0, -7.0).normalized().unwrap().as_vec(),
             Vec2::new(0.0, -1.0)
         );
+        // Not finite: no direction. Overflowing square: scaled, so it has one.
+        assert_eq!(Vec2::new(f64::NAN, 1.0).normalized(), None);
+        assert_eq!(Vec2::new(f64::INFINITY, 1.0).normalized(), None);
+        let big = Vec2::new(1e200, -1e200).normalized().unwrap();
+        assert!((big.length() - 1.0).abs() < 1e-15 && big.x > 0.0 && big.y < 0.0);
     }
 
     #[test]
@@ -468,16 +650,16 @@ mod tests {
         assert!(v.approx_ne(Vec2::new(1.0 + 1e-10, 2.0)));
         let nan = Vec2::new(f64::NAN, 0.0);
         assert!(!v.approx_eq(nan) && !v.approx_ne(nan));
-        assert!(v.closer_than(0.0, v));
-        assert!(!v.closer_than(-1.0, v));
+        let p = v.to_point();
+        assert!(p.closer_than(0.0, p));
+        assert!(!p.closer_than(-1.0, p));
+        assert_eq!(p + Vec2::new(1.0, 1.0) - p, Vec2::new(1.0, 1.0));
     }
 
     #[test]
     fn misc() {
         let mut v = Vec2::new(1.0, 2.0);
         assert_eq!(v.swap_xy(), Vec2::new(2.0, 1.0));
-        assert!(v.component(2).is_err());
-        assert!(v.component_mut(5).is_err());
         v -= Vec2::new(1.0, 1.0);
         assert_eq!(v, Vec2::new(0.0, 1.0));
         assert!(v.is_zero(1.5));

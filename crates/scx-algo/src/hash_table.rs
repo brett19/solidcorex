@@ -19,6 +19,8 @@
 // Then the transcendental functions became `fmath`'s (correctly rounded, the same bits on every
 // platform) in place of the C library's, so results may differ from the pin's in the last bit.
 // Then `tol3d` went (`f64::abs` in its place): the pair tolerance is the sum's `abs()`.
+// Then the inside-out empty box went: an unsized model's box is `None` (`bbox()` answers
+// `Option<Extent3d>`), and `map_voxel_index_to_bbox` answers `None` where it answered `Init()`.
 //! Voxel bucket hash of point-located items for fast coincident-pair searches
 //!
 //! Iteration order is deterministic and documented: [`ObjsInVoxels::find_coincident_pairs`]
@@ -488,7 +490,7 @@ pub struct ObjsInVoxels<T> {
     /// Voxels along z (`m_lZCnt`).
     z_cnt: usize,
     /// Box of all voxels (`m_sBBox`).
-    bbox: Extent3d,
+    bbox: Option<Extent3d>,
     /// Removed point items (`m_lRemovedPointItemCount`; never reset, as upstream).
     removed_point_item_count: usize,
     /// One entry per (item, voxel) placement (`m_sPointItems`).
@@ -505,7 +507,7 @@ impl<T> Default for ObjsInVoxels<T> {
             x_cnt: 0,
             y_cnt: 0,
             z_cnt: 0,
-            bbox: Extent3d::new(),
+            bbox: None,
             removed_point_item_count: 0,
             point_items: Vec::new(),
             point_capacity: 0,
@@ -532,7 +534,7 @@ impl<T: Copy + PartialEq> ObjsInVoxels<T> {
             x_cnt: 0,
             y_cnt: 0,
             z_cnt: 0,
-            bbox: Extent3d::new(),
+            bbox: None,
             removed_point_item_count: 0,
             point_items: Vec::new(),
             point_capacity: 0,
@@ -577,7 +579,7 @@ impl<T: Copy + PartialEq> ObjsInVoxels<T> {
         self.x_cnt = x_cnt;
         self.y_cnt = y_cnt;
         self.z_cnt = z_cnt;
-        self.bbox = bbox.copied().unwrap_or_default();
+        self.bbox = bbox.copied();
         self.hash.init_size(item_estimate, voxel_count)?;
         self.point_items.clear();
         self.point_capacity = 0;
@@ -624,10 +626,10 @@ impl<T: Copy + PartialEq> ObjsInVoxels<T> {
         (self.x_cnt, self.y_cnt, self.z_cnt)
     }
 
-    /// Box of all voxels.
+    /// Box of all voxels, `None` when the model is not sized.
     #[must_use]
-    pub fn bbox(&self) -> &Extent3d {
-        &self.bbox
+    pub const fn bbox(&self) -> Option<Extent3d> {
+        self.bbox
     }
 
     /// Removed point items (`m_lRemovedPointItemCount`).
@@ -676,15 +678,16 @@ impl<T: Copy + PartialEq> ObjsInVoxels<T> {
     /// to a boundary voxel. `None` when the model has no box or no voxels.
     #[must_use]
     pub fn map_point_to_voxel(&self, p: Point3) -> Option<VoxelHit> {
-        if self.bbox.is_init() || self.voxel_count() == 0 {
+        let bbox = self.bbox?;
+        if self.voxel_count() == 0 {
             return None;
         }
-        let dx = self.bbox.x_length() / self.x_cnt as f64;
-        let dy = self.bbox.y_length() / self.y_cnt as f64;
-        let dz = self.bbox.z_length() / self.z_cnt as f64;
-        let mut ix = ulong_from_f64((p.x - self.bbox.min().x) / dx);
-        let mut iy = ulong_from_f64((p.y - self.bbox.min().y) / dy);
-        let mut iz = ulong_from_f64((p.z - self.bbox.min().z) / dz);
+        let dx = bbox.x_length() / self.x_cnt as f64;
+        let dy = bbox.y_length() / self.y_cnt as f64;
+        let dz = bbox.z_length() / self.z_cnt as f64;
+        let mut ix = ulong_from_f64((p.x - bbox.min().x) / dx);
+        let mut iy = ulong_from_f64((p.y - bbox.min().y) / dy);
+        let mut iz = ulong_from_f64((p.z - bbox.min().z) / dz);
         if ix >= self.x_cnt as u64 {
             ix = self.x_cnt as u64 - 1;
         }
@@ -698,40 +701,36 @@ impl<T: Copy + PartialEq> ObjsInVoxels<T> {
         let index = self.map_indices_to_voxel_index(ix, iy, iz);
         Some(VoxelHit {
             index,
-            extent: self.map_voxel_index_to_bbox(index),
+            extent: self.map_voxel_index_to_bbox(index)?,
             ix,
             iy,
             iz,
         })
     }
 
-    /// Box of voxel `index` (`MapVoxelIndexToBBox`); the unsized
-    /// [`Extent3d::new`] when the model has no box or no voxels, or when the
-    /// computed corners are out of order (upstream ignores the `SetMinMax`
-    /// failure).
+    /// Box of voxel `index` (`MapVoxelIndexToBBox`); `None` when the model has no box
+    /// or no voxels, the index is out of range, or the computed corners are out of order
+    /// (where upstream ignores the `SetMinMax` failure and answers the `Init()` box).
     #[must_use]
-    pub fn map_voxel_index_to_bbox(&self, index: usize) -> Extent3d {
-        let mut e = Extent3d::new();
-        if self.bbox.is_init() || self.voxel_count() == 0 {
-            return e;
+    pub fn map_voxel_index_to_bbox(&self, index: usize) -> Option<Extent3d> {
+        let bbox = self.bbox?;
+        if self.voxel_count() == 0 {
+            return None;
         }
-        let dx = self.bbox.x_length() / self.x_cnt as f64;
-        let dy = self.bbox.y_length() / self.y_cnt as f64;
-        let dz = self.bbox.z_length() / self.z_cnt as f64;
-        let Ok((ix, iy, iz)) = self.map_voxel_index_to_indices(index) else {
-            return e;
-        };
+        let dx = bbox.x_length() / self.x_cnt as f64;
+        let dy = bbox.y_length() / self.y_cnt as f64;
+        let dz = bbox.z_length() / self.z_cnt as f64;
+        let (ix, iy, iz) = self.map_voxel_index_to_indices(index).ok()?;
         let (ix, iy, iz) = (ix as f64, iy as f64, iz as f64);
-        let m = self.bbox.min();
-        let _ = e.set_min_max_coords(
+        let m = bbox.min();
+        Extent3d::from_bounds(
             m.x + ix * dx,
             m.y + iy * dy,
             m.z + iz * dz,
             m.x + (ix + 1.0) * dx,
             m.y + (iy + 1.0) * dy,
             m.z + (iz + 1.0) * dz,
-        );
-        e
+        )
     }
 
     /// Indices of every point item (removed ones included) holding `item`
@@ -760,7 +759,7 @@ impl<T: Copy + PartialEq> ObjsInVoxels<T> {
         zone_tol: f64,
         mut updated: Option<&mut Vec<usize>>,
     ) -> Result<Option<usize>> {
-        if self.bbox.is_init() {
+        if self.bbox.is_none() {
             return Ok(None);
         }
         let Some(hit) = self.map_point_to_voxel(point) else {
@@ -953,10 +952,10 @@ impl<T: Copy + PartialEq> ObjsInVoxels<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use scx_num::math::Vec3;
+    use scx_num::math::Point3;
 
     fn unit_box() -> Extent3d {
-        Extent3d::from_bounds(0.0, 0.0, 0.0, 1.0, 1.0, 1.0)
+        Extent3d::spanning(Point3::ORIGIN, Point3::new(1.0, 1.0, 1.0))
     }
 
     fn sorted_item_pairs(v: &ObjsInVoxels<u32>, p: &CoincidentPairs) -> Vec<(u32, u32)> {
@@ -1022,7 +1021,7 @@ mod tests {
     #[test]
     fn overflowing_set_size_preserves_model() {
         let mut v = ObjsInVoxels::<usize>::new(2, 3, 4, Some(&unit_box()), 0).unwrap();
-        v.add(7, Vec3::new(0.2, 0.2, 0.2), 0.0, None).unwrap();
+        v.add(7, Point3::new(0.2, 0.2, 0.2), 0.0, None).unwrap();
         let before = v.clone();
 
         assert!(matches!(
@@ -1084,19 +1083,19 @@ mod tests {
     #[test]
     fn map_point_and_bbox() {
         let v: ObjsInVoxels<u32> = ObjsInVoxels::new(4, 2, 1, Some(&unit_box()), 0).unwrap();
-        let h = v.map_point_to_voxel(Vec3::new(0.6, 0.7, 0.5)).unwrap();
+        let h = v.map_point_to_voxel(Point3::new(0.6, 0.7, 0.5)).unwrap();
         assert_eq!((h.ix, h.iy, h.iz, h.index), (2, 1, 0, 6));
         assert_eq!(
-            h.extent,
+            Some(h.extent),
             Extent3d::from_bounds(0.5, 0.5, 0.0, 0.75, 1.0, 1.0)
         );
         // below the box: the unsigned conversion wraps, then clamps high
-        let h = v.map_point_to_voxel(Vec3::new(-2.0, 0.1, 0.1)).unwrap();
+        let h = v.map_point_to_voxel(Point3::new(-2.0, 0.1, 0.1)).unwrap();
         assert_eq!(h.ix, 3);
         assert_eq!(v.map_voxel_index_to_indices(6).unwrap(), (2, 1, 0));
         let u: ObjsInVoxels<u32> = ObjsInVoxels::new(2, 2, 2, None, 0).unwrap();
-        assert!(u.map_point_to_voxel(Vec3::ZERO).is_none());
-        assert!(u.map_voxel_index_to_bbox(0).is_init());
+        assert!(u.map_point_to_voxel(Point3::ORIGIN).is_none());
+        assert_eq!(u.map_voxel_index_to_bbox(0), None);
     }
 
     #[test]
@@ -1104,15 +1103,15 @@ mod tests {
         let mut v: ObjsInVoxels<u32> = ObjsInVoxels::new(2, 1, 1, Some(&unit_box()), 0).unwrap();
         let mut upd = Vec::new();
         assert_eq!(
-            v.add(1, Vec3::new(0.5, 0.5, 0.5), 1e-3, Some(&mut upd))
+            v.add(1, Point3::new(0.5, 0.5, 0.5), 1e-3, Some(&mut upd))
                 .unwrap(),
             Some(1)
         );
         assert_eq!(upd, vec![1, 0]);
         assert_eq!(v.len(), 2);
         assert_eq!(v.point_capacity(), 64);
-        v.add(2, Vec3::new(0.2, 0.5, 0.5), 1e-3, None).unwrap();
-        v.add(3, Vec3::new(0.2005, 0.5, 0.5), 1e-3, None).unwrap();
+        v.add(2, Point3::new(0.2, 0.5, 0.5), 1e-3, None).unwrap();
+        v.add(3, Point3::new(0.2005, 0.5, 0.5), 1e-3, None).unwrap();
         let p = v
             .find_coincident_pairs(FindPairsOptions::default())
             .unwrap();
@@ -1133,16 +1132,16 @@ mod tests {
             .unwrap();
         assert_eq!(p.first.len(), 1);
         assert_eq!(hist.iter().sum::<u64>(), 1);
-        assert!(v.add(9, Vec3::ZERO, 0.0, None).is_ok());
+        assert!(v.add(9, Point3::ORIGIN, 0.0, None).is_ok());
     }
 
     #[test]
     fn unsized_model_ignores_adds() {
         let mut v: ObjsInVoxels<u32> = ObjsInVoxels::new(0, 0, 0, None, 5).unwrap();
-        assert_eq!(v.add(1, Vec3::ZERO, 0.1, None).unwrap(), None);
+        assert_eq!(v.add(1, Point3::ORIGIN, 0.1, None).unwrap(), None);
         assert_eq!(v.point_capacity(), 69);
         let mut w: ObjsInVoxels<u32> = ObjsInVoxels::new(0, 1, 1, Some(&unit_box()), 0).unwrap();
-        assert!(w.add(1, Vec3::ZERO, 0.1, None).is_err());
+        assert!(w.add(1, Point3::ORIGIN, 0.1, None).is_err());
     }
 
     #[test]
@@ -1151,9 +1150,9 @@ mod tests {
         // (20, 30) does not involve the bucket head 10.
         let mut v3: ObjsInVoxels<u32> = ObjsInVoxels::new(1, 1, 1, Some(&unit_box()), 0).unwrap();
         let pts3 = [
-            (10, Vec3::new(0.25, 0.25, 0.25)),
-            (20, Vec3::new(0.2504, 0.25, 0.25)),
-            (30, Vec3::new(0.2508, 0.25, 0.25)),
+            (10, Point3::new(0.25, 0.25, 0.25)),
+            (20, Point3::new(0.2504, 0.25, 0.25)),
+            (30, Point3::new(0.2508, 0.25, 0.25)),
         ];
         for (id, pt) in pts3 {
             v3.add(id, pt, 1e-3, None).unwrap();
@@ -1173,10 +1172,10 @@ mod tests {
         // 4 coincident items in one voxel -> all 4 * 3 / 2 = 6 unique pairs, and a
         // 5-item voxel whose head (item 1) is far away still reports all 6 pairs.
         let cluster4 = [
-            (4, Vec3::new(0.75, 0.75, 0.75)),
-            (5, Vec3::new(0.7503, 0.75, 0.75)),
-            (6, Vec3::new(0.75, 0.7504, 0.75)),
-            (7, Vec3::new(0.75, 0.75, 0.7505)),
+            (4, Point3::new(0.75, 0.75, 0.75)),
+            (5, Point3::new(0.7503, 0.75, 0.75)),
+            (6, Point3::new(0.75, 0.7504, 0.75)),
+            (7, Point3::new(0.75, 0.75, 0.7505)),
         ];
         let exp4 = [(4, 5), (4, 6), (4, 7), (5, 6), (5, 7), (6, 7)];
 
@@ -1194,7 +1193,7 @@ mod tests {
         assert_eq!(point_item_bits(&v4), before4_bits);
 
         let mut v5: ObjsInVoxels<u32> = ObjsInVoxels::new(1, 1, 1, Some(&unit_box()), 0).unwrap();
-        v5.add(1, Vec3::new(0.1, 0.1, 0.1), 1e-3, None).unwrap();
+        v5.add(1, Point3::new(0.1, 0.1, 0.1), 1e-3, None).unwrap();
         for (id, pt) in cluster4 {
             v5.add(id, pt, 1e-3, None).unwrap();
         }
@@ -1218,9 +1217,9 @@ mod tests {
         let mut upd1 = Vec::new();
         let mut upd2 = Vec::new();
         let mut upd3 = Vec::new();
-        let p1 = Vec3::new(0.4998, 0.4998, 0.5);
-        let p2 = Vec3::new(0.5002, 0.4998, 0.5);
-        let p3 = Vec3::new(0.4998, 0.5002, 0.5);
+        let p1 = Point3::new(0.4998, 0.4998, 0.5);
+        let p2 = Point3::new(0.5002, 0.4998, 0.5);
+        let p3 = Point3::new(0.4998, 0.5002, 0.5);
         assert_eq!(v.add(1, p1, 1e-3, Some(&mut upd1)).unwrap(), Some(0));
         assert_eq!(v.add(2, p2, 1e-3, Some(&mut upd2)).unwrap(), Some(1));
         assert_eq!(v.add(3, p3, 1e-3, Some(&mut upd3)).unwrap(), Some(2));
@@ -1276,13 +1275,13 @@ mod tests {
         // is [0, 4, 3, 2, 1], exercising <lim vs >=lim, >=lim vs <lim, >=lim vs
         // >=lim, and skipping only (0, 1).
         let mut w: ObjsInVoxels<u32> = ObjsInVoxels::new(1, 1, 1, Some(&unit_box()), 0).unwrap();
-        w.add(1, Vec3::new(0.5, 0.5, 0.5), 1e-3, None).unwrap();
-        w.add(2, Vec3::new(0.5, 0.5, 0.5), 1e-3, None).unwrap();
+        w.add(1, Point3::new(0.5, 0.5, 0.5), 1e-3, None).unwrap();
+        w.add(2, Point3::new(0.5, 0.5, 0.5), 1e-3, None).unwrap();
         let lim = w.len();
         assert_eq!(lim, 2);
-        let q3 = Vec3::new(0.5 + 5e-7, 0.5, 0.5);
-        let q4 = Vec3::new(0.5 + 5e-5, 0.5, 0.5);
-        let q5 = Vec3::new(0.9, 0.5, 0.5);
+        let q3 = Point3::new(0.5 + 5e-7, 0.5, 0.5);
+        let q4 = Point3::new(0.5 + 5e-5, 0.5, 0.5);
+        let q5 = Point3::new(0.9, 0.5, 0.5);
         w.add(3, q3, 1e-3, None).unwrap();
         w.add(4, q4, 1e-3, None).unwrap();
         w.add(5, q5, 1e-3, None).unwrap();
@@ -1464,16 +1463,18 @@ mod tests {
 
         let mut voxels = ObjsInVoxels::<u32>::new(2, 2, 1, Some(&unit_box()), 0).unwrap();
         for id in 0..58 {
-            voxels.add(id, Vec3::new(0.2, 0.2, 0.5), 0.0, None).unwrap();
+            voxels
+                .add(id, Point3::new(0.2, 0.2, 0.5), 0.0, None)
+                .unwrap();
         }
         for id in 0..58 {
             assert_eq!(voxels.remove(id), 1);
         }
         voxels
-            .add(0, Vec3::new(0.75, 0.75, 0.5), 1e-3, None)
+            .add(0, Point3::new(0.75, 0.75, 0.5), 1e-3, None)
             .unwrap();
         voxels
-            .add(100, Vec3::new(0.7502, 0.75, 0.5), 1e-3, None)
+            .add(100, Point3::new(0.7502, 0.75, 0.5), 1e-3, None)
             .unwrap();
         assert_eq!(voxels.point_capacity(), 128);
         let pairs = voxels

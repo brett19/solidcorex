@@ -10,7 +10,12 @@
 // `operators_and_predicates` its `UNDEF` cases.
 // Then the transcendental functions became `fmath`'s (correctly rounded, the same bits on every
 // platform) in place of the C library's, so results may differ from the pin's in the last bit.
-//! Three-dimensional vectors and points ([`Vec3`] / [`Point3`]): arithmetic, lengths,
+// Then `component(usize)` (0.0 past 2) and `component_mut` became `Index<Axis>` and
+// `IndexMut<Axis>` on `Vec3` and `Point3`. Angle tolerances are radians:
+// `is_parallel_to(o, max_angle)`, `is_perpendicular_to(o, max_angle)`, and
+// `alignment(o, max_angle) -> Alignment` in place of `parallel_sense`'s `(bool, Option<bool>)`.
+//! Three-dimensional vectors, points and unit vectors ([`Vec3`] / [`Point3`] /
+//! [`UnitVec3`]): affine arithmetic, lengths,
 //! angles, projections, rotation, orthonormal frames and derivatives of unit vectors,
 //! plus the guarded scalar math helpers of `SmMath.cpp`.
 //!
@@ -20,11 +25,12 @@
 //! | Rust                                         | Upstream                                         |
 //! |----------------------------------------------|--------------------------------------------------|
 //! | [`Vec3`]                                     | `SmVector3d`                                     |
-//! | [`Point3`]                                   | `SmPoint3d` (same class upstream)                |
+//! | [`Point3`]                                   | `SmPoint3d` (same class upstream; here distinct) |
+//! | [`UnitVec3`]                                 | a unitized `SmVector3d`                          |
 //! | [`Vec3::new`]                                | `SmVector3d(double, double, double)`, `Set`      |
 //! | [`Vec3::from_array`], `From<[f64; 3]>`       | `SmVector3d(double *)`                           |
 //! | [`Vec3::from_nl`]                            | `SmVector3d(double *, bool fromNL)`              |
-//! | [`Vec3::between`]                            | `SmVector3d(const SmPoint3d&, const SmPoint3d&)` |
+//! | `Point3 - Point3`                            | `SmVector3d(const SmPoint3d&, const SmPoint3d&)` |
 //! | `From<Vec2>`                                 | `SmVector3d(const SmVector2d&)`                  |
 //! | `Copy` / assignment, `core::mem::swap`       | copy constructor, `operator=`, `Copy`, `Swap`    |
 //! | [`Vec3::is_invalid`]                         | `IsUndef` (without `SM_UNDEF_DOUBLE`)            |
@@ -36,27 +42,27 @@
 //! | `Neg`, `Add`, `Sub`                          | `operator-(v)`, `operator+`, `operator-`         |
 //! | `Mul<f64>`, `f64 * Vec3`, `Div<f64>`         | `operator*(v, d)`, `operator*(d, v)`, `operator/` |
 //! | `AddAssign`, `SubAssign`, `MulAssign`, `DivAssign` | `operator+=`, `operator-=`, `operator*=`, `operator/=` |
-//! | [`Vec3::unitize`], [`Vec3::unitize_or_z`]    | `Unitize`                                        |
+//! | [`Vec3::normalized`]                         | `Unitize`                                        |
 //! | [`Vec3::triple_product`]                     | `TripleProduct`                                  |
 //! | [`Vec3::normal_in_plane`]                    | `NormalInPlane`                                  |
 //! | [`Vec3::max_dimension`], [`Vec3::min_dimension`] | `GetMaxDimension`, `GetMinDimension`         |
-//! | [`Vec3::is_parallel_to`], [`Vec3::parallel_sense`] | `IsParallelTo`                             |
+//! | [`Vec3::is_parallel_to`], [`Vec3::alignment`] | `IsParallelTo`                                  |
 //! | [`Vec3::is_perpendicular_to`]                | `IsPerpendicularTo`                              |
 //! | [`Vec3::project_to_plane`]                   | `ProjectToPlane`                                 |
-//! | [`Vec3::project_point_to_plane`]             | `ProjectPointToPlane`                            |
+//! | [`Point3::project_point_to_plane`]           | `ProjectPointToPlane`                            |
 //! | [`Vec3::rotate_project_to_plane`]            | `RotateProjectToPlane`                           |
-//! | [`Vec3::rotate_project_point_to_plane`]      | `RotateProjectPointToPlane`                      |
+//! | [`Point3::rotate_project_point_to_plane`]    | `RotateProjectPointToPlane`                      |
 //! | [`Vec3::perspective_project_to_plane`]       | `PerspectiveProjectToPlane`                      |
-//! | [`Vec3::perspective_project_point_to_plane`] | `PerspectiveProjectPointToPlane`                 |
-//! | [`Vec3::distance`], [`Vec3::distance_squared`] | `DistanceBetween`, `DistanceBetweenSquared`    |
-//! | [`Vec3::closer_than`]                        | `CloserThan`                                     |
+//! | [`Point3::perspective_project_point_to_plane`] | `PerspectiveProjectPointToPlane`                 |
+//! | [`Point3::distance`], [`Point3::distance_squared`] | `DistanceBetween`, `DistanceBetweenSquared` |
+//! | [`Point3::closer_than`]                      | `CloserThan`                                     |
 //! | [`Vec3::multiply`]                           | `Multiply`                                       |
 //! | [`Vec3::derivative_of_cross_product`]        | `DerivativeOfCrossProduct`                       |
 //! | [`Vec3::solve_two_linear_equations`]         | `SolveTwoLinearEquations`                        |
-//! | [`Vec3::component`], [`Vec3::component_mut`] | `operator[] const`, `operator[]`                 |
+//! | `v[Axis::X]` ([`Axis`], `Index`/`IndexMut`)   | `operator[] const`, `operator[]`                 |
 //! | [`Vec3::approx_eq`]                          | `operator==`                                     |
 //! | [`Vec3::is_inside_sector`]                   | `IsInsideSector`                                 |
-//! | [`Vec3::make_unit_ortho_vectors`], [`Vec3::unit_ortho_vectors_on_failure`] | `MakeUnitOrthoVectors` |
+//! | [`Vec3::make_unit_ortho_vectors`]            | `MakeUnitOrthoVectors`                           |
 //! | [`Vec3::rotate_vec_about_axis`]              | `RotateVecAboutAxis`                             |
 //! | [`Vec3::unitized_derivative`]                | `UnitizedDerivative`                             |
 //! | [`Vec3::unitized_derivative2`]               | `UnitizedDerivative2`                            |
@@ -71,21 +77,27 @@
 //! Deviations:
 //! - Out-params and `SmStatus` become return values. `SM_ERR_INVALID_INPUT` is
 //!   [`NumError::InvalidInput`]; `SM_ERR` is [`NumFailure`](crate::error::NumFailure) with code 1001.
+//! - Points and vectors are distinct types (upstream: one class); only affine operations
+//!   exist between them (`Point3 - Point3 = Vec3`, `Point3 ± Vec3 = Point3`).
 //! - `Unitize` updates the vector in place and, for a zero vector, stores `(0, 0, 1)`
-//!   and returns an error. [`Vec3::unitize`] returns the unit vector or the error;
-//!   [`Vec3::unitize_or_z`] returns upstream's in-place result whatever the status
-//!   (what callers that ignore the status see).
+//!   and returns an error. [`Vec3::normalized`] returns `Option<UnitVec3>`: `None` for a
+//!   vector of negligible length or with a component not finite; a vector whose squared
+//!   length overflows is scaled first, so it keeps its direction (upstream answers zero).
+//!   [`Vec3::make_unit_ortho_vectors`] inherits that, and answers no partial frame on
+//!   failure (upstream's out-params as written before the error are not reproduced).
+//! - The vector is generic over its scalar (`Vec3<T = f64>`): the series' and interval
+//!   vectors (upstream's `series::V3` and `interval_vector`) are `Vec3<T>` and `Vec3<Ivl>`.
 //! - `UnitizedDerivative2`/`3` return `SM_ERR` *and* the input derivatives for a
 //!   degenerate `self`; the Rust versions return `Err(inputs)` so callers that ignore
 //!   the status (`.unwrap_or_else(|d| d)`) see the same values.
-//! - `IsParallelTo`'s optional anti-parallel out-flag is [`Vec3::parallel_sense`].
+//! - Angles are radians. `IsParallelTo`'s degree tolerance and its optional anti-parallel
+//!   out-flag are [`Vec3::alignment`]'s radian threshold and [`Alignment`].
 //! - Upstream's tolerant `operator==` is [`Vec3::approx_eq`]; Rust `==`
 //!   (`PartialEq`) is exact component equality.
 //! - `Default` is the zero vector. Upstream's default constructor gives an unset vector
 //!   (all components `SM_UNDEF_DOUBLE`); here an unset vector is an `Option<Vec3>`.
-//! - `operator[] const` with an index above 2 returns `0.0` (its `SE(SM_ERR)` is a no-op
-//!   in the release build), as [`Vec3::component`] does. The non-const `operator[]`
-//!   dereferences `NULL`; [`Vec3::component_mut`] returns `SM_ERR` instead.
+//! - `operator[]` takes an [`Axis`], so no index is out of range. Upstream's `operator[] const`
+//!   answered `0.0` above 2 and the non-const one dereferenced `NULL`.
 //! - `operator/=` keeps the vector unchanged when `|d|` is negligible against every
 //!   component; `operator/` always divides. `DivAssign` and `Div` differ the same way.
 //! - Statuses ignored upstream through `SE(...)` (a no-op in the release build) are
@@ -96,8 +108,8 @@
 
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use crate::error::NumFailure;
-use crate::error::{NumError, Result};
+use crate::error::{NumError, NumFailure, Result};
+use crate::interval::Ivl;
 use crate::math::{BIG_DOUBLE, EFF_ZERO, EFF_ZERO_SQ, PI};
 use crate::tol;
 use crate::vector2d::{Point2, Vec2};
@@ -154,11 +166,6 @@ pub fn asin(x: f64) -> f64 {
     crate::fmath::asin(x)
 }
 
-/// `SM_DEG2RAD(a)` = `a * (SM_PI / 180.0)`.
-fn deg_to_rad(a: f64) -> f64 {
-    a * (PI / 180.0)
-}
-
 /// `SM_IS_VALID_DOUBLE(a)`: not NaN, finite and within `±SM_BIG_DOUBLE / 100`.
 fn is_valid_double(a: f64) -> bool {
     // `(a) == (a)` is `!a.is_nan()`.
@@ -167,22 +174,422 @@ fn is_valid_double(a: f64) -> bool {
         && ((-BIG_DOUBLE / 100.0)..=(BIG_DOUBLE / 100.0)).contains(&a)
 }
 
-// ---- Vec3 ----------------------------------------------------------------------------
+// ---- Types ---------------------------------------------------------------------------
 
-/// A 3D vector (`SmVector3d`). Also used for points, see [`Point3`].
+/// A 3D displacement or direction (`SmVector3d` in its vector role), over the scalar `T`:
+/// `f64` unless stated, [`Ivl`] for an enclosure, a series coefficient for a jet.
+///
+/// Linear: vectors add, subtract, negate and scale. A position is a [`Point3`].
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct Vec3 {
+pub struct Vec3<T = f64> {
     /// X component.
-    pub x: f64,
+    pub x: T,
     /// Y component.
-    pub y: f64,
+    pub y: T,
     /// Z component.
-    pub z: f64,
+    pub z: T,
 }
 
-/// A 3D point. Upstream uses one type for points and vectors
-/// (`#define SmPoint3d SmVector3d`), and so does the port.
-pub type Point3 = Vec3;
+/// A 3D position (`SmPoint3d`, one class with `SmVector3d` upstream), over the scalar `T`.
+///
+/// Affine: `point - point` is a [`Vec3`], `point + vec` and `point - vec` are points, and two
+/// points do not add. A weighted sum of points is [`Point3::affine_combination`].
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Point3<T = f64> {
+    /// X coordinate.
+    pub x: T,
+    /// Y coordinate.
+    pub y: T,
+    /// Z coordinate.
+    pub z: T,
+}
+
+/// A coordinate axis of 3-space: what indexes a [`Vec3`] or a [`Point3`] (`v[Axis::Y]`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Axis {
+    /// The x axis.
+    X,
+    /// The y axis.
+    Y,
+    /// The z axis.
+    Z,
+}
+
+impl Axis {
+    /// Every axis, in x, y, z order.
+    pub const ALL: [Self; 3] = [Self::X, Self::Y, Self::Z];
+}
+
+/// How two directions lie ([`Vec3::alignment`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Alignment {
+    /// Parallel and pointing the same way.
+    Same,
+    /// Parallel and pointing opposite ways.
+    Opposite,
+    /// Not parallel, or one has no direction.
+    Neither,
+}
+
+/// A direction: a [`Vec3`] of length 1 (its square within [`EFF_ZERO_SQ`] of 1), every
+/// component finite. Made by [`Vec3::normalized`]; read through `Deref` (every `Vec3`
+/// method) or [`UnitVec3::as_vec`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct UnitVec3(Vec3);
+
+impl<T> Vec3<T> {
+    /// Creates a vector from its components (`SmVector3d(dX, dY, dZ)`, `Set`).
+    #[must_use]
+    pub const fn new(x: T, y: T, z: T) -> Self {
+        Self { x, y, z }
+    }
+
+    /// The vector with each component mapped by `f`, in x, y, z order.
+    #[must_use]
+    pub fn map<U>(self, mut f: impl FnMut(T) -> U) -> Vec3<U> {
+        Vec3::new(f(self.x), f(self.y), f(self.z))
+    }
+
+    /// The point this displacement reaches from the origin: the same coordinates.
+    #[must_use]
+    pub fn to_point(self) -> Point3<T> {
+        Point3::new(self.x, self.y, self.z)
+    }
+}
+
+impl<T: Copy> Vec3<T> {
+    /// Creates a vector from `[x, y, z]` (`SmVector3d(double *)`).
+    #[must_use]
+    pub const fn from_array(a: [T; 3]) -> Self {
+        Self::new(a[0], a[1], a[2])
+    }
+
+    /// Components as an array `[x, y, z]`.
+    #[must_use]
+    pub const fn to_array(self) -> [T; 3] {
+        [self.x, self.y, self.z]
+    }
+
+    /// The vector with every component `v`.
+    #[must_use]
+    pub const fn splat(v: T) -> Self {
+        Self::new(v, v, v)
+    }
+}
+
+impl<T: Copy + Add<Output = T> + Mul<Output = T>> Vec3<T> {
+    /// Dot product, `(x*o.x) + (y*o.y) + (z*o.z)` (`Dot`).
+    #[must_use]
+    pub fn dot(self, o: Self) -> T {
+        (self.x * o.x) + (self.y * o.y) + (self.z * o.z)
+    }
+}
+
+impl<T: Copy + Sub<Output = T> + Mul<Output = T>> Vec3<T> {
+    /// Cross product `self × o` (upstream `operator*` on two vectors).
+    #[must_use]
+    pub fn cross(self, o: Self) -> Self {
+        Self::new(
+            (self.y * o.z) - (self.z * o.y),
+            (self.z * o.x) - (self.x * o.z),
+            (self.x * o.y) - (self.y * o.x),
+        )
+    }
+}
+
+impl<T> Point3<T> {
+    /// Creates a point from its coordinates.
+    #[must_use]
+    pub const fn new(x: T, y: T, z: T) -> Self {
+        Self { x, y, z }
+    }
+
+    /// The point with each coordinate mapped by `f`, in x, y, z order.
+    #[must_use]
+    pub fn map<U>(self, mut f: impl FnMut(T) -> U) -> Point3<U> {
+        Point3::new(f(self.x), f(self.y), f(self.z))
+    }
+
+    /// The displacement from the origin to this point: the same coordinates.
+    #[must_use]
+    pub fn to_vec(self) -> Vec3<T> {
+        Vec3::new(self.x, self.y, self.z)
+    }
+}
+
+impl<T: Copy> Point3<T> {
+    /// Creates a point from `[x, y, z]`.
+    #[must_use]
+    pub const fn from_array(a: [T; 3]) -> Self {
+        Self::new(a[0], a[1], a[2])
+    }
+
+    /// Coordinates as an array `[x, y, z]`.
+    #[must_use]
+    pub const fn to_array(self) -> [T; 3] {
+        [self.x, self.y, self.z]
+    }
+}
+
+/// Whether each of `x`, `y` and `z` is finite.
+fn finite(x: f64, y: f64, z: f64) -> bool {
+    x.is_finite() && y.is_finite() && z.is_finite()
+}
+
+impl Point3 {
+    /// The origin.
+    pub const ORIGIN: Self = Self::new(0.0, 0.0, 0.0);
+
+    /// True when any coordinate is NaN, infinite or beyond `±SM_BIG_DOUBLE / 100`
+    /// (`IsUndef`, less its `SM_UNDEF_DOUBLE` test).
+    #[must_use]
+    pub fn is_invalid(self) -> bool {
+        self.to_vec().is_invalid()
+    }
+
+    /// Whether every coordinate is finite.
+    #[must_use]
+    pub fn is_finite(self) -> bool {
+        finite(self.x, self.y, self.z)
+    }
+
+    /// Largest absolute coordinate (`GetMaxDimension`).
+    #[must_use]
+    pub fn max_dimension(self) -> f64 {
+        self.to_vec().max_dimension()
+    }
+
+    /// How far this point stands from `origin` along `direction`: `(self - origin) . direction`,
+    /// as many lengths as `direction` is long (a unit direction gives the distance itself).
+    /// Negative behind `origin`.
+    #[must_use]
+    pub fn distance_along(self, origin: Self, direction: Vec3) -> f64 {
+        (self - origin).dot(direction)
+    }
+
+    /// Distance between two points (`DistanceBetween`).
+    #[must_use]
+    pub fn distance(self, o: Self) -> f64 {
+        sqrt(self.distance_squared(o))
+    }
+
+    /// Squared distance between two points (`DistanceBetweenSquared`).
+    #[must_use]
+    pub fn distance_squared(self, o: Self) -> f64 {
+        (self.x - o.x) * (self.x - o.x)
+            + (self.y - o.y) * (self.y - o.y)
+            + (self.z - o.z) * (self.z - o.z)
+    }
+
+    /// True when the distance to `o` is at most `max` (`CloserThan`).
+    ///
+    /// Rejects early when any coordinate difference alone exceeds `max`.
+    #[must_use]
+    pub fn closer_than(self, max: f64, o: Self) -> bool {
+        !((self.x - o.x).abs() > max
+            || (self.y - o.y).abs() > max
+            || (self.z - o.z).abs() > max
+            || self.distance_squared(o) > max * max)
+    }
+
+    /// Upstream's tolerant equality (`operator==`) on points: the L1 distance is below
+    /// `EFF_ZERO * (1 + self.max_dimension())`. Not symmetric in general.
+    #[must_use]
+    pub fn approx_eq(self, o: Self) -> bool {
+        self.to_vec().approx_eq(o.to_vec())
+    }
+
+    /// The point `t` of the way from `self` to `q`: `self + (q - self) t`, exactly `self` at 0.
+    #[must_use]
+    pub fn lerp(self, q: Self, t: f64) -> Self {
+        self + (q - self) * t
+    }
+
+    /// The point halfway between `self` and `q`: `(self + q) / 2`, coordinate by coordinate.
+    #[must_use]
+    pub fn midpoint(self, q: Self) -> Self {
+        Self::new(
+            (self.x + q.x) * 0.5,
+            (self.y + q.y) * 0.5,
+            (self.z + q.z) * 0.5,
+        )
+    }
+
+    /// The weighted sum `Σ wᵢ pᵢ` of points whose weights sum to 1 (a barycentric or de Boor
+    /// step), summed coordinate by coordinate in the order given. The weights are not
+    /// checked: a sum other than 1 moves the result with the origin. The origin for no points.
+    #[must_use]
+    pub fn affine_combination(terms: &[(Self, f64)]) -> Self {
+        terms.iter().fold(Self::ORIGIN, |s, &(p, w)| {
+            Self::new(s.x + p.x * w, s.y + p.y * w, s.z + p.z * w)
+        })
+    }
+
+    /// The point projected along the unit `plane_normal` onto the plane through
+    /// `plane_point` (`ProjectPointToPlane`).
+    #[must_use]
+    pub fn project_point_to_plane(self, plane_point: Self, plane_normal: Vec3) -> Self {
+        let diff = self - plane_point;
+        self - plane_normal * diff.dot(plane_normal)
+    }
+
+    /// The point rotated about the line (`rotate_point`, unit `rotate_axis`) into the
+    /// plane through it spanned by `rotate_axis` and the unit `x_axis`
+    /// (`RotateProjectPointToPlane`).
+    #[must_use]
+    pub fn rotate_project_point_to_plane(
+        self,
+        rotate_point: Self,
+        rotate_axis: Vec3,
+        x_axis: Vec3,
+    ) -> Self {
+        let diff = self - rotate_point;
+        rotate_point + rotate_axis * diff.dot(rotate_axis) + x_axis * diff.dot(x_axis)
+    }
+
+    /// The point projected towards `eye_point` onto the viewing plane (`plane_point`,
+    /// unit `plane_normal`) (`PerspectiveProjectPointToPlane`).
+    #[must_use]
+    pub fn perspective_project_point_to_plane(
+        self,
+        plane_point: Self,
+        plane_normal: Vec3,
+        eye_point: Self,
+    ) -> Self {
+        let eye_plane_diff = plane_point - eye_point;
+        let eye_point_diff = self - eye_point;
+        eye_point
+            + eye_point_diff * (eye_plane_diff.dot(plane_normal) / eye_point_diff.dot(plane_normal))
+    }
+}
+
+impl<T> core::ops::Index<Axis> for Vec3<T> {
+    type Output = T;
+    fn index(&self, axis: Axis) -> &T {
+        match axis {
+            Axis::X => &self.x,
+            Axis::Y => &self.y,
+            Axis::Z => &self.z,
+        }
+    }
+}
+
+impl<T> core::ops::IndexMut<Axis> for Vec3<T> {
+    fn index_mut(&mut self, axis: Axis) -> &mut T {
+        match axis {
+            Axis::X => &mut self.x,
+            Axis::Y => &mut self.y,
+            Axis::Z => &mut self.z,
+        }
+    }
+}
+
+impl<T> core::ops::Index<Axis> for Point3<T> {
+    type Output = T;
+    fn index(&self, axis: Axis) -> &T {
+        match axis {
+            Axis::X => &self.x,
+            Axis::Y => &self.y,
+            Axis::Z => &self.z,
+        }
+    }
+}
+
+impl<T> core::ops::IndexMut<Axis> for Point3<T> {
+    fn index_mut(&mut self, axis: Axis) -> &mut T {
+        match axis {
+            Axis::X => &mut self.x,
+            Axis::Y => &mut self.y,
+            Axis::Z => &mut self.z,
+        }
+    }
+}
+
+impl UnitVec3 {
+    /// Unit X.
+    pub const X: Self = Self(Vec3::X);
+    /// Unit Y.
+    pub const Y: Self = Self(Vec3::Y);
+    /// Unit Z.
+    pub const Z: Self = Self(Vec3::Z);
+
+    /// The direction as a plain vector.
+    #[must_use]
+    pub const fn as_vec(self) -> Vec3 {
+        self.0
+    }
+}
+
+impl core::ops::Deref for UnitVec3 {
+    type Target = Vec3;
+    fn deref(&self) -> &Vec3 {
+        &self.0
+    }
+}
+
+impl From<UnitVec3> for Vec3 {
+    fn from(u: UnitVec3) -> Self {
+        u.0
+    }
+}
+
+/// The reverse direction, still unit.
+impl Neg for UnitVec3 {
+    type Output = Self;
+    fn neg(self) -> Self {
+        Self(-self.0)
+    }
+}
+
+/// The direction scaled to a vector of length `|d|`.
+impl Mul<f64> for UnitVec3 {
+    type Output = Vec3;
+    fn mul(self, d: f64) -> Vec3 {
+        self.0 * d
+    }
+}
+
+/// The direction scaled to a vector of length `|d|`.
+impl Mul<UnitVec3> for f64 {
+    type Output = Vec3;
+    fn mul(self, u: UnitVec3) -> Vec3 {
+        self * u.0
+    }
+}
+
+/// `x^2`, enclosed with a nonnegative lower bound.
+fn square(x: Ivl) -> Ivl {
+    let s = x * x;
+    Ivl::new(s.lo.max(0.0), s.hi)
+}
+
+/// Enclosures: each component an [`Ivl`] holding the true value. (Formerly
+/// `interval_vector`'s free functions over `[Ivl; 3]`, the same operations in the same order.)
+impl Vec3<Ivl> {
+    /// `|self|`, enclosed with nonnegative squared components.
+    #[must_use]
+    pub fn norm(self) -> Ivl {
+        (square(self.x) + square(self.y) + square(self.z)).sqrt()
+    }
+
+    /// A unit direction, enclosed, when the norm is finite and bounded away from zero.
+    #[must_use]
+    pub fn unit(self) -> Option<Self> {
+        let length = self.norm();
+        if !length.is_finite() || length.lo <= 0.0 {
+            return None;
+        }
+        Some(self.map(|v| v / length))
+    }
+
+    /// The componentwise interval hull of `self` and `o`.
+    #[must_use]
+    pub fn hull(self, o: Self) -> Self {
+        Self::new(self.x.hull(o.x), self.y.hull(o.y), self.z.hull(o.z))
+    }
+}
+
+// ---- Vec3 ----------------------------------------------------------------------------
 
 impl Vec3 {
     /// The zero vector.
@@ -216,22 +623,10 @@ impl Vec3 {
     /// orients it: the vector divided by its length. `None` for a vector no longer than
     /// `min_length` or one whose length is not finite.
     #[must_use]
-    pub fn unit_axis_direction(self, min_length: f64) -> Option<Self> {
+    pub fn unit_axis_direction(self, min_length: f64) -> Option<UnitVec3> {
         let length = self.length();
         (length > min_length && length.is_finite())
-            .then(|| (self / length).canonical_axis_direction())
-    }
-
-    /// Creates a vector from its components (`SmVector3d(dX, dY, dZ)`, `Set`).
-    #[must_use]
-    pub const fn new(x: f64, y: f64, z: f64) -> Self {
-        Self { x, y, z }
-    }
-
-    /// Creates a vector from `[x, y, z]` (`SmVector3d(double *)`).
-    #[must_use]
-    pub const fn from_array(a: [f64; 3]) -> Self {
-        Self::new(a[0], a[1], a[2])
+            .then(|| UnitVec3((self / length).canonical_axis_direction()))
     }
 
     /// Converts an NLib control point `[x, y, z, w]` (`SmVector3d(double *, bool)`):
@@ -248,19 +643,11 @@ impl Vec3 {
         v
     }
 
-    /// The vector from `start` to `end`, `end - start`
-    /// (`SmVector3d(const SmPoint3d&, const SmPoint3d&)`).
+    /// Whether every component is finite.
     #[must_use]
-    pub fn between(start: Point3, end: Point3) -> Self {
-        Self::new(end.x - start.x, end.y - start.y, end.z - start.z)
+    pub fn is_finite(self) -> bool {
+        finite(self.x, self.y, self.z)
     }
-
-    /// Components as an array `[x, y, z]`.
-    #[must_use]
-    pub const fn to_array(self) -> [f64; 3] {
-        [self.x, self.y, self.z]
-    }
-
     /// True when any component is NaN, infinite or beyond `±SM_BIG_DOUBLE / 100`
     /// (`IsUndef`, less its `SM_UNDEF_DOUBLE` test).
     #[must_use]
@@ -293,50 +680,27 @@ impl Vec3 {
         sqrt(self.length_squared())
     }
 
-    /// Dot product, `(x*o.x) + (y*o.y) + (z*o.z)` (`Dot`).
-    #[must_use]
-    pub fn dot(self, o: Self) -> f64 {
-        (self.x * o.x) + (self.y * o.y) + (self.z * o.z)
-    }
-
-    /// How far this point stands from `origin` along `direction`: `(self - origin) . direction`,
-    /// as many lengths as `direction` is long (a unit direction gives the distance itself).
-    /// Negative behind `origin`.
-    #[must_use]
-    pub fn distance_along(self, origin: Self, direction: Self) -> f64 {
-        (self - origin).dot(direction)
-    }
-
-    /// Cross product `self × o` (upstream `operator*` on two vectors).
-    #[must_use]
-    pub fn cross(self, o: Self) -> Self {
-        Self::new(
-            (self.y * o.z) - (self.z * o.y),
-            (self.z * o.x) - (self.x * o.z),
-            (self.x * o.y) - (self.y * o.x),
-        )
-    }
-
-    /// Unit vector in the same direction (`Unitize`).
+    /// The unit vector in this direction (`Unitize`): `None` for a vector whose squared
+    /// length is below [`EFF_ZERO_SQ`] or with a component that is not finite.
     ///
-    /// A vector whose squared length is within [`EFF_ZERO_SQ`] of 1 is returned
-    /// unchanged; one with squared length below [`EFF_ZERO_SQ`] is an error
-    /// (upstream then stores `(0, 0, 1)`, see [`Vec3::unitize_or_z`]).
-    pub fn unitize(self) -> Result<Self> {
+    /// A vector whose squared length is within [`EFF_ZERO_SQ`] of 1 is returned unchanged.
+    /// One whose squared length overflows is scaled first, as [`Vec3::length_and_unit`]
+    /// scales it, so every finite vector longer than the threshold has its direction.
+    #[must_use]
+    pub fn normalized(self) -> Option<UnitVec3> {
         let len_sq = self.length_squared();
-        if len_sq < EFF_ZERO_SQ {
-            return Err(NumError::InvalidInput {
-                operation: "geom::vector3d::Vec3::unitize",
-                reason: "zero-length vector",
-            });
+        if len_sq.is_finite() {
+            // A finite square means finite components.
+            (len_sq >= EFF_ZERO_SQ).then(|| UnitVec3(self.unitize_nonzero(len_sq)))
+        } else {
+            self.length_and_unit().map(|(_, unit)| unit)
         }
-        Ok(self.unitize_nonzero(len_sq))
     }
 
     /// Upstream's in-place `Unitize` result with the status ignored: the unit vector,
-    /// or `(0, 0, 1)` for a zero-length vector.
-    #[must_use]
-    pub fn unitize_or_z(self) -> Self {
+    /// or `(0, 0, 1)` for a zero-length vector; NaN or overflow as upstream gives them.
+    /// Kept private for the bodies ported with it; callers use [`Vec3::normalized`].
+    fn unit_or_z(self) -> Self {
         let len_sq = self.length_squared();
         if len_sq < EFF_ZERO_SQ {
             Self::Z
@@ -347,21 +711,23 @@ impl Vec3 {
 
     /// The length and the unit direction of a vector of any finite length (not upstream). The
     /// vector is first divided by its largest absolute coordinate, so its squared length lies
-    /// in `[1, 3]` and neither overflows nor underflows, then made unit as [`Vec3::unitize`]
+    /// in `[1, 3]` and neither overflows nor underflows, then made unit as [`Vec3::normalized`]
     /// makes it. The direction is exact at every finite length; the length is infinite past
     /// `f64::MAX` and rounds to 0 below the smallest positive `f64`.
     ///
     /// `None` for a coordinate that is not finite, or the zero vector.
     #[must_use]
-    pub fn length_and_unit(self) -> Option<(f64, Self)> {
-        let finite = self.x.is_finite() && self.y.is_finite() && self.z.is_finite();
+    pub fn length_and_unit(self) -> Option<(f64, UnitVec3)> {
         let scale = self.max_dimension();
-        if !(finite && scale > 0.0) {
+        if !(self.is_finite() && scale > 0.0) {
             return None;
         }
         let scaled = self / scale;
         let len_sq = scaled.length_squared();
-        Some((scale * sqrt(len_sq), scaled.unitize_nonzero(len_sq)))
+        Some((
+            scale * sqrt(len_sq),
+            UnitVec3(scaled.unitize_nonzero(len_sq)),
+        ))
     }
 
     fn unitize_nonzero(self, len_sq: f64) -> Self {
@@ -421,65 +787,76 @@ impl Vec3 {
         d
     }
 
-    /// True when `self` and `o` are parallel or anti-parallel within `ang_tol_deg`
-    /// degrees (`IsParallelTo`; upstream default [`crate::math::EFF_ZERO_DEG`]).
-    /// Zero-length vectors are parallel to nothing.
+    /// True when `self` and `o` are parallel or anti-parallel within `max_angle` radians
+    /// (`IsParallelTo`, whose tolerance is in degrees). Zero-length vectors are parallel to
+    /// nothing.
     #[must_use]
-    pub fn is_parallel_to(self, o: Self, ang_tol_deg: f64) -> bool {
-        self.parallel_sense(o, ang_tol_deg).0
+    pub fn is_parallel_to(self, o: Self, max_angle: f64) -> bool {
+        self.alignment(o, max_angle) != Alignment::Neither
     }
 
-    /// [`Vec3::is_parallel_to`] plus `IsParallelTo`'s anti-parallel out-flag: `Some(true)`
-    /// when the angle exceeds `PI/2`, `Some(false)` otherwise, `None` (flag untouched
-    /// upstream) when either vector has zero length.
+    /// How `self` and `o` lie: [`Alignment::Same`] or [`Alignment::Opposite`] when they are
+    /// parallel within `max_angle` radians, as their angle is at most or more than a right
+    /// angle; [`Alignment::Neither`] otherwise, and when either has zero length
+    /// (`IsParallelTo` with its anti-parallel out-flag).
     #[must_use]
-    pub fn parallel_sense(self, o: Self, ang_tol_deg: f64) -> (bool, Option<bool>) {
-        let mut parallel = false;
-        let mut anti = None;
-        if self.length_squared() > EFF_ZERO_SQ && o.length_squared() > EFF_ZERO_SQ {
-            // SE(): a failed AngleBetween leaves 0.0.
-            let mut ang = self.angle_between(o).unwrap_or(0.0);
-            if ang > PI / 2.0 {
-                ang = PI - ang;
-                anti = Some(true);
-            } else {
-                anti = Some(false);
+    pub fn alignment(self, o: Self, max_angle: f64) -> Alignment {
+        match self.angle_off_line(o) {
+            Some((ang, opposite)) if ang < max_angle => {
+                if opposite {
+                    Alignment::Opposite
+                } else {
+                    Alignment::Same
+                }
             }
-            if ang < deg_to_rad(ang_tol_deg) {
-                parallel = true;
-            }
+            _ => Alignment::Neither,
         }
-        (parallel, anti)
+    }
+
+    /// The angle between the lines of `self` and `o`, in `[0, PI/2]`, and whether they point
+    /// more than a right angle apart; `None` when either has zero length.
+    fn angle_off_line(self, o: Self) -> Option<(f64, bool)> {
+        if self.length_squared() <= EFF_ZERO_SQ || o.length_squared() <= EFF_ZERO_SQ {
+            return None;
+        }
+        // Both have a length, so only a non-finite one fails; it reads as angle 0, as the
+        // pin's ignored status left it.
+        let ang = self.angle_between(o).unwrap_or(0.0);
+        Some(if ang > PI / 2.0 {
+            (PI - ang, true)
+        } else {
+            (ang, false)
+        })
     }
 
     /// Not upstream: this direction, reversed when it points more than a right angle away from
-    /// `like` ([`Vec3::parallel_sense`]'s anti-parallel flag): a line's direction given the sense
+    /// `like` (by their angle, as [`Vec3::alignment`] reads it): a line's direction given the sense
     /// of another, as a turn about an edge found again keeps the sense it was picked with.
     /// `None` when either has zero length or a coordinate that is not finite. The two are
     /// compared scaled by their largest coordinate, so a vector whose squared length overflows
     /// still has its sense.
     #[must_use]
     pub fn with_sense_of(self, like: Self) -> Option<Self> {
-        let finite = |v: Self| v.x.is_finite() && v.y.is_finite() && v.z.is_finite();
-        if !finite(self) || !finite(like) {
+        if !self.is_finite() || !like.is_finite() {
             return None;
         }
         if self.length_squared() <= EFF_ZERO_SQ || like.length_squared() <= EFF_ZERO_SQ {
             return None;
         }
         let scaled = |v: Self| v * (1.0 / v.x.abs().max(v.y.abs()).max(v.z.abs()));
-        let anti = scaled(self).parallel_sense(scaled(like), 0.0).1?;
-        Some(if anti { -self } else { self })
+        let (_, opposite) = scaled(self).angle_off_line(scaled(like))?;
+        Some(if opposite { -self } else { self })
     }
 
-    /// True when `self` and `o` are perpendicular within `ang_tol_deg` degrees
-    /// (`IsPerpendicularTo`). Zero-length vectors are perpendicular to nothing.
+    /// True when `self` and `o` are perpendicular within `max_angle` radians
+    /// (`IsPerpendicularTo`, whose tolerance is in degrees). Zero-length vectors are
+    /// perpendicular to nothing.
     #[must_use]
-    pub fn is_perpendicular_to(self, o: Self, ang_tol_deg: f64) -> bool {
+    pub fn is_perpendicular_to(self, o: Self, max_angle: f64) -> bool {
         if self.length_squared() > EFF_ZERO_SQ && o.length_squared() > EFF_ZERO_SQ {
             // SE(): a failed AngleBetween leaves 0.0.
             let ang = self.angle_between(o).unwrap_or(0.0);
-            if (ang - PI / 2.0).abs() < deg_to_rad(ang_tol_deg) {
+            if (ang - PI / 2.0).abs() < max_angle {
                 return true;
             }
         }
@@ -493,33 +870,11 @@ impl Vec3 {
         self - plane_normal * self.dot(plane_normal)
     }
 
-    /// The point projected along the unit `plane_normal` onto the plane through
-    /// `plane_point` (`ProjectPointToPlane`).
-    #[must_use]
-    pub fn project_point_to_plane(self, plane_point: Point3, plane_normal: Self) -> Point3 {
-        let diff = self - plane_point;
-        self - plane_normal * diff.dot(plane_normal)
-    }
-
     /// The vector rotated about the unit `rotate_axis` into the plane spanned by
     /// `rotate_axis` and the unit `x_axis` (`RotateProjectToPlane`).
     #[must_use]
     pub fn rotate_project_to_plane(self, rotate_axis: Self, x_axis: Self) -> Self {
         rotate_axis * self.dot(rotate_axis) + x_axis * self.dot(x_axis)
-    }
-
-    /// The point rotated about the line (`rotate_point`, unit `rotate_axis`) into the
-    /// plane through it spanned by `rotate_axis` and the unit `x_axis`
-    /// (`RotateProjectPointToPlane`).
-    #[must_use]
-    pub fn rotate_project_point_to_plane(
-        self,
-        rotate_point: Point3,
-        rotate_axis: Self,
-        x_axis: Self,
-    ) -> Point3 {
-        let diff = self - rotate_point;
-        rotate_point + rotate_axis * diff.dot(rotate_axis) + x_axis * diff.dot(x_axis)
     }
 
     /// The vector based at `base_point`, projected towards `eye_point` onto the
@@ -538,46 +893,6 @@ impl Vec3 {
         let eye_vec_diff = base_point + self - eye_point;
         eye_vec_diff * (eye_plane_diff.dot(plane_normal) / eye_vec_diff.dot(plane_normal))
             - eye_point_diff * (eye_plane_diff.dot(plane_normal) / eye_point_diff.dot(plane_normal))
-    }
-
-    /// The point projected towards `eye_point` onto the viewing plane (`plane_point`,
-    /// unit `plane_normal`) (`PerspectiveProjectPointToPlane`).
-    #[must_use]
-    pub fn perspective_project_point_to_plane(
-        self,
-        plane_point: Point3,
-        plane_normal: Self,
-        eye_point: Point3,
-    ) -> Point3 {
-        let eye_plane_diff = plane_point - eye_point;
-        let eye_point_diff = self - eye_point;
-        eye_point
-            + eye_point_diff * (eye_plane_diff.dot(plane_normal) / eye_point_diff.dot(plane_normal))
-    }
-
-    /// Distance between two points (`DistanceBetween`).
-    #[must_use]
-    pub fn distance(self, o: Self) -> f64 {
-        sqrt(self.distance_squared(o))
-    }
-
-    /// Squared distance between two points (`DistanceBetweenSquared`).
-    #[must_use]
-    pub fn distance_squared(self, o: Self) -> f64 {
-        (self.x - o.x) * (self.x - o.x)
-            + (self.y - o.y) * (self.y - o.y)
-            + (self.z - o.z) * (self.z - o.z)
-    }
-
-    /// True when the distance to `o` is at most `max` (`CloserThan`).
-    ///
-    /// Rejects early when any coordinate difference alone exceeds `max`.
-    #[must_use]
-    pub fn closer_than(self, max: f64, o: Self) -> bool {
-        !((self.x - o.x).abs() > max
-            || (self.y - o.y).abs() > max
-            || (self.z - o.z).abs() > max
-            || self.distance_squared(o) > max * max)
     }
 
     /// Component-wise product (`Multiply`).
@@ -626,35 +941,6 @@ impl Vec3 {
         ))
     }
 
-    /// Component `0` (`x`), `1` (`y`) or `2` (`z`); `0.0` for any other index
-    /// (`operator[] const`).
-    #[must_use]
-    pub fn component(self, index: usize) -> f64 {
-        match index {
-            0 => self.x,
-            1 => self.y,
-            2 => self.z,
-            _ => 0.0,
-        }
-    }
-
-    /// Mutable component `0` (`x`), `1` (`y`) or `2` (`z`) (`operator[]`).
-    ///
-    /// # Errors
-    ///
-    /// `SM_ERR` ([`NumFailure`](crate::error::NumFailure)) for any other index.
-    pub fn component_mut(&mut self, index: usize) -> Result<&mut f64> {
-        match index {
-            0 => Ok(&mut self.x),
-            1 => Ok(&mut self.y),
-            2 => Ok(&mut self.z),
-            _ => Err(NumError::failed(
-                "geom::vector3d::Vec3::component_mut",
-                NumFailure::IndexOutOfRange { index, len: 3 },
-            )),
-        }
-    }
-
     /// Upstream's tolerant equality (`operator==`): the L1 distance is below
     /// `EFF_ZERO * (1 + self.max_dimension())`. Not symmetric in general.
     #[must_use]
@@ -670,7 +956,7 @@ impl Vec3 {
     #[must_use]
     pub fn is_inside_sector(self, bound1: Self, binormal1: Self, bound2: Self) -> bool {
         // SE(sNorm.Unitize()): a zero normal becomes (0,0,1).
-        let norm = bound1.cross(binormal1).unitize_or_z();
+        let norm = bound1.cross(binormal1).unit_or_z();
         // SE(...CCWAngleBetween(...)): it only fails through AngleBetween on
         // zero-length projections, which it rejects (as 0.0) before that call, so the
         // fallback is never used.
@@ -696,61 +982,41 @@ impl Vec3 {
     /// An orthonormal frame `[x, y, z]` with `x` along `self` (`MakeUnitOrthoVectors`).
     ///
     /// `y` lies in the plane of `self` and `y_reference` (on its side) when that is
-    /// given and not parallel to `self`; otherwise `y` is chosen arbitrarily
-    /// (perpendicular to `x`, trying `(0,1,0)` then `(0,0,1)`). `z = x × y`.
+    /// given, has a direction and is not parallel to `self` (the cross product of the two
+    /// unit vectors has length); otherwise `y` is chosen arbitrarily (perpendicular to `x`,
+    /// trying `(0,1,0)` then `(0,0,1)`). `z = x × y`.
     ///
     /// # Errors
     ///
-    /// [`NumError::InvalidInput`] when `self` has zero length; `SM_ERR`
-    /// ([`NumFailure`](crate::error::NumFailure)) if no perpendicular can be found.
-    pub fn make_unit_ortho_vectors(self, y_reference: Option<Self>) -> Result<[Self; 3]> {
-        let x_axis = self.unitize()?;
-
-        if let Some(y_ref) = y_reference {
-            let z_axis = x_axis.cross(y_ref);
-            let len_sq = z_axis.length_squared();
-            if len_sq > EFF_ZERO_SQ {
-                let z_axis = z_axis.unitize_or_z();
-                let y_axis = z_axis.cross(x_axis).unitize_or_z();
-                return Ok([x_axis, y_axis, z_axis]);
-            }
+    /// [`NumError::InvalidInput`] when `self` has no direction ([`Vec3::normalized`] is
+    /// `None`). Upstream also fails, with `SM_ERR`, for a finite `self` whose squared length
+    /// overflows; here that has its direction. Upstream crosses with `y_reference` as
+    /// given, so one too long passes for parallel (its cross product overflows) and one
+    /// too short for parallel too; here only its direction counts.
+    pub fn make_unit_ortho_vectors(self, y_reference: Option<Self>) -> Result<[UnitVec3; 3]> {
+        let x_axis = self.normalized().ok_or(NumError::InvalidInput {
+            operation: "geom::vector3d::Vec3::make_unit_ortho_vectors",
+            reason: "zero-length or non-finite vector",
+        })?;
+        let frame = |z_axis: UnitVec3| {
+            let y_axis = UnitVec3(z_axis.cross(*x_axis).unit_or_z());
+            [x_axis, y_axis, z_axis]
+        };
+        if let Some(z_axis) = y_reference
+            .and_then(Self::normalized)
+            .map(|y_ref| x_axis.cross(*y_ref))
+            .filter(|z_axis| z_axis.length_squared() > EFF_ZERO_SQ)
+            .and_then(Self::normalized)
+        {
+            return Ok(frame(z_axis));
         }
-        // If made it to here choose arbitrary axis
-        let mut z_axis = x_axis.cross(Self::new(0.0, 1.0, 0.0));
-        let len_sq = z_axis.length_squared();
-        if len_sq < EFF_ZERO_SQ {
-            z_axis = x_axis.cross(Self::new(0.0, 0.0, 1.0));
-            if z_axis.length_squared() < EFF_ZERO_SQ {
-                // reached when `self` overflows: unitizing a vector whose squared
-                // length is infinite gives a zero vector
-                return Err(NumError::failed(
-                    "geom::vector3d::Vec3::make_unit_ortho_vectors",
-                    NumFailure::NoPerpendicular,
-                ));
-            }
+        // If made it to here choose arbitrary axis. A unit `x` is square to `(0,1,0)` or
+        // `(0,0,1)` within rounding, so one of the two crosses has length.
+        let mut z_axis = x_axis.cross(Self::Y);
+        if z_axis.length_squared() < EFF_ZERO_SQ {
+            z_axis = x_axis.cross(Self::Z);
         }
-        let z_axis = z_axis.unitize_or_z();
-        let y_axis = z_axis.cross(x_axis).unitize_or_z();
-        Ok([x_axis, y_axis, z_axis])
-    }
-
-    /// The out-params upstream's `MakeUnitOrthoVectors` has written when it fails
-    /// (when [`Vec3::make_unit_ortho_vectors`] returns an error), as `[x, y, z]`
-    /// with `None` for an out-param left unchanged: only `x` (`Unitize`'s
-    /// `(0, 0, 1)`) for a zero-length `self`; otherwise the unit `x` and
-    /// `z = x × (0, 0, 1)`, written before `SER(SM_ERR)` (reached when the unit
-    /// vector underflows to zero because `|self|^2` overflows). Callers that pass
-    /// their own members as out-params use this to keep upstream's partial state.
-    #[must_use]
-    pub fn unit_ortho_vectors_on_failure(self) -> [Option<Self>; 3] {
-        match self.unitize() {
-            Ok(x_axis) => [
-                Some(x_axis),
-                None,
-                Some(x_axis.cross(Self::new(0.0, 0.0, 1.0))),
-            ],
-            Err(_) => [Some(self.unitize_or_z()), None, None],
-        }
+        Ok(frame(UnitVec3(z_axis.unit_or_z())))
     }
 
     /// The vector rotated by `ang_rad` about `axis` (right-handed; `axis` need not be
@@ -761,7 +1027,7 @@ impl Vec3 {
         let sin = crate::fmath::sin(ang_rad);
 
         // avoid errors - unitize the input (status ignored)
-        let z = axis.unitize_or_z();
+        let z = axis.unit_or_z();
 
         // Get the component perp to the rotation axis
         let dot = self.dot(z);
@@ -957,8 +1223,7 @@ impl Vec3 {
     /// [`NumError::InvalidInput`] for a non-finite vector, or a `normal` or `line` along
     /// the axis (it has no direction square to it).
     pub fn square_turn(self, normal: Self, line: Self) -> Result<f64> {
-        let finite = |v: Self| v.x.is_finite() && v.y.is_finite() && v.z.is_finite();
-        if !(finite(self) && finite(normal) && finite(line)) {
+        if !(self.is_finite() && normal.is_finite() && line.is_finite()) {
             return Err(NumError::InvalidInput {
                 operation: "geom::vector3d::Vec3::square_turn",
                 reason: "non-finite vector",
@@ -1002,16 +1267,22 @@ impl Vec3 {
         if vec.length_squared() < EFF_ZERO_SQ {
             return true;
         }
-        let vec = vec.unitize_or_z();
-        let dir1 = self.unitize_or_z();
-        let dir2 = end_vec.unitize_or_z();
+        let vec = vec.unit_or_z();
+        let dir1 = self.unit_or_z();
+        let dir2 = end_vec.unit_or_z();
 
         1.0 - vec.dot(dir1).abs() < EFF_ZERO && 1.0 - vec.dot(dir2).abs() < EFF_ZERO
     }
 }
 
-impl From<[f64; 3]> for Vec3 {
-    fn from(a: [f64; 3]) -> Self {
+impl<T: Copy> From<[T; 3]> for Vec3<T> {
+    fn from(a: [T; 3]) -> Self {
+        Self::from_array(a)
+    }
+}
+
+impl<T: Copy> From<[T; 3]> for Point3<T> {
+    fn from(a: [T; 3]) -> Self {
         Self::from_array(a)
     }
 }
@@ -1023,30 +1294,37 @@ impl From<Vec2> for Vec3 {
     }
 }
 
-impl Neg for Vec3 {
+/// The point of the plane `z = 0` with the same `x` and `y`.
+impl From<Point2> for Point3 {
+    fn from(p: Point2) -> Self {
+        Self::new(p.x, p.y, 0.0)
+    }
+}
+
+impl<T: Neg<Output = T>> Neg for Vec3<T> {
     type Output = Self;
     fn neg(self) -> Self {
         Self::new(-self.x, -self.y, -self.z)
     }
 }
 
-impl Add for Vec3 {
+impl<T: Add<Output = T>> Add for Vec3<T> {
     type Output = Self;
     fn add(self, o: Self) -> Self {
         Self::new(self.x + o.x, self.y + o.y, self.z + o.z)
     }
 }
 
-impl Sub for Vec3 {
+impl<T: Sub<Output = T>> Sub for Vec3<T> {
     type Output = Self;
     fn sub(self, o: Self) -> Self {
         Self::new(self.x - o.x, self.y - o.y, self.z - o.z)
     }
 }
 
-impl Mul<f64> for Vec3 {
+impl<T: Copy + Mul<Output = T>> Mul<T> for Vec3<T> {
     type Output = Self;
-    fn mul(self, d: f64) -> Self {
+    fn mul(self, d: T) -> Self {
         Self::new(self.x * d, self.y * d, self.z * d)
     }
 }
@@ -1059,14 +1337,14 @@ impl Mul<Vec3> for f64 {
 }
 
 /// `operator/(v, d)`: plain component division (no guard against tiny `d`).
-impl Div<f64> for Vec3 {
+impl<T: Copy + Div<Output = T>> Div<T> for Vec3<T> {
     type Output = Self;
-    fn div(self, d: f64) -> Self {
+    fn div(self, d: T) -> Self {
         Self::new(self.x / d, self.y / d, self.z / d)
     }
 }
 
-impl AddAssign for Vec3 {
+impl<T: AddAssign> AddAssign for Vec3<T> {
     fn add_assign(&mut self, o: Self) {
         self.x += o.x;
         self.y += o.y;
@@ -1074,7 +1352,7 @@ impl AddAssign for Vec3 {
     }
 }
 
-impl SubAssign for Vec3 {
+impl<T: SubAssign> SubAssign for Vec3<T> {
     fn sub_assign(&mut self, o: Self) {
         self.x -= o.x;
         self.y -= o.y;
@@ -1082,8 +1360,8 @@ impl SubAssign for Vec3 {
     }
 }
 
-impl MulAssign<f64> for Vec3 {
-    fn mul_assign(&mut self, d: f64) {
+impl<T: Copy + MulAssign> MulAssign<T> for Vec3<T> {
+    fn mul_assign(&mut self, d: T) {
         self.x *= d;
         self.y *= d;
         self.z *= d;
@@ -1104,6 +1382,54 @@ impl DivAssign<f64> for Vec3 {
         self.x /= d;
         self.y /= d;
         self.z /= d;
+    }
+}
+
+/// A point moved by a displacement.
+impl<T: Add<Output = T>> Add<Vec3<T>> for Point3<T> {
+    type Output = Self;
+    fn add(self, v: Vec3<T>) -> Self {
+        Self::new(self.x + v.x, self.y + v.y, self.z + v.z)
+    }
+}
+
+/// A point moved back by a displacement.
+impl<T: Sub<Output = T>> Sub<Vec3<T>> for Point3<T> {
+    type Output = Self;
+    fn sub(self, v: Vec3<T>) -> Self {
+        Self::new(self.x - v.x, self.y - v.y, self.z - v.z)
+    }
+}
+
+/// The displacement from `o` to `self`.
+impl<T: Sub<Output = T>> Sub for Point3<T> {
+    type Output = Vec3<T>;
+    fn sub(self, o: Self) -> Vec3<T> {
+        Vec3::new(self.x - o.x, self.y - o.y, self.z - o.z)
+    }
+}
+
+impl<T: AddAssign> AddAssign<Vec3<T>> for Point3<T> {
+    fn add_assign(&mut self, v: Vec3<T>) {
+        self.x += v.x;
+        self.y += v.y;
+        self.z += v.z;
+    }
+}
+
+impl<T: SubAssign> SubAssign<Vec3<T>> for Point3<T> {
+    fn sub_assign(&mut self, v: Vec3<T>) {
+        self.x -= v.x;
+        self.y -= v.y;
+        self.z -= v.z;
+    }
+}
+
+/// A point moved along a direction by its unit length.
+impl Add<UnitVec3> for Point3 {
+    type Output = Self;
+    fn add(self, u: UnitVec3) -> Self {
+        self + u.0
     }
 }
 
@@ -1159,9 +1485,9 @@ mod tests {
 
     #[test]
     fn distance_along_is_signed_and_ignores_the_sideways_offset() {
-        let (o, d) = (Vec3::new(1.0, 2.0, 3.0), Vec3::new(0.0, 1.0, 0.0));
-        assert!((Vec3::new(9.0, 6.0, -4.0).distance_along(o, d) - 4.0).abs() < 1e-12);
-        assert!((Vec3::new(1.0, -1.0, 3.0).distance_along(o, d) + 3.0).abs() < 1e-12);
+        let (o, d) = (Point3::new(1.0, 2.0, 3.0), Vec3::new(0.0, 1.0, 0.0));
+        assert!((Point3::new(9.0, 6.0, -4.0).distance_along(o, d) - 4.0).abs() < 1e-12);
+        assert!((Point3::new(1.0, -1.0, 3.0).distance_along(o, d) + 3.0).abs() < 1e-12);
         assert_eq!(o.distance_along(o, d), 0.0);
     }
 
@@ -1224,23 +1550,22 @@ mod tests {
         );
     }
 
-    /// Fuzz regression: when `|v|^2` overflows, the unit vector underflows to
-    /// zero and upstream fails after writing the x and z out-params.
+    /// Fuzz regression: when `|v|^2` overflows, upstream's unit vector underflows to zero
+    /// and it fails; here the vector is scaled first, so it has a frame.
     #[test]
     fn ortho_vectors_on_overflow() {
         let v = Vec3::new(1.0, -1.0, -1e300);
-        assert!(v.make_unit_ortho_vectors(None).is_err());
-        let [x, y, z] = v.unit_ortho_vectors_on_failure();
-        let x = x.unwrap();
-        assert_eq!(x.length_squared(), 0.0);
-        assert!(y.is_none());
-        assert_eq!(z, Some(x.cross(Vec3::new(0.0, 0.0, 1.0))));
-        assert_eq!(
-            Vec3::ZERO.unit_ortho_vectors_on_failure(),
-            [Some(Vec3::Z), None, None]
-        );
+        let [x, y, z] = v.make_unit_ortho_vectors(None).unwrap();
+        assert!((x.as_vec() + Vec3::Z).length() < 1e-15);
+        for (a, b) in [(x, y), (y, z), (z, x)] {
+            assert!(a.dot(*b).abs() < 1e-15);
+        }
+        assert!(Vec3::ZERO.make_unit_ortho_vectors(None).is_err());
+        assert!(Vec3::new(f64::NAN, 0.0, 1.0)
+            .make_unit_ortho_vectors(None)
+            .is_err());
     }
-    use crate::math::EFF_ZERO_DEG;
+    use crate::math::EFF_ZERO_RAD;
 
     fn close(a: f64, b: f64) -> bool {
         (a - b).abs() <= EFF_ZERO
@@ -1265,21 +1590,21 @@ mod tests {
         v6 -= v4;
         assert!(close3(v6, 3.0, 4.0, 0.0));
 
-        v3 = v3.unitize().unwrap();
+        v3 = v3.normalized().unwrap().as_vec();
         assert!(close(v3.length(), 1.0));
         assert!(close(v3.dot(v3), 1.0));
 
         let v8 = Vec3::new(5.0, 1.0, 2.0);
         let v9 = Vec3::new(1.0, 3.0, 6.0);
-        assert!(close(v8.distance(v9), 6.0));
+        assert!(close(v8.to_point().distance(v9.to_point()), 6.0));
         assert!(close(v8.angle_between(v9).unwrap(), 1.0022805307621478));
         v5 = Vec3::new(0.0, 0.0, 1.0);
         assert!(close(
             v5.ccw_angle_between(v8, v9).unwrap(),
             1.0516502125483738
         ));
-        assert!(close(v8.distance_squared(v4), 93.0));
-        assert!(!v8.closer_than(1.0, v9));
+        assert!(close(v8.to_point().distance_squared(v4.to_point()), 93.0));
+        assert!(!v8.to_point().closer_than(1.0, v9.to_point()));
         assert!(close(v8.min_dimension(), 1.0));
         assert!(close(v8.max_dimension(), 5.0));
 
@@ -1294,13 +1619,16 @@ mod tests {
         v11 /= 2.0;
         assert!(close3(v11, 15.0, 3.0, 6.0));
         assert!(close3(v8.multiply(v9), 5.0, 3.0, 12.0));
-        assert_eq!(v8.component(0), 5.0);
-        *v11.component_mut(1).unwrap() = 7.0;
+        assert_eq!(v8[Axis::X], 5.0);
+        v11[Axis::Y] = 7.0;
         assert_eq!(v11.y, 7.0);
+        let mut p = v8.to_point();
+        p[Axis::Z] = -1.0;
+        assert_eq!(Axis::ALL.map(|a| p[a]), [5.0, 1.0, -1.0]);
 
         let mut tmp0 = Vec3::new(0.0, 0.0, 1.0);
         let mut tmp1 = Vec3::new(0.0, 1.0, 0.0);
-        let mut v21 = Vec3::between(tmp0, tmp1);
+        let mut v21 = tmp1.to_point() - tmp0.to_point();
         assert!(close3(v21, 0.0, 1.0, -1.0));
         let mut v22 = Vec3::from(Vec2::new(1.0, 0.0));
         assert!(close3(v22, 1.0, 0.0, 0.0));
@@ -1308,10 +1636,10 @@ mod tests {
 
         tmp0 = Vec3::new(1.0, 1.0, 1.0);
         tmp1 = Vec3::new(3.0, 3.0, 3.0);
-        assert!(tmp0.is_colinear_with(tmp1, Vec3::ZERO, Vec3::new(1.0, 1.0, 1.0)));
-        assert!(tmp0.is_parallel_to(tmp1, 0.000001));
+        assert!(tmp0.is_colinear_with(tmp1, Point3::ORIGIN, Point3::new(1.0, 1.0, 1.0)));
+        assert!(tmp0.is_parallel_to(tmp1, 1.0e-6_f64.to_radians()));
         tmp1 = Vec3::new(-3.0, 2.0, 1.0);
-        assert!(tmp0.is_perpendicular_to(tmp1, 0.000001));
+        assert!(tmp0.is_perpendicular_to(tmp1, 1.0e-6_f64.to_radians()));
         v21 = Vec3::new(0.0, 2.0, 1.0);
         assert!(tmp0.is_inside_sector(tmp1, v21, v22));
         assert!(close(tmp0.triple_product(v21, v22), -1.0));
@@ -1319,15 +1647,17 @@ mod tests {
         tmp0 = Vec3::new(0.0, 1.0, 0.0);
         tmp1 = Vec3::new(0.0, 2.0, 1.0);
         let [x, y, z] = tmp0.make_unit_ortho_vectors(Some(tmp1)).unwrap();
-        assert!(close3(x, 0.0, 1.0, 0.0));
-        assert!(close3(y, 0.0, 0.0, 1.0));
-        assert!(close3(z, 1.0, 0.0, 0.0));
-        v22 = y;
+        assert!(close3(*x, 0.0, 1.0, 0.0));
+        assert!(close3(*y, 0.0, 0.0, 1.0));
+        assert!(close3(*z, 1.0, 0.0, 0.0));
+        v22 = *y;
 
-        tmp1 = tmp1.unitize_or_z();
+        tmp1 = tmp1.unit_or_z();
         assert!(close3(tmp0.project_to_plane(tmp1), 0.0, 0.2, -0.4));
         assert!(close3(
-            tmp0.project_point_to_plane(v22, tmp1),
+            tmp0.to_point()
+                .project_point_to_plane(v22.to_point(), tmp1)
+                .to_vec(),
             0.0,
             0.6,
             -0.2
@@ -1371,18 +1701,21 @@ mod tests {
     }
 
     #[test]
-    fn unitize_edge_cases() {
-        assert!(matches!(
-            Vec3::ZERO.unitize(),
-            Err(NumError::InvalidInput { .. })
-        ));
-        assert_eq!(Vec3::new(1e-13, 0.0, 0.0).unitize_or_z(), Vec3::Z);
+    fn normalized_edge_cases() {
+        assert_eq!(Vec3::ZERO.normalized(), None);
+        assert_eq!(Vec3::new(1e-13, 0.0, 0.0).normalized(), None);
+        assert_eq!(Vec3::new(1e-13, 0.0, 0.0).unit_or_z(), Vec3::Z);
         let n = Vec3::new(0.6, 0.0, 0.8);
-        assert_eq!(n.unitize().unwrap(), n);
+        assert_eq!(n.normalized().unwrap().as_vec(), n);
         assert_eq!(
-            Vec3::new(3.0, 0.0, 4.0).unitize().unwrap(),
+            Vec3::new(3.0, 0.0, 4.0).normalized().unwrap().as_vec(),
             Vec3::new(0.6, 0.0, 0.8)
         );
+        // Not finite: no direction. Overflowing square: scaled, so it has one.
+        assert_eq!(Vec3::new(f64::NAN, 0.0, 1.0).normalized(), None);
+        assert_eq!(Vec3::new(0.0, f64::INFINITY, 1.0).normalized(), None);
+        let big = Vec3::new(0.0, 3e200, -4e200).normalized().unwrap();
+        assert!((big.as_vec() - Vec3::new(0.0, 0.6, -0.8)).length() < 1e-15);
     }
 
     #[test]
@@ -1392,14 +1725,14 @@ mod tests {
         for s in [1.0, 1e-200, 1e200, 1e-300, 1e300] {
             let (length, u) = Vec3::new(3.0 * s, 0.0, 4.0 * s).length_and_unit().unwrap();
             assert!((length / s - 5.0).abs() < 1e-12, "{s:e}: {length:e}");
-            assert!((u - unit).length() < 1e-15, "{s:e}: {u:?}");
+            assert!((*u - unit).length() < 1e-15, "{s:e}: {u:?}");
         }
         let (length, u) = Vec3::new(f64::MAX, f64::MAX, 0.0)
             .length_and_unit()
             .unwrap();
         assert_eq!(length, f64::INFINITY);
         let half = core::f64::consts::FRAC_1_SQRT_2;
-        assert!((u - Vec3::new(half, half, 0.0)).length() < 1e-15, "{u:?}");
+        assert!((*u - Vec3::new(half, half, 0.0)).length() < 1e-15, "{u:?}");
         for v in [
             Vec3::ZERO,
             Vec3::new(-0.0, 0.0, -0.0),
@@ -1441,7 +1774,11 @@ mod tests {
     /// was given; a vector too short or not finite has no direction.
     #[test]
     fn a_unit_axis_direction_is_unit_and_oriented() {
-        let unit = |x, y, z| Vec3::new(x, y, z).unit_axis_direction(1e-9);
+        let unit = |x, y, z| {
+            Vec3::new(x, y, z)
+                .unit_axis_direction(1e-9)
+                .map(UnitVec3::as_vec)
+        };
         assert_eq!(unit(0.0, -2.0, 0.0), Some(Vec3::Y));
         assert_eq!(unit(0.0, 0.0, 4.0), Some(Vec3::Z));
         assert_eq!(unit(-3.0, 4.0, 0.0), Some(Vec3::new(-0.6, 0.8, 0.0)));
@@ -1459,12 +1796,14 @@ mod tests {
         assert_eq!(Vec3::ZERO.unitized_derivative2(d, -d), Err([d, -d]));
         assert_eq!(Vec3::ZERO.unitized_derivative3(d, d, d), Err([d, d, d]));
         // Zero vectors are neither parallel nor perpendicular.
-        assert_eq!(Vec3::ZERO.parallel_sense(Vec3::X, 1.0), (false, None));
+        assert_eq!(Vec3::ZERO.alignment(Vec3::X, 1.0), Alignment::Neither);
         assert!(!Vec3::X.is_perpendicular_to(Vec3::ZERO, 1.0));
         assert_eq!(
-            Vec3::X.parallel_sense(-Vec3::X, EFF_ZERO_DEG),
-            (true, Some(true))
+            Vec3::X.alignment(-Vec3::X, EFF_ZERO_RAD),
+            Alignment::Opposite
         );
+        assert_eq!(Vec3::X.alignment(Vec3::X, EFF_ZERO_RAD), Alignment::Same);
+        assert_eq!(Vec3::X.alignment(Vec3::Y, 1.0), Alignment::Neither);
         assert!(Vec3::X.angle_between(Vec3::ZERO).is_err());
         // Parallel to the projection axis gives 0.
         assert_eq!(Vec3::Z.ccw_angle_between(Vec3::Z, Vec3::X).unwrap(), 0.0);
@@ -1476,13 +1815,17 @@ mod tests {
         let [x, y, z] = Vec3::new(0.0, 5.0, 0.0)
             .make_unit_ortho_vectors(None)
             .unwrap();
-        assert_eq!((x, y, z), (Vec3::Y, Vec3::Z, Vec3::X));
+        assert_eq!((*x, *y, *z), (Vec3::Y, Vec3::Z, Vec3::X));
         assert!(Vec3::new(1.0, 2.0, 3.0)
             .solve_two_linear_equations(Vec3::new(2.0, 4.0, 6.0))
             .is_err());
         // Rotation about the vector itself is the identity.
         assert_eq!(Vec3::Z.rotate_vec_about_axis(Vec3::Z, 1.0), Vec3::Z);
-        assert!(Vec3::X.is_colinear_with(Vec3::Y, Vec3::X, Vec3::X));
+        assert!(Vec3::X.is_colinear_with(
+            Vec3::Y,
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0)
+        ));
     }
 
     #[test]
@@ -1494,8 +1837,6 @@ mod tests {
         z /= 0.0;
         assert_eq!(z, Vec3::ZERO);
         assert!((Vec3::ZERO / 0.0).x.is_nan());
-        assert_eq!(v.component(3), 0.0);
-        assert!(v.component_mut(3).is_err());
         assert!(Vec3::new(f64::NAN, 0.0, 0.0).is_invalid());
         assert!(Vec3::new(1e19, 0.0, 0.0).is_invalid());
         assert!(!Vec3::new(1e17, 0.0, 0.0).is_invalid());

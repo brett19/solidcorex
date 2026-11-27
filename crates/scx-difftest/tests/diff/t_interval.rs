@@ -165,7 +165,7 @@ diff!(s_consts, || (
     m::series::TAYLOR,
     m::series::MAX_K,
     m::series::STORE_E,
-    m::series::VZ
+    m::sv3(0.0, 0.0, 0.0)
 ));
 diff!(s_trunc, |s: usize, e: usize, d: usize, p: usize| {
     use m::series::Trunc;
@@ -273,35 +273,41 @@ diff!(s_inv_sqrt_positive, |u: List<f64>, s: usize, e: usize| {
     );
     (a.inv_sqrt(tr), ai.inv_sqrt(tr))
 });
-diff!(s_vectors, |a: [f64; 3], p: [f64; 6], q: [f64; 6], x: I| {
-    use m::series::{v_add, v_hull, v_scale, v_sub, V3};
-    let (p, q) = (m::v3i(six(p)), m::v3i(six(q)));
-    (
-        V3::<f64>::from_vec3(m::v3(a)),
-        V3::<m::interval::Ivl>::from_vec3(m::v3(a)),
-        v_add(p, q),
-        v_sub(p, q),
-        v_scale(p, m::iv(x)),
-        v_hull(p, q),
-    )
-});
+diff!(
+    s_vectors,
+    |a: [f64; 3], p: [f64; 6], q: [f64; 6], x: I| {
+        let (p, q) = (m::v3i(six(p)), m::v3i(six(q)));
+        (
+            m::v3(a),
+            m::v3(a).map(m::interval::Ivl::from),
+            p + q,
+            p - q,
+            p * m::iv(x),
+            p.hull(q),
+        )
+    },
+    {
+        use m::series::{v_add, v_hull, v_scale, v_sub, V3};
+        let (p, q) = (m::v3i(six(p)), m::v3i(six(q)));
+        (
+            V3::<f64>::from_vec3(m::v3(a)),
+            V3::<m::interval::Ivl>::from_vec3(m::v3(a)),
+            v_add(p, q),
+            v_sub(p, q),
+            v_scale(p, m::iv(x)),
+            v_hull(p, q),
+        )
+    }
+);
 diff!(s_vector_series, |u: List<f64>,
                         v: List<f64>,
                         s: usize,
                         e: usize| {
-    use m::series::{VSer, V3};
+    use m::series::VSer;
     let tr = m::trunc(s, e);
     let w = |k: usize| u.0.get(k).copied().unwrap_or(1.0);
-    let a = VSer::<f64>::constant(V3 {
-        x: w(0),
-        y: w(1),
-        z: w(2),
-    });
-    let mut b = VSer::<f64>::constant(V3 {
-        x: w(2),
-        y: w(0),
-        z: w(1),
-    });
+    let a = VSer::<f64>::constant(m::sv3(w(0), w(1), w(2)));
+    let mut b = VSer::<f64>::constant(m::sv3(w(2), w(0), w(1)));
     b.a[0] = m::ser(&v.0, tr);
     let k = m::ser(&u.0, tr);
     (
@@ -337,7 +343,7 @@ diff!(v_ops, |p: [f64; 6], q: [f64; 6]| {
     (
         m::interval_vector::cross(a, b),
         m::interval_vector::dot(a, b),
-        m::interval_vector::square(a[0]),
+        m::interval_vector::norm([a[0], m::iv([0.0, 0.0]), m::iv([0.0, 0.0])]),
         m::interval_vector::norm(a),
         m::interval_vector::unit(a),
     )

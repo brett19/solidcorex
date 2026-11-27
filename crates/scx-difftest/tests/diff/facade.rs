@@ -96,6 +96,8 @@ impl Gen for TolR {
 
 macro_rules! helpers {
     () => {
+        #[allow(unused_imports)]
+        use self::ext::*;
         use crate::facade::TfR;
         use crate::harness::{List, MatR};
 
@@ -105,23 +107,30 @@ macro_rules! helpers {
         pub fn v2(a: [f64; 2]) -> vector2d::Vec2 {
             vector2d::Vec2::new(a[0], a[1])
         }
-        pub fn e1(a: [f64; 2]) -> extent1d::Extent1d {
-            extent1d::Extent1d::from_raw(a[0], a[1])
+        /// A point (the pin: the same class as a vector).
+        pub fn p3(a: [f64; 3]) -> vector3d::Point3 {
+            vector3d::Point3::new(a[0], a[1], a[2])
         }
-        pub fn e2(a: [f64; 4]) -> extent2d::Extent2d {
-            extent2d::Extent2d::from_bounds(a[0], a[1], a[2], a[3])
+        pub fn p2(a: [f64; 2]) -> vector2d::Point2 {
+            vector2d::Point2::new(a[0], a[1])
         }
-        pub fn e3(a: [f64; 6]) -> extent3d::Extent3d {
-            extent3d::Extent3d::from_bounds(a[0], a[1], a[2], a[3], a[4], a[5])
+        /// The interval `[a[0], a[1]]`, `None` when inverted.
+        pub fn e1(a: [f64; 2]) -> Option<extent1d::Extent1d> {
+            extent1d::Extent1d::from_bounds(a[0], a[1])
+        }
+        /// The box with corners `(a[0], a[1])` and `(a[2], a[3])`, `None` when inverted.
+        pub fn e2(a: [f64; 4]) -> Option<extent2d::Extent2d> {
+            extent2d::Extent2d::from_corners(p2([a[0], a[1]]), p2([a[2], a[3]]))
+        }
+        /// The box with corners `a[..3]` and `a[3..]`, `None` when inverted.
+        pub fn e3(a: [f64; 6]) -> Option<extent3d::Extent3d> {
+            extent3d::Extent3d::from_corners(p3([a[0], a[1], a[2]]), p3([a[3], a[4], a[5]]))
         }
         pub fn pe(a: [f64; 3], full: bool) -> periodic_extent1d::PeriodicExtent1d {
             periodic_extent1d::PeriodicExtent1d::from_parts(a[0], a[1], a[2], full)
         }
-        pub fn mt(m: [[f64; 4]; 4]) -> math::Transform {
-            math::Transform { m }
-        }
         pub fn tf(r: &TfR) -> transform::Transform {
-            transform::Transform::new(v3(r.0), v3(r.1), v3(r.2), r.3.map(v3))
+            transform::Transform::new(p3(r.0), v3(r.1), v3(r.2), r.3.map(v3))
         }
         pub fn mat(r: &MatR) -> matrix::Matrix {
             matrix::Matrix::from_row_major(r.0, r.1, r.2.clone()).unwrap()
@@ -155,17 +164,29 @@ macro_rules! helpers {
             }
             r
         }
-        pub fn v3i(a: [[f64; 2]; 3]) -> series::V3<interval::Ivl> {
-            series::V3 {
-                x: iv(a[0]),
-                y: iv(a[1]),
-                z: iv(a[2]),
-            }
+        pub fn v3i(a: [[f64; 2]; 3]) -> SerV3<interval::Ivl> {
+            sv3(iv(a[0]), iv(a[1]), iv(a[2]))
         }
     };
 }
 
 /// scx-num and scx-algo, by solidcore's module names.
+/// The generated 4x4 matrix made affine: column 3 set to `(0, 0, 0, 1)` (scx's `Affine` holds
+/// no projective part; [`x::mt`] and [`s::mt`] read the same 12 entries).
+pub fn affine_part(mut m: [[f64; 4]; 4]) -> [[f64; 4]; 4] {
+    for (i, row) in m.iter_mut().enumerate() {
+        row[3] = if i == 3 { 1.0 } else { 0.0 };
+    }
+    m
+}
+
+/// Fingerprint an upstream row-vector matrix's affine entries: rows 0 to 3, columns 0 to 2.
+fn affine_bits(m: &[[f64; 4]; 4], o: &mut Out) {
+    for row in m {
+        row[..3].bits(o);
+    }
+}
+
 pub mod x {
     pub use crate::solvers::x as sv;
     pub use scx_algo::hash_table;
@@ -181,6 +202,17 @@ pub mod x {
         p.placed
             .map(|q| [q.point.x, q.point.y, q.point.z, q.zone_tol])
     }
+    /// The model's box, `None` when it has none.
+    pub fn ht_bbox(v: &hash_table::ObjsInVoxels<u32>) -> Option<extent3d::Extent3d> {
+        v.bbox()
+    }
+    /// Voxel `i`'s box, `None` when there is none.
+    pub fn ht_voxel_bbox(
+        v: &hash_table::ObjsInVoxels<u32>,
+        i: usize,
+    ) -> Option<extent3d::Extent3d> {
+        v.map_voxel_index_to_bbox(i)
+    }
     pub use scx_algo::krawczyk;
     /// A Krawczyk-module error as (class, operation, failure): `solve4`'s singular system.
     pub fn kz_err(e: &scx_num::NumError) -> (String, &'static str, String) {
@@ -195,26 +227,102 @@ pub mod x {
     }
     pub use scx_algo::polynomial;
     pub use scx_num::{
-        certified, extent1d, extent2d, extent3d, interval, interval_vector, limits, matrix,
-        periodic_extent1d, ring, series, small_matrix, taylor_model, transform, vector2d, vector3d,
+        certified, extent1d, extent2d, extent3d, interval, limits, matrix, periodic_extent1d, ring,
+        series, small_matrix, taylor_model, transform, vector2d, vector3d,
     };
     helpers!();
+    /// scx's extents take no adapter: [`crate::pin_extent`] gives the pin scx's API.
+    pub mod ext {}
+    pub fn end(v: Vec<extent1d::Extent1d>) -> extent1d::ExtentNd {
+        extent1d::ExtentNd::new(v)
+    }
+    /// The affine map type: scx's column-vector `Affine`, the pin's row-vector `Transform`.
+    pub type Map = math::Affine;
+    pub fn mt(m: [[f64; 4]; 4]) -> math::Affine {
+        math::Affine::try_from(super::affine_part(m)).unwrap()
+    }
+    use vector2d::{Axis2, Vec2};
+    use vector3d::{Alignment, Axis, Vec3};
+    fn axis3(i: usize) -> Option<Axis> {
+        Axis::ALL.get(i).copied()
+    }
+    fn axis2(i: usize) -> Option<Axis2> {
+        Axis2::ALL.get(i).copied()
+    }
+    /// The pin's degree angle tolerance as scx's radians, by the pin's own `SM_DEG2RAD`.
+    pub fn angle_tol(deg: f64) -> f64 {
+        deg * (scx_num::math::PI / 180.0)
+    }
+    /// The pin's `operator[] const` over an axis: 0.0 past 2.
+    pub fn component3(v: Vec3, i: usize) -> f64 {
+        axis3(i).map_or(0.0, |a| v[a])
+    }
+    /// The pin's `operator[]` write: whether `i` names an axis.
+    pub fn set3(v: &mut Vec3, i: usize, x: f64) -> bool {
+        axis3(i).map(|a| v[a] = x).is_some()
+    }
+    pub fn component2(v: Vec2, i: usize) -> Option<f64> {
+        axis2(i).map(|a| v[a])
+    }
+    pub fn set2(v: &mut Vec2, i: usize, x: f64) -> bool {
+        axis2(i).map(|a| v[a] = x).is_some()
+    }
+    /// `GetMin(i)`, `GetMax(i)`: 0.0 past 2.
+    pub fn e3_at(e: &extent3d::Extent3d, i: usize) -> (f64, f64) {
+        axis3(i).map_or((0.0, 0.0), |a| (e.min_at(a), e.max_at(a)))
+    }
+    /// The alignment, as the pin's `(parallel, anti)` says it: 0 neither, 1 same, 2 opposite.
+    pub fn alignment(a: Vec3, b: Vec3, deg: f64) -> u32 {
+        match a.alignment(b, angle_tol(deg)) {
+            Alignment::Neither => 0,
+            Alignment::Same => 1,
+            Alignment::Opposite => 2,
+        }
+    }
+    /// The series' vector of scalars (the pin's `series::V3`): `Vec3<T>`.
+    pub type SerV3<T> = Vec3<T>;
+    pub fn sv3<T>(x: T, y: T, z: T) -> SerV3<T> {
+        Vec3::new(x, y, z)
+    }
+    /// The pin's `geom::interval_vector` functions, over arrays: `Vec3<Ivl>`'s methods.
+    pub mod interval_vector {
+        use scx_num::interval::Ivl;
+        use scx_num::vector3d::Vec3;
+        pub fn cross(a: [Ivl; 3], b: [Ivl; 3]) -> [Ivl; 3] {
+            Vec3::from(a).cross(Vec3::from(b)).to_array()
+        }
+        pub fn dot(a: [Ivl; 3], b: [Ivl; 3]) -> Ivl {
+            Vec3::from(a).dot(Vec3::from(b))
+        }
+        pub fn norm(a: [Ivl; 3]) -> Ivl {
+            Vec3::from(a).norm()
+        }
+        pub fn unit(a: [Ivl; 3]) -> Option<[Ivl; 3]> {
+            Vec3::from(a).unit().map(Vec3::to_array)
+        }
+    }
 
-    /// scx's `math`, with the pin's three- and four-operand maxima and minima as the
-    /// nested `max2`/`min2` that replace them.
+    /// scx's `math`, with the pin's two- to four-operand maxima and minima as the
+    /// `f64::max`/`f64::min` chains that replace them.
     pub mod math {
         pub use scx_num::math::*;
+        pub fn max2(a: f64, b: f64) -> f64 {
+            a.max(b)
+        }
+        pub fn min2(a: f64, b: f64) -> f64 {
+            a.min(b)
+        }
         pub fn max3(a: f64, b: f64, c: f64) -> f64 {
-            max2(max2(a, b), c)
+            a.max(b).max(c)
         }
         pub fn min3(a: f64, b: f64, c: f64) -> f64 {
-            min2(min2(a, b), c)
+            a.min(b).min(c)
         }
         pub fn max4(a: f64, b: f64, c: f64, d: f64) -> f64 {
-            max2(max2(a, b), max2(c, d))
+            a.max(b).max(c.max(d))
         }
         pub fn min4(a: f64, b: f64, c: f64, d: f64) -> f64 {
-            min2(min2(a, b), min2(c, d))
+            a.min(b).min(c.min(d))
         }
     }
 
@@ -225,7 +333,7 @@ pub mod x {
         use scx_num::extent1d::Extent1d;
         use scx_num::extent2d::Extent2d;
         use scx_num::extent3d::Extent3d;
-        use scx_num::math::{max2, Vec3, EFF_ZERO, EFF_ZERO_PARAM, EFF_ZERO_RAD};
+        use scx_num::math::{Vec3, EFF_ZERO, EFF_ZERO_PARAM, EFF_ZERO_RAD};
         use scx_num::math::{EFF_ZERO_SQ, EFF_ZERO_SQRT};
         pub use scx_num::tol::*;
         use scx_num::vector2d::Vec2;
@@ -325,12 +433,12 @@ pub mod x {
         }
         impl Mag for Vec2 {
             fn mag(&self) -> f64 {
-                self.max_dimension()
+                self.x.abs().max(self.y.abs())
             }
         }
         impl Mag for Vec3 {
             fn mag(&self) -> f64 {
-                self.max_dimension()
+                self.x.abs().max(self.y.abs()).max(self.z.abs())
             }
         }
         impl Mag for Extent1d {
@@ -375,7 +483,7 @@ pub mod x {
         /// The pin's four-operand maximum pairs its operands (`smos_4Max`), so the
         /// adapter pairs the magnitudes the same way.
         pub fn scaled_zero4(a: &impl Mag, b: &impl Mag, c: &impl Mag, d: &impl Mag) -> f64 {
-            sz(&[max2(a.mag(), b.mag()), max2(c.mag(), d.mag())])
+            sz(&[a.mag().max(b.mag()), c.mag().max(d.mag())])
         }
         pub fn scaled_zero_sq4(a: &impl Mag, b: &impl Mag, c: &impl Mag, d: &impl Mag) -> f64 {
             let z = scaled_zero4(a, b, c, d);
@@ -404,6 +512,17 @@ pub mod s {
         let u = math::UNDEF_DOUBLE;
         let n = [p.point.x, p.point.y, p.point.z, p.zone_tol];
         (n != [u; 4]).then_some(n)
+    }
+    /// The model's box, `None` for the pin's inside-out `Extent3d::new` (no box).
+    pub fn ht_bbox(v: &hash_table::ObjsInVoxels<u32>) -> Option<extent3d::Extent3d> {
+        Some(*v.bbox()).filter(|b| !b.is_init())
+    }
+    /// Voxel `i`'s box, `None` for the pin's inside-out `Extent3d::new` (no box).
+    pub fn ht_voxel_bbox(
+        v: &hash_table::ObjsInVoxels<u32>,
+        i: usize,
+    ) -> Option<extent3d::Extent3d> {
+        Some(v.map_voxel_index_to_bbox(i)).filter(|b| !b.is_init())
     }
     /// `geom::krawczyk`'s items are `pub(crate)` at the pin: the pin's file, made public by
     /// the build script (`build.rs`, `pin_krawczyk`), over the pin's own types.
@@ -490,11 +609,15 @@ pub mod s {
         };
         (format!("{:?}", e.kind()), e.operation(), f)
     }
+    pub use crate::pin_extent::{end, extent1d, extent2d, extent3d};
     pub use solidcore::blend::fillet_section::tay as ring;
     pub use solidcore::blend::fillet_section::{interval, series, taylor_model};
+    /// The pin's extents under scx's names, imported by every diff body.
+    pub mod ext {
+        pub use crate::pin_extent::{E1, E2, E3};
+    }
     pub use solidcore::geom::{
-        certified, extent1d, extent2d, extent3d, matrix, periodic_extent1d, polynomial, tol,
-        transform, vector2d, vector3d,
+        certified, matrix, periodic_extent1d, polynomial, tol, transform, vector2d, vector3d,
     };
     pub use solidcore::kernel::Tolerances;
     pub use solidcore::{limits, math};
@@ -537,6 +660,41 @@ pub mod s {
         pub use solidcore::geom::geom_utility::p2::{inverse_4x4, mult_4x4};
     }
     helpers!();
+    pub type Map = math::Transform;
+    pub fn mt(m: [[f64; 4]; 4]) -> math::Transform {
+        math::Transform {
+            m: super::affine_part(m),
+        }
+    }
+    pub fn angle_tol(deg: f64) -> f64 {
+        deg
+    }
+    pub fn component3(v: vector3d::Vec3, i: usize) -> f64 {
+        v.component(i)
+    }
+    pub fn set3(v: &mut vector3d::Vec3, i: usize, x: f64) -> bool {
+        v.component_mut(i).map(|c| *c = x).is_ok()
+    }
+    pub fn component2(v: vector2d::Vec2, i: usize) -> Option<f64> {
+        v.component(i).ok()
+    }
+    pub fn set2(v: &mut vector2d::Vec2, i: usize, x: f64) -> bool {
+        v.component_mut(i).map(|c| *c = x).is_ok()
+    }
+    pub fn e3_at(e: &extent3d::Extent3d, i: usize) -> (f64, f64) {
+        (e.min_at(i), e.max_at(i))
+    }
+    pub fn alignment(a: vector3d::Vec3, b: vector3d::Vec3, deg: f64) -> u32 {
+        match a.parallel_sense(b, deg) {
+            (false, _) => 0,
+            (true, Some(true)) => 2,
+            (true, _) => 1,
+        }
+    }
+    pub type SerV3<T> = series::V3<T>;
+    pub fn sv3<T>(x: T, y: T, z: T) -> SerV3<T> {
+        series::V3 { x, y, z }
+    }
     use crate::facade::TolR;
     /// The pin's tolerance set of recipe `r` (scx has none: `Tolerances` is retired).
     pub fn tol_set(r: &TolR) -> Tolerances {
@@ -621,20 +779,61 @@ macro_rules! series_bits {
                 }
             }
         }
-        impl<T: Bits> Bits for $m::series::V3<T> {
+    };
+}
+series_bits!(x);
+series_bits!(s);
+
+/// A point, a vector and a unit vector are one class at the pin: each by its coordinates.
+macro_rules! xyz_bits {
+    ($($t:ty),*) => {$(
+        impl Bits for $t {
             fn bits(&self, o: &mut Out) {
                 self.x.bits(o);
                 self.y.bits(o);
                 self.z.bits(o);
             }
         }
-    };
+    )*};
 }
-series_bits!(x);
-series_bits!(s);
-
-both!(vector3d::Vec3 => |e, o| { e.x.bits(o); e.y.bits(o); e.z.bits(o); });
-both!(vector2d::Vec2 => |e, o| { e.x.bits(o); e.y.bits(o); });
+macro_rules! xy_bits {
+    ($($t:ty),*) => {$(
+        impl Bits for $t {
+            fn bits(&self, o: &mut Out) {
+                self.x.bits(o);
+                self.y.bits(o);
+            }
+        }
+    )*};
+}
+impl<T: Bits> Bits for x::vector3d::Vec3<T> {
+    fn bits(&self, o: &mut Out) {
+        self.x.bits(o);
+        self.y.bits(o);
+        self.z.bits(o);
+    }
+}
+impl<T: Bits> Bits for x::vector3d::Point3<T> {
+    fn bits(&self, o: &mut Out) {
+        self.x.bits(o);
+        self.y.bits(o);
+        self.z.bits(o);
+    }
+}
+impl<T: Bits> Bits for s::series::V3<T> {
+    fn bits(&self, o: &mut Out) {
+        self.x.bits(o);
+        self.y.bits(o);
+        self.z.bits(o);
+    }
+}
+xyz_bits!(x::vector3d::UnitVec3, s::vector3d::Vec3);
+xy_bits!(
+    x::vector2d::Vec2,
+    x::vector2d::Point2,
+    x::vector2d::UnitVec2,
+    s::vector2d::Vec2
+);
 both!(extent1d::Extent1d => |e, o| { e.min().bits(o); e.max().bits(o); });
 both!(extent2d::Extent2d => |e, o| { e.min().bits(o); e.max().bits(o); });
 both!(extent3d::Extent3d => |e, o| { e.min().bits(o); e.max().bits(o); });
@@ -644,7 +843,16 @@ both!(periodic_extent1d::PeriodicExtent1d => |e, o| {
     e.period().bits(o);
     e.is_full_period().bits(o);
 });
-both!(math::Transform => |e, o| { e.m.bits(o); });
+impl Bits for x::math::Affine {
+    fn bits(&self, o: &mut Out) {
+        affine_bits(&(*self).into(), o);
+    }
+}
+impl Bits for s::math::Transform {
+    fn bits(&self, o: &mut Out) {
+        affine_bits(&self.m, o);
+    }
+}
 both!(transform::Transform => |e, o| { e.matrix().bits(o); });
 both!(matrix::Matrix => |e, o| {
     e.num_rows().bits(o);
@@ -770,25 +978,26 @@ macro_rules! failure_bits {
 }
 
 /// An error: its class, operation, `InvalidInput` reason or typed failure (fields by bits),
-/// its `Display` text, then its cause's.
+/// its `Display` text, then its cause's. An `InvalidInput` refusal is compared by its class
+/// alone: which operation names the refusal and the words of its reason are text, free to
+/// change (a refused input is the decision compared; scx names its own operation where the
+/// pin names the helper that refused).
 impl Bits for scx_num::NumError {
     fn bits(&self, o: &mut Out) {
         use scx_num::error::NumFailure;
         o.tag(&format!("{:?}", self.kind()));
+        let scx_num::NumError::Failed { failure, .. } = self else {
+            o.tag("InvalidInput");
+            return;
+        };
         o.tag(self.operation());
-        match self {
-            scx_num::NumError::InvalidInput { reason, .. } => {
-                o.tag("InvalidInput");
-                o.tag(reason);
+        match failure {
+            NumFailure::VectorVanishes => o.tag("VectorVanishes"),
+            NumFailure::Defect { why } => {
+                o.tag("Defect");
+                o.tag(why);
             }
-            scx_num::NumError::Failed { failure, .. } => match failure {
-                NumFailure::VectorVanishes => o.tag("VectorVanishes"),
-                NumFailure::Defect { why } => {
-                    o.tag("Defect");
-                    o.tag(why);
-                }
-                f => failure_bits!(f, o, scx_num::error::NumFailure),
-            },
+            f => failure_bits!(f, o, scx_num::error::NumFailure),
         }
         o.tag(&self.to_string());
         if let Some(c) = self.cause() {
@@ -801,11 +1010,12 @@ impl Bits for solidcore::SolidError {
         // The series' blend failures, by the names scx-num gives them (`NumFailure`).
         use solidcore::error::blend::{BlendFailure, SectionDegeneracy};
         o.tag(&format!("{:?}", self.kind()));
-        o.tag(self.operation());
-        if let solidcore::SolidError::InvalidInput { reason, .. } = self {
+        if let solidcore::SolidError::InvalidInput { .. } = self {
             o.tag("InvalidInput");
-            o.tag(reason);
-        } else {
+            return;
+        }
+        o.tag(self.operation());
+        {
             match (self.blend_failure(), self.geom_failure()) {
                 (Some(BlendFailure::SectionDegenerate(SectionDegeneracy::VectorVanishes)), _) => {
                     o.tag("VectorVanishes");

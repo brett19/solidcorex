@@ -18,6 +18,8 @@
 mod facade;
 mod harness;
 mod pin_defects;
+mod pin_extent;
+mod pin_truths;
 mod solvers;
 mod t_algo;
 mod t_extent;
@@ -36,7 +38,7 @@ mod t_vector;
 /// must each fail; a rounding error of drift must pass; the fingerprint stays bit-exact; a
 /// pin defect excuses only inputs whose check passes, and one that applies to none fails.
 mod controls {
-    use crate::harness::{run, run_defect, shot, PinDefect, Tol};
+    use crate::harness::{run, run_defect, shot, Applies, PinDefect, Tol};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     #[test]
@@ -44,7 +46,7 @@ mod controls {
     fn a_different_function_is_caught() {
         run::<(f64, f64), _, _>(
             "control",
-            |(a, b)| scx_num::math::max2(a, b),
+            |(a, b)| a.max(b),
             |(a, b)| solidcore::math::min2(a, b),
         );
     }
@@ -64,7 +66,7 @@ mod controls {
     fn wrong_below_zero(check: fn(&(f64,), &f64) -> Result<(), String>) -> PinDefect<(f64,), f64> {
         PinDefect {
             reason: "control",
-            applies: |&(a,)| a < 0.0,
+            applies: Applies::Inputs(|&(a,)| a < 0.0),
             check,
         }
     }
@@ -103,7 +105,7 @@ mod controls {
             "control_defect_stale",
             &PinDefect {
                 reason: "control",
-                applies: |_| false,
+                applies: Applies::Inputs(|_| false),
                 check: |_, _| Ok(()),
             },
             |(a,)| a,

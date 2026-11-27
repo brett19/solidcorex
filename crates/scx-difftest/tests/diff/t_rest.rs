@@ -31,10 +31,12 @@ diff!(c_verdict, |a: f64, b: f64, t: f64| {
     (p, q, p.and(q), q.and(p), p.is_yes(), q.is_yes())
 });
 diff!(c_distance, |a: V, b: V| m::certified::distance(
-    m::v3(a),
-    m::v3(b)
+    m::p3(a),
+    m::p3(b)
 ));
-diff!(c_unit, |a: V| m::certified::unit(m::v3(a)));
+diff!(c_unit, pin_defect = crate::pin_defects::c_unit, |a: V| {
+    m::certified::unit(m::v3(a))
+});
 diff!(c_errors, |a: f64, b: f64| (
     m::certified::unit_error(),
     m::certified::unit_error_of(a, b),
@@ -193,7 +195,7 @@ diff!(tf_init, |r: TfR| {
 });
 diff!(tf_setters, |r: TfR, v: V| {
     let mut t = [m::tf(&r), m::tf(&r), m::tf(&r), m::tf(&r), m::tf(&r)];
-    t[0].set_to_origin(m::v3(v));
+    t[0].set_to_origin(m::p3(v));
     t[1].set_to_x_axis(m::v3(v));
     t[2].set_to_y_axis(m::v3(v));
     t[3].set_to_z_axis(m::v3(v));
@@ -202,14 +204,14 @@ diff!(tf_setters, |r: TfR, v: V| {
 });
 diff!(tf_set_canonical, |r: TfR, s: TfR| {
     let mut t = m::tf(&r);
-    t.set_canonical(m::v3(s.0), m::v3(s.1), m::v3(s.2), s.3.map(m::v3));
+    t.set_canonical(m::p3(s.0), m::v3(s.1), m::v3(s.2), s.3.map(m::v3));
     t
 });
 diff!(tf_transform_vector, |r: TfR, v: V| {
     let t = m::tf(&r);
     (
         t.transform_vector(m::v3(v)),
-        t.inv_transform_point(m::v3(v)),
+        t.inv_transform_point(m::p3(v)),
         t.inv_transform_vector(m::v3(v)),
     )
 });
@@ -220,18 +222,22 @@ diff!(tf_concat_transform, |a: TfR, b: TfR| {
 });
 diff!(tf_scale_simple, |r: TfR, s: V, c: Option<V>| {
     let mut t = m::tf(&r);
-    t.scale_simple(m::v3(s), c.map(m::v3));
+    t.scale_simple(m::v3(s), c.map(m::p3));
     t
 });
-diff!(tf_mirror_simple, |r: TfR, p: V, n: V| {
-    let mut t = m::tf(&r);
-    (t.mirror_simple(m::v3(p), m::v3(n)), t)
-});
+diff!(
+    tf_mirror_simple,
+    pin_defect = crate::pin_defects::tf_mirror_simple,
+    |r: TfR, p: V, n: V| {
+        let mut t = m::tf(&r);
+        (t.mirror_simple(m::p3(p), m::v3(n)), t)
+    }
+);
 diff!(tf_invert_simple, |r: TfR| {
     let mut t = m::tf(&r);
     (t.invert_simple(), t)
 });
 diff!(tf_evaluate_simple, |r: TfR, p: V, d: usize| m::tf(&r)
-    .evaluate_simple(m::v3(p), d));
+    .evaluate_simple(m::p3(p), d));
 diff!(tf_inv_evaluate_guess_point_simple, |r: TfR, p: V| m::tf(&r)
-    .inv_evaluate_guess_point_simple(m::v3(p)));
+    .inv_evaluate_guess_point_simple(m::p3(p)));
