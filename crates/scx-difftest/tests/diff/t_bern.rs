@@ -178,19 +178,23 @@ diff!(
     }
 );
 
-diff!(bern_roots_known, |k: usize| {
-    // products of (s - r) with dyadic roots r, close pairs and double roots among them
-    let cs = truth::known_cases();
-    let (c, _) = &cs[k % cs.len()];
-    (
-        m::bern::roots(c, 0.0, 1.0, 48, 4096),
-        m::bern::roots(c, 0.0, 1.0, 12, 64),
-        m::bern::roots(c, 1.0, 3.0, 48, 4096),
-    )
-});
+diff!(
+    bern_roots_known,
+    pin_defect = crate::pin_defects::bern_roots_known,
+    |k: usize| {
+        // products of (s - r) with dyadic roots r, close pairs and double roots among them
+        let cs = truth::known_cases();
+        let (c, _) = &cs[k % cs.len()];
+        (
+            m::bern::roots(c, 0.0, 1.0, 48, 4096),
+            m::bern::roots(c, 0.0, 1.0, 12, 64),
+            m::bern::roots(c, 1.0, 3.0, 48, 4096),
+        )
+    }
+);
 
 /// Exact arithmetic over the scx side alone.
-mod truth {
+pub(crate) mod truth {
     use scx_algo::bernstein::{
         Bernstein2, Bounded, Half, MAX_DEGREE, RootLimits, bernstein_roots, binomial,
     };

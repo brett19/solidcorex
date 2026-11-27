@@ -22,7 +22,7 @@
 //! Its claim is a place certified by a sign change of de Casteljau's value, so each true
 //! root in `[0, 1]` must have a place within de Casteljau's error over the slope (see
 //! [`bound`]), each place must be that near a true root, and the distinct places must
-//! number the true roots. Repeated places are a known bug, pinned in [`DUPLICATES`].
+//! number the true roots.
 //!
 //! `SCX_PRINT_POLY_FAMILIES=1 cargo test -p scx-algo --test polynomial_families -- --nocapture`
 //! prints each case.
@@ -473,25 +473,6 @@ fn bound(b: &[f64], dp: &Poly, r: &Rat) -> f64 {
     2.0 * ulp(rf) + 4.0 * n * (f64::EPSILON / 2.0) * abs_scale(b, rf) / dp.eval(r).to_f64().abs()
 }
 
-/// Places reported more than once, per case (known bug, below); every other case has
-/// none.
-const DUPLICATES: &[(&str, usize)] = &[
-    ("wilkinson 5", 5),
-    ("chebyshev 5", 3),
-    ("wilkinson 15", 9),
-    ("chebyshev 15", 7),
-];
-
-// Known bug (bernstein_roots, found 11-27 by this test): a root exactly at a subdivision
-// point is reported once for each level of halving that ends there, and before the roots
-// of the piece it ends. Its docs promise a piece's places before the next piece's. The
-// odd-degree Wilkinson and Chebyshev cases have the root 0.5 (their rounded coefficients
-// keep it exact). `chebyshev 5` returns `[0.5, 0.0245, 0.206, 0.5, 0.5, 0.5, 0.794,
-// 0.976]`. Each piece reports its zero ends, so the halves of a piece ending at a zero
-// report it again. The fix is to report the ends once at the top and a zero midpoint
-// between the halves. That changes results against the pin where a root sits on a
-// split point, so it waits for a pin-defect entry in the difftest. Every other place
-// meets the bound.
 #[test]
 fn bernstein_roots_on_the_families() {
     let mut cases = 0;
@@ -538,11 +519,10 @@ fn bernstein_roots_on_the_families() {
         distinct.sort_by(f64::total_cmp);
         distinct.dedup();
         assert_eq!(distinct.len(), t.len(), "{}: distinct places", k.name);
-        let dup = DUPLICATES.iter().find(|d| d.0 == k.name).map_or(0, |d| d.1);
-        assert_eq!(
-            got.places.len() - distinct.len(),
-            dup,
-            "{}: duplicates (the table)",
+        assert_eq!(got.places.len(), t.len(), "{}: each root once", k.name);
+        assert!(
+            got.places.windows(2).all(|w| w[0] < w[1]),
+            "{}: increasing order",
             k.name
         );
     }
