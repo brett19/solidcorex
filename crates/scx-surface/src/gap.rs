@@ -1092,6 +1092,33 @@ pub fn vertex_curve_gap(point: Point3, curve: &Curve, t: f64) -> Result<Bracket,
     }
 }
 
+/// The distance between two points, enclosed in intervals; no search, so no budget. The
+/// vertex-to-vertex gap of 74 SU8 (`vertex_meet`): the same enclosure as [`vertex_curve_gap`].
+///
+/// # Errors
+///
+/// [`GapError::NotFinite`] when a coordinate is not finite or the distance overflows.
+pub(crate) fn point_point_gap(a: Point3, b: Point3) -> Result<Bracket, GapError> {
+    let at = |p: Point3| [Ivl::from(p.x), Ivl::from(p.y), Ivl::from(p.z)];
+    if a == b && a.is_finite() {
+        // The same point: the distance is exactly zero, not a widened enclosure of it.
+        return Ok(Bracket {
+            lower: 0.0,
+            upper: 0.0,
+        });
+    }
+    let (p, q) = (at(a), at(b));
+    let g = norm([p[0].sub_ulp(q[0]), p[1].sub_ulp(q[1]), p[2].sub_ulp(q[2])]);
+    if g.is_finite() {
+        Ok(Bracket {
+            lower: g.lo.max(0.0),
+            upper: g.hi,
+        })
+    } else {
+        Err(GapError::NotFinite)
+    }
+}
+
 /// The nearest distance from the points of a box `p` to `curve` over its parameters, as
 /// `sup -d`: a mark is the parameter, so the nearest's place comes back with it.
 struct Nearest<'a> {
