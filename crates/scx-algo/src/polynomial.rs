@@ -342,6 +342,11 @@ fn polish<const N: usize>(roots: &mut Roots, c: &[f64; N], zero_tol: f64) {
                 break;
             }
             let next = x - px / dx;
+            if next == x {
+                // converged: the step would be refused (`p(next) == p(x)`), so skip its
+                // evaluation
+                break;
+            }
             let mut others = roots
                 .values
                 .iter()
