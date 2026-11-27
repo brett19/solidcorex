@@ -10,7 +10,13 @@
 // `Declared::warning`; `known` and `warned` folded into `declared`; `Ap242Edition::number` is
 // `const`; `of_exchange` is new (the schemas of a parsed exchange). `split`, `edition` and
 // `shown` are kept as the pin has them; the tests' let-chain is written without one
-// (edition 2021).
+// (edition 2021). Tests: `ap242_without_identifier_is_read_with_a_warning`,
+// `unknown_identifier_is_read_with_a_warning` and `unknown_or_missing_schema_is_read_with_a_warning`
+// are merged into `doubts_are_typed_and_read_as_the_pin_words_them` (the doubts typed, their
+// words checked); `ap242`, `ap242_editions_by_identifier`, `Lcg::below` and
+// `hostile_names_never_panic` changed (the `AP242` constant in the name, `of` over the
+// test's `&str` schemas, `usize::try_from` for an `as` cast, the let-chain unrolled);
+// `a_parsed_header_declares_its_protocol` is new.
 //! Which application protocol a STEP file declares in its `FILE_SCHEMA`: AP203, AP214, or
 //! AP242 and its edition. A file is read the same whatever it declares; an AP242 edition that
 //! is not given or not known, and a schema that is not one of these, read with a [`Doubt`],
@@ -124,8 +130,7 @@ impl fmt::Display for Doubt {
             }
             Self::UnknownEdition(id) => write!(
                 f,
-                "the file declares AP242 with the identifier {{ {id} }}, which names no edition \
-                 known here; it is read as AP242"
+                "the file declares AP242 with the identifier {{ {id} }}, which names no edition known here; it is read as AP242"
             ),
             Self::UnknownSchema(s) => write!(
                 f,
@@ -337,8 +342,7 @@ mod tests {
         }
         assert_eq!(
             Doubt::UnknownEdition("1 2".into()).to_string(),
-            "the file declares AP242 with the identifier { 1 2 }, which names no edition known \
-             here; it is read as AP242"
+            "the file declares AP242 with the identifier { 1 2 }, which names no edition known here; it is read as AP242"
         );
         for (schemas, doubt) in [
             (&[][..], Doubt::NoSchema),

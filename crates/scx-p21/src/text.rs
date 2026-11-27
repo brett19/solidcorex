@@ -21,6 +21,11 @@
 // dropped, so the text did not read back) and a run of non-ASCII characters as one `\X2\` or
 // `\X4\` group. `keyword_ok` and `enumeration_ok` are new: the writer checks names against
 // §5.4.
+// `hex`, `binary_ok` and `RealText::write_str` are new helpers of those. The tests are new:
+// `dec`, `enc`, `decodes_each_directive`, `unknown_and_broken_directives_are_kept_as_written`,
+// `code_pages_switch_s_and_other_pages_are_reported`, `unterminated_runs_decode_in_linear_time`,
+// `encodes_so_that_decoding_gives_it_back`, `reals_are_shortest_with_a_point_and_capital_e`,
+// `names_follow_the_grammar`, `short_names_read_long`.
 //! Part 21's text tokens: decoding and encoding strings (ISO 10303-21:2016 §6.4.3), writing
 //! reals (§6.4.2), and the AP203 short entity names (§12.2.11).
 

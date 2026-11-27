@@ -16,6 +16,8 @@
 // `Writer::file`; the shared-instance map hashes with `FixedState` (was the seeded default).
 // `write`, `write_into`, `instance`, `record`, `checked`, `section` and `raw` are new: the
 // whole exchange is written, every section and HEADER record as read.
+// `Writer::len` and `Writer::is_empty` count the instances added; `Writer::next_id`,
+// `Writer::get` and `at` are new.
 //! Writing an exchange structure (ISO 10303-21:2016 §5 to §11).
 //!
 //! What [`write`] gives reads back as the same [`Exchange`]: `parse(write(x)) == x` for

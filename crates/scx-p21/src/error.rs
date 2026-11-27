@@ -286,7 +286,39 @@ pub enum Unwritable {
     BadBinary(String),
     /// A complex instance with no part.
     EmptyComplex,
+    /// Geometry with no ISO 10303-42 form.
+    Geometry(NoPart42Form),
 }
+
+/// Geometry that ISO 10303-42 cannot state, as [`crate::part42::write`] meets it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum NoPart42Form {
+    /// A point or direction of a 2D parameter space whose z is not 0.
+    OffParameterPlane,
+    /// A vector whose components have different unit factors, as one read in a parameter
+    /// space with an angle on one axis and a length on the other.
+    MixedUnitVector,
+    /// A placement with an axis, in a 2D parameter space.
+    AxisInParameterSpace,
+    /// A surface curve or a 3D offset curve, in a 2D parameter space.
+    SpaceCurveInParameterSpace,
+}
+
+impl fmt::Display for NoPart42Form {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::OffParameterPlane => "a point or direction off a parameter space's plane",
+            Self::MixedUnitVector => "a vector whose components have different unit factors",
+            Self::AxisInParameterSpace => "a placement with an axis in a parameter space",
+            Self::SpaceCurveInParameterSpace => {
+                "a surface curve or 3D offset curve in a parameter space"
+            }
+        })
+    }
+}
+
+impl std::error::Error for NoPart42Form {}
 
 impl fmt::Display for Unwritable {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -296,11 +328,19 @@ impl fmt::Display for Unwritable {
             Self::BadEnumeration(e) => write!(f, "`{e}` is not a Part 21 enumeration value"),
             Self::BadBinary(b) => write!(f, "`{b}` is not a Part 21 binary"),
             Self::EmptyComplex => f.write_str("a complex instance needs at least one part"),
+            Self::Geometry(g) => write!(f, "{g} has no ISO 10303-42 form"),
         }
     }
 }
 
-impl std::error::Error for Unwritable {}
+impl std::error::Error for Unwritable {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Geometry(g) => Some(g),
+            _ => None,
+        }
+    }
+}
 
 /// How an entity instance is not what its reader needs.
 #[derive(Clone, Debug, PartialEq)]

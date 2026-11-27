@@ -31,6 +31,9 @@
 // the section and end keywords may not hold `-`; a complex instance needs a part (§5.5, the
 // pin read `#1=();`); an id defined again in a later DATA section is reported; errors and
 // warnings are typed.
+// New helpers: `at_most_max_count`, `id_of`, `Lexer::peek_at`; `Limits::default` and
+// `Unwatched`'s `read` and `stop` (the `Progress` that never stops) take the place of the pin's
+// constant limits and `Option<&dyn Progress>`.
 //! Reading an exchange structure (ISO 10303-21:2016 §5 to §11).
 //!
 //! Input is hostile: the text's size, the instance, record and parameter counts, the
