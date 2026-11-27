@@ -372,6 +372,14 @@ pub enum EntityCause {
         /// The deepest nesting followed.
         limit: usize,
     },
+    /// The instance is part of a cycle where the file's structure must be a tree or a
+    /// directed acyclic graph (an assembly using itself, a mapped item mapping itself).
+    Cycle,
+    /// Expanding the structure from the instance gives more nodes than the reader makes.
+    TooManyInstances {
+        /// The most nodes made.
+        limit: usize,
+    },
 }
 
 impl fmt::Display for EntityCause {
@@ -386,6 +394,10 @@ impl fmt::Display for EntityCause {
             }
             Self::Invalid { what } => f.write_str(what),
             Self::TooDeep { limit } => write!(f, "references nested more than {limit} deep"),
+            Self::Cycle => f.write_str("part of a cycle"),
+            Self::TooManyInstances { limit } => {
+                write!(f, "expands to more than {limit} instances")
+            }
         }
     }
 }

@@ -18,6 +18,7 @@ pub mod error;
 pub mod exchange;
 pub mod parse;
 pub mod part42;
+pub mod product;
 pub mod protocol;
 mod text;
 pub mod units;
