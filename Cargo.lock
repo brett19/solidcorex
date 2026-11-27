@@ -565,6 +565,7 @@ version = "0.1.0"
 dependencies = [
  "scx-algo",
  "scx-bodyq",
+ "scx-boolean",
  "scx-brep",
  "scx-check",
  "scx-curve",
