@@ -1,7 +1,7 @@
 // Written for solidcorex. Apache-2.0.
 //! Winding numbers and signed areas of closed loops of lines and arcs.
 
-use core::f64::consts::TAU;
+use core::f64::consts::{PI, TAU};
 
 use scx_num::certified::Verdict;
 use scx_num::eft::two_sum;
@@ -26,6 +26,25 @@ pub(crate) fn winding(segments: &[Segment], p: Point2) -> Option<i64> {
     let mut sum = 0.0;
     let mut comp = 0.0;
     for seg in segments {
+        if let Segment::Circle {
+            centre,
+            radius,
+            sense,
+        } = *seg
+        {
+            // A whole turn in its sense about a point inside it, none about one outside.
+            let r2 = Iv::exact(radius).sq();
+            match greater(r2, IP::exact(p).sub(IP::exact(centre)).norm2()) {
+                Verdict::Yes => {
+                    let (s, e) = two_sum(sum, sense.sign() * TAU);
+                    sum = s;
+                    comp += e;
+                }
+                Verdict::No => {}
+                Verdict::Undecided => return None,
+            }
+            continue;
+        }
         let a = seg.start() - p;
         let b = seg.end() - p;
         let cross = a.x * b.y - a.y * b.x;
@@ -67,7 +86,8 @@ pub(crate) fn winding(segments: &[Segment], p: Point2) -> Option<i64> {
 
 /// The signed area the loop encloses, positive counter-clockwise: the shoelace sum of the
 /// chords about the loop's first vertex plus, per arc, the signed circular segment
-/// `r^2 (t - sin t) / 2` of its swept angle `t`; with a bound on the rounding of the sum.
+/// `r^2 (t - sin t) / 2` of its swept angle `t`, and for a whole circle `pi r^2` in its
+/// sense; with a bound on the rounding of the sum.
 pub(crate) fn signed_area(segments: &[Segment]) -> (f64, f64) {
     let Some(o) = segments.first().map(Segment::start) else {
         return (0.0, 0.0);
@@ -76,6 +96,15 @@ pub(crate) fn signed_area(segments: &[Segment]) -> (f64, f64) {
     let mut comp = 0.0;
     let mut mag = 0.0;
     for seg in segments {
+        if let Segment::Circle { radius, sense, .. } = *seg {
+            // Alone in its loop (checked first), so no chord term: the disc in its sense.
+            let disc = PI * radius * radius;
+            let (s, e) = two_sum(sum, sense.sign() * disc);
+            sum = s;
+            comp += e;
+            mag += disc;
+            continue;
+        }
         let a = seg.start() - o;
         let b = seg.end() - o;
         let mut term = 0.5 * (a.x * b.y - a.y * b.x);

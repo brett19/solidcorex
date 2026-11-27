@@ -1,5 +1,6 @@
 // Written for solidcorex. Apache-2.0.
-//! A profile's segment: a straight line or a circular arc between two given points.
+//! A profile's segment: a straight line or a circular arc between two given points, or a
+//! whole circle, which is a loop on its own.
 
 use scx_num::frame::Sense;
 use scx_num::vector2d::Point2;
@@ -20,7 +21,8 @@ pub enum Segment {
     },
     /// The circular arc about `centre` from `start` to `end`: counter-clockwise for
     /// [`Sense::Forward`] (about the plane's z axis), clockwise for [`Sense::Reversed`]. The
-    /// ends lie on one circle within the resolution; a full circle is two arcs.
+    /// ends lie on one circle within the resolution. Equal ends are a degenerate arc, not
+    /// a whole circle: that is [`Segment::Circle`].
     Arc {
         /// The circle's centre.
         centre: Point2,
@@ -28,6 +30,17 @@ pub enum Segment {
         start: Point2,
         /// Second end.
         end: Point2,
+        /// The sense of travel about the centre.
+        sense: Sense,
+    },
+    /// The whole circle about `centre` of `radius`, counter-clockwise for
+    /// [`Sense::Forward`]: a loop on its own, with no ends. Its seam, where
+    /// [`Segment::start`] and [`Segment::end`] put it, is the point `centre + (radius, 0)`.
+    Circle {
+        /// The centre.
+        centre: Point2,
+        /// The radius, above the resolution.
+        radius: f64,
         /// The sense of travel about the centre.
         sense: Sense,
     },
@@ -52,19 +65,32 @@ impl Segment {
         }
     }
 
-    /// Where it starts.
+    /// The whole circle about `centre` of `radius`, counter-clockwise when `sense` is
+    /// [`Sense::Forward`].
+    #[must_use]
+    pub const fn circle(centre: Point2, radius: f64, sense: Sense) -> Self {
+        Self::Circle {
+            centre,
+            radius,
+            sense,
+        }
+    }
+
+    /// Where it starts: a circle's seam.
     #[must_use]
     pub const fn start(&self) -> Point2 {
         match *self {
             Self::Line { start, .. } | Self::Arc { start, .. } => start,
+            Self::Circle { centre, radius, .. } => seam(centre, radius),
         }
     }
 
-    /// Where it ends.
+    /// Where it ends: a circle's seam, where it starts.
     #[must_use]
     pub const fn end(&self) -> Point2 {
         match *self {
             Self::Line { end, .. } | Self::Arc { end, .. } => end,
+            Self::Circle { centre, radius, .. } => seam(centre, radius),
         }
     }
 
@@ -79,10 +105,15 @@ impl Segment {
                 end,
                 sense,
             } => Self::arc(centre, end, start, sense.reversed()),
+            Self::Circle {
+                centre,
+                radius,
+                sense,
+            } => Self::circle(centre, radius, sense.reversed()),
         }
     }
 
-    /// The same segment ending at `end` instead.
+    /// The same segment ending at `end` instead: a circle has no end to move.
     pub(crate) const fn with_end(self, end: Point2) -> Self {
         match self {
             Self::Line { start, .. } => Self::line(start, end),
@@ -92,16 +123,23 @@ impl Segment {
                 sense,
                 ..
             } => Self::arc(centre, start, end, sense),
+            Self::Circle { .. } => self,
         }
     }
 
-    /// Every coordinate it holds.
+    /// Every coordinate it holds, a circle's radius among them.
     pub(crate) const fn coordinates(&self) -> [f64; 6] {
         match *self {
             Self::Line { start, end } => [start.x, start.y, end.x, end.y, 0.0, 0.0],
             Self::Arc {
                 centre, start, end, ..
             } => [start.x, start.y, end.x, end.y, centre.x, centre.y],
+            Self::Circle { centre, radius, .. } => [centre.x, centre.y, radius, 0.0, 0.0, 0.0],
         }
     }
+}
+
+/// A circle's seam: the point at angle 0.
+const fn seam(centre: Point2, radius: f64) -> Point2 {
+    Point2::new(centre.x + radius, centre.y)
 }

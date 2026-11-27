@@ -5010,3 +5010,92 @@ pub fn ssi_coaxial() -> PinDefect<(crate::t_ssi_coaxial::Case,), crate::t_ssi::P
         check: |(c,), _| crate::t_ssi_coaxial::truth::check(c),
     }
 }
+
+// ---- the step-4 recipes (t_slice) --------------------------------------------------------
+
+/// The pin's contradictions of truth on the T12 recipes (`t_slice`). Each selects recipes by
+/// their inputs and checks on the pin's first run that the recorded contradiction is still
+/// the one it shows:
+///
+/// - Outcome: a block with an extent in `(0, c]` is refused by truth (72 §6.1: an edge no
+///   longer than the resolution merges its ends); the pin builds one, its floor being
+///   `SM_EFF_ZERO`, not the resolution.
+/// - Manifold: a part less itself is the empty body; the pin builds it (no faces, edges or
+///   vertices) but its own `is_manifold_solid` says no.
+/// - Topology: two operands with parallel planes `(0, c]` apart; the merged points rule
+///   makes one patch of them and the pin keeps them apart (more patches than truth).
+/// - Classification: the pin puts some of T10's certain points on the wrong side, every one
+///   of them within `1.5 sqrt(3) c` of the boundary (in T10's band at 1.5 times the
+///   width): points `2c` off a face, which the resolution leaves outside, the pin answers
+///   inside (and a few the reverse).
+pub fn slice() -> Vec<crate::t_slice::SliceDefect> {
+    use crate::t_slice::{Check, PinOutcome, RES, SliceDefect, misplaced, near_coplanar};
+    use scx_testkit::recipe::{Op, Outcome, Shape};
+    vec![
+        SliceDefect {
+            reason: "the pin builds a block with an extent at or below the resolution",
+            check: Check::Outcome,
+            applies: |r| {
+                r.steps.is_empty()
+                    && matches!(&r.base.shape, Shape::Block { size }
+                        if size.iter().any(|&a| a > 0.0 && a <= RES))
+            },
+            holds: |_, _, run| match run.outcome {
+                PinOutcome::Body => Ok(()),
+                _ => Err(format!("the pin answers {:?}", run.outcome)),
+            },
+        },
+        SliceDefect {
+            reason: "the pin's empty body (a part less itself) fails its own manifold check",
+            check: Check::Manifold,
+            applies: |r| matches!(r.steps.as_slice(), [s] if s.op == Op::Difference && s.tool == r.base),
+            holds: |_, _, run| {
+                let f = run.facts.as_ref().ok_or("no body")?;
+                let fev = f.topo.as_ref().map(|t| t.fev).map_err(Clone::clone)?;
+                if fev == [0, 0, 0] && f.manifold == Ok(false) {
+                    Ok(())
+                } else {
+                    Err(format!("fev {fev:?}, manifold {:?}", f.manifold))
+                }
+            },
+        },
+        SliceDefect {
+            reason: "the pin keeps parallel faces less than c apart as separate patches",
+            check: Check::Topology,
+            applies: near_coplanar,
+            holds: |r, _, run| {
+                let want = match &r.outcome {
+                    Outcome::Built(t) => t.patch_count().ok_or("no stated patches")?,
+                    o => return Err(format!("truth {o:?}")),
+                };
+                let f = run.facts.as_ref().ok_or("no body")?;
+                let got: u32 = f
+                    .topo
+                    .as_ref()
+                    .map_err(Clone::clone)?
+                    .patches
+                    .values()
+                    .sum();
+                if got > want {
+                    Ok(())
+                } else {
+                    Err(format!("pin patches {got}, truth {want}"))
+                }
+            },
+        },
+        SliceDefect {
+            reason: "the pin misplaces certain points within 1.5 sqrt(3) c of the boundary",
+            check: Check::Classification,
+            applies: |r| !matches!(r.outcome, Outcome::Refused(_)),
+            holds: |_, pts, run| {
+                let f = run.facts.as_ref().ok_or("no body")?;
+                let m = misplaced(pts, &f.sides);
+                if m.count > 0 && m.reach <= 1.5 {
+                    Ok(())
+                } else {
+                    Err(format!("{} misplaced, reach {} c", m.count, m.reach))
+                }
+            },
+        },
+    ]
+}
