@@ -21,7 +21,7 @@ use scx_p21::part42::geom::*;
 use scx_p21::part42::read::Reader;
 use scx_p21::part42::write;
 use scx_p21::units::Units;
-use scx_p21::{parse, Exchange, Header, P21Error, Writer};
+use scx_p21::{Exchange, Header, P21Error, Writer, parse};
 
 const MM: Units = Units { len: 1.0, ang: 1.0 };
 
@@ -425,11 +425,7 @@ impl Rng {
             _ => {
                 let m = (self.next() >> 11) as f64; // [0, 2^53)
                 let x = m * f64::from_bits((1023 - 43 - self.below(40)) << 52);
-                if self.below(2) == 0 {
-                    x
-                } else {
-                    -x
-                }
+                if self.below(2) == 0 { x } else { -x }
             }
         }
     }

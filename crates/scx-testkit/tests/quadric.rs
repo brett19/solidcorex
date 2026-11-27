@@ -15,11 +15,11 @@
 )]
 
 use scx_num::hash::Rng;
+use scx_testkit::Rat;
 use scx_testkit::analytic::Frame;
 use scx_testkit::dd::{self, Dd};
 use scx_testkit::nurbs::{Side, Surface};
 use scx_testkit::quadric::{Error, Implicit, Layout, Order, Param};
-use scx_testkit::Rat;
 
 /// A random frame of small integers with independent axes, so every image point below is
 /// an exact double.
@@ -407,7 +407,7 @@ fn the_closed_form_point_satisfies_the_exact_equation() {
     let mut rng = Rng::new(7);
     let mut worst: f64 = 0.0;
     for _ in 0..30 {
-        let frame = scx_testkit::gen::frame(&mut rng, 4.0);
+        let frame = scx_testkit::sample::frame(&mut rng, 4.0);
         let kinds = [
             Implicit::Plane { frame },
             Implicit::Cylinder { frame, radius: 1.5 },

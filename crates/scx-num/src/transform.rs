@@ -523,9 +523,10 @@ mod tests {
     fn singular_axes_do_not_invert() {
         let flat = Transform::new(Point3::ORIGIN, v(1.0, 0.0, 0.0), v(2.0, 0.0, 0.0), None);
         assert!(flat.inv_transform_vector(v(1.0, 1.0, 1.0)).is_err());
-        assert!(flat
-            .inv_evaluate_guess_point_simple(Point3::ORIGIN)
-            .is_err());
+        assert!(
+            flat.inv_evaluate_guess_point_simple(Point3::ORIGIN)
+                .is_err()
+        );
     }
 
     #[test]

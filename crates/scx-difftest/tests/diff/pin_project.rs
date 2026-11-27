@@ -18,10 +18,10 @@
 use scx_num::hash::Rng;
 use scx_testkit::analytic::{Cone, Ellipse, Frame, Torus};
 use scx_testkit::dd::{self, Dd};
-use scx_testkit::gen::{self, TorusKind};
 use scx_testkit::project::{Nappes, Projection};
-use solidcore::curve::curve::p1::GlobalPointSolveOptions;
+use scx_testkit::sample::{self, TorusKind};
 use solidcore::curve::curve::Curve;
+use solidcore::curve::curve::p1::GlobalPointSolveOptions;
 use solidcore::curve::ellipse::p2::EllipseOptions;
 use solidcore::geom::axis2_placement::Axis2Placement;
 use solidcore::geom::extent1d::Extent1d;
@@ -29,8 +29,8 @@ use solidcore::geom::global_solver::{SolutionRequested, SolverOperation};
 use solidcore::geom::vector2d::Point2;
 use solidcore::geom::vector3d::Vec3;
 use solidcore::kernel::Kernel;
-use solidcore::surface::surface::p4::NoObject;
 use solidcore::surface::surface::Surface;
+use solidcore::surface::surface::p4::NoObject;
 use solidcore::surface::torus::{Torus as PinTorus, TorusOptions};
 
 /// The relative distance error of an answer within tolerance: above the pin's own
@@ -91,7 +91,7 @@ fn truth<P>(p: &Projection<P>) -> f64 {
 
 /// A frame with `z = x * y` to the rounding (the pin makes its own `z`).
 fn frame(rng: &mut Rng) -> Frame {
-    gen::frame(rng, 1.0)
+    sample::frame(rng, 1.0)
 }
 
 const STANDARD: Frame = Frame {
@@ -144,13 +144,13 @@ fn pin_ellipse_closest_point_against_t1() {
     let mut count = Count::default();
     let n = 48;
     for i in 0..n {
-        let e = gen::ellipse(&mut rng);
+        let e = sample::ellipse(&mut rng);
         let q = if i % 3 == 0 {
             // near the evolute, where two stationary points nearly meet
             let lift = 0.1 * rng.next_signed_unit();
-            gen::ellipse_evolute(&mut rng, &e, 1e-3, lift)
+            sample::ellipse_evolute(&mut rng, &e, 1e-3, lift)
         } else {
-            gen::query(&mut rng, &e.frame, 2.0)
+            sample::query(&mut rng, &e.frame, 2.0)
         };
         let t = truth(&e.stationary(q).unwrap());
         count.file(
@@ -236,9 +236,9 @@ fn pin_torus_closest_point_against_t3() {
         let kind = [TorusKind::Ring, TorusKind::Horn, TorusKind::Spindle][i % 3];
         let t = Torus {
             frame: frame(&mut rng),
-            ..gen::torus(&mut rng, kind)
+            ..sample::torus(&mut rng, kind)
         };
-        let q = gen::query(&mut rng, &t.frame, 3.0);
+        let q = sample::query(&mut rng, &t.frame, 3.0);
         let tr = truth(&t.stationary(q).unwrap());
         count.file(i, pin_torus(&k, &t, q), tr, &format!("torus {t:?} q {q:?}"));
     }
@@ -296,9 +296,9 @@ fn pin_cone_closest_point_against_t3() {
     for i in 0..n {
         let c = Cone {
             frame: frame(&mut rng),
-            ..gen::cone(&mut rng)
+            ..sample::cone(&mut rng)
         };
-        let q = gen::query(&mut rng, &c.frame, 3.0);
+        let q = sample::query(&mut rng, &c.frame, 3.0);
         // The pin's cone is the nappe holding the reference circle, apex to infinity.
         let tr = truth(&c.stationary(q, Nappes::One).unwrap());
         count.file(i, pin_cone(&k, &c, q), tr, &format!("cone {c:?} q {q:?}"));

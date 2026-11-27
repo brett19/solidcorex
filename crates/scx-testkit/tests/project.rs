@@ -14,12 +14,12 @@
 )]
 
 use scx_num::hash::Rng;
+use scx_testkit::Rat;
 use scx_testkit::analytic::{Circle, Cone, Ellipse, Frame, Torus, V3};
 use scx_testkit::bound::{self, Bound};
 use scx_testkit::dd::{self, Dd};
-use scx_testkit::gen::{self, TorusKind};
 use scx_testkit::project::{Enclosed, Kind, Locus, Nappes, Nearest, Projection, Uv};
-use scx_testkit::Rat;
+use scx_testkit::sample::{self, TorusKind};
 
 fn sub(a: V3, b: V3) -> V3 {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
@@ -211,8 +211,8 @@ fn check_ellipse_points(e: &Ellipse, q: [f64; 3], p: &Projection<Enclosed>) {
 fn ellipse_stationary_points_match_a_dense_scan() {
     let mut rng = Rng::new(1);
     for case in 0..24 {
-        let e = gen::ellipse(&mut rng);
-        let q = gen::query(&mut rng, &e.frame, 2.5);
+        let e = sample::ellipse(&mut rng);
+        let q = sample::query(&mut rng, &e.frame, 2.5);
         let p = e.stationary(q).unwrap();
         check_narrow(&p, 1e-28);
         check_ellipse_points(&e, q, &p);
@@ -289,9 +289,9 @@ fn ellipse_nearest_matches_eberly() {
 fn ellipse_with_equal_axes_is_the_circle() {
     let mut rng = Rng::new(3);
     for _ in 0..20 {
-        let frame = gen::frame(&mut rng, 1.0);
+        let frame = sample::frame(&mut rng, 1.0);
         let r = 0.25 + rng.next_f64();
-        let q = gen::query(&mut rng, &frame, 2.0);
+        let q = sample::query(&mut rng, &frame, 2.0);
         let e = Ellipse {
             frame,
             semi_x: r,
@@ -357,9 +357,10 @@ fn ellipse_degenerate_queries() {
         assert_eq!(p.loci[*i].kind(), Kind::Min);
     }
     // t = pi is found from the turned-over quartic, exactly.
-    assert!(p
-        .points()
-        .any(|s| s.param.mid == dd::consts().pi && s.distance == Bound::exact(Rat::from(2))));
+    assert!(
+        p.points()
+            .any(|s| s.param.mid == dd::consts().pi && s.distance == Bound::exact(Rat::from(2)))
+    );
     // On the major axis inside the evolute's cusp (|x| < (a^2 - b^2) / a = 1.5): the
     // vertex (2, 0) is a local maximum between two symmetric minima off the axis.
     let p = e.stationary([0.5, 0.0, 0.0]).unwrap();
@@ -393,9 +394,9 @@ fn ellipse_degenerate_queries() {
 fn ellipse_near_the_evolute_stays_certified() {
     let mut rng = Rng::new(4);
     for case in 0..24 {
-        let e = gen::ellipse(&mut rng);
+        let e = sample::ellipse(&mut rng);
         let gap = [1e-6, 1e-9, 1e-12, 1e-15][case % 4];
-        let q = gen::ellipse_evolute(&mut rng, &e, gap, 0.0);
+        let q = sample::ellipse_evolute(&mut rng, &e, gap, 0.0);
         let p = e.stationary(q).unwrap();
         check_ellipse_points(&e, q, &p);
         let mins = p.points().filter(|s| s.kind == Kind::Min).count();
@@ -468,9 +469,9 @@ fn torus_stationary_points_are_stationary_with_their_kinds() {
             let frame = exact_frame(&mut rng);
             let t = Torus {
                 frame,
-                ..gen::torus(&mut rng, kind)
+                ..sample::torus(&mut rng, kind)
             };
-            let q = gen::query(&mut rng, &frame, 3.0);
+            let q = sample::query(&mut rng, &frame, 3.0);
             let p = t.stationary(q).unwrap();
             check_narrow(&p, 1e-50);
             for s in p.points() {
@@ -497,10 +498,10 @@ fn torus_stationary_points_are_stationary_with_their_kinds() {
                 }
             }
             // The double-double Newton foot, where it has one, agrees.
-            if let (Some(foot), Nearest::Unique(_)) = (t.closest(q), &p.nearest) {
-                if kind == TorusKind::Ring {
-                    assert!((foot.distance.to_f64() - dn).abs() <= 1e-15 * (1.0 + dn));
-                }
+            if let (Some(foot), Nearest::Unique(_)) = (t.closest(q), &p.nearest)
+                && kind == TorusKind::Ring
+            {
+                assert!((foot.distance.to_f64() - dn).abs() <= 1e-15 * (1.0 + dn));
             }
         }
     }
@@ -510,8 +511,8 @@ fn torus_stationary_points_are_stationary_with_their_kinds() {
 fn torus_in_rotated_frames_agrees_to_rounding() {
     let mut rng = Rng::new(6);
     for _ in 0..24 {
-        let t = gen::torus(&mut rng, TorusKind::Ring);
-        let q = gen::query(&mut rng, &t.frame, 3.0);
+        let t = sample::torus(&mut rng, TorusKind::Ring);
+        let q = sample::query(&mut rng, &t.frame, 3.0);
         let p = t.stationary(q).unwrap();
         if let Some(foot) = t.closest(q) {
             let dn = nearest_distance(&p);
@@ -527,13 +528,13 @@ fn torus_in_rotated_frames_agrees_to_rounding() {
 fn torus_with_a_tiny_hole_is_the_sphere() {
     let mut rng = Rng::new(7);
     for _ in 0..20 {
-        let frame = gen::frame(&mut rng, 1.0);
+        let frame = sample::frame(&mut rng, 1.0);
         let t = Torus {
             frame,
             major: dd::pow2(-30),
             minor: 1.0,
         };
-        let q = gen::query(&mut rng, &frame, 3.0);
+        let q = sample::query(&mut rng, &frame, 3.0);
         let p = t.stationary(q).unwrap();
         let len = norm(sub(lift(q), lift(frame.origin)));
         assert!((nearest_distance(&p) - (len - 1.0).abs()).abs() <= 2.0 * dd::pow2(-30));
@@ -561,7 +562,7 @@ fn torus_degenerate_queries() {
     };
     assert_eq!(near.kind, Kind::Min);
     assert!((mid(&near.distance) - 2.0).abs() < 1e-30); // sqrt(1.5^2 + 2^2) - 0.5
-                                                        // At the centre: the inner equator, at R - r.
+    // At the centre: the inner equator, at R - r.
     let p = ring.stationary([0.0; 3]).unwrap();
     assert!((nearest_distance(&p) - 1.5).abs() < 1e-30);
     // On the tube's centre circle: the meridian circle at distance r, the nearest.
@@ -613,12 +614,14 @@ fn torus_degenerate_queries() {
     );
     // Rejected input.
     assert!(Torus { minor: 0.0, ..ring }.stationary([1.0; 3]).is_none());
-    assert!(Torus {
-        major: -1.0,
-        ..ring
-    }
-    .stationary([1.0; 3])
-    .is_none());
+    assert!(
+        Torus {
+            major: -1.0,
+            ..ring
+        }
+        .stationary([1.0; 3])
+        .is_none()
+    );
 }
 
 // ---------------------------------------------------------------- T3: the cone
@@ -630,9 +633,9 @@ fn cone_stationary_points_are_stationary_with_their_kinds() {
         let frame = exact_frame(&mut rng);
         let c = Cone {
             frame,
-            ..gen::cone(&mut rng)
+            ..sample::cone(&mut rng)
         };
-        let q = gen::query(&mut rng, &frame, 3.0);
+        let q = sample::query(&mut rng, &frame, 3.0);
         for nappes in [Nappes::One, Nappes::Both] {
             let p = c.stationary(q, nappes).unwrap();
             check_narrow(&p, 1e-50);
@@ -659,15 +662,14 @@ fn cone_stationary_points_are_stationary_with_their_kinds() {
                     );
                 }
             }
-            if nappes == Nappes::One {
-                if let Some(foot) = c.closest(q) {
-                    if p.nearest_locus().unwrap().kind() == Kind::Min {
-                        assert!(
-                            (foot.distance.to_f64() - dn).abs() <= 1e-15 * (1.0 + dn),
-                            "case {case}"
-                        );
-                    }
-                }
+            if nappes == Nappes::One
+                && let Some(foot) = c.closest(q)
+                && p.nearest_locus().unwrap().kind() == Kind::Min
+            {
+                assert!(
+                    (foot.distance.to_f64() - dn).abs() <= 1e-15 * (1.0 + dn),
+                    "case {case}"
+                );
             }
         }
     }
@@ -677,13 +679,13 @@ fn cone_stationary_points_are_stationary_with_their_kinds() {
 fn cone_with_a_tiny_angle_is_the_cylinder() {
     let mut rng = Rng::new(9);
     for _ in 0..20 {
-        let frame = gen::frame(&mut rng, 1.0);
+        let frame = sample::frame(&mut rng, 1.0);
         let c = Cone {
             frame,
             radius: 1.0,
             semi_angle: dd::pow2(-30),
         };
-        let q = gen::query(&mut rng, &frame, 3.0);
+        let q = sample::query(&mut rng, &frame, 3.0);
         let d = sub(lift(q), lift(frame.origin));
         // The frame's z is a unit vector only to rounding: measure along it, normalised.
         let z = lift(frame.z);
@@ -750,19 +752,25 @@ fn cone_degenerate_queries() {
     let p = c.stationary([1.0, 0.0, 0.0], Nappes::One).unwrap();
     assert!(matches!(p.nearest, Nearest::Unique(_)));
     // Rejected input.
-    assert!(Cone { radius: -1.0, ..c }
+    assert!(
+        Cone { radius: -1.0, ..c }
+            .stationary([1.0; 3], Nappes::One)
+            .is_none()
+    );
+    assert!(
+        Cone {
+            semi_angle: 0.0,
+            ..c
+        }
         .stationary([1.0; 3], Nappes::One)
-        .is_none());
-    assert!(Cone {
-        semi_angle: 0.0,
-        ..c
-    }
-    .stationary([1.0; 3], Nappes::One)
-    .is_none());
-    assert!(Cone {
-        semi_angle: 1.6,
-        ..c
-    }
-    .stationary([1.0; 3], Nappes::One)
-    .is_none());
+        .is_none()
+    );
+    assert!(
+        Cone {
+            semi_angle: 1.6,
+            ..c
+        }
+        .stationary([1.0; 3], Nappes::One)
+        .is_none()
+    );
 }

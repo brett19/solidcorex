@@ -74,11 +74,7 @@ const MAX_COUNT: usize = if cfg!(target_pointer_width = "32") {
 
 /// `n`, at most [`MAX_COUNT`] (a no-op on 64-bit targets).
 const fn at_most_max_count(n: usize) -> usize {
-    if n < MAX_COUNT {
-        n
-    } else {
-        MAX_COUNT
-    }
+    if n < MAX_COUNT { n } else { MAX_COUNT }
 }
 
 /// The deepest parameter nesting read.
@@ -403,11 +399,7 @@ impl Lexer<'_> {
         let x = if t.ends_with('.') || t.contains(".E") || t.contains(".e") {
             fixed = {
                 let f = t.replace(".E", ".0E").replace(".e", ".0e");
-                if f.ends_with('.') {
-                    f + "0"
-                } else {
-                    f
-                }
+                if f.ends_with('.') { f + "0" } else { f }
             };
             fixed.parse::<f64>()
         } else {
@@ -677,7 +669,7 @@ impl Lexer<'_> {
 
     /// Count an instance against the limit and ask the progress watcher.
     fn count(&mut self) -> Result<(), P21Error> {
-        if self.instances % PROGRESS_EVERY == 0 {
+        if self.instances.is_multiple_of(PROGRESS_EVERY) {
             if self.progress.stop() {
                 return Err(P21Error::Cancelled);
             }

@@ -59,11 +59,7 @@ impl Dd {
     /// `|self|`.
     #[must_use]
     pub fn abs(self) -> Dd {
-        if self.hi < 0.0 {
-            -self
-        } else {
-            self
-        }
+        if self.hi < 0.0 { -self } else { self }
     }
 
     /// `self 2^k`, exact whenever both parts stay normal.
@@ -398,11 +394,7 @@ pub fn atan2(y: Dd, x: Dd) -> Dd {
         }
     } else {
         let a = atan(x / y);
-        if y.hi > 0.0 {
-            k.pio2 - a
-        } else {
-            -k.pio2 - a
-        }
+        if y.hi > 0.0 { k.pio2 - a } else { -k.pio2 - a }
     }
 }
 

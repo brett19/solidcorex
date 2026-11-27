@@ -133,11 +133,7 @@ impl Kernel {
         let (s2, s2e) = two_sum(s, q);
         let s_lo = se + pe + s2e + qe + sl + cl * h + ch * ds + sh * dcl + sl * dc;
         let sin = fast_two_sum(s2, s_lo);
-        if neg {
-            (-sin.0, -sin.1)
-        } else {
-            sin
-        }
+        if neg { (-sin.0, -sin.1) } else { sin }
     }
 
     /// `cos y`: `cos(a + h) = cos a + cos a (cos h - 1) - sin a sin h`.

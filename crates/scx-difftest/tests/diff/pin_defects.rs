@@ -295,7 +295,7 @@ fn pin_ill_conditioned(s: P, e: P, t: P) -> bool {
 /// (within `2^-51`): see [`three_point_circle_2d`].
 fn true_circle(s: P, e: P, t: P) -> Circle {
     use core::cmp::Ordering::{Greater, Less};
-    use scx_testkit::exact::{ldexp, ratio, sqrt_ratio, Int};
+    use scx_testkit::exact::{Int, ldexp, ratio, sqrt_ratio};
     if !s.iter().chain(&e).chain(&t).all(|v| v.is_finite()) {
         return None;
     }
@@ -452,8 +452,8 @@ pub fn v2_normalized() -> PinDefect<([f64; 2],), Option<scx_num::vector2d::UnitV
 /// error exactly when `a` has no direction; otherwise `x` the direction of `a`, `y` in the
 /// plane of `a` and `y_ref` on its side when `y_ref` has a direction off `a`'s line, unit
 /// and square axes and `z = x × y`.
-pub fn v3_make_unit_ortho_vectors(
-) -> PinDefect<(V, Option<V>), scx_num::Result<[scx_num::vector3d::UnitVec3; 3]>> {
+pub fn v3_make_unit_ortho_vectors()
+-> PinDefect<(V, Option<V>), scx_num::Result<[scx_num::vector3d::UnitVec3; 3]>> {
     PinDefect {
         reason: "the pin's unit of an overflowing or non-finite vector is not a unit vector",
         applies: Applies::Disagreeing,
@@ -1012,8 +1012,8 @@ pub fn c_unit() -> PinDefect<(V,), Option<scx_num::vector3d::Vec3>> {
 /// `transform::Transform::mirror_simple(point, normal)`: the transform followed by the
 /// mirror in the plane (`x - 2 ((x - point)·n) n`), refused (unchanged) when the plane has
 /// no normal or the mirrored transform is too large to represent.
-pub fn tf_mirror_simple(
-) -> PinDefect<(crate::facade::TfR, V, V), (scx_num::Result<()>, scx_num::transform::Transform)> {
+pub fn tf_mirror_simple()
+-> PinDefect<(crate::facade::TfR, V, V), (scx_num::Result<()>, scx_num::transform::Transform)> {
     PinDefect {
         reason: "the pin's unit of an overflowing normal fails, so it leaves the transform as is",
         applies: Applies::Disagreeing,
@@ -1126,8 +1126,8 @@ fn refused_line<T: std::fmt::Debug>(r: &Option<scx_num::Result<T>>) -> Result<()
         _ => Err(format!("an undefined box or line is refused, not {r:?}")),
     }
 }
-pub fn e3_intersect_line(
-) -> PinDefect<([f64; 6], V, V), Option<scx_num::Result<scx_num::extent3d::LineHit>>> {
+pub fn e3_intersect_line()
+-> PinDefect<([f64; 6], V, V), Option<scx_num::Result<scx_num::extent3d::LineHit>>> {
     PinDefect {
         reason: "the pin clips an undefined line or box",
         applies: Applies::Inputs(|(a, p, d)| nan_line(a, p, d)),
@@ -1148,7 +1148,7 @@ pub fn e3_line_hit_count() -> PinDefect<([f64; 6], V, V), Option<scx_num::Result
 // could hide the construct). The clauses are those of ISO 10303-21:2016.
 
 use crate::t_p21::{
-    Text, XRead, EMPTY_COMPLEX, ENUM_DASH, LOWER_HEX, PAGE_LATIN, TYPED_MANY, TYPED_NONE,
+    EMPTY_COMPLEX, ENUM_DASH, LOWER_HEX, PAGE_LATIN, TYPED_MANY, TYPED_NONE, Text, XRead,
 };
 use scx_p21::{P21Error, Param, Refusal, Syntax};
 
@@ -1342,9 +1342,9 @@ pub fn p21_lower_hex() -> PinDefect<(Text<LOWER_HEX>,), XRead> {
 
 // ---- scx-nurbs (t_nurbs) ----------------------------------------------------------------
 
-use crate::t_nurbs::{s as pin_nurbs, At, Hom};
-use scx_testkit::nurbs as tk;
+use crate::t_nurbs::{At, Hom, s as pin_nurbs};
 use scx_testkit::Rat;
+use scx_testkit::nurbs as tk;
 
 /// The two pieces of a split Bezier curve.
 type Pieces = Option<[Vec<[f64; 3]>; 2]>;
@@ -1369,11 +1369,7 @@ fn hull_scale(a: &At) -> f64 {
 
 /// The larger of two differences, a NaN difference counting as infinite.
 fn worst(m: f64, d: f64) -> f64 {
-    if d.is_nan() {
-        f64::INFINITY
-    } else {
-        m.max(d)
-    }
+    if d.is_nan() { f64::INFINITY } else { m.max(d) }
 }
 
 /// The largest coordinate difference of two point lists of the same length.
@@ -1762,7 +1758,7 @@ use crate::t_nurbs_surface::{Homog, Raw, Read};
 fn not_a_surface(r: &Raw) -> Option<String> {
     let (p, q) = r.degrees;
     let n = r.points.len();
-    if r.cols == 0 || n % r.cols != 0 {
+    if r.cols == 0 || !n.is_multiple_of(r.cols) {
         return Some(format!("{n} points do not fill rows of {}", r.cols));
     }
     let rows = n / r.cols;

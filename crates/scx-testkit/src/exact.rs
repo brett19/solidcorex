@@ -277,7 +277,7 @@ impl Int {
     /// otherwise); zero when `d` is zero.
     #[must_use]
     pub fn div_exact(&self, d: &Int) -> Int {
-        self.div_rem(d).map(|(q, _)| q).unwrap_or_default()
+        self.div_rem(d).map_or_default(|(q, _)| q)
     }
 
     /// `|self| * 2^se` against `|o| * 2^oe`.

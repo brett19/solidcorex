@@ -9,7 +9,7 @@
 //! produced is finite, since a difference that rounds to zero divides into an infinity or a
 //! NaN that reaches every value it touches.
 
-use crate::{Approach, KnotVector, NurbsError, Result, MAX_DEGREE, MAX_ORDER};
+use crate::{Approach, KnotVector, MAX_DEGREE, MAX_ORDER, NurbsError, Result};
 
 /// The scratch width for degrees below it (the pin's `SMALL_DEGREE`).
 pub(crate) const SMALL: usize = 8;

@@ -258,8 +258,8 @@ mod tests {
     use scx_num::hash::Rng;
     use scx_nurbs::NurbsError;
     use scx_testkit::data::SurfaceData;
-    use scx_testkit::gen::{self, Knots, Spec, Weights};
     use scx_testkit::nurbs::Side;
+    use scx_testkit::sample::{self, Knots, Spec, Weights};
 
     fn kv(p: usize, k: &[f64]) -> KnotVector {
         KnotVector::new(p, k.to_vec()).unwrap()
@@ -286,7 +286,7 @@ mod tests {
                         count: degree + 3,
                         knots,
                     };
-                    out.push(gen::surface(&mut rng, (spec(pu), spec(pv)), weights));
+                    out.push(sample::surface(&mut rng, (spec(pu), spec(pv)), weights));
                 }
             }
         }

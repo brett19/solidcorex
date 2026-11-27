@@ -26,7 +26,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use crate::harness::{run, run_defect, Bits, Gen, Out, SplitMix64};
+use crate::harness::{Bits, Gen, Out, SplitMix64, run, run_defect};
 use crate::pin_defects;
 
 use scx_p21 as x;
@@ -581,7 +581,7 @@ fn compare_file(name: &str, text: &str, c: &mut Corpus) {
                     o.err().map(|e| e.one_line().to_string()),
                     p.err().map(|e| e.to_string())
                 )
-            })
+            });
         }
     };
     let (cx_, cs_) = (canon_x(&o), canon_s(&p));

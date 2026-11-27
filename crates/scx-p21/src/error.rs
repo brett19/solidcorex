@@ -10,7 +10,7 @@
 
 use core::fmt;
 
-use scx_num::error::{chain, ErrorKind};
+use scx_num::error::{ErrorKind, chain};
 
 /// Why a text could not be read or an exchange could not be written.
 #[derive(Clone, Debug, PartialEq)]
@@ -964,9 +964,10 @@ mod tests {
         sorted.sort_unstable();
         sorted.dedup();
         assert_eq!(sorted.len(), names.len(), "{names:?}");
-        assert!(names.iter().all(|n| n
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')));
+        assert!(names.iter().all(|n| {
+            n.bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+        }));
         let within = P21Error::Within {
             id: 2,
             source: Box::new(P21Error::entity(1, EntityCause::Cycle)),

@@ -19,7 +19,7 @@
 //! (`solvers::CLASSES`). The `usize` argument splits the configurations into 13 shares.
 
 use crate::diff;
-use crate::solvers::{Class, CLASSES, F1, FN};
+use crate::solvers::{CLASSES, Class, F1, FN};
 
 /// Calls swept per configuration.
 const SWEEP: usize = 48;

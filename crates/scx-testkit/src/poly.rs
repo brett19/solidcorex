@@ -103,7 +103,7 @@ impl Poly {
         let mut q = vec![Rat::zero(); r.len().saturating_sub(dn)];
         while r.len() > dn && !r.is_empty() {
             let top = r.len() - 1;
-            let k = r.last().map(|t| t * &lead).unwrap_or_default();
+            let k = r.last().map_or_default(|t| t * &lead);
             let shift = top - dn;
             for (j, dc) in d.c.iter().enumerate() {
                 if let Some(rj) = r.get_mut(shift + j) {

@@ -57,9 +57,9 @@ use std::f64::consts::FRAC_PI_2;
 use std::sync::Arc;
 
 use super::geom::{
-    Associated, Axis1, BSplineCurve, BSplineSurface, Curve, CurveForm, KnotSpec, Logical, Pcurve,
-    Placement, PreferredRep, Surface, SurfaceCurveKind, SurfaceForm, Trim, TrimPreference, Vector,
-    P3,
+    Associated, Axis1, BSplineCurve, BSplineSurface, Curve, CurveForm, KnotSpec, Logical, P3,
+    Pcurve, Placement, PreferredRep, Surface, SurfaceCurveKind, SurfaceForm, Trim, TrimPreference,
+    Vector,
 };
 use crate::error::{EntityCause, InvalidValue, Limit, P21Error, Unsupported};
 use crate::exchange::{Exchange, Instance, Param};
@@ -288,11 +288,7 @@ impl<'a> Fields<'a> {
 
 /// `x` when it is positive; else the refusal `what` at `#id`.
 fn positive(id: u64, x: f64, what: InvalidValue) -> Result<f64> {
-    if x > 0.0 {
-        Ok(x)
-    } else {
-        invalid(id, what)
-    }
+    if x > 0.0 { Ok(x) } else { invalid(id, what) }
 }
 
 fn curve_form(p: Option<&Param>) -> CurveForm {

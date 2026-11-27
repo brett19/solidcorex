@@ -15,10 +15,8 @@
 //! the defect's own check against the true value instead.
 
 use std::fmt::Debug;
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Once;
-
-use scx_num::certified::{next_down, next_up};
 
 /// SplitMix64 (Steele, Lea and Flood 2014), written out so the inputs depend on nothing.
 #[derive(Clone)]
@@ -134,10 +132,10 @@ pub fn thresholds() -> Vec<f64> {
 pub fn threshold_f64() -> Vec<f64> {
     let mut v = Vec::new();
     for t in thresholds() {
-        v.extend([next_down(t), t, next_up(t)]);
+        v.extend([t.next_down(), t, t.next_up()]);
     }
     for t in [scx_num::math::EFF_ZERO, scx_num::consts::ZONE_DEFAULT] {
-        v.extend([-next_down(t), -t, -next_up(t)]);
+        v.extend([-t.next_down(), -t, -t.next_up()]);
     }
     v
 }
@@ -215,7 +213,7 @@ fn vec_pool<const N: usize>(rng: &mut SplitMix64, special: &[[f64; N]]) -> Vec<[
         scx_num::consts::ZONE_DEFAULT,
         scx_num::math::EFF_ZERO_SQRT,
     ] {
-        for x in [next_down(t), t, next_up(t)] {
+        for x in [t.next_down(), t, t.next_up()] {
             let mut a = [0.0; N];
             a[0] = x;
             v.push(a);
@@ -349,9 +347,9 @@ impl Gen for [[f64; 4]; 4] {
         for s in [
             1.0e-310,
             f64::from_bits(1),
-            next_down(scx_num::math::EFF_ZERO),
+            scx_num::math::EFF_ZERO.next_down(),
             scx_num::math::EFF_ZERO,
-            next_up(scx_num::math::EFF_ZERO),
+            scx_num::math::EFF_ZERO.next_up(),
         ] {
             let mut m = id;
             for (i, row) in m.iter_mut().enumerate().take(3) {

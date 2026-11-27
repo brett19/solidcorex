@@ -84,9 +84,9 @@
 
 use crate::error::{EvalError, SolveError, SolveFailure};
 use crate::local_solve1d::Domain1d;
+use scx_num::NumError;
 use scx_num::math::{BIG_DOUBLE, EFF_ZERO, EFF_ZERO_SQ, EFF_ZERO_SQRT};
 use scx_num::matrix::Matrix;
-use scx_num::NumError;
 
 /// Whether the Jacobian system's solve failed with `SM_ERR` (the system is not solvable),
 /// which ends the iteration: by its status, so also a typed failure that replaced the

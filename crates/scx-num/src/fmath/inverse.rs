@@ -89,29 +89,17 @@ pub(super) fn atan2(y: f64, x: f64) -> f64 {
     let (ax, ay) = (x.abs(), y.abs());
     let x_neg = x.is_sign_negative();
     let r = if ay == 0.0 {
-        if x_neg {
-            PI.0
-        } else {
-            0.0
-        }
+        if x_neg { PI.0 } else { 0.0 }
     } else if ax == 0.0 {
         PIO2.0
     } else if ay == f64::INFINITY {
         if ax == f64::INFINITY {
-            if x_neg {
-                PI3O4.0
-            } else {
-                PIO4.0
-            }
+            if x_neg { PI3O4.0 } else { PIO4.0 }
         } else {
             PIO2.0
         }
     } else if ax == f64::INFINITY {
-        if x_neg {
-            PI.0
-        } else {
-            0.0
-        }
+        if x_neg { PI.0 } else { 0.0 }
     } else if !x_neg && ay < ax * RATIO_TINY {
         // atan(t) = t (1 - t^2/3 + ...) with t^2/3 below 2^-121: atan(y/x) rounds as y/x
         // does (and y/x is correctly rounded, subnormal or not).
@@ -183,9 +171,5 @@ pub(super) fn acos(x: f64) -> f64 {
     } else {
         atan_ratio(c, (a, 0.0))
     };
-    if x < 0.0 {
-        sub(PI, r).0
-    } else {
-        r.0
-    }
+    if x < 0.0 { sub(PI, r).0 } else { r.0 }
 }

@@ -84,12 +84,12 @@ pub fn knots(rng: &mut Rng, spec: Spec) -> Vec<f64> {
         Knots::Clustered => {
             // Pull about half the knots to within 1..8 ulps of the previous one.
             for i in 1..inner.len() {
-                if rng.next_u64() & 1 == 0 {
-                    if let Some(&prev) = inner.get(i - 1) {
-                        let n = 1 + below(rng, 8) as i64;
-                        if let Some(k) = inner.get_mut(i) {
-                            *k = ulps(prev, n).min(0.99);
-                        }
+                if rng.next_u64() & 1 == 0
+                    && let Some(&prev) = inner.get(i - 1)
+                {
+                    let n = 1 + below(rng, 8) as i64;
+                    if let Some(k) = inner.get_mut(i) {
+                        *k = ulps(prev, n).min(0.99);
                     }
                 }
             }

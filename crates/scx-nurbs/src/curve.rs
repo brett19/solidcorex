@@ -20,10 +20,10 @@ use core::fmt;
 
 use scx_num::extent1d::Extent1d;
 
-use crate::basis::{check_order, derivs_into, values_into, FULL, SMALL};
+use crate::basis::{FULL, SMALL, check_order, derivs_into, values_into};
 use crate::bezier::{elevate_into, elevation_matrix};
 use crate::point::{Control, Weighted};
-use crate::{Approach, KnotVector, NurbsError, Result, MAX_DEGREE};
+use crate::{Approach, KnotVector, MAX_DEGREE, NurbsError, Result};
 
 /// A control point, knot or scratch index the built curve's invariants rule out: a bug.
 const MISSING_POINT: NurbsError = NurbsError::Defect {
@@ -704,8 +704,8 @@ impl<const D: usize> fmt::Display for NurbsCurve<D> {
 mod tests {
     use super::*;
     use scx_num::hash::Rng;
-    use scx_testkit::gen::{self, Knots, Spec, Weights};
     use scx_testkit::nurbs as tk;
+    use scx_testkit::sample::{self, Knots, Spec, Weights};
 
     const SIDES: [(Approach, tk::Side); 2] = [
         (Approach::Below, tk::Side::Below),
@@ -743,7 +743,7 @@ mod tests {
                         count: degree + 4,
                         knots,
                     };
-                    out.push(gen::curve(&mut rng, spec, weights));
+                    out.push(sample::curve(&mut rng, spec, weights));
                 }
             }
         }
@@ -764,7 +764,7 @@ mod tests {
             let c = ours(&data);
             let exact = data.exact().unwrap();
             for _ in 0..3 {
-                let u = gen::parameter(&mut rng, &data.knots, (-0.1, 1.1));
+                let u = sample::parameter(&mut rng, &data.knots, (-0.1, 1.1));
                 for (side, tside) in SIDES {
                     let want = exact.derivs(u, tside, 3).unwrap();
                     let d = c.derivs::<4>(u, side).unwrap();
@@ -809,7 +809,7 @@ mod tests {
         let mut rng = Rng::new(9);
         for data in curves(3).into_iter().step_by(2) {
             // Drawn before the skip, so every curve meets the same parameter as before.
-            let u = gen::parameter(&mut rng, &data.knots, (0.05, 0.95));
+            let u = sample::parameter(&mut rng, &data.knots, (0.05, 0.95));
             if has_break(&data) {
                 continue;
             }

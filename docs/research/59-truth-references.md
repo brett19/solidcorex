@@ -56,7 +56,7 @@ shared type (JUDGED).
 | `bound` | `Bound`: a closed interval of `Rat`, rounded outward; certified `sqrt`, reciprocal, `sin_cos` and `tan` | certified |
 | `poly` | `Poly`: polynomials over `Rat`; square-free parts (Yun), Sturm sequences, every real root isolated to a width | exact |
 | `project` | All the stationary points of the distance from a point to an ellipse (T1), a torus or a cone (T3), each enclosed, with their kinds and the certified nearest | certified |
-| `gen` | Seeded generators: knots (uniform, random, clustered within ulps, repeated), weights (unit, moderate, near zero), points, curves, surfaces, parameters on and beside knots, frames, near-tangent pairs | |
+| `sample` | Seeded generators: knots (uniform, random, clustered within ulps, repeated), weights (unit, moderate, near zero), points, curves, surfaces, parameters on and beside knots, frames, near-tangent pairs | |
 | `data` | `CurveData` and `SurfaceData`: plain data, with `exact()` to get the reference | |
 
 Every NURBS result is an `Exact<D> { exact: [Rat; D], rounded: [f64; D] }`. A library is checked in
@@ -288,7 +288,7 @@ takes about 0.5 s; each of its tests is under 0.7 s alone.
     `a = 2^-30` is the cylinder (`|rho - 1|` to `(|h| + 1) a`, and `|rho - 1 - h a|` to 1e-14).
   - The degenerate queries: on the axis, the tube's centre circle, a horn's centre, a spindle's pinch
     (exactly 0), the apex (exactly 0), on the axis above and below the apex for one nappe and both.
-- **`tests/gen.rs`.**
+- **`tests/sample.rs`.**
   - Equal seeds give equal data.
   - Every generated curve is valid and clamped.
   - The clustered, repeated and near-zero kinds really occur: each is counted to be above 100.

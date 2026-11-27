@@ -16,7 +16,7 @@ use scx_num::error::ErrorKind;
 use scx_p21::error::{Counted, Limit, Unwritable};
 use scx_p21::parse::{MAX_BYTES, PEAK_PER_BYTE};
 use scx_p21::{
-    parse, parse_with, Instance, Limits, P21Error, Param, Progress, Refusal, Syntax, Warning,
+    Instance, Limits, P21Error, Param, Progress, Refusal, Syntax, Warning, parse, parse_with,
 };
 
 /// A file of the minimal header and one DATA section holding `data`.
@@ -443,10 +443,12 @@ fn a_malformed_header_record_is_skipped() {
         p.warnings
     );
     // With nothing after the junk to resume at, the file is an error.
-    assert!(parse(
-        "ISO-10303-21;\nHEADER;\nFILE_NAME('a');junk').;ENDSEC;DATA;ENDSEC;END-ISO-10303-21;"
-    )
-    .is_err());
+    assert!(
+        parse(
+            "ISO-10303-21;\nHEADER;\nFILE_NAME('a');junk').;ENDSEC;DATA;ENDSEC;END-ISO-10303-21;"
+        )
+        .is_err()
+    );
 }
 
 /// Skipping stops at DATA when the header's `ENDSEC;` is missing, so the instances are not
@@ -512,12 +514,14 @@ fn hostile_text_is_refused() {
         syntax(&format!("{pad}#1=A({}{});", "(".repeat(65), ")".repeat(65))),
         Syntax::NestedTooDeeply { limit: 64 }
     );
-    assert!(parse(&file(&format!(
-        "{pad}#1=A({}{});",
-        "(".repeat(64),
-        ")".repeat(64)
-    )))
-    .is_ok());
+    assert!(
+        parse(&file(&format!(
+            "{pad}#1=A({}{});",
+            "(".repeat(64),
+            ")".repeat(64)
+        )))
+        .is_ok()
+    );
 }
 
 /// Errors name their cause through `source()`, down to the grammar rule broken.
@@ -639,12 +643,14 @@ fn limits() {
 fn memory_is_checked_first() {
     let t = file("#1=A();");
     let needed = t.len() * PEAK_PER_BYTE;
-    assert!(parse_with(
-        &t,
-        Limits::default().with_memory(needed),
-        &scx_p21::Unwatched
-    )
-    .is_ok());
+    assert!(
+        parse_with(
+            &t,
+            Limits::default().with_memory(needed),
+            &scx_p21::Unwatched
+        )
+        .is_ok()
+    );
     let refused = P21Error::Exhausted(Limit::NeedsMemory {
         needed,
         available: needed - 1,

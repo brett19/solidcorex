@@ -65,7 +65,7 @@
 //! ([`TmN`]) for the feet's tube (`feet_tm.rs`, Rump's form about its polynomial), each in
 //! the operations and order it had in its own copy, so every caller's bits are unchanged.
 
-use scx_num::interval::{cmax, round_up, Ivl};
+use scx_num::interval::{Ivl, cmax, round_up};
 use scx_num::ring::Ring;
 use scx_num::series::GnScalar;
 use scx_num::taylor_model::TmN;
@@ -397,11 +397,7 @@ where
 /// `smos_Max(a, b)`: `(a > b) ? a : b`.
 #[inline]
 fn smax(a: f64, b: f64) -> f64 {
-    if a > b {
-        a
-    } else {
-        b
-    }
+    if a > b { a } else { b }
 }
 
 /// A row-major matrix read and written by signed indices, as the fork's nested vectors

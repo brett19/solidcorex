@@ -389,7 +389,7 @@ impl Affine {
     /// SolidCraft's station-map check, `maps_ok`.
     #[must_use]
     pub fn is_regular(&self, ratio: f64) -> crate::certified::Verdict {
-        use crate::certified::{gamma, Bounded, Verdict};
+        use crate::certified::{Bounded, Verdict, gamma};
         if !self.is_finite() || ratio.is_nan() || ratio < 0.0 || ratio.is_infinite() {
             return Verdict::No;
         }
@@ -592,7 +592,7 @@ impl Affine {
     /// underflow, and then by one more double for the subtraction or addition.
     #[must_use]
     pub fn transformed_box(&self, b: Extent3d) -> Option<Extent3d> {
-        use crate::certified::{gamma, next_down, next_up};
+        use crate::certified::gamma;
         let (lo, hi) = (b.min(), b.max());
         let ([tx, ty, tz], td) = (self.axes, self.shift);
         let g = gamma(5);
@@ -619,7 +619,7 @@ impl Affine {
                 size(td.y, tx.y, ty.y, tz.y),
                 size(td.z, tx.z, ty.z, tz.z),
             );
-            let (down, up) = ((p - e).map(next_down), (p + e).map(next_up));
+            let (down, up) = ((p - e).map(f64::next_down), (p + e).map(f64::next_up));
             min = Point3::new(min.x.min(down.x), min.y.min(down.y), min.z.min(down.z));
             max = Point3::new(max.x.max(up.x), max.y.max(up.y), max.z.max(up.z));
         }
@@ -1841,16 +1841,14 @@ mod tests {
         assert!(centroid_and_mean_radius(&[]).is_err());
         assert!(centroid_and_mean_radius(&[Point2::new(f64::NAN, 0.0)]).is_err());
         assert!(centroid_and_mean_radius(&[Point2::new(0.0, f64::INFINITY)]).is_err());
-        assert!(centroid_and_mean_radius(&[
-            Point2::new(f64::MAX, 0.0),
-            Point2::new(f64::MAX, 0.0),
-        ])
-        .is_err());
-        assert!(centroid_and_mean_radius(&[
-            Point2::new(-f64::MAX, 0.0),
-            Point2::new(f64::MAX, 0.0),
-        ])
-        .is_err());
+        assert!(
+            centroid_and_mean_radius(&[Point2::new(f64::MAX, 0.0), Point2::new(f64::MAX, 0.0),])
+                .is_err()
+        );
+        assert!(
+            centroid_and_mean_radius(&[Point2::new(-f64::MAX, 0.0), Point2::new(f64::MAX, 0.0),])
+                .is_err()
+        );
     }
 
     #[test]

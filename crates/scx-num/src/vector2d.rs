@@ -68,7 +68,7 @@
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use crate::error::{Invalid, NumError, Result};
-use crate::math::{Vec3, EFF_ZERO, EFF_ZERO_SQ, PI};
+use crate::math::{EFF_ZERO, EFF_ZERO_SQ, PI, Vec3};
 use crate::tol;
 use crate::vector3d::{acos as sm_acos, asin as sm_asin, sqrt as sm_sqrt};
 

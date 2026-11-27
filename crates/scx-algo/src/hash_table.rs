@@ -916,10 +916,10 @@ impl<T: Copy + PartialEq> ObjsInVoxels<T> {
                     let xs = (beg_at.zone_tol + end_at.zone_tol).abs();
                     let xs_sq = xs * xs;
                     let gap_sq = (beg_at.point - end_at.point).length_squared();
-                    if let Some(h) = histogram.as_deref_mut() {
-                        if let Some(c) = h.get_mut(gap_histogram_index(gap_sq.sqrt())) {
-                            *c = c.wrapping_add(1);
-                        }
+                    if let Some(h) = histogram.as_deref_mut()
+                        && let Some(c) = h.get_mut(gap_histogram_index(gap_sq.sqrt()))
+                    {
+                        *c = c.wrapping_add(1);
                     }
                     if gap_sq < xs_sq {
                         let mut known = false;

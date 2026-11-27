@@ -844,9 +844,10 @@ mod tests {
         sorted.sort_unstable();
         sorted.dedup();
         assert_eq!(sorted.len(), names.len(), "{names:?}");
-        assert!(names.iter().all(|n| n
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')));
+        assert!(names.iter().all(|n| {
+            n.bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+        }));
         let inner = NumError::failed("b", NumFailure::NotSymmetric);
         assert_eq!(NumError::call("a")(inner).name(), "not_symmetric");
         assert_eq!(NumError::invalid_input("a", Invalid::Empty).name(), "empty");

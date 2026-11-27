@@ -88,8 +88,12 @@ pub fn inverse_3x3(a0: &[f64; 3], a1: &[f64; 3], a2: &[f64; 3]) -> Result<[[f64;
 /// (`smgu_4x4Determinate`).
 #[must_use]
 pub fn determinate_4x4(a: &[[f64; 4]; 4]) -> f64 {
-    let [[a00, a01, a02, a03], [a10, a11, a12, a13], [a20, a21, a22, a23], [a30, a31, a32, a33]] =
-        *a;
+    let [
+        [a00, a01, a02, a03],
+        [a10, a11, a12, a13],
+        [a20, a21, a22, a23],
+        [a30, a31, a32, a33],
+    ] = *a;
     a00 * (a11 * (a22 * a33 - a23 * a32)
         + a12 * (a23 * a31 - a21 * a33)
         + a13 * (a21 * a32 - a22 * a31))

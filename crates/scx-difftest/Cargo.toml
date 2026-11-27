@@ -10,6 +10,9 @@ publish.workspace = true
 
 [dependencies]
 scx-num = { path = "../scx-num" }
+
+[dev-dependencies]
+# Used by the tests only; the library holds the shared helpers.
 scx-nurbs = { path = "../scx-nurbs" }
 scx-nurbs-surface = { path = "../scx-nurbs-surface" }
 scx-algo = { path = "../scx-algo", features = ["trace"] }
@@ -20,8 +23,6 @@ solidcore = { path = "../../../sc-wt/scx-pin/solidcore/crates/solidcore" }
 # comparison (`t_p21`). Here only: no library depends on it.
 solidcore-record = { path = "../../../sc-wt/scx-pin/solidcore/crates/solidcore-record" }
 scx-p21 = { path = "../scx-p21" }
-
-[dev-dependencies]
 # The truth references (layers.txt [testkit]), for the exact checks of the pin defects and
 # the seeded curves of `t_nurbs`.
 scx-testkit = { path = "../scx-testkit" }

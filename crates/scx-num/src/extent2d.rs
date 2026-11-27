@@ -96,7 +96,7 @@ use crate::error::{NumError, Result};
 use crate::extent1d::{Extent1d, ExtentPointType, Hull1d};
 use crate::extent3d::{BoundaryType, Extent3d};
 use crate::math::{BIG_DOUBLE, EFF_ZERO, EFF_ZERO_SQRT};
-use crate::tol::{are_same, are_same_to_tol, is_zero_to_tol, scaled_zero, ScaledZero};
+use crate::tol::{ScaledZero, are_same, are_same_to_tol, is_zero_to_tol, scaled_zero};
 use crate::vector2d::{Point2, Vec2};
 use crate::vector3d::sqrt;
 
@@ -962,9 +962,10 @@ mod tests {
             .unwrap();
         assert!((ivl.min() - 0.9).abs() <= EFF_ZERO);
         assert_eq!(ivl.max(), 1.0);
-        assert!(e1
-            .intersect_with_infinite_line(p(0.0, 3.1), Vec2::new(1.0, 1.0), None, None)
-            .is_none());
+        assert!(
+            e1.intersect_with_infinite_line(p(0.0, 3.1), Vec2::new(1.0, 1.0), None, None)
+                .is_none()
+        );
 
         assert!(!e1.x_left_eval(2.5));
         assert!(e1.y_left_eval(2.5));

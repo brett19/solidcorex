@@ -17,9 +17,9 @@
 
 use core::fmt;
 
+use crate::Partials;
 use crate::data::{CurveData, SurfaceData};
 use crate::rat::Rat;
-use crate::Partials;
 
 /// Which piece a parameter at an interior knot belongs to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -121,13 +121,13 @@ fn homogeneous<const D: usize>(
     points: &[[f64; D]],
     weights: Option<&[f64]>,
 ) -> Result<Vec<Row>, Error> {
-    if let Some(w) = weights {
-        if w.len() != points.len() {
-            return Err(Error::WeightCount {
-                expected: points.len(),
-                found: w.len(),
-            });
-        }
+    if let Some(w) = weights
+        && w.len() != points.len()
+    {
+        return Err(Error::WeightCount {
+            expected: points.len(),
+            found: w.len(),
+        });
     }
     let weight = |i: usize| weights.and_then(|w| w.get(i)).copied().unwrap_or(1.0);
     points
@@ -464,8 +464,7 @@ fn quotient2(hom: &Partials<Row>) -> Result<Partials<Row>, Error> {
         for l in 0..=order - k {
             let mut v: Row = hom
                 .get(k, l)
-                .map(|a| a.iter().take(d).cloned().collect())
-                .unwrap_or_default();
+                .map_or_default(|a| a.iter().take(d).cloned().collect());
             for i in 0..=k {
                 for j in 0..=l {
                     if i == 0 && j == 0 {
