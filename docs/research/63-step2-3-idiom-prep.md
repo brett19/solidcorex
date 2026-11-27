@@ -501,8 +501,8 @@ Decided by analysis and an adversarial pass; proposed for review, not yet ruled.
 - **The kinds.** `BadNet` and `BadWeights` are `Refused`; `BadKnots` is a context frame and
   inherits the `scx-nurbs` kind (62 D11). The workspace's `ErrorKind` has the classes before
   62 until the error migration lands, so `Refused` is `InvalidInput` there for now.
-- **`scx-algo` is not a dependency yet.** Nothing in NS1 uses it; NS2 adds it with the first
-  use.
+- **`scx-algo` is not a dependency yet.** Nothing in NS1 uses it, nor in NS2 (below); it is
+  added with the first use.
 - **No knot fixup.** The pin's `BSplineSurface::from_data` snaps near knots together
   (`fixup_knot_vector`). scx stores the doubles given, exactly: the stored form is the record.
 
@@ -522,6 +522,125 @@ definition (pin defect `nurbs_surface_new`):
 Both refuse: degree 0 and 32, a break, extra or missing rows and columns, ragged nets, knot
 counts that do not match, decreasing knots, infinite end knots, an empty domain, end
 multiplicity `p + 2`, zero, negative and infinite weights, and `w P` that overflows.
+
+### 2.7 NS2 as built (11-27)
+
+Evaluation in `crates/scx-nurbs-surface/src/eval.rs` (a new module; `surface.rs` untouched),
+`SurfaceJet` in `scx_num::jet::surface`, `BasisJet` in `scx_nurbs::basis`. Decided by analysis
+and an adversarial pass; proposed for review, not yet ruled.
+
+- **The API follows `NurbsCurve`.** `point(uv: [f64; 2], side: [Approach; 2]) -> Result<[f64; D]>`,
+  `jet::<N>(uv, side) -> Result<SurfaceJet<[f64; D], N>>` and
+  `eval_many(&[[f64; 2]], side) -> Result<Vec<[f64; D]>>`. The parameter is a pair, not two
+  arguments, so a uv point passes through as one value; one `Approach` per direction, as the
+  pin's two `Side`s. `N` is the highest total order, inclusive (`jet::<2>` holds the second
+  partials); the curve's `derivs::<K>` counts rows. The surface's `N` names what the jet holds
+  (`SurfaceJet::order()`), and a row count would be `(N + 1)(N + 2) / 2`, which no const
+  parameter can be.
+- **`SurfaceJet<V, const D>` (the shape SU1 builds on).** The triangle `i + j <= D` only (X10,
+  ruling D3): `from_fn`, `order`, `point`, `get(i, j) -> Option<V>`, `get_mut`, `iter` (in
+  `from_fn`'s order, `i` outer) and `map`. Storage is `point`, `u: [V; D]` (the `S^(i,0)`) and
+  `rest: [[V; D]; D]` (`j >= 1`), since stable Rust cannot size `[V; (D+1)(D+2)/2]`: exact at
+  order 1, 7 for 6 at order 2, 13 for 10 at order 3; the spare entries are never returned.
+  It is generic over the element because SU1's certified jets are interval vectors and NURBS is
+  dimension-generic (`[f64; D]`); `map` changes element (to an interval jet, say). It has no
+  arithmetic: a jet is a container, and the operations on it (normals, curvature) are SU1's.
+- **`BasisJet<D>` (scx-nurbs).** One direction's basis values and derivatives to order `D` on
+  the stack: `values: [f64; FULL]` and `derivs: [[f64; FULL]; D]` (row `k - 1` the `k`-th
+  derivatives), read by `row(k)` for `k <= D`. The split exists because `[[f64; FULL]; D + 1]`
+  is not stable Rust; `BasisDerivs<K>` keeps its row count. `derivs_into` (A2.3) now writes the
+  values and the derivative rows separately, and `BasisDerivs::at` and the curve's `derivs_n`
+  call it through `split_first_mut`: the arithmetic and its order are unchanged, so the curve's
+  bits are unchanged (its tests and difftests pass as before). A test checks `BasisJet<D>`
+  equals `BasisDerivs<D + 1>` bit for bit.
+- **Rational partials by A4.4**, the quotient rule on the jets of `w P` and `w`, not by
+  rational basis functions: one tensor sum per jet, shared by every partial. The point is
+  `(w P)(u, v) / w(u, v)`, a division, where the pin multiplies by the reciprocal: one rounding,
+  not two. The binomials are an exact f64 loop (`n <= MAX_ORDER`).
+- **The jet's point is the point, bit for bit.** `tensor_jet` accumulates in `tensor_point`'s
+  order, so `jet::<N>(uv).point() == point(uv)` for every `N`; a test holds it at orders 0, 1, 3.
+- **`eval_many` reuses each basis** whose parameter is bit-equal to the previous point's (a grid
+  row or column evaluates one basis per new value). The first error ends the batch: a batch is
+  a value, not a list of outcomes; a caller that wants partial results calls `point` per entry.
+- **Errors.** `Basis { axis, cause }`: a frame over the `scx-nurbs` cause (a non-finite
+  parameter, a degenerate span, an order above `MAX_ORDER`), its kind inherited. `Degenerate
+  { uv }`, `Refused`: a value of the result is not finite (an extrapolation that overflows). The
+  pin returns non-finite points. Outside the domain the end pieces continue, as the curve does.
+- **No `scx-algo`.** Nothing uses it; NS1's line that NS2 would add it is superseded. `cargo
+  xtask layers` passes.
+
+Adversarial pass:
+
+- *A `SurfaceJet` of the square (`[[V; D + 1]; D + 1]`) is simpler and SU1 could ignore the
+  extra corner.* The corner (`i + j > D`) is not computed, so the square would hold values that
+  are not partials or cost the work of computing them; X10 and D3 rule the triangle. `get`
+  returning `None` past the triangle makes the shape checkable.
+- *Generic `V` is speculative.* SU1's interval jets are the first second user, and the evaluator
+  is already generic over `D`; a `[f64; 3]`-only type would be a second type on SU1's first day.
+- *`N` inclusive breaks symmetry with the curve's `K`.* It does; the curve counts rows because
+  its jet is an array of `K` rows. For a triangle the order is the only natural size, and the
+  doc comments name it. Recorded for the ruling.
+- *Dividing by `w` rather than multiplying by its reciprocal differs from the pin.* It differs in
+  the last bit at most and is the more exact; the difftest holds both sides to the exact truth
+  (truth over pin).
+- *A4.4 loses accuracy where `w` is near zero.* So does every form; the difftest's tolerance
+  propagates the bound through the quotient rule (below), and a near-zero weight surface passes
+  against the exact truth with scx no further from it than the pin.
+- *Reusing a basis in `eval_many` could change results.* Reuse is only on bit-equal parameters
+  with the same side, so the basis is the same value; the difftest checks `eval_many` against
+  `point` bitwise.
+
+Difftest `t_nurbs_surface_eval` (4 tests, 1.5 s debug), against the pin's `Surface::eval` and
+`Surface::derivs` with `upper` (the triangle), on `t_nurbs_surface`'s generated surfaces at the
+domain's corners, a rounding error inside them, interior knots and their neighbours, points
+outside and random ones, the four side pairs in turn. Where the two disagree, scx is checked
+against the testkit's exact rational truth (`SurfaceData::derivs`), within a tolerance from a
+forward error model, and must be no further from the truth than the pin (`closest`):
+
+| Test | Inputs | Exact | Within tolerance | Pin defects | Mismatches |
+|---|---|---|---|---|---|
+| `nurbs_surface_point` | 1,118 | 548 | 204 | 366 | 0 |
+| `nurbs_surface_jet` (`jet::<2>`) | 902 | 45 | 561 | 296 | 0 |
+| `nurbs_surface_jet4` (`jet::<4>`) | 470 | 55 | 263 | 152 | 0 |
+| `nurbs_surface_eval_many` | 1,118 | 447 | 319 | 352 | 0 |
+
+- **Within tolerance** is the harness's agreement with the pin. **Pin defects** are every other
+  disagreement: the surfaces the pin does not build (NS1's table), the domain's corners, which
+  the pin's `basis_eval` refuses from the side past the end, and answers further from the pin
+  than the harness allows. Each is checked against the exact truth: refused exactly when the
+  data is not a surface or a parameter is not finite, else within the tolerance below and no
+  further from the truth than the pin.
+- **Point tolerance**: `4 m eps` of the absolute scale `Σ |N_i N_j| w |P| / |Σ N_i N_j w|`
+  inside the domain, `max(m, 4) m eps` outside it (the basis grows like the distance to the
+  power of the degree), `m = p + q + 2`.
+- **Jet tolerance**: each partial's bound `E(k, l)` is propagated through A4.4,
+  `E(k,l) = t_n (s_n + Σ c |S^(k-i,l-j)|) + Σ c E(k-i,l-j)`, `c = C(k,i) C(l,j) |w^(i,j)| / |w|`,
+  `t_n = 1e-12 · 10^n` at order `n`: a near-zero weight makes the higher partials ill-conditioned
+  and the bound follows.
+- **The pool is cut to what the exact truth can afford**: the jets keep every case of degree
+  `p + q <= 7` (order 2) or `<= 4` (order 4), and the higher ones at the corners only; inside an
+  end at zero the rounding error is `eps b`, not `5e-324` (a degree-31 truth there took 5 s).
+  `eval_many` is checked bitwise against `point`, not against the truth again.
+- **The checks bite**: scaling one `v²` term by 0.999 gave 540 `jet` and 251 `jet4` mismatches.
+
+Performance (release, a local timing loop, best of 7 over 200,000 calls at 1,024 scattered
+parameters, 8 × 9 net; the machine was loaded, so the ratios move by about 0.2 between runs):
+
+| Surface | `point` / `eval` | `jet::<1>` / `derivs(1, 1)` | `jet::<2>` / `derivs(2, 2)` | `eval_many`, per point |
+|---|---|---|---|---|
+| bicubic, polynomial | 99 / 67 ns (1.56 to 1.66) | 349 / 135 ns (2.1 to 2.5) | 422 / 425 ns (0.98 to 1.5) | 130 to 140 ns |
+| bicubic, rational | 122 / 71 ns (1.58 to 1.75) | 386 / 187 ns (1.95 to 2.8) | 527 / 944 ns (0.53 to 1.41) | 124 to 141 ns |
+| biquintic, rational | 152 / 115 ns (1.28 to 1.34) | 407 / 310 ns (1.29 to 1.35) | 569 / 1,750 ns (0.33) | 169 to 198 ns |
+
+The second partials are as fast as the pin's or up to 3 times faster. The point and the first
+partials are slower, by a cost that does not grow with the degree (40 to 60 ns for the point,
+about 200 ns for `jet::<1>`): likely the stack scratch sized for the degree cap (`FULL = 32`)
+in the basis and A2.3, initialized on each call, where the pin sizes its buffers by the
+degree. That is a hypothesis, not yet measured. Under the perf rule the change does not wait for
+it: the follow-up is a parallel branch that sizes the scratch by the degree, or keeps it
+uninitialized behind a written-before-read proof, with before/after numbers from this loop.
+`eval_many` costs about what `point` does at scattered parameters (no basis is reused there).
+On a grid it evaluates one basis per new parameter value.
 
 ## 3. `scx-curve`
 

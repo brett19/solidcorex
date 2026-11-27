@@ -1,10 +1,11 @@
 // Written for solidcorex. Apache-2.0.
-//! Why a control net or a NURBS surface cannot be built.
+//! Why a control net or a NURBS surface cannot be built or evaluated.
 //!
 //! Errors follow research 62 §10: every cause has a kind computed from it ([`kind`]), a
 //! stable [`name`], and a Display of one frame. All of this crate's causes are the caller's
-//! data, kind `Refused` (63 X13); [`NurbsSurfaceError::BadKnots`] is a context frame over the
-//! `scx-nurbs` error and inherits its kind (62 D11). The pin's `InvalidInput` is [`ErrorKind`]'s
+//! data, kind `Refused` (63 X13); [`NurbsSurfaceError::BadKnots`] and
+//! [`NurbsSurfaceError::Basis`] are context frames over the `scx-nurbs` error and inherit its
+//! kind (62 D11). The pin's `InvalidInput` is [`ErrorKind`]'s
 //! `Refused`.
 //!
 //! | solidcore at the pin | here |
@@ -16,6 +17,8 @@
 //! | `weights_are_valid`: `Weight` (outside `[1e-3, 100]`) | [`WeightCause::NotPositive`] (not positive and finite; any positive scale is a surface) |
 //! | `KnotVector::validate`: `Knots`, `KnotsDecrease` | `scx_nurbs::NurbsError` when the knot vector is built; [`NurbsSurfaceError::BadKnots`] for a break |
 //! | none: non-finite points and weights pass | [`NetCause::NotFinite`], [`NetCause::WeightedNotFinite`], [`WeightCause::NotPositive`] |
+//! | `Surface::eval`, `Surface::derivs`: the errors of `KnotVector::basis_eval` (a parameter outside the domain, a knot difference below `1e-24`) | [`NurbsSurfaceError::Basis`] over `NurbsError::ParameterNotFinite`, `Degenerate` or `DerivativeOrder`; outside the domain the end pieces continue |
+//! | none: a non-finite point is returned | [`NurbsSurfaceError::Degenerate`] |
 //!
 //! [`kind`]: NurbsSurfaceError::kind
 //! [`name`]: NurbsSurfaceError::name
@@ -27,7 +30,7 @@ use scx_nurbs::NurbsError;
 
 use crate::ParamAxis;
 
-/// Why a control net or a NURBS surface cannot be built.
+/// Why a control net or a NURBS surface cannot be built or evaluated.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub enum NurbsSurfaceError {
@@ -45,6 +48,21 @@ pub enum NurbsSurfaceError {
     },
     /// The weights do not fit the net, or one is not positive and finite.
     BadWeights(WeightCause),
+    /// The basis of one direction cannot be evaluated at the parameter given. A context frame
+    /// over the `scx-nurbs` error: `NurbsError::ParameterNotFinite`, `Degenerate` (a parameter
+    /// so far outside the domain that a knot difference rounds away) or `DerivativeOrder`.
+    Basis {
+        /// The direction.
+        axis: ParamAxis,
+        /// Why.
+        cause: NurbsError,
+    },
+    /// The evaluation at `uv` is not finite: a value overflowed (far outside the domain, or
+    /// control points near the largest double).
+    Degenerate {
+        /// The parameters `[u, v]`.
+        uv: [f64; 2],
+    },
 }
 
 /// Why a control net does not fit.
@@ -114,13 +132,14 @@ pub enum WeightCause {
 }
 
 impl NurbsSurfaceError {
-    /// The error's kind: [`ErrorKind::Refused`] (the net and weights are the caller's), or
-    /// the `scx-nurbs` cause's under [`Self::BadKnots`] (62 D11).
+    /// The error's kind: [`ErrorKind::Refused`] (the net, weights and parameters are the
+    /// caller's), or the `scx-nurbs` cause's under [`Self::BadKnots`] and [`Self::Basis`]
+    /// (62 D11).
     #[must_use]
     pub const fn kind(&self) -> ErrorKind {
         match self {
-            Self::BadKnots { cause, .. } => cause.kind(),
-            Self::BadNet(_) | Self::BadWeights(_) => ErrorKind::Refused,
+            Self::BadKnots { cause, .. } | Self::Basis { cause, .. } => cause.kind(),
+            Self::BadNet(_) | Self::BadWeights(_) | Self::Degenerate { .. } => ErrorKind::Refused,
         }
     }
 
@@ -131,6 +150,8 @@ impl NurbsSurfaceError {
             Self::BadNet(c) => c.name(),
             Self::BadKnots { .. } => "knots_break_surface",
             Self::BadWeights(c) => c.name(),
+            Self::Basis { .. } => "basis_unevaluable",
+            Self::Degenerate { .. } => "evaluation_not_finite",
         }
     }
 }
@@ -165,6 +186,10 @@ impl fmt::Display for NurbsSurfaceError {
             Self::BadNet(c) => c.fmt(f),
             Self::BadKnots { axis, .. } => write!(f, "the {axis} knots cannot carry a surface"),
             Self::BadWeights(c) => c.fmt(f),
+            Self::Basis { axis, .. } => write!(f, "the {axis} basis cannot be evaluated"),
+            Self::Degenerate { uv: [u, v] } => {
+                write!(f, "the surface is not finite at ({u}, {v})")
+            }
         }
     }
 }
@@ -221,8 +246,8 @@ impl fmt::Display for WeightCause {
 impl std::error::Error for NurbsSurfaceError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::BadKnots { cause, .. } => Some(cause),
-            Self::BadNet(_) | Self::BadWeights(_) => None,
+            Self::BadKnots { cause, .. } | Self::Basis { cause, .. } => Some(cause),
+            Self::BadNet(_) | Self::BadWeights(_) | Self::Degenerate { .. } => None,
         }
     }
 }
@@ -273,6 +298,13 @@ mod tests {
                 col: at.1,
                 weight: -1.0,
             }),
+            NurbsSurfaceError::Basis {
+                axis: ParamAxis::V,
+                cause: NurbsError::ParameterNotFinite {
+                    parameter: f64::NAN,
+                },
+            },
+            NurbsSurfaceError::Degenerate { uv: [0.5, 1e300] },
         ]
     }
 
@@ -288,8 +320,8 @@ mod tests {
         }
     }
 
-    /// One frame per Display: the knots' frame prints only its own text and hands the
-    /// `scx-nurbs` error on as the source; the others have none.
+    /// One frame per Display: the knots' and the basis' frames print only their own text and
+    /// hand the `scx-nurbs` error on as the source; the others have none.
     #[test]
     fn display_is_one_frame() {
         for e in all() {
@@ -300,6 +332,10 @@ mod tests {
                 NurbsSurfaceError::BadKnots { cause, .. } => {
                     assert_eq!(text, "the u knots cannot carry a surface");
                     assert!(!text.contains(&cause.to_string()));
+                    assert_eq!(e.source().map(ToString::to_string), Some(cause.to_string()));
+                }
+                NurbsSurfaceError::Basis { cause, .. } => {
+                    assert_eq!(text, "the v basis cannot be evaluated");
                     assert_eq!(e.source().map(ToString::to_string), Some(cause.to_string()));
                 }
                 _ => assert!(e.source().is_none()),

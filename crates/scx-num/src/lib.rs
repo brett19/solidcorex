@@ -4,12 +4,13 @@
 //! bounds, the scalar tolerance functions, and interval arithmetic with outward
 //! rounding (intervals, interval vectors, Taylor models and the certificate's series,
 //! [`interval`], [`taylor_model`], [`series`], [`ring`]; an interval vector is a `Vec3<Ivl>`), the
-//! certificate types ([`cert`]), the one fixed hash and random generator ([`hash`]), and the
+//! certificate types ([`cert`]), the fixed-order jets of curves and surfaces ([`jet`]),
+//! the one fixed hash and random generator ([`hash`]), and the
 //! error-free transformations ([`eft`]) and the transcendental functions on them
 //! ([`fmath`]).
 //! Depends on nothing.
 //!
-//! Every module but [`cert`], [`consts`], [`eft`], [`fmath`], [`hash`], [`units`],
+//! Every module but [`cert`], [`consts`], [`eft`], [`fmath`], [`hash`], [`jet`], [`units`],
 //! [`error`] and the crate's own `expansion` (exact sums and products) is moved from
 //! solidcore at commit `03e16c9ee766de5b9b1ced845e5149d62ff493b8` with its results
 //! unchanged bit for bit (`docs/research/52-num-move.md`; the interval modules,
@@ -32,6 +33,7 @@ pub mod fmath;
 pub mod frame;
 pub mod hash;
 pub mod interval;
+pub mod jet;
 pub mod limits;
 pub mod math;
 pub mod matrix;

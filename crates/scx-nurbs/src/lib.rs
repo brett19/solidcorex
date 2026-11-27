@@ -3,7 +3,7 @@
 //!
 //! - [`KnotVector`]: a validated, non-decreasing knot vector of a degree, with multiplicity,
 //!   span finding ([`Approach`]), knot insertion and removal at the knot level;
-//! - [`Basis`], [`BasisDerivs`]: the non-vanishing B-spline basis functions at a parameter and
+//! - [`Basis`], [`BasisDerivs`], [`BasisJet`]: the non-vanishing B-spline basis functions at a parameter and
 //!   their derivatives;
 //! - [`bezier`]: binomials, Bernstein polynomials, Bezier degree elevation and subdivision;
 //! - [`NurbsCurve`]: a validated curve in `D` dimensions, polynomial or rational, with
@@ -28,7 +28,7 @@ mod error;
 mod knots;
 mod point;
 
-pub use basis::{Basis, BasisDerivs};
+pub use basis::{Basis, BasisDerivs, BasisJet};
 pub use curve::NurbsCurve;
 pub use error::NurbsError;
 pub use knots::{Approach, KnotVector};
@@ -53,6 +53,7 @@ const _: () = {
     ok::<Approach>();
     ok::<Basis>();
     ok::<BasisDerivs<3>>();
+    ok::<BasisJet<2>>();
     ok::<NurbsCurve<3>>();
     ok::<NurbsError>();
 };
