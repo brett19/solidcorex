@@ -3965,6 +3965,8 @@ Most of the cost was not the bound's arithmetic. It was the code shape around it
 
 (The pre-MA6 and main counts differ slightly from §14.31's: this harness differs.)
 
+After merging main (which changed `scx-mass`'s breaks and enclosure, and the surfaces' pcurves and hulls), the merged branch is again bit-identical to main over the 288 results: main 68.8M, 415M, 940M; this branch 46.4M, 250M, 645M (0.67x, 0.60x, 0.69x of main; 0.90x, 0.85x, 0.91x of pre-MA6).
+
 **What the rounding still costs.** Steps 1 to 3 speed up the code shape for both halves. So, to be fair, the rounding should also be measured against the same shape with its work removed: the branch with the sample rounding, `spread`, `jump`, `most` and the piece formula stubbed out and plain sums in place of `Sum2`. That is 35.1M, 169M and 454M. The rounding therefore still costs 1.32x (block), 1.48x (cylinder) and 1.37x (sphere) against that shape, about the same share as MA6. Unrolling `eval` alone on pre-MA6 gives 41.3M, 204M and 531M. The ratio of the target (1.1x of pre-MA6) is met because the shared code got faster, not because the bound got cheaper. On this branch's cylinder the remaining rounding share is:
 
 - `sample_rounding` at about 25M (`Set::rounding` 17M, the frame terms and `dn` the rest);
