@@ -399,7 +399,7 @@ pub enum MassError {
   - the five primitives;
   - a spherical cap;
   - half a torus;
-  - a box minus n through-cylinders (plate_12: 100000 − 480π, corrected in §14.1);
+  - a box minus n through-cylinders (plate_12: 144 holes, 100000 − 5760π; see §14.9);
   - gear_60, whose cross-section is a disk less 60 clipped rectangles. Its area is
     `π·50² − 60·∫_{−g/2}^{g/2} (√(2500 − y²) − 45) dy`, closed form, times h = 10. The rectangles
     are apart, since g ≈ 2.12 against a pitch of 4.71 at r = 45.
