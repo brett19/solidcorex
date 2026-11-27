@@ -209,6 +209,9 @@ impl Carry<u32> for Keep {
     fn coincident(&self, onto: Option<&u32>, _: &u32) -> Option<u32> {
         onto.copied()
     }
+    fn offset(&self, from: &u32) -> Option<u32> {
+        Some(*from)
+    }
 }
 
 #[test]

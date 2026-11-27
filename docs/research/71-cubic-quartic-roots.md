@@ -213,3 +213,99 @@ Callers: `scx-curve`'s curve inversion (the quartic fallback) and curve-surface
 intersection keep passing. What they see: roots ascending (the closed form's order was
 not), a root count that is right at clusters and near-double roots (the pin merged or
 dropped them), and a coefficient that is not finite gives no roots instead of NaNs.
+
+## 6. Speed
+
+Branch `pf`, 11-27: make the solvers faster without leaving the contract (§1), and change
+no result unless the change is proven equally or more correct.
+
+Instructions per batch of 1,024 calls (`algo_ic`, callgrind), and wall time (criterion,
+pinned to one core, two alternating rounds of each build; the range covers both):
+
+| case | before | after | change | pin | after / pin |
+|---|---|---|---|---|---|
+| cubic | 1,772,776 | 1,696,725 | -4.3% | 458,538 | 3.70 |
+| cubic edge | 261,577 | 262,165 | +0.2% | 104,954 | 2.50 |
+| quartic | 3,450,960 | 3,513,126 | +1.8% | 761,284 | 4.61 |
+| quartic edge | 1,310,931 | 1,231,221 | -6.1% | 341,194 | 3.61 |
+
+| case | before | after | pin | after / pin |
+|---|---|---|---|---|
+| cubic | 234-248 us | 209-217 us | 66-72 us | 3.1 |
+| cubic edge | 20.5-21.3 us | 21.4-23.5 us | 9.5-9.9 us | 2.3 |
+| quartic | 525-606 us | 483-492 us | 112-131 us | 4.3 |
+| quartic edge | 147-167 us | 120-125 us | 45-46 us | 2.7 |
+
+The quartic's instructions rose while its time fell: most of the rise is the contract
+fixes below (more starts that are correct), and the time is the compensated Horner's new
+shape. The cubic edge time is within the noise of the two rounds (its instructions are
+unchanged).
+
+What changed:
+
+- **Compensated Horner in three passes.** The plain Horner pass keeps each step's
+  multiplier and `two_sum` error; a second pass takes the `two_prod` errors; a third
+  sums the error polynomial. On baseline x86-64 `two_prod` calls `fma` through the
+  runtime and every xmm register is caller saved, so in one pass the Horner chain's live
+  values spilled around each call; in its own pass the call has nothing live but the
+  error array. Same operations in the same order on each value, so the same bits.
+  The single-pass form is 1.5% fewer instructions on the cubic but slower in time
+  (218-226 us cubic, 520-555 us quartic, against 209-217 and 483-492).
+- **Lazy Taylor form.** A sample's Taylor coefficients (for the outer start and the
+  monotone start) are computed only when a start needs them, not at every sign test.
+- **Inner starts measured from the nearer end.** The cubic model's `t` is taken from the
+  end nearer the root (`smooth_inner` returns `t` and which end), so a root near a
+  critical point keeps its digits; the quartic model gets its ends swapped to match.
+- **Outer starts from the same model.** Beyond a critical point the outer root solves
+  the model's quadratic in closed form (`outer_beyond`), from the inner model's `t`,
+  falling back to `smooth_outer`.
+
+Contract fixes found on the way (each a miss or a returned non-root on `main`; the scans
+below check every case against exact Sturm counts and sign changes):
+
+- **Overshoot near a critical point.** An outer search started short of the root, near a
+  critical point where `p'` is small, took one giant Newton step past the root and then
+  crawled back. The first long step that overshoots the bracket's finite end is now
+  clamped to the Taylor bound beyond the root (`outer_start`), when that bound lies
+  between `x` and the step. The Taylor bound is not always past the root (its terms can
+  have mixed signs), so it only shortens a step, never replaces the bracket.
+- **Groups below the split.** Roots in groups up to `2^126` apart (below the 128-bit
+  split of §2.4) make plain Newton from a far start move by a factor `1 - 1/k` a step
+  (`k` roots in the group, at most 4), at least 0.41 bits a step; over the double range
+  (`2^2098`) that is up to about 5,100 steps, and the old shared limit of 100 ran out,
+  leaving a non-root or a missed root. The plain loop now has its own limit
+  `PLAIN_STEPS = 8192`; the polish limit stays 100. No measured cost (the same counts
+  with 100). Unit test `roots_in_groups_far_apart` (one cubic, three quartics, each
+  verified exactly).
+- **Quartic critical points near zero.** The quartic's derivative roots near zero lost
+  their digits when the inner model start was measured from the far end (fixed by the
+  nearer-end start above).
+
+Scans (20,000 random cubics and quartics at each of two coefficient-spread classes,
+against exact truth; zero-coefficient and `tol = 1e-12` inputs left out, the latter
+dropping to the pin's quadratic): misses or non-roots before 34, 10, 111, 7; after 0 in
+every class. Over the full 4,000,000-input local corpus against `main`'s outputs, 2,908
+results differ: 1,699 where `main` broke the contract and this branch meets it, 0 the
+other way, 0 where both break it; and 22 where both meet it, in each of which this
+branch's root is the closer to the exact root (0.09 to 0.46 ulp against 1.87 to 1,091
+ulp). The rest are inputs outside the contract (`tol = 1e-12`: 1,012 now meet it, 90
+fail on both as before; zero coefficients: 77 now meet it).
+
+Tried and dropped:
+
+- **Dekker's split for the `fma`** (an exact product without the runtime call, also as a
+  filtered sign test): the same bits, but more instructions and no faster; reverted.
+- **Aitken extrapolation across the slow groups:** it lands at a group's centre, where
+  `p'` is near zero, and the next step jumps far; 11 cases regressed. The step limit
+  replaced it.
+- **Stopping polish early with a certified bound:** the plain bound `γ S` never
+  certifies polish's `2 (u |v| + γ² S)` stop, so a cheaper stop changes bits and is not
+  proven better; not done.
+- **Research 65 §2.5's trig-free cubic:** not built. It would only give starts, and the
+  starts already take about one plain Newton step a root (§2.2); the cost is in polish and
+  the critical points, which it does not touch.
+
+Remaining gap: the quartic is 4.3x the pin in time and the cubic 3.1x. The cost is the
+contract: compensated evaluation at every root (the pin's closed forms stop at plain
+double), the critical points of a quartic (a cubic solve inside), and the runtime `fma`
+on baseline x86-64 (an `x86-64-v3` build inlines it; research 67).
