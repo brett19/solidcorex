@@ -5202,6 +5202,207 @@ segment over `[0, 1]`, one collapsed edge per pole per face, as the generator ma
 3. Should a degenerate face at a pole (decision 4) ever be built? If so, it needs a
    two-segment or point rule.
 
+### 6.12 BR6 as built (11-27)
+
+Decided by analysis and an adversarial pass. Proposed for review; not yet ruled.
+
+`Draft::transform` moves a body by an affine map. It is built on CU5's `Curve::transformed`
+and SU7's `Surface::transformed`, in `crates/scx-brep/src/draft/transform.rs`.
+
+```rust
+impl Draft {
+    pub fn transform(&mut self, a: &Affine, doc: &Document) -> Result<(), TransformError>;
+}
+
+#[non_exhaustive]
+pub enum TransformError {
+    MapNotFinite,
+    MapSingular,
+    Pending { edge: EdgeId },
+    Surface { face: FaceId, cause: SurfaceError },
+    Curve { edge: EdgeId, cause: CurveError },
+    Pcurve { face: FaceId, edge: EdgeId, cause: PcurveError },
+    PcurveKind { face: FaceId, edge: EdgeId },
+    MissingEdge { face: FaceId, edge: EdgeId },
+    Overflow { entity: Entity },
+}
+```
+
+- `kind()` and `name()` delegate to the cause where there is one.
+- A surface of revolution under a map that is not a similarity is `Surface { cause:
+  NotSimilar }`, which is `(Unsupported, "map_not_similar")` until BR9's refit.
+- `PcurveKind` is `Unsupported` (`pcurve_kind_unmapped`).
+- Every other refusal is `Refused`: `map_not_finite`, `map_singular`, `edge_pending`,
+  `use_edge_missing` (a use naming an edge the draft lacks), `transform_overflow`.
+- The draft is unchanged on every error. Every new record is made first and written only
+  when all of them are.
+
+**What the map does to each record.**
+
+- **Vertices.** Each point is mapped by the map.
+- **Edges.** Each curve goes through `Curve::transformed`, and its interval moves by the
+  curve's `ParamShift`. A collapsed edge keeps its shape.
+- **Faces.** Each surface goes through `Surface::transformed`, which also returns the
+  `UvMap`. The record is replaced whole with fresh cells: `put_face` logs the first write
+  and stores a new `Arc`, so there is no copy-on-write clone of the old face. Edges go
+  through `edge_mut`, which resets their cells. So every face's and edge's boxes and
+  boundary trees are reset, and `BodyCells` is rebuilt at `finish` (BR4).
+- **Topology.** It is kept: the same ids, loops, uses and senses.
+- **`Changes`.** `finish` reports every face and vertex, and every edge with a curve, as
+  `replaced` with `Touch::Geometry`. No record is created or removed, and `carry` is the
+  identity.
+- **Identity.** An exact identity returns at once with no writes, so `Changes` is empty.
+
+**Pcurves.** These are the decisions, in order:
+
+1. A `Point` use is mapped by the `UvMap`.
+2. A pcurve is kept where the edge's shift is none and the `UvMap` is within 16 ε of the
+   identity. This holds for a sphere, a torus or a NURBS face under any map it takes, and
+   for a plane or cylinder under a rigid motion or a mirror, whose `k` can come out as
+   1 − 3ε. Then `S'(p(t)) = A S(p(t)) = C'(t)`, and the error is at most 16 ε |uv|.
+3. Otherwise a `Line2` is mapped by the `UvMap`: an affine map of uv keeps a line a line
+   and keeps its parameter. This covers every planar line, every ruling and every pole
+   segment.
+4. Any other pcurve is made again by `pcurve_of` on the new curve and surface. It is then
+   moved by whole periods so that it starts where the `UvMap` takes the old start, which
+   keeps the loop in its period window.
+5. A collapsed edge's pcurve that is not a line is `PcurveKind`.
+
+**Orientation under a mirror.**
+
+- When `det A < 0`, the natural normal `S_u × S_v` maps to `det(A) A^-T n / det(UvMap)`.
+  `det(UvMap)` is positive for every kind, so the new natural normal is the image of the
+  old back side.
+- Each face's two sides therefore swap, and each edge's fins reverse: counter-clockwise
+  about the direction becomes clockwise. Loops, senses and pcurves stay.
+- This is the pin's `Mirror`, which swaps the faceuse shells and reverses the radial order
+  of the edge uses. BR2's `finish` accepts the result for every generated kind.
+- *For:* uv is unchanged, so pcurves are kept, and it costs one swap per face and one
+  reversal per edge.
+- *Against:* the alternative reverses every surface (`u ↦ −u`), so that fronts keep
+  pointing the same way relative to the solid. That costs a pcurve rewrite per use and
+  needs a reversal that some kinds lack.
+- Answer: which side is the front is the record's choice, and both forms are valid.
+  Swapping is cheaper and exact.
+
+**Accuracy.**
+
+- A distance grows by at most the map's largest stretch. For a similarity (axis lengths
+  equal and axes orthogonal, to 16 ε) that is its scale, snapped to 1 within 16 ε.
+  Otherwise it is the Frobenius norm, an upper bound.
+- Each recorded bound becomes stretch × reach, where reach is the recorded value, or the
+  resolution's zone for `None`. A result at or under the zone stays `None`.
+- A `None` widened past the zone becomes a shared `Measured` record.
+- A `Certified` or `Unproven` bound becomes `Unproven`, scaled. The certificate read the
+  old geometry, and rounding in the map is not certified.
+- *Against* keeping certificates under a rigid motion: the map's rounding (a few ulps of
+  |p|) is not in the certificate. Re-certifying is BR9's or the checker's work.
+- This is why the method takes `&Document`: the resolution sizes the bounds of `None`
+  records.
+- Tolerances scale under a uniform scale: a bound of `Some(zone)` under a scale of 8
+  becomes `Some(8 zone)`, and the inverse takes it back to `None`.
+- Under a rigid motion `None` stays `None`.
+
+**Deviation from 63 §6.3.**
+
+- 63 §6.3 sketched `transform(&Brep, &Affine) -> Result<Brep, _>`. It is built as a `Draft`
+  method instead.
+- *For:*
+  - `Changes` come from `finish`, so a free function would either drop them or need a
+    second signature that returns them.
+  - One signature serves both a finished body (`b.edit()`) and a draft in progress.
+  - It keeps one signature per op (01 §2.6's edits are `Draft` methods).
+- *Against:* a caller holding a `Brep` writes three calls (`edit`, `transform`, `finish`)
+  instead of one. A helper can be added if callers want it.
+
+**Tests.**
+
+`crates/scx-brep/tests/transform.rs` has 8 tests, all on BR8's generated bodies:
+
+- `every_body_moves_under_rigid_scale_and_mirror`: every kind, seeds 0 and 7, under a
+  rigid motion, scales of 2.5 and 0.375, a mirror, and a mirror after a rigid motion. It
+  checks:
+  - the counts;
+  - each point is its old point's image;
+  - pcurves lie on their edges;
+  - body, edge and face boxes enclose the samples;
+  - sides swap and fins reverse under a mirror;
+  - every record is replaced with Geometry;
+  - carry is the identity.
+- `the_identity_writes_nothing`.
+- `a_map_and_its_inverse_return_the_body`: within 1e-10.
+- `exact_maps_return_the_body_to_the_bit`: a mirror through the origin applied twice, and
+  a scale by 4 about the origin with its inverse. Every record comes back bit for bit,
+  except a plane's z, which is within 4 ε (open question 1).
+- `bounds_scale_with_the_map`.
+- `a_planar_body_takes_any_regular_map`: a shear on the planar kinds.
+- `a_surface_of_revolution_refuses_a_map_not_similar`: the error is `(Unsupported,
+  "map_not_similar")`, and the draft is unchanged.
+- `a_map_not_regular_or_not_finite_is_refused`.
+
+**Difftest.**
+
+`crates/scx-difftest/tests/diff/t_transform.rs` runs against the pin's `transform_matrix`
+and `mirror` (`topology/brep/mirror.rs`).
+
+- **Setup.** Each map is applied to seed-0 generated bodies (sizes 1 to 3) and to the pin's
+  primitives of the same five solids.
+- **The truth.** Both sides are judged against the moved solid: every sampled point must
+  lie on one of its sheets, at the inverse image.
+- **Corners.** The block's corners must agree between the sides.
+- **Determinism.** The scx transform runs twice and must give the same draft.
+- **Results.** Each map has 5,275 inputs, 0 pin defects, 0 mismatches and 0
+  nondeterministic:
+
+  | Map | Exact | Within tolerance |
+  |---|---|---|
+  | rigid | 2,927 | 2,348 |
+  | scale up | 4,311 | 964 |
+  | scale down | 4,865 | 410 |
+  | mirror | 1,688 | 3,587 |
+  | mirror after rigid | 899 | 4,376 |
+
+**Cost.**
+
+Throwaway timer, not committed; test profile, one machine, 20 repetitions, seed 3. Figures are ns per face. *Copy* is `edit` plus `face_mut`, `edge_mut` and
+`vertex_mut` on every record. *Finish* includes `finish`.
+
+| Body | Faces | Copy | Rigid | Scale 2.5 | Mirror | Rigid + finish | Finish alone |
+|---|---|---|---|---|---|---|---|
+| block | 2,400 | 456 | 634 | 736 | 774 | 2,093 | 1,349 |
+| cylinder | 202 | 319 | 930 | 4,761 | 1,064 | 5,610 | 4,589 |
+| sphere | 200 | 270 | 709 | 748 | 824 | 6,565 | 5,809 |
+| torus | 900 | 264 | 784 | 838 | 867 | 5,282 | 4,471 |
+| cone | 201 | 284 | 786 | 2,637 | 881 | 4,351 | 3,512 |
+
+- A transform costs 1.4 to 3 times a plain copy, and less than the `finish` after it.
+- The exceptions are the cylinder and cone under a scale. There, `(k, k)` or `(1, k)`
+  rescales the angle-parameterised pcurves (circles and angle lines), and `pcurve_of`
+  makes them again.
+- Before the near-identity rule, a mirror cost 18,538 ns per face on the cylinder, because
+  `k` came out as 1 − 3ε and every pcurve was re-derived.
+- Research 66 §11.4: boxes are not moved through the map (Manifold refits except under
+  axis-aligned maps; OpenNURBS's moved box is not rounded outward). BR6 resets every cell
+  and BR4 refits on read, which is the certified choice. Moving boxes exactly for signed
+  permutations, power-of-two scales and translations, and lazy transforms held on an
+  operand, are left for a measured follow-up.
+
+**Open questions.**
+
+1. **SU7's plane z.** `Plane::transformed` rebuilds z as `Ax × Ay`, normalised, so a skewed
+   plane's z is not bit-exact under an exact map. Taking `sign · Az / k` under a similarity
+   would make the round trips exact.
+2. **Direct pcurve mapping.** `AngleLine2` and `Circle2` could be mapped directly under
+   `(k, k)` instead of going through `pcurve_of`. That would bring the cylinder and cone
+   scale figures to the others.
+3. **Snapping `k` in SU7 and CU5.** Snapping `k` to 1 within 16 ε there was rejected: the
+   scx-surface tests pin the mean scale. The snap is in BR6's stretch and near-identity
+   rule instead.
+4. **Large coordinates.** Rounding after a rigid move at large coordinates (pin #19910) is
+   not modelled in the accuracy. It is covered only by the zone.
+5. **A free function.** A `transform(&Brep, …) -> (Brep, Changes)` helper could be added if
+   callers want it (see the deviation above).
+
 ### 6.13 BR7 as built (11-27)
 
 Decided by analysis and an adversarial pass. Proposed for review; not yet ruled.
