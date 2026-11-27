@@ -14,6 +14,7 @@ scx-curve = { path = "../scx-curve" }
 scx-nurbs = { path = "../scx-nurbs" }
 scx-num = { path = "../scx-num" }
 scx-nurbs-surface = { path = "../scx-nurbs-surface" }
+scx-record = { path = "../scx-record" }
 scx-surface = { path = "../scx-surface" }
 
 [dev-dependencies]
