@@ -477,7 +477,7 @@ pub enum ParamAxis { U, V }   // the uv counterpart of 57 M8's Axis
 
 ### 2.6 NS1 as built (11-27)
 
-Decided by analysis and an adversarial pass; proposed for review, not yet ruled.
+Proposed for review, not yet ruled.
 
 - **Sizes are `usize`, not `u32`.** The sketch's `u32` saved nothing: every count is compared with
   `KnotVector::len()` and slice lengths, which are `usize`, and a `u32` would add a conversion
@@ -525,7 +525,7 @@ multiplicity `p + 2`, zero, negative and infinite weights, and `w P` that overfl
 
 #### NS3 as built (11-27)
 
-Decided by analysis and an adversarial pass; proposed for review, not yet ruled. The code is in
+Proposed for review, not yet ruled. The code is in
 `crates/scx-nurbs-surface/src/edit.rs`.
 
 - **Names follow the curve methods, not the sketch.** `insert_knot(axis, t, times)`,
@@ -795,7 +795,7 @@ here and is not yet in `scx-num` (section 8, P1). `Budget` and `Stop` are 01 §6
 
 ### 3.6 CU1 as built (11-27)
 
-Decided by analysis and an adversarial pass; proposed for review, not yet ruled.
+Proposed for review, not yet ruled.
 
 - **`Line { origin, direction }`, the direction unnormalised.** The pin's point, unit vector and
   scale are one vector here: `point(t) = origin + direction t` is the pin's STEP parameter
@@ -862,7 +862,7 @@ past the tolerance.
 
 ### 3.7 CU2 as built (11-27)
 
-Decided by analysis and an adversarial pass; proposed for review, not yet ruled.
+Proposed for review, not yet ruled.
 
 ```rust
 #[non_exhaustive] #[derive(Clone, Debug, PartialEq)]
@@ -950,6 +950,156 @@ deleted):
 Dispatch costs nothing measurable over a direct call (the conic rows are within the
 run-to-run spread of about 2 ns). `eval_many` saves 9% on a conic (the frame read once)
 and 75% on a line (the loop vectorises).
+
+### 3.8 CU3 as built (11-27)
+
+Proposed for review, not yet ruled.
+
+```rust
+pub enum Curve  { .., Nurbs(Arc<NurbsCurve<3>>) }
+pub enum Curve2 { .., Nurbs(Arc<NurbsCurve<2>>) }
+impl From<NurbsCurve<3>> for Curve { .. }       // and From<Arc<NurbsCurve<3>>>; Curve2 the same
+
+// scx-nurbs, src/eval_over.rs (new)
+impl<const D: usize> NurbsCurve<D> {
+    pub fn jet<const K: usize>(&self, u: f64, side: Approach)
+        -> Result<([f64; D], [[f64; D]; K])>;                          // = derivs::<{K + 1}>
+    pub fn point_over<T: Ranged>(&self, u: T, side: Approach) -> [T; D];
+    pub fn jet_over<T: Ranged, const K: usize>(&self, u: T, side: Approach)
+        -> ([T; D], [[T; D]; K]);
+}
+
+// scx-num, trig.rs
+pub trait Ranged: Ring + Neg<Output = Self> {
+    fn ends(self) -> (f64, f64);
+    fn clip(self, lo: f64, hi: f64) -> Self;
+    fn join(self, other: Self) -> Self;
+    fn undefined() -> Self;                                            // NaN, the whole line
+    fn gap(right: Self, left: Self, high: f64, low: f64) -> Self;      // a basis's knot difference
+}
+pub trait Trig: Ranged { fn sin_cos(self) -> (Self, Self); }           // was Ring + Neg
+```
+
+- **The arm holds an `Arc`** (§3.3, A7). Against: one indirection per call, and a caller
+  who wants to change the curve must clone it out. For: the enum stays within its 104-byte bound
+  (asserted), cloning a `Curve` is a count, and a NURBS curve is plain data that
+  never changes in place (X3), so sharing it is safe. The arm costs nothing measurable over
+  the direct call (table below).
+- **`jet::<D>` comes from a new `NurbsCurve::jet::<K>`, not from `derivs::<{D + 1}>`.**
+  Stable Rust cannot write `D + 1` in a const argument. Against the new function: a second
+  copy of the derivative kernel next to `derivs`. The alternative was a `match D` calling
+  `derivs::<1>` to `derivs::<32>`, which instantiates 32 kernels for every caller and
+  stops at a hand-written bound. For: the copy is the scalar-generic kernel that
+  `jet_over` needs anyway, so `jet` is just its `f64` form (X12). It keeps the pin's
+  arithmetic order, the point's row apart from the derivatives' rows. A test proves it is
+  `derivs::<{K + 1}>` bit for bit, errors included, for K = 0..=5, 9 and 31 at random and
+  knot parameters on both sides.
+- **No quotient-rule step in the wrapper.** `derivs` already returns Cartesian derivatives
+  (the pin's rational basis derivatives). `jet` reuses the same quotient rule, with the same
+  exact binomials and the same loop order.
+- **The generic evaluator lives in scx-nurbs, in a new `eval_over.rs`.** Against: scx-nurbs
+  gains a dependency on `scx_num::trig`. That is a layer-0 module it already sits on. For:
+  the kernels need crate-private `span_of` and `window`, and they stay next to the `f64`
+  kernels they mirror. `curve.rs` and `curves.rs` are untouched.
+- **`Ranged`, a new supertrait of `Trig`.** Against: one more trait in scx-num, and `Trig`
+  now asks more of a ring. Only `f64` and `Ivl` implement it, so nothing breaks. For: the
+  enum's `point_over<T: Trig>` keeps its ruled signature. A piecewise evaluator needs two
+  things `Ring` cannot give: the range a value spans, to pick its pieces, and a knot
+  difference that stays tight. Putting these on `Ring` instead would have reached the
+  Taylor models (`TmN`), which have no range.
+- **An interval's knot difference is exact (`gap`); an `f64`'s is the pin's sum.** In
+  `f64`, `gap` is `(U[i+j] - u) + (u - U[i])`, so the values keep `point`'s and `derivs`'s
+  bits. In an interval that sum is twice as wide as `u` and holds zero once `u` is a span
+  wide, and every basis value then becomes the whole line. `Ivl::gap` encloses
+  `U[i+j] - U[i]` itself, so the enclosure holds the true real-number recurrence however
+  wide `u` is. The alternative, a Bernstein or convex-hull enclosure per piece, would be
+  tighter on wide intervals. It is a second algorithm with its own proof, left for when a
+  certifier needs it.
+- **A wide interval is split at the knots it crosses.** Each piece it meets is evaluated on
+  the part of the interval inside that piece (the end pieces continue past the domain, as
+  the curve does), and the results are joined. At an interior knot inside the interval,
+  both one-sided values are therefore held, whatever `side` says. At a point interval,
+  `side` picks the piece, exactly as in `f64`. Against: the cost grows with the number of
+  knots crossed. For: one polynomial piece per evaluation is what makes the basis
+  enclosure valid, and a jet's derivatives jump at a knot.
+- **The enum's `f64` calls are NaN where the curve's errs.** This happens for a parameter
+  that is not finite, an overflow, or a jet past `MAX_ORDER`. It is how a conic behaves at
+  an infinite angle: `point` and `jet` are infallible on the enum (CU2). Against: the
+  typed cause is lost at the enum. For: a caller who needs the cause calls the curve
+  directly (`Curve::Nurbs(n)` gives `n.point(t, side)?`). Making `Curve::point` fallible
+  for every kind because one kind can fail was rejected. The interval forms give the
+  whole line for an end that is not finite.
+- **`point` and `point_over` take the piece above `t`.** A NURBS curve is C0 (ruling 2),
+  so the two sides agree in value; `Above` is `NurbsCurve::point`'s convention, and in
+  `f64` the bits are that call's.
+- **`eval_many` loops over `NurbsCurve::point`.** Against: no shared span search across
+  the batch. For: it is `point`'s bits by construction, and a sorted-batch kernel belongs
+  in scx-nurbs with its own measurement. It costs 2 to 10% over a hand loop (noise on a
+  loaded machine, table below).
+- **No difftest.** CU6 does the facade adapters (§3.5). The arm's `f64` values are
+  `NurbsCurve`'s own, which `t_nurbs` already compares with the pin.
+
+Tests:
+- **scx-nurbs `eval_over`, 5 tests.**
+  - `point_over::<f64>` against `point`, bit for bit. The curves cover degrees 1 to 5 and 9,
+    and every knot and weight kind. The parameters are random ones in `[-0.1, 1.1]` and
+    every knot, on both sides.
+  - `jet::<K>` against `derivs::<{K + 1}>`, as above.
+  - `Ivl` enclosures hold the testkit's exact rational point and first two derivatives.
+    The intervals have widths 0, `1e-9`, `1e-3`, 0.2, 0.7 and 1.6, inside the domain,
+    across knots and past its ends. They are checked at both ends, at random interior
+    parameters and at every knot inside, with both one-sided exact values inside a wide
+    interval. Degree 9 is checked on polynomial curves only, because its exact rational
+    derivatives take seconds.
+  - Point intervals are tight: within `1e-9` relative of `point`, and holding it.
+  - Undefined inputs: NaN, infinite and reversed intervals, and orders past `MAX_ORDER`.
+- **scx-curve `curve.rs`.**
+  - The two dispatch tests now include NURBS arms: 3-D and 2-D, degrees 1 to 4 and 9. Every method is checked against the curve's own call, bit for bit,
+    including `jet::<4>` against `derivs::<5>`, the interval forms and `domain` as
+    `Bounded`.
+  - The `eval_many` test now covers the NURBS arms as well.
+  - The conversions test covers `From` for both arms and `Arc` sharing.
+  - A new test checks the NaN failures and that clones share one `Arc`.
+
+Timings. These are release builds on one core, on a loaded build machine (load average
+about 11). Each figure is the best of 7 runs of 2,000 passes over 1,024 seeded parameters
+in `[0, 1]`, with the results black-boxed, from a throwaway program that has since been
+deleted. The curves are random-knot curves with `p + 7` control points, degree 3 and 9,
+polynomial (P) and rational (R).
+
+| ns per call | p3 P | p3 R | p9 P | p9 R |
+|---|---:|---:|---:|---:|
+| pin `crv_eval` | 27.1 | 35.7 | 114.4 | 127.5 |
+| `NurbsCurve::point` | 34.5 | 46.7 | 114.2 | 133.8 |
+| `Curve::point` | 34.6 | 46.8 | 108.6 | 134.2 |
+| `Curve::eval_many`, per point | 42.6 | 44.7 | 131.4 | 131.0 |
+| a loop of `NurbsCurve::point`, per point | 40.5 | 40.8 | 130.4 | 126.8 |
+| pin `crv_derivs`, order 2 | 82.2 | 142.1 | 267.5 | 503.7 |
+| `NurbsCurve::derivs::<3>` | 74.2 | 92.4 | 272.4 | 294.1 |
+| `NurbsCurve::jet::<2>` | 76.8 | 94.9 | 313.0 | 353.5 |
+| `Curve::jet::<2>` | 76.5 | 93.1 | 324.0 | 361.9 |
+| `NurbsCurve::point_over::<f64>` | 34.2 | 45.3 | 146.0 | 175.5 |
+| `Curve::point_over::<Ivl>`, a point | 379 | 522 | 2,702 | 2,644 |
+| `Curve::point_over::<Ivl>`, width 0.05 | 512 | 664 | 3,286 | 3,219 |
+| `Curve::jet_over::<Ivl, 2>`, width 0.05 | 1,306 | 1,952 | 5,490 | 5,797 |
+
+- **Dispatch through the enum costs nothing measurable** over the direct call: the rows
+  differ by run-to-run noise of a few ns.
+- **Against the pin, `point` is 7 ns slower at degree 3** (27 against 35 ns) and level at
+  degree 9. That gap was already there in scx-nurbs (the `NurbsCurve::point` row), so CU3
+  did not add it.
+- **Jets.** At degree 3, the jet matches `derivs`. At degree 9 the generic kernel is 15 to
+  20% slower than `derivs` (313 against 272 ns, 353 against 294). That is a regression
+  for an `f64` jet through the enum at high degree, against the `derivs` path no caller
+  had through the enum before. It is still at or below the pin (268 and 504 ns).
+  - The likely cause is the kernel's extra knot arrays and its separate point row at
+    scratch width 32, the same cost `point_over::<f64>` shows at degree 9 (146 against
+    114 ns).
+  - Recovering it is a follow-up, which perf fixes do not block. One option is to route
+    `jet` through `derivs_into` once `curve.rs` is free to change. Another is to drop the
+    knot arrays from the `f64` instance.
+- **An interval point costs 11 to 24 times an `f64` point.** That is the outward-rounded
+  products.
 
 ## 4. `scx-surface`
 
@@ -2098,7 +2248,7 @@ The coordinating session ruled this research on 2026-11-27, adopting the correct
 
 ### 2.7 NS5 as built: IGES 128 (11-27)
 
-Decided by analysis and an adversarial pass; proposed for review, not yet ruled. scx-nurbs has no
+Proposed for review, not yet ruled. scx-nurbs has no
 IGES 126 yet, so this sets the shape that 126 should mirror.
 
 - **What the pin has.** `nurbs/iges.rs`: `N_Iges128Srf` takes the entity's counts, degrees,

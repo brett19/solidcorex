@@ -6,16 +6,26 @@
 //! Each method is the kind's own call under one `match`, so a dispatched result has the
 //! kind's bits. [`Curve::eval_many`] matches once per batch, outside the loop.
 //!
-//! The enums are `#[non_exhaustive]` (01 C10): the `Nurbs` arm joins in CU3, and `Parabola`,
-//! `Hyperbola` and `Procedural` in step 5, so a match outside this crate keeps a wildcard
-//! arm. They are not `Copy`, although every arm today is: the `Nurbs` arm holds an `Arc`.
+//! The `Nurbs` arm holds its [`NurbsCurve`] behind an `Arc` (63 A7): cloning a curve is a
+//! count, and the enum keeps the size of its largest analytic arm. Its calls are the curve's
+//! own: [`NurbsCurve::point`] on the piece above `t`, [`NurbsCurve::jet`] on the piece
+//! `side` picks, and [`NurbsCurve::point_over`] and [`NurbsCurve::jet_over`] over the
+//! scalar. The `f64` calls cannot fail here, so where the curve's call errs (a parameter
+//! that is not finite, a value that overflows, a jet past [`scx_nurbs::MAX_ORDER`]) every
+//! coordinate is NaN, as a conic's are at an infinite angle.
+//!
+//! The enums are `#[non_exhaustive]` (01 C10): `Parabola`, `Hyperbola` and `Procedural`
+//! join in step 5, so a match outside this crate keeps a wildcard arm. They are not `Copy`:
+//! the `Nurbs` arm holds an `Arc`.
+
+use std::sync::Arc;
 
 use scx_num::domain::ParamDomain;
 use scx_num::jet::{CurveJet, CurveJet2};
 use scx_num::trig::Trig;
-use scx_num::vector2d::Point2;
-use scx_num::vector3d::Point3;
-use scx_nurbs::Approach;
+use scx_num::vector2d::{Point2, Vec2};
+use scx_num::vector3d::{Point3, Vec3};
+use scx_nurbs::{Approach, NurbsCurve};
 
 use crate::conic::{Circle, Circle2, Ellipse, Ellipse2};
 use crate::line::{Line, Line2};
@@ -30,6 +40,8 @@ pub enum Curve {
     Circle(Circle),
     /// An ellipse, `t` the angle in radians.
     Ellipse(Ellipse),
+    /// A NURBS curve, over its knots' domain and continuing its end pieces past it.
+    Nurbs(Arc<NurbsCurve<3>>),
 }
 
 /// A curve in the plane (a parameter-space curve): one of the kinds.
@@ -42,46 +54,91 @@ pub enum Curve2 {
     Circle(Circle2),
     /// An ellipse, `t` the angle in radians.
     Ellipse(Ellipse2),
+    /// A NURBS curve, as [`Curve::Nurbs`].
+    Nurbs(Arc<NurbsCurve<2>>),
 }
 
 // The largest arm (an ellipse: a frame of nine `f64`, two semi-axes and a sense) plus the
-// tag; an arm that would grow past this goes behind an `Arc` (63 A7).
+// tag; an arm that would grow past this goes behind an `Arc` (63 A7), as `Nurbs` does.
 const _: () = assert!(size_of::<Curve>() <= 104);
 const _: () = assert!(size_of::<Curve2>() <= 64);
 
-/// Every method once, for both enums: each arm calls the kind's method of the same name.
+/// Every method once, for both enums: each analytic arm calls the kind's method of the same
+/// name, the `Nurbs` arm the second expression.
 macro_rules! dispatch {
-    ($self:expr, $c:ident => $call:expr) => {
+    ($self:expr, $c:ident => $call:expr, $n:ident => $nurbs:expr) => {
         match $self {
             Self::Line($c) => $call,
             Self::Circle($c) => $call,
             Self::Ellipse($c) => $call,
+            Self::Nurbs($n) => $nurbs,
         }
     };
 }
 
+/// A NURBS curve's point on the piece above `t`, NaN where it errs.
+#[inline]
+fn nurbs_point<const N: usize>(c: &NurbsCurve<N>, t: f64) -> [f64; N] {
+    c.point(t, Approach::Above).unwrap_or([f64::NAN; N])
+}
+
+/// A NURBS curve's point and first `D` derivatives on the piece `side` picks, NaN where it
+/// errs.
+#[inline]
+fn nurbs_jet<const N: usize, const D: usize>(
+    c: &NurbsCurve<N>,
+    t: f64,
+    side: Approach,
+) -> ([f64; N], [[f64; N]; D]) {
+    c.jet::<D>(t, side)
+        .unwrap_or(([f64::NAN; N], [[f64::NAN; N]; D]))
+}
+
+fn point3<T>([x, y, z]: [T; 3]) -> Point3<T> {
+    Point3::new(x, y, z)
+}
+
+fn jet3<T, const D: usize>((p, d): ([T; 3], [[T; 3]; D])) -> CurveJet<D, T> {
+    CurveJet {
+        point: point3(p),
+        d: d.map(|[x, y, z]| Vec3::new(x, y, z)),
+    }
+}
+
+fn point2<T>([x, y]: [T; 2]) -> Point2<T> {
+    Point2::new(x, y)
+}
+
+fn jet2<T, const D: usize>((p, d): ([T; 2], [[T; 2]; D])) -> CurveJet2<D, T> {
+    CurveJet2 {
+        point: point2(p),
+        d: d.map(|[x, y]| Vec2::new(x, y)),
+    }
+}
+
 impl Curve {
     /// The parameter's domain: [`ParamDomain::Unbounded`] for a line,
-    /// [`ParamDomain::TURN`] for a conic.
+    /// [`ParamDomain::TURN`] for a conic, [`ParamDomain::Bounded`] by its knots for a NURBS
+    /// curve.
     #[inline]
     #[must_use]
     pub fn domain(&self) -> ParamDomain {
-        dispatch!(self, c => c.domain())
+        dispatch!(self, c => c.domain(), n => ParamDomain::Bounded(n.domain()))
     }
 
-    /// The point at `t`.
+    /// The point at `t` (on the piece above `t` for a NURBS curve, which is continuous).
     #[inline]
     #[must_use]
     pub fn point(&self, t: f64) -> Point3 {
-        dispatch!(self, c => c.point(t))
+        dispatch!(self, c => c.point(t), n => point3(nurbs_point(n, t)))
     }
 
     /// The point and the first `D` derivatives at `t`, from `side` where the curve is not
-    /// smooth there (no kind here: `side` matters from the `Nurbs` arm on).
+    /// smooth there (at a NURBS curve's knot; an analytic kind is smooth everywhere).
     #[inline]
     #[must_use]
     pub fn jet<const D: usize>(&self, t: f64, side: Approach) -> CurveJet<D> {
-        dispatch!(self, c => c.jet(t, side))
+        dispatch!(self, c => c.jet(t, side), n => jet3(nurbs_jet(n, t, side)))
     }
 
     /// The point at `t` in the scalar `T` (an enclosure in
@@ -89,16 +146,15 @@ impl Curve {
     #[inline]
     #[must_use]
     pub fn point_over<T: Trig>(&self, t: T) -> Point3<T> {
-        dispatch!(self, c => c.point_over(t))
+        dispatch!(self, c => c.point_over(t), n => point3(n.point_over(t, Approach::Above)))
     }
 
     /// The point and the first `D` derivatives at `t` in the scalar `T`, from `side` as
-    /// [`Curve::jet`].
+    /// [`Curve::jet`]. An interval holding a knot holds both sides' values there.
     #[inline]
     #[must_use]
     pub fn jet_over<T: Trig, const D: usize>(&self, t: T, side: Approach) -> CurveJet<D, T> {
-        let _ = side;
-        dispatch!(self, c => c.jet_over(t))
+        dispatch!(self, c => c.jet_over(t), n => jet3(n.jet_over::<T, D>(t, side)))
     }
 
     /// The point at each of `ts`, into `out`: `out[i]` is [`Curve::point`]`(ts[i])`, bit
@@ -122,6 +178,11 @@ impl Curve {
             }
             Self::Circle(c) => c.fill(ts, out),
             Self::Ellipse(e) => e.fill(ts, out),
+            Self::Nurbs(n) => {
+                for (p, &t) in out.iter_mut().zip(ts) {
+                    *p = point3(nurbs_point(n, t));
+                }
+            }
         }
     }
 }
@@ -131,36 +192,36 @@ impl Curve2 {
     #[inline]
     #[must_use]
     pub fn domain(&self) -> ParamDomain {
-        dispatch!(self, c => c.domain())
+        dispatch!(self, c => c.domain(), n => ParamDomain::Bounded(n.domain()))
     }
 
-    /// The point at `t`.
+    /// The point at `t`, as [`Curve::point`].
     #[inline]
     #[must_use]
     pub fn point(&self, t: f64) -> Point2 {
-        dispatch!(self, c => c.point(t))
+        dispatch!(self, c => c.point(t), n => point2(nurbs_point(n, t)))
     }
 
     /// The point and the first `D` derivatives at `t`, from `side` as [`Curve::jet`].
     #[inline]
     #[must_use]
     pub fn jet<const D: usize>(&self, t: f64, side: Approach) -> CurveJet2<D> {
-        dispatch!(self, c => c.jet(t, side))
+        dispatch!(self, c => c.jet(t, side), n => jet2(nurbs_jet(n, t, side)))
     }
 
     /// The point at `t` in the scalar `T`.
     #[inline]
     #[must_use]
     pub fn point_over<T: Trig>(&self, t: T) -> Point2<T> {
-        dispatch!(self, c => c.point_over(t))
+        dispatch!(self, c => c.point_over(t), n => point2(n.point_over(t, Approach::Above)))
     }
 
-    /// The point and the first `D` derivatives at `t` in the scalar `T`, from `side`.
+    /// The point and the first `D` derivatives at `t` in the scalar `T`, from `side` as
+    /// [`Curve::jet_over`].
     #[inline]
     #[must_use]
     pub fn jet_over<T: Trig, const D: usize>(&self, t: T, side: Approach) -> CurveJet2<D, T> {
-        let _ = side;
-        dispatch!(self, c => c.jet_over(t))
+        dispatch!(self, c => c.jet_over(t), n => jet2(n.jet_over::<T, D>(t, side)))
     }
 
     /// The point at each of `ts`, into `out`, as [`Curve::eval_many`].
@@ -182,6 +243,11 @@ impl Curve2 {
             }
             Self::Circle(c) => c.fill(ts, out),
             Self::Ellipse(e) => e.fill(ts, out),
+            Self::Nurbs(n) => {
+                for (p, &t) in out.iter_mut().zip(ts) {
+                    *p = point2(nurbs_point(n, t));
+                }
+            }
         }
     }
 }
@@ -199,6 +265,25 @@ macro_rules! from_kind {
 from_kind!(Curve: Line => Line, Circle => Circle, Ellipse => Ellipse);
 from_kind!(Curve2: Line2 => Line, Circle2 => Circle, Ellipse2 => Ellipse);
 
+macro_rules! from_nurbs {
+    ($enum:ident, $d:literal) => {
+        impl From<Arc<NurbsCurve<$d>>> for $enum {
+            fn from(c: Arc<NurbsCurve<$d>>) -> Self {
+                Self::Nurbs(c)
+            }
+        }
+
+        impl From<NurbsCurve<$d>> for $enum {
+            fn from(c: NurbsCurve<$d>) -> Self {
+                Self::Nurbs(Arc::new(c))
+            }
+        }
+    };
+}
+
+from_nurbs!(Curve, 3);
+from_nurbs!(Curve2, 2);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,8 +291,8 @@ mod tests {
     use scx_num::hash::Rng;
     use scx_num::interval::Ivl;
     use scx_num::units::Length;
-    use scx_num::vector2d::Vec2;
-    use scx_num::vector3d::Vec3;
+    use scx_nurbs::KnotVector;
+    use scx_testkit::sample::{self, Knots, Spec, Weights};
 
     const SIDES: [Approach; 2] = [Approach::Below, Approach::Above];
 
@@ -223,9 +308,32 @@ mod tests {
         }
     }
 
+    /// NURBS curves of every knot and weight kind, degrees 1..=4 and 9 (the wide kernel),
+    /// without the picks whose interior knot repeats `p + 1` times, which are not curves.
+    fn nurbs<const D: usize>(rng: &mut Rng) -> Vec<NurbsCurve<D>> {
+        let mut out = Vec::new();
+        for degree in [1, 2, 3, 4, 9] {
+            for knots in [Knots::Uniform, Knots::Clustered, Knots::Multiple] {
+                for weights in [Weights::Unit, Weights::Moderate, Weights::NearZero] {
+                    let spec = Spec {
+                        degree,
+                        count: degree + 3,
+                        knots,
+                    };
+                    let d = sample::curve::<D>(rng, spec, weights);
+                    let c = KnotVector::new(d.degree, d.knots)
+                        .and_then(|k| NurbsCurve::new(k, d.points, d.weights));
+                    out.extend(c.ok());
+                }
+            }
+        }
+        assert!(out.len() > 30, "{}", out.len());
+        out
+    }
+
     fn curves(seed: u64) -> Vec<Curve> {
         let mut rng = Rng::new(seed);
-        let mut out = Vec::new();
+        let mut out: Vec<Curve> = nurbs::<3>(&mut rng).into_iter().map(Curve::from).collect();
         for (i, scale) in [1.0, 1e-3, 1e4].into_iter().cycle().take(60).enumerate() {
             let p = Point3::from(core::array::from_fn(|_| signed(&mut rng, scale)));
             let v = Vec3::from(core::array::from_fn(|_| signed(&mut rng, scale)));
@@ -247,7 +355,7 @@ mod tests {
 
     fn curves2(seed: u64) -> Vec<Curve2> {
         let mut rng = Rng::new(seed);
-        let mut out = Vec::new();
+        let mut out: Vec<Curve2> = nurbs::<2>(&mut rng).into_iter().map(Curve2::from).collect();
         for (i, scale) in [1.0, 1e-3, 1e4].into_iter().cycle().take(60).enumerate() {
             let p = Point2::new(signed(&mut rng, scale), signed(&mut rng, scale));
             let v = Vec2::new(signed(&mut rng, scale), signed(&mut rng, scale));
@@ -266,7 +374,8 @@ mod tests {
         out
     }
 
-    /// Ordinary parameters, large angles, signed zero, infinities and NaN.
+    /// Ordinary parameters, large angles, signed zero, infinities and NaN, and parameters
+    /// inside a NURBS curve's domain, `[0, 1]`.
     fn params(rng: &mut Rng) -> Vec<f64> {
         let mut t = vec![
             0.0,
@@ -280,6 +389,7 @@ mod tests {
             f64::NAN,
         ];
         t.extend((0..24).map(|_| 10.0 * rng.next_signed_unit()));
+        t.extend((0..12).map(|_| rng.next_f64()));
         t
     }
 
@@ -346,6 +456,32 @@ mod tests {
             Curve::Line(k) => of!(k),
             Curve::Circle(k) => of!(k),
             Curve::Ellipse(k) => of!(k),
+            // The curve's own calls: the jet as `derivs`, the order and the point together.
+            Curve::Nurbs(n) => {
+                let jet = |d: &[[f64; 3]]| CurveJet {
+                    point: Point3::from_array(d[0]),
+                    d: core::array::from_fn(|k| Vec3::from_array(d[k + 1])),
+                };
+                let nan = [[f64::NAN; 3]; 5];
+                let (over, (q, d)) = (
+                    n.point_over(w, Approach::Above),
+                    n.jet_over::<Ivl, 2>(w, side),
+                );
+                Direct3 {
+                    domain: ParamDomain::Bounded(n.domain()),
+                    point: Point3::from_array(n.point(t, Approach::Above).unwrap_or(nan[0])),
+                    jet: jet(&n.derivs::<5>(t, side).unwrap_or(nan)),
+                    jet0: CurveJet {
+                        point: Point3::from_array(n.derivs::<1>(t, side).map_or(nan[0], |d| d[0])),
+                        d: [],
+                    },
+                    over: Point3::new(over[0], over[1], over[2]),
+                    jet_over: CurveJet {
+                        point: Point3::new(q[0], q[1], q[2]),
+                        d: d.map(|[x, y, z]| Vec3::new(x, y, z)),
+                    },
+                }
+            }
         }
     }
 
@@ -410,6 +546,28 @@ mod tests {
                         Curve2::Line(k) => check!(k),
                         Curve2::Circle(k) => check!(k),
                         Curve2::Ellipse(k) => check!(k),
+                        Curve2::Nurbs(n) => {
+                            let nan = [[f64::NAN; 2]; 5];
+                            let p = n.point(t, Approach::Above).unwrap_or(nan[0]);
+                            let want = n.derivs::<5>(t, side).unwrap_or(nan);
+                            let got = c.jet::<4>(t, side);
+                            assert_eq!(c.domain(), ParamDomain::Bounded(n.domain()));
+                            assert_eq!(bits2(c.point(t)), p.map(bits), "{c:?} {t}");
+                            assert_eq!(bits2(got.point), want[0].map(bits));
+                            for (g, w) in got.d.iter().zip(&want[1..]) {
+                                assert_eq!(g.to_array().map(bits), w.map(bits));
+                            }
+                            let want0 = n.derivs::<1>(t, side).map_or(nan[0], |d| d[0]);
+                            assert_eq!(bits2(c.jet::<0>(t, side).point), want0.map(bits));
+                            let (got, exp) = (c.point_over(w), n.point_over(w, Approach::Above));
+                            assert_eq!([ibits(got.x), ibits(got.y)], exp.map(ibits));
+                            let got = c.jet_over::<Ivl, 1>(w, side);
+                            let (q, d) = n.jet_over::<Ivl, 1>(w, side);
+                            assert_eq!(
+                                [got.point.x, got.point.y, got.d[0].x, got.d[0].y].map(ibits),
+                                [q[0], q[1], d[0][0], d[0][1]].map(ibits)
+                            );
+                        }
                     }
                     n += 1;
                 }
@@ -475,5 +633,35 @@ mod tests {
             Curve::from(c),
             Curve::from(Ellipse::new(f, r, r, Sense::Forward).unwrap())
         );
+        let mut rng = Rng::new(27);
+        let n = nurbs::<3>(&mut rng).swap_remove(0);
+        let shared = Arc::new(n.clone());
+        assert_eq!(Curve::from(n.clone()), Curve::Nurbs(shared.clone()));
+        assert!(matches!(Curve::from(shared.clone()), Curve::Nurbs(a) if Arc::ptr_eq(&a, &shared)));
+        assert_eq!(
+            Curve::from(n).domain(),
+            ParamDomain::Bounded(shared.domain())
+        );
+        let n2 = nurbs::<2>(&mut rng).swap_remove(0);
+        assert_eq!(Curve2::from(n2.clone()), Curve2::Nurbs(Arc::new(n2)));
+    }
+
+    /// The `f64` calls of a NURBS arm are NaN where the curve's own err, and a clone shares
+    /// the curve.
+    #[test]
+    fn nurbs_failures_are_nan_and_clones_share() {
+        let mut rng = Rng::new(28);
+        let n = Arc::new(nurbs::<3>(&mut rng).swap_remove(3));
+        let c = Curve::Nurbs(n.clone());
+        for t in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(c.point(t).to_array().iter().all(|x| x.is_nan()));
+            let j = c.jet::<2>(t, Approach::Below);
+            assert!(jbits(&j).iter().flatten().all(|&b| b == f64::NAN.to_bits()));
+        }
+        let j = c.jet::<32>(0.5, Approach::Above);
+        assert!(j.d.iter().all(|v| v.to_array().iter().all(|x| x.is_nan())));
+        let copy = c.clone();
+        assert_eq!(Arc::strong_count(&n), 3);
+        assert_eq!(copy, c);
     }
 }
