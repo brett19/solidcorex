@@ -49,7 +49,7 @@ fn at(origin: [f64; 3]) -> Frame {
 /// A circle (even `i`) or an ellipse through a random point of `s`.
 fn conic(rng: &mut Rng, s: &SurfaceKind, i: usize) -> CurveKind {
     let p = sample::point_on(rng, s);
-    if i % 2 == 0 {
+    if i.is_multiple_of(2) {
         sample::circle_through(rng, p)
     } else {
         sample::ellipse_through(rng, p)

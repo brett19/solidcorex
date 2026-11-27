@@ -375,14 +375,13 @@ impl Slope {
         if p.is_zero() {
             return Ok(0);
         }
-        if let Some((lo, hi)) = &self.band {
-            if p.degree().unwrap_or(0) > 0
-                && p.real_roots(&cs::root_width())
-                    .iter()
-                    .any(|r| r.at.lo() <= hi && lo <= r.at.hi())
-            {
-                return Err(Error::Undecided);
-            }
+        if let Some((lo, hi)) = &self.band
+            && p.degree().unwrap_or(0) > 0
+            && p.real_roots(&cs::root_width())
+                .iter()
+                .any(|r| r.at.lo() <= hi && lo <= r.at.hi())
+        {
+            return Err(Error::Undecided);
         }
         Ok(p.eval(&self.k).signum())
     }
@@ -1357,10 +1356,7 @@ pub fn cylinder_section(cyl: &Cylinder, plane: &Plane) -> Result<[Span; 4], Erro
         .iter()
         .zip(&weights)
         .fold(Poly::default(), |s, (bi, wi)| s.add(&bi.scale(wi)));
-    let breaks = match cs::implicit(&SurfaceKind::Cylinder(cyl.clone()))?
-        .pin_layout()
-        .u
-    {
+    let breaks = match cs::implicit(&SurfaceKind::Cylinder(*cyl))?.pin_layout().u {
         Param::Arcs { breaks, .. } => breaks,
         Param::Linear { .. } => Vec::new(),
     };

@@ -110,7 +110,7 @@ fn the_knots_are_the_quarter_turns() {
     assert_eq!(breaks.len(), 5);
     assert_eq!(breaks[3], 3.0 * core::f64::consts::PI);
     let (cyl, cone, sphere) = (cylinder(), cone(), sphere());
-    for k in 0..4 {
+    for (k, &brk) in breaks.iter().take(4).enumerate() {
         let kf = k as f64;
         let zero = Dd::new(0.0);
         assert!(close(
@@ -120,7 +120,7 @@ fn the_knots_are_the_quarter_turns() {
         ));
         assert!(close(
             cyl.to_nurb((quarter(kf), zero)).0,
-            Dd::new(breaks[k]),
+            Dd::new(brk),
             1e-30
         ));
     }

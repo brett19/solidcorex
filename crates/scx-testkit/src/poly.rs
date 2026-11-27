@@ -477,7 +477,7 @@ impl Poly {
     /// zero `d`.
     #[must_use]
     pub fn div_exact(&self, d: &Poly) -> Poly {
-        self.div_rem(d).map(|(q, _)| q).unwrap_or_default()
+        self.div_rem(d).map_or_else(Poly::default, |(q, _)| q)
     }
 
     /// `p` divided by its leading coefficient's magnitude: the same roots and signs.
@@ -494,7 +494,7 @@ impl Poly {
     pub fn gcd(&self, o: &Poly) -> Poly {
         let (mut a, mut b) = (self.clone(), o.clone());
         while !b.is_zero() {
-            let r = a.div_rem(&b).map(|(_, r)| r).unwrap_or_default();
+            let r = a.div_rem(&b).map_or_else(Poly::default, |(_, r)| r);
             a = b;
             b = r.normalised();
         }

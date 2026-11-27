@@ -265,9 +265,9 @@ impl Exactly {
 
     /// The frame coordinates of a homogeneous point of polynomials, each times `w`.
     pub(crate) fn local_poly(&self, p: &[Poly; 3], w: &Poly) -> [Poly; 3] {
-        let d: [Poly; 3] = core::array::from_fn(|i| {
-            let pi = p.get(i).cloned().unwrap_or_default();
-            pi.sub(&w.scale(self.origin.get(i).unwrap_or(&Rat::zero())))
+        let d: [Poly; 3] = core::array::from_fn(|i| match (p.get(i), self.origin.get(i)) {
+            (Some(pi), Some(o)) => pi.sub(&w.scale(o)),
+            _ => Poly::default(),
         });
         self.inverse.each_ref().map(|row| {
             d.iter()

@@ -26,12 +26,15 @@ The new modules:
 
 | Module | What it is |
 |---|---|
-| `poly` | Exact polynomials over the rationals. Every real root is certified in a rational interval with its multiplicity (Yun's square-free factorisation, Sturm sequences, bisection to `2^-110` relative). |
-| `pin_uv` | The pin's uv layout of the analytic surfaces (D13), in closed form and double-double (§2). |
+| `poly` | Exact polynomials over the rationals, one module with `project`'s (T1, T3): one `Poly` over `Rat` and one `Root` (a `bound` interval and a multiplicity). Every real root is certified with its multiplicity (Yun's square-free factorisation, Sturm sequences, refinement to a given width); these truths ask for `2^-110`. |
 | `curve_surface` | T2. Every intersection of a line, circle or ellipse with a plane, cylinder, cone, sphere or ring torus. Each hit has its multiplicity, its contact (crossing or tangent), its curve parameter with a radius, its STEP uv and its pin uv. Curves that lie on the surface are reported as such (§3). |
 | `ssi` | T5. The analytic sections: plane-plane; a plane against a cylinder, cone or sphere; sphere-sphere; coaxial pairs (tori among them); a plane across a torus's axis. Each answer is the exact curve kind (point, line, circle, ellipse, hyperbola branch) with its parameters, its contact, and samples certified on both surfaces. It also gives WR-680's exact section of the pin's NURBS cylinder (§4). |
 
-`gen` gained seeded generators: exact axis frames, revolved surfaces, frames moved along an
+The pin's uv layout (D13) is `quadric::Implicit::pin_layout`, on truth-n's `quadric::Layout`
+(§2), and the surfaces' exact implicit forms are `quadric`'s, so each concept has one truth
+(ruling 11-27; `pin_uv` and `curve_surface`'s own forms were folded onto it in the merge).
+
+`sample` gained seeded generators: exact axis frames, revolved surfaces, frames moved along an
 axis, and planes near an axis. `curve_surface::distance` is a point's first-order distance from a
 surface: the exact implicit value over the double-double gradient's length.
 
@@ -53,9 +56,11 @@ Read from the pin's canonical constructors (`swap_uv` and `inside_out` off, a fu
   - cone, sphere and torus angles: `k/4` over `[0, 1]`;
   - sphere latitude: `k/2`.
 - The cylinder's and cone's v is the height, which is the STEP v.
-- The plane's uv is taken as the STEP uv. This is not checked against the pin (§7).
+- The plane's uv is the STEP uv. `pin_quadric`'s `pin_plane` checks the pin's NURB-to-STEP map
+  of each plane against this identity layout, to `1e-11` (MEASURED: no failures).
 
-The self-tests (`tests/pin_uv.rs`) cover three things:
+The layout is `quadric::Implicit::pin_layout` (`Param::arcs` and `Param::Linear`). The
+self-tests (`tests/pin_layout.rs`) cover three things:
 
 - The quarter-arc map equals the rational quadratic arc itself, evaluated exactly at rational
   `s`.
@@ -115,7 +120,7 @@ The method is exact, with one rounding: the cone's slope.
   - the first-order distance equals the closed form off a plane and a sphere;
   - a near-tangent line splits into two close roots or none, never one.
 - **Typed causes:** bad inputs give `NonFinite`, `DegenerateFrame`, `DegenerateCurve` and
-  `DegenerateSurface`. `pin_uv` is `None` only on the cone's far nappe.
+  `DegenerateSurface`. The pin uv is `None` only on the cone's far nappe.
 - **`poly`:**
   - known rational roots come back exactly, with their multiplicities;
   - irrational roots are isolated and refined;
@@ -181,7 +186,10 @@ Two cases need a word:
 
 - **The parabola.** It needs a plane exactly parallel to a cone's generator. With the slope
   transcendental, no double input reaches it. The truth returns `NoClosedForm` rather than
-  invent one (§7).
+  invent one (accepted 11-27).
+- **Plane-torus sections** are closed form only across the torus's axis (circles). Every other
+  plane-torus section is a quartic curve with no closed form here, and is `NoClosedForm`. This
+  is a limit of T5, accepted for now (11-27): a truth for them needs a certified quartic curve.
 - **The rank-one case.** The cone's `delta` is never the zero polynomial in `k`, so rank one is
   the cylinder alone.
 
@@ -201,12 +209,33 @@ The unit test `the_slope_band_decides_or_refuses` checks all three outcomes.
 
 ### 4.4 Coaxial pairs with a cone
 
-These are solved at the band's two ends and at `k`. The answer is `Undecided` when the three
-answers' shapes differ: whether the surfaces coincide, or the rings' number, kinds or contacts.
+These are solved at `k` and then proved for every slope in the band, else `Undecided` (ruling
+11-27: a truth must be proved). The answer's shape (whether the surfaces coincide, and the
+rings' number, kinds and contacts) is fixed by the signs of a few polynomials in the slopes:
 
-This is a sampled decision, not a proved one. A shape change inside the band and back out again
-would be missed. With a polynomial in `h` whose coefficients are at most quadratic in `k`, that
-needs two roots in a `2^-96` band (JUDGED; for ruling, §7).
+- the section polynomial `g(h)`'s coefficients, which fix its degree;
+- for a quadratic `g`, its discriminant, which fixes the number of roots and their contact;
+- `g` at each cone's apex (`k^d g(h_0 - r / k)`), which fixes which root is a point on the
+  axis.
+
+When each keeps its sign over the band, the roots move continuously without meeting, so the
+shape at `k` is the shape at the true slope.
+
+- **Quadric pairs** (`g` at most quadratic). Each slope is `k_i + e_i`. The polynomials are
+  expanded in `e`, and a sign is proved when the constant term's size exceeds the sum of the
+  other terms' sizes at the band's corner, or when the polynomial is zero. Two cones with the
+  same slope share one `e`: the same cone moved along its axis has parallel generators for
+  every slope, and its one circle is proved.
+- **A cone against a torus** (`g` a quartic in `h`). There is one slope. The quartic's
+  Sylvester resultant with its derivative (nonzero: its degree holds and it stays square-free)
+  and its apex value are polynomials in `k` of degree at most 28 and 8. They are interpolated
+  exactly at 30 nodes, and their signs are decided by §4.3's band test. A quartic with a
+  double root for every slope is `Undecided`.
+
+Unit test `the_band_bound_decides_or_refuses` checks the bound; `tests/ssi.rs`'s
+`coaxial_cones_are_proved_over_the_slope_band` checks a moved cone and a cone through a
+torus's tube, and the seeded coaxial pairs all decide. The `ssi` file's time is unchanged
+(0.65 s before and after, MEASURED).
 
 ### 4.5 WR-680
 
@@ -238,7 +267,7 @@ What stays exact, and what does not:
 
 ### 4.6 Self-tests
 
-`tests/ssi.rs` has 13 tests, plus the unit test above.
+`tests/ssi.rs` has 14 tests, plus the two unit tests above.
 
 - **Closed forms:**
   - two planes meet in a line, coincide, or do not meet;
@@ -249,7 +278,8 @@ What stays exact, and what does not:
     point;
   - two spheres meet on their radical plane;
   - coaxial quadrics meet in circles where their meridians cross;
-  - tori meet planes, quadrics and tori across their axis.
+  - tori meet planes, quadrics and tori across their axis;
+  - coaxial cones are proved over the slope band (§4.4).
 - **An independent method:** for seeded plane sections, coaxial pairs and sphere pairs, three
   things hold:
   - every sample is on both surfaces, with first-order gap below `1e-24`;
@@ -304,28 +334,25 @@ A mismatch fails the test. A pin defect is reported, not failed.
 
 | Test | Inputs | Exact | Within tolerance | Pin defects | Mismatches | Time alone |
 |---|---|---|---|---|---|---|
-| `pin_curve_surface_against_t2` | 15 | 10 | 5 | 0 | 0 | 0.41 to 0.51 s |
-| `pin_tangent_lines_against_t2` | 5 | 0 | 4 | 1 | 0 | 2.8 to 3.5 s |
-| `pin_plane_sections_against_t5` | 12 | 11 | 1 | 0 | 0 | 1.1 to 1.3 s |
-| `pin_revolved_pairs_against_t5` | 12 | 11 | 1 | 0 | 0 | 3.1 to 3.7 s |
-| `pin_tangent_sections_against_t5` | 6 | 6 | 0 | 0 | 0 | 0.03 to 0.08 s |
+| `pin_curve_surface_against_t2` | 15 | 10 | 5 | 0 | 0 | 0.13 s |
+| `pin_tangent_lines_against_t2` | 5 | 0 | 4 | 1 | 0 | 0.22 to 0.23 s |
+| `pin_plane_sections_against_t5` | 12 | 11 | 1 | 0 | 0 | 1.5 to 1.7 s |
+| `pin_revolved_pairs_against_t5` | 12 | 11 | 1 | 0 | 0 | 0.82 to 0.85 s |
+| `pin_tangent_sections_against_t5` | 6 | 6 | 0 | 0 | 0 | 0.02 s |
 
-The five run in 3.6 s together. The machine's load was about 9.
+Times are with the pin built at `opt-level = 2` (ruling 9, §7). The five run in 1.8 s together.
+The machine's load was about 10.
 
-**Why two of the tests are slow.** The time is in the pin's debug-built intersectors, not in the
-truths: each truth takes under 2 ms. The slow cases are these:
+**Test time.** In a debug-built pin the tangent lines took 2.8 to 3.5 s and the revolved pairs
+3.1 to 3.7 s, all of it in the pin's intersectors (one tangent line 0.87 s in
+`intersect_curve_surface`; one coaxial cone pair 0.83 s in `intersect_surfaces_within` and
+1.4 s evaluating its B-spline answer). Each truth takes under 2 ms. The first draft's 60
+curve-surface inputs and 24 per SSI test were cut, and the tangent lines moved to their own
+test. With the pin at `opt-level = 2` both are under 1 s and no further cut is needed.
 
-- One tangent line takes up to 0.87 s inside `intersect_curve_surface`.
-- One coaxial cone pair takes 0.83 s inside `intersect_surfaces_within`, and then about 1.4 s
-  evaluating its B-spline answer.
-
-Two cuts were made to reach these times:
-
-- The first draft had 60 curve-surface inputs and 24 in each SSI test. The counts were cut, and
-  the tangent lines moved to their own test.
-- `cargo xtask fast` does not run the difftest's tests, so the 1 s budget there is not at risk.
-  These two tests are still above it, while keeping every surface kind covered (for ruling,
-  §7).
+The plane sections stay at 1.5 to 1.7 s with the pin optimised, so their time is not in the
+pin (JUDGED: in the debug-built checks of the pin's answers; not profiled, as `perf` is not
+permitted on the machine). Left to a perf follow-up.
 
 **What the pin returns, as notes, not defects:**
 
@@ -336,8 +363,12 @@ Two cuts were made to reach these times:
 
 ### 5.3 Pin defects
 
-The pin's intersectors are not ported in scx, so no `pin_defects.rs` entry is added. Defects 1
-and 2 were found in the 60-input draft of `pin_curve_surface_against_t2` (seed `0x7264`). Defect
+The pin's intersectors are not ported in scx, so no `pin_defects.rs` entry is added. Until they
+are, the defects are `KNOWN_*` lists in `pin_geom_truths.rs`, as in the surveys: each test
+fails when its defective inputs change. `KNOWN_TANGENT_LINES` is `[2]` (defect 3);
+`KNOWN_CURVE_SURFACE` is empty, with defects 1 and 2 described on it. When scx ports these
+intersectors, all three become `pin_defects.rs` entries (ruling 11-27). Defects 1 and 2 were
+found in the 60-input draft of `pin_curve_surface_against_t2` (seed `0x7264`). Defect
 3 is in the current `pin_tangent_lines_against_t2` (seed `0x7265`).
 
 **1. A line across a thin cylinder is reported as an overlap.**
@@ -365,7 +396,9 @@ and 2 were found in the 60-input draft of `pin_curve_surface_against_t2` (seed `
 
 Defects 1 and 2 have the same likely cause (JUDGED). The overlaps are within the pin's fixed
 `0.001` curve-on-surface solve tolerance, so a near-tangent or shallow crossing is accepted as
-"on the surface".
+"on the surface". scx keeps no fixed-tolerance overlap (ruling 11-27): an on-surface or overlap
+answer is given only when it is exact or certified, and a tolerance-based overlap is one a
+caller asks for with an explicit tolerance.
 
 **3. A near-tangent line to a cone is reported as no intersection.**
 
@@ -384,33 +417,29 @@ Defects 1 and 2 have the same likely cause (JUDGED). The overlaps are within the
 - Error: a contact within `1e-8` is missed entirely; at the `1e-6` tangent bound the pin
   should report a point.
 
-## 6. Proposed 04 rows
+## 6. 04 rows
 
-These are proposed only. No 04 row is edited.
+The rows proposed here were ruled 11-27 by the coordinator and are in 04 §3, for Brett's
+review.
 
-| Date | Ruling | Evidence |
-|---|---|---|
-| 11-27 | (Proposed) Curved-surface SSI truths are closed form only for frames sharing axes bit for bit (spheres anywhere, coaxial pairs); every other pair is `NoClosedForm` | A shared `L` up to a shift keeps every predicate exact; rotated axes would need rounding the truth cannot certify (64 §4.1) |
-| 11-27 | (Proposed) A cone predicate inside the slope's `2^-96` band is `Undecided`, a typed cause, not a guess | `tan a` is transcendental; no double input is exactly tangent unless for every slope (64 §4.3) |
-| 11-27 | (Proposed) WR-680's exactness is on the pin's NURBS cylinder, whose middle weight is `cos(pi/4)` rounded | The section is exact on that surface; no double weight makes a quadratic arc exactly circular (64 §4.5) |
+## 7. Rulings (11-27, coordinator, for Brett's review)
 
-## 7. For ruling
-
-- **Shared axes for curved pairs** (§4.1). The alternative is certified rounding on rotated
-  frames.
-- **The cone band:** `Undecided` for plane sections, and the sampled three-point shape decision
-  for coaxial pairs with a cone (§4.3, §4.4).
-- **Folding onto `quadric::Layout`/`Implicit`.** `pin_uv` and `curve_surface`'s implicit forms
-  overlap truth-n's `quadric::Layout`/`Implicit`. One of them should be folded onto the other
-  once both land.
-- **The misaligned WR-680 case** (§4.5). A plane section of a cylinder not aligned with the arcs
-  is exact on the pin's surface only, never on the true cylinder.
-- **The plane's uv** is not checked against the pin (§2).
-- **The parabola** is unreachable from double inputs and returns `NoClosedForm` (§4.2).
-- **Plane-torus** sections are supported only across the axis. Other plane-torus sections are
-  quartic curves, with no closed form here.
-- **The pin's overlap semantics.** Its fixed `0.001` overlap tolerance is behind defects 1 and
-  2 (§5.3). Should scx's intersector keep any overlap test at all?
-- **The tangent lines and revolved pairs tests take 3 to 4 s** in a debug build, all of it in
-  the pin. Two options: accept this, since the difftest is not in `xtask fast`, or keep only
-  three surface kinds for the tangent lines.
+1. **Shared axes for curved pairs.** Accepted: a closed form only when the axes are equal bit
+   for bit; `NoClosedForm` otherwise.
+2. **The cone band.** The `2^-96` band giving `Undecided` is accepted. The sampled three-point
+   decision for coaxial pairs was not accepted; it is now proved, or `Undecided` (§4.4).
+3. **Folding onto `quadric`.** Done in the merge: `pin_uv` and `curve_surface`'s implicit
+   forms are `quadric::Layout` and `quadric::Implicit` (with a crate-private exact form), and
+   `poly` is one module (§1).
+4. **The misaligned WR-680 case** (§4.5). Accepted, as documented.
+5. **The plane's uv.** Checked against the pin in `pin_quadric` (§2).
+6. **The parabola** returns `NoClosedForm` (§4.2). Accepted.
+7. **Plane-torus** sections across the axis only. Accepted for now; the limit is in §4.2.
+8. **Overlaps.** scx keeps no fixed-tolerance overlap (§5.3); the defects are `KNOWN_*` lists
+   until the intersectors are ported.
+9. **Test time.** The pin and its record crate build at `opt-level = 2` in dev and test
+   (`Cargo.toml`). Results do not change (Rust never reassociates floats): the full difftest
+   is 373 tests, 0 failures, 0 mismatches. Times above (§5.2). The rebuild of the pin and its
+   dependents at `opt-level = 2` took 367 s at load 10 (MEASURED; no opt-0 cold build was
+   timed for comparison). The full difftest took 280 s wall against 237 s before, both at
+   load about 10 with other builds sharing the machine, so not a like-for-like comparison.

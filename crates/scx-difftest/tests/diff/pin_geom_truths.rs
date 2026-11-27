@@ -220,13 +220,20 @@ struct Tally {
     inputs: usize,
     exact: usize,
     within: usize,
-    defects: Vec<String>,
+    defects: Vec<(usize, String)>,
     mismatches: Vec<String>,
     notes: Vec<String>,
 }
 
 impl Tally {
-    fn report(&self, name: &str) {
+    /// A pin defect on the current input.
+    fn defect(&mut self, d: String) {
+        self.defects.push((self.inputs.saturating_sub(1), d));
+    }
+
+    /// Prints the counts and each defect, and fails on a mismatch or when the pin's
+    /// defective inputs are not `known`.
+    fn report(&self, name: &str, known: &[usize]) {
         println!(
             "pin geom {name}: {} inputs, {} exact, {} within tolerance, {} pin defects, {} \
              mismatches",
@@ -236,8 +243,8 @@ impl Tally {
             self.defects.len(),
             self.mismatches.len()
         );
-        for d in &self.defects {
-            println!("  pin defect: {d}");
+        for (i, d) in &self.defects {
+            println!("  pin defect #{i}: {d}");
         }
         for m in &self.mismatches {
             println!("  MISMATCH: {m}");
@@ -246,6 +253,9 @@ impl Tally {
             println!("  note: {n}");
         }
         assert!(self.mismatches.is_empty(), "{name}: truth mismatches");
+        let mut got: Vec<usize> = self.defects.iter().map(|(i, _)| *i).collect();
+        got.dedup();
+        assert_eq!(got, known, "{name}: the pin's defective inputs changed");
     }
 }
 
@@ -519,7 +529,7 @@ fn check_curve_surface(k: &Kernel, what: &str, probe: &Probe, b: &Bounded, t: &m
                             truth.len()
                         ));
                     } else {
-                        t.defects.push(format!(
+                        t.defect(format!(
                         "{what}: pin reports {} overlaps, off the surface by {off:e}; truth {:?}",
                         h.curves.len(),
                         truth.iter().map(|h| (hi(h.point), h.contact)).collect::<Vec<_>>()
@@ -534,7 +544,7 @@ fn check_curve_surface(k: &Kernel, what: &str, probe: &Probe, b: &Bounded, t: &m
                     .iter()
                     .any(|h| in_window(hi(h.point), h.t.to_f64(), MARGIN))
                 {
-                    t.defects.push(format!(
+                    t.defect(format!(
                         "{what}: pin error {e}; truth {:?}",
                         truth
                             .iter()
@@ -618,13 +628,28 @@ fn check_curve_surface(k: &Kernel, what: &str, probe: &Probe, b: &Bounded, t: &m
         }
     }
     if !bad.is_empty() {
-        t.defects.push(format!("{what}: {}", bad.join("; ")));
+        t.defect(format!("{what}: {}", bad.join("; ")));
     } else if worst <= EXACT {
         t.exact += 1;
     } else {
         t.within += 1;
     }
 }
+
+/// The pin's intersector defects (research 64 §5.3), by input, until scx ports these
+/// intersectors and they become `pin_defects.rs` entries. scx keeps no fixed-tolerance
+/// overlap (ruling 11-27): an on-surface answer is exact or certified.
+///
+/// None in the current inputs. Defects 1 and 2 were found in this test's first draft (60
+/// inputs, the same seed): a line across a thin cylinder (r `0.30200`) and a line tangent
+/// to a sphere (r `1.02166`), each reported as an overlap off the surface by `2.57e-4` and
+/// `6.62e-4`, within the pin's fixed `0.001` curve-on-surface tolerance, where the truth
+/// has two crossings and no points.
+pub const KNOWN_CURVE_SURFACE: &[usize] = &[];
+
+/// Defect 3, input #2: a line near-tangent to a cone (semi-angle `0.75578`) that the
+/// truth crosses twice, `1.1e-8` apart, which the pin reports as no intersection.
+pub const KNOWN_TANGENT_LINES: &[usize] = &[2];
 
 /// The pin's `intersect_curve_surface` against T2: a line, a circle and an ellipse through
 /// a point of each surface kind, crossing at random.
@@ -644,7 +669,7 @@ fn pin_curve_surface_against_t2() {
         let what = format!("{what} through {p:?} and {:?}", b.truth);
         check_curve_surface(&k, &what, &probe(&k, curve), &b, &mut t);
     }
-    t.report("curve-surface");
+    t.report("curve-surface", KNOWN_CURVE_SURFACE);
 }
 
 /// The pin's `intersect_curve_surface` against T2 on a line tangent to each surface kind:
@@ -661,7 +686,7 @@ fn pin_tangent_lines_against_t2() {
         let curve = tangent_line(&mut rng, &b.truth, p);
         check_curve_surface(&k, &what, &probe(&k, curve), &b, &mut t);
     }
-    t.report("tangent lines");
+    t.report("tangent lines", KNOWN_TANGENT_LINES);
 }
 
 // ---------------------------------------------------------------- surface-surface
@@ -787,10 +812,10 @@ fn check_surfaces(k: &Kernel, what: &str, a: &Bounded, b: &Bounded, t: &mut Tall
             return;
         }
     }
-    if let Err(e) = &status {
-        if truth_inside > 0 || !curves.is_empty() {
-            bad.push(format!("pin status {e}"));
-        }
+    if let Err(e) = &status
+        && (truth_inside > 0 || !curves.is_empty())
+    {
+        bad.push(format!("pin status {e}"));
     }
     let truth_kinds: Vec<String> = pieces
         .iter()
@@ -805,7 +830,7 @@ fn check_surfaces(k: &Kernel, what: &str, a: &Bounded, b: &Bounded, t: &mut Tall
             })
             .collect();
         bad.push(format!("pin curves {}", ends.join(", ")));
-        t.defects.push(format!(
+        t.defect(format!(
             "{what}: truth [{}], pin {pin_kinds:?} ({status:?}): {}",
             truth_kinds.join(", "),
             bad.join("; ")
@@ -857,7 +882,7 @@ fn pin_plane_sections_against_t5() {
         let what = format!("{:?} and {:?}", q, plane.truth);
         check_surfaces(&k, &what, &qb, &plane, &mut t);
     }
-    t.report("plane sections");
+    t.report("plane sections", &[]);
 }
 
 /// The pin's `intersect_surfaces` against T5 on sphere pairs, coaxial pairs (frames on the
@@ -907,7 +932,7 @@ fn pin_revolved_pairs_against_t5() {
         let what = format!("{a:?} and {b:?}");
         check_surfaces(&k, &what, &ab, &bb, &mut t);
     }
-    t.report("revolved pairs");
+    t.report("revolved pairs", &[]);
 }
 
 /// Tangent and degenerate sections: planes tangent to a sphere, along a cylinder and
@@ -987,5 +1012,5 @@ fn pin_tangent_sections_against_t5() {
         let (ab, bb) = (Bounded::new(&k, a), Bounded::new(&k, b));
         check_surfaces(&k, what, &ab, &bb, &mut t);
     }
-    t.report("tangent sections");
+    t.report("tangent sections", &[]);
 }
