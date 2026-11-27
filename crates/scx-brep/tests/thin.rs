@@ -28,6 +28,7 @@ fn every_face_of_a_thin_shell_has_a_box_holding_it() {
     for (r, t) in [(1e4, 1e-3), (10.0, 1e-4), (10.0, 1e-6)] {
         let b = shell(r, t);
         for f in b.faces() {
+            assert!(f.is_region_proved(), "({r}, {t}) face {}", f.id());
             let bx = f
                 .bounding_box()
                 .unwrap_or_else(|| panic!("({r}, {t}) face {} has no box", f.id()));

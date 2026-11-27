@@ -2588,3 +2588,68 @@ The sphere's and torus's cost is the cells along their break lines (the poles' p
 **Open questions.** (1) The typed refusal above, if a caller wants one. (2) The three bodies in the report were not the coordinator's exactly (a transformed testkit block, not `scx_make::block`); the numbers are the same kind. (3) `finish` refuses most testkit kinds at 1e12 with the default resolution (`EdgeEndOffVertex`), so far tests of curved kinds stop at 1e9.
 
 **Proposed 04 row.** "`scx-mass` (MA3): where `8 eps` times the largest coordinate over the box's longest side is above a tenth of the accuracy, a face or edge is first integrated as before within 200,000 evaluations; if that gives up, it is integrated again with each piece held to that rounding and the rounding times the scale is added to the stated error, so far from the origin the result is returned with its error instead of `Defect(StepControl)` or a run of minutes. A request that converges is unchanged bit for bit. Change if a caller needs a typed refusal rather than a stated shortfall."
+
+### 14.22 CK1 as built (11-27)
+
+New crate `scx-check` (after `scx-bodyq` in `layers.txt`; depends on `scx-brep`, `scx-mass`, `scx-num`): `contract(body: &Brep, cx: &Cx<'_>) -> Result<Proved, ContractError>`, and `Proved`, a newtype over `Brep` that only `contract` builds (`body()`, `into_body()`, `AsRef<Brep>`). `ContractError` is `Broken(Breach)` (kind `Refused`), `Undecided { face }` (kind `Unsupported`) or `Mass(MassError)` (that error's kind); `Breach` is `Empty`, `FaceNotBounding { face }`, `NonManifoldEdge { edge, fins }`, `LoneVertex { vertex }`, `FaceUnbounded { face }` or `NotOutward { shell }`. Each has a stable `name()` and a `Display`.
+
+**The tests, in order** (the first failure is named, at its lowest id): (1) at least one face; (2) every face has a solid region on one side and a non-solid region on the other (this refuses sheets, faces inside a solid and faces between stacked solids); (3) every edge with a curve has exactly two fins (this refuses wires, sheet borders, and edges where solids meet), and no shell holds a lone vertex; (4) every face's region is proved by the loops' enclosed signed area and the face has a box; (5) `scx_mass::outward`, MA4's certified per-shell sign. A `NotOutward` from it becomes `Breach::NotOutward`; every other `MassError` passes through as `Mass`.
+
+**A fix in `scx-brep` (open question 2 of §14.16), small, made here.** `Face::bounding_box` was `None` on the thin quarter shell's annular caps because `Boundary::build` could not sign their loops' area. The cause: a circle piece's area `∮ (u - c) dv` was enclosed by the mean value form over each refined piece, whose overestimate grows as `R² · sweep`. At radius 1e4 that is about 1e8 times the sweep, against loops only 1e-3 apart, so the five refinements (`AREA_REFINE`, up to 16 pieces) never excluded zero. The fix encloses a `Curve2::Circle` piece's area in closed form (`arc_area`): `(o_x - c)(y_b - y_a) + ± r²(b - a)/2 + ((x_b - o_x)(y_b - o_y) - (x_a - o_x)(y_a - o_y))/2`, in `Ivl`, with the sweep's sign taken from the turn at the start. It needs two jets per piece, where the mean value form needed one per sample. New public read: `Face::is_region_proved()`. Failing tests first (`crates/scx-brep/tests/thin.rs`): at (1e4, 1e-3), (10, 1e-4) and (10, 1e-6), every face has a box holding its edges and its region is proved, and a cap tells its middle (`Inside`) from inside its inner arc (`Outside`). Both tests failed before the fix and pass after it. The brep, mass, bodyq and make tests are unchanged.
+
+**Decisions, with cases for and against.**
+
+- **`&Cx`, not `&mut Cx`, and a fresh budget from `cx.budget()`.** For: the contract only reads. It uses `cx.stop` and the settings' budget, and memoises nothing. Against: if MA3's memo of face integrals comes to serve the certificate, the contract will want `&mut Scratch`. Change then.
+- **`Proved` holds a clone.** For: 72's `&Brep` signature is kept, and a `Brep` clone shares every table and cell (`Arc`), so it costs a few reference counts. Against: two handles to one body; nothing can change through either.
+- **Collapsed edges are not counted in (3).** A pole or an apex has one fin, because one face uses it as a point. It bounds nothing, and finish proves each of its uses lies on its vertex. For: without this, every cone to an apex and every sphere would be refused (MEASURED: `cone` and `Kind::Cone` failed `NonManifoldEdge { fins: 1 }` before). Against: two faces meeting at one apex pass, a vertex non-manifoldness this crate does not test (below).
+- **"Closed" is not tested separately.** Two fins per curve edge, with both faces bounding the same solid and void (finish's radial check, `SidesDisagree`), leave no shell edge open. Against: it relies on finish's check. That check runs on every `finish` and is tested there.
+- **The undecided region is `Unsupported`, the unbounded face is `Refused`.** A loop whose area the enclosures cannot sign is this method's limit, not a broken body. A face with a proved region and no box is a first loop wound the wrong way on an open surface (a plane, a cylinder's v), and its region is the unbounded rest of the surface. The region is checked first, so an unbounded face is named only when its orientation is proved.
+- **No stronger outward rule.** I considered requiring exactly one positive shell in each bounded region. It is not needed: each face lies between two shells, so an inverted face set shows on one of them, and an inverted void leaves its region with no positive shell (tested below).
+
+**Tests** (13 in `crates/scx-check/tests/contract.rs`, plus 2 in `scx-brep` and 1 in `scx-mass`, listed above and in the commit). The truths are the bodies' own constructions, never the pin's output.
+
+- Every `scx_make` primitive is proved at the origin, at a tilted frame, and at (1e5, -1e5, 1e5): block, cylinder, frustum, cone to an apex, sphere, torus. So is every T11 profile fixture `extrude` accepts, at the same three frames (more than 30 bodies). So is every generated solid kind (Block, Prism, Cylinder, Cone, Sphere, Torus, Holed, Cavity) over seeds 0 to 3 at sizes 1 and 3. So are the thin quarter shells (1e4, 1e-3), (10, 1e-4) and (10, 1e-6), which need the `scx-brep` fix.
+- The empty body is `Empty`. QuadSheet and TriSheet are `FaceNotBounding` on their first face. Stack, Checker and Touching are `FaceNotBounding` or `NonManifoldEdge`. A block with one face removed is refused by finish (`SidesDisagree`); were finish to pass it, the test asserts the contract's `NonManifoldEdge { fins: 1 }`.
+- Block, cylinder, sphere, torus and cavity set inside out (every face's sides swapped) are `NotOutward`. A cavity alone inverted (its lining's faces facing into the solid) is `NotOutward` on the void's shell. A cavity labelled the outside (its shell moved to the outside region and its region removed) passes finish and is `NotOutward` on that shell.
+- **A contradiction smaller than the error.** The (10, 1e-6) shell set inside out has a volume of -1.6e-5 and, at relative accuracy 1e-3, a stated error of 8e-4. `volume`'s guard therefore returns `Ok` (MEASURED), and the contract refuses it `NotOutward`.
+- **The pin's `the_far_thin_shells_loops_reversed_are_caught`, ported as outcomes.** On each of the six faces of the (1e4, 1e-3) shell, loop 0 is reversed: the uses in the other order, each sense flipped, and the face's fins on those edges flipped. Alone, finish refuses it with `SidesDisagree`. With the face's sides swapped as well, finish passes it and the contract refuses it `FaceUnbounded` on that face. This includes the two cylinder walls. Each face's sides swapped with its loops kept is refused by finish or by the contract.
+- The pin's `SolidTest::VolumeNegative` case (the solid and void labels swapped) is refused by finish, because the outside may not be solid (`Outside`).
+- A zero budget gives `Mass(Exhausted)` and a set stop gives `Mass(Cancelled)`, typed by kind. A sheet under both is still `Broken`, since the structure tests come first and charge nothing.
+- `Proved` holds the body: the same faces, edges, ids and box.
+- `scx-mass` `tests/enclosure.rs`: `a_thin_shells_estimate_holds_its_closed_form`, `volume` at 1e-9 on the three thin shells, which `NoBox` blocked before the fix. Its header no longer lists the reversed-loop case as not ported.
+
+**Removed or left, on purpose** (pin test, what it proved, why not here):
+
+- `the_solid_test_names_the_test_a_body_fails`, the loose-vertex-tolerance case (`PointersInvalid`): a vertex here has no tolerance to loosen.
+- The same test, the negated-plane case (`Invalid`): a face's sense here is its sides, so a negated plane is the inside-out case, which is tested.
+- The same test, the (10, 1e-6) shell (`VolumeUndecided` in the pin): here it is proved, a positive case (truth over pin: its pcurves are exact and its sign decides).
+- No test was removed.
+
+**Measurements** (release, local machine, throwaway timer, mean of 20, seed 0, other builds running, so about ±30%). `outward` work is in budget units; `volume` is at relative accuracy 1e-9.
+
+| body | faces | `contract` | `outward` alone | `volume` | `outward` work |
+|---|---:|---:|---:|---:|---:|
+| block | 6 | 1.4 ms | 1.4 ms | 0.05 ms | 2,328 |
+| block, size 4 | 96 | 12 ms | 8.6 ms | 0.54 ms | 37,248 |
+| cylinder | 3 | 2.7 ms | 2.2 ms | 1.1 ms | 6,164 |
+| sphere | 1 | 15 ms | 17 ms | 2.7 ms | 30,592 |
+| torus | 1 | 33 ms | 35 ms | 0.08 ms | 59,208 |
+| torus, size 4 | 16 | 53 ms | 54 ms | 0.42 ms | 89,452 |
+| cavity, size 4 | 192 | 15 ms | 15 ms | 0.95 ms | 74,496 |
+| holed | 10 | 1.0 ms | 1.0 ms | 0.08 ms | 4,856 |
+| thin (1e4, 1e-3) | 6 | 6.3 ms | 6.2 ms | 0.30 ms | 19,684 |
+| thin (10, 1e-6) | 6 | 11 ms | 11 ms | 0.27 ms | 36,020 |
+
+All the cost is MA4's certificate. CK1's own passes (structure, region and box per face) are within the timer's noise, and the region and box cells, once filled, serve every later query on the body. The contract costs 2 to 400 times a volume estimate, with the torus worst.
+
+**Deviations from 72.** None in signature. The tests cover every MK result but no BO result, because there is no BO crate yet. When BO lands, its tests call `contract` on each result.
+
+**Open.**
+
+1. `scx-mass`'s estimate leaves rounding out of its stated error when face fluxes cancel from about 1e8. At (1e4, 1e-3), `volume` at 1e-9 states an error of 0 against a miss of 9.3e-9 (6e-10 of the volume). This is for MA1/MA3; the new mass test asserts the stated error or the accuracy asked, and names the gap.
+2. Vertex manifoldness: two solids touching at one vertex, or two faces at one apex, pass. The full check of step 6 should own it, and it is needed for parity with the pin's `is_manifold_solid`; there is no generator for vertex-touching solids yet.
+3. Proving a sheet or touching solids (an `Expect` argument) is left until a caller needs it; today they are refused.
+4. The certificate's cost at the kernel edge (above). A memo of signs in `Scratch` keyed by face records would make a second call on an unchanged body free. A cheaper first test, such as the estimate's per-shell sum with a rounding term once (1) is fixed, could decide most bodies before the enclosure.
+5. Finish accepts a region whose shells do not meet (a cavity labelled the outside). The contract refuses it as `NotOutward`, which is correct but names the orientation, not the labelling.
+
+**Proposed 04 row.** "`scx-check` (CK1): `contract(&Brep, &Cx) -> Result<Proved, ContractError>` is the kernel edge's proof that a body is closed, manifold and outward. Every face lies between a solid and a void, every curve edge has two fins (collapsed edges excepted), no shell holds a lone vertex, every face's region is proved and bounded, and MA4's certified `outward` passes. The first failure is named at its lowest id: `Broken(Breach)` is refused, `Undecided` unsupported, and `Mass(e)` takes `e`'s kind. `Proved` is a newtype over a shared clone that only `contract` builds. Change if: sheets or touching solids need proving, vertex manifoldness is wanted at the edge, or the certificate's cost (2 to 400 times a volume estimate) is too much for every result."

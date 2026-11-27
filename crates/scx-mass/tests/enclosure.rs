@@ -5,8 +5,9 @@
 //! far wider than thick, the gap a moved face leaves closed by strips, and the budget, the
 //! stop flag and the width floor.
 //!
-//! Not ported, each by intent: the pin's reversed-loop and fillet cases (no `check_brep`
-//! or fillet here), the face-area enclosures (this crate encloses volumes only), the
+//! The pin's reversed-loop case is ported to `scx-check`'s contract tests, where finish or
+//! the contract refuses each variant. Not ported, each by intent: the fillet case (no
+//! fillet here), the face-area enclosures (this crate encloses volumes only), the
 //! relative stop (the width asked is absolute), and the gap as large as the volume (this
 //! crate's pcurves are exact on the generated thin shell, so its sign decides).
 

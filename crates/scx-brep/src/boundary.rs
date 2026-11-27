@@ -166,6 +166,11 @@ impl Boundary {
         self.uv_box
     }
 
+    /// Whether the loops' signed area showed its sign, so the region is proved.
+    pub(crate) const fn is_decided(&self) -> bool {
+        self.decided
+    }
+
     /// Whether the region is bounded by an outer loop, proved.
     pub(crate) fn is_bounded_region(&self) -> bool {
         self.decided && self.tree.as_ref().is_some_and(|t| t.w_in == 1)
