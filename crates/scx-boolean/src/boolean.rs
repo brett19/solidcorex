@@ -5,8 +5,9 @@ use scx_brep::op::{Cx, Done};
 use scx_brep::{Brep, FaceId};
 use scx_num::budget::{Budget, Stop};
 
-use crate::contact::{Span, interferences};
+use crate::contact::{Span, Touched, interferences};
 use crate::error::{BooleanError, BooleanRefusal, BooleanUnsupported, Stage};
+use crate::faceface::face_face;
 use crate::geom::{Operands, Side};
 use crate::pairs::face_pairs;
 use crate::points::{Point, merge};
@@ -42,8 +43,10 @@ pub enum NoItems {}
 /// - [`BooleanUnsupported::Chain`] where two vertices of one operand farther apart than
 ///   coincidence are one place only through a chain of contacts.
 /// - [`BooleanUnsupported::Nurbs`] for NURBS geometry where the operands meet.
+/// - [`BooleanUnsupported::SsiPair`] for a pair of analytic faces whose intersection has
+///   no closed form here.
 /// - [`BooleanUnsupported::Stage`] for operands that pass every stage built so far: the
-///   face-face stage is BO2's.
+///   imprint stage is BO3's.
 /// - [`BooleanError::Exhausted`] when `cx`'s budget runs out, [`BooleanError::Cancelled`]
 ///   when `cx.stop` is set, and [`BooleanError::Defect`] for the method's own failure.
 pub fn boolean(
@@ -63,13 +66,15 @@ pub fn boolean(
         }
     }
     let mut budget = cx.budget();
-    let _found = interfere(Operands { a, b }, &mut budget, cx.stop)?;
+    let ops = Operands { a, b };
+    let found = interfere(ops, &mut budget, cx.stop)?;
+    let _sections = face_face(ops, &found, &mut budget, cx.stop)?;
     Err(BooleanError::Unsupported(BooleanUnsupported::Stage(
-        Stage::FaceFace,
+        Stage::Imprint,
     )))
 }
 
-/// Where the operands meet: stages 1 to 3.
+/// Where the operands meet: stages 1 to 3, with what they read of the faces.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Interference {
     /// The face pairs whose boxes meet, by `a`'s id then `b`'s.
@@ -78,6 +83,8 @@ pub(crate) struct Interference {
     pub(crate) points: Vec<Point>,
     /// Where an edge lies on a face of the other operand, by side, edge, face, start.
     pub(crate) spans: Vec<Span>,
+    /// The faces the pairs name, with their parts, read once.
+    pub(crate) touched: Touched,
 }
 
 /// Stages 1 to 3 over `ops`.
@@ -100,5 +107,6 @@ pub(crate) fn interfere(
         pairs,
         points,
         spans,
+        touched: found.touched,
     })
 }
