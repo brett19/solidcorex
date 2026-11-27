@@ -1921,13 +1921,15 @@ the same points, and a coincidence's extents swapped. The difftest compares
 `section_by_plane` with the pin. Still missing from SS2:
 
 - the cylinder's too-long ellipse and the cone's band between the parabola threshold and the
-  precision bound (`General`, above);
+  precision bound (`General`, above; §5.8 (c): not closed, a rational shape in the clipper
+  is proposed);
 - the torus's spiric sections (`General`; step 5's marcher);
 - exact pcurves off the plane: the cone's conics, open and closed (`pcurve_of` answers
   `NoClosedForm`; the cylinder's oblique ellipse is built, §4.14);
 - the difftest goes through `section_by_plane` only, not `intersect`'s plane-first order
   (the pin's `intersect_with_plane` has one order);
-- SS4 (classification at the tolerance); SS3 (the coaxial pairs, §5.7) is built.
+- ~~SS4 (classification at the tolerance)~~ built 11-27 (§5.8); SS3 (the coaxial pairs,
+  §5.7) is built.
 
 ## 4. `scx-surface`
 
@@ -3345,7 +3347,7 @@ Decided by analysis and an adversarial pass. Proposed for review; not yet ruled.
 // scx-ssi::analytic
 #[non_exhaustive] pub enum Intersection {
     Pieces { curves: Vec<IntersectionCurve>, points: Vec<IntersectionPoint> },  // at least one
-    Coincident { on_a: Extent2d, on_b: Extent2d },
+    Coincident { on_a: Extent2d, on_b: Extent2d },   // 11-27 §5.8: Coincident(Vec<Overlap>)
     Empty,                                                                       // final
 }
 pub struct IntersectionCurve { pub curve: Curve, pub span: Extent1d, pub contact: Contact }
@@ -3499,8 +3501,10 @@ Both are exact and deterministic. Nothing was taken that depends on a search or 
 - ~~Parabola and hyperbola kinds in `scx-curve`.~~ Built 11-27 (§3.12); a cone's
   parabola and hyperbola are solved.
 - The cylinder's ellipse too long for its precision, and the cone's band between the
-  parabola threshold and that bound: `General` (§3.12).
-- SS2's remaining gaps are listed in §3.12; SS4.
+  parabola threshold and that bound: `General` (§3.12). Looked at in SS4 and not closed
+  (§5.8 (c)).
+- SS2's remaining gaps are listed in §3.12. ~~SS4~~ built 11-27 (§5.8): `Coincident`
+  carries the overlap, and one depth rule decides tangency.
 
 ### 5.7 SS3 as built (11-27)
 
@@ -3577,6 +3581,8 @@ The axis is chosen as follows:
     §5.6. Bounding the overlap of two latitude and longitude patches is SS4's
     classification work. A caller that needs the overlap intersects `on_a` with `on_b`.
     This is a deviation, listed for review.
+    [11-27, §5.8: superseded. `Coincident` carries the overlap's pieces, and two spheres
+    whose axes differ past the tolerance are `General`.]
 - **A torus's heights are its whole tube's** (`[-small, small]`), whatever its extent's
   tube angle. The clip then cuts the circles to the tube angle.
   - Against: a tighter height range would reject more pairs as empty before the clip runs.
@@ -3656,8 +3662,193 @@ textbook one for surfaces of revolution, and it is exact and deterministic.
 
 **Open.**
 
-- SS4: the overlap of coincident patches, and tangency classification at the tolerance.
+- ~~SS4: the overlap of coincident patches, and tangency classification at the tolerance.~~
+  Built 11-27 (§5.8). Concentric spheres now answer their overlap; tilted ones are
+  `General`.
 - SS2: non-coaxial quadric pairs.
+
+### 5.8 SS4 as built (11-27)
+
+Decided by analysis and an adversarial pass. Proposed for review; not yet ruled.
+
+```rust
+// scx-ssi::analytic
+pub struct Overlap { pub on_a: Vec<Point2>, pub on_b: Vec<Point2> }  // one piece, vertex for vertex
+#[non_exhaustive] pub enum Intersection {
+    Pieces { curves: Vec<IntersectionCurve>, points: Vec<IntersectionPoint> },
+    Coincident(Vec<Overlap>),   // was Coincident { on_a: Extent2d, on_b: Extent2d }
+    Empty,
+}
+```
+
+`intersect` and `section_by_plane` keep their signatures. The new code is in
+`analytic/overlap.rs`; the tangency rule is in `section.rs` and `coaxial.rs`.
+
+**(a) The overlap of coincident patches.** `Coincident` now carries the pieces of the
+overlap, each a convex polygon in both surfaces' D13 uv, with `on_a[i]` and `on_b[i]` one
+point. Everywhere the closed forms find two surfaces coincident, the map from one uv to the
+other is affine (§5.6 plane uv; the revolutions' turns), so the overlap is exact as
+polygons:
+
+- **Two planes.** The second's rectangle is carried into the first's uv (a rotation and a
+  shift) and clipped by the first's rectangle (Sutherland and Hodgman): one convex polygon of
+  up to eight vertices. The clip is exact first, with no slack. Only when that is empty is it
+  taken again with the tolerance as slack, which gives a piece of no width where the patches
+  touch within the tolerance. When that too is empty the planes are apart and the answer is
+  `Empty`, as before.
+- **Two surfaces of revolution on one axis.** Each coordinate maps alone: the angle about
+  the axis turns and may reverse, a height shifts and may reverse, a latitude or tube angle
+  may reverse. The overlap is a product of intervals, split where an arc wraps past either
+  one's seam: up to two pieces per coordinate. An exact overlap gives pieces; a gap within
+  the tolerance gives a piece of no width; a gap past `tol + δ` (in angle, `asin` of it over
+  the least distance from the axis) is `Empty`; between those it is `General`, as §5.7.
+- **Two spheres one within the tolerance** (concentric to within it, not only to the bit)
+  share the latitude and longitude map when their axes agree within the tolerance over the
+  radius. When the axes differ by more it is `General`.
+- Every vertex is clamped into both extents.
+
+Choices, with the case against and the case for each:
+
+- **Polygons in uv, not the overlap's boundary curves in 3-D.**
+  - Against: a face builder wants the boundary as edges, and the polygon has to be turned
+    into them. A polygon also cannot carry a non-affine map, so a future pair with one (two
+    tilted spheres, below) needs another form.
+  - For: on every pair the closed forms call coincident the map is affine, so the polygon
+    is exact, small (eight vertices at most) and checkable: the tests map every vertex both
+    ways. The edges of the polygon are the patches' own uv lines, so the face builder already
+    has their 3-D curves. A `Vec` of pieces, not one polygon, because a wrapping arc gives
+    two.
+- **Exact first, slack second.**
+  - Against: two clips where one would do.
+  - For: a clip with slack moves every vertex of a true overlap out by up to the tolerance,
+    and clamping it back leaves vertices off the other patch's edge by about that (the
+    first build failed a turned-octagon test by 7e-10 this way). The second clip runs only
+    when the first is empty.
+- **Tilted coincident spheres are `General`.** The map between their uv is a rotation of
+  the sphere, and the overlap of two latitude and longitude patches is bounded by small
+  circles of the other's, which are no rectangle of either's uv.
+  - Against: §5.7 answered concentric spheres `Coincident` whatever their frames; this
+    answers fewer cases.
+  - For: §5.7's answer could not say where the overlap was (§5.7 recorded that as a
+    deviation). An overlap the type cannot hold is `General`, not a wrong polygon. No
+    difftest or T5 case lands here: the pin has no sphere overlap and T5 has no tilted pair.
+  - This is a deviation, listed for review.
+
+**(b) One tangency rule.** Before, each section had its own test of "tangent": a sphere's
+cap radius, a cylinder's half-gap between lines, a cone's `sin * rho`, a torus's half-chord,
+two meridians' half-chord. Those are widths across the crossings, which are of order
+`sqrt(tol * size)` when the depth is `tol`, so a large surface kept two crossings far deeper
+than the tolerance as a touch, and a small one split a tangency into two. Now one rule, as
+SU6's (§4.13: one `Tangent` per run within the tolerance):
+
+- **Two crossings whose surfaces part by no more than the tolerance between them are one
+  tangent piece at the deepest point. A miss within the tolerance is the same touch.**
+- The depth per case, each closed form:
+  - a sphere's cap, `r - |d|`, a touch point at the cap's centre;
+  - a cylinder's strip between two lines, `r - |d|`, a tangent line at its middle;
+  - a torus's tube top or bottom, `small - |h|`, a tangent circle;
+  - a cone's thin sector between two generators, `rho sin^2 / (1 + |cos|)` (the most the
+    cone leaves the plane between them), a tangent generator at its middle;
+  - a line meridian into a circle meridian, `r - dist`;
+  - two circle meridians, the lens across their overlap or across the gap when one is
+    nearly inside the other, a touch at the lens's middle.
+- Against:
+  - the pin's WR-79 kept the exact circle in the SSI and put the "cap centre within the
+    tolerance" test in its face intersector. Keeping the exact curve defers the decision
+    to where topology is known.
+  - A tangent piece in place of two crossings moves the curve by up to the tolerance.
+- For:
+  - SU6's curve-surface intersection already answers one `Tangent` per run within the
+    tolerance. Two layers deciding tangency differently would give an edge that SU6 calls a
+    touch and SSI calls two crossings.
+  - Depth is the quantity the tolerance bounds (every point within it of both surfaces);
+    width is not.
+  - The truth judges agree: in both difftests a truth crossing pair is matched by the
+    tangent piece only when the run between them stays within the tolerance (below).
+
+**(c) The near-threshold `General` bands.** Each was looked at for an exact classification.
+None is closed; why:
+
+- **The cylinder's too-long ellipse** (`semi * 2^-50 > tol`). The ellipse is a valid exact
+  kind, but its form has an error of about its size times epsilon, which is past the
+  tolerance by definition of the band. Its flanks are not near a parabola (they are the
+  cylinder's straight generators), and past the two-lines threshold they are not lines. An
+  exact answer needs a form whose error is relative to the local curvature, such as a
+  rational quadratic arc (a conic as a weighted Bezier, held to the tolerance by its control
+  points). The clipper has no rational `Shape`, so this is proposed as follow-up work, a
+  `Shape::Rational` in `analytic/clip.rs`, not built here.
+- **The cone's band between the parabola threshold and the precision bound.** The same
+  reason. The parabola check `2 |e| reach^2 <= tol |g|` is conservative (it bounds the whole
+  extent's height, not the arc inside it), so a tighter bound from the clipped arc would
+  move part of the band to `Solved`. The arc is only known after clipping, which needs the
+  kind. Not closed: it would need clipping twice.
+- **Vertex-near cases** (a plane through a cone very near its apex, at an angle between the
+  generators' and the axis's). The kind depends on the sign of `e`, whose rounding is of the
+  order of `e` there; the classification is ill-conditioned in doubles, and an exact
+  predicate would only move the band, since the curve itself is then shorter than its
+  precision. Left `General`.
+
+**(d) Other §5 and SS2 items.**
+
+- The difftests check tangency and overlaps against T5, not only the pin (below).
+- SS2's other gaps (§3.12) are not SS4's: the torus's spirics, pcurves off the plane, the
+  difftest's single order. They stay open there.
+
+**Tests and the truth extension.**
+
+- Unit: `coincident_overlap_follows_order` replaces `coincident_extents_follow_order` (the
+  extents it checked are no longer in the answer; it now checks that the pieces swap with the
+  order). New: `coincident_planes_turned_give_an_octagon`, `coincident_planes_touching_and_apart`
+  (a gap of 5e-10 is a touch of no width, 1e-6 is `Empty`).
+- `tests/common`: an overlap judge (every vertex pair is one point; a 41 by 41 grid over the
+  first extent, where a sample inside the second by a margin must be covered by a piece and a
+  sample outside by the margin must not be strictly inside one), and a depth judge (each
+  tangent piece within `tol` of both surfaces; a truth crossing absorbed by a tangent piece
+  only when the run to it is shallow; any two transversal pieces, or opposite points of a
+  whole conic, whose run stays within half the tolerance are flagged).
+- `plane_sections`: `depth_rule`, across sphere, cylinder, torus and cone at depths
+  `0.5 tol, 0, -0.5 tol, 4 tol, -4 tol`; turned plane polygons and edge to edge planes.
+- `coaxial`: `depth_rule` (sphere and cylinder, two spheres, torus and cylinder at the same
+  depths) and `overlaps` (wrapped cylinder arcs in two pieces, stacked heights touching,
+  arcs end to end, a turned cone frame, tube arcs, sphere caps split by the second's seam, a
+  tilted cap `General`).
+- The difftests' T5 judges now check the overlap against the truth's patches, hold
+  tangent pieces to the tolerance, and apply the depth judge.
+
+**Difftests.** 0 mismatches and 0 nondeterministic:
+
+| difftest | inputs | exact | within tolerance | pin defects |
+|---|---:|---:|---:|---:|
+| `ssi_section_by_plane` | 1,000 | 323 | 532 | 145 |
+| `ssi_coaxial` | 900 | 501 | 129 | 270 |
+
+The totals are the same as before SS4: the pin's answers are unchanged, and the stricter
+T5 judges (overlap, depth) pass on every input. The pin's `Coincident` planes and cylinders (23 and 46 defects) are
+now judged by their overlap's pieces, not by the whole extents.
+
+**Added work.** Side-channel, a throwaway timer, not committed; release, per call, on the
+pool's cases, before and after:
+
+| case | before | after |
+|---|---:|---:|
+| plane and plane | 255 to 288 ns | 316 to 367 ns |
+| coaxial, coincident | 288 to 477 ns | 658 to 690 ns |
+| cylinder, cone, sphere, torus sections; coaxial crossing | — | unchanged within noise |
+
+The plane cost is the clip and its `Vec` on the coincident half; the coaxial cost is the
+rectangles and the D13 maps of their corners. Both are paid only where the answer is
+`Coincident`, which before carried no overlap at all. The depth rule replaces one square
+root per case by a subtraction, moving the root after the test.
+
+**Other kernels (research 66).** Nothing applies: 66 lists no technique for coincident
+overlaps or tangency depth. Sutherland and Hodgman's clip is the textbook one, exact for a
+convex polygon against a rectangle and deterministic.
+
+**Open.**
+
+- `Shape::Rational` for the too-long conic bands ((c) above).
+- Tilted coincident spheres: `General` ((a) above).
+- The face intersector's use of the overlap (step 5's face work).
 
 ## 6. `scx-brep`
 

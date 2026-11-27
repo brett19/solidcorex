@@ -567,10 +567,12 @@ pub mod truth {
     use super::{Case, HEIGHT, Kind, SNAP, x};
     use core::f64::consts::TAU;
     use scx_curve::Curve;
+    use scx_num::extent2d::Extent2d;
     use scx_num::frame::Frame;
+    use scx_num::vector2d::Point2;
     use scx_num::vector3d::{Point3, Vec3};
-    use scx_ssi::analytic::Intersection;
-    use scx_surface::Closed;
+    use scx_ssi::analytic::{Contact, Intersection, IntersectionCurve, IntersectionPoint, Overlap};
+    use scx_surface::{Closed, Surface};
     use scx_testkit::analytic as ta;
     use scx_testkit::curve_surface::{self as cs, SurfaceKind};
     use scx_testkit::dd::Dd;
@@ -708,9 +710,15 @@ pub mod truth {
             .collect()
     }
 
-    /// The distance from `q` to the curve over `[t0, t1]`: the nearest of a sampling, then
-    /// a golden-section search beside it (across the ends on a whole turn).
+    /// The distance from `q` to the curve over `[t0, t1]` ([`nearest_on`]).
     pub fn distance_to(c: &Curve, t0: f64, t1: f64, q: Point3) -> f64 {
+        nearest_on(c, t0, t1, q).0
+    }
+
+    /// The nearest point to `q` on the curve over `[t0, t1]` and its distance: the nearest
+    /// of a sampling, then a golden-section search beside it (across the ends on a whole
+    /// turn).
+    pub fn nearest_on(c: &Curve, t0: f64, t1: f64, q: Point3) -> (f64, Point3) {
         const N: usize = 256;
         let f = |t: f64| c.point(t).distance(q);
         let h = (t1 - t0) / N as f64;
@@ -737,7 +745,167 @@ pub mod truth {
                 a = c1;
             }
         }
-        best.0.min(f(0.5 * (a + b)))
+        let m = 0.5 * (a + b);
+        if f(m) < best.0 {
+            (f(m), c.point(m))
+        } else {
+            (best.0, c.point(best.1))
+        }
+    }
+
+    /// The tolerance a touch's piece is held to on both surfaces: the snap, as the depth
+    /// rule (63 SS4) puts a touch at the deepest point between the crossings it stands for.
+    pub fn touch_tol(q: Point3) -> f64 {
+        SNAP * (1.0 + 1e-6) + ON * (1.0 + q.to_vec().length())
+    }
+
+    /// The tolerance a piece of `contact` is held to on both surfaces.
+    pub fn on_tol(contact: Contact, q: Point3) -> f64 {
+        match contact {
+            Contact::Transversal => ON * (1.0 + q.to_vec().length()),
+            Contact::Tangent => touch_tol(q),
+        }
+    }
+
+    /// Whether the straight run from `p` to `q` stays within `tol` of both surfaces
+    /// (sampled): the surfaces are no further apart than `tol` between the two.
+    pub fn shallow(ka: &SurfaceKind, kb: &SurfaceKind, p: Point3, q: Point3, tol: f64) -> bool {
+        (0..=16).all(|i| {
+            let x = p + (q - p) * (f64::from(i) / 16.0);
+            let x = [x.x, x.y, x.z];
+            cs::distance(ka, x).is_ok_and(|d| d <= tol)
+                && cs::distance(kb, x).is_ok_and(|d| d <= tol)
+        })
+    }
+
+    /// Whether truth point `q` is stood for by a touch: the run to the nearest point of a
+    /// tangent piece stays within the snap of both surfaces (the depth rule, 63 SS4).
+    pub fn absorbed(
+        ka: &SurfaceKind,
+        kb: &SurfaceKind,
+        curves: &[IntersectionCurve],
+        points: &[IntersectionPoint],
+        q: Point3,
+    ) -> bool {
+        curves
+            .iter()
+            .filter(|c| c.contact == Contact::Tangent)
+            .map(|c| nearest_on(&c.curve, c.span.min(), c.span.max(), q))
+            .chain(
+                points
+                    .iter()
+                    .filter(|x| x.contact == Contact::Tangent)
+                    .map(|x| (x.point.distance(q), x.point)),
+            )
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .is_some_and(|(_, t)| shallow(ka, kb, q, t, touch_tol(q)))
+    }
+
+    /// The depth judge (63 SS4): no two crossings should have been one touch. Crossing
+    /// curves in pairs (points of one, the nearest of the other) and a whole crossing conic
+    /// across itself (opposite points) must not stay within half the snap of both surfaces
+    /// between them.
+    pub fn depth(
+        ka: &SurfaceKind,
+        kb: &SurfaceKind,
+        curves: &[IntersectionCurve],
+    ) -> Result<(), String> {
+        let cross: Vec<&IntersectionCurve> = curves
+            .iter()
+            .filter(|c| c.contact == Contact::Transversal)
+            .collect();
+        let half = |q: Point3| 0.5 * SNAP - ON * (1.0 + q.to_vec().length());
+        for (i, c) in cross.iter().enumerate() {
+            let (t0, t1) = (c.span.min(), c.span.max());
+            if t1 - t0 >= TAU - 1e-9 && matches!(c.curve, Curve::Circle(_) | Curve::Ellipse(_)) {
+                for t in [t0, t0 + 0.5 * core::f64::consts::PI] {
+                    let (p0, p1) = (c.curve.point(t), c.curve.point(t + core::f64::consts::PI));
+                    if shallow(ka, kb, p0, p1, half(p0)) {
+                        return Err(format!("crossing {c:?} across itself is a touch"));
+                    }
+                }
+            }
+            for d in &cross[i + 1..] {
+                for f in [0.25, 0.5, 0.75] {
+                    let p0 = c.curve.point(t0 + (t1 - t0) * f);
+                    let (_, p1) = nearest_on(&d.curve, d.span.min(), d.span.max(), p0);
+                    if shallow(ka, kb, p0, p1, half(p0)) {
+                        return Err(format!("crossings {c:?} and {d:?} are one touch"));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether `q` is in the convex polygon `poly` within `slack` (either way round); a
+    /// polygon of no area holds nothing.
+    pub fn in_polygon(poly: &[Point2], q: Point2, slack: f64) -> bool {
+        let n = poly.len();
+        if n < 3 {
+            return false;
+        }
+        let cross =
+            |a: Point2, b: Point2, c: Point2| (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+        let area: f64 = (1..n - 1)
+            .map(|i| cross(poly[0], poly[i], poly[i + 1]))
+            .sum();
+        if area.abs() <= 1e-24 {
+            return false;
+        }
+        let s = area.signum();
+        (0..n).all(|i| {
+            let (a, b) = (poly[i], poly[(i + 1) % n]);
+            s * cross(a, b, q) >= -slack * scx_num::fmath::hypot(b.x - a.x, b.y - a.y)
+        })
+    }
+
+    /// Judges a coincidence's pieces (63 SS4): each vertex pair one point (within the snap,
+    /// for a touch) inside the second's extent; every sample of the first's extent well
+    /// inside the second's (`inside_b`, by a negative tolerance) in a piece, and none well
+    /// outside it strictly in one.
+    pub fn overlap(
+        (sa, ea): (&Surface, &Extent2d),
+        sb: &Surface,
+        inside_b: impl Fn(Point3, f64) -> bool,
+        pieces: &[Overlap],
+    ) -> Result<(), String> {
+        for o in pieces {
+            if o.on_a.is_empty() || o.on_a.len() != o.on_b.len() {
+                return Err(format!("a malformed piece {o:?}"));
+            }
+            for (&pa, &pb) in o.on_a.iter().zip(&o.on_b) {
+                let (qa, qb) = (sa.point(pa), sb.point(pb));
+                if qa.distance(qb) > 2.0 * touch_tol(qa) {
+                    return Err(format!(
+                        "vertex pair {pa:?} {pb:?} apart by {:e}",
+                        qa.distance(qb)
+                    ));
+                }
+                if !inside_b(qa, 1e-7) {
+                    return Err(format!("vertex {qa:?} outside the second's extent"));
+                }
+            }
+        }
+        let (lo, hi) = (ea.min(), ea.max());
+        let n = 40;
+        for i in 0..=n {
+            for j in 0..=n {
+                let (fi, fj) = (f64::from(i) / f64::from(n), f64::from(j) / f64::from(n));
+                let uv = Point2::new(lo.x + (hi.x - lo.x) * fi, lo.y + (hi.y - lo.y) * fj);
+                let q = sa.point(uv);
+                if inside_b(q, -MARGIN) {
+                    if !pieces.iter().any(|o| in_polygon(&o.on_a, uv, 1e-9)) {
+                        return Err(format!("{uv:?} ({q:?}) inside both, in no piece"));
+                    }
+                } else if !inside_b(q, MARGIN)
+                    && pieces.iter().any(|o| in_polygon(&o.on_a, uv, -1e-9))
+                {
+                    return Err(format!("{uv:?} ({q:?}) outside the second, in a piece"));
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Whether the surface over its whole extent lies off the plane by more than the
@@ -751,7 +919,7 @@ pub mod truth {
             for j in 0..=64 {
                 let u = se.min().x + (se.max().x - se.min().x) * f64::from(i) / 64.0;
                 let v = se.min().y + (se.max().y - se.min().y) * f64::from(j) / 64.0;
-                let p = s.point(scx_num::vector2d::Point2::new(u, v));
+                let p = s.point(Point2::new(u, v));
                 let d = local(&f, p)[2];
                 lo = lo.min(d);
                 hi = hi.max(d);
@@ -791,12 +959,18 @@ pub mod truth {
                     t => Err(format!("General where the truth is {t:?}")),
                 };
             }
-            Closed::Solved(Intersection::Coincident { .. }) => {
-                return if truth == Ok(Section::Coincident) || coincident(c) {
-                    Ok(())
-                } else {
-                    Err(format!("coincident; the truth is {truth:?}"))
+            Closed::Solved(Intersection::Coincident(pieces)) => {
+                if truth != Ok(Section::Coincident) && !coincident(c) {
+                    return Err(format!("coincident; the truth is {truth:?}"));
+                }
+                let (sa, ea) = x::surface(c);
+                let (p, _) = x::plane(c);
+                let pf = c.plane_frame();
+                let inside_plane = |q: Point3, tol: f64| {
+                    let [u, w, _] = local(&pf, q);
+                    u.abs() <= c.half + tol && w.abs() <= c.half + tol
                 };
+                return overlap((&sa, &ea), &Surface::Plane(p), inside_plane, pieces);
             }
             Closed::Solved(Intersection::Empty) => (&[][..], &[][..]),
             Closed::Solved(Intersection::Pieces { curves, points }) => (&curves[..], &points[..]),
@@ -820,11 +994,12 @@ pub mod truth {
             }
             t => return Err(format!("the truth is {t:?}")),
         };
-        let on = |q: Point3| -> Result<(), String> {
+        // On both surfaces: a crossing to rounding, a touch within the snap (63 SS4).
+        let on = |q: Point3, contact: Contact| -> Result<(), String> {
             let a = cs::distance(&sk, arr(q)).map_err(|e| format!("{e:?}"))?;
             let b = cs::distance(&pk, arr(q)).map_err(|e| format!("{e:?}"))?;
-            let scale = 1.0 + q.to_vec().length();
-            if a > ON * scale || b > ON * scale {
+            let tol = on_tol(contact, q);
+            if a > tol || b > tol {
                 return Err(format!("{q:?} off the surfaces by {a:e}, {b:e}"));
             }
             if !inside(c, q, 1e-7) {
@@ -836,7 +1011,21 @@ pub mod truth {
         for k in curves {
             let (t0, t1) = (k.span.min(), k.span.max());
             for i in 0..=32 {
-                on(k.curve.point(t0 + (t1 - t0) * f64::from(i) / 32.0))?;
+                on(
+                    k.curve.point(t0 + (t1 - t0) * f64::from(i) / 32.0),
+                    k.contact,
+                )?;
+            }
+            // A crossing is one of the truth's crossings (a touch may stand for crossings
+            // within the snap: the owed points judge it).
+            if k.contact == Contact::Transversal
+                && !tpieces.is_empty()
+                && !tpieces.iter().any(|t| {
+                    t.contact == ssi::Contact::Transversal
+                        && !matches!(t.curve, ssi::Curve::Point(_))
+                })
+            {
+                return Err(format!("{k:?} crosses where the truth only touches"));
             }
             if t1 - t0 < TAU - 1e-9 {
                 ends.push(k.curve.point(t0));
@@ -844,7 +1033,7 @@ pub mod truth {
             }
         }
         for q in points {
-            on(q.point)?;
+            on(q.point, q.contact)?;
         }
         // Each piece is a whole connected piece: no two curves meet at their ends.
         for (i, a) in ends.iter().enumerate() {
@@ -860,11 +1049,11 @@ pub mod truth {
                 .map(|k| distance_to(&k.curve, k.span.min(), k.span.max(), q))
                 .chain(points.iter().map(|p| p.point.distance(q)))
                 .fold(f64::INFINITY, f64::min);
-            if near > NEAR * (1.0 + q.to_vec().length()) {
+            if near > NEAR * (1.0 + q.to_vec().length()) && !absorbed(&sk, &pk, curves, points, q) {
                 return Err(format!("truth point {q:?} missed by {near:e}"));
             }
         }
-        Ok(())
+        depth(&sk, &pk, curves)
     }
 }
 

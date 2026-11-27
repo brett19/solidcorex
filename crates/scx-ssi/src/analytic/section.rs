@@ -85,11 +85,9 @@ pub(super) fn section(
     let mut found = Found::default();
     let solved = match s {
         Surface::Plane(k) => match plane_plane(k, se, plane, pe, tol, &mut found) {
-            Some(PlanePlane::Coincident) => {
-                return Closed::Solved(Intersection::Coincident {
-                    on_a: *se,
-                    on_b: *pe,
-                });
+            Some(PlanePlane::Coincident(o)) => {
+                // The surface is first here; plane-first swaps it back.
+                return Closed::Solved(Intersection::Coincident(vec![o]));
             }
             Some(PlanePlane::Other) => Some(()),
             None => None,
@@ -153,7 +151,7 @@ fn apart(d: f64, nz: f64, s: f64, rims: [(f64, f64); 2], tol: f64) -> bool {
 }
 
 enum PlanePlane {
-    Coincident,
+    Coincident(super::Overlap),
     Other,
 }
 
@@ -175,25 +173,9 @@ fn plane_plane(
     let f = |u: f64, v: f64| a * u + b * v + c;
     let fc = corners_of(se).map(|(u, v)| f(u, v));
     if fc.iter().all(|x| x.abs() <= tol) {
-        let world = |frame: &scx_num::frame::Frame, e: &Extent2d| {
-            corners_of(e).map(|(u, v)| frame.origin() + *frame.x() * u + *frame.y() * v)
-        };
-        let (qs, qp) = (world(fs, se), world(fp, pe));
-        let apart = [*fs.x(), *fs.y(), *fp.x(), *fp.y()].iter().any(|&w| {
-            let span = |q: &[Point3; 4]| {
-                q.iter()
-                    .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| {
-                        let x = w.dot(p.to_vec());
-                        (lo.min(x), hi.max(x))
-                    })
-            };
-            let ((l0, h0), (l1, h1)) = (span(&qs), span(&qp));
-            l0 > h1 + tol || l1 > h0 + tol
-        });
-        return Some(if apart {
-            PlanePlane::Other
-        } else {
-            PlanePlane::Coincident
+        return Some(match super::overlap::planes(k, se, plane, pe, tol) {
+            Some(o) => PlanePlane::Coincident(o),
+            None => PlanePlane::Other,
         });
     }
     if fc.iter().all(|&x| x > tol) || fc.iter().all(|&x| x < -tol) {
@@ -255,7 +237,9 @@ fn cylinder(
             .max((half(delta(v1)) - hm).abs())
             <= tol
         {
-            if hm <= tol {
+            if s * (r - dm.abs()) <= tol {
+                // The lines no deeper than the tolerance into the cylinder between them
+                // (or a miss within it): one tangent line at the deepest.
                 let at = add(scale(e_r, r * dm.signum()), scale(Z, vm));
                 found.line(axes.point(at), axes.z, Tangent)?;
             } else {
@@ -400,8 +384,11 @@ fn cone(k: &Cone, se: &Extent2d, n: Vec3, p0: Point3, tol: f64, found: &mut Foun
             Z,
         ))
     };
-    if sin * rho <= tol {
-        found.line(apex, dir(0.0), Tangent)?;
+    // Between the generators the cone leaves the plane by at most `s rho (1 - |cos|)` (at
+    // the thin sector's middle); within the tolerance they are one tangent generator there.
+    if s * rho * sin * sin / (1.0 + cos.abs()) <= tol {
+        let along = axes.vec(add(scale(e_r, cos.signum() * kk), Z));
+        found.line(apex, along, Tangent)?;
     } else {
         found.line(apex, dir(1.0), Transversal)?;
         found.line(apex, dir(-1.0), Transversal)?;
@@ -423,11 +410,12 @@ fn sphere(k: &Sphere, plane: &Plane, p0: Point3, tol: f64, found: &mut Found) {
         }
         return;
     }
-    let rho = ((big - d.abs()) * (big + d.abs())).sqrt();
-    if rho <= tol {
+    if big - d.abs() <= tol {
+        // A cap no deeper than the tolerance: one touch at its centre.
         found.touches.push(touch);
         return;
     }
+    let rho = ((big - d.abs()) * (big + d.abs())).sqrt();
     found.conic(o + n * d, *fp.x() * rho, *fp.y() * rho, true, Transversal);
 }
 
@@ -458,7 +446,8 @@ fn torus(
             return Some(());
         }
         let half = c2.max(0.0).sqrt();
-        if half <= tol {
+        if small - h.abs() <= tol {
+            // The tube's top or bottom no deeper than the tolerance through the plane.
             found.conic(c, axes.x * big, axes.y * big, true, Tangent);
         } else {
             for rho in [big + half, big - half] {
