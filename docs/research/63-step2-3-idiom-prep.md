@@ -3150,6 +3150,163 @@ Both are exact and deterministic. Nothing was taken that depends on a search or 
   kinds exist.
 - SS2 to SS4.
 
+### 5.7 SS3 as built (11-27)
+
+Decided by analysis and an adversarial pass. Proposed for review; not yet ruled.
+
+No public signature changes. `intersect` now answers two spheres, and any two of cylinder,
+cone, sphere and torus on one axis, in `analytic/coaxial.rs`. The answer is §5.6's
+`Closed<Intersection>`. Every other pair stays `General` (SS2). Inside the crate, `Clip` now
+takes two `Part`s (a surface's region and its normal) instead of a surface and a plane, so
+the plane sections and the coaxial circles share one clipper and one orientation rule
+(`n_a x n_b`).
+
+**The method.** Each surface of revolution is reduced to its meridian in the half-plane
+(distance from the axis, height along it):
+
+- a cylinder or cone is a line;
+- a sphere or torus is a circle;
+- each carries the heights its extent allows.
+
+Two meridians meet at points, and each point is a circle about the axis, or a touch point
+when it lies on the axis. The circles are then clipped to both extents by `Clip`.
+
+The axis is chosen as follows:
+
+- Two spheres share the line of their centres.
+- A sphere shares the other surface's axis when its centre lies on it.
+- Otherwise the axes must agree, and their tilt and offset, carried over the second's
+  reach, become `δ`. When `δ` is past the tolerance, the answer is `General`.
+
+| Meridians | Solved | `General` |
+|---|---|---|
+| two lines (cylinder, cone) | one circle; coincident over the shared heights; empty | a gap between `tol` and `tol + δ`; a crossing past both apexes that the apex distance cannot settle |
+| line and circle | one or two circles, a tangent circle, or empty | the same |
+| two circles | one or two circles, a tangent circle, coincident, or empty | the same |
+
+**Choices, with the case against and the case for each.**
+
+- **One meridian solver for every coaxial pair, not one function per pair.** The pin has
+  `intersect_with_sphere` and `intersect_with_cone` per kind.
+  - Against: a function per pair is easier to compare with the pin's line by line.
+  - For: the geometry is the same in every case, either lines and circles meeting in a
+    plane, so ten pairs need three meeting rules (`lines`, `line_circle`, `circles`).
+    The torus pairs come with no extra code. The pin solves the torus pairs only through
+    its general intersector.
+- **Two circles by the pin's WR-79 Heron form.** The half-chord is computed as
+  `sqrt` of the product of the four gaps, not by `r^2 - d^2`.
+  - Against: none found. It is the pin's lesson, and it is exact up to rounding.
+  - For: near a tangency the difference of squares cancels, while the product of gaps does
+    not.
+- **Empty only from exact bounds.** Three bounds give Empty:
+  - the heights apart;
+  - parallel meridians apart;
+  - a crossing past both apexes, where each apex is farther than `tol + δ` from the other
+    meridian.
+
+  Each is a distance in the meridian plane that the surfaces cannot close. Between `tol`
+  and `tol + δ` the answer is `General`, not a guess.
+  - Against: a pair that is slightly off-axis and far apart could have been called empty by
+    a looser bound.
+  - For: §5.6 and 04 say a solved empty is final. `General` costs the marcher a call, and a
+    false empty loses a curve.
+- **Coincident when the meridians agree within `tol` over shared heights longer than `tol`.**
+  Two cones that share only their apex are not coincident: they meet at that apex only. Two
+  spheres with the same centre and radius are coincident, and so are two tori with the same
+  tube.
+  - Against: none found for these surfaces. A turned coaxial frame matters only for the
+    `around` range, and the clip handles that range.
+  - For: the truth (T5) agrees on every case the tests build.
+- **Concentric spheres are answered without looking at their extents.** They are
+  coincident when the radii agree within `tol`, and empty otherwise.
+  - Against: two sphere patches on opposite sides of one sphere do not overlap, and the
+    answer still says `Coincident`.
+  - For: `Coincident { on_a, on_b }` carries both whole extents, as for two planes in
+    §5.6. Bounding the overlap of two latitude and longitude patches is SS4's
+    classification work. A caller that needs the overlap intersects `on_a` with `on_b`.
+    This is a deviation, listed for review.
+- **A torus's heights are its whole tube's** (`[-small, small]`), whatever its extent's
+  tube angle. The clip then cuts the circles to the tube angle.
+  - Against: a tighter height range would reject more pairs as empty before the clip runs.
+  - For: the bound stays exact. The clip is exact as well, so no curve is lost, and a
+    rejected pair would only have been cheaper.
+- **Touch points on the axis.** Where the meridians meet at distance 0 (`|x| <= tol`), the
+  answer is a tangent point, not a circle of radius 0. Examples are a sphere touching a cone's
+  apex, and two spheres touching end to end.
+- **No seam splitting.** This is §5.6's rule: a circle is one piece over its span, even when
+  the span passes the turn's start.
+
+**Tests and the truth extension.**
+
+- **T5 extension.** T5's `shared_axes` now accepts frames whose x and y axes are a signed
+  permutation of each other's, in `scx-testkit/src/ssi.rs`. Before, it needed equal axes.
+  This lets the truth answer pairs that are turned or mirrored about the shared axis. It is
+  tested in `scx-testkit/tests/ssi.rs`.
+- **Shared test helpers.** The helpers of `plane_sections` moved to `tests/common`, so
+  `tests/coaxial.rs` can use them too.
+- **`tests/coaxial.rs`** has 6 tests that check every answer against T5, in both orders,
+  with the same checks as `plane_sections`:
+  - on both surfaces;
+  - inside both extents;
+  - the truth's circle and contact;
+  - direction along `n_a x n_b`;
+  - every owed truth point covered.
+
+  The cases are:
+  - fixed cases for each pair kind, including turned and mirrored frames;
+  - near-axis pairs: a tilt or offset of `1e-12` is solved; `1e-3` and square axes are
+    `General`;
+  - 800 random pairs.
+- **Unit test change.** The unit test `other_pairs_are_general` now uses a sphere off the
+  cylinder's axis.
+
+**Difftest.** `t_ssi_coaxial::ssi_coaxial` compares scx against the pin's
+`intersect_with_sphere` and `intersect_with_cone` on 900 inputs: sphere, cylinder and cone
+pairs on exact signed-axis frames. The pin has no closed-form torus pairs. Results:
+
+- 501 exact;
+- 129 within tolerance;
+- 270 pin defects;
+- 0 mismatches;
+- 0 nondeterministic.
+
+Each pin defect is judged against T5 by `t_ssi_coaxial::truth::check`:
+
+| Class | Count | Pin answer | scx answer |
+|---|---:|---|---|
+| Cones crossing | 41 | general | one circle |
+| Cones apart | 58 | general | empty |
+| Cones coincident | 6 | general | coincident |
+| Cylinder and cone crossing | 64 | general | one circle |
+| Cylinder and cone apart | 28 | general | empty |
+| Cylinders of one radius | 46 | coincident or tangent arcs and lines along the overlap | coincident |
+| Sphere and cylinder of its radius | 27 | the equator, transversal | the equator, tangent (as T5) |
+
+**Timings.** Side-channel and throwaway, as in §5.6: the difftest pool on prebuilt surfaces,
+200 repetitions, release build, per call. Each figure is scx against the pin:
+
+| Pair | scx | pin |
+|---|---:|---:|
+| sphere-sphere | 0.92 us | 1.44 us |
+| sphere-cylinder | 0.72 us | 1.70 us |
+| sphere-cone | 0.76 us | 1.37 us |
+| cylinder-cylinder | 0.28 us | 115 us |
+| cylinder-cone | 0.70 us | 0.37 us |
+| cone-cone | 0.68 us | 0.39 us |
+
+The pin is faster on cone pairs only because it answers `General` at once and leaves the
+work to the marcher. scx solves these pairs. The pin's cylinder pairs are slow because it
+builds arcs and lines along the overlap.
+
+**Other kernels (research 66).** §8.2 has only OCCT's docs on IntAna, and research 66 lists
+nothing for coaxial pairs. Nothing was adopted from it. The meridian reduction is the
+textbook one for surfaces of revolution, and it is exact and deterministic.
+
+**Open.**
+
+- SS4: the overlap of coincident patches, and tangency classification at the tolerance.
+- SS2: non-coaxial quadric pairs.
+
 ## 6. `scx-brep`
 
 The pin's sources are `topology/` (without `api_files`, `part_file` and `database_io`), `heal/gap`,

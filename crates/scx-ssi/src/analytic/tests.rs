@@ -117,13 +117,14 @@ fn coincident_extents_follow_order() {
     );
 }
 
-/// Pairs without a plane are not solved here yet.
+/// Curved pairs off one axis are not solved here yet: a sphere whose centre is off the
+/// cylinder's axis.
 #[test]
 fn other_pairs_are_general() {
     let (c, ce) = cylinder();
     let s = Surface::Sphere(
         Sphere::new(
-            frame([0.0; 3], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]),
+            frame([0.5, 0.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]),
             Length::from_mm(2.0),
             Sense::Forward,
         )

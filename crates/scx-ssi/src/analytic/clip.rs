@@ -429,49 +429,50 @@ impl Region {
     }
 }
 
-/// Both extents, the tolerance and the orientation wanted.
-pub(super) struct Clip<'a> {
-    surface: &'a Surface,
-    region: Region,
-    plane: Rect,
-    n_plane: Vec3,
-    tol: f64,
-    sign: f64,
+/// Where a surface's normal comes from.
+#[derive(Clone, Copy, Debug)]
+enum Normal<'a> {
+    /// A plane's, everywhere.
+    Fixed(Vec3),
+    /// The kind's, at the point's uv.
+    Kind(&'a Surface),
 }
 
-impl<'a> Clip<'a> {
-    /// `None` for a NURBS surface.
-    pub(super) fn new(
-        surface: &'a Surface,
-        se: &Extent2d,
-        plane: &Plane,
-        pe: &Extent2d,
-        tol: f64,
-        sign: f64,
-    ) -> Option<Self> {
-        Some(Self {
-            surface,
-            region: Region::new(surface, se)?,
-            plane: Rect::new(plane.frame(), pe),
-            n_plane: *plane.frame().z(),
-            tol,
-            sign,
+/// One surface of a pair: its extent as a region and its normal.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Part<'a> {
+    normal: Normal<'a>,
+    region: Region,
+}
+
+impl<'a> Part<'a> {
+    /// A plane over `e`.
+    pub(super) fn plane(plane: &Plane, e: &Extent2d) -> Self {
+        Self {
+            normal: Normal::Fixed(*plane.frame().z()),
+            region: Region::Plane(Rect::new(plane.frame(), e)),
+        }
+    }
+
+    /// `s` over `e`; `None` for a NURBS surface.
+    pub(super) fn of(s: &'a Surface, e: &Extent2d) -> Option<Self> {
+        Some(match s {
+            Surface::Plane(p) => Self::plane(p, e),
+            _ => Self {
+                normal: Normal::Kind(s),
+                region: Region::new(s, e)?,
+            },
         })
-    }
-
-    /// The torus extent's tube angle, when it is not a whole turn.
-    pub(super) fn tube(&self) -> Option<[f64; 2]> {
-        self.region.tube()
-    }
-
-    fn contains(&self, p: Point3) -> bool {
-        self.plane.contains(p, self.tol) && self.region.contains(p, self.tol)
     }
 
     /// The surface's normal at its point `p`, `None` where it has none (a cone's apex).
     fn normal(&self, p: Point3) -> Option<Vec3> {
+        let surface = match self.normal {
+            Normal::Fixed(n) => return Some(n),
+            Normal::Kind(s) => s,
+        };
         let step = self.region.step_of(p);
-        Some(Vec3::from(match self.surface {
+        Some(Vec3::from(match surface {
             Surface::Plane(k) => k.normal(k.from_step(step)),
             Surface::Cylinder(k) => k.normal(k.from_step(step)),
             Surface::Cone(k) => k.normal(k.from_step(step))?,
@@ -479,6 +480,28 @@ impl<'a> Clip<'a> {
             Surface::Torus(k) => k.normal(k.from_step(step)),
             _ => return None,
         }))
+    }
+}
+
+/// Both extents and the tolerance; the curves are oriented along `n_a x n_b`.
+pub(super) struct Clip<'a> {
+    a: Part<'a>,
+    b: Part<'a>,
+    tol: f64,
+}
+
+impl<'a> Clip<'a> {
+    pub(super) fn new(a: Part<'a>, b: Part<'a>, tol: f64) -> Self {
+        Self { a, b, tol }
+    }
+
+    /// A torus extent's tube angle, when it is not a whole turn (the section's one torus).
+    pub(super) fn tube(&self) -> Option<[f64; 2]> {
+        self.a.region.tube().or_else(|| self.b.region.tube())
+    }
+
+    fn contains(&self, p: Point3) -> bool {
+        self.a.region.contains(p, self.tol) && self.b.region.contains(p, self.tol)
     }
 
     /// The pieces of `raws` inside both extents, onto `curves` and `points`. `None` when a
@@ -490,8 +513,8 @@ impl<'a> Clip<'a> {
         points: &mut Vec<IntersectionPoint>,
     ) -> Option<()> {
         let mut shared = Vec::new();
-        self.plane.sides(&mut shared);
-        self.region.sides(&mut shared);
+        self.a.region.sides(&mut shared);
+        self.b.region.sides(&mut shared);
         for raw in raws {
             let mut cuts = Vec::new();
             for side in shared.iter().chain(&raw.sides) {
@@ -505,8 +528,9 @@ impl<'a> Clip<'a> {
             let mut spans_in = spans.clone();
             if raw.contact == Contact::Transversal {
                 let t = 0.5 * (first[0] + first[1]);
-                if let Some(n) = self.normal(shape.at(t)) {
-                    let want = n.cross(self.n_plane) * self.sign;
+                let at = shape.at(t);
+                if let (Some(na), Some(nb)) = (self.a.normal(at), self.b.normal(at)) {
+                    let want = na.cross(nb);
                     if shape.tangent(t).dot(want) < 0.0 {
                         shape = shape.reversed();
                         spans_in = spans.iter().map(|&s| flipped(&shape, s)).collect();
