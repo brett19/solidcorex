@@ -2371,7 +2371,7 @@ About 25-30 ns per point on conic edges. NURBS (unit tests' curves): 0.1-1.5 ms 
 
 ### 14.14 BQ1 as built (11-27)
 
-New crate `crates/scx-bodyq`, placed after `scx-mass` in `layers.txt` and the workspace. Dependencies: `scx-brep`, `scx-curve`, `scx-nurbs` (for `Approach`), `scx-num`, `scx-surface`; dev-dependencies `scx-make` and `scx-testkit` with `bodies`. Public API:
+New crate `crates/scx-bodyq`, placed last in `layers.txt` (after `scx-tess`) and after `scx-tess` in the workspace. Dependencies: `scx-brep`, `scx-curve`, `scx-nurbs` (for `Approach`), `scx-num`, `scx-surface`; dev-dependencies `scx-make` and `scx-testkit` with `bodies`. Public API:
 
 ```rust
 pub fn classify_point(body: &Brep, p: Point3, budget: &mut Budget, stop: &Stop) -> Result<PointClass, BodyqError>;
