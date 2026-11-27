@@ -3275,6 +3275,142 @@ Four tests in `crates/scx-boolean/src/tests/unsupported.rs` (one new `mod` line 
 
 **Proposed 04 row.** "BO5: the pin's out-of-scope Boolean cases (tpipe, cylinder-sphere on and off the seam, torus-sphere, torus-box on the seam circle and at the seam vertex) are expected `Unsupported(SsiPair)` tests naming the first pair stage 4 stops at, with kinds, in both operand orders; none reaches `Stage(Imprint)`. `SsiPair` is answered from surfaces over boxes, so it can name a pair whose faces do not touch. Change when step 5 answers the pairs."
 
+### 14.29 BO4 as built (11-27)
+
+`scx-boolean` gains stage 6, the classification and the build (`classify.rs`, `build.rs`): each piece of the imprint is placed in, out of or on the other operand, kept or dropped by the operation, and the kept pieces are merged, cleaned and given shells. `boolean()` now answers `Done { body, changes, report }`. The crate now depends on `scx-bodyq` (`classify_point`, `sides_along`) and `scx-mass` (`volume_sign`, for nesting), and has `scx-check` and `scx-make` as dev dependencies. All are below it in `layers.txt`.
+
+**Public API changes.**
+
+- `BooleanUnsupported::Stage` and `Stage` are gone: every stage is built.
+- `BooleanUnsupported::NonManifold { at: Entity }` (`non_manifold`): the result would not be manifold (D5). The cases are an edge of the result with more than two faces (two solids sharing an edge only), a touch inside a face where both faces keep a piece (the result meets itself at a point), or a point classification that met the other operand's boundary away from a coincident face. Building such results is BO7's.
+- `BooleanUnsupported::Nesting` (`nesting`): more than one connected set of the result's faces encloses positive volume while another set encloses negative volume, so which outer shell holds the cavity is not decided.
+- `BooleanDefect::{Seeds { operand, face }, Classify { operand, face }, Build}` (`classify_seeds`, `classify_point`, `build`): one component took two answers, a piece could not be placed, and the result's draft did not finish or left an edge with one face.
+- `Report.work` is the whole call's budget use (stages 1 to 6).
+
+**The stage.**
+
+1. *Classify* (`classify.rs`). A *component* is a set of pieces of one operand joined across edges where the operands do not meet. They *meet* at an edge with fins of both operands, or at an edge that is one of the imprint's cuts. Each component takes one class:
+   - *Coincident pieces first.* A piece of a face that stage 4 found coincident with a face of the other operand is classified by `classify_point` at a point inside it (a uv scanline at fixed fractions, checked by `contains_uv`). If the point is on a face of the other operand, the class is `On { same }`, where `same` says whether the two materials lie on one side, read from each face's back shell's region. A component that holds an `On` piece and any other piece is `Defect(Seeds)`.
+   - *Seeds.* Each section edge is read with `sides_along` on each operand's face against the other operand. A piece using the edge `Forward` is on the left (`n x T`, with `n` the face's natural normal), and one using it `Reversed` is on the right. `NoClearSide` seeds nothing. Two seeds that disagree are `Defect(Seeds)`.
+   - *The fallback.* A component no seed reached is classified by `classify_point` at the middles of up to four of its curve edges where the operands do not meet, and else at a point inside its first face. An `On` answer there is `Defect(Classify)`.
+2. *Select.* Union keeps `a`'s Out and On-same pieces and `b`'s Out pieces. Intersect keeps In and On-same of `a` and In of `b`. Subtract keeps `a`'s Out and On-opposite pieces, and `b`'s In pieces, turned over (sides swapped, loops kept). The other faces are removed. A stage-4 touch (always inside at least one face) where both faces keep a piece is `NonManifold { at: Face }`.
+3. *Merge.* Kept faces meeting at an edge with exactly their two fins are one face if they are pieces of one operand face, or if they have their material on one side, have surfaces of one kind that are equal or coincide (SS4's `analytic::intersect` over the operand faces' uv boxes answers `Coincident`; cached per pair, 1 work unit), and have natural normals agreeing at the edge. Each group's loops are walked across its inside edges: a use whose successor is an inside edge continues after that edge's twin.
+   - A group of one operand face keeps its use records, and the loops are sorted by shoelace area.
+   - If two pieces of one operand face meet across the face's seam (the twin uses are a period apart in uv), or the group has two operand faces, the loops are written again by `exact_loops` on the survivor's surface.
+   - The survivor is the group's lowest face of `a`, else its lowest face. The others are `merge_face`d into it.
+4. *Edges and vertices.* An edge with no fin goes. One fin is allowed only on a collapsed edge, else `Defect(Build)`. More than two fins is `NonManifold`.
+   - A vertex between exactly two edges, on the same faces, with equal curves (for a circle or an ellipse, up to a period shift of the parameter) or collinear lines, is removed and the edges are joined: `merge_edge`, then the survivor's shape and ends rewritten, the absorbed uses dropped, and the pcurves written again.
+   - A vertex no edge ends at, and that is not a lone vertex of a shell, goes.
+5. *Shells.* Each connected set of kept faces (across two-fin edges) is one solid region with a material shell and a void shell, or the shells of its lowest face of `a` where they are unclaimed and solid where they must be. Each face's sides are set only where they change. Unused shells and regions go.
+   - With two or more sets, the draft is cloned and finished, and each material shell's `volume_sign` is taken. Each negative set is moved into the single positive set's region as a cavity, with a new void region inside it. Two or more positive sets together with a negative one are `Nesting`.
+6. `finish`. A refusal is `Defect(Build)`.
+
+**Decisions, with cases for and against.**
+
+- *Classify by component, seeded by `sides_along`, with `classify_point` as the fallback.*
+  - For: one BQ2 call per section side answers a whole component. It costs 2 to 14 work units, against a ray cast per face. Components across unmet edges are exactly the regions with no boundary of the other operand between them.
+  - Against: a seed that answers wrongly spreads to the whole component. The two-seeds check catches it only where a component has two sections.
+  - Adversarial check: every case is checked by volume to 1e-9 and by the contract. A wrongly seeded component flips a whole region in or out, which the volume shows.
+- *BQ2's open question 1: lying edges seed nothing.* A lying piece (the operands' faces tangent along it, or a face's edge lying in the other's face) carries no contact. It is a component boundary, because its edge has fins of both operands, and the components either side are classified by the fallback.
+  - For: no new BQ2 call, and the fallback is exact (`classify_point`).
+  - Against: one `classify_point` per such component, which costs more than a seed. The cubes sharing a face and the coplanar grids are all fallback and coincidence, and they pass.
+- *BQ2's open question 2: pieces map back through `Imprint.pieces`.* The owner map is inverted from `(Side, operand face) -> pieces`. `sides_along` is called on the operand's own face, so the natural normal and the `Forward` use's left side agree with BQ2's `n_f x T`.
+  - For: the draft face's surface is the operand face's surface, so nothing is recomputed.
+  - Against: none found.
+- *Coincident pieces are classified by a point, not by the coincidence's orientation alone.* Stage 4's coincidence is over whole faces. A piece of a coincident face may still lie off the other face (the part of a large face beyond a small one), so a point inside the piece decides.
+- *Merge coincident faces within the zone's coincidence, not under the pin's plane cover tolerance (5e-9).* Two fronts 1e-6 apart merge into one face. Fronts 1e-4 and 1e-3 apart do not.
+  - For: truth over pin. SS4 answers `Coincident` for these surfaces, so stage 4 already treats them as one surface. Two faces 1e-6 apart in one body would be thinner than the zone, and they would need a Measured accuracy anyway.
+  - Against: the merged face moves by up to `dy` over its area, so the volume differs from the exact union by up to about 50 `dy` (5e-5 at `dy` = 1e-6). The test allows `100 dy`. The pin keeps the two faces from 5e-9 up.
+- *Fin senses are not checked opposite.* A face turned over by subtract keeps its loops counterclockwise about its natural normal. So a `b` face against an `a` face has fins of one sense, and the old check refused every subtract. The merge still skips an edge whose two fins have one sense: two pieces of one face always have opposite senses there, and a coplanar pair of one sense has opposite natural normals, which the normal test refuses anyway.
+- *Seam merges are written again by `exact_loops`.* The torus intersect keeps both pieces of the torus face either side of its meridian seam. They are one face whose uv crosses the seam. Keeping the records would leave two loops sharing the seam vertex, which `finish` refuses (`VertexOnTwoLoops`).
+  - For: `exact_loops` already chooses each pcurve's period, and the result is the exact closed form.
+  - Against: the pcurves of the merged face are rewritten, not kept bit for bit (§9 row 5). This happens only where a seam is crossed.
+- *Nesting by `volume_sign` on a cloned, finished draft.*
+  - For: exact for any surface `scx-mass` integrates. A single positive set with any number of cavities covers every step-4 case.
+  - Against: a clone and a finish per call with two or more sets. Two lumps with a cavity in one is `Nesting`, BO7's.
+- *Vertex removal joins only equal curves or collinear lines.* A vertex between two arcs of different circles, or a line and an arc, stays.
+
+**Tests** (`crates/scx-boolean/src/tests/whole.rs`, 19). Every result passes `scx_check::contract`, and every volume is checked by `scx_mass::volume` against a closed form to 1e-9 relative.
+
+| Case | Ported from | Checks |
+|---|---|---|
+| Cubes of 10 offset by 5 | `boolean_api` box-box-union | union 1875 with 12 faces, subtract 875 with 9 faces, intersect 125 with 6 faces, `b - a` 875 |
+| A cylinder through a plate | `boolean_api` box-cyl-hole | subtract `16 - pi` with 7 faces, union `16 + 2 pi`, intersect `pi`, the cylinder less the plate `2 pi` in two lumps |
+| A sphere less the box over its cap | `boolean_api` sphere-and-box | subtract, intersect and union against the cap `pi h^2 (3 - h) / 3` |
+| Boxes sharing a face | `boolean_api` coplanar-union | union 2 with counts [6, 12, 8] |
+| A torus less the box over its half | `boolean_api` torus-minus-box | subtract and intersect `pi^2 R r^2`; the intersect has counts [3, 3, 2], with one torus face across the old seam |
+| A sphere inside a box | | subtract is a cavity (one solid region); a union with a box apart has two lumps |
+| Near-coplanar fronts, `dy` = 0, 2e-10, 1e-9, 4.5e-9, 1e-8, 1e-6 | `boolean_coplanar_merge` (3 tests) | 6 faces; volume `1500 + 50 dy` within `100 dy` |
+| Fronts 1e-4 and 1e-3 apart | `boolean_coplanar_merge` | more than 6 faces |
+| Interleaved 4 x 4 grids on one plane | `boolean_coplanar_merge` | exact volume, counts [66, 219, 146] (the pin's) |
+| Union, difference, intersection of the 10 cubes | `issue_1462` (3 tests) | each face's area and its one operand face, from `Changes` |
+| Edges crossed by the other operand | `issue_1462` | the surviving piece keeps the operand edge's lineage |
+| Faces the union leaves whole | `issue_1462` (the temporary-attributes test) | untouched faces keep their ids and no lineage entry |
+| Coplanar faces merged | `issue_1462` | the merged cap names both operand faces |
+| The operands are read only | `issue_1462` (the clone test) | both operands keep their counts after a union, and `a` its volume |
+| Crossing creases | `boolean_no_dangling_vertex_refs` | every vertex of the result ends an edge, and the vertex lineage names only live vertices |
+| Determinism | | two runs of the bored plate give equal `Changes`, work and counts |
+| A ball on a cube's top face; two blocks sharing an edge | | union `Unsupported(NonManifold)` for both |
+
+The 1462 tests read lineage from `Changes` (`origins`, `merged`) rather than the pin's attributes. The pin's temporary-attribute and body-clone tests become an untouched-faces test and a read-only-operands test, because there are no attributes and the operands are borrowed. The wavy NURBS strip case of `boolean_coplanar_merge` is not ported: NURBS faces are `Unsupported` in step 4. No `boolean_api` case reached `Unsupported(Pcurve)`.
+
+**Measurements.** Release build, on a machine at load average about 20 (both sides inflated alike; run back to back, best of 50 for ours and 20 for the pin). Ours is the whole `boolean()` call; stages 1-5 and the two halves of stage 6 come from throwaway timers, since removed. The pin's is its whole `boolean`, with the operands built outside the timer. This time it is like for like: both are the whole operation.
+
+| Case | Op | Faces | Work | Stages 1-5 | Classify | Build | Ours, whole | Pin, whole |
+|---|---|---|---|---|---|---|---|---|
+| cubes of 10 offset by 5 | union | 12 | 147 | 141 us | 20 us | 111 us | 0.39 ms | 1.94 ms |
+| | subtract | 9 | 132 | 77 us | 11 us | 42 us | 0.17 ms | 1.44 ms |
+| | intersect | 6 | 129 | 74 us | 9 us | 31 us | 0.12 ms | 1.42 ms |
+| blocks sharing a face | union | 6 | 467 | 228 us | 9 us | 65 us | 0.30 ms | 1.88 ms |
+| | subtract | 6 | 459 | 205 us | 6 us | 13 us | 0.24 ms | 1.58 ms |
+| | intersect | 0 (empty) | 447 | 215 us | 7 us | 8 us | 0.23 ms | 1.99 ms (empty) |
+| cylinder through a plate | union | 10 | 51 | 58 us | 5 us | 30 us | 0.09 ms | 7.53 ms |
+| | subtract | 7 | 51 | 56 us | 5 us | 21 us | 0.10 ms | 6.75 ms |
+| | intersect | 3 | 39 | 51 us | 4 us | 14 us | 0.09 ms | 6.83 ms |
+| sphere over a box | union | 7 | 34 | 33 us | 2 us | 19 us | 0.08 ms | 12.0 ms |
+| | subtract | 7 | 34 | 37 us | 3 us | 20 us | 0.07 ms | 9.49 ms |
+| | intersect | 2 | 22 | 35 us | 3 us | 15 us | 0.07 ms | 11.6 ms |
+| torus and the box over its half | union | 7 | 62 | 66 us | 4 us | 28 us | 0.13 ms | 5.29 ms |
+| | subtract | 3 | 50 | 65 us | 4 us | 14 us | 0.11 ms | 5.08 ms |
+| | intersect | 3 | 50 | 69 us | 4 us | 33 us | 0.13 ms | 4.51 ms |
+
+- The added cost is stage 6, at 0.2x to 1.1x of stages 1-5 on these small cases. Classify is small (2 to 20 us), because one seed answers a component. Build is most of it, and is largest where many pieces merge (the cubes' union, 111 us).
+- The blocks sharing a face spend their work in stages 1-5 (the coincident face pair), not in stage 6.
+- *Scaling*, on the recipes' `plate_holes_k`: a 100 x 100 x 10 plate less `k^2` cylinders, cut one at a time. Load average 11 to 15. "Last" is the final subtraction, on a plate with `k^2 - 1` holes. The stage split is from the same throwaway timers, at the final step.
+
+| k | Faces | Ours, all steps | Ours, last | Stages 1-5 | Classify | Build | Pin, all steps | Pin, last |
+|---|---|---|---|---|---|---|---|---|
+| 4 | 22 | 10.5 ms | 0.89 ms | 0.51 ms | 0.03 ms | 0.12 ms | 88 ms | 5.8 ms |
+| 8 | 70 | 60 ms | 1.66 ms | 1.50 ms | 0.08 ms | 0.32 ms | 417 ms | 7.8 ms |
+| 12 | 150 | 265 ms | 3.44 ms | 3.19 ms | 0.17 ms | 0.69 ms | 1.16 s | 10.7 ms |
+| 16 | 262 | 830 ms | 6.84 ms | 5.57 ms | 0.29 ms | 1.22 ms | 4.32 s | 38 ms |
+
+  - Each step is linear in the body's faces: 1.75x the faces from k = 12 to 16 gives 1.75x in stages 1-5, 1.7x in classify and 1.8x in build. Stage 6 stays about 0.27x of stages 1-5. The whole recipe is quadratic because it has `k^2` steps on a growing body, and the pin's is too.
+  - Each part of stage 6 is one pass over the draft's edges, faces or vertices, with one `classify_point` per component no seed reaches. The only per-call extra is the clone and finish for nesting, with two or more face sets.
+- Where the time goes inside build was not profiled.
+
+**The recipes** (`tests/recipes.rs`, BX1 §14.32). Five of its six tests now run, and their `#[ignore]` is removed: `plate_12_has_144_holes`, `gear_60_has_sixty_slots`, `smaller_hole_cases`, `touches_inside_a_face_are_unsupported` (all six in-face touch cases answer `NonManifold` by name) and `coincident_and_near_coincident_faces`. Each is judged against its closed-form volume, area, regions and shells. `blocks_touching_at_a_vertex_or_along_an_edge_are_built` stays ignored for BO7. `corner-contact-union` passes, but `edge-contact-union` is `NonManifold`, because the shared edge has four faces.
+
+**Removed tests, on purpose.** `the_public_call_runs_every_built_stage_and_names_the_next` (in `tests.rs`) proved that the call ran stages 1 to 5 and answered `Stage(Classify)`. It becomes `the_public_call_runs_every_stage_within_the_settings_budget`, which unwraps the union (12 faces, nonzero work) and still checks that a budget of 1 is `Exhausted`. `the_public_call_stops_at_classification` (in `tests/face_face.rs`) proved that the box and cylinder reached stage 6. The cylinder-through-plate Booleans in `whole.rs` supersede it.
+
+**Deviations from 72.**
+
+- §5.4's steps 5 to 7 are built as one stage, `classify` then `build`, with component seeding (§5.4 leaves the seeding open).
+- Coplanar faces merge within coincidence of the zone (1e-5), not under the pin's 5e-9. This is truth over pin: the volume differs by at most the slab between the faces, and the faces are one surface to SS4.
+- Fins are not required to be of opposite senses: a face turned over keeps its loops.
+- Two kept faces meeting on one surface whose natural normals are opposite are not merged (the normal test). No test has such a pair. (A coincident pair of `a` and `b` faces is never kept twice: the selection keeps `a`'s `On` piece and drops `b`'s, so the merge only meets faces side by side.)
+- Coincident periodic faces from different frames (two cylinders on one axis, with seams at different angles) merge only through `exact_loops`. No test has such a pair.
+- The wavy NURBS strip of `boolean_coplanar_merge` is not ported (NURBS is not step 4's).
+- `NonManifold` and `Nesting` are new `Unsupported` variants, and `Seeds`, `Classify` and `Build` are new defects. §5.5 does not name them.
+
+**Open questions.**
+
+1. Two lumps where one holds a cavity are `Nesting`. Placing each cavity needs a point-in-shell test per pair (BO7's, with D5).
+2. A seed that answers wrongly spreads over its component unchecked when the component has one section. A cheap cross-check (one `classify_point` per component) would cost about one ray cast each.
+3. Whether the merge should also take coincident faces whose natural normals are opposite (same material side, surfaces flipped against each other). That would need `exact_loops` with a reversed orientation.
+4. Build is up to 1.1x of stages 1-5. A profile would show whether `exact_loops` in the merge or the edge joins dominate.
+
+**Proposed 04 row.** "`scx-boolean` stage 6 (BO4): classify by component (pieces of one operand joined across edges where the operands do not meet). Coincident pieces are `On` by a point inside. Other components are seeded by `sides_along` on each section (a `Forward` use on the left of `n x T`), with `classify_point` as the fallback; lying edges seed nothing. Select per operation (subtract turns `b`'s In pieces over). Merge kept faces across two-fin edges where they are one operand face or coincident surfaces with material on one side, within the zone's coincidence. A seam-crossing merge is rewritten by `exact_loops`. Remove dead edges and vertices, and join a vertex between edges on one curve. One solid region per connected face set, with a negative set nested as the cavity of the one positive set. `boolean()` answers `Done`. New `Unsupported(NonManifold | Nesting)` and defects `Seeds`, `Classify`, `Build`. An in-face touch with both faces kept, or an edge of more than two faces, is `NonManifold` (D5). Change if two lumps with a cavity, or opposite-normal coincident faces, reach a case."
 ### 14.30 BO2b as built (11-27)
 
 Stage 4 (`crates/scx-boolean/src/faceface.rs`) now asks, before it refuses a pair as `Unsupported(SsiPair)`, whether the two faces can touch, and drops the pair when they provably cannot. It asks both for `Closed::General` and for a solved answer of a kind the stage does not read. No public API changed, and no error variant was added or removed. Pairs that `analytic::intersect` solves are untouched, so the check costs nothing on them.

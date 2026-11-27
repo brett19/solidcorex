@@ -511,7 +511,9 @@ name = "scx-boolean"
 version = "0.1.0"
 dependencies = [
  "scx-algo",
+ "scx-bodyq",
  "scx-brep",
+ "scx-check",
  "scx-curve",
  "scx-make",
  "scx-mass",

@@ -5,7 +5,6 @@ use core::f64::consts::{PI, TAU};
 
 use scx_brep::Brep;
 use scx_brep::Document;
-use scx_brep::op::Settings;
 use scx_make::{cylinder, sphere};
 use scx_num::budget::{Budget, Stop};
 use scx_num::frame::Frame;
@@ -14,11 +13,11 @@ use scx_num::vector3d::Vec3;
 use scx_ssi::analytic::Contact;
 use scx_surface::SurfaceKind;
 
-use super::{call, cuboid, pt, run, unit};
+use super::{cuboid, pt, run, unit};
 use crate::boolean::{Interference, interfere};
 use crate::faceface::{FaceFace, Section, face_face};
 use crate::geom::{Operands, Side};
-use crate::{BooleanError, BooleanUnsupported, Stage};
+use crate::{BooleanError, BooleanUnsupported};
 
 fn ff(a: &Brep, b: &Brep) -> (Interference, FaceFace) {
     let i = run(a, b).unwrap();
@@ -339,19 +338,6 @@ fn crossed_cylinders_have_no_closed_form_here() {
     };
     assert_eq!(kinds, [SurfaceKind::Cylinder, SurfaceKind::Cylinder]);
     assert_eq!(e.name(), "ssi_pair");
-}
-
-#[test]
-fn the_public_call_stops_at_classification() {
-    let doc = Document::default();
-    let a = cuboid([-2.0, -2.0, 0.0], [2.0, 2.0, 1.0], doc);
-    let b = cyl([0.0, 0.0, -1.0], Z, X, 1.0, 3.0, doc);
-    let e = call(&a, &b, doc, &Settings::new());
-    assert_eq!(
-        e,
-        BooleanError::Unsupported(BooleanUnsupported::Stage(Stage::Classify))
-    );
-    assert_eq!(e.name(), "stage_classify");
 }
 
 #[test]
