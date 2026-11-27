@@ -50,8 +50,9 @@ shared type (JUDGED).
 | `exact` | Big integers: `Int` (sign and magnitude, schoolbook, binary gcd, division), and `ldexp`, `ratio` and `sqrt_ratio` for the difftest | exact |
 | `rat` | `Rat`: `num / den * 2^exp`, kept reduced, so `==` and `Hash` are exact. Every finite double converts exactly. `to_f64` is correctly rounded (ties to even, the subnormals and the overflow included) | exact |
 | `dd` | `Dd { hi, lo }`: double-double arithmetic (operator traits), and `ln`, `exp`, `sin_cos`, `atan`, `atan2` and the constants, to about 2^-100 | about 104 bits |
-| `nurbs` | `Curve<D>` and `Surface<D>`: exact B-spline and NURBS evaluation with any number of derivatives by two methods, knot insertion, degree elevation, blossoms | exact |
+| `nurbs` | `Curve<D>` and `Surface<D>`: exact B-spline and NURBS evaluation with any number of derivatives by two methods, knot insertion, degree elevation, splitting (curve, and surface along `u` or `v`), blossoms | exact |
 | `analytic` | Line, circle, ellipse, plane, cylinder, cone, sphere and torus: points and derivatives of any order, and closest points | double-double; exact for the line and the plane |
+| `quadric` | `Implicit`: the plane, cylinder, cone, sphere and torus as exact implicit equations in their own frames; `check`, an exact decision whether a rational surface lies on one, with the first-order distance where it does not; `Layout`, the closed-form map between NURB and STEP parameters (section 9) | exact decision; double-double map |
 | `gen` | Seeded generators: knots (uniform, random, clustered within ulps, repeated), weights (unit, moderate, near zero), points, curves, surfaces, parameters on and beside knots, frames, near-tangent pairs | |
 | `data` | `CurveData` and `SurfaceData`: plain data, with `exact()` to get the reference | |
 
@@ -141,8 +142,10 @@ in `u` and `j` in `v`.
 
 ## 5. Self-tests
 
-`cargo test -p scx-testkit` runs 23 tests in 4 files plus 3 unit tests, in about 10 s with a warm
-build (MEASURED).
+`cargo test -p scx-testkit` runs 39 integration tests in 5 files plus 3 unit tests (MEASURED). The
+`nurbs.rs` binary takes about 11.5 s of wall time with a warm build. About 7 s of that is the existing
+surface insertion and elevation test, which took the same time before this change. The new tests take 0.3 to 1.3 s each. The
+T8 and T4 tests are listed in section 9.
 
 - **`tests/arith.rs`.**
   - Every `Rat` operation (`+`, `-`, `*`, `/`, the comparison and the conversion) rounds as IEEE does,
@@ -224,7 +227,8 @@ Use:
 - There is no exact or certified ellipse foot (section 4).
 - Knot removal is not provided. It is the inverse of insertion, and a library's removal can be checked
   by inserting again with the references.
-- Surface derivatives of order 3 and up work, but are tested only to order 2.
+- There is no exact on-surface check for surfaces of revolution with a general profile, or for offsets.
+  `quadric` covers the five analytic kinds only.
 
 ## 8. Decisions taken here (for review)
 
@@ -237,3 +241,127 @@ Use:
    checked against the Bernstein formula and shape equality. Elevation refuses unclamped ends.
 6. Analytic frames are used as given. Closest points use double-double Newton steps from closed-form
    starts. The ellipse closest point is left out.
+7. Splitting, insertion and elevation of a surface along one direction are each one method, and the
+   direction is a private `Along` enum, not a flag (section 9).
+8. The on-quadric decision is exact and needs positive weights. The pin's evaluation and map are
+   checked against the closed form only to rounding (section 9).
+
+## 9. T4 and T8 (added 11-27)
+
+### T8: higher-order surface derivatives and the tensor-product operations
+
+New in `nurbs`: `Curve::split`, `Surface::split_u` and `Surface::split_v`. Each returns the two
+clamped halves at a parameter inside the domain, by inserting it to full multiplicity. There is also
+`Surface::from_homogeneous`, the surface form of the curve constructor of the same name. Insertion,
+elevation and splitting along `u` or `v` share one private implementation. It applies the curve
+operation to each row or column of the homogeneous net, with the direction as a private
+`Along { U, V }`.
+
+The new tests in `tests/nurbs.rs` are below. All are seeded, and all agree exactly.
+
+| Test | What it proves | Time |
+|---|---|---|
+| `surface_de_boor_and_basis_sum_agree_exactly_to_order_five` | De Boor and the basis sum agree to order 5 in each direction, on both sides, on 12 surfaces of degree up to 4 | 1.1 s |
+| `high_order_partials_are_the_power_basis_truth_before_and_after_insertion` | Partials to order `min(p + q + 1, 6)` equal an independent truth, before and after one insertion in each direction. The truth comes from each span's power-basis expansion, and the quotient rule by Leibniz. The orders above the degree come out exactly zero in the numerator | 0.6 s |
+| `tensor_product_insertion_elevation_and_split_are_the_curve_operations_per_line` | Each surface operation equals the curve operation on each row or column | 1.3 s |
+| `tensor_product_operations_commute_across_directions` | Operations along `u` and along `v` commute exactly | 1.3 s |
+| `split_halves_are_the_surface_on_each_side` | Each half of a split equals the surface on its side, to order 2 | 0.6 s |
+| `curve_split_halves_are_the_curve_on_each_side` | The same for curves | 0.3 s |
+
+Three of the tests take just over the 1 s target. They were kept at this size so that every degree
+up to 4 and every knot kind is still covered (JUDGED).
+
+### T4: rational images of the analytic surfaces
+
+**The decision.** Each kind is written as an exact polynomial `F` in local coordinates
+`L = M^-1 (P - O)`. The frame `M` is used as given: it may be non-orthonormal, with integer entries,
+and it is inverted exactly. The polynomials are:
+
+| Kind | `F(L)` | Degree `k` |
+|---|---|---|
+| Plane | `z` | 1 |
+| Cylinder | `x^2 + y^2 - r^2` | 2 |
+| Cone | `x^2 + y^2 - (r + s z)^2` | 2 |
+| Sphere | `x^2 + y^2 + z^2 - r^2` | 2 |
+| Torus | `(x^2 + y^2 + z^2 + R^2 - r^2)^2 - 4 R^2 (x^2 + y^2)` | 4 |
+
+On one span patch, a rational surface `P = N / w` of degrees `(p, q)` gives `w^k F(N / w)`, which is
+a polynomial of degrees `(kp, kq)`. It is zero everywhere if and only if it is zero on a grid of
+`(kp + 1)(kq + 1)` distinct points. `check` evaluates it exactly on that grid of interior points,
+on every non-empty span patch. The weights must be positive (otherwise `F(P)` and `w^k F(P)` can
+differ in where they are zero), and a span too narrow for distinct doubles is refused (`NarrowSpan`).
+`Verdict` gives the number of samples, the number off, and the worst first-order distance
+`|F| / |grad F|`, with `grad_P = M^-T grad_L`.
+
+The self-tests in `tests/quadric.rs` (10 tests, 0.6 s for the slowest) show the following:
+
+- Exact rational images of every kind are on it. These use weights that are powers of two, and
+  non-orthonormal integer frames. They stay on it after insertion, elevation and splitting.
+- A one-ulp change to one control point or one weight is off.
+- The standard 9-point circle with its weight `cos 45°` rounded is off by about that rounding. This is
+  why the pin's NURBs are never exactly on their kind, and why the difftest compares a distance to a
+  tolerance.
+- Bad inputs are errors.
+
+**The map.** The pin's arcs are of the standard form. A sweep `Δ` is cut into `n` equal arcs: 1 if
+under 91°, 2 if under 181°, 3 if under 271°, and 4 otherwise. Each arc spans one knot interval, with
+end weights 1 and middle weight `cos(h)`, where `h = Δ / 2n`. Within arc `i`, the NURB parameter `s`
+in `[0, 1]` gives the angle
+
+    φ = start + 2ih + h + 2 atan((2s - 1) tan(h / 2))
+
+and the inverse is `s = (1 + tan((φ_local - h) / 2) / tan(h / 2)) / 2`. Straight directions are linear.
+`Param` holds one direction (`Linear` or `Arcs`, with the angles in double-double, so that a full turn
+is exact). `Layout` holds both, with an `Order` of `Same` or `Swapped`. The tests show that the map
+is the arc's own angle to 1e-28 against an independent double-double evaluation, and that it round-trips.
+They also show that the closed-form point satisfies the exact equation to 1e-29.
+
+### The pin against T4
+
+`crates/scx-difftest/tests/diff/pin_quadric.rs` builds 54 analytic surfaces in the pin: 6 planes, 12
+spheres, 12 tori, and 24 cones and cylinders. They cover full and partial sweeps, and every
+combination of `swap_uv` and `inside_out`. For each surface, the test does the following:
+
+- Checks the pin's `to_nurbs` with `check`.
+- Finds the layout. The best fit among the two orders and the four reversals, by NURB points against
+  the closed form, must fit to `1e-13` of the surface's size.
+- At 24 parameters per surface, checks:
+  - the pin's `convert_uv_from_nurbs_to_step` against the closed-form map, to `1e-11` degrees;
+  - the pin's NURB evaluation against the closed-form point;
+  - the kind's own `evaluate_step_point` at the mapped parameter, both to `1e-13` relative.
+
+A NaN counts as a failure everywhere.
+
+Results (MEASURED, optimised build):
+
+| Kind | Worst distance off | Layout fit | Map | NURB point | STEP point | Failures |
+|---|---|---|---|---|---|---|
+| Plane | 1.8e-17 | 4.7e-17 | 1.2e-32° | 6.3e-17 | - | 0 |
+| Sphere | 1.7e-16 | 4.6e-16 | 1.6e-13° | 5.3e-16 | 1.4e-16 | 0 |
+| Torus | 2.3e-16 | 3.3e-16 | 1.8e-13° | 7.7e-16 | 2.3e-16 | 0 |
+| Cone and cylinder | 1.9e-16 | 2.7e-16 | 9.3e-14° | 4.0e-16 | 2.1e-16 | 0 |
+
+No pin defect was found. Every result is within rounding of the truth.
+
+The layout the pin uses (MEASURED, from the fits):
+
+| `swap_uv` | `inside_out` | NURB `(u, v)` against STEP |
+|---|---|---|
+| false | false | the same order, nothing reversed |
+| true | false | swapped |
+| false | true | the same order, `v` (the generator) reversed |
+| true | true | swapped, with the NURB `u` (the generator) reversed |
+
+For planes, the NURB parameters are the STEP parameters. A bounded cylinder's `u` knots are arc
+lengths `r * angle`, not angles: with `r = 2`, the knot at a half turn is one ulp above `2π`. A
+sphere's pole control point is about 1.5 ulp from the pole. Both are rounding, not defects.
+
+Decisions (JUDGED):
+
+- The decision is exact, but the pin is held only to a distance. A NURB with a rounded `cos(h)` cannot
+  be exactly on its kind, so exactness would fail on rounding alone.
+- The layout is found by fitting, not taken from the pin's flags. The test then records which layout
+  each flag combination gives, so a change in the pin's convention shows up as a change in the table,
+  not as a silent pass.
+- The torus is left out of the insertion and elevation test, as its degree-4 grids make it too slow
+  for the 1 s target. Its exact image is still checked.

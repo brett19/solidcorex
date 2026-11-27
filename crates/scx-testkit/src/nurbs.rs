@@ -59,7 +59,7 @@ pub enum Error {
     EmptyDomain,
     /// A control point's weight is zero, or the weight function is zero at the parameter.
     ZeroWeight,
-    /// A knot to insert lies outside the domain.
+    /// A knot to insert lies outside the domain, or a split is not strictly inside it.
     OutsideDomain,
     /// Degree elevation needs end knots of multiplicity `degree + 1`.
     Unclamped,
@@ -659,6 +659,28 @@ impl<const D: usize> Curve<D> {
         Ok(c)
     }
 
+    /// The two pieces of the curve either side of `u`, strictly inside the domain: `u` is
+    /// inserted up to multiplicity `degree`, and each piece takes the knots on its side with
+    /// `degree + 1` copies of `u` at its end, and the control points those knots govern.
+    /// Each piece is the curve exactly on its part of the domain.
+    pub fn split(&self, u: f64) -> Result<(Curve<D>, Curve<D>), Error> {
+        let c = self.insert_knot(u, self.knots.split_plan(u)?)?;
+        let (low, high) = c.knots.halves(u)?;
+        let n = c.points.len();
+        let first = c.points.iter().take(low.count).cloned().collect();
+        let second = c.points.iter().skip(n - high.count).cloned().collect();
+        Ok((
+            Curve {
+                knots: low,
+                points: first,
+            },
+            Curve {
+                knots: high,
+                points: second,
+            },
+        ))
+    }
+
     /// The same curve with its degree raised by `times` (exactly, by blossoms). The end
     /// knots must have multiplicity `degree + 1`.
     pub fn elevate(&self, times: usize) -> Result<Curve<D>, Error> {
@@ -694,6 +716,35 @@ impl Knots {
             return Err(Error::Unclamped);
         }
         self.elevated()
+    }
+
+    /// How many times `u`, strictly inside the domain, is inserted before a split there:
+    /// up to multiplicity `degree`.
+    fn split_plan(&self, u: f64) -> Result<usize, Error> {
+        if !u.is_finite() {
+            return Err(Error::NonFinite);
+        }
+        let (a, b) = self.domain();
+        if u <= a || u >= b {
+            return Err(Error::OutsideDomain);
+        }
+        Ok(self.degree.saturating_sub(self.multiplicity(u)))
+    }
+
+    /// The knots of the two pieces either side of `u`, which has multiplicity `degree` or
+    /// more here: the knots below `u` then `degree + 1` copies of it, and `degree + 1`
+    /// copies then the knots above. Their counts are the knots below and above `u`.
+    fn halves(&self, u: f64) -> Result<(Knots, Knots), Error> {
+        let p = self.degree;
+        let below: Vec<f64> = self.values.iter().copied().filter(|&k| k < u).collect();
+        let above: Vec<f64> = self.values.iter().copied().filter(|&k| k > u).collect();
+        let ends = core::iter::repeat_n(u, p + 1);
+        let low: Vec<f64> = below.iter().copied().chain(ends.clone()).collect();
+        let high: Vec<f64> = ends.chain(above.iter().copied()).collect();
+        Ok((
+            Knots::new(p, &low, below.len())?,
+            Knots::new(p, &high, above.len())?,
+        ))
     }
 }
 
@@ -787,6 +838,50 @@ impl<const D: usize> Surface<D> {
             u: Knots::new(degrees.0, knots_u, nu)?,
             v: Knots::new(degrees.1, knots_v, nv)?,
             points: homogeneous(points, weights)?,
+        })
+    }
+
+    /// The surface whose homogeneous control points are `(weighted[k], weights[k])`, each
+    /// double taken exactly: the form a NURBS library stores (`w P` and `w`), so that the
+    /// reference is the stored surface itself, not one rebuilt from rounded quotients.
+    pub fn from_homogeneous(
+        degrees: (usize, usize),
+        knots_u: &[f64],
+        knots_v: &[f64],
+        weighted: &[[f64; D]],
+        weights: &[f64],
+    ) -> Result<Surface<D>, Error> {
+        if weights.len() != weighted.len() {
+            return Err(Error::WeightCount {
+                expected: weighted.len(),
+                found: weights.len(),
+            });
+        }
+        let points = weighted
+            .iter()
+            .zip(weights)
+            .map(|(p, &w)| {
+                let w = rat(w)?;
+                if w.is_zero() {
+                    return Err(Error::ZeroWeight);
+                }
+                let mut row = p.iter().map(|&x| rat(x)).collect::<Result<Row, _>>()?;
+                row.push(w);
+                Ok(row)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let count = |knots: &[f64], p: usize| knots.len().saturating_sub(p + 1);
+        let (nu, nv) = (count(knots_u, degrees.0), count(knots_v, degrees.1));
+        if nu * nv != points.len() {
+            return Err(Error::KnotCount {
+                expected: points.len(),
+                found: nu * nv,
+            });
+        }
+        Ok(Surface {
+            u: Knots::new(degrees.0, knots_u, nu)?,
+            v: Knots::new(degrees.1, knots_v, nv)?,
+            points,
         })
     }
 
@@ -953,95 +1048,140 @@ impl<const D: usize> Surface<D> {
             .ok_or(Error::EmptyDomain)
     }
 
-    /// The columns (fixed `j`, along `u`) or rows (fixed `i`, along `v`).
-    fn lines(&self, along_u: bool) -> Vec<Vec<Row>> {
+    /// The knots along a direction.
+    fn knots_along(&self, along: Along) -> &Knots {
+        match along {
+            Along::U => &self.u,
+            Along::V => &self.v,
+        }
+    }
+
+    /// The lines of control points along a direction: the columns (fixed `j`) along `u`,
+    /// the rows (fixed `i`) along `v`.
+    fn lines(&self, along: Along) -> Vec<Vec<Row>> {
         let (nu, nv) = self.counts();
-        if along_u {
-            (0..nv)
+        match along {
+            Along::U => (0..nv)
                 .map(|j| {
                     (0..nu)
                         .filter_map(|i| self.points.get(i * nv + j).cloned())
                         .collect()
                 })
-                .collect()
-        } else {
-            (0..nu).map(|i| self.row(i, 0, nv)).collect()
+                .collect(),
+            Along::V => (0..nu).map(|i| self.row(i, 0, nv)).collect(),
         }
     }
 
-    fn from_lines(u: Knots, v: Knots, lines: &[Vec<Row>], along_u: bool) -> Surface<D> {
-        let points = if along_u {
-            (0..u.count)
-                .flat_map(|i| {
-                    lines
-                        .iter()
-                        .map(move |c| c.get(i).cloned().unwrap_or_default())
-                })
-                .collect()
-        } else {
-            lines.concat()
-        };
-        Surface { u, v, points }
+    /// The surface with the knots along `along` replaced by `knots` and each line along it
+    /// by `f` of it.
+    fn with_lines(
+        &self,
+        along: Along,
+        knots: Knots,
+        f: impl Fn(&[Row]) -> Option<Vec<Row>>,
+    ) -> Result<Surface<D>, Error> {
+        let lines = self
+            .lines(along)
+            .iter()
+            .map(|line| f(line))
+            .collect::<Option<Vec<_>>>()
+            .ok_or(Error::EmptyDomain)?;
+        Ok(match along {
+            Along::U => {
+                let points = (0..knots.count)
+                    .flat_map(|i| {
+                        lines
+                            .iter()
+                            .map(move |c| c.get(i).cloned().unwrap_or_default())
+                    })
+                    .collect();
+                Surface {
+                    u: knots,
+                    v: self.v.clone(),
+                    points,
+                }
+            }
+            Along::V => Surface {
+                u: self.u.clone(),
+                v: knots,
+                points: lines.concat(),
+            },
+        })
     }
 
     /// The same surface with `u` inserted `times` times along `u`.
     pub fn insert_knot_u(&self, u: f64, times: usize) -> Result<Surface<D>, Error> {
-        self.insert(u, times, true)
+        self.insert(u, times, Along::U)
     }
 
     /// The same surface with `v` inserted `times` times along `v`.
     pub fn insert_knot_v(&self, v: f64, times: usize) -> Result<Surface<D>, Error> {
-        self.insert(v, times, false)
+        self.insert(v, times, Along::V)
     }
 
-    fn insert(&self, t: f64, times: usize, along_u: bool) -> Result<Surface<D>, Error> {
+    fn insert(&self, t: f64, times: usize, along: Along) -> Result<Surface<D>, Error> {
         let mut s = self.clone();
         for _ in 0..times {
-            let dir = if along_u { &s.u } else { &s.v };
+            let dir = s.knots_along(along);
             let (knots, l) = dir.insert_plan(t)?;
             let tr = rat(t)?;
-            let lines = s
-                .lines(along_u)
-                .iter()
-                .map(|line| insert_line(&dir.exact, dir.degree, l, &tr, line))
-                .collect::<Option<Vec<_>>>()
-                .ok_or(Error::EmptyDomain)?;
-            s = if along_u {
-                Surface::from_lines(knots, s.v.clone(), &lines, true)
-            } else {
-                Surface::from_lines(s.u.clone(), knots, &lines, false)
-            };
+            s = s.with_lines(along, knots, |line| {
+                insert_line(&dir.exact, dir.degree, l, &tr, line)
+            })?;
         }
         Ok(s)
     }
 
     /// The same surface with the degree along `u` raised by `times`.
     pub fn elevate_u(&self, times: usize) -> Result<Surface<D>, Error> {
-        self.elevate(times, true)
+        self.elevate(times, Along::U)
     }
 
     /// The same surface with the degree along `v` raised by `times`.
     pub fn elevate_v(&self, times: usize) -> Result<Surface<D>, Error> {
-        self.elevate(times, false)
+        self.elevate(times, Along::V)
     }
 
-    fn elevate(&self, times: usize, along_u: bool) -> Result<Surface<D>, Error> {
+    fn elevate(&self, times: usize, along: Along) -> Result<Surface<D>, Error> {
         let mut s = self.clone();
         for _ in 0..times {
-            let dir = if along_u { &s.u } else { &s.v };
+            let dir = s.knots_along(along);
             let knots = dir.elevate_plan()?;
-            let lines = s
-                .lines(along_u)
-                .iter()
-                .map(|line| elevate_line(dir, &knots, line))
-                .collect::<Option<Vec<_>>>()
-                .ok_or(Error::EmptyDomain)?;
-            s = if along_u {
-                Surface::from_lines(knots, s.v.clone(), &lines, true)
-            } else {
-                Surface::from_lines(s.u.clone(), knots, &lines, false)
-            };
+            s = s.with_lines(along, knots.clone(), |line| elevate_line(dir, &knots, line))?;
         }
         Ok(s)
     }
+
+    /// The two halves of the surface either side of `u` (strictly inside the domain along
+    /// `u`): the pieces below and above it, each with end knots of multiplicity
+    /// `degree + 1` at `u` (see [`Curve::split`]).
+    pub fn split_u(&self, u: f64) -> Result<(Surface<D>, Surface<D>), Error> {
+        self.split(u, Along::U)
+    }
+
+    /// The two halves of the surface either side of `v` along `v`.
+    pub fn split_v(&self, v: f64) -> Result<(Surface<D>, Surface<D>), Error> {
+        self.split(v, Along::V)
+    }
+
+    fn split(&self, t: f64, along: Along) -> Result<(Surface<D>, Surface<D>), Error> {
+        let s = self.insert(t, self.knots_along(along).split_plan(t)?, along)?;
+        let dir = s.knots_along(along);
+        let (low, high) = dir.halves(t)?;
+        let (n, below, above) = (dir.count, low.count, high.count);
+        let first = s.with_lines(along, low, |line| {
+            Some(line.iter().take(below).cloned().collect())
+        })?;
+        let second = s.with_lines(along, high, |line| {
+            Some(line.iter().skip(n - above).cloned().collect())
+        })?;
+        Ok((first, second))
+    }
+}
+
+/// A direction of a surface's parameters.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Along {
+    U,
+    V,
 }
