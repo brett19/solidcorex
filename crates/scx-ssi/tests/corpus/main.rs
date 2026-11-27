@@ -332,8 +332,8 @@ fn two_spheres_are_judged_by_the_closed_form_truth() {
             let t = core::f64::consts::TAU * f64::from(i) / f64::from(n);
             format!(
                 "[0.5,{},{}]",
-                0.75f64.sqrt() * t.cos(),
-                0.75f64.sqrt() * t.sin()
+                0.75f64.sqrt() * scx_num::fmath::cos(t),
+                0.75f64.sqrt() * scx_num::fmath::sin(t)
             )
         })
         .collect();
