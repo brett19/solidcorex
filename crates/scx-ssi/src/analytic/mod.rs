@@ -5,7 +5,8 @@
 //! # The answer
 //!
 //! [`Intersection`] is where two surfaces meet within their extents: [`Intersection::Empty`],
-//! [`Intersection::Coincident`] (two planes, one surface over the overlap), or
+//! [`Intersection::Coincident`] (one surface, over the pieces of the patches' overlap, each a
+//! polygon in both surfaces' uv), or
 //! [`Intersection::Pieces`], the curves and isolated points. Each [`IntersectionCurve`] is one
 //! connected piece: an exact [`Curve`] kind (a line, a circle, an ellipse, a parabola or a
 //! hyperbola's branch) and the span of its parameter inside both extents. A curve runs along `n_a x n_b`, the first surface's
@@ -37,8 +38,14 @@
 //! the tolerance of it along the surface, a plane nearly along a cylinder's axis gives its
 //! lines when they lie within the tolerance of the true ellipse over the extent's height,
 //! a cone's near-parabolic ellipse or hyperbola is a parabola when it lies within the
-//! tolerance of it over the extent's height, and two lines or circles within the tolerance
-//! of each other are one tangent curve.
+//! tolerance of it over the extent's height.
+//!
+//! One rule decides tangency, here and in the coaxial sections: two crossings whose surfaces
+//! part by no more than the tolerance between them (a cap, a lens or a strip no deeper than
+//! it) are one tangent piece at the deepest point; a miss within the tolerance is the same
+//! touch. A sphere's cap, a cylinder's strip between two lines, a torus's tube top, a
+//! cone's thin sector between two generators and two meridians' lens are each measured by
+//! that depth, not by the width between the crossings.
 //!
 //! Each curve is clipped to both extents: every side of an extent is a linear function of
 //! the point (a plane's side, a revolution's half-plane at an angle, a height, a latitude's
@@ -70,9 +77,15 @@
 //! else (the heights' overlap, a meridian's slack) widens the tolerance by that offset, so
 //! an `Empty` is only answered where every point is apart by more. The circles are clipped
 //! to both extents like the plane sections'.
+//!
+//! Coincident patches give their overlap's pieces, rectangles of both surfaces' uv split at
+//! either one's seam. Two spheres one within the tolerance whose axes differ by more are
+//! [`Closed::General`]: the overlap of their latitude and longitude patches is no rectangle
+//! of either's uv.
 
 mod clip;
 mod coaxial;
+mod overlap;
 mod section;
 
 use section::Order;
@@ -81,6 +94,7 @@ use scx_curve::Curve;
 use scx_num::extent1d::Extent1d;
 use scx_num::extent2d::Extent2d;
 use scx_num::units::{Accuracy, Length, Resolution, coincident};
+use scx_num::vector2d::Point2;
 use scx_num::vector3d::Point3;
 use scx_surface::{Closed, Plane, Surface};
 
@@ -114,6 +128,19 @@ pub struct IntersectionPoint {
     pub contact: Contact,
 }
 
+/// One piece of two coincident patches' overlap: the same region on both, a convex polygon
+/// in each surface's uv (research 63 D13), vertex for vertex (`on_a[i]` and `on_b[i]` are
+/// one point within the tolerance; the second's turn may run the other way). A plane's
+/// piece has up to eight vertices; a surface of revolution's is a rectangle of its uv. A
+/// piece of no width is where the patches only touch, within the tolerance.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Overlap {
+    /// The polygon in the first surface's uv, inside its extent.
+    pub on_a: Vec<Point2>,
+    /// The same polygon in the second surface's uv, inside its extent.
+    pub on_b: Vec<Point2>,
+}
+
 /// Where two surfaces meet within their extents.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -125,15 +152,10 @@ pub enum Intersection {
         /// The isolated points.
         points: Vec<IntersectionPoint>,
     },
-    /// The surfaces are one surface, within the tolerance, over the overlap of these
-    /// extents (on the first surface and on the second): two planes, two concentric spheres
-    /// of one radius, or two surfaces of revolution on one axis with one meridian.
-    Coincident {
-        /// The first surface's extent.
-        on_a: Extent2d,
-        /// The second surface's extent.
-        on_b: Extent2d,
-    },
+    /// The surfaces are one surface, within the tolerance, over these pieces of their
+    /// extents' overlap (at least one; module docs): two planes, two concentric spheres of
+    /// one radius, or two surfaces of revolution on one axis with one meridian.
+    Coincident(Vec<Overlap>),
     /// Nowhere within the extents. Final: no other algorithm is asked.
     Empty,
 }
@@ -152,10 +174,15 @@ impl Intersection {
     /// are built for the order asked, so nothing else changes here.
     fn swapped(self) -> Self {
         match self {
-            Self::Coincident { on_a, on_b } => Self::Coincident {
-                on_a: on_b,
-                on_b: on_a,
-            },
+            Self::Coincident(pieces) => Self::Coincident(
+                pieces
+                    .into_iter()
+                    .map(|o| Overlap {
+                        on_a: o.on_b,
+                        on_b: o.on_a,
+                    })
+                    .collect(),
+            ),
             other => other,
         }
     }
