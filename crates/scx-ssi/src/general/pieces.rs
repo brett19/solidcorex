@@ -23,8 +23,11 @@
 //! larger than the resolution, or cannot be split in `f64`, is [`SsiError::Unresolved`] where
 //! it lies, which is the one place where the resolution enters as a size.
 //!
-//! The field-sign proof (73 §4.3, item 3) needs the implicit forms of row `SM6a` and is its
-//! proof, not this one's; for a plane side the slab is that proof.
+//! 3. **Field sign** (73 §4.3, item 3, row SM6a): where a side has an implicit form `f`, the
+//!    polynomial `g = f(x)` over the other piece's rational Bernstein form, past the bound
+//!    `|grad f|` times the coincidence (and the forms' rounding), has one strict sign: no
+//!    point of that piece is within the coincidence of the side's surface
+//!    ([`field::apart`](super::field::apart)).
 
 use scx_algo::box_tree::BoxTree;
 use scx_num::budget::{Budget, Stop};
@@ -37,6 +40,8 @@ use scx_nurbs::Approach;
 use scx_nurbs_surface::ParamAxis;
 use scx_surface::{Hulls, Surface};
 
+use super::field;
+use super::implicit::Implicit;
 use crate::error::SsiError;
 
 /// One piece of a surface: a uv rectangle on one Bézier cell (or a part of one) and the
@@ -124,6 +129,8 @@ pub struct Candidates<'s> {
     tol: f64,
     /// The resolution, in mm: pieces no larger are not halved.
     floor: f64,
+    /// The implicit form of each surface, when it is an analytic kind.
+    forms: [Option<Implicit>; 2],
     /// The pairs the proofs of the cells left, in order.
     pairs: Vec<PiecePair>,
 }
@@ -157,6 +164,7 @@ impl<'s> Candidates<'s> {
             hulls: [a.hulls(), b.hulls()],
             tol,
             floor: res.zone().mm(),
+            forms: [Implicit::of(a), Implicit::of(b)],
             pairs: Vec::new(),
         };
         let (Some(pa), Some(pb)) = (out.cells(0, ae), out.cells(1, be)) else {
@@ -256,7 +264,21 @@ impl<'s> Candidates<'s> {
                 }
             }
         }
+        for (f, form) in self.forms.iter().enumerate() {
+            let (Some(form), Some(s)) = (form, self.surfaces.get(1 - f)) else {
+                continue;
+            };
+            let piece = if f == 0 { &pair.b } else { &pair.a };
+            if field::apart(form, s, &piece.uv, &piece.bbox, self.tol) {
+                return None;
+            }
+        }
         Some(best.map_or((pair.next, None), |(_, w, n)| (w, Some(n))))
+    }
+
+    /// The resolution, in mm: pieces no larger are not halved.
+    pub(crate) const fn floor(&self) -> f64 {
+        self.floor
     }
 
     /// A certified range of surface `side` over `p` along `dir`: the Bézier hull of its
@@ -454,7 +476,7 @@ fn box_tolerance(tol: f64, reach: f64) -> f64 {
 
 /// Whether two boxes are apart by more than `tol` on some axis, by interval subtraction
 /// (the difference rounded down, compared with `tol`).
-fn boxes_apart(a: &Extent3d, b: &Extent3d, tol: f64) -> bool {
+pub(crate) fn boxes_apart(a: &Extent3d, b: &Extent3d, tol: f64) -> bool {
     let gap = |lo: f64, hi: f64| (Ivl::from(lo) - Ivl::from(hi)).lo > tol;
     gap(a.x_min(), b.x_max())
         || gap(a.y_min(), b.y_max())

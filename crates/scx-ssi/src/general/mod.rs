@@ -40,6 +40,9 @@
 //!   `fmath` functions. Each pair's answer depends only on the pair, so the output is
 //!   bit-identical across runs and platforms.
 
+mod field;
+mod implicit;
+mod net;
 mod pieces;
 mod traced;
 
@@ -81,6 +84,9 @@ pub fn intersect(
     stop: &Stop,
 ) -> Result<Traced, SsiError> {
     let found = Candidates::new(a, ae, b, be, acc, res, budget, stop)?;
+    if let Some(t) = field::trace(&found, [a, b], [ae, be], found.floor(), budget, stop)? {
+        return Ok(t);
+    }
     for &pair in found.pairs() {
         if let Some(open) = found.settle(pair, FRONT, budget, stop)? {
             return Err(open.unresolved());
