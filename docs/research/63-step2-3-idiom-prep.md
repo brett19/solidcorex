@@ -6464,6 +6464,199 @@ pub fn read_text(s: &str, doc: &Document, limits: Limits) -> Result<Brep, ReadEr
    bytes)? Both keep the bits.
 3. Should the primitives be public under semver now, or crate-private until an app asks for them?
 
+### 7.7 RE2 as built (11-27)
+
+Decided by analysis and an adversarial pass. Proposed for review; not yet ruled.
+
+**What was built.** `crates/scx-record/src/geom.rs` holds the geometry records. Each curve and
+surface kind a body holds is written once through `Sink` and read once through `Source`, so the
+binary and the text come from one field order. The crate now also depends on `scx-curve`,
+`scx-nurbs`, `scx-nurbs-surface` and `scx-surface`. All of them are below layer 6.
+
+```rust
+pub trait Record: Sized {                  // a nested record: no magic, no version
+    fn put<S: Sink>(&self, w: &mut S) -> Result<(), WriteError>;
+    fn take<R: Source>(r: &mut R) -> Result<Self, ReadError>;
+}
+// impl Record for Frame, Frame2, NurbsCurve<D>, NurbsSurface<D>, Curve, Curve2, Surface
+
+pub enum ReadCause { /* RE1's, and: */
+    Frame(FrameError),                     // "bad_frame"
+    Curve(Box<CurveError>),                // "bad_curve", source() is the constructor's error
+    Surface(Box<SurfaceError>),            // "bad_surface"
+    NonCanonical { record: &'static str }, // a second spelling of a value (Refused)
+}
+pub enum WriteCause { /* RE1's, and: */
+    MixedRational { record: &'static str }, // Defect: no constructor or edit builds one
+    NoRecord { record: &'static str },      // Unsupported: a kind added later with no record yet
+}
+```
+
+The kind tags are crate-private `tags!` enums with dense codes. They are `CurveKind` (line,
+circle, ellipse, parabola, hyperbola, nurbs), `Curve2Kind` (the same, then angle_line and
+angle_wave) and `SurfaceKind` (plane, cylinder, cone, sphere, torus, nurbs). Small tags cover the
+sense, the angle axis, the sweep (turn or half) and the NURBS form.
+
+**The records.** A record stores what the type's constructor takes, and nothing derived.
+
+| Kind | Fields, in order |
+|---|---|
+| `Frame` | origin, x, z (9 `f64`); y is `z × x` |
+| `Frame2` | origin, x (4 `f64`) |
+| Line | origin, direction |
+| Circle, Parabola | frame, radius or focal length, sense |
+| Ellipse, Hyperbola | frame, the two semi-axes, sense |
+| Cylinder, Sphere | frame, radius, sense |
+| Cone | frame, radius at the origin, half-angle, sense; the slope is computed |
+| Torus | frame, major, minor, sense |
+| Plane | frame |
+| AngleLine (2D) | sweep (`turn` and its period, or `half`), axis, start, sense, other, rate |
+| AngleWave (2D) | sweep, start, sense, mean, cos and sin amplitudes |
+| NURBS curve | degree, knots, form, points, then weights if rational |
+| NURBS surface | the u degree and knots, the v degree and knots, form, the net row by row, then weights |
+
+- The point count is not stored. For a curve it is `knots.len() - degree - 1`. For a surface the
+  net is that count in u by that count in v.
+- A decoded value goes back through its type's checked constructor. That is `Circle::new`,
+  `KnotVector::new` then `NurbsCurve::new` or `from_homogeneous`, and so on. If the constructor
+  refuses, its cause is boxed and framed: `ReadCause::Curve` or `ReadCause::Surface`, at the
+  offset just after the kind tag.
+
+The tests cover every kind in both encodings. They use seeded values from the constructors and
+from the edits: rotations, translations, mirrors, reversals, knot insertion, splits, degree
+elevation and surface swaps.
+- Every value round-trips to the bit. Equality is checked with `PartialEq` and with the `Debug`
+  text, so `-0` and `0` differ.
+- Binary → text → binary gives equal bytes.
+
+**Decisions.**
+
+1. **Frames are read back with a new `Frame::from_axes`, not `Frame::new`.**
+   - Measured: `Frame::new(o, z, x)` on a frame's own axes changes 152,106 of 200,000 frames by
+     an ulp or more, because it normalizes again. `Frame2::new` changes 59,443.
+   - `from_axes` takes the axes as they are if `|a · a - 1|` and `|x · z|` are within
+     `AXIS_TOLERANCE = 8 ε`. Otherwise it refuses with a typed `FrameError` (`NotFinite`,
+     `NotUnit { axis }` or `NotSquare`).
+   - The frames `new` builds, and those `transformed` builds by normalizing, were measured over
+     200,000 random frames at scales 1e-10 to 1e9. They are at most 2.5 ε from unit and 1 ε from
+     square. `transformed`'s exact path (FU1, §6.12) keeps a scaled image only when it is within
+     8 ε by the same sums, so its tolerance is now this constant. Every frame either path builds
+     passes `from_axes`.
+   - *For:* the record then keeps the bits, and an axis that has been edited off unit is still
+     refused.
+   - *Against:* it is a second public constructor, and the tolerance is a judgement. 8 ε gives
+     3× headroom over what was measured. A frame built some other way, still within that
+     rounding, would be taken, which is harmless.
+
+2. **A rational NURBS value stores the pair it was built from, as a three-way form.**
+   - A value holds both `P` and `w P`. `new` computes `w P = fl(P · w)` and `from_homogeneous`
+     computes `P = fl(w P / w)`, and the two relations differ in the last bit for most values.
+   - The form is written as follows:
+     - `polynomial` when the value has no weights;
+     - `points` when every `w P` is its point times its weight;
+     - otherwise `homogeneous` when every `P` is its `w P` over its weight;
+     - otherwise the write refuses with `MixedRational`.
+   - For this to hold, the curve edits `reversed`, `swapped` and `curve(i)` keep the value's
+     relation. Surface `transformed` gives products. Knot insertion, splits and elevation go
+     through `from_homogeneous`.
+   - On read, a `homogeneous` record whose value would also pass the `points` test is refused as
+     `NonCanonical`. So each value has one spelling, and `encode(decode(x)) == x`.
+   - *For:* it is exact for both constructors, with no second rounding.
+   - *Against:* there is a third form to know. It was considered storing both `P` and `w P`. That
+     is canonical only if the reader checks that one relation holds, it costs D more numbers per
+     point, and it would let a record carry a pair no constructor builds.
+
+3. **`Arcs::try_turn(period)` is added in `scx-curve`.**
+   - It refuses a non-finite period (`NotFinite(Part::Period)`) and one at most `EFF_ZERO`
+     (`Degenerate::Period`).
+   - `Arcs::turn` stays `const` and unchecked for its const callers. The reader must not build an
+     unchecked value.
+
+4. **`ReadError` and `ReadCause` lose `Eq` and `const fn kind`.**
+   - The boxed `CurveError` and `SurfaceError` carry `f64`s, and their `kind()` is not const.
+   - `PartialEq` and `Clone` stay, and `size_of::<ReadError>() <= 32` still holds because the
+     causes are boxed.
+
+5. **Dense tag codes.** §7.6's sketch had `Nurbs = 9`. Codes are per record, so no gap is
+   needed. A kind added later takes the next code, and until then the writer refuses its value
+   with `NoRecord`, since the enums are `non_exhaustive`.
+
+6. **The causes are framed with their own names.** The names are `bad_frame`, `bad_curve` and
+   `bad_surface`. The inner name and kind come through `source()` and `kind()`. This matches the
+   context frames in `scx-surface` and `scx-nurbs-surface`.
+
+**The pin's records, and where we differ.**
+
+| | SMLib database | `solidcore-record` | Ours |
+|---|---|---|---|
+| Curve and surface kinds | to version 32, all as B-splines; after it, a type code with the kind's own fields *and* the B-spline again | serde JSON, plus a binary form | the kind's own fields only |
+| Parabola, conic, iso and projected curves | no writer | — | every kind a body holds |
+| Frame | — | origin, `x_axis`, `y_axis` | origin, x, z (y derived); read back without normalizing again |
+| Line | — | start, end | origin, direction (what `Line::new` takes; start and end would round the direction) |
+| Rational | homogeneous | `RationalSpline`, homogeneous only | the pair the value was built from (decision 2) |
+| pcurves | — | always NURBS | every `Curve2` kind, angle lines and waves included |
+| Sense | — | none (a mirror is a flipped frame) | stored |
+| Cone | — | frame, `radius_at_origin`, `half_angle` | the same, plus sense |
+| Numbers | ASCII `%.16f`, which loses bits and writes `inf` and `nan` | the binary refuses non-finite values | both encodings keep the bits and refuse non-finite values |
+
+Why we differ:
+- Storing the B-spline next to the exact kind (SMLib) leaves two truths to keep in step.
+- A homogeneous-only form cannot keep a value built by `new` to the bit.
+- Start and end points (`solidcore-record`'s line) do not give back `Line::new`'s direction.
+
+**Tests** (`tests/geometry.rs`, 14; nothing removed):
+- Round trips to the bit:
+  - about 8,000 frames (built, mapped, half-turned, and 2D);
+  - every `Curve`, `Curve2` and `Surface` kind, each with at least 20 values;
+  - rational curves in both forms (more than 100 of each), and edited rational surfaces.
+- The corruption sweep, two values of each kind:
+  - every truncation is refused inside the input;
+  - every single-byte change gives a value or a `ReadError`, never a panic;
+  - each value that decodes re-encodes to its input.
+- Refusals with the constructor's own cause, in both encodings (each a single changed number):
+  - a zero radius is `Curve(Degenerate::Radius { radius: 0 })`, and a negative sphere radius is
+    `Surface(..)`;
+  - a non-unit axis is `Frame(NotUnit { axis: X })`, and non-square axes are
+    `Frame(NotSquare)`;
+  - decreasing knots are `Curve(Nurbs(KnotsDecrease))`;
+  - a weight of 0 or less is `Curve(Nurbs(Weight { index: 1, .. }))`, and on a surface
+    `Surface(Nurbs(BadWeights(NotPositive { row: 1, col: 0 })))`;
+  - a period of 0 or less is `Curve(Degenerate::Period)`.
+- A homogeneous second spelling is `NonCanonical`.
+- `scx-num` gains two frame tests: `from_axes` gives built frames back to the bit, and refuses
+  axes off by more than rounding. `scx-curve` gains one `try_turn` test.
+
+**Measured** (one core, release, each over 200 passes of the seeded samples; it includes
+creating the writer; local evidence, not committed):
+
+| Kind | Binary size | Binary write | Binary read | Text size | Text write | Text read |
+|---|---:|---:|---:|---:|---:|---:|
+| Line | 49 B | 102 ns | 36 ns | 118 B | 0.49 µs | 0.54 µs |
+| Circle | 82 B | 106 ns | 46 ns | 209 B | 0.76 µs | 0.87 µs |
+| Ellipse, hyperbola | 90 B | 109 ns | 53 ns | 229 B | 0.81 µs | 0.95 µs |
+| NURBS curve (about 28 numbers) | 234 B | 170 ns | 193 ns | 453 B | 1.7 µs | 2.1 µs |
+| 2D line, circle, angle line, angle wave | 31–42 B | 83–95 ns | 25–33 ns | 81–110 B | 0.36–0.41 µs | 0.36–0.46 µs |
+| 2D NURBS | 198 B | 164 ns | 211 ns | 368 B | 1.6 µs | 2.1 µs |
+| Plane | 73 B | 102 ns | 44 ns | 181 B | 0.74 µs | 0.85 µs |
+| Cylinder, sphere, torus | 82–90 B | 109–125 ns | 55 ns | 208–226 B | 0.80–0.91 µs | 0.93–1.06 µs |
+| Cone | 90 B | 130 ns | 80 ns (`tan`) | 226 B | 0.93 µs | 1.07 µs |
+| NURBS surface (about 135 numbers) | 1,097 B | 439 ns | 648 ns | 2,481 B | 9.2 µs | 11.7 µs |
+
+- A decode costs the RE1 primitives plus the constructor's checks. `from_axes` costs three dot
+  products.
+- Nothing existing got slower. `Frame::new`, `Arcs::turn` and the constructors are unchanged; the
+  new functions are separate and are called only by the reader.
+
+**Open questions.**
+
+1. Is a mixed rational value truly unreachable? Every edit in the crates today keeps one
+   relation (decision 2), but nothing in the types enforces it. A future edit that mixes them
+   would find out at write time (`MixedRational`, a Defect). The alternative is a stored form
+   flag on the NURBS types.
+2. Should `Record` stay public, or become crate-private until RE3 needs it from outside?
+3. Is `AXIS_TOLERANCE = 8 ε` right? It is also open whether a frame that is only nearly unit
+   should be taken, or refused so that it can be renormalized by the caller.
+
 ## 8. Prerequisites outside the six crates
 
 - **P0. Finite extents in `scx-num`** (D1 revised; ahead of RE1, BR1, CU1 and SU1). [Ruled 11-27:

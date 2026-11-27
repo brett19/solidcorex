@@ -8,10 +8,13 @@
 
 use core::fmt;
 
+use scx_curve::CurveError;
 use scx_num::error::ErrorKind;
+use scx_num::frame::FrameError;
+use scx_surface::SurfaceError;
 
 /// Bytes or text that did not read: where, and why.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ReadError {
     /// The byte offset into the input where the failing field starts (for text, the offset
     /// of the token or separator that failed; for a truncation, where more was needed).
@@ -29,13 +32,13 @@ impl ReadError {
 
     /// What the caller does next: the cause's kind.
     #[must_use]
-    pub const fn kind(&self) -> ErrorKind {
+    pub fn kind(&self) -> ErrorKind {
         self.cause.kind()
     }
 
     /// The cause's stable name.
     #[must_use]
-    pub const fn name(&self) -> &'static str {
+    pub fn name(&self) -> &'static str {
         self.cause.name()
     }
 }
@@ -53,7 +56,13 @@ impl std::error::Error for ReadError {
 }
 
 /// Why a record did not read. Each cause has its own kind (63 X13).
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// A geometry record is rebuilt by its type's own checked constructor, and a value that
+/// constructor refuses is the constructor's cause, framed: [`ReadCause::Frame`],
+/// [`ReadCause::Curve`], [`ReadCause::Surface`], whose kind is the cause's and whose
+/// `source()` is it. The curve and surface causes are boxed, so a [`ReadError`] stays at
+/// 32 bytes.
+#[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum ReadCause {
     /// The input ends inside a field, or a list or table claims more entries than the input
@@ -104,12 +113,30 @@ pub enum ReadCause {
         /// The cap.
         limit: u32,
     },
+    /// A frame's axes as read are not a frame ([`Frame::from_axes`]): its cause.
+    ///
+    /// [`Frame::from_axes`]: scx_num::frame::Frame::from_axes
+    Frame(FrameError),
+    /// A curve as read does not build: its constructor's cause (a NURBS curve's as
+    /// [`CurveError::Nurbs`]).
+    Curve(Box<CurveError>),
+    /// A surface as read does not build: its constructor's cause (a NURBS surface's as
+    /// [`SurfaceError::Nurbs`]).
+    Surface(Box<SurfaceError>),
+    /// A value spelled in a form its writer never picks for it: a rational NURBS record in
+    /// the homogeneous form whose homogeneous points are also each point times its weight,
+    /// rounded, which the writer spells by its points. [`ErrorKind::Refused`]: each value has
+    /// one spelling.
+    NonCanonical {
+        /// The record ([`Tag::RECORD`](crate::Tag::RECORD) of its kind).
+        record: &'static str,
+    },
 }
 
 impl ReadCause {
     /// What the caller does next.
     #[must_use]
-    pub const fn kind(&self) -> ErrorKind {
+    pub fn kind(&self) -> ErrorKind {
         match self {
             Self::Truncated
             | Self::Trailing
@@ -117,7 +144,11 @@ impl ReadCause {
             | Self::BadTag { .. }
             | Self::BadToken { .. }
             | Self::NonFinite
-            | Self::BadRun => ErrorKind::Refused,
+            | Self::BadRun
+            | Self::NonCanonical { .. } => ErrorKind::Refused,
+            Self::Frame(e) => e.kind(),
+            Self::Curve(e) => e.kind(),
+            Self::Surface(e) => e.kind(),
             Self::BadVersion { found } => {
                 if *found > crate::FORMAT_VERSION {
                     ErrorKind::Unsupported
@@ -129,7 +160,8 @@ impl ReadCause {
         }
     }
 
-    /// The cause's stable name.
+    /// The cause's stable name. A frame, curve or surface cause is named for the frame;
+    /// its own name is the source's.
     #[must_use]
     pub const fn name(&self) -> &'static str {
         match self {
@@ -142,6 +174,10 @@ impl ReadCause {
             Self::NonFinite => "non_finite",
             Self::BadRun => "bad_run",
             Self::TooMany { .. } => "too_many",
+            Self::Frame(_) => "bad_frame",
+            Self::Curve(_) => "bad_curve",
+            Self::Surface(_) => "bad_surface",
+            Self::NonCanonical { .. } => "non_canonical",
         }
     }
 }
@@ -164,11 +200,26 @@ impl fmt::Display for ReadCause {
             Self::TooMany { count, limit } => {
                 write!(f, "a table claims {count} slots, over the limit of {limit}")
             }
+            Self::Frame(_) => f.write_str("a frame record is no frame"),
+            Self::Curve(_) => f.write_str("a curve record does not build"),
+            Self::Surface(_) => f.write_str("a surface record does not build"),
+            Self::NonCanonical { record } => {
+                write!(f, "a {record} record is not in its canonical form")
+            }
         }
     }
 }
 
-impl std::error::Error for ReadCause {}
+impl std::error::Error for ReadCause {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Frame(e) => Some(e),
+            Self::Curve(e) => Some(&**e),
+            Self::Surface(e) => Some(&**e),
+            _ => None,
+        }
+    }
+}
 
 /// A value that could not be written: where, and why.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -224,6 +275,20 @@ pub enum WriteCause {
         /// The entries.
         len: usize,
     },
+    /// A rational NURBS value whose homogeneous points are neither each point times its
+    /// weight, rounded, nor whose points each homogeneous point over its weight, rounded:
+    /// neither record form rebuilds it to the bit.
+    /// [`ErrorKind::Defect`]: no constructor or edit builds one.
+    MixedRational {
+        /// The record ([`Tag::RECORD`](crate::Tag::RECORD) of its kind).
+        record: &'static str,
+    },
+    /// A variant of a `#[non_exhaustive]` geometry enum this crate has no record for (one
+    /// added after it). [`ErrorKind::Unsupported`].
+    NoRecord {
+        /// The enum ([`Tag::RECORD`](crate::Tag::RECORD) of its kinds).
+        record: &'static str,
+    },
 }
 
 impl WriteCause {
@@ -233,6 +298,8 @@ impl WriteCause {
         match self {
             Self::NonFinite => ErrorKind::Refused,
             Self::TooLong { .. } => ErrorKind::Exhausted,
+            Self::MixedRational { .. } => ErrorKind::Defect,
+            Self::NoRecord { .. } => ErrorKind::Unsupported,
         }
     }
 
@@ -242,6 +309,8 @@ impl WriteCause {
         match self {
             Self::NonFinite => "non_finite",
             Self::TooLong { .. } => "too_long",
+            Self::MixedRational { .. } => "mixed_rational",
+            Self::NoRecord { .. } => "no_record",
         }
     }
 }
@@ -251,6 +320,11 @@ impl fmt::Display for WriteCause {
         match self {
             Self::NonFinite => f.write_str("a number is not finite"),
             Self::TooLong { len } => write!(f, "{len} entries are over the format's u32 count"),
+            Self::MixedRational { record } => write!(
+                f,
+                "a rational {record} keeps neither its points nor its homogeneous points exactly"
+            ),
+            Self::NoRecord { record } => write!(f, "this {record} kind has no record"),
         }
     }
 }
