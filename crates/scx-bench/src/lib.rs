@@ -13,7 +13,8 @@
 //!   result can go unread (its tests check that each bit of each scalar reaches the sum);
 //! - [`Case`]: one batch of each side, every input through `black_box` and every result
 //!   consumed;
-//! - [`pin`]: the pin's `geom/krawczyk.rs`, made public by the build script.
+//! - [`pin`]: the pin's `geom/krawczyk.rs`, made public by the build script;
+//! - [`pin_bern`]: the pin's `bernstein_roots` (`query/tangent_edge.rs`), likewise.
 
 use core::convert::Infallible;
 use core::fmt;
@@ -22,6 +23,8 @@ pub mod case;
 // The cases' setup and evaluators index fixed-size arrays.
 #[allow(clippy::indexing_slicing)]
 pub mod algo;
+#[allow(clippy::indexing_slicing)]
+mod algo_ode;
 #[allow(clippy::indexing_slicing)]
 pub mod num;
 
@@ -132,6 +135,12 @@ impl Consume for u64 {
     }
 }
 
+impl Consume for u32 {
+    fn consume(&self, sum: &mut Checksum) {
+        sum.bits(u64::from(*self));
+    }
+}
+
 impl Consume for usize {
     fn consume(&self, sum: &mut Checksum) {
         sum.bits(*self as u64);
@@ -189,7 +198,9 @@ impl<A: Consume, B: Consume> Consume for (A, B) {
 
 mod scx_impls {
     use super::{Checksum, Consume};
+    use scx_algo::bernstein::Roots as BernRoots;
     use scx_algo::local_solve_nd::{NdReport, Outcome};
+    use scx_algo::ode::{OdeSolution, OdeStep, StepCounts};
     use scx_algo::polynomial::Roots;
     use scx_num::extent1d::Extent1d;
     use scx_num::extent3d::Extent3d;
@@ -262,6 +273,35 @@ mod scx_impls {
             self.iterations.consume(sum);
         }
     }
+
+    impl<const N: usize> Consume for OdeStep<N> {
+        fn consume(&self, sum: &mut Checksum) {
+            self.values.consume(sum);
+            [self.x, self.taken, self.next].consume(sum);
+        }
+    }
+
+    impl Consume for StepCounts {
+        fn consume(&self, sum: &mut Checksum) {
+            [self.good, self.reduced].consume(sum);
+        }
+    }
+
+    /// The values, then the counts: the pin's `([f64; N], StepCounts)` in the same order.
+    impl<const N: usize> Consume for OdeSolution<N> {
+        fn consume(&self, sum: &mut Checksum) {
+            self.values.consume(sum);
+            self.counts.consume(sum);
+        }
+    }
+
+    /// The places, then whether all were isolated: the pin's `(Vec<f64>, bool)`.
+    impl Consume for BernRoots {
+        fn consume(&self, sum: &mut Checksum) {
+            self.places.consume(sum);
+            self.isolated.consume(sum);
+        }
+    }
 }
 
 mod pin_impls {
@@ -273,6 +313,7 @@ mod pin_impls {
     use solidcore::geom::local_solve_nd::NdSolution;
     use solidcore::geom::polynomial::Roots;
     use solidcore::geom::vector3d::Vec3;
+    use solidcore::mass::integrator::{OdeStep, StepCounts};
     use solidcore::math::Transform;
 
     impl Consume for Vec3 {
@@ -322,6 +363,19 @@ mod pin_impls {
         fn consume(&self, sum: &mut Checksum) {
             self.found.consume(sum);
             self.x.consume(sum);
+        }
+    }
+
+    impl Consume for OdeStep {
+        fn consume(&self, sum: &mut Checksum) {
+            self.values.consume(sum);
+            [self.x, self.taken, self.next].consume(sum);
+        }
+    }
+
+    impl Consume for StepCounts {
+        fn consume(&self, sum: &mut Checksum) {
+            [self.good, self.reduced].consume(sum);
         }
     }
 }
@@ -377,6 +431,19 @@ pub mod pin {
     use solidcore::error::Result;
     use solidcore::geom::vector3d::Vec3;
     include!(concat!(env!("OUT_DIR"), "/pin_krawczyk.rs"));
+}
+
+/// The pin's `bernstein_roots` and the helpers it calls (`query/tangent_edge.rs`, where
+/// they are private or `pub(crate)`), made public by the build script.
+#[allow(
+    clippy::all,
+    clippy::pedantic,
+    dead_code,
+    missing_docs,
+    unreachable_pub
+)]
+pub mod pin_bern {
+    include!(concat!(env!("OUT_DIR"), "/pin_bernstein_roots.rs"));
 }
 
 #[cfg(test)]

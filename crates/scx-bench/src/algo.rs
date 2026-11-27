@@ -7,7 +7,8 @@
 //! half from random coefficients); the 1-D local solver on `t^3 + p t - q` (`solve1d`); the
 //! N-D local solver on a circle and a line (`solve_nd`); and, on the same circle and line,
 //! Newton's root (`newton2`) and Krawczyk's test (`krawczyk2`), with Krawczyk's test of
-//! `x^2 - a` (`krawczyk1`) besides.
+//! `x^2 - a` (`krawczyk1`) besides. The integrators' and Bernstein roots' cases are
+//! `algo_ode`'s.
 
 use crate::case::{same, Case};
 use crate::{edges, pin, seeded, NoError, Rng};
@@ -393,5 +394,6 @@ pub fn cases() -> Vec<Case> {
     polynomials(&mut out);
     solvers(&mut out);
     krawczyks(&mut out);
+    crate::algo_ode::cases(&mut out);
     out
 }
