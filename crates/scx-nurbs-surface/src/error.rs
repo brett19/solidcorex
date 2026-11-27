@@ -4,8 +4,8 @@
 //! Errors follow research 62 §10: every cause has a kind computed from it ([`kind`]), a
 //! stable [`name`], and a Display of one frame. All of this crate's causes are the caller's
 //! data, kind `Refused` (63 X13); [`NurbsSurfaceError::BadKnots`] is a context frame over the
-//! `scx-nurbs` error and inherits its kind (62 D11). The workspace's [`ErrorKind`] still has
-//! the classes before 62 (`InvalidInput` for `Refused`) until the error migration lands.
+//! `scx-nurbs` error and inherits its kind (62 D11). The pin's `InvalidInput` is [`ErrorKind`]'s
+//! `Refused`.
 //!
 //! | solidcore at the pin | here |
 //! |---|---|
@@ -114,13 +114,13 @@ pub enum WeightCause {
 }
 
 impl NurbsSurfaceError {
-    /// The error's class: `Refused` under research 62 (the workspace's `InvalidInput` until
-    /// the error migration), or the `scx-nurbs` cause's under [`Self::BadKnots`].
+    /// The error's kind: [`ErrorKind::Refused`] (the net and weights are the caller's), or
+    /// the `scx-nurbs` cause's under [`Self::BadKnots`] (62 D11).
     #[must_use]
     pub const fn kind(&self) -> ErrorKind {
         match self {
             Self::BadKnots { cause, .. } => cause.kind(),
-            Self::BadNet(_) | Self::BadWeights(_) => ErrorKind::InvalidInput,
+            Self::BadNet(_) | Self::BadWeights(_) => ErrorKind::Refused,
         }
     }
 
@@ -295,7 +295,7 @@ mod tests {
         for e in all() {
             let text = e.to_string();
             assert!(!text.is_empty() && !text.contains('\n'), "{text}");
-            assert_eq!(e.kind(), ErrorKind::InvalidInput);
+            assert_eq!(e.kind(), ErrorKind::Refused);
             match e {
                 NurbsSurfaceError::BadKnots { cause, .. } => {
                     assert_eq!(text, "the u knots cannot carry a surface");

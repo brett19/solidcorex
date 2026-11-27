@@ -375,7 +375,6 @@ impl<const D: usize> NurbsCurve<D> {
         if times == 0 {
             return Ok(self.clone());
         }
-        let (low, _) = self.knots.ends();
         let dm = elevation_matrix(p, times)?;
         let plan = Elevation {
             knots: self.knots.knots(),
