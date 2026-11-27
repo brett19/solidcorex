@@ -32,7 +32,7 @@ use scx_num::units::{Length, Resolution};
 use scx_num::vector2d::{Point2, Vec2};
 use scx_num::vector3d::{Point3, Vec3};
 use scx_ssi::analytic::{Intersection, section_by_plane};
-use scx_surface::{Closed, Cone, Cylinder, Plane, Sphere, Surface};
+use scx_surface::{Closed, Cone, Cylinder, Plane, Sphere, Surface, pcurve_of};
 use scx_testkit::bodies::{Kind, generate};
 use scx_testkit::topology::{dog_leg, jumps, passes_pole};
 
@@ -522,27 +522,38 @@ fn refusals_by_cause() {
     let err =
         |d: &Draft, s: &Surface, l: Vec<(EdgeId, Sense)>| d.exact_loops(s, &[l], &doc).unwrap_err();
 
-    // An oblique section of a sphere is a circle with no closed-form pcurve there.
+    // An oblique section of a sphere and one of a cone (SS5 gives an ellipse) have no
+    // closed-form pcurve but one through the surface's chart (73 SM1). Each goes round the
+    // axis, so alone it winds and needs a seam, as a parallel does.
     let tilted = Plane::new(Frame::new(o + z * 0.2, z + x * 0.7, y).unwrap());
     let (c, iv) = section(&sphere, &tilted);
-    let v = vertex(&mut d, c.point(iv.min()));
-    let e = edge(&mut d, c, iv, [v, v]);
-    let got = err(&d, &sphere, vec![(e, FWD)]);
+    let tilted = Plane::new(Frame::new(o + z * 2.0, z + x * 0.3, y).unwrap());
+    let (k, kv) = section(&cone, &tilted);
+    assert!(matches!(k, Curve::Ellipse(_)));
+    for (s, c, iv) in [(&sphere, c, iv), (&cone, k, kv)] {
+        let pc = pcurve_of(&c, s, iv, doc.resolution());
+        assert!(matches!(pc, Ok(Curve2::OnChart(_))), "{pc:?}");
+        let v = vertex(&mut d, c.point(iv.min()));
+        let e = edge(&mut d, c, iv, [v, v]);
+        assert_eq!(
+            err(&d, s, vec![(e, FWD)]),
+            PcurveWriteError::Winds { lp: 0 }
+        );
+    }
+
+    // A NURBS surface has no chart: a circle on a plane given as NURBS needs a fit.
+    let flat = Plane::new(f)
+        .to_nurbs(&Extent2d::from_intervals(span(-2.0, 2.0), span(-2.0, 2.0)))
+        .unwrap();
+    let flat = Surface::Nurbs(flat.into());
+    let ring = Curve::Circle(Circle::new(f, mm(1.0), FWD).unwrap());
+    let v = vertex(&mut d, ring.point(0.0));
+    let e = edge(&mut d, ring, span(0.0, TAU), [v, v]);
+    let got = err(&d, &flat, vec![(e, FWD)]);
     assert_eq!(got, PcurveWriteError::NeedsFit { edge: e });
     assert_eq!(
         (got.kind(), got.name()),
         (ErrorKind::Unsupported, "pcurve_needs_fit")
-    );
-
-    // So is an oblique section of a cone: SS5 gives an ellipse.
-    let tilted = Plane::new(Frame::new(o + z * 2.0, z + x * 0.3, y).unwrap());
-    let (c, iv) = section(&cone, &tilted);
-    assert!(matches!(c, Curve::Ellipse(_)));
-    let v = vertex(&mut d, c.point(iv.min()));
-    let e = edge(&mut d, c, iv, [v, v]);
-    assert_eq!(
-        err(&d, &cone, vec![(e, FWD)]),
-        PcurveWriteError::NeedsFit { edge: e }
     );
 
     // A circle off the sphere is refused, not fitted.

@@ -718,6 +718,184 @@ pairs, 8 rigid motions, every naive vertex and 600 truth samples per comparison)
 default run checks every 16th naive vertex against the same tolerance and 150 truth samples. CI
 runs the ignored sweeps next to the nurbs ones.
 
+## 13. SM1 as built (11-27)
+
+SM1 adds `Curve2::OnChart`, `scx_curve::{Chart, ChartKind, OnChart}` (the 04 R73 ruling: `Chart`
+lives in `scx-curve`), `Surface::chart`, the `pcurve_of` fallback that makes it, its record form,
+and the stage-5 and mass wiring. The two-sphere Boolean is now a result: the imprint's counts and
+`check`, and union, subtract and intersect each pass `scx_check::contract` and match the
+closed-form volume to `1e-9`.
+
+### 13.1 The value: `OnChart { curve, chart, over, reference }`
+
+```rust
+pub struct Chart { /* frame, sense, kind */ }      // Chart::new(frame, sense, kind) -> Result
+pub enum ChartKind { Plane, Cylinder { radius }, Cone, Sphere, Torus { major } }  // non_exhaustive
+pub struct OnChart { /* curve, chart, over, reference */ }
+// OnChart::new(curve, chart, over: Extent1d, reference: [Point2; 2]) -> Result
+// point, jet::<D>, point_over::<T>, jet_over::<T, D>, domain, reversed, restrict, shifted
+```
+
+- **The chart is the surface's own uv** (63 D13), not an angle. Each periodic direction is
+  `Arcs::of_direction`: per quarter (or half) arc, `u = (q + 1/2) L + tau / a` with
+  `tau = b' / (|(a, b)| + a')`, `(a', b')` turned back by the arc's middle. So there is no
+  `atan2` or `asin`: only ring operations and one square root per direction (73 §4.2 expected one
+  `atan2` and one `asin` a point).
+- **Derivatives are Taylor arithmetic through that formula**: the 3-D curve's jet gives the local
+  coordinates' series, a square-root series gives `|(a, b)|`, a series quotient gives `tau`
+  (`Arcs::direction_series`, new). The value and every derivative are the closed form's, in `f64`
+  and in `Ivl` (generic over `Trig`, `TERMS = 16`). An interval box takes every arc it meets, each
+  clipped to its quarter, and joins them.
+- **The uv is only C1 across an arc join.** The NURBS-compatible parameter of a quarter arc is not
+  the angle, so `u''` jumps at each join (on the two-sphere circle, from `-0.234` to `+0.234`).
+  This is the surface's own uv, so it is correct, not a defect; it is why the mass enclosure needed
+  §13.5's split rule.
+- **A point within `NEAR = 4 eps` of a break** takes the arc the curve is moving onto, from the
+  sign of the zero component's first nonzero later coefficient (`Approach` flips odd orders), and
+  the break's exact value. A point exactly on a break whose side cannot be decided joins both.
+- **The cone** needs no size: on the surface `v = z`, and the nappe is the one with `r + k v > 0`,
+  as `Cone::uv_in`; a curve on the other nappe fails the lifting check. **The sphere's `v`** is the
+  half arc at `(rho, z)`, in `[0, 1]`; at an exact pole the value is undefined, which `pcurve_of`
+  never produces (§13.3).
+
+### 13.2 The branch: `over` and a reference line, not `turn: [i32; 2]` (deviation from §4.2)
+
+A turn count at the span's start cannot place a closed curve's lift: its two ends are the same
+point with lifts a period apart, so the branch at `t` needs the span as well. `OnChart` keeps the
+span `over` and a reference line, given by its uv at `over`'s two ends. At `t` each periodic
+coordinate is the principal value plus the whole periods that bring it nearest the line at `t`.
+
+- **The line is centred on the curve.** The maker takes the chord between the curve's lifted ends
+  and moves it to the middle of the band the lifted values span about it, then accepts while the
+  band is under half a period wide. The nearest lift is the curve's own while every value is under
+  half a period from the line; centring leaves a quarter period to spare. Built first with the
+  chord itself (a quarter period either side of it), the accepted set depended on where the span
+  started: a tilted circle whose chord sat off-centre was refused though its band was narrow.
+  Adversarially: the centred line accepts strictly more curves than the chord rule with the same
+  margin, and the band is measured on the same samples as before (§13.3).
+- In intervals the lift is applied to **each arc's value before arcs are joined**. Built first the
+  other way (lift after the join), a box straddling the period break held the whole period, never
+  narrowed, and the two-sphere union's contract failed `SignUndecided`. A test now asserts that the
+  interval width shrinks with the box.
+- `reversed` negates `over` and swaps the reference's ends; `restrict` keeps both (the lift is a
+  property of the maker's span, not of the restricted one); `shifted` moves the reference by whole
+  periods. Both
+  `scx-brep` users of `shifted` (`pcurve`, `draft::transform::aligned`) take the new arm; the
+  transform's uv map still answers `None` for `OnChart` (it rebuilds through `pcurve_of`).
+- **Edges are not split at seams.** 73 §4.2 and the brief expected a split at seams; the lift makes
+  it unnecessary, and the two-sphere edge is one full-circle use crossing the seam in its interior.
+  Poles and apexes still split (`CrossesPole`).
+
+### 13.3 `pcurve_of`: OnChart after the closed forms, never instead of them
+
+`pcurve_of` tries the closed forms first, unchanged (`Line2`, `AngleLine`, `AngleWave`, ...). Only
+where they answered `NoClosedForm` does it call `on_chart`, so pairs that had a closed form pay
+nothing new. `on_chart`:
+
+1. Takes `surface.chart()`; a NURBS surface has none, so it stays `NoClosedForm`.
+2. Off the plane and cylinder, checks the axis at `DENSE = 64` samples. An end within `tol` of the
+   axis returns `None` (so `NoClosedForm`; the uv there is a whole line). An interior approach (a
+   local minimum of `rho` no larger than the chord between its neighbours, refined by golden
+   section, `GOLDEN_STEPS = 120`) within `tol` is `CrossesPole { at }`, so the caller splits there.
+3. Unwraps each periodic coordinate along the samples, halving a step while it turns by an eighth
+   of a period or more (`MAX_HALVINGS = 40`). The start is placed in the surface's window.
+4. Measures, per periodic coordinate, the band of the lifted values about the chord between the
+   lifted ends. A band half a period wide or more is refused (`None`); otherwise the reference line
+   is the chord moved to the band's middle (§13.2). Then it makes the `OnChart` and runs the
+   existing 9-sample lifting check.
+
+Adversarial notes: the pole check and the deviation check are sampled, not certified. A curve that
+dips to the axis between samples, within `tol` and narrower than `1/63` of the span, is missed, and
+its pcurve is then undefined near the dip. This is the same exposure as the 9-sample lifting check
+the closed forms already carry. A certified version (an interval bound of `rho` over each sample
+gap) is an open question below, not done here.
+
+### 13.4 Record form
+
+`Curve2Kind::OnChart = 8` (`"on_chart"`): the 3-D curve, the chart, then `over` and the
+reference as six floats. `Chart` records its tag (`ChartTag`, `"chart"`: plane 0, cylinder 1,
+cone 2, sphere 3, torus 4), frame, sense, and the one size a kind's uv depends on (the
+cylinder's radius, the torus's major radius).
+Reading revalidates through `Chart::new` and `OnChart::new`. The round-trip property test draws
+OnChart as its ninth kind.
+
+### 13.5 Mass and stage 5
+
+- Stage 5 (`scx-boolean`) needed no code change: once `pcurve_of` answers, the two-sphere
+  imprint goes through. Only the tests changed.
+- `scx-mass` `curve_breaks`: an OnChart's own breaks are its 3-D curve's (a NURBS curve's knots).
+  Its arc joins lie on the surface's break lines and are found as crossings, as for the angle
+  kinds.
+- `scx-mass` enclosure, one rule changed. A cell on a `v` break line was always split along `s`.
+  When the line is crossed by the trim itself (the span's end `v(t)` moves across it along `t`),
+  splitting `s` never takes the cell clear: the two-sphere lens sat at 131,072 cells (the cap) with
+  its enclosure 18 wide. Now such a cell splits along whichever of `t` or `s` contributes more to
+  its `v` range. Before OnChart no trim whose `v` varies crossed a `v` join (sphere trims were
+  latitudes and meridians), so this was latent. The lens now settles in 662 cells.
+
+### 13.6 Tests
+
+- `scx-curve` `chart` (8 tests): the value is the surfaces' inverse bit for bit; jets of
+  off-axis curves against the chain rule; the angle kinds' pcurves reproduced; a break takes the
+  side asked for; the lift follows the span past a turn; intervals enclose the `f64` values and
+  narrow with the box; the axis and a pole are undefined; bad data is refused.
+- `scx-surface` `pcurve`: `other_curves_go_through_the_chart` (40 random tilted small circles on
+  spheres: lifting, start in the window, first derivative by the chain rule within `1e-11 r`);
+  `a_curve_through_a_pole_is_split_there` (a circle through the pole: `CrossesPole` within
+  `1e-7`; one ending on it: `NoClosedForm`; one clear of it: `OnChart`).
+- **Changed on purpose**, in `refusals_are_typed`: the ellipse on a cone, the hyperbola on a cone,
+  and the small tilted circle on a sphere were asserted `NoClosedForm` (the hyperbola case also
+  that the message names "hyperbola"). They now assert `Ok(Curve2::OnChart(_))`, because these are
+  exactly the pairs OnChart is for. The refusal and its message are still covered by the NURBS
+  surface case (`NoClosedForm { Line, Nurbs }`, "NURBS surface", `Unsupported`).
+- **Changed on purpose**, in `scx-brep` `refusals_by_cause`: an oblique section of a sphere and an
+  ellipse section of a cone, each alone in a loop, were asserted `NeedsFit` from the exact pcurve
+  writer. `pcurve_of` now gives them `OnChart` (asserted), and the writer reaches the cause that
+  `NeedsFit` hid: each goes round the axis, so alone it winds (`Winds`, as a lone parallel does).
+  `NeedsFit` (`Unsupported`, `pcurve_needs_fit`) is still covered, by a circle on a plane given as
+  a NURBS surface.
+- `scx-record` `geometry`: OnChart in the round-trip pool.
+- `scx-boolean`: `two_spheres_need_a_fitted_pcurve` (proved stage 5 refused
+  `Unsupported(Pcurve)`) is replaced by
+  `two_spheres_cut_each_other_along_a_circle_through_the_chart` (counts `[3]` and `[2]`,
+  `check`), and `two_unit_spheres_a_radius_apart_unite_subtract_and_intersect` is new (contract,
+  and volumes `8 pi/3 - 5 pi/12`, `4 pi/3 - 5 pi/12`, `5 pi/12` to `1e-9`).
+
+### 13.7 Cost
+
+Evaluation, a release build, mean of 2,000,000 parameters across the span (throwaway timer, not
+committed; the main box, 11-27):
+
+| curve on surface | kind | `point` | `jet::<2>` |
+| --- | --- | --- | --- |
+| sphere latitude | `AngleLine` | 29–31 ns | 31 ns |
+| sphere latitude | `OnChart` | 45–47 ns | 59–60 ns |
+| cylinder oblique section | `AngleWave` | 47 ns | 49 ns |
+| cylinder oblique section | `OnChart` | 42 ns | 46 ns |
+| tilted sphere circle | `OnChart` (no other kind) | 45 ns | 59 ns |
+| plane line | `Line2` | 1.5 ns | 1.4 ns |
+| plane line | `OnChart` | 10 ns | 14 ns |
+
+`OnChart` costs about what the angle kinds cost (one square root and a quotient per periodic
+direction, against their own arc parameter) and is never chosen where they apply (§13.3); against
+`Line2` it is 7–10 times dearer, which is why the plane keeps `Line2`. Making one costs the 64
+samples, their unwrapping and the lifting check, only on pairs that had no closed form before.
+
+Mass: the two-sphere lens went from the cell cap (131,072 cells, enclosure 18 wide, `CellCap`) to
+662 cells (`Reached`). Over the scx-mass and scx-boolean suites, 468 enclosures took 401,984 cells
+before the split rule and 401,935 after (49 fewer), counted with a side-channel counter that
+was not committed, before the latest merge of `main`.
+
+### 13.8 Open questions
+
+1. **Inverting a point onto an OnChart pcurve** (`Curve2` inversion) answers `Unsupported`, as for
+   other non-line kinds. Callers that need it go through the 3-D curve.
+2. **`draft::transform`'s uv map** answers `None` for OnChart and rebuilds through `pcurve_of`.
+   A rigid motion that keeps the surface's frame could carry it exactly.
+3. **Certified pole and deviation checks** (§13.3) in place of sampling.
+4. **01 D10's fitter** narrows further: exact curves on analytic faces never need it now. It
+   remains for NURBS faces and STEP export (§10 item 4).
+
 ## 14. SM3 as built (11-27)
 
 SM3 lays down the public API of `scx_ssi::general`, the typed `SsiError` and its plumbing into

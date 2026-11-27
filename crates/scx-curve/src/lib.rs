@@ -13,6 +13,9 @@
 //!   63 §4.11);
 //! - [`AngleWave2`]: the same angle coordinate with a sinusoid in the other, a plane's
 //!   oblique section of a cylinder in that uv (63 §4.14);
+//! - [`OnChart`]: an exact 3-D curve through an analytic surface's closed-form [`Chart`]
+//!   inverse at its own parameter, the exact pcurve of any exact curve on that surface
+//!   (research 73 SM1);
 //! - [`arcs`]: that uv's angle directions, shared with the surfaces (63 D13);
 //! - [`Curve`] and [`Curve2`]: any of these or a NURBS curve, dispatched by `match`, with the batched
 //!   [`Curve::eval_many`];
@@ -37,6 +40,7 @@
 
 mod angle_line;
 pub mod arcs;
+mod chart;
 mod conic;
 mod curve;
 mod edit;
@@ -47,6 +51,7 @@ mod open_conic;
 mod tangent;
 
 pub use angle_line::{AngleAxis, AngleLine2, AngleWave2};
+pub use chart::{Chart, ChartKind, OnChart};
 pub use conic::{Circle, Circle2, Ellipse, Ellipse2};
 pub use curve::{Curve, Curve2};
 pub use edit::ParamShift;
@@ -75,6 +80,8 @@ const _: () = {
     ok::<Curve2>();
     ok::<AngleLine2>();
     ok::<AngleWave2>();
+    ok::<Chart>();
+    ok::<OnChart>();
     ok::<arcs::Arcs>();
     ok::<CurveError>();
     ok::<Foot>();

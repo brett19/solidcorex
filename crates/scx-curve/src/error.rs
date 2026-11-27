@@ -25,6 +25,7 @@
 //! | none: a NURBS curve's inversion runs the general solver | [`Unsupported::NurbsInversion`] |
 //! | new (63 §4.11): an angle line's 2-D inversion | [`Unsupported::AngleLineInversion`] |
 //! | new (63 §4.14): an angle wave's 2-D inversion | [`Unsupported::AngleWaveInversion`] |
+//! | new (73 SM1): a curve on a chart's 2-D inversion | [`Unsupported::OnChartInversion`] |
 //!
 //! `TooLarge` and `Solve` (63 §3.2) join with the first operation that can produce them.
 //! Analytic inversion (CU4) cannot: an outside foot is
@@ -70,6 +71,9 @@ pub enum Unsupported {
     AngleLineInversion,
     /// An angle wave's closest point or inversion, not built, as an angle line's.
     AngleWaveInversion,
+    /// A curve on a chart's closest point or inversion, not built: the 3-D edge's
+    /// inversion answers it.
+    OnChartInversion,
 }
 
 /// A size or direction too small to give a curve. A length's threshold is the pin's
@@ -178,6 +182,7 @@ impl CurveError {
             Self::Unsupported(Unsupported::AngleWaveInversion) => {
                 "unsupported_angle_wave_inversion"
             }
+            Self::Unsupported(Unsupported::OnChartInversion) => "unsupported_on_chart_inversion",
         }
     }
 }
@@ -250,6 +255,9 @@ impl fmt::Display for CurveError {
             }
             Self::Unsupported(Unsupported::AngleWaveInversion) => {
                 f.write_str("an angle wave's inversion is not built")
+            }
+            Self::Unsupported(Unsupported::OnChartInversion) => {
+                f.write_str("a curve on a chart's inversion is not built")
             }
         }
     }

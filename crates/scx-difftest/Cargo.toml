@@ -42,6 +42,8 @@ scx-mass = { path = "../scx-mass" }
 # The contract and the mesh, judged on the constructors (`t_slice`).
 scx-check = { path = "../scx-check" }
 scx-tess = { path = "../scx-tess" }
+# The Boolean, run on the Boolean recipes (`t_slice`).
+scx-boolean = { path = "../scx-boolean" }
 
 [lints]
 workspace = true
