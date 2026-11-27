@@ -12,7 +12,7 @@
 //!
 //! | stage | row | until it lands |
 //! |---|---|---|
-//! | Bézier pieces, `BoxTree::pairs`, pairs dropped only by proof, halving to `Unresolved` | 4 | every pair is [`SsiError::Unresolved`] over the whole of both extents |
+//! | Bézier pieces, `BoxTree::pairs`, pairs dropped only by proof ([`Candidates`]), halving to `Unresolved` | 4 | a pair not proved apart is [`SsiError::Unresolved`] at its first undecided piece pair |
 //! | loop-free pairs (normal cones, Sederberg-Meyers, the critical-point solve), boundary seeds | 5 | |
 //! | the field path when a side has an implicit form; critical cells, valleys, poles | 6a, 6b | |
 //! | the march for NURBS against NURBS, [`SsiError::Stalled`] | 7 | |
@@ -40,13 +40,15 @@
 //!   `fmath` functions. Each pair's answer depends only on the pair, so the output is
 //!   bit-identical across runs and platforms.
 
+mod pieces;
 mod traced;
 
+pub use pieces::{Candidates, Piece, PiecePair};
 pub use traced::{Branch, Certificate, End, Ends, Node, NodeKind, OnSurface, Rim, Touch, Traced};
 
 use scx_num::budget::{Budget, Stop};
 use scx_num::extent2d::Extent2d;
-use scx_num::units::{Accuracy, Length, Resolution};
+use scx_num::units::{Accuracy, Resolution};
 use scx_surface::Surface;
 
 use crate::error::SsiError;
@@ -58,13 +60,16 @@ use crate::error::SsiError;
 /// It answers any pair, the closed-form ones included, but is meant for those the closed
 /// forms answer `General` for: [`crate::intersect`] tries the closed forms first.
 ///
+/// Until rows SM5 to SM8 land the answer is [`Traced::default`], proved (every pair of
+/// pieces is proved apart: [`Candidates`]), or a refusal.
+///
 /// # Errors
 ///
 /// [`SsiError::Unresolved`], [`SsiError::Stalled`], [`SsiError::Singular`] or
 /// [`SsiError::Uncertified`] where the method cannot finish the pair, each naming the
 /// place; [`SsiError::Budget`] when `budget` runs out; [`SsiError::Stopped`] when `stop` is
-/// set. Until row SM4 lands, every pair that the budget and the flag let through is
-/// `Unresolved` over the whole of both extents.
+/// set. Until row SM5 lands, a pair of surfaces whose pieces are not all proved apart is
+/// `Unresolved` where the first piece pair that [`Candidates::settle`] could not clear lies.
 pub fn intersect(
     a: &Surface,
     ae: &Extent2d,
@@ -75,33 +80,20 @@ pub fn intersect(
     budget: &mut Budget,
     stop: &Stop,
 ) -> Result<Traced, SsiError> {
-    // The one pair of pieces (the whole of each extent): charged, then the flag polled.
-    budget.charge(1)?;
-    stop.check()?;
-    let _ = (acc, res);
-    Err(whole_pair(a, ae, b, be))
-}
-
-/// The refusal of a pair left undecided over the whole of both extents: `Unresolved` at
-/// the middle of the overlap of the surfaces' certified boxes (or of their union when they
-/// do not overlap), of that box's longest side. A box that cannot be enclosed (a value not
-/// finite) is an undecided region of unbounded size, named at the middle of the two
-/// extents' middle points.
-fn whole_pair(a: &Surface, ae: &Extent2d, b: &Surface, be: &Extent2d) -> SsiError {
-    if let (Some(xa), Some(xb)) = (a.box_over(*ae), b.box_over(*be)) {
-        let region = xa.intersect(xb).unwrap_or_else(|| xa.union(xb));
-        SsiError::Unresolved {
-            at: region.mid(),
-            size: Length::from_mm(region.max_length()),
-        }
-    } else {
-        let (pa, pb) = (a.point(ae.mid()), b.point(be.mid()));
-        SsiError::Unresolved {
-            at: pa + (pb - pa) * 0.5,
-            size: Length::from_mm(f64::INFINITY),
+    let found = Candidates::new(a, ae, b, be, acc, res, budget, stop)?;
+    for &pair in found.pairs() {
+        if let Some(open) = found.settle(pair, FRONT, budget, stop)? {
+            return Err(open.unresolved());
         }
     }
+    Ok(Traced::default())
 }
+
+/// The widest front of surviving pairs [`intersect`] lets one piece pair's halving keep
+/// before it gives the pair up as undecided: a policy of effort, not a proof (it never
+/// drops a pair). A pair apart by a small margin keeps a front of a few pairs at the nearest
+/// points, and a pair the surfaces cross widens it with every halving.
+const FRONT: usize = 24;
 
 #[cfg(test)]
 mod tests;
