@@ -53,6 +53,7 @@
 //! knots) are not kinds here; reading them is the reader's map, as STEP's is.
 
 mod any_curve;
+mod axial;
 mod chart_check;
 mod closed;
 mod common;
@@ -61,31 +62,44 @@ mod cylinder;
 mod edit;
 mod enclose;
 mod error;
+mod gap;
 mod hull;
 mod intersect;
 mod invert;
+mod meet;
 mod nurbs_invert;
 mod pcurve;
 mod plane;
+mod recognize;
 mod sphere;
 mod surface;
 mod to_nurbs;
 mod torus;
+mod trough;
 
 pub use any_curve::{AnyCurve, CurveOnSurface};
+pub use axial::{AxialError, AxialPiece, Holds, axial_section, holds_axis};
 pub use closed::Closed;
 pub use cone::Cone;
 pub use cylinder::Cylinder;
 pub use edit::UvMap;
+pub use enclose::Along;
 pub use error::{Size, SurfaceError};
+pub use gap::{
+    Aim, Bracket, GapError, Pending, Short, curve_curve_gap, curve_surface_gap, pcurve_edge_gap,
+    point_curve_gap, vertex_curve_gap,
+};
 pub use hull::{Hull, Hulls};
 pub use intersect::{Contact, CurveSurfaceHit, intersect_curve};
 pub use invert::{Closest, Foot, Inversion};
+pub use meet::{Meet, MeetError, points_meet};
 pub use pcurve::{Check, CurveKind, PcurveError, SurfaceKind, pcurve_of};
 pub use plane::Plane;
+pub use recognize::{Recognized, Written, recognize, recognize_written};
 pub use sphere::Sphere;
 pub use surface::Surface;
 pub use torus::Torus;
+pub use trough::{Half, MARGIN, Trough, TroughError, facing_trough};
 
 use scx_num::vector3d::Point3;
 
@@ -111,6 +125,8 @@ const _: () = {
     ok::<Sphere>();
     ok::<Torus>();
     ok::<Surface>();
+    ok::<Recognized>();
+    ok::<Written>();
     ok::<Pole>();
     ok::<CurveSurfaceHit>();
     ok::<UvMap>();

@@ -250,6 +250,58 @@ impl Boundary {
     }
 }
 
+impl Boundary {
+    /// Where the whole of `cell` lies against the region: [`UvSide::Inside`] or
+    /// [`UvSide::Outside`] when no boundary piece reaches it and the winding number shows it,
+    /// [`UvSide::Near`] when a piece may meet it (or it may cross a domain end of a face of
+    /// holes alone); `None` when the enclosures cannot tell.
+    pub(crate) fn side_cell(&self, rec: &FaceRecord, cell: Extent2d) -> Option<UvSide> {
+        let tree = self.tree.as_ref().filter(|_| self.decided)?;
+        let (lo, hi) = (cell.min(), cell.max());
+        if !(lo.x.is_finite() && lo.y.is_finite() && hi.x.is_finite() && hi.y.is_finite()) {
+            return None;
+        }
+        let dom = rec.surface.domain();
+        let mut edge = false;
+        if tree.w_in == 0 {
+            for (d, a, b) in [(dom.u, lo.x, hi.x), (dom.v, lo.y, hi.y)] {
+                if axis_side(d, a) != UvSide::Inside || axis_side(d, b) != UvSide::Inside {
+                    edge = true;
+                }
+            }
+        }
+        let Some(hull) = tree.hull else {
+            return Some(if edge { UvSide::Near } else { UvSide::Inside });
+        };
+        let us = lifts_over(dom.u, lo.x, hi.x, hull.min().x, hull.max().x)?;
+        let vs = lifts_over(dom.v, lo.y, hi.y, hull.min().y, hull.max().y)?;
+        let (hit, miss) = if tree.w_in == 1 {
+            (UvSide::Inside, UvSide::Outside)
+        } else {
+            (UvSide::Outside, UvSide::Inside)
+        };
+        let mut budget = BUDGET;
+        let (mut near, mut unknown) = (false, false);
+        for &u in &us {
+            for &v in &vs {
+                match tree.side_at(rec, (u, v), &mut budget) {
+                    Some(s) if s == hit => return Some(hit),
+                    Some(UvSide::Near) => near = true,
+                    Some(_) => {}
+                    None => unknown = true,
+                }
+            }
+        }
+        if near || edge {
+            Some(UvSide::Near)
+        } else if unknown {
+            None
+        } else {
+            Some(miss)
+        }
+    }
+}
+
 impl Tree {
     /// The pieces and tree of `rec`'s loops; `None` when a piece cannot be enclosed.
     fn build(rec: &FaceRecord) -> Option<Self> {
@@ -771,6 +823,24 @@ fn lifts(d: ParamDomain, x: f64, lo: f64, hi: f64) -> Option<Vec<Ivl>> {
     Some(
         (k0 as i64..=k1 as i64)
             .map(|k| Ivl::from(x) + Ivl::from(k as f64) * Ivl::from(period))
+            .collect(),
+    )
+}
+
+/// The lifts of the range `a..=b` by whole periods that may meet `lo..=hi`, each enclosed:
+/// the range alone on an open direction; `None` past [`MAX_LIFTS`].
+fn lifts_over(d: ParamDomain, a: f64, b: f64, lo: f64, hi: f64) -> Option<Vec<Ivl>> {
+    let ParamDomain::Periodic { period, .. } = d else {
+        return Some(vec![Ivl::new(a, b)]);
+    };
+    let k0 = ((lo - b) / period).floor();
+    let k1 = ((hi - a) / period).ceil();
+    if !(k0.is_finite() && k1.is_finite()) || k1 - k0 > MAX_LIFTS as f64 {
+        return None;
+    }
+    Some(
+        (k0 as i64..=k1 as i64)
+            .map(|k| Ivl::new(a, b) + Ivl::from(k as f64) * Ivl::from(period))
             .collect(),
     )
 }

@@ -5,7 +5,7 @@
 
 use core::fmt;
 
-use scx_brep::{Entity, FaceId, ShellId};
+use scx_brep::{EdgeId, Entity, FaceId, ShellId};
 use scx_num::budget::{Exhausted, Stopped};
 use scx_num::error::ErrorKind;
 use scx_surface::SurfaceError;
@@ -39,6 +39,25 @@ pub enum BodyqRefusal {
     NoShell {
         /// The shell asked for.
         shell: ShellId,
+    },
+    /// An entity the body does not have.
+    NoEntity {
+        /// The entity asked for.
+        entity: Entity,
+    },
+    /// A body with no face, edge or vertex to box.
+    EmptyBody,
+    /// A tolerance that is not finite or is negative, or an angle not below pi.
+    Tolerance,
+    /// An edge with fewer than two faces: nothing to compare across it.
+    OneSided {
+        /// The edge asked about.
+        edge: EdgeId,
+    },
+    /// An edge collapsed to a point: there is no curve to run along.
+    Collapsed {
+        /// The edge asked about.
+        edge: EdgeId,
     },
 }
 
@@ -101,6 +120,12 @@ pub enum BodyqDefect {
     /// No boundary point was found for a point inside the body's box: a body whose faces
     /// do not enclose its box.
     NoBoundary,
+    /// An edge whose curve over its interval cannot be enclosed: a value that is not
+    /// finite.
+    NoEdgeBox {
+        /// The edge.
+        edge: EdgeId,
+    },
     /// A shell whose cells give a negative first Betti number (`betti`).
     Betti {
         /// The shell.
@@ -127,6 +152,11 @@ impl BodyqError {
         match self {
             Self::Refused(BodyqRefusal::NotFinite) => "not_finite",
             Self::Refused(BodyqRefusal::NoShell { .. }) => "no_shell",
+            Self::Refused(BodyqRefusal::NoEntity { .. }) => "no_entity",
+            Self::Refused(BodyqRefusal::EmptyBody) => "empty_body",
+            Self::Refused(BodyqRefusal::Tolerance) => "tolerance",
+            Self::Refused(BodyqRefusal::OneSided { .. }) => "one_sided",
+            Self::Refused(BodyqRefusal::Collapsed { .. }) => "collapsed",
             Self::Unsupported(BodyqUnsupported::Nurbs { .. }) => "nurbs",
             Self::Unsupported(BodyqUnsupported::NonManifold { .. }) => "non_manifold",
             Self::Unsupported(BodyqUnsupported::NoClearSide { .. }) => "no_clear_side",
@@ -138,6 +168,7 @@ impl BodyqError {
             Self::Defect(BodyqDefect::NoNormal { .. }) => "no_normal",
             Self::Defect(BodyqDefect::Ray) => "ray",
             Self::Defect(BodyqDefect::NoBoundary) => "no_boundary",
+            Self::Defect(BodyqDefect::NoEdgeBox { .. }) => "no_edge_box",
             Self::Defect(BodyqDefect::Betti { .. }) => "betti",
         }
     }
@@ -177,6 +208,19 @@ impl fmt::Display for BodyqError {
         match *self {
             Self::Refused(BodyqRefusal::NotFinite) => f.write_str("the point is not finite"),
             Self::Refused(BodyqRefusal::NoShell { shell }) => write!(f, "{shell}: no such shell"),
+            Self::Refused(BodyqRefusal::NoEntity { entity }) => {
+                write!(f, "{entity}: no such entity")
+            }
+            Self::Refused(BodyqRefusal::EmptyBody) => f.write_str("the body has nothing to box"),
+            Self::Refused(BodyqRefusal::Tolerance) => {
+                f.write_str("a tolerance is not finite or negative, or an angle is not below pi")
+            }
+            Self::Refused(BodyqRefusal::OneSided { edge }) => {
+                write!(f, "{edge}: fewer than two faces meet there")
+            }
+            Self::Refused(BodyqRefusal::Collapsed { edge }) => {
+                write!(f, "{edge}: collapsed to a point")
+            }
             Self::Unsupported(BodyqUnsupported::Nurbs { at }) => {
                 write!(f, "{at}: NURBS geometry is not queried yet")
             }
@@ -197,6 +241,9 @@ impl fmt::Display for BodyqError {
                 write!(f, "{at}: no normal at the nearest point")
             }
             Self::Defect(BodyqDefect::Ray) => f.write_str("a ray from the point was refused"),
+            Self::Defect(BodyqDefect::NoEdgeBox { edge }) => {
+                write!(f, "{edge}: the curve cannot be enclosed")
+            }
             Self::Defect(BodyqDefect::Betti { shell }) => {
                 write!(f, "{shell}: the cells give a negative first Betti number")
             }

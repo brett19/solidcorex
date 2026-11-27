@@ -508,6 +508,8 @@ dependencies = [
  "scx-curve",
  "scx-num",
  "scx-nurbs",
+ "scx-nurbs-surface",
+ "scx-planar",
  "scx-ssi",
  "scx-surface",
  "scx-testkit",
@@ -692,6 +694,16 @@ version = "0.1.0"
 dependencies = [
  "scx-num",
  "scx-p21",
+]
+
+[[package]]
+name = "scx-stitch"
+version = "0.1.0"
+dependencies = [
+ "scx-bodyq",
+ "scx-brep",
+ "scx-num",
+ "scx-testkit",
 ]
 
 [[package]]

@@ -1553,6 +1553,146 @@ before and 429 after (both proved), `2^-6` refused (the `FRONT` policy) before a
   interval form's dependency between the axes' terms).
 - SM5's loop-free stop replaces `FRONT`; the diagonal near-touch is the case to try it on.
 
+## 19. SM6a as built (11-27)
+
+Row SM6a (§7), to §4.3 item 3, §4.5's field path, §4.6, §4.7b, §4.9 and §4.10. The code is in
+`crates/scx-ssi/src/general/`: `implicit.rs` (the forms), `net.rs` (a piece in rational Bernstein
+form), `field.rs` (the apartness proof and the trace); `pieces.rs` and `mod.rs` call them.
+
+### 19.1 What exists
+
+- **Implicit forms** (`Implicit::of`): plane, cylinder, cone, sphere and torus as a canonical
+  `f0` of degree 1, 2, 2, 2 and 4 in the kind's frame. `Implicit::field` builds
+  `G = W^k f0(M (H - O W) / W)` over a net in `Bounded` arithmetic, so every coefficient carries a
+  bound of its distance from the exact one. The frame's rows are unit and orthogonal only to
+  rounding; `Implicit::shift` bounds how far the computed form's zero set is from the kind's own
+  surface (from `|M M^T - I|`), and the bounds below add it.
+- **Nets** (`Net::of`): the one Bézier patch of `Surface::to_nurbs` over a piece, with `delta`, a
+  bound of the distance between the net's point and the surface's own. A piece that is not one
+  patch on exactly its uv, or has a weight not positive, has no net: the field path refuses there.
+- **Side choice** (`field_side`): of the sides with a form, the one whose field has the least
+  degree, `k` times the other side's degree sum; then the least `k`; then side 0. The choice does
+  not depend on the work order, so the answer is fixed.
+- **Apartness by sign** (`field::apart`, called last in `Candidates::prove`): with `L` an upper
+  bound of `|grad f|` over the piece's box grown by twice the coincidence and
+  `d = tol + shift + delta`, `g - L d W^k > 0` or `g + L d W^k < 0` (every coefficient past its
+  rounding bound) proves no point of the piece is within the coincidence of the form's surface.
+- **Coincidence**: with `m` a lower bound of `|grad f|`, `|g| < m (tol - shift - delta) W^k` over a
+  whole piece puts every point of it within the coincidence. The piece is clipped to the field
+  side's extent and returned as `Traced::coincident` (`Overlap`, in both surfaces' uv, as the
+  closed forms give it). Extents that only abut give a zero-width piece, as the closed forms do.
+- **The trace**: dyadic squares of each piece's unit square, each dropped (boxes or sign),
+  coincident (whole piece only), a graph cell (`g_t` or `g_s` strictly signed) or split. Edge
+  crossings come from `bernstein_roots` on the restriction to each edge segment, once per
+  segment, with parity matched to one sign per grid point (zero counted positive). So two squares
+  sharing a segment see the same crossings at the same bits. A graph cell's arcs follow from a
+  sweep; vertices are column roots, as many as the chord sag needs to stay within half the
+  coincidence. Arcs link through their ports into chains. Chains are cut where the field side's
+  inverse (`Surface::invert`) leaves its extent (a bisection on the chord) and at periodic seams.
+- **Output**: branches of degree-1 curves in the net side's uv. Both pcurves are `OnSurface::Within`
+  with the vertex distance bound. Nodes are `Seam` or `Pole` only.
+
+### 19.2 Decisions, for and against
+
+- **Column roots, not Newton on `g` (deviation from §4.5).** For: a root of the 1D restriction by
+  Bernstein isolation is certified and depends on nothing but the column. The trace has no step
+  control, so it cannot stall, and it is deterministic by construction. Against: one root per
+  vertex costs more than a Newton step. The vertex count goes as `1/sqrt(tol)` (sag), so at
+  `1e-9` a T-pipe takes 565k budget units and 1.3 s. Refitting to one knot vector is SM8's; until
+  then branches are dense.
+- **Coincident only for a whole piece.** For: a piece within the coincidence everywhere is a
+  coincident patch with no doubt. A part of one within it is where the surfaces touch or run
+  tangent, which is SM6b's case. Against: a coincident region whose border crosses a piece is
+  refused until SM6b, not returned.
+- **Zero counted positive at grid points.** For: one sign per grid point makes the crossings on a
+  shared segment the same for both squares, so chains link without matching tolerances. Against:
+  a curve that runs exactly along the rim of the net side's extent has `g` of one sign inside and
+  is invisible to the grid signs. That was `c5n_curve_on_edge`, answered empty (INCOMPLETE).
+  Now a square whose edge on the rim has `|g|` within the coincidence all along is refused
+  (`runs_along_the_rim`). A curve that touches the rim at one point from inside is still a touch
+  for SM6b.
+- **Topology up to the coincidence (04 R73, Q3).** Roots within the coincidence of an edge's end,
+  or clusters no wider than that, are taken at the end or as one root per the parity. For: this
+  matches SS4's depth rule. Against: two roots closer than the coincidence are merged, so a
+  loop smaller than the tolerance is a touch or nothing.
+- **Field-sign proof last in `prove`.** For: the boxes and slabs are cheaper and settle most
+  pairs; the field is built only for pairs they leave. Against: the net and field are built again
+  for each pair on the same piece. A cache by piece would cut it; nothing measured needs it yet.
+- **Field path before `settle`.** When a side has a form, `intersect` answers by the trace and
+  never by `FRONT` halving. For: one path per pair kind. Against: a touching pair the trace cannot
+  classify is refused deeper, after more work (see 19.4).
+
+### 19.3 Tests
+
+New, in `general/tests/field.rs`, at accuracy `1e-6`:
+
+- `the_field_is_within_its_bound_of_the_exact_rationals`: forms of all five kinds in a tilted
+  frame, both senses, over a tilted plane net and a cylinder quarter net. At 25 dyadic points,
+  `scx-testkit` `Rat` de Casteljau of the exact field against the computed coefficients evaluated
+  exactly: the difference is within `err`, and `err <= 1e-12 max(size, 1)`.
+- `the_field_path_traces_the_sm0_truths`: sphere vs NURBS plane, NURBS sphere vs plane, the
+  T-pipe, sphere vs NURBS sphere, cylinder vs NURBS cylinder, torus vs NURBS plane. Each has
+  branches; nodes only `Seam` or `Pole`; residual and vertex bounds hold; truth samples lie within
+  twice the accuracy of the chords.
+- `a_coincident_patch_is_told_from_a_coplanar_neighbour`: overlapping, abutting and beside, each
+  equal to the closed forms' `Overlap`. The overlap is `[0, 1]^2`.
+- `a_parallel_plane_is_coincident_only_within_the_accuracy`: `0.5` accuracy off is coincident,
+  `3` accuracies off is empty.
+- `a_curve_along_the_rim_is_refused_not_dropped`: a plane through a NURBS patch's edge is
+  `Unresolved`, never empty; the same plane `1e-3` inside is one branch.
+- `a_curve_along_a_knot_line_is_traced_once`: a plane through a NURBS torus's equators, which
+  lie on knot lines, over four `v` ranges: one branch each. Over the whole torus the outer circle
+  lies on the rim `v = 0`, and the answer is `Unresolved`.
+- `the_field_answer_is_the_same_bits_under_any_budget_that_suffices`: two runs equal, the used
+  budget gives the same bits, one unit less is `Budget(Exhausted)`.
+
+Changed: in `general/tests.rs` the size bound of a refusal allows `1e-12` relative for the
+rounding of the NURBS images' boxes; `apart.rs` asserts that field-sign proofs never drop a touching
+pair. None removed.
+
+### 19.4 Measured (release, SM10 corpus, tolerance `1e-6`)
+
+SM10 score (113 cases):
+
+| | pass | refused | failed |
+|---|---|---|---|
+| before (main at the branch point) | 38 | 69 | 6 (incomplete 1, wrong topology 5) |
+| after | 54 | 53 | 6 (the same six: class 7's closed-form depth rule) |
+
+New passes: the six `c7_angle_planes_*`, `c1n_cylN_plane_ellipse`, `c1n_parab_plane_circle`,
+`c1n_saddle_plane_hyperbola`, `c9n_many_spans_plane_sphere`, `c9n_rational_deg5_cyl_arc`,
+`c1_cyl_cyl_two_loops`, `c1_sphere_cyl_two_loops`,
+`c8n_sphereN_polar_cap`, `c9n_deg6_circle` and `c9n_refined_torus_sphere` (16). No verdict got
+worse. The intersections take 1,612 ms in total over the 113 cases, against 1,001 ms before (slowest
+`c9n_deg6_circle`, 198 ms).
+
+Intersect time per case (the harness's column; throwaway timer, not committed), before against after:
+
+- cases that pass in both: 0.3 ms total, against 0.8;
+- new passes: from 3.7 to 155 ms each (T-pipe-like loops 100 to 155 ms);
+- cases still refused: 922 ms total, against 1,534. The field path refuses tangencies deeper than
+  `FRONT` did: `c8_sphere_cyl_through_poles` 4.8 to 155 ms, `c4_viviani_figure8` 5.5 to 92 ms,
+  `y23_fig1b_two_arcs_and_point` 128 to 278 ms.
+
+The harness's judging (32 samples per knot span, quadratic in the vertices) takes 30 to 120 s on
+the dense degree-1 branches, far more than the intersection. That cost is the scorer's, but it
+returns to SSI with SM8's refit.
+
+### 19.5 Open
+
+- Refusals cost more (above). SM6b resolves most of these cases instead of refusing them. If it
+  does not land soon, an early exit (a square at a depth where `g` and `grad g` both lie within
+  the band) would restore the old cost.
+- Vertex density goes as `1/sqrt(tol)` until SM8 refits.
+- A net and field per pair in `prove`, not per piece (19.2).
+- A curve touching the extent's rim at one point from inside (19.2).
+- A curve on a closed rim that is not marked periodic (a NURBS torus's `v = 0`,
+  `c8n_torusN_equator_seam`; a NURBS cylinder's seam, `c8n_cylN_seam_line`) is refused. Before
+  the rim check the first was answered with one circle of two and the second passed. Seeing that the opposite rim is the same edge (equal control rows) would trace it, as a
+  knot line is traced.
+- Poles are not divided out (§4.5); a NURBS sphere's pole piece has a zero-width row, and the
+  trace refuses when it cannot split it.
+
 ## 21. SM1b as built (11-27)
 
 SM1b closes §13.8 items 1 and 3 (the 04 SM1 ruling's follow-up). `pcurve_of` keeps SM1's

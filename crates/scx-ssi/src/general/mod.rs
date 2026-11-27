@@ -14,7 +14,7 @@
 //! |---|---|---|
 //! | Bézier pieces, `BoxTree::pairs`, pairs dropped only by proof ([`Candidates`]), halving to `Unresolved` | 4 | a pair not proved apart is [`SsiError::Unresolved`] at its first undecided piece pair |
 //! | loop-free pairs (normal cones, Sederberg-Meyers, the critical-point solve), boundary seeds | 5 | |
-//! | the field path when a side has an implicit form; critical cells, valleys, poles | 6a, 6b | |
+//! | the field path when a side has an implicit form; critical cells, valleys, poles | 6a, 6b | 6a landed: a touch, a tangency or a crossing inside a piece is `Unresolved` until 6b |
 //! | the march for NURBS against NURBS, [`SsiError::Stalled`] | 7 | |
 //! | one knot vector, certification per span, [`SsiError::Uncertified`] | 8 | |
 //!
@@ -40,6 +40,9 @@
 //!   `fmath` functions. Each pair's answer depends only on the pair, so the output is
 //!   bit-identical across runs and platforms.
 
+mod field;
+mod implicit;
+mod net;
 mod pieces;
 mod traced;
 
@@ -60,8 +63,10 @@ use crate::error::SsiError;
 /// It answers any pair, the closed-form ones included, but is meant for those the closed
 /// forms answer `General` for: [`crate::intersect`] tries the closed forms first.
 ///
-/// Until rows SM5 to SM8 land the answer is [`Traced::default`], proved (every pair of
-/// pieces is proved apart: [`Candidates`]), or a refusal.
+/// When a side has an implicit form (an analytic kind) the field path traces the pair
+/// (row SM6a): branches of degree-1 curves, coincident pieces, or a refusal. Otherwise,
+/// until rows SM5, SM7 and SM8 land, the answer is [`Traced::default`], proved (every pair
+/// of pieces is proved apart: [`Candidates`]), or a refusal.
 ///
 /// # Errors
 ///
@@ -81,6 +86,9 @@ pub fn intersect(
     stop: &Stop,
 ) -> Result<Traced, SsiError> {
     let found = Candidates::new(a, ae, b, be, acc, res, budget, stop)?;
+    if let Some(t) = field::trace(&found, [a, b], [ae, be], found.floor(), budget, stop)? {
+        return Ok(t);
+    }
     for &pair in found.pairs() {
         if let Some(open) = found.settle(pair, FRONT, budget, stop)? {
             return Err(open.unresolved());
