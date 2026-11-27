@@ -814,67 +814,92 @@ Where each record lives:
 
 ## 5. Errors
 
+This section follows research 62 (the error taxonomy) as ruled 2026-11-27, with review-62's
+corrections. Research 62 §10 lists the rulings. It replaces the `Lower(LowerError)` shape of
+review-architecture-v2 (S4).
+
 ### 5.1 Shape
 
-This section is revised after review-architecture-v2 (S4).
-
-Each crate has one error type, named after the crate, with typed `#[non_exhaustive]` causes.
+Each crate has one error type, named after the crate, with typed `#[non_exhaustive]` causes. The
+kind is computed from the cause's type and variant, never stored, and no cause type sits under two
+kinds.
 
 ```rust
 #[non_exhaustive]
 pub enum BlendError {
-    Refused(BlendCause),       // the input is not valid: an id not in the body, a radius no ball can roll
-    Unsupported(BlendCause),   // valid input this method could not complete; the app may retry differently
-    Items(Vec<(usize, BlendCause)>),  // per input item (5.2), sorted by item index
-    Exhausted { budget: u64 }, // the work budget ran out
+    Cause(BlendCause),                 // one failure; BlendCause::kind() is Refused or Unsupported per variant
+    Items(Vec<Skipped<BlendCause>>),   // collect-all mode only (5.2); non-empty, in item order
+    Exhausted { item: usize, work: u64 }, // a limit ran out (typed limit cause, below)
     Cancelled,
-    Defect(Defect),            // our bug: an invariant broke; carries where
-    Lower(LowerError),         // brep, bodyq, boolean ... errors, as source()
+    Defect(Defect),                    // our bug: an invariant broke; carries where
 }
 ```
 
-- **`Refused`** is only for input that is not valid, including `ResolutionMismatch`. "Operations
-  never refuse valid input" (11-26) means: if an answer exists and our method reaches it, give it
-  with recorded accuracy.
-- **`Unsupported`** is honest about a case the method does not cover, such as a vertex blend it
-  cannot patch or a degenerate SSI branch. Each such cause is also an entry on a list of methods to
-  improve.
-- Causes ruled with research 60 (11-27):
-  - a stated incidence that does not hold is `Refused(FalseFact)` at the public API, and a `Defect`
-    when one of our operations stated it;
-  - two operand vertices within coincidence of each other are `Refused`, naming both (4.2);
-  - a merge chain that cannot be anchored is `Unsupported`, with the chain in the trace (4.2);
-  - a singular transform is `Refused` (2.4);
-  - a draft whose curve or p-curve ends miss their vertex balls is `Unfinished` with a
-    `Geometry` cause (2.3).
-- Causes ruled with research 61 (11-27), in `BlendCause`:
-  - a corner the new system does not yet build, not even with the Setback's `Unproven` hole fill,
-    is `Unsupported(CornerUnsupported { kind })`, naming the corner kind (for example a conic
-    Setback, Ball or Mitre, a Roll-over, or edges tangent at the vertex). It is never `Refused`;
-  - a blend whose size does not fit is `Refused` with the size that fits;
-  - a G2 corner that can only be built G1 is a success with G1 recorded on the face and
-    `Warning::ContinuityLowered { face, reached }`. It is `Unsupported(ContinuityNotReached)` only
-    when the caller stated G2 as a hard requirement through the fillet spec's typed continuity
-    option;
-  - an exhausted certificate budget is not an error: `Basis::Unproven` and a warning (4.1).
-- **`Defect`** is `Defect { at: &'static str, what: DefectKind }`. Apps report it and never handle
-  it. Library code never panics; the workspace lints already deny it.
-- **`Exhausted` and `Cancelled`** come only from crates that take a budget or a `Stop`.
-- Lower layers have the subset that applies to them. For example, `SurfaceError` has `Refused`,
-  `Unsupported`, `Exhausted`, `Defect` and `Num`.
-- Every error implements `std::error::Error` with `source()`. Display strings are for people and are
-  not a stable interface; the variants and causes are.
-- **`fn kind(&self) -> ErrorKind`** maps one for one onto a shared `#[non_exhaustive]` enum in
-  `scx-num`: `InvalidInput`, `Unsupported`, `Exhausted`, `Cancelled`, `Defect`. Apps that only
-  route errors use it.
+The five kinds are `ErrorKind` in `scx-num`, each one thing the caller does next:
 
-The solver pattern already in `scx-algo` is kept: `SolveError<E>` with the `EvalError`
-classification (04, 11-26). Its "out of fuel" and "cancelled" classes map to `Exhausted` and
-`Cancelled`.
+- **`Refused`**: the input is invalid or cannot hold as asked (a bad id, a false stated fact, a
+  size that does not fit). The caller changes the input. "Operations never refuse valid input"
+  (11-26) means: if an answer exists and our method reaches it, give it with recorded accuracy.
+- **`Unsupported`**: valid input this method does not build. Each cause is an entry on a list of
+  methods to improve. The kind is the coarse route; a remedy may differ from it (below).
+- **`Exhausted`**: a limit the caller or the machine sets ran out. Typed limit causes: work,
+  allocation, depth, count, memory. Fixed caps on input size (p21's `TooDeep`, `TooMany`,
+  `NeedsMemory`) are such causes. A certificate budget is not one: it gives `Unproven`.
+- **`Cancelled`**: the caller's `Stop` fired.
+- **`Defect`**: `Defect { at: &'static str, what: DefectKind }`. Apps report it and never handle it.
+  Library code never panics; the workspace lints already deny it.
+
+Rules fixed by earlier research still hold (60, 61):
+
+- a stated incidence that does not hold is `Refused(FalseFact)` at the public API, and a `Defect`
+  when one of our operations stated it; two operand vertices within coincidence, and a singular
+  transform, are `Refused`; a merge chain that cannot be anchored is `Unsupported`;
+- a corner the new blend system does not build is `Unsupported(CornerUnsupported { kind })`, never
+  `Refused`; a blend whose size does not fit is `Refused` with the size that fits;
+- a draft whose curve ends miss their vertex balls is `Unfinished` with a `Geometry` cause (2.3);
+  `Unfinished` from our own operation is a `Defect`.
+
+**Chaining.** A lower error sits whole in a typed field of the upper cause, `Box`ed where it would
+grow the enum. There is no `LowerError`, and a wrapper names only its direct callees.
+
+- By default a wrapper inherits the lower kind. It re-judges only when it built the data it passed
+  down: `Defect` if it proved that data valid, otherwise `Unsupported`. A lower `Refused` from our
+  own data is a bug by construction once public entry points validate the caller's input.
+- A lower `Exhausted` or `Cancelled` becomes the upper one. A lower `Defect` stays a `Defect`.
+- Two frame types. A transparent frame forwards `source()` and Display to the inner error and adds
+  nothing (`SolveError::Num` and `Eval`, p21's `Unwritable::Geometry`). A context frame prints only
+  its own text and `source()` returns the inner error (`CallFailed`, `P21Error::Within`). A
+  wrapper never copies a lower cause's text into its own.
+- Display is English for a developer and prints one frame. `scx_num::error::chain` joins the frames
+  and reproduces p21's one-line form, or p21 keeps its own formatter over the chain. Display text
+  is not an interface.
+
+**Names and kinds.** `kind()` and `name()` are plain methods per type, with no shared trait
+(rust-version stays 1.85). A signature is call, kind and cause `name()`, not a numeric code. The
+solver's `EvalError` has a required `fn kind(&self) -> ErrorKind`, and its three predicates are
+derived from it.
+
+**Remedy.** In `scx-brep`, `fn remedy(&self) -> Option<Remedy>` is derived from the cause by an
+exhaustive match, is data and never text, and is `None` where the kind says it all.
+`Resize { at, measure, bound, fit: Option<Fit> }` keeps measure and bound when no size is proved;
+`ChangeInput { at, what }` is the other variant. `Fit { size, measure, bound, inclusive }` names a
+size that builds.
+
+**Warnings.** A warning is a typed value in `Report`, beside a success. It never changes a value in
+its call. It is part of the result: it replays on a cache hit, merges in item order, and is dropped
+for items above a reported failure or the budget cut. `Unproven`'s recorded accuracy legitimately
+affects later operations.
+
+**Sizes.** Errors stay off the success path's size: lower errors in cause fields are `Box`ed, and
+clippy's `result_large_err` is on at its default threshold.
+
+Lower layers have the subset that applies to them. For example, `SurfaceError` has `Refused`,
+`Unsupported`, `Exhausted`, `Defect` and `Num`. The solver pattern in `scx-algo` is kept:
+`SolveError<E>` over an `EvalError` that has a kind.
 
 ### 5.2 Partial success
 
-**C8.** This choice is revised after review-architecture-v2 (S5).
+**C8.** This choice is revised after review-architecture-v2 (S5), and by research 62 (determinism).
 
 - Options:
   - (a) all or nothing, always;
@@ -888,27 +913,37 @@ pub struct Report<C> { pub warnings: Vec<Warning>, pub skipped: Vec<Skipped<C>>,
 pub struct Skipped<C> { pub item: usize, pub round: u32, pub cause: C }
 ```
 
-- **Items** are what the operation treats as units. For blends that is chains of edges, not single
-  edges. Booleans, whole-body offsets and tapers have no items.
-- **The default** returns the first failure in item order. It adds any other failures found without
-  extra work, and no body.
+- **Items** are what the operation treats as units. For blends that is chains of edges. Booleans,
+  whole-body offsets and tapers have no items.
+- **The default** returns only the lowest-index failure, and no body. Collect-all is an explicit
+  mode that runs every item and returns `Items` in item order. Which extra failures a parallel run
+  would find depends on scheduling, so the default never reports them.
+- **Determinism of the merge** (62 §5, H4):
+  - each item runs under the full budget and records the work at which each event (failure,
+    defect, warning) happened;
+  - the merge walks items in index order and counts an event only if the prefix work plus that
+    event's work is within the budget; otherwise the outcome is `Exhausted` at that item;
+  - no algorithm sizes anything from its remaining budget, and a certificate budget is a fixed
+    per-operation amount;
+  - collect-all and `Skip` meter the same way; `Scoped` may stop items above the lowest failing
+    index early, as an optimisation that does not change results;
+  - `Cancelled` is the one timing-dependent outcome and may race a failure.
 - **`Skip`** is a fixpoint:
   1. Drop the failing items, in index order.
   2. Run again.
   3. Repeat until no item fails or a stated round cap is reached (default 3).
   - Each dropped item is reported with its cause and round. The cost is up to that many reruns, and
-    it is documented as such.
-  - It is deterministic, because each round is.
+    it is documented as such. It is deterministic, because each round is.
 - Lost accuracy is never a failure. It appears in `raised` and as warnings.
 - `work` is the budget used, in its deterministic units (6.3, 9.4).
 - Change if: app use shows `Skip` as the default nearly everywhere.
 
 ### 5.3 Layer 0's strings
 
-- Layer 0's `NumError` was ruled to match solidcore's strings and variants one for one (04, 11-26),
-  so the difftest can compare errors exactly.
-- That holds while the difftest drives the move. Once a layer is ported, its strings are free to
-  change, and the facade in `scx-difftest` maps variants instead.
+- Layer 0's `NumError` was ruled to match solidcore's strings one for one (04, 11-26). Research 62
+  (11-27) replaces that: scx's causes and Display are free to change, and the facade in
+  `scx-difftest` maps each scx cause to the pin's kind and text. The facade already compares
+  `InvalidInput` by class alone.
 
 ---
 
