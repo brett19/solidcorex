@@ -72,7 +72,7 @@ impl Cylinder {
         2.0 * PI * self.radius
     }
 
-    fn arcs(&self) -> Arcs {
+    pub(crate) fn arcs(&self) -> Arcs {
         Arcs::turn(self.period())
     }
 
