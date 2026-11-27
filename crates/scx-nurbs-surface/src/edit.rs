@@ -3,12 +3,12 @@
 //! either direction, reversal of a direction, swapping u and v, and affine transforms.
 //!
 //! Every edit reads `&self` and returns a new surface; nothing edits a surface in place
-//! (research 63 §2.2). Insertion, elevation and splitting are the `scx-nurbs` curve edits
-//! applied to each line of the net along the direction (the rows along v; along u the
-//! columns, by editing the swapped surface along v and swapping back), so the surface
-//! versions share the curves' algorithms, checks and accuracy. The lines of a valid surface
-//! are valid curves and their edits share one knot vector, so the edited surface is
-//! assembled without checking again.
+//! (research 63 §2.2). Insertion, elevation and splitting edit the lines of the net along the
+//! direction (the rows along v, the columns along u) as `scx-nurbs`
+//! [`CompatibleCurves`]: the knot work is done once, and each line gets the curve edit's
+//! arithmetic bit for bit, so the surface versions share the curves' algorithms, checks and
+//! accuracy. The edited lines share one knot vector and are checked as curves, so the edited
+//! surface is assembled without checking again.
 //!
 //! | solidcore at the pin | here |
 //! |---|---|
@@ -22,7 +22,7 @@
 
 use scx_num::math::Affine;
 use scx_num::vector3d::Point3;
-use scx_nurbs::{KnotVector, NurbsCurve, NurbsError};
+use scx_nurbs::{CompatibleCurves, KnotVector, NurbsError};
 
 use crate::{Net, NetCause, NurbsSurface, NurbsSurfaceError, ParamAxis, Result};
 
@@ -127,89 +127,62 @@ impl<const D: usize> NurbsSurface<D> {
         )
     }
 
-    /// The surfaces `N` edits of the lines along `axis` give.
+    /// The surfaces `N` edits of the lines along `axis` give: the lines as
+    /// [`CompatibleCurves`], edited together.
     fn edit_lines<const N: usize>(
         &self,
         axis: ParamAxis,
-        edit: impl Fn(&NurbsCurve<D>) -> core::result::Result<[NurbsCurve<D>; N], NurbsError>,
+        edit: impl Fn(
+            &CompatibleCurves<D>,
+        ) -> core::result::Result<[CompatibleCurves<D>; N], NurbsError>,
     ) -> Result<[Self; N]> {
-        match axis {
-            ParamAxis::V => self.edit_rows(axis, edit),
-            ParamAxis::U => Ok(self.swapped().edit_rows(axis, edit)?.map(|s| s.swapped())),
-        }
-    }
-
-    /// The surfaces `N` edits of the rows (the lines along v) give; `axis` names the
-    /// direction the caller asked for, for the error.
-    fn edit_rows<const N: usize>(
-        &self,
-        axis: ParamAxis,
-        edit: impl Fn(&NurbsCurve<D>) -> core::result::Result<[NurbsCurve<D>; N], NurbsError>,
-    ) -> Result<[Self; N]> {
-        let rows = self.points().nrows();
-        let mut pieces: [Vec<NurbsCurve<D>>; N] =
-            core::array::from_fn(|_| Vec::with_capacity(rows));
-        for i in 0..rows {
-            let edited = edit(&self.row_curve(i)?)
-                .map_err(|cause| NurbsSurfaceError::Edit { axis, cause })?;
-            for (piece, c) in pieces.iter_mut().zip(edited) {
-                piece.push(c);
-            }
-        }
+        let edited =
+            edit(&self.lines(axis)?).map_err(|cause| NurbsSurfaceError::Edit { axis, cause })?;
         let mut out = Vec::with_capacity(N);
-        for piece in pieces {
-            out.push(self.with_rows(&piece)?);
+        for lines in edited {
+            out.push(self.with_lines(axis, lines)?);
         }
         out.try_into().map_err(|_| PIECES)
     }
 
-    /// Row `i` (the points of u index `i`) as a curve along v.
-    fn row_curve(&self, i: usize) -> Result<NurbsCurve<D>> {
-        let v = self.knot_vector(ParamAxis::V).clone();
-        let curve = match (self.weighted_points(), self.weights()) {
-            (Some(wp), Some(w)) => NurbsCurve::from_homogeneous(
-                v,
-                wp.row(i).ok_or(LINE)?.to_vec(),
-                w.row(i).ok_or(LINE)?.to_vec(),
-            ),
-            _ => NurbsCurve::new(v, self.points().row(i).ok_or(LINE)?.to_vec(), None),
+    /// The lines of the net along `axis` (the rows along v, the columns along u) as curves.
+    fn lines(&self, axis: ParamAxis) -> Result<CompatibleCurves<D>> {
+        let knots = self.knot_vector(axis).clone();
+        let count = match axis {
+            ParamAxis::U => self.points().ncols(),
+            ParamAxis::V => self.points().nrows(),
         };
-        curve.map_err(|_| LINE)
+        match (self.weighted_points(), self.weights()) {
+            (Some(wp), Some(w)) => CompatibleCurves::from_homogeneous(
+                knots,
+                count,
+                line_values(wp, axis),
+                line_values(w, axis),
+            ),
+            _ => CompatibleCurves::new(knots, count, line_values(self.points(), axis), None),
+        }
+        .map_err(|_| LINE)
     }
 
-    /// This surface with its rows replaced by `curves` (its u knots kept).
-    fn with_rows(&self, curves: &[NurbsCurve<D>]) -> Result<Self> {
-        let v = curves.first().ok_or(PIECES)?.knot_vector();
-        if curves.iter().any(|c| c.knot_vector() != v) {
-            return Err(PIECES);
-        }
-        let (rows, cols) = (curves.len(), v.point_count());
-        let net = |values: Vec<_>| Net::new(rows, cols, values).map_err(|_| PIECES);
-        let points = net(curves
-            .iter()
-            .flat_map(NurbsCurve::points)
-            .copied()
-            .collect())?;
-        let rational = if self.is_rational() {
-            let mut weights = Vec::with_capacity(rows * cols);
-            let mut weighted = Vec::with_capacity(rows * cols);
-            for c in curves {
-                weights.extend_from_slice(c.weights().ok_or(PIECES)?);
-                weighted.extend_from_slice(c.weighted_points().ok_or(PIECES)?);
-            }
-            Some((
-                Net::new(rows, cols, weights).map_err(|_| PIECES)?,
-                net(weighted)?,
-            ))
-        } else {
-            None
+    /// This surface with its lines along `axis` replaced by `lines` (the knots of the other
+    /// direction kept).
+    fn with_lines(&self, axis: ParamAxis, lines: CompatibleCurves<D>) -> Result<Self> {
+        let count = lines.count();
+        let (knots, points, rational) = lines.into_parts();
+        let n = knots.point_count();
+        let points = line_net(count, n, points, axis)?;
+        let rational = match rational {
+            None => None,
+            Some(h) => Some((
+                line_net(count, n, h.weights, axis)?,
+                line_net(count, n, h.weighted, axis)?,
+            )),
         };
-        Ok(Self::from_valid_parts(
-            self.knot_vector(ParamAxis::U).clone(),
-            v.clone(),
-            points,
-            rational,
-        ))
+        let (u, v) = match axis {
+            ParamAxis::U => (knots, self.knot_vector(ParamAxis::V).clone()),
+            ParamAxis::V => (self.knot_vector(ParamAxis::U).clone(), knots),
+        };
+        Ok(Self::from_valid_parts(u, v, points, rational))
     }
 }
 
@@ -263,6 +236,23 @@ impl NurbsSurface<3> {
             rational,
         ))
     }
+}
+
+/// The values of `net` line after line along `axis`: its rows along v, its columns along u.
+fn line_values<P: Clone>(net: &Net<P>, axis: ParamAxis) -> Vec<P> {
+    match axis {
+        ParamAxis::U => net.transposed().into_points(),
+        ParamAxis::V => net.points().to_vec(),
+    }
+}
+
+/// The net of `count` lines of `n` values each along `axis`, given line after line.
+fn line_net<P: Clone>(count: usize, n: usize, values: Vec<P>, axis: ParamAxis) -> Result<Net<P>> {
+    let lines = Net::new(count, n, values).map_err(|_| PIECES)?;
+    Ok(match axis {
+        ParamAxis::U => lines.transposed(),
+        ParamAxis::V => lines,
+    })
 }
 
 /// The net with its lines along `axis` reversed.
