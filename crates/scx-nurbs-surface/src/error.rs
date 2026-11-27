@@ -1,11 +1,13 @@
 // Written for solidcorex. Apache-2.0.
-//! Why a control net or a NURBS surface cannot be built.
+//! Why a control net or a NURBS surface cannot be built, or an edit cannot be made.
 //!
 //! Errors follow research 62 §10: every cause has a kind computed from it ([`kind`]), a
-//! stable [`name`], and a Display of one frame. All of this crate's causes are the caller's
-//! data, kind `Refused` (63 X13); [`NurbsSurfaceError::BadKnots`] is a context frame over the
-//! `scx-nurbs` error and inherits its kind (62 D11). The pin's `InvalidInput` is [`ErrorKind`]'s
-//! `Refused`.
+//! stable [`name`], and a Display of one frame. The construction causes are the caller's
+//! data, kind `Refused` (63 X13); [`NurbsSurfaceError::BadKnots`] and
+//! [`NurbsSurfaceError::Edit`] are context frames over the `scx-nurbs` error and inherit its
+//! kind (62 D11). An edit whose exact answer has no double form is `Unsupported`
+//! ([`NurbsSurfaceError::Reversal`], [`NurbsSurfaceError::Overflow`]). The pin's
+//! `InvalidInput` is [`ErrorKind`]'s `Refused`.
 //!
 //! | solidcore at the pin | here |
 //! |---|---|
@@ -27,7 +29,7 @@ use scx_nurbs::NurbsError;
 
 use crate::ParamAxis;
 
-/// Why a control net or a NURBS surface cannot be built.
+/// Why a control net or a NURBS surface cannot be built, or an edit cannot be made.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub enum NurbsSurfaceError {
@@ -45,6 +47,37 @@ pub enum NurbsSurfaceError {
     },
     /// The weights do not fit the net, or one is not positive and finite.
     BadWeights(WeightCause),
+    /// A knot insertion, degree elevation or split along `axis` failed on the curves of the
+    /// net's lines along it. A context frame: the cause is the `scx-nurbs` curve edit's
+    /// error, through [`std::error::Error::source`], and the kind is its kind (a parameter
+    /// outside the domain is `Refused`, a degree above the cap `Exhausted`, an elevation that
+    /// lost the surface `Unsupported`).
+    Edit {
+        /// The direction edited.
+        axis: ParamAxis,
+        /// Why.
+        cause: NurbsError,
+    },
+    /// The reflected knots of `axis` are not a valid knot vector in doubles: rounding
+    /// `a + b - t` merged a knot with a neighbour past the allowed multiplicity, or
+    /// overflowed. The exact reversal exists; it has no double form. The cause is the
+    /// `scx-nurbs` error the reflected knots got.
+    Reversal {
+        /// The direction reversed.
+        axis: ParamAxis,
+        /// Why the reflected knots were refused.
+        cause: NurbsError,
+    },
+    /// The transform's matrix has a coefficient that is infinite or NaN.
+    AffineNotFinite,
+    /// A transformed control point, or its homogeneous point, overflowed to infinity.
+    Overflow(NetCause),
+    /// A step failed through the crate's own fault: values that the edited surface's
+    /// invariants guarantee were refused or missing. A bug.
+    Defect {
+        /// The step that failed.
+        why: &'static str,
+    },
 }
 
 /// Why a control net does not fit.
@@ -114,13 +147,17 @@ pub enum WeightCause {
 }
 
 impl NurbsSurfaceError {
-    /// The error's kind: [`ErrorKind::Refused`] (the net and weights are the caller's), or
-    /// the `scx-nurbs` cause's under [`Self::BadKnots`] (62 D11).
+    /// The error's kind: [`ErrorKind::Refused`] (the net, weights and matrix are the
+    /// caller's), the `scx-nurbs` cause's under [`Self::BadKnots`] and [`Self::Edit`] (62
+    /// D11), [`ErrorKind::Unsupported`] for a result with no double form, and
+    /// [`ErrorKind::Defect`].
     #[must_use]
     pub const fn kind(&self) -> ErrorKind {
         match self {
-            Self::BadKnots { cause, .. } => cause.kind(),
-            Self::BadNet(_) | Self::BadWeights(_) => ErrorKind::Refused,
+            Self::BadKnots { cause, .. } | Self::Edit { cause, .. } => cause.kind(),
+            Self::BadNet(_) | Self::BadWeights(_) | Self::AffineNotFinite => ErrorKind::Refused,
+            Self::Reversal { .. } | Self::Overflow(_) => ErrorKind::Unsupported,
+            Self::Defect { .. } => ErrorKind::Defect,
         }
     }
 
@@ -131,6 +168,11 @@ impl NurbsSurfaceError {
             Self::BadNet(c) => c.name(),
             Self::BadKnots { .. } => "knots_break_surface",
             Self::BadWeights(c) => c.name(),
+            Self::Edit { .. } => "line_edit_failed",
+            Self::Reversal { .. } => "knots_not_reversible",
+            Self::AffineNotFinite => "affine_not_finite",
+            Self::Overflow(_) => "transform_overflow",
+            Self::Defect { .. } => "defect",
         }
     }
 }
@@ -165,6 +207,13 @@ impl fmt::Display for NurbsSurfaceError {
             Self::BadNet(c) => c.fmt(f),
             Self::BadKnots { axis, .. } => write!(f, "the {axis} knots cannot carry a surface"),
             Self::BadWeights(c) => c.fmt(f),
+            Self::Edit { axis, .. } => write!(f, "the edit along {axis} failed"),
+            Self::Reversal { axis, .. } => {
+                write!(f, "the reversed {axis} knots have no form in doubles")
+            }
+            Self::AffineNotFinite => f.write_str("the transform is not finite"),
+            Self::Overflow(c) => write!(f, "the transform overflows: {c}"),
+            Self::Defect { why } => write!(f, "internal defect: {why}"),
         }
     }
 }
@@ -221,8 +270,14 @@ impl fmt::Display for WeightCause {
 impl std::error::Error for NurbsSurfaceError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::BadKnots { cause, .. } => Some(cause),
-            Self::BadNet(_) | Self::BadWeights(_) => None,
+            Self::BadKnots { cause, .. }
+            | Self::Edit { cause, .. }
+            | Self::Reversal { cause, .. } => Some(cause),
+            Self::BadNet(_)
+            | Self::BadWeights(_)
+            | Self::AffineNotFinite
+            | Self::Overflow(_)
+            | Self::Defect { .. } => None,
         }
     }
 }
@@ -273,6 +328,27 @@ mod tests {
                 col: at.1,
                 weight: -1.0,
             }),
+            NurbsSurfaceError::Edit {
+                axis: ParamAxis::U,
+                cause: NurbsError::ParameterOutside {
+                    parameter: 2.0,
+                    domain: [0.0, 1.0],
+                },
+            },
+            NurbsSurfaceError::Reversal {
+                axis: ParamAxis::V,
+                cause: NurbsError::Multiplicity {
+                    knot: 1.0,
+                    multiplicity: 4,
+                    max: 3,
+                },
+            },
+            NurbsSurfaceError::AffineNotFinite,
+            NurbsSurfaceError::Overflow(NetCause::NotFinite {
+                row: at.0,
+                col: at.1,
+            }),
+            NurbsSurfaceError::Defect { why: "a test" },
         ]
     }
 
@@ -288,22 +364,34 @@ mod tests {
         }
     }
 
-    /// One frame per Display: the knots' frame prints only its own text and hands the
+    /// One frame per Display: the context frames print only their own text and hand the
     /// `scx-nurbs` error on as the source; the others have none.
     #[test]
     fn display_is_one_frame() {
         for e in all() {
             let text = e.to_string();
             assert!(!text.is_empty() && !text.contains('\n'), "{text}");
-            assert_eq!(e.kind(), ErrorKind::Refused);
+            let expected = match e {
+                NurbsSurfaceError::BadKnots { .. } | NurbsSurfaceError::Edit { .. } => {
+                    ErrorKind::Refused
+                }
+                NurbsSurfaceError::Reversal { .. } | NurbsSurfaceError::Overflow(_) => {
+                    ErrorKind::Unsupported
+                }
+                NurbsSurfaceError::Defect { .. } => ErrorKind::Defect,
+                _ => ErrorKind::Refused,
+            };
+            assert_eq!(e.kind(), expected, "{e:?}");
             match e {
-                NurbsSurfaceError::BadKnots { cause, .. } => {
-                    assert_eq!(text, "the u knots cannot carry a surface");
+                NurbsSurfaceError::BadKnots { cause, .. }
+                | NurbsSurfaceError::Edit { cause, .. }
+                | NurbsSurfaceError::Reversal { cause, .. } => {
                     assert!(!text.contains(&cause.to_string()));
                     assert_eq!(e.source().map(ToString::to_string), Some(cause.to_string()));
                 }
                 _ => assert!(e.source().is_none()),
             }
         }
+        assert_eq!(all()[4].to_string(), "the u knots cannot carry a surface");
     }
 }

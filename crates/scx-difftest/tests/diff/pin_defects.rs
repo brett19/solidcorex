@@ -1870,3 +1870,197 @@ pub fn nurbs_surface_from_homogeneous() -> PinDefect<(Homog,), Option<Read>> {
         check: |(h,), b| surface_answer(&h.0, b),
     }
 }
+
+// ---- scx-nurbs-surface edits ----------------------------------------------------------------
+
+use crate::t_nurbs_surface_edit::{Along, Raise};
+use scx_nurbs_surface::ParamAxis;
+
+/// The exact surface both sides are given: the homogeneous points `(w P, w)` as stored.
+pub fn stored(r: &Raw) -> Result<tk::Surface<3>, String> {
+    let hom = r.hom();
+    match &r.weights {
+        None => tk::Surface::new(r.degrees, &r.knots_u, &r.knots_v, &r.points, None),
+        Some(_) => {
+            let wp: Vec<[f64; 3]> = hom.iter().map(|h| [h[0], h[1], h[2]]).collect();
+            let w: Vec<f64> = hom.iter().map(|h| h[3]).collect();
+            tk::Surface::from_homogeneous(r.degrees, &r.knots_u, &r.knots_v, &wp, &w)
+        }
+    }
+    .map_err(|e| format!("{e:?}"))
+}
+
+/// The exact surface a read-back denotes.
+fn read_surface((p, q, ku, kv, hom): &Read) -> Result<tk::Surface<3>, String> {
+    let wp: Vec<[f64; 3]> = hom.iter().map(|h| [h[0], h[1], h[2]]).collect();
+    let w: Vec<f64> = hom.iter().map(|h| h[3]).collect();
+    tk::Surface::from_homogeneous((*p, *q), ku, kv, &wp, &w).map_err(|e| format!("{e:?}"))
+}
+
+/// How far `got` is from `want` (rounded): `INFINITY` for other degrees or knots, else the
+/// largest difference of homogeneous coordinates over the largest of them (at least 1).
+pub fn surface_off(got: &Read, want: &tk::Surface<3>) -> f64 {
+    let d = want.rounded();
+    let (p, q, ku, kv, hom) = got;
+    if (*p, *q) != d.degrees || *ku != d.knots_u || *kv != d.knots_v || hom.len() != d.points.len()
+    {
+        return f64::INFINITY;
+    }
+    let ws = d.weights.unwrap_or_else(|| vec![1.0; d.points.len()]);
+    let want: Vec<[f64; 4]> = d
+        .points
+        .iter()
+        .zip(&ws)
+        .map(|(p, &w)| [w * p[0], w * p[1], w * p[2], w])
+        .collect();
+    let scale = want.iter().flatten().fold(1.0_f64, |m, x| m.max(x.abs()));
+    hom.iter()
+        .zip(&want)
+        .flat_map(|(a, b)| a.iter().zip(b).map(|(x, y)| (x - y).abs()))
+        .fold(0.0, worst)
+        / scale
+}
+
+/// `scx_nurbs_surface::NurbsSurface::elevate`: where scx answers it is within `1e-12` of the
+/// exact elevation (`1e-11` from degree 9, the curve elevation's known error passed through);
+/// where it refuses (`Unstable`, near-coincident knots), the pin's answer has a weight that is
+/// not positive, or is more than `1e-6` from the original surface somewhere (evaluated
+/// exactly: an elevation is the same surface).
+pub fn nurbs_surface_elevate() -> PinDefect<(Raise,), Option<Read>> {
+    PinDefect {
+        reason: "the pin's A5.9 loses the surface across near-coincident knots, as for curves",
+        applies: Applies::Disagreeing,
+        check: |(a,), r| {
+            let e = &a.0;
+            let t = stored(&e.r)?;
+            let Some(x) = r else {
+                let pin = crate::t_nurbs_surface_edit::s::elevate(e).ok_or("both refused")?;
+                if pin.4.iter().any(|h| h[3] <= 0.0 || h[3].is_nan()) {
+                    return Ok(()); // a weight that is not positive: not a surface at all
+                }
+                let off = surface_gap(&read_surface(&pin)?, &t)?;
+                return if off > 1e-6 {
+                    Ok(())
+                } else {
+                    Err(format!("scx refused; the pin is {off:e} from the surface"))
+                };
+            };
+            let want = match e.axis {
+                ParamAxis::U => t.elevate_u(e.times),
+                ParamAxis::V => t.elevate_v(e.times),
+            }
+            .map_err(|err| format!("{err:?}"))?;
+            let p = match e.axis {
+                ParamAxis::U => e.r.degrees.0,
+                ParamAxis::V => e.r.degrees.1,
+            };
+            let tol = if p >= 9 { 1e-11 } else { 1e-12 };
+            let off = surface_off(x, &want);
+            if off <= tol {
+                Ok(())
+            } else {
+                Err(format!("scx is {off:e} from the exact elevation"))
+            }
+        },
+    }
+}
+
+/// The largest distance between `a` and `b` at a few parameters spread over their (shared)
+/// domain, relative to the larger coordinate (at least 1).
+fn surface_gap(a: &tk::Surface<3>, b: &tk::Surface<3>) -> Result<f64, String> {
+    let ((u0, u1), (v0, v1)) = b.domain();
+    let side = (tk::Side::Above, tk::Side::Above);
+    let mut off = 0.0_f64;
+    for (fu, fv) in [(0.0, 0.0), (0.3, 0.9), (0.71, 0.45), (0.5, 0.5)] {
+        let uv = (u0 + fu * (u1 - u0), v0 + fv * (v1 - v0));
+        let g = a.point(uv, side).map_err(|e| format!("{e:?}"))?.rounded;
+        let w = b.point(uv, side).map_err(|e| format!("{e:?}"))?.rounded;
+        for (x, y) in g.iter().zip(&w) {
+            off = worst(off, (x - y).abs() / (1.0 + y.abs()));
+        }
+    }
+    Ok(off)
+}
+
+/// `scx_nurbs_surface::NurbsSurface::reversed` on unclamped knots: scx reflects them about
+/// the domain `[a, b]` (`t` to `a + b - t`), which it keeps; the pin reflects them about
+/// `U[0] + U[m]`, which moves the domain where the end knots lie outside it. The check: scx
+/// keeps the domain, flips the net exactly, maps each knot to `a + b - t` within rounding,
+/// and (degrees up to 3) is the original surface reversed at a point inside the domain.
+pub fn nurbs_surface_reversed() -> PinDefect<(Along,), Option<Read>> {
+    PinDefect {
+        reason: "the pin reflects unclamped knots about U[0] + U[m], moving the domain",
+        applies: Applies::Disagreeing,
+        check: |(a,), r| {
+            let e = &a.0;
+            let x = r.as_ref().ok_or("scx refused")?;
+            let (p, knots, rows, cols) = match e.axis {
+                ParamAxis::U => (e.r.degrees.0, &e.r.knots_u, e.r.rows(), e.r.cols),
+                ParamAxis::V => (e.r.degrees.1, &e.r.knots_v, e.r.rows(), e.r.cols),
+            };
+            let got = match e.axis {
+                ParamAxis::U => &x.2,
+                ParamAxis::V => &x.3,
+            };
+            let m = knots.len() - 1;
+            let (lo, hi) = (knots[p], knots[m - p]);
+            if (got[p], got[m - p]) != (lo, hi) {
+                return Err(format!(
+                    "scx's domain is [{}, {}], not [{lo}, {hi}]",
+                    got[p],
+                    got[m - p]
+                ));
+            }
+            if let Some(pin) = crate::t_nurbs_surface_edit::s::reverse(e) {
+                let pk = match e.axis {
+                    ParamAxis::U => &pin.2,
+                    ParamAxis::V => &pin.3,
+                };
+                if (pk[p], pk[m - p]) == (lo, hi) {
+                    return Err("the pin keeps the domain too".to_owned());
+                }
+            }
+            let c = lo + hi;
+            for (k, &g) in got.iter().enumerate() {
+                let want = c - knots[m - k];
+                if (g - want).abs() > 4.0 * f64::EPSILON * c.abs().max(want.abs()).max(1.0) {
+                    return Err(format!("knot {k} is {g}, not {want}"));
+                }
+            }
+            let hom = e.r.hom();
+            for i in 0..rows {
+                for j in 0..cols {
+                    let (fi, fj) = match e.axis {
+                        ParamAxis::U => (rows - 1 - i, j),
+                        ParamAxis::V => (i, cols - 1 - j),
+                    };
+                    if x.4[i * cols + j] != hom[fi * cols + fj] {
+                        return Err(format!("point ({i}, {j}) is not the flipped point"));
+                    }
+                }
+            }
+            // The exact references are slow at high degree; the structure above is the
+            // definition, the points a cross-check on the low degrees.
+            if e.r.degrees.0.max(e.r.degrees.1) > 3 {
+                return Ok(());
+            }
+            let (t, rev) = (stored(&e.r)?, read_surface(x)?);
+            let ((u0, u1), (v0, v1)) = t.domain();
+            let side = (tk::Side::Above, tk::Side::Above);
+            let uv = (u0 + 0.3 * (u1 - u0), v0 + 0.9 * (v1 - v0));
+            let back = match e.axis {
+                ParamAxis::U => (c - uv.0, uv.1),
+                ParamAxis::V => (uv.0, c - uv.1),
+            };
+            let g = rev.point(back, side).map_err(|e| format!("{e:?}"))?.rounded;
+            let w = t.point(uv, side).map_err(|e| format!("{e:?}"))?.rounded;
+            if g.iter()
+                .zip(&w)
+                .any(|(a, b)| (a - b).abs() > 1e-9 * (1.0 + b.abs()))
+            {
+                return Err(format!("at {uv:?}: {g:?} reversed, {w:?} original"));
+            }
+            Ok(())
+        },
+    }
+}
