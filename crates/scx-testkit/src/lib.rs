@@ -27,8 +27,12 @@
 //! - [`ssi`]: analytic surface-surface sections in closed form, with certified samples
 //!   (research 63 T5).
 //! - [`sample`]: seeded generators of well- and ill-conditioned inputs.
+//! - `bodies` (feature `bodies`): seeded valid and broken B-rep bodies, the one module that
+//!   builds library types (`scx-brep`'s `Draft`), with an independent structure oracle.
 
 pub mod analytic;
+#[cfg(feature = "bodies")]
+pub mod bodies;
 pub mod bound;
 pub mod curve_surface;
 pub mod data;
