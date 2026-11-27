@@ -27,8 +27,14 @@
 //!    it, each section a new edge, each face split by its cuts with exact pcurves, and
 //!    `b`'s faces copied in sharing the new edges, with lineage from both operands. A
 //!    loop that needs a fitted pcurve is [`BooleanUnsupported::Pcurve`].
-//! 6. **Classify** and **select and build** (BO4): not built yet. [`boolean`] runs stages
-//!    1 to 5 and then answers [`BooleanUnsupported::Stage`].
+//! 6. **Classify** (BO4). Each piece in, out of or on the other operand, one answer per
+//!    set of pieces joined where the operands do not meet: seeded along each section by
+//!    `scx_bodyq::sides_along`, the rest by `scx_bodyq::classify_point`; a piece of a
+//!    coincident face is on it, with its material on the same side or the other.
+//! 7. **Select and build** (BO4). The pieces the operation keeps (`b`'s turned over for a
+//!    subtraction), merged where two of them are one face (pieces of one face, or coplanar
+//!    faces of the two operands), edges and vertices no face needs removed, two edges on one
+//!    curve joined, and each connected set of faces given its region and shells.
 //!
 //! **Reads only.** Both operands are `&Brep`; their box trees and boundary trees are filled
 //! on first read by `scx-brep`, and the work charged does not depend on whether they were
@@ -38,6 +44,8 @@
 //! sorted by ids before it is used, so the same operands give the same answer and work.
 
 mod boolean;
+mod build;
+mod classify;
 mod contact;
 mod error;
 mod faceface;
@@ -47,7 +55,7 @@ mod pairs;
 mod points;
 
 pub use boolean::{BooleanOp, NoItems, boolean};
-pub use error::{BooleanDefect, BooleanError, BooleanRefusal, BooleanUnsupported, Stage};
+pub use error::{BooleanDefect, BooleanError, BooleanRefusal, BooleanUnsupported};
 
 #[cfg(test)]
 mod tests;
