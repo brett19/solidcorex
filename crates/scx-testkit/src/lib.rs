@@ -27,8 +27,14 @@
 //! - [`ssi`]: analytic surface-surface sections in closed form, with certified samples
 //!   (research 63 T5).
 //! - [`sample`]: seeded generators of well- and ill-conditioned inputs.
+//! - [`topology`]: body structure invariants, Euler-Poincaré and the pole and seam rules
+//!   as predicates on plain incidence data and uv samples (research 63 T7).
+//! - `bodies` (feature `bodies`): seeded valid and broken B-rep bodies, the one module that
+//!   builds library types (`scx-brep`'s `Draft`), with an independent structure oracle.
 
 pub mod analytic;
+#[cfg(feature = "bodies")]
+pub mod bodies;
 pub mod bound;
 pub mod curve_surface;
 pub mod data;
@@ -42,6 +48,7 @@ pub mod quadric;
 pub mod rat;
 pub mod sample;
 pub mod ssi;
+pub mod topology;
 
 pub use rat::Rat;
 

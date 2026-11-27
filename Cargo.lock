@@ -498,7 +498,9 @@ version = "0.1.0"
 dependencies = [
  "scx-curve",
  "scx-num",
+ "scx-nurbs",
  "scx-surface",
+ "scx-testkit",
 ]
 
 [[package]]
@@ -516,6 +518,7 @@ name = "scx-difftest"
 version = "0.1.0"
 dependencies = [
  "scx-algo",
+ "scx-brep",
  "scx-curve",
  "scx-num",
  "scx-nurbs",
@@ -586,7 +589,11 @@ dependencies = [
 name = "scx-testkit"
 version = "0.1.0"
 dependencies = [
+ "scx-brep",
+ "scx-curve",
  "scx-num",
+ "scx-nurbs",
+ "scx-surface",
 ]
 
 [[package]]

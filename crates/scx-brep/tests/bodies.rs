@@ -12,11 +12,13 @@ use std::collections::BTreeMap;
 use std::f64::consts::TAU;
 
 use scx_brep::{
-    Brep, Document, Draft, EdgeGeom, EdgeId, EdgeShape, EdgeUse, FaceRecord, FaceSide, Fin,
-    LoopRecord, RegionId, ShellId, ShellRecord, UseGeom, VertexId, VertexRecord,
+    Brep, Document, Draft, EdgeGeom, EdgeId, EdgeShape, EdgeUse, FaceId, FaceRecord, FaceSide, Fin,
+    LoopRecord, RegionId, ShellId, ShellRecord, UseGeom, UvSide, VertexId, VertexRecord,
 };
 use scx_curve::{Circle, Curve, Curve2, Line, Line2};
 use scx_num::extent1d::Extent1d;
+use scx_num::extent3d::Extent3d;
+use scx_num::fmath;
 use scx_num::frame::{Frame, Sense};
 use scx_num::units::Length;
 use scx_num::vector2d::{Point2, Vec2};
@@ -195,6 +197,10 @@ struct Walk {
     fins: Vec<Vec<Fin>>,
     /// Per vertex: its edges.
     stars: Vec<Vec<EdgeId>>,
+    /// Per shell: its face sides.
+    sides: Vec<Vec<(FaceId, FaceSide)>>,
+    /// Per region: its shells.
+    shells: Vec<Vec<ShellId>>,
 }
 
 /// Walks every view and iterator of a finished body, checking what holds of any closed
@@ -304,6 +310,14 @@ fn walk(body: &Brep) -> Walk {
         loops,
         fins,
         stars,
+        sides: body
+            .shells()
+            .map(|s| s.faces().map(|(f, side)| (f.id(), side)).collect())
+            .collect(),
+        shells: body
+            .regions()
+            .map(|r| r.shells().map(scx_brep::Shell::id).collect())
+            .collect(),
     }
 }
 
@@ -349,6 +363,14 @@ fn walk_draft(d: &Draft) -> Walk {
         loops,
         fins,
         stars,
+        sides: d
+            .shells()
+            .map(|s| s.faces().map(|(f, side)| (f.id(), side)).collect())
+            .collect(),
+        shells: d
+            .regions()
+            .map(|r| r.shells().map(scx_brep::Shell::id).collect())
+            .collect(),
     }
 }
 
@@ -430,10 +452,159 @@ fn a_rewritten_face_leaves_the_original_body_alone() {
         }
     }
     assert_eq!(walk(&body), before);
+    // Turned over with its sides and surface left as they were, the face disagrees with
+    // its neighbours about which shell lies between them.
+    let refused = d.finish(&Document::default()).unwrap_err();
+    assert_eq!(refused.name(), "sides_disagree");
+    // A rewrite that keeps the face a face: its loop starts at another use.
+    let mut d = body.edit();
+    d.face_mut(first).unwrap().loops[0].uses.rotate_left(1);
+    assert_eq!(walk(&body), before);
     let (edited, _) = d.finish(&Document::default()).unwrap();
     let after = edited.face(first).unwrap().uses().next().unwrap();
     assert_ne!(
         after.record(),
         body.face(first).unwrap().uses().next().unwrap().record()
     );
+}
+
+fn holds(b: Extent3d, p: Point3) -> bool {
+    let (lo, hi) = (b.min(), b.max());
+    (lo.x..=hi.x).contains(&p.x) && (lo.y..=hi.y).contains(&p.y) && (lo.z..=hi.z).contains(&p.z)
+}
+
+/// Points of each face, from a grid over its uv box kept where the face holds them, each
+/// checked to lie in the face's box; how many.
+fn sample_faces(body: &Brep) -> usize {
+    let mut n = 0;
+    for face in body.faces() {
+        let bx = face.bounding_box().unwrap();
+        let uv = face.uv_box().unwrap();
+        let (lo, hi) = (uv.min(), uv.max());
+        for i in 0..=20 {
+            for j in 0..=20 {
+                let p = Point2::new(
+                    lo.x + (hi.x - lo.x) * f64::from(i) / 20.0,
+                    lo.y + (hi.y - lo.y) * f64::from(j) / 20.0,
+                );
+                match face.contains_uv(p) {
+                    Some(UvSide::Inside | UvSide::Near) => {
+                        let q = face.surface().point(p);
+                        assert!(holds(bx, q), "{q:?} of {} outside {bx:?}", face.id());
+                        n += 1;
+                    }
+                    Some(UvSide::Outside) => {}
+                    None => panic!("{} cannot tell {p:?}", face.id()),
+                }
+            }
+        }
+    }
+    n
+}
+
+/// Every face's box, every edge's box and the body's, as bits.
+fn box_bits(body: &Brep) -> Vec<[u64; 6]> {
+    let bits = |b: Option<Extent3d>| {
+        let b = b.unwrap();
+        let (lo, hi) = (b.min(), b.max());
+        [lo.x, lo.y, lo.z, hi.x, hi.y, hi.z].map(f64::to_bits)
+    };
+    body.faces()
+        .map(|f| bits(f.bounding_box()))
+        .chain(body.edges().map(|e| bits(e.bounding_box())))
+        .chain([bits(body.bounding_box())])
+        .collect()
+}
+
+#[test]
+fn a_block_s_boxes_hold_it_closely() {
+    let (body, _) = check_body(block());
+    let zone = body.resolution().zone().mm();
+    let b = body.bounding_box().unwrap();
+    // Each side grown by the resolution and no more than a rounding past it.
+    for off in [
+        -b.min().x,
+        -b.min().y,
+        -b.min().z,
+        b.max().x - 1.0,
+        b.max().y - 1.0,
+        b.max().z - 1.0,
+    ] {
+        assert!(off >= zone && off < zone + 1e-12, "{off} against {zone}");
+    }
+    assert!(sample_faces(&body) > 6 * 400);
+    for face in body.faces() {
+        assert!(face.accuracy().is_none());
+        let uv = face.uv_box().unwrap();
+        assert_eq!(face.contains_uv(uv.mid()), Some(UvSide::Inside));
+    }
+    // The faces near a corner are the three that meet there, in id order.
+    let corner = Extent3d::from_bounds(-0.1, -0.1, -0.1, 0.1, 0.1, 0.1).unwrap();
+    let near: Vec<_> = body.faces_meeting(corner).map(scx_brep::Face::id).collect();
+    let brute: Vec<_> = body
+        .faces()
+        .filter(|f| f.bounding_box().unwrap().intersect(corner).is_some())
+        .map(scx_brep::Face::id)
+        .collect();
+    assert_eq!(near, brute);
+    assert_eq!(near.len(), 3);
+    let far = Extent3d::from_bounds(5.0, 5.0, 5.0, 6.0, 6.0, 6.0).unwrap();
+    assert_eq!(body.faces_meeting(far).len(), 0);
+}
+
+#[test]
+fn a_cylinder_s_boxes_hold_it() {
+    let (body, _) = check_body(cylinder());
+    let b = body.bounding_box().unwrap();
+    assert!(b.min().x <= -1.0 && b.max().y >= 1.0 && b.min().z <= 0.0 && b.max().z >= 2.0);
+    // Certified, not exact: the round sides stand off by under a quarter of the radius.
+    assert!(b.max().x < 1.25 && b.min().y > -1.25 && b.max().z < 2.0 + 1e-4);
+    assert!(sample_faces(&body) > 400);
+    let wall = body.faces().next().unwrap();
+    let bx = wall.bounding_box().unwrap();
+    for i in 0..64 {
+        let t = f64::from(i) * TAU / 64.0;
+        for z in [0.0, 0.7, 2.0] {
+            assert!(holds(bx, Point3::new(fmath::cos(t), fmath::sin(t), z)));
+        }
+    }
+    // Round the seam: every lift of a point of the wall is inside it.
+    let p = Point2::new(1.0 + 2.0 * TAU, 1.0);
+    assert_eq!(wall.contains_uv(p), Some(UvSide::Inside));
+    assert_eq!(
+        wall.contains_uv(Point2::new(1.0, 2.5)),
+        Some(UvSide::Outside)
+    );
+    for e in body.edges() {
+        assert!(e.bounding_box().is_some());
+    }
+}
+
+#[test]
+fn cells_fill_the_same_bits_on_every_thread() {
+    for d in [block(), cylinder()] {
+        let (body, _) = d.finish(&Document::default()).unwrap();
+        let want = box_bits(&body);
+        // Fresh cells on two threads at once, and one body's cells raced by two threads.
+        let fresh: Vec<_> = (0..2)
+            .map(|_| {
+                let b = body.edit().finish(&Document::default()).unwrap().0;
+                std::thread::spawn(move || box_bits(&b))
+            })
+            .collect();
+        let (shared, _) = body.edit().finish(&Document::default()).unwrap();
+        std::thread::scope(|s| {
+            let racers: Vec<_> = (0..2).map(|_| s.spawn(|| box_bits(&shared))).collect();
+            for r in racers {
+                assert_eq!(r.join().unwrap(), want);
+            }
+        });
+        for f in fresh {
+            assert_eq!(f.join().unwrap(), want);
+        }
+        // Shed and filled again, the same.
+        let mut again = body.clone();
+        again.shed_cells();
+        assert_eq!(box_bits(&again), want);
+    }
 }

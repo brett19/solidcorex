@@ -123,21 +123,68 @@ fn an_edit_shares_until_written_and_writes_one_face() {
 fn into_draft_writes_in_place_when_unshared() {
     let s = sheet();
     let (body, _) = s.draft.finish(&Document::default()).unwrap();
-    let before: *const FaceRecord = &raw const **body.tables().faces.get(s.face).unwrap();
+    let before: *const EdgeGeom = body.tables().edges.get(s.edge).unwrap();
     let mut d = body.into_draft();
-    let after: *const FaceRecord = &raw const *d.face_mut(s.face).unwrap();
+    let after: *const EdgeGeom = d.edge_mut(s.edge).unwrap();
     assert_eq!(before, after);
+    // A face the draft started with is copied once on its first write, since `Changes`
+    // keeps it as it was (BR3); a face the draft made is written in place.
+    let f = d
+        .add_face(d.face(s.face).unwrap().record().clone())
+        .unwrap();
+    let made: *const FaceRecord = &raw const **d.tables().faces.get(f).unwrap();
+    let written: *const FaceRecord = &raw const *d.face_mut(f).unwrap();
+    assert_eq!(made, written);
+}
+
+/// The sheet's ids, kept once its draft is finished.
+struct Ids {
+    face: FaceId,
+    edge: EdgeId,
+    vertex: VertexId,
+}
+
+fn ids(s: &Sheet) -> Ids {
+    Ids {
+        face: s.face,
+        edge: s.edge,
+        vertex: s.vertex,
+    }
+}
+
+/// Fills every cell of `body`: the sheet's face cells, its edge's curve box, the body cells.
+fn fill(body: &Brep, s: &Ids) {
+    let f = body.face(s.face).unwrap();
+    assert_eq!(f.contains_uv(Point2::new(1.0, 1.0)), Some(UvSide::Inside));
+    assert_eq!(f.bounding_box(), None);
+    let _ = cells::curve_box(body.tables().edges.get(s.edge).unwrap());
+    assert_eq!(body.vertex(s.vertex).unwrap().edges().count(), 1);
+    assert_eq!(body.bounding_box(), None);
+    assert!(!face_cells_empty(body.tables(), s.face));
+    assert!(!body.tables().edges.get(s.edge).unwrap().cells.is_empty());
+    assert!(!body.body_cells().is_empty());
+}
+
+fn face_cells_empty(t: &tables::Tables, f: FaceId) -> bool {
+    t.faces.get(f).unwrap().cells.is_empty()
 }
 
 #[test]
-fn a_vertex_or_edge_write_copies_no_face_with_empty_cells() {
-    let s = sheet();
-    let (body, _) = s.draft.finish(&Document::default()).unwrap();
+fn a_vertex_or_edge_write_copies_no_face() {
+    let sh = sheet();
+    let s = ids(&sh);
+    let (body, _) = sh.draft.finish(&Document::default()).unwrap();
+    fill(&body, &s);
     let mut d = body.edit();
     d.vertex_mut(s.vertex).unwrap().point = Point3::new(1.0, 0.0, 0.0);
     d.edge_mut(s.edge).unwrap().accuracy = None;
-    // No cell is filled in BR1, so no face record is replaced.
+    // No face cell reads an edge or a vertex, so no face record is copied, and the shared
+    // face keeps its cells.
     assert!(d.tables().faces.shares(&body.tables().faces));
+    assert!(!face_cells_empty(d.tables(), s.face));
+    // The edge write resets the draft's edge, not the body's.
+    assert!(d.tables().edges.get(s.edge).unwrap().cells.is_empty());
+    assert!(!body.tables().edges.get(s.edge).unwrap().cells.is_empty());
     // The adjacency write copies only the adjacency table.
     d.adjacency_mut(s.edge).unwrap().fins.reverse();
     assert!(d.tables().faces.shares(&body.tables().faces));
@@ -145,10 +192,85 @@ fn a_vertex_or_edge_write_copies_no_face_with_empty_cells() {
 }
 
 #[test]
+fn every_write_path_resets_what_it_hands_out() {
+    let sh = sheet();
+    let s = ids(&sh);
+    let (body, _) = sh.draft.finish(&Document::default()).unwrap();
+    fill(&body, &s);
+    // `edit`: the draft's copy is reset, the body's kept.
+    let mut d = body.edit();
+    d.face_mut(s.face).unwrap();
+    assert!(face_cells_empty(d.tables(), s.face));
+    assert!(!face_cells_empty(body.tables(), s.face));
+    // A record cloned with its cells goes back in reset.
+    let copy = body.face(s.face).unwrap().record().clone();
+    assert!(!copy.cells.is_empty());
+    let added = d.add_face(copy).unwrap();
+    assert!(face_cells_empty(d.tables(), added));
+    let mut geom = body.edge(s.edge).unwrap().geometry().clone();
+    assert!(!geom.cells.is_empty());
+    geom.ends = [s.vertex, s.vertex];
+    let e = d.add_edge(geom).unwrap();
+    assert!(d.tables().edges.get(e).unwrap().cells.is_empty());
+    // A finished draft starts with empty body cells.
+    drop(d);
+    let (again, _) = body.edit().finish(&Document::default()).unwrap();
+    assert!(again.body_cells().is_empty());
+    // `into_draft`, unshared: written in place, and reset.
+    let (mut body, _) = sheet().draft.finish(&Document::default()).unwrap();
+    fill(&body, &s);
+    let mut d = body.clone().into_draft();
+    d.edge_mut(s.edge).unwrap();
+    assert!(d.tables().edges.get(s.edge).unwrap().cells.is_empty());
+    drop(d);
+    let mut d = body.clone().into_draft();
+    d.face_mut(s.face).unwrap();
+    assert!(face_cells_empty(d.tables(), s.face));
+    // Shedding empties what the body alone holds.
+    drop(d);
+    body.shed_cells();
+    assert!(face_cells_empty(body.tables(), s.face));
+    assert!(body.tables().edges.get(s.edge).unwrap().cells.is_empty());
+    assert!(body.body_cells().is_empty());
+    // A copy-on-write of the edge table keeps the other edges' cells: a copy keeps fields.
+    fill(&body, &s);
+    let mut d = body.edit();
+    d.add_vertex(VertexRecord::new(Point3::new(0.0, 0.0, 1.0)))
+        .unwrap();
+    let v = d
+        .add_vertex(VertexRecord::new(Point3::new(0.0, 0.0, 2.0)))
+        .unwrap();
+    d.add_edge(EdgeGeom::new(EdgeShape::Collapsed, [v, v]))
+        .unwrap();
+    assert!(!d.tables().edges.shares(&body.tables().edges));
+    assert!(!d.tables().edges.get(s.edge).unwrap().cells.is_empty());
+}
+
+#[test]
+fn body_cells_stay_small() {
+    let sh = sheet();
+    let s = ids(&sh);
+    let (body, _) = sh.draft.finish(&Document::default()).unwrap();
+    fill(&body, &s);
+    let t = body.tables();
+    // One star, one shell row of two sides, the region rows: offsets and ids only.
+    let adjacency = body.body_cells().adjacency(t).bytes();
+    assert!(adjacency <= 128, "{adjacency} bytes");
+    // The plane face has no box, so the boxes hold one unboxed id and no tree.
+    let boxes = body.body_cells().boxes(t, body.resolution()).bytes();
+    assert!(boxes <= 16, "{boxes} bytes");
+}
+
+#[test]
 fn a_pending_edge_has_no_shape_until_attached() {
     let mut s = sheet();
     let v = s.vertex;
-    let e = s.draft.add_edge_pending([v, v]).unwrap();
+    // The wire runs from the lone vertex to a second one, where its line will end.
+    let w = s
+        .draft
+        .add_vertex(VertexRecord::new(Point3::new(1.0, 0.0, 0.0)))
+        .unwrap();
+    let e = s.draft.add_edge_pending([v, w]).unwrap();
     assert_eq!(s.draft.edge(e).unwrap().shape(), None);
     assert_eq!(
         s.draft.edge(s.edge).unwrap().shape(),
@@ -306,10 +428,11 @@ fn record_sizes_stay_small() {
     use core::mem::size_of;
     // A face record is its surface by value plus sides and loops; a use its pcurve plus
     // 16 bytes; a vertex its point plus 8.
-    assert!(size_of::<FaceRecord>() <= size_of::<Surface>() + 32);
+    // The cells add a once-flag and a pointer per cell: 16 bytes each (research 63 §6.9).
+    assert!(size_of::<FaceRecord>() <= size_of::<Surface>() + 32 + 32);
     assert!(size_of::<EdgeUse>() <= size_of::<UseGeom>() + 24);
     assert!(size_of::<VertexRecord>() <= 32);
-    assert!(size_of::<EdgeGeom>() <= size_of::<EdgeShape>() + 24);
+    assert!(size_of::<EdgeGeom>() <= size_of::<EdgeShape>() + 24 + 16);
     assert_eq!(size_of::<Fin>(), 8);
     assert_eq!(size_of::<EdgeAdj>(), 24);
 }

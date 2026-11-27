@@ -1921,13 +1921,15 @@ the same points, and a coincidence's extents swapped. The difftest compares
 `section_by_plane` with the pin. Still missing from SS2:
 
 - the cylinder's too-long ellipse and the cone's band between the parabola threshold and the
-  precision bound (`General`, above);
+  precision bound (`General`, above; §5.8 (c): not closed, a rational shape in the clipper
+  is proposed);
 - the torus's spiric sections (`General`; step 5's marcher);
 - exact pcurves off the plane: the cone's conics, open and closed (`pcurve_of` answers
   `NoClosedForm`; the cylinder's oblique ellipse is built, §4.14);
 - the difftest goes through `section_by_plane` only, not `intersect`'s plane-first order
   (the pin's `intersect_with_plane` has one order);
-- SS4 (classification at the tolerance); SS3 (the coaxial pairs, §5.7) is built.
+- ~~SS4 (classification at the tolerance)~~ built 11-27 (§5.8); SS3 (the coaxial pairs,
+  §5.7) is built.
 
 ## 4. `scx-surface`
 
@@ -3345,7 +3347,7 @@ Decided by analysis and an adversarial pass. Proposed for review; not yet ruled.
 // scx-ssi::analytic
 #[non_exhaustive] pub enum Intersection {
     Pieces { curves: Vec<IntersectionCurve>, points: Vec<IntersectionPoint> },  // at least one
-    Coincident { on_a: Extent2d, on_b: Extent2d },
+    Coincident { on_a: Extent2d, on_b: Extent2d },   // 11-27 §5.8: Coincident(Vec<Overlap>)
     Empty,                                                                       // final
 }
 pub struct IntersectionCurve { pub curve: Curve, pub span: Extent1d, pub contact: Contact }
@@ -3499,8 +3501,10 @@ Both are exact and deterministic. Nothing was taken that depends on a search or 
 - ~~Parabola and hyperbola kinds in `scx-curve`.~~ Built 11-27 (§3.12); a cone's
   parabola and hyperbola are solved.
 - The cylinder's ellipse too long for its precision, and the cone's band between the
-  parabola threshold and that bound: `General` (§3.12).
-- SS2's remaining gaps are listed in §3.12; SS4.
+  parabola threshold and that bound: `General` (§3.12). Looked at in SS4 and not closed
+  (§5.8 (c)).
+- SS2's remaining gaps are listed in §3.12. ~~SS4~~ built 11-27 (§5.8): `Coincident`
+  carries the overlap, and one depth rule decides tangency.
 
 ### 5.7 SS3 as built (11-27)
 
@@ -3577,6 +3581,8 @@ The axis is chosen as follows:
     §5.6. Bounding the overlap of two latitude and longitude patches is SS4's
     classification work. A caller that needs the overlap intersects `on_a` with `on_b`.
     This is a deviation, listed for review.
+    [11-27, §5.8: superseded. `Coincident` carries the overlap's pieces, and two spheres
+    whose axes differ past the tolerance are `General`.]
 - **A torus's heights are its whole tube's** (`[-small, small]`), whatever its extent's
   tube angle. The clip then cuts the circles to the tube angle.
   - Against: a tighter height range would reject more pairs as empty before the clip runs.
@@ -3656,8 +3662,193 @@ textbook one for surfaces of revolution, and it is exact and deterministic.
 
 **Open.**
 
-- SS4: the overlap of coincident patches, and tangency classification at the tolerance.
+- ~~SS4: the overlap of coincident patches, and tangency classification at the tolerance.~~
+  Built 11-27 (§5.8). Concentric spheres now answer their overlap; tilted ones are
+  `General`.
 - SS2: non-coaxial quadric pairs.
+
+### 5.8 SS4 as built (11-27)
+
+Decided by analysis and an adversarial pass. Proposed for review; not yet ruled.
+
+```rust
+// scx-ssi::analytic
+pub struct Overlap { pub on_a: Vec<Point2>, pub on_b: Vec<Point2> }  // one piece, vertex for vertex
+#[non_exhaustive] pub enum Intersection {
+    Pieces { curves: Vec<IntersectionCurve>, points: Vec<IntersectionPoint> },
+    Coincident(Vec<Overlap>),   // was Coincident { on_a: Extent2d, on_b: Extent2d }
+    Empty,
+}
+```
+
+`intersect` and `section_by_plane` keep their signatures. The new code is in
+`analytic/overlap.rs`; the tangency rule is in `section.rs` and `coaxial.rs`.
+
+**(a) The overlap of coincident patches.** `Coincident` now carries the pieces of the
+overlap, each a convex polygon in both surfaces' D13 uv, with `on_a[i]` and `on_b[i]` one
+point. Everywhere the closed forms find two surfaces coincident, the map from one uv to the
+other is affine (§5.6 plane uv; the revolutions' turns), so the overlap is exact as
+polygons:
+
+- **Two planes.** The second's rectangle is carried into the first's uv (a rotation and a
+  shift) and clipped by the first's rectangle (Sutherland and Hodgman): one convex polygon of
+  up to eight vertices. The clip is exact first, with no slack. Only when that is empty is it
+  taken again with the tolerance as slack, which gives a piece of no width where the patches
+  touch within the tolerance. When that too is empty the planes are apart and the answer is
+  `Empty`, as before.
+- **Two surfaces of revolution on one axis.** Each coordinate maps alone: the angle about
+  the axis turns and may reverse, a height shifts and may reverse, a latitude or tube angle
+  may reverse. The overlap is a product of intervals, split where an arc wraps past either
+  one's seam: up to two pieces per coordinate. An exact overlap gives pieces; a gap within
+  the tolerance gives a piece of no width; a gap past `tol + δ` (in angle, `asin` of it over
+  the least distance from the axis) is `Empty`; between those it is `General`, as §5.7.
+- **Two spheres one within the tolerance** (concentric to within it, not only to the bit)
+  share the latitude and longitude map when their axes agree within the tolerance over the
+  radius. When the axes differ by more it is `General`.
+- Every vertex is clamped into both extents.
+
+Choices, with the case against and the case for each:
+
+- **Polygons in uv, not the overlap's boundary curves in 3-D.**
+  - Against: a face builder wants the boundary as edges, and the polygon has to be turned
+    into them. A polygon also cannot carry a non-affine map, so a future pair with one (two
+    tilted spheres, below) needs another form.
+  - For: on every pair the closed forms call coincident the map is affine, so the polygon
+    is exact, small (eight vertices at most) and checkable: the tests map every vertex both
+    ways. The edges of the polygon are the patches' own uv lines, so the face builder already
+    has their 3-D curves. A `Vec` of pieces, not one polygon, because a wrapping arc gives
+    two.
+- **Exact first, slack second.**
+  - Against: two clips where one would do.
+  - For: a clip with slack moves every vertex of a true overlap out by up to the tolerance,
+    and clamping it back leaves vertices off the other patch's edge by about that (the
+    first build failed a turned-octagon test by 7e-10 this way). The second clip runs only
+    when the first is empty.
+- **Tilted coincident spheres are `General`.** The map between their uv is a rotation of
+  the sphere, and the overlap of two latitude and longitude patches is bounded by small
+  circles of the other's, which are no rectangle of either's uv.
+  - Against: §5.7 answered concentric spheres `Coincident` whatever their frames; this
+    answers fewer cases.
+  - For: §5.7's answer could not say where the overlap was (§5.7 recorded that as a
+    deviation). An overlap the type cannot hold is `General`, not a wrong polygon. No
+    difftest or T5 case lands here: the pin has no sphere overlap and T5 has no tilted pair.
+  - This is a deviation, listed for review.
+
+**(b) One tangency rule.** Before, each section had its own test of "tangent": a sphere's
+cap radius, a cylinder's half-gap between lines, a cone's `sin * rho`, a torus's half-chord,
+two meridians' half-chord. Those are widths across the crossings, which are of order
+`sqrt(tol * size)` when the depth is `tol`, so a large surface kept two crossings far deeper
+than the tolerance as a touch, and a small one split a tangency into two. Now one rule, as
+SU6's (§4.13: one `Tangent` per run within the tolerance):
+
+- **Two crossings whose surfaces part by no more than the tolerance between them are one
+  tangent piece at the deepest point. A miss within the tolerance is the same touch.**
+- The depth per case, each closed form:
+  - a sphere's cap, `r - |d|`, a touch point at the cap's centre;
+  - a cylinder's strip between two lines, `r - |d|`, a tangent line at its middle;
+  - a torus's tube top or bottom, `small - |h|`, a tangent circle;
+  - a cone's thin sector between two generators, `rho sin^2 / (1 + |cos|)` (the most the
+    cone leaves the plane between them), a tangent generator at its middle;
+  - a line meridian into a circle meridian, `r - dist`;
+  - two circle meridians, the lens across their overlap or across the gap when one is
+    nearly inside the other, a touch at the lens's middle.
+- Against:
+  - the pin's WR-79 kept the exact circle in the SSI and put the "cap centre within the
+    tolerance" test in its face intersector. Keeping the exact curve defers the decision
+    to where topology is known.
+  - A tangent piece in place of two crossings moves the curve by up to the tolerance.
+- For:
+  - SU6's curve-surface intersection already answers one `Tangent` per run within the
+    tolerance. Two layers deciding tangency differently would give an edge that SU6 calls a
+    touch and SSI calls two crossings.
+  - Depth is the quantity the tolerance bounds (every point within it of both surfaces);
+    width is not.
+  - The truth judges agree: in both difftests a truth crossing pair is matched by the
+    tangent piece only when the run between them stays within the tolerance (below).
+
+**(c) The near-threshold `General` bands.** Each was looked at for an exact classification.
+None is closed; why:
+
+- **The cylinder's too-long ellipse** (`semi * 2^-50 > tol`). The ellipse is a valid exact
+  kind, but its form has an error of about its size times epsilon, which is past the
+  tolerance by definition of the band. Its flanks are not near a parabola (they are the
+  cylinder's straight generators), and past the two-lines threshold they are not lines. An
+  exact answer needs a form whose error is relative to the local curvature, such as a
+  rational quadratic arc (a conic as a weighted Bezier, held to the tolerance by its control
+  points). The clipper has no rational `Shape`, so this is proposed as follow-up work, a
+  `Shape::Rational` in `analytic/clip.rs`, not built here.
+- **The cone's band between the parabola threshold and the precision bound.** The same
+  reason. The parabola check `2 |e| reach^2 <= tol |g|` is conservative (it bounds the whole
+  extent's height, not the arc inside it), so a tighter bound from the clipped arc would
+  move part of the band to `Solved`. The arc is only known after clipping, which needs the
+  kind. Not closed: it would need clipping twice.
+- **Vertex-near cases** (a plane through a cone very near its apex, at an angle between the
+  generators' and the axis's). The kind depends on the sign of `e`, whose rounding is of the
+  order of `e` there; the classification is ill-conditioned in doubles, and an exact
+  predicate would only move the band, since the curve itself is then shorter than its
+  precision. Left `General`.
+
+**(d) Other §5 and SS2 items.**
+
+- The difftests check tangency and overlaps against T5, not only the pin (below).
+- SS2's other gaps (§3.12) are not SS4's: the torus's spirics, pcurves off the plane, the
+  difftest's single order. They stay open there.
+
+**Tests and the truth extension.**
+
+- Unit: `coincident_overlap_follows_order` replaces `coincident_extents_follow_order` (the
+  extents it checked are no longer in the answer; it now checks that the pieces swap with the
+  order). New: `coincident_planes_turned_give_an_octagon`, `coincident_planes_touching_and_apart`
+  (a gap of 5e-10 is a touch of no width, 1e-6 is `Empty`).
+- `tests/common`: an overlap judge (every vertex pair is one point; a 41 by 41 grid over the
+  first extent, where a sample inside the second by a margin must be covered by a piece and a
+  sample outside by the margin must not be strictly inside one), and a depth judge (each
+  tangent piece within `tol` of both surfaces; a truth crossing absorbed by a tangent piece
+  only when the run to it is shallow; any two transversal pieces, or opposite points of a
+  whole conic, whose run stays within half the tolerance are flagged).
+- `plane_sections`: `depth_rule`, across sphere, cylinder, torus and cone at depths
+  `0.5 tol, 0, -0.5 tol, 4 tol, -4 tol`; turned plane polygons and edge to edge planes.
+- `coaxial`: `depth_rule` (sphere and cylinder, two spheres, torus and cylinder at the same
+  depths) and `overlaps` (wrapped cylinder arcs in two pieces, stacked heights touching,
+  arcs end to end, a turned cone frame, tube arcs, sphere caps split by the second's seam, a
+  tilted cap `General`).
+- The difftests' T5 judges now check the overlap against the truth's patches, hold
+  tangent pieces to the tolerance, and apply the depth judge.
+
+**Difftests.** 0 mismatches and 0 nondeterministic:
+
+| difftest | inputs | exact | within tolerance | pin defects |
+|---|---:|---:|---:|---:|
+| `ssi_section_by_plane` | 1,000 | 323 | 532 | 145 |
+| `ssi_coaxial` | 900 | 501 | 129 | 270 |
+
+The totals are the same as before SS4: the pin's answers are unchanged, and the stricter
+T5 judges (overlap, depth) pass on every input. The pin's `Coincident` planes and cylinders (23 and 46 defects) are
+now judged by their overlap's pieces, not by the whole extents.
+
+**Added work.** Side-channel, a throwaway timer, not committed; release, per call, on the
+pool's cases, before and after:
+
+| case | before | after |
+|---|---:|---:|
+| plane and plane | 255 to 288 ns | 316 to 367 ns |
+| coaxial, coincident | 288 to 477 ns | 658 to 690 ns |
+| cylinder, cone, sphere, torus sections; coaxial crossing | — | unchanged within noise |
+
+The plane cost is the clip and its `Vec` on the coincident half; the coaxial cost is the
+rectangles and the D13 maps of their corners. Both are paid only where the answer is
+`Coincident`, which before carried no overlap at all. The depth rule replaces one square
+root per case by a subtraction, moving the root after the test.
+
+**Other kernels (research 66).** Nothing applies: 66 lists no technique for coincident
+overlaps or tangency depth. Sutherland and Hodgman's clip is the textbook one, exact for a
+convex polygon against a rectangle and deterministic.
+
+**Open.**
+
+- `Shape::Rational` for the too-long conic bands ((c) above).
+- Tilted coincident spheres: `General` ((a) above).
+- The face intersector's use of the overlap (step 5's face work).
 
 ## 6. `scx-brep`
 
@@ -4125,6 +4316,734 @@ in for BR8's largest generated body, which does not exist yet.
   view.
 - At 10,000 faces (about 1.4 MB of face records) the walk falls out of L2.
 - Research 51's 4.9 ns per face is met up to 1,024 faces.
+
+### 6.7 BR2 as built (11-27)
+
+Decided by analysis and an adversarial pass. Proposed for review; not yet ruled.
+
+`Draft::finish` now runs, in order, and stops at the first failure:
+
+1. every curve attached (`MissingCurve`, `Defect`);
+2. `check::references` (BR1's, unchanged);
+3. `check::structure`: the body invariants (`StructureCause`, `Refused`);
+4. `check::geometry`: the cheap geometry check (`GeometryCause`, `Refused`).
+
+Each pass walks records in kind order (regions, shells, faces, edges, vertices), then id order, so
+with several faults the cause is the lowest and the same on every run. Both cause enums are
+`Copy`, `#[non_exhaustive]`, with a stable `name()` and a `Display` that names the ids; the
+geometry causes carry the gap and the allowance as `Length` where there is one.
+
+**Structure** (the pin's `topology/brep/validation/assert_valid` rules, ported as one pass of
+sorted arrays and a disjoint-set forest, no maps):
+
+| Cause | Rule |
+|---|---|
+| `wire_with_fins` | a shell's wire edge has no fin |
+| `face_without_loop`, `empty_loop` | a face has a loop, a loop has a use |
+| `loop_not_connected` | each use starts where the one before it ends |
+| `point_use_of_curve`, `pcurve_interval` | a curve edge's use is a pcurve over the edge's own interval |
+| `repeated_use` | a face uses an edge at most once in each sense |
+| `use_without_fin`, `repeated_fin` (and BR1's `fin_without_use`) | radial completeness: the fins are the uses, each once |
+| `vertex_on_two_loops` | no vertex on two loops of one face (the pin's Face 39) |
+| `collapsed_edge_ends` | a collapsed edge starts and ends at one vertex |
+| `loose_edge`, `loose_vertex` | every edge has a fin or a shell, every vertex an edge or a shell |
+| `sides_disagree` | the sector rule: for radially consecutive fins `a`, `b`, the shell after `a` (front for a forward fin) is the shell before `b` |
+| `empty_shell`, `shell_not_connected` | a shell holds something and is one piece (face sides joined across edges by the sector rule and at shared vertices) |
+| `region_without_shell` | every region but the outside has a shell; the outside has one if any region does |
+
+**Geometry** (research 60 V1 at fixed samples, 63 D10; 8 segments per edge and per use, the ends
+exact):
+
+| Cause | Rule |
+|---|---|
+| `edge_end_off_vertex` | a curve's ends within its vertices' balls (the pin's Edge 16, 17) |
+| `edge_too_short` | the curve longer than its own reach (Edge 7) |
+| `use_end_off_vertex` | a use's lifted ends within its vertices' balls |
+| `outside_domain` | every sample in the surface's domain |
+| `pcurve_off_edge` | every sample lifts onto the edge's curve at the same parameter (onto the vertex, for a collapsed edge) |
+| `period_jump` | no two consecutive samples 0.9 of a period apart (Edgeuse 7, the pin's threshold) |
+| `dog_leg` | at a pole, a pcurve only arrives or leaves: samples at the pole near an end keep the end's `u` (Edgeuse 20); 10 probes at `2^-j` of the interval toward each pole end catch a leg shorter than a segment |
+| `pole_not_vertex` | no interior sample at a pole when neither end is there (Face 24) |
+| `loop_open_in_uv` | each use ends where the next starts in uv, within the two ends' budgets over the surface's larger speed there |
+| `loop_orientation` | loop 0 counter-clockwise from the front, the others clockwise (shoelace on the samples) |
+| `face_wraps` | the loops span at most a period in each closed direction |
+
+Poles are the sphere's two and the cone's apex. A NURBS surface's collapsed rows are not found yet.
+
+**T7** is `scx_testkit::topology`: a body as plain incidence data (indices, senses, sides), with
+`violations` (every failed invariant, sorted), `euler` and `genus` per shell, and the pole and
+seam predicates `jumps`, `dog_leg` and `passes_pole` on dense uv samples. It is written with maps
+and a breadth-first search where the library uses sorted arrays and disjoint sets. The tests
+adapt each draft to it and require agreement on every body: the structure is refused exactly when
+the oracle finds a violation, and the cause is among them. T6 is not needed yet: every pcurve in
+the tests is exact, and the lift check compares at the edge's own parameter.
+
+Decisions, each with the case for and against:
+
+- **The whole body is checked, not the touched part** (01 §2.3 says touched).
+  - *For:* touched needs the draft's events, which are BR3's; until then the whole body is the same
+    answer, and the cost is linear (measured below).
+  - *Against:* an edit of one face in a large body pays for every face.
+  - *Change if:* BR3's events land. Then the structure pass keeps its global parts (shells,
+    regions) and the record parts run on the touched records.
+- **Distances add**: an end is within `reach(edge) + reach(vertex)` of the vertex, a lifted sample
+  within `reach(use)` of the curve, and a use's end within `reach(use) + reach(edge) +
+  reach(vertex)`. A reach is the recorded accuracy, or the zone where none is recorded.
+  - *For:* truth. The curve's end is within its reach of the true end and the vertex within its
+    own, so the two are within the sum. The pin's `tau_e + tau_v` says the same.
+  - *Against:* research 60 V1 wrote the maximum. The sum admits up to twice as much.
+  - *Change if:* the accuracies are redefined as distances to each other rather than to truth.
+- **A collapsed edge has no radial order**: its fins are not paired by the sector rule, in the
+  check or in joining a shell's pieces.
+  - *For:* a pole's single fin has its face on both sides; the rule would read that as front equal
+    to back and refuse every closed sphere and cone.
+  - *Against:* a collapsed edge with two fins from different faces is then not checked for sides.
+  - *Change if:* bodies with shared collapsed edges appear (a double cone's apex); then pair them.
+- **uv closure is strict**: the joint gap is allowed only the two ends' 3-D budgets over the
+  surface's larger speed. So a seam must be an edge used on both sides, and a pole's line must be
+  a collapsed edge's pcurve (63 §6, D8).
+  - *For:* the loop's uv polygon is then the face's trim, so orientation and wrap are well defined.
+  - *Against:* the pin accepts a loop that jumps a seam at a vertex, where the 3-D gap is zero. That
+    body is refused here.
+  - *Change if:* a writer needs it; the jump would be recorded as a uv shift on the use.
+- **A pole is one collapsed edge per face, each with one fin and a pcurve along the pole's line**
+  (BR8's form, asked of BR2). The pcurve's interval is its own: a collapsed edge has no
+  parameter, so the `pcurve_interval` rule compares nothing there, and `[0, 1]` is a convention,
+  not an assumption the check makes.
+  - *For:* strict closure needs the pole's line in the loop's uv (a `UseGeom::Point` leaves a jump
+    from the meridian's end to the next one's start, refused as `loop_open_in_uv`); faces round a
+    pole stay independent, so editing one lune touches no record of another; the use carries the
+    pcurve, so nothing needs an interval on the edge.
+  - *Against, shared edge with n fins:* one edge per pole is closer to the 3-D truth (one point),
+    but its fins have no radial order (see above), so their list order is a convention to keep
+    deterministic and every edit round the pole rewrites it. *Against, an interval on
+    `Collapsed`:* a field with no 3-D meaning, there only to repeat what the pcurve already holds.
+  - *Change if:* a body needs the faces round a pole joined topologically (a double cone's apex);
+    then a shared edge with its fins paired by angle, as the radial rule's change-if says.
+  The check does not refuse a shared pole edge; the generators and writers use this form.
+- **Face 24 by the pole check plus closure**: a pole inside a face's interior (no edge through it)
+  is the case the shoelace and the domain catch together, since a loop round a pole on a sphere
+  must cross the pole's line, which closure allows only along a collapsed edge's pcurve.
+- **Loop 0 may turn clockwise only on a surface with an open direction** (a plane, a cylinder,
+  the cone's `v`): the face is then the surface minus holes, unbounded.
+  - *For:* BR1's sheet test and a half-space face are valid bodies.
+  - *Against:* on a plane, a closed solid's face with its loop reversed is read as an unbounded face,
+    not refused; the sides check catches the reversal only when the sides were not also swapped.
+  - *Change if:* 01 rules every face bounded; then loop 0 is always counter-clockwise.
+- **Point loops have no orientation** (a lone vertex, or a loop of collapsed edges): there is no
+  area to sign.
+- **Euler is a T7 check, not a `finish` one**: for a body that passes the record and shell checks
+  the characteristic is whatever the topology is; there is no genus to compare it with. The tests
+  assert genus 0 on the valid bodies.
+- **`finish` does not compare region kinds across a face.** Both sides solid is a non-manifold
+  interface, which 01 allows.
+
+Deferred, with where they belong:
+
+- the radial order's geometry (the pin's Edge 9, 10: fins counter-clockwise by the faces' normals);
+- inner loops inside the outer and loops not crossing (Face 37, 38): BR4's cells hold the trim;
+- a NURBS surface's poles;
+- region connectivity (Brep 18, 19);
+- the sample count: 8 segments catch a fault wider than an eighth of a use. A tighter check is
+  T6's job in the tests, and the writer's at fit time (D10).
+
+**Difftest against the pin's checker: not feasible yet.** The pin's `check_brep` reads its own
+arena, and there is no converter from an scx body to it (RE3's record path is the first). The pin's
+sphere and cone uv are in radians where ours are D13's arc parameters, so even a converter must
+remap every pcurve. Recorded for RE3: once a body can be decoded on both sides, the same bodies go
+to both checkers, with each disagreement judged against T7.
+
+**Tests.** 3 new unit tests (the pole rules on hand-made pcurves, each also judged by T7's
+dense-sample predicates) and 4 integration tests in `tests/finish.rs`: a block, a cylinder, a
+sphere and a cone finish, with genus 0 by T7; 20 structure faults each give their cause, and 10 broken bodies give 9 of the
+11 geometry causes (`dog_leg` and `pole_not_vertex` come from the unit tests); a structure fault outranks a geometry one, the lower of two ids is named, and a rerun
+gives the same cause. 4 unit tests for T7 in `scx-testkit`. BR1's tests changed in two places: a
+pending line ran between one vertex and itself (now two vertices), and a face turned over with its
+sides left alone is now refused as `sides_disagree` (the test makes a valid rewrite instead).
+
+**Cost.** Release build, best of 5 runs of 200 finishes of a cloned draft, before (BR1, references
+only) and after:
+
+| Body | BR1 | BR2 | of which structure |
+|---|---|---|---|
+| 100 blocks, 600 planar faces | 17.8 µs (0.03 µs per face) | 698 µs (1.16 µs per face) | 195 µs (0.32 µs per face) |
+| block, 6 faces | 0.20 µs | 6.9 µs | 1.7 µs |
+| cylinder, 3 faces | 0.07 µs | 4.0 µs | 0.5 µs |
+| sphere, 1 face | 0.05 µs | 6.0 µs | 0.3 µs |
+| cone, 2 faces | 0.06 µs | 3.4 µs | 0.4 µs |
+
+The added work is about 1.1 µs per face, three quarters of it geometry: 8 samples per use, the
+endpoint evaluations, and on a sphere the pole probes and trigonometry. It is linear in the body, so
+a large body pays it in full on every finish until finish checks only what the draft touched
+(open: BR3's touched sets, §6.8, make that possible).
+
+**Long loops (after BR8).** BR1's fin-to-use test scanned the face's uses for each fin, quadratic
+in a loop's length (BR8 saw 78 to 170 µs per face on long-loop bodies). It now sorts every use
+once as `(face, edge, sense)` and finds each fin's by binary search. On an n-gon prism (two caps
+of n uses), release, best of 3: n = 1,000: 1.79 to 1.74 ms; n = 4,000: 9.69 to 6.75 ms; n =
+16,000: 86.7 to 26.5 ms (5.4 to 1.66 µs per face, now flat in n). The 600-face blocks body is
+unchanged (1.09 µs per face).
+
+**Against BR8's bodies.** Every valid generated body (11 kinds, seeds 0 to 3, sizes 1 to 4)
+finishes, and every broken one (16 of BR8's 17 invariants; `UvGap` has no body yet) is refused,
+each invariant by one cause: `ShellOpen`, `Misoriented` and `RadialOrder` all as `sides_disagree`,
+`PeriodJump` and `PoleGap` as `loop_open_in_uv`, the rest by their own names. BR8's test of the
+three causes BR1 checked now asserts all of them (`finish_refuses_every_break_with_its_cause`).
+BR8's checker and T7 are both independent of `finish`; T7 is plain data for unit tests of the rules,
+BR8's reads a `Draft`. Folding them is left for review.
+
+**Merged with BR3.** Eight of BR3's `Changes` tests make bookkeeping edits that leave no valid
+body (a removed face's edges left loose, a lone vertex in a shell with faces, an edge's ends
+swapped), which the full check refuses. Their `done` now finishes through a test-only
+`finish_references_only` (BR1's check, then the same `Changes`); the strip they start from still
+goes through the full `finish`. *For:* what they test, the events and lineage, does not depend on
+validity, and making each edit valid would hide that under unrelated construction. *Against:* a
+path production never takes; the risk is small because the two share everything after the check.
+
+### 6.8 BR3 as built (11-27)
+
+Decided by analysis and an adversarial pass. Proposed for review; not yet ruled.
+
+**What was built** (`crates/scx-brep/src/changes.rs`, the recording in `draft.rs`):
+
+- `Draft::finish` returns honest `Changes`: for faces, edges and vertices, an `EntityChanges<I>`
+  with `replaced: Vec<(I, Touch)>`, `created: Vec<(I, Origins)>`, `merged: Vec<Merge<I>>`,
+  `coincident: Vec<Coincidence<I>>`, `removed: Vec<I>` and `split: Vec<Split<I>>`. Every list is in
+  id order; split pieces follow the key below.
+- `Touch` is `Boundary` (loops, sides, an edge's ends) or `Geometry` (surface, curve, interval,
+  accuracy, a vertex's point).
+- `Origin` is `Face`, `Edge`, `Vertex` (part of an entity the edit started with), `Offset(Entity)`,
+  `Operand(Operand, Entity)` (from a tool body) or `Free`. `Origins` is sorted, without repeats,
+  never empty; `[Free]` costs no allocation.
+- Draft calls added: `derive(new, origin) -> Result<(), LineageError>`,
+  `coincident(operand, entity, onto) -> Result<(), Absent>`, `merge_face`, `merge_edge`,
+  `merge_vertex` (remove the absorbed entity and name its survivor), and
+  `edit_face(id, |&mut FaceRecord| ..) -> Option<R>`.
+- `carry(changes, own, operands, rule) -> BTreeMap<I, T>` with `trait Carry<T>` (`split`, `merge`,
+  `coincident`, each returning `Option<T>`). `IdMap::renumber` carries an application table across
+  `compact`.
+- `Tracked` (sealed; `FaceId`, `EdgeId`, `VertexId`) makes all of it generic over the kind.
+
+**Decisions**, each with the case for and against:
+
+1. *Touch is found by diff, not by logging each write.* The first `face_mut`, `edge_mut` or
+   `vertex_mut` on an entity the draft started with keeps its record as it was (a face's `Arc`, an
+   edge's geometry without cells, a vertex); `finish` compares. For: a write that changes nothing
+   reports nothing (an edit that touches nothing gives empty `Changes`, 63 §6.3's identity oracle),
+   and no mutation path can forget to log. Against: one copy per first write, and the touch is
+   record-level only: a face around a moved vertex, or an edge whose radial order changed, is not
+   listed. Change if an application needs "faces whose geometry moved through a vertex": that is
+   derivable from `vertices.replaced` and the stars.
+2. *Under `into_draft`, the first write to a before-face copies it once*, since the kept snapshot
+   shares its `Arc`. BR1's test `into_draft_writes_in_place_when_unshared` now asserts in-place
+   writes for edges and for faces the draft added. For: honest `Changes` need the old record.
+   Against: `into_draft`'s "no copy" promise is weaker. Change if a profile shows it: a draft could
+   take a "no changes" flag.
+3. *Vertices get a full `EntityChanges`* (01 §2.6 has a smaller `VertexChanges`). For: one generic
+   `carry`, and vertex merges and coincidences are real (a boolean's coincident corners). Against:
+   a few unused lists. Kept.
+4. *Named `Merge` and `Coincidence` records* (57 §5.1) and a `split` list. A split is read off the
+   created entities that name a kept or removed entity as their part: `Split { from, pieces }` lists
+   `from` itself among the pieces when it survives.
+5. *Split piece order* is a total key: the lineage of the bounding entities (a face's edges, an
+   edge's vertices), then the uv midpoints of its boundary (`total_cmp`), then the id. For: stable
+   across executors and independent of creation order in the common case. Against: 01 §2.6 says an
+   interior point; boundary midpoints are cheaper and need no point-in-face test, but two pieces
+   with the same bounding lineage and the same boundary midpoints fall to the id, which is creation
+   order. Change if BR7's ports show a case where that matters.
+6. *`Origin::Offset`* added beyond 01, for offset and thicken (the pin's `offset_history`,
+   `issue_1973_*`). It carries by the same-kind rule (an offset face takes the face's values).
+7. *`derive` resolves at call time*: an origin naming a created entity stands for that entity's
+   origins as they are then. For: lineage always ends at the before-body or an operand. Against: a
+   later `derive` on the intermediate does not flow forward. `derive` on a before-id, or naming an
+   absent origin, is refused (`LineageError::NotCreated`, `UnknownOrigin`).
+8. *A created entity absorbed into a before-id drops its lineage*; one absorbed into a created id
+   adds its origins. A chain of merges is followed to the end; an absorbed entity whose survivor is
+   gone counts as removed.
+9. *`Carry` rules return `Option`* (01 has `T`), so "no value" is expressible, as the pin's
+   attribute handlers allow (`issue_1730_application_attribute_handlers`). Cross-kind origins carry
+   nothing.
+10. *`carry` takes `operands: &[&BTreeMap<I, T>]`*, indexed by `Operand`, for the boolean
+    attribute tests (`issue_1462_boolean_*`). The tables are `BTreeMap`, as `IdMap` is taken by
+    `compact`.
+11. *BR1's question, loop edits keeping fins in step: yes.* `edit_face` diffs the face's
+    `(edge, sense)` uses before and after the closure and fixes only the changed fins, so a seam's
+    two fins stay distinct. `face_mut` is kept for edits that do not move uses. `attach_curve`
+    needed nothing: its touch comes from the diff.
+12. *Regions and shells are not reported.* No pin test reads them; add when one does.
+13. *No difftest*: the pin has no equivalent of `Changes` to compare against (its history is
+    callbacks into application code). BR7 ports the tests themselves.
+14. Research 66 has nothing on provenance.
+
+**Tests** (15 in `changes/tests.rs`): each mutation's event and touch (including a re-attach of the
+same curve giving none), adds and removes, splits ordered by bound and by place, merges through
+chains, refused derives, coincidences following the survivor, the same edit twice giving equal
+`Changes`, carry over a split, merge, coincidence and offset, carry across an edit then `compact`,
+and `edit_face` on a seam.
+
+**Cost** (MEASURED, throwaway timer, a 100×100 quad sheet: 10,000 faces, 20,200 edges, 10,201
+vertices; best of 9; ns per call or µs per finish; the host was loaded, so ±15%):
+
+| Step | Before | After |
+|---|---|---|
+| `add_*`, per entity | 50–72 | 60–80 |
+| `face_mut`, first write | 90–124 | 127–142 |
+| `face_mut`, later write | 37–49 | 53 |
+| `edge_mut`, first write | 12–18 | 35–41 |
+| `vertex_mut` (the star scan dominates) | 16,000–26,000 | 16,000–29,000 |
+| `remove_face` / `remove_edge` / `remove_vertex` | 106–137 / 42–58 / 10–13 | 116–152 / 52–67 / 9–11 |
+| `finish`, built draft (40,401 created) | 700–1,200 | 1,800–2,000 |
+| `finish`, untouched edit | 260–500 | 320–540 |
+| `finish`, `face_mut` on every face | 540–950 | 940–1,400 |
+| `finish`, `face_mut` on 100 faces | 300–540 | 320–540 |
+| `edit_face`, no change / rotated loop | | 156–175 / 171–204 |
+| split every face via `derive`, then `finish` | | 5,400–8,200 |
+
+Snapshots are a bit per slot plus a list in first-write order, so a repeat write costs a bit test.
+The remaining first-write cost is the copy itself (an edge's curve clone). `finish` on a fully
+built draft pays for the 40,401-entry created lists.
+
+**Open**:
+
+- `Changes::then`, the composition oracle (63 §6.3), is not built; it needs a rule for a split of a
+  merged entity.
+- Whether `Offset` should carry by its own rule rather than the same-kind one.
+- Touch of faces around moved edges and vertices (decision 1).
+- The `into_draft` copy (decision 2).
+
+### 6.9 BR4 as built (11-27)
+
+Decided by analysis and an adversarial pass. Proposed for review; not yet ruled.
+
+BR4 fills BR1's empty `FaceCells` and `EdgeCells` and adds body cells. Cells are derived data,
+filled on first read by a pure function. They never change a result, only its speed.
+
+**Public API added.**
+
+```rust
+pub enum UvSide { Inside, Outside, Near }
+impl<S: Stage> Face<'_, S> {
+    pub fn uv_box(self) -> Option<Extent2d>;
+    pub fn contains_uv(self, p: Point2) -> Option<UvSide>;
+}
+impl Face<'_, Finished> {
+    pub fn accuracy(self) -> Option<Accuracy>;
+    pub fn bounding_box(self) -> Option<Extent3d>;
+}
+impl Edge<'_, Finished> { pub fn bounding_box(self) -> Option<Extent3d>; }
+impl Brep {
+    pub fn bounding_box(&self) -> Option<Extent3d>;
+    pub fn faces_meeting(&self, b: Extent3d) -> impl ExactSizeIterator<Item = Face<'_>>;
+    pub fn shed_cells(&mut self);
+}
+```
+
+`Region::shells`, `Shell::faces` and `Vertex::edges` keep their signatures. On a `Brep` they
+walk a body cell's row. On a `Draft` they scan the tables, as before.
+
+**What is built.**
+
+- **Face cells**, each a `OnceLock<Box<_>>`:
+  - The boundary tree. It holds the loops' pcurves as pieces: 4 parts per curved use, 1 per
+    line, and a straight gap piece wherever a use's end is not exactly the next use's start.
+    It also holds a box tree over the pieces (4 per leaf), the uv box, and the region's sense.
+  - The surface box: `Surface::box_over` of the uv box. On a plane, cylinder or cone (straight
+    along `v`) with a bounded region, it is cut down to the hull of the pieces' boxes mapped.
+- **The edge cell**: the curve's box, the hull of the interval enclosures over 8 parts of its
+  interval (1 for a line).
+- **Body cells**, an `Arc<BodyCells>` beside the tables, holding two `OnceLock`s:
+  - Adjacency rows (compressed rows by slot, each row in id order): each vertex's star, each
+    shell's face sides, each region's shells.
+  - Boxes: every face's grown box, a box tree over them (median split on the longest spread of
+    the box middles, ties broken by id, 4 per leaf), the unboxed faces, and the body's box.
+- **Point-in-face** (`contains_uv`) is a winding number along a ray.
+  - It tries four rays (`+u`, `-u`, `+v`, `-v`). A ray is undecided where a piece endpoint lies
+    level with the point.
+  - A subtree that lies wholly ahead of the point costs two endpoint tests, because the pieces
+    chain.
+  - A piece whose box holds the point is halved, down to depth 48 (then the answer is `Near`)
+    or until 4,096 halvings in all (then `None`).
+  - On a periodic surface the point is tried at its lifts, at most 8 per axis.
+- **The region's sense** is the sign of an enclosed signed area, refined over 1 to 16 parts per
+  use.
+  - Positive: the loops bound a region, and the uv box is the pieces' hull.
+  - Negative, or no loop with area: the loops are holes in the whole domain, and the uv box is one
+    window of the domain.
+  - Undecided: `contains_uv` returns `None`, and the uv box is the hull joined with the window.
+
+**Every box is a certified enclosure, never sampled.**
+
+- Every box comes from an interval evaluation (`point_over`) or `Surface::box_over`, rounded
+  outward.
+- A face's box is its surface box grown by `round_up(accuracy + zone)`. An edge's box is its curve
+  box grown by the edge's accuracy plus the zone. A collapsed edge uses its vertex's box. A
+  vertex's box is its point grown by its accuracy plus the zone.
+- The body's box is the union of all of these. It is `None` when the body is empty or any face or
+  edge has no box.
+- So each box holds every point of the exact entity, and every place within the resolution of it.
+
+The surface box's overshoot, on a full-turn cylinder (r = 1, h = 1, tilted frame), as the ratio
+of the box side to the exact side, per box:
+
+| Per-arc enclosure | Ratio (x / y / z) | Cost |
+|---|---|---|
+| interval, 1 part | 1.75 / 1.88 / 1.63 | 1.2 µs |
+| interval, 2 parts | 1.31 / 1.36 / 1.19 | 2.5–3.5 µs |
+| interval, 4 parts (chosen) | 1.21 / 1.24 / 1.10 | 4.0–4.8 µs |
+| interval, 8 parts | 1.11 / 1.12 / 1.05 | 5.4–6.0 µs |
+| interval, 16 parts | 1.06 / 1.06 / 1.02 | 10 µs |
+| Taylor model, 1 part | 1.39 / 1.40 / 1.05 | 20 µs |
+| Taylor model, 2 parts | 1.07 / 1.06 / 1.04 | 41 µs |
+| Taylor model, 4 parts | 1.01 / 1.00 / 1.01 | 81 µs |
+
+The tests check that a block's box sides stand off by between the zone and the zone plus
+1e-12. They check that a cylinder's box is within 1.25 of the exact side. They also check that
+every sampled point of every face and edge lies in its box, and that a 21 × 21 uv grid's
+`contains_uv` answers agree with the face box.
+
+**Decisions.**
+
+- **A record's cells read that record alone** (design B). BR1's planned
+  `FaceCell::fill(rec, &EdgeGeomTable, &VertexTable)` and its reset skip are replaced. A face
+  cell reads the surface and pcurves, and an edge cell reads the edge's shape. Anything that
+  crosses records is a body cell.
+  - `face_mut` and `edge_mut` reset only the record they hand out. `add_*` resets the record it
+    takes in. `vertex_mut` and `adjacency_mut` reset nothing, and `vertex_mut` no longer scans.
+  - *For:* BR1's skip was unsound. A face record shared by `Arc` with the body a draft came from
+    can be filled by that body (on another thread, or later) after the draft's reset, and the
+    draft then sees a cell derived from the old edge. Under design B no write has to reach
+    another record, so the writes are O(1). On main, `vertex_mut` scanned all edges (20,200 at
+    100 × 100) and `edge_mut` visited every fin's face.
+  - *Against:* a face's accuracy and 3D box read its edges and vertices, so they cannot be face
+    cells. The accuracy is derived on read, and the box is a body cell.
+  - *Change if:* a face cell needs cross-record data that is too slow to derive on read. It then
+    goes in the body cells, which a draft does not have.
+- **Body cells live behind an `Arc` in `Brep` and nowhere else.** `finish` and `compact` make
+  them fresh, clones share them, and a draft has none.
+  - *For:* no draft write can make a body cell stale, because no draft holds one. So there is
+    no reset bookkeeping across records.
+  - *Against:* after `edit` and `finish`, the whole body cell is rebuilt, even for a one-face
+    edit. At 10,000 faces that is about 0.9 ms for the stars and 14 ms for the boxes.
+  - *Change if:* profiles show edit loops that are rebuild-bound. Then make the rebuild
+    incremental from `Changes` (BR3).
+- **A clone carries its filled cells.** `OnceLock`'s derived `Clone` copies what is filled.
+  - *For:* a record enters a table only through `add_*` (which resets it) or as a faithful copy
+    (a copy-on-write, `compact`). So a carried cell always matches its fields. An edge-table
+    copy-on-write keeps every other edge's curve box. The test
+    `every_write_path_resets_what_it_hands_out` covers each path.
+  - *Against:* a user's clone that is mutated by field and inspected without being re-added
+    holds a stale cell. That cell cannot reach a body: it is crate-private, and `add_*` resets it.
+  - *Change if:* a path appears that puts a record into a table without `add_*`. A decoder must
+    go through `add_*`.
+- **Cells are boxed.** Each is a `OnceLock<Box<_>>`, 16 B inline.
+  - *For:* a face grows by 32 B, not by the cell's 600 to 900 B. An edge grows by 16 B. An empty
+    cell allocates nothing. The BR1 walk's cache footprint is unchanged.
+  - *Against:* one pointer chase per cell read.
+  - *Change if:* never at these sizes.
+- **Reads take `&Brep`: `OnceLock` cells, deterministic and `Send + Sync`.**
+  - *For:* one signature per op (`&` reads, `&mut` writes). Each fill is a pure function of its
+    inputs, so two threads that race store the same bits. The test
+    `cells_fill_the_same_bits_on_every_thread` fills on two threads, races two threads on one
+    body, and refills after `shed_cells`, comparing the bits each time. `OnceLock` is
+    `Send + Sync` for `Send + Sync` contents, and the crate's asserts keep `Brep` and the views
+    so.
+  - *Against:* a reader that meets a cell another thread is filling waits for that fill
+    (`OnceLock` runs one initializer). A filled cell cannot be freed through `&`, which is why
+    `shed_cells(&mut self)` exists. It frees the body cells and the cells of records the body
+    holds alone.
+  - *Change if:* a fill grows long enough that the wait shows in profiles. Then split
+    the cell, for example the box tree from the face boxes.
+- **Face accuracy is derived on each read, not cached.** It is the largest of the uses' bounds,
+  the edges' accuracies and their end vertices' accuracies, computed in O(uses).
+  - *For:* it reads other records, so as a face cell it would break design B. Measured at 9.4 ns
+    on a quad face, less than a body-cell lookup would save.
+  - *Against:* a face with hundreds of uses pays per read.
+  - *Change if:* profiles show it. It then becomes a column in the body boxes.
+- **The adjacency cells are built here** (BR1's "planned home"). `ShellRecord` still stores no
+  face list. The row is derived from the faces' `sides`.
+- **`faces_meeting` returns the tree hits plus the unboxed faces, in id order.** It uses a
+  closed-box test, so boxes that touch at a single shared bit count as meeting.
+  - *For:* the order does not depend on the tree's shape, so the tree can change without changing
+    any result. An unboxed face (one that reaches infinity) cannot be ruled out, so it is always
+    returned.
+  - *Against:* there is a sort per query.
+  - *Change if:* never.
+- **`rectangular_trim` (§6.2) is not built.** No reader exists yet. The boundary tree's uv box
+  plus a four-line loop would derive it.
+  - *Change if:* the first reader lands.
+- **No difftest.** The pin's `calculate_bounding_box` has a different contract:
+  - For a face with a linear direction, it boxes the vertices and edge curves, each grown by its
+    tolerance.
+  - For any other face, it boxes the whole control net, whatever the trim.
+  - Its `proved_bounding_box` is certified, but it is a different construction: the surface box
+    over the trimmed uv domain, grown by twice the largest tolerance.
+
+  None of these is bit-comparable with ours, and its point classification works on a different
+  topology. The truth tests above, which check the exact geometry against the boxes and against
+  `contains_uv`, stand in.
+
+**Research 66 adopted.** These are adopted:
+
+- the uv-box reject before point-in-face (§10.1 rank 1, §10.3);
+- a box tree over the faces (§6.1).
+
+The §10.3 conditions hold: pcurve boxes are interval enclosures rounded outward, and a loop over
+the seam stays on its unwrapped parameter, with the point tried at its lifts.
+
+**Tests.** There are 2 unit tests in `cells.rs` (parts, outward growth) and 7 in
+`boundary.rs`:
+
+- the square and its clockwise hole;
+- the annulus, with 200 points checked against their radius;
+- the cylinder band's lifts;
+- a face of points, a loop of no area, and a gap closing an open loop;
+- the boundary tree's size bound.
+
+In `tests.rs`, one reset test is new, one is rewritten with filled cells, and the
+body cells' size bound is new; the record size bounds grew by the cell slots.
+There are 3 new integration tests in
+`tests/bodies.rs`:
+
+- the block's boxes are tight, and `faces_meeting` equals brute force;
+- the cylinder's boxes and its seam;
+- fill determinism across threads.
+
+The block and cylinder walks now also compare each shell's faces, and each vertex star, between
+the draft scan and the finished rows.
+
+**Measured** (throwaway timer, not committed; release build).
+
+Per face (quad plane / circle cap / cylinder wall):
+
+| Measure | Quad plane | Circle cap | Cylinder wall |
+|---|---|---|---|
+| Boundary fill | 1.0–1.3 µs | 3.1–3.4 µs | 1.0 µs |
+| Surface box fill | 1.9 µs | 1.2 µs | 5.0 µs (was 23.8 before the period skip) |
+| Pieces | 8 (4 gaps) | 5 | 8 |
+| Boundary heap | 924 B | 636 B | 924 B |
+| `contains_uv` | 48 ns | 0.55 µs | 82 ns |
+
+Face accuracy costs 9.4 ns and a face box read 18 ns.
+
+On quad sheets of k × k faces:
+
+| Measure | 8 × 8 | 32 × 32 | 100 × 100 |
+|---|---|---|---|
+| All vertex stars, by scan | 14 µs | 2,395 µs | 525 ms |
+| All vertex stars, by rows | 2.4 µs | 27 µs | 0.29 ms |
+| Star fill (including `finish`) | 4.8 µs | 63.5 µs | 0.9 ms |
+| All shells' faces, by scan | 0.6 µs | 8.8 µs | 86 µs |
+| All shells' faces, by rows | 0.3 µs | 4.2 µs | 43 µs |
+| Adjacency rows, per face | 53.6 B | 52.3 B | 56.5 B |
+| Boxes fill, per face | 1.19 µs | 1.26 µs | 1.34–1.47 µs |
+| Boxes memory, per face | 88 B | 88 B | 88 B |
+| `faces_meeting` (a one-face box) | 47 ns | 58 ns | 70 ns |
+| Brute-force box filter | 2.5 µs | 21 µs | 292 µs |
+| `finish` alone | 1.1 µs | 14.9 µs | 370 µs |
+
+- The vertex-star scan is quadratic, so the rows win 1,800× at 10,000 faces.
+- `faces_meeting` is about 4,000× faster than the brute-force filter at that size.
+- Memory per face, fully filled: 32 B of slots, about 0.6–0.9 KB of boundary tree, under 64 B of
+  surface box, 88 B of boxes, and about 55 B of adjacency.
+
+**Open items.**
+
+- **The gap pieces double a line loop's pieces.** An interval endpoint is never an exact point,
+  so a gap goes in after every use. Dropping a gap between two overlapping endpoint enclosures
+  would leave the chain open by a few ulps. That is not sound unless the adjacent pieces' boxes
+  are proved to cover the gap.
+- **The boundary heap is about 1 KB per face.** It could be compressed with f32 boxes rounded
+  outward, or with node boxes shared with their pieces.
+- **A use index for fins** (§6.6) is not built as a cell. BR2's check sorts the uses once
+  instead (§6.7), and `Edge::uses` still scans a face's uses.
+- **Analytic point-in-face** for planes and quadrics (66 §10.1 M1) is not built: invert the
+  point to uv in closed form, then use `contains_uv`.
+- **A Morton radix build** of the face tree (66 §6.2) is not built. The median build is
+  1.3 µs per face, including the face boxes, and the trees are small.
+- **The hull-skip heuristic** (`spans_a_period`) is by uv width. A band just short of a full turn
+  still pays the hull, and the hull is then barely tighter.
+
+### 6.10 BR8 as built (11-27)
+
+Decided by analysis and an adversarial pass. Proposed for review; not yet ruled.
+
+`scx_testkit::bodies`, behind the testkit's optional `bodies` feature, builds valid bodies
+through `scx-brep`'s public `Draft` API only. It also builds one broken body per structure
+invariant, and holds an independent oracle, `check::violations`, that names the invariants
+a draft breaks. Every body is a function of `(kind, seed, size)`. Seed 0 is canonical: unit
+sizes, placed about the origin along z, no jitter. Any other seed draws the sizes, a
+right-handed frame and jittered splits from a SplitMix64.
+
+**Placement.** `layers.txt` puts `scx-testkit` in `[testkit]`, which may depend on any
+library, so a testkit dependency on `scx-brep` fits the layering. The open choice was
+whether to use a feature or a crate.
+
+- *For the feature* (chosen): one truth crate, as 63 §6.4 asks, and no new crate.
+  - The geometry layers' tests all dev-depend on the testkit. Without the feature they do
+    not build `scx-brep`, and `cargo xtask fast` is unchanged.
+  - `scx-brep`'s own tests can take the generators: an integration-test dev-dependency on
+    the testkit with `bodies` type-unifies.
+- *Against*, adversarially:
+  - A feature makes the dependency cycle `scx-brep` → (dev) testkit → `scx-brep` real for
+    `scx-brep`'s tests. In its `src` unit tests the two `scx-brep`s are distinct crates and
+    their types do not unify. Its integration tests are unaffected.
+  - A separate `[testkit]` crate (`scx-testkit-brep`) would make the cycle explicit and need
+    no feature.
+  - Answer: the generators are used from integration tests and `scx-difftest`. A unit test
+    that needs a body can call `generate` from `tests/`. A second crate costs a
+    `layers.txt` row and a crate for 2,100 lines. Revisit this if unit tests come to need
+    the bodies.
+- 63 §6.4 named the module `gen`. It is `bodies`, because `gen` is a reserved keyword in
+  edition 2024.
+
+**The public surface.**
+
+```rust
+pub enum Kind { Block, Prism, QuadSheet, TriSheet, Cylinder, Cone, Sphere, Torus, Holed, Cavity, Stack }
+impl Kind { pub const ALL: [Kind; 11]; pub fn name(self) -> &'static str; pub fn faces(self, size: usize) -> usize }
+pub struct Counts { pub regions, shells, faces, loops, uses, edges, collapsed, vertices: usize, pub euler: i64 }
+pub struct Generated { pub draft: Draft, pub counts: Counts }
+#[non_exhaustive] pub enum GenError { Table(TableFull), Curve(CurveError), Surface(SurfaceError), Pcurve(PcurveError), Degenerate(&'static str) }
+pub const BUILD_TOL: Length;                                    // 1e-9 mm
+pub fn generate(kind: Kind, seed: u64, size: usize) -> Result<Generated, GenError>;   // size 0 is 1
+pub fn broken(invariant: Invariant, seed: u64, size: usize) -> Result<Option<Draft>, GenError>;
+pub mod check {
+    pub enum Invariant { OutsideVoid, LiveReferences, FinWithoutUse, UseWithoutFin, RepeatedFin, SameSenseTwice,
+        LoopChained, PeriodJump, PoleGap, UvGap, IntervalMismatch, PcurveOffEdge, VertexOffEdge, ShellOpen,
+        Misoriented, RadialOrder, OrphanVertex }                // ALL
+    pub struct Tolerance { pub space: f64, pub uv: f64 }        // Default: 1e-7, 1e-9
+    pub fn violations(draft: &Draft, tol: Tolerance) -> BTreeSet<Invariant>;
+}
+```
+
+**The bodies**, with `n = size`:
+
+| Kind | Faces | What it covers |
+|---|---|---|
+| `Block` | `6n²` | a box, each side an `n × n` grid of planar faces, with jittered breaks |
+| `Prism` | `n + 5` | an `(n+3)`-gon extruded: long planar loops |
+| `QuadSheet`, `TriSheet` | `n²`, `2n²` | an open sheet with the outside on both sides, and random diagonals |
+| `Cylinder` | `n + 2` | `n` wall faces between rulings, so one face crosses the seam; two caps |
+| `Cone` | `n + 1` | `n` wall faces to the apex, a collapsed edge per face; a base |
+| `Sphere` | `n` | `n` lunes, a collapsed edge at either pole per face |
+| `Torus` | `n²` | `n × n` patches, crossing both seams; genus 1 |
+| `Holed` | `n + 9` | a slab with an `(n+3)`-gon through-hole: an inner loop on two faces; genus 1 |
+| `Cavity` | `12n²` | a solid with a void inside: two shells in the solid, one in the void |
+| `Stack` | `5n + 6` | `n + 1` blocks sharing faces, one region each; 3-fin edges in radial order |
+
+The pcurves come from `scx_surface::pcurve_of`, aligned along the loop by whole periods.
+A pole's use is the uv segment along u from the arriving use's end to the leaving use's
+start. `Counts` are closed forms, checked against the draft. Euler is
+`V − (E − C) + F − (L − F)`, where C counts the collapsed edges. It gives 2 for the convex
+bodies, 0 for the torus and the holed slab, 1 for the sheets, 4 for the cavity (two
+spheres) and 4 for a stack of three.
+
+**The broken bodies.** Each one writes a single defect into a valid body through the
+`Draft` API, so that `violations` reports that invariant and no other:
+
+- a solid outside;
+- a removed edge;
+- a fin pushed for a face that does not use its edge, and a fin popped;
+- a fin repeated;
+- a sheet's centre loop doubled, with its fins;
+- two uses swapped;
+- a cylinder wall's arc moved by a period;
+- a lune's pole use removed;
+- a pcurve interval halved;
+- a pcurve bowed into an arc through the same ends;
+- a vertex moved;
+- a face removed;
+- one face's loop reversed, with its fins;
+- a 3-fin edge's radial order reversed;
+- an orphan vertex.
+
+`UvGap` has none, because no single defect breaks it alone: a uv gap that is not a period
+or a pole also moves a pcurve off its edge, or unchains the loop. Today's `finish`
+refuses three of them: `OutsideVoid`, `LiveReferences` and `FinWithoutUse`. BR2's `finish`
+should refuse all sixteen, and its tests can take `broken` as is.
+
+**Tests.** `crates/scx-testkit/tests/bodies.rs` has 8 tests:
+
+- every kind, at seeds {0, 1, 2, 7, 0x5eed} and sizes {1, 2, 3, 5}, holds its counts, breaks
+  nothing and finishes;
+- the Euler values above;
+- every outer loop has positive uv area;
+- the convex bodies face outward;
+- each broken body breaks its invariant alone;
+- `finish` refuses the three it checks;
+- a seed is deterministic;
+- seed 0 is canonical.
+
+The difftest `t_bodies` checks the seed-0 block, cylinder, cone, sphere and torus, at sizes
+1 to 4, against the pin's `create_box`, `create_cylinder`, `create_cone`, `create_sphere`
+and `create_torus`. The two sides split the solid differently, so each is checked against
+the solid instead:
+
+- the pin's face surfaces, sampled over their uv domains, lie on the solid's sheets;
+- the generated vertices, edge samples and face middles lie on a sheet and in the closure;
+- the generated surface kinds are the solid's own. The pin's are printed but not compared,
+  because it writes a cylinder as a cone of half-angle 0;
+- the box corners are the same bits.
+
+It finds 0 mismatches.
+
+**The walk** (BR1's A9 measurement, redone): all faces, then loops, then uses, marking each
+edge in a bitset. Bodies are seed 0, finished. The numbers are release builds, best of 7,
+in ns per face.
+
+| Body | Faces | `Use::record().edge` | `Use::edge().id()` |
+|---|---|---|---|
+| block n=14 | 1,176 | 5.5 | 8.2 |
+| block n=144 | 124,416 | 40.8 | 63.3 |
+| quad sheet 33 × 33 | 1,089 | 4.4 | 7.4 |
+| cylinder n=1045 | 1,047 | 6.6 | 11.1 |
+| cylinder n=102908 | 102,910 | 38.6 | 67.0 |
+| cone n=1045 | 1,046 | 5.2 | 9.3 |
+| sphere n=1045 | 1,045 | 4.1 | 8.0 |
+| sphere n=102908 | 102,908 | 29.5 | 48.4 |
+| torus 33 × 33 | 1,089 | 4.0 | 7.4 |
+| torus 325 × 325 | 105,625 | 28.0 | 41.3 |
+| holed n=1045 | 1,054 | 7.4 | 11.5 |
+| cavity n=10 | 1,200 | 5.6 | 8.3 |
+| cavity n=102 | 124,848 | 41.3 | 62.6 |
+| stack n=204 | 1,026 | 5.8 | 8.2 |
+| stack n=22261 | 111,311 | 36.8 | 63.8 |
+| pin box: `Loop::edges` / `loop_edgeuses` | 6 | 6.1 | 40.4 |
+| pin cylinder | 3 | 5.1 | 34.1 |
+| pin cone | 2 | 5.8 | 34.2 |
+| pin sphere | 1 | 6.3 | 35.6 |
+| pin torus | 1 | 8.5 | 43.5 |
+
+- At about 1,000 faces, every kind walks in 4 to 7 ns per face. That is at or below the
+  pin's port-only list (5 to 8.5) and 5 to 8× faster than its edge-use ring.
+- At about 10,000 faces it is 13 to 28 ns, and at about 100,000 faces it is 28 to 53 ns. That
+  is memory, not work: the face records then exceed L2, and later L3.
+- The pin has no generator for a matching 100,000-face body.
+- Generation costs about 1.5 to 7 µs per face. Its main costs are `pcurve_of` and the
+  frames.
+- **Finding for BR2: `finish` is quadratic in loop length.** `check::references` scans the
+  whole face for each fin, to find its use. The prism, cylinder, cone and holed slab have a
+  loop of `n` uses. At about 100,000 faces they finish in 78 to 170 µs per face, against
+  0.1 to 0.4 µs for the grid bodies. A per-face `(edge, sense)` set, or a check from the use
+  side, makes it linear.
+
+**Open questions.**
+
+1. **A collapsed edge's use.** Each pole face has its own collapsed edge with one fin. Its
+   use is a `Pcurve` segment, a `Line2` over an assumed `[0, 1]`, because `EdgeShape::Collapsed`
+   has no interval. The alternatives:
+   - share one collapsed edge per pole, with `n` fins;
+   - make the use `UseGeom::Point`, which leaves a uv gap the length of the face's u span;
+   - give `Collapsed` an interval.
+
+   BR2's pole rules, and BR5, should settle this.
+2. Euler-Poincaré must leave collapsed edges out (they are not 1-cells), or count them as
+   a vertex and an edge that cancel.
+3. Face 24's "a pole is a vertex", and `UvGap` alone, have no broken body.
+4. The dev-dependency cycle is described above: integration tests only.
+5. `EdgeAdj` has only `Default`, so a builder fills its fins through `adjacency_mut`.
+   `Draft::add_face` appends fins loop by loop, which is enough for the generators. No API
+   was added to `scx-brep`.
 
 ## 7. `scx-record`
 

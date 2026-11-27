@@ -26,9 +26,9 @@ use scx_curve::arcs::Arcs;
 use scx_num::jet::SurfaceJet;
 
 /// The `u` direction: a turn over `[0, 1]`.
-const U: Arcs = Arcs::turn(1.0);
+pub(crate) const U: Arcs = Arcs::turn(1.0);
 /// The `v` direction: the latitude over `[0, 1]`.
-const V: Arcs = Arcs::half();
+pub(crate) const V: Arcs = Arcs::half();
 
 /// A sphere about the frame's origin, poles on its z axis.
 #[derive(Clone, Copy, Debug, PartialEq)]
