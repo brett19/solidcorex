@@ -23,7 +23,12 @@ use super::face_face::{X, Z, ball, cyl};
 use super::{cuboid, pt};
 use crate::{BooleanError, BooleanOp, BooleanUnsupported, NoItems, boolean};
 
-fn op(a: &Brep, b: &Brep, which: BooleanOp, doc: Document) -> Result<Done<NoItems>, BooleanError> {
+pub(super) fn op(
+    a: &Brep,
+    b: &Brep,
+    which: BooleanOp,
+    doc: Document,
+) -> Result<Done<NoItems>, BooleanError> {
     let mut scratch = Scratch::new();
     let stop = Stop::new();
     let settings = Settings::new();
@@ -32,7 +37,7 @@ fn op(a: &Brep, b: &Brep, which: BooleanOp, doc: Document) -> Result<Done<NoItem
 }
 
 /// The Boolean, checked by the contract.
-fn checked(a: &Brep, b: &Brep, which: BooleanOp, doc: Document) -> Done<NoItems> {
+pub(super) fn checked(a: &Brep, b: &Brep, which: BooleanOp, doc: Document) -> Done<NoItems> {
     let done = op(a, b, which, doc).unwrap_or_else(|e| panic!("{which:?}: {e:?}"));
     let mut scratch = Scratch::new();
     let stop = Stop::new();
@@ -44,7 +49,7 @@ fn checked(a: &Brep, b: &Brep, which: BooleanOp, doc: Document) -> Done<NoItems>
     done
 }
 
-fn volume(body: &Brep) -> f64 {
+pub(super) fn volume(body: &Brep) -> f64 {
     scx_mass::volume(
         body,
         RelAccuracy::new(1e-10).unwrap(),
@@ -56,7 +61,7 @@ fn volume(body: &Brep) -> f64 {
     .value
 }
 
-fn area(body: &Brep, f: FaceId) -> f64 {
+pub(super) fn area(body: &Brep, f: FaceId) -> f64 {
     scx_mass::face_area(
         body.face(f).unwrap(),
         RelAccuracy::new(1e-10).unwrap(),
@@ -81,7 +86,7 @@ fn length(body: &Brep, e: EdgeId) -> f64 {
 }
 
 #[track_caller]
-fn near(got: f64, want: f64, rel: f64) {
+pub(super) fn near(got: f64, want: f64, rel: f64) {
     assert!(
         (got - want).abs() <= rel * want.abs().max(1.0),
         "{got} against {want}"
@@ -97,9 +102,9 @@ fn counts(body: &Brep) -> [usize; 3] {
     ]
 }
 
-const UNION: BooleanOp = BooleanOp::Union;
-const SUBTRACT: BooleanOp = BooleanOp::Subtract;
-const INTERSECT: BooleanOp = BooleanOp::Intersect;
+pub(super) const UNION: BooleanOp = BooleanOp::Union;
+pub(super) const SUBTRACT: BooleanOp = BooleanOp::Subtract;
+pub(super) const INTERSECT: BooleanOp = BooleanOp::Intersect;
 
 #[test]
 fn overlapping_cubes_unite_subtract_and_intersect() {
@@ -298,7 +303,7 @@ fn interleaved_grids_on_one_plane_unite() {
 
 /// Where a result face came from: the operand faces (operand, face) whose lineage it
 /// carries, sorted.
-fn face_from(c: &Changes, f: FaceId) -> Vec<(u32, FaceId)> {
+pub(super) fn face_from(c: &Changes, f: FaceId) -> Vec<(u32, FaceId)> {
     let mut out = Vec::new();
     let mut add = |o: &Origin| match *o {
         Origin::Face(g) => out.push((0, g)),
@@ -557,14 +562,11 @@ fn a_boolean_is_deterministic() {
 #[test]
 fn non_manifold_results_are_unsupported() {
     // A ball on a cube's top face: the union meets itself at one point inside the face
-    // (D5). Two cubes sharing an edge are BO7's; today that edge's four faces are also
-    // `NonManifold`.
+    // (D5). Two cubes sharing an edge are built (BO7, `contacts`).
     let doc = Document::default();
     let a = cuboid([0.0; 3], [1.0; 3], doc);
-    for b in [
-        ball([0.5, 0.5, 1.5], 0.5, doc),
-        cuboid([1.0, 1.0, 0.0], [2.0, 2.0, 1.0], doc),
-    ] {
+    {
+        let b = ball([0.5, 0.5, 1.5], 0.5, doc);
         let e = op(&a, &b, UNION, doc).unwrap_err();
         assert!(
             matches!(

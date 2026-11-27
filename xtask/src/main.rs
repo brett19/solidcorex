@@ -34,6 +34,15 @@
 //!   members, then the difftest and bench crates, the benchmarks included), `layers`,
 //!   `headers`, the tier-1 tests (`cargo test -p <crate>` for each crate named, default every
 //!   library and test kit), the bench crate's own tests and xtask's.
+//! - `lint` and `tests [crate ... | --except crate ...]`: the two halves of `fast`, which CI runs
+//!   as separate jobs (`tests` shards by crate; `--except` takes the rest, with the bench crate's
+//!   tests and xtask's, so named shards and one `--except` shard together run all of `fast`).
+//! - `diff [--changed-since REV]`: the differential suite (`cargo test -p scx-difftest`). With
+//!   `--changed-since`, the three slow tests (`SLOW_DIFF`, minutes each) run only when a file
+//!   changed since `REV` (the working tree against it) is one their subject can change:
+//!   `scx-algo`, `scx-nurbs`, `scx-nurbs-surface`, `scx-num`, `scx-testkit` (their exact
+//!   references), the difftest crate's files for them and the manifests. The skipped tests are
+//!   named in the output; CI runs every test every push.
 //! - `bench`: build the benchmarks in the bench profile without running them (`cargo bench
 //!   -p scx-bench --no-run`); docs/02-testing.md says how to run them.
 //!
@@ -66,8 +75,11 @@ fn main() -> ExitCode {
         Some("movecheck") => movecheck(&root, args.get(1..).unwrap_or(&[])),
         Some("conflicts") => conflicts(&root),
         Some("fast") => fast(&root, args.get(1..).unwrap_or(&[])),
+        Some("lint") => lint(&root),
+        Some("diff") => diff(&root, args.get(1..).unwrap_or(&[])),
+        Some("tests") => tests(&root, args.get(1..).unwrap_or(&[]), false),
         Some("bench") => bench(&root),
-        _ => Err("usage: cargo xtask <layers | headers | pin | bodydiff | cov [crate ...] | movecheck [crate ...] | conflicts | fast [crate ...] | bench>".to_string()),
+        _ => Err("usage: cargo xtask <layers | headers | pin | bodydiff | cov [crate ...] | movecheck [crate ...] | conflicts | fast [crate ...] | lint | diff [--changed-since rev] | tests [crate ... | --except crate ...] | bench>".to_string()),
     };
     match result {
         Ok(msg) => {
@@ -779,6 +791,86 @@ fn cargo_parallel(root: &Path, jobs: Vec<Vec<String>>) -> Result<(), String> {
     }
 }
 
+/// The difftest tests that take minutes (their subject: the polynomial solvers, curve and
+/// surface degree elevation) and the paths whose change can alter them.
+const SLOW_DIFF: &[&str] = &[
+    "t_algo::poly_from_roots",
+    "t_nurbs::nurbs_elevate",
+    "t_nurbs_surface_edit::nurbs_surface_elevate",
+];
+const SLOW_DIFF_PATHS: &[&str] = &[
+    "crates/scx-algo/",
+    "crates/scx-nurbs/",
+    "crates/scx-nurbs-surface/",
+    "crates/scx-num/",
+    "crates/scx-testkit/",
+    "crates/scx-difftest/tests/diff/t_algo.rs",
+    "crates/scx-difftest/tests/diff/t_nurbs.rs",
+    "crates/scx-difftest/tests/diff/t_nurbs_surface_edit.rs",
+    "crates/scx-difftest/tests/diff/pin_defects.rs",
+    "crates/scx-difftest/tests/diff/harness.rs",
+    "crates/scx-difftest/tests/diff/facade.rs",
+    "crates/scx-difftest/tests/diff/main.rs",
+    "Cargo.toml",
+    "Cargo.lock",
+    "rust-toolchain.toml",
+];
+
+/// Whether any of `changed` is under a path of [`SLOW_DIFF_PATHS`].
+fn slow_diff_due(changed: &[String]) -> bool {
+    changed
+        .iter()
+        .any(|f| SLOW_DIFF_PATHS.iter().any(|p| f.starts_with(p)))
+}
+
+/// `cargo xtask diff [--changed-since REV]`.
+fn diff(root: &Path, args: &[String]) -> Result<String, String> {
+    let mut test = vec![
+        "test".to_string(),
+        "-p".to_string(),
+        "scx-difftest".to_string(),
+    ];
+    let skipped = match args {
+        [] => false,
+        [flag, rev] if flag == "--changed-since" => {
+            let out = Command::new("git")
+                .args(["diff", "--name-only", rev])
+                .current_dir(root)
+                .output()
+                .map_err(|e| format!("git diff: {e}"))?;
+            if !out.status.success() {
+                return Err(format!(
+                    "git diff {rev}: {}",
+                    String::from_utf8_lossy(&out.stderr).trim_end()
+                ));
+            }
+            let changed: Vec<String> = String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .map(str::to_string)
+                .collect();
+            !slow_diff_due(&changed)
+        }
+        _ => return Err("usage: cargo xtask diff [--changed-since <rev>]".to_string()),
+    };
+    if skipped {
+        test.push("--".to_string());
+        for t in SLOW_DIFF {
+            test.push("--skip".to_string());
+            test.push((*t).to_string());
+        }
+        println!(
+            "diff: skipping {} (nothing they test changed)",
+            SLOW_DIFF.join(", ")
+        );
+    }
+    cargo(root, &test.iter().map(String::as_str).collect::<Vec<_>>())?;
+    Ok(if skipped {
+        "diff: passed (slow tests skipped)".to_string()
+    } else {
+        "diff: passed".to_string()
+    })
+}
+
 /// The pattern of a conflict-marker line, for `git grep -E`.
 const CONFLICT_PATTERN: &str = "^(<<<<<<<|=======|>>>>>>>)( |$)";
 
@@ -802,6 +894,13 @@ fn conflicts(root: &Path) -> Result<String, String> {
 }
 
 fn fast(root: &Path, crates: &[String]) -> Result<String, String> {
+    println!("{}", lint(root)?);
+    tests(root, crates, true)
+}
+
+/// The static checks of `fast`: conflict markers, fmt, clippy with warnings denied, layers and
+/// headers. CI runs them as a job of their own, beside the test shards.
+fn lint(root: &Path) -> Result<String, String> {
     println!("{}", conflicts(root)?);
     // `--all` would take in solidcore too, a path dependency of the difftest crate.
     let mut fmt = vec!["fmt".to_string(), "--check".to_string()];
@@ -841,15 +940,34 @@ fn fast(root: &Path, crates: &[String]) -> Result<String, String> {
     )?;
     println!("{}", layers(root)?);
     println!("{}", headers(root)?);
-    let libs: Vec<String> = if crates.is_empty() {
-        layer_roles(root)?
+    Ok("lint: passed".to_string())
+}
+
+/// The tier-1 tests of `fast`. `crates` names the crates to test (default every library and test
+/// kit); `--except a b` takes every one but those named. `extras` adds the bench crate's own tests
+/// and xtask's; `tests` (the CI shards) adds them only when `crates` is `--except ...`, so the
+/// shards together run exactly what `fast` runs.
+fn tests(root: &Path, crates: &[String], extras: bool) -> Result<String, String> {
+    let all = || -> Result<Vec<String>, String> {
+        Ok(layer_roles(root)?
             .roles
             .into_iter()
             .filter(|(_, r)| matches!(r, Role::Library(_) | Role::Testkit))
             .map(|(n, _)| n)
-            .collect()
-    } else {
-        crates.to_vec()
+            .collect())
+    };
+    let (libs, extras) = match crates.split_first() {
+        None => (all()?, true),
+        Some((flag, rest)) if flag == "--except" => {
+            if let Some(bad) = rest.iter().find(|c| !all().is_ok_and(|a| a.contains(c))) {
+                return Err(format!("tests: --except names no library: {bad}"));
+            }
+            (
+                all()?.into_iter().filter(|c| !rest.contains(c)).collect(),
+                true,
+            )
+        }
+        Some(_) => (crates.to_vec(), extras),
     };
     // Each crate keeps its own `-p` selection (its own feature set, so nothing is rebuilt),
     // but its test targets run as separate cargo invocations, side by side: a few test
@@ -907,12 +1025,14 @@ fn fast(root: &Path, crates: &[String]) -> Result<String, String> {
     }
     let mut jobs = long;
     jobs.extend(short);
-    jobs.push(
-        ["test", "-p", "scx-bench", "--lib"]
-            .map(String::from)
-            .to_vec(),
-    );
-    jobs.push(["test", "-p", "xtask"].map(String::from).to_vec());
+    if extras {
+        jobs.push(
+            ["test", "-p", "scx-bench", "--lib"]
+                .map(String::from)
+                .to_vec(),
+        );
+        jobs.push(["test", "-p", "xtask"].map(String::from).to_vec());
+    }
     cargo_parallel(root, jobs)?;
     Ok(format!("fast: passed ({})", libs.join(", ")))
 }
@@ -920,6 +1040,27 @@ fn fast(root: &Path, crates: &[String]) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_slow_difftests_run_only_for_their_subjects() {
+        let f = |l: &[&str]| l.iter().map(|s| (*s).to_string()).collect::<Vec<_>>();
+        assert!(slow_diff_due(&f(&["crates/scx-nurbs/src/lib.rs"])));
+        assert!(slow_diff_due(&f(&[
+            "docs/x.md",
+            "crates/scx-testkit/src/exact.rs"
+        ])));
+        assert!(slow_diff_due(&f(&[
+            "crates/scx-difftest/tests/diff/t_algo.rs"
+        ])));
+        assert!(!slow_diff_due(&f(&[
+            "crates/scx-boolean/src/lib.rs",
+            "docs/04-decisions.md"
+        ])));
+        assert!(!slow_diff_due(&f(&[
+            "crates/scx-difftest/tests/diff/t_slice.rs"
+        ])));
+        assert!(!slow_diff_due(&[]));
+    }
 
     #[test]
     fn deps_of_every_table_are_read() {

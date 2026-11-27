@@ -16,3 +16,6 @@ git read-tree --prefix=solidcore/ FETCH_HEAD
 git checkout-index -a
 git -c user.name=ci -c user.email=ci@invalid commit -q -m "pin: solidcore at the mirror tree"
 test "$(git rev-parse HEAD:solidcore)" = "$TREE" || { echo "pin tree mismatch" >&2; exit 1; }
+# Cargo fingerprints a path dependency by its files' mtimes, and a fresh checkout stamps them with
+# the clock, so a cached build of the pin would be thrown away every run. A fixed stamp keeps it.
+find solidcore -exec touch -h -d '2020-01-01 00:00:00 UTC' {} +

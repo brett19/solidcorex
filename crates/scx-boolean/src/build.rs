@@ -12,10 +12,13 @@
 //! - **Vertices.** An edge no kept face bounds goes, and a vertex no edge ends at; a
 //!   vertex left between two edges on one curve, bounding the same faces, goes too: the
 //!   edges are one.
-//! - **Shells.** Each connected set of kept faces bounds one solid region, with a shell on
-//!   each side: the shells of its lowest face of `a` where it has one, else new ones. A set
-//!   whose material shell encloses negative volume is a cavity of the one set that encloses
-//!   positive volume; more than one such set is [`BooleanUnsupported::Nesting`].
+//! - **Shells.** Each set of kept faces connected across edges two faces bound bounds one
+//!   solid region, with a shell on each side: the shells of its lowest face of `a` where it
+//!   has one, else new ones. An edge more than two bound (the result touching itself or
+//!   another lump along a line) has its fins put in radial order, and the shells meeting
+//!   across each of its sectors are one ([`pinch`]). With more than one set, each shell
+//!   then goes to its region by its volume's sign and the shells holding it: a cavity's
+//!   wall to the lump round it, a lump inside a cavity to that cavity's void.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -24,7 +27,6 @@ use scx_brep::{
     ShellRecord, UseGeom, VertexId,
 };
 use scx_curve::Curve;
-use scx_mass::{MassError, Sign, volume_sign};
 use scx_num::budget::{Budget, Stop};
 use scx_num::extent1d::Extent1d;
 use scx_num::frame::Sense;
@@ -40,9 +42,14 @@ use crate::error::{BooleanDefect, BooleanError, BooleanUnsupported};
 use crate::faceface::Touch;
 use crate::geom::{Operands, Side};
 use crate::imprint::{Imprint, loops_error, ring, shoelace};
+use crate::pinch;
 
 /// Two uses' middles closer than this in uv are one place: a cut, not a seam.
 const SAME_UV: f64 = 1e-7;
+
+/// Faces whose normals at a shared edge are further apart than 60 degrees (or nearer than
+/// 120) are not on one surface, which the merge then need not test.
+const PARALLEL: f64 = 0.5;
 
 /// A kept face: its operand face, and whether its material is behind it.
 #[derive(Debug, Clone, Copy)]
@@ -137,17 +144,21 @@ fn merge(
         let (Some(f0), Some(f1), 2) = (fins.first(), fins.get(1), fins.len()) else {
             continue;
         };
-        if f0.face == f1.face || f0.sense == f1.sense {
+        if f0.face == f1.face {
             continue;
         }
         let (Some(&k0), Some(&k1)) = (kept.get(&f0.face), kept.get(&f1.face)) else {
             continue;
         };
-        if (k0.side, k0.of) == (k1.side, k1.of) {
-            set.join(f0.face, f1.face);
+        // Faces turned against each other (one material behind, the other's in front)
+        // run their loops opposite ways about one normal, so they use the edge in one
+        // sense; faces turned alike use it in opposite senses.
+        let turned = k0.back != k1.back;
+        if (f0.sense == f1.sense) != turned {
             continue;
         }
-        if k0.back != k1.back {
+        if (k0.side, k0.of) == (k1.side, k1.of) {
+            set.join(f0.face, f1.face);
             continue;
         }
         let (Some(v0), Some(v1)) = (m.draft.face(f0.face), m.draft.face(f1.face)) else {
@@ -157,7 +168,31 @@ fn merge(
         if core::mem::discriminant(s0) != core::mem::discriminant(s1) {
             continue;
         }
-        if s0 != s1 {
+        if s0 == s1 {
+            // One surface, so one natural normal: turned faces have material either side.
+            if turned {
+                continue;
+            }
+        } else {
+            // On one surface, the material lies on one side where the natural normals
+            // agree and the faces are turned alike, or they are opposite and the faces
+            // turned against each other (a subtraction's turned piece beside a face of
+            // `a`, §14.35). Coincident surfaces have parallel normals where they meet, so
+            // the normals, read first, also spare the surface test for faces at an angle.
+            let n = |f: FaceId| -> Option<scx_num::vector3d::UnitVec3> {
+                let face = m.draft.face(f)?;
+                let u = face.uses().find(|u| u.record().edge == e)?;
+                let uv = use_mid(u.geom())?;
+                face.surface()
+                    .normal(uv, [Approach::Above, Approach::Above])
+            };
+            let (Some(n0), Some(n1)) = (n(f0.face), n(f1.face)) else {
+                continue;
+            };
+            let dot = n0.as_vec().dot(n1.as_vec());
+            if dot.abs() < PARALLEL || (dot < 0.0) != turned {
+                continue;
+            }
             let key = (k0.side, k0.of, k1.side, k1.of);
             let on = if let Some(&on) = same_surface.get(&key) {
                 on
@@ -169,20 +204,6 @@ fn merge(
                 on
             };
             if !on {
-                continue;
-            }
-            // Fins of opposite senses on one surface: the natural normals agree there.
-            let n = |f: FaceId| -> Option<scx_num::vector3d::UnitVec3> {
-                let face = m.draft.face(f)?;
-                let u = face.uses().find(|u| u.record().edge == e)?;
-                let uv = use_mid(u.geom())?;
-                face.surface()
-                    .normal(uv, [Approach::Above, Approach::Above])
-            };
-            let (Some(n0), Some(n1)) = (n(f0.face), n(f1.face)) else {
-                continue;
-            };
-            if n0.as_vec().dot(n1.as_vec()) <= 0.0 {
                 continue;
             }
         }
@@ -315,9 +336,18 @@ fn splice(
         twin.insert(p, q);
         twin.insert(q, p);
     }
+    // A face turned against the survivor (§14.35) runs its loops the other way about the
+    // survivor's normal: it is walked backwards, each use against its own sense.
+    let back = |f: FaceId| kept.get(&f).map(|k| k.back);
+    let turned: BTreeSet<FaceId> = faces
+        .iter()
+        .copied()
+        .filter(|&f| back(f) != back(survivor))
+        .collect();
     let next = |at: At| -> At {
         let n = lens.get(&(at.0, at.1)).copied().unwrap_or(1);
-        (at.0, at.1, (at.2 + 1) % n)
+        let step = if turned.contains(&at.0) { n - 1 } else { 1 };
+        (at.0, at.1, (at.2 + step) % n)
     };
     let total: usize = lens.values().sum();
     let mut seen: BTreeSet<At> = BTreeSet::new();
@@ -370,7 +400,15 @@ fn splice(
         .into_iter()
         .map(|c| {
             c.into_iter()
-                .map(|at| record(at).map(|u| (u.edge, u.sense)).ok_or_else(defect))
+                .map(|at| {
+                    let u = record(at).ok_or_else(defect)?;
+                    let sense = if turned.contains(&at.0) {
+                        u.sense.reversed()
+                    } else {
+                        u.sense
+                    };
+                    Ok::<_, BooleanError>((u.edge, sense))
+                })
                 .collect::<Result<Vec<_>, _>>()
         })
         .collect::<Result<_, _>>()?;
@@ -381,9 +419,11 @@ fn splice(
         .map_err(|e| loops_error(e.kind(), side.operand(), survivor))
 }
 
-/// Removes the edges no face bounds; refuses an edge one face bounds or more than two do.
+/// Removes the edges no face bounds and refuses an edge one face bounds; puts the fins of
+/// an edge more than two bound in radial order ([`pinch::order_fins`]).
 fn edges(m: &mut Imprint) -> Result<(), BooleanError> {
     let mut gone = Vec::new();
+    let mut pinched = Vec::new();
     for e in m.draft.edges() {
         let fins: Vec<_> = e.fins().collect();
         let collapsed = matches!(e.shape(), Some(EdgeShape::Collapsed));
@@ -392,15 +432,14 @@ fn edges(m: &mut Imprint) -> Result<(), BooleanError> {
             [_] if collapsed => {}
             [_, _] => {}
             [_] => return Err(defect()),
-            _ => {
-                return Err(BooleanError::Unsupported(BooleanUnsupported::NonManifold {
-                    at: Entity::Edge(e.id()),
-                }));
-            }
+            _ => pinched.push(e.id()),
         }
     }
     for e in gone {
         m.draft.remove_edge(e);
+    }
+    for e in pinched {
+        pinch::order_fins(&mut m.draft, e)?;
     }
     Ok(())
 }
@@ -661,9 +700,20 @@ fn shells(
             }
         }
     }
+    let moved = pinch::link(&mut m.draft, &mut claimed)?;
     unused(m, &claimed);
     if pairs.len() > 1 {
-        nest(m, &pairs, doc, budget, stop)?;
+        let to = |s: ShellId| moved.get(&s).copied().unwrap_or(s);
+        let mirrored: Vec<(ShellId, ShellId)> = pairs
+            .iter()
+            .copied()
+            .filter(|(mat, void)| !moved.contains_key(mat) && !moved.contains_key(void))
+            .filter(|(mat, void)| !moved.values().any(|r| r == mat || r == void))
+            .collect();
+        let mut all: Vec<ShellId> = pairs.iter().flat_map(|&(a, b)| [to(a), to(b)]).collect();
+        all.sort_unstable();
+        all.dedup();
+        pinch::nest(&mut m.draft, &all, &mirrored, doc, budget, stop)?;
         unused(m, &claimed);
     }
     Ok(())
@@ -693,48 +743,5 @@ fn unused(m: &mut Imprint, claimed: &BTreeSet<ShellId>) {
         .collect();
     for r in gone {
         m.draft.remove_region(r);
-    }
-}
-
-/// Puts each set whose material shell encloses negative volume inside the one set that
-/// encloses positive volume, as a cavity.
-fn nest(
-    m: &mut Imprint,
-    pairs: &[(ShellId, ShellId)],
-    doc: Document,
-    budget: &mut Budget,
-    stop: &Stop,
-) -> Result<(), BooleanError> {
-    let (body, _) = m.draft.clone().finish(&doc).map_err(|_| defect())?;
-    let mut positive = Vec::new();
-    let mut negative = Vec::new();
-    for &(mat, void) in pairs {
-        match volume_sign(&body, mat, budget, stop).map_err(mass)? {
-            Sign::Positive => positive.push(mat),
-            Sign::Negative => negative.push((mat, void)),
-            Sign::Zero => return Err(defect()),
-        }
-    }
-    if negative.is_empty() {
-        return Ok(());
-    }
-    let [outer] = positive.as_slice() else {
-        return Err(BooleanError::Unsupported(BooleanUnsupported::Nesting));
-    };
-    let region = m.draft.shell(*outer).ok_or_else(defect)?.record().region;
-    for (mat, void) in negative {
-        m.draft.shell_mut(mat).ok_or_else(defect)?.region = region;
-        let cavity = m.draft.add_region(false).map_err(|_| defect())?;
-        m.draft.shell_mut(void).ok_or_else(defect)?.region = cavity;
-    }
-    Ok(())
-}
-
-/// A mass query's error, as the Boolean's.
-fn mass(e: MassError) -> BooleanError {
-    match e {
-        MassError::Exhausted { limit } => BooleanError::Exhausted { limit },
-        MassError::Cancelled => BooleanError::Cancelled,
-        _ => defect(),
     }
 }

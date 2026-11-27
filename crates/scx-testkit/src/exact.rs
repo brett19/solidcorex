@@ -104,6 +104,14 @@ impl Int {
         Some(64 * i as u64 + u64::from(w.trailing_zeros()))
     }
 
+    /// Whether the magnitude is a power of two (one is `2^0`).
+    pub fn mag_is_power_of_two(&self) -> bool {
+        match self.mag.split_last() {
+            None => false,
+            Some((top, rest)) => top.is_power_of_two() && rest.iter().all(|w| *w == 0),
+        }
+    }
+
     /// `self * 2^n`.
     #[must_use]
     pub fn shl(&self, n: u64) -> Int {
@@ -245,32 +253,15 @@ impl Int {
     /// The greatest common divisor of the magnitudes (`|o|` when `self` is zero).
     #[must_use]
     pub fn gcd(&self, o: &Int) -> Int {
-        let (Some(za), Some(zb)) = (self.trailing_zeros(), o.trailing_zeros()) else {
+        if self.is_zero() || o.is_zero() {
             return if self.is_zero() { o.abs() } else { self.abs() };
-        };
-        // A unit divides everything; the loop below would take one step per bit for it.
+        }
+        // A unit divides everything.
         if self.mag == [1] || o.mag == [1] {
             return Int::from(1u64);
         }
-        let mut a = self.abs().shr(za);
-        let mut b = o.abs().shr(zb);
-        // Binary gcd on odd numbers: each step clears at least one bit of the larger.
-        loop {
-            if let ([x], [y]) = (a.mag.as_slice(), b.mag.as_slice()) {
-                return Int::from(gcd_u64(*x, *y)).shl(za.min(zb));
-            }
-            match Int::cmp_mag(&a.mag, &b.mag) {
-                Ordering::Equal => return a.shl(za.min(zb)),
-                Ordering::Greater => {
-                    sub_in_place(&mut a.mag, &b.mag);
-                    a = a.shr(a.trailing_zeros().unwrap_or(0));
-                }
-                Ordering::Less => {
-                    sub_in_place(&mut b.mag, &a.mag);
-                    b = b.shr(b.trailing_zeros().unwrap_or(0));
-                }
-            }
-        }
+        let (a, b) = (self.mag.clone(), o.mag.clone());
+        Int::new(false, gcd_mag(a, b))
     }
 
     /// `self / d` for a `d` known to divide `self` (the quotient rounded toward zero
@@ -332,6 +323,84 @@ fn gcd_u64(mut a: u64, mut b: u64) -> u64 {
     a
 }
 
+/// `x >> k`, low 64 bits.
+fn shr_low64(x: &[u64], k: u64) -> u64 {
+    let (i, r) = ((k / 64) as usize, (k % 64) as u32);
+    let lo = x.get(i).copied().unwrap_or(0);
+    let hi = x.get(i + 1).copied().unwrap_or(0);
+    ((u128::from(hi) << 64 | u128::from(lo)) >> r) as u64
+}
+
+/// `cx * x + cy * y` for cofactors under 2^62 in magnitude, where the result is known not to
+/// be negative.
+fn lincomb(x: &[u64], cx: i128, y: &[u64], cy: i128) -> Vec<u64> {
+    let n = x.len().max(y.len());
+    let mut out = Vec::with_capacity(n);
+    let mut carry = 0i128;
+    for i in 0..n {
+        let xi = i128::from(x.get(i).copied().unwrap_or(0));
+        let yi = i128::from(y.get(i).copied().unwrap_or(0));
+        let t = cx * xi + cy * yi + carry;
+        out.push(t as u64);
+        carry = t >> 64;
+    }
+    while out.last() == Some(&0) {
+        out.pop();
+    }
+    out
+}
+
+/// The gcd of two magnitudes, neither zero: Lehmer's algorithm (TAOCP 4.5.2 L). The leading
+/// 62 bits of the pair decide a run of quotients at once, and a pass over the limbs applies
+/// them, instead of one pass per quotient.
+fn gcd_mag(mut a: Vec<u64>, mut b: Vec<u64>) -> Vec<u64> {
+    if Int::cmp_mag(&a, &b) == Ordering::Less {
+        core::mem::swap(&mut a, &mut b);
+    }
+    while b.len() > 1 {
+        let bits =
+            64 * (a.len() as u64 - 1) + u64::from(64 - a.last().map_or(0, |w| w.leading_zeros()));
+        let k = bits.saturating_sub(62);
+        let (mut ah, mut bh) = (i128::from(shr_low64(&a, k)), i128::from(shr_low64(&b, k)));
+        let (mut ca, mut cb, mut cc, mut cd) = (1i128, 0i128, 0i128, 1i128);
+        loop {
+            if bh + cc == 0 || bh + cd == 0 {
+                break;
+            }
+            let q = (ah + ca) / (bh + cc);
+            if q != (ah + cb) / (bh + cd) {
+                break;
+            }
+            (ca, cc) = (cc, ca - q * cc);
+            (cb, cd) = (cd, cb - q * cd);
+            (ah, bh) = (bh, ah - q * bh);
+        }
+        if cb == 0 {
+            // No quotient was certain from the leading bits: one full division.
+            let Some((_, r)) = div_rem_mag(&a, &b) else {
+                return a;
+            };
+            a = core::mem::replace(&mut b, r);
+        } else {
+            let na = lincomb(&a, ca, &b, cb);
+            let nb = lincomb(&a, cc, &b, cd);
+            (a, b) = (na, nb);
+        }
+        if b.is_empty() {
+            return a;
+        }
+    }
+    // b is one limb: one more division brings a down to a limb, then plain Euclid.
+    let y = b.first().copied().unwrap_or(0);
+    let x = match a.as_slice() {
+        [x] => *x,
+        _ => div_rem_mag(&a, &b)
+            .and_then(|(_, r)| r.first().copied())
+            .unwrap_or(0),
+    };
+    vec![gcd_u64(y, x)]
+}
+
 /// `a -= b` for `a >= b`, high zero limbs dropped.
 fn sub_in_place(a: &mut Vec<u64>, b: &[u64]) {
     let mut borrow = 0u64;
@@ -351,8 +420,8 @@ fn sub_in_place(a: &mut Vec<u64>, b: &[u64]) {
     }
 }
 
-/// Magnitudes `(n / d, n % d)`; `None` when `d` is zero. One limb at a time for a one-limb
-/// divisor, else one bit at a time (the quotients here are short or the numbers small).
+/// Magnitudes `(n / d, n % d)`; `None` when `d` is zero. A one-limb divisor goes one limb at a
+/// time; a longer one by Knuth's algorithm D (TAOCP 4.3.1), one quotient limb per step.
 fn div_rem_mag(n: &[u64], d: &[u64]) -> Option<(Vec<u64>, Vec<u64>)> {
     match d {
         [] => None,
@@ -368,34 +437,82 @@ fn div_rem_mag(n: &[u64], d: &[u64]) -> Option<(Vec<u64>, Vec<u64>)> {
             Some((q, vec![r as u64]))
         }
         _ if Int::cmp_mag(n, d) == Ordering::Less => Some((Vec::new(), n.to_vec())),
-        _ => {
-            let bits = 64 * n.len() as u64;
-            let mut q = vec![0u64; n.len()];
-            let mut r: Vec<u64> = Vec::with_capacity(d.len() + 1);
-            for bit in (0..bits).rev() {
-                let b = n
-                    .get((bit / 64) as usize)
-                    .map_or(0, |w| (w >> (bit % 64)) & 1);
-                // r = 2r + b
-                let mut carry = b;
-                for w in &mut r {
-                    let top = *w >> 63;
-                    *w = (*w << 1) | carry;
-                    carry = top;
-                }
-                if carry != 0 {
-                    r.push(carry);
-                }
-                if Int::cmp_mag(&r, d) != Ordering::Less {
-                    sub_in_place(&mut r, d);
-                    if let Some(w) = q.get_mut((bit / 64) as usize) {
-                        *w |= 1 << (bit % 64);
-                    }
-                }
-            }
-            Some((q, r))
-        }
+        _ => Some(knuth_d(n, d)),
     }
+}
+
+/// Algorithm D for `n >= d` and `d` of two or more limbs, no high zero limb in either.
+#[allow(clippy::indexing_slicing)] // the indices are bounded by the lengths m and n.len()
+fn knuth_d(n: &[u64], d: &[u64]) -> (Vec<u64>, Vec<u64>) {
+    const B: u128 = 1 << 64;
+    let m = d.len();
+    // Normalise: shift both so the divisor's top bit is set.
+    let s = d[m - 1].leading_zeros();
+    let shl = |x: &[u64], extra: bool| -> Vec<u64> {
+        let mut out = Vec::with_capacity(x.len() + 1);
+        let mut carry = 0u64;
+        for &w in x {
+            out.push((w << s) | carry);
+            carry = if s == 0 { 0 } else { w >> (64 - s) };
+        }
+        if extra {
+            out.push(carry);
+        }
+        out
+    };
+    let v = shl(d, false);
+    let mut u = shl(n, true);
+    let mut q = vec![0u64; n.len() - m + 1];
+    let (vt, vs) = (u128::from(v[m - 1]), u128::from(v[m - 2]));
+    for j in (0..=n.len() - m).rev() {
+        let top = (u128::from(u[j + m]) << 64) | u128::from(u[j + m - 1]);
+        let mut qhat = top / vt;
+        let mut rhat = top % vt;
+        while qhat >= B || qhat * vs > ((rhat << 64) | u128::from(u[j + m - 2])) {
+            qhat -= 1;
+            rhat += vt;
+            if rhat >= B {
+                break;
+            }
+        }
+        // u[j..=j+m] -= qhat * v
+        let mut borrow = 0i128;
+        let mut carry = 0u128;
+        for i in 0..m {
+            let p = qhat * u128::from(v[i]) + carry;
+            carry = p >> 64;
+            let t = i128::from(u[j + i]) - borrow - i128::from(p as u64);
+            u[j + i] = t as u64;
+            borrow = i128::from(t < 0);
+        }
+        let t = i128::from(u[j + m]) - borrow - carry as i128;
+        u[j + m] = t as u64;
+        if t < 0 {
+            // qhat was one too large: add the divisor back.
+            qhat -= 1;
+            let mut c = 0u128;
+            for i in 0..m {
+                let sum = u128::from(u[j + i]) + u128::from(v[i]) + c;
+                u[j + i] = sum as u64;
+                c = sum >> 64;
+            }
+            u[j + m] = u[j + m].wrapping_add(c as u64);
+        }
+        q[j] = qhat as u64;
+    }
+    // The remainder is u[..m] shifted back down.
+    let mut r = Vec::with_capacity(m);
+    for i in 0..m {
+        let hi = if s == 0 { 0 } else { u[i + 1] << (64 - s) };
+        r.push((u[i] >> s) | hi);
+    }
+    while q.last() == Some(&0) {
+        q.pop();
+    }
+    while r.last() == Some(&0) {
+        r.pop();
+    }
+    (q, r)
 }
 
 /// `m * 2^k`, rounded (twice at most, in the subnormals): infinite past the doubles.
@@ -455,6 +572,111 @@ mod tests {
     fn random(rng: &mut Rng, limbs: usize) -> Int {
         let mag = (0..limbs).map(|_| rng.next_u64()).collect();
         Int::new(rng.next_u64() & 1 == 1, mag)
+    }
+
+    /// The bit-at-a-time division `knuth_d` replaced, as a reference.
+    fn div_rem_bitwise(n: &[u64], d: &[u64]) -> (Vec<u64>, Vec<u64>) {
+        let mut q = vec![0u64; n.len()];
+        let mut r: Vec<u64> = Vec::with_capacity(d.len() + 1);
+        for bit in (0..64 * n.len() as u64).rev() {
+            let b = n
+                .get((bit / 64) as usize)
+                .map_or(0, |w| (w >> (bit % 64)) & 1);
+            let mut carry = b;
+            for w in &mut r {
+                let top = *w >> 63;
+                *w = (*w << 1) | carry;
+                carry = top;
+            }
+            if carry != 0 {
+                r.push(carry);
+            }
+            if Int::cmp_mag(&r, d) != Ordering::Less {
+                sub_in_place(&mut r, d);
+                if let Some(w) = q.get_mut((bit / 64) as usize) {
+                    *w |= 1 << (bit % 64);
+                }
+            }
+        }
+        while q.last() == Some(&0) {
+            q.pop();
+        }
+        (q, r)
+    }
+
+    /// Algorithm D against the bitwise division, on limbs that are random, all ones, zero or
+    /// a power of two, which hit the quotient-digit correction and the add-back.
+    #[test]
+    fn long_division_matches_the_bitwise_one() {
+        let mut rng = Rng::new(11);
+        let limb = |rng: &mut Rng| match rng.next_u64() % 6 {
+            0 => u64::MAX,
+            1 => 0,
+            2 => 1 << 63,
+            3 => 1,
+            _ => rng.next_u64(),
+        };
+        for i in 0..6000 {
+            let nl = 2 + i % 7;
+            let dl = 2 + (i / 7) % 4;
+            let mut n: Vec<u64> = (0..nl).map(|_| limb(&mut rng)).collect();
+            let mut d: Vec<u64> = (0..dl).map(|_| limb(&mut rng)).collect();
+            while n.last() == Some(&0) {
+                n.pop();
+            }
+            while d.last() == Some(&0) {
+                d.pop();
+            }
+            if d.len() < 2 || Int::cmp_mag(&n, &d) == Ordering::Less {
+                continue;
+            }
+            assert_eq!(knuth_d(&n, &d), div_rem_bitwise(&n, &d), "{n:x?} / {d:x?}");
+        }
+    }
+
+    /// Lehmer's gcd against Euclid's with exact division, on limbs that are random, all ones,
+    /// zero or a power of two, and on multiples of a common factor.
+    #[test]
+    fn lehmer_gcd_matches_euclid() {
+        fn euclid(mut a: Vec<u64>, mut b: Vec<u64>) -> Vec<u64> {
+            while !b.is_empty() {
+                let (_, r) = div_rem_mag(&a, &b).unwrap();
+                let mut r = r;
+                while r.last() == Some(&0) {
+                    r.pop();
+                }
+                (a, b) = (b, r);
+            }
+            a
+        }
+        let mut rng = Rng::new(23);
+        let limb = |rng: &mut Rng| match rng.next_u64() % 7 {
+            0 => u64::MAX,
+            1 => 0,
+            2 => 1 << 63,
+            3 => 1,
+            _ => rng.next_u64(),
+        };
+        for i in 0..4000 {
+            let mk = |rng: &mut Rng, n: usize| {
+                let mut v: Vec<u64> = (0..n).map(|_| limb(rng)).collect();
+                while v.last() == Some(&0) {
+                    v.pop();
+                }
+                v
+            };
+            let (x, y) = (mk(&mut rng, 1 + i % 9), mk(&mut rng, 1 + (i / 9) % 9));
+            let g = mk(&mut rng, 1 + i % 3);
+            let (x, y) = (Int::new(false, x), Int::new(false, y));
+            let g = Int::new(false, g);
+            for (p, q) in [(x.clone(), y.clone()), (x.mul(&g), y.mul(&g))] {
+                if p.is_zero() || q.is_zero() {
+                    continue;
+                }
+                let want = Int::new(false, euclid(p.mag.clone(), q.mag.clone()));
+                assert_eq!(p.gcd(&q), want, "{:x?} {:x?}", p.mag, q.mag);
+            }
+        }
     }
 
     /// Division and gcd against their definitions on random multi-limb numbers.

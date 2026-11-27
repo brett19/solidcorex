@@ -1,6 +1,11 @@
 # Written for solidcorex. Apache-2.0.
 # Routine checks, so a builder pushes a branch and reviews only the design (docs/02-testing.md, CI).
 # The toolchain comes from rust-toolchain.toml; cargo installs it on first use.
+#
+# Wall time is the slowest job, so the work is split to even the jobs out: `lint` (static checks),
+# `tests` (the tier-1 tests, one shard per heavy crate), `difftest` (the differential suite) and
+# the small cross-platform and bench-compile jobs. The same tests run as before;
+# `cargo xtask tests --except ...` takes every crate no named shard does.
 name: ci
 on:
   push:
@@ -13,15 +18,41 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
+  # Line tables keep panic backtraces; full debug info only slows the compile and link.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
 jobs:
-  fast:
+  lint:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - uses: ./.github/actions/pin # xtask fast lints scx-difftest, which links the pin
+      - uses: ./.github/actions/pin # lint checks scx-difftest, which links the pin
       - uses: Swatinem/rust-cache@v2
-      - run: cargo xtask fast # fmt --check, clippy -D warnings, layers, headers, pin, tests
+        with:
+          shared-key: lint
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo xtask lint # conflicts, fmt --check, clippy -D warnings, layers, headers
       - run: cargo clippy --workspace --all-targets -- -D warnings # every member, difftest too
+
+  tests:
+    name: tests (${{ matrix.name }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: surface, crates: scx-surface }
+          - { name: mass, crates: scx-mass }
+          - { name: ssi-record, crates: scx-ssi scx-record }
+          # Every other library and test kit, the bench crate's tests and xtask's.
+          - { name: rest, crates: --except scx-surface scx-mass scx-ssi scx-record }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/pin # the pin check and scx-bench's tests link it
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: tests-${{ matrix.name }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo xtask tests ${{ matrix.crates }}
 
   xplat:
     name: xplat (${{ matrix.name }})
@@ -41,6 +72,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Golden hash tests
         env:
           CARGO_TARGET_WASM32_WASIP1_RUNNER: wasmtime
@@ -56,8 +88,16 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/pin
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: difftest
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo test -p scx-difftest
-      - run: cargo test -p scx-testkit --test nurbs -- --ignored # the full sweeps `fast` skips
+      - run: cargo test -p scx-testkit --test nurbs -- --ignored # the full sweeps `tests` skips
+      - run: cargo test -p scx-testkit --test ssi_truth -- --ignored # the SSI truths' full sweeps
+      - name: SSI corpus score # the corpus ships with the pin (MIT OR Apache-2.0); prints the table
+        env:
+          SCX_SSI_CORPUS: ${{ github.workspace }}/../sc-wt/scx-pin/tests/ssi-corpus
+        run: cargo test -p scx-ssi --test corpus -- --ignored --nocapture
 
   bench-compile:
     runs-on: ubuntu-24.04
@@ -69,5 +109,7 @@ jobs:
         uses: ./.github/actions/pin # scx-bench links the pin, as scx-difftest does
       - if: steps.has.outputs.yes == 'true'
         uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - if: steps.has.outputs.yes == 'true'
         run: cargo check --benches -p scx-bench

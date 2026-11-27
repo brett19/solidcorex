@@ -25,8 +25,10 @@ use crate::geom::{Operands, Side};
 use crate::{BooleanError, BooleanOp, BooleanRefusal, BooleanUnsupported, boolean};
 
 mod apart;
+mod contacts;
 mod face_face;
 mod imprint;
+mod stage6;
 mod unsupported;
 mod whole;
 

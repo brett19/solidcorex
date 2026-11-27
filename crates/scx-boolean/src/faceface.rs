@@ -45,9 +45,10 @@ use scx_num::extent1d::Extent1d;
 use scx_num::extent3d::Extent3d;
 use scx_num::fmath;
 use scx_num::frame::Frame;
-use scx_num::units::Accuracy;
+use scx_num::units::{Accuracy, Length};
 use scx_num::vector2d::Point2;
 use scx_num::vector3d::{Point3, Vec3};
+use scx_ssi::SsiError;
 use scx_ssi::analytic::{self, Contact, Intersection, IntersectionCurve, Overlap};
 use scx_surface::{Closed, Surface, SurfaceKind};
 
@@ -680,8 +681,9 @@ fn halves(x: Extent3d) -> Option<[Extent3d; 2]> {
 /// `reach` of `sb`. So if every piece of a cover of the grown boxes' overlap is clear of one
 /// of the surfaces by more than `reach` ([`clear_of`]), there are no such points. The
 /// overlap is bisected across its longest side, depth first, down to [`APART_DEPTH`]; the
-/// first piece at that depth clear of neither answers `false` (it may touch). Never `true`
-/// for faces that touch; `false` is only "not proved".
+/// first piece at that depth clear of neither is the answer (it may touch). `None` is the
+/// proof that the faces do not touch; a piece is only "not proved", the region the refusal
+/// names.
 fn apart(
     sa: &Surface,
     xa: Extent3d,
@@ -689,12 +691,12 @@ fn apart(
     xb: Extent3d,
     reach: f64,
     budget: &mut Budget,
-) -> Result<bool, BooleanError> {
+) -> Result<Option<Extent3d>, BooleanError> {
     let (Some(ga), Some(gb)) = (xa.expanded(reach), xb.expanded(reach)) else {
-        return Ok(false);
+        return Ok(Some(xa.intersect(xb).unwrap_or_else(|| xa.union(xb))));
     };
     let Some(shared) = ga.intersect(gb) else {
-        return Ok(true);
+        return Ok(None);
     };
     let mut stack = vec![(shared, 0)];
     while let Some((x, depth)) = stack.pop() {
@@ -703,15 +705,15 @@ fn apart(
             continue;
         }
         if depth >= APART_DEPTH {
-            return Ok(false);
+            return Ok(Some(x));
         }
         let Some([lo, hi]) = halves(x) else {
-            return Ok(false);
+            return Ok(Some(x));
         };
         stack.push((hi, depth + 1));
         stack.push((lo, depth + 1));
     }
-    Ok(true)
+    Ok(None)
 }
 
 /// Stage 4 over the stages before it.
@@ -778,23 +780,38 @@ pub(crate) fn face_face(
             pb.accuracy.unwrap_or(Accuracy::ZERO),
         ];
         let reach = ops.coincidence(pa.accuracy, pb.accuracy);
-        let no_form = BooleanError::Unsupported(BooleanUnsupported::SsiPair {
-            a: fa,
-            b: fb,
-            kinds: [SurfaceKind::of(sa), SurfaceKind::of(sb)],
-        });
+        let kinds = [SurfaceKind::of(sa), SurfaceKind::of(sb)];
         // No closed form here (`General`, or an answer of a kind this stage does not read):
-        // the pair is dropped when its faces provably cannot touch, else refused.
-        let cannot_touch =
-            |budget: &mut Budget| match (face_a.bounding_box(), face_b.bounding_box()) {
-                (Some(xa), Some(xb)) => apart(sa, xa, sb, xb, reach, budget),
-                _ => Ok(false),
+        // the pair is dropped when its faces provably cannot touch, else refused, naming
+        // the first region `apart` could not clear. The general intersector (73 row SM9)
+        // replaces this.
+        let undecided =
+            |budget: &mut Budget| -> Result<Option<BooleanError>, BooleanError> {
+                let xa = face_a.bounding_box().ok_or(BooleanError::Defect(
+                    BooleanDefect::NoFaceBox {
+                        operand: Side::A.operand(),
+                        face: fa,
+                    },
+                ))?;
+                let xb = face_b.bounding_box().ok_or(BooleanError::Defect(
+                    BooleanDefect::NoFaceBox {
+                        operand: Side::B.operand(),
+                        face: fb,
+                    },
+                ))?;
+                Ok(apart(sa, xa, sb, xb, reach, budget)?.map(|x| {
+                    let cause = SsiError::Unresolved {
+                        at: x.mid(),
+                        size: Length::from_mm(x.max_length()),
+                    };
+                    BooleanError::of_ssi(cause, fa, fb, kinds)
+                }))
             };
         let Closed::Solved(answer) = analytic::intersect(sa, &ua, sb, &ub, acc, res) else {
-            if cannot_touch(budget)? {
-                continue;
+            if let Some(e) = undecided(budget)? {
+                return Err(e);
             }
-            return Err(no_form);
+            continue;
         };
         let worst = if pa.accuracy >= pb.accuracy {
             pa.accuracy
@@ -861,8 +878,8 @@ pub(crate) fn face_face(
             }
             // A kind of answer this stage does not read yet.
             _ => {
-                if !cannot_touch(budget)? {
-                    return Err(no_form);
+                if let Some(e) = undecided(budget)? {
+                    return Err(e);
                 }
             }
         }

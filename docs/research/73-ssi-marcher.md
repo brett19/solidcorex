@@ -641,3 +641,486 @@ against the pin's output.
 ## 11. Proposed 04 row
 
 | 11-27 | Proposed (R73, research 73), for review. Step 5's SSI has five layers, in this order. (1) Closed forms first: today's SS1 to SS5, plus parallel cylinders, equal cylinders with meeting axes, Miller-Goldman conic pairs and Villarceau planes, each `General` past the tolerance. (2) Exact pcurves for exact curves on analytic surfaces: `Curve2::OnChart`, the closed-form chart inverse at the edge's own parameter, split at poles. (3) Then `scx-ssi::general`, the pin `ssi` crate's design ported as idiomatic Rust: Bézier pieces through `BoxTree::pairs`; pairs dropped only by proof with outward rounding; loop-free by certified normal cones, Sederberg-Meyers, then a Krawczyk critical-point solve that seeds loops and classifies touches and nodes by `II_A - II_B`; the field path whenever a side has an implicit form, the march otherwise; Taylor fields deferred and refused. (4) Each span is certified by residual enclosure plus parametric Krawczyk and recorded as `Basis::Certified`; three B-splines share one knot vector. (5) Refusals are typed `SsiError` (`Unresolved`, `Stalled`, `Singular`, `Uncertified`, budget, stop), carried in `SsiPair`; there are no fixed caps, and order is fixed. Topology is claimed up to the coincidence, as SS4 does. BO2b stays as the filter in front. Change if: SM11 measures certification above 2 times the uncertified path, the torus field path above 2 times the pin crate, or C10's procedural arm is ruled needed for step 5. |
+
+## 12. SM0 as built (11-27)
+
+Branch `sm0`. New files only: `scx-testkit/src/ssi_truth.rs` (one `mod` line in `lib.rs`) and
+`scx-testkit/tests/ssi_truth.rs`. No `scx-ssi` or `scx-boolean` source is touched. The module
+states §9's truths as data a test can ask: each `Truth` holds the two surfaces (`Surf`: signed
+distance and normal, so a residual is a distance), the curves (`TruthCurve`: a pure function of
+one parameter, its domain, `Loop` or `Line`, and the length where known), the nodes (point plus
+every `(curve, parameter)` that reaches it), isolated touches, and `tangent` and `coincident`.
+`Truth::placed(&Rigid)` moves the whole answer; `Truth::hausdorff(candidate, n)` gives the two
+one-sided distances; `Truth::residual`, `Truth::nearest` are the per-point checks.
+
+**Cases.** `sphere_sphere` (circle, touch, coincident, empty; `sphere_sphere_frame` gives the
+circle's frame), `tiny_loop`, `cylinders_perpendicular(r, R, e)` (two loops, Steinmetz with two
+nodes, a figure eight at `e = R - r`, one loop, a touch), `cylinders_parallel` (two lines,
+tangent line, coincident), `sphere_cylinder` and `viviani(a)`, `torus_plane_parallel` (the five
+spiric sections with the figure eight and the touch), `torus_villarceau`. Boolean figures:
+`bicylinder_volume`, `bicylinder_area`, `t_union_volume`, `sphere_lens_volume`,
+`sphere_union_area`, with `ellip_k` and `ellip_e`.
+
+**Decisions, with the cases for and against.**
+
+1. *Analytic parameter through a square-root end.* A loop with `z = sqrt(g(t))` has vertical
+   tangents where `g = 0`; a plain `sqrt` there is not smooth, and the ends are where a marcher
+   is tested. For an oval the truth uses `phi = phi0 cos(th)`: `cos phi - cos phi0 = f sin^2(th) / 2`
+   with `f` analytic and positive, so the signed `z = sin(th) sqrt(K f / 2)` is analytic through
+   both ends. For a figure eight it uses the half angle (`z = 2 sqrt(e r) sin(t/2)`, Viviani's own
+   form). For: exact points and derivatives at the ends, one parameter for the whole loop. Against:
+   the parameter is not the cylinder's angle for the one-loop skew case (documented per case).
+   The tests therefore also compare against naive two-family parametrisations (by angle, and by
+   height `z`) that share no code.
+2. *Lengths.* `length` is `Some` for circles, the Steinmetz ellipses (`4 sqrt(2) R E(1/2)`) and
+   Viviani (`8 sqrt(2) a E(1/2)`) in closed form, and for the concentric perpendicular loops
+   (`e = 0`, the tpipe's 9.887974) by trapezoid of the exact speed (geometric convergence, 4096
+   nodes). Every `Some` is checked in the tests against Romberg-extrapolated chord lengths, which
+   use no derivative. `None` elsewhere (skew loops, spiric ovals): no closed form was derived.
+3. *Nodes are tangent points.* In every case here the surfaces are tangent at a node (Steinmetz,
+   Viviani, the skew figure eight, the spiric figure eight, the Villarceau pair); the tests assert
+   parallel normals at every node and touch. A transversal node does not occur in this set.
+4. *Exact comparisons.* Touch, node and tangent classes compare on exact `f64` (on `d^2` for
+   spheres and parallel cylinders), as the constructors' arguments are the caller's exact numbers;
+   the tests also straddle each critical value by 1e-9 to show the class flips.
+5. *Elliptic integrals by AGM, with `S`.* `E = K (1 - S)`; the bicylinder's `(R^2 + r^2) E - (R^2 - r^2) K`
+   is written `r^2 K (2 - S - S/m)` and the area's `E - (1 - m) K` as `K (m - S)`. The first form
+   lost 5e-12 relative at `r/R = 0.003` against quadrature; the second does not cancel. (A first
+   AGM loop with the tolerance `1e-17 a` never ended: `a - b` stalls at one ulp.)
+6. *Villarceau and the figure eight come from the quartic's own roots* in the tests (a quadratic
+   in `x^2` per height), not from the tube-circle picture the truth uses.
+
+**Verified.**
+- Bicylinder volume `16 R^3 / 3` at `r = R` (and the limit `r -> R(1 - 1e-9)`), `26.1131656` at
+  `r = 1.5`, `R = 2` (to 5e-8), against two independent quadratures (slices across `y`, slices
+  across `x`) at five radius pairs to 1e-12 relative; the area `16 R^2` and the elliptic area
+  against a direct sum of the two cylinders' parts.
+- The tpipe union volume is `102.5 pi - V/2 = 308.956664169885` (the branch is inside the pipe
+  over half the bicylinder; it equals the recipe table's value to 1e-9). The pin's figure
+  308.956697417 (308.9567) is 3.3e-5 above it: the pin's error, not the truth's. Each tpipe loop is
+  9.887974 long.
+- Every curve sample has residual below 1e-14 R on both surfaces; loops close; nodes sit on the
+  claimed parameters; `placed` keeps all of it under a random rigid motion.
+- Tiny loop `delta = 1e-7`: radius `sqrt(delta (2R - delta))`, residual below 3e-15; the cap area
+  `2 pi R delta` from two routes. The checker's `acos` loses digits at small `delta`; its tolerance
+  scales as `8e-16 / delta`.
+- Sphere lens and union area against slice integrals and a bisected-boundary polar integral.
+
+**Not done here.** The perturbed variants with the tolerance's expected answer (§7 SM0) wait for
+the tolerance model of SM3; the NURBS-sphere form of `c7_tiny_loop_*` is SM5's test. No truth for
+sphere-cylinder with the sphere centre off the plane of the axes (not a closed form of this kind).
+`nearest` samples 512 parameters and narrows the six lowest local minima by golden section (about
+800 evaluations; a crossing needs more than one minimum: a first version with one missed a point
+near a node by 2.6e-3). Test time: the first version took 78 s wall (3 CPU minutes) because
+`nearest` (4096 samples) was called about 12,000 times per case; now the default run is 1.1 s
+(8 s with the build) and the `_full` sweeps (`-- --ignored`: all five radius pairs, 40 sphere
+pairs, 8 rigid motions, every naive vertex and 600 truth samples per comparison) are 12.7 s. The
+default run checks every 16th naive vertex against the same tolerance and 150 truth samples. CI
+runs the ignored sweeps next to the nurbs ones.
+
+## 14. SM3 as built (11-27)
+
+SM3 lays down the public API of `scx_ssi::general`, the typed `SsiError` and its plumbing into
+`scx-boolean`. The body refuses every pair. This section records what was built, where it departs
+from §4.10 and §4.11, and the case for and against each choice.
+
+### 14.1 What exists
+
+- `scx_ssi::SsiError` (`crates/scx-ssi/src/error.rs`) is §4.10's enum, `#[non_exhaustive]`:
+  `Unresolved { at, size }`, `Stalled { at, step }`, `Singular { at, kind: SingularKind }`,
+  `Uncertified { at }`, `Budget(Exhausted)` and `Stopped`.
+  - `kind()` is `Unsupported` for the four refusals, `Exhausted` for the budget and `Cancelled`
+    for the stop (62).
+  - `name()` gives the stable names `ssi_unresolved`, `ssi_stalled`, `ssi_singular` and
+    `ssi_uncertified`, and the budget's and stop's own names.
+  - `at()` gives the named point, or `None` for the budget and the stop.
+  - The one-line Display names the point and the size or step in mm. `From<Exhausted>` and
+    `From<Stopped>` exist, so `budget.charge(n)?` and `stop.check()?` work.
+- `SingularKind` (`#[non_exhaustive]`) has two variants. `DegenerateForm` is a collinear-normal
+  point whose relative form is singular within its bound: a tacnode, a cusp or a touch of order
+  above 2, not told apart. `HighOrderTangency` is a tangent curve of order above 2, which is
+  SM12's.
+- `scx_ssi::general::intersect(a, ae, b, be, [Accuracy; 2], Resolution, &mut Budget, &Stop) ->
+  Result<Traced, SsiError>` charges one unit, then polls the stop, as `global_solve` orders them.
+  It then refuses with `Unresolved`:
+  - at the middle of the overlap of the two certified boxes `Surface::box_over(extent)`, or of
+    their union when they do not overlap;
+  - with `size` set to that box's longest side;
+  - or, if a box cannot be enclosed, with an infinite size at the middle of the two extents'
+    middle points.
+- `scx_ssi::intersect` takes the same arguments and returns `Result<Answer, SsiError>`, where
+  `Answer` is either `Closed(analytic::Intersection)` or `Traced(general::Traced)`. It tries the
+  closed forms first. The closed forms charge nothing and do not poll the stop.
+- The answer types (`general/traced.rs`):
+  - `Traced { branches, nodes, touches }` (`#[non_exhaustive]`, `Default` = no meeting, proved).
+  - `Branch { curve: Arc<NurbsCurve<3>>, pcurves: [Curve2; 2], contact: Contact, ends: Ends,
+    certificate: Certificate }`.
+  - `Ends::{Closed, Open { start, end }}`, `End::{Rim(Rim), Node(usize)}` and `Rim::{A, B, Both}`.
+  - `Node { point, uv: [Point2; 2], kind: NodeKind }`, with `NodeKind::{Crossing, Pole, Seam}`
+    (`#[non_exhaustive]`).
+  - `Touch { point, uv: [Point2; 2] }`.
+  - `Certificate { to_intersection: Length, on_surface: [OnSurface; 2] }`
+    (`#[non_exhaustive]`, so only this crate builds one), and `OnSurface::{Exact, Within(Length)}`.
+  - `Certificate::curve_cert(reads)` and `OnSurface::cert(reads)` give the `scx_num::cert::Cert`
+    records (`CurveToIntersection` by `Krawczyk`, `PcurveOnSurface` by `Interval`). The caller
+    supplies the keys. An exact pcurve has no record.
+- In `scx-boolean`:
+  - `BooleanUnsupported::SsiPair` gains `cause: SsiError`, and its Display appends the cause's
+    line.
+  - `BooleanError::of_ssi(cause, a, b, kinds)` maps the budget to `Exhausted`, the stop to
+    `Cancelled`, and any refusal to `SsiPair` with it as the cause.
+  - Stage 4 does not call the general method yet; that is SM9. Its pre-check `apart` now returns
+    the first region its bisection could not clear (`Option<Extent3d>`, `None` = proved apart)
+    instead of `false`. The refusal is `Unresolved` at that region's middle, of its longest
+    side.
+  - A face with no box at this point is now `Defect(NoFaceBox)`, which matches that variant's
+    contract. It was a bare `SsiPair` before. It cannot happen, because pairs come from the box
+    tree.
+
+### 14.2 Decisions, for and against
+
+1. **A separate `Traced`, not a certified kind in `IntersectionCurve` (departs from §4.11 and
+   §7's SM3 row).**
+   - For:
+     - `IntersectionCurve` is read field by field in stages 4 and 5, which BO4 is editing now. A
+       new kind there forces a match arm in every reader before any of them can use it.
+     - A traced branch carries what a closed-form piece does not: two pcurves, its ends, and its
+       certificate. A closed-form piece carries its exact span and overlap flags instead.
+     - `Answer` keeps the two apart where they differ, and SM9 reads both.
+   - Against:
+     - Stage 4 has two answer shapes to split at merged points.
+     - §4.11's single `Intersection` would let `exact_loops` read one list.
+   - Held: SM9 can convert a `Traced` into stage 4's records in one place. Folding the types
+     later is cheap, but splitting them after readers depend on a merged type is not.
+2. **`Answer` at the top level, not `Result<Intersection, SsiError>`.**
+   - For: it follows from decision 1, and the caller sees which method answered.
+   - Against: a caller that wants "just the curves" matches twice. No such caller exists yet.
+3. **The certificate as bounds plus `Cert` builders, with no keys stored.**
+   - For: `scx-ssi` sits below `scx-brep` and knows no entity keys. `Cert` already lives in
+     `scx-num`, so the records the body stores are built from this type with no new type.
+   - Against: a branch's certificate holds one bound per claim, not one per span. SM8 may want
+     per-span bounds, which is why `Certificate` is `#[non_exhaustive]`.
+4. **`OnSurface::Exact`.** SM1's `OnChart` pcurve is exact and carries no record.
+   - Against: a seam or pole split still needs the chart's turn tracking. That is SM1's, not a
+     bound.
+5. **`End::Node(usize)` indexes `Traced::nodes`.**
+   - For: there is one owner for each node, and no `Rc` graph.
+   - Against: an index can be stale if a caller edits the lists. The fields are public for
+     reading, and the crate builds the lists. No setters are offered.
+6. **`Rim::Both`** names a corner where both extents' boundaries meet within the coincidence.
+   The alternative was two ends, which would double-count the exit.
+7. **Coincident pieces (all-zero fields, SM4) are not a field yet.** `Traced` is
+   `#[non_exhaustive]` so SM4 can add one without breaking callers.
+   - Against: SM4 must decide the shape (a uv region on each side) before SM9 reads it.
+8. **`SsiPair` holds a full `SsiError`, though `Budget` and `Stopped` never go there**
+   (`of_ssi` routes them to the Boolean's own variants, and the field's doc says so).
+   - Against: a narrower `SsiRefusal` type would make the bad state unrepresentable.
+   - Held: it would duplicate four variants and their names for a state that one constructor
+     already rules out. `BooleanUnsupported` is `#[non_exhaustive]`, so tightening the field
+     later breaks only this crate.
+9. **`BooleanError` and `BooleanUnsupported` lose `Eq`**, because the cause holds `Point3` and
+   `Length`, which are `f64`. Nothing outside `scx-boolean` names either type, so `PartialEq` is
+   enough for the tests.
+10. **Stage 4's cause comes from BO2b's bisection, not from the stub.**
+    - For: the region it names really is the undecided one. On the torus and block it is a
+      0.14 mm piece holding the touch, where the stub would name the faces' whole overlap.
+    - Against: this is a touch to `faceface.rs` beyond the error type. BO4 does not edit that
+      file, and the change is only `apart`'s return type and the construction site.
+11. **The stub's region is the box overlap.**
+    - For: it is deterministic, symmetric in the operands, and lies inside both surfaces' boxes.
+    - Against: it says nothing about where the surfaces really meet. It is replaced by SM4's
+      first undecided pair.
+
+### 14.3 Tests
+
+- `scx-ssi` `general::tests` has 10 tests:
+  - a general pair (tpipe; a NURBS sphere against a plane) is refused as `Unresolved` inside
+    both boxes, with one unit spent;
+  - the budget is charged before the stop is polled, and the budget answers when both apply;
+  - the closed forms answer first with no budget and the flag set, and spend nothing;
+  - the same bits on every run and under any budget that suffices;
+  - swapped operands name the same place;
+  - every cause's kind, name, Display and `at()`;
+  - the `?` conversions;
+  - the certificate's records;
+  - the empty trace.
+- `scx-boolean`:
+  - `expect_ssi_pair` now checks that the cause is `Unresolved` and is the same in either operand
+    order;
+  - the torus-and-block test checks that the named region holds the touch and is small.
+- No test was removed.
+
+### 14.4 Added cost
+
+- The general stub is not on any Boolean path.
+- `apart` returns a box it already held instead of a `bool`. The refusal path builds one
+  `SsiError` (a midpoint and a longest side) once per refused Boolean.
+- No loop gained work.
+
+### 14.5 Ruling (11-27)
+
+The coordinator accepted SM3 as built.
+
+- `Answer` and `Traced` stay separate from `IntersectionCurve` for now, as a stepping stone. SM9
+  merges them.
+- SM9 also narrows `SsiPair`'s cause to a refusal-only type, so that `Budget` and `Stopped`
+  cannot be represented there (§14.2 items 1 and 8).
+
+## 15. SM4 as built (11-27)
+
+SM4 cuts each surface into pieces with certified boxes, pairs them with `BoxTree::pairs`, and
+drops a pair only by proof. `general::intersect` now answers a proved-empty `Traced` for pairs
+that are truly apart, and refuses the rest as `Unresolved` at the first piece pair it could not
+clear. The Bézier-level proofs that need implicit forms (field sign) wait for SM6a.
+
+### 15.1 What exists
+
+- `general::Candidates` (`general/pieces.rs`), with `Piece { uv, bbox }` and `PiecePair`:
+  - `Candidates::new(a, ae, b, be, acc, res, budget, stop)` builds each surface's cells (the
+    knot-span rectangles of `Surface::to_nurbs`, u-major; the whole extent as one cell where the
+    form cannot be built), each with `Surface::box_over`. It pairs them through `BoxTree` and
+    keeps the pairs the slab proof does not drop. `pairs()` is the survivors, in ascending piece
+    order, for SM5 and SM6a.
+  - `apart(&pair)` is the proof (boxes, then slabs). `halve(&pair, budget, stop)` splits one
+    piece in two and returns the child pairs that survive; `settle(pair, front, ..)` halves
+    round by round until nothing survives (`None`: proved) or it must give up (`Some(pair)`).
+  - A pair at the resolution, or whose pieces cannot be split in `f64`, is `Unresolved` where it
+    lies. That ends every halving, so no fixed depth exists.
+- `Surface::range_along(dir, uv) -> Option<Ivl>` (`scx-surface`, `enclose.rs`): a certified
+  range of `dir . S` over a box. Analytic kinds use the mean-value form with the partials
+  enclosed by their own formulas in a ring of value-with-partials (`Grad`, intervals), met with
+  the natural range; NURBS uses `partials_over_piece` per knot span. A flat piece seen along its
+  normal has a width second order in its size.
+- Proofs and their rounding:
+  1. Boxes. `BoxTree` tests `a.min > b.max + t`, so it is given `t = tol + 4 eps (reach + tol)`
+     (rounded up, `reach` the largest coordinate of any box): that exceeds the rounding of the
+     sum, so a dropped pair is apart by more than `tol` in the reals. Child pairs use interval
+     subtraction.
+  2. Slabs. Along the unit normal `n` of either piece at its middle, the two ranges are apart
+     by more than `tol |n|`, with `|n|` an interval upper bound. No `acos`, no pad.
+- `Traced::coincident: Vec<analytic::Overlap>` (see 15.2 item 3).
+- The Cargo graph gained `scx-algo` and `scx-nurbs-surface` for `scx-ssi`.
+
+### 15.2 Decisions, for and against
+
+1. **Halving is a method for SM5, with a width limit in `intersect`.**
+   - For: with no loop-free test yet, a pair that the surfaces cross can never be proved apart
+     and would be halved down to the resolution. `intersect` therefore gives a piece pair up
+     when the surviving front of its descendants holds more than `FRONT = 24` pairs. A
+     near-miss keeps a narrow front at the nearest points. A crossing widens it every round.
+   - Against: `FRONT` is a fixed number, though a policy of effort and not of proof (it never
+     drops a pair; only the refusal depends on it). SM5's loop-free test replaces it as the
+     stop. 8, 12 and 24 were measured (15.4); 24 is what proves two unit spheres `2^-10` and
+     `2^-20` apart.
+2. **Field-sign proof deferred to SM6a** (§4.3 item 3). It needs the implicit forms and the
+   rational Bernstein `g` that SM6a builds. For a plane side the slab is that proof.
+3. **Coincident pieces.** `Traced` gains `coincident: Vec<analytic::Overlap>`, the closed
+   forms' own type (convex polygons in both surfaces' uv, vertex for vertex).
+   - For: SM9 reads one shape for `Closed::Coincident` and the general method.
+   - Against: a NURBS-on-NURBS overlap may not be a convex polygon. Held: it is then split into
+     convex pieces by whoever proves it.
+   - Nothing fills it in SM4. The proof is an all-zero field (SM6a), and a slab alone cannot tell
+     a coincident patch from one that only lies in the same plane beside it.
+4. **Analytic ranges are not taken from the rational NURBS image.** `to_nurbs` rounds its
+   control data (the quarter arc's middle weight is `cos(pi/4)`), so a hull range from it is
+   not certified. Ranges use each kind's own formula instead.
+   - Against: the kinds' interval boxes are loose (a unit sphere's whole box is 20 percent
+     wide), so near-touching analytic pairs cost many halvings (15.4).
+5. **Region of a surviving pair.** The overlap of its boxes, or their union when rounding leaves
+   none (the pair survived by the coincidence alone). `Unresolved` names the middle of that
+   region.
+6. **Halving rule.** The piece to split comes from the axis along which the ranges overlap
+   least (the wider piece), and its split side from the narrower range along that axis (box
+   length without an axis). A split by box length alone stalled on cylinders (it halved their
+   height forever along the tangent line).
+
+### 15.3 Tests
+
+`general::tests::apart` (9 tests): separated pairs (sphere over and under a plane, two
+spheres, a cylinder beside a plane, spheres also as NURBS) at gaps `4` to `2^-20` are proved
+empty where `testkit` says the whole surfaces do not meet; the SM0 truths (`sphere_sphere`,
+`cylinders_parallel`) decide spheres and parallel cylinders through and past the touch;
+gaps at, inside and past the coincidence, and crossings, are never dropped; a refusal at a touch
+names it; halving proves what the cells cannot; a pair dropped by `apart` is far apart by
+sampling; the same bits every run, swapped, and under the exact budget (one unit less is
+`Budget`); a set stop; the tolerance is the coincidence. `scx-surface` has two tests of
+`range_along`. In `general::tests`, three assertions changed (the refusal names a piece pair,
+not the whole overlap, and spends more than one unit); none was removed.
+
+### 15.4 Measured (release, throwaway harness, not committed)
+
+Pairing at the cell level against the pin's `ssi` crate, on all 119 corpus cases as exact
+NURBS patches (pin: its Bézier pieces and all pairs of `pieces_apart`, pad 1e-9; here:
+`Candidates::new`, tol 1e-9):
+
+| | pin | here |
+|---|---|---|
+| median per case | 12.7 us | 211 us (2.3 to 68 times) |
+| surviving cell pairs, total | 2,083 | 2,736 (more in 22 cases, same in 97, fewer in none) |
+
+- The cost is the certified enclosures (`box_over`, `partials_over_piece` at each slab), not the
+  tree. The pin takes its boxes and slabs from control points, uncertified.
+  `nurbs_invert.rs` already extracts Bézier nets with error bounds, so a hull range along `n`
+  would be certified and as cheap as the pin's. That is the next step if SM11 finds this
+  matters.
+- `intersect` end to end (cells and halving to the refusal): 116 of the 119 cases (they cross)
+  are `Unresolved`, 3 are proved empty. Median 11.9 ms, total 5.2 s with `FRONT = 24`; with 12
+  10.6 ms and 4.3 s; with 8 4.2 ms and 1.35 s. This is the refusal path only, and SM5's
+  loop-free stop replaces it.
+- Near-touching analytic pairs: two unit spheres `2^-10` apart, 4,305 pair tests and about
+  100 ms; `2^-20`, 9,089 and 214 ms. The same pairs as NURBS are cleared at the cells (the NURBS
+  boxes are tight at the contact), in about 0.1 ms.
+- Not on any Boolean path yet (the stage 4 stub does not call it), so no existing path gained
+  work.
+
+### 15.5 Open
+
+- Hull-based certified ranges for NURBS and for the analytic kinds' exact images (15.4).
+- The analytic kinds' loose interval boxes.
+- A shared per-piece cache of the own-normal range (each slab computes it again per pair).
+
+## 16. SM10 as built (11-27)
+
+SM10 is the corpus scorer: a test target, `crates/scx-ssi/tests/corpus/` (`cargo test -p scx-ssi
+--test corpus`), in new files only. It does not touch the algorithm. It runs `scx_ssi::intersect` on
+each case of the ssi-corpus and judges the answer against the truth stored with the case. SM5
+onward measure progress with it.
+
+### 16.1 What it does
+
+- **Data.** The corpus (jyviko/ssi-corpus, MIT OR Apache-2.0) is not in the repository.
+  `SCX_SSI_CORPUS` names the folder that holds `cases/` (each case `.json` or `.json.gz`, read
+  through `gzip -dc`). The six cases built from Yang et al.'s published data (`y23_appendix_ex2`,
+  `y23_t3_ex1` to `ex5`) are excluded by id (04 R73 row); 113 cases run.
+- **Surfaces.** Each case surface becomes a `Surface` over an `Extent2d`: the analytic kinds
+  through their frame and `from_step` (degrees to radians; the cone's frame at its apex with
+  radius 0, so `v` is the height from the apex), a NURBS surface through `KnotVector` and
+  `Net` over its knot domain. Every case checks itself: the `surf` column is the largest distance
+  from a few of the truth's points to either built surface, by `Surface::invert`. It is at most
+  3e-9 over the 113 cases, so the loader's conventions are right.
+- **Run.** One call per case at a fixed tolerance, `min(1e-6 mm, feature_size / 10)` for the
+  resolution and both accuracies, and a fixed `Budget` of 2,000,000 units. `acc_tol` is ten
+  times the tolerance; the coverage tolerance is the corpus's rule,
+  `max(cov_tol, min(0.5, 2 acc_tol ill_cond))`.
+- **Scoring.** Verdicts, most severe first: `REFUSED <name>`, `INCOMPLETE`, `WRONG TOPOLOGY`,
+  `BAD CERT`, `INACCURATE`, `PASS`.
+  - Refusals are their own verdict, counted by the error's stable name (`ssi_unresolved`, ...),
+    and are not failures. The total reads `pass P of N; refused R (by kind); failed F`.
+  - `INCOMPLETE`: a truth vertex (branch, isolated point, region boundary) farther than the
+    coverage tolerance from the output. `h_truth` is that distance.
+  - `WRONG TOPOLOGY`: output farther than the coverage from the truth (`h_out`); or the
+    components differ (curves joined at ends within the coverage, points joined to what they lie
+    on, compared as a sorted list of free-end counts); or a truth singular point has no output
+    curve, node or touch within the coverage; or a non-finite sample.
+  - `BAD CERT`: a traced branch's certificate is not borne out. Its `to_intersection` must be at
+    least the observed distance from its samples to the truth (less the truth polyline's own chord
+    error, measured from its turning angles); each pcurve's observed residual `|S(p(t)) - c(t)|`
+    must not exceed its `Within` bound, and an `Exact` pcurve's must be under 1e-9.
+  - `INACCURATE`: `h_out` above `acc_tol` (plus the chord error).
+  - Topology is reported as truth and output counts `branches/nodes/touches`.
+  - A coincident answer's pieces are drawn on the first surface (edges in 32 steps). Where the
+    truth has a region, its boundary must be covered; where it has none, the pieces are held to
+    the truth like any curve (a piece of no width along a seam is then a curve). The check is
+    one-sided for regions (the cuts between pieces are not on the truth's boundary).
+- **Hausdorff** is both ways, point to polyline segment: output samples (720 a closed-form
+  conic, 32 a knot span of a traced branch) to the truth's polylines, and the truth's vertices to
+  the output's segments.
+- **SM0's truths.** Where a case has a closed form in `scx_testkit::ssi_truth` the scorer
+  uses its `to_truth` and `from_truth` (exact curve, 720 samples) in place of the corpus
+  polylines for the curve distances. Today that is two-sphere pairs (`sphere_sphere`); no
+  corpus case with a circle is one (the touches have no curve), so it is exercised by an
+  inline test, where the corpus's coarse polygon would have failed the exact circle. The other
+  constructors (perpendicular cylinders, Viviani) need the case's placed axes mapped to a
+  `Rigid`: open, for the cases `c1_cyl_cyl_two_loops`, `c4_steinmetz`, `c4_viviani_figure8`.
+- **Time.** Measured around the call and printed after the table, apart from it, because a time
+  is not deterministic. `SCX_SSI_TIMES=1` adds a time column. The table has no time otherwise, so
+  two runs print the same bytes.
+
+Running it: `SCX_SSI_CORPUS=<dir> cargo test -p scx-ssi --test corpus -- --ignored --nocapture
+score_corpus` (the full run, about 11 s in a debug build; `SCX_SSI_CASES=a,b` limits it,
+`SCX_SSI_OUT=<file>` also writes the table). Without `SCX_SSI_CORPUS` the tests that run by
+default are the scorer's own, on inline cases (no corpus file): verdicts for each kind of answer,
+a bad certificate, a refusal scored by kind, a deterministic table. With it, a smoke subset
+(four cases, one of them refused) also runs, and the surfaces are checked against the truth.
+
+### 16.2 Today's score (113 cases, closed forms only)
+
+```
+pass 35 of 113; refused 72 (ssi_unresolved 72); failed 6
+  (incomplete 1, wrong topology 5, bad cert 0, inaccurate 0, setup 0)
+for comparison, over all 119: the pin crate passes 118, the SMLib port 78
+```
+
+Not "almost every case Unresolved": the closed forms answer every pair of a plane with an
+analytic surface, the coaxial pairs and the coincident ones, which is 41 of the 113. They score 35;
+the other 72 are refused `ssi_unresolved` (every NURBS pair, and the analytic pairs with no closed
+form: two cylinders, a sphere and a cylinder, the tori).
+
+| class | pass | refused | failed |
+|---|---|---|---|
+| c1 transversal (8) | 6 | 2 | 0 |
+| c1n (6) | 0 | 6 | 0 |
+| c2, c2n (10) | 3 | 7 | 0 |
+| c3, c3n (7) | 3 | 4 | 0 |
+| c4, c4n (6) | 1 | 5 | 0 |
+| c5, c5n (8) | 6 | 2 | 0 |
+| c6, c6n (7) | 4 | 3 | 0 |
+| c7 (24) | 5 | 13 | 6 |
+| c8, c8n (12) | 7 | 5 | 0 |
+| c9n (6) | 0 | 6 | 0 |
+| y23, the 19 reconstructions | 0 | 19 | 0 |
+| total (113) | 35 | 72 | 6 |
+
+Total time of the run, in a debug build: about 150 ms.
+
+### 16.3 What the six failures say (not scorer faults)
+
+All six are class 7, and all six are the closed forms' tolerance rule, not the scorer: the truth
+points lie on both built surfaces, and the answer is a legitimate one at the tolerance used.
+
+- `c7_sunk_cyl_1e-3` to `1e-6` (truth: two lines): the plane cuts the cylinder so shallowly
+  (the first case: 5e-7 deep, the lines 2e-3 apart) that the strip between the lines is no
+  deeper than the tolerance. The rule of 63 (such a strip is one tangent line) answers one line,
+  the case's own size from the truth. The corpus counts the lines' separation as the feature.
+- `c7_tiny_loop_sphere_1e-4`, `1e-5` (truth: a closed loop of that radius): the cap is
+  about 5e-9 deep, so the rule answers a touch point.
+
+These are the case 73 §4.6 and §10 already name (depth against width). They are SM2's to settle:
+either the corpus's width is the measure for a closed form's answer, or these cases are N/A at
+the tolerance used. Change the tolerance rule only with a decision on that, not to move the score.
+
+### 16.4 Decisions, for and against
+
+1. **The corpus is read from a folder, not vendored.**
+   - For: 9 MB of gzip would sit in a repository the other corpora do not weigh; the licence is
+     permissive, so nothing stops a later copy; the table is the same either way.
+   - Against: a clean checkout runs only the inline tests until `SCX_SSI_CORPUS` is set, so CI
+     does not run the full score. Held: SM11 and the status row name the variable.
+2. **Decompress with `gzip -dc`, not a built-in inflate.**
+   - For: no external crate (layers.txt `[external]` is empty) and no 300-line inflate to get
+     wrong.
+   - Against: a tool outside the build (every machine here has it). A `.json` folder needs none.
+3. **The tolerance is per case, `min(1e-6, feature_size / 10)`.**
+   - For: a feature below the tolerance is not resolvable by any method, so the corpus's tiny
+     cases would be N/A; this resolves them and leaves the others at the pin's default zone.
+   - Against: a case-dependent knob. Held: it is one line (`Case::tol`) and the cases that
+     change are the 24 with a feature size, all in class 7.
+4. **Component comparison joins at ends, not along curves.**
+   - For: it is the corpus's "free-end count" notion and cheap.
+   - Against: two curves that cross mid-way without a node are two components in both truth and
+     output, which agrees, but a truth curve that touches another mid-way would not join.
+     Not met in the corpus.
+5. **A coincident answer's pieces are drawn on the first surface and held to the truth only
+   where the truth has no region.**
+   - For: it scores a piece of no width along a seam (the closed forms' answer for
+     `c5_cyl_quilt_seam`) as the curve it is, and checks a region's boundary is covered.
+   - Against: the cuts between pieces are not checked, so extra area outside the truth's region
+     passes. An overlap's area test needs the polygon in both uv and is SM9's.
+6. **Certificate soundness is judged against the truth polylines, with their chord error.**
+   - For: it needs no implicit form for each truth kind (`param`, `heightfield`).
+   - Against: a truth polyline is itself an approximation, so a claim tighter than its chord
+     error cannot be refuted; the chord error is measured and subtracted, and is at most the
+     coverage. Nothing here is a certificate until SM8, so this path is exercised only by the
+     inline tests.
+7. **Zero cost on `xtask fast`.** The full run is `#[ignore]`d. The inline tests take 0.7 s
+   in a debug build; with a corpus the smoke subset adds four cases and the surface checks.

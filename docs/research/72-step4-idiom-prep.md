@@ -3503,6 +3503,48 @@ A box is mapped into the kind's frame as the box of its 8 corners' coordinates, 
 
 **Proposed 04 row.** "BX1 (72 §14.32): `scx-boolean/tests/recipes.rs` runs T12's plate, gear, contact and coincident-face recipes (21 cases) through `boolean`, `#[ignore = \"awaits BO4 classify\"]` until BO4; operand volumes are live. Change if: BO7 names the in-face touch differently from `non_manifold`."
 
+### 14.33 GS2 as built (11-27)
+
+**Task.** Cut CI wall time per push, and (Brett's update) make the difftest itself fast wherever it runs. Measured on run 46054913714 (main, 25 min 35 s): `fast` 14 min 30 s, `difftest` 25 min, xplat 1 to 2 min, bench-compile 1 min 5 s.
+
+**Where the time went.** Compile was not the main cost (the cache restored, and workspace crates rebuild in a minute or two). The difftest binary ran 972 s for 529 tests, and four tests were the whole tail: `t_nurbs::nurbs_elevate` 866 s, `t_algo::poly_from_roots` 835 s, `t_slice::t_slice` 116 s and `t_nurbs_surface_edit::nurbs_surface_elevate` 100 s (the rest 130 s together), each run alone locally, 4 threads. Sampled with gdb (no `perf` here), the time was not in scx-nurbs or scx-algo (opt-level 2 on seven scx crates moved nurbs_surface_elevate 100 s to 87 s, so rejected), it was in the exact references of `scx-testkit`:
+- `nurbs_elevate` and `nurbs_surface_elevate`: the rational de Boor lerp, in `Rat::reduce` -> `Int::gcd`: a binary gcd that allocated a new number every step, and `div_exact` by bit-at-a-time long division.
+- `poly_from_roots`: the truth oracle `exact_real_roots` (Sturm isolation and bisection to 2^-116) run for every disagreeing case at every one of about thirty tolerances, and again in `poly_cubic` and `poly_quartic`, though it depends on the coefficients alone.
+- `t_slice`: the pin's own interval solver (`fillet_section::interval`); not touched.
+
+**What was changed.**
+1. `scx-testkit::exact`: Knuth algorithm D long division (was bit at a time), Lehmer's gcd with the leading 62 bits deciding a run of quotients (was binary gcd allocating per step). Results are exact integers, so every reference is bit-identical. New tests: the old bitwise division kept as a reference in the test module and compared on 6000 limb patterns of random, all ones, zero, one and 2^63 (hits the qhat correction and the add-back); Lehmer against Euclid on 4000 pairs and on pairs with a common factor.
+2. `scx-testkit::poly`: `Z::sign_at` shifts instead of multiplying when the denominator is a power of two (bisection points).
+3. `scx-difftest` `pin_defects::exact_real_roots`: results kept by the coefficients' bits (a pure function; the first caller computes, the rest read).
+4. CI (`.github/workflows/ci.yml`): `fast` split into `lint` plus four `tests` shards (`cargo xtask tests scx-surface` / `scx-mass` / `scx-ssi scx-record` / `--except` those four, which adds the bench crate's tests and xtask's, so the four together run exactly what `fast` runs); `xtask` gains `lint` and `tests`, and `fast` is `lint` then `tests` as before. `Swatinem/rust-cache` saves only on main (branch pushes restore main's cache and save nothing: fewer 600 MB uploads, less eviction). The pin's files get a fixed mtime in `pin.sh`: cargo fingerprints a path dependency by mtime and a fresh checkout stamps the clock, so the pin (`solidcore`, `solidcore-record`, opt-level 2, about 4 to 8 min on 4 vCPU) was rebuilt every run. `CARGO_PROFILE_DEV_DEBUG=line-tables-only` shortens compile and link and keeps backtrace lines. The `--ignored` nurbs sweeps stay in the difftest job. Concurrency was already one run per ref with cancel-in-progress; unchanged.
+
+**Measured (local, loaded 32-core box, times alone with `--exact`).**
+
+| Test | Before | After |
+|---|---|---|
+| `t_nurbs::nurbs_elevate` | 866 s | 168 s |
+| `t_algo::poly_from_roots` | 835 s (882 s coordinator) | 140 s |
+| `t_nurbs_surface_edit::nurbs_surface_elevate` | 100 s | 27 s |
+| `t_slice::t_slice` | 116 s | 56 to 98 s (noise; unchanged code) |
+| whole difftest, `--test-threads=4` | 972 s (CI) | 201 s |
+
+Work added: none (the changes remove work); the cache holds the oracle results in memory (distinct disagreeing coefficient sets, a few thousand polynomials).
+
+**Local path rule.** `cargo xtask diff --changed-since REV` runs the difftest, skipping the three slow tests (`poly_from_roots`, `nurbs_elevate`, `nurbs_surface_elevate`; 526 of 529 run) unless a file changed against REV is under `scx-algo`, `scx-nurbs`, `scx-nurbs-surface`, `scx-num` or `scx-testkit` (their exact references, which the speed-up touched), the difftest files for them, or a manifest; the skip is printed. CI runs all 529.
+
+**Cases for and against, decisions.**
+- Opt-level for the scx crates in the hot path: against (no gain measured, every local build gets slower to compile). Not done.
+- nextest with hash shards for the difftest: for, it balances; against, each test in its own process loses the in-process oracle cache and the shared fixtures, and after the fix the whole suite is 200 s so sharding buys little. Tried in the draft, dropped; one difftest job.
+- Pin at opt-level 3 without debug assertions: `t_slice` 96 s to 65 s (a third), but the pin then runs unchecked and costs a 7 minute rebuild; against, not done. Open.
+- Moving the sweeps behind `--ignored`: not needed; coverage is whole.
+- Sharding `fast` by crate: for, the 4 vCPU runners were oversubscribed by 16 side-by-side cargo jobs; against, four jobs rebuild shared dependencies and take more job slots (20 concurrent on the free plan). Kept, with the shard lists in the workflow and `--except` so a new crate lands in the last shard by default.
+
+**Deviations from 72.** None.
+
+**Open questions.** (1) First CI run: does the pin come from the cache (watch `Compiling solidcore` in the difftest and tests logs; if it still builds, the fixed mtime is not enough and the cache key or target dir needs work)? (2) `fast`'s `lint` still builds clippy for the pin three times; one `cargo clippy --workspace` could replace the two member-wise ones. (3) `push` and `pull_request` both trigger on a PR branch; two runs of the same commit.
+
+**Proposed 04 row.** "GS2 (72 §14.33): the difftest's four slowest tests were `scx-testkit`'s exact arithmetic and one repeated oracle, not scx or the pin. Long division is Knuth's algorithm D, the gcd Lehmer's, the oracle results are kept by coefficient bits; nurbs_elevate 866 s to 168 s, poly_from_roots 835 s to 140 s, the whole difftest 972 s to 201 s on 4 threads, results unchanged. CI: `lint` and four test shards in place of `fast`, cache saved on main only, the pin's mtimes fixed so its build is cached. Against: more jobs per run; for: wall time is the slowest shard. Change if a shard becomes the floor." | GS2 |
+
 ### 14.34 CK2 as built (11-27)
 
 **What was asked.** CK1's `contract` cost 2 to 400 times a volume estimate (a torus about 33 ms). CK2 makes it cheaper without weakening what it proves. The changes stay in `scx-check`, and `scx-mass` is untouched, since MA6 is changing its error bound in parallel.
@@ -3567,3 +3609,172 @@ No test was removed.
 **Open questions.** (1) The exact-break-end change in `scx-mass` (above), for MA after MA6. Of the two it is the larger lever on curved bodies. (2) Whether `scx_mass` should offer the paired rule itself (`outward` certifying once per pair), so that the rule lives in one place. That is a one-function change for whoever next owns `enclose.rs`.
 
 **Proposed 04 row.** "CK2 (72 §14.34): `scx_check::contract` certifies each mirror shell pair once. Once the structure tests pass, every face lies between a solid and a void, so shells pair with exactly negated face weights. Their certified volumes are exact negatives, so one `volume_sign` gives both signs. Pairs are read from the weights on each call, and a shell without one is certified alone. The rule, order and naming of `scx_mass::outward` are kept in `scx-check`, with no API change. Work is exactly halved on every body, about 18 ms on the torus under load (CK1 37 ms in the same run). Most of what is left is `scx-mass` range cells at quarter-arc break lines that outward rounding places inside a cell. An exact end hull with geometric sliver splitting halves that again (prototype), proposed for MA after MA6. Against: the rule is repeated outside `scx-mass`. Change if `scx_mass::outward` takes the pairing itself, or its rule changes."
+
+### 14.35 BO6 as built (11-27)
+
+**What was asked.** The plate and gear recipes as tests judged by outcome (T9 volume, T10 points, genus), and BO4's open questions 2 (a cross-check of each seed by one point) and 3 (merging coincident faces whose natural normals are opposite). It stays in `scx-boolean`'s classify, build and tests, and leaves `error.rs` alone: `BooleanDefect::Seeds` already exists.
+
+**Public API.** No change. Inside the crate, `classify::check_seed` is new (`pub(crate)`, for the unit test), and the old `by_point` is split into `by_middles` (the edge middles) and `point_class` (the middles, then a point inside the face).
+
+**Tests.**
+- `tests/recipes.rs`, in the shared `check`, so every built recipe it runs gets the new checks (`plate_12_has_144_holes`, `gear_60_has_sixty_slots`, `smaller_hole_cases`, the coincident-face cases). No test was added that repeats one there, and none was removed.
+  - *Genus*, from Euler-Poincare over the result's own cells: `V - E + sum (2 - 2 g_f - L_f) = 2 (S - G)`. `g_f` is one only for a torus face with no loop. It is checked against the recipe's hand-stated genus (144 for `plate-12`, 0 for `gear-60`).
+  - *T10 points*, for every recipe with no slack: 300 seeded points in the truth's box (`box_points`) and 300 of the truth's probes (`Csg::probes`, 2 per face, at offsets up to 5 coincidences). Each point is classified against the result by `classify_point`. A point on the result must be in the truth's band (`side(p, 1.5 c)`). A point in a solid region must be in the truth, or in the band and not out of the truth at `1e-9`, and a point in a void the mirror of that. A probe at offset 0 must be on the result. Each case needs more than 20 points on, in and out.
+  - Sabotage: adding one to the genus fails every built case, and swapping solid for void fails the points.
+- `src/tests/stage6.rs` (new):
+  - `a_wrong_seed_is_a_seeds_defect`: the plate less a cylinder. Every piece that is not `On` passes `check_seed` with its own class and gives `Defect(Seeds)` with the other. The exceptions are the two disks in the hole, which are bounded by the cut alone and are not checked.
+  - `a_turned_piece_flush_with_a_face_merges_with_it`: an L (`[0, 2] x [0, 1] x [0, 1]` with `[0, 1] x [0, 1] x [1, 2]` on it) less its upper arm, built two ways. Built by a union, the step's top has its natural normal up and b's turned bottom has its natural normal down. Built by a subtract, both point down. Each result is the 2 x 1 x 1 block: 6 faces, volume 2, the contract passes, and exactly one face (the top) comes from both operands. On main the union-built L gives 7 faces.
+- `src/tests/whole.rs`: `checked`, `volume`, `area`, `near` and `face_from` become `pub(super)` for `stage6.rs`.
+
+**Decision: check each seeded component at one edge middle, and never at a point inside the face.** BO4 asked for one `classify_point` per seeded component, compared with its seed, with `Defect(Seeds)` when they disagree. The first build used the fallback's own point, which is the first free curve edge's middle, or else the scanline point inside the face. On curved cases that cost 40% to 190% of stage 6. The inside point was most of it: 10 to 22 us for its scanline and query, against under 1 us for an edge middle on a small body. Checking only components seeded by one section (as distinct from those `put` already cross-checks) saved almost nothing, because the expensive components are exactly the one-section ones: the plate's disks inside a hole, and the box's floor inside the sphere. So the check uses edge middles only. A component with no free curve edge, or whose middles all fall on the other operand, goes unchecked. So does one whose point the query cannot place (`Defect(Classify)`), as it was before the check.
+  - For: under 10% of stage 6 in every measured case (table below). A throwaway probe flipped each piece's class in the cylinder-plate, sphere-box and cubes cases under all three ops. Every flip failed in the build, with `Defect(Build)`, or `Unsupported(NonManifold)` for a disk. A single wrong component leaves a section edge with one or three kept fins. The failure a seed alone cannot show is a section whose `sides_along` swapped left and right. That flips both of one operand's pieces there and keeps two kept fins. One of those two pieces belongs to the rest of the operand, which has free edges (the disk's partner is the plate), so the middle check catches it. A component seeded by two or more sections is still also cross-checked by `put`.
+  - Against: a component that only sections bound is not checked by a point. The argument above covers it only when its partner has a free edge, so two edge-free partners at one swapped section would go unseen. No operand in step 4 has a face without edges: spheres, cylinders and tori all carry seams. The decision also departs from BO4's wording ("one `classify_point` per component"): only edge middles count.
+  - Rejected: the full check (40% to 190% of stage 6 on small curved cases), one-section components only (the same cost, since those are the expensive ones), and dropping the check (it then catches nothing at run time, and a swapped section builds a closed, wrong body).
+- *Open question:* a wrong disk shows up as `Unsupported(NonManifold)`, a refusal, when it is a defect. That name is BO7's (D5).
+
+**Decision: merge coincident faces whose natural normals are opposite (BO4's question 3, yes).** In `merge`, a two-fin edge between faces is taken when the faces are *turned against each other* (their `Kept.back` differ, so one has its material behind its natural normal and the other in front), their fins share a sense, and their surfaces are distinct, coincide, and have opposite normals at the edge. Faces turned alike keep BO4's rule: opposite senses and agreeing normals. One surface with turned faces would have material on both sides, so it is skipped. In `splice`, each turned face's loops are walked backwards, and each use enters `exact_loops` against its own sense, so the merged loops run about the survivor's normal.
+  - For: the case is real and plain. An L built by a union keeps its step's top with its natural normal up. Less a block whose bottom is flush with that step, b's turned bottom lies beside it with the material below both. Main keeps two coplanar faces (7 faces where the truth has 6), and the union-built L is how any part built up from blocks looks. With one rule for both orientations, the result no longer depends on how an operand was built (the subtract-built L already merged).
+  - Against: the backwards walk in `splice` runs only for turned merges, and only the L tests it. Without more, turned pairs that meet at a section (perpendicular planes, in every subtract of blocks) would reach the cached `coincide` test, which main skipped on the shared sense: the cubes' subtract went from 15 to 21 work units and 24.4 to 26.3 us of build.
+- *Normals before `coincide`.* The merge now compares the two faces' normals at the edge before it asks whether the surfaces coincide, and skips a pair whose normals are further than 60 degrees from parallel (`PARALLEL`, `|dot| < 0.5`) or point the wrong way for the pair. For: coincident surfaces have parallel normals at every shared point, so no true pair is lost, and the normals are two evaluations where `coincide` samples the faces. Every perpendicular pair, turned or not, is now refused before `coincide`, which also speeds main's own path. Against: a new threshold, though any value well short of parallel gives the same answers. Change if a merge is missed between nearly tangent surfaces (it cannot be, since such surfaces do not coincide).
+
+**Measurements.** Release build on an idle machine (load about 0.3). Stage 6 is `classify` plus `build`, best of 5 x 20 calls. The check is on and off in alternate rounds, toggled by a throwaway switch (since removed). For the recipes, the last step is timed (the plate with `k^2 - 1` holes less the last cylinder, the gear less its last slot). "Checks" is the components that reach `check_seed`, and "work" is their budget units.
+
+| Case | Op | Faces | Checks | Work | Classify, no check | Classify, check | Build | Stage 6 added: full check (first build) | Stage 6 added: as built |
+|---|---|---|---|---|---|---|---|---|---|
+| cubes of 10 offset by 5 | union | 12 | 4 | 4 | 5.2 us | 6.9 us | 34.5 us | 6.4% | 3.2% |
+| | subtract | 9 | 4 | 4 | 5.2 us | 6.9 us | 26.1 us | 5.5% | 5.3% |
+| | intersect | 6 | 4 | 4 | 5.0 us | 6.7 us | 20.4 us | 7.7% | 7.5% |
+| blocks sharing a face | all | 0 to 6 | 0 | 0 | 4.0 to 4.5 us | same | 5 to 39 us | 0% | 0% |
+| cylinder through a plate | union | 10 | 6 | 2 | 3.0 us | 4.0 us | 19.2 us | 69% | 4.1% |
+| | subtract | 7 | 6 | 2 | 2.9 us | 3.9 us | 14.5 us | 92% | 6.9% |
+| | intersect | 3 | 6 | 2 | 2.8 us | 3.8 us | 9.9 us | 127% | 7.8% |
+| sphere less the box over its cap | union | 7 | 4 | 2 | 1.8 us | 3.0 us | 20.0 us | 107% | 4.4% |
+| | subtract | 2 | 4 | 2 | 1.8 us | 2.9 us | 10.5 us | 190% | 9.3% |
+| | intersect | 2 | 4 | 2 | 1.8 us | 2.9 us | 10.8 us | 184% | 9.0% |
+| torus and the box over its half | union | 7 | 5 | 2 | 2.7 us | 3.7 us | 20.6 us | 45% | 4.8% |
+| | subtract | 3 | 5 | 2 | 2.6 us | 3.7 us | 10.3 us | 82% | 7.8% |
+| | intersect | 3 | 5 | 2 | 2.7 us | 3.7 us | 24.8 us | 40% | 3.9% |
+| box-cyl-hole | subtract | 7 | 6 | 2 | 2.7 us | 3.8 us | 14.7 us | 97% | 7.0% |
+| plate-4, last step | subtract | 22 | 6 | 2 | 5.3 us | 7.8 us | 42.2 us | 44% | 5.5% |
+| plate_holes_8, last step | subtract | 70 | 6 | 2 | 28.0 us | 32.4 us | 158 us | 15% | 2.1% |
+| plate-12, last step | subtract | 150 | 6 | 2 | 77.4 us | 88.1 us | 367 us | 8.0% | 2.6% |
+| plate_holes_16, last step | subtract | 262 | 6 | 2 | 135 us | 151 us | 643 us | 5.4% | 2.2% |
+| gear-60, last step | subtract | 242 | 4 | 4 | 164 us | 180 us | 907 us | 1.5% | 1.7% |
+
+- The check's cost is a constant number of edge-middle queries per call (4 to 6 components here), each linear in the other operand's faces. Its share of stage 6 falls as the body grows. The worst share is 9.3%, on the smallest curved result.
+- Build, as built against main's `build.rs` (same session, best of 5 x 20; the first column of each pair is work units in `merge`):
+
+| Case | Op | Faces | Main work | Main build | Branch work | Branch build |
+|---|---|---|---|---|---|---|
+| cubes of 10 offset by 5 | union | 12 | 30 | 35.5 us | 0 | 26.8 us |
+| | subtract | 9 | 15 | 24.5 us | 0 | 20.9 us |
+| | intersect | 6 | 12 | 20.2 us | 0 | 17.6 us |
+| blocks sharing a face | union | 6 | 20 | 39.1 us | 4 | 36.0 us |
+| | subtract | 6 | 12 | 8.7 us | 0 | 5.4 us |
+| | intersect | 0 | 0 | 5.1 us | 0 | 5.1 us |
+| cylinder through a plate | union | 10 | 12 | 19.5 us | 0 | 16.3 us |
+| | subtract | 7 | 12 | 14.6 us | 0 | 11.2 us |
+| | intersect | 3 | 0 | 9.9 us | 0 | 9.8 us |
+| sphere and the box over its cap | union | 7 | 12 | 20.2 us | 0 | 17.2 us |
+| | subtract / intersect | 2 | 0 | 10.6 / 11.0 us | 0 | 10.6 / 11.0 us |
+| torus and the box over its half | union | 7 | 12 | 20.5 us | 0 | 17.3 us |
+| | subtract | 3 | 0 | 10.5 us | 0 | 10.7 us |
+| | intersect | 3 | 0 | 25.0 us | 0 | 25.6 us |
+| L (union) less its arm | union | 12 | 28 | 45.3 us | 2 | 40.0 us |
+| | subtract | 7 main, 6 branch | 11 | 21.0 us | 1 | 29.2 us |
+| | intersect | 6 | 12 | 22.5 us | 0 | 19.0 us |
+
+  Build is faster or equal within noise everywhere except the L's subtract, where the extra 8 us is the turned merge itself (6 faces, the truth; main leaves 7). The "Build" column of the stage-6 table above is main's build.
+
+**Deviations from 72.** The seed check uses edge middles only, not any `classify_point` (above). BO4's note in §14.29 that "a coplanar pair of one sense has opposite natural normals, which the normal test refuses anyway" no longer holds for turned faces: such pairs now merge. The merge's normal test now runs before `coincide` with a 60 degree prefilter, for every pair, not only turned ones; the answers are main's on every non-turned case, and build is faster (above).
+
+**Open questions.** (1) A wrong disk gives `Unsupported(NonManifold)` rather than a defect (for BO7, with D5). (2) A face with no edges at all (a torus or sphere face without seams) would leave a swapped section unseen. No step-4 constructor makes one. If one ever does, the inside point is the fallback, at its measured cost. (3) BO4's question 4 (profiling build) is still open. Build is 3 to 5 times classify on every case here.
+
+**Proposed 04 row.** "BO6 (72 §14.35): `scx-boolean`'s recipe tests check genus (Euler-Poincare over the result's cells) and T10 points (box points and face probes against the truth's band) on every built recipe without slack, including plate-12 and gear-60. Each seeded component is checked by `classify_point` at one free edge middle, with `Defect(Seeds)` on disagreement. It is never checked at a point inside a face, since that cost 40% to 190% of stage 6 on curved cases, while the middle costs under 10% everywhere measured. Build merges coincident faces turned against each other (opposite natural normals, material on one side), walking the turned face's loops backwards. It compares the faces' normals at the edge before `coincide` and skips pairs more than 60 degrees from parallel, so build is faster than before on every bench case but the one that now merges (L less its arm, 21 to 29 us, 7 faces to the true 6). Against: a new threshold, and edge middles only. Change if: an operand face without edges appears (check its components by the inside point), or a merge between coincident faces is missed."
+
+### 14.36 BO7 as built (11-27)
+
+BO7 builds what D5 allows: a result whose two solids share only a vertex, and a result that meets itself along an edge (an edge of four fins). It also places a cavity when the result has two or more lumps (BO4's open question 1). The new code is one crate-private module, `crates/scx-boolean/src/pinch.rs`. `build.rs` calls it at two points: after the edges are cleaned and at the end of the shells step. Classification and selection are unchanged. No public API and no error variant are added: `NonManifold` and `Nesting` (BO4) keep their names, and each now has fewer cases.
+
+**What was built.**
+
+1. *Radial order* (`pinch::order_fins`). An edge with more than two fins was `NonManifold` (BO4). It is now kept, and its fins are sorted counterclockwise about the edge's tangent T, which is the order scx-brep's radial check reads. The tangent is taken at the middle of the edge's interval. Each fin's direction into its face is d = sense (N x T), where N is the face's natural normal at the fin's pcurve point. Its angle is taken from the first fin's d, in the plane normal to T.
+   - An odd fin count is `Defect(Build)`.
+   - An edge with no curve, or a fin with no pcurve, is `NonManifold { at: Edge }`.
+   - Two angles within 1e-9 rad of each other, including across the wrap, are `NonManifold { at: Edge }`. These are faces tangent along the contact edge, whose order a single sample cannot decide.
+2. *Linking shells across a pinch* (`pinch::link`). scx-brep's structure check requires that the shell after one fin, in its sense, is the shell before the next fin. At an edge of four fins, the two operands' outer shells (or a body's two halves) must therefore be one shell.
+   - A union-find runs over shells, one sector at a time. The lower id is kept.
+   - The faces of each moved shell are relabelled.
+   - Two shells to be joined that bound different regions are `Defect(Build)`, since that would mean the classification disagreed.
+   - A vertex contact needs no link: the check's shells rule joins pieces at a common vertex, so two outer shells meeting at one vertex are left as two shells (decision below).
+3. *Nesting* (`pinch::nest`, which replaces BO4's `nest` in `build.rs`).
+   - The draft is cloned and finished once, as in BO4. Each shell gets a `volume_sign`, except a void shell whose material mirror was not moved by the link: its sign is the negation of the mirror's (the CK2 rule, exact).
+   - A shell's box is the union of its finished faces' boxes.
+   - A positive material shell stays. A positive void shell is a new cavity region.
+   - A negative material shell (a cavity lining) goes into the region of the positive material shell that holds it. Candidates are the positive material shells whose box contains its box. With none, the answer is `Nesting`. With one, that shell is taken with no test. With several, each candidate is tested and the innermost holder is taken.
+   - A negative void shell (a lump's skin seen from outside) goes into a void region that holds it, else into the outside. Its candidates are the positive void shells whose box contains its box, and any candidate is always tested.
+   - The test: a point inside the held shell's first face is classified with `classify_point` against a body made from the candidate shell alone (`shell_body`). `In` the candidate's solid means it holds. Any other `In` means it does not, and any other answer is `Nesting`.
+   - The innermost holder is the one with the smallest box volume. Two holders with equal boxes are `Nesting`.
+   - `shell_body` clones the draft, keeps the candidate shell's faces with the outside behind them, drops every other face, edge, vertex, shell and region, and finishes. It is built once per candidate per call.
+
+**Decisions, with cases for and against.**
+
+- *Build edge contacts with four fins in radial order, rather than refuse them.*
+  - For: D5 as changed. scx-brep's `finish` accepts it, and `classify_point`, `volume`, `area` and `tessellate` all answer correctly on the result (tested below).
+  - Against: `scx_check::contract` refuses an edge with other than two fins by design (CK1's test 3, `Breach::NonManifoldEdge`). So these results cannot pass the contract, which conflicts with the brief's "every result passes the contract". The tests require the contract to fail at exactly that breach on exactly the pinch edge, and `scx_mass::outward` (the contract's test 5 on its own) to prove the shells' orientation. That is the most the contract can say about them today. See open question 1.
+- *Vertex contacts are left as two outer shells meeting at the vertex.*
+  - For: `finish` accepts it, since its shells rule joins pieces at a shared vertex. It is the form scx-brep's records already describe (one shell per connected face set), and `corner-contact-union` passes T12's topology (two regions, two outer shells) and the contract.
+  - Against: the pin builds one shell through the vertex. A later consumer that walks a shell by faces would see two shells. Joining them is a relabel, if 04 rules that a shell should be connected through vertices too.
+- *Tangent fins are `NonManifold`, not ordered by curvature.*
+  - For: no step-4 case has them. scx-brep's bend ordering for tangent faces is in its private radial check and would have to be repeated. A wrong order would build a self-crossing body that passes `finish`.
+  - Against: a cylinder lying along the contact edge of two blocks is refused, though it is well defined (`faces_tangent_along_a_contact_edge_are_non_manifold`).
+- *The tie tolerance is 1e-9 rad.*
+  - For: on step-4 surfaces, fins that are not tangent are well apart (pi/2 for blocks).
+  - Against: two faces meeting at a dihedral angle under 1e-9 rad would be refused rather than built.
+- *Nesting: a box prefilter, then a point test only when the boxes leave a choice.*
+  - For: every step-4 case with one positive lump costs what BO4 cost: one clone and finish, and the same number of `volume_sign` calls, because mirrored voids are signed by negation. The point test is exact (BQ1's `classify_point` on a closed shell), and it runs only for two or more holders, or for a lump inside a void.
+  - Against: a single box candidate is taken without a test. That is right when one positive lump holds the cavity's box, since the cavity must lie inside some positive lump and only one box can hold it. Each test builds a body (a clone and a finish, about 30 us on these cases).
+- *The innermost holder is the smallest box.*
+  - For: holders are nested, so their boxes are nested, and the innermost holder's box is the smallest.
+  - Against: two holders with equal boxes cannot be told apart this way, and that case is `Nesting`. No case reaches it.
+- *Rejected: placing each cavity by the volume sign of the cavity's shell combined with each candidate.* It needs a `volume_sign` per pair, which costs more than a point test (`volume_sign` is the contract's hot path, CK2). It also does not tell nested holders apart.
+
+**Tests** (`crates/scx-boolean/src/tests/contacts.rs`, 10 new; all results checked against closed forms to 1e-9 relative, or 1e-7 for the spheres).
+
+| Test | Ported from | Checks |
+|---|---|---|
+| `point_contacts_are_non_manifold_and_one_sided_results_are_built` | `boolean_api` tangent-sphere-box, seam-sphere-box, seam-box-sphere, off-seam-sphere-box, seam-sphere-sphere, seam-box-minus-sphere; `point_contact_unions_check_clean` (all 11) | The operation the pin runs is `NonManifold`, because every touch is inside a face (D5). Each one-sided operation builds, with the contract and the closed-form volume (both `a - b`, `b - a`, and the empty intersect; for the box less the sphere, the union is the box, the intersect is the ball, and the ball less the box is empty). The five cylinder and torus contacts answer `SsiPair` in every operation, since step 5 owns their intersections. |
+| `blocks_sharing_an_edge_unite_into_two_regions_with_one_outer_shell` | | Volume 2; 2 solid regions, one shell each; one outside shell; one edge of 4 fins; both operand orders |
+| `blocks_sharing_a_corner_unite_into_two_regions_and_two_outer_shells` | | 2 regions, two outside shells; passes the contract |
+| `a_body_touching_itself_along_an_edge_is_one_region_and_one_shell` | | Two pillars joined at one edge: volume 8, 1 region, 1 shell. Less the bridge: volume 4, 2 regions, 1 outside shell |
+| `faces_tangent_along_a_contact_edge_are_non_manifold` | | A cylinder along the cube's edge: `NonManifold` |
+| `the_pinched_body_answers_queries` | | `classify_point` puts each cube in its own region and the pinch edge `On`; volume 2, area 12, tessellated signed volume 2; each end of the pinch edge has 5 edges |
+| `two_lumps_one_with_a_cavity_place_the_cavity_by_a_point_test` | | A holed 4-cube and a far block: volume 64, regions [1, 2] shells, the cavity point in a void that is not the outside. A holed block inside a square frame, whose box holds it: volume 168, the holed block's region has 2 shells |
+| `a_lump_inside_a_cavity_sits_in_the_cavity_void` | | Volume 160, one void region with 2 shells holding the inner lump |
+| `a_union_that_fills_nothing_new_keeps_working_when_nested` | | Subtracting a lump inside the cavity leaves 152; the intersect is empty |
+| `one_sided_edge_contacts_build_each_operand` | | Subtract 1; intersect empty |
+
+`tests/recipes.rs`: `blocks_touching_at_a_vertex_or_along_an_edge_are_built` is no longer ignored and passes, since `edge-contact-union` builds with T12's topology. All 8 recipe tests run.
+
+**Changed test, on purpose.** BO4's `non_manifold_results_are_unsupported` (`whole.rs`) proved two things: a ball on a cube's top face is `NonManifold`, and two blocks sharing an edge are `NonManifold`. It keeps the ball. The edge half is dropped, because that result is now built (`blocks_sharing_an_edge_...` above). No test was removed.
+
+**The contract and empty results.** CK1 refuses an empty body (`Breach::Empty`), so an empty result (an intersect of bodies that only touch) is checked by having no solid region, not by the contract. A result with a pinch edge is checked as described above. Every other result passes the contract.
+
+**Measurements.** Release build, under load, from throwaway timers and counters (since removed), over all of `scx-boolean`'s lib and recipe tests (79).
+- `link` runs on every `boolean()` with a result (362 calls). It averages 1.8 us, and most of that is a pass over the edges that finds no pinch.
+- `nest` ran 33 times, with 151 shells, 68 of them signed by mirror. It made 83 `volume_sign` calls. On every body BO4 built, the number of `volume_sign` calls is the same as BO4's: one per material shell.
+- The point test ran 12 times, all in the two new nesting tests. `shell_body` averaged 34 us, which is small next to `nest`'s clone and finish plus signs (0.8 to 3 ms per call on these bodies).
+- So the added cost on BO4's cases is the link pass alone, about 2 us per call.
+
+**Deviations from 72.**
+- §11's BO7 row says "the non-manifold vertex as scx-brep allows it, or `Unsupported(NonManifold)` by ruling". D5 as changed builds vertex and edge contacts, and this follows D5.
+- The ported point contacts are all touches inside a face, which D5 keeps as `NonManifold`. So the operation the pin runs on them is refused, not built. Only their one-sided operations build.
+- Edge-contact results do not pass `scx_check::contract` (above).
+
+**Open questions.**
+1. Should `scx_check::contract` accept an edge of four fins in radial order (D5), for example as a separate `Breach` that a caller may allow, or a `contract_d5`? Until it does, no edge-contact result can be called contract-clean. That decision belongs to CK's owner.
+2. Should a shell be one connected set through vertices, so that the two outer shells of a vertex contact become one? That would be a relabel in `pinch::link`.
+3. The five cylinder and torus point contacts wait on step-5 SSI (tangent quadric pairs). When they intersect, they will be in-face touches and so `NonManifold`, unless a point loop is added to scx-brep.
+4. Tangent fins at a pinch edge: should they be ordered by bend, as scx-brep's radial check does, instead of refused?
+
+**Proposed 04 row.** "BO7 (72 §14.36): the Boolean builds D5's contacts. An edge of the result with four fins is kept with its fins in radial order (d = sense N x T about the tangent, sampled at the edge's middle). The shells across it are joined by a union-find so that scx-brep's radial rule holds. Tangent fins (within 1e-9 rad) and missing pcurves are `NonManifold`. A vertex contact keeps two outer shells. Nesting signs each shell (mirrored voids by negation), filters holders by box, and only when the boxes leave a choice uses `classify_point` against a body of the candidate shell; the innermost holder is the smallest box, so two lumps with a cavity now build. No new API or variant. The added cost on non-contact cases is about 2 us per call. Against: edge-contact results fail `scx_check::contract`'s two-fin rule by design. Change if the contract admits D5 edges, or if tangent pinches reach a case."

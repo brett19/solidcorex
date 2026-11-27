@@ -9,12 +9,15 @@
 //! Never a sampled box: every point of the surface over the box lies in the result, for any
 //! box, inside the domain or past it where the kind continues.
 
+use core::ops::{Add, Div, Mul, Sub};
 use scx_curve::arcs::Arcs;
 use scx_num::extent2d::Extent2d;
 use scx_num::extent3d::Extent3d;
 use scx_num::interval::Ivl;
+
+use scx_num::ring::Ring;
 use scx_num::vector2d::Point2;
-use scx_num::vector3d::Point3;
+use scx_num::vector3d::{Point3, Vec3};
 use scx_nurbs::{Approach, KnotVector};
 use scx_nurbs_surface::{About, EnclosureCause, NurbsSurface, NurbsSurfaceError, ParamAxis};
 
@@ -78,6 +81,250 @@ impl Surface {
             Self::Nurbs(n) => nurbs(n, uv),
         }
     }
+
+    /// An interval holding `dir . S(u, v)` for every `(u, v)` in `uv`, certified as
+    /// [`Surface::box_over`] is (outward interval arithmetic, never samples): the range of
+    /// the surface along a direction, for proofs that two pieces lie on opposite sides of a
+    /// plane across `dir`. `dir` is any vector, taken as given (the range scales with its
+    /// length).
+    ///
+    /// Each part of the box (cut at the arc breaks of an analytic kind, whole between them,
+    /// and at the knot lines of a NURBS surface) is the mean-value form `dir . S(m) + (dir . S_u) [-hu, hu] + (dir . S_v) [-hv, hv]`
+    /// about the part's middle `m`, with the partials enclosed over the part (an analytic
+    /// kind's by the same formulas in a ring of values with their two partials, a NURBS
+    /// surface's by [`NurbsSurface::partials_over_piece`]), met with the natural range of
+    /// the part. A piece seen along its normal then has a width second order in its size.
+    ///
+    /// `None` when the box cannot be enclosed (as [`Surface::box_over`]).
+    #[must_use]
+    pub fn range_along(&self, dir: Vec3, uv: Extent2d) -> Option<Ivl> {
+        let u = (uv.min().x, uv.max().x);
+        let v = (uv.min().y, uv.max().y);
+        let d = [Ivl::from(dir.x), Ivl::from(dir.y), Ivl::from(dir.z)];
+        // The kind's own formula twice, in the ring of values with partials and in intervals.
+        macro_rules! along {
+            ($s:expr, $cu:expr, $cv:expr) => {{
+                let s = $s;
+                along_parts(
+                    u,
+                    v,
+                    $cu,
+                    $cv,
+                    d,
+                    |a, b, n| s.eval(a, b, n),
+                    |a, b, n| s.eval(a, b, n),
+                )
+            }};
+        }
+        match self {
+            Self::Plane(s) => along!(s, (None, 1), (None, 1)),
+            Self::Cylinder(s) => along!(s, (Some(s.arcs()), 1), (None, 1)),
+            Self::Cone(s) => along!(s, (Some(cone::U), 1), (None, 1)),
+            Self::Sphere(s) => along!(s, (Some(sphere::U), 1), (Some(sphere::V), 1)),
+            Self::Torus(s) => along!(s, (Some(torus::TURN), 1), (Some(torus::TURN), 1)),
+            Self::Nurbs(n) => nurbs_along(n, d, uv),
+        }
+    }
+}
+
+/// A value with its two partials, each an enclosure over the same box: the ring the kinds'
+/// formulas are evaluated in to enclose their partials (forward-mode differentiation in
+/// interval arithmetic). A quotient by a value that holds 0 is the whole line.
+#[derive(Clone, Copy)]
+struct Grad {
+    f: Ivl,
+    u: Ivl,
+    v: Ivl,
+}
+
+impl Add for Grad {
+    type Output = Self;
+    fn add(self, b: Self) -> Self {
+        Self {
+            f: self.f + b.f,
+            u: self.u + b.u,
+            v: self.v + b.v,
+        }
+    }
+}
+
+impl Sub for Grad {
+    type Output = Self;
+    fn sub(self, b: Self) -> Self {
+        Self {
+            f: self.f - b.f,
+            u: self.u - b.u,
+            v: self.v - b.v,
+        }
+    }
+}
+
+impl Mul for Grad {
+    type Output = Self;
+    fn mul(self, b: Self) -> Self {
+        Self {
+            f: self.f * b.f,
+            u: self.u * b.f + self.f * b.u,
+            v: self.v * b.f + self.f * b.v,
+        }
+    }
+}
+
+impl Div for Grad {
+    type Output = Self;
+    fn div(self, b: Self) -> Self {
+        if !(b.f.lo > 0.0 || b.f.hi < 0.0) {
+            let w = Ivl::whole();
+            return Self { f: w, u: w, v: w };
+        }
+        // q = a / b, and (a / b)' = (a' - q b') / b.
+        let q = self.f / b.f;
+        Self {
+            f: q,
+            u: (self.u - q * b.u) / b.f,
+            v: (self.v - q * b.v) / b.f,
+        }
+    }
+}
+
+impl Ring for Grad {
+    fn lift(d: f64) -> Self {
+        Self {
+            f: Ivl::from(d),
+            u: Ivl::from(0.0),
+            v: Ivl::from(0.0),
+        }
+    }
+}
+
+/// The hull over the parts of `u x v` of each part's mean-value range along `d` (see
+/// [`Surface::range_along`]): `eval_g` is the kind's formula in [`Grad`], `eval_i` in
+/// intervals.
+fn along_parts(
+    u: (f64, f64),
+    v: (f64, f64),
+    cut_u: (Option<Arcs>, usize),
+    cut_v: (Option<Arcs>, usize),
+    d: [Ivl; 3],
+    eval_g: impl Fn(Grad, Grad, Point2) -> Point3<Grad>,
+    eval_i: impl Fn(Ivl, Ivl, Point2) -> Point3<Ivl>,
+) -> Option<Ivl> {
+    let us = parts(u, cut_u)?;
+    let vs = parts(v, cut_v)?;
+    let mut out: Option<Ivl> = None;
+    for &(u0, u1) in &us {
+        for &(v0, v1) in &vs {
+            let (ui, vi) = (Ivl::new(u0, u1), Ivl::new(v0, v1));
+            let near = Point2::new(u0, v0);
+            let (mu, mv) = (ui.mid(), vi.mid());
+            let one = Ivl::from(1.0);
+            let zero = Ivl::from(0.0);
+            let g = eval_g(
+                Grad {
+                    f: ui,
+                    u: one,
+                    v: zero,
+                },
+                Grad {
+                    f: vi,
+                    u: zero,
+                    v: one,
+                },
+                near,
+            );
+            let natural = dot_ivl(d, Point3::new(g.x.f, g.y.f, g.z.f));
+            let su = dot_ivl(d, Point3::new(g.x.u, g.y.u, g.z.u));
+            let sv = dot_ivl(d, Point3::new(g.x.v, g.y.v, g.z.v));
+            let m = dot_ivl(d, eval_i(Ivl::from(mu), Ivl::from(mv), near));
+            let (hu, hv) = (ivl_half(ui, mu), ivl_half(vi, mv));
+            let mean = m + su * Ivl::new(-hu, hu) + sv * Ivl::new(-hv, hv);
+            let r = meet(mean, natural);
+            if !r.is_finite() {
+                return None;
+            }
+            out = Some(out.map_or(r, |o| o.hull(r)));
+        }
+    }
+    out
+}
+
+/// `d . p` in interval arithmetic.
+fn dot_ivl(d: [Ivl; 3], p: Point3<Ivl>) -> Ivl {
+    d[0] * p.x + d[1] * p.y + d[2] * p.z
+}
+
+/// The range along `d` of a NURBS surface over `uv`: the hull over its knot-span parts of
+/// each part's mean-value range (see [`Surface::range_along`]).
+fn nurbs_along(n: &NurbsSurface<3>, d: [Ivl; 3], uv: Extent2d) -> Option<Ivl> {
+    let ku = n.knot_vector(ParamAxis::U);
+    let kv = n.knot_vector(ParamAxis::V);
+    let us = knot_parts(ku, uv.min().x, uv.max().x)?;
+    let vs = knot_parts(kv, uv.min().y, uv.max().y)?;
+    let mut out: Option<Ivl> = None;
+    for &(u0, u1, su) in &us {
+        for &(v0, v1, sv) in &vs {
+            let r = patch_along(n, d, [su, sv], [Ivl::new(u0, u1), Ivl::new(v0, v1)], BISECT)?;
+            out = Some(out.map_or(r, |o| o.hull(r)));
+        }
+    }
+    out
+}
+
+/// The mean-value range along `d` of the piece on `span` over `uv`, bisected where the
+/// form cannot prove its weights positive, `depth` times at most.
+fn patch_along(
+    n: &NurbsSurface<3>,
+    d: [Ivl; 3],
+    span: [usize; 2],
+    uv: [Ivl; 2],
+    depth: u32,
+) -> Option<Ivl> {
+    let dot = |a: [Ivl; 3]| d[0] * a[0] + d[1] * a[1] + d[2] * a[2];
+    let [u, v] = uv;
+    let (mu, mv) = (u.mid(), v.mid());
+    let whole = n.partials_over_piece::<1>(span, uv, About::Middle);
+    let mid = n.partials_over_piece::<0>(span, [Ivl::from(mu), Ivl::from(mv)], About::Middle);
+    match (whole, mid) {
+        (Ok(j), Ok(m)) => {
+            let (Some(su), Some(sv)) = (j.get(1, 0), j.get(0, 1)) else {
+                return None;
+            };
+            // |x - m| over the part, each end rounded outward.
+            let hu = Ivl::new(-ivl_half(u, mu), ivl_half(u, mu));
+            let hv = Ivl::new(-ivl_half(v, mv), ivl_half(v, mv));
+            let mean = dot(m.point()) + dot(su) * hu + dot(sv) * hv;
+            let boxed = dot(j.point());
+            Some(meet(mean, boxed))
+        }
+        (Err(NurbsSurfaceError::Enclosure(EnclosureCause::WeightsNotPositive { .. })), _)
+        | (_, Err(NurbsSurfaceError::Enclosure(EnclosureCause::WeightsNotPositive { .. })))
+            if depth > 0 =>
+        {
+            let halves = if u.hi - u.lo >= v.hi - v.lo {
+                [[Ivl::new(u.lo, mu), v], [Ivl::new(mu, u.hi), v]]
+            } else {
+                [[u, Ivl::new(v.lo, mv)], [u, Ivl::new(mv, v.hi)]]
+            };
+            let a = patch_along(n, d, span, halves[0], depth - 1)?;
+            let b = patch_along(n, d, span, halves[1], depth - 1)?;
+            Some(a.hull(b))
+        }
+        _ => None,
+    }
+}
+
+/// The distance from `m` to the far end of `t`, rounded up: `|x - m| <= this` over `t`.
+fn ivl_half(t: Ivl, m: f64) -> f64 {
+    let a = Ivl::from(t.hi) - Ivl::from(m);
+    let b = Ivl::from(m) - Ivl::from(t.lo);
+    a.hi.max(b.hi)
+}
+
+/// The meet of two enclosures of the same value (so they intersect); were rounding to
+/// part them, the first stands.
+fn meet(a: Ivl, b: Ivl) -> Ivl {
+    let (lo, hi) = (a.lo.max(b.lo), a.hi.min(b.hi));
+    if lo <= hi { Ivl::new(lo, hi) } else { a }
 }
 
 /// The hull of `eval` over the parts of `u × v`, each evaluated with the formula of the arc
@@ -89,17 +336,33 @@ fn analytic(
     cut_v: (Option<Arcs>, usize),
     eval: impl Fn(Ivl, Ivl, Point2) -> Point3<Ivl>,
 ) -> Option<Extent3d> {
+    analytic_with(u, v, cut_u, cut_v, eval, ivl_box, Extent3d::union)
+}
+
+/// [`analytic`] with the finish of each part (`fin`) and the join of the parts' results.
+fn analytic_with<R>(
+    u: (f64, f64),
+    v: (f64, f64),
+    cut_u: (Option<Arcs>, usize),
+    cut_v: (Option<Arcs>, usize),
+    eval: impl Fn(Ivl, Ivl, Point2) -> Point3<Ivl>,
+    fin: impl Fn(Point3<Ivl>) -> Option<R>,
+    join: impl Fn(R, R) -> R,
+) -> Option<R> {
     let us = parts(u, cut_u)?;
     let vs = parts(v, cut_v)?;
-    let mut out: Option<Extent3d> = None;
+    let mut out: Option<R> = None;
     for &(u0, u1) in &us {
         for &(v0, v1) in &vs {
-            let b = ivl_box(eval(
+            let b = fin(eval(
                 Ivl::new(u0, u1),
                 Ivl::new(v0, v1),
                 Point2::new(u0, v0),
             ))?;
-            out = Some(out.map_or(b, |o| o.union(b)));
+            out = Some(match out {
+                None => b,
+                Some(o) => join(o, b),
+            });
         }
     }
     out
@@ -393,5 +656,77 @@ mod tests {
             whole.size().x <= 1.05 * a.size().x,
             "{whole:?} against {a:?}"
         );
+    }
+
+    /// Every sampled `dir . S` (with the evaluation's own rounding as slack) lies in the
+    /// range; a flat NURBS piece seen along its normal is far narrower than its box.
+    #[test]
+    fn ranges_along_a_direction_hold_the_surface() {
+        let t =
+            Torus::new(frame(), mm(3.0), mm(1.0), Sense::Forward).unwrap_or_else(|e| panic!("{e}"));
+        let nurbs: Surface = Arc::new(
+            t.to_nurbs(&uv(0.0, 0.0, 1.0, 1.0))
+                .unwrap_or_else(|e| panic!("{e}")),
+        )
+        .into();
+        let dirs = [
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.3, -0.5, 0.8),
+            Vec3::new(-2.0, 0.25, 0.1),
+        ];
+        let kinds = [
+            (Surface::from(t), uv(0.2, 0.1, 5.0, 4.0)),
+            (nurbs, uv(0.1, 0.2, 0.9, 0.7)),
+            (
+                Surface::from(
+                    Sphere::new(frame(), mm(2.0), Sense::Forward).unwrap_or_else(|e| panic!("{e}")),
+                ),
+                uv(0.3, -0.4, 2.0, 0.9),
+            ),
+        ];
+        for (s, e) in &kinds {
+            for d in dirs {
+                let r = s.range_along(d, *e).unwrap_or_else(|| panic!("no range"));
+                let n = 30;
+                for i in 0..=n {
+                    for j in 0..=n {
+                        let f = |a: f64, b: f64, k: usize| a + (b - a) * (k as f64 / n as f64);
+                        let p = s.point(Point2::new(
+                            f(e.min().x, e.max().x, i),
+                            f(e.min().y, e.max().y, j),
+                        ));
+                        let x = d.x * p.x + d.y * p.y + d.z * p.z;
+                        assert!(r.lo - 1e-12 <= x && x <= r.hi + 1e-12, "{x} outside {r:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_flat_piece_along_its_normal_has_second_order_width() {
+        // A bilinear patch z = 0.01 u v over [0, 1]^2 as a NURBS surface.
+        use scx_nurbs::KnotVector;
+        use scx_nurbs_surface::Net;
+        let k = KnotVector::new(1, vec![0.0, 0.0, 1.0, 1.0]).unwrap_or_else(|e| panic!("{e}"));
+        let pts = Net::new(
+            2,
+            2,
+            vec![
+                [0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [1.0, 1.0, 0.01],
+            ],
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let n: Surface =
+            Arc::new(NurbsSurface::new(k.clone(), k, pts, None).unwrap_or_else(|e| panic!("{e}")))
+                .into();
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let r = n
+            .range_along(z, uv(0.0, 0.0, 1.0, 1.0))
+            .unwrap_or_else(|| panic!("range"));
+        assert!(r.lo <= 0.0 && r.hi >= 0.01 && r.hi - r.lo < 0.02, "{r:?}");
     }
 }
