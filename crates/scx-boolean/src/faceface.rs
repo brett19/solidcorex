@@ -1000,7 +1000,9 @@ fn lying(
             || slack(t).distance(slack(hi)) <= reach
     });
     cuts.sort_by(|p, q| p.0.total_cmp(&q.0).then(p.1.cmp(&q.1)));
-    cuts.dedup_by_key(|c| c.1);
+    // One point named twice (inside the edge and at its end) is one cut; the two ends of a
+    // closed edge at one vertex are two, a curve's length apart.
+    cuts.dedup_by(|q, p| q.1 == p.1 && slack(0.5 * (p.0 + q.0)).distance(slack(p.0)) <= reach);
     let of = [Of { side: fside, face }];
     let worst = if acc >= parts.accuracy {
         acc
