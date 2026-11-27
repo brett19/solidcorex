@@ -1340,12 +1340,12 @@ the pin used have the same SHA-256 at the head, so nothing the pin measured move
 
 ### 14.3 The `references.tsv` generator
 
-The pin's `bench/step/references.tsv` is a hand table, 24 rows, keyed by SHA-256. 17 rows are
-step-conformance parts whose volume comes from the generator's profiles; 6 are SolidCraft
-`kernel-cases` `expected.json` volumes and 1 is `torus_ring_nurbs` by name. The port computes the
-17 from the truth files, and adds `plate_900_holes` and `torus_ring`: **19 rows**. The 6
-`kernel-cases` rows are not carried over: their files and expected values are SolidCraft's own and
-neither is verified (as the coordinator ruled), so only truths we can derive stay.
+The pin's `bench/step/references.tsv` is a hand table of 24 rows keyed by SHA-256: 18
+step-conformance parts, whose volumes come from the generator's profiles, and 6 SolidCraft
+`kernel-cases` `expected.json` volumes. The port computes the 18 from the truth files and adds
+`plate_900_holes`: **19 rows**, 17 of them checked against the pin's values. The 6 `kernel-cases`
+rows are not carried over: their files and expected values are SolidCraft's own and neither is
+verified (as the coordinator ruled), so only truths we can derive stay.
 
 Closed forms (units: mm, mm^3). A solid of revolution has a closed profile in (axis, radius)
 coordinates, and its volume is `pi |∮ r² da|`: per segment `(a1-a0)(r0²+r0 r1+r1²)/3`, per arc the
