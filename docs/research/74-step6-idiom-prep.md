@@ -2208,3 +2208,161 @@ bounds the sampled distance from above) and for the normal's side. No tests remo
    everywhere would compare normals on the certificate's pieces.
 3. A minimax refinement, if non-rational fits near the accuracy matter on the corpus (measure on
    the corpus once SP2b lands).
+
+## 17. SU6 as built (11-27)
+
+`scx_surface::gap` (re-exported at the crate root), branch `su6`. No new Cargo edge; four kinds'
+`axes()` became `pub(crate)`.
+
+```rust
+pub struct Bracket { lower, upper }            // lower() upper() width() exceeds(allowance) -> Option<bool>
+pub enum Aim { Width(f64), Against(f64) }      // a bracket this narrow, or one that leaves the allowance
+pub enum Short { Exhausted(Exhausted), Stopped, Precision }
+pub enum Pending { NurbsSurface }
+pub enum GapError { Undecided { reached: Bracket, why: Short }, Pending(Pending), NotFinite, BadAim { value } }
+
+pub fn curve_surface_gap(curve: &Curve, over: &Extent1d, surface: &Surface, aim: Aim,
+                         budget: &mut Budget, stop: &Stop) -> Result<Bracket, GapError>;
+pub fn pcurve_edge_gap(surface: &Surface, pcurve: &Curve2, curve: &Curve, over: &Extent1d,
+                       aim: Aim, budget: &mut Budget, stop: &Stop) -> Result<Bracket, GapError>;
+pub fn vertex_curve_gap(point: Point3, curve: &Curve, t: f64) -> Result<Bracket, GapError>;
+pub fn point_curve_gap(point: Point3, curve: &Curve, over: &Extent1d, aim: Aim,
+                       budget: &mut Budget, stop: &Stop) -> Result<Bracket, GapError>;
+pub fn curve_curve_gap(a: &Curve, a_over: &Extent1d, b: &Curve, b_over: &Extent1d, aim: Aim,
+                       budget: &mut Budget, stop: &Stop) -> Result<Bracket, GapError>;
+```
+
+The module's doc holds the table from the pin's functions to these.
+
+**One search for every gap.** Each gap is `sup_t d(t)` over a range. One branch and bound finds it.
+Pieces sit on a max-heap keyed by an upper bound over the piece, ties to the earlier `t`, so the
+result is deterministic. The lower bound is the largest certified `d` at a piece end. The range is
+first cut at the curve's knots (and the kind's arc breaks, below), then into four pieces each.
+
+A piece's upper bound is the smallest of:
+
+- the chord bound on the vector `D(t)` whose length is the gap:
+  `|D| <= max(|D(a)|, |D(b)|) + h^2/8 sup|D''|`;
+- the same bound on `q = |D|^2`, square-rooted, whose `q'' = 2(|D'|^2 + D . D'')` stays small
+  where `D` turns at a near-constant length;
+- the direct interval enclosure.
+
+Second derivatives come from a forward-differentiation ring over intervals (`Jet2`), evaluated
+through the kinds' own `eval<T: Ring>`. The aim is met when the bracket is narrow enough, or when it
+leaves the allowance. Otherwise the answer is `Undecided` with the bracket reached: the budget ran
+out (R6), the caller stopped it, or the pieces can no longer be cut in floating point (`Precision`).
+The budget unit is one point evaluated, the pin's `MAX_PIECES` and `MAX_PATCHES` made the caller's.
+The nearest point of a curve to a point is the same engine run on `-d`.
+
+**Choices, with cases for and against.**
+
+- **The gap is to the kind's whole surface, not the face.**
+  - For: scx-surface sits below the Brep and has no trim. The whole surface's distance is a closed
+    form in the kind's frame (`z`, `|p| - r`, `rho - r`, the torus tube, the cone's generator
+    `|perp|` or apex, the larger where the foot crosses the apex), so it is smooth and the brackets
+    close.
+  - For: the pin's `curve_face_gap_bound` also bounds against the surface's parameter box, not the
+    trimmed face.
+  - Against: an edge near the surface but off its face's trim reads as close. A caller needing the
+    face's gap uses `pcurve_edge_gap`, an upper bound on it because the pcurve lies in the face.
+    CF2a's finding needs a lower bound above the allowance, and the whole surface's lower bound is
+    conservative for that.
+- **Lines, circles and ellipses as interval series.**
+  - For: the squares the closed forms need are taken on the series' coefficients, so a circle
+    coaxial with a cylinder, or lying in its plane, is a constant to rounding. It closes in under 64
+    units, where a jet bound would cut it to the width.
+  - Against: this is a second path beside the jets. NURBS curves take the jet path (tested on a
+    quadratic and a rational two-piece cubic).
+- **The pcurve gap at the same parameter.**
+  - For: a pcurve shares its edge's parameter, so `sup_t |S(p(t)) - C(t)|` is what same-parameter
+    means, and it needs no nearest-point search.
+  - Against: an edge whose pcurve is parametrised off its curve's parameter reads as a large gap.
+    That is a defect the checker should report, so this is the intended reading.
+  - The kinds' `u` is a rational arc parameter, exact only within one arc. A piece whose uv box
+    straddles an arc break falls back to the direct `Surface::box_over` bound.
+- **Curve to curve is one-sided Hausdorff**, `sup_t min_s |a(t) - b(s)|`. The symmetric distance is
+  the larger of both calls; the stitcher's pairing (BW, ST2) wants the one-sided distance.
+  - A piece's bound uses three correspondences and takes the smallest: `s` linear between the
+    ends' nearest parameters (only where `b` has no knot between them), or `s` held at either end's.
+  - The held correspondences are first order, but they survive feet that tie across a seam
+    (`0` against `2 pi` on a full circle).
+- **Vertex to edge has no budget.** It is one interval evaluation at the vertex's parameter.
+
+**Not here (deviations from the row).**
+
+- `seam_bound` is not ported. At the pin it encloses the largest normal angle along a seam
+  (`seam_angle_*`, 1,412 lines), which is a continuity question, not a gap. No step 6 row consumes
+  it through SU6; BW4's `tangent_all_along` is its likely user. A follow-up row SU6b is proposed.
+- NURBS surfaces return `Pending(NurbsSurface)` from `curve_surface_gap` and `pcurve_edge_gap`. A
+  point's distance to one is `Surface::invert`'s, but the bound over a piece (the chain rule
+  through `partials_over_piece`, step 5's SM chain) is not built.
+
+**Tests** (`crates/scx-surface/src/gap/tests.rs`, 21, all on a tilted frame away from the origin,
+truths closed form, brackets at most 1e-9 wide unless stated):
+
+- line above a plane;
+- circle in its plane (0), and tilted (`R sin a`);
+- circle coaxial with a cylinder (exact, under 64 units), and off its axis by 1e-3 and by 1e-7;
+- a line tangent to a cylinder;
+- sphere cases; a cone by its generator and by its apex; a torus; an ellipse against a plane;
+- NURBS curves over a plane;
+- a NURBS surface is pending;
+- budget run out and stop are `Undecided` with brackets holding the truth;
+- allowances, decided or undecided at the allowance itself;
+- determinism;
+- pcurves on a plane, on a cylinder across its arc breaks, and a latitude on a sphere (the fitted
+  pcurve);
+- vertex at an edge end; point against a curve;
+- curves against curves: concentric circles (to 1e-6, below), coincident circles (0), parallel
+  segments with and without overhang, an arc against its chord (the sagitta).
+
+Nothing removed.
+
+**Cost.** Side-channel timers, release build, a 24-core build host, 200 calls each, compared on
+the pin's own test case: a line, and a quadratic bow, `6.8e-5` above a box's top face.
+
+| call | per call | answer |
+|---|---|---|
+| pin `curve_face_gap_bound`, line, floor 1e-7 | 1,925 us | upper `6.80000008e-5` |
+| pin `curve_face_gap_bound`, bow, floor 1e-7 | 2,041 us | upper `6.80000008e-5` |
+| pin `curve_face_gap_bound_within`, bow, floor 1e-7 | 89,362 us | upper `6.8098e-5` |
+| pin `curve_face_gap_bound_within`, bow, floor 1e-9 | 161,274 us | upper `6.8024e-5` |
+| `curve_surface_gap`, line, any aim (5 units) | 4.5 us | `[6.79999999993e-5, 6.80000000028e-5]` |
+| `curve_surface_gap`, NURBS bow, any aim (5 units) | 26.7 us | `[6.79999999992e-5, 6.80000000122e-5]` |
+
+The scx calls are 70 to 6,000 times cheaper. They also return a lower bound, which the pin does not.
+The two do not do the same work. The pin converts the face to a NURBS net and fits a correspondence
+on every call; here the plane is a closed form. That makes this the cheap end, not a like-for-like
+comparison on hard surfaces.
+
+On curved kinds, at 1e-9 unless stated:
+
+- coaxial and off-axis circles on a cylinder, sphere, cone and torus cases: 5 to 32 units each;
+- pcurves: 5 units on a plane, about 8,350 on a cylinder across its breaks, 6,471 on a sphere
+  latitude. The fitted pcurve's real deviation is about the width, so the search cuts finely there.
+  That sphere case costs 293 units at 1e-5 and 2,917 at 1e-8;
+- curve to curve: 94 to 1,011 units;
+- concentric circles: 12,089 units (86 ms) at 1e-5 and 319,969 (1.3 s) at 1e-9, which is
+  `width^(-1/3)` (Open 1). One unit is about 4 us in release (an inner nearest-point search of
+  about 38 evaluations per outer point for curve to curve).
+
+Nothing calls these on an existing path yet, so no existing path got slower.
+
+**Open.**
+
+1. Plateaus are the expensive case. Where the gap is the same all along (concentric circles, 0.5
+   apart), every piece must be bounded below the largest point's lower bound, and the cost grows as
+   `width^(-1/3)` (the piece bound's error is third order in `h`). Callers that ask `Against`
+   an allowance pay far less than callers asking a width. The coincident case (gap 0) is cheap.
+2. The face trim. Should scx-bodyq offer the face's own gap (the surface gap restricted to the
+   trimmed region) on top of these, or do CF2a and BW3 manage with the whole surface's lower bound
+   and the pcurve's upper bound?
+3. Should SU6b (the seam angle) come before BW4, or should BW4 build on `tangent_edge`'s bounds as
+   §2 says?
+
+**Proposed 04 row.** Certified gaps live in `scx_surface::gap`: every gap is `sup_t d(t)` by one
+deterministic branch and bound returning a `Bracket` or a typed `GapError`
+(`Undecided { reached, why }` per R2/R6, `Pending`, `NotFinite`, `BadAim`); the leaf calls take
+`(Aim, &mut Budget, &Stop)` with one budget unit per point evaluated; edge-to-surface is to the
+kind's whole surface, the face's gap is bounded above by the pcurve at the same parameter;
+curve-to-curve is one-sided; NURBS surfaces are pending until step 5's piece bounds.
