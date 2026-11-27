@@ -17,6 +17,7 @@ scx-ssi = { path = "../scx-ssi" }
 scx-surface = { path = "../scx-surface" }
 
 [dev-dependencies]
+scx-nurbs-surface = { path = "../scx-nurbs-surface" }
 scx-testkit = { path = "../scx-testkit", features = ["bodies"] }
 
 [lints]

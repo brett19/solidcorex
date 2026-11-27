@@ -51,12 +51,14 @@ mod near;
 mod on;
 mod rays;
 mod side;
+mod tight;
 
 pub use betti::{Betti, betti};
 pub use classify::{PointClass, classify_point};
 pub use error::{BodyqDefect, BodyqError, BodyqRefusal, BodyqUnsupported};
 pub use rays::RAYS;
 pub use side::{Along, Sides, side_at_touch, sides_along};
+pub use tight::{tight_body_box, tight_box, tight_box_charged};
 
 #[cfg(test)]
 mod tests;
