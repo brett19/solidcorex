@@ -155,6 +155,12 @@ impl core::ops::IndexMut<Axis2> for Point2 {
 pub struct UnitVec2(Vec2);
 
 impl UnitVec2 {
+    /// `v` as a direction, unchanged: for a caller that has checked it is unit within
+    /// rounding ([`Frame2::from_axis`](crate::frame::Frame2::from_axis)).
+    pub(crate) const fn kept(v: Vec2) -> Self {
+        Self(v)
+    }
+
     /// The direction as a plain vector.
     #[must_use]
     pub const fn as_vec(self) -> Vec2 {

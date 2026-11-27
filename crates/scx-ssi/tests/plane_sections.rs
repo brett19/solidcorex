@@ -180,7 +180,7 @@ fn check(name: &str, s: &Side, pl: &Side, expect: Expect) -> Closed<Intersection
         &s.extent,
         plane,
         &pl.extent,
-        Length::from_mm(TOL),
+        Resolution::new(Length::from_mm(TOL)).unwrap(),
     );
     // Through `intersect` both ways, the same answer (the extents swap for coincident).
     let acc = Accuracy::new(Length::from_mm(TOL)).unwrap();
@@ -414,7 +414,7 @@ fn plane_plane() {
             _ => unreachable!(),
         },
         &a.extent,
-        Length::from_mm(TOL),
+        Resolution::new(Length::from_mm(TOL)).unwrap(),
     );
     assert_eq!(got.solved(), Some(Intersection::Empty));
     judge_overlap("far", &far, &a, &[]);
@@ -598,7 +598,7 @@ fn analytic_empty(s: &Side, pl: &Side) -> Option<Intersection> {
         &s.extent,
         plane,
         &pl.extent,
-        Length::from_mm(TOL),
+        Resolution::new(Length::from_mm(TOL)).unwrap(),
     )
     .solved()
 }

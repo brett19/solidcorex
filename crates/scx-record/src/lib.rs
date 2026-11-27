@@ -26,6 +26,15 @@
 //!   counts ([`Sink::slots`]).
 //! - A NaN or an infinity is refused on both sides (63 D1).
 //!
+//! # Geometry (63 RE2)
+//!
+//! [`Record`] writes and reads every curve and surface kind a body holds ([`scx_curve::Curve`],
+//! [`scx_curve::Curve2`], [`scx_surface::Surface`], their NURBS kinds and the frames),
+//! nested in a larger record. A read value is rebuilt by its type's checked constructor,
+//! whose refusal is the cause ([`ReadCause::Frame`], [`ReadCause::Curve`],
+//! [`ReadCause::Surface`]); every bit is kept, frames' axes and rational NURBS points
+//! included.
+//!
 //! # Errors
 //!
 //! A read fails with [`ReadError`], the byte offset and a typed, kinded [`ReadCause`]
@@ -34,12 +43,14 @@
 
 mod binary;
 mod error;
+mod geom;
 mod tag;
 mod text;
 mod wire;
 
 pub use binary::{Reader, Writer};
 pub use error::{ReadCause, ReadError, WriteCause, WriteError};
+pub use geom::Record;
 pub use tag::Tag;
 pub use text::{TextReader, TextWriter};
 pub use wire::{FORMAT_VERSION, Magic, Sink, Source};

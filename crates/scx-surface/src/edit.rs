@@ -118,17 +118,21 @@ fn similar(vs: &[Vec3]) -> bool {
     })
 }
 
+/// How much `a` stretches the unit vector `v`: `|A v| / |v|`, so a stored axis a rounding
+/// off unit length still gives an exact stretch under an exact map (a power-of-two scale, a
+/// mirror, a quarter turn about a world axis: the lengths are summed in any order).
+fn stretch(image: Vec3, v: Vec3) -> f64 {
+    image.length_any_order() / v.length_any_order()
+}
+
 /// The image frame, its sense and scale under a similarity: the frame through
-/// [`Frame::transformed`], the scale the mean length of the axes' images.
+/// [`Frame::transformed`], the scale the mean stretch of the axes.
 fn similarity(frame: &Frame, a: &Affine) -> Result<(Frame, Sense, f64)> {
     if !a.is_finite() {
         return Err(SurfaceError::MapNotFinite);
     }
-    let axes = [
-        a.apply_vec(frame.x().as_vec()),
-        a.apply_vec(frame.y().as_vec()),
-        a.apply_vec(frame.z().as_vec()),
-    ];
+    let units = [frame.x().as_vec(), frame.y().as_vec(), frame.z().as_vec()];
+    let axes = units.map(|v| a.apply_vec(v));
     if !a.apply(frame.origin()).is_finite() || axes.iter().any(|v| !v.is_finite()) {
         return Err(SurfaceError::MapNotFinite);
     }
@@ -136,7 +140,12 @@ fn similarity(frame: &Frame, a: &Affine) -> Result<(Frame, Sense, f64)> {
     if !similar(&axes) {
         return Err(SurfaceError::NotSimilar);
     }
-    let k = axes.iter().map(|v| v.length()).sum::<f64>() / 3.0;
+    let k = axes
+        .iter()
+        .zip(units)
+        .map(|(&w, v)| stretch(w, v))
+        .sum::<f64>()
+        / 3.0;
     if !k.is_finite() {
         return Err(SurfaceError::MapNotFinite);
     }
@@ -171,11 +180,14 @@ impl Plane {
     }
 
     /// The image under any affine map `a`, and its [`UvMap`]: the plane through the image
-    /// of the origin, on the frame whose x is the image `A x` of the frame's x and whose z is
-    /// `A x × A y`. Then `A y = (A y · x') x' + (A y · y') y'`, so the map is triangular,
-    /// `u' = |A x| u + (A y · x') v`, `v' = (A y · y') v`. Where `A x` and `A y` are square
-    /// and of one length to 16 roundings (a similarity on the plane) it is the scale by their
-    /// mean length in both directions.
+    /// of the origin, on the frame whose x is the direction of the image `A x` of the frame's x
+    /// and whose z is the direction of `A x × A y` ([`Frame::transformed`], which takes `± A z`
+    /// scaled back where that is square to the image plane, so an exact map and its inverse
+    /// give the plane back to the bit). Then `A y = (A y · x') x' + (A y · y') y'`, so the map
+    /// is triangular, `u' = sx u + (A y · x') v`, `v' = (A y · y') v`, with `sx = |A x| / |x|`
+    /// the stretch of x. Where `A x` and `A y` are square and of one length to 16 roundings (a
+    /// similarity on the plane) it is the scale by the mean stretch of x and y in both
+    /// directions.
     ///
     /// # Errors
     ///
@@ -192,14 +204,21 @@ impl Plane {
         if !origin.is_finite() || !ax.is_finite() || !ay.is_finite() {
             return Err(SurfaceError::MapNotFinite);
         }
-        let frame = Frame::new(origin, ax.cross(ay), ax).ok_or(SurfaceError::MapFlattens)?;
+        // Through `Frame::transformed` where it has a frame (exact under an exact map, SU7's
+        // open question in 63 §6.12); a map that takes z into the plane still has an image.
+        let frame = match f.transformed(a) {
+            Some((frame, _)) => frame,
+            None => Frame::new(origin, ax.cross(ay), ax).ok_or(SurfaceError::MapFlattens)?,
+        };
+        let (sx, sy) = (stretch(ax, f.x().as_vec()), stretch(ay, f.y().as_vec()));
         let map = if similar(&[ax, ay]) {
-            let k = 0.5 * (ax.length() + ay.length());
+            let k = 0.5 * (sx + sy);
             UvMap::scaling(k, k)
         } else {
+            // `x'` is `A x / sx`, so `u'` gains `sx u`.
             UvMap {
                 m: [
-                    [ax.length(), ay.dot(frame.x().as_vec())],
+                    [sx, ay.dot(frame.x().as_vec())],
                     [0.0, ay.dot(frame.y().as_vec())],
                 ],
                 c: [0.0, 0.0],
@@ -657,6 +676,40 @@ mod tests {
             }
         }
         assert!(checked > 10_000, "{checked}");
+    }
+
+    /// Maps whose matrices are exact (a power-of-two scale, mirrors in the coordinate planes,
+    /// a quarter turn about a coordinate axis, all through the origin) and their inverses:
+    /// there and back gives every analytic surface and every `UvMap` back to the bit, for
+    /// frames on no world axis.
+    #[test]
+    fn exact_maps_return_every_surface_to_the_bit() {
+        let o = Point3::new(0.0, 0.0, 0.0);
+        let quarter = Affine::from_axes(Vec3::Y, -Vec3::X, Vec3::Z, o);
+        let maps = [
+            Affine::uniform_scaling(o, 4.0).unwrap(),
+            Affine::uniform_scaling(o, 0.125).unwrap(),
+            Affine::reflection(o, Vec3::Y).unwrap(),
+            Affine::reflection(o, Vec3::Z).unwrap(),
+            quarter,
+            Affine::from_axes(Vec3::X, -Vec3::Z, Vec3::Y, o),
+            Affine::uniform_scaling(o, 2.0).unwrap() * Affine::reflection(o, Vec3::X).unwrap(),
+        ];
+        let mut rng = Rng::new(0x5e7_0005);
+        let mut checked = 0;
+        for s in analytic(&mut rng) {
+            for a in &maps {
+                let back = a.inverse().unwrap();
+                let (t, m) = s.transformed(a).unwrap();
+                let (r, n) = t.transformed(&back).unwrap();
+                assert_eq!(r, s, "{s:?} under {a:?} and back");
+                for uv in params(&mut rng, &s) {
+                    assert_eq!(n.apply(m.apply(uv)), uv, "{s:?} uv {uv:?}");
+                }
+                checked += 1;
+            }
+        }
+        assert!(checked > 1_000, "{checked}");
     }
 
     #[test]

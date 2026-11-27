@@ -3233,6 +3233,81 @@ committed). `main` and the branch were run back to back under the same load:
   `acos`. Then one curve point and one `uv_in` per sub-interval (at most 9 here).
 - A plain hit gains one comparison for `tol`.
 
+**FU1 (11-27): the largest miss, and the tolerance audit.**
+
+*3. `NotOnSurface` reports the largest miss.* `pcurve_of` stopped at the first sample past
+`tol` and reported that one. BR5's writer splits on the miss: within the edge's reach it is
+`NeedsFit`, past it `OffSurface`. So an edge whose first sample past `tol` was within reach,
+but which left the surface farther on, came back `NeedsFit` (Unsupported) instead of
+`OffSurface` (Refused).
+
+- Now, once one sample fails, the rest are measured too and the largest miss is reported, with
+  its parameter. A NaN counts as the largest.
+- The success path does the same work as before: one `distance` per sample and nothing more.
+  The extra samples are measured only after a failure.
+- *Tests.*
+  - `not_on_surface_reports_the_largest_miss` (scx-surface): a line leaving a plane is
+    reported at its end, and a tilted circle at its middle.
+  - In `refusals_by_cause` (scx-brep `tests/pcurve.rs`): a line whose first miss past half
+    the zone is 0.75 zone and whose last is 6 zones is `OffSurface` at `t = 1`. It came back
+    `NeedsFit` before the fix.
+
+*4. Which entry points take a tolerance.* Every public `fn` in scx-curve, scx-surface, scx-ssi,
+scx-nurbs, scx-nurbs-surface and scx-brep was checked for a tolerance argument.
+
+| Entry point | Tolerance | Zero, negative, non-finite |
+| --- | --- | --- |
+| `scx_surface::pcurve_of` | was `tol: Length`, now `Resolution` | was `PcurveError::BadTolerance` (Refused), since BR5; now not representable |
+| `scx_surface::intersect_curve` | was `tol: Length`, now `Resolution` | was `SurfaceError::BadTolerance` (Refused), checked first; now not representable |
+| `scx_ssi::analytic::intersect` | `[Accuracy; 2]`, `Resolution` | not representable: `Resolution::new` is `None` for any of them, and `Accuracy::new` for a negative or non-finite one |
+| `scx_ssi::analytic::section_by_plane` | was `tol: Length`, now `Resolution` | was unchecked; now not representable |
+| `scx_brep::Draft::{finish, write_pcurves, exact_loops, transform}` | `&Document` (its `Resolution`) | not representable |
+| `scx_brep::Document::with_resolution` | `Resolution` | not representable |
+
+- `section_by_plane` was the one inconsistent entry point. It passed any `Length` to the
+  section, and a NaN fails every comparison, so it could have given a solved, and final,
+  `Empty`.
+  - It now takes a `Resolution` and reads its zone, like `intersect`.
+  - It returns `Closed<Intersection>` with no error channel. A `Result` only for the tolerance
+    would make every caller handle a case the type can rule out.
+  - The callers in the tests and the difftest build a `Resolution` instead.
+- *Done as FU2 (11-27):* `pcurve_of` and `intersect_curve` take a `Resolution`, and both
+  `BadTolerance` variants are removed.
+  - Why `Resolution` and not `Accuracy`: both tolerances are per operation (how close the
+    lift must land; how close a curve must come to count as meeting or touching the
+    surface), not a bound on a stored entity, and `Accuracy` admits zero, which is the
+    case `BadTolerance` refused.
+  - `pcurve_of` reads `res.approx()`, the distance a fitted entity may stand from the one
+    it stands for. `intersect_curve` reads `res.zone()`.
+  - Results are bit-identical: each caller that passed `t` now passes a resolution whose
+    `approx()` is `t` (a zone of `2t`, a doubling and halving that is exact). BR5's writer
+    passed `res.approx()` and now passes `res`. `Draft::transform` passes the zone-or-bound
+    reach doubled, with the document's resolution as the fallback for a reach that is not
+    a resolution (a recorded bound is above the zone, so it never fires).
+  - Removed tests, on purpose; each proved only that a bad tolerance was refused, which the
+    type now rules out:
+    - `scx-surface/tests/intersect.rs` `a_bad_tolerance_is_refused_first`: for a zero,
+      negative, NaN and infinite `tol`, on a sphere and its NURBS image, `intersect_curve`
+      returned `SurfaceError::BadTolerance` (Refused, `intersect_tolerance_invalid`) before
+      the NURBS check.
+    - `scx-surface/src/pcurve.rs` `refusals_are_typed`, the two tolerance arms only (the
+      test stays for its other causes): a NaN `tol` gave `pcurve_tolerance_invalid`, and
+      zero, `-0`, negative and infinite gave `PcurveError::BadTolerance { value }`
+      (Refused).
+    - `scx-surface/src/error.rs`'s name-and-kind check for `BadTolerance`
+      (`intersect_tolerance_invalid`, Refused), one assertion in `kinds_and_names`.
+    - Every other test keeps its checks; their tolerance arguments are now resolutions.
+- *Not geometry entry points, recorded not changed:*
+  - `scx_num::invert::Foot::is_on(tol)` is a predicate. A zero `tol` is the exact test, and a
+    NaN or negative one is never on, so it needs no refusal.
+  - scx-algo's ported solvers and boxes take raw `f64` tolerances with SMLib's meaning: zero is
+    the exact test, and `PointSet` takes `|tol|`. These are `BoxTree::{overlapping, pairs,
+    self_pairs}`, `best_fit_{point, line, plane}`, `SolveOptions::new`, `may_contain`,
+    `HashTable::add`, `solve_by_brent`, the ODE and quadrature controls, `PointSet` and
+    `PseudoBox`. Their callers are scx's own, and typing them belongs to scx-algo's idiom pass.
+  - scx-num's extents and `is_zero` are the same kind of predicate.
+- The difftests `t_ssi` and the rest are unchanged at 0 mismatches.
+
 ## 5. `scx-ssi`, the analytic part
 
 The pin's sources are `intersect/surface_intersector` (`p1`-`p5`) and `adv_surface_intersector`.
@@ -5404,6 +5479,77 @@ Throwaway timer, not committed; test profile, one machine, 20 repetitions, seed 
 5. **A free function.** A `transform(&Brep, …) -> (Brep, Changes)` helper could be added if
    callers want it (see the deviation above).
 
+**FU1 (11-27): open questions 1 and 2.**
+
+*1. Exact frames under exact maps.* The fix is in `scx_num::Frame::transformed`, which every
+surface kind's transform goes through. It was not only the plane: a cylinder, cone, sphere
+or torus on a skewed frame also missed by an ulp or two, because `Frame::new` renormalised
+both axes. BR6's bodies sit on world frames, which is why only the plane showed it.
+
+- Where the map keeps the axes square, the image axes are the images scaled back by their
+  own stretch: `x' = A x · |x| / |A x|` and `z' = ±A z · |z| / |A z|`, with the sign the
+  sense's. They are stored as they are, without a second normalisation, when they are unit
+  and square to 8 roundings and `A y` lies in their plane to the same. Otherwise z comes
+  from `A x × A y`, normalised, as before.
+- The lengths are summed smallest first (`Vec3::length_any_order`, new), so a signed
+  permutation keeps them to the bit. Under a scale by a power of two, a mirror in a
+  coordinate plane or a quarter turn about a world axis, the stretch is then exact, and so
+  is each axis.
+- The scales use the same stretch. A surface's `k` is the mean of `|A v| / |v|` over its
+  three axes, not the mean of `|A v|`, so a stored axis an ulp off unit still gives an exact
+  `k`. The plane's `UvMap` takes `|A x| / |x|` as its `u` scale. The plane now gets its
+  frame from `Frame::transformed`, and falls back to `A x × A y` only for a map that takes
+  z into the plane.
+- *For:* exact maps now round-trip to the bit for every kind on any frame, and the stored
+  axes are about as accurate as the renormalised ones.
+- *Against:* a frame's axes may now be unit to 8 roundings rather than 1 to 2. Repeated
+  rigid moves would let that drift grow, so past 8 roundings the axes are renormalised,
+  which bounds it. Taking `±A z / k` with one `k` from the map, as the open question
+  suggested, would not be exact under a permutation, because the length is summed in a
+  different order.
+- *Tests.*
+  - `exact_maps_and_their_inverses_return_the_frame_to_the_bit` (scx-num): 2,000 random
+    frames under 6 maps.
+  - `exact_maps_return_every_surface_to_the_bit` (scx-surface): every analytic kind on
+    random frames, with the surface and the composed `UvMap` both bit-equal.
+  - In `crates/scx-brep/tests/transform.rs`, `exact_maps_return_the_body_to_the_bit` now
+    compares surfaces with `==`, so the 4 ε exception for a plane's z is gone. It also adds
+    a quarter turn and a mirror times two. On main the prism already fails under the plain
+    mirror.
+  - `t_transform` is unchanged at 0 mismatches.
+- Still open: CU5's conics (`scx-curve`, `conic.rs`) build their image frame the old way,
+  so a circle on a skewed frame is not bit-exact under an exact map either. None of the
+  generated bodies has one.
+
+*2. Pcurves mapped, not made again.* When the map keeps the edge's parameter, `use_image` in
+`draft/transform.rs` now maps more kinds through the `UvMap`, as it already did for lines.
+The image pcurve is then `uv ∘ p` exactly, so it is on the moved edge.
+
+- A circle, an ellipse or a hyperbola's branch under a uniform `(k, k)` with `k > 0` (a
+  plane under a similarity) keeps its axes and sense. Its centre is mapped and its
+  semi-axes are multiplied by `k` (new `Frame2::moved_to`).
+- An angle line or an angle wave under a diagonal map (a cylinder's `(k, k)`, a cone's
+  `(1, k)`) keeps its angle. It goes on the new surface's arcs when the angle scale is the
+  new period over the old to 16 ε and the angle offset is zero. The other coordinate is
+  mapped as a line's.
+- Still made by `pcurve_of`: a parabola, whose parameter a scale stretches, so its edge is
+  shifted; a NURBS pcurve; any map with a shear or a mirror in uv; and a shifted edge.
+- *Cost* (release, ns a face, best of 7 × 20 transforms on the generated bodies).
+
+  | Kind | Rigid | Scale 2.5 before | Scale 2.5 after | Mirror |
+  |---|---:|---:|---:|---:|
+  | cylinder | 861 | 6354 | 1345 | 909 |
+  | cone | 743 | 3487 | 1127 | 782 |
+  | block | 592 | 938 | 909 | 624 |
+  | torus | 723 | 1048 | 1017 | 770 |
+  | sphere | 588 | 934 | 898 | 635 |
+
+  Rigid and mirror were near-identity in uv already, so they do not change.
+- *Test:* `scaled_pcurves_keep_their_kind_and_match_pcurve_of` (scx-brep `transform.rs`).
+  Under scales 2.5 and 0.375, every use keeps its kind and agrees with `pcurve_of` for the
+  moved edge to 1e-12 relative, up to whole periods. `t_transform` and `t_pcurve*` are
+  unchanged at 0 mismatches.
+
 ### 6.13 BR7 as built (11-27)
 
 Decided by analysis and an adversarial pass. Proposed for review; not yet ruled.
@@ -5691,6 +5837,7 @@ is always in.
 | `regions` | `RegionWithoutShell` | every shell's region | always (one pass over shells; cheap) |
 | `edge_check` | `EdgeEndOffVertex`, `EdgeTooShort` | the edge's curve and accuracy, its ends' points and accuracy | EG = written ∪ created edges ∪ the star of each written vertex, live only |
 | `use_check`, `closure`, `pole_check`, `face_check` | `OutsideDomain`, `PcurveOffEdge`, `UseEndOffVertex`, `PeriodJump`, `LoopOpenInUv`, `DogLeg`, `PoleNotVertex`, `LoopOrientation`, `FaceWraps` | the face, its uses' edges and their ends | FG = written ∪ created faces ∪ the faces of EG's final fins, live only |
+| `radial::check` (BR10, §6.15) | `RadialOrder` | the edge's curve and accuracy, its fins; each fin face's surface, uses, pcurves and bounds | the plan edges, live with more than two fins |
 
 The plan's selected instances are walked in id order inside each rule (`Sel::Only` takes a
 sorted list), and the rules run in the full check's order, so the order argument holds
@@ -5851,6 +5998,152 @@ snapshot hooks, extended with marks.
 2. An incremental body union, and refitting the tree in place when a few face boxes change
    instead of rebuilding it (the face replace row).
 3. The 8-samples question and research 66 were not taken up.
+
+### 6.15 BR10 as built (11-27)
+
+Decided by analysis and an adversarial pass. Proposed for review; not yet ruled.
+
+`finish` refuses an edge of more than two fins whose faces do not leave it counter-clockwise
+in the fins' order (research 72 §12, D5). Before this, the order was the caller's duty
+alone, and a wrong order passed whenever the sides happened to agree.
+
+**The public surface.** One new cause:
+
+```rust
+pub enum GeometryCause {
+    // ...
+    /// The faces of `edge`'s fins do not leave it in the fins' radial order, proved at
+    /// edge parameter `at`.
+    RadialOrder { edge: EdgeId, at: f64 },   // name "radial_order"
+}
+```
+
+The rule is the crate-private `check/radial.rs`. It runs last, after the faces' geometry
+pass, in both the full and the touched check.
+
+**When the sides already decide.** `edge_structure` checks that the region after each fin
+(Front after a forward fin, Back after a reversed one) is the region before the next. With
+the sectors about an edge naming distinct regions, that rule already forces the cyclic
+order. Two blocks of two regions sharing an edge, listed out of order, are refused by
+`SidesDisagree`. The geometry decides only where the sectors repeat: several blocks of
+*one* solid region touching along an edge, where the sectors are the solid and the outside
+by turns. A reversal of the four fins, or a swap of opposite fins, keeps the sectors
+alternating and passes the sides. Only the faces' directions show the order.
+
+**The rule.**
+
+1. At edge parameter `s`, each fin's face leaves in `d = σ N × T̂`. `T̂` is the edge's unit
+   tangent (`Approach::Above`), `N` the sensed surface normal at the use's pcurve point at
+   `s` (pcurves run over the edge's own interval), and `σ` the fin's sense.
+2. The counter-clockwise gap from `d_a` to `d_b` is `atan2((d_a × d_b)·T̂, d_a·d_b)` mapped
+   into (0, 2π). Taken around the fins in order, the true gaps add up to 2πk, with k = 1
+   exactly when the order is right.
+3. Each direction is known within its *spread*:
+   `κ_max·(reach(use bound) + reach(edge)) + γ₆₄`. The lift stands within the use's reach
+   and the edge's of the true edge; the normal turns by at most the largest principal
+   curvature (from the first and second fundamental forms) times that distance.
+4. Each gap has bounds from the spreads. **Wrong** iff the sum of lower bounds exceeds
+   2π(1 + slack): a second turn is proved, so a refusal is a proof. **Right** iff no gap is
+   undecided and the upper bounds sum below 4π. Otherwise **undecided**.
+5. Samples are taken at 0.5, then at 0.25 and 0.75 only while undecided. If all three are
+   undecided, the caller's order stands.
+
+*Tangent faces.* Two directions within their spreads of each other (|θ| ≤ spread_a +
+spread_b) are faces tangent along the edge. They are ordered by their bend
+`c = σ·κ_n(d)`, the normal curvature along the leaving direction with the use's sense. A
+larger bend is further counter-clockwise.
+
+- If b bends more, b is just after a: the gap's upper bound is the spread sum.
+- If b bends less, b is just before: the lower bound is 2π minus the spread sum.
+- Equal bends (within `bend_spread = 4κ²ρ + 1e-9·max(κ, |bend|)`) leave the gap undecided.
+
+Why this ordering holds within the resolution: in any reading where θ has the other sign,
+the two faces cross at distance `h* = 2θ/Δc` from the edge. Within that distance they stay
+within κρ²/2 of each other, which is coincident at the resolution. Past it, every reading
+shows the order the bends give.
+
+**Cases for and against the choices.**
+
+- *Sample at the midpoint first* (chosen). For: one sample decides every edge the tests
+  build, at one normal per fin. Against: a wrong order that is right at the midpoint and
+  wrong elsewhere passes. It needs faces crossing inside the edge's interior, which another
+  rule (face intersection) should catch, not this one. Change if a body with such a cross
+  reaches finish.
+- *Refuse only on a proof* (chosen). For: a spread or tangent tie never refuses a valid
+  body, so the rule adds no false refusals. Against: an order that is wrong only within
+  the spreads passes. The caller's order is then as good as any reading the resolution
+  can tell apart.
+- *A new `GeometryCause`, not a `StructureCause`*. For: it reads surfaces and curves, as the
+  geometry causes do, and runs after the faces' check. Against: a caller fixing fin
+  order might look in structure first. The cause names the edge.
+- *Sum of gaps, not pairwise comparisons*. For: one bound covers any number of fins and
+  any permutation; a cyclic shift of the list is the same order and is accepted. Against:
+  none found.
+
+**The touched closure (the §6.14 table gains a row).**
+
+| Rule (check fn) | Causes | Reads | Instances checked |
+|---|---|---|---|
+| `radial::check` | `RadialOrder` | the edge's curve and accuracy, its fins; each fin face's surface, uses, pcurves and bounds | the plan edges, live with more than two fins |
+
+Every write that feeds an instance is already in `plan.edges`: a geometry write (the edge's
+first-write snapshot), a fin write, the face hook's marks (every edge a written face's uses
+name), and created edges. A resolution change is whole mode, which checks all edges. The
+rule reads no vertex. A sabotage (running the rule over the geometry pass's edge set
+instead of the plan edges) fails both touched tests.
+
+**Testkit.** BR8's generator gains two kinds:
+
+- `checker`: an (n+1)×(n+1) one-layer checkerboard. Its black cells are blocks; diagonal
+  neighbours share an edge of four fins, and each block is its own region. n² four-fin
+  edges.
+- `touching`: the same blocks, all in one solid region and shell. It is the body where only
+  the geometry decides.
+
+`Invariant::RadialOrder` in the wreck now reverses a four-fin edge of `touching` (was a
+three-fin edge of `stack`). Its finish cause changed from `sides_disagree` to
+`radial_order`, as the rule now names it.
+
+**Tests.** `tests/radial.rs`:
+
+- four-fin edges in order finish (checker, touching; seeds 0–5, sizes 1–3);
+- two regions out of order give `sides_disagree`;
+- touching blocks reversed or swapped give exactly `RadialOrder { edge, at: 0.5 }`;
+- every one of the 24 orders of a four-fin edge is judged as the oracle judges it (rotations
+  finish; every other order is refused by sides or by the rule; all three outcomes reached);
+- reversing every two-fin edge of block, cylinder, sphere and quad sheet still finishes.
+
+The rule's unit tests cover the turning order, an unknown direction only letting an order
+stand, tangent faces (a plane and a cylinder lying on it) ordered by bend, and equal bends
+left to the caller. `tests/touched.rs` gains a valid "rotate fins" and an invalid "swap
+fins" op, and a test over stack, checker and touching where the radial rule is reached in
+touched mode (22 times at the seeds run) with the touched and full checks agreeing.
+
+**Measurements** (release, full check, throwaway timers):
+
+| Body | Faces | Edges (>2 fins) | Radial pass | Geometry pass | Finish |
+|---|---|---|---|---|---|
+| block, size 41 | 10,086 | 20,172 (0) | 12–20 µs | 6.9–7.4 ms | 15–17.7 ms |
+| checker, size 40 | 5,046 | 8,492 (1,600) | 0.56–0.57 ms | 3.4 ms | 7.7–7.9 ms |
+| touching, size 40 | 5,046 | 8,492 (1,600) | 0.55–0.56 ms | 3.4 ms | 7.7–7.9 ms |
+
+About 0.7 ns per two-fin edge (one branch) and about 350 ns per four-fin edge (four
+normals, four curvatures, one midpoint sample). On a body where every edge has four fins,
+the rule is about 7% of finish.
+
+**Open questions and change-ifs.**
+
+1. The tangent's error is not in the spread. An edge curve's tangent is exact for lines and
+   circles; for a NURBS edge it is not bounded. Change if a NURBS edge with tangent faces is
+   refused.
+2. NURBS curvature is not certified (`CURVATURE_SLACK = 1e-9` is generous for analytic kinds
+   and inferred for NURBS).
+3. A fin's use is found by a linear scan of its face's uses. Fine at the faces tested; a
+   face of thousands of uses on many-fin edges would want the use index.
+4. `bend_spread` is INFERRED, not derived from a bound on the second partials' rounding.
+5. Once the midpoint decides, the edge's interior is not checked (see above).
+6. The weak points are near-flat cones and NURBS faces with high curvature near the edge,
+   where the spread grows and more pairs are undecided. None is in the tests.
 
 ## 7. `scx-record`
 
@@ -6194,6 +6487,199 @@ pub fn read_text(s: &str, doc: &Document, limits: Limits) -> Result<Brep, ReadEr
 2. Should text `f64` use `Display` (readable, up to about 330 bytes) or `{:e}` (at most about 24
    bytes)? Both keep the bits.
 3. Should the primitives be public under semver now, or crate-private until an app asks for them?
+
+### 7.7 RE2 as built (11-27)
+
+Decided by analysis and an adversarial pass. Proposed for review; not yet ruled.
+
+**What was built.** `crates/scx-record/src/geom.rs` holds the geometry records. Each curve and
+surface kind a body holds is written once through `Sink` and read once through `Source`, so the
+binary and the text come from one field order. The crate now also depends on `scx-curve`,
+`scx-nurbs`, `scx-nurbs-surface` and `scx-surface`. All of them are below layer 6.
+
+```rust
+pub trait Record: Sized {                  // a nested record: no magic, no version
+    fn put<S: Sink>(&self, w: &mut S) -> Result<(), WriteError>;
+    fn take<R: Source>(r: &mut R) -> Result<Self, ReadError>;
+}
+// impl Record for Frame, Frame2, NurbsCurve<D>, NurbsSurface<D>, Curve, Curve2, Surface
+
+pub enum ReadCause { /* RE1's, and: */
+    Frame(FrameError),                     // "bad_frame"
+    Curve(Box<CurveError>),                // "bad_curve", source() is the constructor's error
+    Surface(Box<SurfaceError>),            // "bad_surface"
+    NonCanonical { record: &'static str }, // a second spelling of a value (Refused)
+}
+pub enum WriteCause { /* RE1's, and: */
+    MixedRational { record: &'static str }, // Defect: no constructor or edit builds one
+    NoRecord { record: &'static str },      // Unsupported: a kind added later with no record yet
+}
+```
+
+The kind tags are crate-private `tags!` enums with dense codes. They are `CurveKind` (line,
+circle, ellipse, parabola, hyperbola, nurbs), `Curve2Kind` (the same, then angle_line and
+angle_wave) and `SurfaceKind` (plane, cylinder, cone, sphere, torus, nurbs). Small tags cover the
+sense, the angle axis, the sweep (turn or half) and the NURBS form.
+
+**The records.** A record stores what the type's constructor takes, and nothing derived.
+
+| Kind | Fields, in order |
+|---|---|
+| `Frame` | origin, x, z (9 `f64`); y is `z × x` |
+| `Frame2` | origin, x (4 `f64`) |
+| Line | origin, direction |
+| Circle, Parabola | frame, radius or focal length, sense |
+| Ellipse, Hyperbola | frame, the two semi-axes, sense |
+| Cylinder, Sphere | frame, radius, sense |
+| Cone | frame, radius at the origin, half-angle, sense; the slope is computed |
+| Torus | frame, major, minor, sense |
+| Plane | frame |
+| AngleLine (2D) | sweep (`turn` and its period, or `half`), axis, start, sense, other, rate |
+| AngleWave (2D) | sweep, start, sense, mean, cos and sin amplitudes |
+| NURBS curve | degree, knots, form, points, then weights if rational |
+| NURBS surface | the u degree and knots, the v degree and knots, form, the net row by row, then weights |
+
+- The point count is not stored. For a curve it is `knots.len() - degree - 1`. For a surface the
+  net is that count in u by that count in v.
+- A decoded value goes back through its type's checked constructor. That is `Circle::new`,
+  `KnotVector::new` then `NurbsCurve::new` or `from_homogeneous`, and so on. If the constructor
+  refuses, its cause is boxed and framed: `ReadCause::Curve` or `ReadCause::Surface`, at the
+  offset just after the kind tag.
+
+The tests cover every kind in both encodings. They use seeded values from the constructors and
+from the edits: rotations, translations, mirrors, reversals, knot insertion, splits, degree
+elevation and surface swaps.
+- Every value round-trips to the bit. Equality is checked with `PartialEq` and with the `Debug`
+  text, so `-0` and `0` differ.
+- Binary → text → binary gives equal bytes.
+
+**Decisions.**
+
+1. **Frames are read back with a new `Frame::from_axes`, not `Frame::new`.**
+   - Measured: `Frame::new(o, z, x)` on a frame's own axes changes 152,106 of 200,000 frames by
+     an ulp or more, because it normalizes again. `Frame2::new` changes 59,443.
+   - `from_axes` takes the axes as they are if `|a · a - 1|` and `|x · z|` are within
+     `AXIS_TOLERANCE = 8 ε`. Otherwise it refuses with a typed `FrameError` (`NotFinite`,
+     `NotUnit { axis }` or `NotSquare`).
+   - The frames `new` builds, and those `transformed` builds by normalizing, were measured over
+     200,000 random frames at scales 1e-10 to 1e9. They are at most 2.5 ε from unit and 1 ε from
+     square. `transformed`'s exact path (FU1, §6.12) keeps a scaled image only when it is within
+     8 ε by the same sums, so its tolerance is now this constant. Every frame either path builds
+     passes `from_axes`.
+   - *For:* the record then keeps the bits, and an axis that has been edited off unit is still
+     refused.
+   - *Against:* it is a second public constructor, and the tolerance is a judgement. 8 ε gives
+     3× headroom over what was measured. A frame built some other way, still within that
+     rounding, would be taken, which is harmless.
+
+2. **A rational NURBS value stores the pair it was built from, as a three-way form.**
+   - A value holds both `P` and `w P`. `new` computes `w P = fl(P · w)` and `from_homogeneous`
+     computes `P = fl(w P / w)`, and the two relations differ in the last bit for most values.
+   - The form is written as follows:
+     - `polynomial` when the value has no weights;
+     - `points` when every `w P` is its point times its weight;
+     - otherwise `homogeneous` when every `P` is its `w P` over its weight;
+     - otherwise the write refuses with `MixedRational`.
+   - For this to hold, the curve edits `reversed`, `swapped` and `curve(i)` keep the value's
+     relation. Surface `transformed` gives products. Knot insertion, splits and elevation go
+     through `from_homogeneous`.
+   - On read, a `homogeneous` record whose value would also pass the `points` test is refused as
+     `NonCanonical`. So each value has one spelling, and `encode(decode(x)) == x`.
+   - *For:* it is exact for both constructors, with no second rounding.
+   - *Against:* there is a third form to know. It was considered storing both `P` and `w P`. That
+     is canonical only if the reader checks that one relation holds, it costs D more numbers per
+     point, and it would let a record carry a pair no constructor builds.
+
+3. **`Arcs::try_turn(period)` is added in `scx-curve`.**
+   - It refuses a non-finite period (`NotFinite(Part::Period)`) and one at most `EFF_ZERO`
+     (`Degenerate::Period`).
+   - `Arcs::turn` stays `const` and unchecked for its const callers. The reader must not build an
+     unchecked value.
+
+4. **`ReadError` and `ReadCause` lose `Eq` and `const fn kind`.**
+   - The boxed `CurveError` and `SurfaceError` carry `f64`s, and their `kind()` is not const.
+   - `PartialEq` and `Clone` stay, and `size_of::<ReadError>() <= 32` still holds because the
+     causes are boxed.
+
+5. **Dense tag codes.** §7.6's sketch had `Nurbs = 9`. Codes are per record, so no gap is
+   needed. A kind added later takes the next code, and until then the writer refuses its value
+   with `NoRecord`, since the enums are `non_exhaustive`.
+
+6. **The causes are framed with their own names.** The names are `bad_frame`, `bad_curve` and
+   `bad_surface`. The inner name and kind come through `source()` and `kind()`. This matches the
+   context frames in `scx-surface` and `scx-nurbs-surface`.
+
+**The pin's records, and where we differ.**
+
+| | SMLib database | `solidcore-record` | Ours |
+|---|---|---|---|
+| Curve and surface kinds | to version 32, all as B-splines; after it, a type code with the kind's own fields *and* the B-spline again | serde JSON, plus a binary form | the kind's own fields only |
+| Parabola, conic, iso and projected curves | no writer | — | every kind a body holds |
+| Frame | — | origin, `x_axis`, `y_axis` | origin, x, z (y derived); read back without normalizing again |
+| Line | — | start, end | origin, direction (what `Line::new` takes; start and end would round the direction) |
+| Rational | homogeneous | `RationalSpline`, homogeneous only | the pair the value was built from (decision 2) |
+| pcurves | — | always NURBS | every `Curve2` kind, angle lines and waves included |
+| Sense | — | none (a mirror is a flipped frame) | stored |
+| Cone | — | frame, `radius_at_origin`, `half_angle` | the same, plus sense |
+| Numbers | ASCII `%.16f`, which loses bits and writes `inf` and `nan` | the binary refuses non-finite values | both encodings keep the bits and refuse non-finite values |
+
+Why we differ:
+- Storing the B-spline next to the exact kind (SMLib) leaves two truths to keep in step.
+- A homogeneous-only form cannot keep a value built by `new` to the bit.
+- Start and end points (`solidcore-record`'s line) do not give back `Line::new`'s direction.
+
+**Tests** (`tests/geometry.rs`, 14; nothing removed):
+- Round trips to the bit:
+  - about 8,000 frames (built, mapped, half-turned, and 2D);
+  - every `Curve`, `Curve2` and `Surface` kind, each with at least 20 values;
+  - rational curves in both forms (more than 100 of each), and edited rational surfaces.
+- The corruption sweep, two values of each kind:
+  - every truncation is refused inside the input;
+  - every single-byte change gives a value or a `ReadError`, never a panic;
+  - each value that decodes re-encodes to its input.
+- Refusals with the constructor's own cause, in both encodings (each a single changed number):
+  - a zero radius is `Curve(Degenerate::Radius { radius: 0 })`, and a negative sphere radius is
+    `Surface(..)`;
+  - a non-unit axis is `Frame(NotUnit { axis: X })`, and non-square axes are
+    `Frame(NotSquare)`;
+  - decreasing knots are `Curve(Nurbs(KnotsDecrease))`;
+  - a weight of 0 or less is `Curve(Nurbs(Weight { index: 1, .. }))`, and on a surface
+    `Surface(Nurbs(BadWeights(NotPositive { row: 1, col: 0 })))`;
+  - a period of 0 or less is `Curve(Degenerate::Period)`.
+- A homogeneous second spelling is `NonCanonical`.
+- `scx-num` gains two frame tests: `from_axes` gives built frames back to the bit, and refuses
+  axes off by more than rounding. `scx-curve` gains one `try_turn` test.
+
+**Measured** (one core, release, each over 200 passes of the seeded samples; it includes
+creating the writer; local evidence, not committed):
+
+| Kind | Binary size | Binary write | Binary read | Text size | Text write | Text read |
+|---|---:|---:|---:|---:|---:|---:|
+| Line | 49 B | 102 ns | 36 ns | 118 B | 0.49 µs | 0.54 µs |
+| Circle | 82 B | 106 ns | 46 ns | 209 B | 0.76 µs | 0.87 µs |
+| Ellipse, hyperbola | 90 B | 109 ns | 53 ns | 229 B | 0.81 µs | 0.95 µs |
+| NURBS curve (about 28 numbers) | 234 B | 170 ns | 193 ns | 453 B | 1.7 µs | 2.1 µs |
+| 2D line, circle, angle line, angle wave | 31–42 B | 83–95 ns | 25–33 ns | 81–110 B | 0.36–0.41 µs | 0.36–0.46 µs |
+| 2D NURBS | 198 B | 164 ns | 211 ns | 368 B | 1.6 µs | 2.1 µs |
+| Plane | 73 B | 102 ns | 44 ns | 181 B | 0.74 µs | 0.85 µs |
+| Cylinder, sphere, torus | 82–90 B | 109–125 ns | 55 ns | 208–226 B | 0.80–0.91 µs | 0.93–1.06 µs |
+| Cone | 90 B | 130 ns | 80 ns (`tan`) | 226 B | 0.93 µs | 1.07 µs |
+| NURBS surface (about 135 numbers) | 1,097 B | 439 ns | 648 ns | 2,481 B | 9.2 µs | 11.7 µs |
+
+- A decode costs the RE1 primitives plus the constructor's checks. `from_axes` costs three dot
+  products.
+- Nothing existing got slower. `Frame::new`, `Arcs::turn` and the constructors are unchanged; the
+  new functions are separate and are called only by the reader.
+
+**Open questions.**
+
+1. Is a mixed rational value truly unreachable? Every edit in the crates today keeps one
+   relation (decision 2), but nothing in the types enforces it. A future edit that mixes them
+   would find out at write time (`MixedRational`, a Defect). The alternative is a stored form
+   flag on the NURBS types.
+2. Should `Record` stay public, or become crate-private until RE3 needs it from outside?
+3. Is `AXIS_TOLERANCE = 8 ε` right? It is also open whether a frame that is only nearly unit
+   should be taken, or refused so that it can be renormalized by the caller.
 
 ## 8. Prerequisites outside the six crates
 

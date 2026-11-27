@@ -23,9 +23,12 @@
 use core::f64::consts::{FRAC_1_SQRT_2, FRAC_PI_2, FRAC_PI_4};
 
 use scx_num::fmath;
+use scx_num::math::EFF_ZERO;
 use scx_num::ring::Ring;
 use scx_num::trig::Trig;
 use scx_nurbs::Approach;
+
+use crate::error::{CurveError, Degenerate, Part};
 
 /// `tan(pi/8) = sqrt(2) - 1`, correctly rounded.
 const TAN_PI_8: f64 = 0.414_213_562_373_095_05;
@@ -94,6 +97,24 @@ impl Arcs {
             span: period / 4.0,
             sweep: Sweep::Turn,
         }
+    }
+
+    /// A full turn over `[0, period]`, checked: [`Arcs::turn`] for a kind's own period, this
+    /// for one read back from a record. The turn's [`Arcs::length`] is `period` again, to
+    /// the bit (`period / 4` and `4 span` are exact for a period this large).
+    ///
+    /// # Errors
+    ///
+    /// [`CurveError::NotFinite`] ([`Part::Period`]) for a period that is not finite;
+    /// [`Degenerate::Period`] for one not above [`EFF_ZERO`].
+    pub fn try_turn(period: f64) -> crate::Result<Self> {
+        if !period.is_finite() {
+            return Err(CurveError::NotFinite(Part::Period));
+        }
+        if period <= EFF_ZERO {
+            return Err(CurveError::Degenerate(Degenerate::Period { period }));
+        }
+        Ok(Self::turn(period))
     }
 
     /// The latitude, `[-pi/2, pi/2]` over `[0, 1]`.
@@ -663,5 +684,26 @@ mod tests {
         assert!(Arcs::turn(1.0).breaks(0.0, 1e4).is_none());
         assert!(Arcs::turn(1.0).breaks(1.0, 0.0).is_none());
         assert_eq!(Arcs::turn(1.0).breaks(0.0, 0.25), Some(vec![]));
+    }
+
+    #[test]
+    fn try_turn_checks_the_period_and_keeps_it() {
+        for period in [1.0, 7.3, 2.0 * core::f64::consts::PI * 3.7, 1e-11, 1e300] {
+            let a = Arcs::try_turn(period).unwrap();
+            assert_eq!(a, Arcs::turn(period));
+            assert_eq!(a.length().to_bits(), period.to_bits());
+        }
+        assert_eq!(
+            Arcs::try_turn(0.0),
+            Err(CurveError::Degenerate(Degenerate::Period { period: 0.0 }))
+        );
+        assert_eq!(
+            Arcs::try_turn(-1.0).map_err(|e| e.name()),
+            Err("degenerate_period")
+        );
+        assert_eq!(
+            Arcs::try_turn(f64::NAN).map_err(|e| e.to_string()),
+            Err("the period is not finite".to_owned())
+        );
     }
 }

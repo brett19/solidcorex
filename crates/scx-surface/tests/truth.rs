@@ -24,7 +24,7 @@ use scx_num::fmath;
 use scx_num::frame::{Frame, Sense};
 use scx_num::hash::Rng;
 use scx_num::interval::Ivl;
-use scx_num::units::Length;
+use scx_num::units::{Length, Resolution};
 use scx_num::vector2d::Point2;
 use scx_num::vector3d::{Point3, Vec3};
 use scx_nurbs::Approach;
@@ -1094,7 +1094,13 @@ fn oblique_cylinder_sections_have_the_rational_uv() {
         let lo = 6.0 * rng.next_signed_unit();
         let over = Extent1d::new(lo, lo + 7.0).unwrap();
         let surface = AnySurface::Cylinder(cyl);
-        let pc = pcurve_of(&curve, &surface, over, Length::from_mm(1e-9 * size)).unwrap();
+        let pc = pcurve_of(
+            &curve,
+            &surface,
+            over,
+            Resolution::new(Length::from_mm(2e-9 * size)).unwrap(),
+        )
+        .unwrap();
         assert!(matches!(pc, Curve2::AngleWave(_)), "{pc:?}");
         let period = 2.0 * PI * r;
         let scale = period / (4.0 * PI);

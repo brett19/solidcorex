@@ -30,7 +30,7 @@ use scx_num::extent2d::Extent2d;
 use scx_num::fmath;
 use scx_num::frame::{Frame, Sense};
 use scx_num::hash::Rng;
-use scx_num::units::Length;
+use scx_num::units::{Length, Resolution};
 use scx_num::vector2d::Point2;
 use scx_num::vector3d::{Point3, Vec3};
 use scx_nurbs::Approach;
@@ -322,13 +322,18 @@ fn full(s: &Surface) -> Extent2d {
     Extent2d::from_bounds(u.0, v.0, u.1, v.1).unwrap()
 }
 
+/// The resolution whose zone is `mm` millimetres.
+fn zone(mm: f64) -> Resolution {
+    Resolution::new(len(mm)).unwrap()
+}
+
 fn run(p: &Path, s: &Surf, se: &Extent2d, tol: f64) -> Result<Vec<CurveSurfaceHit>, SurfaceError> {
     intersect_curve(
         &p.c,
         &p.ce,
         &s.s,
         se,
-        len(tol),
+        zone(tol),
         &mut Budget::unlimited(),
         &Stop::new(),
     )
@@ -903,119 +908,6 @@ fn rulings_and_parallels_clip_exactly() {
 }
 
 #[test]
-fn a_bad_tolerance_is_refused_first() {
-    let s = sphere(Frame::WORLD, 1.0, Sense::Forward);
-    let p = circle(Frame::WORLD, 0.5, Sense::Forward, turn());
-    let se = full(&s.s);
-    let nurbs = Surface::from(s.s.to_nurbs(&se).unwrap());
-    for tol in [0.0, -1e-6, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
-        for surface in [&s.s, &nurbs] {
-            let e = intersect_curve(
-                &p.c,
-                &p.ce,
-                surface,
-                &se,
-                len(tol),
-                &mut Budget::new(0),
-                &Stop::new(),
-            )
-            .unwrap_err();
-            assert!(
-                matches!(e, SurfaceError::BadTolerance { .. }),
-                "{tol} {e:?}"
-            );
-            assert_eq!(e.name(), "intersect_tolerance_invalid");
-            assert_eq!(e.kind(), scx_num::error::ErrorKind::Refused);
-        }
-    }
-}
-
-#[test]
-fn the_cone_far_nappe_is_not_the_cone() {
-    // The cone `rho = 1 + v` (apex at v = -1) and the line along x at height -3: it meets
-    // the far nappe at x = +-2, which the surface does not reach, and nothing else.
-    let s = cone(Frame::WORLD, 1.0, PI / 4.0, Sense::Forward);
-    let p = line(Point3::new(0.0, 0.0, -3.0), Vec3::new(1.0, 0.0, 0.0), 10.0);
-    let hits = run(&p, &s, &full(&s.s), 1e-6).unwrap();
-    assert!(hits.is_empty(), "{hits:?}");
-    // Through the apex along the axis: one crossing at the apex.
-    let p = line(Point3::new(0.0, 0.0, -3.0), Vec3::new(0.0, 0.0, 1.0), 10.0);
-    let hits = run(&p, &s, &full(&s.s), 1e-6).unwrap();
-    assert!(
-        matches!(hits[..], [CurveSurfaceHit::Point { t, .. }] if (t - 2.0).abs() < 1e-9),
-        "{hits:?}"
-    );
-    // At height 1 it meets the near nappe at x = +-2, in u 0.5 and 0.
-    let p = line(Point3::new(0.0, 0.0, 1.0), Vec3::new(1.0, 0.0, 0.0), 10.0);
-    let hits = run(&p, &s, &full(&s.s), 1e-6).unwrap();
-    let uvs: Vec<Point2> = hits
-        .iter()
-        .map(|h| match h {
-            CurveSurfaceHit::Point {
-                uv,
-                contact: Contact::Crossing,
-                ..
-            } => *uv,
-            other => panic!("{other:?}"),
-        })
-        .collect();
-    assert_eq!(uvs.len(), 2, "{hits:?}");
-    assert!((uvs[0] - Point2::new(0.5, 1.0)).length() < 1e-12, "{uvs:?}");
-    assert!((uvs[1] - Point2::new(0.0, 1.0)).length() < 1e-12, "{uvs:?}");
-}
-
-#[test]
-fn points_outside_se_are_dropped_and_uv_wraps_into_it() {
-    // The unit sphere and the x axis: crossings at x = -1 (u 0.5) and x = 1 (u 0).
-    let s = sphere(Frame::WORLD, 1.0, Sense::Forward);
-    let p = line(Point3::ORIGIN, Vec3::new(1.0, 0.0, 0.0), 5.0);
-    let both = run(&p, &s, &full(&s.s), 1e-6).unwrap();
-    assert_eq!(both.len(), 2, "{both:?}");
-    let half = Extent2d::from_bounds(0.25, 0.0, 0.75, 1.0).unwrap();
-    let one = run(&p, &s, &half, 1e-6).unwrap();
-    assert!(
-        matches!(one[..], [CurveSurfaceHit::Point { t, uv, .. }] if t == -1.0 && uv == Point2::new(0.5, 0.5)),
-        "{one:?}"
-    );
-    // A window a turn up: the same points, their u a period on.
-    let up = Extent2d::from_bounds(1.0, 0.0, 2.0, 1.0).unwrap();
-    let moved = run(&p, &s, &up, 1e-6).unwrap();
-    let us: Vec<f64> = moved
-        .iter()
-        .map(|h| match h {
-            CurveSurfaceHit::Point { uv, .. } => uv.x,
-            other => panic!("{other:?}"),
-        })
-        .collect();
-    assert_eq!(us, [1.5, 1.0]);
-}
-
-#[test]
-fn results_are_sorted_by_t() {
-    let mut rng = Rng::new(0x5_06_03);
-    for _ in 0..30 {
-        for s in surfaces(&mut rng) {
-            let o = Point3::new(s.kit_origin()[0], s.kit_origin()[1], s.kit_origin()[2]);
-            for p in curves(&mut rng, o) {
-                let hits = run(&p, &s, &full(&s.s), 1e-6).unwrap();
-                let ts: Vec<f64> = hits
-                    .iter()
-                    .filter_map(|h| match h {
-                        CurveSurfaceHit::Point { t, .. } => Some(*t),
-                        CurveSurfaceHit::Overlap { .. } => None,
-                    })
-                    .collect();
-                assert!(ts.windows(2).all(|w| w[0] <= w[1]), "{ts:?}");
-                assert!(
-                    ts.iter()
-                        .all(|t| p.ce.contains_value(*t, 0.0) || p.ce.length() >= TAU)
-                );
-            }
-        }
-    }
-}
-
-#[test]
 fn nurbs_budget_and_stop_are_typed() {
     let s = sphere(Frame::WORLD, 1.0, Sense::Forward);
     let p = circle(Frame::WORLD, 0.5, Sense::Forward, turn());
@@ -1026,7 +918,7 @@ fn nurbs_budget_and_stop_are_typed() {
         &p.ce,
         &Surface::from(nurbs),
         &se,
-        len(1e-6),
+        zone(1e-6),
         &mut Budget::unlimited(),
         &Stop::new(),
     )
@@ -1034,8 +926,16 @@ fn nurbs_budget_and_stop_are_typed() {
     assert_eq!(e, SurfaceError::NurbsIntersection);
     assert_eq!(e.name(), "nurbs_intersection_unbuilt");
     let mut budget = Budget::new(1);
-    let e =
-        intersect_curve(&p.c, &p.ce, &s.s, &se, len(1e-6), &mut budget, &Stop::new()).unwrap_err();
+    let e = intersect_curve(
+        &p.c,
+        &p.ce,
+        &s.s,
+        &se,
+        zone(1e-6),
+        &mut budget,
+        &Stop::new(),
+    )
+    .unwrap_err();
     assert!(matches!(e, SurfaceError::Exhausted(_)), "{e:?}");
     let stop = Stop::new();
     stop.set();
@@ -1044,7 +944,7 @@ fn nurbs_budget_and_stop_are_typed() {
         &p.ce,
         &s.s,
         &se,
-        len(1e-6),
+        zone(1e-6),
         &mut Budget::unlimited(),
         &stop,
     )
@@ -1052,7 +952,16 @@ fn nurbs_budget_and_stop_are_typed() {
     assert_eq!(e, SurfaceError::Stopped);
     // A circle against the sphere is two pieces: four units.
     let mut budget = Budget::new(4);
-    intersect_curve(&p.c, &p.ce, &s.s, &se, len(1e-6), &mut budget, &Stop::new()).unwrap();
+    intersect_curve(
+        &p.c,
+        &p.ce,
+        &s.s,
+        &se,
+        zone(1e-6),
+        &mut budget,
+        &Stop::new(),
+    )
+    .unwrap();
     assert_eq!(budget.used(), 4);
 }
 

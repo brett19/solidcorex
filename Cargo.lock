@@ -533,6 +533,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "scx-make"
+version = "0.1.0"
+dependencies = [
+ "scx-brep",
+ "scx-curve",
+ "scx-num",
+ "scx-surface",
+ "scx-testkit",
+]
+
+[[package]]
 name = "scx-num"
 version = "0.1.0"
 dependencies = [
@@ -576,7 +587,12 @@ dependencies = [
 name = "scx-record"
 version = "0.1.0"
 dependencies = [
+ "scx-curve",
  "scx-num",
+ "scx-nurbs",
+ "scx-nurbs-surface",
+ "scx-surface",
+ "scx-testkit",
 ]
 
 [[package]]

@@ -1,6 +1,6 @@
 // Written for solidcorex. Apache-2.0.
-//! The planar generators: blocks, prisms, sheets, a holed slab, a block with a cavity and
-//! a stack of blocks. Every face is a plane bounded by straight edges over `[0, 1]`.
+//! The planar generators: blocks, prisms, sheets, a holed slab, a block with a cavity, a
+//! stack of blocks and a checkerboard of them. Every face is a plane bounded by straight edges over `[0, 1]`.
 
 use std::collections::BTreeMap;
 use std::f64::consts::TAU;
@@ -385,6 +385,88 @@ pub(crate) fn stack(dice: &mut Dice, n: usize) -> Result<Draft> {
             [shell(t + 1)?, shell(t)?],
             &[level(t + 1)?],
         )?;
+    }
+    b.order_fins()?;
+    Ok(b.d)
+}
+
+/// An `(n + 1) x (n + 1)` checkerboard of blocks one layer high, the black cells (`i + j`
+/// even) filled: diagonal neighbours share the vertical edge at their common corner, so
+/// each of the `n^2` inner lattice edges has four fins, put in radial order. Each block is
+/// its own solid region and shell, or, when `one`, every block is one solid region of one
+/// shell, the blocks touching along those edges: the sectors about such an edge are then
+/// the solid and the outside by turns, so the sides say nothing of the order and only the
+/// geometry fixes it. Seed 0: unit cells.
+pub(crate) fn checker(dice: &mut Dice, n: usize, one: bool) -> Result<Draft> {
+    let place = Place {
+        frame: dice.frame(),
+    };
+    let m = n + 1;
+    let (w, d) = (dice.range(0.5, 3.0, 1.0), dice.range(0.5, 3.0, 1.0));
+    let h = dice.range(0.5, 3.0, 1.0);
+    let axes = [
+        breaks(dice, m, w * m as f64),
+        breaks(dice, m, d * m as f64),
+        vec![0.0, h],
+    ];
+    let mut b = Builder::new();
+    let outside = b.d.add_shell(ShellRecord::new(RegionId::OUTSIDE))?;
+    let welded = if one {
+        Some(b.region_shell(true)?)
+    } else {
+        None
+    };
+    let mut vertices: BTreeMap<[usize; 3], VertexId> = BTreeMap::new();
+    let mut lines = Lines::default();
+    for i in 0..m {
+        for j in 0..m {
+            if (i + j) % 2 != 0 {
+                continue;
+            }
+            let shell = match welded {
+                Some(s) => s,
+                None => b.region_shell(true)?,
+            };
+            let lo = [i, j, 0];
+            let mut corner = |b: &mut Builder, c: [usize; 3]| -> Result<VertexId> {
+                let idx = [lo[0] + c[0], lo[1] + c[1], c[2]];
+                if let Some(&v) = vertices.get(&idx) {
+                    return Ok(v);
+                }
+                let mut l = [0.0; 3];
+                for (a, slot) in l.iter_mut().enumerate() {
+                    let at = idx.get(a).copied().unwrap_or(0);
+                    *slot = axes
+                        .get(a)
+                        .and_then(|x| x.get(at))
+                        .copied()
+                        .ok_or(GenError::Degenerate("checker"))?;
+                }
+                let v = b.vertex(place.point(l))?;
+                vertices.insert(idx, v);
+                Ok(v)
+            };
+            // The block's six faces, fronts outward, as `lattice_box` makes a cell's.
+            for axis in 0..3 {
+                let (u, v) = ((axis + 1) % 3, (axis + 2) % 3);
+                for side in [0, 1] {
+                    let mut ring = Vec::with_capacity(4);
+                    for (du, dv) in [(0, 0), (1, 0), (1, 1), (0, 1)] {
+                        let mut c = [0; 3];
+                        for (a, value) in [(axis, side), (u, du), (v, dv)] {
+                            if let Some(slot) = c.get_mut(a) {
+                                *slot = value;
+                            }
+                        }
+                        ring.push(corner(&mut b, c)?);
+                    }
+                    if side == 0 {
+                        ring.reverse();
+                    }
+                    polygon(&mut b, &mut lines, [outside, shell], &[ring])?;
+                }
+            }
+        }
     }
     b.order_fins()?;
     Ok(b.d)

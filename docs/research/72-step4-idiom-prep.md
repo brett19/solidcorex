@@ -1587,6 +1587,117 @@ difftest and T12 should too. The area is `2 (10^4 - 48 pi) + 4000 + 480 pi`.
 cone with an apex inside the height range (a double cone) is two recipes. A membership oracle
 for these shapes is T10's, not here: the tests carry their own small ones.
 
+### 14.2 T10 as built (11-27): `scx_testkit::csg`
+
+**What.** `crates/scx-testkit/src/csg/` (`mod.rs`, `ivl.rs`, `profile.rs`, `probe.rs`) and
+`crates/scx-testkit/tests/csg.rs` (21 tests, 1.2 s). Plain `f64` data; no library type.
+
+- `Csg::leaf(&Frame, Primitive) -> Result<Csg, CsgError>`, then by-value `union`,
+  `intersection`, `difference` and `complement`. `Primitive` is `HalfSpace`, `Slab`, `Block`
+  (corner at the origin), `Cylinder`, `Frustum` (`radius1 = 0` is the cone), `Sphere`, `Torus`
+  and `Extrusion { profile, height }`. `Profile::new(&[Vec<Seg>])` takes loops of
+  `Seg::{Line, Arc, Circle}`. Loops may nest, and odd winding is inside.
+- `side(p, delta) -> Side::{In, Out, Band}` is §12.4 row 7: `Band` iff the outward-rounded
+  interval enclosure of the tree's `f` over the box `p ± delta` holds 0. `enclose` returns that
+  enclosure. Union is min, intersection is max, difference is `max(a, -b)` and complement is
+  `-f`, all exact on intervals. A leaf maps the box into its frame by `R^-1` as intervals, so
+  any non-singular axes work (a sheared ellipsoid is tested).
+- `census(points, delta) -> Census { inside, outside, band }` with `certain_fraction()` is the
+  sampler helper row 7 asks for. `box_points(lo, hi, grow, count, seed)` gives the 1,000
+  points in the box grown 10%.
+- `probes(&ProbeSpec) -> Vec<Probe>` gives the points on purpose. Each `Probe` has a `point`,
+  a `feature` (leaf, plus `Face`, `Edge`, `Vertex` or `Meet { other }`), a `dir` and an
+  `offset`.
+  - Seeded points are taken on each face, edge and vertex (with seams, poles and cap centres
+    on purpose), and on the meets of two leaves' surfaces, found by walking parameter lines and
+    bisecting the other leaf's sign change.
+  - A point is kept only if the tree is certainly `In` and certainly `Out` among its offsets of
+    ±10 coincidences, so faces buried in another leaf and the shared face of a coplanar union
+    give none.
+  - Each kept point gives an offset 0 probe and offsets ±{½, 2, 10}·c along each normal and the
+    normals' sum. At a meet the normals' difference is added too: a meet's normals are each
+    leaf's own, and the solid may lie in any of the four quarters they bound. Without it, the
+    rim of a hole gave no meets.
+- `CsgError` (`#[non_exhaustive]`) has `Frame`, `Size { what }`, `ProfileShape` and
+  `ProfileOpen { gap }`. A non-finite point, a negative width or a magnitude of 1e150 or more
+  is `Band`: the oracle makes no claim there.
+
+**Tested against** truth independent of the oracle:
+- Plain-`f64` signed distances written in the test: box, cylinder as a 2D box in (ρ, z),
+  frustum by its meridian segments, sphere and torus. Every certain answer must be farther than
+  `delta` on its side, at 40 random frames × 3 widths × 300 points per kind.
+- The analytic `Sphere::closest` and `Torus::closest`.
+- Exact `Rat` signs for a half-space at width 0, at points within 3 ulps of its plane.
+- Mirror symmetry, and turning a frame about its axis.
+- Equivalent trees never contradict each other (no point is `In` for one tree and `Out` for
+  another), and at least 85-90% agree with certainty:
+  - a block, six half-spaces, three slabs and an extruded rectangle;
+  - a cylinder, an extruded circle, two half arcs, a clockwise full arc and a straight frustum;
+  - a rounded rectangle and the union of two blocks and four cylinders;
+  - a ring extrusion and a cylinder minus a cylinder.
+- Commutativity and De Morgan, with enclosures equal in bits.
+- Profile winding against an exact `i128` crossing test (points on an edge are skipped), with
+  loops reversed.
+- Arc distances against the closed form.
+
+**Decision: interval enclosure, no Lipschitz bound** (row 7 as ruled). For: it is sound by the
+inclusion property alone. A boundary point has `f = 0` by continuity, so every point within
+`delta` of the boundary is `Band`, and the ∞-norm box contains the ball. Against: the band is
+wider than `delta`, as measured below. Each `f` is a max of pieces, not a distance.
+
+**Decision: an extrusion's `g` is the profile's signed distance at the box centre, ± (half the
+box diagonal + its error bound).** For: signed distance is 1-Lipschitz (a theorem, not a
+per-primitive proof), and it is one double-double evaluation, tight to the box. Against: soundness
+rests on the stated error bound `E = gap + 2^-90 (S + |c|) + 2^-52 |d|` in `profile.rs`, rather
+than on interval rounding. The sign is the winding parity from double-double `atan2` sums. It is
+checked against the exact crossing test, but it is not itself exact.
+
+**Decision: the frustum's slant term is divided by `sqrt(1 + s^2)`**, so its width is a
+distance's. For: before that, a flat cone's band reached about `|s|` widths. Against: one more
+interval division (sound, and the divisor is ≥ 1).
+
+**Measured** with throwaway timers (opt-level 3, as the testkit builds in dev):
+- `side` costs about 3.1 µs a call on a four-leaf tree (block minus cylinder, plus frustum,
+  plus sphere) over 100,000 points.
+- `probes` gives 3,239 probes in 12 ms on that tree.
+- In the recipe test, `census` at `delta = sqrt 3 · 1e-6` keeps at least 95% certain (asserted).
+  The timing run's 100,000 points had no `Band` at all.
+- Band reach, as the largest `|sd| / delta` over `Band` points at random rotated frames, scaled by
+  `sin(θ/2)` for the sharpest edge angle θ: block 1.47, cylinder 1.72, frustum 2.01, sphere 2.69,
+  torus 2.76.
+  - Unrotated, the block's band stays within `sqrt 3 · delta` and the sphere's within 1.01 of it.
+  - Rotation can grow the box's bounding box to `sqrt 3 · delta` a side, whose corner is
+    `3 · delta` away.
+  - A max of planes reads `d sin(θ/2)` beyond an edge of angle θ, so a flat frustum's rim widens
+    the band by `1 / sin(θ/2)` (10.6 widths measured, unscaled). This is sound; it costs certain
+    points only near sharp edges.
+
+**Deviations from 72.**
+- §3.4 says `Band` is "within a stated distance of the truth boundary". As built, `Band` *contains*
+  every point within `delta`, but it reaches farther (above). The guarantee is one-sided, which is
+  what row 7 needs.
+- §8.1's classification row says band points "must classify `On` or the side T10 gives at the
+  band's edge". T10 gives no such side. Row 7 supersedes this: band points are counted, not judged.
+  DT1 should follow row 7.
+- Extrusions of line-and-arc profiles are added, as the task names them, and the cone is a
+  `Frustum` with `radius1 = 0`.
+
+**Open.**
+- *Three segment types.* `csg::Seg` (an angle-swept arc and a full circle), T9's `solid::Seg`
+  and T11's `profile::Seg` (an arc by centre, two exact ends and a sense) each describe line-and-arc
+  loops. Case for unifying on T11's: exact ends, already the fixtures' form. Case against now: it
+  touches three tasks' files, and `csg` would derive angles by `atan2` anyway. Recommendation: one
+  follow-up moves `csg` and `solid` onto `profile::Seg`, with `Circle` as two arcs.
+- *Extrusion caps get no meet walks.* Meets of a cap with another leaf are found only from the
+  other leaf's walks. Enough for the tests here; a cap-only meet (a pin tip on a lid) would be
+  missed.
+- *Profile normals assume simple loops.* An edge between pieces takes the next piece's normal
+  with this piece's outward sign. A self-touching loop could flip it, and the probe is then
+  dropped by the ±10c filter rather than kept wrong.
+- *Band width per edge angle.* If DT1 finds the 95% share hard to keep near sharp edges, a
+  meridian signed distance for the frustum (as the extrusion does) would remove the
+  `1 / sin(θ/2)`.
+
 ### 14.3 T11 as built (11-27)
 
 `scx-testkit::profile` (`crates/scx-testkit/src/profile.rs`, tests in `tests/profile.rs`).
@@ -1648,6 +1759,18 @@ for these shapes is T10's, not here: the tests carry their own small ones.
 - **Not covered:** self-intersection of non-adjacent triangles (a test needs a triangle-triangle
   intersection oracle; deferred to TS3 if wanted), and multiple shells or genus (the oracle
   takes the whole mesh as one surface; `NonManifoldVertex` is per vertex).
+
+### 14.5 CX1 as built (11-27)
+
+`scx_brep::op` (D1), `crates/scx-brep/src/op.rs`: `Cx`, `Settings`, `Scratch`, `Trace` (with `Event`, `NoTrace`), `Warning` (with `WarningKind`), `Raise`, `Skipped<C>`, `Report<C>`, `Done<C>`. All plain types; `Settings`, `Scratch`, `Report` and `Done` are `Send + Sync` (asserted).
+
+- **`Cx` is a bundle with public fields and `Cx::new`.** A caller destructures it and passes `&mut Budget` and `&Stop` (mass, classification, tessellation) or `&mut Scratch`. `Cx::budget()` gives a fresh `Budget` from the settings' limit.
+- **`Settings`** is `#[non_exhaustive]` with `new()` (default seed, unlimited budget), by-value `with_seed` and `with_budget`, and `rng(op, entity)` = `Rng::new(mix(&[seed, op, entity]))`. It has `Default` because every value is valid, so it is not a failing default. No executor field: the executor lives in `scx-algo`, above `scx-brep`; it joins `Settings` when an operation takes one (change-if).
+- **`Scratch`** is a `BTreeMap<(TypeId, u64), Box<dyn Any + Send + Sync>>`: typed `get` and `insert`. Case for the typed map: no crate above needs to be named here, and iteration is in key order. Case against: `dyn Any` hides what is memoised. Kept because 01 §6.3 says only "memo", and each user crate can wrap its keys. It does not charge work on a hit; the caller stores the work with the value.
+- **`Report::new`** canonicalises: warnings by (entity, kind), skipped by (item, round), raised by entity; equal keys keep their given order (stable sort). The fields stay public per 01 §5.2, so a hand-built `Report` can bypass it; `Report::empty(work)` is the clean one.
+- **`Warning`** is `{ entity, kind: WarningKind }` with `AccuracyRaised` and `Coincident` (the 12.4 row 4 cross-operand identification). **`Raise`** is `{ entity, before, after: Accuracy }`; 09's `cert` field is left out until `Cert` is wanted by a consumer.
+- **`Done::new`** is `const`; chaining is `op2(&done.body, ...)`.
+- Tests: construction and splitting a `Cx`, chaining three `Done`s, seed draws fixed by inputs, `Report` order independent of input order.
 
 ### 14.6 PL1 as built (11-27)
 
@@ -1746,3 +1869,46 @@ Tests: `tests/fixtures.rs` (T11 through one adapter), `tests/pin_ports.rs` (the 
   ellipse, conic, Bezier and hyperbola areas and holds (step 5); the distance query; placement
   between regions; readers, sheets, prisms, arc building, circle and ellipse recognition.
 - **Removed tests:** none.
+
+### 14.7 MK1 as built (11-27)
+
+`crates/scx-make` (new, in `layers.txt` after `scx-record`; depends on `scx-brep`, `scx-curve`, `scx-num`, `scx-surface`; `scx-testkit` as a dev-dependency). Public API:
+
+```rust
+pub fn block(frame: &Frame, size: [Length; 3], doc: &Document) -> Result<Made<BlockFaces>, MakeError>;
+pub struct Made<R> { pub body: Brep, pub faces: R }
+pub struct BlockFaces { pub bottom: FaceId, pub top: FaceId, pub sides: [FaceId; 4] }  // Copy
+#[non_exhaustive] pub enum MakeError { Refused(Refusal), Defect(Defect), Full(TableFull) }  // kind(), name(), Display, Error
+#[non_exhaustive] pub enum Refusal { Size { dimension: Dimension, value: f64, floor: Length } }
+#[non_exhaustive] pub enum Defect { Curve(CurveError), Absent(Absent), Interval, PlaneFrame, Pcurve(PcurveWriteError), Finish(FinishCause) }
+#[non_exhaustive] pub enum Dimension { X, Y, Z }
+```
+
+**What it does.** The block has its corner at the frame's origin and extents along the frame's axes (the placement T9's `solid::block(..).place(&frame)` answers for; the pin's `create_box` also puts its lower corner at `origin`). It writes 8 vertices, 12 edges and 6 planar faces into one `Draft`: each edge once, each face's ring counter-clockwise about its outward normal, front in the outside's shell and back in the solid's, both regions decided at construction, pcurves from `Draft::exact_loops` (BR5, every `bound` `None`), then `finish`. No stitch, no orientation pass, no ray fire. Vertices are `origin + (x dx + y dy + z dz)`, so each rounds once.
+
+**The pattern MK2 reuses.**
+- A `const` table of roles over corners (`Role { ring, axis, outward }`) and a record struct of `FaceId`s in the table's order. `BlockFaces` documents its order (bottom, top, sides counter-clockwise from the face on `y = 0`).
+- `assembly::Assembly` (crate-private): `new(doc)` (outside shell, solid region and shell), `vertex(point)`, `line(a, b)` (shared edge by end ids, with the sense of a use from `a`), `edge(curve, interval, ends)` (an unshared curved edge), `face(surface, &[loops of (EdgeId, Sense)])` and `finish()`. MK2 adds a collapsed-edge method (poles, apex) and seam edges to it; nothing else in it is block-specific.
+- `Made<R>` is the S6 shape. No `Changes` is returned: a new body has no inputs.
+- `MakeError` is `#[non_exhaustive]` and has no `Unsupported` yet because no cause exists; MK2 adds `Unsupported(..)` with `HornTorus` (D3) and `Dimension` gains `Radius` and the like.
+
+**Decisions, with cases.**
+- **The size floor is the document's zone, strictly above.** For: 72 §4.2 says "greater than the document's resolution", a box whose size is within the zone has its two ends one place, and `finish` would refuse it as a `Defect` where a `Refused` names the size. Against: the pin's floor is a constant (`SM_EFF_ZERO`), so a size between the two is a different answer at a coarse document. Kept: the answer follows the document, and the test pins both sides at the default and at a 0.01 mm document. NaN and infinity are refused with the same variant (a typed `value`, not a string).
+- **`Defect::Finish` carries the `FinishCause`, not `Box<Unfinished>`.** For: `Unfinished` holds the whole draft (not `PartialEq`, large; `result_large_err`), and a constructor's own draft has nothing for a caller to repair. Against: the draft would help to debug. A `Defect` is our bug and the test suite has no case of it; the cause names the lowest failing entity.
+- **A straight edge is `origin + t (q - p)` over `[0, 1]` from the lower vertex id to the higher.** Same as the testkit generators. Against: a unit-speed line would read lengths off the interval. Kept: the line is exact with no rounding of a direction, and `Line::through` is the type's own form.
+- **Vertices are created on first use, in the order of the role table**, so ids are the same on every run and no table is indexed (the workspace denies indexing). Asserted by a bit-for-bit repeat.
+- **No result contract run.** S8: ends at `finish`.
+
+**Pin tests.**
+- `boxes_far_from_the_origin_build_closed_and_valid`: ported with all 17 rows (sides 2e-4 to 5e3 at 1e3 to 1e12). Each asserts the 6/12/8 counts, two regions and shells, two opposite fins on each edge, front in the outside shell and back in the solid's, every pcurve a `Line2` with no bound, every vertex a corner within 4 ulp of the offset, and the volume and area (from the divergence theorem over the faces, about the frame origin, as there is no mass crate yet) against `solid::block`. The `check_brep` Level2 verdict is replaced by `finish` plus these. Not ported: the pin's second half, the quarter `create_cylindrical_box` rows at 1e3 to 1e8. A partial primitive is `Unsupported` by name until a caller needs it (§4.2). It is a removal on purpose: the rows proved that a cylinder's tangent test did not scale with the corner's position, which belongs to MK2's cylinder at a far frame (one row there).
+- `small_boxes_at_1e4_answer_as_at_the_origin`: ported; cubes of 1e-4 and 5e-5 at 1e4 answer as at the origin, and both answers are a built 6/12/8 body (the pin only said "the same answer", which a shared refusal would also satisfy).
+- `api_primitives`' size refusals: for the box, `invalid_inputs_are_rejected_before_the_kernel`'s box line becomes `a_size_that_is_not_finite_and_above_the_resolution_is_refused_naming_it` (zero, negative, NaN, both infinities, the zone itself and half of it, each on each axis, the variant naming the dimension, the value and the floor, kind `Refused`, name `size`). The sphere, cylinder, cone, pyramid and torus refusals (`a_sphere_radius_not_above_zero_is_refused_naming_the_radius`, `a_torus_whose_tube_crosses_its_axis_is_refused_naming_the_radii`, the horn torus one, `validators_match_upstream`'s cone line) belong to MK2, which owns those constructors. The pyramid is not in the step-4 constructor list (§4.2), so its refusal is not ported.
+- Added, with no pin counterpart: `the_size_floor_is_the_documents_resolution`; `a_rotated_block_matches_the_closed_form_and_its_roles` (a skew frame with unequal sizes: the eight corners, each face's outward normal and plane offset by role, volume, area and centroid against `solid::block(..).place(..)` to 1e-13); `every_pcurve_lies_on_its_edge` (plane of the pcurve at t equals the edge's curve at t, and a use's ends are its vertices); `making_is_deterministic`.
+
+**Measurements** (throwaway timer, not committed; release build, 20,000 repetitions after 2,000 warm-up, a 2 x 3 x 4 block at the world frame, build plus `finish`): **18.3 us per body**, the same on two runs. The build/finish split and the pin's `create_box` were not measured. Added work against the pin: none (the pin stitches and fires a ray; this does neither).
+
+**Deviations from 72.** None in signature (§4.3 gives `block(&Frame, [Length; 3], &Document)`). `MakeError::Defect` carries a cause where §4.2 says "carrying the `Unfinished` report" (above).
+
+**Open questions.** (1) Whether `Defect::Finish` should keep the draft for a debugging build. (2) `Dimension` as an enum of axes grows a variant per constructor's size; a `&'static str` would not grow, but would be untyped, and MK2 will say which it wants once it has seen five constructors' sizes.
+
+**Proposed 04 row.** "`scx-make` (MK1): constructors take a frame and `Length` sizes, are built with their topology known and return `Made<R> { body, faces }` with a typed face record; a size must be finite and above the document's zone or it is `Refused { Size }`; the result's only check is `Draft::finish`, whose refusal is a `Defect`. Change if: a caller needs the draft after a defect, or a constructor needs a size the zone does not bound."

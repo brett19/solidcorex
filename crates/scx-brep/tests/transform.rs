@@ -12,11 +12,13 @@ use std::collections::BTreeMap;
 use scx_brep::{
     Brep, Carry, Changes, Document, EdgeShape, FaceSide, Touch, TransformError, UseGeom, carry,
 };
+use scx_curve::Curve2;
 use scx_num::error::ErrorKind;
 use scx_num::extent3d::Extent3d;
 use scx_num::math::Affine;
+use scx_num::units::{Length, Resolution};
 use scx_num::vector3d::{Point3, Vec3};
-use scx_surface::Surface;
+use scx_surface::pcurve_of;
 use scx_testkit::bodies::{Kind, generate};
 
 fn doc() -> Document {
@@ -232,6 +234,77 @@ fn every_body_moves_under_rigid_scale_and_mirror() {
     }
 }
 
+/// Under a uniform scale the circles, ellipses, hyperbolas, angle lines and angle waves are
+/// mapped through the uv map, not made again (FU1, 63 §6.12 open question 2): each use keeps
+/// its kind, and its points are `pcurve_of`'s for the moved edge to rounding, up to whole
+/// periods.
+#[test]
+fn scaled_pcurves_keep_their_kind_and_match_pcurve_of() {
+    let mut mapped = 0;
+    for kind in Kind::ALL {
+        for seed in [0, 7] {
+            let b = body(kind, seed, 2);
+            for k in [2.5, 0.375] {
+                let (m, _) = moved(&b, &scale(k));
+                for (f, g) in b.faces().zip(m.faces()) {
+                    let domain = g.surface().domain();
+                    for (l, n) in f.loops().zip(g.loops()) {
+                        for (u, w) in l.uses().zip(n.uses()) {
+                            let (
+                                UseGeom::Pcurve { curve: old, .. },
+                                UseGeom::Pcurve { curve, interval },
+                                EdgeShape::Curve {
+                                    curve: c,
+                                    interval: over,
+                                },
+                            ) = (&u.record().geom, &w.record().geom, w.edge().shape())
+                            else {
+                                continue;
+                            };
+                            if !matches!(
+                                old,
+                                Curve2::Line(_) | Curve2::Nurbs(_) | Curve2::Parabola(_)
+                            ) {
+                                mapped += 1;
+                            }
+                            assert_eq!(
+                                core::mem::discriminant(old),
+                                core::mem::discriminant(curve),
+                                "{}: {:?}",
+                                kind.name(),
+                                g.id()
+                            );
+                            let made = pcurve_of(
+                                c,
+                                g.surface(),
+                                *over,
+                                Resolution::new(Length::from_mm(2e-9)).unwrap(),
+                            )
+                            .unwrap();
+                            for i in 0..=8 {
+                                let t = interval.min()
+                                    + (interval.max() - interval.min()) * f64::from(i) / 8.0;
+                                let (p, q) = (curve.point(t), made.point(t));
+                                let off = |d: f64, period: Option<f64>| {
+                                    period.map_or(d, |w| d - w * (d / w).round()).abs()
+                                };
+                                let reach = 1e-12 * (1.0 + p.to_vec().length() + k * 100.0);
+                                assert!(
+                                    off(p.x - q.x, domain.u.period()) <= reach
+                                        && off(p.y - q.y, domain.v.period()) <= reach,
+                                    "{}: {p:?} against {q:?}",
+                                    kind.name()
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert!(mapped > 0);
+}
+
 #[test]
 fn the_identity_writes_nothing() {
     for kind in Kind::ALL {
@@ -250,28 +323,13 @@ fn the_identity_writes_nothing() {
 fn same_records(b: &Brep, c: &Brep) -> bool {
     b.faces().zip(c.faces()).all(|(f, g)| {
         let (f, g) = (f.record(), g.record());
-        same_surface(&f.surface, &g.surface) && f.sides == g.sides && f.loops == g.loops
+        f.surface == g.surface && f.sides == g.sides && f.loops == g.loops
     }) && b.edges().zip(c.edges()).all(|(e, g)| {
         e.shape() == g.shape() && e.accuracy() == g.accuracy() && e.fins().eq(g.fins())
     }) && b
         .vertices()
         .zip(c.vertices())
         .all(|(v, w)| v.point() == w.point() && v.accuracy() == w.accuracy())
-}
-
-/// The same surface, but for a plane's normal: `Plane::transformed` makes it again from the
-/// images of the plane's axes, `A x × A y`, so a plane whose axes are not on the world's
-/// axes keeps its origin and x to the bit and its normal within a few roundings.
-fn same_surface(s: &Surface, t: &Surface) -> bool {
-    match (s, t) {
-        (Surface::Plane(p), Surface::Plane(q)) => {
-            let (f, g) = (p.frame(), q.frame());
-            f.origin() == g.origin()
-                && f.x() == g.x()
-                && (f.z().as_vec() - g.z().as_vec()).length() <= 4.0 * f64::EPSILON
-        }
-        _ => s == t,
-    }
 }
 
 #[test]
@@ -296,18 +354,25 @@ fn a_map_and_its_inverse_return_the_body() {
 
 #[test]
 fn exact_maps_return_the_body_to_the_bit() {
-    // On the canonical bodies (the world frame, round sizes) a mirror in a coordinate
-    // plane through the origin and a scale by a power of two about the origin are exact.
-    let quadruple = Affine::uniform_scaling(Point3::new(0.0, 0.0, 0.0), 4.0).unwrap();
-    let flip = Affine::reflection(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0)).unwrap();
+    // On the canonical bodies (round sizes; the planes of the prism, holed and stack kinds
+    // on no world axis) a mirror in a coordinate plane through the origin, a scale by a power
+    // of two about the origin and a quarter turn about a coordinate axis are exact, and so
+    // is every record after the map and its inverse, planes' normals included (FU1).
+    let o = Point3::new(0.0, 0.0, 0.0);
+    let quadruple = Affine::uniform_scaling(o, 4.0).unwrap();
+    let flip = Affine::reflection(o, Vec3::new(0.0, 1.0, 0.0)).unwrap();
+    let quarter = Affine::from_axes(Vec3::Y, -Vec3::X, Vec3::Z, o);
+    // Up first: a scale down takes a `None` bound to half the zone, which stays `None`, and
+    // the way back up then widens it past the zone (`bounds_scale_with_the_map`).
+    let double_flip =
+        Affine::uniform_scaling(o, 2.0).unwrap() * Affine::reflection(o, Vec3::Z).unwrap();
     for kind in Kind::ALL {
         let b = body(kind, 0, 2);
-        let (m, _) = moved(&b, &flip);
-        let (r, _) = moved(&m, &flip);
-        assert!(same_records(&b, &r), "{}: mirror twice", kind.name());
-        let (m, _) = moved(&b, &quadruple);
-        let (r, _) = moved(&m, &quadruple.inverse().unwrap());
-        assert!(same_records(&b, &r), "{}: scale and back", kind.name());
+        for a in [flip, quadruple, quarter, double_flip] {
+            let (m, _) = moved(&b, &a);
+            let (r, _) = moved(&m, &a.inverse().unwrap());
+            assert!(same_records(&b, &r), "{}: {a:?} and back", kind.name());
+        }
     }
 }
 
@@ -346,6 +411,8 @@ fn a_planar_body_takes_any_regular_map() {
         Kind::Holed,
         Kind::Cavity,
         Kind::Stack,
+        Kind::Checker,
+        Kind::Touching,
         Kind::QuadSheet,
     ] {
         let b = body(kind, 2, 2);
