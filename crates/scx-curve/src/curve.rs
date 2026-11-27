@@ -27,7 +27,7 @@ use scx_num::vector2d::{Point2, Vec2};
 use scx_num::vector3d::{Point3, Vec3};
 use scx_nurbs::{Approach, NurbsCurve};
 
-use crate::angle_line::AngleLine2;
+use crate::angle_line::{AngleLine2, AngleWave2};
 use crate::conic::{Circle, Circle2, Ellipse, Ellipse2};
 use crate::line::{Line, Line2};
 
@@ -60,6 +60,10 @@ pub enum Curve2 {
     /// A line in angle and height in the NURBS-compatible uv, `t` the angle in radians: a
     /// circle's pcurve on a surface of revolution (63 §4.11).
     AngleLine(AngleLine2),
+    /// A plane's section of a cylinder in the NURBS-compatible uv: `u` the arc parameter
+    /// of an angle linear in `t`, `v` a sinusoid in `t`, `t` the ellipse's own angle in
+    /// radians (63 §4.14).
+    AngleWave(AngleWave2),
 }
 
 // The largest arm (an ellipse: a frame of nine `f64`, two semi-axes and a sense) plus the
@@ -85,6 +89,7 @@ macro_rules! dispatch {
             Self::Ellipse($c) => $call,
             Self::Nurbs($n) => $nurbs,
             Self::AngleLine($a) => $angle,
+            Self::AngleWave($a) => $angle,
         }
     };
 }
@@ -272,6 +277,7 @@ impl Curve2 {
                 }
             }
             Self::AngleLine(a) => a.fill(ts, out),
+            Self::AngleWave(a) => a.fill(ts, out),
         }
     }
 }
@@ -287,7 +293,7 @@ macro_rules! from_kind {
 }
 
 from_kind!(Curve: Line => Line, Circle => Circle, Ellipse => Ellipse);
-from_kind!(Curve2: Line2 => Line, Circle2 => Circle, Ellipse2 => Ellipse, AngleLine2 => AngleLine);
+from_kind!(Curve2: Line2 => Line, Circle2 => Circle, Ellipse2 => Ellipse, AngleLine2 => AngleLine, AngleWave2 => AngleWave);
 
 macro_rules! from_nurbs {
     ($enum:ident, $d:literal) => {
@@ -396,6 +402,21 @@ pub(crate) mod tests {
             if let Some(f) = Frame2::new(p, v) {
                 out.push(Circle2::new(f, a, sense(i)).unwrap().into());
                 out.push(Ellipse2::new(f, a, b, sense(i)).unwrap().into());
+            }
+        }
+        out
+    }
+
+    /// Angle waves on two turns, each sense.
+    pub(crate) fn angle_waves() -> Vec<Curve2> {
+        let mut out = Vec::new();
+        for arcs in [Arcs::turn(1.0), Arcs::turn(40.0)] {
+            for sense in [Sense::Forward, Sense::Reversed] {
+                out.push(
+                    AngleWave2::new(arcs, -0.7, sense, 2.0, 0.5, -1.25)
+                        .unwrap()
+                        .into(),
+                );
             }
         }
         out
@@ -566,7 +587,11 @@ pub(crate) mod tests {
     fn plane_dispatch_has_the_bits_of_the_kind() {
         let mut rng = Rng::new(23);
         let mut n = 0;
-        for c in curves2(22).into_iter().chain(angle_lines()) {
+        for c in curves2(22)
+            .into_iter()
+            .chain(angle_lines())
+            .chain(angle_waves())
+        {
             for t in params(&mut rng) {
                 let w = Ivl::new(t, t + 0.25);
                 for side in SIDES {
@@ -586,11 +611,9 @@ pub(crate) mod tests {
                             assert_eq!(ivls(got), ivls(exp));
                         }};
                     }
-                    match &c {
-                        Curve2::Line(k) => check!(k),
-                        Curve2::Circle(k) => check!(k),
-                        Curve2::Ellipse(k) => check!(k),
-                        Curve2::AngleLine(a) => {
+                    macro_rules! angle_check {
+                        ($a:expr) => {{
+                            let a = $a;
                             assert_eq!(c.domain(), a.domain());
                             assert_eq!(bits2(c.point(t)), bits2(a.point(t)), "{c:?} {t}");
                             assert_eq!(jbits2(&c.jet::<4>(t, side)), jbits2(&a.jet::<4>(t, side)));
@@ -605,7 +628,14 @@ pub(crate) mod tests {
                             let mut out = [Point2::ORIGIN; 1];
                             c.eval_many(&[t], &mut out);
                             assert_eq!(bits2(out[0]), bits2(a.point(t)));
-                        }
+                        }};
+                    }
+                    match &c {
+                        Curve2::Line(k) => check!(k),
+                        Curve2::Circle(k) => check!(k),
+                        Curve2::Ellipse(k) => check!(k),
+                        Curve2::AngleLine(a) => angle_check!(a),
+                        Curve2::AngleWave(a) => angle_check!(a),
                         Curve2::Nurbs(n) => {
                             let nan = [[f64::NAN; 2]; 5];
                             let p = n.point(t, Approach::Above).unwrap_or(nan[0]);

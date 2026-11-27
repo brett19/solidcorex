@@ -1,6 +1,6 @@
 // Written for solidcorex. Apache-2.0.
 //! Where a line, circle or ellipse meets a plane, cylinder, cone, sphere or torus (research
-//! 63 §4.2, SU6; §4.13 has the decisions).
+//! 63 §4.2, SU6; §4.13 and §4.14 have the decisions).
 //!
 //! **The equation.** The curve is taken into the surface's axes (its frame, z times its
 //! sense) as a polynomial in a parameter `u` on `[0, 1]`, in Bernstein form and homogeneous:
@@ -45,8 +45,12 @@
 //!
 //! **The uv** is the foot of the hit's point on the surface in D13's parameters, with no
 //! transcendental function (the arcs' `of_direction`), then wrapped by the surface's periods
-//! into `se`; a point whose uv is outside `se` is dropped. An overlap is not clipped by `se`
-//! (§4.13).
+//! into `se`; a point whose uv is outside `se` is dropped. An overlap is clipped by `se`
+//! into the pieces whose uv is inside it (§4.14): the cuts are where the curve meets the
+//! planes, in the surface's axes, that hold `se`'s sides (a side of constant `u` is a
+//! plane through the axis; one of constant `v` a plane across it, or the plane's own
+//! lines), each piece is kept when its middle's uv is in `se`, and a touch of no length is
+//! dropped.
 
 use core::f64::consts::{PI, TAU};
 
@@ -90,9 +94,12 @@ pub enum CurveSurfaceHit {
         /// Crossing or tangent.
         contact: Contact,
     },
-    /// The curve lies on the surface, within the tolerance, over this extent: the whole
-    /// curve extent (an analytic curve on an analytic surface is on it everywhere or at
-    /// isolated points).
+    /// The curve lies on the surface, within the tolerance, over this extent: a piece of
+    /// the curve extent whose uv lies in the surface's extent (an analytic curve on an
+    /// analytic surface is on it everywhere or at isolated points, so the pieces are where
+    /// the curve leaves and re-enters `se`). The whole extent when no part leaves `se`;
+    /// on a closed curve a piece across the turn's start runs past `ce.min() + 2 pi`
+    /// (63 §4.14).
     Overlap {
         /// The curve parameters.
         t: Extent1d,
@@ -120,6 +127,8 @@ impl CurveSurfaceHit {
 ///
 /// # Errors
 ///
+/// - [`SurfaceError::BadTolerance`] (Refused) when `tol` is not a positive finite length,
+///   checked first.
 /// - [`SurfaceError::NurbsIntersection`] (Unsupported) when the curve or the surface is a
 ///   NURBS one: not built yet, never an empty answer.
 /// - [`SurfaceError::Exhausted`] when `budget` runs out, [`SurfaceError::Stopped`] when
@@ -133,6 +142,10 @@ pub fn intersect_curve(
     budget: &mut Budget,
     stop: &Stop,
 ) -> Result<Vec<CurveSurfaceHit>, SurfaceError> {
+    // NaN refuses too (07 §6 rule 5).
+    if !(tol.mm().is_finite() && tol.mm() > 0.0) {
+        return Err(SurfaceError::BadTolerance { value: tol.mm() });
+    }
     let Some(target) = Target::of(s) else {
         return Err(SurfaceError::NurbsIntersection);
     };
@@ -176,7 +189,11 @@ pub fn intersect_curve(
         a.kind == b.kind && (b.t - a.t).abs() <= 8.0 * f64::EPSILON * a.t.abs().max(1.0)
     });
     if events.iter().all(|e| e.near) {
-        return Ok(vec![CurveSurfaceHit::Overlap { t: path.extent }]);
+        return Ok(path
+            .clip(c, &target, se)
+            .into_iter()
+            .map(|t| CurveSurfaceHit::Overlap { t })
+            .collect());
     }
     // A closed curve's events are a cycle: start after a far one, so no run is cut in two.
     if path.closed
@@ -453,6 +470,91 @@ impl Path {
         t
     }
 
+    /// The pieces of an overlap whose uv lies in `se`, sorted by `t` (63 §4.14).
+    ///
+    /// The uv can leave `se` only where it meets one of `se`'s sides. Each side is a set
+    /// the curve's point meets on a plane in the surface's axes: a plane's `x` or `y`; a
+    /// height `z` for a cylinder's or cone's `v`, a sphere's latitude (`r sin`) or a torus's
+    /// tube angle (the minor radius times its sine); and for an angle `u` the plane through
+    /// the axis at that azimuth (both its halves). On a plane, the curve's signed distance
+    /// is affine in a line's `t` and `alpha cos t + beta sin t + gamma` on a conic, so the
+    /// meeting parameters are closed forms. Between neighbours the uv is wholly in or out
+    /// of `se`, which the midpoint decides; neighbouring pieces inside merge, and on a
+    /// closed curve the pieces at the turn's two ends join across it. A piece of zero
+    /// length (a touch of a side from outside) is dropped.
+    fn clip(&self, c: &Curve, target: &Target, se: &Extent2d) -> Vec<Extent1d> {
+        let (lo, hi) = (self.extent.min(), self.extent.max());
+        let end = if self.closed { lo + TAU } else { hi };
+        let mut cuts: Vec<f64> = Vec::with_capacity(18);
+        cuts.push(lo);
+        cuts.push(end);
+        for (normal, offset) in target.sides(se) {
+            for t in self.meets(target, normal, offset).into_iter().flatten() {
+                if let Some(t) = self.place(t).filter(|t| *t > lo && *t < end) {
+                    cuts.push(t);
+                }
+            }
+        }
+        cuts.sort_by(f64::total_cmp);
+        cuts.dedup();
+        let mut pieces: Vec<(f64, f64)> = Vec::new();
+        for w in cuts.windows(2) {
+            let &[a, b] = w else { continue };
+            if target.uv_in(c.point(0.5 * (a + b)), se).is_none() {
+                continue;
+            }
+            match pieces.last_mut() {
+                Some(last) if last.1 == a => last.1 = b,
+                _ => pieces.push((a, b)),
+            }
+        }
+        if pieces.as_slice() == [(lo, end)] {
+            return vec![self.extent];
+        }
+        if self.closed
+            && pieces.len() > 1
+            && pieces.first().is_some_and(|p| p.0 == lo)
+            && pieces.last().is_some_and(|p| p.1 == end)
+            && let Some(first) = pieces.first().copied()
+        {
+            pieces.remove(0);
+            if let Some(last) = pieces.last_mut() {
+                last.1 = first.1 + TAU;
+            }
+        }
+        pieces
+            .into_iter()
+            .filter_map(|(a, b)| Extent1d::new(a, b))
+            .collect()
+    }
+
+    /// The parameters where the curve meets the plane `normal . l = offset` in the
+    /// target's axes, unplaced: a line's one (none when parallel), a conic's two (none
+    /// when it misses or lies in a parallel plane).
+    fn meets(&self, target: &Target, normal: [f64; 3], offset: f64) -> [Option<f64>; 2] {
+        let ax = &target.axes;
+        let dot = |l: [f64; 3]| normal[0] * l[0] + normal[1] * l[1] + normal[2] * l[2];
+        let along = |v: Vec3| dot([v.dot(ax.x), v.dot(ax.y), v.dot(ax.z)]);
+        match self.kind {
+            PathKind::Line { origin, direction } => {
+                let (rate, at0) = (along(direction), dot(tuple(ax.local(origin))) - offset);
+                let t = -at0 / rate;
+                [t.is_finite().then_some(t), None]
+            }
+            PathKind::Conic { centre, a, b } => {
+                let (alpha, beta) = (along(a), along(b));
+                let gamma = dot(tuple(ax.local(centre))) - offset;
+                let amp = fmath::hypot(alpha, beta);
+                let cos = -gamma / amp;
+                if !(amp > 0.0 && cos.abs() <= 1.0) {
+                    return [None, None];
+                }
+                let (psi, half) = (fmath::atan2(beta, alpha), fmath::acos(cos));
+                [Some(psi - half), Some(psi + half)]
+            }
+        }
+    }
+
     /// `t` placed in the extent (a conic's angle wrapped to the turn from `ce.min()`), or
     /// `None` outside it.
     fn place(&self, t: f64) -> Option<f64> {
@@ -618,6 +720,54 @@ impl Target {
             Shape::Cone { r, k } => r + k * z >= 0.0,
             _ => true,
         }
+    }
+
+    /// Planes in the axes, `normal . l = offset`, that hold every point on the surface
+    /// where its uv meets a side of `se` (see [`Path::clip`]); a side at an infinite bound,
+    /// or an angle range of a whole period or more, has none.
+    fn sides(&self, se: &Extent2d) -> Vec<([f64; 3], f64)> {
+        const Z: [f64; 3] = [0.0, 0.0, 1.0];
+        let (lo, hi) = (se.min(), se.max());
+        let mut out = Vec::with_capacity(4);
+        // An angle direction's sides: the planes through the axis at their azimuths.
+        let angles = |out: &mut Vec<_>, arcs: Arcs, period: f64| {
+            if hi.x - lo.x < period {
+                for u in [lo.x, hi.x] {
+                    let phi = arcs.angle(u);
+                    out.push(([-fmath::sin(phi), fmath::cos(phi), 0.0], 0.0));
+                }
+            }
+        };
+        match self.shape {
+            Shape::Plane => {
+                out.extend([([1.0, 0.0, 0.0], lo.x), ([1.0, 0.0, 0.0], hi.x)]);
+                out.extend([([0.0, 1.0, 0.0], lo.y), ([0.0, 1.0, 0.0], hi.y)]);
+            }
+            Shape::Cylinder { r, arcs } => {
+                angles(&mut out, arcs, 2.0 * PI * r);
+                out.extend([(Z, lo.y), (Z, hi.y)]);
+            }
+            Shape::Cone { .. } => {
+                angles(&mut out, TURN, 1.0);
+                out.extend([(Z, lo.y), (Z, hi.y)]);
+            }
+            Shape::Sphere { r } => {
+                angles(&mut out, TURN, 1.0);
+                for v in [lo.y, hi.y] {
+                    out.push((Z, r * fmath::sin(HALF.angle(v))));
+                }
+            }
+            Shape::Torus { small, .. } => {
+                angles(&mut out, TURN, 1.0);
+                if hi.y - lo.y < 1.0 {
+                    for v in [lo.y, hi.y] {
+                        out.push((Z, small * fmath::sin(TURN.angle(v))));
+                    }
+                }
+            }
+        }
+        out.retain(|(_, offset)| offset.is_finite());
+        out
     }
 
     /// The foot of `p` in D13's uv, wrapped by the periods into `se`, or `None` outside.
