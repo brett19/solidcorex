@@ -160,9 +160,21 @@ fn aimed(rng: &mut SplitMix64, k: Kind) -> (&'static str, [f64; 3], [f64; 3]) {
     let pick = rng.below(8);
     let pi2 = core::f64::consts::FRAC_PI_2;
     match (k, pick) {
-        (Kind::Plane, 0) => ("parallel", [0.0, 0.0, rng.uniform(-1.0, 1.0)], [0.0, 0.0, 1.0]),
-        (Kind::Plane, 1) => ("coincident", [rng.uniform(-3.0, 3.0), 0.0, 0.0], [0.0, 0.0, 1.0]),
-        (Kind::Plane, 2) => ("square", [rng.uniform(-3.0, 3.0), 0.0, 0.0], tilted(pi2, turn)),
+        (Kind::Plane, 0) => (
+            "parallel",
+            [0.0, 0.0, rng.uniform(-1.0, 1.0)],
+            [0.0, 0.0, 1.0],
+        ),
+        (Kind::Plane, 1) => (
+            "coincident",
+            [rng.uniform(-3.0, 3.0), 0.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ),
+        (Kind::Plane, 2) => (
+            "square",
+            [rng.uniform(-3.0, 3.0), 0.0, 0.0],
+            tilted(pi2, turn),
+        ),
         (Kind::Cylinder { .. }, 0 | 1) => (
             "across",
             [0.0, 0.0, rng.uniform(-1.0, HEIGHT + 1.0)],
@@ -190,7 +202,11 @@ fn aimed(rng: &mut SplitMix64, k: Kind) -> (&'static str, [f64; 3], [f64; 3]) {
         (Kind::Cone { r, a, .. }, 2) => {
             // The apex, at `z = -r / tan a`.
             let apex = -r / scx_num::fmath::tan(a);
-            ("apex", [0.0, 0.0, apex], tilted(rng.uniform(0.0, pi2), turn))
+            (
+                "apex",
+                [0.0, 0.0, apex],
+                tilted(rng.uniform(0.0, pi2), turn),
+            )
         }
         (Kind::Cone { r, a, h }, 3) => {
             // Square to a generator's direction rotated into the plane (parallel to it):
@@ -323,8 +339,13 @@ pub mod x {
                 Surface::Cylinder(Cylinder::new(f, mm(r), s).unwrap()),
                 e(TAU * r, HEIGHT),
             ),
-            Kind::Cone { r, a, h } => (Surface::Cone(Cone::new(f, mm(r), a, s).unwrap()), e(1.0, h)),
-            Kind::Sphere { r } => (Surface::Sphere(Sphere::new(f, mm(r), s).unwrap()), e(1.0, 1.0)),
+            Kind::Cone { r, a, h } => {
+                (Surface::Cone(Cone::new(f, mm(r), a, s).unwrap()), e(1.0, h))
+            }
+            Kind::Sphere { r } => (
+                Surface::Sphere(Sphere::new(f, mm(r), s).unwrap()),
+                e(1.0, 1.0),
+            ),
             Kind::Torus { big, small } => (
                 Surface::Torus(Torus::new(f, mm(big), mm(small), s).unwrap()),
                 e(1.0, 1.0),
@@ -623,9 +644,7 @@ pub mod truth {
         let on_surface = match c.kind {
             Kind::Plane => within(lx, -10.0, 10.0) && within(ly, -10.0, 10.0),
             Kind::Cylinder { .. } => within(z, 0.0, HEIGHT),
-            Kind::Cone { r, a, h } => {
-                within(z, 0.0, h) && r + scx_num::fmath::tan(a) * z >= -tol
-            }
+            Kind::Cone { r, a, h } => within(z, 0.0, h) && r + scx_num::fmath::tan(a) * z >= -tol,
             Kind::Sphere { .. } | Kind::Torus { .. } => true,
         };
         on_surface && within(u, -c.half, c.half) && within(w, -c.half, c.half)
@@ -715,8 +734,7 @@ pub mod truth {
     fn coincident(c: &Case) -> bool {
         let (a, b) = (c.surface_frame(), c.plane_frame());
         let corners = |f: &Frame, h: f64| {
-            [(-h, -h), (h, -h), (h, h), (-h, h)]
-                .map(|(u, v)| f.origin() + *f.x() * u + *f.y() * v)
+            [(-h, -h), (h, -h), (h, h), (-h, h)].map(|(u, v)| f.origin() + *f.x() * u + *f.y() * v)
         };
         let near = |f: &Frame, q: Point3| local(f, q)[2].abs() <= SNAP;
         let within = |f: &Frame, h: f64, q: Point3| {
@@ -738,7 +756,8 @@ pub mod truth {
                 return match &truth {
                     Err(ssi::Error::NoClosedForm | ssi::Error::Undecided) => Ok(()),
                     Ok(Section::Curves(t))
-                        if t.iter().any(|q| matches!(q.curve, ssi::Curve::Hyperbola { .. })) =>
+                        if t.iter()
+                            .any(|q| matches!(q.curve, ssi::Curve::Hyperbola { .. })) =>
                     {
                         Ok(())
                     }
@@ -753,9 +772,7 @@ pub mod truth {
                 };
             }
             Closed::Solved(Intersection::Empty) => (&[][..], &[][..]),
-            Closed::Solved(Intersection::Pieces { curves, points }) => {
-                (&curves[..], &points[..])
-            }
+            Closed::Solved(Intersection::Pieces { curves, points }) => (&curves[..], &points[..]),
             _ => return Err("an unknown answer".to_owned()),
         };
         let tpieces = match &truth {

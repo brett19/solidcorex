@@ -348,7 +348,13 @@ fn owed(s: &Side, pl: &Side, truth: &[ssi::Piece]) -> Vec<Point3> {
             }
             // A branch runs both ways from its vertex.
             ssi::Curve::Hyperbola { .. } => (0..=4000)
-                .map(|i| tpoint(piece.curve.point(Dd::new(-10.0 + 20.0 * f64::from(i) / 4000.0))))
+                .map(|i| {
+                    tpoint(
+                        piece
+                            .curve
+                            .point(Dd::new(-10.0 + 20.0 * f64::from(i) / 4000.0)),
+                    )
+                })
                 .collect(),
             _ => (0..720)
                 .map(|i| tpoint(piece.curve.point(Dd::new(TAU * f64::from(i) / 720.0))))

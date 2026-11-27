@@ -13,8 +13,8 @@
 //!
 //! # Uv curves
 //!
-//! An answer carries the 3D curves only. The uv curve of a section curve on either surface
-//! is `scx_surface`'s `pcurve_of(curve, surface)` (the exact-pcurve ruling of 11-27: the
+//! An answer carries the 3D curves only. The uv curve of a section piece on either surface
+//! is `scx_surface::pcurve_of(&piece.curve, surface, piece.span, tol)` (63 D10, §4.11: the
 //! curve's own parameter, an angle-direction uv kind where the surface's uv is an angle),
 //! called by whoever needs it; nothing here builds one.
 

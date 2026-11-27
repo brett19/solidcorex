@@ -2798,6 +2798,156 @@ None of these are in the testkit (59). All are closed forms, so they are cheap.
 | SS3 | sphere-sphere, coaxial pairs | SS1, SU1; T5 |
 | SS4 | coincidence and tangency classification at the tolerance | SS2, SS3 |
 
+### 5.6 SS1/SS5 as built (11-27)
+
+Decided by analysis and an adversarial pass. Proposed for review; not yet ruled.
+
+```rust
+// scx-ssi::analytic
+#[non_exhaustive] pub enum Intersection {
+    Pieces { curves: Vec<IntersectionCurve>, points: Vec<IntersectionPoint> },  // at least one
+    Coincident { on_a: Extent2d, on_b: Extent2d },
+    Empty,                                                                       // final
+}
+pub struct IntersectionCurve { pub curve: Curve, pub span: Extent1d, pub contact: Contact }
+pub struct IntersectionPoint { pub point: Point3, pub contact: Contact }
+pub enum Contact { Transversal, Tangent }
+pub fn intersect(a: &Surface, ae: &Extent2d, b: &Surface, be: &Extent2d,
+                 acc: [Accuracy; 2], res: Resolution) -> Closed<Intersection>;
+pub fn section_by_plane(s: &Surface, se: &Extent2d, plane: &Plane, pe: &Extent2d,
+                        tol: Length) -> Closed<Intersection>;
+// scx-surface: Closed<T> { Solved(T), General } moved here from its first user, shared
+```
+
+| Surface | Solved | `General` |
+|---|---|---|
+| plane | a line, coincident, or empty | never |
+| cylinder | an ellipse, a circle, two lines or a tangent line, or empty | an ellipse so long that `2^-50` of its semi-axis passes the tolerance |
+| cone | an ellipse, a circle, two generators or a tangent generator, the apex, or empty | a parabola or hyperbola; an ellipse that long |
+| sphere | a circle, a touch point, or empty | never |
+| torus | one or two circles across the axis, two meridian circles along it, or empty | every other plane (a spiric section) |
+
+**Deviations from §5.2 and §5.3, with the case against and the case for each.**
+
+- **One answer type, `Closed<Intersection>`, for both entry points.** §5.3 has a separate
+  `Section` with warnings.
+  - Against: a plane section has the plane's side to name, and 5.3 kept them apart.
+  - For: a section *is* an intersection with a plane. One type means `intersect` hands
+    `section_by_plane`'s answer through unchanged, and the caller matches one enum. The pin's
+    warnings say that the answer is partial or near a limit. Here those cases are
+    `General`, so no warning is left to carry.
+- **No pcurve fields.** §5.3 has `on_a`/`on_b: Option<Curve2>`.
+  - Against: callers building edges need them, and 5.2 said SS5 needs `scx-nurbs`.
+  - For: D10 and §4.11 (ruled 11-27) put exact pcurves in `scx_surface::pcurve_of`, at the
+    curve's own parameter. A piece carries `curve` and `span`, which is exactly what
+    `pcurve_of(&piece.curve, surface, piece.span, tol)` takes. A unit test calls it on both sides of
+    a square cylinder cut. Storing `Option<Curve2>` here would duplicate that function and
+    compute pcurves for callers that never read them. An oblique cylinder section's pcurve is
+    `NoClosedForm` in `pcurve_of` today (WR-680's rational form is not built), and that gap
+    belongs to `pcurve_of`, not to this crate.
+- **`Pieces { curves, points }`, not `Curves` and `Touch`.**
+  - Against: 5.3 kept touch points as their own variant.
+  - For: one section can have both. A cylinder cut can give a line and a separate point where
+    the other line leaves the extent within the tolerance. Two variants would force one of
+    them to be lost or a third variant. `Empty` stays its own variant, never an empty `Pieces`.
+- **Curves in construction order, not sorted.**
+  - Against: a sort makes `(a, b)` and `(b, a)` compare equal piece for piece.
+  - For: the construction is deterministic (the same input gives the same bits), and
+    reversing the order reverses the direction (`n_a x n_b`), so the pieces would not match
+    one-to-one anyway. A sort key over floating point needs a tie rule, and no caller needs one.
+    It can be added when a caller needs it.
+- **`acc: [Accuracy; 2]` and `res: Resolution` on `intersect`; `section_by_plane` takes one
+  `Length`.** This follows §5.2's coincidence row (`max(res, acc1, acc2)`, via
+  `scx_num::units::coincident`). `section_by_plane` keeps the single plane-accuracy length that
+  5.2 names.
+- **`use_surface_edges` and `ang_tol` dropped** (§5.2 said so). Neither changes any pin answer
+  on these kinds.
+- **The cone is worked from its apex.** The cone is `rho = k z'` and the plane is
+  `n . p' = delta`, so every size is `delta` times a factor of the plane's lean.
+  - Against: the pin works from the frame origin.
+  - For: there is no cancellation. A plane through the apex gives the apex or the generators,
+    not a rounding-sized ellipse.
+- **Empty from exact bounds, never from a search (04, research 68).** Two bounds come in
+  beyond the pin's. Each is a support function, so it is exact and final:
+  - **The cylinder or cone between its two rims.** Each generator is a segment between the rims,
+    so the part lies in their convex hull. A rim at height `v` and radius `rho` spans
+    `nz v - d +- |rho| s` from the plane. Both rims off one side by more than `tol` means
+    `Empty`.
+  - **The torus.** If the plane is farther from the centre than `s * major + minor` (the core
+    circle's support plus the tube's ball), the answer is `Empty`.
+  - Against: the pin answers `General` there, and a bound that is too tight would lose a curve.
+  - For: both are exact supports. The difftest checks every such case on a 65x65 grid of the
+    surface (all points off the plane by more than the snap), and `plane_sections` checks them
+    against the truth's points. Without them, a hyperbola or spiric case that misses the extent
+    would go to the marcher for nothing.
+- **No seam splitting.** A conic arc that crosses the turn's start (`u = 0`) is one piece
+  whose span passes `2 pi`.
+  - Against: the pin cuts it in two, and a face loop built from the pieces may want the seam
+    as a vertex.
+  - For: the intersection is one connected curve. A seam is a property of a face's uv, and
+    whoever builds edges splits there if the face needs it, via `pcurve_of`'s period window
+    (07 §3 rule 5). The difftest's truth check rejects two pieces that meet end to end.
+- **Primitives keep their known topology (04).** A near-square cylinder cut is a circle when
+  the true ellipse lies within the tolerance of it along the surface. A near-axial plane gives
+  lines when they are within the tolerance over the extent's height. Two lines or circles
+  within the tolerance of each other are one tangent curve.
+- **The difftest compares on forward sense only.** Sense changes only the direction
+  (`plane_sections` covers both senses against the truth). The pin's reversed-sense frames
+  would add a mapping to the harness and no new geometry.
+
+**Validation.** `plane_sections` (6 tests) checks every answer against the exact sections
+(testkit T5). Pieces must lie on both surfaces and inside both extents, with the truth's
+kinds, and every truth point inside the extents must be covered. Crossing curves must run
+along `n_s x n_plane`. It covers both senses: fixed cases per kind plus 400 random sections.
+There are 5 unit tests: order and direction, coincident extents, other pairs `General`,
+the span merge across the turn's start, and the `pcurve_of` seam.
+
+The difftest `t_ssi::ssi_section_by_plane` compares against the pin's `intersect_with_plane`.
+It uses 1,000 inputs aimed at the cases above. Results: 378 exact, 532 within tolerance,
+90 pin defects, 0 mismatches, 0 nondeterministic.
+
+Each pin defect is judged against T5 by `t_ssi::truth::check`, in these classes (pool counts):
+
+| Class | Count | Pin answer | scx answer |
+|---|---:|---|---|
+| Coincident planes | 23 | general | coincident |
+| Cone cut through the apex, steeper than the generators | 11 | general | the two generator lines |
+| Cone apex outside the extent | 15 | a tangent point off the extent | empty |
+| Cylinder seam | 9 | splits the arc at `u = 0` | one piece |
+| Cone seam | 10 | splits the arc at `u = 0` | one piece |
+| Bounded cylinder or cone missed | 8 | general | empty |
+| Torus missed | 15 | general | empty |
+
+**Timings.** These were measured side-channel with a throwaway timer, not committed. The
+timer ran over the difftest pool on prebuilt surfaces, 200 repetitions, per call. Each
+figure is scx against the pin:
+
+| Kind | scx | pin |
+|---|---:|---:|
+| plane | 0.55 us | 1.71 us |
+| cylinder | 1.81 us | 7.72 us |
+| cone | 0.68 us | 2.57 us |
+| sphere | 0.63 us | 5.47 us |
+| torus | 0.69 us | 32.6 us |
+
+The torus gap is mostly the pin's general fallback on the spiric cases. scx gives up on
+those cases at once and the caller pays later; the comparison is on what each call does.
+
+**Other kernels (research 66).** §8.2 records that OCCT's IntAna does analytic quadric pairs.
+Its docs only were read, and no code. The techniques adopted here are ours:
+
+- exact support and hull rejects before any conic is built;
+- one linear side per extent edge, so clipping is the roots of `a cos t + b sin t + c`.
+
+Both are exact and deterministic. Nothing was taken that depends on a search or a cache.
+
+**Open.**
+
+- WR-680's rational pcurve of an oblique cylinder section, in `pcurve_of`.
+- Parabola and hyperbola kinds in `scx-curve`. SS5 answers `General` for them until those
+  kinds exist.
+- SS2 to SS4.
+
 ## 6. `scx-brep`
 
 The pin's sources are `topology/` (without `api_files`, `part_file` and `database_io`), `heal/gap`,

@@ -10,7 +10,7 @@ use scx_num::extent2d::Extent2d;
 use scx_num::frame::{Frame, Sense};
 use scx_num::units::{Accuracy, Length, Resolution};
 use scx_num::vector3d::{Point3, Vec3};
-use scx_surface::{Closed, Cylinder, Plane, Sphere, Surface};
+use scx_surface::{Closed, Cylinder, Plane, Sphere, Surface, pcurve_of};
 
 use super::{Intersection, intersect};
 
@@ -158,4 +158,24 @@ fn span_merges_across_turn_start() {
     );
     assert!(span.min() >= 0.0 && span.min() < TAU);
     assert!(x[0].curve.point(0.5 * (span.min() + span.max())).x > 0.99);
+}
+
+/// The uv seam: a piece's curve over its span has its pcurve from `pcurve_of` on both
+/// surfaces (a square cut of a cylinder is a parallel).
+#[test]
+fn pieces_take_their_pcurves() {
+    let (c, ce) = cylinder();
+    let p = Surface::Plane(Plane::new(frame(
+        [0.0, 0.0, 0.5],
+        [0.0, 0.0, 1.0],
+        [1.0, 0.0, 0.0],
+    )));
+    let pe = square(2.0);
+    let r = intersect(&c, &ce, &p, &pe, acc(), res());
+    let x = curves(&r);
+    assert_eq!(x.len(), 1, "{x:?}");
+    let tol = Length::from_mm(1e-9);
+    for s in [&c, &p] {
+        assert!(pcurve_of(&x[0].curve, s, x[0].span, tol).is_ok());
+    }
 }
