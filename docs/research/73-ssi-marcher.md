@@ -866,6 +866,119 @@ The coordinator accepted SM3 as built.
 - SM9 also narrows `SsiPair`'s cause to a refusal-only type, so that `Budget` and `Stopped`
   cannot be represented there (§14.2 items 1 and 8).
 
+## 15. SM4 as built (11-27)
+
+SM4 cuts each surface into pieces with certified boxes, pairs them with `BoxTree::pairs`, and
+drops a pair only by proof. `general::intersect` now answers a proved-empty `Traced` for pairs
+that are truly apart, and refuses the rest as `Unresolved` at the first piece pair it could not
+clear. The Bézier-level proofs that need implicit forms (field sign) wait for SM6a.
+
+### 15.1 What exists
+
+- `general::Candidates` (`general/pieces.rs`), with `Piece { uv, bbox }` and `PiecePair`:
+  - `Candidates::new(a, ae, b, be, acc, res, budget, stop)` builds each surface's cells (the
+    knot-span rectangles of `Surface::to_nurbs`, u-major; the whole extent as one cell where the
+    form cannot be built), each with `Surface::box_over`. It pairs them through `BoxTree` and
+    keeps the pairs the slab proof does not drop. `pairs()` is the survivors, in ascending piece
+    order, for SM5 and SM6a.
+  - `apart(&pair)` is the proof (boxes, then slabs). `halve(&pair, budget, stop)` splits one
+    piece in two and returns the child pairs that survive; `settle(pair, front, ..)` halves
+    round by round until nothing survives (`None`: proved) or it must give up (`Some(pair)`).
+  - A pair at the resolution, or whose pieces cannot be split in `f64`, is `Unresolved` where it
+    lies. That ends every halving, so no fixed depth exists.
+- `Surface::range_along(dir, uv) -> Option<Ivl>` (`scx-surface`, `enclose.rs`): a certified
+  range of `dir . S` over a box. Analytic kinds use the mean-value form with the partials
+  enclosed by their own formulas in a ring of value-with-partials (`Grad`, intervals), met with
+  the natural range; NURBS uses `partials_over_piece` per knot span. A flat piece seen along its
+  normal has a width second order in its size.
+- Proofs and their rounding:
+  1. Boxes. `BoxTree` tests `a.min > b.max + t`, so it is given `t = tol + 4 eps (reach + tol)`
+     (rounded up, `reach` the largest coordinate of any box): that exceeds the rounding of the
+     sum, so a dropped pair is apart by more than `tol` in the reals. Child pairs use interval
+     subtraction.
+  2. Slabs. Along the unit normal `n` of either piece at its middle, the two ranges are apart
+     by more than `tol |n|`, with `|n|` an interval upper bound. No `acos`, no pad.
+- `Traced::coincident: Vec<analytic::Overlap>` (see 15.2 item 3).
+- The Cargo graph gained `scx-algo` and `scx-nurbs-surface` for `scx-ssi`.
+
+### 15.2 Decisions, for and against
+
+1. **Halving is a method for SM5, with a width limit in `intersect`.**
+   - For: with no loop-free test yet, a pair that the surfaces cross can never be proved apart
+     and would be halved down to the resolution. `intersect` therefore gives a piece pair up
+     when the surviving front of its descendants holds more than `FRONT = 24` pairs. A
+     near-miss keeps a narrow front at the nearest points. A crossing widens it every round.
+   - Against: `FRONT` is a fixed number, though a policy of effort and not of proof (it never
+     drops a pair; only the refusal depends on it). SM5's loop-free test replaces it as the
+     stop. 8, 12 and 24 were measured (15.4); 24 is what proves two unit spheres `2^-10` and
+     `2^-20` apart.
+2. **Field-sign proof deferred to SM6a** (§4.3 item 3). It needs the implicit forms and the
+   rational Bernstein `g` that SM6a builds. For a plane side the slab is that proof.
+3. **Coincident pieces.** `Traced` gains `coincident: Vec<analytic::Overlap>`, the closed
+   forms' own type (convex polygons in both surfaces' uv, vertex for vertex).
+   - For: SM9 reads one shape for `Closed::Coincident` and the general method.
+   - Against: a NURBS-on-NURBS overlap may not be a convex polygon. Held: it is then split into
+     convex pieces by whoever proves it.
+   - Nothing fills it in SM4. The proof is an all-zero field (SM6a), and a slab alone cannot tell
+     a coincident patch from one that only lies in the same plane beside it.
+4. **Analytic ranges are not taken from the rational NURBS image.** `to_nurbs` rounds its
+   control data (the quarter arc's middle weight is `cos(pi/4)`), so a hull range from it is
+   not certified. Ranges use each kind's own formula instead.
+   - Against: the kinds' interval boxes are loose (a unit sphere's whole box is 20 percent
+     wide), so near-touching analytic pairs cost many halvings (15.4).
+5. **Region of a surviving pair.** The overlap of its boxes, or their union when rounding leaves
+   none (the pair survived by the coincidence alone). `Unresolved` names the middle of that
+   region.
+6. **Halving rule.** The piece to split comes from the axis along which the ranges overlap
+   least (the wider piece), and its split side from the narrower range along that axis (box
+   length without an axis). A split by box length alone stalled on cylinders (it halved their
+   height forever along the tangent line).
+
+### 15.3 Tests
+
+`general::tests::apart` (9 tests): separated pairs (sphere over and under a plane, two
+spheres, a cylinder beside a plane, spheres also as NURBS) at gaps `4` to `2^-20` are proved
+empty where `testkit` says the whole surfaces do not meet; the SM0 truths (`sphere_sphere`,
+`cylinders_parallel`) decide spheres and parallel cylinders through and past the touch;
+gaps at, inside and past the coincidence, and crossings, are never dropped; a refusal at a touch
+names it; halving proves what the cells cannot; a pair dropped by `apart` is far apart by
+sampling; the same bits every run, swapped, and under the exact budget (one unit less is
+`Budget`); a set stop; the tolerance is the coincidence. `scx-surface` has two tests of
+`range_along`. In `general::tests`, three assertions changed (the refusal names a piece pair,
+not the whole overlap, and spends more than one unit); none was removed.
+
+### 15.4 Measured (release, throwaway harness, not committed)
+
+Pairing at the cell level against the pin's `ssi` crate, on all 119 corpus cases as exact
+NURBS patches (pin: its Bézier pieces and all pairs of `pieces_apart`, pad 1e-9; here:
+`Candidates::new`, tol 1e-9):
+
+| | pin | here |
+|---|---|---|
+| median per case | 12.7 us | 211 us (2.3 to 68 times) |
+| surviving cell pairs, total | 2,083 | 2,736 (more in 22 cases, same in 97, fewer in none) |
+
+- The cost is the certified enclosures (`box_over`, `partials_over_piece` at each slab), not the
+  tree. The pin takes its boxes and slabs from control points, uncertified.
+  `nurbs_invert.rs` already extracts Bézier nets with error bounds, so a hull range along `n`
+  would be certified and as cheap as the pin's. That is the next step if SM11 finds this
+  matters.
+- `intersect` end to end (cells and halving to the refusal): 116 of the 119 cases (they cross)
+  are `Unresolved`, 3 are proved empty. Median 11.9 ms, total 5.2 s with `FRONT = 24`; with 12
+  10.6 ms and 4.3 s; with 8 4.2 ms and 1.35 s. This is the refusal path only, and SM5's
+  loop-free stop replaces it.
+- Near-touching analytic pairs: two unit spheres `2^-10` apart, 4,305 pair tests and about
+  100 ms; `2^-20`, 9,089 and 214 ms. The same pairs as NURBS are cleared at the cells (the NURBS
+  boxes are tight at the contact), in about 0.1 ms.
+- Not on any Boolean path yet (the stage 4 stub does not call it), so no existing path gained
+  work.
+
+### 15.5 Open
+
+- Hull-based certified ranges for NURBS and for the analytic kinds' exact images (15.4).
+- The analytic kinds' loose interval boxes.
+- A shared per-piece cache of the own-normal range (each slab computes it again per pair).
+
 ## 16. SM10 as built (11-27)
 
 SM10 is the corpus scorer: a test target, `crates/scx-ssi/tests/corpus/` (`cargo test -p scx-ssi

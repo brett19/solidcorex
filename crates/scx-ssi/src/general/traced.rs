@@ -11,15 +11,14 @@ use scx_num::vector2d::Point2;
 use scx_num::vector3d::Point3;
 use scx_nurbs::NurbsCurve;
 
-use crate::analytic::Contact;
+use crate::analytic::{Contact, Overlap};
 
 /// Where two surfaces meet within their extents, traced by the general method: curves,
 /// the points where their ends meet, and isolated points, each in a fixed order (module
-/// docs). All three empty is a proof that the surfaces do not meet within the extents
+/// docs). All four empty is a proof that the surfaces do not meet within the extents
 /// (pairs are dropped only by proof), final as the closed forms' `Empty` is.
 ///
-/// Non-exhaustive: the general method's coincident pieces (all-zero fields, row SM4) join
-/// as a field when their shape is settled.
+/// Non-exhaustive: later rows may add fields.
 #[derive(Clone, Debug, PartialEq, Default)]
 #[non_exhaustive]
 pub struct Traced {
@@ -30,13 +29,24 @@ pub struct Traced {
     pub nodes: Vec<Node>,
     /// The isolated points.
     pub touches: Vec<Touch>,
+    /// Where the surfaces are one surface within the coincidence: the same pieces as the
+    /// closed forms' [`Intersection::Coincident`](crate::analytic::Intersection::Coincident)
+    /// (convex polygons in both surfaces' uv, vertex for vertex), so a reader that takes
+    /// one takes the other. A region lies here and not in `branches` when the surfaces
+    /// agree over it: a curve is only where they cross or touch alone. The method that proves
+    /// it (a field with every coefficient zero within its bound, row `SM6a`) puts it here;
+    /// none does before that.
+    pub coincident: Vec<Overlap>,
 }
 
 impl Traced {
     /// Whether the surfaces do not meet within the extents (proved).
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.branches.is_empty() && self.nodes.is_empty() && self.touches.is_empty()
+        self.branches.is_empty()
+            && self.nodes.is_empty()
+            && self.touches.is_empty()
+            && self.coincident.is_empty()
     }
 }
 
