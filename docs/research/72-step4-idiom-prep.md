@@ -3399,3 +3399,94 @@ The 1462 tests read lineage from `Changes` (`origins`, `merged`) rather than the
 4. Build is up to 1.1x of stages 1-5. A profile would show whether `exact_loops` in the merge or the edge joins dominate.
 
 **Proposed 04 row.** "`scx-boolean` stage 6 (BO4): classify by component (pieces of one operand joined across edges where the operands do not meet). Coincident pieces are `On` by a point inside. Other components are seeded by `sides_along` on each section (a `Forward` use on the left of `n x T`), with `classify_point` as the fallback; lying edges seed nothing. Select per operation (subtract turns `b`'s In pieces over). Merge kept faces across two-fin edges where they are one operand face or coincident surfaces with material on one side, within the zone's coincidence. A seam-crossing merge is rewritten by `exact_loops`. Remove dead edges and vertices, and join a vertex between edges on one curve. One solid region per connected face set, with a negative set nested as the cavity of the one positive set. `boolean()` answers `Done`. New `Unsupported(NonManifold | Nesting)` and defects `Seeds`, `Classify`, `Build`. Change if two lumps with a cavity, or opposite-normal coincident faces, reach a case."
+### 14.30 BO2b as built (11-27)
+
+Stage 4 (`crates/scx-boolean/src/faceface.rs`) now asks, before it refuses a pair as `Unsupported(SsiPair)`, whether the two faces can touch, and drops the pair when they provably cannot. It asks both for `Closed::General` and for a solved answer of a kind the stage does not read. No public API changed, and no error variant was added or removed. Pairs that `analytic::intersect` solves are untouched, so the check costs nothing on them.
+
+**The proof.** The faces lie in their boxes `xa` and `xb` (`Face::bounding_box`, an enclosure of the surface over the face's uv box, grown by accuracy and resolution). Take a point `p` of `a` and a point `q` of `b` within `reach` of each other, where `reach` is the pair's coincidence, the same one stage 4 judges contact by. Both points lie in `X = grow(xa, reach) ∩ grow(xb, reach)`. At `p`, `g_a(p) = 0` and `|g_b(p)| <= reach`, where `g_s` is a function that is zero exactly on surface `s` and 1-Lipschitz, so `|g_s(p)|` is at most the distance from `p` to `s`. So if every piece of a cover of `X` has `g_a` or `g_b` enclosed outside `[-reach, reach]`, the faces cannot touch. The functions are written in each kind's frame, with `rho` the distance from the axis and `h` the height:
+
+| Kind | `g` | Why it is exact over a box |
+|---|---|---|
+| plane | `h` | linear |
+| cylinder | `rho - r` | monotone in `rho`, and the `rho` range of an xy rectangle is exact |
+| sphere | `\|p\| - r` | monotone in `\|x\|`, `\|y\|` and `\|z\|` |
+| cone | `rho cos a - h sin a - r cos a` | the signed distance in the `(rho, h)` half-plane from the line `rho = r + h tan a`. Its part at `rho >= 0` is exactly the one nappe the kind has, and it is monotone in `rho` and `h` |
+| torus | `hypot(rho - R, h) - r` | monotone in `\|rho - R\|` and `\|h\|`. It holds for a ring torus only (a spindle's inner part is not this zero set), and `Torus::new` refuses `r >= R` |
+| NURBS | none | never reached: the stage refuses a NURBS pair before this point |
+
+A box is mapped into the kind's frame as the box of its 8 corners' coordinates, which holds the whole box because the map is affine. So the enclosure is exact when the frame is aligned with the world axes, and conservative otherwise. A slack of `64 eps (1 + size)` covers the rounding of the frame's coordinates (its axes are unit to `8 eps`) and of `hypot`. `X` is bisected across its longest side, depth first, to `APART_DEPTH = 8`. That is at most 511 boxes, at one work unit each. The first leaf at depth 8 that neither function clears answers "not proved", and the pair is refused as before.
+
+**Result on BO5's cases.** In the seam-vertex torus-box case, the pair with the `y = -3` face is now dropped with one box: over `X` the torus has `rho >= sqrt(6.5^2 + 9)`, about 7.16, so it is clear by about 0.66. `sides[1]` (`x = 10.5`) is not a pair, and `sides[2]` (`y = 3`) is dropped in the same way. The case now names `sides[3]`, the face on `x = 6.5` that the torus touches. **The brief said `sides[1]`, which is BO5's misreading of the side order**: `BlockFaces::sides` is `y = 0`, `x = size`, `y = size`, `x = 0`, so `x = 6.5` is `sides[3]` (id 5). That was checked against the face ids. Every other BO5 case keeps its pair, because those faces really meet.
+
+**New hand-worked cases** (`src/tests/apart.rs`). The torus (R=5, r=1.5) is set against a block on `[x0, 8] x [-4, -3] x [-1, 1]` with `x0 = sqrt((6.5 + gap)^2 - 9)`. The block is clear of the torus by `gap`, at its edge `(x0, -3, 0)`.
+
+- With `gap` = 1e-4, ten coincidences, all six pairs (every face of the block) reach stage 4. The four sides are dropped as apart, and the caps' circles miss the block, so stage 4 answers nothing.
+- With `gap` = 0 (just touching at a point of the outer equator) or `gap` = 5e-6 (half the coincidence, which counts as touching), `sides[0]` is dropped (clear by about 0.53). `sides[2]` (`y = -3`), which holds the touch on its edge, is kept and refused.
+- A sphere (r=3) is set off a cylinder's axis (r=2) by `5 + gap` along `x = y`. Their boxes meet, and the shared box is not clear of either surface alone. Clear by 0.8, the pair is proved apart only through the bisection (at depth 8, not at 6). Clear by 0.3, it is not proved and is refused, which is the sound side. Touching, it is refused.
+
+**Decisions, with cases for and against.**
+
+- *Interval enclosures of exact level functions over 3D boxes,* against *an exact distance test per kind pair.*
+  - For: one short function per kind covers every pair, with no case table. The bound is exact for the axis-aligned case BO5 found. Soundness rests on two facts that can be checked line by line: the functions are 1-Lipschitz, and their zero sets are exactly the surfaces.
+  - Against: the convergence is first order. On oblique pairs it proves only gaps that are a sizeable fraction of the boxes: the sphere-cylinder case is proved at 0.8 and not at 0.5, on boxes about 1.5 x 1.5 x 6. An exact test (the minimum distance between the face regions) would prove any gap, but it needs the trims, and it amounts to a second-order solver per kind pair. Step 5's marcher answers these pairs anyway.
+- *Bisecting 3D boxes,* against *bisecting one face's uv box and bounding the other surface over each patch's box.*
+  - For: 3D bisection uses both surfaces at once (each box must lie in both thin shells), needs no `box_over` call per piece, and is symmetric in the operands.
+  - Against: a uv split would follow the face's trimmed region more closely, through its uv box. Both converge at first order. A probe of the sphere-cylinder case gave no reason to prefer the uv split, so the cheaper 3D split was kept.
+- *Depth 8* (at most 511 boxes), against 6 or 10.
+  - Measured on the sphere-cylinder diagonal: depth 6 proves gaps of 1.0 and above, depth 8 proves 0.8 and above, and depth 10 proves 0.5 and above.
+  - On pairs that touch, the depth-first walk stops at its first surviving leaf, so the cost is roughly linear in the depth. Each box costs about 0.25 µs. Depth 10 would allow up to 2047 boxes (about 0.5 ms) on a pair that is apart but only barely provable, so 8 was chosen.
+- *Grow both boxes by `reach`,* against *growing only one.* For: the test is symmetric and still sound. Against: a gap up to about `2 reach` is not proved. Such a pair is refused, which is the sound side, and a gap that small is a near-touch the marcher should see anyway.
+- *Also check before the stage's "answer it does not read" refusal.* For: the same reasoning applies, and no such answer exists yet. Against: none.
+
+**Measurements.** Release build, a throwaway timer and box counter (not committed). The figures are for the check alone; each pair that touches pays it on its way to a refusal it already had.
+
+| Pair | Result | Boxes | Time |
+|---|---|---|---|
+| torus and block faces that cannot touch (BO5 seam-vertex case, the new near-miss) | dropped | 1 | 0.15-1 µs |
+| torus and the touching block face (BO5 torus-box) | refused | 15 | 3.3-4 µs |
+| tpipe walls | refused | 19 | 4-4.3 µs |
+| cylinder-sphere tangent (BO5) | refused | 28 | 5.9-6.8 µs |
+| torus-sphere (BO5) | refused | 24 | 5.8-6.9 µs |
+| crossed cylinders (BO2's test) | refused | 10 | 6.6 µs |
+| sphere clear of a cylinder by 0.8 | dropped | 47 | 31 µs |
+| sphere clear of a cylinder by 0.3 | refused | 23 | 16 µs |
+
+**Deviations from 72.** None in the plan. The deviation from the brief is that the case names `sides[3]`, not `sides[1]`, as explained above. BO5's test doc and table text that call `x = 6.5` "the second side" are corrected in the test; §14.28 is left as written.
+
+**Open questions.** (1) Whether step 5's marcher should take over these refusals outright, which would make this check a prefilter only. (2) A second-order (exact distance) test would be needed if a real model has near-misses on oblique pairs that are smaller than the bisection resolves.
+
+**Proposed 04 row.** "BO2b (72 §14.30): before refusing a pair with no closed form, stage 4 proves whether its faces can touch. It encloses each surface's 1-Lipschitz level function (plane `h`, cylinder `rho - r`, sphere `|p| - r`, cone line distance, ring torus `hypot(rho - R, h) - r`) over the overlap of the faces' boxes grown by the coincidence, bisected depth first to depth 8, and drops the pair when every piece is clear of one surface by more than the coincidence. Otherwise it refuses `SsiPair` as before. The seam-vertex torus-box case now names `sides[3]` (`x = 6.5`, the face the torus touches), and the other BO5 cases are unchanged. The cost is 1 box on the torus-box drops and 10-28 boxes (3-7 µs) on pairs that touch. Against: the bound is first order, so oblique near-misses below about half the box size are still refused. Change if real models refuse oblique near-misses, or when step 5 answers these pairs."
+
+### 14.32 BX1 as built (11-27)
+
+**What it is.** Test wiring for BO6, BO7 and DT3 ahead of BO4, in one new file, `crates/scx-boolean/tests/recipes.rs` (a dev-dependency on `scx-testkit` is the only other change). No source under `scx-boolean/src` and no difftest file changed: T12's `recipe::all` already carries every operand, truth value and hand-stated topology the three tasks need, and `t_slice` already runs each Boolean recipe as `NotYet(Boolean)`, so its counts stay 157 pass, 0 fail, 326 not yet. DT3 flips `scx_gap`; nothing else in `t_slice` needs a new entry.
+
+**Tests.**
+- Live: `every_named_case_exists_and_states_its_truth` (21 names exist, each has a truth, each built topology satisfies Euler-Poincare) and `every_operand_builds_with_the_closed_form_volume` (every part of the 21 cases builds with `scx-make` and `scx_mass::volume` is `Part::solid`'s to 1e-7).
+- `#[ignore = "awaits BO4 classify"]`, running each recipe's steps through `boolean` on the running body and judging volume and area (1e-9 plus the truth's slack), solid regions and shells, or the named `Unsupported` cause: `plate_12_has_144_holes`, `gear_60_has_sixty_slots`, `smaller_hole_cases`, `blocks_touching_at_a_vertex_or_along_an_edge_are_built`, `touches_inside_a_face_are_unsupported`, `coincident_and_near_coincident_faces`. Today each fails with `Unsupported(Stage(Classify))` (checked with `--include-ignored`), which is the reason in the attribute. BO4 removes the attributes.
+
+**Cases and truth** (volume, area, regions/shells/genus, vertices/edges/patches; resolution 1e-5):
+
+| Case | Steps | Volume | Area | Topology |
+|---|---|---|---|---|
+| box-cyl-hole | 1 | 874.336294 | 700.530965 | 1/1/1, 10/14/7 |
+| plate-4 | 16 | 97989.380702 | 25608.495439 | 1/1/16, 40/44/22 |
+| plate-12 | 144 | 81904.426315 | 38476.458948 | 1/1/144, 296/300/150 |
+| gear-60 | 60 | 72182.859480 | 23564.577139 | 1/1/0, 480/720/242 |
+| corner-contact-union | 1 | 2000 | 1200 | 2/2/0, 16/24/12 |
+| edge-contact-union | 1 | 1500 | 982.842712 | 2/2/0, 18/27/13 |
+| box-box-union-flush | 1 | 1750 | 950 | 1/1/0, 16/24/10 |
+| coplanar-union | 1 | 1500 | 900 | 1/1/0, 12/18/8 |
+| coplanar-offset-0, 0.1c, 0.5c | 1 | 1500 (+50 dy) | 800 (+30 dy), slack 0.01 | merged: 1/1/0, 8/12/6 |
+| coplanar-offset-4c, 10c | 1 | 1500.002, 1500.005 | 800.0012, 800.003 | 1/1/0, 16/24/10 |
+| interleaved-grids-4 | 7 | 80 | 248 | 1/1/9, 146/219/66 |
+| interleaved-grids-8 | 15 | 320 | 944 | 1/1/49, 546/819/226 |
+| tangent-sphere-box, seam-sphere-box, seam-box-sphere, off-seam-sphere-box, seam-sphere-sphere, seam-box-minus-sphere | 1 | (of the body a later step would build) 1113.097, 3079.646, 3079.646, 3079.646, 146.608, 476.401 | 713.097, 1556.858, 1556.858, 1556.858, 163.363, 914.159 | `Unsupported(NonManifold)`; 1, 1, 1, 1, 1 and 6 contact points |
+
+**Decision: the in-face touches expect `non_manifold` by name.** For: the recipes say D5 makes a touch inside a face `Unsupported(NonManifold)`, and the named variant is what BO7 must add (it does not exist in `BooleanUnsupported` yet); asserting only `Unsupported(_)` would pass on any later refusal. Against: the name is proposed, so BO7 may rename it, and the one-line match in `check` then changes. Kept the name.
+
+**Decision: the cases run through the public `boolean`, not `scx-boolean`'s `src/tests`.** For: no BO4 file is touched, the integration test sees only the public API BO6 and DT3 will use, and `plate-12` and `gear-60` are benchmark-sized (144 and 60 steps). Against: an integration test cannot see `pub(crate)` stage outputs; BO6's stage-level checks belong in `src/tests`.
+
+**Not done / open.** (1) No new generators: nothing T12 lacked was found. (2) The `Lineage` and `Mesh` invariants the recipes list are DT3's, not wired here. (3) Area slack for the merged `coplanar-offset` cases is applied unscaled, looser than `t_slice`'s `slack / area_scale`.
+
+**Proposed 04 row.** "BX1 (72 §14.32): `scx-boolean/tests/recipes.rs` runs T12's plate, gear, contact and coincident-face recipes (21 cases) through `boolean`, `#[ignore = \"awaits BO4 classify\"]` until BO4; operand volumes are live. Change if: BO7 names the in-face touch differently from `non_manifold`."

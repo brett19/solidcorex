@@ -24,6 +24,7 @@ use crate::contact::On;
 use crate::geom::{Operands, Side};
 use crate::{BooleanError, BooleanOp, BooleanRefusal, BooleanUnsupported, boolean};
 
+mod apart;
 mod face_face;
 mod imprint;
 mod unsupported;

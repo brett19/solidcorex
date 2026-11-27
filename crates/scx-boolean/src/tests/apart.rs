@@ -1,0 +1,156 @@
+// Written for solidcorex. Apache-2.0.
+//! Stage 4 (72 §14.30): a pair with no closed form is dropped when its faces provably cannot
+//! touch, and refused when they may. Each case is worked by hand.
+//!
+//! The torus is the pin's R=5 r=1.5 about z. On the plane `y = -3` it reaches
+//! `rho = sqrt(x^2 + 9) <= 6.5`, so `x <= sqrt(6.5^2 - 9) = sqrt(33.25)`. A block on
+//! `[x0, 8] x [-4, -3] x [-1, 1]` is clear of it by `sqrt(x0^2 + 9) - 6.5` (at its edge
+//! `x = x0, y = -3, z = 0`), and its faces' boxes meet the torus's for any `x0` below 6.5.
+//! Its faces: bottom and top (`z = -1, 1`, planes square to the axis: circles, a closed
+//! form), `sides[0]` on `y = -4`, `sides[1]` on `x = 8`,
+//! `sides[2]` on `y = -3` and `sides[3]` on `x = x0`. The plane sides are parallel to the
+//! axis: spiric sections, no closed form. The coincidence here is the resolution, 1e-5.
+
+use scx_brep::{Document, FaceId};
+use scx_make::{BlockFaces, TorusFaces, block, cylinder, sphere, torus};
+use scx_num::budget::{Budget, Stop};
+use scx_num::frame::Frame;
+use scx_num::units::Length;
+use scx_num::vector3d::Vec3;
+use scx_surface::SurfaceKind;
+
+use super::{pt, run};
+use crate::faceface::{FaceFace, face_face};
+use crate::geom::Operands;
+use crate::{BooleanError, BooleanUnsupported};
+
+const Z: [f64; 3] = [0.0, 0.0, 1.0];
+const X: [f64; 3] = [1.0, 0.0, 0.0];
+
+fn frame(o: [f64; 3], z: [f64; 3], x: [f64; 3]) -> Frame {
+    Frame::new(
+        pt(o),
+        Vec3::new(z[0], z[1], z[2]),
+        Vec3::new(x[0], x[1], x[2]),
+    )
+    .unwrap()
+}
+
+fn mm(x: f64) -> Length {
+    Length::from_mm(x)
+}
+
+/// The torus's and the block's faces, stage 1's pairs and stage 4's answer.
+struct Case {
+    t: TorusFaces,
+    b: BlockFaces,
+    pairs: Vec<(FaceId, FaceId)>,
+    f: Result<FaceFace, BooleanError>,
+}
+
+/// The torus and the block clear of it by `gap`, with stage 4's answer on them.
+fn torus_and_block(gap: f64) -> Case {
+    let doc = Document::default();
+    let t = torus(&frame([0.0; 3], Z, X), mm(5.0), mm(1.5), &doc).unwrap();
+    let x0 = ((6.5 + gap) * (6.5 + gap) - 9.0).sqrt();
+    let b = block(
+        &frame([x0, -4.0, -1.0], Z, X),
+        [mm(8.0 - x0), mm(1.0), mm(2.0)],
+        &doc,
+    )
+    .unwrap();
+    let (ta, bb) = (&t.body, &b.body);
+    let i = run(ta, bb).unwrap();
+    let f = face_face(
+        Operands { a: ta, b: bb },
+        &i,
+        &mut Budget::unlimited(),
+        &Stop::new(),
+    );
+    Case {
+        t: t.faces,
+        b: b.faces,
+        pairs: i.pairs,
+        f,
+    }
+}
+
+/// Ten coincidences clear: every side pair has no closed form, but no side can touch the
+/// torus, so all are dropped; the caps' circles miss the block. Stage 4 answers nothing.
+#[test]
+fn a_block_just_clear_of_a_torus_is_dropped_pair_by_pair() {
+    let Case { t, b, pairs, f } = torus_and_block(1e-4);
+    // The pairs stage 1 found: the torus with every face of the block (the torus's box,
+    // from its whole uv box, reaches `x = 8`).
+    let mut want: Vec<_> = [
+        b.bottom, b.top, b.sides[0], b.sides[1], b.sides[2], b.sides[3],
+    ]
+    .map(|s| (t.face, s))
+    .to_vec();
+    want.sort_unstable();
+    assert_eq!(pairs, want);
+    assert_eq!(f.unwrap(), FaceFace::default());
+}
+
+/// Touching at `(x0, -3, 0)` (a point of the outer equator), or clear by half the
+/// coincidence, which is touching too: `sides[0]` is clear by `sqrt(x0^2 + 16) - 6.5`,
+/// about 0.53, and dropped; `sides[2]` (`y = -3`) holds the touch on its edge and is the
+/// first pair kept, refused for its spiric section.
+#[test]
+fn a_block_touching_a_torus_keeps_the_touching_pair() {
+    for gap in [0.0, 5e-6] {
+        let Case { t, b, f, .. } = torus_and_block(gap);
+        assert_eq!(
+            f.unwrap_err(),
+            BooleanError::Unsupported(BooleanUnsupported::SsiPair {
+                a: t.face,
+                b: b.sides[2],
+                kinds: [SurfaceKind::Torus, SurfaceKind::Plane],
+            }),
+            "gap {gap}"
+        );
+    }
+}
+
+/// A sphere of radius 3 off a cylinder's axis by `5 + gap` along the diagonal `x = y`, so
+/// its box meets the r=2 cylinder's (x and y from about 0.54) while the shared box is not
+/// clear of either surface alone: the proof needs the bisection. Clear by 0.8 it is
+/// proved apart at depth 8 (not at 6); clear by 0.5 or less it is not proved, and refused.
+fn cylinder_and_sphere(gap: f64) -> Result<FaceFace, BooleanError> {
+    let doc = Document::default();
+    let c = cylinder(&frame([0.0; 3], Z, X), mm(2.0), mm(10.0), &doc).unwrap();
+    let d = (5.0 + gap) / 2.0_f64.sqrt();
+    let s = sphere(&frame([d, d, 5.0], Z, X), mm(3.0), &doc).unwrap();
+    let i = run(&c.body, &s.body).unwrap();
+    assert_eq!(i.pairs, vec![(c.faces.wall, s.faces.face)]);
+    face_face(
+        Operands {
+            a: &c.body,
+            b: &s.body,
+        },
+        &i,
+        &mut Budget::unlimited(),
+        &Stop::new(),
+    )
+}
+
+#[test]
+fn a_sphere_clear_of_a_cylinder_is_dropped_by_bisection() {
+    assert_eq!(cylinder_and_sphere(0.8).unwrap(), FaceFace::default());
+    // Not proved (refused, the sound side): a gap the boxes at depth 8 cannot resolve.
+    assert!(matches!(
+        cylinder_and_sphere(0.3),
+        Err(BooleanError::Unsupported(
+            BooleanUnsupported::SsiPair { .. }
+        ))
+    ));
+}
+
+#[test]
+fn a_sphere_touching_a_cylinder_is_refused() {
+    let e = cylinder_and_sphere(0.0).unwrap_err();
+    let BooleanError::Unsupported(BooleanUnsupported::SsiPair { kinds, .. }) = e else {
+        panic!("{e:?}");
+    };
+    assert_eq!(kinds, [SurfaceKind::Cylinder, SurfaceKind::Sphere]);
+}
