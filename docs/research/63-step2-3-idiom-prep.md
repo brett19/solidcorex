@@ -1139,7 +1139,7 @@ impl From<Line> for Curve { .. }  // and every other kind into its arm
   caller); with it 3.4 ns.
 - **`From` each kind into its arm.** A caller builds a kind and writes `.into()`.
 - **No `tangent_dir`** (§3.3's sketch) yet: CU6's facade is its first user, and it needs
-  the `Nurbs` arm's degenerate case to be defined.
+  the `Nurbs` arm's degenerate case to be defined. CU6 added it (§3.11).
 - **No difftest through the enum.** CU6 adds the facade adapters (§3.5); the unit tests
   prove the enum gives the kind's bits, so the pin comparison would add nothing until then.
 - **"Bit for bit" treats every NaN as one value.** Rust leaves a NaN's sign and payload
@@ -1456,6 +1456,182 @@ Tests (scx-curve `edit.rs`, 6 tests; scx-nurbs `reverse.rs`, 1; `error.rs` exten
 Work added to existing paths: none. These are new functions. The only change to shared code
 is `curve.rs`'s test helpers becoming `pub(crate)` and the error enum's larger size, which
 the constructors' `Result`s mostly absorb.
+
+### 3.10 CU4 as built (11-27)
+
+Proposed for review, not yet ruled.
+
+```rust
+// scx-num, src/invert.rs (new): shared with scx-surface; scx-curve re-exports both
+pub struct Foot<A = f64, Q = Point3> { pub at: A, pub point: Q, pub distance: f64 }
+impl<A, Q> Foot<A, Q> { pub fn is_on(&self, tol: Length) -> bool; }   // distance <= tol
+pub enum Inversion<A = f64, Q = Point3> { Inside(Foot<A, Q>), Outside(Foot<A, Q>) }
+impl<A, Q> Inversion<A, Q> { pub const fn foot(&self) -> &Foot<A, Q>; pub fn into_foot(self) -> Foot<A, Q>;
+                             pub const fn is_inside(&self) -> bool; }
+// scx-curve, src/invert.rs (new); 2-D kinds the same with Point2
+pub enum Closest<A = f64, Q = Point3> { One(Foot<A, Q>), Two([Foot<A, Q>; 2]), Every { distance: f64 } }
+pub const POLISH_STEPS: u32 = 64;
+
+impl Line    { pub fn closest(&self, p: Point3) -> Foot;
+               pub fn invert(&self, p: Point3, domain: Option<&Extent1d>) -> Inversion; }
+impl Circle  { pub fn closest(&self, p: Point3) -> Closest;
+               pub fn invert(&self, p: Point3, domain: Option<&Extent1d>) -> Inversion; }
+impl Ellipse { /* as Circle */ }
+impl Curve   { pub fn closest(&self, p: Point3) -> Result<Closest, CurveError>;
+               pub fn invert(&self, p: Point3, domain: Option<&Extent1d>) -> Result<Inversion, CurveError>; }
+
+// error.rs
+pub enum CurveError { .., Unsupported(Unsupported) }      // kind Unsupported
+#[non_exhaustive] pub enum Unsupported { NurbsInversion }
+```
+
+- **`closest` gives every nearest point; `invert` picks one.** Against: two calls where
+  §3.3 sketched one, and a caller who only wants a foot can ignore `Closest`. For: a
+  circle's axis (every point) and an ellipse's axis inside its evolute (two feet) are real
+  answers; the pin returned the domain's ends there without saying so. `invert` keeps
+  §3.3's one-foot shape on top. All stationary points (the testkit's `Locus`) were
+  rejected: no caller needs the farther ones, and the testkit already certifies them.
+- **The domain is `Option<&Extent1d>`, wrapped by whole turns for a conic.** Against: a
+  conic's foot can come back past `2 pi` (`at` is moved to start at the domain's `min`).
+  For: an edge's interval on a periodic curve may start anywhere (`[-pi, 0]`,
+  `[4 pi, 5 pi]`), and the caller wants `at` in its own interval. `None` is the kind's own
+  domain. A domain a whole turn long or more holds every angle.
+- **An outside foot is not clamped to the domain's end.** Against: a caller wanting the
+  nearest point of a trimmed edge must compare the ends itself. For: 57 F6's `Outside`
+  says the kind's foot lies outside, and the nearest end is the edge's question, not the
+  kind's (scx-brep). Clamping would hide whether the foot was inside.
+- **The circle's axis is exact.** Only a query whose projection is the centre itself is
+  `Every`. Against: a query `1e-20` off the axis gets an `atan2` angle that means little.
+  For: its distance is right to the last bit whatever the angle, and the pin's band of
+  `SM_EFF_ZERO` scaled by the model is a tolerance the kind has no business choosing. The
+  difftest finds no input where the band changes the distance.
+- **No budget, `Stop` or near hint** (§3.3 sketched them). Against: the sketch's
+  signature, and a NURBS arm will need them. For: every analytic arm is a closed form or
+  a polish of at most `POLISH_STEPS` steps (bisection alone closes the quarter turn in
+  under 60), so a budget would only be threaded through and never spent. The ellipse's
+  seed is the quartic in `tan(s/2)` (`scx_algo::polynomial::solve_quartic`), polished by
+  Newton inside a bracket in the first quadrant, where there is exactly one stationary
+  point. The centre and the axes are closed forms. The NURBS arm adds the budget when it
+  is built, on its own signature.
+- **NURBS is `Unsupported`**, a new `CurveError` cause of kind `Unsupported`. Against:
+  `Curve::invert` is fallible for every kind because one kind is not built. For: the
+  alternative, a dense sample with a local polish, would be a wrong-answer path with no
+  certified truth behind it (§3.4), and a typed refusal is honest. `Closest` and
+  `Inversion` are infallible on the kinds themselves.
+- **The impls live in `invert.rs`, not `curve.rs`.** `curve.rs` was being edited by CU5
+  at the same time. The kinds' and enums' inversions sit together, and `curve.rs` is
+  untouched.
+- **`Foot` and `Inversion` live in `scx_num::invert`.** Against: two plain value types
+  in layer 0 that scx-num itself never returns. For: the surfaces' inversion (SU4)
+  returns the same shapes with `A = (f64, f64)`, and scx-surface does not depend on
+  scx-curve. `Closest` stays in scx-curve: its `Every` and `Two` are curve answers.
+- **The distance is 3-D, always computed.** Against: a caller who only wants `at` pays
+  for a subtraction and a length (the line's 7.4 ns against the pin's 6.3 ns below). For:
+  the foot is one value (X8), and `is_on(tol)` needs it; the pin's out-parameters made
+  callers recompute it.
+
+Tests (scx-curve, 9 new): the line's foot against the testkit's exact projection at
+scales `1`, `1e3`, `1e-3`; a line against its domain; the circle's foot against the
+reference, and its axis as every point; the ellipse's foot against the testkit's
+certified nearest (T1, research 59 §4a) at four scales, near its evolute and when thin
+(`b/a` down to `1e-3`); the ellipse's two feet at its centre and on an axis inside its
+evolute; whole-turn wrapping; the 2-D kinds against the 3-D ones in the plane; a
+non-finite query gives a NaN foot, and NURBS gives `Unsupported`.
+
+T1's `Ellipse::stationary` was already in the testkit; only its doc in `analytic.rs`
+was corrected to say so.
+
+Timings. Release, one core, on a loaded build machine; best of several runs over 256
+seeded queries, from a throwaway bench since deleted.
+
+| per query | scx `invert` | pin |
+|---|---:|---:|
+| line | 7.4 ns | 6.3 ns (`step_inversion`, the parameter only) |
+| circle | 98 ns | 302 ns (`drop_point_fast`) |
+| ellipse | 1.11 µs | 33.5 ns (`step_inversion`, `atan2`, the foot only on the curve) |
+
+- **The line is 17% slower** because it also builds the foot point and distance, which
+  the pin's call does not return.
+- **The circle is 3.1 times faster.**
+- **The ellipse has no like-for-like pin row.** The pin's `step_inversion` is one
+  `atan2` and is the foot only for a point on the curve. The pin's general
+  `drop_point`, seeded with it, took about 76 µs per query in the same bench, but that
+  bench passed a degree interval and a degree guess to a solve that runs on the carried
+  NURB's parameter, so the figure is not a fair comparison and is not claimed.
+
+### 3.11 CU6 as built (11-27)
+
+Proposed for review, not yet ruled.
+
+```rust
+// scx-curve, src/tangent.rs (new)
+impl Curve  { pub fn tangent_dir(&self, t: f64, side: Approach) -> Option<UnitVec3>; }
+impl Curve2 { pub fn tangent_dir(&self, t: f64, side: Approach) -> Option<UnitVec2>; }
+
+// scx-difftest, tests/diff/t_curve_query.rs (new)
+// curve_nurbs_jet, curve_nurbs_tangent, curve_line_tangent, curve_line_invert,
+// curve_circle_invert, curve_ellipse_invert_on
+```
+
+- **`tangent_dir` keeps the pin's floor for a vanishing derivative,
+  `1.1 EFF_ZERO (1 + max|C(t)|)`.** Against: a first derivative of `1e-18` is not zero,
+  and exact arithmetic would follow it. For: a computed derivative that small is
+  indistinguishable from the rounding of one that is zero (a doubled control point at an
+  interior double knot gives about `1e-16`), and its direction would be noise. The floor
+  applies to each derivative in turn, not to the second alone as at the pin; `None` only
+  where every derivative to the order vanishes (a curve collapsed to a point).
+- **The sign follows the side: `(-1)^(k-1)` for the k-th derivative from below.** The
+  pin negated the second derivative past the middle of the domain, whichever side was
+  asked. Against: results differ from the pin. For: near `t` the curve runs as
+  `C^(k) h^k / k!`, so from below an even-order cusp is approached along `-C^(k)`. The
+  pin's rule is right only at the domain's start from above and its end from below.
+- **An analytic arm normalises its first derivative**, which never vanishes (CU1's
+  construction floor). Each arm scales by its largest coordinate before normalising, so
+  any finite non-zero vector has a direction.
+- **`from_left = true` is `Approach::Above`** (X5). The pin's `Side::Left` is the span
+  starting at the knot, which is the piece above it.
+- **The conics are not compared through the pin's `Curve::evaluate`.** It runs on the
+  carried NURB's parameter, not the angle; `t_curve` compares their `evaluate_step`
+  instead. The line and NURBS arms are compared through it.
+- **The NURBS arm is compared inside the knots' domain, on curves scx builds.** Outside
+  the domain the pin clamps `t` and scx continues the end pieces (CU2). The `t_nurbs`
+  pool's curves with a knot of multiplicity above the degree are refused by scx (CU3) and
+  are left out.
+- **A circle is compared by its foot's distance.** The pin's `drop_point_fast` returns
+  the carried NURB's parameter, not an angle, so the distance is what both share. It is
+  compared at `rel 1e-12, abs 1e-12`: a distance near zero carries the coordinates'
+  rounding (`4e-14` a thousand units out), not its own.
+- **An ellipse is compared only for points on it.** That is the one place the pin's
+  `atan2` is the foot. Off the curve, the foot is held to T1's certified nearest in
+  scx-curve's tests.
+
+Pin defects, each with a truth check in `pin_defects.rs`:
+- `curve_nurbs_tangent`: the pin's zero-tangent fallback signs by the domain's middle,
+  not the side, and keeps a zero first derivative where the second vanishes too. Truth:
+  the testkit's exact derivatives, the first above the floor, signed by the side, within
+  `1e-9` (a rational curve's higher derivatives lose digits to the spread of its
+  weights). 17 inputs.
+- `curve_ellipse_invert_on`: the two angles are a turn apart at the seam, or differ by
+  `atan2`'s rounding on a thin ellipse. Truth: the point at scx's angle is the query,
+  within 64 roundings of the ellipse's size. 57 inputs.
+
+| difftest | inputs | exact | within tolerance | pin defects | mismatches |
+|---|---:|---:|---:|---:|---:|
+| `curve_nurbs_jet` | 3,270 | 1,398 | 1,872 | 0 | 0 |
+| `curve_nurbs_tangent` | 3,206 | 1,894 | 1,295 | 17 | 0 |
+| `curve_line_tangent` | 3,026 | 2,347 | 679 | 0 | 0 |
+| `curve_line_invert` | 3,406 | 3,170 | 236 | 0 | 0 |
+| `curve_circle_invert` | 437 | 264 | 173 | 0 | 0 |
+| `curve_ellipse_invert_on` | 323 | 148 | 118 | 57 | 0 |
+
+The NURBS pool adds cusps: a doubled start and end, a tripled start, a rational doubled
+start, a curve collapsed to a point, and a degree-2 cusp at a double knot at 0.4, 0.5 and
+0.7, at their knots and `1e-9` either side. scx-curve's `tangent.rs` has 3 unit tests (an
+analytic kind, the NURBS cusps on both sides, 2-D against 3-D).
+
+`tangent_dir` adds no work to any existing call: it is new, and only the difftest calls
+it. A smooth NURBS point costs one `derivs::<2>`; the higher derivatives are computed
+only where the first vanishes.
 
 ## 4. `scx-surface`
 

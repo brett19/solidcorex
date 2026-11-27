@@ -22,8 +22,9 @@
 //! double-double on the parameterisation itself (the gradient of the squared distance),
 //! from the closed-form answer for an orthonormal frame. `None` where the foot is not
 //! unique or the start is meaningless: on a circle's or surface's axis, at a torus tube's
-//! centre line, beyond a cone's apex. The ellipse has no closest point here: its start is
-//! not closed-form, and Newton's method from a poor start can find the wrong foot.
+//! centre line, beyond a cone's apex. The ellipse has no Newton foot here: its start is
+//! not closed-form, and Newton's method from a poor start can find the wrong foot. Its
+//! certified feet are [`Ellipse::stationary`](crate::project) (T1).
 
 use crate::Partials;
 use crate::dd::{self, Dd};
