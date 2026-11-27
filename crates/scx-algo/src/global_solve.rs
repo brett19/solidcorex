@@ -44,13 +44,15 @@
 #![allow(clippy::neg_cmp_op_on_partial_ord)]
 
 use crate::error::{SolveError, SolveFailure};
+use crate::geom;
+use crate::geom::plane::point_project_to_plane;
 use crate::solution::{
     identical, End, EndClass, Pairing, Prefer, Solution, SolutionKind, SolutionObject, SortKey,
     MAX_OBJECTS,
 };
 use crate::split_tree::{Node, NodeId, SplitTree};
 use scx_num::extent3d::Extent3d;
-use scx_num::math::{EFF_ZERO, EFF_ZERO_SQ, EFF_ZERO_SQRT};
+use scx_num::math::{EFF_ZERO, EFF_ZERO_SQRT};
 use scx_num::tol::is_zero;
 use scx_num::vector3d::{sqrt, Point3, UnitVec3, Vec3};
 
@@ -895,21 +897,10 @@ where
     Ok(found)
 }
 
-/// `line_closest_point`: the parameter of the point of the line `p + t v` nearest `q`; 0
-/// for a degenerate line (solidcore `geom_utility::p1`).
-fn line_closest_point(p: Point3, v: Vec3, q: Point3) -> f64 {
-    if v.length_squared() < EFF_ZERO_SQ {
-        0.0
-    } else {
-        (q - p).dot(v) / v.length_squared()
-    }
-}
-
-/// `point_project_to_plane`: `pt` projected along `n` (any length) onto the plane through
-/// `plane` (solidcore `geom_utility::p1`).
-fn point_project_to_plane(pt: Point3, plane: Point3, n: Vec3) -> Point3 {
-    let k = ((pt.x - plane.x) * n.x + (pt.y - plane.y) * n.y + (pt.z - plane.z) * n.z) / n.dot(n);
-    pt - k * n
+/// The parameter of the point of the line `p + t v` nearest `q`, 0 for a line with no
+/// direction (the global solver's reading of [`geom::line::line_closest_point`]).
+fn closest_t(p: Point3, v: Vec3, q: Point3) -> f64 {
+    geom::line::line_closest_point(p, v, q).unwrap_or(0.0)
 }
 
 fn unit_or_z(v: Vec3) -> Vec3 {
@@ -1003,7 +994,7 @@ pub fn may_contain(op: &Operation, boxes: &[Extent3d], tolerance: f64, best_sq: 
         Operation::Signed3dDirectedMinimize { direction } => {
             let s1 = b0.sphere_bound();
             let s2 = b1.sphere_bound();
-            let t = line_closest_point(s1.center, direction, s2.center);
+            let t = closest_t(s1.center, direction, s2.center);
             let closest = s1.center + t * direction;
             // the spheres do not meet along the direction
             if closest.distance(s2.center) > s1.radius + s2.radius + tol {
@@ -1049,7 +1040,10 @@ fn projected_extreme(
     if scale <= 0.0 || !scale.is_finite() {
         return true;
     }
-    let projected = point_project_to_plane(s2.center, s1.center, normal);
+    // a normal too short to project along prunes nothing
+    let Some(projected) = point_project_to_plane(s2.center, s1.center, normal) else {
+        return true;
+    };
     let centres = s1.center.distance(projected) * scale;
     let r1 = s1.radius * scale + tol;
     let r2 = s2.radius * scale;
@@ -1115,10 +1109,12 @@ fn projected_intersect(op: &Operation, b0: &Extent3d, b1: &Extent3d, tol: f64) -
             r2 = sqrt(max2);
             (p1, p2)
         }
-        Operation::ProjectedIntersect { normal } => (
-            s1.center,
-            point_project_to_plane(s2.center, s1.center, *normal),
-        ),
+        Operation::ProjectedIntersect { normal } => {
+            match point_project_to_plane(s2.center, s1.center, *normal) {
+                Some(p2) => (s1.center, p2),
+                None => return true,
+            }
+        }
         _ => return true,
     };
     !(p1.distance(p2) - r1 - r2 > 0.0)
@@ -1139,13 +1135,19 @@ fn directed(
     let plane_normal = direction.cross(normal);
     let s1 = b0.sphere_bound();
     let s2 = b1.sphere_bound();
-    let mut proj = point_project_to_plane(s2.center, s1.center, plane_normal);
+    // a direction along the normal, or a normal too short, prunes nothing (upstream's NaN
+    // projection fails every test below)
+    let Some(proj) = point_project_to_plane(s2.center, s1.center, plane_normal) else {
+        return true;
+    };
     let sum = s1.radius + s2.radius;
     if proj.distance_squared(s2.center) > sum * sum + EFF_ZERO_SQRT {
         return false;
     }
     // then onto the projection plane through the first centre
-    proj = point_project_to_plane(proj, s1.center, normal);
+    let Some(proj) = point_project_to_plane(proj, s1.center, normal) else {
+        return true;
+    };
     match op {
         Operation::SignedDirectedMinimize { .. } => {
             let v = proj - s1.center;
@@ -1174,7 +1176,7 @@ fn directed(
 fn rayfire(direction: Vec3, b0: &Extent3d, b1: &Extent3d, tol: f64, best_sq: f64) -> bool {
     let start = b0.min();
     let s = b1.sphere_bound();
-    let t = line_closest_point(start, direction, s.center);
+    let t = closest_t(start, direction, s.center);
     let closest = start + t * direction;
     // the sphere misses the line
     if closest.distance(s.center) > s.radius + tol {
@@ -1231,15 +1233,15 @@ pub fn split_choice<T, const N: usize>(op: &Operation, branch: &Branch<'_, T, N>
         (Operation::Rayfire { direction }, Some((h1, h2))) => {
             let start = boxes.first().map(Extent3d::min);
             start.is_some_and(|p| {
-                line_closest_point(p, direction, mid(&h2))
-                    < line_closest_point(p, direction, mid(&h1))
+                closest_t(p, direction, mid(&h2))
+                    < closest_t(p, direction, mid(&h1))
             })
         }
         (Operation::Signed3dDirectedMinimize { direction }, Some((h1, h2))) => {
             other.is_some_and(|o| {
                 let p = mid(o);
-                line_closest_point(p, direction, mid(&h2))
-                    < line_closest_point(p, direction, mid(&h1))
+                closest_t(p, direction, mid(&h2))
+                    < closest_t(p, direction, mid(&h1))
             })
         }
         (

@@ -1342,6 +1342,11 @@ pub fn object_for_parameter() -> PinDefect<(usize, usize, usize), Option<(usize,
                 Ok(())
             } else {
                 Err(format!("{r:?}, the truth is {want:?}"))
+            }
+        },
+    }
+}
+
 // ---- scx-algo's pseudo box against solidcore's `SmPseudoBox` (`t_pbox`) --------------------
 
 use crate::t_pbox::{BoxR, ProjR};
