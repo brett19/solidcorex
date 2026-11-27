@@ -28,7 +28,7 @@ use scx_curve::arcs::Arcs;
 use scx_num::jet::SurfaceJet;
 
 /// The `u` direction: a turn over `[0, 1]`.
-const U: Arcs = Arcs::turn(1.0);
+pub(crate) const U: Arcs = Arcs::turn(1.0);
 
 /// A right circular cone about the frame's z axis.
 ///
