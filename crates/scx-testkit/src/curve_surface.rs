@@ -29,7 +29,9 @@
 //! double-double: within the root's interval (about `2^-110` relative) and the
 //! double-double rounding.
 
-use crate::analytic::{Circle, Cone, Cylinder, Ellipse, Line, Plane, Sphere, Torus, V3};
+use crate::analytic::{
+    Circle, Cone, Cylinder, Ellipse, Hyperbola, Line, Parabola, Plane, Sphere, Torus, V3,
+};
 use crate::bound::rat_to_dd;
 use crate::dd::{self, Dd};
 use crate::poly::{Poly, Root};
@@ -45,6 +47,10 @@ pub enum CurveKind {
     Circle(Circle),
     /// `C + a cos t X + b sin t Y`.
     Ellipse(Ellipse),
+    /// `V + F t^2 X + 2 F t Y`.
+    Parabola(Parabola),
+    /// `C + a cosh t X + b sinh t Y`, one branch.
+    Hyperbola(Hyperbola),
 }
 
 /// A surface the truths take.
@@ -104,7 +110,8 @@ pub enum Contact {
 /// One intersection point.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Hit {
-    /// The curve parameter: the line's `t`, the conic's angle in `[0, 2 pi)`.
+    /// The curve parameter: the line's and the open conics' `t`, the closed conic's angle
+    /// in `[0, 2 pi)`.
     pub t: Dd,
     /// A bound on `|t_true - t|` from the root's interval (the double-double rounding
     /// aside).
@@ -308,6 +315,8 @@ pub fn curve_point(c: &CurveKind, t: Dd) -> V3 {
         CurveKind::Line(l) => l.derivs(t, 0),
         CurveKind::Circle(k) => k.derivs(t, 0),
         CurveKind::Ellipse(e) => e.derivs(t, 0),
+        CurveKind::Parabola(p) => p.derivs(t, 0),
+        CurveKind::Hyperbola(h) => h.derivs(t, 0),
     };
     d.into_iter().next().unwrap_or([Dd::new(0.0); 3])
 }
@@ -321,6 +330,8 @@ enum Variable {
     Parameter,
     /// A conic's half-angle tangent, `s = tan(t / 2)`.
     HalfAngle,
+    /// A hyperbola's `s = e^t`: only `s > 0` is on the branch.
+    Exp,
 }
 
 /// The curve as exact homogeneous polynomials `(P(s), W(s))` in its variable.
@@ -367,6 +378,36 @@ fn homogeneous(c: &CurveKind) -> Result<([Poly; 3], Poly, Variable), Error> {
             let f = &e.frame;
             conic(f.origin, e.semi_x, f.x, e.semi_y, f.y)
         }
+        CurveKind::Parabola(k) => {
+            if k.focal.is_nan() || k.focal <= 0.0 {
+                return Err(Error::DegenerateCurve);
+            }
+            let (f, (o, x, y)) = (
+                rf(k.focal)?,
+                (r3(k.frame.origin)?, r3(k.frame.x)?, r3(k.frame.y)?),
+            );
+            let p = [0, 1, 2].map(|i| {
+                let at = |v: &R3| v.get(i).cloned().unwrap_or_default();
+                // o + 2 F y t + F x t^2
+                Poly::new(vec![at(&o), (&at(&y) * &f).scale(1), &at(&x) * &f])
+            });
+            Ok((p, Poly::constant(Rat::one()), Variable::Parameter))
+        }
+        CurveKind::Hyperbola(h) => {
+            if !(h.semi_x > 0.0 && h.semi_y != 0.0) {
+                return Err(Error::DegenerateCurve);
+            }
+            let (c, x, y) = (r3(h.frame.origin)?, r3(h.frame.x)?, r3(h.frame.y)?);
+            let (a, b) = (rf(h.semi_x)?, rf(h.semi_y)?);
+            let p = [0, 1, 2].map(|i| {
+                let at = |v: &R3| v.get(i).cloned().unwrap_or_default();
+                let (xi, yi) = (&at(&x) * &a, &at(&y) * &b);
+                // 2 s (C + a cosh t X + b sinh t Y) = (aX - bY) + 2 C s + (aX + bY) s^2
+                Poly::new(vec![&xi - &yi, at(&c).scale(1), &xi + &yi])
+            });
+            let two = Rat::one().scale(1);
+            Ok((p, Poly::new(vec![Rat::zero(), two]), Variable::Exp))
+        }
     }
 }
 
@@ -406,6 +447,9 @@ pub fn intersect(curve: &CurveKind, surface: &SurfaceKind) -> Result<Meeting, Er
         let (t, rad) = match var {
             Variable::HalfAngle => (turn(dd::atan(s) * 2.0), 2.0 * root.at.radius()),
             Variable::Parameter => (s, root.at.radius()),
+            // The other branch (s < 0) and the asymptote's s = 0 are not the curve.
+            Variable::Exp if root.at.lo().signum() <= 0 => continue,
+            Variable::Exp => (dd::ln_dd(s), root.at.radius() / root.at.lo().to_f64()),
         };
         add(t, rad, coords(s), root.multiplicity);
     }
@@ -429,7 +473,8 @@ pub fn intersect(curve: &CurveKind, surface: &SurfaceKind) -> Result<Meeting, Er
     Ok(Meeting::Points(hits))
 }
 
-/// The exact equation in the curve parameter (`t` for a line, `tan(t/2)` for a conic)
+/// The exact equation in the curve parameter (`t` for a line or parabola, `tan(t/2)` for a
+/// conic, `e^t` for a hyperbola)
 /// whose real roots [`intersect`] reports: for the self-tests.
 pub fn equation(curve: &CurveKind, surface: &SurfaceKind) -> Result<Poly, Error> {
     let (p, w, _) = homogeneous(curve)?;

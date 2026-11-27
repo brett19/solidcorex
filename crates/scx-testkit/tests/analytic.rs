@@ -16,7 +16,8 @@
 use scx_num::hash::Rng;
 use scx_testkit::Rat;
 use scx_testkit::analytic::{
-    Circle, Cone, Cylinder, Ellipse, Foot, Frame, Line, Plane, Sphere, Torus, V3,
+    Circle, Cone, Cylinder, Ellipse, Foot, Frame, Hyperbola, Line, Parabola, Plane, Sphere, Torus,
+    V3,
 };
 use scx_testkit::dd::{self, Dd};
 use scx_testkit::sample;
@@ -356,4 +357,94 @@ fn near_tangent_pairs_are_tangent_to_the_gap() {
         let d = norm(sub(lift(foot.rounded), lift(sphere.frame.origin)));
         assert!((d - sphere.radius - gap).abs() < 1e-15, "{gap}: {d}");
     }
+}
+
+/// The open conics: each derivative is the difference quotient of the one before (to the
+/// quotient's error), the feet are normal and no sample is nearer, and a point on the
+/// curve is its own foot.
+#[test]
+fn open_conics_have_their_derivatives_and_feet() {
+    let mut rng = Rng::new(9);
+    let h = 1e-12;
+    for i in 0..60 {
+        let frame = sample::frame(&mut rng, 2.0);
+        let focal = 0.2 + rng.next_f64();
+        let (a, b) = (
+            0.2 + rng.next_f64(),
+            (0.2 + rng.next_f64()) * if i % 2 == 0 { 1.0 } else { -1.0 },
+        );
+        let p = Parabola { frame, focal };
+        let hy = Hyperbola {
+            frame,
+            semi_x: a,
+            semi_y: b,
+        };
+        let t = 3.0 * rng.next_signed_unit();
+        let quotient = |f: &dyn Fn(Dd) -> Vec<V3>, k: usize| {
+            let (lo, hi) = (f(Dd::new(t) - Dd::new(h)), f(Dd::new(t) + Dd::new(h)));
+            sub(hi[k], lo[k]).map(|x| x / (2.0 * h))
+        };
+        let pf = |t: Dd| p.derivs(t, 3);
+        let hf = |t: Dd| hy.derivs(t, 3);
+        for k in 0..3 {
+            assert!(
+                near(quotient(&pf, k), p.derivs(t, 3)[k + 1], 1e-10),
+                "parabola {k}"
+            );
+            assert!(
+                near(quotient(&hf, k), hy.derivs(t, 3)[k + 1], 1e-10),
+                "hyperbola {k}"
+            );
+        }
+        assert_eq!(p.derivs(t, 4)[3], [Dd::new(0.0); 3]);
+        // Points on and off the curves.
+        let on = |v: V3| dd::round(v);
+        for (q, own) in [
+            (on(p.derivs(t, 0)[0]), true),
+            (sample::query(&mut rng, &frame, 3.0), false),
+        ] {
+            if let Some(f) = p.nearest(q) {
+                if own {
+                    assert!((f.param - Dd::new(t)).abs().hi < 1e-14, "{t} {:?}", f.param);
+                } else {
+                    let tangent = p.derivs(f.param, 1)[1];
+                    check_curve_foot(&f, q, tangent, |s| p.derivs(4.0 * s, 0)[0]);
+                }
+            }
+        }
+        for (q, own) in [
+            (on(hy.derivs(t, 0)[0]), true),
+            (sample::query(&mut rng, &frame, 3.0), false),
+        ] {
+            if let Some(f) = hy.nearest(q) {
+                if own {
+                    assert!((f.param - Dd::new(t)).abs().hi < 1e-12, "{t} {:?}", f.param);
+                } else {
+                    let tangent = hy.derivs(f.param, 1)[1];
+                    check_curve_foot(&f, q, tangent, |s| hy.derivs(s, 0)[0]);
+                }
+            }
+        }
+    }
+    // Inside the parabola on its axis past the centre of curvature: two equal feet, a tie.
+    let f = Frame {
+        origin: [0.0; 3],
+        x: [1.0, 0.0, 0.0],
+        y: [0.0, 1.0, 0.0],
+        z: [0.0, 0.0, 1.0],
+    };
+    let p = Parabola {
+        frame: f,
+        focal: 1.0,
+    };
+    assert_eq!(p.stationary([5.0, 0.0, 0.0]).unwrap().len(), 3);
+    assert!(p.nearest([5.0, 0.0, 0.0]).is_none());
+    assert_eq!(p.stationary([1.0, 0.0, 0.0]).unwrap().len(), 1);
+    let hy = Hyperbola {
+        frame: f,
+        semi_x: 1.0,
+        semi_y: 1.0,
+    };
+    let x = hy.nearest([1.0, 0.0, 0.0]).unwrap();
+    assert_eq!(x.param.hi, 0.0);
 }

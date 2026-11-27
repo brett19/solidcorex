@@ -210,6 +210,13 @@ pub fn cosh(x: f64) -> f64 {
     hyper::cosh(x)
 }
 
+/// `(sinh(x), cosh(x))`, the bits of [`sinh`] and [`cosh`], for less than the cost of both.
+#[inline]
+#[must_use]
+pub fn sinh_cosh(x: f64) -> (f64, f64) {
+    hyper::sinh_cosh(x)
+}
+
 /// The hyperbolic tangent.
 #[inline]
 #[must_use]

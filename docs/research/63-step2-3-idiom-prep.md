@@ -1749,6 +1749,181 @@ analytic kind, the NURBS cusps on both sides, 2-D against 3-D).
 it. A smooth NURBS point costs one `derivs::<2>`; the higher derivatives are computed
 only where the first vanishes.
 
+### 3.12 Conic kinds as built (11-27)
+
+Proposed for review, not yet ruled. Decided by analysis and an adversarial pass, below.
+
+```rust
+// scx-curve, src/open_conic.rs (new)
+pub struct Parabola  { /* frame, focal: Length, sense */ }   // vertex + F t^2 x + 2 F t y
+pub struct Hyperbola { /* frame, semi_x, semi_y, sense */ }  // centre + a cosh t x + b sinh t y
+// and Parabola2, Hyperbola2; each: new(..) -> Result, point, jet::<D>(t, Approach),
+// point_over / jet_over (f64, Ivl), domain() = Unbounded, reversed, transformed -> (Self, ParamShift),
+// closest(p) -> Closest, invert(p, Option<&Extent1d>) -> Inversion
+// Curve::{Parabola, Hyperbola}, Curve2::{Parabola, Hyperbola}: every dispatched method
+// ParamShift gains a stretch: (t + by) / stretch (one but for a parabola's affine image)
+
+// scx-ssi::analytic: a cone's section is now a parabola or a hyperbola's branch where it is one
+// scx-surface: pcurve_of on a plane keeps the kind (Parabola2, Hyperbola2); on the other
+//   kinds NoClosedForm { curve: Parabola | Hyperbola, .. } (Unsupported), never empty;
+//   intersect_curve takes both against all five kinds
+```
+
+**The parametrisation: STEP's, the pin's.** A parabola is `O + F t^2 X + 2 F t Y` and a
+hyperbola one branch `C + a cosh t X + b sinh t Y`, over every `t`.
+
+- Alternatives weighed:
+  - **the parabola by its y**, `(t^2 / 4F, t)`: the parameter is a length, so a uniform
+    scale moves it, and every STEP read and write would remap it;
+  - **a rational form** (a quadratic Bezier, or `sec`/`tan` for the hyperbola): the NURBS
+    code could evaluate it, but `sec`/`tan` has poles inside the branch's natural range, the
+    Bezier is bounded to one span, and either needs a remap to and from STEP;
+  - **`e^t` for the hyperbola**, `(a (s + 1/s) / 2, b (s - 1/s) / 2)`: a polynomial after
+    clearing `s`, which T2 and the clip use internally (below), but `s` runs over `(0, inf)`
+    only, the reversal `t -> -t` becomes `s -> 1/s`, and the derivatives lose their
+    two-term cycle.
+- For STEP's: the AP242 `parabola` and `hyperbola` entities take exactly these, so a part
+  reads and writes with no parameter map; the pin's `evaluate_step` is the same function, so
+  the difftest compares like with like; reversal is `t -> -t` with the sense flipped, as the
+  closed conics (CU5); a uniform scale or rigid motion leaves `t` alone; and the
+  derivatives are closed forms of any order (the parabola's vanish past the second; the
+  hyperbola's alternate between two terms).
+- Against, and what was done:
+  - **a hyperbola point needs `sinh` and `cosh`**: `fmath::sinh_cosh` (new in scx-num) gives
+    both from one double-double exponential, each within an ulp or two; a point costs about
+    20 ns against the parabola's 4;
+  - **`cosh` overflows past `|t| ~ 710`**: there the point is infinite, as a line's at an
+    infinite `t`; an edge's interval never reaches it (the branch is then past `1e308`);
+  - **a parabola's parameter is not affine-invariant**: under a map that is not a similarity
+    the vertex moves and the parameter stretches. `transformed` returns the map as a
+    `ParamShift` with a stretch, `(t + by) / stretch`, and an edge's interval moves with it,
+    as CU5's ellipse.
+
+**Deviations from the pin.**
+
+- **Plain data, validated once.** A frame, the sizes as `Length` and a `Sense`, refused at
+  `new` for a non-finite size or one not above `EFF_ZERO` (`Degenerate::Focal`,
+  `Degenerate::SemiAxis`). The pin built any size, kept an analytic domain and a NURB
+  twin, and clamped `t` to the domain inside `evaluate_step`. Here the domain is
+  `Unbounded`: an arc is an edge's interval (CU5).
+- **The parabola's x term is `F (t t)`**, the pin's `(F t) t`. Both are one rounding of the
+  same product apart; `F (t t)` keeps `t t` exact in the interval form, so the enclosure is
+  tight. The difftest agrees with the pin within the tolerance at every input.
+- **The foot is the true nearest point.** The pin's `step_inversion` is the parameter of a
+  point assumed on the curve (`y / 2F`, `asinh(y / b)`). `closest` and `invert` (CU4) take
+  the query into the frame:
+  - the parabola's stationary cubic `F s^3 + (2F - u) s - v` has one root on the query's
+    side; Cardano's root (stable forms) seeds a bracketed Newton polish. On the axis, past
+    the evolute's cusp (`u > 2F`), two equal feet `+-sqrt((u - 2F) / F)`;
+  - the hyperbola's `k sinh t - a u tanh t - b v` (`k = a^2 + b^2`) has one root on the
+    query's side, below `asinh((max(a u, 0) + b v) / k)`; the pin's `asinh(v / b)` seeds a
+    bracketed Newton polish. On the axis past the cusp, `+-acosh(a u / k)`.
+  - No quartic fallback: the hyperbola's equation is a quartic in `e^t`, but the bracket is
+    certified (the function is convex on the side, with a sign change at its ends), so the
+    bracketed Newton converges from any seed in it. A foot outside the domain is reported as
+    `Outside`, never clamped (CU4, CU6). Held to the testkit's certified nearest (cubic for
+    the parabola, isolated roots for the hyperbola) in scx-curve's tests.
+- **Bounding** is the interval form, as for the closed conics: `point_over::<Ivl>` over an
+  interval of `t` encloses the arc (tested against samples).
+
+**Wired in.**
+
+- **scx-surface `pcurve_of`**: on a plane the kind is kept in its affine uv (`Parabola2`,
+  `Hyperbola2`); on a cylinder, cone, sphere or torus the answer is
+  `PcurveError::NoClosedForm { curve, surface }` (`ErrorKind::Unsupported`), never an empty
+  or approximate curve. Exact pcurves off the plane belong with WR-680's oblique cylinder
+  section.
+- **scx-surface `intersect_curve`**: both kinds against all five surfaces. The parabola is a
+  polynomial quadratic in `u` (its parameter affine in `u`, as a line's); the hyperbola is a
+  rational quadratic whose middle control point is where the ends' tangents meet, with
+  weight `cosh w`, and a new `Map::Hyper` takes `u` back to `t`
+  (`t = m + 2 atanh(k (2u - 1))`, kept as sums of positive terms). Degrees as for a conic.
+- **Testkit T2** takes both curves: the parabola in `t`, the hyperbola in `s = e^t` (a new
+  `Variable::Exp`), with only `s > 0` on the branch.
+
+**The cone section (63 §5.6).** From the apex, in the plane's coordinates
+`delta n + alpha e1 + beta e_t`, the section is `e alpha^2 - g alpha + beta^2 + c0 = 0`
+(`e = nz^2 - k^2 s^2`, `g = 2 delta s nz (1 + k^2)`, `c0 = delta^2 (s^2 - k^2 nz^2)`).
+
+- `e > 0` is an ellipse, `e < 0` a hyperbola and `e = 0` a parabola. A rounded `e` is never
+  exactly zero, so **a parabola is taken where dropping `e alpha^2` moves no point of the
+  extent's heights by more than the tolerance**: `2 |e| reach^2 <= tol |g|`, `reach` the
+  largest `|alpha|` over the two rims. There the exact ellipse or hyperbola is longer than
+  its precision and the parabola is within the tolerance of it.
+  - Against: the true curve is an ellipse or hyperbola, and a parabola changes its kind.
+  - For: 04's primitive rule (a section within the tolerance of a simpler kind is that kind)
+    and the ellipse's own precision bound; outside the threshold the exact kind is kept.
+- The hyperbola is the branch on the nappe the cone's extent lies on (`k z' > 0`); the
+  other branch is on the far nappe and is dropped, as the generators' far halves are.
+- Between the parabola threshold and the ellipse or hyperbola precision bound
+  (`size * 2^-50 > tol`) the answer stays `General`. Both tests are exact statements of
+  what a double can hold; the band between them stays open, and
+  closing it would need a kind that is neither.
+- The clip: a parabola's crossings with a linear side are a quadratic in `t`; a
+  hyperbola's are a quadratic in `e^t`, roots with `e^t > 0` only. Spans are kept as a
+  line's.
+
+**The cylinder's too-long ellipse does not fall out.** A near-axial cut of a cylinder is
+an ellipse longer than its precision, but it is not near a parabola: its flanks are the
+cylinder's two nearly straight generators, and its ends turn with the cylinder's radius.
+Where the generators are within the tolerance over the extent's height it is already two
+lines (§5.6); between that and the precision bound it stays `General`.
+
+**Tests.** scx-curve: 7 unit tests in `open_conic.rs` (points and jets to order 5 against
+the double-double truth, interval enclosure, reversal to the bit, the 2-D twins, refusals,
+`transformed` against closed forms, the inverse hyperbolics) and 3 in `invert.rs` (the foot
+against the certified nearest over every scale and sense, the two feet past the cusp, an
+outside foot reported). scx-num: `sinh_cosh` to the bit of each, and the `Ranged`
+enclosures. scx-surface: `pcurve_of` on a plane and the typed refusal on a cone;
+`intersect_curve` against T2 for both kinds, with the plane's overlap and the vertex touch.
+Testkit: the new truths checked exactly.
+
+| difftest | inputs | exact | within tolerance | pin defects | mismatches |
+|---|---:|---:|---:|---:|---:|
+| `curve_parabola_point` | 380 | 330 | 50 | 0 | 0 |
+| `curve_parabola_jet` | 380 | 154 | 226 | 0 | 0 |
+| `curve_parabola2_jet` | 380 | 144 | 236 | 0 | 0 |
+| `curve_hyperbola_point` | 380 | 309 | 71 | 0 | 0 |
+| `curve_hyperbola_jet` | 380 | 324 | 56 | 0 | 0 |
+| `curve_hyperbola2_jet` | 380 | 312 | 68 | 0 | 0 |
+
+`t_open_conic` compares against the pin's `Parabola::evaluate_step` and
+`Hyperbola::evaluate_step` on `t_curve`'s conic pool, at parameters inside the pin's domain
+(it clamps; scx does not). The within-tolerance rows are an ulp or two of the sum's order.
+
+**Timings.** Side-channel, a throwaway timer, not committed; release, per call:
+
+| call | scx | pin |
+|---|---:|---:|
+| parabola point | 4.2 ns | 17.4 ns |
+| parabola jet, order 3 | 7.5 ns | 16.5 ns |
+| hyperbola point | 20.1 ns | 24.2 ns |
+| hyperbola jet, order 3 | 24.3 ns | 54.3 ns |
+
+The pin allocates a `Vec` per call; scx's hyperbola is mostly `sinh_cosh`.
+
+**Other kernels (research 66).** Nothing applies: 66 §8.2 records only OCCT's IntAna for
+quadric pairs (docs only), and none of 66's techniques is about conic evaluation or feet.
+The `e^t` substitution and the tangent-meeting control point are the textbook conic as a
+rational quadratic.
+
+**SS2 coverage (63 §5.5).** SS2 is plane-plane and plane-quadric through `intersect`.
+`intersect` puts the plane second and answers by `section_by_plane`, so both pairs are
+built. `plane_sections` now runs every case (fixed and 400 random, both senses) through
+`intersect` both ways: the surface first equals `section_by_plane`, and the plane first gives
+the same pieces run the other way (a tangent curve either way, its `n_a x n_b` vanishing),
+the same points, and a coincidence's extents swapped. The difftest compares
+`section_by_plane` with the pin. Still missing from SS2:
+
+- the cylinder's too-long ellipse and the cone's band between the parabola threshold and the
+  precision bound (`General`, above);
+- the torus's spiric sections (`General`; step 5's marcher);
+- exact pcurves off the plane: WR-680's oblique cylinder section and the cone's conics
+  (`pcurve_of` answers `NoClosedForm`);
+- the difftest goes through `section_by_plane` only, not `intersect`'s plane-first order
+  (the pin's `intersect_with_plane` has one order);
+- SS3 (sphere-sphere, coaxial pairs) and SS4 (classification at the tolerance).
+
 ## 4. `scx-surface`
 
 The step-2 slice covers plane, cylinder, cone, sphere, torus and B-spline, with point inversion,
@@ -3009,7 +3184,7 @@ pub fn section_by_plane(s: &Surface, se: &Extent2d, plane: &Plane, pe: &Extent2d
 |---|---|---|
 | plane | a line, coincident, or empty | never |
 | cylinder | an ellipse, a circle, two lines or a tangent line, or empty | an ellipse so long that `2^-50` of its semi-axis passes the tolerance |
-| cone | an ellipse, a circle, two generators or a tangent generator, the apex, or empty | a parabola or hyperbola; an ellipse that long |
+| cone | an ellipse, a circle, a parabola, the branch of a hyperbola on the nappe, two generators or a tangent generator, the apex, or empty (§3.12, 11-27) | an ellipse or hyperbola that long and not within the tolerance of a parabola |
 | sphere | a circle, a touch point, or empty | never |
 | torus | one or two circles across the axis, two meridian circles along it, or empty | every other plane (a spiric section) |
 
@@ -3090,7 +3265,9 @@ the span merge across the turn's start, and the `pcurve_of` seam.
 
 The difftest `t_ssi::ssi_section_by_plane` compares against the pin's `intersect_with_plane`.
 It uses 1,000 inputs aimed at the cases above. Results: 378 exact, 532 within tolerance,
-90 pin defects, 0 mismatches, 0 nondeterministic.
+90 pin defects, 0 mismatches, 0 nondeterministic. With the open conics (§3.12, 11-27): 323
+exact, 532 within tolerance, 145 pin defects, 0 mismatches, 0 nondeterministic; the 55 new
+defects are the last four rows below.
 
 Each pin defect is judged against T5 by `t_ssi::truth::check`, in these classes (pool counts):
 
@@ -3103,6 +3280,10 @@ Each pin defect is judged against T5 by `t_ssi::truth::check`, in these classes 
 | Cone seam | 10 | splits the arc at `u = 0` | one piece |
 | Bounded cylinder or cone missed | 8 | general | empty |
 | Torus missed | 15 | general | empty |
+| Cone hyperbola | 19 + 12 | general | the branch on the nappe, in one piece or two |
+| Cone parabola | 13 + 5 | general | the parabola, in one piece or two |
+| Cone cut along a generator, off the apex | 4 | general | empty (the parabola on the other nappe or outside the extent) |
+| Cone hyperbola clipped to nothing | 2 | general | empty |
 
 **Timings.** These were measured side-channel with a throwaway timer, not committed. The
 timer ran over the difftest pool on prebuilt surfaces, 200 repetitions, per call. Each
@@ -3119,6 +3300,12 @@ figure is scx against the pin:
 The torus gap is mostly the pin's general fallback on the spiric cases. scx gives up on
 those cases at once and the caller pays later; the comparison is on what each call does.
 
+With the open conics (§3.12, 11-27), on the pool's cone cases, release: a hyperbola section
+1.70 us (31 cases) and a parabola 0.94 us (17) against the pin's 0.70 and 0.65 us, which
+answer `general` and leave the curve to the marcher; the other cone cases 0.89 us against
+3.17 us. The hyperbola's cost over the ellipse's is its clip (a quadratic in `e^t`, a `ln`
+per root) and `sinh_cosh` at the span's ends.
+
 **Other kernels (research 66).** §8.2 records that OCCT's IntAna does analytic quadric pairs.
 Its docs only were read, and no code. The techniques adopted here are ours:
 
@@ -3130,9 +3317,11 @@ Both are exact and deterministic. Nothing was taken that depends on a search or 
 **Open.**
 
 - WR-680's rational pcurve of an oblique cylinder section, in `pcurve_of`.
-- Parabola and hyperbola kinds in `scx-curve`. SS5 answers `General` for them until those
-  kinds exist.
-- SS2 to SS4.
+- ~~Parabola and hyperbola kinds in `scx-curve`.~~ Built 11-27 (§3.12); a cone's
+  parabola and hyperbola are solved.
+- The cylinder's ellipse too long for its precision, and the cone's band between the
+  parabola threshold and that bound: `General` (§3.12).
+- SS2's remaining gaps are listed in §3.12; SS3 and SS4.
 
 ## 6. `scx-brep`
 

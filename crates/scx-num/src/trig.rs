@@ -1,12 +1,17 @@
 // Written for solidcorex. Apache-2.0.
-//! Sine and cosine over a ring: the one evaluator of an analytic curve or surface runs in
-//! `f64` for values and in [`Ivl`] for enclosures (research 63 §3.2, "the scalar-generic
-//! form").
+//! Sine and cosine, their hyperbolic twins and the square over a ring: the one evaluator of
+//! an analytic curve or surface runs in `f64` for values and in [`Ivl`] for enclosures
+//! (research 63 §3.2, "the scalar-generic form").
 //!
-//! - `f64`: [`crate::fmath::sin_cos`], correctly rounded.
+//! - `f64`: [`crate::fmath::sin_cos`] and [`crate::fmath::sinh_cosh`], correctly rounded;
+//!   the square `x * x`.
 //! - [`Ivl`]: an enclosure of `{sin x, cos x : x in the interval}` for any interval. The
 //!   ring's `sin_cos_s` ([`crate::ring::TayScalar`]) is the fork's, valid on `[0, pi/2]`
-//!   only; this one holds everywhere.
+//!   only; this one holds everywhere. `sinh` is increasing, so its enclosure is its two
+//!   ends' values widened; `cosh` falls to 1 at zero and rises either side, so its
+//!   enclosure is the ends' values widened, its low end 1 when the interval holds zero and
+//!   never below 1. The square of an interval holding zero starts at zero, where the
+//!   ring's product `x * x` would start at `lo * hi < 0` (a parabola's `s^2`).
 //!
 //! The interval enclosure takes each function's values at the two ends, widened by
 //! [`crate::ring::wide`] (`1e-15` relative, past [`crate::fmath`]'s half ulp), and adds the
@@ -53,6 +58,11 @@ pub trait Ranged: Ring + Neg<Output = Self> {
     /// true difference however wide `u` is.
     #[must_use]
     fn gap(right: Self, left: Self, high: f64, low: f64) -> Self;
+
+    /// `self * self`: for an `f64` the product, for an interval the tight enclosure of the
+    /// squares of its points (from zero when it holds zero).
+    #[must_use]
+    fn sqr(self) -> Self;
 }
 
 impl Ranged for f64 {
@@ -80,6 +90,10 @@ impl Ranged for f64 {
     fn gap(right: Self, left: Self, _high: f64, _low: f64) -> Self {
         right + left
     }
+    #[inline]
+    fn sqr(self) -> Self {
+        self * self
+    }
 }
 
 impl Ranged for Ivl {
@@ -103,18 +117,35 @@ impl Ranged for Ivl {
     fn gap(_right: Self, _left: Self, high: f64, low: f64) -> Self {
         Ivl::from(high) - Ivl::from(low)
     }
+    fn sqr(self) -> Self {
+        if self.lo >= 0.0 {
+            self * self
+        } else if self.hi <= 0.0 {
+            (-self) * (-self)
+        } else {
+            let m = Ivl::from(cmax(-self.lo, self.hi));
+            Ivl::new(0.0, (m * m).hi)
+        }
+    }
 }
 
-/// A ring with sine and cosine: `f64` and [`Ivl`].
+/// A ring with sine and cosine and their hyperbolic twins: `f64` and [`Ivl`].
 pub trait Trig: Ranged {
     /// `(sin x, cos x)`; for an interval, an enclosure of both over the interval.
     fn sin_cos(self) -> (Self, Self);
+
+    /// `(sinh x, cosh x)`; for an interval, an enclosure of both over the interval.
+    fn sinh_cosh(self) -> (Self, Self);
 }
 
 impl Trig for f64 {
     #[inline]
     fn sin_cos(self) -> (Self, Self) {
         crate::fmath::sin_cos(self)
+    }
+    #[inline]
+    fn sinh_cosh(self) -> (Self, Self) {
+        crate::fmath::sinh_cosh(self)
     }
 }
 
@@ -163,6 +194,23 @@ impl Trig for Ivl {
         }
         let clamp = |i: Ivl| Ivl::new(i.lo.max(-1.0), i.hi.min(1.0));
         (clamp(s), clamp(c))
+    }
+
+    fn sinh_cosh(self) -> (Self, Self) {
+        if self.lo.is_nan() || self.hi.is_nan() || self.lo > self.hi {
+            return (Ivl::whole(), Ivl::whole());
+        }
+        let (sl, cl) = crate::fmath::sinh_cosh(self.lo);
+        let (sh, ch) = crate::fmath::sinh_cosh(self.hi);
+        let s = wide(sl, sh);
+        let c = if self.lo >= 0.0 {
+            wide(cl, ch)
+        } else if self.hi <= 0.0 {
+            wide(ch, cl)
+        } else {
+            wide(1.0, cmax(cl, ch))
+        };
+        (s, Ivl::new(c.lo.max(1.0), c.hi))
     }
 }
 
@@ -250,6 +298,60 @@ mod tests {
         assert!(g.lo <= 1.0 && 1.0 <= g.hi && g.hi - g.lo < 1e-15);
         let g = Ivl::gap(u, u, 0.7, 0.1);
         assert!(g.lo <= 0.6 && 0.6 <= g.hi && g.lo > 0.59);
+    }
+
+    #[test]
+    fn hyperbolic_enclosures_hold_samples_inside() {
+        assert_eq!(Trig::sinh_cosh(0.7), crate::fmath::sinh_cosh(0.7));
+        let mut r = Rng::new(8);
+        for _ in 0..4000 {
+            let a = r.next_signed_unit() * 20.0;
+            let w = r.next_signed_unit().abs() * if r.next_f64() > 0.5 { 8.0 } else { 1e-6 };
+            let i = Ivl::new(a, a + w);
+            let (s, c) = Trig::sinh_cosh(i);
+            assert!(c.lo >= 1.0);
+            for k in 0..=16 {
+                let x = a + w * f64::from(k) / 16.0;
+                if x > i.hi {
+                    continue;
+                }
+                let (sx, cx) = crate::fmath::sinh_cosh(x);
+                assert!(holds(s, sx) && holds(c, cx), "{i:?} at {x}: {s:?} {c:?}");
+            }
+        }
+        // Across zero cosh reaches 1; a tight interval stays tight.
+        let (_, c) = Trig::sinh_cosh(Ivl::new(-1.0, 2.0));
+        assert_eq!(c.lo, 1.0);
+        let (s, c) = Trig::sinh_cosh(Ivl::new(0.5, 0.5 + 1e-9));
+        assert!(s.hi - s.lo < 3e-9 && c.hi - c.lo < 3e-9);
+        let (s, c) = Trig::sinh_cosh(Ivl::new(f64::NAN, 1.0));
+        assert_eq!((s, c), (Ivl::whole(), Ivl::whole()));
+        let (s, _) = Trig::sinh_cosh(Ivl::new(1.0, f64::INFINITY));
+        assert_eq!(s.hi, f64::INFINITY);
+    }
+
+    #[test]
+    fn the_square_is_tight() {
+        assert_eq!(Ranged::sqr(-3.0), 9.0);
+        assert_eq!(
+            Ivl::new(2.0, 3.0).sqr(),
+            Ivl::new(2.0, 3.0) * Ivl::new(2.0, 3.0)
+        );
+        assert_eq!(Ivl::new(-3.0, -2.0).sqr(), Ivl::new(2.0, 3.0).sqr());
+        let s = Ivl::new(-2.0, 3.0).sqr();
+        assert!(s.lo == 0.0 && s.hi >= 9.0 && s.hi < 9.0 + 1e-14);
+        let mut r = Rng::new(9);
+        for _ in 0..2000 {
+            let a = r.next_signed_unit() * 5.0;
+            let i = Ivl::new(a, a + r.next_f64() * 4.0);
+            let q = i.sqr();
+            for k in 0..=8 {
+                let x = i.lo + (i.hi - i.lo) * f64::from(k) / 8.0;
+                if x <= i.hi {
+                    assert!(holds(q, x * x), "{i:?} {x}");
+                }
+            }
+        }
     }
 
     #[test]

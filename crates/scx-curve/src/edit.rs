@@ -7,7 +7,7 @@
 //! | `Trim` and `Copy` of a bounded line or a conic arc | none: a line and a conic carry no extent (an edge holds its interval), so a restriction is the curve itself |
 //! | `Trim` and `Copy` of a NURBS curve | [`Curve::restrict`]: [`NurbsCurve::split`] at each end inside the domain |
 //! | `ReverseParameterization`: a bounded line's `a + b - t`, a conic's y axis flipped and its angles mirrored, a NURBS curve's knots reflected about the domain | [`Curve::reversed`]: `C'(t) = C(-t)` for every kind, exact |
-//! | `Transform`, a conic under a uniform scale only | [`Curve::transformed`]: any affine map, a circle to an ellipse where it is not a similarity, with the angle's [`ParamShift`] |
+//! | `Transform`, a conic under a uniform scale only | [`Curve::transformed`]: any affine map, a circle to an ellipse where it is not a similarity, with the parameter's [`ParamShift`] (a parabola's also stretched) |
 //!
 //! The plane curves have no `transformed`: there is no plane affine map in `scx-num`, and
 //! a body's transform keeps its pcurves (63 D14).
@@ -25,22 +25,39 @@ use crate::curve::{Curve, Curve2};
 use crate::error::{CurveError, Degenerate, Part};
 
 /// How a transformed curve's parameter relates to the original's: the image of the point
-/// at `t` is at `t + by` on the image.
+/// at `t` is at `(t + by) / stretch` on the image.
 ///
-/// Zero for every kind but a conic under a map that is not a similarity, whose image is
-/// placed on its principal axes, so its angle starts elsewhere (63 §3.2). An edge's
-/// interval moves with it ([`ParamShift::extent`]).
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+/// The identity for every kind but a conic under a map that is not a similarity, whose
+/// image is placed on its principal axes, so its parameter starts elsewhere (63 §3.2): an
+/// ellipse's angle and a hyperbola's parameter shift (`stretch` one), and a parabola's
+/// parameter also stretches, its vertex moving (63 §3.12). An edge's interval moves with
+/// it ([`ParamShift::extent`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ParamShift {
     by: f64,
+    stretch: f64,
+}
+
+impl Default for ParamShift {
+    fn default() -> Self {
+        Self::NONE
+    }
 }
 
 impl ParamShift {
     /// No shift.
-    pub const NONE: Self = Self { by: 0.0 };
+    pub const NONE: Self = Self {
+        by: 0.0,
+        stretch: 1.0,
+    };
 
     pub(crate) const fn new(by: f64) -> Self {
-        Self { by }
+        Self { by, stretch: 1.0 }
+    }
+
+    /// `(t + by) / stretch`, `stretch` positive and finite.
+    pub(crate) const fn affine(by: f64, stretch: f64) -> Self {
+        Self { by, stretch }
     }
 
     /// The amount added to the parameter.
@@ -49,16 +66,24 @@ impl ParamShift {
         self.by
     }
 
-    /// The image's parameter of the point at `t`: `t + by`, rounded once.
+    /// What the shifted parameter is divided by: one but for a parabola's image.
     #[must_use]
-    pub fn apply(self, t: f64) -> f64 {
-        t + self.by
+    pub const fn stretch(self) -> f64 {
+        self.stretch
     }
 
-    /// An interval on the original moved onto the image; `None` where an end overflows.
+    /// The image's parameter of the point at `t`: `(t + by) / stretch`, rounded once where
+    /// `stretch` is one (the division is then exact) and twice otherwise.
+    #[must_use]
+    pub fn apply(self, t: f64) -> f64 {
+        (t + self.by) / self.stretch
+    }
+
+    /// An interval on the original moved onto the image (the map is increasing); `None`
+    /// where an end overflows.
     #[must_use]
     pub fn extent(self, e: Extent1d) -> Option<Extent1d> {
-        e.translated(self.by)
+        Extent1d::new(self.apply(e.min()), self.apply(e.max()))
     }
 }
 
@@ -121,7 +146,11 @@ impl Curve {
     /// ([`CurveError::Nurbs`]).
     pub fn restrict(&self, e: Extent1d) -> crate::Result<Self> {
         match self {
-            Self::Line(_) | Self::Circle(_) | Self::Ellipse(_) => Ok(self.clone()),
+            Self::Line(_)
+            | Self::Circle(_)
+            | Self::Ellipse(_)
+            | Self::Parabola(_)
+            | Self::Hyperbola(_) => Ok(self.clone()),
             Self::Nurbs(n) => restrict_nurbs(n, e).map(Self::Nurbs),
         }
     }
@@ -136,6 +165,8 @@ impl Curve {
             Self::Line(l) => Self::Line(l.reversed()),
             Self::Circle(c) => Self::Circle(c.reversed()),
             Self::Ellipse(e) => Self::Ellipse(e.reversed()),
+            Self::Parabola(c) => Self::Parabola(c.reversed()),
+            Self::Hyperbola(c) => Self::Hyperbola(c.reversed()),
             Self::Nurbs(n) => Self::Nurbs(Arc::new(n.reversed())),
         }
     }
@@ -146,8 +177,10 @@ impl Curve {
     /// A line maps to a line ([`Line::transformed`](crate::Line::transformed)), a NURBS
     /// curve to a NURBS curve (its control points mapped), both with no shift. A circle
     /// maps to a circle under a similarity on its plane and to an ellipse otherwise
-    /// ([`Circle::transformed`](crate::Circle::transformed)), an ellipse to an ellipse;
-    /// these are exact images, so no kind becomes NURBS (63 §3.2).
+    /// ([`Circle::transformed`](crate::Circle::transformed)), an ellipse to an ellipse, a
+    /// parabola to a parabola and a hyperbola to a hyperbola (their parameter shifted, and
+    /// a parabola's stretched, where the map is not a similarity); these are exact images,
+    /// so no kind becomes NURBS (63 §3.2).
     ///
     /// # Errors
     ///
@@ -159,6 +192,8 @@ impl Curve {
             Self::Line(l) => Ok((l.transformed(a)?.into(), ParamShift::NONE)),
             Self::Circle(c) => c.transformed(a),
             Self::Ellipse(e) => e.transformed(a).map(|(e, s)| (e.into(), s)),
+            Self::Parabola(c) => c.transformed(a).map(|(c, s)| (c.into(), s)),
+            Self::Hyperbola(c) => c.transformed(a).map(|(c, s)| (c.into(), s)),
             Self::Nurbs(n) => Ok((transform_nurbs(n, a)?.into(), ParamShift::NONE)),
         }
     }
@@ -172,7 +207,11 @@ impl Curve2 {
     /// As [`Curve::restrict`].
     pub fn restrict(&self, e: Extent1d) -> crate::Result<Self> {
         match self {
-            Self::Line(_) | Self::Circle(_) | Self::Ellipse(_) => Ok(self.clone()),
+            Self::Line(_)
+            | Self::Circle(_)
+            | Self::Ellipse(_)
+            | Self::Parabola(_)
+            | Self::Hyperbola(_) => Ok(self.clone()),
             Self::Nurbs(n) => restrict_nurbs(n, e).map(Self::Nurbs),
             Self::AngleLine(a) => match a.domain() {
                 ParamDomain::Bounded(domain)
@@ -193,6 +232,8 @@ impl Curve2 {
             Self::Line(l) => Self::Line(l.reversed()),
             Self::Circle(c) => Self::Circle(c.reversed()),
             Self::Ellipse(e) => Self::Ellipse(e.reversed()),
+            Self::Parabola(c) => Self::Parabola(c.reversed()),
+            Self::Hyperbola(c) => Self::Hyperbola(c.reversed()),
             Self::Nurbs(n) => Self::Nurbs(Arc::new(n.reversed())),
         }
     }
@@ -392,6 +433,8 @@ mod tests {
             Curve::Line(l) => l.direction().length() * (1.0 + t.abs()),
             Curve::Circle(k) => k.radius().mm(),
             Curve::Ellipse(e) => e.semi_x().mm().max(e.semi_y().mm()),
+            Curve::Parabola(k) => k.focal().mm() * (t * t + 2.0 * t.abs()),
+            Curve::Hyperbola(k) => k.semi_x().mm().max(k.semi_y().mm()) * scx_num::fmath::cosh(t),
             _ => 0.0,
         };
         max_abs(a.translation_part().to_array()) + 3.0 * col * (max_abs(p.to_array()) + size)
@@ -401,7 +444,7 @@ mod tests {
     fn transformed_maps_every_point_and_tangent() {
         let mut rng = Rng::new(34);
         let maps = maps(&mut rng);
-        let mut kinds = [0; 4];
+        let mut kinds = [0; 6];
         for c in curves(8) {
             for a in &maps {
                 let (image, shift) = c.transformed(a).unwrap();
@@ -409,9 +452,14 @@ mod tests {
                     Curve::Line(_) => 0,
                     Curve::Circle(_) => 1,
                     Curve::Ellipse(_) => 2,
-                    _ => 3,
+                    Curve::Parabola(_) => 3,
+                    Curve::Hyperbola(_) => 4,
+                    _ => 5,
                 }] += 1;
-                if !matches!(c, Curve::Circle(_) | Curve::Ellipse(_)) {
+                if !matches!(
+                    c,
+                    Curve::Circle(_) | Curve::Ellipse(_) | Curve::Parabola(_) | Curve::Hyperbola(_)
+                ) {
                     assert_eq!(shift, ParamShift::NONE);
                 }
                 let ts: Vec<f64> = match bounded(&c) {
@@ -432,19 +480,18 @@ mod tests {
                         "{c:?} {a:?} {t}: {:?} {want:?}",
                         k.point
                     );
+                    // The image's parameter runs `1 / stretch` as fast: the chain rule.
                     let dw = a.apply_vec(j.d[0]);
+                    let dk = k.d[0] / shift.stretch();
                     let scale = scale.max(3.0 * max_abs(dw.to_array()));
-                    assert!(
-                        near3(k.d[0], dw, scale, 1e-12),
-                        "{c:?} {t} {:?} {dw:?}",
-                        k.d[0]
-                    );
+                    assert!(near3(dk, dw, scale, 1e-12), "{c:?} {t} {dk:?} {dw:?}");
                 }
             }
         }
-        // Lines, circles under a random map (never a similarity) become ellipses, and NURBS.
+        // Lines, circles under a random map (never a similarity) become ellipses, the open
+        // conics stay themselves, and NURBS.
         assert_eq!(kinds[1], 0, "{kinds:?}");
-        assert!(kinds.iter().filter(|&&k| k > 0).count() == 3, "{kinds:?}");
+        assert!(kinds.iter().filter(|&&k| k > 0).count() == 5, "{kinds:?}");
     }
 
     fn unit_circle(sense: Sense) -> Circle {

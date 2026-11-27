@@ -3,8 +3,11 @@
 //! `scx_testkit::ssi`): every answer's curves and points lie on both surfaces and inside
 //! both extents, their kinds are the truth's, every truth point inside both extents lies on
 //! an answer's piece (so an empty answer is checked, not trusted), a crossing curve runs
-//! along `n_s x n_plane`, and `General` comes only where the truth is a hyperbola or a
-//! parabola, or has no closed form.
+//! along `n_s x n_plane`, and `General` comes only where the truth has no closed form. A
+//! cone's parabola, which the exact truth never reaches, is checked against the cone's
+//! generators met with the plane, and so is every cone answer. Each answer also comes
+//! through `intersect` both ways (63 SS2): the surface first the same, the plane first the
+//! same pieces run the other way.
 
 #![allow(
     missing_docs,
@@ -262,6 +265,8 @@ enum Class {
     Line,
     Circle,
     Ellipse,
+    Parabola,
+    Hyperbola,
     Other,
 }
 
@@ -279,7 +284,7 @@ fn truth_class(c: &ssi::Curve) -> Class {
                 Class::Ellipse
             }
         }
-        ssi::Curve::Hyperbola { .. } => Class::Other,
+        ssi::Curve::Hyperbola { .. } => Class::Hyperbola,
     }
 }
 
@@ -288,6 +293,8 @@ fn class(c: &Curve) -> Class {
         Curve::Line(_) => Class::Line,
         Curve::Circle(_) => Class::Circle,
         Curve::Ellipse(_) => Class::Ellipse,
+        Curve::Parabola(_) => Class::Parabola,
+        Curve::Hyperbola(_) => Class::Hyperbola,
         _ => Class::Other,
     }
 }
@@ -368,6 +375,29 @@ fn owed(s: &Side, pl: &Side, truth: &[ssi::Piece]) -> Vec<Point3> {
     out
 }
 
+/// What a cone's section owes, from the cone alone: each of `n` generators met with the
+/// plane (one division each, so to a few units of the last place), where that lies inside
+/// both extents. Empty for another kind.
+fn generators_owed(s: &Side, pl: &Side, n: u32) -> Vec<Point3> {
+    let Surface::Cone(k) = &s.surface else {
+        return Vec::new();
+    };
+    let (o, x, y, z) = axes_of(&s.surface).unwrap();
+    let kk = fmath::tan(k.half_angle());
+    let apex = o + z * (-k.radius().mm() / kk);
+    let nv = n_of(pl);
+    let delta = nv.dot(pl_origin(pl) - apex);
+    (0..n)
+        .filter_map(|i| {
+            let (sn, cs) = fmath::sin_cos(TAU * f64::from(i) / f64::from(n));
+            let dir = (x * cs + y * sn) * kk + z;
+            let lambda = delta / nv.dot(dir);
+            (lambda.is_finite() && lambda * kk >= 0.0).then(|| apex + dir * lambda)
+        })
+        .filter(|&q| inside(s, q, -MARGIN) && inside(pl, q, -MARGIN))
+        .collect()
+}
+
 fn n_of(pl: &Side) -> Vec3 {
     match &pl.surface {
         Surface::Plane(k) => *k.frame().z(),
@@ -391,6 +421,59 @@ enum Expect {
     General,
     /// Torus meridians: the truth has no closed form; on both surfaces and inside only.
     Meridians(usize),
+    /// A cone section the truth has no closed form for (a parabola): `General`, or pieces
+    /// checked against the generators.
+    Generators,
+}
+
+/// `back`, the plane-first answer, is `got` seen from the plane: the same kinds of piece in
+/// the same order, each between the same ends run the other way (a tangent curve either
+/// way, as `n_a x n_b` vanishes along it; a whole turn by its kind only), the same touch
+/// points, and a coincidence's extents swapped.
+fn reversed(name: &str, got: &Closed<Intersection>, back: &Closed<Intersection>) {
+    let near = |p: Point3, q: Point3| p.distance(q) <= 1e-9 * (1.0 + p.to_vec().length());
+    match (got.as_solved(), back.as_solved()) {
+        (None, None) => {}
+        (Some(Intersection::Empty), Some(Intersection::Empty)) => {}
+        (
+            Some(Intersection::Coincident { on_a, on_b }),
+            Some(Intersection::Coincident { on_a: ba, on_b: bb }),
+        ) => assert_eq!((on_a, on_b), (bb, ba), "{name}: coincident extents"),
+        (
+            Some(Intersection::Pieces { curves, points }),
+            Some(Intersection::Pieces {
+                curves: bc,
+                points: bp,
+            }),
+        ) => {
+            assert_eq!(curves.len(), bc.len(), "{name}: pieces {got:?} {back:?}");
+            for (a, b) in curves.iter().zip(bc) {
+                assert_eq!(
+                    core::mem::discriminant(&a.curve),
+                    core::mem::discriminant(&b.curve),
+                    "{name}: kinds {a:?} {b:?}"
+                );
+                assert_eq!(a.contact, b.contact, "{name}: contact");
+                let ends = |c: &analytic::IntersectionCurve| {
+                    (c.curve.point(c.span.min()), c.curve.point(c.span.max()))
+                };
+                let ((a0, a1), (b0, b1)) = (ends(a), ends(b));
+                let (la, lb) = (a.span.max() - a.span.min(), b.span.max() - b.span.min());
+                let whole = la >= TAU - 1e-12 && lb >= TAU - 1e-12;
+                assert!(
+                    whole
+                        || (near(a0, b1) && near(a1, b0))
+                        || (a.contact == Contact::Tangent && near(a0, b0) && near(a1, b1)),
+                    "{name}: ends {a0:?} {a1:?} against {b1:?} {b0:?}"
+                );
+            }
+            assert_eq!(points.len(), bp.len(), "{name}: points");
+            for (p, q) in points.iter().zip(bp) {
+                assert!(near(p.point, q.point), "{name}: point {p:?} {q:?}");
+            }
+        }
+        _ => panic!("{name}: {got:?} against plane-first {back:?}"),
+    }
 }
 
 /// Checks the section of `s` by `pl` and returns it.
@@ -417,11 +500,23 @@ fn check(name: &str, s: &Side, pl: &Side, expect: Expect) -> Closed<Intersection
         res,
     );
     assert_eq!(via, got, "{name}: intersect differs from section_by_plane");
+    let back = analytic::intersect(
+        &pl.surface,
+        &pl.extent,
+        &s.surface,
+        &s.extent,
+        [acc, acc],
+        res,
+    );
+    reversed(name, &got, &back);
     let truth = ssi::intersect(&s.kind, &pl.kind);
     // A cylinder or cone wholly off the plane is empty even where its section has no
     // closed form: the truth's samples check it below.
     let off = matches!(got.as_solved(), Some(Intersection::Empty))
         && matches!(s.surface, Surface::Cylinder(_) | Surface::Cone(_));
+    if expect == Expect::Generators && got.is_general() {
+        return got;
+    }
     if expect == Expect::General && !off {
         if let (Some(Intersection::Empty), Surface::Torus(k)) = (got.as_solved(), &s.surface) {
             // Past the torus's extent along the normal (the core circle's `major s` and the
@@ -464,6 +559,7 @@ fn check(name: &str, s: &Side, pl: &Side, expect: Expect) -> Closed<Intersection
             assert_eq!(curves.len(), n, "{name}: meridians {answer:?}");
             Vec::new()
         }
+        (_, Expect::Generators) => Vec::new(),
         (Ok(Section::Curves(t)), _) => t.clone(),
         (Ok(Section::Empty), _) => Vec::new(),
         (other, _) => panic!("{name}: truth {other:?}"),
@@ -529,7 +625,10 @@ fn check(name: &str, s: &Side, pl: &Side, expect: Expect) -> Closed<Intersection
             );
         }
     }
-    for q in owed(s, pl, &tpieces) {
+    for q in owed(s, pl, &tpieces)
+        .into_iter()
+        .chain(generators_owed(s, pl, 2000))
+    {
         let near_curve = curves
             .iter()
             .map(|c| distance_to(&c.curve, c.span.min(), c.span.max(), q))
@@ -713,8 +812,32 @@ fn cone_sections() {
             kinds(&check("generators", &low, &steep, Expect::Truth)),
             vec![(Class::Line, Contact::Transversal); 2]
         );
+        // Along the axis off it: the branch on the nappe, its vertex below the extent's
+        // height, so in two pieces.
         let hyperbola = big_plane(p(0.3, 0.0, 0.0), v(1.0, 0.0, 0.0), v(0.0, 1.0, 0.0));
-        check("hyperbola", &c, &hyperbola, Expect::General);
+        assert_eq!(
+            kinds(&check("hyperbola", &c, &hyperbola, Expect::Truth)),
+            vec![(Class::Hyperbola, Contact::Transversal); 2]
+        );
+        let tilted = big_plane(p(0.5, 0.2, 1.0), v(1.0, 0.1, 0.15), v(0.0, 1.0, 0.0));
+        assert_eq!(
+            kinds(&check("hyperbola tilted", &c, &tilted, Expect::Truth)),
+            vec![(Class::Hyperbola, Contact::Transversal)]
+        );
+        // Parallel to a generator (square to it turned into the plane): a parabola, one
+        // piece inside it, and outside it (the other nappe) nothing.
+        for (h, pieces) in [(-1.5, 1), (1.5, 0)] {
+            let (sn, cs) = fmath::sin_cos(0.4);
+            let normal = v(cs, 0.0, -sn * sense.sign());
+            let on = p(1.0 + h * cs, 0.0, -h * sn * sense.sign());
+            let par = big_plane(on, normal, v(0.0, 1.0, 0.0));
+            let got = check("parabola", &c, &par, Expect::Generators);
+            assert_eq!(
+                kinds(&got),
+                vec![(Class::Parabola, Contact::Transversal); pieces],
+                "parabola at {h}"
+            );
+        }
         // Square to the axis past the apex: only the other nappe, outside the domain.
         let beyond = big_plane(
             p(0.0, 0.0, (apex_z - 1.0) * sense.sign()),
@@ -900,6 +1023,7 @@ fn sense_of(rng: &mut Rng) -> Sense {
 fn random_sections() {
     let mut rng = Rng::new(0x5ec7_1011);
     let mut tally = [0usize; 3];
+    let mut branches = 0;
     for i in 0..400 {
         let f = random_frame(&mut rng, 5.0);
         let sense = sense_of(&mut rng);
@@ -944,13 +1068,8 @@ fn random_sections() {
         let pl = random_plane_near(&mut rng, f.origin(), 3.0);
         let truth = ssi::intersect(&side.kind, &pl.kind);
         let expect = match (&truth, &side.surface) {
+            (Err(_), Surface::Cone(_)) => Expect::Generators,
             (Err(_), _) => Expect::General,
-            (Ok(Section::Curves(t)), _)
-                if t.iter().any(|q| truth_class(&q.curve) == Class::Other) =>
-            {
-                Expect::General
-            }
-            // The truth's cone has both nappes; a parabola is its own error-free case.
             _ => Expect::Truth,
         };
         let name = format!("random {i}");
@@ -959,6 +1078,10 @@ fn random_sections() {
             // `r + k v >= 0`), so the full check applies.
         }
         let got = check(&name, &side, &pl, expect);
+        branches += kinds(&got)
+            .iter()
+            .filter(|k| k.0 == Class::Hyperbola)
+            .count();
         tally[match got.as_solved() {
             None => 0,
             Some(Intersection::Empty) => 1,
@@ -967,4 +1090,5 @@ fn random_sections() {
     }
     // The mix exercises every outcome.
     assert!(tally.iter().all(|&n| n > 10), "{tally:?}");
+    assert!(branches > 15, "{branches} hyperbola pieces");
 }
