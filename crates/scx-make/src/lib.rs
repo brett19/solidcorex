@@ -1,6 +1,7 @@
 // Written for solidcorex. Apache-2.0.
-//! Constructors of bodies (research 72 §4, task MK1): each takes a [`Frame`] and sizes and
-//! returns a [`Made`], the finished body with a typed record of its faces by role.
+//! Constructors of bodies (research 72 §4, tasks MK1 and MK3): each takes a [`Frame`] and
+//! sizes, or a planar region ([`extrude`]), and returns a [`Made`], the finished body with a
+//! typed record of its faces by role.
 //!
 //! - **Built with the topology known.** A constructor writes every vertex, edge and face of
 //!   its body into one [`Draft`](scx_brep::Draft), the shared edges made once and each
@@ -24,9 +25,11 @@
 mod assembly;
 mod block;
 mod error;
+mod extrude;
 
 pub use block::{BlockFaces, block};
-pub use error::{Defect, Dimension, MakeError, Refusal};
+pub use error::{Defect, Dimension, MakeError, Refusal, Unsupported};
+pub use extrude::{ExtrudeFaces, Span, extrude};
 
 use scx_brep::Brep;
 
