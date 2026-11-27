@@ -3009,3 +3009,18 @@ Readings:
 - an about-equilateral lattice at `0.8 sqrt(3) sqrt(c (2ρ − c))` on a sphere or torus, its row steps capped at 1.5 row spacings in scaled `uv`.
 
 Every triangle is checked against a proved sag bound: for a ruled surface, `max 2 ρ_i sin²((φ_i − mid)/2)`, the minimax dual; for a round surface, the enclosing-circle cap `ρ − sqrt(ρ² − R²)`. A triangle that fails adds its centroid, up to 32 rounds, then `Defect(Refinement)`. Sphere and torus faces ask TS1 for boundary segments at that lattice side. Every MK2 primitive and an MK3 extrusion with circles meshes closed (T13 oracle, crack statement). NURBS faces stay `Unsupported(FaceKind)` until step 5."
+
+### 14.25 DT2 as built (11-27)
+
+(§14.24 is BO2's; this is the next free number.) The constructor and extrusion recipes in `t_slice` now answer `Valid`, `Manifold` and `Mesh` from scx. `NotYet::Mesh` and `NotYet::Contract` are removed; `Boolean`, `Work` and `Lineage` stay. `scx-difftest` gains `scx-check` and `scx-tess` as dev dependencies.
+
+**Result.** scx: 157 pass, 0 fail, 326 not yet (Boolean 297, Work 29); DT1c had 109 pass and 374 not yet. The 48 new passes are `Valid` and `Manifold` on the 16 constructor recipes that build (32) and `Mesh` on the 16 (16). `cargo test -p scx-difftest --release t_slice`: 2 tests passed, 40.75 s test time (the pin's time; the scx side adds little). No scx failure was found.
+
+**The checks.**
+- `Valid` and `Manifold` are both `scx_check::contract` (a `Proved` is `Pass`, an error is `Fail` with the first breach and its `Debug`). For: CK1's tests (closed, two fins per edge, regions proved, certified outward) cover both of T12's statements, and the pin's two checks (`integrity::check`, `is_manifold_solid`) are likewise one question of a built body. Against: a failure of one cannot be told from the other except by the breach's name, which is printed.
+- `Mesh` is `scx_tess::tessellate` at chord `0.01 cbrt(V)`, never below `10 c`, with no angle or edge-length bound. It passes when T13's oracle (`violations`, default limits) finds nothing (closed, manifold, outward, no fold-over, no degenerate triangle), every face's stated `chord_bound` is within the chord, and the signed volume is within `chord x truth area + 1e-9 V` of truth's volume (`volume_gap`). For: this is TS3's own test, judged against T9's closed forms and not against the pin's mesh, and the chord scales with the body so a 1e4 body and a 1e-4 one are both asked for the same relative fidelity. Against: one chord per recipe; finer chords, tilted frames and the angle and edge-length bounds are in `scx-tess/tests/curved.rs` and not repeated here. A recipe with no stated area is judged on the oracle and the bound only (none of the constructors lacks one).
+- Judged as DT1c judged classification: against truth, never against the pin, no tolerance widened to pass. A refused recipe has no body and keeps its outcome check only.
+
+**Not done, left typed.** Booleans (297 `Boolean`), `Work` (BO6) and `Lineage` (BO). The pin's mesh is still not run (as DT1 said).
+
+**Proposed 04 row.** "DT2 (72 §14.25): `t_slice` runs `scx_check::contract` (as `Valid` and `Manifold`) and `scx_tess::tessellate` (T13's oracle, face bounds within the chord, volume within chord times truth's area) on every constructor and extrusion recipe, judged against truth. scx: 157 pass, 0 fail, 326 not yet (Boolean 297, Work 29). Change if: a recipe fails either check, or the Boolean results should be meshed and proved the same way (DT3)."
