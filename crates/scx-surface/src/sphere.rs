@@ -19,6 +19,8 @@ use crate::Pole;
 use crate::arcs::Arcs;
 use crate::common::{Axes, check_lengths, unit};
 use crate::error::{Size, SurfaceError, positive};
+use crate::invert::{self, Closest, Inversion, Periods};
+use scx_num::extent2d::Extent2d;
 use scx_num::jet::SurfaceJet;
 
 /// The `u` direction: a turn over `[0, 1]`.
@@ -166,5 +168,47 @@ impl Sphere {
     #[must_use]
     pub fn from_step(&self, step: Point2) -> Point2 {
         Point2::new(U.parameter(step.x), V.parameter(step.y))
+    }
+}
+
+impl Sphere {
+    /// The nearest point to `p`: the radial foot along `p - O`; the pole on `p`'s side
+    /// ([`Closest::AlongU`]) for `p` on the axis, and every point ([`Closest::Every`]) for
+    /// `p` at the centre.
+    #[must_use]
+    pub fn closest(&self, p: Point3) -> Closest {
+        let (x, y, z) = self.axes().local(p);
+        let at = |uv: Point2| invert::foot(p, uv, self.point(uv));
+        if x == 0.0 && y == 0.0 {
+            if z == 0.0 {
+                return Closest::Every {
+                    distance: at(Point2::new(0.0, 0.0)).distance,
+                };
+            }
+            let v = if z < 0.0 { 0.0 } else { 1.0 };
+            return Closest::AlongU {
+                v,
+                distance: at(Point2::new(0.0, v)).distance,
+            };
+        }
+        let rho = (x * x + y * y).sqrt();
+        Closest::One(at(Point2::new(
+            U.of_direction(x, y),
+            V.of_direction(rho, z),
+        )))
+    }
+
+    /// The nearest point to `p`, inside `domain` (`u` wrapped by its period, 1) or not
+    /// (`None`: the whole sphere). At a pole the foot is at the domain's start in `u`; at
+    /// the centre, at the domain's start.
+    #[must_use]
+    pub fn invert(&self, p: Point3, domain: Option<&Extent2d>) -> Inversion<Point2> {
+        let periods = Periods {
+            u: Some(1.0),
+            v: None,
+        };
+        invert::invert(self.closest(p), periods, domain, |uv| {
+            invert::foot(p, uv, self.point(uv))
+        })
     }
 }

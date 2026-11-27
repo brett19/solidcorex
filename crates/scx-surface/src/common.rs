@@ -34,6 +34,12 @@ impl Axes {
         }
     }
 
+    /// `p`'s coordinates along `X`, `Y` and `Z`: the radial pair and the height.
+    pub(crate) fn local(&self, p: Point3) -> (f64, f64, f64) {
+        let d = p - self.o;
+        (d.dot(self.x), d.dot(self.y), d.dot(self.z))
+    }
+
     /// `cos X + sin Y`.
     pub(crate) fn radial(&self, (c, s): (f64, f64)) -> Vec3 {
         self.x * c + self.y * s

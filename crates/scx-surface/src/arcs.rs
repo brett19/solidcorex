@@ -232,6 +232,60 @@ impl Arcs {
         (k as f64 + 0.5) * self.span + tau / self.rate()
     }
 
+    /// The parameter whose `(cos phi, sin phi)` points along `(x, y)`, with no
+    /// transcendental function: in `[0, 4 L)` on the turn, and in `[0, 1]` on the half turn
+    /// for `x >= 0` (a direction with `x < 0` is past the half turn's ends and gets an end).
+    ///
+    /// The arc is read from the signs, `(x, y)` is turned back by the arc's middle angle to
+    /// `(x', y')`, and `tau = tan(psi / 2) = y' / (|(x, y)| + x')` (with `|psi| <= pi/4`, the
+    /// denominator is at least `(1 + cos(pi/4)) |(x, y)|`, so no cancellation). A direction
+    /// along an axis gets its break exactly. `(0, 0)` gives the start; a NaN, a NaN.
+    pub(crate) fn of_direction(self, x: f64, y: f64) -> f64 {
+        let period = self.span * self.count() as f64;
+        let q: usize = match self.sweep {
+            Sweep::Turn => {
+                if y == 0.0 {
+                    return if x < 0.0 { 2.0 * self.span } else { 0.0 };
+                }
+                if x == 0.0 {
+                    return if y > 0.0 { self.span } else { 3.0 * self.span };
+                }
+                match (x > 0.0, y > 0.0) {
+                    (true, true) => 0,
+                    (false, true) => 1,
+                    (false, false) => 2,
+                    (true, false) => 3,
+                }
+            }
+            Sweep::Half => {
+                if y == 0.0 && x >= 0.0 {
+                    return 0.5;
+                }
+                if x <= 0.0 {
+                    return if y < 0.0 { 0.0 } else { 1.0 };
+                }
+                usize::from(y > 0.0)
+            }
+        };
+        let (cm, sm) = self.mid(q);
+        let (xr, yr) = (cm * x + sm * y, cm * y - sm * x);
+        let r = (x * x + y * y).sqrt();
+        let tau = yr / (r + xr);
+        let t = (q as f64 + 0.5) * self.span + tau / self.rate();
+        // Rounding may step an ulp past the arc's ends; the turn wraps, the half clamps.
+        if t < 0.0 {
+            0.0
+        } else if t >= period {
+            if self.sweep == Sweep::Turn {
+                0.0
+            } else {
+                period
+            }
+        } else {
+            t + 0.0
+        }
+    }
+
     /// The parameter of each break in `[lo, hi]`, for tests and poles.
     #[cfg(test)]
     pub(crate) fn span(self) -> f64 {
@@ -268,6 +322,39 @@ mod tests {
                 assert!((back - t).abs() < 1e-14 * (1.0 + t.abs()), "{t} {back}");
             }
         }
+    }
+
+    #[test]
+    fn of_direction_inverts_cos_sin() {
+        for a in [Arcs::turn(1.0), Arcs::turn(7.3), Arcs::half()] {
+            let end = a.span() * a.count() as f64;
+            for i in 0..=400 {
+                let t = end * (f64::from(i) / 400.0);
+                let (c, s) = a.cos_sin(t, a.piece(t, Approach::Above));
+                for scale in [1.0, 3.5e-7, 2.0e9] {
+                    let back = a.of_direction(c * scale, s * scale);
+                    let want = if a.sweep == Sweep::Turn && i == 400 {
+                        0.0
+                    } else {
+                        t
+                    };
+                    assert!((back - want).abs() <= 1e-15 * end, "{t} {scale}: {back}");
+                    assert!((0.0..end).contains(&back) || back == end && a.sweep == Sweep::Half);
+                }
+            }
+            // Breaks along the axes are exact.
+            for k in 0..a.count() {
+                let t = a.span() * k as f64;
+                let (c, s) = a.cos_sin(t, a.piece(t, Approach::Above));
+                let (c, s) = (c.round(), s.round());
+                assert_eq!(a.of_direction(c, s), t, "{k}");
+            }
+        }
+        let h = Arcs::half();
+        assert_eq!(h.of_direction(0.0, -2.0), 0.0);
+        assert_eq!(h.of_direction(0.0, 2.0), 1.0);
+        assert_eq!(Arcs::turn(1.0).of_direction(0.0, 0.0), 0.0);
+        assert!(Arcs::turn(1.0).of_direction(f64::NAN, 1.0).is_nan());
     }
 
     #[test]
