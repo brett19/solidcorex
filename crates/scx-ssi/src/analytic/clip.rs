@@ -180,6 +180,24 @@ impl Shape {
         }
     }
 
+    /// The parameter of `p`, a point on the curve: on a conic in `[0, 2 pi)`.
+    fn param(&self, p: Point3) -> f64 {
+        match *self {
+            Self::Line { o, d } => (p - o).dot(d),
+            Self::Conic { c, a, b, .. } => {
+                let v = p - c;
+                fmath::atan2(v.dot(b) / b.dot(b), v.dot(a) / a.dot(a)).rem_euclid(TAU)
+            }
+            Self::Parabola { v, y, .. } => (p - v).dot(y) / y.dot(y),
+            Self::Hyperbola { c, b, .. } => {
+                let sh = (p - c).dot(b) / b.dot(b);
+                // asinh, without cancellation for either sign.
+                let t = fmath::ln(sh.abs() + fmath::hypot(sh, 1.0));
+                t.copysign(sh)
+            }
+        }
+    }
+
     /// The same curve run the other way, `t -> -t`.
     fn reversed(self) -> Self {
         match self {
@@ -257,13 +275,15 @@ fn quadratic(a: f64, b: f64, c: f64, out: &mut Vec<f64>) {
     }
 }
 
-/// A section curve with how the surfaces meet along it and any sides of its own (a torus
-/// meridian's tube angle).
+/// A section curve with how the surfaces meet along it, any sides of its own (a torus
+/// meridian's tube angle) and the parameters of the branch points on it, where its pieces
+/// are cut although they stay inside both extents.
 #[derive(Clone, Debug)]
 pub(super) struct Raw {
     pub(super) shape: Shape,
     pub(super) contact: Contact,
     pub(super) sides: Vec<Side>,
+    branches: Vec<f64>,
 }
 
 impl Raw {
@@ -272,6 +292,16 @@ impl Raw {
             shape,
             contact,
             sides: Vec::new(),
+            branches: Vec::new(),
+        }
+    }
+
+    /// Cuts the curve's pieces at `p`, where another curve crosses it, when `p` lies within
+    /// `tol` of it.
+    pub(super) fn branch_at(&mut self, p: Point3, tol: f64) {
+        let t = self.shape.param(p);
+        if self.shape.at(t).distance(p) <= tol {
+            self.branches.push(t);
         }
     }
 }
@@ -597,25 +627,35 @@ impl<'a> Clip<'a> {
             for side in shared.iter().chain(&raw.sides) {
                 raw.shape.crossings(side, &mut cuts);
             }
-            let spans = self.spans(&raw.shape, cuts);
+            let spans = self.branched(&raw, self.spans(&raw.shape, cuts));
             let Some(first) = spans.first() else {
                 continue;
             };
-            let mut shape = raw.shape;
-            let mut spans_in = spans.clone();
-            if raw.contact == Contact::Transversal {
-                let t = 0.5 * (first[0] + first[1]);
-                let at = shape.at(t);
-                if let (Some(na), Some(nb)) = (self.a.normal(at), self.b.normal(at)) {
-                    let want = na.cross(nb);
-                    if shape.tangent(t).dot(want) < 0.0 {
-                        shape = shape.reversed();
-                        spans_in = spans.iter().map(|&s| flipped(&shape, s)).collect();
-                    }
+            // Each piece runs along `n_a x n_b`: one turn of the curve decides all its pieces,
+            // except across a branch point, where the surfaces touch and the product turns
+            // over, so each piece decides its own.
+            let backwards = |[t0, t1]: [f64; 2]| {
+                let t = 0.5 * (t0 + t1);
+                let at = raw.shape.at(t);
+                match (self.a.normal(at), self.b.normal(at)) {
+                    (Some(na), Some(nb)) => raw.shape.tangent(t).dot(na.cross(nb)) < 0.0,
+                    _ => false,
                 }
-            }
-            let curve = shape.curve()?;
-            for [t0, t1] in spans_in {
+            };
+            let turned = raw.contact == Contact::Transversal && backwards(*first);
+            let (forward, reversed) = (raw.shape, raw.shape.reversed());
+            let mut curve: [Option<Curve>; 2] = [None, None];
+            for span in spans {
+                let back = if raw.contact == Contact::Transversal && !raw.branches.is_empty() {
+                    backwards(span)
+                } else {
+                    turned
+                };
+                let (shape, [t0, t1]) = if back {
+                    (&reversed, flipped(&reversed, span))
+                } else {
+                    (&forward, span)
+                };
                 let mid = shape.at(0.5 * (t0 + t1));
                 let (p0, p1) = (shape.at(t0), shape.at(t1));
                 let tol = self.tol;
@@ -625,8 +665,12 @@ impl<'a> Clip<'a> {
                         contact: raw.contact,
                     });
                 } else {
+                    let slot = curve.get_mut(usize::from(back))?;
+                    if slot.is_none() {
+                        *slot = Some(shape.curve()?);
+                    }
                     curves.push(IntersectionCurve {
-                        curve: curve.clone(),
+                        curve: slot.clone()?,
                         span: Extent1d::new(t0, t1)?,
                         contact: raw.contact,
                     });
@@ -641,6 +685,55 @@ impl<'a> Clip<'a> {
         if self.contains(p) {
             points.push(IntersectionPoint { point: p, contact });
         }
+    }
+
+    /// `spans` cut at the raw's branch points: a whole turn of a conic runs from one branch
+    /// point round to the next; a cut within the tolerance of a span's end is no cut.
+    fn branched(&self, raw: &Raw, spans: Vec<[f64; 2]>) -> Vec<[f64; 2]> {
+        if raw.branches.is_empty() {
+            return spans;
+        }
+        let shape = &raw.shape;
+        let conic = matches!(shape, Shape::Conic { .. });
+        let mut bs = raw.branches.clone();
+        bs.sort_by(f64::total_cmp);
+        let mut out = Vec::with_capacity(spans.len() + bs.len());
+        for [t0, t1] in spans {
+            let mut cuts: Vec<f64> = if conic && t1 - t0 >= FULL_TURN {
+                // The whole turn, started at the first branch point.
+                let s = bs.first().copied().unwrap_or(0.0);
+                let mut c: Vec<f64> = bs.iter().map(|&b| b - s).collect();
+                c.push(TAU);
+                let mut prev = 0.0;
+                for t in c {
+                    out.push([s + prev, s + t]);
+                    prev = t;
+                }
+                continue;
+            } else if conic {
+                bs.iter()
+                    .flat_map(|&b| [b, b + TAU])
+                    .filter(|&b| b > t0 && b < t1)
+                    .collect()
+            } else {
+                bs.iter().copied().filter(|&b| b > t0 && b < t1).collect()
+            };
+            cuts.sort_by(f64::total_cmp);
+            let (p0, p1) = (shape.at(t0), shape.at(t1));
+            cuts.retain(|&b| {
+                let q = shape.at(b);
+                q.distance(p0) > self.tol && q.distance(p1) > self.tol
+            });
+            let mut prev = t0;
+            for b in cuts {
+                out.push([prev, b]);
+                prev = b;
+            }
+            out.push([prev, t1]);
+        }
+        // A whole turn's pieces through a repeated branch point have no length.
+        out.retain(|[t0, t1]| t1 > t0);
+        out
     }
 
     /// The spans of the curve's parameter inside both extents, between the crossings

@@ -834,7 +834,17 @@ fn near_axes() {
         )
     };
     assert!(is_coincident(&solve(&c, &tilted(1e-12))));
-    assert!(solve(&c, &tilted(1e-3)).is_general());
+    // Tilted by more, the axes still meet (at `z = -1`): two cylinders of one radius, the
+    // Miller-Goldman pair's ellipses (research 73 §17). Moved off that meeting too, `General`.
+    assert!(matches!(solve(&c, &tilted(1e-3)), Closed::Solved(_)));
+    let skew = cylinder(
+        frame(p(1e-3, 1e-3, 0.0), v(1e-3, 0.0, 1.0), v(1.0, 0.0, 0.0)),
+        1.0,
+        Sense::Forward,
+        TURN,
+        [-1.0, 1.0],
+    );
+    assert!(solve(&c, &skew).is_general());
     let s = |x: f64| {
         sphere(
             frame(p(x, 0.0, 0.5), v(0.0, 0.0, 1.0), v(1.0, 0.0, 0.0)),
@@ -846,15 +856,19 @@ fn near_axes() {
     };
     assert_eq!(counts(&solve(&c, &s(1e-12))), (2, 0));
     assert!(solve(&c, &s(1e-3)).is_general());
-    // Square axes are never one.
-    let across = cylinder(
-        frame(p(0.0, 0.0, 0.0), v(1.0, 0.0, 0.0), v(0.0, 1.0, 0.0)),
-        1.0,
-        Sense::Forward,
-        TURN,
-        [-2.0, 2.0],
-    );
-    assert!(solve(&c, &across).is_general());
+    // Square axes are never one: of one radius they are the Steinmetz pair (73 §17), of two
+    // radii `General`.
+    let across = |r: f64| {
+        cylinder(
+            frame(p(0.0, 0.0, 0.0), v(1.0, 0.0, 0.0), v(0.0, 1.0, 0.0)),
+            r,
+            Sense::Forward,
+            TURN,
+            [-2.0, 2.0],
+        )
+    };
+    assert!(matches!(solve(&c, &across(1.0)), Closed::Solved(_)));
+    assert!(solve(&c, &across(0.7)).is_general());
 }
 
 // ---------------------------------------------------------------- random

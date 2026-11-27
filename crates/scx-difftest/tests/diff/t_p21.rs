@@ -465,6 +465,69 @@ struct Corpus {
     part42: Tally,
     part42_refused: usize,
     products: Tally,
+    /// The pin's unit defects (research 74 §23): where the file leaves a unit out, or lists two,
+    /// or states several uncertainties, scx says so and the pin reads mm / rad / the last one.
+    pin_units: PinUnits,
+}
+
+/// How often the pin's reading of a context is a defect rather than a disagreement.
+#[derive(Default)]
+struct PinUnits {
+    /// A unit the context names none of (scx `Unit::Missing`): the pin reads mm or radians.
+    defaulted: usize,
+    /// Two different units of one kind (scx `Unit::Conflicting`): the pin keeps the last.
+    conflicting: usize,
+    /// Several uncertainties (scx keeps the largest): the pin keeps the last.
+    last_wins: usize,
+    /// A product read scx refuses for want of a length unit, which the pin reads in mm.
+    refused: usize,
+}
+
+/// The unit the pin reads where scx reads `u`: the file's, or the pin's default (millimetres,
+/// radians: `default`, written out here at the comparison) where the file names none, counted
+/// as the pin's defect. `None` for two different units, which has no pin value to compare (the
+/// pin keeps the last), also counted.
+fn pin_unit(u: x::units::Unit, default: f64, n: &mut PinUnits) -> Option<f64> {
+    match u {
+        x::units::Unit::Named(f) => Some(f),
+        x::units::Unit::Missing => {
+            n.defaulted += 1;
+            Some(default)
+        }
+        x::units::Unit::Conflicting => {
+            n.conflicting += 1;
+            None
+        }
+    }
+}
+
+/// The pin's reading of the context scx reads as `c` (its units, its uncertainty), with
+/// `None` for a part that is the pin's defect and cannot be compared.
+struct PinView {
+    len: Option<f64>,
+    ang: Option<f64>,
+    /// Outer `None`: not compared (several uncertainties, or no length unit to read them in).
+    uncertainty: Option<Option<f64>>,
+}
+
+fn pin_view(c: &x::units::Context, n: &mut PinUnits) -> PinView {
+    let d = x::units::Units::default();
+    let len = pin_unit(c.length, d.len, n);
+    let ang = pin_unit(c.angle, d.ang, n);
+    let uncertainty = len.and_then(|l| {
+        let u = c.uncertainty(l);
+        if u.several {
+            n.last_wins += 1;
+            None
+        } else {
+            Some(u.largest)
+        }
+    });
+    PinView {
+        len,
+        ang,
+        uncertainty,
+    }
 }
 
 fn same_f(a: f64, b: f64) -> bool {
@@ -486,7 +549,16 @@ fn part42_x(ex: &x::Exchange, ids: &BTreeSet<u64>) -> Vec<(u64, String, Result<S
     let ctx = ids
         .iter()
         .find(|id| ex.get(**id).unwrap().has("GLOBAL_UNIT_ASSIGNED_CONTEXT"));
-    let units = ctx.map_or_else(Default::default, |id| x::units::context(ex, *id).units);
+    // The pin reads a missing unit as its default; the same is written out here, so both
+    // readers read the geometry in the same units (a conflict names no unit: the default).
+    let d = x::units::Units::default();
+    let units = ctx.map_or(d, |id| {
+        let c = x::units::context(ex, *id);
+        x::units::Units {
+            len: c.length.named().unwrap_or(d.len),
+            ang: c.angle.named().unwrap_or(d.ang),
+        }
+    });
     let mut r = x::part42::read::Reader::new(ex, units);
     ids.iter()
         .filter_map(|id| {
@@ -558,10 +630,27 @@ fn kind(n: &str) -> Option<Kind> {
     }
 }
 
-fn product_x(ex: &x::Exchange) -> Result<String, ()> {
-    x::product::read(ex)
-        .map(|v| format!("{v:?}"))
-        .map_err(|_| ())
+/// scx's product structure as text in the pin's shape, with each representation's context
+/// written as the pin reads it (a missing unit as the pin's default). `Err(true)`:
+/// refused for want of a length unit, which the pin reads in millimetres; `Err(false)`: any
+/// other refusal. `Ok((text, comparable))`: `comparable` is false where the pin's reading of a
+/// context is its defect with no value to compare (conflicting units, several uncertainties).
+fn product_x(ex: &x::Exchange, n: &mut PinUnits) -> Result<(String, bool), bool> {
+    let ps = x::product::read(ex).map_err(|e| format!("{e:?}").contains("Units("))?;
+    let mut text = format!("{ps:?}");
+    let mut comparable = true;
+    for r in &ps.representations {
+        let v = pin_view(&r.units, n);
+        let (Some(len), Some(ang), Some(unc)) = (v.len, v.ang, v.uncertainty) else {
+            comparable = false;
+            continue;
+        };
+        let pin_form = format!(
+            "Context {{ units: Units {{ len: {len:?}, ang: {ang:?} }}, uncertainty: {unc:?} }}"
+        );
+        text = text.replace(&format!("{:?}", r.units), &pin_form);
+    }
+    Ok((text, comparable))
 }
 
 fn compare_file(name: &str, text: &str, c: &mut Corpus) {
@@ -631,14 +720,17 @@ fn compare_file(name: &str, text: &str, c: &mut Corpus) {
         if e.has("GLOBAL_UNIT_ASSIGNED_CONTEXT") || e.has("GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT") {
             let a = x::units::context(ex, *id);
             let b = solidcore_record::step::units::context(&p, *id);
+            let v = pin_view(&a, &mut c.pin_units);
             let eq = |f: fn(f64, f64) -> bool| {
-                f(a.units.len, b.units.len)
-                    && f(a.units.ang, b.units.ang)
-                    && match (a.uncertainty, b.uncertainty) {
-                        (Some(u), Some(v)) => f(u, v),
+                // A part that is the pin's defect is not compared; a missing unit is compared
+                // with the pin's default.
+                v.len.is_none_or(|l| f(l, b.units.len))
+                    && v.ang.is_none_or(|g| f(g, b.units.ang))
+                    && v.uncertainty.is_none_or(|u| match (u, b.uncertainty) {
+                        (Some(u), Some(w)) => f(u, w),
                         (None, None) => true,
                         _ => false,
-                    }
+                    })
             };
             c.contexts.take(eq(same_f), eq(close), || {
                 format!("{name}: context #{id}: scx {a:?} pin {b:?}")
@@ -668,18 +760,28 @@ fn compare_file(name: &str, text: &str, c: &mut Corpus) {
             }),
         }
     }
-    let a = product_x(ex);
-    if a != product_x(ex) {
+    // The contexts' own tally counts the pin's unit defects; these reads are not counted again.
+    let a = product_x(ex, &mut PinUnits::default());
+    if a != product_x(ex, &mut PinUnits::default()) {
         c.products.unstable.push(name.to_owned());
     }
     let b = solidcore_record::step::product::read(&p)
         // the pin names its node `Instance`; the fields are the same
         .map(|v| format!("{v:?}").replace("Instance {", "Node {"))
         .map_err(|_| ());
-    c.products.take(a == b, false, || {
-        let cut = |r: &Result<String, ()>| format!("{r:?}").chars().take(400).collect::<String>();
-        format!("{name}: product: scx {}\n  pin {}", cut(&a), cut(&b))
-    });
+    match &a {
+        // Refused for want of a length unit where the pin reads in millimetres: its defect.
+        Err(true) if b.is_ok() => c.pin_units.refused += 1,
+        Ok((_, false)) => {}
+        _ => {
+            let a = a.map(|x| x.0).map_err(|_| ());
+            c.products.take(a == b, false, || {
+                let cut =
+                    |r: &Result<String, ()>| format!("{r:?}").chars().take(400).collect::<String>();
+                format!("{name}: product: scx {}\n  pin {}", cut(&a), cut(&b))
+            });
+        }
+    }
 }
 
 /// One instance's records, fingerprinted.
@@ -740,6 +842,10 @@ fn p21_corpus() {
     for (name, t) in &all {
         t.report(name);
     }
+    println!(
+        "difftest t_p21::corpus_pin_units: pin defects: {} missing units read as mm/rad, {} conflicting units read as the last, {} several uncertainties read as the last, {} products read where scx refuses for want of a length unit",
+        c.pin_units.defaulted, c.pin_units.conflicting, c.pin_units.last_wins, c.pin_units.refused
+    );
     println!(
         "difftest t_p21::corpus_part42: {} reads refused by both readers",
         c.part42_refused
