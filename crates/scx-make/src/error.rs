@@ -7,7 +7,8 @@ use core::fmt;
 use scx_brep::{Absent, FinishCause, PcurveWriteError, TableFull};
 use scx_curve::CurveError;
 use scx_num::error::ErrorKind;
-use scx_num::units::Length;
+use scx_num::units::{Length, Resolution};
+use scx_planar::{PlanarError, SegmentRef};
 use scx_surface::SurfaceError;
 
 /// Which size of a constructor is meant.
@@ -66,6 +67,26 @@ pub enum Refusal {
         /// What it must exceed.
         floor: Length,
     },
+    /// The profile is not a region: the planar layer's verdict, as it gave it.
+    Profile(PlanarError),
+    /// An extrusion's heights are not finite, or are not more than `floor`, the document's
+    /// resolution, apart (mm).
+    Span {
+        /// The start height.
+        start: f64,
+        /// The end height.
+        end: f64,
+        /// What their distance must exceed.
+        floor: Length,
+    },
+    /// The region was validated at a resolution other than the document's: its segments are
+    /// proved apart, and its joints closed, at the wrong length.
+    Resolution {
+        /// The region's.
+        region: Resolution,
+        /// The document's.
+        document: Resolution,
+    },
     /// A cone whose radii are both zero: a segment, not a solid.
     ZeroRadii,
     /// A spindle torus: the minor radius exceeds the major one by more than the resolution,
@@ -82,6 +103,10 @@ pub enum Refusal {
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub enum Unsupported {
+    /// The planar layer could not decide the profile (its `Undecided`).
+    Profile(PlanarError),
+    /// A profile segment of a kind this constructor does not sweep yet.
+    Segment(SegmentRef),
     /// A horn torus: the radii are equal within the resolution, so the tube meets the axis
     /// at one point, a singular point that the pole rules do not cover (72 D3).
     HornTorus {
@@ -145,6 +170,11 @@ impl MakeError {
     pub const fn name(&self) -> &'static str {
         match self {
             Self::Refused(Refusal::Size { .. }) => "size",
+            Self::Refused(Refusal::Profile(_)) => "profile",
+            Self::Refused(Refusal::Span { .. }) => "span",
+            Self::Refused(Refusal::Resolution { .. }) => "resolution",
+            Self::Unsupported(Unsupported::Profile(_)) => "profile_undecided",
+            Self::Unsupported(Unsupported::Segment(_)) => "segment_kind",
             Self::Refused(Refusal::ZeroRadii) => "zero_radii",
             Self::Refused(Refusal::SelfIntersecting { .. }) => "self_intersecting",
             Self::Unsupported(Unsupported::HornTorus { .. }) => "horn_torus",
@@ -173,6 +203,24 @@ impl fmt::Display for MakeError {
                 dimension.name(),
                 floor.mm()
             ),
+            Self::Refused(Refusal::Profile(e)) => write!(f, "the profile: {e}"),
+            Self::Refused(Refusal::Span { start, end, floor }) => write!(
+                f,
+                "the heights {start} mm and {end} mm are not finite and more than the resolution {} mm apart",
+                floor.mm()
+            ),
+            Self::Refused(Refusal::Resolution { region, document }) => write!(
+                f,
+                "the region's resolution {} mm is not the document's {} mm",
+                region.zone().mm(),
+                document.zone().mm()
+            ),
+            Self::Unsupported(Unsupported::Profile(e)) => {
+                write!(f, "the profile is undecided: {e}")
+            }
+            Self::Unsupported(Unsupported::Segment(at)) => {
+                write!(f, "{at} is of a kind not swept yet")
+            }
             Self::Refused(Refusal::ZeroRadii) => write!(f, "both radii of the cone are zero"),
             Self::Refused(Refusal::SelfIntersecting { major, minor }) => write!(
                 f,
@@ -202,6 +250,9 @@ impl core::error::Error for MakeError {
             Self::Defect(Defect::Pcurve(e)) => Some(e),
             Self::Defect(Defect::Surface(e)) => Some(e),
             Self::Defect(Defect::Finish(c)) => Some(c),
+            Self::Refused(Refusal::Profile(e)) | Self::Unsupported(Unsupported::Profile(e)) => {
+                Some(e)
+            }
             Self::Full(e) => Some(e),
             Self::Refused(_)
             | Self::Unsupported(_)
@@ -231,6 +282,17 @@ impl From<CurveError> for MakeError {
 impl From<SurfaceError> for MakeError {
     fn from(e: SurfaceError) -> Self {
         Self::Defect(Defect::Surface(e))
+    }
+}
+
+/// A profile the planar layer refused is the caller's to change; one it could not decide is
+/// a limit of this build.
+impl From<PlanarError> for MakeError {
+    fn from(e: PlanarError) -> Self {
+        match e.kind() {
+            ErrorKind::Unsupported => Self::Unsupported(Unsupported::Profile(e)),
+            _ => Self::Refused(Refusal::Profile(e)),
+        }
     }
 }
 

@@ -12,10 +12,12 @@ publish.workspace = true
 scx-brep = { path = "../scx-brep" }
 scx-curve = { path = "../scx-curve" }
 scx-num = { path = "../scx-num" }
+scx-planar = { path = "../scx-planar" }
 scx-surface = { path = "../scx-surface" }
 
 [dev-dependencies]
 scx-nurbs = { path = "../scx-nurbs" }
+scx-record = { path = "../scx-record" }
 scx-testkit = { path = "../scx-testkit", features = ["bodies"] }
 
 [lints]

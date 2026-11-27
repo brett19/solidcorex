@@ -6859,6 +6859,133 @@ converter must remap sphere and cone uv: the pin's are radians, and ours are arc
    refusal as "written at 1e-5, read at 1e-7"?
 3. Should `Draft::skip` stay public, or become a crate-feature for decoders?
 
+### 7.9 RE5 as built (11-27)
+
+Decided by analysis and an adversarial pass. Proposed for review; not yet ruled. No library
+code changed: RE5 is tests, and the suite found no bug in `scx-record`, in the body it decodes
+into, or in what `finish` accepts (see "Found").
+
+**What was built.** Two new test files and a shared module in `crates/scx-record/tests`, and
+one test file in `scx-make`.
+
+- `common/mod.rs` holds what `body.rs` had: `body`, the two decoders, `slots` (a body's tables
+  as `Debug` text, which prints each `f64` as its shortest round-trip spelling, so equal text is
+  equal bits and `-0` and `0` differ), `round_trip` and `gapped`. `body.rs` uses it.
+- `roundtrip.rs` (6 normal tests, 1 slow):
+  - every `Kind::ALL` at seeds 3 to 6 and sizes 1 to 3 (seeds 0 to 2 are `body.rs`'s);
+  - every kind moved by six maps: rigid, mirror, scale by 1e3 and 1e-3, a far translation
+    (1e6), and a quarter turn (zeros of either sign);
+  - a gapped body and its `compact`ed copy (which has no `gap` word);
+  - a decoded body edited gives the record the original's edit gives;
+  - the spellings are plain (ASCII, one trailing newline, no doubled spaces).
+  - Slow: `every_kind_wide`, seeds 0 to 23 and sizes 1 to 5.
+- `scx-make/tests/record.rs` (2 tests): `block` at four frames (one with `-0` in the origin, one
+  at 1e4) and five sizes (1e-3 to 2e3), and a made block after each of four maps, round trip in
+  both encodings with the vertices equal to the bit. It lives in `scx-make` because `scx-make`
+  is above `scx-record` in `layers.txt`; `scx-make` gains `scx-record` as a dev-dependency.
+- `corrupt.rs` (17 normal tests, 2 slow), the structured corruption suite.
+
+**The probe.** Every corrupted input, in either encoding, goes through one probe:
+
+1. it does not panic (a panic is re-raised with the mutation named);
+2. an input that decodes re-encodes to itself, and the body, edited with nothing changed and
+   finished again, is the same record (`finish` is idempotent on what it accepted);
+3. an error has kind `Refused`, `Unsupported` or `Exhausted` (never `Defect`: `MissingCurve`
+   cannot be reached from bytes), points inside the input, prints, and has a `source()` exactly
+   when it is `Invalid`.
+
+**Targeted mutations**, each with the cause it must give (all in text, with the exact offset
+where the field is a word; the binary twins are marked):
+
+| Mutation | Cause |
+|---|---|
+| a fin's face changed, its sense flipped | `Invalid(Structure(FinWithoutUse))` |
+| a fin to face 999; a use to edge 999; a side to shell 999; a shell to region 999 | `Invalid(Structure(Dangling))` |
+| a fin doubled | `RepeatedFin` |
+| all fins removed | `UseWithoutFin` |
+| a use's edge changed, a use's sense flipped | `FinWithoutUse` |
+| an edge end moved to another vertex | `LoopNotConnected` at the use that meets it |
+| an edge interval narrowed or of zero length | `PcurveInterval` |
+| a vertex moved | `Geometry(EdgeEndOffVertex)` |
+| sides swapped, or both the same | `SidesDisagree` |
+| two fins swapped on a two-fin edge | accepted: a cyclic shift, and the record is the swapped one |
+| four fins: every cyclic shift; reversed and the non-shifts | accepted; `RadialOrder` or `SidesDisagree`, naming the edge |
+| every float field of three bodies to `NaN`, `inf`, `-inf` (text and, by value, binary) | `NonFinite` at that field's offset |
+| every interval of a block, cylinder and cone swapped | `BadInterval` at the interval's first end |
+| version 0; 2, 255, 256, `u16::MAX` | `BadVersion`, `Refused` for 0, `Unsupported` for the rest (binary and text) |
+| magic changed (four spellings), empty input, magic prefixes | `BadMagic`, `Truncated` |
+| a frame axis of length 2 | `Frame(NotUnit)`, `source()` set |
+| tag bytes 2, 3, 7, 0x80, 0xFF where a slot or a bool is | `BadTag { record, found }` at the byte; text `BadToken { expected }` |
+| a table count of `u32::MAX` and 2^20 | `TooMany`, `Exhausted`; counts under the limit run out (`Truncated`) or read the next table as slots (`BadTag`) |
+| every `u32` position set to `u32::MAX` | never panics; `TooMany` and `Truncated` both occur |
+| a run of 0, past the table, 10^9, and a run split in two | `BadRun` |
+| each accuracy basis: negative; `-0`; an unknown basis; an unknown claim and method | `BadAccuracy`, `NonCanonical`, `BadToken` |
+| reads count 5, 999, `u32::MAX` | `BadReads { count }` |
+| text: trailing zero, exponent, plus, leading zero, hex, empty, comma, a count of `1.0`, `4294967296` | `BadToken` |
+| text: no final newline; an extra newline, space or character; a tab; CRLF; non-ASCII | `Truncated`; `Trailing`; `BadMagic` or `BadToken` |
+| an edge line deleted or doubled, the count kept; kept in step | `BadToken` or `Truncated`; `Invalid` |
+| the last vertex deleted, its count in step | `Dangling` |
+| a vertex doubled | accepted or `Invalid`; either way a fixed point |
+
+**Sweeps.** Deterministic, no new dependency, in the normal tier:
+
+- binary: each byte of four small bodies (block, sphere, cylinder, and a gapped body that has
+  every accuracy basis) set to 0x00, 0xFF, 0x80 or flipped, deleted and doubled; each position's
+  four bytes set to 999 and `u32::MAX`; every float field (found by value) set to NaN, an
+  infinity, `-0`, `5e-324`, `MIN_POSITIVE`, 1e-300, 1e300, `MAX`, `-MAX` and 2^63. 50,874 changed
+  inputs, 8,833 decoded. Every prefix is `Truncated`.
+- text: every token of the small bodies replaced from a five-word dictionary, deleted, swapped
+  with its neighbour; each line deleted and doubled; every prefix.
+- seeded fuzz: one to four stacked changes (byte, bit, delete, insert, double a chunk, truncate,
+  a `u32`, a run of one to three floats at a float's offset) and the text twin, over all 13
+  kinds, 3,120 inputs.
+- Coverage is asserted: the sweeps must reach `truncated`, `bad_tag`, `non_finite`, `bad_run`,
+  `too_many`, `bad_interval`, `invalid`, `trailing` and decoded bodies, and `BadTag` and
+  `BadToken` must name every enum the record has (`slot`, `bool`, `sense`, `edge_shape`,
+  `use_geom`, `basis`, `claim`, `method`, `surface`, `curve`, `curve2`; text adds `u32`, `f64`
+  and `separator`).
+
+**Slow tier** (`#[ignore]`, `cargo test -p scx-record --test <name> -- --ignored`):
+`every_kind_wide`; `the_sweeps_wide` (all five byte values and all five word values over the
+small bodies and one body of every kind, the full dictionary, 1,051,596 changed inputs, 165,289
+decoded; 24 s in release, 160 s in debug); `seeded_fuzz_wide` (four seeds, 2,500 stacked
+changes per kind, 35 s in debug). All passed in debug (overflow checks on) and release.
+
+**Decisions.**
+
+1. **Fault the text by field, the binary by sweep.** The text's words are its fields, so a
+   targeted mutation names a (line, word) and an offset. The binary has no markers: a field is
+   found only by value (floats) or by position (the header, the first counts). Writing a
+   second schema to locate binary fields would repeat the format in the test.
+   - *Against:* the binary's id and count fields are covered by sweeps with coverage
+     assertions, not by one named case each.
+2. **No `cargo-fuzz` target.** The seeded loops run in seconds, add no dependency, and the
+   `Rng` makes a failure a number. A coverage-guided fuzzer would add reach only if the format grows branches the
+   dictionaries do not name.
+   - *Change if:* a record kind lands with a variable layout (step 5's blends). It would be an
+     optional directory outside the workspace, per the project's dependency rule.
+3. **`scx-make`'s test sits in `scx-make`.** Layering forbids `scx-record` depending on it.
+
+**Found.** No bug: every failure while the suite was written was a wrong expectation in the test (a count under the limit, a gap's line), and no sweep failed, in debug and release.
+`Arcs::piece` (RE3's find) was the only fault the earlier 16,000-change sweep had reached, and
+the denser sweeps here (about 1.1 million changed inputs in the slow tier, with every float
+field at the awkward doubles) reach nothing else. Two smaller facts, both as designed:
+a count under the limit is read as slots, so a body with a large claimed count fails by
+reading the next table's bytes (`BadTag`), not by `Truncated`; and the last gap or record
+of a table carries the next table's count on its line in text, which a text editor must keep
+(a run split in two must carry that count to the second line).
+
+**Measured.** Normal tier, debug, one core of a loaded machine: `corrupt` 4.3 s, `roundtrip`
+0.6 s, `scx-make/record` 0.02 s. `body.rs` is unchanged at 1.8 s.
+
+**Open questions.**
+
+1. Should the slow tier run in CI? The two corruption sweeps take about 3.5 minutes in debug. (Release is 50 s but loses
+   the overflow checks that found `Arcs::piece`.)
+2. A real corpus of bodies (BR8's generators are structured; the NIST parts of 66 are not
+   yet records) would exercise surface and curve kinds the generators do not make: NURBS and
+   revolved surfaces in a body.
+
 ## 8. Prerequisites outside the six crates
 
 - **P0. Finite extents in `scx-num`** (D1 revised; ahead of RE1, BR1, CU1 and SU1). [Ruled 11-27:
