@@ -203,7 +203,7 @@ fn references_agree_with_the_pins_table() {
         ("grooved_shaft", 153532.251),
         ("plate_100_holes", 71588.321),
         ("sheet_disc", 193396443.755),
-        ("tiny_pin", 0.39269908169872414),
+        ("tiny_pin", std::f64::consts::FRAC_PI_8),
         ("torus_ring_nurbs", 4934.802),
         ("washer", 3534.292),
     ];
