@@ -5,6 +5,7 @@
 //! under a mirror is again a right-handed placement of the image (`X`, `Y` and their cross
 //! product), so the mirror needs nothing more.
 
+use crate::common::check_lengths;
 use scx_num::domain::{ParamDomain, UvDomain};
 use scx_num::frame::Frame;
 use scx_num::ring::Ring;
@@ -52,10 +53,17 @@ impl Plane {
         )
     }
 
-    /// The points at `uv`, into `out` (cleared first).
-    pub fn eval_many(&self, uv: &[Point2], out: &mut Vec<Point3>) {
-        out.clear();
-        out.extend(uv.iter().map(|&p| self.point(p)));
+    /// The point at each of `uv`, into `out`: `out[i]` is `point(uv[i])`, bit for bit (a NaN
+    /// is a NaN; Rust leaves its sign and payload open).
+    ///
+    /// # Panics
+    ///
+    /// If `uv` and `out` differ in length.
+    pub fn eval_many(&self, uv: &[Point2], out: &mut [Point3]) {
+        check_lengths(uv, out);
+        for (o, &p) in out.iter_mut().zip(uv) {
+            *o = self.point(p);
+        }
     }
 
     /// The partials up to total order `D`. `side` changes nothing: the plane is smooth.
