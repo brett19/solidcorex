@@ -37,3 +37,59 @@ Lines are `x` or `x,y` in C99 hex, as in the source files. `atan2` lines are `y,
 A full file holds 29,000 to 2,000,000 inputs. To run every input, use the ignored test
 `full_core_math_files` against a checkout (see `tests/fmath_worst.rs`).
 
+## `testfloat/`: Berkeley TestFloat `f64_mulAdd` cases (BSD-3-Clause)
+
+Test cases for IEEE 754 double fused multiply-add, used by `tests/testfloat_muladd.rs`.
+Each line is `a b c result flags`, bit patterns in hex; `result` is `a * b + c` rounded
+once to nearest, ties to even, and `flags` are the exception flags (not checked).
+
+- Origin: Berkeley TestFloat 3e, https://github.com/ucb-bar/berkeley-testfloat-3, commit
+  `a9c849f1b0eb0264b626d9686ffae167d996e3be` (2025-03-07), built against Berkeley
+  SoftFloat 3e, https://github.com/ucb-bar/berkeley-softfloat-3, commit
+  `afdc157e71f0d97508301ac0965defead49c679b` (2026-11-25), with the default `8086-SSE`
+  specialisation (its default NaN is `FFF8000000000000`).
+- `f64_mulAdd_level1.txt`: `testfloat_gen -seed 1 -level 1 f64_mulAdd`, all 6,133,248
+  cases, keeping the first and every 1,533rd after it: 4,001 cases.
+- `f64_mulAdd_level2.txt`: `testfloat_gen -seed 1 -forever f64_mulAdd` (level 2 cases,
+  without end), the first 2,000. The output is the same on every run with the same seed.
+- Each file starts with four comment lines naming its command and the licence.
+
+The cases are generated output of TestFloat, which is under this licence:
+
+```text
+License for Berkeley TestFloat Release 3e
+
+John R. Hauser
+2018 January 20
+
+The following applies to the whole of TestFloat Release 3e as well as to
+each source file individually.
+
+Copyright 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018 The Regents of the
+University of California.  All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+ 1. Redistributions of source code must retain the above copyright notice,
+    this list of conditions, and the following disclaimer.
+
+ 2. Redistributions in binary form must reproduce the above copyright
+    notice, this list of conditions, and the following disclaimer in the
+    documentation and/or other materials provided with the distribution.
+
+ 3. Neither the name of the University nor the names of its contributors
+    may be used to endorse or promote products derived from this software
+    without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS "AS IS", AND ANY
+EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE, ARE
+DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE FOR ANY
+DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
+THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```
