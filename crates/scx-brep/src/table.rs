@@ -91,6 +91,13 @@ impl<I: Id, T> Table<I, T> {
         }
     }
 
+    /// The live records, to write, when no other table shares them; nothing otherwise.
+    pub(crate) fn unique_mut(&mut self) -> impl Iterator<Item = &mut T> {
+        Arc::get_mut(&mut self.slots)
+            .into_iter()
+            .flat_map(|slots| slots.iter_mut().flatten())
+    }
+
     /// Whether `self` and `other` share their slots (no write has copied either).
     #[cfg(test)]
     pub(crate) fn shares(&self, other: &Self) -> bool {

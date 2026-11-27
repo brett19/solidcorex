@@ -499,6 +499,35 @@ impl Arcs {
     pub fn span(self) -> f64 {
         self.span
     }
+
+    /// The breaks strictly inside `(lo, hi)`, in order: the parameters where [`Arcs::piece`]
+    /// moves to the next arc, each the value `piece` compares against, bit for bit. A turn
+    /// breaks every quarter; the half turn once, at its middle (past its ends the end arcs
+    /// continue). `None` when `lo` or `hi` is not finite or out of order, or more than
+    /// 4,096 breaks lie between them (an interval over a thousand turns, which no caller
+    /// splits).
+    pub fn breaks(self, lo: f64, hi: f64) -> Option<Vec<f64>> {
+        if !(lo.is_finite() && hi.is_finite() && lo <= hi) {
+            return None;
+        }
+        let ks = match self.sweep {
+            Sweep::Half => 1..=1,
+            Sweep::Turn => {
+                let k0 = (lo / self.span).floor();
+                let k1 = (hi / self.span).ceil();
+                if (k1 - k0).is_nan() || k1 - k0 > 4_096.0 {
+                    return None;
+                }
+                // Finite and within 4,096 of each other, so both fit an `i64`.
+                (k0 as i64)..=(k1 as i64)
+            }
+        };
+        Some(
+            ks.map(|k| self.start_of(k))
+                .filter(|&b| lo < b && b < hi)
+                .collect(),
+        )
+    }
 }
 
 #[cfg(test)]
@@ -594,5 +623,45 @@ mod tests {
             assert!((fd.0 - j.nth(n).0).abs() < 1e-5 * scale * [1.0, 10.0, 100.0, 1000.0][n]);
             assert!((fd.1 - j.nth(n).1).abs() < 1e-5 * scale * [1.0, 10.0, 100.0, 1000.0][n]);
         }
+    }
+
+    #[test]
+    fn breaks_are_where_the_piece_changes() {
+        for a in [
+            Arcs::turn(1.0),
+            Arcs::turn(core::f64::consts::TAU * 0.3),
+            Arcs::half(),
+        ] {
+            let (lo, hi) = (-1.3, 2.7);
+            let breaks = a.breaks(lo, hi).unwrap_or_default();
+            assert!(!breaks.is_empty());
+            for w in breaks.windows(2) {
+                assert!(w[0] < w[1]);
+            }
+            // Between two breaks (and past the ends) the piece holds; at each it moves.
+            let mut edges = vec![lo];
+            edges.extend(&breaks);
+            edges.push(hi);
+            for w in edges.windows(2) {
+                let p = a.piece(w[0], Approach::Above);
+                let last = w[1].next_down();
+                assert_eq!(
+                    a.piece(last, Approach::Above),
+                    p,
+                    "{a:?} on [{}, {}]",
+                    w[0],
+                    w[1]
+                );
+            }
+            for &b in &breaks {
+                assert_ne!(
+                    a.piece(b, Approach::Above),
+                    a.piece(b.next_down(), Approach::Above)
+                );
+            }
+        }
+        assert!(Arcs::turn(1.0).breaks(0.0, 1e4).is_none());
+        assert!(Arcs::turn(1.0).breaks(1.0, 0.0).is_none());
+        assert_eq!(Arcs::turn(1.0).breaks(0.0, 0.25), Some(vec![]));
     }
 }
