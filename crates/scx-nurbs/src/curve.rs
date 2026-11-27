@@ -25,6 +25,11 @@ use crate::bezier::{elevate_into, elevation_matrix};
 use crate::point::{Control, Weighted};
 use crate::{Approach, KnotVector, NurbsError, Result, MAX_DEGREE};
 
+/// A control point, knot or scratch index the built curve's invariants rule out: a bug.
+const MISSING_POINT: NurbsError = NurbsError::Defect {
+    why: "a curve routine read an index its counts rule out",
+};
+
 /// A NURBS curve in `D` dimensions: a [`KnotVector`] of degree `p`, `m - p` control points,
 /// and for a rational curve one positive weight per point.
 ///
@@ -156,7 +161,7 @@ impl<const D: usize> NurbsCurve<D> {
         } else {
             self.point_n::<FULL>(u, span)
         };
-        point
+        Some(point.ok_or(MISSING_POINT)?)
             .filter(|c| c.iter().all(|x| x.is_finite()))
             .ok_or(NurbsError::Degenerate { parameter: u })
     }
@@ -205,7 +210,7 @@ impl<const D: usize> NurbsCurve<D> {
         } else {
             self.derivs_n::<FULL, K>(u, span)
         };
-        derivs
+        Some(derivs.ok_or(MISSING_POINT)?)
             .filter(|c| c.iter().flatten().all(|x| x.is_finite()))
             .ok_or(NurbsError::Degenerate { parameter: u })
     }
@@ -279,7 +284,6 @@ impl<const D: usize> NurbsCurve<D> {
         }
         let knots = self.knots.inserted(u, times)?;
         let span = self.knots.span_of(u, Approach::Above);
-        let degenerate = NurbsError::Degenerate { parameter: u };
         let plan = Insertion {
             knots: self.knots.knots(),
             degree: self.degree(),
@@ -290,14 +294,14 @@ impl<const D: usize> NurbsCurve<D> {
         };
         match &self.rational {
             None => {
-                let points = plan.points(&self.points).ok_or(degenerate)?;
+                let points = plan.points(&self.points).ok_or(MISSING_POINT)?;
                 Self::new(knots, points, None)
             }
             Some(r) => {
                 let (weighted, weights) = plan
                     .points(&r.homogeneous())
                     .map(split_weights)
-                    .ok_or(degenerate)?;
+                    .ok_or(MISSING_POINT)?;
                 Self::from_homogeneous(knots, weighted, weights)
             }
         }
@@ -324,15 +328,14 @@ impl<const D: usize> NurbsCurve<D> {
         let right_knots = KnotVector::new(p, ends.chain(above.iter().copied()).collect())?;
         let left_count = left_knots.point_count();
         let right_from = full.points.len() - right_knots.point_count();
-        let degenerate = NurbsError::Degenerate { parameter: u };
         let piece = |knots: KnotVector, range: core::ops::Range<usize>| match &full.rational {
             None => {
-                let points = full.points.get(range).ok_or(degenerate)?;
+                let points = full.points.get(range).ok_or(MISSING_POINT)?;
                 Self::new(knots, points.to_vec(), None)
             }
             Some(r) => {
-                let weighted = r.weighted.get(range.clone()).ok_or(degenerate)?;
-                let weights = r.weights.get(range).ok_or(degenerate)?;
+                let weighted = r.weighted.get(range.clone()).ok_or(MISSING_POINT)?;
+                let weights = r.weights.get(range).ok_or(MISSING_POINT)?;
                 Self::from_homogeneous(knots, weighted.to_vec(), weights.to_vec())
             }
         };
@@ -388,18 +391,17 @@ impl<const D: usize> NurbsCurve<D> {
             spans: self.knots.span_count(),
             matrix: &dm,
         };
-        let degenerate = NurbsError::Degenerate { parameter: low };
         let lost = |e| match e {
             NurbsError::PointNotFinite { .. } | NurbsError::Weight { .. } => NurbsError::Unstable,
             e => e,
         };
         match &self.rational {
             None => {
-                let (points, knots) = plan.points(&self.points).ok_or(degenerate)?;
+                let (points, knots) = plan.points(&self.points).ok_or(MISSING_POINT)?;
                 Self::new(KnotVector::new(p + times, knots)?, points, None).map_err(lost)
             }
             Some(r) => {
-                let (points, knots) = plan.points(&r.homogeneous()).ok_or(degenerate)?;
+                let (points, knots) = plan.points(&r.homogeneous()).ok_or(MISSING_POINT)?;
                 let (weighted, weights) = split_weights(points);
                 Self::from_homogeneous(KnotVector::new(p + times, knots)?, weighted, weights)
                     .map_err(lost)
