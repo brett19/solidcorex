@@ -36,6 +36,7 @@ mod query;
 pub mod record;
 mod table;
 mod tables;
+mod touched;
 mod view;
 
 pub use boundary::UvSide;
