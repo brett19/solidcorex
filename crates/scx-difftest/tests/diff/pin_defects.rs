@@ -4498,7 +4498,11 @@ fn poly_meets_contract(c: &[f64], got: &[f64]) -> Result<(), String> {
     if c.iter().all(|&v| v == 0.0) {
         return Ok(());
     }
-    if got.windows(2).any(|w| !(w[0] < w[1])) || got.len() + 1 > c.len() {
+    if got
+        .windows(2)
+        .any(|w| w[0].partial_cmp(&w[1]) != Some(core::cmp::Ordering::Less))
+        || got.len() + 1 > c.len()
+    {
         return Err(format!("{got:?}: not distinct and ascending"));
     }
     let (p, truth) = exact_real_roots(c);
@@ -4513,7 +4517,10 @@ fn poly_meets_contract(c: &[f64], got: &[f64]) -> Result<(), String> {
             .iter()
             .map(|&x| dist(x, r))
             .fold(f64::INFINITY, f64::min);
-        if !(near <= b) {
+        if !matches!(
+            near.partial_cmp(&b),
+            Some(core::cmp::Ordering::Less | core::cmp::Ordering::Equal)
+        ) {
             return Err(format!(
                 "true root {:e} (multiplicity {m}) has none within {:.3e} (nearest {:.3e})",
                 r.to_f64(),

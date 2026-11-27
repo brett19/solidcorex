@@ -413,7 +413,11 @@ fn balanced<const N: usize>(c: &[f64; N]) -> ([f64; N], i32, i32) {
     if least >= -1022 && low + m >= -1022 {
         // every input and result normal: add to the exponent fields, exactly
         for (o, i) in out.iter_mut().zip(0..) {
-            let shift = if *o == 0.0 { 0 } else { i64::from(m + j * i) << 52 };
+            let shift = if *o == 0.0 {
+                0
+            } else {
+                i64::from(m + j * i) << 52
+            };
             *o = f64::from_bits(o.to_bits().wrapping_add_signed(shift));
         }
     } else {
