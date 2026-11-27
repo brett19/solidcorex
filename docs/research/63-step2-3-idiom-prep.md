@@ -1729,3 +1729,55 @@ The coordinating session ruled this research on 2026-11-27, adopting the correct
   replaced by 01's `solid: bool`; the clashing `EvalError` is renamed; one `Side` enum per meaning,
   named apart (`Approach`, `BoundSide`); inversion uses 57 F6's `Inversion`; D11 cites 01 §7.4.
 - **Held:** D2, D5, D6, D7 (reconciled with 57 F6), D9 and D11.
+
+### 2.7 NS5 as built: IGES 128 (11-27)
+
+Decided by analysis and an adversarial pass; proposed for review, not yet ruled. scx-nurbs has no
+IGES 126 yet, so this sets the shape that 126 should mirror.
+
+- **What the pin has.** `nurbs/iges.rs`: `N_Iges128Srf` takes the entity's counts, degrees,
+  knots, weights, points and bounds (not the flags, not a file), clamps the knots to the bounds
+  (`N_IgesClampSrf`) and reduces the multiplicities (`N_IgesCorrectSrfKnots`). Only that
+  parameter-list to surface mapping is ported; the reverse direction (`to_iges`) is new.
+- **Shape.** Module `scx_nurbs_surface::iges`: `Iges128 { m1, m2, s, t, weights: Net<f64>,
+  points: Net<[f64; 3]>, u, v }`, `from_iges(&Iges128) -> Result<NurbsSurface<3>, IgesError>`,
+  `to_iges(&NurbsSurface<3>) -> Iges128`. `K1`, `K2` are the nets' shape, so a short or ragged
+  array cannot be expressed; knot arrays must have exactly `K + M + 2` values (the pin reads a
+  prefix of a longer one).
+- **Flags `PROP1..5` are not read** (the pin does not take them; writers set them wrongly).
+  Polynomial is every weight equal to the first, as the pin; closed and periodic are not
+  surface data here.
+- **Checks.** Degrees `1..=31`; knot count, finite, non-decreasing; points finite; weights
+  finite and positive (no `[1e-3, 100]`); `w P` finite; bounds `U[p] <= U(0) < U(1) <= U[m-p]`
+  written to refuse NaN. All `Refused`; an index outside an array in the ported loops is a
+  `Defect` (never reached by the difftest pool).
+- **Repairs: ruled 11-27 (coordinator), for Brett's review.** scx does not port the pin's
+  averaging reduction (`N_IgesCorrectSrfKnots`): it changes the surface, and a result must be
+  the surface the data defines. Clamping to the bounds is the pin's, on homogeneous points, in
+  its arithmetic order, and keeps the surface on the bounds.
+  - An interior knot repeated `p + 1` times is a break (two surfaces): refused through the
+    surface's own check (`BadKnots` over `NurbsError::Multiplicity`), Refused. Bounds that leave
+    the break outside the domain are fine.
+  - An end knot repeated more than `p + 1` times is dropped with its row or column of points,
+    exactly: its basis function is zero on the domain, so the points cannot matter (the pin
+    keeps the point whose function is zero and drops the next, which is wrong). The drop runs
+    first, on the points given, so those kept are exact and rationality is decided on the
+    surviving weights. The testkit's exact model takes no such knots, so the unit test
+    `surplus_end_knots_drop_exactly` proves it by construction: a surface with its end knots
+    repeated once more and rows and columns of arbitrary points added returns as the surface,
+    equal exactly.
+  - A surface that needs no clamping keeps its points and weights exactly.
+- **Round trip.** `from_iges(&to_iges(s)) == s` exactly for clamped `s`. Exceptions, by
+  design: a rational surface of all-equal weights returns as its polynomial form; an unclamped
+  surface returns clamped to its domain (the same surface there).
+- **Adversarial pass.** Porting the averaging as the pin does would make the pair total on
+  malformed files, but returns a different surface than the data defines; rejected (ruling
+  above). Keeping weights whenever given (so equal weights round-trip) would
+  differ from the pin's stored form for no gain in the surface; rejected. `to_iges` refusing
+  unclamped surfaces would make the pair total only on clamped data; rejected, since the IGES
+  entity allows unclamped knots and `from_iges` defines what they mean.
+- **Pin defect `iges_128_surface`** (`pin_defects.rs`): the pin refuses degrees 18 to 31 and
+  weights outside `[1e-3, 100]`, reads a prefix of long knot arrays, and builds from NaN
+  weights, knots, bounds and points and from overflowing `w P`, and averages away breaks and
+  surplus end knots; scx answers by the definition.
+
