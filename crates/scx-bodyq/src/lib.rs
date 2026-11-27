@@ -42,22 +42,33 @@
 //! meets it, and [`side_at_touch`] round a point where the two touch: the Boolean's seeds
 //! (BO4). Both read the two surfaces' normals and curvatures at the meeting (see
 //! the note on [`sides_along`]).
+//!
+//! **Across an edge** (research 74 §25). [`tangent_all_along`] proves or refutes that the
+//! faces across an edge meet within an angle at every point; [`continuity`] proves the
+//! order of contact (G0 to G4) and, apart from it, measures the drops. Both enclose each
+//! face's normal field along the edge curve with Taylor models, splitting the curve as the
+//! proof needs under one budget.
 
+mod along;
 mod betti;
 mod classify;
+mod continuity;
 mod error;
 mod geom;
 mod near;
 mod on;
 mod rays;
 mod side;
+mod tangent;
 mod tight;
 
 pub use betti::{Betti, betti};
 pub use classify::{PointClass, classify_point};
+pub use continuity::{Continuity, ContinuityTolerances, Limit, Measured, Order, continuity};
 pub use error::{BodyqDefect, BodyqError, BodyqRefusal, BodyqUnsupported};
 pub use rays::RAYS;
 pub use side::{Along, Sides, side_at_touch, sides_along};
+pub use tangent::{Tangency, tangent_all_along};
 pub use tight::{tight_body_box, tight_box, tight_box_charged};
 
 #[cfg(test)]
