@@ -14,6 +14,10 @@
 // `with_max`, `shrunk` and `intersect` answer `Option`; the swapping constructor is `spanning`;
 // the transforms take and return the value; `dont_cross: bool` is `AtSeam`; `ExtentNd` is built
 // from its intervals.
+// Then the ends became finite by construction (research 63 P0, D1): `from_bounds` is `new`, and
+// it, `point`, `spanning` and the transforms refuse a non-finite end (`Option`); `UNBOUNDED`,
+// `boundary_type`, `is_bounded` and `approximate_unbounded*` went (a missing end is a
+// `ParamDomain` variant); `ClampVector` clamps every interval.
 //! One-dimensional intervals (`[min, max]`, often a curve's parameter domain) with
 //! clamping, snapping, normalised evaluation/inversion, set operations, predicates,
 //! periodic wrapping/containment/intersection, and N-dimensional interval boxes.
@@ -27,10 +31,9 @@
 //! | [`Hull1d`] ([`Hull1d::EMPTY`], [`Hull1d::add`], [`Hull1d::finish`]) | `SmExtent1d()`, `Init`, `AddValue`, `IsInit` |
 //! | [`Extent1d::point`]                          | `SmExtent1d(double)`                         |
 //! | [`Extent1d::spanning`]                       | `SmExtent1d(double, double)`                 |
-//! | [`Extent1d::from_bounds`]                    | `SetMinMax` (`None` where it fails)          |
+//! | [`Extent1d::new`]                            | `SetMinMax` (`None` where it fails)          |
 //! | [`Extent1d::with_min`], [`Extent1d::with_max`] | `SetMin`, `SetMax` (`None` where they fail) |
 //! | `Clone`/`Copy`                               | copy constructor, `operator=`, destructor    |
-//! | [`Extent1d::UNBOUNDED`]                      | `SetUnbounded`                               |
 //! | [`Extent1d::negated`]                        | `Negate`                                     |
 //! | [`Extent1d::translated`]                     | `Translate`                                  |
 //! | [`Extent1d::min`], [`Extent1d::max`], [`Extent1d::mid`] | `GetMin`, `GetMax`, `GetMid`      |
@@ -55,8 +58,6 @@
 //! | [`Extent1d::is_value_on_boundary`]           | `IsValueOnBoundary`                          |
 //! | [`Extent1d::classify_point`], [`ExtentPointType`] | `ClassifyPoint`, `SmExtentPointType`    |
 //! | [`Extent1d::is_degenerate`]                  | `IsDegenerate`                               |
-//! | [`Extent1d::boundary_type`], [`Extent1d::is_bounded`] | `IsBounded`                         |
-//! | [`Extent1d::approximate_unbounded`], [`Extent1d::approximate_unbounded_expanded`] | `ApproximateUnbounded` |
 //! | [`Extent1d::are_same`]                       | `operator==`                                 |
 //! | [`Extent1d::are_disjoint_periodic`]          | `AreDisjointPeriodic`                        |
 //! | [`Extent1d::periodic_wrap`]                  | `PeriodicWrap`                               |
@@ -71,10 +72,15 @@
 //! | `are_same`, `are_same_to_tol` (private)      | `SM_ARE_SAME`, `SM_ARE_SAME_TO_TOL`          |
 //!
 //! Deviations:
-//! - Out-params become return values: [`Inversion`], [`PeriodicContainment`], tuples,
-//!   `Option` for `ApproximateUnbounded`'s expanded extent (`None` where upstream's
-//!   `SetMinMax` rejects it and leaves the caller's extent untouched).
+//! - Out-params become return values: [`Inversion`], [`PeriodicContainment`], tuples.
 //!   Optional out-params are always computed (they have no side effects).
+//! - Both ends are finite (research 63 D1). Upstream marks a missing end with
+//!   `±SM_INFINITE_PARAMETER` (1234567) and skips it in `Translate`, `Scale`,
+//!   `ExpandAbsolute`, `ExpandRelative` and `ClampVector`; here a missing end is a
+//!   [`ParamDomain`](crate::domain::ParamDomain) variant, never an interval end, and numeric work
+//!   runs on its finite working extent. So `SetUnbounded`, `IsBounded` and
+//!   `ApproximateUnbounded` have no counterpart on the interval. A constructor or transform
+//!   whose end would be ±inf or NaN answers `None` where upstream stores it.
 //! - Status codes: `SM_ERR_INVALID_INPUT` is [`NumError::InvalidInput`]; `SM_ERR`
 //!   is a typed [`crate::error::NumFailure`] (status 1001). The non-periodic branch of
 //!   `IntersectPeriodic` leaves an `Init()` interval as the result when it fails; the Rust
@@ -82,8 +88,7 @@
 //! - No interval is inverted, so the pin's `Init()` state is a [`Hull1d`] with nothing added.
 //!   A hull starts at ±inf, not ±1e20: values beyond ±1e20 keep their place in it.
 //! - `ClampVector` keeps upstream's in/out arrays (`SetSize` keeps the existing
-//!   prefix and zero-fills, unbounded dimensions are not written, counts are
-//!   incremented); arrays shorter than the dimension (undefined behaviour upstream)
+//!   prefix and zero-fills, counts are incremented); arrays shorter than the dimension (undefined behaviour upstream)
 //!   are rejected with [`NumError::InvalidInput`].
 //! - `ContainsPeriodicValue` moves a value within the tolerance of the top of the period
 //!   above the start down by the period, and keeps it where that lies in the interval,
@@ -93,8 +98,7 @@
 //!   no Rust counterpart (a dropped value cannot be used), nor has `AssertDefined`.
 
 use crate::error::{Invalid, NumError, Result};
-use crate::extent3d::BoundaryType;
-use crate::math::{EFF_ZERO, EFF_ZERO_DEG, INFINITE_PARAMETER, is_infinite_param};
+use crate::math::{EFF_ZERO, EFF_ZERO_DEG};
 use crate::tol::{are_same, are_same_to_tol};
 
 /// Classification of a value against an interval (`SmExtentPointType`).
@@ -159,9 +163,10 @@ pub enum AtSeam {
 
 /// A closed interval `[min, max]` on the real line (`SmExtent1d`), never inverted.
 ///
-/// The invariant is `!(min > max)`: a NaN end is held (no comparison with it decides), an
-/// inverted pair is not. An interval that may be absent is an `Option<Extent1d>`; a fold
-/// over values is a [`Hull1d`]. Unbounded ends are stored as `±INFINITE_PARAMETER`.
+/// The invariant is `min <= max` with both ends finite: no constructor or transform stores
+/// ±inf, NaN or an inverted pair (each answers `None` instead). An interval that may be absent
+/// is an `Option<Extent1d>`; a fold over values is a [`Hull1d`]. A parameter with a missing
+/// end is a [`ParamDomain`](crate::domain::ParamDomain), not an interval.
 ///
 /// `PartialEq` compares the ends exactly (not upstream `operator==`, which is
 /// [`Extent1d::are_same`]).
@@ -174,8 +179,9 @@ pub struct Extent1d {
 /// A running hull of values, for folds (`SmExtent1d()` then `AddValue`).
 ///
 /// It starts at the identity of the union, `[+inf, -inf]`, so [`Hull1d::add`] needs no
-/// branch; [`Hull1d::finish`] is `None` until a value other than NaN was added. A NaN value
-/// is passed over (`f64::min` and `f64::max`), as upstream's comparisons pass it.
+/// branch; [`Hull1d::finish`] is `None` until a value other than NaN was added, and `None`
+/// once ±inf was. A NaN value is passed over (`f64::min` and `f64::max`), as upstream's
+/// comparisons pass it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Hull1d {
     min: f64,
@@ -218,10 +224,10 @@ impl Hull1d {
         }
     }
 
-    /// The interval covered, `None` when nothing was added.
+    /// The interval covered, `None` when nothing was added or ±inf was.
     #[must_use]
     pub fn finish(self) -> Option<Extent1d> {
-        Extent1d::from_bounds(self.min, self.max)
+        Extent1d::new(self.min, self.max)
     }
 }
 
@@ -236,39 +242,39 @@ impl FromIterator<f64> for Hull1d {
 }
 
 impl Extent1d {
-    /// `[-INFINITE_PARAMETER, INFINITE_PARAMETER]` (`SetUnbounded`).
-    pub const UNBOUNDED: Self = Self {
-        min: -INFINITE_PARAMETER,
-        max: INFINITE_PARAMETER,
-    };
-
-    /// The degenerate interval `[v, v]` (`SmExtent1d(double)`).
+    /// The interval `[min, max]`, `None` when an end is not finite or `min > max`
+    /// (`SetMinMax`, which refuses the inverted pair).
     #[must_use]
-    pub const fn point(v: f64) -> Self {
-        Self { min: v, max: v }
+    #[inline]
+    pub fn new(min: f64, max: f64) -> Option<Self> {
+        (min.is_finite() && max.is_finite() && min <= max).then_some(Self { min, max })
     }
 
-    /// The interval spanned by `a` and `b`, swapped when `a > b`
-    /// (`SmExtent1d(double, double)`).
+    /// The degenerate interval `[v, v]`, `None` when `v` is not finite
+    /// (`SmExtent1d(double)`).
     #[must_use]
-    pub fn spanning(a: f64, b: f64) -> Self {
-        if a > b {
-            Self { min: b, max: a }
+    pub const fn point(v: f64) -> Option<Self> {
+        if v.is_finite() {
+            Some(Self { min: v, max: v })
         } else {
-            Self { min: a, max: b }
+            None
         }
     }
 
-    /// `[min, max]` for ends the caller holds ordered: a box's interval, whose invariant
-    /// is this one's.
-    pub(crate) const fn from_ordered(min: f64, max: f64) -> Self {
-        Self { min, max }
+    /// The interval spanned by `a` and `b`, swapped when `a > b`, `None` when either is not
+    /// finite (`SmExtent1d(double, double)`).
+    #[must_use]
+    #[inline]
+    pub fn spanning(a: f64, b: f64) -> Option<Self> {
+        let (min, max) = if a > b { (b, a) } else { (a, b) };
+        // `&`, not `&&`: both checks run, so the test compiles without a branch.
+        (a.is_finite() & b.is_finite()).then_some(Self { min, max })
     }
 
-    /// The interval `[min, max]`, `None` when `min > max` (`SetMinMax`, which refuses it).
-    #[must_use]
-    pub fn from_bounds(min: f64, max: f64) -> Option<Self> {
-        (min.partial_cmp(&max) != Some(core::cmp::Ordering::Greater)).then_some(Self { min, max })
+    /// `[min, max]` for ends the caller holds ordered and finite: a box's interval, whose
+    /// invariant is this one's.
+    pub(crate) const fn from_ordered(min: f64, max: f64) -> Self {
+        Self { min, max }
     }
 
     /// The smallest interval covering `values`, `None` for none (a [`Hull1d`] fold).
@@ -277,18 +283,18 @@ impl Extent1d {
         values.into_iter().collect::<Hull1d>().finish()
     }
 
-    /// This interval with its lower end `min`, `None` when that is above the upper end
-    /// (`SetMin`).
+    /// This interval with its lower end `min`, `None` when that is above the upper end or
+    /// not finite (`SetMin`).
     #[must_use]
     pub fn with_min(self, min: f64) -> Option<Self> {
-        Self::from_bounds(min, self.max)
+        Self::new(min, self.max)
     }
 
-    /// This interval with its upper end `max`, `None` when that is below the lower end
-    /// (`SetMax`).
+    /// This interval with its upper end `max`, `None` when that is below the lower end or
+    /// not finite (`SetMax`).
     #[must_use]
     pub fn with_max(self, max: f64) -> Option<Self> {
-        Self::from_bounds(self.min, max)
+        Self::new(self.min, max)
     }
 
     /// Mirrored about zero: `[-max, -min]` (`Negate`).
@@ -300,14 +306,11 @@ impl Extent1d {
         }
     }
 
-    /// Both ends shifted by `v`, unbounded markers left in place (`Translate`).
+    /// Both ends shifted by `v`, `None` when an end would not be finite (`Translate`).
     #[must_use]
-    pub fn translated(self, v: f64) -> Self {
-        let shift = |e: f64| if is_infinite_param(e) { e } else { e + v };
-        Self {
-            min: shift(self.min),
-            max: shift(self.max),
-        }
+    #[inline]
+    pub fn translated(self, v: f64) -> Option<Self> {
+        Self::new(self.min + v, self.max + v)
     }
 
     /// Lower end (`GetMin`).
@@ -420,57 +423,51 @@ impl Extent1d {
         })
     }
 
-    /// Both bounded ends moved by `d`, outwards when `d > 0` and inwards when `d < 0`
-    /// (`ExpandAbsolute`), `None` when moving inwards inverts the interval.
+    /// Both ends moved by `d`, outwards when `d > 0` and inwards when `d < 0`
+    /// (`ExpandAbsolute`), `None` when that inverts the interval or an end is not finite.
+    #[inline]
     fn moved_out(self, d: f64) -> Option<Self> {
-        let min = if is_infinite_param(self.min) {
-            self.min
-        } else {
-            self.min - d
-        };
-        let max = if is_infinite_param(self.max) {
-            self.max
-        } else {
-            self.max + d
-        };
-        Self::from_bounds(min, max)
+        Self::new(self.min - d, self.max + d)
     }
 
-    /// Both bounded ends moved outwards by `d` (`ExpandAbsolute` with `d >= 0`). A `d`
-    /// below zero or NaN leaves the interval as it is: shrinking is [`Extent1d::shrunk`].
+    /// Both ends moved outwards by `d` (`ExpandAbsolute` with `d >= 0`), `None` when an
+    /// end would not be finite. A `d` below zero or NaN leaves the interval as it is:
+    /// shrinking is [`Extent1d::shrunk`].
     #[must_use]
-    pub fn expanded(self, d: f64) -> Self {
+    #[inline]
+    pub fn expanded(self, d: f64) -> Option<Self> {
         if d > 0.0 {
-            self.moved_out(d).unwrap_or(self)
+            self.moved_out(d)
         } else {
-            self
+            Some(self)
         }
     }
 
-    /// Both bounded ends moved inwards by `d` (`ExpandAbsolute(-d)`), `None` when that
-    /// inverts the interval.
+    /// Both ends moved inwards by `d` (`ExpandAbsolute(-d)`), `None` when that inverts the
+    /// interval or an end is not finite.
     #[must_use]
     pub fn shrunk(self, d: f64) -> Option<Self> {
         self.moved_out(-d)
     }
 
-    /// Both bounded ends moved outwards by `factor * length` (`ExpandRelative` with
-    /// `factor >= 0`). A `factor` below zero or NaN leaves the interval as it is.
+    /// Both ends moved outwards by `factor * length` (`ExpandRelative` with
+    /// `factor >= 0`), `None` when an end would not be finite. A `factor` below zero or NaN
+    /// leaves the interval as it is.
     #[must_use]
-    pub fn expanded_relative(self, factor: f64) -> Self {
+    pub fn expanded_relative(self, factor: f64) -> Option<Self> {
         if factor > 0.0 {
             self.moved_out((self.max - self.min) * factor)
-                .unwrap_or(self)
         } else {
-            self
+            Some(self)
         }
     }
 
-    /// Both bounded ends multiplied by `s` (any sign), re-ordered if needed (`Scale`).
+    /// Both ends multiplied by `s` (any sign), re-ordered if needed, `None` when an end
+    /// would not be finite (`Scale`).
     #[must_use]
-    pub fn scaled(self, s: f64) -> Self {
-        let times = |e: f64| if is_infinite_param(e) { e } else { e * s };
-        Self::spanning(times(self.min), times(self.max))
+    #[inline]
+    pub fn scaled(self, s: f64) -> Option<Self> {
+        Self::spanning(self.min * s, self.max * s)
     }
 
     /// The normalised parameter of `v` (inverse of [`Extent1d::evaluate`], not
@@ -569,105 +566,6 @@ impl Extent1d {
         (self.min >= self.max - tol) && (self.min <= self.max + tol)
     }
 
-    /// Classifies the ends as bounded or unbounded (`IsBounded`'s out-param).
-    #[must_use]
-    pub fn boundary_type(&self) -> BoundaryType {
-        if is_infinite_param(self.max) && is_infinite_param(self.min) {
-            BoundaryType::Unbounded
-        } else if is_infinite_param(self.min) {
-            BoundaryType::UnboundedMin
-        } else if is_infinite_param(self.max) {
-            BoundaryType::UnboundedMax
-        } else {
-            BoundaryType::Bounded
-        }
-    }
-
-    /// True when neither end is an unbounded marker (`IsBounded`).
-    #[must_use]
-    pub fn is_bounded(&self) -> bool {
-        self.boundary_type() == BoundaryType::Bounded
-    }
-
-    /// The approximated ends of `ApproximateUnbounded`, before the final swap.
-    fn approx_ends(&self, center: f64, half: f64) -> (BoundaryType, f64, f64) {
-        let ty = self.boundary_type();
-        let mut min = self.min;
-        let mut max = self.max;
-        if ty != BoundaryType::Bounded {
-            min = match ty {
-                BoundaryType::UnboundedMin => {
-                    if max < center + half {
-                        max - 2.0 * half
-                    } else {
-                        center - half
-                    }
-                }
-                BoundaryType::UnboundedMax => {
-                    if min > center - half {
-                        min
-                    } else {
-                        center - half
-                    }
-                }
-                BoundaryType::Unbounded => center - half,
-                BoundaryType::Bounded | BoundaryType::Unknown => min,
-            };
-            max = match ty {
-                BoundaryType::UnboundedMin => {
-                    if max < center + half {
-                        max
-                    } else {
-                        center + half
-                    }
-                }
-                BoundaryType::UnboundedMax => {
-                    if min > center - half {
-                        min + 2.0 * half
-                    } else {
-                        center + half
-                    }
-                }
-                BoundaryType::Unbounded => center + half,
-                BoundaryType::Bounded | BoundaryType::Unknown => max,
-            };
-        }
-        (ty, min, max)
-    }
-
-    /// A bounded interval approximating this one: unbounded ends are replaced
-    /// using `center` and `half` (upstream defaults `0` and
-    /// `BOUNDED_INFINITE_PARAM`); a bounded interval is returned unchanged
-    /// (`ApproximateUnbounded` without the expanded extent).
-    #[must_use]
-    pub fn approximate_unbounded(&self, center: f64, half: f64) -> Self {
-        let (_, min, max) = self.approx_ends(center, half);
-        Self::spanning(min, max)
-    }
-
-    /// [`Extent1d::approximate_unbounded`] plus the extent expanded by `half / 12`
-    /// at each replaced end (`ApproximateUnbounded` with `pOptExpandedApprox`);
-    /// `None` where upstream's `SetMinMax` rejects it (min > max).
-    #[must_use]
-    pub fn approximate_unbounded_expanded(&self, center: f64, half: f64) -> (Self, Option<Self>) {
-        let (ty, min, max) = self.approx_ends(center, half);
-        let mut min_inc = min;
-        let mut max_inc = max;
-        let inf_inc = half / 12.0;
-        if ty != BoundaryType::Bounded {
-            if ty == BoundaryType::UnboundedMin || ty == BoundaryType::Unbounded {
-                min_inc -= inf_inc;
-            }
-            if ty == BoundaryType::UnboundedMax || ty == BoundaryType::Unbounded {
-                max_inc += inf_inc;
-            }
-        }
-        (
-            Self::spanning(min, max),
-            Self::from_bounds(min_inc, max_inc),
-        )
-    }
-
     /// Both ends equal up to the scaled zero (`operator==`).
     #[must_use]
     pub fn are_same(&self, other: &Self) -> bool {
@@ -698,51 +596,7 @@ impl Extent1d {
     /// interval or when `v` is too large to wrap (`PeriodicWrap`).
     #[must_use]
     pub fn periodic_wrap(&self, v: f64) -> f64 {
-        let period = self.max - self.min;
-        if period <= EFF_ZERO {
-            return v;
-        }
-        let mut v = v;
-        if (v - self.min).abs() < EFF_ZERO {
-            v = self.min;
-        }
-        if (v - self.max).abs() < EFF_ZERO {
-            v = self.max;
-        }
-        if v + period == v {
-            return v;
-        }
-        // The whole periods to the interval in one step: a value below lands in
-        // `[min, max)`, one above in `(min, max]`, as upstream's one-period-a-time loop
-        // leaves them, which never ended for a value many periods out.
-        // The count is the fewest periods that reach the interval to within `EFF_ZERO`, where
-        // the loop stopped: the quotient's rounding can make its ceiling one too many.
-        if v < self.min {
-            let mut k = ((self.min - v) / period).ceil();
-            if k > 1.0 && v + (k - 1.0) * period >= self.min - EFF_ZERO {
-                k -= 1.0;
-            }
-            v += k * period;
-        } else if v > self.max {
-            let mut k = ((v - self.max) / period).ceil();
-            if k > 1.0 && v - (k - 1.0) * period <= self.max + EFF_ZERO {
-                k -= 1.0;
-            }
-            v -= k * period;
-        }
-        // The product's rounding can leave `v` just past an end: one period more at most.
-        if v < self.min - EFF_ZERO {
-            v += period;
-        } else if v > self.max + EFF_ZERO {
-            v -= period;
-        }
-        if (v - self.min).abs() < EFF_ZERO {
-            v = self.min;
-        }
-        if (v - self.max).abs() < EFF_ZERO {
-            v = self.max;
-        }
-        v
+        wrap(self.min, self.max, v)
     }
 
     /// The intersection of two intervals of the same periodic space of length
@@ -751,7 +605,8 @@ impl Extent1d {
     /// interval's boundaries (`IntersectPeriodic`; upstream default [`AtSeam::Join`]).
     ///
     /// Fails (`SM_ERR`) only for `period == 0` and disjoint intervals (upstream's
-    /// result is then one `Init()` interval).
+    /// result is then one `Init()` interval), and with `InvalidInput` for a period that is
+    /// not finite or that carries a piece's end past the finite range.
     pub fn intersect_periodic(
         &self,
         other: &Self,
@@ -760,6 +615,12 @@ impl Extent1d {
     ) -> Result<Vec<Self>> {
         let dont_cross = at_seam == AtSeam::Split;
         let mut out = Vec::new();
+        if !period.is_finite() {
+            return Err(NumError::InvalidInput {
+                operation: "geom::extent1d::Extent1d::intersect_periodic",
+                reason: Invalid::NotFinite,
+            });
+        }
         if period == 0.0 {
             out.push(self.intersect(*other).ok_or_else(|| {
                 NumError::failed(
@@ -773,11 +634,18 @@ impl Extent1d {
             return Ok(out);
         }
 
-        let ivl = Self::spanning(self.min, self.min + period);
+        let (lo, hi) = ordered(self.min, self.min + period);
         let this_min = self.min;
         let this_max = self.max;
-        let mut other_min = ivl.periodic_wrap(other.min);
-        let mut other_max = ivl.periodic_wrap(other.max);
+        let mut other_min = wrap(lo, hi, other.min);
+        let mut other_max = wrap(lo, hi, other.max);
+        // a piece of the answer: `None` where a non-finite `period` left an end non-finite
+        let piece = |a: f64, b: f64| {
+            Self::spanning(a, b).ok_or(NumError::InvalidInput {
+                operation: "geom::extent1d::Extent1d::intersect_periodic",
+                reason: Invalid::Overflows,
+            })
+        };
 
         if other_min < other_max - EFF_ZERO {
             if (this_min <= other_max + EFF_ZERO) && (this_max >= other_min - EFF_ZERO) {
@@ -786,13 +654,13 @@ impl Extent1d {
                 if are_same(min, max) {
                     max = min;
                 }
-                out.push(Self::spanning(min, max));
+                out.push(piece(min, max)?);
             }
             if !self.is_closed(period)
                 && !other.is_closed(period)
                 && are_same(other_max, this_min + period)
             {
-                out.push(Self::spanning(this_min, this_min));
+                out.push(piece(this_min, this_min)?);
             }
         } else if other_min > other_max + EFF_ZERO {
             let this_closed = self.is_closed(period);
@@ -804,7 +672,7 @@ impl Extent1d {
                         other_max = this_min;
                     }
                     if !(this_closed && are_same(this_min, other_max)) {
-                        out.push(Self::spanning(this_min, this_max.min(other_max)));
+                        out.push(piece(this_min, this_max.min(other_max))?);
                     }
                 }
                 if this_max >= other_min - EFF_ZERO {
@@ -812,15 +680,15 @@ impl Extent1d {
                         other_min = this_max;
                     }
                     if !(this_closed && are_same(this_max, other_min)) {
-                        out.push(Self::spanning(this_min.max(other_min), this_max));
+                        out.push(piece(this_min.max(other_min), this_max)?);
                     }
                 }
             }
         } else if other.is_closed(period) {
             if dont_cross {
                 if self.contains_value(other_min, -EFF_ZERO) {
-                    out.push(Self::spanning(this_min, other_max));
-                    out.push(Self::spanning(other_min, this_max));
+                    out.push(piece(this_min, other_max)?);
+                    out.push(piece(other_min, this_max)?);
                 } else {
                     out.push(*self);
                 }
@@ -828,7 +696,7 @@ impl Extent1d {
                 out.push(*self);
             }
         } else if other_min <= this_max {
-            out.push(Self::spanning(other_min, other_min));
+            out.push(piece(other_min, other_min)?);
         }
         Ok(out)
     }
@@ -863,16 +731,16 @@ impl Extent1d {
             };
         }
 
-        let ivl = Self::spanning(self.min, self.min + period);
+        let (lo, hi) = ordered(self.min, self.min + period);
         let mut map = v;
-        if !ivl.contains_value(v, zero) {
-            map = ivl.periodic_wrap(v);
+        if !(v >= lo - zero && v <= hi + zero) {
+            map = wrap(lo, hi, v);
         }
 
         contained = map > self.min - zero && map < self.max + zero;
 
         let mut kept_down = false;
-        if !contained && are_same_to_tol(map, ivl.max(), zero) {
+        if !contained && are_same_to_tol(map, hi, zero) {
             // a period down, kept where it lies in the interval; the C++ sets it to the
             // start instead (WR-509, #1518; tangency-labs/smlib#46)
             let down = map - period;
@@ -930,6 +798,62 @@ impl Extent1d {
     }
 }
 
+/// [`Extent1d::periodic_wrap`] on the raw ends `[min, max]`: the periodic helpers wrap into
+/// `[min, min + period]`, which need not be finite when `period` is not, so they hold no
+/// [`Extent1d`].
+fn wrap(min: f64, max: f64, v: f64) -> f64 {
+    let period = max - min;
+    if period <= EFF_ZERO {
+        return v;
+    }
+    let mut v = v;
+    if (v - min).abs() < EFF_ZERO {
+        v = min;
+    }
+    if (v - max).abs() < EFF_ZERO {
+        v = max;
+    }
+    if v + period == v {
+        return v;
+    }
+    // The whole periods to the interval in one step: a value below lands in
+    // `[min, max)`, one above in `(min, max]`, as upstream's one-period-a-time loop
+    // leaves them, which never ended for a value many periods out.
+    // The count is the fewest periods that reach the interval to within `EFF_ZERO`, where
+    // the loop stopped: the quotient's rounding can make its ceiling one too many.
+    if v < min {
+        let mut k = ((min - v) / period).ceil();
+        if k > 1.0 && v + (k - 1.0) * period >= min - EFF_ZERO {
+            k -= 1.0;
+        }
+        v += k * period;
+    } else if v > max {
+        let mut k = ((v - max) / period).ceil();
+        if k > 1.0 && v - (k - 1.0) * period <= max + EFF_ZERO {
+            k -= 1.0;
+        }
+        v -= k * period;
+    }
+    // The product's rounding can leave `v` just past an end: one period more at most.
+    if v < min - EFF_ZERO {
+        v += period;
+    } else if v > max + EFF_ZERO {
+        v -= period;
+    }
+    if (v - min).abs() < EFF_ZERO {
+        v = min;
+    }
+    if (v - max).abs() < EFF_ZERO {
+        v = max;
+    }
+    v
+}
+
+/// `a` and `b` in order, swapped when `a > b` (the ends `SmExtent1d(double, double)` holds).
+fn ordered(a: f64, b: f64) -> (f64, f64) {
+    if a > b { (b, a) } else { (a, b) }
+}
+
 /// An N-dimensional box of intervals (`SmExtentNd`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExtentNd {
@@ -961,12 +885,11 @@ impl ExtentNd {
         self.extents.get_mut(i)
     }
 
-    /// Clamps (or, where `periodic[i]`, wraps) each `values[i]` to interval `i`;
-    /// unbounded intervals are skipped (`ClampVector`).
+    /// Clamps (or, where `periodic[i]`, wraps) each `values[i]` to interval `i`
+    /// (`ClampVector`).
     ///
     /// As upstream, `clamped` and `counts` are resized to the dimension keeping their
-    /// existing prefix and zero-filling; `clamped[i]` is written only for bounded
-    /// intervals, and `counts[i]` is incremented when a non-periodic value moved by
+    /// existing prefix and zero-filling, and `counts[i]` is incremented when a non-periodic value moved by
     /// more than `EFF_ZERO`. Returns true when at least one value was clamped.
     /// Fails when `values` or `periodic` is shorter than the dimension.
     pub fn clamp_vector(
@@ -989,9 +912,6 @@ impl ExtentNd {
             c.resize(dim, 0);
         }
         for (i, (ext, &value)) in self.extents.iter().zip(values).enumerate() {
-            if !ext.is_bounded() {
-                continue;
-            }
             let is_periodic = periodic.and_then(|p| p.get(i)).copied().unwrap_or(false);
             let Some(slot) = clamped.get_mut(i) else {
                 continue;
@@ -1026,20 +946,19 @@ impl ExtentNd {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::math::BOUNDED_INFINITE_PARAM;
 
     #[test]
     fn construct_and_access() {
-        let e = Extent1d::spanning(3.0, 1.0);
+        let e = Extent1d::spanning(3.0, 1.0).unwrap();
         assert_eq!((e.min(), e.max()), (1.0, 3.0));
         assert_eq!(e.mid(), 2.0);
         assert_eq!(e.length(), 2.0);
-        assert_eq!(Extent1d::spanning(-5.0, 1.0).max_dimension(), 5.0);
+        assert_eq!(Extent1d::spanning(-5.0, 1.0).unwrap().max_dimension(), 5.0);
         assert_eq!(Hull1d::EMPTY.finish(), None);
-        assert_eq!(Extent1d::from_bounds(1.0, 0.0), None);
+        assert_eq!(Extent1d::new(1.0, 0.0), None);
         assert_eq!(
-            Extent1d::from_bounds(0.0, 1.0),
-            Some(Extent1d::spanning(1.0, 0.0))
+            Extent1d::new(0.0, 1.0),
+            Some(Extent1d::spanning(1.0, 0.0).unwrap())
         );
         assert!(e.t_left_eval(2.0));
         assert!(!e.t_left_eval(2.5));
@@ -1062,25 +981,25 @@ mod tests {
         let out = e.inversion(5.0);
         assert!(!out.is_success());
         assert_eq!(out.parameter, Some(2.0));
-        assert_eq!(Extent1d::point(1.0).inversion(2.0).parameter, None);
+        assert_eq!(Extent1d::point(1.0).unwrap().inversion(2.0).parameter, None);
     }
 
     #[test]
     fn setters() {
-        let e = Extent1d::spanning(0.0, 1.0);
+        let e = Extent1d::spanning(0.0, 1.0).unwrap();
         assert_eq!(e.with_min(2.0), None);
         assert_eq!(e.with_max(-1.0), None);
         let e = e.with_min(0.5).and_then(|e| e.with_max(0.5));
-        assert_eq!(e, Some(Extent1d::point(0.5)));
+        assert_eq!(e, Some(Extent1d::point(0.5).unwrap()));
     }
 
     #[test]
     fn set_operations() {
-        let a = Extent1d::spanning(0.0, 2.0);
-        let b = Extent1d::spanning(1.0, 3.0);
-        assert_eq!(a.union(b), Extent1d::spanning(0.0, 3.0));
-        assert_eq!(a.intersect(b), Some(Extent1d::spanning(1.0, 2.0)));
-        let c = Extent1d::spanning(5.0, 6.0);
+        let a = Extent1d::spanning(0.0, 2.0).unwrap();
+        let b = Extent1d::spanning(1.0, 3.0).unwrap();
+        assert_eq!(a.union(b), Extent1d::spanning(0.0, 3.0).unwrap());
+        assert_eq!(a.intersect(b), Some(Extent1d::spanning(1.0, 2.0).unwrap()));
+        let c = Extent1d::spanning(5.0, 6.0).unwrap();
         assert_eq!(a.intersect(c), None);
         let disjoint = a.intersect_periodic(&c, 0.0, AtSeam::Join).unwrap_err();
         assert_eq!(
@@ -1093,104 +1012,139 @@ mod tests {
         // status SM_ERR (1001): every `NumError::Failed` has it
         assert!(matches!(disjoint, NumError::Failed { .. }));
         assert!(a.are_disjoint(&c, 0.0));
-        assert!(!a.are_disjoint(&Extent1d::spanning(2.0, 3.0), 0.0));
+        assert!(!a.are_disjoint(&Extent1d::spanning(2.0, 3.0).unwrap(), 0.0));
         assert_eq!(a.distance_from(-1.0), 1.0);
         assert_eq!(a.distance_from(1.0), 0.0);
-        assert!(Extent1d::spanning(0.5, 1.0).is_contained_by(&a, 0.0));
-        assert!(a.are_equal(&Extent1d::spanning(0.1, 2.0), -0.2));
-        assert!(a.are_same(&Extent1d::spanning(1e-13, 2.0)));
+        assert!(
+            Extent1d::spanning(0.5, 1.0)
+                .unwrap()
+                .is_contained_by(&a, 0.0)
+        );
+        assert!(a.are_equal(&Extent1d::spanning(0.1, 2.0).unwrap(), -0.2));
+        assert!(a.are_same(&Extent1d::spanning(1e-13, 2.0).unwrap()));
     }
 
     #[test]
     fn expand_scale_negate_translate() {
-        let e = Extent1d::spanning(1.0, 3.0).expanded(1.0);
+        let e = Extent1d::spanning(1.0, 3.0).unwrap().expanded(1.0).unwrap();
         assert_eq!((e.min(), e.max()), (0.0, 4.0));
-        assert_eq!(e.expanded(-1.0), e);
-        assert_eq!(e.shrunk(1.5), Some(Extent1d::spanning(1.5, 2.5)));
+        assert_eq!(e.expanded(-1.0).unwrap(), e);
+        assert_eq!(e.shrunk(1.5), Some(Extent1d::spanning(1.5, 2.5).unwrap()));
         assert_eq!(e.shrunk(2.5), None);
-        let e = e.expanded_relative(0.5);
+        let e = e.expanded_relative(0.5).unwrap();
         assert_eq!((e.min(), e.max()), (-2.0, 6.0));
-        let e = e.scaled(-1.0);
+        let e = e.scaled(-1.0).unwrap();
         assert_eq!((e.min(), e.max()), (-6.0, 2.0));
         let e = e.negated();
         assert_eq!((e.min(), e.max()), (-2.0, 6.0));
-        let u = Extent1d::UNBOUNDED.translated(5.0);
-        assert_eq!(u.min(), -INFINITE_PARAMETER);
-        assert!(!u.is_bounded());
-        assert_eq!(u.boundary_type(), BoundaryType::Unbounded);
+        assert_eq!(e.translated(1.0), Extent1d::new(-1.0, 7.0));
+    }
+
+    /// No constructor or transform stores ±inf or NaN: each answers `None` (research 63 D1).
+    #[test]
+    fn ends_are_finite_by_construction() {
+        let (inf, nan, big) = (f64::INFINITY, f64::NAN, f64::MAX);
+        for v in [inf, -inf, nan] {
+            assert_eq!(Extent1d::new(v, 1.0), None);
+            assert_eq!(Extent1d::new(0.0, v), None);
+            assert_eq!(Extent1d::point(v), None);
+            assert_eq!(Extent1d::spanning(v, 0.0), None);
+            assert_eq!(Extent1d::spanning(0.0, v), None);
+        }
+        let e = Extent1d::spanning(-1.0, big).unwrap();
+        assert_eq!(e.with_max(inf), None);
+        assert_eq!(e.with_min(nan), None);
+        assert_eq!(e.translated(big), None);
+        assert_eq!(e.translated(nan), None);
+        assert_eq!(e.scaled(2.0), None);
+        assert_eq!(e.scaled(nan), None);
+        assert_eq!(e.expanded(big), None);
+        assert_eq!(e.expanded(inf), None);
+        assert_eq!(e.expanded_relative(1.0), None);
+        assert_eq!(e.shrunk(nan), None);
+        assert_eq!(e.shrunk(-big), None);
+        // a factor at or below zero, or NaN, leaves the interval as it is
+        assert_eq!(e.expanded(nan), Some(e));
+        assert_eq!(e.expanded_relative(-1.0), Some(e));
+        // a fold is `None` once ±inf was added; NaN is passed over
+        assert_eq!(Extent1d::hull([1.0, inf]), None);
+        assert_eq!(Extent1d::hull([1.0, nan]), Extent1d::point(1.0));
+        // a non-finite period cannot give a piece of an intersection
+        let q = Extent1d::spanning(0.0, 1.0).unwrap();
+        assert!(q.intersect_periodic(&q, nan, AtSeam::Join).is_err());
+        assert!(!q.contains_periodic_value(5.0, nan, -1.0).contained);
     }
 
     #[test]
     fn classify_and_boundary() {
-        let e = Extent1d::spanning(0.0, 1.0);
+        let e = Extent1d::spanning(0.0, 1.0).unwrap();
         assert_eq!(e.classify_point(0.0, EFF_ZERO), ExtentPointType::Start);
         assert_eq!(e.classify_point(1.0, EFF_ZERO), ExtentPointType::End);
         assert_eq!(e.classify_point(0.5, EFF_ZERO), ExtentPointType::Inside);
         assert_eq!(e.classify_point(2.0, EFF_ZERO), ExtentPointType::Outside);
         assert_eq!(
-            Extent1d::point(0.0).classify_point(0.0, EFF_ZERO),
+            Extent1d::point(0.0).unwrap().classify_point(0.0, EFF_ZERO),
             ExtentPointType::Both
         );
         assert_eq!(e.is_value_on_boundary(1.0, EFF_ZERO), (true, 0.0));
-        assert!(Extent1d::point(1.0).is_degenerate(0.0));
-    }
-
-    #[test]
-    fn approximate() {
-        let e = Extent1d::UNBOUNDED.with_max(5.0).unwrap();
-        let a = e.approximate_unbounded(0.0, BOUNDED_INFINITE_PARAM);
-        assert_eq!((a.min(), a.max()), (5.0 - 66.0, 5.0));
-        let e = Extent1d::UNBOUNDED;
-        let (a, x) = e.approximate_unbounded_expanded(0.0, 12.0);
-        assert_eq!((a.min(), a.max()), (-12.0, 12.0));
-        assert_eq!(x, Some(Extent1d::spanning(-13.0, 13.0)));
-        let b = Extent1d::spanning(1.0, 2.0);
-        assert_eq!(b.approximate_unbounded(0.0, 33.0), b);
+        assert!(Extent1d::point(1.0).unwrap().is_degenerate(0.0));
     }
 
     #[test]
     fn periodic() {
-        let e = Extent1d::spanning(0.0, 2.0);
+        let e = Extent1d::spanning(0.0, 2.0).unwrap();
         assert_eq!(e.periodic_wrap(4.5), 0.5);
         assert_eq!(e.periodic_wrap(-1.0), 1.0);
         // Whole periods out: below lands on `min`, above on `max`.
         assert_eq!(e.periodic_wrap(-4.0), 0.0);
         assert_eq!(e.periodic_wrap(6.0), 2.0);
         // One period out by a quotient that rounds above 1 still takes one step.
-        let e = Extent1d::spanning(-1.0, 0.945_266_454_097_540_8);
+        let e = Extent1d::spanning(-1.0, 0.945_266_454_097_540_8).unwrap();
         assert_eq!(e.periodic_wrap(-2.945_266_454_097_541), -1.0);
         // Many periods out wraps in one step (the period-at-a-time loop never ended).
-        let short = Extent1d::spanning(0.0, 1e-6);
+        let short = Extent1d::spanning(0.0, 1e-6).unwrap();
         for v in [1e9, -1e9, 12_345.678_9] {
             let w = short.periodic_wrap(v);
             assert!((0.0..=1e-6).contains(&w), "{v} wrapped to {w}");
         }
-        let full = Extent1d::spanning(0.0, 360.0);
+        let full = Extent1d::spanning(0.0, 360.0).unwrap();
         let r = full
-            .intersect_periodic(&Extent1d::spanning(-90.0, 90.0), 360.0, AtSeam::Join)
+            .intersect_periodic(
+                &Extent1d::spanning(-90.0, 90.0).unwrap(),
+                360.0,
+                AtSeam::Join,
+            )
             .unwrap_or_default();
-        assert_eq!(r, vec![Extent1d::spanning(-90.0, 90.0)]);
+        assert_eq!(r, vec![Extent1d::spanning(-90.0, 90.0).unwrap()]);
         let r = full
-            .intersect_periodic(&Extent1d::spanning(-90.0, 90.0), 360.0, AtSeam::Split)
+            .intersect_periodic(
+                &Extent1d::spanning(-90.0, 90.0).unwrap(),
+                360.0,
+                AtSeam::Split,
+            )
             .unwrap_or_default();
         assert_eq!(
             r,
             vec![
-                Extent1d::spanning(0.0, 90.0),
-                Extent1d::spanning(270.0, 360.0)
+                Extent1d::spanning(0.0, 90.0).unwrap(),
+                Extent1d::spanning(270.0, 360.0).unwrap()
             ]
         );
-        let q = Extent1d::spanning(0.0, 90.0);
+        let q = Extent1d::spanning(0.0, 90.0).unwrap();
         let c = q.contains_periodic_value(370.0, 360.0, -1.0);
         assert!(c.contained);
         assert_eq!(c.periodic_value, 10.0);
         assert_eq!(q.clamp_periodic_value(200.0, 360.0, -1.0), 90.0);
         assert!(full.is_closed(360.0));
         assert!(q.is_value_on_periodic_boundary(360.0, 360.0, EFF_ZERO).0);
-        assert!(q.are_disjoint_periodic(&Extent1d::spanning(100.0, 200.0), 360.0, -1.0));
+        assert!(q.are_disjoint_periodic(&Extent1d::spanning(100.0, 200.0).unwrap(), 360.0, -1.0));
         assert!(
-            q.intersect_periodic(&Extent1d::spanning(100.0, 200.0), 0.0, AtSeam::Join)
-                .is_err()
+            q.intersect_periodic(
+                &Extent1d::spanning(100.0, 200.0).unwrap(),
+                0.0,
+                AtSeam::Join
+            )
+            .is_err()
         );
     }
 
@@ -1198,7 +1152,7 @@ mod tests {
     fn issue_1518_value_past_start_moves_down_a_period() {
         // An interval shorter than the tolerance (1e-4 degrees), and a value 3e-5 past
         // its start given a period up: the C++ returns the start (-10).
-        let q = Extent1d::spanning(-10.0, -10.0 + 7.0e-5);
+        let q = Extent1d::spanning(-10.0, -10.0 + 7.0e-5).unwrap();
         let v = 350.0 + 3.0e-5;
         let c = q.contains_periodic_value(v, 360.0, -1.0);
         assert!(c.contained);
@@ -1208,7 +1162,7 @@ mod tests {
 
         // a value within the tolerance below the start keeps its place a period down
         // (the C++: the start, 0)
-        let r = Extent1d::spanning(0.0, 90.0);
+        let r = Extent1d::spanning(0.0, 90.0).unwrap();
         let w = 360.0 - 5.0e-5;
         let c = r.contains_periodic_value(w, 360.0, -1.0);
         assert!(c.contained);
@@ -1220,20 +1174,20 @@ mod tests {
     #[test]
     fn clamp_vector() {
         let nd = ExtentNd::new(vec![
-            Extent1d::spanning(0.0, 1.0),
-            Extent1d::spanning(0.0, 2.0),
-            Extent1d::UNBOUNDED,
+            Extent1d::spanning(0.0, 1.0).unwrap(),
+            Extent1d::spanning(0.0, 2.0).unwrap(),
+            Extent1d::spanning(-5.0, 5.0).unwrap(),
         ]);
         let mut out = vec![9.0];
         let mut counts = vec![5];
         let r = nd.clamp_vector(
-            &[2.0, 3.0, 7.0],
+            &[2.0, 3.0, 4.0],
             Some(&[false, true, false]),
             &mut out,
             Some(&mut counts),
         );
         assert_eq!(r.ok(), Some(true));
-        assert_eq!(out, vec![1.0, 1.0, 0.0]);
+        assert_eq!(out, vec![1.0, 1.0, 4.0]);
         assert_eq!(counts, vec![6, 0, 0]);
         assert!(nd.clamp_vector(&[1.0], None, &mut out, None).is_err());
         assert_eq!(nd.get(5), None);

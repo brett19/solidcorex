@@ -351,21 +351,17 @@ diff!(
         })
     }
 );
-diff!(
-    scaled_zero_of_boxes,
-    truth_defect = crate::pin_truths::scaled_zero_of_boxes,
-    |e: B, f: R| {
-        use m::tol::ScaledZero;
-        m::e3(e).zip(m::e2(f)).map(|(e, f)| {
-            [
-                e.scaled_zero(),
-                f.scaled_zero(),
-                m::tol::scaled_zero_sq_of(&e),
-                m::tol::scaled_zero_sqrt_of(&f),
-            ]
-        })
-    }
-);
+diff!(scaled_zero_of_boxes, |e: B, f: R| {
+    use m::tol::ScaledZero;
+    m::e3(e).zip(m::e2(f)).map(|(e, f)| {
+        [
+            e.scaled_zero(),
+            f.scaled_zero(),
+            m::tol::scaled_zero_sq_of(&e),
+            m::tol::scaled_zero_sqrt_of(&f),
+        ]
+    })
+});
 diff!(
     scaled_zero_n,
     truth_defect = crate::pin_truths::scaled_zero_n,

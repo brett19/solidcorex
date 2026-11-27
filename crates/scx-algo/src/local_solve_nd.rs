@@ -400,14 +400,14 @@ impl<const N: usize, C> LocalSolveNd<N, C> {
         let mut out = Clamped { x, hit: [false; N] };
         for ((v, hit), dom) in out.x.iter_mut().zip(&mut out.hit).zip(&self.domain) {
             match dom {
-                Domain1d::Periodic(e) if e.is_bounded() => *v = e.periodic_wrap(*v),
-                Domain1d::Bounded(e) if e.is_bounded() => {
+                Domain1d::Periodic(e) => *v = e.periodic_wrap(*v),
+                Domain1d::Bounded(e) => {
                     let c = e.clamp_value(*v);
                     *hit = (c - *v).abs() > EFF_ZERO;
                     *v = c;
                 }
-                // the line, and an interval with an infinite end: unchanged
-                Domain1d::Line | Domain1d::Periodic(_) | Domain1d::Bounded(_) => {}
+                // the line: unchanged
+                Domain1d::Line => {}
             }
         }
         out
@@ -862,7 +862,7 @@ mod tests {
     };
 
     fn bounds<const N: usize>(extents: [(f64, f64); N]) -> [Domain1d; N] {
-        extents.map(|(lo, hi)| Domain1d::Bounded(Extent1d::spanning(lo, hi)))
+        extents.map(|(lo, hi)| Domain1d::Bounded(Extent1d::spanning(lo, hi).unwrap()))
     }
 
     fn bounded<const N: usize>(extents: [(f64, f64); N]) -> LocalSolveNd<N> {
@@ -1085,18 +1085,18 @@ mod tests {
     }
 
     /// Bounded parameters clamp (a hit past `SM_EFF_ZERO`), periodic ones wrap (never a
-    /// hit), the line and unbounded intervals leave the parameter as given.
+    /// hit), the line and a value inside its interval leave the parameter as given.
     #[test]
     fn clamp_follows_the_domain() {
-        let unit = Extent1d::spanning(0.0, 1.0);
-        let free = Extent1d::UNBOUNDED;
+        let unit = Extent1d::spanning(0.0, 1.0).unwrap();
+        let wide = Extent1d::spanning(-10.0, 10.0).unwrap();
         let s = LocalSolveNd {
             domain: [
                 Domain1d::Line,
                 Domain1d::Bounded(unit),
                 Domain1d::Bounded(unit),
                 Domain1d::Periodic(unit),
-                Domain1d::Bounded(free),
+                Domain1d::Bounded(wide),
             ],
             ..LocalSolveNd::new()
         };
@@ -1124,8 +1124,8 @@ mod tests {
     #[test]
     fn jacobian_on_degenerate_interval_fails() {
         let domain = [
-            Domain1d::Bounded(Extent1d::point(0.5)),
-            Domain1d::Bounded(Extent1d::spanning(-2.0, 2.0)),
+            Domain1d::Bounded(Extent1d::point(0.5).unwrap()),
+            Domain1d::Bounded(Extent1d::spanning(-2.0, 2.0).unwrap()),
         ];
         let r = jacobian(
             &mut |x: &[f64; 2]| Ok::<_, TestErr>(CUBIC.values(x)),
