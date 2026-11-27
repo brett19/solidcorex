@@ -21,14 +21,18 @@
 //!   signed so the solid is inside; the area every face not between two solids. A finished
 //!   body's fins agree about their sides (`scx_brep`'s `SidesDisagree` check), so a solid
 //!   region's boundary is always closed and no open-shell case arises.
-//! - **Not yet.** Gap closure onto an edge's curve for a use with a recorded accuracy
-//!   (MA2, at `face::join`); a loop winding round a `v` period or `u` windings that do not
-//!   cancel ([`MassUnsupported`]).
+//! - **Gap closure.** A use whose pcurve carries a recorded accuracy is closed onto its
+//!   edge's curve by a strip and a corner fan (the `closure` module), so the faces bound one
+//!   closed surface; a use with none costs nothing extra. The closure's integration error
+//!   and the tube it cannot count are in the stated error.
+//! - **Not yet.** A loop winding round a `v` period or `u` windings that do not cancel
+//!   ([`MassUnsupported`]).
 //!
 //! Every per-piece evaluation is charged to the budget, the stop flag checked first.
 
 mod body;
 mod breaks;
+mod closure;
 mod edge;
 mod error;
 mod face;
