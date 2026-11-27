@@ -241,6 +241,12 @@ fn traced_output(t: &Traced, case: &Case) -> Output {
         .extend(t.nodes.iter().map(|n| [n.point.x, n.point.y, n.point.z]));
     o.points
         .extend(t.touches.iter().map(|n| [n.point.x, n.point.y, n.point.z]));
+    o.coincident = !t.coincident.is_empty();
+    o.regions = t
+        .coincident
+        .iter()
+        .map(|p| polygon_points(&case.sides[0], &p.on_a))
+        .collect();
     o
 }
 

@@ -19,14 +19,10 @@ use scx_surface::Surface;
 /// the unit square, `(s, t)` mapped affinely onto `uv` (`s` along u).
 #[derive(Clone, Debug)]
 pub(crate) struct Net {
-    /// The piece's uv rectangle.
-    pub(crate) uv: Extent2d,
     /// The homogeneous coordinates `w P`, one polynomial per axis.
     pub(crate) h: [Bernstein2; 3],
     /// The weight, positive over the square.
     pub(crate) w: Bernstein2,
-    /// The least weight coefficient (positive): a lower bound of `W` over the square.
-    pub(crate) w_min: f64,
     /// A bound of `|H / W - S|` at every uv of the piece, `S` the surface's own point.
     pub(crate) delta: f64,
 }
@@ -61,17 +57,25 @@ impl Net {
             _ => (points.points().to_vec(), vec![1.0; (p + 1) * (q + 1)]),
         };
         let coord = |k: usize| -> Option<Bernstein2> {
-            Bernstein2::new(p, q, hs.iter().map(|x| x.get(k).copied()).collect::<Option<_>>()?)
-                .ok()
+            Bernstein2::new(
+                p,
+                q,
+                hs.iter()
+                    .map(|x| x.get(k).copied())
+                    .collect::<Option<_>>()?,
+            )
+            .ok()
         };
         let h = [coord(0)?, coord(1)?, coord(2)?];
         let w = Bernstein2::new(p, q, ws.clone()).ok()?;
         let w_min = ws.iter().copied().fold(f64::INFINITY, f64::min);
         let w_max = ws.iter().copied().fold(0.0_f64, f64::max);
-        if !(w_min > 0.0) || !w_max.is_finite() {
+        if w_min.is_nan() || w_min <= 0.0 || !w_max.is_finite() {
             return None;
         }
-        let h_max = h.iter().fold(0.0_f64, |m, b| m.max(b.max_abs_coefficient()));
+        let h_max = h
+            .iter()
+            .fold(0.0_f64, |m, b| m.max(b.max_abs_coefficient()));
         let reach = points
             .points()
             .iter()
@@ -79,18 +83,7 @@ impl Net {
             .fold(0.0_f64, |m, x| m.max(x.abs()));
         let size = up(3.0_f64.sqrt() * h_max * (1.0 + gamma(2)) + reach * w_max);
         let delta = up(gamma(32 + 8 * (p + q)) * size / w_min);
-        delta.is_finite().then_some(Self {
-            uv: *uv,
-            h,
-            w,
-            w_min,
-            delta,
-        })
-    }
-
-    /// The degrees `(p, q)`.
-    pub(crate) fn degrees(&self) -> (usize, usize) {
-        self.w.degrees()
+        delta.is_finite().then_some(Self { h, w, delta })
     }
 
     /// The weight raised to `k`, with its rounding bound.
@@ -107,8 +100,16 @@ impl Net {
 /// A knot vector of one span over its domain: `p + 1` equal knots, then `p + 1` equal knots.
 fn single_span(knots: &[f64], p: usize) -> bool {
     knots.len() == 2 * (p + 1)
-        && knots.split_at(p + 1).0.windows(2).all(|w| w.first() == w.last())
-        && knots.split_at(p + 1).1.windows(2).all(|w| w.first() == w.last())
+        && knots
+            .split_at(p + 1)
+            .0
+            .windows(2)
+            .all(|w| w.first() == w.last())
+        && knots
+            .split_at(p + 1)
+            .1
+            .windows(2)
+            .all(|w| w.first() == w.last())
 }
 
 /// `x` raised past the rounding of the few operations that computed it from nonnegative

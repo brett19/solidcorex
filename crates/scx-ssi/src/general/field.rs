@@ -24,7 +24,9 @@
 //! Each net piece (a Bézier cell of the other side that a surviving pair names) is cut into
 //! dyadic squares of its unit square. A square is dropped by its box (more than the
 //! coincidence from every box of the field side it was paired with) or by the sign proof,
-//! taken whole when coincident, kept as a **graph cell** when `g_t` (or `g_s`) is strictly
+//! taken whole when coincident (only a whole piece is: a smaller square within the
+//! coincidence is a touch or a tangency, [`SsiError::Unresolved`] until row `SM6b`), kept as a
+//! **graph cell** when `g_t` (or `g_s`) is strictly
 //! signed (the zero set is then a graph over the other parameter: one root per column), and
 //! otherwise split. A square at the resolution that must still split is
 //! [`SsiError::Unresolved`] where it lies.
@@ -45,6 +47,11 @@
 //! crossings into chains, and the chains are cut where the field side's inverse leaves its
 //! extent (bisection on the chord: [`Rim`]) and where it crosses a periodic seam
 //! ([`NodeKind::Seam`]).
+//!
+//! A coincident piece is clipped to the field side's extent in the net side's uv, as the
+//! closed forms clip an overlap: with positive area when the extents overlap, else a
+//! zero-width piece along the edge where they abut (the field side's extent grown by the
+//! uv distance its derivative bound gives the coincidence, then clamped back into it).
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -283,7 +290,13 @@ fn bounds(form: &Implicit, bbox: &Extent3d, delta: f64, tol: f64) -> Option<Boun
 
 /// Whether the piece of `s` over `uv` (box `bbox`) is proved more than `tol` from the zero
 /// set of `form` by the sign of the field (module docs). `false` is "not proved".
-pub(crate) fn apart(form: &Implicit, s: &Surface, uv: &Extent2d, bbox: &Extent3d, tol: f64) -> bool {
+pub(crate) fn apart(
+    form: &Implicit,
+    s: &Surface,
+    uv: &Extent2d,
+    bbox: &Extent3d,
+    tol: f64,
+) -> bool {
     let proved = || -> Option<bool> {
         let net = Net::of(s, uv)?;
         let g = form.field(&net)?;
@@ -297,32 +310,25 @@ pub(crate) fn apart(form: &Implicit, s: &Surface, uv: &Extent2d, bbox: &Extent3d
 /// Whether `g - c W^k > 0` or `g + c W^k < 0` over the square.
 fn signed_past(g: &Bounded, wk: &Bounded, c: f64) -> bool {
     g.add_scaled(wk, -c)
-        .ok()
-        .is_some_and(|p| strict_sign(&p) == Some(1))
+        .is_ok_and(|p| strict_sign(&p) == Some(1))
         || g.add_scaled(wk, c)
-            .ok()
-            .is_some_and(|p| strict_sign(&p) == Some(-1))
+            .is_ok_and(|p| strict_sign(&p) == Some(-1))
 }
 
 /// Whether `|g| < c W^k` over the square.
 fn within(g: &Bounded, wk: &Bounded, c: f64) -> bool {
     c > 0.0
-        && wk
-            .scale(c)
-            .sub(g)
-            .ok()
-            .is_some_and(|p| strict_sign(&p) == Some(1))
+        && wk.scale(c).sub(g).is_ok_and(|p| strict_sign(&p) == Some(1))
         && g.add_scaled(wk, c)
-            .ok()
-            .is_some_and(|p| strict_sign(&p) == Some(1))
+            .is_ok_and(|p| strict_sign(&p) == Some(1))
 }
 
 // ---------------------------------------------------------------------------------------
 // The side choice.
 
 /// The field side and its form: of the sides with an implicit form, the one whose field
-/// has the least degree (`k` times the other side's degrees); the first on a tie. `None`
-/// when neither side has a form.
+/// has the least degree (`k` times the other side's degrees); on a tie the form of least
+/// degree `k`, then the first. `None` when neither side has a form.
 pub(crate) fn field_side(s: [&Surface; 2], e: [&Extent2d; 2]) -> Option<(usize, Implicit)> {
     let [a, b] = s;
     let [ae, be] = e;
@@ -335,7 +341,11 @@ pub(crate) fn field_side(s: [&Surface; 2], e: [&Extent2d; 2]) -> Option<(usize, 
         })
     };
     match (cost(Implicit::of(a), b, be), cost(Implicit::of(b), a, ae)) {
-        (Some((x, f)), Some((y, g))) => Some(if y < x { (1, g) } else { (0, f) }),
+        (Some((x, f)), Some((y, g))) => Some(if (y, g.degree()) < (x, f.degree()) {
+            (1, g)
+        } else {
+            (0, f)
+        }),
         (Some((_, f)), None) => Some((0, f)),
         (None, Some((_, g))) => Some((1, g)),
         (None, None) => None,
@@ -410,8 +420,6 @@ struct ArcOut {
     sag: f64,
     /// The net side's second-partial bound over its piece.
     d2: f64,
-    /// The net side's point at each end, for refusals.
-    cell: usize,
 }
 
 /// The fixed data of one piece's trace.
@@ -430,6 +438,12 @@ struct Cell<'a> {
     j: [f64; 2],
     /// The largest second partial's length over the piece.
     d2: f64,
+    /// The coincidence in the field side's uv (over an upper bound of its first partials),
+    /// the slack of a piece of no width; 0 when no bound is found.
+    field_slack: f64,
+    /// Which of the piece's edges (`s = 0`, `s = 1`, `t = 0`, `t = 1`) lie on the rim of the
+    /// net side's extent.
+    rim: [bool; 4],
 }
 
 /// What one piece gives: arcs (with their ports) and coincident regions, in net-then-field
@@ -483,10 +497,18 @@ impl Cell<'_> {
         {
             return Ok((Class::Drop, Some(bbox)));
         }
-        if within(&q.g, &q.wk, self.b.coincident)
-            && let Some(o) = self.overlap(&uv, budget, stop)?
-        {
-            return Ok((Class::Coincident(o), Some(bbox)));
+        if within(&q.g, &q.wk, self.b.coincident) {
+            // A whole piece within the coincidence is a coincident patch; a part of one is
+            // where the surfaces touch or run tangent within it (row SM6b), refused here.
+            if q.level > 0 {
+                return Err(unresolved(&bbox));
+            }
+            if let Some(o) = self.overlap(&uv, budget, stop)? {
+                return Ok((Class::Coincident(o), Some(bbox)));
+            }
+        }
+        if self.runs_along_the_rim(q) {
+            return Err(unresolved(&bbox));
         }
         let class = if strict_sign(&q.g.deriv_v()).is_some() {
             Class::Graph(true)
@@ -496,6 +518,35 @@ impl Cell<'_> {
             Class::Split
         };
         Ok((class, Some(bbox)))
+    }
+
+    /// Whether `|g|` is within the coincidence all along an edge of `q` on the extent's
+    /// rim: the curve then runs along the rim, where the sign at the grid points (zero
+    /// counted positive) cannot see it, so the square is refused (a curve on the boundary,
+    /// research 73 §19). The edge's coefficients are the square's own: no arithmetic.
+    fn runs_along_the_rim(&self, q: &Square) -> bool {
+        let c = self.b.coincident;
+        let [s0, s1, t0, t1] = q.grid();
+        let end = 1_u64 << MAX_LEVEL;
+        let edge = |b: &Bounded, k: usize| -> Option<Bounded> {
+            let (du, dv) = b.f.degrees();
+            let f = match k {
+                0 => Bernstein2::new(0, dv, row(&b.f, 0)),
+                1 => Bernstein2::new(0, dv, row(&b.f, du)),
+                2 => Bernstein2::new(du, 0, column(&b.f, 0)),
+                _ => Bernstein2::new(du, 0, column(&b.f, dv)),
+            }
+            .ok()?;
+            Some(Bounded { f, err: b.err })
+        };
+        let on = [s0 == 0, s1 == end, t0 == 0, t1 == end];
+        (0..4).any(|k| {
+            self.rim.get(k).copied().unwrap_or(false)
+                && on.get(k).copied().unwrap_or(false)
+                && edge(&q.g, k)
+                    .zip(edge(&q.wk, k))
+                    .is_some_and(|(g, wk)| within(&g, &wk, c))
+        })
     }
 
     /// The coincident region over the square `uv` in both surfaces' uv, clipped to the
@@ -519,9 +570,8 @@ impl Cell<'_> {
         };
         let periods = [self.fs.domain().u.period(), self.fs.domain().v.period()];
         let unwrap = |q: Point2, near: Point2| {
-            let fix = |x: f64, n: f64, p: Option<f64>| {
-                p.map_or(x, |p| x - p * fmath_round((x - n) / p))
-            };
+            let fix =
+                |x: f64, n: f64, p: Option<f64>| p.map_or(x, |p| x - p * fmath_round((x - n) / p));
             let [pu, pv] = periods;
             Point2::new(fix(q.x, near.x, pu), fix(q.y, near.y, pv))
         };
@@ -541,12 +591,12 @@ impl Cell<'_> {
             let p = self
                 .ns
                 .point(Point2::new(lerp(lo.x, hi.x, s), lerp(lo.y, hi.y, t)));
-            if (self.fs.point(map(s, t)) - p).norm() > 0.5 * self.tol {
+            if (self.fs.point(map(s, t)) - p).length() > 0.5 * self.tol {
                 return Ok(None);
             }
         }
         let det = e1.x * e3.y - e1.y * e3.x;
-        if !(det.abs() > 0.0) || !det.is_finite() {
+        if det == 0.0 || !det.is_finite() {
             return Ok(None);
         }
         let to_n = |q: Point2| {
@@ -558,24 +608,54 @@ impl Cell<'_> {
                 lerp(lo.y, hi.y, t.clamp(0.0, 1.0)),
             )
         };
-        let poly = vec![q0, map(1.0, 0.0), map(1.0, 1.0), map(0.0, 1.0)];
-        let shifts = |p: Option<f64>| -> Vec<f64> { p.map_or(vec![0.0], |p| vec![-p, 0.0, p]) };
+        let poly = [q0, map(1.0, 0.0), map(1.0, 1.0), map(0.0, 1.0)];
+        let shifts =
+            |p: Option<f64>| -> Vec<f64> { p.map_or_else(|| vec![0.0], |p| vec![-p, 0.0, p]) };
+        let [pu, pv] = periods;
+        let (su, sv) = (shifts(pu), shifts(pv));
+        let moved = |du: f64, dv: f64| -> Vec<Point2> {
+            poly.iter()
+                .map(|q| Point2::new(q.x + du, q.y + dv))
+                .collect()
+        };
+        let piece = |clipped: &[Point2], du: f64, dv: f64| Overlap {
+            on_a: clipped
+                .iter()
+                .map(|q| to_n(Point2::new(q.x - du, q.y - dv)))
+                .collect(),
+            on_b: clipped.to_vec(),
+        };
         let mut out = Vec::new();
-        for du in shifts(periods.first().copied().flatten()) {
-            for dv in shifts(periods.get(1).copied().flatten()) {
-                let moved: Vec<Point2> = poly.iter().map(|q| Point2::new(q.x + du, q.y + dv)).collect();
-                let clipped = clip_rect(&moved, self.fe);
-                if clipped.len() < 3 || polygon_area(&clipped) <= 0.0 {
-                    continue;
+        for &du in &su {
+            for &dv in &sv {
+                let clipped = clip_rect(&moved(du, dv), self.fe);
+                if clipped.len() >= 3 && polygon_area(&clipped) > 0.0 {
+                    out.push(piece(&clipped, du, dv));
                 }
-                let on_n = clipped
-                    .iter()
-                    .map(|q| to_n(Point2::new(q.x - du, q.y - dv)))
-                    .collect();
-                out.push(Overlap {
-                    on_a: on_n,
-                    on_b: clipped,
-                });
+            }
+        }
+        // No overlap of positive area: where the square's image touches the extent within
+        // the coincidence (a neighbour on the same surface), a piece of no width there, as
+        // the closed forms give (its vertices clamped into the extent).
+        if out.is_empty() && self.field_slack > 0.0 {
+            let r = self.field_slack;
+            let fe = self.fe;
+            if let Some(grown) = Extent2d::from_bounds(
+                fe.x_min() - r,
+                fe.y_min() - r,
+                fe.x_max() + r,
+                fe.y_max() + r,
+            ) {
+                for &du in &su {
+                    for &dv in &sv {
+                        let clipped = clip_rect(&moved(du, dv), &grown);
+                        if clipped.len() >= 3 {
+                            let flat: Vec<Point2> =
+                                clipped.iter().map(|q| clamp_to(*q, fe)).collect();
+                            out.push(piece(&flat, du, dv));
+                        }
+                    }
+                }
             }
         }
         Ok(Some(out))
@@ -669,9 +749,10 @@ struct Memo {
 impl Cell<'_> {
     /// The sign of `g` at grid point `(s, t)` (zero counted positive), one value per point.
     fn sign(&self, memo: &mut Memo, s: u64, t: u64) -> bool {
-        *memo.signs.entry((s, t)).or_insert_with(|| {
-            self.g.f.eval(s as f64 / SCALE, t as f64 / SCALE) >= 0.0
-        })
+        *memo
+            .signs
+            .entry((s, t))
+            .or_insert_with(|| self.g.f.eval(s as f64 / SCALE, t as f64 / SCALE) >= 0.0)
     }
 
     /// The crossings of the segment `[a, b]` of the line `line` (grid units), along it.
@@ -746,12 +827,12 @@ impl Cell<'_> {
                 _ => return None,
             }
         };
-        if (local.len() % 2 == 1) != parity {
+        if local.len() % 2 != usize::from(parity) {
             let (c0, c1) = (e.first()?.abs(), e.last()?.abs());
-            let at_start = if near_end[0] != near_end[1] {
-                near_end[0]
-            } else {
-                c0 <= c1
+            let at_start = match near_end {
+                [true, false] => true,
+                [false, true] => false,
+                _ => c0 <= c1,
             };
             let small = if at_start { c0 } else { c1 };
             if !(near_end[0] || near_end[1] || small <= 4.0 * err) {
@@ -763,12 +844,7 @@ impl Cell<'_> {
                 local.push(1.0);
             }
         }
-        Some(
-            local
-                .into_iter()
-                .map(|x| lerp(fa, fb, x))
-                .collect(),
-        )
+        Some(local.into_iter().map(|x| lerp(fa, fb, x)).collect())
     }
 }
 
@@ -848,10 +924,11 @@ impl Cell<'_> {
             match self.square_arcs(q, *over_s, memo, &cuts) {
                 Some(found) => {
                     for a in &found {
-                        for (key, uv) in a.ports.iter().zip([
-                            a.verts.first().map(|v| v.0),
-                            a.verts.last().map(|v| v.0),
-                        ]) {
+                        for (key, uv) in a
+                            .ports
+                            .iter()
+                            .zip([a.verts.first().map(|v| v.0), a.verts.last().map(|v| v.0)])
+                        {
                             if let Some(uv) = uv {
                                 ports.insert(*key, (uv, self.slack(key, uv)));
                             }
@@ -938,7 +1015,11 @@ impl Cell<'_> {
             (None, None) => {}
             _ => return None,
         }
-        let p = if over_s { q.g.clone() } else { transpose(&q.g)? };
+        let p = if over_s {
+            q.g.clone()
+        } else {
+            transpose(&q.g)?
+        };
         let side = q.side() as f64 / SCALE;
         let origin = if over_s {
             [s0 as f64 / SCALE, t0 as f64 / SCALE]
@@ -991,8 +1072,8 @@ impl Cell<'_> {
         let [ju, jv] = self.j;
         let (wu, wv) = (self.uv.x_length() * side, self.uv.y_length() * side);
         let (h_sig, h_tau, j_tau) = if over_s { (wu, wv, jv) } else { (wv, wu, ju) };
-        let k = up(phi2.mag() * h_tau * j_tau
-            + (h_sig + phi1.mag() * h_tau).powi(2) * self.d2);
+        let lead = h_sig + phi1.mag() * h_tau;
+        let k = up(phi2.mag() * h_tau * j_tau + lead * lead * self.d2);
         let target = 0.5 * self.tol;
         let length = (sb - sa).abs();
         let n = if k > 0.0 && length > 0.0 {
@@ -1033,7 +1114,6 @@ impl Cell<'_> {
             ports: [a.key, b.key],
             sag,
             d2: self.d2,
-            cell: self.id,
         })
     }
 }
@@ -1041,7 +1121,10 @@ impl Cell<'_> {
 /// The root in `[0, 1]` of a monotone 1D polynomial by bisection; the end of the smaller
 /// value when its ends have one sign.
 fn root1(c: &[f64]) -> f64 {
-    let (f0, f1) = (c.first().copied().unwrap_or(0.0), c.last().copied().unwrap_or(0.0));
+    let (f0, f1) = (
+        c.first().copied().unwrap_or(0.0),
+        c.last().copied().unwrap_or(0.0),
+    );
     if f0 == 0.0 {
         return 0.0;
     }
@@ -1073,7 +1156,12 @@ fn root1(c: &[f64]) -> f64 {
 
 /// Traces one piece: classifies squares, splitting as needed, and assembles the graph
 /// squares' arcs (module docs).
-fn trace_cell(cell: &Cell<'_>, wk: Bounded, budget: &mut Budget, stop: &Stop) -> Result<CellOut, SsiError> {
+fn trace_cell(
+    cell: &Cell<'_>,
+    wk: Bounded,
+    budget: &mut Budget,
+    stop: &Stop,
+) -> Result<CellOut, SsiError> {
     let mut todo = vec![Square {
         i: 0,
         j: 0,
@@ -1095,14 +1183,20 @@ fn trace_cell(cell: &Cell<'_>, wk: Bounded, budget: &mut Budget, stop: &Stop) ->
                     graph.push((q, over_s));
                     boxes.push(bbox);
                 }
-                Class::Split => split_into(cell, q, bbox, &mut todo)?,
+                Class::Split => split_into(cell, &q, bbox, &mut todo)?,
             }
         }
         // Squares in grid order, so the assembly does not depend on the work order.
         let mut order: Vec<usize> = (0..graph.len()).collect();
         order.sort_by_key(|&k| graph.get(k).map(|(q, _)| (q.i, q.j, q.level)));
-        let sorted: Vec<(Square, bool)> = order.iter().filter_map(|&k| graph.get(k).cloned()).collect();
-        let sorted_boxes: Vec<Option<Extent3d>> = order.iter().filter_map(|&k| boxes.get(k).copied()).collect();
+        let sorted: Vec<(Square, bool)> = order
+            .iter()
+            .filter_map(|&k| graph.get(k).cloned())
+            .collect();
+        let sorted_boxes: Vec<Option<Extent3d>> = order
+            .iter()
+            .filter_map(|&k| boxes.get(k).copied())
+            .collect();
         graph = sorted;
         boxes = sorted_boxes;
         match cell.assemble(&graph, &mut memo) {
@@ -1118,7 +1212,7 @@ fn trace_cell(cell: &Cell<'_>, wk: Bounded, budget: &mut Budget, stop: &Stop) ->
                 let mut keep_boxes = Vec::with_capacity(graph.len());
                 for (k, (sq, b)) in graph.drain(..).zip(boxes.drain(..)).enumerate() {
                     if failed.contains(&k) {
-                        split_into(cell, sq.0, b, &mut todo)?;
+                        split_into(cell, &sq.0, b, &mut todo)?;
                     } else {
                         keep.push(sq);
                         keep_boxes.push(b);
@@ -1134,7 +1228,12 @@ fn trace_cell(cell: &Cell<'_>, wk: Bounded, budget: &mut Budget, stop: &Stop) ->
 }
 
 /// Pushes the four quarters of `q` (to be classified), or refuses at the resolution.
-fn split_into(cell: &Cell<'_>, q: Square, bbox: Option<Extent3d>, todo: &mut Vec<Square>) -> Result<(), SsiError> {
+fn split_into(
+    cell: &Cell<'_>,
+    q: &Square,
+    bbox: Option<Extent3d>,
+    todo: &mut Vec<Square>,
+) -> Result<(), SsiError> {
     let at_floor = bbox.is_none_or(|b| b.max_length() <= cell.floor);
     if at_floor || q.level >= MAX_LEVEL {
         return Err(match bbox {
@@ -1246,13 +1345,17 @@ fn link(
     let mut parent: Vec<usize> = (0..keys.len()).collect();
     let mut bridged = vec![false; keys.len()];
     for i in 0..keys.len() {
-        let Some((ki, (pi, si))) = info(i) else { continue };
+        let Some((ki, (pi, si))) = info(i) else {
+            continue;
+        };
         if degree.get(i) != Some(&1) || !outer(&ki) || on_rim(pi) || bridged.get(i) == Some(&true) {
             continue;
         }
         let mut found = Vec::new();
         for j in 0..keys.len() {
-            let Some((kj, (pj, sj))) = info(j) else { continue };
+            let Some((kj, (pj, sj))) = info(j) else {
+                continue;
+            };
             if kj.cell == ki.cell || degree.get(j) != Some(&1) || !outer(&kj) {
                 continue;
             }
@@ -1291,7 +1394,7 @@ fn link(
     }
     for (r, list) in &incident {
         if list.len() > 2 {
-            let at = info(*r).map_or(ne.mid(), |(_, (p, _))| p);
+            let at = info(*r).map_or_else(|| ne.mid(), |(_, (p, _))| p);
             return Err(unresolved_at(ns.point(at), 0.0));
         }
     }
@@ -1305,7 +1408,10 @@ fn link(
         .filter_map(|(r, l)| l.first().map(|&(a, e)| (*r, a, e)))
         .collect();
     let end_kind = |r: usize| {
-        info(r).map_or(Open::Loose, |(_, (p, _))| if on_rim(p) { Open::Rim } else { Open::Loose })
+        info(r).map_or(
+            Open::Loose,
+            |(_, (p, _))| if on_rim(p) { Open::Rim } else { Open::Loose },
+        )
     };
     for (r, a0, e0) in starts {
         if used.get(a0) == Some(&true) {
@@ -1316,7 +1422,9 @@ fn link(
         let (mut sag, mut d2) = (0.0_f64, 0.0_f64);
         let last_root;
         loop {
-            let Some(arc) = arcs.get(a) else { return Err(unresolved_at(ns.point(ne.mid()), 0.0)) };
+            let Some(arc) = arcs.get(a) else {
+                return Err(unresolved_at(ns.point(ne.mid()), 0.0));
+            };
             if let Some(u) = used.get_mut(a) {
                 *u = true;
             }
@@ -1360,8 +1468,7 @@ fn link(
         let mut verts: Vec<(Point2, f64)> = Vec::new();
         let (mut a, mut from_end) = (a0, 0_usize);
         let (mut sag, mut d2) = (0.0_f64, 0.0_f64);
-        loop {
-            let Some(arc) = arcs.get(a) else { break };
+        while let Some(arc) = arcs.get(a) {
             if let Some(u) = used.get_mut(a) {
                 *u = true;
             }
@@ -1374,10 +1481,14 @@ fn link(
             let skip = usize::from(!verts.is_empty());
             verts.extend(vs.into_iter().skip(skip));
             let other = arc.ports.get(1 - from_end).copied();
-            let Some(rn) = other.and_then(|k| port_root(&mut parent, &k)) else { break };
-            let next = incident
-                .get(&rn)
-                .and_then(|l| l.iter().find(|&&(x, e)| (x, e) != (a, 1 - from_end)).copied());
+            let Some(rn) = other.and_then(|k| port_root(&mut parent, &k)) else {
+                break;
+            };
+            let next = incident.get(&rn).and_then(|l| {
+                l.iter()
+                    .find(|&&(x, e)| (x, e) != (a, 1 - from_end))
+                    .copied()
+            });
             match next {
                 Some((na, ne_)) if used.get(na) == Some(&false) => {
                     a = na;
@@ -1430,7 +1541,13 @@ struct Out<'a> {
 }
 
 impl Out<'_> {
-    fn place(&self, uv: Point2, err: f64, budget: &mut Budget, stop: &Stop) -> Result<Placed, SsiError> {
+    fn place(
+        &self,
+        uv: Point2,
+        err: f64,
+        budget: &mut Budget,
+        stop: &Stop,
+    ) -> Result<Placed, SsiError> {
         let p = self.ns.point(uv);
         let inv = self
             .fs
@@ -1450,7 +1567,14 @@ impl Out<'_> {
 
     /// The last inside point on the chord from `a` (inside) to `b` (outside), by
     /// bisection; its field uv clamped to the extent.
-    fn clip(&self, a: &Placed, b: &Placed, sag: f64, budget: &mut Budget, stop: &Stop) -> Result<Placed, SsiError> {
+    fn clip(
+        &self,
+        a: &Placed,
+        b: &Placed,
+        sag: f64,
+        budget: &mut Budget,
+        stop: &Stop,
+    ) -> Result<Placed, SsiError> {
         let (mut lo, mut hi) = (0.0_f64, 1.0_f64);
         let at = |x: f64| a.uv + (b.uv - a.uv) * x;
         let err = up(a.err.max(b.err) + sag);
@@ -1471,8 +1595,14 @@ impl Out<'_> {
 }
 
 fn clamp_to(q: Point2, e: &Extent2d) -> Point2 {
-    Point2::new(q.x.clamp(e.x_min(), e.x_max()), q.y.clamp(e.y_min(), e.y_max()))
+    Point2::new(
+        q.x.clamp(e.x_min(), e.x_max()),
+        q.y.clamp(e.y_min(), e.y_max()),
+    )
 }
+
+/// A run of placed vertices, how it starts and ends, and whether it closes on itself.
+type Run = (Vec<Placed>, [Cut; 2], bool);
 
 /// The pieces of a chain inside the field side's extent, cut at its seams: each a run of
 /// placed vertices and how it starts and ends.
@@ -1482,7 +1612,7 @@ fn runs(
     nodes: &mut Vec<Node>,
     budget: &mut Budget,
     stop: &Stop,
-) -> Result<Vec<(Vec<Placed>, [Cut; 2], bool)>, SsiError> {
+) -> Result<Vec<Run>, SsiError> {
     let mut placed = Vec::with_capacity(chain.verts.len());
     for &(uv, err) in &chain.verts {
         budget.charge(1)?;
@@ -1563,7 +1693,11 @@ fn runs(
             {
                 let (end_v, start_v) = seam_cut(out, v, next, periods, chain.sag)?;
                 let node = nodes.len();
-                let uvs = if out.nside == 0 { [end_v.uv, end_v.q] } else { [end_v.q, end_v.uv] };
+                let uvs = if out.nside == 0 {
+                    [end_v.uv, end_v.q]
+                } else {
+                    [end_v.q, end_v.uv]
+                };
                 nodes.push(Node {
                     point: end_v.p,
                     uv: uvs,
@@ -1616,9 +1750,16 @@ fn seam_jumps(vs: &[Placed], periods: [Option<f64>; 2]) -> Vec<usize> {
 
 /// The two sides of the seam crossing between `a` and `b`: the end of the piece before (on
 /// `a`'s side of the seam) and the start of the piece after, at one point.
-fn seam_cut(out: &Out<'_>, a: &Placed, b: &Placed, periods: [Option<f64>; 2], sag: f64) -> Result<(Placed, Placed), SsiError> {
+fn seam_cut(
+    out: &Out<'_>,
+    a: &Placed,
+    b: &Placed,
+    periods: [Option<f64>; 2],
+    sag: f64,
+) -> Result<(Placed, Placed), SsiError> {
     let [pu, pv] = periods;
-    let unwrap = |x: f64, near: f64, p: Option<f64>| p.map_or(x, |p| x - p * ((x - near) / p).round());
+    let unwrap =
+        |x: f64, near: f64, p: Option<f64>| p.map_or(x, |p| x - p * ((x - near) / p).round());
     let bq = Point2::new(unwrap(b.q.x, a.q.x, pu), unwrap(b.q.y, a.q.y, pv));
     let shift = b.q - bq;
     // The seam line crossed, in a's frame: the extent's boundary nearest the jump.
@@ -1637,9 +1778,9 @@ fn seam_cut(out: &Out<'_>, a: &Placed, b: &Placed, periods: [Option<f64>; 2], sa
     let uv = a.uv + (b.uv - a.uv) * t;
     let q = a.q + (bq - a.q) * t;
     // Too large a step in the field's uv for its chord: a pole, not a seam.
-    let step = (bq - a.q).norm();
+    let step = (bq - a.q).length();
     if pu.is_some_and(|p| step > 0.125 * p) || pv.is_some_and(|p| step > 0.125 * p) {
-        return Err(unresolved_at(a.p, (b.p - a.p).norm()));
+        return Err(unresolved_at(a.p, (b.p - a.p).length()));
     }
     let p = out.ns.point(uv);
     let err = up(a.err.max(b.err) + sag);
@@ -1682,14 +1823,26 @@ fn field_d2(fs: &Surface, fe: &Extent2d, qs: &[Point2]) -> Option<f64> {
 
 /// One output branch from a run (module docs): oriented along `n_a x n_b`, on a chord-length
 /// parameter, with its certificate.
-fn branch(out: &Out<'_>, run: Vec<Placed>, cuts: [Cut; 2], closed: bool, chain: &Chain) -> Result<Option<Branch>, SsiError> {
+fn branch(
+    out: &Out<'_>,
+    run: Vec<Placed>,
+    cuts: [Cut; 2],
+    closed: bool,
+    chain: &Chain,
+) -> Result<Option<Branch>, SsiError> {
     let mut vs: Vec<Placed> = Vec::with_capacity(run.len());
     for v in run {
-        if vs.last().is_none_or(|l: &Placed| (v.p - l.p).norm() > 0.0) {
+        if vs
+            .last()
+            .is_none_or(|l: &Placed| (v.p - l.p).length() > 0.0)
+        {
             vs.push(v);
         }
     }
-    if closed && vs.len() > 2 && let Some(&f) = vs.first() {
+    if closed
+        && vs.len() > 2
+        && let Some(&f) = vs.first()
+    {
         vs.push(f);
     }
     if vs.len() < 2 {
@@ -1709,7 +1862,11 @@ fn branch(out: &Out<'_>, run: Vec<Placed>, cuts: [Cut; 2], closed: bool, chain: 
         let nn = out.ns.normal(a.uv, [Approach::Above; 2]);
         let nf = out.fs.normal(a.q, [Approach::Above; 2]);
         if let (Some(nn), Some(nf)) = (nn, nf) {
-            let (na, nb) = if out.nside == 0 { (nn.as_vec(), nf.as_vec()) } else { (nf.as_vec(), nn.as_vec()) };
+            let (na, nb) = if out.nside == 0 {
+                (nn.as_vec(), nf.as_vec())
+            } else {
+                (nf.as_vec(), nn.as_vec())
+            };
             if (b.p - a.p).dot(na.cross(nb)) < 0.0 {
                 vs.reverse();
                 ends.reverse();
@@ -1722,7 +1879,7 @@ fn branch(out: &Out<'_>, run: Vec<Placed>, cuts: [Cut; 2], closed: bool, chain: 
     let mut t = 0.0_f64;
     for w in vs.windows(2) {
         if let [a, b] = w {
-            t += (b.p - a.p).norm();
+            t += (b.p - a.p).length();
             knots.push(t);
         }
     }
@@ -1734,9 +1891,9 @@ fn branch(out: &Out<'_>, run: Vec<Placed>, cuts: [Cut; 2], closed: bool, chain: 
     let curve = NurbsCurve::new(kv.clone(), p3, None).map_err(bad)?;
     let cn = NurbsCurve::new(kv.clone(), pn, None).map_err(bad)?;
     let cf = NurbsCurve::new(kv, pf, None).map_err(bad)?;
-    let reach = vs
-        .iter()
-        .fold(0.0_f64, |r, v| r.max(v.p.x.abs()).max(v.p.y.abs()).max(v.p.z.abs()));
+    let reach = vs.iter().fold(0.0_f64, |r, v| {
+        r.max(v.p.x.abs()).max(v.p.y.abs()).max(v.p.z.abs())
+    });
     let round = up(gamma(64) * reach);
     let err = vs.iter().fold(0.0_f64, |e, v| e.max(v.err));
     let step = |f: &dyn Fn(&Placed) -> Point2| {
@@ -1748,11 +1905,13 @@ fn branch(out: &Out<'_>, run: Vec<Placed>, cuts: [Cut; 2], closed: bool, chain: 
             _ => m,
         })
     };
-    let on_n = up(0.125 * step(&|v| v.uv).powi(2) * chain.d2 + round);
+    let hn = step(&|v| v.uv);
+    let on_n = up(0.125 * hn * hn * chain.d2 + round);
     let qs: Vec<Point2> = vs.iter().map(|v| v.q).collect();
     let d2f = field_d2(out.fs, out.fe, &qs).ok_or_else(|| unresolved_at(at, 0.0))?;
     let residual = vs.iter().fold(0.0_f64, |e, v| e.max(v.residual));
-    let on_f = up(residual + 0.125 * step(&|v| v.q).powi(2) * d2f + round);
+    let hf = step(&|v| v.q);
+    let on_f = up(residual + 0.125 * hf * hf * d2f + round);
     let to_intersection = up(err + chain.sag + round);
     let (pa, pb, oa, ob) = if out.nside == 0 {
         (cn, cf, on_n, on_f)
@@ -1792,17 +1951,23 @@ pub(crate) fn trace(
         return Ok(None);
     };
     let nside = 1 - f;
-    let pick = |x: [&Surface; 2], i: usize| if i == 0 { x[0] } else { x[1] };
-    let pick_e = |x: [&Extent2d; 2], i: usize| if i == 0 { x[0] } else { x[1] };
-    let (ns, fs) = (pick(surfaces, nside), pick(surfaces, f));
-    let (ne, fe) = (pick_e(extents, nside), pick_e(extents, f));
+    let ([sa, sb], [ea, eb]) = (surfaces, extents);
+    let (ns, fs, ne, fe) = if nside == 0 {
+        (sa, sb, ea, eb)
+    } else {
+        (sb, sa, eb, ea)
+    };
     let tol = found.tolerance();
     // The pieces of the net side the pairs name, in order of first appearance, each with
     // its partners' boxes.
     let mut order: Vec<(Extent2d, Extent3d, Vec<Extent3d>)> = Vec::new();
     let mut at: BTreeMap<[u64; 4], usize> = BTreeMap::new();
     for pair in found.pairs() {
-        let (np, fp) = if nside == 0 { (pair.a, pair.b) } else { (pair.b, pair.a) };
+        let (np, fp) = if nside == 0 {
+            (pair.a, pair.b)
+        } else {
+            (pair.b, pair.a)
+        };
         let key = [
             np.uv.x_min().to_bits(),
             np.uv.y_min().to_bits(),
@@ -1817,6 +1982,14 @@ pub(crate) fn trace(
             c.2.push(fp.bbox);
         }
     }
+    let field_slack = derivative_bounds(fs, fe).map_or(0.0, |([ju, jv], _)| {
+        let j = ju.max(jv);
+        if j > 0.0 {
+            (Ivl::from(tol) / Ivl::from(j)).lo
+        } else {
+            0.0
+        }
+    });
     let mut arcs = Vec::new();
     let mut ports = BTreeMap::new();
     let mut overlaps = Vec::new();
@@ -1840,6 +2013,13 @@ pub(crate) fn trace(
             b,
             j,
             d2,
+            field_slack,
+            rim: [
+                uv.x_min() <= ne.x_min(),
+                uv.x_max() >= ne.x_max(),
+                uv.y_min() <= ne.y_min(),
+                uv.y_max() >= ne.y_max(),
+            ],
         };
         let o = trace_cell(&cell, wk, budget, stop)?;
         arcs.extend(o.arcs);
@@ -1847,7 +2027,7 @@ pub(crate) fn trace(
         overlaps.extend(o.overlaps);
     }
     let chains = link(ns, ne, &arcs, &ports)?;
-    let out = Outs::new(ns, fs, fe, nside);
+    let out = Out { ns, fs, fe, nside };
     let mut traced = Traced::default();
     for chain in &chains {
         if chain.verts.len() < 2 {
@@ -1873,13 +2053,4 @@ pub(crate) fn trace(
         })
         .collect();
     Ok(Some(traced))
-}
-
-/// [`Out`]'s constructor, kept apart so the struct stays plain.
-struct Outs;
-
-impl Outs {
-    fn new<'a>(ns: &'a Surface, fs: &'a Surface, fe: &'a Extent2d, nside: usize) -> Out<'a> {
-        Out { ns, fs, fe, nside }
-    }
 }

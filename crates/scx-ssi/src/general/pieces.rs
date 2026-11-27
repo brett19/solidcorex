@@ -221,15 +221,16 @@ impl<'s> Candidates<'s> {
     }
 
     /// Whether the two pieces of `pair` are proved apart by more than the coincidence: by
-    /// their boxes, then by the slab across either's normal. `false` is "not proved", never
-    /// "meet".
+    /// their boxes, then by the slab across either's normal, then by the sign of either
+    /// side's implicit field over the other's piece (an analytic side's). `false` is "not
+    /// proved", never "meet".
     #[must_use]
     pub fn apart(&self, pair: &PiecePair) -> bool {
         self.prove(pair).is_none()
     }
 
     /// `None` when the pair is proved apart (boxes, then the slab across either piece's unit
-    /// normal at its middle); else the piece to halve next, from the axis along which the
+    /// normal at its middle, then the field sign); else the piece to halve next, from the axis along which the
     /// ranges overlap least (a heuristic, never a proof).
     fn prove(&self, pair: &PiecePair) -> Option<(usize, Option<Vec3>)> {
         if boxes_apart(&pair.a.bbox, &pair.b.bbox, self.tol) {

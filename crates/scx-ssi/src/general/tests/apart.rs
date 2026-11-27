@@ -117,6 +117,23 @@ fn run(a: &Part, b: &Part) -> Result<Traced, SsiError> {
     )
 }
 
+/// How many piece pairs the proofs (boxes, slabs, field signs) leave.
+fn kept(a: &Part, b: &Part) -> usize {
+    Candidates::new(
+        &a.0,
+        &a.1,
+        &b.0,
+        &b.1,
+        acc(),
+        res(),
+        &mut Budget::unlimited(),
+        &Stop::new(),
+    )
+    .unwrap()
+    .pairs()
+    .len()
+}
+
 /// Whether the infinite surfaces meet, by the truth.
 fn truly_meet(a: &Part, b: &Part) -> bool {
     match truth(&a.2, &b.2).unwrap() {
@@ -173,12 +190,18 @@ fn separated_pairs_are_proved_empty_where_the_truth_is_empty() {
 #[test]
 fn touching_and_crossing_pairs_are_never_dropped() {
     // Gaps at, inside and past the coincidence (1e-9): the truth meets for g <= 0 and the
-    // surfaces are within the coincidence of meeting for 0 < g <= 1e-9. A pair that is not
-    // apart by more than that is refused where it lies, never answered empty.
+    // surfaces are within the coincidence of meeting for 0 < g <= 1e-9. No proof (the field
+    // signs of row SM6a included) drops every pair of such surfaces; a touch within the
+    // coincidence is refused where it lies, never answered empty. (A crossing is traced:
+    // `field`.)
     for g in [0.0, p2(40), -p2(40), -p2(20), -1e-2, -0.5] {
         for (name, a, b) in apart_pairs(g) {
             if g <= 0.0 {
                 assert!(truly_meet(&a, &b), "truth: {name} at {g}");
+            }
+            assert!(kept(&a, &b) > 0, "{name} at {g}: every pair dropped");
+            if g < -p2(40) {
+                continue;
             }
             let Err(SsiError::Unresolved { at, size }) = run(&a, &b) else {
                 panic!("{name} at {g} was dropped or not refused");
@@ -341,7 +364,8 @@ fn a_dropped_pair_is_apart_by_sampling_and_the_survivors_are_the_rest() {
 
 #[test]
 fn the_answer_is_deterministic_and_independent_of_the_budget() {
-    for g in [p2(10), 0.0, -0.5] {
+    // A crossing's trace is the same check in `field`, at a coarser coincidence.
+    for g in [p2(10), 0.0] {
         for (name, a, b) in apart_pairs(g) {
             let first = run(&a, &b);
             assert_eq!(run(&a, &b), first, "{name} at {g}");
@@ -469,7 +493,8 @@ fn cylinder_at(x: f64, r: f64) -> Part {
 }
 
 /// The research-73 truths (`ssi_truth`, row SM0) decide each pair: no contact is proved
-/// empty, a contact (a touch or a curve) is refused where it lies and never dropped.
+/// empty, a touch is refused where it lies, and a curve is never dropped (it is traced:
+/// `field`).
 #[test]
 fn the_sm0_truths_decide_spheres_and_parallel_cylinders() {
     use scx_testkit::ssi_truth::{cylinders_parallel, sphere_sphere};
@@ -487,28 +512,46 @@ fn the_sm0_truths_decide_spheres_and_parallel_cylinders() {
         0.4,
     ] {
         let truth = sphere_sphere([0.0; 3], 1.0, [d, 0.0, 0.0], 1.5).unwrap();
-        let out = run(&sphere([0.0; 3], 1.0), &sphere([d, 0.0, 0.0], 1.5));
+        let (a, b) = (sphere([0.0; 3], 1.0), sphere([d, 0.0, 0.0], 1.5));
+        let crossing = !truth.is_empty() && d != 2.5 && d != 0.5;
+        let out = if crossing {
+            Ok(Traced::default())
+        } else {
+            run(&a, &b)
+        };
         if truth.is_empty() {
             // Apart (d > 2.5) or one inside the other (d < 0.5): no contact. Only the first
             // is a proof by apartness.
             if d > 2.5 {
                 assert_eq!(out.map(|t| t.is_empty()), Ok(true), "spheres at {d}");
             }
-        } else {
+        } else if d == 2.5 || d == 0.5 {
+            // A touch: refused where it lies (row SM6b).
             assert!(
                 matches!(out, Err(SsiError::Unresolved { .. })),
                 "spheres at {d}: {out:?}"
             );
+        } else {
+            // A circle: never dropped (traced in `field`).
+            assert!(kept(&a, &b) > 0, "spheres at {d}");
         }
     }
     // Two parallel cylinders of radii 1 and 0.5 with axes e apart.
     for e in [3.0, 1.6, 1.5 + p2(8), 1.5, 1.2, 0.5] {
         let truth = cylinders_parallel(1.0, 0.5, e, 4.0).unwrap();
-        let out = run(&cylinder_at(0.0, 1.0), &cylinder_at(e, 0.5));
+        let (a, b) = (cylinder_at(0.0, 1.0), cylinder_at(e, 0.5));
+        let crossing = !truth.is_empty() && e != 1.5 && e != 0.5;
+        let out = if crossing {
+            Ok(Traced::default())
+        } else {
+            run(&a, &b)
+        };
         if truth.is_empty() {
             if e > 1.5 {
                 assert_eq!(out.map(|t| t.is_empty()), Ok(true), "cylinders at {e}");
             }
+        } else if crossing {
+            assert!(kept(&a, &b) > 0, "cylinders at {e}");
         } else {
             assert!(
                 matches!(out, Err(SsiError::Unresolved { .. })),

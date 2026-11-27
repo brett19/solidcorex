@@ -1,5 +1,5 @@
 // Written for solidcorex. Apache-2.0.
-//! The implicit forms of the analytic kinds (research 73 §4.5, row SM6a), and the field
+//! The implicit forms of the analytic kinds (research 73 §4.5, row `SM6a`), and the field
 //! `g = f(x)` of one of them over another surface's [`Net`].
 //!
 //! Each kind is `O + a X + b Y + c Z` for a canonical shape in `(a, b, c)`, its frame's axes
@@ -64,9 +64,7 @@ impl Implicit {
             Surface::Cylinder(c) => (
                 c.frame(),
                 c.sense().sign(),
-                Shape::Cylinder {
-                    r: c.radius().mm(),
-                },
+                Shape::Cylinder { r: c.radius().mm() },
             ),
             Surface::Cone(c) => (
                 c.frame(),
@@ -79,9 +77,7 @@ impl Implicit {
             Surface::Sphere(c) => (
                 c.frame(),
                 c.sense().sign(),
-                Shape::Sphere {
-                    r: c.radius().mm(),
-                },
+                Shape::Sphere { r: c.radius().mm() },
             ),
             Surface::Torus(t) => (
                 t.frame(),
@@ -99,10 +95,9 @@ impl Implicit {
         let mut eta = 0.0_f64;
         for (i, a) in rows.iter().enumerate() {
             for (j, b) in rows.iter().enumerate() {
-                let d = a
-                    .iter()
-                    .zip(b)
-                    .fold(Ivl::from(0.0), |s, (p, q)| s + Ivl::from(*p) * Ivl::from(*q));
+                let d = a.iter().zip(b).fold(Ivl::from(0.0), |s, (p, q)| {
+                    s + Ivl::from(*p) * Ivl::from(*q)
+                });
                 let d = if i == j { d - Ivl::from(1.0) } else { d };
                 eta = eta.max(d.mag());
             }
@@ -234,7 +229,11 @@ impl Implicit {
             Shape::Cylinder { .. } => Vec3::new(two * y1, two * y2, Ivl::from(0.0)),
             Shape::Cone { r, k } => {
                 let k = Ivl::from(k);
-                Vec3::new(two * y1, two * y2, Ivl::from(0.0) - two * k * (Ivl::from(r) + k * y3))
+                Vec3::new(
+                    two * y1,
+                    two * y2,
+                    Ivl::from(0.0) - two * k * (Ivl::from(r) + k * y3),
+                )
             }
             Shape::Sphere { .. } => Vec3::new(two * y1, two * y2, two * y3),
             Shape::Torus { big, small } => {
