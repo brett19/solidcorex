@@ -96,7 +96,7 @@ impl Torus {
         }
     }
 
-    fn axes(&self) -> Axes {
+    pub(crate) fn axes(&self) -> Axes {
         Axes::new(&self.frame, self.sense)
     }
 
