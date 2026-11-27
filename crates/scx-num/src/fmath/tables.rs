@@ -463,3 +463,77 @@ pub(super) const TWO_OVER_PI: [u64; 21] = [
 pub(super) const CBRT2: (f64, f64) = (f64::from_bits(0x3ff428a2f98d728b), f64::from_bits(0xbc7ddc22548ea41e));
 /// `2^(2/3)` as (high, low).
 pub(super) const CBRT4: (f64, f64) = (f64::from_bits(0x3ff965fea53d6e3d), f64::from_bits(0xbc9f53e999952f09));
+
+// The accurate phase's constants (`big`, `accurate`), by the same methods at 1200 digits,
+// truncated rather than rounded.
+/// `ln 2`: `0.m * 2^0`, the significand's first 640 bits (truncated).
+pub(super) const LN2_BIG: (i64, [u64; 10]) = (0, [
+    0xb17217f7d1cf79ab,
+    0xc9e3b39803f2f6af,
+    0x40f343267298b62d,
+    0x8a0d175b8baafa2b,
+    0xe7b876206debac98,
+    0x559552fb4afa1b10,
+    0xed2eae35c1382144,
+    0x27573b291169b825,
+    0x3e96ca16224ae8c5,
+    0x1acbda11317c387e,
+]);
+/// `ln 10`: `0.m * 2^2`, the significand's first 640 bits (truncated).
+pub(super) const LN10_BIG: (i64, [u64; 10]) = (2, [
+    0x935d8dddaaa8ac16,
+    0xea56d62b82d30a28,
+    0xe28fecf9da5df90e,
+    0x83c61e8201f02d72,
+    0x962f02d7b1a8105c,
+    0xcc70cbc02c5f0d68,
+    0x2c622418410be2da,
+    0xfb8f788402e516d6,
+    0x782cf8a28a8c911e,
+    0x765aa6c3b0d831fb,
+]);
+/// `pi/2`: `0.m * 2^1`, the significand's first 640 bits (truncated).
+pub(super) const PIO2_BIG: (i64, [u64; 10]) = (1, [
+    0xc90fdaa22168c234,
+    0xc4c6628b80dc1cd1,
+    0x29024e088a67cc74,
+    0x020bbea63b139b22,
+    0x514a08798e3404dd,
+    0xef9519b3cd3a431b,
+    0x302b0a6df25f1437,
+    0x4fe1356d6d51c245,
+    0xe485b576625e7ec6,
+    0xf44c42e9a637ed6b,
+]);
+/// The bits of `2/pi` after the binary point: word `w` holds `b_(64w+1)` to `b_(64w+64)`,
+/// most significant first (1792 bits).
+pub(super) const TWO_OVER_PI_BITS: [u64; 28] = [
+    0xa2f9836e4e441529,
+    0xfc2757d1f534ddc0,
+    0xdb6295993c439041,
+    0xfe5163abdebbc561,
+    0xb7246e3a424dd2e0,
+    0x06492eea09d1921c,
+    0xfe1deb1cb129a73e,
+    0xe88235f52ebb4484,
+    0xe99c7026b45f7e41,
+    0x3991d639835339f4,
+    0x9c845f8bbdf9283b,
+    0x1ff897ffde05980f,
+    0xef2f118b5a0a6d1f,
+    0x6d367ecf27cb09b7,
+    0x4f463f669e5fea2d,
+    0x7527bac7ebe5f17b,
+    0x3d0739f78a5292ea,
+    0x6bfb5fb11f8d5d08,
+    0x56033046fc7b6bab,
+    0xf0cfbc209af4361d,
+    0xa9e391615ee61b08,
+    0x6599855f14a06840,
+    0x8dffd8804d732731,
+    0x06061556ca73a8c9,
+    0x60e27bc08c6b47c4,
+    0x19c367cddce8092a,
+    0x8359c4768b961ca6,
+    0xddaf44d15719053e,
+];

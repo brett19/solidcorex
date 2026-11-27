@@ -191,8 +191,8 @@ macro_rules! worst {
 // A fix (a rounding test with a more precise fallback) brings a count to 0: lower it
 // here with the fix; a rise is a regression.
 worst! {
-    exp => "exp", 195;
-    exp2 => "exp2", 116;
+    exp => "exp", 0;
+    exp2 => "exp2", 0;
     ln => "log", 262;
     log2 => "log2", 210;
     log10 => "log10", 267;
@@ -203,9 +203,9 @@ worst! {
     acos => "acos", 78;
     atan => "atan", 166;
     atan2 => "atan2", 195;
-    sinh => "sinh", 18;
-    cosh => "cosh", 151;
-    tanh => "tanh", 90;
+    sinh => "sinh", 0;
+    cosh => "cosh", 0;
+    tanh => "tanh", 0;
     cbrt => "cbrt", 0;
     hypot => "hypot", 63;
     powf => "pow", 98;

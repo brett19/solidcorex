@@ -192,6 +192,101 @@ pub(super) fn rounds_to_hi(hi: f64, lo: f64, e: f64) -> bool {
     hi + lo * e == hi
 }
 
+/// The rounded `hi + lo` when every real within `r |hi|` of it rounds the same way, else
+/// `accurate()`. For a normalised pair with a finite nonzero `hi`, a normal result, and
+/// `r` at least twice the pair's proven relative error bound (the margin absorbs the
+/// tests' own roundings below), `r <= 2^-56`.
+///
+/// First [`rounds_to_hi`] with `e = 1 + 2^54 r`, whose `eps = 2^-54 (1 - (1 + 2^-53)/e)`
+/// is above `r (1 - 2^54 r) - 2^-107`, so above half of `r` and the bound: three
+/// operations. When it fails, [`round_ball`] (whether the ends' bits agree, a little
+/// sharper), then the accurate phase.
+#[inline]
+pub(super) fn round_or(hi: f64, lo: f64, r: f64, accurate: impl FnOnce() -> f64) -> f64 {
+    if rounds_to_hi(hi, lo, 1.0 + r * TWO_54) {
+        return hi;
+    }
+    ball_or(hi, lo, r * hi.abs(), accurate)
+}
+
+/// [`round_ball`], else `accurate()`, for an error stated absolutely (`err` at least twice
+/// the bound).
+#[inline]
+pub(super) fn round_ball_or(hi: f64, lo: f64, err: f64, accurate: impl FnOnce() -> f64) -> f64 {
+    match round_ball(hi, lo, err) {
+        Some(v) => v,
+        None => cold(accurate),
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn ball_or(hi: f64, lo: f64, err: f64, accurate: impl FnOnce() -> f64) -> f64 {
+    round_ball(hi, lo, err).unwrap_or_else(accurate)
+}
+
+#[cold]
+#[inline(never)]
+fn cold(accurate: impl FnOnce() -> f64) -> f64 {
+    accurate()
+}
+
+/// [`round_or`] for `(hi + lo) 2^k`, any `k`, also when the result is subnormal or
+/// overflows (the test is on the unscaled pair; [`round_ball_scaled`] then rounds the
+/// ends as scaled reals).
+#[inline]
+pub(super) fn round_scaled_or(
+    hi: f64,
+    lo: f64,
+    r: f64,
+    k: i32,
+    accurate: impl FnOnce() -> f64,
+) -> f64 {
+    if rounds_to_hi(hi, lo, 1.0 + r * TWO_54)
+        && let Some(v) = scale_normal(hi, k)
+    {
+        return v;
+    }
+    round_ball_scaled(hi, lo, r * hi.abs(), k).unwrap_or_else(accurate)
+}
+
+const TWO_54: f64 = 18_014_398_509_481_984.0;
+
+/// `hi` rounded with `lo`, if every real within `err` of `hi + lo` rounds to the same
+/// double; `None` when one might not. For a normalised pair with `hi` finite and `err`
+/// well below `ulp(hi)`.
+///
+/// Rounding is monotone, so it suffices that the two ends round alike. The ends are
+/// computed: `lo -/+ err` is rounded once (by at most `2^-53 (|lo| + err)`, below `2^-104
+/// |hi|`), and each caller's `err` exceeds its proven bound by more than that (each
+/// constant is at least twice its bound), so the computed ends lie outside the exact
+/// ones; `hi + (lo -/+ err)` then rounds them as the reals they are.
+#[inline]
+pub(super) fn round_ball(hi: f64, lo: f64, err: f64) -> Option<f64> {
+    let a = hi + (lo - err);
+    let b = hi + (lo + err);
+    (a == b).then_some(a)
+}
+
+/// [`round_ball`] for `(hi + lo) 2^k`, also when the result is subnormal or overflows
+/// (`err` for the unscaled pair, any `k`): then each end is rounded by [`round_scaled`],
+/// the one rounding of the scaled real.
+#[cold]
+#[inline(never)]
+pub(super) fn round_ball_scaled(hi: f64, lo: f64, err: f64, k: i32) -> Option<f64> {
+    let (l0, l1) = (lo - err, lo + err);
+    let (a, b) = (hi + l0, hi + l1);
+    if a == b
+        && let Some(r) = scale_normal(a, k)
+    {
+        return Some(r);
+    }
+    let (ah, al) = fast_two_sum(hi, l0);
+    let (bh, bl) = fast_two_sum(hi, l1);
+    let (ra, rb) = (round_scaled(ah, al, k), round_scaled(bh, bl, k));
+    (ra.to_bits() == rb.to_bits()).then_some(ra)
+}
+
 /// A table entry, with a zero fallback that a masked index never reaches (library code
 /// may not index unchecked).
 #[inline]
