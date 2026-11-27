@@ -113,6 +113,20 @@ impl<I: Id, T: Clone> Table<I, T> {
         Arc::make_mut(&mut self.slots).get_mut(id.slot())?.as_mut()
     }
 
+    /// Leaves the next `count` ids unused, as if each had been given and its record removed
+    /// (01 §2.2): the next push gets the id after them. Nothing is written when the ids would
+    /// run past `u32`.
+    pub(crate) fn skip(&mut self, count: u32) -> Result<(), TableFull> {
+        let end = self.slots.len() + count as usize;
+        if end > u32::MAX as usize {
+            return Err(TableFull { kind: I::KIND });
+        }
+        if count > 0 {
+            Arc::make_mut(&mut self.slots).resize_with(end, || None);
+        }
+        Ok(())
+    }
+
     /// Stores `record` at the next id.
     pub(crate) fn push(&mut self, record: T) -> Result<I, TableFull> {
         let slot = u32::try_from(self.slots.len()).map_err(|_| TableFull { kind: I::KIND })?;

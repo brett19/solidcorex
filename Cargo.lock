@@ -576,9 +576,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "scx-planar"
+version = "0.1.0"
+dependencies = [
+ "scx-algo",
+ "scx-num",
+ "scx-testkit",
+]
+
+[[package]]
 name = "scx-record"
 version = "0.1.0"
 dependencies = [
+ "scx-brep",
  "scx-curve",
  "scx-num",
  "scx-nurbs",
