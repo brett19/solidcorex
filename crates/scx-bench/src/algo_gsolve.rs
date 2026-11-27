@@ -159,6 +159,7 @@ mod xs {
     };
     use scx_algo::solution::{Solution, SolutionKind, SolutionObject, SortKey};
     use scx_algo::split_tree::SplitTree;
+    use scx_num::budget::{Budget, Stop};
     use scx_num::extent1d::Extent1d;
     use scx_num::extent3d::Extent3d;
     use scx_num::vector3d::{Point3, Vec3};
@@ -218,6 +219,7 @@ mod xs {
             &mut self,
             branch: &Branch<'_, Option<usize>, 2>,
             found: &mut Accumulator<Piece>,
+            _: &mut Budget,
         ) -> Result<Next, SolveError<()>> {
             let [Some(a), Some(b)] = branch.nodes().map(|n| *n.item()) else {
                 return Ok(Next::Done);
@@ -261,7 +263,14 @@ mod xs {
             op,
             log: Vec::new(),
         };
-        let found = solve([t1, t2], Accumulator::new(options), &mut hooks).ok()?;
+        let found = solve(
+            [t1, t2],
+            Accumulator::new(options),
+            &mut hooks,
+            &mut Budget::unlimited(),
+            &Stop::new(),
+        )
+        .ok()?;
         let rows = found
             .solutions()
             .iter()
