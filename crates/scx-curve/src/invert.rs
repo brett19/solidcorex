@@ -29,13 +29,15 @@
 //!   domain, or [`Inversion::Outside`]; `None` is the kind's own domain. The foot is the
 //!   kind's nearest point either way: an outside foot is not moved to the domain's end.
 //! - [`Curve::invert`] and [`Curve2::invert`] dispatch; a NURBS curve's inversion is
-//!   [`Unsupported`](crate::CurveError::Unsupported) until its solve is built.
+//!   [`Unsupported`](crate::CurveError::Unsupported) until its solve is built. A curve on
+//!   a chart's is a certified search under a budget ([`crate::chart_invert`]).
 //!
 //! Every analytic arm is a closed form or a bounded polish (at most [`POLISH_STEPS`]
 //! Newton or bisection steps), so it takes no budget and cannot fail. A non-finite query
 //! gives a foot with NaN parts, as evaluation does.
 
 use scx_algo::polynomial::solve_quartic;
+use scx_num::budget::{Budget, Stop};
 use scx_num::extent1d::Extent1d;
 use scx_num::fmath::{self, acos, asin, atan, atan2, sin_cos};
 pub use scx_num::invert::{Foot, Inversion};
@@ -350,13 +352,23 @@ impl Curve {
 }
 
 impl Curve2 {
-    /// The nearest points to `p`; see [`Curve::closest`].
+    /// The nearest points to `p`; see [`Curve::closest`]. Only a curve on a chart searches
+    /// ([`OnChart::closest`](crate::OnChart::closest)), under `budget` and `stop`; the
+    /// analytic kinds take neither.
     ///
     /// # Errors
     ///
-    /// [`Unsupported::NurbsInversion`] for a NURBS curve.
+    /// [`Unsupported::NurbsInversion`] for a NURBS curve,
+    /// [`Unsupported::AngleLineInversion`] for an angle line,
+    /// [`Unsupported::AngleWaveInversion`] for an angle wave;
+    /// [`CurveError::Exhausted`] or [`CurveError::Stopped`] for a curve on a chart.
     #[inline]
-    pub fn closest(&self, p: Point2) -> Result<Closest<f64, Point2>, CurveError> {
+    pub fn closest(
+        &self,
+        p: Point2,
+        budget: &mut Budget,
+        stop: &Stop,
+    ) -> Result<Closest<f64, Point2>, CurveError> {
         match self {
             Self::Line(c) => Ok(Closest::One(c.closest(p))),
             Self::Circle(c) => Ok(c.closest(p)),
@@ -366,23 +378,23 @@ impl Curve2 {
             Self::Nurbs(_) => Err(CurveError::Unsupported(Unsupported::NurbsInversion)),
             Self::AngleLine(_) => Err(CurveError::Unsupported(Unsupported::AngleLineInversion)),
             Self::AngleWave(_) => Err(CurveError::Unsupported(Unsupported::AngleWaveInversion)),
-            Self::OnChart(_) => Err(CurveError::Unsupported(Unsupported::OnChartInversion)),
+            Self::OnChart(c) => Ok(Closest::One(c.closest(p, budget, stop)?)),
         }
     }
 
-    /// The nearest point to `p`, inside `domain` or not; see [`Curve::invert`].
+    /// The nearest point to `p`, inside `domain` or not; see [`Curve::invert`] and
+    /// [`Curve2::closest`].
     ///
     /// # Errors
     ///
-    /// [`Unsupported::NurbsInversion`] for a NURBS curve,
-    /// [`Unsupported::AngleLineInversion`] for an angle line,
-    /// [`Unsupported::AngleWaveInversion`] for an angle wave,
-    /// [`Unsupported::OnChartInversion`] for a curve on a chart.
+    /// As [`Curve2::closest`].
     #[inline]
     pub fn invert(
         &self,
         p: Point2,
         domain: Option<&Extent1d>,
+        budget: &mut Budget,
+        stop: &Stop,
     ) -> Result<Inversion<f64, Point2>, CurveError> {
         match self {
             Self::Line(c) => Ok(c.invert(p, domain)),
@@ -393,7 +405,7 @@ impl Curve2 {
             Self::Nurbs(_) => Err(CurveError::Unsupported(Unsupported::NurbsInversion)),
             Self::AngleLine(_) => Err(CurveError::Unsupported(Unsupported::AngleLineInversion)),
             Self::AngleWave(_) => Err(CurveError::Unsupported(Unsupported::AngleWaveInversion)),
-            Self::OnChart(_) => Err(CurveError::Unsupported(Unsupported::OnChartInversion)),
+            Self::OnChart(c) => c.invert(p, domain, budget, stop),
         }
     }
 }
@@ -789,8 +801,8 @@ fn hyperbola_params(a: f64, b: f64, u: f64, v: f64) -> Params {
     Params::One(if v < 0.0 { -t } else { t })
 }
 
-/// A line's foot against its domain.
-fn place<Q>(f: Foot<f64, Q>, domain: Option<&Extent1d>) -> Inversion<f64, Q> {
+/// A foot against a domain.
+pub(crate) fn place<Q>(f: Foot<f64, Q>, domain: Option<&Extent1d>) -> Inversion<f64, Q> {
     let inside = match domain {
         _ if f.at.is_nan() => false,
         None => true,
@@ -1490,7 +1502,12 @@ mod tests {
             assert_eq!(p2.closest(q2).ats(), p.closest(q).ats());
             assert_eq!(h2.closest(q2).ats(), h.closest(q).ats());
             assert_eq!(Curve::Parabola(p).closest(q).unwrap(), p.closest(q));
-            assert_eq!(Curve2::Hyperbola(h2).closest(q2).unwrap(), h2.closest(q2));
+            assert_eq!(
+                Curve2::Hyperbola(h2)
+                    .closest(q2, &mut Budget::new(0), &Stop::new())
+                    .unwrap(),
+                h2.closest(q2)
+            );
         }
     }
 }

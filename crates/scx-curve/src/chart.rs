@@ -717,7 +717,7 @@ pub(crate) mod tests {
     const TAU: f64 = 2.0 * PI;
 
     /// An oblique frame, so no coordinate is trivially zero.
-    fn frame() -> Frame {
+    pub(crate) fn frame() -> Frame {
         Frame::new(
             Point3::new(0.7, -1.3, 2.1),
             Vec3::new(0.2, -0.3, 1.0),
@@ -739,11 +739,11 @@ pub(crate) mod tests {
         Length::from_mm(x)
     }
 
-    fn chart(kind: ChartKind, sense: Sense) -> Chart {
+    pub(crate) fn chart(kind: ChartKind, sense: Sense) -> Chart {
         Chart::new(frame(), sense, kind).unwrap()
     }
 
-    fn whole_turn(curve: Curve, chart: Chart) -> OnChart {
+    pub(crate) fn whole_turn(curve: Curve, chart: Chart) -> OnChart {
         let start = chart.inverse(curve.point(0.0));
         OnChart::new(
             curve,
@@ -755,7 +755,7 @@ pub(crate) mod tests {
     }
 
     /// The circle `centre + r (cos t x + sin t y)` with `x`, `y` given in `f`.
-    fn circle(centre: Point3, x: Vec3, z: Vec3, r: f64) -> Curve {
+    pub(crate) fn circle(centre: Point3, x: Vec3, z: Vec3, r: f64) -> Curve {
         let cf = Frame::new(centre, z, x).unwrap();
         Curve::Circle(Circle::new(cf, mm(r), Sense::Forward).unwrap())
     }

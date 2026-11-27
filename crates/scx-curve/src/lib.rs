@@ -41,6 +41,7 @@
 mod angle_line;
 pub mod arcs;
 mod chart;
+pub mod chart_invert;
 mod conic;
 mod curve;
 mod edit;
