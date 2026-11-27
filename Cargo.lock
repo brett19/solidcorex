@@ -499,6 +499,7 @@ dependencies = [
  "scx-curve",
  "scx-num",
  "scx-nurbs",
+ "scx-ssi",
  "scx-surface",
  "scx-testkit",
 ]
@@ -557,6 +558,13 @@ dependencies = [
 
 [[package]]
 name = "scx-p21"
+version = "0.1.0"
+dependencies = [
+ "scx-num",
+]
+
+[[package]]
+name = "scx-record"
 version = "0.1.0"
 dependencies = [
  "scx-num",

@@ -15,7 +15,8 @@ scx-num = { path = "../scx-num" }
 scx-surface = { path = "../scx-surface" }
 
 [dev-dependencies]
-scx-testkit = { path = "../scx-testkit" }
+scx-ssi = { path = "../scx-ssi" }
+scx-testkit = { path = "../scx-testkit", features = ["bodies"] }
 
 [lints]
 workspace = true

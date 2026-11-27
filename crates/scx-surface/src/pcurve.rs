@@ -155,7 +155,8 @@ pub enum PcurveError {
         /// The parameter.
         at: f64,
     },
-    /// The tolerance is negative, infinite or NaN.
+    /// The tolerance is zero, negative, infinite or NaN: a lifting check at zero would
+    /// refuse every rounded closed form, so zero is no tolerance at all.
     BadTolerance {
         /// The value given, in mm.
         value: f64,
@@ -295,7 +296,7 @@ pub fn pcurve_of(
     tol: Length,
 ) -> Result<Curve2, PcurveError> {
     let tol = tol.mm();
-    if !(tol.is_finite() && tol >= 0.0) {
+    if !(tol.is_finite() && tol > 0.0) {
         return Err(PcurveError::BadTolerance { value: tol });
     }
     if over.min() >= over.max() {
@@ -923,6 +924,13 @@ mod tests {
         assert_eq!(e.name(), "pcurve_interval_empty");
         let e = pcurve_of(&on, &plane, span(0.0, 1.0), mm(f64::NAN)).unwrap_err();
         assert_eq!(e.name(), "pcurve_tolerance_invalid");
+        // Zero is no tolerance: the lifting check at zero refuses every rounded closed
+        // form (04 backlog), so it is refused up front, as a negative one is.
+        for bad in [0.0, -0.0, -1e-9, f64::INFINITY] {
+            let e = pcurve_of(&on, &plane, span(0.0, 1.0), mm(bad)).unwrap_err();
+            assert_eq!(e, PcurveError::BadTolerance { value: bad });
+            assert_eq!(e.kind(), ErrorKind::Refused);
+        }
         // A line skew to a cylinder's axis by 1e-3 stays within 1e-6 of it over `[-1, 1]`,
         // but it is not a ruling: the ruling's closed form misses it.
         let cyl = Surface::Cylinder(Cylinder::new(f, mm(1.0), Sense::Forward).unwrap());

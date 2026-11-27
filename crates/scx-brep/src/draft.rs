@@ -10,7 +10,14 @@
 //! read that record alone, so [`Draft::face_mut`] and [`Draft::edge_mut`] reset the cells
 //! of the record they hand out and nothing else, `add_face` and `add_edge` reset the
 //! incoming record's, and an adjacency or vertex write resets none. A draft has no body
-//! cells; `finish` starts the body's empty.
+//! cells; `finish` starts the body's empty, seeded with the boxes of the body it was made
+//! from where the edit left them standing.
+//!
+//! A draft made from a finished body also notes, at each first write to a record that body
+//! had, which check instances read it, so `finish` checks only those and the records the
+//! draft made (research 63 §6.14).
+
+mod transform;
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -18,7 +25,9 @@ use std::sync::Arc;
 use scx_curve::Curve;
 use scx_num::extent1d::Extent1d;
 use scx_num::frame::Sense;
+use scx_num::units::Resolution;
 
+use crate::body::BodyCells;
 use crate::brep::Brep;
 use crate::changes::{Changes, LineageError, Log, Operand, Origin, Tracked};
 use crate::check;
@@ -30,7 +39,10 @@ use crate::record::{
     EdgeAdj, EdgeGeom, EdgeShape, FaceRecord, Fin, RegionRecord, ShellRecord, VertexRecord,
 };
 use crate::tables::Tables;
+use crate::touched::Touched;
 use crate::view::{At, Drafting, Edge, Face, Region, Shell, Vertex};
+
+pub use transform::TransformError;
 
 /// A body being edited.
 #[derive(Debug, Clone)]
@@ -41,6 +53,8 @@ pub struct Draft {
     pending: BTreeSet<EdgeId>,
     /// What the edit has done, for [`Changes`].
     log: Log,
+    /// What the draft touched of the body it was made from, for `finish`.
+    touched: Touched,
 }
 
 impl Default for Draft {
@@ -53,12 +67,20 @@ impl Draft {
     /// An empty draft: the outside region alone.
     #[must_use]
     pub fn new() -> Self {
-        Self::from_tables(Tables::empty())
-    }
-
-    pub(crate) fn from_tables(t: Tables) -> Self {
+        let t = Tables::empty();
         Self {
             log: Log::new(&t),
+            t,
+            pending: BTreeSet::new(),
+            touched: Touched::whole(),
+        }
+    }
+
+    /// A draft of the finished body `t`, stamped `resolution`, with its body cells.
+    pub(crate) fn from_body(t: Tables, resolution: Resolution, cells: Arc<BodyCells>) -> Self {
+        Self {
+            log: Log::new(&t),
+            touched: Touched::of(&t, resolution, cells),
             t,
             pending: BTreeSet::new(),
         }
@@ -71,10 +93,36 @@ impl Draft {
     /// Checks the draft and stamps it with `doc`'s resolution, and says what the edit
     /// changed since the draft was made.
     ///
+    /// A draft made by [`Brep::edit`] or [`Brep::into_draft`] and finished under that
+    /// body's resolution checks only the records it wrote or made and those whose rules read
+    /// them, and refuses exactly when checking the whole body would, with the same cause.
+    ///
     /// # Errors
     ///
     /// [`Unfinished`], holding the draft unchanged and the [`FinishCause`](crate::FinishCause).
     pub fn finish(self, doc: &Document) -> Result<(Brep, Changes), Box<Unfinished>> {
+        let res = doc.resolution();
+        if !self.touched.applies(res) {
+            return self.finish_checking_all(doc);
+        }
+        match check::run_touched(&self.t, &self.pending, res, &self.touched) {
+            Ok(dirty) => {
+                let seed = self.touched.seed(dirty);
+                let changes = self.log.changes(&self.t);
+                Ok((Brep::from_tables_seeded(self.t, res, seed), changes))
+            }
+            Err(cause) => Err(Box::new(Unfinished { draft: self, cause })),
+        }
+    }
+
+    /// [`finish`](Self::finish) checking the whole body, however the draft was made: what
+    /// `finish` must agree with, for tests.
+    ///
+    /// # Errors
+    ///
+    /// As [`finish`](Self::finish).
+    #[doc(hidden)]
+    pub fn finish_checking_all(self, doc: &Document) -> Result<(Brep, Changes), Box<Unfinished>> {
         match check::run(&self.t, &self.pending, doc.resolution()) {
             Ok(()) => {
                 let changes = self.log.changes(&self.t);
@@ -195,6 +243,7 @@ impl Draft {
             .collect();
         let id = self.t.faces.push(Arc::new(face))?;
         for (edge, sense) in fins {
+            self.touched.fins(&self.t, edge);
             if let Some(adj) = self.t.adjacency.get_mut(edge) {
                 adj.fins.push(Fin::new(id, sense));
             }
@@ -211,6 +260,7 @@ impl Draft {
 
     /// The shell's record, to write.
     pub fn shell_mut(&mut self, id: ShellId) -> Option<&mut ShellRecord> {
+        self.touched.shell(&self.t, id);
         self.t.shells.get_mut(id)
     }
 
@@ -223,6 +273,7 @@ impl Draft {
     /// The first write to a face the draft started with keeps its record as it was, for
     /// [`Changes`]: after [`Brep::into_draft`] that write copies the record once.
     pub fn face_mut(&mut self, id: FaceId) -> Option<&mut FaceRecord> {
+        self.touched.face(&self.t, id);
         let face = self.t.faces.get_mut(id)?;
         self.log.face_written(id, face);
         let face = Arc::make_mut(face);
@@ -255,6 +306,7 @@ impl Draft {
                 }
                 (Some(&(edge, forward)), b) if b.is_none_or(|b| (edge, forward) < *b) => {
                     let fin = Fin::new(id, sense(forward));
+                    self.touched.fins(&self.t, edge);
                     if let Some(adj) = self.t.adjacency.get_mut(edge)
                         && let Some(at) = adj.fins.iter().position(|f| *f == fin)
                     {
@@ -263,6 +315,7 @@ impl Draft {
                     i += 1;
                 }
                 (_, Some(&(edge, forward))) => {
+                    self.touched.fins(&self.t, edge);
                     if let Some(adj) = self.t.adjacency.get_mut(edge) {
                         adj.fins.push(Fin::new(id, sense(forward)));
                     }
@@ -276,6 +329,7 @@ impl Draft {
 
     /// The edge's geometry part, to write. Resets its cells; no face's cell reads it.
     pub fn edge_mut(&mut self, id: EdgeId) -> Option<&mut EdgeGeom> {
+        self.touched.geom(&self.t, id);
         let geom = self.t.edges.get_mut(id)?;
         self.log.edge_written(id, geom);
         geom.cells.reset();
@@ -284,12 +338,14 @@ impl Draft {
 
     /// The edge's adjacency part, to write: its radial order. Resets no cell.
     pub fn adjacency_mut(&mut self, id: EdgeId) -> Option<&mut EdgeAdj> {
+        self.touched.fins(&self.t, id);
         self.t.adjacency.get_mut(id)
     }
 
     /// The vertex's record, to write. Resets no cell: no record's cell reads a vertex.
     pub fn vertex_mut(&mut self, id: VertexId) -> Option<&mut VertexRecord> {
         self.log.vertex_written(id, self.t.vertices.get(id)?);
+        self.touched.vertex(id);
         self.t.vertices.get_mut(id)
     }
 
@@ -300,12 +356,16 @@ impl Draft {
         if id == RegionId::OUTSIDE {
             return None;
         }
-        self.t.regions.remove(id)
+        let region = self.t.regions.remove(id)?;
+        self.touched.region_removed(id);
+        Some(region)
     }
 
     /// Removes the shell.
     pub fn remove_shell(&mut self, id: ShellId) -> Option<ShellRecord> {
-        self.t.shells.remove(id)
+        let shell = self.t.shells.remove(id)?;
+        self.touched.shell_removed(id);
+        Some(shell)
     }
 
     /// Removes the face, and its fins from its edges.
@@ -317,6 +377,7 @@ impl Draft {
 
     /// Removes the face and its fins, recording nothing.
     fn drop_face(&mut self, id: FaceId) -> Option<FaceRecord> {
+        self.touched.face(&self.t, id);
         let face = self.t.faces.remove(id)?;
         let mut edges: Vec<EdgeId> = face
             .loops
@@ -327,6 +388,7 @@ impl Draft {
         edges.sort_unstable();
         edges.dedup();
         for e in edges {
+            self.touched.fins(&self.t, e);
             if let Some(adj) = self.t.adjacency.get_mut(e) {
                 adj.fins.retain(|f| f.face != id);
             }
@@ -342,6 +404,7 @@ impl Draft {
     }
 
     fn drop_edge(&mut self, id: EdgeId) -> Option<(EdgeGeom, EdgeAdj)> {
+        self.touched.edge_removed(&self.t, id);
         let geom = self.t.edges.remove(id)?;
         let adj = self.t.adjacency.remove(id).unwrap_or_default();
         self.pending.remove(&id);
@@ -351,6 +414,7 @@ impl Draft {
     /// Removes the vertex.
     pub fn remove_vertex(&mut self, id: VertexId) -> Option<VertexRecord> {
         let vertex = self.t.vertices.remove(id)?;
+        self.touched.vertex_removed(id);
         self.log.removed(id.into());
         Some(vertex)
     }
@@ -441,6 +505,7 @@ impl Draft {
             return None;
         }
         let vertex = self.t.vertices.remove(absorbed)?;
+        self.touched.vertex_removed(absorbed);
         self.log.absorbed(absorbed.into(), survivor.into());
         Some(vertex)
     }
