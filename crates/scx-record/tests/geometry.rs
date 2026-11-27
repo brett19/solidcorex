@@ -19,10 +19,12 @@ use std::sync::Arc;
 
 use scx_curve::arcs::Arcs;
 use scx_curve::{
-    AngleAxis, AngleLine2, AngleWave2, Circle, Circle2, Curve, Curve2, CurveError, Degenerate,
-    Ellipse, Ellipse2, Hyperbola, Hyperbola2, Line, Line2, Parabola, Parabola2,
+    AngleAxis, AngleLine2, AngleWave2, Chart, ChartKind, Circle, Circle2, Curve, Curve2,
+    CurveError, Degenerate, Ellipse, Ellipse2, Hyperbola, Hyperbola2, Line, Line2, OnChart,
+    Parabola, Parabola2,
 };
 use scx_num::Length;
+use scx_num::extent1d::Extent1d;
 use scx_num::frame::{Frame, Frame2, FrameAxis, FrameError, Sense};
 use scx_num::hash::Rng;
 use scx_num::math::Affine;
@@ -310,7 +312,7 @@ fn curves2(seed: u64, n: usize) -> Vec<Curve2> {
         } else {
             Arcs::turn(0.5 + 10.0 * rng.next_f64())
         };
-        let c = match i % 8 {
+        let c = match i % 9 {
             0 => Curve2::Line(
                 Line2::new(
                     Point2::new(signed(&mut rng, 5.0), signed(&mut rng, 5.0)),
@@ -360,6 +362,26 @@ fn curves2(seed: u64, n: usize) -> Vec<Curve2> {
                 )
                 .unwrap(),
             ),
+            8 => {
+                let kind = match i % 5 {
+                    0 => ChartKind::Plane,
+                    1 => ChartKind::Cylinder {
+                        radius: length(&mut rng, 0.01, 30.0),
+                    },
+                    2 => ChartKind::Cone,
+                    3 => ChartKind::Sphere,
+                    _ => ChartKind::Torus {
+                        major: length(&mut rng, 0.01, 30.0),
+                    },
+                };
+                let chart = Chart::new(frame(&mut rng), s, kind).unwrap();
+                let circle = Circle::new(frame(&mut rng), length(&mut rng, 0.01, 30.0), s);
+                let start = signed(&mut rng, 3.0);
+                let over = Extent1d::new(start, start + 0.1 + rng.next_f64()).unwrap();
+                let mut end = || Point2::new(signed(&mut rng, 4.0), signed(&mut rng, 4.0));
+                let ends = [end(), end()];
+                Curve2::from(OnChart::new(Curve::Circle(circle.unwrap()), chart, over, ends).unwrap())
+            }
             _ => Curve2::AngleWave(
                 AngleWave2::new(
                     arcs,
@@ -491,6 +513,7 @@ fn every_curve2_kind_round_trips_to_the_bit() {
         "Nurbs",
         "AngleLine",
         "AngleWave",
+        "OnChart",
     ] {
         assert!(kinds.get(k).copied().unwrap_or(0) >= 20, "{k}: {kinds:?}");
     }

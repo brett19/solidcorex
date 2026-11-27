@@ -4,7 +4,7 @@
 //! line. The integrals are split there, as the pin splits them, so no Kronrod piece spans a
 //! kink; a missed split costs only bisections, never accuracy.
 
-use scx_curve::Curve2;
+use scx_curve::{Curve, Curve2};
 use scx_curve::arcs::Arcs;
 use scx_nurbs_surface::ParamAxis;
 use scx_surface::Surface;
@@ -43,6 +43,11 @@ pub(crate) fn surface_breaks(s: &Surface, dir: Dir, lo: f64, hi: f64) -> Vec<f64
 pub(crate) fn curve_breaks(c: &Curve2, lo: f64, hi: f64) -> Vec<f64> {
     match c {
         Curve2::Nurbs(n) => inside(n.knots(), lo, hi),
+        // Its smoothness is its 3D curve's.
+        Curve2::OnChart(o) => match o.curve() {
+            Curve::Nurbs(n) => inside(n.knots(), lo, hi),
+            _ => Vec::new(),
+        },
         _ => Vec::new(),
     }
 }

@@ -27,12 +27,13 @@
 //! derivative are the closed form's, in `f64` and in [`Ivl`](scx_num::interval::Ivl)
 //! (an enclosure over every arc a box meets).
 //!
-//! The periodic coordinates are lifted by the span the pcurve was made over: `over` and the
-//! lifted uv at its two ends. At `t`, each periodic coordinate is the principal value plus
-//! the whole periods that bring it nearest the straight line between the ends' values at
-//! `t`. A recorded turn count alone cannot do this: a closed curve's two ends are the same
-//! point with different lifts. The maker (scx-surface `pcurve_of`) checks that the curve
-//! stays within a quarter period of that line, so the nearest lift is the curve's own.
+//! The periodic coordinates are lifted by a reference line over the span the pcurve was
+//! made over: `over` and the line's uv at its two ends. At `t`, each periodic coordinate is
+//! the principal value plus the whole periods that bring it nearest the line at `t`. A
+//! recorded turn count alone cannot do this: a closed curve's two ends are the same point
+//! with different lifts. The maker (scx-surface `pcurve_of`) centres the line on the
+//! curve's lifted values and checks that they stay within a quarter period of it, so the
+//! nearest lift is the curve's own with a quarter period to spare.
 
 use core::f64::consts::PI;
 
@@ -219,38 +220,38 @@ pub struct OnChart {
     curve: Curve,
     chart: Chart,
     over: Extent1d,
-    ends: [Point2; 2],
+    reference: [Point2; 2],
 }
 
 impl OnChart {
-    /// The pcurve of `curve` on `chart`, its periodic coordinates lifted so that at
-    /// `over`'s ends they are `ends`. The caller has checked that the curve lies on the
-    /// surface and stays within a quarter period of the straight line between the ends
-    /// (scx-surface `pcurve_of` does).
+    /// The pcurve of `curve` on `chart`, each periodic coordinate lifted to the copy
+    /// nearest the straight line that is `reference` at `over`'s ends. The caller has
+    /// checked that the curve lies on the surface and that its lifted values stay within a
+    /// quarter period of that line (scx-surface `pcurve_of` does).
     ///
     /// # Errors
     ///
     /// [`Degenerate::Extent`] for an `over` of no length or one not finite,
-    /// [`CurveError::NotFinite`] ([`Part::Origin`]) for ends that are not finite.
+    /// [`CurveError::NotFinite`] ([`Part::Origin`]) for a reference that is not finite.
     pub fn new(
         curve: Curve,
         chart: Chart,
         over: Extent1d,
-        ends: [Point2; 2],
+        reference: [Point2; 2],
     ) -> crate::Result<Self> {
         if !(over.length() > 0.0 && over.length().is_finite()) {
             return Err(CurveError::Degenerate(Degenerate::Extent {
                 at: over.min(),
             }));
         }
-        if !ends.iter().all(|p| p.x.is_finite() && p.y.is_finite()) {
+        if !reference.iter().all(|p| p.x.is_finite() && p.y.is_finite()) {
             return Err(CurveError::NotFinite(Part::Origin));
         }
         Ok(Self {
             curve,
             chart,
             over,
-            ends,
+            reference,
         })
     }
 
@@ -272,10 +273,10 @@ impl OnChart {
         self.over
     }
 
-    /// The lifted uv at `over`'s start and end.
+    /// The reference line's uv at `over`'s start and end.
     #[must_use]
-    pub const fn ends(&self) -> [Point2; 2] {
-        self.ends
+    pub const fn reference(&self) -> [Point2; 2] {
+        self.reference
     }
 
     /// The 3-D curve's domain.
@@ -350,43 +351,39 @@ impl OnChart {
         let mut u = [zero; TERMS];
         let mut v = [zero; TERMS];
         let (us, vs) = (head_mut(&mut u, n), head_mut(&mut v, n));
+        let periods = self.chart.periods();
+        let lift_u = |w: T| self.lift(t, 0, w, periods[0]);
+        let lift_v = |w: T| self.lift(t, 1, w, periods[1]);
         match self.chart.shape() {
             Shape::Plane => {
                 us.copy_from_slice(x);
                 vs.copy_from_slice(y);
             }
             Shape::Cylinder(arcs) => {
-                angle(arcs, x, y, side, us);
+                angle(arcs, x, y, side, &lift_u, us);
                 vs.copy_from_slice(z);
             }
             Shape::Cone => {
-                angle(TURN, x, y, side, us);
+                angle(TURN, x, y, side, &lift_u, us);
                 vs.copy_from_slice(z);
             }
             Shape::Sphere => {
-                angle(TURN, x, y, side, us);
+                angle(TURN, x, y, side, &lift_u, us);
                 let mut rho = [zero; TERMS];
                 let rho = head_mut(&mut rho, n);
                 length(x, y, rho);
-                angle(HALF, rho, z, side, vs);
+                angle(HALF, rho, z, side, &lift_v, vs);
             }
             Shape::Torus(big) => {
-                angle(TURN, x, y, side, us);
+                angle(TURN, x, y, side, &lift_u, us);
                 let mut off = [zero; TERMS];
                 let off = head_mut(&mut off, n);
                 length(x, y, off);
                 if let Some(o) = off.first_mut() {
                     *o = *o - l(big);
                 }
-                angle(TURN, off, z, side, vs);
+                angle(TURN, off, z, side, &lift_v, vs);
             }
-        }
-        let periods = self.chart.periods();
-        if let Some(u0) = us.first_mut() {
-            *u0 = self.lift(t, 0, *u0, periods[0]);
-        }
-        if let Some(v0) = vs.first_mut() {
-            *v0 = self.lift(t, 1, *v0, periods[1]);
         }
         let mut d = [Vec2::new(zero, zero); D];
         let mut fact = 1.0;
@@ -404,7 +401,7 @@ impl OnChart {
     }
 
     /// The principal value `w` of coordinate `axis` plus the whole periods bringing it
-    /// nearest the straight line between the ends' values at `t`; an interval holds each
+    /// nearest the reference line at `t`; an interval holds each
     /// of up to three such lifts, more is undefined.
     fn lift<T: Trig>(&self, t: T, axis: usize, w: T, period: Option<f64>) -> T {
         let Some(period) = period else {
@@ -412,7 +409,7 @@ impl OnChart {
         };
         let pick = |p: Point2| if axis == 0 { p.x } else { p.y };
         let (t0, t1) = (self.over.min(), self.over.max());
-        let (w0, w1) = (pick(self.ends[0]), pick(self.ends[1]));
+        let (w0, w1) = (pick(self.reference[0]), pick(self.reference[1]));
         let l = T::lift;
         let line = l(w0) + (t - l(t0)) * l((w1 - w0) / (t1 - t0));
         let (lo, hi) = ((line - w) / l(period)).ends();
@@ -430,14 +427,14 @@ impl OnChart {
     }
 
     /// The same pcurve run the other way, `C'(t) = C(-t)`: the 3-D curve reversed, the
-    /// span negated and its ends swapped.
+    /// span negated and the reference's ends swapped.
     #[must_use]
     pub fn reversed(&self) -> Self {
         Self {
             curve: self.curve.reversed(),
             chart: self.chart,
             over: self.over.negated(),
-            ends: [self.ends[1], self.ends[0]],
+            reference: [self.reference[1], self.reference[0]],
         }
     }
 
@@ -466,8 +463,8 @@ impl OnChart {
             pu.map_or(0.0, |p| turns[0] * p),
             pv.map_or(0.0, |p| turns[1] * p),
         );
-        let ends = self.ends.map(|e| e + step);
-        Self::new(self.curve.clone(), self.chart, self.over, ends)
+        let reference = self.reference.map(|e| e + step);
+        Self::new(self.curve.clone(), self.chart, self.over, reference)
     }
 }
 
@@ -526,8 +523,24 @@ fn length<T: Trig>(a: &[T], b: &[T], out: &mut [T]) {
 /// within [`NEAR`] of a break takes the arc the curve is on from `side` (the break's exact
 /// value when it is exactly on it; the arc's formula continues smoothly an ulp past); an
 /// interval box takes every arc it meets, each with the box clipped to it, and joins them.
-/// A box holding the centre (a turn's axis, a sphere's pole) is undefined.
-fn angle<T: Trig>(arcs: Arcs, a: &[T], b: &[T], side: Approach, out: &mut [T]) {
+/// A box holding the centre (a turn's axis, a sphere's pole) is undefined. `lift` takes
+/// each arc's value to the branch the caller wants, before arcs are joined.
+fn angle<T: Trig>(
+    arcs: Arcs,
+    a: &[T],
+    b: &[T],
+    side: Approach,
+    lift: &impl Fn(T) -> T,
+    out: &mut [T],
+) {
+    // Each arc's value is lifted before any join: the arcs either side of the period's
+    // break hold values a period apart, and their hull would hold the whole period.
+    let on_arc = |arcs: Arcs, q: usize, a: &[T], b: &[T], exact: Option<f64>, out: &mut [T]| {
+        on_arc(arcs, q, a, b, exact, out);
+        if let Some(o) = out.first_mut() {
+            *o = lift(*o);
+        }
+    };
     let ((alo, ahi), (blo, bhi)) = match (a.first(), b.first()) {
         (Some(a0), Some(b0)) => (a0.ends(), b0.ends()),
         _ => return,
@@ -1063,6 +1076,7 @@ pub(crate) mod tests {
         assert!(exact * 10 > n * 9, "{exact} of {n}");
     }
 
+    /// Every box's jet holds the values at its points, and a small box's is small.
     #[test]
     fn intervals_enclose_the_values() {
         for (oc, _) in pairs() {
@@ -1070,6 +1084,16 @@ pub(crate) mod tests {
                 let lo = 0.11 * f64::from(i);
                 for w in [0.0, 1e-9, 1e-3, 0.3, 2.0] {
                     let iv = oc.jet_over::<Ivl, 2>(Ivl::new(lo, lo + w), Approach::Above);
+                    // Narrow too, across the period's break as anywhere: each arc is lifted
+                    // before the arcs are joined.
+                    if w <= 1e-3 {
+                        let wide = |i: Ivl| i.hi - i.lo;
+                        assert!(
+                            wide(iv.point.x) < 0.05 && wide(iv.point.y) < 0.05,
+                            "{oc:?} [{lo}, {}]: {iv:?}",
+                            lo + w
+                        );
+                    }
                     for j in 0..=8 {
                         let t = lo + w * f64::from(j) / 8.0;
                         for side in [Approach::Above, Approach::Below] {
