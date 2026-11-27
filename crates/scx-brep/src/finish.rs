@@ -461,6 +461,16 @@ pub enum GeometryCause {
         /// `0` for `u`, `1` for `v`.
         direction: usize,
     },
+    /// An edge's fins are out of radial order: at a sample of the edge, the directions in
+    /// which their faces leave it, taken in the fins' order, turn more than once about the
+    /// edge's direction (the order is counter-clockwise, by the right-hand rule). Faces
+    /// tangent along the edge are ordered by how they bend away from each other.
+    RadialOrder {
+        /// The edge.
+        edge: EdgeId,
+        /// The edge's parameter at the sample.
+        at: f64,
+    },
 }
 
 impl GeometryCause {
@@ -479,6 +489,7 @@ impl GeometryCause {
             Self::LoopOpenInUv { .. } => "loop_open_in_uv",
             Self::LoopOrientation { .. } => "loop_orientation",
             Self::FaceWraps { .. } => "face_wraps",
+            Self::RadialOrder { .. } => "radial_order",
         }
     }
 }
@@ -595,6 +606,10 @@ impl fmt::Display for GeometryCause {
                 f,
                 "face {face} spans more than a period in {}",
                 if direction == 0 { "u" } else { "v" }
+            ),
+            Self::RadialOrder { edge, at } => write!(
+                f,
+                "the fins of edge {edge} are out of radial order at parameter {at}"
             ),
         }
     }

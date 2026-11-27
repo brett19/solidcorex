@@ -12,6 +12,7 @@
 //! are.
 
 mod geometry;
+mod radial;
 
 use std::collections::BTreeSet;
 
@@ -68,7 +69,8 @@ pub(crate) fn run(
     }
     references(t).map_err(FinishCause::Structure)?;
     structure(t).map_err(FinishCause::Structure)?;
-    geometry::check(t, res, Sel::All, Sel::All).map_err(FinishCause::Geometry)
+    geometry::check(t, res, Sel::All, Sel::All).map_err(FinishCause::Geometry)?;
+    radial::check(t, res, Sel::All).map_err(FinishCause::Geometry)
 }
 
 /// Every check over the instances `touched` names, in the order [`run`] takes them, with
@@ -141,6 +143,9 @@ pub(crate) fn run_touched(
     regions(t).map_err(s)?;
     let (edges, faces) = touched.geometry(t, &plan);
     geometry::check(t, res, Sel::Only(&edges), Sel::Only(&faces)).map_err(FinishCause::Geometry)?;
+    // The radial order reads an edge's curve and fins and its faces' surfaces and uses:
+    // a write to any of them marks the edge (research 63 §6.15).
+    radial::check(t, res, Sel::Only(&plan.edges)).map_err(FinishCause::Geometry)?;
     Ok(faces)
 }
 
