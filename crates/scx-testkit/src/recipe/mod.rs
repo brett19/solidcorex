@@ -43,7 +43,7 @@ use core::fmt;
 use scx_num::fmath;
 
 use crate::analytic::Frame;
-use crate::csg::{self, Csg, CsgError, Primitive, Profile};
+use crate::csg::{Csg, CsgError, Primitive, Profile};
 use crate::profile::Seg;
 use crate::solid::{self, Solid, SolidError};
 
@@ -147,62 +147,6 @@ pub struct Part {
     pub shape: Shape,
 }
 
-fn loop_of(segs: &[Seg]) -> Result<solid::Loop, SolidError> {
-    let start = segs
-        .first()
-        .map(Seg::start)
-        .ok_or(SolidError::Profile("empty loop"))?;
-    let segs = segs
-        .iter()
-        .map(|s| match *s {
-            Seg::Line { end, .. } => solid::Seg::Line { to: end },
-            Seg::Arc {
-                centre, end, ccw, ..
-            } => solid::Seg::Arc {
-                to: end,
-                center: centre,
-                ccw,
-            },
-        })
-        .collect();
-    Ok(solid::Loop { start, segs })
-}
-
-/// A profile loop as [`csg`]'s pieces: an arc by centre, radius, start angle and signed sweep.
-fn csg_loop(segs: &[Seg]) -> Vec<csg::Seg> {
-    segs.iter()
-        .map(|s| match *s {
-            Seg::Line { start, end } => csg::Seg::Line {
-                from: start,
-                to: end,
-            },
-            Seg::Arc {
-                centre,
-                start,
-                end,
-                ccw,
-            } => {
-                let a0 = fmath::atan2(start[1] - centre[1], start[0] - centre[0]);
-                let a1 = fmath::atan2(end[1] - centre[1], end[0] - centre[0]);
-                let tau = core::f64::consts::TAU;
-                let mut sweep = a1 - a0;
-                if ccw && sweep <= 0.0 {
-                    sweep += tau;
-                }
-                if !ccw && sweep >= 0.0 {
-                    sweep -= tau;
-                }
-                csg::Seg::Arc {
-                    center: centre,
-                    radius: fmath::hypot(start[0] - centre[0], start[1] - centre[1]),
-                    start: a0,
-                    sweep,
-                }
-            }
-        })
-        .collect()
-}
-
 impl Part {
     /// The closed-form volume, area and moments at the frame ([`crate::solid`]).
     ///
@@ -221,10 +165,9 @@ impl Part {
                 holes,
                 height,
             } => {
-                let mut loops = vec![loop_of(outer)?];
-                for h in holes {
-                    loops.push(loop_of(h)?);
-                }
+                let loops: Vec<Vec<Seg>> = core::iter::once(outer.clone())
+                    .chain(holes.iter().cloned())
+                    .collect();
                 solid::extrusion(&loops, *height)?
             }
         };
@@ -257,8 +200,9 @@ impl Part {
                 holes,
                 height,
             } => {
-                let mut loops = vec![csg_loop(outer)];
-                loops.extend(holes.iter().map(|h| csg_loop(h)));
+                let loops: Vec<Vec<Seg>> = core::iter::once(outer.clone())
+                    .chain(holes.iter().cloned())
+                    .collect();
                 Primitive::Extrusion {
                     profile: Profile::new(&loops)?,
                     height: *height,
