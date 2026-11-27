@@ -97,7 +97,7 @@ pub fn read(ex: &Exchange, opts: &ReadOptions) -> Result<Imported, StepError> {
         return Err(StepError::BadAssumedUnits);
     }
     let declared = protocol::of_exchange(ex);
-    let products = product::read(ex)?;
+    let products = product::read_assuming(ex, opts.assume_units)?;
     let mut bodies = Vec::new();
     let mut skipped = Vec::new();
     let mut warnings: Vec<ImportWarning> = declared

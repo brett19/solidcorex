@@ -64,7 +64,7 @@ use crate::error::{EntityCause, Limit};
 use crate::exchange::{Exchange, Instance, Param};
 use crate::part42::geom::{P3, Placement};
 use crate::part42::read::{MAX_COORD, Reader};
-use crate::units::{self, Context, Units};
+use crate::units::{self, Context, MissingUnits, Unit, Units, UnitsFault};
 
 type Result<T> = core::result::Result<T, P21Error>;
 
@@ -143,7 +143,8 @@ pub struct Representation {
     pub items: Vec<Item>,
     /// Its representation context (entity id), if the file gives one.
     pub context: Option<u64>,
-    /// That context's units and uncertainty (millimetres and radians when it names none).
+    /// That context's units and uncertainty, as the file names them: [`Unit::Missing`] when it
+    /// names none, and nothing assumed.
     pub units: Context,
 }
 
@@ -589,13 +590,55 @@ pub fn operator_attributes(e: &Instance) -> &[Param] {
     e.params().get(operator_labels(e)..).unwrap_or_default()
 }
 
+/// The units to read the frames of a representation in `ctx`: its length unit, or the
+/// length of `assume` when the context names none. A frame reads no plane angle, so the angle
+/// factor is NaN: any use of it would show.
+fn frame_units(ctx: &Context, assume: Option<Units>) -> std::result::Result<Units, EntityCause> {
+    let len = match ctx.length {
+        Unit::Named(len) => len,
+        Unit::Missing => assume.map(|a| a.len).ok_or(EntityCause::Units(
+            UnitsFault::Missing(MissingUnits {
+                length: true,
+                angle: false,
+            }),
+        ))?,
+        Unit::Conflicting => {
+            return Err(EntityCause::Units(UnitsFault::Conflicting(MissingUnits {
+                length: true,
+                angle: false,
+            })));
+        }
+    };
+    Ok(Units { len, ang: f64::NAN })
+}
+
 /// A placement or a transformation operator, in `units`.
-fn frame(ex: &Exchange, id: u64, units: Units) -> Result<Frame> {
+fn frame(ex: &Exchange, id: u64, units: std::result::Result<Units, EntityCause>) -> Result<Frame> {
     read_frame(ex, id, units).map_err(|e| e.within(id))
 }
 
-fn read_frame(ex: &Exchange, id: u64, units: Units) -> Result<Frame> {
+fn read_frame(
+    ex: &Exchange,
+    id: u64,
+    units: std::result::Result<Units, EntityCause>,
+) -> Result<Frame> {
     let e = entity(ex, id)?;
+    if !matches!(
+        e.name(),
+        "CARTESIAN_TRANSFORMATION_OPERATOR_3D"
+            | "CARTESIAN_TRANSFORMATION_OPERATOR_3D_NON_UNIFORM"
+            | "AXIS2_PLACEMENT_3D"
+            | "AXIS2_PLACEMENT_2D"
+    ) {
+        return refuse(
+            id,
+            EntityCause::WrongType {
+                expected: "a placement or a cartesian transformation operator",
+                found: e.name().to_owned(),
+            },
+        );
+    }
+    let units = units.map_err(|c| P21Error::entity(id, c))?;
     let reader = Reader::new(ex, units);
     match e.name() {
         "CARTESIAN_TRANSFORMATION_OPERATOR_3D"
@@ -622,13 +665,7 @@ fn read_frame(ex: &Exchange, id: u64, units: Units) -> Result<Frame> {
             }))
         }
         "AXIS2_PLACEMENT_3D" | "AXIS2_PLACEMENT_2D" => Ok(Frame::Placement(reader.frame(id)?)),
-        n => refuse(
-            id,
-            EntityCause::WrongType {
-                expected: "a placement or a cartesian transformation operator",
-                found: n.to_owned(),
-            },
-        ),
+        _ => unreachable!("the instance was checked to be a frame above"),
     }
 }
 
@@ -881,11 +918,15 @@ fn transformation(
     id: u64,
     (rep_1, rep_2): (usize, usize),
     operator: Option<(&[Param], usize)>,
+    assume: Option<Units>,
 ) -> Result<Option<Transformation>> {
     let units_of = |r: usize| {
         out.representations
             .get(r)
-            .map_or_else(Units::default, |r| r.units.units)
+            .map_or_else(
+                || frame_units(&Context::default(), assume),
+                |r| frame_units(&r.units, assume),
+            )
     };
     let Some((p, index)) = operator else {
         return Ok(None);
@@ -927,9 +968,20 @@ fn transformation(
 /// missing or of the wrong kind ([`EntityCause::Missing`], [`EntityCause::WrongType`]), a
 /// parameter of the wrong kind ([`EntityCause::BadParam`]), an assembly or chain of mapped
 /// items that cycles ([`EntityCause::Cycle`]) or nests past [`MAX_ASSEMBLY_DEPTH`]
-/// ([`Limit::TooDeep`]), or a placement the geometry reader refuses.
-#[allow(clippy::too_many_lines)]
+/// ([`Limit::TooDeep`]), a placement the geometry reader refuses, or a placement or
+/// transformation operator in a context without a single length unit ([`EntityCause::Units`]).
 pub fn read(ex: &Exchange) -> Result<ProductStructure> {
+    read_assuming(ex, None)
+}
+
+/// [`read`], with the length unit `assume` supplies for a representation context that names
+/// none (the file's own unit always wins). Without it, a placement or transformation operator
+/// in such a context is refused with [`EntityCause::Units`]: its lengths have no size.
+///
+/// # Errors
+/// As [`read`].
+#[allow(clippy::too_many_lines)]
+pub fn read_assuming(ex: &Exchange, assume: Option<Units>) -> Result<ProductStructure> {
     let all = in_id_order(ex);
     let mut out = ProductStructure::default();
     // Shape aspects of definitions: PRODUCT_DEFINITION_SHAPE / PROPERTY_DEFINITION → what it
@@ -1039,7 +1091,10 @@ pub fn read(ex: &Exchange) -> Result<ProductStructure> {
     let mut contexts: BTreeMap<u64, Context> = BTreeMap::new();
     let mut context_of = |ctx: Option<u64>| -> Context {
         ctx.map_or_else(Context::default, |c| {
-            *contexts.entry(c).or_insert_with(|| units::context(ex, c))
+            contexts
+                .entry(c)
+                .or_insert_with(|| units::context(ex, c))
+                .clone()
         })
     };
     // Representations, then maps (whose origins are in their representation's units).
@@ -1058,7 +1113,7 @@ pub fn read(ex: &Exchange) -> Result<ProductStructure> {
                 let map = reference(item, ip, 1)?;
                 ItemKind::Mapped {
                     map: index_of(ex, &map_index, map, "REPRESENTATION_MAP")?,
-                    target: frame(ex, reference(item, ip, 2)?, ctx.units)
+                    target: frame(ex, reference(item, ip, 2)?, frame_units(&ctx, assume))
                         .map_err(|e| e.within(item))?,
                 }
             } else {
@@ -1083,10 +1138,10 @@ pub fn read(ex: &Exchange) -> Result<ProductStructure> {
         let p = entity(ex, m)?.params();
         let rep = reference(m, p, 1)?;
         let representation = index_of(ex, &rep_index, rep, "a representation")?;
-        let units = out
-            .representations
-            .get(representation)
-            .map_or_else(Units::default, |r| r.units.units);
+        let units = out.representations.get(representation).map_or_else(
+            || frame_units(&Context::default(), assume),
+            |r| frame_units(&r.units, assume),
+        );
         out.maps.push(RepresentationMap {
             entity: m,
             origin: frame(ex, reference(m, p, 0)?, units).map_err(|e| e.within(m))?,
@@ -1118,7 +1173,7 @@ pub fn read(ex: &Exchange) -> Result<ProductStructure> {
             "a representation",
         )?;
         let transformation =
-            transformation(ex, &out, id, (rep_1, rep_2), l.operator).map_err(|e| e.within(id))?;
+            transformation(ex, &out, id, (rep_1, rep_2), l.operator, assume).map_err(|e| e.within(id))?;
         links.insert(id, out.links.len());
         out.links.push(Link {
             entity: id,
