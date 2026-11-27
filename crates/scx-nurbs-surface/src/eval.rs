@@ -62,38 +62,97 @@ impl<const D: usize> NurbsSurface<D> {
         }
     }
 
-    /// [`NurbsSurface::point`] at each of `uv`, in order, on the same pieces: the same bits as
-    /// one call each. A parameter repeated from the previous point (a row or column of a
-    /// grid) reuses its basis.
+    /// [`NurbsSurface::point`] at each of `uv`, into `out`, on the same pieces: `out[k]` is
+    /// `point(uv[k], side)` bit for bit. A parameter repeated from the previous point (a row
+    /// or column walked in order) reuses its basis; for a whole grid,
+    /// [`NurbsSurface::eval_grid`] computes each basis once.
     ///
-    /// Errors with the first point's error.
-    pub fn eval_many(&self, uv: &[[f64; 2]], side: [Approach; 2]) -> Result<Vec<[f64; D]>> {
-        let mut out = Vec::with_capacity(uv.len());
-        let mut cache: Option<([f64; 2], Basis, Basis)> = None;
-        for &[u, v] in uv {
-            let (bu, bv) = match cache.take() {
-                Some(([cu, cv], bu, bv)) => {
-                    let bu = if cu.to_bits() == u.to_bits() {
-                        bu
-                    } else {
-                        self.basis_at(ParamAxis::U, u, side[0])?
-                    };
-                    let bv = if cv.to_bits() == v.to_bits() {
-                        bv
-                    } else {
-                        self.basis_at(ParamAxis::V, v, side[1])?
-                    };
-                    (bu, bv)
+    /// Errors with the first point's error; `out` then holds the points before it, and the
+    /// rest is left as it was.
+    ///
+    /// # Panics
+    ///
+    /// If `uv` and `out` differ in length.
+    pub fn eval_many(
+        &self,
+        uv: &[[f64; 2]],
+        side: [Approach; 2],
+        out: &mut [[f64; D]],
+    ) -> Result<()> {
+        assert_eq!(
+            uv.len(),
+            out.len(),
+            "eval_many: uv and out differ in length"
+        );
+        // The bases of the previous point, updated in place (a `Basis` is 264 bytes).
+        let mut prev: Option<([u64; 2], Basis, Basis)> = None;
+        for (&[u, v], p) in uv.iter().zip(out) {
+            let key = [u.to_bits(), v.to_bits()];
+            let (bu, bv) = if let Some((at, bu, bv)) = &mut prev {
+                if at[0] != key[0] {
+                    *bu = self.basis_at(ParamAxis::U, u, side[0])?;
                 }
-                None => (
-                    self.basis_at(ParamAxis::U, u, side[0])?,
-                    self.basis_at(ParamAxis::V, v, side[1])?,
-                ),
+                if at[1] != key[1] {
+                    *bv = self.basis_at(ParamAxis::V, v, side[1])?;
+                }
+                *at = key;
+                (&*bu, &*bv)
+            } else {
+                let bu = self.basis_at(ParamAxis::U, u, side[0])?;
+                let bv = self.basis_at(ParamAxis::V, v, side[1])?;
+                let (_, bu, bv) = prev.insert((key, bu, bv));
+                (&*bu, &*bv)
             };
-            out.push(self.point_with([u, v], &bu, &bv)?);
-            cache = Some(([u, v], bu, bv));
+            *p = self.point_with([u, v], bu, bv)?;
         }
-        Ok(out)
+        Ok(())
+    }
+
+    /// The points of the grid `us × vs`, into `out` row by row: `out[i * vs.len() + j]` is
+    /// `point([us[i], vs[j]], side)` bit for bit. Each basis is computed once, `us.len() +
+    /// vs.len()` of them for `us.len() · vs.len()` points (65 §3.1).
+    ///
+    /// Errors with the first point's error in that order; `out` then holds the points before
+    /// it, and the rest is left as it was.
+    ///
+    /// # Panics
+    ///
+    /// If `out.len()` is not `us.len() * vs.len()`.
+    pub fn eval_grid(
+        &self,
+        us: &[f64],
+        vs: &[f64],
+        side: [Approach; 2],
+        out: &mut [[f64; D]],
+    ) -> Result<()> {
+        assert_eq!(
+            Some(out.len()),
+            us.len().checked_mul(vs.len()),
+            "eval_grid: out is not us.len() * vs.len() long"
+        );
+        if vs.is_empty() {
+            return Ok(());
+        }
+        // A failed `v` basis is kept as `None` and its error rebuilt when its first point is
+        // reached, so the error is the one `point` gives there.
+        let bvs: Vec<Option<Basis>> = vs
+            .iter()
+            .map(|&v| self.basis_at(ParamAxis::V, v, side[1]).ok())
+            .collect();
+        for (&u, row) in us.iter().zip(out.chunks_exact_mut(vs.len())) {
+            let bu = self.basis_at(ParamAxis::U, u, side[0])?;
+            for ((&v, bv), p) in vs.iter().zip(&bvs).zip(row) {
+                let fresh;
+                let bv = if let Some(bv) = bv {
+                    bv
+                } else {
+                    fresh = self.basis_at(ParamAxis::V, v, side[1])?;
+                    &fresh
+                };
+                *p = self.point_with([u, v], &bu, bv)?;
+            }
+        }
+        Ok(())
     }
 
     /// The basis of `axis` at `t`.
@@ -122,8 +181,8 @@ impl<const D: usize> NurbsSurface<D> {
         let p = match self.weighted_points().zip(self.weights()) {
             None => tensor_point(self.points(), at, nu, nv),
             Some((wp, w)) => {
-                let w = tensor_point(w, at, nu, nv);
-                tensor_point(wp, at, nu, nv).map(|x| x / w)
+                let (a, w) = tensor_point_rational(wp, w, at, nu, nv);
+                a.map(|x| x / w)
             }
         };
         if p.iter().all(|x| x.is_finite()) {
@@ -200,6 +259,29 @@ fn tensor_point<P: Lin>(net: &Net<P>, first: (usize, usize), nu: &[f64], nv: &[f
         s = s.axpy(a, t);
     }
     s
+}
+
+/// [`tensor_point`] of the weighted points and of the weights in one pass over the net: each
+/// sum is the one `tensor_point` takes, so both are its values bit for bit.
+fn tensor_point_rational<const D: usize>(
+    wp: &Net<[f64; D]>,
+    w: &Net<f64>,
+    first: (usize, usize),
+    nu: &[f64],
+    nv: &[f64],
+) -> ([f64; D], f64) {
+    let (mut s, mut sw) = ([0.0; D], 0.0);
+    let rows = local(wp, first, nu.len(), nv.len()).zip(local(w, first, nu.len(), nv.len()));
+    for (&a, (row, wrow)) in nu.iter().zip(rows) {
+        let (mut t, mut tw) = ([0.0; D], 0.0);
+        for ((&b, &q), &wq) in nv.iter().zip(row).zip(wrow) {
+            t = t.axpy(b, q);
+            tw = tw.axpy(b, wq);
+        }
+        s = s.axpy(a, t);
+        sw = sw.axpy(a, tw);
+    }
+    (s, sw)
 }
 
 /// `A^(k,l) = Σ_i nu[k][i] Σ_j nv[l][j] net[..]` for `k + l <= N`, in [`tensor_point`]'s
@@ -428,12 +510,71 @@ mod tests {
             // a grid row: repeated u
             uv.extend([[0.3, 0.1], [0.3, 0.2], [0.3, 0.2], [0.6, 0.2]]);
             for side in SIDES {
-                let many = s.eval_many(&uv, side).unwrap();
+                let mut many = vec![[0.0; 3]; uv.len()];
+                s.eval_many(&uv, side, &mut many).unwrap();
                 let each: Vec<_> = uv.iter().map(|&p| s.point(p, side).unwrap()).collect();
                 assert_eq!(many, each);
             }
-            assert_eq!(s.eval_many(&[], SIDES[0]).unwrap(), Vec::<[f64; 3]>::new());
+            s.eval_many(&[], SIDES[0], &mut []).unwrap();
         }
+    }
+
+    #[test]
+    #[should_panic(expected = "uv and out differ in length")]
+    fn eval_many_refuses_slices_of_different_lengths() {
+        let _ = build(&data(false)).eval_many(&[[0.5, 0.5]], SIDES[0], &mut []);
+    }
+
+    #[test]
+    fn eval_grid_is_point_each() {
+        // inside, at knots, at the ends and outside the domain, repeated
+        let ts = [0.0, 0.3, 0.5, 0.5, 0.75, 1.0, -0.2, 1.3];
+        for rational in [false, true] {
+            let s = build(&data(rational));
+            for side in SIDES {
+                for (nu, nv) in [(8, 8), (3, 8), (8, 1), (1, 1), (0, 4), (4, 0)] {
+                    let (us, vs) = (&ts[..nu], &ts[8 - nv..]);
+                    let mut grid = vec![[0.0; 3]; nu * nv];
+                    s.eval_grid(us, vs, side, &mut grid).unwrap();
+                    let each: Vec<_> = us
+                        .iter()
+                        .flat_map(|&u| vs.iter().map(move |&v| [u, v]))
+                        .map(|p| s.point(p, side).unwrap())
+                        .collect();
+                    assert_eq!(grid, each);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn eval_grid_errors_as_the_first_failing_point() {
+        let s = build(&data(true));
+        let side = SIDES[0];
+        let mut out = [[7.0; 3]; 6];
+        // row 0 is fine; row 1 fails on u at its first point
+        let e = s
+            .eval_grid(&[0.5, f64::NAN], &[0.1, 0.2, 0.3], side, &mut out)
+            .unwrap_err();
+        // (the cause holds the NaN, so compare the debug forms)
+        let want = s.point([f64::NAN, 0.1], side).unwrap_err();
+        assert_eq!(format!("{e:?}"), format!("{want:?}"));
+        assert_eq!(out[2], s.point([0.5, 0.3], side).unwrap());
+        assert_eq!(out[3], [7.0; 3]);
+        // a bad v fails at its column in row 0, after the points before it
+        let mut out = [[7.0; 3]; 6];
+        let e = s
+            .eval_grid(&[0.5, 0.6], &[0.1, f64::INFINITY, 0.3], side, &mut out)
+            .unwrap_err();
+        assert_eq!(e, s.point([0.5, f64::INFINITY], side).unwrap_err());
+        assert_eq!(out[0], s.point([0.5, 0.1], side).unwrap());
+        assert_eq!(out[1], [7.0; 3]);
+    }
+
+    #[test]
+    #[should_panic(expected = "out is not us.len() * vs.len() long")]
+    fn eval_grid_refuses_a_wrong_length() {
+        let _ = build(&data(false)).eval_grid(&[0.5, 0.6], &[0.5], SIDES[0], &mut [[0.0; 3]]);
     }
 
     #[test]
@@ -457,7 +598,10 @@ mod tests {
                 s.jet::<2>(uv, side).unwrap_err(),
                 NurbsSurfaceError::Basis { axis: a, .. } if a == axis
             ));
-            assert!(s.eval_many(&[[0.5, 0.5], uv], side).is_err());
+            assert!(
+                s.eval_many(&[[0.5, 0.5], uv], side, &mut [[0.0; 3]; 2])
+                    .is_err()
+            );
         }
         assert!(matches!(
             s.jet::<{ scx_nurbs::MAX_ORDER + 1 }>([0.5, 0.5], side)

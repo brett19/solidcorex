@@ -661,6 +661,87 @@ nothing beyond noise, so it is not in.
 `eval_many` costs about what `point` does at scattered parameters (no basis is reused there).
 On a grid it evaluates one basis per new parameter value.
 
+#### NS2c: the point's fixed cost and grid evaluation (11-27)
+
+Branch `nsurf-2c`. Two items from the NS2 follow-ups: the point's fixed cost (1.4 to 1.8x the
+pin at low degree after nsurf-2b) and 65 #2, grid evaluation with basis reuse. Every result is
+the same bits as before; the counts are local (callgrind on a timing loop, not committed).
+
+**Profile first.** Instructions per `point` on the 12 × 13 bicubic net, at 1,024 scattered
+parameters (the pin's `Surface::eval` 1,575 polynomial and 1,584 rational):
+
+| Step | Polynomial | Rational |
+|---|---|---|
+| main after nsurf-2b | 2,014 | 2,243 |
+| finiteness check over the `p + 1` live values, not all 32 | 1,898 | 2,127 |
+| A2.2 leaves `n[p+1..]` as it is (it is never read; `Basis` already starts at zero) | 1,864 | 2,093 |
+| `#[inline]` on `KnotVector::basis` and `Basis::at` (non-generic, so no cross-crate inlining without it) | 1,836 | 2,065 |
+| A2.2's inner loop indexed, not zipped (`right.zip(left.take(j).rev())` over `n.take(j + 1)`) | 1,510 | 1,739 |
+| the `Basis` built in place, not from a `values` array moved in | 1,443 | 1,672 |
+| the rational point's two tensor sums (`w P` and `w`) in one pass over the net | 1,443 | 1,548 |
+| `#[inline]` on `Basis::first` and `Basis::values` | **1,412** | **1,514** |
+
+So the fixed cost was the basis, not the span search (about 60 instructions a direction,
+as the pin's `find_span`) and only partly the moves: the iterator adapters around A2.2's
+inner loop cost more than its arithmetic at degree 3 (326 instructions a point), then the
+32-wide finiteness check (116) and the copies of the 264-byte `Basis` (about 130, of which one
+copy a direction is left: `Ok(basis)` still copies it out). The point now runs fewer
+instructions than the pin's. The arithmetic and its order are unchanged in every step: the same
+products, quotients and sums in the same order, so the bits are the same (the SMALL-against-FULL
+test, the scx-nurbs and scx-nurbs-surface unit tests and the `t_nurbs` difftests pass as
+before). The curve's `point` shares `values_into`, so it gains too; `curve.rs` is untouched.
+Earlier (nsurf-2b) the clipped finiteness check showed nothing in wall time at a machine load of
+about 10; the instruction count shows it, so it is in.
+
+**Grid evaluation: a separate entry point.** `eval_grid(us: &[f64], vs: &[f64], side, out:
+&mut [[f64; D]]) -> Result<()>` writes `out[i * vs.len() + j] = point([us[i], vs[j]], side)`,
+`u` outer, computing each `v` basis once (kept in a `Vec<Option<Basis>>`, one allocation a
+call) and each `u` basis once per row: `us.len() + vs.len()` bases for `us.len() · vs.len()`
+points. The alternative was to have `eval_many` detect a grid in its `uv` list.
+
+- *For a separate entry point.* The grid's structure is in the arguments, so nothing has to be
+  detected, and a caller with a grid (tessellation, sampling, the projection's start grids)
+  passes `nu + nv` numbers, not `nu · nv` pairs. `eval_many`'s contract stays simple.
+- *Against.* A second function to learn, and a caller holding an arbitrary list that happens to
+  be a grid gets only `eval_many`'s reuse.
+- *Adversarial on detection.* Recognising a grid in a list costs a pass and a hash or sort of
+  the distinct values, and still needs a store of `nv` bases. It is wrong for lists that are
+  almost grids. It would also make `eval_many`'s cost depend on its input's shape in a way its
+  signature does not show. Rejected.
+- *Error order.* `eval_grid` errors with the first failing point in row order, as `point` at
+  each would. A `v` basis that fails is kept as `None` and rebuilt when its first point is
+  reached, so a degenerate point earlier in row 0 still wins. A unit test checks both a failing
+  `u` (row 1) and a failing `v` (column 1).
+
+`eval_many` keeps its previous-point reuse (it is free and covers a row or column walked in
+order), now updating the two bases in place rather than moving them through an `Option` each
+step.
+
+**The 04 output shape.** Both write into a caller's `&mut [[f64; D]]` and panic on a length
+mismatch (`uv.len()` for `eval_many`, `us.len() * vs.len()` for `eval_grid`, with an overflowing
+product treated as a mismatch), as CU2's `Curve::eval_many` and the 04 11-27 ruling. They return
+`Result<()>`: on an error `out` holds the points before the failing one and the rest is left as
+it was. This changes `eval_many` from `-> Result<Vec<_>>`; its callers were the unit test and
+the difftest.
+
+**Wall time** (same loop, ns a point; the machine load was 10 before and 13 after, so the
+after numbers are if anything high):
+
+| Case | `point` scx/pin | `eval_many` scattered | `eval_many` 32 × 32 grid | `eval_grid` 32 × 32 | pin `eval` on the grid |
+|---|---|---|---|---|---|
+| bicubic, polynomial | 1.41 / 1.27 | 132 / 92 | 98 / 61 | 22 | 76 / 72 |
+| bicubic, rational | 1.53 / 1.31 | 132 / 98 | 98 / 66 | 28 | 72 / 72 |
+| biquintic, rational | 1.30 / 1.15 | 186 / 152 | 135 / 100 | 43 | 124 / 124 |
+| degree 9, rational | 1.02 / 0.91 | 392 / 331 | 270 / 213 | 92 | 350 / 347 |
+
+`eval_grid` is 0.27 to 0.39 times the pin's point-by-point grid, and 3.5 to 4.2 times faster than
+scx's own point per point, above 65 #2's "about 2x" estimate: the bases dominate a point at
+these degrees. The point's wall-time ratio fell less than its instruction ratio (now 0.90 and
+0.96 of the pin's instructions), so what is left is likely latency rather than work (a
+hypothesis, not measured): the A2.2 divisions are a dependent chain, and scx still clears and
+copies a 256-byte `Basis` a direction. Shrinking `Basis` below `FULL` would need a degree-split
+type; at this ratio it is not pursued.
+
 #### NS3 as built (11-27)
 
 Proposed for review, not yet ruled. The code is in

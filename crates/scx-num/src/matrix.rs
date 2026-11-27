@@ -1313,8 +1313,13 @@ mod tests {
     /// be allocated return `InvalidInput` or `Exhausted` instead of aborting.
     #[test]
     fn huge_sizes_fail_softly() {
+        // Sized by the pointer width so the test runs on 32-bit targets too: `half` squared
+        // overflows `usize`, and `big` is `2^40` on 64 bits, `2^8` on 32 (either way
+        // `big << 20` elements is far above the allocation ceiling).
+        let half = 1usize << (usize::BITS / 2);
+        let big = 1usize << (usize::BITS - 24);
         assert!(matches!(
-            Matrix::try_new(1 << 32, 1 << 32),
+            Matrix::try_new(half, half),
             Err(NumError::InvalidInput { .. })
         ));
         assert!(matches!(
@@ -1324,7 +1329,7 @@ mod tests {
         let mut a = m(2, 2, &[1.0, 2.0, 3.0, 4.0]);
         let keep = a.clone();
         assert!(a.set_size(usize::MAX, 3).is_err());
-        assert!(a.set_size(1 << 40, 1 << 20).is_err());
+        assert!(a.set_size(big, 1 << 20).is_err());
         assert_eq!(a, keep);
         assert_eq!(Matrix::try_new(2, 3).unwrap(), Matrix::new(2, 3));
     }

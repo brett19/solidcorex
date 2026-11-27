@@ -14,7 +14,7 @@
 //! | `NurbsFailure::DerivativeOrder { given, max }` | [`NurbsError::DerivativeOrder`] |
 //! | `NurbsFailure::Degree`, `InvalidInput` (`p >= MAX_DEGREE`) | [`NurbsError::Degree`] |
 //! | `NurbsFailure::Index`, `ControlPointsShort`, `InvalidInput` (out of bounds) | none: a built curve has the right counts ([`NurbsError::PointCount`] at construction) |
-//! | none: `elevate_degree` returns zero or negative weights | [`NurbsError::Unstable`] |
+//! | none: `elevate_degree` returns zero or negative weights, or an answer of any error | [`NurbsError::Unstable`] |
 //! | `SolidError::Unsupported` at a domain end (`basis_eval`, `crv_eval`) | none: the ends evaluate |
 //! | none: an index past a slice the built values' counts rule out | [`NurbsError::Defect`] |
 //!
@@ -144,10 +144,12 @@ pub enum NurbsError {
         /// The parameter being evaluated.
         parameter: f64,
     },
-    /// Degree elevation lost the curve: removing the knots it inserted extrapolates across
-    /// neighbouring spans, and across near-coincident knots the rounding grew until a weight
-    /// was no longer positive or a point no longer finite. (Where it stays finite the answer
-    /// may still be inaccurate: see [`NurbsCurve::elevate`](crate::NurbsCurve::elevate).)
+    /// Degree elevation could not keep the curve: removing the knots it inserted
+    /// extrapolates across neighbouring spans, and the bound on the rounding that grows passed
+    /// [`ELEVATION_ERROR`](scx_num::consts::ELEVATION_ERROR) (high degrees, uniform knots
+    /// first), or a weight was no longer positive or a point no longer finite. Every
+    /// elevation that answers is within that bound: see
+    /// [`NurbsCurve::elevate`](crate::NurbsCurve::elevate).
     Unstable,
     /// A step failed through the crate's own fault: an index the built values' invariants
     /// rule out was missing. A bug.
@@ -281,9 +283,7 @@ impl fmt::Display for NurbsError {
                 f,
                 "a knot difference rounded to zero or the result overflowed evaluating at {parameter}"
             ),
-            Self::Unstable => {
-                f.write_str("degree elevation lost the curve across near-coincident knots")
-            }
+            Self::Unstable => f.write_str("degree elevation's rounding error would pass its bound"),
             Self::Defect { why } => f.write_str(why),
         }
     }

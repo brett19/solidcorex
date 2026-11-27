@@ -45,6 +45,10 @@ jobs:
         env:
           CARGO_TARGET_WASM32_WASIP1_RUNNER: wasmtime
         run: cargo test --target ${{ matrix.target }} -p scx-num --test fmath_pin -p scx-algo --test xplat_pin
+      - name: scx-num unit tests # its dev-dependencies are built for fmath_pin already
+        env:
+          CARGO_TARGET_WASM32_WASIP1_RUNNER: wasmtime
+        run: cargo test --target ${{ matrix.target }} -p scx-num --lib
 
   difftest:
     runs-on: ubuntu-24.04
