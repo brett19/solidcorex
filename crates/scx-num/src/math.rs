@@ -55,7 +55,8 @@
 //! in upstream order, so results are bit-identical to the C++ (built with
 //! `-ffp-contract=off`).
 
-use crate::extent3d::{Extent3d, Hull3d};
+use crate::extent1d::Extent1d;
+use crate::extent3d::Extent3d;
 pub use crate::vector2d::{Point2, Vec2};
 pub use crate::vector3d::{Point3, UnitVec3, Vec3};
 
@@ -612,7 +613,13 @@ impl Affine {
         let (lo, hi) = (b.min(), b.max());
         let ([tx, ty, tz], td) = (self.axes, self.shift);
         let g = gamma(5);
-        let mut hull = Hull3d::EMPTY;
+        // The lower side takes only the corners' lower bounds and the upper side only their
+        // upper ones. That is the hull of both, bit for bit: `e` is positive or NaN, so `down`
+        // is below `up` unless one is NaN, and `down` is NaN with `up` not only when `p` and
+        // `e` are both `+inf` (`up` is then `+inf`, which no minimum takes), as `up` is NaN
+        // with `down` not only at `-inf`.
+        let mut min = Point3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
+        let mut max = Point3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
         for i in 0..8 {
             let corner = Point3::new(
                 if i & 1 == 0 { lo.x } else { hi.x },
@@ -629,18 +636,15 @@ impl Affine {
                 size(td.y, tx.y, ty.y, tz.y),
                 size(td.z, tx.z, ty.z, tz.z),
             );
-            hull.add(Point3::new(
-                next_down(p.x - e.x),
-                next_down(p.y - e.y),
-                next_down(p.z - e.z),
-            ));
-            hull.add(Point3::new(
-                next_up(p.x + e.x),
-                next_up(p.y + e.y),
-                next_up(p.z + e.z),
-            ));
+            let (down, up) = ((p - e).map(next_down), (p + e).map(next_up));
+            min = Point3::new(min.x.min(down.x), min.y.min(down.y), min.z.min(down.z));
+            max = Point3::new(max.x.max(up.x), max.y.max(up.y), max.z.max(up.z));
         }
-        hull.finish()
+        Some(Extent3d::from_intervals(
+            Extent1d::from_bounds(min.x, max.x)?,
+            Extent1d::from_bounds(min.y, max.y)?,
+            Extent1d::from_bounds(min.z, max.z)?,
+        ))
     }
 
     /// The map that undoes this one, when [`Self::is_regular`] proves it regular at ratio 0:

@@ -687,14 +687,24 @@ impl Vec3 {
     /// One whose squared length overflows is scaled first, as [`Vec3::length_and_unit`]
     /// scales it, so every finite vector longer than the threshold has its direction.
     #[must_use]
+    #[inline]
     pub fn normalized(self) -> Option<UnitVec3> {
         let len_sq = self.length_squared();
         if len_sq.is_finite() {
             // A finite square means finite components.
             (len_sq >= EFF_ZERO_SQ).then(|| UnitVec3(self.unitize_nonzero(len_sq)))
         } else {
-            self.length_and_unit().map(|(_, unit)| unit)
+            self.normalized_overflowing()
         }
+    }
+
+    /// [`Vec3::normalized`] for a vector whose squared length is not finite: one that
+    /// overflows is scaled first, one with a component not finite has no direction. Out of
+    /// line, so the common case stays small enough to inline.
+    #[cold]
+    #[inline(never)]
+    fn normalized_overflowing(self) -> Option<UnitVec3> {
+        self.length_and_unit().map(|(_, unit)| unit)
     }
 
     /// Upstream's in-place `Unitize` result with the status ignored: the unit vector,
