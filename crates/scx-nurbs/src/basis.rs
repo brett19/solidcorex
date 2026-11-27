@@ -24,14 +24,26 @@ pub(crate) const MISSING_KNOT: NurbsError = NurbsError::Defect {
 
 /// The `p + 1` basis values `N[span-p..=span]` at `u` into `n[..=p]`, for `p < N` and the
 /// window of [`KnotVector::window`].
-pub(crate) fn values_into<const N: usize>(
+pub(crate) fn values_into<const N: usize>(window: (&[f64], &[f64]), u: f64, n: &mut [f64; N]) {
+    // The scratch is [`SMALL`] wide below that degree whatever `N` is (a `Basis` holds `FULL`
+    // values): the arithmetic is the same, and clearing `FULL`-wide scratch for a cubic costs
+    // more than the cubic.
+    if window.1.len() < SMALL {
+        values_with::<SMALL, N>(window, u, n);
+    } else {
+        values_with::<N, N>(window, u, n);
+    }
+}
+
+/// [`values_into`] with scratch arrays of `M > p` entries.
+fn values_with<const M: usize, const N: usize>(
     (below, above): (&[f64], &[f64]),
     u: f64,
     n: &mut [f64; N],
 ) {
     // left[j-1] = u - U[span+1-j], right[j-1] = U[span+j] - u, for j in 1..=p.
-    let mut left = [0.0; N];
-    let mut right = [0.0; N];
+    let mut left = [0.0; M];
+    let mut right = [0.0; M];
     for (l, k) in left.iter_mut().zip(below.iter().rev()) {
         *l = u - k;
     }
@@ -65,14 +77,29 @@ pub(crate) fn values_into<const N: usize>(
 /// The values and the derivatives are separate so that a caller can hold `D` derivative rows
 /// beside the values, which stable Rust cannot size as one `[_; D + 1]`.
 pub(crate) fn derivs_into<const N: usize>(
+    window: (&[f64], &[f64]),
+    u: f64,
+    values: &mut [f64; N],
+    derivs: &mut [[f64; N]],
+) -> Option<()> {
+    // As in `values_into`: a `FULL × FULL` table is 8 KiB to clear.
+    if window.1.len() < SMALL {
+        derivs_with::<SMALL, N>(window, u, values, derivs)
+    } else {
+        derivs_with::<N, N>(window, u, values, derivs)
+    }
+}
+
+/// [`derivs_into`] with scratch arrays of `M > p` entries.
+fn derivs_with<const M: usize, const N: usize>(
     (below, above): (&[f64], &[f64]),
     u: f64,
     values: &mut [f64; N],
     derivs: &mut [[f64; N]],
 ) -> Option<()> {
     let p = above.len();
-    let mut left = [0.0; N];
-    let mut right = [0.0; N];
+    let mut left = [0.0; M];
+    let mut right = [0.0; M];
     for (l, k) in left.iter_mut().skip(1).zip(below.iter().rev()) {
         *l = u - k;
     }
@@ -82,7 +109,7 @@ pub(crate) fn derivs_into<const N: usize>(
 
     // ndu[r][j] (r <= j): the basis functions of degree j. ndu[j][r] (j > r): the knot
     // differences they divide by.
-    let mut ndu = [[0.0; N]; N];
+    let mut ndu = [[0.0; M]; M];
     put(&mut ndu, 0, 0, 1.0)?;
     for j in 1..=p {
         let mut saved = 0.0;
@@ -106,7 +133,7 @@ pub(crate) fn derivs_into<const N: usize>(
 
     let order = p.min(derivs.len());
     for r in 0..=p {
-        let mut rows = [[0.0; N]; 2];
+        let mut rows = [[0.0; M]; 2];
         let [first, second] = &mut rows;
         let (mut s1, mut s2) = (first, second);
         *s1.first_mut()? = 1.0;
@@ -369,6 +396,43 @@ mod tests {
                 c.point(u, tside).unwrap().rounded[0]
             })
             .collect()
+    }
+
+    /// The narrow scratch below [`SMALL`] gives the bits of the `FULL`-wide one: values and
+    /// every derivative row, for each degree it serves, inside, at knots and outside.
+    #[test]
+    fn small_scratch_is_full_scratch_bit_for_bit() {
+        for p in 1..SMALL {
+            let mut knots = vec![0.0; p + 1];
+            knots.extend([0.2, 0.45, 0.45, 0.8]);
+            knots.extend(vec![1.0; p + 1]);
+            let kv = KnotVector::new(p, knots).unwrap();
+            for u in [-0.3, 0.0, 0.1, 0.45, 0.6, 1.0, 1.4] {
+                for side in [Approach::Below, Approach::Above] {
+                    let window = kv.window(kv.span(u, side).unwrap()).unwrap();
+                    let (mut small, mut full) = ([0.0; FULL], [0.0; FULL]);
+                    values_with::<SMALL, FULL>(window, u, &mut small);
+                    values_with::<FULL, FULL>(window, u, &mut full);
+                    assert_eq!(
+                        small.map(f64::to_bits),
+                        full.map(f64::to_bits),
+                        "p {p} u {u}"
+                    );
+                    let mut ds = [[0.0; FULL]; MAX_ORDER];
+                    let mut df = [[0.0; FULL]; MAX_ORDER];
+                    derivs_with::<SMALL, FULL>(window, u, &mut small, &mut ds).unwrap();
+                    derivs_with::<FULL, FULL>(window, u, &mut full, &mut df).unwrap();
+                    assert_eq!(
+                        small.map(f64::to_bits),
+                        full.map(f64::to_bits),
+                        "p {p} u {u}"
+                    );
+                    for (a, b) in ds.iter().zip(&df) {
+                        assert_eq!(a.map(f64::to_bits), b.map(f64::to_bits), "p {p} u {u}");
+                    }
+                }
+            }
+        }
     }
 
     #[test]

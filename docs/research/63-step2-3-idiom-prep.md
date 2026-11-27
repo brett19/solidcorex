@@ -639,6 +639,25 @@ in the basis and A2.3, initialized on each call, where the pin sizes its buffers
 degree. That is a hypothesis, not yet measured. Under the perf rule the change does not wait for
 it: the follow-up is a parallel branch that sizes the scratch by the degree, or keeps it
 uninitialized behind a written-before-read proof, with before/after numbers from this loop.
+
+Follow-up (nsurf-2b, 11-27): below degree `SMALL = 8` the basis values and A2.3 now run on
+`SMALL`-wide scratch (the `FULL`-wide path stays for higher degrees; a unit test checks the two
+are bit-equal for every degree below `SMALL`, both sides, inside and outside the knots). Same
+loop, before / after, scx ns (scx/pin):
+
+| Case | `point` | `jet::<1>` | `jet::<2>` | `eval_many` per point |
+|---|---|---|---|---|
+| bicubic, polynomial | 116 / 91 to 116 (1.43 / 1.42 to 1.78) | 365 / 195 to 208 (2.7 / 1.78) | 435 / 262 (1.0 / 0.72) | 145 / 110 to 128 |
+| bicubic, rational | 128 / 86 to 104 (1.57 / 1.43 to 1.54) | 388 / 218 to 230 (1.97 / 1.35) | 545 / 343 to 354 (0.52 / 0.41) | 150 / 120 to 123 |
+| biquintic, rational | 190 / 139 to 175 (1.30 / 1.20 to 1.36) | 485 / 275 to 295 (1.29 / 0.92) | 670 / 437 to 460 (0.34 / 0.28) | 208 / 167 to 190 |
+| degree 9, rational | 386 / 326 to 332 (1.02 / 1.04 to 1.10) | 796 / 704 to 805 (0.86 / 0.92 to 1.03) | 0.22 / 0.22 to 0.24 | 403 / 313 to 340 |
+
+Degree 9 takes the `FULL` path, so it is unchanged within noise (the "before" ran at a higher
+machine load). `jet::<1>` lost most of its fixed cost: the hypothesis held there. The point did
+not move in ratio (still about 1.4 to 1.5 at low degree), so its fixed cost is elsewhere; the
+candidates (span search, moving `Result`s, the 256-byte `Basis` arrays) are open and unmeasured.
+Clipping the finiteness check in `Basis::at` to the live `p + 1` values was tried and gave
+nothing beyond noise, so it is not in.
 `eval_many` costs about what `point` does at scattered parameters (no basis is reused there).
 On a grid it evaluates one basis per new parameter value.
 
