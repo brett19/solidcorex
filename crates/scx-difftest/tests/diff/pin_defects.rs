@@ -1756,6 +1756,276 @@ pub fn nurbs_bezier_split() -> PinDefect<(At,), Pieces> {
     }
 }
 
+/// `global_solve::solve` of `ProjectedMaximize` started with no best answer
+/// (`t_gsolve::gsolve_projected_maximize`).
+///
+/// The pin resets "no best yet" (`SM_BIG_DOUBLE`, 1e20) to 0 for `Maximize` and
+/// `DirectedMaximize` only, so a `ProjectedMaximize` starts with a best of 1e20 squared: every
+/// solution is "far from the best" and the pin returns none. The true answer is the largest
+/// projected distance over the leaf pairs (brute force over every pair); scx starts the
+/// maximising operations at 0 and returns it first, with its square as the best.
+pub fn gsolve_projected_maximize() -> PinDefect<(u64, u64), crate::t_gsolve::Res> {
+    use crate::t_gsolve::{Case, holds_the_best, scenario};
+    PinDefect {
+        reason: "the pin starts ProjectedMaximize at the 1e20 sentinel",
+        applies: Applies::Disagreeing,
+        check: |&(a, b), r| holds_the_best(&scenario(a, b, false), Case::ProjectedMaximize, r),
+    }
+}
+
+/// `global_solve::solve` of `Rayfire` (`t_gsolve::gsolve_rayfire`).
+///
+/// The pin's `FindBestSubdivisionNode` orders the halves of the node it splits by reading
+/// the children of the second tree's node, whatever tree it splits. Splitting the ray tree
+/// (the first) once the second is down to a leaf, that is a null child and the pin fails.
+/// scx reads the children of the tree it splits. The scenario's ray tree has every leaf at
+/// the ray's start, so the true answer is the smallest ray parameter of the pieces the ray
+/// passes within the radius of (brute force over every pair), or no solution when it
+/// passes none.
+pub fn gsolve_rayfire() -> PinDefect<(u64, u64), crate::t_gsolve::Res> {
+    use crate::t_gsolve::{Case, holds_the_best, scenario};
+    PinDefect {
+        reason: "the pin reads tree 1's children for the rayfire order",
+        applies: Applies::Disagreeing,
+        check: |&(a, b), r| holds_the_best(&scenario(a, b, true), Case::Rayfire, r),
+    }
+}
+
+/// `Solution::object_for_parameter` on objects of mixed kinds
+/// (`t_gsolve::sol_object_for_parameter`).
+///
+/// The pin's `GetObjectIndexForParameterIndex` reads the kind of object 0 on every pass of
+/// its loop (it indexes by `object_index`, set only on the way out, not by the loop's `ii`),
+/// so past a first object of another kind it counts the wrong parameters; and when no object
+/// holds the parameter (vertices only) it falls out of the loop answering object 0, axis 0.
+/// The truth is the object reached by counting each object's own parameters; scx counts them.
+pub fn object_for_parameter() -> PinDefect<(usize, usize, usize), Option<(usize, usize)>> {
+    use crate::t_gsolve::{object_for_parameter_case, object_for_parameter_truth};
+    PinDefect {
+        reason: "the pin reads object 0's kind for every object",
+        applies: Applies::Disagreeing,
+        check: |&a, r| {
+            let (counts, index) = object_for_parameter_case(a);
+            let want = object_for_parameter_truth(&counts, index);
+            if *r == want {
+                Ok(())
+            } else {
+                Err(format!("{r:?}, the truth is {want:?}"))
+            }
+        },
+    }
+}
+
+// ---- scx-algo's pseudo box against solidcore's `SmPseudoBox` (`t_pbox`) --------------------
+
+use crate::t_pbox::{BoxR, ProjR};
+type XV3 = scx_num::vector3d::Vec3;
+type XIv = scx_num::extent1d::Extent1d;
+type BoxParts = ([XV3; 3], [XIv; 3]);
+type BasisR = Option<([XV3; 3], bool)>;
+type LineR = Option<scx_num::Result<(&'static str, Vec<f64>)>>;
+type HullR = Option<Option<BoxParts>>;
+type ExpandR = Option<Option<(Option<BoxParts>, BoxParts)>>;
+
+/// `BoxBasis::new` (the pin's `SetBasis` then `InvertAbsolute`'s determinant test) of
+/// vectors with a component not finite.
+///
+/// Such vectors span no box: a NaN component has no value, and an infinite one has no
+/// direction once unitised (`inf / inf`). The pin's `SetBasis` compares the determinant
+/// with `<`, which NaN passes, and its `InvertAbsolute` divides on, so it keeps a basis of
+/// NaN vectors. scx refuses the basis (`None`). The check: `None` for every such input.
+pub fn pb_basis() -> PinDefect<(V, V, V), BasisR> {
+    PinDefect {
+        reason: "the pin keeps a basis of vectors that are not finite",
+        applies: Applies::Inputs(|(a, b, c)| !(finite(a) && finite(b) && finite(c))),
+        check: |_, r| match r {
+            None => Ok(()),
+            Some(b) => Err(format!("vectors not finite span no box, not {b:?}")),
+        },
+    }
+}
+
+/// `PseudoBox::intersect_line` of a line through a point, or along a direction, that is not
+/// finite: no line, so no clip is defined. scx refuses it (`InvalidInput`); the pin clips
+/// its NaN parameters on and answers a miss or a hit (as [`e3_intersect_line`] for boxes
+/// on the axes). The check: refused, or no box at all.
+pub fn pb_intersect_line() -> PinDefect<(BoxR, V, V), LineR> {
+    PinDefect {
+        reason: "the pin clips an undefined line",
+        applies: Applies::Inputs(|(_, p, v)| !(finite(p) && finite(v))),
+        check: |(b, _, _), r| match r {
+            None if crate::t_pbox::xbox(b).is_none() => Ok(()),
+            _ => refused_line(r),
+        },
+    }
+}
+
+/// The corners of `r` on its unit basis vectors.
+fn pb_corners(r: &BoxR) -> Vec<V> {
+    let u = r.b.map(direction);
+    let mut out = Vec::with_capacity(8);
+    for k in 0..8 {
+        let mut c = [0.0; 3];
+        for (i, ui) in u.iter().enumerate() {
+            c = add3(c, scale3(*ui, r.i[i][(k >> i) & 1]));
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// Whether the perspective image of `r` from `p.e` onto the plane through `p.p` along `p.n`
+/// is undefined, with slack around each boundary: the eye on the view plane (every ray
+/// meets the plane at the eye or nowhere), the box reaching the plane through the eye
+/// parallel to the view plane (its image is unbounded), or a basis vector at the plane's
+/// point seen along a ray parallel to the plane (its image is at infinity).
+fn pb_perspective_undefined(r: &BoxR, p: &ProjR) -> bool {
+    const SLACK: f64 = 1e-9;
+    let n = direction(p.n);
+    let near = |d: V| far_dot3(d, n).abs() <= SLACK * (1.0 + len3(d));
+    if near(sub3(p.p, p.e)) {
+        return true;
+    }
+    let sides: Vec<f64> = pb_corners(r)
+        .into_iter()
+        .map(|c| {
+            let d = sub3(c, p.e);
+            let s = far_dot3(d, n);
+            if s.abs() <= SLACK * (1.0 + len3(d)) {
+                0.0
+            } else {
+                s.signum()
+            }
+        })
+        .collect();
+    let one_side = sides.iter().all(|&s| s > 0.0) || sides.iter().all(|&s| s < 0.0);
+    !one_side
+        || r.b
+            .iter()
+            .any(|b| near(add3(sub3(p.p, p.e), direction(*b))))
+}
+
+/// `PseudoBox::project_to_plane` in perspective where the image is undefined
+/// ([`pb_perspective_undefined`]).
+///
+/// The pin divides by the ray's distance along the normal and answers a box of NaN or of
+/// numbers past any scale (the true image is unbounded); for a box across the eye's plane it
+/// answers a bounded box, though the image of the corners behind the eye folds through
+/// infinity and no bounded box holds it. scx refuses. The check: scx refused (`Some(None)`),
+/// and the projection is perspective and undefined for this box.
+pub fn pb_project() -> PinDefect<(BoxR, ProjR), Option<Option<BoxParts>>> {
+    PinDefect {
+        reason: "the pin answers a box for an unbounded perspective image",
+        applies: Applies::Disagreeing,
+        check: |(b, p), r| {
+            if p.kind != 1 || !pb_perspective_undefined(b, p) {
+                return Err(format!("a defined projection has an image, not {r:?}"));
+            }
+            match r {
+                Some(None) => Ok(()),
+                _ => Err(format!("an unbounded image is refused, not {r:?}")),
+            }
+        },
+    }
+}
+
+/// `PseudoBox::are_project_disjoint` where either box's perspective image is undefined
+/// ([`pb_perspective_undefined`]): nothing shows the images apart, so scx answers `false`
+/// (not proven disjoint); the pin compares its boxes of NaN or of a folded image
+/// ([`pb_project`]) and finds them apart. The check: `false`, and an undefined image.
+pub fn pb_project_disjoint() -> PinDefect<(BoxR, BoxR, ProjR), Option<bool>> {
+    PinDefect {
+        reason: "the pin separates unbounded perspective images",
+        applies: Applies::Disagreeing,
+        check: |(a, b, p), r| {
+            if p.kind != 1 || !(pb_perspective_undefined(a, p) || pb_perspective_undefined(b, p)) {
+                return Err(format!("both images are defined: {r:?}"));
+            }
+            match r {
+                Some(false) => Ok(()),
+                _ => Err(format!(
+                    "undefined images are not proven disjoint, not {r:?}"
+                )),
+            }
+        },
+    }
+}
+
+/// `true` coordinates of `q` in the basis `u` (Cramer's rule through cross then dot, a
+/// different rounding from scx's six-term determinant) and the tolerance on each: a few
+/// thousand units of the last place of `|q| / |det|`.
+fn pb_true_coords(u: [V; 3], q: V) -> ([f64; 3], f64) {
+    let det = dot3(u[0], cross3(u[1], u[2]));
+    let c = [
+        far_dot3(q, cross3(u[1], u[2])) / det,
+        far_dot3(q, cross3(u[2], u[0])) / det,
+        far_dot3(q, cross3(u[0], u[1])) / det,
+    ];
+    (c, 1e-12 * (1.0 + len3(q) / det.abs()))
+}
+
+/// `PseudoBox::bounding` (the pin's `Init` then `AddPoint3d`) of points far from the origin.
+///
+/// The pin's hull starts at `±1e20` (`HULL_START`, as `e1_hull`), so a coordinate past it on
+/// one side is lost and the box is short of its points; scx starts empty. The check: the
+/// basis is the unit vectors of the input, each interval is the hull of the points' true
+/// coordinates (NaN ones, from overflow, skipped) to the tolerance of [`pb_true_coords`],
+/// and it is `None` exactly when an axis has no coordinate. A point not finite has no true
+/// coordinates (the pin's and scx's are what `inf · 0` and `inf - inf` round to): with one
+/// in the list, the intervals need only hold the finite points' hull, and no box (scx's hull
+/// refuses an end that is not finite) is right too.
+pub fn pb_bounding() -> PinDefect<(BoxR, List<V>), HullR> {
+    PinDefect {
+        reason: "the pin's hull starts at 1e20 and loses coordinates past it",
+        applies: Applies::Disagreeing,
+        check: |(b, pts), r| {
+            let Some(got) = r else {
+                return Err("a basis of independent vectors has a box".to_owned());
+            };
+            let u = b.b.map(direction);
+            let mut hull = [[f64::INFINITY, f64::NEG_INFINITY]; 3];
+            let mut tol = [0.0_f64; 3];
+            let all_finite = pts.0.iter().all(|q| finite(q));
+            for &q in pts.0.iter().filter(|q| finite(*q)) {
+                let (c, t) = pb_true_coords(u, q);
+                for i in 0..3 {
+                    if !c[i].is_nan() {
+                        hull[i] = [hull[i][0].min(c[i]), hull[i][1].max(c[i])];
+                        tol[i] = tol[i].max(t);
+                    }
+                }
+            }
+            let want: Option<Vec<XIv>> = hull.iter().map(|h| XIv::new(h[0], h[1])).collect();
+            match (got, want) {
+                (None, None) => Ok(()),
+                // no box holds a point that is not finite
+                (None, Some(_)) if !all_finite => Ok(()),
+                (Some(_), None) if !all_finite => Ok(()),
+                (Some((gb, gi)), Some(w)) => {
+                    for i in 0..3 {
+                        along(gb[i].to_array(), b.b[i])?;
+                    }
+                    for i in 0..3 {
+                        let (g, w) = (gi[i], w[i]);
+                        let close = |a: f64, b: f64| a == b || (a - b).abs() <= tol[i];
+                        let holds = all_finite
+                            || (g.min() <= w.min() + tol[i] && g.max() >= w.max() - tol[i]);
+                        let equal = close(g.min(), w.min()) && close(g.max(), w.max());
+                        if !(holds && (equal || !all_finite)) {
+                            return Err(format!(
+                                "interval {i} {g:?} is not {w:?} (to {:e})",
+                                tol[i]
+                            ));
+                        }
+                    }
+                    Ok(())
+                }
+                (g, w) => Err(format!("box {g:?}, but the points' hull is {w:?}")),
+            }
+        },
+    }
+}
+
 // ---- Parameter domains and frames (`t_math`) ------------------------------------------------
 
 /// A domain kind, its ends, the reach and whether the rule is `Clamp::Sample`.
@@ -1784,6 +2054,859 @@ pub fn domain_working() -> PinDefect<DomainIn, Option<(f64, f64)>> {
             match r {
                 Some(got) if *got == want => Ok(()),
                 _ => Err(format!("want {want:?}, not {r:?}")),
+            }
+        },
+    }
+}
+
+/// `PseudoBox::expanded` (the pin's `ExpandAbsolute`) by NaN, then `union` with the
+/// expanded box: a move by no number moves nothing (`NAN_MOVE`, as `e1_expanded`). The pin
+/// moves every bound by NaN and its union of the NaN corners is NaN; scx leaves the box as
+/// it was. The check: the expanded box is the box, and the union is the box's own hull in
+/// the second basis.
+pub fn pb_expand_union() -> PinDefect<(BoxR, BoxR, f64), ExpandR> {
+    PinDefect {
+        reason: "the pin moves a box by NaN",
+        applies: Applies::Inputs(|(_, _, d)| d.is_nan()),
+        check: |(a, q, _), r| {
+            use crate::t_pbox::{xbasis, xbox, xparts};
+            let want = xbox(a)
+                .zip(xbasis(&q.b))
+                .map(|(a, basis)| Some((a.union(&a, basis).map(|b| xparts(&b)), xparts(&a))));
+            if *r == want {
+                Ok(())
+            } else {
+                Err(format!("a move by NaN leaves the box: {r:?}, not {want:?}"))
+            }
+        },
+    }
+}
+
+// ---- scx-algo's geom and sort against solidcore's geom_utility (t_gutil) -------------------
+//
+// Most of these share one cause: the pin keeps upstream's arithmetic, so where a square
+// overflows (components past `1e154`), a direction has no length (below `SM_EFF_ZERO`), or
+// an input is not finite, it divides on and answers NaN, an infinity, or a silent 0. scx
+// answers `None` there, measures an overflowing direction scaled, and refuses an answer
+// that is not finite. Each check computes the truth from the inputs, with every length
+// taken scaled ([`len3`], [`dir3`], [`far_dot3`]) and every difference of points taken at
+// half size so it cannot overflow. scx must agree with it to `GU_REL` of the size its
+// rounding is bounded by; it may refuse only where the question has no answer (no
+// direction, input not finite, the answer past `f64`'s range), where its own products pass
+// `f64`'s range, or in the band of rounding around its own thresholds.
+
+use crate::harness::List;
+use crate::t_gutil::{FitOut, Pts};
+type XP3 = scx_num::vector3d::Point3;
+type V4 = (V, V, V, V);
+type Two = Option<(f64, f64)>;
+type SegR = ((f64, f64), (f64, f64));
+type V5 = (V, V, V, V, V);
+type Three = Option<(f64, f64, f64)>;
+type V6 = (V, V, V, V, V, V);
+
+/// Agreement with the truth, relative to the size that bounds the rounding.
+const GU_REL: f64 = 1e-12;
+/// `f64::EPSILON / 2`.
+const GU_U: f64 = 1.1102230246251565e-16;
+
+/// Eight steps of `2^-1074`: an answer below `f64::MIN_POSITIVE` is rounded absolutely.
+const GU_SUBNORMAL: f64 = 8.0 * 5e-324;
+
+fn gu_close(what: &str, x: f64, t: f64, scale: f64) -> Result<(), String> {
+    let tol = GU_REL * (t.abs() + scale.abs()) + GU_SUBNORMAL;
+    if (x - t).abs() <= tol {
+        Ok(())
+    } else {
+        Err(format!("{what} {x:e} is not the true {t:e} (to {tol:e})"))
+    }
+}
+fn half(a: V) -> V {
+    scale3(a, 0.5)
+}
+/// `(q - p) / 2`, which cannot overflow.
+fn half_gap(q: V, p: V) -> V {
+    sub3(half(q), half(p))
+}
+/// The unit normal the test gives both sides, as an array.
+fn gu_unit(n: V) -> Option<V> {
+    crate::t_gutil::unit(n).map(|u| [u.x, u.y, u.z])
+}
+/// `x / |v|`, with `|v|` past `f64`'s range taken scaled.
+fn over_len(x: f64, v: V) -> f64 {
+    let s = biggest(&v);
+    x / s / len3(v.map(|c| c / s))
+}
+/// A length is in the band where `|v|² < SM_EFF_ZERO_SQ` may round either way.
+fn near_no_length(len: f64) -> bool {
+    (len - NO_LENGTH).abs() <= 1e-9 * NO_LENGTH
+}
+/// Whether the products scx forms of these points and directions may pass `f64`'s range.
+fn products_overflow(points: &[V], dirs: &[V]) -> bool {
+    let mut m = points.iter().map(|p| biggest(p)).sum::<f64>() + 1.0;
+    for d in dirs {
+        m *= 1.0 + biggest(d);
+    }
+    !(m * 4.0).is_finite()
+}
+/// `x` against what the truth allows: a refusal only where `may_refuse`, an answer only
+/// where the truth has one.
+fn judge<X: std::fmt::Debug, T>(
+    x: &Option<X>,
+    may_refuse: bool,
+    truth: Option<T>,
+    agree: impl Fn(&X, &T) -> Result<(), String>,
+) -> Result<(), String> {
+    match (x, truth) {
+        (None, _) if may_refuse => Ok(()),
+        (None, Some(_)) => Err("a true answer exists".into()),
+        (None, None) => Ok(()),
+        (Some(x), Some(t)) => agree(x, &t),
+        (Some(x), None) => Err(format!("no true answer, not {x:?}")),
+    }
+}
+
+/// The true line parameter of `q` on the line `(p, v)` and the size its rounding is bounded
+/// by (`|q - p| / |v|`); `None` for no direction or no finite answer.
+fn gu_line_param(p: V, v: V, q: V) -> Option<(f64, f64)> {
+    if !(finite(&p) && finite(&v) && finite(&q)) {
+        return None;
+    }
+    let u = dir3(v)?;
+    let dh = half_gap(q, p);
+    let t = over_len(2.0 * far_dot3(dh, u), v);
+    t.is_finite().then_some((t, over_len(2.0 * len3(dh), v)))
+}
+/// What scx may refuse for the line `(p, v)` and point `q`, past the true refusals.
+fn gu_line_may_refuse(p: V, v: V, q: V) -> bool {
+    !(finite(&p) && finite(&v) && finite(&q))
+        || len3(v) < NO_LENGTH
+        || near_no_length(len3(v))
+        || !finite(&sub3(q, p))
+        || products_overflow(&[p, q], &[v])
+        || gu_line_param(p, v, q).is_none()
+}
+
+/// `line_closest_point` where `v` has no direction, overflows when squared, or the
+/// parameter is past `f64`'s range.
+///
+/// For `|v|² < SM_EFF_ZERO_SQ` the pin answers 0 (upstream's "line beginning"), and NaN
+/// for input not finite; for `|v|²` past `f64`'s range it divides by infinity and answers
+/// 0 or NaN where the true parameter is a small number (`[2, 1e300, 0]` gives `-1.9e-300`).
+/// scx refuses the first and measures the second scaled. The check: the truth
+/// `2 ((q - p)/2 · v̂) / |v|`, or a refusal where [`gu_line_may_refuse`].
+pub fn gu_line_closest_point() -> PinDefect<(V, V, V), Option<f64>> {
+    PinDefect {
+        reason: "the pin answers 0 or NaN for a direction with no length or an overflowing one",
+        applies: Applies::Disagreeing,
+        check: |&(p, v, q), r| {
+            judge(
+                r,
+                gu_line_may_refuse(p, v, q),
+                gu_line_param(p, v, q),
+                |x, &(t, s)| gu_close("the parameter", *x, t, s),
+            )
+        },
+    }
+}
+
+/// `line_point_distance` on the inputs of [`gu_line_closest_point`], and distances whose
+/// squares overflow (the pin answers infinity for points `1e300` apart). The check: the
+/// truth parameter and the distance `2 |(q - p)/2 - ((q - p)/2 · v̂) v̂|`, the distance to
+/// the rounding of the points' coordinates.
+pub fn gu_line_point_distance() -> PinDefect<(V, V, V), Option<(f64, f64)>> {
+    PinDefect {
+        reason: "the pin answers 0, NaN or infinity for a direction with no length or an \
+                 overflowing one",
+        applies: Applies::Disagreeing,
+        check: |&(p, v, q), r| {
+            let truth = gu_line_param(p, v, q).and_then(|(t, s)| {
+                let u = dir3(v)?;
+                let dh = half_gap(q, p);
+                let dist = 2.0 * len3(sub3(dh, scale3(u, far_dot3(dh, u))));
+                dist.is_finite().then_some((t, s, dist))
+            });
+            judge(
+                r,
+                gu_line_may_refuse(p, v, q),
+                truth,
+                |&(xd, xt), &(t, s, d)| {
+                    gu_close("the parameter", xt, t, s)?;
+                    // the foot is `p + v t` for an `f64` `t`, rounded at `2^-1074` when subnormal
+                    let foot = 8.0 * (biggest(&p) + biggest(&q)) + len3(v) * 5e-324 / GU_REL;
+                    gu_close("the distance", xd, d, foot)
+                },
+            )
+        },
+    }
+}
+
+/// `point_project_to_plane` with a normal of no length, an overflowing one, or a projection
+/// past `f64`'s range.
+///
+/// The pin divides by `|n|²`: NaN or the point unmoved for a normal of no length, the
+/// point unmoved or NaN for one whose square overflows (`[2e-308, 1e300, 0]`, along `y`,
+/// leaves `y` at `1e-5` where the plane is at `y = 1`). The check: the truth
+/// `q - 2 ((q - p)/2 · n̂) n̂`, or a refusal where the normal has no direction, an input
+/// is not finite, the products overflow, or the truth is not finite.
+pub fn gu_point_project_to_plane() -> PinDefect<(V, V, V), Option<XP3>> {
+    PinDefect {
+        reason: "the pin moves a point by NaN or 0 along a normal with no length or an \
+                 overflowing one",
+        applies: Applies::Disagreeing,
+        check: |&(q, p, n), r| {
+            let ok_in = finite(&q) && finite(&p) && finite(&n);
+            let truth = dir3(n).filter(|_| ok_in).and_then(|u| {
+                let k = 2.0 * far_dot3(half_gap(q, p), u);
+                let res = sub3(q, scale3(u, k));
+                finite(&res).then_some((res, k))
+            });
+            let may = !ok_in
+                || len3(n) < NO_LENGTH
+                || near_no_length(len3(n))
+                || products_overflow(&[p, q], &[n])
+                || truth.is_none();
+            judge(r, may, truth, |x, &(t, k)| {
+                let s = 8.0 * (biggest(&q) + biggest(&p)) + k.abs();
+                let x = [x.x, x.y, x.z];
+                (0..3).try_for_each(|i| gu_close("the projection", x[i], t[i], s))
+            })
+        },
+    }
+}
+
+/// The true closest-point parameters of two lines and the sizes their rounding is bounded
+/// by, from `t1 = ((q - p) × ŵ)·(v̂ × ŵ) / (|v̂ × ŵ|² |v|)` and its twin.
+fn gu_line_line_truth(p: V, v: V, q: V, w: V) -> Option<(f64, f64, f64, f64)> {
+    if !(finite(&p) && finite(&v) && finite(&q) && finite(&w)) {
+        return None;
+    }
+    let (u1, u2) = (dir3(v)?, dir3(w)?);
+    let (l1, l2) = (len3(v), len3(w));
+    let c = cross3(u1, u2);
+    let c2 = dot3(c, c);
+    if l1 * l2 * c2.sqrt() < NO_LENGTH {
+        return None; // parallel
+    }
+    // `(q - p) / 8`, so the triple products cannot overflow
+    let dh = sub3(scale3(q, 0.125), scale3(p, 0.125));
+    let t1 = 8.0 * over_len(dot3(cross3(dh, u2), c) / c2, v);
+    let t2 = 8.0 * over_len(dot3(cross3(dh, u1), c) / c2, w);
+    // a size past range is held at `f64::MAX`, a tighter bound
+    let size = |l| (8.0 * (over_len(len3(dh), l) / c2)).min(f64::MAX);
+    (t1.is_finite() && t2.is_finite()).then_some((t1, t2, size(v), size(w)))
+}
+
+/// `line_line_closest_point` where the pin's unit of an overflowing direction fails, or it
+/// answers a NaN or an infinity.
+///
+/// The pin unitises `(v1 × v2) × v1`, which fails once its square overflows, so lines
+/// along `[1e300, 1e-13, 1e-12]` get no answer; and for input not finite or past range it
+/// answers NaN or infinity. The check: the truth by Cramer's rule on unit directions, or a
+/// refusal where a direction has none, the lines are parallel (in the band of scx's
+/// `|v × w|² < SM_EFF_ZERO_SQ`), the products overflow, or the truth is not finite.
+pub fn gu_line_line_closest_point() -> PinDefect<V4, Two> {
+    PinDefect {
+        reason: "the pin fails on overflowing directions and answers NaN or infinity past range",
+        applies: Applies::Disagreeing,
+        check: |&(p, v, q, w), r| {
+            let truth = gu_line_line_truth(p, v, q, w);
+            let par = len3(v) * len3(w) * len3(cross3(direction(v), direction(w)));
+            let may = !(finite(&p) && finite(&v) && finite(&q) && finite(&w))
+                || len3(v) < NO_LENGTH * (1.0 + 1e-9)
+                || len3(w) < NO_LENGTH * (1.0 + 1e-9)
+                || par < NO_LENGTH * (1.0 + 1e-6)
+                || products_overflow(&[p, q], &[v, w])
+                || truth.is_none();
+            judge(r, may, truth, |&(x1, x2), &(t1, t2, s1, s2)| {
+                gu_close("t1", x1, t1, s1)?;
+                gu_close("t2", x2, t2, s2)
+            })
+        },
+    }
+}
+
+/// `line_plane_intersect` where the pin answers NaN or an infinity: input not finite, or
+/// sums past `f64`'s range. The check: the truth `2 ((q - p)/2 · n̂) / (|v| v̂ · n̂)`, or a
+/// refusal where a direction has none, the line is parallel (in the band of scx's
+/// `|v · n| < SM_EFF_ZERO max |v_i| + SM_EFF_ZERO_SQ`), the products overflow, or the
+/// truth is not finite.
+pub fn gu_line_plane_intersect() -> PinDefect<(V, V, V, V), Option<f64>> {
+    PinDefect {
+        reason: "the pin answers NaN or infinity for input not finite or past range",
+        applies: Applies::Disagreeing,
+        check: |&(p, v, q, n), r| {
+            let ok_in = finite(&p) && finite(&v) && finite(&q) && finite(&n);
+            let truth = (|| {
+                let (uv, un) = (dir3(v)?, dir3(n)?);
+                let (lv, ln) = (len3(v), len3(n));
+                let cos = dot3(uv, un);
+                let m = lv * ln * cos.abs();
+                if !ok_in || m < GU_REL * biggest(&v) + 1e-24 {
+                    return None;
+                }
+                let dh = half_gap(q, p);
+                let t = over_len(2.0 * far_dot3(dh, un) / cos, v);
+                let s = (t.abs() + over_len(2.0 * len3(dh), v)) / cos.abs();
+                t.is_finite().then_some((t, s))
+            })();
+            let m = len3(v) * len3(n) * dot3(direction(v), direction(n)).abs();
+            let thr = GU_REL * biggest(&v) + 1e-24;
+            let may = !ok_in
+                || len3(v) < NO_LENGTH * (1.0 + 1e-9)
+                || len3(n) < NO_LENGTH * (1.0 + 1e-9)
+                || m < thr + 8.0 * GU_U * len3(v) * len3(n)
+                || products_overflow(&[p, q], &[v, n])
+                || truth.is_none();
+            judge(r, may, truth, |x, &(t, s)| {
+                gu_close("the parameter", *x, t, s)
+            })
+        },
+    }
+}
+
+/// `line_plane_intersect_uv` on the inputs of [`gu_line_plane_intersect`]. The check: the
+/// truth by Cramer's rule on unit vectors, `t = -(n̂·(p - q)) / (|v| v̂·n̂)`,
+/// `u = ((p - q) × ŝv)·v̂ / (|su| v̂·n̂)`, `v = (ŝu × (p - q))·v̂ / (|sv| v̂·n̂)` with
+/// `n̂ = ŝu × ŝv`, or a refusal as there (and for tangents with a parallel cross product).
+pub fn gu_line_plane_intersect_uv() -> PinDefect<V5, Three> {
+    PinDefect {
+        reason: "the pin answers NaN or infinity for input not finite or past range",
+        applies: Applies::Disagreeing,
+        check: |&(p, v, q, a, b), r| {
+            let ok_in = [p, v, q, a, b].iter().all(|x| finite(x));
+            let (lv, l1, l2) = (len3(v), len3(a), len3(b));
+            let nn = cross3(direction(a), direction(b));
+            let ln = l1 * l2 * len3(nn);
+            let g = dot3(direction(v), nn);
+            let m = lv * l1 * l2 * g.abs();
+            let thr = GU_REL * biggest(&v) + 1e-24;
+            let truth = (|| {
+                let (uv, u1, u2) = (dir3(v)?, dir3(a)?, dir3(b)?);
+                if !ok_in || ln < NO_LENGTH || m < thr {
+                    return None;
+                }
+                let dh = half_gap(p, q);
+                let t = over_len(-2.0 * dot3(nn, dh) / g, v);
+                let u = over_len(2.0 * dot3(cross3(dh, u2), uv) / g, a);
+                let w = over_len(2.0 * dot3(cross3(u1, dh), uv) / g, b);
+                let d = 2.0 * len3(dh);
+                let sizes = [
+                    (t.abs() + over_len(d, v)) / g.abs(),
+                    (u.abs() + over_len(d, a)) / g.abs(),
+                    (w.abs() + over_len(d, b)) / g.abs(),
+                ];
+                (t.is_finite() && u.is_finite() && w.is_finite()).then_some(([t, u, w], sizes))
+            })();
+            let may = !ok_in
+                || [lv, l1, l2].iter().any(|&l| l < NO_LENGTH * (1.0 + 1e-9))
+                || ln < NO_LENGTH * (1.0 + 1e-6)
+                || m < thr + 8.0 * GU_U * lv * l1 * l2
+                || products_overflow(&[p, q], &[v, a, b])
+                || truth.is_none();
+            judge(r, may, truth, |&(xt, xu, xv), (t, s)| {
+                gu_close("t", xt, t[0], s[0])?;
+                gu_close("u", xu, t[1], s[1])?;
+                gu_close("v", xv, t[2], s[2])
+            })
+        },
+    }
+}
+
+/// The common point of three planes, scaled by an eighth so the sums cannot overflow, with
+/// the planes' unit normals and `|n1 · (n2 × n3)|`; `None` for input not finite or a point
+/// past `f64`'s range.
+fn gu_three_planes_truth(planes: [(V, V); 3]) -> Option<(V, f64)> {
+    let [(p1, n1), (p2, n2), (p3, n3)] = planes;
+    if !planes.iter().all(|(p, n)| finite(p) && finite(n)) {
+        return None;
+    }
+    let det = dot3(n1, cross3(n2, n3));
+    let r = [p1, p2, p3]
+        .iter()
+        .zip([n1, n2, n3])
+        .map(|(p, n)| far_dot3(scale3(*p, 0.125), n) / det)
+        .collect::<Vec<_>>();
+    let x8 = add3(
+        add3(scale3(cross3(n2, n3), r[0]), scale3(cross3(n3, n1), r[1])),
+        scale3(cross3(n1, n2), r[2]),
+    );
+    (finite(&x8) && biggest(&x8) < f64::MAX / 8.0 * (1.0 - 1e-12))
+        .then(|| (scale3(x8, 8.0), det.abs()))
+}
+/// Each plane passes through `x`: `|n̂·x - n̂·p| <= GU_REL (|x| + |p|) / |det|`.
+fn gu_on_planes(x: V, planes: &[(V, V)], det: f64) -> Result<(), String> {
+    for &(p, n) in planes {
+        let res = far_dot3(x, n) - far_dot3(p, n);
+        let tol = GU_REL * (len3(x) + len3(p)) / det.min(1.0);
+        if res.is_nan() || res.abs() > tol {
+            return Err(format!(
+                "{x:?} is {res:e} off the plane through {p:?} (to {tol:e})"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// `intersect_three_planes` where the pin answers a point not finite, or rounds an
+/// ill-conditioned one differently.
+///
+/// For a plane point not finite, or a point past `f64`'s range, the pin answers NaN or
+/// infinite coordinates; scx refuses. Where the normals are nearly dependent the pin's
+/// six-term determinant and scx's triple product round apart (`1e-12` relative for a
+/// determinant near `1e-5`). The check: scx's point lies on all three planes to the
+/// rounding of the input, magnified by `1 / |det|`; a refusal only for input not finite,
+/// a point past range, or a determinant in the band of `SM_EFF_ZERO`.
+pub fn gu_intersect_three_planes() -> PinDefect<V6, Option<Option<XP3>>> {
+    PinDefect {
+        reason: "the pin answers points not finite, and rounds ill-conditioned ones apart",
+        applies: Applies::Disagreeing,
+        check: |&(a, m, b, n, c, o), r| {
+            let (Some(m), Some(n), Some(o)) = (gu_unit(m), gu_unit(n), gu_unit(o)) else {
+                return match r {
+                    None => Ok(()),
+                    Some(x) => Err(format!("a normal has no direction, not {x:?}")),
+                };
+            };
+            let planes = [(a, m), (b, n), (c, o)];
+            let det = dot3(m, cross3(n, o)).abs();
+            let truth = gu_three_planes_truth(planes).filter(|_| det >= 1e-12);
+            let may = truth.is_none() || (det - 1e-12).abs() <= 8.0 * GU_U;
+            let x = r.as_ref().ok_or("the normals have directions")?;
+            judge(x, may, truth, |x, &(_, det)| {
+                gu_on_planes(x.to_array(), &planes, det)
+            })
+        },
+    }
+}
+
+type TwoPlanes = Option<Option<(&'static str, Vec<f64>)>>;
+
+/// `intersect_two_planes` where the pin calls antiparallel planes apart coincident, or
+/// answers a line point not finite.
+///
+/// For antiparallel normals the pin's two signed distances `(p2 - p1)·n1` and
+/// `(p1 - p2)·n2` are equal, so planes any distance apart pass its `< scaled zero` test
+/// on the side they face away. For a point not finite or past range it answers NaN or
+/// infinity. The check: parallel normals (`|n1 × n2|² < SM_EFF_ZERO_SQ`, with a band) are
+/// "Coincident" exactly when both absolute distances are below
+/// `SM_EFF_ZERO (1 + max |coordinate|)` (with a band), else "Parallel"; a line's point lies
+/// on both planes and the plane through their midpoint normal to both, and its direction
+/// is `n̂1 × n̂2` normalised; a refusal only as [`gu_intersect_three_planes`].
+pub fn gu_intersect_two_planes() -> PinDefect<(V, V, V, V), TwoPlanes> {
+    PinDefect {
+        reason: "the pin calls antiparallel planes on opposite sides coincident",
+        applies: Applies::Disagreeing,
+        check: |&(a, m, b, n), r| {
+            let (Some(m), Some(n)) = (gu_unit(m), gu_unit(n)) else {
+                return match r {
+                    None => Ok(()),
+                    Some(x) => Err(format!("a normal has no direction, not {x:?}")),
+                };
+            };
+            let x = r.as_ref().ok_or("the normals have directions")?;
+            let c = cross3(m, n);
+            let c_len = len3(c);
+            let parallel_band = (c_len - NO_LENGTH).abs() <= 1e-6 * NO_LENGTH;
+            let ok_in = finite(&a) && finite(&b);
+            if c_len < NO_LENGTH || parallel_band {
+                let sz = 1e-12 * (1.0 + biggest(&a).max(biggest(&b)));
+                let dh = half_gap(b, a);
+                let d1 = 2.0 * far_dot3(dh, m).abs();
+                let d2 = 2.0 * far_dot3(dh, n).abs();
+                let near = |d: f64| (d - sz).abs() <= 1e-9 * sz;
+                let want = if d1 < sz && d2 < sz {
+                    "Coincident"
+                } else {
+                    "Parallel"
+                };
+                match x {
+                    Some((label, _)) if *label == want => return Ok(()),
+                    Some((label, _)) if (near(d1) || near(d2)) && *label != "Line" => return Ok(()),
+                    None if !ok_in => return Ok(()),
+                    Some(("Line", _)) if parallel_band => {}
+                    _ => return Err(format!("parallel planes are {want}, not {x:?}")),
+                }
+            }
+            let Some(u) = dir3(c) else {
+                return Err(format!("the planes cross, not {x:?}"));
+            };
+            let mid = add3(half(a), half(b));
+            let planes = [(a, m), (b, n), (mid, u)];
+            let truth = gu_three_planes_truth(planes);
+            let may = !ok_in || truth.is_none() || products_overflow(&[a, b], &[]);
+            judge(x, may, truth, |(label, v), &(_, det)| {
+                if *label != "Line" || v.len() != 6 {
+                    return Err(format!("the planes cross along a line, not {label}"));
+                }
+                gu_on_planes([v[0], v[1], v[2]], &planes, det)?;
+                near3("the direction", [v[3], v[4], v[5]], u, 1e-12)
+            })
+        },
+    }
+}
+
+/// `segment_point_distance` and `segment_point_angle_to_perp` (in degrees) where the pin
+/// answers NaN, an infinity or a silent 0.
+///
+/// Past range the pin's `|v|²`, `|q - foot|²` and the angle's squares overflow: it answers
+/// NaN parameters, infinite distances and a 0 parameter for segments `1e300` long (so the
+/// distance is to the wrong end). Where the angle is a few `1e-14` degrees from square the
+/// pin's `angle · 180/π - 90` rounds at `90`'s ulp; scx takes `|angle - π/2|` in radians,
+/// exactly, before converting. The check: the true parameter (clamped), the distance to
+/// the true foot, and the angle `asin(|ĝ · v̂|)` of the gap `g` from the nearest end, each
+/// to the rounding of its inputs; NaN parameters only where there is no answer.
+pub fn gu_segment_point() -> PinDefect<(V, V, V), SegR> {
+    PinDefect {
+        reason: "the pin answers NaN, infinity or 0 past range, and rounds near-square angles",
+        applies: Applies::Disagreeing,
+        check: |&(a, b, q), &((xd, xt), (xang, xt2))| {
+            let ok_in = finite(&a) && finite(&b) && finite(&q);
+            let vh = half_gap(b, a);
+            let v = scale3(vh, 2.0);
+            let lv = 2.0 * len3(vh);
+            if !ok_in {
+                return if xt.is_nan() && xt2.is_nan() {
+                    Ok(())
+                } else {
+                    Err(format!("no segment, so no parameter, not {xt:e}"))
+                };
+            }
+            let tl = if lv < NO_LENGTH {
+                if near_no_length(lv) {
+                    return Ok(());
+                }
+                Some((0.0, 0.0))
+            } else {
+                gu_line_param(a, v, q).filter(|_| finite(&v))
+            };
+            let Some((tl, s)) = tl else {
+                // the parameter is past range, or the segment's length overflows
+                return if xt.is_nan() || !finite(&v) {
+                    Ok(())
+                } else {
+                    Err(format!("no finite parameter, not {xt:e}"))
+                };
+            };
+            if xt.is_nan() && products_overflow(&[a, b, q], &[v]) {
+                return Ok(());
+            }
+            let t = tl.clamp(0.0, 1.0);
+            gu_close("the parameter", xt, t, s)?;
+            gu_close("the angle's parameter", xt2, t, s)?;
+            // the foot and the gap, at half size
+            let foot_h = add3(half(a), scale3(vh, t));
+            let gh = sub3(half(q), foot_h);
+            let dist = 2.0 * len3(gh);
+            let coords = biggest(&a) / 2.0 + biggest(&b) / 2.0 + biggest(&q) / 2.0;
+            if dist.is_finite() {
+                gu_close("the distance", xd, dist, 16.0 * coords)?;
+            } else if xd.is_finite() {
+                return Err(format!("the distance is past range, not {xd:e}"));
+            }
+            let ang = if (0.0..=1.0).contains(&tl) || dist < NO_LENGTH {
+                0.0
+            } else {
+                // atan2, not asin, so the truth is good next to square too
+                let (ug, uv) = (direction(gh), direction(v));
+                let (cos, sin) = (dot3(ug, uv).abs(), len3(cross3(ug, uv)));
+                scx_num::math::rad_to_deg(scx_num::fmath::atan2(cos, sin))
+            };
+            // the gap is rounded at the coordinates' ulps (the half gap and coordinates
+            // are both at half size)
+            let slack_rad = 4.0 * GU_U * (1.0 + 2.0 * coords / len3(gh).max(f64::MIN_POSITIVE));
+            let tol = GU_REL * ang + scx_num::math::rad_to_deg(slack_rad);
+            let near_end = tl.abs() <= GU_REL * s || (tl - 1.0).abs() <= GU_REL * s;
+            if (xang - ang).abs() <= tol || (near_end && xang.abs() <= tol) {
+                Ok(())
+            } else {
+                Err(format!(
+                    "the angle {xang:e} is not the true {ang:e} (to {tol:e})"
+                ))
+            }
+        },
+    }
+}
+
+/// `polygon_area` of no points. Upstream reads `sPoints[-1]` and the pin fails; no points
+/// enclose no area. The check: 0 (when the normal has a direction).
+pub fn gu_polygon_area() -> PinDefect<(List<V>, V), Option<f64>> {
+    PinDefect {
+        reason: "the pin fails on a polygon of no points",
+        applies: Applies::Inputs(|(pts, _)| pts.0.is_empty()),
+        check: |(_, n), r| {
+            let want = gu_unit(*n).map(|_| 0.0);
+            if r.map(f64::to_bits) == want.map(f64::to_bits) {
+                Ok(())
+            } else {
+                Err(format!("no points enclose no area: {want:?}, not {r:?}"))
+            }
+        },
+    }
+}
+
+/// `triangle_decomposition` of sides past `1e154`, whose squares overflow: the pin answers
+/// NaN; scx takes the sides over the longest. The check: the foot `q` of the apex from the
+/// right end and the height from the scaled sides, `q = (b² + r² - l²) / 2b`,
+/// `h = √(r² - q²)`, each to the rounding of the squares (`s² / b` and `s² / h` for the
+/// longest side `s`); a refusal only for sides not finite, or in the band of the
+/// triangle's own tests.
+pub fn gu_triangle_decomposition() -> PinDefect<(f64, f64, f64), Option<(f64, f64)>> {
+    PinDefect {
+        reason: "the pin answers NaN for sides whose squares overflow",
+        applies: Applies::Disagreeing,
+        check: |&(b, l, r), x| {
+            let ok_in = b.is_finite() && l.is_finite() && r.is_finite();
+            let s = b.abs().max(l.abs()).max(r.abs());
+            let (bs, ls, rs) = (b / s, l / s, r / s);
+            let qs = (bs * bs + rs * rs - ls * ls) / (2.0 * bs);
+            let least = b + 1e-12 * (1.0 + b);
+            let legs = l + r;
+            let triangle = ok_in && b.abs() >= 1e-12 && legs >= least && qs.abs() <= rs;
+            let band = (b.abs() - 1e-12).abs() <= 1e-9
+                || (legs - least).abs() <= 1e-9 * least.abs()
+                || (qs.abs() - rs).abs() <= 1e-9;
+            let truth = triangle.then(|| {
+                let h = (rs * rs - qs * qs).max(0.0).sqrt();
+                ((bs - qs) * s, h * s)
+            });
+            judge(x, !ok_in || band, truth, |&(xa, xh), &(a, h)| {
+                gu_close("the foot", xa, a, s * (s / b.abs()))?;
+                gu_close(
+                    "the height",
+                    xh,
+                    h,
+                    s * (s / h.max(f64::MIN_POSITIVE)).min(1e12),
+                )
+            })
+        },
+    }
+}
+
+/// `parallelogram_cross_vectors` with sides past `1e154`, parallel sides, or distances not
+/// finite or past range.
+///
+/// The pin's unitise fails on sides whose square overflows (no answer for
+/// `[1e300, 1e300, -1]`); it divides by a zero sine for parallel sides and answers
+/// infinities and NaN, and does likewise for distances not finite. The check: the true
+/// diagonals `â (2h / s) + b̂ (h / s)` and `b̂ (h / s) - â (2h / s)` with `s = |â × b̂|`, to
+/// the rounding of the sine (relative `ε / s`); a refusal only for sides of no direction,
+/// sides parallel to rounding (`s` below `1e-15`), or diagonals past range.
+pub fn gu_parallelogram_cross_vectors() -> PinDefect<(V, V, f64), Option<(XV3, XV3)>> {
+    PinDefect {
+        reason: "the pin fails on overflowing sides and divides by a zero sine",
+        applies: Applies::Disagreeing,
+        check: |&(a, b, h), r| {
+            let truth = (|| {
+                let (ua, ub) = (dir3(a)?, dir3(b)?);
+                let s = len3(cross3(ua, ub));
+                if s == 0.0 || !h.is_finite() {
+                    return None;
+                }
+                let (lb, ls) = (2.0 * h / s, h / s);
+                let d1 = add3(scale3(ua, lb), scale3(ub, ls));
+                let d2 = sub3(scale3(ub, ls), scale3(ua, lb));
+                (finite(&d1) && finite(&d2)).then_some((d1, d2, s, lb.abs()))
+            })();
+            let may = truth.is_none_or(|(_, _, s, _)| s < 1e-15)
+                || [a, b].iter().any(|v| near_no_length(len3(*v)));
+            judge(r, may, truth, |(x1, x2), (d1, d2, s, lb)| {
+                // unit sides are rounded at `ε`, so the sine is good to `ε` absolute
+                let tol = lb * (GU_REL + 8.0 * GU_U / s);
+                near3("the first diagonal", x1.to_array(), *d1, tol)?;
+                near3("the second diagonal", x2.to_array(), *d2, tol)
+            })
+        },
+    }
+}
+
+/// `best_fit_plane` where the pin's gap misses the points below the plane.
+///
+/// `smgu_BestFitPlaneToPoints` keeps the largest signed distance `n · (p - c)`, so a set
+/// bent to one side of its plane passes for planar however far it bends below; scx keeps
+/// the largest absolute one. The check: scx's gap is the largest `|n · (p - c)|` over the
+/// points for scx's own point and normal, the set is "Planar" exactly when that gap is
+/// within the tolerance, and everything else (point, normal, centroid gap) is the pin's
+/// to the bit, since the defect is in the gap alone.
+pub fn gu_best_fit_plane() -> PinDefect<(Pts, f64), Option<FitOut>> {
+    PinDefect {
+        reason: "the pin's plane gap is the largest signed distance, not the largest distance",
+        applies: Applies::Disagreeing,
+        check: |(pts, tol), r| {
+            let (kind, c, n, gap, cgap) = r.ok_or("the pin fits these points")?;
+            let n = n.ok_or("a plane fit has a normal")?;
+            let c = c.to_array();
+            let want = pts
+                .0
+                .iter()
+                .map(|&p| far_dot3(sub3(p, c), n).abs())
+                .fold(0.0_f64, f64::max);
+            if !ulp_close(gap, want) && (gap - want).abs() > 4.0 * GU_U * biggest(&c) {
+                return Err(format!(
+                    "the gap {gap:e} is not the largest distance {want:e}"
+                ));
+            }
+            let kind_want = if gap <= *tol { "Planar" } else { "Scattered" };
+            if kind != kind_want {
+                return Err(format!(
+                    "a gap of {gap:e} at {tol:e} is {kind_want}, not {kind}"
+                ));
+            }
+            let sp: Vec<solidcore::geom::vector3d::Vec3> = pts
+                .0
+                .iter()
+                .map(|q| solidcore::geom::vector3d::Vec3::new(q[0], q[1], q[2]))
+                .collect();
+            let s = solidcore::geom::geom_utility::p2::best_fit_plane_to_points(&sp, *tol)
+                .map_err(|e| format!("the pin fits these points: {e:?}"))?;
+            let same = |x: f64, y: f64| x.to_bits() == y.to_bits();
+            let sn = s.normal;
+            if same(c[0], s.point.x)
+                && same(c[1], s.point.y)
+                && same(c[2], s.point.z)
+                && same(n[0], sn.x)
+                && same(n[1], sn.y)
+                && same(n[2], sn.z)
+                && same(cgap, s.max_centroid_gap)
+            {
+                Ok(())
+            } else {
+                Err("the point, normal or centroid gap moved too".into())
+            }
+        },
+    }
+}
+
+/// `sort` of values with a NaN. The pin's shell sort compares with `<`, which a NaN fails
+/// both ways, so the NaN stops nowhere and splits the run around it unsorted
+/// (`[2, 1.1e-11, NaN]` stays put; `[-1e-12, 5e-6, NaN, 1.2e6, …]` keeps `7.3e-12` after
+/// `NaN`). scx sorts by `f64::total_cmp`, NaNs at the ends by sign. The check: the output
+/// is the input reordered (as bits) and runs in the total order.
+pub fn gu_sort() -> PinDefect<(List<f64>,), Vec<f64>> {
+    PinDefect {
+        reason: "the pin's shell sort leaves a NaN anywhere and the run around it unsorted",
+        applies: Applies::Inputs(|(v,)| v.0.iter().any(|x| x.is_nan())),
+        check: |(v,), r| {
+            let mut a: Vec<u64> = v.0.iter().map(|x| x.to_bits()).collect();
+            let mut b: Vec<u64> = r.iter().map(|x| x.to_bits()).collect();
+            a.sort_unstable();
+            b.sort_unstable();
+            if a != b {
+                return Err(format!("{r:?} is not {:?} reordered", v.0));
+            }
+            if r.windows(2).all(|w| w[0].total_cmp(&w[1]).is_le()) {
+                Ok(())
+            } else {
+                Err(format!("{r:?} is not in the total order"))
+            }
+        },
+    }
+}
+
+// ---- point sets ----------------------------------------------------------------------
+
+use crate::t_pset::{SetOut, XBox};
+
+/// Whether the pin's `unitize_or_z` loses `v`: its squared length is past `f64::MAX`
+/// (the pin divides by an infinite length and gets the zero vector) or under
+/// `SM_EFF_ZERO_SQ` (it answers `Z`).
+/// Only vectors scx makes unit: it refuses the others as well.
+fn ps_unitize_lost(v: &V) -> bool {
+    let l = v.iter().map(|c| c * c).sum::<f64>();
+    crate::t_gutil::unit(*v).is_some() && (!l.is_finite() || l < 1e-24)
+}
+
+/// The set's fit is [`gu_best_fit_plane`]'s, whose pin defect (a signed gap) makes a set
+/// bent to one side of its plane `Planar` in the pin and `Scattered` in scx; the type
+/// picks the tight box's hull-edge alignment, so the boxes, and through a `Linear`/
+/// `Planar` frame the loop's answers, follow. The check: scx's fit passes
+/// [`gu_best_fit_plane`]'s truth check, and the pin's fit has the other type.
+fn ps_fit_moved(pts: &Pts, tol: f64) -> Result<&'static str, String> {
+    use crate::t_gutil::{stype, xdir, xtype};
+    let xp: Vec<scx_num::vector3d::Point3> = pts
+        .0
+        .iter()
+        .map(|q| scx_num::vector3d::Point3::new(q[0], q[1], q[2]))
+        .collect();
+    let tol = tol.abs();
+    let f = scx_algo::geom::fit::best_fit_plane(&xp, tol).map_err(|e| format!("{e:?}"))?;
+    let out: FitOut = (
+        xtype(f.set_type),
+        f.point,
+        xdir(f.direction),
+        f.max_plane_gap,
+        f.max_centroid_gap,
+    );
+    (gu_best_fit_plane().check)(&(pts.clone(), tol), &Some(out))?;
+    let sp: Vec<solidcore::geom::vector3d::Vec3> = pts
+        .0
+        .iter()
+        .map(|q| solidcore::geom::vector3d::Vec3::new(q[0], q[1], q[2]))
+        .collect();
+    let s = solidcore::geom::geom_utility::p2::best_fit_plane_to_points(&sp, tol)
+        .map_err(|e| format!("the pin fits these points: {e:?}"))?;
+    if stype(s.set_type) == out.0 {
+        return Err(format!(
+            "both fits are {}: the disagreement is not the fit's",
+            out.0
+        ));
+    }
+    Ok(out.0)
+}
+
+pub fn ps_set() -> PinDefect<(Pts, f64), Option<SetOut>> {
+    PinDefect {
+        reason: "the pin's set takes its type from the signed-gap plane fit",
+        applies: Applies::Disagreeing,
+        check: |(pts, tol), r| {
+            let kind = ps_fit_moved(pts, *tol)?;
+            let got = r.as_ref().ok_or("scx builds this set")?.0;
+            if got == kind {
+                Ok(())
+            } else {
+                Err(format!("the set is {got}, its fit {kind}"))
+            }
+        },
+    }
+}
+
+pub fn ps_tight_about() -> PinDefect<(Pts, f64, V), Option<Option<XBox>>> {
+    PinDefect {
+        reason: "the pin's set takes its type, which picks the alignment, from the signed-gap plane fit; and its unitize_or_z loses a z whose squared length is past f64::MAX or under SM_EFF_ZERO_SQ",
+        applies: Applies::Disagreeing,
+        check: |(pts, tol, z), r| {
+            if ps_unitize_lost(z) {
+                let b = r.as_ref().ok_or("scx takes this z")?;
+                // no points: no box either side
+                return match b {
+                    Some(_) => ps_box_along(b, *z),
+                    None => Err("the pin and scx both have no box".into()),
+                };
+            }
+            ps_fit_moved(pts, *tol).map(|_| ())
+        },
+    }
+}
+
+/// The box's third vector is `z`'s direction (the check for a `z` the pin loses).
+fn ps_box_along(b: &Option<XBox>, z: V) -> Result<(), String> {
+    let (v, _) = b.as_ref().ok_or("scx boxes these points")?;
+    along(v[2].to_array(), z)
+}
+
+pub fn ps_with_normal() -> PinDefect<(Pts, f64, V), Option<SetOut>> {
+    PinDefect {
+        reason: "the pin's unitize_or_z loses a normal whose squared length is past f64::MAX or under SM_EFF_ZERO_SQ, and fits the points instead",
+        applies: Applies::Inputs(|(_, _, n)| ps_unitize_lost(n)),
+        check: |(_, _, n), r| {
+            let (kind, _, normal, _, tight) = r.as_ref().ok_or("scx builds this set")?;
+            if *kind != "Planar" {
+                return Err(format!("a set with a given normal is {kind}"));
+            }
+            along(normal.ok_or("a set has a normal")?, *n)?;
+            match tight {
+                Some(_) => ps_box_along(tight, *n),
+                None => Ok(()),
             }
         },
     }
