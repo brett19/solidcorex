@@ -58,7 +58,9 @@
 //! | `powf` | 40.1 | 12.5 | 3.22 | | `powi` | 57.3 | 26.8 | 2.14 |
 //!
 //! The default x86-64 target has no fused multiply-add instruction, so every
-//! [`crate::eft::two_prod`] is a call to the C library's `fma`. Built with
+//! [`crate::eft::two_prod`] is a call to a library `fma`: on `x86_64-unknown-linux-gnu`,
+//! `compiler_builtins`' own, which picks a hardware or software path at run time (each
+//! correctly rounded, so the bits agree). Built with
 //! `-C target-cpu=native` (which the workspace does not do) on a machine with one, fmath
 //! is 30 to 40% faster (`sin` 21.8 ns, `ln` 11.3 ns, `powi` 35.2 ns) with the same bits.
 //! Correct rounding is the reason for the cost; the speed that matters is the corpus's,
