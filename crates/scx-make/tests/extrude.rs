@@ -5,9 +5,8 @@
 //! against the closed-form truth of `scx_testkit::solid` (volume, area) and the membership
 //! oracle of `scx_testkit::csg` (points just off each face).
 //!
-//! Volume and area are read off the finished body's faces by the divergence theorem: a
-//! plane by Green's theorem over its loops (a chord term per edge, plus the circular term
-//! of an arc), a cylinder patch in closed form from its rim arc and height.
+//! Volume and area are read by `scx_mass::mass` (relative accuracy each test's tolerance) and compared to
+//! the closed forms; each tolerance is also checked against the Estimate's error bound.
 //!
 //! Removed on purpose, from the pin's tests:
 //! - `a_long_direction_extrudes_the_distance`'s zero-direction refusal: the direction is
@@ -31,9 +30,12 @@
 
 use core::f64::consts::{PI, TAU};
 
+use scx_brep::op::Scratch;
 use scx_brep::{Brep, Document, EdgeShape, UseGeom};
 use scx_curve::{Curve, Curve2};
 use scx_make::{ExtrudeFaces, Made, MakeError, Refusal, Span, Unsupported, extrude};
+use scx_mass::{MassSpec, RelAccuracy, mass};
+use scx_num::budget::{Budget, Stop};
 use scx_num::error::ErrorKind;
 use scx_num::fmath;
 use scx_num::frame::{Frame, Sense};
@@ -259,77 +261,19 @@ fn assert_closed_solid(b: &Brep) {
     }
 }
 
-/// Volume and area by the divergence theorem about `o`.
-fn volume_and_area(b: &Brep, o: Point3) -> (f64, f64) {
-    let (mut v, mut a) = (0.0, 0.0);
-    for face in b.faces() {
-        match face.surface() {
-            Surface::Plane(pl) => {
-                let n: Vec3 = *pl.frame().z();
-                let mut twice = 0.0;
-                for u in face.uses() {
-                    let e = u.edge();
-                    let (p, q) = (e.start().point() - o, e.end().point() - o);
-                    let term = match e.shape() {
-                        EdgeShape::Curve {
-                            curve: Curve::Line(_),
-                            ..
-                        } => p.cross(q).dot(n),
-                        EdgeShape::Curve {
-                            curve: Curve::Circle(c),
-                            interval,
-                        } => {
-                            assert_eq!(c.sense(), Sense::Forward);
-                            let (cc, nc) = (c.frame().origin() - o, *c.frame().z());
-                            let r = c.radius().mm();
-                            let t = interval.max() - interval.min();
-                            cc.cross(q - p).dot(n) + r * r * t * nc.dot(n)
-                        }
-                        s => panic!("{s:?}"),
-                    };
-                    twice += u.sense().sign() * term;
-                }
-                let area = 0.5 * twice;
-                assert!(
-                    area > 0.0,
-                    "a cap's loops wind counter-clockwise about its front"
-                );
-                a += area;
-                v += n.dot(pl.frame().origin() - o) * area / 3.0;
-            }
-            Surface::Cylinder(cy) => {
-                let mut arc = None;
-                let mut h = None;
-                for u in face.uses() {
-                    match u.edge().shape() {
-                        EdgeShape::Curve {
-                            curve: Curve::Circle(c),
-                            interval,
-                        } => arc = Some((*c, interval.max() - interval.min())),
-                        EdgeShape::Curve {
-                            curve: Curve::Line(_),
-                            ..
-                        } => {
-                            let e = u.edge();
-                            h = Some((e.end().point() - e.start().point()).length());
-                        }
-                        s => panic!("{s:?}"),
-                    }
-                }
-                let ((c, t), h) = (arc.unwrap(), h.unwrap());
-                let r = c.radius().mm();
-                assert_eq!(r, cy.radius().mm());
-                let s = cy.sense().sign();
-                let (x, y): (Vec3, Vec3) = (*c.frame().x(), *c.frame().y());
-                let area = r * t * h;
-                let mean = x * fmath::sin(t) + y * (1.0 - fmath::cos(t));
-                a += area;
-                v += s * (r * area + (c.frame().origin() - o).dot(mean) * r * h) / 3.0;
-            }
-            s => panic!("{s:?}"),
-        }
-    }
-    (v, a)
+/// The body's volume and area about `o` with their error estimates, by `scx_mass::mass` at
+/// relative accuracy `accuracy`, each test's own tolerance: `(volume, its error, area, its error)`.
+fn volume_and_area(b: &Brep, o: Point3, accuracy: f64) -> (f64, f64, f64, f64) {
+    let spec = MassSpec::new(RelAccuracy::new(accuracy).unwrap()).with_about(o);
+    let m = mass(
+        b,
+        &spec,
+        &mut Scratch::new(),
+        &mut Budget::unlimited(),
+        &Stop::new(),
+    )
+    .unwrap();
+    (m.volume, m.error.volume, m.area, m.error.area)
 }
 
 fn truth_frame(f: &Frame, lo: f64) -> TruthFrame {
@@ -360,11 +304,12 @@ fn volume_and_area_match_the_closed_forms() {
                 let truth = solid::extrusion(&loops, h)
                     .unwrap()
                     .place(&truth_frame(&frame, lo));
-                let (v, a) = volume_and_area(&m.body, frame.origin());
+                let (v, ve, a, ae) = volume_and_area(&m.body, frame.origin(), tol);
                 let (dv, da) = (rel(v, truth.volume()), rel(a, truth.area));
+                // The tolerance, and the Estimate's error bound within it.
                 assert!(
-                    dv <= tol && da <= tol,
-                    "{name} {span:?}: {v} vs {}, {a} vs {}",
+                    dv <= tol && da <= tol && ve <= tol * truth.volume() && ae <= tol * truth.area,
+                    "{name} {span:?}: {v} (err {ve:e}) vs {}, {a} (err {ae:e}) vs {}",
                     truth.volume(),
                     truth.area
                 );
@@ -567,8 +512,12 @@ fn a_round_bar_has_one_wall_and_a_seam() {
     let m = make(&[vec![circle([0.0, 0.0], 2.0, true)]], &plain(), [0.0, 5.0]);
     assert_eq!(counts(&m.body), (3, 3, 2));
     assert_eq!(m.faces.walls, vec![vec![m.faces.walls[0][0]]]);
-    let (v, a) = volume_and_area(&m.body, Point3::ORIGIN);
-    assert!(rel(v, 20.0 * PI) < 1e-14 && rel(a, 2.0 * 4.0 * PI + 4.0 * PI * 5.0) < 1e-14);
+    let (v, ve, a, ae) = volume_and_area(&m.body, Point3::ORIGIN, 1e-14);
+    let (tv, ta) = (20.0 * PI, 2.0 * 4.0 * PI + 4.0 * PI * 5.0);
+    assert!(
+        rel(v, tv) < 1e-14 && rel(a, ta) < 1e-14 && ve < 1e-14 * tv && ae < 1e-14 * ta,
+        "{v} (err {ve:e}) {a} (err {ae:e})"
+    );
 }
 
 /// A plate with circle holes: one wall per hole.
@@ -591,10 +540,13 @@ fn circle_holes_give_one_wall_each() {
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    let (v, a) = volume_and_area(&m.body, Point3::ORIGIN);
+    let (v, ve, a, ae) = volume_and_area(&m.body, Point3::ORIGIN, 1e-12);
     assert!(
-        rel(v, truth.volume()) < 1e-12 && rel(a, truth.area) < 1e-12,
-        "{v} {a}"
+        rel(v, truth.volume()) < 1e-12
+            && rel(a, truth.area) < 1e-12
+            && ve < 1e-12 * truth.volume()
+            && ae < 1e-12 * truth.area,
+        "{v} (err {ve:e}) {a} (err {ae:e})"
     );
 }
 
@@ -688,8 +640,11 @@ fn a_short_segment_keeps_its_wall() {
             .filter(|e| (e.end().point() - e.start().point()).length() < 2.0 * len)
             .count();
         assert_eq!(short, 2, "{len}");
-        let (v, _) = volume_and_area(&m.body, Point3::ORIGIN);
-        assert!(rel(v, 120.0) < 1e-13, "{v}");
+        let (v, ve, ..) = volume_and_area(&m.body, Point3::ORIGIN, 1e-13);
+        assert!(
+            rel(v, 120.0) < 1e-13 && ve < 1e-13 * 120.0,
+            "{v} (err {ve:e})"
+        );
     }
 }
 
@@ -701,9 +656,12 @@ fn a_rounded_rectangle_keeps_every_corner_wall() {
     for h in [2.0, 2.01, 2.5] {
         let m = make(&[rounded(a, b, r)], &plain(), [0.0, h]);
         assert_eq!(counts(&m.body), (10, 24, 16));
-        let (v, _) = volume_and_area(&m.body, Point3::ORIGIN);
+        let (v, ve, ..) = volume_and_area(&m.body, Point3::ORIGIN, 1e-12);
         let want = h * (4.0 * a * b - (4.0 - PI) * r * r);
-        assert!(rel(v, want) < 1e-12, "{v} vs {want}");
+        assert!(
+            rel(v, want) < 1e-12 && ve < 1e-12 * want,
+            "{v} (err {ve:e}) vs {want}"
+        );
     }
 }
 
@@ -722,9 +680,13 @@ fn every_profile_fixture_comes_through() {
                 match extrude(&r, &plain(), Span::new(mm(0.0), mm(1.5)), &d) {
                     Ok(m) => {
                         assert_closed_solid(&m.body);
-                        let (v, _) = volume_and_area(&m.body, Point3::ORIGIN);
-                        if rel(v, area * 1.5) > 1e-10 {
-                            bad.push(format!("{}: volume {v}, want {}", f.name, area * 1.5));
+                        let (v, ve, ..) = volume_and_area(&m.body, Point3::ORIGIN, 1e-10);
+                        if rel(v, area * 1.5) > 1e-10 || ve > 1e-10 * area * 1.5 {
+                            bad.push(format!(
+                                "{}: volume {v} (err {ve:e}), want {}",
+                                f.name,
+                                area * 1.5
+                            ));
                         }
                     }
                     Err(e) => bad.push(format!("{}: {e}", f.name)),

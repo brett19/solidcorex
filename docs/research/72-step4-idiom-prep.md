@@ -2079,7 +2079,7 @@ pub struct TorusFaces { pub face: FaceId }
 
 **Proposed 04 row.** "`scx-make` (MK2): a periodic surface is one face whose loop runs round a seam edge used twice; poles and apexes are collapsed edges; a cone radius is exactly zero (an apex) or a size, both zero refused; a torus with radii within the zone of each other is `Unsupported { HornTorus }`, beyond that `Refused { SelfIntersecting }`; `sphere` takes a frame; `Dimension` stays one enum. Change if: BR2's pole rules cover an apex on the axis (the horn torus), or a caller needs partial primitives."
 
-MK2b (11-27): MK1's and MK2's volume, area and centroid checks now use `scx_mass::mass` (scx-mass a dev-dependency, below scx-make in `layers.txt`), still against the T9 closed forms at the same tolerances, each also required to hold the Estimate's error within it (the far boxes ask accuracy equal to their tolerance, since `1e-13` there ends in `StepControl`), and the local divergence-theorem `mass`/`volume_and_area` stand-ins and their Gauss-Legendre helpers are deleted, as they proved nothing beyond what scx-mass's own truth tests prove.
+MK2b (11-27): MK1's, MK2's and MK3's volume, area and centroid checks now use `scx_mass::mass` (scx-mass a dev-dependency, below scx-make in `layers.txt`), still against the T9 closed forms at the same tolerances, each also required to hold the Estimate's error within it (the far boxes and MK3's extrusions ask accuracy equal to their tolerance, since `1e-13` there ends in `StepControl`), and the local divergence-theorem `mass`/`volume_and_area` stand-ins and their Gauss-Legendre helpers are deleted, as they proved nothing beyond what scx-mass's own truth tests prove.
 
 ### 14.12 MK3 as built (11-27)
 
