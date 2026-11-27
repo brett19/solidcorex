@@ -359,6 +359,11 @@ fn references_at_known_values() {
     exact("powf", 2.0, -3.0, 0.125);
     exact("powf", 4.0, 0.5, 2.0);
     exact("powf", 10.0, 22.0, 1e22);
+    // Exact halfway points, ties to even: 1781^5 = 17919240458812901 and
+    // 194701.5625^2.5 = 441.25^5 = 17128666303103125/1024.
+    assert_eq!(fmath::powf(1781.0, 5.0), 17_919_240_458_812_900.0);
+    assert_eq!(fmath::powi(1781.0, 5), 17_919_240_458_812_900.0);
+    assert_eq!(fmath::powf(194_701.5625, 2.5), 16_727_213_186_624.145);
     // pi/4, pi, and pi/2 rounded.
     let (d, _) = reference(k, "atan", 1.0, 0.0);
     assert!(ulp_err(core::f64::consts::FRAC_PI_4, d, 0) <= 0.5);

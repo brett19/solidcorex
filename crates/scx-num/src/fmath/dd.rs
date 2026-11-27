@@ -234,7 +234,7 @@ fn cold(accurate: impl FnOnce() -> f64) -> f64 {
 /// [`round_or`] for `(hi + lo) 2^k`, any `k`, also when the result is subnormal or
 /// overflows (the test is on the unscaled pair; [`round_ball_scaled`] then rounds the
 /// ends as scaled reals).
-#[inline]
+#[inline(always)]
 pub(super) fn round_scaled_or(
     hi: f64,
     lo: f64,

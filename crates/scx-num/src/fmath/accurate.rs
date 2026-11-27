@@ -13,7 +13,7 @@
 //! argument. Every step loses at most a few units of `2^(1 - 64p)`, which the error
 //! constant [`C`] (`2^C` such units) covers with room to spare.
 
-use super::big::{Big, ziv};
+use super::big::{Big, LADDER, ziv, ziv_on};
 use super::dd;
 use super::tables::{INV_LN2, LN2_BIG, LN10_BIG, PIO2_BIG, TWO_OVER_PI_BITS};
 
@@ -560,7 +560,9 @@ pub(super) fn pow(x: f64, y: f64) -> f64 {
     if let Some(r) = exact_pow(a, y) {
         return r;
     }
-    ziv(C + 12, |p| pow_big(a, y, p))
+    // From 192 bits: z's 2^12 more units (|z| < 2^10) leave 128 bits a ball of 2^-69,
+    // no better than the fast path's.
+    ziv_on(&[3, LADDER[1]], C + 12, |p| pow_big(a, y, p))
 }
 
 /// `|x|^n`, correctly rounded, for a finite nonzero `x`: the exact check, then squaring

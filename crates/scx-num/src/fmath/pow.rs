@@ -1,7 +1,8 @@
 // Written for solidcorex. Apache-2.0.
 //! `powi` and `powf`.
 
-use super::dd::{self, round_scaled};
+use super::accurate;
+use super::dd::{self, round_scaled_or};
 use super::exp::exp_core;
 use super::log::ln_dd;
 use crate::eft::{fast_two_sum, two_prod};
@@ -11,7 +12,8 @@ const BELOW: f64 = 3.8725919148493183e-121;
 const ABOVE: f64 = 2.5822498780869086e120;
 
 /// `x^n` by squaring, the running products kept as double-doubles with their exponents
-/// apart, so nothing overflows or underflows before the one final rounding.
+/// apart, so nothing overflows or underflows before the one final rounding, which is
+/// tested ([`powi_err`]) before the multi-precision fallback.
 pub(super) fn powi(x: f64, n: i32) -> f64 {
     if n == 0 {
         return 1.0;
@@ -64,8 +66,21 @@ pub(super) fn powi(x: f64, n: i32) -> f64 {
         acc = dd::recip(acc);
         acc_e = -acc_e;
     }
-    let r = round_scaled(acc.0, acc.1, acc_e.clamp(-4000, 4000) as i32);
+    let e = acc_e.clamp(-4000, 4000) as i32;
+    let r = round_scaled_or(acc.0, acc.1, powi_err(n), e, || accurate::powi(x, n));
     if neg { -r } else { r }
+}
+
+/// The relative error radius of [`powi`]'s double-double, twice its bound of
+/// `(|n| + 1) 2^-103`. Each [`dd::mul`] of normalised pairs is within `2^-103` (the
+/// dropped `lo lo` and five roundings of terms below `2^-52` of the product), and the
+/// renormalisations are exact. Squaring doubles a relative error, so the `j`-th square
+/// of the exact `x` is within `(2^j - 1) 2^-103`; the products of those for the set
+/// bits of `|n|`, one multiplication each, sum to at most `|n| 2^-103`, and the
+/// reciprocal adds one more (second-order terms, below `n^2 2^-206`, are far inside the
+/// rounding of the constant).
+fn powi_err(n: i32) -> f64 {
+    (f64::from(n.unsigned_abs()) + 1.0) * 1.972_152_263_052_529_5e-31 // 2^-102
 }
 
 /// Whether a finite `y` is an integer, and whether it is odd.
@@ -120,5 +135,39 @@ pub(super) fn powf(x: f64, y: f64) -> f64 {
     let (zh, ze) = two_prod(y, lh);
     let (zh, zl) = fast_two_sum(zh, ze + y * ll);
     let ((h, l), m) = exp_core(zh, zl);
-    sign(round_scaled(h, l, m))
+    // The error radius, twice the bound: exp_core's 2^-68 relative, and z's absolute
+    // error, which is e^z's relative one: ln_dd's (within 2^-73.5 absolute plus 2^-100
+    // relative) times |y|, and z's own roundings (2^-104 |z|). With |z| <= 746 the
+    // relative terms fold into the constant.
+    let err = POW_ERR + POW_ERR_LN * y.abs();
+    if err > POW_ERR_MAX {
+        return sign(pow_wide(x, y, lh, zh, (h, l), m));
+    }
+    sign(round_scaled_or(h, l, err, m, || accurate::pow(x, y)))
 }
+
+/// [`powf`] for `|y|` above about `2^16.5`, where the absolute bound on `ln_dd` is too
+/// weak. Near 1 (`|ln a| < 2^-9`, so `c = 1` and `|r| < 2^-8.99`) the error of `ln_dd`
+/// is within `2^-52.5 r^2 / (1 - |r|) < 2^-70.4 |ln a|`, so that of `z` within
+/// `2^-70.4 |z|`; elsewhere the multi-precision fallback.
+#[cold]
+#[inline(never)]
+fn pow_wide(x: f64, y: f64, lh: f64, zh: f64, (h, l): (f64, f64), m: i32) -> f64 {
+    let err = POW_ERR + POW_ERR_NEAR * zh.abs();
+    if lh.abs() < POW_NEAR_1 && err <= POW_ERR_MAX {
+        round_scaled_or(h, l, err, m, || accurate::pow(x, y))
+    } else {
+        accurate::pow(x, y)
+    }
+}
+
+/// `2^-66.9`: twice `2^-68` plus `2^-100 + 2^-104` of `|z| <= 746`.
+const POW_ERR: f64 = 7.262_619_478_088_474e-21;
+/// `2^-72.5`, twice `2^-73.5`.
+const POW_ERR_LN: f64 = 1.497_356_852_229_857_6e-22;
+/// `2^-9`.
+const POW_NEAR_1: f64 = 0.001_953_125;
+/// `2^-69.4`, twice `2^-70.4`.
+const POW_ERR_NEAR: f64 = 1.283_861_870_533_466_3e-21;
+/// `2^-56`, the largest radius [`dd::round_scaled_or`] takes.
+const POW_ERR_MAX: f64 = 1.387_778_780_781_445_7e-17;

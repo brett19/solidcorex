@@ -397,8 +397,13 @@ pub(super) fn round_ball(v: &Big, c: i64) -> Option<f64> {
 /// decides it with error constant `c`, else the last one rounded (see the research note:
 /// no input known needs it).
 pub(super) fn ziv(c: i64, f: impl Fn(usize) -> Big) -> f64 {
+    ziv_on(&LADDER, c, f)
+}
+
+/// [`ziv`] on the precisions `ladder` (ascending, the last [`LADDER`]'s).
+pub(super) fn ziv_on(ladder: &[usize], c: i64, f: impl Fn(usize) -> Big) -> f64 {
     let mut last = Big::zero(1);
-    for p in LADDER {
+    for &p in ladder {
         last = f(p);
         if let Some(r) = round_ball(&last, c) {
             return r;
