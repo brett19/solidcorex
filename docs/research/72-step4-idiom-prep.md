@@ -1772,6 +1772,104 @@ interval division (sound, and the divisor is ≥ 1).
 - **`Done::new`** is `const`; chaining is `op2(&done.body, ...)`.
 - Tests: construction and splitting a `Cx`, chaining three `Done`s, seed draws fixed by inputs, `Report` order independent of input order.
 
+### 14.6 PL1 as built (11-27)
+
+`scx-planar` (`crates/scx-planar`, layer after `scx-curve`; depends on `scx-num` and `scx-algo`).
+Tests: `tests/fixtures.rs` (T11 through one adapter), `tests/pin_ports.rs` (the pin's
+`prism/tests.rs` line-and-arc cases as outcomes), `tests/profiles.rs`, and unit tests in `cert`.
+
+- **Shape.** `#[non_exhaustive] enum Segment { Line { start, end }, Arc { centre, start, end,
+  sense: Sense } }` with `line`, `arc`, `start`, `end`, `reversed`. `Loop` (closed, oriented, by
+  construction) with `segments` and `signed_area`. `Region::new(outer: Vec<Segment>, holes:
+  Vec<Vec<Segment>>, res: Resolution) -> Result<Region, PlanarError>`, with `outer`, `holes`,
+  `resolution`, `outer_reversed`, `holes_reversed`, `area` and `classify(p) -> Result<Place,
+  PlanarError>` (`Inside`, `Outside`, `Boundary`).
+- **Errors.** `PlanarError` (`non_exhaustive`), one cause per refusal: `NotFinite`, `OutOfRange`,
+  `Empty`, `Open { in_loop, joint, gap }`, `Degenerate { at, why: Short | Radius | EndOffCircle }`,
+  `Crossing { a, b }`, `Touching { a, b }`, `HoleOutside`, `HoleInHole { outer, inner }` are
+  `Refused`; `Undecided { in_loop }` (an interval test that could not decide) is `Unsupported`.
+  Segments are named by `SegmentRef { in_loop: LoopId, segment }`.
+- **Order of checks.** Numbers (finite, in range) and empty loops; closure; degenerate segments;
+  contacts; nesting; orientation. The first failing check is the cause, and within contacts
+  `Crossing` beats `Touching` and the least `(a, b)` pair is reported, so the verdict does not
+  depend on loop order (tested over rotations, reversal and permuted holes on every fixture).
+- **Results.** All 23 T11 fixtures give their verdict, accepted areas within 1e-12 relative and
+  the reversal flags as stated; the Open fixture's gap is reported exactly.
+- **Decision: segments are endpoint data, not 72 §4.3's `Arc(Circle2, Extent1d)`.** For: joints
+  are then exact points that two segments share bit for bit (closure and adjacency are equalities
+  after snapping), T11's `Seg` maps one to one, and no angle is ever rounded into the input.
+  Against: a consumer wanting the circle and the parameter range has to derive them (one atan2 per
+  end), and MK3 will want `AngleLine2` pcurves. The derivation is cheap and the input stays exact;
+  a `Circle2` view can be added when MK3 needs it.
+- **Decision: reuse `scx_num::frame::Sense`** for an arc's direction (`Forward` is
+  counter-clockwise). For: one direction type in the workspace. Against: `ccw: bool` reads more
+  plainly; but a bool invites the wrong default.
+- **Decision: NotFinite and OutOfRange before Open.** "An open loop is judged first" holds among
+  geometric causes; a NaN makes every later test meaningless, including the gap. Against: a NaN in
+  an open loop reports NotFinite, not Open. Tested (`the_checks_run_in_order`).
+- **Decision: closure snaps.** A gap proved at most the resolution (interval test on `gap^2 <=
+  res^2`) is closed by moving each segment's end onto the next segment's start, so later tests see
+  exactly shared joints. For: adjacency is then an equality, and the joint's contact is not
+  re-decided by tolerance. Against: an arc's end moves by up to the resolution off its circle; the
+  EndOffCircle test allows exactly that.
+- **Decision: contacts are decided by events, certified.** Lines use an exact orient2d (Shewchuk's
+  filter, then 16 error-free products summed as an expansion); arcs use interval arithmetic with
+  one-ulp outward rounding over a radius band (the hull of the two end distances). A pair is
+  Crossing only when a proper crossing is proved, Apart only when every event (end distances,
+  meeting points, the critical pairs on the line of centres) is proved more than the resolution
+  apart; anything else is Touching. No fixed epsilon: the only length is the resolution.
+  Against: an undecidable near-tangent case is refused as Touching rather than accepted; this is
+  the conservative side, and such profiles are within the resolution of touching anyway.
+- **Decision: a joint neighbourhood for adjacent segments.** Events within `rho = 4 sqrt(R_max
+  res) + 4 res` of a shared joint are ignored, since two segments tangent at a joint (a fillet, a
+  slot) come within the resolution of each other over a length of about `sqrt(R res)`. For:
+  tangent joints are accepted (rounded rectangle, slot, S-bend tested). Against: a real fold-back
+  shorter than `rho` beside a joint is missed; a fold along a whole segment is still found
+  (`collinear_edges_apart_are_apart`'s spike).
+- **Decision: concentric only when the centres are bit-equal.** Arcs on one circle then overlap by
+  mid-direction tests (four quarter arcs accepted, a retraced arc Touching). Distinct but
+  near-equal centres go through the general path, which may answer Touching where the truth is
+  Apart by less than the band. Against: an exact-but-different representation of one centre is
+  conservative, never wrong.
+- **Decision: coordinates are 0 or of magnitude in `[1e-100, 1e9]`** (`OutOfRange` otherwise), so
+  every `two_prod` in orient2d is error-free and the line tests are exact. Against: a profile in
+  metres at 1e-100 resolution is impossible anyway; 1e9 mm is 1000 km.
+- **Decision: `classify` answers `Boundary` within the resolution** of any segment (certified),
+  else the winding number decides. The pin's `holds` returned `None` only exactly on the loop; here
+  a point within the resolution is not decided either way, which is what the resolution means.
+  The pin ports use a resolution below each case's distance.
+- **Decision: winding by angle sum**, not ray casting. Each arc adds its chord's angle plus a full
+  turn when the point is in the circular segment, read from the same float cross that atan2 reads
+  so a point on the chord line is consistent. No ray means no half-open vertex rule.
+- **Decision: orientation by signed area with a bound.** Shoelace about the first vertex plus
+  `r^2 (t - sin t) / 2` per arc (series below `|t| = 1e-2`), compensated, with a bound of `16 eps`
+  times the sum of the terms' magnitudes and the arcs' angle sensitivity. A loop whose area is
+  not proved non-zero is `Undecided` (a region of zero area is degenerate in practice).
+- **Decision: candidate pairs from `scx-algo`'s box tree** (`BoxTree<Extent2d>::self_pairs`), not a
+  sort-and-sweep and not brute force. Measured (release, throwaway timer, medians of 7, whole
+  `Region::new`): 1000-gon 0.7-1.1 ms, 10000-gon 6.9 ms; comb of 1001 / 10001 segments 0.60 /
+  6.4 ms upright and 0.61 / 6.4 ms on its side; 2500 round holes in a square 5.0 ms. A sweep on `x`
+  was the same or slightly faster upright (comb 10001: 5.3 ms) but 64 ms on its side, where every
+  box spans the same `x` (`O(n^2)`); brute-force box pairs were 53-62 ms at 10000 segments
+  everywhere. The tree is `O(n log n)` to build and its self-join follows the overlapping pairs in
+  both axes, so no orientation of the profile is a worst case. Nested holes use the same tree.
+- **Complexity, open:** the hole-inside-outer test is one winding number per hole over the whole
+  outer loop, `O(h n)`: a 1000-gon with 2388 round holes takes 47 ms (with 488 holes, 10 ms).
+  One point per hole suffices because contacts are already excluded. A ray test against the
+  tree would make it `O(h log n)`; not done, since profiles of thousands of holes in a
+  thousand-segment outer loop are rare.
+- **Decision: no segment-count limit.** The costs above are near linear; a limit would refuse
+  valid input.
+- **Deviation:** 72 §4.2's `Unsupported { segment }` for ellipse and NURBS segments is not a
+  variant: `Segment` has no such kinds yet and is `non_exhaustive`, so step 5 adds the variants
+  and their refusal together.
+- **Open:** a full circle as one arc (start equal to end) is refused as `Degenerate::Short`;
+  T11 and the ports use two half arcs. Accepting it needs an explicit full-turn flag on `Arc`.
+- **Pin cases not ported** (not line-and-arc regions or not this layer): chord coordinates;
+  ellipse, conic, Bezier and hyperbola areas and holds (step 5); the distance query; placement
+  between regions; readers, sheets, prisms, arc building, circle and ellipse recognition.
+- **Removed tests:** none.
+
 ### 14.7 MK1 as built (11-27)
 
 `crates/scx-make` (new, in `layers.txt` after `scx-record`; depends on `scx-brep`, `scx-curve`, `scx-num`, `scx-surface`; `scx-testkit` as a dev-dependency). Public API:
@@ -1814,3 +1912,19 @@ pub struct BlockFaces { pub bottom: FaceId, pub top: FaceId, pub sides: [FaceId;
 **Open questions.** (1) Whether `Defect::Finish` should keep the draft for a debugging build. (2) `Dimension` as an enum of axes grows a variant per constructor's size; a `&'static str` would not grow, but would be untyped, and MK2 will say which it wants once it has seen five constructors' sizes.
 
 **Proposed 04 row.** "`scx-make` (MK1): constructors take a frame and `Length` sizes, are built with their topology known and return `Made<R> { body, faces }` with a typed face record; a size must be finite and above the document's zone or it is `Refused { Size }`; the result's only check is `Draft::finish`, whose refusal is a `Defect`. Change if: a caller needs the draft after a defect, or a constructor needs a size the zone does not bound."
+
+### 14.10 FU3 as built (11-27)
+
+One segment type, `profile::Seg`: `Line { start, end }` and `Arc { centre, start, end, ccw }`, ends equal for a whole circle. `solid::Seg` and `solid::Loop` and `csg::Seg` are gone; a loop is a `Vec<Seg>` and `solid::extrusion` and `profile_area` take `&[Vec<Seg>]`. `solid` reads each piece's own start (as `profile` does) and refuses a loop whose pieces do not chain, `"loop is not closed"`, as it did a loop that does not return.
+
+**What the others carried that `profile::Seg` lacked, and the decision.**
+- `csg::Seg::Arc` gave radius, start angle and a signed sweep; `Circle` was a variant. Decided: derive them in double-double from the ends (radius from the start, angles by `atan2`, sweep in the sense, equal ends the whole circle). For: one meaning of an arc in all three modules; the ends are the data a planar layer will hold, so the oracle now judges the arc the profile names and not one a rounded `sin_cos` moves off it by 1e-16. Against: an angle-specified arc is a different input once its ends are rounded; the old `sweep > 2 pi` and `start` range refusals have no input to refuse; an end off the circle is a new refusal (`Size`, beyond a relative `1e-9`). Adversarial: the Lipschitz argument needs only a closed set and the right parity, not that the ends are on the circle, and the junction gap and arithmetic term already bound a stray end, so soundness does not change. A whole circle with a clockwise sense used to be an arc of sweep `-2 pi` whose chord angle was noise about zero; it is now `Kind::Circle` in either sense (angle `2 pi` inside), which is the sound reading.
+- `solid::Seg` had implicit starts and `to` equal to the start for a whole circle: the same convention, kept.
+- `profile::Seg` had neither; `loop_area` and `swept` already give `2 pi` and the full disc for equal ends, so the doc now says so (the fixtures still spell a circle as two arcs).
+
+**Results.** `solid`: `profile_area` and `extrusion` of four loops (stadium, stadium with a hole, an off-origin reflex loop, three quarters) and `gear` are bit-identical (Debug output of every field compared old to new, release). `csg`: `signed_distance` at 300 seeded points on each of six profiles is bit-identical, including the arc ones; line-only profiles, whole circles started at angle 0 and a ring are bit-identical in enclosures, `gap`, `bounds` and probes too. Arc profiles with an end on a multiple of pi/2 differ in the enclosure by a few ulp, 3e-16 at most seen (it is tighter: the old junction gap was the `1e-16` by which `cos(pi/2)` is not 0, now only the `2^-90` arithmetic term) and in the probes by at most 8e-16. That the old enclosure was wider for the same drawn profile is the old input's rounding, not a defect; the new one is the truth for the ends as given. Tests in `scx-testkit` in release: 165 pass, 0 fail; no difftest uses these modules.
+
+**Tests.** None removed. Two assertions changed with the type: the `csg` error test's arc of sweep `7.0` expecting `Size` is now an arc whose end is off its circle (the sweep is no longer a field), and the `csg` tests that built arcs by angle use a test helper `arc_at` that rounds the ends the way `fmath::sin_cos` does.
+
+**Proposed 04 row.** "FU3: the testkit has one segment type, `profile::Seg`, a line or an arc by its ends, centre and sense (equal ends a whole circle); `csg` and `solid` take it and derive radius and angles in double-double. Change if: an oracle needs an arc the rounded ends cannot name (a radius with no ends)."
+

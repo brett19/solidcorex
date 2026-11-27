@@ -70,7 +70,7 @@ use core::fmt;
 
 pub use ivl::Enclosure;
 pub use probe::{Feature, FeatureKind, Probe, ProbeSpec};
-pub use profile::{Profile, Seg};
+pub use profile::Profile;
 
 use crate::analytic::Frame;
 use scx_num::hash::Rng;

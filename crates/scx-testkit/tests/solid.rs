@@ -17,10 +17,11 @@ use scx_num::fmath;
 use scx_num::hash::Rng;
 use scx_testkit::analytic::Frame;
 use scx_testkit::dd::{self, Dd};
+use scx_testkit::profile::Seg;
 use scx_testkit::sample;
 use scx_testkit::solid::{
-    self, Hole, Loop, Moments, REL_ERR, Seg, Solid, SolidError, block, cone, cylinder, extrusion,
-    gear, plate, sphere, sphere_cap, torus, torus_sector,
+    self, Hole, Moments, REL_ERR, Solid, SolidError, block, cone, cylinder, extrusion, gear, plate,
+    sphere, sphere_cap, torus, torus_sector,
 };
 
 const PI: f64 = core::f64::consts::PI;
@@ -245,37 +246,50 @@ fn typed_errors() {
     assert_eq!(plate(10.0, 10.0, 1.0, &touching), Err(SolidError::Apart));
     // a slot wider than the pitch
     assert_eq!(gear(50.0, 10.0, 60, 45.0, 6.0, 0.0), Err(SolidError::Apart));
-    let open = Loop {
-        start: [0.0, 0.0],
-        segs: vec![Seg::Line { to: [1.0, 0.0] }, Seg::Line { to: [1.0, 1.0] }],
-    };
+    let open = vec![
+        Seg::Line {
+            start: [0.0, 0.0],
+            end: [1.0, 0.0],
+        },
+        Seg::Line {
+            start: [1.0, 0.0],
+            end: [1.0, 1.0],
+        },
+    ];
     assert_eq!(
         extrusion(&[open], 1.0),
         Err(SolidError::Profile("loop is not closed"))
     );
-    let bad_arc = Loop {
-        start: [0.0, 0.0],
-        segs: vec![
-            Seg::Arc {
-                to: [3.0, 0.0],
-                center: [1.0, 0.0],
-                ccw: true,
-            },
-            Seg::Line { to: [0.0, 0.0] },
-        ],
-    };
+    let bad_arc = vec![
+        Seg::Arc {
+            centre: [1.0, 0.0],
+            start: [0.0, 0.0],
+            end: [3.0, 0.0],
+            ccw: true,
+        },
+        Seg::Line {
+            start: [3.0, 0.0],
+            end: [0.0, 0.0],
+        },
+    ];
     assert_eq!(
         extrusion(&[bad_arc], 1.0),
         Err(SolidError::Profile("arc radii differ"))
     );
-    let clockwise = Loop {
-        start: [0.0, 0.0],
-        segs: vec![
-            Seg::Line { to: [0.0, 1.0] },
-            Seg::Line { to: [1.0, 0.0] },
-            Seg::Line { to: [0.0, 0.0] },
-        ],
-    };
+    let clockwise = vec![
+        Seg::Line {
+            start: [0.0, 0.0],
+            end: [0.0, 1.0],
+        },
+        Seg::Line {
+            start: [0.0, 1.0],
+            end: [1.0, 0.0],
+        },
+        Seg::Line {
+            start: [1.0, 0.0],
+            end: [0.0, 0.0],
+        },
+    ];
     assert_eq!(
         extrusion(&[clockwise], 1.0),
         Err(SolidError::Profile("area is not positive"))
@@ -670,21 +684,26 @@ fn gear_60_by_monte_carlo_and_the_documented_formula() {
     }
     // the plain disk's value less sixty slots, each by nested quadrature (route 4)
     let slot = extrusion(
-        &[Loop {
-            start: [45.0, -half],
-            segs: vec![
-                Seg::Line {
-                    to: [(2500.0 - half * half).sqrt(), -half],
-                },
-                Seg::Arc {
-                    to: [(2500.0 - half * half).sqrt(), half],
-                    center: [0.0, 0.0],
-                    ccw: true,
-                },
-                Seg::Line { to: [45.0, half] },
-                Seg::Line { to: [45.0, -half] },
-            ],
-        }],
+        &[vec![
+            Seg::Line {
+                start: [45.0, -half],
+                end: [(2500.0 - half * half).sqrt(), -half],
+            },
+            Seg::Arc {
+                centre: [0.0, 0.0],
+                start: [(2500.0 - half * half).sqrt(), -half],
+                end: [(2500.0 - half * half).sqrt(), half],
+                ccw: true,
+            },
+            Seg::Line {
+                start: [(2500.0 - half * half).sqrt(), half],
+                end: [45.0, half],
+            },
+            Seg::Line {
+                start: [45.0, half],
+                end: [45.0, -half],
+            },
+        ]],
         1.0,
     )
     .unwrap();
@@ -735,16 +754,20 @@ fn gear_60_by_monte_carlo_and_the_documented_formula() {
 // ---------------------------------------------------------------------------------------
 // Profiles of lines and arcs against polygon moments of finely cut arcs (route 5)
 
-fn discretise(lp: &Loop, per_arc: usize) -> Vec<[f64; 2]> {
-    let mut pts = vec![lp.start];
-    let mut p0 = lp.start;
-    for s in &lp.segs {
+fn discretise(lp: &[Seg], per_arc: usize) -> Vec<[f64; 2]> {
+    let mut pts = vec![lp[0].start()];
+    for s in lp {
+        let p0 = s.start();
         match *s {
-            Seg::Line { to } => {
-                pts.push(to);
-                p0 = to;
+            Seg::Line { end, .. } => {
+                pts.push(end);
             }
-            Seg::Arc { to, center, ccw } => {
+            Seg::Arc {
+                centre: center,
+                end: to,
+                ccw,
+                ..
+            } => {
                 let (a, b) = (
                     [p0[0] - center[0], p0[1] - center[1]],
                     [to[0] - center[0], to[1] - center[1]],
@@ -766,7 +789,6 @@ fn discretise(lp: &Loop, per_arc: usize) -> Vec<[f64; 2]> {
                     let (s, c) = fmath::sin_cos(t);
                     pts.push([center[0] + r * c, center[1] + r * s]);
                 }
-                p0 = to;
             }
         }
     }
@@ -790,7 +812,7 @@ fn polygon(pts: &[[f64; 2]]) -> [f64; 7] {
     o
 }
 
-fn check_profile(what: &str, loops: &[Loop], h: f64) {
+fn check_profile(what: &str, loops: &[Vec<Seg>], h: f64) {
     let mut poly = [0.0; 7];
     for lp in loops {
         for (a, b) in poly.iter_mut().zip(polygon(&discretise(lp, 40_000))) {
@@ -817,31 +839,34 @@ fn check_profile(what: &str, loops: &[Loop], h: f64) {
 #[test]
 fn line_and_arc_extrusions_match_polygon_moments() {
     // a stadium with a round hole
-    let stadium = Loop {
-        start: [0.0, 0.0],
-        segs: vec![
-            Seg::Line { to: [4.0, 0.0] },
-            Seg::Arc {
-                to: [4.0, 2.0],
-                center: [4.0, 1.0],
-                ccw: true,
-            },
-            Seg::Line { to: [0.0, 2.0] },
-            Seg::Arc {
-                to: [0.0, 0.0],
-                center: [0.0, 1.0],
-                ccw: true,
-            },
-        ],
-    };
-    let hole = Loop {
+    let stadium = vec![
+        Seg::Line {
+            start: [0.0, 0.0],
+            end: [4.0, 0.0],
+        },
+        Seg::Arc {
+            centre: [4.0, 1.0],
+            start: [4.0, 0.0],
+            end: [4.0, 2.0],
+            ccw: true,
+        },
+        Seg::Line {
+            start: [4.0, 2.0],
+            end: [0.0, 2.0],
+        },
+        Seg::Arc {
+            centre: [0.0, 1.0],
+            start: [0.0, 2.0],
+            end: [0.0, 0.0],
+            ccw: true,
+        },
+    ];
+    let hole = vec![Seg::Arc {
+        centre: [2.0, 1.0],
         start: [2.5, 1.0],
-        segs: vec![Seg::Arc {
-            to: [2.5, 1.0],
-            center: [2.0, 1.0],
-            ccw: false,
-        }],
-    };
+        end: [2.5, 1.0],
+        ccw: false,
+    }];
     check_profile("stadium", core::slice::from_ref(&stadium), 1.7);
     check_profile("stadium with a hole", &[stadium.clone(), hole.clone()], 1.7);
     let a = solid::profile_area(&[stadium.clone(), hole]).unwrap();
@@ -849,80 +874,105 @@ fn line_and_arc_extrusions_match_polygon_moments() {
     // a quarter-circle bulge on a triangle
     check_profile(
         "bulge",
-        &[Loop {
-            start: [0.0, 0.0],
-            segs: vec![
-                Seg::Line { to: [3.0, 0.0] },
-                Seg::Arc {
-                    to: [4.5, 1.5],
-                    center: [3.0, 1.5],
-                    ccw: true,
-                },
-                Seg::Line { to: [0.0, 3.0] },
-                Seg::Line { to: [0.0, 0.0] },
-            ],
-        }],
+        &[vec![
+            Seg::Line {
+                start: [0.0, 0.0],
+                end: [3.0, 0.0],
+            },
+            Seg::Arc {
+                centre: [3.0, 1.5],
+                start: [3.0, 0.0],
+                end: [4.5, 1.5],
+                ccw: true,
+            },
+            Seg::Line {
+                start: [4.5, 1.5],
+                end: [0.0, 3.0],
+            },
+            Seg::Line {
+                start: [0.0, 3.0],
+                end: [0.0, 0.0],
+            },
+        ]],
         2.5,
     );
     // an arc that goes clockwise and one over three quarters of a circle, off the origin
     check_profile(
         "concave and reflex arcs",
-        &[Loop {
-            start: [10.0, 10.0],
-            segs: vec![
-                Seg::Line { to: [13.0, 10.0] },
-                Seg::Arc {
-                    to: [14.5, 8.5],
-                    center: [13.0, 8.5],
-                    ccw: false,
-                },
-                Seg::Line { to: [14.5, 12.0] },
-                Seg::Line { to: [10.0, 12.0] },
-                Seg::Line { to: [10.0, 10.0] },
-            ],
-        }],
+        &[vec![
+            Seg::Line {
+                start: [10.0, 10.0],
+                end: [13.0, 10.0],
+            },
+            Seg::Arc {
+                centre: [13.0, 8.5],
+                start: [13.0, 10.0],
+                end: [14.5, 8.5],
+                ccw: false,
+            },
+            Seg::Line {
+                start: [14.5, 8.5],
+                end: [14.5, 12.0],
+            },
+            Seg::Line {
+                start: [14.5, 12.0],
+                end: [10.0, 12.0],
+            },
+            Seg::Line {
+                start: [10.0, 12.0],
+                end: [10.0, 10.0],
+            },
+        ]],
         0.9,
     );
     check_profile(
         "three quarters",
-        &[Loop {
-            start: [-1.0, 2.0],
-            segs: vec![
-                Seg::Arc {
-                    to: [-2.0, 3.0],
-                    center: [-2.0, 2.0],
-                    ccw: true,
-                },
-                Seg::Line { to: [-1.0, 2.0] },
-            ],
-        }],
+        &[vec![
+            Seg::Arc {
+                centre: [-2.0, 2.0],
+                start: [-1.0, 2.0],
+                end: [-2.0, 3.0],
+                ccw: true,
+            },
+            Seg::Line {
+                start: [-2.0, 3.0],
+                end: [-1.0, 2.0],
+            },
+        ]],
         1.3,
     );
 }
 
 #[test]
 fn a_circle_profile_is_a_cylinder_and_a_rectangle_is_a_block() {
-    let circle = Loop {
+    let circle = vec![Seg::Arc {
+        centre: [0.0, 0.0],
         start: [1.5, 0.0],
-        segs: vec![Seg::Arc {
-            to: [1.5, 0.0],
-            center: [0.0, 0.0],
-            ccw: true,
-        }],
-    };
+        end: [1.5, 0.0],
+        ccw: true,
+    }];
     let c = extrusion(&[circle], 4.0).unwrap();
     let want = cylinder(1.5, 4.0).unwrap();
     close_m(&c.moments, &want.moments, 1e-13, "circle extrusion");
     close(c.area, want.area, 1e-13, "circle extrusion area");
-    let rect = Loop {
-        start: [0.0, 0.0],
-        segs: vec![
-            Seg::Line { to: [2.0, 0.0] },
-            Seg::Line { to: [2.0, 3.0] },
-            Seg::Line { to: [0.0, 3.0] },
-            Seg::Line { to: [0.0, 0.0] },
-        ],
-    };
+    let rect = vec![
+        Seg::Line {
+            start: [0.0, 0.0],
+            end: [2.0, 0.0],
+        },
+        Seg::Line {
+            start: [2.0, 0.0],
+            end: [2.0, 3.0],
+        },
+        Seg::Line {
+            start: [2.0, 3.0],
+            end: [0.0, 3.0],
+        },
+        Seg::Line {
+            start: [0.0, 3.0],
+            end: [0.0, 0.0],
+        },
+    ];
     let r = extrusion(&[rect], 5.0).unwrap();
     let want = block(2.0, 3.0, 5.0).unwrap();
     close_m(&r.moments, &want.moments, 1e-13, "rect extrusion");
