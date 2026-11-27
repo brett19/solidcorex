@@ -610,6 +610,7 @@ dependencies = [
  "scx-num",
  "scx-nurbs",
  "scx-nurbs-surface",
+ "scx-record",
  "scx-surface",
  "scx-testkit",
 ]

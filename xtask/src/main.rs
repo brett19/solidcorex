@@ -43,11 +43,16 @@
 //!   `scx-algo`, `scx-nurbs`, `scx-nurbs-surface`, `scx-num`, `scx-testkit` (their exact
 //!   references), the difftest crate's files for them and the manifests. The skipped tests are
 //!   named in the output; CI runs every test every push.
+//! - `corpus fetch | verify [prefix ...]`: the STEP corpus (research 74 §7): every file of
+//!   `corpus/manifest.tsv`, checked by SHA-256 and size, under the directory `SCX_CORPUS_CACHE`
+//!   names. Never committed. Details in `xtask/src/corpus.rs`.
 //! - `bench`: build the benchmarks in the bench profile without running them (`cargo bench
 //!   -p scx-bench --no-run`); docs/02-testing.md says how to run them.
 //!
 //! No dependencies: the manifests are read line by line, which is enough for the plain
 //! manifests this repository writes.
+
+mod corpus;
 
 use std::fmt::Write as _;
 use std::fs;
@@ -79,7 +84,8 @@ fn main() -> ExitCode {
         Some("diff") => diff(&root, args.get(1..).unwrap_or(&[])),
         Some("tests") => tests(&root, args.get(1..).unwrap_or(&[]), false),
         Some("bench") => bench(&root),
-        _ => Err("usage: cargo xtask <layers | headers | pin | bodydiff | cov [crate ...] | movecheck [crate ...] | conflicts | fast [crate ...] | lint | diff [--changed-since rev] | tests [crate ... | --except crate ...] | bench>".to_string()),
+        Some("corpus") => corpus::run(&root, args.get(1..).unwrap_or(&[])),
+        _ => Err("usage: cargo xtask <layers | headers | pin | bodydiff | cov [crate ...] | movecheck [crate ...] | conflicts | fast [crate ...] | lint | diff [--changed-since rev] | tests [crate ... | --except crate ...] | bench | corpus <fetch | verify> [prefix ...]>".to_string()),
     };
     match result {
         Ok(msg) => {

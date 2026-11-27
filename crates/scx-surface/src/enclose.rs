@@ -232,7 +232,8 @@ fn along_parts(
                 },
                 near,
             );
-            let natural = dot_ivl(d, Point3::new(g.x.f, g.y.f, g.z.f));
+            // The kind's formula in intervals over the part: tight where it is monotone per arc.
+            let natural = dot_ivl(d, eval_i(ui, vi, near));
             let su = dot_ivl(d, Point3::new(g.x.u, g.y.u, g.z.u));
             let sv = dot_ivl(d, Point3::new(g.x.v, g.y.v, g.z.v));
             let m = dot_ivl(d, eval_i(Ivl::from(mu), Ivl::from(mv), near));
@@ -650,10 +651,11 @@ mod tests {
         holds(&n, uv(0.25, 0.25, 0.25, 0.25));
         // Past the domain the end pieces continue; no control hull bounds them.
         holds(&n, uv(-0.2, 0.9, 0.1, 1.3));
-        // The torus's own box is within a few percent of the NURBS one's.
+        // The torus's own box is exact (tight cos and sin on the arcs); the NURBS one's is the
+        // quarter arcs' control hull, up to 12 percent wider on this torus.
         let a = holds(&Surface::from(t), uv(0.0, 0.0, 1.0, 1.0));
         assert!(
-            whole.size().x <= 1.05 * a.size().x,
+            a.size().x <= whole.size().x && whole.size().x <= 1.12 * a.size().x,
             "{whole:?} against {a:?}"
         );
     }
@@ -728,5 +730,67 @@ mod tests {
             .range_along(z, uv(0.0, 0.0, 1.0, 1.0))
             .unwrap_or_else(|| panic!("range"));
         assert!(r.lo <= 0.0 && r.hi >= 0.01 && r.hi - r.lo < 0.02, "{r:?}");
+    }
+
+    /// A sphere's boxes are the exact extrema of the kind where they are closed form: an
+    /// octant is `[0, r]` on each axis, the whole sphere `[-r, r]`, to rounding, and the
+    /// range along an axis of the frame is its own extent.
+    #[test]
+    fn a_spheres_extrema_are_exact() {
+        let r = 1.5;
+        let axes = Frame::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap_or_else(|| panic!("frame"));
+        let s: Surface = Sphere::new(axes, mm(r), Sense::Forward)
+            .unwrap_or_else(|e| panic!("{e}"))
+            .into();
+        let close = |a: f64, b: f64| (a - b).abs() <= 1e-13;
+        // The whole sphere.
+        let b = holds(&s, uv(0.0, 0.0, 1.0, 1.0));
+        for (lo, hi) in [
+            (b.min().x, b.max().x),
+            (b.min().y, b.max().y),
+            (b.min().z, b.max().z),
+        ] {
+            assert!(close(lo, -r) && close(hi, r), "{b:?}");
+        }
+        // The octant over the first quarter turn and the northern half.
+        let b = holds(&s, uv(0.0, 0.5, 0.25, 1.0));
+        assert!(close(b.min().x, 0.0) && close(b.max().x, r), "{b:?}");
+        assert!(close(b.min().y, 0.0) && close(b.max().y, r), "{b:?}");
+        assert!(close(b.min().z, 0.0) && close(b.max().z, r), "{b:?}");
+        // The range along z over the whole sphere, and along x over the octant.
+        let z = s
+            .range_along(Vec3::new(0.0, 0.0, 1.0), uv(0.0, 0.0, 1.0, 1.0))
+            .unwrap_or_else(|| panic!("range"));
+        assert!(close(z.lo, -r) && close(z.hi, r), "{z:?}");
+        let x = s
+            .range_along(Vec3::new(1.0, 0.0, 0.0), uv(0.0, 0.5, 0.25, 1.0))
+            .unwrap_or_else(|| panic!("range"));
+        assert!(close(x.lo, 0.0) && close(x.hi, r), "{x:?}");
+    }
+
+    /// A cylinder's and a torus's boxes along their own frame's axes are tight too: a quarter
+    /// turn of a cylinder of radius `r` and height `h` is `[0, r] x [0, r] x [0, h]`.
+    #[test]
+    fn a_cylinder_quarter_is_exact() {
+        let axes = Frame::new(
+            Point3::new(1.0, -2.0, 3.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap_or_else(|| panic!("frame"));
+        let c: Surface = Cylinder::new(axes, mm(2.0), Sense::Forward)
+            .unwrap_or_else(|e| panic!("{e}"))
+            .into();
+        let period = 2.0 * core::f64::consts::PI * 2.0;
+        let b = holds(&c, uv(0.0, 0.0, period / 4.0, 5.0));
+        let close = |a: f64, b: f64| (a - b).abs() <= 1e-12;
+        assert!(close(b.min().x, 1.0) && close(b.max().x, 3.0), "{b:?}");
+        assert!(close(b.min().y, -2.0) && close(b.max().y, 0.0), "{b:?}");
+        assert!(close(b.min().z, 3.0) && close(b.max().z, 8.0), "{b:?}");
     }
 }

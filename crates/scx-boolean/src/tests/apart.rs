@@ -81,13 +81,12 @@ fn torus_and_block(gap: f64) -> Case {
 #[test]
 fn a_block_just_clear_of_a_torus_is_dropped_pair_by_pair() {
     let Case { t, b, pairs, f } = torus_and_block(1e-4);
-    // The pairs stage 1 found: the torus with every face of the block (the torus's box,
-    // from its whole uv box, reaches `x = 8`).
-    let mut want: Vec<_> = [
-        b.bottom, b.top, b.sides[0], b.sides[1], b.sides[2], b.sides[3],
-    ]
-    .map(|s| (t.face, s))
-    .to_vec();
+    // The pairs stage 1 found: the torus with every face of the block but the one on
+    // `x = 8` (the torus's box is exact now, `|x| <= 6.5`, so that face's box is clear of
+    // it; it was loose enough to reach `x = 8` before).
+    let mut want: Vec<_> = [b.bottom, b.top, b.sides[0], b.sides[2], b.sides[3]]
+        .map(|s| (t.face, s))
+        .to_vec();
     want.sort_unstable();
     assert_eq!(pairs, want);
     assert_eq!(f.unwrap(), FaceFace::default());

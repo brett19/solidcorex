@@ -28,6 +28,22 @@ pub trait Ring:
 {
     /// `Z(double)`.
     fn lift(d: f64) -> Self;
+
+    /// The ends of the range the value stands for, when the ring is one of ranges
+    /// ([`Ivl`]); `None` for a ring of points. A function monotone on the range is then
+    /// evaluated at the two ends and joined by [`Ring::join_padded`], which is tight where the
+    /// ring's own arithmetic loses the dependence between the uses of the variable.
+    fn range_ends(self) -> Option<(f64, f64)> {
+        None
+    }
+
+    /// The range holding `self` and `other` (two values of one function at the ends of a
+    /// range) with `pad` more on each side, rounded outward; a ring of points has no ranges
+    /// and gives `self`.
+    #[must_use]
+    fn join_padded(self, _other: Self, _pad: f64) -> Self {
+        self
+    }
 }
 
 impl Ring for f64 {
@@ -39,6 +55,16 @@ impl Ring for f64 {
 impl Ring for Ivl {
     fn lift(d: f64) -> Self {
         Ivl::from(d)
+    }
+
+    fn range_ends(self) -> Option<(f64, f64)> {
+        Some((self.lo, self.hi))
+    }
+
+    fn join_padded(self, other: Self, pad: f64) -> Self {
+        let lo = (Ivl::from(self.lo.min(other.lo)) - Ivl::from(pad)).lo;
+        let hi = (Ivl::from(self.hi.max(other.hi)) + Ivl::from(pad)).hi;
+        Ivl::new(lo, hi)
     }
 }
 
