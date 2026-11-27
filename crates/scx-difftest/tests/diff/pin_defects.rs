@@ -1360,17 +1360,77 @@ fn closest(
     Ok(())
 }
 
+/// The first interior knot of `a`'s curve repeated `p + 1` times: a break, where the curve
+/// is two curves (`Knots::Multiple` makes some).
+fn break_knot(a: &At) -> Option<f64> {
+    let k = &a.curve.knots;
+    k.iter()
+        .copied()
+        .filter(|&u| u > 0.0 && u < 1.0)
+        .find(|&u| k.iter().filter(|&&x| x == u).count() > a.curve.degree)
+}
+
+/// Where `a`'s curve has a break: `Some` of whether scx's refusal is right. scx refuses to
+/// build a curve with an interior knot of multiplicity `p + 1` (04, 11-27 scx-nurbs ruling
+/// 2: every curve is C0, a break is a split); the pin's `Curve::new` checks only for empty
+/// inputs and builds it, though its own `KnotVector::validate` refuses those knots. The
+/// truth: the exact curve's limits from either side of the knot differ, so the data is not
+/// one continuous curve, and scx answered `None`.
+fn break_refused(a: &At, scx_answered: bool) -> Option<Result<(), String>> {
+    let u = break_knot(a)?;
+    Some((|| {
+        if scx_answered {
+            return Err(format!("scx built a curve with a break at {u}"));
+        }
+        let truth = a.curve.exact().map_err(|e| format!("{e:?}"))?;
+        let below = truth
+            .point(u, tk::Side::Below)
+            .map_err(|e| format!("{e:?}"))?;
+        let above = truth
+            .point(u, tk::Side::Above)
+            .map_err(|e| format!("{e:?}"))?;
+        if below.rounded == above.rounded {
+            return Err(format!("the exact curve is continuous at the break {u}"));
+        }
+        Ok(())
+    })())
+}
+
+/// `NurbsCurve::insert_knot` where scx and the pin disagree: curves with a break, which scx
+/// does not build ([`break_refused`]).
+pub fn nurbs_insert_knot() -> PinDefect<(At, usize), Option<Hom>> {
+    PinDefect {
+        reason: "the pin builds a curve across a knot of multiplicity p + 1",
+        applies: Applies::Disagreeing,
+        check: |(a, _), r| break_refused(a, r.is_some()).unwrap_or(Err("no break".to_owned())),
+    }
+}
+
+/// `NurbsCurve::split` where scx and the pin disagree: curves with a break, as
+/// [`nurbs_insert_knot`].
+pub fn nurbs_split() -> PinDefect<(At,), Option<[Hom; 2]>> {
+    PinDefect {
+        reason: "the pin builds a curve across a knot of multiplicity p + 1",
+        applies: Applies::Disagreeing,
+        check: |(a,), r| break_refused(a, r.is_some()).unwrap_or(Err("no break".to_owned())),
+    }
+}
+
 /// `NurbsCurve::point` where scx and the pin disagree: at the ends of the domain.
 ///
 /// The pin's `crv_eval` refuses `u = U[p]` and `u = U[n+1]` (`basis_eval` errs there, and the
 /// upstream caller evaluated the end control points itself); scx's span search is exact and
 /// the ends evaluate. The check: scx's point is within `4 eps` of the hull's scale of the
 /// exact point (`scx_testkit::nurbs::Curve`, rationals), and no further than the pin's.
+/// Also curves with a break, which scx does not build ([`break_refused`]).
 pub fn nurbs_point() -> PinDefect<(At, bool), Option<[f64; 3]>> {
     PinDefect {
         reason: "the pin's crv_eval refuses the ends of the domain",
         applies: Applies::Disagreeing,
         check: |(a, above), r| {
+            if let Some(refused) = break_refused(a, r.is_some()) {
+                return refused;
+            }
             let truth = a.curve.exact().map_err(|e| format!("{e:?}"))?;
             let want = truth
                 .point(a.u, tk_side(*above))
@@ -1395,11 +1455,15 @@ pub fn nurbs_point() -> PinDefect<(At, bool), Option<[f64; 3]>> {
 /// both carry the cancellation of the quotient rule and land a few ulps of the largest
 /// component apart (2 inputs). The check: each order of scx's is within `1e-12 * 10^k`
 /// of the largest component of the exact derivatives, and no further than the pin's.
+/// Also curves with a break, which scx does not build ([`break_refused`]).
 pub fn nurbs_derivs() -> PinDefect<(At, bool), Option<Vec<[f64; 3]>>> {
     PinDefect {
         reason: "the pin and scx round a cancelling high derivative differently",
         applies: Applies::Disagreeing,
         check: |(a, above), r| {
+            if let Some(refused) = break_refused(a, r.is_some()) {
+                return refused;
+            }
             let truth = a.curve.exact().map_err(|e| format!("{e:?}"))?;
             let want = truth
                 .derivs(a.u, tk_side(*above), 5)
@@ -1430,12 +1494,16 @@ pub fn nurbs_derivs() -> PinDefect<(At, bool), Option<Vec<[f64; 3]>>> {
 ///
 /// The check: where scx answers, its curve is the exact elevation (knots equal, homogeneous
 /// points within `1e-12` of the hull's scale); where it refuses, the pin's answer is more
-/// than `1e-6` of the scale from the exact one.
+/// than `1e-6` of the scale from the exact one. Also curves with a break, which scx does not
+/// build ([`break_refused`]).
 pub fn nurbs_elevate() -> PinDefect<(At, usize), Option<Hom>> {
     PinDefect {
         reason: "the pin's A5.9 returns non-positive weights across near-coincident knots",
         applies: Applies::Disagreeing,
         check: |(a, times), r| {
+            if let Some(refused) = break_refused(a, r.is_some()) {
+                return refused;
+            }
             let t = times % 4;
             let want = a
                 .curve

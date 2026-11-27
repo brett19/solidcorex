@@ -185,6 +185,27 @@ impl KnotVector {
         .filter(move |&(k, _)| low <= k && k <= high)
     }
 
+    /// Checks that no knot strictly inside the domain repeats more than `p` times, so a curve
+    /// on these knots is continuous (C0) there: a knot of multiplicity `p + 1` breaks the
+    /// curve in two, which is a split, not a curve (04, 11-27 scx-nurbs ruling 2). This knot
+    /// vector itself allows `p + 1` everywhere.
+    ///
+    /// Errs with [`NurbsError::Multiplicity`] (`max` the degree) at the first such knot.
+    pub fn check_continuous(&self) -> Result<()> {
+        let (low, high) = (self.low, self.high);
+        match self
+            .breakpoints()
+            .find(|&(k, mult)| low < k && k < high && mult > self.degree)
+        {
+            Some((knot, multiplicity)) => Err(NurbsError::Multiplicity {
+                knot,
+                multiplicity,
+                max: self.degree,
+            }),
+            None => Ok(()),
+        }
+    }
+
     /// The index `i` of the knot span `[U[i], U[i+1]]` that `u` lies in, with `p <= i < m - p`
     /// and `U[i] < U[i+1]`.
     ///
