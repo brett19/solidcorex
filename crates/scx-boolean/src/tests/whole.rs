@@ -43,7 +43,7 @@ pub(super) fn checked(a: &Brep, b: &Brep, which: BooleanOp, doc: Document) -> Do
     let stop = Stop::new();
     let settings = Settings::new();
     let cx = Cx::new(&doc, &settings, &mut scratch, &stop, &NoTrace);
-    if let Err(e) = scx_check::contract(&done.body, &cx) {
+    if let Err(e) = scx_check::contract(&done.body, &cx, scx_check::Contacts::Refused) {
         panic!("{which:?}: contract {e:?}");
     }
     done

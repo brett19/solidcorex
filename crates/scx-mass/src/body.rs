@@ -12,6 +12,7 @@ use crate::face::{self, reference};
 use crate::guard::Shells;
 use crate::integrand::{FIRST_MONOMIAL, Set, monomial, shift};
 use crate::kronrod::{MAX_COMPONENTS, Meter};
+use crate::rounding::{Sum, gamma};
 use crate::spec::{Estimate, Mass, MassErrors, MassSpec, RelAccuracy, Sym3};
 
 /// Whether the region on `side` of `face` is solid.
@@ -76,7 +77,7 @@ pub fn volume(
     let _ = scratch;
     let about = body_reference(body, None)?;
     let mut meter = Meter::new(budget, stop);
-    let (mut value, mut error) = (0.0, 0.0);
+    let (mut value, mut error) = (Sum::default(), 0.0);
     let mut shells = Shells::default();
     for f in body.faces() {
         let sign = volume_sign(f);
@@ -86,12 +87,15 @@ pub fn volume(
         }
         let mut r = face::integrate(f, Set::Volume, accuracy.get(), &mut meter)?;
         shift(Set::Volume, r.reference - about, &mut r.value, &mut r.error);
-        value += sign * r.value[1];
+        value.add(sign * r.value[1]);
         error += r.error[1];
         shells.add(f, r.value[1], r.error[1]);
     }
     shells.check(body, budget, stop)?;
-    Ok(Estimate { value, error })
+    Ok(Estimate {
+        value: value.value(),
+        error: error + value.bound(),
+    })
 }
 
 /// The boundary's area: every face but those between two solid regions, sheets included.
@@ -108,13 +112,16 @@ pub fn area(
 ) -> Result<Estimate, MassError> {
     let _ = scratch;
     let mut meter = Meter::new(budget, stop);
-    let (mut value, mut error) = (0.0, 0.0);
+    let (mut value, mut error) = (Sum::default(), 0.0);
     for f in body.faces().filter(|&f| counts_in_area(f)) {
         let r = face::integrate(f, Set::Area, accuracy.get(), &mut meter)?;
-        value += r.value[0];
+        value.add(r.value[0]);
         error += r.error[0];
     }
-    Ok(Estimate { value, error })
+    Ok(Estimate {
+        value: value.value(),
+        error: error + value.bound(),
+    })
 }
 
 /// One face's area.
@@ -160,7 +167,7 @@ pub fn mass(
     }
     let about = body_reference(body, spec.about)?;
     let mut meter = Meter::new(budget, stop);
-    let mut sum = [0.0; MAX_COMPONENTS];
+    let mut sums = [Sum::default(); MAX_COMPONENTS];
     let mut sum_err = [0.0; MAX_COMPONENTS];
     let mut shells = Shells::default();
     let vi = monomial([0, 0, 1]);
@@ -179,7 +186,7 @@ pub fn mass(
             let at = |a: &[f64; MAX_COMPONENTS]| a.get(vi).copied().unwrap_or(0.0);
             shells.add(f, at(&r.value), at(&r.error));
         }
-        for (i, ((s, e), (v, ve))) in sum
+        for (i, ((s, e), (v, ve))) in sums
             .iter_mut()
             .zip(sum_err.iter_mut())
             .zip(r.value.iter().zip(&r.error))
@@ -190,15 +197,22 @@ pub fn mass(
             } else {
                 sign
             };
-            *s += w * v;
+            s.add(w * v);
             *e += w.abs() * ve;
         }
     }
     shells.check(body, budget, stop)?;
+    let mut sum = [0.0; MAX_COMPONENTS];
+    for ((v, e), s) in sum.iter_mut().zip(sum_err.iter_mut()).zip(&sums) {
+        *v = s.value();
+        *e += s.bound();
+    }
+    // A division by 3 rounds: one more rounding of the quotient.
     let m = |a: [u8; 3], c: f64| {
         let i = monomial(a);
         let at = |a: &[f64; MAX_COMPONENTS]| a.get(i).copied().unwrap_or(0.0);
-        (at(&sum) / c, at(&sum_err) / c)
+        let q = at(&sum) / c;
+        (q, at(&sum_err) / c + gamma(1) * q.abs())
     };
     let (volume, e_volume) = m([0, 0, 1], 1.0);
     let (fx, efx) = m([1, 0, 1], 1.0);

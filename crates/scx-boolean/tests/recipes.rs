@@ -19,6 +19,8 @@
     clippy::indexing_slicing
 )]
 
+use std::collections::BTreeSet;
+
 use scx_bodyq::{PointClass, classify_point};
 use scx_boolean::{BooleanError, BooleanOp, boolean};
 use scx_brep::op::{Cx, NoTrace, Scratch, Settings};
@@ -203,22 +205,32 @@ fn check(name: &str) {
     }
 }
 
-/// The genus of `body` from the Euler-Poincare relation over its own cells:
-/// `V - E + sum (2 - 2 g_f - L_f) = 2 (S - G)`, with `L_f` the face's loops and `g_f` one
-/// only for a torus face with no loop. A seam is an edge like any other (the face it cuts
-/// open is a disc), so no edge is dropped.
+/// The genus of `body` from the Euler-Poincare relation over its own cells, shell by shell:
+/// `V_s - E_s + sum (2 - 2 g_f - L_f) = 2 (1 - G_s)` per shell `s` of a solid region, with
+/// `L_f` the face's loops and `g_f` one only for a torus face with no loop. A vertex or edge
+/// is counted once in each shell whose faces use it, so shells that touch at a vertex or
+/// along an edge (D5 contacts) each keep their own. A seam is an edge like any other (the
+/// face it cuts open is a disc), so no edge is dropped.
 fn genus(body: &Brep, t: &Topology) -> u32 {
-    let faces: i64 = body
-        .faces()
-        .map(|f| {
+    let mut chi = 0i64;
+    let mut shells = 0i64;
+    for s in body.shells().filter(|s| !s.region().is_outside()) {
+        shells += 1;
+        let mut vertices = BTreeSet::new();
+        let mut edges = BTreeSet::new();
+        for (f, _) in s.faces() {
             let loops = f.loops().len() as i64;
             let g = i64::from(loops == 0 && matches!(f.surface(), Surface::Torus(_)));
-            2 - 2 * g - loops
-        })
-        .sum();
-    let chi = body.vertices().count() as i64 - body.edges().count() as i64 + faces;
+            chi += 2 - 2 * g - loops;
+            for u in f.uses() {
+                edges.insert(u.edge().id());
+                vertices.insert(u.start().id());
+            }
+        }
+        chi += vertices.len() as i64 - edges.len() as i64;
+    }
+    assert_eq!(shells, i64::from(t.shells), "shells of solid regions");
     assert_eq!(chi % 2, 0, "Euler characteristic {chi} is odd");
-    let shells = i64::from(t.shells);
     u32::try_from(shells - chi / 2).unwrap_or_else(|_| panic!("chi {chi} over {shells} shells"))
 }
 

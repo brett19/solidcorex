@@ -33,9 +33,12 @@ impl RelAccuracy {
     }
 }
 
-/// A value and the integrator's estimate of its error: an estimate, not a proved bound
-/// (the Kronrod and Gauss values' difference, summed over the pieces, with the inner
-/// integrals' estimates carried through).
+/// A value and the integrator's estimate of its error: an estimate, not a proved bound.
+/// It is the Kronrod and Gauss values' difference, summed over the pieces with the inner
+/// integrals' estimates carried through, plus a first-order bound of the floating-point
+/// rounding (research 72 §14.31): the samples' rounding, the rules' sums and the shifts, so
+/// that a value whose terms cancel (a thin shell, a face far from the reference) states
+/// what the cancellation cost. The truncation part stays an estimate.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Estimate {
     /// The value.
