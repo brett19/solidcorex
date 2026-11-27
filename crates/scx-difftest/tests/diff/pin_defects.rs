@@ -3902,3 +3902,525 @@ pub fn bern_roots_shapes() -> PinDefect<(BernR, usize), (RootsOut, RootsOut, Roo
         },
     }
 }
+
+// ---- scx-nurbs-surface evaluation ----
+
+use crate::t_nurbs_surface_eval::{At as SurfaceAt, JetAt, Sides, Tri, batch};
+
+/// The largest coordinate of the control points, at least 1.
+fn net_scale(r: &Raw) -> f64 {
+    r.points
+        .iter()
+        .flatten()
+        .fold(1.0_f64, |m, x| m.max(x.abs()))
+}
+
+fn tk_sides(s: Sides) -> (tk::Side, tk::Side) {
+    (tk_side(s.0[0]), tk_side(s.0[1]))
+}
+
+/// Where `a`'s data is not a surface or its parameter is not finite: `Some` of whether scx's
+/// answer is right (it must refuse); `None` where scx must answer.
+fn eval_refused(a: &SurfaceAt, scx_answered: bool) -> Option<Result<(), String>> {
+    let why = not_a_surface(&a.raw)
+        .or_else(|| (!a.uv.iter().all(|t| t.is_finite())).then(|| "a parameter".to_owned()));
+    match (why, scx_answered) {
+        (Some(why), true) => Some(Err(format!("scx evaluated what is not one: {why}"))),
+        (Some(_), false) => Some(Ok(())),
+        (None, false) => Some(Err(format!("scx refused {} at {:?}", a.raw.edit, a.uv))),
+        (None, true) => None,
+    }
+}
+
+/// The exact partials `S^(k,l)`, `k + l < order + 1`, row by row (`k` outer).
+fn exact_tri(a: &SurfaceAt, order: usize) -> Result<Tri, String> {
+    let t = a.raw.data().exact().map_err(|e| format!("{e:?}"))?;
+    let d = t
+        .derivs((a.uv[0], a.uv[1]), tk_sides(a.sides), order)
+        .map_err(|e| format!("{e:?}"))?;
+    (0..=order)
+        .flat_map(|k| (0..=order - k).map(move |l| (k, l)))
+        .map(|(k, l)| {
+            d.get(k, l)
+                .map(|e| e.rounded)
+                .ok_or_else(|| format!("no exact ({k},{l})"))
+        })
+        .collect()
+}
+
+/// `Σ |N_i(u) N_j(v)| w_ij |P_ij| / |w(u, v)|` (`w = 1` for a polynomial surface): the scale
+/// of what the point's sums cancel, from scx's own basis (only a tolerance depends on it). Inside
+/// the domain, where every `N` is non-negative, it is at most the net's scale; outside, the
+/// end pieces' bases alternate in sign and it grows. The net's scale where a basis fails.
+fn abs_scale(a: &SurfaceAt) -> f64 {
+    use scx_nurbs::{Approach, KnotVector};
+    let r = &a.raw;
+    let side = |above: bool| {
+        if above {
+            Approach::Above
+        } else {
+            Approach::Below
+        }
+    };
+    let basis = |p: usize, k: &[f64], t: f64, above: bool| {
+        let b = KnotVector::new(p, k.to_vec())
+            .ok()?
+            .basis(t, side(above))
+            .ok()?;
+        Some((b.first(), b.values().to_vec()))
+    };
+    let scale = || {
+        let (fu, nu) = basis(r.degrees.0, &r.knots_u, a.uv[0], a.sides.0[0])?;
+        let (fv, nv) = basis(r.degrees.1, &r.knots_v, a.uv[1], a.sides.0[1])?;
+        let (mut num, mut den) = (0.0_f64, 0.0_f64);
+        for (i, bu) in nu.iter().enumerate() {
+            for (j, bv) in nv.iter().enumerate() {
+                let at = (fu + i) * r.cols + fv + j;
+                let w = r
+                    .weights
+                    .as_ref()
+                    .map_or(Some(1.0), |w| w.get(at).copied())?;
+                let p = r
+                    .points
+                    .get(at)?
+                    .iter()
+                    .fold(0.0_f64, |m, x| m.max(x.abs()));
+                num += (bu * bv).abs() * w.abs() * p;
+                den += bu * bv * w;
+            }
+        }
+        Some(num / den.abs()).filter(|x| x.is_finite())
+    };
+    scale().unwrap_or_else(|| net_scale(r))
+}
+
+/// Whether `a`'s parameter is outside the surface's domain in either direction.
+fn outside(a: &SurfaceAt) -> bool {
+    let r = &a.raw;
+    let out = |k: &[f64], p: usize, t: f64| {
+        let n = k.len().saturating_sub(p + 1);
+        matches!((k.get(p), k.get(n)), (Some(&lo), Some(&hi)) if t < lo || t > hi)
+    };
+    out(&r.knots_u, r.degrees.0, a.uv[0]) || out(&r.knots_v, r.degrees.1, a.uv[1])
+}
+
+/// The rounding a tensor-product point may carry, of the largest of the net's scale, the
+/// exact point's and [`abs_scale`]: `4 eps` per basis function summed in either direction
+/// (`m = p + q + 2` of them), and `m² eps` outside the domain, where each of the `p` levels of
+/// the basis recursion multiplies by ratios above one and the rounding of every level grows.
+fn point_tol(a: &SurfaceAt, exact: &[[f64; 3]]) -> f64 {
+    let (p, q) = a.raw.degrees;
+    let m = (p + q + 2) as f64;
+    let terms = if outside(a) { m.max(4.0) * m } else { 4.0 * m };
+    let scale = exact
+        .iter()
+        .flatten()
+        .fold(net_scale(&a.raw).max(abs_scale(a)), |m, x| m.max(x.abs()));
+    terms * f64::EPSILON * scale
+}
+
+/// The point check: within [`point_tol`] of the exact point, and no further than the pin's.
+fn surface_point_check(
+    a: &SurfaceAt,
+    got: Option<[f64; 3]>,
+    pin: Option<[f64; 3]>,
+) -> Result<(), String> {
+    if let Some(refused) = eval_refused(a, got.is_some()) {
+        return refused;
+    }
+    let want = exact_tri(a, 0)?;
+    let got = got.ok_or("scx refused")?;
+    let tol = point_tol(a, &want);
+    closest(
+        "point",
+        &[got],
+        pin.as_ref().map(std::slice::from_ref),
+        &want,
+        tol,
+    )
+}
+
+/// `NurbsSurface::point` where scx and the pin disagree: surfaces the pin does not build
+/// (degrees 18 to 31, the testkit's near-zero weights outside `[1e-3, 100]`; see
+/// [`nurbs_surface_new`]), and the corners of the domain, which the pin's `basis_eval`
+/// refuses from the side past the end. The check: refused exactly when the data is not a
+/// surface or a parameter is not finite, else within [`point_tol`] of the exact point and no
+/// further than the pin's.
+pub fn nurbs_surface_point() -> PinDefect<(SurfaceAt,), Option<[f64; 3]>> {
+    PinDefect {
+        reason: "the pin refuses high-degree and wide-weight surfaces and the domain's ends",
+        applies: Applies::Disagreeing,
+        check: |(a,), r| {
+            let pin = crate::t_nurbs_surface_eval::s::point(a);
+            surface_point_check(a, *r, pin)
+        },
+    }
+}
+
+/// The exact partials `w^(i,j)` of the weight function, `i + j <= order`, row by row; all
+/// but `w^(0,0) = 1` zero for a polynomial surface.
+fn exact_weight_tri(a: &SurfaceAt, order: usize) -> Result<Vec<f64>, String> {
+    let pairs = (0..=order).flat_map(|k| (0..=order - k).map(move |l| (k, l)));
+    let Some(w) = &a.raw.weights else {
+        return Ok(pairs.map(|ij| f64::from(u8::from(ij == (0, 0)))).collect());
+    };
+    let r = &a.raw;
+    let data = scx_testkit::data::SurfaceData::<1> {
+        degrees: r.degrees,
+        knots_u: r.knots_u.clone(),
+        knots_v: r.knots_v.clone(),
+        points: w.iter().map(|&w| [w]).collect(),
+        weights: None,
+    };
+    let t = data.exact().map_err(|e| format!("{e:?}"))?;
+    let d = t
+        .derivs((a.uv[0], a.uv[1]), tk_sides(a.sides), order)
+        .map_err(|e| format!("{e:?}"))?;
+    pairs
+        .map(|(k, l)| {
+            d.get(k, l)
+                .map(|e| e.rounded[0])
+                .ok_or_else(|| format!("no exact w ({k},{l})"))
+        })
+        .collect()
+}
+
+/// The binomial `C(n, k)`, `k <= n`.
+fn choose(n: usize, k: usize) -> f64 {
+    (0..k).fold(1.0, |c, i| c * (n - i) as f64 / (i + 1) as f64)
+}
+
+/// The jet check for the triangle `k + l <= N`: each partial of scx's within `E(k,l)` of the
+/// exact one, and each total order no further than the pin's.
+///
+/// `E` is the first-order error the quotient rule (A4.4) carries. With `n = k + l`,
+/// `t_n = 1e-12 10^n` (the polynomial surfaces' allowance: the homogeneous sums of order `n`
+/// round by about that much of their scale) and `c(i,j) = C(k,i) C(l,j) |w^(i,j)| / |w|`
+/// from the exact weight jet:
+///
+/// `E(k,l) = t_n (s_n + Σ_{(i,j) ≠ 0} c(i,j) |S^(k-i,l-j)|) + Σ_{(i,j) ≠ 0} c(i,j) E(k-i,l-j)`,
+///
+/// where `s_n` is the largest of the net's scale and the order's exact coordinates: the
+/// rounding of `A^(k,l)` and of the terms the rule subtracts, then every lower partial's error
+/// as the rule passes it on. A polynomial surface has `c = 0`, so `E = t_n s_n`; a surface
+/// with weights near zero (`c` large where `w` is small) is ill conditioned, and `E` grows
+/// with it as the arithmetic must.
+fn surface_jet_check<const N: usize>(a: &SurfaceAt, got: &Option<Tri>) -> Result<(), String> {
+    if let Some(refused) = eval_refused(a, got.is_some()) {
+        return refused;
+    }
+    let want = exact_tri(a, N)?;
+    let wt = exact_weight_tri(a, N)?;
+    let got = got.as_ref().ok_or("scx refused")?;
+    let pin = crate::t_nurbs_surface_eval::s::jet::<N>(a);
+    let pairs: Vec<(usize, usize)> = (0..=N)
+        .flat_map(|k| (0..=N - k).map(move |l| (k, l)))
+        .collect();
+    let index = |i: usize, j: usize| pairs.iter().position(|&ij| ij == (i, j));
+    let mag = |v: &[f64; 3]| v.iter().fold(0.0_f64, |m, x| m.max(x.abs()));
+    let order_scale: Vec<f64> = (0..=N)
+        .map(|n| {
+            pairs
+                .iter()
+                .zip(&want)
+                .filter(|((k, l), _)| k + l == n)
+                .fold(net_scale(&a.raw), |m, (_, v)| m.max(mag(v)))
+        })
+        .collect();
+    let w00 = wt[0].abs();
+    let mut err = vec![0.0_f64; pairs.len()];
+    for (at, &(k, l)) in pairs.iter().enumerate() {
+        let n = k + l;
+        let t = 1e-12 * [1.0, 1e1, 1e2, 1e3, 1e4, 1e5][n];
+        let (mut terms, mut passed) = (order_scale[n], 0.0);
+        for i in 0..=k {
+            for j in 0..=l {
+                if (i, j) == (0, 0) {
+                    continue;
+                }
+                let (Some(wi), Some(si)) = (index(i, j), index(k - i, l - j)) else {
+                    continue;
+                };
+                let c = choose(k, i) * choose(l, j) * wt[wi].abs() / w00;
+                terms += c * mag(&want[si]);
+                passed += c * err[si];
+            }
+        }
+        err[at] = t * terms + passed;
+    }
+    for n in 0..=N {
+        let idx: Vec<usize> = (0..pairs.len())
+            .filter(|&i| pairs[i].0 + pairs[i].1 == n)
+            .collect();
+        for &i in &idx {
+            let e = max_diff(&got[i..=i], &want[i..=i]);
+            // a NaN distance fails
+            if !matches!(
+                e.partial_cmp(&err[i]),
+                Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
+            ) {
+                let (k, l) = pairs[i];
+                return Err(format!(
+                    "({k},{l}): {e:e} from the truth (tolerance {:e})",
+                    err[i]
+                ));
+            }
+        }
+        let pick = |v: &[[f64; 3]]| idx.iter().map(|&i| v[i]).collect::<Vec<_>>();
+        let tol = idx.iter().fold(0.0_f64, |m, &i| m.max(err[i]));
+        let p = pin.as_ref().map(|p| pick(p));
+        closest(
+            &format!("order {n}"),
+            &pick(got),
+            p.as_deref(),
+            &pick(&want),
+            tol,
+        )?;
+    }
+    Ok(())
+}
+
+/// `NurbsSurface::jet::<2>` where scx and the pin disagree: the pin's refusals as
+/// [`nurbs_surface_point`], and rational surfaces, where scx takes the quotient rule once over
+/// the homogeneous partials (A4.4) and the pin per control point through rational basis
+/// derivatives: the two round a cancelling partial differently. The check: each partial
+/// within the quotient rule's error bound of the exact one (`surface_jet_check`), and each
+/// order no further than the pin's.
+pub fn nurbs_surface_jet() -> PinDefect<(JetAt<7>,), Option<Tri>> {
+    PinDefect {
+        reason: "the pin's refusals as nurbs_surface_point; rational partials rounded differently",
+        applies: Applies::Disagreeing,
+        check: |(a,), r| surface_jet_check::<2>(&a.0, r),
+    }
+}
+
+/// [`nurbs_surface_jet`] for `jet::<4>`.
+pub fn nurbs_surface_jet4() -> PinDefect<(JetAt<4>,), Option<Tri>> {
+    PinDefect {
+        reason: "as nurbs_surface_jet",
+        applies: Applies::Disagreeing,
+        check: |(a,), r| surface_jet_check::<4>(&a.0, r),
+    }
+}
+
+/// `NurbsSurface::eval_many` where scx and the pin disagree, for the pin's refusals as
+/// [`nurbs_surface_point`]. The check: scx's batch is its `point` at each parameter bit for
+/// bit, so refused whole when one of them is refused, and not answered where the data is not
+/// a surface or a parameter is not finite. The points themselves are judged against the truth by
+/// [`nurbs_surface_point`] (the batch's first is the pool's parameter); judging every one again
+/// here would triple the test's time.
+pub fn nurbs_surface_eval_many() -> PinDefect<(SurfaceAt,), Option<Vec<[f64; 3]>>> {
+    PinDefect {
+        reason: "as nurbs_surface_point",
+        applies: Applies::Disagreeing,
+        check: |(a,), r| {
+            let each: Option<Vec<[f64; 3]>> = batch(a)
+                .into_iter()
+                .map(|uv| {
+                    let at = SurfaceAt {
+                        raw: a.raw.clone(),
+                        uv,
+                        sides: a.sides,
+                    };
+                    crate::t_nurbs_surface_eval::x::point(&at)
+                })
+                .collect();
+            let bits = |v: &Option<Vec<[f64; 3]>>| {
+                v.as_ref()
+                    .map(|v| v.iter().flatten().map(|x| x.to_bits()).collect::<Vec<_>>())
+            };
+            if bits(r) != bits(&each) {
+                return Err(format!("the batch {r:?} is not point at each, {each:?}"));
+            }
+            // a refused batch is right when a point of it is (the point test judges that);
+            // an answered one must have no point that is not one
+            let wrong = batch(a).into_iter().find_map(|uv| {
+                let at = SurfaceAt {
+                    raw: a.raw.clone(),
+                    uv,
+                    sides: a.sides,
+                };
+                eval_refused(&at, true).filter(|_| r.is_some())
+            });
+            wrong.unwrap_or(Ok(()))
+        },
+    }
+}
+
+/// The real roots of `c` (ascending, every coefficient finite) as exact rationals, each to
+/// within a width far below the spacing of doubles at `scale`; `None` for a coefficient not
+/// finite or the zero polynomial.
+fn true_real_roots(c: &[f64], scale: f64) -> Option<(scx_testkit::poly::Poly, Vec<Rat>)> {
+    let rc: Option<Vec<Rat>> = c.iter().map(|&x| Rat::from_f64(x)).collect();
+    let p = scx_testkit::poly::Poly::new(rc?);
+    if p.is_zero() {
+        return None;
+    }
+    // 2^-64 of the spacing at the smallest root measured, never below 2^-1200
+    let e = if scale == 0.0 || !scale.is_finite() {
+        -1200
+    } else {
+        (scx_num::fmath::log2(scale.abs()).floor() as i64 - 116).max(-1200)
+    };
+    let roots = p
+        .real_roots(&Rat::one().scale(e))
+        .iter()
+        .map(|t| t.at.mid())
+        .collect();
+    Some((p, roots))
+}
+
+/// How far `z` is from the truth: the distance to the nearest true real root when one lies
+/// within `1e-4` of `|z|` (`Ok`), else the exact residual `|p(z)|` (`Err`: a grazing root
+/// of a complex pair near the axis, which has no real root to be near, or one root reported
+/// for a cluster, as `[0, 1e-9, 1e-9]` reported once near `7e-10`, which is near no one
+/// root of it on its own scale).
+fn root_error(p: &scx_testkit::poly::Poly, roots: &[Rat], z: f64) -> Result<f64, f64> {
+    let Some(rz) = Rat::from_f64(z) else {
+        return Err(f64::INFINITY);
+    };
+    let near = roots.iter().map(|r| (&rz - r).abs()).min();
+    match near {
+        Some(d) if d.to_f64() <= 1e-4 * z.abs() => Ok(d.to_f64()),
+        _ => Err(p.eval(&rz).abs().to_f64()),
+    }
+}
+
+/// The polished roots `got` against the pin's `pin` for the polynomial `c`: the same count,
+/// and each root, paired in order, at least as close to the true real root as the pin's
+/// (to one spacing of doubles at the root), or, for a grazing root with no real root near,
+/// of no larger exact residual (to one part in 10^6: the closed forms differ from the
+/// pin's in the last bit of `fmath`). Pairs within the difftest's tolerance are not judged.
+fn poly_roots_no_worse(c: &[f64], got: &[f64], pin: &[f64]) -> Result<(), String> {
+    if got.len() != pin.len() {
+        return Err(format!("{} roots, the pin's {}", got.len(), pin.len()));
+    }
+    let tol = crate::harness::Tol::DEFAULT;
+    let moved: Vec<(f64, f64)> = got
+        .iter()
+        .zip(pin)
+        .map(|(&x, &s)| (x, s))
+        .filter(|&(x, s)| {
+            !(x == s
+                || (x.is_nan() && s.is_nan())
+                || (x - s).abs() <= tol.abs.max(tol.rel * x.abs().max(s.abs())))
+        })
+        .collect();
+    if moved.is_empty() {
+        return Ok(());
+    }
+    let scale = moved
+        .iter()
+        .flat_map(|&(x, s)| [x.abs(), s.abs()])
+        .filter(|&v| v > 0.0)
+        .fold(f64::INFINITY, f64::min);
+    if c.iter().all(|&v| v == 0.0) {
+        // every number is a root of the zero polynomial
+        return Ok(());
+    }
+    let (p, roots) = true_real_roots(c, scale)
+        .ok_or_else(|| format!("{c:?}: a root moved, and no exact truth for these"))?;
+    for (x, s) in moved {
+        let ulp = x.abs().next_up() - x.abs();
+        match (root_error(&p, &roots, x), root_error(&p, &roots, s)) {
+            (Ok(ex), Ok(es)) if ex <= es + ulp => {}
+            // scx is near a real root and the pin is near none
+            (Ok(_), Err(_)) => {}
+            (Err(rx), Err(rs)) if rx <= rs * (1.0 + 1e-6) => {}
+            (ex, es) => {
+                return Err(format!(
+                    "{x:e} is {ex:?} from the truth, the pin's {s:e} {es:?}"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `solve_cubic` where scx's roots and the pin's disagree. scx takes the closed form's
+/// roots (the pin's, but for `fmath`'s last bits) and polishes each with at most two Newton
+/// steps on the given cubic, each kept only when it lowers the compensated-Horner residual
+/// `|p|`. The closed form loses up to half the digits at near-double roots and at large
+/// coefficient ratios (`acos` and `cbrt` of a cancelled discriminant), which the pin keeps.
+/// The truth: the exact real roots of the cubic with the input's coefficients, isolated by
+/// Sturm sequences in rationals ([`scx_testkit::poly`]). The check ([`poly_roots_no_worse`]):
+/// the pin's count, and each root at least as close to its true root as the pin's.
+pub fn poly_cubic() -> PinDefect<([f64; 4], f64), Vec<f64>> {
+    PinDefect {
+        reason: "the pin's closed-form cubic roots are unpolished",
+        applies: Applies::Disagreeing,
+        check: |(c, tol), got| {
+            let pin = solidcore::geom::polynomial::solve_cubic(c, *tol).to_vec();
+            let used: &[f64] = if c[3].abs() < *tol { &c[..3] } else { c };
+            poly_roots_no_worse(used, got, &pin)
+        },
+    }
+}
+
+/// `solve_quartic` where scx's roots and the pin's disagree: as [`poly_cubic`], the
+/// quartic's roots (Ferrari's method through the resolvent cubic, which loses digits at
+/// clustered roots) polished on the given quartic, or on the cubic when the leading
+/// coefficient is below the tolerance.
+pub fn poly_quartic() -> PinDefect<([f64; 4], f64, f64), Vec<f64>> {
+    PinDefect {
+        reason: "the pin's closed-form quartic roots are unpolished",
+        applies: Applies::Disagreeing,
+        check: |([a, b, d, f], e, tol), got| {
+            let c = [*a, *b, *d, *f, *e];
+            let pin = solidcore::geom::polynomial::solve_quartic(&c, *tol).to_vec();
+            poly_roots_no_worse(quartic_used(&c, *tol), got, &pin)
+        },
+    }
+}
+
+/// The polynomial the quartic solver solves: the quartic, or the cubic below it when the
+/// leading coefficient is below the tolerance (then the quadratic, as the cubic does).
+/// Decided as the solvers decide, so a NaN tolerance keeps the quartic.
+fn quartic_used(c: &[f64; 5], tol: f64) -> &[f64] {
+    if c[3].abs() < tol && c[4].abs() < tol {
+        &c[..3]
+    } else if c[4].abs() < tol {
+        &c[..4]
+    } else {
+        c
+    }
+}
+
+/// `poly_from_roots` (every structured polynomial at one tolerance) where scx's roots and
+/// the pin's disagree: [`poly_cubic`] and [`poly_quartic`] on each of its cubics and
+/// quartics; its quadratics are not polished and must match the pin to the bit.
+pub fn poly_from_roots() -> PinDefect<(f64,), Vec<Vec<f64>>> {
+    PinDefect {
+        reason: "the pin's closed-form cubic and quartic roots are unpolished",
+        applies: Applies::Disagreeing,
+        check: |(tol,), got| {
+            use crate::t_algo::{arr, cases};
+            use solidcore::geom::polynomial as pp;
+            let mut got = got.iter();
+            let mut next = || got.next().ok_or("fewer results than cases");
+            for c in cases(2) {
+                let pin = pp::solve_quadratic(&arr::<3>(&c), *tol).to_vec();
+                let g = next()?;
+                let same = g.len() == pin.len()
+                    && g.iter().zip(&pin).all(|(x, s)| x.to_bits() == s.to_bits());
+                if !same {
+                    return Err(format!("quadratic {c:?}: {g:?}, the pin's {pin:?}"));
+                }
+            }
+            for c in cases(3) {
+                let k = arr::<4>(&c);
+                let pin = pp::solve_cubic(&k, *tol).to_vec();
+                let used: &[f64] = if k[3].abs() < *tol { &k[..3] } else { &k };
+                poly_roots_no_worse(used, next()?, &pin)
+                    .map_err(|e| format!("cubic {c:?}: {e}"))?;
+            }
+            for c in cases(4) {
+                let k = arr::<5>(&c);
+                let pin = pp::solve_quartic(&k, *tol).to_vec();
+                poly_roots_no_worse(quartic_used(&k, *tol), next()?, &pin)
+                    .map_err(|e| format!("quartic {c:?}: {e}"))?;
+            }
+            Ok(())
+        },
+    }
+}

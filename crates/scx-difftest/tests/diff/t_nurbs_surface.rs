@@ -92,7 +92,7 @@ fn base(d: SurfaceData<3>) -> Raw {
 
 /// The generated surfaces: degree pairs from 1 to 9, every knot and weight kind, and degrees
 /// 0, 17, 18, 31 and 32 (the pin's cap is 17, scx's 31).
-fn surfaces(rng: &mut SplitMix64) -> Vec<Raw> {
+pub fn surfaces(rng: &mut SplitMix64) -> Vec<Raw> {
     let mut r = Rng::new(rng.next_u64());
     let mut out = Vec::new();
     for (pu, pv) in [(1, 1), (2, 1), (2, 3), (3, 3), (5, 2), (9, 4)] {

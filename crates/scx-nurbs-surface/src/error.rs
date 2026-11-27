@@ -1,11 +1,12 @@
 // Written for solidcorex. Apache-2.0.
-//! Why a control net or a NURBS surface cannot be built, or an edit cannot be made.
+//! Why a control net or a NURBS surface cannot be built or evaluated, or an edit cannot be
+//! made.
 //!
 //! Errors follow research 62 §10: every cause has a kind computed from it ([`kind`]), a
 //! stable [`name`], and a Display of one frame. The construction causes are the caller's
-//! data, kind `Refused` (63 X13); [`NurbsSurfaceError::BadKnots`] and
-//! [`NurbsSurfaceError::Edit`] are context frames over the `scx-nurbs` error and inherit its
-//! kind (62 D11). An edit whose exact answer has no double form is `Unsupported`
+//! data, kind `Refused` (63 X13); [`NurbsSurfaceError::BadKnots`], [`NurbsSurfaceError::Basis`]
+//! and [`NurbsSurfaceError::Edit`] are context frames over the `scx-nurbs` error and inherit
+//! its kind (62 D11). An edit whose exact answer has no double form is `Unsupported`
 //! ([`NurbsSurfaceError::Reversal`], [`NurbsSurfaceError::Overflow`]). The pin's
 //! `InvalidInput` is [`ErrorKind`]'s `Refused`.
 //!
@@ -18,6 +19,8 @@
 //! | `weights_are_valid`: `Weight` (outside `[1e-3, 100]`) | [`WeightCause::NotPositive`] (not positive and finite; any positive scale is a surface) |
 //! | `KnotVector::validate`: `Knots`, `KnotsDecrease` | `scx_nurbs::NurbsError` when the knot vector is built; [`NurbsSurfaceError::BadKnots`] for a break |
 //! | none: non-finite points and weights pass | [`NetCause::NotFinite`], [`NetCause::WeightedNotFinite`], [`WeightCause::NotPositive`] |
+//! | `Surface::eval`, `Surface::derivs`: the errors of `KnotVector::basis_eval` (a parameter outside the domain, a knot difference below `1e-24`) | [`NurbsSurfaceError::Basis`] over `NurbsError::ParameterNotFinite`, `Degenerate` or `DerivativeOrder`; outside the domain the end pieces continue |
+//! | none: a non-finite point is returned | [`NurbsSurfaceError::Degenerate`] |
 //!
 //! [`kind`]: NurbsSurfaceError::kind
 //! [`name`]: NurbsSurfaceError::name
@@ -29,7 +32,8 @@ use scx_nurbs::NurbsError;
 
 use crate::ParamAxis;
 
-/// Why a control net or a NURBS surface cannot be built, or an edit cannot be made.
+/// Why a control net or a NURBS surface cannot be built or evaluated, or an edit cannot be
+/// made.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub enum NurbsSurfaceError {
@@ -57,6 +61,21 @@ pub enum NurbsSurfaceError {
         axis: ParamAxis,
         /// Why.
         cause: NurbsError,
+    },
+    /// The basis of one direction cannot be evaluated at the parameter given. A context frame
+    /// over the `scx-nurbs` error: `NurbsError::ParameterNotFinite`, `Degenerate` (a parameter
+    /// so far outside the domain that a knot difference rounds away) or `DerivativeOrder`.
+    Basis {
+        /// The direction.
+        axis: ParamAxis,
+        /// Why.
+        cause: NurbsError,
+    },
+    /// The evaluation at `uv` is not finite: a value overflowed (far outside the domain, or
+    /// control points near the largest double).
+    Degenerate {
+        /// The parameters `[u, v]`.
+        uv: [f64; 2],
     },
     /// The reflected knots of `axis` are not a valid knot vector in doubles: rounding
     /// `a + b - t` merged a knot with a neighbour past the allowed multiplicity, or
@@ -147,15 +166,20 @@ pub enum WeightCause {
 }
 
 impl NurbsSurfaceError {
-    /// The error's kind: [`ErrorKind::Refused`] (the net, weights and matrix are the
-    /// caller's), the `scx-nurbs` cause's under [`Self::BadKnots`] and [`Self::Edit`] (62
-    /// D11), [`ErrorKind::Unsupported`] for a result with no double form, and
+    /// The error's kind: [`ErrorKind::Refused`] (the net, weights, matrix and parameters are
+    /// the caller's), the `scx-nurbs` cause's under [`Self::BadKnots`], [`Self::Basis`] and
+    /// [`Self::Edit`] (62 D11), [`ErrorKind::Unsupported`] for a result with no double form, and
     /// [`ErrorKind::Defect`].
     #[must_use]
     pub const fn kind(&self) -> ErrorKind {
         match self {
-            Self::BadKnots { cause, .. } | Self::Edit { cause, .. } => cause.kind(),
-            Self::BadNet(_) | Self::BadWeights(_) | Self::AffineNotFinite => ErrorKind::Refused,
+            Self::BadKnots { cause, .. } | Self::Basis { cause, .. } | Self::Edit { cause, .. } => {
+                cause.kind()
+            }
+            Self::BadNet(_)
+            | Self::BadWeights(_)
+            | Self::Degenerate { .. }
+            | Self::AffineNotFinite => ErrorKind::Refused,
             Self::Reversal { .. } | Self::Overflow(_) => ErrorKind::Unsupported,
             Self::Defect { .. } => ErrorKind::Defect,
         }
@@ -168,6 +192,8 @@ impl NurbsSurfaceError {
             Self::BadNet(c) => c.name(),
             Self::BadKnots { .. } => "knots_break_surface",
             Self::BadWeights(c) => c.name(),
+            Self::Basis { .. } => "basis_unevaluable",
+            Self::Degenerate { .. } => "evaluation_not_finite",
             Self::Edit { .. } => "line_edit_failed",
             Self::Reversal { .. } => "knots_not_reversible",
             Self::AffineNotFinite => "affine_not_finite",
@@ -207,6 +233,10 @@ impl fmt::Display for NurbsSurfaceError {
             Self::BadNet(c) => c.fmt(f),
             Self::BadKnots { axis, .. } => write!(f, "the {axis} knots cannot carry a surface"),
             Self::BadWeights(c) => c.fmt(f),
+            Self::Basis { axis, .. } => write!(f, "the {axis} basis cannot be evaluated"),
+            Self::Degenerate { uv: [u, v] } => {
+                write!(f, "the surface is not finite at ({u}, {v})")
+            }
             Self::Edit { axis, .. } => write!(f, "the edit along {axis} failed"),
             Self::Reversal { axis, .. } => {
                 write!(f, "the reversed {axis} knots have no form in doubles")
@@ -271,10 +301,12 @@ impl std::error::Error for NurbsSurfaceError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::BadKnots { cause, .. }
+            | Self::Basis { cause, .. }
             | Self::Edit { cause, .. }
             | Self::Reversal { cause, .. } => Some(cause),
             Self::BadNet(_)
             | Self::BadWeights(_)
+            | Self::Degenerate { .. }
             | Self::AffineNotFinite
             | Self::Overflow(_)
             | Self::Defect { .. } => None,
@@ -328,6 +360,13 @@ mod tests {
                 col: at.1,
                 weight: -1.0,
             }),
+            NurbsSurfaceError::Basis {
+                axis: ParamAxis::V,
+                cause: NurbsError::ParameterNotFinite {
+                    parameter: f64::NAN,
+                },
+            },
+            NurbsSurfaceError::Degenerate { uv: [0.5, 1e300] },
             NurbsSurfaceError::Edit {
                 axis: ParamAxis::U,
                 cause: NurbsError::ParameterOutside {
@@ -387,6 +426,10 @@ mod tests {
                 | NurbsSurfaceError::Edit { cause, .. }
                 | NurbsSurfaceError::Reversal { cause, .. } => {
                     assert!(!text.contains(&cause.to_string()));
+                    assert_eq!(e.source().map(ToString::to_string), Some(cause.to_string()));
+                }
+                NurbsSurfaceError::Basis { cause, .. } => {
+                    assert_eq!(text, "the v basis cannot be evaluated");
                     assert_eq!(e.source().map(ToString::to_string), Some(cause.to_string()));
                 }
                 _ => assert!(e.source().is_none()),

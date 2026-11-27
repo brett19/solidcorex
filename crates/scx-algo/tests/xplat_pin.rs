@@ -371,7 +371,7 @@ const PINNED: &[(&str, u64)] = &[
     ("circles", 0x95647a90fd2227d8),
     ("affine", 0x49ab13e94a8125f9),
     ("extents", 0x0f7be59348ab390f),
-    ("roots", 0xab35fb4fc82816fa),
+    ("roots", 0x81ea06b587b1a7d6),
     ("solve1d", 0x31224adf78560453),
     ("solve_nd", 0x1ebe485c28af86e8),
 ];

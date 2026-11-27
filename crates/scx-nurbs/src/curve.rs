@@ -242,7 +242,10 @@ impl<const D: usize> NurbsCurve<D> {
     ) -> Option<[[f64; D]; K]> {
         let p = self.degree();
         let mut nd = [[0.0; N]; K];
-        derivs_into(self.knots.window(span)?, u, &mut nd)?;
+        let window = self.knots.window(span)?;
+        if let Some((values, derivs)) = nd.split_first_mut() {
+            derivs_into(window, u, values, derivs)?;
+        }
         let local = span - p..=span;
         let points = self.points.get(local.clone())?;
         let mut out = [[0.0; D]; K];
