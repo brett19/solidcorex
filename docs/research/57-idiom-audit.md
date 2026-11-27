@@ -504,8 +504,9 @@ difftest is `scx-difftest/tests/diff/t_gsolve.rs`.
     (`num_variables`/`parameters`, `num_objects`/`objects`).
   - `LocalSolve` returns a bool, "needs more subdivision".
 - **Replacement:**
-  - `solve(trees, accumulator, hooks) -> Result<Accumulator, SolveError<E>>`, a pure call.
-    `SolveOptions { operation, keep, tolerance, incumbent_sq }` is the options value.
+  - `solve(trees, accumulator, hooks) -> Result<Accumulator, Unfinished<O, E>>`, a pure
+    call. `SolveOptions { operation, keep, tolerance, incumbent_sq, max_branches }` is the
+    options value.
     `Accumulator` holds the options, the best so far and the sorted solutions, and is
     the only state a hook can change (`add_sorted`, `push`). The hooks are the trait
     `BranchSolver<T, O, N>`: `local_solve` is required; `may_contain`, `is_ready` and
@@ -533,10 +534,37 @@ difftest is `scx-difftest/tests/diff/t_gsolve.rs`.
     a dozen defaulted geometry lookups. The geometry queries of `Solution` (`point`,
     `point_of`) and the `SideRecord` stay with the crates that own the geometry.
   - The traversal is an explicit stack in the order of the pin's recursion: first half
-    first, all of it. So there is no depth bound. `MAX_BRANCHES` (2^23) bounds the work, as
-    solidcore's `MAX_SOLVE_BRANCHES` did.
-  - There is no cancel token. A hook that is cancelled returns its own error, which ends
-    the solve.
+    first, all of it. So there is no depth bound.
+  - **Budget and cancel (decided 11-27, 04 rulings row; research 63: iterative calls take
+    a budget or stop).**
+    - The bound is `SolveOptions::max_branches`, the branches visited, a deterministic
+      count (01 §6.3), defaulting to `DEFAULT_MAX_BRANCHES` (2^23, solidcore's
+      `MAX_SOLVE_BRANCHES`). A solve that needs exactly that many finishes; the next
+      branch is `SolveFailure::BranchesExhausted { limit }`, kind `Exhausted`. The pin
+      called it an invalid input.
+    - The cancel check is a hook, `BranchSolver::cancelled(&self) -> bool`, by default
+      never. It is asked before every branch, so a solve whose hooks never evaluate (the
+      default box tests) still stops within one branch. True is `SolveFailure::Cancelled`,
+      kind `Cancelled`. Neither error is ignorable (`SolveError::is_ignorable`), so a
+      caller's skip of failed samples never swallows them.
+    - Every error, these two and the hooks' own, comes back as
+      `Unfinished { error, found }`: the accumulator as it stood. For the minimising
+      operations its best value bounds the full answer; for Intersect its solutions are a
+      subset. `From<Unfinished> for SolveError` lets a caller that wants only the error use
+      `?`.
+    - Against a hook for the cancel: cancellation is the caller's state, not geometry, and
+      a hook that forgets to forward it never cancels. A `&Stop` parameter would make every
+      call pass one. But no `Stop` type exists yet (01 §6.3 puts it in `Cx`); the hooks are
+      already the caller's state (the evaluator, its own errors); and the default keeps the
+      common call unchanged. When `Stop` lands, the hook's body is a read of it.
+    - Against an options count rather than 01's one metered total: the solve cannot charge
+      a shared budget. The total does not exist yet either; when it does, the caller sets
+      `max_branches` from what is left and charges what was used.
+    - Against `Unfinished` on every error rather than only these two: a hook's failure
+      leaves a partial accumulator that answers nothing. Handing it back is harmless and
+      keeps one error type; the alternatives were an out-parameter
+      (`&mut Accumulator`, the pin's shape) or an `Ok` that a caller could read as
+      complete.
 - **Corrections (results change; each is checked against brute force):**
   - The rayfire child order reads the children of the tree being split. The pin read the
     second tree's and failed when that was a leaf (pin defect `gsolve_rayfire`).

@@ -10,8 +10,8 @@
 //! ([`fmath`]).
 //! Depends on nothing.
 //!
-//! Every module but [`cert`], [`consts`], [`eft`], [`fmath`], [`hash`], [`jet`], [`units`],
-//! [`error`] and the crate's own `expansion` (exact sums and products) is moved from
+//! Every module but [`cert`], [`consts`], [`eft`], [`fmath`], [`hash`], [`jet`], [`trig`],
+//! [`units`], [`error`] and the crate's own `expansion` (exact sums and products) is moved from
 //! solidcore at commit `03e16c9ee766de5b9b1ced845e5149d62ff493b8` with its results
 //! unchanged bit for bit (`docs/research/52-num-move.md`; the interval modules,
 //! `53-interval-and-algo.md`), except that the transcendental functions are [`fmath`]'s in
@@ -44,6 +44,7 @@ pub mod small_matrix;
 pub mod taylor_model;
 pub mod tol;
 pub mod transform;
+pub mod trig;
 pub mod units;
 pub mod vector2d;
 pub mod vector3d;
