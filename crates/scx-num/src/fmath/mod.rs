@@ -15,8 +15,8 @@
 //!
 //! # Accuracy
 //!
-//! Every function is correctly rounded (round to nearest, ties to even) on every input
-//! tried: 5,000 per function (4,997 for `sin` and 4,999 for `tan`, whose other inputs
+//! Every function was correctly rounded (round to nearest, ties to even) on every random
+//! input tried: 5,000 per function (4,997 for `sin` and 4,999 for `tan`, whose other inputs
 //! were infinite), log-uniform over the whole domain and dense near the hard places
 //! (arguments near multiples of `pi/2`, near 1 for the logarithms, near `±1` for `asin`,
 //! subnormals), against Python's `decimal` at 90 digits. MEASURED 2026-11-27, off the
@@ -31,6 +31,16 @@
 //! | `sinh` | 0.5000 | | `cosh` | 0.4999 | | `tanh` | 0.5000 |
 //! | `cbrt` | 0.4997 | | `hypot` | 0.4999 | | `powf` | 0.4999 |
 //! | `powi` | 0.4999 | |  |  | |  |  |
+//!
+//! It is not correctly rounded everywhere. Each function rounds once a result carrying 68
+//! to 104 bits, so where the true value lies closer than that to a halfway point between
+//! two doubles the result can be the neighbour of the correct one: at CORE-MATH's worst
+//! cases (`tests/fmath_worst.rs`, 1,000 per function) 2 to 27% of the results misround,
+//! by at most 2^-21 ulp past the halfway point (`exp2`; `exp` 2^-28, `ln` 2^-36, the rest
+//! 2^-40 or less).
+//! `powf` also misrounds exact halfway points (`powf(1781, 5)`). Only `cbrt` was
+//! correctly rounded at all of them. Every result checked is within one ulp, and none is
+//! further than the neighbour.
 //!
 //! `tests/fmath.rs` holds the test that keeps this: random inputs and a table of hard
 //! cases against references computed in double-double in the test itself, each within
