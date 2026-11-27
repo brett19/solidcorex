@@ -21,9 +21,14 @@
 //!   parameter step `s` deviates by at most `M2 s² / 8`. A piece is bisected while that
 //!   lowers its count.
 //!
-//! **A face's need** is a longest segment `L_f = sqrt(8 c / κ_f)` (and `angle / κ_f` when a
-//! turning bound is set), `κ_f` the face's largest normal curvature: the length a triangle
-//! side may span in the per-triangle test (72 §12 row 6). A plane, cylinder or cone gives
+//! **A face's need** is a longest segment `L_f = 0.8 sqrt(3) sqrt(c (2ρ − c))` (and
+//! `angle / κ_f` when a turning bound is set), `ρ = 1/κ_f` the face's least radius of
+//! curvature: the curved faces' lattice side, 0.8 of the equilateral side whose enclosing
+//! circle is the cap of sag `c` on a sphere of radius `ρ`. The cap's full chord
+//! `2 sqrt(c (2ρ − c))` is the limit itself: a triangle on such a segment passes the
+//! per-triangle test only once it is obtuse, which took the sphere's seam many refinement
+//! rounds (72 §12 row 6, §14.23; TS1 had the second-order `sqrt(8 c / κ_f)`, which a torus
+//! equator's own triangles could never meet). A plane, cylinder or cone gives
 //! none: developable, its curvature across a segment is at most the curve's own along it
 //! (the triangle test there must use the developable bound). A sphere gives `1/r`, a torus
 //! `max(1/r, 1/(R − r))`.
@@ -212,7 +217,12 @@ fn face_need(surface: &Surface, spec: &TessSpec) -> Result<f64, SurfaceKind> {
         }
         other => return Err(SurfaceKind::of(other)),
     };
-    let chord = sqrt(8.0 * spec.chord().mm() / kappa);
+    // The curved faces' lattice side (`SIDE` of the equilateral side whose enclosing circle
+    // the chord allows on a sphere of radius `rho`): a boundary segment no longer leaves a
+    // triangle on it room to pass without being obtuse.
+    let rho = 1.0 / kappa;
+    let c = spec.chord().mm().min(rho);
+    let chord = crate::curved::SIDE * sqrt(3.0) * sqrt(c * (2.0 * rho - c));
     Ok(spec.angle().map_or(chord, |a| chord.min(a / kappa)))
 }
 
@@ -848,7 +858,7 @@ mod tests {
             assert_eq!(fold(&order).to_bits(), all.to_bits());
         }
         // The torus's meridian bounds it: 1/r = 1/3 against 1/(R - r) = 1/7 and the sphere's
-        // 1/4; the angle bound 0.3 * 3 = 0.9 is above sqrt(8 * 0.01 * 3) = 0.49.
-        assert_eq!(all, sqrt(8.0 * 0.01 / (1.0 / 3.0)));
+        // 1/4; the angle bound 0.3 * 3 = 0.9 is above 2 sqrt(0.01 (6 - 0.01)) = 0.49.
+        assert_eq!(all, 0.8 * sqrt(3.0) * sqrt(0.01 * (2.0 * 3.0 - 0.01)));
     }
 }

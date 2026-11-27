@@ -2266,6 +2266,13 @@ The 19 recipes the classification entry selects without a mismatch on their poin
 - *Mass is asked and judged at `1e-9` relative* (`SCX_ACCURACY`), with T12's slack as for the pin. scx's error estimate is not added to the allowance. For: §8.1 asks for 1e-9, and an estimate that exceeded it would be scx's failure. Against: none. A miss would show as a finding.
 - *Refusals map by meaning.* A cone's base and top radii map to truth's `Radius`. The torus major radius has no truth dimension, so a refusal on it never matches. `ZeroRadii` matches `NoBody`, and `HornTorus` matches the horn-torus `Unsupported`. A `PlanarError` from the extrusion profile is `Refused(Profile)` and matches no truth outcome. For: truth names the quantity, not the parameter. Against: a refused radius on the wrong end of a cone would pass. No recipe has radii that would tell the two ends apart.
 
+**DT1c (11-27).** scx's classification check now runs `scx_bodyq::classify_point` on the same points the pin classifies: T10's box points and its seeded probe subset. It is judged as the pin is. Every point T10 calls certain must land on its side, and band points are counted, not judged. `NotYet::Classify` is removed. All 16 constructor recipes pass, and no scx point is misplaced. Of 24,163 points, 17,411 are certain; 5,364 of the 6,752 band points classify On, and none fails. The scx split is 109 pass, 0 fail, 374 not yet (Boolean 297, Mesh 16, Contract 32, Work 29). The scx classify side costs about 0.16 s of CPU over the 16 recipes, about 7 us a point and 4 to 22 ms a recipe (throwaway timer, not committed); the run takes 48 s, which is still the pin's time. Decisions (cases for and against):
+- *A solid region is `In`; any other region is `Out`; a face, edge or vertex is `On`; an error is `Failed`.* These are the pin's four answers, so the same `misplaced` rule judges both kernels. For: one rule, and an `On` or an error on a certain point is a misplacement in both. Against: `Failed` hides which `BodyqError` it was. A failure lists every misplaced point with both answers, and the error can be read from there.
+- *The budget is unlimited and the stop never set.* For: the check asks for the answer, not the cost, and the cost is measured separately. Against: a runaway query would hang the run instead of failing. The per-recipe cost above shows no such query.
+- *A control proves the check is not vacuous.* `t_slice_controls` builds the block in scx, passes it on T10's sides and fails it with In and Out swapped.
+
+**Open.** BQ1 answers a point with no clean ray from the nearest boundary point, not with `NoClearRay`, so A4's per-run `NoClearRay` count (§8.1 revision) has nothing to count. Whether the fallback count should be exposed as a side-channel for the work record is BO6's question.
+
 ### 14.14 BQ1 as built (11-27)
 
 New crate `crates/scx-bodyq`, placed last in `layers.txt` (after `scx-tess`) and after `scx-tess` in the workspace. Dependencies: `scx-brep`, `scx-curve`, `scx-nurbs` (for `Approach`), `scx-num`, `scx-surface`; dev-dependencies `scx-make` and `scx-testkit` with `bodies`. Public API:
@@ -2746,6 +2753,262 @@ Prisms are two N-gon extrusions of radius 10, `b` turned by pi / N and raised by
 **Open questions.** (1) Two edges of one operand crossing each other within one merged point are allowed (only vertices are checked); a valid body cannot have them, so this is `finish`'s guarantee taken on trust. (2) `scx-brep` could cache a face's box and accuracy (both derived per call); BO1 caches its own, and BO2-BO4 will want the same. (3) `NearWithoutBoundary` on valid input, if DT3 finds it.
 
 **Proposed 04 row.** "`scx-boolean` (BO1): `boolean(&Brep, &Brep, BooleanOp, &mut Cx) -> Result<Done<NoItems>, BooleanError>`. Stages before face against face: pairs from `b`'s box tree; vertex-vertex, vertex-edge, vertex-face and edge-face tests on the pairs' entities from one box sweep, edge-edge found as edge-face hits at the face's boundary; components within coincidence fixed before any merge; the point is `a`'s vertex, else `b`'s, else the mean, its gap the `Measured` accuracy to record. Two vertices of one operand in one point are `Refused` within coincidence and `Unsupported(Chain)` beyond it (no nearest-vertex anchoring: it would move an operand record). An operand at another resolution is `Refused(OtherDocument)`. Change if a step-4 recipe makes a chain, or the rebase operation makes the resolution check redundant."
+
+### 14.22 CK1 as built (11-27)
+
+New crate `scx-check` (after `scx-bodyq` and before `scx-boolean` in `layers.txt`, so BO's tests can call it; depends on `scx-brep`, `scx-mass`, `scx-num`): `contract(body: &Brep, cx: &Cx<'_>) -> Result<Proved, ContractError>`, and `Proved`, a newtype over `Brep` that only `contract` builds (`body()`, `into_body()`, `AsRef<Brep>`). `ContractError` is `Broken(Breach)` (kind `Refused`), `Undecided { face }` (kind `Unsupported`) or `Mass(MassError)` (that error's kind); `Breach` is `Empty`, `FaceNotBounding { face }`, `NonManifoldEdge { edge, fins }`, `LoneVertex { vertex }`, `FaceUnbounded { face }` or `NotOutward { shell }`. Each has a stable `name()` and a `Display`.
+
+**The tests, in order** (the first failure is named, at its lowest id): (1) at least one face; (2) every face has a solid region on one side and a non-solid region on the other (this refuses sheets, faces inside a solid and faces between stacked solids); (3) every edge with a curve has exactly two fins (this refuses wires, sheet borders, and edges where solids meet), and no shell holds a lone vertex; (4) every face's region is proved by the loops' enclosed signed area and the face has a box; (5) `scx_mass::outward`, MA4's certified per-shell sign. A `NotOutward` from it becomes `Breach::NotOutward`; every other `MassError` passes through as `Mass`.
+
+**A fix in `scx-brep` (open question 2 of §14.16), small, made here.** `Face::bounding_box` was `None` on the thin quarter shell's annular caps because `Boundary::build` could not sign their loops' area. The cause: a circle piece's area `∮ (u - c) dv` was enclosed by the mean value form over each refined piece, whose overestimate grows as `R² · sweep`. At radius 1e4 that is about 1e8 times the sweep, against loops only 1e-3 apart, so the five refinements (`AREA_REFINE`, up to 16 pieces) never excluded zero. The fix encloses a `Curve2::Circle` piece's area in closed form (`arc_area`): `(o_x - c)(y_b - y_a) + ± r²(b - a)/2 + ((x_b - o_x)(y_b - o_y) - (x_a - o_x)(y_a - o_y))/2`, in `Ivl`, with the sweep's sign taken from the turn at the start. It needs two jets per piece, where the mean value form needed one per sample. New public read: `Face::is_region_proved()`. Failing tests first (`crates/scx-brep/tests/thin.rs`): at (1e4, 1e-3), (10, 1e-4) and (10, 1e-6), every face has a box holding its edges and its region is proved, and a cap tells its middle (`Inside`) from inside its inner arc (`Outside`). Both tests failed before the fix and pass after it. The brep, mass, bodyq and make tests are unchanged.
+
+**Decisions, with cases for and against.**
+
+- **`&Cx`, not `&mut Cx`, and a fresh budget from `cx.budget()`.** For: the contract only reads. It uses `cx.stop` and the settings' budget, and memoises nothing. Against: if MA3's memo of face integrals comes to serve the certificate, the contract will want `&mut Scratch`. Change then.
+- **`Proved` holds a clone.** For: 72's `&Brep` signature is kept, and a `Brep` clone shares every table and cell (`Arc`), so it costs a few reference counts. Against: two handles to one body; nothing can change through either.
+- **Collapsed edges are not counted in (3).** A pole or an apex has one fin, because one face uses it as a point. It bounds nothing, and finish proves each of its uses lies on its vertex. For: without this, every cone to an apex and every sphere would be refused (MEASURED: `cone` and `Kind::Cone` failed `NonManifoldEdge { fins: 1 }` before). Against: two faces meeting at one apex pass, a vertex non-manifoldness this crate does not test (below).
+- **"Closed" is not tested separately.** Two fins per curve edge, with both faces bounding the same solid and void (finish's radial check, `SidesDisagree`), leave no shell edge open. Against: it relies on finish's check. That check runs on every `finish` and is tested there.
+- **The undecided region is `Unsupported`, the unbounded face is `Refused`.** A loop whose area the enclosures cannot sign is this method's limit, not a broken body. A face with a proved region and no box is a first loop wound the wrong way on an open surface (a plane, a cylinder's v), and its region is the unbounded rest of the surface. The region is checked first, so an unbounded face is named only when its orientation is proved.
+- **No stronger outward rule.** I considered requiring exactly one positive shell in each bounded region. It is not needed: each face lies between two shells, so an inverted face set shows on one of them, and an inverted void leaves its region with no positive shell (tested below).
+
+**Tests** (13 in `crates/scx-check/tests/contract.rs`, plus 2 in `scx-brep` and 1 in `scx-mass`, listed above and in the commit). The truths are the bodies' own constructions, never the pin's output.
+
+- Every `scx_make` primitive is proved at the origin, at a tilted frame, and at (1e5, -1e5, 1e5): block, cylinder, frustum, cone to an apex, sphere, torus. So is every T11 profile fixture `extrude` accepts, at the same three frames (more than 30 bodies). So is every generated solid kind (Block, Prism, Cylinder, Cone, Sphere, Torus, Holed, Cavity) over seeds 0 to 3 at sizes 1 and 3. So are the thin quarter shells (1e4, 1e-3), (10, 1e-4) and (10, 1e-6), which need the `scx-brep` fix.
+- The empty body is `Empty`. QuadSheet and TriSheet are `FaceNotBounding` on their first face. Stack, Checker and Touching are `FaceNotBounding` or `NonManifoldEdge`. A block with one face removed is refused by finish (`SidesDisagree`); were finish to pass it, the test asserts the contract's `NonManifoldEdge { fins: 1 }`.
+- Block, cylinder, sphere, torus and cavity set inside out (every face's sides swapped) are `NotOutward`. A cavity alone inverted (its lining's faces facing into the solid) is `NotOutward` on the void's shell. A cavity labelled the outside (its shell moved to the outside region and its region removed) passes finish and is `NotOutward` on that shell.
+- **A contradiction smaller than the error.** The (10, 1e-6) shell set inside out has a volume of -1.6e-5 and, at relative accuracy 1e-3, a stated error of 8e-4. `volume`'s guard therefore returns `Ok` (MEASURED), and the contract refuses it `NotOutward`.
+- **The pin's `the_far_thin_shells_loops_reversed_are_caught`, ported as outcomes.** On each of the six faces of the (1e4, 1e-3) shell, loop 0 is reversed: the uses in the other order, each sense flipped, and the face's fins on those edges flipped. Alone, finish refuses it with `SidesDisagree`. With the face's sides swapped as well, finish passes it and the contract refuses it `FaceUnbounded` on that face. This includes the two cylinder walls. Each face's sides swapped with its loops kept is refused by finish or by the contract.
+- The pin's `SolidTest::VolumeNegative` case (the solid and void labels swapped) is refused by finish, because the outside may not be solid (`Outside`).
+- A zero budget gives `Mass(Exhausted)` and a set stop gives `Mass(Cancelled)`, typed by kind. A sheet under both is still `Broken`, since the structure tests come first and charge nothing.
+- `Proved` holds the body: the same faces, edges, ids and box.
+- `scx-mass` `tests/enclosure.rs`: `a_thin_shells_estimate_holds_its_closed_form`, `volume` at 1e-9 on the three thin shells, which `NoBox` blocked before the fix. Its header no longer lists the reversed-loop case as not ported.
+
+**Removed or left, on purpose** (pin test, what it proved, why not here):
+
+- `the_solid_test_names_the_test_a_body_fails`, the loose-vertex-tolerance case (`PointersInvalid`): a vertex here has no tolerance to loosen.
+- The same test, the negated-plane case (`Invalid`): a face's sense here is its sides, so a negated plane is the inside-out case, which is tested.
+- The same test, the (10, 1e-6) shell (`VolumeUndecided` in the pin): here it is proved, a positive case (truth over pin: its pcurves are exact and its sign decides).
+- No test was removed.
+
+**Measurements** (release, local machine, throwaway timer, mean of 20, seed 0, other builds running, so about ±30%). `outward` work is in budget units; `volume` is at relative accuracy 1e-9.
+
+| body | faces | `contract` | `outward` alone | `volume` | `outward` work |
+|---|---:|---:|---:|---:|---:|
+| block | 6 | 1.4 ms | 1.4 ms | 0.05 ms | 2,328 |
+| block, size 4 | 96 | 12 ms | 8.6 ms | 0.54 ms | 37,248 |
+| cylinder | 3 | 2.7 ms | 2.2 ms | 1.1 ms | 6,164 |
+| sphere | 1 | 15 ms | 17 ms | 2.7 ms | 30,592 |
+| torus | 1 | 33 ms | 35 ms | 0.08 ms | 59,208 |
+| torus, size 4 | 16 | 53 ms | 54 ms | 0.42 ms | 89,452 |
+| cavity, size 4 | 192 | 15 ms | 15 ms | 0.95 ms | 74,496 |
+| holed | 10 | 1.0 ms | 1.0 ms | 0.08 ms | 4,856 |
+| thin (1e4, 1e-3) | 6 | 6.3 ms | 6.2 ms | 0.30 ms | 19,684 |
+| thin (10, 1e-6) | 6 | 11 ms | 11 ms | 0.27 ms | 36,020 |
+
+All the cost is MA4's certificate. CK1's own passes (structure, region and box per face) are within the timer's noise, and the region and box cells, once filled, serve every later query on the body. The contract costs 2 to 400 times a volume estimate, with the torus worst.
+
+**Deviations from 72.** None in signature. The tests cover every MK result but no BO result: BO1 (§14.20) builds stages 1 to 3 and answers `Unsupported` before it has a body. BO's tests should call `contract` on each result once BO2 returns bodies (`scx-check` sits before `scx-boolean` for this).
+
+**Open.**
+
+1. `scx-mass`'s estimate leaves rounding out of its stated error when face fluxes cancel from about 1e8. At (1e4, 1e-3), `volume` at 1e-9 states an error of 0 against a miss of 9.3e-9 (6e-10 of the volume). This is for MA1/MA3; the new mass test asserts the stated error or the accuracy asked, and names the gap.
+2. Vertex manifoldness: two solids touching at one vertex, or two faces at one apex, pass. The full check of step 6 should own it, and it is needed for parity with the pin's `is_manifold_solid`; there is no generator for vertex-touching solids yet.
+3. Proving a sheet or touching solids (an `Expect` argument) is left until a caller needs it; today they are refused.
+4. The certificate's cost at the kernel edge (above). A memo of signs in `Scratch` keyed by face records would make a second call on an unchanged body free. A cheaper first test, such as the estimate's per-shell sum with a rounding term once (1) is fixed, could decide most bodies before the enclosure.
+5. Finish accepts a region whose shells do not meet (a cavity labelled the outside). The contract refuses it as `NotOutward`, which is correct but names the orientation, not the labelling.
+
+**Proposed 04 row.** "`scx-check` (CK1): `contract(&Brep, &Cx) -> Result<Proved, ContractError>` is the kernel edge's proof that a body is closed, manifold and outward. Every face lies between a solid and a void, every curve edge has two fins (collapsed edges excepted), no shell holds a lone vertex, every face's region is proved and bounded, and MA4's certified `outward` passes. The first failure is named at its lowest id: `Broken(Breach)` is refused, `Undecided` unsupported, and `Mass(e)` takes `e`'s kind. `Proved` is a newtype over a shared clone that only `contract` builds. Change if: sheets or touching solids need proving, vertex manifoldness is wanted at the edge, or the certificate's cost (2 to 400 times a volume estimate) is too much for every result."
+
+### 14.23 TS3 as built (11-27)
+
+Cylinder, cone, sphere and torus faces (§11 TS3), on TS2's CDT in each face's own `uv`. There is no §14.21: the number follows the brief. Public API: no new function; `tessellate` and `tessellate_faces` now mesh every analytic face.
+
+```rust
+// new variants
+TessRefusal::FaceTooFine { face, needed }   // "face_too_fine": more points than a mesh indexes
+TessDefect::Refinement { face }             // "refinement": a triangle still fails after 32 rounds
+// still unsupported
+TessUnsupported::FaceKind { face, kind }    // NURBS faces (step 5)
+```
+
+The work is in `scx-tess/src/curved.rs` (crate-private). `wire.rs` gains a crate-private `wire` that returns each polyline's sample parameters beside the `Mesh`.
+
+**What it does.**
+- **Boundary.** Each loop use takes its edge's TS1 polyline. Its mesh indices are the polyline's, and its `uv` is the use's pcurve at the edge's own sample parameters, never a projection. A seam's two uses are its two pcurves, a period apart. A triangulation point is a ring position, not a mesh index, so a seam vertex is two points with one mesh index. A pole's or apex's collapsed edge is its pcurve, the `Line2` along `u` at the pole's `v`. It is cut into steps of the face's pole step (a row's step at the face's widest circumference), and every point on it is the pole's vertex. A triangle with two corners on one pole line is the pole itself and is dropped (`pole_pair`); what is left is the closed fan round the pole.
+- **Interior points.**
+  - A cylinder needs none: a triangle's sag is bounded by its angle span alone, so the edge samples hold it already.
+  - A cone gets none when it runs to an apex, since the fan of its rulings is within the chord already. It also gets none when its rims' radii differ by at most `RATIO` (1.25).
+  - Any other cone gets rows at radii in even ratio between its rims. There are `n = ceil(ln(wide/small) / ln 1.25)` steps of ratio `q = (wide/small)^(1/n)`, and each row is spaced at `0.8` of the ruled step of the next wider row.
+  - A sphere or torus face gets rows in latitude (or tube angle). Each row's points are spaced evenly in longitude at the row's own circumference, about equilateral in space, at a side of `0.8 sqrt(3) sqrt(c (2ρ − c))`, within the angle and edge-length bounds.
+  - A cylinder or cone gets rows for an edge-length bound.
+  - Every row's step in `u` is at most `WIDE` (1.5) row spacings in the triangulation's scaled `uv`.
+  - A point is kept only when it is clear of the boundary by `0.4` of its row's step, checked at three lines across the row.
+- **Triangulation.** `uv` is scaled per axis to be about isometric at the box's centre. The face is triangulated by TS2's CDT, and pole pairs are dropped.
+- **The check.** Every triangle is tested on its corners:
+  - its normal is within 90° of the surface normal at its middle;
+  - its sides are within the edge-length bound;
+  - its sag is within the chord.
+
+  For a cylinder or cone, the sag bound is the largest `2 ρ_i sin²((φ_i − mid)/2)` over the corners, `mid` the middle of the triangle's angle span. An apex corner adds 0. A span of π or more fails. For a sphere or torus, the bound is `ρ − sqrt(ρ² − R²)`: `R` is the triangle's smallest enclosing circle in space and `ρ` the least radius of curvature (`r` for a sphere, `min(r, R − r)` for a torus). A triangle that fails gets its centroid in `uv` as a new point, and the face is triangulated again, at most `ROUNDS` (32) times. After that it is `Defect(Refinement)`. The face's `chord_bound` is the larger of its polylines' chords and its worst triangle bound.
+- **Output.** Triangles are flipped when the front is solid and the back is not, as in TS2. Corner normals are the surface's at the corner's `uv`. At a pole or apex, which has no normal of its own, the normal is the surface's at the triangle's middle. New points get mesh indices after the wireframe's.
+- **Edge sampling (TS1 changed).** A sphere or torus face's longest boundary segment `L_f` is now the lattice side, `0.8 sqrt(3) sqrt(c (2ρ − c))`, not TS1's `sqrt(8 c / κ)`. Plane, cylinder and cone faces still ask for none.
+- **Budget.** CDT units per round (one per point inserted and per flip), on top of the wireframe's. `stop` is checked per round.
+
+**Decisions, with cases.**
+- **`uv` from the pcurves at the edges' own parameters.** For: exact for every analytic face's pcurve (MK2's `Arcs` lines and circles). It needs no inversion, and it gives a seam's two sides and a pole's line without special cases. Against: it needs the sample parameters out of `wireframe`, so there is a crate-private `wire`. Kept, as the brief asks.
+- **The pole line, cut into steps, with pole pairs dropped.** For: the CDT sees a plain polygon, and the fan round the pole comes out with one triangle per step of the pole line, each with a well-defined `uv`. Against: a triangle near the pole has two corners at one point in space, so its spatial sides need care (`corners` keeps the pole flag, and the bounds skip its `φ`). Considered instead: one point per pole, which makes the `uv` boundary non-simple (a point with two `u`). Rejected.
+- **The dual ruled bound.** For: it is exact at the best direction `d` (von Neumann's minimax over the weights). At mid-span it is never looser than this branch's first bound, `2 ρ_max sin²(span/4)`, and an apex corner contributes 0. That last point is what lets an apex cone be one fan with no interior points. Against: it is not the exact sag of the flat triangle against the cone, only a proved bound. Kept.
+- **Cone rows in even radius ratio.** For: the frustum at chord 0.001 went from 23,058 triangles and 41 ms (centroid refinement doing the work) to 1,672 and 2 ms. Against: the ratio 1.25 and the spacing at the next wider row are judgement, chosen by measurement on the frustum, not proved optimal. Kept.
+- **The round lattice and its enclosing-circle bound.** For: exact for a sphere (the triangle lies in the convex hull of the cap its circle cuts). The lattice side is 0.8 of the largest equilateral side that passes, which leaves room for the boundary's irregular triangles. Against: for a torus, the isotropic `ρ = min(r, R − r)` is conservative in `u` (the outer circle's curvature across it is far less). The torus is about 1.7x the pin's display grid's count. It is a judgement that this bound holds for a torus triangle (a doubly curved patch whose curvatures are both at most `1/ρ` lies within the sphere bound of radius `ρ`); that is not proved here (open question 1).
+- **Row steps capped at 1.5 row spacings in scaled `uv` (`WIDE`).**
+  - For: near a sphere's poles the circumference is small against the scale's, so a row's points sit far apart in scaled `uv` while the rows stay close. The Delaunay triangles then span several rows and fail in space. At chord 0.001, 13% of the first round's triangles failed (nearly all above 45° latitude), and refinement took 15 rounds and 337 ms. Under 2, the Delaunay triangles of staggered rows join adjacent rows. With the cap, every face in the measured set passes on its first triangulation, and the sphere takes 36 ms with fewer triangles (69,858 against 78,418).
+  - Against: rows near a pole carry more points than their circumference needs. That is about 13% more than an ideal lattice on a full sphere, in theory; in measurement the total fell, because refinement no longer adds points.
+  - Kept.
+- **`L_f` at the lattice side, not the cap's chord.**
+  - For: a boundary segment of length `2 sqrt(c (2ρ − c))` forces any triangle on it to an enclosing radius of at least half that, which is exactly the limit. A seam triangle then passes only once it is obtuse, which took many centroid rounds.
+  - Against: sphere and torus edges get 1.44x the segments of the cap's chord (TS1's closed-form counts change, see Tests). TS1's original `sqrt(8 c / κ)` was second-order and too long for a torus equator's own triangles to meet.
+  - The torus at chord 0.001 went from 273 ms to about 130 ms.
+  - Kept for sphere and torus only.
+- **Centroid refinement, re-triangulating from scratch each round.** For: it is simple and deterministic, and it reuses TS2's CDT unchanged. Against: every round pays the whole face again. Kept, because with the lattice above no measured primitive needs a second round at the default spec; only the coarse, angle and edge-length specs do (`coarse_and_bounded_specs_hold_their_bounds` takes one). Incremental insertion is open question 3.
+- **The plane path is unchanged.** For: TS2's plane faces need no interior points for the chord, and their boundary is now shared with curved faces through the same polylines, so the extrusion with circular holes is closed. Against: an edge-length bound is still not applied inside a plane face (TS2 open question 5). Kept.
+- **Pole normals at the triangle's middle.** For: an apex has no normal, and at a sphere's pole a `v` a rounding past it can be read on the far side. The middle of the triangle (its `u` taken from its non-pole corners) gives the normal the fan needs. Against: a pole vertex has a different normal in each triangle, but it already has one per triangle corner in `Mesh`. Kept.
+
+**Tests.** Integration (`scx-tess/tests/curved.rs`, 6), each mesh adapted to the T13 oracle `scx_testkit::mesh`:
+- `every_primitive_is_closed_on_its_surfaces_and_within_the_chord`: cylinder, frustum, apex cone up and down, sphere and torus, at the `at` frame and a tilted far frame, at chords 0.1, 0.01 and 0.001. For each body:
+  - `violations` is empty (closed, manifold, outward, no fold-over);
+  - the volume is within chord times area of the closed form;
+  - every vertex lies on its surface;
+  - every triangle's 7 sample points lie within its face's stated bound, measured against the closed-form surface;
+  - each stated bound is within the spec's chord;
+  - every triangle faces the way its corner normals do;
+  - the crack statement: every polyline segment is a triangle side on each face of its edge, once.
+- `an_extrusion_with_circular_holes_is_closed`: TS2's `round_holes` extrusion (MK3, circles and a slot with arc ends), with every check above, at both frames and three chords.
+- `coarse_and_bounded_specs_hold_their_bounds`: a chord past the radius, an angle bound and an edge-length bound on a sphere, torus, cylinder and cone. Each mesh passes the oracle, and every curved face's sides are within the edge length.
+- `the_same_body_gives_the_same_mesh`: every primitive at the tilted frame, twice, equal.
+- `one_curved_face_alone_meshes_on_the_whole_wireframe`: `tessellate_faces` on a cylinder's wall alone.
+- `budget_and_stop_end_the_work`: a sphere at 0.001. One unit short of the measured use is `Exhausted`, the exact use passes, and a set stop is `Cancelled`.
+
+Changed:
+- `tests/face.rs::caps_with_circular_holes_cover_their_boundary_exactly` now asserts the whole body closed, where it asserted `Unsupported(FaceKind { Cylinder })`.
+- `tests/wire.rs`: the closed-form circle counts and the torus budget follow the new `L_f` (sphere 30 to 43, torus 193 to 278 and 39 to 56).
+- `src/edge.rs::a_face_need_is_the_same_in_either_order` checks the new formula.
+
+**Removed, on purpose:** `tests/face.rs::faces_that_are_not_planes_are_unsupported_and_unknown_ids_refused`. Its cylinder half proved that a non-plane face is refused as `Unsupported(FaceKind)` named `face_kind`. A cylinder is now meshed. The remaining refusal of that kind is a NURBS face, and no NURBS-face body exists to build one on before step 5. Its unknown-id half stays, as `unknown_face_ids_are_refused`.
+
+**Measurements** (throwaway timer, not committed; release; one body per call; `tessellate` end to end, wireframe included; ours best of 5 calls; the machine was shared and runs varied by up to 1.5x).
+
+Ours is single-threaded. The pin was run from a separate throwaway crate on the same machine (32 CPUs). Its `plan` + `evaluate` is the display grid, and `mesh` + `welded` is CDT with Ruppert refinement. Both are at the same chord, with `size` the box diagonal. The pin runs faces in parallel (rayon), so its times are wall-clock. Its counts also follow its own size rules (a side at most `size/5` among them), so counts compare loosely.
+
+Triangles / ms:
+
+| body | chord | ours | pin `plan` | pin `mesh` |
+|---|---|---|---|---|
+| cylinder r5 h10 | 0.1 | 60 / 0.16 | 256 / 0.90 | 440 / 3.9 |
+| | 0.01 | 196 / 0.69 | 1,250 / 2.8 | 2,554 / 38 |
+| | 0.001 | 628 / 1.5 | 7,732 / 14 | 33,660 / 360 |
+| frustum 4/1.5 h10 | 0.1 | 166 / 0.15 | 192 / 0.68 | 414 / 3.0 |
+| | 0.01 | 528 / 0.56 | 2,048 / 3.5 | 3,786 / 38 |
+| | 0.001 | 1,672 / 2.1 | 8,088 / 13 | 34,108 / 533 |
+| apex cone 4/0 h10 | 0.1 | 28 / 0.05 | 848 / 2.0 | 1,142 / 18 |
+| | 0.01 | 88 / 0.20 | 2,096 / 3.3 | 4,108 / 112 |
+| | 0.001 | 280 / 0.74 | 8,216 / 12 | 41,898 / 1,803 |
+| sphere r7 | 0.1 | 720 / 0.36 | 960 / 2.5 | 1,162 / 16 |
+| | 0.01 | 6,950 / 3.6 | 7,040 / 15 | 13,454 / 549 |
+| | 0.001 | 69,858 / 36 | 75,808 / 133 | 136,566 / 11,542 |
+| torus 10/3 | 0.1 | 2,520 / 1.1 | 1,280 / 3.6 | 3,320 / 47 |
+| | 0.01 | 24,188 / 11 | 16,384 / 34 | 29,054 / 490 |
+| | 0.001 | 238,032 / 128 | 143,008 / 248 | 291,650 / 9,702 |
+
+Readings:
+- Ours is under the pin's display grid in time on every case, and under its mesher by 10x to 2,000x.
+- In count, ours is under both everywhere but the torus, where it is 1.7x the display grid (the isotropic `ρ`, open question 1) and under the mesher.
+- Cost per triangle is about 0.5 us at the fine chords, so the CDT dominates. Every face triangulates once at these specs.
+- Before the last two decisions the sphere at 0.001 was 78,546 triangles in 337 ms (15 rounds), and the torus 240,960 in 273 ms.
+- Against TS2 the added work is the interior points and the per-triangle check (one pass at these specs). TS1's sphere and torus edges carry 1.44x the segments.
+
+**BO4.** No boolean output exists to mesh yet: main's `scx-boolean` (BO1) answers `Unsupported(Stage(FaceFace))` after stages 1-3. BO4's inputs are deferred until BO2-BO3 build faces.
+
+**Deferred to step 5 (NURBS faces and record fixtures), by name.**
+- The pin's `solidcore-tess/tests/data/*.json.gz` records (35):
+  - block_with_sphere_void
+  - box_10x6x4
+  - box_2x3x4
+  - box_2x3x4_placed
+  - box_40x30x20
+  - box_offset
+  - box_with_drill_hole_r3_4_depth_8
+  - box_with_drill_hole_r3_depth_10
+  - box_with_filleted_top
+  - box_with_hole
+  - cylinder_r10_h5
+  - cylinder_r2_h5_mirrored
+  - cylinder_tilted
+  - cylinder_with_cross_hole
+  - disc_with_boss_tangent_inside_its_rim
+  - lens_and_square
+  - pin_cylinder
+  - plate_990_with_small_hole
+  - plate_with_holes_touching_at_points
+  - rig_join_cap_touching_lips_base
+  - rig_rivet_flush_heads_sheet
+  - rig_ruled_cylinder_rim_flat_ring
+  - rig_tapered_text_cut_over_block_edge
+  - smlib_coil_lower_half
+  - smlib_coil_upper_half
+  - smlib_half_sphere
+  - smlib_thread_in_bore
+  - smlib_thread_run_out
+  - smlib_torus_22_4
+  - sphere_r10_with_pocket
+  - sphere_r12
+  - sphere_r4
+  - thin_lune_prism
+  - torus_22_4
+  - torus_6_1_5
+
+  These need a record reader and, for most, NURBS or boolean-built faces.
+- The pin's `mesh_tests.rs` cases on those records:
+  - rounded_edges_on_the_mesh_path_keep_their_angle (box_with_filleted_top)
+  - a_ring_bounded_by_a_slit_loop… (rig_ruled_cylinder_rim_flat_ring)
+  - chords_moved_by_the_shaping_rounds… (rig_rivet_flush_heads_sheet)
+  - a_sliver_narrower_than_its_pole_reach… (rig_tapered_text_cut_over_block_edge)
+  - a_sliver_narrower_than_the_chord… (rig_join_cap_touching_lips_base)
+  - the spline-sphere pole-ring and pole-run fan tests
+  - the sphere and torus keep-angle tests on records
+- `nurbs-grid-mesh` `tests/mesh.rs`:
+  - covers_exactly_the_region_inside_a_loop_facing_the_normal
+  - cuts_a_hole_and_turns_every_triangle_over_when_reversed
+  - takes_loops_either_way_round
+  - meshes_a_hole_smaller_than_one_cell
+  - spaces_grid_lines_so_a_cell_strays_no_more_than_the_tolerance
+  - a_trimmed_bumpy_face_stays_near_its_surface
+  - a_pole_leaves_no_zero_area_triangles_and_stays_within_tolerance
+  - a_rational_cylinder_lands_on_its_radius
+  - two_faces_sharing_an_edge_polyline_meet_without_a_crack
+  - finds_a_point_on_the_surface_again_from_a_nearby_seed
+  - refuses_bad_input_by_name
+  - a_reflex_corner_on_an_ears_edge_is_not_cut_across
+  - a_cut_cell_is_triangulated_facing_the_surface
+
+**Deviations from 72.**
+- TS1's face need changed (`L_f`), with its counts.
+- Interior points are a lattice plus centroid refinement, not refinement alone.
+- BO4 results are deferred: no boolean output exists.
+- The NURBS fixtures are deferred to step 5, as briefed.
+
+**Open questions.**
+1. Torus rigour and count. The enclosing-circle bound with `ρ = min(r, R − r)` is a judgement for a doubly curved patch, not a proof. An anisotropic bound (the curvature along `u` is `cos ψ / (R + r cos ψ)`) would cut the torus count toward the display grid's.
+2. `uv` scale distortion at high latitude is handled by `WIDE`. A per-band scale (triangulating latitude bands separately) would remove the extra pole points, but it needs shared band boundaries.
+3. Refinement re-triangulates the face each round. TS2's CDT has no incremental insert, which a face that needs many rounds (coarse or angle specs, small trimmed faces) would want.
+4. An edge-length bound inside plane faces (TS2's open question 5) still stands.
+5. BO4's inputs, once BO2-BO3 build faces.
+
+**Proposed 04 row.** "`scx-tess` (TS3): cylinder, cone, sphere and torus faces are TS2's CDT in the face's own `uv`. That `uv` is the uses' pcurves at the edges' own sample parameters (no projection), and seams and poles fall out of the pcurves (a pole's collapsed edge is its `u` line, and a triangle on two of its points is dropped). Interior points:
+- none on a cylinder or an apex cone;
+- rows in even radius ratio on a frustum;
+- an about-equilateral lattice at `0.8 sqrt(3) sqrt(c (2ρ − c))` on a sphere or torus, its row steps capped at 1.5 row spacings in scaled `uv`.
+
+Every triangle is checked against a proved sag bound: for a ruled surface, `max 2 ρ_i sin²((φ_i − mid)/2)`, the minimax dual; for a round surface, the enclosing-circle cap `ρ − sqrt(ρ² − R²)`. A triangle that fails adds its centroid, up to 32 rounds, then `Defect(Refinement)`. Sphere and torus faces ask TS1 for boundary segments at that lattice side. Every MK2 primitive and an MK3 extrusion with circles meshes closed (T13 oracle, crack statement). NURBS faces stay `Unsupported(FaceKind)` until step 5."
 
 ### 14.24 BO2 as built (11-27)
 

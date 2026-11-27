@@ -28,6 +28,18 @@ pub fn wireframe(
     budget: &mut Budget,
     stop: &Stop,
 ) -> Result<Mesh, TessError> {
+    wire(body, spec, budget, stop).map(|(mesh, _)| mesh)
+}
+
+/// [`wireframe`], with each polyline's sample parameters beside it (`params[i]` for
+/// `mesh.edges[i]`, its interior points' curve parameters): where a face's pcurve of the
+/// edge is evaluated for the points' `uv`.
+pub(crate) fn wire(
+    body: &Brep,
+    spec: &TessSpec,
+    budget: &mut Budget,
+    stop: &Stop,
+) -> Result<(Mesh, Vec<Vec<f64>>), TessError> {
     spec.check(body.resolution())?;
     let mut index: Vec<Option<u32>> = vec![None; body.vertex_slots()];
     let mut positions = Vec::with_capacity(body.vertices().len());
@@ -40,6 +52,7 @@ pub fn wireframe(
         positions.push(v.point());
     }
     let mut edges = Vec::with_capacity(body.edges().len());
+    let mut params = Vec::with_capacity(body.edges().len());
     for e in body.edges() {
         let samples = sample_edge(e, spec, budget, stop)?;
         let id = e.id();
@@ -62,15 +75,17 @@ pub fn wireframe(
             points,
             chord: samples.chord(),
         });
+        params.push(samples.params().to_vec());
     }
-    Ok(Mesh {
+    let mesh = Mesh {
         positions,
         triangles: Vec::new(),
         normals: Vec::new(),
         face_of: Vec::new(),
         edges,
         chord_bound: Vec::new(),
-    })
+    };
+    Ok((mesh, params))
 }
 
 fn too_fine(edge: EdgeId, needed: usize) -> TessError {

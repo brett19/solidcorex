@@ -32,10 +32,11 @@ scx-testkit = { path = "../scx-testkit", features = ["bodies"] }
 # The bodies the testkit generates (`t_bodies`).
 scx-brep = { path = "../scx-brep" }
 # The step-4 outcome difftest (`t_slice`): the constructors scx has, the planar regions its
-# extrusions take, and the encoding its run-twice check compares.
+# extrusions take, the encoding its run-twice check compares, and the point classifier.
 scx-make = { path = "../scx-make" }
 scx-planar = { path = "../scx-planar" }
 scx-record = { path = "../scx-record" }
+scx-bodyq = { path = "../scx-bodyq" }
 # The mass properties against the pin's (`t_mass`).
 scx-mass = { path = "../scx-mass" }
 

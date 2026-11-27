@@ -1,0 +1,22 @@
+# Written for solidcorex.
+[package]
+name = "scx-check"
+description = "The body contract: a manifold, closed, outward body, proved"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+scx-brep = { path = "../scx-brep" }
+scx-mass = { path = "../scx-mass" }
+scx-num = { path = "../scx-num" }
+
+[dev-dependencies]
+scx-make = { path = "../scx-make" }
+scx-planar = { path = "../scx-planar" }
+scx-testkit = { path = "../scx-testkit", features = ["bodies"] }
+
+[lints]
+workspace = true

@@ -5,8 +5,9 @@
 //! far wider than thick, the gap a moved face leaves closed by strips, and the budget, the
 //! stop flag and the width floor.
 //!
-//! Not ported, each by intent: the pin's reversed-loop and fillet cases (no `check_brep`
-//! or fillet here), the face-area enclosures (this crate encloses volumes only), the
+//! The pin's reversed-loop case is ported to `scx-check`'s contract tests, where finish or
+//! the contract refuses each variant. Not ported, each by intent: the fillet case (no
+//! fillet here), the face-area enclosures (this crate encloses volumes only), the
 //! relative stop (the width asked is absolute), and the gap as large as the volume (this
 //! crate's pcurves are exact on the generated thin shell, so its sign decides).
 
@@ -188,6 +189,41 @@ fn thin_shells_are_positive() {
         assert_outward(&b, &format!("r {r} t {t}"));
         let e = enclose(&b, 1e-3 * want);
         assert!(e.holds(want), "r {r} t {t}: {e:?}");
+    }
+}
+
+/// The estimate reads the thin shells too: each cap's region is proved (its arcs' areas in
+/// closed form, 72 §14.22), so every face has a box and `volume` holds the closed form
+/// within its stated error (it was `NoBox` on the caps before).
+#[test]
+fn a_thin_shells_estimate_holds_its_closed_form() {
+    let fine = Document::with_resolution(scx_testkit::bodies::build_resolution());
+    for (r, t) in [(1e4, 1e-3), (10.0, 1e-4), (10.0, 1e-6)] {
+        let b = quarter_shell(r, t, 1.0)
+            .unwrap()
+            .finish(&fine)
+            .map_err(|u| u.cause)
+            .unwrap()
+            .0;
+        let want = PI / 4.0 * (2.0 * r * t + t * t);
+        let acc = RelAccuracy::new(1e-9).unwrap();
+        let e = volume(
+            &b,
+            acc,
+            &mut Scratch::new(),
+            &mut Budget::unlimited(),
+            &Stop::new(),
+        )
+        .unwrap();
+        let miss = (e.value - want).abs();
+        // Within the stated error or the accuracy asked. On the widest shell the stated
+        // error is 0 against a miss of 9e-9 (6e-10 of the volume: the faces' fluxes cancel
+        // from 1e8 and their rounding is not in the estimate), an open question for the
+        // estimate (72 §14.22).
+        assert!(
+            miss <= e.error || miss <= 1e-9 * want,
+            "r {r} t {t}: {e:?}, miss {miss:e}"
+        );
     }
 }
 

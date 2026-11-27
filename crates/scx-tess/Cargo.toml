@@ -19,6 +19,7 @@ scx-surface = { path = "../scx-surface" }
 scx-make = { path = "../scx-make" }
 scx-mass = { path = "../scx-mass" }
 scx-planar = { path = "../scx-planar" }
+scx-testkit = { path = "../scx-testkit" }
 
 [lints]
 workspace = true

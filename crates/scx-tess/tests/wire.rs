@@ -149,9 +149,9 @@ fn samples_lie_on_every_adjacent_face_through_its_pcurve() {
 }
 
 /// The circle edges' closed-form counts at chord 0.01 mm, from `n = ceil(span / step)` with
-/// `step = min(pi/2, 4 asin(sqrt(c / 2r)), L_f / r)`, `L_f = sqrt(8 c / kappa)` for the
-/// largest curvature `kappa` of an adjacent face (none for a plane, cylinder or cone; `1/7`
-/// for the sphere; `1/3` for the torus), at least 3 for a closed edge.
+/// `step = min(pi/2, 4 asin(sqrt(c / 2r)), L_f / r)`, `L_f = 0.8 sqrt(3) sqrt(c (2 rho - c))`
+/// for the least radius of curvature `rho` of an adjacent face (none for a plane, cylinder or
+/// cone; 7 for the sphere; 3 for the torus), at least 3 for a closed edge.
 #[test]
 fn circle_edges_hold_the_chord_against_the_exact_circle_at_the_closed_form_count() {
     let c = 0.01;
@@ -199,9 +199,9 @@ fn circle_edges_hold_the_chord_against_the_exact_circle_at_the_closed_form_count
                 ("cylinder" | "cone", 10.0) => 71,
                 ("cone", 4.0) => 45,
                 ("apex", 6.0) => 55,
-                ("sphere", 7.0) => 30,
-                ("torus", 15.0) => 193,
-                ("torus", 3.0) => 39,
+                ("sphere", 7.0) => 43,
+                ("torus", 15.0) => 278,
+                ("torus", 3.0) => 56,
                 other => panic!("{name}: no expected count for {other:?}"),
             };
             assert_eq!(segments, expected, "{name} r {r}");
@@ -307,5 +307,5 @@ fn an_empty_budget_or_a_set_stop_ends_the_wireframe() {
     // The budget is one unit a segment: the torus's two circles.
     let mut b = Budget::unlimited();
     wireframe(&body, &spec(0.01), &mut b, &Stop::new()).unwrap();
-    assert_eq!(b.used(), 193 + 39);
+    assert_eq!(b.used(), 278 + 56);
 }
