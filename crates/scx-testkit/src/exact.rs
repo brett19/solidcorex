@@ -141,6 +141,27 @@ impl Int {
             .then_with(|| a.iter().rev().cmp(b.iter().rev()))
     }
 
+    /// `floor(sqrt(self))` for `self >= 0`; `None` for a negative value.
+    pub fn isqrt(&self) -> Option<Int> {
+        if self.neg {
+            return None;
+        }
+        if self.is_zero() {
+            return Some(Int::default());
+        }
+        // Newton's method from above: x = 2^ceil(len / 2) >= sqrt(self), and the iterates
+        // fall to the floor and stop there.
+        let mut x = Int::from(1u64).shl(self.bit_len().div_ceil(2));
+        loop {
+            let (q, _) = self.div_rem(&x)?;
+            let y = x.add(&q).shr(1);
+            if y.cmp_abs(&x) != Ordering::Less {
+                return Some(x);
+            }
+            x = y;
+        }
+    }
+
     /// `|self|` against `|o|`.
     pub fn cmp_abs(&self, o: &Int) -> Ordering {
         Int::cmp_mag(&self.mag, &o.mag)
@@ -227,6 +248,10 @@ impl Int {
         let (Some(za), Some(zb)) = (self.trailing_zeros(), o.trailing_zeros()) else {
             return if self.is_zero() { o.abs() } else { self.abs() };
         };
+        // A unit divides everything; the loop below would take one step per bit for it.
+        if self.mag == [1] || o.mag == [1] {
+            return Int::from(1u64);
+        }
         let mut a = self.abs().shr(za);
         let mut b = o.abs().shr(zb);
         // Binary gcd on odd numbers: each step clears at least one bit of the larger.

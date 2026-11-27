@@ -15,14 +15,21 @@
 //!   double-double (exact for the rational cases), with closest points.
 //! - [`quadric`]: the analytic surfaces as exact implicit equations, an exact on-surface
 //!   decision for rational surfaces, and the NURB-to-STEP uv map in closed form.
+//! - [`bound`]: certified enclosures, intervals of rationals rounded outward.
+//! - [`poly`]: rational polynomials with their real roots isolated with certainty.
+//! - [`project`]: every stationary point of the distance to an ellipse, a torus and a cone,
+//!   certified, with the certified nearest.
 //! - [`gen`]: seeded generators of well- and ill-conditioned inputs.
 
 pub mod analytic;
+pub mod bound;
 pub mod data;
 pub mod dd;
 pub mod exact;
 pub mod gen;
 pub mod nurbs;
+pub mod poly;
+pub mod project;
 pub mod quadric;
 pub mod rat;
 

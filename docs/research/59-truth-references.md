@@ -53,6 +53,9 @@ shared type (JUDGED).
 | `nurbs` | `Curve<D>` and `Surface<D>`: exact B-spline and NURBS evaluation with any number of derivatives by two methods, knot insertion, degree elevation, splitting (curve, and surface along `u` or `v`), blossoms | exact |
 | `analytic` | Line, circle, ellipse, plane, cylinder, cone, sphere and torus: points and derivatives of any order, and closest points | double-double; exact for the line and the plane |
 | `quadric` | `Implicit`: the plane, cylinder, cone, sphere and torus as exact implicit equations in their own frames; `check`, an exact decision whether a rational surface lies on one, with the first-order distance where it does not; `Layout`, the closed-form map between NURB and STEP parameters (section 9) | exact decision; double-double map |
+| `bound` | `Bound`: a closed interval of `Rat`, rounded outward; certified `sqrt`, reciprocal, `sin_cos` and `tan` | certified |
+| `poly` | `Poly`: polynomials over `Rat`; square-free parts (Yun), Sturm sequences, every real root isolated to a width | exact |
+| `project` | All the stationary points of the distance from a point to an ellipse (T1), a torus or a cone (T3), each enclosed, with their kinds and the certified nearest | certified |
 | `gen` | Seeded generators: knots (uniform, random, clustered within ulps, repeated), weights (unit, moderate, near zero), points, curves, surfaces, parameters on and beside knots, frames, near-tangent pairs | |
 | `data` | `CurveData` and `SurfaceData`: plain data, with `exact()` to get the reference | |
 
@@ -136,9 +139,89 @@ in `u` and `j` in `v`.
     - at a torus tube's centre circle;
     - beyond a cone's apex;
     - when Newton's method does not reach a minimum.
-- **The ellipse has no closest point (JUDGED).** Its foot has no closed form, and Newton's method from
-  a poor start can converge to the wrong foot. A reference that is sometimes wrong is worse than none.
-  An exact or certified one (the quartic's roots isolated) can be added when `scx-curve` needs it.
+- **The ellipse has no Newton closest point (JUDGED).** Newton's method from a poor start can
+  converge to the wrong foot, and a reference that is sometimes wrong is worse than none. The
+  certified foot is in `project` (section 4a).
+
+## 4a. Projection truths: T1 and T3 (research 63 §8)
+
+`project` answers, for a point `q`, every stationary point of the distance to the shape, each with an
+enclosure, and which of them is the global nearest. The answer is a `Projection<P>`:
+
+- `loci`: each a `Locus::Point(Stationary<P>)` (a parameter, the point, a certified distance
+  `Bound`, and a `Kind`: `Min`, `Saddle`, `Max`, `Flat` or `Apex`) or a `Locus::Circle` (a whole
+  circle of stationary points, for a query on an axis of symmetry).
+- `nearest`: `Nearest::Unique(i)`, or `Nearest::Tied(is)` for loci whose distance intervals still
+  meet at the last precision tried.
+
+Parameters are `Enclosed { mid: Dd, radius }`. Points are doubles with a radius. Distances are
+`Bound`s: exact rationals rounded outward, so a distance is never wrong, only wide.
+
+**T1, the ellipse** (`Ellipse::stationary`). With `s = tan(t/2)` the point is
+`V(s) / (1 + s^2)`, `V(s) = (d - A) s^2 + 2 B s + (d + A)`, `d = C - q`, `A = a X`, `B = b Y`. The
+squared distance is `N(s) / (1 + s^2)^2`, `N = |V|^2`, and its derivative has the sign of the quartic
+`Q = N' (1 + s^2) - 4 s N`. Every coefficient is an exact rational (the frame's doubles are exact), so
+`Q`'s real roots are isolated exactly (square-free part, Sturm sequence, bisection) to a width of
+`2^-bits`. `t = pi` is `s = infinity`: it is found from the quartic of the turned-over ellipse (`A`
+and `B` negated), which has a root at 0 exactly when `t = pi` is stationary. Each root's kind is the
+sign change of `Q` across it, or for an exact root the lowest derivative not zero. The distance is
+enclosed by `sqrt(N / (1 + s^2)^2)` over the root's interval, with the curvature bound
+`E = M w^2 / 2` (`M = 2 (K^2 + (D + K) K)`, `K = |A|_1 + |B|_1`, `D = |d|_1`) added for the width
+`w`. `Q` zero everywhere (a circle, the query on its axis) gives one `Locus::Circle`. It runs at
+110 bits and refines to 220 and 440 when a kind or the nearest is not decided.
+
+**T3, the torus and the cone** (`Torus::stationary`, `Cone::stationary(q, Nappes)`). Both are
+surfaces of revolution, so every stationary point lies in the meridian plane through `q`. There the
+torus is two circles of radius `r` centred at signed radii `+-R`, and the cone is two lines. The feet
+on them have closed forms in `rho` (the distance from the axis) and `h` (the height):
+
+- torus, circle at `c`: `w = c + sigma r (rho - c) / D`, `h_p = sigma r h / D`,
+  `D^2 = (rho - c)^2 + h^2`, at distance `|D - r|` (`sigma = 1`) or `D + r` (`sigma = -1`);
+- cone, generators `w = +-(r + v tan a)`: the foot `v` and the distance
+  `|rho -+ r -+ h tan a| / sqrt(1 + tan^2 a)` for each.
+
+The kind of a foot is the sign pair of the two principal terms: along the meridian (near foot a
+minimum, far foot a maximum) and around the axis (a positive signed radius `w` a minimum). `rho^2`
+and `h^2` are exact rationals; `rho`, `h`, `tan a` and the quotients are `Bound`s at 192 bits,
+refined to 384 and 768 as for T1.
+
+Degenerate cases:
+
+- the query on the axis: the feet sweep circles (`Locus::Circle`), decided exactly from `rho^2 = 0`;
+- the query on the torus tube's centre circle: the whole meridian circle is stationary (`Min` for a
+  ring torus, `Flat` for a horn or spindle), decided exactly;
+- the cone's apex, and the query at the apex (distance exactly 0);
+- horn and spindle tori: the pinches on the axis (`h = +-sqrt(r^2 - R^2)`, one at the centre for a
+  horn), and a foot exactly on the axis (decided exactly, `on_axis_exactly`), which is a pinch.
+
+`Nappes::One` is the cone from its apex through the reference circle (STEP's and the pin's);
+`Nappes::Both` adds the other.
+
+**Decisions (JUDGED, for review).**
+
+1. **The ideal surface of revolution.** T3 takes the shape to be exactly rotationally symmetric about
+   `(O, z)`, `z` normalised, rather than the parameterisation with the frame's rounded `x` and `y`
+   as given (section 4's rule for the analytic primitives). The closed forms need the symmetry, and
+   with them every degenerate case is decided exactly. The two shapes differ by the frame's
+   rounding (about 1e-16 relative), which is far below any library tolerance; the tests check the
+   points against the parameterisation to 1e-13 in rotated frames, and to 1e-27 in exactly
+   orthonormal ones (signed permutations). The angle `u` is measured from the radial part of `q - O`,
+   which is exactly square to `z`. T1 uses the ellipse's frame as given: its quartic is exact for
+   any frame.
+2. **Parameter radii include the double-double function error.** `u` and `v` come from `dd::atan2`
+   on enclosed values: their radius is the enclosure's propagated width plus `1e-29` for the function.
+   Points and distances are certified without it, from the exact forms.
+3. **`Tied` means not separated.** Loci whose distance intervals still meet at the last precision
+   (440 or 768 bits) are reported tied, not ordered by midpoint. Real ties (the ends of an ellipse's
+   minor axis from its centre) are tied for this reason; nothing is claimed about near ties.
+4. **Singular points are listed always.** The cone's apex and a horn or spindle torus's pinches are
+   listed as `Kind::Apex` whatever the query, as candidates for the nearest: the distance is not
+   differentiable there, and a one-nappe cone's nearest point can be its apex. A caller that wants
+   only smooth stationary points filters them out. A foot that lands exactly on a pinch is that
+   pinch, listed once.
+5. **Flat meridian circle.** On a horn or spindle torus the tube's centre circle meets the axis, so
+   the meridian circle at distance `r` is stationary but not a minimum in every direction; it is
+   `Flat` there and `Min` on a ring torus.
 
 ## 5. Self-tests
 
@@ -146,6 +229,8 @@ in `u` and `j` in `v`.
 `nurbs.rs` binary takes about 11.5 s of wall time with a warm build. About 7 s of that is the existing
 surface insertion and elevation test, which took the same time before this change. The new tests take 0.3 to 1.3 s each. The
 T8 and T4 tests are listed in section 9.
+T1 and T3: `tests/project.rs`
+takes about 0.5 s; each of its tests is under 0.7 s alone.
 
 - **`tests/arith.rs`.**
   - Every `Rat` operation (`+`, `-`, `*`, `/`, the comparison and the conversion) rounds as IEEE does,
@@ -182,6 +267,27 @@ T8 and T4 tests are listed in section 9.
   - The exact line and plane residuals are exactly normal.
   - The degenerate queries give `None`.
   - The near-tangent pairs are at their gap.
+- **`tests/project.rs`** (T1, T3) and the `poly` unit tests.
+  - Certified `sin_cos` holds the double-double values to 1e-30, with `sin^2 + cos^2` holding 1;
+    `tan` at the double below `pi/4` is `1 + 2 (x - pi/4)` to 1e-31; square roots of squares are
+    exact. Root isolation: exact dyadic roots come back as points, multiplicities are found, and the
+    intervals are disjoint.
+  - Ellipse: the stationary points match a dense scan (sign changes of the derivative on 2,048
+    samples, then bisection) to 1e-14 in angle, with as many minima as maxima, and no sample of 512
+    is nearer than the nearest. The nearest agrees with Eberly's robust bisection (a second,
+    independent method) to 1e-15 relative. With equal axes it is the circle's closed form. The
+    degenerate queries (the centre, with its tie and the exact `t = pi`; inside the evolute's cusp;
+    on a circle's axis) and queries from 1e-6 to 1e-15 off the evolute, where two stationary points
+    nearly meet, stay certified.
+  - Torus (ring, horn, spindle) and cone, in exactly orthonormal frames: each stationary point has a
+    gradient of the squared distance under 1e-27 and a Hessian with its kind's signs, the Morse count
+    `#min - #saddle + #max = 0` holds on a ring torus, and no sample of a 40 by 40 grid is nearer.
+    The ring torus's nearest agrees with the double-double Newton foot (a second method). In rotated
+    frames the points agree with the parameterisation to 1e-13.
+  - Closed-form limits: a torus with `R = 2^-30` is the sphere (`||q - O| - r|` to `2 R`); a cone with
+    `a = 2^-30` is the cylinder (`|rho - 1|` to `(|h| + 1) a`, and `|rho - 1 - h a|` to 1e-14).
+  - The degenerate queries: on the axis, the tube's centre circle, a horn's centre, a spindle's pinch
+    (exactly 0), the apex (exactly 0), on the axis above and below the apex for one nappe and both.
 - **`tests/gen.rs`.**
   - Equal seeds give equal data.
   - Every generated curve is valid and clamped.
@@ -209,6 +315,10 @@ Random and clustered knots cost about the same (the ranges above cover both). Th
 cost, in double-double: circle `derivs` to order 2, 1.4 us; circle `closest`, 6.8 us; sphere `derivs` to
 order 2, 3.5 us; sphere `closest`, 14 us; torus `closest`, 14 us.
 
+The projection truths (optimised build, 300 calls each): ellipse `stationary`, 4.6 ms (the same within
+1e-9 of the evolute); torus, 1.2 ms (ring) to 1.7 ms (spindle); cone, 1.6 ms. A tier-1 test can afford a
+hundred or so.
+
 Use:
 
 - The exact references cost milliseconds a call: about 0.3 to 2 ms for a curve, and 10 to 25 ms for a
@@ -224,7 +334,6 @@ Use:
 - There is no exact closest point on a NURBS curve or surface. A library's projection can be checked
   through the references' derivatives (orthogonality of the residual, exactly or in double-double),
   which is what the analytic tests do.
-- There is no exact or certified ellipse foot (section 4).
 - Knot removal is not provided. It is the inverse of insertion, and a library's removal can be checked
   by inserting again with the references.
 - There is no exact on-surface check for surfaces of revolution with a general profile, or for offsets.
@@ -240,11 +349,14 @@ Use:
 5. Insertion uses Boehm's algorithm, checked against blossoms. Elevation uses the blossom formula,
    checked against the Bernstein formula and shape equality. Elevation refuses unclamped ends.
 6. Analytic frames are used as given. Closest points use double-double Newton steps from closed-form
-   starts. The ellipse closest point is left out.
+   starts. The ellipse Newton closest point is left out.
 7. Splitting, insertion and elevation of a surface along one direction are each one method, and the
    direction is a private `Along` enum, not a flag (section 9).
 8. The on-quadric decision is exact and needs positive weights. The pin's evaluation and map are
    checked against the closed form only to rounding (section 9).
+9. The projection truths (section 4a): T3 on the ideal surface of revolution; parameter radii with
+   the function error; `Tied` as not separated; singular points always listed; the flat meridian
+   circle of a horn or spindle torus.
 
 ## 9. T4 and T8 (added 11-27)
 

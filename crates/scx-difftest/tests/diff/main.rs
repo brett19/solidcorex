@@ -19,6 +19,7 @@ mod facade;
 mod harness;
 mod pin_defects;
 mod pin_extent;
+mod pin_project;
 mod pin_quadric;
 mod pin_truths;
 mod solvers;
