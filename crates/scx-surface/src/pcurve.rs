@@ -1,5 +1,5 @@
 // Written for solidcorex. Apache-2.0.
-//! The exact pcurve of a curve lying on a surface (research 63 D10, §4.10): the 2-D curve in
+//! The exact pcurve of a curve lying on a surface (research 63 D10, §4.11): the 2-D curve in
 //! the surface's uv (D13) whose image is the curve, at the curve's own parameter.
 //!
 //! [`pcurve_of`] gives a closed form where one exists and refuses with a typed
@@ -11,20 +11,36 @@
 //! |---|---|
 //! | line, circle, ellipse, NURBS curve on a plane | [`Line2`], [`Circle2`], [`Ellipse2`], the NURBS curve through the plane's affine uv |
 //! | line along a cylinder's or cone's ruling | [`Line2`]: `u` fixed, `v` the height, affine in `t` |
+//! | circle about the axis of a cylinder, cone, sphere or torus (a parallel) | [`AngleLine2`] in `u`, `v` fixed |
+//! | sphere's great circle through the poles (a meridian), on one side of them | [`AngleLine2`] in `v`, `u` fixed |
+//! | torus's tube circle (a meridian) | [`AngleLine2`] in `v`, `u` fixed |
+//! | meridian over an interval that crosses a pole | [`PcurveError::CrossesPole`]: split it there |
 //! | anything else, or any curve on a NURBS surface | [`PcurveError::NoClosedForm`] |
 //!
-//! The period window (07 §3 rule 5): where `u` is periodic, the pcurve's `u` at the interval's
-//! start lies in the surface's base window `[base, base + period)`. A face whose trims use
-//! another window shifts the pcurve by whole periods.
+//! A circle is tried as a parallel or a meridian when its axis and centre are within
+//! `1e-6` (relative) of that configuration; the lifting check then decides, so a circle
+//! near one but not in it is [`PcurveError::Inexact`] and one far from both is
+//! [`PcurveError::NoClosedForm`].
 //!
-//! The pin (`eval/pcurve.rs`, `On::exact`) builds the same forms as degree-1 splines in
-//! radians, between the interval's end points; here the kinds are kept (a line stays a
-//! [`Line2`], a circle a [`Circle2`]) in the pin's NURBS uv.
+//! The period window (07 §3 rule 5): where a direction is periodic, the pcurve's coordinate
+//! at the interval's start lies in the surface's base window `[base, base + period)`. A face
+//! whose trims use another window shifts the pcurve by whole periods.
+//!
+//! The pin (`eval/pcurve.rs`, `On::exact`) builds the same forms as degree-1 splines
+//! between the interval's end points, in a uv whose angle directions are radians; there a
+//! parallel or a meridian is affine in the circle's angle. Here the kinds are kept (a line
+//! stays a [`Line2`], a circle a [`Circle2`]) in the NURBS uv, whose angle directions are
+//! arc parameters (63 D13), so a parallel or a meridian is an [`AngleLine2`] at the
+//! circle's own parameter. The pin also lets a sphere's meridian run past a pole (latitude
+//! beyond `pi/2`); here that is [`PcurveError::CrossesPole`] (63 §4.11).
 
 use core::fmt;
 use std::sync::Arc;
 
-use scx_curve::{Circle2, Curve, Curve2, Ellipse2, Line2};
+use core::f64::consts::{FRAC_PI_2, PI, TAU};
+
+use scx_curve::arcs::Arcs;
+use scx_curve::{AngleAxis, AngleLine2, Circle, Circle2, Curve, Curve2, Ellipse2, Line2};
 use scx_num::domain::ParamDomain;
 use scx_num::error::ErrorKind;
 use scx_num::extent1d::Extent1d;
@@ -40,6 +56,15 @@ use crate::{Cone, Plane, Surface};
 
 /// The parameters the lifting check samples, ends included.
 const SAMPLES: usize = 9;
+
+/// How near (relative: an angle in radians, an offset over the circle's radius) a circle's
+/// axis and centre must be to a parallel's or a meridian's for that closed form to be
+/// tried. It only picks the candidate; the lifting check at the tolerance decides.
+const NEAR: f64 = 1e-6;
+
+/// Slack, in radians, for a meridian's end at a pole: the end's latitude is a rounded
+/// `atan2`, so a half meridian from pole to pole may reach a few ulps past `pi/2`.
+const POLE_SLACK: f64 = 1e-14;
 
 /// A curve kind, as an error names it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -144,17 +169,24 @@ pub enum PcurveError {
         /// The distance between the curve and the lifted closed form, in mm.
         miss: f64,
     },
+    /// A sphere's meridian passes a pole at `at`, inside the interval: there `u` jumps by
+    /// half a turn, so no one pcurve covers the interval. The caller splits the edge at `at`.
+    CrossesPole {
+        /// The curve's parameter at the pole.
+        at: f64,
+    },
 }
 
 impl PcurveError {
-    /// The error's kind: [`ErrorKind::Refused`] for the interval, the tolerance and a
-    /// curve off the surface, [`ErrorKind::Unsupported`] for a pair with no closed form.
+    /// The error's kind: [`ErrorKind::Refused`] for the interval, the tolerance, a curve
+    /// off the surface and a meridian across a pole, [`ErrorKind::Unsupported`] for a pair with no closed form.
     #[must_use]
     pub const fn kind(&self) -> ErrorKind {
         match self {
-            Self::EmptyInterval { .. } | Self::BadTolerance { .. } | Self::NotOnSurface { .. } => {
-                ErrorKind::Refused
-            }
+            Self::EmptyInterval { .. }
+            | Self::BadTolerance { .. }
+            | Self::NotOnSurface { .. }
+            | Self::CrossesPole { .. } => ErrorKind::Refused,
             Self::NoClosedForm { .. } | Self::Inexact { .. } => ErrorKind::Unsupported,
         }
     }
@@ -168,6 +200,7 @@ impl PcurveError {
             Self::NotOnSurface { .. } => "pcurve_not_on_surface",
             Self::NoClosedForm { .. } => "pcurve_no_closed_form",
             Self::Inexact { .. } => "pcurve_inexact",
+            Self::CrossesPole { .. } => "pcurve_crosses_pole",
         }
     }
 }
@@ -213,6 +246,12 @@ impl fmt::Display for PcurveError {
                 "the closed form misses the curve by {miss} at {at}: the curve is near a \
                  configuration with an exact pcurve but not in it"
             ),
+            Self::CrossesPole { at } => {
+                write!(
+                    f,
+                    "the meridian crosses a pole at {at}: split the curve there"
+                )
+            }
         }
     }
 }
@@ -228,7 +267,8 @@ impl std::error::Error for PcurveError {}
 /// [`PcurveError::EmptyInterval`] or [`PcurveError::BadTolerance`] for the arguments;
 /// [`PcurveError::NotOnSurface`] when a sample of the curve is more than `tol` from the
 /// surface; [`PcurveError::NoClosedForm`] for a pair with no closed form here (see the
-/// module's table); [`PcurveError::Inexact`] when the closed form fails the lifting check.
+/// module's table); [`PcurveError::CrossesPole`] for a meridian across a pole;
+/// [`PcurveError::Inexact`] when the closed form fails the lifting check.
 pub fn pcurve_of(
     curve: &Curve,
     surface: &Surface,
@@ -255,7 +295,7 @@ pub fn pcurve_of(
             return Err(PcurveError::NotOnSurface { at: t, miss });
         }
     }
-    let pc = closed_form(curve, surface, &points).ok_or(no_form)?;
+    let pc = closed_form(curve, surface, &points, over)?.ok_or(no_form)?;
     for (&t, &p) in ts.iter().zip(&points) {
         let miss = (surface.point(pc.point(t)) - p).length();
         if miss.is_nan() || miss > tol {
@@ -320,23 +360,241 @@ fn cone_distance(c: &Cone, rho: f64, h: f64) -> f64 {
     }
 }
 
-/// The closed form for the pair, from the curve's sample points; `None` where the pair has
-/// none here.
-fn closed_form(curve: &Curve, surface: &Surface, points: &[Point3; SAMPLES]) -> Option<Curve2> {
-    match surface {
+/// The closed form for the pair, from the curve's sample points; `Ok(None)` where the pair
+/// has none here.
+fn closed_form(
+    curve: &Curve,
+    surface: &Surface,
+    points: &[Point3; SAMPLES],
+    over: Extent1d,
+) -> Result<Option<Curve2>, PcurveError> {
+    // Every angle direction here is a turn whose period is the domain's (the cylinder's
+    // `2 pi r`, the others' 1) or the sphere's half turn (63 D13).
+    let turn = |d: ParamDomain| d.period().map(Arcs::turn);
+    Ok(match surface {
         Surface::Plane(s) => on_plane(curve, s),
         Surface::Cylinder(s) => {
             let axes = Axes::new(s.frame(), s.sense());
             let from_step = |phi: f64| s.from_step(Point2::new(phi, 0.0)).x;
-            ruling(curve, &axes, points, from_step, s.domain().u)
+            let u = s.domain().u;
+            match curve {
+                Curve::Circle(c) => turn(u).and_then(|a| parallel(c, &axes, over, a, u, |h, _| h)),
+                _ => ruling(curve, &axes, points, from_step, u),
+            }
         }
         Surface::Cone(s) => {
             let axes = Axes::new(s.frame(), s.sense());
             let from_step = |phi: f64| s.from_step(Point2::new(phi, 0.0)).x;
-            ruling(curve, &axes, points, from_step, s.domain().u)
+            let u = s.domain().u;
+            match curve {
+                Curve::Circle(c) => turn(u).and_then(|a| parallel(c, &axes, over, a, u, |h, _| h)),
+                _ => ruling(curve, &axes, points, from_step, u),
+            }
         }
-        Surface::Sphere(_) | Surface::Torus(_) | Surface::Nurbs(_) => None,
+        Surface::Sphere(s) => {
+            let (Curve::Circle(c), Some(ua)) = (curve, turn(s.domain().u)) else {
+                return Ok(None);
+            };
+            let axes = Axes::new(s.frame(), s.sense());
+            let u = s.domain().u;
+            let lat = |h: f64, rho: f64| s.from_step(Point2::new(0.0, fmath::atan2(h, rho))).y;
+            match parallel(c, &axes, over, ua, u, lat) {
+                Some(pc) => Some(pc),
+                None => sphere_meridian(c, &axes, over, ua, u)?,
+            }
+        }
+        Surface::Torus(s) => {
+            let (u, v) = (s.domain().u, s.domain().v);
+            let (Curve::Circle(c), Some(ua), Some(va)) = (curve, turn(u), turn(v)) else {
+                return Ok(None);
+            };
+            let axes = Axes::new(s.frame(), s.sense());
+            let major = s.major().mm();
+            let tube = |h: f64, rho: f64| {
+                in_window(
+                    s.from_step(Point2::new(0.0, fmath::atan2(h, rho - major)))
+                        .y,
+                    v,
+                )
+            };
+            parallel(c, &axes, over, ua, u, tube)
+                .or_else(|| tube_circle(c, &axes, major, over, (ua, u), (va, v)))
+        }
+        Surface::Nurbs(_) => None,
+    })
+}
+
+/// The circle's angle in the plane of the orthonormal `e1` and `e2`: `(alpha, s)` with the
+/// circle's radial direction at `t` equal to `cos(alpha + s t) e1 + sin(alpha + s t) e2`
+/// (for a circle in that plane), `s` [`Sense::Forward`] for `+1`.
+///
+/// The circle runs `cos t Fx + sigma sin t Fy` with `Fy = Fz x Fx`; with `Fz = ±(e1 x e2)`,
+/// `Fy` is `Fx` turned a quarter forward or back in the plane, so `s` is the sign of
+/// `sigma (Fz . (e1 x e2))`.
+fn in_plane(c: &Circle, e1: Vec3, e2: Vec3) -> (f64, Sense) {
+    let fx = *c.frame().x();
+    let alpha = fmath::atan2(fx.dot(e2), fx.dot(e1));
+    let with = c.frame().z().dot(e1.cross(e2)) >= 0.0;
+    let s = match (with, c.sense()) {
+        (true, Sense::Forward) | (false, Sense::Reversed) => Sense::Forward,
+        _ => Sense::Reversed,
+    };
+    (alpha, s)
+}
+
+/// `start` moved by whole turns so the coordinate `arcs.parameter(start + s t0)` at the
+/// interval's start lies in the window (07 §3 rule 5); unchanged for a direction that is
+/// not periodic.
+fn place(start: f64, s: Sense, t0: f64, arcs: Arcs, window: ParamDomain) -> f64 {
+    let ParamDomain::Periodic { period, base, .. } = window else {
+        return start;
+    };
+    let at = |a: f64| arcs.parameter(a + s.sign() * t0);
+    let u0 = at(start);
+    let a = start + ((in_window(u0, window) - u0) / period).round() * TAU;
+    // How far the coordinate at `t0` is outside the half-open window (the top itself a
+    // least step outside). At the seam the rounded parameter can be just outside on either
+    // side; the turn nearest the window is kept.
+    let outside = |a: f64| {
+        let u = at(a);
+        if (base..base + period).contains(&u) {
+            0.0
+        } else {
+            (base - u).max(u - (base + period)).max(f64::MIN_POSITIVE)
+        }
+    };
+    [a, a + TAU, a - TAU]
+        .into_iter()
+        .min_by(|x, y| outside(*x).total_cmp(&outside(*y)))
+        .unwrap_or(a)
+}
+
+/// A circle about the axis (a parallel): `u` the arc parameter of the azimuth, `v` fixed at
+/// `v_of(h, rho)` for the circle's height `h` along the axis and its radius `rho`. `None`
+/// when the circle's axis or centre is not within `NEAR` of the surface's axis.
+fn parallel(
+    c: &Circle,
+    axes: &Axes,
+    over: Extent1d,
+    arcs: Arcs,
+    window: ParamDomain,
+    v_of: impl Fn(f64, f64) -> f64,
+) -> Option<Curve2> {
+    let rho = c.radius().mm();
+    let d = c.frame().origin() - axes.o;
+    let h = d.dot(axes.z);
+    let off_axis = (d - axes.z * h).length();
+    if c.frame().z().cross(axes.z).length() > NEAR || off_axis > NEAR * rho {
+        return None;
     }
+    let (alpha, s) = in_plane(c, axes.x, axes.y);
+    let start = place(alpha, s, over.min(), arcs, window);
+    let line = AngleLine2::new(arcs, AngleAxis::U, start, s, v_of(h, rho), 0.0).ok()?;
+    Some(Curve2::AngleLine(line))
+}
+
+/// `u` of the azimuth of the horizontal unit vector `d`, in the window.
+fn azimuth(axes: &Axes, d: Vec3, arcs: Arcs, window: ParamDomain) -> f64 {
+    in_window(
+        arcs.parameter(fmath::atan2(d.dot(axes.y), d.dot(axes.x))),
+        window,
+    )
+}
+
+/// One half-plane of a sphere's meridian: the horizontal direction `d` of the half-plane,
+/// the latitude `start + s t`, the latitude at the interval's start (in `(-pi, pi]`), and
+/// whether the interval stays in `[-pi/2, pi/2]`.
+struct Half {
+    d: Vec3,
+    start: f64,
+    s: Sense,
+    lat0: f64,
+    fits: bool,
+}
+
+/// A sphere's great circle through the poles (a meridian): `v` the latitude's arc
+/// parameter, `u` fixed at the azimuth of the half of the circle the interval runs on.
+/// `Ok(None)` when the circle is not within `NEAR` of a meridian;
+/// [`PcurveError::CrossesPole`] when the interval passes a pole.
+fn sphere_meridian(
+    c: &Circle,
+    axes: &Axes,
+    over: Extent1d,
+    ua: Arcs,
+    u: ParamDomain,
+) -> Result<Option<Curve2>, PcurveError> {
+    let rho = c.radius().mm();
+    let fz = *c.frame().z();
+    let off_centre = (c.frame().origin() - axes.o).length();
+    if fz.dot(axes.z).abs() > NEAR || off_centre > NEAR * rho {
+        return Ok(None);
+    }
+    let Some(d) = axes.z.cross(fz).normalized() else {
+        return Ok(None);
+    };
+    let (t0, t1) = (over.min(), over.max());
+    let half = |d: Vec3| {
+        let (alpha, s) = in_plane(c, d, axes.z);
+        let sign = s.sign();
+        // The latitude at `t0`, reduced by whole turns into `(-pi, pi]`.
+        let raw = alpha + sign * t0;
+        let lat0 = raw - TAU * ((raw - PI) / TAU).ceil();
+        let start = lat0 - sign * t0;
+        let lat1 = start + sign * t1;
+        let fits =
+            lat0.min(lat1) >= -FRAC_PI_2 - POLE_SLACK && lat0.max(lat1) <= FRAC_PI_2 + POLE_SLACK;
+        Half {
+            d,
+            start,
+            s,
+            lat0,
+            fits,
+        }
+    };
+    let halves = [half(*d), half(-*d)];
+    if let Some(h) = halves.iter().find(|h| h.fits) {
+        let other = azimuth(axes, h.d, ua, u);
+        let line = AngleLine2::new(Arcs::half(), AngleAxis::V, h.start, h.s, other, 0.0);
+        return Ok(line.ok().map(Curve2::AngleLine));
+    }
+    // The interval starts on one half and leaves it through the pole it moves toward.
+    let h = halves
+        .iter()
+        .find(|h| h.lat0.abs() <= FRAC_PI_2 + POLE_SLACK)
+        .unwrap_or(&halves[0]);
+    let sign = h.s.sign();
+    Err(PcurveError::CrossesPole {
+        at: (FRAC_PI_2 * sign - h.start) * sign,
+    })
+}
+
+/// A torus's tube circle (a meridian): `v` the tube angle's arc parameter, `u` fixed at the
+/// azimuth of the tube's centre. `None` when the circle is not within `NEAR` of one.
+fn tube_circle(
+    c: &Circle,
+    axes: &Axes,
+    major: f64,
+    over: Extent1d,
+    (ua, u): (Arcs, ParamDomain),
+    (va, v): (Arcs, ParamDomain),
+) -> Option<Curve2> {
+    let rho = c.radius().mm();
+    let to_centre = c.frame().origin() - axes.o;
+    let h = to_centre.dot(axes.z);
+    let (dist, d) = (to_centre - axes.z * h).length_and_unit()?;
+    let d = *d;
+    let fz = *c.frame().z();
+    let near = h.abs() <= NEAR * rho
+        && (dist - major).abs() <= NEAR * major
+        && fz.dot(d).abs() <= NEAR
+        && fz.dot(axes.z).abs() <= NEAR;
+    if !near {
+        return None;
+    }
+    let (alpha, s) = in_plane(c, d, axes.z);
+    let start = place(alpha, s, over.min(), va, v);
+    let line = AngleLine2::new(va, AngleAxis::V, start, s, azimuth(axes, d, ua, u), 0.0).ok()?;
+    Some(Curve2::AngleLine(line))
 }
 
 /// A curve on a plane through the plane's affine uv, `((p - O) . X, (p - O) . Y)`: exact
@@ -436,6 +694,7 @@ fn in_window(u: f64, window: ParamDomain) -> f64 {
 mod tests {
     use super::*;
     use crate::{Cylinder, Sphere, Torus};
+    use core::f64::consts::FRAC_PI_2;
     use scx_curve::{Circle, Ellipse, Line};
     use scx_num::frame::Frame;
     use scx_num::hash::Rng;
@@ -596,21 +855,28 @@ mod tests {
         let e = pcurve_of(&Curve::Line(skew), &cyl, span(-1.0, 1.0), mm(1e-6)).unwrap_err();
         assert_eq!(e.name(), "pcurve_inexact", "{e}");
         assert_eq!(e.kind(), ErrorKind::Unsupported);
-        // No closed form in this step: the circle about a cylinder's axis, a sphere's
-        // equator, a curve on a NURBS surface.
-        let ring = Curve::Circle(Circle::new(f, mm(1.0), Sense::Forward).unwrap());
-        let e = pcurve_of(&ring, &cyl, span(0.0, 1.0), tol).unwrap_err();
+        // No closed form here: an oblique section of a cylinder (an ellipse; the SS5
+        // section gap, 63 §4.11), a small circle of a sphere tilted off its axis, a curve on
+        // a NURBS surface.
+        let (y, tilt) = (*f.y(), 0.4_f64);
+        let major = x * fmath::cos(tilt) - z * fmath::sin(tilt);
+        let fe = Frame::new(o, major.cross(y), major).unwrap();
+        let oblique = Ellipse::new(fe, mm(1.0 / fmath::cos(tilt)), mm(1.0), Sense::Forward);
+        let e = pcurve_of(&Curve::Ellipse(oblique.unwrap()), &cyl, span(0.0, 1.0), tol);
         assert_eq!(
-            e,
+            e.unwrap_err(),
             PcurveError::NoClosedForm {
-                curve: CurveKind::Circle,
+                curve: CurveKind::Ellipse,
                 surface: SurfaceKind::Cylinder
             }
         );
-        assert_eq!(e.kind(), ErrorKind::Unsupported);
         let sphere = Surface::Sphere(Sphere::new(f, mm(1.0), Sense::Forward).unwrap());
-        let e = pcurve_of(&ring, &sphere, span(0.0, 1.0), tol).unwrap_err();
-        assert_eq!(e.name(), "pcurve_no_closed_form");
+        let n = (z + x).normalized().map(Vec3::from).unwrap();
+        let small = Frame::new(o + n * 0.6, n, y).unwrap();
+        let small = Curve::Circle(Circle::new(small, mm(0.8), Sense::Forward).unwrap());
+        let e = pcurve_of(&small, &sphere, span(0.0, 1.0), tol).unwrap_err();
+        assert_eq!(e.name(), "pcurve_no_closed_form", "{e}");
+        assert_eq!(e.kind(), ErrorKind::Unsupported);
         let nurbs = Surface::Nurbs(Arc::new(
             Plane::new(f)
                 .to_nurbs(&scx_num::extent2d::Extent2d::from_bounds(-2.0, -2.0, 2.0, 2.0).unwrap())
@@ -635,6 +901,186 @@ mod tests {
             tol,
         );
         assert_eq!(e.unwrap_err().name(), "pcurve_not_on_surface");
+    }
+
+    /// The pcurve is an angle line in `axis` with the other coordinate fixed, and at `t0`
+    /// each periodic coordinate lies in the surface's window.
+    fn check_angle_line(pc: &Curve2, axis: AngleAxis, s: &Surface, t0: f64) {
+        let Curve2::AngleLine(a) = pc else {
+            panic!("{pc:?}");
+        };
+        assert_eq!(a.axis(), axis);
+        assert_eq!(a.rate(), 0.0);
+        let p = pc.point(t0);
+        for (c, window) in [(p.x, s.domain().u), (p.y, s.domain().v)] {
+            // At the seam the rounded parameter may sit a rounding outside.
+            if let ParamDomain::Periodic { period, base, .. } = window {
+                let slack = 1e-15 * period;
+                assert!(
+                    c >= base - slack && c <= base + period + slack,
+                    "{pc:?} {c} at {t0}"
+                );
+            }
+        }
+    }
+
+    /// Intervals across the seam, past a turn, negative and short.
+    const SPANS: [(f64, f64); 5] = [
+        (0.0, 6.0),
+        (-1.0, 2.0),
+        (5.5, 13.0),
+        (-20.0, -19.5),
+        (3.0, 3.1),
+    ];
+
+    /// A circle about the axis of each surface of revolution, each sense of circle and
+    /// surface, its z with and against the axis, is an angle line in `u` with `v` fixed.
+    #[test]
+    fn parallels_are_angle_lines_in_u() {
+        let mut rng = Rng::new(0x9c_0004);
+        for scale in [1.0, 1e3, 1e-3] {
+            for _ in 0..6 {
+                let f = frame(&mut rng, scale);
+                let size = 1.0 + 8.0 * scale;
+                for sense in [Sense::Forward, Sense::Reversed] {
+                    let a = Axes::new(&f, sense);
+                    let r = 0.8 * scale;
+                    let cone = Cone::new(f, mm(r), 0.4, sense).unwrap();
+                    let cases: [(Surface, f64, f64); 6] = [
+                        (
+                            Surface::Cylinder(Cylinder::new(f, mm(r), sense).unwrap()),
+                            0.3,
+                            r,
+                        ),
+                        (Surface::Cone(cone), 0.5, r + cone.slope() * 0.5 * scale),
+                        (
+                            Surface::Sphere(Sphere::new(f, mm(r), sense).unwrap()),
+                            0.3,
+                            (0.64_f64 - 0.09).sqrt() * scale,
+                        ),
+                        (
+                            Surface::Sphere(Sphere::new(f, mm(r), sense).unwrap()),
+                            0.0,
+                            r,
+                        ),
+                        (
+                            Surface::Torus(Torus::new(f, mm(3.0 * scale), mm(r), sense).unwrap()),
+                            0.5,
+                            (3.0 + (0.64_f64 - 0.25).sqrt()) * scale,
+                        ),
+                        (
+                            Surface::Torus(Torus::new(f, mm(3.0 * scale), mm(r), sense).unwrap()),
+                            -0.5,
+                            (3.0 - (0.64_f64 - 0.25).sqrt()) * scale,
+                        ),
+                    ];
+                    for (s, h, rho) in cases {
+                        let centre = a.o + a.z * (h * scale);
+                        for zc in [a.z, -a.z] {
+                            for phase in [0.0, 1.0, -2.5, PI] {
+                                let xc = a.x * fmath::cos(phase) + a.y * fmath::sin(phase);
+                                for cs in [Sense::Forward, Sense::Reversed] {
+                                    let fc = Frame::new(centre, zc, xc).unwrap();
+                                    let c = Curve::Circle(Circle::new(fc, mm(rho), cs).unwrap());
+                                    for (lo, hi) in SPANS {
+                                        let pc = exact(&c, &s, span(lo, hi), size);
+                                        check_angle_line(&pc, AngleAxis::U, &s, lo);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// A sphere's great circle through the poles is an angle line in `v` with `u` fixed on
+    /// the half it runs on, pole to pole included; across a pole it is refused at the pole.
+    #[test]
+    fn sphere_meridians_are_angle_lines_in_v() {
+        let mut rng = Rng::new(0x9c_0005);
+        for scale in [1.0, 1e3, 1e-3] {
+            for _ in 0..6 {
+                let f = frame(&mut rng, scale);
+                let size = 1.0 + 2.0 * scale;
+                for sense in [Sense::Forward, Sense::Reversed] {
+                    let a = Axes::new(&f, sense);
+                    let r = 0.8 * scale;
+                    let s = Surface::Sphere(Sphere::new(f, mm(r), sense).unwrap());
+                    for az in [0.0, 1.0, PI, -0.3, 2.0 * PI - 1e-13] {
+                        let d = a.x * fmath::cos(az) + a.y * fmath::sin(az);
+                        // `x = d`: latitude `+t` (forward, z = d x Z) on `d`'s half.
+                        for (zc, cs) in [
+                            (d.cross(a.z), Sense::Forward),
+                            (-d.cross(a.z), Sense::Reversed),
+                        ] {
+                            let fc = Frame::new(a.o, zc, d).unwrap();
+                            let c = Curve::Circle(Circle::new(fc, mm(r), cs).unwrap());
+                            for (lo, hi) in [
+                                (-FRAC_PI_2, FRAC_PI_2),
+                                (-1.0, 0.5),
+                                (2.0, 4.0),
+                                (0.0, FRAC_PI_2),
+                            ] {
+                                let pc = exact(&c, &s, span(lo, hi), size);
+                                check_angle_line(&pc, AngleAxis::V, &s, lo);
+                            }
+                            for (lo, hi, pole) in [
+                                (0.3, 2.0, FRAC_PI_2),
+                                (-2.0, 0.0, -FRAC_PI_2),
+                                (1.0, 5.0, FRAC_PI_2),
+                            ] {
+                                let e =
+                                    pcurve_of(&c, &s, span(lo, hi), mm(TOL * size)).unwrap_err();
+                                let PcurveError::CrossesPole { at } = e else {
+                                    panic!("{e}");
+                                };
+                                assert!((at - pole).abs() < 1e-12, "{at} {pole}");
+                                assert_eq!(e.kind(), ErrorKind::Refused);
+                            }
+                            // Run the other way, the latitude falls: a different sense in v.
+                            let pc = exact(&c, &s, span(-0.5, 0.5), size);
+                            let Curve2::AngleLine(l) = pc else { panic!() };
+                            assert_eq!(l.sense(), Sense::Forward);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// A torus's tube circle is an angle line in `v` with `u` fixed, over any interval.
+    #[test]
+    fn tube_circles_are_angle_lines_in_v() {
+        let mut rng = Rng::new(0x9c_0006);
+        for scale in [1.0, 1e3, 1e-3] {
+            for _ in 0..6 {
+                let f = frame(&mut rng, scale);
+                let size = 1.0 + 8.0 * scale;
+                for sense in [Sense::Forward, Sense::Reversed] {
+                    let a = Axes::new(&f, sense);
+                    let (big, r) = (3.0 * scale, 0.8 * scale);
+                    let s = Surface::Torus(Torus::new(f, mm(big), mm(r), sense).unwrap());
+                    for az in [0.0, 1.0, PI, -0.3] {
+                        let d = a.x * fmath::cos(az) + a.y * fmath::sin(az);
+                        for zc in [d.cross(a.z), -d.cross(a.z)] {
+                            for phase in [0.0, 2.0, -1.0] {
+                                let xc = d * fmath::cos(phase) + a.z * fmath::sin(phase);
+                                for cs in [Sense::Forward, Sense::Reversed] {
+                                    let fc = Frame::new(a.o + d * big, zc, xc).unwrap();
+                                    let c = Curve::Circle(Circle::new(fc, mm(r), cs).unwrap());
+                                    for (lo, hi) in SPANS {
+                                        let pc = exact(&c, &s, span(lo, hi), size);
+                                        check_angle_line(&pc, AngleAxis::V, &s, lo);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]

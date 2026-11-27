@@ -255,6 +255,7 @@ impl Curve2 {
             Self::Circle(c) => Ok(c.closest(p)),
             Self::Ellipse(c) => Ok(c.closest(p)),
             Self::Nurbs(_) => Err(CurveError::Unsupported(Unsupported::NurbsInversion)),
+            Self::AngleLine(_) => Err(CurveError::Unsupported(Unsupported::AngleLineInversion)),
         }
     }
 
@@ -262,7 +263,8 @@ impl Curve2 {
     ///
     /// # Errors
     ///
-    /// [`Unsupported::NurbsInversion`] for a NURBS curve.
+    /// [`Unsupported::NurbsInversion`] for a NURBS curve,
+    /// [`Unsupported::AngleLineInversion`] for an angle line.
     #[inline]
     pub fn invert(
         &self,
@@ -274,6 +276,7 @@ impl Curve2 {
             Self::Circle(c) => Ok(c.invert(p, domain)),
             Self::Ellipse(c) => Ok(c.invert(p, domain)),
             Self::Nurbs(_) => Err(CurveError::Unsupported(Unsupported::NurbsInversion)),
+            Self::AngleLine(_) => Err(CurveError::Unsupported(Unsupported::AngleLineInversion)),
         }
     }
 }
