@@ -7,6 +7,7 @@
 pub mod box_tree;
 pub mod error;
 pub mod executor;
+pub mod global_solve;
 pub mod hash_table;
 pub mod krawczyk;
 pub mod local_solve1d;

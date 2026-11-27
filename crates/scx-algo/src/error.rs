@@ -63,6 +63,12 @@ pub enum SolveFailure {
         /// The parameter's value.
         at: f64,
     },
+    /// A global solve's branch is not ready for a local solve and has no node to split
+    /// (solidcore `GeomFailure::NoNodeToSubdivide`).
+    NoNodeToSubdivide {
+        /// The trees of the branch.
+        trees: usize,
+    },
 }
 
 impl SolveFailure {
@@ -71,7 +77,7 @@ impl SolveFailure {
     pub const fn kind(&self) -> ErrorKind {
         match self {
             Self::BrentDidNotConverge { .. } => ErrorKind::StageFailed,
-            Self::ZeroDifferenceStep { .. } => ErrorKind::Failed,
+            Self::ZeroDifferenceStep { .. } | Self::NoNodeToSubdivide { .. } => ErrorKind::Failed,
         }
     }
 }
@@ -93,6 +99,10 @@ impl fmt::Display for SolveFailure {
             Self::ZeroDifferenceStep { parameter, at } => write!(
                 f,
                 "the difference step of parameter {parameter} at {at} is zero"
+            ),
+            Self::NoNodeToSubdivide { trees } => write!(
+                f,
+                "no node of the {trees} trees of the branch can be subdivided"
             ),
         }
     }

@@ -176,6 +176,9 @@ pub fn solve_pin(e: SolveError<XErr>) -> SolidError {
                 SolveFailure::ZeroDifferenceStep { parameter, at } => {
                     GeomFailure::ZeroDifferenceStep { parameter, at }
                 }
+                SolveFailure::NoNodeToSubdivide { trees } => {
+                    GeomFailure::NoNodeToSubdivide { trees }
+                }
             },
         )
         .into_error(),
