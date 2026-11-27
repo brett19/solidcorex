@@ -9,8 +9,8 @@
 // that of the pin, from `Doubt`'s `Display` (`Doubt::fmt`, new); `Declared::doubt` in place of
 // `Declared::warning`; `known` and `warned` folded into `declared`; `Ap242Edition::number` is
 // `const`; `of_exchange` is new (the schemas of a parsed exchange). `split`, `edition` and
-// `shown` are kept as the pin has them; the tests' let-chain is written without one
-// (edition 2021). Tests: `ap242_without_identifier_is_read_with_a_warning`,
+// `shown` are kept as the pin has them; the tests' let-chain is unrolled
+// Tests: `ap242_without_identifier_is_read_with_a_warning`,
 // `unknown_identifier_is_read_with_a_warning` and `unknown_or_missing_schema_is_read_with_a_warning`
 // are merged into `doubts_are_typed_and_read_as_the_pin_words_them` (the doubts typed, their
 // words checked); `ap242`, `ap242_editions_by_identifier`, `Lcg::below` and
@@ -354,9 +354,11 @@ mod tests {
             assert_eq!(d.protocol, Protocol::Unknown, "{schemas:?}");
             assert_eq!(d.doubt.as_ref(), Some(&doubt), "{schemas:?}");
         }
-        assert!(Doubt::UnknownSchema("X_DESIGN".into())
-            .to_string()
-            .contains("X_DESIGN is not AP203"));
+        assert!(
+            Doubt::UnknownSchema("X_DESIGN".into())
+                .to_string()
+                .contains("X_DESIGN is not AP203")
+        );
     }
 
     #[test]
@@ -451,13 +453,11 @@ mod tests {
                 assert!(n <= longest, "{n} characters");
             }
             // The first schema decides when it is AP242 with a known identifier.
-            if let Some(first) = schemas.first() {
-                if let (name, Some((id, true))) = split(first) {
-                    if let Some(edition) = edition(id).filter(|_| name.eq_ignore_ascii_case(AP242))
-                    {
-                        assert_eq!(d, known(Protocol::Ap242(Some(edition))), "{first:?}");
-                    }
-                }
+            if let Some(first) = schemas.first()
+                && let (name, Some((id, true))) = split(first)
+                && let Some(edition) = edition(id).filter(|_| name.eq_ignore_ascii_case(AP242))
+            {
+                assert_eq!(d, known(Protocol::Ap242(Some(edition))), "{first:?}");
             }
         }
     }

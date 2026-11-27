@@ -135,13 +135,13 @@ pub(crate) fn decode(raw: &[u8], out: &mut String) -> Decoded {
             i += 2;
             continue;
         }
-        if rest.starts_with(b"\\X\\") {
-            if let Some(v) = rest.get(3..5).and_then(hex) {
-                // Two hexadecimal digits: always a character (U+0000 to U+00FF).
-                out.push(char::from_u32(v).unwrap_or(char::REPLACEMENT_CHARACTER));
-                i += 5;
-                continue;
-            }
+        if rest.starts_with(b"\\X\\")
+            && let Some(v) = rest.get(3..5).and_then(hex)
+        {
+            // Two hexadecimal digits: always a character (U+0000 to U+00FF).
+            out.push(char::from_u32(v).unwrap_or(char::REPLACEMENT_CHARACTER));
+            i += 5;
+            continue;
         }
         let width = if rest.starts_with(b"\\X2\\") {
             4
@@ -190,18 +190,18 @@ pub(crate) fn decode(raw: &[u8], out: &mut String) -> Decoded {
         // `\S\` takes a basic-alphabet character (space to `~`); before any other byte, the
         // start of a UTF-8 character, adding 128 would split it, so the escape is kept as
         // written.
-        if rest.starts_with(b"\\S\\") {
-            if let Some(&ch) = rest.get(3).filter(|ch| (b' '..=b'~').contains(*ch)) {
-                if page == 'A' {
-                    // ISO 8859-1 is Unicode's first 256 code points.
-                    out.push(char::from(ch + 128));
-                } else {
-                    found.unsupported_page.get_or_insert(page);
-                    out.push(char::REPLACEMENT_CHARACTER);
-                }
-                i += 4;
-                continue;
+        if rest.starts_with(b"\\S\\")
+            && let Some(&ch) = rest.get(3).filter(|ch| (b' '..=b'~').contains(*ch))
+        {
+            if page == 'A' {
+                // ISO 8859-1 is Unicode's first 256 code points.
+                out.push(char::from(ch + 128));
+            } else {
+                found.unsupported_page.get_or_insert(page);
+                out.push(char::REPLACEMENT_CHARACTER);
             }
+            i += 4;
+            continue;
         }
         out.push('\\');
         i += 1;

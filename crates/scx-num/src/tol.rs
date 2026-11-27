@@ -108,10 +108,10 @@
 use crate::certified::gamma;
 use crate::extent1d::Extent1d;
 use crate::extent3d::Extent3d;
-use crate::math::{Vec3, EFF_ZERO, EFF_ZERO_SQ};
+use crate::math::{EFF_ZERO, EFF_ZERO_SQ, Vec3};
 #[cfg(doc)]
 use crate::math::{EFF_ZERO_PARAM, EFF_ZERO_RAD, EFF_ZERO_SQRT};
-use crate::units::{coincident, Accuracy, Length, ParamTol, Resolution};
+use crate::units::{Accuracy, Length, ParamTol, Resolution, coincident};
 use crate::vector2d::Vec2;
 
 /// `SM_MODEL_SIZE_ESTIMATE`: the model size [`zone_for_size`] reads when none is given.

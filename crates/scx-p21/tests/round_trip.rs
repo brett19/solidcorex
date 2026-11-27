@@ -15,8 +15,8 @@ use std::path::{Path, PathBuf};
 
 use scx_p21::error::Unwritable;
 use scx_p21::{
-    parse, write, DataSection, Exchange, FileDescription, FileName, Header, Instance, P21Error,
-    Param, Record, Refusal, Writer,
+    DataSection, Exchange, FileDescription, FileName, Header, Instance, P21Error, Param, Record,
+    Refusal, Writer, parse, write,
 };
 
 /// `ex` written and read back, which must be `ex` again with no warning.

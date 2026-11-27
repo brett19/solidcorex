@@ -102,25 +102,22 @@
 //!   clamps each step against the default inside-out `[1e20, -1e20]` interval, replacing
 //!   every step with `+-1.584e19` against the Newton direction.
 
-use crate::error::{ignored, EvalError, SolveError, SolveFailure};
+use crate::error::{EvalError, SolveError, SolveFailure, ignored};
 pub use crate::local_solve_nd::{Outcome, Residual, TerminationReason};
 use core::num::NonZeroUsize;
+use scx_num::NumError;
+use scx_num::error::Limit;
 use scx_num::extent1d::Extent1d;
 use scx_num::limits::try_filled;
 use scx_num::math::{EFF_ZERO, EFF_ZERO_SQ};
 use scx_num::tol::in_tol;
-use scx_num::NumError;
 
 /// `ZEPS` of `SolveByBrent`.
 const ZEPS: f64 = 1.0e-12;
 
 /// `SMSIGN(a, b)`: `|a|` with the sign of `b` (`b >= 0` counts as positive).
 fn sign(a: f64, b: f64) -> f64 {
-    if b >= 0.0 {
-        a.abs()
-    } else {
-        -a.abs()
-    }
+    if b >= 0.0 { a.abs() } else { -a.abs() }
 }
 
 /// Which extremum a Brent search looks for.
@@ -236,13 +233,14 @@ impl IterQueue1d {
     ///
     /// # Errors
     ///
-    /// [`NumError::InvalidInput`] when `size` slots cannot be allocated or would take
+    /// [`NumError::Exhausted`] when `size` slots cannot be allocated or would take
     /// more than [`scx_num::limits::MAX_ALLOC_BYTES`] (upstream's `SetSize` then fails
     /// softly and `Add` writes past the empty array).
     pub fn try_new(size: NonZeroUsize) -> Result<Self, NumError> {
-        let steps = try_filled(size.get(), 0.0).ok_or(NumError::InvalidInput {
+        let count = size.get();
+        let steps = try_filled(count, 0.0).ok_or(NumError::Exhausted {
             operation: "geom::local_solve1d::IterQueue1d::try_new",
-            reason: "queue size too large to allocate",
+            limit: Limit::Allocation { count },
         })?;
         Ok(Self::with_slots(steps))
     }
@@ -526,11 +524,7 @@ impl<C> LocalSolve1d<C> {
 
                 if ok1 || ok2 {
                     let step = if ok1 && ok2 {
-                        if d1.abs() < d2.abs() {
-                            d1
-                        } else {
-                            d2
-                        }
+                        if d1.abs() < d2.abs() { d1 } else { d2 }
                     } else if ok1 {
                         d1
                     } else {
@@ -776,11 +770,11 @@ impl<C: Converged1d> LocalSolve1d<C> {
 
         // The initial guess must be within the problem interval (clamped if not).
         let mut guess_t = guess;
-        if let Some(ivl) = self.domain.interval() {
-            if !ivl.contains_value(guess_t, 0.0) {
-                // (upstream only logs SM_ERR_INVALID_INPUT beyond EFF_ZERO_SQRT and goes on)
-                guess_t = ivl.clamp_value(guess_t);
-            }
+        if let Some(ivl) = self.domain.interval()
+            && !ivl.contains_value(guess_t, 0.0)
+        {
+            // (upstream only logs SM_ERR_INVALID_INPUT beyond EFF_ZERO_SQRT and goes on)
+            guess_t = ivl.clamp_value(guess_t);
         }
 
         // Evaluate at the guess.
@@ -887,15 +881,15 @@ impl<C: Converged1d> Run<'_, C> {
                 let (mut new_lo, mut new_hi) = if mid.f > 0.0 { (end, mid) } else { (mid, end) };
 
                 // Prefer an existing bracket when it is closer.
-                if let Some(lo) = self.st.lower {
-                    if (lo.t - new_hi.t).abs() < (new_lo.t - new_hi.t).abs() {
-                        new_lo = lo;
-                    }
+                if let Some(lo) = self.st.lower
+                    && (lo.t - new_hi.t).abs() < (new_lo.t - new_hi.t).abs()
+                {
+                    new_lo = lo;
                 }
-                if let Some(hi) = self.st.upper {
-                    if (hi.t - new_lo.t).abs() < (new_hi.t - new_lo.t).abs() {
-                        new_hi = hi;
-                    }
+                if let Some(hi) = self.st.upper
+                    && (hi.t - new_lo.t).abs() < (new_hi.t - new_lo.t).abs()
+                {
+                    new_hi = hi;
                 }
                 self.st.lower = Some(new_lo);
                 self.st.upper = Some(new_hi);
@@ -1362,9 +1356,10 @@ mod tests {
         let (r, st) = s.solve_traced(cycle_failing_at_last_guess, 0.0).unwrap();
         assert!(!r.is_root(), "{r:?}");
         assert_ne!(r.value().to_bits(), LAST_GUESS.to_bits());
-        assert!(st
-            .lower
-            .is_none_or(|b| b.t.to_bits() != LAST_GUESS.to_bits()));
+        assert!(
+            st.lower
+                .is_none_or(|b| b.t.to_bits() != LAST_GUESS.to_bits())
+        );
         assert_eq!(st.termination_reason, TerminationReason::UnableToConverge);
 
         // F really is about 0.95 there.
@@ -1459,7 +1454,10 @@ mod tests {
         // fuzz regression: a caller-chosen size that cannot be allocated fails softly
         assert!(matches!(
             IterQueue1d::try_new(NonZeroUsize::MAX),
-            Err(NumError::InvalidInput { .. })
+            Err(NumError::Exhausted {
+                limit: Limit::Allocation { count: usize::MAX },
+                ..
+            })
         ));
         assert!(IterQueue1d::try_new(NonZeroUsize::new(1 << 60).unwrap()).is_err());
     }

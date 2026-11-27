@@ -95,10 +95,10 @@
 //! - `SmExtent3d(const SmPseudoBox&)` and `Circumscribe` (`from_pseudo_box`,
 //!   `circumscribe` in solidcore) stay with the pseudo box, above this layer.
 
-use crate::error::{NumError, Result};
+use crate::error::{Invalid, NumError, Result};
 use crate::extent1d::{Extent1d, Hull1d};
-use crate::math::{Point3, Vec3, BIG_DOUBLE, EFF_ZERO, EFF_ZERO_SQ, PI};
-use crate::vector3d::{asin, sqrt, Axis, UnitVec3};
+use crate::math::{BIG_DOUBLE, EFF_ZERO, EFF_ZERO_SQ, PI, Point3, Vec3};
+use crate::vector3d::{Axis, UnitVec3, asin, sqrt};
 
 /// Result of [`Extent3d::intersect_line`].
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -855,7 +855,7 @@ impl Extent3d {
         if !line.iter().all(|c| c.is_finite()) || dir.length_squared() < EFF_ZERO_SQ {
             return Err(NumError::InvalidInput {
                 operation: "geom::extent3d::Extent3d::intersect_line",
-                reason: "zero-length line direction, or an undefined line",
+                reason: Invalid::UndefinedLine,
             });
         }
         let (tmin_x, tmax_x) = slab(self.min.x, self.max.x, point.x, dir.x);
@@ -1120,9 +1120,11 @@ mod tests {
         let (on, bn) = e.is_point_on_boundary(p(0.0, 1.0, 0.5), EFF_ZERO);
         assert!(on);
         assert_eq!(bn, v(1.0, -1.0, 0.0));
-        assert!(Extent3d::from_point(p(1.0, 1.0, 1.0))
-            .unwrap()
-            .is_point_sized(EFF_ZERO));
+        assert!(
+            Extent3d::from_point(p(1.0, 1.0, 1.0))
+                .unwrap()
+                .is_point_sized(EFF_ZERO)
+        );
         assert!(e.is_contained_by(&e, 0.0));
         let g = e.expanded(1.0).unwrap();
         assert_eq!(g.min(), p(-1.0, -1.0, -1.0));

@@ -81,6 +81,7 @@
 //!   `Draw`, `AssertValid`, `operator=` / `operator==` are not ported (`Clone`
 //!   covers assignment).
 
+use scx_num::error::{Invalid, Limit};
 use scx_num::extent3d::Extent3d;
 use scx_num::math::Point3;
 use scx_num::{NumError, Result};
@@ -205,15 +206,17 @@ impl HashTable {
     ///
     /// # Errors
     ///
-    /// [`NumError::InvalidInput`] when `bucket_count` buckets cannot be allocated.
+    /// [`NumError::Exhausted`] when `bucket_count` buckets cannot be allocated.
     pub fn init_size(&mut self, item_estimate: usize, bucket_count: usize) -> Result<()> {
         self.used_buckets = None;
         self.buckets.clear();
         self.buckets
             .try_reserve_exact(bucket_count)
-            .map_err(|_| NumError::InvalidInput {
+            .map_err(|_| NumError::Exhausted {
                 operation: "geom::hash_table::HashTable::init_size",
-                reason: "bucket count too large",
+                limit: Limit::Allocation {
+                    count: bucket_count,
+                },
             })?;
         self.buckets.resize(bucket_count, None);
         self.bucket_items.clear();
@@ -300,7 +303,7 @@ impl HashTable {
         let Some(&head) = self.buckets.get(bucket_index) else {
             return Err(NumError::InvalidInput {
                 operation: "geom::hash_table::HashTable::add",
-                reason: "bucket index out of range",
+                reason: Invalid::IndexOutside,
             });
         };
         if self.bucket_items.len() == self.capacity {
@@ -576,7 +579,7 @@ impl<T: Copy + PartialEq> ObjsInVoxels<T> {
                 .and_then(|xy| xy.checked_mul(z_cnt))
                 .ok_or(NumError::InvalidInput {
                     operation: "geom::hash_table::ObjsInVoxels::set_size",
-                    reason: "voxel dimensions overflow",
+                    reason: Invalid::Overflows,
                 })?
         };
         self.x_cnt = x_cnt;
@@ -666,7 +669,7 @@ impl<T: Copy + PartialEq> ObjsInVoxels<T> {
         if xy == 0 {
             return Err(NumError::InvalidInput {
                 operation: "geom::hash_table::ObjsInVoxels::map_voxel_index_to_indices",
-                reason: "no voxels in x or y",
+                reason: Invalid::NoVoxels,
             });
         }
         let iz = index / xy;
@@ -731,11 +734,7 @@ impl<T: Copy + PartialEq> ObjsInVoxels<T> {
         // max where the steps round past the `f64` range.
         let end = |lo: f64, hi: f64, i: usize, n: usize| {
             let e = lo + i as f64 * ((hi - lo) / n as f64);
-            if i == n && !e.is_finite() {
-                hi
-            } else {
-                e
-            }
+            if i == n && !e.is_finite() { hi } else { e }
         };
         let (nx, ny, nz) = (self.x_cnt, self.y_cnt, self.z_cnt);
         Extent3d::from_bounds(
@@ -780,7 +779,7 @@ impl<T: Copy + PartialEq> ObjsInVoxels<T> {
         let Some(hit) = self.map_point_to_voxel(point) else {
             return Err(NumError::InvalidInput {
                 operation: "geom::hash_table::ObjsInVoxels::add",
-                reason: "voxel model has no voxels",
+                reason: Invalid::NoVoxels,
             });
         };
         while self.point_items.len() + MAX_ITEMS_PER_ADD > self.point_capacity {
@@ -874,7 +873,7 @@ impl<T: Copy + PartialEq> ObjsInVoxels<T> {
                 let Some(&h) = self.hash.buckets.get(b) else {
                     return Err(NumError::InvalidInput {
                         operation: "geom::hash_table::ObjsInVoxels::find_coincident_pairs",
-                        reason: "bucket index out of range",
+                        reason: Invalid::IndexOutside,
                     });
                 };
                 heads.push(h);
@@ -928,10 +927,10 @@ impl<T: Copy + PartialEq> ObjsInVoxels<T> {
                     let xs = (beg_at.zone_tol + end_at.zone_tol).abs();
                     let xs_sq = xs * xs;
                     let gap_sq = (beg_at.point - end_at.point).length_squared();
-                    if let Some(h) = histogram.as_deref_mut() {
-                        if let Some(c) = h.get_mut(gap_histogram_index(gap_sq.sqrt())) {
-                            *c = c.wrapping_add(1);
-                        }
+                    if let Some(h) = histogram.as_deref_mut()
+                        && let Some(c) = h.get_mut(gap_histogram_index(gap_sq.sqrt()))
+                    {
+                        *c = c.wrapping_add(1);
                     }
                     if gap_sq < xs_sq {
                         let mut known = false;
@@ -1008,7 +1007,7 @@ mod tests {
             ObjsInVoxels::<usize>::new(usize::MAX, usize::MAX, 1, None, 0),
             Err(NumError::InvalidInput {
                 operation: "geom::hash_table::ObjsInVoxels::set_size",
-                reason: "voxel dimensions overflow",
+                reason: Invalid::Overflows,
             })
         ));
     }
@@ -1028,7 +1027,7 @@ mod tests {
             ObjsInVoxels::<usize>::new(1, usize::MAX, 2, None, 0),
             Err(NumError::InvalidInput {
                 operation: "geom::hash_table::ObjsInVoxels::set_size",
-                reason: "voxel dimensions overflow",
+                reason: Invalid::Overflows,
             })
         ));
     }
@@ -1043,7 +1042,7 @@ mod tests {
             v.set_size(usize::MAX, usize::MAX, 1, None, 10),
             Err(NumError::InvalidInput {
                 operation: "geom::hash_table::ObjsInVoxels::set_size",
-                reason: "voxel dimensions overflow",
+                reason: Invalid::Overflows,
             })
         ));
         assert_eq!(v.counts(), before.counts());
@@ -1301,7 +1300,7 @@ mod tests {
             },),
             Err(NumError::InvalidInput {
                 operation: "geom::hash_table::ObjsInVoxels::find_coincident_pairs",
-                reason: "bucket index out of range",
+                reason: Invalid::IndexOutside,
             })
         ));
 

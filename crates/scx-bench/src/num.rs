@@ -9,8 +9,8 @@
 //! `distance`, `vec_mix` (cross, dot, scale, add and subtract in one expression) and
 //! `contains` (a point in a box, with tolerance).
 
-use crate::case::{both, same, Case};
-use crate::{edges, seeded, Rng};
+use crate::case::{Case, both, same};
+use crate::{Rng, edges, seeded};
 
 use scx_num::extent1d::Extent1d as XE1;
 use scx_num::extent3d::Extent3d as XE3;

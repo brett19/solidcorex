@@ -8,7 +8,7 @@
 
 use scx_num::hash::Rng;
 
-use crate::analytic::{Circle, Frame, Line, Plane, Sphere};
+use crate::analytic::{Circle, Cone, Ellipse, Frame, Line, Plane, Sphere, Torus};
 use crate::data::{CurveData, SurfaceData};
 
 /// How interior knots are placed in a clamped knot vector on `[0, 1]`.
@@ -84,12 +84,12 @@ pub fn knots(rng: &mut Rng, spec: Spec) -> Vec<f64> {
         Knots::Clustered => {
             // Pull about half the knots to within 1..8 ulps of the previous one.
             for i in 1..inner.len() {
-                if rng.next_u64() & 1 == 0 {
-                    if let Some(&prev) = inner.get(i - 1) {
-                        let n = 1 + below(rng, 8) as i64;
-                        if let Some(k) = inner.get_mut(i) {
-                            *k = ulps(prev, n).min(0.99);
-                        }
+                if rng.next_u64() & 1 == 0
+                    && let Some(&prev) = inner.get(i - 1)
+                {
+                    let n = 1 + below(rng, 8) as i64;
+                    if let Some(k) = inner.get_mut(i) {
+                        *k = ulps(prev, n).min(0.99);
                     }
                 }
             }
@@ -261,4 +261,106 @@ pub fn near_tangent_sphere_plane(rng: &mut Rng, gap: f64) -> (Sphere, Plane) {
             },
         },
     )
+}
+
+/// A random ellipse at an origin in `[-1, 1)^3`: semi-axes in `[1/4, 5/4)`, their ratio
+/// up to 5, the frame as [`frame`] gives it.
+pub fn ellipse(rng: &mut Rng) -> Ellipse {
+    let frame = frame(rng, 1.0);
+    let semi_x = 0.25 + rng.next_f64();
+    let semi_y = semi_x * (0.2 + 0.8 * rng.next_f64());
+    if rng.next_u64() & 1 == 0 {
+        Ellipse {
+            frame,
+            semi_x,
+            semi_y,
+        }
+    } else {
+        Ellipse {
+            frame,
+            semi_x: semi_y,
+            semi_y: semi_x,
+        }
+    }
+}
+
+/// `(cos t, sin t)` for `t = 2 atan(s)`, `s` uniform in `[-1, 1)`: a direction with no
+/// transcendental (rounded once each).
+fn rational_angle(rng: &mut Rng) -> (f64, f64) {
+    let s = rng.next_signed_unit();
+    let d = 1.0 + s * s;
+    ((1.0 - s * s) / d, 2.0 * s / d)
+}
+
+/// A point of an ellipse's evolute (its centres of curvature), moved off it by up to
+/// `gap` along the frame's axes: where two stationary points of the distance merge, the
+/// hard case for a foot-point solver. In the ellipse's plane, plus `lift` along its normal.
+pub fn ellipse_evolute(rng: &mut Rng, e: &Ellipse, gap: f64, lift: f64) -> [f64; 3] {
+    let (c, s) = rational_angle(rng);
+    let (a, b) = (e.semi_x, e.semi_y);
+    let k = a * a - b * b;
+    let (x, y) = (
+        k / a * c * c * c + gap * rng.next_signed_unit(),
+        -k / b * s * s * s + gap * rng.next_signed_unit(),
+    );
+    let f = &e.frame;
+    core::array::from_fn(|i| {
+        let at = |v: [f64; 3]| v.get(i).copied().unwrap_or(0.0);
+        at(f.origin) + x * at(f.x) + y * at(f.y) + lift * at(f.z)
+    })
+}
+
+/// The kinds of torus by its radii.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum TorusKind {
+    /// `R > r`: the doughnut.
+    Ring,
+    /// `R = r`: the tube touches the axis at the centre.
+    Horn,
+    /// `R < r`: the tube crosses the axis.
+    Spindle,
+}
+
+/// A random torus of a kind at an origin in `[-1, 1)^3`, `R` in `[1/2, 3/2)`.
+pub fn torus(rng: &mut Rng, kind: TorusKind) -> Torus {
+    let frame = frame(rng, 1.0);
+    let major = 0.5 + rng.next_f64();
+    let minor = match kind {
+        TorusKind::Ring => major * (0.1 + 0.8 * rng.next_f64()),
+        TorusKind::Horn => major,
+        TorusKind::Spindle => major * (1.1 + rng.next_f64()),
+    };
+    Torus {
+        frame,
+        major,
+        minor,
+    }
+}
+
+/// A random cone at an origin in `[-1, 1)^3`: radius in `[0, 1)` (zero a quarter of the
+/// time, the apex at the origin), semi-angle in `[0.05, 1.5)` radians.
+pub fn cone(rng: &mut Rng) -> Cone {
+    let frame = frame(rng, 1.0);
+    let radius = if below(rng, 4) == 0 {
+        0.0
+    } else {
+        rng.next_f64()
+    };
+    let semi_angle = 0.05 + 1.45 * rng.next_f64();
+    Cone {
+        frame,
+        radius,
+        semi_angle,
+    }
+}
+
+/// A query point in the cube of half-side `scale` about the frame's origin, a fifth of the
+/// time on the frame's `z` axis through the origin (to the rounding).
+pub fn query(rng: &mut Rng, frame: &Frame, scale: f64) -> [f64; 3] {
+    if below(rng, 5) == 0 {
+        return offset(frame.origin, scale * rng.next_signed_unit(), frame.z);
+    }
+    core::array::from_fn(|i| {
+        frame.origin.get(i).copied().unwrap_or(0.0) + scale * rng.next_signed_unit()
+    })
 }

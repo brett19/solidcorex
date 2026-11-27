@@ -475,6 +475,54 @@ pub enum ParamAxis { U, V }   // the uv counterpart of 57 M8's Axis
 | NS4 | enclosure (`geom/nurbs_enclosure`) as a cell | NS2 |
 | NS5 | IGES 128 | NS1 (parallel) |
 
+### 2.6 NS1 as built (11-27)
+
+Decided by analysis and an adversarial pass; proposed for review, not yet ruled.
+
+- **Sizes are `usize`, not `u32`.** The sketch's `u32` saved nothing: every count is compared with
+  `KnotVector::len()` and slice lengths, which are `usize`, and a `u32` would add a conversion
+  (and a failure) at each. The caps that matter are the knot vector's degree caps.
+- **`Net::new` returns `Result<Net, NurbsSurfaceError>`, not `Option`.** A size that does not
+  fill the net is caller data, so it is refused with a cause (`NetCause::Size`), not dropped.
+  A net is never empty; a ragged net cannot be expressed.
+- **`NurbsSurface<const D: usize>`**, as `NurbsCurve<D>`: points `[f64; D]`, so 2-D (uv) and
+  4-D uses need no second type. `Net<[f64; D]>` holds the points; a rational surface also keeps
+  `w P` and the weights (as `NurbsCurve` keeps its homogeneous form, F12), built once.
+- **Checks, in order, each once:** each knot vector refuses a break (`check_continuous`, the
+  curve rule of ruling 2: every surface is C0 in each direction); the net's rows and columns
+  match the two bases; every point finite; the weights' net has the points' shape; every weight
+  finite and positive; every `w P` finite. `from_homogeneous` checks `w P` first and the derived
+  `P = w P / w` last. Weights have no range: scaling every weight leaves the surface unchanged,
+  so the pin's `[1e-3, 100]` is not a property of a surface.
+- **No `TooLarge`.** The degree caps live in `KnotVector::new` (`NurbsError::Degree`), which a
+  caller builds before the surface; nothing else here can be too large. The error has three
+  variants (`BadNet`, `BadKnots`, `BadWeights`), not the four of X13; `TooLarge` joins if a
+  cap of its own appears (a net size limit, say).
+- **The kinds.** `BadNet` and `BadWeights` are `Refused`; `BadKnots` is a context frame and
+  inherits the `scx-nurbs` kind (62 D11). The workspace's `ErrorKind` has the classes before
+  62 until the error migration lands, so `Refused` is `InvalidInput` there for now.
+- **`scx-algo` is not a dependency yet.** Nothing in NS1 uses it; NS2 adds it with the first
+  use.
+- **No knot fixup.** The pin's `BSplineSurface::from_data` snaps near knots together
+  (`fixup_knot_vector`). scx stores the doubles given, exactly: the stored form is the record.
+
+Difftest `t_nurbs_surface` (construction against the pin's `Surface::new` then `is_valid`; its
+`from_data` checks nothing more). Where acceptance differs, scx is checked against the
+definition (pin defect `nurbs_surface_new`):
+
+| Input | pin | scx | Why scx is right |
+|---|---|---|---|
+| unclamped ends | refuses | builds | the basis is defined on the domain; scx-nurbs ruling |
+| degrees 18 to 31 | refuses | builds | the ruled cap is 31 (scx-nurbs) |
+| weights outside `[1e-3, 100]` (one at 1e-4, 1e3, 1e300; all scaled by 1e-6; the testkit's near-zero weights) | refuses | builds | positive weights of any scale give a surface |
+| a NaN weight | builds | refuses | `w < 1e-3 \|\| w > 100` is false for NaN |
+| a NaN interior knot | builds | refuses | `validate` compares with `<` |
+| a NaN or infinite control point | builds | refuses | nothing checks coordinates |
+
+Both refuse: degree 0 and 32, a break, extra or missing rows and columns, ragged nets, knot
+counts that do not match, decreasing knots, infinite end knots, an empty domain, end
+multiplicity `p + 2`, zero, negative and infinite weights, and `w P` that overflows.
+
 ## 3. `scx-curve`
 
 The step-2 slice covers line, circle, ellipse and B-spline, in 3-D and 2-D, with `Curve` and its

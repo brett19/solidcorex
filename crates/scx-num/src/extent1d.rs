@@ -97,7 +97,7 @@
 //!   ported (they do not change results). The destructor's "undefined" sentinel has
 //!   no Rust counterpart (a dropped value cannot be used), nor has `AssertDefined`.
 
-use crate::error::{NumError, Result};
+use crate::error::{Invalid, NumError, Result};
 use crate::math::{EFF_ZERO, EFF_ZERO_DEG};
 use crate::tol::{are_same, are_same_to_tol};
 
@@ -618,7 +618,7 @@ impl Extent1d {
         if !period.is_finite() {
             return Err(NumError::InvalidInput {
                 operation: "geom::extent1d::Extent1d::intersect_periodic",
-                reason: "the period is not finite",
+                reason: Invalid::NotFinite,
             });
         }
         if period == 0.0 {
@@ -643,7 +643,7 @@ impl Extent1d {
         let piece = |a: f64, b: f64| {
             Self::spanning(a, b).ok_or(NumError::InvalidInput {
                 operation: "geom::extent1d::Extent1d::intersect_periodic",
-                reason: "the period carries an end past the finite range",
+                reason: Invalid::Overflows,
             })
         };
 
@@ -851,11 +851,7 @@ fn wrap(min: f64, max: f64, v: f64) -> f64 {
 
 /// `a` and `b` in order, swapped when `a > b` (the ends `SmExtent1d(double, double)` holds).
 fn ordered(a: f64, b: f64) -> (f64, f64) {
-    if a > b {
-        (b, a)
-    } else {
-        (a, b)
-    }
+    if a > b { (b, a) } else { (a, b) }
 }
 
 /// An N-dimensional box of intervals (`SmExtentNd`).
@@ -907,7 +903,7 @@ impl ExtentNd {
         if values.len() < dim || periodic.is_some_and(|p| p.len() < dim) {
             return Err(NumError::InvalidInput {
                 operation: "geom::extent1d::ExtentNd::clamp_vector",
-                reason: "vector shorter than the dimension",
+                reason: Invalid::SizeMismatch,
             });
         }
         let mut rtn = false;
@@ -1019,9 +1015,11 @@ mod tests {
         assert!(!a.are_disjoint(&Extent1d::spanning(2.0, 3.0).unwrap(), 0.0));
         assert_eq!(a.distance_from(-1.0), 1.0);
         assert_eq!(a.distance_from(1.0), 0.0);
-        assert!(Extent1d::spanning(0.5, 1.0)
-            .unwrap()
-            .is_contained_by(&a, 0.0));
+        assert!(
+            Extent1d::spanning(0.5, 1.0)
+                .unwrap()
+                .is_contained_by(&a, 0.0)
+        );
         assert!(a.are_equal(&Extent1d::spanning(0.1, 2.0).unwrap(), -0.2));
         assert!(a.are_same(&Extent1d::spanning(1e-13, 2.0).unwrap()));
     }
@@ -1140,13 +1138,14 @@ mod tests {
         assert!(full.is_closed(360.0));
         assert!(q.is_value_on_periodic_boundary(360.0, 360.0, EFF_ZERO).0);
         assert!(q.are_disjoint_periodic(&Extent1d::spanning(100.0, 200.0).unwrap(), 360.0, -1.0));
-        assert!(q
-            .intersect_periodic(
+        assert!(
+            q.intersect_periodic(
                 &Extent1d::spanning(100.0, 200.0).unwrap(),
                 0.0,
                 AtSeam::Join
             )
-            .is_err());
+            .is_err()
+        );
     }
 
     #[test]

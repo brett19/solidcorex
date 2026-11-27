@@ -15,14 +15,14 @@
 use core::fmt;
 
 use scx_algo::error::EvalError;
+use scx_algo::local_solve_nd::{LocalSolveNd, Outcome as OutcomeNd, jacobian};
 use scx_algo::local_solve1d::{Bracket3, Domain1d, Goal, LocalSolve1d, Sample};
-use scx_algo::local_solve_nd::{jacobian, LocalSolveNd, Outcome as OutcomeNd};
 use scx_algo::polynomial::{solve_cubic, solve_quadratic, solve_quartic};
 use scx_num::extent1d::Extent1d;
 use scx_num::extent3d::Extent3d;
 use scx_num::fmath;
-use scx_num::hash::{finalize, Rng};
-use scx_num::math::{circumcentre_2d, three_point_circle_2d, Affine};
+use scx_num::hash::{Rng, finalize};
+use scx_num::math::{Affine, circumcentre_2d, three_point_circle_2d};
 use scx_num::vector3d::{Point3, Vec3};
 
 /// Folds words into one hash, in order.

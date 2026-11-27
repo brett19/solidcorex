@@ -22,7 +22,7 @@
 // over yet). The nesting bound of a `CONVERSION_BASED_UNIT` chain is the named
 // `MAX_CONVERSION_DEPTH` (was the literal 4). Otherwise only formatting and doc comments on every
 // public item.
-// Changes: `context` reads its records without let chains (edition 2021); the test helper
+// Changes: `context` reads its records through `and_then`; the test helper
 // `parse` reads through this crate's `parse`. Paths otherwise. Results unchanged.
 //! The units of a representation context (ISO 10303-41 measures and units, ISO 10303-43
 //! representation contexts): `GLOBAL_UNIT_ASSIGNED_CONTEXT`'s length and plane angle units and
@@ -214,7 +214,7 @@ mod tests {
         );
         match crate::parse(&t) {
             Ok(p) => p.exchange,
-            Err(e) => panic!("{e}\n{t}"),
+            Err(e) => panic!("{}\n{t}", e.one_line()),
         }
     }
 

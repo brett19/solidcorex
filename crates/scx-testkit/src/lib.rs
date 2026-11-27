@@ -9,19 +9,29 @@
 //! - [`exact`], [`rat`]: exact integers and rationals, with a correctly rounded `f64`.
 //! - [`nurbs`]: exact B-spline and NURBS curves and surfaces: evaluation with any
 //!   derivatives by two independent methods (de Boor and the basis-function sum), knot
-//!   insertion and degree elevation.
+//!   insertion, degree elevation and splitting.
 //! - [`dd`]: double-double arithmetic and elementary functions.
 //! - [`analytic`]: lines, circles, ellipses, planes, cylinders, cones, spheres and tori in
 //!   double-double (exact for the rational cases), with closest points.
-//! - [`gen`]: seeded generators of well- and ill-conditioned inputs.
+//! - [`quadric`]: the analytic surfaces as exact implicit equations, an exact on-surface
+//!   decision for rational surfaces, and the NURB-to-STEP uv map in closed form.
+//! - [`bound`]: certified enclosures, intervals of rationals rounded outward.
+//! - [`poly`]: rational polynomials with their real roots isolated with certainty.
+//! - [`project`]: every stationary point of the distance to an ellipse, a torus and a cone,
+//!   certified, with the certified nearest.
+//! - [`sample`]: seeded generators of well- and ill-conditioned inputs.
 
 pub mod analytic;
+pub mod bound;
 pub mod data;
 pub mod dd;
 pub mod exact;
-pub mod gen;
 pub mod nurbs;
+pub mod poly;
+pub mod project;
+pub mod quadric;
 pub mod rat;
+pub mod sample;
 
 pub use rat::Rat;
 

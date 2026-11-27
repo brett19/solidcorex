@@ -19,6 +19,8 @@ mod facade;
 mod harness;
 mod pin_defects;
 mod pin_extent;
+mod pin_project;
+mod pin_quadric;
 mod pin_truths;
 mod solvers;
 mod t_algo;
@@ -28,6 +30,7 @@ mod t_interval;
 mod t_kraw;
 mod t_math;
 mod t_nurbs;
+mod t_nurbs_surface;
 mod t_p21;
 mod t_rest;
 mod t_rng;
@@ -39,7 +42,7 @@ mod t_vector;
 /// must each fail; a rounding error of drift must pass; the fingerprint stays bit-exact; a
 /// pin defect excuses only inputs whose check passes, and one that applies to none fails.
 mod controls {
-    use crate::harness::{run, run_defect, shot, Applies, PinDefect, Tol};
+    use crate::harness::{Applies, PinDefect, Tol, run, run_defect, shot};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     #[test]

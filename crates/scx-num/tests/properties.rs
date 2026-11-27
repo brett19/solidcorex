@@ -12,7 +12,6 @@
     clippy::needless_range_loop
 )]
 
-use scx_num::certified::{next_down, next_up};
 use scx_num::extent1d::Extent1d;
 use scx_num::extent2d::Extent2d;
 use scx_num::extent3d::Extent3d;
@@ -84,14 +83,17 @@ fn next_up_and_down_step_one_bit_pattern() {
             f64::from_bits(1)
         };
         if x != f64::MAX {
-            assert_eq!(next_up(x).to_bits(), up.to_bits(), "{x:e}");
+            assert_eq!(x.next_up().to_bits(), up.to_bits(), "{x:e}");
         }
-        assert!(next_down(x) < x);
-        assert_eq!(next_down(next_up(x)), if x == 0.0 { 0.0 } else { x });
+        assert!(x.next_down() < x);
+        assert_eq!((x.next_up()).next_down(), if x == 0.0 { 0.0 } else { x });
     }
-    assert_eq!(next_up(f64::MAX), f64::INFINITY);
-    assert_eq!(next_up(-0.0).to_bits(), 1);
-    assert_eq!(next_down(0.0).to_bits(), (-f64::from_bits(1)).to_bits());
+    assert_eq!(f64::MAX.next_up(), f64::INFINITY);
+    assert_eq!((-0.0_f64).next_up().to_bits(), 1);
+    assert_eq!(
+        0.0_f64.next_down().to_bits(),
+        (-f64::from_bits(1)).to_bits()
+    );
 }
 
 /// Dot, cross and triple products of integer vectors against exact `i128` arithmetic
@@ -122,7 +124,9 @@ fn products_match_integer_arithmetic() {
         let cf = c.map(|x| x as f64);
         assert_eq!(vec_triple_product(&af, &bf, &cf), triple as f64);
         assert_eq!(
-            determinate_3x3(af[0], af[1], af[2], bf[0], bf[1], bf[2], cf[0], cf[1], cf[2]),
+            determinate_3x3(
+                af[0], af[1], af[2], bf[0], bf[1], bf[2], cf[0], cf[1], cf[2]
+            ),
             triple as f64
         );
     }
@@ -196,7 +200,7 @@ fn unimodular<const N: usize>(r: &mut Rng) -> [[i64; N]; N] {
         if i == j {
             continue;
         }
-        if r.next_u64() % 3 == 0 {
+        if r.next_u64().is_multiple_of(3) {
             m.swap(i, j);
         } else {
             let k = r.int(2);
@@ -395,7 +399,12 @@ fn linear_solve_residual_is_small() {
                     off += a[i * n + j].abs();
                 }
             }
-            a[i * n + i] = (off + 1.0) * if r.next_u64() % 2 == 0 { 1.0 } else { -1.0 };
+            a[i * n + i] = (off + 1.0)
+                * if r.next_u64().is_multiple_of(2) {
+                    1.0
+                } else {
+                    -1.0
+                };
         }
         let b: Vec<f64> = (0..n).map(|_| r.uniform(-10.0, 10.0)).collect();
         let m = Matrix::from_row_major(n, n, a.clone()).unwrap();
