@@ -3896,3 +3896,66 @@ BO7 builds what D5 allows: a result whose two solids share only a vertex, and a 
 
 **Proposed 04 row.** "CK3 (72 §14.37): `scx_check::contract(&Brep, &Cx, Contacts)` takes `Contacts::Refused` (default; an edge of other than two fins is `NonManifoldEdge`) or `Contacts::Radial`, which admits an edge of an even number of fins over two when, at the middle of the edge, the faces' directions `d = sense N x T` are strictly counter-clockwise in the edge's order (each gap above 1e-9 rad, so tangent fins are refused) and the sectors are solid and void by turns; any other such edge is `Breach::EdgeNotRadial`, an odd count `NonManifoldEdge`. BO7's edge-contact results now prove with `Radial`. No cost on bodies without such edges (measured). Against: the order is read at one sample, and a four-fin edge is not a `Brep` the test can refuse for order (`finish` does). Change if: tangent pinches reach a case (order by bend), or vertex manifoldness is wanted at the edge."
 
+
+### 14.40 MA6b as built (11-27)
+
+MA6's rounding bound (§14.31) cost 1.29x to 1.41x instructions on `volume` plus `mass`. MA6b brings `scx-mass` below its pre-MA6 count. The values and stated errors are **bit-identical to main**: 288 printed results matched bit for bit. They cover eight generated kinds (block, prism, cylinder, cone, sphere, torus, holed, cavity), sizes 1 to 3, the world frame and a far tilted one, and accuracies 1e-6, 1e-9 and 1e-12. No bound changed, so every stated error still bounds its miss exactly as MA6 proved and tested. No public API changes.
+
+**Profile first** (callgrind, main's generated cylinder at n3, 415M in all):
+
+| Cost | Instructions | Note |
+|---|---|---|
+| `Set::eval` | 113.5M | predates MA6: about 500 instructions a call, the monomial loop's three table lookups and power indexing not unrolled |
+| `Inner::sample_rounding` | 60.7M | of which `Set::rounding` 48.6M (the same loop shape as `eval`, with the derivatives); the frame terms and the normal's `dn` make up the rest |
+| K15's extras | about 51M | `spread`, `jump`, `most`, each piece's rounding formula and the `Sum2` adds, all over a runtime component count (1 to 24) with bounds checks |
+
+Most of the cost was not the bound's arithmetic. It was the code shape around it: runtime-length loops over the components and an integrand loop that the compiler could not unroll.
+
+**What changed.** Four steps, each kept only once the outputs matched bit for bit:
+
+1. *Unrolled monomials* (`integrand.rs`). `Set::eval`'s and `Set::rounding`'s full branches expand the 20 monomials at compile time (`each_monomial!`, with const-generic exponents). They read the powers from one `Powers` table taken once per sample. Exponents of zero drop their terms at compile time, so they leave out the `1.0 *` factors (LLVM folds those, so the bits are the same). In the derivative sums they leave out the `0.0 *` terms: the sum starts from `-0.0`, the identity of addition, and adding `+0` to a finite sum leaves its bits. A unit test (`each_monomial_is_in_order`) pins the expansion to `MONOMIALS`.
+2. *A const-generic rule* (`kronrod.rs`). `integrate` dispatches the component count to `integrate_n::<N>` with N of 1, 2 or `MAX_COMPONENTS`, so every per-component loop has a compile-time length. Gauss terms with a zero weight are skipped. Their product is `+0` and adding it changes no bits, because a Gauss sum is never `-0` here: it starts from `+0`.
+3. *Side-by-side sums* (`rounding.rs`). `Sums<N>` holds each component's `Sum2` total, carry and absolute sum as arrays, with one count. It runs the same `TwoSum` per lane in the same order as `[Sum; N]`, but the lanes vectorise and share the count. A unit test (`sums_are_sum_side_by_side`) checks the bits against `Sum`.
+4. *Exact derivatives carry nothing* (`face.rs`). `Terms::rounding` gives `None` for derivatives that carry no rounding (a plane's stored axes). `sample_rounding` then leaves out the zero derivative terms in the normal's `dn`. Bit-identical for finite inputs, as in 1.
+
+**Cost** (callgrind instructions, each run three times `volume` plus `mass` at 1e-9, measured off the tree and not committed):
+
+| Body, n3 | pre-MA6 | main (MA6) | step 1 | step 2 | step 3 | MA6b (step 4) | MA6b / pre-MA6 | MA6b / main |
+|---|---|---|---|---|---|---|---|---|
+| generated block | 51.7M | 68.9M | 55.0M | 49.3M | 47.1M | 46.3M | 0.90x | 0.67x |
+| generated cylinder | 294M | 415M | 293M | 268M | 254M | 250M | 0.85x | 0.60x |
+| generated sphere | 708M | 911M | 673M | 639M | 620M | 620M | 0.87x | 0.68x |
+
+(The pre-MA6 and main counts differ slightly from §14.31's: this harness differs.)
+
+**What the rounding still costs.** Steps 1 to 3 speed up the code shape for both halves. So, to be fair, the rounding should also be measured against the same shape with its work removed: the branch with the sample rounding, `spread`, `jump`, `most` and the piece formula stubbed out and plain sums in place of `Sum2`. That is 35.1M, 169M and 454M. The rounding therefore still costs 1.32x (block), 1.48x (cylinder) and 1.37x (sphere) against that shape, about the same share as MA6. Unrolling `eval` alone on pre-MA6 gives 41.3M, 204M and 531M. The ratio of the target (1.1x of pre-MA6) is met because the shared code got faster, not because the bound got cheaper. On this branch's cylinder the remaining rounding share is:
+
+- `sample_rounding` at about 25M (`Set::rounding` 17M, the frame terms and `dn` the rest);
+- `spread` 7.2M;
+- `most` 2.3M;
+- `jump` 1.8M;
+- the peaks 7M;
+- the `TwoSum`s and the piece formula.
+
+**Decisions, with the cases for and against.**
+
+| Decision | For | Against | Chosen |
+|---|---|---|---|
+| Codegen only (unrolling, const-generic lengths, side-by-side sums), bounds unchanged | bit-identical results, so MA6's proofs and tests carry over untouched; also speeds the value path | leaves the bound's own share near 1.3x to 1.5x of the same shape | **yes** |
+| One term bound per rule application (`gamma(k)` times the rule's weights times a magnitude bound) in place of per-node sample rounding | removes most of `sample_rounding` (about 25M on the cylinder) | the magnitude bound would be the peak over the nodes: looser than MA6's per-node bound wherever the samples vary (the round bar's 7.0e-13 would grow), so the errors would loosen, not tighten | no; open for a ruling if speed is worth looser errors |
+| Sparser rounding reads on K7 (centre and ends, as K15 already does) | about a third of `sample_rounding` on the outer rule | a model with no proof that the rounding is smooth along the trim; it would change the stated errors (looser or tighter by the node) | no; open |
+| Fuse the per-node rounding pass into `eval` (one pass sharing the powers) | about 2M on the cylinder | `eval` runs on every sample and the rounding only where it is read; fusing pays the derivative work on samples that never read it | no |
+| Dispatch N of {1, 2, `MAX_COMPONENTS`} | the counts used are 1 (`volume`, `area`) and 2 (`mass`'s parts) or the full set; three instantiations keep the code size small | a count between 3 and 23 runs the 24-lane loops on padding lanes (lanes past `n` stay zero and are ignored) | **yes** |
+| `Sums<N>` beside `Sum` (not replacing it) | `body.rs`'s face and shell sums are scalar, and `Sum` reads plainly there | two forms of one algorithm; the test ties their bits | **yes** |
+
+**Tests.** New:
+
+- `integrand.rs`'s `each_monomial_is_in_order`: the macro's exponents equal `MONOMIALS`;
+- `rounding.rs`'s `sums_are_sum_side_by_side`: `Sums<2>` gives `[Sum; 2]`'s bits.
+
+Unchanged and passing: every MA6 test in `tests/rounding.rs`, the changed-on-purpose `kronrod`, `enclosure.rs` and `scx-make` `extrude.rs` tests, and the rest of `scx-mass`. No test was removed.
+
+**Open.**
+
+- Whether a looser but cheaper bound (the per-application row above, or sparse K7 reads) is wanted. It would need a ruling, since it trades the round bar's and far boxes' tightness for about 10% to 15%.
+- `Set::eval`'s unrolling also helps any future integrand. MA5's per-face memo is separate, and the two compose.
