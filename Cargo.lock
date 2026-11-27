@@ -635,6 +635,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "scx-tess"
+version = "0.1.0"
+dependencies = [
+ "scx-brep",
+ "scx-curve",
+ "scx-make",
+ "scx-num",
+ "scx-nurbs",
+ "scx-surface",
+]
+
+[[package]]
 name = "scx-testkit"
 version = "0.1.0"
 dependencies = [
