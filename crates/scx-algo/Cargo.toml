@@ -12,6 +12,10 @@ publish.workspace = true
 [dependencies]
 scx-num = { path = "../scx-num" }
 
+# The exact truths of the polynomial tests.
+[dev-dependencies]
+scx-testkit = { path = "../scx-testkit" }
+
 # `LocalSolve1d::solve_traced`, for the difftest.
 [features]
 trace = []

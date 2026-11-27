@@ -478,6 +478,7 @@ name = "scx-algo"
 version = "0.1.0"
 dependencies = [
  "scx-num",
+ "scx-testkit",
 ]
 
 [[package]]
