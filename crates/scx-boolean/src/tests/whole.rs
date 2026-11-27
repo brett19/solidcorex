@@ -23,7 +23,12 @@ use super::face_face::{X, Z, ball, cyl};
 use super::{cuboid, pt};
 use crate::{BooleanError, BooleanOp, BooleanUnsupported, NoItems, boolean};
 
-fn op(a: &Brep, b: &Brep, which: BooleanOp, doc: Document) -> Result<Done<NoItems>, BooleanError> {
+pub(super) fn op(
+    a: &Brep,
+    b: &Brep,
+    which: BooleanOp,
+    doc: Document,
+) -> Result<Done<NoItems>, BooleanError> {
     let mut scratch = Scratch::new();
     let stop = Stop::new();
     let settings = Settings::new();
@@ -97,9 +102,9 @@ fn counts(body: &Brep) -> [usize; 3] {
     ]
 }
 
-const UNION: BooleanOp = BooleanOp::Union;
-const SUBTRACT: BooleanOp = BooleanOp::Subtract;
-const INTERSECT: BooleanOp = BooleanOp::Intersect;
+pub(super) const UNION: BooleanOp = BooleanOp::Union;
+pub(super) const SUBTRACT: BooleanOp = BooleanOp::Subtract;
+pub(super) const INTERSECT: BooleanOp = BooleanOp::Intersect;
 
 #[test]
 fn overlapping_cubes_unite_subtract_and_intersect() {
@@ -537,14 +542,11 @@ fn a_boolean_is_deterministic() {
 #[test]
 fn non_manifold_results_are_unsupported() {
     // A ball on a cube's top face: the union meets itself at one point inside the face
-    // (D5). Two cubes sharing an edge are BO7's; today that edge's four faces are also
-    // `NonManifold`.
+    // (D5). Two cubes sharing an edge are built (BO7, `contacts`).
     let doc = Document::default();
     let a = cuboid([0.0; 3], [1.0; 3], doc);
-    for b in [
-        ball([0.5, 0.5, 1.5], 0.5, doc),
-        cuboid([1.0, 1.0, 0.0], [2.0, 2.0, 1.0], doc),
-    ] {
+    {
+        let b = ball([0.5, 0.5, 1.5], 0.5, doc);
         let e = op(&a, &b, UNION, doc).unwrap_err();
         assert!(
             matches!(

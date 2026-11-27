@@ -3649,3 +3649,90 @@ No test was removed.
 **Open questions.** (1) A wrong disk gives `Unsupported(NonManifold)` rather than a defect (for BO7, with D5). (2) A face with no edges at all (a torus or sphere face without seams) would leave a swapped section unseen. No step-4 constructor makes one. If one ever does, the inside point is the fallback, at its measured cost. (3) BO4's question 4 (profiling build) is still open. Build is 3 to 5 times classify on every case here.
 
 **Proposed 04 row.** "BO6 (72 §14.35): `scx-boolean`'s recipe tests check genus (Euler-Poincare over the result's cells) and T10 points (box points and face probes against the truth's band) on every built recipe without slack, including plate-12 and gear-60. Each seeded component is checked by `classify_point` at one free edge middle, with `Defect(Seeds)` on disagreement. It is never checked at a point inside a face, since that cost 40% to 190% of stage 6 on curved cases, while the middle costs under 10% everywhere measured. Build merges coincident faces turned against each other (opposite natural normals, material on one side), walking the turned face's loops backwards. It compares the faces' normals at the edge before `coincide` and skips pairs more than 60 degrees from parallel, so build is faster than before on every bench case but the one that now merges (L less its arm, 21 to 29 us, 7 faces to the true 6). Against: a new threshold, and edge middles only. Change if: an operand face without edges appears (check its components by the inside point), or a merge between coincident faces is missed."
+
+### 14.36 BO7 as built (11-27)
+
+BO7 builds what D5 allows: a result whose two solids share only a vertex, and a result that meets itself along an edge (an edge of four fins). It also places a cavity when the result has two or more lumps (BO4's open question 1). The new code is one crate-private module, `crates/scx-boolean/src/pinch.rs`. `build.rs` calls it at two points: after the edges are cleaned and at the end of the shells step. Classification and selection are unchanged. No public API and no error variant are added: `NonManifold` and `Nesting` (BO4) keep their names, and each now has fewer cases.
+
+**What was built.**
+
+1. *Radial order* (`pinch::order_fins`). An edge with more than two fins was `NonManifold` (BO4). It is now kept, and its fins are sorted counterclockwise about the edge's tangent T, which is the order scx-brep's radial check reads. The tangent is taken at the middle of the edge's interval. Each fin's direction into its face is d = sense (N x T), where N is the face's natural normal at the fin's pcurve point. Its angle is taken from the first fin's d, in the plane normal to T.
+   - An odd fin count is `Defect(Build)`.
+   - An edge with no curve, or a fin with no pcurve, is `NonManifold { at: Edge }`.
+   - Two angles within 1e-9 rad of each other, including across the wrap, are `NonManifold { at: Edge }`. These are faces tangent along the contact edge, whose order a single sample cannot decide.
+2. *Linking shells across a pinch* (`pinch::link`). scx-brep's structure check requires that the shell after one fin, in its sense, is the shell before the next fin. At an edge of four fins, the two operands' outer shells (or a body's two halves) must therefore be one shell.
+   - A union-find runs over shells, one sector at a time. The lower id is kept.
+   - The faces of each moved shell are relabelled.
+   - Two shells to be joined that bound different regions are `Defect(Build)`, since that would mean the classification disagreed.
+   - A vertex contact needs no link: the check's shells rule joins pieces at a common vertex, so two outer shells meeting at one vertex are left as two shells (decision below).
+3. *Nesting* (`pinch::nest`, which replaces BO4's `nest` in `build.rs`).
+   - The draft is cloned and finished once, as in BO4. Each shell gets a `volume_sign`, except a void shell whose material mirror was not moved by the link: its sign is the negation of the mirror's (the CK2 rule, exact).
+   - A shell's box is the union of its finished faces' boxes.
+   - A positive material shell stays. A positive void shell is a new cavity region.
+   - A negative material shell (a cavity lining) goes into the region of the positive material shell that holds it. Candidates are the positive material shells whose box contains its box. With none, the answer is `Nesting`. With one, that shell is taken with no test. With several, each candidate is tested and the innermost holder is taken.
+   - A negative void shell (a lump's skin seen from outside) goes into a void region that holds it, else into the outside. Its candidates are the positive void shells whose box contains its box, and any candidate is always tested.
+   - The test: a point inside the held shell's first face is classified with `classify_point` against a body made from the candidate shell alone (`shell_body`). `In` the candidate's solid means it holds. Any other `In` means it does not, and any other answer is `Nesting`.
+   - The innermost holder is the one with the smallest box volume. Two holders with equal boxes are `Nesting`.
+   - `shell_body` clones the draft, keeps the candidate shell's faces with the outside behind them, drops every other face, edge, vertex, shell and region, and finishes. It is built once per candidate per call.
+
+**Decisions, with cases for and against.**
+
+- *Build edge contacts with four fins in radial order, rather than refuse them.*
+  - For: D5 as changed. scx-brep's `finish` accepts it, and `classify_point`, `volume`, `area` and `tessellate` all answer correctly on the result (tested below).
+  - Against: `scx_check::contract` refuses an edge with other than two fins by design (CK1's test 3, `Breach::NonManifoldEdge`). So these results cannot pass the contract, which conflicts with the brief's "every result passes the contract". The tests require the contract to fail at exactly that breach on exactly the pinch edge, and `scx_mass::outward` (the contract's test 5 on its own) to prove the shells' orientation. That is the most the contract can say about them today. See open question 1.
+- *Vertex contacts are left as two outer shells meeting at the vertex.*
+  - For: `finish` accepts it, since its shells rule joins pieces at a shared vertex. It is the form scx-brep's records already describe (one shell per connected face set), and `corner-contact-union` passes T12's topology (two regions, two outer shells) and the contract.
+  - Against: the pin builds one shell through the vertex. A later consumer that walks a shell by faces would see two shells. Joining them is a relabel, if 04 rules that a shell should be connected through vertices too.
+- *Tangent fins are `NonManifold`, not ordered by curvature.*
+  - For: no step-4 case has them. scx-brep's bend ordering for tangent faces is in its private radial check and would have to be repeated. A wrong order would build a self-crossing body that passes `finish`.
+  - Against: a cylinder lying along the contact edge of two blocks is refused, though it is well defined (`faces_tangent_along_a_contact_edge_are_non_manifold`).
+- *The tie tolerance is 1e-9 rad.*
+  - For: on step-4 surfaces, fins that are not tangent are well apart (pi/2 for blocks).
+  - Against: two faces meeting at a dihedral angle under 1e-9 rad would be refused rather than built.
+- *Nesting: a box prefilter, then a point test only when the boxes leave a choice.*
+  - For: every step-4 case with one positive lump costs what BO4 cost: one clone and finish, and the same number of `volume_sign` calls, because mirrored voids are signed by negation. The point test is exact (BQ1's `classify_point` on a closed shell), and it runs only for two or more holders, or for a lump inside a void.
+  - Against: a single box candidate is taken without a test. That is right when one positive lump holds the cavity's box, since the cavity must lie inside some positive lump and only one box can hold it. Each test builds a body (a clone and a finish, about 30 us on these cases).
+- *The innermost holder is the smallest box.*
+  - For: holders are nested, so their boxes are nested, and the innermost holder's box is the smallest.
+  - Against: two holders with equal boxes cannot be told apart this way, and that case is `Nesting`. No case reaches it.
+- *Rejected: placing each cavity by the volume sign of the cavity's shell combined with each candidate.* It needs a `volume_sign` per pair, which costs more than a point test (`volume_sign` is the contract's hot path, CK2). It also does not tell nested holders apart.
+
+**Tests** (`crates/scx-boolean/src/tests/contacts.rs`, 10 new; all results checked against closed forms to 1e-9 relative, or 1e-7 for the spheres).
+
+| Test | Ported from | Checks |
+|---|---|---|
+| `point_contacts_are_non_manifold_and_one_sided_results_are_built` | `boolean_api` tangent-sphere-box, seam-sphere-box, seam-box-sphere, off-seam-sphere-box, seam-sphere-sphere, seam-box-minus-sphere; `point_contact_unions_check_clean` (all 11) | The operation the pin runs is `NonManifold`, because every touch is inside a face (D5). Each one-sided operation builds, with the contract and the closed-form volume (both `a - b`, `b - a`, and the empty intersect; for the box less the sphere, the union is the box, the intersect is the ball, and the ball less the box is empty). The five cylinder and torus contacts answer `SsiPair` in every operation, since step 5 owns their intersections. |
+| `blocks_sharing_an_edge_unite_into_two_regions_with_one_outer_shell` | | Volume 2; 2 solid regions, one shell each; one outside shell; one edge of 4 fins; both operand orders |
+| `blocks_sharing_a_corner_unite_into_two_regions_and_two_outer_shells` | | 2 regions, two outside shells; passes the contract |
+| `a_body_touching_itself_along_an_edge_is_one_region_and_one_shell` | | Two pillars joined at one edge: volume 8, 1 region, 1 shell. Less the bridge: volume 4, 2 regions, 1 outside shell |
+| `faces_tangent_along_a_contact_edge_are_non_manifold` | | A cylinder along the cube's edge: `NonManifold` |
+| `the_pinched_body_answers_queries` | | `classify_point` puts each cube in its own region and the pinch edge `On`; volume 2, area 12, tessellated signed volume 2; each end of the pinch edge has 5 edges |
+| `two_lumps_one_with_a_cavity_place_the_cavity_by_a_point_test` | | A holed 4-cube and a far block: volume 64, regions [1, 2] shells, the cavity point in a void that is not the outside. A holed block inside a square frame, whose box holds it: volume 168, the holed block's region has 2 shells |
+| `a_lump_inside_a_cavity_sits_in_the_cavity_void` | | Volume 160, one void region with 2 shells holding the inner lump |
+| `a_union_that_fills_nothing_new_keeps_working_when_nested` | | Subtracting a lump inside the cavity leaves 152; the intersect is empty |
+| `one_sided_edge_contacts_build_each_operand` | | Subtract 1; intersect empty |
+
+`tests/recipes.rs`: `blocks_touching_at_a_vertex_or_along_an_edge_are_built` is no longer ignored and passes, since `edge-contact-union` builds with T12's topology. All 8 recipe tests run.
+
+**Changed test, on purpose.** BO4's `non_manifold_results_are_unsupported` (`whole.rs`) proved two things: a ball on a cube's top face is `NonManifold`, and two blocks sharing an edge are `NonManifold`. It keeps the ball. The edge half is dropped, because that result is now built (`blocks_sharing_an_edge_...` above). No test was removed.
+
+**The contract and empty results.** CK1 refuses an empty body (`Breach::Empty`), so an empty result (an intersect of bodies that only touch) is checked by having no solid region, not by the contract. A result with a pinch edge is checked as described above. Every other result passes the contract.
+
+**Measurements.** Release build, under load, from throwaway timers and counters (since removed), over all of `scx-boolean`'s lib and recipe tests (79).
+- `link` runs on every `boolean()` with a result (362 calls). It averages 1.8 us, and most of that is a pass over the edges that finds no pinch.
+- `nest` ran 33 times, with 151 shells, 68 of them signed by mirror. It made 83 `volume_sign` calls. On every body BO4 built, the number of `volume_sign` calls is the same as BO4's: one per material shell.
+- The point test ran 12 times, all in the two new nesting tests. `shell_body` averaged 34 us, which is small next to `nest`'s clone and finish plus signs (0.8 to 3 ms per call on these bodies).
+- So the added cost on BO4's cases is the link pass alone, about 2 us per call.
+
+**Deviations from 72.**
+- §11's BO7 row says "the non-manifold vertex as scx-brep allows it, or `Unsupported(NonManifold)` by ruling". D5 as changed builds vertex and edge contacts, and this follows D5.
+- The ported point contacts are all touches inside a face, which D5 keeps as `NonManifold`. So the operation the pin runs on them is refused, not built. Only their one-sided operations build.
+- Edge-contact results do not pass `scx_check::contract` (above).
+
+**Open questions.**
+1. Should `scx_check::contract` accept an edge of four fins in radial order (D5), for example as a separate `Breach` that a caller may allow, or a `contract_d5`? Until it does, no edge-contact result can be called contract-clean. That decision belongs to CK's owner.
+2. Should a shell be one connected set through vertices, so that the two outer shells of a vertex contact become one? That would be a relabel in `pinch::link`.
+3. The five cylinder and torus point contacts wait on step-5 SSI (tangent quadric pairs). When they intersect, they will be in-face touches and so `NonManifold`, unless a point loop is added to scx-brep.
+4. Tangent fins at a pinch edge: should they be ordered by bend, as scx-brep's radial check does, instead of refused?
+
+**Proposed 04 row.** "BO7 (72 §14.36): the Boolean builds D5's contacts. An edge of the result with four fins is kept with its fins in radial order (d = sense N x T about the tangent, sampled at the edge's middle). The shells across it are joined by a union-find so that scx-brep's radial rule holds. Tangent fins (within 1e-9 rad) and missing pcurves are `NonManifold`. A vertex contact keeps two outer shells. Nesting signs each shell (mirrored voids by negation), filters holders by box, and only when the boxes leave a choice uses `classify_point` against a body of the candidate shell; the innermost holder is the smallest box, so two lumps with a cavity now build. No new API or variant. The added cost on non-contact cases is about 2 us per call. Against: edge-contact results fail `scx_check::contract`'s two-fin rule by design. Change if the contract admits D5 edges, or if tangent pinches reach a case."
