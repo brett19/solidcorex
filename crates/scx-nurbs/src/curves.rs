@@ -363,14 +363,14 @@ fn elevate_each<P: Control>(
     let mut out = Vec::new();
     let mut knots = None;
     for polygon in lines(polygons, n) {
-        let (points, k) = plan.points(polygon).ok_or(MISSING_POINT)?;
+        let (points, k) = plan.points(polygon)?;
         out.extend(points);
         knots.get_or_insert(k);
     }
     let knots = match knots {
         Some(k) => k,
         // No curves: the knots of the elevation of any polygon.
-        None => plan.points(&vec![P::ZERO; n]).ok_or(MISSING_POINT)?.1,
+        None => plan.points(&vec![P::ZERO; n])?.1,
     };
     Ok((out, knots))
 }

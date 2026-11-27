@@ -7,17 +7,25 @@
 //! - `nurbs_crv::crv_derivs` with `rational_basis_derivs_into` (derivatives, A3.2 and the
 //!   rational basis functions' quotient rule);
 //! - `crv_tool::p1::Curve::insert_knot` (A5.1) and `nurbs_crv::crv_split`;
-//! - `crv_tool::p1::Curve::elevate_degree` (A5.9) with `bezier::elevate_degree`.
+//! - `crv_tool::p1::Curve::elevate_degree` (A5.9) with `bezier::elevate_degree`, up to its
+//!   knot removal, which differs (below).
 //!
 //! Where the pin's knot insertion combines two control points with `CPoint::combine2`, this
 //! uses the affine form (`CPoint::affine2`, [`Control::affine`]), which keeps a coordinate
 //! equal in both points exactly, so insertion and splitting keep a plane exactly. Degree
-//! elevation keeps the pin's `combine2`: its Bezier sums lose that exactness anyway, and its
-//! knot removal amplifies rounding so much across near-coincident knots that any change of
-//! arithmetic there changes the (equally inaccurate) answer.
+//! elevation keeps the pin's `combine2`: its Bezier sums lose that exactness anyway.
+//!
+//! Degree elevation does not keep the pin's knot removal. A5.9 solves each removal's
+//! equations from both ends to a fixed middle one; across a span many times shorter than
+//! its neighbours that divides by a ratio near zero at every step, and the result can be
+//! anything (`1e99` off at degree 15). Here the equation dropped is the one that minimises
+//! a tracked bound on the rounding, and an elevation whose bound passes
+//! [`ELEVATION_ERROR`] is [`NurbsError::Unstable`]. The answers differ from the pin's where
+//! the pin's are wrong (`pin_defects` in `scx-difftest`).
 
 use core::fmt;
 
+use scx_num::consts::ELEVATION_ERROR;
 use scx_num::extent1d::Extent1d;
 
 use crate::basis::{FULL, SMALL, check_order, derivs_into, values_into};
@@ -371,11 +379,14 @@ impl<const D: usize> NurbsCurve<D> {
     /// `p + times` must not exceed
     /// [`MAX_DEGREE`](crate::MAX_DEGREE).
     ///
-    /// Accuracy: A5.9 removes the knots it inserted by extrapolating across neighbouring
-    /// spans, so rounding error grows with the ratio of a span's neighbours to its length.
-    /// Spans many orders of magnitude shorter than their neighbours (near-coincident knots)
-    /// lose most or all accuracy, as at the pin; where a weight stops being positive or a
-    /// point finite this errs with [`NurbsError::Unstable`] (the pin returns the curve).
+    /// Accuracy: the knots A5.9 inserts are removed again by extrapolation, each removal
+    /// solved the way that bounds its rounding least (not A5.9's fixed middle), so
+    /// near-coincident knots cost nothing. The bound still grows with the degree, fastest
+    /// on uniform knots; when it passes [`ELEVATION_ERROR`] of the largest homogeneous
+    /// coordinate, or a weight stops being positive or a point finite, this errs with
+    /// [`NurbsError::Unstable`] (the pin returns the curve). Seeded curves up to degree 23
+    /// come within `4e-11` of the exact curve; uniform knots raised to degree 28 or more are
+    /// refused.
     pub fn elevate(&self, times: usize) -> Result<Self> {
         let p = self.degree();
         if p.saturating_add(times) > MAX_DEGREE {
@@ -404,11 +415,11 @@ impl<const D: usize> NurbsCurve<D> {
         };
         match &self.rational {
             None => {
-                let (points, knots) = plan.points(&self.points).ok_or(MISSING_POINT)?;
+                let (points, knots) = plan.points(&self.points)?;
                 Self::new(KnotVector::new(p + times, knots)?, points, None).map_err(lost)
             }
             Some(r) => {
-                let (points, knots) = plan.points(&r.homogeneous()).ok_or(MISSING_POINT)?;
+                let (points, knots) = plan.points(&r.homogeneous())?;
                 let (weighted, weights) = split_weights(points);
                 Self::from_homogeneous(KnotVector::new(p + times, knots)?, weighted, weights)
                     .map_err(lost)
@@ -564,7 +575,8 @@ impl Insertion<'_> {
     }
 }
 
-/// The control points and knots of a degree elevation (A5.9).
+/// The control points and knots of a degree elevation (A5.9's plan, with a stable knot
+/// removal).
 pub(crate) struct Elevation<'a> {
     pub(crate) knots: &'a [f64],
     pub(crate) degree: usize,
@@ -575,140 +587,237 @@ pub(crate) struct Elevation<'a> {
 }
 
 impl Elevation<'_> {
-    #[allow(clippy::many_single_char_names, clippy::similar_names)] // A5.9's names
-    pub(crate) fn points<P: Control>(&self, pw: &[P]) -> Option<(Vec<P>, Vec<f64>)> {
+    /// The elevated control points and knots.
+    ///
+    /// The curve is cut into Bezier pieces (A5.9's knot insertion: every ratio in
+    /// `[0, 1]`), each piece is elevated by the matrix (positive weights that sum to one),
+    /// and then each joint's surplus knots are removed one at a time by
+    /// [`Joined::remove_last_knot`]. The removal tracks a first-order bound on each point's
+    /// rounding error; the elevation is [`NurbsError::Unstable`] when the bound passes
+    /// [`ELEVATION_ERROR`] of the largest coordinate. Errs with [`MISSING_POINT`] for an
+    /// index the plan's counts rule out.
+    pub(crate) fn points<P: Control>(&self, pw: &[P]) -> Result<(Vec<P>, Vec<f64>)> {
+        let (points, knots, bound) = self.join(pw).ok_or(MISSING_POINT)?;
+        // NaN refuses.
+        if bound * (f64::EPSILON / 2.0) <= ELEVATION_ERROR {
+            Ok((points, knots))
+        } else {
+            Err(NurbsError::Unstable)
+        }
+    }
+
+    /// The points, the knots and the largest error bound, in units of the rounding of the
+    /// largest coordinate.
+    fn join<P: Control>(&self, pw: &[P]) -> Option<(Vec<P>, Vec<f64>, f64)> {
         let up = self.knots;
-        let to = |x: usize| isize::try_from(x).ok();
-        let (p, t) = (to(self.degree)?, to(self.times)?);
+        let (p, t) = (self.degree, self.times);
         let q = p + t;
-        let mp = to(up.len())? - 1;
-        let mut qw = vec![P::ZERO; pw.len() + self.times * self.spans];
-        let mut uq = vec![0.0; up.len() + self.times * (self.spans + 1)];
-        let mut bw = vec![P::ZERO; self.degree + 1];
-        let mut nw = vec![P::ZERO; self.degree + 1];
-        let mut dw = vec![P::ZERO; self.degree + self.times + 1];
-        let mut alfs = vec![0.0; self.degree + 1];
+        let m = up.len().checked_sub(1)?;
+        let count = pw.len() + t * self.spans;
+        let mut out = Joined {
+            points: Vec::with_capacity(count + q),
+            knots: Vec::with_capacity(up.len() + t * (self.spans + 1)),
+            err: Vec::with_capacity(count + q),
+            steps: Vec::with_capacity(q),
+        };
+        // Each Bezier point starts at one rounding: the extraction and the matrix are convex
+        // sums, whose few roundings the removal's growth swamps (the bound is first order).
+        let start = 1.0;
+        let mut bw: Vec<P> = pw.get(..=p)?.to_vec();
+        let mut nw = vec![P::ZERO; p + 1];
+        let mut dw = vec![P::ZERO; q + 1];
+        let mut alfs = vec![0.0; p + 1];
 
         let mut a = p;
         let mut b = p + 1;
-        let mut r: isize = -1;
-        let mut cind: isize = 1;
-        let mut kind = q + 1;
-        for i in 0..=q {
-            set(&mut uq, i, get(up, a)?)?;
-        }
-        set(&mut qw, 0, get(pw, 0)?)?;
-        for i in 0..=p {
-            set(&mut bw, i, get(pw, i)?)?;
-        }
-
-        while b < mp {
-            // The multiplicity of the knot.
+        // The multiplicity of the joint at `up[a]` (none before the first piece).
+        let mut joint: Option<usize> = None;
+        while b < m {
+            // The multiplicity of the knot `up[b]` that ends this piece.
             let i0 = b;
-            while b < mp && get(up, b)? == get(up, b + 1)? {
+            while b < m && up.get(b)? == up.get(b + 1)? {
                 b += 1;
             }
             let mlt = b - i0 + 1;
-            let oldr = r;
-            r = p - mlt;
-            let lbz = if oldr > 0 { (oldr + 2) / 2 } else { 1 };
-            let rbz = if r > 0 { q - (r + 1) / 2 } else { q };
+            let (ua, ub) = (*up.get(a)?, *up.get(b)?);
 
-            // Insert the knot to get the Bezier piece.
+            // Insert `up[b]` until its multiplicity is `p`, for the Bezier piece on
+            // `[ua, ub]`.
+            let r = p.saturating_sub(mlt);
             if r > 0 {
-                let num = get(up, b)? - get(up, a)?;
-                let mut k = p;
-                while k > mlt {
-                    let al = num / (get(up, a + k)? - get(up, a)?);
-                    set(&mut alfs, k - mlt - 1, al)?;
-                    k -= 1;
+                let num = ub - ua;
+                for k in mlt + 1..=p {
+                    *alfs.get_mut(k - mlt - 1)? = num / (up.get(a + k)? - ua);
                 }
                 for j in 1..=r {
-                    let save = r - j;
                     let s = mlt + j;
-                    let mut k = p;
-                    while k >= s {
-                        let c = {
-                            let al = get(&alfs, k - s)?;
-                            P::combine(al, get(&bw, k)?, 1.0 - al, get(&bw, k - 1)?)
-                        };
-                        set(&mut bw, k, c)?;
-                        k -= 1;
+                    for k in (s..=p).rev() {
+                        let al = *alfs.get(k - s)?;
+                        let c = P::combine(al, *bw.get(k)?, 1.0 - al, *bw.get(k - 1)?);
+                        *bw.get_mut(k)? = c;
                     }
-                    set(&mut nw, save, get(&bw, p)?)?;
+                    *nw.get_mut(r - j)? = *bw.get(p)?;
                 }
             }
 
-            // Elevate the Bezier piece.
-            elevate_into(
-                &bw,
-                self.times,
-                self.matrix,
-                usize::try_from(lbz).ok()?,
-                &mut dw,
-            );
-
-            // Remove the knot U[a].
-            if oldr > 1 {
-                let mut first = kind - 2;
-                let den = get(up, b)? - get(up, a)?;
-                let bet = (get(up, b)? - get(&uq, kind - 1)?) / den;
-                for (tr, last) in (1..oldr).zip(kind..) {
-                    let mut i = first;
-                    let mut j = last;
-                    let mut l = j - kind + 1;
-                    while j - i > tr {
-                        if i < cind {
-                            let alf = (get(up, b)? - get(&uq, i)?) / (get(up, a)? - get(&uq, i)?);
-                            let c = P::combine(alf, get(&qw, i)?, 1.0 - alf, get(&qw, i - 1)?);
-                            set(&mut qw, i, c)?;
-                        }
-                        if j >= lbz {
-                            let g = if j - tr <= kind - q + oldr {
-                                (get(up, b)? - get(&uq, j - tr)?) / den
-                            } else {
-                                bet
-                            };
-                            let c = P::combine(g, get(&dw, l)?, 1.0 - g, get(&dw, l + 1)?);
-                            set(&mut dw, l, c)?;
-                        }
-                        i += 1;
-                        j -= 1;
-                        l -= 1;
+            // Elevate it, and join it to the curve so far.
+            elevate_into(&bw, t, self.matrix, 0, &mut dw);
+            match joint {
+                None => {
+                    out.points.extend_from_slice(&dw);
+                    out.err.extend(core::iter::repeat_n(start, q + 1));
+                    out.knots.extend(core::iter::repeat_n(ua, q + 1));
+                }
+                Some(joined) => {
+                    // The pieces share the point at the joint.
+                    out.points.extend_from_slice(dw.get(1..)?);
+                    out.err.extend(core::iter::repeat_n(start, q));
+                    out.knots.extend(core::iter::repeat_n(ua, q));
+                    // The joint holds `q` copies of `ua`, one fewer after each removal.
+                    for removed in 0..p.saturating_sub(joined) {
+                        out.remove_last_knot(q, q - 1 - removed, ub)?;
                     }
-                    first -= 1;
                 }
-            }
-
-            // Load the knots and control points.
-            if a != p {
-                for _ in 0..q - oldr {
-                    set(&mut uq, kind, get(up, a)?)?;
-                    kind += 1;
-                }
-            }
-            for i in lbz..=rbz {
-                set(&mut qw, cind, get(&dw, i)?)?;
-                cind += 1;
             }
 
             // Set up the next piece.
-            if b < mp {
+            if b < m {
                 for i in 0..r {
-                    set(&mut bw, i, get(&nw, i)?)?;
+                    *bw.get_mut(i)? = *nw.get(i)?;
                 }
                 for i in r..=p {
-                    set(&mut bw, i, get(pw, b - p + i)?)?;
+                    *bw.get_mut(i)? = *pw.get(b - p + i)?;
                 }
+                joint = Some(mlt);
                 a = b;
                 b += 1;
             } else {
-                for i in 0..=q {
-                    set(&mut uq, kind + i, get(up, b)?)?;
-                }
+                out.knots.extend(core::iter::repeat_n(ub, q + 1));
             }
         }
-        Some((qw, uq))
+        let bound = out.err.iter().fold(0.0_f64, |m, &x| m.max(x));
+        Some((out.points, out.knots, bound))
+    }
+}
+
+/// One equation of a knot removal, solved either way: forward
+/// `P[e] = f_q Q[e] - f_p P[e - 1]`, backward `P[e - 1] = b_q Q[e] - b_p P[e]`, with the
+/// error bounds of the point each gives.
+#[derive(Clone, Copy)]
+struct Step {
+    forward: (f64, f64),
+    backward: (f64, f64),
+    forward_err: f64,
+    /// The largest `forward_err` of the equations before this one.
+    forward_before: f64,
+    backward_err: f64,
+}
+
+/// The elevated curve as it is built: its points, its knots so far, and for each point a
+/// first-order bound on its rounding error, in units of the rounding of the largest
+/// coordinate (every point of every stage is a convex combination of the control points,
+/// so none is larger).
+struct Joined<P> {
+    points: Vec<P>,
+    knots: Vec<f64>,
+    err: Vec<f64>,
+    steps: Vec<Step>,
+}
+
+impl<P: Control> Joined<P> {
+    /// Removes one copy of `u`, the last knot so far and one of its `s + 1` copies, from
+    /// the degree-`q` spline, whose knots past those so far are all `right` (at least `q`
+    /// of them).
+    ///
+    /// Inserting `u` back would give the old points `Q` from the new ones `P` (Boehm):
+    /// `Q[e] = alpha[e] P[e] + (1 - alpha[e]) P[e - 1]` with
+    /// `alpha[e] = (u - T[e]) / (T[e + q] - T[e])` for `e` from `k - q + 1` to `k - s`,
+    /// where `T` is the new knot vector, `k` its last copy of `u` and `s` its count of
+    /// them; outside that range `P` is `Q` shifted. That is one equation more than there
+    /// are new points, so one equation `d` is dropped: those before it are solved forward
+    /// (dividing by `alpha`), those after it backward (dividing by `1 - alpha`). A5.9 drops
+    /// the middle one by position; across a span many times shorter than its neighbours
+    /// that divides by a ratio near zero at every step, and the rounding grows by its
+    /// reciprocal (`1e81` at degree 15). Here `d` is the one that gives the smallest bound
+    /// on the new points' error, the bound carried through every removal before.
+    fn remove_last_knot(&mut self, q: usize, s: usize, right: f64) -> Option<()> {
+        let u = *self.knots.last()?;
+        let k = self.knots.len().checked_sub(2)?;
+        let (lo, hi) = (k.checked_sub(q - 1)?, k.checked_sub(s)?);
+
+        // The equations' coefficients and the bounds either way: forward_err of e is the
+        // bound on P[e] solved forward from lo, backward_err of e that on P[e - 1] solved
+        // backward from hi. Every `T[e + q]` here is past `k`, so `right`.
+        let lows = self.knots.get(lo..=hi)?;
+        let errs = self.err.get(lo..=hi)?;
+        let above = right - u;
+        self.steps.clear();
+        let mut prev = *self.err.get(lo - 1)?;
+        let mut forward_worst = 0.0_f64;
+        for (&low, &here) in lows.iter().zip(errs) {
+            let (below, width) = (u - low, right - low);
+            let forward = (width / below, above / below);
+            let backward = (width / above, below / above);
+            let forward_before = forward_worst;
+            prev = forward.0 * (here + 1.0) + forward.1 * (prev + 1.0);
+            forward_worst = forward_worst.max(prev);
+            self.steps.push(Step {
+                forward,
+                backward,
+                forward_err: prev,
+                forward_before,
+                backward_err: 0.0,
+            });
+        }
+
+        // The drop d: forward for e < d gives P[lo..d], backward for e > d gives
+        // P[d..=hi - 1]. Scanned from the top with the backward bounds, keeping the worst
+        // either way (the bounds need not grow monotonically: a step may divide by more
+        // than one or less). Ties go to the lower d.
+        let mut best = (f64::INFINITY, hi);
+        let mut worst_backward = 0.0_f64;
+        let mut next = *self.err.get(hi + 1)?;
+        for (i, (step, &here)) in self.steps.iter_mut().zip(errs).enumerate().rev() {
+            let worst = step.forward_before.max(worst_backward);
+            if worst <= best.0 {
+                best = (worst, lo + i);
+            }
+            next = step.backward.0 * (here + 1.0) + step.backward.1 * (next + 1.0);
+            step.backward_err = next;
+            worst_backward = worst_backward.max(next);
+        }
+        let drop = best.1;
+
+        // Forward: P[e] = (Q[e] - (1 - alpha) P[e - 1]) / alpha, in place.
+        let split = drop - lo;
+        let (forward, rest) = self.steps.split_at(split);
+        let mut prev = *self.points.get(lo - 1)?;
+        let points = self.points.get_mut(lo..drop)?;
+        let errs = self.err.get_mut(lo..drop)?;
+        for ((point, err), step) in points.iter_mut().zip(errs).zip(forward) {
+            let (fq, fp) = step.forward;
+            prev = P::combine(fq, *point, -fp, prev);
+            *point = prev;
+            *err = step.forward_err;
+        }
+        // Backward: P[e - 1] = (Q[e] - alpha P[e]) / (1 - alpha), with P[e] held at e + 1.
+        let mut next = *self.points.get(hi + 1)?;
+        let points = self.points.get_mut(drop + 1..=hi)?;
+        let errs = self.err.get_mut(drop + 1..=hi)?;
+        let backward = rest.get(1..)?;
+        for ((point, err), step) in points.iter_mut().zip(errs).zip(backward).rev() {
+            let (bq, bp) = step.backward;
+            next = P::combine(bq, *point, -bp, next);
+            *point = next;
+            *err = step.backward_err;
+        }
+        if drop >= self.points.len() {
+            return None;
+        }
+        self.points.remove(drop);
+        self.err.remove(drop);
+        self.knots.pop();
+        Some(())
     }
 }
 
@@ -878,50 +987,132 @@ mod tests {
                     "split of {c} at {u}"
                 );
             }
-            // Near-coincident knots: see `elevation_of_near_coincident_knots`.
-            if well_spaced(&c) {
-                let e = c.elevate(2).unwrap();
-                let want = exact.elevate(2).unwrap().rounded();
-                assert_eq!(e.knots(), want.knots.as_slice());
-                let tol = 1e-12;
-                check(&e, "elevation", tol);
-                for (g, w) in e.points().iter().zip(&want.points) {
-                    assert!(close(g, w, tol), "elevation of {c}: {g:?} vs {w:?}");
+            let e = c.elevate(2).unwrap();
+            let want = exact.elevate(2).unwrap().rounded();
+            assert_eq!(e.knots(), want.knots.as_slice());
+            let tol = 1e-12;
+            check(&e, "elevation", tol);
+            for (g, w) in e.points().iter().zip(&want.points) {
+                assert!(close(g, w, tol), "elevation of {c}: {g:?} vs {w:?}");
+            }
+        }
+    }
+
+    /// Random curves of degree `degree` with the given knot kinds, unit and moderate
+    /// weights, `each` of every pair, those [`has_break`] picks left out.
+    fn high_degree(
+        rng: &mut Rng,
+        degree: usize,
+        kinds: &[Knots],
+        each: usize,
+    ) -> Vec<scx_testkit::data::CurveData<3>> {
+        let mut out = Vec::new();
+        for &knots in kinds {
+            for weights in [Weights::Unit, Weights::Moderate] {
+                for _ in 0..each {
+                    let spec = Spec {
+                        degree,
+                        count: degree + 4,
+                        knots,
+                    };
+                    out.push(sample::curve(rng, spec, weights));
                 }
             }
         }
+        out.retain(|d| !has_break(d));
+        out
     }
 
-    /// No span is shorter than 1e-6 of the domain.
-    fn well_spaced<const D: usize>(c: &NurbsCurve<D>) -> bool {
-        c.knots()
-            .windows(2)
-            .all(|w| w[1] == w[0] || w[1] - w[0] >= 1e-6)
+    /// The largest coordinate of the curve's homogeneous control points: the scale
+    /// [`ELEVATION_ERROR`] is relative to.
+    fn scale(c: &NurbsCurve<3>) -> f64 {
+        let weights = c.weights().map(<[f64]>::to_vec);
+        c.points()
+            .iter()
+            .enumerate()
+            .map(|(i, x)| {
+                let w = weights.as_ref().map_or(1.0, |w| w[i]);
+                x.iter().fold(w.abs(), |m, v| m.max((v * w).abs()))
+            })
+            .fold(0.0, f64::max)
     }
 
-    /// A5.9 removes each knot after elevating the Bezier pieces by extrapolating across the
-    /// neighbouring spans, which multiplies rounding error by the ratio of a span's
-    /// neighbours to it: a span a few ulps long next to long spans loses everything (the
-    /// pin's `elevate_degree` is the same algorithm). Kept as the truth check for the
-    /// stable elevation this needs; see 57 §N.
+    /// Degree 15 raised by 3, clustered knots among them: A5.9 dropped the middle equation of
+    /// each knot removal and across a span many times shorter than its neighbours divided by
+    /// a ratio near zero at every step (`1e99` off on clustered knots, `0.46` on random ones,
+    /// the rational ones mostly refused as `Unstable` by a negative weight). The truth is the
+    /// exact curve (the exact elevation is the same curve; computing it takes seconds a
+    /// curve): every distinct knot gains 3 in multiplicity, and the elevated curve is within
+    /// `1e-12` of the scale of the exact one, inside the shortest span too.
     #[test]
-    #[ignore = "known: A5.9 knot removal is ill-conditioned for near-coincident knots"]
-    fn elevation_of_near_coincident_knots() {
-        for data in curves(3).into_iter().step_by(2).filter(|d| !has_break(d)) {
+    fn elevation_at_degree_15_keeps_the_exact_curve() {
+        let mut rng = Rng::new(15);
+        let mut clustered = 0;
+        let kinds = [
+            Knots::Uniform,
+            Knots::Random,
+            Knots::Clustered,
+            Knots::Multiple,
+        ];
+        for data in high_degree(&mut rng, 15, &kinds, 1) {
             let c = ours(&data);
-            if well_spaced(&c) {
-                continue;
-            }
             let exact = data.exact().unwrap();
-            let e = c.elevate(2).unwrap();
-            for v in [0.03, 0.31, 0.5, 0.77, 0.97] {
+            let e = c.elevate(3).unwrap();
+            let mut want = Vec::new();
+            for (k, m) in c.knot_vector().breakpoints() {
+                want.extend(core::iter::repeat_n(k, m + 3));
+            }
+            assert_eq!(e.knots(), want.as_slice(), "{c}");
+            let shortest = c
+                .knots()
+                .windows(2)
+                .filter(|w| w[0] < w[1])
+                .min_by(|a, b| (a[1] - a[0]).total_cmp(&(b[1] - b[0])))
+                .map(|w| (w[0] + w[1]) / 2.0)
+                .unwrap();
+            let tol = 1e-12 * scale(&c);
+            for v in [0.03, 0.31, 0.5, 0.77, 0.97, shortest] {
                 let want = exact.point(v, tk::Side::Above).unwrap().rounded;
-                assert!(
-                    close(&e.point(v, Approach::Above).unwrap(), &want, 1e-12),
-                    "{c} at {v}"
-                );
+                let got = e.point(v, Approach::Above).unwrap();
+                assert!(close(&got, &want, tol), "{c} at {v}: {got:?} vs {want:?}");
+            }
+            clustered += usize::from(
+                c.knots()
+                    .windows(2)
+                    .any(|w| w[0] < w[1] && w[1] - w[0] < 1e-6),
+            );
+        }
+        assert!(clustered >= 1, "no curve with near-coincident knots");
+    }
+
+    /// Above degree 20 the removal's error bound can pass [`ELEVATION_ERROR`] (uniform knots
+    /// first, where every removal extrapolates as far as it can): such an elevation is
+    /// `Unstable`, and every one it answers is within that of the exact curve.
+    #[test]
+    fn elevation_with_an_unbounded_error_is_unstable() {
+        let mut rng = Rng::new(28);
+        let mut refused = 0;
+        for degree in [25, 28] {
+            for data in high_degree(&mut rng, degree, &[Knots::Uniform, Knots::Clustered], 1) {
+                let c = ours(&data);
+                match c.elevate(3) {
+                    Err(e) => {
+                        assert_eq!(e, NurbsError::Unstable, "{c}");
+                        refused += 1;
+                    }
+                    Ok(e) => {
+                        let exact = data.exact().unwrap();
+                        let tol = ELEVATION_ERROR * scale(&c);
+                        for v in [0.31, 0.77] {
+                            let want = exact.point(v, tk::Side::Above).unwrap().rounded;
+                            let got = e.point(v, Approach::Above).unwrap();
+                            assert!(close(&got, &want, tol), "{c} at {v}: {got:?} vs {want:?}");
+                        }
+                    }
+                }
             }
         }
+        assert!(refused >= 2, "only {refused} refused");
     }
 
     /// A knot of multiplicity `p + 1` inside the domain is a break, not a curve: both
