@@ -23,6 +23,8 @@ pub mod case;
 #[allow(clippy::indexing_slicing)]
 pub mod algo;
 #[allow(clippy::indexing_slicing)]
+pub mod algo_geom;
+#[allow(clippy::indexing_slicing)]
 pub mod num;
 
 pub use case::{Case, Side};

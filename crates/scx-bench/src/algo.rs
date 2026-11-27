@@ -393,5 +393,6 @@ pub fn cases() -> Vec<Case> {
     polynomials(&mut out);
     solvers(&mut out);
     krawczyks(&mut out);
+    crate::algo_geom::cases(&mut out);
     out
 }
