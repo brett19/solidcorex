@@ -1,0 +1,22 @@
+# Written for solidcorex.
+[package]
+name = "scx-tess"
+description = "solidcorex: tessellation of a body, watertight by edge samples that are a pure function of the edge, with a proved chord bound"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+scx-brep = { path = "../scx-brep" }
+scx-curve = { path = "../scx-curve" }
+scx-num = { path = "../scx-num" }
+scx-nurbs = { path = "../scx-nurbs" }
+scx-surface = { path = "../scx-surface" }
+
+[dev-dependencies]
+scx-make = { path = "../scx-make" }
+
+[lints]
+workspace = true
