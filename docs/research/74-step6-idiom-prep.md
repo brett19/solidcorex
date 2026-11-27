@@ -1533,6 +1533,255 @@ is renumbered. "Changed" names the sections that now carry the fix.
 3. Leaf queries keep `(&mut Budget, &Stop)`. Queries that keep a memo take `&mut Cx` (F8, R8).
 4. Stored re-identification goes in bodyq's `still_names`, and scx-record calls it (F4).
 
+## 18. CF1 as built (11-27)
+
+Task CF1 (§8): the structure pass `contract` and `check` share, and the `Findings`, `Finding` and
+`Scope` types. Branch `cf1`. Crate `scx-check`; no new Cargo edge.
+
+### 18.1 What `finish` and `contract` establish, and what CF1 adds
+
+Read from `crates/scx-brep/src/finish.rs` (and `check/`), and `crates/scx-check/src/lib.rs`.
+
+| Question | Settled by | CF1 |
+|---|---|---|
+| References resolve, each fin has its use and each use its fin, loops are connected, no face uses an edge twice in one sense | `finish` (`StructureCause`) | nothing |
+| Sides of each pair of radially adjacent fins agree; shells connected; regions have shells; outside not solid | `finish` | nothing |
+| One vertex on two loops of one face | `finish` (`VertexOnTwoLoops`) | nothing |
+| Collapsed edge has one vertex; a point use only on a collapsed edge | `finish` | nothing |
+| Ends, uses and pcurves within their own samples | `finish` (`GeometryCause`) | nothing; the certified gaps are CF2a's |
+| At least one face; every face bounds a solid and a non-solid; two fins per curve edge; no lone vertex; regions proved; outward | `contract` tests 1 to 5 | nothing |
+| **The faces round a vertex are one piece** | nobody (72 §14.22 left it open; two solids touching at one vertex passed the contract) | **added** |
+| **Solid, sheet or mixed** | nobody names it: `finish` accepts all three, `contract` refuses all but the solid | **added** as a fact (`Class`), and as `NotSolid` where a face has material on both sides |
+
+Nothing is duplicated: `finish`'s `VertexOnTwoLoops` is about the loops of one face and says
+nothing across faces or shells, and the contract's edge test sees a pinch only where an edge is
+shared. The pass reads records only; it needs no geometry, no budget and no `Scratch`.
+
+### 18.2 The pass
+
+- **Vertex manifoldness** is connectedness of the vertex's link. Nodes are the ends of edges at
+  the vertex (edge id, and which end: 0 start, 1 end, so a closed edge has two nodes). Arcs are
+  face corners: a use ending at the vertex joined to the next use of its loop that is not a
+  collapsed point (collapsed uses sit at one vertex, so skipping them gives the corner round an
+  apex or pole). Wire edges ending there are nodes with no arc. A vertex with two or more
+  connected components is `Pinch { vertex, pieces }`. One walk over the uses; a union-find per
+  vertex over its sorted nodes; deterministic (id order throughout).
+- **It does not duplicate the edge test.** A radial edge of four fins is one node with four arcs,
+  so blocks touching along an edge are one piece at the edge's ends: `Contacts::Radial` is not
+  affected, and the pass applies in both modes. An edge of the wrong fin count is the edge test's
+  breach, found first.
+- **Classification.** Each face is bounding (solid one side), sheet (non-solid both sides) or
+  inside (solid both sides). `Class` is `Empty`, `Solid`, `Sheet` or `Mixed` (more than one
+  kind). `NotSolid { shell }` is each shell that bounds a solid region and has an inside face.
+  A sheet is valid input (an importer's open shell), so `Class::Sheet` is a fact on `Findings`,
+  not a finding.
+
+### 18.3 Public API (all in `scx-check`)
+
+```rust
+pub fn check(body: &Brep, cx: &mut Cx<'_>, scope: Scope) -> Result<Findings, CheckError>;
+#[non_exhaustive] pub enum Scope { Import /* default */, Stitched, Full }
+#[non_exhaustive] pub struct Findings { pub list: Vec<Finding>, pub undecided: Vec<Undecided>,
+                                        pub class: Class, pub spent: Spent }
+#[non_exhaustive] pub enum Finding { VertexNotManifold { vertex, pieces }, NotSolid { shell } }
+#[non_exhaustive] pub enum Undecided {}            // no cases yet
+#[non_exhaustive] pub struct Spent { pub work: u64 }
+#[non_exhaustive] pub enum Class { Empty, Solid, Sheet, Mixed }
+#[non_exhaustive] pub enum CheckError { Exhausted { limit }, Cancelled }   // kind() + name()
+pub struct Pinch { pub vertex: VertexId, pub pieces: usize }              // the pass's answer
+// contract: Breach::VertexNotManifold { vertex, pieces } (name "vertex_not_manifold")
+```
+
+`contract` calls the pass after the edge and lone-vertex tests (so existing first-failure order is
+unchanged), but only under the new `Contacts::Manifold`, which refuses a pinched vertex with
+`Breach::VertexNotManifold` (see 18.4, the deviation). `Refused` and `Radial` admit it. `check` charges one
+unit per edge use to a fresh budget of the settings and polls `cx.stop` once up front (the pass
+is a short walk); it takes `&mut Cx` for the signature of 74 R8, though this part does not touch
+`Scratch`. All three scopes run the same part so far. The list is in kind then id order.
+
+### 18.4 Choices, with cases for and against
+
+- **Findings carry only the variants CF1 produces.** For: the 74 §3.3 variants with
+  `Bracket<Length>`, `Entity` payloads and `Degeneracy` need SU6's bracket type, which does not
+  exist; inventing one here would fix it before SU6. `Finding` is `#[non_exhaustive]`, so CF2a to
+  CF3 add theirs. Against: callers cannot match the full list yet. They cannot match a list that
+  does not exist either.
+- **`Undecided` is an uninhabited non-exhaustive enum.** For: the field exists with its final
+  type, and the structure part is decided by the records. Against: an empty enum is odd; a
+  placeholder variant would be a lie.
+- **`class` is a field of `Findings`, not a finding.** For: sheets are valid, and stitch and the
+  importer both ask the question. Against: 74 §3.3 lists `NotSolid` as a variant; it is kept, for
+  the real defect (material on both sides of a face), not for every sheet.
+- **`VertexNotManifold` carries `pieces`** (74 §3.3 has only the vertex). For: a pinch of two and
+  a vertex in three pieces read differently; free from the pass. Against: one more field to keep
+  stable.
+- **A wire edge is a piece of its own.** For: a wire touching a sheet or solid at a vertex is not
+  a surface there. Against: a wire network is only wires (the vertex has no corner and is not
+  examined), and the contract refuses wires earlier.
+- **Deviation: `contract` refuses a pinched vertex only under `Contacts::Manifold`, not by
+  default.** The first build refused it in every mode, and two `scx-boolean` tests failed
+  (`blocks_sharing_a_corner_unite_into_two_regions_and_two_outer_shells`,
+  `a_union_of_crossing_creases_names_only_live_vertices`): 72 §12.4's BO7 builds a union whose
+  parts touch at a vertex, and its tests prove it with `contract(.., Refused)`. For the
+  default: BO7 is ruled and its output must be a contract-valid body; `check` reports the pinch
+  either way. Against: `Refused` then refuses an edge pinch and admits a vertex pinch, which
+  reads oddly; the variant's doc says so. The alternative (refusing by default and changing
+  BO7's tests to a new mode) reverses a ruling, so it is left to the coordinator.
+- **The pass is infallible and uncharged inside the contract**, like the contract's other
+  structure tests (they charge nothing). `check` charges its own use count.
+
+### 18.5 Tests (`crates/scx-check/tests/structure.rs`, 6; testkit bodies only)
+
+Truths are constructions, never the pin's output.
+
+- `blocks_meeting_at_a_vertex_pinch_it`: the new testkit body `bodies::corner_touch(seed, one)`
+  (two blocks sharing one lattice vertex and no edge; separate regions, or one region of one
+  shell), seeds 0 to 3. Exactly one finding, `VertexNotManifold` with 2 pieces, at the vertex on
+  six edges; class Solid; `contract` passes it under `Refused` and `Radial` (as before CF1, BO7)
+  and returns `Breach::VertexNotManifold` under `Contacts::Manifold`.
+- `bodies_that_are_manifold_at_every_vertex_have_no_finding`: every generator kind, seeds 0 to 2,
+  sizes 1 to 3: none has a pinch (cone apexes, sphere poles, seam vertices, the torus, holes,
+  cavities, the edge-touching checkerboard).
+- `the_class_is_what_the_regions_say`: solids are Solid with no finding; both sheets are Sheet;
+  stacks of 2 to 4 blocks are Mixed with `NotSolid` on exactly the block shells.
+- `a_repeated_check_leaves_the_body_as_it_was` (the pin's test of that name, ported as
+  construction): debug form of the body before and after is equal, and two runs give equal
+  findings.
+- `every_scope_runs_the_structure_part`, `a_budget_or_a_stop_ends_it_typed` (work is 24 n^2 for a
+  block; `limit = work - 1` is `Exhausted`, a set stop is `Cancelled`).
+
+The 19 `contract` tests still pass unchanged. Testkit: `lattice_blocks` factors `checker` (same
+dice draws for it: its seeds build the same bodies; the testkit's own tests pass) and
+`corner_touch` uses it. No test was removed.
+
+Not tested: a pinched sheet (two sheets sharing one vertex). It needs a sheet recipe the testkit
+lacks; the pass handles it by the same link argument (two fans). A follow-up can add it with
+CF6's one-defect recipes.
+
+### 18.6 Measurement
+
+Throwaway timer, release, mean of 50, `check` at `Scope::Import`: block 6 faces 1.5 us; block of 384 faces 93 us; torus 16 faces 2.3 us; cavity 192 faces 39 us (about 0.24 us a face). Against `contract`'s 1.4 ms for a block, the pass is about 0.1%, and it runs in `contract` only under `Contacts::Manifold`.
+
+### 18.7 Proposed 04 row
+
+CF1: `scx_check::check(&Brep, &mut Cx, Scope) -> Result<Findings, CheckError>` exists with the
+structure part only. The pass shared with `contract` adds vertex manifoldness (a vertex's link,
+nodes the ends of edges there and arcs the face corners, is connected; `Pinch`) and the
+solid/sheet/mixed `Class`; it duplicates nothing of `finish` or the contract's other tests, and
+`contract` refuses a pinched vertex (`Breach::VertexNotManifold`) under the new `Contacts::Manifold`; the default modes admit it, because BO7 builds such unions. Later
+tasks add `Finding` variants (non-exhaustive) and `Undecided` cases. `Scope` is `Import`
+(default), `Stitched` or `Full`; all run the structure part.
+## 19. SP1 as built (11-27)
+
+The `scx-step` crate on `scx-p21`: the skeleton of the importer (74 §8, row SP1). It reads
+units, uncertainty and the entity plan of each solid and sheet from an `Exchange`, and builds no
+geometry. 17 tests on synthetic AP203, AP214 and AP242 files (`crates/scx-step/tests/synthetic.rs`).
+
+### 19.1 Public API
+
+```rust
+pub fn read(ex: &scx_p21::Exchange, opts: &ReadOptions) -> Result<Imported, StepError>;
+pub struct ReadOptions { pub assume_units: Option<Units>, pub close_gaps: bool } // non_exhaustive
+pub struct Imported { pub bodies: Vec<ImportedBody>, pub products: ProductStructure,
+                      pub skipped: Vec<Skipped>, pub report: ImportReport }
+pub struct ImportedBody { entity, name, kind: SolidOrSheet, representation,
+                          context: Resolved, shells: Vec<ShellPlan> }
+pub struct ShellPlan { entity, role: ShellRole, closed, reversed, faces: Vec<FacePlan> }
+pub struct FacePlan { entity, surface, surface_kind: String, same_sense, bounds: usize }
+pub struct Resolved { units: Units, assumed: MissingUnits, uncertainty: Uncertainty,
+                      several_uncertainties: bool }
+pub enum Uncertainty { Absent, Stated(f64 /* mm */) }
+pub struct ImportReport { declared, warnings: Vec<ImportWarning>,
+                          assumed: Vec<AssumedUnits>, raised: Vec<Raise> }
+pub enum StepError { NoUnits, ConflictingUnits, BadAssumedUnits, Structure(Box<P21Error>),
+                     Pending(Pending) }   // kind() and name() as in 62
+```
+
+The 04 row's field is `ImportReport::raised: Vec<Raise>`, with `Raise { entity (STEP id), gap:
+GapKind, before, after }` (millimetres). SP1 defines it and leaves it empty; SP2 fills it. The
+read never heals: nothing in this crate changes a number the file wrote.
+
+### 19.2 Choices, with cases for and against
+
+- **Edges: `scx-p21`, plus `scx-num`.** `scx-p21` is the only edge the row names. `scx-num` is
+  added because `StepError::kind()` returns `scx_num::error::ErrorKind` (the five kinds of 62),
+  as `P21Error` does; it is the lowest layer and p21 already depends on it. For: one error
+  convention across the crates. Against: one edge beyond the row. `scx-brep` is *not* added, so
+  `Imported` here has no `Brep` and the report is not `scx_brep::Report`: SP2 adds `body: Brep`
+  and `findings` to `ImportedBody`, and maps `ImportReport::raised` onto `Report::raised` if
+  a caller wants the brep form (the STEP entity id is the useful key before there is an entity
+  in a `Brep`). For: the edge list stays as ruled. Against: SP2 reshapes `Imported` slightly,
+  and the report is a second type where 74 §6.3 shows `Report<ImportNotes>`.
+- **Missing units are refused per file, naming the first representation.** Units belong to a
+  representation context, so each representation that lists a body is resolved; the first
+  failure (id order) refuses the file. Against refusing the file: one bad part blocks an
+  assembly. For: the ruling (the 04 STEP-import row) says refuse, a half-read assembly with a part at the wrong
+  scale is the failure the rule exists to prevent, and the caller can assume units.
+- **A missing plane angle unit is missing too.** The ruling says units, not only length.
+  Against: angle is rarely used by solids and such files exist. For: a cone or a torus read at
+  the wrong angle unit is silently wrong; `ReadOptions::assuming_units` covers it in one line.
+  Reversible: if the corpus shows it often, the ruling can relax angle alone.
+- **The assumption fills only what the file lacks** and is recorded per representation
+  (`ImportReport::assumed`, which of the two parts, `Resolved::assumed`). The file's own unit
+  always wins. Against: a caller who wants to override wrong units cannot. For: that is a
+  different request (a rescale), not a read option.
+- **Two different units of one kind in one context are refused (`ConflictingUnits`)**; the same
+  unit listed twice is not. p21's `context()` takes the last, silently. For: the file does not
+  say which numbers mean what. Against: valid input refused; but a context with two lengths is
+  not a valid context (ISO 10303-42 gives one).
+- **Uncertainty is the context's own, in millimetres; absent stays `Absent`.** It is never the
+  last measure in the file, never clamped (the pin clamps to 1e-7..1 and defaults 1e-3). SP2
+  resolves `Absent` to the document's resolution, which needs a `Cx`. Several uncertainties in
+  one context: the largest, flagged (`SeveralUncertainties`). Against: the finest would be
+  stricter. For: the file claims the coarsest accuracy it states (a smaller one on a different
+  entity does not make the geometry better), and a too-small value would make `finish` refuse
+  the file, which the raise (SP2) then repairs; the largest avoids a raise made only because of
+  the choice. The accuracy-ratio warning (CTC-05, 2.05e-2) needs the document's resolution
+  and is SP2's.
+- **`close_gaps: true` is `StepError::Pending(CloseGaps)`, not ignored.** An option that
+  silently does nothing is a failing default. SP4 removes the variant's use.
+- **A body that cannot be read is `Skipped`, not an error**: `SkipReason::BodyKind` (faceted
+  brep, with the entity type named) and `Malformed(P21Error)` (the first fault, naming its
+  instance, such as an open shell in a solid, a face with no surface, a missing entity). One
+  body's fault does not refuse the file (74 §6.3 and the skip list of 74 §11 row 5). Faceted breps are named,
+  not read.
+- **Shell nesting is one level.** An `ORIENTED_*_SHELL` wraps a plain shell only, so a cycle of
+  them cannot recurse (tested). Product structure errors are `StepError::Structure`: the file's
+  assembly cannot be trusted.
+- **A body in several representations is read once**, from the first (id order). Its units are
+  that representation's. A body shared by representations with different units is an assembly
+  case SP8 decides.
+
+### 19.3 What the tests prove
+
+Units: mm, metre, inch (conversion-based, 25.4) and degree (the file's own number, not a computed
+pi); the three protocols and an unknown schema's warning; missing units (no context, an empty
+context, a length-only context) refused with the typed missing parts; assumption fills only
+what is missing and is recorded, the file's units win; bad assumed units; conflicting units;
+per-representation units and uncertainty (no leak between contexts); uncertainty without a unit
+is in the context's length unit; several uncertainties. Skeleton: a cube, a solid with a void
+(reversed oriented shell), an open sheet; faceted, open-shell-in-solid, missing-entity and
+no-surface bodies skipped with typed reasons while the good body is read; an oriented-shell
+cycle; a broken product structure; determinism (two reads equal). No test was removed.
+
+### 19.4 Not done, for later rows
+
+Geometry and topology (SP2); raises (SP2, field defined here); the document-resolution default
+and accuracy-ratio warning (SP2); product tree of placed instances (SP8, `Imported::products` is
+p21's `ProductStructure` for now); quadric recognition (SP2b); the writer (SP3); gap closing
+(SP4).
+
+### 19.5 Proposed 04 row
+
+**scx-step skeleton (SP1).** `scx_step::read(&Exchange, &ReadOptions) -> Result<Imported,
+StepError>`. Units are the representation context's; a missing length or plane angle unit, or two
+different ones of a kind, is refused unless the caller assumes units, and an assumption is
+recorded in `ImportReport::assumed`. Uncertainty is the context's own (`Uncertainty::Absent` when
+it names none; SP2 resolves it to the document's resolution). Bodies that cannot be read are
+`Skipped` with a typed reason. `ImportReport::raised` is where SP2 records enclosed-gap raises;
+`scx-step` never heals, and `close_gaps` is `Pending` until SP4. Edges: `scx-step` → `scx-p21`
+and `scx-num`.
+
 ## 16. LY1 as built (11-27)
 
 `layers.txt` now lists `scx-make` last, after `scx-boolean`, with a comment where `scx-stitch`,
@@ -1559,3 +1808,87 @@ so no xtask change was needed; it passed after the move.
   use is a later cleanup.
 - **Tests.** None changed, none removed; only import paths, and prose in three comments naming
   the constructor. `scx-make`'s own tests still run on the real constructors.
+
+## 21. CO4 as built (11-27)
+
+Trust: the model count, the entity scan, the sizes and the timings are MEASURED on 11-27 by
+running code over the pinned files; the reading of the file-name structure is INFERRED (the truth
+files that would confirm it were never fetched). Proposed for review.
+
+### 21.1 The count and what MFCAD contains
+
+- **Count.** The git tree of `github.com/hducg/MFCAD` at `ef6d58a` (GitHub's tree API, not
+  truncated) lists 15,488 `.step` files and 15,488 `.face_truth` files, plus one `readme`.
+  74's "UNVERIFIED" is now verified: 15,488 (1,158,435,999 bytes; 22,436 to 253,345 each, median
+  72,751). No two files are byte-equal.
+- **Scan.** All 15,488 files were downloaded under a scratch directory (never executed, never
+  opened by anything but a byte-pattern count) and every entity name was counted. Every file is
+  one `MANIFOLD_SOLID_BREP` with one `CLOSED_SHELL`, schema `AUTOMOTIVE_DESIGN { 1 0 10303 214 1
+  1 1 1 }`, one `LENGTH_UNIT`; every surface is a `PLANE`, every curve a `LINE` (with
+  `EDGE_CURVE`, `PCURVE`, `SURFACE_CURVE`). **There is no cylinder, cone, sphere, torus, circle,
+  ellipse, B-spline, revolution or extrusion in any file.** The "holes", "pockets" and "slots" of
+  the MFCAD classes are all polygonal. Face counts run 8 to 59 (median 22).
+- **Consequence.** The gate is a planar, linear gate: it exercises `scx-step`'s plane and line
+  reading, pcurves on planes, loop and shell building, the check and the contract. It says
+  nothing about curved analytic faces; those are covered by the NIST and conformance files
+  (74 §14). The earlier phrase "analytic gate" holds only for planes. Where a wording in 74
+  or 04 says MFCAD tests "analytic faces and edges", read "planar faces, line edges".
+- **File names.** `a-b-c-d-e-23.step`: the tokens before the last are a sorted multiset of
+  feature-class ids 0 to 14 (the multiset counts match exactly: 11,628 = C(19,5) files with five
+  features, 3,060 = C(18,4) with four, 680 with three, 120 with two); the last token is a
+  suffix (23 or 19). Each class appears in 4,844 names. This is an inference from the names
+  and counts, used only to stratify; no score depends on it.
+
+### 21.2 The sample: rule, size, and why
+
+**Rule (fixed, no choices in it).** Cell each of the 15,488 files by face count (six bins:
+8 to 16, 17 to 20, 21 to 24, 25 to 29, 30 to 36, 37 to 59) and by feature count (2, 3, 4 or 5,
+from the name). In each of the 20 non-empty cells take the first 30 files in order of SHA-256 of
+the file name (all of them where the cell has fewer). Add four forced extremes: the file with the
+most faces (`2-3-3-3-3-23`, 59), the largest file (`3-3-3-3-3-23`, 253,345 bytes), the fewest
+faces (`0-0-19`, 8; 20 files tie, the first by name) and the smallest file (`6-7-7-9-19`,
+22,436 bytes; already in). The result is **480 files, 37,027,352 bytes**, 8 to 59 faces, 182
+with five features. The seven files CO2 took (every 2,500th) were chosen by a rule that ignores
+stratification; none of them is in this sample, so they are removed from the manifest and
+replaced, not kept as extras.
+
+**Measured coverage of the sample.** Every feature class appears in at least 79 files; all 105
+class pairs occur together in at least one file; face counts span the whole range. (The whole
+set's classes are equal in number, so this is about as even as five-feature multisets allow.)
+
+**Why 480 and not 1,000 (74 says up to 1,000).**
+
+- For: coverage saturates early. At 30 per cell all 15 classes and all 105 pairs are already
+  present; 10 per cell (177 files) already reaches 105 pairs. The set is one generator with
+  one entity vocabulary (planes and lines), so more files add repeats, not kinds. A defect
+  that hits 1% of the files is caught with probability 0.99 at 480 files (1 - 0.99^480 = 99.2%),
+  0.5% with 91%.
+- Against: a rarer defect (0.2%, say one odd feature combination) is missed 38% of the time at
+  480 and 14% at 1,000; the gate is the only real-file check of the planar path before
+  merge. Mitigation: the rule has one constant (30 per cell); 60 gives 925 files, 70 MB, and
+  is one regenerated block of manifest rows. The full 15,488 set is a nightly or manual run, not
+  the gate.
+- Time cost, measured: the first `corpus fetch mfcad` took **79 s** for 481 files (one `curl`
+  per file, hash and size checked; about 160 ms each, so 1,000 files would take about 165 s),
+  once per cache. A second fetch or `verify` takes **2.6 s** (debug `xtask`, SHA-256 of 37 MB).
+  Reading: `std::fs::read_to_string` plus `scx_p21::parse` over all 480 files takes **0.32 s**
+  in a release build (37 MB), so the syntax layer is not the gate's cost; the import and check
+  time is CO1's to measure once `scx-step` exists, and if it is small the size can go to 60
+  per cell.
+
+### 21.3 Built
+
+- `corpus/manifest.tsv`: the 7 seed rows removed, 480 rows added (`mfcad/<name>.step`, URL
+  pinned to `ef6d58a`, SHA-256 and size from the downloaded bytes, licence MIT, part `file`);
+  the `mfcad/LICENSE` row stays. 560 lines in all. The existing `corpus fetch|verify mfcad`
+  selects them; nothing in `xtask` or `scx-testkit` changed (their manifest tests pass).
+- Never fetched: any `.face_truth` file. Downloads were kept under a scratch directory and
+  deleted when done; nothing downloaded was run.
+- No scoring code (CO1). The generator was a throwaway script over the tree listing and the
+  scan; the rule above is the record, and the hashes in the manifest are what is checked.
+- Not done: a smaller "fast" tier inside the sample (the manifest selects by name prefix, and
+  the names carry no tier). If CO1's import time is high, shrink the constant instead.
+
+### 21.4 Proposed 04 row
+
+| 11-27 | (For the owner's review) The MFCAD gate sample is fixed in `corpus/manifest.tsv`: 480 of MFCAD's 15,488 models at `ef6d58a` (the count is verified), chosen by a stated rule (30 per face-count-by-feature-count cell, in order of the hash of the name, plus four extremes), 37 MB, fetched in 80 s once and verified in 3 s. Every one of the 15,488 models is planes and lines only, so the gate is a planar gate; curved analytic reading is gated by NIST and the conformance parts. `.face_truth` pickles are never fetched | The "up to 1,000" ruling left the size open; coverage (all 15 classes, all 105 pairs) saturates well below it, and the scan showed nothing non-planar to stratify on | research 74 §21 |
