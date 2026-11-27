@@ -49,8 +49,9 @@
 //! refined and each surface evaluation of Newton. The [`Stop`] is polled at the same points
 //! and by the solve before every branch. Both end the search with an error, never a partial
 //! answer; a search that finishes returns the same bits whatever the budget's limit and
-//! whatever the flag did not do. The solve's own branch bound is lifted
-//! (`u64::MAX`): the budget is the one bound.
+//! whatever the flag did not do. The solve takes the same `&mut Budget` and `&Stop`, which it
+//! charges one unit a branch (each tree node tested) and hands the local solves: the budget
+//! is the one bound.
 //!
 //! The foot is the surface's own point at its `uv` ([`NurbsSurface::point`], above), its
 //! distance from the query, and its `uv` is placed against the domain as the analytic kinds'
@@ -165,7 +166,6 @@ fn nearest(
         best_sq: f64::INFINITY,
         best_uv: n.domain().min(),
         eps: 0.0,
-        budget,
         stop,
         seq: 0,
         leaves: Vec::new(),
@@ -175,19 +175,30 @@ fn nearest(
         search.take_corners(piece);
     }
     let seed = search.best_uv;
-    search.newton(seed)?;
+    search.newton(seed, budget)?;
     if let Some(near) = near.filter(|uv| uv.x.is_finite() && uv.y.is_finite()) {
-        search.newton(search.domain.clamp_point(near))?;
+        let near = search.domain.clamp_point(near);
+        search.newton(near, budget)?;
     }
     search.eps = GAP_REL * (diagonal + search.best_sq.sqrt());
     let tree = tree(&patches, &pieces)?;
     search.leaves = pieces.into_iter().map(Some).collect();
-    let options = SolveOptions::new(Operation::Minimize, 0.0).with_max_branches(u64::MAX);
-    match global_solve::solve([&tree], Accumulator::<NoObject>::new(options), &mut search) {
+    let options = SolveOptions::new(Operation::Minimize, 0.0);
+    match global_solve::solve(
+        [&tree],
+        Accumulator::<NoObject>::new(options),
+        &mut search,
+        budget,
+        stop,
+    ) {
         Ok(_) => {}
         Err(Unfinished { error, .. }) => {
             return Err(match error {
                 SolveError::Eval(h) => h,
+                SolveError::Failed {
+                    failure: SolveFailure::BranchesExhausted { limit },
+                    ..
+                } => Halt::Exhausted(Exhausted { limit }),
                 SolveError::Failed {
                     failure: SolveFailure::Cancelled,
                     ..
@@ -198,7 +209,7 @@ fn nearest(
     }
     // Polish the place: the search fixed the distance, Newton fixes the `uv`.
     let best = search.best_uv;
-    search.newton(best)?;
+    search.newton(best, budget)?;
     Ok(search.best_uv)
 }
 
@@ -820,7 +831,6 @@ struct Search<'a> {
     best_uv: Point2,
     /// The certified gap.
     eps: f64,
-    budget: &'a mut Budget,
     stop: &'a Stop,
     seq: u64,
     /// Each patch's whole piece, taken when its leaf is solved.
@@ -828,9 +838,9 @@ struct Search<'a> {
 }
 
 impl Search<'_> {
-    /// Charges one unit and polls the stop flag.
-    fn tick(&mut self) -> Result<(), Halt> {
-        self.budget.charge(1).map_err(Halt::Exhausted)?;
+    /// Charges one unit to `budget` and polls the stop flag.
+    fn tick(&self, budget: &mut Budget) -> Result<(), Halt> {
+        budget.charge(1).map_err(Halt::Exhausted)?;
         self.stop.check().map_err(|_| Halt::Stopped)
     }
 
@@ -868,10 +878,10 @@ impl Search<'_> {
 
     /// Projected Newton on `|S - q|^2 / 2` from `start`, keeping only decreases; the
     /// incumbent takes every point it reaches.
-    fn newton(&mut self, start: Point2) -> Result<(), Halt> {
+    fn newton(&mut self, start: Point2, budget: &mut Budget) -> Result<(), Halt> {
         let mut uv = self.domain.clamp_point(start);
         for _ in 0..NEWTON_STEPS {
-            self.tick()?;
+            self.tick(budget)?;
             let Ok(j) = self.surface.jet::<2>(uv.to_array(), ABOVE) else {
                 return Ok(());
             };
@@ -930,7 +940,7 @@ impl Search<'_> {
                 if !(step.x.is_finite() && step.y.is_finite()) {
                     continue;
                 }
-                moved = self.line_search(uv, step, f)?;
+                moved = self.line_search(uv, step, f, budget)?;
                 if moved.is_some() {
                     break;
                 }
@@ -957,6 +967,7 @@ impl Search<'_> {
         uv: Point2,
         step: Point2,
         f: f64,
+        budget: &mut Budget,
     ) -> Result<Option<(Point2, f64)>, Halt> {
         let mut t = 1.0;
         for _ in 0..HALVINGS {
@@ -966,7 +977,7 @@ impl Search<'_> {
             if next == uv {
                 return Ok(None);
             }
-            self.tick()?;
+            self.tick(budget)?;
             if let Some(fn_) = self.eval_sq(next).filter(|&x| x < f) {
                 return Ok(Some((next, fn_)));
             }
@@ -976,20 +987,20 @@ impl Search<'_> {
     }
 
     /// Refines one patch best first until no piece of it may beat the incumbent by `eps`.
-    fn refine(&mut self, piece: Piece) -> Result<(), Halt> {
+    fn refine(&mut self, piece: Piece, budget: &mut Budget) -> Result<(), Halt> {
         let mut heap = BinaryHeap::new();
         heap.push(Queued { seq: 0, piece });
         while let Some(Queued { piece, .. }) = heap.pop() {
             if !self.open(piece.lb_sq) {
                 break; // the least bound left: every other is no lower
             }
-            self.tick()?;
+            self.tick(budget)?;
             for (sq, uv) in piece.corners() {
                 if sq < self.best_sq {
                     let gain = self.best_sq.sqrt() - sq.sqrt();
                     self.take(sq, uv);
                     if gain > self.eps {
-                        self.newton(uv)?;
+                        self.newton(uv, budget)?;
                     }
                 }
             }
@@ -1017,6 +1028,7 @@ impl BranchSolver<Item, NoObject, 1> for Search<'_> {
         &mut self,
         branch: &Branch<'_, Item, 1>,
         _found: &mut Accumulator<NoObject>,
+        budget: &mut Budget,
     ) -> Result<Next, SolveError<Halt>> {
         let [node] = branch.nodes();
         let piece = self
@@ -1024,7 +1036,7 @@ impl BranchSolver<Item, NoObject, 1> for Search<'_> {
             .get_mut(node.item().patch)
             .and_then(Option::take)
             .ok_or(SolveError::Eval(Halt::Defect("a patch was solved twice")))?;
-        self.refine(piece).map_err(SolveError::Eval)?;
+        self.refine(piece, budget).map_err(SolveError::Eval)?;
         Ok(Next::Done)
     }
 
@@ -1033,7 +1045,6 @@ impl BranchSolver<Item, NoObject, 1> for Search<'_> {
         branch: &Branch<'_, Item, 1>,
         _found: &Accumulator<NoObject>,
     ) -> Result<bool, SolveError<Halt>> {
-        self.tick().map_err(SolveError::Eval)?;
         let [node] = branch.nodes();
         Ok(self.open(node.item().lb_sq))
     }
@@ -1055,9 +1066,5 @@ impl BranchSolver<Item, NoObject, 1> for Search<'_> {
             ChildOrder::Given
         };
         Ok(Split { tree: 0, order })
-    }
-
-    fn cancelled(&self) -> bool {
-        self.stop.is_set()
     }
 }
