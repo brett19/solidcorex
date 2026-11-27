@@ -121,9 +121,10 @@ impl<P> Net<P> {
     where
         P: Clone,
     {
-        let points = (0..self.cols)
-            .flat_map(|j| self.points.iter().skip(j).step_by(self.cols).cloned())
-            .collect();
+        let mut points = Vec::with_capacity(self.points.len());
+        for j in 0..self.cols {
+            points.extend(self.points.iter().skip(j).step_by(self.cols).cloned());
+        }
         Self {
             rows: self.cols,
             cols: self.rows,
