@@ -6,7 +6,8 @@
 //! directory does (cargo scans a directory named by `rerun-if-changed` recursively).
 //! Also writes the pin's `geom/krawczyk.rs` items, made public, for the Krawczyk benchmarks
 //! ([`pin_krawczyk`]), and the pin's `bernstein_roots` with its helpers
-//! ([`pin_bernstein_roots`]).
+//! ([`pin_bernstein_roots`]), and the pin's call-local spatial index for the box tree
+//! benchmarks ([`pin_spatial`]).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -130,10 +131,35 @@ fn pin_bernstein_roots() -> Result<(), String> {
     std::fs::write(dir.join("pin_bernstein_roots.rs"), body).map_err(|e| e.to_string())
 }
 
+/// The pin's `topology/brep/validation/spatial.rs` (`SpatialIndex`, the tree the pin's
+/// validity checks and Boolean search with; `pub(crate)` there), made public, written to
+/// `OUT_DIR/pin_spatial.rs` without its module docs, its `use` lines (`scx_bench::pin_spatial`
+/// supplies the same names from the pin) and its tests. Every other line is the pin's,
+/// unchanged.
+fn pin_spatial() -> Result<(), String> {
+    let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").map_err(|e| e.to_string())?);
+    let src = manifest.join(
+        "../../../sc-wt/scx-pin/solidcore/crates/solidcore/src/topology/brep/validation/spatial.rs",
+    );
+    let text = std::fs::read_to_string(&src).map_err(|e| format!("{}: {e}", src.display()))?;
+    let body = text.split("#[cfg(test)]").next().unwrap_or("");
+    let out: Vec<String> = body
+        .lines()
+        .filter(|l| !l.starts_with("//!") && !l.starts_with("use "))
+        .map(|l| l.replace("pub(crate) ", "pub "))
+        .collect();
+    if !out.iter().any(|l| l.contains("pub struct SpatialIndex")) {
+        return Err(format!("{}: `SpatialIndex` not found", src.display()));
+    }
+    let dir = PathBuf::from(std::env::var("OUT_DIR").map_err(|e| e.to_string())?);
+    std::fs::write(dir.join("pin_spatial.rs"), out.join("\n")).map_err(|e| e.to_string())
+}
+
 fn main() -> std::process::ExitCode {
     match check()
         .and_then(|()| pin_krawczyk())
         .and_then(|()| pin_bernstein_roots())
+        .and_then(|()| pin_spatial())
     {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(e) => {
