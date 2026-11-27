@@ -38,7 +38,11 @@
 use core::fmt;
 use std::sync::Arc;
 
-use scx_curve::{AngleAxis, AngleLine2, Curve2, CurveError, Line2, ParamShift};
+use scx_curve::arcs::Arcs;
+use scx_curve::{
+    AngleAxis, AngleLine2, AngleWave2, Circle2, Curve2, CurveError, Ellipse2, Hyperbola2, Line2,
+    ParamShift,
+};
 use scx_num::cert::{Basis, Recorded};
 use scx_num::domain::UvDomain;
 use scx_num::error::ErrorKind;
@@ -475,6 +479,12 @@ fn use_image(
             interval,
         });
     }
+    if unshifted && let Some(mapped) = mapped(curve, uv, &surface.domain()) {
+        return Ok(UseGeom::Pcurve {
+            curve: mapped,
+            interval,
+        });
+    }
     let EdgeShape::Curve {
         curve: moved,
         interval: over,
@@ -493,6 +503,95 @@ fn use_image(
         curve: made,
         interval: *over,
     })
+}
+
+/// `uv` applied to `curve` where the image is of the same kind with the same parameter
+/// (FU1, 63 §6.12 open question 2), for an edge whose parameter the map kept: then the image
+/// pcurve is `uv ∘ p`, exactly as for a line, and needs no `pcurve_of`.
+///
+/// - A circle, an ellipse or a hyperbola's branch under a uniform scale `(k, k)`, `k > 0`
+///   (a plane under a similarity): the centre mapped, the semi-axes times `k`, the axes and
+///   sense kept.
+/// - An angle line or an angle wave under a diagonal map (a cylinder's `(k, k)`, a cone's
+///   `(1, k)`): the angle coordinate keeps its angle, on the new surface's arcs, when its
+///   scale is the ratio of the new period to the old to [`SIMILAR`] and it has no offset; the
+///   other coordinate is mapped as a line's.
+///
+/// `None` for anything else (a parabola, whose parameter a scale stretches, so its edge is
+/// shifted; a NURBS pcurve; a map with a shear), which `pcurve_of` makes again.
+fn mapped(curve: &Curve2, uv: &UvMap, domain: &UvDomain) -> Option<Curve2> {
+    let [[p, q], [r, s]] = uv.matrix();
+    if q != 0.0 || r != 0.0 {
+        return None;
+    }
+    let [cu, cv] = uv.offset();
+    let uniform = p == s && p > 0.0;
+    match curve {
+        Curve2::Circle(c) if uniform => {
+            let frame = c.frame().moved_to(uv.apply(c.frame().origin()))?;
+            Circle2::new(frame, c.radius() * p, c.sense())
+                .ok()
+                .map(Curve2::Circle)
+        }
+        Curve2::Ellipse(e) if uniform => {
+            let frame = e.frame().moved_to(uv.apply(e.frame().origin()))?;
+            Ellipse2::new(frame, e.semi_x() * p, e.semi_y() * p, e.sense())
+                .ok()
+                .map(Curve2::Ellipse)
+        }
+        Curve2::Hyperbola(h) if uniform => {
+            let frame = h.frame().moved_to(uv.apply(h.frame().origin()))?;
+            Hyperbola2::new(frame, h.semi_x() * p, h.semi_y() * p, h.sense())
+                .ok()
+                .map(Curve2::Hyperbola)
+        }
+        Curve2::AngleLine(l) => {
+            let (scale, shift, other, at, period) = match l.axis() {
+                AngleAxis::U => (p, cu, s, cv, domain.u.period()),
+                AngleAxis::V => (s, cv, p, cu, domain.v.period()),
+            };
+            let arcs = rescaled(l.arcs(), scale, shift, period)?;
+            AngleLine2::new(
+                arcs,
+                l.axis(),
+                l.start(),
+                l.sense(),
+                other * l.other() + at,
+                other * l.rate(),
+            )
+            .ok()
+            .map(Curve2::AngleLine)
+        }
+        Curve2::AngleWave(w) => {
+            let arcs = rescaled(w.arcs(), p, cu, domain.u.period())?;
+            let (ac, asin) = w.amplitudes();
+            AngleWave2::new(
+                arcs,
+                w.start(),
+                w.sense(),
+                s * w.mean() + cv,
+                s * ac,
+                s * asin,
+            )
+            .ok()
+            .map(Curve2::AngleWave)
+        }
+        _ => None,
+    }
+}
+
+/// The arcs of the new surface's angle direction, where the map scales that coordinate by
+/// `scale` with no offset, and that is the ratio of its new period to the old (a turn), or
+/// one (the sphere's half turn, which has no period).
+fn rescaled(arcs: Arcs, scale: f64, shift: f64, period: Option<f64>) -> Option<Arcs> {
+    if shift != 0.0 {
+        return None;
+    }
+    if !arcs.is_turn() {
+        return (scale == 1.0 && period.is_none()).then_some(arcs);
+    }
+    let period = period?;
+    ((scale * arcs.length() - period).abs() <= SIMILAR * period).then(|| Arcs::turn(period))
 }
 
 /// Whether `uv` is the identity to [`SIMILAR`]: a rigid motion's, whose scale is the mean

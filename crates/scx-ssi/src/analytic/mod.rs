@@ -93,7 +93,7 @@ use section::Order;
 use scx_curve::Curve;
 use scx_num::extent1d::Extent1d;
 use scx_num::extent2d::Extent2d;
-use scx_num::units::{Accuracy, Length, Resolution, coincident};
+use scx_num::units::{Accuracy, Resolution, coincident};
 use scx_num::vector2d::Point2;
 use scx_num::vector3d::Point3;
 use scx_surface::{Closed, Plane, Surface};
@@ -215,18 +215,22 @@ pub fn intersect(
     }
 }
 
-/// The section of `s` over `se` by `plane` over `pe` (module docs), within `tol`: the
-/// curves run along `n_s x n_plane`. [`Closed::General`] for a NURBS surface and the cases
-/// in the module docs' table.
+/// The section of `s` over `se` by `plane` over `pe` (module docs), within `tol`'s zone:
+/// the curves run along `n_s x n_plane`. [`Closed::General`] for a NURBS surface and the
+/// cases in the module docs' table.
+///
+/// `tol` is a [`Resolution`], finite and above zero by construction, as [`intersect`]'s
+/// is: a zero, negative or non-finite tolerance is refused where it is made
+/// (`Resolution::new` is `None`), not here (FU1, 63 §4.14).
 #[must_use]
 pub fn section_by_plane(
     s: &Surface,
     se: &Extent2d,
     plane: &Plane,
     pe: &Extent2d,
-    tol: Length,
+    tol: Resolution,
 ) -> Closed<Intersection> {
-    section::section(s, se, plane, pe, tol, Order::PlaneSecond)
+    section::section(s, se, plane, pe, tol.zone(), Order::PlaneSecond)
 }
 
 #[cfg(test)]
