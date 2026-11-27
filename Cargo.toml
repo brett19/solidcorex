@@ -4,6 +4,7 @@ resolver = "2"
 members = [
     "crates/scx-num",
     "crates/scx-algo",
+    "crates/scx-p21",
     "crates/scx-testkit",
     "crates/scx-difftest",
     "xtask",
@@ -12,6 +13,7 @@ members = [
 default-members = [
     "crates/scx-num",
     "crates/scx-algo",
+    "crates/scx-p21",
     "crates/scx-testkit",
     "xtask",
 ]

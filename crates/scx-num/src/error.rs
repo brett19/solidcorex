@@ -16,11 +16,12 @@
 // Changes: only the variants layer 0 builds, renamed: `SolidError` -> `NumError` (its
 // `InvalidInput` and `Failed` shapes), `GeomFailure` -> `NumFailure` (the causes the moved
 // files build, with their classes and `Display` texts); `ErrorKind` keeps the four classes
-// those causes take. Added from the blend error for the interval move: `NumFailure::Defect`
+// those causes take, and `Unsupported` and `Cancelled` (for `scx-p21`'s refusals and a caller's
+// stop). Added from the blend error for the interval move: `NumFailure::Defect`
 // (`BlendFailure::Defect`, StageFailed, the same text) and `NumFailure::VectorVanishes`
 // (`BlendFailure::SectionDegenerate(SectionDegeneracy::VectorVanishes)`, Degenerate, the
 // same text, class first). No `Failure` wrapper, site, fit, status numbers or upstream-status
-// accessors. Written here over those variants: `ErrorKind::name` (the four names), the
+// accessors. Written here over those variants: `ErrorKind::name` (the six names), the
 // `Display` impls' `fmt`, `NumFailure::kind`, `NumError::invalid_input`, `NumError::failed`,
 // `NumError::call`, `NumError::kind`, `NumError::operation`, `NumError::failure`,
 // `NumError::cause`, `Error::source`, and the tests
@@ -64,6 +65,10 @@ pub enum ErrorKind {
     StageFailed,
     /// A generic failure (`SM_ERR`).
     Failed,
+    /// The inputs are a combination the routine does not support.
+    Unsupported,
+    /// The caller cancelled the operation.
+    Cancelled,
 }
 
 impl ErrorKind {
@@ -75,6 +80,8 @@ impl ErrorKind {
             Self::Degenerate => "degenerate",
             Self::StageFailed => "stage_failed",
             Self::Failed => "failed",
+            Self::Unsupported => "unsupported",
+            Self::Cancelled => "cancelled",
         }
     }
 }
@@ -461,13 +468,22 @@ mod tests {
             ErrorKind::Degenerate,
             ErrorKind::StageFailed,
             ErrorKind::Failed,
+            ErrorKind::Unsupported,
+            ErrorKind::Cancelled,
         ]
         .into_iter()
         .map(ErrorKind::name)
         .collect();
         assert_eq!(
             names,
-            ["invalid_input", "degenerate", "stage_failed", "failed"]
+            [
+                "invalid_input",
+                "degenerate",
+                "stage_failed",
+                "failed",
+                "unsupported",
+                "cancelled"
+            ]
         );
         let caused = NumError::call("outer")(NumError::invalid_input("inner", "why"));
         assert!(std::error::Error::source(&caused).is_some());
