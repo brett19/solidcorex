@@ -4126,6 +4126,188 @@ in for BR8's largest generated body, which does not exist yet.
 - At 10,000 faces (about 1.4 MB of face records) the walk falls out of L2.
 - Research 51's 4.9 ns per face is met up to 1,024 faces.
 
+### 6.10 BR8 as built (11-27)
+
+Decided by analysis and an adversarial pass. Proposed for review; not yet ruled.
+
+`scx_testkit::bodies`, behind the testkit's optional `bodies` feature, builds valid bodies
+through `scx-brep`'s public `Draft` API only. It also builds one broken body per structure
+invariant, and holds an independent oracle, `check::violations`, that names the invariants
+a draft breaks. Every body is a function of `(kind, seed, size)`. Seed 0 is canonical: unit
+sizes, placed about the origin along z, no jitter. Any other seed draws the sizes, a
+right-handed frame and jittered splits from a SplitMix64.
+
+**Placement.** `layers.txt` puts `scx-testkit` in `[testkit]`, which may depend on any
+library, so a testkit dependency on `scx-brep` fits the layering. The open choice was
+whether to use a feature or a crate.
+
+- *For the feature* (chosen): one truth crate, as 63 §6.4 asks, and no new crate.
+  - The geometry layers' tests all dev-depend on the testkit. Without the feature they do
+    not build `scx-brep`, and `cargo xtask fast` is unchanged.
+  - `scx-brep`'s own tests can take the generators: an integration-test dev-dependency on
+    the testkit with `bodies` type-unifies.
+- *Against*, adversarially:
+  - A feature makes the dependency cycle `scx-brep` → (dev) testkit → `scx-brep` real for
+    `scx-brep`'s tests. In its `src` unit tests the two `scx-brep`s are distinct crates and
+    their types do not unify. Its integration tests are unaffected.
+  - A separate `[testkit]` crate (`scx-testkit-brep`) would make the cycle explicit and need
+    no feature.
+  - Answer: the generators are used from integration tests and `scx-difftest`. A unit test
+    that needs a body can call `generate` from `tests/`. A second crate costs a
+    `layers.txt` row and a crate for 2,100 lines. Revisit this if unit tests come to need
+    the bodies.
+- 63 §6.4 named the module `gen`. It is `bodies`, because `gen` is a reserved keyword in
+  edition 2024.
+
+**The public surface.**
+
+```rust
+pub enum Kind { Block, Prism, QuadSheet, TriSheet, Cylinder, Cone, Sphere, Torus, Holed, Cavity, Stack }
+impl Kind { pub const ALL: [Kind; 11]; pub fn name(self) -> &'static str; pub fn faces(self, size: usize) -> usize }
+pub struct Counts { pub regions, shells, faces, loops, uses, edges, collapsed, vertices: usize, pub euler: i64 }
+pub struct Generated { pub draft: Draft, pub counts: Counts }
+#[non_exhaustive] pub enum GenError { Table(TableFull), Curve(CurveError), Surface(SurfaceError), Pcurve(PcurveError), Degenerate(&'static str) }
+pub const BUILD_TOL: Length;                                    // 1e-9 mm
+pub fn generate(kind: Kind, seed: u64, size: usize) -> Result<Generated, GenError>;   // size 0 is 1
+pub fn broken(invariant: Invariant, seed: u64, size: usize) -> Result<Option<Draft>, GenError>;
+pub mod check {
+    pub enum Invariant { OutsideVoid, LiveReferences, FinWithoutUse, UseWithoutFin, RepeatedFin, SameSenseTwice,
+        LoopChained, PeriodJump, PoleGap, UvGap, IntervalMismatch, PcurveOffEdge, VertexOffEdge, ShellOpen,
+        Misoriented, RadialOrder, OrphanVertex }                // ALL
+    pub struct Tolerance { pub space: f64, pub uv: f64 }        // Default: 1e-7, 1e-9
+    pub fn violations(draft: &Draft, tol: Tolerance) -> BTreeSet<Invariant>;
+}
+```
+
+**The bodies**, with `n = size`:
+
+| Kind | Faces | What it covers |
+|---|---|---|
+| `Block` | `6n²` | a box, each side an `n × n` grid of planar faces, with jittered breaks |
+| `Prism` | `n + 5` | an `(n+3)`-gon extruded: long planar loops |
+| `QuadSheet`, `TriSheet` | `n²`, `2n²` | an open sheet with the outside on both sides, and random diagonals |
+| `Cylinder` | `n + 2` | `n` wall faces between rulings, so one face crosses the seam; two caps |
+| `Cone` | `n + 1` | `n` wall faces to the apex, a collapsed edge per face; a base |
+| `Sphere` | `n` | `n` lunes, a collapsed edge at either pole per face |
+| `Torus` | `n²` | `n × n` patches, crossing both seams; genus 1 |
+| `Holed` | `n + 9` | a slab with an `(n+3)`-gon through-hole: an inner loop on two faces; genus 1 |
+| `Cavity` | `12n²` | a solid with a void inside: two shells in the solid, one in the void |
+| `Stack` | `5n + 6` | `n + 1` blocks sharing faces, one region each; 3-fin edges in radial order |
+
+The pcurves come from `scx_surface::pcurve_of`, aligned along the loop by whole periods.
+A pole's use is the uv segment along u from the arriving use's end to the leaving use's
+start. `Counts` are closed forms, checked against the draft. Euler is
+`V − (E − C) + F − (L − F)`, where C counts the collapsed edges. It gives 2 for the convex
+bodies, 0 for the torus and the holed slab, 1 for the sheets, 4 for the cavity (two
+spheres) and 4 for a stack of three.
+
+**The broken bodies.** Each one writes a single defect into a valid body through the
+`Draft` API, so that `violations` reports that invariant and no other:
+
+- a solid outside;
+- a removed edge;
+- a fin pushed for a face that does not use its edge, and a fin popped;
+- a fin repeated;
+- a sheet's centre loop doubled, with its fins;
+- two uses swapped;
+- a cylinder wall's arc moved by a period;
+- a lune's pole use removed;
+- a pcurve interval halved;
+- a pcurve bowed into an arc through the same ends;
+- a vertex moved;
+- a face removed;
+- one face's loop reversed, with its fins;
+- a 3-fin edge's radial order reversed;
+- an orphan vertex.
+
+`UvGap` has none, because no single defect breaks it alone: a uv gap that is not a period
+or a pole also moves a pcurve off its edge, or unchains the loop. Today's `finish`
+refuses three of them: `OutsideVoid`, `LiveReferences` and `FinWithoutUse`. BR2's `finish`
+should refuse all sixteen, and its tests can take `broken` as is.
+
+**Tests.** `crates/scx-testkit/tests/bodies.rs` has 8 tests:
+
+- every kind, at seeds {0, 1, 2, 7, 0x5eed} and sizes {1, 2, 3, 5}, holds its counts, breaks
+  nothing and finishes;
+- the Euler values above;
+- every outer loop has positive uv area;
+- the convex bodies face outward;
+- each broken body breaks its invariant alone;
+- `finish` refuses the three it checks;
+- a seed is deterministic;
+- seed 0 is canonical.
+
+The difftest `t_bodies` checks the seed-0 block, cylinder, cone, sphere and torus, at sizes
+1 to 4, against the pin's `create_box`, `create_cylinder`, `create_cone`, `create_sphere`
+and `create_torus`. The two sides split the solid differently, so each is checked against
+the solid instead:
+
+- the pin's face surfaces, sampled over their uv domains, lie on the solid's sheets;
+- the generated vertices, edge samples and face middles lie on a sheet and in the closure;
+- the generated surface kinds are the solid's own. The pin's are printed but not compared,
+  because it writes a cylinder as a cone of half-angle 0;
+- the box corners are the same bits.
+
+It finds 0 mismatches.
+
+**The walk** (BR1's A9 measurement, redone): all faces, then loops, then uses, marking each
+edge in a bitset. Bodies are seed 0, finished. The numbers are release builds, best of 7,
+in ns per face.
+
+| Body | Faces | `Use::record().edge` | `Use::edge().id()` |
+|---|---|---|---|
+| block n=14 | 1,176 | 5.5 | 8.2 |
+| block n=144 | 124,416 | 40.8 | 63.3 |
+| quad sheet 33 × 33 | 1,089 | 4.4 | 7.4 |
+| cylinder n=1045 | 1,047 | 6.6 | 11.1 |
+| cylinder n=102908 | 102,910 | 38.6 | 67.0 |
+| cone n=1045 | 1,046 | 5.2 | 9.3 |
+| sphere n=1045 | 1,045 | 4.1 | 8.0 |
+| sphere n=102908 | 102,908 | 29.5 | 48.4 |
+| torus 33 × 33 | 1,089 | 4.0 | 7.4 |
+| torus 325 × 325 | 105,625 | 28.0 | 41.3 |
+| holed n=1045 | 1,054 | 7.4 | 11.5 |
+| cavity n=10 | 1,200 | 5.6 | 8.3 |
+| cavity n=102 | 124,848 | 41.3 | 62.6 |
+| stack n=204 | 1,026 | 5.8 | 8.2 |
+| stack n=22261 | 111,311 | 36.8 | 63.8 |
+| pin box: `Loop::edges` / `loop_edgeuses` | 6 | 6.1 | 40.4 |
+| pin cylinder | 3 | 5.1 | 34.1 |
+| pin cone | 2 | 5.8 | 34.2 |
+| pin sphere | 1 | 6.3 | 35.6 |
+| pin torus | 1 | 8.5 | 43.5 |
+
+- At about 1,000 faces, every kind walks in 4 to 7 ns per face. That is at or below the
+  pin's port-only list (5 to 8.5) and 5 to 8× faster than its edge-use ring.
+- At about 10,000 faces it is 13 to 28 ns, and at about 100,000 faces it is 28 to 53 ns. That
+  is memory, not work: the face records then exceed L2, and later L3.
+- The pin has no generator for a matching 100,000-face body.
+- Generation costs about 1.5 to 7 µs per face. Its main costs are `pcurve_of` and the
+  frames.
+- **Finding for BR2: `finish` is quadratic in loop length.** `check::references` scans the
+  whole face for each fin, to find its use. The prism, cylinder, cone and holed slab have a
+  loop of `n` uses. At about 100,000 faces they finish in 78 to 170 µs per face, against
+  0.1 to 0.4 µs for the grid bodies. A per-face `(edge, sense)` set, or a check from the use
+  side, makes it linear.
+
+**Open questions.**
+
+1. **A collapsed edge's use.** Each pole face has its own collapsed edge with one fin. Its
+   use is a `Pcurve` segment, a `Line2` over an assumed `[0, 1]`, because `EdgeShape::Collapsed`
+   has no interval. The alternatives:
+   - share one collapsed edge per pole, with `n` fins;
+   - make the use `UseGeom::Point`, which leaves a uv gap the length of the face's u span;
+   - give `Collapsed` an interval.
+
+   BR2's pole rules, and BR5, should settle this.
+2. Euler-Poincaré must leave collapsed edges out (they are not 1-cells), or count them as
+   a vertex and an edge that cancel.
+3. Face 24's "a pole is a vertex", and `UvGap` alone, have no broken body.
+4. The dev-dependency cycle is described above: integration tests only.
+5. `EdgeAdj` has only `Default`, so a builder fills its fins through `adjacency_mut`.
+   `Draft::add_face` appends fins loop by loop, which is enough for the generators. No API
+   was added to `scx-brep`.
+
 ## 7. `scx-record`
 
 The pin's sources are `topology/api_files`, `topology/part_file`, `topology/database_io` and
