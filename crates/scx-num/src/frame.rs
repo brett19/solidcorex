@@ -64,10 +64,11 @@ impl Sense {
 /// How far from unit length, and from square to each other, [`Frame::from_axes`] and
 /// [`Frame2::from_axis`] take an axis to be: `|a · a - 1|` and `|x · z|` at most this.
 ///
-/// Eight ulps of 1. The axes [`Frame::new`], [`Frame::transformed`] and [`Frame2::new`] build
-/// are within 2.5 ulps of unit and 1 ulp of square (measured over 200 000 random frames at
-/// scales `1e-10` to `1e9`, half of them mapped by random affine maps), so every frame they
-/// build passes; an axis off by more than rounding does not.
+/// Eight ulps of 1. The axes [`Frame::new`] and [`Frame2::new`] build are within 2.5 ulps of
+/// unit and 1 ulp of square (measured over 200 000 random frames at scales `1e-10` to `1e9`,
+/// half of them mapped by random affine maps); [`Frame::transformed`] keeps a scaled image as
+/// it is only within this same tolerance (`IMAGE_SQUARE`). So every frame they build passes;
+/// an axis off by more than rounding does not.
 pub const AXIS_TOLERANCE: f64 = 8.0 * f64::EPSILON;
 
 /// Why axes given as they are make no frame ([`Frame::from_axes`], [`Frame2::from_axis`]).
@@ -199,16 +200,17 @@ impl Frame {
         if !(origin.is_finite() && x.is_finite() && z.is_finite()) {
             return Err(FrameError::NotFinite);
         }
-        unit(FrameAxis::X, x.dot(x))?;
-        unit(FrameAxis::Z, z.dot(z))?;
+        // The same sums as `transformed`'s exact path, so every frame it keeps passes.
+        unit(FrameAxis::X, x.length_squared())?;
+        unit(FrameAxis::Z, z.length_squared())?;
         let dot = x.dot(z);
         if dot.abs() > AXIS_TOLERANCE {
             return Err(FrameError::NotSquare { dot });
         }
         Ok(Self {
             origin,
-            x: UnitVec3::from_unit(x),
-            z: UnitVec3::from_unit(z),
+            x: UnitVec3::kept(x),
+            z: UnitVec3::kept(z),
         })
     }
 
@@ -278,13 +280,21 @@ impl Frame {
     ///
     /// `None` when the image is not finite or `a` flattens the frame (its linear part is
     /// singular on the frame's axes).
+    ///
+    /// Where the map keeps the axes square (a similarity, or any map whose image of z is
+    /// square to the image plane), the axes are the images scaled back by their own stretch,
+    /// `x' = A x · |x| / |A x|` and `z' = ±A z · |z| / |A z|`, kept as they are when they are
+    /// unit and square to 8 roundings. Under a map whose matrix is exact (a
+    /// scale by a power of two, a mirror in a coordinate plane, a quarter turn about a
+    /// coordinate axis) these are exact, so the map and its inverse give the frame back to the
+    /// bit. Otherwise z is made again from `A x × A y` and normalised.
     #[must_use]
     pub fn transformed(&self, a: &Affine) -> Option<(Self, Sense)> {
         let ax = a.apply_vec(*self.x);
         let ay = a.apply_vec(*self.y());
         let az = a.apply_vec(*self.z);
         let normal = ax.cross(ay);
-        let frame = Self::new(a.apply(self.origin), normal, ax)?;
+        let origin = a.apply(self.origin);
         let side = az.dot(normal);
         let sense = if side > 0.0 {
             Sense::Forward
@@ -294,9 +304,46 @@ impl Frame {
             // z maps into the image plane (or the image is not finite).
             return None;
         };
-        Some((frame, sense))
+        if let Some(frame) = self.square_image(origin, ax, ay, az, sense) {
+            return Some((frame, sense));
+        }
+        Some((Self::new(origin, normal, ax)?, sense))
+    }
+
+    /// [`Frame::transformed`]'s exact path: the images of x and z scaled back by their own
+    /// stretch, z's sign the sense's. `None` where the image is not finite, or where the
+    /// result is not unit and square to [`IMAGE_SQUARE`] roundings or `A y` leaves its plane
+    /// by more (the map is not square on the axes), and the caller normalises instead.
+    fn square_image(
+        &self,
+        origin: Point3,
+        ax: Vec3,
+        ay: Vec3,
+        az: Vec3,
+        sense: Sense,
+    ) -> Option<Self> {
+        // Lengths summed in any order, so a signed permutation's stretch is exact too.
+        let x = ax * (self.x.length_any_order() / ax.length_any_order());
+        let z = az * (sense.sign() * self.z.length_any_order() / az.length_any_order());
+        let tol = IMAGE_SQUARE;
+        let fits = origin.is_finite()
+            && x.is_finite()
+            && z.is_finite()
+            && (x.length_squared() - 1.0).abs() <= tol
+            && (z.length_squared() - 1.0).abs() <= tol
+            && x.dot(z).abs() <= tol
+            && ay.dot(z).abs() <= tol * ay.length();
+        fits.then_some(Self {
+            origin,
+            x: UnitVec3::kept(x),
+            z: UnitVec3::kept(z),
+        })
     }
 }
+
+/// The roundings within which [`Frame::transformed`] keeps the scaled images of the axes as
+/// they are: each unit, and square to the other and to the image of y.
+const IMAGE_SQUARE: f64 = AXIS_TOLERANCE;
 
 /// A placement in the plane: an origin and a unit x axis, `y` its quarter turn
 /// counter-clockwise, so the basis is right-handed (counter-clockwise) by construction. A
@@ -343,8 +390,14 @@ impl Frame2 {
         unit(FrameAxis::X, x.dot(x))?;
         Ok(Self {
             origin,
-            x: UnitVec2::from_unit(x),
+            x: UnitVec2::kept(x),
         })
+    }
+
+    /// The same axes at `origin`, x kept to the bit. `None` when `origin` is not finite.
+    #[must_use]
+    pub fn moved_to(&self, origin: Point2) -> Option<Self> {
+        (origin.x.is_finite() && origin.y.is_finite()).then_some(Self { origin, x: self.x })
     }
 
     /// The origin.
@@ -551,6 +604,33 @@ mod tests {
         }
     }
 
+    /// Property (FU1): under a map whose matrix is exact (a power-of-two scale, a mirror in a
+    /// coordinate plane, a quarter turn about a coordinate axis, through the origin) and its
+    /// inverse, a frame on no world axis comes back to the bit, and each image is orthonormal.
+    #[test]
+    fn exact_maps_and_their_inverses_return_the_frame_to_the_bit() {
+        let mut r = Rng::new(0xf4a3_e008);
+        let o = Point3::ORIGIN;
+        let maps = [
+            Affine::uniform_scaling(o, 4.0).unwrap(),
+            Affine::uniform_scaling(o, 0.125).unwrap(),
+            Affine::reflection(o, Vec3::Y).unwrap(),
+            Affine::from_axes(Vec3::Y, -Vec3::X, Vec3::Z, o),
+            Affine::from_axes(Vec3::X, -Vec3::Z, Vec3::Y, o),
+            Affine::uniform_scaling(o, 2.0).unwrap() * Affine::reflection(o, Vec3::X).unwrap(),
+        ];
+        for _ in 0..2_000 {
+            let f = random_frame(&mut r);
+            for a in &maps {
+                let (g, sense) = f.transformed(a).unwrap();
+                assert!(orthonormal(&g));
+                let (h, back) = g.transformed(&a.inverse().unwrap()).unwrap();
+                assert_eq!(h, f, "{a:?}");
+                assert_eq!(back, sense);
+            }
+        }
+    }
+
     /// A uniform scale keeps the axes; a non-uniform one keeps x's direction and the image
     /// plane of x and y; a map that flattens that plane gives no frame.
     #[test]
@@ -609,12 +689,22 @@ mod tests {
             let s = [1e-6, 1e-3, 1.0, 1e3, 1e6][i % 5];
             let f = Frame::new(p(&mut r, 100.0), v(&mut r, s), v(&mut r, s));
             let Some(mut f) = f else { continue };
-            if i % 2 == 1 {
-                let a =
-                    Affine::from_axes(v(&mut r, 1.0), v(&mut r, 1.0), v(&mut r, 1.0), f.origin());
-                if let Some((g, _)) = f.transformed(&a) {
-                    f = g;
-                }
+            // Random maps take `transformed`'s normalizing path; similarities (a rotation
+            // and a scale) its exact path, which keeps axes within the same tolerance.
+            let a = match i % 4 {
+                1 => Some(Affine::from_axes(
+                    v(&mut r, 1.0),
+                    v(&mut r, 1.0),
+                    v(&mut r, 1.0),
+                    f.origin(),
+                )),
+                3 => Affine::rotation(f.origin(), v(&mut r, 1.0), 0.7)
+                    .ok()
+                    .and_then(|rot| Some(Affine::uniform_scaling(f.origin(), 3.0).ok()? * rot)),
+                _ => None,
+            };
+            if let Some((g, _)) = a.and_then(|a| f.transformed(&a)) {
+                f = g;
             }
             assert_eq!(Frame::from_axes(f.origin(), *f.x(), *f.z()), Ok(f));
             renormalized += usize::from(Frame::new(f.origin(), *f.z(), *f.x()) != Some(f));

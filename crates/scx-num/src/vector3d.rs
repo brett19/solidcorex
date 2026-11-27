@@ -495,9 +495,9 @@ impl<T> core::ops::IndexMut<Axis> for Point3<T> {
 }
 
 impl UnitVec3 {
-    /// `v` as a direction, unchanged: for a caller that has checked it is unit within
-    /// rounding ([`Frame::from_axes`](crate::frame::Frame::from_axes)).
-    pub(crate) const fn from_unit(v: Vec3) -> Self {
+    /// A vector the caller has checked is unit within a few roundings, kept as it is (no
+    /// division, so an exact image stays exact).
+    pub(crate) const fn kept(v: Vec3) -> Self {
         Self(v)
     }
 
@@ -658,6 +658,25 @@ impl Vec3 {
     #[must_use]
     pub fn length(self) -> f64 {
         sqrt(self.length_squared())
+    }
+
+    /// Not upstream: the Euclidean length with the squares summed smallest first, so it is
+    /// the same to the bit for any order and signs of the components: a signed permutation
+    /// of a vector, or its scale by a power of two, keeps its length exactly. For a stretch
+    /// that must be exact under an exact map ([`crate::frame::Frame::transformed`]).
+    #[must_use]
+    pub fn length_any_order(self) -> f64 {
+        let (mut a, mut b, mut c) = (self.x * self.x, self.y * self.y, self.z * self.z);
+        if a > b {
+            core::mem::swap(&mut a, &mut b);
+        }
+        if b > c {
+            core::mem::swap(&mut b, &mut c);
+        }
+        if a > b {
+            core::mem::swap(&mut a, &mut b);
+        }
+        sqrt((a + b) + c)
     }
 
     /// The unit vector in this direction (`Unitize`): `None` for a vector whose squared

@@ -157,7 +157,7 @@ pub struct UnitVec2(Vec2);
 impl UnitVec2 {
     /// `v` as a direction, unchanged: for a caller that has checked it is unit within
     /// rounding ([`Frame2::from_axis`](crate::frame::Frame2::from_axis)).
-    pub(crate) const fn from_unit(v: Vec2) -> Self {
+    pub(crate) const fn kept(v: Vec2) -> Self {
         Self(v)
     }
 
