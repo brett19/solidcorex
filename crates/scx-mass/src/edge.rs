@@ -13,8 +13,8 @@ use scx_curve::Curve;
 use scx_num::budget::{Budget, Stop};
 use scx_nurbs::Approach;
 
-use crate::error::{MassError, MassUnsupported};
-use crate::face::{fail, reachable};
+use crate::error::{MassDefect, MassError, MassUnsupported};
+use crate::face::{FIRST_WORK, fail, reachable};
 use crate::kronrod::{self, K7, Meter, Tol};
 use crate::spec::{Estimate, RelAccuracy};
 
@@ -45,7 +45,6 @@ pub fn edge_length(
     let size = bbox.max_length();
     // As a face's: the coordinates' rounding is what a piece cannot be held below.
     let noise = reachable(bbox.min(), bbox.max(), size);
-    let held = (accuracy.get() / 10.0).max(noise);
     let (lo, hi) = (interval.min(), interval.max());
     let mut ends = vec![lo];
     if let Curve::Nurbs(n) = curve {
@@ -57,37 +56,51 @@ pub fn edge_length(
     }
     ends.push(hi);
     let mut meter = Meter::new(budget, stop);
-    let (mut value, mut error) = ([0.0], [0.0]);
     let width = hi - lo;
-    for w in ends.windows(2) {
-        let [a, b] = *w else { continue };
-        let floor = [size * (b - a) / width];
-        let tol = Tol {
-            accuracy: held,
-            floor: &floor,
-        };
-        kronrod::integrate(
-            &K7,
-            (a, b),
-            tol,
-            &mut value,
-            &mut error,
-            &mut meter,
-            |t, out, _| {
-                let [d] = curve.jet::<1>(t, Approach::Above).d;
-                if let Some(v) = out.value.first_mut() {
-                    *v = d.length();
-                }
-                Ok(())
-            },
-        )
-        .map_err(|f| fail(at, f))?;
-    }
-    if noise > accuracy.get() / 10.0 {
-        error[0] += noise * size;
-    }
-    Ok(Estimate {
-        value: value[0],
-        error: error[0],
-    })
+    let run = |held: f64, meter: &mut Meter<'_>| -> Result<(f64, f64), MassError> {
+        let (mut value, mut error) = ([0.0], [0.0]);
+        for w in ends.windows(2) {
+            let [a, b] = *w else { continue };
+            let floor = [size * (b - a) / width];
+            let tol = Tol {
+                accuracy: held,
+                floor: &floor,
+            };
+            kronrod::integrate(
+                &K7,
+                (a, b),
+                tol,
+                &mut value,
+                &mut error,
+                meter,
+                |t, out, _| {
+                    let [d] = curve.jet::<1>(t, Approach::Above).d;
+                    if let Some(v) = out.value.first_mut() {
+                        *v = d.length();
+                    }
+                    Ok(())
+                },
+            )
+            .map_err(|f| fail(at, f))?;
+        }
+        Ok((value[0], error[0]))
+    };
+    // As a face's ([`crate::face::integrate`]): where the coordinates' rounding is above
+    // the accuracy, a first attempt on fewer pieces, then one held to the rounding.
+    let held = accuracy.get() / 10.0;
+    let (value, error) = if noise <= held {
+        run(held, &mut meter)?
+    } else {
+        meter.allow(Some(FIRST_WORK));
+        let first = run(held, &mut meter);
+        meter.allow(None);
+        match first {
+            Err(MassError::Defect(MassDefect::StepControl { .. })) => {
+                let (v, e) = run(noise, &mut meter)?;
+                (v, e + noise * size)
+            }
+            done => done?,
+        }
+    };
+    Ok(Estimate { value, error })
 }
