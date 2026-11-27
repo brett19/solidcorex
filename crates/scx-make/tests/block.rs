@@ -5,9 +5,9 @@
 //! `scx_testkit::solid` (volume, area, centroid) and its own geometry: vertex positions,
 //! face planes, exact pcurves, the structure counts.
 //!
-//! There is no mass crate yet, so volume and area are read off the finished body's faces
-//! (the divergence theorem over each planar ring, taken about the frame's origin), and
-//! compared to `solid::block`.
+//! Volume and area are read by `scx_mass::mass` (relative accuracy as each test states, about the frame's
+//! origin) and compared to `solid::block`; each tolerance is also checked against the
+//! Estimate's error bound.
 
 #![allow(
     clippy::unwrap_used,
@@ -16,9 +16,12 @@
     clippy::float_cmp
 )]
 
+use scx_brep::op::Scratch;
 use scx_brep::{Brep, Document, EdgeShape, FaceId, FaceSide, UseGeom};
 use scx_curve::Curve2;
 use scx_make::{BlockFaces, Dimension, Made, MakeError, Refusal, block};
+use scx_mass::{MassSpec, RelAccuracy, mass};
+use scx_num::budget::{Budget, Stop};
 use scx_num::error::ErrorKind;
 use scx_num::frame::{Frame, Sense};
 use scx_num::units::{Length, Resolution};
@@ -98,29 +101,19 @@ fn ring(b: &Brep, id: FaceId) -> Vec<Point3> {
         .collect()
 }
 
-/// Volume and area from the faces: for a planar ring about `o` with unit normal `n`, area
-/// `A = |sum (p_i x p_{i+1})| / 2` and the divergence theorem gives `V = sum n.p0 A / 3`.
-fn volume_and_area(b: &Brep, f: &BlockFaces, o: Point3) -> (f64, f64) {
-    let (mut v, mut a) = (0.0, 0.0);
-    for id in all(f) {
-        let pts: Vec<Vec3> = ring(b, id).into_iter().map(|p| p - o).collect();
-        let mut twice = Vec3::ZERO;
-        for (p, q) in pts.iter().zip(pts.iter().cycle().skip(1)) {
-            twice += p.cross(*q);
-        }
-        let Surface::Plane(pl) = b.face(id).unwrap().surface() else {
-            panic!("not a plane")
-        };
-        let n: Vec3 = *pl.frame().z();
-        let area = 0.5 * twice.dot(n);
-        assert!(
-            area > 0.0,
-            "ring is counter-clockwise about the front normal"
-        );
-        a += area;
-        v += n.dot(pts[0]) * area / 3.0;
-    }
-    (v, a)
+/// The body's volume and area about `o` with their error estimates, by `scx_mass::mass` at
+/// relative accuracy `accuracy`: `(volume, its error, area, its error)`.
+fn volume_and_area(b: &Brep, o: Point3, accuracy: f64) -> (f64, f64, f64, f64) {
+    let spec = MassSpec::new(RelAccuracy::new(accuracy).unwrap()).with_about(o);
+    let m = mass(
+        b,
+        &spec,
+        &mut Scratch::new(),
+        &mut Budget::unlimited(),
+        &Stop::new(),
+    )
+    .unwrap();
+    (m.volume, m.error.volume, m.area, m.error.area)
 }
 
 /// The pin's rows: sides from 2e-4 to a 5e3 cube at 1e12.
@@ -161,13 +154,20 @@ fn boxes_far_from_the_origin_build_closed_and_valid() {
                             }
                         }
                     }
-                    let (vol, area) = volume_and_area(b, &m.faces, Point3::new(c, c, c));
-                    let truth = solid::block(s, s, s).unwrap();
+                    // The tolerance, and the Estimate's error bound within it; the
+                    // accuracy asked is the tolerance (the far rows round at `c eps / s`).
                     let slack = 1e-9 + 4.0 * c * f64::EPSILON / s;
+                    let (vol, vol_err, area, area_err) =
+                        volume_and_area(b, Point3::new(c, c, c), slack.min(1.0));
+                    let truth = solid::block(s, s, s).unwrap();
                     if (vol / truth.volume() - 1.0).abs() > slack
                         || (area / truth.area - 1.0).abs() > slack
+                        || vol_err > slack * truth.volume()
+                        || area_err > slack * truth.area
                     {
-                        failures.push(format!("box {s:e} at {c:e}: V {vol:e} A {area:e}"));
+                        failures.push(format!(
+                            "box {s:e} at {c:e}: V {vol:e} (err {vol_err:e}) A {area:e} (err {area_err:e})"
+                        ));
                     }
                 }
             }
@@ -311,13 +311,17 @@ fn a_rotated_block_matches_the_closed_form_and_its_roles() {
         z: z.to_array(),
     };
     let placed = truth.place(&tf);
-    let (vol, area) = volume_and_area(b, &m.faces, frame.origin());
+    let (vol, vol_err, area, area_err) = volume_and_area(b, frame.origin(), 1e-13);
     assert!(
-        (vol / placed.volume() - 1.0).abs() < 1e-13,
-        "{vol} {}",
+        (vol / placed.volume() - 1.0).abs() < 1e-13 && vol_err < 1e-13 * placed.volume(),
+        "{vol} (err {vol_err:e}) {}",
         placed.volume()
     );
-    assert!((area / placed.area - 1.0).abs() < 1e-13);
+    assert!(
+        (area / placed.area - 1.0).abs() < 1e-13 && area_err < 1e-13 * placed.area,
+        "{area} (err {area_err:e}) {}",
+        placed.area
+    );
     let centroid = placed.moments.centroid();
     let mean = corners.iter().fold(Vec3::ZERO, |s, p| s + p.to_vec()) / 8.0;
     for (a, t) in mean.to_array().into_iter().zip(centroid) {

@@ -31,6 +31,10 @@ scx-p21 = { path = "../scx-p21" }
 scx-testkit = { path = "../scx-testkit", features = ["bodies"] }
 # The bodies the testkit generates (`t_bodies`).
 scx-brep = { path = "../scx-brep" }
+# The step-4 outcome difftest (`t_slice`): the constructors scx has, and the encoding its
+# run-twice check compares.
+scx-make = { path = "../scx-make" }
+scx-record = { path = "../scx-record" }
 # The mass properties against the pin's (`t_mass`).
 scx-mass = { path = "../scx-mass" }
 

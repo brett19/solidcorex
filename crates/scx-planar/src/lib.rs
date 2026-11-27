@@ -1,7 +1,8 @@
 // Written for solidcorex. Apache-2.0.
 //! solidcorex layer 2: planar profiles of lines and circular arcs (research 72 §4).
 //!
-//! - [`Segment`]: a line or an arc between two given points;
+//! - [`Segment`]: a line or an arc between two given points, or a whole circle (a loop
+//!   on its own);
 //! - [`Region::new`]: an outer loop and holes, validated once: closed within the
 //!   resolution, no two segments crossing or touching away from a shared joint, holes
 //!   inside the outer loop and apart; the outer loop is made counter-clockwise and the

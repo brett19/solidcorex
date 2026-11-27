@@ -1,0 +1,1710 @@
+// Written for solidcorex. Apache-2.0.
+//! The step-4 outcome difftest (research 72 §8.1, task DT1): every T12 recipe built in scx
+//! (MK, then BO) and in the pin (its `api` primitives and Booleans), each side judged against
+//! truth: the recipe's outcome, the closed-form volume and area of T9, the topology T12
+//! states, the T10 classification oracle, validity, the lineage of the `issue_1462` boxes and
+//! run-twice determinism.
+//!
+//! **scx.** Most of the operations are not written yet. Each check scx cannot run answers a
+//! typed [`NotYet`] naming the missing piece and its task (MK2, BO, MA1, ...), so DT2 and
+//! DT3 replace one arm at a time: today only [`scx_make::block`] runs, for the block
+//! constructors (outcome, topology, determinism by the `scx-record` encoding). Every check
+//! scx runs must pass.
+//!
+//! **The pin.** It runs every recipe and is judged against truth, never the other way. A
+//! check where it contradicts truth is a finding; each finding must be covered by a
+//! [`SliceDefect`] in `pin_defects.rs` whose predicate on the recipe's inputs selects it and
+//! whose check confirms the recorded contradiction still holds. An entry that covers no
+//! finding, or whose predicate selects a recipe the pin gets right, fails: the record stays
+//! exact (a classification entry, being sampled, is counted there instead). It is a side
+//! record, never filed upstream.
+//!
+//! **Classification.** 1,000 seeded points in the oracle's box grown 10%, plus a seeded
+//! subset of at most 1,000 of T10's probes.
+//! Points T10 calls certain must classify on that side; points in its band are counted, not
+//! judged (72 §12 row 7). The recipes where the band holds more than 5% of the box points
+//! are printed.
+//!
+//! **Counts printed, never compared.** The pin's face, edge and vertex counts record SMLib's
+//! seam and merge choices (72 §8.1), so they are printed beside truth's patch counts.
+//!
+//! The test prints `difftest t_slice: <n> inputs ...` like the other difftests, then one
+//! line per side.
+
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::fmt::Write as _;
+use std::panic::{AssertUnwindSafe, catch_unwind};
+
+use scx_num::fmath::{atan2, hypot};
+use scx_num::hash::mix;
+use scx_testkit::analytic::Frame as TFrame;
+use scx_testkit::csg::{Csg, ProbeSpec, Side, box_points};
+use scx_testkit::profile::Seg;
+use scx_testkit::recipe::{
+    self, BoxFace, Dimension, Invariant, Kind, Op, Outcome, Part, Recipe, Refusal, Shape, Topology,
+};
+
+use solidcore::boolean::api_brep::{boolean_difference, boolean_intersection, boolean_union};
+use solidcore::curve::curve::Curve;
+use solidcore::error::ErrorKind;
+use solidcore::geom::attribute::{Attribute, Behavior};
+use solidcore::geom::axis2_placement::Axis2Placement;
+use solidcore::mass::integrator::properties::{brep_area, brep_volume_default, face_area};
+use solidcore::math::{Point3, Vec3};
+use solidcore::primitive::api_curves::{create_arc, create_line_segment};
+use solidcore::primitive::api_primitives as ap;
+use solidcore::query::brep::BrepClassifier;
+use solidcore::sweep::api_brep::create_linear_sweep;
+use solidcore::topology::Brep as PinBrep;
+use solidcore::topology::brep::p2::is_manifold_solid;
+use solidcore::topology::brep::p5::transform;
+use solidcore::topology::integrity;
+use solidcore::{EntityRef, Kernel, Point2};
+
+use crate::pin_defects;
+
+/// The document's resolution `c` in millimetres: scx's `Resolution::DEFAULT` and the pin's
+/// system zone, so both sides and the recipes near it share one value.
+pub const RES: f64 = 1e-5;
+/// T10's band half-width for coincidence `c`: a point's box `p +- delta` reaches every point
+/// within `c` of it (`sqrt(3) c`).
+const DELTA: f64 = 1.732_050_807_568_877_2 * RES;
+/// The pin's requested accuracy for volume and area (72 §8.1: `brep_volume(1e-6)`).
+const PIN_ACCURACY: f64 = 1e-6;
+/// The seed of every case: one fixed value, mixed with the recipe's name.
+const SEED: u64 = 0x5_11CE;
+/// Seeded points per case.
+const POINTS: usize = 1_000;
+/// The most boundary probes per case (a seeded subset when a recipe has more).
+const PROBES: usize = 1_000;
+/// How far a pin face's samples may lie from an operand's surface and still be on it.
+const SHEET_TOL: f64 = 1e-6;
+/// The first attribute id the lineage tags use (the pin's `issue_1462` tests' base).
+const TAG_BASE: u64 = 10_007;
+
+// ---------------------------------------------------------------------------------------
+// What a check is, and what scx cannot run yet
+
+/// A row of 72 §8.1.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Check {
+    /// Built, refused or unsupported, with the cause.
+    Outcome,
+    /// T9's volume.
+    Volume,
+    /// T9's area.
+    Area,
+    /// Solid regions, shells, genus and the smooth patches.
+    Topology,
+    /// T10's certain points.
+    Classification,
+    /// The contract check (scx) or the integrity check (the pin).
+    Valid,
+    /// Two fins per edge, one fan per vertex.
+    Manifold,
+    /// T13's mesh invariants.
+    Mesh,
+    /// Run twice, equal in bits.
+    Deterministic,
+    /// The `issue_1462` boxes' face origins.
+    Lineage,
+    /// No edge names a vertex the body lacks.
+    NoDanglingVertices,
+    /// `Report::work`, against the committed baseline.
+    Work,
+}
+
+impl Check {
+    const ALL: [Check; 12] = [
+        Check::Outcome,
+        Check::Volume,
+        Check::Area,
+        Check::Topology,
+        Check::Classification,
+        Check::Valid,
+        Check::Manifold,
+        Check::Mesh,
+        Check::Deterministic,
+        Check::Lineage,
+        Check::NoDanglingVertices,
+        Check::Work,
+    ];
+
+    fn of(i: Invariant) -> Check {
+        match i {
+            Invariant::Valid => Check::Valid,
+            Invariant::Manifold => Check::Manifold,
+            Invariant::Volume => Check::Volume,
+            Invariant::Area => Check::Area,
+            Invariant::Topology => Check::Topology,
+            Invariant::Classification => Check::Classification,
+            Invariant::Mesh => Check::Mesh,
+            Invariant::Deterministic => Check::Deterministic,
+            Invariant::Lineage => Check::Lineage,
+            Invariant::NoDanglingVertices => Check::NoDanglingVertices,
+        }
+    }
+}
+
+/// A constructor scx does not have yet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Primitive {
+    /// `scx_make::cylinder` (MK2).
+    Cylinder,
+    /// `scx_make::cone` (MK2).
+    Cone,
+    /// `scx_make::sphere` (MK2).
+    Sphere,
+    /// `scx_make::torus` (MK2).
+    Torus,
+    /// `scx_make::extrusion` (MK3).
+    Extrusion,
+}
+
+/// Why scx cannot run a check yet: the missing piece, by the task that adds it. DT2 and DT3
+/// replace an arm with the real call when its task lands; [`NotYet::task`] names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum NotYet {
+    /// A constructor (MK2, MK3).
+    Make(Primitive),
+    /// The Boolean (BO).
+    Boolean,
+    /// `scx_mass::mass` (MA1).
+    Mass,
+    /// Point classification against a body (BQ).
+    Classify,
+    /// The tessellator (TS).
+    Mesh,
+    /// `scx_check::contract` (CK1).
+    Contract,
+    /// `Report::work` and its baseline (BO6).
+    Work,
+    /// The Boolean's `Changes` (BO).
+    Lineage,
+}
+
+impl NotYet {
+    /// The 72 task that lifts it.
+    pub fn task(self) -> &'static str {
+        match self {
+            NotYet::Make(Primitive::Extrusion) => "MK3",
+            NotYet::Make(_) => "MK2",
+            NotYet::Boolean | NotYet::Lineage => "BO",
+            NotYet::Mass => "MA1",
+            NotYet::Classify => "BQ",
+            NotYet::Mesh => "TS",
+            NotYet::Contract => "CK1",
+            NotYet::Work => "BO6",
+        }
+    }
+}
+
+/// The checks a recipe asks for: the outcome always, the recipe's invariants where a body
+/// is (or may be) built, and the work record for every case scx runs (72 §8.1's last row).
+fn checks_of(r: &Recipe) -> BTreeSet<Check> {
+    let mut c: BTreeSet<Check> = BTreeSet::from([Check::Outcome, Check::Work]);
+    let built = matches!(r.outcome, Outcome::Built(_) | Outcome::Open(_));
+    if built {
+        c.extend(r.invariants.iter().map(|&i| Check::of(i)));
+    }
+    c
+}
+
+// ---------------------------------------------------------------------------------------
+// The case's inputs: truth's points
+
+/// The recipe's seed, from its name (adding a recipe changes no other case's points).
+fn case_seed(r: &Recipe) -> u64 {
+    let words: Vec<u64> = core::iter::once(SEED)
+        .chain(r.name.bytes().map(u64::from))
+        .collect();
+    mix(&words)
+}
+
+/// The points one case classifies, with T10's side for each.
+pub struct Points {
+    /// The points: the box points first, then the probes.
+    pub at: Vec<[f64; 3]>,
+    /// T10's side of each.
+    pub side: Vec<Side>,
+    /// How many of `at` are box points.
+    pub boxed: usize,
+    /// The oracle, for how far a misclassified point lies from the boundary.
+    pub csg: Option<Csg>,
+}
+
+fn points(csg: &Csg, seed: u64) -> Points {
+    let mut at = match csg.bounds() {
+        Some((lo, hi)) => box_points(lo, hi, 0.1, POINTS, mix(&[seed, 0])),
+        None => Vec::new(),
+    };
+    let boxed = at.len();
+    let spec = ProbeSpec {
+        seed: mix(&[seed, 1]),
+        per_face: 4,
+        coincidence: RES,
+        extent: 5.0,
+    };
+    // A seeded subset of at most `PROBES`: the probes number up to ~12k on the big plates, and
+    // each costs the pin a classification on both runs.
+    let mut probes: Vec<(u64, [f64; 3])> = csg
+        .probes(&spec)
+        .into_iter()
+        .enumerate()
+        .map(|(i, p)| (mix(&[seed, 2, i as u64]), p.point))
+        .collect();
+    probes.sort_by_key(|&(k, _)| k);
+    at.extend(probes.into_iter().take(PROBES).map(|(_, p)| p));
+    let side = at.iter().map(|&p| csg.side(p, DELTA)).collect();
+    Points {
+        at,
+        side,
+        boxed,
+        csg: Some(csg.clone()),
+    }
+}
+
+// ---------------------------------------------------------------------------------------
+// The operands' surfaces: sheets, for patches and lineage on the pin's body
+
+/// A part's boundary surface, in the part's own frame.
+#[derive(Clone, Copy, Debug)]
+enum SheetGeom {
+    /// `n . l = d`, `n` unit.
+    Plane { n: [f64; 3], d: f64 },
+    /// The cylinder about the axis through `(c, z)` along `z`.
+    Cylinder { c: [f64; 2], r: f64 },
+    /// The cone through radius `r0` at `z = 0` and `r1` at `z = h`, about `z`.
+    Cone { r0: f64, r1: f64, h: f64 },
+    /// The sphere about the origin.
+    Sphere { r: f64 },
+    /// The torus about `z`.
+    Torus { major: f64, minor: f64 },
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Sheet {
+    frame: TFrame,
+    geom: SheetGeom,
+    kind: Kind,
+    /// The part it bounds, `0` the base.
+    part: usize,
+    /// For a block, which face.
+    role: Option<BoxFace>,
+}
+
+fn local(f: &TFrame, p: [f64; 3]) -> [f64; 3] {
+    let q = [p[0] - f.origin[0], p[1] - f.origin[1], p[2] - f.origin[2]];
+    let dot = |a: [f64; 3]| a[0] * q[0] + a[1] * q[1] + a[2] * q[2];
+    [dot(f.x), dot(f.y), dot(f.z)]
+}
+
+impl Sheet {
+    fn distance(&self, p: [f64; 3]) -> f64 {
+        let l = local(&self.frame, p);
+        let rho = hypot(l[0], l[1]);
+        match self.geom {
+            SheetGeom::Plane { n, d } => n[0] * l[0] + n[1] * l[1] + n[2] * l[2] - d,
+            SheetGeom::Cylinder { c, r } => hypot(l[0] - c[0], l[1] - c[1]) - r,
+            SheetGeom::Cone { r0, r1, h } => {
+                let s = (r1 - r0) / h;
+                // either nappe: the pin's cone surface runs past its apex
+                (rho - (r0 + s * l[2]).abs()) / hypot(1.0, s)
+            }
+            SheetGeom::Sphere { r } => hypot(rho, l[2]) - r,
+            SheetGeom::Torus { major, minor } => hypot(rho - major, l[2]) - minor,
+        }
+    }
+}
+
+/// Whether two operands have parallel planes at most `c` apart but not coincident (past
+/// rounding, `1e-6 c`): the gap the
+/// merged points rule closes (72 §6.2).
+pub fn near_coplanar(r: &Recipe) -> bool {
+    let planes: Vec<(usize, [f64; 3], [f64; 3])> = sheets(r)
+        .iter()
+        .filter_map(|s| match s.geom {
+            SheetGeom::Plane { n, d } => {
+                let f = &s.frame;
+                let w = |i: usize| n[0] * f.x[i] + n[1] * f.y[i] + n[2] * f.z[i];
+                let nw = [w(0), w(1), w(2)];
+                let at = [0, 1, 2].map(|i| f.origin[i] + d * nw[i]);
+                Some((s.part, nw, at))
+            }
+            _ => None,
+        })
+        .collect();
+    let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    planes.iter().enumerate().any(|(i, &(pa, na, a))| {
+        planes[i + 1..].iter().any(|&(pb, nb, b)| {
+            let gap = dot(na, [b[0] - a[0], b[1] - a[1], b[2] - a[2]]).abs();
+            pa != pb && dot(na, nb).abs() > 1.0 - 1e-12 && gap > 1e-6 * RES && gap <= RES
+        })
+    })
+}
+
+/// Every operand's sheets, base first, a block's in [`BoxFace`] order.
+fn sheets(r: &Recipe) -> Vec<Sheet> {
+    let mut v = Vec::new();
+    for (part, p) in r.parts().enumerate() {
+        let mut add = |geom, kind, role| {
+            v.push(Sheet {
+                frame: p.frame,
+                geom,
+                kind,
+                part,
+                role,
+            });
+        };
+        let plane = |n: [f64; 3], d: f64| SheetGeom::Plane { n, d };
+        match &p.shape {
+            Shape::Block { size } => {
+                let roles = [
+                    (BoxFace::Bottom, [0.0, 0.0, 1.0], 0.0),
+                    (BoxFace::Top, [0.0, 0.0, 1.0], size[2]),
+                    (BoxFace::Front, [0.0, 1.0, 0.0], 0.0),
+                    (BoxFace::Right, [1.0, 0.0, 0.0], size[0]),
+                    (BoxFace::Back, [0.0, 1.0, 0.0], size[1]),
+                    (BoxFace::Left, [1.0, 0.0, 0.0], 0.0),
+                ];
+                for (role, n, d) in roles {
+                    add(plane(n, d), Kind::Plane, Some(role));
+                }
+            }
+            Shape::Cylinder { radius, height } => {
+                add(
+                    SheetGeom::Cylinder {
+                        c: [0.0, 0.0],
+                        r: *radius,
+                    },
+                    Kind::Cylinder,
+                    None,
+                );
+                add(plane([0.0, 0.0, 1.0], 0.0), Kind::Plane, None);
+                add(plane([0.0, 0.0, 1.0], *height), Kind::Plane, None);
+            }
+            Shape::Cone { radii, height } => {
+                add(
+                    SheetGeom::Cone {
+                        r0: radii[0],
+                        r1: radii[1],
+                        h: *height,
+                    },
+                    Kind::Cone,
+                    None,
+                );
+                for (r, z) in [(radii[0], 0.0), (radii[1], *height)] {
+                    if r > 0.0 {
+                        add(plane([0.0, 0.0, 1.0], z), Kind::Plane, None);
+                    }
+                }
+            }
+            Shape::Sphere { radius } => add(SheetGeom::Sphere { r: *radius }, Kind::Sphere, None),
+            Shape::Torus { major, minor } => add(
+                SheetGeom::Torus {
+                    major: *major,
+                    minor: *minor,
+                },
+                Kind::Torus,
+                None,
+            ),
+            Shape::Extrusion {
+                outer,
+                holes,
+                height,
+            } => {
+                for s in outer.iter().chain(holes.iter().flatten()) {
+                    match *s {
+                        Seg::Line { start, end } => {
+                            let (dx, dy) = (end[0] - start[0], end[1] - start[1]);
+                            let len = hypot(dx, dy);
+                            let n = [dy / len, -dx / len, 0.0];
+                            add(
+                                plane(n, n[0] * start[0] + n[1] * start[1]),
+                                Kind::Plane,
+                                None,
+                            );
+                        }
+                        Seg::Arc { centre, start, .. } => add(
+                            SheetGeom::Cylinder {
+                                c: centre,
+                                r: hypot(start[0] - centre[0], start[1] - centre[1]),
+                            },
+                            Kind::Cylinder,
+                            None,
+                        ),
+                    }
+                }
+                add(plane([0.0, 0.0, 1.0], 0.0), Kind::Plane, None);
+                add(plane([0.0, 0.0, 1.0], *height), Kind::Plane, None);
+            }
+        }
+    }
+    v
+}
+
+/// The first sheet every sample lies on. Two operands' coincident surfaces always resolve
+/// to the first of them, so faces on one surface share an index.
+fn sheet_of(sheets: &[Sheet], samples: &[[f64; 3]]) -> Option<usize> {
+    if samples.is_empty() {
+        return None;
+    }
+    sheets
+        .iter()
+        .position(|s| samples.iter().all(|&p| s.distance(p).abs() <= SHEET_TOL))
+}
+
+// ---------------------------------------------------------------------------------------
+// The pin's side
+
+fn p3(a: [f64; 3]) -> Point3 {
+    Point3::new(a[0], a[1], a[2])
+}
+
+fn is_world(f: &TFrame) -> bool {
+    f.x == [1.0, 0.0, 0.0] && f.y == [0.0, 1.0, 0.0] && f.z == [0.0, 0.0, 1.0]
+}
+
+/// The pin's extrusion: the profile's curves at `z = o.z`, swept along `z`. A clockwise arc
+/// is the same arc written counter-clockwise from its end.
+fn pin_extrusion(
+    k: &mut Kernel,
+    o: [f64; 3],
+    loops: &[&Vec<Seg>],
+    height: f64,
+) -> solidcore::Result<PinBrep> {
+    let at = |q: [f64; 2]| Point3::new(o[0] + q[0], o[1] + q[1], o[2]);
+    let mut curves = Vec::new();
+    for s in loops.iter().copied().flatten() {
+        curves.push(match *s {
+            Seg::Line { start, end } => Curve::from(create_line_segment(at(start), at(end))?),
+            Seg::Arc {
+                centre,
+                start,
+                end,
+                ccw,
+            } => {
+                let deg = |q: [f64; 2]| atan2(q[1] - centre[1], q[0] - centre[0]).to_degrees();
+                let r = hypot(start[0] - centre[0], start[1] - centre[1]);
+                let (a, mut b) = if ccw {
+                    (deg(start), deg(end))
+                } else {
+                    (deg(end), deg(start))
+                };
+                if b <= a {
+                    b += 360.0;
+                }
+                Curve::from(create_arc(at(centre), r, a, b)?)
+            }
+        });
+    }
+    let refs: Vec<Option<&Curve>> = curves.iter().map(Some).collect();
+    create_linear_sweep(k, &refs, Vec3::new(0.0, 0.0, 1.0), height, true)
+}
+
+/// A part in the pin: built at its origin when its frame has the world's axes (as the pin's
+/// own tests build), else at the world's origin and placed by `transform`.
+fn pin_part(k: &mut Kernel, part: &Part) -> solidcore::Result<PinBrep> {
+    let world = is_world(&part.frame);
+    let o = if world {
+        part.frame.origin
+    } else {
+        [0.0, 0.0, 0.0]
+    };
+    let mut b = match &part.shape {
+        Shape::Block { size } => ap::create_box(k, p3(o), size[0], size[1], size[2]),
+        Shape::Cylinder { radius, height } => ap::create_cylinder(k, p3(o), *radius, *height),
+        Shape::Cone { radii, height } => ap::create_cone(k, p3(o), radii[0], radii[1], *height),
+        Shape::Sphere { radius } => ap::create_sphere(k, p3(o), *radius),
+        Shape::Torus { major, minor } => ap::create_torus(k, p3(o), *major, *minor),
+        Shape::Extrusion {
+            outer,
+            holes,
+            height,
+        } => {
+            let loops: Vec<&Vec<Seg>> = core::iter::once(outer).chain(holes).collect();
+            pin_extrusion(k, o, &loops, *height)
+        }
+    }?;
+    if !world {
+        let f = &part.frame;
+        let place = Axis2Placement::new(p3(f.origin), p3(f.x), p3(f.y));
+        transform(k, &mut b, &place, None, false)?;
+    }
+    Ok(b)
+}
+
+/// How the pin answered.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PinOutcome {
+    /// A body.
+    Body,
+    /// An error, at the stage named (`make 0` for the base, `step 1` for the first Boolean).
+    Error {
+        /// Where.
+        stage: String,
+        /// The pin's kind.
+        kind: ErrorKind,
+        /// Its message.
+        text: String,
+    },
+    /// A panic, at the stage named.
+    Panic {
+        /// Where.
+        stage: String,
+    },
+}
+
+impl PinOutcome {
+    /// Whether the pin answered with an error of `kind`.
+    pub fn is_error(&self, kind: ErrorKind) -> bool {
+        matches!(self, PinOutcome::Error { kind: k, .. } if *k == kind)
+    }
+}
+
+/// How the pin classifies one point.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PinSide {
+    /// Inside a solid region.
+    In,
+    /// In a void region.
+    Out,
+    /// On a face, edge or vertex.
+    On,
+    /// It failed.
+    Failed,
+}
+
+/// The pin's topology, as truth counts it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PinTopo {
+    /// Non-void regions other than the infinite one.
+    pub solid_regions: u32,
+    /// Face components joined across two-fin edges: the shells cut apart at pinches.
+    pub shells: u32,
+    /// Total genus over the components, or why it has none (an odd Euler characteristic).
+    pub genus: Result<u32, String>,
+    /// Faces, edges, vertices: printed only.
+    pub fev: [usize; 3],
+    /// Smooth patches by kind: faces on one operand surface joined across two-fin edges.
+    pub patches: BTreeMap<Kind, u32>,
+    /// Faces that lie on no operand's surface.
+    pub off_sheet: u32,
+}
+
+/// One result face (patch) and its origins, for the lineage check.
+pub type PinFace = (f64, Vec<(u8, BoxFace)>);
+
+/// What the pin's body is.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PinFacts {
+    /// `brep_volume_default(1e-6)`.
+    pub volume: Result<f64, String>,
+    /// `brep_area(1e-6)`.
+    pub area: Result<f64, String>,
+    /// The counts.
+    pub topo: Result<PinTopo, String>,
+    /// `is_manifold_solid`.
+    pub manifold: Result<bool, String>,
+    /// `integrity::check`.
+    pub integrity: Result<(), String>,
+    /// Edges naming a vertex the body does not have.
+    pub dangling: usize,
+    /// Each point's side, in [`Points::at`]'s order.
+    pub sides: Vec<PinSide>,
+    /// The result's patches by area and origins, where the recipe states a lineage.
+    pub lineage: Option<Result<Vec<PinFace>, String>>,
+    /// Every vertex's point, in list order (for the run-twice comparison).
+    pub vertices: Vec<[u64; 3]>,
+}
+
+/// One run of the pin on a recipe.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PinRun {
+    /// What it answered.
+    pub outcome: PinOutcome,
+    /// What its body is, when it built one.
+    pub facts: Option<PinFacts>,
+}
+
+fn text(e: &solidcore::SolidError) -> String {
+    let s = e.to_string();
+    s.chars().take(160).collect()
+}
+
+/// Tags each face of a block operand with its [`BoxFace`], found from the part's sheets.
+fn tag_box(b: &mut PinBrep, k: &Kernel, operand: u8, all: &[Sheet]) -> Result<(), String> {
+    let mine: Vec<Sheet> = all
+        .iter()
+        .filter(|s| s.part == usize::from(operand))
+        .copied()
+        .collect();
+    for f in b.face_list().to_vec() {
+        let samples = face_samples(k, b, f);
+        let role = sheet_of(&mine, &samples)
+            .and_then(|i| mine[i].role)
+            .ok_or_else(|| format!("operand {operand}: a face on no block plane"))?;
+        let id = TAG_BASE + u64::from(operand) * 10 + role as u64;
+        b.add_attribute(
+            EntityRef::Face(f),
+            Attribute::long(id, id as i64, Behavior::Copy),
+        )
+        .map_err(|e| text(&e))?;
+    }
+    Ok(())
+}
+
+const ROLES: [BoxFace; 6] = [
+    BoxFace::Bottom,
+    BoxFace::Top,
+    BoxFace::Front,
+    BoxFace::Right,
+    BoxFace::Back,
+    BoxFace::Left,
+];
+
+fn face_origins(b: &PinBrep, f: solidcore::topology::FaceId) -> Vec<(u8, BoxFace)> {
+    b.entity_attributes(EntityRef::Face(f))
+        .into_iter()
+        .filter(|(_, a)| a.attribute_id() >= TAG_BASE && a.attribute_id() < TAG_BASE + 20)
+        .map(|(_, a)| {
+            let raw = a.attribute_id() - TAG_BASE;
+            ((raw / 10) as u8, ROLES[(raw % 10) as usize])
+        })
+        .collect()
+}
+
+/// Nine points of the face's surface over its uv box (a sample the surface cannot evaluate
+/// is skipped).
+fn face_samples(k: &Kernel, b: &PinBrep, f: solidcore::topology::FaceId) -> Vec<[f64; 3]> {
+    let Ok(face) = b.face(f) else {
+        return Vec::new();
+    };
+    let Some(s) = face.surface.as_ref() else {
+        return Vec::new();
+    };
+    let (u, v) = (face.uv_domain.u_interval(), face.uv_domain.v_interval());
+    let mut out = Vec::new();
+    for i in 0..3 {
+        for j in 0..3 {
+            let t = [0.1, 0.5, 0.9];
+            let uv = Point2::new(u.min() + t[i] * u.length(), v.min() + t[j] * v.length());
+            if let Ok(p) = s.evaluate_point(k, uv) {
+                out.push([p.x, p.y, p.z]);
+            }
+        }
+    }
+    out
+}
+
+struct Uf(Vec<usize>);
+
+impl Uf {
+    fn new(n: usize) -> Uf {
+        Uf((0..n).collect())
+    }
+    fn find(&mut self, mut i: usize) -> usize {
+        while self.0[i] != i {
+            self.0[i] = self.0[self.0[i]];
+            i = self.0[i];
+        }
+        i
+    }
+    fn join(&mut self, a: usize, b: usize) {
+        let (a, b) = (self.find(a), self.find(b));
+        if a != b {
+            self.0[a.max(b)] = a.min(b);
+        }
+    }
+}
+
+/// The pin body's faces, each with its sheet, its loops and the edges its loops use; and
+/// for each edge, the faces that use it (once per use).
+struct PinCells {
+    faces: Vec<solidcore::topology::FaceId>,
+    sheet: Vec<Option<usize>>,
+    loops: Vec<usize>,
+    edges: Vec<Vec<solidcore::topology::EdgeId>>,
+    users: BTreeMap<solidcore::topology::EdgeId, Vec<usize>>,
+}
+
+fn pin_cells(k: &Kernel, b: &PinBrep, all: &[Sheet]) -> solidcore::Result<PinCells> {
+    let faces: Vec<_> = b.faces().ids().collect();
+    let mut cells = PinCells {
+        sheet: Vec::new(),
+        loops: Vec::new(),
+        edges: Vec::new(),
+        users: BTreeMap::new(),
+        faces: faces.clone(),
+    };
+    for (i, &f) in faces.iter().enumerate() {
+        let face = b.face(f)?;
+        cells.sheet.push(sheet_of(all, &face_samples(k, b, f)));
+        cells.loops.push(face.loops.len());
+        let mut es = Vec::new();
+        for &l in &face.loops {
+            for le in &b.loop_(l)?.edges {
+                es.push(le.edge);
+                cells.users.entry(le.edge).or_default().push(i);
+            }
+        }
+        cells.edges.push(es);
+    }
+    Ok(cells)
+}
+
+fn pin_topology(b: &PinBrep, cells: &PinCells, all: &[Sheet]) -> solidcore::Result<PinTopo> {
+    let infinite = b.infinite_region();
+    let solid_regions = b
+        .regions()
+        .iter()
+        .filter(|(id, r)| r.in_brep && Some(*id) != infinite && r.is_void == 0)
+        .count() as u32;
+    let n = cells.faces.len();
+    // components across two-fin edges, and patches across two-fin edges on one sheet
+    let mut comp = Uf::new(n);
+    let mut patch = Uf::new(n);
+    for users in cells.users.values() {
+        if let [a, c] = users.as_slice() {
+            comp.join(*a, *c);
+            if cells.sheet[*a].is_some() && cells.sheet[*a] == cells.sheet[*c] {
+                patch.join(*a, *c);
+            }
+        }
+    }
+    let mut chi: BTreeMap<usize, (BTreeSet<_>, BTreeSet<_>, i64)> = BTreeMap::new();
+    for i in 0..n {
+        let root = comp.find(i);
+        let e = chi.entry(root).or_default();
+        let torus = cells.sheet[i].is_some_and(|s| all[s].kind == Kind::Torus);
+        let g = i64::from(cells.loops[i] == 0 && torus);
+        e.2 += 2 - 2 * g - cells.loops[i] as i64;
+        for &edge in &cells.edges[i] {
+            e.1.insert(edge);
+            for v in b.edge(edge)?.vertices {
+                e.0.insert(v);
+            }
+        }
+    }
+    let mut genus = Ok(0u32);
+    for (vs, es, f) in chi.values() {
+        let x = vs.len() as i64 - es.len() as i64 + f;
+        genus = genus.and_then(|g| {
+            if x % 2 != 0 || x > 2 {
+                Err(format!("a component's Euler characteristic is {x}"))
+            } else {
+                Ok(g + ((2 - x) / 2) as u32)
+            }
+        });
+    }
+    let mut patches = BTreeMap::new();
+    let mut off_sheet = 0;
+    let mut seen = BTreeSet::new();
+    for i in 0..n {
+        match cells.sheet[i] {
+            Some(s) => {
+                if seen.insert(patch.find(i)) {
+                    *patches.entry(all[s].kind).or_insert(0) += 1;
+                }
+            }
+            None => off_sheet += 1,
+        }
+    }
+    Ok(PinTopo {
+        solid_regions,
+        shells: chi.len() as u32,
+        genus,
+        fev: [n, b.edges().len(), b.vertices().len()],
+        patches,
+        off_sheet,
+    })
+}
+
+fn pin_lineage(k: &Kernel, b: &mut PinBrep, cells: &PinCells) -> solidcore::Result<Vec<PinFace>> {
+    let n = cells.faces.len();
+    let mut patch = Uf::new(n);
+    for users in cells.users.values() {
+        if let [a, c] = users.as_slice()
+            && cells.sheet[*a].is_some()
+            && cells.sheet[*a] == cells.sheet[*c]
+        {
+            patch.join(*a, *c);
+        }
+    }
+    let mut by: BTreeMap<usize, (f64, BTreeSet<(u8, BoxFace)>)> = BTreeMap::new();
+    for i in 0..n {
+        let f = cells.faces[i];
+        let area = face_area(k, b, f, 1e-7)?;
+        let e = by.entry(patch.find(i)).or_default();
+        e.0 += area;
+        e.1.extend(face_origins(b, f));
+    }
+    Ok(by
+        .into_values()
+        .map(|(a, o)| (a, o.into_iter().collect()))
+        .collect())
+}
+
+fn pin_side(k: &Kernel, b: &PinBrep, c: &mut BrepClassifier<'_, '_>, p: [f64; 3]) -> PinSide {
+    match c.point_3d_classify(k, p3(p), RES, false) {
+        Ok(pc) => match pc.object() {
+            Some(EntityRef::Region(r)) => match b.region(r) {
+                Ok(reg) if reg.is_void() == 0 => PinSide::In,
+                Ok(_) => PinSide::Out,
+                Err(_) => PinSide::Failed,
+            },
+            Some(EntityRef::Face(_) | EntityRef::Edge(_) | EntityRef::Vertex(_)) => PinSide::On,
+            _ => PinSide::Failed,
+        },
+        Err(_) => PinSide::Failed,
+    }
+}
+
+fn pin_facts(k: &Kernel, mut b: PinBrep, r: &Recipe, pts: &Points) -> PinFacts {
+    let all = sheets(r);
+    let volume = brep_volume_default(k, &mut b, PIN_ACCURACY).map_err(|e| text(&e));
+    let area = brep_area(k, &mut b, PIN_ACCURACY).map_err(|e| text(&e));
+    let cells = pin_cells(k, &b, &all);
+    let topo = cells
+        .as_ref()
+        .map_err(text)
+        .and_then(|c| pin_topology(&b, c, &all).map_err(|e| text(&e)));
+    let lineage = r.lineage.as_ref().map(|_| {
+        cells
+            .as_ref()
+            .map_err(text)
+            .and_then(|c| pin_lineage(k, &mut b, c).map_err(|e| text(&e)))
+    });
+    let manifold = is_manifold_solid(&b).map_err(|e| text(&e));
+    let integrity = integrity::check(&b).map_err(|e| text(&e));
+    let dangling = b
+        .edges()
+        .iter()
+        .filter(|(_, e)| e.vertices.iter().any(|&v| b.vertex(v).is_err()))
+        .count();
+    let mut classifier = BrepClassifier::of_brep(&b);
+    let sides = pts
+        .at
+        .iter()
+        .map(|&p| pin_side(k, &b, &mut classifier, p))
+        .collect();
+    let vertices = b
+        .vertex_list()
+        .iter()
+        .filter_map(|&v| b.vertex(v).ok())
+        .map(|v| {
+            [
+                v.point.x.to_bits(),
+                v.point.y.to_bits(),
+                v.point.z.to_bits(),
+            ]
+        })
+        .collect();
+    PinFacts {
+        volume,
+        area,
+        topo,
+        manifold,
+        integrity,
+        dangling,
+        sides,
+        lineage,
+        vertices,
+    }
+}
+
+/// The recipe on a fresh kernel: the parts, then each Boolean step on the running result.
+pub fn pin_run(r: &Recipe, pts: &Points) -> PinRun {
+    let mut k = Kernel::default();
+    let all = sheets(r);
+    let built = catch_unwind(AssertUnwindSafe(|| -> Result<PinBrep, PinOutcome> {
+        let fail = |stage: String| {
+            move |e: solidcore::SolidError| PinOutcome::Error {
+                stage,
+                kind: e.kind(),
+                text: text(&e),
+            }
+        };
+        let mut acc = pin_part(&mut k, &r.base).map_err(fail("make 0".into()))?;
+        for (i, s) in r.steps.iter().enumerate() {
+            let mut tool = pin_part(&mut k, &s.tool).map_err(fail(format!("make {}", i + 1)))?;
+            if i == 0 && r.lineage.is_some() {
+                let tag = |b: &mut PinBrep, k: &Kernel, o| {
+                    tag_box(b, k, o, &all).map_err(|text| PinOutcome::Error {
+                        stage: "tag".into(),
+                        kind: ErrorKind::Failed,
+                        text,
+                    })
+                };
+                tag(&mut acc, &k, 0)?;
+                tag(&mut tool, &k, 1)?;
+            }
+            let step = match s.op {
+                Op::Union => boolean_union(&mut k, acc, tool),
+                Op::Intersection => boolean_intersection(&mut k, acc, tool),
+                Op::Difference => boolean_difference(&mut k, acc, tool),
+            };
+            acc = step.map_err(fail(format!("step {}", i + 1)))?;
+        }
+        Ok(acc)
+    }));
+    match built {
+        Ok(Ok(b)) => {
+            let facts = catch_unwind(AssertUnwindSafe(|| pin_facts(&k, b, r, pts)));
+            match facts {
+                Ok(f) => PinRun {
+                    outcome: PinOutcome::Body,
+                    facts: Some(f),
+                },
+                Err(_) => PinRun {
+                    outcome: PinOutcome::Panic {
+                        stage: "facts".into(),
+                    },
+                    facts: None,
+                },
+            }
+        }
+        Ok(Err(o)) => PinRun {
+            outcome: o,
+            facts: None,
+        },
+        Err(_) => PinRun {
+            outcome: PinOutcome::Panic {
+                stage: "build".into(),
+            },
+            facts: None,
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------------------
+// Judging the pin against truth
+
+/// Where the pin contradicts truth on one check.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Finding {
+    /// The check.
+    pub check: Check,
+    /// What truth says and the pin answers.
+    pub what: String,
+}
+
+/// The pin's volume (or area) allowance: its requested accuracy, the recipe's slack and
+/// one rounding of the closed form.
+fn allowance(truth: f64, slack: f64) -> f64 {
+    PIN_ACCURACY * truth.abs() + slack + 1e-13 * truth.abs()
+}
+
+/// The rungs, in units of `c`, at which [`reach`] measures a point's distance.
+const RUNGS: [f64; 8] = [1.0, 1.5, 2.0, 2.5, 3.0, 10.0, 100.0, 1e4];
+
+/// The least rung `k` at which T10 puts `p` in the band of half-width `sqrt(3) k c`: an
+/// upper bound on `p`'s distance from the boundary, in units of `c` (infinite past 1e4).
+pub fn reach(csg: &Csg, p: [f64; 3]) -> f64 {
+    RUNGS
+        .iter()
+        .copied()
+        .find(|k| csg.side(p, DELTA * k) == Side::Band)
+        .unwrap_or(f64::INFINITY)
+}
+
+/// T10's certain points the pin puts elsewhere.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Misplaced {
+    /// How many.
+    pub count: usize,
+    /// The certain points.
+    pub certain: usize,
+    /// The largest [`reach`] among them.
+    pub reach: f64,
+    /// The first, described.
+    pub first: Option<String>,
+}
+
+/// The points T10 calls certain that the pin puts elsewhere.
+pub fn misplaced(pts: &Points, sides: &[PinSide]) -> Misplaced {
+    let mut m = Misplaced {
+        count: 0,
+        certain: 0,
+        reach: 0.0,
+        first: None,
+    };
+    for (i, (&t, &p)) in pts.side.iter().zip(sides).enumerate() {
+        let ok = match t {
+            Side::In => p == PinSide::In,
+            Side::Out => p == PinSide::Out,
+            Side::Band => continue,
+        };
+        m.certain += 1;
+        if !ok {
+            m.count += 1;
+            if let Some(c) = &pts.csg {
+                m.reach = m.reach.max(reach(c, pts.at[i]));
+            }
+            m.first
+                .get_or_insert_with(|| format!("{:?}: truth {t:?}, pin {p:?}", pts.at[i]));
+        }
+    }
+    m
+}
+
+fn judge_body(
+    r: &Recipe,
+    checks: &BTreeSet<Check>,
+    topology: Option<&Topology>,
+    f: &PinFacts,
+    pts: &Points,
+    out: &mut Vec<Finding>,
+) {
+    let mut find = |check, what: String| out.push(Finding { check, what });
+    if let Some(t) = r.truth {
+        if checks.contains(&Check::Volume) {
+            match &f.volume {
+                Ok(v) if (v - t.volume).abs() <= allowance(t.volume, t.slack) => {}
+                Ok(v) => find(
+                    Check::Volume,
+                    format!(
+                        "truth {}, pin {v} (relative {:.1e})",
+                        t.volume,
+                        (v - t.volume) / t.volume
+                    ),
+                ),
+                Err(e) => find(Check::Volume, format!("the pin's volume fails: {e}")),
+            }
+        }
+        if let (true, Some(a)) = (checks.contains(&Check::Area), t.area) {
+            let scale = scx_num::fmath::cbrt(t.volume.abs()).max(f64::MIN_POSITIVE);
+            match &f.area {
+                Ok(v) if (v - a).abs() <= allowance(a, t.slack / scale) => {}
+                Ok(v) => find(
+                    Check::Area,
+                    format!("truth {a}, pin {v} (relative {:.1e})", (v - a) / a),
+                ),
+                Err(e) => find(Check::Area, format!("the pin's area fails: {e}")),
+            }
+        }
+    }
+    if let (true, Some(t)) = (checks.contains(&Check::Topology), topology) {
+        match &f.topo {
+            Ok(p) => {
+                let mut bad = Vec::new();
+                if p.solid_regions != t.solid_regions {
+                    bad.push(format!(
+                        "solid regions truth {}, pin {}",
+                        t.solid_regions, p.solid_regions
+                    ));
+                }
+                if p.shells != t.shells {
+                    bad.push(format!("shells truth {}, pin {}", t.shells, p.shells));
+                }
+                match &p.genus {
+                    Ok(g) if *g == t.genus => {}
+                    Ok(g) => bad.push(format!("genus truth {}, pin {g}", t.genus)),
+                    Err(e) => bad.push(e.clone()),
+                }
+                if p.off_sheet > 0 {
+                    bad.push(format!("{} faces on no operand surface", p.off_sheet));
+                }
+                if let Some(c) = &t.cells {
+                    let mut want: BTreeMap<Kind, u32> = BTreeMap::new();
+                    for pc in &c.patches {
+                        *want.entry(pc.kind).or_insert(0) += pc.count;
+                    }
+                    if want != p.patches {
+                        bad.push(format!("patches truth {want:?}, pin {:?}", p.patches));
+                    }
+                }
+                if !bad.is_empty() {
+                    find(Check::Topology, bad.join("; "));
+                }
+            }
+            Err(e) => find(Check::Topology, format!("the pin's tables fail: {e}")),
+        }
+    }
+    if checks.contains(&Check::Classification) {
+        let m = misplaced(pts, &f.sides);
+        if m.count > 0 {
+            find(
+                Check::Classification,
+                format!(
+                    "{} of {} certain points, all within {} c; first {}",
+                    m.count,
+                    m.certain,
+                    m.reach,
+                    m.first.unwrap_or_default()
+                ),
+            );
+        }
+    }
+    if checks.contains(&Check::Valid)
+        && let Err(e) = &f.integrity
+    {
+        find(Check::Valid, format!("integrity: {e}"));
+    }
+    if checks.contains(&Check::Manifold) {
+        match &f.manifold {
+            Ok(true) => {}
+            Ok(false) => find(Check::Manifold, "is_manifold_solid says no".into()),
+            Err(e) => find(Check::Manifold, format!("is_manifold_solid fails: {e}")),
+        }
+    }
+    if checks.contains(&Check::NoDanglingVertices) && f.dangling > 0 {
+        find(
+            Check::NoDanglingVertices,
+            format!("{} edges name a missing vertex", f.dangling),
+        );
+    }
+    if let (true, Some(want)) = (checks.contains(&Check::Lineage), &r.lineage) {
+        match &f.lineage {
+            Some(Ok(got)) => {
+                if let Some(why) = lineage_differs(&want.faces, got) {
+                    find(Check::Lineage, why);
+                }
+            }
+            Some(Err(e)) => find(Check::Lineage, format!("the pin's face areas fail: {e}")),
+            None => find(Check::Lineage, "no lineage read".into()),
+        }
+    }
+}
+
+/// Whether the result's patches are the stated ones: equal origins and areas within 1e-6
+/// relative, as multisets.
+fn lineage_differs(want: &[recipe::FaceOrigin], got: &[PinFace]) -> Option<String> {
+    let mut left: Vec<&PinFace> = got.iter().collect();
+    for w in want {
+        let close = |(a, o): &&PinFace| {
+            *o == w.origins && (a - w.area).abs() <= 1e-6 * w.area.abs().max(1.0)
+        };
+        match left.iter().position(close) {
+            Some(i) => {
+                left.swap_remove(i);
+            }
+            None => {
+                return Some(format!(
+                    "no result face of area {} from {:?}; pin's {:?}",
+                    w.area, w.origins, got
+                ));
+            }
+        }
+    }
+    (!left.is_empty()).then(|| format!("result faces truth does not list: {left:?}"))
+}
+
+/// What the pin's two runs contradict of truth. An error on a case truth leaves unsupported
+/// or open is not a finding (the pin is not asked to build it).
+pub fn judge_pin(r: &Recipe, pts: &Points, runs: &[PinRun; 2]) -> Vec<Finding> {
+    let mut out = Vec::new();
+    let run = &runs[0];
+    let checks = checks_of(r);
+    if runs[0] != runs[1] && checks.contains(&Check::Deterministic) {
+        out.push(Finding {
+            check: Check::Deterministic,
+            what: "two runs differ".into(),
+        });
+    }
+    match (&r.outcome, &run.outcome) {
+        (Outcome::Refused(_), o) if o.is_error(ErrorKind::InvalidInput) => {}
+        (Outcome::Refused(why), o) => out.push(Finding {
+            check: Check::Outcome,
+            what: format!("truth refuses ({why:?}); pin {}", describe(o)),
+        }),
+        (Outcome::Built(_), PinOutcome::Body) => {}
+        (Outcome::Built(_), o) => out.push(Finding {
+            check: Check::Outcome,
+            what: format!("truth builds; pin {}", describe(o)),
+        }),
+        (Outcome::Unsupported(_) | Outcome::Open(_), _) => {}
+    }
+    if let Some(f) = &run.facts {
+        match &r.outcome {
+            Outcome::Built(t) => judge_body(r, &checks, Some(t), f, pts, &mut out),
+            // A body on a case truth leaves open or unsupported: judged where truth speaks.
+            Outcome::Open(_) | Outcome::Unsupported(_) => {
+                let mut c: BTreeSet<Check> =
+                    Invariant::BUILT.iter().map(|&i| Check::of(i)).collect();
+                c.extend(checks.iter().copied());
+                c.remove(&Check::Topology);
+                if matches!(r.outcome, Outcome::Unsupported(_)) {
+                    c.remove(&Check::Manifold);
+                }
+                judge_body(r, &c, None, f, pts, &mut out);
+            }
+            Outcome::Refused(_) => {}
+        }
+    }
+    out
+}
+
+fn describe(o: &PinOutcome) -> String {
+    match o {
+        PinOutcome::Body => "builds a body".into(),
+        PinOutcome::Error { stage, kind, text } => format!("errs at {stage}: {kind:?} ({text})"),
+        PinOutcome::Panic { stage } => format!("panics at {stage}"),
+    }
+}
+
+/// A recorded pin contradiction of truth (`pin_defects::slice`). `applies` selects the
+/// recipes by their inputs; `holds` confirms the pin's answer is still the one recorded.
+pub struct SliceDefect {
+    /// What the pin gets wrong, briefly.
+    pub reason: &'static str,
+    /// The check it fails.
+    pub check: Check,
+    /// The recipes it covers, by their inputs.
+    pub applies: fn(&Recipe) -> bool,
+    /// The recorded contradiction, still there, on the recipe's points and first run.
+    pub holds: fn(&Recipe, &Points, &PinRun) -> Result<(), String>,
+}
+
+// ---------------------------------------------------------------------------------------
+// The scx side
+
+/// What scx answers on one check.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Verdict {
+    /// It agrees with truth.
+    Pass,
+    /// It does not.
+    Fail(String),
+    /// It cannot run yet.
+    NotYet(NotYet),
+}
+
+fn mm(v: f64) -> scx_num::units::Length {
+    scx_num::units::Length::from_mm(v)
+}
+
+fn scx_frame(f: &TFrame) -> Option<scx_num::frame::Frame> {
+    use scx_num::vector3d::{Point3 as P, Vec3 as V};
+    scx_num::frame::Frame::new(
+        P::new(f.origin[0], f.origin[1], f.origin[2]),
+        V::new(f.z[0], f.z[1], f.z[2]),
+        V::new(f.x[0], f.x[1], f.x[2]),
+    )
+}
+
+/// The first piece scx lacks to build the recipe's body.
+fn scx_gap(r: &Recipe) -> Option<NotYet> {
+    let missing = |p: &Part| match p.shape {
+        Shape::Block { .. } => None,
+        Shape::Cylinder { .. } => Some(NotYet::Make(Primitive::Cylinder)),
+        Shape::Cone { .. } => Some(NotYet::Make(Primitive::Cone)),
+        Shape::Sphere { .. } => Some(NotYet::Make(Primitive::Sphere)),
+        Shape::Torus { .. } => Some(NotYet::Make(Primitive::Torus)),
+        Shape::Extrusion { .. } => Some(NotYet::Make(Primitive::Extrusion)),
+    };
+    r.parts()
+        .find_map(missing)
+        .or_else(|| (!r.is_constructor()).then_some(NotYet::Boolean))
+}
+
+fn scx_dimension(d: scx_make::Dimension) -> Dimension {
+    match d {
+        scx_make::Dimension::X => Dimension::X,
+        scx_make::Dimension::Y => Dimension::Y,
+        scx_make::Dimension::Z => Dimension::Z,
+        _ => Dimension::Height,
+    }
+}
+
+fn scx_build(
+    frame: &scx_num::frame::Frame,
+    p: &Part,
+) -> Result<scx_brep::Brep, scx_make::MakeError> {
+    let Shape::Block { size } = p.shape else {
+        unreachable!("scx_gap admits blocks only");
+    };
+    scx_make::block(frame, size.map(mm), &scx_brep::Document::default()).map(|m| m.body)
+}
+
+/// scx's topology, as truth counts it: solid regions, their shells, the genus from the
+/// Euler-Poincare relation, and the patch complex (faces joined across two-fin edges whose
+/// faces' surfaces are equal).
+fn scx_topology(b: &scx_brep::Brep, t: &Topology) -> Verdict {
+    use scx_surface::Surface;
+    let solid: Vec<_> = b.regions().filter(|r| r.is_solid()).collect();
+    let shells = solid.iter().map(|r| r.shells().count()).sum::<usize>() as u32;
+    let faces: Vec<_> = b.faces().collect();
+    let index: HashMap<_, _> = faces.iter().enumerate().map(|(i, f)| (f.id(), i)).collect();
+    let mut patch = Uf::new(faces.len());
+    for e in b.edges() {
+        let fins: Vec<_> = e.fins().collect();
+        if let [a, c] = fins.as_slice() {
+            let (a, c) = (index[&a.face], index[&c.face]);
+            if faces[a].surface() == faces[c].surface() {
+                patch.join(a, c);
+            }
+        }
+    }
+    let loops = |f: &scx_brep::Face<'_>| f.loops().len() as i64;
+    let genus_f = |f: &scx_brep::Face<'_>| {
+        i64::from(f.loops().len() == 0 && matches!(f.surface(), Surface::Torus(_)))
+    };
+    let fsum: i64 = faces.iter().map(|f| 2 - 2 * genus_f(f) - loops(f)).sum();
+    let chi = b.vertices().len() as i64 - b.edges().len() as i64 + fsum;
+    let genus = i64::from(shells) - chi / 2;
+    let mut bad = Vec::new();
+    if solid.len() as u32 != t.solid_regions {
+        bad.push(format!(
+            "solid regions {} (truth {})",
+            solid.len(),
+            t.solid_regions
+        ));
+    }
+    if shells != t.shells {
+        bad.push(format!("shells {shells} (truth {})", t.shells));
+    }
+    if chi % 2 != 0 || genus != i64::from(t.genus) {
+        bad.push(format!("genus {genus}, chi {chi} (truth {})", t.genus));
+    }
+    if let Some(c) = &t.cells {
+        let roots: BTreeSet<usize> = (0..faces.len()).map(|i| patch.find(i)).collect();
+        if roots.len() == faces.len() {
+            // every patch one face: the complex is the body's own
+            let kind = |s: &Surface| match s {
+                Surface::Plane(_) => Some(Kind::Plane),
+                Surface::Cylinder(_) => Some(Kind::Cylinder),
+                Surface::Cone(_) => Some(Kind::Cone),
+                Surface::Sphere(_) => Some(Kind::Sphere),
+                Surface::Torus(_) => Some(Kind::Torus),
+                _ => None,
+            };
+            let mut got: BTreeMap<(Option<Kind>, u32, u32), u32> = BTreeMap::new();
+            for f in &faces {
+                let key = (kind(f.surface()), loops(f) as u32, genus_f(f) as u32);
+                *got.entry(key).or_insert(0) += 1;
+            }
+            let mut want: BTreeMap<(Option<Kind>, u32, u32), u32> = BTreeMap::new();
+            for p in &c.patches {
+                *want.entry((Some(p.kind), p.loops, p.genus)).or_insert(0) += p.count;
+            }
+            let ve = [b.vertices().len() as u32, b.edges().len() as u32];
+            if got != want || ve != [c.vertices, c.edges] {
+                bad.push(format!(
+                    "cells {ve:?} {got:?} (truth {:?} {want:?})",
+                    [c.vertices, c.edges]
+                ));
+            }
+        } else {
+            bad.push("faces merge into patches: count the patch complex".into());
+        }
+    }
+    if bad.is_empty() {
+        Verdict::Pass
+    } else {
+        Verdict::Fail(bad.join("; "))
+    }
+}
+
+/// Every check of the recipe on scx's side.
+pub fn scx_checks(r: &Recipe) -> BTreeMap<Check, Verdict> {
+    let checks = checks_of(r);
+    if let Some(gap) = scx_gap(r) {
+        return checks
+            .into_iter()
+            .map(|c| (c, Verdict::NotYet(gap)))
+            .collect();
+    }
+    let Some(frame) = scx_frame(&r.base.frame) else {
+        let why = Verdict::Fail("scx refuses the recipe's frame as not orthonormal".into());
+        return checks.into_iter().map(|c| (c, why.clone())).collect();
+    };
+    let run = || scx_build(&frame, &r.base);
+    let first = run();
+    let second = run();
+    let mut out = BTreeMap::new();
+    for c in checks {
+        let v = match (c, &first, &r.outcome) {
+            (Check::Outcome, Ok(_), Outcome::Built(_)) => Verdict::Pass,
+            (
+                Check::Outcome,
+                Err(scx_make::MakeError::Refused(scx_make::Refusal::Size { dimension, .. })),
+                Outcome::Refused(Refusal::Size(d)),
+            ) if scx_dimension(*dimension) == *d => Verdict::Pass,
+            (Check::Outcome, got, want) => Verdict::Fail(format!(
+                "truth {want:?}; scx {}",
+                match got {
+                    Ok(_) => "builds".to_owned(),
+                    Err(e) => format!("{e}"),
+                }
+            )),
+            (Check::Topology, Ok(b), Outcome::Built(t)) => scx_topology(b, t),
+            (Check::Deterministic, Ok(a), _) => match (&second, scx_record::encode(a)) {
+                (Ok(b), Ok(ea)) => match scx_record::encode(b) {
+                    Ok(eb) if ea == eb => Verdict::Pass,
+                    Ok(_) => Verdict::Fail("two runs encode differently".into()),
+                    Err(e) => Verdict::Fail(format!("encode: {e}")),
+                },
+                (Err(e), _) => Verdict::Fail(format!("the second run fails: {e}")),
+                (_, Err(e)) => Verdict::Fail(format!("encode: {e}")),
+            },
+            (Check::NoDanglingVertices, Ok(b), _) => {
+                let vs: BTreeSet<_> = b.vertices().map(|v| v.id()).collect();
+                let dangling = b
+                    .edges()
+                    .filter(|e| !vs.contains(&e.start().id()) || !vs.contains(&e.end().id()))
+                    .count();
+                if dangling == 0 {
+                    Verdict::Pass
+                } else {
+                    Verdict::Fail(format!("{dangling} edges name a missing vertex"))
+                }
+            }
+            (Check::Volume | Check::Area, _, _) => Verdict::NotYet(NotYet::Mass),
+            (Check::Classification, _, _) => Verdict::NotYet(NotYet::Classify),
+            (Check::Valid | Check::Manifold, _, _) => Verdict::NotYet(NotYet::Contract),
+            (Check::Mesh, _, _) => Verdict::NotYet(NotYet::Mesh),
+            (Check::Lineage, _, _) => Verdict::NotYet(NotYet::Lineage),
+            (Check::Work, _, _) => Verdict::NotYet(NotYet::Work),
+            (c, Err(e), _) => Verdict::Fail(format!("{c:?}: no body ({e})")),
+            (c, Ok(_), o) => Verdict::Fail(format!("{c:?} asked of {o:?}")),
+        };
+        out.insert(c, v);
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------------------
+// The run
+
+/// One case's answers on both sides.
+struct Case {
+    points: Points,
+    band: f64,
+    runs: [PinRun; 2],
+    findings: Vec<Finding>,
+    scx: BTreeMap<Check, Verdict>,
+}
+
+fn case(r: &Recipe) -> Case {
+    let points = match r.csg() {
+        Ok(c) => points(&c, case_seed(r)),
+        Err(_) => Points {
+            at: Vec::new(),
+            side: Vec::new(),
+            boxed: 0,
+            csg: None,
+        },
+    };
+    let boxed = &points.side[..points.boxed];
+    let band = if boxed.is_empty() {
+        1.0
+    } else {
+        boxed.iter().filter(|s| **s != Side::Band).count() as f64 / boxed.len() as f64
+    };
+    let runs = [pin_run(r, &points), pin_run(r, &points)];
+    let findings = judge_pin(r, &points, &runs);
+    let scx = scx_checks(r);
+    Case {
+        points,
+        band,
+        runs,
+        findings,
+        scx,
+    }
+}
+
+/// The summary of the whole run; the test asserts on it.
+struct Summary {
+    lines: Vec<String>,
+    failures: Vec<String>,
+}
+
+fn summarise(recipes: &[Recipe], cases: &[Case], defects: &[SliceDefect]) -> Summary {
+    let mut lines = Vec::new();
+    let mut failures = Vec::new();
+    let points: usize = cases.iter().map(|c| c.points.at.len()).sum();
+    let mut used = vec![0usize; defects.len()];
+    let mut unsampled = 0usize;
+    let (mut pin_defects, mut pin_ok, mut pin_listed) = (0, 0, 0);
+    let mut verdicts: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut gaps: BTreeMap<NotYet, usize> = BTreeMap::new();
+    for (r, c) in recipes.iter().zip(cases) {
+        let mut line = format!(
+            "  {:<28} pin {:<10} fev {:<14} findings {}",
+            r.name,
+            match &c.runs[0].outcome {
+                PinOutcome::Body => "body".to_owned(),
+                PinOutcome::Error { kind, .. } => format!("{kind:?}"),
+                PinOutcome::Panic { .. } => "panic".to_owned(),
+            },
+            c.runs[0]
+                .facts
+                .as_ref()
+                .and_then(|f| f.topo.as_ref().ok())
+                .map_or_else(|| "-".to_owned(), |t| format!("{:?}", t.fev)),
+            c.findings.len()
+        );
+        if !matches!(r.outcome, Outcome::Built(_) | Outcome::Refused(_))
+            && !matches!(c.runs[0].outcome, PinOutcome::Body)
+        {
+            pin_listed += 1;
+        }
+        if c.findings.is_empty() {
+            pin_ok += 1;
+        }
+        for f in &c.findings {
+            let covering: Vec<usize> = defects
+                .iter()
+                .enumerate()
+                .filter(|(_, d)| d.check == f.check && (d.applies)(r))
+                .map(|(i, _)| i)
+                .collect();
+            match covering.as_slice() {
+                [i] => match (defects[*i].holds)(r, &c.points, &c.runs[0]) {
+                    Ok(()) => {
+                        used[*i] += 1;
+                        pin_defects += 1;
+                    }
+                    Err(why) => failures.push(format!(
+                        "{r}: pin defect ({}) no longer holds: {why}; finding: {:?} {}",
+                        defects[*i].reason, f.check, f.what
+                    )),
+                },
+                [] => failures.push(format!("{r}: pin {:?}: {}", f.check, f.what)),
+                _ => failures.push(format!(
+                    "{r}: {} pin defects cover {:?}",
+                    covering.len(),
+                    f.check
+                )),
+            }
+        }
+        // An entry whose predicate selects a recipe the pin gets right is too wide. A sampled
+        // check (classification) may miss the contradiction on one recipe's points and find it
+        // on the next, so there it is counted, not failed.
+        for (i, d) in defects.iter().enumerate() {
+            if (d.applies)(r) && !c.findings.iter().any(|f| f.check == d.check) {
+                if d.check == Check::Classification {
+                    unsampled += 1;
+                } else {
+                    failures.push(format!(
+                        "{r}: pin defect ({}) applies but the pin passes {:?}",
+                        d.reason, d.check
+                    ));
+                    used[i] += 1;
+                }
+            }
+        }
+        for (check, v) in &c.scx {
+            match v {
+                Verdict::Pass => *verdicts.entry("pass").or_insert(0) += 1,
+                Verdict::Fail(why) => {
+                    *verdicts.entry("fail").or_insert(0) += 1;
+                    failures.push(format!("{r}: scx {check:?}: {why}"));
+                }
+                Verdict::NotYet(g) => {
+                    *verdicts.entry("not yet").or_insert(0) += 1;
+                    *gaps.entry(*g).or_insert(0) += 1;
+                }
+            }
+        }
+        if c.band < 0.95 {
+            let _ = write!(line, " certain {:.3}", c.band);
+        }
+        for f in &c.findings {
+            let _ = write!(line, "\n      {:?}: {}", f.check, f.what);
+        }
+        lines.push(line);
+    }
+    for (i, d) in defects.iter().enumerate() {
+        if used[i] == 0 {
+            failures.push(format!("pin defect ({}) applies to no recipe", d.reason));
+        }
+    }
+    let unstable = cases.iter().filter(|c| c.runs[0] != c.runs[1]).count();
+    lines.insert(
+        0,
+        format!(
+            "difftest t_slice: {} inputs ({} recipes, {points} points), {} pin defects, {} failures, {unstable} pin nondeterministic",
+            recipes.len() + points,
+            recipes.len(),
+            pin_defects,
+            failures.len()
+        ),
+    );
+    lines.insert(
+        1,
+        format!(
+            "difftest t_slice pin: {pin_ok} recipes agree with truth, {} with findings ({pin_defects} recorded), {pin_listed} unsupported or open and not built, {unsampled} sampled entries not met on their points",
+            recipes.len() - pin_ok
+        ),
+    );
+    let gaps: Vec<String> = gaps
+        .iter()
+        .map(|(g, n)| format!("{g:?} ({}) {n}", g.task()))
+        .collect();
+    lines.insert(
+        2,
+        format!(
+            "difftest t_slice scx: {} pass, {} fail, {} not yet: {}",
+            verdicts.get("pass").unwrap_or(&0),
+            verdicts.get("fail").unwrap_or(&0),
+            verdicts.get("not yet").unwrap_or(&0),
+            gaps.join(", ")
+        ),
+    );
+    Summary { lines, failures }
+}
+
+#[test]
+fn t_slice() {
+    let recipes = recipe::all(RES);
+    let cases: Vec<Case> = std::thread::scope(|s| {
+        let handles: Vec<_> = recipes.iter().map(|r| s.spawn(|| case(r))).collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    let summary = summarise(&recipes, &cases, &pin_defects::slice());
+    for l in &summary.lines {
+        println!("{l}");
+    }
+    assert!(
+        summary.failures.is_empty(),
+        "t_slice: {} failures:\n{}",
+        summary.failures.len(),
+        summary.failures.join("\n")
+    );
+    let _ = Check::ALL;
+}
+
+/// The harness catches what it exists to catch: a wrong truth, an unrecorded contradiction and
+/// a stale entry, on one block's case.
+#[test]
+fn t_slice_controls() {
+    let all = recipe::all(RES);
+    let r = all.iter().find(|r| r.name == "block-far-turned").unwrap();
+    let c = case(r);
+    assert!(c.findings.is_empty(), "{:?}", c.findings);
+    // a truth one part in 1e4 off is a volume finding
+    let mut wrong = r.clone();
+    if let Some(t) = &mut wrong.truth {
+        t.volume *= 1.0 + 1e-4;
+    }
+    let f = judge_pin(&wrong, &c.points, &c.runs);
+    assert!(f.iter().any(|f| f.check == Check::Volume), "{f:?}");
+    // so the summary fails it, unrecorded
+    let w = Case {
+        findings: f,
+        ..case(&wrong)
+    };
+    let s = summarise(std::slice::from_ref(&wrong), std::slice::from_ref(&w), &[]);
+    assert!(
+        s.failures.iter().any(|l| l.contains("pin Volume")),
+        "{:?}",
+        s.failures
+    );
+    // an entry that meets nothing is stale
+    let stale = SliceDefect {
+        reason: "control",
+        check: Check::Volume,
+        applies: |_| false,
+        holds: |_, _, _| Ok(()),
+    };
+    let s = summarise(std::slice::from_ref(r), std::slice::from_ref(&c), &[stale]);
+    assert!(
+        s.failures
+            .iter()
+            .any(|l| l.contains("applies to no recipe")),
+        "{:?}",
+        s.failures
+    );
+}

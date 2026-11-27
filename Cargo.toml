@@ -15,6 +15,8 @@ members = [
     "crates/scx-record",
     "crates/scx-make",
     "crates/scx-mass",
+    "crates/scx-tess",
+    "crates/scx-bodyq",
     "crates/scx-testkit",
     "crates/scx-difftest",
     "crates/scx-bench",
@@ -36,6 +38,8 @@ default-members = [
     "crates/scx-record",
     "crates/scx-make",
     "crates/scx-mass",
+    "crates/scx-tess",
+    "crates/scx-bodyq",
     "crates/scx-testkit",
     "xtask",
 ]
@@ -89,6 +93,11 @@ assert_is_empty = "allow"
 # The truth references do exact big-integer arithmetic: unoptimised, their tests take
 # minutes; optimised, seconds. Only this crate, so every other build is unchanged.
 [profile.dev.package.scx-testkit]
+opt-level = 3
+
+# The mass integrals (adaptive Gauss-Kronrod over every trim) dominate the make tests' time
+# in an unoptimised build; optimising changes no result.
+[profile.dev.package.scx-mass]
 opt-level = 3
 
 # The pin, built optimised in dev and test builds too: the difftest's time is in its

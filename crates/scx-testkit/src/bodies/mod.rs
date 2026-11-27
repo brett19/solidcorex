@@ -11,6 +11,8 @@
 //!   [`Generated`]: the draft, and the counts a closed form says it has.
 //! - [`check::violations`] is the structure oracle (63 §6.4): the invariants a draft breaks.
 //!   Every valid body breaks none.
+//! - [`loose`] builds a valid body whose trims carry a recorded accuracy, for the gap closure
+//!   of a measure (MA2).
 //! - [`broken`] builds, for each [`Invariant`] but [`Invariant::UvGap`], a body that breaks
 //!   it and no other.
 //!
@@ -25,6 +27,7 @@
 
 pub mod check;
 mod curved;
+mod loose;
 mod mesh;
 mod planar;
 mod shell;
@@ -43,6 +46,7 @@ use scx_num::vector3d::{Point3, Vec3};
 use scx_surface::{PcurveError, SurfaceError};
 
 pub use check::Invariant;
+pub use loose::loose;
 pub use shell::quarter_shell;
 pub use wreck::broken;
 

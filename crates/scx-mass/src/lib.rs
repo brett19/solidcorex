@@ -30,14 +30,18 @@
 //!   [`outward`], which refuses the body ([`MassRefusal::NotOutward`]) or, when it is
 //!   outward after all, reports [`MassDefect::EstimateMissed`]. A valid body never pays
 //!   for an enclosure.
-//! - **Not yet.** Gap closure onto an edge's curve for a use with a recorded accuracy
-//!   (MA2, at `face::join`); a loop winding round a `v` period or `u` windings that do not
-//!   cancel ([`MassUnsupported`]).
+//! - **Gap closure.** A use whose pcurve carries a recorded accuracy is closed onto its
+//!   edge's curve by a strip and a corner fan (the `closure` module), so the faces bound one
+//!   closed surface; a use with none costs nothing extra. The closure's integration error
+//!   and the tube it cannot count are in the stated error.
+//! - **Not yet.** A loop winding round a `v` period or `u` windings that do not cancel
+//!   ([`MassUnsupported`]).
 //!
 //! Every per-piece evaluation is charged to the budget, the stop flag checked first.
 
 mod body;
 mod breaks;
+mod closure;
 mod edge;
 mod enclose;
 mod error;
