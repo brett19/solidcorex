@@ -1892,3 +1892,92 @@ set's classes are equal in number, so this is about as even as five-feature mult
 ### 21.4 Proposed 04 row
 
 | 11-27 | (For the owner's review) The MFCAD gate sample is fixed in `corpus/manifest.tsv`: 480 of MFCAD's 15,488 models at `ef6d58a` (the count is verified), chosen by a stated rule (30 per face-count-by-feature-count cell, in order of the hash of the name, plus four extremes), 37 MB, fetched in 80 s once and verified in 3 s. Every one of the 15,488 models is planes and lines only, so the gate is a planar gate; curved analytic reading is gated by NIST and the conformance parts. `.face_truth` pickles are never fetched | The "up to 1,000" ruling left the size open; coverage (all 15 classes, all 105 pairs) saturates well below it, and the scan showed nothing non-planar to stratify on | research 74 §21 |
+
+## 23. P21U as built (11-27)
+
+`scx_p21::units::context` no longer reads a missing unit as millimetres and radians.
+
+### 23.1 The shape, chosen
+
+```rust
+pub fn context(ex: &Exchange, id: u64) -> Context;
+pub struct Context { pub length: Unit, pub angle: Unit, pub distances: Vec<(f64, Option<f64>)> }
+pub enum Unit { Missing, Named(f64), Conflicting }
+impl Context {
+    pub fn units(&self, assume: Option<Units>) -> Result<(Units, MissingUnits), UnitsFault>;
+    pub fn uncertainty(&self, length: f64) -> Uncertainty { largest: Option<f64>, several: bool }
+}
+pub enum UnitsFault { Missing(MissingUnits), Conflicting(MissingUnits) }  // moved from scx-step
+```
+
+Options considered:
+
+- **`Option<f64>` per unit.** For: smallest. Against: two different units of a kind
+  (which scx-step refuses, and the old p21 resolved by "later wins") have no place, so scx-step
+  could not drop its reader; its `ConflictingUnits` tests would lose their meaning.
+- **`Result<Context, UnitsFault>`.** For: one decision point. Against: all or nothing. The
+  product reader must go on reading a file whose context lacks a unit (it only needs the length
+  of frames; scx-step wants the structure before it assumes anything), and the uncertainty is
+  lost with the units. A caller that wants the `Result` has it: `Context::units`.
+- **A per-unit enum (built).** The three states are what a file can say, the caller decides what
+  each means, and `Context::units(assume)` is the one place that turns them into numbers, with
+  the assumption the caller states. `Default` for `Context` is "names nothing", not mm.
+
+Adversarial pass on the built shape:
+
+- *Does the private default move up a level?* `Units::default()` (mm, rad) still exists. It
+  is no longer reachable from `context`; the callers that use it write it (difftest, as the
+  pin's default; a test). `Context::units` with `None` never produces it.
+- *The uncertainty of a context with no length unit.* A measure that names no unit is read in
+  "the context's length unit". With the length missing that is the caller's assumed one, so
+  `uncertainty(length)` takes it as an argument (scx-step passes the resolved length) and no
+  default is hidden in the context.
+- *Several uncertainties.* The old p21 kept the last, scx-step the largest (74 §19). p21 now
+  keeps the largest and says `several`; this changes `context`'s result on files that state
+  more than one (equal ones count once). Both choices are the file's accuracy claim read as the
+  coarsest; the pin's last-wins is a defect class in difftest.
+- *Products.* A placement or transformation operator has lengths and no size without a length
+  unit. `product::read` now refuses it with `EntityCause::Units(UnitsFault)` (names
+  `no_length_unit`, `conflicting_length_units`) instead of reading it in mm. A representation
+  with no frames reads as before. `product::read_assuming(ex, Some(units))` supplies the length
+  unit the caller assumes (the file's wins); scx-step passes its `assume_units`, so an assumed
+  inch now scales mapped-item frames too (before, they were silently mm). Frames read no angle,
+  so the angle factor they get is NaN.
+- *Left in place.* `unit_factor` reads an SI unit whose base it does not know
+  (`SI_UNIT(.MILLI.,.FURLONG.)`) as factor 1: the same kind of guess, one level down, and
+  compared against the pin by difftest. It is not changed here; it needs its own typed
+  result (a follow-up: `unit_factor` returns `None` for it, as it does for an unreadable
+  conversion).
+
+### 23.2 scx-step
+
+`crates/scx-step/src/units.rs` lost its context reader (`listed`, `name`, `finish`, the unit and
+uncertainty loops: about 120 lines). `resolve` is `context` plus `Context::units` plus
+`Context::uncertainty`; `MissingUnits` and `UnitsFault` moved to scx-p21 and are re-exported
+(`scx_step::units::{MissingUnits, UnitsFault}`, `scx_step::MissingUnits` unchanged). The 17
+synthetic tests are unchanged and pass.
+
+### 23.3 Tests
+
+scx-p21 units: the "missing or broken units read as mm and rad" test is now "are missing, not
+mm and rad" (the same inputs, each asserted `Unit::Missing` and `units(None)` a typed fault; the
+unknown-base SI unit moved out of that list to a case that asserts it is `Named(1.0)`, the
+residue above); new `two_different_units_conflict`; the uncertainty tests are the same cases
+through `uncertainty(length)`; "the last one listed wins" became "the largest wins and `several`
+is set, equal ones are one"; "a bad one after a good one clears it" became "a bad one beside a
+good one is left out". scx-p21 product: `a_frame_in_a_context_without_a_length_unit` (refused
+with `Units(Missing)`; read in an assumed unit); the cycle refusals now give their context a
+length unit (they asked about a cycle, not units). Removed: none.
+
+### 23.4 difftest
+
+`t_p21` maps the pin's default at the comparison: `pin_unit` reads a `Missing` unit as the pin's
+mm / radians and counts it as the pin's defect (`corpus_pin_units` line), a `Conflicting` one has
+no pin value (the pin keeps the last) and is counted and not compared, several uncertainties
+likewise; a product scx refuses for want of a length unit where the pin reads in mm is counted,
+not a mismatch. The Part 42 comparison reads both in the same explicit units. Result:
+`cargo test -p scx-difftest --test diff t_p21`: 8 passed; `corpus_contexts` 13 of 13 exact, `corpus_products` 5 of 5 exact, `corpus_part42` 1954 of 1954 exact, 0 mismatches, and `corpus_pin_units` 0 of every class: the pin's fixtures (the only corpus when `SCX_P21_CORPUS` is unset) all name both units, so the mapping is built and compiles but is not exercised by a real file; a corpus with unitless files will count them.
+
+### 23.5 Proposed 04 row
+
+| 11-27 | (For the owner's review) `scx_p21::units::context` returns a `Context` with `length` and `angle` each `Unit::{Missing, Named(f), Conflicting}` and the file's distance measures; nothing defaults. `Context::units(assume)` turns it into `Units` or a typed `UnitsFault`, and `Context::uncertainty(length)` is the largest stated (`several` when more). scx-step uses it and drops its own reader (17 tests unchanged); `product::read` refuses a frame in a context without one length unit (`EntityCause::Units`) and `read_assuming` takes the caller's assumed length. The pin's mm/rad default, last-wins conflict and last-wins uncertainty are counted as defect classes in `t_p21` | A per-unit enum is the only shape that keeps "missing" and "conflicting" apart and lets the product reader go on; `Result` would lose the uncertainty and the structure of files that lack a unit. `unit_factor`'s unknown-SI-base factor 1 is the same guess one level down and stays a follow-up | 74 §23 |

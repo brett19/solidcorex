@@ -34,9 +34,9 @@ use scx_p21::part42::geom::Placement;
 use scx_p21::product::{
     BodyKind, Colour, Definition, Frame, Item, ItemKind, Link, MAX_ASSEMBLY_DEPTH, MAX_VISITS,
     Node, Operator, Product, ProductStructure, Representation, RepresentationMap, Side, StyledItem,
-    SurfaceStyle, Transformation, pre_defined_rgb, read,
+    SurfaceStyle, Transformation, pre_defined_rgb, read, read_assuming,
 };
-use scx_p21::units::{Context, Units};
+use scx_p21::units::{Context, MissingUnits, Unit, UnitsFault};
 use scx_p21::{Exchange, P21Error, parse};
 
 /// The refusal of `#id` for `cause`.
@@ -125,8 +125,9 @@ fn product(pd: u64, name: &str) -> String {
 
 fn mm(len: f64) -> Context {
     Context {
-        units: Units { len, ang: 1.0 },
-        uncertainty: Some(1.0E-6 * len),
+        length: Unit::Named(len),
+        angle: Unit::Named(1.0),
+        distances: vec![(1.0E-6, Some(len))],
     }
 }
 
@@ -160,13 +161,7 @@ fn a_part() {
     t += "#60=ADVANCED_BREP_SHAPE_REPRESENTATION('brep',(#101,#65),#20);\n#61=SHAPE_DEFINITION_REPRESENTATION(#54,#62);\n#62=SHAPE_REPRESENTATION('',(),#20);\n#63=SHAPE_REPRESENTATION_RELATIONSHIP('','',#62,#60);\n";
     t += "#65=AXIS2_PLACEMENT_3D('',#66,$,$);\n#66=CARTESIAN_POINT('',(0.,0.,0.));\n";
     t += "#70=STYLED_ITEM('',(#71),#101);\n#71=PRESENTATION_STYLE_ASSIGNMENT((#72));\n#72=SURFACE_STYLE_USAGE(.BOTH.,#73);\n#73=SURFACE_SIDE_STYLE('',(#74));\n#74=SURFACE_STYLE_FILL_AREA(#75);\n#75=FILL_AREA_STYLE('',(#76));\n#76=FILL_AREA_STYLE_COLOUR('',#77);\n#77=COLOUR_RGB('',1.,0.5,0.);\n";
-    let inch = Context {
-        units: Units {
-            len: 25.4 * 1.0,
-            ang: 1.0,
-        },
-        uncertainty: Some(1.0E-6 * (25.4 * 1.0)),
-    };
+    let inch = mm(25.4 * 1.0);
     assert_eq!(
         structure(&t),
         ProductStructure {
@@ -197,7 +192,7 @@ fn a_part() {
                         },
                     ],
                     context: Some(20),
-                    units: inch,
+                    units: inch.clone(),
                 },
                 Representation {
                     entity: 62,
@@ -793,7 +788,8 @@ fn refusals_say_why() {
     assert_eq!(refused(&missing_item), at(999, EntityCause::Missing));
     let mapped = |rest: &str| {
         two()
-            + "#60=SHAPE_REPRESENTATION('',(#110),$);\n#61=SHAPE_DEFINITION_REPRESENTATION(#54,#60);\n#110=MAPPED_ITEM('',#111,#112);\n#112=AXIS2_PLACEMENT_3D('',#113,$,$);\n#113=CARTESIAN_POINT('',(0.,0.,0.));\n"
+            + "#60=SHAPE_REPRESENTATION('',(#110),#20);\n#61=SHAPE_DEFINITION_REPRESENTATION(#54,#60);\n#110=MAPPED_ITEM('',#111,#112);\n#112=AXIS2_PLACEMENT_3D('',#113,$,$);\n#113=CARTESIAN_POINT('',(0.,0.,0.));\n"
+            + &context(20, MM)
             + rest
     };
     assert_eq!(
@@ -901,4 +897,37 @@ fn transform_items_written_the_other_way_round() {
     });
     assert_eq!(read_with((171, 163)), want);
     assert_eq!(read_with((163, 171)), want);
+}
+
+/// A context that names no length unit gives a frame no size: the read refuses it, says why,
+/// and reads it in the length unit the caller assumes (never one of its own).
+#[test]
+fn a_frame_in_a_context_without_a_length_unit() {
+    let data = String::from(BASE)
+        + "#60=SHAPE_REPRESENTATION('',(#101,#110),$);\n#110=MAPPED_ITEM('',#111,#114);\n#111=REPRESENTATION_MAP(#112,#120);\n#112=AXIS2_PLACEMENT_3D('',#113,$,$);\n#113=CARTESIAN_POINT('',(1.,0.,0.));\n#114=AXIS2_PLACEMENT_3D('',#113,$,$);\n#120=SHAPE_REPRESENTATION('',(#101),$);\n";
+    let missing = UnitsFault::Missing(MissingUnits {
+        length: true,
+        angle: false,
+    });
+    let err = read(&file(&data)).unwrap_err();
+    assert!(
+        format!("{err:?}").contains(&format!("Units({missing:?})")),
+        "{err:?}"
+    );
+    let assumed = read_assuming(
+        &file(&data),
+        Some(scx_p21::units::Units {
+            len: 25.4,
+            ang: 1.0,
+        }),
+    )
+    .unwrap();
+    assert_eq!(assumed.representations[0].units.length, Unit::Missing);
+    let ItemKind::Mapped { target, .. } = &assumed.representations[0].items[1].kind else {
+        panic!("a mapped item");
+    };
+    let Frame::Placement(p) = target else {
+        panic!("a placement");
+    };
+    assert_eq!(p.origin[0], 25.4);
 }
