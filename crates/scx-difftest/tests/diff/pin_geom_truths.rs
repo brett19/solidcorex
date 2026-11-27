@@ -351,6 +351,9 @@ fn probe(k: &Kernel, truth: CurveKind) -> Probe {
             ),
             window: None,
         },
+        CurveKind::Parabola(_) | CurveKind::Hyperbola(_) => {
+            unreachable!("the probes are lines and closed conics")
+        }
     }
 }
 
@@ -374,6 +377,9 @@ fn curve_distance(c: &CurveKind, p: P) -> f64 {
         }
         CurveKind::Circle(k) => conic(&k.frame, k.radius, k.radius),
         CurveKind::Ellipse(e) => conic(&e.frame, e.semi_x, e.semi_y),
+        CurveKind::Parabola(_) | CurveKind::Hyperbola(_) => {
+            unreachable!("the probes are lines and closed conics")
+        }
     }
 }
 
@@ -421,6 +427,9 @@ fn tangent(c: &CurveKind, p: P) -> P {
         CurveKind::Line(l) => l.direction,
         CurveKind::Circle(k) => conic(&k.frame, k.radius, k.radius),
         CurveKind::Ellipse(e) => conic(&e.frame, e.semi_x, e.semi_y),
+        CurveKind::Parabola(_) | CurveKind::Hyperbola(_) => {
+            unreachable!("the probes are lines and closed conics")
+        }
     }
 }
 

@@ -7,8 +7,8 @@
 //! [`Intersection`] is where two surfaces meet within their extents: [`Intersection::Empty`],
 //! [`Intersection::Coincident`] (two planes, one surface over the overlap), or
 //! [`Intersection::Pieces`], the curves and isolated points. Each [`IntersectionCurve`] is one
-//! connected piece: an exact [`Curve`] kind (a line, a circle or an ellipse) and the span of
-//! its parameter inside both extents. A curve runs along `n_a x n_b`, the first surface's
+//! connected piece: an exact [`Curve`] kind (a line, a circle, an ellipse, a parabola or a
+//! hyperbola's branch) and the span of its parameter inside both extents. A curve runs along `n_a x n_b`, the first surface's
 //! normal across the second's (each with its sense); where the surfaces are tangent along
 //! it that product vanishes, and the direction is the construction's (fixed for a given
 //! input).
@@ -28,7 +28,7 @@
 //! |---|---|---|
 //! | plane | a line, coincident or empty | never |
 //! | cylinder | an ellipse, a circle, two lines or one tangent line, or empty | an ellipse too long for its precision |
-//! | cone | an ellipse, a circle, two generators or one tangent generator, the apex, or empty | a parabola or hyperbola (the plane parallel to a generator or steeper, off the apex), an ellipse too long for its precision |
+//! | cone | an ellipse, a circle, a parabola (the plane parallel to a generator), the branch of a hyperbola on the nappe (steeper), two generators or one tangent generator, the apex, or empty | a conic too long for its precision and not within the tolerance of a parabola |
 //! | sphere | a circle or a touch point, or empty | never |
 //! | torus | one or two circles across the axis, two meridian circles along it, or empty | every other plane (a spiric section) |
 //!
@@ -36,15 +36,17 @@
 //! nearly square to its axis is a circle when every point of the true ellipse lies within
 //! the tolerance of it along the surface, a plane nearly along a cylinder's axis gives its
 //! lines when they lie within the tolerance of the true ellipse over the extent's height,
-//! and two lines or circles within the tolerance of each other are one tangent curve.
+//! a cone's near-parabolic ellipse or hyperbola is a parabola when it lies within the
+//! tolerance of it over the extent's height, and two lines or circles within the tolerance
+//! of each other are one tangent curve.
 //!
 //! Each curve is clipped to both extents: every side of an extent is a linear function of
 //! the point (a plane's side, a revolution's half-plane at an angle, a height, a latitude's
 //! height, a tube angle's half-line on a meridian), so its crossings are the roots of
-//! `a cos t + b sin t + c` on a conic and of a linear function on a line. The spans between
-//! crossings are kept where their middles lie in both extents within the tolerance, and
-//! neighbours merge (across the turn's start on a conic). A piece no longer than the
-//! tolerance is a point.
+//! `a cos t + b sin t + c` on a conic, of a quadratic on a parabola, of a quadratic in `e^t`
+//! on a hyperbola and of a linear function on a line. The spans between crossings are kept
+//! where their middles lie in both extents within the tolerance, and neighbours merge
+//! (across the turn's start on a conic). A piece no longer than the tolerance is a point.
 //!
 //! # The coaxial sections
 //!

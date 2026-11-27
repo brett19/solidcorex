@@ -22,7 +22,7 @@
 
 use core::f64::consts::{PI, TAU};
 
-use scx_curve::{Circle, Curve, Ellipse, Line};
+use scx_curve::{Circle, Curve, Ellipse, Hyperbola, Line, Parabola};
 use scx_num::budget::{Budget, Stop};
 use scx_num::domain::ParamDomain;
 use scx_num::extent1d::Extent1d;
@@ -222,11 +222,43 @@ fn ellipse(f: Frame, a: f64, b: f64, s: Sense, ce: Extent1d) -> Path {
     }
 }
 
+fn parabola(f: Frame, focal: f64, s: Sense, ce: Extent1d) -> Path {
+    Path {
+        c: Parabola::new(f, len(focal), s).unwrap().into(),
+        kit: CurveKind::Parabola(analytic::Parabola {
+            frame: kit(&f, s.sign(), 1.0),
+            focal,
+        }),
+        ce,
+    }
+}
+
+fn hyperbola(f: Frame, a: f64, b: f64, s: Sense, ce: Extent1d) -> Path {
+    Path {
+        c: Hyperbola::new(f, len(a), len(b), s).unwrap().into(),
+        kit: CurveKind::Hyperbola(analytic::Hyperbola {
+            frame: kit(&f, s.sign(), 1.0),
+            semi_x: a,
+            semi_y: b,
+        }),
+        ce,
+    }
+}
+
+/// Whether `t` parameterises the curve as a line does: not an angle.
+fn open(k: &CurveKind) -> bool {
+    matches!(
+        k,
+        CurveKind::Line(_) | CurveKind::Parabola(_) | CurveKind::Hyperbola(_)
+    )
+}
+
 fn turn() -> Extent1d {
     Extent1d::new(0.0, TAU).unwrap()
 }
 
-/// Random curves about `o`: lines, circles and ellipses over a turn and over an arc.
+/// Random curves about `o`: lines, circles and ellipses over a turn and over an arc,
+/// parabolas and hyperbolas over a stretch about the vertex and one off it.
 fn curves(rng: &mut Rng, o: Point3) -> Vec<Path> {
     let mut out = Vec::new();
     for _ in 0..3 {
@@ -248,6 +280,29 @@ fn curves(rng: &mut Rng, o: Point3) -> Vec<Path> {
             out.push(circle(f, a, s, ce));
         } else {
             out.push(ellipse(f, a, a * between(rng, 0.2, 1.0), s, ce));
+        }
+    }
+    for i in 0..4 {
+        let c = o + unit(rng) * between(rng, 0.0, 12.0);
+        let f = Frame::new(c, unit(rng), unit(rng)).unwrap();
+        let s = sense(rng);
+        let a = between(rng, 0.5, 10.0);
+        if i < 2 {
+            let lo = if i == 0 {
+                -3.0
+            } else {
+                between(rng, -3.0, 2.0)
+            };
+            let ce = Extent1d::new(lo, lo + between(rng, 0.5, 5.0)).unwrap();
+            out.push(parabola(f, a, s, ce));
+        } else {
+            let lo = if i == 2 {
+                -2.0
+            } else {
+                between(rng, -2.5, 1.5)
+            };
+            let ce = Extent1d::new(lo, lo + between(rng, 0.5, 4.0)).unwrap();
+            out.push(hyperbola(f, a, a * between(rng, 0.2, 2.0), s, ce));
         }
     }
     out
@@ -296,7 +351,7 @@ fn truth(p: &Path, s: &Surf) -> Option<Vec<(Point3, u32, f64)>> {
                     let t = h.t.to_f64();
                     let (lo, hi) = (p.ce.min(), p.ce.max());
                     match p.kit {
-                        CurveKind::Line(_) => (lo..=hi).contains(&t),
+                        ref k if open(k) => (lo..=hi).contains(&t),
                         _ => {
                             hi - lo >= TAU || {
                                 let t = t + TAU * ((lo - t) / TAU).ceil();
@@ -320,6 +375,8 @@ struct Stats {
     overlaps: usize,
     worst_crossing: f64,
     worst_by_kind: [f64; 5],
+    /// Crossings by a parabola or a hyperbola.
+    open_crossings: usize,
 }
 
 fn kind(s: &Surface) -> usize {
@@ -336,7 +393,7 @@ fn kind(s: &Surface) -> usize {
 /// way round a conic), on 32 samples.
 fn joined(p: &Path, s: &Surf, tol: f64, from: f64, to: f64) -> bool {
     let to = match p.kit {
-        CurveKind::Line(_) => to,
+        ref k if open(k) => to,
         _ => from + (to - from + PI).rem_euclid(TAU) - PI,
     };
     (0..=32).all(|i| {
@@ -383,6 +440,9 @@ fn check(p: &Path, s: &Surf, se: &Extent2d, tol: f64, hits: &[CurveSurfaceHit], 
         match contact {
             Contact::Crossing => {
                 stats.crossings += 1;
+                if !matches!(p.kit, CurveKind::Line(_)) && open(&p.kit) {
+                    stats.open_crossings += 1;
+                }
                 let near = roots
                     .iter()
                     .map(|(q, ..)| (*q - point).length())
@@ -436,7 +496,10 @@ fn random_pairs_match_t2() {
         }
     }
     eprintln!("{stats:?}");
-    assert!(stats.crossings > 1000, "{stats:?}");
+    assert!(
+        stats.crossings > 1000 && stats.open_crossings > 300,
+        "{stats:?}"
+    );
 }
 
 impl Surf {
@@ -549,61 +612,113 @@ fn near_tangents_classify_at_the_tolerance() {
     assert!(touches > 500 && misses > 150, "{touches} {misses}");
 }
 
+/// Curves lying on each kind about a random frame: a plane's line and circle, a cylinder's
+/// ruling and parallel, a cone's ruling and parallel, a sphere's parallel and meridian, a
+/// torus's parallel and tube circle; and (new in 63 §4.14) a cylinder's oblique section.
+fn on_surface_cases(rng: &mut Rng) -> Vec<(Surf, Path)> {
+    let f = frame(rng);
+    let (o, x, y, z) = (f.origin(), *f.x(), *f.y(), *f.z());
+    let s = sense(rng);
+    let zs = z * s.sign();
+    let phi = between(rng, 0.0, TAU);
+    let dir = x * fmath::cos(phi) + y * fmath::sin(phi);
+    let along = |c: Point3, r: f64, axis: Vec3, x: Vec3| {
+        circle(
+            Frame::new(c, axis, x).unwrap(),
+            r,
+            sense(&mut Rng::new(7)),
+            turn(),
+        )
+    };
+    let mut cases: Vec<(Surf, Path)> = Vec::new();
+    cases.push((plane(f), line(o + x * 2.0 - y, dir, 40.0)));
+    cases.push((plane(f), along(o + x * 3.0, 4.0, z, x)));
+    let r = between(rng, 1.0, 10.0);
+    cases.push((cylinder(f, r, s), line(o + dir * r, z, 40.0)));
+    cases.push((cylinder(f, r, s), along(o + z * 3.0, r, z, dir)));
+    let angle = between(rng, 0.2, 1.2);
+    let k = fmath::tan(angle);
+    let v = between(rng, 0.5, 3.0);
+    cases.push((
+        cone(f, r, angle, s),
+        line(o + dir * (r + k * v) + zs * v, dir * k + zs, 2.0),
+    ));
+    cases.push((cone(f, r, angle, s), along(o + zs * v, r + k * v, z, dir)));
+    let lat = between(rng, -1.2, 1.2);
+    cases.push((
+        sphere(f, r, s),
+        along(o + z * (r * fmath::sin(lat)), r * fmath::cos(lat), z, dir),
+    ));
+    cases.push((sphere(f, r, s), along(o, r, dir.cross(z), dir)));
+    let small = r * between(rng, 0.2, 0.8);
+    let big = r;
+    cases.push((
+        torus(f, big, small, s),
+        along(
+            o + z * (small * fmath::sin(lat)),
+            big + small * fmath::cos(lat),
+            z,
+            dir,
+        ),
+    ));
+    cases.push((
+        torus(f, big, small, s),
+        along(o + dir * big, small, dir.cross(z), dir),
+    ));
+    let tilt = between(rng, 0.1, 1.2);
+    let normal = dir.cross(z) * fmath::sin(tilt) + z * fmath::cos(tilt);
+    let fe = Frame::new(o + z * v, normal, dir).unwrap();
+    cases.push((
+        cylinder(f, r, s),
+        ellipse(fe, r, r / fmath::cos(tilt), sense(rng), turn()),
+    ));
+    // The open conics: in a plane, and a cone's sections by a plane along a generator (a
+    // parabola, its vertex `c0 / 2` inside the generator's line) and along the axis (the
+    // hyperbola's branch on the nappe, its centre the apex's height).
+    let ext = |a: f64| Extent1d::new(-a, a).unwrap();
+    let side = dir.cross(z);
+    let fp = Frame::new(o + x * 0.5 - y, z, dir).unwrap();
+    cases.push((
+        plane(f),
+        parabola(fp, between(rng, 0.2, 2.0), sense(rng), ext(3.0)),
+    ));
+    let (a, b) = (between(rng, 0.5, 3.0), between(rng, 0.5, 3.0));
+    cases.push((plane(f), hyperbola(fp, a, b, sense(rng), ext(2.0))));
+    let apex = o + zs * (-r / k);
+    let g = (dir * k + zs) * (1.0 / fmath::hypot(k, 1.0));
+    let c0 = r * between(rng, 0.2, 1.0);
+    let hv = c0 / (2.0 * k);
+    let vertex = apex + dir * (-0.5 * c0) + zs * hv;
+    let focal = k * c0 / (2.0 * fmath::hypot(k, 1.0));
+    cases.push((
+        cone(f, r, angle, s),
+        parabola(
+            Frame::new(vertex, g.cross(side), g).unwrap(),
+            focal,
+            sense(rng),
+            ext(between(rng, 1.0, 4.0)),
+        ),
+    ));
+    let c = r * between(rng, 0.2, 1.0);
+    cases.push((
+        cone(f, r, angle, s),
+        hyperbola(
+            Frame::new(apex + dir * c, zs.cross(side), zs).unwrap(),
+            c / k,
+            c,
+            sense(rng),
+            ext(between(rng, 0.5, 2.0)),
+        ),
+    ));
+    cases
+}
+
 #[test]
 fn curves_on_the_surface_overlap_it() {
     let mut rng = Rng::new(0x5_06_02);
     let mut count = 0;
     for _ in 0..20 {
-        let f = frame(&mut rng);
-        let (o, x, y, z) = (f.origin(), *f.x(), *f.y(), *f.z());
-        let s = sense(&mut rng);
-        let zs = z * s.sign();
-        let phi = between(&mut rng, 0.0, TAU);
-        let dir = x * fmath::cos(phi) + y * fmath::sin(phi);
-        let along = |c: Point3, r: f64, axis: Vec3, x: Vec3| {
-            circle(
-                Frame::new(c, axis, x).unwrap(),
-                r,
-                sense(&mut Rng::new(7)),
-                turn(),
-            )
-        };
-        let mut cases: Vec<(Surf, Path)> = Vec::new();
-        cases.push((plane(f), line(o + x * 2.0 - y, dir, 40.0)));
-        cases.push((plane(f), along(o + x * 3.0, 4.0, z, x)));
-        let r = between(&mut rng, 1.0, 10.0);
-        cases.push((cylinder(f, r, s), line(o + dir * r, z, 40.0)));
-        cases.push((cylinder(f, r, s), along(o + z * 3.0, r, z, dir)));
-        let angle = between(&mut rng, 0.2, 1.2);
-        let k = fmath::tan(angle);
-        let v = between(&mut rng, 0.5, 3.0);
-        cases.push((
-            cone(f, r, angle, s),
-            line(o + dir * (r + k * v) + zs * v, dir * k + zs, 2.0),
-        ));
-        cases.push((cone(f, r, angle, s), along(o + zs * v, r + k * v, z, dir)));
-        let lat = between(&mut rng, -1.2, 1.2);
-        cases.push((
-            sphere(f, r, s),
-            along(o + z * (r * fmath::sin(lat)), r * fmath::cos(lat), z, dir),
-        ));
-        cases.push((sphere(f, r, s), along(o, r, dir.cross(z), dir)));
-        let small = r * between(&mut rng, 0.2, 0.8);
-        let big = r;
-        cases.push((
-            torus(f, big, small, s),
-            along(
-                o + z * (small * fmath::sin(lat)),
-                big + small * fmath::cos(lat),
-                z,
-                dir,
-            ),
-        ));
-        cases.push((
-            torus(f, big, small, s),
-            along(o + dir * big, small, dir.cross(z), dir),
-        ));
-        for (surf, p) in cases {
+        for (surf, p) in on_surface_cases(&mut rng) {
             let se = full(&surf.s);
             let hits = run(&p, &surf, &se, 1e-6).unwrap();
             assert!(
@@ -615,7 +730,204 @@ fn curves_on_the_surface_overlap_it() {
             count += 1;
         }
     }
-    assert_eq!(count, 200);
+    assert_eq!(count, 300);
+}
+
+/// Whether the overlap pieces cover `t` (on a closed curve, `t` or `t` a turn on).
+fn covered(pieces: &[Extent1d], t: f64, closed: bool) -> bool {
+    pieces
+        .iter()
+        .any(|e| e.contains_value(t, 0.0) || (closed && e.contains_value(t + TAU, 0.0)))
+}
+
+/// How far `t` is from the nearest end of a piece, turns apart on a closed curve.
+fn from_ends(pieces: &[Extent1d], t: f64, closed: bool) -> f64 {
+    pieces
+        .iter()
+        .flat_map(|e| [e.min(), e.max()])
+        .map(|end| {
+            let d = t - end;
+            if closed {
+                (d - TAU * (d / TAU).round()).abs()
+            } else {
+                d.abs()
+            }
+        })
+        .fold(f64::INFINITY, f64::min)
+}
+
+/// SU6's follow-up (63 §4.14): an overlap is clipped by `se`. Against an independent
+/// oracle, the surface's own inversion placed against `se`, at 200 parameters across the
+/// curve: a parameter is in a piece exactly when its foot is inside, except within `1e-6`
+/// of a piece's end. Each `se` is a random part of the domain, its `u` sometimes a whole
+/// period or more.
+#[test]
+fn overlaps_are_clipped_by_se() {
+    let mut rng = Rng::new(0x5_06_04);
+    let (mut several, mut none, mut whole, mut checked) = (0, 0, 0, 0);
+    for _ in 0..30 {
+        for (surf, p) in on_surface_cases(&mut rng) {
+            let full = full(&surf.s);
+            let part = |rng: &mut Rng, lo: f64, hi: f64| {
+                let (lo, hi) = (lo.max(-30.0), hi.min(30.0));
+                let w = (hi - lo) * between(rng, 0.2, 1.0);
+                let a = lo + (hi - lo - w) * rng.next_f64();
+                (a, a + w)
+            };
+            let (u, v) = match surf.s.domain().u {
+                ParamDomain::Periodic { period, base, .. } => {
+                    let a = base + period * between(&mut rng, -1.0, 1.0);
+                    let w = period * between(&mut rng, 0.1, 1.2);
+                    ((a, a + w), part(&mut rng, full.min().y, full.max().y))
+                }
+                _ => (
+                    part(&mut rng, full.min().x, full.max().x),
+                    part(&mut rng, full.min().y, full.max().y),
+                ),
+            };
+            let se = Extent2d::from_bounds(u.0, v.0, u.1, v.1).unwrap();
+            let hits = run(&p, &surf, &se, 1e-6).unwrap();
+            let pieces: Vec<Extent1d> = hits
+                .iter()
+                .map(|h| match h {
+                    CurveSurfaceHit::Overlap { t } => *t,
+                    other => panic!("{other:?}"),
+                })
+                .collect();
+            assert!(
+                pieces.windows(2).all(|w| w[0].max() < w[1].min()),
+                "{pieces:?}"
+            );
+            match pieces.len() {
+                0 => none += 1,
+                1 if pieces[0] == p.ce => whole += 1,
+                1 => {}
+                _ => several += 1,
+            }
+            let closed = !open(&p.kit) && p.ce.length() >= TAU;
+            let (lo, hi) = (
+                p.ce.min(),
+                if closed { p.ce.min() + TAU } else { p.ce.max() },
+            );
+            for i in 0..200 {
+                let t = lo + (hi - lo) * (f64::from(i) + 0.5) / 200.0;
+                if from_ends(&pieces, t, closed) < 1e-6 {
+                    continue;
+                }
+                let inv = surf
+                    .s
+                    .invert(
+                        p.c.point(t),
+                        None,
+                        Some(&se),
+                        &mut Budget::unlimited(),
+                        &Stop::new(),
+                    )
+                    .unwrap();
+                let inside = matches!(inv, scx_num::invert::Inversion::Inside(_));
+                assert_eq!(
+                    covered(&pieces, t, closed),
+                    inside,
+                    "{:?} on {:?} in {se:?} at {t}: {pieces:?}",
+                    p.c,
+                    surf.s
+                );
+                checked += 1;
+            }
+        }
+    }
+    assert!(
+        several > 10 && none > 20 && whole > 5,
+        "{several} {none} {whole}"
+    );
+    assert!(checked > 50_000, "{checked}");
+}
+
+/// The exact pieces of a unit circle in a plane box: `x >= -1/2` keeps the arc about
+/// `t = 0`, across the turn's start; `|x|, |y| <= 4/5` keeps four arcs.
+#[test]
+fn a_circle_in_a_box_is_its_arcs() {
+    let s = plane(Frame::WORLD);
+    let p = circle(Frame::WORLD, 1.0, Sense::Forward, turn());
+    let se = Extent2d::from_bounds(-0.5, -2.0, 2.0, 2.0).unwrap();
+    let hits = run(&p, &s, &se, 1e-9).unwrap();
+    let third = TAU / 3.0;
+    assert!(
+        matches!(hits[..], [CurveSurfaceHit::Overlap { t }]
+            if (t.min() - 2.0 * third).abs() < 1e-14 && (t.max() - 4.0 * third).abs() < 1e-14),
+        "{hits:?}"
+    );
+    let se = Extent2d::from_bounds(-0.8, -0.8, 0.8, 0.8).unwrap();
+    let hits = run(&p, &s, &se, 1e-9).unwrap();
+    let (a, b) = (fmath::acos(0.8), fmath::asin(0.8));
+    assert_eq!(hits.len(), 4, "{hits:?}");
+    for (k, h) in hits.iter().enumerate() {
+        let CurveSurfaceHit::Overlap { t } = h else {
+            panic!("{h:?}");
+        };
+        let q = PI / 2.0 * k as f64;
+        assert!((t.min() - (q + a)).abs() < 1e-14, "{k} {t:?}");
+        assert!((t.max() - (q + b)).abs() < 1e-14, "{k} {t:?}");
+    }
+    // The box past the circle: nothing; around it: the whole turn.
+    let se = Extent2d::from_bounds(2.0, 2.0, 3.0, 3.0).unwrap();
+    assert!(run(&p, &s, &se, 1e-9).unwrap().is_empty());
+    let se = Extent2d::from_bounds(-2.0, -2.0, 2.0, 2.0).unwrap();
+    assert!(
+        matches!(run(&p, &s, &se, 1e-9).unwrap()[..], [CurveSurfaceHit::Overlap { t }] if t == p.ce)
+    );
+}
+
+/// A cylinder's ruling clipped in `v`, and a parallel in `u` over half the turn, the
+/// window a period up.
+#[test]
+fn rulings_and_parallels_clip_exactly() {
+    let r = 2.0;
+    let s = cylinder(Frame::WORLD, r, Sense::Forward);
+    let p = line(Point3::new(r, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 40.0);
+    let period = TAU * r;
+    let se = Extent2d::from_bounds(0.0, -1.0, period, 2.5).unwrap();
+    let hits = run(&p, &s, &se, 1e-9).unwrap();
+    assert!(
+        matches!(hits[..], [CurveSurfaceHit::Overlap { t }] if t.min() == -1.0 && t.max() == 2.5),
+        "{hits:?}"
+    );
+    let p = circle(Frame::WORLD, r, Sense::Forward, turn());
+    let se = Extent2d::from_bounds(period, -1.0, 1.5 * period, 1.0).unwrap();
+    let hits = run(&p, &s, &se, 1e-9).unwrap();
+    assert!(
+        matches!(hits[..], [CurveSurfaceHit::Overlap { t }]
+            if t.min().abs() < 1e-14 && (t.max() - PI).abs() < 1e-14),
+        "{hits:?}"
+    );
+}
+
+#[test]
+fn a_bad_tolerance_is_refused_first() {
+    let s = sphere(Frame::WORLD, 1.0, Sense::Forward);
+    let p = circle(Frame::WORLD, 0.5, Sense::Forward, turn());
+    let se = full(&s.s);
+    let nurbs = Surface::from(s.s.to_nurbs(&se).unwrap());
+    for tol in [0.0, -1e-6, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        for surface in [&s.s, &nurbs] {
+            let e = intersect_curve(
+                &p.c,
+                &p.ce,
+                surface,
+                &se,
+                len(tol),
+                &mut Budget::new(0),
+                &Stop::new(),
+            )
+            .unwrap_err();
+            assert!(
+                matches!(e, SurfaceError::BadTolerance { .. }),
+                "{tol} {e:?}"
+            );
+            assert_eq!(e.name(), "intersect_tolerance_invalid");
+            assert_eq!(e.kind(), scx_num::error::ErrorKind::Refused);
+        }
+    }
 }
 
 #[test]
@@ -742,4 +1054,43 @@ fn nurbs_budget_and_stop_are_typed() {
     let mut budget = Budget::new(4);
     intersect_curve(&p.c, &p.ce, &s.s, &se, len(1e-6), &mut budget, &Stop::new()).unwrap();
     assert_eq!(budget.used(), 4);
+}
+
+#[test]
+fn open_conics_overlap_their_plane_and_touch_at_the_vertex() {
+    let mut rng = Rng::new(0x5_06_77);
+    let mut touched = 0;
+    for i in 0..20 {
+        let f = frame(&mut rng);
+        let s = sense(&mut rng);
+        let a = between(&mut rng, 0.5, 10.0);
+        let ce = Extent1d::new(-between(&mut rng, 0.5, 3.0), between(&mut rng, 0.5, 3.0)).unwrap();
+        let p = if i % 2 == 0 {
+            parabola(f, a, s, ce)
+        } else {
+            hyperbola(f, a, a * between(&mut rng, 0.2, 2.0), s, ce)
+        };
+        // In its own plane: an overlap over the whole extent.
+        let own = plane(f);
+        let hits = run(&p, &own, &full(&own.s), 1e-6).unwrap();
+        assert_eq!(hits, vec![CurveSurfaceHit::Overlap { t: ce }]);
+        // The plane through the vertex across the axis: one tangent at t = 0.
+        let vertex = p.c.point(0.0);
+        let across = Frame::new(vertex, *f.x(), *f.y()).unwrap();
+        let touch = plane(across);
+        let hits = run(&p, &touch, &full(&touch.s), 1e-6).unwrap();
+        let [CurveSurfaceHit::Point { t, contact, .. }] = hits[..] else {
+            panic!("{hits:?}");
+        };
+        assert_eq!(contact, Contact::Tangent);
+        assert!(t.abs() <= 1e-3, "{t}");
+        touched += 1;
+        // Moved past the vertex by more than tol along x: two crossings, at T2's roots.
+        let past = plane(Frame::new(vertex + *f.x() * 0.01, *f.x(), *f.y()).unwrap());
+        let hits = run(&p, &past, &full(&past.s), 1e-6).unwrap();
+        let mut stats = Stats::default();
+        check(&p, &past, &full(&past.s), 1e-6, &hits, &mut stats);
+        assert_eq!(stats.crossings, 2, "{hits:?}");
+    }
+    assert_eq!(touched, 20);
 }

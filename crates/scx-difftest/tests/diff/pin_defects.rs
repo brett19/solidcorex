@@ -4863,12 +4863,76 @@ fn curve_surface_truth(c: &crate::t_curve_surface::Case) -> Result<(), String> {
 /// - Plane missing a bounded cylinder or cone (8) or a torus (15): the pin answers general;
 ///   scx answers empty from the rims' hull or the torus's support, and every point of the
 ///   surface's grid is off the plane by more than the snap.
+/// - Plane and cone cutting a hyperbola whose branch on the nappe misses the extent (2):
+///   the pin answers general; scx clips the branch to nothing and answers empty.
+/// - Plane and cone cutting a hyperbola (19 in one piece, 12 in two): the pin answers
+///   general; scx answers the branch on the nappe, clipped to the extent.
+/// - Plane and cone parallel to a generator, a parabola (13 in one piece, 5 in two): the
+///   pin answers general; scx answers the parabola, clipped.
+/// - Plane aimed along a generator but off the apex (4): the pin answers general; scx
+///   answers empty, the parabola on the other nappe or outside the extent.
 pub fn ssi_section_by_plane() -> PinDefect<(crate::t_ssi::Case,), crate::t_ssi::Print> {
     PinDefect {
-        reason: "the pin leaves closed forms to the general intersector, splits pieces at a seam, or answers outside the extent",
+        reason: "the pin leaves closed forms (parabolas and hyperbolas among them) to the general intersector, splits pieces at a seam, or answers outside the extent",
         applies: Applies::Disagreeing,
         check: |(c,), _| crate::t_ssi::truth::check(c),
     }
+}
+
+/// `t_pcurve`: `drop_curve_to_srf` drops at a 3-D tolerance of 10, so `DropIsoCurve` takes
+/// a gently tilted section, whose start tangent is within a degree of the cylinder's `u`
+/// direction, for the iso line at its start height and answers a constant `v`. The check
+/// holds scx's stations to the section's exact uv: `v` the height of the ellipse's point
+/// above the base and `u` testkit T4's arcs parameter of its azimuth (double-double), each
+/// within `1e-9` of size.
+pub fn oblique_pcurve() -> PinDefect<(crate::t_pcurve::Case,), Option<Vec<[f64; 2]>>> {
+    PinDefect {
+        reason: "the pin's drop, at a tolerance of 10, takes a gently tilted section for an iso \
+                 line (63 §4.14)",
+        applies: Applies::Disagreeing,
+        check: |(c,), got| oblique_pcurve_truth(c, got.as_deref()),
+    }
+}
+
+fn oblique_pcurve_truth(c: &crate::t_pcurve::Case, got: Option<&[[f64; 2]]>) -> Result<(), String> {
+    use scx_testkit::dd::{self, Dd};
+    use scx_testkit::quadric::Param;
+    let got = got.ok_or("scx gave no AngleWave2")?;
+    let [o, _, _] = c.frame;
+    let f = {
+        use scx_num::vector3d::{Point3, Vec3};
+        let [o, z, x] = c.frame;
+        scx_num::frame::Frame::new(Point3::from(o), Vec3::from(z), Vec3::from(x)).unwrap()
+    };
+    let (fx, fy, fz) = (
+        f.x().as_vec().to_array(),
+        f.y().as_vec().to_array(),
+        f.z().as_vec().to_array(),
+    );
+    let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    let turn = Param::arcs(
+        (0.0, core::f64::consts::TAU * c.r),
+        Dd::new(0.0),
+        dd::consts().pi * 2.0,
+    );
+    let size = 10.0 + c.a.max(c.b) + crate::t_pcurve::HEIGHT;
+    let [t0, t1] = c.t;
+    let n = crate::t_pcurve::STATIONS;
+    if got.len() != n + 1 {
+        return Err(format!("{} stations", got.len()));
+    }
+    for (k, uv) in got.iter().enumerate() {
+        let t = t0 + (t1 - t0) * (k as f64 / n as f64);
+        let (ct, st) = (scx_num::fmath::cos(t), scx_num::fmath::sin(t));
+        let d: [f64; 3] =
+            core::array::from_fn(|i| c.c[i] + c.a * ct * c.x[i] + c.b * st * c.y[i] - o[i]);
+        let phi = scx_num::fmath::atan2(dot(d, fy), dot(d, fx)).rem_euclid(core::f64::consts::TAU);
+        let want = [turn.to_nurb(Dd::new(phi)).to_f64(), dot(d, fz)];
+        if (0..2).any(|i| (uv[i] - want[i]).abs() > 1e-9 * size) {
+            return Err(format!("station {k}: {uv:?}, the truth {want:?}"));
+        }
+    }
+    Ok(())
 }
 
 /// The sphere and coaxial pairs of `analytic::intersect` against the pin's

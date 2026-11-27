@@ -37,7 +37,7 @@
 
 use scx_algo::polynomial::solve_quartic;
 use scx_num::extent1d::Extent1d;
-use scx_num::fmath::{acos, asin, atan, atan2, sin_cos};
+use scx_num::fmath::{self, acos, asin, atan, atan2, sin_cos};
 pub use scx_num::invert::{Foot, Inversion};
 use scx_num::math::{EFF_ZERO, HALF_PI, PI, TWO_PI};
 use scx_num::vector2d::{Point2, Vec2};
@@ -47,6 +47,7 @@ use crate::conic::{Circle, Circle2, Ellipse, Ellipse2};
 use crate::curve::{Curve, Curve2};
 use crate::error::{CurveError, Unsupported};
 use crate::line::{Line, Line2};
+use crate::open_conic::{Hyperbola, Hyperbola2, Parabola, Parabola2, acosh, asinh};
 
 /// The most steps the ellipse's polish takes. Bisection alone closes the quarter turn's
 /// bracket to below an ulp of the angle in under 60.
@@ -209,6 +210,105 @@ impl Ellipse2 {
     }
 }
 
+macro_rules! open_conic {
+    ($ty:ident, $p:ident, $local:ident, $foot:ident, $doc:literal) => {
+        impl $ty {
+            #[doc = $doc]
+            #[must_use]
+            pub fn closest(&self, p: $p) -> Closest<f64, $p> {
+                match self.params(p) {
+                    Params::One(t) => Closest::One($foot(p, t, self.point(t))),
+                    Params::Two(s, t) => {
+                        Closest::Two([$foot(p, s, self.point(s)), $foot(p, t, self.point(t))])
+                    }
+                }
+            }
+
+            /// The nearest point to `p`, inside `domain` or not (`None`: every `t`). Of two
+            /// equally near feet, the first inside the domain, else the first. An outside
+            /// foot is reported as it is, not moved to the domain's end (CU4).
+            #[must_use]
+            pub fn invert(&self, p: $p, domain: Option<&Extent1d>) -> Inversion<f64, $p> {
+                let at = |t: f64| place($foot(p, t, self.point(t)), domain);
+                match self.params(p) {
+                    Params::One(t) => at(t),
+                    Params::Two(s, t) => {
+                        let (f, g) = (at(s), at(t));
+                        if f.is_inside() || !g.is_inside() {
+                            f
+                        } else {
+                            g
+                        }
+                    }
+                }
+            }
+
+            fn params(&self, p: $p) -> Params {
+                let y = self.frame().y().as_vec() * self.sense().sign();
+                let (u, v) = $local(self.frame().origin(), self.frame().x().as_vec(), y, p);
+                self.feet(u, v)
+            }
+        }
+    };
+}
+
+open_conic!(
+    Parabola,
+    Point3,
+    local3,
+    foot3,
+    "The nearest points to `p`: one, or two mirrored ones for `p` on the axis beyond the \
+     evolute's cusp (`u > 2 F`, the cusp at `vertex + 2 F x`). Measured in the plane: `p`'s \
+     offset along the frame's z changes the distance, not the feet."
+);
+open_conic!(
+    Parabola2,
+    Point2,
+    local2,
+    foot2,
+    "The nearest points to `p`; see [`Parabola::closest`]."
+);
+open_conic!(
+    Hyperbola,
+    Point3,
+    local3,
+    foot3,
+    "The nearest points to `p`: one, or two mirrored ones for `p` on the axis beyond the \
+     evolute's cusp (`u > (a^2 + b^2) / a`). Measured in the plane, as \
+     [`Parabola::closest`]."
+);
+open_conic!(
+    Hyperbola2,
+    Point2,
+    local2,
+    foot2,
+    "The nearest points to `p`; see [`Hyperbola::closest`]."
+);
+
+impl Parabola {
+    fn feet(&self, u: f64, v: f64) -> Params {
+        parabola_params(self.focal().mm(), u, v)
+    }
+}
+
+impl Parabola2 {
+    fn feet(&self, u: f64, v: f64) -> Params {
+        parabola_params(self.focal().mm(), u, v)
+    }
+}
+
+impl Hyperbola {
+    fn feet(&self, u: f64, v: f64) -> Params {
+        hyperbola_params(self.semi_x().mm(), self.semi_y().mm(), u, v)
+    }
+}
+
+impl Hyperbola2 {
+    fn feet(&self, u: f64, v: f64) -> Params {
+        hyperbola_params(self.semi_x().mm(), self.semi_y().mm(), u, v)
+    }
+}
+
 // ---------------------------------------------------------------- the enums
 
 impl Curve {
@@ -224,6 +324,8 @@ impl Curve {
             Self::Line(c) => Ok(Closest::One(c.closest(p))),
             Self::Circle(c) => Ok(c.closest(p)),
             Self::Ellipse(c) => Ok(c.closest(p)),
+            Self::Parabola(c) => Ok(c.closest(p)),
+            Self::Hyperbola(c) => Ok(c.closest(p)),
             Self::Nurbs(_) => Err(CurveError::Unsupported(Unsupported::NurbsInversion)),
         }
     }
@@ -240,6 +342,8 @@ impl Curve {
             Self::Line(c) => Ok(c.invert(p, domain)),
             Self::Circle(c) => Ok(c.invert(p, domain)),
             Self::Ellipse(c) => Ok(c.invert(p, domain)),
+            Self::Parabola(c) => Ok(c.invert(p, domain)),
+            Self::Hyperbola(c) => Ok(c.invert(p, domain)),
             Self::Nurbs(_) => Err(CurveError::Unsupported(Unsupported::NurbsInversion)),
         }
     }
@@ -257,8 +361,11 @@ impl Curve2 {
             Self::Line(c) => Ok(Closest::One(c.closest(p))),
             Self::Circle(c) => Ok(c.closest(p)),
             Self::Ellipse(c) => Ok(c.closest(p)),
+            Self::Parabola(c) => Ok(c.closest(p)),
+            Self::Hyperbola(c) => Ok(c.closest(p)),
             Self::Nurbs(_) => Err(CurveError::Unsupported(Unsupported::NurbsInversion)),
             Self::AngleLine(_) => Err(CurveError::Unsupported(Unsupported::AngleLineInversion)),
+            Self::AngleWave(_) => Err(CurveError::Unsupported(Unsupported::AngleWaveInversion)),
         }
     }
 
@@ -267,7 +374,8 @@ impl Curve2 {
     /// # Errors
     ///
     /// [`Unsupported::NurbsInversion`] for a NURBS curve,
-    /// [`Unsupported::AngleLineInversion`] for an angle line.
+    /// [`Unsupported::AngleLineInversion`] for an angle line,
+    /// [`Unsupported::AngleWaveInversion`] for an angle wave.
     #[inline]
     pub fn invert(
         &self,
@@ -278,8 +386,11 @@ impl Curve2 {
             Self::Line(c) => Ok(c.invert(p, domain)),
             Self::Circle(c) => Ok(c.invert(p, domain)),
             Self::Ellipse(c) => Ok(c.invert(p, domain)),
+            Self::Parabola(c) => Ok(c.invert(p, domain)),
+            Self::Hyperbola(c) => Ok(c.invert(p, domain)),
             Self::Nurbs(_) => Err(CurveError::Unsupported(Unsupported::NurbsInversion)),
             Self::AngleLine(_) => Err(CurveError::Unsupported(Unsupported::AngleLineInversion)),
+            Self::AngleWave(_) => Err(CurveError::Unsupported(Unsupported::AngleWaveInversion)),
         }
     }
 }
@@ -452,7 +563,7 @@ fn quadrant_root(a: f64, b: f64, u: f64, v: f64) -> f64 {
     // eps of `s`; the quartic's polish keeps the exact stop.
     let cheap = atan2(a * v, b * u);
     if cheap > 0.0 && cheap < HALF_PI {
-        let (s, done) = polish(&g, cheap, FAST_STEPS, true);
+        let (s, done) = polish(&g, cheap, (0.0, HALF_PI), FAST_STEPS, true);
         if done {
             return s;
         }
@@ -472,14 +583,20 @@ fn quadrant_root(a: f64, b: f64, u: f64, v: f64) -> f64 {
             }
         }
     }
-    polish(&g, best.1, POLISH_STEPS, false).0
+    polish(&g, best.1, (0.0, HALF_PI), POLISH_STEPS, false).0
 }
 
 /// Newton steps on `g` (its value, slope and the size of its terms) from `s0`, safeguarded by
-/// bisection inside `(0, pi/2)`; and whether it converged within `steps`. `fast` adds the
-/// rounding-level stop.
-fn polish(g: &impl Fn(f64) -> (f64, f64, f64), s0: f64, steps: u32, fast: bool) -> (f64, bool) {
-    let (mut lo, mut hi, mut s) = (0.0, HALF_PI, s0);
+/// bisection inside the bracket `(lo, hi)` (`g` below zero at `lo`, above at `hi`, one root
+/// between); and whether it converged within `steps`. `fast` adds the rounding-level stop.
+fn polish(
+    g: &impl Fn(f64) -> (f64, f64, f64),
+    s0: f64,
+    (mut lo, mut hi): (f64, f64),
+    steps: u32,
+    fast: bool,
+) -> (f64, bool) {
+    let mut s = s0;
     for _ in 0..steps {
         let (val, der, noise) = g(s);
         if val == 0.0 {
@@ -493,7 +610,7 @@ fn polish(g: &impl Fn(f64) -> (f64, f64, f64), s0: f64, steps: u32, fast: bool) 
         let newton = s - val / der;
         if fast
             && val.abs() <= 4.0 * f64::EPSILON * noise
-            && (newton - s).abs() <= 4.0 * f64::EPSILON * s
+            && (newton - s).abs() <= 4.0 * f64::EPSILON * s.abs()
         {
             return (s, true);
         }
@@ -502,7 +619,7 @@ fn polish(g: &impl Fn(f64) -> (f64, f64, f64), s0: f64, steps: u32, fast: bool) 
         } else {
             0.5 * (lo + hi)
         };
-        if next == s || (next - s).abs() <= f64::EPSILON * s {
+        if next == s || (next - s).abs() <= f64::EPSILON * s.abs() {
             return (next, true);
         }
         s = next;
@@ -557,6 +674,116 @@ fn place_periodic<Q>(f: Foot<f64, Q>, domain: Option<&Extent1d>) -> Inversion<f6
     } else {
         Inversion::Outside(f)
     }
+}
+
+/// An open conic's nearest parameters, increasing.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Params {
+    One(f64),
+    Two(f64, f64),
+}
+
+/// The parabola `(F s^2, 2 F s)`'s nearest parameters to `(u, v)`, `F > 0`.
+///
+/// The distance is stationary where `g(s) = F s^3 + (2 F - u) s - v` is zero. For `v > 0`
+/// the nearest root is the one positive one (a negative `s` is farther than `-s`, and `g` is
+/// convex on `s > 0` with `g(0) = -v`); it is below `hi = max(sqrt(2 (u - 2 F)+ / F),
+/// cbrt(2 v / F))`, where `g >= 0`. Cardano's root (stable forms: no difference of like
+/// terms) seeds a bracketed Newton polish. `v < 0` is the mirror; on the axis (`v = 0`) the
+/// vertex, or the two feet `+-sqrt((u - 2 F) / F)` past the evolute's cusp.
+fn parabola_params(f: f64, u: f64, v: f64) -> Params {
+    if !(u.is_finite() && v.is_finite()) {
+        return Params::One(f64::NAN);
+    }
+    // Scale by a power of two (exact) so F is in [1, 2).
+    let e = 1.0 / pow2_floor(f);
+    let (f, u, w) = (f * e, u * e, (v * e).abs());
+    if w == 0.0 {
+        if u > 2.0 * f {
+            let s = ((u - 2.0 * f) / f).sqrt();
+            return Params::Two(-s, s);
+        }
+        return Params::One(0.0);
+    }
+    let g = |s: f64| -> (f64, f64, f64) {
+        let s3 = f * s * s * s;
+        let val = s3 + 2.0 * f * s - u * s - w;
+        let der = 3.0 * f * s * s + 2.0 * f - u;
+        let noise = s3 + 2.0 * f * s + (u * s).abs() + w;
+        (val, der, noise)
+    };
+    let hi = (2.0 * (u - 2.0 * f).max(0.0) / f)
+        .sqrt()
+        .max(fmath::cbrt(2.0 * w / f));
+    // Cardano on s^3 + p s + q, p = (2 F - u) / F, q = -w / F < 0: the largest real root.
+    let (p, q) = ((2.0 * f - u) / f, -w / f);
+    let (p3, h) = (p / 3.0, -0.5 * q);
+    let disc = h * h + p3 * p3 * p3;
+    let seed = if disc >= 0.0 {
+        let a = fmath::cbrt(h + disc.sqrt());
+        let b = -p3 / a;
+        if p3 >= 0.0 {
+            w / f / (a * a + p3 + b * b)
+        } else {
+            a + b
+        }
+    } else {
+        // Three real roots (p < 0): the largest, 2 sqrt(-p/3) cos(theta / 3).
+        let m = (-p3).sqrt();
+        let c = (h / (m * m * m)).clamp(-1.0, 1.0);
+        2.0 * m * fmath::cos(acos(c) / 3.0)
+    };
+    let seed = if seed > 0.0 && seed < hi {
+        seed
+    } else {
+        0.5 * hi
+    };
+    let s = polish(&g, seed, (0.0, hi), POLISH_STEPS, true).0;
+    Params::One(if v < 0.0 { -s } else { s })
+}
+
+/// The branch `(a cosh t, b sinh t)`'s nearest parameters to `(u, v)`, `a, b > 0`.
+///
+/// The distance is stationary where `h(t) = k sinh t - a u tanh t - b v` is zero,
+/// `k = a^2 + b^2`. For `v > 0` the nearest root is the one positive one (a negative `t` is
+/// farther than `-t`; `h` is convex on `t > 0`, increasing where `a u <= 0`, with
+/// `h(0) = -b v`); it is below `asinh((max(a u, 0) + b v) / k)`, where `h >= 0` as
+/// `tanh < 1`. The seed is the parameter of the point on the curve with `p`'s `y`
+/// (`asinh(v / b)`, the pin's `step_inversion`), polished by a bracketed Newton. `v < 0`
+/// is the mirror; on the axis the vertex, or `+-acosh(a u / k)` past the evolute's cusp.
+fn hyperbola_params(a: f64, b: f64, u: f64, v: f64) -> Params {
+    if !(u.is_finite() && v.is_finite()) {
+        return Params::One(f64::NAN);
+    }
+    let e = 1.0 / pow2_floor(a.max(b));
+    let (a, b, u, w) = (a * e, b * e, u * e, (v * e).abs());
+    let k = a * a + b * b;
+    let au = a * u;
+    if w == 0.0 {
+        if au > k {
+            let t = acosh(au / k);
+            return Params::Two(-t, t);
+        }
+        return Params::One(0.0);
+    }
+    let bv = b * w;
+    let g = |t: f64| -> (f64, f64, f64) {
+        let (sh, ch) = fmath::sinh_cosh(t);
+        let th = sh / ch;
+        let val = k * sh - au * th - bv;
+        let der = k * ch - au / (ch * ch);
+        let noise = k * sh.abs() + (au * th).abs() + bv;
+        (val, der, noise)
+    };
+    let hi = asinh((au.max(0.0) + bv) / k);
+    let seed = asinh(w / b);
+    let seed = if seed > 0.0 && seed < hi {
+        seed
+    } else {
+        0.5 * hi
+    };
+    let t = polish(&g, seed, (0.0, hi), POLISH_STEPS, true).0;
+    Params::One(if v < 0.0 { -t } else { t })
 }
 
 /// A line's foot against its domain.
@@ -648,6 +875,20 @@ mod tests {
             _ => None,
         };
         (d, at)
+    }
+
+    trait Ats {
+        fn ats(&self) -> Vec<f64>;
+    }
+
+    impl<Q: Copy> Ats for Closest<f64, Q> {
+        fn ats(&self) -> Vec<f64> {
+            match self {
+                Closest::One(f) => vec![f.at],
+                Closest::Two(f) => f.iter().map(|g| g.at).collect(),
+                Closest::Every { .. } => Vec::new(),
+            }
+        }
     }
 
     fn feet(c: &Closest) -> Vec<Foot> {
@@ -790,7 +1031,7 @@ mod tests {
 
     fn want_axis(c: &Circle, q: Point3) -> f64 {
         let h = (q - c.frame().origin()).dot(c.frame().z().as_vec());
-        scx_num::fmath::hypot(h, c.radius().mm())
+        fmath::hypot(h, c.radius().mm())
     }
 
     #[test]
@@ -1092,5 +1333,161 @@ mod tests {
                 distance: 1.0
             })
         );
+    }
+
+    /// Every open conic of every scale and sense, with its truth, checked over `queries`:
+    /// each foot's distance is the truth's nearest distance, and where the truth is unique
+    /// and not tied to an axis by rounding, the parameter is too.
+    #[test]
+    fn an_open_conic_foot_is_the_certified_nearest() {
+        let mut rng = Rng::new(47);
+        let (mut checked, mut params) = (0, 0);
+        for (i, (scale, size)) in [(1.0, 1.0), (1e3, 1e-3), (1e-3, 1e3), (0.0, 1.0)]
+            .into_iter()
+            .enumerate()
+        {
+            for k in 0..12 {
+                let f = frame(&mut rng, scale);
+                let s = sense(i + k);
+                let a = size * (0.25 + rng.next_f64());
+                let b = match k % 3 {
+                    0 => a,
+                    1 => a * 0.05,
+                    _ => size * (0.25 + rng.next_f64()),
+                };
+                let p = Parabola::new(f, Length::from_mm(a), s).unwrap();
+                let h = Hyperbola::new(f, Length::from_mm(a), Length::from_mm(b), s).unwrap();
+                let kp = analytic::Parabola {
+                    frame: kit_frame(&f, s),
+                    focal: a,
+                };
+                let kh = analytic::Hyperbola {
+                    frame: kit_frame(&f, s),
+                    semi_x: a,
+                    semi_y: b,
+                };
+                for q in queries(&mut rng, &f, a.max(b)) {
+                    let sz = (q - f.origin()).length() + a.max(b) + f.origin().to_vec().length();
+                    let truths = [kp.nearest(q.to_array()), kh.nearest(q.to_array())];
+                    for (got, truth) in [p.closest(q), h.closest(q)].into_iter().zip(truths) {
+                        let Some(t) = truth else { continue };
+                        for g in feet(&got) {
+                            // Measured worst: 2.4 ulps of the query's size.
+                            assert!(near(g.distance, t.distance, sz, 8.0), "{g:?} {t:?} {q:?}");
+                        }
+                        checked += 1;
+                        if let Closest::One(g) = got {
+                            let err = (Dd::new(g.at) - t.param).hi.abs();
+                            if err <= 1e-6 * (1.0 + t.param.hi.abs()) {
+                                params += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(checked > 6000 && params > 6000, "{checked} {params}");
+    }
+
+    #[test]
+    fn an_open_conic_has_two_feet_on_its_axis_past_the_cusp() {
+        let f = Frame::WORLD;
+        let mm = Length::from_mm;
+        let p = Parabola::new(f, mm(1.0), Sense::Forward).unwrap();
+        // The vertex up to the cusp at u = 2 F, then +-sqrt((u - 2 F) / F).
+        for u in [-5.0, 0.0, 1.0, 2.0] {
+            assert_eq!(
+                p.closest(Point3::new(u, 0.0, 0.0)),
+                Closest::One(Foot {
+                    at: 0.0,
+                    point: Point3::ORIGIN,
+                    distance: u.abs()
+                })
+            );
+        }
+        let Closest::Two([g, k]) = p.closest(Point3::new(6.0, 0.0, 3.0)) else {
+            panic!()
+        };
+        assert_eq!((g.at, k.at), (-2.0, 2.0));
+        assert_eq!(
+            (g.point, k.point),
+            (Point3::new(4.0, -4.0, 0.0), Point3::new(4.0, 4.0, 0.0))
+        );
+        // sqrt(2^2 + 4^2 + 3^2): the z offset adds to the distance only.
+        assert_eq!(g.distance, 29.0_f64.sqrt());
+        let h = Hyperbola::new(f, mm(3.0), mm(4.0), Sense::Reversed).unwrap();
+        // The cusp at u = (a^2 + b^2) / a = 25 / 3; past it, cosh t = a u / k.
+        assert!(matches!(h.closest(Point3::new(8.0, 0.0, 0.0)), Closest::One(g) if g.at == 0.0));
+        let Closest::Two([g, k]) = h.closest(Point3::new(25.0, 0.0, 0.0)) else {
+            panic!()
+        };
+        assert_eq!(g.at, -k.at);
+        assert!((fmath::cosh(k.at) - 3.0).abs() <= 4.0 * U * 3.0, "{}", k.at);
+        // Of the two, invert takes the first inside the domain.
+        let right = Extent1d::new(0.0, 10.0).unwrap();
+        assert_eq!(
+            h.invert(Point3::new(25.0, 0.0, 0.0), Some(&right))
+                .foot()
+                .at,
+            k.at
+        );
+        assert_eq!(h.invert(Point3::new(25.0, 0.0, 0.0), None).foot().at, g.at);
+    }
+
+    #[test]
+    fn an_open_conic_foot_outside_the_domain_is_reported_not_clamped() {
+        let f = Frame::WORLD;
+        let p = Parabola::new(f, Length::from_mm(1.0), Sense::Forward).unwrap();
+        let h = Hyperbola::new(
+            f,
+            Length::from_mm(1.0),
+            Length::from_mm(1.0),
+            Sense::Forward,
+        )
+        .unwrap();
+        let d = Extent1d::new(-1.0, 1.0).unwrap();
+        // The parabola's point at s = 3 is (9, 6): its foot is there, outside [-1, 1].
+        let q = Point3::new(9.0, 6.0, 0.0);
+        let got = p.invert(q, Some(&d));
+        assert!(!got.is_inside());
+        // To the polish's stop (a few ulps), not moved to 1.
+        assert!((got.foot().at - 3.0).abs() <= 4.0 * U * 3.0, "{got:?}");
+        assert!(got.foot().distance <= 64.0 * U * 9.0, "{got:?}");
+        assert!(p.invert(q, None).is_inside());
+        let q = h.point(-2.5);
+        let got = h.invert(q, Some(&d));
+        assert!(!got.is_inside());
+        assert!(
+            (got.foot().at + 2.5).abs() <= 8.0 * U * 2.5,
+            "{}",
+            got.foot().at
+        );
+        for q in [
+            Point3::new(f64::NAN, 0.0, 0.0),
+            Point3::new(0.0, f64::INFINITY, 0.0),
+        ] {
+            let Closest::One(g) = p.closest(q) else {
+                panic!()
+            };
+            assert!(g.at.is_nan());
+            assert!(!h.invert(q, None).is_inside() && !p.invert(q, None).is_inside());
+        }
+        // The plane twins and the enum agree with the 3-D kinds.
+        let p2 = Parabola2::new(Frame2::WORLD, Length::from_mm(1.0), Sense::Forward).unwrap();
+        let h2 = Hyperbola2::new(
+            Frame2::WORLD,
+            Length::from_mm(1.0),
+            Length::from_mm(1.0),
+            Sense::Forward,
+        )
+        .unwrap();
+        for (u, v) in [(9.0, 6.0), (-1.0, 0.3), (4.0, 0.0), (0.5, -7.0)] {
+            let q = Point3::new(u, v, 0.0);
+            let q2 = Point2::new(u, v);
+            assert_eq!(p2.closest(q2).ats(), p.closest(q).ats());
+            assert_eq!(h2.closest(q2).ats(), h.closest(q).ats());
+            assert_eq!(Curve::Parabola(p).closest(q).unwrap(), p.closest(q));
+            assert_eq!(Curve2::Hyperbola(h2).closest(q2).unwrap(), h2.closest(q2));
+        }
     }
 }

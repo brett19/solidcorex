@@ -16,12 +16,15 @@
 //! | `Ellipse::create_canonical_circle`: `RadiusNotPositive` (not above `SM_EFF_ZERO`, or NaN) | [`Degenerate::Radius`], or [`CurveError::NotFinite`] for NaN |
 //! | none: an infinite radius builds | [`CurveError::NotFinite`] |
 //! | none: `Ellipse::new` builds any radii | [`Degenerate::SemiAxis`], [`CurveError::NotFinite`] |
+//! | none: `Hyperbola::new` builds any semi-axes | [`Degenerate::SemiAxis`], [`CurveError::NotFinite`] |
+//! | none: `Parabola::new` builds any focal distance | [`Degenerate::Focal`], [`CurveError::NotFinite`] |
 //! | none: non-finite points and vectors build | [`CurveError::NotFinite`] (a [`Frame`](scx_num::frame::Frame) refuses them itself) |
 //! | new (CU5): a restriction past a NURBS curve's domain | [`CurveError::OutsideDomain`] |
 //! | new (CU5): a restriction to one parameter | [`Degenerate::Extent`] |
 //! | new (CU5): a map that takes a conic's plane to a line or a point | [`Degenerate::Plane`], or a degenerate semi-axis |
 //! | none: a NURBS curve's inversion runs the general solver | [`Unsupported::NurbsInversion`] |
 //! | new (63 §4.11): an angle line's 2-D inversion | [`Unsupported::AngleLineInversion`] |
+//! | new (63 §4.14): an angle wave's 2-D inversion | [`Unsupported::AngleWaveInversion`] |
 //!
 //! `TooLarge` and `Solve` (63 §3.2) join with the first operation that can produce them.
 //! Analytic inversion (CU4) cannot: an outside foot is
@@ -65,6 +68,8 @@ pub enum Unsupported {
     /// An angle line's closest point or inversion (a 2-D query on a pcurve; the 3-D
     /// edge's inversion answers the same question exactly), not built.
     AngleLineInversion,
+    /// An angle wave's closest point or inversion, not built, as an angle line's.
+    AngleWaveInversion,
 }
 
 /// A size or direction too small to give a curve. A length's threshold is the pin's
@@ -82,12 +87,17 @@ pub enum Degenerate {
         /// The radius.
         radius: f64,
     },
-    /// An ellipse's semi-axis is not above `EFF_ZERO`.
+    /// An ellipse's or a hyperbola's semi-axis is not above `EFF_ZERO`.
     SemiAxis {
         /// Which.
         axis: SemiAxis,
         /// Its length.
         length: f64,
+    },
+    /// A parabola's focal distance is not above `EFF_ZERO`.
+    Focal {
+        /// The focal distance.
+        focal: f64,
     },
     /// A restriction to the single parameter `at`: an extent of no length.
     Extent {
@@ -98,7 +108,7 @@ pub enum Degenerate {
     Plane,
 }
 
-/// An ellipse's semi-axis: along its frame's x or y.
+/// An ellipse's or a hyperbola's semi-axis: along its frame's x or y.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SemiAxis {
     /// Along x (where the angle starts).
@@ -117,8 +127,10 @@ pub enum Part {
     Direction,
     /// A circle's radius.
     Radius,
-    /// An ellipse's semi-axis.
+    /// An ellipse's or a hyperbola's semi-axis.
     SemiAxis(SemiAxis),
+    /// A parabola's focal distance.
+    Focal,
     /// The affine map a curve is transformed by.
     Map,
 }
@@ -144,6 +156,7 @@ impl CurveError {
             Self::Degenerate(Degenerate::Direction { .. }) => "degenerate_direction",
             Self::Degenerate(Degenerate::Radius { .. }) => "degenerate_radius",
             Self::Degenerate(Degenerate::SemiAxis { .. }) => "degenerate_semi_axis",
+            Self::Degenerate(Degenerate::Focal { .. }) => "degenerate_focal",
             Self::Degenerate(Degenerate::Extent { .. }) => "degenerate_extent",
             Self::Degenerate(Degenerate::Plane) => "degenerate_plane",
             Self::NotFinite(_) => "not_finite",
@@ -152,6 +165,9 @@ impl CurveError {
             Self::Unsupported(Unsupported::NurbsInversion) => "unsupported_nurbs_inversion",
             Self::Unsupported(Unsupported::AngleLineInversion) => {
                 "unsupported_angle_line_inversion"
+            }
+            Self::Unsupported(Unsupported::AngleWaveInversion) => {
+                "unsupported_angle_wave_inversion"
             }
         }
     }
@@ -173,6 +189,7 @@ impl fmt::Display for Part {
             Self::Direction => f.write_str("the direction"),
             Self::Radius => f.write_str("the radius"),
             Self::SemiAxis(a) => write!(f, "the {a} semi-axis"),
+            Self::Focal => f.write_str("the focal distance"),
             Self::Map => f.write_str("the map"),
         }
     }
@@ -188,7 +205,10 @@ impl fmt::Display for CurveError {
                 write!(f, "a circle radius of {radius} is not positive")
             }
             Self::Degenerate(Degenerate::SemiAxis { axis, length }) => {
-                write!(f, "an ellipse {axis} semi-axis of {length} is not positive")
+                write!(f, "a conic's {axis} semi-axis of {length} is not positive")
+            }
+            Self::Degenerate(Degenerate::Focal { focal }) => {
+                write!(f, "a parabola focal distance of {focal} is not positive")
             }
             Self::Degenerate(Degenerate::Extent { at }) => {
                 write!(
@@ -214,6 +234,9 @@ impl fmt::Display for CurveError {
             }
             Self::Unsupported(Unsupported::AngleLineInversion) => {
                 f.write_str("an angle line's inversion is not built")
+            }
+            Self::Unsupported(Unsupported::AngleWaveInversion) => {
+                f.write_str("an angle wave's inversion is not built")
             }
         }
     }
@@ -241,9 +264,11 @@ mod tests {
                 axis: SemiAxis::Y,
                 length: 0.0,
             }),
+            CurveError::Degenerate(Degenerate::Focal { focal: 0.0 }),
             CurveError::Degenerate(Degenerate::Extent { at: 1.0 }),
             CurveError::Degenerate(Degenerate::Plane),
             CurveError::NotFinite(Part::Origin),
+            CurveError::NotFinite(Part::Focal),
             CurveError::NotFinite(Part::SemiAxis(SemiAxis::X)),
             CurveError::NotFinite(Part::Map),
             CurveError::OutsideDomain {
@@ -252,7 +277,7 @@ mod tests {
             },
         ];
         let names: BTreeSet<_> = all.iter().map(CurveError::name).collect();
-        assert_eq!(names.len(), 7);
+        assert_eq!(names.len(), 8);
         let unsupported = CurveError::Unsupported(Unsupported::NurbsInversion);
         assert_eq!(unsupported.kind(), ErrorKind::Unsupported);
         assert!(!names.contains(unsupported.name()));

@@ -260,6 +260,8 @@ pub enum Class {
     Line,
     Circle,
     Ellipse,
+    Parabola,
+    Hyperbola,
     Other,
 }
 
@@ -277,7 +279,7 @@ pub fn truth_class(c: &ssi::Curve) -> Class {
                 Class::Ellipse
             }
         }
-        ssi::Curve::Hyperbola { .. } => Class::Other,
+        ssi::Curve::Hyperbola { .. } => Class::Hyperbola,
     }
 }
 
@@ -286,6 +288,8 @@ pub fn class(c: &Curve) -> Class {
         Curve::Line(_) => Class::Line,
         Curve::Circle(_) => Class::Circle,
         Curve::Ellipse(_) => Class::Ellipse,
+        Curve::Parabola(_) => Class::Parabola,
+        Curve::Hyperbola(_) => Class::Hyperbola,
         _ => Class::Other,
     }
 }
