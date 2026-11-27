@@ -3332,3 +3332,93 @@ A box is mapped into the kind's frame as the box of its 8 corners' coordinates, 
 **Open questions.** (1) Whether step 5's marcher should take over these refusals outright, which would make this check a prefilter only. (2) A second-order (exact distance) test would be needed if a real model has near-misses on oblique pairs that are smaller than the bisection resolves.
 
 **Proposed 04 row.** "BO2b (72 §14.30): before refusing a pair with no closed form, stage 4 proves whether its faces can touch. It encloses each surface's 1-Lipschitz level function (plane `h`, cylinder `rho - r`, sphere `|p| - r`, cone line distance, ring torus `hypot(rho - R, h) - r`) over the overlap of the faces' boxes grown by the coincidence, bisected depth first to depth 8, and drops the pair when every piece is clear of one surface by more than the coincidence. Otherwise it refuses `SsiPair` as before. The seam-vertex torus-box case now names `sides[3]` (`x = 6.5`, the face the torus touches), and the other BO5 cases are unchanged. The cost is 1 box on the torus-box drops and 10-28 boxes (3-7 µs) on pairs that touch. Against: the bound is first order, so oblique near-misses below about half the box size are still refused. Change if real models refuse oblique near-misses, or when step 5 answers these pairs."
+
+### 14.31 MA6 as built (11-27)
+
+`scx-mass`'s stated error now bounds the floating-point rounding as well as estimating the truncation, so a value whose terms cancel states what the cancellation cost. Before, the stated error was the Kronrod and Gauss values' difference alone. That difference is zero wherever the rules are exact (planes, polynomial integrands) whatever the rounding, so CK1's quarter shell (1e4, 1e-3) stated 0 against a miss of 9.3e-9 (§14.22 Q1). No public API changes. `Estimate`'s and the crate's docs say what the error now holds: truncation estimated, rounding bounded to first order.
+
+**The method.** Three parts, in `crates/scx-mass/src/rounding.rs`, `kronrod.rs`, `face.rs`, `integrand.rs`, `body.rs`, `guard.rs`.
+
+1. *Compensated sums.* Every sum whose terms can cancel (a rule's nodes, a face's pieces, the body's faces, a shell's fluxes) is Ogita, Rump and Oishi's `Sum2` (cascaded `TwoSum`), with its proved bound `u |s| + gamma(n-1)^2 sum |x|`. Cancellation in a sum then costs about one rounding of the result, not of the terms.
+2. *Each term bounded by its operands.* A sample carries, beside its value, a first-order bound of its rounding (`gamma(k)` times the absolute sizes it was made from). A piece's rounding is `2 half most + gamma(3) |k| + half gamma(2m+1) spread + place (spread + w0 jump) / nearest`: the samples' rounding (`most`, the largest over the nodes), the rule's value, its weighted sum (`spread`, the sum of `w |v|`) and the nodes' placement (`place = 2u (|mid| + half)`, each node's `x` off by that, moving its sample by its slope, taken to first order from the samples' differences: `jump`, the largest sample minus the centre). The shifts to the body's reference add their binomial terms' rounding; `mass`'s division by 3 adds one.
+3. *The integrand's inputs.* The points, normals and pcurves the integrands read carry a model of their evaluation's rounding, per world axis (`face::Terms`):
+   - an analytic surface is its frame's origin plus a local point along the axes. The origin carries `gamma(2)` (the jets add it last, the plane's point after its `u` term), the local terms `gamma(8)` of their size (`gamma(3)` on a plane, whose derivatives are its stored axes and carry nothing);
+   - a NURBS surface carries `gamma(3 (p + q) + 4)` of the larger of its largest control point and the point;
+   - a kind the crate does not know carries `gamma(8)` of the point's largest axis, on every axis;
+   - a pcurve's point and derivative carry `gamma(8)` of their size. A `v` off by `dq` moves `G` by the integrand there times `dq`; a `u` off moves it by `G`'s change along `u`, at most the integrand's over the span from the base;
+   - each component's own evaluation from the point and normal carries `gamma(10)`.
+
+   The inner rule (K15 over `v`) reads the samples' rounding only at the centre and the outer node pair (the samples' rounding is smooth along the line, so the largest is near an end or the middle). The outer rule (K7 along the trims) reads it at every node. The pass that computes it (`Set::rounding`) takes the powers once.
+
+**Decisions, with the cases for and against.**
+
+| Decision | For | Against | Chosen |
+|---|---|---|---|
+| A priori `gamma(n) sum |x|` over each sum, plain sums kept | cheapest (one extra sum of absolute values) | states the cancelled terms' full rounding, about 1e8 eps on CK1 (1e-8 relative, past the accuracy asked); the values stay as inaccurate as before | no |
+| A running error bound (Higham's `mu`) on plain sums | tighter than a priori, cheap | the values still lose the cancellation; the bound is near the a priori one when every term is large | no |
+| `Sum2` plus per-term first-order bounds | the values gain (CK1 at 1e-12: mass volume miss 4.3e-8 to 9.3e-9); the sum's own share is a proved bound; the terms' share is first order, standard for forward error | about 1.3x to 1.4x instructions; the term bounds rest on evaluation models (below) | **yes** |
+| Interval arithmetic or double-double throughout | proved | 10x or more; every surface and curve evaluation would need an interval or double-double form; the enclosure (`enclose_volume`) already gives proved bounds when they are needed | no |
+| Surface rounding by a per-kind frame model | tracks where the size is: a body far from the world origin rounds by its origin, a curved local point by its radius | each kind's constant is a model of `scx-surface`'s evaluation, not a proof; a change there could invalidate it silently | **yes**, constants named and documented |
+| Surface rounding by the point's max-norm on every axis | kind-agnostic, simple | `scx-make`'s far boxes stated 8 `c eps / s` against a slack of 4 (one axis's size charged to all three); the round bar six times looser | fallback for unknown kinds only |
+| Node placement by the samples' jump from the centre | first order in the slope, and independent of the piece count | a model: a sample's slope taken from differences, exact for linear and good for smooth samples | **yes** |
+| Node placement by the peak sample per node (built first) | simpler | grows with the number of pieces, and dominated the round bar (6.4e-12 against 7.0e-13 now) | replaced |
+| K15 reads every node's rounding | no sparse model | about 5M more instructions on the block (of 69M) | sparse reads |
+
+**Constants.** `POINT_ROUNDINGS = 8`, `PLANE_ROUNDINGS = 3`, `ORIGIN_ROUNDINGS = 2`, `DERIVATIVE_ROUNDINGS = 8`, `PCURVE_ROUNDINGS = 8`, `EVAL_ROUNDINGS = 10`, a NURBS surface `3 (p + q) + 4`. Each is in `face.rs` with the evaluation steps it counts.
+
+**Limits (open).**
+
+- The pcurve terms are max-norm and dominate CK1: there the stated error (1.0e-6) is about 100 times the miss (9.3e-9), about 45 eps of the 1e8 fluxes.
+- The NURBS and unknown-kind models are coarse.
+- The normal's own change with `u` is left out of the `u` term.
+- The strips and corner fans of the closure, and the enclosure, are unchanged (the enclosure is proved already).
+- The sparse K15 read and the slopes from differences are models: first order, not proofs.
+- A constant offset of every point (a body far from the world origin) is charged in full, although over a closed body it cancels exactly. The tilted extrusion at 2500 from the origin states 4.9e-10 against a real miss of 4e-12. Seeing the correlation would need the error kept per axis with sign, and is left.
+- *Pre-existing, unchanged:* `mass` on the shells (1e5, 1e-3) and (1e3, 1e-6) at 1e-9 and 1e-12 fails `Defect(StepControl)` on face 4, before and after. `mass`'s volume error on CK1 at 1e-6 (0.18) is also as before.
+
+**Stated volume error, before and after** (`volume` at 1e-9 unless named; the miss is against the closed form, unchanged unless shown):
+
+| Body | Before | After | Miss |
+|---|---|---|---|
+| CK1 shell (1e4, 1e-3), at 1e-6, 1e-9, 1e-12 | 0 (false) | 1.0e-6 | 9.3e-9 |
+| shell (1e4, 1e-5) | 1.5e-8 | 1.0e-6 | 4.3e-9 |
+| cube 2e-4 at 1e3 | 0 (false) | 1.8e-20 | 2.0e-21 |
+| cube 1e-3 at 1e4 | 0 (false) | 4.4e-18 | 2.0e-19 |
+| slab 1 x 1 x 1e-6 at 1e4 | 1.2e-15 (false) | 4.4e-12 | 3.4e-13 |
+| cube 1 at 1e6 | 0 | 4.4e-10 | 0 |
+| unit block | 0 | 5.1e-15 | 0 |
+| cylinder, sphere, torus (generated, n1) | 1.1e-10, 6.4e-10, 2.1e-10 | the same | - |
+| holed block (n1) | 0 | 1.3e-13 | - |
+
+Over the 51-row probe (blocks, prisms, cylinders, cones, spheres, tori, holed and cavity bodies, each also at 1e4; thin shells; far cubes; slabs), 9 rows stated less than their miss before, and none do after. The curved bodies' errors are unchanged: their truncation estimate dwarfs the rounding.
+
+**Cost.** Instruction counts by callgrind (wall time on the shared machine was too noisy to read), main against this branch, each `volume` plus `mass` three times at 1e-9:
+
+| Body | Before | After | Ratio |
+|---|---|---|---|
+| generated block, n3 | 52.3M | 69.5M | 1.33x |
+| generated cylinder, n3 | 295M | 416M | 1.41x |
+| generated sphere, n3 | 710M | 913M | 1.29x |
+
+What remains is the per-node rounding pass, the sums' `TwoSum`s, and the pieces' `spread`, `jump` and `most`.
+
+**Tests.**
+
+New in `crates/scx-mass/tests/rounding.rs`, each with the stated error at least the miss against the closed form for `volume`, `mass`'s volume and (where given) `area`:
+
+- `ck1s_shell_states_its_rounding`: at 1e-6, 1e-9 and 1e-12, with the error at most 1e-5;
+- `thinner_shells_state_their_rounding`;
+- `far_small_cubes_state_their_rounding`: with the error within 1e3 eps of the fluxes;
+- `a_far_thin_slab_states_its_rounding`;
+- `an_ordinary_cube_is_not_loosened`: at most 100 eps.
+
+Changed on purpose:
+
+- `kronrod`'s `a_constant_is_exact`: the error was asserted 0. It is now positive and at most 8 eps of the value, because a constant's sum still rounds.
+- `rounding`'s own sum test is new.
+- `enclosure.rs`'s `a_thin_shells_estimate_holds_its_closed_form` is strict now: the miss within the stated error, the "or the accuracy asked" escape gone.
+- `scx-make`'s `extrude.rs`:
+  - `a_round_bar_has_one_wall_and_a_seam` at 1e-14 now allows a stated error of twice the accuracy, not once (7.0e-13 on 62.8, about 50 eps; the value check at 1e-14 is unchanged);
+  - `volume_and_area_match_the_closed_forms` allows the volume's error `tol V + 4 eps |origin| A`, the faces' points' rounding where the tilted frame puts them (2500 from the world origin). The value checks are unchanged.
+
+No test was removed.
