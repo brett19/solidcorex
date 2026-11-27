@@ -1532,3 +1532,87 @@ is renumbered. "Changed" names the sections that now carry the fix.
 2. Revision pairs are a smoke column, not pre-qualified and scored (F7, Q7).
 3. Leaf queries keep `(&mut Budget, &Stop)`. Queries that keep a memo take `&mut Cx` (F8, R8).
 4. Stored re-identification goes in bodyq's `still_names`, and scx-record calls it (F4).
+
+## 21. CO4 as built (11-27)
+
+Trust: the model count, the entity scan, the sizes and the timings are MEASURED on 11-27 by
+running code over the pinned files; the reading of the file-name structure is INFERRED (the truth
+files that would confirm it were never fetched). Proposed for review.
+
+### 21.1 The count and what MFCAD contains
+
+- **Count.** The git tree of `github.com/hducg/MFCAD` at `ef6d58a` (GitHub's tree API, not
+  truncated) lists 15,488 `.step` files and 15,488 `.face_truth` files, plus one `readme`.
+  74's "UNVERIFIED" is now verified: 15,488 (1,158,435,999 bytes; 22,436 to 253,345 each, median
+  72,751). No two files are byte-equal.
+- **Scan.** All 15,488 files were downloaded under a scratch directory (never executed, never
+  opened by anything but a byte-pattern count) and every entity name was counted. Every file is
+  one `MANIFOLD_SOLID_BREP` with one `CLOSED_SHELL`, schema `AUTOMOTIVE_DESIGN { 1 0 10303 214 1
+  1 1 1 }`, one `LENGTH_UNIT`; every surface is a `PLANE`, every curve a `LINE` (with
+  `EDGE_CURVE`, `PCURVE`, `SURFACE_CURVE`). **There is no cylinder, cone, sphere, torus, circle,
+  ellipse, B-spline, revolution or extrusion in any file.** The "holes", "pockets" and "slots" of
+  the MFCAD classes are all polygonal. Face counts run 8 to 59 (median 22).
+- **Consequence.** The gate is a planar, linear gate: it exercises `scx-step`'s plane and line
+  reading, pcurves on planes, loop and shell building, the check and the contract. It says
+  nothing about curved analytic faces; those are covered by the NIST and conformance files
+  (74 §14). The earlier phrase "analytic gate" holds only for planes. Where a wording in 74
+  or 04 says MFCAD tests "analytic faces and edges", read "planar faces, line edges".
+- **File names.** `a-b-c-d-e-23.step`: the tokens before the last are a sorted multiset of
+  feature-class ids 0 to 14 (the multiset counts match exactly: 11,628 = C(19,5) files with five
+  features, 3,060 = C(18,4) with four, 680 with three, 120 with two); the last token is a
+  suffix (23 or 19). Each class appears in 4,844 names. This is an inference from the names
+  and counts, used only to stratify; no score depends on it.
+
+### 21.2 The sample: rule, size, and why
+
+**Rule (fixed, no choices in it).** Cell each of the 15,488 files by face count (six bins:
+8 to 16, 17 to 20, 21 to 24, 25 to 29, 30 to 36, 37 to 59) and by feature count (2, 3, 4 or 5,
+from the name). In each of the 20 non-empty cells take the first 30 files in order of SHA-256 of
+the file name (all of them where the cell has fewer). Add four forced extremes: the file with the
+most faces (`2-3-3-3-3-23`, 59), the largest file (`3-3-3-3-3-23`, 253,345 bytes), the fewest
+faces (`0-0-19`, 8; 20 files tie, the first by name) and the smallest file (`6-7-7-9-19`,
+22,436 bytes; already in). The result is **480 files, 37,027,352 bytes**, 8 to 59 faces, 182
+with five features. The seven files CO2 took (every 2,500th) were chosen by a rule that ignores
+stratification; none of them is in this sample, so they are removed from the manifest and
+replaced, not kept as extras.
+
+**Measured coverage of the sample.** Every feature class appears in at least 79 files; all 105
+class pairs occur together in at least one file; face counts span the whole range. (The whole
+set's classes are equal in number, so this is about as even as five-feature multisets allow.)
+
+**Why 480 and not 1,000 (74 says up to 1,000).**
+
+- For: coverage saturates early. At 30 per cell all 15 classes and all 105 pairs are already
+  present; 10 per cell (177 files) already reaches 105 pairs. The set is one generator with
+  one entity vocabulary (planes and lines), so more files add repeats, not kinds. A defect
+  that hits 1% of the files is caught with probability 0.99 at 480 files (1 - 0.99^480 = 99.2%),
+  0.5% with 91%.
+- Against: a rarer defect (0.2%, say one odd feature combination) is missed 38% of the time at
+  480 and 14% at 1,000; the gate is the only real-file check of the planar path before
+  merge. Mitigation: the rule has one constant (30 per cell); 60 gives 925 files, 70 MB, and
+  is one regenerated block of manifest rows. The full 15,488 set is a nightly or manual run, not
+  the gate.
+- Time cost, measured: the first `corpus fetch mfcad` took **79 s** for 481 files (one `curl`
+  per file, hash and size checked; about 160 ms each, so 1,000 files would take about 165 s),
+  once per cache. A second fetch or `verify` takes **2.6 s** (debug `xtask`, SHA-256 of 37 MB).
+  Reading: `std::fs::read_to_string` plus `scx_p21::parse` over all 480 files takes **0.32 s**
+  in a release build (37 MB), so the syntax layer is not the gate's cost; the import and check
+  time is CO1's to measure once `scx-step` exists, and if it is small the size can go to 60
+  per cell.
+
+### 21.3 Built
+
+- `corpus/manifest.tsv`: the 7 seed rows removed, 480 rows added (`mfcad/<name>.step`, URL
+  pinned to `ef6d58a`, SHA-256 and size from the downloaded bytes, licence MIT, part `file`);
+  the `mfcad/LICENSE` row stays. 560 lines in all. The existing `corpus fetch|verify mfcad`
+  selects them; nothing in `xtask` or `scx-testkit` changed (their manifest tests pass).
+- Never fetched: any `.face_truth` file. Downloads were kept under a scratch directory and
+  deleted when done; nothing downloaded was run.
+- No scoring code (CO1). The generator was a throwaway script over the tree listing and the
+  scan; the rule above is the record, and the hashes in the manifest are what is checked.
+- Not done: a smaller "fast" tier inside the sample (the manifest selects by name prefix, and
+  the names carry no tier). If CO1's import time is high, shrink the constant instead.
+
+### 21.4 Proposed 04 row
+
+| 11-27 | (For the owner's review) The MFCAD gate sample is fixed in `corpus/manifest.tsv`: 480 of MFCAD's 15,488 models at `ef6d58a` (the count is verified), chosen by a stated rule (30 per face-count-by-feature-count cell, in order of the hash of the name, plus four extremes), 37 MB, fetched in 80 s once and verified in 3 s. Every one of the 15,488 models is planes and lines only, so the gate is a planar gate; curved analytic reading is gated by NIST and the conformance parts. `.face_truth` pickles are never fetched | The "up to 1,000" ruling left the size open; coverage (all 15 classes, all 105 pairs) saturates well below it, and the scan showed nothing non-planar to stratify on | research 74 §21 |
