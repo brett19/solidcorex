@@ -8,8 +8,8 @@ version.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
-# scx-curve (01's crate row) joins when a step uses it (sections, curve-surface hits).
 [dependencies]
+scx-curve = { path = "../scx-curve" }
 scx-num = { path = "../scx-num" }
 scx-nurbs = { path = "../scx-nurbs" }
 scx-nurbs-surface = { path = "../scx-nurbs-surface" }

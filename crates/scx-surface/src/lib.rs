@@ -15,6 +15,8 @@
 //! - Edits by value: `reversed` and `transformed` on each kind and on [`Surface`], with the
 //!   [`UvMap`] from the original's parameters to the edit's, and [`Surface::restrict`]
 //!   (63 SU7).
+//! - [`AnyCurve`]: a free [`Curve`](scx_curve::Curve), or a [`CurveOnSurface`] (a uv curve on
+//!   a shared [`Surface`]) with its point and its jet by the chain rule (63 §4.10).
 //!
 //! # The uv (research 63 D13)
 //!
@@ -39,6 +41,7 @@
 //! The pin's other layouts (swapped or reversed directions, part turns, reparameterised
 //! knots) are not kinds here; reading them is the reader's map, as STEP's is.
 
+mod any_curve;
 mod arcs;
 mod common;
 mod cone;
@@ -51,6 +54,7 @@ mod surface;
 mod to_nurbs;
 mod torus;
 
+pub use any_curve::{AnyCurve, CurveOnSurface};
 pub use cone::Cone;
 pub use cylinder::Cylinder;
 pub use edit::UvMap;
