@@ -12,9 +12,10 @@
 //!   (63 A10).
 //!
 //! Iteration is in id order over the live entities only, so a walk costs the live count,
-//! not the slot count (research 66 §14). What is found by scanning, not stored, says so:
-//! [`Vertex::edges`], [`Shell::faces`] and [`Region::shells`] walk a table, and an edge's
-//! uses scan its faces' loops (C4). BR4's body cells replace the scans where one shows.
+//! not the slot count (research 66 §14). What a record does not store is found:
+//! [`Vertex::edges`], [`Shell::faces`] and [`Region::shells`] walk a row of the body cells
+//! over a finished body (built in one pass on first read, research 63 §6.9) and scan a
+//! table over a draft; an edge's uses scan its faces' loops (C4).
 
 use core::fmt;
 use std::collections::BTreeSet;
@@ -24,12 +25,15 @@ use scx_num::frame::Sense;
 use scx_num::vector3d::Point3;
 use scx_surface::Surface;
 
+use crate::body::BodyCells;
 use crate::id::{EdgeId, FaceId, RegionId, ShellId, VertexId};
 use crate::record::{
     EdgeAdj, EdgeGeom, EdgeShape, EdgeUse, FaceRecord, FaceSide, Fin, LoopRecord, RegionRecord,
     ShellRecord, UseGeom, VertexRecord,
 };
+use crate::table::Id;
 use crate::tables::Tables;
+use scx_num::units::Resolution;
 
 mod sealed {
     pub trait Sealed {}
@@ -92,13 +96,26 @@ impl Stage for Drafting<'_> {
 /// A body's tables seen at a stage: where every view starts.
 #[derive(Clone, Copy)]
 pub(crate) struct At<'a, S> {
-    t: &'a Tables,
+    pub(crate) t: &'a Tables,
     s: S,
+    /// A finished body's cells and resolution; a draft has none.
+    pub(crate) body: Option<Body<'a>>,
+}
+
+/// A finished body's cells and the resolution it was finished under.
+#[derive(Clone, Copy)]
+pub(crate) struct Body<'a> {
+    pub(crate) cells: &'a BodyCells,
+    pub(crate) resolution: Resolution,
 }
 
 impl<'a> At<'a, Finished> {
-    pub(crate) const fn finished(t: &'a Tables) -> Self {
-        Self { t, s: Finished }
+    pub(crate) const fn finished(t: &'a Tables, body: Body<'a>) -> Self {
+        Self {
+            t,
+            s: Finished,
+            body: Some(body),
+        }
     }
 }
 
@@ -107,6 +124,43 @@ impl<'a> At<'a, Drafting<'a>> {
         Self {
             t,
             s: Drafting { pending },
+            body: None,
+        }
+    }
+}
+
+/// A walk of a body cell's row, or a scan where there is none.
+#[derive(Clone)]
+enum Found<A, B> {
+    Row(A),
+    Scan(B),
+}
+
+impl<A: Iterator, B: Iterator<Item = A::Item>> Iterator for Found<A, B> {
+    type Item = A::Item;
+
+    fn next(&mut self) -> Option<A::Item> {
+        match self {
+            Self::Row(a) => a.next(),
+            Self::Scan(b) => b.next(),
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        match self {
+            Self::Row(a) => a.size_hint(),
+            Self::Scan(b) => b.size_hint(),
+        }
+    }
+}
+
+impl<A: DoubleEndedIterator, B: DoubleEndedIterator<Item = A::Item>> DoubleEndedIterator
+    for Found<A, B>
+{
+    fn next_back(&mut self) -> Option<A::Item> {
+        match self {
+            Self::Row(a) => a.next_back(),
+            Self::Scan(b) => b.next_back(),
         }
     }
 }
@@ -238,10 +292,20 @@ impl<'a, S: Stage> Region<'a, S> {
         self.id == RegionId::OUTSIDE
     }
 
-    /// The shells that bound it, in id order. Scans the shell table.
+    /// The shells that bound it, in id order. Over a draft, scans the shell table.
     pub fn shells(self) -> impl DoubleEndedIterator<Item = Shell<'a, S>> + Clone {
-        let id = self.id;
-        self.at.shells().filter(move |s| s.rec.region == id)
+        let (at, id) = (self.at, self.id);
+        match at.body {
+            Some(b) => Found::Row(
+                b.cells
+                    .adjacency(at.t)
+                    .region_shells
+                    .row(id.slot())
+                    .iter()
+                    .filter_map(move |&s| at.shell(s)),
+            ),
+            None => Found::Scan(at.shells().filter(move |s| s.rec.region == id)),
+        }
     }
 }
 
@@ -272,15 +336,25 @@ impl<'a, S: Stage> Shell<'a, S> {
     }
 
     /// Its face sides, in face id order, front before back: a face with both sides in this
-    /// shell (a sheet) comes twice. Scans the face table.
+    /// shell (a sheet) comes twice. Over a draft, scans the face table.
     pub fn faces(self) -> impl DoubleEndedIterator<Item = (Face<'a, S>, FaceSide)> + Clone {
-        let id = self.id;
-        self.at.faces().flat_map(move |f| {
-            FaceSide::BOTH
-                .into_iter()
-                .filter(move |&side| f.rec.side(side) == id)
-                .map(move |side| (f, side))
-        })
+        let (at, id) = (self.at, self.id);
+        match at.body {
+            Some(b) => Found::Row(
+                b.cells
+                    .adjacency(at.t)
+                    .shell_faces
+                    .row(id.slot())
+                    .iter()
+                    .filter_map(move |&(f, side)| Some((at.face(f)?, side))),
+            ),
+            None => Found::Scan(at.faces().flat_map(move |f| {
+                FaceSide::BOTH
+                    .into_iter()
+                    .filter(move |&side| f.rec.side(side) == id)
+                    .map(move |side| (f, side))
+            })),
+        }
     }
 
     /// Its wire edges, in the record's order.
@@ -306,9 +380,9 @@ impl<'a, S: Stage> Shell<'a, S> {
 /// A face.
 #[derive(Clone, Copy)]
 pub struct Face<'a, S: Stage = Finished> {
-    at: At<'a, S>,
+    pub(crate) at: At<'a, S>,
     id: FaceId,
-    rec: &'a FaceRecord,
+    pub(crate) rec: &'a FaceRecord,
 }
 
 impl<'a, S: Stage> Face<'a, S> {
@@ -512,9 +586,9 @@ impl<'a, S: Stage> Use<'a, S> {
 /// An edge: its geometry part and its adjacency part.
 #[derive(Clone, Copy)]
 pub struct Edge<'a, S: Stage = Finished> {
-    at: At<'a, S>,
+    pub(crate) at: At<'a, S>,
     id: EdgeId,
-    geom: &'a EdgeGeom,
+    pub(crate) geom: &'a EdgeGeom,
     adj: &'a EdgeAdj,
 }
 
@@ -620,11 +694,21 @@ impl<'a, S: Stage> Vertex<'a, S> {
         self.rec.accuracy.as_deref()
     }
 
-    /// The edges that start or end here, each once, in id order. Scans the edge table
-    /// (vertex stars are a BR4 body cell).
+    /// The edges that start or end here, each once, in id order. Over a draft, scans the
+    /// edge table.
     pub fn edges(self) -> impl DoubleEndedIterator<Item = Edge<'a, S>> + Clone {
-        let id = self.id;
-        self.at.edges().filter(move |e| e.geom.ends.contains(&id))
+        let (at, id) = (self.at, self.id);
+        match at.body {
+            Some(b) => Found::Row(
+                b.cells
+                    .adjacency(at.t)
+                    .stars
+                    .row(id.slot())
+                    .iter()
+                    .filter_map(move |&e| at.edge(e)),
+            ),
+            None => Found::Scan(at.edges().filter(move |e| e.geom.ends.contains(&id))),
+        }
     }
 }
 

@@ -7,29 +7,45 @@
 
 use std::sync::Arc;
 
+use scx_num::extent3d::Extent3d;
 use scx_num::units::Resolution;
 
+use crate::body::BodyCells;
 use crate::draft::Draft;
 use crate::id::{EdgeId, FaceId, IdMap, RegionId, ShellId, VertexId};
 use crate::record::{EdgeAdj, EdgeGeom, FaceRecord, ShellRecord};
 use crate::table::{Id, Table};
 use crate::tables::Tables;
-use crate::view::{At, Edge, Face, Finished, Region, Shell, Stage, Vertex};
+use crate::view::{At, Body, Edge, Face, Finished, Region, Shell, Stage, Vertex};
 
 /// A finished body.
+///
+/// Beside its tables it keeps its body cells (research 63 §6.9): vertex stars, shells'
+/// faces, boxes, filled on first read and shared by its clones. Reads take `&Brep`.
 #[derive(Debug, Clone)]
 pub struct Brep {
     t: Tables,
     resolution: Resolution,
+    cells: Arc<BodyCells>,
 }
 
 impl Brep {
-    pub(crate) const fn from_tables(t: Tables, resolution: Resolution) -> Self {
-        Self { t, resolution }
+    pub(crate) fn from_tables(t: Tables, resolution: Resolution) -> Self {
+        Self {
+            t,
+            resolution,
+            cells: Arc::default(),
+        }
     }
 
-    const fn at(&self) -> At<'_, Finished> {
-        At::finished(&self.t)
+    fn at(&self) -> At<'_, Finished> {
+        At::finished(
+            &self.t,
+            Body {
+                cells: &self.cells,
+                resolution: self.resolution,
+            },
+        )
     }
 
     /// The resolution the body was finished under: an accuracy of `None` means within it.
@@ -164,6 +180,45 @@ impl Brep {
         &self,
     ) -> impl ExactSizeIterator<Item = Vertex<'_>> + DoubleEndedIterator + Clone {
         self.at().vertices()
+    }
+
+    /// A box holding the whole body (every face, edge and vertex, each grown by its
+    /// accuracy and the resolution); `None` for an empty body or one that reaches infinity.
+    /// Filled with every other box on first read.
+    #[must_use]
+    pub fn bounding_box(&self) -> Option<Extent3d> {
+        self.cells.boxes(&self.t, self.resolution).body()
+    }
+
+    /// The faces whose box ([`Face::bounding_box`]) meets `b`, and every face with no box,
+    /// in id order: every face with a point within the resolution of `b` is among them.
+    /// Walks a box tree over the faces, built on first read.
+    pub fn faces_meeting(&self, b: Extent3d) -> impl ExactSizeIterator<Item = Face<'_>> {
+        let at = self.at();
+        self.cells
+            .boxes(&self.t, self.resolution)
+            .faces_meeting(b)
+            .into_iter()
+            .map(move |f| Finished::look(at.face(f)))
+    }
+
+    /// Empties every cell: the body cells, and the cells of each record this body alone
+    /// holds. What is shed is filled again on the next read that needs it.
+    pub fn shed_cells(&mut self) {
+        self.cells = Arc::default();
+        for f in self.t.faces.unique_mut() {
+            if let Some(f) = Arc::get_mut(f) {
+                f.cells.reset();
+            }
+        }
+        for g in self.t.edges.unique_mut() {
+            g.cells.reset();
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn body_cells(&self) -> &BodyCells {
+        &self.cells
     }
 
     /// One past the highest face id ever given: the length of a dense side table or bitset

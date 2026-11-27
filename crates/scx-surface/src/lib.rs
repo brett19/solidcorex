@@ -58,6 +58,7 @@ mod common;
 mod cone;
 mod cylinder;
 mod edit;
+mod enclose;
 mod error;
 mod intersect;
 mod invert;

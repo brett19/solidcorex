@@ -23,7 +23,7 @@ use scx_curve::arcs::Arcs;
 use scx_num::jet::SurfaceJet;
 
 /// Both directions: a turn over `[0, 1]`.
-const TURN: Arcs = Arcs::turn(1.0);
+pub(crate) const TURN: Arcs = Arcs::turn(1.0);
 
 /// A ring torus about the frame's z axis: the tube does not reach the axis.
 #[derive(Clone, Copy, Debug, PartialEq)]
