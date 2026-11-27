@@ -1,0 +1,18 @@
+# Written for solidcorex.
+[package]
+name = "scx-step"
+description = "solidcorex layer 8: STEP import and export of solids and sheets (the skeleton: units, uncertainty, the result types, the entity plan of each body)"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# SP1 adds only the edge to scx-p21 (research 74 §8), and scx-num for the five error kinds
+# `scx-p21`'s own errors already use. SP2 adds check, mass, surface and brep.
+[dependencies]
+scx-num = { path = "../scx-num" }
+scx-p21 = { path = "../scx-p21" }
+
+[lints]
+workspace = true

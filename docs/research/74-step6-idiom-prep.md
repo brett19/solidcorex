@@ -1375,3 +1375,114 @@ is renumbered. "Changed" names the sections that now carry the fix.
 2. Revision pairs are a smoke column, not pre-qualified and scored (F7, Q7).
 3. Leaf queries keep `(&mut Budget, &Stop)`. Queries that keep a memo take `&mut Cx` (F8, R8).
 4. Stored re-identification goes in bodyq's `still_names`, and scx-record calls it (F4).
+
+## 19. SP1 as built (11-27)
+
+The `scx-step` crate on `scx-p21`: the skeleton of the importer (74 §8, row SP1). It reads
+units, uncertainty and the entity plan of each solid and sheet from an `Exchange`, and builds no
+geometry. 17 tests on synthetic AP203, AP214 and AP242 files (`crates/scx-step/tests/synthetic.rs`).
+
+### 19.1 Public API
+
+```rust
+pub fn read(ex: &scx_p21::Exchange, opts: &ReadOptions) -> Result<Imported, StepError>;
+pub struct ReadOptions { pub assume_units: Option<Units>, pub close_gaps: bool } // non_exhaustive
+pub struct Imported { pub bodies: Vec<ImportedBody>, pub products: ProductStructure,
+                      pub skipped: Vec<Skipped>, pub report: ImportReport }
+pub struct ImportedBody { entity, name, kind: SolidOrSheet, representation,
+                          context: Resolved, shells: Vec<ShellPlan> }
+pub struct ShellPlan { entity, role: ShellRole, closed, reversed, faces: Vec<FacePlan> }
+pub struct FacePlan { entity, surface, surface_kind: String, same_sense, bounds: usize }
+pub struct Resolved { units: Units, assumed: MissingUnits, uncertainty: Uncertainty,
+                      several_uncertainties: bool }
+pub enum Uncertainty { Absent, Stated(f64 /* mm */) }
+pub struct ImportReport { declared, warnings: Vec<ImportWarning>,
+                          assumed: Vec<AssumedUnits>, raised: Vec<Raise> }
+pub enum StepError { NoUnits, ConflictingUnits, BadAssumedUnits, Structure(Box<P21Error>),
+                     Pending(Pending) }   // kind() and name() as in 62
+```
+
+The 04 row's field is `ImportReport::raised: Vec<Raise>`, with `Raise { entity (STEP id), gap:
+GapKind, before, after }` (millimetres). SP1 defines it and leaves it empty; SP2 fills it. The
+read never heals: nothing in this crate changes a number the file wrote.
+
+### 19.2 Choices, with cases for and against
+
+- **Edges: `scx-p21`, plus `scx-num`.** `scx-p21` is the only edge the row names. `scx-num` is
+  added because `StepError::kind()` returns `scx_num::error::ErrorKind` (the five kinds of 62),
+  as `P21Error` does; it is the lowest layer and p21 already depends on it. For: one error
+  convention across the crates. Against: one edge beyond the row. `scx-brep` is *not* added, so
+  `Imported` here has no `Brep` and the report is not `scx_brep::Report`: SP2 adds `body: Brep`
+  and `findings` to `ImportedBody`, and maps `ImportReport::raised` onto `Report::raised` if
+  a caller wants the brep form (the STEP entity id is the useful key before there is an entity
+  in a `Brep`). For: the edge list stays as ruled. Against: SP2 reshapes `Imported` slightly,
+  and the report is a second type where 74 §6.3 shows `Report<ImportNotes>`.
+- **Missing units are refused per file, naming the first representation.** Units belong to a
+  representation context, so each representation that lists a body is resolved; the first
+  failure (id order) refuses the file. Against refusing the file: one bad part blocks an
+  assembly. For: the ruling (the 04 STEP-import row) says refuse, a half-read assembly with a part at the wrong
+  scale is the failure the rule exists to prevent, and the caller can assume units.
+- **A missing plane angle unit is missing too.** The ruling says units, not only length.
+  Against: angle is rarely used by solids and such files exist. For: a cone or a torus read at
+  the wrong angle unit is silently wrong; `ReadOptions::assuming_units` covers it in one line.
+  Reversible: if the corpus shows it often, the ruling can relax angle alone.
+- **The assumption fills only what the file lacks** and is recorded per representation
+  (`ImportReport::assumed`, which of the two parts, `Resolved::assumed`). The file's own unit
+  always wins. Against: a caller who wants to override wrong units cannot. For: that is a
+  different request (a rescale), not a read option.
+- **Two different units of one kind in one context are refused (`ConflictingUnits`)**; the same
+  unit listed twice is not. p21's `context()` takes the last, silently. For: the file does not
+  say which numbers mean what. Against: valid input refused; but a context with two lengths is
+  not a valid context (ISO 10303-42 gives one).
+- **Uncertainty is the context's own, in millimetres; absent stays `Absent`.** It is never the
+  last measure in the file, never clamped (the pin clamps to 1e-7..1 and defaults 1e-3). SP2
+  resolves `Absent` to the document's resolution, which needs a `Cx`. Several uncertainties in
+  one context: the largest, flagged (`SeveralUncertainties`). Against: the finest would be
+  stricter. For: the file claims the coarsest accuracy it states (a smaller one on a different
+  entity does not make the geometry better), and a too-small value would make `finish` refuse
+  the file, which the raise (SP2) then repairs; the largest avoids a raise made only because of
+  the choice. The accuracy-ratio warning (CTC-05, 2.05e-2) needs the document's resolution
+  and is SP2's.
+- **`close_gaps: true` is `StepError::Pending(CloseGaps)`, not ignored.** An option that
+  silently does nothing is a failing default. SP4 removes the variant's use.
+- **A body that cannot be read is `Skipped`, not an error**: `SkipReason::BodyKind` (faceted
+  brep, with the entity type named) and `Malformed(P21Error)` (the first fault, naming its
+  instance, such as an open shell in a solid, a face with no surface, a missing entity). One
+  body's fault does not refuse the file (74 §6.3 and the skip list of 74 §11 row 5). Faceted breps are named,
+  not read.
+- **Shell nesting is one level.** An `ORIENTED_*_SHELL` wraps a plain shell only, so a cycle of
+  them cannot recurse (tested). Product structure errors are `StepError::Structure`: the file's
+  assembly cannot be trusted.
+- **A body in several representations is read once**, from the first (id order). Its units are
+  that representation's. A body shared by representations with different units is an assembly
+  case SP8 decides.
+
+### 19.3 What the tests prove
+
+Units: mm, metre, inch (conversion-based, 25.4) and degree (the file's own number, not a computed
+pi); the three protocols and an unknown schema's warning; missing units (no context, an empty
+context, a length-only context) refused with the typed missing parts; assumption fills only
+what is missing and is recorded, the file's units win; bad assumed units; conflicting units;
+per-representation units and uncertainty (no leak between contexts); uncertainty without a unit
+is in the context's length unit; several uncertainties. Skeleton: a cube, a solid with a void
+(reversed oriented shell), an open sheet; faceted, open-shell-in-solid, missing-entity and
+no-surface bodies skipped with typed reasons while the good body is read; an oriented-shell
+cycle; a broken product structure; determinism (two reads equal). No test was removed.
+
+### 19.4 Not done, for later rows
+
+Geometry and topology (SP2); raises (SP2, field defined here); the document-resolution default
+and accuracy-ratio warning (SP2); product tree of placed instances (SP8, `Imported::products` is
+p21's `ProductStructure` for now); quadric recognition (SP2b); the writer (SP3); gap closing
+(SP4).
+
+### 19.5 Proposed 04 row
+
+**scx-step skeleton (SP1).** `scx_step::read(&Exchange, &ReadOptions) -> Result<Imported,
+StepError>`. Units are the representation context's; a missing length or plane angle unit, or two
+different ones of a kind, is refused unless the caller assumes units, and an assumption is
+recorded in `ImportReport::assumed`. Uncertainty is the context's own (`Uncertainty::Absent` when
+it names none; SP2 resolves it to the document's resolution). Bodies that cannot be read are
+`Skipped` with a typed reason. `ImportReport::raised` is where SP2 records enclosed-gap raises;
+`scx-step` never heals, and `close_gaps` is `Pending` until SP4. Edges: `scx-step` → `scx-p21`
+and `scx-num`.
