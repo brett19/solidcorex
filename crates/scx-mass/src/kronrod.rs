@@ -158,6 +158,11 @@ impl<'a> Meter<'a> {
         self.spent = 0;
     }
 
+    /// The budget's use so far: what a memo entry records as its fill's work.
+    pub(crate) const fn used(&self) -> u64 {
+        self.budget.used()
+    }
+
     /// Charges `work` after checking the stop flag.
     pub(crate) fn charge(&mut self, work: u64) -> Result<(), Fail> {
         self.stop.check().map_err(|_| Fail::Cancelled)?;
