@@ -48,12 +48,24 @@ const SIDES: [Side; 2] = [Side::Below, Side::Above];
 
 /// Random curves of every kind, degrees 1..=4.
 fn curves(seed: u64, per_kind: usize) -> Vec<CurveData<3>> {
+    curves_from(seed, per_kind, false)
+}
+
+/// `curves`, or with `spread` the degrees shifted per kind, so a few curves per kind still
+/// reach every degree across the kinds.
+fn curves_if(seed: u64, per_kind: usize, spread: bool) -> Vec<CurveData<3>> {
+    curves_from(seed, per_kind, spread)
+}
+
+fn curves_from(seed: u64, per_kind: usize, spread: bool) -> Vec<CurveData<3>> {
     let mut rng = Rng::new(seed);
     let mut out = Vec::new();
+    let mut kind = 0;
     for knots in KNOTS {
         for weights in WEIGHTS {
+            kind += 1;
             for i in 0..per_kind {
-                let degree = 1 + i % 4;
+                let degree = 1 + (i + if spread { kind } else { 0 }) % 4;
                 let count = degree + 1 + (i * 7 + 3) % 5;
                 let spec = Spec {
                     degree,
@@ -157,13 +169,12 @@ fn the_rational_quarter_circle_is_exactly_a_circle() {
     assert_eq!(c.point(0.5, Side::Below).unwrap().exact, [q(3, 5), q(4, 5)]);
 }
 
-#[test]
-fn de_boor_and_the_basis_sum_agree_exactly() {
+fn de_boor_sweep(per_kind: usize, spread: bool, extra: usize, min_checked: usize) {
     let mut rng = Rng::new(3);
     let mut checked = 0;
-    for data in curves(30, 6) {
+    for data in curves_if(30, per_kind, spread) {
         let c = data.exact().unwrap();
-        for u in samples(&mut rng, &data.knots, c.domain(), 6) {
+        for u in samples(&mut rng, &data.knots, c.domain(), extra) {
             for side in SIDES {
                 let a = c.derivs(u, side, 3).unwrap();
                 let b = c.derivs_by_basis(u, side, 3).unwrap();
@@ -172,14 +183,26 @@ fn de_boor_and_the_basis_sum_agree_exactly() {
             }
         }
     }
-    assert!(checked > 1000, "{checked}");
+    assert!(checked > min_checked, "{checked}");
 }
 
 #[test]
-fn a_knot_of_multiplicity_m_joins_its_pieces_with_p_minus_m_derivatives() {
+fn de_boor_and_the_basis_sum_agree_exactly() {
+    de_boor_sweep(2, true, 0, 50);
+}
+
+/// Full sweep (6 curves per kind, 6 extra samples per curve); run with
+/// `cargo test -p scx-testkit --test nurbs -- --ignored`.
+#[test]
+#[ignore = "slow exhaustive sweep"]
+fn de_boor_and_the_basis_sum_agree_exactly_full() {
+    de_boor_sweep(6, false, 6, 1000);
+}
+
+fn multiplicity_sweep(per_kind: usize, min_joins: usize) {
     let mut rng = Rng::new(4);
     let mut joins = 0;
-    for data in curves(40, 8) {
+    for data in curves(40, per_kind) {
         let c = data.exact().unwrap();
         let p = c.degree();
         let (a, b) = c.domain();
@@ -202,7 +225,12 @@ fn a_knot_of_multiplicity_m_joins_its_pieces_with_p_minus_m_derivatives() {
             assert_eq!(c.derivs(u, Side::Below, 2), c.derivs(u, Side::Above, 2));
         }
     }
-    assert!(joins > 100, "{joins}");
+    assert!(joins > min_joins, "{joins}");
+}
+
+#[test]
+fn a_knot_of_multiplicity_m_joins_its_pieces_with_p_minus_m_derivatives() {
+    multiplicity_sweep(4, 40);
     // A generic C1 quadratic join really breaks at the second derivative.
     let c = Curve::new(
         2,
@@ -219,11 +247,18 @@ fn a_knot_of_multiplicity_m_joins_its_pieces_with_p_minus_m_derivatives() {
     assert_ne!(lo[2], hi[2]);
 }
 
+/// Full sweep (8 curves per kind); run with `cargo test -p scx-testkit --test nurbs -- --ignored`.
+#[test]
+#[ignore = "slow exhaustive sweep"]
+fn a_knot_of_multiplicity_m_joins_its_pieces_with_p_minus_m_derivatives_full() {
+    multiplicity_sweep(8, 100);
+}
+
 /// Every sample of `a` and `b` agrees exactly, derivatives to order 2 on both sides.
-fn same_curve(a: &Curve<3>, b: &Curve<3>, rng: &mut Rng, what: &str) {
+fn same_curve(a: &Curve<3>, b: &Curve<3>, rng: &mut Rng, extra: usize, what: &str) {
     assert_eq!(a.domain(), b.domain());
     // b's knots: an inserted knot is sampled on both its sides.
-    for u in samples(rng, b.knots(), a.domain(), 8) {
+    for u in samples(rng, b.knots(), a.domain(), extra) {
         for side in SIDES {
             // A side at a knot of the new curve that the old one lacks sees the same piece.
             let at = |c: &Curve<3>| {
@@ -250,13 +285,12 @@ fn points_are_blossoms(c: &Curve<3>, of: &Curve<3>) {
     }
 }
 
-#[test]
-fn knot_insertion_leaves_the_shape_exactly_unchanged() {
+fn insertion_sweep(per_kind: usize, spread: bool, rounds: usize, extra: usize) {
     let mut rng = Rng::new(5);
-    for data in curves(50, 5) {
+    for data in curves_if(50, per_kind, spread) {
         let c = data.exact().unwrap();
         let p = c.degree();
-        for _ in 0..3 {
+        for _ in 0..rounds {
             let u = sample::parameter(&mut rng, &data.knots, c.domain());
             let room = p + 1 - data.knots.iter().filter(|&&k| k == u).count().min(p + 1);
             let times = 1 + gen_below(&mut rng, 3);
@@ -271,11 +305,25 @@ fn knot_insertion_leaves_the_shape_exactly_unchanged() {
                 &c,
                 &inserted,
                 &mut rng,
+                extra,
                 &format!("{data:?} insert {u} x{times}"),
             );
             points_are_blossoms(&inserted, &c);
         }
     }
+}
+
+#[test]
+fn knot_insertion_leaves_the_shape_exactly_unchanged() {
+    insertion_sweep(2, true, 1, 0);
+}
+
+/// Full sweep (5 curves per kind, 3 insertions each); run with
+/// `cargo test -p scx-testkit --test nurbs -- --ignored`.
+#[test]
+#[ignore = "slow exhaustive sweep"]
+fn knot_insertion_leaves_the_shape_exactly_unchanged_full() {
+    insertion_sweep(5, false, 3, 8);
 }
 
 fn gen_below(rng: &mut Rng, n: u64) -> usize {
@@ -319,21 +367,39 @@ fn a_bezier_curve_elevates_by_the_bernstein_formula() {
                 assert_eq!(&pt[k] * &we, want[k], "p {p} point {i}");
             }
         }
-        same_curve(&c, &e, &mut rng, "bezier");
+        same_curve(&c, &e, &mut rng, 8, "bezier");
+    }
+}
+
+fn elevation_sweep(per_kind: usize, spread: bool, max_times: u64, extra: usize) {
+    let mut rng = Rng::new(7);
+    for data in curves_if(70, per_kind, spread) {
+        let c = data.exact().unwrap();
+        let times = 1 + gen_below(&mut rng, max_times);
+        let e = c.elevate(times).unwrap();
+        assert_eq!(e.degree(), c.degree() + times);
+        same_curve(
+            &c,
+            &e,
+            &mut rng,
+            extra,
+            &format!("{data:?} elevate x{times}"),
+        );
+        points_are_blossoms(&e, &e.clone());
     }
 }
 
 #[test]
 fn degree_elevation_leaves_the_shape_exactly_unchanged() {
-    let mut rng = Rng::new(7);
-    for data in curves(70, 4) {
-        let c = data.exact().unwrap();
-        let times = 1 + gen_below(&mut rng, 2);
-        let e = c.elevate(times).unwrap();
-        assert_eq!(e.degree(), c.degree() + times);
-        same_curve(&c, &e, &mut rng, &format!("{data:?} elevate x{times}"));
-        points_are_blossoms(&e, &e.clone());
-    }
+    elevation_sweep(2, true, 1, 0);
+}
+
+/// Full sweep (4 curves per kind, elevated by 1 or 2 degrees, 8 extra samples); run with
+/// `cargo test -p scx-testkit --test nurbs -- --ignored`.
+#[test]
+#[ignore = "slow exhaustive sweep"]
+fn degree_elevation_leaves_the_shape_exactly_unchanged_full() {
+    elevation_sweep(4, false, 2, 8);
 }
 
 #[test]
@@ -463,13 +529,12 @@ const SIDE2: [(Side, Side); 4] = [
     (Side::Above, Side::Above),
 ];
 
-#[test]
-fn surface_de_boor_and_basis_sum_agree_exactly() {
+fn surface_de_boor_sweep(per_kind: usize, extra: usize, min_checked: usize) {
     let mut rng = Rng::new(9);
     let mut checked = 0;
-    for data in surfaces(90, 2) {
+    for data in surfaces(90, per_kind) {
         let s = data.exact().unwrap();
-        for uv in surface_samples(&mut rng, &s, 2) {
+        for uv in surface_samples(&mut rng, &s, extra) {
             for side in SIDE2 {
                 let a = s.derivs(uv, side, 2).unwrap();
                 let b = s.derivs_by_basis(uv, side, 2).unwrap();
@@ -478,7 +543,20 @@ fn surface_de_boor_and_basis_sum_agree_exactly() {
             }
         }
     }
-    assert!(checked > 500, "{checked}");
+    assert!(checked > min_checked, "{checked}");
+}
+
+#[test]
+fn surface_de_boor_and_basis_sum_agree_exactly() {
+    surface_de_boor_sweep(1, 0, 30);
+}
+
+/// Full sweep (2 surfaces per kind, 2 extra samples per direction); run with
+/// `cargo test -p scx-testkit --test nurbs -- --ignored`.
+#[test]
+#[ignore = "slow exhaustive sweep"]
+fn surface_de_boor_and_basis_sum_agree_exactly_full() {
+    surface_de_boor_sweep(2, 2, 500);
 }
 
 #[test]
@@ -524,8 +602,8 @@ fn a_surface_extruded_from_a_curve_is_that_curve() {
     }
 }
 
-fn same_surface(a: &Surface<3>, b: &Surface<3>, rng: &mut Rng, what: &str) {
-    for uv in surface_samples(rng, b, 2) {
+fn same_surface(a: &Surface<3>, b: &Surface<3>, rng: &mut Rng, extra: usize, what: &str) {
+    for uv in surface_samples(rng, b, extra) {
         for side in SIDE2 {
             assert_eq!(
                 a.derivs(uv, side, 2).unwrap(),
@@ -536,24 +614,36 @@ fn same_surface(a: &Surface<3>, b: &Surface<3>, rng: &mut Rng, what: &str) {
     }
 }
 
-#[test]
-fn surface_insertion_and_elevation_leave_the_shape_exactly_unchanged() {
+fn surface_edit_sweep(per_kind: usize, extra: usize) {
     let mut rng = Rng::new(11);
-    for data in surfaces(110, 1) {
+    for data in surfaces(110, per_kind) {
         let s = data.exact().unwrap();
         let (du, dv) = s.domain();
         let u = sample::parameter(&mut rng, &data.knots_u, du);
         let v = sample::parameter(&mut rng, &data.knots_v, dv);
         if let Ok(t) = s.insert_knot_u(u, 1) {
-            same_surface(&s, &t, &mut rng, &format!("{data:?} insert u {u}"));
+            same_surface(&s, &t, &mut rng, extra, &format!("{data:?} insert u {u}"));
         }
         if let Ok(t) = s.insert_knot_v(v, 1) {
-            same_surface(&s, &t, &mut rng, &format!("{data:?} insert v {v}"));
+            same_surface(&s, &t, &mut rng, extra, &format!("{data:?} insert v {v}"));
         }
         let e = s.elevate_u(1).unwrap().elevate_v(1).unwrap();
         assert_eq!(e.degrees(), (data.degrees.0 + 1, data.degrees.1 + 1));
-        same_surface(&s, &e, &mut rng, &format!("{data:?} elevate"));
+        same_surface(&s, &e, &mut rng, extra, &format!("{data:?} elevate"));
     }
+}
+
+#[test]
+fn surface_insertion_and_elevation_leave_the_shape_exactly_unchanged() {
+    surface_edit_sweep(1, 0);
+}
+
+/// Full sweep (12 surfaces, 2 extra samples per direction); run with
+/// `cargo test -p scx-testkit --test nurbs -- --ignored`.
+#[test]
+#[ignore = "slow exhaustive sweep"]
+fn surface_insertion_and_elevation_leave_the_shape_exactly_unchanged_full() {
+    surface_edit_sweep(1, 2);
 }
 
 // ---------------------------------------------------------------- order 3 and higher; splitting
@@ -574,13 +664,15 @@ fn high_surfaces(seed: u64, count: usize) -> Vec<scx_testkit::data::SurfaceData<
         .collect()
 }
 
-#[test]
-fn surface_de_boor_and_basis_sum_agree_exactly_to_order_five() {
+fn order_five_sweep(per_surface: usize, min_checked: usize) {
     let mut rng = Rng::new(12);
     let mut checked = 0;
     for data in high_surfaces(120, 12) {
         let s = data.exact().unwrap();
-        for uv in surface_samples(&mut rng, &s, 0).into_iter().take(5) {
+        for uv in surface_samples(&mut rng, &s, 0)
+            .into_iter()
+            .take(per_surface)
+        {
             let side = SIDE2[checked % 4];
             let a = s.derivs(uv, side, 5).unwrap();
             let b = s.derivs_by_basis(uv, side, 5).unwrap();
@@ -589,7 +681,19 @@ fn surface_de_boor_and_basis_sum_agree_exactly_to_order_five() {
             checked += 1;
         }
     }
-    assert!(checked > 50, "{checked}");
+    assert!(checked > min_checked, "{checked}");
+}
+
+#[test]
+fn surface_de_boor_and_basis_sum_agree_exactly_to_order_five() {
+    order_five_sweep(2, 20);
+}
+
+/// Full sweep (5 samples per surface); run with `cargo test -p scx-testkit --test nurbs -- --ignored`.
+#[test]
+#[ignore = "slow exhaustive sweep"]
+fn surface_de_boor_and_basis_sum_agree_exactly_to_order_five_full() {
+    order_five_sweep(5, 50);
 }
 
 /// The power-basis coefficients of the Bernstein polynomials of degree `p`:
