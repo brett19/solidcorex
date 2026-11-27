@@ -77,7 +77,7 @@ column says; "—" means the crate takes no kernel code. The figures move as cra
 
 | Layer | Crate | Holds | Depends on | Kernel lines |
 |---:|---|---|---|---:|
-| 0 | `scx-num` | vectors, points, frames, rigid and affine transforms, extents, intervals and Taylor models (with the certified section's intervals and series), pseudo-boxes, placements, units and tolerance newtypes, `Cert` and `Basis`, constants, platform-independent transcendentals (`fmath`), error-free transforms, the fixed hash and `Rng` | std | 16,992 |
+| 0 | `scx-num` | vectors, points, frames, rigid and affine transforms, extents (finite by construction) and parameter domains, intervals and Taylor models (with the certified section's intervals and series), pseudo-boxes, placements, units and tolerance newtypes, `Cert` and `Basis`, constants, platform-independent transcendentals (`fmath`), error-free transforms, the fixed hash and `Rng` | std | 16,992 |
 | 1 | `scx-algo` | polynomials and root isolation (with `bernstein_roots`), 1-D and n-D local solvers, Krawczyk, the global solver, the ODE core of the mass integrator, deterministic sorting and grouping, a box tree over `Extent`, point sets, the `Executor` trait | num | 17,515 |
 | 1 | `scx-nurbs` | knots, basis, Bézier, NURBS curves as plain data: evaluation, splitting, degree change, curve fitting and approximation, curve enclosures and deviations, IGES entity 126 | num | 28,669 |
 | 1 | `scx-p21` | STEP Part 21 read and write, Part 42 entities as data, units, product structure | num | — (part of `solidcore-step`) |
@@ -377,7 +377,7 @@ This section is revised after review-architecture-v2 (B1, S11, K5).
 | `Region` | a volume: `RegionId(0)` is the infinite region outside everything; others are solid or void, with a `solid: bool` | region table |
 | `Shell` | a connected set of face sides bounding one region, plus its wire edges and lone vertices; the region it bounds | shell table |
 | `Face` | surface, `sides: [ShellId; 2]` (front, back, front taken about the natural normal), loops of `EdgeUse`s, cells | `Arc<FaceRecord>` per face |
-| `EdgeUse` | the edge, sense, pcurve (a 2-D curve and interval on the face's surface), the pcurve's recorded bound | inside its face's loop |
+| `EdgeUse` | the edge, sense, pcurve (a 2-D curve and interval on the face's surface; a uv point for a lone vertex), the pcurve's recorded bound | inside its face's loop |
 | `Edge` | **geometry part:** curve and interval (none for an edge collapsed to a point), end vertices, recorded accuracy. **Adjacency part:** the face sides around it in radial order | edge table, two parts |
 | `Vertex` | point, recorded accuracy | vertex table |
 
@@ -398,6 +398,16 @@ The pin's Boolean labels regions in one cellular body and then keeps or deletes 
 - **A wire edge** has no face sides. It belongs to its shell's wire list.
 - **A lone vertex inside a face** (a cone apex, an imprinted point) is a loop of one `EdgeUse` on an
   edge collapsed to that vertex.
+- **A collapsed edge** has no curve and is valid. A non-collapsed edge without a curve can exist
+  only in a draft: at `finish` it is a `Defect`, since only our own operations build drafts that
+  way, and a caller's input without one is refused before `finish` (research 63 D8, review-63 M1).
+
+**Pcurves** (research 63 D10, review-63 H3): exact where a closed form exists. Otherwise the
+writer fits them eagerly before `finish`, to the body's claimed accuracy (never raised in advance),
+accepting within edge accuracy + face accuracy + the existing gap, and records an accuracy only
+when worse than the resolution. Every pcurve keeps the pole and seam rules: no jump across a
+period, no dog-leg at a pole, a pole is a vertex. The fitter comes in step 5 (10.2); until then a
+writer that needs one returns `Unsupported`.
 
 **C4. The layout of use records.** This choice is revised after review-architecture-v2 (B1, S11).
 
@@ -814,67 +824,92 @@ Where each record lives:
 
 ## 5. Errors
 
+This section follows research 62 (the error taxonomy) as ruled 2026-11-27, with review-62's
+corrections. Research 62 §10 lists the rulings. It replaces the `Lower(LowerError)` shape of
+review-architecture-v2 (S4).
+
 ### 5.1 Shape
 
-This section is revised after review-architecture-v2 (S4).
-
-Each crate has one error type, named after the crate, with typed `#[non_exhaustive]` causes.
+Each crate has one error type, named after the crate, with typed `#[non_exhaustive]` causes. The
+kind is computed from the cause's type and variant, never stored, and no cause type sits under two
+kinds.
 
 ```rust
 #[non_exhaustive]
 pub enum BlendError {
-    Refused(BlendCause),       // the input is not valid: an id not in the body, a radius no ball can roll
-    Unsupported(BlendCause),   // valid input this method could not complete; the app may retry differently
-    Items(Vec<(usize, BlendCause)>),  // per input item (5.2), sorted by item index
-    Exhausted { budget: u64 }, // the work budget ran out
+    Cause(BlendCause),                 // one failure; BlendCause::kind() is Refused or Unsupported per variant
+    Items(Vec<Skipped<BlendCause>>),   // collect-all mode only (5.2); non-empty, in item order
+    Exhausted { item: usize, work: u64 }, // a limit ran out (typed limit cause, below)
     Cancelled,
-    Defect(Defect),            // our bug: an invariant broke; carries where
-    Lower(LowerError),         // brep, bodyq, boolean ... errors, as source()
+    Defect(Defect),                    // our bug: an invariant broke; carries where
 }
 ```
 
-- **`Refused`** is only for input that is not valid, including `ResolutionMismatch`. "Operations
-  never refuse valid input" (11-26) means: if an answer exists and our method reaches it, give it
-  with recorded accuracy.
-- **`Unsupported`** is honest about a case the method does not cover, such as a vertex blend it
-  cannot patch or a degenerate SSI branch. Each such cause is also an entry on a list of methods to
-  improve.
-- Causes ruled with research 60 (11-27):
-  - a stated incidence that does not hold is `Refused(FalseFact)` at the public API, and a `Defect`
-    when one of our operations stated it;
-  - two operand vertices within coincidence of each other are `Refused`, naming both (4.2);
-  - a merge chain that cannot be anchored is `Unsupported`, with the chain in the trace (4.2);
-  - a singular transform is `Refused` (2.4);
-  - a draft whose curve or p-curve ends miss their vertex balls is `Unfinished` with a
-    `Geometry` cause (2.3).
-- Causes ruled with research 61 (11-27), in `BlendCause`:
-  - a corner the new system does not yet build, not even with the Setback's `Unproven` hole fill,
-    is `Unsupported(CornerUnsupported { kind })`, naming the corner kind (for example a conic
-    Setback, Ball or Mitre, a Roll-over, or edges tangent at the vertex). It is never `Refused`;
-  - a blend whose size does not fit is `Refused` with the size that fits;
-  - a G2 corner that can only be built G1 is a success with G1 recorded on the face and
-    `Warning::ContinuityLowered { face, reached }`. It is `Unsupported(ContinuityNotReached)` only
-    when the caller stated G2 as a hard requirement through the fillet spec's typed continuity
-    option;
-  - an exhausted certificate budget is not an error: `Basis::Unproven` and a warning (4.1).
-- **`Defect`** is `Defect { at: &'static str, what: DefectKind }`. Apps report it and never handle
-  it. Library code never panics; the workspace lints already deny it.
-- **`Exhausted` and `Cancelled`** come only from crates that take a budget or a `Stop`.
-- Lower layers have the subset that applies to them. For example, `SurfaceError` has `Refused`,
-  `Unsupported`, `Exhausted`, `Defect` and `Num`.
-- Every error implements `std::error::Error` with `source()`. Display strings are for people and are
-  not a stable interface; the variants and causes are.
-- **`fn kind(&self) -> ErrorKind`** maps one for one onto a shared `#[non_exhaustive]` enum in
-  `scx-num`: `InvalidInput`, `Unsupported`, `Exhausted`, `Cancelled`, `Defect`. Apps that only
-  route errors use it.
+The five kinds are `ErrorKind` in `scx-num`, each one thing the caller does next:
 
-The solver pattern already in `scx-algo` is kept: `SolveError<E>` with the `EvalError`
-classification (04, 11-26). Its "out of fuel" and "cancelled" classes map to `Exhausted` and
-`Cancelled`.
+- **`Refused`**: the input is invalid or cannot hold as asked (a bad id, a false stated fact, a
+  size that does not fit). The caller changes the input. "Operations never refuse valid input"
+  (11-26) means: if an answer exists and our method reaches it, give it with recorded accuracy.
+- **`Unsupported`**: valid input this method does not build. Each cause is an entry on a list of
+  methods to improve. The kind is the coarse route; a remedy may differ from it (below).
+- **`Exhausted`**: a limit the caller or the machine sets ran out. Typed limit causes: work,
+  allocation, depth, count, memory. Fixed caps on input size (p21's `TooDeep`, `TooMany`,
+  `NeedsMemory`) are such causes. A certificate budget is not one: it gives `Unproven`.
+- **`Cancelled`**: the caller's `Stop` fired.
+- **`Defect`**: `Defect { at: &'static str, what: DefectKind }`. Apps report it and never handle it.
+  Library code never panics; the workspace lints already deny it.
+
+Rules fixed by earlier research still hold (60, 61):
+
+- a stated incidence that does not hold is `Refused(FalseFact)` at the public API, and a `Defect`
+  when one of our operations stated it; two operand vertices within coincidence, and a singular
+  transform, are `Refused`; a merge chain that cannot be anchored is `Unsupported`;
+- a corner the new blend system does not build is `Unsupported(CornerUnsupported { kind })`, never
+  `Refused`; a blend whose size does not fit is `Refused` with the size that fits;
+- a draft whose curve ends miss their vertex balls is `Unfinished` with a `Geometry` cause (2.3);
+  `Unfinished` from our own operation is a `Defect`.
+
+**Chaining.** A lower error sits whole in a typed field of the upper cause, `Box`ed where it would
+grow the enum. There is no `LowerError`, and a wrapper names only its direct callees.
+
+- By default a wrapper inherits the lower kind. It re-judges only when it built the data it passed
+  down: `Defect` if it proved that data valid, otherwise `Unsupported`. A lower `Refused` from our
+  own data is a bug by construction once public entry points validate the caller's input.
+- A lower `Exhausted` or `Cancelled` becomes the upper one. A lower `Defect` stays a `Defect`.
+- Two frame types. A transparent frame forwards `source()` and Display to the inner error and adds
+  nothing (`SolveError::Num` and `Eval`, p21's `Unwritable::Geometry`). A context frame prints only
+  its own text and `source()` returns the inner error (`CallFailed`, `P21Error::Within`). A
+  wrapper never copies a lower cause's text into its own.
+- Display is English for a developer and prints one frame. `scx_num::error::chain` joins the frames
+  and reproduces p21's one-line form, or p21 keeps its own formatter over the chain. Display text
+  is not an interface.
+
+**Names and kinds.** `kind()` and `name()` are plain methods per type, with no shared trait
+(rust-version stays 1.85). A signature is call, kind and cause `name()`, not a numeric code. The
+solver's `EvalError` has a required `fn kind(&self) -> ErrorKind`, and its three predicates are
+derived from it.
+
+**Remedy.** In `scx-brep`, `fn remedy(&self) -> Option<Remedy>` is derived from the cause by an
+exhaustive match, is data and never text, and is `None` where the kind says it all.
+`Resize { at, measure, bound, fit: Option<Fit> }` keeps measure and bound when no size is proved;
+`ChangeInput { at, what }` is the other variant. `Fit { size, measure, bound, inclusive }` names a
+size that builds.
+
+**Warnings.** A warning is a typed value in `Report`, beside a success. It never changes a value in
+its call. It is part of the result: it replays on a cache hit, merges in item order, and is dropped
+for items above a reported failure or the budget cut. `Unproven`'s recorded accuracy legitimately
+affects later operations.
+
+**Sizes.** Errors stay off the success path's size: lower errors in cause fields are `Box`ed, and
+clippy's `result_large_err` is on at its default threshold.
+
+Lower layers have the subset that applies to them. For example, `SurfaceError` has `Refused`,
+`Unsupported`, `Exhausted`, `Defect` and `Num`. The solver pattern in `scx-algo` is kept:
+`SolveError<E>` over an `EvalError` that has a kind.
 
 ### 5.2 Partial success
 
-**C8.** This choice is revised after review-architecture-v2 (S5).
+**C8.** This choice is revised after review-architecture-v2 (S5), and by research 62 (determinism).
 
 - Options:
   - (a) all or nothing, always;
@@ -888,27 +923,37 @@ pub struct Report<C> { pub warnings: Vec<Warning>, pub skipped: Vec<Skipped<C>>,
 pub struct Skipped<C> { pub item: usize, pub round: u32, pub cause: C }
 ```
 
-- **Items** are what the operation treats as units. For blends that is chains of edges, not single
-  edges. Booleans, whole-body offsets and tapers have no items.
-- **The default** returns the first failure in item order. It adds any other failures found without
-  extra work, and no body.
+- **Items** are what the operation treats as units. For blends that is chains of edges. Booleans,
+  whole-body offsets and tapers have no items.
+- **The default** returns only the lowest-index failure, and no body. Collect-all is an explicit
+  mode that runs every item and returns `Items` in item order. Which extra failures a parallel run
+  would find depends on scheduling, so the default never reports them.
+- **Determinism of the merge** (62 §5, H4):
+  - each item runs under the full budget and records the work at which each event (failure,
+    defect, warning) happened;
+  - the merge walks items in index order and counts an event only if the prefix work plus that
+    event's work is within the budget; otherwise the outcome is `Exhausted` at that item;
+  - no algorithm sizes anything from its remaining budget, and a certificate budget is a fixed
+    per-operation amount;
+  - collect-all and `Skip` meter the same way; `Scoped` may stop items above the lowest failing
+    index early, as an optimisation that does not change results;
+  - `Cancelled` is the one timing-dependent outcome and may race a failure.
 - **`Skip`** is a fixpoint:
   1. Drop the failing items, in index order.
   2. Run again.
   3. Repeat until no item fails or a stated round cap is reached (default 3).
   - Each dropped item is reported with its cause and round. The cost is up to that many reruns, and
-    it is documented as such.
-  - It is deterministic, because each round is.
+    it is documented as such. It is deterministic, because each round is.
 - Lost accuracy is never a failure. It appears in `raised` and as warnings.
 - `work` is the budget used, in its deterministic units (6.3, 9.4).
 - Change if: app use shows `Skip` as the default nearly everywhere.
 
 ### 5.3 Layer 0's strings
 
-- Layer 0's `NumError` was ruled to match solidcore's strings and variants one for one (04, 11-26),
-  so the difftest can compare errors exactly.
-- That holds while the difftest drives the move. Once a layer is ported, its strings are free to
-  change, and the facade in `scx-difftest` maps variants instead.
+- Layer 0's `NumError` was ruled to match solidcore's strings one for one (04, 11-26). Research 62
+  (11-27) replaces that: scx's causes and Display are free to change, and the facade in
+  `scx-difftest` maps each scx cause to the pin's kind and text. The facade already compares
+  `InvalidInput` by class alone.
 
 ---
 
@@ -1059,8 +1104,17 @@ review-architecture-v2 (S10, K1).
 **The kind set** is settled when `scx-curve` and `scx-surface` start, from the pin's kinds and their uses. Starting
 points (JUDGED):
 
-- line, circle, ellipse, parabola and hyperbola stay separate, each with its natural
-  parameterisation;
+- line, circle, ellipse, parabola and hyperbola stay separate;
+- every kind keeps the pin's analytic, NURBS-compatible parameterisation, in closed form with no
+  carried NURB, so oblique sections stay exact and converters need no uv mapping (research 63 D13,
+  review-63 H2; this replaces "each with its natural parameterisation");
+- a parameter's domain is a `ParamDomain` (periodic, bounded, half-open or unbounded); extents are
+  finite and no ±inf or sentinel is stored; numeric work runs on an explicit working extent
+  (research 63 D1);
+- placed kinds hold a right-handed `Frame` (x and z stored) and a sense; a mirror reverses the
+  sense, never the frame's handedness (research 63 D12, D14);
+- a non-similarity on an analytic surface gives NURBS over an extent; its pcurves are refit in
+  step 5, and until then the face is `Unsupported` under that map (research 63 D4);
 - Hermite and composite curves become NURBS if they exist only for fitting; if they stay, they are
   in `scx-curve`;
 - the pin's `CrvInVolume` and `SrfInVolume` become images under the volume maps, all in
@@ -1275,6 +1329,8 @@ early.
 2. **Private newtype fields**, with the arithmetic each newtype needs. Remove `AngleTol` (4.2).
 3. **Remove sentinels** (`UNDEF_DOUBLE`, `Vector3::UNDEF`, `USE_DEFAULT`, `UNINIT_TOL`,
    `INFINITE_PARAMETER`, READ) in favour of `Option`, typed defaults or named bounds.
+   `INFINITE_PARAMETER` goes in research 63's task P0: extent ends become finite by construction,
+   unboundedness is a `ParamDomain` variant, and the pin's clamps become named rules.
 4. **Add `fmath`**, covering every function in the 8.3 list.
 5. **Move `Cert`, `Claim`, `Method`, `Basis` and `Recorded` into `scx-num`**, and add the fixed hash
    and `Rng`.
@@ -1293,9 +1349,9 @@ early.
 |---|---|---|
 | 1 | 10.1 | `cargo xtask fast` clean; difftest 0 mismatches, or each explained |
 | 2 | **Vertical slice, geometry:** `scx-nurbs` evaluation and knots; `scx-nurbs-surface` evaluation and the `Nurbs` record; `scx-curve` for line, circle, ellipse, B-spline curve; `scx-surface` for plane, cylinder, cone, sphere, torus, B-spline surface, with point inversion, closed-form analytic projection and curve-surface intersection; the analytic part of `scx-ssi` | function-by-function difftest on those |
-| 3 | **Vertical slice, body:** `scx-brep` (regions, sides, cells, `Changes`, `carry`, stamp); the provenance and history tests ported; `scx-record`; the pin-record converter | round trip keeps ids and bytes; cells empty after both edit paths; provenance tests pass |
+| 3 | **Vertical slice, body:** `scx-brep` (regions, sides, cells, `Changes`, `carry`, stamp; exact pcurves only, research 63 D10); the provenance and history tests ported; `scx-record`; the pin-record converter | round trip keeps ids and bytes; cells empty after both edit paths; provenance tests pass |
 | 4 | **Vertical slice, end to end:** `scx-mass`; `scx-bodyq` classification; `scx-make` primitives and extrude; `scx-boolean` on analytic bodies; `scx-tess`. The crates these depend on (`scx-planar`, `scx-check`, `scx-stitch`, `scx-hlr`) exist from here, holding what the slice calls | **the end-to-end difftest by outcome runs from here on**; first performance measurement (9.4) |
-| 5 | Widen geometry (layers 1-4): all NURBS work, fitting with per-span certificates, procedural kinds (the blend definition with the one section generator: chord, circle, Gⁿ G2-G4 with `Fullness`, and the conic, with their exact classes; research 61 §7), the volume maps, B-spline SSI, `scx-planar`, `scx-sketch`, `scx-teeth`, `scx-dxf`, `scx-p21` | difftest per function; certified bounds checked; the section truth checks of research 61 §4.4; DXF corpus |
+| 5 | Widen geometry (layers 1-4): all NURBS work, fitting with per-span certificates, the writer's pcurve fitter and the refit after a non-similarity (research 63 D4, D10), procedural kinds (the blend definition with the one section generator: chord, circle, Gⁿ G2-G4 with `Fullness`, and the conic, with their exact classes; research 61 §7), the volume maps, B-spline SSI, `scx-planar`, `scx-sketch`, `scx-teeth`, `scx-dxf`, `scx-p21` | difftest per function; certified bounds checked; the section truth checks of research 61 §4.4; DXF corpus |
 | 6 | Widen bodies (layers 5-7 without Booleans): full `scx-bodyq` (contact, continuity, pick), `scx-check`, `scx-stitch`, `scx-hlr`, `scx-step` | the STEP corpus imports and passes the check; drawings |
 | 7 | Layers 7-8: `scx-boolean` full, `scx-deform`, `scx-make` full, `scx-repair` | Boolean suite, algebra properties, difftest by outcome |
 | 8 | Layer 9: `scx-local`, `scx-mesh`, `scx-sheetmetal`, `scx-taper` | each family by outcome, kept-face counts; mesh round trips |

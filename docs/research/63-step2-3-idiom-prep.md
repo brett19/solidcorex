@@ -1,0 +1,1598 @@
+# 63 - Steps 2 and 3: the idiom hunt ahead of the builders
+
+Written for solidcorex, 2026-11-27. When `scx-nurbs` lands, builders start the rest of step 2 and
+then step 3 of 01 §10.2. Research 57 found the C++/SMLib shapes in what had been ported to
+`scx-num` and `scx-algo`. This note does the same hunt ahead of time for the six crates that come
+next, so each builder starts from a ruled shape and does not rediscover it:
+
+- `scx-nurbs-surface`;
+- `scx-curve`;
+- `scx-surface`;
+- the analytic part of `scx-ssi`;
+- `scx-brep`;
+- `scx-record`.
+
+For each crate the note gives:
+
+1. the shapes found at the pin, with citations and counts;
+2. the proposed shape, consistent with 57's rulings;
+3. a sketch of the public types;
+4. the truth references the crate needs that `scx-testkit` lacks;
+5. a split into builder tasks with their dependencies.
+
+Section 9 then argues against each proposal and revises the ones that lose. Section 11 lists the
+decisions, written as 04 rows. Section 12 records the coordinating session's rulings of 2026-11-27,
+which adopt the corrections of `reviews/review-63.md`. The body is revised in place to match them,
+and each place a ruling changed carries a bracketed "[Ruled 11-27: ...]" note. 04 §3 carries the
+rulings as its 11-27 rows on this research.
+
+- **Labels** (as in 57):
+  - READ: read from the pin's code or the docs.
+  - MEASURED: counted or run here; the method is given.
+  - JUDGED: a design judgement.
+- **Citations.**
+  - Pin paths are relative to the pinned kernel's `src/` (crate `solidcore`, pin 03e16c9ee7).
+  - `p2.rs:335` means line 335 of that file.
+- **Scope.**
+  - No crate code was changed.
+  - Errors follow research 62 as ruled (its §10, 01 §5, the 11-27 rows of 04): each crate has its
+    own error type with typed causes, `SolveError<E>` where a solver is wrapped, and no status
+    codes. Every cause named below is given its kind, and every wrapper is marked as a transparent
+    or a context frame (X13). [Ruled 11-27, M2: this line said 62 was in progress.]
+
+## 0. How the counts were made (MEASURED)
+
+- **Which file belongs to which crate.**
+  - Every pin file was mapped to a crate by research 56's `assignment.py` table, longest prefix
+    first.
+  - Files whose path contains `test` were then dropped.
+- **What a count means.**
+  - A count is the number of matching lines found by `grep -cE` over the remaining files.
+  - Comment and doc lines are included, as in 57. A count is a size, not an exact number of
+    occurrences.
+  - The doc comments name the C++ shape often, so a high count for `SM_ERR` partly measures how
+    carefully the port documented the shape.
+- **The six crates' shares of the pin:**
+
+| Crate | Pin files (all) | Pin lines (all) |
+|---|---:|---:|
+| `scx-nurbs-surface` | 24 | 24,926 |
+| `scx-curve` | 66 | 89,931 |
+| `scx-surface` | 146 | 249,335 |
+| `scx-ssi` | 13 | 21,334 |
+| `scx-brep` | 53 | 123,585 |
+| `scx-record` | 4 | 3,248 |
+
+- **Step 2 ports a slice, not these totals.**
+  - Curves: line, circle, ellipse and B-spline.
+  - Surfaces: plane, cylinder, cone, sphere, torus and B-spline.
+  - Queries: inversion, closed-form projection and curve-surface intersection.
+  - Intersection: the analytic part of `scx-ssi`.
+  - The counts show where each shape lives. The slice meets most of them, because the shapes sit in
+    the dispatch types (`Curve`, `Surface`, the topology records) that every kind passes through.
+
+## 1. Shapes common to all six crates
+
+Every crate meets these shapes. Each is ruled once here, and the crate sections refer back to it.
+
+### 1.1 Counts (MEASURED)
+
+| Shape | Pattern (summary) | nurbs-surface | curve | surface | ssi | brep | record |
+|---|---|---:|---:|---:|---:|---:|---:|
+| Kernel passed for reading | `&Kernel` | 0 | 498 | 1,685 | 229 | 603 | 1 |
+| Kernel passed for writing (the arena) | `&mut Kernel` | 0 | 0 | 3 | 0 | 418 | 6 |
+| Tolerance read from the kernel | `k.tolerances`, `k.fixes` | 0 | 11 | 17 | 0 | 18 | 0 |
+| Failing base-class default | `Err(base_err`, `base_*()`, `SM_ERR` | 2 | 267 | 603 | 38 | 287 | 0 |
+| Unsupported kind or method at run time | `Unsupported*Kind`, "not implemented" | 0 | 170 | 380 | 66 | 227 | 0 |
+| Upstream status inspected | `upstream_status` | 0 | 49 | 84 | 12 | 77 | 3 |
+| Behaviour-picking bool parameter | `name: bool` in a signature | 55 | 247 | 750 | 50 | 501 | 15 |
+| the span side as a bool | `from_left` | 3 | 72 | 181 | 0 | 3 | 0 |
+| zero tangents replaced | `non_zero_tangents` | 0 | 59 | 92 | 5 | 2 | 0 |
+| Integer flag or type code parameter | `kind/type/flag/mode: i32` etc. | 11 | 33 | 127 | 7 | 44 | 5 |
+| Type test by integer | `is_kind_of`, `_TYPE` | 12 | 359 | 606 | 18 | 317 | 1 |
+| Owner link on geometry | `ObjectRef`, `owner` | 0 | 435 | 887 | 17 | 1,495 | 6 |
+| Identity and notification | `identity`, `notify` | 0 | 103 | 269 | 5 | 1,919 | 13 |
+| Owner's zone tolerance cached on geometry | `owner_zone_tol` | 0 | 52 | 92 | 3 | 21 | 0 |
+| NURB carried inside an analytic kind | `kind_with_nurb`, `gw_nurb` | 0 | 126 | 341 | 6 | 59 | 0 |
+| Memo or cache inside geometry | `memo`, `cache` | 49 | 316 | 647 | 71 | 152 | 4 |
+| Interior mutability | `RefCell`, `Cell`, `Rc` | 0 | 0 | 25 | 2 | 6 | 0 |
+| Sentinel values | `UNDEF`, `NOZ`/`NOW`, `BIG_DOUBLE`, `INFINITE_PARAMETER`, ... | 116 | 552 | 1,045 | 71 | 404 | 2 |
+| of these, `NOZ`/`NOW` | | 116 | 245 | 448 | 10 | 121 | 0 |
+| of these, `INFINITE_PARAMETER` | | 0 | 16 | 100 | 10 | 0 | 0 |
+| of these, `BIG_DOUBLE` | | 0 | 53 | 97 | 14 | 63 | 0 |
+| A tuple with a bool | `(bool,` | 1 | 25 | 89 | 8 | 20 | 0 |
+| Answer and "needs more work" bool | `needs_more` | 0 | 94 | 83 | 2 | 0 | 0 |
+| Out-parameter: vector | `: &mut Vec<` | 2 | 22 | 52 | 15 | 41 | 1 |
+| Out-parameter: slice | `: &mut [` | 44 | 38 | 78 | 17 | 20 | 0 |
+| Out-parameter: scalar, point or `Option` | `: &mut f64`, `: &mut Point3`, ... | 8 | 47 | 76 | 2 | 38 | 0 |
+| `Result<()>` (mutate and report) | `-> Result<()>` | 64 | 148 | 356 | 73 | 623 | 12 |
+| `Result<bool>` | | 6 | 114 | 285 | 33 | 202 | 0 |
+| Setter on a long-lived object | `fn set_*(&mut self` | 1 | 14 | 36 | 3 | 31 | 3 |
+| Nested vectors | `Vec<Vec<` | 68 | 13 | 167 | 5 | 14 | 0 |
+| `Vec<Vec<Vec3>>` partials | | 18 | 0 | 59 | 2 | 2 | 0 |
+| `Result<Vec<Vec3>>` curve derivatives | | 6 | 19 | 37 | 0 | 0 | 0 |
+| Angles in degrees | `to_radians`, `360.0`, `180.0` | 9 | 204 | 497 | 7 | 34 | 0 |
+| Upstream arity or variant suffix | `_simple(` | 0 | 1 | 352 | 0 | 4 | 0 |
+| Trait objects | `dyn` | 1 | 9 | 101 | 12 | 145 | 1 |
+| Upstream class names in identifiers or docs | `` `Sm`` | 3 | 951 | 1,883 | 126 | 1,879 | 79 |
+
+### 1.2 The rulings
+
+**X1. No ambient kernel.**
+
+- **Pin.**
+  - `&Kernel` is threaded through almost every geometry signature. The analytic kinds ignore it:
+    `CurveEvaluate::evaluate(&self, k: &Kernel, ..)` at `curve/curve/p2.rs:345`, implemented by
+    `Conic`, `Line` and the others with `_k`.
+  - It carries tolerances (`k.tolerances`), the arena (`&mut Kernel` in topology) and the
+    notification stores (`topology/edge.rs:2539` `NotificationStores`, `:2558` `NotifyEnv`).
+- **Proposal** (01 §6 and §12, already ruled).
+  - Geometry functions take only what they read:
+    - a `Length` or `Resolution` where a tolerance decides an answer;
+    - `&mut Scratch` where they memoise;
+    - a budget and `Stop` where they may run long.
+  - The body is a value (`Brep`, `Draft`), not an arena inside a kernel.
+  - A function that read `k` only to forward it loses the parameter.
+
+**X2. No failing defaults.**
+
+- **Pin.** A base-class virtual becomes a match arm or a free `base_*()` that returns an error at
+  run time.
+  - `curve/curve/p2.rs:327` has `base_err(BaseCurveMethod)`, with 9 methods. Arms return it at
+    `:1598` (continuities), `:1805` (inversion), `:1919`, `:1941`, `:2008`, `:2051` (transform: for
+    Hermite, conic, iso and offset curves), `:2097`, `:2138` and `:2209`.
+  - `surface/surface/p2.rs:5195`-`5400` has the free defaults:
+    - `base_copy`;
+    - `base_adjust_step_uv_domain`;
+    - `base_drop_point_fast`;
+    - `base_evaluate`;
+    - `base_intersect_with_plane -> (bool, SurfaceIntersection)` (`:5375`);
+    - `base_edit` (`:5381`);
+    - `base_split_at`;
+    - `base_step_inversion -> (Point2, LocationType)` (`:5391`);
+    - `base_knots -> (Vec<f64>, Vec<usize>)` (`:5396`).
+- **Proposal.** Every operation on a kind enum is a total `match`. For a kind that cannot do an
+  operation exactly, the choice is made per operation and written in the type:
+  - (a) the kind is converted to an exact NURBS image, which does it;
+  - (b) the operation is approximated, and the accuracy is recorded (04, 11-26 accuracy rule;
+    11-27 transform rule);
+  - (c) the operation does not exist for the kind. It is then a method of that kind only, or it
+    returns `Option`/`Result` with a cause that names the kind, such as `Unsupported(SurfaceKindName)`.
+    It is never a catch-all `SM_ERR`.
+  - For the step-2 kinds (line, circle, ellipse, B-spline; plane, cylinder, cone, sphere, torus,
+    B-spline) every operation in the slice is total. No step-2 match arm should return an
+    unsupported error (JUDGED, from reading the overrides).
+
+**X3. Geometry has no owner and no identity.**
+
+- **Pin.**
+  - `struct Curve` (`curve/curve/p2.rs:628`) holds `owner: Option<ObjectRef>`, a `notify_identity`,
+    a memo shared by clones, and `owner_zone_tol_3d: Option<(Option<ObjectRef>, f64)>`.
+  - `Clone` resets the owner. `snapshot_copy` and `clone_exact_bounded` exist beside it.
+  - `struct Surface` (`surface/surface/p2.rs:428`) has the same fields, plus `owner_chain_face`
+    (`:435`) and `made_kind` (`:451`), a lazily built NURB.
+  - The plane intersection expands its box by "the tolerance of the plane's face"
+    (`surface/sphere.rs:1195`, `PlaneOwner`).
+- **Proposal** (01 §7.1, ruled).
+  - Geometry is plain data: `Clone + Send + Sync + PartialEq`, with no owner link and no identity.
+  - What the owner supplied comes in as an argument. The face's accuracy is a `Length` the caller
+    passes (`scx-brep` reads it from the face record).
+  - Identity lives in body ids only.
+  - Clone is a clone. There is one copy operation, not three.
+
+**X4. Caches are cells on immutable payloads, or the caller's `Scratch`.**
+
+- **Pin.** `CurveMemo` is shared between clones and reset by every in-place edit
+  (`transform_at_depth` resets it). Surface has a `CacheSlot`, and `take_made_kind_for_edit` at
+  `surface/surface/p2.rs:1016`.
+- **Proposal** (01 §3.1).
+  - Large payloads (a NURBS net, a procedural definition) sit behind `Arc`. Their derived data are
+    `OnceLock` fields of that payload, which is never edited, so no invalidation exists.
+  - Small analytic kinds carry no cache.
+  - A memo of results across calls lives in the caller's `Scratch`.
+
+**X5. Bools that pick behaviour become enums or separate functions** (57 §5.2).
+
+- **`from_left: bool` becomes `Approach::{Below, Above}`.**
+  - This is the testkit's `Side { Below, Above }` (59 §8 item 4, `scx-testkit/src/nurbs.rs:26`)
+    under a name of its own, with `scx-nurbs` defining the library copy and the testkit renamed to
+    match when it lands.
+  - The pin's own naming shows why: `EvaluateFlags::u_side` (`nurbs/b_spline_surface_n_lib/p2.rs:177`)
+    documents "`bUFromLeft`: `TRUE` is `Side::Left`, the span starting at the knot". "Left" is the
+    span to the right of the knot. A name by limit direction cannot be misread that way.
+  - **One enum per meaning, named apart** [Ruled 11-27, L4]. Three `Side`s would otherwise meet in
+    one prelude: 57 F3's boundary side `{ Lo, Hi, Inside }` becomes `BoundSide`, the evaluation side
+    is `Approach`, and `scx-p21`'s product-structure `Side` stays in that crate, outside the geometry preludes. No crate in
+    this note exports a type named `Side`.
+- **`non_zero_tangents: bool` (upstream default TRUE) is dropped as a flag.**
+  - Its doc (`curve/curve/p2.rs:343`) reads: "a zero first derivative is replaced by a
+    tolerance-sized one along the limiting direction".
+  - Proposal: derivatives are always the true derivatives. The limiting direction is its own
+    function, `tangent_dir(t, side) -> Option<UnitVec3>`, taken from the first non-zero
+    derivative.
+  - Section 9 revises how callers reach it.
+- **Other bools.** `classify: bool` on inversion (`curve/ellipse/p2.rs:1418`) and the like are
+  split into two functions, or the cheap part is always returned.
+
+**X6. Sentinels become types.**
+
+- **Pin.**
+  - `Vec3::UNDEF` fills failed outputs (`curve/curve/p1.rs:177`, `p3.rs:175`, `p7.rs:992`).
+  - `NOZ` and `NOW` mark "not rational".
+  - `INFINITE_PARAMETER` (`= 1234567.0`) bounds unbounded parameters.
+  - `BIG_DOUBLE` marks inside-out empty extents.
+  - `zone_tol == 0` means "use the context's tolerance" (`curve/ellipse/p2.rs:1407`).
+  - `rectangular_trim: i32` holds `UNSURE` (`topology.rs:458` struct `Face`).
+  - `tolerance: f64` is 0.0 when not set (`topology.rs:386`, `:413`).
+- **Proposal** (57 M3, F12, 01 §10.1 item 3).
+  - `Option` where a value may be absent, enums where the states are named, `Option<Extent>` for
+    empty extents, and `from_homogeneous` for rationality (F12, owned by `scx-nurbs`).
+  - **`INFINITE_PARAMETER`: unboundedness is a state of the type, not a value** (section 11, D1).
+    [Ruled 11-27, D1 revised after review-63 H1. This item first proposed ±inf ends.]
+    - A shared `ParamDomain` (P2) says, per parameter direction, whether the domain is periodic,
+      bounded, half-open (bounded below or above only) or unbounded. A missing end is a variant,
+      with no number behind it.
+    - `Extent1d`, `Extent2d` and `Extent3d` ends become finite by construction: `new` refuses a
+      non-finite end, `UNBOUNDED` and `is_infinite_param` go, and so do the sentinel branches in
+      `shift` and `times`. That is a change to merged `scx-num` (today `extent1d.rs` stores
+      unbounded ends as `±INFINITE_PARAMETER`, review-63 H1), so it is its own task, P0 (section 8),
+      ahead of RE1, BR1, CU1 and SU1.
+    - Neither ±inf nor a sentinel is ever stored, in memory or in a record.
+    - Numeric work on an unbounded kind goes through an explicit finite working extent,
+      `ParamDomain::working(&self, rule: Clamp) -> Extent1d`. The extent comes from the face's uv
+      box or the edge's interval where one exists, and from a stated `Clamp` rule otherwise. No
+      arithmetic ever touches a `ParamDomain` end.
+    - The pin's two clamping lessons are kept as named `Clamp` rules (`math.rs:61-65`, 57 §5.1):
+      - `BOUNDED_INFINITE_PARAM = 33.0`, the half-size used where an unbounded range must be
+        sampled, becomes `Clamp::Sample`;
+      - `INFINITE_PARAMETER_SQRT = 1111.111` exists because a parabola squares its parameter. It
+        becomes `Clamp::Squared`: a kind whose point grows as the square of its parameter clamps
+        at the square root of the bound, so the evaluated point stays within the bound.
+    - The general bound is sized from the model, never a fixed 1.2e6. The pin's #18922
+      (`offset/offset_geometry_creation.rs:~6885`) found 3.4e-11 rounding on a plane copy sized at
+      1.2e6, which is the cost of a bound far larger than the part.
+    - The pin's newer `eval/label.rs:23` (`UNBOUNDED = Range(-inf, inf)`) is not followed. ±inf does
+      not fail loudly: `inf * 0` and `inf - inf` give NaN, and NaN comparisons are silently false
+      (review-63 H1).
+
+**X7. A pair with a bool becomes a sum type.**
+
+- **Pin.**
+  - `intersect_with_plane -> Result<(bool, SurfaceIntersection)>` (`surface/sphere.rs:1178`). The
+    bool is `rbNeedsMoreIntersections`: "the general intersector is still needed".
+  - The dispatcher adds a third element: `(bool, SurfaceIntersection, Option<PlaneIntersectWarning>)`
+    (`surface/surface/p2.rs:3249`).
+  - Inversion returns `(Point2, LocationType)` with a sentinel location on failure.
+  - `KnotsWithStatus` (`curve/crv_on_surf.rs:1111`) returns knots with a status beside them.
+- **Proposal** (57 F3, F6).
+  - The plane case becomes `enum Closed { Solved(Section), General }`. `General` means "no closed
+    form for this pair here". It is an answer, not an error.
+  - Warnings go in the result struct, not in a third tuple slot.
+
+**X8. No upstream status inspection.**
+
+- **Pin.** `step_inversion_answered` (`surface/surface/p2.rs:2902`) treats an error as an answer
+  when its upstream status is `SM_ERR_NOT_WITHIN_TOLERANCE` or `SM_ERR_OUTSIDE_OF_DOMAIN`.
+  - Two "failures" are in fact results: "the nearest point is not on the surface" and "the point
+    is outside the domain".
+- **Proposal.** Inversion returns an `Inversion`-shaped result with those outcomes as variants (57
+  F6, extended in section 4). No caller ever looks at a code.
+
+**X9. Out-parameters.**
+
+- **Pin.** `&mut Vec`, `&mut [..]` and `&mut f64` outputs, often with a `bool` or `Result<()>`
+  return.
+- **Proposal** (57 §5.2).
+  - Return values.
+  - The one kept exception is batched evaluation into caller storage, `eval_many(&self, &[f64],
+    &mut [Point3])`.
+  - `Result<(), E>` plus mutation only where the value is unchanged on `Err`.
+  - The pin's `base_edit` comment ("puts s back as it was when the edit fails") shows the C++ needed
+    a rollback. A by-value edit (`fn reversed(&self) -> Self`) has nothing to roll back.
+
+**X10. Nested vectors and fixed sizes.**
+
+- **Pin.**
+  - Partials are `Vec<Vec<Vec3>>` (`surface/surface/p2.rs:2190` `evaluate`), and curve derivatives
+    `Result<Vec<Vec3>>`.
+  - Nets are `Vec<Vec<CPoint>>` (`nurbs/srf_basic.rs:241`).
+  - The pin's second evaluator, `eval/`, already moved to fixed shapes (`Partials`,
+    `derivs -> Option<(Vec3, Vec3, Vec3)>`, `eval/surface.rs:258`).
+- **Proposal.**
+  - Jets of fixed order, `CurveJet<const D: usize>` and `SurfaceJet<const D: usize>`, triangular
+    where only `i + j <= D` is wanted (the pin's `only_upper_half`).
+  - A net is one `Vec` with row-major indexing behind a typed accessor.
+  - Section 9 gives the measurement. [Ruled 11-27, D3: the measurement is unverified until A1's
+    benchmark is rerun fairly in the new `scx-bench` crate, with every input `black_box`ed and
+    every output consumed whole (review-63 M4).]
+  - `SurfaceJet<D>` stores the triangle `i + j <= D` only, not the full square, which at order 2
+    would waste a third (review-63 M4).
+
+**X11. Degrees and upstream names.**
+
+- Angles are radians (57 M4).
+  - The ellipse's inversion returns "the ellipse angle in degrees ... in `[0, 360)`"
+    (`curve/ellipse/p2.rs:1411`).
+  - Curve parameters of circles and ellipses are radians.
+- No `_simple`, `_it`, `2`/`3` arity suffixes, and no `Sm` names in identifiers.
+  - The upstream name stays only in a doc line (57 §5.2).
+  - In `scx-surface`, `_simple` (352 lines) is almost entirely the volume code
+    (`surface/b_spline_volume_n_lib.rs:134` and on), which comes in step 5.
+
+**X12. Two evaluators become one.**
+
+- **Pin.** The pin holds two evaluators:
+  - the Kernel-bound kind methods;
+  - `eval/`, a second one over plain data with no kernel (`EvalCurve`, `EvalSurface`, `Partials`,
+    `Domain`, `Collapse`).
+  - `eval`'s errors carry `String`s (`EvalError::{Unsupported, Invalid, TooLarge, Unevaluable,
+    Degenerate, OffRange}`).
+- **Proposal** (01 §7.1, review-56 E3). Each kind evaluates itself, once.
+  - `eval/`'s plain-data shapes are the better starting point for the signatures, since they were
+    written without the kernel.
+  - The proposal keeps `eval/`'s caps and lessons:
+    - `MAX_SPLINE_DEGREE`, `MAX_EVAL_KNOTS`;
+    - collapse and pole detection;
+    - "onto knots".
+  - Its string causes become typed causes in each crate's own enum (X13).
+  - No type here is named `EvalError`: that name is `scx_algo::error::EvalError`, the solver's
+    trait (62 D8). The pin's `eval::EvalError` causes go to `CurveError`, `SurfaceError` and
+    `NurbsSurfaceError`. [Ruled 11-27, L3.]
+
+**X13. Errors follow 62 §10.** [Ruled 11-27, M2. Review-63 §2 calls this gap "X10"; 63's X10 is the
+nested-vector ruling, so the error ruling is added here.]
+
+- **Every cause has a kind**, computed from the cause (01 §5.1). The causes named in this note:
+
+| Cause | Crate | Kind | Why |
+|---|---|---|---|
+| `TooLarge { cap }` (degree, knot count over `MAX_SPLINE_DEGREE`, `MAX_EVAL_KNOTS`) | curve, surface, nurbs-surface | `Exhausted` | a fixed cap is a typed limit cause (62 M1) |
+| `Degenerate` (zero radius, parallel frame axes, a zero-length line) | curve, surface | `Refused` | 62 §3.1 |
+| `OutsideDomain` | curve, surface | `Refused` | the caller asked outside the domain |
+| `BadNet`, `BadKnots`, `BadWeights` | nurbs-surface | `Refused` | caller's data |
+| `AnalyticNonSimilarity { kind }` (D4, until step 5) | brep (`TransformCause`) | `Unsupported` | a method we do not yet build |
+| `NeedsFit { edge }` (a writer needs a fitted pcurve before step 5) | brep | `Unsupported` | D10 |
+| `MissingCurve { edge }` (a non-collapsed edge with no curve at `finish`) | brep (`FinishCause`) | `Defect` | D8: only our own operations reach it |
+| `Truncated`, `BadMagic`, `BadTag` | record | `Refused` | the bytes are the caller's input |
+| `BadVersion { found }` | record | `Unsupported` | valid data from a newer writer that this reader does not build |
+| `Invalid(Box<FinishCause>)` | record | inherits the finish cause (62 D11) | the decoder pre-checks curve presence, so `MissingCurve` is never reached from bytes |
+| `Solve(SolveError<..>)` inside an iterative routine | curve, surface, ssi | inherits | 62 D11 |
+| budget ran out, `Stop` fired | all iterative routines | `Exhausted`, `Cancelled` | 01 §6.3 |
+
+- **Frames** (62 D12):
+  - transparent: `CurveError::Solve`, `SurfaceError::Solve`, `SurfaceError::Curve` (a curve
+    error met while evaluating a surface's own curve), `NurbsSurfaceError::Nurbs` (the
+    `scx-nurbs` cause under it);
+  - context: `ReadError { at, cause }` (adds the byte offset), `ReadCause::Invalid` (adds "while
+    decoding"), `TransformError { entity, cause }` and `Unfinished` (add the entity id),
+    `IntersectError { pair, cause }` (adds the surface pair).
+- **Bounded or iterative, per routine** (review-63 M2). A closed form is bounded, so it is
+  infallible or returns its `Refused` causes only. An iterative routine takes a budget and `Stop`
+  (01 §6.3) and returns a `Result`, metered as the 04 budget row says. In this note:
+  - bounded: every analytic `point`, `jet`, `normal`, `invert` of line, circle, plane, cylinder
+    and sphere; the plane section of analytic kinds; the analytic SSI pairs; `to_nurbs`;
+  - iterative: NURBS inversion, torus and cone inversion where the closed form hands over to a
+    solve, ellipse inversion (root isolation), `intersect_curve` on any pair that isolates roots,
+    knot removal, every future fit.
+
+## 2. `scx-nurbs-surface`
+
+The pin's sources here are `nurbs/srf_*`, `nurbs/nurbs_srf`, `nurbs/iges` (entity 128),
+`geom/nurbs_enclosure` and the `Nurbs` record of `eval/spline`. The step-2 slice is evaluation and
+the record.
+
+### 2.1 Shapes found
+
+| Shape | Where (READ) | Count (MEASURED) |
+|---|---|---:|
+| Net as `Vec<Vec<CPoint>>`, sizes as NURBS-book `n, m, p, q, r, s` | `nurbs/srf_basic.rs:241` `zero_net`, `:255` `Surface::new(net, p, q, u, v)`, accessors `:347`-`:383` | `Vec<Vec<` 68 |
+| `NOW` weight sentinel for "not rational", checked point by point | `nurbs/srf_basic.rs:230` `rationality_is_uniform` (`first.w != NOW`) | `NOZ`/`NOW` 116 |
+| Checked index returning `Result` for a programming error | `nurbs/srf_basic.rs:394` `cpt(i, j) -> Result<CPoint>`, `:406` `cpt_mut` | — |
+| Partials `Vec<Vec<Vec3>>` with `EvaluateFlags` | `nurbs/b_spline_surface_n_lib/p2.rs:176` (`u_side`, `v_side`, `only_upper_half`, `non_zero_tangents`) | 18 |
+| Write helpers with an `op: &'static str` and an out slice | `nurbs/index.rs:52` `set`, `:100` `put`, `:113` `put2`; `nurbs/basis_basic.rs:137`, `:152` | `&mut [` 44 |
+| In-place knot edits returning `Result<()>` | `nurbs/basis_basic.rs:424` `reparam(knots: &mut [f64], ..)`, `:458` `compatible_knot_array(&mut [Vec<f64>])` | `Result<()>` 64 |
+| bool parameters | through the surface tools | 55 |
+| Mutable control-point access on a long-lived surface | `nurbs/srf_basic.rs:461` `displace_cpts`, `:503` `u_knots_mut` | — |
+
+### 2.2 Proposed shapes
+
+- **The net is one buffer with typed sizes.**
+  - `Net<P> { rows: u32, cols: u32, points: Vec<P> }` with `get(i, j) -> Option<&P>` and
+    `rows()`/`row(i)` iterators.
+  - The pin's `cpt(i, j) -> Result` becomes `Option`, because a bad index is the caller's bug and
+    is not an error to propagate. Internal loops iterate and do not index (57 M8).
+- **Rationality is decided once, in the type.**
+  - `NurbsSurface` holds `points: Net<Point3>` and `weights: Option<Net<f64>>`. Alternatively it
+    takes the `scx-nurbs` choice; see the next item.
+  - `None` is polynomial. A mixed net cannot exist, so `rationality_is_uniform` disappears.
+- **Follow `scx-nurbs` exactly.**
+  - The knot vector type, `Approach`, `from_homogeneous` (F12) and the degree caps are `scx-nurbs`'s.
+  - This crate adds the tensor product and invents nothing parallel.
+  - If `scx-nurbs` stores homogeneous points, so does the net.
+- **Evaluation.**
+  - `point(u, v) -> Point3`.
+  - `jet::<D>(u, v, [Approach; 2]) -> SurfaceJet<D>`: triangular, true derivatives, no flags.
+  - `eval_many(&self, uv: &[Point2], out: &mut [Point3])` as the one batched out-param.
+  - Outside the knot range the end pieces continue, as the testkit's reference does (59 §8 item 4).
+- **Edits by value.** `with_knots_inserted`, `elevated`, `split_at`, `reversed`, `swapped`
+  (u and v swapped) and `transformed(&Affine)` return a new surface.
+  - `displace_cpts` becomes `with_points_moved(&[((u32, u32), Vec3)])`, or a builder used before
+    the surface is shared.
+- **No `op: &'static str` on internal helpers.**
+  - Errors are typed, and the location of an internal-invariant failure is a `Defect` with a
+    `Location` (57 §5.1).
+  - The helpers that exist only to avoid indexing disappear with the flat net.
+- **The `Nurbs` record** (from `eval/spline`) is the exact stored form of a NURBS surface:
+  - degrees, knots with multiplicities, points, optional weights;
+  - validated by `NurbsSurface::new -> Result<_, NurbsError>`.
+  - `scx-record` encodes this type. There is no second record type.
+
+### 2.3 Sketch
+
+```rust
+pub struct Net<P> { rows: u32, cols: u32, points: Vec<P> }        // row-major
+impl<P> Net<P> {
+    pub fn new(rows: u32, cols: u32, points: Vec<P>) -> Option<Self>;
+    pub fn get(&self, i: u32, j: u32) -> Option<&P>;
+    pub fn rows(&self) -> impl ExactSizeIterator<Item = &[P]>;
+}
+pub struct NurbsSurface { u: scx_nurbs::Knots, v: scx_nurbs::Knots, net: Net<Point3>, weights: Option<Net<f64>>,
+                          cells: SurfaceCells /* OnceLock: box tree, enclosure */ }
+pub struct SurfaceJet<const D: usize> { /* d[i][j], i + j <= D; d[0][0] is the point */ }
+impl NurbsSurface {
+    pub fn new(u: Knots, v: Knots, net: Net<Point3>, weights: Option<Net<f64>>) -> Result<Self, NurbsSurfaceError>;
+    pub fn point(&self, uv: Point2) -> Point3;
+    pub fn jet<const D: usize>(&self, uv: Point2, side: [Approach; 2]) -> SurfaceJet<D>;
+    pub fn eval_many(&self, uv: &[Point2], out: &mut [Point3]);
+    pub fn domain(&self) -> Extent2d;
+    pub fn split_at(&self, axis: ParamAxis, t: f64) -> Option<[Self; 2]>;
+    pub fn with_knot_inserted(&self, axis: ParamAxis, t: f64, times: u32) -> Self;
+    pub fn elevated(&self, axis: ParamAxis, by: u32) -> Self;
+    pub fn transformed(&self, a: &Affine) -> Self;
+}
+pub enum ParamAxis { U, V }   // the uv counterpart of 57 M8's Axis
+```
+
+### 2.4 Truth references missing
+
+- **Surface derivatives of order 3 and up.** The testkit computes them but tests only to order 2
+  (59 §7). Add the exact tests before this crate claims `jet::<3>`.
+- **Tensor-product knot insertion and elevation.** The curve versions exist (Boehm, blossoms).
+  - The surface versions are the curve versions applied row by row and column by column.
+  - The reference should be exactly that composition, plus the check that the surface is unchanged
+    at exact rational sample points.
+- **Splitting.** Exact equality of both halves to the original on their domains, in rationals.
+- **IGES 128 round trip.** Parse(write(s)) == s on generated surfaces. This is an invariant, not a
+  reference.
+
+### 2.5 Builder tasks
+
+| Task | Work | Depends on |
+|---|---|---|
+| NS1 | `Net`, `NurbsSurface::new` with its validation, `NurbsSurfaceError` | `scx-nurbs` landed |
+| NS2 | `point`, `jet`, `eval_many`, difftest per function against `srf_*` evaluation | NS1; testkit order-3 tests |
+| NS3 | by-value edits: insert, elevate, split, reverse, swap, transform | NS1 (parallel to NS2) |
+| NS4 | enclosure (`geom/nurbs_enclosure`) as a cell | NS2 |
+| NS5 | IGES 128 | NS1 (parallel) |
+
+## 3. `scx-curve`
+
+The step-2 slice covers line, circle, ellipse and B-spline, in 3-D and 2-D, with `Curve` and its
+dispatch.
+
+### 3.1 Shapes found
+
+| Shape | Where (READ) | Count (MEASURED) |
+|---|---|---:|
+| Evaluation trait with the kernel, two bools and a `Vec` result | `curve/curve/p2.rs:335` `trait CurveEvaluate`: `evaluate(&self, k, t, num_derivs, from_left, non_zero_tangents) -> Result<Vec<Vec3>>`, `evaluate_point`, `dim() -> u64` | `from_left` 72, `non_zero_tangents` 59, `Result<Vec<Vec3>>` 19 |
+| Trait default that walks back to the base class | `is_closed_virtual` calling `p4::is_closed_base` | — |
+| A downcast as a trait method | `as_crv_on_surf() -> Option<&CrvOnSurf>` (`curve/crv_on_surf.rs:2306`, `curve/tangent_field.rs:811`) | — |
+| Runtime "base method not implemented" | `curve/curve/p2.rs:327` `base_err(BaseCurveMethod)`; arms at `:1598`, `:1805`, `:1919`, `:1941`, `:2008`, `:2051`, `:2097`, `:2138`, `:2209` | `Err(base_err` and kin 267 |
+| Kind enum mixing free, on-surface and volume curves | `curve/curve/p2.rs:570` `enum CurveKind` (14 variants; circle inside `Ellipse`) | — |
+| Owner, identity, shared memo, owner tolerance on the curve | `curve/curve/p2.rs:628` `struct Curve` | owner 435, identity 103, `owner_zone_tol` 52 |
+| In-place transform with an optional scale and a depth | `transform_at_depth(&mut self, k, &Axis2Placement, Option<Vec3>, depth)` (`curve/crv_on_surf.rs:1901`, `curve/crv_in_volume.rs:1402`) | `fn set_` 14, `&mut self` 105 |
+| Sentinel output arrays | `[Vec3::UNDEF; N]` at `curve/curve/p1.rs:177`, `p3.rs:175`, `p7.rs:992` | sentinels 552 |
+| Degrees for conic angles; zero tolerance means "the context's" | `curve/ellipse/p2.rs:1411` `step_inversion(&self, k, point, classify: bool, zone_tol) -> (f64, Option<CurveLocationType>)` | angle degrees 204 |
+| Knots with a status beside them | `KnotsWithStatus` (`curve/crv_on_surf.rs:1111`), `knots_ignoring_status` | — |
+| Type test by integer | `is_kind_of(i64)` per class | 359 |
+
+### 3.2 Proposed shapes
+
+- **The kind set for step 2** (01 §7.3 starting points, JUDGED).
+  - `Curve` (3-D): `Line`, `Circle`, `Ellipse`, `Nurbs`. `Parabola` and `Hyperbola` follow in step
+    5 as separate kinds, each with the pin's parameterisation (D13).
+  - Every kind keeps the pin's parameterisation (D13) [Ruled 11-27, H2]: the line's parameter as
+    at the pin, the conics' angle in radians from `frame.x` (X11), and the NURBS curve's own
+    parameter.
+  - `Curve2` (2-D, for pcurves): `Line2`, `Circle2`, `Ellipse2`, `Nurbs2`.
+  - The circle leaves the ellipse. A circle has one radius and an exact closest point, and the
+    ellipse's foot needs quartic isolation (04, 11-27 testkit row).
+  - Curves on surfaces and in volumes are `AnyCurve` in `scx-surface`, not here (01 §2), so
+    `as_crv_on_surf` has no counterpart: `AnyCurve::OnSurface(c)` is matched.
+- **Evaluation is inherent per kind, then dispatched by `match`.**
+  - Every kind has `point(t)`, `jet::<D>(t, side)`, `domain() -> ParamDomain` (periodic, bounded,
+    half-open or unbounded, with no number for a missing end: D1) and `eval_many`.
+  - Analytic kinds ignore `side`, and the signature still takes it so the dispatch is uniform.
+    Section 9 discusses whether an analytic kind should take it.
+  - The scalar-generic form required by 01 (`eval<T: Ring>`) is provided for the analytic kinds and
+    for NURBS through `scx-nurbs`'s generic evaluation, so interval jets can certify.
+  - No `dim()`: 2-D and 3-D are different types.
+- **`tangent_dir(t, side) -> Option<UnitVec3>`** replaces `non_zero_tangents` (X5). It returns
+  `None` only where every derivative up to the degree vanishes, which is a degenerate curve.
+- **Transforms by value.**
+  - `transformed(&self, &Affine) -> Transformed`, with `enum Transformed { Same(Curve),
+    Nurbs(Curve) }`, or simply `Curve`, with the doc saying which kinds change kind.
+  - A circle under a non-similarity becomes an ellipse. That is exact and stays analytic: an affine
+    image of an ellipse is an ellipse.
+  - Every step-2 curve kind is closed under `Affine`: line to line, circle to ellipse, ellipse to
+    ellipse, NURBS to NURBS. So the 11-27 transform rule's "become exact rational NURBS" path is
+    not needed for curves in step 2.
+  - The image of a conic under a non-similarity has new principal axes, so its angle parameter is
+    the old one plus a constant. `transformed` returns that shift with the curve, and
+    `scx-brep::transform` applies it to the edge's interval (JUDGED; a line under a non-uniform
+    scale likewise rescales its parameter).
+  - A mirror keeps the frame right-handed and reverses the kind's sense (D14).
+  - The pin's `transform_at_depth`, its scale vector and its depth argument have no counterpart.
+- **Inversion** [Ruled 11-27, L5: 57 F6's shape].
+  - `invert` returns `Inversion<f64>`, 57 F6's `Inversion { Inside, Outside }` with each variant
+    holding the `Foot { at, point, distance }`. F6's `Failed` is gone, because an inversion that
+    can fail is iterative and returns `Result` (X13). The foot is always computed, so there is no
+    `classify` flag; start, end and seam are read from `at` against the domain.
+  - Angles are radians, and the tolerance is a `Length` argument. A zero tolerance is a zero
+    tolerance.
+  - Closed forms for the line and circle: bounded and infallible. The ellipse isolates a quartic's
+    roots, so it takes a budget and `Stop`; its truth is the certified quartic when the testkit
+    gains it (section 3.4).
+- **`restrict(&self, Extent1d) -> Option<Curve>`** replaces `Trim`/`Copy` pairs. `reversed()`
+  replaces `ReverseParameterization`. Both are total for the step-2 kinds.
+- **Errors.** One `CurveError` with typed causes, kinded per X13: `Degenerate` (`Refused`),
+  `OutsideDomain` (`Refused`), `TooLarge { cap }` (`Exhausted`), `Solve` (transparent, inherits).
+  `BaseCurveMethod` has no counterpart (X2). No `String` causes (X12).
+
+### 3.3 Sketch
+
+```rust
+#[non_exhaustive] #[derive(Clone, Debug, PartialEq)]
+pub enum Curve { Line(Line), Circle(Circle), Ellipse(Ellipse), Nurbs(Arc<NurbsCurve>) /* step 5: Parabola, Hyperbola, Procedural */ }
+#[non_exhaustive] #[derive(Clone, Debug, PartialEq)]
+pub enum Curve2 { Line(Line2), Circle(Circle2), Ellipse(Ellipse2), Nurbs(Arc<NurbsCurve2>) }
+
+pub struct Circle { frame: Frame, radius: Length, sense: Sense } // t in radians from frame.x; private fields (01 §7.4)
+pub struct CurveJet<const D: usize> { pub point: Point3, pub d: [Vec3; D] }
+pub struct Foot<P> { pub at: P, pub point: Point3, pub distance: f64 }
+pub enum Inversion<P> { Inside(Foot<P>), Outside(Foot<P>) }  // 57 F6, without Failed
+
+impl Curve {
+    pub fn point(&self, t: f64) -> Point3;
+    pub fn jet<const D: usize>(&self, t: f64, side: Approach) -> CurveJet<D>;
+    pub fn tangent_dir(&self, t: f64, side: Approach) -> Option<UnitVec3>;
+    pub fn eval_many(&self, ts: &[f64], out: &mut [Point3]);
+    pub fn domain(&self) -> ParamDomain;                    // periodic, bounded, half-open or unbounded (D1)
+    pub fn invert(&self, p: Point3, near: Option<f64>, budget: &mut Budget, stop: &Stop)
+        -> Result<Inversion<f64>, CurveError>;              // closed-form arms never fail
+    pub fn restrict(&self, e: Extent1d) -> Option<Curve>;
+    pub fn reversed(&self) -> Curve;
+    pub fn transformed(&self, a: &Affine) -> (Curve, ParamShift); // D14 for mirrors
+}
+```
+
+`Frame` (an origin with an orthonormal right-handed basis: x and z stored, y derived; D12) is needed
+here and is not yet in `scx-num` (section 8, P1). `Budget` and `Stop` are 01 §6.3's.
+
+### 3.4 Truth references missing
+
+- **A certified ellipse foot**: quartic root isolation, ruled for when `scx-curve` needs it (04,
+  11-27). It is needed for `Ellipse::invert`.
+- **An exact NURBS curve closest point** (59 §7).
+  - Until it exists, inversion is checked by the residual's orthogonality in double-double, as 59
+    suggests.
+  - That check proves a stationary point, not the nearest one. A second check is needed: for small
+    degrees, compare the minimum distance against a dense exact-rational sample with a certified
+    bound on the gap between samples. A Lipschitz bound from the derivative reference suffices.
+- **Knot removal** (59 §7), checked by reinsertion.
+- **Affine images of conics.** Circle to ellipse under shear and non-uniform scale, checked by
+  exact rational evaluation of the image at the images of sample points. This needs the testkit's
+  analytic types to accept an `Affine`.
+- **Parabola and hyperbola in double-double** (step 5, listed so the slot is reserved).
+
+### 3.5 Builder tasks
+
+| Task | Work | Depends on |
+|---|---|---|
+| CU1 | `Line`, `Circle`, `Ellipse` (3-D and 2-D): construction, `point`, `jet`, generic scalar, `domain` | P0, P1 (`Frame`), P2 (`ParamDomain`) |
+| CU2 | `Curve`/`Curve2` enums, dispatch, Send/Sync compile test | CU1 (after it, not in parallel: review-63 M5) |
+| CU3 | `Nurbs` arm wrapping `scx-nurbs` | `scx-nurbs` landed, CU2 |
+| CU4 | inversion: line and circle closed form; ellipse through certified quartic | CU1; testkit ellipse foot for the ellipse |
+| CU5 | `restrict`, `reversed`, `transformed` | CU2, CU3 |
+| CU6 | difftest facade adapters for the slice (facade maps `from_left` to `Approach`, `non_zero_tangents` to `tangent_dir`) | CU2 |
+
+## 4. `scx-surface`
+
+The step-2 slice covers plane, cylinder, cone, sphere, torus and B-spline, with point inversion,
+closed-form analytic projection and curve-surface intersection. `AnyCurve` starts here.
+
+### 4.1 Shapes found
+
+| Shape | Where (READ) | Count (MEASURED) |
+|---|---|---:|
+| Kind enum where analytic kinds are subclasses of the B-spline and carry its NURB | `surface/surface/p2.rs:392` `enum SurfaceKind`: `Cone` "including analytic state and its NURB", `Plane` "(an `SmBSplineSurface`)", `Sphere` "(an `SmSurfOfRevolution`)" | `kind_with_nurb`/`gw_nurb` 341 |
+| Lazily made NURB, reached before every dispatch | `surface/surface/p2.rs:1711` `kind_with_nurb(&self, k) -> Result<&SurfaceKind>`, used by `evaluate` (`:2190`) and `step_inversion` (`:2919`) | — |
+| Owner chain and owner tolerance on the surface | `surface/surface/p2.rs:430`-`:441` (`owner`, `owner_chain_face`, `owner_zone_tol_3d`) | owner 887, `owner_zone_tol` 92 |
+| Integer type test | `surface/surface/p2.rs:357` `is_kind_of(t: i64)`, `TYPE_STRING`, `CLASS_STRING` | 606 |
+| Base-class failing defaults | `surface/surface/p2.rs:5195`-`5400` (X2) | 603 |
+| Partials `Vec<Vec<Vec3>>` with two orders and flags | `surface/surface/p2.rs:2190` `evaluate(&self, k, uv, highest_u_deriv, highest_v_deriv, flags: EvaluateFlags)` | 59 |
+| An error status that is an answer | `surface/surface/p2.rs:2902` `step_inversion_answered` | `upstream_status` 84 |
+| Inversion returning `(Point2, LocationType)` | `surface/surface/p2.rs:2919`; separate `_unbounded` variants (`:3051`, `surface/cone/p1.rs:1863`) | — |
+| Plane intersection as `(bool, SurfaceIntersection, Option<Warning>)`, with `use_surface_edges: [bool; 2]` and an ignored angle tolerance | `surface/surface/p2.rs:3249` | `needs_more` 83, `(bool,` 89 |
+| Tolerance fallback by `Option` | `surface/sphere.rs:1170`: "the tolerance is `approx_tol_3d`, else `SM_EFF_ZERO_SQRT`" | — |
+| Two result types of the same name | `SurfaceIntersection` at `surface/surface/p2.rs:1178` (curves) and `surface/surface/p11.rs:209` (a point pair) | — |
+| Owned and borrowed duplicates of one routine | `intersect_with_plane`, `_owned`, `_owned_into` (`surface/torus.rs:471`, `:494`, `:515`) | — |
+| `_simple` volume methods | `surface/b_spline_volume_n_lib.rs:134` and on | 352 |
+| Interior mutability | — | `RefCell`/`Cell`/`Rc` 25 |
+
+### 4.2 Proposed shapes
+
+- **Analytic kinds are analytic only.**
+  - `Plane`, `Cylinder`, `Cone`, `Sphere` and `Torus` are small value types (a `Frame` and lengths
+    or angles), with no NURB inside.
+  - `to_nurbs(&self, over: &Extent2d) -> NurbsSurface` is the exact rational conversion, a pure
+    function of the kind and a bounded extent. Under D13 it keeps uv: the NURBS image has the same
+    parameter as the kind on `over`, so a pcurve needs no mapping across the conversion.
+  - An unbounded plane or cylinder has no NURB, so the extent is required. `Extent2d` is finite by
+    construction (P0), so the conversion is total.
+  - `kind_with_nurb` disappears. Every query on an analytic kind uses its closed form, which 01 C10
+    gives as the reason for enums.
+  - Section 9 tests whether the pin's carried NURB encodes a cost lesson.
+- **The uv parameterisation is the pin's** (D13) [Ruled 11-27, H2. This note first switched the
+  analytic kinds to natural parameters, angle periodic in 2π, without a D row; review-63 H2.]
+  - At the pin, sphere, torus, revolution and extrusion evaluate through their base NURB
+    (`surface/surface/p2.rs:1711`, `:2190-2240`), and the cone and cylinder "at the NURB
+    parameters" (`surface/cone/p1.rs:1570`). Their uv is the rational NURB parameter.
+  - scx keeps that uv, computed in closed form from the kind's frame and sizes. The kind carries no
+    NURB (D4). The closed forms (inversion, normals, sections) work in the angle and map it to the
+    NURB-compatible parameter and back, per span of the pin's knot layout, which SU1's builder
+    reads from the pin and states in the crate docs.
+  - Why (review-63 H2):
+    - an oblique plane section of a cylinder stays an exact rational pcurve of degree 2p in uv
+      (`intersect/surface_drop_lib/cylinder_section.rs`, WR-680), held exactly by `Curve2::Nurbs`.
+      With natural parameters it would be `v = a cos u + b sin u`, which no `Curve2` kind holds, so
+      it would become a fitted pcurve;
+    - the pin's open item asks for more exact sections, not fewer (`docs/booleans.md:~1024`);
+    - reading pin bodies needs no uv mapping, and uv-valued difftests compare directly.
+  - The cost moves to STEP, whose pcurves on analytic faces use the angle: `scx-step` maps them, as
+    the pin's reader does. The truth for that map is that a STEP uv and its scx uv give the same
+    3-D point (section 4.4).
+- **Cylinder leaves Cone.**
+  - The pin's `Cone` holds both. A cone with a zero half-angle is the cylinder, but the closed
+    forms differ: the apex is a pole, and v runs along the ruling against along the axis.
+  - Each kind keeps the pin's uv for its own case (D13), so the split changes no parameter
+    (JUDGED).
+- **Evaluation.**
+  - `point(uv)`, `jet::<D>(uv, [Approach; 2]) -> SurfaceJet<D>`, `normal(uv) -> Option<UnitVec3>`
+    (`None` at a pole or degenerate point), `domain() -> UvDomain` (a `ParamDomain` per direction,
+    D1) and `eval_many`.
+  - Partials are true partials, with no flags (X5).
+  - The pole and collapse lessons of `eval/collapse` and `eval/pole` become `poles()` and
+    `collapse_at(uv, reach: Length) -> Collapse` on the kinds that have them.
+- **Inversion has outcomes, not codes** (X8) [Ruled 11-27, L5 and D7: 57 F6's shape].
+  - It returns `Inversion<Point2>`, the same type as the curve's (section 3.2): `Inside(Foot)` or
+    `Outside(Foot)` of the domain, each with uv, point and distance. Being out of tolerance is
+    `foot.distance > tol`, read by `Foot::is_on(tol)`. D7's three outcomes are inside and on,
+    inside and off, and outside.
+  - F6's `Failed` is gone: the closed forms (plane, cylinder, sphere) cannot fail, and the
+    iterative arms (NURBS, and the torus and cone where they hand over to a solve) return
+    `Result<_, SurfaceError>` under a budget and `Stop` (X13).
+  - The `_unbounded` twins become an argument: `domain: Option<&Extent2d>`, where `None` means the
+    kind's own domain, possibly unbounded. This is not a bool. Only the closed forms accept `None`
+    on an unbounded kind; they do no arithmetic on the domain's ends (D1).
+- **The plane section is `scx-ssi`'s** (01 §1.1: "the plane section of a surface") [Ruled 11-27,
+  M3. This note first put `section_by_plane` here as SU5.] Section 5 has it as SS5. `scx-surface`
+  supplies only what every query uses: the kind's frame, sizes and the uv map of D13.
+- **One routine per operation.** No `_owned`/`_owned_into` triplets.
+  - Where the pin passed ownership context, the caller passes the value.
+  - Where it wrote into a vector, the function returns one.
+- **Curve-surface intersection** returns sorted `Vec<CurveSurfaceHit>`, inside a `Result` under a
+  budget and `Stop`, because root isolation iterates (X13).
+  - A hit is a point `{ t, uv, point, kind: Crossing | Tangent }` or an overlap
+    `{ t: Extent1d, .. }`.
+  - Sorting is by `t`, then `uv`, for determinism.
+  - Analytic pairs use closed forms. Line, circle and ellipse against the quadrics reduce to
+    polynomials of degree up to 4 in `scx-algo`'s root isolation.
+- **`AnyCurve`** (01 §2) starts here with the arms step 2 needs: `Free(Curve)` and `OnSurface`
+  (a `Curve2` on an `Arc<Surface>`). The intersection curve arm follows with `scx-ssi`'s marching
+  in step 5.
+
+### 4.3 Sketch
+
+```rust
+#[non_exhaustive] #[derive(Clone, Debug, PartialEq)]
+pub enum Surface { Plane(Plane), Cylinder(Cylinder), Cone(Cone), Sphere(Sphere), Torus(Torus), Nurbs(Arc<NurbsSurface>) }
+pub struct Cone { frame: Frame, radius: Length, half_angle: f64 /* radians, (0, pi/2) */, sense: Sense } // private fields (01 §7.4)
+pub enum Closed<T> { Solved(T), General }                         // shared with scx-ssi (D6)
+pub enum CurveSurfaceHit { Point { t: f64, uv: Point2, point: Point3, contact: Contact }, Overlap { t: Extent1d } }
+
+impl Surface {
+    pub fn point(&self, uv: Point2) -> Point3;
+    pub fn jet<const D: usize>(&self, uv: Point2, side: [Approach; 2]) -> SurfaceJet<D>;
+    pub fn normal(&self, uv: Point2) -> Option<UnitVec3>;
+    pub fn invert(&self, p: Point3, near: Option<Point2>, domain: Option<&Extent2d>,
+                  budget: &mut Budget, stop: &Stop) -> Result<Inversion<Point2>, SurfaceError>;
+    pub fn to_nurbs(&self, over: &Extent2d) -> NurbsSurface;           // exact; keeps uv (D13)
+    pub fn transformed(&self, a: &Affine, over: &Extent2d) -> Surface; // D4: NURBS over `over` for a non-similarity
+}
+pub fn intersect_curve(c: &Curve, ce: &Extent1d, s: &Surface, se: &Extent2d, tol: Length,
+                       budget: &mut Budget, stop: &Stop) -> Result<Vec<CurveSurfaceHit>, SurfaceError>;
+```
+
+- **Transforms, per 04's 11-27 row** [Ruled 11-27, D4 revised].
+  - Plane, sphere, cylinder, cone and torus are closed under similarities. A sphere under a
+    non-uniform scale is an ellipsoid, which is not a step-2 kind.
+  - The row says such a map gives "exact rational NURBS". `transformed` therefore returns
+    `Surface::Nurbs` for a non-similarity, over an extent the caller passes. `scx-brep` passes the
+    face's uv box, never an infinite domain (review-63 H1).
+  - A face whose surface changes kind has its pcurves refit by the step-5 fitter, with the
+    accuracy recorded (D10). Until the fitter lands, `scx-brep::transform` of a body with an
+    analytic face under a non-similarity returns `Unsupported` by name
+    (`TransformCause::AnalyticNonSimilarity { kind }`). `Surface::transformed` itself is exact and
+    available from SU7.
+  - JUDGED, for SU7's builder to measure: under D13 the NURBS image keeps the kind's uv on the
+    extent, so many pcurves may come through unchanged. The refit then reduces to a check for
+    those, and the builder counts which need more before the step-5 work is sized.
+  - A mirror keeps every frame right-handed and reverses the kind's sense (D14).
+
+### 4.4 Truth references missing
+
+- **Curve-surface intersection truths.** Line against plane, sphere, cylinder, cone and torus:
+  - exact roots in rationals where the data are rational (line-plane, line-sphere with a rational
+    discriminant);
+  - otherwise the quadratic or quartic roots certified by the algo crate's isolation, checked in
+    double-double.
+  - Tangency cases are generated by construction: a line tangent to a sphere at a chosen point.
+- **Analytic projection references.** 59 has closest points for every step-2 analytic surface,
+  exact for the plane, so these are covered.
+  - What is missing is a check that the returned uv is the *global* nearest, for the torus (up to
+    four stationary points) and the cone near its apex.
+  - The reference should enumerate all stationary points by the closed forms and pick the least
+    in double-double.
+- **Exact `to_nurbs` of quadrics.** The rational biquadratic image, evaluated in rationals at
+  rational parameters of the rational parameterisation, lies exactly on the implicit quadric.
+  This is an exact predicate.
+- **Poles and normals.** Sphere poles and cone apices: `normal` returns `None` exactly there, and
+  the limiting normal from either side matches the closed form.
+- **Derivatives above order 2 for analytic surfaces in double-double.** 59 gives derivatives, and
+  the order to which they are tested should be extended with the jets.
+- **The uv map of D13** [Ruled 11-27, H2]. The testkit's analytic primitives use the angle today.
+  Two truths are added:
+  - the kind's NURB-compatible uv and the angle form give the same 3-D point at exact rational
+    parameters (this is also the converter truth for `scx-step`);
+  - `to_nurbs` keeps uv: the NURBS image and the kind agree at the same uv.
+- **WR-680's exact cylinder section** (T5): an oblique plane section of a cylinder, as a rational
+  uv curve of degree 2p, lifts exactly onto the 3-D conic.
+
+### 4.5 Builder tasks
+
+| Task | Work | Depends on |
+|---|---|---|
+| SU1 | analytic kinds: construction, `point`, `jet`, generic scalar, `normal`, poles, domain, the D13 uv map | P0, P1 (`Frame`), P2 (`ParamDomain`) |
+| SU2 | `Surface` enum, dispatch, Send/Sync, `Nurbs` arm | NS1, SU1 names |
+| SU3 | `to_nurbs` for the quadrics and torus, with the exact on-surface predicate | SU1, NS1; T4 |
+| SU4 | inversion: closed forms, global-nearest for torus and cone; NURBS inversion over `scx-algo` | SU1, SU2, NS2; T3 |
+| SU5 | (moved to `scx-ssi` as SS5: M3) | — |
+| SU6 | curve-surface intersection, analytic pairs, budgeted | SU1, CU1, CU4; T2 |
+| SU7 | `transformed` per the 11-27 row and D4 (exact; the pcurve refit is step 5's BR9) | SU3 |
+| SU8 | `AnyCurve` with `Free` and `OnSurface` | CU2, SU2 |
+
+## 5. `scx-ssi`, the analytic part
+
+The pin's sources are `intersect/surface_intersector` (`p1`-`p5`) and `adv_surface_intersector`.
+Step 2 needs only the analytic pairs. The marching and the B-spline patch intersector are step 5.
+
+### 5.1 Shapes found
+
+| Shape | Where (READ) | Count (MEASURED) |
+|---|---|---:|
+| Intersector object with setters before the call | `intersect/surface_intersector/p1.rs:628` `SurfaceIntersector<'s>`, `:839` `new`, `:961` `set_extension_distance`, `:966` `set_use_surface_edges(bool, bool)` | `fn set_` 3 |
+| Point arena with typed ids, and mutable accessors by surface index | `p1.rs:274` `TsectPnt`, `:601` `TsectId`, `:439`-`:540` `uv_pos_mut(SrfIndex)` and so on | `&mut self` 38 |
+| `assign(&mut self, &Self)` as copy-assignment | `p1.rs:349` | — |
+| `Result<()>` steps that mutate the intersector | `p1.rs:1621` `add_point_to_curve`, `:1634` `add_start_point(k, id)`, `:1924` `reverse_curve_direction` | 73 |
+| Kernel for tolerances | `p1.rs:1634` and on | `&Kernel` 229 |
+| User surface wrapped in `Arc` | `p1.rs:306` `UserSurface(pub Arc<Surface>)` | — |
+| Analytic pairs dispatched inside surface kinds, with a bool for "general intersector still needed" | `surface/sphere.rs:1178`, `surface/cone/p3.rs:401`, `surface/torus.rs:471`, `surface/plane/p2.rs:781` | `needs_more` 2 here, 83 in surface |
+
+### 5.2 Proposed shapes
+
+- **The analytic part is free functions over pairs, not methods on the intersector.**
+  - `analytic::intersect(a: &Surface, ae: &Extent2d, b: &Surface, be: &Extent2d, tol: Length) ->
+    Closed<Intersection>`.
+  - It matches on the unordered pair, normalised so `(a, b)` and `(b, a)` share one routine, and
+    swaps the pcurve sides back.
+  - `General` hands over to the marcher in step 5. In step 2, `General` is a valid result that the
+    caller handles: the difftest counts the pairs.
+- **The pairs in step 2** (JUDGED from the pin's overrides):
+  - plane-plane (a line, coincident or nothing);
+  - plane-quadric (conics: the plane section, SS5, which lives here per 01 §1.1);
+  - sphere-sphere (a circle);
+  - coaxial quadric pairs (circles);
+  - sphere against a cylinder, cone or torus on its axis (circles).
+  - Anything else is `General`.
+- **The plane section of a surface** (01 §1.1) [Ruled 11-27, M3: moved here from `scx-surface`'s
+  SU5]. `section_by_plane(s, se, plane, pe, tol) -> Closed<Section>`.
+  - `Section` holds the 3-D curves with their two pcurves as `Option<Curve2>` (`None` where no
+    closed form exists on that side), plus warnings.
+  - Under D13 the pcurves of plane sections on cylinders, and where the pin has them on cones,
+    spheres and tori, are exact rational `Curve2::Nurbs` in the kind's uv (WR-680). So SS5 needs
+    `scx-nurbs` (CU3).
+  - The plane's face accuracy, which the pin took from `PlaneOwner`, is a `Length` argument.
+  - The unused `use_surface_edges` and `ang_tol_rad` are dropped.
+  - It is a closed form, so it is bounded and infallible (X13).
+- **Coincidence is a result variant**, `Intersection::Coincident { region }`. It is not an empty
+  curve list with a flag.
+  - Its tolerance is `max(resolution, acc1, acc2)` (04, 11-27 coincidence row). The caller passes
+    both accuracies, and the function does not look them up.
+- **The marching intersector, when it comes in step 5,** becomes `options + one call` (04 closure
+  row): `MarchOptions { extension: Option<Length>, edges: [EdgeUse; 2] }` passed to `march(..)`.
+  - The point arena stays as a local `Vec<TsectPnt>` with `TsectId` indices inside the call. That
+    is idiomatic, so it is kept.
+  - The `_mut(SrfIndex)` accessors become `[SideState; 2]` indexed by a two-variant `Which { A, B }`
+    with `Index`, the 57 M8 pattern.
+  - Listed now so the step-2 types do not block it.
+
+### 5.3 Sketch
+
+```rust
+pub mod analytic {
+    pub enum Intersection {
+        Curves(Vec<IntersectionCurve>),   // sorted: by kind, then by a point on each, then by direction
+        Coincident { on_a: Extent2d, on_b: Extent2d },
+        Touch(Vec<TouchPoint>),           // isolated tangent points
+        Empty,
+    }
+    pub struct IntersectionCurve { pub curve: Curve, pub on_a: Option<Curve2>, pub on_b: Option<Curve2>, pub contact: Contact }
+    pub fn intersect(a: &Surface, ae: &Extent2d, b: &Surface, be: &Extent2d, acc: [Length; 2], res: Resolution) -> Closed<Intersection>;
+    pub struct Section { pub curves: Vec<SectionCurve>, pub warnings: Vec<SectionWarning> }
+    pub struct SectionCurve { pub curve: Curve, pub on_surface: Option<Curve2>, pub on_plane: Option<Curve2> }
+    pub fn section_by_plane(s: &Surface, se: &Extent2d, plane: &Plane, pe: &Extent2d, tol: Length) -> Closed<Section>;
+}
+```
+
+### 5.4 Truth references missing
+
+None of these are in the testkit (59). All are closed forms, so they are cheap.
+
+- plane-plane: an exact line in rationals;
+- plane against sphere, cylinder, cone and torus:
+  - the conic's centre, axes and radii in closed form;
+  - the exact rational uv pcurve on the cylinder (WR-680) in the D13 uv, lifted exactly;
+  - exact in rationals where the data allow, double-double otherwise;
+  - the cone's conic type by the sign of an exact predicate: ellipse, parabola or hyperbola;
+- sphere-sphere: the circle's plane and radius, exact in rationals when the squared radii are
+  rational;
+- coaxial pairs: the circle heights, from a quadratic in the axial coordinate;
+- **near-degenerate generators**: tangent planes to spheres and cylinders, parallel and coincident
+  planes, nearly coaxial pairs (axes off by 1e-12 rad). The truth decides `General` against
+  `Solved`. The pin is not the judge.
+- **a pcurve agreement oracle**: each returned pcurve lifted onto its surface lies within tol of
+  the 3-D curve. This is shared with `scx-brep` (T6), and it is a test oracle only: no library code
+  calls it (D10).
+
+### 5.5 Builder tasks
+
+| Task | Work | Depends on |
+|---|---|---|
+| SS1 | `analytic::Intersection` types, pair normalisation, `Closed` reuse | SU2 |
+| SS5 | the plane section of the analytic kinds (was SU5) | SS1, SU1, CU1, CU3; T5 |
+| SS2 | plane-plane, plane-quadric (on SS5) | SS1, SS5; T5 |
+| SS3 | sphere-sphere, coaxial pairs | SS1, SU1; T5 |
+| SS4 | coincidence and tangency classification at the tolerance | SS2, SS3 |
+
+## 6. `scx-brep`
+
+The pin's sources are `topology/` (without `api_files`, `part_file` and `database_io`), `heal/gap`,
+`eval/pcurve`, `query/poly` and `geom/tools`. Step 3 builds the structure and its writers, not the
+operations.
+
+### 6.1 Shapes found
+
+| Shape | Where (READ) | Count (MEASURED) |
+|---|---|---:|
+| The body as arenas inside the kernel, with use records at four levels | `topology.rs:761` `struct Brep`: arenas of shells, faces, loops, edges, vertices, regions, faceuses, loopuses, edgeuses and vertexuses, each `Stamped<..>` | `&mut Kernel` 418 |
+| Mode flags on a long-lived body | `topology.rs:761`: `validate_only: Stamped<bool>`, `editing_enabled: Stamped<bool>` | — |
+| Order lists kept beside the arenas | `face_list`, `edge_list`, `vertex_list`, `region_order`, `region_list_head` | — |
+| Per-field write stamps as cache invalidation | `Stamped<..>` on every field; `topology/stamped.rs` | memo/cache 152 |
+| Generic flags, marks and user slots on every entity | `topology/topology.rs:144` `struct Topology`; `:227` `set_all_flags(u64)`, `:250` `set_user_index1`, `:255` `set_user_index2`, `:260` `set_user_ptr1`, `:280` `mark(Option<&Context>, MarkType)` | marks 146, user slots 97, `&Context` 54 |
+| Notification and change callbacks | `topology/topology.rs:764` `notify`, `:857` `NotifyEvent`, `:960` `TopologyChangeCallback`; `topology/edge.rs:2539`, `:2558` | identity/notify 1,919 |
+| A direction as a bool | `topology.rs` `LoopEdge { edge, forward: bool }` | — |
+| Tolerance 0.0 for "not set"; a tri-state as `i32` with `UNSURE` | `topology.rs:386` `Vertex::tolerance`, `:413` `Edge::tolerance`, `:458` `Face { rectangular_trim: i32, tolerance: f64 }` | sentinels 404, `SM_USE_OLDTOL` in `topology/vertex.rs` 5 |
+| Geometry optional on a finished entity | `Edge { curve: Option<Curve> }`, `Face { surface: Option<Surface> }` | — |
+| Interval as an extent that may be inside-out | `Edge { interval: Extent1d }` | `BIG_DOUBLE` 63 |
+| Gap held as cached state | `topology/vertex.rs:1186` `VertexGap`, `:1206` `HeldGap`; `topology/edge.rs:1508` `EdgeGap`, `:1528` `MaxGap` | — |
+| Options structs in some writers (already the right shape) | `topology/edge.rs:2879` `SetCurveOptions`; `topology/face/p1.rs:2090` `MoveSeamOptions` | — |
+| Pcurves exact on the record path, fitted by the kernel otherwise [Ruled 11-27, D10: this row read "exact or refused, with nothing fitted"; review-63 H3] | `eval/pcurve.rs:316-320`: `exact_pcurves` returns `None` for "the uses whose pcurves the face's kernel makes ([`Trims`])", and the kernel fits them: `topology/edgeuse/p2.rs:652` `rebuild_uv_trim_curve`, `:696` `check_and_set_uv_trim_curve` (an 8-sample distance under 100× tolerance or a tenth of the edge length, else a raise or a re-drop more than twice as close); `docs/booleans.md` §7 (~924-940) | — |
+| In-place knot snapping that returns a bool | `eval/pcurve.rs:1626` `snap_end_knots(&mut [f64], interval, rounding) -> bool` | — |
+| Mirror that keeps ids | `topology/brep/mirror.rs` | — |
+| Free functions over `(&Brep, FaceId) -> Result<Option<&Surface>>` | `topology/face/p2.rs:252` `surface`, `:285` `tolerance -> Result<f64>` | `Result<()>` 623, `Result<bool>` 202 |
+
+### 6.2 Proposed shapes
+
+Most of these shapes are ruled by 01 §2. The list says which ruling answers which shape, and adds
+what 01 leaves open.
+
+- **Arena in a kernel → `Brep`/`Draft` values** (01 §2.3).
+  - No `&mut Kernel`, `validate_only` or `editing_enabled`. Editing is the `Draft` type, and
+    validation is `finish`.
+  - The order lists go: id order is the order (01 §2.2).
+- **Four use levels → two sides per face and one `EdgeUse` per pass** (01 C4, ruled).
+  - Faceuse, loopuse and vertexuse have no counterpart.
+  - The radial order is stored on the edge's adjacency part.
+- **`Stamped` fields → cells reset on write** (01 §3.2). `Draft::face_mut` is the only mutable
+  accessor and empties the cells on every call.
+- **`Topology` flags, marks and user slots: dropped.**
+  - Marks are traversal state. They become a local `IdSet`/`IdMap` in the algorithm that marks.
+  - User indices and pointers are application data in the app's `IdMap`s, carried by `carry`
+    (01 §2.6).
+  - The `Context` argument goes with them.
+- **Notification → `Changes`.** Events are recorded by the draft as it edits (01 §2.3).
+  - The C++ callbacks (`TopologyChangeCallback`) have no counterpart.
+  - Named change records, per 57 §5.1: `Merge { survivor, absorbed }` and
+    `Coincidence { operand, entity, onto }`.
+- **`forward: bool` → `Sense`** (57 M3), on `EdgeUse`.
+- **Tolerances.**
+  - `tolerance: f64` with 0.0 for "unset", and `SM_USE_OLDTOL`, become `accuracy: Option<Accuracy>`,
+    where `None` means within the stamped resolution (01 C4).
+  - `rectangular_trim: i32` (`UNSURE`) is not stored. It is a face cell
+    (`OnceLock<RectangularTrim>`) derived from the loops.
+- **An edge's geometry is a curve or a collapse** (D8) [Ruled 11-27, D8 revised after review-63
+  M1. This item first required a curve on every finished edge.]
+  - 01 §2.1: an edge collapsed to a point has no curve, and a lone vertex (a cone apex, an
+    imprinted point) is a loop of one use on a collapsed edge. A collapsed edge is valid.
+  - So the geometry part is `enum EdgeShape { Curve { curve: Curve, interval: Extent1d },
+    Collapsed }`. A face is never without a surface.
+  - A `Draft` may hold an edge whose curve is not yet attached (A10), as a draft-only state. At
+    `finish`, a non-collapsed edge with no curve is `FinishCause::MissingCurve { edge }`, kinded
+    `Defect`: only our own operations build drafts that way, since the public builders and the
+    record decoder check curve presence on the caller's input first and refuse there (62 D11).
+  - The `EdgeUse` gains the parameter interval 01 §2.1 gives it. On a collapsed edge at a pole its
+    pcurve is the pole's uv segment (Face 24); a lone vertex's use holds a uv point.
+- **Intervals.** `Edge::interval: Extent1d` is always non-empty, because an empty extent is not an
+  `Extent1d` (57 M3).
+- **Gaps are recorded facts, not caches** (04 §4, research 20 and 21 withdrawn).
+  - The gap is the recorded accuracy on the use, the edge or the vertex, written by every writer
+    before `finish` (01 §2).
+  - `VertexGap`, `EdgeGap` and `HeldGap` become the measurement functions those writers call. They
+    return a `Length` and keep no state.
+- **Pcurves: exact where a closed form exists, otherwise fitted by the writer** (D10) [Ruled
+  11-27, D10 holds in direction, rewritten. The first text said the pin refuses where no closed
+  form exists. Only the record path refuses; the kernel's `Trims` fit (review-63 H3).]
+  - **Exact first.** Closed-form pcurves (the `eval/pcurve` cases, and SS5's sections in the D13
+    uv) are exact and checked by lifting. Step 3 carries exact pcurves only.
+  - **Who fits, and when.** The writer fits, eagerly, before `finish`. 04 §4 withdrew "raise
+    tolerances up front, build trims lazily", and research 27 found that trims fitted on demand
+    depend on the order of the reads.
+  - **The target** (research 27 D2, 28, 34). Fit to the accuracy the body claims, and never raise
+    it in advance. Accept when the fitted distance is within the edge's accuracy plus the face's
+    accuracy plus the existing gap G (34: the pin's fitter targets the edge tolerance only, which
+    is where most of its failures came from). Record an accuracy only when the result is worse
+    than the resolution, or recorded accuracies creep up.
+  - **The basis and its cost** (research 35, 47). The recorded accuracy says whether it is
+    `Certified` or `Measured`. A certified design refused 40 trims and cost 3.3× creation time,
+    76% of it in bounding G (35). A certified trim has a median of 12.8 ms against 69 µs without
+    one, and 1% of trims take 73% of trim time (47). So the default is `Measured`, by the library's
+    own measure in `scx-brep` or below (dense sampling of the lifted distance), and a certified
+    bound is taken only where an operation asks for it. Under the hot-path rule BR9's builder
+    gives before and after counts of the work added (JUDGED; for review with BR9).
+  - **Poles, seams and periodicity** (the pin's `docs/validity-and-tolerances.md`): a pcurve does
+    not jump across a period (Edgeuse 7), has no dog-leg at a pole (Edgeuse 20), and a pole is a
+    vertex (Face 24). `finish` checks all three, and every writer, exact or fitted, keeps them.
+  - **T6 is a test oracle only.** It checks the library's recorded figure in tests; no library
+    code calls it. The pin never measures a pcurve against its edge (`docs/validity-and-tolerances.md`
+    `:229-231`, `:441`), so T6 is a truth the pin lacks.
+  - **Timing.** Curve fitting is `scx-nurbs` work in step 5 (01 §10.2). The fitted half of the old
+    BR5 moves to step 5 as BR9. Until then a writer that needs a fitted pcurve returns
+    `Unsupported` by name (`NeedsFit { edge }`).
+  - **Records** (research 37, 41). The record stores each pcurve exactly as written, so a decoded
+    body never refits. 37 found the pin loses plane trims on read, and 41 lists what its records
+    cannot hold exactly; both bear on RE2 and RE3. The plane-trim carry stays held until records
+    store exact forms (04, 11-25).
+  - `snap_end_knots` becomes `snapped_end_knots(&Knots, Extent1d, rounding) -> Option<Knots>`,
+    which returns `None` when no snap applies.
+- **Free functions with `Result<Option<&Surface>>` → borrowing views** (57 §5.2):
+  - `brep.face(id) -> Option<Face<'_>>`;
+  - `face.surface() -> &Surface`, which is total;
+  - `face.accuracy() -> Option<Accuracy>`;
+  - `face.loops()`, `lp.uses()`, `edge.sides()`, `vertex.edges()` as iterators.
+  - The `Result` disappears, because a missing id is `None` and a present face always has a
+    surface.
+- **`transform`** ports `topology/brep/mirror.rs` and the pin's `transform_matrix` (04, 11-27
+  transform row):
+  - ids kept;
+  - every entity `Touch::Geometry`;
+  - an orientation-reversing map reverses loops and keeps the quadrics' sense. Each placed kind's
+    image is a right-handed frame plus a reversed kind sense (D14), so no left-handed frame is
+    stored and the uv map is unchanged;
+  - an analytic face under a non-similarity is `Unsupported` until step 5's refit (D4).
+
+### 6.3 Sketch
+
+```rust
+pub struct RegionId(u32); pub struct ShellId(u32); pub struct FaceId(u32); pub struct EdgeId(u32); pub struct VertexId(u32);
+// Records are #[non_exhaustive] (01 §7.4): fields readable, built only through Draft and constructors.
+pub struct RegionRecord { pub solid: bool }                         // 01 §2.1; RegionId(0) is the outside by construction
+pub struct FaceRecord { pub surface: Surface, pub sense: Sense, pub sides: [ShellId; 2], pub loops: Vec<LoopRecord>,
+                        pub accuracy: Option<Accuracy>, cells: FaceCells }
+pub struct LoopRecord { pub uses: Vec<EdgeUse> }
+pub struct EdgeUse { pub edge: EdgeId, pub sense: Sense, pub geom: UseGeom, pub accuracy: Option<Accuracy> }
+pub enum UseGeom { Pcurve { curve: Curve2, interval: Extent1d }, Point(Point2) }   // Point: a lone vertex
+pub enum EdgeShape { Curve { curve: Curve, interval: Extent1d }, Collapsed }        // D8
+pub struct EdgeGeom { pub shape: EdgeShape, pub ends: [VertexId; 2], pub accuracy: Option<Accuracy>, cells: EdgeCells }
+pub struct EdgeAdj { pub radial: Vec<(FaceId, u32 /* use index */)> }   // radial order
+pub struct VertexRecord { pub point: Point3, pub accuracy: Option<Accuracy> }
+
+impl Brep {
+    pub fn face(&self, f: FaceId) -> Option<Face<'_>>;
+    pub fn faces(&self) -> impl ExactSizeIterator<Item = Face<'_>>;   // id order, live only
+    pub fn edit(&self) -> Draft; pub fn into_draft(self) -> Draft;
+    pub fn compact(&self) -> (Brep, IdMap);
+}
+impl Draft {
+    pub fn add_face(&mut self, rec: FaceRecord) -> FaceId;
+    pub fn face_mut(&mut self, f: FaceId) -> Option<&mut FaceRecord>;  // empties cells
+    pub fn finish(self, doc: &Document) -> Result<(Brep, Changes), Box<Unfinished>>;
+}
+pub fn transform(b: &Brep, a: &Affine) -> Result<Brep, TransformError>;
+```
+
+### 6.4 Truth references missing
+
+- **Structure invariants as executable predicates**:
+  - Euler-Poincaré with genus and regions;
+  - every edge's radial order lists each use exactly once;
+  - each loop is closed in uv and in 3-D within its recorded accuracies;
+  - the two sides of every face name existing shells, and those shells bound regions of
+    consistent kind;
+  - ids are dense and never reused.
+  - These are the oracle for `finish`'s structure check. The check must agree with the predicate on
+    generated valid and broken bodies.
+- **The pcurve agreement oracle (T6).** A pcurve lifted onto its surface against the edge curve,
+  with a certified bound for the analytic and NURBS cases: interval evaluation of the difference,
+  through the generic-scalar evaluators (so it needs CU1, SU1 and NS2: review-63 M5).
+  - This gives `finish`'s "curve and pcurve ends within vertex balls" check something to be checked
+    against.
+  - It checks, in tests, the fitted pcurve's recorded accuracy. It is not how the library measures
+    (D10).
+- **Pole and seam predicates** (T7): no jump across a period (Edgeuse 7), no dog-leg at a pole
+  (Edgeuse 20), a pole is a vertex (Face 24).
+- **`Changes` and `carry` property oracles.**
+  - Composition: carry over two edits equals carry over the composed changes, where composition is
+    defined.
+  - Identity: an edit that touches nothing gives empty `Changes`.
+  - Order: every list is sorted, and split pieces follow 01 §2.6's key.
+  - Determinism: the same edit under two executors gives equal `Changes`.
+- **Transform truth.** For a rational affine map and rational input geometry:
+  - the transformed body's vertex points are the exact images;
+  - the curves agree with the images at sample points;
+  - the signed volume, once `scx-mass` exists, scales by `det(A)`.
+  - These are exact in rationals.
+- **Body generators.** Seeded generators of small valid bodies: a block, a cylinder, a sphere, a
+  torus, a slab with a hole. They are built through `Draft` and used by every property above. They
+  go in the testkit's `gen`.
+
+### 6.5 Builder tasks
+
+| Task | Work | Depends on |
+|---|---|---|
+| BR1 | ids, records, `Brep`/`Draft`, views and iterators, Send/Sync | SU2, CU2 (geometry types), P0, P2 |
+| BR2 | `finish`: structure check, the pole and seam rules, and the cheap geometry check | BR1; T7 (T6 in its tests) |
+| BR3 | `Changes`, event recording in `Draft`, `carry` | BR1 (parallel with BR2) |
+| BR4 | cells: face, uv and body boxes; `FaceCell::fill`; boundary trees | BR1 |
+| BR5 | pcurves, step 3: the exact cases from `eval/pcurve` and SS5's sections; `NeedsFit` elsewhere | BR1, CU3, SU2, SS5; T6 in tests |
+| BR6 | `transform` (an analytic face under a non-similarity `Unsupported` until BR9) | BR1, SU7, CU5 |
+| BR7 | port the provenance and history tests onto `Changes` (01 §2.6) | BR3 |
+| BR8 | body generators in the testkit | BR1 |
+| BR9 | step 5: fitted pcurves by the writer, eagerly, to D10's target, with the recorded basis; the D4 refit | BR5, the `scx-nurbs` fitter (step 5) |
+
+## 7. `scx-record`
+
+The pin's sources are `topology/api_files`, `topology/part_file`, `topology/database_io` and
+`eval/label`. Its own `brep_data` and `brep_data_write` are the pin's format, so they go to
+`scx-import-sc` (04, 11-27). They are read here only for their lessons.
+
+### 7.1 Shapes found
+
+| Shape | Where (READ) | Count (MEASURED) |
+|---|---|---:|
+| An iostream emulation with sticky state bits | `topology/database_io.rs:212`-`218` `IoState::{GOOD, BAD, EOF, FAIL}`; `:282` `good()`, `:294` `fail()`, `:299` `clear()` | `&mut self` 55 |
+| Extraction returning `Option` per field, with sticky failure | `topology/database_io.rs:582` `extract_long`, `:590` `extract_ulong`, `:636` `extract_double` | — |
+| Out-param readers | `topology/brep_data.rs:1204` `ext_double(s, &mut self.zone_tol_3d)` and its neighbours | — |
+| Branches on the file version through the decode | `topology/database_io.rs:117` `DEFAULT_VERSION = 30`; `version > 30` and `version >= 40` | 33 in `brep_data`, 24 in `brep_data_write` |
+| A bool stored as `i32`, a record kind as an integer that decides which fields mean anything | `topology/brep_data.rs:1228` `manifold: i32`; `:880` `eu_type: u64` ("0 face edge, 1 loop vertex, 2 wire edge, 3 vertex at a pole"), with `edge`, `vertex`, `shell` and `loop_` valid per type | int flag params 5 |
+| Variable-length lists flattened with counts | `topology/brep_data.rs` `cfaces`, `cedges`: `[count, n0, face.., n1, ..]` | — |
+| Integer codes for enums | `topology/database_io.rs:135` `code()`, `:140` `from_code(i32)` | code/from_code 3 |
+| File paths in the library | `topology/api_files.rs:183` `read_brep_from_file`, `:272` `write_brep_to_file` | — |
+| A kernel-wide conversion with an optional body | `topology/api_files.rs:293` `turn_to_nurbs(k: &mut Kernel, brep: Option<&mut Brep>)` | `&mut Kernel` 6 |
+| Labels computed from geometry, with ±inf for unbounded | `eval/label.rs:15` `enum Natural { Periodic, Range(f64, f64) }`, `:23` `UNBOUNDED` | — |
+
+### 7.2 Proposed shapes
+
+- **A reader that fails with `?`, not with sticky bits.**
+  - `Reader<'a> { bytes: &'a [u8], pos: usize }` with `u32()`, `f64()`, `tag::<T>()` and `list()`,
+    each returning `Result<_, ReadError>`.
+  - `ReadError { at: usize, cause: ReadCause }` has typed causes, each kinded per X13 (62 §10):
+    `Truncated`, `BadMagic` and `BadTag { found }` are `Refused` (the bytes are not a record);
+    `BadVersion { found }` is `Unsupported` (a newer record this reader does not know);
+    `Invalid(FinishCause)` inherits its cause's kind. `ReadError` is a context frame: it adds the
+    byte offset. [Ruled 11-27, M2.]
+  - There is no state to `clear`.
+- **Our own format, versioned from 1.** No branch on pin versions: that is `scx-import-sc`'s job.
+  - Each top-level record starts with `(magic, version)`.
+  - A reader accepts versions up to its own and refuses newer ones with `BadVersion`.
+  - Version-dependent decoding is a `match version` at the record boundary, never threaded through
+    field reads.
+- **Kinds as enums with their own fields.**
+  - `eu_type` becomes the enum of the record's use kinds. Under 01 C4 there is only the `EdgeUse`
+    and the lone-vertex loop (01 §2.1), so the tag picks a variant whose fields are all
+    meaningful.
+  - The tag is a `u8` on the wire, mapped by an exhaustive `match`. An unknown tag is `BadTag`, not
+    an `Unknown` variant (57 F2).
+- **Lists are length-prefixed `Vec`s.** No flattened count streams.
+- **Ids kept; deleted runs as counts** (01 §2.2): `enum Slot { Live(rec), Gap(u32) }` on the wire,
+  never in memory.
+- **Exact numbers.**
+  - Binary: little-endian IEEE bits.
+  - Text: Rust's shortest round-trip `Display` for `f64` and `str::parse` (std only, both correctly
+    rounded), so text round-trips the bits.
+  - Non-finite values are always refused. Under D1 no ±inf or sentinel is ever stored, so a
+    `ParamDomain` goes on the wire as its variant tag with finite ends only. [Ruled 11-27, D1: this
+    line allowed ±inf as a parameter bound.]
+- **Bytes, not files.** `encode(&Brep) -> Vec<u8>`, `decode(&[u8]) -> Result<Brep, ReadError>`,
+  and `write_text(&Brep, &mut impl fmt::Write)`. Paths and IO are the app's.
+- **The decoder does not heal** (01 §1.1). It validates through `Draft::finish`, so a record that
+  decodes is a valid body, and a bad one is `Invalid` with the `FinishCause`. It checks curve
+  presence before `finish`, so bytes never reach the `MissingCurve` defect (D8).
+- **Pcurves are stored exactly as written** (D10), so a decoded body never refits. Research 37
+  (the pin loses plane trims on read) and 41 (what its records cannot hold exactly) are the
+  lessons for RE2 and RE3; the plane-trim carry stays held (04, 11-25).
+- **Records are a public format under semver** (01 §7.4): adding a record kind or a field is a new
+  version, and fields of the Rust record types are private or `#[non_exhaustive]`.
+- **Labels** (`eval/label`): `Natural` becomes `scx-curve`/`scx-surface`'s `ParamDomain`. If labels
+  are stored at all, the record stores them as a check copy. Otherwise they are recomputed on read
+  (JUDGED: recompute, and store nothing derived).
+
+### 7.3 Sketch
+
+```rust
+pub const FORMAT_VERSION: u16 = 1;
+pub fn encode(b: &Brep) -> Vec<u8>;
+pub fn decode(bytes: &[u8], doc: &Document) -> Result<Brep, ReadError>;
+pub fn write_text(b: &Brep, out: &mut impl core::fmt::Write) -> core::fmt::Result;
+pub fn read_text(s: &str, doc: &Document) -> Result<Brep, ReadError>;
+pub struct ReadError { pub at: usize, pub cause: ReadCause }
+#[non_exhaustive] pub enum ReadCause { Truncated, BadMagic, BadVersion { found: u16 }, BadTag { record: &'static str, found: u8 }, Invalid(Box<FinishCause>) }
+```
+
+### 7.4 Truth references missing
+
+- **The round-trip fixed point** (step 3's done test):
+  - `decode(encode(b)) == b`, with structure, ids and geometry bits equal;
+  - `encode(decode(x)) == x` for every `x` that decodes;
+  - the same for text, and `binary → text → binary` is equal bytes.
+  - This is an invariant oracle over the body generators (BR8).
+- **Corruption fuzz.** Every truncation and every single-byte flip of a valid record either decodes
+  to a valid body or fails with `ReadError`. It never panics and never yields a body that fails
+  `finish` (std only: a seeded byte-flip loop with the testkit's `Rng`).
+- **Exact procedural records** are a step-5 concern (blend definitions). The slot is reserved.
+
+### 7.5 Builder tasks
+
+| Task | Work | Depends on |
+|---|---|---|
+| RE1 | `Reader`/`Writer`, `ReadError`, tags, lists, `Slot` runs | P0 (finite extents: review-63 M5) |
+| RE2 | geometry records: curves, surfaces, NURBS | RE1, CU2, CU3, SU2, NS1 |
+| RE3 | body records and decode through `Draft::finish` | RE2, BR1, BR2 |
+| RE4 | the text encoding | RE1 (parallel to RE2) |
+| RE5 | round-trip and corruption tests | RE3, RE4, BR8 |
+
+## 8. Prerequisites outside the six crates
+
+- **P0. Finite extents in `scx-num`** (D1 revised; ahead of RE1, BR1, CU1 and SU1). [Ruled 11-27:
+  new task, after review-63 H1. Today `Extent1d` stores ±`INFINITE_PARAMETER` (`UNBOUNDED`), so
+  "finite by construction" was not true.]
+  - `Extent1d::new` (and the 2-D and 3-D forms) refuses non-finite or reversed ends, so every
+    extent is finite by construction.
+  - Remove `UNBOUNDED`, `INFINITE_PARAMETER`, `is_infinite_param` and the infinity branches in
+    `shift` and `times` across `extent1d`, `extent2d`, `extent3d`, `math.rs` and `transform.rs`.
+    Their callers take an explicit working extent.
+  - Add the named clamping rules that replace the pin's constants: `Clamp::Sample`
+    (`BOUNDED_INFINITE_PARAM`) and `Clamp::Squared` (`INFINITE_PARAMETER_SQRT`, for parabolas).
+    The bound is sized from the model, not fixed, because the pin's 1.2e6 rounds by 3.4e-11 in
+    double (#18922).
+  - Neither ±inf nor a sentinel is ever stored.
+- **P1. `Frame` (and `Rigid`) in `scx-num`.**
+  - Every analytic kind is a frame plus sizes. 01 §1.1 promises frames in `scx-num`, and 57 §5.2
+    lists `From<Frame> for Rigid`.
+  - Today `scx-num` has `Affine` (`math.rs:127`), `Point3`, `Vec3`, `UnitVec3` and `Axis`, but no
+    frame. The testkit has its own `Frame` (`scx-testkit/src/analytic.rs:38`).
+  - The pin's counterpart is `Axis2Placement`.
+  - Proposed (D14): `Frame { origin: Point3, x: UnitVec3, z: UnitVec3 }`, with `x ⟂ z` by
+    construction (`Frame::new(origin, z, x_hint) -> Option<Frame>`), `y = z × x` derived, and
+    `to_affine()`. Fields private with accessors (01 §7.4). z is always stored, since every kind's
+    axis is z; y is stored as well only if CU1 or SU1 measures the cross product as a cost.
+  - Right-handed by construction. A mirror maps a placed kind to a right-handed frame plus a
+    reversed `sense` on the kind, so no left-handed frame is ever stored (D14). [Ruled 11-27, D12.
+    The first proposal stored x and y.]
+  - This is a small `scx-num` task and blocks CU1 and SU1.
+- **P2. `ParamDomain`.** A shared type for a parameter's domain: `Periodic { period, base }`,
+  `Bounded(Extent1d)`, `AtLeast(f64)`, `AtMost(f64)` or `Unbounded`. It is placed in `scx-num`
+  beside `PeriodicExtent1d` so curves and surfaces share it; a `UvDomain` is one per direction.
+  `ParamDomain::working(&self, rule: Clamp) -> Extent1d` gives the finite extent numeric work
+  runs on. It depends on P0.
+- **Testkit additions (T1-T8)**, from the sections above. Each is an independent builder task on
+  `scx-testkit`:
+
+| Id | Reference | For |
+|---|---|---|
+| T1 | certified ellipse foot (quartic isolation) | CU4 |
+| T2 | line and conic against quadric and torus intersection truths | SU6 |
+| T3 | all stationary points for torus and cone projection (global nearest) | SU4 |
+| T4 | exact on-quadric predicate for rational `to_nurbs` images; the D13 uv map checked against the closed form | SU1, SU3 |
+| T5 | analytic SSI truths: plane-plane, plane-quadric conics (WR-680's oblique cylinder section among them), sphere-sphere, coaxial | SS2, SS3, SS5 |
+| T6 | pcurve agreement oracle with a certified bound; a test oracle only, never called by the library (D10). Needs CU1, SU1 and NS2, so not day one | tests of BR2, BR5, SS4 |
+| T7 | structure invariants (Euler, radial completeness, sides) and the pole and seam rules as predicates; needs BR1's types | BR2 |
+| T8 | surface derivatives of order 3 and up tested; tensor-product insert, elevate, split | NS2, NS3 |
+
+T2, T3 and T5 are written on the testkit's own types (its `Frame` and analytic kinds, with `Affine`
+for placement), so they do not wait for CU1 or SU1. A thin adapter maps them once those land.
+
+## 9. Adversarial pass
+
+For each proposal: the argument against it, then the verdict. "Holds" means the proposal stands.
+"Revised" means it changed, and the change is folded into sections 1-8 above unless stated here.
+
+**A1. Fixed-size jets in place of `Vec` partials (X10).**
+
+- **Against.**
+  - The pin returns `Vec<Vec3>` because callers ask for a run-time number of derivatives.
+  - A const generic forces each call site to know its order at compile time.
+  - Some callers, curvature analysis at a run-time continuity order for example, take the order
+    from data.
+- **Measured.**
+  - A scratch microbenchmark (rustc `-O`, 2×10⁷ calls; not repo code) compared a circle-like curve
+    jet of 3 vectors and a 3×3 surface partials block.
+  - Curve: `Vec<Vec3>` 26.4-27.1 ns, `[Vec3; 3]` 17.2 ns.
+  - Surface: `Vec<Vec<Vec3>>` 55.5-57.0 ns, `[[Vec3; 3]; 3]` 7.9 ns (MEASURED, but unverified:
+    review-63 found the inputs were not black-boxed and the outputs not consumed whole, so the
+    fixed-size figure may be partly optimised away).
+  - The nested vector costs about 47 ns per surface evaluation, which is 7× the evaluation itself.
+    Inversion and marching evaluate surfaces in their inner loops.
+- **Verdict: holds, with a revision, pending a fair rerun.** [Ruled 11-27, D3: holds pending a
+  rerun in the new `scx-bench` crate, inputs black-boxed and outputs consumed whole. The 7.9 ns is
+  unverified.]
+  - Run-time orders are served by the largest const order the kind supports (`MAX_PARTIAL_ORDER`
+    from `eval/`), truncated.
+  - Or a `jet_dyn(&self, t, order, out: &mut [Vec3])` is kept as the second batched out-param,
+    which 57 allows for evaluation into caller storage.
+  - Builders add `jet_dyn` only when a caller with a data-driven order is ported.
+
+**A2. Dropping `non_zero_tangents` (X5).**
+
+- **Against.**
+  - Upstream's default is TRUE (`EvaluateFlags`, `nurbs/b_spline_surface_n_lib/p2.rs:186`). So
+    almost every pin caller that normalises a derivative relies on it silently: at a pole, a
+    collapsed edge or a cusp, the "tangent" is a short vector along the limit direction, never
+    zero.
+  - Dropping it moves the failure to the caller's normalise, which now returns `None`. Unless each
+    port handles that, code that worked at the pin fails at poles in scx.
+  - That is a lesson the flag encodes: degenerate points are everywhere in B-reps (sphere poles,
+    cone apices, collapsed NURBS edges).
+- **Verdict: revised.**
+  - True derivatives stay the default, because the faked magnitude is not a derivative and would
+    poison Taylor models and certification.
+  - The lesson is kept as a required step at the call sites.
+  - The pin's callers of `evaluate(.., non_zero_tangents = true)` that take a direction are ported
+    to `tangent_dir`, which returns the limiting direction.
+  - `tangent_dir`'s doc states "defined at poles and cusps where the limit exists".
+  - The difftest facade maps the pin's flag-on output to `tangent_dir` scaled, so comparison stays
+    meaningful.
+  - Builders of CU1, SU1 and NS2 grep the pin for each caller with the flag on and list them in the
+    PR, with how each is served. The count is the 59 + 92 + 5 + 2 lines above.
+
+**A3. Analytic kinds without a carried NURB (section 4.2).**
+
+- **Against.**
+  - The pin carries the NURB because the general intersector, the box builders and the fallback
+    projections ask for it repeatedly. `kind_with_nurb` is called 341 times in the surface code.
+  - Rebuilding it per call could cost a hot path.
+- **Answer.**
+  - In scx the general intersector is not called on analytic pairs that have a closed form (SS1).
+  - Boxes of analytic patches have closed forms.
+  - The remaining callers are the step-5 B-spline-against-analytic pairs. There the NURB is built
+    over the trimmed extent once per call, so the cost is one conversion per intersection call, not
+    per evaluation.
+  - For a quadric, the conversion is a few-by-three net (JUDGED, not measured: nothing to run
+    yet).
+- **Verdict: holds.**
+  - SU3's builder records the conversion's cost against one inversion, as before and after numbers
+    for the hot-path rule.
+  - If it ever shows in the top costs, the NURB is memoised in the caller's `Scratch`, keyed by the
+    kind's bits and the extent (01 §3.1). It is never stored on the kind.
+
+**A4. Splitting Cylinder from Cone and Circle from Ellipse.**
+
+- **Against.**
+  - The pin merged them, so each has one inversion, one intersection set and one transform.
+  - Splitting doubles the match arms, and a cone becomes a cylinder at a zero angle only through a
+    kind change.
+  - The pin's merge also means a cylinder under a transform stays the same kind trivially.
+- **Answer.**
+  - Separate kinds give each its own closed forms (keeping the pin's parameterisation, D13): the
+    circle's foot is closed form, the ellipse's needs a quartic; a cylinder has no apex.
+  - The pin's merged cone carries an `is_cylinder` branch internally, so the arms exist either way
+    (JUDGED).
+  - A cone with a zero angle is not constructible (`half_angle` in `(0, π/2)`), so no kind ever
+    changes by data.
+- **Verdict: holds.** [Ruled 11-27, H2: "natural parameterisation" here meant each kind's own
+  closed forms. The uv is the pin's NURBS-compatible one (D13), not a natural one.]
+
+**A5. Total matches instead of failing defaults (X2).**
+
+- **Against.**
+  - A failing default lets a new kind compile before every operation is written. A total match
+    forces each kind to answer everything, or builders write `unimplemented` stubs, which are the
+    same shape in disguise.
+  - "Kind X cannot do Y" is also information. The pin's `base_err(Transform)` for an offset curve
+    records that no exact image exists.
+- **Verdict: holds, revised in how incompleteness is shown.**
+  - In step 2 every slice kind is complete, so no stub is needed.
+  - For later kinds, an operation not yet written for a kind returns the crate's
+    `Unsupported(KindName)` variant. It is listed in the crate's README as a gap, and no
+    `todo!()` or `unimplemented!()` is used (lints forbid panics).
+  - An operation that *cannot* be exact (transforming an offset) records an accuracy under the
+    11-26 rule, which is the lesson `base_err` was standing in for.
+
+**A6. No owner tolerance on geometry (X3).**
+
+- **Against.** `owner_zone_tol_3d` lets a deep geometry routine widen its box by the face's
+  tolerance without any caller passing it. Removing it means every routine that needs it gains a
+  parameter, and missing one silently uses a tighter tolerance than the pin. That is a correctness
+  regression on bodies with recorded gaps.
+- **Verdict: holds, with a check.**
+  - Each routine that read the owner's tolerance at the pin (52 + 92 + 3 + 21 lines) takes an
+    explicit `Length`.
+  - Its builder lists each one in the PR.
+  - The difftest's bodies with raised accuracies (the CTC import cases of 04, 11-27) exercise the
+    path.
+  - A routine that forgets is caught by the type, because the parameter is not optional.
+
+**A7. Enum dispatch rather than `dyn` (C10, X2).**
+
+- **Against.** A large enum makes every `Curve` value as big as its largest arm. The pin boxes
+  `SurfOfRevolution` and others "because it is the largest kind".
+- **Verdict: holds.**
+  - NURBS and procedural payloads are behind `Arc` (01 §7.1), so the analytic arms are the largest.
+  - The largest step-2 arm is the torus: a frame of 9 f64 plus 2 radii, about 88 bytes.
+  - Match dispatch is a jump table with no indirection and inlines the analytic closed forms. `dyn`
+    would forbid the generic-scalar evaluation 01 needs.
+  - A size assertion per enum (`const _: () = assert!(size_of::<Surface>() <= 128)`) keeps it honest.
+
+**A8. `Closed::General` as a success value (X7, SS1).**
+
+- **Against.** The pin's bool `needs_more` is cheap and composes. A caller can merge partial
+  closed-form results with the general intersector's, for example the analytic plane cut of a
+  surface of revolution "special cases" plus the general rest. An enum that is either solved or
+  general loses "partly solved".
+- **Verdict: revised.**
+  - `Closed` gains a third variant only where the pin does produce partial answers:
+    `Partial { solved: T, rest: Extent2d }`, where `rest` is the uv region still to march.
+  - The pin's step-2 kinds always return all or nothing: the sphere's doc says
+    `rbNeedsMoreIntersections` "stays FALSE".
+  - So the variant is added in step 5 with surfaces of revolution, not now. `Closed` is
+    `#[non_exhaustive]`, so adding it is not breaking.
+
+**A9. Dropping `Topology` marks and user slots (section 6.2).**
+
+- **Against.**
+  - Marks on the entity are O(1) to set and test. A local `IdSet` per traversal allocates, and
+    traversals are hot in the Boolean and blend.
+  - The pin's 146 mark lines are spread over many algorithms that would each grow a set.
+- **Answer.** Ids are dense `u32`s, so an `IdSet` is a bitset of `len / 64` words, cleared by
+  reallocation or reuse from `Scratch`. That is O(1) per test, like a mark, and needs no write to the
+  shared body. A write would force copy-on-write of a shared `Arc<FaceRecord>` just to mark it,
+  which is far costlier.
+- **Verdict: holds.** BR1's builder measures one traversal (all faces of the largest generated
+  body, marking each edge) with the bitset, as the before and after record for the hot-path rule.
+
+**A10. `Draft::add_edge` requires the curve (section 6.2).**
+
+- **Against.**
+  - Some construction orders build topology before geometry: the stitcher, the sweeper and the
+    pin's `brep_constructor` (1,588 lines) add edges and later attach curves.
+  - Requiring the curve up front forces those ports to restructure.
+- **Verdict: revised.** [Ruled 11-27, D8 revised further: a collapsed edge has no curve and is
+  valid (01 §2.1); review-63 M1. The text below is the ruled form.]
+  - `Draft` allows an edge whose curve is not yet attached, in a draft only.
+  - The finished geometry is `EdgeShape { Curve { curve, interval }, Collapsed }`, so a collapsed
+    edge is valid with no curve.
+  - At `finish`, a non-collapsed edge with no curve is `FinishCause::MissingCurve { edge }`, kinded
+    `Defect`, because only our own operations build drafts that way. The public builders and the
+    decoder refuse a caller's input that lacks one before `finish`.
+  - The `Brep` view's `edge.shape()` is total, because the view is built only over finished
+    tables.
+
+**A11. `PARAM_BOUND` as ±inf (X6, D1).**
+
+- **Against.**
+  - Infinities propagate silently: `inf - inf = NaN`, and a box of an unbounded line becomes NaN in
+    one subtraction.
+  - The pin's `1234567.0` is ugly, but every downstream computation stays finite, and the pin's
+    geometry code has been debugged with it.
+  - Arithmetic on a finite bound is also exact enough for extents.
+- **Answer.**
+  - The pin's own newer code (`eval/label.rs`) already uses infinities.
+  - A finite magic bound silently truncates a model larger than 1.2 km in millimetres.
+  - Both representations need clamping before evaluation. The difference is that ±inf makes a
+    missing clamp produce NaN, which fails loudly in `finish`'s checks and in debug assertions,
+    whereas `1234567` yields a plausible wrong answer. That is 57 M8's argument.
+- **Verdict: held here; overturned by review-63 H1 and superseded by D1 revised.** [Ruled 11-27.
+  Two premises were wrong: `Extent1d` is not finite by construction today (it stores
+  ±`INFINITE_PARAMETER`), and NaN is not loud (comparisons with NaN are false, so a missing clamp
+  passes most checks silently). The ruled form stores neither ±inf nor a sentinel: unboundedness
+  is a `ParamDomain` variant, extents are finite by construction (P0), and numeric work runs on an
+  explicit working extent from a named clamping rule (X6).]
+  - The original text: a domain that is unbounded is `ParamDomain::Unbounded` at that end; every
+    routine that needs a finite range takes an `Extent1d`/`Extent2d`; unbounded geometry never
+    flows into arithmetic without passing through a constructor that rejects non-finite bounds.
+    The last two survive into the ruled form.
+
+**A12. Our own record format, without the pin's (section 7.2).**
+
+- **Against.** The pin's format exists, is documented by its reader, and solidcore designs are
+  written in it. A new format means two readers, and the converter (`scx-import-sc`) is extra work
+  that a "read the pin format natively" approach avoids.
+- **Verdict: holds.**
+  - 04's 11-27 row already rules the converter as a helper crate that heals. The pin's format
+    cannot carry two face sides, regions with kinds, or recorded accuracies as `Option`, and it
+    renumbers on write (01 §2.2).
+  - The lesson kept from the pin's reader is its defect list: uninitialised locals at
+    `version >= 40` and 8-byte `ULONG`s (`topology/database_io.rs:58`-`61`). Every width is fixed in
+    our format and stated in the spec.
+
+**A13. Free-function analytic SSI over normalised pairs (section 5.2).**
+
+- **Against.** The pin dispatches inside each surface kind (`Sphere::intersect_with_plane`). That
+  keeps the kind's private state accessible and lets each kind add a pair without touching a
+  central match.
+- **Verdict: holds.**
+  - Kinds in scx are plain data with accessors (fields private or `#[non_exhaustive]`, 01 §7.4), so
+    nothing a pair needs is hidden. [Ruled 11-27, LOW: this said "public fields".]
+  - A central match over unordered pairs makes the missing pairs visible as one table: the
+    `General` arms.
+  - The pin's per-kind methods duplicated the swap logic in each direction. `plane.intersect(sphere)`
+    and `sphere.intersect(plane)` are separate code at the pin (`surface/plane/p2.rs:781` against
+    `surface/sphere.rs:1178`).
+
+**A14. A curve-surface hit list sorted by `t` (section 4.2).**
+
+- **Against.** The pin's hit order may encode a preference: first hit from the curve's start, or
+  from the guess. Callers may take `[0]` meaning "the one near my guess".
+- **Verdict: holds.**
+  - Sorting by `t` is deterministic, and "near a guess" is a separate query (`nearest_hit(guess)`)
+    or a filter at the caller.
+  - The builder of SU6 lists the pin's callers that take the first hit and how each is served.
+
+## 10. Task graph across the crates
+
+[Ruled 11-27, M5: redrawn. The `scx-nurbs` landing, NS1, NS2 and P0 are now on the critical path;
+RE1 and BR1 depend on P0; SS2 depends on the plane section (SS5, was SU5); CU2 follows CU1; T6
+is a test oracle that needs CU1, SU1 and NS2.]
+
+```text
+P0 Extent finite ─┬─ P2 ParamDomain ─┐
+                  ├─ RE1 ─┬─ RE4 ────────────────────────────────── RE5
+                  │       └─ RE2 (CU2, CU3, SU2, NS1) ─ RE3 ─────── RE5
+P1 Frame ─────────┴──────────────────┴─┬─ CU1 ─ CU2 ─┬─ CU3 (scx-nurbs) ─ CU5 ─ BR6
+                                       │      ├─ CU4 (T1 for ellipse)
+                                       │      └─ CU6 (after CU2)
+                                       └─ SU1 ─┬─ SU6 (CU1, CU4, T2)
+                                               └─┐
+scx-nurbs lands ─ NS1 ─┬─ SU2 (SU1) ─┬─ SS1 ─┬─ SS5 (SU1, CU1, CU3, T5) ─ SS2 (T5) ─┐
+                       │             │       └─ SS3 (T5) ─────────────────────────────┴─ SS4
+                       │             ├─ SU8 (CU2)
+                       │             └─ BR1 (CU2, P0, P2) ─┬─ BR2 (T7) ─ RE3
+                       │                                   ├─ BR3 ─ BR7
+                       │                                   ├─ BR4
+                       │                                   ├─ BR5 (CU3, SS5) ─ BR9 (step 5)
+                       │                                   ├─ BR6 (SU7, CU5)
+                       │                                   └─ BR8 ─ RE5
+                       ├─ SU3 (SU1, T4) ─ SU7
+                       ├─ NS2 (T8) ─┬─ SU4 (SU2, T3)
+                       │            ├─ NS4
+                       │            └─ T6 (CU1, SU1): test oracle for BR2, BR5, SS4
+                       ├─ NS3
+                       └─ NS5
+```
+
+- **Can start now, without `scx-nurbs`:** P0, P1, and the testkit truths T1, T2, T3, T4, T5 and
+  T8 (T2, T3 and T5 on the testkit's own types).
+- **After P0:** P2 and RE1, then RE4.
+- **After P1 and P2:** CU1 and SU1, in parallel.
+- **After CU1:** CU2, then CU6; CU4 (line and circle; the ellipse waits for T1); SU6 once SU1, CU4
+  and T2 are in.
+- **Everything else waits for `scx-nurbs`:** NS1-NS5, CU3, CU5, SU2-SU4, SU7, SU8, all of SS, BR
+  (BR1 needs SU2) and RE2, RE3 and RE5. T6 waits for NS2, and T7 for BR1's types.
+- **The critical path to step 2's done test:** `scx-nurbs` lands → NS1 → SU2 → SS1 → SS5 → SS2 →
+  SS4, with P0 → P2 → SU1 (with P1) joining at SU2, CU1 → CU2 → CU3 joining at SS5, and NS1 → NS2
+  → SU4 (T3) beside it.
+- **Step 3's done test** (a round trip keeps ids and bytes; cells empty after both edit paths;
+  provenance tests pass) needs BR1-BR5, BR7, BR8 and RE1-RE5. BR5 in step 3 carries exact pcurves
+  only; a writer that needs a fitted one returns `NeedsFit` (`Unsupported`).
+- **Step 5** adds BR9: the writer's eager pcurve fitter (D10) and the refit of pcurves after a
+  non-similarity on an analytic face (D4), on `scx-nurbs`'s fitting.
+- **Hot-path measurements owed** (as before and after counts of added work; local side-channel
+  counts, nothing committed):
+  - A1: the jet shape, rerun fairly in `scx-bench` (D3), then in NS2 and SU1;
+  - A3: the NURB conversion, in SU3;
+  - A9: the mark bitset, in BR1;
+  - D14: whether storing `y` in `Frame` pays, in CU1 and SU1;
+  - D10: the fitter's added work and the measured-basis cost, in BR9;
+  - A2: the `tangent_dir` callers, listed rather than timed.
+
+## 11. Decisions for review (proposed 04 rows)
+
+The coordinating session ruled these on 2026-11-27 (section 12); 04 §3 carries them as rows for the
+owner's review. The table gives the ruled form.
+
+| Id | Ruled row | Grounds |
+|---|---|---|
+| D1 | Unboundedness is a state of the type. A shared `ParamDomain` (P2) says per direction whether a parameter is periodic, bounded, half-open or unbounded. `Extent1d` ends are finite by construction, and `UNBOUNDED`/`±INFINITE_PARAMETER` go (P0, ahead of RE1, BR1, CU1, SU1). Numeric work uses an explicit finite working extent; `BOUNDED_INFINITE_PARAM` and `INFINITE_PARAMETER_SQRT` become named `Clamp` rules (#18922). Neither ±inf nor a sentinel is ever stored. [Revised 11-27] | X6, A11; review-63 H1 |
+| D2 | Derivatives are true derivatives. `non_zero_tangents` is not ported, and its callers use `tangent_dir(t, side) -> Option<UnitVec3>`, each listed in its PR | X5, A2 |
+| D3 | Evaluation returns fixed-order jets (`CurveJet<D>`, triangular `SurfaceJet<D>`). A run-time order uses a batched `jet_dyn` into caller storage, added only when a caller needs it. Holds pending a fair rerun of A1 in `scx-bench` (inputs black-boxed, outputs consumed whole); the 7.9 ns is unverified | X10, A1; review-63 |
+| D4 | Analytic surfaces carry no NURB. `to_nurbs(&Extent2d)` is exact, bounded and keeps uv. A non-similarity on an analytic surface gives `Surface::Nurbs`, which needs an extent; its pcurves are refit by step 5's fitter (BR9), and until then the result is `Unsupported` by name (`AnalyticNonSimilarity`). [Revised 11-27] | X4, 4.2, A3; the 11-27 transform row; review-63 |
+| D5 | Step 2's kinds: `Line`, `Circle`, `Ellipse`, `Nurbs` curves (and 2-D twins); `Plane`, `Cylinder`, `Cone`, `Sphere`, `Torus`, `Nurbs` surfaces; circle separate from ellipse, cylinder separate from cone | 01 §7.3 starting points, A4 |
+| D6 | Closed-form geometry answers are `Closed<T> { Solved(T), General }`, with `Partial` added in step 5 if surfaces of revolution need it. No "needs more" bool | X7, A8 |
+| D7 | Inversion returns its outcome as a value, 57 F6's `Inversion<P> { Inside(Foot<P>), Outside(Foot<P>) }`; iterative arms return a `Result` under a budget and a stop, and no caller inspects an error code. [Reconciled with F6 11-27] | X8; 57 F6 |
+| D8 | An edge's geometry is `EdgeShape { Curve { curve, interval }, Collapsed }`: a collapsed edge has no curve and is valid (01 §2.1). A `Draft` may hold an edge whose curve is not yet attached; a missing curve that our own operations produce is `FinishCause::MissingCurve`, kinded `Defect`; a caller's input without one is refused before `finish`. [Revised 11-27] | A10; review-63 M1 |
+| D9 | Entity marks and user slots are not ported: traversal state is a dense-id bitset, and application data is the app's `IdMap` with `carry` | 6.2, A9 |
+| D10 | Pcurves are exact where a closed form exists, checked by lifting. Otherwise the writer fits them eagerly before `finish`, to the body's claimed accuracy (never raised in advance), accepting within edge accuracy + face accuracy + gap G, and records the accuracy and its basis (`Measured` by default; `Certified` on request) only when worse than the resolution. `finish` checks the pole and seam rules (Edgeuse 7, 20; Face 24). T6 is a test oracle only. The fitter lands in step 5 (BR9); step 3 carries exact pcurves only, and a writer that needs a fit returns `NeedsFit`. [Rewritten 11-27: only the record path refuses; the kernel's `Trims` fit] | 6.2; research 27, 28, 34, 35, 37, 41, 47; 04 §4; review-63 H3 |
+| D11 | `scx-record` has its own format from version 1: bytes in and out, typed tags, length-prefixed lists, ids kept with deleted runs as counts, shortest round-trip text for `f64`. The decoder validates through `finish` and does not heal. The format and the record types are public API under 01 §7.4 | 7.2, A12; 04 11-27 converter row; 01 §7.4 |
+| D12 | `Frame` joins `scx-num` before step 2's kinds (P1): an origin, x and z stored (y derived, or stored too if measured cheaper; z always stored), right-handed by construction, built by `Frame::new -> Option`. [Revised 11-27] | P1; D14 |
+| D13 | Surfaces and curves keep the pin's analytic, NURBS-compatible parameterisation, computed in closed form with no carried NURB. Oblique cylinder sections stay exact (WR-680), and converters and the difftest need no uv mapping; `scx-step` maps STEP's angle parameters. The natural-parameter switch is withdrawn everywhere. [New 11-27, H2] | review-63 H2; 4.2; WR-680 |
+| D14 | A mirror gives a right-handed frame plus a reversed `sense` on the kind; no left-handed frame is ever stored. Evaluation uses the effective axis `sense · z`, so the uv map and the pcurves are unchanged. [New 11-27, from D12] | P1, 3.2, 6.2 |
+
+## 12. Rulings (2026-11-27)
+
+The coordinating session ruled this research on 2026-11-27, adopting the corrections of
+`reviews/review-63.md`. The body above is revised in place; each changed place carries a "[Ruled
+11-27: ...]" note.
+
+- **D1, revised.** Unboundedness is a type-level state (`ParamDomain`, P2). `Extent1d` ends become
+  finite by construction and the `UNBOUNDED`/`±INFINITE_PARAMETER` sentinel goes: a new `scx-num`
+  task, P0, ahead of RE1, BR1, CU1 and SU1. Numeric work goes through an explicit finite working
+  extent. `BOUNDED_INFINITE_PARAM` and `INFINITE_PARAMETER_SQRT` become named clamping rules,
+  citing #18922. Neither ±inf nor a sentinel is ever stored. (Review-63 H1 overturned A11.)
+- **H2.** Keep the pin's analytic, NURBS-compatible uv, so oblique cylinder sections stay exact
+  (WR-680) and converters and the difftest need no uv mapping. Added as D13; the natural-parameter
+  switch is removed everywhere.
+- **D4, revised.** A non-similarity on an analytic surface gives NURBS, which needs an extent. Its
+  pcurves are refit by the step-5 fitter (BR9); until then the result is `Unsupported` by name.
+- **D8, revised.** A collapsed edge has no curve (01 §2.1) and is valid. A missing curve that our
+  own operations produce is a `Defect`.
+- **D10.** Holds in direction; the row is rewritten. Its premise was wrong: only the record path
+  refuses, and the kernel's `Trims` fit (review-63 H3). Folded in: research 27, 28, 34, 35, 37, 41
+  and 47 (eager fitting by the writer, the fit target with gap G, the certified-bound cost); the
+  pole and seam rules (Edgeuse 7, 20; Face 24); T6 is a test oracle only. The fitter lands in step
+  5, so BR5's fitted half moves to step 5 (BR9) and step 3 carries exact pcurves only.
+- **D12.** `Frame` stores x and z with y derived (or whatever is cheapest, but z is stored),
+  right-handed by construction. A mirror gives a right-handed frame plus a reversed sense on the
+  kind; no left-handed frame is ever stored. Added as D14.
+- **D3.** Holds pending a fair rerun of A1's benchmark in the new `scx-bench` crate (inputs
+  black-boxed, outputs consumed whole). The 7.9 ns is marked unverified.
+- **M2.** Aligned with 62 §10: every cause is kinded (`TooLarge` is `Exhausted`, `Degenerate` is
+  `Refused`, `BadVersion` is `Unsupported`); each wrapper is marked as a transparent or a context
+  frame; iterative sketches take a budget or a stop. The review's "X10" (errors) is fixed as X13.
+- **M3.** The plane section belongs in `scx-ssi` (01 §1.1), not SU5: it is SS5.
+- **M5.** The task graph is fixed: the `scx-nurbs` landing, NS1, NS2 and P0 are on the critical
+  path; RE1 and BR1 depend on P0; SS2 depends on the plane section (SS5); CU2 follows CU1, and T6
+  is no longer parallel from day one.
+- **LOW.** Fields follow 01 §7.4 (private or `#[non_exhaustive]`, with accessors); `RegionKind` is
+  replaced by 01's `solid: bool`; the clashing `EvalError` is renamed; one `Side` enum per meaning,
+  named apart (`Approach`, `BoundSide`); inversion uses 57 F6's `Inversion`; D11 cites 01 §7.4.
+- **Held:** D2, D5, D6, D7 (reconciled with 57 F6), D9 and D11.

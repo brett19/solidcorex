@@ -483,6 +483,86 @@ same files.
 - **Blast radius:** one impl. Every later crate copies it.
 - **Difftest:** unaffected. Errors are compared by variant and text.
 
+### M10. The global solver: a mutable solver object with virtual hooks
+
+Decided 11-27 while porting `geom/global_solver.rs` and `geom/solution_array.rs` (the
+pin's `SmGlobalSolver`, `SmSolution`, `SmSolutionArray`) to `scx-algo`'s `global_solve`,
+`solution` and `split_tree`. Each decision below was argued for and then against; the
+difftest is `scx-difftest/tests/diff/t_gsolve.rs`.
+
+- **The C++ shapes found:**
+  - `GlobalSolver` is a long-lived mutable object: `SolveIt` copies its arguments into
+    fields (operation, category, tolerance, `opt_vectors`, best so far), swaps the caller's
+    `SolutionArray` in and out, and keeps a recursion depth, a branch count and a cancel
+    token. The hooks (`GlobalSolve`'s virtuals) read those fields.
+  - The operation's vectors are `opt_vectors[i]`, indexed by convention per operation.
+    `OperationCategory` is a second enum derived from the first.
+  - "No best answer yet" is the sentinel `SM_BIG_DOUBLE` (1e20), reset to 0 for two of the
+    three maximising operations.
+  - `SolutionRequested` is a mode flag read deep inside `AddSortedSolution`.
+  - `Solution` is all public fields with counts beside fixed arrays
+    (`num_variables`/`parameters`, `num_objects`/`objects`).
+  - `LocalSolve` returns a bool, "needs more subdivision".
+- **Replacement:**
+  - `solve(trees, accumulator, hooks) -> Result<Accumulator, SolveError<E>>`, a pure call.
+    `SolveOptions { operation, keep, tolerance, incumbent_sq }` is the options value.
+    `Accumulator` holds the options, the best so far and the sorted solutions, and is
+    the only state a hook can change (`add_sorted`, `push`). The hooks are the trait
+    `BranchSolver<T, O, N>`: `local_solve` is required; `may_contain`, `is_ready` and
+    `split_choice` default to the module's generic tests (`may_contain`, `split_choice`,
+    free functions a hook can call). Against: a hook that needs per-solve state must carry
+    it itself. That is the point: the pin's hooks read solver fields that only `SolveIt`
+    set.
+  - `Operation` carries the vectors its generic tests read (`Rayfire { direction }`,
+    `Directed* { normal, direction }`, `PerspectiveIntersect { plane_point, normal, eye }`
+    and so on). Operations whose vectors only a hook reads carry none: the hook holds them.
+    `Goal` replaces `OperationCategory`, as a method.
+  - "No best yet" is `incumbent_sq: None`. It starts the maximising operations at 0 and
+    the others at infinity. The pin started `ProjectedMaximize` at 1e20, so it returned
+    no solution (pin defect `gsolve_projected_maximize`). Infinity also stops 1e20 from
+    culling boxes more than 1e10 apart. The skip of a solution valued `SM_BIG_DOUBLE` is
+    dropped, since no solver here makes the sentinel.
+  - `Keep { All, Best, Nodes }` replaces `SolutionRequested`. `FindAmbiguities` is unused
+    upstream and is left out.
+  - `Next { Done, Split }` replaces the bool. A split is
+    `Split { tree, order: ChildOrder }`, not `(usize, bool)`.
+  - `Solution<O>` has private counts. It is built by `point`, `range` and `nodes` with
+    const-generic arrays, then `with_objects`/`with_nodes`. `SolutionKind`, `EndClass`,
+    `Pairing`/`Prefer` and `SortKey` are enums. The object is a trait
+    (`parameter_count`, `parameter_interval`, `tolerance`) where the pin had `kind()` plus
+    a dozen defaulted geometry lookups. The geometry queries of `Solution` (`point`,
+    `point_of`) and the `SideRecord` stay with the crates that own the geometry.
+  - The traversal is an explicit stack in the order of the pin's recursion: first half
+    first, all of it. So there is no depth bound. `MAX_BRANCHES` (2^23) bounds the work, as
+    solidcore's `MAX_SOLVE_BRANCHES` did.
+  - There is no cancel token. A hook that is cancelled returns its own error, which ends
+    the solve.
+- **Corrections (results change; each is checked against brute force):**
+  - The rayfire child order reads the children of the tree being split. The pin read the
+    second tree's and failed when that was a leaf (pin defect `gsolve_rayfire`).
+  - A two-tree ordering asked of a third tree leaves its children in order. The pin
+    failed.
+  - `object_for_parameter` reads each object's own parameter count. The pin read object
+    0's kind on every pass and fell out of the loop answering object 0 (pin defect
+    `object_for_parameter`).
+- **Split from the pin's `tree.rs`:** `SplitTree<T>` is the global solver's tree: built
+  bottom up, immutable, with an item `T` per node. The spatial object tree
+  (`AddObject`/`GetObjectsInBox`) is `box_tree`. The surface neighbour searches belong to
+  the surface crate, and the span data (`BezierSpan`) to the curve crate, as their `T`.
+- **Not ported:** the `SurfaceProjectedIntersect` curve-on-surface test (it reads curves:
+  the curve crate's hook) and `PolySingleValue` (the poly solver's type).
+- **Difftest:** `t_gsolve`, 144 seeded scenarios per operation (Intersect as ranges,
+  Intersect keeping nodes, Minimize, Minimize keeping the best, Maximize,
+  ProjectedMinimize, ProjectedMaximize, Rayfire). It compares the solutions, the best
+  value and the order the leaf pairs were solved in. `gsolve_truths` checks 2,100
+  scenarios against brute force.
+- **Speed (MEASURED, 11-27):** the same hooks on both sides over 1,024 seeded scenarios,
+  trees built outside the loop, inputs through `black_box`, every field of every result
+  folded into a checksum, the two sides interleaved, 11 runs on one core, the median.
+  scx takes 0.49 to 0.51 of the pin's time on trees of up to 9 and 12 pieces (0.8 to 3.6
+  us a solve), and 0.56 to 0.63 on trees of up to 64 and 96 (37 to 126 us), but 0.91 for
+  Intersect there, whose time is in joining the ranges.
+
 ## 3. Fix when touched
 
 Each item gives where it is, the pattern, and the replacement. The blast radius is MEASURED as
@@ -633,3 +713,85 @@ change to `scx-num`'s value types, made before step 2.
 7. **07 §9 rule 5**: the naming, bool, out-param, conversion and facade rules of 5.2.
 8. **01 §2.1, §2.6 and §5.1**: `RegionKind`, named change records, one item-failure type, and
    `Defect::at` as a `Location`.
+
+## 8. `scx-nurbs` (step 2): decisions made while porting
+
+Written 11-27 by the builder of `scx-nurbs` (01 §10.2 step 2: knot vectors, basis functions,
+Bezier helpers, NURBS curves as plain data). The pin's sources are `nurbs/knots`,
+`nurbs/basis_basic`, `nurbs/bezier`, `nurbs/crv_*` and `nurbs/math`. Each item names the pin's
+shape, what replaced it, and why. Items marked "(ruling)" are proposals for the owner.
+
+- **One validated value per concept; no setters.** The pin's curve is a long-lived struct with
+  `knots_mut`, `cpts_mut` and per-call checks of counts and indices (`NurbsFailure::Index`,
+  `ControlPointsShort`). Here `KnotVector::new` and `NurbsCurve::new`/`from_homogeneous` check
+  everything once (degree, counts, finiteness, non-decreasing knots, multiplicity, positive
+  weights, finite `w P`), and every edit (`inserted`, `removed`, `insert_knot`, `split`,
+  `elevate`) returns a new value. The index errors have no counterpart: a built curve cannot
+  have the wrong count.
+- **Rationality in the type (F12).** `NOZ`/`NOW` marked "not rational" per point; a mixed curve
+  could exist. Here a curve holds `Option<Rational { weights, weighted }>`: `None` is polynomial,
+  and both `P` and `w P` are kept so neither form is recomputed per evaluation.
+  `from_homogeneous` is the rational constructor from `(w P, w)`. F12's removal from `scx-num`
+  (`NOZ`, `NOW`, `from_nl`, `is_2d`) is its own commit; research 63 §2.2 has
+  `scx-nurbs-surface` follow this exactly.
+- **`Approach::{Below, Above}` replaces `from_left: bool`** (63 X5, ruled L4). The pin's
+  `Side::Left` is the span starting at the knot, which is `Approach::Above`. The testkit's
+  `Side` is renamed to match when its owner next touches it; no crate exports `Side`.
+- **Span finding is exact.** The pin's `find_span` moves the end spans inwards past spans
+  shorter than an absolute `1e-12` (`U[spn+1] < U[spn] + 1e-12`), a threshold with no scale.
+  Here the span is found by comparison alone (`partition_point` on `<` or `<=` by approach),
+  and only spans of exactly zero length are skipped. Every difftest point away from the domain
+  ends agrees with the pin bit for bit.
+- **The domain ends evaluate.** The pin's `basis_eval` and `crv_eval` return
+  `SolidError::Unsupported` at `u = U[p]` and `u = U[m-p]`; upstream callers evaluated the end
+  control points themselves. Here both ends take the end span, which is the limit the pin's
+  callers wanted. Outside the domain each end piece continues as its polynomial (59 §8 item 4).
+- **A knot difference fails only when it is exactly zero or not finite.** The pin errs below
+  `1e-24` (`NurbsFailure::Numerical`), a threshold with no scale. Here `NurbsError::Degenerate`
+  carries the parameter.
+- **Kernels return `Option`, mapped once to `Degenerate` (M8).** The inner loops iterate and do
+  not index; where a slot could in principle be missing they return `None`, and the public call
+  maps it to `NurbsError::Degenerate`. No silent fallback value is produced. (ruling: this is
+  M8's pattern; the alternative is `debug_assert` plus a default, which 57 M8 rejected.)
+- **Fixed-order derivatives as const generics.** The pin's `crv_derivs(u, d, out: &mut
+  Vec<Vec3>)` and `basis_derivs(.., n, out)` are out-params sized at run time. Here
+  `derivs::<K>(u, approach) -> [[f64; D]; K]` and `basis_derivs::<K>` return arrays on the stack
+  (63 D3's fixed-order jets); `K - 1` above the degree gives zeros for a polynomial curve, and the
+  rational quotient rule runs to any `K <= MAX_ORDER + 1`.
+- **Degree caps: `MAX_DEGREE = 31`, `MAX_ORDER = 31`** (ruling). The pin's limit is
+  `p < MAX_DEGREE` with its Bezier binomials from an 18-row Pascal table, so its degree
+  elevation stops at 17. Here binomials are computed exactly in integers (`None` above `2^53`);
+  31 bounds the stack scratch and keeps every binomial the rational derivatives and elevation
+  use exact. Any cap from 25 up keeps that exactness.
+- **Unclamped knots, and interior multiplicity up to `p + 1`, are valid** (ruling). The pin's
+  `validate` (`N_KnotVectorIsValid`) requires end multiplicity exactly `p + 1` and interior
+  multiplicity at most `p`. Here the domain is `[U[p], U[m-p]]` whatever the end knots
+  (`is_clamped` reports it), and an interior knot of full multiplicity is a break in the curve
+  whose two one-sided limits `Approach` selects; the testkit's truth treats both the same way.
+  Above `p + 1` is `NurbsError::Multiplicity`. Insertion still keeps the result continuous
+  (multiplicity at most `p` after it).
+- **Affine for insertion and splitting, `combine2` for elevation.** The pin's `affine2` keeps a
+  coordinate exactly when both points have it (a plane stays exactly a plane); its
+  `elevate_degree` uses `combine2(alf, a, 1 - alf, b)` throughout. scx follows both, in the pin's
+  order. Using `affine` in elevation too was tried: it differed from the pin on 210 elevation
+  inputs, against 110 with `combine2` (all 110 the refusals below), so the pin's choice stays.
+- **`NurbsError::Unstable` for an elevation that loses the curve.** A5.9 removes the inserted
+  knots by extrapolating across the neighbouring spans, so a span ratio near `1e16` (knots a few
+  ulps apart) multiplies the rounding by that much. The pin returns the result, with zero or
+  negative weights on rational curves and errors up to `1e32`; scx refuses with `Unstable`
+  (`ErrorKind::Degenerate`) when the elevated weights or points are no longer valid. Its
+  polynomial answers on such curves are the pin's bit for bit, and as inaccurate: the ignored
+  test `elevation_of_near_coincident_knots` holds the truth check for a stable elevation
+  (Bezier decomposition with exact blossoms, or knot removal by least squares), a step-5
+  follow-up (ruling: whether that is wanted before step 5).
+- **Bezier helpers take any `u`.** The pin's `eval_one_basis` refuses `i > p` and `u` outside
+  `[0, 1]`, and `split` refuses `u` outside `[0, 1]`. `B[i, n]` is `0` for `i > n` and both are
+  polynomials defined everywhere, so scx answers (a Bezier curve extended past its ends). Both
+  refuse a non-finite `u` with `ParameterNotFinite`, where the pin's `eval_one_basis` returned
+  NaN as a value for a NaN `u`.
+- **Typed errors per crate.** `NurbsError` is `#[non_exhaustive]`, `Copy`, with `kind() ->
+  ErrorKind` per 62's taxonomy and a table from the pin's `NurbsFailure` in `error.rs`.
+- **Not yet done, and shaped for.** The scalar-generic evaluation (`eval<T: Ring>`) that 63 §3
+  wants for interval jets, `eval_many`, `tangent_dir`, fitting, deviation, enclosures and IGES 126
+  are not here. The curve's fields are private and every edit is by value, so these add methods
+  without changing the type.

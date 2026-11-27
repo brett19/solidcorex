@@ -23,22 +23,19 @@ pub(super) fn pow2(k: i32) -> f64 {
     f64::from_bits(((1023 + i64::from(k)) as u64) << 52)
 }
 
-/// `x * 2^k` for finite `x` and any `k`, rounding once: exact whenever the result is
-/// normal, correctly rounded when it is subnormal, infinite when it overflows.
+/// `x * 2^k` for any `k`, rounding once: exact whenever the result is normal, correctly
+/// rounded when it is subnormal, infinite when it overflows. Zero, infinities and NaN come
+/// back unchanged (no sign is read from a NaN).
 pub(crate) fn scale(x: f64, k: i32) -> f64 {
     if let Some(r) = scale_normal(x, k) {
         return r;
     }
-    if x == 0.0 {
+    if x == 0.0 || !x.is_finite() {
         return x;
     }
-    // x = m * 2^ex with m in [1, 2), exactly.
+    // x = m * 2^ex with |m| in [1, 2), exactly.
     let ex = exponent(x);
-    let m = if ex >= -1022 {
-        x * pow2(-ex)
-    } else {
-        x * pow2(1023) * pow2(-ex - 1023)
-    };
+    let m = mantissa(x);
     let t = ex.saturating_add(k);
     if t > 1023 {
         f64::INFINITY.copysign(x)
@@ -97,6 +94,22 @@ pub(crate) fn round_scaled(hi: f64, lo: f64, k: i32) -> f64 {
     } else {
         r
     }
+}
+
+/// `x / 2^exponent(x)`, the significand in `[1, 2)` with the sign of `x`, exactly, for a
+/// finite nonzero `x` (also subnormal). Read from the bits: `2^-exponent(x)` is no normal
+/// double for exponents 1023 and below -1022, so no multiplication by [`pow2`] reaches it.
+#[inline]
+pub(crate) fn mantissa(x: f64) -> f64 {
+    const KEEP: u64 = 0x800f_ffff_ffff_ffff; // sign and fraction
+    const ONE: u64 = 0x3ff0_0000_0000_0000;
+    let b = if x.to_bits() & 0x7ff0_0000_0000_0000 == 0 {
+        // Subnormal: x 2^54 is normal and exact, with the same significand.
+        (x * pow2(54)).to_bits()
+    } else {
+        x.to_bits()
+    };
+    f64::from_bits((b & KEEP) | ONE)
 }
 
 /// The unbiased binary exponent of a finite nonzero double (`floor(log2 |x|)`), also for
@@ -176,6 +189,13 @@ mod tests {
         assert_eq!(exponent(f64::from_bits(1)), -1074);
         assert_eq!(exponent(f64::MIN_POSITIVE), -1022);
         assert_eq!(exponent(-3.0), 1);
+        // The significand from the bits, at both ends of the exponent range.
+        assert_eq!(mantissa(f64::MAX), 2.0 - f64::EPSILON);
+        assert_eq!(mantissa(-f64::MAX), -(2.0 - f64::EPSILON));
+        assert_eq!(mantissa(f64::from_bits(1)), 1.0);
+        assert_eq!(mantissa(f64::from_bits(3)), 1.5);
+        assert_eq!(mantissa(f64::MIN_POSITIVE), 1.0);
+        assert_eq!(mantissa(-0.75), -1.5);
     }
 
     #[test]
@@ -189,6 +209,19 @@ mod tests {
         assert_eq!(scale(1.0, 1024), f64::INFINITY);
         assert_eq!(scale(0.75, 1024), 0.75 * pow2(1023) * 2.0);
         assert_eq!(scale(3.0, -2000), 0.0);
+        // The largest exponent (2^-1023 is no normal double) scaled into the subnormals:
+        // (2 - 2^-52) 2^-1023 is half-way below 2^-1022 and ties to it (even); the others
+        // round to the nearest grid point.
+        assert_eq!(scale(f64::MAX, -2046), f64::MIN_POSITIVE);
+        assert_eq!(scale(f64::MAX, -2050), f64::from_bits(1 << 48));
+        assert_eq!(scale(f64::MAX, -2097), 2.0 * tiny);
+        assert_eq!(scale(-f64::MAX, -2098), -tiny);
+        assert_eq!(scale(f64::MAX, -2099), 0.0);
+        assert_eq!(scale(f64::MAX, -1000), f64::MAX * pow2(-1000));
+        // Non-finite values pass through.
+        assert!(scale(f64::NAN, -2000).is_nan());
+        assert_eq!(scale(f64::INFINITY, -2000), f64::INFINITY);
+        assert_eq!(scale(f64::NEG_INFINITY, 2000), f64::NEG_INFINITY);
         // A half-way hi that lo pushes up, and one it pushes down.
         assert_eq!(round_scaled(1.0, 1e-20, -1075), tiny);
         assert_eq!(round_scaled(1.0, -1e-20, -1075), 0.0);

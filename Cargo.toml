@@ -3,15 +3,19 @@
 resolver = "2"
 members = [
     "crates/scx-num",
+    "crates/scx-nurbs",
     "crates/scx-algo",
     "crates/scx-p21",
     "crates/scx-testkit",
     "crates/scx-difftest",
+    "crates/scx-bench",
     "xtask",
 ]
-# scx-difftest links the pinned solidcore and is built only when asked for (`-p scx-difftest`).
+# scx-difftest and scx-bench link the pinned solidcore and are built only when asked for
+# (`-p scx-difftest`, `-p scx-bench`).
 default-members = [
     "crates/scx-num",
+    "crates/scx-nurbs",
     "crates/scx-algo",
     "crates/scx-p21",
     "crates/scx-testkit",
