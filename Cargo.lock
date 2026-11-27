@@ -91,6 +91,13 @@ name = "scx-num"
 version = "0.1.0"
 
 [[package]]
+name = "scx-p21"
+version = "0.1.0"
+dependencies = [
+ "scx-num",
+]
+
+[[package]]
 name = "serde"
 version = "1.0.229"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -1,9 +1,9 @@
 # Written for solidcorex. The workspace: libraries bottom to top as `layers.txt` lists them.
 [workspace]
 resolver = "2"
-members = ["crates/scx-num", "crates/scx-algo", "crates/scx-difftest", "xtask"]
+members = ["crates/scx-num", "crates/scx-algo", "crates/scx-p21", "crates/scx-difftest", "xtask"]
 # scx-difftest links the pinned solidcore and is built only when asked for (`-p scx-difftest`).
-default-members = ["crates/scx-num", "crates/scx-algo", "xtask"]
+default-members = ["crates/scx-num", "crates/scx-algo", "crates/scx-p21", "xtask"]
 
 [workspace.package]
 edition = "2021"
