@@ -133,6 +133,11 @@ impl Cone {
         Axes::new(&self.frame, self.sense)
     }
 
+    /// `k = tan(half-angle)`, as stored (the radius grows by `k` per unit of `v`).
+    pub(crate) const fn slope(&self) -> f64 {
+        self.slope
+    }
+
     /// The height of the apex, `-r / k`.
     fn apex_v(&self) -> f64 {
         -self.radius / self.slope
