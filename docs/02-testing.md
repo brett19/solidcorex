@@ -42,16 +42,20 @@ did move a point by 2e-6. It took all 283 to see it.
 
 ## 2. Principle
 
-Two checks, each at the level where it is cheap to state:
+Changed 11-27 (04 §1): results are validated against known truths, not against solidcore's outputs.
+A result may change whenever the new one is equally or more correct. This replaces the 11-26 text,
+which made the pin the oracle.
 
+- **Against the truth: the oracle.** Exact or higher-precision references, closed forms, known roots,
+  integrals and measures, and properties that need no reference: validity, algebra, metamorphic
+  relations, determinism.
 - **Against solidcore** (the pin, `06-licence-and-source.md`): the comparison harness, `scx-difftest`.
-  This is the oracle for behaviour.
-- **Against properties** that need no oracle: validity, analytic measures, algebra, determinism.
+  It is a smoke detector. It finds inputs where behaviour changed, which are then settled against the
+  truth (section 3). Agreement with the pin is evidence, not proof, and a disagreement is a question,
+  not a failure of scx.
 
 The goal is the fastest answer that does not give up much checking (04, 11-26). Whole-body comparison
-is by outcome, never by dump. Changed 11-26: the earlier text of this section asked for an oracle
-independent of the kernel at every layer; the pin is now the oracle, and the properties cover what the
-pin cannot say.
+is by outcome, never by dump.
 
 ## 3. The pin comparison (`scx-difftest`)
 
@@ -66,9 +70,14 @@ deterministic; see 01 §9.1).
 - **Determinism is separate and exact.** The same input twice gives the same bits (section 6). Being
   near the pin and being repeatable are two checks.
 - **Layers 0 to 4 are compared function by function.** Today that covers `scx-num` and `scx-algo`
-  (324 tests, 0 mismatches; 01 §9.1). Each difference is traced to a pin
-  defect, which is recorded, or to ours, which is fixed. Pin defects stay pinned and reported while a
-  layer is moved; they are fixed after the layer is complete, as their own change (01 §10.1 item 10).
+  (324 tests, 0 mismatches; 01 §9.1).
+- **A disagreement is settled against the truth** (changed 11-27). Both sides are checked against an
+  exact or higher-precision reference, or a known invariant. If scx is within tolerance of the truth
+  and at least as close as the pin, the input is a pin defect. It is excused by a predicate over the
+  input, never by a list of fingerprints, and every excused input is checked against the truth on each
+  run; a defect that matches no input fails (`tests/diff/pin_defects.rs`; 04, 11-27). Otherwise the
+  fault is ours and is fixed. A pin defect may be fixed in scx as soon as it is found; scx does not
+  reproduce a known wrong answer to keep agreement.
 - **Bodies are compared by outcome**, through the pin-record converter, from the vertical slice
   (01 §10.2 steps 2 to 4) on:
   - topology up to isomorphism;
@@ -85,14 +94,14 @@ deterministic; see 01 §9.1).
 
 | Layer | What is tested | Oracle |
 |---|---|---|
-| `scx-num` | arithmetic, transforms, interval operations, `fmath`, hash and `Rng` | the pin, function by function; exact identities; for random inputs an interval result contains the true value; `fmath` against a high-precision reference, and a table of its values per target |
-| `scx-algo` | solvers, quadrature, bisection, box tree | the pin, function by function; functions with known roots and integrals |
-| `scx-nurbs` | evaluation, derivatives, knot insertion, fitting | the pin; a slow reference evaluator; derivatives against finite differences; insertion leaves the curve unchanged |
-| `scx-geom`, `scx-geomq` | each kind's evaluation, closed forms, projection, intersection, certified bounds | the pin; analytic formulas; evaluate then project returns the parameter; a sampled distance never exceeds a bound; the ratio of bound to sampled distance is tracked so looseness is visible |
+| `scx-num` | arithmetic, transforms, interval operations, `fmath`, hash and `Rng` | exact identities; `fmath` against a high-precision reference, and a table of its values per target; for random inputs an interval result contains the true value; the pin as a smoke check |
+| `scx-algo` | solvers, quadrature, bisection, box tree | functions with known roots and integrals; exact references where cheap; the pin as a smoke check |
+| `scx-nurbs` | evaluation, derivatives, knot insertion, fitting | a slow reference evaluator; derivatives against finite differences; insertion leaves the curve unchanged; the pin as a smoke check |
+| `scx-geom`, `scx-geomq` | each kind's evaluation, closed forms, projection, intersection, certified bounds | analytic formulas; evaluate then project returns the parameter; a sampled distance never exceeds a bound; the ratio of bound to sampled distance is tracked so looseness is visible; the pin as a smoke check |
 | `scx-brep` | construction, edits, sharing, `Changes` and `carry` | invariants: adjacency and sides consistent, every cell empty after both edit paths, an edit leaves untouched faces shared (`assert_kept`); the pin's provenance and history tests, ported |
 | `scx-record` | the stored form | round trip keeps ids and bytes; a second trip changes nothing |
-| `scx-bodyq` | mass, classification, validity check, contact | outcome against the pin; the checker's findings on bodies broken on purpose; mass against analytic values |
-| operation crates | Boolean, blend, offset, sweep, repair, ... | outcome against the pin, plus the properties of section 5 |
+| `scx-bodyq` | mass, classification, validity check, contact | mass against analytic values; the checker's findings on bodies broken on purpose; outcome against the pin as a smoke check |
+| operation crates | Boolean, blend, offset, sweep, repair, ... | the properties of section 5; outcome against the pin as a smoke check |
 | helpers (`scx-fates`, `scx-features`, ...) | what they add | the same properties, per feature, over the design corpus |
 
 Batched evaluation is out of the first design (01 §9.4), so there is no "batched equals single" test

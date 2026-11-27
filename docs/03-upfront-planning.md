@@ -59,11 +59,16 @@ are written.
 
 ## 4. The oracle
 
-New code is proved right by comparison with old from the first day.
+Changed 11-27 (04 §1): new code is proved right against known truths, and compared with the old as a
+smoke detector from the first day. A result may change whenever the new one is equally or more
+correct.
 
+- **Truth checks:** exact or higher-precision references, closed forms, and properties that need no
+  reference (`02-testing.md` sections 2, 4 and 5).
 - **A differential harness:** `scx-difftest`. Layers 0 to 4 are compared function by function and bodies
-  by outcome, within a stated tolerance of the pin, not bit for bit (04, 11-26; `02-testing.md`
-  section 3).
+  by outcome, within a stated tolerance of the pin, not bit for bit (04, 11-26). A disagreement is
+  settled against the truth, and a pin defect is excused by a predicate and checked against the truth
+  (`02-testing.md` section 3).
 - **A written definition of a valid body,** and a checker built to it: `scx-bodyq::check` takes `&Brep`
   and only reads (01 §2.3). solidcore's checker edits the body it checks and can excuse a fault by
   widening a tolerance (research 45, 46), so it cannot be the oracle as it stands.

@@ -1009,22 +1009,40 @@ This section is revised after review-architecture-v2 (S7).
 
 Doc 02 holds the testing plan. This section is how it fits the architecture.
 
-### 9.1 Against solidcore
+Changed 11-27 (04 §1): results are validated against known truths, not against solidcore's outputs.
+A result may change whenever the new one is equally or more correct, and a change that makes code
+faster, more accurate or more idiomatic is worth taking on those terms. The truth checks of 9.2 are
+the oracle. The pin comparison of 9.1 is a smoke detector: it finds behaviour worth looking at, and
+it never decides which side is right.
+
+### 9.1 Against solidcore, as a smoke detector
 
 - **Layers 0-4 are compared function by function.** `scx-difftest` does this today for `scx-num` and
-  `scx-algo`: 317 tests, 0 mismatches, with a default tolerance of 1e-12 relative (MEASURED, 05 §6).
+  `scx-algo`: 323 tests over 767,061 inputs, 0 mismatches, with a default tolerance of 1e-12
+  relative (MEASURED, 05 §6).
 - **Bodies are compared by outcome**, through the pin-record converter in `scx-difftest`:
   - topology up to isomorphism;
   - area and volume within tolerance;
   - the two-way distance between results under resolution plus recorded accuracy;
   - validity.
 - **This starts with the vertical slice** (10.2), not after every layer.
-- Bit-for-bit agreement with solidcore is not a goal at any layer (owner, 11-26); bit-for-bit determinism of our own results is. Each difference is traced to a
-  pin defect, which is recorded, or to ours, which is fixed.
-- **When `fmath` lands**, layer 0's agreement becomes tolerance agreement.
+- Bit-for-bit agreement with solidcore is not a goal at any layer (owner, 11-26); bit-for-bit
+  determinism of our own results is.
+- **A difference is settled by the truth, not by the pin.** When scx and the pin disagree beyond
+  tolerance, both are checked against an exact or higher-precision reference, or a known invariant.
+  If scx is within tolerance of the truth and at least as close as the pin, the input is a pin
+  defect: excused by a predicate over the input and checked against the truth on every run (04,
+  11-27). Otherwise the fault is ours and is fixed.
+- `fmath` has landed (11-27). Layer 0 agrees within tolerance, with 1,134 inputs excused as pin
+  defects and 0 mismatches (05 §6).
 
-### 9.2 By properties
+### 9.2 Against the truth
 
+These are the oracle (changed 11-27).
+
+- references: exact arithmetic (expansions, big integers or rationals) or a higher-precision
+  evaluation for numerical kernels, as `fmath` and the exact circle are checked now;
+- closed forms and known roots, integrals and measures;
 - validity of every result;
 - analytic measures on fixtures;
 - Boolean algebra;
@@ -1089,8 +1107,9 @@ early.
 8. **Add the box tree and the `Executor`** to `scx-algo`. As built: a static tree over `Extent1d/2d/3d` with `overlapping`, `pairs` and `self_pairs` queries returning sorted results, NaN boxes kept outside the tree; `Serial` and `Scoped` executors with an index-ordered `map`. `mul_add` is allowed only in the `eft` module once it exists.
 9. **Error strings** stay matched to the pin while the difftest compares them (5.3).
 10. **The recorded defects** (interval overflow to NaN, Ferrari's quartic on clustered roots) stay
-    pinned and reported while layers are being moved, per 04 §3 (11-26, "defects found while moving are pinned"). Each is fixed after its layer
-    is complete, as its own change, with the difftest recording the difference on purpose.
+    were pinned and reported while layers were moved (04 §3, 11-26). Changed 11-27 (04 §3,
+    superseding that row): a defect may be fixed as soon as it is found, as its own change, with a
+    truth check of the fixed answer and a pin-defect predicate in the difftest (02 §3).
 
 ### 10.2 Layers in order
 

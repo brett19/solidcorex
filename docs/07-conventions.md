@@ -131,8 +131,8 @@ They are converted once there and never snapped.
   kept by the external comparison harness (01 §9.1), not by the internal unit.
 - **Results move.** Every conic whose domain was stored in degrees moves by up to one rounding per
   conversion. Changed 11-26: there is no separate step for this. solidcorex is written in radians from
-  the start (01 §10.2 step 2 for `scx-geom`, step 3 for `scx-record`), and the difference from the pin
-  is within the difftest's tolerance (02 §3).
+  the start (01 §10.2 step 2 for `scx-geom`, step 3 for `scx-record`). A difference from the pin
+  beyond the difftest's tolerance is settled against the truth (02 §3).
 
 ## 3. Parameter domains
 
@@ -453,8 +453,9 @@ Duplicated tolerance constants (determinism audit, 11-26):
    It is disallowed elsewhere by clippy (01 §8.3). Changed 11-26: batched evaluation is out of the
    first design (01 §9.4), so there is no lane code yet. The 19 evaluation sites either move into
    `num::eft::fma` unchanged (no result moves) or are unfused (moves those results by a rounding),
-   decided as each is ported, with any difference recorded in the difftest. The default is to move
-   them unchanged. v2 does not say which; see the report.
+   decided as each is ported on accuracy and speed. Changed 11-27 (04 §1): a moved result is not a
+   reason either way; a difference from the pin beyond tolerance is settled against the truth
+   (02 §3).
 5. **Sums.** Every reduction over a variable-length set runs in id order, left to right. A parallel
    reduction collects per-item values and sums them in that order afterwards. There are no
    cross-lane horizontal sums.
@@ -550,7 +551,7 @@ Duplicated tolerance constants (determinism audit, 11-26):
    `docs/upstream-map.md` lists upstream name → solidcorex path, made by a script from those doc
    lines.
 3. **Test units.** Changed 11-26: solidcorex has no golden units (02 §9). A `scx-difftest` case is
-   named after the pin's unit it compares, so the oracle's history stays readable.
+   named after the pin's unit it compares, so that unit's history stays readable.
 4. **One function per meaning.** A reader takes `&Brep` and returns a value. There are no
    `_read_only` / `_existing` twins: the draft-time version is a different function on `Draft`,
    with a different name (`fit_trim` against `trim`).
