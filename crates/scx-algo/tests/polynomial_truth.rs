@@ -54,12 +54,22 @@ const FAMILIES: [Family; 5] = [
 ];
 
 fn sign(r: &mut Rng) -> f64 {
-    if r.next_u64() % 2 == 0 { 1.0 } else { -1.0 }
+    if r.next_u64().is_multiple_of(2) {
+        1.0
+    } else {
+        -1.0
+    }
 }
 
 /// A root in `[-3, -0.1] u [0.1, 3]`, never exactly zero (a zero root has no ulp scale).
 fn root(r: &mut Rng) -> f64 {
     sign(r) * (0.1 + 2.9 * r.next_f64())
+}
+
+/// `10^k`, exact for `k >= 0` (to 22) and one correctly rounded division below.
+fn ten(k: i32) -> f64 {
+    let p = (0..k.unsigned_abs()).fold(1.0, |p, _| p * 10.0);
+    if k < 0 { 1.0 / p } else { p }
 }
 
 fn lead(r: &mut Rng) -> f64 {
@@ -83,14 +93,14 @@ fn draw(family: Family, deg: usize, r: &mut Rng) -> Vec<f64> {
         Family::Random => {}
         Family::NearDouble => {
             let k = 2 + (r.next_u64() % 9) as i32;
-            roots[1] = roots[0] + sign(r) * 10f64.powi(-k);
+            roots[1] = roots[0] + sign(r) * ten(-k);
         }
         Family::Double => roots[1] = roots[0],
         Family::Scales => {
             let k = 1 + (r.next_u64() % 3) as i32;
-            roots[0] *= 10f64.powi(-k);
-            roots[deg - 1] *= 10f64.powi(k);
-            let l = lead(r) * 10f64.powi(((r.next_u64() % 13) as i32) - 6);
+            roots[0] *= ten(-k);
+            roots[deg - 1] *= ten(k);
+            let l = lead(r) * ten(((r.next_u64() % 13) as i32) - 6);
             return from_roots(&roots, l);
         }
     }
@@ -102,15 +112,17 @@ fn draw(family: Family, deg: usize, r: &mut Rng) -> Vec<f64> {
     from_roots(&roots, lead(r))
 }
 
-/// The true real roots of `c` (exact rational coefficients), each to within `2^-100`.
-fn truth(c: &[f64]) -> Vec<Rat> {
-    let rc: Vec<Rat> = c.iter().map(|&x| Rat::from_f64(x).unwrap()).collect();
+/// The true real roots of `c` (exact rational coefficients), each to within `2^-100`;
+/// `None` for a coefficient not finite (no family draws one).
+fn truth(c: &[f64]) -> Option<Vec<Rat>> {
+    let rc: Vec<Rat> = c.iter().map(|&x| Rat::from_f64(x)).collect::<Option<_>>()?;
     let width = Rat::one().scale(-100);
-    Poly::new(rc)
+    let roots = Poly::new(rc)
         .real_roots(&width)
         .iter()
         .map(|t| t.at.mid())
-        .collect()
+        .collect::<Vec<_>>();
+    Some(roots)
 }
 
 /// The spacing of doubles at `|x|`.
@@ -156,7 +168,9 @@ fn run(deg: usize, seed: u64, solve: impl Fn(&[f64]) -> Vec<f64>) -> Vec<(Family
         let mut s = Stats::default();
         for _ in 0..PER_FAMILY {
             let c = draw(family, deg, &mut r);
-            let t = truth(&c);
+            let Some(t) = truth(&c) else {
+                unreachable!("{c:?}: a coefficient not finite");
+            };
             for x in solve(&c) {
                 assert!(x.is_finite(), "{c:?}: {x}");
                 match measure(x, &t) {

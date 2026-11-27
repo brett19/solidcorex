@@ -99,7 +99,7 @@ diff!(poly_quadratic, |c: [f64; 3], tol: f64| {
 diff!(
     poly_cubic,
     pin_defect = crate::pin_defects::poly_cubic,
-    |c: [f64; 4], tol: f64| { m::polynomial::solve_cubic(&c, tol).to_vec() }
+    |c: [f64; 4], tol: f64| m::polynomial::solve_cubic(&c, tol).to_vec()
 );
 diff!(
     poly_quartic,

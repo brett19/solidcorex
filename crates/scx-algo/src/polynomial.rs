@@ -151,10 +151,12 @@ pub fn solve_quadratic(coefficients: &[f64; 3], zero_tol: f64) -> Roots {
 #[must_use]
 pub fn solve_cubic(coefficients: &[f64; 4], zero_tol: f64) -> Roots {
     let mut roots = closed_cubic(coefficients, zero_tol);
-    // as `closed_cubic` decides (a NaN `zero_tol` keeps the cubic)
-    if !(coefficients[3].abs() < zero_tol) {
-        polish(&mut roots, coefficients, zero_tol);
+    // the quadratic fallback, decided as `closed_cubic` decides (a NaN `zero_tol` keeps
+    // the cubic), is not polished
+    if coefficients[3].abs() < zero_tol {
+        return roots;
     }
+    polish(&mut roots, coefficients, zero_tol);
     roots
 }
 
@@ -340,13 +342,13 @@ fn polish<const N: usize>(roots: &mut Roots, c: &[f64; N], zero_tol: f64) {
                 break;
             }
             let next = x - px / dx;
-            let others = roots
+            let mut others = roots
                 .values
                 .iter()
                 .take(len)
                 .enumerate()
                 .filter(|&(j, _)| j != i);
-            let keeps_apart = others.clone().all(|(_, &y)| {
+            let keeps_apart = others.all(|(_, &y)| {
                 (next - x).abs() * 4.0 <= (x - y).abs()
                     && ((next - y).abs() < zero_tol) == ((x - y).abs() < zero_tol)
             });
@@ -354,7 +356,8 @@ fn polish<const N: usize>(roots: &mut Roots, c: &[f64; N], zero_tol: f64) {
                 break;
             }
             let (pn, dn) = eval_with_derivative(c, next);
-            if !(pn.abs() < px.abs()) {
+            // not strictly smaller, or NaN (a positive NaN orders above every number)
+            if pn.abs().total_cmp(&px.abs()).is_ge() {
                 break;
             }
             (x, px, dx) = (next, pn, dn);

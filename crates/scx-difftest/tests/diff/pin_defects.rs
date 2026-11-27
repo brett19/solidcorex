@@ -3820,12 +3820,12 @@ pub fn poly_quartic() -> PinDefect<([f64; 4], f64, f64), Vec<f64>> {
 /// leading coefficient is below the tolerance (then the quadratic, as the cubic does).
 /// Decided as the solvers decide, so a NaN tolerance keeps the quartic.
 fn quartic_used(c: &[f64; 5], tol: f64) -> &[f64] {
-    if !(c[4].abs() < tol) {
-        c
-    } else if !(c[3].abs() < tol) {
+    if c[3].abs() < tol && c[4].abs() < tol {
+        &c[..3]
+    } else if c[4].abs() < tol {
         &c[..4]
     } else {
-        &c[..3]
+        c
     }
 }
 
