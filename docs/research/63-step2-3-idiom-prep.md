@@ -5953,6 +5953,248 @@ pub struct ReadError { pub at: usize, pub cause: ReadCause }
 | RE4 | the text encoding | RE1 (parallel to RE2) |
 | RE5 | round-trip and corruption tests | RE3, RE4, BR8 |
 
+### 7.6 RE1 and RE4 as built (11-27)
+
+Decided by analysis and an adversarial pass. Proposed for review; not yet ruled.
+
+**What was built.** The new crate `crates/scx-record`, layer 6 (`layers.txt`, after `scx-brep`,
+which RE3 will need). Its only dependency is `scx-num`, for `ErrorKind`. It works on bytes and
+strings, with no IO and no paths. It holds the primitives of both encodings. RE2 and RE3 build
+their records on them.
+
+```rust
+pub const FORMAT_VERSION: u16 = 1;
+pub struct Magic([u8; 4]);                 // ASCII letters and digits
+impl Magic { pub const fn new(bytes: [u8; 4]) -> Option<Magic>; pub const fn bytes(self) -> [u8; 4]; pub fn word(&self) -> &str; }
+
+pub trait Tag: Copy {                       // an enum on the wire
+    const RECORD: &'static str;
+    fn code(self) -> u8;   fn from_code(code: u8) -> Option<Self>;
+    fn name(self) -> &'static str;  fn from_name(name: &str) -> Option<Self>;
+}                                           // impl for bool: 0/1, "false"/"true"
+
+pub trait Sink {                            // Writer (binary), TextWriter
+    fn at(&self) -> usize;
+    fn magic(&mut self, m: Magic); fn u8(&mut self, v: u8); fn u16(..); fn u32(..); fn u64(..);
+    fn f64(&mut self, v: f64) -> Result<(), WriteError>;   // NaN, ±inf refused, nothing written
+    fn tag<T: Tag>(&mut self, t: T);
+    fn line(&mut self);                     // layout only: a newline in text, nothing in binary
+    // provided:
+    fn header(&mut self, m: Magic);         // magic, then FORMAT_VERSION
+    fn bool(&mut self, v: bool);
+    fn count(&mut self, len: usize) -> Result<(), WriteError>;   // u32, TooLong over u32::MAX
+    fn list<T>(&mut self, items: &[T], put: impl FnMut(&mut Self, &T) -> Result<(), WriteError>) -> Result<(), WriteError>;
+    fn slots<'r, R: 'r, I>(&mut self, slots: I, put: impl FnMut(&mut Self, &R) -> Result<(), WriteError>) -> Result<(), WriteError>
+        where I: IntoIterator<Item = Option<&'r R>>, I::IntoIter: ExactSizeIterator;
+}
+pub trait Source {                          // Reader<'a> (binary), TextReader<'a>
+    fn at(&self) -> usize; fn remaining(&self) -> usize;
+    fn magic(&mut self, m: Magic) -> Result<(), ReadError>;
+    fn u8(&mut self) -> Result<u8, ReadError>; /* u16, u32, u64 */ fn f64(&mut self) -> Result<f64, ReadError>;
+    fn tag<T: Tag>(&mut self) -> Result<T, ReadError>;
+    fn line(&mut self);
+    fn finish(self) -> Result<(), ReadError>;   // Trailing if input is left
+    // provided:
+    fn header(&mut self, m: Magic) -> Result<u16, ReadError>;   // the version, for the record's match
+    fn bool(&mut self) -> Result<bool, ReadError>;
+    fn count(&mut self) -> Result<usize, ReadError>;            // Truncated if over the bytes left
+    fn list<T>(&mut self, take: impl FnMut(&mut Self) -> Result<T, ReadError>) -> Result<Vec<T>, ReadError>;
+    fn slots<R>(&mut self, limit: u32, take: impl FnMut(&mut Self) -> Result<R, ReadError>) -> Result<Vec<Option<R>>, ReadError>;
+}
+impl Writer { pub const fn new() -> Writer; pub fn finish(self) -> Vec<u8>; }
+impl<'a> Reader<'a> { pub const fn new(bytes: &'a [u8]) -> Reader<'a>; }
+impl TextWriter { pub const fn new() -> TextWriter; pub fn finish(self) -> String; }   // ends with '\n'
+impl<'a> TextReader<'a> { pub const fn new(text: &'a str) -> TextReader<'a>; }
+
+pub struct ReadError { pub at: usize, pub cause: ReadCause }     // kind(), name(); context frame
+#[non_exhaustive] pub enum ReadCause {
+    Truncated, Trailing, BadMagic, BadVersion { found: u16 },
+    BadTag { record: &'static str, found: u8 }, BadToken { expected: &'static str },
+    NonFinite, BadRun, TooMany { count: u32, limit: u32 },
+}
+pub struct WriteError { pub at: usize, pub cause: WriteCause }   // kind(), name()
+#[non_exhaustive] pub enum WriteCause { NonFinite, TooLong { len: usize } }
+```
+
+**The wire.**
+
+- *Binary.*
+  - Integers are fixed-width little-endian. An `f64` is its IEEE bits, little-endian.
+  - A tag is one byte, and a magic is its four bytes.
+  - A list is a `u32` count followed by its items.
+  - A table is its `u32` length (the next id), then one entry per live record or per run. A live
+    record is `0` followed by the record. A run of deleted slots is `1` followed by its `u32`
+    count.
+- *Text.*
+  - Each field is one word. Words are separated by one space, or by one newline where the
+    record calls `line()`, and the text ends with one newline.
+  - Integers are decimal, with no sign and no leading zero.
+  - An `f64` is written by `Display`: shortest round-trip, no exponent.
+  - A tag is its variant's word, and a magic is its four letters.
+  - Each table entry starts a line, as `live ...` or `gap N`.
+- A record with `xs = [-0, 0.5]` and a table `[None, None, Some(..), None]` reads, for example,
+  `TEST 1\n7 300 0 18446744073709551615 true circle\n2 -0 0.5\n...\n4\ngap 2\nlive line 2\ngap 1\n`.
+
+**Both encodings are canonical.** Each value has one spelling in each encoding, and every other
+input is refused. The rules that make this so:
+
+- `Trailing` refuses input left after the record.
+- A flag byte other than 0 or 1 is `BadTag`.
+- Runs are whole: an empty run, two runs in a row, or a run past the table's end is `BadRun`.
+- In text, `BadToken` refuses a sign, a leading zero, a second space and the wrong separator.
+- In text, an `f64` word must be exactly the word `Display` gives for the value it parses to. So
+  `1.0`, `+1`, `1e0`, `-0.0`, `0.10` and a longer digit string for the same bits are all refused.
+
+So `encode(decode(x)) == x` for every `x` that decodes, in either encoding (63 §7.4), and
+binary → text → binary gives equal bytes. The corruption test checks this for every changed input
+that decodes.
+
+**Decisions**, each with the case for and against:
+
+1. *One schema, two encodings: the `Sink`/`Source` traits.* A record writes itself once, generic
+   over `impl Sink`, and reads itself once, generic over `impl Source`. The calls are
+   monomorphised, so they cost nothing.
+   - For: binary and text cannot drift apart, so binary → text → binary is equal bytes by
+     construction once each primitive round-trips. RE4 then adds no record code to RE2 or RE3.
+   - Against: text cannot be read without its schema, because a word does not say its type. That
+     is acceptable: the text is for diffing and debugging, not for an untyped reader. A
+     self-describing text would need a second spelling of each record.
+2. *The text `f64` is `Display`, as the brief says, not `{:e}`.*
+   - For: CAD values read naturally (`0.5`, `12.25`), and the spelling is std's shortest
+     round-trip.
+   - Against: values far from 1 are long. 1e-300 has about 300 digits, and random finite bit
+     patterns average 164 bytes per `f64` (MEASURED, below). `{:e}` is also shortest round-trip,
+     and caps a value at about 24 bytes, but `1e0`-style spellings are less readable. *Open
+     question 2.*
+3. *The text reader takes only the canonical spelling.* It checks an `f64` by formatting the
+   parsed value back and comparing, with no allocation (a `fmt::Write` that compares as it goes).
+   - For: it is the only way to keep the 7.4 fixed point for text, since `str::parse` accepts
+     many spellings of one value.
+   - Against: it costs about 64 ns per `f64`, which is most of the text decode (MEASURED). A
+     hand-edited `1.0` is refused. Text is not the fast path, and the binary pays nothing.
+4. *A text tag is its variant's word, not its byte.*
+   - For: the text is readable.
+   - Against: `Tag` needs two maps, by code and by name. The crate's `tags!` macro writes both
+     from one table, and the compiler checks it (a repeated code or name is an unreachable
+     pattern, which `-D warnings` refuses). A hand-written `Tag` must keep its two maps in step.
+5. *The writer is fallible: `Sink::f64` returns `Result<(), WriteError>`.* 63 says non-finite
+   values are always refused, and an `f64` argument can be NaN.
+   - For: the refusal is a value, with no panic and no sticky writer state. The check is one
+     branch per `f64` (binary encode costs 1.6 ns per `f64`).
+   - Against: 63 §7.3's `encode(&Brep) -> Vec<u8>` becomes a `Result`. A body's numbers are
+     finite by construction (the kinds' constructors refuse NaN), so RE3 re-judges `NonFinite`
+     as `Defect` (01 §5.1: a wrapper that proved its data valid). *Open question 1.*
+6. *`BadVersion`'s kind depends on what was found.* A version newer than `FORMAT_VERSION` is
+   `Unsupported`, as 63 says. Version 0 is `Refused`, because no writer writes it. The kind is
+   still computed from the cause, never stored.
+   - For: no new variant for a case no writer makes.
+   - Against: the kind reads a field as well as the variant. Folding 0 into `BadMagic` instead
+     would mislabel it.
+7. *Allocation is bounded by the input.*
+   - A list count larger than the bytes left is `Truncated` before allocating: every entry takes
+     at least one byte, which is a format rule.
+   - A table takes a caller's `limit`. Over it is `TooMany`, kind `Exhausted`, before anything
+     is allocated.
+   - For: a 9-byte table of `u32::MAX` deleted slots would otherwise ask for gigabytes. A fixed
+     cap on input size is a typed limit cause (04, 11-27; p21's `TooMany`).
+   - Against: RE3 must choose the limit, from a `Limits` value its caller passes, as p21 does.
+8. *`Slot` is a wire form only.* The tag `SlotKind { Live, Gap }` is crate-private, and a
+   decoded table is `Vec<Option<R>>`, matching `scx-brep`'s `Table` (01 §2.2: deleted slots
+   stay as `None`). The writer takes any exact-size iterator of `Option<&R>`, so RE3 can pass a
+   table's slots without copying them.
+9. *`Reader`, `Writer`, `Sink`, `Source` and `Tag` are public.*
+   - For: an app can write its own records, such as attributes beside a body, in the same
+     primitives.
+   - Against: they join the semver surface (01 §7.4). Every enum is `#[non_exhaustive]`, every
+     field is private except the two error frames, and `Tag` is a user trait, so it is not
+     sealed. *Open question 3.*
+
+**Deviations from 63 §7.2 and §7.3.**
+
+- `ReadCause` gains `Trailing`, `BadToken { expected }` (text), `NonFinite`, `BadRun` and
+  `TooMany { count, limit }`.
+- `Invalid(Box<FinishCause>)` is not added yet. It lands with RE3, its only producer, and adding
+  it now would pull `scx-brep` into a crate that does not need it yet. `ReadCause` is
+  `#[non_exhaustive]`.
+- `BadMagic` carries nothing, because the text's word is not four bytes.
+- The writers return their output (`Vec<u8>`, `String`) instead of writing into
+  `&mut impl fmt::Write`. A streaming text writer can come later if a caller needs one.
+- `WriteError` is new (decision 5).
+- A text `at` is a byte offset into the `str`.
+
+**Shapes for RE2 and RE3** (sketch, not built):
+
+```rust
+// RE2: each kind's tag from the crate's table; fields through Sink/Source.
+tags! { pub(crate) enum CurveKind: "curve" { Line = 0, "line"; Circle = 1, "circle"; /* ... */ Nurbs = 9, "nurbs"; } }
+fn put_curve(c: &Curve, w: &mut impl Sink) -> Result<(), WriteError>;
+fn take_curve(r: &mut impl Source) -> Result<Curve, ReadError>;   // through the kind's validating constructor
+// ParamDomain: its variant tag, then finite ends only (D1). A refused construction:
+//   ReadCause::Curve { cause: Box<CurveError> } (and Surface, NurbsSurface), keeping the lower kind.
+// RE3:
+pub const BODY: Magic;                                   // b"SCXB"
+pub fn encode(b: &Brep) -> Result<Vec<u8>, EncodeError>;   // NonFinite/TooLong re-judged Defect
+pub fn decode(bytes: &[u8], doc: &Document, limits: Limits) -> Result<Brep, ReadError>;
+pub fn write_text(b: &Brep) -> Result<String, EncodeError>;
+pub fn read_text(s: &str, doc: &Document, limits: Limits) -> Result<Brep, ReadError>;
+// decode: header(BODY) -> match version { 1 => v1(r) }; tables by slots(limits.slots, ..);
+// curve presence checked before Draft::finish (D8); a finish refusal is
+// ReadCause::Invalid(Box<FinishCause>); pcurves stored exactly, never refitted (D10).
+```
+
+**Tests** (`crates/scx-record/tests/primitives.rs`, 11 tests, 3 s in a debug build):
+
+- Round trips of every primitive, for 2000 seeded samples. Each sample holds `u8`, `u16`, `u32`,
+  `u64`, a flag, a hand-written tag, a list of `f64` (random bits and edge values: ±0,
+  subnormals, `MIN`, `MAX`), nested lists and a table with gaps. Each is checked in binary and in
+  text, to the bit, and binary → text → binary and text → binary → text give equal output.
+- `f64` text keeps the bits for 50,000 random finite bit patterns, the edge values, and each
+  power of ten from 1e-320 to 1e308 with its two neighbours.
+- One exact text, to pin the layout.
+- Tables: empty, all gaps, a trailing gap, and gaps between live records.
+- Magic and version, in both encodings: a wrong magic is `BadMagic`. Versions 0, 2 and
+  `u16::MAX` are `BadVersion`, with the kinds of decision 6 and the offsets of the field.
+- Non-finite values: NaN (two payloads), ±inf and a signalling NaN are refused by both writers
+  (with nothing written) and by both readers (`NaN`, `inf`, `infinity` and their signed
+  spellings in text). Inside a record, the error names the field's offset.
+- Canonical text: each non-canonical `f64` and `u32` spelling is refused, as are a second space,
+  the wrong separator, a missing or extra final newline and an unknown tag word.
+- Every byte value as a `bool` and as a tag: only the known codes read.
+- Runs and caps: an empty run, two runs in a row and a run past the end are each `BadRun`. A
+  table of `u32::MAX` slots is `TooMany` (`Exhausted`) before allocation. A list count past the
+  input is `Truncated`.
+- The error frame: Display, `source()`, name, and `size_of::<ReadError>() <= 32`.
+- Corruption, for 5 seeded samples:
+  - every truncation is refused with an offset inside the input;
+  - every single-byte change to every other byte value gives a value or a `ReadError`, never a
+    panic;
+  - every changed input that decodes re-encodes to itself.
+  - Of 127,500 changed binary inputs, 88,494 decode (changes inside numbers); of 553,212 changed
+    texts that are still UTF-8, 4,884 decode.
+
+**Measured** (one core, release, best of 7 over 10⁶ values; local evidence, not committed):
+
+| Primitive | Binary write | Binary read | Text write | Text read |
+|---|---:|---:|---:|---:|
+| `f64`, CAD-like (6 decimals, about 11 B in text) | 1.6 ns (4.9 GB/s) | 1.8 ns (4.4 GB/s) | 60 ns (190 MB/s) | 76 ns (150 MB/s) |
+| `f64`, random finite bits (164 B in text) | 1.4 ns (5.6 GB/s) | 1.8 ns (4.6 GB/s) | 134 ns (1.2 GB/s) | 274 ns (600 MB/s) |
+| tag | 0.55 ns | 0.18 ns | 3.1 ns | 12.3 ns |
+| `u32` | 1.4 ns | 1.6 ns | 22 ns | 18 ns |
+
+- Of a CAD-like text `f64` read, `str::parse` is 16 ns and the canonical check (formatting the
+  value back) is about 64 ns.
+- Nothing existing got slower: the crate is new, and no other crate changed.
+
+**Open questions.**
+
+1. Should `encode(&Brep)` return `Result` (decision 5), or should the body writer take
+   finiteness from the types and write a non-finite value's bits, leaving it to the reader to
+   refuse? The latter has no `Result`, but a body that broke its invariant would write without
+   complaint.
+2. Should text `f64` use `Display` (readable, up to about 330 bytes) or `{:e}` (at most about 24
+   bytes)? Both keep the bits.
+3. Should the primitives be public under semver now, or crate-private until an app asks for them?
+
 ## 8. Prerequisites outside the six crates
 
 - **P0. Finite extents in `scx-num`** (D1 revised; ahead of RE1, BR1, CU1 and SU1). [Ruled 11-27:

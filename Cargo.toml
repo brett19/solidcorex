@@ -11,6 +11,7 @@ members = [
     "crates/scx-surface",
     "crates/scx-ssi",
     "crates/scx-brep",
+    "crates/scx-record",
     "crates/scx-testkit",
     "crates/scx-difftest",
     "crates/scx-bench",
@@ -28,6 +29,7 @@ default-members = [
     "crates/scx-surface",
     "crates/scx-ssi",
     "crates/scx-brep",
+    "crates/scx-record",
     "crates/scx-testkit",
     "xtask",
 ]
