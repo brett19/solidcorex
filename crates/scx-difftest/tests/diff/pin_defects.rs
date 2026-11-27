@@ -3485,3 +3485,149 @@ pub fn surface_jet() -> PinDefect<(crate::t_surface::Spec,), Vec<[f64; 3]>> {
         },
     }
 }
+
+use crate::berns::BernR;
+
+/// One call's roots: the places and whether every root was isolated.
+type RootsOut = (Vec<f64>, bool);
+
+/// `t_bern::bern_roots`'s four calls.
+type FourRoots = (RootsOut, RootsOut, RootsOut, RootsOut);
+
+/// The polynomial with Bernstein coefficients `c` on `[lo, hi]`, exactly, at `g`: its sign.
+fn bern_sign(c: &[Rat], lo: &Rat, hi: &Rat, g: f64) -> Result<i32, String> {
+    let t = (&rat(g)? - lo)
+        .checked_div(&(hi - lo))
+        .ok_or("an empty interval")?;
+    let s = &Rat::one() - &t;
+    let mut b = c.to_vec();
+    while b.len() > 1 {
+        b = b
+            .windows(2)
+            .map(|w| &(&s * &w[0]) + &(&t * &w[1]))
+            .collect();
+    }
+    Ok(b.first().map_or(0, Rat::signum))
+}
+
+/// `g` moved `k` doubles up (`k` negative: down), by the order of the doubles.
+fn ulps_from(g: f64, k: i64) -> f64 {
+    let key = |x: f64| {
+        let b = x.to_bits() as i64;
+        if b < 0 { i64::MIN - b } else { b }
+    };
+    let b = key(g).saturating_add(k);
+    f64::from_bits((if b < 0 { i64::MIN - b } else { b }) as u64)
+}
+
+/// The fewest doubles `k` from `g` within which the exact polynomial changes sign (0 where
+/// `g` is an exact zero), searched in `[lo, hi]` up to `2^40`; `None` past that.
+fn ulps_to_root(c: &[Rat], lo: f64, hi: f64, g: f64) -> Result<Option<i64>, String> {
+    let (rl, rh) = (rat(lo)?, rat(hi)?);
+    let s0 = bern_sign(c, &rl, &rh, g)?;
+    if s0 == 0 {
+        return Ok(Some(0));
+    }
+    let changes = |k: i64| -> Result<bool, String> {
+        for x in [ulps_from(g, -k), ulps_from(g, k)] {
+            if x.is_finite()
+                && x >= lo.min(hi)
+                && x <= lo.max(hi)
+                && bern_sign(c, &rl, &rh, x)? != s0
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    };
+    let mut k = 1_i64;
+    while !changes(k)? {
+        k *= 2;
+        if k > 1 << 40 {
+            return Ok(None);
+        }
+    }
+    let (mut a, mut b) = (k / 2, k);
+    while b - a > 1 {
+        let m = a + (b - a) / 2;
+        if changes(m)? { b = m } else { a = m }
+    }
+    Ok(Some(b))
+}
+
+/// scx's roots of `c` on `[lo, hi]` against the pin's: the same number of places, the same
+/// `isolated`, and every place that differs at least as near an exact sign change of the
+/// polynomial (in doubles) as the pin's.
+fn roots_no_worse(c: &[f64], lo: f64, hi: f64, x: &RootsOut, p: &RootsOut) -> Result<(), String> {
+    if x.0.len() != p.0.len() || x.1 != p.1 {
+        return Err(format!("the shape moved: the pin has {p:?}"));
+    }
+    let exact: Vec<Rat> = c.iter().map(|&v| rat(v)).collect::<Result<_, _>>()?;
+    for (&g, &w) in x.0.iter().zip(&p.0) {
+        if g.to_bits() == w.to_bits() {
+            continue;
+        }
+        let far = |k: Option<i64>| k.unwrap_or(i64::MAX);
+        let (kx, kp) = (
+            ulps_to_root(&exact, lo, hi, g)?,
+            ulps_to_root(&exact, lo, hi, w)?,
+        );
+        if kx.is_none() && kp.is_none() {
+            return Err(format!("neither {g} nor the pin's {w} is near a root"));
+        }
+        if far(kx) > far(kp) {
+            return Err(format!(
+                "{g} is {kx:?} doubles from a root, the pin's {w} {kp:?}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// `bernstein_roots` where a simple root is refined (`t_bern::bern_roots`): the pin bisects
+/// an isolated root from the whole piece for at most 64 halvings, which stop short of
+/// rounding for a root within about `5e-4` of the piece's start (the bracket is then still
+/// `2^-64` of the piece wide). scx refines it by Newton's method, certifies the sign change
+/// four doubles either side and bisects that to rounding. Example (`bern_roots_shapes`): the
+/// line with coefficients `[1e-12, -0.2545316193327256]` has its root at
+/// `1e-12 / 0.2545316193337256 = 3.92878496831807...e-12`; scx answers
+/// `3.928784968318077e-12`, the pin `3.9287849503636535e-12`, `1.4e-8` relatively off. The
+/// check: the same places but for those, the same `isolated`, and every place that moved
+/// at least as near (in doubles) an exact sign change of the input polynomial as the pin's.
+pub fn bern_roots() -> PinDefect<(List<f64>, f64, f64), FourRoots> {
+    PinDefect {
+        reason: "the pin's 64 halvings stop short of rounding near a piece's start",
+        applies: Applies::Disagreeing,
+        check: |(c, lo, hi), r| {
+            let limits = [(48, 4096), (3, 2), (0, 4096), (48, 0)];
+            for (x, (depth, work)) in [&r.0, &r.1, &r.2, &r.3].into_iter().zip(limits) {
+                let p = crate::berns::s::roots(&c.0, *lo, *hi, depth, work);
+                roots_no_worse(&c.0, *lo, *hi, x, &p)?;
+            }
+            Ok(())
+        },
+    }
+}
+
+/// `bernstein_roots` over the recipes' coefficients (`t_bern::bern_roots_shapes`): the same
+/// defect as [`bern_roots`], and the same check.
+pub fn bern_roots_shapes() -> PinDefect<(BernR, usize), (RootsOut, RootsOut, RootsOut)> {
+    PinDefect {
+        reason: "the pin's 64 halvings stop short of rounding near a piece's start",
+        applies: Applies::Disagreeing,
+        check: |(p, d), r| {
+            let c = &p.0.2;
+            let deep = u32::try_from(*d).unwrap_or(u32::MAX);
+            let calls = [
+                (0.0, 1.0, 48, 4096),
+                (-2.0, 0.5, 48, 4096),
+                (0.0, 1.0, deep, *d),
+            ];
+            for (x, (lo, hi, depth, work)) in [&r.0, &r.1, &r.2].into_iter().zip(calls) {
+                let w = crate::berns::s::roots(c, lo, hi, depth, work);
+                roots_no_worse(c, lo, hi, x, &w)?;
+            }
+            Ok(())
+        },
+    }
+}

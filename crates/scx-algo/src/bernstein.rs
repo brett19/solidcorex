@@ -27,7 +27,14 @@
 // products and sums, so the same bits). Errors are `NumError::InvalidInput` with the pin's
 // operation and reasons. `gamma` is `scx_num::certified::gamma`, `Vec3`
 // `scx_num::vector3d::Vec3`. The tests are in the difftest (`t_bern`), checked against exact
-// rationals. Results unchanged bit for bit.
+// rationals. Results unchanged bit for bit, but for `bernstein_roots`' simple roots: where
+// the pin bisects an isolated root from the whole piece (64 de Casteljau evaluations at
+// most), `simple_root` refines it by safeguarded Newton in O(n) a step, certifies it by
+// de Casteljau's signs four units in the last place either side, and bisects between those
+// to rounding, falling back to the pin's bisection where either step fails. The place moves
+// only where the pin's 64 halvings stop short of rounding (a root within about 5e-4 of
+// the piece's start) or the sign of de Casteljau's value changes more than once near the
+// root; the difftest judges those against the exact polynomial (`bern_roots`).
 //! Tensor-product Bernstein polynomials on the unit square: the exact algebra the offset
 //! certificates bound (products, derivatives, subdivision, coefficient bounds), and the
 //! roots of a polynomial in one variable in Bernstein form.
@@ -56,10 +63,14 @@
 //!
 //! [`bernstein_roots`] isolates the roots of a polynomial in one variable by the variation
 //! diminishing property: no sign change in the coefficients means no root, exactly one
-//! means one simple root (found by bisection to rounding), otherwise the halves are
+//! means one simple root (refined by safeguarded Newton, certified by a sign change a few
+//! units in the last place either side and bisected between those to rounding), otherwise
+//! the halves are
 //! searched, to the depth and number of subdivisions [`RootLimits`] allows.
 //!
-//! Deviations: none (new code). Degrees are bounded by [`MAX_DEGREE`].
+//! Deviations: none (new code). Degrees are bounded by [`MAX_DEGREE`]. From the pin's
+//! `bernstein_roots`: a simple root is refined by Newton's method before it is bisected,
+//! which moves it only where it is more exact (the header above).
 
 use scx_num::certified::gamma;
 use scx_num::error::Invalid;
@@ -852,9 +863,9 @@ pub struct Roots {
 }
 
 /// The roots in `[lo, hi]` of the polynomial with Bernstein coefficients `c` there: none
-/// where the coefficients keep one sign, exactly one where they change sign once (found by
-/// bisection to rounding), the end where an end coefficient is zero, otherwise those of each
-/// half, within `limits`.
+/// where the coefficients keep one sign, exactly one where they change sign once (refined
+/// by safeguarded Newton, certified by a sign change and bisected to rounding), the end
+/// where an end coefficient is zero, otherwise those of each half, within `limits`.
 #[must_use]
 pub fn bernstein_roots(c: &[f64], lo: f64, hi: f64, limits: RootLimits) -> Roots {
     let mut places = Vec::new();
@@ -883,21 +894,7 @@ fn roots_in(c: &[f64], lo: f64, hi: f64, depth: u32, work: &mut usize, out: &mut
         return true;
     }
     if changes == 1 && first != 0.0 && last != 0.0 {
-        let mut scratch = Vec::with_capacity(c.len());
-        let (mut a, mut b) = (0.0, 1.0);
-        for _ in 0..64 {
-            let m = 0.5 * (a + b);
-            if !(m > a && m < b) {
-                break;
-            }
-            let value = eval_1d(c, m, &mut scratch);
-            if (value > 0.0) == (first > 0.0) {
-                a = m;
-            } else {
-                b = m;
-            }
-        }
-        out.push(lo + (hi - lo) * 0.5 * (a + b));
+        out.push(lo + (hi - lo) * simple_root(c, first));
         return true;
     }
     if depth == 0 || *work == 0 {
@@ -910,6 +907,147 @@ fn roots_in(c: &[f64], lo: f64, hi: f64, depth: u32, work: &mut usize, out: &mut
     let left = roots_in(&l, lo, mid, depth - 1, work, out);
     let right = roots_in(&r, mid, hi, depth - 1, work, out);
     left && right
+}
+
+/// The most steps [`newton_root`] takes before it gives the root up to bisection.
+const NEWTON_STEPS: usize = 64;
+
+/// How many units in the last place on each side of the refined root the certificate
+/// looks for the sign change.
+const CERTIFICATE_ULPS: usize = 4;
+
+/// The one root in `[0, 1]` of the coefficients `c`, which change sign once and whose ends
+/// `first` and the last are not zero: a safeguarded Newton refinement ([`newton_root`]),
+/// certified by de Casteljau's signs a few units in the last place either side of it
+/// ([`CERTIFICATE_ULPS`]) and bisected between those two to rounding. Where the refinement
+/// gives up or the certificate fails, bisection from the whole of `[0, 1]`. Either way the
+/// place returned lies between two adjacent values at which [`eval_1d`] has the sign of
+/// `first` and not (or the 64 halvings' limit).
+fn simple_root(c: &[f64], first: f64) -> f64 {
+    let mut scratch = Vec::with_capacity(c.len());
+    if let Some(x) = newton_root(c, first) {
+        let (mut a, mut b) = (x, x);
+        for _ in 0..CERTIFICATE_ULPS {
+            a = a.next_down().max(0.0);
+            b = b.next_up().min(1.0);
+        }
+        let side = |v: f64| (v > 0.0) == (first > 0.0);
+        if side(eval_1d(c, a, &mut scratch)) && !side(eval_1d(c, b, &mut scratch)) {
+            return bisect(c, first, a, b, &mut scratch);
+        }
+    }
+    bisect(c, first, 0.0, 1.0, &mut scratch)
+}
+
+/// Bisection of `[a, b]`, at whose ends `c` has the sign of `first` and not, to rounding
+/// (or 64 halvings): the midpoint of the last bracket.
+fn bisect(c: &[f64], first: f64, mut a: f64, mut b: f64, scratch: &mut Vec<f64>) -> f64 {
+    for _ in 0..64 {
+        let m = 0.5 * (a + b);
+        if !(m > a && m < b) {
+            break;
+        }
+        let value = eval_1d(c, m, scratch);
+        if (value > 0.0) == (first > 0.0) {
+            a = m;
+        } else {
+            b = m;
+        }
+    }
+    0.5 * (a + b)
+}
+
+/// The root of `c` (as [`simple_root`] takes it) by Newton's method kept inside a bracket
+/// (Press et al., *Numerical Recipes*, `rtsafe`): a step that leaves the bracket, or that
+/// does not shrink to half the one before, is a bisection instead. It starts where the
+/// control polygon crosses zero and evaluates in O(n) ([`value_and_slope`]). `None` where
+/// a coefficient is not finite, the degree is past the binomial table, or the steps run
+/// out; the caller then bisects.
+fn newton_root(c: &[f64], first: f64) -> Option<f64> {
+    if c.len() > 2 * MAX_DEGREE + 1 || !c.iter().all(|x| x.is_finite()) {
+        return None;
+    }
+    let side = |v: f64| (v > 0.0) == (first > 0.0);
+    let (mut a, mut b) = (0.0_f64, 1.0_f64);
+    let mut x = polygon_crossing(c, first).unwrap_or(0.5);
+    let mut step_before = 1.0_f64;
+    for _ in 0..NEWTON_STEPS {
+        let (v, d) = value_and_slope(c, x);
+        if v == 0.0 {
+            return Some(x);
+        }
+        if side(v) {
+            a = x;
+        } else {
+            b = x;
+        }
+        let step = v / d;
+        let newton = x - step;
+        let next = if newton > a && newton < b && 2.0 * step.abs() <= step_before.abs() {
+            newton
+        } else {
+            0.5 * (a + b)
+        };
+        if !(next > a && next < b) {
+            // `a` and `b` are adjacent
+            return Some(x);
+        }
+        step_before = next - x;
+        if step_before.abs() <= 2.0 * (next.next_up() - next) {
+            return Some(next);
+        }
+        x = next;
+    }
+    None
+}
+
+/// Where the control polygon of `c` first leaves the sign of `first`: between the last
+/// coefficient of that sign and the next, `(i + c_i / (c_i - c_(i+1))) / n`, if inside
+/// `(0, 1)`.
+fn polygon_crossing(c: &[f64], first: f64) -> Option<f64> {
+    let n = (c.len() - 1) as f64;
+    let side = |v: f64| (v > 0.0) == (first > 0.0);
+    let (i, w) = c
+        .windows(2)
+        .enumerate()
+        .find(|(_, w)| matches!(**w, [p, q] if side(p) && !side(q)))?;
+    let [p, q] = *w else {
+        return None;
+    };
+    let t = (i as f64 + p / (p - q)) / n;
+    (t > 0.0 && t < 1.0).then_some(t)
+}
+
+/// The value and the derivative at `t` in `[0, 1]` of the Bernstein coefficients `c` (at
+/// least two, degree within the binomial table) in O(n): Horner's rule on the scaled
+/// basis, `v_k = v_(k-1) (1 - t) + C(n, k) t^k c_k`, which sums `C(n, k) t^k (1 - t)^(n-k)
+/// c_k` without a division (Schumaker and Volk 1986, CAGD 3(2)); the derivative the same
+/// over `n (c_(k+1) - c_k)` at degree `n - 1`. Every term is a product of non-negative
+/// factors and a coefficient, so the rounding is of de Casteljau's order.
+fn value_and_slope(c: &[f64], t: f64) -> (f64, f64) {
+    let n = c.len() - 1;
+    let s = 1.0 - t;
+    let rows = pascal();
+    let (Some(row), Some(row_d)) = (rows.get(n), n.checked_sub(1).and_then(|m| rows.get(m))) else {
+        return (f64::NAN, f64::NAN);
+    };
+    let mut v = c.first().copied().unwrap_or(0.0);
+    let mut d = 0.0;
+    let mut tk = 1.0;
+    for (k, ((w, &cn), &cd)) in c.windows(2).zip(row.iter().skip(1)).zip(row_d).enumerate() {
+        let [p, q] = *w else {
+            break;
+        };
+        // `tk` is t^k here: the derivative's term k, then the value's term k + 1
+        d = if k == 0 {
+            q - p
+        } else {
+            d * s + cd * tk * (q - p)
+        };
+        tk *= t;
+        v = v * s + cn * tk * q;
+    }
+    (v, n as f64 * d)
 }
 
 /// The Bernstein coefficients of the polynomial `c` on `[0, 1/2]` and `[1/2, 1]`.

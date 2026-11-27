@@ -150,25 +150,33 @@ diff!(bern_product_rounding_extreme, || {
     )
 });
 
-diff!(bern_roots, |c: List<f64>, lo: f64, hi: f64| {
-    let c = &c.0;
-    (
-        m::bern::roots(c, lo, hi, 48, 4096),
-        m::bern::roots(c, lo, hi, 3, 2),
-        m::bern::roots(c, lo, hi, 0, 4096),
-        m::bern::roots(c, lo, hi, 48, 0),
-    )
-});
+diff!(
+    bern_roots,
+    pin_defect = crate::pin_defects::bern_roots,
+    |c: List<f64>, lo: f64, hi: f64| {
+        let c = &c.0;
+        (
+            m::bern::roots(c, lo, hi, 48, 4096),
+            m::bern::roots(c, lo, hi, 3, 2),
+            m::bern::roots(c, lo, hi, 0, 4096),
+            m::bern::roots(c, lo, hi, 48, 0),
+        )
+    }
+);
 
-diff!(bern_roots_shapes, |p: BernR, d: usize| {
-    // each recipe's coefficients as one polynomial, on [0, 1] and on a shifted interval
-    let c = &p.0.2;
-    (
-        m::bern::roots(c, 0.0, 1.0, 48, 4096),
-        m::bern::roots(c, -2.0, 0.5, 48, 4096),
-        m::bern::roots(c, 0.0, 1.0, u32::try_from(d).unwrap_or(u32::MAX), d),
-    )
-});
+diff!(
+    bern_roots_shapes,
+    pin_defect = crate::pin_defects::bern_roots_shapes,
+    |p: BernR, d: usize| {
+        // each recipe's coefficients as one polynomial, on [0, 1] and on a shifted interval
+        let c = &p.0.2;
+        (
+            m::bern::roots(c, 0.0, 1.0, 48, 4096),
+            m::bern::roots(c, -2.0, 0.5, 48, 4096),
+            m::bern::roots(c, 0.0, 1.0, u32::try_from(d).unwrap_or(u32::MAX), d),
+        )
+    }
+);
 
 diff!(bern_roots_known, |k: usize| {
     // products of (s - r) with dyadic roots r, close pairs and double roots among them
