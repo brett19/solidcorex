@@ -2261,114 +2261,6 @@ The 19 recipes the classification entry selects without a mismatch on their poin
 
 **Proposed 04 row.** "DT1 (72 §14.13): `t_slice` runs every T12 recipe in the pin and in scx at `c = 1e-5`, judges each against truth (outcome, volume, area, topology with patches, classification of about 2,000 seeded and on-purpose points, validity, lineage, no dangling vertices, run-twice determinism) and records the pin's contradictions as `pin_defects::slice` entries with input predicates (4 entries cover 43 findings). scx answers typed `NotYet` for everything but blocks. About 40 s in release. Change if: a pin contradiction appears that no entry covers, or truth's band leaves fewer than 95% of points certain on a recipe that is not a few `c` across."
 
-### 14.15 TS1 as built (11-27)
-
-New crate `crates/scx-tess` (dependencies `scx-brep`, `scx-curve`, `scx-num`, `scx-nurbs`, `scx-surface`; dev-dependency `scx-make`). Public API:
-
-```rust
-pub struct TessSpec { /* chord, resolution, angle, edge_length */ }
-impl TessSpec {
-    pub fn new(chord: Length, resolution: Resolution) -> Result<Self, TessError>;
-    pub fn with_angle(self, radians: f64) -> Result<Self, TessError>;
-    pub fn with_edge_length(self, length: Length) -> Result<Self, TessError>;
-    pub const fn chord(&self) -> Length; // also resolution(), angle(), edge_length()
-}
-pub struct Mesh {
-    pub positions: Vec<Point3>, pub triangles: Vec<[u32; 3]>, pub normals: Vec<[Vec3; 3]>,
-    pub face_of: Vec<FaceId>, pub edges: Vec<EdgePolyline>, pub chord_bound: Vec<(FaceId, Length)>,
-}
-pub struct EdgePolyline { pub edge: EdgeId, pub points: Vec<u32>, pub chord: Length }
-pub struct EdgeSamples { /* params(), points(), chord(), segments() */ }
-pub fn sample_edge(edge: Edge<'_>, spec: &TessSpec, budget: &mut Budget, stop: &Stop) -> Result<EdgeSamples, TessError>;
-pub fn wireframe(body: &Brep, spec: &TessSpec, budget: &mut Budget, stop: &Stop) -> Result<Mesh, TessError>;
-#[non_exhaustive] pub enum TessError { Refused(TessRefusal), Unsupported(TessUnsupported), Exhausted { limit: u64 }, Cancelled, Defect(TessDefect) }
-#[non_exhaustive] pub enum TessRefusal { Chord { value }, Angle { value }, EdgeLength { value }, Resolution { spec, body }, TooFine { edge, needed } }
-#[non_exhaustive] pub enum TessUnsupported { EdgeKind { edge, kind: CurveKind }, FaceKind { face, kind: SurfaceKind }, NoBound { edge } }
-#[non_exhaustive] pub enum TessDefect { Sagitta { edge }, Unindexed { edge } }
-```
-
-`TessError` has `kind()` (an `ErrorKind`) and `name()` (a stable snake-case name), `From<Exhausted>` and `From<Stopped>`. `tessellate` is not here: TS2 and TS3 add it on top of `sample_edge`, and `wireframe` is its edge half (`triangles`, `normals`, `face_of` and `chord_bound` empty).
-
-**What it does.** `sample_edge` reads only the edge: its curve and interval, its ends, and the surfaces of the faces that use it. The count is the largest of the curve's own need and each face's need, and a maximum is the same in any order, so two faces meeting at an edge get the same samples bit for bit (§6.2 item 1, §9 row 8). `wireframe` lists the live vertices in id order, then each edge's interior samples in edge id order; each polyline runs from its start vertex's index through its samples to its end vertex's index, so a closed edge starts and ends at one index and a collapsed edge is its vertex twice.
-
-- **Line:** one segment, or `ceil(len / edge_length)`.
-- **Circle**, radius `r`, step `h`: the sagitta `2 r sin²(h/4)` in closed form. The step is the least of `4 asin(sqrt(c / 2r))`, a quarter turn, the angle bound, `edge_length / r` and `L_f / r`, and `n = ceil(span / step)`. A post-check evaluates the sagitta at `n` and bumps `n` up to 4 times; a miss after that is `Defect(Sagitta)` (never seen).
-- **Ellipse**, semi-axes `a ≥ b`: the affine image of a circle, so a chord over `h` stays within `a (1 − cos(h/2))` of the arc, each way; the tangent turns at most `a/b` per radian. The count is the circle's with `a`, and the angle step divided by `a/b`.
-- **NURBS:** split at every distinct interior knot. Per knot span, interval enclosures (`jet_over::<Ivl, 2>`) give `M1 ≥ |C'|`, `m1 ≤ |C'|`, `M2 ≥ |C''|`, and a chord over a parameter step `s` stays within `M2 s² / 8`. The raw count of a span is the largest of `h sqrt(M2 / 8c)`, `h M1 / L_f`, `h M1 / edge_length` and, with an angle set, `h M2 / (m1 angle)` (infinite when `m1` may be 0). `grow` bisects a span while that lowers its count; `merge` joins neighbouring leaves left to right while the joined count is no more than the two apart. A non-finite count is `Unsupported(NoBound)`. The reported chord is the largest `M2 s² / 8` over the pieces.
-- **A face's need** is a longest segment `L_f = min(sqrt(8c / κ_f), angle / κ_f)`, with `κ_f` the face's largest normal curvature: `1/r` for a sphere, `max(1/r, 1/(R − r))` for a torus (§12.4 row 6), none for a plane, cylinder or cone. A NURBS face (or any other kind) is `Unsupported(FaceKind)`.
-- **Least counts:** a non-line edge has at least 2 segments, a closed one at least 3 (a NURBS edge reaches them by splitting its widest piece). Past `u32::MAX / 4` segments is `Refused(TooFine)`.
-- **Budget and stop** (§12.4 row 6): one unit per segment and per NURBS enclosure; the stop is checked per edge.
-
-**Decisions, with cases.**
-- **Budget and `Stop` now, not at step 5** (against §6.2 item 6, with §12.4 row 6). For: §12.4 row 6 rules the signature with both, and an edge count can be huge at a fine chord. Against: a closed-form count is cheap and cannot loop. Kept: one signature from the start.
-- **Normals per triangle corner** (`Vec<[Vec3; 3]>`, against §6.3's per position). For: a position shared across a sharp edge carries one normal per face, and sharing is what makes the mesh watertight. Against: three times the memory, and a viewer wants per-vertex arrays. Kept: a viewer can split positions from this, while a shared normal could not be split back.
-- **Layer: after `scx-make`, last of the library crates** (against §11's order, which puts `scx-tess` before `scx-mass` and `scx-make`). For: a crate may depend, even as a dev-dependency, only on crates above it, and the tests build MK2 bodies. Against: a mesher does not need constructors, and a later crate (a viewer query, `scx-check`) may want to sit between. Kept: no normal dependency of tess is below `scx-brep`, so the order can be relaxed later without code changes.
-- **`κ_f` none for a plane, cylinder or cone.** For: they are developable, and along an edge their normal curvature never exceeds the edge curve's own curvature, which the curve's count already holds. Against: a cylinder's curvature across the edge is `1/r`. Kept, with a condition for TS3: its per-triangle test on these kinds must use the developable bound (the chord across a ruling), not `L_f`.
-- **No quarter-turn floor for NURBS.** For: the enclosed turn `M2 / m1` is loose, and a free floor on it raised a rational circle's count to 136 against the exact circle's 23. Against: a conic has the floor (the pin's `QUARTER_TURN`), so a NURBS circle and an exact one differ. Kept: a caller wanting a turn limit sets an angle, and that bound is then honoured for every kind.
-- **`LEAF = 2.0`, `GAIN = 0.95`, `MAX_DEPTH = 12`** for `grow`. For: an enclosure costs about 2-3.5 us and a segment about 30 ns (below), so halving enclosures is worth a few more segments; at `LEAF = 1` the rational circle r 1, c 1e-3 took 92 segments and 252 enclosures, at 2 it takes 108 and 124; at r 10 and r 100 the segment count is the same and the enclosures fall from 748 to 508 and 1788 to 1020. Against: TS3's interior points grow with the edge count, so fewer segments may pay later. Kept, to re-tune when TS3 measures faces.
-- **The merge rule** (join while `ceil(joined) ≤ ceil(left) + ceil(right)`). For: it never adds a segment, and joined runs give equal steps. Against: it is greedy and left to right, so not optimal. Kept: deterministic, and it removes the split cost of `grow`.
-- **Least counts 2 and 3.** For: a curved edge in one segment, or a closed edge in two, gives faces that fold onto themselves in TS3. Against: for a tiny curved edge a single segment already holds the chord. Kept: TS3 triangulates from these.
-- **`TooFine` is a refusal**, not `Exhausted`. For: the count is past what a `u32` index can hold, whatever the budget. Against: it is a size the caller cannot always predict. Kept: the caller chose the chord, and the error names the edge and the count.
-- **Parabola and hyperbola are `Unsupported(EdgeKind)`.** No constructor makes them yet; closed forms can follow when one does.
-
-**Tests.** Unit (12, `src/edge.rs`): circle counts hold the chord and one fewer would not; no circle segment turns past a quarter; angle and length bounds refine a circle; ellipse counts hold the chord, the densely sampled gap within the bound and at least half of it; a rational circle holds the chord against the exact circle, with fewer than 2.5 times its segments; a cubic holds the chord by dense sampling, its interior knot a sample; a stationary NURBS end bounds the chord but refuses an angle (`NoBound`); a count past the index space is `TooFine`; a parabola is `EdgeKind`; a line is one segment unless a length asks; the budget is charged per segment and per enclosure; a face's need is the same in either order. Integration (9, `tests/wire.rs`, on the block, cylinder, frustum, apex cone, sphere and torus, at the world frame and a tilted one): polylines run from their start vertex's index to their end vertex's, closed edges close, collapsed edges are `[v, v]`, every position is a vertex or one edge's sample; every sample lies on each adjacent face through its pcurve at the same parameter, within the zone; every circle edge lies on its circle, its largest midpoint radial gap within the reported chord, and its count equals the closed form (cylinder and frustum r 10: 71, frustum r 4: 45, apex cone r 6: 55, sphere seam r 7: 30 (face-limited), torus equator r 15: 193 (face-limited, `L_f = sqrt(8 c 3)`), meridian r 3: 39); two runs are equal bit for bit; a finer chord never gives fewer points; spec refusals (chord 0, negative, NaN, infinite, the zone; angle and edge length); another resolution is `Refused(Resolution)`; angle and edge-length bounds refine counts; `Budget::new(100)` is `Exhausted`, a set stop is `Cancelled`, and the torus charges exactly 193 + 39. No pin test is ported or removed: the pin's tessellation tests are TS3's (§6.5).
-
-**Measurements** (throwaway timer, not committed; release build, 2,000 repetitions of `wireframe`, world frame; the machine is shared, so a run can vary by tens of percent):
-
-| body | c 0.1 | c 0.01 | c 0.001 |
-|---|---|---|---|
-| block | 8 pts, 1.0 us | 8 pts, 0.5 us | 8 pts, 0.6 us |
-| cylinder r10 h20 | 46 pts, 2.0 us | 142 pts, 4.2 us | 446 pts, 12.3 us |
-| frustum 10-4 h15 | 38 pts, 1.4 us | 116 pts, 3.6 us | 364 pts, 9.7 us |
-| sphere r7 | 11 pts, 0.5 us | 31 pts, 1.1 us | 94 pts, 2.5 us |
-| torus 12, 3 | 73 pts, 2.3 us | 231 pts, 6.6 us | 730 pts, 18.2 us |
-
-About 25-30 ns per point on conic edges. NURBS (unit tests' curves): 0.1-1.5 ms per edge, about 2-3.5 us per enclosure; a rational circle r 1 takes 48 segments at c 0.01 (exact: 23), 108 at 1e-3 (exact: 71), and at r 100, c 1e-3, 804 (exact: 703). A cubic takes 17, 43 and 128 segments at c 0.1, 0.01 and 1e-3 with 18, 50 and 104 enclosures. Added work against the pin: none comparable yet; the pin samples edges inside face planning, and the conic counts here are closed forms with one sagitta check.
-
-**Deviations from 72.** Budget and `Stop` (above, §12.4 row 6 over §6.2); per-corner normals; the layer; `EdgePolyline` carries its chord; `wireframe` and `sample_edge` are public, `tessellate` waits for TS2.
-
-**Open questions.**
-1. TS3's per-triangle test: the developable bound for cylinder and cone, and for sphere and torus the triangle's smallest enclosing circle radius against `L_f`.
-2. A curvature bound for rational NURBS edges: `|C''|` holds the parametrisation's own acceleration, which is why a rational circle takes about 1.1-2.1 times the exact circle's segments. A bound on curvature and arc length (step 5) would close that.
-3. `FaceKind` has no integration test: no body with a NURBS face can be made on main yet.
-
-**Proposed 04 row.** "`scx-tess` (TS1): edge samples are a pure function of the edge, the count the largest of the curve's need and each adjacent face's need `L_f = sqrt(8c / κ_f)`; circle and ellipse counts in closed form, NURBS from interval enclosures of `C'` and `C''` per knot span; the chord is a proved bound reported per polyline; no NURBS quarter-turn floor; budget and stop on every entry; normals per triangle corner; `scx-tess` sits after `scx-make`. Change if: TS3's per-triangle test needs a different face need, or step 5 brings a curvature bound for rational edges."
-
-### 14.17 MA2 as built (11-27)
-
-`scx-mass` closes a face onto its edges for each use whose pcurve carries a recorded accuracy (`Use::bound`), through `face::pieces` (where MA1's `join` runs); a use with none is unchanged. New module `crates/scx-mass/src/closure.rs`; new testkit generator `scx_testkit::bodies::loose`. No public mass API changed.
-
-**The method (the pin's #16735, `gap_closure`).** A pcurve with a recorded bound lies within the bound of its edge, not on it, so two faces of an edge leave a gap and the divergence theorem's fields leak through it, to first order in the bound and differently at each reference. Each such use gets a **strip**, the ruled surface from `P(t) = S(p(t))` to the edge's curve `E(t)`, and each corner of the loop beside one a **fan** over the polygon `P_end, E_end, vertex, E_start, P_start` from its centroid. The faces then share the edges and vertices and bound one closed surface. Both are fluxes of the volume integrands only (`Set::volume_start`): the area is the face's own and gets nothing. The strips are integrated along `t` by the face's own step control (K7, a tenth of the accuracy, the same pieces as the use's Green integral plus the edge's NURBS knots); the ruling is taken by the 3-point Gauss rule, exact for the degree 4 integrands.
-
-**Decisions, with cases for and against.**
-
-- **The correspondence is `t = t`, not a nearest-point grid.** The pin marches 64 nearest points from the trim to the edge and keeps a table. A use's pcurve runs over the edge's own interval and its recorded claim is `|S(p(t)) - C(t)|` at the same `t` (`Claim::PcurveOnSurface`), so `E(t)` is the partner the record states. For: no search, no table, no `correspondence_bends`/`polynomial_strip` special case; a planar use is one K7 piece (7 evaluations); the closed surface is exactly the one the bound speaks of. Against: a recorded bound that is true but whose parameters slip (a pcurve fitted with a different speed) gives an oblique strip, a larger but still closed one; the nearest point would give a thinner strip. The tube term below covers the width the bound states, and `loose` slips parameters on purpose (a half-offset along the pcurve on every second use) and closes exactly on planar faces. Change if a producer records a bound that holds only by nearest point.
-- **Closed uses are those with `Use::bound`, not edge or vertex accuracy.** The use's bound is the one that says the pcurve may be off its edge; `finish` allows a use end off its vertex by `use + edge + vertex` accuracy. For: the use's own bound is the pcurve's gap and nothing else's. Against: a use with no bound beside a vertex with a recorded accuracy (a merge that moved a point) has its end off that vertex by up to the vertex's bound, and is not closed there. The rule in 72 §12.1 row 3 names "a gap recorded"; the pcurves such a merge moves would record theirs. Open: confirm when BO's merge exists.
-- **A corner is closed when either neighbour is.** The unclosed neighbour contributes its pcurve end as both its pcurve and its edge point (it is exact). No corner with neither is made, so a body with none pays nothing.
-- **The pin's gap cones are not made.** A straight uv piece `join` adds (a pole's line, or the gap between two recorded pcurve ends) is part of the face's boundary; the pin closes it onto the vertex by a cone and a corner on each side. Here the corner polygon closes with the chord from `P_start` to `P_end`, which cancels the face's own straight piece exactly on a plane and differs by a sliver of order `gap^2 kappa` elsewhere, inside the ball term below. For: one fan per corner, no extra sides. Against: not watertight to the second order in the gap on a curved surface.
-- **The closure's error enters the result.** (1) The strips' Kronrod-Gauss estimates add to the face's error as every piece's do. (2) The tube between the recorded surface and the closed one is added by the divergence of each component's field over that volume: `pi tol^2 L` per closed use (`L` the edge's 16-sample polyline length, `tol` the use's bound) and `4/3 pi tol^3` per corner, times `c R^(a+b+c-1)` for the monomial `x^a y^b z^c n_z`, `R` the face box's longest side (0 for `c = 0`: its field is divergence free). For: the stated error is what the closed surface can differ from the recorded one by, as the pin's doc states (`sum pi tol^2 L`), not only the integration's. Against: it is conservative (the cylinder at offset 1e-3 states 1.1e-4 for a miss of 0, since the planar and vertical strips are exact); and the 16-sample length and `R = size` are estimates, as the crate's other errors are. The area terms get none.
-- **`Set::Area` does no closure.** `area`, `face_area` read no strips and no corner; the volume group does.
-
-**The testkit body (`bodies::loose(kind, seed, size, offset)`).** A valid body of `kind` with every line, constant-`v` angle line and circle pcurve moved off its edge: along the loop's left normal by `offset` (a circle by its radius), and by half as much along the pcurve on every second use of a loop; each moved use records the largest distance it measured by 24 samples, rounded up 0.1 percent (`Basis::Measured`), and the others stay exact. `finish` accepts it under the default resolution because the bound says the pcurve may be off; with the bounds forgotten it needs a resolution of the offset (the tests do that to read the unclosed body), which is the check the `Use::bound` exists to satisfy.
-
-**Tests** (`crates/scx-mass/tests/closure.rs`, 5):
-
-- `a_loose_block_closes_to_its_closed_form`: offsets 1e-2, 2e-2, 1e-4: volume, first and second moments equal `solid::block` within 1e-12 (the strips and fans lie in each face's plane, so they close exactly, corners included: the slip leaves the pcurve ends apart, so the fans are not degenerate); the unclosed body leaks at least half the offset; the result about another reference is the same.
-- `a_cubes_strips_close_in_one_piece_per_edge_use` (the port of the pin's `a_cubes_strips_close_in_one_piece_per_edge_use`): the closure adds exactly 24 x 7 evaluations to `volume`.
-- `an_exact_body_pays_nothing`: a valid block's `volume` is 798 evaluations, MA1's figure.
-- `a_loose_curved_body_holds_within_its_stated_error` (the cylinder's strips in `a_cylinders_strips_keep_the_grid`, a cone beside it): within 1e-12 of the closed form, the stated error covers the miss, the unclosed body leaks at least a tenth of the offset, and the closure's tube makes the stated error more than ten times the exact body's.
-- `an_exact_pcurve_off_its_edge_is_refused_by_finish` (A8, 72 §10): `broken(PcurveOffEdge)` is refused by `finish`, so a pcurve with no recorded accuracy that is off its edge is a defect found there, not a gap mass closes.
-
-**Not ported, on purpose.** `an_edge_off_its_trims_...`: it reads the pin's tolerant-edge builder, which has no counterpart; the cylinder's circles (exact beside moved lines) and the cone's apex corner cover an edge whose two uses differ. The corpus parity test needs the benchmark corpus (step 6).
-
-**Measurements** (bit-identical before and after: the 84 lines of `mass` over every generated kind at sizes 1 to 3 at accuracy 1e-6 and 1e-9, printed with `{:?}` and the work charged, before and after the change, are equal). Cost where a use records an accuracy: 7 K7 evaluations per planar use (24 for a cube's `volume`, 168 of 966), a corner fan costs none charged (its integral is exact). Cost where none does: a `Use::bound` read per use and nothing else.
-
-**Deviations from 72.** None in signature; §2.2's "gap closure onto the edge's curve" is by `t = t`, not nearest point (above).
-
-**Open questions.** (1) Whether a vertex's or an edge's recorded accuracy alone (no use bound) should close its uses (above). (2) The 1.1e-4 stated against a miss of 0 on the cylinder: a tighter tube bound needs the strip's width per use, which the use's bound already is; what would tighten it is the divergence of the field over the actual swept volume, not `c R^(d-1)`. (3) `loose` moves no pcurve of a sphere's lunes or a torus's patches (angle lines along `v`, and the `finish` pole and seam rules refuse larger offsets); a closure on a pole needs a producer that records one.
-
-**Proposed 04 row.** "`scx-mass` (MA2): a use whose pcurve records an accuracy is closed onto its edge's curve by a strip, `E(t)` against `S(p(t))` at the same `t`, and a fan at each corner beside one, in the volume terms only; the strips' integration error and the tube `pi tol^2 L` (a ball at a corner) are in the stated error; a use with none costs nothing and the results are bit-identical. Change if a producer records a bound that holds only by nearest point, or a vertex's accuracy alone must close its uses."
-
 ### 14.14 BQ1 as built (11-27)
 
 New crate `crates/scx-bodyq`, placed last in `layers.txt` (after `scx-tess`) and after `scx-tess` in the workspace. Dependencies: `scx-brep`, `scx-curve`, `scx-nurbs` (for `Approach`), `scx-num`, `scx-surface`; dev-dependencies `scx-make` and `scx-testkit` with `bodies`. Public API:
@@ -2508,3 +2400,111 @@ Added work against the pin: none. The pin builds trim trees and fires up to six 
 - Else the nearest boundary point's face side, or the angle-weighted pseudonormal at an edge or vertex.
 
 Answers and work are deterministic and independent of which clean ray decides. Change if: a body defeats every ray off a measure-zero set, or a trimmed torus or ellipse arc puts a nearer interior local minimum under the fallback."
+
+### 14.15 TS1 as built (11-27)
+
+New crate `crates/scx-tess` (dependencies `scx-brep`, `scx-curve`, `scx-num`, `scx-nurbs`, `scx-surface`; dev-dependency `scx-make`). Public API:
+
+```rust
+pub struct TessSpec { /* chord, resolution, angle, edge_length */ }
+impl TessSpec {
+    pub fn new(chord: Length, resolution: Resolution) -> Result<Self, TessError>;
+    pub fn with_angle(self, radians: f64) -> Result<Self, TessError>;
+    pub fn with_edge_length(self, length: Length) -> Result<Self, TessError>;
+    pub const fn chord(&self) -> Length; // also resolution(), angle(), edge_length()
+}
+pub struct Mesh {
+    pub positions: Vec<Point3>, pub triangles: Vec<[u32; 3]>, pub normals: Vec<[Vec3; 3]>,
+    pub face_of: Vec<FaceId>, pub edges: Vec<EdgePolyline>, pub chord_bound: Vec<(FaceId, Length)>,
+}
+pub struct EdgePolyline { pub edge: EdgeId, pub points: Vec<u32>, pub chord: Length }
+pub struct EdgeSamples { /* params(), points(), chord(), segments() */ }
+pub fn sample_edge(edge: Edge<'_>, spec: &TessSpec, budget: &mut Budget, stop: &Stop) -> Result<EdgeSamples, TessError>;
+pub fn wireframe(body: &Brep, spec: &TessSpec, budget: &mut Budget, stop: &Stop) -> Result<Mesh, TessError>;
+#[non_exhaustive] pub enum TessError { Refused(TessRefusal), Unsupported(TessUnsupported), Exhausted { limit: u64 }, Cancelled, Defect(TessDefect) }
+#[non_exhaustive] pub enum TessRefusal { Chord { value }, Angle { value }, EdgeLength { value }, Resolution { spec, body }, TooFine { edge, needed } }
+#[non_exhaustive] pub enum TessUnsupported { EdgeKind { edge, kind: CurveKind }, FaceKind { face, kind: SurfaceKind }, NoBound { edge } }
+#[non_exhaustive] pub enum TessDefect { Sagitta { edge }, Unindexed { edge } }
+```
+
+`TessError` has `kind()` (an `ErrorKind`) and `name()` (a stable snake-case name), `From<Exhausted>` and `From<Stopped>`. `tessellate` is not here: TS2 and TS3 add it on top of `sample_edge`, and `wireframe` is its edge half (`triangles`, `normals`, `face_of` and `chord_bound` empty).
+
+**What it does.** `sample_edge` reads only the edge: its curve and interval, its ends, and the surfaces of the faces that use it. The count is the largest of the curve's own need and each face's need, and a maximum is the same in any order, so two faces meeting at an edge get the same samples bit for bit (§6.2 item 1, §9 row 8). `wireframe` lists the live vertices in id order, then each edge's interior samples in edge id order; each polyline runs from its start vertex's index through its samples to its end vertex's index, so a closed edge starts and ends at one index and a collapsed edge is its vertex twice.
+
+- **Line:** one segment, or `ceil(len / edge_length)`.
+- **Circle**, radius `r`, step `h`: the sagitta `2 r sin²(h/4)` in closed form. The step is the least of `4 asin(sqrt(c / 2r))`, a quarter turn, the angle bound, `edge_length / r` and `L_f / r`, and `n = ceil(span / step)`. A post-check evaluates the sagitta at `n` and bumps `n` up to 4 times; a miss after that is `Defect(Sagitta)` (never seen).
+- **Ellipse**, semi-axes `a ≥ b`: the affine image of a circle, so a chord over `h` stays within `a (1 − cos(h/2))` of the arc, each way; the tangent turns at most `a/b` per radian. The count is the circle's with `a`, and the angle step divided by `a/b`.
+- **NURBS:** split at every distinct interior knot. Per knot span, interval enclosures (`jet_over::<Ivl, 2>`) give `M1 ≥ |C'|`, `m1 ≤ |C'|`, `M2 ≥ |C''|`, and a chord over a parameter step `s` stays within `M2 s² / 8`. The raw count of a span is the largest of `h sqrt(M2 / 8c)`, `h M1 / L_f`, `h M1 / edge_length` and, with an angle set, `h M2 / (m1 angle)` (infinite when `m1` may be 0). `grow` bisects a span while that lowers its count; `merge` joins neighbouring leaves left to right while the joined count is no more than the two apart. A non-finite count is `Unsupported(NoBound)`. The reported chord is the largest `M2 s² / 8` over the pieces.
+- **A face's need** is a longest segment `L_f = min(sqrt(8c / κ_f), angle / κ_f)`, with `κ_f` the face's largest normal curvature: `1/r` for a sphere, `max(1/r, 1/(R − r))` for a torus (§12.4 row 6), none for a plane, cylinder or cone. A NURBS face (or any other kind) is `Unsupported(FaceKind)`.
+- **Least counts:** a non-line edge has at least 2 segments, a closed one at least 3 (a NURBS edge reaches them by splitting its widest piece). Past `u32::MAX / 4` segments is `Refused(TooFine)`.
+- **Budget and stop** (§12.4 row 6): one unit per segment and per NURBS enclosure; the stop is checked per edge.
+
+**Decisions, with cases.**
+- **Budget and `Stop` now, not at step 5** (against §6.2 item 6, with §12.4 row 6). For: §12.4 row 6 rules the signature with both, and an edge count can be huge at a fine chord. Against: a closed-form count is cheap and cannot loop. Kept: one signature from the start.
+- **Normals per triangle corner** (`Vec<[Vec3; 3]>`, against §6.3's per position). For: a position shared across a sharp edge carries one normal per face, and sharing is what makes the mesh watertight. Against: three times the memory, and a viewer wants per-vertex arrays. Kept: a viewer can split positions from this, while a shared normal could not be split back.
+- **Layer: after `scx-make`, last of the library crates** (against §11's order, which puts `scx-tess` before `scx-mass` and `scx-make`). For: a crate may depend, even as a dev-dependency, only on crates above it, and the tests build MK2 bodies. Against: a mesher does not need constructors, and a later crate (a viewer query, `scx-check`) may want to sit between. Kept: no normal dependency of tess is below `scx-brep`, so the order can be relaxed later without code changes.
+- **`κ_f` none for a plane, cylinder or cone.** For: they are developable, and along an edge their normal curvature never exceeds the edge curve's own curvature, which the curve's count already holds. Against: a cylinder's curvature across the edge is `1/r`. Kept, with a condition for TS3: its per-triangle test on these kinds must use the developable bound (the chord across a ruling), not `L_f`.
+- **No quarter-turn floor for NURBS.** For: the enclosed turn `M2 / m1` is loose, and a free floor on it raised a rational circle's count to 136 against the exact circle's 23. Against: a conic has the floor (the pin's `QUARTER_TURN`), so a NURBS circle and an exact one differ. Kept: a caller wanting a turn limit sets an angle, and that bound is then honoured for every kind.
+- **`LEAF = 2.0`, `GAIN = 0.95`, `MAX_DEPTH = 12`** for `grow`. For: an enclosure costs about 2-3.5 us and a segment about 30 ns (below), so halving enclosures is worth a few more segments; at `LEAF = 1` the rational circle r 1, c 1e-3 took 92 segments and 252 enclosures, at 2 it takes 108 and 124; at r 10 and r 100 the segment count is the same and the enclosures fall from 748 to 508 and 1788 to 1020. Against: TS3's interior points grow with the edge count, so fewer segments may pay later. Kept, to re-tune when TS3 measures faces.
+- **The merge rule** (join while `ceil(joined) ≤ ceil(left) + ceil(right)`). For: it never adds a segment, and joined runs give equal steps. Against: it is greedy and left to right, so not optimal. Kept: deterministic, and it removes the split cost of `grow`.
+- **Least counts 2 and 3.** For: a curved edge in one segment, or a closed edge in two, gives faces that fold onto themselves in TS3. Against: for a tiny curved edge a single segment already holds the chord. Kept: TS3 triangulates from these.
+- **`TooFine` is a refusal**, not `Exhausted`. For: the count is past what a `u32` index can hold, whatever the budget. Against: it is a size the caller cannot always predict. Kept: the caller chose the chord, and the error names the edge and the count.
+- **Parabola and hyperbola are `Unsupported(EdgeKind)`.** No constructor makes them yet; closed forms can follow when one does.
+
+**Tests.** Unit (12, `src/edge.rs`): circle counts hold the chord and one fewer would not; no circle segment turns past a quarter; angle and length bounds refine a circle; ellipse counts hold the chord, the densely sampled gap within the bound and at least half of it; a rational circle holds the chord against the exact circle, with fewer than 2.5 times its segments; a cubic holds the chord by dense sampling, its interior knot a sample; a stationary NURBS end bounds the chord but refuses an angle (`NoBound`); a count past the index space is `TooFine`; a parabola is `EdgeKind`; a line is one segment unless a length asks; the budget is charged per segment and per enclosure; a face's need is the same in either order. Integration (9, `tests/wire.rs`, on the block, cylinder, frustum, apex cone, sphere and torus, at the world frame and a tilted one): polylines run from their start vertex's index to their end vertex's, closed edges close, collapsed edges are `[v, v]`, every position is a vertex or one edge's sample; every sample lies on each adjacent face through its pcurve at the same parameter, within the zone; every circle edge lies on its circle, its largest midpoint radial gap within the reported chord, and its count equals the closed form (cylinder and frustum r 10: 71, frustum r 4: 45, apex cone r 6: 55, sphere seam r 7: 30 (face-limited), torus equator r 15: 193 (face-limited, `L_f = sqrt(8 c 3)`), meridian r 3: 39); two runs are equal bit for bit; a finer chord never gives fewer points; spec refusals (chord 0, negative, NaN, infinite, the zone; angle and edge length); another resolution is `Refused(Resolution)`; angle and edge-length bounds refine counts; `Budget::new(100)` is `Exhausted`, a set stop is `Cancelled`, and the torus charges exactly 193 + 39. No pin test is ported or removed: the pin's tessellation tests are TS3's (§6.5).
+
+**Measurements** (throwaway timer, not committed; release build, 2,000 repetitions of `wireframe`, world frame; the machine is shared, so a run can vary by tens of percent):
+
+| body | c 0.1 | c 0.01 | c 0.001 |
+|---|---|---|---|
+| block | 8 pts, 1.0 us | 8 pts, 0.5 us | 8 pts, 0.6 us |
+| cylinder r10 h20 | 46 pts, 2.0 us | 142 pts, 4.2 us | 446 pts, 12.3 us |
+| frustum 10-4 h15 | 38 pts, 1.4 us | 116 pts, 3.6 us | 364 pts, 9.7 us |
+| sphere r7 | 11 pts, 0.5 us | 31 pts, 1.1 us | 94 pts, 2.5 us |
+| torus 12, 3 | 73 pts, 2.3 us | 231 pts, 6.6 us | 730 pts, 18.2 us |
+
+About 25-30 ns per point on conic edges. NURBS (unit tests' curves): 0.1-1.5 ms per edge, about 2-3.5 us per enclosure; a rational circle r 1 takes 48 segments at c 0.01 (exact: 23), 108 at 1e-3 (exact: 71), and at r 100, c 1e-3, 804 (exact: 703). A cubic takes 17, 43 and 128 segments at c 0.1, 0.01 and 1e-3 with 18, 50 and 104 enclosures. Added work against the pin: none comparable yet; the pin samples edges inside face planning, and the conic counts here are closed forms with one sagitta check.
+
+**Deviations from 72.** Budget and `Stop` (above, §12.4 row 6 over §6.2); per-corner normals; the layer; `EdgePolyline` carries its chord; `wireframe` and `sample_edge` are public, `tessellate` waits for TS2.
+
+**Open questions.**
+1. TS3's per-triangle test: the developable bound for cylinder and cone, and for sphere and torus the triangle's smallest enclosing circle radius against `L_f`.
+2. A curvature bound for rational NURBS edges: `|C''|` holds the parametrisation's own acceleration, which is why a rational circle takes about 1.1-2.1 times the exact circle's segments. A bound on curvature and arc length (step 5) would close that.
+3. `FaceKind` has no integration test: no body with a NURBS face can be made on main yet.
+
+**Proposed 04 row.** "`scx-tess` (TS1): edge samples are a pure function of the edge, the count the largest of the curve's need and each adjacent face's need `L_f = sqrt(8c / κ_f)`; circle and ellipse counts in closed form, NURBS from interval enclosures of `C'` and `C''` per knot span; the chord is a proved bound reported per polyline; no NURBS quarter-turn floor; budget and stop on every entry; normals per triangle corner; `scx-tess` sits after `scx-make`. Change if: TS3's per-triangle test needs a different face need, or step 5 brings a curvature bound for rational edges."
+
+### 14.17 MA2 as built (11-27)
+
+`scx-mass` closes a face onto its edges for each use whose pcurve carries a recorded accuracy (`Use::bound`), through `face::pieces` (where MA1's `join` runs); a use with none is unchanged. New module `crates/scx-mass/src/closure.rs`; new testkit generator `scx_testkit::bodies::loose`. No public mass API changed.
+
+**The method (the pin's #16735, `gap_closure`).** A pcurve with a recorded bound lies within the bound of its edge, not on it, so two faces of an edge leave a gap and the divergence theorem's fields leak through it, to first order in the bound and differently at each reference. Each such use gets a **strip**, the ruled surface from `P(t) = S(p(t))` to the edge's curve `E(t)`, and each corner of the loop beside one a **fan** over the polygon `P_end, E_end, vertex, E_start, P_start` from its centroid. The faces then share the edges and vertices and bound one closed surface. Both are fluxes of the volume integrands only (`Set::volume_start`): the area is the face's own and gets nothing. The strips are integrated along `t` by the face's own step control (K7, a tenth of the accuracy, the same pieces as the use's Green integral plus the edge's NURBS knots); the ruling is taken by the 3-point Gauss rule, exact for the degree 4 integrands.
+
+**Decisions, with cases for and against.**
+
+- **The correspondence is `t = t`, not a nearest-point grid.** The pin marches 64 nearest points from the trim to the edge and keeps a table. A use's pcurve runs over the edge's own interval and its recorded claim is `|S(p(t)) - C(t)|` at the same `t` (`Claim::PcurveOnSurface`), so `E(t)` is the partner the record states. For: no search, no table, no `correspondence_bends`/`polynomial_strip` special case; a planar use is one K7 piece (7 evaluations); the closed surface is exactly the one the bound speaks of. Against: a recorded bound that is true but whose parameters slip (a pcurve fitted with a different speed) gives an oblique strip, a larger but still closed one; the nearest point would give a thinner strip. The tube term below covers the width the bound states, and `loose` slips parameters on purpose (a half-offset along the pcurve on every second use) and closes exactly on planar faces. Change if a producer records a bound that holds only by nearest point.
+- **Closed uses are those with `Use::bound`, not edge or vertex accuracy.** The use's bound is the one that says the pcurve may be off its edge; `finish` allows a use end off its vertex by `use + edge + vertex` accuracy. For: the use's own bound is the pcurve's gap and nothing else's. Against: a use with no bound beside a vertex with a recorded accuracy (a merge that moved a point) has its end off that vertex by up to the vertex's bound, and is not closed there. The rule in 72 §12.1 row 3 names "a gap recorded"; the pcurves such a merge moves would record theirs. Open: confirm when BO's merge exists.
+- **A corner is closed when either neighbour is.** The unclosed neighbour contributes its pcurve end as both its pcurve and its edge point (it is exact). No corner with neither is made, so a body with none pays nothing.
+- **The pin's gap cones are not made.** A straight uv piece `join` adds (a pole's line, or the gap between two recorded pcurve ends) is part of the face's boundary; the pin closes it onto the vertex by a cone and a corner on each side. Here the corner polygon closes with the chord from `P_start` to `P_end`, which cancels the face's own straight piece exactly on a plane and differs by a sliver of order `gap^2 kappa` elsewhere, inside the ball term below. For: one fan per corner, no extra sides. Against: not watertight to the second order in the gap on a curved surface.
+- **The closure's error enters the result.** (1) The strips' Kronrod-Gauss estimates add to the face's error as every piece's do. (2) The tube between the recorded surface and the closed one is added by the divergence of each component's field over that volume: `pi tol^2 L` per closed use (`L` the edge's 16-sample polyline length, `tol` the use's bound) and `4/3 pi tol^3` per corner, times `c R^(a+b+c-1)` for the monomial `x^a y^b z^c n_z`, `R` the face box's longest side (0 for `c = 0`: its field is divergence free). For: the stated error is what the closed surface can differ from the recorded one by, as the pin's doc states (`sum pi tol^2 L`), not only the integration's. Against: it is conservative (the cylinder at offset 1e-3 states 1.1e-4 for a miss of 0, since the planar and vertical strips are exact); and the 16-sample length and `R = size` are estimates, as the crate's other errors are. The area terms get none.
+- **`Set::Area` does no closure.** `area`, `face_area` read no strips and no corner; the volume group does.
+
+**The testkit body (`bodies::loose(kind, seed, size, offset)`).** A valid body of `kind` with every line, constant-`v` angle line and circle pcurve moved off its edge: along the loop's left normal by `offset` (a circle by its radius), and by half as much along the pcurve on every second use of a loop; each moved use records the largest distance it measured by 24 samples, rounded up 0.1 percent (`Basis::Measured`), and the others stay exact. `finish` accepts it under the default resolution because the bound says the pcurve may be off; with the bounds forgotten it needs a resolution of the offset (the tests do that to read the unclosed body), which is the check the `Use::bound` exists to satisfy.
+
+**Tests** (`crates/scx-mass/tests/closure.rs`, 5):
+
+- `a_loose_block_closes_to_its_closed_form`: offsets 1e-2, 2e-2, 1e-4: volume, first and second moments equal `solid::block` within 1e-12 (the strips and fans lie in each face's plane, so they close exactly, corners included: the slip leaves the pcurve ends apart, so the fans are not degenerate); the unclosed body leaks at least half the offset; the result about another reference is the same.
+- `a_cubes_strips_close_in_one_piece_per_edge_use` (the port of the pin's `a_cubes_strips_close_in_one_piece_per_edge_use`): the closure adds exactly 24 x 7 evaluations to `volume`.
+- `an_exact_body_pays_nothing`: a valid block's `volume` is 798 evaluations, MA1's figure.
+- `a_loose_curved_body_holds_within_its_stated_error` (the cylinder's strips in `a_cylinders_strips_keep_the_grid`, a cone beside it): within 1e-12 of the closed form, the stated error covers the miss, the unclosed body leaks at least a tenth of the offset, and the closure's tube makes the stated error more than ten times the exact body's.
+- `an_exact_pcurve_off_its_edge_is_refused_by_finish` (A8, 72 §10): `broken(PcurveOffEdge)` is refused by `finish`, so a pcurve with no recorded accuracy that is off its edge is a defect found there, not a gap mass closes.
+
+**Not ported, on purpose.** `an_edge_off_its_trims_...`: it reads the pin's tolerant-edge builder, which has no counterpart; the cylinder's circles (exact beside moved lines) and the cone's apex corner cover an edge whose two uses differ. The corpus parity test needs the benchmark corpus (step 6).
+
+**Measurements** (bit-identical before and after: the 84 lines of `mass` over every generated kind at sizes 1 to 3 at accuracy 1e-6 and 1e-9, printed with `{:?}` and the work charged, before and after the change, are equal). Cost where a use records an accuracy: 7 K7 evaluations per planar use (24 for a cube's `volume`, 168 of 966), a corner fan costs none charged (its integral is exact). Cost where none does: a `Use::bound` read per use and nothing else.
+
+**Deviations from 72.** None in signature; §2.2's "gap closure onto the edge's curve" is by `t = t`, not nearest point (above).
+
+**Open questions.** (1) Whether a vertex's or an edge's recorded accuracy alone (no use bound) should close its uses (above). (2) The 1.1e-4 stated against a miss of 0 on the cylinder: a tighter tube bound needs the strip's width per use, which the use's bound already is; what would tighten it is the divergence of the field over the actual swept volume, not `c R^(d-1)`. (3) `loose` moves no pcurve of a sphere's lunes or a torus's patches (angle lines along `v`, and the `finish` pole and seam rules refuse larger offsets); a closure on a pole needs a producer that records one.
+
+**Proposed 04 row.** "`scx-mass` (MA2): a use whose pcurve records an accuracy is closed onto its edge's curve by a strip, `E(t)` against `S(p(t))` at the same `t`, and a fan at each corner beside one, in the volume terms only; the strips' integration error and the tube `pi tol^2 L` (a ball at a corner) are in the stated error; a use with none costs nothing and the results are bit-identical. Change if a producer records a bound that holds only by nearest point, or a vertex's accuracy alone must close its uses."
