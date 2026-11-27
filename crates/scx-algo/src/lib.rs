@@ -7,11 +7,14 @@
 pub mod box_tree;
 pub mod error;
 pub mod executor;
+pub mod geom;
 pub mod global_solve;
 pub mod hash_table;
 pub mod krawczyk;
 pub mod local_solve1d;
 pub mod local_solve_nd;
 pub mod polynomial;
+pub mod pseudo_box;
 pub mod solution;
+pub mod sort;
 pub mod split_tree;
