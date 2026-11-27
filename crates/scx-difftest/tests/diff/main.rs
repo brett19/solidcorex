@@ -17,6 +17,7 @@
 
 mod facade;
 mod harness;
+mod odes;
 mod pin_defects;
 mod pin_extent;
 mod pin_truths;
@@ -27,6 +28,7 @@ mod t_hash;
 mod t_interval;
 mod t_kraw;
 mod t_math;
+mod t_ode;
 mod t_p21;
 mod t_rest;
 mod t_rng;

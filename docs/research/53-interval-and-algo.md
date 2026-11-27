@@ -361,3 +361,65 @@ plane and last-point ones are cheap to clone per worker (their state is per solv
 seven fillet ones cannot, since they write the fillet solver's offset caches, so each
 worker needs its own fillet solver (or those caches move behind a per-worker store).
 
+
+## 13. The ODE integrator (`scx-algo::ode`, 11-27)
+
+Ported from the pin's `mass/integrator.rs` (its ODE core; the mass-property drivers stay with
+`mass`). Shape (M6): the controls are a value and the integration a pure call over a closure.
+`OdeIntegrator<N>` holds every control as a public field (accuracy, initial and minimum step,
+error scale, `StepEstimate`, rounding floor and rate, step budget, `tiny`; the pin's
+`OdeOptions`, setters and private fields are gone) and `OdeIntegrator::integrate(x1, x2, f)`
+returns an `OdeSolution` (values and `StepCounts`) where the pin wrote into an in-out slice.
+The component count is the const `N` (`[f64; N]` throughout). `Quadrature { accuracy,
+rounding, rate }` and `Quadrature::integrate(a, b, g)` replace the pin's scalar entry points.
+`step` is a free function taking the scale by value (the pin floored the caller's slice in
+place). The `Kernel`, read only for cancellation, is gone: a cancellable caller checks in its
+closure, whose error ends the integration.
+
+Errors are the crate's `SolveError<E>` (section 12):
+
+- the step control's failures are `SolveFailure::StepControl(StepControlFailure::..)`, one
+  reason each (unachievable accuracy, below the minimum step, steps or retries exhausted,
+  step underflow, owed rounding over the accuracy); solidcore reports all of them except
+  `Overflow` as `MassFailure::StepControl`, without the reason. A non-finite integrand is
+  `SolveFailure::IntegrandNotFinite` (`MassFailure::Integrand`);
+- `StepControlFailure::Overflow` is new: a step's error scale is NaN (the step grew past the
+  largest float with a zero derivative, or the values overflowed). The pin reaches it as the
+  upstream step's `SM_ERR` (`RoutineFailed` caused by its own `InvalidInput` "invalid error
+  scale"); the difftest maps it back. It is reachable (the `quad_intervals` sweep hits it);
+- the evaluation at a step's start returns the closure's error unchanged (`SolveError::Eval`)
+  and one inside a step is wrapped (`SolveError::call(OP)`), as in the pin; which errors pass
+  through is the closure error's `EvalError`.
+- The early returns give zeros, as the pin's zeroed output did.
+
+Kept from the pin (inherited, recorded for a ruling):
+
+- `are_same(initial_step, EFF_ZERO)` picks the default initial step, so a caller's step within
+  tolerance of 1e-12 is replaced.
+- **A vanishing start gives up.** When the start value and its derivative are both 0 the error
+  scale floors to `EFF_ZERO`, so the guard `accuracy <= embedded_max * EFF_ZERO` becomes
+  `accuracy <= estimate` and the solve stops as `Unachievable`: `sin` from 0 at 1e-9, `t^7 - t^3`
+  at every accuracy, `t^4` and `sin` quadratures below 1e-6, `e^x - 1` below 1e-6. The truths
+  assert these give-ups explicitly (`truth_a_vanishing_start_gives_up`), so a fix shows as a
+  test change. Proposed fix: scale by the running magnitude of the solution (as in Hairer's
+  `sc = atol + rtol*max(|y0|, |y1|)`) instead of the start values; not built, as it changes
+  results the pin's callers rely on.
+
+`fmath::powf` replaces the platform `powf` in the step-size update (determinism). Its last bit
+can differ, which moves step sizes and so the results within the accuracy, not within 1e-12.
+The difftest treats such inputs as a pin truth defect whose truth is the pin's own integrator
+compiled with `fmath::powf` (the `pinf` oracle: `build.rs` extracts the pin's source and
+replaces the two `powf` calls, with checked counts); scx must match the oracle exactly.
+
+Difftest (`t_ode.rs`, per input; exact / within tolerance / pin defect / mismatch):
+`ode_step` 3080/26/0/0, `ode_step_fail` 14/0/0/0, `ode_too_many_components` 1/0/0/0,
+`ode1_clean` 1/2/11/0, `ode1_fail` 8/1/5/0, `ode2_clean` 1/2/11/0, `ode2_fail` 8/2/4/0,
+`quad_clean` 6/1/7/0, `quad_fail` 13/0/1/0, `quad_intervals` 3092/1/13/0. Nine truths
+(closed-form quadratures and systems, the fifth-derivative error estimate, the give-ups, the
+failure paths) pass.
+
+Timings (best of 7 x 200 runs, microseconds, scx vs pin, a loaded box): Runge 1e-12 33.7-35 vs
+35.6-37; `2 + sin 20t` 1e-9 67-70 vs 70-73; `exp` 1e-12 26-27 vs 27-29; a 2-system at 1e-9
+27.8-29 vs 22-23. The system case is the one regression: 182 steps at about 33 ns each more,
+which is `fmath::powf` (about 46 ns against the platform's 10). A cheaper fixed-exponent
+`powf` (`x^-0.2`, `x^-0.25`) is a follow-up.

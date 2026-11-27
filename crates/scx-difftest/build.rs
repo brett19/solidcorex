@@ -5,7 +5,8 @@
 //! Reruns when the checkout's HEAD or index changes or a file under solidcore's crate
 //! directory does (cargo scans a directory named by `rerun-if-changed` recursively).
 //! Also writes the pin's `geom/krawczyk.rs` items, made public, for the difftest
-//! ([`pin_krawczyk`]).
+//! ([`pin_krawczyk`]), and the pin's `mass/integrator.rs` with the deterministic `powf`
+//! ([`pin_integrator`]).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -85,8 +86,56 @@ fn pin_krawczyk() -> Result<(), String> {
     std::fs::write(dir.join("pin_krawczyk.rs"), out.join("\n")).map_err(|e| e.to_string())
 }
 
+/// The pin's `mass/integrator.rs` with `fmath::powf` for the platform's `powf` in its two
+/// step factors, the oracle for the inputs on which the platform's last bit moves the pin's
+/// steps (`odes::pinf`): written to `OUT_DIR/pin_integrator.rs` without its module docs,
+/// its `use` lines, its submodule (`properties`) and its tests, and with its two
+/// `pub(crate)` error constructors renamed to the difftest's copies (`odes::pinf`). Every
+/// other line is the pin's, unchanged; a replacement not found fails the build.
+fn pin_integrator() -> Result<(), String> {
+    let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").map_err(|e| e.to_string())?);
+    let src =
+        manifest.join("../../../sc-wt/scx-pin/solidcore/crates/solidcore/src/mass/integrator.rs");
+    let text = std::fs::read_to_string(&src).map_err(|e| format!("{}: {e}", src.display()))?;
+    let mut body: String = text
+        .split("#[cfg(test)]")
+        .next()
+        .unwrap_or("")
+        .lines()
+        .filter(|l| !l.starts_with("//!") && !l.starts_with("use ") && !l.starts_with("pub mod "))
+        .collect::<Vec<_>>()
+        .join("\n");
+    for (from, to, count) in [
+        ("errmax.powf(-0.2)", "scx_num::fmath::powf(errmax, -0.2)", 1),
+        (
+            "errmax.powf(-0.25)",
+            "scx_num::fmath::powf(errmax, -0.25)",
+            1,
+        ),
+        ("SolidError::mass(", "pin_mass(", 2),
+        ("SolidError::nurbs_routine(", "pin_nurbs_routine(", 1),
+    ] {
+        let found = body.matches(from).count();
+        if found != count {
+            return Err(format!(
+                "{}: `{from}` occurs {found} times, not {count}",
+                src.display()
+            ));
+        }
+        body = body.replace(from, to);
+    }
+    if body.contains(".powf(") {
+        return Err(format!("{}: a `powf` left unreplaced", src.display()));
+    }
+    let dir = PathBuf::from(std::env::var("OUT_DIR").map_err(|e| e.to_string())?);
+    std::fs::write(dir.join("pin_integrator.rs"), body).map_err(|e| e.to_string())
+}
+
 fn main() -> std::process::ExitCode {
-    match check().and_then(|()| pin_krawczyk()) {
+    match check()
+        .and_then(|()| pin_krawczyk())
+        .and_then(|()| pin_integrator())
+    {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("scx-difftest build: {e}");
