@@ -28,6 +28,7 @@ pub mod bezier;
 mod curve;
 mod curves;
 mod error;
+mod eval_over;
 mod knots;
 mod point;
 

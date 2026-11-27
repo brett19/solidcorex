@@ -39,7 +39,6 @@ mod common;
 mod cone;
 mod cylinder;
 mod error;
-mod jet;
 mod plane;
 mod sphere;
 mod torus;
@@ -76,7 +75,7 @@ const _: () = {
     ok::<Pole>();
     ok::<SurfaceError>();
     ok::<Size>();
-    ok::<jet::SurfaceJet<scx_num::vector3d::Vec3, 2>>();
+    ok::<scx_num::jet::SurfaceJet<scx_num::vector3d::Vec3, 2>>();
 };
 
 // The kinds stay small, so the `Surface` enum stays within 128 bytes (63 §4.3).

@@ -5,7 +5,7 @@
 //! - [`Circle`] and [`Circle2`]: `centre + r (cos t x + sin t y)`, `t` in radians from the
 //!   frame's x axis, period `2 pi`;
 //! - [`Ellipse`] and [`Ellipse2`]: `centre + a cos t x + b sin t y`, likewise;
-//! - [`Curve`] and [`Curve2`]: any of these, dispatched by `match`, with the batched
+//! - [`Curve`] and [`Curve2`]: any of these or a NURBS curve, dispatched by `match`, with the batched
 //!   [`Curve::eval_many`];
 //! - [`CurveError`]: why one cannot be built.
 //!
@@ -19,8 +19,8 @@
 //! are the pin's (63 D13), angles in radians (X11). A conic's orientation is a
 //! [`Sense`](scx_num::frame::Sense): reversed runs it clockwise about its frame's z (D14).
 //!
-//! Inversion, restriction, reversal and transformation build on these types (63 §3.5, CU3
-//! to CU5).
+//! Inversion, restriction, reversal and transformation build on these types (63 §3.5, CU4
+//! and CU5).
 
 mod conic;
 mod curve;

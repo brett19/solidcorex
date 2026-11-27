@@ -16,7 +16,7 @@ use scx_nurbs::Approach;
 use crate::arcs::Arcs;
 use crate::common::{Axes, unit};
 use crate::error::{Size, SurfaceError, positive};
-use crate::jet::SurfaceJet;
+use scx_num::jet::SurfaceJet;
 
 /// Both directions: a turn over `[0, 1]`.
 const TURN: Arcs = Arcs::turn(1.0);
