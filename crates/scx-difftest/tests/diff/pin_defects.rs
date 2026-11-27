@@ -3690,6 +3690,563 @@ conic_defects! {
     curve_ellipse2_jet: Vec<[f64; 2]>, axes2, false, all;
 }
 
+use crate::berns::BernR;
+
+/// One call's roots: the places and whether every root was isolated.
+pub(crate) type RootsOut = (Vec<f64>, bool);
+
+/// `t_bern::bern_roots`'s four calls.
+type FourRoots = (RootsOut, RootsOut, RootsOut, RootsOut);
+
+/// Exact de Casteljau of `c` at the local parameter `t`.
+fn casteljau_rat(c: &[Rat], t: &Rat) -> Rat {
+    let s = &Rat::one() - t;
+    let mut b = c.to_vec();
+    while b.len() > 1 {
+        b = b.windows(2).map(|w| &(&s * &w[0]) + &(t * &w[1])).collect();
+    }
+    b.first().cloned().unwrap_or_else(Rat::zero)
+}
+
+/// The local parameter of the global place `g` on `[lo, hi]`, exactly.
+fn local_t(lo: &Rat, hi: &Rat, g: f64) -> Result<Rat, String> {
+    (&rat(g)? - lo)
+        .checked_div(&(hi - lo))
+        .ok_or_else(|| "an empty interval".to_string())
+}
+
+/// The polynomial with Bernstein coefficients `c` on `[lo, hi]`, exactly, at `g`: its sign.
+fn bern_sign(c: &[Rat], lo: &Rat, hi: &Rat, g: f64) -> Result<i32, String> {
+    Ok(casteljau_rat(c, &local_t(lo, hi, g)?).signum())
+}
+
+/// Whether every place within `k` doubles of `g` lies inside the f64 evaluator's error band
+/// around a root of `c` on `[lo, hi]`, where de Casteljau's computed sign cannot be trusted
+/// and no double is more correct than another. `k` is `g`'s distance from an exact sign
+/// change, so the root lies within `d`, the wider side of those `k` doubles.
+///
+/// The band is the a-priori bound of f64 de Casteljau (Mainar and Peña): degree `n` takes
+/// `n` levels of two products and a sum, and `1 - t` rounds once more, so the computed value
+/// is within `γ_{3n} Σ|b_i| B_i(t)` of the exact one, `γ_m = m u / (1 - m u)`, `u = 2^-53`.
+/// Divided by the exact slope `|f'(t)|` it is a width in `t`. Mapped out by
+/// `lo + (hi - lo) t` it widens by `|hi - lo|` and gains the map's own rounding,
+/// `u (|g| + 2|g - lo|)`. A zero slope gives no band, and the place is then held to the
+/// distance rule alone.
+fn in_error_band(c: &[Rat], lo: f64, hi: f64, g: f64, k: i64) -> Result<bool, String> {
+    let n = c.len().saturating_sub(1);
+    if n == 0 {
+        return Ok(false);
+    }
+    let (rl, rh) = (rat(lo)?, rat(hi)?);
+    let t = local_t(&rl, &rh, g)?;
+    let diffs: Vec<Rat> = c.windows(2).map(|w| &w[1] - &w[0]).collect();
+    let degree = Rat::from(i64::try_from(n).map_err(|e| e.to_string())?);
+    let slope = (&casteljau_rat(&diffs, &t) * &degree).abs();
+    if slope.is_zero() {
+        return Ok(false);
+    }
+    let abs: Vec<Rat> = c.iter().map(Rat::abs).collect();
+    let u = rat(f64::EPSILON / 2.0)?;
+    let mu = &u * &Rat::from(i64::try_from(3 * n).map_err(|e| e.to_string())?);
+    let gamma = mu.checked_div(&(&Rat::one() - &mu)).ok_or("no γ")?;
+    let width_t = (&gamma * &casteljau_rat(&abs, &t))
+        .checked_div(&slope)
+        .ok_or("no slope")?;
+    let rg = rat(g)?;
+    let map = &u * &(&rg.abs() + &(&rg - &rl).abs().scale(1));
+    let band = &(&width_t * &(&rh - &rl).abs()) + &map;
+    let d = [ulps_from(g, -k), ulps_from(g, k)]
+        .into_iter()
+        .filter(|x| x.is_finite())
+        .map(|x| rat(x).map(|r| (&r - &rg).abs()))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .fold(
+            Rat::zero(),
+            |a, b| if (&b - &a).signum() > 0 { b } else { a },
+        );
+    Ok((&band - &d).signum() >= 0)
+}
+
+/// `g` moved `k` doubles up (`k` negative: down), by the order of the doubles.
+fn ulps_from(g: f64, k: i64) -> f64 {
+    let key = |x: f64| {
+        let b = x.to_bits() as i64;
+        if b < 0 { i64::MIN - b } else { b }
+    };
+    let b = key(g).saturating_add(k);
+    f64::from_bits((if b < 0 { i64::MIN - b } else { b }) as u64)
+}
+
+/// The fewest doubles `k` from `g` within which the exact polynomial changes sign (0 where
+/// `g` is an exact zero), searched in `[lo, hi]` up to `2^40`; `None` past that.
+pub(crate) fn ulps_to_root(c: &[Rat], lo: f64, hi: f64, g: f64) -> Result<Option<i64>, String> {
+    let (rl, rh) = (rat(lo)?, rat(hi)?);
+    let s0 = bern_sign(c, &rl, &rh, g)?;
+    if s0 == 0 {
+        return Ok(Some(0));
+    }
+    let changes = |k: i64| -> Result<bool, String> {
+        for x in [ulps_from(g, -k), ulps_from(g, k)] {
+            if x.is_finite()
+                && x >= lo.min(hi)
+                && x <= lo.max(hi)
+                && bern_sign(c, &rl, &rh, x)? != s0
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    };
+    let mut k = 1_i64;
+    while !changes(k)? {
+        k *= 2;
+        if k > 1 << 40 {
+            return Ok(None);
+        }
+    }
+    let (mut a, mut b) = (k / 2, k);
+    while b - a > 1 {
+        let m = a + (b - a) / 2;
+        if changes(m)? { b = m } else { a = m }
+    }
+    Ok(Some(b))
+}
+
+/// scx's roots of `c` on `[lo, hi]` against the pin's: the same number of places, the same
+/// `isolated`, and every place that differs either at least as near an exact sign change of
+/// the polynomial (in doubles) as the pin's, or inside the f64 evaluator's error band around
+/// that root ([`in_error_band`]): there the computed sign is noise, so both answers are
+/// equally correct.
+pub(crate) fn roots_no_worse(
+    c: &[f64],
+    lo: f64,
+    hi: f64,
+    x: &RootsOut,
+    p: &RootsOut,
+) -> Result<(), String> {
+    if x.0.len() != p.0.len() || x.1 != p.1 {
+        return Err(format!("the shape moved: the pin has {p:?}"));
+    }
+    let exact: Vec<Rat> = c.iter().map(|&v| rat(v)).collect::<Result<_, _>>()?;
+    for (&g, &w) in x.0.iter().zip(&p.0) {
+        if g.to_bits() == w.to_bits() {
+            continue;
+        }
+        let far = |k: Option<i64>| k.unwrap_or(i64::MAX);
+        let (kx, kp) = (
+            ulps_to_root(&exact, lo, hi, g)?,
+            ulps_to_root(&exact, lo, hi, w)?,
+        );
+        if kx.is_none() && kp.is_none() {
+            return Err(format!("neither {g} nor the pin's {w} is near a root"));
+        }
+        let banded = match kx {
+            Some(k) => in_error_band(&exact, lo, hi, g, k)?,
+            None => false,
+        };
+        if far(kx) > far(kp) && !banded {
+            return Err(format!(
+                "{g} is {kx:?} doubles from a root, the pin's {w} {kp:?}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// `bernstein_roots` where a simple root is refined (`t_bern::bern_roots`): the pin bisects
+/// an isolated root from the whole piece for at most 64 halvings, which stop short of
+/// rounding for a root within about `5e-4` of the piece's start (the bracket is then still
+/// `2^-64` of the piece wide). scx refines it by Newton's method, certifies the sign change
+/// four doubles either side and bisects that to rounding. Example (`bern_roots_shapes`): the
+/// line with coefficients `[1e-12, -0.2545316193327256]` has its root at
+/// `1e-12 / 0.2545316193337256 = 3.92878496831807...e-12`; scx answers
+/// `3.928784968318077e-12`, the pin `3.9287849503636535e-12`, `1.4e-8` relatively off. The
+/// check: the same places but for those, the same `isolated`, and every place that moved
+/// at least as near (in doubles) an exact sign change of the input polynomial as the pin's,
+/// or inside the f64 evaluator's error band around it ([`roots_no_worse`]).
+pub fn bern_roots() -> PinDefect<(List<f64>, f64, f64), FourRoots> {
+    PinDefect {
+        reason: "the pin's 64 halvings stop short of rounding near a piece's start",
+        applies: Applies::Disagreeing,
+        check: |(c, lo, hi), r| {
+            let limits = [(48, 4096), (3, 2), (0, 4096), (48, 0)];
+            for (x, (depth, work)) in [&r.0, &r.1, &r.2, &r.3].into_iter().zip(limits) {
+                let p = crate::berns::s::roots(&c.0, *lo, *hi, depth, work);
+                roots_no_worse(&c.0, *lo, *hi, x, &p)?;
+            }
+            Ok(())
+        },
+    }
+}
+
+/// `bernstein_roots` over the recipes' coefficients (`t_bern::bern_roots_shapes`): the same
+/// defect as [`bern_roots`], and the same check.
+pub fn bern_roots_shapes() -> PinDefect<(BernR, usize), (RootsOut, RootsOut, RootsOut)> {
+    PinDefect {
+        reason: "the pin's 64 halvings stop short of rounding near a piece's start",
+        applies: Applies::Disagreeing,
+        check: |(p, d), r| {
+            let c = &p.0.2;
+            let deep = u32::try_from(*d).unwrap_or(u32::MAX);
+            let calls = [
+                (0.0, 1.0, 48, 4096),
+                (-2.0, 0.5, 48, 4096),
+                (0.0, 1.0, deep, *d),
+            ];
+            for (x, (lo, hi, depth, work)) in [&r.0, &r.1, &r.2].into_iter().zip(calls) {
+                let w = crate::berns::s::roots(c, lo, hi, depth, work);
+                roots_no_worse(c, lo, hi, x, &w)?;
+            }
+            Ok(())
+        },
+    }
+}
+
+// ---- scx-nurbs-surface evaluation ----
+
+use crate::t_nurbs_surface_eval::{At as SurfaceAt, JetAt, Sides, Tri, batch};
+
+/// The largest coordinate of the control points, at least 1.
+fn net_scale(r: &Raw) -> f64 {
+    r.points
+        .iter()
+        .flatten()
+        .fold(1.0_f64, |m, x| m.max(x.abs()))
+}
+
+fn tk_sides(s: Sides) -> (tk::Side, tk::Side) {
+    (tk_side(s.0[0]), tk_side(s.0[1]))
+}
+
+/// Where `a`'s data is not a surface or its parameter is not finite: `Some` of whether scx's
+/// answer is right (it must refuse); `None` where scx must answer.
+fn eval_refused(a: &SurfaceAt, scx_answered: bool) -> Option<Result<(), String>> {
+    let why = not_a_surface(&a.raw)
+        .or_else(|| (!a.uv.iter().all(|t| t.is_finite())).then(|| "a parameter".to_owned()));
+    match (why, scx_answered) {
+        (Some(why), true) => Some(Err(format!("scx evaluated what is not one: {why}"))),
+        (Some(_), false) => Some(Ok(())),
+        (None, false) => Some(Err(format!("scx refused {} at {:?}", a.raw.edit, a.uv))),
+        (None, true) => None,
+    }
+}
+
+/// The exact partials `S^(k,l)`, `k + l < order + 1`, row by row (`k` outer).
+fn exact_tri(a: &SurfaceAt, order: usize) -> Result<Tri, String> {
+    let t = a.raw.data().exact().map_err(|e| format!("{e:?}"))?;
+    let d = t
+        .derivs((a.uv[0], a.uv[1]), tk_sides(a.sides), order)
+        .map_err(|e| format!("{e:?}"))?;
+    (0..=order)
+        .flat_map(|k| (0..=order - k).map(move |l| (k, l)))
+        .map(|(k, l)| {
+            d.get(k, l)
+                .map(|e| e.rounded)
+                .ok_or_else(|| format!("no exact ({k},{l})"))
+        })
+        .collect()
+}
+
+/// `Σ |N_i(u) N_j(v)| w_ij |P_ij| / |w(u, v)|` (`w = 1` for a polynomial surface): the scale
+/// of what the point's sums cancel, from scx's own basis (only a tolerance depends on it). Inside
+/// the domain, where every `N` is non-negative, it is at most the net's scale; outside, the
+/// end pieces' bases alternate in sign and it grows. The net's scale where a basis fails.
+fn abs_scale(a: &SurfaceAt) -> f64 {
+    use scx_nurbs::{Approach, KnotVector};
+    let r = &a.raw;
+    let side = |above: bool| {
+        if above {
+            Approach::Above
+        } else {
+            Approach::Below
+        }
+    };
+    let basis = |p: usize, k: &[f64], t: f64, above: bool| {
+        let b = KnotVector::new(p, k.to_vec())
+            .ok()?
+            .basis(t, side(above))
+            .ok()?;
+        Some((b.first(), b.values().to_vec()))
+    };
+    let scale = || {
+        let (fu, nu) = basis(r.degrees.0, &r.knots_u, a.uv[0], a.sides.0[0])?;
+        let (fv, nv) = basis(r.degrees.1, &r.knots_v, a.uv[1], a.sides.0[1])?;
+        let (mut num, mut den) = (0.0_f64, 0.0_f64);
+        for (i, bu) in nu.iter().enumerate() {
+            for (j, bv) in nv.iter().enumerate() {
+                let at = (fu + i) * r.cols + fv + j;
+                let w = r
+                    .weights
+                    .as_ref()
+                    .map_or(Some(1.0), |w| w.get(at).copied())?;
+                let p = r
+                    .points
+                    .get(at)?
+                    .iter()
+                    .fold(0.0_f64, |m, x| m.max(x.abs()));
+                num += (bu * bv).abs() * w.abs() * p;
+                den += bu * bv * w;
+            }
+        }
+        Some(num / den.abs()).filter(|x| x.is_finite())
+    };
+    scale().unwrap_or_else(|| net_scale(r))
+}
+
+/// Whether `a`'s parameter is outside the surface's domain in either direction.
+fn outside(a: &SurfaceAt) -> bool {
+    let r = &a.raw;
+    let out = |k: &[f64], p: usize, t: f64| {
+        let n = k.len().saturating_sub(p + 1);
+        matches!((k.get(p), k.get(n)), (Some(&lo), Some(&hi)) if t < lo || t > hi)
+    };
+    out(&r.knots_u, r.degrees.0, a.uv[0]) || out(&r.knots_v, r.degrees.1, a.uv[1])
+}
+
+/// The rounding a tensor-product point may carry, of the largest of the net's scale, the
+/// exact point's and [`abs_scale`]: `4 eps` per basis function summed in either direction
+/// (`m = p + q + 2` of them), and `m² eps` outside the domain, where each of the `p` levels of
+/// the basis recursion multiplies by ratios above one and the rounding of every level grows.
+fn point_tol(a: &SurfaceAt, exact: &[[f64; 3]]) -> f64 {
+    let (p, q) = a.raw.degrees;
+    let m = (p + q + 2) as f64;
+    let terms = if outside(a) { m.max(4.0) * m } else { 4.0 * m };
+    let scale = exact
+        .iter()
+        .flatten()
+        .fold(net_scale(&a.raw).max(abs_scale(a)), |m, x| m.max(x.abs()));
+    terms * f64::EPSILON * scale
+}
+
+/// The point check: within [`point_tol`] of the exact point, and no further than the pin's.
+fn surface_point_check(
+    a: &SurfaceAt,
+    got: Option<[f64; 3]>,
+    pin: Option<[f64; 3]>,
+) -> Result<(), String> {
+    if let Some(refused) = eval_refused(a, got.is_some()) {
+        return refused;
+    }
+    let want = exact_tri(a, 0)?;
+    let got = got.ok_or("scx refused")?;
+    let tol = point_tol(a, &want);
+    closest(
+        "point",
+        &[got],
+        pin.as_ref().map(std::slice::from_ref),
+        &want,
+        tol,
+    )
+}
+
+/// `NurbsSurface::point` where scx and the pin disagree: surfaces the pin does not build
+/// (degrees 18 to 31, the testkit's near-zero weights outside `[1e-3, 100]`; see
+/// [`nurbs_surface_new`]), and the corners of the domain, which the pin's `basis_eval`
+/// refuses from the side past the end. The check: refused exactly when the data is not a
+/// surface or a parameter is not finite, else within [`point_tol`] of the exact point and no
+/// further than the pin's.
+pub fn nurbs_surface_point() -> PinDefect<(SurfaceAt,), Option<[f64; 3]>> {
+    PinDefect {
+        reason: "the pin refuses high-degree and wide-weight surfaces and the domain's ends",
+        applies: Applies::Disagreeing,
+        check: |(a,), r| {
+            let pin = crate::t_nurbs_surface_eval::s::point(a);
+            surface_point_check(a, *r, pin)
+        },
+    }
+}
+
+/// The exact partials `w^(i,j)` of the weight function, `i + j <= order`, row by row; all
+/// but `w^(0,0) = 1` zero for a polynomial surface.
+fn exact_weight_tri(a: &SurfaceAt, order: usize) -> Result<Vec<f64>, String> {
+    let pairs = (0..=order).flat_map(|k| (0..=order - k).map(move |l| (k, l)));
+    let Some(w) = &a.raw.weights else {
+        return Ok(pairs.map(|ij| f64::from(u8::from(ij == (0, 0)))).collect());
+    };
+    let r = &a.raw;
+    let data = scx_testkit::data::SurfaceData::<1> {
+        degrees: r.degrees,
+        knots_u: r.knots_u.clone(),
+        knots_v: r.knots_v.clone(),
+        points: w.iter().map(|&w| [w]).collect(),
+        weights: None,
+    };
+    let t = data.exact().map_err(|e| format!("{e:?}"))?;
+    let d = t
+        .derivs((a.uv[0], a.uv[1]), tk_sides(a.sides), order)
+        .map_err(|e| format!("{e:?}"))?;
+    pairs
+        .map(|(k, l)| {
+            d.get(k, l)
+                .map(|e| e.rounded[0])
+                .ok_or_else(|| format!("no exact w ({k},{l})"))
+        })
+        .collect()
+}
+
+/// The binomial `C(n, k)`, `k <= n`.
+fn choose(n: usize, k: usize) -> f64 {
+    (0..k).fold(1.0, |c, i| c * (n - i) as f64 / (i + 1) as f64)
+}
+
+/// The jet check for the triangle `k + l <= N`: each partial of scx's within `E(k,l)` of the
+/// exact one, and each total order no further than the pin's.
+///
+/// `E` is the first-order error the quotient rule (A4.4) carries. With `n = k + l`,
+/// `t_n = 1e-12 10^n` (the polynomial surfaces' allowance: the homogeneous sums of order `n`
+/// round by about that much of their scale) and `c(i,j) = C(k,i) C(l,j) |w^(i,j)| / |w|`
+/// from the exact weight jet:
+///
+/// `E(k,l) = t_n (s_n + Σ_{(i,j) ≠ 0} c(i,j) |S^(k-i,l-j)|) + Σ_{(i,j) ≠ 0} c(i,j) E(k-i,l-j)`,
+///
+/// where `s_n` is the largest of the net's scale and the order's exact coordinates: the
+/// rounding of `A^(k,l)` and of the terms the rule subtracts, then every lower partial's error
+/// as the rule passes it on. A polynomial surface has `c = 0`, so `E = t_n s_n`; a surface
+/// with weights near zero (`c` large where `w` is small) is ill conditioned, and `E` grows
+/// with it as the arithmetic must.
+fn surface_jet_check<const N: usize>(a: &SurfaceAt, got: &Option<Tri>) -> Result<(), String> {
+    if let Some(refused) = eval_refused(a, got.is_some()) {
+        return refused;
+    }
+    let want = exact_tri(a, N)?;
+    let wt = exact_weight_tri(a, N)?;
+    let got = got.as_ref().ok_or("scx refused")?;
+    let pin = crate::t_nurbs_surface_eval::s::jet::<N>(a);
+    let pairs: Vec<(usize, usize)> = (0..=N)
+        .flat_map(|k| (0..=N - k).map(move |l| (k, l)))
+        .collect();
+    let index = |i: usize, j: usize| pairs.iter().position(|&ij| ij == (i, j));
+    let mag = |v: &[f64; 3]| v.iter().fold(0.0_f64, |m, x| m.max(x.abs()));
+    let order_scale: Vec<f64> = (0..=N)
+        .map(|n| {
+            pairs
+                .iter()
+                .zip(&want)
+                .filter(|((k, l), _)| k + l == n)
+                .fold(net_scale(&a.raw), |m, (_, v)| m.max(mag(v)))
+        })
+        .collect();
+    let w00 = wt[0].abs();
+    let mut err = vec![0.0_f64; pairs.len()];
+    for (at, &(k, l)) in pairs.iter().enumerate() {
+        let n = k + l;
+        let t = 1e-12 * [1.0, 1e1, 1e2, 1e3, 1e4, 1e5][n];
+        let (mut terms, mut passed) = (order_scale[n], 0.0);
+        for i in 0..=k {
+            for j in 0..=l {
+                if (i, j) == (0, 0) {
+                    continue;
+                }
+                let (Some(wi), Some(si)) = (index(i, j), index(k - i, l - j)) else {
+                    continue;
+                };
+                let c = choose(k, i) * choose(l, j) * wt[wi].abs() / w00;
+                terms += c * mag(&want[si]);
+                passed += c * err[si];
+            }
+        }
+        err[at] = t * terms + passed;
+    }
+    for n in 0..=N {
+        let idx: Vec<usize> = (0..pairs.len())
+            .filter(|&i| pairs[i].0 + pairs[i].1 == n)
+            .collect();
+        for &i in &idx {
+            let e = max_diff(&got[i..=i], &want[i..=i]);
+            // a NaN distance fails
+            if !matches!(
+                e.partial_cmp(&err[i]),
+                Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
+            ) {
+                let (k, l) = pairs[i];
+                return Err(format!(
+                    "({k},{l}): {e:e} from the truth (tolerance {:e})",
+                    err[i]
+                ));
+            }
+        }
+        let pick = |v: &[[f64; 3]]| idx.iter().map(|&i| v[i]).collect::<Vec<_>>();
+        let tol = idx.iter().fold(0.0_f64, |m, &i| m.max(err[i]));
+        let p = pin.as_ref().map(|p| pick(p));
+        closest(
+            &format!("order {n}"),
+            &pick(got),
+            p.as_deref(),
+            &pick(&want),
+            tol,
+        )?;
+    }
+    Ok(())
+}
+
+/// `NurbsSurface::jet::<2>` where scx and the pin disagree: the pin's refusals as
+/// [`nurbs_surface_point`], and rational surfaces, where scx takes the quotient rule once over
+/// the homogeneous partials (A4.4) and the pin per control point through rational basis
+/// derivatives: the two round a cancelling partial differently. The check: each partial
+/// within the quotient rule's error bound of the exact one (`surface_jet_check`), and each
+/// order no further than the pin's.
+pub fn nurbs_surface_jet() -> PinDefect<(JetAt<7>,), Option<Tri>> {
+    PinDefect {
+        reason: "the pin's refusals as nurbs_surface_point; rational partials rounded differently",
+        applies: Applies::Disagreeing,
+        check: |(a,), r| surface_jet_check::<2>(&a.0, r),
+    }
+}
+
+/// [`nurbs_surface_jet`] for `jet::<4>`.
+pub fn nurbs_surface_jet4() -> PinDefect<(JetAt<4>,), Option<Tri>> {
+    PinDefect {
+        reason: "as nurbs_surface_jet",
+        applies: Applies::Disagreeing,
+        check: |(a,), r| surface_jet_check::<4>(&a.0, r),
+    }
+}
+
+/// `NurbsSurface::eval_many` where scx and the pin disagree, for the pin's refusals as
+/// [`nurbs_surface_point`]. The check: scx's batch is its `point` at each parameter bit for
+/// bit, so refused whole when one of them is refused, and not answered where the data is not
+/// a surface or a parameter is not finite. The points themselves are judged against the truth by
+/// [`nurbs_surface_point`] (the batch's first is the pool's parameter); judging every one again
+/// here would triple the test's time.
+pub fn nurbs_surface_eval_many() -> PinDefect<(SurfaceAt,), Option<Vec<[f64; 3]>>> {
+    PinDefect {
+        reason: "as nurbs_surface_point",
+        applies: Applies::Disagreeing,
+        check: |(a,), r| {
+            let each: Option<Vec<[f64; 3]>> = batch(a)
+                .into_iter()
+                .map(|uv| {
+                    let at = SurfaceAt {
+                        raw: a.raw.clone(),
+                        uv,
+                        sides: a.sides,
+                    };
+                    crate::t_nurbs_surface_eval::x::point(&at)
+                })
+                .collect();
+            let bits = |v: &Option<Vec<[f64; 3]>>| {
+                v.as_ref()
+                    .map(|v| v.iter().flatten().map(|x| x.to_bits()).collect::<Vec<_>>())
+            };
+            if bits(r) != bits(&each) {
+                return Err(format!("the batch {r:?} is not point at each, {each:?}"));
+            }
+            // a refused batch is right when a point of it is (the point test judges that);
+            // an answered one must have no point that is not one
+            let wrong = batch(a).into_iter().find_map(|uv| {
+                let at = SurfaceAt {
+                    raw: a.raw.clone(),
+                    uv,
+                    sides: a.sides,
+                };
+                eval_refused(&at, true).filter(|_| r.is_some())
+            });
+            wrong.unwrap_or(Ok(()))
+        },
+    }
+}
+
 /// The real roots of `c` (ascending, every coefficient finite) as exact rationals, each to
 /// within a width far below the spacing of doubles at `scale`; `None` for a coefficient not
 /// finite or the zero polynomial.
@@ -3734,7 +4291,7 @@ fn root_error(p: &scx_testkit::poly::Poly, roots: &[Rat], z: f64) -> Result<f64,
 /// (to one spacing of doubles at the root), or, for a grazing root with no real root near,
 /// of no larger exact residual (to one part in 10^6: the closed forms differ from the
 /// pin's in the last bit of `fmath`). Pairs within the difftest's tolerance are not judged.
-fn roots_no_worse(c: &[f64], got: &[f64], pin: &[f64]) -> Result<(), String> {
+fn poly_roots_no_worse(c: &[f64], got: &[f64], pin: &[f64]) -> Result<(), String> {
     if got.len() != pin.len() {
         return Err(format!("{} roots, the pin's {}", got.len(), pin.len()));
     }
@@ -3786,7 +4343,7 @@ fn roots_no_worse(c: &[f64], got: &[f64], pin: &[f64]) -> Result<(), String> {
 /// `|p|`. The closed form loses up to half the digits at near-double roots and at large
 /// coefficient ratios (`acos` and `cbrt` of a cancelled discriminant), which the pin keeps.
 /// The truth: the exact real roots of the cubic with the input's coefficients, isolated by
-/// Sturm sequences in rationals ([`scx_testkit::poly`]). The check ([`roots_no_worse`]):
+/// Sturm sequences in rationals ([`scx_testkit::poly`]). The check ([`poly_roots_no_worse`]):
 /// the pin's count, and each root at least as close to its true root as the pin's.
 pub fn poly_cubic() -> PinDefect<([f64; 4], f64), Vec<f64>> {
     PinDefect {
@@ -3795,7 +4352,7 @@ pub fn poly_cubic() -> PinDefect<([f64; 4], f64), Vec<f64>> {
         check: |(c, tol), got| {
             let pin = solidcore::geom::polynomial::solve_cubic(c, *tol).to_vec();
             let used: &[f64] = if c[3].abs() < *tol { &c[..3] } else { c };
-            roots_no_worse(used, got, &pin)
+            poly_roots_no_worse(used, got, &pin)
         },
     }
 }
@@ -3811,7 +4368,7 @@ pub fn poly_quartic() -> PinDefect<([f64; 4], f64, f64), Vec<f64>> {
         check: |([a, b, d, f], e, tol), got| {
             let c = [*a, *b, *d, *f, *e];
             let pin = solidcore::geom::polynomial::solve_quartic(&c, *tol).to_vec();
-            roots_no_worse(quartic_used(&c, *tol), got, &pin)
+            poly_roots_no_worse(quartic_used(&c, *tol), got, &pin)
         },
     }
 }
@@ -3854,12 +4411,13 @@ pub fn poly_from_roots() -> PinDefect<(f64,), Vec<Vec<f64>>> {
                 let k = arr::<4>(&c);
                 let pin = pp::solve_cubic(&k, *tol).to_vec();
                 let used: &[f64] = if k[3].abs() < *tol { &k[..3] } else { &k };
-                roots_no_worse(used, next()?, &pin).map_err(|e| format!("cubic {c:?}: {e}"))?;
+                poly_roots_no_worse(used, next()?, &pin)
+                    .map_err(|e| format!("cubic {c:?}: {e}"))?;
             }
             for c in cases(4) {
                 let k = arr::<5>(&c);
                 let pin = pp::solve_quartic(&k, *tol).to_vec();
-                roots_no_worse(quartic_used(&k, *tol), next()?, &pin)
+                poly_roots_no_worse(quartic_used(&k, *tol), next()?, &pin)
                     .map_err(|e| format!("quartic {c:?}: {e}"))?;
             }
             Ok(())

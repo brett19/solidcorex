@@ -14,7 +14,9 @@
 //! - [`Case`]: one batch of each side, every input through `black_box` and every result
 //!   consumed;
 //! - [`pin`]: the pin's `geom/krawczyk.rs`, made public by the build script;
-//! - [`pin_bern`]: the pin's `bernstein_roots` (`query/tangent_edge.rs`), likewise.
+//! - [`pin_bern`]: the pin's `bernstein_roots` (`query/tangent_edge.rs`), likewise;
+//! - [`pin_spatial`]: the pin's `SpatialIndex` (`topology/brep/validation/spatial.rs`),
+//!   likewise.
 
 use core::convert::Infallible;
 use core::fmt;
@@ -23,6 +25,7 @@ pub mod case;
 // The cases' setup and evaluators index fixed-size arrays.
 #[allow(clippy::indexing_slicing)]
 pub mod algo;
+pub mod algo_btree;
 #[allow(clippy::indexing_slicing)]
 pub mod algo_geom;
 #[allow(clippy::indexing_slicing)]
@@ -446,6 +449,27 @@ pub mod pin_bern {
     include!(concat!(env!("OUT_DIR"), "/pin_bernstein_roots.rs"));
 }
 
+/// The pin's `SpatialIndex` (`topology/brep/validation/spatial.rs`, `pub(crate)` there),
+/// made public by the build script, with [`pin_spatial::root`] to read its root box.
+#[allow(
+    clippy::all,
+    clippy::pedantic,
+    dead_code,
+    missing_docs,
+    unreachable_pub
+)]
+pub mod pin_spatial {
+    use solidcore::geom::extent3d::Extent3d;
+    use solidcore::math::Point3;
+    include!(concat!(env!("OUT_DIR"), "/pin_spatial.rs"));
+
+    /// The root's box (the union of the finite boxes), if any: what a benchmark reads of a
+    /// built index, after the whole index has gone through `black_box`.
+    pub fn root(s: &SpatialIndex) -> Option<Extent3d> {
+        s.nodes.first().map(|n| n.bbox)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{BATCH, Checksum, Consume, Rng, edges, seeded};
@@ -517,7 +541,10 @@ mod tests {
             made.sort_unstable();
             assert_eq!(named, made);
             for c in &cases {
-                assert_eq!(c.len, BATCH, "{}", c.name);
+                // The box tree cases read one set of `n` boxes, at their own sizes.
+                if !super::algo_btree::is_sized(&c.name) {
+                    assert_eq!(c.len, BATCH, "{}", c.name);
+                }
             }
         }
     }

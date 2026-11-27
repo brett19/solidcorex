@@ -24,14 +24,26 @@ pub(crate) const MISSING_KNOT: NurbsError = NurbsError::Defect {
 
 /// The `p + 1` basis values `N[span-p..=span]` at `u` into `n[..=p]`, for `p < N` and the
 /// window of [`KnotVector::window`].
-pub(crate) fn values_into<const N: usize>(
+pub(crate) fn values_into<const N: usize>(window: (&[f64], &[f64]), u: f64, n: &mut [f64; N]) {
+    // The scratch is [`SMALL`] wide below that degree whatever `N` is (a `Basis` holds `FULL`
+    // values): the arithmetic is the same, and clearing `FULL`-wide scratch for a cubic costs
+    // more than the cubic.
+    if window.1.len() < SMALL {
+        values_with::<SMALL, N>(window, u, n);
+    } else {
+        values_with::<N, N>(window, u, n);
+    }
+}
+
+/// [`values_into`] with scratch arrays of `M > p` entries.
+fn values_with<const M: usize, const N: usize>(
     (below, above): (&[f64], &[f64]),
     u: f64,
     n: &mut [f64; N],
 ) {
     // left[j-1] = u - U[span+1-j], right[j-1] = U[span+j] - u, for j in 1..=p.
-    let mut left = [0.0; N];
-    let mut right = [0.0; N];
+    let mut left = [0.0; M];
+    let mut right = [0.0; M];
     for (l, k) in left.iter_mut().zip(below.iter().rev()) {
         *l = u - k;
     }
@@ -58,17 +70,36 @@ pub(crate) fn values_into<const N: usize>(
     }
 }
 
-/// `nd[k][..=p]`, the `k`-th derivatives of the `p + 1` basis functions at `u`, for every
-/// row `k` of `nd`. Rows above `p` are zero. `None` only for an index past a scratch array,
-/// which `p < N` and a span from [`KnotVector::span`] rule out.
-pub(crate) fn derivs_into<const N: usize, const K: usize>(
+/// The `p + 1` basis values at `u` into `values[..=p]` and their `k`-th derivatives into
+/// `derivs[k - 1][..=p]`, for every row of `derivs`. Rows above `p` are zero. `None` only for
+/// an index past a scratch array, which `p < N` and a span from [`KnotVector::span`] rule out.
+///
+/// The values and the derivatives are separate so that a caller can hold `D` derivative rows
+/// beside the values, which stable Rust cannot size as one `[_; D + 1]`.
+pub(crate) fn derivs_into<const N: usize>(
+    window: (&[f64], &[f64]),
+    u: f64,
+    values: &mut [f64; N],
+    derivs: &mut [[f64; N]],
+) -> Option<()> {
+    // As in `values_into`: a `FULL × FULL` table is 8 KiB to clear.
+    if window.1.len() < SMALL {
+        derivs_with::<SMALL, N>(window, u, values, derivs)
+    } else {
+        derivs_with::<N, N>(window, u, values, derivs)
+    }
+}
+
+/// [`derivs_into`] with scratch arrays of `M > p` entries.
+fn derivs_with<const M: usize, const N: usize>(
     (below, above): (&[f64], &[f64]),
     u: f64,
-    nd: &mut [[f64; N]; K],
+    values: &mut [f64; N],
+    derivs: &mut [[f64; N]],
 ) -> Option<()> {
     let p = above.len();
-    let mut left = [0.0; N];
-    let mut right = [0.0; N];
+    let mut left = [0.0; M];
+    let mut right = [0.0; M];
     for (l, k) in left.iter_mut().skip(1).zip(below.iter().rev()) {
         *l = u - k;
     }
@@ -78,7 +109,7 @@ pub(crate) fn derivs_into<const N: usize, const K: usize>(
 
     // ndu[r][j] (r <= j): the basis functions of degree j. ndu[j][r] (j > r): the knot
     // differences they divide by.
-    let mut ndu = [[0.0; N]; N];
+    let mut ndu = [[0.0; M]; M];
     put(&mut ndu, 0, 0, 1.0)?;
     for j in 1..=p {
         let mut saved = 0.0;
@@ -94,16 +125,15 @@ pub(crate) fn derivs_into<const N: usize, const K: usize>(
         put(&mut ndu, j, j, saved)?;
     }
 
-    *nd = [[0.0; N]; K];
-    if let Some(row) = nd.first_mut() {
-        for (j, v) in row.iter_mut().enumerate().take(p + 1) {
-            *v = at(&ndu, j, p)?;
-        }
+    *values = [0.0; N];
+    derivs.fill([0.0; N]);
+    for (j, v) in values.iter_mut().enumerate().take(p + 1) {
+        *v = at(&ndu, j, p)?;
     }
 
-    let order = p.min(K.saturating_sub(1));
+    let order = p.min(derivs.len());
     for r in 0..=p {
-        let mut rows = [[0.0; N]; 2];
+        let mut rows = [[0.0; M]; 2];
         let [first, second] = &mut rows;
         let (mut s1, mut s2) = (first, second);
         *s1.first_mut()? = 1.0;
@@ -129,14 +159,14 @@ pub(crate) fn derivs_into<const N: usize, const K: usize>(
                 *s2.get_mut(k)? = v;
                 d += v * at(&ndu, r, pk)?;
             }
-            *nd.get_mut(k)?.get_mut(r)? = d;
+            *derivs.get_mut(k - 1)?.get_mut(r)? = d;
             (s1, s2) = (s2, s1);
         }
     }
 
     // Multiply through by p! / (p - k)!.
     let mut factor = p;
-    for (k, row) in nd.iter_mut().enumerate().skip(1).take(order) {
+    for (k, row) in (1..).zip(derivs.iter_mut().take(order)) {
         for v in row.iter_mut().take(p + 1) {
             *v *= factor as f64;
         }
@@ -216,7 +246,9 @@ impl<const K: usize> BasisDerivs<K> {
         let span = knots.span(u, side)?;
         let window = knots.window(span).ok_or(MISSING_KNOT)?;
         let mut rows = [[0.0; FULL]; K];
-        derivs_into(window, u, &mut rows).ok_or(MISSING_KNOT)?;
+        if let Some((values, derivs)) = rows.split_first_mut() {
+            derivs_into(window, u, values, derivs).ok_or(MISSING_KNOT)?;
+        }
         if rows.iter().flatten().any(|v| !v.is_finite()) {
             return Err(NurbsError::Degenerate { parameter: u });
         }
@@ -246,6 +278,69 @@ impl<const K: usize> BasisDerivs<K> {
     }
 }
 
+/// The non-vanishing basis functions of a knot vector at a parameter and their derivatives
+/// up to order `D` inclusive: `row(k)[j]` is the `k`-th derivative of `N[first() + j]`, for
+/// `k <= D`.
+///
+/// [`BasisDerivs`] with the order counted as a surface jet's is (`D` is the highest order, not
+/// the number of rows), so that a jet of order `D` can hold its `D + 1` rows: stable Rust has
+/// no `BasisDerivs<{ D + 1 }>`. The rows are bit for bit those of `BasisDerivs<{ D + 1 }>`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BasisJet<const D: usize> {
+    span: usize,
+    degree: usize,
+    values: [f64; FULL],
+    derivs: [[f64; FULL]; D],
+}
+
+impl<const D: usize> BasisJet<D> {
+    /// The basis functions of `knots` at `u` and their derivatives.
+    pub(crate) fn at(knots: &KnotVector, u: f64, side: Approach) -> Result<Self> {
+        check_order(D.saturating_add(1))?;
+        let span = knots.span(u, side)?;
+        let window = knots.window(span).ok_or(MISSING_KNOT)?;
+        let mut values = [0.0; FULL];
+        let mut derivs = [[0.0; FULL]; D];
+        derivs_into(window, u, &mut values, &mut derivs).ok_or(MISSING_KNOT)?;
+        if values
+            .iter()
+            .chain(derivs.iter().flatten())
+            .any(|v| !v.is_finite())
+        {
+            return Err(NurbsError::Degenerate { parameter: u });
+        }
+        Ok(Self {
+            span,
+            degree: knots.degree(),
+            values,
+            derivs,
+        })
+    }
+
+    /// The span index `i` ([`KnotVector::span`]).
+    #[must_use]
+    pub const fn span(&self) -> usize {
+        self.span
+    }
+
+    /// The index of the first non-vanishing function, `span - degree`.
+    #[must_use]
+    pub const fn first(&self) -> usize {
+        self.span - self.degree
+    }
+
+    /// The `k`-th derivatives of the `degree + 1` functions (`k = 0`: the values), for
+    /// `k <= D`.
+    #[must_use]
+    pub fn row(&self, k: usize) -> Option<&[f64]> {
+        let row = match k.checked_sub(1) {
+            None => &self.values,
+            Some(k) => self.derivs.get(k)?,
+        };
+        row.get(..=self.degree)
+    }
+}
+
 /// Checks that `K` rows (orders `0..K`) are supported.
 pub(crate) const fn check_order(rows: usize) -> Result<()> {
     if rows > MAX_ORDER + 1 {
@@ -271,6 +366,12 @@ impl KnotVector {
     pub fn basis_derivs<const K: usize>(&self, u: f64, side: Approach) -> Result<BasisDerivs<K>> {
         BasisDerivs::at(self, u, side)
     }
+
+    /// The non-vanishing basis functions at `u` and their derivatives up to order `D`
+    /// inclusive (A2.3): [`KnotVector::basis_derivs`]`::<{ D + 1 }>`. Errors as it does.
+    pub fn basis_jet<const D: usize>(&self, u: f64, side: Approach) -> Result<BasisJet<D>> {
+        BasisJet::at(self, u, side)
+    }
 }
 
 #[cfg(test)]
@@ -295,6 +396,43 @@ mod tests {
                 c.point(u, tside).unwrap().rounded[0]
             })
             .collect()
+    }
+
+    /// The narrow scratch below [`SMALL`] gives the bits of the `FULL`-wide one: values and
+    /// every derivative row, for each degree it serves, inside, at knots and outside.
+    #[test]
+    fn small_scratch_is_full_scratch_bit_for_bit() {
+        for p in 1..SMALL {
+            let mut knots = vec![0.0; p + 1];
+            knots.extend([0.2, 0.45, 0.45, 0.8]);
+            knots.extend(vec![1.0; p + 1]);
+            let kv = KnotVector::new(p, knots).unwrap();
+            for u in [-0.3, 0.0, 0.1, 0.45, 0.6, 1.0, 1.4] {
+                for side in [Approach::Below, Approach::Above] {
+                    let window = kv.window(kv.span(u, side).unwrap()).unwrap();
+                    let (mut small, mut full) = ([0.0; FULL], [0.0; FULL]);
+                    values_with::<SMALL, FULL>(window, u, &mut small);
+                    values_with::<FULL, FULL>(window, u, &mut full);
+                    assert_eq!(
+                        small.map(f64::to_bits),
+                        full.map(f64::to_bits),
+                        "p {p} u {u}"
+                    );
+                    let mut ds = [[0.0; FULL]; MAX_ORDER];
+                    let mut df = [[0.0; FULL]; MAX_ORDER];
+                    derivs_with::<SMALL, FULL>(window, u, &mut small, &mut ds).unwrap();
+                    derivs_with::<FULL, FULL>(window, u, &mut full, &mut df).unwrap();
+                    assert_eq!(
+                        small.map(f64::to_bits),
+                        full.map(f64::to_bits),
+                        "p {p} u {u}"
+                    );
+                    for (a, b) in ds.iter().zip(&df) {
+                        assert_eq!(a.map(f64::to_bits), b.map(f64::to_bits), "p {p} u {u}");
+                    }
+                }
+            }
+        }
     }
 
     #[test]
@@ -335,6 +473,32 @@ mod tests {
         assert_eq!(d.row(3).unwrap(), [-6.0, 18.0, -18.0, 6.0]);
         assert_eq!(d.row(4).unwrap(), [0.0; 4]);
         assert!(d.row(5).is_none());
+    }
+
+    #[test]
+    fn basis_jet_is_basis_derivs_one_row_longer() {
+        let kv = KnotVector::new(
+            3,
+            vec![0.0, 0.0, 0.0, 0.0, 0.3, 0.3, 0.7, 1.0, 1.0, 1.0, 1.0],
+        )
+        .unwrap();
+        for u in [0.0, 0.1, 0.3, 0.55, 0.7, 1.0] {
+            for side in [Approach::Below, Approach::Above] {
+                let d = kv.basis_derivs::<5>(u, side).unwrap();
+                let j = kv.basis_jet::<4>(u, side).unwrap();
+                assert_eq!((j.span(), j.first()), (d.span(), d.first()));
+                for k in 0..=5 {
+                    assert_eq!(j.row(k), d.row(k), "u {u}, row {k}");
+                }
+                let j0 = kv.basis_jet::<0>(u, side).unwrap();
+                assert_eq!(j0.row(0), Some(kv.basis(u, side).unwrap().values()));
+                assert!(j0.row(1).is_none());
+            }
+        }
+        assert!(matches!(
+            kv.basis_jet::<{ MAX_ORDER + 1 }>(0.5, Approach::Above),
+            Err(NurbsError::DerivativeOrder { .. })
+        ));
     }
 
     #[test]

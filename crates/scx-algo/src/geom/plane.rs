@@ -128,12 +128,35 @@ pub fn intersect_two_planes(a: &Plane, b: &Plane) -> Option<PlanesIntersection> 
 /// direction (`|plane_norm|² < SM_EFF_ZERO_SQ`, or a component not finite) or the
 /// projection is not finite.
 #[must_use]
+#[inline]
 pub fn point_project_to_plane(
     point: Point3,
     plane_pnt: Point3,
     plane_norm: Vec3,
 ) -> Option<Point3> {
     let len_sq = plane_norm.dot(plane_norm);
+    // the common case first: a length in range and a finite answer (the
+    // same answer as the general path below, which takes everything else)
+    let k = ((point.x - plane_pnt.x) * plane_norm.x
+        + (point.y - plane_pnt.y) * plane_norm.y
+        + (point.z - plane_pnt.z) * plane_norm.z)
+        / len_sq;
+    let projected = point - k * plane_norm;
+    if (EFF_ZERO_SQ..f64::INFINITY).contains(&len_sq) && projected.is_finite() {
+        return Some(projected);
+    }
+    project_general(point, plane_pnt, plane_norm, len_sq)
+}
+
+/// [`point_project_to_plane`] for every `|plane_norm|² = len_sq`.
+#[cold]
+#[inline(never)]
+fn project_general(
+    point: Point3,
+    plane_pnt: Point3,
+    plane_norm: Vec3,
+    len_sq: f64,
+) -> Option<Point3> {
     if len_sq.is_nan() || len_sq < EFF_ZERO_SQ {
         return None;
     }
