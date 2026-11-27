@@ -2692,6 +2692,192 @@ certificate, not finding the foot, is most of the work (likely too: an incumbent
 differs by rounding prunes differently; not measured). So `near` is kept as a hint, not
 relied on for speed.
 
+### 4.13 SU6 as built (11-27)
+
+Built on SU4's `Budget` and `Stop` (§4.12), for review.
+
+```rust
+// scx-surface
+pub enum Contact { Crossing, Tangent }
+pub enum CurveSurfaceHit {
+    Point { t: f64, uv: Point2, point: Point3, contact: Contact },
+    Overlap { t: Extent1d },
+}
+pub fn intersect_curve(c: &Curve, ce: &Extent1d, s: &Surface, se: &Extent2d, tol: Length,
+                       budget: &mut Budget, stop: &Stop) -> Result<Vec<CurveSurfaceHit>, SurfaceError>;
+pub enum SurfaceError { .., NurbsIntersection /* Unsupported */, Exhausted(Exhausted), Stopped }
+// scx-curve: Arcs::of_direction(x, y) is pub (the D13 parameter of a direction, no atan2)
+```
+
+| Curve | Plane | Cylinder | Cone | Sphere | Torus |
+| --- | --- | --- | --- | --- | --- |
+| line (one Bernstein piece) | 1 | 2 | 2 | 2 | 4 |
+| circle, ellipse (two rational half turns) | 2 | 4 | 4 | 4 | 8 |
+
+The table is the degree of `g(u)`, the surface's implicit equation on the curve's piece.
+`intersect_curve` takes the curve into the surface's axes (frame z times sense), writes
+each piece in homogeneous Bernstein form on `u` in `[0, 1]`, and isolates two sets of
+roots with `scx-algo`'s `bernstein_roots`:
+
+- the roots of `g`;
+- the turning points of `g / H^d`, which are `g'` for a line and `H g' - d H' g` for a
+  conic (degree at most 9).
+
+Those roots and the ends of the extent are events in `t`. Each root is refined on the
+surface's own equation. Each event is judged near or far by the distance at the tolerance.
+A run of near events then gives one answer:
+
+- an overlap, when every event is near;
+- a `Tangent` at the nearest turning point;
+- a `Crossing` at the root, or at the end when the run has only an end.
+
+Every point gets the D13 uv of its foot, with periods wrapped into `se`, and a point
+outside `se` is dropped. The results are sorted by `t`, then `u`, then `v`.
+
+**Bernstein isolation for every degree, not the closed forms.** §4.2 said the pairs
+reduce to "polynomials of degree up to 4" in `scx-algo`'s solvers. In fact a conic against
+a torus has degree 8, and the turning points reach degree 9.
+
+- The case for:
+  - There is one certified path for every pair, and its answer is final. A root exists
+    exactly where the Bernstein coefficients certify a sign change, so an empty answer
+    needs no grid fallback (04).
+  - `solve_quadratic` has an absolute `zero_tol` and cancels on a near-double root. Those
+    are exactly the near tangents this query has to classify.
+  - The Bernstein form of the half turns needs no `tan` substitution at the seam. The
+    halves share their end control point bit for bit, so a sign change at the seam is
+    seen once.
+- The case against:
+  - Quadratics cost more than the formula would. Measured, the plane (degree 1 and 2) is
+    1.1 µs a call, 20 times faster than the pin, so no degree-2 fast path was added. It
+    can be added later without changing any answer.
+
+**The polish.** A root of the Bernstein `g` carries the rounding of its coefficients. That
+rounding is large for the torus's degree 8, where a crossing came out 9.3e-10 off the
+surface. The fix is up to 3 Newton steps on the surface's affine implicit, evaluated at the
+curve's point. A step is kept only while it lowers `|f|` and moves `t` by less than 1e-6 of
+the curve's scale, so a root cannot move to another one. With the polish the worst crossing
+is 1.95e-13 from T2's root, at size 20.
+
+- The case for:
+  - The steps are deterministic, bounded and cheap (at most 3 evaluations per root).
+- The case against:
+  - A second equation beside `g`. The two must agree, and they are tested to.
+
+**Tangency at the tolerance.** Between two events `g` is monotone and keeps one sign. That
+is exact for the plane, cylinder and sphere, where `g` is a function of the distance. For
+the cone and torus it holds at the tolerance: their `g` has a turning point near, but not
+at, the distance minimum.
+
+The rules:
+
+- A Tangent is placed at the nearest turning point of the run, within `tol`.
+- Crossings closer than `tol` can tell apart merge into that one Tangent. A segment that
+  enters and leaves a sphere within one tolerance of depth is one touch, not two
+  crossings.
+
+- The case for:
+  - The answer is exact: every point is on the curve and within `tol` of the surface.
+  - Every T2 root is either a crossing within rounding or joined to a tangent by a stretch
+    that stays within `tol`. The tests check exactly that.
+- The case against:
+  - A Tangent's point is where the turning point is, not the true distance minimum. For
+    the cone and torus they differ by up to the tolerance.
+  - A segment shorter than its distance to the surface, lying wholly within `tol`, is
+    reported as an Overlap. This is the same rule as a curve lying on the surface, applied
+    at the tolerance.
+
+**Open for review.**
+
+- **The overlap is not clipped by `se`.** An `Overlap` covers the whole `ce`. Clipping a
+  curve's stretch to a uv box needs the curve's pcurve, which `pcurve_of` (§4.11) now
+  gives. Until then the caller clips.
+- **A NaN `tol` gives no tangents.** It is not refused. `pcurve_of` refuses a bad
+  tolerance (`BadTolerance`), so a typed refusal may be the consistent rule here too.
+- **A closed `ce`** (a turn or more) is the one turn from `ce.min()`.
+
+**Errors.**
+
+- A NURBS curve or surface is `NurbsIntersection` (Unsupported, `nurbs_intersection_unbuilt`),
+  never an empty answer.
+- `Exhausted` and `Stopped` are SU4's variants, with the same names, kinds and Display.
+  SU4's `Defect` is not used: the closed forms have no inside failure to
+  report.
+- The budget is charged 2 units per piece (one for each isolation), and `stop` is checked
+  before each piece. Neither returns a partial answer.
+
+**A14: the pin's callers that take the first hit.** The pin's curve-surface solve returns
+its hits by curve parameter, ascending (`add_sorted_solution`, by all parameters). It
+re-sorts by `t` when there are coincident ranges or several gaps. So "first" means
+smallest `t`, and the `t, u, v` sort serves it with no change.
+
+Four production sites take the first hit:
+
+- `blend/fillet_solver/p2.rs:2902`, the corner trim;
+- `blend/fillet_solver/p1/rails.rs:613`, the support edge's end;
+- `blend/fillet_geom/p1.rs:2009`, the cliff vertex;
+- `intersect/curve_class/p2.rs:1703` and `:1875`, the seed for the refined `(t, uv)`.
+
+Three more depend on order but do not take the first hit:
+
+- `offset_geometry_creation.rs:1317`, which reads every hit as having one parameter;
+- its other caller at `:5281`;
+- the boolean's `topology_intersector/p1.rs:1002`, which processes edges in `t` order.
+
+Every other caller uses all the hits and re-sorts or picks the nearest. That includes the
+ray pick in `query/brep.rs`, which sorts by distance along the ray. Where a caller of ours
+wants the hit nearest a guess, the rule stands: that is a filter at the caller.
+
+**How the pin differs.** `SmApiIntersectCurveSurface` (`GlobalCurveIntersect`, within
+0.001) agrees on every pair in the difftest but one. In that pair a segment cuts a sphere
+of radius 1.65 along a chord of about 0.25, dipping 4.6e-3 inside, which is 4.6 times the
+tolerance. The pin reports a coincident stretch and one point. scx reports two crossings,
+which T2's roots confirm. This is the pin's defect, checked against T2 in
+`pin_defects::curve_surface`.
+
+**Truth check.**
+
+- Unit tests (`tests/intersect.rs`, 39 s) check against testkit T2 and against exact
+  checks:
+  - every point is on the curve at its `t`, inside `se`, and its foot is within the
+    distance;
+  - every crossing is within `1e-11` of size of a T2 root;
+  - every tangent is within `tol`;
+  - every T2 root is found.
+- The random pairs: 2,800 pairs at `tol` of 1e-6 and 1e-3, with 3,106 roots and 3,104
+  crossings. The worst crossing is 1.95e-13.
+- The near tangents: the curve is set at a distance `delta` from a surface point along
+  the tangent plane, with `delta` in 0, ±1e-9, ±tol/2 and ±2 tol, for lines, circles and
+  ellipses curving both ways.
+  - A run of 30 seeds: 10,080 pairs, 7,200 touches classified Tangent, 1,624 misses with
+    no hit. The worst crossing is 4.3e-11, on a cylinder at the 1e-3 tolerance.
+  - The committed test runs 4 seeds.
+- Further tests: curves lying on the surface (Overlap), the cone's far nappe (no hit),
+  `se` dropping and wrapping, the sort, and the NURBS, budget and stop errors.
+- The difftest `t_curve_surface`: 716 inputs, 279 exact, 436 within tolerance, 1 pin
+  defect and 0 mismatches.
+
+**Speed.** Measured with both sides prebuilt and the intersect call alone. scx ran at
+opt-level 2 (the pin's dev profile) over the 737 pool cases, taking the best of 7 runs:
+
+| Surface | scx | pin | ratio |
+| --- | --- | --- | --- |
+| plane | 1.14 µs | 22.4 µs | 20x |
+| cylinder | 2.41 µs | 443 µs | 184x |
+| cone | 2.51 µs | 813 µs | 323x |
+| sphere | 2.27 µs | 2.56 ms | 1,129x |
+| torus | 4.37 µs | 4.06 ms | 930x |
+| all | 2.55 µs | 1.59 ms | 622x |
+
+The pin solves its NURBS images with a general subdivision solver. Research 66 §5 has
+nothing for this beyond 65's rows. Its candidates either do not certify isolation (Newton
+from samples) or are the pin's own subdivision. The certified Bernstein isolation used
+here is 65 row 1.
+
+**Added work.** All the code is new. No existing path gains work. `Arcs::of_direction`
+became `pub` because `Arcs` moved to `scx-curve`. `Axes::local` is the same as SU4's, and
+`Cone::slope` is main's.
+
 ## 5. `scx-ssi`, the analytic part
 
 The pin's sources are `intersect/surface_intersector` (`p1`-`p5`) and `adv_surface_intersector`.
@@ -2797,6 +2983,156 @@ None of these are in the testkit (59). All are closed forms, so they are cheap.
 | SS2 | plane-plane, plane-quadric (on SS5) | SS1, SS5; T5 |
 | SS3 | sphere-sphere, coaxial pairs | SS1, SU1; T5 |
 | SS4 | coincidence and tangency classification at the tolerance | SS2, SS3 |
+
+### 5.6 SS1/SS5 as built (11-27)
+
+Decided by analysis and an adversarial pass. Proposed for review; not yet ruled.
+
+```rust
+// scx-ssi::analytic
+#[non_exhaustive] pub enum Intersection {
+    Pieces { curves: Vec<IntersectionCurve>, points: Vec<IntersectionPoint> },  // at least one
+    Coincident { on_a: Extent2d, on_b: Extent2d },
+    Empty,                                                                       // final
+}
+pub struct IntersectionCurve { pub curve: Curve, pub span: Extent1d, pub contact: Contact }
+pub struct IntersectionPoint { pub point: Point3, pub contact: Contact }
+pub enum Contact { Transversal, Tangent }
+pub fn intersect(a: &Surface, ae: &Extent2d, b: &Surface, be: &Extent2d,
+                 acc: [Accuracy; 2], res: Resolution) -> Closed<Intersection>;
+pub fn section_by_plane(s: &Surface, se: &Extent2d, plane: &Plane, pe: &Extent2d,
+                        tol: Length) -> Closed<Intersection>;
+// scx-surface: Closed<T> { Solved(T), General } moved here from its first user, shared
+```
+
+| Surface | Solved | `General` |
+|---|---|---|
+| plane | a line, coincident, or empty | never |
+| cylinder | an ellipse, a circle, two lines or a tangent line, or empty | an ellipse so long that `2^-50` of its semi-axis passes the tolerance |
+| cone | an ellipse, a circle, two generators or a tangent generator, the apex, or empty | a parabola or hyperbola; an ellipse that long |
+| sphere | a circle, a touch point, or empty | never |
+| torus | one or two circles across the axis, two meridian circles along it, or empty | every other plane (a spiric section) |
+
+**Deviations from §5.2 and §5.3, with the case against and the case for each.**
+
+- **One answer type, `Closed<Intersection>`, for both entry points.** §5.3 has a separate
+  `Section` with warnings.
+  - Against: a plane section has the plane's side to name, and 5.3 kept them apart.
+  - For: a section *is* an intersection with a plane. One type means `intersect` hands
+    `section_by_plane`'s answer through unchanged, and the caller matches one enum. The pin's
+    warnings say that the answer is partial or near a limit. Here those cases are
+    `General`, so no warning is left to carry.
+- **No pcurve fields.** §5.3 has `on_a`/`on_b: Option<Curve2>`.
+  - Against: callers building edges need them, and 5.2 said SS5 needs `scx-nurbs`.
+  - For: D10 and §4.11 (ruled 11-27) put exact pcurves in `scx_surface::pcurve_of`, at the
+    curve's own parameter. A piece carries `curve` and `span`, which is exactly what
+    `pcurve_of(&piece.curve, surface, piece.span, tol)` takes. A unit test calls it on both sides of
+    a square cylinder cut. Storing `Option<Curve2>` here would duplicate that function and
+    compute pcurves for callers that never read them. An oblique cylinder section's pcurve is
+    `NoClosedForm` in `pcurve_of` today (WR-680's rational form is not built), and that gap
+    belongs to `pcurve_of`, not to this crate.
+- **`Pieces { curves, points }`, not `Curves` and `Touch`.**
+  - Against: 5.3 kept touch points as their own variant.
+  - For: one section can have both. A cylinder cut can give a line and a separate point where
+    the other line leaves the extent within the tolerance. Two variants would force one of
+    them to be lost or a third variant. `Empty` stays its own variant, never an empty `Pieces`.
+- **Curves in construction order, not sorted.**
+  - Against: a sort makes `(a, b)` and `(b, a)` compare equal piece for piece.
+  - For: the construction is deterministic (the same input gives the same bits), and
+    reversing the order reverses the direction (`n_a x n_b`), so the pieces would not match
+    one-to-one anyway. A sort key over floating point needs a tie rule, and no caller needs one.
+    It can be added when a caller needs it.
+- **`acc: [Accuracy; 2]` and `res: Resolution` on `intersect`; `section_by_plane` takes one
+  `Length`.** This follows §5.2's coincidence row (`max(res, acc1, acc2)`, via
+  `scx_num::units::coincident`). `section_by_plane` keeps the single plane-accuracy length that
+  5.2 names.
+- **`use_surface_edges` and `ang_tol` dropped** (§5.2 said so). Neither changes any pin answer
+  on these kinds.
+- **The cone is worked from its apex.** The cone is `rho = k z'` and the plane is
+  `n . p' = delta`, so every size is `delta` times a factor of the plane's lean.
+  - Against: the pin works from the frame origin.
+  - For: there is no cancellation. A plane through the apex gives the apex or the generators,
+    not a rounding-sized ellipse.
+- **Empty from exact bounds, never from a search (04, research 68).** Two bounds come in
+  beyond the pin's. Each is a support function, so it is exact and final:
+  - **The cylinder or cone between its two rims.** Each generator is a segment between the rims,
+    so the part lies in their convex hull. A rim at height `v` and radius `rho` spans
+    `nz v - d +- |rho| s` from the plane. Both rims off one side by more than `tol` means
+    `Empty`.
+  - **The torus.** If the plane is farther from the centre than `s * major + minor` (the core
+    circle's support plus the tube's ball), the answer is `Empty`.
+  - Against: the pin answers `General` there, and a bound that is too tight would lose a curve.
+  - For: both are exact supports. The difftest checks every such case on a 65x65 grid of the
+    surface (all points off the plane by more than the snap), and `plane_sections` checks them
+    against the truth's points. Without them, a hyperbola or spiric case that misses the extent
+    would go to the marcher for nothing.
+- **No seam splitting.** A conic arc that crosses the turn's start (`u = 0`) is one piece
+  whose span passes `2 pi`.
+  - Against: the pin cuts it in two, and a face loop built from the pieces may want the seam
+    as a vertex.
+  - For: the intersection is one connected curve. A seam is a property of a face's uv, and
+    whoever builds edges splits there if the face needs it, via `pcurve_of`'s period window
+    (07 §3 rule 5). The difftest's truth check rejects two pieces that meet end to end.
+- **Primitives keep their known topology (04).** A near-square cylinder cut is a circle when
+  the true ellipse lies within the tolerance of it along the surface. A near-axial plane gives
+  lines when they are within the tolerance over the extent's height. Two lines or circles
+  within the tolerance of each other are one tangent curve.
+- **The difftest compares on forward sense only.** Sense changes only the direction
+  (`plane_sections` covers both senses against the truth). The pin's reversed-sense frames
+  would add a mapping to the harness and no new geometry.
+
+**Validation.** `plane_sections` (6 tests) checks every answer against the exact sections
+(testkit T5). Pieces must lie on both surfaces and inside both extents, with the truth's
+kinds, and every truth point inside the extents must be covered. Crossing curves must run
+along `n_s x n_plane`. It covers both senses: fixed cases per kind plus 400 random sections.
+There are 5 unit tests: order and direction, coincident extents, other pairs `General`,
+the span merge across the turn's start, and the `pcurve_of` seam.
+
+The difftest `t_ssi::ssi_section_by_plane` compares against the pin's `intersect_with_plane`.
+It uses 1,000 inputs aimed at the cases above. Results: 378 exact, 532 within tolerance,
+90 pin defects, 0 mismatches, 0 nondeterministic.
+
+Each pin defect is judged against T5 by `t_ssi::truth::check`, in these classes (pool counts):
+
+| Class | Count | Pin answer | scx answer |
+|---|---:|---|---|
+| Coincident planes | 23 | general | coincident |
+| Cone cut through the apex, steeper than the generators | 11 | general | the two generator lines |
+| Cone apex outside the extent | 15 | a tangent point off the extent | empty |
+| Cylinder seam | 9 | splits the arc at `u = 0` | one piece |
+| Cone seam | 10 | splits the arc at `u = 0` | one piece |
+| Bounded cylinder or cone missed | 8 | general | empty |
+| Torus missed | 15 | general | empty |
+
+**Timings.** These were measured side-channel with a throwaway timer, not committed. The
+timer ran over the difftest pool on prebuilt surfaces, 200 repetitions, per call. Each
+figure is scx against the pin:
+
+| Kind | scx | pin |
+|---|---:|---:|
+| plane | 0.55 us | 1.71 us |
+| cylinder | 1.81 us | 7.72 us |
+| cone | 0.68 us | 2.57 us |
+| sphere | 0.63 us | 5.47 us |
+| torus | 0.69 us | 32.6 us |
+
+The torus gap is mostly the pin's general fallback on the spiric cases. scx gives up on
+those cases at once and the caller pays later; the comparison is on what each call does.
+
+**Other kernels (research 66).** §8.2 records that OCCT's IntAna does analytic quadric pairs.
+Its docs only were read, and no code. The techniques adopted here are ours:
+
+- exact support and hull rejects before any conic is built;
+- one linear side per extent edge, so clipping is the roots of `a cos t + b sin t + c`.
+
+Both are exact and deterministic. Nothing was taken that depends on a search or a cache.
+
+**Open.**
+
+- WR-680's rational pcurve of an oblique cylinder section, in `pcurve_of`.
+- Parabola and hyperbola kinds in `scx-curve`. SS5 answers `General` for them until those
+  kinds exist.
+- SS2 to SS4.
 
 ## 6. `scx-brep`
 

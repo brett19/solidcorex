@@ -225,7 +225,9 @@ mod tests {
         );
     }
 
+    // wasm32-wasip1 cannot spawn threads; the xplat job runs this crate there.
     #[test]
+    #[cfg_attr(target_os = "wasi", ignore = "wasi has no threads")]
     fn stop_is_shared_across_threads() {
         fn shared<T: Send + Sync>() {}
         shared::<Stop>();

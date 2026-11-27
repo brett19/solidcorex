@@ -1,5 +1,6 @@
 // Written for solidcorex. Apache-2.0.
-//! Why a surface cannot be built or edited, or a NURBS surface's inversion did not finish.
+//! Why a surface cannot be built or edited, a NURBS surface's inversion did not finish, or a
+//! curve-surface intersection cannot answer.
 //!
 //! Errors follow research 62 §10: every cause has a kind ([`SurfaceError::kind`]), a stable
 //! [`SurfaceError::name`] and a one-frame Display. A kind is validated once, when it is built;
@@ -105,9 +106,13 @@ pub enum SurfaceError {
     /// sizes and extents `to_nurbs` reaches it only on overflow (sizes near the largest
     /// double).
     Nurbs(NurbsSurfaceError),
-    /// The work budget of a NURBS surface's inversion ran out.
+    /// A curve-surface intersection with a NURBS curve or a NURBS surface: not built yet
+    /// (SU6 builds the analytic pairs). Named, never an empty answer.
+    NurbsIntersection,
+    /// The work budget of an iterating call (a NURBS surface's inversion, a curve-surface
+    /// intersection) ran out.
     Exhausted(Exhausted),
-    /// The caller stopped a NURBS surface's inversion.
+    /// The caller stopped an iterating call.
     Stopped,
     /// A NURBS surface's inversion went wrong inside: a bug, not the input's fault.
     Defect {
@@ -119,7 +124,8 @@ pub enum SurfaceError {
 impl SurfaceError {
     /// The error's kind: [`ErrorKind::Refused`] for sizes that make no surface and for an
     /// edit's extent or map, [`ErrorKind::Unsupported`] for a self-intersecting torus and a
-    /// kind's image under a map that is not a similarity, the NURBS error's own kind for
+    /// kind's image under a map that is not a similarity and a NURBS curve-surface
+    /// intersection, the NURBS error's own kind for
     /// [`SurfaceError::Nurbs`], and the inversion's [`ErrorKind::Exhausted`],
     /// [`ErrorKind::Cancelled`] and [`ErrorKind::Defect`].
     #[must_use]
@@ -128,7 +134,9 @@ impl SurfaceError {
             Self::NotFinite { .. } | Self::Degenerate { .. } | Self::Negative { .. } => {
                 ErrorKind::Refused
             }
-            Self::SelfIntersecting { .. } | Self::NotSimilar => ErrorKind::Unsupported,
+            Self::SelfIntersecting { .. } | Self::NotSimilar | Self::NurbsIntersection => {
+                ErrorKind::Unsupported
+            }
             Self::EmptyExtent { .. }
             | Self::OutsideDomain { .. }
             | Self::MapNotFinite
@@ -154,6 +162,7 @@ impl SurfaceError {
             Self::MapFlattens => "map_flattens",
             Self::NotSimilar => "map_not_similar",
             Self::Nurbs(_) => "nurbs_failed",
+            Self::NurbsIntersection => "nurbs_intersection_unbuilt",
             Self::Exhausted(e) => e.name(),
             Self::Stopped => Stopped.name(),
             Self::Defect { .. } => "inversion_defect",
@@ -198,6 +207,9 @@ impl fmt::Display for SurfaceError {
                 "the transform is not a similarity, so the image is not a surface of the kind",
             ),
             Self::Nurbs(_) => f.write_str("the NURBS surface could not be built or edited"),
+            Self::NurbsIntersection => {
+                f.write_str("intersecting a NURBS curve or surface with a curve is not built yet")
+            }
             Self::Exhausted(e) => write!(f, "{e}"),
             Self::Stopped => write!(f, "{Stopped}"),
             Self::Defect { reason } => write!(f, "the inversion failed inside: {reason}"),
@@ -258,6 +270,11 @@ mod tests {
         };
         assert_eq!(t.kind(), ErrorKind::Unsupported);
         assert!(t.to_string().contains("intersects itself"));
+        let n = SurfaceError::NurbsIntersection;
+        assert_eq!(
+            (n.kind(), n.name()),
+            (ErrorKind::Unsupported, "nurbs_intersection_unbuilt")
+        );
         let x = SurfaceError::Exhausted(Exhausted { limit: 3 });
         assert_eq!(
             (x.kind(), x.name()),
