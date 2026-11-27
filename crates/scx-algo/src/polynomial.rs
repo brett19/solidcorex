@@ -39,8 +39,8 @@
 //! The roots are bracketed by the critical points (the derivative's roots, from the
 //! stable quadratic formula for a cubic and recursively from the cubic for a quartic):
 //! between two consecutive critical points `p` is monotone, so a change of sign there
-//! holds exactly one root. Each sign is taken from plain Horner when the value clears its
-//! error bound, else from compensated Horner. Each root is then found by Newton's method,
+//! holds exactly one root. Each sign is taken from plain evaluation when the value clears
+//! its error bound, else from compensated Horner. Each root is then found by Newton's method,
 //! kept inside the bracket, and finished by compensated Newton steps. The starts come from
 //! exact forms solved in plain arithmetic: a cubic with critical points `c1 < c2` is
 //! `v1 + (v2 - v1)(3 t^2 - 2 t^3)` at `x = c1 + (c2 - c1) t`, and a quartic between two
@@ -394,11 +394,16 @@ fn balanced<const N: usize>(c: &[f64; N]) -> ([f64; N], i32, i32) {
         e.get(lowest).copied().unwrap_or(0),
         e.last().copied().unwrap_or(0),
     );
-    // round to nearest (ties down) of (e_low - e_lead) / span
-    let j = if span > 0 {
-        (2 * (e_low - e_lead) + span).div_euclid(2 * span)
-    } else {
-        0
+    // round to nearest (ties down) of (e_low - e_lead) / span, by constant divisors (a
+    // multiply, not a division)
+    let num = 2 * (e_low - e_lead) + span;
+    let j = match span {
+        1 => num.div_euclid(2),
+        2 => num.div_euclid(4),
+        3 => num.div_euclid(6),
+        4 => num.div_euclid(8),
+        s if s > 0 => num.div_euclid(2 * s),
+        _ => 0,
     };
     let (mut top, mut low, mut least) = (i32::MIN, i32::MAX, i32::MAX);
     for ((&v, &ei), i) in c.iter().zip(&e).zip(0..) {
@@ -544,7 +549,8 @@ fn compensated(mut terms: impl Iterator<Item = (f64, f64)>, x: f64) -> (f64, f64
 const U: f64 = f64::EPSILON / 2.0;
 
 /// Higham's `γ_k = k u / (1 - k u)`. Horner's rule on a polynomial of degree `n` errs by at
-/// most `γ_2n` times `S(x) = Σ |c_i| |x|^i`; one more `u` covers the dropped `lo` parts.
+/// most `γ_2n` times `S(x) = Σ |c_i| |x|^i` (and so does [`horner`]'s Estrin form, whose
+/// terms see fewer roundings); one more `u` covers the dropped `lo` parts.
 /// Compensated Horner errs by at most `u |p(x)| + γ_2n^2 S(x)`.
 const fn gamma<const N: usize>() -> f64 {
     let ku = (2 * N - 1) as f64 * U;
@@ -676,7 +682,7 @@ fn roots_between<const N: usize>(
                 let h = next.x - s.x;
                 // the model's root as a fraction `t` of `h` from the nearer end (`flip`:
                 // `next`), so that a root close to that end keeps its precision
-                let (t, flip) = smooth_inner(v1, v2);
+                let (t, flip) = smooth_inner(v1, v2, N != 5);
                 inner_t = Some((t, flip));
                 // a quartic is the cubic form plus `c4 h^4 t^2 (1 - t)^2`, which is the
                 // same from either end
@@ -803,21 +809,31 @@ fn roots_between<const N: usize>(
 
 /// The inner root of the model cubic, `t` in `(0, 1)` with
 /// `s(t) = 3 t^2 - 2 t^3 = v1 / (v1 - v2)` (`v1`, `v2` of opposite signs), in plain
-/// arithmetic: solved on the half nearer `v1`'s or `v2`'s end, where `s` is convex, from
-/// below, and given as the fraction of the way from that end, in `(0, 1/2]`, with whether
-/// it is `v2`'s.
-fn smooth_inner(v1: f64, v2: f64) -> (f64, bool) {
+/// arithmetic: solved on the half nearer `v1`'s or `v2`'s end, where `s` is convex, and
+/// given as the fraction of the way from that end, in `(0, 1/2]`, with whether it is
+/// `v2`'s. Without `converge`, only the fit that starts Newton's method (to within
+/// `2^-16` of `t`), for a quartic's search, which [`quartic_inner`] refines.
+fn smooth_inner(v1: f64, v2: f64, converge: bool) -> (f64, bool) {
     let w = v1 - v2;
     let (q, flip) = if v1.abs() <= v2.abs() {
         (v1 / w, false)
     } else {
         (-v2 / w, true)
     };
-    // `3 t^2 - 2 t^3 = q` on `(0, 1/2]`: one fixed-point step from `sqrt(q / 3)`, then Newton
-    let t = (q / 3.0).sqrt();
-    let t = scalar_newton(((q + 2.0 * t * t * t) / 3.0).sqrt(), |t| {
-        (t * t * (3.0 - 2.0 * t) - q, 6.0 * t * (1.0 - t))
-    });
+    // `3 t^2 - 2 t^3 = q` on `(0, 1/2]`: `t / sqrt(q)` by a degree-six fit in `sqrt(q)`
+    // (interpolated at Chebyshev nodes; relative error below `2^-16.9`), then Newton,
+    // whose relative error squares and halves each step, so that two steps end it
+    let z = q.sqrt();
+    let z2 = z * z;
+    let fit = (0.577_352_449_811_064_3 + 0.110_810_816_906_093_87 * z)
+        + z2 * ((0.060_031_781_812_350_5 - 0.019_305_341_360_908_265 * z)
+            + z2 * ((0.211_289_159_249_565_65 - 0.303_350_715_091_017_7 * z)
+                + z2 * 0.232_047_409_306_649_58));
+    let t = z * fit;
+    if !converge {
+        return (t, flip);
+    }
+    let t = scalar_newton(t, |t| (t * t * (3.0 - 2.0 * t) - q, 6.0 * t * (1.0 - t)));
     (t, flip)
 }
 
@@ -1025,8 +1041,40 @@ fn magnitudes<const N: usize>(c: &[f64; N], x: f64) -> (f64, f64) {
     (s, d)
 }
 
-/// `p(x)`, `p'(x)` and `S(x)` by plain Horner.
+/// `p(x)`, `p'(x)` and `S(x)` in plain arithmetic: for degrees three and four by Estrin's
+/// scheme (in powers of `x^2`), whose chain of dependent operations is shorter than
+/// Horner's (each Newton step waits on it), and whose terms see at most `2n - 1`
+/// roundings, inside Horner's `γ_2n` bound; by Horner's rule otherwise, and past `2^250`.
+/// Below it, with coefficients below `2^16` (balanced ones are below 2, their derivatives'
+/// below 8), every term is below `2^1016`, so no term or partial sum of either form can
+/// overflow and the two differ only in rounding; above it, Estrin's separate powers could
+/// overflow (and give `inf - inf`) where Horner's nesting does not.
 fn horner<const N: usize>(c: &[f64; N], x: f64) -> (f64, f64, f64) {
+    // `2^250`
+    const FAR: f64 = f64::from_bits((1023 + 250) << 52);
+    let ax = x.abs();
+    if ax > FAR {
+        return horner_rule(c, x);
+    }
+    let (x2, a2) = (x * x, ax * ax);
+    if let [c0, c1, c2, c3, c4] = *c.as_slice() {
+        let p = (c0 + c1 * x) + x2 * ((c2 + c3 * x) + x2 * c4);
+        let d = (c1 + 2.0 * c2 * x) + x2 * (3.0 * c3 + 4.0 * c4 * x);
+        let s = (c0.abs() + c1.abs() * ax) + a2 * ((c2.abs() + c3.abs() * ax) + a2 * c4.abs());
+        return (p, d, s);
+    }
+    if let [c0, c1, c2, c3] = *c.as_slice() {
+        let p = (c0 + c1 * x) + x2 * (c2 + c3 * x);
+        let d = c1 + x * (2.0 * c2 + 3.0 * c3 * x);
+        let s = (c0.abs() + c1.abs() * ax) + a2 * (c2.abs() + c3.abs() * ax);
+        return (p, d, s);
+    }
+    horner_rule(c, x)
+}
+
+/// [`horner`] by Horner's rule.
+#[inline(never)]
+fn horner_rule<const N: usize>(c: &[f64; N], x: f64) -> (f64, f64, f64) {
     let ax = x.abs();
     let (mut p, mut d, mut s) = (0.0, 0.0, 0.0);
     for &a in c.iter().rev() {
