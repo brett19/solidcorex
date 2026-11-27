@@ -10,11 +10,19 @@
 //! `-`, `*`, `/`, `sqrt` and the error-free transformations are used, all of them
 //! correctly rounded by IEEE 754, so the bits do not depend on the platform.
 //!
-//! `cos`, `acos` and `cbrt` first try a fast path (Ziv's strategy): the same value in
-//! plain doubles, with exact products only where the result needs them, kept when a
-//! rounding test proves the double-double path rounds to the same double, and that path
-//! otherwise (under 2% of inputs). The bits are the double-double path's either way;
-//! `dd::rounds_to_hi` holds the test and its proof, and each fast path its error bound.
+//! Every function is correctly rounded (round to nearest, ties to even), by Ziv's
+//! strategy: the double-double result carries a proven error bound, and a rounding test
+//! (`dd::round_or` and its scaled forms) keeps it only when every value within the bound
+//! rounds to the same double. Otherwise a slower path decides: for `sin`, `cos`, `tan`,
+//! the inverse trigonometric functions and `cbrt` first a tighter double-double, then
+//! multi-precision evaluation (`accurate`, on `big`'s fixed-point numbers, again with a
+//! bound and a test, at rising precision), which also detects the exact results and
+//! the halfway points (`hypot`, `cbrt`, `powf`, `powi`) and rounds those exactly. On the
+//! inputs below the multi-precision path ran for under 0.04% of calls, the tighter
+//! double-double for under 2%.
+//! `cos`, `acos` and `cbrt` keep a plain-double fast path ahead of the double-double,
+//! tested the same way. `docs/research/70-fmath-correct-rounding.md` holds the design
+//! and each bound's proof.
 //!
 //! Depends on nothing in the crate but [`crate::eft`], so the two can move to a crate of
 //! their own.
@@ -38,17 +46,14 @@
 //! | `cbrt` | 0.4997 | | `hypot` | 0.4999 | | `powf` | 0.4999 |
 //! | `powi` | 0.4999 | |  |  | |  |  |
 //!
-//! It is not correctly rounded everywhere. Each function rounds once a result carrying 68
-//! to 104 bits, so where the true value lies closer than that to a halfway point between
-//! two doubles the result can be the neighbour of the correct one: at CORE-MATH's worst
-//! cases (`tests/fmath_worst.rs`, 1,000 per function) 2 to 27% of the results misround,
-//! by at most 2^-21 ulp past the halfway point (`exp2`; `exp` 2^-28, `ln` 2^-36, the rest
-//! 2^-40 or less).
-//! `powf` also misrounds exact halfway points (`powf(1781, 5)`). Only `cbrt` was
-//! correctly rounded at all of them. Every result checked is within one ulp, and none is
-//! further than the neighbour.
+//! At CORE-MATH's worst cases (`tests/fmath_worst.rs`, the 1,000 inputs per function whose
+//! true values lie closest to a halfway point) every function is
+//! correctly rounded; before the rounding tests 3,174 of those 18,000 results were the
+//! neighbour of the correct one, and `powf` misrounded exact halfway points
+//! (`powf(1781, 5)`).
 //!
-//! `tests/fmath.rs` holds the test that keeps this: random inputs and a table of hard
+//! `tests/fmath_worst.rs` keeps that, pinning each function's misround count at 0, and
+//! `tests/fmath.rs` holds random inputs and a table of hard
 //! cases against references computed in double-double in the test itself, each within
 //! 0.501 ulp, and the C99 special values bit for bit.
 //!
@@ -73,10 +78,13 @@
 //! | `cbrt` | 24.2 | 12.8 | 1.90 | | `hypot` | 13.0 | 12.1 | 1.07 |
 //! | `powf` | 40.1 | 12.5 | 3.22 | | `powi` | 57.3 | 26.8 | 2.14 |
 //!
-//! The `cos`, `acos` and `cbrt` rows predate their fast paths. MEASURED 2026-11-27, off
-//! the repository, back to back on one pinned core against the build before them (as
-//! ratios to the platform's libm in the same run): `cos` about 9% faster, `acos` about
-//! 30%, `cbrt` about 12%.
+//! The table predates the rounding tests. MEASURED 2026-11-27, off the repository, in
+//! instructions per call (callgrind, the inputs above, fallbacks included), before the
+//! tests and after: `exp` 165 to 170, `exp2` 158 to 162, `ln` 190 to 195, `log2` 208 to
+//! 216, `log10` 214 to 226, `sin` 298 to 237, `cos` 238 to 239, `tan` 427 to 337,
+//! `sin_cos` 397 to 356, `asin` 309 to 317, `acos` 278 to 270, `atan` 196 to 206, `atan2`
+//! 294 to 305, `sinh` 215 to 238, `cosh` 199 to 216, `tanh` 224 to 244, `cbrt` 123 to
+//! 114, `hypot` 188 to 179, `powf` 444 to 466, `powi` 351 to 368.
 //!
 //! The default x86-64 target has no fused multiply-add instruction, so every
 //! [`crate::eft::two_prod`] is a call to a library `fma`: on `x86_64-unknown-linux-gnu`,

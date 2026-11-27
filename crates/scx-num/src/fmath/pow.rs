@@ -148,8 +148,9 @@ pub(super) fn powf(x: f64, y: f64) -> f64 {
 
 /// [`powf`] for `|y|` above about `2^16.5`, where the absolute bound on `ln_dd` is too
 /// weak. Near 1 (`|ln a| < 2^-9`, so `c = 1` and `|r| < 2^-8.99`) the error of `ln_dd`
-/// is within `2^-52.5 r^2 / (1 - |r|) < 2^-70.4 |ln a|`, so that of `z` within
-/// `2^-70.4 |z|`; elsewhere the multi-precision fallback.
+/// is the tail's `2^-52.5 |r|^3`, at most `2^-52.5 r^2 / (1 - |r|) |ln a| < 2^-70.4
+/// |ln a|` (with the `2^-100` of the sums), so that of `z` within `2^-70.4 |z|`; elsewhere
+/// the multi-precision fallback.
 #[cold]
 #[inline(never)]
 fn pow_wide(x: f64, y: f64, lh: f64, zh: f64, (h, l): (f64, f64), m: i32) -> f64 {
