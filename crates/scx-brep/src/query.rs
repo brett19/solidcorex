@@ -26,6 +26,15 @@ impl<S: Stage> Face<'_, S> {
         Boundary::of(self.rec).uv_box()
     }
 
+    /// Whether the face's region is proved: its loops' signed area (enclosed, refined
+    /// until its sign shows) decides which side of them the face lies on. Unproved for a
+    /// loop that does not close in uv or a sliver whose area the enclosures cannot sign;
+    /// [`Face::contains_uv`] then answers `None` everywhere. Filled on first read.
+    #[must_use]
+    pub fn is_region_proved(self) -> bool {
+        Boundary::of(self.rec).is_decided()
+    }
+
     /// Where `p` lies against the face's region in uv: inside, outside, or near the
     /// boundary, as the pcurves' enclosures prove. `None` when they cannot tell (a loop
     /// whose orientation does not show, a point level with a vertex on every ray tried).
