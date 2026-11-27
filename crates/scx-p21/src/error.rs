@@ -37,7 +37,7 @@ impl P21Error {
     #[must_use]
     pub fn kind(&self) -> ErrorKind {
         match self.innermost() {
-            Self::Refused(_) | Self::Within { .. } => ErrorKind::InvalidInput,
+            Self::Refused(_) | Self::Within { .. } => ErrorKind::Refused,
             Self::Unsupported(_) => ErrorKind::Unsupported,
             Self::Cancelled => ErrorKind::Cancelled,
         }

@@ -550,8 +550,10 @@ impl Matrix {
     ///
     /// The matrix is used as work space: on success its upper triangle is restored
     /// from the lower triangle; when the solver fails to converge it is left rotated.
-    /// Errors: `SM_ERR` when the matrix is not symmetric ([`Matrix::is_symmetric`])
-    /// or the off-diagonal sum is not below `SM_EFF_ZERO` after 50 sweeps.
+    /// Errors: [`NumFailure::NotSymmetric`] when the matrix is not symmetric
+    /// ([`Matrix::is_symmetric`]); [`NumError::InvalidInput`] when an entry is not finite
+    /// (the pin sweeps it); [`NumFailure::JacobiDidNotConverge`] when the off-diagonal sum
+    /// is not below `SM_EFF_ZERO` after 50 sweeps.
     pub fn eigen_system_jacobi(&mut self) -> Result<EigenSystem> {
         const OP: &str = "geom::matrix::Matrix::eigen_system_jacobi";
         let st = self
@@ -579,6 +581,14 @@ impl Matrix {
         const OP: &str = "geom::matrix::Matrix::eigen_system_jacobi";
         if !self.is_symmetric() {
             return Ok(None);
+        }
+        // Non-finite input is refused, so that a solve that runs out of sweeps is the
+        // method's fault (research 62 M3). The pin sweeps it (eigenvalues of `inf` or NaN).
+        if !self.data.iter().all(|x| x.is_finite()) {
+            return Err(NumError::InvalidInput {
+                operation: OP,
+                reason: "matrix not finite",
+            });
         }
         let n = self.rows;
         let mut d = vec![0.0; n];
@@ -715,8 +725,8 @@ impl Matrix {
     /// matrix as [`Matrix::eigen_system_jacobi`] does and returns the unconverged
     /// state when the solver runs out of sweeps.
     ///
-    /// Errors: `InvalidInput` when not 3x3; `SM_ERR` when not symmetric (upstream
-    /// returns uninitialized vectors there).
+    /// Errors: `InvalidInput` when not 3x3 or an entry is not finite (the pin sweeps it);
+    /// `SM_ERR` when not symmetric (upstream returns uninitialized vectors there).
     pub fn compute_3x3_eigen_vectors(&mut self) -> Result<([f64; 3], [Vec3; 3])> {
         const OP: &str = "geom::matrix::Matrix::compute_3x3_eigen_vectors";
         if self.rows != 3 || self.cols != 3 {
@@ -1196,15 +1206,13 @@ mod tests {
         ));
         let z = m(2, 2, &[1.0, 2.0, 0.0, 0.0]);
         let singular = z.solve_linear_system(&[1.0, 2.0]).unwrap_err();
-        // status SM_ERR (1001): every `NumError::Failed` has it
-        assert!(matches!(singular, NumError::Failed { .. }));
-        assert_eq!(
-            singular.failure(),
-            Some(&NumFailure::CallFailed {
-                class: ErrorKind::Degenerate
-            })
-        );
-        assert_eq!(singular.kind(), ErrorKind::Degenerate);
+        // a call frame over the decomposition's singular system (upstream `SM_ERR`)
+        assert!(matches!(singular, NumError::Call { .. }));
+        assert!(matches!(
+            singular.cause().and_then(NumError::failure),
+            Some(&NumFailure::Singular { .. })
+        ));
+        assert_eq!(singular.kind(), ErrorKind::Refused);
         assert!(singular
             .to_string()
             .contains("; caused by geom::matrix::Matrix::lu_decompose"));
@@ -1358,17 +1366,26 @@ mod tests {
 
     #[test]
     fn jacobi_non_finite() {
+        // The eigenvalues of a matrix with an infinite or NaN entry are not defined (the
+        // pin returned `[0, inf]` and NaN here): refused.
         let mut a = m(2, 2, &[f64::INFINITY, 1.0, 1.0, 0.0]);
-        let e = a.eigen_system_jacobi().unwrap();
-        assert_eq!(e.values, vec![0.0, f64::INFINITY]);
+        assert!(matches!(
+            a.eigen_system_jacobi(),
+            Err(NumError::InvalidInput { .. })
+        ));
         let mut b = m(
             3,
             3,
             &[f64::INFINITY, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0],
         );
-        assert!(b.compute_3x3_eigen_vectors().is_ok());
+        assert!(matches!(
+            b.compute_3x3_eigen_vectors(),
+            Err(NumError::InvalidInput { .. })
+        ));
         let mut nan = m(1, 1, &[f64::NAN]);
-        let e = nan.eigen_system_jacobi().unwrap();
-        assert!(e.values[0].is_nan());
+        assert!(matches!(
+            nan.eigen_system_jacobi(),
+            Err(NumError::InvalidInput { .. })
+        ));
     }
 }

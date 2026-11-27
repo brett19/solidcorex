@@ -819,7 +819,7 @@ mod tests {
         let why = NumFailure::VectorVanishes;
         let error = Ser::constant(0.0).inv_sqrt(tr).unwrap_err();
         assert_eq!(error, NumError::failed(op, why));
-        assert_eq!(error.kind(), crate::error::ErrorKind::Degenerate);
+        assert_eq!(error.kind(), crate::error::ErrorKind::Refused);
         let mut pows = InvSqrtSeries::<f64>::default();
         let error = pows.update(&Ser::constant(-1.0), tr).unwrap_err();
         assert_eq!(error, NumError::failed(op, why));

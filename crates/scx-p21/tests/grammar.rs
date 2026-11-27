@@ -504,7 +504,7 @@ fn hostile_text_is_refused() {
         ),
     ] {
         let e = parse(&t).unwrap_err();
-        assert_eq!(e.kind(), ErrorKind::InvalidInput, "{t:.60}: {e}");
+        assert_eq!(e.kind(), ErrorKind::Refused, "{t:.60}: {e}");
     }
     // Padded so that the density limit (a parameter per four bytes) is not what refuses it.
     let pad = format!("/*{}*/", " ".repeat(1000));
@@ -524,7 +524,7 @@ fn hostile_text_is_refused() {
 #[test]
 fn errors_chain_to_their_cause() {
     let e = parse(&file("#1=A(T(1.,2.));")).unwrap_err();
-    assert_eq!(e.kind(), ErrorKind::InvalidInput);
+    assert_eq!(e.kind(), ErrorKind::Refused);
     assert_eq!(e.to_string(), "STEP input refused: syntax error at line 8: typed parameter `T` does not hold exactly one parameter");
     let refusal = e.source().unwrap();
     assert_eq!(

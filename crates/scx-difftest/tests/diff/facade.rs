@@ -223,7 +223,11 @@ pub mod x {
             } => "singular".to_string(),
             other => format!("{other:?}"),
         };
-        (format!("{:?}", e.kind()), e.operation(), f)
+        (
+            format!("{:?}", crate::facade::num_as_pin(e).kind()),
+            e.operation(),
+            f,
+        )
     }
     pub use scx_algo::polynomial;
     pub use scx_num::{
@@ -977,34 +981,86 @@ macro_rules! failure_bits {
     }};
 }
 
+/// The pin's error for a layer-0 error: the map from scx's causes to the pin's class and
+/// text (research 62 D5). scx's kinds and `Display` are its own; the difftest compares what
+/// the pin would report for the same cause, so each cause maps to the pin value it replaced
+/// (`GeomFailure` of the same name and fields, the series' two `BlendFailure`s, and a
+/// [`scx_num::NumError::Call`] frame to `GeomFailure::CallFailed` with the cause's class,
+/// as the pin's `geom_call` builds it). A cause not mapped here mismatches.
+pub fn num_as_pin(e: &scx_num::NumError) -> solidcore::SolidError {
+    use scx_num::error::NumFailure as N;
+    use scx_num::NumError;
+    use solidcore::error::blend::{BlendFailure, SectionDegeneracy};
+    use solidcore::error::geom::GeomFailure as G;
+    use solidcore::error::Failure;
+    use solidcore::SolidError;
+    match e {
+        NumError::InvalidInput { operation, reason } => {
+            SolidError::InvalidInput { operation, reason }
+        }
+        NumError::Failed { operation, failure } => {
+            let g = match *failure {
+                N::Disjoint { a, b } => G::Disjoint { a, b },
+                N::IndexOutOfRange { index, len } => G::IndexOutOfRange { index, len },
+                N::JacobiDidNotConverge {
+                    sweeps,
+                    off_diagonal,
+                } => G::JacobiDidNotConverge {
+                    sweeps,
+                    off_diagonal,
+                },
+                N::NoPerpendicular => G::NoPerpendicular,
+                N::NotSquare { rows, cols } => G::NotSquare { rows, cols },
+                N::NotSymmetric => G::NotSymmetric,
+                N::PointOutsideExtent { u, v } => G::PointOutsideExtent { u, v },
+                N::Singular { measure } => G::Singular { measure },
+                N::SpanOutsidePeriod { from, to, period } => {
+                    G::SpanOutsidePeriod { from, to, period }
+                }
+                N::TooFewRows { rows, cols } => G::TooFewRows { rows, cols },
+                N::Defect { why } => {
+                    return Failure::new(operation, BlendFailure::Defect { why }).into_error()
+                }
+                N::VectorVanishes => {
+                    return Failure::new(
+                        operation,
+                        BlendFailure::SectionDegenerate(SectionDegeneracy::VectorVanishes),
+                    )
+                    .into_error()
+                }
+                // `NumFailure` is `#[non_exhaustive]`: a new cause mismatches until mapped
+                _ => G::Defect {
+                    why: "a layer-0 failure the facade does not map",
+                },
+            };
+            Failure::new(operation, g).into_error()
+        }
+        NumError::Call { operation, cause } => {
+            let cause = num_as_pin(cause);
+            Failure::new(
+                operation,
+                G::CallFailed {
+                    class: cause.kind(),
+                },
+            )
+            .caused_by(cause)
+            .into_error()
+        }
+    }
+}
+
+/// A layer-0 error, as the pin's error its causes map to ([`num_as_pin`]).
+impl Bits for scx_num::NumError {
+    fn bits(&self, o: &mut Out) {
+        num_as_pin(self).bits(o);
+    }
+}
+
 /// An error: its class, operation, `InvalidInput` reason or typed failure (fields by bits),
 /// its `Display` text, then its cause's. An `InvalidInput` refusal is compared by its class
 /// alone: which operation names the refusal and the words of its reason are text, free to
 /// change (a refused input is the decision compared; scx names its own operation where the
 /// pin names the helper that refused).
-impl Bits for scx_num::NumError {
-    fn bits(&self, o: &mut Out) {
-        use scx_num::error::NumFailure;
-        o.tag(&format!("{:?}", self.kind()));
-        let scx_num::NumError::Failed { failure, .. } = self else {
-            o.tag("InvalidInput");
-            return;
-        };
-        o.tag(self.operation());
-        match failure {
-            NumFailure::VectorVanishes => o.tag("VectorVanishes"),
-            NumFailure::Defect { why } => {
-                o.tag("Defect");
-                o.tag(why);
-            }
-            f => failure_bits!(f, o, scx_num::error::NumFailure),
-        }
-        o.tag(&self.to_string());
-        if let Some(c) = self.cause() {
-            c.bits(o);
-        }
-    }
-}
 impl Bits for solidcore::SolidError {
     fn bits(&self, o: &mut Out) {
         // The series' blend failures, by the names scx-num gives them (`NumFailure`).

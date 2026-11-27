@@ -1584,7 +1584,7 @@ fn a_nested_refusal_names_its_path() {
     )
     .map(|_| ())
     .unwrap_err();
-    assert_eq!(e.kind(), ErrorKind::InvalidInput);
+    assert_eq!(e.kind(), ErrorKind::Refused);
     assert_eq!(
         e.to_string(),
         "STEP input refused: in #12: in #11: #10: a direction whose ratios are all zero"

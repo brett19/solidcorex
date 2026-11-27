@@ -90,10 +90,10 @@ use scx_num::NumError;
 
 /// Whether the Jacobian system's solve failed with `SM_ERR` (the system is not solvable),
 /// which ends the iteration: by its status, so also a typed failure that replaced the
-/// `Upstream` (#13790). Every layer-0 `Failed` has status `SM_ERR`; `InvalidInput` has
+/// `Upstream` (#13790). Every layer-0 `Failed` and `Call` has status `SM_ERR`; `InvalidInput` has
 /// `SM_ERR_INVALID_INPUT`.
 fn is_bad_jacobian(error: &NumError) -> bool {
-    matches!(error, NumError::Failed { .. })
+    matches!(error, NumError::Failed { .. } | NumError::Call { .. })
 }
 
 /// How a solve treats next guesses that leave the domain's intervals
