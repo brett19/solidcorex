@@ -509,6 +509,7 @@ dependencies = [
  "scx-num",
  "scx-nurbs",
  "scx-nurbs-surface",
+ "scx-planar",
  "scx-ssi",
  "scx-surface",
  "scx-testkit",
