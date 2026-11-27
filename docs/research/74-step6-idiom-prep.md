@@ -2208,3 +2208,118 @@ bounds the sampled distance from above) and for the normal's side. No tests remo
    everywhere would compare normals on the certificate's pieces.
 3. A minimax refinement, if non-rational fits near the accuracy matter on the corpus (measure on
    the corpus once SP2b lands).
+
+## 27. SP8 as built (11-27)
+
+`scx-step` gains the product structure: `Imported::products` is now a `ProductTree` (parts, the
+assembly expanded into instances, every body with its placement), replacing the raw p21
+`ProductStructure` SP1 passed through. No Cargo edge was added (`scx-num` was SP1's; `Affine`
+and `Frame` come from it). 17 new tests in `crates/scx-step/tests/products.rs`, on synthetic
+files; the 17 SP1 tests are unchanged.
+
+### 27.1 Public API
+
+```rust
+pub struct ProductTree { pub parts: Vec<Part>, pub instances: Vec<Instance>,
+                         pub placed: Vec<PlacedBody> }       // bodies_of(i), placements_of(body)
+pub struct Part { definition: u64, id, name, description }
+pub struct Instance { part: usize, by: Option<Use>, parent: Option<usize>, world: World }
+pub struct Use { entity: u64, id, name, reference_designator }
+pub struct PlacedBody { body: u64, kind: BodyKind, representation: u64, instance: usize,
+                        mapped_by: Vec<u64>, world: World }
+pub enum World { Placed(Affine), Unplaced(Unplaced) }
+pub enum Unplaced { NoRelationship{occurrence}, NoTransformation{link}, NotAboutChild{link},
+                    Several{occurrence}, Degenerate{entity}, Units{representation, fault} }
+```
+
+`Affine` is `scx_num::math::Affine` (column vectors, `parent * local`; millimetres). The tree is
+built inside `read` (crate-private `products::tree`), so the units a body was read in are known.
+
+### 27.2 What the pin did, and what replaced it
+
+| Pin (`step_assembly.rs`) | Here |
+|---|---|
+| An occurrence with no relationship: identity | `Unplaced::NoRelationship`; the bodies below are listed with the same cause |
+| A relationship without a transformation: identity | `Unplaced::NoTransformation` |
+| Which side of a relationship is the child: "rep_1 unless only rep_2 is in the child's closure", so neither or both fall to rep_1 | exactly one side must be in the child's representations, else `NotAboutChild` |
+| Several relationships on one occurrence: the first | equal maps are one placement, different ones `Several` |
+| Degenerate or singular frame: a `String` error refuses the whole file | `Unplaced::Degenerate{entity}`, the file is read; `inverse` is `Affine::inverse` (regular proved, not a `det == 0.0` test) |
+| Absent reference direction: x chosen as global X unless `|z.x| >= 0.9`, then Y | ISO 10303-42's rule: +Z made square to the axis, +X where the axis is along Z |
+| Operator axes: unit-length as written, not made square | ISO `base_axis`: Z from axis3, X and Y made square to it, so a skew operator is not read as a shear (a mirrored one stays a mirror) |
+| A body shared by representations with different length units: not said (SP1 left it to SP8) | scaled by the ratio of the lengths, relative to the representation it was read in; a representation with no usable length unit is `Unplaced::Units`, never mm |
+| Plain relationships followed one hop from a mapped item, full closure from a definition | full closure in both; a relationship that is an occurrence's own placement is not a "same shape" link (the pin's closure took it for one) |
+| A body reached through two related representations: listed twice | once per `(body, mapped_by)` in an instance |
+| Errors: `String` | cycles, depth and instance count are p21's typed `P21Error` (`StepError::Structure`); nothing else refuses |
+
+A root is the world frame by definition (identity). That is the one placement that is stated
+rather than read.
+
+### 27.3 Choices, with cases for and against
+
+- **Unplaced is a value, not an error.** For: valid input is never refused (one bad frame in a
+  large assembly must not lose the file), the caller sees every body and decides, and a failing
+  default (identity) cannot hide in a result. Against: a caller who ignores `World` gets no
+  warning; `Placed` must be matched. `World::placed()` returns an `Option` so that the match is
+  one line.
+- **Descendants of an unplaced instance carry the same cause** rather than a `Below` variant:
+  the cause names the occurrence at fault, which is what a user needs. Against: the tree does not
+  say which ancestor, but `parent` does.
+- **ISO's default for an absent reference direction, not the pin's.** The pin chooses by a
+  threshold; the standard gives a formula (as recalled: `first_proj_axis`, +Z unless the axis is
+  +Z, then +X; the standard's text is not in the repo, and the case of an axis along -Z, where
+  +Z is parallel to it and the standard's text has no x, takes +X as the same rule). The two
+  agree for an axis along Z and differ for others (axis +X: ISO gives x = +Z, the pin +Y).
+  Files that omit the direction on a tilted axis are written by tools that mean the standard's.
+  Reversible: one function (`default_ref`). Needs a corpus file with an omitted direction on a
+  tilted axis to confirm.
+- **Scale ratio when the length unit differs.** For: the numbers of a body are in the unit of
+  the representation that lists it, and a file that lists one body in two does mean it at both
+  sizes. Against: a shared body read at the first representation's unit gets an instance at
+  1/25.4 scale, which a rigid-only consumer must refuse; `Affine::axis_lengths` and `is_rigid`
+  say so.
+- **Dedupe within an instance by (body, mapped_by).** Two mapped items that place the same body
+  in one part stay two (they differ in `mapped_by`); the same shape in two related
+  representations is one.
+- **Not checked: that the relationship's other side is in the parent.** The pin does not either;
+  exporters link the child to the parent's root representation or to a sub-representation, and
+  a check would refuse real files. A wrong side shows as `Several` or a placement the caller
+  can compare with `parent`.
+
+### 27.4 Tests
+
+Ported from the pin's `step_assembly` tests (rebuilt as synthetic p21 text through `read`, with
+units): the three writings of the transformation (conformant; `rep_1` the child with `item_1` in
+the parent; `item_1` in the child) all put the child at +754 X; nested composition (a quarter
+turn about Z then +10 X lands at (0,10,0), the other order would give (10,0,0)); a mapped item
+(origin onto target, closed form (5,-1,0)); a cycle (now a `Structure` error from p21's read).
+Not ported: the real HOOPS extract (`assembly_extract.stp`): its licence is unverified (74 §7).
+New: instances, parts and occurrences (names, reference designator); a shared part placed once
+per use; an occurrence with no placement and its grandchild (unplaced, bodies listed);
+`NotAboutChild`; `NoTransformation`; `Several` and its agreeing twin; a degenerate frame; the
+standard's default reference direction (axis +X and -Z); an operator scale of 2; a body in an
+inch and a millimetre representation (1/25.4); a representation with no length unit
+(`Unplaced::Units`, and with an assumed unit scaled by it); one shape in two related
+representations; reading twice is equal. No test was removed.
+
+### 27.5 Cost
+
+The walk is linear in instances times the representations of a definition's closure, plus the
+bodies listed; the dedupe is `n log n` in one instance's bodies. Measured with a throwaway
+timer (release, an assembly of one root and n uses of one part with a body): the whole
+`scx_step::read` (p21's product read, the skeleton and the tree) takes 0.27 ms for n = 100, 3.1 ms
+for n = 1,000 and 13.9 ms for n = 5,000; p21's `product::read` alone takes 0.18, 1.8 and 6.6 ms.
+So the tree and the skeleton together add about the cost of the p21 read again, and the
+growth is linear. Before this row the tree was not built, so that is the added work; the added
+work per instance is one `Affine` product and, per body, a clone of the (empty) `mapped_by`.
+
+### 27.6 Not done
+
+
+`Imported` still lists the bodies once (read from the first representation); SP2 builds each
+`Brep` once and the caller instances it with `placed`. Colours and styles (`ProductStructure::
+styles`) are no longer on `Imported`: nothing consumed them; they are one line to carry through
+when a row needs them (SP3 writes them). Units of an instance's own occurrence frames are p21's.
+
+### 27.7 Proposed 04 row
+
+| 11-27 | (For the owner's review) `scx_step::Imported::products` is a `ProductTree`: the file's parts, its assembly expanded into instances, and every body with the map that places it in the world frame (`World::Placed(Affine)`, millimetres, `parent * local`). A placement the file does not give or gives unusably (no relationship, no transformation, a relationship not about the child, two different placements, a degenerate frame, a length unit missing) is `World::Unplaced(cause)`, never the identity, and the file is still read. Frames follow ISO 10303-42 (absent reference direction, operator axes made square); a body listed in a representation of another length unit is scaled by the ratio. Edges: none added | The pin's identity fallbacks, first-of-several, rep_1 guess and `String` refusals are failing defaults; a typed value keeps the assembly readable | 74 §27 |
