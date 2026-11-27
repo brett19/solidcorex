@@ -63,6 +63,111 @@ pub(crate) const MONOMIALS: [[u8; 3]; 20] = [
     [0, 0, 3],
 ];
 
+/// `x^k` for `k <= 3` and its derivative `k x^(k-1)`, per axis of a point.
+struct Powers {
+    x: [f64; 4],
+    y: [f64; 4],
+    z: [f64; 4],
+    dx: [f64; 4],
+    dy: [f64; 4],
+    dz: [f64; 4],
+}
+
+impl Powers {
+    fn of(p: Vec3) -> Self {
+        let pw = |t: f64| [1.0, t, t * t, t * t * t];
+        let dw = |t: f64| [0.0, 1.0, 2.0 * t, 3.0 * t * t];
+        Self {
+            x: pw(p.x),
+            y: pw(p.y),
+            z: pw(p.z),
+            dx: dw(p.x),
+            dy: dw(p.y),
+            dz: dw(p.z),
+        }
+    }
+}
+
+/// Entry `K` of a power table: `K` is a constant at every use, so the read folds.
+#[inline]
+fn pick<const K: usize>(a: &[f64; 4]) -> f64 {
+    a.get(K).copied().unwrap_or(0.0)
+}
+
+/// The monomial `x^A y^B z^C n_z`. Every exponent is a constant, so a factor `x^0 = 1`
+/// folds away: the products are those of the table form, in the same order, the same bits.
+#[inline]
+fn value<const A: usize, const B: usize, const C: usize>(pw: &Powers, nz: f64) -> f64 {
+    pick::<A>(&pw.x) * pick::<B>(&pw.y) * pick::<C>(&pw.z) * nz
+}
+
+/// What [`moved`] reads: the point's and normal's rounding, the step along `u`, the
+/// normal's `z` (all absolute) and the evaluation's own roundings.
+struct Moved {
+    dp: Vec3,
+    dnz: f64,
+    du: Vec3,
+    nz: f64,
+    rounds: f64,
+}
+
+/// `a + b` where `b` is present: an axis whose exponent is zero has a zero partial, and
+/// leaving its products out gives the same bits as adding them (every term is a finite
+/// size, so `+0` adds nothing) without their cost. `-0` is the sum's start, exact.
+#[inline]
+fn plus(a: f64, present: bool, b: impl FnOnce() -> f64) -> f64 {
+    if present { a + b() } else { a }
+}
+
+/// The rounding of monomial `(A, B, C)` at the absolute point the powers are of, and its
+/// change per unit step along `du` ([`Set::rounding`]): `(grad m . dp) n_z + m dn_z +
+/// rounds m n_z`, and `(grad m . du) n_z`.
+#[inline]
+fn moved<const A: usize, const B: usize, const C: usize>(pw: &Powers, at: &Moved) -> (f64, f64) {
+    let (mx, my, mz) = (pick::<A>(&pw.x), pick::<B>(&pw.y), pick::<C>(&pw.z));
+    let gx = pick::<A>(&pw.dx) * my * mz;
+    let gy = mx * pick::<B>(&pw.dy) * mz;
+    let gz = mx * my * pick::<C>(&pw.dz);
+    let mono = mx * my * mz;
+    let d = plus(-0.0, A > 0, || gx * at.dp.x);
+    let d = plus(d, B > 0, || gy * at.dp.y);
+    let d = plus(d, C > 0, || gz * at.dp.z);
+    let l = plus(-0.0, A > 0, || gx * at.du.x);
+    let l = plus(l, B > 0, || gy * at.du.y);
+    let l = plus(l, C > 0, || gz * at.du.z);
+    // The constant monomial does not move along `u`: `+0`, as the table form gave.
+    let l = if A + B + C == 0 { 0.0 } else { l * at.nz };
+    (d * at.nz + mono * at.dnz + at.rounds * mono * at.nz, l)
+}
+
+/// `[f::<a, b, c>(args), ...]` over [`MONOMIALS`], in its order (checked by a test).
+macro_rules! each_monomial {
+    ($f:ident, $($arg:expr),*) => {
+        [
+            $f::<0, 0, 0>($($arg),*),
+            $f::<1, 0, 0>($($arg),*),
+            $f::<0, 1, 0>($($arg),*),
+            $f::<0, 0, 1>($($arg),*),
+            $f::<2, 0, 0>($($arg),*),
+            $f::<1, 1, 0>($($arg),*),
+            $f::<1, 0, 1>($($arg),*),
+            $f::<0, 2, 0>($($arg),*),
+            $f::<0, 1, 1>($($arg),*),
+            $f::<0, 0, 2>($($arg),*),
+            $f::<3, 0, 0>($($arg),*),
+            $f::<2, 1, 0>($($arg),*),
+            $f::<2, 0, 1>($($arg),*),
+            $f::<1, 2, 0>($($arg),*),
+            $f::<1, 1, 1>($($arg),*),
+            $f::<1, 0, 2>($($arg),*),
+            $f::<0, 3, 0>($($arg),*),
+            $f::<0, 2, 1>($($arg),*),
+            $f::<0, 1, 2>($($arg),*),
+            $f::<0, 0, 3>($($arg),*),
+        ]
+    };
+}
+
 /// The first monomial's place among [`Set::Full`]'s components.
 pub(crate) const FIRST_MONOMIAL: usize = 4;
 
@@ -130,12 +235,10 @@ impl Set {
                     *x = p.x * len;
                     *y = p.y * len;
                     *z = p.z * len;
-                    let px = [1.0, p.x, p.x * p.x, p.x * p.x * p.x];
-                    let py = [1.0, p.y, p.y * p.y, p.y * p.y * p.y];
-                    let pz = [1.0, p.z, p.z * p.z, p.z * p.z * p.z];
-                    for (o, m) in rest.iter_mut().zip(MONOMIALS) {
-                        let g = |a: &[f64; 4], i: u8| a.get(usize::from(i)).copied().unwrap_or(0.0);
-                        *o = g(&px, m[0]) * g(&py, m[1]) * g(&pz, m[2]) * n.z;
+                    let pw = Powers::of(p);
+                    let values = each_monomial!(value, &pw, n.z);
+                    for (o, v) in rest.iter_mut().zip(values) {
+                        *o = v;
                     }
                 }
             }
@@ -188,23 +291,18 @@ impl Set {
                     *lx = du.x * len;
                     *ly = du.y * len;
                     *lz = du.z * len;
-                    // `x^k` and its derivative `k x^(k-1)` per axis.
-                    let pw = |t: f64| [1.0, t, t * t, t * t * t];
-                    let dw = |t: f64| [0.0, 1.0, 2.0 * t, 3.0 * t * t];
-                    let (px, py, pz) = (pw(p.x), pw(p.y), pw(p.z));
-                    let (qx, qy, qz) = (dw(p.x), dw(p.y), dw(p.z));
-                    let g = |a: &[f64; 4], i: u8| a.get(usize::from(i)).copied().unwrap_or(0.0);
-                    for ((o, l), m) in rest.iter_mut().zip(lrest.iter_mut()).zip(MONOMIALS) {
-                        let (mx, my, mz) = (g(&px, m[0]), g(&py, m[1]), g(&pz, m[2]));
-                        let (gx, gy, gz) = (
-                            g(&qx, m[0]) * my * mz,
-                            mx * g(&qy, m[1]) * mz,
-                            mx * my * g(&qz, m[2]),
-                        );
-                        let mono = mx * my * mz;
-                        let d = gx * dp.x + gy * dp.y + gz * dp.z;
-                        *o = d * n.z + mono * dn.z + rounds * mono * n.z;
-                        *l = (gx * du.x + gy * du.y + gz * du.z) * n.z;
+                    let pw = Powers::of(p);
+                    let at = Moved {
+                        dp,
+                        dnz: dn.z,
+                        du,
+                        nz: n.z,
+                        rounds,
+                    };
+                    let terms = each_monomial!(moved, &pw, &at);
+                    for ((o, l), (e, a)) in rest.iter_mut().zip(lrest.iter_mut()).zip(terms) {
+                        *o = e;
+                        *l = a;
                     }
                 }
             }
@@ -293,6 +391,15 @@ pub(crate) fn monomial(m: [u8; 3]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// [`each_monomial`] lists [`MONOMIALS`] in its order.
+    #[test]
+    fn each_monomial_is_in_order() {
+        fn exponents<const A: usize, const B: usize, const C: usize>() -> [u8; 3] {
+            [A as u8, B as u8, C as u8]
+        }
+        assert_eq!(each_monomial!(exponents,), MONOMIALS);
+    }
 
     /// Moving the components by `t` equals evaluating them about the moved reference.
     #[test]
