@@ -3233,7 +3233,7 @@ committed). `main` and the branch were run back to back under the same load:
   `acos`. Then one curve point and one `uv_in` per sub-interval (at most 9 here).
 - A plain hit gains one comparison for `tol`.
 
-**FU1 (11-27): the largest miss.**
+**FU1 (11-27): the largest miss, and the tolerance audit.**
 
 *3. `NotOnSurface` reports the largest miss.* `pcurve_of` stopped at the first sample past
 `tol` and reported that one. BR5's writer splits on the miss: within the edge's reach it is
@@ -3251,6 +3251,38 @@ but which left the surface farther on, came back `NeedsFit` (Unsupported) instea
   - In `refusals_by_cause` (scx-brep `tests/pcurve.rs`): a line whose first miss past half
     the zone is 0.75 zone and whose last is 6 zones is `OffSurface` at `t = 1`. It came back
     `NeedsFit` before the fix.
+
+*4. Which entry points take a tolerance.* Every public `fn` in scx-curve, scx-surface, scx-ssi,
+scx-nurbs, scx-nurbs-surface and scx-brep was checked for a tolerance argument.
+
+| Entry point | Tolerance | Zero, negative, non-finite |
+| --- | --- | --- |
+| `scx_surface::pcurve_of` | `tol: Length` | `PcurveError::BadTolerance` (Refused), since BR5 |
+| `scx_surface::intersect_curve` | `tol: Length` | `SurfaceError::BadTolerance` (Refused), checked first |
+| `scx_ssi::analytic::intersect` | `[Accuracy; 2]`, `Resolution` | not representable: `Resolution::new` is `None` for any of them, and `Accuracy::new` for a negative or non-finite one |
+| `scx_ssi::analytic::section_by_plane` | was `tol: Length`, now `Resolution` | was unchecked; now not representable |
+| `scx_brep::Draft::{finish, write_pcurves, exact_loops, transform}` | `&Document` (its `Resolution`) | not representable |
+| `scx_brep::Document::with_resolution` | `Resolution` | not representable |
+
+- `section_by_plane` was the one inconsistent entry point. It passed any `Length` to the
+  section, and a NaN fails every comparison, so it could have given a solved, and final,
+  `Empty`.
+  - It now takes a `Resolution` and reads its zone, like `intersect`.
+  - It returns `Closed<Intersection>` with no error channel. A `Result` only for the tolerance
+    would make every caller handle a case the type can rule out.
+  - The callers in the tests and the difftest build a `Resolution` instead.
+- *Left for review:* `pcurve_of` and `intersect_curve` could also take a `Resolution`. That
+  would remove both `BadTolerance` variants. They are kept as ruled (SU6, BR5).
+- *Not geometry entry points, recorded not changed:*
+  - `scx_num::invert::Foot::is_on(tol)` is a predicate. A zero `tol` is the exact test, and a
+    NaN or negative one is never on, so it needs no refusal.
+  - scx-algo's ported solvers and boxes take raw `f64` tolerances with SMLib's meaning: zero is
+    the exact test, and `PointSet` takes `|tol|`. These are `BoxTree::{overlapping, pairs,
+    self_pairs}`, `best_fit_{point, line, plane}`, `SolveOptions::new`, `may_contain`,
+    `HashTable::add`, `solve_by_brent`, the ODE and quadrature controls, `PointSet` and
+    `PseudoBox`. Their callers are scx's own, and typing them belongs to scx-algo's idiom pass.
+  - scx-num's extents and `is_zero` are the same kind of predicate.
+- The difftests `t_ssi` and the rest are unchanged at 0 mismatches.
 
 ## 5. `scx-ssi`, the analytic part
 

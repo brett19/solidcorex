@@ -323,7 +323,7 @@ pub mod x {
     use scx_curve::Curve;
     use scx_num::extent2d::Extent2d;
     use scx_num::frame::Sense;
-    use scx_num::units::Length;
+    use scx_num::units::{Length, Resolution};
     use scx_num::vector3d::Point3;
     use scx_ssi::analytic::{Contact, Intersection, section_by_plane};
     use scx_surface::{Closed, Cone, Cylinder, Plane, Sphere, Surface, Torus};
@@ -366,7 +366,13 @@ pub mod x {
     pub fn answer(c: &Case) -> Closed<Intersection> {
         let (s, se) = surface(c);
         let (p, pe) = plane(c);
-        section_by_plane(&s, &se, &p, &pe, Length::from_mm(SNAP))
+        section_by_plane(
+            &s,
+            &se,
+            &p,
+            &pe,
+            Resolution::new(Length::from_mm(SNAP)).unwrap(),
+        )
     }
 
     fn arr(p: Point3) -> [f64; 3] {

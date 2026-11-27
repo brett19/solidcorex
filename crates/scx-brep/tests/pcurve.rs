@@ -28,7 +28,7 @@ use scx_num::extent1d::Extent1d;
 use scx_num::extent2d::Extent2d;
 use scx_num::fmath;
 use scx_num::frame::{Frame, Sense};
-use scx_num::units::Length;
+use scx_num::units::{Length, Resolution};
 use scx_num::vector2d::{Point2, Vec2};
 use scx_num::vector3d::{Point3, Vec3};
 use scx_ssi::analytic::{Intersection, section_by_plane};
@@ -280,7 +280,7 @@ fn section(s: &Surface, plane: &Plane) -> (Curve, Extent1d) {
         Extent2d::from_intervals(u, v)
     };
     let Closed::Solved(Intersection::Pieces { curves, .. }) =
-        section_by_plane(s, &se, plane, &big, mm(1e-9))
+        section_by_plane(s, &se, plane, &big, Resolution::new(mm(1e-9)).unwrap())
     else {
         panic!("no section");
     };
