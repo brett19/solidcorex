@@ -53,7 +53,7 @@ fn multisets(k: usize) -> Vec<Vec<f64>> {
 }
 
 /// The structured cases of degree `deg` (ascending coefficients, `deg + 1` of them).
-fn cases(deg: usize) -> Vec<Vec<f64>> {
+pub(crate) fn cases(deg: usize) -> Vec<Vec<f64>> {
     let mut out = Vec::new();
     for lead in LEAD {
         for roots in multisets(deg) {
@@ -85,7 +85,7 @@ fn cases(deg: usize) -> Vec<Vec<f64>> {
     out
 }
 
-fn arr<const N: usize>(c: &[f64]) -> [f64; N] {
+pub(crate) fn arr<const N: usize>(c: &[f64]) -> [f64; N] {
     let mut a = [0.0; N];
     for (s, &v) in a.iter_mut().zip(c) {
         *s = v;
@@ -96,13 +96,19 @@ fn arr<const N: usize>(c: &[f64]) -> [f64; N] {
 diff!(poly_quadratic, |c: [f64; 3], tol: f64| {
     m::polynomial::solve_quadratic(&c, tol).to_vec()
 });
-diff!(poly_cubic, |c: [f64; 4], tol: f64| {
-    m::polynomial::solve_cubic(&c, tol).to_vec()
-});
-diff!(poly_quartic, |c: [f64; 4], e: f64, tol: f64| {
-    let [a, b, d, f] = c;
-    m::polynomial::solve_quartic(&[a, b, d, f, e], tol).to_vec()
-});
+diff!(
+    poly_cubic,
+    pin_defect = crate::pin_defects::poly_cubic,
+    |c: [f64; 4], tol: f64| { m::polynomial::solve_cubic(&c, tol).to_vec() }
+);
+diff!(
+    poly_quartic,
+    pin_defect = crate::pin_defects::poly_quartic,
+    |c: [f64; 4], e: f64, tol: f64| {
+        let [a, b, d, f] = c;
+        m::polynomial::solve_quartic(&[a, b, d, f, e], tol).to_vec()
+    }
+);
 diff!(poly_roots_type, || {
     let r = m::polynomial::Roots::new();
     let d = m::polynomial::Roots::default();
@@ -113,16 +119,20 @@ diff!(poly_roots_type, || {
         format!("{r:?}") == format!("{d:?}"),
     )
 });
-diff!(poly_from_roots, |tol: f64| {
-    let mut out: Vec<Vec<f64>> = Vec::new();
-    for c in cases(2) {
-        out.push(m::polynomial::solve_quadratic(&arr::<3>(&c), tol).to_vec());
+diff!(
+    poly_from_roots,
+    pin_defect = crate::pin_defects::poly_from_roots,
+    |tol: f64| {
+        let mut out: Vec<Vec<f64>> = Vec::new();
+        for c in cases(2) {
+            out.push(m::polynomial::solve_quadratic(&arr::<3>(&c), tol).to_vec());
+        }
+        for c in cases(3) {
+            out.push(m::polynomial::solve_cubic(&arr::<4>(&c), tol).to_vec());
+        }
+        for c in cases(4) {
+            out.push(m::polynomial::solve_quartic(&arr::<5>(&c), tol).to_vec());
+        }
+        out
     }
-    for c in cases(3) {
-        out.push(m::polynomial::solve_cubic(&arr::<4>(&c), tol).to_vec());
-    }
-    for c in cases(4) {
-        out.push(m::polynomial::solve_quartic(&arr::<5>(&c), tol).to_vec());
-    }
-    out
-});
+);

@@ -6,6 +6,8 @@
 // unchanged bit for bit.
 // Then the transcendental functions became `fmath`'s (correctly rounded, the same bits on every
 // platform) in place of the C library's, so results may differ from the pin's in the last bit.
+// Then the cubic and quartic roots gained Newton polishing on the original polynomial, so
+// they may differ from the pin's wherever the pin's are less accurate.
 //! Closed-form real roots of quadratic, cubic and quartic polynomials.
 //!
 //! Upstream: `source/SMLib/src/SmPolynomial.cpp`, `source/SMLib/inc/SmPolynomial.h`.
@@ -30,9 +32,18 @@
 //!   uninitialised `adCSol[0]` (undefined behaviour). The port uses `0.0` there
 //!   (see `plan/findings.md`, `geom.polynomial`).
 //! - The `SM_DEBUG_CODE` self-checks (disabled upstream) are not ported.
+//! - [`solve_cubic`] and [`solve_quartic`] polish each closed-form root with up to two
+//!   Newton steps on the original polynomial, residual by compensated Horner, each kept
+//!   only when it strictly reduces `|p|`. The count and order of the roots are upstream's:
+//!   the quartic's internal decisions use the unpolished cubic, and no step moves a root
+//!   past a quarter of the gap to another or across `zero_tol` of one. Upstream's roots
+//!   are off by thousands of units in the last place for roots of mixed scale and near
+//!   double roots; polished, a simple root is within half a unit of the exact one
+//!   (`tests/polynomial_truth.rs`).
 
 use core::ops::Deref;
 
+use scx_num::eft::{two_prod, two_sum};
 use scx_num::fmath::cos;
 use scx_num::math::{EFF_ZERO_SQRT, PI};
 use scx_num::vector3d::{acos, cbrt, sqrt};
@@ -136,9 +147,19 @@ pub fn solve_quadratic(coefficients: &[f64; 3], zero_tol: f64) -> Roots {
 ///
 /// Falls back to [`solve_quadratic`] when `|A| < zero_tol`. Multiple roots are
 /// reported once (a triple root once, a single plus double root as two roots).
-/// From Graphics Gems I.
+/// From Graphics Gems I; the roots are then polished (see the module's deviations).
 #[must_use]
 pub fn solve_cubic(coefficients: &[f64; 4], zero_tol: f64) -> Roots {
+    let mut roots = closed_cubic(coefficients, zero_tol);
+    // as `closed_cubic` decides (a NaN `zero_tol` keeps the cubic)
+    if !(coefficients[3].abs() < zero_tol) {
+        polish(&mut roots, coefficients, zero_tol);
+    }
+    roots
+}
+
+/// The closed form of [`solve_cubic`], unpolished: the roots the quartic's own steps read.
+fn closed_cubic(coefficients: &[f64; 4], zero_tol: f64) -> Roots {
     let [c0, c1, c2, c3] = *coefficients;
     if c3.abs() < zero_tol {
         return solve_quadratic(&[c0, c1, c2], zero_tol);
@@ -199,7 +220,7 @@ fn add_solution(roots: &mut Roots, value: f64, zero_tol: f64) {
 ///
 /// Falls back to [`solve_cubic`] when `|A| < zero_tol`. Roots within `zero_tol`
 /// of each other are reported once. From Graphics Gems I (Ferrari's method via
-/// the resolvent cubic).
+/// the resolvent cubic); the roots are then polished (see the module's deviations).
 #[must_use]
 pub fn solve_quartic(coefficients: &[f64; 5], zero_tol: f64) -> Roots {
     let [c0, c1, c2, c3, c4] = *coefficients;
@@ -227,7 +248,7 @@ pub fn solve_quartic(coefficients: &[f64; 5], zero_tol: f64) -> Roots {
 
     if r.abs() < zero_tol {
         // No absolute term: y (y^3 + p y + q) = 0.
-        for &x in solve_cubic(&[q, p, 0.0, 1.0], zero_tol).iter() {
+        for &x in closed_cubic(&[q, p, 0.0, 1.0], zero_tol).iter() {
             add_solution(&mut roots, x, zero_tol);
         }
         add_solution(&mut roots, 0.0, zero_tol);
@@ -239,7 +260,7 @@ pub fn solve_quartic(coefficients: &[f64; 5], zero_tol: f64) -> Roots {
             -1.0 / 2.0 * p,
             1.0,
         ];
-        let z = solve_cubic(&resolvent, zero_tol)
+        let z = closed_cubic(&resolvent, zero_tol)
             .first()
             .copied()
             .unwrap_or(0.0);
@@ -275,7 +296,73 @@ pub fn solve_quartic(coefficients: &[f64; 5], zero_tol: f64) -> Roots {
 
     // Back-substitute x = y - A/4.
     roots.shift(1.0 / 4.0 * a);
+    polish(&mut roots, coefficients, zero_tol);
     roots
+}
+
+/// How many Newton steps [`polish`] takes at most.
+const POLISH_STEPS: usize = 2;
+
+/// `p(x)` by compensated Horner (Graillat, Langlois and Louvet, 2009), as accurate as
+/// Horner's rule in twice the working precision, and `p'(x)` by plain Horner.
+/// `c` is in ascending powers.
+fn eval_with_derivative<const N: usize>(c: &[f64; N], x: f64) -> (f64, f64) {
+    let mut terms = c.iter().rev();
+    let Some(&lead) = terms.next() else {
+        return (0.0, 0.0);
+    };
+    let (mut s, mut err, mut d) = (lead, 0.0, 0.0);
+    for &a in terms {
+        d = d * x + s;
+        let (prod, prod_err) = two_prod(s, x);
+        let (sum, sum_err) = two_sum(prod, a);
+        s = sum;
+        err = err * x + (prod_err + sum_err);
+    }
+    (s + err, d)
+}
+
+/// Newton steps on the original polynomial `c` from each root, at most [`POLISH_STEPS`],
+/// each kept only when it strictly reduces `|p|` (evaluated as [`eval_with_derivative`]),
+/// so no root moves to a worse residual. A step is also refused when it would move a root
+/// more than a quarter of the way to another, or change whether it lies within `zero_tol`
+/// of another: the roots keep their count, their order and every within-`zero_tol`
+/// relation the closed form gave.
+fn polish<const N: usize>(roots: &mut Roots, c: &[f64; N], zero_tol: f64) {
+    let len = roots.len;
+    for i in 0..len {
+        let Some(&x0) = roots.values.get(i) else {
+            continue;
+        };
+        let (mut x, (mut px, mut dx)) = (x0, eval_with_derivative(c, x0));
+        for _ in 0..POLISH_STEPS {
+            if !(px.is_finite() && dx.is_finite()) || px == 0.0 || dx == 0.0 {
+                break;
+            }
+            let next = x - px / dx;
+            let others = roots
+                .values
+                .iter()
+                .take(len)
+                .enumerate()
+                .filter(|&(j, _)| j != i);
+            let keeps_apart = others.clone().all(|(_, &y)| {
+                (next - x).abs() * 4.0 <= (x - y).abs()
+                    && ((next - y).abs() < zero_tol) == ((x - y).abs() < zero_tol)
+            });
+            if !keeps_apart {
+                break;
+            }
+            let (pn, dn) = eval_with_derivative(c, next);
+            if !(pn.abs() < px.abs()) {
+                break;
+            }
+            (x, px, dx) = (next, pn, dn);
+        }
+        if let Some(slot) = roots.values.get_mut(i) {
+            *slot = x;
+        }
+    }
 }
 
 #[cfg(test)]
