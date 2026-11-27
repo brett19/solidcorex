@@ -23,10 +23,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use scx_brep::{
-    Brep, Changes, Document, EdgeId, EdgeShape, Entity, FaceId, LoopRecord, RegionId, ShellId,
-    ShellRecord, UseGeom, VertexId,
+    Brep, Changes, Document, EdgeId, EdgeShape, Entity, FaceId, FaceSide, LoopRecord, RegionId,
+    ShellId, ShellRecord, UseGeom, VertexId,
 };
 use scx_curve::Curve;
+use scx_mass::Sign;
 use scx_num::budget::{Budget, Stop};
 use scx_num::extent1d::Extent1d;
 use scx_num::frame::Sense;
@@ -40,7 +41,7 @@ use crate::boolean::BooleanOp;
 use crate::classify::{Class, Classes, Joins, material_back};
 use crate::error::{BooleanDefect, BooleanError, BooleanUnsupported};
 use crate::faceface::Touch;
-use crate::geom::{Operands, Side};
+use crate::geom::{Operands, Side, recorded};
 use crate::imprint::{Imprint, loops_error, ring, shoelace};
 use crate::pinch;
 
@@ -113,10 +114,10 @@ pub(crate) fn build(
     stop.check()?;
     merge(ops, &mut m, &mut kept, doc, budget, stop)?;
     edges(&mut m)?;
-    join_edges(&mut m, doc)?;
+    join_edges(ops, &mut m, doc)?;
     vertices(&mut m);
     stop.check()?;
-    shells(&mut m, &kept, doc, budget, stop)?;
+    shells(ops, &mut m, &kept, doc, budget, stop)?;
     m.draft.finish(&doc).map_err(|_| defect())
 }
 
@@ -466,7 +467,7 @@ fn vertices(m: &mut Imprint) {
 
 /// Joins two edges that meet at a vertex no other edge ends at, run on along one curve and
 /// bound the same faces the same way: the vertex goes.
-fn join_edges(m: &mut Imprint, doc: Document) -> Result<(), BooleanError> {
+fn join_edges(ops: Operands<'_>, m: &mut Imprint, doc: Document) -> Result<(), BooleanError> {
     loop {
         let mut ends: BTreeMap<VertexId, Vec<EdgeId>> = BTreeMap::new();
         for e in m.draft.edges() {
@@ -482,7 +483,7 @@ fn join_edges(m: &mut Imprint, doc: Document) -> Result<(), BooleanError> {
             if e0 == e1 {
                 continue;
             }
-            if let Some(plan) = join_plan(m, v, e0, e1) {
+            if let Some(plan) = join_plan(ops, m, v, e0, e1) {
                 apply_join(m, v, &plan, doc)?;
                 joined = true;
                 break;
@@ -513,7 +514,7 @@ struct Join {
     faces: Vec<FaceId>,
 }
 
-fn join_plan(m: &Imprint, v: VertexId, e0: EdgeId, e1: EdgeId) -> Option<Join> {
+fn join_plan(ops: Operands<'_>, m: &Imprint, v: VertexId, e0: EdgeId, e1: EdgeId) -> Option<Join> {
     let (g0, g1) = (m.draft.edge(e0)?, m.draft.edge(e1)?);
     // `first` runs into `v`, `second` out of it.
     let (first, second) = if g0.ends()[1] == v && g1.ends()[0] == v {
@@ -567,16 +568,33 @@ fn join_plan(m: &Imprint, v: VertexId, e0: EdgeId, e1: EdgeId) -> Option<Join> {
         }
         (c0.clone(), Extent1d::new(i0.min(), end)?)
     } else if let (Curve::Line(l0), Curve::Line(l1)) = (c0, c1) {
+        // One line within the edges' coincidence: every end of both pieces lies that near
+        // the kept line, so the absorbed piece runs along it nowhere farther (a near-coplanar
+        // front merged across its jog, §14.42). Both edges must record the same accuracy,
+        // so the joined edge claims what each did.
+        if first.accuracy() != second.accuracy() {
+            return None;
+        }
         let d0 = l0.direction();
         let d1 = l1.direction();
-        let along = d0.dot(d1) / (d0.length() * d1.length());
-        let off = (l1.origin() - l0.origin()).cross(d0).length() / d0.length();
-        let scale = 1.0 + l0.origin().to_vec().length() + l1.origin().to_vec().length();
-        if along < 1.0 - 1e-12 || off > 1e-12 * scale {
+        if d0.dot(d1) <= 0.0 {
+            return None;
+        }
+        let line = if keep == first.id() { l0 } else { l1 };
+        let reach = ops.coincidence(recorded(first.accuracy()), recorded(second.accuracy()));
+        let ends = [
+            l0.point(i0.min()),
+            l0.point(i0.max()),
+            l1.point(i1.min()),
+            l1.point(i1.max()),
+        ];
+        let off = |p: scx_num::vector3d::Point3| {
+            (p - line.origin()).cross(line.direction()).length() / line.direction().length()
+        };
+        if ends.into_iter().any(|p| off(p) > reach) {
             return None;
         }
         // On the kept line: its parameter at the far end of the other.
-        let line = if keep == first.id() { l0 } else { l1 };
         let t = |p: scx_num::vector3d::Point3| {
             (p - line.origin()).dot(line.direction()) / line.direction().length_squared()
         };
@@ -625,6 +643,7 @@ fn apply_join(m: &mut Imprint, v: VertexId, j: &Join, doc: Document) -> Result<(
 
 /// Gives each connected set of kept faces its region and shells.
 fn shells(
+    ops: Operands<'_>,
     m: &mut Imprint,
     kept: &BTreeMap<FaceId, Kept>,
     doc: Document,
@@ -713,10 +732,71 @@ fn shells(
         let mut all: Vec<ShellId> = pairs.iter().flat_map(|&(a, b)| [to(a), to(b)]).collect();
         all.sort_unstable();
         all.dedup();
-        pinch::nest(&mut m.draft, &all, &mirrored, doc, budget, stop)?;
+        // `pairs` is in `comps`' order: each set beside its shells.
+        let known: BTreeMap<ShellId, Sign> = pairs
+            .iter()
+            .zip(comps.values())
+            .filter(|(p, _)| mirrored.contains(p))
+            .filter_map(|(&(mat, _), faces)| Some((mat, whole_shell(ops, m, kept, faces)?)))
+            .collect();
+        pinch::nest(&mut m.draft, &all, &mirrored, &known, doc, budget, stop)?;
         unused(m, &claimed);
     }
     Ok(())
+}
+
+/// The sign of the volume a set of kept faces bounds from its material side, where the set
+/// is one operand shell whole: each face the only piece of its operand face, all of one
+/// operand, all the shell's faces, each once (no sheet), its material on one side of that
+/// shell. Its surface is the operand shell's, so its sign is the operand's: a shell of
+/// the outside is negative, the one shell of a region positive (a valid operand's, as
+/// classification already trusts). `None` where that does not settle it (a region with a
+/// cavity), and nesting measures the sign (§14.42).
+fn whole_shell(
+    ops: Operands<'_>,
+    m: &Imprint,
+    kept: &BTreeMap<FaceId, Kept>,
+    faces: &[FaceId],
+) -> Option<Sign> {
+    let first = kept.get(faces.first()?)?;
+    let body = ops.of(first.side);
+    // The operand side the draft's material is on: the back where the face is kept with
+    // its material behind it.
+    let at = |k: &Kept| {
+        if k.back {
+            FaceSide::Back
+        } else {
+            FaceSide::Front
+        }
+    };
+    let shell = body.face(first.of)?.shell(at(first));
+    let mut ofs = BTreeSet::new();
+    for f in faces {
+        let k = kept.get(f)?;
+        let whole = m.pieces.get(&(k.side, k.of)).is_some_and(|p| p.len() == 1);
+        if k.side != first.side || !whole || body.face(k.of)?.shell(at(k)).id() != shell.id() {
+            return None;
+        }
+        ofs.insert(k.of);
+    }
+    let mut sides = 0;
+    for (f, _) in shell.faces() {
+        sides += 1;
+        if !ofs.contains(&f.id()) {
+            return None;
+        }
+    }
+    if sides != ofs.len() || ofs.len() != faces.len() {
+        return None;
+    }
+    let region = shell.region();
+    if region.is_outside() {
+        Some(Sign::Negative)
+    } else if region.shells().count() == 1 {
+        Some(Sign::Positive)
+    } else {
+        None
+    }
 }
 
 /// Removes the shells no face bounds, and the regions no shell bounds.

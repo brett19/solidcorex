@@ -25,7 +25,6 @@
 use scx_brep::op::{Cx, NoTrace, Scratch, Settings};
 use scx_brep::{Brep, Document, Draft, FaceId, FaceSide, FinishCause, ShellId, StructureCause};
 use scx_check::{Breach, Contacts, ContractError, Proved, contract};
-use scx_make::{Span, block, cone, cylinder, extrude, sphere, torus};
 use scx_mass::{MassError, MassRefusal, RelAccuracy, Sign, outward, volume, volume_sign};
 use scx_num::budget::{Budget, Stop};
 use scx_num::error::ErrorKind;
@@ -35,6 +34,7 @@ use scx_num::units::{Length, Resolution};
 use scx_num::vector2d::Point2;
 use scx_num::vector3d::{Point3, Vec3};
 use scx_planar::{Region, Segment};
+use scx_testkit::bodies::made::{Span, block, cone, cylinder, extrude, sphere, torus};
 use scx_testkit::bodies::{Kind, build_resolution, generate, quarter_shell};
 use scx_testkit::profile::{Seg, Verdict, fixtures};
 
@@ -114,7 +114,7 @@ fn frames() -> [Frame; 3] {
     ]
 }
 
-/// Every primitive `scx-make` builds is proved, at the origin, tilted and far.
+/// Every primitive `scx-make` builds (the testkit's port) is proved, at the origin, tilted and far.
 #[test]
 fn every_primitive_is_proved() {
     let doc = Document::default();

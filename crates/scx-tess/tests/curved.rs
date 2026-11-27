@@ -19,7 +19,6 @@ use std::collections::HashMap;
 use std::f64::consts::PI;
 
 use scx_brep::{Brep, Document, FaceId};
-use scx_make::{Span, cone, cylinder, extrude, sphere, torus};
 use scx_num::budget::{Budget, Stop};
 use scx_num::fmath::tan;
 use scx_num::frame::{Frame, Sense};
@@ -29,6 +28,7 @@ use scx_num::vector3d::{Point3, Vec3, sqrt};
 use scx_planar::{Region, Segment};
 use scx_surface::Surface;
 use scx_tess::{Mesh, TessError, TessSpec, tessellate, tessellate_faces};
+use scx_testkit::bodies::made::{Span, cone, cylinder, extrude, sphere, torus};
 use scx_testkit::mesh as oracle;
 
 fn mm(v: f64) -> Length {
