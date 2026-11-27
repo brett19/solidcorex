@@ -39,6 +39,7 @@ mod t_gutil;
 mod t_hash;
 mod t_interval;
 mod t_kraw;
+mod t_mass;
 mod t_math;
 mod t_nurbs;
 mod t_nurbs_surface;

@@ -35,6 +35,8 @@ scx-brep = { path = "../scx-brep" }
 # run-twice check compares.
 scx-make = { path = "../scx-make" }
 scx-record = { path = "../scx-record" }
+# The mass properties against the pin's (`t_mass`).
+scx-mass = { path = "../scx-mass" }
 
 [lints]
 workspace = true

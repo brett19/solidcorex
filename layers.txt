@@ -11,6 +11,7 @@ scx-surface
 scx-ssi
 scx-brep
 scx-record
+scx-mass
 scx-make
 
 # Crates outside the order. `difftest` may depend on any library (and on the pinned

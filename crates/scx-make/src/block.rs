@@ -12,7 +12,7 @@ use scx_surface::{Plane, Surface};
 
 use crate::Made;
 use crate::assembly::Assembly;
-use crate::error::{Defect, Dimension, MakeError, Refusal};
+use crate::error::{self, Defect, Dimension, MakeError};
 
 /// The faces of a [`block`] by role.
 ///
@@ -78,7 +78,7 @@ const ROLES: [Role; 6] = [
 ///
 /// # Errors
 ///
-/// [`Refusal::Size`] for a size that is not finite and above the document's resolution;
+/// [`Refusal::Size`](crate::Refusal::Size) for a size that is not finite and above the document's resolution;
 /// [`MakeError::Defect`] if the body the constructor builds is refused by `finish`;
 /// [`MakeError::Full`] if a table runs out of ids.
 pub fn block(
@@ -87,22 +87,11 @@ pub fn block(
     doc: &Document,
 ) -> Result<Made<BlockFaces>, MakeError> {
     let floor = doc.resolution().zone();
-    for (dimension, s) in [Dimension::X, Dimension::Y, Dimension::Z]
-        .into_iter()
-        .zip(size)
-    {
-        let value = s.mm();
-        // NaN is not above the floor, so it is refused here too.
-        let ok = value.is_finite() && value > floor.mm();
-        if !ok {
-            return Err(MakeError::Refused(Refusal::Size {
-                dimension,
-                value,
-                floor,
-            }));
-        }
-    }
-    let [dx, dy, dz] = size.map(Length::mm);
+    let [dx, dy, dz] = [
+        error::size(Dimension::X, size[0], floor)?,
+        error::size(Dimension::Y, size[1], floor)?,
+        error::size(Dimension::Z, size[2], floor)?,
+    ];
     let (ax, ay, az): (Vec3, Vec3, Vec3) = (*frame.x(), *frame.y(), *frame.z());
     // A corner is placed once, as the sum of its offsets along the axes added to the origin.
     let point = |bits: u8| -> Point3 {
