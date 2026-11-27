@@ -26,6 +26,7 @@
 //! structure kept in its item.
 
 use scx_num::extent3d::Extent3d;
+use scx_num::vector3d::Point3;
 
 /// A node of a [`SplitTree`]: an index into the tree that made it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -46,9 +47,35 @@ pub struct Node<T> {
     children: Option<[NodeId; 2]>,
     height: u32,
     item: T,
+    /// The box's squared diagonal and middle, which a solve reads at every split.
+    diagonal_sq: f64,
+    middle: Point3,
 }
 
 impl<T> Node<T> {
+    fn new(bbox: Extent3d, children: Option<[NodeId; 2]>, height: u32, item: T) -> Self {
+        Self {
+            diagonal_sq: (bbox.max() - bbox.min()).length_squared(),
+            middle: bbox.evaluate(0.5, 0.5, 0.5),
+            bbox,
+            children,
+            height,
+            item,
+        }
+    }
+
+    /// The squared length of the box's diagonal, `(max - min)²`.
+    #[must_use]
+    pub(crate) const fn diagonal_squared(&self) -> f64 {
+        self.diagonal_sq
+    }
+
+    /// The box's middle, [`Extent3d::evaluate`] at `(0.5, 0.5, 0.5)`.
+    #[must_use]
+    pub(crate) const fn middle(&self) -> Point3 {
+        self.middle
+    }
+
     /// The node's box.
     #[must_use]
     pub const fn bbox(&self) -> &Extent3d {
@@ -115,12 +142,7 @@ impl<T> SplitTree<T> {
 
     /// Adds a leaf. `None` once the tree holds `u32::MAX` nodes.
     pub fn leaf(&mut self, bbox: Extent3d, item: T) -> Option<NodeId> {
-        self.push(Node {
-            bbox,
-            children: None,
-            height: 0,
-            item,
-        })
+        self.push(Node::new(bbox, None, 0, item))
     }
 
     /// Adds a node over `children`, which must be nodes of this tree. `None` when a child
@@ -129,12 +151,12 @@ impl<T> SplitTree<T> {
         let [a, b] = children;
         let ha = self.nodes.get(a.index())?.height;
         let hb = self.nodes.get(b.index())?.height;
-        self.push(Node {
+        self.push(Node::new(
             bbox,
-            children: Some(children),
-            height: ha.max(hb).saturating_add(1),
+            Some(children),
+            ha.max(hb).saturating_add(1),
             item,
-        })
+        ))
     }
 
     /// The node `id`; `None` for an id of another, larger tree.

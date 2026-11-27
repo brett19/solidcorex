@@ -702,16 +702,12 @@ impl<'a, T, const N: usize> Branch<'a, T, N> {
     /// tree.
     #[must_use]
     pub fn new(trees: [&'a SplitTree<T>; N], ids: [NodeId; N]) -> Option<Self> {
-        let mut found: [Option<&'a Node<T>>; N] = [None; N];
-        for ((slot, tree), id) in found.iter_mut().zip(trees).zip(ids) {
-            *slot = Some(tree.get(id)?);
+        let first = trees.first()?.get(*ids.first()?)?;
+        let mut nodes = [first; N];
+        for ((slot, tree), id) in nodes.iter_mut().zip(trees).zip(ids) {
+            *slot = tree.get(id)?;
         }
-        let fallback = found.iter().flatten().next().copied()?;
-        Some(Self {
-            trees,
-            ids,
-            nodes: found.map(|n| n.unwrap_or(fallback)),
-        })
+        Some(Self { trees, ids, nodes })
     }
 
     /// The trees.
@@ -1022,12 +1018,44 @@ fn max_projected_radius_sq(
 /// `tolerance` better than `best_sq`, by box and sphere tests. True for one box, for
 /// operations with no test, and wherever a test cannot decide.
 #[must_use]
+#[inline]
 pub fn may_contain(op: &Operation, boxes: &[Extent3d], tolerance: f64, best_sq: f64) -> bool {
     // no natural test for a single tree: a hook's job
     let [b0, b1, ..] = boxes else {
         return true;
     };
     let tol = tolerance;
+    // the box-distance tests inline into a solve's loop; the others are out of line
+    match *op {
+        Operation::Minimize => nearest_may_beat(b0, b1, tol, best_sq),
+        Operation::Maximize => farthest_may_beat(b0, b1, tol, best_sq),
+        _ => may_contain_two(op, boxes, b0, b1, tol, best_sq),
+    }
+}
+
+/// The minimise test: the boxes' nearest points may be within the tolerance of the best.
+#[inline]
+fn nearest_may_beat(b0: &Extent3d, b1: &Extent3d, tol: f64, best_sq: f64) -> bool {
+    let d_sq = b0.min_distance_squared(b1);
+    !(d_sq > best_sq && sqrt(d_sq) - tol > sqrt(best_sq))
+}
+
+/// The maximise test: the boxes' farthest points may be within the tolerance of the best.
+#[inline]
+fn farthest_may_beat(b0: &Extent3d, b1: &Extent3d, tol: f64, best_sq: f64) -> bool {
+    let d_sq = b0.max_distance_squared(b1);
+    !(d_sq < best_sq && sqrt(d_sq) + tol < sqrt(best_sq))
+}
+
+/// [`may_contain`] for two or more boxes, `b0` and `b1` the first two of `boxes`.
+fn may_contain_two(
+    op: &Operation,
+    boxes: &[Extent3d],
+    b0: &Extent3d,
+    b1: &Extent3d,
+    tol: f64,
+    best_sq: f64,
+) -> bool {
     match *op {
         Operation::Intersect | Operation::IntersectionTest => {
             for (i, bi) in boxes.iter().enumerate() {
@@ -1045,14 +1073,8 @@ pub fn may_contain(op: &Operation, boxes: &[Extent3d], tolerance: f64, best_sq: 
             }
             true
         }
-        Operation::Minimize => {
-            let d_sq = b0.min_distance_squared(b1);
-            !(d_sq > best_sq && sqrt(d_sq) - tol > sqrt(best_sq))
-        }
-        Operation::Maximize => {
-            let d_sq = b0.max_distance_squared(b1);
-            !(d_sq < best_sq && sqrt(d_sq) + tol < sqrt(best_sq))
-        }
+        Operation::Minimize => nearest_may_beat(b0, b1, tol, best_sq),
+        Operation::Maximize => farthest_may_beat(b0, b1, tol, best_sq),
         Operation::AtDistance(d) => {
             let at_sq = d * d;
             let max_sq = b0.max_distance_squared(b1);
@@ -1303,7 +1325,7 @@ pub fn split_choice<T, const N: usize>(op: &Operation, branch: &Branch<'_, T, N>
         if node.is_leaf() {
             continue;
         }
-        let size = (node.bbox().max() - node.bbox().min()).length_squared();
+        let size = node.diagonal_squared();
         if size >= max_size {
             max_size = size;
             best = Some(i);
@@ -1311,28 +1333,25 @@ pub fn split_choice<T, const N: usize>(op: &Operation, branch: &Branch<'_, T, N>
     }
     let tree = best?;
     let nodes = branch.nodes();
-    let boxes = branch.boxes();
+    // the middles of the node's halves
     let halves = nodes
         .get(tree)
         .and_then(|n| n.children())
         .and_then(|[a, b]| {
             let t = branch.trees().get(tree)?;
-            Some((*t.get(a)?.bbox(), *t.get(b)?.bbox()))
+            Some((t.get(a)?.middle(), t.get(b)?.middle()))
         });
-    // the other box of a two-tree ordering
-    let other = if tree < 2 { boxes.get(1 - tree) } else { None };
-    let mid = |b: &Extent3d| b.evaluate(0.5, 0.5, 0.5);
-    let swapped = match (*op, halves) {
+    // the other node of a two-tree ordering
+    let other = if tree < 2 { nodes.get(1 - tree) } else { None };
+    let swapped = match (op, halves) {
         (Operation::Rayfire { direction }, Some((h1, h2))) => {
-            let start = boxes.first().map(Extent3d::min);
-            start.is_some_and(|p| {
-                closest_t(p, direction, mid(&h2)) < closest_t(p, direction, mid(&h1))
-            })
+            let start = nodes.first().map(|n| n.bbox().min());
+            start.is_some_and(|p| closest_t(p, *direction, h2) < closest_t(p, *direction, h1))
         }
         (Operation::Signed3dDirectedMinimize { direction }, Some((h1, h2))) => {
             other.is_some_and(|o| {
-                let p = mid(o);
-                closest_t(p, direction, mid(&h2)) < closest_t(p, direction, mid(&h1))
+                let p = o.middle();
+                closest_t(p, *direction, h2) < closest_t(p, *direction, h1)
             })
         }
         (
@@ -1342,12 +1361,12 @@ pub fn split_choice<T, const N: usize>(op: &Operation, branch: &Branch<'_, T, N>
             | Operation::ProjectedMinimize { .. },
             Some((h1, h2)),
         ) => other.is_some_and(|o| {
-            let p = mid(o);
-            (mid(&h2) - p).length_squared() < (mid(&h1) - p).length_squared()
+            let p = o.middle();
+            (h2 - p).length_squared() < (h1 - p).length_squared()
         }),
         (_, Some((h1, h2))) if op.maximizes() => other.is_some_and(|o| {
-            let p = mid(o);
-            (mid(&h2) - p).length_squared() > (mid(&h1) - p).length_squared()
+            let p = o.middle();
+            (h2 - p).length_squared() > (h1 - p).length_squared()
         }),
         _ => false,
     };
