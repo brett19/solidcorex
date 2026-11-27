@@ -770,7 +770,7 @@ fn shells(
 }
 
 /// The sign of the volume a set of kept faces bounds from its material side, where the set
-/// is one operand shell whole: each face the only piece of its operand face, all of one
+/// is one operand shell whole: each face with all the pieces of its operand face, all of one
 /// operand, all the shell's faces, each once (no sheet), its material on one side of that
 /// shell. Its surface is the operand shell's, so its sign is the operand's: a shell of
 /// the outside is negative, the one shell of a region positive (a valid operand's, as
@@ -794,14 +794,23 @@ fn whole_shell(
         }
     };
     let shell = body.face(first.of)?.shell(at(first));
+    let set: BTreeSet<FaceId> = faces.iter().copied().collect();
     let mut ofs = BTreeSet::new();
+    let mut pieces = 0;
     for f in faces {
         let k = kept.get(f)?;
-        let whole = m.pieces.get(&(k.side, k.of)).is_some_and(|p| p.len() == 1);
-        if k.side != first.side || !whole || body.face(k.of)?.shell(at(k)).id() != shell.id() {
+        // Every piece of its operand face is in the set (a face cut by a contact edge still
+        // covers its surface).
+        let all = m.pieces.get(&(k.side, k.of))?;
+        if k.side != first.side
+            || !all.iter().all(|p| set.contains(p))
+            || body.face(k.of)?.shell(at(k)).id() != shell.id()
+        {
             return None;
         }
-        ofs.insert(k.of);
+        if ofs.insert(k.of) {
+            pieces += all.len();
+        }
     }
     let mut sides = 0;
     for (f, _) in shell.faces() {
@@ -810,7 +819,7 @@ fn whole_shell(
             return None;
         }
     }
-    if sides != ofs.len() || ofs.len() != faces.len() {
+    if sides != ofs.len() || pieces != faces.len() {
         return None;
     }
     let region = shell.region();
