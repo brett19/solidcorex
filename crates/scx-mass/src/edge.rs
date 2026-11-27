@@ -14,7 +14,7 @@ use scx_num::budget::{Budget, Stop};
 use scx_nurbs::Approach;
 
 use crate::error::{MassError, MassUnsupported};
-use crate::face::fail;
+use crate::face::{fail, reachable};
 use crate::kronrod::{self, K7, Meter, Tol};
 use crate::spec::{Estimate, RelAccuracy};
 
@@ -39,10 +39,13 @@ pub fn edge_length(
             error: 0.0,
         });
     };
-    let size = edge
+    let bbox = edge
         .bounding_box()
-        .ok_or(MassError::Unsupported(MassUnsupported::NoBox { at }))?
-        .max_length();
+        .ok_or(MassError::Unsupported(MassUnsupported::NoBox { at }))?;
+    let size = bbox.max_length();
+    // As a face's: the coordinates' rounding is what a piece cannot be held below.
+    let noise = reachable(bbox.min(), bbox.max(), size);
+    let held = (accuracy.get() / 10.0).max(noise);
     let (lo, hi) = (interval.min(), interval.max());
     let mut ends = vec![lo];
     if let Curve::Nurbs(n) = curve {
@@ -60,7 +63,7 @@ pub fn edge_length(
         let [a, b] = *w else { continue };
         let floor = [size * (b - a) / width];
         let tol = Tol {
-            accuracy: accuracy.get() / 10.0,
+            accuracy: held,
             floor: &floor,
         };
         kronrod::integrate(
@@ -79,6 +82,9 @@ pub fn edge_length(
             },
         )
         .map_err(|f| fail(at, f))?;
+    }
+    if noise > accuracy.get() / 10.0 {
+        error[0] += noise * size;
     }
     Ok(Estimate {
         value: value[0],

@@ -250,6 +250,23 @@ pub(crate) fn reference(mid: Point3, size: f64) -> Point3 {
     Point3::new(r(mid.x), r(mid.y), r(mid.z))
 }
 
+/// The roundings of a point's coordinates one evaluation carries (a few operations on
+/// numbers as large as the coordinates).
+const COORD_ROUNDINGS: f64 = 8.0;
+
+/// The relative accuracy the coordinates of a thing in the box `min`..`max`, of longest side
+/// `size`, can give: their rounding over the size. Zero for a box at the origin.
+pub(crate) fn reachable(min: Point3, max: Point3, size: f64) -> f64 {
+    let far = [min.x, min.y, min.z, max.x, max.y, max.z]
+        .into_iter()
+        .fold(0.0_f64, |m, c| m.max(c.abs()));
+    if size > 0.0 && far.is_finite() {
+        COORD_ROUNDINGS * f64::EPSILON * far / size
+    } else {
+        0.0
+    }
+}
+
 /// The pin's area estimate of a box: half its surface, the larger of a face's projections.
 fn area_estimate(sides: Vec3) -> f64 {
     let a = sides.x * sides.y + sides.y * sides.z + sides.z * sides.x;
@@ -410,6 +427,13 @@ pub(crate) fn integrate(
     for (s, &p) in scale.iter_mut().zip(&powers) {
         *s = area * (0..p).fold(1.0, |a, _| a * size);
     }
+    // What the coordinates' own rounding allows: a point's last bit is `eps` of its distance
+    // from the origin, which a piece's difference of rules cannot go below however it is
+    // cut. A piece is held to the larger of that and a tenth of the accuracy; a request the
+    // coordinates cannot meet is met as far as they allow, and the shortfall is in the
+    // error (below).
+    let noise = reachable(bbox.min(), bbox.max(), size);
+    let held = (accuracy / 10.0).max(noise);
     let uv_area = (u_hi - u_lo) * (v_hi - v_lo);
     let uv_area = if uv_area > 0.0 { uv_area } else { 1.0 };
     let mut density = [0.0; MAX_COMPONENTS];
@@ -421,7 +445,7 @@ pub(crate) fn integrate(
         set,
         reference: reference - Point3::new(0.0, 0.0, 0.0),
         base,
-        accuracy: accuracy / 10.0,
+        accuracy: held,
         density,
         v_breaks: surface_breaks(surface, Dir::V, v_lo, v_hi),
     };
@@ -446,7 +470,7 @@ pub(crate) fn integrate(
                 *f = s * share;
             }
             let tol = Tol {
-                accuracy: accuracy / 10.0,
+                accuracy: held,
                 floor: floor.get(..n).unwrap_or_default(),
             };
             kronrod::integrate(
@@ -499,7 +523,7 @@ pub(crate) fn integrate(
                     *f = s * share;
                 }
                 let tol = Tol {
-                    accuracy: accuracy / 10.0,
+                    accuracy: held,
                     floor: floor.get(..n).unwrap_or_default(),
                 };
                 kronrod::integrate(
@@ -561,6 +585,11 @@ pub(crate) fn integrate(
             size,
             &mut error,
         );
+    }
+    if noise > accuracy / 10.0 {
+        for (e, s) in error.iter_mut().zip(&scale).take(n) {
+            *e += noise * s;
+        }
     }
     Ok(FaceIntegral {
         reference,
