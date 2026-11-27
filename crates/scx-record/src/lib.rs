@@ -26,6 +26,22 @@
 //!   counts ([`Sink::slots`]).
 //! - A NaN or an infinity is refused on both sides (63 D1).
 //!
+//! # Geometry (63 RE2)
+//!
+//! [`Record`] writes and reads every curve and surface kind a body holds ([`scx_curve::Curve`],
+//! [`scx_curve::Curve2`], [`scx_surface::Surface`], their NURBS kinds and the frames),
+//! nested in a larger record. A read value is rebuilt by its type's checked constructor,
+//! whose refusal is the cause ([`ReadCause::Frame`], [`ReadCause::Curve`],
+//! [`ReadCause::Surface`]); every bit is kept, frames' axes and rational NURBS points
+//! included.
+//!
+//! # Bodies (63 RE3)
+//!
+//! [`encode`] and [`write_text`] write a [`Brep`](scx_brep::Brep) as the record [`BODY`]: its
+//! tables by id, each record's constructor inputs and nothing derived. [`decode`] and
+//! [`read_text`] read one back through a [`Draft`](scx_brep::Draft) and its `finish`, so every
+//! decoded body is checked, and a refusal is [`ReadCause::Invalid`] with the finish cause.
+//!
 //! # Errors
 //!
 //! A read fails with [`ReadError`], the byte offset and a typed, kinded [`ReadCause`]
@@ -33,13 +49,17 @@
 //! Refusing heals nothing (01 §1.1).
 
 mod binary;
+mod body;
 mod error;
+mod geom;
 mod tag;
 mod text;
 mod wire;
 
 pub use binary::{Reader, Writer};
+pub use body::{BODY, Limits, decode, encode, read_text, write_text};
 pub use error::{ReadCause, ReadError, WriteCause, WriteError};
+pub use geom::Record;
 pub use tag::Tag;
 pub use text::{TextReader, TextWriter};
 pub use wire::{FORMAT_VERSION, Magic, Sink, Source};

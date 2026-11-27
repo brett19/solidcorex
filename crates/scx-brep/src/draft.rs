@@ -34,7 +34,7 @@ use crate::check;
 use crate::document::Document;
 use crate::error::{Absent, TableFull};
 use crate::finish::Unfinished;
-use crate::id::{EdgeId, Entity, FaceId, RegionId, ShellId, VertexId};
+use crate::id::{EdgeId, Entity, EntityKind, FaceId, RegionId, ShellId, VertexId};
 use crate::record::{
     EdgeAdj, EdgeGeom, EdgeShape, FaceRecord, Fin, RegionRecord, ShellRecord, VertexRecord,
 };
@@ -170,6 +170,27 @@ impl Draft {
     /// [`TableFull`] when the shell ids have run out.
     pub fn add_shell(&mut self, shell: ShellRecord) -> Result<ShellId, TableFull> {
         self.t.shells.push(shell)
+    }
+
+    /// Leaves the next `count` ids of `kind` unused, as if each had been added and removed:
+    /// the next add of that kind gets the id after them. A reader that keeps a body's ids
+    /// (01 §2.2) spells its deleted slots this way; no entity is created or removed, so the
+    /// edit's [`Changes`] do not name them.
+    ///
+    /// # Errors
+    ///
+    /// [`TableFull`] when the ids would run past `u32`; nothing is skipped then.
+    pub fn skip(&mut self, kind: EntityKind, count: u32) -> Result<(), TableFull> {
+        match kind {
+            EntityKind::Region => self.t.regions.skip(count),
+            EntityKind::Shell => self.t.shells.skip(count),
+            EntityKind::Face => self.t.faces.skip(count),
+            EntityKind::Edge => {
+                self.t.edges.skip(count)?;
+                self.t.adjacency.skip(count)
+            }
+            EntityKind::Vertex => self.t.vertices.skip(count),
+        }
     }
 
     /// Adds a vertex.

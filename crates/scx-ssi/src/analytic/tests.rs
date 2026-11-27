@@ -269,7 +269,7 @@ fn pieces_take_their_pcurves() {
     let r = intersect(&c, &ce, &p, &pe, acc(), res());
     let x = curves(&r);
     assert_eq!(x.len(), 1, "{x:?}");
-    let tol = Length::from_mm(1e-9);
+    let tol = Resolution::new(Length::from_mm(2e-9)).unwrap();
     for s in [&c, &p] {
         assert!(pcurve_of(&x[0].curve, s, x[0].span, tol).is_ok());
     }

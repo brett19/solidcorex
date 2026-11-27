@@ -3257,8 +3257,8 @@ scx-nurbs, scx-nurbs-surface and scx-brep was checked for a tolerance argument.
 
 | Entry point | Tolerance | Zero, negative, non-finite |
 | --- | --- | --- |
-| `scx_surface::pcurve_of` | `tol: Length` | `PcurveError::BadTolerance` (Refused), since BR5 |
-| `scx_surface::intersect_curve` | `tol: Length` | `SurfaceError::BadTolerance` (Refused), checked first |
+| `scx_surface::pcurve_of` | was `tol: Length`, now `Resolution` | was `PcurveError::BadTolerance` (Refused), since BR5; now not representable |
+| `scx_surface::intersect_curve` | was `tol: Length`, now `Resolution` | was `SurfaceError::BadTolerance` (Refused), checked first; now not representable |
 | `scx_ssi::analytic::intersect` | `[Accuracy; 2]`, `Resolution` | not representable: `Resolution::new` is `None` for any of them, and `Accuracy::new` for a negative or non-finite one |
 | `scx_ssi::analytic::section_by_plane` | was `tol: Length`, now `Resolution` | was unchecked; now not representable |
 | `scx_brep::Draft::{finish, write_pcurves, exact_loops, transform}` | `&Document` (its `Resolution`) | not representable |
@@ -3271,8 +3271,32 @@ scx-nurbs, scx-nurbs-surface and scx-brep was checked for a tolerance argument.
   - It returns `Closed<Intersection>` with no error channel. A `Result` only for the tolerance
     would make every caller handle a case the type can rule out.
   - The callers in the tests and the difftest build a `Resolution` instead.
-- *Left for review:* `pcurve_of` and `intersect_curve` could also take a `Resolution`. That
-  would remove both `BadTolerance` variants. They are kept as ruled (SU6, BR5).
+- *Done as FU2 (11-27):* `pcurve_of` and `intersect_curve` take a `Resolution`, and both
+  `BadTolerance` variants are removed.
+  - Why `Resolution` and not `Accuracy`: both tolerances are per operation (how close the
+    lift must land; how close a curve must come to count as meeting or touching the
+    surface), not a bound on a stored entity, and `Accuracy` admits zero, which is the
+    case `BadTolerance` refused.
+  - `pcurve_of` reads `res.approx()`, the distance a fitted entity may stand from the one
+    it stands for. `intersect_curve` reads `res.zone()`.
+  - Results are bit-identical: each caller that passed `t` now passes a resolution whose
+    `approx()` is `t` (a zone of `2t`, a doubling and halving that is exact). BR5's writer
+    passed `res.approx()` and now passes `res`. `Draft::transform` passes the zone-or-bound
+    reach doubled, with the document's resolution as the fallback for a reach that is not
+    a resolution (a recorded bound is above the zone, so it never fires).
+  - Removed tests, on purpose; each proved only that a bad tolerance was refused, which the
+    type now rules out:
+    - `scx-surface/tests/intersect.rs` `a_bad_tolerance_is_refused_first`: for a zero,
+      negative, NaN and infinite `tol`, on a sphere and its NURBS image, `intersect_curve`
+      returned `SurfaceError::BadTolerance` (Refused, `intersect_tolerance_invalid`) before
+      the NURBS check.
+    - `scx-surface/src/pcurve.rs` `refusals_are_typed`, the two tolerance arms only (the
+      test stays for its other causes): a NaN `tol` gave `pcurve_tolerance_invalid`, and
+      zero, `-0`, negative and infinite gave `PcurveError::BadTolerance { value }`
+      (Refused).
+    - `scx-surface/src/error.rs`'s name-and-kind check for `BadTolerance`
+      (`intersect_tolerance_invalid`, Refused), one assertion in `kinds_and_names`.
+    - Every other test keeps its checks; their tolerance arguments are now resolutions.
 - *Not geometry entry points, recorded not changed:*
   - `scx_num::invert::Foot::is_on(tol)` is a predicate. A zero `tol` is the exact test, and a
     NaN or negative one is never on, so it needs no refusal.
@@ -5813,6 +5837,7 @@ is always in.
 | `regions` | `RegionWithoutShell` | every shell's region | always (one pass over shells; cheap) |
 | `edge_check` | `EdgeEndOffVertex`, `EdgeTooShort` | the edge's curve and accuracy, its ends' points and accuracy | EG = written ∪ created edges ∪ the star of each written vertex, live only |
 | `use_check`, `closure`, `pole_check`, `face_check` | `OutsideDomain`, `PcurveOffEdge`, `UseEndOffVertex`, `PeriodJump`, `LoopOpenInUv`, `DogLeg`, `PoleNotVertex`, `LoopOrientation`, `FaceWraps` | the face, its uses' edges and their ends | FG = written ∪ created faces ∪ the faces of EG's final fins, live only |
+| `radial::check` (BR10, §6.15) | `RadialOrder` | the edge's curve and accuracy, its fins; each fin face's surface, uses, pcurves and bounds | the plan edges, live with more than two fins |
 
 The plan's selected instances are walked in id order inside each rule (`Sel::Only` takes a
 sorted list), and the rules run in the full check's order, so the order argument holds
@@ -5973,6 +5998,152 @@ snapshot hooks, extended with marks.
 2. An incremental body union, and refitting the tree in place when a few face boxes change
    instead of rebuilding it (the face replace row).
 3. The 8-samples question and research 66 were not taken up.
+
+### 6.15 BR10 as built (11-27)
+
+Decided by analysis and an adversarial pass. Proposed for review; not yet ruled.
+
+`finish` refuses an edge of more than two fins whose faces do not leave it counter-clockwise
+in the fins' order (research 72 §12, D5). Before this, the order was the caller's duty
+alone, and a wrong order passed whenever the sides happened to agree.
+
+**The public surface.** One new cause:
+
+```rust
+pub enum GeometryCause {
+    // ...
+    /// The faces of `edge`'s fins do not leave it in the fins' radial order, proved at
+    /// edge parameter `at`.
+    RadialOrder { edge: EdgeId, at: f64 },   // name "radial_order"
+}
+```
+
+The rule is the crate-private `check/radial.rs`. It runs last, after the faces' geometry
+pass, in both the full and the touched check.
+
+**When the sides already decide.** `edge_structure` checks that the region after each fin
+(Front after a forward fin, Back after a reversed one) is the region before the next. With
+the sectors about an edge naming distinct regions, that rule already forces the cyclic
+order. Two blocks of two regions sharing an edge, listed out of order, are refused by
+`SidesDisagree`. The geometry decides only where the sectors repeat: several blocks of
+*one* solid region touching along an edge, where the sectors are the solid and the outside
+by turns. A reversal of the four fins, or a swap of opposite fins, keeps the sectors
+alternating and passes the sides. Only the faces' directions show the order.
+
+**The rule.**
+
+1. At edge parameter `s`, each fin's face leaves in `d = σ N × T̂`. `T̂` is the edge's unit
+   tangent (`Approach::Above`), `N` the sensed surface normal at the use's pcurve point at
+   `s` (pcurves run over the edge's own interval), and `σ` the fin's sense.
+2. The counter-clockwise gap from `d_a` to `d_b` is `atan2((d_a × d_b)·T̂, d_a·d_b)` mapped
+   into (0, 2π). Taken around the fins in order, the true gaps add up to 2πk, with k = 1
+   exactly when the order is right.
+3. Each direction is known within its *spread*:
+   `κ_max·(reach(use bound) + reach(edge)) + γ₆₄`. The lift stands within the use's reach
+   and the edge's of the true edge; the normal turns by at most the largest principal
+   curvature (from the first and second fundamental forms) times that distance.
+4. Each gap has bounds from the spreads. **Wrong** iff the sum of lower bounds exceeds
+   2π(1 + slack): a second turn is proved, so a refusal is a proof. **Right** iff no gap is
+   undecided and the upper bounds sum below 4π. Otherwise **undecided**.
+5. Samples are taken at 0.5, then at 0.25 and 0.75 only while undecided. If all three are
+   undecided, the caller's order stands.
+
+*Tangent faces.* Two directions within their spreads of each other (|θ| ≤ spread_a +
+spread_b) are faces tangent along the edge. They are ordered by their bend
+`c = σ·κ_n(d)`, the normal curvature along the leaving direction with the use's sense. A
+larger bend is further counter-clockwise.
+
+- If b bends more, b is just after a: the gap's upper bound is the spread sum.
+- If b bends less, b is just before: the lower bound is 2π minus the spread sum.
+- Equal bends (within `bend_spread = 4κ²ρ + 1e-9·max(κ, |bend|)`) leave the gap undecided.
+
+Why this ordering holds within the resolution: in any reading where θ has the other sign,
+the two faces cross at distance `h* = 2θ/Δc` from the edge. Within that distance they stay
+within κρ²/2 of each other, which is coincident at the resolution. Past it, every reading
+shows the order the bends give.
+
+**Cases for and against the choices.**
+
+- *Sample at the midpoint first* (chosen). For: one sample decides every edge the tests
+  build, at one normal per fin. Against: a wrong order that is right at the midpoint and
+  wrong elsewhere passes. It needs faces crossing inside the edge's interior, which another
+  rule (face intersection) should catch, not this one. Change if a body with such a cross
+  reaches finish.
+- *Refuse only on a proof* (chosen). For: a spread or tangent tie never refuses a valid
+  body, so the rule adds no false refusals. Against: an order that is wrong only within
+  the spreads passes. The caller's order is then as good as any reading the resolution
+  can tell apart.
+- *A new `GeometryCause`, not a `StructureCause`*. For: it reads surfaces and curves, as the
+  geometry causes do, and runs after the faces' check. Against: a caller fixing fin
+  order might look in structure first. The cause names the edge.
+- *Sum of gaps, not pairwise comparisons*. For: one bound covers any number of fins and
+  any permutation; a cyclic shift of the list is the same order and is accepted. Against:
+  none found.
+
+**The touched closure (the §6.14 table gains a row).**
+
+| Rule (check fn) | Causes | Reads | Instances checked |
+|---|---|---|---|
+| `radial::check` | `RadialOrder` | the edge's curve and accuracy, its fins; each fin face's surface, uses, pcurves and bounds | the plan edges, live with more than two fins |
+
+Every write that feeds an instance is already in `plan.edges`: a geometry write (the edge's
+first-write snapshot), a fin write, the face hook's marks (every edge a written face's uses
+name), and created edges. A resolution change is whole mode, which checks all edges. The
+rule reads no vertex. A sabotage (running the rule over the geometry pass's edge set
+instead of the plan edges) fails both touched tests.
+
+**Testkit.** BR8's generator gains two kinds:
+
+- `checker`: an (n+1)×(n+1) one-layer checkerboard. Its black cells are blocks; diagonal
+  neighbours share an edge of four fins, and each block is its own region. n² four-fin
+  edges.
+- `touching`: the same blocks, all in one solid region and shell. It is the body where only
+  the geometry decides.
+
+`Invariant::RadialOrder` in the wreck now reverses a four-fin edge of `touching` (was a
+three-fin edge of `stack`). Its finish cause changed from `sides_disagree` to
+`radial_order`, as the rule now names it.
+
+**Tests.** `tests/radial.rs`:
+
+- four-fin edges in order finish (checker, touching; seeds 0–5, sizes 1–3);
+- two regions out of order give `sides_disagree`;
+- touching blocks reversed or swapped give exactly `RadialOrder { edge, at: 0.5 }`;
+- every one of the 24 orders of a four-fin edge is judged as the oracle judges it (rotations
+  finish; every other order is refused by sides or by the rule; all three outcomes reached);
+- reversing every two-fin edge of block, cylinder, sphere and quad sheet still finishes.
+
+The rule's unit tests cover the turning order, an unknown direction only letting an order
+stand, tangent faces (a plane and a cylinder lying on it) ordered by bend, and equal bends
+left to the caller. `tests/touched.rs` gains a valid "rotate fins" and an invalid "swap
+fins" op, and a test over stack, checker and touching where the radial rule is reached in
+touched mode (22 times at the seeds run) with the touched and full checks agreeing.
+
+**Measurements** (release, full check, throwaway timers):
+
+| Body | Faces | Edges (>2 fins) | Radial pass | Geometry pass | Finish |
+|---|---|---|---|---|---|
+| block, size 41 | 10,086 | 20,172 (0) | 12–20 µs | 6.9–7.4 ms | 15–17.7 ms |
+| checker, size 40 | 5,046 | 8,492 (1,600) | 0.56–0.57 ms | 3.4 ms | 7.7–7.9 ms |
+| touching, size 40 | 5,046 | 8,492 (1,600) | 0.55–0.56 ms | 3.4 ms | 7.7–7.9 ms |
+
+About 0.7 ns per two-fin edge (one branch) and about 350 ns per four-fin edge (four
+normals, four curvatures, one midpoint sample). On a body where every edge has four fins,
+the rule is about 7% of finish.
+
+**Open questions and change-ifs.**
+
+1. The tangent's error is not in the spread. An edge curve's tangent is exact for lines and
+   circles; for a NURBS edge it is not bounded. Change if a NURBS edge with tangent faces is
+   refused.
+2. NURBS curvature is not certified (`CURVATURE_SLACK = 1e-9` is generous for analytic kinds
+   and inferred for NURBS).
+3. A fin's use is found by a linear scan of its face's uses. Fine at the faces tested; a
+   face of thousands of uses on many-fin edges would want the use index.
+4. `bend_spread` is INFERRED, not derived from a bound on the second partials' rounding.
+5. Once the midpoint decides, the edge's interior is not checked (see above).
+6. The weak points are near-flat cones and NURBS faces with high curvature near the edge,
+   where the spread grows and more pairs are undecided. None is in the tests.
 
 ## 7. `scx-record`
 
@@ -6316,6 +6487,377 @@ pub fn read_text(s: &str, doc: &Document, limits: Limits) -> Result<Brep, ReadEr
 2. Should text `f64` use `Display` (readable, up to about 330 bytes) or `{:e}` (at most about 24
    bytes)? Both keep the bits.
 3. Should the primitives be public under semver now, or crate-private until an app asks for them?
+
+### 7.7 RE2 as built (11-27)
+
+Decided by analysis and an adversarial pass. Proposed for review; not yet ruled.
+
+**What was built.** `crates/scx-record/src/geom.rs` holds the geometry records. Each curve and
+surface kind a body holds is written once through `Sink` and read once through `Source`, so the
+binary and the text come from one field order. The crate now also depends on `scx-curve`,
+`scx-nurbs`, `scx-nurbs-surface` and `scx-surface`. All of them are below layer 6.
+
+```rust
+pub trait Record: Sized {                  // a nested record: no magic, no version
+    fn put<S: Sink>(&self, w: &mut S) -> Result<(), WriteError>;
+    fn take<R: Source>(r: &mut R) -> Result<Self, ReadError>;
+}
+// impl Record for Frame, Frame2, NurbsCurve<D>, NurbsSurface<D>, Curve, Curve2, Surface
+
+pub enum ReadCause { /* RE1's, and: */
+    Frame(FrameError),                     // "bad_frame"
+    Curve(Box<CurveError>),                // "bad_curve", source() is the constructor's error
+    Surface(Box<SurfaceError>),            // "bad_surface"
+    NonCanonical { record: &'static str }, // a second spelling of a value (Refused)
+}
+pub enum WriteCause { /* RE1's, and: */
+    MixedRational { record: &'static str }, // Defect: no constructor or edit builds one
+    NoRecord { record: &'static str },      // Unsupported: a kind added later with no record yet
+}
+```
+
+The kind tags are crate-private `tags!` enums with dense codes. They are `CurveKind` (line,
+circle, ellipse, parabola, hyperbola, nurbs), `Curve2Kind` (the same, then angle_line and
+angle_wave) and `SurfaceKind` (plane, cylinder, cone, sphere, torus, nurbs). Small tags cover the
+sense, the angle axis, the sweep (turn or half) and the NURBS form.
+
+**The records.** A record stores what the type's constructor takes, and nothing derived.
+
+| Kind | Fields, in order |
+|---|---|
+| `Frame` | origin, x, z (9 `f64`); y is `z × x` |
+| `Frame2` | origin, x (4 `f64`) |
+| Line | origin, direction |
+| Circle, Parabola | frame, radius or focal length, sense |
+| Ellipse, Hyperbola | frame, the two semi-axes, sense |
+| Cylinder, Sphere | frame, radius, sense |
+| Cone | frame, radius at the origin, half-angle, sense; the slope is computed |
+| Torus | frame, major, minor, sense |
+| Plane | frame |
+| AngleLine (2D) | sweep (`turn` and its period, or `half`), axis, start, sense, other, rate |
+| AngleWave (2D) | sweep, start, sense, mean, cos and sin amplitudes |
+| NURBS curve | degree, knots, form, points, then weights if rational |
+| NURBS surface | the u degree and knots, the v degree and knots, form, the net row by row, then weights |
+
+- The point count is not stored. For a curve it is `knots.len() - degree - 1`. For a surface the
+  net is that count in u by that count in v.
+- A decoded value goes back through its type's checked constructor. That is `Circle::new`,
+  `KnotVector::new` then `NurbsCurve::new` or `from_homogeneous`, and so on. If the constructor
+  refuses, its cause is boxed and framed: `ReadCause::Curve` or `ReadCause::Surface`, at the
+  offset just after the kind tag.
+
+The tests cover every kind in both encodings. They use seeded values from the constructors and
+from the edits: rotations, translations, mirrors, reversals, knot insertion, splits, degree
+elevation and surface swaps.
+- Every value round-trips to the bit. Equality is checked with `PartialEq` and with the `Debug`
+  text, so `-0` and `0` differ.
+- Binary → text → binary gives equal bytes.
+
+**Decisions.**
+
+1. **Frames are read back with a new `Frame::from_axes`, not `Frame::new`.**
+   - Measured: `Frame::new(o, z, x)` on a frame's own axes changes 152,106 of 200,000 frames by
+     an ulp or more, because it normalizes again. `Frame2::new` changes 59,443.
+   - `from_axes` takes the axes as they are if `|a · a - 1|` and `|x · z|` are within
+     `AXIS_TOLERANCE = 8 ε`. Otherwise it refuses with a typed `FrameError` (`NotFinite`,
+     `NotUnit { axis }` or `NotSquare`).
+   - The frames `new` builds, and those `transformed` builds by normalizing, were measured over
+     200,000 random frames at scales 1e-10 to 1e9. They are at most 2.5 ε from unit and 1 ε from
+     square. `transformed`'s exact path (FU1, §6.12) keeps a scaled image only when it is within
+     8 ε by the same sums, so its tolerance is now this constant. Every frame either path builds
+     passes `from_axes`.
+   - *For:* the record then keeps the bits, and an axis that has been edited off unit is still
+     refused.
+   - *Against:* it is a second public constructor, and the tolerance is a judgement. 8 ε gives
+     3× headroom over what was measured. A frame built some other way, still within that
+     rounding, would be taken, which is harmless.
+
+2. **A rational NURBS value stores the pair it was built from, as a three-way form.**
+   - A value holds both `P` and `w P`. `new` computes `w P = fl(P · w)` and `from_homogeneous`
+     computes `P = fl(w P / w)`, and the two relations differ in the last bit for most values.
+   - The form is written as follows:
+     - `polynomial` when the value has no weights;
+     - `points` when every `w P` is its point times its weight;
+     - otherwise `homogeneous` when every `P` is its `w P` over its weight;
+     - otherwise the write refuses with `MixedRational`.
+   - For this to hold, the curve edits `reversed`, `swapped` and `curve(i)` keep the value's
+     relation. Surface `transformed` gives products. Knot insertion, splits and elevation go
+     through `from_homogeneous`.
+   - On read, a `homogeneous` record whose value would also pass the `points` test is refused as
+     `NonCanonical`. So each value has one spelling, and `encode(decode(x)) == x`.
+   - *For:* it is exact for both constructors, with no second rounding.
+   - *Against:* there is a third form to know. It was considered storing both `P` and `w P`. That
+     is canonical only if the reader checks that one relation holds, it costs D more numbers per
+     point, and it would let a record carry a pair no constructor builds.
+
+3. **`Arcs::try_turn(period)` is added in `scx-curve`.**
+   - It refuses a non-finite period (`NotFinite(Part::Period)`) and one at most `EFF_ZERO`
+     (`Degenerate::Period`).
+   - `Arcs::turn` stays `const` and unchecked for its const callers. The reader must not build an
+     unchecked value.
+
+4. **`ReadError` and `ReadCause` lose `Eq` and `const fn kind`.**
+   - The boxed `CurveError` and `SurfaceError` carry `f64`s, and their `kind()` is not const.
+   - `PartialEq` and `Clone` stay, and `size_of::<ReadError>() <= 32` still holds because the
+     causes are boxed.
+
+5. **Dense tag codes.** §7.6's sketch had `Nurbs = 9`. Codes are per record, so no gap is
+   needed. A kind added later takes the next code, and until then the writer refuses its value
+   with `NoRecord`, since the enums are `non_exhaustive`.
+
+6. **The causes are framed with their own names.** The names are `bad_frame`, `bad_curve` and
+   `bad_surface`. The inner name and kind come through `source()` and `kind()`. This matches the
+   context frames in `scx-surface` and `scx-nurbs-surface`.
+
+**The pin's records, and where we differ.**
+
+| | SMLib database | `solidcore-record` | Ours |
+|---|---|---|---|
+| Curve and surface kinds | to version 32, all as B-splines; after it, a type code with the kind's own fields *and* the B-spline again | serde JSON, plus a binary form | the kind's own fields only |
+| Parabola, conic, iso and projected curves | no writer | — | every kind a body holds |
+| Frame | — | origin, `x_axis`, `y_axis` | origin, x, z (y derived); read back without normalizing again |
+| Line | — | start, end | origin, direction (what `Line::new` takes; start and end would round the direction) |
+| Rational | homogeneous | `RationalSpline`, homogeneous only | the pair the value was built from (decision 2) |
+| pcurves | — | always NURBS | every `Curve2` kind, angle lines and waves included |
+| Sense | — | none (a mirror is a flipped frame) | stored |
+| Cone | — | frame, `radius_at_origin`, `half_angle` | the same, plus sense |
+| Numbers | ASCII `%.16f`, which loses bits and writes `inf` and `nan` | the binary refuses non-finite values | both encodings keep the bits and refuse non-finite values |
+
+Why we differ:
+- Storing the B-spline next to the exact kind (SMLib) leaves two truths to keep in step.
+- A homogeneous-only form cannot keep a value built by `new` to the bit.
+- Start and end points (`solidcore-record`'s line) do not give back `Line::new`'s direction.
+
+**Tests** (`tests/geometry.rs`, 14; nothing removed):
+- Round trips to the bit:
+  - about 8,000 frames (built, mapped, half-turned, and 2D);
+  - every `Curve`, `Curve2` and `Surface` kind, each with at least 20 values;
+  - rational curves in both forms (more than 100 of each), and edited rational surfaces.
+- The corruption sweep, two values of each kind:
+  - every truncation is refused inside the input;
+  - every single-byte change gives a value or a `ReadError`, never a panic;
+  - each value that decodes re-encodes to its input.
+- Refusals with the constructor's own cause, in both encodings (each a single changed number):
+  - a zero radius is `Curve(Degenerate::Radius { radius: 0 })`, and a negative sphere radius is
+    `Surface(..)`;
+  - a non-unit axis is `Frame(NotUnit { axis: X })`, and non-square axes are
+    `Frame(NotSquare)`;
+  - decreasing knots are `Curve(Nurbs(KnotsDecrease))`;
+  - a weight of 0 or less is `Curve(Nurbs(Weight { index: 1, .. }))`, and on a surface
+    `Surface(Nurbs(BadWeights(NotPositive { row: 1, col: 0 })))`;
+  - a period of 0 or less is `Curve(Degenerate::Period)`.
+- A homogeneous second spelling is `NonCanonical`.
+- `scx-num` gains two frame tests: `from_axes` gives built frames back to the bit, and refuses
+  axes off by more than rounding. `scx-curve` gains one `try_turn` test.
+
+**Measured** (one core, release, each over 200 passes of the seeded samples; it includes
+creating the writer; local evidence, not committed):
+
+| Kind | Binary size | Binary write | Binary read | Text size | Text write | Text read |
+|---|---:|---:|---:|---:|---:|---:|
+| Line | 49 B | 102 ns | 36 ns | 118 B | 0.49 µs | 0.54 µs |
+| Circle | 82 B | 106 ns | 46 ns | 209 B | 0.76 µs | 0.87 µs |
+| Ellipse, hyperbola | 90 B | 109 ns | 53 ns | 229 B | 0.81 µs | 0.95 µs |
+| NURBS curve (about 28 numbers) | 234 B | 170 ns | 193 ns | 453 B | 1.7 µs | 2.1 µs |
+| 2D line, circle, angle line, angle wave | 31–42 B | 83–95 ns | 25–33 ns | 81–110 B | 0.36–0.41 µs | 0.36–0.46 µs |
+| 2D NURBS | 198 B | 164 ns | 211 ns | 368 B | 1.6 µs | 2.1 µs |
+| Plane | 73 B | 102 ns | 44 ns | 181 B | 0.74 µs | 0.85 µs |
+| Cylinder, sphere, torus | 82–90 B | 109–125 ns | 55 ns | 208–226 B | 0.80–0.91 µs | 0.93–1.06 µs |
+| Cone | 90 B | 130 ns | 80 ns (`tan`) | 226 B | 0.93 µs | 1.07 µs |
+| NURBS surface (about 135 numbers) | 1,097 B | 439 ns | 648 ns | 2,481 B | 9.2 µs | 11.7 µs |
+
+- A decode costs the RE1 primitives plus the constructor's checks. `from_axes` costs three dot
+  products.
+- Nothing existing got slower. `Frame::new`, `Arcs::turn` and the constructors are unchanged; the
+  new functions are separate and are called only by the reader.
+
+**Open questions.**
+
+1. Is a mixed rational value truly unreachable? Every edit in the crates today keeps one
+   relation (decision 2), but nothing in the types enforces it. A future edit that mixes them
+   would find out at write time (`MixedRational`, a Defect). The alternative is a stored form
+   flag on the NURBS types.
+2. Should `Record` stay public, or become crate-private until RE3 needs it from outside?
+3. Is `AXIS_TOLERANCE = 8 ε` right? It is also open whether a frame that is only nearly unit
+   should be taken, or refused so that it can be renormalized by the caller.
+
+### 7.8 RE3 as built (11-27)
+
+Decided by analysis and an adversarial pass. Proposed for review; not yet ruled.
+
+**What was built.** `crates/scx-record/src/body.rs` holds the body record. It is written once
+through `Sink` and read once through `Source`, so the binary and the text come from one field
+order. The crate now depends on `scx-brep`, which is layer 5.
+
+```rust
+pub const BODY: Magic = Magic(*b"SCXB");
+#[non_exhaustive] pub struct Limits { pub slots: u32 }   // per table; DEFAULT = 1 << 20
+impl Limits { pub const DEFAULT: Self; pub const fn new(slots: u32) -> Self }
+pub fn encode(b: &Brep) -> Result<Vec<u8>, WriteError>;
+pub fn write_text(b: &Brep) -> Result<String, WriteError>;
+pub fn decode(bytes: &[u8], doc: &Document, limits: Limits) -> Result<Brep, ReadError>;
+pub fn read_text(text: &str, doc: &Document, limits: Limits) -> Result<Brep, ReadError>;
+
+pub enum ReadCause { /* RE1's and RE2's, and: */
+    BadInterval,                  // min > max: Extent1d::new refused (Refused)
+    BadAccuracy,                  // a negative accuracy (Refused); -0 is NonCanonical
+    BadReads { count: u32 },      // more than MAX_READS = 4 keys (Refused)
+    Invalid(Box<FinishCause>),    // "invalid": the kind and source() are the finish cause's
+}
+```
+
+`scx-brep` gains three small functions, which only the decoder needs today:
+
+- `Draft::skip(kind, count) -> Result<(), TableFull>` leaves `count` ids of one table unused, as
+  if each had been added and removed. It reports no `Changes`, because a gap was never a live
+  entity. For edges it skips the geometry and the adjacency together.
+- `Brep::region_slots()` and `Brep::shell_slots()`, beside the existing face, edge and vertex
+  counts.
+
+**The wire.** The header is `SCXB`, version 1. The tables follow in kind order, each as live
+records and runs of gaps (RE1's `slots`):
+
+| Table | Live record |
+|---|---|
+| regions, from id 1 | `solid` (bool) |
+| shells | region id; wires (list of edge ids); lone vertices (list of vertex ids) |
+| faces | surface (RE2); the two side shells; loops, each a list of uses |
+| a use | edge id; sense; `pcurve` (a `Curve2` and its interval) or `point` (u, v); bound |
+| edges | `curve` (a `Curve` and its interval) or `collapsed`; two end ids; accuracy; fins |
+| a fin | face id; sense |
+| vertices | x, y, z; accuracy |
+| bound, accuracy | `false`, or `true`, the length (mm), then `measured`, `stated`, or `certified` / `unproven` with a cert |
+| a cert | claim tag; bound (mm); method tag; the read keys (at most 4 u64) |
+
+The text puts each face's loops and uses on their own lines. Records are each a fixed point:
+`encode(decode(x)) == x` for every `x` that decodes, in both encodings.
+
+**Decisions** (each with its case against).
+
+1. **The reader builds a `Draft` and finishes it.** Every table is read whole, the input must end,
+   and then the records go in through `add_*` in id order, gaps through `Draft::skip`. Changes
+   from `finish` are dropped.
+   - *For:* a decoded body is a checked body by construction (01 §1.1, D11), so 7.4's "never
+     yields a body that fails `finish`" holds without a test of its own. Cells are reset by
+     `add_*`, as the BR1 cell rule requires.
+   - *Against:* the decode cost is mostly `finish` (below). A trusted fast path would skip it.
+   - *Change if:* a measured caller needs trusted loads. It would be a separate, named function.
+2. **Gaps go through a new `Draft::skip`, not through placeholders added and removed.**
+   - *For:* no fake record is built (a placeholder face needs a surface), and a run of a million
+     gaps costs one resize. It is capped by `Limits` before anything is allocated.
+   - *Against:* it is new public API on `Draft` that only the decoder uses.
+   - *Change if:* `compact` makes gaps rare enough that the record can drop them (ids would then
+     change across a save, which D11 rules out today).
+3. **The outside region is implied.** Regions are stored from id 1.
+   - *For:* every `Draft::new` starts with it, void, so storing it would be a second spelling.
+   - *Against:* the record depends on that `Draft::new` rule. If it changes, version 1 changes
+     meaning.
+   - *Change if:* the outside gains fields. It then gets a record and a new version.
+4. **Fins are stored per edge, in radial order.** `add_face` appends fins in face order; the
+   stored list replaces them.
+   - *For:* the radial order is a constructor input that the faces do not fix. BR10 accepts any
+     cyclic shift, and the sides decide only where the sectors differ. A test rotates four-fin
+     fins and reads the rotation back.
+   - *Against:* the fin set repeats what the uses say. A record can disagree with itself.
+   - *Why it is still sound:* `finish` checks the set against the uses (`UseWithoutFin`,
+     `FinWithoutUse`, `RepeatedFin`) and the order against the geometry (`RadialOrder`).
+5. **The resolution is not stored.** It is the reader's `Document`, as at every `finish`.
+   - *For:* one source for the setting. The same bytes are judged at the reader's resolution.
+   - *Against:* a body saved at a coarse resolution can be refused when read at a fine one.
+   - *Change if:* 01's units and size class land in `Document`. The record header may then carry
+     the document it was written under, and the reader would choose.
+6. **`encode` returns `Result`** (answers RE1 open question 1).
+   - *For:* `Cert.bound` is a bare `Length`, never checked finite, so a non-finite value can
+     reach the writer through the public API. Writing its bits would make a record no reader
+     takes.
+   - *Against:* almost every body writes without fail, and callers must handle an error that
+     needs a bug to happen.
+   - *Change if:* `Cert` checks its bound. Then the remaining failures (an over-long list, a
+     mixed rational) are defects and could panic instead.
+7. **`Invalid` sits at the input's end.** `finish` judges the whole body, so no byte offset
+   names the fault; the cause names the entity.
+   - *Against:* a reader of a long text file has to find the entity by id.
+8. **Structure faults keep their kind** (answers the BR1 open item on decoder dangling ids).
+   `Invalid` takes its kind from the finish cause: `Refused` for structure and geometry.
+   - *For:* to the decoder's caller, a bad record is a bad input, which `Refused` already means.
+     `MissingCurve` (`Defect`) cannot be reached from bytes (D8): every stored edge has a shape.
+   - *Against:* a corrupt file and a bad draft look the same by kind. Only the `ReadCause`
+     tells them apart. That is enough, since every decoded fault is inside `Invalid`.
+9. **`Limits` caps each table's slots**, default 2^20.
+   - *For:* a gap run is a few bytes for any count, so without a cap eight bytes could make
+     the reader allocate gigabytes. Live records cost bytes already.
+   - *Against:* one number for every table. A body with more than a million faces needs a
+     raised limit.
+10. **Pcurves are stored exactly** (D10), so a decoded body never refits. The plane-trim carry
+    stays held.
+11. **Read keys are stored as given.** They are opaque body-layer keys, and no producer assigns
+    them yet. See open question 1.
+
+**Tests** (`crates/scx-record/tests/body.rs`, 7; RE5's full suite comes after):
+
+- Every `scx_testkit::bodies` kind, seeds 0 to 2, sizes 1 and 2, round-trips to the bit in
+  both encodings. Slot counts, every record field and the resolution compare by `Debug` (shortest
+  round-trip `f64`, so `-0` and `0` differ). Each record is its own fixed point, and binary → text
+  → binary gives the same bytes.
+- Deleted slots in every table, in the middle and at the end (including a lone vertex past a
+  gap), plus recorded accuracy of every basis, claim and method on vertices, edges and uses,
+  round-trip.
+- A rotated radial order on four-fin edges reads back as stored.
+- A body `finish` refuses keeps its cause, in text:
+  - an edge end of 999 is `Invalid(Structure(Dangling))`, at the input's end, kind `Refused`,
+    with `source()` set;
+  - a moved vertex is `Invalid(Geometry(EdgeEndOffVertex))`;
+  - reversed fins on a four-fin edge are `Invalid(Geometry(RadialOrder { at: 0.5 }))`;
+  - an inverted interval is `BadInterval`, before `finish`.
+- The frame: a wrong magic is `BadMagic`; version 2 is `Unsupported` at byte 4; a trailing byte
+  is `Trailing`; `Limits::new(3)` is `TooMany` (`Exhausted`).
+- Corruption on four small bodies: every truncation is refused inside the input. 16,000 seeded
+  changes (12,000 binary byte changes, 4,000 text character changes) never panic. 4,075 decoded,
+  each re-encoding to its own input, and 5,152 were refused by `finish`.
+- `scx-curve` gains `piece_of_a_huge_parameter_does_not_overflow` (below).
+
+**Found by the sweep.** `Arcs::piece` overflowed `i64` when `t / span` was past `2^63`: the
+index saturated, and the step `k + 1` panicked in debug builds. A record can carry any finite
+parameter, so the reader reached it through `finish`. The steps now saturate (and so does the
+`Below` step in `arc_of_angle`). Results for parameters in range are unchanged.
+
+**No difftest.** The pin's checker has no record converter, so nothing in the pin reads these
+bytes. Later, the same bodies should be decoded on both sides once a converter exists. The
+converter must remap sphere and cone uv: the pin's are radians, and ours are arc parameters.
+
+**Measured** (one core, release, 200 passes each, seed 1; a throwaway timer, not committed):
+
+| Body | Faces | Binary | Text | Encode | Decode | Text write | Text read | `finish` alone |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| block 1 | 6 | 3.2 kB | 6.3 kB | 1.3 µs | 21 µs | 31 µs | 40 µs | 15 µs |
+| sphere 1 | 1 | 0.6 kB | 1.1 kB | 0.4 µs | 7.5 µs | 3.5 µs | 11 µs | 6.6 µs |
+| cylinder 16 | 18 | 14 kB | 30 kB | 3.7 µs | 91 µs | 87 µs | 198 µs | 75 µs |
+| torus 16 | 256 | 157 kB | 376 kB | 39 µs | 1.35 ms | 1.04 ms | 2.71 ms | 1.17 ms |
+| touching 16 | 870 | 426 kB | 882 kB | 126 µs | 2.0 ms | 2.9 ms | 5.5 ms | 1.39 ms |
+| cavity 16 | 3,072 | 1.6 MB | 3.4 MB | 446 µs | 6.7 ms | 10.9 ms | 20.5 ms | 4.7 ms |
+
+- About 520 B of binary per planar face. Text is about twice the binary.
+- `finish` is 60–90% of a binary decode; reading the bytes and `add_*` take the rest. The
+  `finish` time includes cloning the draft.
+- Nothing existing got slower. `Draft::skip` and the two slot counts are new. `Arcs::piece`
+  gains two saturating adds, which cost nothing measurable.
+
+**Deviations from §7.3.**
+
+- `encode` and `write_text` return `Result` (decision 6). `write_text` returns a `String`
+  rather than writing into a `fmt::Write`, as RE4's `TextWriter` does.
+- `decode` and `read_text` take `Limits`.
+- `Truncated`, `BadMagic`, `BadVersion` and `BadTag` are RE1's; RE3 adds `BadInterval`,
+  `BadAccuracy`, `BadReads` and `Invalid`.
+
+**Open questions.**
+
+1. Who assigns `Reads` keys, and are they stable across a save? Today they are stored as given.
+   If they name entities, a decoder that keeps ids keeps them right; after `compact` they would
+   go stale.
+2. Should a body record carry the resolution it was written under (decision 5), to report a
+   refusal as "written at 1e-5, read at 1e-7"?
+3. Should `Draft::skip` stay public, or become a crate-feature for decoders?
 
 ## 8. Prerequisites outside the six crates
 

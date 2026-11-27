@@ -22,7 +22,8 @@ use scx_num::math::Affine;
 use scx_num::vector3d::{Point3, Vec3};
 use scx_testkit::analytic::Frame;
 use scx_testkit::bodies::{Kind, generate};
-use scx_testkit::solid::{self, Loop, Seg, Solid};
+use scx_testkit::profile::Seg;
+use scx_testkit::solid::{self, Solid};
 
 /// The seed-0 body of `kind` at `size`, carried to `frame`.
 fn body(kind: Kind, size: usize, frame: &Frame) -> Brep {
@@ -40,24 +41,27 @@ fn body(kind: Kind, size: usize, frame: &Frame) -> Brep {
     d.finish(&doc).map_err(|u| u.cause).unwrap().0
 }
 
+/// A closed polyline through `points`, back to the first.
+fn closed(points: &[[f64; 2]]) -> Vec<Seg> {
+    (0..points.len())
+        .map(|j| Seg::Line {
+            start: points[j],
+            end: points[(j + 1) % points.len()],
+        })
+        .collect()
+}
+
 /// The regular `m`-gon of circumradius 1 from angle 0, counter-clockwise or not.
-fn polygon(m: usize, ccw: bool) -> Loop {
+fn polygon(m: usize, ccw: bool) -> Vec<Seg> {
     let at = |j: usize| {
         let phi = TAU * j as f64 / m as f64;
         [fmath::cos(phi), fmath::sin(phi)]
     };
-    let order: Vec<usize> = if ccw {
-        (1..=m).collect()
-    } else {
-        (0..m).rev().collect()
-    };
-    Loop {
-        start: at(0),
-        segs: order
-            .into_iter()
-            .map(|j| Seg::Line { to: at(j % m) })
-            .collect(),
+    let mut points: Vec<[f64; 2]> = (0..m).map(at).collect();
+    if !ccw {
+        points.reverse();
     }
+    closed(&points)
 }
 
 /// The closed form of the seed-0 `kind` body at `size`, at the world frame.
@@ -71,12 +75,7 @@ fn truth(kind: Kind, size: usize) -> Solid {
         Kind::Torus => solid::torus(2.0, 1.0),
         Kind::Prism => solid::extrusion(&[polygon(n + 3, true)], 1.0),
         Kind::Holed => {
-            let sq = Loop {
-                start: [-2.0, -2.0],
-                segs: [[2.0, -2.0], [2.0, 2.0], [-2.0, 2.0], [-2.0, -2.0]]
-                    .map(|to| Seg::Line { to })
-                    .to_vec(),
-            };
+            let sq = closed(&[[-2.0, -2.0], [2.0, -2.0], [2.0, 2.0], [-2.0, 2.0]]);
             solid::extrusion(&[sq, polygon(n + 3, false)], 1.0)
         }
         Kind::Cavity => {
@@ -93,6 +92,22 @@ fn truth(kind: Kind, size: usize) -> Solid {
                 moments: s.moments,
                 area: s.area,
             })
+        }
+        Kind::Checker | Kind::Touching => {
+            // The black unit cells of the (n+1) x (n+1) board: they meet only along
+            // edges, so no face is shared and every face counts toward the area.
+            let cell = solid::block(1.0, 1.0, 1.0).unwrap();
+            let mut moments = solid::Moments::ZERO;
+            let mut area = 0.0;
+            for i in 0..=n {
+                for j in 0..=n {
+                    if (i + j) % 2 == 0 {
+                        moments = moments.plus(&cell.moments.translated([i as f64, j as f64, 0.0]));
+                        area += cell.area;
+                    }
+                }
+            }
+            Ok(Solid { moments, area })
         }
         Kind::QuadSheet | Kind::TriSheet => Ok(Solid {
             moments: solid::Moments::ZERO,

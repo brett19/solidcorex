@@ -6,10 +6,12 @@ scx-p21
 scx-algo
 scx-nurbs-surface
 scx-curve
+scx-planar
 scx-surface
 scx-ssi
 scx-brep
 scx-record
+scx-make
 scx-mass
 
 # Crates outside the order. `difftest` may depend on any library (and on the pinned

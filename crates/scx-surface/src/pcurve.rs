@@ -56,7 +56,7 @@ use scx_num::error::ErrorKind;
 use scx_num::extent1d::Extent1d;
 use scx_num::fmath;
 use scx_num::frame::{Frame2, Sense};
-use scx_num::units::Length;
+use scx_num::units::Resolution;
 use scx_num::vector2d::{Point2, Vec2};
 use scx_num::vector3d::{Point3, Vec3};
 use scx_nurbs::NurbsCurve;
@@ -155,12 +155,6 @@ pub enum PcurveError {
         /// The parameter.
         at: f64,
     },
-    /// The tolerance is zero, negative, infinite or NaN: a lifting check at zero would
-    /// refuse every rounded closed form, so zero is no tolerance at all.
-    BadTolerance {
-        /// The value given, in mm.
-        value: f64,
-    },
     /// The curve leaves the surface: at `at` it is `miss` from it, more than the tolerance.
     NotOnSurface {
         /// The curve's parameter.
@@ -201,10 +195,9 @@ impl PcurveError {
     #[must_use]
     pub const fn kind(&self) -> ErrorKind {
         match self {
-            Self::EmptyInterval { .. }
-            | Self::BadTolerance { .. }
-            | Self::NotOnSurface { .. }
-            | Self::CrossesPole { .. } => ErrorKind::Refused,
+            Self::EmptyInterval { .. } | Self::NotOnSurface { .. } | Self::CrossesPole { .. } => {
+                ErrorKind::Refused
+            }
             Self::NoClosedForm { .. } | Self::Inexact { .. } => ErrorKind::Unsupported,
         }
     }
@@ -214,7 +207,6 @@ impl PcurveError {
     pub const fn name(&self) -> &'static str {
         match self {
             Self::EmptyInterval { .. } => "pcurve_interval_empty",
-            Self::BadTolerance { .. } => "pcurve_tolerance_invalid",
             Self::NotOnSurface { .. } => "pcurve_not_on_surface",
             Self::NoClosedForm { .. } => "pcurve_no_closed_form",
             Self::Inexact { .. } => "pcurve_inexact",
@@ -254,7 +246,6 @@ impl fmt::Display for PcurveError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             Self::EmptyInterval { at } => write!(f, "the interval is the single parameter {at}"),
-            Self::BadTolerance { value } => write!(f, "the tolerance {value} is not usable"),
             Self::NotOnSurface { at, miss } => {
                 write!(f, "the curve leaves the surface: {miss} from it at {at}")
             }
@@ -280,12 +271,14 @@ impl std::error::Error for PcurveError {}
 
 /// The exact pcurve of `curve` on `surface` over `over`: the 2-D curve `p` in the
 /// surface's uv with `surface.point(p.point(t))` on `curve.point(t)` for every `t` in
-/// `over` (the same parameter), within `tol`.
+/// `over` (the same parameter), within `res.approx()`, the distance a fitted entity may
+/// stand from the one it stands for. A `Resolution` is above zero and finite, so the
+/// tolerance needs no refusal.
 ///
 /// # Errors
 ///
-/// [`PcurveError::EmptyInterval`] or [`PcurveError::BadTolerance`] for the arguments;
-/// [`PcurveError::NotOnSurface`] when a sample of the curve is more than `tol` from the
+/// [`PcurveError::EmptyInterval`] for the interval;
+/// [`PcurveError::NotOnSurface`] when a sample of the curve is more than `res.approx()` from the
 /// surface, at the sample farthest from it; [`PcurveError::NoClosedForm`] for a pair with no closed form here (see the
 /// module's table); [`PcurveError::CrossesPole`] for a meridian across a pole;
 /// [`PcurveError::Inexact`] when the closed form fails the lifting check.
@@ -293,12 +286,9 @@ pub fn pcurve_of(
     curve: &Curve,
     surface: &Surface,
     over: Extent1d,
-    tol: Length,
+    res: Resolution,
 ) -> Result<Curve2, PcurveError> {
-    let tol = tol.mm();
-    if !(tol.is_finite() && tol > 0.0) {
-        return Err(PcurveError::BadTolerance { value: tol });
-    }
+    let tol = res.approx().mm();
     if over.min() >= over.max() {
         return Err(PcurveError::EmptyInterval { at: over.min() });
     }
@@ -794,6 +784,7 @@ mod tests {
     use scx_num::frame::Frame;
     use scx_num::hash::Rng;
     use scx_num::math::PI;
+    use scx_num::units::Length;
     use scx_nurbs::KnotVector;
     use scx_testkit::sample;
 
@@ -804,6 +795,12 @@ mod tests {
 
     fn mm(x: f64) -> Length {
         Length::from_mm(x)
+    }
+
+    /// The resolution whose approximation tolerance is `approx`, which `pcurve_of` reads
+    /// (twice it is exact).
+    fn res(approx: f64) -> Resolution {
+        Resolution::new(mm(approx * 2.0)).unwrap()
     }
 
     fn span(lo: f64, hi: f64) -> Extent1d {
@@ -828,7 +825,7 @@ mod tests {
     }
 
     fn exact(curve: &Curve, surface: &Surface, over: Extent1d, size: f64) -> Curve2 {
-        let pc = pcurve_of(curve, surface, over, mm(TOL * size))
+        let pc = pcurve_of(curve, surface, over, res(TOL * size))
             .unwrap_or_else(|e| panic!("{curve:?} on {surface:?}: {e}"));
         lifts(curve, surface, &pc, over, size);
         pc
@@ -840,7 +837,7 @@ mod tests {
     fn not_on_surface_reports_the_largest_miss() {
         let plane = Surface::Plane(Plane::new(Frame::WORLD));
         let line = Line::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 1e-3)).unwrap();
-        let got = pcurve_of(&Curve::Line(line), &plane, span(0.0, 1.0), mm(1e-4));
+        let got = pcurve_of(&Curve::Line(line), &plane, span(0.0, 1.0), res(1e-4));
         let Err(PcurveError::NotOnSurface { at, miss }) = got else {
             panic!("{got:?}")
         };
@@ -849,7 +846,7 @@ mod tests {
         assert!((miss - end).abs() <= 1e-15, "{miss} against {end}");
         let tilted = Frame::new(Point3::ORIGIN, Vec3::new(0.0, -0.01, 1.0), Vec3::X).unwrap();
         let c = Circle::new(tilted, mm(2.0), Sense::Forward).unwrap();
-        let got = pcurve_of(&Curve::Circle(c), &plane, span(0.0, PI), mm(1e-3));
+        let got = pcurve_of(&Curve::Circle(c), &plane, span(0.0, PI), res(1e-3));
         let Err(PcurveError::NotOnSurface { at, miss }) = got else {
             panic!("{got:?}")
         };
@@ -962,7 +959,7 @@ mod tests {
         let mut rng = Rng::new(0x9c_0003);
         let f = frame(&mut rng, 1.0);
         let (o, x, z) = (f.origin(), *f.x(), *f.z());
-        let tol = mm(TOL);
+        let tol = res(TOL);
         let plane = Surface::Plane(Plane::new(f));
         let off = Line::new(o, x + z * 1e-3).unwrap();
         let e = pcurve_of(&Curve::Line(off), &plane, span(0.0, 1.0), tol).unwrap_err();
@@ -971,20 +968,11 @@ mod tests {
         let on = Curve::Line(Line::new(o, x).unwrap());
         let e = pcurve_of(&on, &plane, span(1.0, 1.0), tol).unwrap_err();
         assert_eq!(e.name(), "pcurve_interval_empty");
-        let e = pcurve_of(&on, &plane, span(0.0, 1.0), mm(f64::NAN)).unwrap_err();
-        assert_eq!(e.name(), "pcurve_tolerance_invalid");
-        // Zero is no tolerance: the lifting check at zero refuses every rounded closed
-        // form (04 backlog), so it is refused up front, as a negative one is.
-        for bad in [0.0, -0.0, -1e-9, f64::INFINITY] {
-            let e = pcurve_of(&on, &plane, span(0.0, 1.0), mm(bad)).unwrap_err();
-            assert_eq!(e, PcurveError::BadTolerance { value: bad });
-            assert_eq!(e.kind(), ErrorKind::Refused);
-        }
         // A line skew to a cylinder's axis by 1e-3 stays within 1e-6 of it over `[-1, 1]`,
         // but it is not a ruling: the ruling's closed form misses it.
         let cyl = Surface::Cylinder(Cylinder::new(f, mm(1.0), Sense::Forward).unwrap());
         let skew = Line::new(o + x, z + *f.y() * 1e-3).unwrap();
-        let e = pcurve_of(&Curve::Line(skew), &cyl, span(-1.0, 1.0), mm(1e-6)).unwrap_err();
+        let e = pcurve_of(&Curve::Line(skew), &cyl, span(-1.0, 1.0), res(1e-6)).unwrap_err();
         assert_eq!(e.name(), "pcurve_inexact", "{e}");
         assert_eq!(e.kind(), ErrorKind::Unsupported);
         // No closed form here: a plane's section of a cone (an ellipse), a small circle of a
@@ -1019,7 +1007,7 @@ mod tests {
         let cone = Surface::Cone(Cone::new(f, mm(0.0), 0.5, Sense::Forward).unwrap());
         let fh = Frame::new(o + y, y, z).unwrap();
         let h = Hyperbola::new(fh, mm(1.0 / k), mm(1.0), Sense::Forward).unwrap();
-        let e = pcurve_of(&Curve::Hyperbola(h), &cone, span(-1.0, 1.0), mm(1e-9)).unwrap_err();
+        let e = pcurve_of(&Curve::Hyperbola(h), &cone, span(-1.0, 1.0), res(1e-9)).unwrap_err();
         assert_eq!(
             e,
             PcurveError::NoClosedForm {
@@ -1243,7 +1231,7 @@ mod tests {
                                 (1.0, 5.0, FRAC_PI_2),
                             ] {
                                 let e =
-                                    pcurve_of(&c, &s, span(lo, hi), mm(TOL * size)).unwrap_err();
+                                    pcurve_of(&c, &s, span(lo, hi), res(TOL * size)).unwrap_err();
                                 let PcurveError::CrossesPole { at } = e else {
                                     panic!("{e}");
                                 };

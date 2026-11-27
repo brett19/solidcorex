@@ -66,10 +66,6 @@ macro_rules! tags {
         }
     };
 }
-#[expect(
-    unused_imports,
-    reason = "the record kinds of RE2 and RE3 define their tags with it"
-)]
 pub(crate) use tags;
 
 /// `false` is byte 0, word `false`; `true` is byte 1, word `true`. Any other byte is

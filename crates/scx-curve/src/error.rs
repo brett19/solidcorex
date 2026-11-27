@@ -106,6 +106,12 @@ pub enum Degenerate {
     },
     /// A map that takes a conic's plane to a line or a point: the image has no plane.
     Plane,
+    /// An angle direction's period ([`Arcs::try_turn`](crate::arcs::Arcs::try_turn)) is not
+    /// above `EFF_ZERO`.
+    Period {
+        /// The period.
+        period: f64,
+    },
 }
 
 /// An ellipse's or a hyperbola's semi-axis: along its frame's x or y.
@@ -133,6 +139,8 @@ pub enum Part {
     Focal,
     /// The affine map a curve is transformed by.
     Map,
+    /// An angle direction's period.
+    Period,
 }
 
 impl CurveError {
@@ -159,6 +167,7 @@ impl CurveError {
             Self::Degenerate(Degenerate::Focal { .. }) => "degenerate_focal",
             Self::Degenerate(Degenerate::Extent { .. }) => "degenerate_extent",
             Self::Degenerate(Degenerate::Plane) => "degenerate_plane",
+            Self::Degenerate(Degenerate::Period { .. }) => "degenerate_period",
             Self::NotFinite(_) => "not_finite",
             Self::OutsideDomain { .. } => "outside_domain",
             Self::Nurbs(e) => e.name(),
@@ -191,6 +200,7 @@ impl fmt::Display for Part {
             Self::SemiAxis(a) => write!(f, "the {a} semi-axis"),
             Self::Focal => f.write_str("the focal distance"),
             Self::Map => f.write_str("the map"),
+            Self::Period => f.write_str("the period"),
         }
     }
 }
@@ -218,6 +228,9 @@ impl fmt::Display for CurveError {
             }
             Self::Degenerate(Degenerate::Plane) => {
                 f.write_str("the map takes the conic's plane to a line or a point")
+            }
+            Self::Degenerate(Degenerate::Period { period }) => {
+                write!(f, "an angle period of {period} is not positive")
             }
             Self::NotFinite(part) => write!(f, "{part} is not finite"),
             Self::OutsideDomain { extent, domain } => write!(

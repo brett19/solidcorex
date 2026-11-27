@@ -26,6 +26,9 @@
 //!   cylinder, cone, sphere or torus (research 63 T2).
 //! - [`ssi`]: analytic surface-surface sections in closed form, with certified samples
 //!   (research 63 T5).
+//! - [`csg`]: a CSG membership oracle (`In`, `Out` or a sound `Band`, by interval
+//!   enclosure) for placed primitives, line-and-arc extrusions and Boolean trees of them,
+//!   with seeded points on purpose (research 72 T10).
 //! - [`sample`]: seeded generators of well- and ill-conditioned inputs.
 //! - [`topology`]: body structure invariants, Euler-Poincaré and the pole and seam rules
 //!   as predicates on plain incidence data and uv samples (research 63 T7).
@@ -35,6 +38,9 @@
 //!   nested, reversed) with the verdict a region builder must give (research 72 T11).
 //! - [`mesh`]: a triangle mesh's invariants (closed, manifold, oriented, no degenerate or folded
 //!   triangles) and its volume gap against a reference (research 72 T13).
+//! - [`recipe`]: the step-4 test cases as data: constructors and Booleans with their expected
+//!   outcome (built, `Refused`, `Unsupported`), closed-form volume and area, hand-stated topology
+//!   and lineage (research 72 T12).
 //! - `bodies` (feature `bodies`): seeded valid and broken B-rep bodies, the one module that
 //!   builds library types (`scx-brep`'s `Draft`), with an independent structure oracle.
 
@@ -42,6 +48,7 @@ pub mod analytic;
 #[cfg(feature = "bodies")]
 pub mod bodies;
 pub mod bound;
+pub mod csg;
 pub mod curve_surface;
 pub mod data;
 pub mod dd;
@@ -54,6 +61,7 @@ pub mod profile;
 pub mod project;
 pub mod quadric;
 pub mod rat;
+pub mod recipe;
 pub mod sample;
 pub mod solid;
 pub mod ssi;

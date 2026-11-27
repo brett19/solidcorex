@@ -25,7 +25,7 @@ Short answers:
   - mass properties (14.1%);
   - imprinting (19.8%).
 
-  On plate_12, a third of the run is building the twelve cylinders. The time goes into a certified
+  On plate_12, a third of the run is building the 144 cylinders. The time goes into a certified
   ray fire inside stitching (`create_cylinder` 34.5%).
 - **Order.** §5 proposes a new order for 66's top ten: primitives without stitching (old rank 5)
   moves to the top, and rank 1 is narrowed to the trim-loop walk.
@@ -45,7 +45,7 @@ Short answers:
 - **gear_60**: a cylinder, r 50 and h 10. Sixty boxes (10 × gap × 12, with gap = 2π·45/60·0.45) are
   each placed at (45, −gap/2, −1) and rotated about z by 2πi/60 + 0.1234 using
   `topology::brep::p5::transform`. Each box is subtracted with `boolean_difference`.
-- **plate_12** (`plate_holes_12`): a 100 × 100 × 10 box. Twelve r 2, h 12 cylinders at z = −1 are
+- **plate_12** (`plate_holes_12`): a 100 × 100 × 10 box. A 12 × 12 grid of 144 r 2, h 12 cylinders at z = −1 are
   centred on a pitch grid. Each is subtracted in turn.
 - **Both** then run `brep_volume(1e-6)` and `brep_area(1e-6)`.
 

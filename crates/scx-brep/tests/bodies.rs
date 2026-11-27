@@ -20,12 +20,14 @@ use scx_num::extent1d::Extent1d;
 use scx_num::extent3d::Extent3d;
 use scx_num::fmath;
 use scx_num::frame::{Frame, Sense};
-use scx_num::units::Length;
+use scx_num::units::{Length, Resolution};
 use scx_num::vector2d::{Point2, Vec2};
 use scx_num::vector3d::{Point3, Vec3};
 use scx_surface::{Cylinder, Plane, Surface, pcurve_of};
 
-const TOL: Length = Length::from_mm(1e-9);
+fn tol() -> Resolution {
+    Resolution::new(Length::from_mm(2e-9)).unwrap()
+}
 
 /// The shells of a one-solid body: the outside's, then the solid's.
 fn solid_shells(d: &mut Draft) -> (ShellId, ShellId) {
@@ -37,7 +39,7 @@ fn solid_shells(d: &mut Draft) -> (ShellId, ShellId) {
 
 fn pcurve(edge: &Curve, interval: Extent1d, surface: &Surface) -> UseGeom {
     UseGeom::Pcurve {
-        curve: pcurve_of(edge, surface, interval, TOL).unwrap(),
+        curve: pcurve_of(edge, surface, interval, tol()).unwrap(),
         interval,
     }
 }
