@@ -635,6 +635,9 @@ pub enum EntityCause {
     /// The instance is part of a cycle where the file's structure must be a tree or a
     /// directed acyclic graph (an assembly using itself, a mapped item mapping itself).
     Cycle,
+    /// The representation context names no length unit (and none was assumed), or names two
+    /// different ones, so a length the instance reads has no size.
+    Units(crate::units::UnitsFault),
 }
 
 impl EntityCause {
@@ -647,6 +650,8 @@ impl EntityCause {
             Self::BadParam { .. } => "bad_param",
             Self::Invalid(v) => v.name(),
             Self::Cycle => "cycle",
+            Self::Units(crate::units::UnitsFault::Missing(_)) => "no_length_unit",
+            Self::Units(crate::units::UnitsFault::Conflicting(_)) => "conflicting_length_units",
         }
     }
 }
@@ -663,6 +668,12 @@ impl fmt::Display for EntityCause {
             }
             Self::Invalid(v) => v.fmt(f),
             Self::Cycle => f.write_str("part of a cycle"),
+            Self::Units(crate::units::UnitsFault::Missing(_)) => {
+                f.write_str("the representation context names no length unit")
+            }
+            Self::Units(crate::units::UnitsFault::Conflicting(_)) => {
+                f.write_str("the representation context names two different length units")
+            }
         }
     }
 }
@@ -954,6 +965,12 @@ mod tests {
                 expected: "",
             },
             EntityCause::Cycle,
+            EntityCause::Units(crate::units::UnitsFault::Missing(
+                crate::units::MissingUnits::default(),
+            )),
+            EntityCause::Units(crate::units::UnitsFault::Conflicting(
+                crate::units::MissingUnits::default(),
+            )),
             EntityCause::Invalid(InvalidValue::KnotsDecrease),
             EntityCause::Invalid(InvalidValue::KnotVector),
             EntityCause::Invalid(InvalidValue::KnotCount),

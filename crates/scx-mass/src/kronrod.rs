@@ -19,7 +19,7 @@
 
 use scx_num::budget::{Budget, Stop};
 
-use crate::rounding::{Sum, U, gamma, larger};
+use crate::rounding::{Sums, U, gamma, larger};
 
 /// One rule: the nodes on `[0, 1)` (the centre first, then each `±x`), the Kronrod
 /// weights and the embedded Gauss weights (zero off the Gauss nodes).
@@ -158,6 +158,11 @@ impl<'a> Meter<'a> {
         self.spent = 0;
     }
 
+    /// The budget's use so far: what a memo entry records as its fill's work.
+    pub(crate) const fn used(&self) -> u64 {
+        self.budget.used()
+    }
+
     /// Charges `work` after checking the stop flag.
     pub(crate) fn charge(&mut self, work: u64) -> Result<(), Fail> {
         self.stop.check().map_err(|_| Fail::Cancelled)?;
@@ -199,30 +204,57 @@ pub(crate) struct Tol<'f> {
 /// `value.len()`), by `rule`.
 pub(crate) fn integrate<F>(
     rule: &Rule,
-    (a, b): (f64, f64),
+    range: (f64, f64),
     tol: Tol<'_>,
     value: &mut [f64],
     error: &mut [f64],
+    meter: &mut Meter<'_>,
+    f: F,
+) -> Result<(), Fail>
+where
+    F: FnMut(f64, Sample<'_>, &mut Meter<'_>) -> Result<(), Fail>,
+{
+    let n = value.len().min(error.len()).min(MAX_COMPONENTS);
+    // The component loops run over a length known when compiled, so they are straight
+    // line; the components past `n` are zero throughout and never written out.
+    match n {
+        0 | 1 => integrate_n::<1, F>(rule, range, tol, (value, error), n, meter, f),
+        2 => integrate_n::<2, F>(rule, range, tol, (value, error), n, meter, f),
+        _ => integrate_n::<MAX_COMPONENTS, F>(rule, range, tol, (value, error), n, meter, f),
+    }
+}
+
+/// [`integrate`] over `N >= n` components.
+fn integrate_n<const N: usize, F>(
+    rule: &Rule,
+    (a, b): (f64, f64),
+    tol: Tol<'_>,
+    (value, error): (&mut [f64], &mut [f64]),
+    n: usize,
     meter: &mut Meter<'_>,
     mut f: F,
 ) -> Result<(), Fail>
 where
     F: FnMut(f64, Sample<'_>, &mut Meter<'_>) -> Result<(), Fail>,
 {
-    let n = value.len().min(error.len()).min(MAX_COMPONENTS);
     let width = b - a;
     if width.is_nan() || width <= 0.0 {
         return Ok(());
     }
+    let mut floor = [0.0; N];
+    for (f, t) in floor.iter_mut().zip(tol.floor.iter().take(n)) {
+        *f = *t;
+    }
     let mut stack = vec![(a, b, 0_u32)];
     let mut pieces = 0_u32;
-    let mut sums = [Sum::default(); MAX_COMPONENTS];
-    let mut rounded = [0.0; MAX_COMPONENTS];
-    let mut centre = [0.0; MAX_COMPONENTS];
-    let mut centre_err = [0.0; MAX_COMPONENTS];
-    let mut at = [0.0; MAX_COMPONENTS];
-    let mut at_err = [0.0; MAX_COMPONENTS];
-    let mut at_round = [0.0; MAX_COMPONENTS];
+    let mut sums = Sums::<N>::ZERO;
+    let mut rounded = [0.0; N];
+    let mut centre = [0.0; N];
+    let mut centre_err = [0.0; N];
+    let mut at = [0.0; N];
+    let mut at_err = [0.0; N];
+    let mut at_round = [0.0; N];
+    let w0 = rule.kronrod.first().copied().unwrap_or(0.0);
     while let Some((lo, hi, depth)) = stack.pop() {
         pieces += 1;
         if pieces > MAX_PIECES {
@@ -231,21 +263,19 @@ where
         meter.charge(rule.evaluations())?;
         let mid = 0.5 * (lo + hi);
         let half = 0.5 * (hi - lo);
-        let mut kron = [0.0; MAX_COMPONENTS];
-        let mut gauss = [0.0; MAX_COMPONENTS];
-        let mut size = [0.0; MAX_COMPONENTS];
-        let mut inner = [0.0; MAX_COMPONENTS];
-        let mut spread = [0.0; MAX_COMPONENTS];
-        let mut jump = [0.0; MAX_COMPONENTS];
+        let mut kron = [0.0; N];
+        let mut gauss = [0.0; N];
+        let mut size = [0.0; N];
+        let mut inner = [0.0; N];
+        let mut spread = [0.0; N];
+        let mut jump = [0.0; N];
         let mut read = (&mut centre, &mut centre_err, &mut at_round);
         sample(&mut f, mid, n, &mut read, true, meter)?;
         let mut most = at_round;
-        let w0 = rule.kronrod.first().copied().unwrap_or(0.0);
         for ((s, i), (v, e)) in size
             .iter_mut()
             .zip(inner.iter_mut())
             .zip(centre.iter().zip(&centre_err))
-            .take(n)
         {
             *s = w0 * v.abs();
             *i = w0 * e;
@@ -258,18 +288,24 @@ where
                 let mut read = (&mut at, &mut at_err, &mut at_round);
                 sample(&mut f, mid + side * x * half, n, &mut read, rounds, meter)?;
                 if rounds {
-                    for (m, r) in most.iter_mut().zip(&at_round).take(n) {
+                    for (m, r) in most.iter_mut().zip(&at_round) {
                         *m = larger(*r, *m);
                     }
                 }
-                let sums = kron.iter_mut().zip(gauss.iter_mut()).zip(size.iter_mut());
-                let reads = at.iter().zip(&at_err).zip(&centre).zip(inner.iter_mut());
+                // Off the Gauss nodes the Gauss weight is zero: its product adds a zero
+                // to a sum that is never `-0`, which leaves it as it is (a non-finite
+                // sample is refused by the size sums either way).
+                if wg != 0.0 {
+                    for ((g, v), c) in gauss.iter_mut().zip(&at).zip(&centre) {
+                        *g += wg * (v - c);
+                    }
+                }
+                let sums = kron.iter_mut().zip(size.iter_mut()).zip(inner.iter_mut());
+                let reads = at.iter().zip(&at_err).zip(&centre);
                 let abs = spread.iter_mut().zip(jump.iter_mut());
-                for ((((k, g), s), (((v, e), c), inn)), (sp, j)) in sums.zip(reads).zip(abs).take(n)
-                {
+                for (((k, s), inn), (((v, e), c), (sp, j))) in sums.zip(reads.zip(abs)) {
                     let off = v - c;
                     *k += wk * off;
-                    *g += wg * off;
                     *s += wk * v.abs();
                     *inn += wk * e;
                     *sp += wk * off.abs();
@@ -278,22 +314,30 @@ where
             }
         }
         // A sample's value or error that is not finite makes its size or error sum so.
-        let sizes = size.iter().zip(&inner).take(n);
-        if !sizes.fold(true, |ok, (s, i)| ok & s.is_finite() & i.is_finite()) {
+        if !size
+            .iter()
+            .zip(&inner)
+            .fold(true, |ok, (s, i)| ok & s.is_finite() & i.is_finite())
+        {
             return Err(Fail::NotFinite);
         }
         let share = (hi - lo) / width;
         let mut accepted = true;
-        for c in 0..n {
-            let centre_c = get(&centre, c);
-            let k = half * (2.0 * centre_c + get(&kron, c));
-            let g = half * (2.0 * centre_c + get(&gauss, c));
-            put(&mut kron, c, k);
-            let estimate = (k - g).abs();
-            put(&mut gauss, c, estimate);
-            let floor = tol.floor.get(c).copied().unwrap_or(0.0) * share;
-            let held = tol.accuracy * k.abs().max(floor);
-            let rounding = ROUNDING_PASS * half * get(&size, c);
+        for ((((k, g), c), s), fl) in kron
+            .iter_mut()
+            .zip(gauss.iter_mut())
+            .zip(&centre)
+            .zip(&size)
+            .zip(&floor)
+        {
+            let kv = half * (2.0 * c + *k);
+            let gv = half * (2.0 * c + *g);
+            *k = kv;
+            let estimate = (kv - gv).abs();
+            *g = estimate;
+            let floor = fl * share;
+            let held = tol.accuracy * kv.abs().max(floor);
+            let rounding = ROUNDING_PASS * half * s;
             if estimate.is_nan() || (estimate > held && estimate > rounding) {
                 accepted = false;
             }
@@ -309,21 +353,18 @@ where
             // nearest node's distance. The half width's own rounding is the value's.
             let place = 2.0 * U * (mid.abs() + half);
             let g_sum = gamma(rule.sum_roundings());
-            for c in 0..n {
-                let k = get(&kron, c);
-                let sp = get(&spread, c);
-                if let Some(s) = sums.get_mut(c) {
-                    s.add(k);
-                }
-                let rounding = 2.0 * half * get(&most, c)
+            let nearest = rule.nearest();
+            sums.add(&kron);
+            let reads = kron.iter().zip(&spread).zip(most.iter().zip(&jump));
+            for (r, ((k, sp), (m, j))) in rounded.iter_mut().zip(reads) {
+                let rounding = 2.0 * half * m
                     + gamma(3) * k.abs()
                     + half * g_sum * sp
-                    + place * (sp + w0 * get(&jump, c)) / rule.nearest();
-                let sofar = get(&rounded, c);
-                put(&mut rounded, c, sofar + rounding);
-                if let Some(e) = error.get_mut(c) {
-                    *e += get(&gauss, c) + half * get(&inner, c);
-                }
+                    + place * (sp + w0 * j) / nearest;
+                *r += rounding;
+            }
+            for (e, (g, i)) in error.iter_mut().zip(gauss.iter().zip(&inner)) {
+                *e += g + half * i;
             }
             continue;
         }
@@ -334,30 +375,23 @@ where
         stack.push((lo, mid, depth + 1));
     }
     // The pieces' compensated sum is added once: its bound, and the addition's rounding.
-    for (c, s) in sums.iter().enumerate().take(n) {
-        if let Some(v) = value.get_mut(c) {
-            *v += s.value();
-            if let Some(e) = error.get_mut(c) {
-                *e += get(&rounded, c) + s.bound() + gamma(1) * v.abs();
-            }
-        }
+    let pieces = sums.each().zip(&rounded);
+    for ((v, e), ((sum, bound), r)) in value.iter_mut().zip(error.iter_mut()).zip(pieces) {
+        *v += sum;
+        *e += r + bound + gamma(1) * v.abs();
     }
     Ok(())
 }
 
 /// The value, error and rounding one sample is read into.
-type Read<'r> = (
-    &'r mut [f64; MAX_COMPONENTS],
-    &'r mut [f64; MAX_COMPONENTS],
-    &'r mut [f64; MAX_COMPONENTS],
-);
+type Read<'r, const N: usize> = (&'r mut [f64; N], &'r mut [f64; N], &'r mut [f64; N]);
 
 /// `f` at `x` into `read`, cleared first and checked finite; its rounding only if `rounds`.
-fn sample<F>(
+fn sample<const N: usize, F>(
     f: &mut F,
     x: f64,
     n: usize,
-    (value, error, rounding): &mut Read<'_>,
+    (value, error, rounding): &mut Read<'_, N>,
     rounds: bool,
     meter: &mut Meter<'_>,
 ) -> Result<(), Fail>
@@ -383,16 +417,6 @@ where
         Ok(())
     } else {
         Err(Fail::NotFinite)
-    }
-}
-
-fn get(a: &[f64; MAX_COMPONENTS], i: usize) -> f64 {
-    a.get(i).copied().unwrap_or(0.0)
-}
-
-fn put(a: &mut [f64; MAX_COMPONENTS], i: usize, v: f64) {
-    if let Some(x) = a.get_mut(i) {
-        *x = v;
     }
 }
 

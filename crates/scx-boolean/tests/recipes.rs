@@ -6,7 +6,7 @@
 //!
 //! Two kinds of test live here.
 //! - *Live today:* the operand generators. Every part of every case builds through
-//!   `scx-make` and its volume is the closed form's, so a later failure of a case is the
+//!   the testkit's port of `scx-make` and its volume is the closed form's, so a later failure of a case is the
 //!   Boolean's and not the operands'.
 //! - *The cases themselves,* judged against their truth. Cases whose recipe says
 //!   `Unsupported` (a touch inside a face, D5) expect that answer by name. The vertex and
@@ -19,9 +19,7 @@
     clippy::indexing_slicing
 )]
 
-use std::collections::BTreeSet;
-
-use scx_bodyq::{PointClass, classify_point};
+use scx_bodyq::{PointClass, betti, classify_point};
 use scx_boolean::{BooleanError, BooleanOp, boolean};
 use scx_brep::op::{Cx, NoTrace, Scratch, Settings};
 use scx_brep::{Brep, Document};
@@ -30,7 +28,6 @@ use scx_num::frame::Frame;
 use scx_num::hash::mix;
 use scx_num::units::Length;
 use scx_num::vector3d::{Point3, Vec3};
-use scx_surface::Surface;
 use scx_testkit::csg::{Csg, ProbeSpec, Side, box_points};
 use scx_testkit::recipe::{self, Op, Outcome, Part, Recipe, Shape, Topology, Unsupported};
 
@@ -79,16 +76,20 @@ fn frame(p: &Part) -> Frame {
 fn operand(p: &Part, doc: Document) -> Brep {
     let f = frame(p);
     match &p.shape {
-        Shape::Block { size } => scx_make::block(&f, size.map(mm), &doc).map(|m| m.body),
+        Shape::Block { size } => {
+            scx_testkit::bodies::made::block(&f, size.map(mm), &doc).map(|m| m.body)
+        }
         Shape::Cylinder { radius, height } => {
-            scx_make::cylinder(&f, mm(*radius), mm(*height), &doc).map(|m| m.body)
+            scx_testkit::bodies::made::cylinder(&f, mm(*radius), mm(*height), &doc).map(|m| m.body)
         }
         Shape::Cone { radii, height } => {
-            scx_make::cone(&f, radii.map(mm), mm(*height), &doc).map(|m| m.body)
+            scx_testkit::bodies::made::cone(&f, radii.map(mm), mm(*height), &doc).map(|m| m.body)
         }
-        Shape::Sphere { radius } => scx_make::sphere(&f, mm(*radius), &doc).map(|m| m.body),
+        Shape::Sphere { radius } => {
+            scx_testkit::bodies::made::sphere(&f, mm(*radius), &doc).map(|m| m.body)
+        }
         Shape::Torus { major, minor } => {
-            scx_make::torus(&f, mm(*major), mm(*minor), &doc).map(|m| m.body)
+            scx_testkit::bodies::made::torus(&f, mm(*major), mm(*minor), &doc).map(|m| m.body)
         }
         Shape::Extrusion { .. } => panic!("no Boolean case here extrudes a profile"),
     }
@@ -205,33 +206,20 @@ fn check(name: &str) {
     }
 }
 
-/// The genus of `body` from the Euler-Poincare relation over its own cells, shell by shell:
-/// `V_s - E_s + sum (2 - 2 g_f - L_f) = 2 (1 - G_s)` per shell `s` of a solid region, with
-/// `L_f` the face's loops and `g_f` one only for a torus face with no loop. A vertex or edge
-/// is counted once in each shell whose faces use it, so shells that touch at a vertex or
-/// along an edge (D5 contacts) each keep their own. A seam is an edge like any other (the
-/// face it cuts open is a disc), so no edge is dropped.
+/// The genus of `body`: the handles (`b1 / 2`) of every shell of a solid region, by
+/// `scx_bodyq::betti`. A vertex or edge is counted once in each shell whose faces use it,
+/// so bodies touching at a vertex or along an edge (D5), each its own shell, keep their own.
 fn genus(body: &Brep, t: &Topology) -> u32 {
-    let mut chi = 0i64;
-    let mut shells = 0i64;
+    let mut shells = 0u32;
+    let mut handles = 0u32;
     for s in body.shells().filter(|s| !s.region().is_outside()) {
         shells += 1;
-        let mut vertices = BTreeSet::new();
-        let mut edges = BTreeSet::new();
-        for (f, _) in s.faces() {
-            let loops = f.loops().len() as i64;
-            let g = i64::from(loops == 0 && matches!(f.surface(), Surface::Torus(_)));
-            chi += 2 - 2 * g - loops;
-            for u in f.uses() {
-                edges.insert(u.edge().id());
-                vertices.insert(u.start().id());
-            }
-        }
-        chi += vertices.len() as i64 - edges.len() as i64;
+        let b = betti(body, s.id()).unwrap_or_else(|e| panic!("{:?}: {e}", s.id()));
+        assert_eq!(b.b1 % 2, 0, "{:?}: b1 {} is odd", s.id(), b.b1);
+        handles += b.b1 / 2;
     }
-    assert_eq!(shells, i64::from(t.shells), "shells of solid regions");
-    assert_eq!(chi % 2, 0, "Euler characteristic {chi} is odd");
-    u32::try_from(shells - chi / 2).unwrap_or_else(|_| panic!("chi {chi} over {shells} shells"))
+    assert_eq!(shells, t.shells, "shells of solid regions");
+    handles
 }
 
 /// The coincidence the points are spaced by: the default resolution.

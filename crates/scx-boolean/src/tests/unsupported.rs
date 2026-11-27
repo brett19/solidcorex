@@ -5,8 +5,8 @@
 //!
 //! Every case here is `SsiPair`, a real cause: none reaches `Stage(Imprint)`, so none
 //! of these tests changes when BO3 removes that variant. The operands are the pin's
-//! (`boolean_api.rs`, millimetres), rebuilt with `scx-make`; the pin's cylinder rises
-//! from its base point along z, which is `scx-make`'s `z = 0` to `z = height` too.
+//! (`boolean_api.rs`, millimetres), rebuilt with the testkit's port of `scx-make`; the pin's cylinder rises
+//! from its base point along z, which is the constructor's `z = 0` to `z = height` too.
 //!
 //! Stage 4 takes the pairs in order (a's face id, then b's) and stops at the first one
 //! it cannot answer, so each case names that first pair, worked out by hand. A pair is
@@ -15,13 +15,13 @@
 
 use scx_brep::op::Settings;
 use scx_brep::{Brep, Document, FaceId};
-use scx_make::{block, cylinder, sphere, torus};
 use scx_num::fmath;
 use scx_num::frame::Frame;
 use scx_num::units::Length;
 use scx_num::vector3d::Vec3;
 use scx_ssi::SsiError;
 use scx_surface::SurfaceKind;
+use scx_testkit::bodies::made::{block, cylinder, sphere, torus};
 
 use super::{call, pt};
 use crate::{BooleanError, BooleanUnsupported};

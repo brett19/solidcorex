@@ -3933,3 +3933,193 @@ BO7 builds what D5 allows: a result whose two solids share only a vertex, and a 
 **Open questions.** (1) The three gaps above, for BO. (2) The units of the contact and cavity cases (above): a stage charging for work it does not do would show here. (3) CK3's "found, not mine" (`recipes.rs`'s genus asserting an odd Euler characteristic on an edge contact) is probably the same per-sheet count above (not run here): it counts the shared vertex once; the difftest counts per sheet and passes. (4) The pin's pairs-tried comparison needs a per-stage number.
 
 **Proposed 04 row.** "DT3 (72 §14.38): `t_slice` runs every Boolean recipe in scx beside the pin, each judged against truth. Outcomes are matched by name (`NonManifold`, `SsiPair` with its two kinds as a set), the built ones get volume, area, topology (counted per sheet), classification, contract (an empty body judged for what it is, a four-fin edge with `Contacts::Radial`), mesh, determinism and, on the four `issue_1462` recipes, lineage from `Changes`. scx: 429 pass, 0 fail, 12 recorded gaps (a cylinder less itself, two jog-vertex cases, one crease mesh). `Report::work` (a public value, summed over steps) is committed as test data in `slice_work.txt`; a rise over 10% fails, `SCX_BLESS_WORK=1` rewrites. No counter in kernel code; the pin's pairs-tried comparison would need a stage-level number that is not public. Change if: a recorded gap stops failing (the entry then fails the run) or the per-stage work needs a gate."
+
+### 14.40 MA6b as built (11-27)
+
+MA6's rounding bound (§14.31) cost 1.29x to 1.41x instructions on `volume` plus `mass`. MA6b brings `scx-mass` below its pre-MA6 count. The values and stated errors are **bit-identical to main**: 288 printed results matched bit for bit. They cover eight generated kinds (block, prism, cylinder, cone, sphere, torus, holed, cavity), sizes 1 to 3, the world frame and a far tilted one, and accuracies 1e-6, 1e-9 and 1e-12. No bound changed, so every stated error still bounds its miss exactly as MA6 proved and tested. No public API changes.
+
+**Profile first** (callgrind, main's generated cylinder at n3, 415M in all):
+
+| Cost | Instructions | Note |
+|---|---|---|
+| `Set::eval` | 113.5M | predates MA6: about 500 instructions a call, the monomial loop's three table lookups and power indexing not unrolled |
+| `Inner::sample_rounding` | 60.7M | of which `Set::rounding` 48.6M (the same loop shape as `eval`, with the derivatives); the frame terms and the normal's `dn` make up the rest |
+| K15's extras | about 51M | `spread`, `jump`, `most`, each piece's rounding formula and the `Sum2` adds, all over a runtime component count (1 to 24) with bounds checks |
+
+Most of the cost was not the bound's arithmetic. It was the code shape around it: runtime-length loops over the components and an integrand loop that the compiler could not unroll.
+
+**What changed.** Four steps, each kept only once the outputs matched bit for bit:
+
+1. *Unrolled monomials* (`integrand.rs`). `Set::eval`'s and `Set::rounding`'s full branches expand the 20 monomials at compile time (`each_monomial!`, with const-generic exponents). They read the powers from one `Powers` table taken once per sample. Exponents of zero drop their terms at compile time, so they leave out the `1.0 *` factors (LLVM folds those, so the bits are the same). In the derivative sums they leave out the `0.0 *` terms: the sum starts from `-0.0`, the identity of addition, and adding `+0` to a finite sum leaves its bits. A unit test (`each_monomial_is_in_order`) pins the expansion to `MONOMIALS`.
+2. *A const-generic rule* (`kronrod.rs`). `integrate` dispatches the component count to `integrate_n::<N>` with N of 1, 2 or `MAX_COMPONENTS`, so every per-component loop has a compile-time length. Gauss terms with a zero weight are skipped. Their product is `+0` and adding it changes no bits, because a Gauss sum is never `-0` here: it starts from `+0`.
+3. *Side-by-side sums* (`rounding.rs`). `Sums<N>` holds each component's `Sum2` total, carry and absolute sum as arrays, with one count. It runs the same `TwoSum` per lane in the same order as `[Sum; N]`, but the lanes vectorise and share the count. A unit test (`sums_are_sum_side_by_side`) checks the bits against `Sum`.
+4. *Exact derivatives carry nothing* (`face.rs`). `Terms::rounding` gives `None` for derivatives that carry no rounding (a plane's stored axes). `sample_rounding` then leaves out the zero derivative terms in the normal's `dn`. Bit-identical for finite inputs, as in 1.
+
+**Cost** (callgrind instructions, each run three times `volume` plus `mass` at 1e-9, measured off the tree and not committed):
+
+| Body, n3 | pre-MA6 | main (MA6) | step 1 | step 2 | step 3 | MA6b (step 4) | MA6b / pre-MA6 | MA6b / main |
+|---|---|---|---|---|---|---|---|---|
+| generated block | 51.7M | 68.9M | 55.0M | 49.3M | 47.1M | 46.3M | 0.90x | 0.67x |
+| generated cylinder | 294M | 415M | 293M | 268M | 254M | 250M | 0.85x | 0.60x |
+| generated sphere | 708M | 911M | 673M | 639M | 620M | 620M | 0.87x | 0.68x |
+
+(The pre-MA6 and main counts differ slightly from §14.31's: this harness differs.)
+
+After merging main (MA5's per-face memo, §14.41, and changes to `scx-mass`'s breaks and enclosure and to the surfaces' pcurves and hulls), the merged branch is again bit-identical to main over the 288 results: main 71.8M, 416M, 940M; this branch 49.3M, 250M, 646M (0.69x, 0.60x, 0.69x of main; 0.95x, 0.85x, 0.91x of pre-MA6). The memo's bookkeeping adds about 3M to the block on both.
+
+**What the rounding still costs.** Steps 1 to 3 speed up the code shape for both halves. So, to be fair, the rounding should also be measured against the same shape with its work removed: the branch with the sample rounding, `spread`, `jump`, `most` and the piece formula stubbed out and plain sums in place of `Sum2`. That is 35.1M, 169M and 454M. The rounding therefore still costs 1.32x (block), 1.48x (cylinder) and 1.37x (sphere) against that shape, about the same share as MA6. Unrolling `eval` alone on pre-MA6 gives 41.3M, 204M and 531M. The ratio of the target (1.1x of pre-MA6) is met because the shared code got faster, not because the bound got cheaper. On this branch's cylinder the remaining rounding share is:
+
+- `sample_rounding` at about 25M (`Set::rounding` 17M, the frame terms and `dn` the rest);
+- `spread` 7.2M;
+- `most` 2.3M;
+- `jump` 1.8M;
+- the peaks 7M;
+- the `TwoSum`s and the piece formula.
+
+**Decisions, with the cases for and against.**
+
+| Decision | For | Against | Chosen |
+|---|---|---|---|
+| Codegen only (unrolling, const-generic lengths, side-by-side sums), bounds unchanged | bit-identical results, so MA6's proofs and tests carry over untouched; also speeds the value path | leaves the bound's own share near 1.3x to 1.5x of the same shape | **yes** |
+| One term bound per rule application (`gamma(k)` times the rule's weights times a magnitude bound) in place of per-node sample rounding | removes most of `sample_rounding` (about 25M on the cylinder) | the magnitude bound would be the peak over the nodes: looser than MA6's per-node bound wherever the samples vary (the round bar's 7.0e-13 would grow), so the errors would loosen, not tighten | no; open for a ruling if speed is worth looser errors |
+| Sparser rounding reads on K7 (centre and ends, as K15 already does) | about a third of `sample_rounding` on the outer rule | a model with no proof that the rounding is smooth along the trim; it would change the stated errors (looser or tighter by the node) | no; open |
+| Fuse the per-node rounding pass into `eval` (one pass sharing the powers) | about 2M on the cylinder | `eval` runs on every sample and the rounding only where it is read; fusing pays the derivative work on samples that never read it | no |
+| Dispatch N of {1, 2, `MAX_COMPONENTS`} | the counts used are 1 (`volume`, `area`) and 2 (`mass`'s parts) or the full set; three instantiations keep the code size small | a count between 3 and 23 runs the 24-lane loops on padding lanes (lanes past `n` stay zero and are ignored) | **yes** |
+| `Sums<N>` beside `Sum` (not replacing it) | `body.rs`'s face and shell sums are scalar, and `Sum` reads plainly there | two forms of one algorithm; the test ties their bits | **yes** |
+
+**Tests.** New:
+
+- `integrand.rs`'s `each_monomial_is_in_order`: the macro's exponents equal `MONOMIALS`;
+- `rounding.rs`'s `sums_are_sum_side_by_side`: `Sums<2>` gives `[Sum; 2]`'s bits.
+
+Unchanged and passing: every MA6 test in `tests/rounding.rs`, the changed-on-purpose `kronrod`, `enclosure.rs` and `scx-make` `extrude.rs` tests, and the rest of `scx-mass`. No test was removed.
+
+**Open.**
+
+- Whether a looser but cheaper bound (the per-application row above, or sparse K7 reads) is wanted. It would need a ruling, since it trades the round bar's and far boxes' tightness for about 10% to 15%.
+- `Set::eval`'s unrolling also helps any future integrand. MA5's per-face memo is separate, and the two compose.
+
+### 14.41 MA5 as built (11-27)
+
+`scx-mass` keeps each face's integral in the caller's `Scratch` (new module `crates/scx-mass/src/memo.rs`), so a face a Boolean keeps is read back, not integrated again. The entry is the face's `FaceIntegral` about its own reference, before the shift to the body's: the values and the stated error with MA6's rounding bound (§14.31), so a hit states the same error as a recompute, bit for bit. `volume`, `area`, `face_area` and `mass` go through it; no public API changed (the `Scratch` they already took is now used). `scx-mass` gains a dependency on `scx-record` (above it in `layers.txt`).
+
+**The key.** The bits the integral reads, written by the record format's own writers (`scx_record::Record` into a `Writer`), folded into the `u64` scratch key by `scx_num::hash::mix`:
+
+- the set (`Area`, `Volume` or `Full`) and the accuracy's bits;
+- the face's grown box (`Face::bounding_box`): it fixes the reference, the floors and MA3's rounding test, and carries the face's accuracy and the body's resolution;
+- the surface, its sense included;
+- each loop's uses in order: the use's sense, its pcurve and interval (or point), its recorded bound, and, for a use with a bound on a curve edge, what MA2's closure reads (the edge's curve, the use's end vertices' points).
+
+**Decisions, with cases for and against.**
+
+| Decision | For | Against | Chosen |
+|---|---|---|---|
+| Key on what the integral reads, not the whole face record: ids and sides left out, the box and the closure's edge data put in (deviation from §2.5's "the face record's bits") | the integral reads no id (an id appears only in an error, never kept) and no side (the body applies the side's sign after); so a face a Boolean renumbers, or a subtract turns over (sides swapped, loops kept, §14.29), still hits; and the box and the closure's edge curves are read, so must be in the key or a hit could be wrong | the key now names what `face::integrate` reads, so a change there must change `memo::write` too (said in the module's doc) | **yes** |
+| Write the bits with `scx_record`'s writers | every surface and curve kind's bits, already canonical and complete, sense included | a new dependency of `scx-mass`; a kind with no record yet is integrated without the memo | **yes** |
+| Hash per kind inside `scx-mass` | no dependency | duplicates the record format for every kind; a missed field is a wrong hit | no |
+| Key by the face record's `Arc` pointer (copy-on-write keeps a kept face's record shared) | near free | not bits: an address is reused after a free (a wrong hit), and a record copied for a write misses | no |
+| Store the full bits and compare them on a hit | a hash collision can only replace an entry, never give a wrong hit | memory: the bits per entry (a few KB for plate-12's top face, 144 circle loops) | **yes** |
+| A hit charges the work its fill recorded, at once | 04 11-27 (work does not depend on warmth): the budget runs out on a hit exactly where a recompute does, the same `Exhausted { limit }` | `Budget::used` after running out holds the face's whole work, where a recompute stops partway (said in the doc; no result reads it) | **yes** |
+| Keep only finished integrals | an error (budget, stop, step control) is never a memo; 04 11-27: an item cut by the budget is never memoized | a face that always fails is integrated again on every call | **yes** |
+| One entry per set | each set has its own step control (`Full` judges 22 components, `Volume` 2), so their bits differ | `volume` after `mass` misses | **yes** |
+
+**Tests.**
+
+- `memo::tests::a_flipped_sense_another_set_or_accuracy_is_another_key` (unit): the same face gives the same bits; the cylinder wall with its sense flipped, another set, another accuracy, and the accuracy one bit up each give other bits.
+- `crates/scx-mass/tests/memo.rs`:
+  - `a_warm_memo_gives_the_cold_bits_and_work`: on a block, a holed block, cylinder, cone, sphere, torus and a loose cylinder (MA2's strips), `mass` on a warm scratch equals a cold one in every value and stated error bit and in the work charged; one entry per face; a third call adds nothing; `volume` and `area` likewise.
+  - `another_accuracy_or_bound_misses`: another accuracy, or one bit of it, is an entry for every face; a loose block with another offset (the uses' bounds) misses on every face.
+  - `a_hit_runs_out_of_budget_where_a_recompute_does`: at limits 0, 1, a third, a half, one short and the total, warm and cold give the same result or error; a call cut by the budget keeps only the faces it finished and the next call's bits are the cold ones.
+- `crates/scx-boolean/tests/mass_memo.rs`, across a Boolean that keeps faces: each bench recipe run to its last step, `mass` of the body before it filling the scratch, then `mass` of the result. Warm equals cold in every bit and in work; a third call adds nothing; a scratch filled in another order (`volume` at 1e-6, then the result, then the body before) gives the same bits. `box-cyl-hole` and `plate-4` miss fewer than their faces; plate-12 misses 3 of 150 faces (its top and bottom, one more loop each, and the new wall); gear-60 misses 7 of 242.
+
+No test was removed.
+
+**Cost** (callgrind instructions of one `mass` at 1e-9 on the recipe's result, the Boolean chain outside the count; main against this branch; release):
+
+| Body | Main (no memo) | Cold memo | Warm memo (after the body before the last step) |
+|---|---:|---:|---:|
+| plate-12 (150 faces, 3 misses) | 10,279.5M | 10,281.3M (+0.02%) | 7,728.1M (0.75x) |
+| gear-60 (242 faces, 7 misses) | 361.2M | 364.0M (+0.8%) | 213.8M (0.59x) |
+
+Work charged is the same in all three (4,443,502 and 149,746 units). Wall time (best of 15, shared machine): plate-12 400 to 469 ms cold (noise), 301 ms warm; gear-60 13.7 ms cold, 7.9 ms warm. The cold overhead is the key's bits, the hash and the insert, about 11.6K instructions a face on gear-60.
+
+**Open.**
+
+1. What is left warm is the faces the last step changed, and on these bodies they dominate: plate-12's top and bottom carry 144 circle loops each. A per-loop memo would not be exact as built: a face's `base` (the loops' lowest `v`), its reference and its floors come from all its loops and its box. Making loops separable (a fixed base and floors per face kind) would change the method's bits, so it is for a later task, judged against T9.
+2. The memo has no eviction: a caller that keeps one `Scratch` over many bodies keeps every face's entry. `Scratch` has no size policy yet; none of step 4's callers needs one.
+
+**Proposed 04 row.** "MA5 (72 §14.41): `scx-mass` keeps each face's integral (about its own reference, values and MA6's stated error) in the caller's `Scratch`, keyed by the bits the integral reads: the set, the accuracy, the face's grown box, the surface with its sense, and each use's sense, pcurve or point, recorded bound and, for a bounded use, its edge's curve and end points, written by `scx_record`'s writers; ids and sides are not in the key (not read), so a renumbered or turned-over face hits. The full bits are stored and compared, so a collision only replaces an entry. A hit charges the recorded work at once (the same `Exhausted` as a recompute); only finished integrals are kept. Warm equals cold bit for bit across the bench recipes' last steps; plate-12 warm 0.75x and gear-60 0.59x instructions, cold +0.02% and +0.8%. Against: the key names what `face::integrate` reads, so the two change together; no eviction. Change if a per-loop memo is wanted (method change), or a caller needs a bounded `Scratch`."
+
+### 14.42 BO8 as built (11-27)
+
+**What was asked.** The four gaps DT3 recorded in `scx_gaps` (§14.38): `cylinder-minus-itself` failing `Defect(Seeds)`, the jog cells of `coplanar-offset-0.1c` and `-0.5c`, the non-manifold mesh vertex of `crease-0.3c` (pinched or wrong), and `Report::work` on operands that do not cross. Each fix removes its entry; `scx_gaps()` is now empty.
+
+**1. A cylinder less itself (`faceface.rs`, `lying`).** Cause: the cuts along an edge were sorted and deduplicated by vertex (`dedup_by_key(|c| c.1)`). A closed edge (each circle of the cylinder) has both ends at the seam's one vertex, so its far end's cut went and `pieces` took the whole circle for a stub. The circles were then never shared between the copies, each cap joined the wall in one component with an `On` piece, and the seed cross-check refused it. Now two cuts at one vertex are one only where the curve's point halfway between their parameters is within the coincidence of the first (one point named twice); the two ends of a closed edge, a curve's length apart, both stay. The subtract is empty, union and intersect are the cylinder (3 faces, 3 edges, 2 vertices, 40π).
+- For: it states what the dedup meant (one place), and keeps every other case as it was (two cuts at one vertex a short way apart are still one).
+- Against: the midpoint test assumes a curve between two cuts at one vertex is either short or goes round; an edge that leaves its vertex and comes back within the zone half way along would be wrongly kept as two cuts. No body in the tests or recipes has one. The like dedup in `sections` is left unchanged: no recipe reaches it with a closed edge.
+
+**2. Jog cells on merged near-coplanar fronts (`build.rs`, `join_plan`).** Two kept line edges either side of a vertex were joined only when collinear to 1e-12. The fronts 0.1c and 0.5c apart merge to one face (the faces' coincidence), but the edges of the two operands on its boundary lie on lines `dy` apart, so the jog vertices stayed. The line join now takes the coincidence of the two edges (`ops.coincidence` of their recorded accuracies, the zone when both are exact): every end of both edges within it of the kept line, the directions not opposed, the two accuracies equal. The kept edge's line carries the joined edge.
+- For: the faces were merged by the same tolerance, so the edges on their boundary now follow the faces; truth's cells (6, 12, 8) are met from 0 to 5e-6, and past the zone (4e-5) the step stays (10, 24, 16).
+- Against: the joined line moves the far end by up to the zone, within the edges' own coincidence; nothing is recorded for it. Edges of unequal recorded accuracy are not joined (conservative; no case needs it).
+
+**3. `crease-0.3c` is pinched.** Settled for pinched. At d = 0.3c the overlap of the cube and the turned block is a tetrahedron about d across: the crease meets z = 10 and y = 10 about 2d apart, and the cube's edge crosses the block's faces about 2d apart, so all its corners are within about 1.5d of one point, under the resolution. Stage 3 merges them, and any body at this resolution has the two lumps meet at one vertex (4 edges there; 2 solid regions, volume 3000): a D5 vertex contact. The mesh's `NonManifoldVertex` is at that vertex and nowhere else. T12's recipe now says `pinched()` for k below 1 (the oracle is right; the recipe asked the wrong invariants). It stays `Open`.
+- For: the geometry forces it, and the contract passes the body as built.
+- Against: a kernel that settled the merged points as one lump (dropping the tetrahedron) would have a manifold body and lose nothing to `pinched()`, since `Open` accepts it either way.
+
+**4. `Report::work` on operands that do not cross (`pinch::nest`).** Found with side-channel prints of `budget.used()` per stage (removed): stages 1 to 5 charged 6 units on `disjoint-union`, then `shells` charged about 2,330, all in `nest`'s `volume_sign` of each material shell. That is real work, but its answer was already known: each face set there is one operand shell, whole. Build now passes `nest` the signs it can read off the operands (`whole_shell`): a set whose faces are each the only piece of their operand face, all of one operand, all the faces of one operand shell, each once (no sheet), with the material on one side of that shell. Its surface is that shell's, so the sign is the operand's: negative for a shell of the outside, positive for the one shell of a region. A region of several shells (a cavity in an operand) is not settled this way and is measured, as are sets a link touched.
+- For: no answer changes; only the measuring of signs the operands already give goes. Classification already trusts the operands to face outward, which is what this reads.
+- Against: it trusts operand orientation where `volume_sign` would have caught an inside-out operand at this point. It would not have saved such an operand: classification answers wrong first.
+- Not done: `nest` still clones and finishes the draft for boxes and point-in-shell tests (not budget units; about 180 µs is the whole of `disjoint-union` now). Lazily finishing it is a further step.
+
+**Work baseline (`slice_work.txt`).** Re-blessed for falls only, and one new line: `disjoint-union` 2,334 to 6, `box-cavity` 2,336 to 8, `corner-contact-union` 2,403 to 75, `crease-0.3c` 2,961 to 64 (the cube's and the block's faces are uncut there, so each lump is an operand shell whole), and `cylinder-minus-itself` 214 (new: it now builds). Nothing rose; `edge-contact-union` stays 5,713 (its shells are linked at the four-fin edge, so their signs are measured).
+
+**Tests.** New in `scx-boolean`'s `tests/cleanup.rs`: `a_cylinder_less_itself_is_empty_and_with_itself_is_itself`, `near_coplanar_fronts_merge_without_their_jog` (dy 0, 1e-8, 1e-6, 5e-6 and 4e-5), `a_crease_inside_the_resolution_of_an_edge_pinches_at_one_vertex` (the mesh's only violations are non-manifold vertices at the pinch), `shells_that_are_operand_shells_whole_cost_no_volume_signs` (apart and cavity below a crossing pair's work, right volumes and regions; an operand with a cavity still nests). `whole::crease` is shared with them. No test removed. `t_slice`: every check passes, no gap recorded.
+
+**Measurements** (release, server, median per call of `scx_run` over 41 runs, 9 for the last two; before = the branch base).
+
+| recipe | before µs | after µs | work before | work after |
+|---|---|---|---|---|
+| cylinder-minus-itself | 477 (fails) | 468 | — | 214 |
+| block-minus-itself | 760 | 724 | 1,056 | 1,056 |
+| coplanar-offset-0.1c | 613 | 607 | 586 | 586 |
+| coplanar-offset-0.5c | 601 | 584 | 586 | 586 |
+| crease-0.3c | 1,259 | 252 | 2,961 | 64 |
+| crease-3c | 290 | 260 | 139 | 139 |
+| disjoint-union | 831 | 182 | 2,334 | 6 |
+| box-cavity | 806 | 181 | 2,336 | 8 |
+| corner-contact-union | 891 | 249 | 2,403 | 75 |
+| edge-contact-union | 2,008 | 1,930 | 5,713 | 5,713 |
+| plate-12 | 197,000 to 209,000 | 192,000 to 197,000 | 26,496 | 26,496 |
+| gear-60 | 88,000 to 91,000 | 88,000 to 91,000 | 26,300 | 26,300 |
+
+plate-12 and gear-60 are two alternating runs each (the machine's noise is larger than any difference); their work is unchanged. The new checks (the midpoint test per repeated vertex, four point-line distances per line join, a pass over each face set's faces) are not visible in any of these.
+
+**Open questions.** (1) `edge-contact-union`'s 5,713 units: linked shells' signs are measured; the link could carry the operands' signs too. (2) `nest`'s clone and finish when no test needs the body. (3) The `sections` dedup by vertex has the same shape as the one fixed; no case reaches it.
+
+**Proposed 04 row.** "BO8 (72 §14.42): the four DT3 gaps closed. A closed edge's two ends at one vertex are two cuts (a cylinder less itself is empty); line edges either side of a vertex join within their coincidence (near-coplanar fronts lose their jog cells); `crease-0.3c` is a D5 vertex pinch, so T12 marks it `pinched()`; a face set that is one operand shell whole takes its volume sign from the operand, so nesting measures none (work on disjoint, cavity and corner-contact cases 2,300 to under 100; no rise anywhere). `scx_gaps` empty. Change if: an edge returns to its vertex within the zone half way along, or operands are no longer trusted to face outward."
+
+### 14.43 BO9 as built (11-27)
+
+**What was asked.** BO8's three open questions (§14.42): the like dedup in `sections`; `edge-contact-union`'s 5,713 units (linked shells' signs measured); the midpoint test's blind spot.
+
+**1. The `sections` dedup (`faceface.rs`).** It is dead, so removed, not fixed. It deduplicated `cuts` by point index (`dedup_by_key(|c| c.1)`), but `cuts` takes one cut per entry of `near` and `near` (`Index::through`) lists each point once: a face's list gets a point once per side (`through` is sorted and deduplicated before it is pushed), the two lists are intersected by binary search, and `cut_at` returns one parameter per point. Two cuts of one index never arise, so the dedup could drop nothing, and a closed edge reaches it with one cut per vertex: a circle through the seam vertex is one cut and one closed piece from `t` round to `t + TAU`. That is the shape the intersection curve needs, unlike `lying`, which got one point from two sources (an edge's parameter list and its end vertices), which is why the same dedup bit there. No body can reach it, so no failing-first test exists; the pair `a_cylinder_less_itself...` (closed circles meeting at seam vertices) and the whole difftest pass with it gone. Real, different limit left unchanged: a curve through one point twice (a self-crossing spline) gets one cut from `cut_at`; no recipe has one.
+- For removing: a line that cannot act is a claim that it can.
+- Against: if `near` is ever built differently (duplicates), the dedup would be missed; a zero-length piece is then dropped by `Extent1d::new` anyway.
+
+**2. Linked shells take the operands' signs (`build.rs`).** Done, sound for these cases.
+- The sign of a shell is the sign of its signed volume, and signed volume is additive over closed face sets. A shell the links join is the union of the face sets of the pairs it holds. So where every set is an operand shell whole (`whole_shell`) and all are of one sign, the joined shell has that sign; a void shell has the opposite (its faces' other side). Mixed signs, or any set that is not whole, are measured as before. `known` is now built per shell from the sets that make it (one set for an unlinked shell), not only for unlinked pairs.
+- `whole_shell` also widened: a set is a shell whole when every piece of each of its operand faces is in it (not only faces with one piece), since pieces cut by a contact edge still cover the same surface with the same orientation. That is what `edge-contact-union` needs: the diamond's edge splits the cube's face x = 10 into 2 pieces. The count check is now pieces against the set's faces; the shell must still be all the operand shell's faces, each once (no sheet).
+- Not what I expected: in an edge contact the material lumps are not linked (the sectors alternate material and void); the voids are. So the cheapest gain was reading the unlinked material shells' signs, which `known` only offered for mirrored pairs.
+- For: one more reading of what classification already trusts (operands face outward); additivity is exact (an integral over faces); no answer changes.
+- Against: it extends trust to a joined shell: a linked group mixing an inside-out operand with a right one would be misread, but that operand is wrong already and classification would answer wrong first; the 'all one sign' rule never takes a cavity wall's sign wrongly because a region with several shells is never whole.
+- Test: `shells_linked_from_operand_shells_whole_cost_no_volume_signs` (two cubes sharing an edge under 1,000 units against 5,700 measured before, volume and regions right; the same with a cavity in one operand, mixed signs, still measured and right).
+
+**3. A sounder test than the midpoint (`lying`).** Yes, at no real cost: two cuts at one vertex are one only if the curve stays within reach of the first at every eighth of the parameter span between them (7 points, not 1). It catches an edge that is out half way but returns at a quarter, and costs six more `curve.point` calls only where one vertex is named twice on an edge. For lines, circles and ellipses the distance from a point on the curve is unimodal between the cuts, so the midpoint was already exact; only a spline or a helix can differ, and none is in a recipe, so there is no failing-first test (no cheap body has one). Not exact for a spline that returns between samples; a bound from the curve's own derivative would be, but costs a curve-length query, which was not asked of this path.
+- Against: seven samples is still a sample.
+
+**Work and time** (`slice_work.txt`, falls only, re-blessed): `edge-contact-union` 5,713 to 175; `gear-60` 26,300 to 26,166 (a fall, from the widened `whole_shell` reaching a lump of its link; not looked at further). Nothing rose. Release timings, median of 41, server: cube and cube sharing an edge 1,419 to 235 µs; cylinder with itself 353 to 353. t_slice passes (2 tests) on a second machine too.
+
+**Open questions.** `nest` still clones and finishes the draft (BO8's second); curves through a point twice.
+
+**Proposed 04 row.** "BO9 (72 §14.43): `sections`' vertex dedup was dead (one cut per point), removed; a shell the links join takes the operands' sign when each part is an operand shell whole (signed volume adds), and a shell is whole when all pieces of each of its faces are in the set, so edge-contact-union work is 5,713 to 175 (cube pair 1,419 to 235 µs), no rise; `lying`'s repeated-vertex test samples the arc at eighths. Change if: a spline edge returns inside the zone between samples, or operands are no longer trusted to face outward."
+

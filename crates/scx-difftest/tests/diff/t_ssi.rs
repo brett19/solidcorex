@@ -692,9 +692,13 @@ pub mod truth {
         out
     }
 
-    /// What a cone's section owes from the cone alone: each of 2000 generators met with the
-    /// plane (one division), where that lies inside both extents. Empty for another kind.
+    /// What a cone's or torus's section owes from the surface alone: each of 2000 generators
+    /// (a torus's meridian circles) met with the plane, where that lies inside both extents.
+    /// Empty for another kind.
     fn generators(c: &Case) -> Vec<Point3> {
+        if let Kind::Torus { big, small } = c.kind {
+            return meridians(c, big, small);
+        }
         let Kind::Cone { r, a, .. } = c.kind else {
             return Vec::new();
         };
@@ -714,6 +718,37 @@ pub mod truth {
             })
             .filter(|&q| inside(c, q, -MARGIN))
             .collect()
+    }
+
+    /// Each of 2000 meridian circles of a torus met with the plane: `A cos psi + B sin psi =
+    /// -D` in the tube angle, two roots or none.
+    fn meridians(c: &Case, big: f64, small: f64) -> Vec<Point3> {
+        let f = c.surface_frame();
+        let (x, y, z) = (*f.x(), *f.y(), *f.z());
+        let pf = c.plane_frame();
+        let n = *pf.z();
+        let mut out = Vec::new();
+        for i in 0..2000 {
+            let (sn, cs) = scx_num::fmath::sin_cos(TAU * f64::from(i) / 2000.0);
+            let e = x * cs + y * sn;
+            let centre = f.origin() + e * big;
+            let (a, b) = (n.dot(e) * small, n.dot(z) * small);
+            let d = n.dot(centre - pf.origin());
+            let r = scx_num::fmath::hypot(a, b);
+            if r == 0.0 || d.abs() > r {
+                continue;
+            }
+            let at = scx_num::fmath::atan2(b, a);
+            let off = scx_num::fmath::acos(-d / r);
+            for psi in [at + off, at - off] {
+                let (sp, cp) = scx_num::fmath::sin_cos(psi);
+                let q = centre + (e * cp + z * sp) * small;
+                if inside(c, q, -MARGIN) {
+                    out.push(q);
+                }
+            }
+        }
+        out
     }
 
     /// The distance from `q` to the curve over `[t0, t1]` ([`nearest_on`]).
@@ -998,6 +1033,16 @@ pub mod truth {
             {
                 Vec::new()
             }
+            // A torus's Villarceau circles (radius `big`, research 73 §17), or none inside the
+            // plane's square, which the exact truth never reaches: the meridians below owe
+            // their points.
+            Err(ssi::Error::NoClosedForm)
+                if matches!(c.kind, Kind::Torus { big, .. }
+                    if curves.iter().all(|k| matches!(&k.curve,
+                        Curve::Circle(e) if (e.radius().mm() - big).abs() <= NEAR * big))) =>
+            {
+                Vec::new()
+            }
             t => return Err(format!("the truth is {t:?}")),
         };
         // On both surfaces: a crossing to rounding, a touch within the snap (63 SS4).
@@ -1041,10 +1086,12 @@ pub mod truth {
         for q in points {
             on(q.point, q.contact)?;
         }
-        // Each piece is a whole connected piece: no two curves meet at their ends.
+        // Each piece is a whole connected piece: no two curves meet at their ends, but at a
+        // branch point (an answer's point, where crossing curves are cut).
+        let near = |a: Point3, b: Point3| a.distance(b) <= NEAR * (1.0 + a.to_vec().length());
         for (i, a) in ends.iter().enumerate() {
             for (j, b) in ends.iter().enumerate().skip(i + 1) {
-                if i / 2 != j / 2 && a.distance(*b) <= NEAR * (1.0 + a.to_vec().length()) {
+                if i / 2 != j / 2 && near(*a, *b) && !points.iter().any(|q| near(q.point, *a)) {
                     return Err(format!("two pieces meet at {a:?}"));
                 }
             }

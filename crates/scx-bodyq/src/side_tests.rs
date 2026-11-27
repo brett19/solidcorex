@@ -17,7 +17,6 @@ use core::f64::consts::TAU;
 
 use scx_brep::{Brep, Document, FaceSide, RegionId};
 use scx_curve::{Circle, Curve, Line};
-use scx_make::{block, sphere};
 use scx_num::budget::{Budget, Stop};
 use scx_num::extent1d::Extent1d;
 use scx_num::frame::{Frame, Sense};
@@ -25,6 +24,7 @@ use scx_num::units::Length;
 use scx_num::vector3d::{Point3, Vec3};
 use scx_ssi::analytic::Contact;
 use scx_surface::{Cylinder, Plane, Sphere, Surface};
+use scx_testkit::bodies::made::{block, sphere};
 
 use super::{Along, Sheet, side_at, sides_on};
 use crate::error::{BodyqError, BodyqRefusal, BodyqUnsupported};

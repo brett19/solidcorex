@@ -12,13 +12,13 @@
 //! axis: spiric sections, no closed form. The coincidence here is the resolution, 1e-5.
 
 use scx_brep::{Document, FaceId};
-use scx_make::{BlockFaces, TorusFaces, block, cylinder, sphere, torus};
 use scx_num::budget::{Budget, Stop};
 use scx_num::frame::Frame;
 use scx_num::units::Length;
 use scx_num::vector3d::Vec3;
 use scx_ssi::SsiError;
 use scx_surface::SurfaceKind;
+use scx_testkit::bodies::made::{BlockFaces, TorusFaces, block, cylinder, sphere, torus};
 
 use super::{pt, run};
 use crate::faceface::{FaceFace, face_face};

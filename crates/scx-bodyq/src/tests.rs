@@ -11,12 +11,12 @@
 use core::f64::consts::PI;
 
 use scx_brep::{Brep, Document, RegionId};
-use scx_make::{block, cone, cylinder, sphere, torus};
 use scx_num::budget::{Budget, Stop};
 use scx_num::fmath;
 use scx_num::frame::Frame;
 use scx_num::units::Length;
 use scx_num::vector3d::{Point3, Vec3};
+use scx_testkit::bodies::made::{block, cone, cylinder, sphere, torus};
 use scx_testkit::bodies::{Kind, generate};
 use scx_testkit::csg::{Side, box_points};
 

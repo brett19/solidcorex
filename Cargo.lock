@@ -498,7 +498,6 @@ version = "0.1.0"
 dependencies = [
  "scx-brep",
  "scx-curve",
- "scx-make",
  "scx-num",
  "scx-nurbs",
  "scx-ssi",
@@ -515,7 +514,6 @@ dependencies = [
  "scx-brep",
  "scx-check",
  "scx-curve",
- "scx-make",
  "scx-mass",
  "scx-num",
  "scx-nurbs",
@@ -542,7 +540,6 @@ name = "scx-check"
 version = "0.1.0"
 dependencies = [
  "scx-brep",
- "scx-make",
  "scx-mass",
  "scx-num",
  "scx-nurbs",
@@ -610,6 +607,7 @@ dependencies = [
  "scx-num",
  "scx-nurbs",
  "scx-nurbs-surface",
+ "scx-record",
  "scx-surface",
  "scx-testkit",
 ]
@@ -681,6 +679,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "scx-step"
+version = "0.1.0"
+dependencies = [
+ "scx-num",
+ "scx-p21",
+]
+
+[[package]]
 name = "scx-surface"
 version = "0.1.0"
 dependencies = [
@@ -698,7 +704,6 @@ version = "0.1.0"
 dependencies = [
  "scx-brep",
  "scx-curve",
- "scx-make",
  "scx-mass",
  "scx-num",
  "scx-nurbs",
@@ -715,6 +720,7 @@ dependencies = [
  "scx-curve",
  "scx-num",
  "scx-nurbs",
+ "scx-planar",
  "scx-surface",
 ]
 
