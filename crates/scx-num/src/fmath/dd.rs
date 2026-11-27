@@ -167,7 +167,7 @@ pub(crate) fn sqrt(a: (f64, f64)) -> (f64, f64) {
     fast_two_sum(s, r / (2.0 * s))
 }
 
-/// Ziv's rounding test, in the form CRlibm uses (Ziv, "Fast evaluation of elementary
+/// Ziv's rounding test, in the form `CRlibm` uses (Ziv, "Fast evaluation of elementary
 /// mathematical functions with correctly rounded last bit", ACM TOMS 17, 1991; de
 /// Dinechin, Lauter and Muller, "Fast and correctly rounded logarithms in
 /// double-precision", RAIRO-ITA 41, 2007), with its constant derived here: whether every

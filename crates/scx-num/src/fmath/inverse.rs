@@ -281,7 +281,11 @@ mod tests {
     /// `acos` against its double-double path alone, bit for bit.
     fn check(x: f64, st: &mut Stats) {
         let a = x.abs();
-        let slow = if x.is_nan() || a > 1.0 { (f64::NAN, 0.0) } else { acos_dd(x, a) };
+        let slow = if x.is_nan() || a > 1.0 {
+            (f64::NAN, 0.0)
+        } else {
+            acos_dd(x, a)
+        };
         assert_eq!(acos(x).to_bits(), slow.0.to_bits(), "acos({x:e})");
         if a < 1.0 {
             let (hi, lo) = fast_acos(x, a);

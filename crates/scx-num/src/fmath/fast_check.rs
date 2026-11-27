@@ -41,7 +41,7 @@ impl Stats {
              difference 2^{:.1}",
             self.n,
             100.0 * rate,
-            self.max_rel.log2()
+            super::log2(self.max_rel)
         );
     }
 }
@@ -82,14 +82,14 @@ fn parse_hex(s: &str) -> Option<f64> {
         "nan" | "snan" => f64::NAN,
         _ if !s.starts_with("0x") => f64::from(s.parse::<u8>().ok()?),
         _ => {
-        let s = s.strip_prefix("0x")?;
-        let (mant, exp) = s.split_once('p')?;
-        let (int, frac) = mant.split_once('.').unwrap_or((mant, ""));
-        let digits = format!("{int}{frac}");
-        let m = u64::from_str_radix(&digits, 16).ok()?;
-        let e: i32 = exp.parse().ok()?;
-        // m below 2^56 here; every list's values have 53 bits or fewer, so m is exact.
-        dd::scale(m as f64, e - 4 * frac.len() as i32)
+            let s = s.strip_prefix("0x")?;
+            let (mant, exp) = s.split_once('p')?;
+            let (int, frac) = mant.split_once('.').unwrap_or((mant, ""));
+            let digits = format!("{int}{frac}");
+            let m = u64::from_str_radix(&digits, 16).ok()?;
+            let e: i32 = exp.parse().ok()?;
+            // m below 2^56 here; every list's values have 53 bits or fewer, so m is exact.
+            dd::scale(m as f64, e - 4 * frac.len() as i32)
         }
     };
     Some(if neg { -v } else { v })
@@ -117,7 +117,10 @@ fn hex_floats_parse() {
     assert_eq!(parse_hex("0x1.8p-1"), Some(0.75));
     assert_eq!(parse_hex("-0x1p+0"), Some(-1.0));
     assert_eq!(parse_hex("+0x1p-1074"), Some(f64::from_bits(1)));
-    assert_eq!(parse_hex("+0x.fffffffffffffp-1022"), Some(f64::from_bits((1 << 52) - 1)));
+    assert_eq!(
+        parse_hex("+0x.fffffffffffffp-1022"),
+        Some(f64::from_bits((1 << 52) - 1))
+    );
     assert_eq!(parse_hex("+0x1.fffffffffffffp+1023"), Some(f64::MAX));
     assert_eq!(parse_hex("+0").map(f64::to_bits), Some(0));
     assert_eq!(parse_hex("-0").map(f64::to_bits), Some((-0.0f64).to_bits()));

@@ -50,12 +50,11 @@ fn cbrt_dd(m: f64, r: i32) -> (f64, f64) {
     let res = dd::add(y3, (-m, 0.0));
     let d = -(res.0 + res.1) / (3.0 * y2.0);
     let root = fast_two_sum(y, d);
-    let root = match r {
+    match r {
         0 => root,
         1 => dd::mul(root, CBRT2),
         _ => dd::mul(root, CBRT4),
-    };
-    root
+    }
 }
 
 /// The rounding-test constant for [`fast_cbrt`]: `1 + 2^-9`, good for
@@ -132,7 +131,10 @@ mod tests {
     fn check(x: f64, st: &mut Stats) {
         let got = cbrt(x);
         if x.is_nan() || x == 0.0 || x.is_infinite() {
-            assert_eq!(got.to_bits(), if x.is_nan() { f64::NAN } else { x }.to_bits());
+            assert_eq!(
+                got.to_bits(),
+                if x.is_nan() { f64::NAN } else { x }.to_bits()
+            );
             return;
         }
         // The same split as cbrt's.

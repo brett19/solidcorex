@@ -257,11 +257,11 @@ fn fast_parts(y: (f64, f64)) -> (usize, f64, f64, f64) {
 }
 
 /// `sin y` as an unevaluated `hi + lo` (`|lo|` near `ulp(hi)/2`), for the reduced `y`,
-/// in doubles but for one exact product: `sin(a + h) = sin a + cos a h + sin a dc
-/// + cos a ds`, with `cos a h` exact and the rest, below `2^-13.7 |sin y|`, summed
-/// plainly. Relative error at most `2^-62`: `2^-64.1` from the eight roundings of the
-/// small terms, `2^-64.9` from `dc` (times `sin a <= 2 |sin y|`), `2^-66.7` from `ds`,
-/// `2^-67` from the dropped `sl dc`, and the table's `2^-106`.
+/// in doubles but for one exact product:
+/// `sin(a + h) = sin a + cos a h + sin a dc + cos a ds`, with `cos a h` exact and the rest, below
+/// `2^-13.7 |sin y|`, summed plainly. Relative error at most `2^-62`: `2^-64.1` from the eight
+/// roundings of the small terms, `2^-64.9` from `dc` (times `sin a <= 2 |sin y|`), `2^-66.7` from
+/// `ds`, `2^-67` from the dropped `sl dc`, and the table's `2^-106`.
 #[inline]
 fn fast_sin(y: (f64, f64)) -> (f64, f64) {
     let (i, h, ds, dc) = fast_parts(y);
@@ -274,10 +274,10 @@ fn fast_sin(y: (f64, f64)) -> (f64, f64) {
     if y.0 < 0.0 { (-hi, -lo) } else { (hi, lo) }
 }
 
-/// `cos y` as [`fast_sin`] gives `sin y`: `cos(a + h) = cos a - sin a h + cos a dc
-/// - sin a ds`, with `sin a h` exact. Relative error at most `2^-63`: the small terms
-/// are below `2^-14.5 |cos y|` (`cos y >= 0.7`), their six roundings `2^-64.9`, `dc`
-/// `2^-65.4`, the rest below `2^-68`.
+/// `cos y` as [`fast_sin`] gives `sin y`:
+/// `cos(a + h) = cos a - sin a h + cos a dc - sin a ds`, with `sin a h` exact. Relative error at
+/// most `2^-63`: the small terms are below `2^-14.5 |cos y|` (`cos y >= 0.7`), their six roundings
+/// `2^-64.9`, `dc` `2^-65.4`, the rest below `2^-68`.
 #[inline]
 fn fast_cos(y: (f64, f64)) -> (f64, f64) {
     let (i, h, ds, dc) = fast_parts(y);
