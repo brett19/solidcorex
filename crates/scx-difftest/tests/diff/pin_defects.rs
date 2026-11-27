@@ -1553,13 +1553,15 @@ pub fn nurbs_derivs() -> PinDefect<(At, bool), Option<Vec<[f64; 3]>>> {
     }
 }
 
-/// `NurbsCurve::elevate` where scx and the pin disagree: rational curves with knots a few
-/// ulps apart (`Knots::Clustered`). A5.9 removes each inserted knot by extrapolating across
-/// the neighbouring spans, multiplying the rounding by their length ratio (about 1e16), and
-/// the elevated weights come out zero or negative. The pin returns that curve, 2 to 1e32 from
-/// the exact elevation; scx refuses with `NurbsError::Unstable` (its polynomial answers,
-/// equally inaccurate, are the pin's bit for bit; `scx-nurbs`' ignored truth test
-/// `elevation_of_near_coincident_knots` keeps the gap visible).
+/// `NurbsCurve::elevate` where scx and the pin disagree: curves with knots a few ulps apart
+/// (`Knots::Clustered`). A5.9 removes each inserted knot by solving to a fixed middle
+/// equation, extrapolating across the neighbouring spans and multiplying the rounding by
+/// their length ratio (about 1e16): the pin's weights come out zero or negative, or its
+/// points far off, 2 to 1e32 from the exact elevation. scx drops the equation that bounds
+/// the rounding least and answers the exact elevation to rounding (`scx-nurbs`' truth test
+/// `elevation_at_degree_15_keeps_the_exact_curve`); it refuses (`NurbsError::Unstable`)
+/// only where that bound passes `scx_num::consts::ELEVATION_ERROR`, which no input here
+/// reaches.
 ///
 /// The check: where scx answers, its curve is the exact elevation (knots equal, homogeneous
 /// points within `1e-12` of the hull's scale); where it refuses, the pin's answer is more
@@ -1567,7 +1569,7 @@ pub fn nurbs_derivs() -> PinDefect<(At, bool), Option<Vec<[f64; 3]>>> {
 /// build ([`break_refused`]).
 pub fn nurbs_elevate() -> PinDefect<(At, usize), Option<Hom>> {
     PinDefect {
-        reason: "the pin's A5.9 returns non-positive weights across near-coincident knots",
+        reason: "the pin's A5.9 loses the curve across near-coincident knots",
         applies: Applies::Disagreeing,
         check: |(a, times), r| {
             if let Some(refused) = break_refused(a, r.is_some()) {
@@ -3312,10 +3314,10 @@ pub fn surface_off(got: &Read, want: &tk::Surface<3>) -> f64 {
 }
 
 /// `scx_nurbs_surface::NurbsSurface::elevate`: where scx answers it is within `1e-12` of the
-/// exact elevation (`1e-11` from degree 9, the curve elevation's known error passed through);
-/// where it refuses (`Unstable`, near-coincident knots), the pin's answer has a weight that is
-/// not positive, or is more than `1e-6` from the original surface somewhere (evaluated
-/// exactly: an elevation is the same surface).
+/// exact elevation (`1e-11` from degree 9, kept from when the curve elevation was A5.9's);
+/// where it refuses (`Unstable`, a line's rounding bound past `ELEVATION_ERROR`), the pin's
+/// answer has a weight that is not positive, or is more than `1e-6` from the original
+/// surface somewhere (evaluated exactly: an elevation is the same surface).
 pub fn nurbs_surface_elevate() -> PinDefect<(Raise,), Option<Read>> {
     PinDefect {
         reason: "the pin's A5.9 loses the surface across near-coincident knots, as for curves",

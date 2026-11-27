@@ -161,9 +161,11 @@ impl Gen for Along {
 }
 
 /// An [`Along`] whose result degree is at most 17, the pin's cap. Above it the pin refuses
-/// and scx answers, but A5.9 (`scx-nurbs`'s curve elevation, line by line) is then far from
-/// the exact elevation, up to `1e77` on the degree-15 surfaces here (63 §2.6, NS3): no pin
-/// defect can excuse that, and fixing the curve elevation is outside this crate.
+/// and scx answers. A5.9's knot removal was then up to `1e77` from the exact elevation on
+/// the degree-15 surfaces here (63 §2.6, NS3); `scx-nurbs` now removes knots the stable way
+/// and is checked against the exact curve there by its own truth tests. The pool still
+/// stops at the cap: past it there is no pin answer to compare, and the exact elevation
+/// takes seconds a line.
 #[derive(Clone, Debug)]
 pub struct Raise(pub Edit);
 
