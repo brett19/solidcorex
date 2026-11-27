@@ -19,18 +19,39 @@
 
 use scx_num::budget::{Budget, Stop};
 
+use crate::rounding::{Sum, U, gamma, larger};
+
 /// One rule: the nodes on `[0, 1)` (the centre first, then each `±x`), the Kronrod
 /// weights and the embedded Gauss weights (zero off the Gauss nodes).
 pub(crate) struct Rule {
     nodes: &'static [f64],
     kronrod: &'static [f64],
     gauss: &'static [f64],
+    /// Whether a sample's rounding is read at the centre and the outermost nodes only, not
+    /// at every node (see [`Sample::rounds`]).
+    sparse: bool,
 }
 
 impl Rule {
     /// The integrand evaluations a piece takes.
     const fn evaluations(&self) -> u64 {
         (2 * self.nodes.len() - 1) as u64
+    }
+
+    /// The roundings in the rule's sum of differences from the centre: each difference,
+    /// its product by a weight, the weight's own rounding, and the additions.
+    const fn sum_roundings(&self) -> u32 {
+        (2 * self.nodes.len() + 1) as u32
+    }
+
+    /// Whether the node at index `i` of [`Rule::nodes`] reads the sample's rounding.
+    fn rounds_at(&self, i: usize) -> bool {
+        !self.sparse || i == 0 || i + 1 == self.nodes.len()
+    }
+
+    /// The node nearest the centre, as a fraction of the half width.
+    fn nearest(&self) -> f64 {
+        self.nodes.get(1).copied().unwrap_or(1.0)
     }
 }
 
@@ -50,6 +71,7 @@ pub(crate) const K7: Rule = Rule {
         0.104_656_226_026_467_265_193_823_857_192_073,
     ],
     gauss: &[8.0 / 9.0, 0.0, 5.0 / 9.0, 0.0],
+    sparse: false,
 };
 
 /// The 15-point Gauss-Kronrod rule on `[-1, 1]` and its embedded 7-point Gauss rule.
@@ -84,6 +106,7 @@ pub(crate) const K15: Rule = Rule {
         0.129_484_966_168_869_693_270_611_432_679_082,
         0.0,
     ],
+    sparse: true,
 };
 
 /// The most bisections of one piece.
@@ -149,10 +172,19 @@ impl<'a> Meter<'a> {
 }
 
 /// What an integrand writes at one point: its values and, for each, a bound of their own
-/// error (an inner integral's estimate), integrated beside the values but not judged.
+/// error (an inner integral's estimate), integrated beside the values but not judged; and,
+/// where `rounds` is set, a bound of their rounding.
+///
+/// The rounding is read at every node of [`K7`] and at the centre and the two outermost
+/// nodes of [`K15`] (whose integrand is the costly inner one), and a piece's is its width
+/// times the largest read: the rounding bound is a smooth size (the terms' absolute
+/// values), not a value to resolve, and so is held by its largest over the piece's reach
+/// (72 §14.31).
 pub(crate) struct Sample<'s> {
     pub(crate) value: &'s mut [f64],
     pub(crate) error: &'s mut [f64],
+    pub(crate) rounding: &'s mut [f64],
+    pub(crate) rounds: bool,
 }
 
 /// Where a piece is accepted: `accuracy` relative to the piece's value or to its width's
@@ -184,10 +216,13 @@ where
     }
     let mut stack = vec![(a, b, 0_u32)];
     let mut pieces = 0_u32;
+    let mut sums = [Sum::default(); MAX_COMPONENTS];
+    let mut rounded = [0.0; MAX_COMPONENTS];
     let mut centre = [0.0; MAX_COMPONENTS];
     let mut centre_err = [0.0; MAX_COMPONENTS];
     let mut at = [0.0; MAX_COMPONENTS];
     let mut at_err = [0.0; MAX_COMPONENTS];
+    let mut at_round = [0.0; MAX_COMPONENTS];
     while let Some((lo, hi, depth)) = stack.pop() {
         pieces += 1;
         if pieces > MAX_PIECES {
@@ -200,7 +235,11 @@ where
         let mut gauss = [0.0; MAX_COMPONENTS];
         let mut size = [0.0; MAX_COMPONENTS];
         let mut inner = [0.0; MAX_COMPONENTS];
-        sample(&mut f, mid, n, &mut centre, &mut centre_err, meter)?;
+        let mut spread = [0.0; MAX_COMPONENTS];
+        let mut jump = [0.0; MAX_COMPONENTS];
+        let mut read = (&mut centre, &mut centre_err, &mut at_round);
+        sample(&mut f, mid, n, &mut read, true, meter)?;
+        let mut most = at_round;
         let w0 = rule.kronrod.first().copied().unwrap_or(0.0);
         for ((s, i), (v, e)) in size
             .iter_mut()
@@ -214,25 +253,34 @@ where
         for (i, &x) in rule.nodes.iter().enumerate().skip(1) {
             let wk = rule.kronrod.get(i).copied().unwrap_or(0.0);
             let wg = rule.gauss.get(i).copied().unwrap_or(0.0);
+            let rounds = rule.rounds_at(i);
             for side in [-1.0, 1.0] {
-                sample(
-                    &mut f,
-                    mid + side * x * half,
-                    n,
-                    &mut at,
-                    &mut at_err,
-                    meter,
-                )?;
+                let mut read = (&mut at, &mut at_err, &mut at_round);
+                sample(&mut f, mid + side * x * half, n, &mut read, rounds, meter)?;
+                if rounds {
+                    for (m, r) in most.iter_mut().zip(&at_round).take(n) {
+                        *m = larger(*r, *m);
+                    }
+                }
                 let sums = kron.iter_mut().zip(gauss.iter_mut()).zip(size.iter_mut());
                 let reads = at.iter().zip(&at_err).zip(&centre).zip(inner.iter_mut());
-                for (((k, g), s), (((v, e), c), inn)) in sums.zip(reads).take(n) {
+                let abs = spread.iter_mut().zip(jump.iter_mut());
+                for ((((k, g), s), (((v, e), c), inn)), (sp, j)) in sums.zip(reads).zip(abs).take(n)
+                {
                     let off = v - c;
                     *k += wk * off;
                     *g += wg * off;
                     *s += wk * v.abs();
                     *inn += wk * e;
+                    *sp += wk * off.abs();
+                    *j = larger(off.abs(), *j);
                 }
             }
+        }
+        // A sample's value or error that is not finite makes its size or error sum so.
+        let sizes = size.iter().zip(&inner).take(n);
+        if !sizes.fold(true, |ok, (s, i)| ok & s.is_finite() & i.is_finite()) {
+            return Err(Fail::NotFinite);
         }
         let share = (hi - lo) / width;
         let mut accepted = true;
@@ -251,10 +299,28 @@ where
             }
         }
         if accepted {
+            // The piece's rounding (72 §14.31): the samples' own, the centre's doubling, the
+            // sum and the half width's product (`gamma(3)` of the value), the rule's sum of
+            // differences, and where the nodes fall. A node lands within `place` of where
+            // the rule puts it on `[lo, hi]` (the centre's and half width's rounding, the
+            // product's and the sum's) and moves its sample by the slope there times that:
+            // to first order the slope at a node is its difference from the centre over
+            // their distance, and at the centre the largest such, each at most over the
+            // nearest node's distance. The half width's own rounding is the value's.
+            let place = 2.0 * U * (mid.abs() + half);
+            let g_sum = gamma(rule.sum_roundings());
             for c in 0..n {
-                if let Some(v) = value.get_mut(c) {
-                    *v += get(&kron, c);
+                let k = get(&kron, c);
+                let sp = get(&spread, c);
+                if let Some(s) = sums.get_mut(c) {
+                    s.add(k);
                 }
+                let rounding = 2.0 * half * get(&most, c)
+                    + gamma(3) * k.abs()
+                    + half * g_sum * sp
+                    + place * (sp + w0 * get(&jump, c)) / rule.nearest();
+                let sofar = get(&rounded, c);
+                put(&mut rounded, c, sofar + rounding);
                 if let Some(e) = error.get_mut(c) {
                     *e += get(&gauss, c) + half * get(&inner, c);
                 }
@@ -267,29 +333,53 @@ where
         stack.push((mid, hi, depth + 1));
         stack.push((lo, mid, depth + 1));
     }
+    // The pieces' compensated sum is added once: its bound, and the addition's rounding.
+    for (c, s) in sums.iter().enumerate().take(n) {
+        if let Some(v) = value.get_mut(c) {
+            *v += s.value();
+            if let Some(e) = error.get_mut(c) {
+                *e += get(&rounded, c) + s.bound() + gamma(1) * v.abs();
+            }
+        }
+    }
     Ok(())
 }
 
-/// `f` at `x` into `value` and `error`, cleared first and checked finite.
+/// The value, error and rounding one sample is read into.
+type Read<'r> = (
+    &'r mut [f64; MAX_COMPONENTS],
+    &'r mut [f64; MAX_COMPONENTS],
+    &'r mut [f64; MAX_COMPONENTS],
+);
+
+/// `f` at `x` into `read`, cleared first and checked finite; its rounding only if `rounds`.
 fn sample<F>(
     f: &mut F,
     x: f64,
     n: usize,
-    value: &mut [f64; MAX_COMPONENTS],
-    error: &mut [f64; MAX_COMPONENTS],
+    (value, error, rounding): &mut Read<'_>,
+    rounds: bool,
     meter: &mut Meter<'_>,
 ) -> Result<(), Fail>
 where
     F: FnMut(f64, Sample<'_>, &mut Meter<'_>) -> Result<(), Fail>,
 {
+    // Whole arrays, so the clearing is straight-line; past `n` stays zero.
     value.fill(0.0);
     error.fill(0.0);
-    let (v, e) = (
-        value.get_mut(..n).unwrap_or(&mut []),
-        error.get_mut(..n).unwrap_or(&mut []),
-    );
-    f(x, Sample { value: v, error: e }, meter)?;
-    if value.iter().chain(error.iter()).all(|v| v.is_finite()) {
+    if rounds {
+        rounding.fill(0.0);
+    }
+    let out = Sample {
+        value: value.get_mut(..n).unwrap_or(&mut []),
+        error: error.get_mut(..n).unwrap_or(&mut []),
+        rounding: rounding.get_mut(..n).unwrap_or(&mut []),
+        rounds,
+    };
+    f(x, out, meter)?;
+    // The values and errors are checked by the piece's sums of their sizes (see
+    // [`integrate`]); a rounding is read only where it is reported.
+    if !rounds || rounding.iter().all(|v| v.is_finite()) {
         Ok(())
     } else {
         Err(Fail::NotFinite)
@@ -346,13 +436,15 @@ mod tests {
         }
     }
 
-    /// A constant is integrated exactly, whatever the weights' rounding (pin #15021).
+    /// A constant is integrated exactly, whatever the weights' rounding (pin #15021), and
+    /// its stated error is the few roundings of the arithmetic's size that the rules'
+    /// difference cannot see (research 72 §14.31): no longer zero, on purpose.
     #[test]
     fn a_constant_is_exact() {
         for rule in [&K7, &K15] {
             let (v, e, _) = run(rule, (0.0, 100.0), 1e-12, |_| 200.0);
             assert_eq!(v, 20000.0);
-            assert_eq!(e, 0.0);
+            assert!(e > 0.0 && e <= 8.0 * f64::EPSILON * v, "{e}");
         }
     }
 

@@ -12,6 +12,7 @@ publish.workspace = true
 scx-brep = { path = "../scx-brep" }
 scx-mass = { path = "../scx-mass" }
 scx-num = { path = "../scx-num" }
+scx-nurbs = { path = "../scx-nurbs" }
 
 [dev-dependencies]
 scx-make = { path = "../scx-make" }
