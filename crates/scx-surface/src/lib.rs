@@ -61,6 +61,7 @@ mod cylinder;
 mod edit;
 mod enclose;
 mod error;
+mod gap;
 mod hull;
 mod intersect;
 mod invert;
@@ -80,6 +81,10 @@ pub use cylinder::Cylinder;
 pub use edit::UvMap;
 pub use enclose::Along;
 pub use error::{Size, SurfaceError};
+pub use gap::{
+    Aim, Bracket, GapError, Pending, Short, curve_curve_gap, curve_surface_gap, pcurve_edge_gap,
+    point_curve_gap, vertex_curve_gap,
+};
 pub use hull::{Hull, Hulls};
 pub use intersect::{Contact, CurveSurfaceHit, intersect_curve};
 pub use invert::{Closest, Foot, Inversion};
