@@ -250,6 +250,25 @@ pub(crate) fn reference(mid: Point3, size: f64) -> Point3 {
     Point3::new(r(mid.x), r(mid.y), r(mid.z))
 }
 
+/// The coordinates' rounding (`eps` of the largest, over the size) a piece's difference of
+/// rules cannot go below, times a margin. Measured: sweeping the accuracy over the generated
+/// kinds at 1e4, 1e6 and 1e8, the step control gave up at a tenth of the accuracy up to 0.32
+/// of `eps far / size` and converged from 1.0; 8 is eight times the largest seen.
+const COORD_ROUNDINGS: f64 = 8.0;
+
+/// The relative accuracy the coordinates of a thing in the box `min`..`max`, of longest side
+/// `size`, can give: their rounding over the size. Zero for a box at the origin.
+pub(crate) fn reachable(min: Point3, max: Point3, size: f64) -> f64 {
+    let far = [min.x, min.y, min.z, max.x, max.y, max.z]
+        .into_iter()
+        .fold(0.0_f64, |m, c| m.max(c.abs()));
+    if size > 0.0 && far.is_finite() {
+        COORD_ROUNDINGS * f64::EPSILON * far / size
+    } else {
+        0.0
+    }
+}
+
 /// The pin's area estimate of a box: half its surface, the larger of a face's projections.
 fn area_estimate(sides: Vec3) -> f64 {
     let a = sides.x * sides.y + sides.y * sides.z + sides.z * sides.x;
@@ -347,11 +366,53 @@ impl Inner<'_> {
     }
 }
 
+/// The evaluations a first attempt may take where the coordinates' rounding may be what
+/// stops it: a face that converges takes at most tens of thousands (the costliest in the
+/// tests, a sphere's lunes at 1e-9, 50,000 in all, a body of ten faces), the nested bisection of one that does
+/// not is bounded only by 100,000 pieces a call, two deep (see [`integrate`]).
+pub(crate) const FIRST_WORK: u64 = 200_000;
+
 /// The face's `set` integrals about its reference, each piece held to `accuracy / 10`.
+///
+/// Where the coordinates' own rounding (`eps` of the distance from the origin, over the
+/// face's size: [`reachable`]) is above that, the integration may be unable to meet it: a
+/// piece's difference of rules is the rounding's, however it is cut. Then the first attempt
+/// is made as always but with a bound on the work it may take; if it gives up
+/// (`StepControl`) the face is integrated again with each piece held to the rounding, and
+/// the rounding times the face's scale is added to the stated error. A request the
+/// coordinates allow never reaches the second attempt and its result is the same bits as
+/// without it.
 pub(crate) fn integrate(
     face: Face<'_>,
     set: Set,
     accuracy: f64,
+    meter: &mut Meter<'_>,
+) -> Result<FaceIntegral, MassError> {
+    let noise = match face.bounding_box() {
+        Some(b) => reachable(b.min(), b.max(), b.max_length()),
+        None => 0.0,
+    };
+    if noise <= accuracy / 10.0 {
+        return attempt(face, set, accuracy / 10.0, 0.0, meter);
+    }
+    meter.allow(Some(FIRST_WORK));
+    let first = attempt(face, set, accuracy / 10.0, 0.0, meter);
+    meter.allow(None);
+    match first {
+        Err(MassError::Defect(MassDefect::StepControl { .. })) => {
+            attempt(face, set, noise, noise, meter)
+        }
+        done => done,
+    }
+}
+
+/// One attempt of [`integrate`]: each piece held to `held`, `reported` times the scale added
+/// to the error.
+fn attempt(
+    face: Face<'_>,
+    set: Set,
+    held: f64,
+    reported: f64,
     meter: &mut Meter<'_>,
 ) -> Result<FaceIntegral, MassError> {
     let id: FaceId = face.id();
@@ -421,7 +482,7 @@ pub(crate) fn integrate(
         set,
         reference: reference - Point3::new(0.0, 0.0, 0.0),
         base,
-        accuracy: accuracy / 10.0,
+        accuracy: held,
         density,
         v_breaks: surface_breaks(surface, Dir::V, v_lo, v_hi),
     };
@@ -446,7 +507,7 @@ pub(crate) fn integrate(
                 *f = s * share;
             }
             let tol = Tol {
-                accuracy: accuracy / 10.0,
+                accuracy: held,
                 floor: floor.get(..n).unwrap_or_default(),
             };
             kronrod::integrate(
@@ -499,7 +560,7 @@ pub(crate) fn integrate(
                     *f = s * share;
                 }
                 let tol = Tol {
-                    accuracy: accuracy / 10.0,
+                    accuracy: held,
                     floor: floor.get(..n).unwrap_or_default(),
                 };
                 kronrod::integrate(
@@ -561,6 +622,11 @@ pub(crate) fn integrate(
             size,
             &mut error,
         );
+    }
+    if reported > 0.0 {
+        for (e, s) in error.iter_mut().zip(&scale).take(n) {
+            *e += reported * s;
+        }
     }
     Ok(FaceIntegral {
         reference,

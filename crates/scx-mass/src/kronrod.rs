@@ -113,16 +113,35 @@ pub(crate) enum Fail {
 pub(crate) struct Meter<'a> {
     budget: &'a mut Budget,
     stop: &'a Stop,
+    /// The evaluations a first attempt may take before it gives up, and what it has taken.
+    allowance: Option<u64>,
+    spent: u64,
 }
 
 impl<'a> Meter<'a> {
     pub(crate) fn new(budget: &'a mut Budget, stop: &'a Stop) -> Self {
-        Self { budget, stop }
+        Self {
+            budget,
+            stop,
+            allowance: None,
+            spent: 0,
+        }
+    }
+
+    /// Lets the work from now on take at most `work` evaluations before it gives up with
+    /// [`Fail::Step`]; `None` lifts the limit.
+    pub(crate) fn allow(&mut self, work: Option<u64>) {
+        self.allowance = work;
+        self.spent = 0;
     }
 
     /// Charges `work` after checking the stop flag.
     pub(crate) fn charge(&mut self, work: u64) -> Result<(), Fail> {
         self.stop.check().map_err(|_| Fail::Cancelled)?;
+        self.spent = self.spent.saturating_add(work);
+        if self.allowance.is_some_and(|a| self.spent > a) {
+            return Err(Fail::Step);
+        }
         self.budget
             .charge(work)
             .map_err(|e| Fail::Exhausted(e.limit))

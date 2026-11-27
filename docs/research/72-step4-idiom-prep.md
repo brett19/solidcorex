@@ -413,7 +413,7 @@ pub enum MassError {
 |---|---|---|
 | MA1 | `scx-mass` crate: `MassSpec`, `Mass`, `MassError`; face boundary integrals by the pin's method (Gauss-Kronrod with `scx_algo::ode`) over `&Brep`, about the face's own reference with the shift; `volume`, `area`, `mass`, `face_area`, `edge_length`; ports `issue_2091` (9), `edge_properties_hold_their_accuracy` (5), `precise_area_holds_its_accuracy` (1), `issue_383` (1), `issue_16735_volume_moves` (5) and properties' 23 inline tests where they test behaviour, not pin internals | CX1, T9 |
 | MA2 | gap closure only for uses with a recorded accuracy; test with a `broken`-style body whose trims carry an accuracy | MA1 |
-| MA3 | per-face memo in `Scratch`, keyed by the face record's bits, its sense and the accuracy; the work rule; a test that memo and recompute are bit-identical across a Boolean that keeps faces | MA1, BO4 |
+| MA5 | per-face memo in `Scratch`, keyed by the face record's bits, its sense and the accuracy; the work rule; a test that memo and recompute are bit-identical across a Boolean that keeps faces | MA1, BO4 |
 | MA4 | `volume_sign` from `enclosure.rs` over `&Brep`; ports `issue_2972` (19) and enclosure's 16 inline tests | MA1 |
 
 ## 3. `scx-bodyq`: classification
@@ -1173,7 +1173,7 @@ then the mass memo, then a cheap pair prefilter.
 | 1 | primitives with known topology, no stitch and no ray fire | make, MK1-MK3 | each region is the one the geometry gives; every fin is on the side its region needs | `contract`, T9 volumes, T10 points (DT2) |
 | 2 | uv-box reject before the loop walk | brep (BR4 cells, built), used by bodyq BQ1 and boolean BO2 | the box encloses the trimmed loop: outward-rounded over the pcurve's enclosure, not samples; a loop across a periodic seam gets an unwrapped box or two boxes (66 §10.3) | 66 §10.3's cases: a loop across a cylinder's seam, a hole whose box touches to the last bit, a near-touching loop outside |
 | 2 | per-face loop cache for the Boolean | brep cells (BR4: the boundary tree filled on first read) | cells are keyed and invalidated by the face record (BR4), never by an ambient id | BR4's cell tests; bit-identical repeat in DT3 |
-| 3 | per-face mass memo | mass, MA3 | the face's own reference and error scale (66 §13.2); keyed on the face record's bits, its sense and the accuracy; a memo hit charges the recorded work | MA3's memo-against-recompute test; T9 truth once |
+| 3 | per-face mass memo | mass, MA5 | the face's own reference and error scale (66 §13.2); keyed on the face record's bits, its sense and the accuracy; a memo hit charges the recorded work | MA3's memo-against-recompute test; T9 truth once |
 | 3 | gap closure only where a gap is recorded | mass, MA2 | a use without recorded accuracy has an exact pcurve (BR1, exact pcurves rows); no step-4 operation records one except a merge that moved a point | MA2's accuracy-carrying body; T9 |
 | 4 | cheap pair prefilter | boolean, BO1 | the face boxes enclose (BR4: grown by accuracy and resolution); no allocation per call; one finiteness check per box | DT3's pairs-tried count against the pin's 572 (gear_60) and 288 (plate_12), side-channel only |
 | 5 | trim-deviation bound carried with copied trims | boolean, BO3 | a copied face keeps its pcurve bits, so its recorded accuracy (none, when exact) is the same record | BO3: copied faces' records equal by bits |
@@ -1320,13 +1320,13 @@ places are noted.
 ```
 CX1 ──┬─> MA1 ─┬─> MA2
       │        ├─> MA4 ──> CK1
-      │        └─> MA3 (after BO4)
+      │        └─> MA5 (after BO4)
       ├─> MK1 ─┬─> MK2 ──> TS1 ──> TS2 ──> TS3
       │        └─> MK3 (after PL1)
       ├─> BQ1 (after MK2, T10)
       └─> BO1 (after MK1, BQ1) ──> BO2 ──┬─> BO3 ──> BO4 (with BQ2) ──┬─> BO6 ──> PF1
                                          │                           ├─> BO7 (after D5)
-                                         └─> BO5                     └─> MA3
+                                         └─> BO5                     └─> MA5
 T9, T10, T11, T12, T13 (testkit) ──> DT1 ──> DT2 ──> DT3
 PL1 (after T11)
 ```
@@ -1341,7 +1341,7 @@ PL1 (after T11)
 | T13 | testkit: mesh invariants oracle | — | Sonnet |
 | MA1 | mass | CX1, T9 | Opus |
 | MA2 | mass | MA1 | Sonnet |
-| MA3 | mass | MA1, BO4 | Opus |
+| MA5 | mass | MA1, BO4 | Opus |
 | MA4 | mass | MA1 | Opus |
 | PL1 | planar | T11 | Opus |
 | MK1 | make | CX1, T9 | Sonnet |
@@ -1928,7 +1928,7 @@ pub struct BlockFaces { pub bottom: FaceId, pub top: FaceId, pub sides: [FaceId;
 - **The volume sign of a face is `[back solid] - [front solid]`** from its shells' regions, so a void's walls, a cavity and a mirror count without a separate orientation step; a face between two solids or two voids is skipped. The area counts every face not between two solids (sheets and void walls included). This is the region-based sign of a finished `Brep`, not MA4's certified `volume_sign`, which stays MA4's.
 - **No `OpenShell` refusal.** A finished `Brep` cannot hold a face whose sides disagree or a solid region that is not closed (`finish` refuses `SidesDisagree`), so there is nothing to refuse; a sheet has its area and zero volume.
 - **Joins and windings.** Point uses (poles) are skipped and the next piece is joined by a straight uv path; a gap of whole periods (a seam) is no path. A remaining gap is joined by a straight path in `face::join`, the hook where MA2 closes onto the edge's curve for uses with a recorded accuracy. A loop whose v winds by more than half a period (`VWrap`), or loops whose net u winding exceeds half a period (`NetWinding`, a face round a closed spline with no seam trim), are `Unsupported`, not guessed.
-- **`Scratch` is taken and unused** until MA3's memo.
+- **`Scratch` is taken and unused** until MA5's memo.
 - **Not ported:** the pin's banding of a long trim into twelve strips (`MIN_BANDS`, only a split of the work; the step control bisects where needed), the edge tube terms of `edge_properties` (no caller), `PropertyAttributes` (per-entity attribute masses, no caller), `AreaAbout`, and the prepared (non-mutating) twins (every read here takes `&Brep`).
 
 **Tests** (25: 8 unit, 17 integration; about 10 s in debug, most of it the knot-span and random-frame cases):
@@ -2266,6 +2266,146 @@ The 19 recipes the classification entry selects without a mismatch on their poin
 - *Mass is asked and judged at `1e-9` relative* (`SCX_ACCURACY`), with T12's slack as for the pin. scx's error estimate is not added to the allowance. For: §8.1 asks for 1e-9, and an estimate that exceeded it would be scx's failure. Against: none. A miss would show as a finding.
 - *Refusals map by meaning.* A cone's base and top radii map to truth's `Radius`. The torus major radius has no truth dimension, so a refusal on it never matches. `ZeroRadii` matches `NoBody`, and `HornTorus` matches the horn-torus `Unsupported`. A `PlanarError` from the extrusion profile is `Refused(Profile)` and matches no truth outcome. For: truth names the quantity, not the parameter. Against: a refused radius on the wrong end of a cone would pass. No recipe has radii that would tell the two ends apart.
 
+### 14.14 BQ1 as built (11-27)
+
+New crate `crates/scx-bodyq`, placed last in `layers.txt` (after `scx-tess`) and after `scx-tess` in the workspace. Dependencies: `scx-brep`, `scx-curve`, `scx-nurbs` (for `Approach`), `scx-num`, `scx-surface`; dev-dependencies `scx-make` and `scx-testkit` with `bodies`. Public API:
+
+```rust
+pub fn classify_point(body: &Brep, p: Point3, budget: &mut Budget, stop: &Stop) -> Result<PointClass, BodyqError>;
+#[non_exhaustive] pub enum PointClass { In(RegionId), On(Entity) }
+pub const RAYS: [Vec3; 13];
+pub enum BodyqError { Refused(BodyqRefusal), Unsupported(BodyqUnsupported), Exhausted { limit }, Cancelled, Defect(BodyqDefect) }
+pub enum BodyqRefusal { NotFinite }
+pub enum BodyqUnsupported { Nurbs { at: Entity }, NonManifold { at: Entity } }
+pub enum BodyqDefect { NoFaceBox { face }, NoUvBox { face }, Surface { face, .. }, NoNormal { at }, Ray, NoBoundary }
+// each with kind() and name(); From<Exhausted> and From<Stopped>
+```
+
+**What it does.** The three steps of §12.4 row 2, all reads of `&Brep`:
+
+1. **Fast paths.** A body with no box (no faces) and a point outside the body's box answer `In(OUTSIDE)` with no work: every box is grown by its entity's accuracy and the resolution, so a point outside it is on nothing.
+2. **On.** The faces whose box holds `p` (`faces_meeting`), then their edges, then those edges' vertices. Each is projected by its closed form (`Surface::invert` over the face's uv box, `Curve::invert` over the edge's interval). Coincidence is `coincident(resolution, accuracy)` of that entity. A vertex wins over an edge, an edge over a face; within a dimension, the lowest id. A face counts only when its foot's uv is `Inside` it. A foot only `Near` the face's boundary is `On` through the edge there, which is within coincidence on a valid body, since the face's accuracy covers its edges.
+3. **Rays.** Each ray runs from `p` to `1.0625` times the farthest corner of the body's box, plus 1 mm. The faces it meets are taken from `faces_meeting` of the ray's box, slab-tested and sorted by where the ray enters their boxes (then id). Each is intersected by `intersect_curve` with the ray as a `Line`. The *horizon* is the nearest hit's `t` plus its coincidence, and faces entering past it are not read. The nearest hit is **clean** when all of these hold:
+   - it is a `Crossing`, its uv is `Inside`, it lies farther than coincidence from `p`, and `|n . d| > GRAZE` (1e-6);
+   - no other hit lies within coincidence of it;
+   - it is not an `Overlap`;
+   - no edge or vertex of a face reached comes within coincidence of the segment up to the horizon. A vertex is tested by segment distance. An edge is tested by `intersect_curve` of the edge against a thin `Cylinder` of radius `c` about the ray, `[0, 2 pi c] x [0, horizon]`.
+
+   A clean hit gives the region of the face's shell on the start's side: `Back` when `n . d > 0`. A ray with no hit gives the outside. The first clean ray in table order decides.
+4. **Fallback.** No ray is clean, so the nearest boundary point decides. The search window doubles from `max_length / 64` of the body's box until the nearest candidate lies within it. The candidates are:
+   - face feet with uv `Inside`;
+   - edge feet inside the interval;
+   - vertices.
+
+   Ties are ranked by distance, then dimension (vertex, edge, face), then raw id. How the nearest point decides:
+   - **At a face:** the sign of `(p - q) . n`.
+   - **At an edge:** the sum of its fin faces' normals at their feet of `q`, each turned toward the first region.
+   - **At a vertex:** the angle-weighted pseudonormal (Baerentzen and Aanaes). For each corner of each face round the vertex, the angle is `atan2((t_out x -t_in) . n, t_out . -t_in)`, mapped into `(0, 2 pi]`. Collapsed edges are skipped to the next real use. At a cone's apex, where there is no normal, the mean of the normals at four rulings is used.
+
+   The regions round the point:
+   - one region: that region;
+   - two: each face must have one on each side;
+   - otherwise `Unsupported { NonManifold }`.
+
+**Work.** One unit of budget per inversion. `intersect_curve` charges its own (two per isolated piece). `stop` is checked before each face and edge. The cells `scx-brep` fills on first read (box tree, boundary trees) are not charged, so the same body and point charge the same work, warm or cold (tested).
+
+**Decisions, with cases.**
+- **The ray table: 13 directions from a seeded search**, maximising the worst of three margins:
+  - at least 10.2 degrees from every coordinate plane and every diagonal plane (`x = +-y`, `y = +-z`, `z = +-x`);
+  - at least 15.5 degrees from every axis, face diagonal and body diagonal;
+  - every pair at least 25.6 degrees from one line, so none are opposite.
+
+  For: bodies are drawn in frames, so their faces, edges and symmetry planes lie in those planes and along those lines. The rhombic dodecahedron (§12.4's example) defeats every axis and diagonal ray from its centre, and beats none of these. The test builds it and checks both. Against: a body drawn in a turned frame can still put an edge on one of these rays. Kept: then that ray is unclean and the next decides. A fixed table keeps the answer and the work deterministic; a random table would not.
+
+  The table is normalised to the last bit, and the unit length is tested.
+- **The clean rule includes the edge tube**, not only the uv tests. For: at an edge, both faces' uv tests can place the crossing just `Outside`, a crack the ray slips through. A crossing `Inside` but within coincidence of an edge may also have its face end just past it. Either would be a wrong region read with confidence. Against: one more intersection per edge of the faces reached, and an unclean ray where a careful reading would have decided. Kept: the cost is bounded by the faces before the horizon (MEASURED below), and an unclean ray only moves on to the next.
+- **`GRAZE = 1e-6` on `|n . d|`.** Below it the sign of `n . d` is not read. For: a hit this shallow is a crossing only by the solver's arithmetic. Against: it is an absolute bound on a unit dot product, so it is not tied to the resolution. Kept: the table keeps rays 10 degrees from the planes faces are drawn in, so a real body's faces are graze-free for most rays. The pin's grazing cases (4.9999 on r5: clean; 4.999 999: within coincidence, unclean) both hold.
+- **`Near` is not `On` without an edge** (§12.4 row 2, as ruled). The first build counted a `Near` foot as `On` the face; it now follows the ruling. On a valid body the two agree, because the edge is then within coincidence and wins first. Against the ruling: on a body whose edge and trim disagree by more than coincidence, a point there falls through to the rays. Kept: that body is invalid, which `finish` refuses.
+- **Fallback limits.** The fallback takes a face foot only when its uv is `Inside`, and an edge foot only inside its interval. Otherwise the nearest point is taken to be on the boundary (an edge or a vertex). That holds when the closed-form foot is the surface's or curve's only local minimum over the face. Two cases are not covered:
+  - a trimmed torus face whose nearest local minimum lies inside the trim while the global one lies outside;
+  - an ellipse arc with an interior local minimum while the global one lies outside the interval.
+
+  In both, the fallback reads a boundary point that is not the nearest, and its side can be wrong. Step 4's made bodies have whole tori (one face, no trim) and no ellipse edges, and the fallback runs only when all 13 rays are unclean. Kept, as an open question for when the Boolean cuts tori and cylinders.
+- **The cone apex's normal is the mean over four rulings** at the uv box's middle `v`. For: the cone's normal is constant along a ruling, so the mean of four rulings a quarter turn apart points along the axis, as the normal cone round the apex does. Against: on a cone face that does not go round the full turn (after a Boolean), four rulings over its `u` span are a sample, not the whole cone. Kept: step 4's cones go round the full turn. The test reads points just above and below the apex.
+- **Wire edges and lone vertices are ignored.** They bound no face, so the face-led candidate lists never name them. For: step 4 has none; a wire neither separates regions nor bounds one. Against: a point on a wire edge is `In`, not `On`. Kept, as a scope limit that `PointClass` can extend later (it is `non_exhaustive`).
+- **Placed after `scx-mass`.** It reads `scx-surface`'s intersection, and the Boolean (BO1, BO4) is its first caller. Nothing below it depends on it.
+- **Rays tried in order until one is clean**, not a vote. Every clean ray gives the same region; the test checks every one on every testkit kind, over 1,000 points.
+
+**Pin tests.**
+- **`query/brep.rs` `notify_named_primitive_box_builds_nonempty_trees_and_classifies_interior` (`:2439`):** the unit box's (0.5, 0.5, 0.5) is in material and (2, 2, 2) is outside, both ported (`the_unit_box_inside_and_out`). The tree-count half has no counterpart: the cells are `scx-brep`'s.
+- **The ray-hit tests (`:1847-2275`)** are ported as one-ray outcomes through the crate-private `cast` (`src/tests.rs`):
+  - entering 1e-3 from a 100-cube's edge is clean;
+  - the nearest hit decides, from outside, from the axis, and on the bar into the post;
+  - seam, pole, edge and corner hits are unclean;
+  - a ray 5e-4 past a face is clean (it meets nothing);
+  - a ray 1e-6 past a face is unclean (its edges are within coincidence);
+  - a ray along a face is unclean;
+  - the shallow and close-pair cases are clean;
+  - the thin cylinder r4e-4 and the torus hole are clean;
+  - the cone apex up the axis is unclean.
+
+  The pin's "each face there hit once" becomes "no hit there decides", and its hit lists and counts have no counterpart: the method does not report hits.
+- **`brep_query_cache_lifetime`:** the six fixed points' in-material booleans `[T, T, T, T, F, F]` are ported, on the bar into the post built through `Draft` (the test helper `bar_into_post`). Added: the tangent rulings at `x = 40` are `On`, (36, 8, 10) under the post's wall is material, and 600 seeded points agree with T10. **Not ported, no counterpart:** the editing-state tests (the trims seen while editing is on, the open-loop refusal mid-edit, a cache reused across an edit). `classify_point` takes a finished `&Brep`, so there is no editing state to classify during.
+- **Hand-built `bar_into_post`.** There is no Boolean yet, so the union is written as its faces: 10 vertices, 15 edges, 7 faces. The bar's sides touch the post along its rulings, which gives tangent contacts at `x = 40, y = 0` and `y = 16`. To be replaced by `scx-boolean`'s union (BO4) when it lands, as a cross-check.
+
+**Other tests.**
+- The make primitives (block, cylinder, three cones, sphere, torus) at the world frame, a turned frame and a far frame (~1e4 mm), each against its T10 leaf: 1,000 box points each, and T10's probes.
+  - A probe at offset 0 must be `On`.
+  - A probe two coincidences clear of every feature must be `In`.
+  - Every answer must agree with T10's `side`.
+- Every testkit kind (seeds 0-2, sizes 1-2): 1e-3 off each face's middle, each side is that face's shell's region.
+- The fallback alone agrees with T10 on the primitives, and with `classify_point` on every kind. It reads edges and vertices right: off block corners and edges, at the cone apex, at the sphere poles, and at the cylinder's rim and seam.
+- Determinism: the same answer and the same work on repeat.
+- Refusals: NaN gives `NotFinite`; a set stop gives `Cancelled`; `Budget::new(1)` gives `Exhausted`. A point outside the box costs nothing (`Budget::new(0)`).
+
+Removed tests: none (new crate).
+
+**Measurements.** Throwaway timer, not committed; release build, 2,000 seeded points in each body's box after 20 warm-up, the same LCG point set on both sides; the pin's `BrepQuery::point_3d_classify` with boundary intersections, query built once; two runs each on a loaded machine.
+
+| body | bodyq, us per query | pin, us per query | ratio |
+|---|---:|---:|---:|
+| block 40 x 16 x 10 | 0.70-1.10 | 5.2-7.3 | about 6x |
+| cylinder r8 h20 | 2.7-3.1 | 432-466 | about 150x |
+| sphere r5 | 1.51 | 1,766-1,818 | about 1,200x |
+| torus 10, 2 | 2.5 | 3,297-3,663 | about 1,400x |
+| bar into post (hand-built here, the pin's own `boolean_union` there) | 1.58-1.59 | 375-381 | about 240x |
+
+The work charged per query on these is 2.0 to 5.8 units, a few inversions and one or two ray intersections.
+
+Against body size, on the testkit kinds:
+
+| kind | faces | us per query | work per query |
+|---|---|---|---|
+| Block | 6 to 6,144 | 1.8 to 27 (26.5 on the repeat) | 5.6 to 3.0 |
+| Sphere (lunes) | 1 to 32 | 1.5 to 25 | 3.5 to 45 |
+| Torus | 1 to 1,024 | 2.9 to 10 | 5.5 to 7.3 |
+| Cylinder | 3 to 34 | 3.1 to 4.8 | 4.8 to 11 |
+| Holed | 10 to 41 | 2.6 to 6.5 | 6.7 to 6.9 |
+
+The work is flat on blocks; the time grows with faces at about 4 ns per face. That is the `faces_meeting` walk over the ray's box: a long ray's box meets many face boxes before the slab test rejects them. On the sphere's lunes the work grows with the lune count: every lune's box holds the poles and most rays enter all of them before the horizon. Neither is a regression against the pin, which is slower on every row. Both are candidates for PF1:
+- a ray-ordered walk of the box tree in place of `faces_meeting` of the ray's box;
+- a tighter lune box.
+
+Added work against the pin: none. The pin builds trim trees and fires up to six rays through its topology solver; this fires one clean ray in the common case, and builds nothing.
+
+**Deviations from 72.**
+- None in the method.
+- The signature is §12.4 row 2's.
+- `PointClass` is `non_exhaustive`.
+- `BodyqDefect::Ray` names a ray the line constructor refused (a zero-length or non-finite ray, which cannot happen from the table).
+
+**Open questions.**
+1. The fallback's local-minimum limit on trimmed tori and ellipse arcs (above): BO-era bodies need a bounded search there, or a proof that some ray is always clean off a measure-zero set.
+2. Wire edges and lone vertices, if a caller needs them.
+3. Whether `GRAZE` should scale with the face's curvature and the resolution, not stay absolute.
+
+**Proposed 04 row.** "`scx-bodyq` (BQ1): `classify_point(&Brep, p, &mut Budget, &Stop) -> Result<PointClass, BodyqError>`, `PointClass::{In(RegionId), On(Entity)}`, no Unknown. The steps are:
+- On, by closed-form feet: vertex, then edge, then face (uv `Inside` only), then lowest id.
+- The first clean ray of a fixed 13-direction general-position table: a crossing, `Inside`, past coincidence, `|n . d| > 1e-6`, alone within coincidence, and no edge or vertex within coincidence of the ray to the horizon.
+- Else the nearest boundary point's face side, or the angle-weighted pseudonormal at an edge or vertex.
+
+Answers and work are deterministic and independent of which clean ray decides. Change if: a body defeats every ray off a measure-zero set, or a trimmed torus or ellipse arc puts a nearer interior local minimum under the fallback."
+
 ### 14.15 TS1 as built (11-27)
 
 New crate `crates/scx-tess` (dependencies `scx-brep`, `scx-curve`, `scx-num`, `scx-nurbs`, `scx-surface`; dev-dependency `scx-make`). Public API:
@@ -2373,3 +2513,30 @@ About 25-30 ns per point on conic edges. NURBS (unit tests' curves): 0.1-1.5 ms 
 **Open questions.** (1) Whether a vertex's or an edge's recorded accuracy alone (no use bound) should close its uses (above). (2) The 1.1e-4 stated against a miss of 0 on the cylinder: a tighter tube bound needs the strip's width per use, which the use's bound already is; what would tighten it is the divergence of the field over the actual swept volume, not `c R^(d-1)`. (3) `loose` moves no pcurve of a sphere's lunes or a torus's patches (angle lines along `v`, and the `finish` pole and seam rules refuse larger offsets); a closure on a pole needs a producer that records one.
 
 **Proposed 04 row.** "`scx-mass` (MA2): a use whose pcurve records an accuracy is closed onto its edge's curve by a strip, `E(t)` against `S(p(t))` at the same `t`, and a fan at each corner beside one, in the volume terms only; the strips' integration error and the tube `pi tol^2 L` (a ball at a corner) are in the stated error; a use with none costs nothing and the results are bit-identical. Change if a producer records a bound that holds only by nearest point, or a vertex's accuracy alone must close its uses."
+
+### 14.18 MA3 as built (11-27)
+
+`Defect(StepControl)` from `mass`, `volume` and `edge_length` on a body far from the origin, found by MK2b (a 2e-4 block at 1e3 at 1e-12 and 1e-13; a 0.1 block at 1e8; a 5e3 block at 1e12, which also ran on for minutes at 1e-12). Fixed in `face::integrate` and `edge_length`; no public signature changed. Tests are `crates/scx-mass/tests/far.rs` (6), written failing first (four failed with `StepControl`).
+
+**Cause.** A point `S(u, v)` is computed in the body's own coordinates, so its last bit is `eps` of its distance from the origin, not of the face's size. The integrands are taken about the face's reference, so the difference `S - reference` is exact but carries that rounding as noise of relative size `eps * |far| / size`: 1.1e-9 for the 2e-4 block at 1e3, 2.2e-7 for the 0.1 block at 1e8, 4.4e-8 for the 5e3 block at 1e12 (with `eps` 2.2e-16). A piece is accepted when its Kronrod-Gauss difference is within a tenth of the accuracy or within `64 eps` of the integrand's size taken about the reference; the noise is above both once a tenth of the accuracy is below it (the step control gave up from 0.05 to 0.3 of the noise, by body), so the piece is bisected to the depth bound (48) or the piece bound (100,000 per call, nested two deep), which is a `Step` defect, or minutes of work. It was not the `about` shift (exact binomial in the values) and not the budget's accounting (the work was charged; the default budget is unlimited).
+
+**Decision: a second attempt held to the rounding, entered only where the rounding can be the obstacle; the shortfall is in the stated error.** Let `noise = 8 eps * (largest |coordinate| of the box) / (its longest side)` (`face::reachable`; zero at the origin; the same for an edge). When `noise <= accuracy / 10` the face is integrated exactly as before. Otherwise the first attempt is the old one limited to 200,000 evaluations in all (`FIRST_WORK`; a call may take 100,000 pieces, nested two deep, which was the minutes); if it ends in `StepControl` the face is integrated again with each piece held to `noise`, and `noise * scale` (the area-and-size scale the pieces' floors use) is added to each component's error. A first attempt that converges is returned as it is. The 84-line `mass` print of §14.17 (every generated kind at sizes 1 to 3, accuracies 1e-6 and 1e-9) is identical before and after, results and work; MK2b's far-box test in `scx-make` (its accuracy is the tolerance, above the rounding) passes unchanged.
+
+**The constant 8 is measured.** An accuracy sweep (a quarter decade apart, 1e-1 to 1e-15) on every generated kind at 1e4, 1e6 and 1e8, with the step control as it was: it gave up at a tenth of the accuracy up to 0.32 of `eps far / size` (the holed slab) and converged from 1.0, so the boundary is body-dependent (cubes 0.005, a prism 0.2 to 0.4, a holed slab about 1). A fixed floor of the tested size would have changed results MK2b's test depends on; entering the second attempt only on failure leaves every converging request alone.
+
+**Cases for and against.**
+
+- *Retry on failure, state the shortfall (taken)* against *a floor applied from the start*, which I built first and measured: a floor of one eighth of the rounding left the prism failing, a floor of 8 changed the error of the MK2b far-box rows (its test fails: stated error above its tolerance). The retry changes nothing that converged. Against: the first attempt's work is spent before the retry (at most 200,000 evaluations a face: the whole `far` file, six tests, takes 6.5 s in debug); and a request that converges within the allowance at noise level returns a value whose error estimate is its own, not the floor. A per-call piece cap, which I tried first (300), made MK3's tilted round bar at 1e-12 give up and take the floor, which that test's tolerance refuses: that case converges, on more pieces than a cap of that size allows, so the bound is on work, not on pieces.
+- *Meet as far as possible, state the rest in the error (taken)* against *a typed refusal `Unreachable`*. For meeting: every result carries its error (72 §14.8), so a caller who needs the accuracy reads it; a refusal needs a threshold and the threshold is body-dependent (above). Against: a caller who ignores `error` gets less than asked, silently. Change if a caller wants "accuracy or nothing": `MassRefusal::Unreachable { reachable }` from `reachable` at the entry, a few lines.
+- *The noise from the box, not from the surface's own rounding.* Against: a plane at 1e12 and a sphere round differently, and the box only bounds both. For: one rule, no per-surface error model (the evaluation error `scx-surface` will state, 01 §10, is the right input later).
+- *Value bias is not removed.* A smooth rounding (a plane's) moves the value without moving the difference of rules, so a request that converges can still be off by the rounding with an error estimate far below it; this was so before and stays (bit-identical results). The second attempt, entered only on failure, is the case that states the floor.
+
+**Measurements.** The far test file (every case that failed, six tests) runs in 6.5 s in debug; the work is bounded by the first attempt's allowance and then by the budget. Reachable accuracies: identical results and work.
+
+**MK3's extrude profiles.** The failing profiles were not available here (`scx-make` is above `scx-mass` in the layers, so the crate cannot build them); the far test runs every testkit kind, prisms and holed slabs among them, at 1e6, 1e9 and 1e12 at 1e-10 and 1e-13, and none is a defect now. If an extrude still gives `StepControl` at a reachable accuracy near the origin, it is another cause, and the test for it belongs in `scx-make`.
+
+**Deviations from 72.** None in signature.
+
+**Open questions.** (1) The typed refusal above, if a caller wants one. (2) The three bodies in the report were not the coordinator's exactly (a transformed testkit block, not `scx_make::block`); the numbers are the same kind. (3) `finish` refuses most testkit kinds at 1e12 with the default resolution (`EdgeEndOffVertex`), so far tests of curved kinds stop at 1e9.
+
+**Proposed 04 row.** "`scx-mass` (MA3): where `8 eps` times the largest coordinate over the box's longest side is above a tenth of the accuracy, a face or edge is first integrated as before within 200,000 evaluations; if that gives up, it is integrated again with each piece held to that rounding and the rounding times the scale is added to the stated error, so far from the origin the result is returned with its error instead of `Defect(StepControl)` or a run of minutes. A request that converges is unchanged bit for bit. Change if a caller needs a typed refusal rather than a stated shortfall."
