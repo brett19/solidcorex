@@ -4,11 +4,12 @@
 //! The crate's one error type, [`P21Error`], its typed causes, and the warnings of a read
 //! that succeeded.
 //!
-//! Display strings are for people; the variants and causes are the interface.
+//! Display strings are for people; the variants and causes are the interface. Each
+//! `Display` prints its own frame; [`scx_num::error::chain`] joins a chain of them.
 
 use core::fmt;
 
-use scx_num::error::ErrorKind;
+use scx_num::error::{chain, ErrorKind};
 
 /// Why a text could not be read or an exchange could not be written.
 #[derive(Clone, Debug, PartialEq)]
@@ -113,7 +114,7 @@ impl fmt::Display for P21Error {
             e = source;
         }
         match leaf {
-            Self::Refused(r) => r.fmt(f),
+            Self::Refused(r) => chain(r).fmt(f),
             Self::Unsupported(u) => u.fmt(f),
             Self::Exhausted(l) => l.fmt(f),
             Self::Cancelled | Self::Within { .. } => Ok(()),
@@ -273,24 +274,25 @@ impl fmt::Display for Refusal {
         match self {
             Self::NotStep => f.write_str("not a STEP file (no ISO-10303-21 header)"),
             Self::MissingEnd => f.write_str("the file ends without END-ISO-10303-21"),
-            Self::Syntax { line, cause } => write!(f, "syntax error at line {line}: {cause}"),
-            Self::Unwritable {
-                id: Some(id),
-                cause,
-            } => write!(f, "#{id}: {cause}"),
+            Self::Syntax { line, .. } => write!(f, "syntax error at line {line}"),
+            Self::Unwritable { id: Some(id), .. } | Self::Entity { id, .. } => write!(f, "#{id}"),
+            // Transparent: the cause's own frame.
             Self::Unwritable { id: None, cause } => cause.fmt(f),
-            Self::Entity { id, cause } => write!(f, "#{id}: {cause}"),
         }
     }
 }
 
+/// A syntax error, an instance's refusal or a written instance's unwritable value is a
+/// context frame (research 62 D12): it prints where ("syntax error at line 8", "#10") and
+/// its `source()` is the cause. An unwritable value outside an instance is transparent.
 impl std::error::Error for Refusal {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Syntax { cause, .. } => Some(cause),
-            Self::Unwritable { cause, .. } => Some(cause),
+            Self::Unwritable { id: Some(_), cause } => Some(cause),
+            Self::Unwritable { id: None, cause } => cause.source(),
             Self::Entity { cause, .. } => Some(cause),
-            _ => None,
+            Self::NotStep | Self::MissingEnd => None,
         }
     }
 }
@@ -415,11 +417,17 @@ pub enum NoPart42Form {
 impl fmt::Display for NoPart42Form {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Self::OffParameterPlane => "a point or direction off a parameter space's plane",
-            Self::MixedUnitVector => "a vector whose components have different unit factors",
-            Self::AxisInParameterSpace => "a placement with an axis in a parameter space",
+            Self::OffParameterPlane => {
+                "a point or direction off a parameter space's plane has no ISO 10303-42 form"
+            }
+            Self::MixedUnitVector => {
+                "a vector whose components have different unit factors has no ISO 10303-42 form"
+            }
+            Self::AxisInParameterSpace => {
+                "a placement with an axis in a parameter space has no ISO 10303-42 form"
+            }
             Self::SpaceCurveInParameterSpace => {
-                "a surface curve or 3D offset curve in a parameter space"
+                "a surface curve or 3D offset curve in a parameter space has no ISO 10303-42 form"
             }
         })
     }
@@ -435,7 +443,8 @@ impl fmt::Display for Unwritable {
             Self::BadEnumeration(e) => write!(f, "`{e}` is not a Part 21 enumeration value"),
             Self::BadBinary(b) => write!(f, "`{b}` is not a Part 21 binary"),
             Self::EmptyComplex => f.write_str("a complex instance needs at least one part"),
-            Self::Geometry(g) => write!(f, "{g} has no ISO 10303-42 form"),
+            // Transparent (research 62 D12): the geometry's own frame.
+            Self::Geometry(g) => g.fmt(f),
         }
     }
 }
@@ -443,7 +452,7 @@ impl fmt::Display for Unwritable {
 impl std::error::Error for Unwritable {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Geometry(g) => Some(g),
+            Self::Geometry(g) => g.source(),
             _ => None,
         }
     }

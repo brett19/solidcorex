@@ -1217,9 +1217,10 @@ mod tests {
             Some(&NumFailure::Singular { .. })
         ));
         assert_eq!(singular.kind(), ErrorKind::Refused);
-        assert!(singular
-            .to_string()
-            .contains("; caused by geom::matrix::Matrix::lu_decompose"));
+        assert_eq!(
+            singular.cause().map(NumError::operation),
+            Some("geom::matrix::Matrix::lu_decompose")
+        );
         let big = Matrix::new(MAX_MATRIX_SIZE + 1, MAX_MATRIX_SIZE + 1);
         assert!(matches!(
             big.solve_linear_system(&vec![0.0; MAX_MATRIX_SIZE + 1]),

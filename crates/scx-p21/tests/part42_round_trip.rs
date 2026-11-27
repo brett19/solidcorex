@@ -727,11 +727,7 @@ fn refused(r: Result<u64, P21Error>, cause: NoPart42Form) {
             cause: Unwritable::Geometry(cause),
         })
     );
-    assert!(
-        e.to_string()
-            .ends_with(&format!("{cause} has no ISO 10303-42 form")),
-        "{e}"
-    );
+    assert!(e.to_string().ends_with(&cause.to_string()), "{e}");
     let mut chain = std::error::Error::source(&e);
     let mut last = None;
     while let Some(x) = chain {

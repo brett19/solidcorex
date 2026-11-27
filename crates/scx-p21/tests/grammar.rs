@@ -527,8 +527,10 @@ fn errors_chain_to_their_cause() {
     assert_eq!(e.kind(), ErrorKind::Refused);
     assert_eq!(e.to_string(), "STEP input refused: syntax error at line 8: typed parameter `T` does not hold exactly one parameter");
     let refusal = e.source().unwrap();
+    // One frame per Display (research 62 D12); `chain` joins them.
+    assert_eq!(refusal.to_string(), "syntax error at line 8");
     assert_eq!(
-        refusal.to_string(),
+        scx_num::error::chain(refusal).to_string(),
         "syntax error at line 8: typed parameter `T` does not hold exactly one parameter"
     );
     let cause = refusal.source().unwrap();

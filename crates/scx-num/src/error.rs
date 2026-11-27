@@ -28,7 +28,8 @@
 // `NumError::call`, `Limit` and `NumError::Exhausted` (62 T13: the fixed caps and soft
 // allocation failures solidcore reports as `InvalidInput`), `NumError::kind`,
 // `NumError::limit`, `NumError::operation`, `NumError::failure`,
-// `NumError::cause`, `Error::source`, and the tests.
+// `NumError::cause`, `Error::source`, `chain` (research 62 §2.4: each `Display` prints
+// one frame, where solidcore's `CallFailed` printed its cause too), and the tests.
 //! Why a layer-0 routine fails.
 //!
 //! A check of the caller's argument that fails is [`NumError::InvalidInput`]; a
@@ -430,12 +431,7 @@ impl fmt::Display for NumError {
             }
             Self::Exhausted { operation, limit } => write!(f, "{operation}: {limit}"),
             Self::Failed { operation, failure } => write!(f, "{operation}: {failure}"),
-            Self::Call { operation, cause } => {
-                write!(
-                    f,
-                    "{operation}: a routine it calls failed; caused by {cause}"
-                )
-            }
+            Self::Call { operation, .. } => write!(f, "{operation}: a routine it calls failed"),
         }
     }
 }
@@ -444,6 +440,36 @@ impl std::error::Error for NumError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         self.cause()
             .map(|c| c as &(dyn std::error::Error + 'static))
+    }
+}
+
+/// The error and its sources, one frame each, joined by ": " (research 62 §2.4). Each
+/// `Display` prints its own frame only; this prints the chain a report shows.
+///
+/// ```
+/// use scx_num::error::{chain, NumError, NumFailure};
+/// let e = NumError::call("outer")(NumError::failed("inner", NumFailure::NotSymmetric));
+/// assert_eq!(
+///     chain(&e).to_string(),
+///     "outer: a routine it calls failed: inner: the matrix is not symmetric"
+/// );
+/// ```
+#[must_use]
+pub fn chain<'a>(e: &'a (dyn std::error::Error + 'static)) -> impl fmt::Display + 'a {
+    Chain(e)
+}
+
+struct Chain<'a>(&'a (dyn std::error::Error + 'static));
+
+impl fmt::Display for Chain<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)?;
+        let mut next = self.0.source();
+        while let Some(e) = next {
+            write!(f, ": {e}")?;
+            next = e.source();
+        }
+        Ok(())
     }
 }
 
@@ -544,6 +570,12 @@ mod tests {
         assert_eq!(NumError::call("outer")(full).kind(), ErrorKind::Exhausted);
         let caused = NumError::call("outer")(NumError::invalid_input("inner", "why"));
         assert!(std::error::Error::source(&caused).is_some());
+        // One frame per Display; `chain` joins them.
+        assert_eq!(caused.to_string(), "outer: a routine it calls failed");
+        assert_eq!(
+            chain(&NumError::call("top")(caused)).to_string(),
+            "top: a routine it calls failed: outer: a routine it calls failed: inner: invalid input: why"
+        );
         assert_eq!(NumError::invalid_input("x", "y").failure(), None);
     }
 }
