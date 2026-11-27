@@ -46,15 +46,19 @@ pub trait Bounds: Copy {
 impl Bounds for Extent1d {
     type Axis = ();
     const AXES: &'static [()] = &[()];
+    #[inline]
     fn lo(&self, (): ()) -> f64 {
         self.min()
     }
+    #[inline]
     fn hi(&self, (): ()) -> f64 {
         self.max()
     }
+    #[inline]
     fn union(&self, other: &Self) -> Self {
         Extent1d::union(*self, *other)
     }
+    #[inline]
     fn are_disjoint(&self, other: &Self, tol: f64) -> bool {
         Extent1d::are_disjoint(self, other, tol)
     }
@@ -63,21 +67,25 @@ impl Bounds for Extent1d {
 impl Bounds for Extent2d {
     type Axis = Axis2;
     const AXES: &'static [Axis2] = &Axis2::ALL;
+    #[inline]
     fn lo(&self, axis: Axis2) -> f64 {
         match axis {
             Axis2::X => self.x_min(),
             Axis2::Y => self.y_min(),
         }
     }
+    #[inline]
     fn hi(&self, axis: Axis2) -> f64 {
         match axis {
             Axis2::X => self.x_max(),
             Axis2::Y => self.y_max(),
         }
     }
+    #[inline]
     fn union(&self, other: &Self) -> Self {
         Extent2d::union(*self, *other)
     }
+    #[inline]
     fn are_disjoint(&self, other: &Self, tol: f64) -> bool {
         Extent2d::are_disjoint(self, other, tol)
     }
@@ -86,15 +94,19 @@ impl Bounds for Extent2d {
 impl Bounds for Extent3d {
     type Axis = Axis;
     const AXES: &'static [Axis] = &Axis::ALL;
+    #[inline]
     fn lo(&self, axis: Axis) -> f64 {
         self.min_at(axis)
     }
+    #[inline]
     fn hi(&self, axis: Axis) -> f64 {
         self.max_at(axis)
     }
+    #[inline]
     fn union(&self, other: &Self) -> Self {
         Extent3d::union(*self, *other)
     }
+    #[inline]
     fn are_disjoint(&self, other: &Self, tol: f64) -> bool {
         Extent3d::are_disjoint(self, other, tol)
     }
@@ -155,6 +167,113 @@ fn centre<B: Bounds>(b: &B, axis: B::Axis) -> f64 {
     0.5 * (b.lo(axis) + b.hi(axis))
 }
 
+/// The axis, of `0..dims`, on which the values `values(axis)` spread most (max minus min),
+/// the first of the widest.
+fn widest<I: Iterator<Item = f64>>(dims: usize, values: impl Fn(usize) -> I) -> usize {
+    let mut axis = 0;
+    let mut spread = f64::NEG_INFINITY;
+    for a in 0..dims {
+        // The ends `f64::min` and `max` give (a NaN value fails both tests, as they skip
+        // it), but for the sign of a zero end, which cannot change a comparison of spreads.
+        let (lo, hi) = values(a).fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), c| {
+            (if c < lo { c } else { lo }, if c > hi { c } else { hi })
+        });
+        if hi - lo > spread {
+            spread = hi - lo;
+            axis = a;
+        }
+    }
+    axis
+}
+
+/// The split keys of a build: every item's centre on every axis, computed once, and a
+/// buffer of `(key, item)` pairs that selection reorders, so a comparison reads two
+/// adjacent pairs rather than two boxes.
+struct Keys {
+    /// Item `i`'s centre on axis `a` (the `a`-th of [`Bounds::AXES`]) at `i * dims + a`.
+    centres: Vec<f64>,
+    dims: usize,
+    keyed: Vec<(i64, usize)>,
+}
+
+/// `x` as an integer in the order of [`f64::total_cmp`] (the same map that method makes
+/// before it compares), so the split order is a plain integer order: by key, then by item
+/// index, a strict total order.
+fn total_key(x: f64) -> i64 {
+    let bits = x.to_bits() as i64;
+    bits ^ (((bits >> 63) as u64) >> 1) as i64
+}
+
+impl Keys {
+    fn new<B: Bounds>(boxes: &[B]) -> Self {
+        let dims = B::AXES.len();
+        let mut centres = Vec::with_capacity(boxes.len() * dims);
+        for b in boxes {
+            centres.extend(B::AXES.iter().map(|&a| centre(b, a)));
+        }
+        Self {
+            centres,
+            dims,
+            keyed: Vec::new(),
+        }
+    }
+
+    fn centre(&self, i: usize, axis: usize) -> f64 {
+        self.centres
+            .get(i * self.dims + axis)
+            .copied()
+            .unwrap_or(0.0)
+    }
+
+    /// Fills the buffer with `items` and their keys on `axis`.
+    fn fill(&mut self, items: &[usize], axis: usize) {
+        self.keyed.clear();
+        let centres = &self.centres;
+        let dims = self.dims;
+        self.keyed.extend(items.iter().map(|&i| {
+            (
+                total_key(centres.get(i * dims + axis).copied().unwrap_or(0.0)),
+                i,
+            )
+        }));
+    }
+
+    /// Writes the buffer's items back to `items`.
+    fn write(&self, items: &mut [usize]) {
+        for (slot, &(_, i)) in items.iter_mut().zip(&self.keyed) {
+            *slot = i;
+        }
+    }
+
+    /// Reorders `items` so the first `half` are the smallest on the axis where the centres
+    /// spread most, each half that holds at most `leaf` items sorted; returns the axis.
+    fn select(&mut self, items: &mut [usize], half: usize, leaf: usize) -> usize {
+        let this = &*self;
+        let axis = widest(this.dims, |a| items.iter().map(move |&i| this.centre(i, a)));
+        self.fill(items, axis);
+        // The key is a strict total order, so selection puts the same items in each half
+        // as a full sort.
+        self.keyed.select_nth_unstable(half);
+        let (lo, hi) = self.keyed.split_at_mut(half);
+        for part in [lo, hi] {
+            // A half that will be a leaf is sorted, so its items stand in the order a full
+            // sort gives; a larger half is reordered by its own split.
+            if part.len() <= leaf {
+                part.sort_unstable();
+            }
+        }
+        self.write(items);
+        axis
+    }
+
+    /// Sorts `items` by their keys on `axis`.
+    fn sort(&mut self, items: &mut [usize], axis: usize) {
+        self.fill(items, axis);
+        self.keyed.sort_unstable();
+        self.write(items);
+    }
+}
+
 impl<B: Bounds> BoxTree<B> {
     /// The tree over `boxes`; item `i` is `boxes[i]`.
     #[must_use]
@@ -165,19 +284,29 @@ impl<B: Bounds> BoxTree<B> {
     /// The tree over `boxes`, its nodes split by selection, or by a full sort with
     /// `FULL_SORT`.
     fn build<const FULL_SORT: bool>(boxes: &[B]) -> Self {
-        let (order, unplaced): (Vec<usize>, Vec<usize>) =
-            (0..boxes.len()).partition(|&i| boxes.get(i).is_some_and(|b| !has_nan(b)));
+        let mut order = Vec::with_capacity(boxes.len());
+        let mut unplaced = Vec::new();
+        for (i, b) in boxes.iter().enumerate() {
+            if has_nan(b) {
+                unplaced.push(i);
+            } else {
+                order.push(i);
+            }
+        }
         let mut tree = Self {
             boxes: boxes.to_vec(),
-            nodes: Vec::new(),
+            // A node splits only above `LEAF` items, so every leaf but a lone item's holds
+            // at least two: at most `n` nodes for `n` items.
+            nodes: Vec::with_capacity(order.len()),
             order,
             unplaced,
         };
+        let mut keys = Keys::new(boxes);
         if let Some(root) = tree.node(0, tree.order.len()) {
             tree.nodes.push(root);
             let mut stack = vec![0];
             while let Some(k) = stack.pop() {
-                if let Some(children) = tree.split::<FULL_SORT>(k) {
+                if let Some(children) = tree.split::<FULL_SORT>(k, &mut keys) {
                     stack.push(children.1);
                     stack.push(children.0);
                 }
@@ -215,55 +344,54 @@ impl<B: Bounds> BoxTree<B> {
     }
 
     /// Splits node `k` if it holds more than [`LEAF`] items; returns its children. The
-    /// halves come from selection; with `FULL_SORT` (the tests' reference build) from a full
-    /// sort of the node, which gives the same tree.
-    fn split<const FULL_SORT: bool>(&mut self, k: usize) -> Option<(usize, usize)> {
+    /// halves come from selection over the items' keys; with `FULL_SORT` (the tests'
+    /// reference build) from a full sort of the node by keys computed from the boxes, which
+    /// gives the same tree.
+    fn split<const FULL_SORT: bool>(
+        &mut self,
+        k: usize,
+        keys: &mut Keys,
+    ) -> Option<(usize, usize)> {
         let Node { start, end, .. } = *self.nodes.get(k)?;
         if end - start <= LEAF {
             return None;
         }
         let boxes = &self.boxes;
         let items = self.order.get_mut(start..end)?;
-        let mut axis = *B::AXES.first()?;
-        let mut spread = f64::NEG_INFINITY;
-        for &a in B::AXES {
-            let (lo, hi) = items
-                .iter()
-                .filter_map(|&i| boxes.get(i))
-                .map(|b| centre(b, a))
-                .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), c| {
-                    (lo.min(c), hi.max(c))
-                });
-            if hi - lo > spread {
-                spread = hi - lo;
-                axis = a;
-            }
-        }
-        let key = |i: usize| boxes.get(i).map_or(0.0, |b| centre(b, axis));
-        let cmp = |p: &usize, q: &usize| key(*p).total_cmp(&key(*q)).then(p.cmp(q));
         let half = (end - start) / 2;
+        let mut axis = 0;
         if FULL_SORT {
-            items.sort_unstable_by(cmp);
+            // The reference: the spread by `f64::min` and `max`, the keys from the boxes.
+            let mut axis = *B::AXES.first()?;
+            let mut spread = f64::NEG_INFINITY;
+            for &a in B::AXES {
+                let (lo, hi) = items
+                    .iter()
+                    .filter_map(|&i| boxes.get(i))
+                    .map(|b| centre(b, a))
+                    .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), c| {
+                        (lo.min(c), hi.max(c))
+                    });
+                if hi - lo > spread {
+                    spread = hi - lo;
+                    axis = a;
+                }
+            }
+            let key = |i: usize| boxes.get(i).map_or(0.0, |b| centre(b, axis));
+            items.sort_unstable_by(|p, q| key(*p).total_cmp(&key(*q)).then(p.cmp(q)));
         } else {
-            // The key is a strict total order, so selection puts the same items in each half
-            // as a full sort.
-            items.select_nth_unstable_by(half, cmp);
+            axis = keys.select(items, half, LEAF);
         }
         let mut halves = [None, None];
         let (lo, hi) = items.split_at_mut(half);
         for (part, out) in [lo, hi].into_iter().zip(&mut halves) {
-            // A half that will be a leaf is sorted, so its items stand in the order a full
-            // sort gives; a larger half is reordered by its own split.
-            if !FULL_SORT && part.len() <= LEAF {
-                part.sort_unstable_by(cmp);
-            }
             let mut bounds = union_of(boxes, part);
             // The union is the same for any order of the items but for the sign of a zero
             // bound, when both zeros are bounds (`f64::min` may return either). Then the half
             // is sorted and its union taken again, in the full sort's order.
             if !FULL_SORT && part.len() > LEAF && bounds.is_some_and(|u| zero_tie(boxes, part, &u))
             {
-                part.sort_unstable_by(cmp);
+                keys.sort(part, axis);
                 bounds = union_of(boxes, part);
             }
             *out = bounds;
