@@ -34,6 +34,8 @@ pub const YANG_DATA: [&str; 6] = [
 pub struct Side {
     pub surface: Surface,
     pub extent: Extent2d,
+    /// A sphere's centre and radius, for the closed-form truth.
+    pub sphere: Option<(P3, f64)>,
 }
 
 pub struct TruthBranch {
@@ -121,6 +123,7 @@ fn side(s: &Json) -> Result<Side, String> {
         return Ok(Side {
             surface: Surface::Nurbs(Arc::new(n)),
             extent,
+            sphere: None,
         });
     }
     let (x, y) = (p3(s.get("xaxis"), "xaxis")?, p3(s.get("yaxis"), "yaxis")?);
@@ -133,6 +136,7 @@ fn side(s: &Json) -> Result<Side, String> {
             Ok(Side {
                 surface: Surface::Plane(Plane::new(f)),
                 extent: rect(Point2::new(u[0], v[0]), Point2::new(u[1], v[1]))?,
+                sphere: None,
             })
         }
         "cylinder" => {
@@ -150,6 +154,7 @@ fn side(s: &Json) -> Result<Side, String> {
             Ok(Side {
                 surface: Surface::Cylinder(k),
                 extent,
+                sphere: None,
             })
         }
         "cone" => {
@@ -165,12 +170,14 @@ fn side(s: &Json) -> Result<Side, String> {
             Ok(Side {
                 surface: Surface::Cone(k),
                 extent,
+                sphere: None,
             })
         }
         "sphere" => {
-            let f = frame(p3(s.get("center"), "center")?, x, y)?;
-            let k =
-                Sphere::new(f, mm(num(s.get("radius"), "radius")?), Sense::Forward).map_err(se)?;
+            let centre = p3(s.get("center"), "center")?;
+            let radius = num(s.get("radius"), "radius")?;
+            let f = frame(centre, x, y)?;
+            let k = Sphere::new(f, mm(radius), Sense::Forward).map_err(se)?;
             let (lo, la) = (pair(s.get("lon"), "lon")?, pair(s.get("lat"), "lat")?);
             let extent = rect(
                 k.from_step(Point2::new(rad(lo[0]), rad(la[0]))),
@@ -179,6 +186,7 @@ fn side(s: &Json) -> Result<Side, String> {
             Ok(Side {
                 surface: Surface::Sphere(k),
                 extent,
+                sphere: Some((centre, radius)),
             })
         }
         "torus" => {
@@ -201,6 +209,7 @@ fn side(s: &Json) -> Result<Side, String> {
             Ok(Side {
                 surface: Surface::Torus(k),
                 extent,
+                sphere: None,
             })
         }
         other => Err(format!("unknown surface type: {other}")),

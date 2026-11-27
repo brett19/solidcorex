@@ -912,6 +912,13 @@ onward measure progress with it.
 - **Hausdorff** is both ways, point to polyline segment: output samples (720 a closed-form
   conic, 32 a knot span of a traced branch) to the truth's polylines, and the truth's vertices to
   the output's segments.
+- **SM0's truths.** Where a case has a closed form in `scx_testkit::ssi_truth` the scorer
+  uses its `to_truth` and `from_truth` (exact curve, 720 samples) in place of the corpus
+  polylines for the curve distances. Today that is two-sphere pairs (`sphere_sphere`); no
+  corpus case with a circle is one (the touches have no curve), so it is exercised by an
+  inline test, where the corpus's coarse polygon would have failed the exact circle. The other
+  constructors (perpendicular cylinders, Viviani) need the case's placed axes mapped to a
+  `Rigid`: open, for the cases `c1_cyl_cyl_two_loops`, `c4_steinmetz`, `c4_viviani_figure8`.
 - **Time.** Measured around the call and printed after the table, apart from it, because a time
   is not deterministic. `SCX_SSI_TIMES=1` adds a time column. The table has no time otherwise, so
   two runs print the same bytes.

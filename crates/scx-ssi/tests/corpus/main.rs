@@ -316,3 +316,39 @@ fn the_table_is_deterministic_and_totals_exclude_refusals_from_failures() {
     assert!(a.contains("refused 1 (ssi_unresolved 1)"), "{a}");
     assert!(a.contains("failed 0"), "{a}");
 }
+
+/// Two unit spheres 1 apart: SM0's exact circle (`ssi_truth::sphere_sphere`) judges the
+/// answer, the corpus truth being a coarse polygon of it.
+#[test]
+fn two_spheres_are_judged_by_the_closed_form_truth() {
+    let sphere = |x: f64| {
+        format!(
+            r#"{{"type":"sphere","center":[{x},0,0],"xaxis":[1,0,0],"yaxis":[0,1,0],"radius":1,"lon":[0,360],"lat":[-90,90]}}"#
+        )
+    };
+    let n = 16;
+    let pts: Vec<String> = (0..=n)
+        .map(|i| {
+            let t = core::f64::consts::TAU * f64::from(i) / f64::from(n);
+            format!(
+                "[0.5,{},{}]",
+                0.75f64.sqrt() * t.cos(),
+                0.75f64.sqrt() * t.sin()
+            )
+        })
+        .collect();
+    let text = format!(
+        r#"{{"id":"inline_spheres","cov_tol":0.001,"surfaces":[{},{}],"truth":[],
+        "expected":{{"branches":[{{"closed":true,"kind":"crossing","points":[{}]}}],
+        "isolated_points":[],"singular_points":[],"coincident_regions":[]}}}}"#,
+        sphere(0.0),
+        sphere(1.0),
+        pts.join(",")
+    );
+    let c = Case::from_text(&text).unwrap();
+    let row = run_case(&c);
+    // The corpus's polygon has chord error 0.75 (1 - cos(pi/16)) ~ 1.4e-2 against the circle,
+    // which the exact truth does not have: the closed-form answer is within 1e-6 of it.
+    assert_eq!(row.verdict, Verdict::Pass, "{row:?}");
+    assert!(row.h_out.unwrap() < 1e-6, "{row:?}");
+}

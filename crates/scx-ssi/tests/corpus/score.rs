@@ -300,6 +300,15 @@ fn output_of(answer: &Answer, case: &Case) -> Output {
 
 // ---------------------------------------------------------------- the judgement
 
+/// The closed-form truth (`scx_testkit::ssi_truth`, SM0) of the case where it has one: two
+/// spheres. Its Hausdorff measure replaces the polyline distances there.
+fn closed_truth(case: &Case) -> Option<scx_testkit::ssi_truth::Truth> {
+    let [Some((c1, r1)), Some((c2, r2))] = [case.sides[0].sphere, case.sides[1].sphere] else {
+        return None;
+    };
+    scx_testkit::ssi_truth::sphere_sphere(c1, r1, c2, r2)
+}
+
 /// The components of curves (with their free-end counts) and points joined within `cov`,
 /// as a sorted list of `(free ends, holds a curve)`.
 fn signature(curves: &[(Vec<P3>, bool)], points: &[P3], cov: f64) -> Vec<(usize, bool)> {
@@ -457,6 +466,14 @@ pub fn judge(case: &Case, out: &Output) -> Row {
     let mut h_out = 0.0f64;
     for p in on_truth_polys.iter().flatten() {
         h_out = h_out.max(set_dist(*p, &truth_polys));
+    }
+    // Where SM0 has the exact curve, its Hausdorff measure judges the curves (the points
+    // keep the corpus's polylines).
+    if let Some(truth) = closed_truth(case).filter(|t| !t.curves.is_empty()) {
+        if !out.curves.is_empty() {
+            h_out = truth.to_truth(&out.curves);
+            h_tru = truth.from_truth(&out.curves, 720);
+        }
     }
     row.h_tru = Some(h_tru);
     row.h_out = Some(h_out);
