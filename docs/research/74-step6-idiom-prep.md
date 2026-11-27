@@ -2232,6 +2232,180 @@ bounds the sampled distance from above) and for the normal's side. No tests remo
 3. A minimax refinement, if non-rational fits near the accuracy matter on the corpus (measure on
    the corpus once SP2b lands).
 
+## 24. HL1 as built (11-27)
+
+`crates/scx-hlr`, placed after `scx-stitch` in layers.txt. Cargo edges: hlr → bodyq, and
+brep, curve, surface, num, which bodyq already sits on, so no new layer edge below bodyq. No ssi
+edge (HL4) and no planar edge (HL2). Dev edges: testkit (`bodies`), nurbs, nurbs-surface, planar.
+Module docs hold every formula: `silhouette.rs` (cylinder, cone and sphere; the trimming argument)
+and `contour.rs` (the torus contour and its boundary crossings).
+
+### 24.1 Public API
+
+```rust
+pub struct View;                                       // x, y, d: UnitVec3
+impl View { pub fn new(direction: Vec3, up: Vec3) -> Result<View, HlrError>;
+            pub fn screen(&self, p: Point3, origin: Point3) -> Point2; }
+pub fn silhouettes(body: &Brep, view: &View, cx: &mut Cx<'_>) -> Result<Silhouettes, HlrError>;
+pub fn prepare<'a>(bodies: &[(&'a Brep, Frame)], cx: &mut Cx<'_>) -> Result<Scene<'a>, HlrError>;
+impl Scene<'_> { pub fn bodies(&self); pub fn bounds(&self) -> Option<Extent3d>;
+                 pub fn centre(&self) -> Option<Point3>; pub fn scale(&self) -> f64;
+                 pub fn silhouettes(&self, view: &View, cx: &mut Cx<'_>)
+                     -> Result<Vec<Silhouettes>, HlrError>; }
+pub struct Silhouettes { pub curves: Vec<Silhouette>, pub unsupported: Vec<Unsupported> }
+pub struct Silhouette { pub face: FaceId, pub curve: SilhouetteCurve,
+                        pub accuracy: Exactness, pub on_face: OnFace }
+pub enum SilhouetteCurve { Line(Line), Circle(Circle), Torus(TorusContour) }   // non_exhaustive
+pub enum Exactness { Exact, Recognized { deviation: Length } }
+pub enum OnFace { Proved(Vec<Extent1d>), Undecided { over: Extent1d, why: Undecided } }
+pub enum Undecided { NurbsEdge { edge }, TorusEdge { edge }, Classification }
+pub struct Unsupported { pub face: FaceId, pub why: Why }  // Why { Freeform, Unbounded }
+pub struct TorusContour;  // frame, major, minor, sight, branch; point(θ), normal(θ)
+pub enum Branch { Plus, Minus }
+pub enum HlrError { BadView(BadView), BadPlacement { body }, Exhausted, Stopped,
+                    Surface { face, error }, Curve { face, error }, Bodyq, Defect { reason } }
+pub const PARALLEL: f64 = 16.0 * f64::EPSILON;   pub const ROUNDING: f64 = 8.0 * f64::EPSILON;
+```
+
+`HlrError::kind()` and `name()` as every crate's. `cx.stop` is checked by every inversion and
+recognition; the budget is charged one per face and one per classified span besides what
+recognition and inversion charge; `cx.trace` gets `Phase("hlr.prepare")`, `Phase("hlr.silhouettes")`
+and `Progress { done, total }` per face.
+
+### 24.2 Choices, with cases for and against
+
+- *What one face cannot answer is in the result, not an error.* 74 §5.3 has
+  `Result<Vec<Silhouette>, HlrError>`. Here a freeform or unbounded face is `Unsupported` by name
+  and a curve whose trim cannot be proved is `OnFace::Undecided` with the edge that blocks it; only
+  a refused view or placement, the budget, the stop, a surface refusal and defects end the call.
+  For: one NURBS face does not lose a drawing its other faces can make; HL2 needs exactly this
+  split (74 §5.3's `uncertain` and `unsupported`). Against: callers must look at two places.
+- *Placement is a rigid `Frame`, not `Affine`.* For: silhouettes of a scaled or sheared body are
+  not the transformed silhouettes of the body (`n · d = 0` is not affine-invariant), and no part
+  in a drawing is placed by anything but a rigid motion; the scene maps the view into each body's
+  frame (exact up to rounding) instead of moving the body. Against: a mirrored instance needs a
+  mirrored body. Open question 1.
+- *One silhouette per face, not per surface.* Faces split from one periodic surface (the testkit's
+  walls, lunes and patches) each return their own piece of the same curve, and a generator lying
+  on an edge two faces share is held by both (test `a_generator_on_a_shared_edge_...`). For: each
+  piece is proved on its own face, nothing global is needed; HL2 merges by curve identity when it
+  builds image-space spans. Against: HL2 must dedupe.
+- *Trimming by closed-form crossings, not samples.* The pin trims with 256 samples and bisection,
+  so a face boundary that dips across the curve between two samples is missed. Here the curve can
+  leave the face only where it crosses a boundary edge; each boundary edge is intersected with a
+  plane that cuts the surface in the silhouette (`intersect_curve`, complete), or, on a torus,
+  classified as a meridian or parallel whose crossings are `θ0` and `φd ± acos(q)` in closed form;
+  one point per span is classified by `invert` plus `contains_uv`. For: proved, deterministic, no
+  sample count. Against: an edge of another kind on a torus face, and any NURBS boundary edge
+  (`intersect_curve` refuses NURBS curves today), give `Undecided` until step 5's general
+  intersections.
+- *The torus contour is exact, not a 720-point polyline.* `TorusContour` is the closed form
+  `o + R ρ̂ + r σ(−da ρ̂ + k a)/s`, two branches parametrised by the meridian angle; viewed across or
+  along the axis (exact zeros only) it is four circles or two equators, as `Circle`s. For: points,
+  normals and crossings are exact; HL2's crossing search gets an analytic curve. Against: PL6's
+  conic intersections do not cover it, so its HL2 spans wait on step 5 (as 74 §5.3 says).
+- *Only NURBS faces are recognised.* Analytic faces use their own kinds as `Exact`; a NURBS face
+  goes through `scx_surface::recognize` over its uv box (clipped to the surface's domain, since
+  the box is padded by pcurve rounding) at the resolution's approximation accuracy, and the
+  recorded deviation is carried (`Exactness::Recognized`) and widens every crossing tolerance by
+  that much. A near-flat or near-straight analytic cone is not simplified: its closed form is
+  already exact, and simplifying would replace a true curve by an approximate one (truth over pin).
+- *The scene box is the union of tight body boxes* (`tight_body_box`, BW2), placed. The pin used
+  vertex boxes, which for a sphere are its two poles; the test checks the sphere's full extent.
+- *The tolerances decide only where to split, and are generous.* `near = max(zone, edge accuracy,
+  ROUNDING · size) + deviation` decides whether a plane crossing is on the silhouette (the plane
+  also cuts the surface in other curves, told apart by distance); a split too many changes
+  nothing because both halves classify alike and merge. `PARALLEL` drops the generator of a
+  cylinder or cone viewed within `16 ε` of its axis: the direction `a × d` is noise there and the
+  lost line projects to below one rounding error of the height. Cuts within `ROUNDING` of each
+  other (relative) are one crossing rounded twice: every ruling of a cone meets the splitting plane
+  at the apex, which also ends the generator, and without this the sliver at the apex was kept as
+  a piece on every face (found by the generated-cone test). The pin carries about 116 literal
+  tolerances in its HLR.
+- *A generator stops at the cone's apex.* The axial range is the face box's, clipped to the nappe
+  where `r + k v >= 0` (the first build ran on through the apex; the made-cone test caught the
+  piece past it).
+- *A candidate wholly off the face is not listed.* `OnFace::Proved` is never empty.
+
+### 24.3 Tests (`crates/scx-hlr/tests/silhouettes.rs`, 18; testkit bodies only, no pin output)
+
+Every proved piece is checked at 8 interior points: on the face's surface (closed-form inversion)
+and `|n · d|` within 1e-12 to 1e-14; on generated bodies each piece's midpoint inverts inside its
+face's uv box.
+
+- views: refusals (zero, NaN, infinite, parallel up) by name; the frame is right-handed into the
+  screen and `screen` subtracts the origin;
+- sphere, 8 views: one circle, radius and centre exact, frame z parallel to d, `[0, 2π]`;
+- sphere lunes (seeds 1-4): the pieces sum to `2π` over the faces;
+- cylinder, 8 views: two lines at `±r` across the view, pieces `[0, h]`, none along the axis;
+- cone (frustum `[2,1]`, to the apex `[2,0]`, widening `[0.5,1.5]`): two generators exactly when
+  `|k da| < |dρ|`, none when greater, ends on the rims (or the apex);
+- cylinder and cone walls (seeds 1-4): each generator on exactly one face;
+- a generator on a shared ruling (seed 0, view x): held by both faces, both `[0, 2]`;
+- torus along its axis: circles of radius `R ± r` on a level frame, the general contour giving the
+  same equators on a tilted one;
+- torus across its axis: four circles, centres and radii exact;
+- torus, general views: two branches, whole turns, the screen offset from the projected spine is
+  `r` and normal to it, `normal(θ)` equals the surface's;
+- torus patches (seeds 1-4): each branch's pieces sum to `2π`;
+- 1e6 from the origin: sphere and cylinder closed forms hold;
+- scene: a placed cylinder matches the one made in place (lines and pieces to 1e-12); the sphere's
+  box is its full box;
+- twice to the bit (Debug equality);
+- stop gives `Cancelled`; budgets 0, 1 and 2 give `Exhausted`;
+- NURBS: the exact rational 270-degree cylinder, trimmed, is `Recognized` (deviation <= 1e-9) with
+  two generators at radius 1 and `Undecided::NurbsEdge` naming its rim; the same net without
+  weights is `Unsupported(Freeform)`.
+
+No tests removed (new crate). The pin's 88 HLR tests are HL3's.
+
+### 24.4 Measurements (release, one thread, throwaway timer, 2000 calls over 8 views, warm)
+
+| body | faces | per call | per curved face |
+| --- | --- | --- | --- |
+| sphere (made) | 1 | 1.1 us | 1.1 us |
+| torus (made) | 1 | 1.3 us | 1.3 us |
+| cone (made, frustum) | 3 | 10 us | 10 us |
+| cylinder (made) | 3 | 14 us | 14 us |
+| torus, 4 x 4 patches | 16 | 43 us | 2.7 us |
+| sphere, 8 lunes | 8 | 49 us | 6.1 us |
+| cylinder, 8 walls | 10 | 83 us | 10 us |
+| rational NURBS cylinder (with recognition) | 1 | 29 us | 29 us |
+
+Cost is the boundary edges' plane intersections and one inversion plus `contains_uv` per span;
+the torus needs no intersections (closed-form crossings). Recognition is SU7's (17 us for the
+cylinder). This is a new crate, so it adds nothing to existing paths; the pin's sampled trim does
+256 inversions per curve and is not timed here.
+
+### 24.5 Deviations from 74
+
+- `silhouettes` returns `Silhouettes` (curves plus unsupported faces) and each curve carries
+  `OnFace` (above); 74 §5.3 had `Vec<Silhouette>`.
+- `prepare` takes `Frame`, not `Affine` (above).
+- Silhouettes are 3-D curves with their face; projection to screen curves (`Curve2`) is left to
+  HL2, which needs the 3-D curves for depth anyway. `View::screen` gives points.
+- No `Options`/`hidden_lines` yet: HL2.
+
+### 24.6 Waits on step 5 (named, typed)
+
+- NURBS boundary edges: `OnFace::Undecided { why: NurbsEdge }` (needs `intersect_curve` for NURBS).
+- Torus faces bounded by anything but meridians and parallels: `Undecided::TorusEdge`.
+- Freeform NURBS faces: `Unsupported { why: Freeform }` (HL4, SM5).
+- HL2's spans on `TorusContour` (general bounded 2-D intersections).
+
+### 24.7 Open questions
+
+1. Mirrored placements: accept a `Frame` with a reflection (and flip normals) or require a
+   mirrored body? Nothing needs it yet.
+2. Should a NURBS face recognised as a plane say so (today it returns no curves, like a plane)?
+3. HL2's dedupe of a curve held by two faces: by curve identity (same surface) or by image-space
+   overlap? The former is exact for split periodic faces; the latter also covers distinct but
+   tangent faces.
+
+### 24.8 Proposed 04 row
+
+| 11-27 | Proposed (HL1), for review | `scx-hlr` is created with `silhouettes(&Brep, &View, &mut Cx) -> Result<Silhouettes, HlrError>` and `prepare(&[(&Brep, Frame)], cx) -> Scene`. Per face: exact closed-form silhouettes for cylinder, cone, sphere and torus (`TorusContour`, or circles on exact axis zeros); NURBS faces through `scx_surface::recognize` with the deviation carried. Trimming is proved: closed-form crossings of the boundary edges (plane cuts, or a torus's meridians and parallels) and one classified point per span, never samples. What a face cannot answer is named in the result (`Unsupported { Freeform, Unbounded }`, `OnFace::Undecided { NurbsEdge, TorusEdge, Classification }`); errors are only a refused view or placement, budget, stop, surface refusal and defects. Rigid `Frame` placement, not `Affine`. One silhouette per face; HL2 dedupes. Tolerances (`PARALLEL`, `ROUNDING`, per-face `near`) decide only splits | 74 §5.3 asked for exact quadric and torus silhouettes without sampled trims; the pin trims by 256 samples and draws the torus as 720 points. Against: callers read two places; HL2 must dedupe; NURBS rims wait on step 5 | 74 §24 |
+
 ## 27. SP8 as built (11-27)
 
 `scx-step` gains the product structure: `Imported::products` is now a `ProductTree` (parts, the
