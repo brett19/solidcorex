@@ -361,3 +361,130 @@ plane and last-point ones are cheap to clone per worker (their state is per solv
 seven fillet ones cannot, since they write the fillet solver's offset caches, so each
 worker needs its own fillet solver (or those caches move behind a per-worker store).
 
+
+## 13. The ODE integrator (`scx-algo::ode`, 11-27)
+
+Ported from the pin's `mass/integrator.rs` (its ODE core; the mass-property drivers stay with
+`mass`). Shape (M6): the controls are a value and the integration a pure call over a closure.
+`OdeIntegrator<N>` holds every control as a public field (accuracy, initial and minimum step,
+error scale, `StepEstimate`, rounding floor and rate, step budget, `tiny`; the pin's
+`OdeOptions`, setters and private fields are gone) and `OdeIntegrator::integrate(x1, x2, f)`
+returns an `OdeSolution` (values and `StepCounts`) where the pin wrote into an in-out slice.
+The component count is the const `N` (`[f64; N]` throughout). `Quadrature { accuracy,
+rounding, rate }` and `Quadrature::integrate(a, b, g)` replace the pin's scalar entry points.
+`step` is a free function taking the scale by value (the pin floored the caller's slice in
+place). The `Kernel`, read only for cancellation, is gone: a cancellable caller checks in its
+closure, whose error ends the integration.
+
+Errors are the crate's `SolveError<E>` (section 12):
+
+- the step control's failures are `SolveFailure::StepControl(StepControlFailure::..)`, one
+  reason each (unachievable accuracy, below the minimum step, steps or retries exhausted,
+  step underflow, owed rounding over the accuracy); solidcore reports all of them except
+  `Overflow` as `MassFailure::StepControl`, without the reason. A non-finite integrand is
+  `SolveFailure::IntegrandNotFinite` (`MassFailure::Integrand`);
+- `StepControlFailure::Overflow` is new: a step's error scale is NaN (the step grew past the
+  largest float with a zero derivative, or the values overflowed). The pin reaches it as the
+  upstream step's `SM_ERR` (`RoutineFailed` caused by its own `InvalidInput` "invalid error
+  scale"); the difftest maps it back. It is reachable (the `quad_intervals` sweep hits it);
+- the evaluation at a step's start returns the closure's error unchanged (`SolveError::Eval`)
+  and one inside a step is wrapped (`SolveError::call(OP)`), as in the pin; which errors pass
+  through is the closure error's `EvalError`.
+- The early returns give zeros, as the pin's zeroed output did.
+
+Kept from the pin (inherited, recorded for a ruling):
+
+- `are_same(initial_step, EFF_ZERO)` picks the default initial step, so a caller's step within
+  tolerance of 1e-12 is replaced.
+- **A vanishing start gives up.** When the start value and its derivative are both 0 the error
+  scale floors to `EFF_ZERO`, so the guard `accuracy <= embedded_max * EFF_ZERO` becomes
+  `accuracy <= estimate` and the solve stops as `Unachievable`: `sin` from 0 at 1e-9, `t^7 - t^3`
+  at every accuracy, `t^4` and `sin` quadratures below 1e-6, `e^x - 1` below 1e-6. The truths
+  assert these give-ups explicitly (`truth_a_vanishing_start_gives_up`), so a fix shows as a
+  test change. Proposed fix: scale by the running magnitude of the solution (as in Hairer's
+  `sc = atol + rtol*max(|y0|, |y1|)`) instead of the start values; not built, as it changes
+  results the pin's callers rely on.
+
+`fmath::powf` replaces the platform `powf` in the step-size update (determinism). Its last bit
+can differ, which moves step sizes and so the results within the accuracy, not within 1e-12.
+The difftest treats such inputs as a pin truth defect whose truth is the pin's own integrator
+compiled with `fmath::powf` (the `pinf` oracle: `build.rs` extracts the pin's source and
+replaces the two `powf` calls, with checked counts); scx must match the oracle exactly.
+
+Difftest (`t_ode.rs`, per input; exact / within tolerance / pin defect / mismatch):
+`ode_step` 3080/26/0/0, `ode_step_fail` 14/0/0/0, `ode_too_many_components` 1/0/0/0,
+`ode1_clean` 1/2/11/0, `ode1_fail` 8/1/5/0, `ode2_clean` 1/2/11/0, `ode2_fail` 8/2/4/0,
+`quad_clean` 6/1/7/0, `quad_fail` 13/0/1/0, `quad_intervals` 3092/1/13/0. Nine truths
+(closed-form quadratures and systems, the fifth-derivative error estimate, the give-ups, the
+failure paths) pass.
+
+Timings (best of 7 x 200 runs, microseconds, scx vs pin, a loaded box): Runge 1e-12 33.7-35 vs
+35.6-37; `2 + sin 20t` 1e-9 67-70 vs 70-73; `exp` 1e-12 26-27 vs 27-29; a 2-system at 1e-9
+27.8-29 vs 22-23. The system case is the one regression: 182 steps at about 33 ns each more,
+which is `fmath::powf` (about 46 ns against the platform's 10). A cheaper fixed-exponent
+`powf` (`x^-0.2`, `x^-0.25`) is a follow-up.
+
+## 14. Bernstein polynomials and their roots (`scx-algo::bernstein`, 11-27)
+
+Ported from the pin's `offset/construction/bernstein.rs`, with `bernstein_roots` (and its
+helpers) from `query/tangent_edge.rs`, where it is `pub(crate)`; the difftest's `build.rs`
+extracts the pin's three functions between two marker comments (each checked to occur once)
+and makes them public. Shape:
+
+- **The binomial table is shared.** The pin built a `Binomials` table and threaded `&Binomials`
+  through every product, elevation, sum and vector operation; scx builds the same Pascal
+  rows once (`OnceLock`) and `binomial(n, k)` reads them. No operation takes a table; values
+  are identical (`bern_binomial_all` compares every entry up to `2 * MAX_DEGREE`).
+- **`Poly3<P>`** (`x`, `y`, `z`; `Bernstein3` and `Bounded3` its aliases) replaces
+  `[Bernstein2; 3]` and `[Bounded; 3]`, and the pin's free functions (`dot`, `cross`, `sub3`,
+  `mul3`, `deriv_u3`, ... and each `_bounded` twin) are its methods over the trait `Algebra`,
+  which `Bernstein2` and `Bounded` implement by their own methods: one set of vector
+  operations instead of two.
+- **`Half::{Lower, Upper}`** replaces the `quarter(upper_u: bool, upper_v: bool)` flags.
+- **`bernstein_roots(c, lo, hi, RootLimits { depth, subdivisions }) -> Roots { places,
+  isolated }`** replaces the depth, the `&mut usize` work budget and the `&mut Vec` it
+  appended to, and the returned flag. `RootLimits::DEFAULT` is the pin's `tangent_edge` limits
+  (48, 4096); `prism/profile.rs`'s call (depth 48, work 128, `out` pre-seeded with 0 and 1)
+  will be a `RootLimits` value and a `chain` on the places when it moves. The recursion (`roots_in`) is
+  unchanged. Its value helper is the file's `eval_1d`, which reuses one scratch buffer where
+  the pin's `bernstein_value` allocated a vector per de Casteljau level per bisection step;
+  the products and sums are the same, so the bits are.
+- Errors are `NumError::InvalidInput` with the pin's operation (`offset::construction::bernstein`)
+  and reasons, as the crate's other moved files map `SolidError::InvalidInput`.
+
+Difftest (`t_bern.rs`, inputs; all exact, none within tolerance, no pin defects, no
+mismatches): `bern_new` 3053, `bern_new_extreme` 1, `bern_binomial` 196, `bern_binomial_all`
+1, `bern_ops` 3106, `bern_elevate` 3070, `bern_split` 3106, `bern_bounded` 3106, `bern_vec3`
+3070, `bern_product_rounding` 196, `bern_product_rounding_extreme` 1, `bern_roots` 3106,
+`bern_roots_shapes` 980, `bern_roots_known` 14. The recipes cover degrees up to (5, 2) and
+(4, 4), coefficients over five decades, zeros, ones, short dyadics and one edge value (up to
+`f64::MAX`, infinities and NaN), error bounds 0 to infinity and NaN, and every refusal.
+
+Seven truths hold scx alone to exact rationals (`scx_testkit::Rat`): each operation's result
+evaluated exactly (de Casteljau in rationals) against the exact operation on its operands at
+dyadic and non-dyadic points (products, elevations, sums, both derivatives, splits,
+restrictions, `eval`, the convex-hull bound); degree refusals and degree-128 polynomials
+split and restricted; Pascal's rule and the row sums `2^n` (exact to `n = 56`); the counted
+rounding of products and quarters holding the exact coefficients, with the rounding nonzero,
+over four degree pairs; a subnormal rounding counted; operands' bounds carried through sums,
+scalings, derivatives, products and squares; the roots of twelve polynomials with known
+dyadic roots (simple roots found once within 1e-12 with an exact sign change within four
+ulps, close and double roots reported within reach or left `isolated = false`, the
+double-root exact zeros at 1/2, exhaustion by depth and by subdivisions, a shifted
+interval). These replace the pin's tests: `product_derivative_split_and_elevation_agree_with_values`,
+`degrees_past_the_bound_are_refused`, `extreme_degrees_neither_panic_nor_change_values`,
+`the_counted_rounding_holds_the_exact_coefficients`, `a_rounding_below_the_normal_range_is_counted`,
+`the_counted_rounding_carries_through_sums_scalings_and_derivatives` and `tangent_edge`'s
+`bernstein_roots_are_isolated_and_exact`, each kept as a truth of at least the same claim, the
+value checks now exact instead of against `f64` evaluation.
+
+Timings (release, one core under `taskset`, 1,024 shared seeded inputs through `black_box`,
+every output field folded into a black-boxed checksum, scx and pin interleaved with the order
+alternating, 11 reps, median, ns per input; two cores, a box at load 11): `bernstein_roots` on
+quintics 3,989-4,112 / 3,162 vs 6,695-7,253 / 4,713 (checksums equal), the allocation-free
+value helper. The ODE, on the same harness: a step 269-332 vs 528-554 (equal checksums); the
+2-system `[y1 + a, -y0]` integrated to `T` in `[1, 4]` at 1e-9 7,671-12,924 vs 8,581-15,623;
+the quadrature of `1 / (1 + c t^2)` on `[-1, 1]` at 1e-9 9,609-13,542 vs 10,035-15,437. The
+integrations' checksums differ, as expected: `fmath::powf` moves step sizes (section 13). On
+these fair inputs section 13's system regression does not show; its earlier figure was a
+single input, best of 7.

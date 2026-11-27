@@ -15,7 +15,9 @@
 //! transformation), enclosures and IGES 128 build on these types (research 63 §2.5, NS2 to
 //! NS5).
 
+mod edit;
 mod error;
+pub mod iges;
 mod net;
 mod surface;
 

@@ -1,8 +1,10 @@
 // Written for solidcorex. Apache-2.0. Mirrors, for the local solvers, how solidcore at
 // 03e16c9ee766de5b9b1ced845e5149d62ff493b8 reports their failures (`error/geom.rs`
 // `GeomFailure::{BrentDidNotConverge, ZeroDifferenceStep, CallFailed}`,
-// `SolidError::geom_call`, `error.rs` `ignored`), one for one (report 53, section 12).
-//! Errors of the local solvers, generic over the evaluator's error.
+// `SolidError::geom_call`, `error.rs` `ignored`), one for one (report 53, section 12), and
+// for the ODE integrator its `error/mass.rs` `MassFailure::{StepControl, Integrand}` and
+// `SolidError::nurbs_routine` (report 53, section 13).
+//! Errors of the local solvers and the ODE integrator, generic over the evaluator's error.
 //!
 //! A solver cannot name the kernel's error type (it sits above this layer), yet it acts on
 //! the class of what an evaluator returns, exactly as solidcore does:
@@ -63,6 +65,59 @@ pub enum SolveFailure {
         /// The parameter's value.
         at: f64,
     },
+    /// A global solve's branch is not ready for a local solve and has no node to split
+    /// (solidcore `GeomFailure::NoNodeToSubdivide`).
+    NoNodeToSubdivide {
+        /// The trees of the branch.
+        trees: usize,
+    },
+    /// The ODE integrator's step control cannot meet the accuracy (solidcore
+    /// `MassFailure::StepControl`), for the reason given.
+    StepControl(StepControlFailure),
+    /// The integrand evaluated to a value that is not a finite number (solidcore
+    /// `MassFailure::Integrand`).
+    IntegrandNotFinite,
+}
+
+/// Why the ODE integrator's step control gave up (`crate::ode`): solidcore reports every
+/// one of these but [`StepControlFailure::Overflow`] as `MassFailure::StepControl`, without
+/// the reason.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StepControlFailure {
+    /// A step's error estimate is not above the accuracy by more than its own rounding
+    /// (`accuracy <= estimate * EFF_ZERO`), or the accuracy is not positive.
+    Unachievable,
+    /// The proposed next step is no longer than the minimum step.
+    BelowMinimumStep,
+    /// The step budget ran out before the end of the interval.
+    StepsExhausted,
+    /// A step was retried, shrinking, the most times allowed.
+    RetriesExhausted,
+    /// A retried step shrank to nothing (`x + h` is `x`) or is not finite.
+    StepUnderflow,
+    /// The errors owed by steps accepted through the rounding floor exceed the accuracy
+    /// relative to the integral.
+    ErrorOwed,
+    /// A step's error scale is not a number: the step grew past the largest float with a
+    /// zero derivative, or the values overflowed (solidcore: a failed routine caused by
+    /// its own refusal of the scale, `invalid error scale`).
+    Overflow,
+}
+
+impl StepControlFailure {
+    /// The reason in words.
+    #[must_use]
+    pub const fn reason(self) -> &'static str {
+        match self {
+            Self::Unachievable => "the accuracy is below the rounding of the error estimate",
+            Self::BelowMinimumStep => "the next step is below the minimum step",
+            Self::StepsExhausted => "the step budget ran out",
+            Self::RetriesExhausted => "a step was retried the most times allowed",
+            Self::StepUnderflow => "a retried step shrank to nothing",
+            Self::ErrorOwed => "the errors owed below the rounding floor exceed the accuracy",
+            Self::Overflow => "the step or the values overflowed",
+        }
+    }
 }
 
 impl SolveFailure {
@@ -70,9 +125,11 @@ impl SolveFailure {
     #[must_use]
     pub const fn kind(&self) -> ErrorKind {
         match self {
-            Self::BrentDidNotConverge { .. } | Self::ZeroDifferenceStep { .. } => {
-                ErrorKind::Unsupported
-            }
+            Self::BrentDidNotConverge { .. }
+            | Self::ZeroDifferenceStep { .. }
+            | Self::NoNodeToSubdivide { .. }
+            | Self::StepControl(_) => ErrorKind::Unsupported,
+            Self::IntegrandNotFinite => ErrorKind::Refused,
         }
     }
 }
@@ -93,6 +150,16 @@ impl fmt::Display for SolveFailure {
                 f,
                 "the difference step of parameter {parameter} at {at} is zero"
             ),
+            Self::NoNodeToSubdivide { trees } => write!(
+                f,
+                "no node of the {trees} trees of the branch can be subdivided"
+            ),
+            Self::StepControl(why) => write!(
+                f,
+                "the integrator's step control cannot meet the accuracy: {}",
+                why.reason()
+            ),
+            Self::IntegrandNotFinite => f.write_str("the integrand is not a finite number"),
         }
     }
 }

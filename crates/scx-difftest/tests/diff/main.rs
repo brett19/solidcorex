@@ -15,8 +15,10 @@
     clippy::unwrap_used
 )]
 
+mod berns;
 mod facade;
 mod harness;
+mod odes;
 mod pin_defects;
 mod pin_extent;
 mod pin_project;
@@ -24,14 +26,22 @@ mod pin_quadric;
 mod pin_truths;
 mod solvers;
 mod t_algo;
+mod t_bern;
 mod t_extent;
+mod t_gsolve;
+mod t_gutil;
 mod t_hash;
 mod t_interval;
 mod t_kraw;
 mod t_math;
 mod t_nurbs;
 mod t_nurbs_surface;
+mod t_nurbs_surface_edit;
+mod t_nurbs_surface_iges;
+mod t_ode;
 mod t_p21;
+mod t_pbox;
+mod t_pset;
 mod t_rest;
 mod t_rng;
 mod t_solve;
