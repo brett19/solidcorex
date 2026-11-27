@@ -6,11 +6,12 @@
 //! run-twice determinism.
 //!
 //! **scx.** Most of the operations are not written yet. Each check scx cannot run answers a
-//! typed [`NotYet`] naming the missing piece and its task (BO, BQ, CK1, ...), so DT2 and
+//! typed [`NotYet`] naming the missing piece and its task (BO, TS, CK1, ...), so DT2 and
 //! DT3 replace one arm at a time: today the constructors run (`scx_make`'s block,
 //! cylinder, cone, sphere, torus and extrusion), judged on outcome, volume and area
-//! (`scx_mass` at 1e-9), topology, determinism by the `scx-record` encoding and dangling
-//! vertices. Every check scx runs must pass.
+//! (`scx_mass` at 1e-9), topology, classification (`scx_bodyq::classify_point`, judged as
+//! the pin is), determinism by the `scx-record` encoding and dangling vertices. Every check
+//! scx runs must pass.
 //!
 //! **The pin.** It runs every recipe and is judged against truth, never the other way. A
 //! check where it contradicts truth is a finding; each finding must be covered by a
@@ -154,8 +155,6 @@ impl Check {
 pub enum NotYet {
     /// The Boolean (BO).
     Boolean,
-    /// Point classification against a body (BQ).
-    Classify,
     /// The tessellator (TS).
     Mesh,
     /// `scx_check::contract` (CK1).
@@ -171,7 +170,6 @@ impl NotYet {
     pub fn task(self) -> &'static str {
         match self {
             NotYet::Boolean | NotYet::Lineage => "BO",
-            NotYet::Classify => "BQ",
             NotYet::Mesh => "TS",
             NotYet::Contract => "CK1",
             NotYet::Work => "BO6",
@@ -1487,6 +1485,51 @@ fn scx_topology(b: &scx_brep::Brep, t: &Topology) -> Verdict {
     }
 }
 
+/// Where scx's `classify_point` puts a point, in the pin's terms: a solid region is `In`,
+/// any other region `Out`, a face, edge or vertex `On`, and an error `Failed`.
+fn scx_side(b: &scx_brep::Brep, p: [f64; 3]) -> PinSide {
+    let at = scx_num::vector3d::Point3::new(p[0], p[1], p[2]);
+    let found = scx_bodyq::classify_point(
+        b,
+        at,
+        &mut scx_num::budget::Budget::unlimited(),
+        &scx_num::budget::Stop::new(),
+    );
+    match found {
+        Ok(scx_bodyq::PointClass::In(id)) if b.region(id).is_some_and(|r| r.is_solid()) => {
+            PinSide::In
+        }
+        Ok(scx_bodyq::PointClass::In(_)) => PinSide::Out,
+        Ok(_) => PinSide::On,
+        Err(_) => PinSide::Failed,
+    }
+}
+
+/// T10's certain points must classify on their side in scx, as in the pin; band points are
+/// not judged. Every misplaced point is listed.
+fn scx_classification(b: &scx_brep::Brep, pts: &Points) -> Verdict {
+    let sides: Vec<PinSide> = pts.at.iter().map(|&p| scx_side(b, p)).collect();
+    let m = misplaced(pts, &sides);
+    if m.count == 0 {
+        return Verdict::Pass;
+    }
+    let mut all = String::new();
+    for ((p, t), s) in pts.at.iter().zip(&pts.side).zip(&sides) {
+        let wrong = match t {
+            Side::In => *s != PinSide::In,
+            Side::Out => *s != PinSide::Out,
+            Side::Band => false,
+        };
+        if wrong {
+            let _ = write!(all, "; {p:?}: truth {t:?}, scx {s:?}");
+        }
+    }
+    Verdict::Fail(format!(
+        "{} of {} certain points, all within {} c{all}",
+        m.count, m.certain, m.reach
+    ))
+}
+
 /// The accuracy scx's mass properties are asked for and judged at (72 §8.1).
 const SCX_ACCURACY: f64 = 1e-9;
 
@@ -1551,7 +1594,7 @@ fn scx_area(b: &scx_brep::Brep, r: &Recipe) -> Verdict {
 }
 
 /// Every check of the recipe on scx's side.
-pub fn scx_checks(r: &Recipe) -> BTreeMap<Check, Verdict> {
+pub fn scx_checks(r: &Recipe, pts: &Points) -> BTreeMap<Check, Verdict> {
     let checks = checks_of(r);
     if let Some(gap) = scx_gap(r) {
         return checks
@@ -1602,7 +1645,7 @@ pub fn scx_checks(r: &Recipe) -> BTreeMap<Check, Verdict> {
             }
             (Check::Volume, Ok(b), _) => scx_volume(b, r),
             (Check::Area, Ok(b), _) => scx_area(b, r),
-            (Check::Classification, _, _) => Verdict::NotYet(NotYet::Classify),
+            (Check::Classification, Ok(b), _) => scx_classification(b, pts),
             (Check::Valid | Check::Manifold, _, _) => Verdict::NotYet(NotYet::Contract),
             (Check::Mesh, _, _) => Verdict::NotYet(NotYet::Mesh),
             (Check::Lineage, _, _) => Verdict::NotYet(NotYet::Lineage),
@@ -1645,7 +1688,7 @@ fn case(r: &Recipe) -> Case {
     };
     let runs = [pin_run(r, &points), pin_run(r, &points)];
     let findings = judge_pin(r, &points, &runs);
-    let scx = scx_checks(r);
+    let scx = scx_checks(r, &points);
     Case {
         points,
         band,
@@ -1857,5 +1900,27 @@ fn t_slice_controls() {
             .any(|l| l.contains("applies to no recipe")),
         "{:?}",
         s.failures
+    );
+    // scx's classification passes the true sides and fails the swapped ones
+    let b = scx_build(&scx_frame(&r.base.frame).unwrap(), &r.base).unwrap();
+    assert_eq!(scx_classification(&b, &c.points), Verdict::Pass);
+    let swapped = Points {
+        at: c.points.at.clone(),
+        side: c
+            .points
+            .side
+            .iter()
+            .map(|s| match s {
+                Side::In => Side::Out,
+                Side::Out => Side::In,
+                Side::Band => Side::Band,
+            })
+            .collect(),
+        boxed: c.points.boxed,
+        csg: None,
+    };
+    assert!(
+        matches!(scx_classification(&b, &swapped), Verdict::Fail(_)),
+        "swapped sides pass"
     );
 }

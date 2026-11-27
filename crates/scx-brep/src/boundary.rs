@@ -30,7 +30,7 @@
 
 use core::cmp::Ordering;
 
-use scx_curve::Curve2;
+use scx_curve::{Circle2, Curve2};
 use scx_num::domain::ParamDomain;
 use scx_num::extent2d::Extent2d;
 use scx_num::frame::Sense;
@@ -164,6 +164,11 @@ impl Boundary {
     /// `None` when that is unbounded.
     pub(crate) const fn uv_box(&self) -> Option<Extent2d> {
         self.uv_box
+    }
+
+    /// Whether the loops' signed area showed its sign, so the region is proved.
+    pub(crate) const fn is_decided(&self) -> bool {
+        self.decided
     }
 
     /// Whether the region is bounded by an outer loop, proved.
@@ -356,6 +361,9 @@ impl Tree {
                             let curve = pcurve(rec, lp, us)?;
                             if matches!(curve, Curve2::Line(_)) {
                                 straight(piece.start, end)
+                            } else if let Curve2::Circle(circle) = curve {
+                                let sum = arc_area(circle, curve, lo, hi, c)?;
+                                if rev { neg(sum) } else { sum }
                             } else {
                                 let mut sum = Ivl::from(0.0);
                                 for (a, b) in parts(lo, hi, k) {
@@ -590,6 +598,36 @@ fn crossing(s: P, e: P, q: (Ivl, Ivl)) -> Step {
         (Some(s), Some(e)) => Step::Count(e - s),
         _ => Step::Undecided,
     }
+}
+
+/// `∫ (u - c) dv` along the arc of `circle` from `t = a` to `b`, closed-form: about the
+/// centre `o`, with `u - o.x = R cos φ` and `φ = φ0 ± t`,
+/// `(o.x - c) (v_b - v_a) ± R² (b - a) / 2 + [(u - o.x)(v - o.y)]_a^b / 2`. Only the ends
+/// are evaluated, so a thin face's arcs (radius 1e4, loops 1e-3 apart) keep their
+/// cancelling areas to rounding, where the mean value form's overestimate grows as
+/// `R² (b - a)` over a part and no refinement here could show the sign. The sign `±` is
+/// that of `(p - o) × p'`, which is `±R²`; `None` when it does not show.
+fn arc_area(circle: &Circle2, curve: &Curve2, a: f64, b: f64, c: Ivl) -> Option<Ivl> {
+    let o = circle.frame().origin();
+    let (ox, oy) = (Ivl::from(o.x), Ivl::from(o.y));
+    let r = Ivl::from(circle.radius().mm());
+    let at = |t: f64| curve.jet_over::<Ivl, 1>(Ivl::from(t), Approach::Above);
+    let (ja, jb) = (at(a), at(b));
+    let [d] = ja.d;
+    let turn = (ja.point.x - ox) * d.y - (ja.point.y - oy) * d.x;
+    let half = Ivl::from(0.5);
+    let sweep = r * r * (Ivl::from(b) - Ivl::from(a)) * half;
+    let sweep = if turn.lo > 0.0 {
+        sweep
+    } else if turn.hi < 0.0 {
+        neg(sweep)
+    } else {
+        return None;
+    };
+    let corner = |p: P| (p.x - ox) * (p.y - oy);
+    let total =
+        (ox - c) * (jb.point.y - ja.point.y) + sweep + (corner(jb.point) - corner(ja.point)) * half;
+    total.is_finite().then_some(total)
 }
 
 const fn neg(x: Ivl) -> Ivl {

@@ -727,6 +727,58 @@ fn cargo(root: &Path, args: &[&str]) -> Result<(), String> {
     }
 }
 
+/// Runs the cargo invocations `jobs` side by side (`XTASK_JOBS` at a time, default 16), each
+/// with its output held until it ends, so the lines of two runs never interleave. Every job runs
+/// to its end; the error names the ones that failed.
+fn cargo_parallel(root: &Path, jobs: Vec<Vec<String>>) -> Result<(), String> {
+    use std::sync::Mutex;
+    let width = std::env::var("XTASK_JOBS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(16);
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+    let queue = Mutex::new(jobs.into_iter());
+    let failed = Mutex::new(Vec::new());
+    std::thread::scope(|scope| {
+        for _ in 0..width {
+            scope.spawn(|| {
+                loop {
+                    let next = queue.lock().ok().and_then(|mut q| q.next());
+                    let Some(args) = next else { return };
+                    let out = Command::new(&cargo).args(&args).current_dir(root).output();
+                    let line = format!("cargo {}", args.join(" "));
+                    let ok = match out {
+                        Ok(out) => {
+                            // One print per job, so its lines stay together.
+                            let text = format!(
+                                "xtask: {line}\n{}{}",
+                                String::from_utf8_lossy(&out.stderr),
+                                String::from_utf8_lossy(&out.stdout)
+                            );
+                            println!("{}", text.trim_end());
+                            out.status.success()
+                        }
+                        Err(e) => {
+                            println!("xtask: {line}: {e}");
+                            false
+                        }
+                    };
+                    if !ok && let Ok(mut f) = failed.lock() {
+                        f.push(line);
+                    }
+                }
+            });
+        }
+    });
+    let failed = failed.into_inner().map_err(|e| e.to_string())?;
+    if failed.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("{} failed", failed.join(", ")))
+    }
+}
+
 /// The pattern of a conflict-marker line, for `git grep -E`.
 const CONFLICT_PATTERN: &str = "^(<<<<<<<|=======|>>>>>>>)( |$)";
 
@@ -799,11 +851,69 @@ fn fast(root: &Path, crates: &[String]) -> Result<String, String> {
     } else {
         crates.to_vec()
     };
+    // Each crate keeps its own `-p` selection (its own feature set, so nothing is rebuilt),
+    // but its test targets run as separate cargo invocations, side by side: a few test
+    // binaries are single-thread-bound for tens of seconds, and one after another they left
+    // the machine mostly idle. The targets are cargo's auto-discovered ones (`src/lib.rs`,
+    // `src/main.rs`, `tests/*.rs`, `tests/*/main.rs`) and the doctests; no library crate sets
+    // a custom target.
+    let mut long = Vec::new();
+    let mut short = Vec::new();
     for lib in &libs {
-        cargo(root, &["test", "-p", lib])?;
+        let dir = root.join("crates").join(lib);
+        if !dir.join("Cargo.toml").exists() {
+            return Err(format!("fast: no crate at {}", dir.display()));
+        }
+        let job = |rest: &[&str]| {
+            let mut v = vec!["test".to_string(), "-p".to_string(), lib.clone()];
+            v.extend(rest.iter().map(|a| (*a).to_string()));
+            v
+        };
+        let mut tests: Vec<String> = Vec::new();
+        for e in fs::read_dir(dir.join("tests"))
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
+            let path = e.path();
+            let name = e.file_name().to_string_lossy().to_string();
+            if path.is_dir() && path.join("main.rs").exists() {
+                tests.push(name);
+            } else if let Some(stem) = name.strip_suffix(".rs") {
+                tests.push(stem.to_string());
+            }
+        }
+        tests.sort();
+        for t in &tests {
+            long.push(job(&["--test", t]));
+        }
+        let (has_lib, has_bin) = (
+            dir.join("src/lib.rs").exists(),
+            dir.join("src/main.rs").exists(),
+        );
+        if has_lib || has_bin {
+            let mut v = job(&[]);
+            if has_lib {
+                v.push("--lib".to_string());
+            }
+            if has_bin {
+                v.push("--bins".to_string());
+            }
+            short.push(v);
+        }
+        if has_lib {
+            short.push(job(&["--doc"]));
+        }
     }
-    cargo(root, &["test", "-p", "scx-bench", "--lib"])?;
-    cargo(root, &["test", "-p", "xtask"])?;
+    let mut jobs = long;
+    jobs.extend(short);
+    jobs.push(
+        ["test", "-p", "scx-bench", "--lib"]
+            .map(String::from)
+            .to_vec(),
+    );
+    jobs.push(["test", "-p", "xtask"].map(String::from).to_vec());
+    cargo_parallel(root, jobs)?;
     Ok(format!("fast: passed ({})", libs.join(", ")))
 }
 

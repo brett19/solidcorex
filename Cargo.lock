@@ -506,6 +506,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "scx-boolean"
+version = "0.1.0"
+dependencies = [
+ "scx-brep",
+ "scx-curve",
+ "scx-make",
+ "scx-num",
+ "scx-surface",
+]
+
+[[package]]
 name = "scx-brep"
 version = "0.1.0"
 dependencies = [
@@ -514,6 +525,18 @@ dependencies = [
  "scx-nurbs",
  "scx-ssi",
  "scx-surface",
+ "scx-testkit",
+]
+
+[[package]]
+name = "scx-check"
+version = "0.1.0"
+dependencies = [
+ "scx-brep",
+ "scx-make",
+ "scx-mass",
+ "scx-num",
+ "scx-planar",
  "scx-testkit",
 ]
 
@@ -532,6 +555,7 @@ name = "scx-difftest"
 version = "0.1.0"
 dependencies = [
  "scx-algo",
+ "scx-bodyq",
  "scx-brep",
  "scx-curve",
  "scx-make",
