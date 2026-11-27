@@ -1,0 +1,23 @@
+# Written for solidcorex.
+[package]
+name = "scx-bodyq"
+description = "Queries of a body: which region or boundary entity a point lies in"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+scx-brep = { path = "../scx-brep" }
+scx-curve = { path = "../scx-curve" }
+scx-nurbs = { path = "../scx-nurbs" }
+scx-num = { path = "../scx-num" }
+scx-surface = { path = "../scx-surface" }
+
+[dev-dependencies]
+scx-make = { path = "../scx-make" }
+scx-testkit = { path = "../scx-testkit", features = ["bodies"] }
+
+[lints]
+workspace = true
