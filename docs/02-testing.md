@@ -176,7 +176,12 @@ count of cells filled, as reported by the test harness's own `FaceCell` wrappers
   in CI).
   - **Tier 1, seconds:** the touched crate's own tests, the difftest cases for it, one case per
     parallel site at 1 and 3 workers, a handful of property cases. `cargo xtask fast` takes about
-    2.2 s warm today (01 §9.3). Every change runs this locally.
+    65 s warm (measured 11-27 on a shared 32-core box; 01 §9.3 has the 2.2 s of the first crates).
+    Every change runs this locally. It runs every crate's test targets (each integration test file,
+    the lib tests, the doctests) as separate `cargo test -p` invocations, up to 16 at a time
+    (`XTASK_JOBS`), because a few test binaries are single-thread-bound for tens of seconds; the
+    longest, `scx-surface`'s `intersect` (`near_tangents_classify_at_the_tolerance`, `random_pairs_match_t2`),
+    now sets the time.
   - **Tier 2, CI:** every crate's tests, the full difftest, every case at both worker counts, the
     corpora, the work gate of section 7.
   - **Nightly:** property tests with thousands of cases from the same generators, random operation
