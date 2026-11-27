@@ -593,6 +593,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "scx-hlr"
+version = "0.1.0"
+dependencies = [
+ "scx-bodyq",
+ "scx-brep",
+ "scx-curve",
+ "scx-num",
+ "scx-nurbs",
+ "scx-nurbs-surface",
+ "scx-planar",
+ "scx-surface",
+ "scx-testkit",
+]
+
+[[package]]
 name = "scx-make"
 version = "0.1.0"
 dependencies = [
