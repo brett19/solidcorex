@@ -50,17 +50,17 @@ pub struct ShellPlan {
     pub faces: Vec<FacePlan>,
 }
 
-type Result<T> = core::result::Result<T, P21Error>;
+pub(crate) type Result<T> = core::result::Result<T, P21Error>;
 
-fn fail(id: u64, cause: EntityCause) -> P21Error {
+pub(crate) fn fail(id: u64, cause: EntityCause) -> P21Error {
     P21Error::entity(id, cause)
 }
 
-fn get(ex: &Exchange, id: u64) -> Result<&Instance> {
+pub(crate) fn get(ex: &Exchange, id: u64) -> Result<&Instance> {
     ex.get(id).ok_or_else(|| fail(id, EntityCause::Missing))
 }
 
-fn wrong(e: &Instance, id: u64, expected: &'static str) -> P21Error {
+pub(crate) fn wrong(e: &Instance, id: u64, expected: &'static str) -> P21Error {
     fail(
         id,
         EntityCause::WrongType {
@@ -70,12 +70,17 @@ fn wrong(e: &Instance, id: u64, expected: &'static str) -> P21Error {
     )
 }
 
-fn param<'a>(id: u64, p: &'a [Param], index: usize, expected: &'static str) -> Result<&'a Param> {
+pub(crate) fn param<'a>(
+    id: u64,
+    p: &'a [Param],
+    index: usize,
+    expected: &'static str,
+) -> Result<&'a Param> {
     p.get(index)
         .ok_or_else(|| fail(id, EntityCause::BadParam { index, expected }))
 }
 
-fn reference(id: u64, p: &[Param], index: usize) -> Result<u64> {
+pub(crate) fn reference(id: u64, p: &[Param], index: usize) -> Result<u64> {
     param(id, p, index, "an entity reference")?
         .as_ref_id()
         .ok_or_else(|| {
@@ -89,7 +94,7 @@ fn reference(id: u64, p: &[Param], index: usize) -> Result<u64> {
         })
 }
 
-fn refs(id: u64, p: &[Param], index: usize) -> Result<Vec<u64>> {
+pub(crate) fn refs(id: u64, p: &[Param], index: usize) -> Result<Vec<u64>> {
     let list = param(id, p, index, "a list of entity references")?
         .as_list()
         .ok_or_else(|| {
@@ -114,6 +119,19 @@ fn refs(id: u64, p: &[Param], index: usize) -> Result<Vec<u64>> {
             })
         })
         .collect()
+}
+
+/// Parameter `index` of `#id` as a boolean.
+pub(crate) fn boolean(id: u64, p: &[Param], index: usize) -> Result<bool> {
+    param(id, p, index, "a boolean")?.as_bool().ok_or_else(|| {
+        fail(
+            id,
+            EntityCause::BadParam {
+                index,
+                expected: "a boolean",
+            },
+        )
+    })
 }
 
 /// A face's plan.
