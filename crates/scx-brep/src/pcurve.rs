@@ -330,7 +330,7 @@ impl Draft {
                     )
                 }
                 Kind::Collapsed { pole } => {
-                    let Some((start, budget)) = at else {
+                    let Some((start, _)) = at else {
                         return Err(PcurveWriteError::NoCurveUse { lp });
                     };
                     let next = (k + 1) % n;
@@ -342,18 +342,20 @@ impl Draft {
                         }
                         _ => return Err(PcurveWriteError::CollapsedRun { lp, at: next }),
                     };
-                    match (pole, periods[0]) {
-                        (Some(p), Some(period)) => {
-                            let sign = if side_v < p.v { -1.0 } else { 1.0 };
-                            let du = toward(target.x - start.x, period, sign);
-                            let end = start + Vec2::new(du, 0.0);
-                            at = Some((end, budget));
-                            (
-                                pole_segment(start, end, item.sense, item.edge)?,
-                                [start, end],
-                            )
-                        }
-                        _ => (UseGeom::Point(start), [start, start]),
+                    // The loop then stands at this use's end, with its budget, as `finish`
+                    // measures the next joint.
+                    if let (Some(p), Some(period)) = (pole, periods[0]) {
+                        let sign = if side_v < p.v { -1.0 } else { 1.0 };
+                        let du = toward(target.x - start.x, period, sign);
+                        let end = start + Vec2::new(du, 0.0);
+                        at = Some((end, item.end_budget));
+                        (
+                            pole_segment(start, end, item.sense, item.edge)?,
+                            [start, end],
+                        )
+                    } else {
+                        at = Some((start, item.end_budget));
+                        (UseGeom::Point(start), [start, start])
                     }
                 }
             };

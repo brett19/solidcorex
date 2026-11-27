@@ -10,7 +10,7 @@ use std::sync::Arc;
 use scx_num::extent3d::Extent3d;
 use scx_num::units::Resolution;
 
-use crate::body::BodyCells;
+use crate::body::{BodyCells, Seed};
 use crate::draft::Draft;
 use crate::id::{EdgeId, FaceId, IdMap, RegionId, ShellId, VertexId};
 use crate::record::{EdgeAdj, EdgeGeom, FaceRecord, ShellRecord};
@@ -38,6 +38,19 @@ impl Brep {
         }
     }
 
+    /// A body finished from a draft of another, whose boxes start from `seed`.
+    pub(crate) fn from_tables_seeded(
+        t: Tables,
+        resolution: Resolution,
+        seed: Option<Seed>,
+    ) -> Self {
+        Self {
+            t,
+            resolution,
+            cells: Arc::new(BodyCells::seeded(seed)),
+        }
+    }
+
     fn at(&self) -> At<'_, Finished> {
         At::finished(
             &self.t,
@@ -57,13 +70,13 @@ impl Brep {
     /// A draft sharing every table with this body until it writes one.
     #[must_use]
     pub fn edit(&self) -> Draft {
-        Draft::from_tables(self.t.clone())
+        Draft::from_body(self.t.clone(), self.resolution, Arc::clone(&self.cells))
     }
 
     /// A draft of this body that writes in place wherever the body held the only reference.
     #[must_use]
     pub fn into_draft(self) -> Draft {
-        Draft::from_tables(self.t)
+        Draft::from_body(self.t, self.resolution, self.cells)
     }
 
     /// The same body with its ids renumbered densely, keeping their order, and how. A body
