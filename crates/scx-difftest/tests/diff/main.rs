@@ -51,6 +51,7 @@ mod t_open_conic;
 mod t_p21;
 mod t_pbox;
 mod t_pcurve;
+mod t_pcurve_write;
 mod t_pset;
 mod t_rest;
 mod t_rng;

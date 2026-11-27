@@ -5045,6 +5045,163 @@ in ns per face.
    `Draft::add_face` appends fins loop by loop, which is enough for the generators. No API
    was added to `scx-brep`.
 
+### 6.11 BR5 as built (11-27)
+
+Decided by analysis and an adversarial pass. Proposed for review; not yet ruled.
+
+`scx_brep::pcurve` is the exact pcurve writer, step 3 of the pcurve plan. Each use of a face
+gets the closed form that `scx_surface::pcurve_of` gives for its edge's curve on the face's
+surface, moved by whole periods into the window its loop needs. A collapsed edge at a pole
+gets the pole's segment. Where there is no closed form the writer refuses with
+`PcurveWriteError::NeedsFit { edge }` (Unsupported) and writes nothing. Fitting is BR9's.
+
+**The public surface.**
+
+```rust
+impl Draft {
+    pub fn exact_loops(&self, surface: &Surface, loops: &[Vec<(EdgeId, Sense)>], doc: &Document)
+        -> Result<Vec<LoopRecord>, PcurveWriteError>;
+    pub fn write_pcurves(&mut self, face: FaceId, doc: &Document) -> Result<(), PcurveWriteError>;
+}
+```
+
+- `exact_loops` computes the loops of a face that is not built yet (`add_face` takes them).
+- `write_pcurves` rewrites a face's uses in place through `face_mut`. It computes everything
+  first, so on any error the face is unchanged. Every use it writes carries `bound = None`.
+- `PcurveWriteError` is `Copy` and `#[non_exhaustive]`, with a stable `name()`. Its
+  variants:
+
+| Variant | Kind | When |
+|---|---|---|
+| `NeedsFit { edge }` | Unsupported | `pcurve_of` has no closed form or is inexact, or the curve is within the edge's reach of the surface but not within the approximation tolerance |
+| `NoCurveUse { lp }` | Unsupported | a loop of collapsed uses only (nothing to place it by) |
+| `CollapsedRun { lp, at }` | Unsupported | two collapsed uses in a row |
+| `Absent(Absent)` | Refused | no such face or edge |
+| `Pending { edge }` | Refused | the edge's curve is not attached (A10) |
+| `OffSurface { edge, at, miss }` | Refused | the curve leaves the surface beyond the edge's reach |
+| `CrossesPole { edge, at }` | Refused | a meridian runs through a pole inside one use |
+| `LoopOpen { lp, at, gap }` | Refused | consecutive uses do not meet, even after whole-period moves |
+| `PoleNeedsEdge { lp, at }` | Refused | they fail to meet at a pole, where a collapsed edge is missing |
+| `Winds { lp }` | Refused | the loop closes a whole period away (it needs a seam) |
+| `Pcurve { edge, cause }` | the cause's | another `PcurveError` |
+
+**The rules.** These are 07 §3 rule 5 and the checks BR2's `finish` makes.
+
+- *Periods.* A loop's first curve use keeps `pcurve_of`'s base window. Each later use moves
+  by `round(gap / period)` periods toward the use before it. What remains must be within
+  the two ends' budgets (record, edge reach, vertex reach), converted to uv by the
+  surface's speed, as `finish` measures it.
+- *Poles.* A collapsed use whose vertex is a pole (a sphere's two, a cone's apex, within
+  zone + edge reach + vertex reach) becomes a `Line2` along `u` at the pole's `v`, over
+  `[0, 1]`. It runs from where the loop arrives to where it leaves, with its length moved
+  into `(0, period]`; a zero gap becomes a whole turn. It runs toward `-u` when the face
+  lies below the pole and toward `+u` above, so the face stays on the left. For a
+  `Reversed` use the line is reversed. A collapsed use away from a pole becomes
+  `UseGeom::Point` where the loop stands. No pcurve runs along a pole's line, and none
+  passes a pole inside a use.
+- *Inner loops* move by whole periods so that their centre is nearest the first loop's.
+
+This answers §6.10's open question 1 for the writer's side. A collapsed edge's use is a
+segment over `[0, 1]`, one collapsed edge per pole per face, as the generator makes it.
+`finish` accepts it, and `contains_uv` closes on it.
+
+**Decisions, with cases for and against.**
+
+1. *The tolerance is `res.approx()` (half the zone).*
+   - For: `pcurve_of` checks at 9 parameters. A sinusoidal miss between two samples is at
+     most `1 / cos(pi / 8)` (1.08) times the larger sampled one. Checking at half the zone
+     therefore keeps the pcurve within the zone everywhere, so `bound = None` is honest.
+   - Against: a curve that lifts at 0.6 zone is refused as `NeedsFit`, even though `finish`
+     would pass it.
+   - Answer: that edge then gets a fitted pcurve with a recorded bound (BR9). An exact claim
+     that might not hold is worse.
+2. *Near the surface is `NeedsFit`, not `OffSurface`.* A `NotOnSurface` whose miss is within
+   the edge's reach means a fit can carry it.
+   - Against: `pcurve_of` reports the first failing sample's miss, not the largest, so a
+     curve that leaves the surface after a near first sample is called `NeedsFit`.
+   - Answer: BR9's fitter measures the whole curve and refuses it then. The writer never
+     writes such a curve. Open question 2 below.
+3. *The pole direction comes from the arriving pcurve's middle `v`.*
+   - For: it uses only data the writer already has. It is right for every face that does
+     not touch the pole on both sides.
+   - Against: on a face whose arriving use is itself at the pole's `v` this is undefined.
+   - Answer: no pcurve may run along a pole's line, so that arriving use does not exist.
+4. *One pole segment per joint.* Two collapsed uses in a row (`CollapsedRun`) and a loop of
+   collapsed uses only (`NoCurveUse`) are Unsupported rather than Refused. They are legal
+   in principle (a degenerate face at a pole), and nothing builds them yet.
+5. *Shifting.* Only `Line2`, `AngleLine2` and `AngleWave2` can be moved by a period. These
+   are all `pcurve_of` gives on periodic surfaces; any other kind is `NeedsFit`, which is
+   unreachable today.
+6. *Zero tolerance in `pcurve_of`* (the 11-27 04 follow-up) is now refused:
+   `PcurveError::BadTolerance` for zero, negative, infinite and NaN, Refused.
+
+**Tests** (`crates/scx-brep/tests/pcurve.rs`, 7; the dense judge stands in for T6):
+
+- *The judge.* At 1001 parameters per use, the lift is on the edge's curve within the zone
+  and `bound` is `None`. There are no period jumps (T7 `jumps`). Wherever the surface has
+  poles, there is no dog-leg and no pole passed (T7 `dog_leg`, `passes_pole`).
+- Every generated body (11 kinds × seeds 0..5 × sizes 1..=4) is rewritten face by face. It
+  agrees with the generator up to whole periods, finishes, and passes the judge.
+- `contains_uv` on the written pcurves (BR4): just left of every curve use's middle is
+  `Inside` and just right is `Outside`. The right-hand check is skipped on faces that wrap
+  a whole period, where the far side is the face again. Over 100 checks.
+- A plane-section oblique cylinder in three frames (SS5 `section_by_plane`): the wall loop
+  is circle (`AngleLine2`), seam (`Line2`), ellipse (`AngleWave2`), seam. The plane caps get
+  the circle and the ellipse. The body finishes and passes the judge.
+- A spherical cap cut by a plane, with a collapsed use at the north pole. The pole segment
+  is a whole turn toward `-u`, and the cap finishes. The same cap with its uses re-sensed
+  has its segment run backward and still finishes.
+- Each refusal by its cause: `NeedsFit` (an oblique sphere section's circle, an oblique
+  cone section's ellipse), `OffSurface`, `CrossesPole`, `Winds`, `PoleNeedsEdge`,
+  `LoopOpen`, `NoCurveUse`, `CollapsedRun`, `Pending`, an absent face and an absent edge.
+  A refused write changes nothing.
+
+**Difftest** (`t_pcurve_write`) against the pin's `eval::pcurve::exact_pcurves`.
+
+- *Setup.* Every generated body (11 kinds × seeds 0..3 × sizes 1..=3) is used. Each face's
+  surface and curves are passed to the pin as its plain-data records. Their frames are
+  read off scx's geometry at STEP parameters and checked against the pin's formulas to
+  1e-12. The pin's radian uv are mapped by the surface's `from_step` and compared per use,
+  up to one whole period, at 33 samples.
+- *Result.* 5,160 inputs: 1,183 exact, 3,977 within 1e-9 (relative), 0 pin defects,
+  0 mismatches, 0 nondeterministic.
+- The pin has no exact pcurve for 54 uses: circles on planes, since its plane closed forms
+  cover only lines and polylines and fit the rest. Those uses are judged against truth on
+  scx's side alone, and all lift within the zone.
+
+**Cost** (release, throwaway timer over seeds 0..5).
+
+| Bodies | Write cost per use | Generator's construction per face |
+|---|---|---|
+| Planar | 175–295 ns (0.6–1.2 µs per face) | 1.2–2.9 µs |
+| Sphere | 0.66–0.69 µs | 2.8–3.0 µs |
+| Cone | 0.79–0.83 µs | 3.6–4.0 µs |
+| Cylinder | 1.0–1.1 µs | 4.6–5.5 µs |
+| Torus | 2.4–2.5 µs | 9.4–10.2 µs |
+
+- The curved faces cost about what the generator spends making the same pcurves through
+  `pcurve_of`. The lifting check's surface evaluations dominate.
+- The writer is not on any existing path; it only adds cost where it is called. Research 66
+  names no technique for writing exact pcurves. Its pcurve items are boxes and filtered trim
+  predicates, which belong to BR4 and the tessellator.
+
+**Deviations from §6.5.**
+
+- T6 does not exist, so the dense judge stands in for it.
+- SS5's sections arrive as ordinary curves: the writer does not know an edge came from a
+  section. Its exact forms are `pcurve_of`'s, including `AngleWave2` for an oblique cylinder
+  section.
+
+**Open questions.**
+
+1. `finish`'s closure check measures the joint between uses `a` and `b` with `b`'s *end*
+   budget (BR2, `check/geometry.rs`). The writer uses `b`'s start budget. These agree
+   unless a vertex's reach differs at the two ends of one edge. Is BR2's choice intended?
+2. `pcurve_of`'s `NotOnSurface` could report the largest sampled miss rather than the first
+   one, so the writer could split `NeedsFit` from `OffSurface` exactly.
+3. Should a degenerate face at a pole (decision 4) ever be built? If so, it needs a
+   two-segment or point rule.
+
 ## 7. `scx-record`
 
 The pin's sources are `topology/api_files`, `topology/part_file`, `topology/database_io` and
