@@ -423,3 +423,68 @@ Timings (best of 7 x 200 runs, microseconds, scx vs pin, a loaded box): Runge 1e
 27.8-29 vs 22-23. The system case is the one regression: 182 steps at about 33 ns each more,
 which is `fmath::powf` (about 46 ns against the platform's 10). A cheaper fixed-exponent
 `powf` (`x^-0.2`, `x^-0.25`) is a follow-up.
+
+## 14. Bernstein polynomials and their roots (`scx-algo::bernstein`, 11-27)
+
+Ported from the pin's `offset/construction/bernstein.rs`, with `bernstein_roots` (and its
+helpers) from `query/tangent_edge.rs`, where it is `pub(crate)`; the difftest's `build.rs`
+extracts the pin's three functions between two marker comments (each checked to occur once)
+and makes them public. Shape:
+
+- **The binomial table is shared.** The pin built a `Binomials` table and threaded `&Binomials`
+  through every product, elevation, sum and vector operation; scx builds the same Pascal
+  rows once (`OnceLock`) and `binomial(n, k)` reads them. No operation takes a table; values
+  are identical (`bern_binomial_all` compares every entry up to `2 * MAX_DEGREE`).
+- **`Poly3<P>`** (`x`, `y`, `z`; `Bernstein3` and `Bounded3` its aliases) replaces
+  `[Bernstein2; 3]` and `[Bounded; 3]`, and the pin's free functions (`dot`, `cross`, `sub3`,
+  `mul3`, `deriv_u3`, ... and each `_bounded` twin) are its methods over the trait `Algebra`,
+  which `Bernstein2` and `Bounded` implement by their own methods: one set of vector
+  operations instead of two.
+- **`Half::{Lower, Upper}`** replaces the `quarter(upper_u: bool, upper_v: bool)` flags.
+- **`bernstein_roots(c, lo, hi, RootLimits { depth, subdivisions }) -> Roots { places,
+  isolated }`** replaces the depth, the `&mut usize` work budget and the `&mut Vec` it
+  appended to, and the returned flag. `RootLimits::DEFAULT` is the pin's `tangent_edge` limits
+  (48, 4096); `prism/profile.rs`'s call (depth 48, work 128, `out` pre-seeded with 0 and 1)
+  will be a `RootLimits` value and a `chain` on the places when it moves. The recursion (`roots_in`) is
+  unchanged. Its value helper is the file's `eval_1d`, which reuses one scratch buffer where
+  the pin's `bernstein_value` allocated a vector per de Casteljau level per bisection step;
+  the products and sums are the same, so the bits are.
+- Errors are `NumError::InvalidInput` with the pin's operation (`offset::construction::bernstein`)
+  and reasons, as the crate's other moved files map `SolidError::InvalidInput`.
+
+Difftest (`t_bern.rs`, inputs; all exact, none within tolerance, no pin defects, no
+mismatches): `bern_new` 3053, `bern_new_extreme` 1, `bern_binomial` 196, `bern_binomial_all`
+1, `bern_ops` 3106, `bern_elevate` 3070, `bern_split` 3106, `bern_bounded` 3106, `bern_vec3`
+3070, `bern_product_rounding` 196, `bern_product_rounding_extreme` 1, `bern_roots` 3106,
+`bern_roots_shapes` 980, `bern_roots_known` 14. The recipes cover degrees up to (5, 2) and
+(4, 4), coefficients over five decades, zeros, ones, short dyadics and one edge value (up to
+`f64::MAX`, infinities and NaN), error bounds 0 to infinity and NaN, and every refusal.
+
+Seven truths hold scx alone to exact rationals (`scx_testkit::Rat`): each operation's result
+evaluated exactly (de Casteljau in rationals) against the exact operation on its operands at
+dyadic and non-dyadic points (products, elevations, sums, both derivatives, splits,
+restrictions, `eval`, the convex-hull bound); degree refusals and degree-128 polynomials
+split and restricted; Pascal's rule and the row sums `2^n` (exact to `n = 56`); the counted
+rounding of products and quarters holding the exact coefficients, with the rounding nonzero,
+over four degree pairs; a subnormal rounding counted; operands' bounds carried through sums,
+scalings, derivatives, products and squares; the roots of twelve polynomials with known
+dyadic roots (simple roots found once within 1e-12 with an exact sign change within four
+ulps, close and double roots reported within reach or left `isolated = false`, the
+double-root exact zeros at 1/2, exhaustion by depth and by subdivisions, a shifted
+interval). These replace the pin's tests: `product_derivative_split_and_elevation_agree_with_values`,
+`degrees_past_the_bound_are_refused`, `extreme_degrees_neither_panic_nor_change_values`,
+`the_counted_rounding_holds_the_exact_coefficients`, `a_rounding_below_the_normal_range_is_counted`,
+`the_counted_rounding_carries_through_sums_scalings_and_derivatives` and `tangent_edge`'s
+`bernstein_roots_are_isolated_and_exact`, each kept as a truth of at least the same claim, the
+value checks now exact instead of against `f64` evaluation.
+
+Timings (release, one core under `taskset`, 1,024 shared seeded inputs through `black_box`,
+every output field folded into a black-boxed checksum, scx and pin interleaved with the order
+alternating, 11 reps, median, ns per input; two cores, a box at load 11): `bernstein_roots` on
+quintics 3,989-4,112 / 3,162 vs 6,695-7,253 / 4,713 (checksums equal), the allocation-free
+value helper. The ODE, on the same harness: a step 269-332 vs 528-554 (equal checksums); the
+2-system `[y1 + a, -y0]` integrated to `T` in `[1, 4]` at 1e-9 7,671-12,924 vs 8,581-15,623;
+the quadrature of `1 / (1 + c t^2)` on `[-1, 1]` at 1e-9 9,609-13,542 vs 10,035-15,437. The
+integrations' checksums differ, as expected: `fmath::powf` moves step sizes (section 13). On
+these fair inputs section 13's system regression does not show; its earlier figure was a
+single input, best of 7.

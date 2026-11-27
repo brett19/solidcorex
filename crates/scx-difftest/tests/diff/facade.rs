@@ -188,6 +188,7 @@ fn affine_bits(m: &[[f64; 4]; 4], o: &mut Out) {
 }
 
 pub mod x {
+    pub use crate::berns::x as bern;
     pub use crate::odes::x as od;
     pub use crate::solvers::x as sv;
     pub use scx_algo::hash_table;
@@ -498,6 +499,7 @@ pub mod x {
 
 /// The pinned solidcore.
 pub mod s {
+    pub use crate::berns::s as bern;
     pub use crate::odes::s as od;
     pub use crate::solvers::s as sv;
     pub use solidcore::geom::hash_table;
