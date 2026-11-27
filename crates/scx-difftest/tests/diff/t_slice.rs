@@ -6,11 +6,12 @@
 //! run-twice determinism.
 //!
 //! **scx.** Most of the operations are not written yet. Each check scx cannot run answers a
-//! typed [`NotYet`] naming the missing piece and its task (BO, TS, CK1, ...), so DT2 and
-//! DT3 replace one arm at a time: today the constructors run (`scx_make`'s block,
+//! typed [`NotYet`] naming the missing piece and its task (BO, BO6), so DT3
+//! replaces one arm at a time: today the constructors run (`scx_make`'s block,
 //! cylinder, cone, sphere, torus and extrusion), judged on outcome, volume and area
 //! (`scx_mass` at 1e-9), topology, classification (`scx_bodyq::classify_point`, judged as
-//! the pin is), determinism by the `scx-record` encoding and dangling vertices. Every check
+//! the pin is), validity and manifoldness (`scx_check::contract`), the mesh (`scx_tess` at a
+//! chord of 1% of `cbrt(V)`, against T13's oracle and truth's volume), determinism by the `scx-record` encoding and dangling vertices. Every check
 //! scx runs must pass.
 //!
 //! **The pin.** It runs every recipe and is judged against truth, never the other way. A
@@ -155,10 +156,6 @@ impl Check {
 pub enum NotYet {
     /// The Boolean (BO).
     Boolean,
-    /// The tessellator (TS).
-    Mesh,
-    /// `scx_check::contract` (CK1).
-    Contract,
     /// `Report::work` and its baseline (BO6).
     Work,
     /// The Boolean's `Changes` (BO).
@@ -170,8 +167,6 @@ impl NotYet {
     pub fn task(self) -> &'static str {
         match self {
             NotYet::Boolean | NotYet::Lineage => "BO",
-            NotYet::Mesh => "TS",
-            NotYet::Contract => "CK1",
             NotYet::Work => "BO6",
         }
     }
@@ -1593,6 +1588,82 @@ fn scx_area(b: &scx_brep::Brep, r: &Recipe) -> Verdict {
     }
 }
 
+/// The contract (`scx_check::contract`): closed, manifold and outward, or the first breach
+/// named. It answers `Valid` and `Manifold` alike, as the pin's two checks both ask of a
+/// body that every edge has two fins and every face bounds the solid.
+fn scx_contract(b: &scx_brep::Brep) -> Verdict {
+    use scx_brep::op::{Cx, NoTrace, Scratch, Settings};
+    let doc = scx_brep::Document::with_resolution(b.resolution());
+    let mut scratch = Scratch::default();
+    let settings = Settings::new();
+    let stop = scx_num::budget::Stop::new();
+    let cx = Cx::new(&doc, &settings, &mut scratch, &stop, &NoTrace);
+    match scx_check::contract(b, &cx) {
+        Ok(_) => Verdict::Pass,
+        Err(e) => Verdict::Fail(format!("contract: {e} ({e:?})")),
+    }
+}
+
+/// The mesh's chord as a fraction of the body's size, `cbrt(V)`.
+const MESH_CHORD: f64 = 0.01;
+
+/// T13's mesh invariants on scx's mesh at the recipe's chord: no violation of the oracle
+/// (closed, manifold, outward, unfolded, no degenerate triangle), every face's stated bound
+/// within the chord, and the enclosed volume within chord times truth's area of truth's
+/// volume (rounding, `1e-9` of the volume, added). The chord is `MESH_CHORD` of `cbrt(V)`,
+/// never below ten resolutions.
+fn scx_mesh(b: &scx_brep::Brep, r: &Recipe) -> Verdict {
+    let Some(t) = r.truth else {
+        return Verdict::Fail("mesh asked with no truth".into());
+    };
+    let chord = (MESH_CHORD * scx_num::fmath::cbrt(t.volume)).max(10.0 * RES);
+    let spec = match scx_tess::TessSpec::new(mm(chord), b.resolution()) {
+        Ok(s) => s,
+        Err(e) => return Verdict::Fail(format!("spec at chord {chord}: {e}")),
+    };
+    let mesh = match scx_tess::tessellate(
+        b,
+        &spec,
+        &mut scx_num::budget::Budget::unlimited(),
+        &scx_num::budget::Stop::new(),
+    ) {
+        Ok(m) => m,
+        Err(e) => return Verdict::Fail(format!("tessellate at chord {chord}: {e}")),
+    };
+    let m = scx_testkit::mesh::Mesh {
+        vertices: mesh.positions.iter().map(|q| [q.x, q.y, q.z]).collect(),
+        triangles: mesh.triangles.clone(),
+    };
+    let v = scx_testkit::mesh::violations(&m, scx_testkit::mesh::Limits::default());
+    if !v.is_empty() {
+        return Verdict::Fail(format!(
+            "chord {chord}: {} violations, first {:?}",
+            v.len(),
+            v.first()
+        ));
+    }
+    if let Some((f, bound)) = mesh
+        .chord_bound
+        .iter()
+        .find(|(_, bound)| bound.mm() > chord * (1.0 + 1e-9))
+    {
+        return Verdict::Fail(format!(
+            "face {f} states bound {} over chord {chord}",
+            bound.mm()
+        ));
+    }
+    let Some(area) = t.area else {
+        return Verdict::Pass;
+    };
+    let slack = scx_testkit::mesh::chord_bound(chord, area) + 1e-9 * t.volume;
+    let gap = scx_testkit::mesh::volume_gap(&m, t.volume, slack);
+    if gap.holds() {
+        Verdict::Pass
+    } else {
+        Verdict::Fail(format!("chord {chord}: volume {gap:?}"))
+    }
+}
+
 /// Every check of the recipe on scx's side.
 pub fn scx_checks(r: &Recipe, pts: &Points) -> BTreeMap<Check, Verdict> {
     let checks = checks_of(r);
@@ -1646,8 +1717,8 @@ pub fn scx_checks(r: &Recipe, pts: &Points) -> BTreeMap<Check, Verdict> {
             (Check::Volume, Ok(b), _) => scx_volume(b, r),
             (Check::Area, Ok(b), _) => scx_area(b, r),
             (Check::Classification, Ok(b), _) => scx_classification(b, pts),
-            (Check::Valid | Check::Manifold, _, _) => Verdict::NotYet(NotYet::Contract),
-            (Check::Mesh, _, _) => Verdict::NotYet(NotYet::Mesh),
+            (Check::Valid | Check::Manifold, Ok(b), _) => scx_contract(b),
+            (Check::Mesh, Ok(b), _) => scx_mesh(b, r),
             (Check::Lineage, _, _) => Verdict::NotYet(NotYet::Lineage),
             (Check::Work, _, _) => Verdict::NotYet(NotYet::Work),
             (c, Err(e), _) => Verdict::Fail(format!("{c:?}: no body ({e})")),
