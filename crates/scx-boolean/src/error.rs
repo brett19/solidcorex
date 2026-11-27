@@ -9,7 +9,7 @@ use core::fmt;
 use scx_brep::{EdgeId, Entity, FaceId, Operand, VertexId};
 use scx_num::budget::{Exhausted, Stopped};
 use scx_num::error::ErrorKind;
-use scx_surface::SurfaceError;
+use scx_surface::{SurfaceError, SurfaceKind};
 
 /// Why a Boolean did not finish.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,6 +71,17 @@ pub enum BooleanUnsupported {
         /// The two vertices.
         vertices: [VertexId; 2],
     },
+    /// A pair of analytic faces whose surfaces meet in a curve with no closed form here
+    /// (72 §5.2, a quartic say): step 5's marcher answers it. The faces are `a`'s, then
+    /// `b`'s, and so are the kinds.
+    SsiPair {
+        /// `a`'s face.
+        a: FaceId,
+        /// `b`'s face.
+        b: FaceId,
+        /// The two surfaces' kinds.
+        kinds: [SurfaceKind; 2],
+    },
     /// A stage of the method not built yet: the operands got past every stage before it.
     /// Each later task removes the stage it builds (72 §5.8).
     Stage(Stage),
@@ -80,8 +91,8 @@ pub enum BooleanUnsupported {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
 pub enum Stage {
-    /// Face against face: the intersection curves of each meeting pair (BO2).
-    FaceFace,
+    /// Imprint: splitting each face by its sections and lying edges (BO3).
+    Imprint,
 }
 
 /// The method's own failure on valid operands.
@@ -126,6 +137,28 @@ pub enum BooleanDefect {
         /// The face.
         face: FaceId,
     },
+    /// A sub-span of an intersection curve or of a lying edge that no sample decides against
+    /// the face: every sample stayed near its boundary with no edge of it within
+    /// coincidence, after every refinement.
+    UndecidedSpan {
+        /// The operand.
+        operand: Operand,
+        /// The face.
+        face: FaceId,
+    },
+    /// A kept piece of an intersection curve ends at no merged point: the faces' boundaries
+    /// cross where stage 2 found no contact. `a`'s face, then `b`'s.
+    LooseSection {
+        /// The faces.
+        faces: [FaceId; 2],
+    },
+    /// A kept piece of an edge lying on a face of the other operand ends at no merged point.
+    LooseSpan {
+        /// The edge's operand.
+        operand: Operand,
+        /// The edge.
+        edge: EdgeId,
+    },
     /// An edge the method reads is missing from its operand: a bug.
     NoEdge {
         /// The operand.
@@ -158,7 +191,8 @@ impl BooleanError {
             Self::Refused(BooleanRefusal::OtherDocument { .. }) => "other_document",
             Self::Unsupported(BooleanUnsupported::Nurbs { .. }) => "nurbs",
             Self::Unsupported(BooleanUnsupported::Chain { .. }) => "chain",
-            Self::Unsupported(BooleanUnsupported::Stage(Stage::FaceFace)) => "stage_face_face",
+            Self::Unsupported(BooleanUnsupported::SsiPair { .. }) => "ssi_pair",
+            Self::Unsupported(BooleanUnsupported::Stage(Stage::Imprint)) => "stage_imprint",
             Self::Exhausted { .. } => "exhausted",
             Self::Cancelled => "cancelled",
             Self::Defect(BooleanDefect::NoFaceBox { .. }) => "no_face_box",
@@ -166,6 +200,9 @@ impl BooleanError {
             Self::Defect(BooleanDefect::Surface { .. }) => "surface",
             Self::Defect(BooleanDefect::UvUndecided { .. }) => "uv_undecided",
             Self::Defect(BooleanDefect::NearWithoutBoundary { .. }) => "near_without_boundary",
+            Self::Defect(BooleanDefect::UndecidedSpan { .. }) => "undecided_span",
+            Self::Defect(BooleanDefect::LooseSection { .. }) => "loose_section",
+            Self::Defect(BooleanDefect::LooseSpan { .. }) => "loose_span",
             Self::Defect(BooleanDefect::NoEdge { .. }) => "no_edge",
         }
     }
@@ -218,8 +255,16 @@ impl fmt::Display for BooleanError {
                 operand,
                 vertices: [v, w],
             }) => write!(f, "{operand}: {v} and {w} are joined by a chain of points"),
-            Self::Unsupported(BooleanUnsupported::Stage(Stage::FaceFace)) => {
-                f.write_str("the face-face stage is not built yet")
+            Self::Unsupported(BooleanUnsupported::SsiPair {
+                a,
+                b,
+                kinds: [ka, kb],
+            }) => write!(
+                f,
+                "operand 0 {a} ({ka}) and operand 1 {b} ({kb}) meet in no closed form yet"
+            ),
+            Self::Unsupported(BooleanUnsupported::Stage(Stage::Imprint)) => {
+                f.write_str("the imprint stage is not built yet")
             }
             Self::Exhausted { limit } => write!(f, "the budget of {limit} ran out"),
             Self::Cancelled => f.write_str("stopped"),
@@ -242,6 +287,21 @@ impl fmt::Display for BooleanError {
                 write!(
                     f,
                     "{operand}: {face}: a hit near the boundary with no edge there"
+                )
+            }
+            Self::Defect(BooleanDefect::UndecidedSpan { operand, face }) => {
+                write!(
+                    f,
+                    "{operand}: {face}: no sample decides a span near the boundary"
+                )
+            }
+            Self::Defect(BooleanDefect::LooseSection { faces: [a, b] }) => {
+                write!(f, "a section of {a} and {b} ends at no merged point")
+            }
+            Self::Defect(BooleanDefect::LooseSpan { operand, edge }) => {
+                write!(
+                    f,
+                    "{operand}: {edge}: a lying piece ends at no merged point"
                 )
             }
             Self::Defect(BooleanDefect::NoEdge { operand, edge }) => {
