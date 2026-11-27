@@ -1838,7 +1838,7 @@ mm / radians and counts it as the pin's defect (`corpus_pin_units` line), a `Con
 no pin value (the pin keeps the last) and is counted and not compared, several uncertainties
 likewise; a product scx refuses for want of a length unit where the pin reads in mm is counted,
 not a mismatch. The Part 42 comparison reads both in the same explicit units. Result on server2:
-RESULT_PLACEHOLDER
+`cargo test -p scx-difftest --test diff t_p21`: 8 passed; `corpus_contexts` 13 of 13 exact, `corpus_products` 5 of 5 exact, `corpus_part42` 1954 of 1954 exact, 0 mismatches, and `corpus_pin_units` 0 of every class: the pin's fixtures (the only corpus when `SCX_P21_CORPUS` is unset) all name both units, so the mapping is built and compiles but is not exercised by a real file; a corpus with unitless files will count them.
 
 ### 23.5 Proposed 04 row
 
