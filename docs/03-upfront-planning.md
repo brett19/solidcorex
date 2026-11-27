@@ -69,7 +69,7 @@ correct.
   by outcome, within a stated tolerance of the pin, not bit for bit (04, 11-26). A disagreement is
   settled against the truth, and a pin defect is excused by a predicate and checked against the truth
   (`02-testing.md` section 3).
-- **A written definition of a valid body,** and a checker built to it: `scx-bodyq::check` takes `&Brep`
+- **A written definition of a valid body,** and a checker built to it: `scx-check` takes `&Brep`
   and only reads (01 §2.3). solidcore's checker edits the body it checks and can excuse a fault by
   widening a tolerance (research 45, 46), so it cannot be the oracle as it stands.
 - **Fixtures and corpus:** where test bodies come from, in what format, under what licence. Standing

@@ -327,17 +327,18 @@ REMOVE = [
 ]
 
 # The design graph (5.1 as changed by Re-review 2): each crate's direct dependencies.
+# The four edges ruled 11-27 after the re-measure (56 Appendix C.2) are included.
 DEPS = {
     'num': '', 'algo': 'num', 'nurbs': 'num',
     'nurbs-surface': 'nurbs algo', 'curve': 'nurbs algo',
     'surface': 'nurbs-surface curve', 'planar': 'curve',
     'sketch': 'planar', 'teeth': 'planar',
-    'ssi': 'surface', 'brep': 'surface', 'bodyq': 'brep planar', 'record': 'brep', 'tess': 'brep',
+    'ssi': 'surface', 'brep': 'surface', 'bodyq': 'brep planar ssi', 'record': 'brep', 'tess': 'brep',
     'mass': 'brep',
-    'check': 'bodyq ssi', 'stitch': 'bodyq', 'boolean': 'bodyq ssi stitch', 'hlr': 'bodyq',
+    'check': 'bodyq ssi mass', 'stitch': 'bodyq', 'boolean': 'bodyq ssi stitch', 'hlr': 'bodyq',
     'make': 'boolean stitch planar check hlr', 'repair': 'boolean stitch check',
-    'mesh': 'tess make', 'deform': 'stitch check',
-    'local': 'make', 'taper': 'make', 'sheetmetal': 'make',
+    'mesh': 'tess make mass', 'deform': 'stitch check',
+    'local': 'make mass', 'taper': 'make', 'sheetmetal': 'make',
     'blend': 'local repair', 'offset': 'blend taper',
     'weld': 'blend', 'frames': 'make', 'features': 'offset',
 }

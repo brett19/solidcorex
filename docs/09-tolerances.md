@@ -207,7 +207,7 @@ pub enum Claim {
 
 - Changed 11-26 (01 §4.1). Where a `Cert` lives: on an edge, vertex or `EdgeUse` as a `Recorded`
   (`Option<Recorded>`, `None` meaning within the resolution stamp), and, for a surface's accuracy, per
-  span in the procedural kind's payload in `scx-geom`, never in a side table.
+  span in the procedural kind's payload in `scx-curve` (`Procedural`), never in a side table.
 - `reads` names the inputs (curve, surface, vertex positions) by entity id. Because a changed entity
   is a new entity in a `Draft`, a certificate can never outlive its inputs.
 - An edge's or vertex's accuracy is its `Recorded::acc`. A face's accuracy is derived (the maximum of
@@ -272,7 +272,7 @@ What each old step's work becomes:
 
 ### 7.2 What waits for its layer
 
-- **Bound routines** (was step C): `scx-geomq`, step 2 for closed forms, step 5 for fitting with
+- **Bound routines** (was step C): `scx-surface`, step 2 for closed forms, step 5 for fitting with
   per-span certificates and B-spline SSI.
 - **Entities with accuracy** (was steps E and K): `scx-brep` is built without a body tolerance and with
   recorded accuracies from the start (step 3). There is no later step that removes `Brep.tolerance`.

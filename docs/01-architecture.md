@@ -62,37 +62,56 @@ These come from the owner's rules and from the faults in section 11. Every later
 
 All crates are Apache-2.0 and named `scx-*`.
 
-The core is a spine of six crates (layers 0-5). Read crates, operation crates and exchange crates
-hang off it. Couplings measured between solidcore's operation areas set the order of the operation
-crates (C3).
+There are 31 core crates. The split is research 56 as changed by Re-review 2 of review-56, with the
+four edges the measured code needs (04 §1, 11-27; research 56 Appendix C). The geometry crates come
+first and know nothing of bodies. `scx-brep` is the body data model, `scx-bodyq` the reads over it,
+and the check, exchange and operation crates sit above. Couplings measured between solidcore's
+operation areas set the order of the operation crates (C3).
 
-| Layer | Crate | Purpose | Depends on | Adopted alone, a user gets |
-|---|---|---|---|---|
-| 0 | `scx-num` | vectors, points, frames, rigid and affine transforms, extents, intervals and Taylor models, units and tolerance newtypes, `Cert` and `Basis`, constants, platform-independent transcendentals (`fmath`), error-free transforms, the fixed hash and `Rng` | std | a deterministic small-vector, interval and certificate library |
-| 1 | `scx-algo` | polynomials and root isolation, 1-D and n-D local solvers, Krawczyk, the global solver, deterministic sorting and grouping, a box tree over `Extent`, the `Executor` trait | num | solvers and spatial search with no CAD types |
-| 2 | `scx-nurbs` | B-spline and rational B-spline curves and surfaces as plain data: evaluation, knots, splitting, degree change, fitting, approximation with a per-span `Cert`, Gordon and n-sided patches, IGES entity 126/128 conversion | num, algo | a complete NURBS library |
-| 3 | `scx-geom` | every curve and surface kind: analytic, NURBS, procedural (offset, blend with its section and station mathematics, sweep, intersection curve, volume deformations); 2-D curves for pcurves; evaluation generic over the scalar; natural parameterisation; `restrict`; transforms; closed-form properties; `SurfaceFn` approximation | num, algo, nurbs | geometry with no topology |
-| 4 | `scx-geomq` | queries between geometry: projection, closest points, curve-curve, curve-surface and surface-surface intersection (including the B-spline patch SSI), ray casting, analytic recognition, plane fitting, distance, certified gap bounds | 0-3 | an intersection and projection toolkit |
-| 4 | `scx-planar` | 2-D regions from loops, their Booleans and offsets, profiles and line families, cell grids, bounded 2-D intersections for drawings | 0-3 | planar region work for sketches and drawings |
-| 4 | `scx-sketch` | constraint residuals over dual numbers and their solver, sketch arc arithmetic | 0-3, planar | a sketch constraint solver |
-| 5 | `scx-brep` | the body: `Brep`, `Draft`, regions, shells, faces with two sides, edges, vertices, ids, cells, recorded accuracies, `Document`, `Changes`, `carry`, structural checks, traversal, `transform` | 0-4 | a body data model that can be built, walked, edited and moved |
-| 6 | `scx-bodyq` | reads on finished bodies: point, curve and ray classification, distance, contact, mass properties, the full validity check, continuity, pick, tangent chains, face measures | 0-5 | measuring and checking bodies |
-| 6 | `scx-record` | the exact stored form of bodies and documents: versioned, keeping ids, with its own binary and text encodings and exact procedural records | 0-5 | saving and loading |
-| 7 | `scx-stitch` | sewing sheets along coincident edges and vertices, gap closing, orientation, and `rebase` to a new resolution | 0-6 | repair of imported data without Booleans |
-| 7 | `scx-boolean` | the cellular merge, union, subtract, intersect, sections, imprint, split by surface or sheet, trims of sheets by sheets | 0-6 | Booleans |
-| 8 | `scx-make` | primitives, extrude, revolve, sweep, loft, skins, Coons and network patches, sheets between sheets, planar prisms | 0-7 | body construction |
-| 8 | `scx-repair` | the repairs that need Booleans: short edges, sliver faces, tolerance defects found by the check | 0-7 | full healing |
-| 9 | `scx-blend` | fillet and chamfer (constant and variable), vertex blends, fillet removal, weld beads | 0-8 | blends |
-| 9 | `scx-taper` | taper (the draft-angle feature) | 0-8 | tapers |
-| 9 | `scx-local` | move, replace and delete faces with the gap healed (defeature), untrim, extend, dome | 0-8 | direct editing |
-| 10 | `scx-offset` | offset faces, shell, thicken, thin features, sheet offsets | 0-9 (blend for fillet removal and reapplication) | offsets |
-| 10 | `scx-deform` | global deformation of bodies through volume kinds (bend, twist, unbend, B-spline volume) | 0-8 | deformation |
-| 10 | `scx-sheetmetal` | flat pattern and fold of sheet metal parts | 0-9, planar | sheet metal |
-| 11 | `scx-tess` | faceting with chord, angle and edge-length bounds, watertight along edges, and the dense grid mesher for NURBS faces | 0-5 | meshes for display and export |
-| 11 | `scx-hlr` | hidden lines, silhouettes, projected outlines and view projection | 0-6, tess | drawings |
-| 11 | `scx-mesh` | mesh to B-rep reconstruction, mesh reduction, faceted bodies and their exact volume, STL and 3MF | 0-7, tess | mesh work |
-| 11 | `scx-step` | STEP read and write of geometry, solids and sheets; product structure into placed instances | 0-6, stitch | STEP exchange |
-| 11 | `scx-dxf` | DXF read and write of 2-D paths | 0-4, planar | DXF exchange |
+The layer is the longest path from `scx-num`. "Depends on" lists direct dependencies only;
+`cargo xtask layers` checks them as each crate is ported. "Kernel lines" is the non-test lines of
+the pin's kernel crate that research 56's proof assigns to the crate (Appendix C.4, with the four
+added edges; MEASURED). A crate that also takes a whole pin crate of 1.3 is larger by it, as the
+column says; "—" means the crate takes no kernel code. The figures move as crates are ported.
+
+| Layer | Crate | Holds | Depends on | Kernel lines |
+|---:|---|---|---|---:|
+| 0 | `scx-num` | vectors, points, frames, rigid and affine transforms, extents, intervals and Taylor models (with the certified section's intervals and series), pseudo-boxes, placements, units and tolerance newtypes, `Cert` and `Basis`, constants, platform-independent transcendentals (`fmath`), error-free transforms, the fixed hash and `Rng` | std | 16,992 |
+| 1 | `scx-algo` | polynomials and root isolation (with `bernstein_roots`), 1-D and n-D local solvers, Krawczyk, the global solver, the ODE core of the mass integrator, deterministic sorting and grouping, a box tree over `Extent`, point sets, the `Executor` trait | num | 17,515 |
+| 1 | `scx-nurbs` | knots, basis, Bézier, NURBS curves as plain data: evaluation, splitting, degree change, curve fitting and approximation, curve enclosures and deviations, IGES entity 126 | num | 28,669 |
+| 1 | `scx-p21` | STEP Part 21 read and write, Part 42 entities as data, units, product structure | num | — (part of `solidcore-step`) |
+| 2 | `scx-nurbs-surface` | NURBS surfaces as plain data: evaluation, surface fitting and approximation, match and seam, Gordon and n-sided patches at the NURBS level, surface enclosures and deviations, the `Nurbs` record, IGES entity 128 | nurbs, algo | 19,386 |
+| 2 | `scx-curve` | every free curve kind, 2-D and 3-D (analytic, B-spline, the 2-D curves of pcurves), `Curve` and its dispatch, evaluation generic over the scalar, natural parameterisation, `restrict`, transforms, closed-form properties, curve-curve queries and joins, length bounds, `Procedural` | nurbs, algo | 63,747 |
+| 3 | `scx-surface` | every surface kind: analytic, NURBS, procedural (offset, blend with its section, station and certificate mathematics, sweep); `AnyCurve` with the curves defined on surfaces and in volumes and the intersection curve with its point refinement on two surfaces; the volume maps and their images; `SurfaceFn` approximation; the geometry queries: point inversion, projection with the tracer, curve-surface intersection, recognition (with exact blends), plane fitting, distance, certified gap bounds | curve, nurbs-surface | 201,369 |
+| 3 | `scx-planar` | 2-D regions from loops, their Booleans and offsets, profiles and line families, arc conversion and loop recognition, fill, cell grids, paper gaps, projection of curves into a plane, bounded 2-D intersections for drawings | curve | 14,915 |
+| 4 | `scx-sketch` | constraint residuals over dual numbers and their solver, sketch arc arithmetic | planar | 363 |
+| 4 | `scx-teeth` | gear and spline tooth profiles, involutes | planar | 11,826 |
+| 4 | `scx-dxf` | DXF read and write of 2-D paths | planar | — |
+| 4 | `scx-ssi` | surface-surface intersection: marching and the B-spline patch intersector; the plane section of a surface | surface | 18,118 (+ the `ssi` and `solidcore-ssi` crates) |
+| 4 | `scx-brep` | the body: `Brep`, `Draft`, regions, shells, faces with two sides, edges, vertices, ids, pcurves, recorded accuracies, recorded gaps, `Document`, `Changes`, `carry`; the cells (face, uv and body boxes, point-in-face boundary trees labelled from the face's own loops) and the `FaceCell` trait; structure checks; traversal and derived adjacency; `transform`. No classification and no surface intersection | surface | 84,299 |
+| 5 | `scx-tess` | faceting with chord, angle and edge-length bounds, watertight along edges, and the dense grid mesher for NURBS faces | brep | 1,158 (+ the `solidcore-tess` and `nurbs-grid-mesh` crates) |
+| 5 | `scx-record` | the exact stored form of bodies and documents: versioned, keeping ids, with its own binary and text encodings and exact procedural records. Its reader decodes and does not heal | brep | 8,155 (+ `solidcore-record`) |
+| 5 | `scx-mass` | mass properties: area, volume, centroid, moments, the signed volume, face and loop measures | brep | 4,792 |
+| 5 | `scx-bodyq` | reads on finished bodies: point, curve and ray classification, the topology solver, ray firing, `ShellRayWorld`, `VertexSector`, the tangent-contact witness, the tight face and body boxes, distance, contact, pick, continuity, tangent chains, face measures, vertex corners, projection of a curve onto a body, recognition of planar profiles | brep, planar, ssi | 73,693 |
+| 6 | `scx-check` | the full validity check: integrity, the body validation, the geometric validity checks that intersect surfaces, the clearance reports, and the outward test (the check, then a signed volume) | bodyq, ssi, mass | 8,653 |
+| 6 | `scx-stitch` | sewing sheets along coincident edges and vertices, gap closing, orientation, shell nesting, and `rebase` to a new resolution | bodyq | 12,766 |
+| 6 | `scx-hlr` | hidden lines, silhouettes, projected outlines and view projection | bodyq | 10,948 |
+| 7 | `scx-boolean` | the cellular merge, union, subtract, intersect, sections and cuts, imprint (with its vertex-sector choice), split by surface or sheet, trims of sheets by sheets, body-body and face-face intersection, the planar Boolean of two sheets | bodyq, ssi, stitch | 47,303 |
+| 7 | `scx-step` | the mapping between STEP and bodies: geometry, solids and sheets; product structure into placed instances | p21, stitch, check | — (`solidcore-step`, `step-export`) |
+| 7 | `scx-deform` | global deformation of bodies through the volume maps (bend, twist, unbend, B-spline volume) | stitch, check | — |
+| 8 | `scx-make` | primitives, extrude, revolve, sweep (the solid sweep reads the tool's silhouette), loft with its certificate, skins, Coons and network patches, sheets between sheets, planar prisms, faces from surfaces, the radial sweep | boolean, stitch, check, planar, hlr | 34,082 |
+| 8 | `scx-repair` | the repairs that need Booleans: short edges, sliver faces, tolerance defects found by the check | boolean, stitch, check | 1,240 |
+| 9 | `scx-local` | move, replace and delete faces with the gap healed (defeature), fillet removal and identification, untrim, extend, dome | make, mass | 9,374 |
+| 9 | `scx-mesh` | mesh to B-rep reconstruction, mesh reduction, faceted bodies and their exact volume, STL and 3MF | make, tess, mass | 5,565 |
+| 9 | `scx-sheetmetal` | flat pattern and fold of sheet metal parts | make | 7,358 |
+| 9 | `scx-taper` | taper (the draft-angle feature) | make | 773 |
+| 10 | `scx-blend` | fillet and chamfer (constant and variable), vertex blends, law-curve intersection | local, repair | 150,425 |
+| 11 | `scx-offset` | offset faces, shell, thicken, thin features, sheet offsets, local operations | blend, taper | 36,702 |
+
+The four edges `scx-bodyq` → `scx-ssi`, `scx-check` → `scx-mass`, `scx-local` → `scx-mass` and
+`scx-mesh` → `scx-mass` are the ones added to the ruled graph (04 §1, 11-27; research 56 C.2): a
+tangent contact refines on two surfaces, the outward test is a signed volume, the material side is
+found by integrating faces, and a reconstructed mesh reads the body's exact volume.
 
 ### 1.2 Helper crates
 
@@ -101,32 +120,40 @@ These are not core.
 | Crate | Purpose | Depends on |
 |---|---|---|
 | `scx-fates` | turns `Changes` (2.6) into the typed record of what became of each face, edge and vertex. It follows names across a chain of operations and stores that history in its own record | brep, record |
-| `scx-features` | feature compositions (hole, pocket, pattern, extrude-cut, extrude to next) built from operation calls. It computes no geometry itself | ops crates, fates |
-| `scx-frames` | structural frame members, gussets, end trims, tube copes, section corners | make, boolean, bodyq |
-| `scx-teeth` | gear teeth, involutes, shaft splines and hubs | make, boolean, planar |
-| `scx-weld` | weld symbols, and bead bodies laid along joints | blend, bodyq |
+| `scx-features` | feature compositions (hole, pocket, pattern, extrude-cut, extrude to next, gear and spline bodies) built from operation calls. It computes no geometry itself | ops crates, fates, teeth |
+| `scx-frames` | structural frame members, gussets, end trims, tube copes, section corners | make |
+| `scx-weld` | weld symbols, and bead bodies laid along joints | blend |
 | `scx-cadir` | the CADIR neutral model read into bodies | brep, stitch |
-| `scx-testkit` | fixtures built in code, property generators, oracles, determinism harnesses, `assert_kept`; a dev-dependency only | brep, bodyq, record |
+| `scx-import-sc` | opens designs saved by solidcore: decodes their records and heals on load, as the pin's reader does. `scx-record` reads only its own exact form | stitch, record |
+| `scx-testkit` | fixtures built in code, property generators, oracles, determinism harnesses, `assert_kept`; a dev-dependency only | brep, bodyq, check, record |
 | `scx-difftest` | differential tests against the pinned solidcore, and a converter between pin records and `Brep`. The only crate that links the pin; never published | everything ported |
 
 **Why this shape (JUDGED).**
 
-- **Geometry without topology.** Layers 0-4 have no idea a body exists. A user who wants curves,
-  surfaces, intersections, sketches or planar regions stops at layer 4.
+- **Geometry without topology.** The crates up to `scx-surface`, `scx-planar` and the crates on it,
+  and `scx-ssi` have no idea a body exists. A user who wants curves, surfaces, intersections,
+  sketches or planar regions stops there.
   - In solidcore, curves and surfaces carry owner links into topology. `Curve` and `Surface` hold
     `owner: Option<ObjectRef>`, notify identities and a cache slot (READ), so today the two cannot
     be separated.
+- **A data model without classification.** `scx-brep` depends on `scx-surface` only. Its edits
+  take explicit structure (2.3), so they need no ray firing; the operation that makes a shell
+  decides its region with `scx-bodyq` (review-56 E4). A body user does not carry classification
+  (`scx-bodyq` is about 74,000 kernel lines), and the body data model takes no surface
+  intersection.
 - **Reads separate from data.** `scx-bodyq` holds everything that reads a finished body and changes
-  nothing.
-- **A viewer needs no query stack.** `scx-tess` depends only on 0-5. Faceting needs the body and
-  geometry, not classification.
-- **Exchange without operations.** `scx-step` depends on `scx-stitch`, not on Booleans, so reading
-  STEP pulls in neither `scx-boolean` nor `scx-make`. This is revised after review-architecture-v2
-  (S3), where the earlier `scx-heal` pulled both.
+  nothing. Mass and the full check are their own crates beside and above it.
+- **Loading and viewing need no query stack.** `scx-record`, `scx-tess` and `scx-mass` depend only
+  on `scx-brep`. Loading, faceting and the mass of saved bodies need the body and geometry, not
+  classification. A file written by `scx-record` is exact, so its reader has nothing to heal.
+- **Exchange without operations.** `scx-step` depends on `scx-p21`, `scx-stitch` and `scx-check`,
+  not on Booleans, so reading STEP pulls in neither `scx-boolean` nor `scx-make`. This is revised
+  after review-architecture-v2 (S3), where the earlier `scx-heal` pulled both.
 
 ### 1.3 What maps where: the inventory
 
-This answers review B4. It is revised after review-architecture-v2.
+This answers review B4. It is revised after review-architecture-v2, and for the crate split of
+11-27. The file-level assignment is `research/56-data/assignment.py`; this table is its summary.
 
 The app talks to solidcore only through `solidcore-ops`: one seam, with 84 modules and 485 `pub fn`s
 (READ, research 38 and the review). The tables below map every pin crate, every kernel area and
@@ -141,12 +168,12 @@ at the pin, tests included (READ).
 |---|---:|---|---|
 | `solidcore` (the kernel) | 1.16M | split by area, next table | everything |
 | `solidcore-ops` | (84 modules) | split by module, table after next; the app then calls scx crates directly | everything |
-| `solidcore-record` | 17,840 | `scx-record` (bodies, document); history records to `scx-fates`; metadata to the app | open, save |
+| `solidcore-record` | 17,840 | `scx-record` (bodies, document); `step/` to `scx-p21`; history records to `scx-fates`; metadata to the app; opening saved solidcore designs, with healing on load, to `scx-import-sc` (1.2) | open, save |
 | `solidcore-convert` | 8,603 | not needed: the stored form is the `Brep`'s own. The pin converter lives in `scx-difftest` | none |
-| `solidcore-step`, `step-export` | 24,763 + 7,791 | `scx-step` | STEP import and export |
+| `solidcore-step`, `step-export` | 24,763 + 7,791 | `scx-step`, over `scx-p21` | STEP import and export |
 | `solidcore-cadir` | 8,070 | `scx-cadir` (helper) | CADIR import |
 | `solidcore-tess`, `nurbs-grid-mesh` | 16,731 + 2,398 | `scx-tess` | display, mesh export |
-| `ssi`, `solidcore-ssi` | 11,784 + 2,187 | `scx-geomq::ssi` | every Boolean on B-spline faces |
+| `ssi`, `solidcore-ssi` | 11,784 + 2,187 | `scx-ssi` | every Boolean on B-spline faces |
 | `goldens` | 445,047 | the cases feed `scx-difftest` and the corpus. The golden files are not carried | none (validation) |
 | `diagnostics` | 1,018 | not ported; replaced by the progress and trace sink in `Cx` (6.3) | none |
 | `xtask` | | solidcorex's own `xtask` | none |
@@ -156,21 +183,21 @@ at the pin, tests included (READ).
 | Area | Lines | Home |
 |---|---:|---|
 | `math`, `limits` | | `scx-num` |
-| `geom` | 50,540 | vectors, extents, transforms, intervals, `certified`, `tol` to `scx-num`; solvers, `polynomial`, `global_solver`, `hash_table`, `tree` to `scx-algo`; `nurbs_enclosure` to `scx-nurbs`; `pseudo_box`, `axis2_placement` to `scx-geom`; `plane_height`, `facing_trough`, `axial_section`, `point_set` to `scx-geomq`; `paper_gaps` to `scx-planar`; `attribute` to `carry` and app tables (2.6); `context`, `object`, `a_object`, `check_memo`, `content` not ported (ambient state and object identity, section 11) |
-| `nurbs` | 93,661 | `scx-nurbs`; `certificate` with the per-span form (4.1); `iges` to `scx-nurbs::iges` |
-| `eval` | 22,111 | plain-data evaluation to `scx-geom` (geometry is plain data here); `constraint` to `scx-sketch`; `outline` to `scx-hlr`; `pcurve` to `scx-brep`; `hole_stacks` to `scx-bodyq`; `label` to `scx-record` |
-| `curve` | 77,316 | `scx-geom::curve`; `crv_in_volume` to `scx-geom::volume`; `conic_projection`, `spline_projection`, `fit_projection`, `plane_of`, `proximity`, `contact` to `scx-geomq` |
-| `surface` | 177,539 | `scx-geom::surface`; volume kinds (`b_spline_volume`, `bend_volume`, `twist_volume`, `unbend_volume`, `srf_in_volume`) to `scx-geom::volume`; `recognise`, `surface_point_solve`, `implicit` to `scx-geomq`; `face_*`, `mid_sheet`, `mid_joint`, `cylinder_wall`, `side` to `scx-bodyq`; `extend` to `scx-local`; `surface_cache` and `trim_srf_cache` not ported (cells instead) |
-| `intersect` | 83,659 | surface, curve and silhouette intersectors and the ray tracer to `scx-geomq`; `point_class`, `curve_class` to `scx-bodyq`; `topology_solver` to `scx-boolean`; `views`, `surface_silhouette` to `scx-hlr` |
-| `topology` | 152,233 | data, constructor, traverser and `trimming_tools` to `scx-brep`; `integrity` to `scx-bodyq::check`; `api_files`, `part_file`, `database_io` to `scx-record`; `brep_cache` not ported (cells); the use records replaced (2.1) |
-| `query` | 55,518 | `scx-bodyq`; `tess` to `scx-tess`; `curve_surface_gap`, `distance_bound`, `deviation` to `scx-geomq` |
-| `mass` | 9,583 | `scx-bodyq::mass` |
+| `geom` | 50,540 | vectors, extents, transforms, intervals, `certified`, `tol`, `expansion`, `pseudo_box`, `axis2_placement` and the zero interval of `nurbs_enclosure` to `scx-num`; solvers, `polynomial`, `global_solver`, `krawczyk`, `hash_table`, `tree`, `point_set` to `scx-algo`; `nurbs_enclosure` to `scx-nurbs-surface`, its Bézier helpers to `scx-nurbs`; `grid`, `plane_height`, `facing_trough`, `axial_section` to `scx-surface`; `paper_gaps` to `scx-planar`; `tools` to `scx-brep`; `attribute` to `carry` and app tables (2.6); `context`, `object`, `a_object`, `check_memo`, `content` not ported (ambient state and object identity, section 11) |
+| `nurbs` | 93,661 | NLib curves to `scx-nurbs`, NLib surfaces to `scx-nurbs-surface`; the kernel B-spline curve to `scx-curve` and B-spline surface to `scx-surface`; `gordon`, `n_sided` to `scx-surface`; `certificate` (the loft's) to `scx-make`; `iges` split by entity, 126 to `scx-nurbs` and 128 to `scx-nurbs-surface` |
+| `eval` | 22,111 | no counterpart as one unit, because each plain-data kind evaluates itself (7.1): the curve half to `scx-curve`; the surface half (`spline`, `collapse`, `uv`, `surface`, `sphere`, `pole`, `ruling`, `query`) and the intersection curve to `scx-surface`; the `Nurbs` record of `spline` to `scx-nurbs-surface`; `constraint` to `scx-sketch`; `outline` to `scx-hlr`; `pcurve` to `scx-brep`; `hole_stacks` to `scx-bodyq`; `label` to `scx-record` |
+| `curve` | 77,316 | `scx-curve`; the curves defined on surfaces or in volumes (`crv_on_surf`, `iso_curve`, `tangent_field`, `geodesic_offset`, `projected_curve`, `crv_in_volume`) and `contact` to `scx-surface`; `conic_projection`, `spline_projection`, `fit_projection` to `scx-planar` |
+| `surface` | 177,539 | `scx-surface`, with the volume kinds (`b_spline_volume`, `bend_volume`, `twist_volume`, `unbend_volume`, `srf_in_volume`), `recognise`, `surface_point_solve` and `implicit` (its quadric helpers to `scx-curve`); `face_*`, `mid_sheet`, `mid_joint`, `cylinder_wall`, `side` to `scx-bodyq`; `surface_cache` and `trim_srf_cache` not ported (cells instead) |
+| `intersect` | 83,659 | `surface_intersector`, `adv_surface_intersector` to `scx-ssi`; `surface_tracer`, the drop code and curve-surface intersection to `scx-surface`; `point_class`, `curve_class`, `topology_solver`, `ray_tracer` to `scx-bodyq`; `api_intersectors` split (curve-curve to `scx-curve`, surface-surface to `scx-ssi`, the rest to `scx-bodyq`); `surface_silhouette` to `scx-hlr`; `views` to `scx-make` |
+| `topology` | 152,233 | data, constructor, traverser and `trimming_tools` to `scx-brep`; `integrity`, `brep/validation` to `scx-check`; `ShellRayWorld`, `VertexSector`, `vertex/corner` and projection onto a body to `scx-bodyq`; the plane section of a surface to `scx-ssi`; `proto_topology`, cutting, body-body and face-face intersection to `scx-boolean`; the edits that classify to the operations that make the structure (2.3); `side_extend` to `scx-local`; `api_projection` to `scx-hlr`; `api_files`, `part_file`, `database_io` to `scx-record`; `brep_cache` not ported (cells); the use records replaced (2.1) |
+| `query` | 55,518 | `scx-bodyq`, with the tight boxes; the plain boxes, `LazyBrep` and `poly` to `scx-brep`; `tess` to `scx-tess`; `curve_surface_gap`, `distance_bound`, `deviation`, `seam_bound` to `scx-surface` |
+| `mass` | 9,583 | `scx-mass`; `mass/integrator.rs`, the ODE core, to `scx-algo` |
 | `boolean` | 33,444 | `scx-boolean`; `operand_tolerances` not ported (no body tolerances) |
-| `blend` | 232,788 | `scx-blend`; `fillet_section`'s station, interval, series and certificate to `scx-geom::procedural` (they define the blend surface); `weld_bead` to `scx-weld`; `fillet_removal` stays in `scx-blend` |
-| `offset` | 53,744 | `scx-offset`; `draft` to `scx-taper` |
-| `sweep`, `primitive` | 26,328 + 20,712 | `scx-make` |
-| `heal` | 23,674 | `stitch`, `gap` to `scx-stitch`; `tolerance_defects`, `face_props` to `scx-repair` |
-| `prism` | 19,647 | the planar core (profiles, regions, fill, fit, arc conversion) to `scx-planar`; extrusion and sheets to `scx-make`; recognition and measure to `scx-bodyq`; members and gussets to `scx-frames` |
+| `blend` | 232,788 | `scx-blend`; `fillet_section`'s intervals, series and Taylor models to `scx-num`, and its station, section and certificate to `scx-surface` (they define the blend surface); exact-blend recognition to `scx-surface`; `fillet_removal`, `identify_fillet`, `feature_executive` to `scx-local`; `hcr` to `scx-hlr`; `weld_bead` to `scx-weld` |
+| `offset` | 53,744 | `scx-offset`; `draft` to `scx-taper`; the Bernstein construction to `scx-algo` |
+| `sweep`, `primitive` | 26,328 + 20,712 | `scx-make`; the planar Boolean of the primitive builder to `scx-boolean` |
+| `heal` | 23,674 | `stitch` to `scx-stitch`; `gap` to `scx-brep`; `face_props` to `scx-bodyq`; `tolerance_defects` to `scx-repair` |
+| `prism` | 19,647 | the planar core (profiles, regions, fill, fit, arc conversion, loop circles and ellipses) to `scx-planar`; extrusion, sheets and placement to `scx-make`; recognition and measure to `scx-bodyq`; members and gussets to `scx-frames` |
 | `cell_grid` | 6,998 | `scx-planar` |
 | `develop` | 10,457 | `scx-sheetmetal` |
 | `hlr` | 13,775 | `scx-hlr` |
@@ -187,16 +214,19 @@ because the app holds `Brep`s directly.
 | Home | Modules |
 |---|---|
 | `scx-num` | `affine` |
-| `scx-nurbs` | `bspline`, `curve`, `curve_fit`, `curve_knots`, `surface_cvs`, `network` |
-| `scx-geomq` | `conic_projection`, `spline_projection`, `fit_projection`, `curve_plane`, `curve_gap`, `axial_section`, `facing_trough`, `vertex_meet` |
-| `scx-planar` | `profile`, `cell_grid`, `paper_gaps`, planar-sheet Booleans from `boolean`, the 2-D half of `prism` |
+| `scx-nurbs` | `bspline`, `curve`, `curve_fit`, `curve_knots` |
+| `scx-nurbs-surface` | `surface_cvs`, `network` |
+| `scx-surface` | `curve_plane`, `curve_gap`, `axial_section`, `facing_trough`, `vertex_meet` |
+| `scx-planar` | `profile`, `cell_grid`, `paper_gaps`, `conic_projection`, `spline_projection`, `fit_projection`, the 2-D half of `prism` |
 | `scx-sketch` | `constraint`, `sketch_arc` |
 | `scx-brep` | `body` (copy, transform, counts, the result contract), `provenance` and `history` as `Changes` and `carry`, `point_identity`, `pcurve` |
-| `scx-bodyq` | `measure`, `check`, `contact`, `continuity`, `pick`, `query`, `tangent`, `face_pair`, `face_surface`, `round_face`, `cap`, `mid_sheet`, `mid_joint`, `cylinder_wall`, `joint_turn`, `hole_stacks`, the recognition half of `prism` |
+| `scx-mass` | the mass properties of `measure` |
+| `scx-bodyq` | the rest of `measure`, `contact`, `continuity`, `pick`, `query`, `tangent`, `face_pair`, `face_surface`, `round_face`, `cap`, `mid_sheet`, `mid_joint`, `cylinder_wall`, `joint_turn`, `hole_stacks`, the recognition half of `prism` |
+| `scx-check` | `check` |
 | `scx-record` | `file`, `blend_definition` (exact blend records), `label`, `record_check`, `order` (gone: ids are kept, so a record index is the id) |
 | `scx-stitch` | `stitch` |
 | `scx-repair` | `heal` |
-| `scx-boolean` | `boolean`, `split`, `trim` |
+| `scx-boolean` | `boolean` (with the planar-sheet Booleans), `split`, `trim` |
 | `scx-make` | `sweep`, `surface` (Coons and bounded patches), `blend_surface`, the extrusion half of `prism` |
 | `scx-blend` | `blend` |
 | `scx-local` | `untrim`, `extend`, `dome` |
@@ -207,9 +237,8 @@ because the app holds `Brep`s directly.
 | `scx-mesh` | `mesh`, `faceted` |
 | `scx-step` | `step_assembly` |
 | `scx-dxf` | `dxf` |
-| `scx-features` | `stop` (extrude to next) |
+| `scx-features` | `stop` (extrude to next), `shaft_spline` |
 | `scx-frames` | `frame_member`, `frame_gusset`, `frame_trim`, `tube_cope`, `section_corners` |
-| `scx-teeth` | `shaft_spline` |
 | `scx-weld` | `bead` |
 | `scx-testkit` | `test_corpus` |
 | `Cx` and errors (6.3, 5) | `session` (gone: no session), `cancel` (the `Stop` in `Cx`), `fuel` (the budget in `Settings`), `error` (each crate's error) |
@@ -221,21 +250,36 @@ module that moved.
 
 ### 1.4 Choosing a subset
 
-A user picks crates, not features. For example:
+A user picks crates, not features. Each row is the closure of its top crates in 1.1.
 
-- **geometry only:** `scx-geom` and `scx-geomq`;
-- **a sketcher:** `scx-planar` and `scx-sketch`;
-- **a viewer:** `scx-record` and `scx-tess`;
-- **a modeller:** add `scx-bodyq`, `scx-make`, `scx-boolean` and the layer-9 and layer-10 crates it
-  needs;
-- **an app with history:** add `scx-fates` and, if it suits, `scx-features`.
+| A user who wants | Takes exactly |
+|---|---|
+| a NURBS curve library | num, nurbs |
+| NURBS curves and surfaces | num, algo, nurbs, nurbs-surface |
+| 2-D and 3-D curves with curve-curve queries (the curves) | num, algo, nurbs, curve |
+| a sketcher | the curves, plus planar and sketch |
+| DXF exchange of 2-D paths | the curves, plus planar and dxf |
+| gear and spline profiles | the curves, plus planar and teeth |
+| STEP file structure, product tree and metadata | num, p21 |
+| curves and surfaces: evaluated, built, inverted and projected | the curves, plus nurbs-surface and surface |
+| surface-surface intersection | the row above, plus ssi |
+| a body data model, built in memory | curves and surfaces, plus brep. No SSI |
+| loading saved bodies | the body data model, plus record |
+| mass properties of saved bodies | loading, plus mass |
+| a viewer (load and facet) | loading, plus tess |
+| pick, measure and classification of a body | the body data model, plus planar, ssi and bodyq |
+| a STEP translator (read, sew, check) | the row above, plus mass, check, stitch, p21 and step. No Boolean |
+| drawings (hidden lines) | pick and classification, plus hlr. No Boolean |
+| a modeller | the translator, plus record, boolean, hlr, make, and the layer-9 to layer-11 crates it needs |
+| defeaturing imported parts for analysis | the modeller's base up to make, plus local. No blend |
+| an app with history | add `scx-fates` and, if it suits, `scx-features` |
 
 No facade crate re-exporting everything is provided at first. A facade is easy to add and easy to get
 wrong: it becomes the place where everything depends on everything.
 
 ### 1.5 Choices
 
-**C1. Curves and surfaces in one crate or two.**
+**C1. Curves and surfaces in one crate or two.** Revised 11-27 (research 56 §3, review-56).
 
 - Options:
   - (a) `scx-curve` below `scx-surface`;
@@ -243,40 +287,70 @@ wrong: it becomes the place where everything depends on everything.
     checked order;
   - (c) one crate per kind family.
 - Evidence: at the pin, surface refers to curve 314 times and curve refers to surface 48 times
-  (MEASURED, research 49). The back-references are curve kinds defined on surfaces. Under (a) those
-  kinds would have to move into the surface crate, splitting the curve enum across two crates.
-- **Chosen: (b).** The module order is checked by `cargo xtask layers`, extended to module level.
+  (MEASURED, research 49). The back-references are curve kinds defined on surfaces. Research 56
+  resolves every reference from curve code to surface code by a move or by a design change of its
+  §9.3 (MEASURED, research 56 §3, §9).
+- **Chosen: (a), extended.** `scx-curve` holds the free kinds and `Procedural`. `scx-surface` holds
+  the surface kinds, the volume maps, the curves defined on surfaces and in volumes, `AnyCurve` and
+  the geometry queries. The old ground for (b), that the curve enum would be split across two
+  crates, is answered by making the split explicit as `AnyCurve`.
+  - `scx-curve` depends on `scx-nurbs` and `scx-algo`, not on `scx-nurbs-surface`. The pin's
+    second evaluator (`eval/`) has no counterpart as one unit: its curve half goes to the curve
+    kinds and its surface half to the surface kinds (review-56 E3).
+  - The geometry queries are merged into `scx-surface`, because every procedural kind needs point
+    inversion for its own contract (review-56 E7). Projection is a module of `scx-surface`, entered
+    through its own functions, not through `Surface` methods.
+  - The volume maps are merged into `scx-surface` too.
+  - The module order inside `scx-surface`, `scx-blend` and `scx-brep` is checked by
+    `cargo xtask layers`.
 - Change if:
-  - a user wants curves without surfaces; or
-  - the crate's build time becomes the worst in the tier-1 loop.
+  - `scx-surface`'s build time is the worst in the tier-1 loop. Look first at procedural kinds,
+    behind the enum, in a lower crate. That needs a generic, so the trigger must be real; or
+  - the port finds composites of on-surface segments, in which case `AnyCurve::Composite` is added.
 
-**C2. `scx-brep` and `scx-bodyq` as two crates.**
+**C2. `scx-brep` and `scx-bodyq` as two crates.** Revised 11-27 (review-56 E1, E2, E4).
 
 - Options: (a) one crate; (b) the data model in `scx-brep`, and reads over many faces in
   `scx-bodyq`.
 - **Chosen: (b).**
-- `scx-brep` depends on `scx-geomq`, because its cells (boxes, boundary trees) need projection.
-  Under the vertical slice (10.2) only the analytic part of `scx-geomq` exists at first, so this
-  dependency does not hold the slice back.
+- `scx-brep` depends on `scx-surface` only, because its cells (boxes, boundary trees) need
+  projection (3.1). It needs no surface intersection: the operations that sat on the pin's body
+  classes (the plane section, body and face intersection, projection onto a body) move to
+  `scx-ssi`, `scx-boolean` and `scx-bodyq`.
+- Classification stays whole in `scx-bodyq`: ray firing, the topology solver, curve
+  classification, `ShellRayWorld`, `VertexSector`. `scx-brep`'s edits take explicit structure
+  (2.3), so they fire no rays; an operation that makes a shell decides its region with
+  `scx-bodyq` (`scx-stitch`, `scx-boolean`, `scx-make`).
+  - Face cells label their boundary-tree leaves from the face's own loops (3.2 rule 2). The tight
+    face box classifies its extreme points, so it is a `scx-bodyq` read, not a cell.
+  - The alternative, moving the point classifier into `scx-brep`, also gives no cycle, but brings
+    the ray preparation that trims on read (11.1) into the data model (research 56 C.3).
+- Mass leaves `scx-bodyq` as `scx-mass` on `scx-brep`, so the mass of saved bodies takes no
+  classification. The full check leaves it as `scx-check`, which `scx-stitch` does not need.
 - Change if:
   - more than a handful of `scx-bodyq` items need private access to `scx-brep`; or
-  - the slice shows `scx-geomq` must be finished before `scx-brep` can be tested. Then the cells'
-    fill functions move behind the `FaceCell` trait (3.2), implemented in `scx-bodyq`.
+  - the slice shows `scx-surface`'s projection must be finished before `scx-brep` can be tested.
+    Then the cells' fill functions move behind the `FaceCell` trait (3.2), implemented in
+    `scx-bodyq`.
 
-**C3. Operation crates and their order.** This choice is revised after review-architecture-v2 (S3).
+**C3. Operation crates and their order.** This choice is revised after review-architecture-v2 (S3),
+and for the crate split of 11-27.
 
 - Options:
   - (a) one `scx-ops`;
   - (b) a crate per family, never depending on each other;
   - (c) a crate per family, in an order set by the measured couplings, with shared parts moved down.
-- Each measured coupling is broken as follows (MEASURED, research 49; the pieces are READ):
+- Each measured coupling is broken as follows (MEASURED, research 49 and research 56 §10; the
+  pieces are READ):
 
 | Coupling | References | Resolution |
 |---|---:|---|
-| `primitive` to `boolean`, `sweep` to `boolean` | 23, 18 | the uses are the merge and topology intersector (READ); `scx-make` sits above `scx-boolean` |
+| `primitive` to `boolean`, `sweep` to `boolean` | 23, 18 | the uses are the merge and topology intersector (READ); `scx-make` sits above `scx-boolean`. The planar Boolean, a method of the primitive builder at the pin, moves down into `scx-boolean` |
 | `primitive` to `sweep` | 36 (12 back) | both in `scx-make` |
+| `sweep` to `hlr` | | the boundary of a swept solid is generated by the tool's silhouette, so `scx-make` depends on `scx-hlr` (review-56 E6) |
 | `blend` to `boolean` | 29 | `scx-blend` sits above `scx-boolean` |
-| `offset` to `blend` | 36 (62 in the area table) | 31 of the uses are `fillet_section`'s station, interval, series and certificate (READ). They define the blend surface, so they move to `scx-geom::procedural`. The rest (fillet removal and reapplication through the fillet executive) make `scx-offset` depend on `scx-blend`, stated |
+| `blend` to defeature | 2 | `fillet_executive` uses defeature, which is in `scx-local`, so `scx-blend` depends on `scx-local` |
+| `offset` to `blend` | 56 between the areas | 41 are to the certified section of `fillet_section`. It defines the blend surface, so it moves to `scx-num` and `scx-surface`. 9 are to defeature, in `scx-local`. What remains is 25 references in fillet reapplication (`offset_faces.rs`) and offset geometry creation, so `scx-offset` depends on `scx-blend`, stated |
 | `offset` to `heal` | 18 | stitching only (READ), so `scx-offset` uses `scx-stitch` |
 | `offset` to `boolean` | 15 | `scx-offset` sits above `scx-boolean` |
 
@@ -387,7 +461,7 @@ pub struct Unfinished { pub draft: Draft, pub cause: StructureCause }
   - rebuilds the body cells it must (3.1).
 - On a structural failure, `finish` returns the draft with the cause, so tools can show the broken
   structure (review K6). The error is a `Defect` when the caller is one of our operations (5).
-- Geometric validity (self-intersection, gaps) belongs to `scx-bodyq::check`, which only reads.
+- Geometric validity (self-intersection, gaps) belongs to `scx-check`, which only reads.
 
 **C5. Whole-table copy-on-write.** This is kept as ruled on 11-26, from research 51.
 
@@ -584,7 +658,7 @@ is the shape.
 
 ### 4.1 Types
 
-All of these are in `scx-num`, so layers 2 and 3 can produce certificates. This is revised after
+All of these are in `scx-num`, so every geometry crate can produce certificates. This is revised after
 review-architecture-v2 (S10).
 
 ```rust
@@ -601,7 +675,7 @@ Where each record lives:
 
 - `EdgeGeom::accuracy`, `Vertex::accuracy` and `EdgeUse::bound` are `Option<Recorded>`. `None`
   means "within the body's resolution stamp".
-- **A surface's accuracy has one home: the procedural kind's payload in `scx-geom`.** That payload
+- **A surface's accuracy has one home: the procedural kind's payload in `scx-surface`.** That payload
   holds the definition, the approximant, and a certificate per span, each with its span's uv region
   (04, 11-26, second trim-gap row).
   - A span's bound may be used only for a trim whose uv box lies inside that span's region.
@@ -701,7 +775,7 @@ pub enum BlendError {
 - **`Defect`** is `Defect { at: &'static str, what: DefectKind }`. Apps report it and never handle
   it. Library code never panics; the workspace lints already deny it.
 - **`Exhausted` and `Cancelled`** come only from crates that take a budget or a `Stop`.
-- Lower layers have the subset that applies to them. For example, `GeomqError` has `Refused`,
+- Lower layers have the subset that applies to them. For example, `SurfaceError` has `Refused`,
   `Unsupported`, `Exhausted`, `Defect` and `Num`.
 - Every error implements `std::error::Error` with `source()`. Display strings are for people and are
   not a stable interface; the variants and causes are.
@@ -817,7 +891,7 @@ pub fn fillet(body: &Brep, edges: &[EdgeId], spec: &FilletSpec, cx: &mut Cx<'_>)
 ```
 
 - Operation crates and `scx-bodyq` take `Cx`.
-- Layers 0-4 take only what they read: a `Resolution` or `Length`, `&mut Scratch` where they memo,
+- The geometry crates take only what they read: a `Resolution` or `Length`, `&mut Scratch` where they memo,
   and a budget and `Stop` where they iterate. Geometry users never build a `Cx`.
 - **`Settings`** is a `#[non_exhaustive]` struct with `Default`.
   - It holds the random **seed** (per 07; revised after review-architecture-v2, S13). Each draw is
@@ -890,13 +964,17 @@ review-architecture-v2 (S10, K1).
 - Change if: a user needs a custom kind to stay exact through operations. Because the procedural
   mechanism exists, `Custom` is then one more user of it, not an arm in every match.
 
-**The kind set** is settled when `scx-geom` starts, from the pin's kinds and their uses. Starting
+**The kind set** is settled when `scx-curve` and `scx-surface` start, from the pin's kinds and their uses. Starting
 points (JUDGED):
 
 - line, circle, ellipse, parabola and hyperbola stay separate, each with its natural
   parameterisation;
-- Hermite and composite curves become NURBS if they exist only for fitting;
-- the pin's `CrvInVolume` and `SrfInVolume` become images under a volume kind in `scx-geom::volume`;
+- Hermite and composite curves become NURBS if they exist only for fitting; if they stay, they are
+  in `scx-curve`;
+- the pin's `CrvInVolume` and `SrfInVolume` become images under the volume maps, all in
+  `scx-surface`;
+- `Procedural` lives in `scx-curve`. The intersection curve is an `AnyCurve` arm in `scx-surface`,
+  with its evaluator (point refinement on two surfaces) beside it;
 - offset, blend, swept and intersection kinds are procedural and stored exactly. This answers the 04
   question on exact offset and blend records with "yes, by design".
 
@@ -1017,7 +1095,7 @@ it never decides which side is right.
 
 ### 9.1 Against solidcore, as a smoke detector
 
-- **Layers 0-4 are compared function by function.** `scx-difftest` does this today for `scx-num` and
+- **The geometry crates are compared function by function.** `scx-difftest` does this today for `scx-num` and
   `scx-algo`: 323 tests over 767,061 inputs, 0 mismatches, with a default tolerance of 1e-12
   relative (MEASURED, 05 §6).
 - **Bodies are compared by outcome**, through the pin-record converter in `scx-difftest`:
@@ -1116,20 +1194,22 @@ early.
 | Step | Work | Done when |
 |---|---|---|
 | 1 | 10.1 | `cargo xtask fast` clean; difftest 0 mismatches, or each explained |
-| 2 | **Vertical slice, geometry:** `scx-nurbs` evaluation and knots; `scx-geom` for line, circle, ellipse, B-spline curve, plane, cylinder, cone, sphere, torus, B-spline surface; `scx-geomq` closed-form analytic intersections and projection | function-by-function difftest on those |
+| 2 | **Vertical slice, geometry:** `scx-nurbs` evaluation and knots; `scx-nurbs-surface` evaluation and the `Nurbs` record; `scx-curve` for line, circle, ellipse, B-spline curve; `scx-surface` for plane, cylinder, cone, sphere, torus, B-spline surface, with point inversion, closed-form analytic projection and curve-surface intersection; the analytic part of `scx-ssi` | function-by-function difftest on those |
 | 3 | **Vertical slice, body:** `scx-brep` (regions, sides, cells, `Changes`, `carry`, stamp); the provenance and history tests ported; `scx-record`; the pin-record converter | round trip keeps ids and bytes; cells empty after both edit paths; provenance tests pass |
-| 4 | **Vertical slice, end to end:** `scx-bodyq` mass and classification; `scx-make` primitives and extrude; `scx-boolean` on analytic bodies; `scx-tess` | **the end-to-end difftest by outcome runs from here on**; first performance measurement (9.4) |
-| 5 | Widen geometry: all NURBS work, fitting with per-span certificates, procedural kinds, volume kinds, B-spline SSI, `scx-planar`, `scx-sketch` | difftest per function; certified bounds checked |
-| 6 | Widen bodies: full `scx-bodyq` (validity check, contact, continuity), `scx-stitch`, `scx-step` | the STEP corpus imports and passes the check |
-| 7 | `scx-boolean` full, `scx-make` full, `scx-repair` | Boolean suite, algebra properties, difftest by outcome |
-| 8 | `scx-blend`, `scx-taper`, `scx-local` | each family by outcome, kept-face counts |
-| 9 | `scx-offset`, `scx-deform`, `scx-sheetmetal` | as above |
-| 10 | `scx-hlr`, `scx-mesh`, `scx-dxf` | drawings, mesh round trips, DXF corpus |
-| 11 | Helpers: `scx-fates`, `scx-features`, `scx-frames`, `scx-teeth`, `scx-weld`, `scx-cadir` | every row of 1.3 has a home that passes its tests; the app's design corpus runs on solidcorex |
+| 4 | **Vertical slice, end to end:** `scx-mass`; `scx-bodyq` classification; `scx-make` primitives and extrude; `scx-boolean` on analytic bodies; `scx-tess`. The crates these depend on (`scx-planar`, `scx-check`, `scx-stitch`, `scx-hlr`) exist from here, holding what the slice calls | **the end-to-end difftest by outcome runs from here on**; first performance measurement (9.4) |
+| 5 | Widen geometry (layers 1-4): all NURBS work, fitting with per-span certificates, procedural kinds, the volume maps, B-spline SSI, `scx-planar`, `scx-sketch`, `scx-teeth`, `scx-dxf`, `scx-p21` | difftest per function; certified bounds checked; DXF corpus |
+| 6 | Widen bodies (layers 5-7 without Booleans): full `scx-bodyq` (contact, continuity, pick), `scx-check`, `scx-stitch`, `scx-hlr`, `scx-step` | the STEP corpus imports and passes the check; drawings |
+| 7 | Layers 7-8: `scx-boolean` full, `scx-deform`, `scx-make` full, `scx-repair` | Boolean suite, algebra properties, difftest by outcome |
+| 8 | Layer 9: `scx-local`, `scx-mesh`, `scx-sheetmetal`, `scx-taper` | each family by outcome, kept-face counts; mesh round trips |
+| 9 | Layer 10: `scx-blend` | as above |
+| 10 | Layer 11: `scx-offset` | as above |
+| 11 | Helpers: `scx-fates`, `scx-features`, `scx-frames`, `scx-weld`, `scx-cadir`, `scx-import-sc` | every row of 1.3 has a home that passes its tests; the app's design corpus runs on solidcorex |
 | 12 | Cross-platform | `fmath` hashes equal on x86_64, aarch64 and wasm32 |
 | 13 | App switch | in one go, checked against the 1.3 inventory and the 9.4 target |
 
-- Steps 5 and 6 can run in parallel, as can the families within 8, 9 and 10.
+- A crate is ported after every crate it depends on (1.1). Crates of one layer within a step can run
+  in parallel, as can the families of step 8.
+- Steps 5 and 6 can overlap: a body crate widens as soon as the geometry it calls exists.
 - The design corpus can run partly from step 7, on the features whose crates exist. It does not wait
   for step 11.
 
@@ -1144,7 +1224,7 @@ early.
 | Ambient mutable state on the kernel (memos in `Cell`/`RefCell`, a result-changing `blend_net_tolerance`, size scalars read by later calls) | research 03 | `Cx`; no session (6) |
 | Process statics and thread-locals (idle pool, fix switches, hook) | READ, solidcore-ops | none; `Executor` in `Settings` (8.2) |
 | 26 fix switches | research 03 | none (6.3) |
-| `&mut Kernel` passed through 89% of the time | research 03 | layers 0-4 take only what they read |
+| `&mut Kernel` passed through 89% of the time | research 03 | the geometry crates take only what they read |
 | One crate with 19 of 26 areas in one cycle; operation areas referring to each other 38 times | research 49 | layered crates, couplings resolved (C3) |
 | One error type referenced from 559 files | research 49 | an error per crate with typed causes (5) |
 | Geometry pointing at topology | READ, curve and surface `p2.rs`; research 01 | geometry is plain data (7.1) |

@@ -131,7 +131,7 @@ They are converted once there and never snapped.
   kept by the external comparison harness (01 §9.1), not by the internal unit.
 - **Results move.** Every conic whose domain was stored in degrees moves by up to one rounding per
   conversion. Changed 11-26: there is no separate step for this. solidcorex is written in radians from
-  the start (01 §10.2 step 2 for `scx-geom`, step 3 for `scx-record`). A difference from the pin
+  the start (01 §10.2 step 2 for the geometry crates, step 3 for `scx-record`). A difference from the pin
   beyond the difftest's tolerance is settled against the truth (02 §3).
 
 ## 3. Parameter domains
