@@ -17,7 +17,7 @@ use scx_num::vector3d::{Point3, UnitVec3, Vec3};
 use scx_nurbs::Approach;
 
 use crate::arcs::Arcs;
-use crate::common::{Axes, linear, unit};
+use crate::common::{Axes, check_lengths, linear, unit};
 use crate::error::{Size, SurfaceError, positive};
 use scx_num::jet::SurfaceJet;
 
@@ -93,14 +93,19 @@ impl Cylinder {
         self.axes().at_in(cs, T::lift(self.radius), v)
     }
 
-    /// The points at `uv`, into `out` (cleared first).
-    pub fn eval_many(&self, uv: &[Point2], out: &mut Vec<Point3>) {
+    /// The point at each of `uv`, into `out`: `out[i]` is `point(uv[i])`, bit for bit (a NaN
+    /// is a NaN; Rust leaves its sign and payload open).
+    ///
+    /// # Panics
+    ///
+    /// If `uv` and `out` differ in length.
+    pub fn eval_many(&self, uv: &[Point2], out: &mut [Point3]) {
+        check_lengths(uv, out);
         let (a, axes) = (self.arcs(), self.axes());
-        out.clear();
-        out.extend(uv.iter().map(|p| {
+        for (o, p) in out.iter_mut().zip(uv) {
             let cs = a.cos_sin(p.x, a.piece(p.x, Approach::Above));
-            axes.at(cs, self.radius, p.y)
-        }));
+            *o = axes.at(cs, self.radius, p.y);
+        }
     }
 
     /// The partials up to total order `D`; at a break of `u`, `side[0]` picks the arc.

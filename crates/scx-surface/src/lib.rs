@@ -10,6 +10,8 @@
 //!   direction at a break), `normal`, `domain`, and `to_step` / `from_step`. The cone and
 //!   sphere have poles ([`Pole`]). The sphere is smooth at its poles, so every kind but the
 //!   cone has a normal everywhere and returns it directly; the cone's is `None` at its apex.
+//! - [`Surface`]: every kind as one value (the five and a NURBS surface behind an `Arc`),
+//!   dispatched by `match` with the kind's bits (63 §4.7).
 //!
 //! # The uv (research 63 D13)
 //!
@@ -41,6 +43,7 @@ mod cylinder;
 mod error;
 mod plane;
 mod sphere;
+mod surface;
 mod torus;
 
 pub use cone::Cone;
@@ -48,6 +51,7 @@ pub use cylinder::Cylinder;
 pub use error::{Size, SurfaceError};
 pub use plane::Plane;
 pub use sphere::Sphere;
+pub use surface::Surface;
 pub use torus::Torus;
 
 use scx_num::vector3d::Point3;
@@ -72,6 +76,7 @@ const _: () = {
     ok::<Cone>();
     ok::<Sphere>();
     ok::<Torus>();
+    ok::<Surface>();
     ok::<Pole>();
     ok::<SurfaceError>();
     ok::<Size>();

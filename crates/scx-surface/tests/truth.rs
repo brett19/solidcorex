@@ -716,7 +716,7 @@ fn eval_many_is_point() {
     let uv: Vec<Point2> = (0..17)
         .map(|i| Point2::new(f64::from(i) / 16.0, 0.7 - f64::from(i) / 9.0))
         .collect();
-    let mut out = vec![Point3::default()];
+    let mut out = vec![Point3::default(); uv.len()];
     s.eval_many(&uv, &mut out);
     assert_eq!(out, uv.iter().map(|&p| s.point(p)).collect::<Vec<_>>());
 }
