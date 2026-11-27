@@ -35,6 +35,7 @@ mod t_p21;
 mod t_rest;
 mod t_rng;
 mod t_solve;
+mod t_surface;
 mod t_tol;
 mod t_vector;
 

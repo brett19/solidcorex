@@ -1973,3 +1973,34 @@ pub fn nurbs_surface_from_homogeneous() -> PinDefect<(Homog,), Option<Read>> {
         check: |(h,), b| surface_answer(&h.0, b),
     }
 }
+
+/// `scx_surface`'s `jet` on a periodic direction's seam, from the side off the domain: from
+/// below at `u = 0` (or a torus's `v = 0`), from above at the period's end.
+///
+/// The surface is periodic, so the arc on that side is the one at the seam's other end: scx
+/// wraps to it. The pin's NURB has no span past its ends and clamps to the end span, whose
+/// second derivatives differ (each quarter arc's rational parameterisation has its own
+/// `S_uu`). The true value is the jet from the same side at the other end of the seam,
+/// which the pin computes inside its domain; the check holds scx to that at the test's
+/// tolerance.
+pub fn surface_jet() -> PinDefect<(crate::t_surface::Spec,), Vec<[f64; 3]>> {
+    PinDefect {
+        reason: "the pin's NURB clamps at a periodic seam instead of wrapping",
+        applies: Applies::Inputs(|(s,)| s.across_seam().is_some()),
+        check: |(s,), r| {
+            let t = s.across_seam().ok_or("not on a seam")?;
+            let w = crate::t_surface::s::jet(&t);
+            let tol = crate::t_surface::TOL;
+            let ok = r.len() == w.len()
+                && r.iter()
+                    .flatten()
+                    .zip(w.iter().flatten())
+                    .all(|(&a, &b)| tol.floats_agree(a, b));
+            if ok {
+                Ok(())
+            } else {
+                Err(format!("the truth (across the seam) is {w:?}"))
+            }
+        },
+    }
+}

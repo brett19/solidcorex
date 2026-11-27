@@ -830,6 +830,75 @@ pub fn intersect_curve(c: &Curve, ce: &Extent1d, s: &Surface, se: &Extent2d, tol
 | SU7 | `transformed` per the 11-27 row and D4 (exact; the pcurve refit is step 5's BR9) | SU3 |
 | SU8 | `AnyCurve` with `Free` and `OnSurface` | CU2, SU2 |
 
+### 4.6 SU1 as built (11-27)
+
+Built 11-27, proposed for review: decided by analysis and an adversarial pass, not yet ruled.
+
+- **Kinds.** `Plane`, `Cylinder`, `Cone`, `Sphere` and `Torus` hold a `Frame`, their sizes as
+  `f64` millimetres (given as `Length`) and, except the plane, a `Sense`. Fields are private;
+  every one is `Copy` and at most 120 bytes, checked at compile time. Each has `new`, accessors,
+  `point`, `eval<T: Ring>(u, v, near)`, `eval_many`, `jet::<D>(uv, [Approach; 2])`, `normal`,
+  `domain`, `to_step` and `from_step`. The cone has `pole()`, the sphere `poles()`.
+- **The plane has no sense.** Its normal is the frame's z. A reversed plane is the plane of
+  the mirrored frame. `Plane::new(frame)` is infallible and `const`. Its uv is STEP's.
+- **Reversed is a mirror (D14).** Evaluation uses `Ze = sense * z`. A reversed kind is the
+  forward one mirrored in its frame's xy plane at the same uv, so `S_u x S_v` turns and the
+  normal stays along it.
+- **`normal` is `Option` only on the cone.**
+  - The sketch had `normal -> Option<UnitVec3>` on every kind. Plane, cylinder and ring torus
+    have a normal everywhere.
+  - The sphere is smooth at its poles. Where `S_u x S_v` vanishes it returns the limit
+    (`-Ze` at `v = 0`, `+Ze` at `v = 1`) rather than `None`. This is a change to 4.4's "None
+    exactly there", which holds only for the cone's apex.
+  - The `Surface` enum (SU2) keeps `Option`.
+- **The cone's half-angle is signed** as the pin's semi-angle is.
+  - A negative half-angle narrows the cone along `Z`. The sketch had `(0, pi/2)`.
+  - Zero is refused (`Degenerate`: a cylinder is its own kind), as is a magnitude of `pi/2` or
+    more. The pin reduces the angle modulo `pi`; scx refuses it instead.
+  - A zero radius is allowed: the apex is at the origin.
+  - The slope `tan(half_angle)` is computed once, in `new`.
+  - The `v` domain runs from the apex along the nappe that holds `O`'s circle.
+- **The torus is a ring torus.** `minor >= major` (horn or spindle) is
+  `SelfIntersecting`, `Unsupported`, which is not a step-2 kind. The pin builds these.
+- **Errors.** `SurfaceError` has four causes, each with a kind and `name()`:
+  - `NotFinite`, `Degenerate` and `Negative` of a `Size` (`Radius`, `HalfAngle`, `Major`,
+    `Minor`), all `Refused`;
+  - `SelfIntersecting`, `Unsupported`.
+  
+  Evaluation cannot fail.
+- **The D13 layout**, read from the pin and stated in the crate docs:
+  - every angle direction is standard rational quarter arcs, one span each;
+  - cylinder `u` is over `[0, 2 pi r]` (arc length);
+  - cone, sphere and torus `u` are over `[0, 1]`;
+  - sphere `v` is two arcs from the south pole;
+  - torus `v` is four arcs from the outer equator;
+  - cylinder and cone `v` is the height.
+  
+  `to_step` and `from_step` give STEP's angles in radians. The cone's `to_step` angle is
+  continuous, not reduced to a turn.
+- **Jets at breaks.**
+  - `Approach` picks the arc in each direction.
+  - On a periodic seam, the side off the domain wraps to the arc at the other end, which is the
+    periodic surface's true value. The pin's NURB clamps to its end span there (pin defect
+    `surface_jet`).
+- **Generic-scalar `eval` takes `near`.** It uses the formulas of the arcs that hold `near`. An
+  argument spanning a break evaluates one arc's rational form past its span, which is a
+  different curve. Callers split at the breaks (`domain`).
+- **Cylinder breaks.**
+  - scx puts the breaks at `k (2 pi r / 4)`. The pin's arc-length knots come from
+    `reparametrize_with_arc_length`, and its period end also differs from scx's by a few ulps.
+  - Both are within a few ulps of the true `k pi r / 2`, neither consistently closer. scx's are
+    one rounding of a closed form.
+  - The difftest evaluates the pin on its own knot when the spec is on a break.
+- **The pin's unbounded cylinder and cone are not the reference.**
+  - The pin's canonical unbounded forms store their height over `[-1234567, 1234567]`. They
+    lose about `1e-10` in `v` (for example `S_u.z = 6e-11`).
+  - The difftest uses the bounded forms (`new_cylinder_bounded`, `new_bounded`), whose `v`
+    knots are `[0, h]`.
+  - This is recorded here as a pin precision limit, not filed as a pin defect.
+- **`SurfaceJet` is a crate-private stand-in** with NS2's `from_fn`, `point` and `get`, and no
+  re-export. It is swapped for `scx_num::jet::SurfaceJet` when NS2 lands.
+
 ## 5. `scx-ssi`, the analytic part
 
 The pin's sources are `intersect/surface_intersector` (`p1`-`p5`) and `adv_surface_intersector`.
