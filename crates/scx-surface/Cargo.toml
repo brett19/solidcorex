@@ -8,6 +8,7 @@ version.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+# scx-curve (01's crate row): the exact pcurves (`pcurve_of`) build its 2-D kinds.
 [dependencies]
 scx-algo = { path = "../scx-algo" }
 scx-curve = { path = "../scx-curve" }

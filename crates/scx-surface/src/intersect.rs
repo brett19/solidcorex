@@ -61,7 +61,7 @@ use scx_num::units::Length;
 use scx_num::vector2d::Point2;
 use scx_num::vector3d::{Point3, Vec3};
 
-use crate::arcs::Arcs;
+use scx_curve::arcs::Arcs;
 use crate::common::Axes;
 use crate::error::SurfaceError;
 use crate::surface::Surface;

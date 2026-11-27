@@ -373,9 +373,9 @@ pub mod x {
         BoundaryHandler, LocalSolveNd, NdReport, Outcome, TerminationReason, jacobian,
     };
     use scx_algo::local_solve1d::{
-        Bracket3, Domain1d, Goal, IterQueue1d, IterationValue, LocalSolve1d, Sample,
-        SolverAlgorithm,
+        Bracket3, Goal, IterQueue1d, IterationValue, LocalSolve1d, Sample, SolverAlgorithm,
     };
+    use scx_num::domain::{Clamp, ParamDomain};
     use scx_num::extent1d::Extent1d;
 
     fn err(c: Class) -> XErr {
@@ -418,12 +418,21 @@ pub mod x {
         Extent1d::spanning(a, b).unwrap()
     }
 
+    /// The periodic domain whose period is `[a, b]`, the pin's interval. A domain holds
+    /// the period `b - a` from `a`; every interval the configurations give comes back
+    /// exactly as `[a, a + (b - a)]`, which is checked.
+    fn periodic(a: f64, b: f64) -> ParamDomain {
+        let d = ParamDomain::periodic(b - a, a).unwrap();
+        assert_eq!(d.working(Clamp::Sample), finite(a, b), "period [{a}, {b}]");
+        d
+    }
+
     /// `(min, max, periodic)` as a domain; `None` the whole line.
-    pub fn domain1d(ivl: Option<(f64, f64, bool)>) -> Domain1d {
+    pub fn domain1d(ivl: Option<(f64, f64, bool)>) -> ParamDomain {
         match ivl {
-            None => Domain1d::Line,
-            Some((a, b, true)) => Domain1d::Periodic(finite(a, b)),
-            Some((a, b, false)) => Domain1d::Bounded(finite(a, b)),
+            None => ParamDomain::Unbounded,
+            Some((a, b, true)) => periodic(a, b),
+            Some((a, b, false)) => ParamDomain::Bounded(finite(a, b)),
         }
     }
 
@@ -518,8 +527,8 @@ pub mod x {
         x: [f64; 2],
         ivl: Option<[[f64; 2]; 2]>,
     ) -> Result<[[f64; 2]; 2], SolveError<XErr>> {
-        let domain = ivl.map_or([Domain1d::Line; 2], |a| {
-            a.map(|[lo, hi]| Domain1d::Bounded(finite(lo, hi)))
+        let domain = ivl.map_or([ParamDomain::Unbounded; 2], |a| {
+            a.map(|[lo, hi]| ParamDomain::Bounded(finite(lo, hi)))
         });
         let mut values = |p: &[f64; 2]| rec.call(*p, false).map(|(v, _)| v).map_err(err);
         jacobian(&mut values, x, &domain)
@@ -559,14 +568,13 @@ pub mod x {
         acc: f64,
     ) -> Result<super::RepN, PinErr> {
         let func = rec.func;
-        let domain = ivl.map_or([Domain1d::Line; 2], |a| {
-            let mut d = [Domain1d::Line; 2];
+        let domain = ivl.map_or([ParamDomain::Unbounded; 2], |a| {
+            let mut d = [ParamDomain::Unbounded; 2];
             for (i, (di, [lo, hi])) in d.iter_mut().zip(a).enumerate() {
-                let e = finite(lo, hi);
                 *di = if periodic && i == 0 {
-                    Domain1d::Periodic(e)
+                    self::periodic(lo, hi)
                 } else {
-                    Domain1d::Bounded(e)
+                    ParamDomain::Bounded(finite(lo, hi))
                 };
             }
             d
@@ -602,7 +610,7 @@ pub mod x {
 
     fn diag<const N: usize>(d: &mut Diag) -> Result<RepD, PinErr> {
         let s = LocalSolveNd::<N> {
-            domain: [Domain1d::Bounded(finite(-2.0, 2.0)); N],
+            domain: [ParamDomain::Bounded(finite(-2.0, 2.0)); N],
             acceptable_accuracy: 1e-9,
             ..LocalSolveNd::new()
         };
@@ -674,13 +682,13 @@ pub mod x {
         let brent = algorithm(code).map(|a| a.goal().is_some());
         let d = LocalSolve1d::default();
         let s = LocalSolve1d {
-            domain: Domain1d::Bounded(finite(lo, hi)),
+            domain: ParamDomain::Bounded(finite(lo, hi)),
             desired_accuracy: acc.abs(),
             acceptable_accuracy: 1e-3,
             ..LocalSolve1d::new()
         };
         // Bounded just above.
-        let ivl = s.domain.interval().unwrap();
+        let ivl = finite(lo, hi);
         let mut rec = Rec1::new(0, usize::MAX, false, Class::SmErr);
         let r = s
             .solve(|t| rec.call(t).map(|(v, d, _)| (v, d)).map_err(err), 1.0)

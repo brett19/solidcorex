@@ -12,7 +12,7 @@ use scx_num::frame::{Frame, Sense};
 use scx_num::ring::Ring;
 use scx_num::vector3d::{Point3, UnitVec3, Vec3};
 
-use crate::arcs::Trig;
+use scx_curve::arcs::ArcTrig;
 use scx_num::jet::SurfaceJet;
 
 /// A frame's origin and axes, z times the sense.
@@ -66,7 +66,7 @@ impl Axes {
     /// The jet of `O + f(v) D(u) + g(v) Z`, with `fg(j) = (f^(j)(v), g^(j)(v))`.
     pub(crate) fn jet<const D: usize>(
         &self,
-        u: &Trig<D>,
+        u: &ArcTrig<D>,
         fg: impl Fn(usize) -> (f64, f64),
     ) -> SurfaceJet<Vec3, D> {
         SurfaceJet::from_fn(|i, j| {

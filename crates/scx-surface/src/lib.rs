@@ -18,6 +18,8 @@
 //! - [`intersect_curve`]: where a line, circle or ellipse meets a kind, every point in
 //!   the curve's `t` and the kind's uv, crossing or tangent at the tolerance, or the curve
 //!   lying on it ([`CurveSurfaceHit`]); closed forms, a NURBS pair `Unsupported` (63 SU6).
+//! - [`pcurve_of`]: the exact pcurve of a curve lying on a surface, checked by lifting, or a
+//!   typed [`PcurveError`] (63 D10, §4.11).
 //! - [`AnyCurve`]: a free [`Curve`](scx_curve::Curve), or a [`CurveOnSurface`] (a uv curve on
 //!   a shared [`Surface`]) with its point and its jet by the chain rule (63 §4.10).
 //!
@@ -45,13 +47,13 @@
 //! knots) are not kinds here; reading them is the reader's map, as STEP's is.
 
 mod any_curve;
-mod arcs;
 mod common;
 mod cone;
 mod cylinder;
 mod edit;
 mod error;
 mod intersect;
+mod pcurve;
 mod plane;
 mod sphere;
 mod surface;
@@ -64,6 +66,7 @@ pub use cylinder::Cylinder;
 pub use edit::UvMap;
 pub use error::{Size, SurfaceError};
 pub use intersect::{Contact, CurveSurfaceHit, intersect_curve};
+pub use pcurve::{CurveKind, PcurveError, SurfaceKind, pcurve_of};
 pub use plane::Plane;
 pub use sphere::Sphere;
 pub use surface::Surface;
@@ -87,6 +90,7 @@ pub struct Pole {
 const _: () = {
     const fn ok<T: Send + Sync>() {}
     ok::<Plane>();
+    ok::<PcurveError>();
     ok::<Cylinder>();
     ok::<Cone>();
     ok::<Sphere>();
