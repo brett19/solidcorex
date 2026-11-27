@@ -13,10 +13,10 @@
 use crate::harness::{Bits, Out};
 use scx_algo::error::{EvalError, SolveError, SolveFailure, StepControlFailure};
 use scx_num::fmath;
+use solidcore::SolidError;
+use solidcore::error::Failure;
 use solidcore::error::mass::MassFailure;
 use solidcore::error::nurbs::{BSplineFailure, NurbsFailure};
-use solidcore::error::Failure;
-use solidcore::SolidError;
 
 /// An integrand error class the pin's integrator tells apart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,7 +50,7 @@ pub const OCLASSES: [OClass; 7] = [
 
 /// The pin's error of class `c`.
 pub fn pin_error(c: OClass) -> SolidError {
-    use crate::solvers::{pin_error as solver_error, Class};
+    use crate::solvers::{Class, pin_error as solver_error};
     match c {
         OClass::Cancelled => solver_error(Class::Cancelled),
         OClass::Unported => solver_error(Class::Unported),
@@ -273,7 +273,7 @@ pub type Integral<const N: usize> = Result<([f64; N], (u32, u32)), Fp>;
 pub type Stepped<const N: usize> = Result<([f64; N], f64, f64, f64), Fp>;
 
 pub mod x {
-    use super::{ode_pin, Cfg, Fp, Integral, OErr, Rec, Stepped};
+    use super::{Cfg, Fp, Integral, OErr, Rec, Stepped, ode_pin};
     use scx_algo::ode::{self, OdeIntegrator, Quadrature, StepEstimate};
 
     pub fn integrate<const N: usize>(c: &Cfg<N>, rec: &mut Rec) -> Integral<N> {
@@ -416,9 +416,9 @@ pub mod s {
 pub mod pinf {
     #[allow(clippy::all, clippy::pedantic, dead_code, unused_imports)]
     mod pin {
+        use solidcore::error::Failure;
         use solidcore::error::mass::MassFailure;
         use solidcore::error::nurbs::{BSplineFailure, NurbsFailure};
-        use solidcore::error::Failure;
         use solidcore::geom::tol::are_same;
         use solidcore::math::{EFF_ZERO, EFF_ZERO_SQ};
         use solidcore::{Kernel, Result, SolidError};

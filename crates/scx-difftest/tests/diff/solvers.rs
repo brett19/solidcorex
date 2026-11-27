@@ -13,12 +13,11 @@
 
 use crate::harness::{Bits, Out};
 use scx_algo::error::{EvalError, SolveError, SolveFailure};
-use scx_num::error::NumFailure;
 use scx_num::NumError;
+use solidcore::SolidError;
+use solidcore::error::Failure;
 use solidcore::error::geom::GeomFailure;
 use solidcore::error::mass::MassFailure;
-use solidcore::error::Failure;
-use solidcore::SolidError;
 
 impl Bits for String {
     fn bits(&self, o: &mut Out) {
@@ -119,41 +118,9 @@ impl EvalError for XErr {
     }
 }
 
-/// A layer-0 error as the pin reports it (the variants the solvers can reach; any other
-/// comes out as a `Defect` and so mismatches).
+/// A layer-0 error as the pin reports it ([`crate::facade::num_as_pin`]).
 pub fn num_pin(e: NumError) -> SolidError {
-    match e {
-        NumError::InvalidInput { operation, reason } => {
-            SolidError::InvalidInput { operation, reason }
-        }
-        NumError::Failed {
-            operation,
-            failure,
-            cause,
-        } => {
-            let cause = cause.map(|c| num_pin(*c));
-            let f = match failure {
-                NumFailure::Singular { measure } => GeomFailure::Singular { measure },
-                NumFailure::IndexOutOfRange { index, len } => {
-                    GeomFailure::IndexOutOfRange { index, len }
-                }
-                NumFailure::NotSquare { rows, cols } => GeomFailure::NotSquare { rows, cols },
-                NumFailure::CallFailed { .. } => GeomFailure::CallFailed {
-                    class: cause
-                        .as_ref()
-                        .map_or(solidcore::error::ErrorKind::Failed, SolidError::kind),
-                },
-                _ => GeomFailure::Defect {
-                    why: "a layer-0 failure the solver facade does not map",
-                },
-            };
-            let mut fl = Failure::new(operation, f);
-            if let Some(c) = cause {
-                fl = fl.caused_by(c);
-            }
-            fl.into_error()
-        }
-    }
+    crate::facade::num_as_pin(&e)
 }
 
 /// The solver's error as the pin reports it, one for one (report 53 section 12).
@@ -391,15 +358,15 @@ pub type RepD = ((bool, Vec<f64>), (i32, u64, bool));
 
 /// The scx side.
 pub mod x {
-    use super::{f1, fd, found_n, solve_pin, Class, Diag, PinErr, Rec1, RecN, RepD, St1, XErr};
+    use super::{Class, Diag, PinErr, Rec1, RecN, RepD, St1, XErr, f1, fd, found_n, solve_pin};
     use core::num::NonZeroUsize;
     use scx_algo::error::SolveError;
+    use scx_algo::local_solve_nd::{
+        BoundaryHandler, LocalSolveNd, NdReport, Outcome, TerminationReason, jacobian,
+    };
     use scx_algo::local_solve1d::{
         Bracket3, Domain1d, Goal, IterQueue1d, IterationValue, LocalSolve1d, Sample,
         SolverAlgorithm,
-    };
-    use scx_algo::local_solve_nd::{
-        jacobian, BoundaryHandler, LocalSolveNd, NdReport, Outcome, TerminationReason,
     };
     use scx_num::extent1d::Extent1d;
 
@@ -407,9 +374,11 @@ pub mod x {
         XErr(super::pin_error(c))
     }
 
-    /// A solver error as `(Display, the pin's error)`.
+    /// A solver error as `(Display, the pin's error)`: the text the pin writes for the
+    /// error the solver's causes map to (research 62 D5; scx's own text is its own).
     pub fn pin(e: SolveError<XErr>) -> PinErr {
-        (e.to_string(), solve_pin(e))
+        let p = solve_pin(e);
+        (crate::facade::pin_text(&p), p)
     }
 
     /// The pin's `SmLocalSolverAlgorithmType` code `code` (`SM_SA_BISECTION` solves as
@@ -659,9 +628,10 @@ pub mod x {
     /// size, and `is_oscillating` after each of 20 alternating steps.
     pub fn queue(size: NonZeroUsize) -> (bool, Result<(), String>, Vec<bool>) {
         let ok = IterQueue1d::try_new(size).is_ok();
+        // The pin's text for the error (D5: the facade maps the cause).
         let big = IterQueue1d::try_new(NonZeroUsize::MAX)
             .map(|_| ())
-            .map_err(|e| e.to_string());
+            .map_err(|e| crate::facade::num_as_pin(&e).to_string());
         let mut q = IterQueue1d::new(size);
         let mut osc = Vec::new();
         for i in 0..20u32 {
@@ -714,21 +684,21 @@ pub mod x {
 
 /// The pin's side.
 pub mod s {
-    use super::{pin_error, Class, Diag, PinErr, Rec1, RecN, RepD, St1};
+    use super::{Class, Diag, PinErr, Rec1, RecN, RepD, St1, pin_error};
     use core::num::NonZeroUsize;
+    use solidcore::SolidError;
     use solidcore::geom::extent1d::{Extent1d, ExtentNd};
+    use solidcore::geom::local_solve_nd::{
+        BoundaryHandler, EvalNFunctions, LocalSolveNd, compute_jacobian,
+    };
     use solidcore::geom::local_solve1d::{
         EvalFunction, FunctionValue, IterQueue1d, IterationValue, LocalSolve1d, SolverAlgorithm,
     };
-    use solidcore::geom::local_solve_nd::{
-        compute_jacobian, BoundaryHandler, EvalNFunctions, LocalSolveNd,
-    };
     use solidcore::geom::matrix::Matrix;
-    use solidcore::SolidError;
 
     /// A solver error as `(Display, the error)`.
     pub fn pin(e: SolidError) -> PinErr {
-        (e.to_string(), e)
+        (crate::facade::pin_text(&e), e)
     }
 
     impl EvalFunction for Rec1 {

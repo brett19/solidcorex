@@ -5,8 +5,8 @@ description = "Benchmarks: scx-num and scx-algo against the pinned solidcore, on
 edition.workspace = true
 license.workspace = true
 version.workspace = true
-# gungraun 0.20 needs 1.88 (criterion 0.8, 1.86); the libraries keep the workspace's 1.85
-rust-version = "1.88"
+# gungraun 0.20 needs 1.88 and criterion 0.8 1.86; the workspace's version covers both
+rust-version.workspace = true
 publish = false
 
 [dependencies]

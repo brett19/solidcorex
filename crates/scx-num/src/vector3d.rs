@@ -108,7 +108,7 @@
 
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use crate::error::{NumError, NumFailure, Result};
+use crate::error::{Invalid, NumError, NumFailure, Result};
 use crate::interval::Ivl;
 use crate::math::{BIG_DOUBLE, EFF_ZERO, EFF_ZERO_SQ, PI};
 use crate::tol;
@@ -120,11 +120,7 @@ use crate::vector2d::{Point2, Vec2};
 /// (upstream also flags an error below `-SM_EFF_ZERO_SQ`).
 #[must_use]
 pub fn sqrt(x: f64) -> f64 {
-    if x <= 0.0 {
-        0.0
-    } else {
-        x.sqrt()
-    }
+    if x <= 0.0 { 0.0 } else { x.sqrt() }
 }
 
 /// `sm_cbrt` (`smos_CubeRoot`): cube root.
@@ -979,7 +975,7 @@ impl Vec3 {
     pub fn make_unit_ortho_vectors(self, y_reference: Option<Self>) -> Result<[UnitVec3; 3]> {
         let x_axis = self.normalized().ok_or(NumError::InvalidInput {
             operation: "geom::vector3d::Vec3::make_unit_ortho_vectors",
-            reason: "zero-length or non-finite vector",
+            reason: Invalid::NoDirection,
         })?;
         let frame = |z_axis: UnitVec3| {
             let y_axis = UnitVec3(z_axis.cross(*x_axis).unit_or_z());
@@ -1125,7 +1121,7 @@ impl Vec3 {
         if tol::is_zero_squared(v1_len_sq) || tol::is_zero_squared(v2_len_sq) {
             return Err(NumError::InvalidInput {
                 operation: "geom::vector3d::Vec3::angle_between",
-                reason: "zero-length vector",
+                reason: Invalid::ZeroLength,
             });
         }
         let dot_prep = self.dot(o);
@@ -1159,7 +1155,7 @@ impl Vec3 {
         {
             return Err(NumError::InvalidInput {
                 operation: "geom::vector3d::Vec3::signed_unit_angle",
-                reason: "expected unit directions perpendicular to a unit normal",
+                reason: Invalid::NotPerpendicular,
             });
         }
         let sin = self.dot(start.cross(end));
@@ -1209,18 +1205,14 @@ impl Vec3 {
         if !(self.is_finite() && normal.is_finite() && line.is_finite()) {
             return Err(NumError::InvalidInput {
                 operation: "geom::vector3d::Vec3::square_turn",
-                reason: "non-finite vector",
+                reason: Invalid::NotFinite,
             });
         }
         // Only their directions count: scaled to a largest component of 1, so squaring a huge
         // (or tiny) finite vector can't overflow (or underflow) on the way.
         let scaled = |v: Self| {
             let m = v.x.abs().max(v.y.abs()).max(v.z.abs());
-            if m > 0.0 {
-                v / m
-            } else {
-                v
-            }
+            if m > 0.0 { v / m } else { v }
         };
         let (normal, line) = (scaled(normal), scaled(line));
         let target = self.cross(line);
@@ -1229,7 +1221,7 @@ impl Vec3 {
         {
             return Err(NumError::InvalidInput {
                 operation: "geom::vector3d::Vec3::square_turn",
-                reason: "a vector along the axis",
+                reason: Invalid::AlongAxis,
             });
         }
         let turn = self.ccw_angle_between(normal, target)?;
@@ -1544,9 +1536,11 @@ mod tests {
             assert!(a.dot(*b).abs() < 1e-15);
         }
         assert!(Vec3::ZERO.make_unit_ortho_vectors(None).is_err());
-        assert!(Vec3::new(f64::NAN, 0.0, 1.0)
-            .make_unit_ortho_vectors(None)
-            .is_err());
+        assert!(
+            Vec3::new(f64::NAN, 0.0, 1.0)
+                .make_unit_ortho_vectors(None)
+                .is_err()
+        );
     }
     use crate::math::EFF_ZERO_RAD;
 
@@ -1799,9 +1793,11 @@ mod tests {
             .make_unit_ortho_vectors(None)
             .unwrap();
         assert_eq!((*x, *y, *z), (Vec3::Y, Vec3::Z, Vec3::X));
-        assert!(Vec3::new(1.0, 2.0, 3.0)
-            .solve_two_linear_equations(Vec3::new(2.0, 4.0, 6.0))
-            .is_err());
+        assert!(
+            Vec3::new(1.0, 2.0, 3.0)
+                .solve_two_linear_equations(Vec3::new(2.0, 4.0, 6.0))
+                .is_err()
+        );
         // Rotation about the vector itself is the identity.
         assert_eq!(Vec3::Z.rotate_vec_about_axis(Vec3::Z, 1.0), Vec3::Z);
         assert!(Vec3::X.is_colinear_with(

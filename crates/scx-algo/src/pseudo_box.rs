@@ -82,15 +82,15 @@
 //!   the eye fold through infinity), where upstream answered a bounded box of the corners.
 //! - `IsAxisAligned`/`AreAligned` return a map of [`SignedAxis`] in place of `±1, ±2, ±3`.
 
-use scx_num::error::{NumError, Result};
+use scx_num::error::{Invalid, NumError, Result};
 use scx_num::extent1d::{Extent1d, ExtentPointType, Hull1d};
 use scx_num::extent3d::{BoundaryType, Extent3d, LineHit};
-use scx_num::math::{Point3, BIG_DOUBLE, EFF_ZERO, EFF_ZERO_SQ};
-use scx_num::tol::{are_same, is_zero, is_zero_to_tol, ScaledZero};
+use scx_num::math::{BIG_DOUBLE, EFF_ZERO, EFF_ZERO_SQ, Point3};
+use scx_num::tol::{ScaledZero, are_same, is_zero, is_zero_to_tol};
 use scx_num::vector3d::{Axis, UnitVec3, Vec3};
 
 use crate::geom::line::line_closest_point;
-use crate::geom::plane::{intersect_three_planes, intersect_two_planes, Plane, PlanesIntersection};
+use crate::geom::plane::{Plane, PlanesIntersection, intersect_three_planes, intersect_two_planes};
 use crate::polynomial::solve_quadratic;
 
 /// Three unit, linearly independent basis vectors (`m_aBasis` with `m_bOrthogonalBasis`).
@@ -346,21 +346,13 @@ fn det3(a: Vec3, b: Vec3, c: Vec3) -> f64 {
 /// The largest of three, as upstream's `SM_MAX3` (`a > b ? a : b`, then with `c`).
 fn max3(a: f64, b: f64, c: f64) -> f64 {
     let ab = if a > b { a } else { b };
-    if ab > c {
-        ab
-    } else {
-        c
-    }
+    if ab > c { ab } else { c }
 }
 
 /// The smallest of three, as upstream's `SM_MIN3`.
 fn min3(a: f64, b: f64, c: f64) -> f64 {
     let ab = if a < b { a } else { b };
-    if ab < c {
-        ab
-    } else {
-        c
-    }
+    if ab < c { ab } else { c }
 }
 
 impl PseudoBox {
@@ -498,9 +490,10 @@ impl PseudoBox {
             (1, [(_, d), ..]) => d,
             // closest to the edge the two planes meet at
             (2, [(a, _), (b, _), _]) => match intersect_two_planes(&a, &b) {
+                // no closest point (`p` not finite) is no distance
                 Some(PlanesIntersection::Line { point, direction }) => {
-                    let t = line_closest_point(point, *direction, p).unwrap_or(0.0);
-                    (point + t * *direction).distance(p)
+                    line_closest_point(point, *direction, p)
+                        .map_or(f64::NAN, |t| (point + t * *direction).distance(p))
                 }
                 _ => outside,
             },
@@ -522,7 +515,7 @@ impl PseudoBox {
         if !p.is_finite() || !v.is_finite() || v.length_squared() < EFF_ZERO_SQ {
             return Err(NumError::invalid_input(
                 "pseudo_box::PseudoBox::intersect_line",
-                "undefined or zero line",
+                Invalid::UndefinedLine,
             ));
         }
         let [b0, b1, b2] = self.basis.vectors;
@@ -842,10 +835,7 @@ impl PseudoBox {
                 }
             });
             if !(sides.iter().all(|&s| s == 1) || sides.iter().all(|&s| s == -1)) {
-                return Err(NumError::invalid_input(
-                    OP,
-                    "the box reaches the eye's plane: its perspective image is unbounded",
-                ));
+                return Err(NumError::invalid_input(OP, Invalid::Overflows));
             }
         }
 
@@ -904,10 +894,7 @@ impl PseudoBox {
             }
         }
         if !basis.iter().take(3).all(|b| b.is_finite()) {
-            return Err(NumError::invalid_input(
-                OP,
-                "projected basis vector is not finite",
-            ));
+            return Err(NumError::invalid_input(OP, Invalid::Overflows));
         }
 
         let unit = |v: Vec3| v.normalized().map_or(Vec3::Z, |u| *u);
@@ -943,10 +930,8 @@ impl PseudoBox {
                 let [x, y, z] = basis[0].make_unit_ortho_vectors(Some(y_ref))?;
                 // upstream does not refresh the orthogonality flag here: the fresh box's
                 // `true`, which a unit orthogonal frame is
-                BoxBasis::new(*x, *y, *z).ok_or(NumError::invalid_input(
-                    OP,
-                    "orthogonal frame about the projected vector is degenerate",
-                ))?
+                BoxBasis::new(*x, *y, *z)
+                    .ok_or(NumError::invalid_input(OP, Invalid::DependentAxes))?
             }
         };
 
@@ -956,10 +941,7 @@ impl PseudoBox {
         for c in &mut corners {
             *c = c.project_point_to_plane(proj_point, proj_unit);
             if !c.is_finite() {
-                return Err(NumError::invalid_input(
-                    OP,
-                    "projected corner is not finite",
-                ));
+                return Err(NumError::invalid_input(OP, Invalid::Overflows));
             }
             sizer.add(*c);
         }
@@ -981,7 +963,7 @@ impl PseudoBox {
         }
         sizer
             .finish()
-            .ok_or(NumError::invalid_input(OP, "projected box is empty"))
+            .ok_or(NumError::invalid_input(OP, Invalid::Empty))
     }
 
     /// The axis-aligned box holding this one (`SmExtent3d::Circumscribe`): copied interval

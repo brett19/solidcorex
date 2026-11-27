@@ -28,6 +28,8 @@ pub mod algo_gsolve;
 #[allow(clippy::indexing_slicing)]
 mod algo_ode;
 #[allow(clippy::indexing_slicing)]
+pub mod algo_geom;
+#[allow(clippy::indexing_slicing)]
 pub mod num;
 
 pub use case::{Case, Side};
@@ -311,8 +313,8 @@ mod pin_impls {
     use solidcore::blend::fillet_section::interval::Ivl;
     use solidcore::geom::extent1d::Extent1d;
     use solidcore::geom::extent3d::Extent3d;
-    use solidcore::geom::local_solve1d::SolveOutcome;
     use solidcore::geom::local_solve_nd::NdSolution;
+    use solidcore::geom::local_solve1d::SolveOutcome;
     use solidcore::geom::polynomial::Roots;
     use solidcore::geom::vector3d::Vec3;
     use solidcore::mass::integrator::{OdeStep, StepCounts};
@@ -419,13 +421,9 @@ impl scx_algo::error::EvalError for NoError {
 )]
 pub mod pin {
     pub use solidcore::blend::fillet_section::certificate::inverse4;
-    use solidcore::blend::fillet_section::interval::{round_up, Ivl};
+    use solidcore::blend::fillet_section::interval::{Ivl, round_up};
     fn cmax(a: f64, b: f64) -> f64 {
-        if a < b {
-            b
-        } else {
-            a
-        }
+        if a < b { b } else { a }
     }
     pub use solidcore::blend::fillet_section::station::solve4;
     use solidcore::blend::fillet_section::tay::Ring;
@@ -450,7 +448,7 @@ pub mod pin_bern {
 
 #[cfg(test)]
 mod tests {
-    use super::{edges, seeded, Checksum, Consume, Rng, BATCH};
+    use super::{BATCH, Checksum, Consume, Rng, edges, seeded};
     use scx_num::extent3d::Extent3d;
     use scx_num::vector3d::Point3;
 

@@ -25,7 +25,7 @@
 
 use core::ops::{Add, Div, Mul, Sub};
 
-use crate::error::{NumError, NumFailure, Result};
+use crate::error::{Limit, NumError, NumFailure, Result};
 use crate::interval::Ivl;
 use crate::vector3d::Vec3;
 
@@ -166,9 +166,14 @@ impl Trunc {
     pub fn new(s: usize, e: usize) -> Result<Self> {
         let e_max = if s == 0 { STORE_E } else { MAX_E };
         if s > MAX_S || e > e_max {
-            return Err(NumError::InvalidInput {
+            return Err(NumError::Exhausted {
                 operation: "blend::fillet_section::Trunc::new",
-                reason: "a series' orders exceed SM_GN_MAXS or SM_GN_MAXE",
+                limit: Limit::SeriesOrder {
+                    s,
+                    e,
+                    limit_s: MAX_S,
+                    limit_e: e_max,
+                },
             });
         }
         Ok(Self {
@@ -638,7 +643,17 @@ mod tests {
     #[test]
     fn truncation_is_bounded() {
         assert!(Trunc::new(MAX_S, MAX_E).is_ok());
-        assert!(Trunc::new(MAX_S + 1, 0).is_err());
+        assert_eq!(
+            Trunc::new(MAX_S + 1, 0)
+                .err()
+                .and_then(|e| e.limit().copied()),
+            Some(Limit::SeriesOrder {
+                s: MAX_S + 1,
+                e: 0,
+                limit_s: MAX_S,
+                limit_e: MAX_E
+            })
+        );
         assert!(Trunc::new(1, MAX_E + 1).is_err());
         assert!(Trunc::new(0, MAX_E + 1).is_ok());
         assert!(Trunc::new(0, MAX_E + 2).is_err());
@@ -672,15 +687,11 @@ mod tests {
         let y = x.inv_sqrt(tr).unwrap();
         // y^2 x = 1 to every kept order
         let one = y.mul(&y, tr).mul(&x, tr);
-        for i in 0..=MAX_S {
-            for k in 0..=MAX_E {
+        for (i, row) in one.c.iter().enumerate() {
+            for (k, &got) in row.iter().enumerate() {
                 let want = if i == 0 && k == 0 { 1.0 } else { 0.0 };
                 // the binomial sum stops at tr.s + tr.e terms, which covers every kept order
-                assert!(
-                    (one.c[i][k] - want).abs() < 1e-12,
-                    "{i} {k} {}",
-                    one.c[i][k]
-                );
+                assert!((got - want).abs() < 1e-12, "{i} {k} {got}");
             }
         }
         assert_eq!(y.c[0][0], 0.5);
@@ -767,9 +778,9 @@ mod tests {
         let tr = Trunc::new(6, 2).unwrap();
         let d = no_constant();
         let mut di = Ser::constant(Ivl::from(0.0));
-        for i in 0..=MAX_S {
-            for k in 0..=MAX_E {
-                di.set(i, k, Ivl::from(d.c[i][k]));
+        for (i, row) in d.c.iter().enumerate() {
+            for (k, &v) in row.iter().enumerate() {
+                di.set(i, k, Ivl::from(v));
             }
         }
         let (mut p, mut q, mut pd) = (
@@ -819,7 +830,7 @@ mod tests {
         let why = NumFailure::VectorVanishes;
         let error = Ser::constant(0.0).inv_sqrt(tr).unwrap_err();
         assert_eq!(error, NumError::failed(op, why));
-        assert_eq!(error.kind(), crate::error::ErrorKind::Degenerate);
+        assert_eq!(error.kind(), crate::error::ErrorKind::Refused);
         let mut pows = InvSqrtSeries::<f64>::default();
         let error = pows.update(&Ser::constant(-1.0), tr).unwrap_err();
         assert_eq!(error, NumError::failed(op, why));

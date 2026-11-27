@@ -14,12 +14,12 @@
 )]
 
 use scx_num::hash::Rng;
+use scx_testkit::Rat;
 use scx_testkit::analytic::{
     Circle, Cone, Cylinder, Ellipse, Foot, Frame, Line, Plane, Sphere, Torus, V3,
 };
 use scx_testkit::dd::{self, Dd};
-use scx_testkit::gen;
-use scx_testkit::Rat;
+use scx_testkit::sample;
 
 fn sub(a: V3, b: V3) -> V3 {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
@@ -57,7 +57,7 @@ fn radial(frame: &Frame, u: f64, f: Dd) -> V3 {
 fn curve_derivatives_satisfy_their_identities() {
     let mut rng = Rng::new(1);
     for _ in 0..200 {
-        let frame = gen::frame(&mut rng, 2.0);
+        let frame = sample::frame(&mut rng, 2.0);
         let t = 8.0 * rng.next_signed_unit();
         let o = lift(frame.origin);
         let c = Circle {
@@ -107,7 +107,7 @@ fn curve_derivatives_satisfy_their_identities() {
 fn surface_derivatives_satisfy_their_identities() {
     let mut rng = Rng::new(2);
     for _ in 0..200 {
-        let frame = gen::frame(&mut rng, 2.0);
+        let frame = sample::frame(&mut rng, 2.0);
         let (u, v) = (6.0 * rng.next_signed_unit(), 1.4 * rng.next_signed_unit());
         let o = lift(frame.origin);
         let z = lift(frame.z);
@@ -205,7 +205,7 @@ fn check_surface_foot(
 fn closest_points_are_normal_feet_and_nearest() {
     let mut rng = Rng::new(3);
     for _ in 0..40 {
-        let frame = gen::frame(&mut rng, 1.0);
+        let frame = sample::frame(&mut rng, 1.0);
         let q: [f64; 3] = core::array::from_fn(|_| 3.0 * rng.next_signed_unit());
         let r = 0.2 + rng.next_f64();
         let circle = Circle { frame, radius: r };
@@ -283,7 +283,7 @@ fn exact_closest_points_have_exactly_normal_residuals() {
     let dot =
         |a: &[Rat; 3], b: [f64; 3]| a.iter().zip(b).fold(Rat::zero(), |s, (x, y)| s + x * &r(y));
     for _ in 0..200 {
-        let frame = gen::frame(&mut rng, 2.0);
+        let frame = sample::frame(&mut rng, 2.0);
         let q: [f64; 3] = core::array::from_fn(|_| 3.0 * rng.next_signed_unit());
         let qr = q.map(r);
         let line = Line {
@@ -304,14 +304,18 @@ fn exact_closest_points_have_exactly_normal_residuals() {
 #[test]
 fn degenerate_queries_have_no_closest_point() {
     let mut rng = Rng::new(5);
-    let frame = gen::frame(&mut rng, 1.0);
+    let frame = sample::frame(&mut rng, 1.0);
     let on_axis: [f64; 3] = core::array::from_fn(|k| frame.origin[k] + 0.5 * frame.z[k]);
-    assert!(Circle { frame, radius: 1.0 }
-        .closest(frame.origin)
-        .is_none());
-    assert!(Sphere { frame, radius: 1.0 }
-        .closest(frame.origin)
-        .is_none());
+    assert!(
+        Circle { frame, radius: 1.0 }
+            .closest(frame.origin)
+            .is_none()
+    );
+    assert!(
+        Sphere { frame, radius: 1.0 }
+            .closest(frame.origin)
+            .is_none()
+    );
     assert!(Cylinder { frame, radius: 1.0 }.closest(on_axis).is_none());
     let tube: [f64; 3] = core::array::from_fn(|k| frame.origin[k] + 2.0 * frame.x[k]);
     let torus = Torus {
@@ -323,13 +327,15 @@ fn degenerate_queries_have_no_closest_point() {
     // Beyond a cone's apex (it is at v = -r / tan a below the origin).
     let below: [f64; 3] =
         core::array::from_fn(|k| frame.origin[k] - 5.0 * frame.z[k] + 0.01 * frame.x[k]);
-    assert!(Cone {
-        frame,
-        radius: 1.0,
-        semi_angle: 0.5,
-    }
-    .closest(below)
-    .is_none());
+    assert!(
+        Cone {
+            frame,
+            radius: 1.0,
+            semi_angle: 0.5,
+        }
+        .closest(below)
+        .is_none()
+    );
     let zero_line = Line {
         origin: frame.origin,
         direction: [0.0; 3],
@@ -341,11 +347,11 @@ fn degenerate_queries_have_no_closest_point() {
 fn near_tangent_pairs_are_tangent_to_the_gap() {
     let mut rng = Rng::new(6);
     for gap in [0.0, 1e-12, -1e-12, 1e-6] {
-        let (circle, line) = gen::near_tangent_circle_line(&mut rng, gap);
+        let (circle, line) = sample::near_tangent_circle_line(&mut rng, gap);
         let (_, foot) = line.closest_exact(circle.frame.origin).unwrap();
         let d = norm(sub(lift(foot.rounded), lift(circle.frame.origin)));
         assert!((d - circle.radius - gap).abs() < 1e-15, "{gap}: {d}");
-        let (sphere, plane) = gen::near_tangent_sphere_plane(&mut rng, gap);
+        let (sphere, plane) = sample::near_tangent_sphere_plane(&mut rng, gap);
         let (_, foot) = plane.closest_exact(sphere.frame.origin).unwrap();
         let d = norm(sub(lift(foot.rounded), lift(sphere.frame.origin)));
         assert!((d - sphere.radius - gap).abs() < 1e-15, "{gap}: {d}");

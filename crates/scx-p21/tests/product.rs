@@ -29,15 +29,15 @@
 
 use std::fmt::Write as _;
 
-use scx_p21::error::{EntityCause, Warning};
+use scx_p21::error::{EntityCause, Limit, Warning};
 use scx_p21::part42::geom::Placement;
 use scx_p21::product::{
-    pre_defined_rgb, read, BodyKind, Colour, Definition, Frame, Item, ItemKind, Link, Node,
-    Operator, Product, ProductStructure, Representation, RepresentationMap, Side, StyledItem,
-    SurfaceStyle, Transformation, MAX_ASSEMBLY_DEPTH, MAX_VISITS,
+    BodyKind, Colour, Definition, Frame, Item, ItemKind, Link, MAX_ASSEMBLY_DEPTH, MAX_VISITS,
+    Node, Operator, Product, ProductStructure, Representation, RepresentationMap, Side, StyledItem,
+    SurfaceStyle, Transformation, pre_defined_rgb, read,
 };
 use scx_p21::units::{Context, Units};
-use scx_p21::{parse, Exchange, P21Error};
+use scx_p21::{Exchange, P21Error, parse};
 
 /// The refusal of `#id` for `cause`.
 fn at(id: u64, cause: EntityCause) -> P21Error {
@@ -68,12 +68,12 @@ fn file(data: &str) -> Exchange {
             assert!(twice.is_empty(), "ids defined twice: {twice:?}\n{t}");
             p.exchange
         }
-        Err(e) => panic!("{e}\n{t}"),
+        Err(e) => panic!("{}\n{t}", e.one_line()),
     }
 }
 
 fn structure(data: &str) -> ProductStructure {
-    read(&file(data)).unwrap_or_else(|e| panic!("{e}"))
+    read(&file(data)).unwrap_or_else(|e| panic!("{}", e.one_line()))
 }
 
 fn refused(data: &str) -> P21Error {
@@ -455,14 +455,14 @@ fn a_sub_assembly_shared_at_every_level_is_read_once() {
     );
     assert_eq!(
         s.instances(),
-        Err(at(
-            1000,
-            EntityCause::TooManyInstances { limit: MAX_VISITS }
-        ))
+        Err(P21Error::Exhausted(Limit::TooManyInstances {
+            id: 1000,
+            limit: MAX_VISITS
+        }))
     );
     assert_eq!(
-        EntityCause::TooManyInstances { limit: 7 }.to_string(),
-        "expands to more than 7 instances"
+        Limit::TooManyInstances { id: 3, limit: 7 }.to_string(),
+        "#3: expands to more than 7 instances"
     );
     assert_eq!(structure(&levels(3)).instances().map(|i| i.len()), Ok(15));
 }
@@ -730,12 +730,10 @@ fn nesting_is_bounded() {
     // The definition one level too deep, #1330, is named.
     assert_eq!(
         refused(&chain(depth + 1)),
-        at(
-            1330,
-            EntityCause::TooDeep {
-                limit: MAX_ASSEMBLY_DEPTH
-            }
-        )
+        P21Error::Exhausted(Limit::TooDeep {
+            id: 1330,
+            limit: MAX_ASSEMBLY_DEPTH
+        })
     );
 }
 

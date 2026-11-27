@@ -12,7 +12,7 @@
 //! `SM_BIG_DOUBLE` for the pin, read back as infinity. `gsolve_truths` checks the answers
 //! against brute force over every leaf pair.
 
-use crate::harness::{run, run_defect, SplitMix64};
+use crate::harness::{SplitMix64, run, run_defect};
 use scx_num::vector3d::sqrt;
 
 type P = [f64; 3];
@@ -187,11 +187,11 @@ fn rad_of(plan: &[Plan], piece: usize) -> f64 {
 }
 
 pub mod xs {
-    use super::{rad_of, value, Case, Res, Row, Scenario};
+    use super::{Case, Res, Row, Scenario, rad_of, value};
     use scx_algo::error::SolveError;
     use scx_algo::global_solve::{
-        record_nodes, solve, Accumulator, Branch, BranchSolver, Join, Keep, Next, Operation,
-        SolveOptions,
+        Accumulator, Branch, BranchSolver, Join, Keep, Next, Operation, SolveOptions, record_nodes,
+        solve,
     };
     use scx_algo::solution::{Solution, SolutionKind, SolutionObject, SortKey};
     use scx_algo::split_tree::SplitTree;
@@ -385,7 +385,8 @@ pub mod xs {
 }
 
 pub mod ss {
-    use super::{rad_of, value, Case, Res, Row, Scenario};
+    use super::{Case, Res, Row, Scenario, rad_of, value};
+    use solidcore::Result;
     use solidcore::geom::extent1d::Extent1d;
     use solidcore::geom::extent3d::Extent3d;
     use solidcore::geom::global_solver::{
@@ -395,8 +396,7 @@ pub mod ss {
         ObjectKind, Solution, SolutionArray, SolutionObject, SolutionType, SortKey,
     };
     use solidcore::geom::tree::{NodeId, Tree, TreeNode};
-    use solidcore::math::{Vec3, BIG_DOUBLE};
-    use solidcore::Result;
+    use solidcore::math::{BIG_DOUBLE, Vec3};
 
     #[derive(Clone, Copy, Debug, PartialEq)]
     pub struct Piece {
@@ -654,10 +654,10 @@ pub fn holds_the_best(sc: &Scenario, case: Case, r: &Res) -> Result<(), String> 
     if first != truth {
         return Err(format!("first value {first:?}, the truth is {truth:?}"));
     }
-    if let Some(t) = truth {
-        if *best_sq != t * t {
-            return Err(format!("best_sq {best_sq}, the truth is {}", t * t));
-        }
+    if let Some(t) = truth
+        && *best_sq != t * t
+    {
+        return Err(format!("best_sq {best_sq}, the truth is {}", t * t));
     }
     Ok(())
 }

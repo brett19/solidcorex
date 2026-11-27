@@ -8,7 +8,7 @@
 //! largest that a double holds, so elevation reaches [`MAX_DEGREE`](crate::MAX_DEGREE).
 
 use crate::point::Control;
-use crate::{NurbsError, Result, MAX_DEGREE};
+use crate::{MAX_DEGREE, NurbsError, Result};
 
 /// The binomial coefficient `C(n, k)`, exactly; `0` for `k > n`. `None` when it is above
 /// `2^53`, where not every integer is a double.

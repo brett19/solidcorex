@@ -16,6 +16,7 @@ pub mod krawczyk;
 pub mod local_solve1d;
 pub mod local_solve_nd;
 pub mod ode;
+pub mod point_set;
 pub mod polynomial;
 pub mod pseudo_box;
 pub mod solution;

@@ -750,11 +750,7 @@ fn estimate_rounding(weights: [f64; 6], h: f64, delta: f64, samples: [f64; 6]) -
 /// The error scale `s` floored at `floor` when there is one (a zero floor leaves `s`
 /// as upstream's, also a negative one a caller's lower bound gave).
 fn floored(s: f64, floor: f64) -> f64 {
-    if floor > 0.0 {
-        s.max(floor)
-    } else {
-        s
-    }
+    if floor > 0.0 { s.max(floor) } else { s }
 }
 
 /// The bound `delta` on the rounding of component `i`'s samples

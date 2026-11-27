@@ -276,10 +276,10 @@ impl<const N: usize> TmN<N> {
     /// not a usable expansion value (`ok` false on it).
     fn middles(&self, fallback: f64, ok: impl Fn(f64) -> bool) -> [f64; N] {
         let mut m = self.c.map(Ivl::mid);
-        if let Some(m0) = m.first_mut() {
-            if !ok(*m0) {
-                *m0 = fallback;
-            }
+        if let Some(m0) = m.first_mut()
+            && !ok(*m0)
+        {
+            *m0 = fallback;
         }
         m
     }

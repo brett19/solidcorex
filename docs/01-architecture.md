@@ -885,7 +885,7 @@ grow the enum. There is no `LowerError`, and a wrapper names only its direct cal
   is not an interface.
 
 **Names and kinds.** `kind()` and `name()` are plain methods per type, with no shared trait
-(rust-version stays 1.85). A signature is call, kind and cause `name()`, not a numeric code. The
+(no trait is needed at any Rust version). A signature is call, kind and cause `name()`, not a numeric code. The
 solver's `EvalError` has a required `fn kind(&self) -> ErrorKind`, and its three predicates are
 derived from it.
 

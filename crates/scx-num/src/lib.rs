@@ -46,5 +46,5 @@ pub mod vector3d;
 
 pub use cert::{Basis, Cert, Claim, EdgeEnd, Method, Reads, Recorded};
 pub use error::{NumError, NumFailure, Result};
-pub use hash::{mix, Rng};
-pub use units::{coincident, Accuracy, Length, ParamTol, Resolution};
+pub use hash::{Rng, mix};
+pub use units::{Accuracy, Length, ParamTol, Resolution, coincident};

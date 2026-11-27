@@ -8,7 +8,7 @@
 //! bound), a refusal [`Er`] (operation and reason). The pin's operations take its binomial
 //! table, one shared here; scx's read its own.
 
-use crate::harness::{edge_f64, Gen, SplitMix64};
+use crate::harness::{Gen, SplitMix64, edge_f64};
 
 /// A polynomial: degrees `(du, dv)` and the coefficients, row by row.
 pub type Pl = (usize, usize, Vec<f64>);
@@ -367,16 +367,12 @@ macro_rules! side {
 /// scx.
 pub mod x {
     use scx_algo::bernstein as b;
-    use scx_algo::bernstein::{bernstein_roots, Bernstein3, Bounded3, Half, Poly3, RootLimits};
+    use scx_algo::bernstein::{Bernstein3, Bounded3, Half, Poly3, RootLimits, bernstein_roots};
     use scx_num::NumError;
     type E = NumError;
 
     fn half(upper: bool) -> Half {
-        if upper {
-            Half::Upper
-        } else {
-            Half::Lower
-        }
+        if upper { Half::Upper } else { Half::Lower }
     }
 
     fn v3<P>([x, y, z]: [P; 3]) -> Poly3<P> {
@@ -389,9 +385,11 @@ pub mod x {
 
     side!(
         bin = [],
+        // scx's reason is typed and the pin's is text: an invalid input compares by
+        // class and operation only (research 62 T4), as the facade's `num_as_pin`
         err = |e: NumError| match e {
-            NumError::InvalidInput { operation, reason } => (operation, reason),
-            NumError::Failed { .. } => ("failed", "failed"),
+            NumError::InvalidInput { operation, .. } => (operation, "invalid input"),
+            _ => ("failed", "failed"),
         },
         quarter = |p: &Bounded, u: bool, v: bool| p.quarter(half(u), half(v)),
         roots = |c: &[f64], lo: f64, hi: f64, depth: u32, work: usize| {
@@ -440,9 +438,9 @@ pub mod s {
     mod pin {
         include!(concat!(env!("OUT_DIR"), "/pin_bernstein_roots.rs"));
     }
+    use solidcore::SolidError;
     use solidcore::offset::construction::bernstein as b;
     use solidcore::offset::construction::bernstein::{self as pb, Bernstein3, Binomials, Bounded3};
-    use solidcore::SolidError;
     use std::sync::OnceLock;
     type E = SolidError;
 
@@ -463,7 +461,7 @@ pub mod s {
     side!(
         bin = [, bi()],
         err = |e: SolidError| match e {
-            SolidError::InvalidInput { operation, reason } => (operation, reason),
+            SolidError::InvalidInput { operation, .. } => (operation, "invalid input"),
             _ => ("failed", "failed"),
         },
         quarter = |p: &Bounded, u: bool, v: bool| p.quarter(u, v),

@@ -388,11 +388,7 @@ fn are_sequential(a: f64, b: f64, c: f64) -> bool {
 /// `smos_Max` of three: `a > b ? (a > c ? a : c) : (b > c ? b : c)`.
 pub(crate) fn max3(a: f64, b: f64, c: f64) -> f64 {
     if a > b {
-        if a > c {
-            a
-        } else {
-            c
-        }
+        if a > c { a } else { c }
     } else if b > c {
         b
     } else {

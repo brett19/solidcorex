@@ -23,26 +23,16 @@
 
 use core::ops::{Add, Div, Mul, Sub};
 
-use crate::certified::next_up;
-
 /// `std::min(a, b)`: `(b < a) ? b : a` (a NaN `a` is kept).
 #[inline]
 pub fn cmin(a: f64, b: f64) -> f64 {
-    if b < a {
-        b
-    } else {
-        a
-    }
+    if b < a { b } else { a }
 }
 
 /// `std::max(a, b)`: `(a < b) ? b : a` (a NaN `a` is kept).
 #[inline]
 pub fn cmax(a: f64, b: f64) -> f64 {
-    if a < b {
-        b
-    } else {
-        a
-    }
+    if a < b { b } else { a }
 }
 
 /// `sm_Dn`: moved down by twice the rounding error of an operation that gave `x`
@@ -82,10 +72,11 @@ const WIDEN_TINY: f64 = 9.0e-293;
 #[inline]
 fn widening(x: f64) -> f64 {
     let a = x.abs();
-    if a > 0.0 && a < WIDEN_TINY {
-        if let Some(w) = widening_tiny(a) {
-            return w;
-        }
+    if a > 0.0
+        && a < WIDEN_TINY
+        && let Some(w) = widening_tiny(a)
+    {
+        return w;
     }
     a * WIDEN_REL + WIDEN_ABS
 }
@@ -96,11 +87,7 @@ fn significand_exponent(x: f64) -> (u64, u64) {
     let bits = x.to_bits();
     let e = (bits >> 52) & 0x7ff;
     let f = bits & ((1 << 52) - 1);
-    if e == 0 {
-        (f, 1)
-    } else {
-        (f | (1 << 52), e)
-    }
+    if e == 0 { (f, 1) } else { (f | (1 << 52), e) }
 }
 
 /// `a * b`, bit for bit (not the fork's, which writes the product). Where the product is
@@ -291,7 +278,7 @@ impl Ivl {
     #[must_use]
     pub fn outward_ulp(lo: f64, hi: f64) -> Self {
         if lo.is_finite() && hi.is_finite() && lo <= hi {
-            Self::new(-next_up(-lo), next_up(hi))
+            Self::new(-(-lo).next_up(), hi.next_up())
         } else {
             Self::whole()
         }
@@ -598,9 +585,9 @@ mod tests {
             Ivl::from(f64::MAX).add_ulp(Ivl::from(f64::MAX)),
             Ivl::whole()
         );
-        assert_eq!(next_up(-0.0), f64::from_bits(1));
-        assert_eq!(next_up(-f64::from_bits(1)), -0.0);
-        assert_eq!(next_up(f64::MAX), f64::INFINITY);
+        assert_eq!((-0.0_f64).next_up(), f64::from_bits(1));
+        assert_eq!((-f64::from_bits(1)).next_up(), -0.0);
+        assert_eq!(f64::MAX.next_up(), f64::INFINITY);
     }
 
     #[test]
