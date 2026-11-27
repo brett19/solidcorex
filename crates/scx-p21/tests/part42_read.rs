@@ -77,7 +77,7 @@ fn file(data: &str) -> Exchange {
     );
     match parse(&t) {
         Ok(p) => p.exchange,
-        Err(e) => panic!("{e}\n{t}"),
+        Err(e) => panic!("{}\n{t}", e.one_line()),
     }
 }
 
@@ -98,7 +98,7 @@ fn curve_err(data: &str, id: u64, units: Units) -> Result<Arc<Curve>, P21Error> 
 }
 
 fn curve(data: &str, id: u64, units: Units) -> Arc<Curve> {
-    curve_err(data, id, units).unwrap_or_else(|e| panic!("{e}"))
+    curve_err(data, id, units).unwrap_or_else(|e| panic!("{}", e.one_line()))
 }
 
 fn surface_err(data: &str, id: u64, units: Units) -> Result<Arc<Surface>, P21Error> {
@@ -107,7 +107,7 @@ fn surface_err(data: &str, id: u64, units: Units) -> Result<Arc<Surface>, P21Err
 }
 
 fn surface(data: &str, id: u64, units: Units) -> Arc<Surface> {
-    surface_err(data, id, units).unwrap_or_else(|e| panic!("{e}"))
+    surface_err(data, id, units).unwrap_or_else(|e| panic!("{}", e.one_line()))
 }
 
 // Curves.
@@ -1575,7 +1575,7 @@ fn a_nested_refusal_names_its_path() {
     .unwrap_err();
     assert_eq!(e.kind(), ErrorKind::Refused);
     assert_eq!(
-        e.to_string(),
+        e.one_line().to_string(),
         "STEP input refused: in #12: in #11: #10: a direction whose ratios are all zero"
     );
     let mut path = Vec::new();
@@ -1603,7 +1603,7 @@ fn a_nested_refusal_names_its_path() {
     .unwrap_err();
     assert_eq!(e.kind(), ErrorKind::Unsupported);
     assert_eq!(
-        e.to_string(),
+        e.one_line().to_string(),
         "STEP input not supported: in #10: #4: `AXIS2_PLACEMENT_3D` is not read here"
     );
     assert_eq!(e.id(), Some(10));

@@ -214,7 +214,7 @@ mod tests {
         );
         match crate::parse(&t) {
             Ok(p) => p.exchange,
-            Err(e) => panic!("{e}\n{t}"),
+            Err(e) => panic!("{}\n{t}", e.one_line()),
         }
     }
 

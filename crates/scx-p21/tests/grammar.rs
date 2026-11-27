@@ -525,18 +525,26 @@ fn hostile_text_is_refused() {
 fn errors_chain_to_their_cause() {
     let e = parse(&file("#1=A(T(1.,2.));")).unwrap_err();
     assert_eq!(e.kind(), ErrorKind::Refused);
-    assert_eq!(e.to_string(), "STEP input refused: syntax error at line 8: typed parameter `T` does not hold exactly one parameter");
-    let refusal = e.source().unwrap();
-    // One frame per Display (research 62 D12); `chain` joins them.
-    assert_eq!(refusal.to_string(), "syntax error at line 8");
     assert_eq!(
-        scx_num::error::chain(refusal).to_string(),
-        "syntax error at line 8: typed parameter `T` does not hold exactly one parameter"
+        e,
+        P21Error::Refused(Refusal::Syntax {
+            line: 8,
+            cause: Syntax::TypedArity("T".to_owned()),
+        })
     );
-    let cause = refusal.source().unwrap();
+    // One frame per Display (research 62 D12): the refusal is transparent, the syntax
+    // error a context frame; `chain` joins the frames and `one_line` puts the class first.
+    assert_eq!(e.to_string(), "syntax error at line 8");
+    let text = "syntax error at line 8: typed parameter `T` does not hold exactly one parameter";
+    assert_eq!(scx_num::error::chain(&e).to_string(), text);
     assert_eq!(
-        cause.to_string(),
-        "typed parameter `T` does not hold exactly one parameter"
+        e.one_line().to_string(),
+        format!("STEP input refused: {text}")
+    );
+    let cause = e.source().unwrap();
+    assert_eq!(
+        cause.downcast_ref::<Syntax>(),
+        Some(&Syntax::TypedArity("T".to_owned()))
     );
     assert!(cause.source().is_none());
     // A refused write chains the same way.
@@ -557,7 +565,10 @@ fn errors_chain_to_their_cause() {
         ),
         "{e:?}"
     );
-    assert!(e.source().unwrap().source().is_some());
+    assert!(matches!(
+        e.source().and_then(|c| c.downcast_ref::<Unwritable>()),
+        Some(Unwritable::NonFiniteReal(_))
+    ));
 }
 
 /// The limits count across the whole file; a raised size raises the counts with it.

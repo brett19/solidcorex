@@ -68,12 +68,12 @@ fn file(data: &str) -> Exchange {
             assert!(twice.is_empty(), "ids defined twice: {twice:?}\n{t}");
             p.exchange
         }
-        Err(e) => panic!("{e}\n{t}"),
+        Err(e) => panic!("{}\n{t}", e.one_line()),
     }
 }
 
 fn structure(data: &str) -> ProductStructure {
-    read(&file(data)).unwrap_or_else(|e| panic!("{e}"))
+    read(&file(data)).unwrap_or_else(|e| panic!("{}", e.one_line()))
 }
 
 fn refused(data: &str) -> P21Error {

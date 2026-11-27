@@ -5,7 +5,8 @@
 //! that succeeded.
 //!
 //! Display strings are for people; the variants and causes are the interface. Each
-//! `Display` prints its own frame; [`scx_num::error::chain`] joins a chain of them.
+//! `Display` prints its own frame; [`scx_num::error::chain`] joins a chain of them, and
+//! [`P21Error::one_line`] prints the chain after the error's class.
 
 use core::fmt;
 
@@ -61,6 +62,13 @@ impl P21Error {
         }
     }
 
+    /// The error on one line, its class first, then every frame (research 62 M6): "STEP
+    /// input refused: in #90: in #20: #4: no such instance".
+    #[must_use]
+    pub fn one_line(&self) -> impl fmt::Display + '_ {
+        OneLine(self)
+    }
+
     /// The error at the end of a chain of [`P21Error::Within`]: itself, when it is not one.
     #[must_use]
     pub fn innermost(&self) -> &Self {
@@ -111,27 +119,32 @@ impl P21Error {
     }
 }
 
-impl fmt::Display for P21Error {
-    /// The innermost error's class, the path of instances to it, and its cause: "STEP input
-    /// refused: in #90: in #20: #4: no such instance".
+/// [`P21Error::one_line`].
+struct OneLine<'a>(&'a P21Error);
+
+impl fmt::Display for OneLine<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let leaf = self.innermost();
-        f.write_str(match leaf {
-            Self::Refused(_) | Self::Within { .. } => "STEP input refused: ",
-            Self::Unsupported(_) => "STEP input not supported: ",
-            Self::Exhausted(_) => "STEP input beyond a limit: ",
-            Self::Cancelled => "STEP reading cancelled",
-        })?;
-        let mut e = self;
-        while let Self::Within { id, source } = e {
-            write!(f, "in #{id}: ")?;
-            e = source;
-        }
-        match leaf {
-            Self::Refused(r) => chain(r).fmt(f),
+        let class = match self.0.innermost() {
+            P21Error::Refused(_) | P21Error::Within { .. } => "STEP input refused",
+            P21Error::Unsupported(_) => "STEP input not supported",
+            P21Error::Exhausted(_) => "STEP input beyond a limit",
+            P21Error::Cancelled => return f.write_str("STEP reading cancelled"),
+        };
+        write!(f, "{class}: {}", chain(self.0))
+    }
+}
+
+/// One frame (research 62 D12). [`P21Error::Within`] is a context frame: it prints
+/// "in #id" and its `source()` is the error met inside. The other variants are
+/// transparent: each prints its cause's frame and passes on its cause's `source()`.
+impl fmt::Display for P21Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Refused(r) => r.fmt(f),
             Self::Unsupported(u) => u.fmt(f),
             Self::Exhausted(l) => l.fmt(f),
-            Self::Cancelled | Self::Within { .. } => Ok(()),
+            Self::Cancelled => f.write_str("STEP reading cancelled"),
+            Self::Within { id, .. } => write!(f, "in #{id}"),
         }
     }
 }
@@ -139,9 +152,9 @@ impl fmt::Display for P21Error {
 impl std::error::Error for P21Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Refused(r) => Some(r),
-            Self::Unsupported(u) => Some(u),
-            Self::Exhausted(l) => Some(l),
+            Self::Refused(r) => r.source(),
+            Self::Unsupported(u) => u.source(),
+            Self::Exhausted(l) => l.source(),
             Self::Within { source, .. } => Some(source.as_ref()),
             Self::Cancelled => None,
         }
