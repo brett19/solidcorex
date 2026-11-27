@@ -29,7 +29,7 @@ const MM: Units = Units { len: 1.0, ang: 1.0 };
 fn reread(w: Writer) -> Exchange {
     let ex = Exchange::new(Header::default(), w.finish(None));
     let text = scx_p21::write(&ex).unwrap();
-    let back = parse(&text).unwrap_or_else(|e| panic!("{e}\n{text}"));
+    let back = parse(&text).unwrap_or_else(|e| panic!("{}\n{text}", e.one_line()));
     assert!(back.warnings.is_empty(), "{:?}", back.warnings);
     back.exchange
 }
@@ -40,31 +40,31 @@ fn same<T: std::fmt::Debug>(back: &T, g: &T) {
 
 fn curve_round_trip(c: &Curve) {
     let mut w = Writer::new();
-    let id = write::curve(&mut w, c).unwrap_or_else(|e| panic!("{e}\n{c:?}"));
+    let id = write::curve(&mut w, c).unwrap_or_else(|e| panic!("{}\n{c:?}", e.one_line()));
     let ex = reread(w);
     let back = Reader::new(&ex, MM)
         .curve(id)
-        .unwrap_or_else(|e| panic!("{e}\n{c:?}"));
+        .unwrap_or_else(|e| panic!("{}\n{c:?}", e.one_line()));
     same(&*back, c);
 }
 
 fn surface_round_trip(s: &Surface) {
     let mut w = Writer::new();
-    let id = write::surface(&mut w, s).unwrap_or_else(|e| panic!("{e}\n{s:?}"));
+    let id = write::surface(&mut w, s).unwrap_or_else(|e| panic!("{}\n{s:?}", e.one_line()));
     let ex = reread(w);
     let back = Reader::new(&ex, MM)
         .surface(id)
-        .unwrap_or_else(|e| panic!("{e}\n{s:?}"));
+        .unwrap_or_else(|e| panic!("{}\n{s:?}", e.one_line()));
     same(&*back, s);
 }
 
 fn pcurve_round_trip(pc: &Pcurve) {
     let mut w = Writer::new();
-    let id = write::pcurve(&mut w, pc).unwrap_or_else(|e| panic!("{e}\n{pc:?}"));
+    let id = write::pcurve(&mut w, pc).unwrap_or_else(|e| panic!("{}\n{pc:?}", e.one_line()));
     let ex = reread(w);
     let back = Reader::new(&ex, MM)
         .pcurve(id)
-        .unwrap_or_else(|e| panic!("{e}\n{pc:?}"));
+        .unwrap_or_else(|e| panic!("{}\n{pc:?}", e.one_line()));
     same(&back, pc);
 }
 
@@ -716,8 +716,8 @@ fn generated_geometry() {
     }
 }
 
-/// `r`, which must refuse geometry with no ISO 10303-42 form, for `cause`; the refusal names
-/// its cause in its text and its `source()` chain.
+/// `r`, which must refuse geometry with no ISO 10303-42 form, for `cause`; the refusal is
+/// transparent, so its text is the cause's and it has no further source.
 fn refused(r: Result<u64, P21Error>, cause: NoPart42Form) {
     let e = r.unwrap_err();
     assert_eq!(
@@ -727,18 +727,9 @@ fn refused(r: Result<u64, P21Error>, cause: NoPart42Form) {
             cause: Unwritable::Geometry(cause),
         })
     );
-    assert!(
-        e.to_string()
-            .ends_with(&format!("{cause} has no ISO 10303-42 form")),
-        "{e}"
-    );
-    let mut chain = std::error::Error::source(&e);
-    let mut last = None;
-    while let Some(x) = chain {
-        last = Some(x.to_string());
-        chain = x.source();
-    }
-    assert_eq!(last, Some(cause.to_string()));
+    // Transparent all the way (research 62 D12): the error's one frame is the cause's.
+    assert_eq!(e.to_string(), cause.to_string());
+    assert!(std::error::Error::source(&e).is_none());
 }
 
 #[test]

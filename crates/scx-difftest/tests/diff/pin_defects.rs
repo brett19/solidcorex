@@ -939,6 +939,59 @@ pub fn offset_quad() -> PinDefect<(V, V, V, V, f64), Option<Quad>> {
     }
 }
 
+/// The scx result of `mx_eigen`: the Jacobi eigen system and the 3x3 eigen vectors, each with
+/// the matrix after the call.
+type Eigen = (
+    (
+        scx_num::Result<scx_num::matrix::EigenSystem>,
+        scx_num::matrix::Matrix,
+    ),
+    (
+        scx_num::Result<([f64; 3], [scx_num::vector3d::Vec3; 3])>,
+        scx_num::matrix::Matrix,
+    ),
+);
+
+/// `Matrix::eigen_system_jacobi` and `compute_3x3_eigen_vectors` on a symmetric matrix with an
+/// entry infinite or NaN.
+///
+/// The eigenvalues of such a matrix are not defined: `inf - inf` and `0 * inf` enter every
+/// characteristic polynomial's coefficients. The pin sweeps it and answers, with NaN or
+/// infinite values (`[[inf, 1], [1, inf]]` gives two NaN eigenvalues). scx refuses it before
+/// the sweeps (research 62 M3: a solve that runs out of sweeps on finite input is then the
+/// method's fault). The check: both calls are refused as invalid input, and leave the matrix
+/// as it was, bit for bit.
+pub fn mx_eigen() -> PinDefect<(crate::harness::MatR,), Eigen> {
+    PinDefect {
+        reason: "the pin answers eigenvalues of a matrix with an entry not finite",
+        applies: Applies::Inputs(|(a,)| {
+            crate::facade::x::mat(a).is_symmetric() && !a.2.iter().all(|x| x.is_finite())
+        }),
+        check: |(a,), ((jacobi, p), (three, q))| {
+            let refused = |r: bool, m: &scx_num::matrix::Matrix, what: &str| {
+                let same = (0..a.0 * a.1).all(|k| {
+                    m.at(k / a.1, k % a.1).ok().map(f64::to_bits) == a.2.get(k).map(|x| x.to_bits())
+                });
+                match (r, same) {
+                    (true, true) => Ok(()),
+                    (false, _) => Err(format!("{what}: no eigen system to give, so refused")),
+                    (true, false) => Err(format!("{what}: a refusal changed the matrix")),
+                }
+            };
+            refused(
+                matches!(jacobi, Err(scx_num::NumError::InvalidInput { .. })),
+                p,
+                "eigen_system_jacobi",
+            )?;
+            refused(
+                matches!(three, Err(scx_num::NumError::InvalidInput { .. })),
+                q,
+                "compute_3x3_eigen_vectors",
+            )
+        },
+    }
+}
+
 /// `certified::unit(a)`: `None` when the square of `a` is not finite (its error bound is for
 /// the plain quotient) or `a` has no direction, else the direction.
 pub fn c_unit() -> PinDefect<(V,), Option<scx_num::vector3d::Vec3>> {

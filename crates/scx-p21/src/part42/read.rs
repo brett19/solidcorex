@@ -5,8 +5,8 @@
 // data of [`super::geom`], from a parsed [`Exchange`] (ISO 10303-21) in one representation
 // context's [`Units`].
 // Changes: every refusal is a typed `P21Error` (was a `String`): `EntityCause::Missing`,
-// `WrongType`, `BadParam` (with the parameter's position in its record), `Invalid` and
-// `TooDeep`, or `Unsupported::Entity` for valid input not read here; so `entity`,
+// `WrongType`, `BadParam` (with the parameter's position in its record) and `Invalid` (a typed `InvalidValue`), the
+// limit `Limit::TooDeep`, or `Unsupported::Entity` for valid input not read here; so `entity`,
 // `reference`, `num`, `logical`, `boolean`, `positive`, `knots`, `implied_knots`, `weights`,
 // `degree`, `bspline_params`, `Reader::length`, `Reader::angle`, `Reader::point_in`,
 // `Reader::point`, `Reader::ratios`, `Reader::direction`, `Reader::placement_in`,
@@ -61,7 +61,7 @@ use super::geom::{
     Placement, PreferredRep, Surface, SurfaceCurveKind, SurfaceForm, Trim, TrimPreference, Vector,
     P3,
 };
-use crate::error::{EntityCause, P21Error, Unsupported};
+use crate::error::{EntityCause, InvalidValue, Limit, P21Error, Unsupported};
 use crate::exchange::{Exchange, Instance, Param};
 use crate::units::Units;
 
@@ -160,8 +160,8 @@ fn refuse<T>(id: u64, cause: EntityCause) -> Result<T> {
 }
 
 /// An inconsistent or out-of-range value at `#id`.
-fn invalid<T>(id: u64, what: &'static str) -> Result<T> {
-    refuse(id, EntityCause::Invalid { what })
+fn invalid<T>(id: u64, what: InvalidValue) -> Result<T> {
+    refuse(id, EntityCause::Invalid(what))
 }
 
 /// Valid input this reader has no mapping for: `#id`, an instance called `name`.
@@ -287,7 +287,7 @@ impl<'a> Fields<'a> {
 }
 
 /// `x` when it is positive; else the refusal `what` at `#id`.
-fn positive(id: u64, x: f64, what: &'static str) -> Result<f64> {
+fn positive(id: u64, x: f64, what: InvalidValue) -> Result<f64> {
     if x > 0.0 {
         Ok(x)
     } else {
@@ -358,10 +358,7 @@ fn knots(
         .map(|x| number(f.id, at, Some(x)))
         .collect::<Result<_>>()?;
     if m.len() != raw.len() || raw.windows(2).any(|w| w.first() > w.get(1)) {
-        return invalid(
-            f.id,
-            "knots that decrease, or not one multiplicity per knot",
-        );
+        return invalid(f.id, InvalidValue::KnotsDecrease);
     }
     // Some writers list a knot twice; that is one knot with both multiplicities.
     let (mut k, mut mm): (Vec<f64>, Vec<usize>) = (Vec::new(), Vec::new());
@@ -376,16 +373,10 @@ fn knots(
     }
     let m = mm;
     if k.len() < 2 || m.iter().any(|v| *v > degree + 1) {
-        return invalid(
-            f.id,
-            "a knot vector without two distinct knots, or a knot above the degree + 1",
-        );
+        return invalid(f.id, InvalidValue::KnotVector);
     }
     if m.iter().try_fold(0usize, |a, v| a.checked_add(*v)) != Some(n_ctrl + degree + 1) {
-        return invalid(
-            f.id,
-            "knot multiplicities that do not match the control points",
-        );
+        return invalid(f.id, InvalidValue::KnotCount);
     }
     Ok((k, m))
 }
@@ -401,17 +392,14 @@ fn implied_knots(
     degree: usize,
 ) -> Result<(Vec<f64>, Vec<usize>)> {
     if n_ctrl <= degree {
-        return invalid(id, "no more control points than the degree");
+        return invalid(id, InvalidValue::TooFewControlPoints);
     }
     match spec {
         KnotSpec::PiecewiseBezierKnots => {
             // Segments of `degree`, full interior multiplicity.
             let segs = (n_ctrl - 1) / degree;
             if segs * degree + 1 != n_ctrl {
-                return invalid(
-                    id,
-                    "a Bezier spline whose control points are not the degree times the segments, plus 1",
-                );
+                return invalid(id, InvalidValue::BezierSegments);
             }
             let k = (0..=segs).map(|s| s as f64).collect();
             let mut m = vec![degree; segs + 1];
@@ -463,7 +451,7 @@ fn weights(id: u64, index: usize, p: Option<&Param>, n: usize) -> Result<Vec<f64
                 if w > 0.0 {
                     Ok(w)
                 } else {
-                    invalid(id, "a weight that is not positive")
+                    invalid(id, InvalidValue::WeightNotPositive)
                 }
             })
         })
@@ -471,7 +459,7 @@ fn weights(id: u64, index: usize, p: Option<&Param>, n: usize) -> Result<Vec<f64
     if w.len() == n {
         Ok(w)
     } else {
-        invalid(id, "weights that do not match the control points")
+        invalid(id, InvalidValue::WeightCount)
     }
 }
 
@@ -636,7 +624,7 @@ impl<'a> Reader<'a> {
             if dim == Dim::Three { g(2)? * sz } else { 0.0 },
         ];
         if d == [0.0; 3] {
-            return invalid(id, "a direction whose ratios are all zero");
+            return invalid(id, InvalidValue::ZeroDirection);
         }
         Ok(d)
     }
@@ -751,10 +739,10 @@ impl<'a> Reader<'a> {
         let orientation = self.ratios(f.reference(1)?, [1.0; 3], sp.dim)?;
         let magnitude = f.num(2)?;
         if magnitude < 0.0 {
-            return invalid(id, "a vector magnitude that is negative");
+            return invalid(id, InvalidValue::NegativeMagnitude);
         }
         if magnitude == 0.0 {
-            return invalid(id, "a vector of magnitude zero");
+            return invalid(id, InvalidValue::ZeroMagnitude);
         }
         Ok(Vector {
             orientation,
@@ -825,12 +813,11 @@ impl<'a> Reader<'a> {
 
     fn read_curve(&mut self, id: u64, sp: Space, depth: usize) -> Result<Curve> {
         if depth > MAX_GEOM_DEPTH {
-            return refuse(
+            return Err(Limit::TooDeep {
                 id,
-                EntityCause::TooDeep {
-                    limit: MAX_GEOM_DEPTH,
-                },
-            );
+                limit: MAX_GEOM_DEPTH,
+            }
+            .into());
         }
         let e = entity(self.ex, id)?;
         if e.is_complex() {
@@ -849,13 +836,13 @@ impl<'a> Reader<'a> {
                 let position = self.placement_in(f.reference(1)?, sp)?;
                 Ok(Curve::Circle {
                     position,
-                    radius: positive(id, f.num(2)? * k, "a circle radius that is not positive")?,
+                    radius: positive(id, f.num(2)? * k, InvalidValue::CircleRadius)?,
                 })
             }
             "ELLIPSE" => {
                 let k = Self::conic_scale(id, name, sp)?;
                 let position = self.placement_in(f.reference(1)?, sp)?;
-                let what = "an ellipse semi axis that is not positive";
+                let what = InvalidValue::EllipseSemiAxis;
                 Ok(Curve::Ellipse {
                     position,
                     semi_axis_1: positive(id, f.num(2)? * k, what)?,
@@ -865,7 +852,7 @@ impl<'a> Reader<'a> {
             "HYPERBOLA" => {
                 let k = Self::conic_scale(id, name, sp)?;
                 let position = self.placement_in(f.reference(1)?, sp)?;
-                let what = "a hyperbola semi axis that is not positive";
+                let what = InvalidValue::HyperbolaSemiAxis;
                 Ok(Curve::Hyperbola {
                     position,
                     semi_axis: positive(id, f.num(2)? * k, what)?,
@@ -877,7 +864,7 @@ impl<'a> Reader<'a> {
                 let position = self.placement_in(f.reference(1)?, sp)?;
                 let focal_dist = f.num(2)? * k;
                 if focal_dist == 0.0 {
-                    return invalid(id, "a parabola focal distance of zero");
+                    return invalid(id, InvalidValue::ParabolaFocalDistance);
                 }
                 Ok(Curve::Parabola {
                     position,
@@ -935,7 +922,7 @@ impl<'a> Reader<'a> {
                 let curve_3d = self.curve_in(f.reference(1)?, depth + 1)?;
                 let items = f.list(2, "a list of associated geometry")?;
                 if items.len() > 2 {
-                    return invalid(id, "a surface curve with more than two associated items");
+                    return invalid(id, InvalidValue::SurfaceCurveItems);
                 }
                 let mut associated = Vec::new();
                 for item in items {
@@ -1031,7 +1018,7 @@ impl<'a> Reader<'a> {
         let rf = Fields::of(rep_id, rep);
         let items = rf.list(1, "a list of representation items")?;
         let [item] = items else {
-            return invalid(rep_id, "a pcurve representation without exactly one item");
+            return invalid(rep_id, InvalidValue::PcurveItems);
         };
         let c = item
             .as_ref_id()
@@ -1086,7 +1073,7 @@ impl<'a> Reader<'a> {
         let degree = degree(base, 1)?;
         let ids = base.list(2, "a list of control points")?;
         if ids.len() > MAX_CTRL {
-            return invalid(id, "a B-spline with more than 1 000 000 control points");
+            return invalid(id, InvalidValue::CurveControlPoints);
         }
         let points: Vec<P3> = ids
             .iter()
@@ -1132,12 +1119,11 @@ impl<'a> Reader<'a> {
             return Ok(s.clone());
         }
         if depth > MAX_GEOM_DEPTH {
-            return refuse(
+            return Err(Limit::TooDeep {
                 id,
-                EntityCause::TooDeep {
-                    limit: MAX_GEOM_DEPTH,
-                },
-            );
+                limit: MAX_GEOM_DEPTH,
+            }
+            .into());
         }
         let s = Arc::new(self.read_surface(id, depth).map_err(|e| e.within(id))?);
         self.surfaces.insert(id, s.clone());
@@ -1157,11 +1143,7 @@ impl<'a> Reader<'a> {
             }),
             "CYLINDRICAL_SURFACE" => Ok(Surface::Cylinder {
                 position: position(self)?,
-                radius: positive(
-                    id,
-                    self.length(f, 2)?,
-                    "a cylinder radius that is not positive",
-                )?,
+                radius: positive(id, self.length(f, 2)?, InvalidValue::CylinderRadius)?,
             }),
             "CONICAL_SURFACE" => {
                 let radius = self.length(f, 2)?;
@@ -1169,10 +1151,7 @@ impl<'a> Reader<'a> {
                 if radius < 0.0
                     || !(semi_angle.abs() > MIN_SEMI_ANGLE && semi_angle.abs() < MAX_SEMI_ANGLE)
                 {
-                    return invalid(
-                        id,
-                        "a cone with a negative radius or a semi angle outside (0, π/2) in size",
-                    );
+                    return invalid(id, InvalidValue::ConeShape);
                 }
                 Ok(Surface::Cone {
                     position: position(self)?,
@@ -1182,23 +1161,16 @@ impl<'a> Reader<'a> {
             }
             "SPHERICAL_SURFACE" => Ok(Surface::Sphere {
                 position: position(self)?,
-                radius: positive(
-                    id,
-                    self.length(f, 2)?,
-                    "a sphere radius that is not positive",
-                )?,
+                radius: positive(id, self.length(f, 2)?, InvalidValue::SphereRadius)?,
             }),
             "TOROIDAL_SURFACE" | "DEGENERATE_TOROIDAL_SURFACE" => {
                 let major_radius = self.length(f, 2)?;
-                let minor_radius = positive(
-                    id,
-                    self.length(f, 3)?,
-                    "a torus minor radius that is not positive",
-                )?;
+                let minor_radius =
+                    positive(id, self.length(f, 3)?, InvalidValue::TorusMinorRadius)?;
                 // A negative major radius (outside the schema, which some writers use for a
                 // spindle torus) is the same formula: its tube on the other side of the axis.
                 if !major_radius.is_finite() {
-                    return invalid(id, "a torus major radius that is not finite");
+                    return invalid(id, InvalidValue::TorusMajorRadius);
                 }
                 let position = position(self)?;
                 if e.name() == "DEGENERATE_TOROIDAL_SURFACE" {
@@ -1273,10 +1245,7 @@ impl<'a> Reader<'a> {
                 .ok_or_else(|| base.bad(3, "a list of control point rows"))?;
             total = total.saturating_add(r.len());
             if total > MAX_CTRL {
-                return invalid(
-                    id,
-                    "a B-spline surface with more than 1 000 000 control points",
-                );
+                return invalid(id, InvalidValue::SurfaceControlPoints);
             }
             points.push(
                 r.iter()
@@ -1292,7 +1261,7 @@ impl<'a> Reader<'a> {
         let nu = points.len();
         let nv = points.first().map_or(0, Vec::len);
         if nu == 0 || nv == 0 || points.iter().any(|r| r.len() != nv) {
-            return invalid(id, "a B-spline control net that is empty or ragged");
+            return invalid(id, InvalidValue::ControlNet);
         }
         let ((u_knots, u_multiplicities), (v_knots, v_multiplicities), knot_spec) =
             if let Some(k) = with_knots {
@@ -1321,7 +1290,7 @@ impl<'a> Reader<'a> {
                     );
                 };
                 if w.len() != nu {
-                    return invalid(id, "weights that do not match the control net");
+                    return invalid(id, InvalidValue::NetWeightCount);
                 }
                 Some(
                     w.iter()

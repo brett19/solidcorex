@@ -68,7 +68,7 @@
 //!   `RotateAboutAxis*`, `DecomposeToAngles`, ... listed in
 //!   `harness/callgraph/unused_functions.txt`) are not part of this unit.
 
-use crate::error::{NumError, Result};
+use crate::error::{Invalid, Limit, NumError, Result};
 use crate::extent3d::Extent3d;
 use crate::small_matrix::{inverse_3x3, inverse_4x4, mult_4x4};
 use crate::tol::is_zero;
@@ -343,7 +343,7 @@ impl Transform {
         // unitize Plane Normal
         let n = plane_normal.normalized().ok_or(NumError::InvalidInput {
             operation: "geom::transform::Transform::mirror_simple",
-            reason: "zero-length or non-finite normal",
+            reason: Invalid::NoDirection,
         })?;
 
         // Build mirror transform            = [1-2NxNx  -2NxNy  -2NxNz  0]
@@ -383,7 +383,7 @@ impl Transform {
         if !mirrored.m.iter().flatten().all(|v| v.is_finite()) {
             return Err(NumError::InvalidInput {
                 operation: "geom::transform::Transform::mirror_simple",
-                reason: "a mirror too large to represent",
+                reason: Invalid::Unrepresentable,
             });
         }
         *self = mirrored;
@@ -408,12 +408,16 @@ impl Transform {
     ///
     /// # Errors
     ///
-    /// `SM_ERR_INVALID_INPUT` when `highest_deriv > MAX_DERIV`.
+    /// [`NumError::Exhausted`] ([`Limit::DerivativeOrder`]) when `highest_deriv >
+    /// MAX_DERIV` (upstream `SM_ERR_INVALID_INPUT`).
     pub fn evaluate_simple(&self, param_point: Point3, highest_deriv: usize) -> Result<Vec<Vec3>> {
         if highest_deriv > MAX_DERIV {
-            return Err(NumError::InvalidInput {
+            return Err(NumError::Exhausted {
                 operation: "geom::transform::Transform::evaluate_simple",
-                reason: "highest derivative exceeds GW_MAX_DERIV",
+                limit: Limit::DerivativeOrder {
+                    order: highest_deriv,
+                    limit: MAX_DERIV,
+                },
             });
         }
         let n1 = highest_deriv + 1;
@@ -503,7 +507,16 @@ mod tests {
         assert_eq!(d[1], t.to_z_axis());
         let back = t.inv_transform_point(d[0].to_point()).unwrap();
         assert!((back - p(0.25, -1.0, 4.0)).length() < 1e-12);
-        assert!(t.evaluate_simple(Point3::ORIGIN, MAX_DERIV + 1).is_err());
+        assert_eq!(
+            t.evaluate_simple(Point3::ORIGIN, MAX_DERIV + 1),
+            Err(NumError::Exhausted {
+                operation: "geom::transform::Transform::evaluate_simple",
+                limit: Limit::DerivativeOrder {
+                    order: MAX_DERIV + 1,
+                    limit: MAX_DERIV
+                },
+            })
+        );
     }
 
     #[test]

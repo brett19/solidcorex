@@ -578,7 +578,7 @@ fn compare_file(name: &str, text: &str, c: &mut Corpus) {
             return c.files.take(false, false, || {
                 format!(
                     "{name}: scx {:?}, pin {:?}",
-                    o.err().map(|e| e.to_string()),
+                    o.err().map(|e| e.one_line().to_string()),
                     p.err().map(|e| e.to_string())
                 )
             })

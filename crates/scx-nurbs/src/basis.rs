@@ -17,6 +17,11 @@ pub(crate) const SMALL: usize = 8;
 /// The scratch width for every degree.
 pub(crate) const FULL: usize = MAX_DEGREE + 1;
 
+/// A knot or scratch index the span from [`KnotVector::span`] and `p < N` rule out.
+pub(crate) const MISSING_KNOT: NurbsError = NurbsError::Defect {
+    why: "a basis read a knot or scratch index its span rules out",
+};
+
 /// The `p + 1` basis values `N[span-p..=span]` at `u` into `n[..=p]`, for `p < N` and the
 /// window of [`KnotVector::window`].
 pub(crate) fn values_into<const N: usize>(
@@ -162,9 +167,7 @@ impl Basis {
     /// The basis functions of `knots` at `u`, in the span `side` picks ([`KnotVector::span`]).
     pub(crate) fn at(knots: &KnotVector, u: f64, side: Approach) -> Result<Self> {
         let span = knots.span(u, side)?;
-        let window = knots
-            .window(span)
-            .ok_or(NurbsError::Degenerate { parameter: u })?;
+        let window = knots.window(span).ok_or(MISSING_KNOT)?;
         let mut values = [0.0; FULL];
         values_into(window, u, &mut values);
         if values.iter().any(|v| !v.is_finite()) {
@@ -211,12 +214,11 @@ impl<const K: usize> BasisDerivs<K> {
     pub(crate) fn at(knots: &KnotVector, u: f64, side: Approach) -> Result<Self> {
         check_order(K)?;
         let span = knots.span(u, side)?;
-        let degenerate = NurbsError::Degenerate { parameter: u };
-        let window = knots.window(span).ok_or(degenerate)?;
+        let window = knots.window(span).ok_or(MISSING_KNOT)?;
         let mut rows = [[0.0; FULL]; K];
-        derivs_into(window, u, &mut rows).ok_or(degenerate)?;
+        derivs_into(window, u, &mut rows).ok_or(MISSING_KNOT)?;
         if rows.iter().flatten().any(|v| !v.is_finite()) {
-            return Err(degenerate);
+            return Err(NurbsError::Degenerate { parameter: u });
         }
         Ok(Self {
             span,

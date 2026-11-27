@@ -87,7 +87,7 @@ diff!(ht_voxels, |seed: usize, cnt: [f64; 3], scale: f64| {
     let mut out: Vec<Rec> = Vec::new();
     let mut v = match ObjsInVoxels::<u32>::new(dims[0], dims[1], dims[2], bbox, seed % 70) {
         Ok(v) => v,
-        Err(e) => return vec![(0, Vec::new(), Vec::new(), Some(e.to_string()))],
+        Err(e) => return vec![(0, Vec::new(), Vec::new(), Some(m::err_text(&e)))],
     };
     out.push(state!(v));
     let q = |r: &mut u64| (next(r) % 9) as f64 / 8.0 * scale + (next(r) % 3) as f64 * 1e-7;
@@ -106,7 +106,7 @@ diff!(ht_voxels, |seed: usize, cnt: [f64; 3], scale: f64| {
                 };
                 match res {
                     Ok(x) => (1, [vec![o(x)], upd].concat(), Vec::new(), None),
-                    Err(e) => (1, upd, Vec::new(), Some(e.to_string())),
+                    Err(e) => (1, upd, Vec::new(), Some(m::err_text(&e))),
                 }
             }
             5 | 6 => {
@@ -136,7 +136,7 @@ diff!(ht_voxels, |seed: usize, cnt: [f64; 3], scale: f64| {
                         Vec::new(),
                         None,
                     ),
-                    Err(e) => (3, Vec::new(), Vec::new(), Some(e.to_string())),
+                    Err(e) => (3, Vec::new(), Vec::new(), Some(m::err_text(&e))),
                 }
             }
             9 => {
@@ -164,14 +164,19 @@ diff!(ht_voxels, |seed: usize, cnt: [f64; 3], scale: f64| {
                         ints.extend([a, b, c]);
                         None
                     }
-                    Err(e) => Some(e.to_string()),
+                    Err(e) => Some(m::err_text(&e)),
                 };
                 (4, ints, nums, err)
             }
             10 => {
                 let d = [next(&mut r) % 4, next(&mut r) % 4, next(&mut r) % 4].map(|x| x as usize);
                 let res = v.set_size(d[0], d[1], d[2], bbox, (next(&mut r) % 70) as usize);
-                (5, d.to_vec(), Vec::new(), res.err().map(|e| e.to_string()))
+                (
+                    5,
+                    d.to_vec(),
+                    Vec::new(),
+                    res.err().map(|e| m::err_text(&e)),
+                )
             }
             _ => {
                 let gaps = [0.0, 1e-9, 1e-6, 1e-3, 0.5, 2.0, f64::NAN];
@@ -195,7 +200,7 @@ diff!(ht_table, |seed: usize, estimate: usize, buckets: usize| {
     let mut out: Vec<(Vec<usize>, Option<String>)> = Vec::new();
     let mut h = match HashTable::new(estimate * 7, buckets * 13) {
         Ok(h) => h,
-        Err(e) => return vec![(Vec::new(), Some(e.to_string()))],
+        Err(e) => return vec![(Vec::new(), Some(m::err_text(&e)))],
     };
     let mut r = seed as u64 + 77;
     for _ in 0..200 {
@@ -205,7 +210,7 @@ diff!(ht_table, |seed: usize, estimate: usize, buckets: usize| {
                 let b = (next(&mut r) % (buckets as u64 * 13 + 3)) as usize;
                 h.add((next(&mut r) % 50) as usize, b, (next(&mut r) % 9) as usize)
                     .err()
-                    .map(|e| e.to_string())
+                    .map(|e| m::err_text(&e))
             }
             3 => {
                 let idx: Vec<usize> = (0..next(&mut r) % 5)
@@ -222,7 +227,7 @@ diff!(ht_table, |seed: usize, estimate: usize, buckets: usize| {
             _ => h
                 .init_size((next(&mut r) % 30) as usize, (next(&mut r) % 30) as usize)
                 .err()
-                .map(|e| e.to_string()),
+                .map(|e| m::err_text(&e)),
         };
         let mut s = vec![
             h.capacity(),

@@ -13,7 +13,7 @@
 use std::error::Error as _;
 
 use scx_num::error::ErrorKind;
-use scx_p21::error::{Counted, Unwritable};
+use scx_p21::error::{Counted, Limit, Unwritable};
 use scx_p21::parse::{MAX_BYTES, PEAK_PER_BYTE};
 use scx_p21::{
     parse, parse_with, Instance, Limits, P21Error, Param, Progress, Refusal, Syntax, Warning,
@@ -504,7 +504,7 @@ fn hostile_text_is_refused() {
         ),
     ] {
         let e = parse(&t).unwrap_err();
-        assert_eq!(e.kind(), ErrorKind::InvalidInput, "{t:.60}: {e}");
+        assert_eq!(e.kind(), ErrorKind::Refused, "{t:.60}: {e}");
     }
     // Padded so that the density limit (a parameter per four bytes) is not what refuses it.
     let pad = format!("/*{}*/", " ".repeat(1000));
@@ -524,17 +524,27 @@ fn hostile_text_is_refused() {
 #[test]
 fn errors_chain_to_their_cause() {
     let e = parse(&file("#1=A(T(1.,2.));")).unwrap_err();
-    assert_eq!(e.kind(), ErrorKind::InvalidInput);
-    assert_eq!(e.to_string(), "STEP input refused: syntax error at line 8: typed parameter `T` does not hold exactly one parameter");
-    let refusal = e.source().unwrap();
+    assert_eq!(e.kind(), ErrorKind::Refused);
     assert_eq!(
-        refusal.to_string(),
-        "syntax error at line 8: typed parameter `T` does not hold exactly one parameter"
+        e,
+        P21Error::Refused(Refusal::Syntax {
+            line: 8,
+            cause: Syntax::TypedArity("T".to_owned()),
+        })
     );
-    let cause = refusal.source().unwrap();
+    // One frame per Display (research 62 D12): the refusal is transparent, the syntax
+    // error a context frame; `chain` joins the frames and `one_line` puts the class first.
+    assert_eq!(e.to_string(), "syntax error at line 8");
+    let text = "syntax error at line 8: typed parameter `T` does not hold exactly one parameter";
+    assert_eq!(scx_num::error::chain(&e).to_string(), text);
     assert_eq!(
-        cause.to_string(),
-        "typed parameter `T` does not hold exactly one parameter"
+        e.one_line().to_string(),
+        format!("STEP input refused: {text}")
+    );
+    let cause = e.source().unwrap();
+    assert_eq!(
+        cause.downcast_ref::<Syntax>(),
+        Some(&Syntax::TypedArity("T".to_owned()))
     );
     assert!(cause.source().is_none());
     // A refused write chains the same way.
@@ -555,7 +565,10 @@ fn errors_chain_to_their_cause() {
         ),
         "{e:?}"
     );
-    assert!(e.source().unwrap().source().is_some());
+    assert!(matches!(
+        e.source().and_then(|c| c.downcast_ref::<Unwritable>()),
+        Some(Unwritable::NonFiniteReal(_))
+    ));
 }
 
 /// The limits count across the whole file; a raised size raises the counts with it.
@@ -567,7 +580,7 @@ fn limits() {
         parse_with(t, l, &scx_p21::Unwatched)
     };
     let too_many = |r: Result<_, P21Error>| match r {
-        Err(P21Error::Refused(Refusal::TooMany { what, limit })) => Some((what, limit)),
+        Err(P21Error::Exhausted(Limit::TooMany { what, limit })) => Some((what, limit)),
         _ => None,
     };
     // With no header, so that only these count. `$`, the list, its `$`, the typed value and
@@ -602,7 +615,7 @@ fn limits() {
     let t = file("#1=A($);");
     assert_eq!(
         at(&t, &|l| l.bytes = t.len() - 1).unwrap_err(),
-        P21Error::Refused(Refusal::TooLarge {
+        P21Error::Exhausted(Limit::TooLarge {
             bytes: t.len(),
             limit: t.len() - 1
         })
@@ -632,7 +645,7 @@ fn memory_is_checked_first() {
         &scx_p21::Unwatched
     )
     .is_ok());
-    let refused = P21Error::Refused(Refusal::NeedsMemory {
+    let refused = P21Error::Exhausted(Limit::NeedsMemory {
         needed,
         available: needed - 1,
     });
@@ -656,9 +669,10 @@ fn memory_is_checked_first() {
         &scx_p21::Unwatched,
     )
     .unwrap_err();
-    assert!(matches!(e, P21Error::Refused(Refusal::NeedsMemory { .. })));
+    assert!(matches!(e, P21Error::Exhausted(Limit::NeedsMemory { .. })));
+    assert_eq!(e.kind(), ErrorKind::Exhausted);
     assert_eq!(
-        Refusal::NeedsMemory {
+        Limit::NeedsMemory {
             needed: 11 << 30,
             available: 8 << 30
         }

@@ -24,7 +24,7 @@ mod text;
 pub mod units;
 pub mod write;
 
-pub use error::{P21Error, Refusal, Syntax, Warning};
+pub use error::{Limit, P21Error, Refusal, Syntax, Warning};
 pub use exchange::{
     DataSection, Exchange, FileDescription, FileName, Header, Instance, Param, Record,
 };

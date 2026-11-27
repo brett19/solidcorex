@@ -50,7 +50,7 @@ use std::collections::HashSet;
 
 use scx_num::hash::FixedState;
 
-use crate::error::{Counted, P21Error, Refusal, Syntax, Warning};
+use crate::error::{Counted, Limit, P21Error, Refusal, Syntax, Warning};
 use crate::exchange::{DataSection, Exchange, Header, Instance, Param, Record};
 use crate::text;
 
@@ -157,13 +157,13 @@ impl Limits {
     }
 }
 
-/// Whether reading a text of `len` bytes fits in `memory` bytes; [`Refusal::NeedsMemory`],
+/// Whether reading a text of `len` bytes fits in `memory` bytes; [`Limit::NeedsMemory`],
 /// naming [`PEAK_PER_BYTE`] times `len`, when it does not. A caller can ask before it reads
 /// the file.
 pub fn check_memory(len: usize, memory: usize) -> Result<(), P21Error> {
     let needed = len.saturating_mul(PEAK_PER_BYTE);
     if needed > memory {
-        return Err(Refusal::NeedsMemory {
+        return Err(Limit::NeedsMemory {
             needed,
             available: memory,
         }
@@ -209,7 +209,7 @@ pub fn parse(text: &str) -> Result<Parsed, P21Error> {
 /// Read `text` under `limits`, telling `progress` how far it is.
 pub fn parse_with(text: &str, limits: Limits, progress: &dyn Progress) -> Result<Parsed, P21Error> {
     if text.len() > limits.bytes {
-        return Err(Refusal::TooLarge {
+        return Err(Limit::TooLarge {
             bytes: text.len(),
             limit: limits.bytes,
         }
@@ -512,7 +512,7 @@ impl Lexer<'_> {
             return self.fail(Syntax::NestedTooDeeply { limit: MAX_DEPTH });
         }
         if self.params >= self.limits.params {
-            return Err(Refusal::TooMany {
+            return Err(Limit::TooMany {
                 what: Counted::Params,
                 limit: self.limits.params,
             }
@@ -593,7 +593,7 @@ impl Lexer<'_> {
 
     fn record(&mut self) -> Result<Record, P21Error> {
         if self.records >= self.limits.records {
-            return Err(Refusal::TooMany {
+            return Err(Limit::TooMany {
                 what: Counted::Records,
                 limit: self.limits.records,
             }
@@ -685,7 +685,7 @@ impl Lexer<'_> {
         }
         // A repeated id's records were read too, so it counts as an instance.
         if self.instances >= self.limits.instances {
-            return Err(Refusal::TooMany {
+            return Err(Limit::TooMany {
                 what: Counted::Instances,
                 limit: self.limits.instances,
             }

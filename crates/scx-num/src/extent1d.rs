@@ -92,7 +92,7 @@
 //!   ported (they do not change results). The destructor's "undefined" sentinel has
 //!   no Rust counterpart (a dropped value cannot be used), nor has `AssertDefined`.
 
-use crate::error::{NumError, Result};
+use crate::error::{Invalid, NumError, Result};
 use crate::extent3d::BoundaryType;
 use crate::math::{is_infinite_param, EFF_ZERO, EFF_ZERO_DEG, INFINITE_PARAMETER};
 use crate::tol::{are_same, are_same_to_tol};
@@ -980,7 +980,7 @@ impl ExtentNd {
         if values.len() < dim || periodic.is_some_and(|p| p.len() < dim) {
             return Err(NumError::InvalidInput {
                 operation: "geom::extent1d::ExtentNd::clamp_vector",
-                reason: "vector shorter than the dimension",
+                reason: Invalid::SizeMismatch,
             });
         }
         let mut rtn = false;

@@ -16,6 +16,13 @@
 //! | `NurbsFailure::Index`, `ControlPointsShort`, `InvalidInput` (out of bounds) | none: a built curve has the right counts ([`NurbsError::PointCount`] at construction) |
 //! | none: `elevate_degree` returns zero or negative weights | [`NurbsError::Unstable`] |
 //! | `SolidError::Unsupported` at a domain end (`basis_eval`, `crv_eval`) | none: the ends evaluate |
+//! | none: an index past a slice the built values' counts rule out | [`NurbsError::Defect`] |
+//!
+//! The kinds (research 62 §1.1): a degree above [`MAX_DEGREE`](crate::MAX_DEGREE) and a
+//! derivative order above [`MAX_ORDER`](crate::MAX_ORDER) are fixed caps, so
+//! [`ErrorKind::Exhausted`] (62 M1); [`NurbsError::Unstable`] is valid input the elevation
+//! cannot finish, [`ErrorKind::Unsupported`]; the rest refuse the caller's input, including
+//! [`NurbsError::Degenerate`], whose degenerate span or parameter is the caller's (62 §3.1, D2).
 
 use core::fmt;
 
@@ -141,14 +148,25 @@ pub enum NurbsError {
     /// was no longer positive or a point no longer finite. (Where it stays finite the answer
     /// may still be inaccurate: see [`NurbsCurve::elevate`](crate::NurbsCurve::elevate).)
     Unstable,
+    /// A step failed through the crate's own fault: an index the built values' invariants
+    /// rule out was missing. A bug.
+    Defect {
+        /// The step that failed.
+        why: &'static str,
+    },
 }
 
 impl NurbsError {
-    /// The error's class.
+    /// What the caller can do about the error (research 62 §1.1).
     #[must_use]
     pub const fn kind(&self) -> ErrorKind {
         match self {
-            Self::Degenerate { .. } | Self::Unstable => ErrorKind::Degenerate,
+            // valid input the elevation cannot finish
+            Self::Unstable => ErrorKind::Unsupported,
+            // fixed caps on the input (research 62 M1); a degree of zero is refused
+            Self::Degree { degree, .. } if *degree > 0 => ErrorKind::Exhausted,
+            Self::DerivativeOrder { .. } => ErrorKind::Exhausted,
+            Self::Defect { .. } => ErrorKind::Defect,
             Self::Degree { .. }
             | Self::TooFewKnots { .. }
             | Self::KnotNotFinite { .. }
@@ -163,8 +181,34 @@ impl NurbsError {
             | Self::ParameterOutside { .. }
             | Self::InsertionMultiplicity { .. }
             | Self::RemovalMultiplicity { .. }
-            | Self::DerivativeOrder { .. }
-            | Self::Unclamped => ErrorKind::InvalidInput,
+            | Self::Unclamped
+            | Self::Degenerate { .. } => ErrorKind::Refused,
+        }
+    }
+
+    /// The cause's stable name, unique in the crate (research 62 D6).
+    #[must_use]
+    pub const fn name(&self) -> &'static str {
+        match self {
+            Self::Degree { .. } => "degree",
+            Self::TooFewKnots { .. } => "too_few_knots",
+            Self::KnotNotFinite { .. } => "knot_not_finite",
+            Self::KnotsDecrease { .. } => "knots_decrease",
+            Self::Multiplicity { .. } => "multiplicity",
+            Self::EmptyDomain { .. } => "empty_domain",
+            Self::PointCount { .. } => "point_count",
+            Self::WeightCount { .. } => "weight_count",
+            Self::PointNotFinite { .. } => "point_not_finite",
+            Self::Weight { .. } => "weight",
+            Self::ParameterNotFinite { .. } => "parameter_not_finite",
+            Self::ParameterOutside { .. } => "parameter_outside",
+            Self::InsertionMultiplicity { .. } => "insertion_multiplicity",
+            Self::RemovalMultiplicity { .. } => "removal_multiplicity",
+            Self::DerivativeOrder { .. } => "derivative_order",
+            Self::Unclamped => "unclamped",
+            Self::Degenerate { .. } => "degenerate",
+            Self::Unstable => "unstable",
+            Self::Defect { .. } => "defect",
         }
     }
 }
@@ -236,14 +280,12 @@ impl fmt::Display for NurbsError {
             }
             Self::Degenerate { parameter } => write!(
                 f,
-                "{}: a knot difference rounded to zero or the result overflowed evaluating at {parameter}",
-                ErrorKind::Degenerate
+                "a knot difference rounded to zero or the result overflowed evaluating at {parameter}"
             ),
-            Self::Unstable => write!(
-                f,
-                "{}: degree elevation lost the curve across near-coincident knots",
-                ErrorKind::Degenerate
-            ),
+            Self::Unstable => {
+                f.write_str("degree elevation lost the curve across near-coincident knots")
+            }
+            Self::Defect { why } => f.write_str(why),
         }
     }
 }
@@ -255,18 +297,83 @@ mod tests {
     use super::*;
 
     #[test]
-    fn classes_and_texts() {
+    fn kinds_and_texts() {
         let e = NurbsError::Degenerate { parameter: 0.5 };
-        assert_eq!(e.kind(), ErrorKind::Degenerate);
+        assert_eq!(e.kind(), ErrorKind::Refused);
         assert_eq!(
             e.to_string(),
-            "degenerate: a knot difference rounded to zero or the result overflowed evaluating at 0.5"
+            "a knot difference rounded to zero or the result overflowed evaluating at 0.5"
         );
+        assert_eq!(NurbsError::Unstable.kind(), ErrorKind::Unsupported);
         let e = NurbsError::ParameterOutside {
             parameter: 2.0,
             domain: [0.0, 1.0],
         };
-        assert_eq!(e.kind(), ErrorKind::InvalidInput);
+        assert_eq!(e.kind(), ErrorKind::Refused);
         assert_eq!(e.to_string(), "parameter 2 is not inside the domain (0, 1)");
+        let cap = |degree| NurbsError::Degree { degree, max: 3 }.kind();
+        assert_eq!((cap(0), cap(4)), (ErrorKind::Refused, ErrorKind::Exhausted));
+        let order = NurbsError::DerivativeOrder { order: 9, max: 8 };
+        assert_eq!(order.kind(), ErrorKind::Exhausted);
+        assert_eq!(NurbsError::Defect { why: "" }.kind(), ErrorKind::Defect);
+    }
+
+    /// Every cause's name is unique in the crate (research 62 D6).
+    #[test]
+    fn cause_names_are_unique() {
+        let all = [
+            NurbsError::Degree { degree: 0, max: 0 },
+            NurbsError::TooFewKnots {
+                count: 0,
+                needed: 0,
+            },
+            NurbsError::KnotNotFinite { index: 0 },
+            NurbsError::KnotsDecrease { index: 0 },
+            NurbsError::Multiplicity {
+                knot: 0.0,
+                multiplicity: 0,
+                max: 0,
+            },
+            NurbsError::EmptyDomain { at: 0.0 },
+            NurbsError::PointCount {
+                count: 0,
+                expected: 0,
+            },
+            NurbsError::WeightCount {
+                count: 0,
+                expected: 0,
+            },
+            NurbsError::PointNotFinite { index: 0 },
+            NurbsError::Weight {
+                index: 0,
+                weight: 0.0,
+            },
+            NurbsError::ParameterNotFinite { parameter: 0.0 },
+            NurbsError::ParameterOutside {
+                parameter: 0.0,
+                domain: [0.0; 2],
+            },
+            NurbsError::InsertionMultiplicity {
+                knot: 0.0,
+                multiplicity: 0,
+                times: 0,
+                degree: 0,
+            },
+            NurbsError::RemovalMultiplicity {
+                knot: 0.0,
+                multiplicity: 0,
+                times: 0,
+            },
+            NurbsError::DerivativeOrder { order: 0, max: 0 },
+            NurbsError::Unclamped,
+            NurbsError::Degenerate { parameter: 0.0 },
+            NurbsError::Unstable,
+            NurbsError::Defect { why: "" },
+        ];
+        let names: Vec<&str> = all.iter().map(NurbsError::name).collect();
+        let mut sorted = names.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), names.len(), "{names:?}");
     }
 }
