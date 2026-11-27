@@ -536,16 +536,22 @@ fn a_boolean_is_deterministic() {
 
 #[test]
 fn non_manifold_results_are_unsupported() {
-    // Two cubes sharing only an edge.
+    // A ball on a cube's top face: the union meets itself at one point inside the face
+    // (D5). Two cubes sharing an edge are BO7's; today that edge's four faces are also
+    // `NonManifold`.
     let doc = Document::default();
     let a = cuboid([0.0; 3], [1.0; 3], doc);
-    let b = cuboid([1.0, 1.0, 0.0], [2.0, 2.0, 1.0], doc);
-    let e = op(&a, &b, UNION, doc).unwrap_err();
-    assert!(
-        matches!(
-            e,
-            BooleanError::Unsupported(BooleanUnsupported::NonManifold { .. })
-        ),
-        "{e:?}"
-    );
+    for b in [
+        ball([0.5, 0.5, 1.5], 0.5, doc),
+        cuboid([1.0, 1.0, 0.0], [2.0, 2.0, 1.0], doc),
+    ] {
+        let e = op(&a, &b, UNION, doc).unwrap_err();
+        assert!(
+            matches!(
+                e,
+                BooleanError::Unsupported(BooleanUnsupported::NonManifold { .. })
+            ),
+            "{e:?}"
+        );
+    }
 }

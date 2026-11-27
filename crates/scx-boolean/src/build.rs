@@ -37,6 +37,7 @@ use scx_surface::Closed;
 use crate::boolean::BooleanOp;
 use crate::classify::{Class, Classes, Joins, material_back};
 use crate::error::{BooleanDefect, BooleanError, BooleanUnsupported};
+use crate::faceface::Touch;
 use crate::geom::{Operands, Side};
 use crate::imprint::{Imprint, loops_error, ring, shoelace};
 
@@ -69,6 +70,7 @@ const fn select(op: BooleanOp, side: Side, c: Class) -> Option<bool> {
 pub(crate) fn build(
     ops: Operands<'_>,
     mut m: Imprint,
+    touches: &[Touch],
     cls: &Classes,
     op: BooleanOp,
     doc: Document,
@@ -86,6 +88,19 @@ pub(crate) fn build(
             None => {
                 m.draft.remove_face(f);
             }
+        }
+    }
+    // A touch inside a face (stage 4 records no other) where both faces keep a piece:
+    // the result meets itself at that point.
+    for t in touches {
+        let both = [Side::A, Side::B]
+            .into_iter()
+            .zip(t.faces)
+            .all(|(side, of)| kept.values().any(|k| (k.side, k.of) == (side, of)));
+        if both {
+            return Err(BooleanError::Unsupported(BooleanUnsupported::NonManifold {
+                at: Entity::Face(t.faces[0]),
+            }));
         }
     }
     stop.check()?;

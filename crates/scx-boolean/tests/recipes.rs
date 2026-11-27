@@ -8,11 +8,11 @@
 //! - *Live today:* the operand generators. Every part of every case builds through
 //!   `scx-make` and its volume is the closed form's, so a later failure of a case is the
 //!   Boolean's and not the operands'.
-//! - *Awaiting the classify stage:* the cases themselves, `#[ignore]`d with the reason
-//!   "awaits BO4 classify" (the call answers `Stage(Classify)` until then). Run them with
-//!   `cargo test -p scx-boolean --test recipes -- --ignored`; when BO4 lands the
-//!   `#[ignore]` attributes are deleted and nothing else changes. Cases whose recipe says
-//!   `Unsupported` (a touch inside a face, D5) expect that answer by name.
+//! - *The cases themselves,* judged against their truth. Cases whose recipe says
+//!   `Unsupported` (a touch inside a face, D5) expect that answer by name. The vertex and
+//!   edge contacts stay `#[ignore]`d for BO7: the edge contact's shared edge has four
+//!   faces, which the build answers `NonManifold` until then. Run it with
+//!   `cargo test -p scx-boolean --test recipes -- --ignored`.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -230,7 +230,6 @@ fn every_operand_builds_with_the_closed_form_volume() {
 // BO6: the benchmark bodies
 
 #[test]
-#[ignore = "awaits BO4 classify"]
 fn plate_12_has_144_holes() {
     let r = case("plate-12");
     assert_eq!(r.steps.len(), 144);
@@ -238,7 +237,6 @@ fn plate_12_has_144_holes() {
 }
 
 #[test]
-#[ignore = "awaits BO4 classify"]
 fn gear_60_has_sixty_slots() {
     let r = case("gear-60");
     assert_eq!(r.steps.len(), 60);
@@ -246,7 +244,6 @@ fn gear_60_has_sixty_slots() {
 }
 
 #[test]
-#[ignore = "awaits BO4 classify"]
 fn smaller_hole_cases() {
     check("box-cyl-hole");
     check("plate-4");
@@ -256,7 +253,7 @@ fn smaller_hole_cases() {
 // BO7: contacts
 
 #[test]
-#[ignore = "awaits BO4 classify"]
+#[ignore = "awaits BO7: the edge contact is an edge of four faces"]
 fn blocks_touching_at_a_vertex_or_along_an_edge_are_built() {
     for n in CONTACT_BUILT {
         check(n);
@@ -264,7 +261,6 @@ fn blocks_touching_at_a_vertex_or_along_an_edge_are_built() {
 }
 
 #[test]
-#[ignore = "awaits BO4 classify"]
 fn touches_inside_a_face_are_unsupported() {
     for n in CONTACT_IN_FACE {
         check(n);
@@ -275,7 +271,6 @@ fn touches_inside_a_face_are_unsupported() {
 // Coincident and near-coincident faces
 
 #[test]
-#[ignore = "awaits BO4 classify"]
 fn coincident_and_near_coincident_faces() {
     for n in COINCIDENT {
         check(n);

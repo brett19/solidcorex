@@ -76,7 +76,16 @@ pub fn boolean(
     let ff = face_face(ops, &found, &mut budget, cx.stop)?;
     let imprinted = imprint(ops, &found, &ff, *cx.doc, &mut budget, cx.stop)?;
     let classes = classify(ops, &ff, &imprinted, &mut budget, cx.stop)?;
-    let (body, changes) = build(ops, imprinted, &classes, op, *cx.doc, &mut budget, cx.stop)?;
+    let (body, changes) = build(
+        ops,
+        imprinted,
+        &ff.touches,
+        &classes,
+        op,
+        *cx.doc,
+        &mut budget,
+        cx.stop,
+    )?;
     Ok(Done::new(body, changes, Report::empty(budget.used())))
 }
 
