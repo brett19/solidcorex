@@ -596,12 +596,12 @@ pub fn operator_attributes(e: &Instance) -> &[Param] {
 fn frame_units(ctx: &Context, assume: Option<Units>) -> std::result::Result<Units, EntityCause> {
     let len = match ctx.length {
         Unit::Named(len) => len,
-        Unit::Missing => assume.map(|a| a.len).ok_or(EntityCause::Units(
-            UnitsFault::Missing(MissingUnits {
+        Unit::Missing => assume
+            .map(|a| a.len)
+            .ok_or(EntityCause::Units(UnitsFault::Missing(MissingUnits {
                 length: true,
                 angle: false,
-            }),
-        ))?,
+            })))?,
         Unit::Conflicting => {
             return Err(EntityCause::Units(UnitsFault::Conflicting(MissingUnits {
                 length: true,
@@ -921,12 +921,10 @@ fn transformation(
     assume: Option<Units>,
 ) -> Result<Option<Transformation>> {
     let units_of = |r: usize| {
-        out.representations
-            .get(r)
-            .map_or_else(
-                || frame_units(&Context::default(), assume),
-                |r| frame_units(&r.units, assume),
-            )
+        out.representations.get(r).map_or_else(
+            || frame_units(&Context::default(), assume),
+            |r| frame_units(&r.units, assume),
+        )
     };
     let Some((p, index)) = operator else {
         return Ok(None);
@@ -1172,8 +1170,8 @@ pub fn read_assuming(ex: &Exchange, assume: Option<Units>) -> Result<ProductStru
             reference(id, l.reps, 3)?,
             "a representation",
         )?;
-        let transformation =
-            transformation(ex, &out, id, (rep_1, rep_2), l.operator, assume).map_err(|e| e.within(id))?;
+        let transformation = transformation(ex, &out, id, (rep_1, rep_2), l.operator, assume)
+            .map_err(|e| e.within(id))?;
         links.insert(id, out.links.len());
         out.links.push(Link {
             entity: id,

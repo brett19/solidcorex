@@ -523,7 +523,11 @@ fn pin_view(c: &x::units::Context, n: &mut PinUnits) -> PinView {
             Some(u.largest)
         }
     });
-    PinView { len, ang, uncertainty }
+    PinView {
+        len,
+        ang,
+        uncertainty,
+    }
 }
 
 fn same_f(a: f64, b: f64) -> bool {
@@ -772,9 +776,8 @@ fn compare_file(name: &str, text: &str, c: &mut Corpus) {
         _ => {
             let a = a.map(|x| x.0).map_err(|_| ());
             c.products.take(a == b, false, || {
-                let cut = |r: &Result<String, ()>| {
-                    format!("{r:?}").chars().take(400).collect::<String>()
-                };
+                let cut =
+                    |r: &Result<String, ()>| format!("{r:?}").chars().take(400).collect::<String>();
                 format!("{name}: product: scx {}\n  pin {}", cut(&a), cut(&b))
             });
         }
@@ -841,10 +844,7 @@ fn p21_corpus() {
     }
     println!(
         "difftest t_p21::corpus_pin_units: pin defects: {} missing units read as mm/rad, {} conflicting units read as the last, {} several uncertainties read as the last, {} products read where scx refuses for want of a length unit",
-        c.pin_units.defaulted,
-        c.pin_units.conflicting,
-        c.pin_units.last_wins,
-        c.pin_units.refused
+        c.pin_units.defaulted, c.pin_units.conflicting, c.pin_units.last_wins, c.pin_units.refused
     );
     println!(
         "difftest t_p21::corpus_part42: {} reads refused by both readers",

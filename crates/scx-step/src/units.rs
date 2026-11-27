@@ -7,9 +7,9 @@
 //! ([`MissingUnits`], [`UnitsFault`]), and keeps [`Uncertainty::Absent`] for a context that
 //! states none.
 
+use scx_p21::Exchange;
 pub use scx_p21::units::{MissingUnits, UnitsFault};
 use scx_p21::units::{Units, context};
-use scx_p21::Exchange;
 
 /// A context's distance uncertainty.
 #[derive(Clone, Copy, Debug, PartialEq)]
