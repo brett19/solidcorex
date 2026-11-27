@@ -2481,3 +2481,172 @@ deterministic branch and bound returning a `Bracket` or a typed `GapError`
 `(Aim, &mut Budget, &Stop)` with one budget unit per point evaluated; edge-to-surface is to the
 kind's whole surface, the face's gap is bounded above by the pcurve at the same parameter;
 curve-to-curve is one-sided; NURBS surfaces are pending until step 5's piece bounds.
+
+## 26. ST1 as built (11-27)
+
+New crate `scx-stitch` (layers.txt after `scx-boolean`; one Cargo edge, stitch → bodyq, plus
+stitch → brep and → num, which bodyq already sits on). The first stage of §4.3: the sheets are
+gathered into one body, and vertices of different sheets within coincidence are identified as
+04 rows 108 and 186 rule. The edge stage (ST2) and orientation (ST3) are not built. A stitch that
+needs either one returns a typed pending error, so no result leaves a join undone. Test bodies
+come from `scx_testkit::bodies` (no `scx-make`). 16 tests: 11 in `crates/scx-stitch/tests/stitch.rs`
+and 5 unit tests of the identification in `src/points.rs`.
+
+### 26.1 Public API
+
+```rust
+pub fn stitch(sheets: &[&Brep], want: Want, cx: &mut Cx<'_>) -> Result<Stitched, StitchError>;
+#[non_exhaustive] pub enum Want { Sheets, Solid }
+pub enum NoItems {}                                   // a stitch skips nothing
+pub struct Stitched { pub done: Done<NoItems>, pub report: StitchReport }
+#[non_exhaustive] pub struct StitchReport { pub identified: Vec<Identified> }
+#[non_exhaustive] pub struct Identified { vertex: VertexId, members: Vec<(Operand, VertexId)>,
+                                          kept: (Operand, VertexId), spread: Length }
+pub enum StitchError { Refused(StitchRefusal), Unsupported(StitchUnsupported),
+                       Exhausted { limit }, Cancelled, Defect(StitchDefect) }   // kind(), name()
+pub enum StitchRefusal { VerticesWithinCoincidence { operand, vertices: [VertexId; 2] },
+                         OtherDocument { operand } }
+pub enum StitchUnsupported { Chain { operand, vertices }, Edges { operand, edge }, Solid,
+                             TooLarge, Query { operand, at: Entity, cause: BodyqUnsupported } }
+pub enum StitchDefect { Draft, Query { operand, at }, Finish(Box<FinishCause>) }
+```
+
+Sheet `i` is operand `i` of `Changes`. Sheet 0 is `sheets[0].edit()`, so its entities keep their
+ids. Every other sheet's regions, vertices, edges, shells and faces are copied in, in that order.
+Each copied vertex, edge and face is `derive`d from its operand entity. An edge of three or more
+fins gets its sheet's radial order back through `adjacency_mut`. Any finished body is taken,
+solids included.
+
+### 26.2 Identification (`points.rs`)
+
+1. **Pairs.** One grid holds every sheet's vertices. Its cell is twice the largest reach (reach =
+   the vertex's accuracy, at least the zone), and each vertex is tested against the 27 cells
+   around it. A pair is within coincidence when its distance is at most the larger reach, which
+   is `units::coincident`. This is O(V) on spread-out input, and the pairs are a sorted set.
+2. **Clearance.** Two vertices of one sheet within coincidence give `Refused(VerticesWithinCoincidence)`.
+   The error names the lowest such pair, the one row 186 rules per operand.
+3. **Components** of "within coincidence" are formed by union-find over the pairs, rooted at the
+   lowest index (sheet, then id), before any merge.
+4. **One vertex per sheet.** In such a component, the kept record is the vertex with the smallest
+   reach, then the lowest (x, y, z). It is an operand vertex's own record.
+5. **Chains** (R7). Here one sheet has two or more vertices in the component. Each other vertex is
+   anchored to its nearest vertex of that sheet (ties by id), and each anchor keeps its own point.
+   The result is `Unsupported(Chain)` in three cases: a second sheet also has two vertices; a
+   vertex lies beyond coincidence of its nearest anchor; or two vertices of one sheet land on
+   one anchor.
+
+### 26.3 Accuracy
+
+Each identified vertex gets a `Coincident` warning. For each other member there is a
+`coincident` lineage record onto sheet 0's vertex, or an `Origin::Operand` derive into a new
+vertex. Row 186 says "every new vertex and edge end records its measured gap as `Measured`", so
+the merged vertex's accuracy covers how far the merge moves things. It is set to the largest of
+three distances from the kept point:
+
+- the spread;
+- each member's edge-curve ends at it (the interval min at `ends[0]`, max at `ends[1]`);
+- each use's surface point there (pcurve ends, or `UseGeom::Point`).
+
+When that is beyond the kept vertex's reach, its accuracy is raised to it as `Measured`, with a
+`Raise` and an `AccuracyRaised` warning. Without this, `finish` refuses: `EdgeEndOffVertex`
+allows only `re + rv`, and a curve end from another sheet can sit nearly `max(reach)` away.
+
+### 26.4 The edge stage, pending
+
+Until ST2, `stitch` returns `Unsupported(Edges { operand, edge })` before building in two cases:
+
+- (a) Edges of two sheets have both ends in the same two identified vertices. These are edges to
+  join.
+- (b) A vertex of another sheet, not identified with one of the edge's ends, lies in the edge's
+  box. This is an edge to split, or one passing within coincidence.
+
+For (b), the loose `Edge::bounding_box` (grown by the edge's accuracy and the zone) is tested
+first, then the certified `tight_box_charged`. This is the reason for the bodyq edge. Either box
+is grown further by the vertex's reach beyond the zone. The candidates come from three
+axis-sorted arrays, using the slab of the axis that holds the fewest. The check is conservative:
+an edge that only passes near a vertex, inside its box, is refused too, until ST2 measures the
+gap. Sheets that meet only at vertices, or not at all, stitch whole.
+
+### 26.5 Choices, with cases for and against
+
+| Choice | For | Against |
+|---|---|---|
+| `Result<Stitched, StitchError>` with `Stitched { done: Done<NoItems>, report }`, not the literal `Done<StitchReport>` | `Done<C>`'s parameter is the skip-cause type (`Skipped<C>` is for skip-mode ops). A stitch skips nothing, so `C` is uninhabited and the stitch's own report sits beside it | One more wrapper to unpack; ST2 may want `Done<C>` to carry a skipped edge, and that would change `NoItems` |
+| `cx` last: `stitch(sheets, want, cx)` | Matches `boolean` and `tight_box_charged` | §4.3 wrote `cx` before `want` |
+| Kept record by geometry (smallest reach, then lowest point), not "the lower sheet index's" (§4.3, row 186's "a's record kept") | §4.4 and ST4 want permuted input to give identical bits. Choosing by sheet index cannot give that; choosing by geometry does, and it is no less true (each is an operand vertex within coincidence of all members). The smallest reach is the best-known point | Departs from the words of row 186 and §4.3. With equal reach the lowest point is arbitrary, though deterministic. Ids still follow sheet 0, so "identical bits" holds for the geometry, not the ids |
+| Raise to the measured gap (row 186), not "never raises" (§4.3 step 4) | The finished body must pass `finish`'s end checks, and an edge end from another sheet can lie nearly `max(reach)` off the kept point, beyond `re + rv`. Row 186 asks for `Measured` gaps on every new vertex and edge end | Step 4's claim that identification needs no raise holds only for the vertex itself, not for the curve ends that move with it. The raise grows boxes and tolerances downstream |
+| Chains anchored (R7, rows 108/186), unlike BO1 (row 214, no anchoring) | Stitch points are all operand vertices, and anchors keep their own points, so anchoring is well defined | In practice a chain's middle vertex is also within coincidence of the anchors' edges, so stitch returns `Edges` before anchoring matters until ST2. Anchoring is tested at the unit level |
+| Same-sheet pairs refused whenever found, before anything else | Row 186: the refusal is per operand, and `check` reports the same pair | A pair inside a sheet that no other sheet comes near is refused too. That matches the row, but it is stricter than the pin, which only looks at merge candidates |
+| Edge stage pending as a typed error, checked before building | No result silently leaves a joinable edge pair or a vertex on an edge unjoined (analytic first) | The box check is conservative: it can refuse sheets whose edges only pass within the box |
+| Sheet 0 edited in place | Its ids survive, which is what a caller stitching onto a body expects; lineage records only the others | The result's ids depend on which sheet is first |
+
+### 26.6 Tests
+
+`tests/stitch.rs` (11):
+
+- corner touch gives one vertex: 7 vertices, 8 edges, 2 faces; sheet 0's id kept; coincident
+  lineage from operand 1; 3 created vertices, 4 edges and 1 face, each derived from operand 1;
+  a `Coincident` warning; no raise;
+- 0.5 zone apart joins and 2 zone apart stays apart;
+- a 0.005 mm merge with a 0.01 accuracy vertex raises the kept vertex to 0.005, `Measured`;
+- a shared edge gives `Edges`;
+- a vertex on another sheet's edge gives `Edges`;
+- one sheet's vertices within coincidence are `Refused`, operand 1, lower id first;
+- another resolution gives `OtherDocument`;
+- `Want::Solid` gives `Solid`;
+- no sheets give an empty body; one sheet gives itself with empty `Changes` and a clean report;
+- run twice gives equal reports, changes and points, and three permutations give the same points;
+- a set stop gives `Cancelled`.
+
+`points.rs` (5):
+
+- a chain anchors to the nearest vertex;
+- two sheets doubled is `Chain`;
+- two of one sheet on one anchor is `Chain`;
+- a same-sheet pair is refused, lowest first;
+- the kept vertex is chosen by geometry, whatever the order.
+
+No tests were removed.
+
+### 26.7 Measurements
+
+Release build, one thread, best of 5, on the second build machine under load (load average
+about 12). Measured with a throwaway timer test, not committed. Unit quad sheets from
+`bodies::generate(QuadSheet, 0, n)`.
+
+| Case | Sheets | V | E | Identified | Work | Time | Per vertex |
+|---|---|---|---|---|---|---|---|
+| two 1x1, corner | 2 | 8 | 8 | 1 | 50 | 0.006 ms | 0.76 us |
+| two 10x10, corner | 2 | 242 | 440 | 1 | 6,287 | 0.38 ms | 1.57 us |
+| two 30x30, corner | 2 | 1,922 | 3,720 | 1 | 127,447 | 3.7 ms | 1.91 us |
+| two 60x60, corner | 2 | 7,442 | 14,640 | 1 | 940,687 | 15.9 ms | 2.14 us |
+| checker 4x4 of 4x4 sheets | 8 | 200 | 320 | 9 | 5,117 | 0.39 ms | 1.93 us |
+| checker 10x10 | 50 | 1,250 | 2,000 | 81 | 74,399 | 2.8 ms | 2.22 us |
+| checker 20x20 | 200 | 5,000 | 8,000 | 361 | 577,949 | 12.3 ms | 2.46 us |
+
+Time is close to linear in V. Work, which charges one unit per slab candidate, grows like
+V^1.5 on these flat grids. The edge gate's thinnest-axis slab holds a whole row of vertices,
+because every vertex lies in z = 0 and an axis-aligned edge has a near-zero span on one axis
+only. The pin has no equivalent gate. ST2 replaces the gate with real edge candidates (box
+tree), and a box tree over vertices would make the gate O(V log V) if the gate stays. This is
+not a regression of existing work: the crate is new.
+
+### 26.8 Deviations and open questions
+
+Deviations from §4.3 and the ST1 row: the return type (§26.5), argument order, kept record by
+geometry, and the raise. ST1 does not build the edge stage, splits, orientation or `Want::Solid`.
+These are ST2 and ST3, and each returns a typed `Unsupported` now.
+
+Open questions:
+
+1. Should ST2 keep `Stitched` or move the report into `Done<C>`? If ST2 skips undecided edge
+   pairs, `C` becomes their cause and `NoItems` goes.
+2. Row 186 says "a's record kept". Should the 04 wording change to "the smallest reach, then the
+   lowest point" so that ST4's permuted-bits truth holds?
+3. A chain end to end only reaches anchoring once ST2 can tell that the middle vertex's
+   nearness to an anchor's edges is explained by the identification. Until then, chains surface
+   as `Edges`.
+
+### 26.9 Proposed 04 row
+
+| 11-27 | (For the owner's review) `scx_stitch::stitch(&[&Brep], Want, &mut Cx) -> Result<Stitched, StitchError>`: sheet `i` is operand `i`, sheet 0 is edited in place, and the others are copied in with `Origin::Operand` lineage. Vertices of different sheets within coincidence are one vertex, from one grid over all sheets. Two of one sheet are `Refused(VerticesWithinCoincidence)`. A chain is anchored to the nearest vertex of its doubled sheet, else `Unsupported(Chain)`. The kept record is the member with the smallest reach, then the lowest point, so permuted input gives the same points. That vertex is raised, `Measured`, to the farthest edge or pcurve end the merge moves, where that is beyond its reach. Until ST2, edges to join or split, and a vertex inside another sheet's edge box, are `Unsupported(Edges)`; `Want::Solid` is `Unsupported(Solid)`. `Stitched { done: Done<NoItems>, report: StitchReport }`, since a stitch skips nothing. Edges: stitch → bodyq | Amends row 186's "a's record kept" for stitch, so that §4.4's permuted-bits truth holds; amends §4.3 step 4 ("never raises"), since moved curve ends need the measured gap row 186 asks for | 74 §26 |
