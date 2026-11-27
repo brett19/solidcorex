@@ -1,0 +1,28 @@
+# Report::work of scx's Boolean on each built Boolean recipe (steps summed), 72 section 14.38.
+# A rise of more than 10% fails t_slice. SCX_BLESS_WORK=1 rewrites this file.
+box-cyl-hole 41
+box-box-union 121
+box-box-difference 121
+box-box-intersection 121
+box-box-union-flush 288
+sphere-and-box 29
+coplanar-union 368
+torus-minus-box 41
+coplanar-offset-0 622
+coplanar-offset-0.1c 586
+coplanar-offset-0.5c 586
+coplanar-offset-4c 288
+coplanar-offset-10c 288
+crease-0.3c 2961
+crease-3c 139
+crease-10c 129
+corner-contact-union 2403
+edge-contact-union 5713
+disjoint-union 2334
+box-cavity 2336
+block-minus-itself 1056
+plate-4 896
+plate-12 26496
+gear-60 26300
+interleaved-grids-4 4893
+interleaved-grids-8 18445

@@ -227,9 +227,12 @@ fn a_refusal_at_a_touch_names_the_touch() {
 
 #[test]
 fn halving_proves_what_the_cells_cannot() {
-    // Two unit spheres 2^-10 apart: the cells' boxes overlap, so some cell pairs survive, and
-    // halving clears every one of them.
-    let (a, b) = (sphere([0.0; 3], 1.0), sphere([2.0 + p2(10), 0.0, 0.0], 1.0));
+    // Two unit spheres 2^-4 apart along a diagonal (the facing octants' boxes overlap, so
+    // some cell pairs survive; along an axis the exact boxes would prove it, see
+    // `near_touching_analytic_spheres_are_cleared_at_the_cells`), and halving clears every
+    // one of them.
+    let d = (2.0 + p2(4)) / core::f64::consts::SQRT_2;
+    let (a, b) = (sphere([0.0; 3], 1.0), sphere([d, d, 0.0], 1.0));
     let mut budget = Budget::unlimited();
     let c = Candidates::new(
         &a.0,
@@ -316,14 +319,8 @@ fn a_dropped_pair_is_apart_by_sampling_and_the_survivors_are_the_rest() {
                 )
                 .unwrap();
                 let p = crate::general::PiecePair::new(
-                    crate::general::Piece {
-                        uv: ua,
-                        bbox: a.box_over(ua).unwrap(),
-                    },
-                    crate::general::Piece {
-                        uv: ub,
-                        bbox: b.box_over(ub).unwrap(),
-                    },
+                    c.piece_of_a(ua).unwrap(),
+                    c.piece_of_b(ub).unwrap(),
                 );
                 if c.apart(&p) {
                     dropped += 1;
@@ -518,5 +515,64 @@ fn the_sm0_truths_decide_spheres_and_parallel_cylinders() {
                 "cylinders at {e}: {out:?}"
             );
         }
+    }
+}
+
+#[test]
+fn near_touching_analytic_spheres_are_cleared_at_the_cells() {
+    // The sphere's boxes are as tight as the quarter arcs' monotone cos and sin: the facing
+    // octants of two unit spheres `g` apart are apart by their boxes, so the cells clear it
+    // with no halving (73 §20: it took 4,305 pair tests at `2^-10`).
+    for k in [10, 20, 29] {
+        let (a, b) = (sphere([0.0; 3], 1.0), sphere([2.0 + p2(k), 0.0, 0.0], 1.0));
+        let mut budget = Budget::unlimited();
+        let t = intersect(
+            &a.0,
+            &a.1,
+            &b.0,
+            &b.1,
+            acc(),
+            res(),
+            &mut budget,
+            &Stop::new(),
+        )
+        .unwrap();
+        assert!(t.is_empty(), "2^-{k}");
+        assert_eq!(budget.used(), 1, "2^-{k}: the cells alone prove it");
+    }
+}
+
+#[test]
+fn a_tilted_near_touch_is_still_cheap() {
+    // Spheres in tilted frames, centres on a line at the touching distance plus `g`: the
+    // frame's mixed axes cost the boxes their tightness, but the proof stays near the cells.
+    let tilt = |c: [f64; 3]| {
+        let (f, t) = fr(c, [0.6, 0.0, 0.8], [0.0, 1.0, 0.0]);
+        let s = Sphere::new(f, mm(1.0), Sense::Forward).unwrap();
+        (
+            Surface::Sphere(s),
+            Extent2d::from_bounds(0.0, 0.0, 1.0, 1.0).unwrap(),
+            SurfaceKind::Sphere(tk::Sphere {
+                frame: t,
+                radius: 1.0,
+            }),
+        )
+    };
+    for k in [10, 20] {
+        let (a, b) = (tilt([0.0; 3]), tilt([0.0, 2.0 + p2(k), 0.0]));
+        let mut budget = Budget::unlimited();
+        let t = intersect(
+            &a.0,
+            &a.1,
+            &b.0,
+            &b.1,
+            acc(),
+            res(),
+            &mut budget,
+            &Stop::new(),
+        )
+        .unwrap();
+        assert!(t.is_empty(), "2^-{k}");
+        assert!(budget.used() < 400, "2^-{k}: {} units", budget.used());
     }
 }

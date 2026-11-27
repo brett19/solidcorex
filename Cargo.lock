@@ -545,6 +545,7 @@ dependencies = [
  "scx-make",
  "scx-mass",
  "scx-num",
+ "scx-nurbs",
  "scx-planar",
  "scx-testkit",
 ]
@@ -565,6 +566,7 @@ version = "0.1.0"
 dependencies = [
  "scx-algo",
  "scx-bodyq",
+ "scx-boolean",
  "scx-brep",
  "scx-check",
  "scx-curve",

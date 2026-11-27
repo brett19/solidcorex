@@ -718,6 +718,184 @@ pairs, 8 rigid motions, every naive vertex and 600 truth samples per comparison)
 default run checks every 16th naive vertex against the same tolerance and 150 truth samples. CI
 runs the ignored sweeps next to the nurbs ones.
 
+## 13. SM1 as built (11-27)
+
+SM1 adds `Curve2::OnChart`, `scx_curve::{Chart, ChartKind, OnChart}` (the 04 R73 ruling: `Chart`
+lives in `scx-curve`), `Surface::chart`, the `pcurve_of` fallback that makes it, its record form,
+and the stage-5 and mass wiring. The two-sphere Boolean is now a result: the imprint's counts and
+`check`, and union, subtract and intersect each pass `scx_check::contract` and match the
+closed-form volume to `1e-9`.
+
+### 13.1 The value: `OnChart { curve, chart, over, reference }`
+
+```rust
+pub struct Chart { /* frame, sense, kind */ }      // Chart::new(frame, sense, kind) -> Result
+pub enum ChartKind { Plane, Cylinder { radius }, Cone, Sphere, Torus { major } }  // non_exhaustive
+pub struct OnChart { /* curve, chart, over, reference */ }
+// OnChart::new(curve, chart, over: Extent1d, reference: [Point2; 2]) -> Result
+// point, jet::<D>, point_over::<T>, jet_over::<T, D>, domain, reversed, restrict, shifted
+```
+
+- **The chart is the surface's own uv** (63 D13), not an angle. Each periodic direction is
+  `Arcs::of_direction`: per quarter (or half) arc, `u = (q + 1/2) L + tau / a` with
+  `tau = b' / (|(a, b)| + a')`, `(a', b')` turned back by the arc's middle. So there is no
+  `atan2` or `asin`: only ring operations and one square root per direction (73 §4.2 expected one
+  `atan2` and one `asin` a point).
+- **Derivatives are Taylor arithmetic through that formula**: the 3-D curve's jet gives the local
+  coordinates' series, a square-root series gives `|(a, b)|`, a series quotient gives `tau`
+  (`Arcs::direction_series`, new). The value and every derivative are the closed form's, in `f64`
+  and in `Ivl` (generic over `Trig`, `TERMS = 16`). An interval box takes every arc it meets, each
+  clipped to its quarter, and joins them.
+- **The uv is only C1 across an arc join.** The NURBS-compatible parameter of a quarter arc is not
+  the angle, so `u''` jumps at each join (on the two-sphere circle, from `-0.234` to `+0.234`).
+  This is the surface's own uv, so it is correct, not a defect; it is why the mass enclosure needed
+  §13.5's split rule.
+- **A point within `NEAR = 4 eps` of a break** takes the arc the curve is moving onto, from the
+  sign of the zero component's first nonzero later coefficient (`Approach` flips odd orders), and
+  the break's exact value. A point exactly on a break whose side cannot be decided joins both.
+- **The cone** needs no size: on the surface `v = z`, and the nappe is the one with `r + k v > 0`,
+  as `Cone::uv_in`; a curve on the other nappe fails the lifting check. **The sphere's `v`** is the
+  half arc at `(rho, z)`, in `[0, 1]`; at an exact pole the value is undefined, which `pcurve_of`
+  never produces (§13.3).
+
+### 13.2 The branch: `over` and a reference line, not `turn: [i32; 2]` (deviation from §4.2)
+
+A turn count at the span's start cannot place a closed curve's lift: its two ends are the same
+point with lifts a period apart, so the branch at `t` needs the span as well. `OnChart` keeps the
+span `over` and a reference line, given by its uv at `over`'s two ends. At `t` each periodic
+coordinate is the principal value plus the whole periods that bring it nearest the line at `t`.
+
+- **The line is centred on the curve.** The maker takes the chord between the curve's lifted ends
+  and moves it to the middle of the band the lifted values span about it, then accepts while the
+  band is under half a period wide. The nearest lift is the curve's own while every value is under
+  half a period from the line; centring leaves a quarter period to spare. Built first with the
+  chord itself (a quarter period either side of it), the accepted set depended on where the span
+  started: a tilted circle whose chord sat off-centre was refused though its band was narrow.
+  Adversarially: the centred line accepts strictly more curves than the chord rule with the same
+  margin, and the band is measured on the same samples as before (§13.3).
+- In intervals the lift is applied to **each arc's value before arcs are joined**. Built first the
+  other way (lift after the join), a box straddling the period break held the whole period, never
+  narrowed, and the two-sphere union's contract failed `SignUndecided`. A test now asserts that the
+  interval width shrinks with the box.
+- `reversed` negates `over` and swaps the reference's ends; `restrict` keeps both (the lift is a
+  property of the maker's span, not of the restricted one); `shifted` moves the reference by whole
+  periods. Both
+  `scx-brep` users of `shifted` (`pcurve`, `draft::transform::aligned`) take the new arm; the
+  transform's uv map still answers `None` for `OnChart` (it rebuilds through `pcurve_of`).
+- **Edges are not split at seams.** 73 §4.2 and the brief expected a split at seams; the lift makes
+  it unnecessary, and the two-sphere edge is one full-circle use crossing the seam in its interior.
+  Poles and apexes still split (`CrossesPole`).
+
+### 13.3 `pcurve_of`: OnChart after the closed forms, never instead of them
+
+`pcurve_of` tries the closed forms first, unchanged (`Line2`, `AngleLine`, `AngleWave`, ...). Only
+where they answered `NoClosedForm` does it call `on_chart`, so pairs that had a closed form pay
+nothing new. `on_chart`:
+
+1. Takes `surface.chart()`; a NURBS surface has none, so it stays `NoClosedForm`.
+2. Off the plane and cylinder, checks the axis at `DENSE = 64` samples. An end within `tol` of the
+   axis returns `None` (so `NoClosedForm`; the uv there is a whole line). An interior approach (a
+   local minimum of `rho` no larger than the chord between its neighbours, refined by golden
+   section, `GOLDEN_STEPS = 120`) within `tol` is `CrossesPole { at }`, so the caller splits there.
+3. Unwraps each periodic coordinate along the samples, halving a step while it turns by an eighth
+   of a period or more (`MAX_HALVINGS = 40`). The start is placed in the surface's window.
+4. Measures, per periodic coordinate, the band of the lifted values about the chord between the
+   lifted ends. A band half a period wide or more is refused (`None`); otherwise the reference line
+   is the chord moved to the band's middle (§13.2). Then it makes the `OnChart` and runs the
+   existing 9-sample lifting check.
+
+Adversarial notes: the pole check and the deviation check are sampled, not certified. A curve that
+dips to the axis between samples, within `tol` and narrower than `1/63` of the span, is missed, and
+its pcurve is then undefined near the dip. This is the same exposure as the 9-sample lifting check
+the closed forms already carry. A certified version (an interval bound of `rho` over each sample
+gap) is an open question below, not done here.
+
+### 13.4 Record form
+
+`Curve2Kind::OnChart = 8` (`"on_chart"`): the 3-D curve, the chart, then `over` and the
+reference as six floats. `Chart` records its tag (`ChartTag`, `"chart"`: plane 0, cylinder 1,
+cone 2, sphere 3, torus 4), frame, sense, and the one size a kind's uv depends on (the
+cylinder's radius, the torus's major radius).
+Reading revalidates through `Chart::new` and `OnChart::new`. The round-trip property test draws
+OnChart as its ninth kind.
+
+### 13.5 Mass and stage 5
+
+- Stage 5 (`scx-boolean`) needed no code change: once `pcurve_of` answers, the two-sphere
+  imprint goes through. Only the tests changed.
+- `scx-mass` `curve_breaks`: an OnChart's own breaks are its 3-D curve's (a NURBS curve's knots).
+  Its arc joins lie on the surface's break lines and are found as crossings, as for the angle
+  kinds.
+- `scx-mass` enclosure, one rule changed. A cell on a `v` break line was always split along `s`.
+  When the line is crossed by the trim itself (the span's end `v(t)` moves across it along `t`),
+  splitting `s` never takes the cell clear: the two-sphere lens sat at 131,072 cells (the cap) with
+  its enclosure 18 wide. Now such a cell splits along whichever of `t` or `s` contributes more to
+  its `v` range. Before OnChart no trim whose `v` varies crossed a `v` join (sphere trims were
+  latitudes and meridians), so this was latent. The lens now settles in 662 cells.
+
+### 13.6 Tests
+
+- `scx-curve` `chart` (8 tests): the value is the surfaces' inverse bit for bit; jets of
+  off-axis curves against the chain rule; the angle kinds' pcurves reproduced; a break takes the
+  side asked for; the lift follows the span past a turn; intervals enclose the `f64` values and
+  narrow with the box; the axis and a pole are undefined; bad data is refused.
+- `scx-surface` `pcurve`: `other_curves_go_through_the_chart` (40 random tilted small circles on
+  spheres: lifting, start in the window, first derivative by the chain rule within `1e-11 r`);
+  `a_curve_through_a_pole_is_split_there` (a circle through the pole: `CrossesPole` within
+  `1e-7`; one ending on it: `NoClosedForm`; one clear of it: `OnChart`).
+- **Changed on purpose**, in `refusals_are_typed`: the ellipse on a cone, the hyperbola on a cone,
+  and the small tilted circle on a sphere were asserted `NoClosedForm` (the hyperbola case also
+  that the message names "hyperbola"). They now assert `Ok(Curve2::OnChart(_))`, because these are
+  exactly the pairs OnChart is for. The refusal and its message are still covered by the NURBS
+  surface case (`NoClosedForm { Line, Nurbs }`, "NURBS surface", `Unsupported`).
+- **Changed on purpose**, in `scx-brep` `refusals_by_cause`: an oblique section of a sphere and an
+  ellipse section of a cone, each alone in a loop, were asserted `NeedsFit` from the exact pcurve
+  writer. `pcurve_of` now gives them `OnChart` (asserted), and the writer reaches the cause that
+  `NeedsFit` hid: each goes round the axis, so alone it winds (`Winds`, as a lone parallel does).
+  `NeedsFit` (`Unsupported`, `pcurve_needs_fit`) is still covered, by a circle on a plane given as
+  a NURBS surface.
+- `scx-record` `geometry`: OnChart in the round-trip pool.
+- `scx-boolean`: `two_spheres_need_a_fitted_pcurve` (proved stage 5 refused
+  `Unsupported(Pcurve)`) is replaced by
+  `two_spheres_cut_each_other_along_a_circle_through_the_chart` (counts `[3]` and `[2]`,
+  `check`), and `two_unit_spheres_a_radius_apart_unite_subtract_and_intersect` is new (contract,
+  and volumes `8 pi/3 - 5 pi/12`, `4 pi/3 - 5 pi/12`, `5 pi/12` to `1e-9`).
+
+### 13.7 Cost
+
+Evaluation, a release build, mean of 2,000,000 parameters across the span (throwaway timer, not
+committed; the main box, 11-27):
+
+| curve on surface | kind | `point` | `jet::<2>` |
+| --- | --- | --- | --- |
+| sphere latitude | `AngleLine` | 29–31 ns | 31 ns |
+| sphere latitude | `OnChart` | 45–47 ns | 59–60 ns |
+| cylinder oblique section | `AngleWave` | 47 ns | 49 ns |
+| cylinder oblique section | `OnChart` | 42 ns | 46 ns |
+| tilted sphere circle | `OnChart` (no other kind) | 45 ns | 59 ns |
+| plane line | `Line2` | 1.5 ns | 1.4 ns |
+| plane line | `OnChart` | 10 ns | 14 ns |
+
+`OnChart` costs about what the angle kinds cost (one square root and a quotient per periodic
+direction, against their own arc parameter) and is never chosen where they apply (§13.3); against
+`Line2` it is 7–10 times dearer, which is why the plane keeps `Line2`. Making one costs the 64
+samples, their unwrapping and the lifting check, only on pairs that had no closed form before.
+
+Mass: the two-sphere lens went from the cell cap (131,072 cells, enclosure 18 wide, `CellCap`) to
+662 cells (`Reached`). Over the scx-mass and scx-boolean suites, 468 enclosures took 401,984 cells
+before the split rule and 401,935 after (49 fewer), counted with a side-channel counter that
+was not committed, before the latest merge of `main`.
+
+### 13.8 Open questions
+
+1. **Inverting a point onto an OnChart pcurve** (`Curve2` inversion) answers `Unsupported`, as for
+   other non-line kinds. Callers that need it go through the 3-D curve.
+2. **`draft::transform`'s uv map** answers `None` for OnChart and rebuilds through `pcurve_of`.
+   A rigid motion that keeps the surface's frame could carry it exactly.
+3. **Certified pole and deviation checks** (§13.3) in place of sampling.
+4. **01 D10's fitter** narrows further: exact curves on analytic faces never need it now. It
+   remains for NURBS faces and STEP export (§10 item 4).
+
 ## 14. SM3 as built (11-27)
 
 SM3 lays down the public API of `scx_ssi::general`, the typed `SsiError` and its plumbing into
@@ -1242,3 +1420,121 @@ Within noise on every existing path.
 - The corpus's per-case tolerance by depth rather than width (decision 5), SM10's.
 - `scx-boolean` takes the branch points as touches; the pairs were `General` before, so no
   built case changes, but a face pair through a node now reaches D5's contacts.
+
+## 20. SM4b as built (11-27)
+
+The perf follow-up of SM4 (§15.4, §15.5): cell-level pairing within a small factor of the pin, and
+the near-touching analytic pairs cleared at the cells. Results only equal or tighter; no pair is
+dropped without proof.
+
+### 20.1 What changed
+
+- **Hull ranges for NURBS pieces** (`scx-surface`, `hull.rs`). `Surface::hulls()` takes the
+  Bézier patches of `nurbs_invert` (each homogeneous control coordinate with its error bound),
+  divides each point by its weight in interval arithmetic (the weight's interval must be
+  positive, else no hulls), and keeps the points as boxes. `Hull::range_along(dir)` is the
+  least and greatest interval dot product, outward rounded: certified by the convex-hull
+  property of a rational Bézier patch with positive weights, and as cheap as the control points.
+  `Hull::bbox()` is the box of the points. `Hull::axis()` is the mean of the unit normals of
+  the net's quadrilaterals (floating-point: any direction proves, a good one proves more).
+  `Hulls::containing(uv)` finds the patch by its rectangle. Only a NURBS surface has hulls: an
+  analytic kind's rational image rounds its data (§15.2 item 4), so the kinds keep their own
+  formulas.
+- **Piece cache** (`general/pieces.rs`). A `Piece` now carries two slabs, each an axis, the
+  piece's own certified range along it and the coincidence scaled by an upper bound of the axis's
+  length, computed once when the piece is made (before: twice per pair, per piece). The first
+  axis is the hull's mean normal for a whole patch (else the surface's normal at the middle), the
+  second the surface's normal at the middle where that differs. A pair is dropped when any of
+  up to four slabs separates it; each costs one range of the other piece (a hull range for a
+  whole patch, `range_along` for a half). A whole patch takes its box from the hull; a half
+  made by halving takes `box_over`. `Piece` has private fields now: `Candidates::piece_of_a` and
+  `piece_of_b` make a piece for a uv rectangle.
+- **Tight cos and sin on an arc** (`scx-curve`, `Arcs::cos_sin`; `scx-num`, `Ring`). A range
+  that lies on one quarter arc has monotone `cos` and `sin`, so its result is the hull of the
+  formula at the two ends, widened by `8 eps` (the formula's constants are rounded, which can
+  put its turning point a few ulps inside the arc: a second-order excess). The interval form of
+  the same formula was about 20 percent wide, because `tau` appears in the numerator and the
+  denominator. `Ring` gains two provided methods (`range_ends`, `join_padded`) that only `Ivl`
+  overrides; a ring of points evaluates as before. `range_along` takes its natural range from
+  the interval formula (now tight) in place of the ring-of-values one.
+
+### 20.2 Decisions, for and against
+
+1. **Hull and surface box are not met for a whole patch; the hull stands.**
+   - For: cheaper (no `partials_over_piece` per cell), and the pairs came out no more than the
+     met form's in every case (below).
+   - Against: for a strongly curved patch the Taylor-form enclosure can be tighter than the
+     control hull; a half patch still takes that form.
+2. **Two axes.** One axis (the hull's mean normal) gave 2,168 pairs over the corpus; adding the
+   surface's normal at the middle gave 2,081 (the pin: 2,083) for about a third more time.
+   Against: the extra range per pair; it is cheap on a hull.
+3. **Where a hull is not valid it is not used**: a piece that is part of a patch (halving) or
+   whose rectangle is not exactly a patch's. The rectangle is compared as stored, so a clipped
+   extent falls to the surface's own enclosure, never to a looser hull.
+4. **Tight arcs by a hook on `Ring`, not by a new interval type.** The kinds' `eval` is generic
+   in the ring, so the hook is what reaches it without a second formula per kind.
+   - Against: `scx-num` gets two methods only `Ivl` uses, and the monotone claim rests on the
+     caller passing a range on the arc (checked in `cos_sin`, which falls back outside it).
+5. **The axis hint of halving may now be a hull axis.** The halving rule picks the axis from the
+   best slab; with four candidates the hint differs on some pairs, so a refusing NURBS pair spends
+   a few units more or fewer (two unit NURBS spheres on a diagonal at `2^-4`: 239 against 221
+   units, both refused). No pair is dropped that was not before.
+
+### 20.3 Tests
+
+`apart` tests all pass, with changes of premise in two other places that assumed the loose boxes:
+`scx-boolean`'s `a_block_just_clear_of_a_torus_is_dropped_pair_by_pair` no longer finds the pair with
+the block's `x = 8` face (the torus's box is exact, `|x| <= 6.5`, so stage 1 drops it; five of six
+faces stay), and `scx-surface`'s `nurbs_boxes_hold_the_surface` asserted the analytic torus box within
+5 percent of the NURBS one; now it is within the NURBS one's width, which is up to 12 percent more
+(the quarter arcs' control hull). In `apart`, two changes of premise: `halving_proves_what_the_cells_cannot` now
+uses spheres `2^-4` apart along a diagonal (axis-aligned near-touching spheres are cleared at
+the cells now, so the old premise, that the cells do not prove them, no longer holds), and
+`a_dropped_pair_is_apart_by_sampling...` builds its pieces with `piece_of_a` and `piece_of_b`.
+New: `near_touching_analytic_spheres_are_cleared_at_the_cells` (`2^-10`, `2^-20`, `2^-29`: one
+unit, no halving), `a_tilted_near_touch_is_still_cheap`; in `scx-surface` `hull.rs`
+(`hulls_hold_dense_samples`: every patch of a torus and a sphere as NURBS, 25 by 25 samples,
+four directions, and the box; `a_bilinear_patch_has_its_exact_range`: the range along four
+directions is the corners' to `1e-14`; `analytic_kinds_have_none`; `hulls_are_deterministic`) and
+`enclose.rs` (`a_spheres_extrema_are_exact`: whole sphere `[-r, r]`, octant `[0, r]`, ranges
+along z and x, to `1e-13`; `a_cylinder_quarter_is_exact`); in `scx-curve`
+`a_range_on_an_arc_has_the_tight_cos_and_sin` (holds 40 samples per range, width within `1e-13` of
+the ends' difference, and across a break still holds).
+
+### 20.4 Measured (release, throwaway harness, tolerance 1e-9)
+
+119 corpus cases as exact NURBS patches, pairing at the cell level (`Candidates::new`), the pin's
+pieces and `pieces_apart` for comparison (the same run, so the machine is the same):
+
+| | pin | SM4 | SM4b |
+|---|---|---|---|
+| median per case | 7.3 to 8.2 us | 125 us (17.7 times the pin's) | 8.4 us (1.4 times the pin's) |
+| total, 119 cases | 10.9 ms | 190.9 ms | 8.5 ms |
+| surviving pairs | 2,083 | 2,736 | 2,081 |
+
+Run to run on a shared machine the medians move by 20 percent (the pin's own between 7.2 and 10.9 us);
+the ratio and the totals are what hold. SM4b never keeps a pair SM4 dropped, and keeps fewer in 22
+cases; it keeps more than the pin's uncertified control points in 2 (`c9n_many_spans_plane_sphere`,
+582 against 580; `y23_t3_ex2_torus_ellipsoid`, 72 against 68). The results of the full `intersect`
+(refusal or proof) are unchanged in all 119. With one axis only (the hull's mean normal) the totals
+were 6.9 ms, median 8.7 us, and 2,168 pairs.
+
+Two unit spheres `2^-10` and `2^-20` apart (analytic kinds, `intersect` end to end):
+
+| | SM4 | SM4b |
+|---|---|---|
+| `2^-10` | 4,305 units, 63 ms | 1 unit, 0.14 ms |
+| `2^-20` | 9,089 units, 134 ms | 1 unit, 0.14 ms |
+
+The same on a diagonal (boxes overlap at the nearest points) stays hard: `2^-4` 1,025 units
+before and 429 after (both proved), `2^-6` refused (the `FRONT` policy) before and 813 units proved after,
+`2^-10` refused by both. Halving of NURBS pairs still uses `partials_over_piece`; its cost is not changed here.
+
+### 20.5 Open
+
+- Hulls for the halves of a patch (de Casteljau of the homogeneous interval points) would make the
+  halving rounds as cheap as the cells.
+- Exact extrema over a uv box for a kind in a general frame (the sphere in a tilted frame keeps the
+  interval form's dependency between the axes' terms).
+- SM5's loop-free stop replaces `FRONT`; the diagonal near-touch is the case to try it on.
+

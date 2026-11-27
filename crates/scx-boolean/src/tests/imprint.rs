@@ -16,10 +16,10 @@ use scx_surface::Surface;
 
 use super::face_face::{X, Z, ball, cyl};
 use super::{cuboid, run, unit};
+use crate::BooleanError;
 use crate::faceface::face_face;
 use crate::geom::{Operands, Side};
 use crate::imprint::{Imprint, imprint};
-use crate::{BooleanError, BooleanUnsupported};
 
 fn imp(a: &Brep, b: &Brep) -> Result<(Imprint, u64), BooleanError> {
     let doc = Document::default();
@@ -301,19 +301,17 @@ fn a_plane_through_a_spheres_centre_cuts_it_into_three_lunes() {
 }
 
 #[test]
-fn two_spheres_need_a_fitted_pcurve() {
-    // The circle x = 1/2 is no line in either sphere's (u, v): step 5 fits it.
+fn two_spheres_cut_each_other_along_a_circle_through_the_chart() {
+    // The circle x = 1/2 is no line in either sphere's (u, v): its pcurves map it through
+    // each sphere's chart inverse (OnChart). It crosses a's seam meridian (at +x) twice, so
+    // a's cap is two pieces and the rest one; b's seam is on its far side, so b's cap and
+    // rest are one piece each.
     let doc = Document::default();
     let (a, b) = (ball([0.0; 3], 1.0, doc), ball([1.0, 0.0, 0.0], 1.0, doc));
-    let e = imp(&a, &b).unwrap_err();
-    assert!(
-        matches!(
-            e,
-            BooleanError::Unsupported(BooleanUnsupported::Pcurve { .. })
-        ),
-        "{e:?}"
-    );
-    assert_eq!(e.name(), "no_exact_pcurve");
+    let (m, _) = imp(&a, &b).unwrap();
+    assert_eq!(counts(&m, Side::A), vec![3]);
+    assert_eq!(counts(&m, Side::B), vec![2]);
+    check(&m, &a, &b, [3, 2]);
 }
 
 #[test]

@@ -856,8 +856,14 @@ impl<'a> Engine<'a, '_> {
         if on_u || on_v {
             // Over a line where the surface may not be smooth: the integrand's range,
             // hulled over each patch the cell meets, times the cell's area.
+            // Along `t` when `u` is on the line, or when `v` is and its range over the cell
+            // comes more from the curve's `v` moving along `t` than from `s`: splitting `s`
+            // alone never takes a cell clear of a line the trim itself crosses.
+            let dv = vb - va;
+            let from_t = s0.abs().max(s1.abs()) * (dv.hi - dv.lo);
+            let from_s = (s1 - s0) * dv.mag();
             cell.rem = 0.0;
-            cell.split_t = on_u;
+            cell.split_t = on_u || (on_v && from_t >= from_s);
             let Some(near) = patches(surface, u, vr) else {
                 cell.value = Ivl::whole();
                 return Ok(());

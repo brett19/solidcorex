@@ -538,6 +538,8 @@ fn shifted(pc: &Curve2, m: [f64; 2], periods: [Option<f64>; 2]) -> Option<Curve2
             .ok()
             .map(Curve2::AngleWave)
         }
+        // The chart's periods are the surface's.
+        Curve2::OnChart(o) => o.shifted(m).ok().map(Curve2::from),
         _ => None,
     }
 }
