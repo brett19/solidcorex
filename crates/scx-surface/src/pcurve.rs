@@ -16,7 +16,10 @@
 //! | sphere's great circle through the poles (a meridian), on one side of them | [`AngleLine2`] in `v`, `u` fixed |
 //! | torus's tube circle (a meridian) | [`AngleLine2`] in `v`, `u` fixed |
 //! | meridian over an interval that crosses a pole | [`PcurveError::CrossesPole`]: split it there |
-//! | anything else, or any curve on a NURBS surface | [`PcurveError::NoClosedForm`] |
+//! | any other curve on a cylinder, cone, sphere or torus (a tilted circle on a sphere, a cone's conic section) | [`OnChart`]: the curve through the surface's chart inverse, at its own parameter (73 SM1) |
+//! | such a curve through a pole or a cone's apex inside the interval | [`PcurveError::CrossesPole`]: split it there |
+//! | such a curve meeting the axis at an end, or whose angle spans a band half a period wide or more about the straight line between its ends' | [`PcurveError::NoClosedForm`] |
+//! | any curve on a NURBS surface | [`PcurveError::NoClosedForm`] |
 //!
 //! A circle is tried as a parallel or a meridian when its axis and centre are within
 //! `1e-6` (relative) of that configuration, an ellipse on a cylinder as a section when its
@@ -48,8 +51,8 @@ use core::f64::consts::{FRAC_PI_2, PI, TAU};
 
 use scx_curve::arcs::Arcs;
 use scx_curve::{
-    AngleAxis, AngleLine2, AngleWave2, Circle, Circle2, Curve, Curve2, Ellipse, Ellipse2,
-    Hyperbola2, Line2, Parabola2,
+    AngleAxis, AngleLine2, AngleWave2, Chart, Circle, Circle2, Curve, Curve2, Ellipse, Ellipse2,
+    Hyperbola2, Line2, OnChart, Parabola2,
 };
 use scx_num::domain::ParamDomain;
 use scx_num::error::ErrorKind;
@@ -71,6 +74,15 @@ const SAMPLES: usize = 9;
 /// axis and centre must be to a parallel's or a meridian's for that closed form to be
 /// tried. It only picks the candidate; the lifting check at the tolerance decides.
 const NEAR: f64 = 1e-6;
+
+/// The samples [`on_chart`] unwraps the angle across, ends included.
+const DENSE: usize = 64;
+
+/// How many times [`on_chart`] may halve a step that turns too fast (near the axis).
+const MAX_HALVINGS: usize = 40;
+
+/// Golden-section steps for the nearest approach to the axis: `0.618^120` of the bracket.
+const GOLDEN_STEPS: usize = 120;
 
 /// Slack, in radians, for a meridian's end at a pole: the end's latitude is a rounded
 /// `atan2`, so a half meridian from pole to pole may reach a few ulps past `pi/2`.
@@ -180,8 +192,9 @@ pub enum PcurveError {
         /// The distance between the curve and the lifted closed form, in mm.
         miss: f64,
     },
-    /// A sphere's meridian passes a pole at `at`, inside the interval: there `u` jumps by
-    /// half a turn, so no one pcurve covers the interval. The caller splits the edge at `at`.
+    /// The curve passes the surface's axis at `at`, inside the interval (a sphere's pole,
+    /// a cone's apex: a meridian, or any curve through the chart): there `u` jumps, so no one
+    /// pcurve covers the interval. The caller splits the edge at `at`.
     CrossesPole {
         /// The curve's parameter at the pole.
         at: f64,
@@ -305,7 +318,10 @@ pub fn pcurve_of(
             return Err(worst_miss(surface, &ts, &points, i, t, miss));
         }
     }
-    let pc = closed_form(curve, surface, &points, over)?.ok_or(no_form)?;
+    let pc = match closed_form(curve, surface, &points, over)? {
+        Some(pc) => pc,
+        None => on_chart(curve, surface, over, tol)?.ok_or(no_form)?,
+    };
     for (&t, &p) in ts.iter().zip(&points) {
         let miss = (surface.point(pc.point(t)) - p).length();
         if miss.is_nan() || miss > tol {
@@ -460,6 +476,196 @@ fn closed_form(
         }
         Surface::Nurbs(_) => None,
     })
+}
+
+/// The curve through the surface's chart ([`OnChart`]), for a curve on an analytic surface
+/// with no other closed form: `Ok(None)` for a NURBS surface, and where the curve's angle
+/// spans a band half a period wide or more about the straight line between its ends' (the
+/// branch rule `OnChart` lifts by, nearest to the band's centre line, would be unsafe there);
+/// [`PcurveError::CrossesPole`] where the curve meets the axis (a pole, an apex) inside the
+/// interval; [`PcurveError::NoClosedForm`] (as `None`) where it meets it at an end, where
+/// the angle has no value.
+///
+/// The angle is unwrapped across `DENSE` samples, each step halved until it turns less than
+/// an eighth of the period; the axis is found from the samples' distances to it, each local
+/// least one near enough to reach the axis refined by golden section.
+fn on_chart(
+    curve: &Curve,
+    surface: &Surface,
+    over: Extent1d,
+    tol: f64,
+) -> Result<Option<Curve2>, PcurveError> {
+    let Some(chart) = surface.chart() else {
+        return Ok(None);
+    };
+    let axes = Axes::new(chart.frame(), chart.sense());
+    let off_axis = |t: f64| {
+        let (x, y, _) = axes.local(curve.point(t));
+        fmath::hypot(x, y)
+    };
+    let (lo, hi) = (over.min(), over.max());
+    let ts: [f64; DENSE] = core::array::from_fn(|i| match i {
+        0 => lo,
+        i if i == DENSE - 1 => hi,
+        i => lo + (hi - lo) * (i as f64 / (DENSE - 1) as f64),
+    });
+    let points = ts.map(|t| curve.point(t));
+    if !matches!(surface, Surface::Plane(_) | Surface::Cylinder(_)) {
+        if off_axis(lo) <= tol || off_axis(hi) <= tol {
+            return Ok(None);
+        }
+        if let Some(at) = axis_crossing(&ts, &points, &axes, off_axis, tol) {
+            return Err(PcurveError::CrossesPole { at });
+        }
+    }
+    let periods = chart.periods();
+    let windows = [surface.domain().u, surface.domain().v];
+    let first = chart.inverse(points[0]);
+    let mut start = [first.x, first.y];
+    for ((s, w), p) in start.iter_mut().zip(windows).zip(periods) {
+        if p.is_some() {
+            *s = in_window(*s, w);
+        }
+    }
+    // Every coordinate (unwrapped where periodic) at each parameter the walk visits.
+    let mut walk: Vec<(f64, [f64; 2])> = vec![(lo, start)];
+    for (&t, &p) in ts.iter().zip(&points).skip(1) {
+        let (t0, at0) = walk.last().copied().unwrap_or((lo, start));
+        step(&chart, curve, periods, (t0, at0), (t, p), 0, &mut walk);
+    }
+    let end = walk.last().map_or(start, |w| w.1);
+    // The reference line: the chord between the lifted ends, moved to the middle of the
+    // band the curve's lifted values span about it. The nearest lift is the curve's own
+    // while the band's half-width is under half a period; a quarter keeps a margin.
+    let mut reference = [start, end];
+    for (k, p) in periods.iter().enumerate() {
+        let Some(p) = *p else { continue };
+        let (a, b) = (coord(start, k), coord(end, k));
+        let (low, high) = walk
+            .iter()
+            .fold((0.0_f64, 0.0_f64), |(low, high), &(t, at)| {
+                let d = coord(at, k) - (a + (b - a) * ((t - lo) / (hi - lo)));
+                (low.min(d), high.max(d))
+            });
+        if high - low >= 0.5 * p {
+            return Ok(None);
+        }
+        let mid = 0.5 * (low + high);
+        for r in &mut reference {
+            if let Some(c) = r.get_mut(k) {
+                *c += mid;
+            }
+        }
+    }
+    let [r0, r1] = reference.map(|r| Point2::new(r[0], r[1]));
+    Ok(OnChart::new(curve.clone(), chart, over, [r0, r1])
+        .ok()
+        .map(Curve2::from))
+}
+
+fn coord(at: [f64; 2], k: usize) -> f64 {
+    at.get(k).copied().unwrap_or(f64::NAN)
+}
+
+/// Walk from `(t0, at0)` to the parameter `t1` (its point `p1`): push `t1`'s coordinates,
+/// each periodic one the period's copy nearest the previous, halving the step (to a depth of
+/// `MAX_HALVINGS`) while a periodic one turns by an eighth of its period or more.
+fn step(
+    chart: &Chart,
+    curve: &Curve,
+    periods: [Option<f64>; 2],
+    (t0, at0): (f64, [f64; 2]),
+    (t1, p1): (f64, Point3),
+    depth: usize,
+    walk: &mut Vec<(f64, [f64; 2])>,
+) {
+    let raw = chart.inverse(p1);
+    let mut at1 = [raw.x, raw.y];
+    let mut fast = false;
+    for ((a1, &a0), p) in at1.iter_mut().zip(&at0).zip(periods) {
+        let Some(p) = p else { continue };
+        let d = *a1 - a0;
+        let d = d - p * (d / p).round();
+        *a1 = a0 + d;
+        fast |= d.abs() >= 0.125 * p;
+    }
+    let mid = 0.5 * (t0 + t1);
+    if fast && depth < MAX_HALVINGS && t0 < mid && mid < t1 {
+        step(
+            chart,
+            curve,
+            periods,
+            (t0, at0),
+            (mid, curve.point(mid)),
+            depth + 1,
+            walk,
+        );
+        let m = walk.last().copied().unwrap_or((t0, at0));
+        step(chart, curve, periods, m, (t1, p1), depth + 1, walk);
+        return;
+    }
+    walk.push((t1, at1));
+}
+
+/// The parameter inside the interval where the curve meets the surface's axis, within
+/// `tol`: each sample nearer the axis than both its neighbours and than the chord between
+/// them (so the curve might reach the axis between them) is refined by golden section.
+fn axis_crossing(
+    ts: &[f64; DENSE],
+    points: &[Point3; DENSE],
+    axes: &Axes,
+    off_axis: impl Fn(f64) -> f64,
+    tol: f64,
+) -> Option<f64> {
+    let rho = points.map(|p| {
+        let (x, y, _) = axes.local(p);
+        fmath::hypot(x, y)
+    });
+    for i in 1..DENSE - 1 {
+        let (Some(&[r0, r1, r2]), Some(&[t0, _, t2]), Some(&[p0, _, p2])) = (
+            rho.get(i - 1..=i + 1)
+                .and_then(|s| <&[f64; 3]>::try_from(s).ok()),
+            ts.get(i - 1..=i + 1)
+                .and_then(|s| <&[f64; 3]>::try_from(s).ok()),
+            points
+                .get(i - 1..=i + 1)
+                .and_then(|s| <&[Point3; 3]>::try_from(s).ok()),
+        ) else {
+            continue;
+        };
+        if r1 > r0 || r1 > r2 || r1 > (p2 - p0).length() {
+            continue;
+        }
+        let (at, r) = golden_min(&off_axis, t0, t2);
+        if r <= tol {
+            return Some(at);
+        }
+    }
+    None
+}
+
+/// The least of `f` over `[a, b]` by golden section, `(t, f(t))`, for `f` with one local
+/// least there.
+fn golden_min(f: &impl Fn(f64) -> f64, mut a: f64, mut b: f64) -> (f64, f64) {
+    const G: f64 = 0.618_033_988_749_894_8;
+    let mut c = b - G * (b - a);
+    let mut d = a + G * (b - a);
+    let (mut fc, mut fd) = (f(c), f(d));
+    for _ in 0..GOLDEN_STEPS {
+        if !(a < c && c < d && d < b) {
+            break;
+        }
+        if fc <= fd {
+            (b, d, fd) = (d, c, fc);
+            c = b - G * (b - a);
+            fc = f(c);
+        } else {
+            (a, c, fc) = (c, d, fd);
+            d = a + G * (b - a);
+            fd = f(d);
+        }
+    }
+    if fc <= fd { (c, fc) } else { (d, fd) }
 }
 
 /// The circle's angle in the plane of the orthonormal `e1` and `e2`: `(alpha, s)` with the
@@ -785,6 +991,7 @@ mod tests {
     use scx_num::hash::Rng;
     use scx_num::math::PI;
     use scx_num::units::Length;
+    use scx_nurbs::Approach;
     use scx_nurbs::KnotVector;
     use scx_testkit::sample;
 
@@ -975,8 +1182,9 @@ mod tests {
         let e = pcurve_of(&Curve::Line(skew), &cyl, span(-1.0, 1.0), res(1e-6)).unwrap_err();
         assert_eq!(e.name(), "pcurve_inexact", "{e}");
         assert_eq!(e.kind(), ErrorKind::Unsupported);
-        // No closed form here: a plane's section of a cone (an ellipse), a small circle of a
-        // sphere tilted off its axis, a curve on a NURBS surface.
+        // Through the chart (no other closed form here): a plane's section of a cone (an
+        // ellipse), one of its hyperbolas, a small circle of a sphere tilted off its axis.
+        // A curve on a NURBS surface has none.
         let y = *f.y();
         let (r, m) = (1.0, 0.5);
         let cone = Cone::new(f, mm(r), 0.4, Sense::Forward).unwrap();
@@ -995,41 +1203,35 @@ mod tests {
             span(0.0, 6.0),
             tol,
         );
-        assert_eq!(
-            e.unwrap_err(),
-            PcurveError::NoClosedForm {
-                curve: CurveKind::Ellipse,
-                surface: SurfaceKind::Cone
-            }
-        );
+        assert!(matches!(e, Ok(Curve2::OnChart(_))), "{e:?}");
         // A hyperbola on a cone (its section by a plane along the axis), named as one.
         let k = fmath::tan(0.5);
         let cone = Surface::Cone(Cone::new(f, mm(0.0), 0.5, Sense::Forward).unwrap());
         let fh = Frame::new(o + y, y, z).unwrap();
         let h = Hyperbola::new(fh, mm(1.0 / k), mm(1.0), Sense::Forward).unwrap();
-        let e = pcurve_of(&Curve::Hyperbola(h), &cone, span(-1.0, 1.0), res(1e-9)).unwrap_err();
-        assert_eq!(
-            e,
-            PcurveError::NoClosedForm {
-                curve: CurveKind::Hyperbola,
-                surface: SurfaceKind::Cone
-            }
-        );
-        assert!(e.to_string().contains("hyperbola"), "{e}");
+        let e = pcurve_of(&Curve::Hyperbola(h), &cone, span(-1.0, 1.0), res(1e-9));
+        assert!(matches!(e, Ok(Curve2::OnChart(_))), "{e:?}");
         let sphere = Surface::Sphere(Sphere::new(f, mm(1.0), Sense::Forward).unwrap());
         let n = (z + x).normalized().map(Vec3::from).unwrap();
         let small = Frame::new(o + n * 0.6, n, y).unwrap();
         let small = Curve::Circle(Circle::new(small, mm(0.8), Sense::Forward).unwrap());
-        let e = pcurve_of(&small, &sphere, span(0.0, 1.0), tol).unwrap_err();
-        assert_eq!(e.name(), "pcurve_no_closed_form", "{e}");
-        assert_eq!(e.kind(), ErrorKind::Unsupported);
+        let e = pcurve_of(&small, &sphere, span(0.0, 1.0), tol);
+        assert!(matches!(e, Ok(Curve2::OnChart(_))), "{e:?}");
         let nurbs = Surface::Nurbs(Arc::new(
             Plane::new(f)
                 .to_nurbs(&scx_num::extent2d::Extent2d::from_bounds(-2.0, -2.0, 2.0, 2.0).unwrap())
                 .unwrap(),
         ));
         let e = pcurve_of(&on, &nurbs, span(0.0, 1.0), tol).unwrap_err();
-        assert_eq!(e.name(), "pcurve_no_closed_form");
+        assert_eq!(
+            e,
+            PcurveError::NoClosedForm {
+                curve: CurveKind::Line,
+                surface: SurfaceKind::Nurbs
+            }
+        );
+        assert!(e.to_string().contains("NURBS surface"), "{e}");
+        assert_eq!(e.kind(), ErrorKind::Unsupported);
         // A line on a sphere or torus leaves it; a line across a cylinder too.
         let torus = Surface::Torus(Torus::new(f, mm(3.0), mm(1.0), Sense::Forward).unwrap());
         for s in [&sphere, &torus, &cyl] {
@@ -1292,5 +1494,90 @@ mod tests {
         assert_eq!(in_window(-1e-17, w), 0.0);
         assert!((0.0..1.0).contains(&in_window(-1e-300, w)));
         assert_eq!(in_window(3.0, ParamDomain::Unbounded), 3.0);
+    }
+
+    /// Curves with no other closed form go through the chart: small circles of a sphere at
+    /// many tilts, senses and spans (long ones cross the seam). Each lifts back onto the curve at fine samples, starts in the base window,
+    /// and its derivative is the chain rule's.
+    #[test]
+    fn other_curves_go_through_the_chart() {
+        let mut rng = Rng::new(0x9c_00c1);
+        for _ in 0..40 {
+            let f = frame(&mut rng, 1.0);
+            let (o, x, y, z) = (f.origin(), *f.x(), *f.y(), *f.z());
+            let r = 0.5 + 2.0 * rng.next_f64();
+            let sphere = Surface::Sphere(Sphere::new(f, mm(r), Sense::Forward).unwrap());
+            // The circle's axis, tilted 0.3 to 1.2 off the sphere's; its centre's height
+            // keeps it clear of both poles (the pole is `tilt` from the axis, the circle's
+            // angular radius is acos(h)).
+            let tilt = 0.3 + 0.9 * rng.next_f64();
+            let n = (z * fmath::cos(tilt) + x * fmath::sin(tilt))
+                .normalized()
+                .unwrap();
+            let n = Vec3::from(n);
+            let h = fmath::cos(tilt + 0.2 + 0.3 * rng.next_f64());
+            let frame = Frame::new(o + n * (r * h), n, y).unwrap();
+            let rho = r * (1.0 - h * h).sqrt();
+            let sense = if rng.next_u64() & 1 == 0 {
+                Sense::Forward
+            } else {
+                Sense::Reversed
+            };
+            let c = Curve::Circle(Circle::new(frame, mm(rho), sense).unwrap());
+            let lo = 6.0 * rng.next_f64() - 3.0;
+            let over = span(lo, lo + 0.5 + 5.5 * rng.next_f64());
+            let pc = exact(&c, &sphere, over, r);
+            let Curve2::OnChart(o) = &pc else {
+                panic!("{pc:?}");
+            };
+            let u0 = pc.point(over.min()).x;
+            assert!((0.0..1.0).contains(&u0), "{u0} {:?}", o.reference());
+            for i in 0..=20 {
+                let t = over.min() + (over.max() - over.min()) * (f64::from(i) / 20.0);
+                let j = pc.jet::<1>(t, Approach::Above);
+                let sj = sphere.jet::<1>(j.point, [Approach::Above; 2]);
+                let [d] = j.d;
+                let chain = sj.get(1, 0).unwrap() * d.x + sj.get(0, 1).unwrap() * d.y;
+                let [want] = c.jet::<1>(t, Approach::Above).d;
+                assert!(
+                    (chain - want).length() <= 1e-11 * r,
+                    "{t}: {chain:?} {want:?}"
+                );
+            }
+        }
+    }
+
+    /// A small circle through a sphere's pole: across it, the edge is split there; ending
+    /// at it, `u` has no value at the end; the same circle clear of the pole goes through.
+    #[test]
+    fn a_curve_through_a_pole_is_split_there() {
+        let f = Frame::WORLD;
+        let (o, x, z) = (f.origin(), *f.x(), *f.z());
+        let sphere = Surface::Sphere(Sphere::new(f, mm(1.0), Sense::Forward).unwrap());
+        // Axis `alpha` off z, angular radius `alpha`: the circle meets the north pole at
+        // `t = 0`, where its radial direction `w` points at the pole.
+        let alpha: f64 = 0.7;
+        let n = Vec3::from(
+            (z * fmath::cos(alpha) + x * fmath::sin(alpha))
+                .normalized()
+                .unwrap(),
+        );
+        let w = Vec3::from(
+            (z * fmath::sin(alpha) - x * fmath::cos(alpha))
+                .normalized()
+                .unwrap(),
+        );
+        let frame = Frame::new(o + n * fmath::cos(alpha), n, w).unwrap();
+        let c = Curve::Circle(Circle::new(frame, mm(fmath::sin(alpha)), Sense::Forward).unwrap());
+        assert!((c.point(0.0) - (o + z)).length() < 1e-15);
+        let e = pcurve_of(&c, &sphere, span(-1.0, 1.5), res(TOL)).unwrap_err();
+        let PcurveError::CrossesPole { at } = e else {
+            panic!("{e:?}");
+        };
+        assert!(at.abs() < 1e-7, "{at}");
+        let e = pcurve_of(&c, &sphere, span(0.0, 1.5), res(TOL)).unwrap_err();
+        assert_eq!(e.name(), "pcurve_no_closed_form", "{e}");
+        let pc = exact(&c, &sphere, span(0.5, 5.5), 1.0);
+        assert!(matches!(pc, Curve2::OnChart(_)), "{pc:?}");
     }
 }

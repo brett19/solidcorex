@@ -1,10 +1,10 @@
 // Written for solidcorex. Apache-2.0.
-//! Sine and cosine, their hyperbolic twins and the square over a ring: the one evaluator of
+//! Sine and cosine, their hyperbolic twins, the square and the square root over a ring: the one evaluator of
 //! an analytic curve or surface runs in `f64` for values and in [`Ivl`] for enclosures
 //! (research 63 §3.2, "the scalar-generic form").
 //!
 //! - `f64`: [`crate::fmath::sin_cos`] and [`crate::fmath::sinh_cosh`], correctly rounded;
-//!   the square `x * x`.
+//!   the square `x * x`; the root `f64::sqrt` (IEEE, correctly rounded).
 //! - [`Ivl`]: an enclosure of `{sin x, cos x : x in the interval}` for any interval. The
 //!   ring's `sin_cos_s` ([`crate::ring::TayScalar`]) is the fork's, valid on `[0, pi/2]`
 //!   only; this one holds everywhere. `sinh` is increasing, so its enclosure is its two
@@ -136,6 +136,12 @@ pub trait Trig: Ranged {
 
     /// `(sinh x, cosh x)`; for an interval, an enclosure of both over the interval.
     fn sinh_cosh(self) -> (Self, Self);
+
+    /// The square root: correctly rounded for an `f64` (NaN below zero); for an interval,
+    /// an enclosure of the roots of its non-negative part, the whole line if it has none
+    /// ([`Ivl::sqrt`]).
+    #[must_use]
+    fn sqrt(self) -> Self;
 }
 
 impl Trig for f64 {
@@ -146,6 +152,10 @@ impl Trig for f64 {
     #[inline]
     fn sinh_cosh(self) -> (Self, Self) {
         crate::fmath::sinh_cosh(self)
+    }
+    #[inline]
+    fn sqrt(self) -> Self {
+        f64::sqrt(self)
     }
 }
 
@@ -211,6 +221,10 @@ impl Trig for Ivl {
             wide(1.0, cmax(cl, ch))
         };
         (s, Ivl::new(c.lo.max(1.0), c.hi))
+    }
+
+    fn sqrt(self) -> Self {
+        Ivl::sqrt(self)
     }
 }
 
@@ -352,6 +366,16 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn the_root_is_the_kind_s_own() {
+        assert_eq!(Trig::sqrt(2.0f64).to_bits(), 2.0f64.sqrt().to_bits());
+        assert!(Trig::sqrt(-1.0f64).is_nan());
+        let i = Ivl::new(2.0, 9.0);
+        assert_eq!(Trig::sqrt(i), i.sqrt());
+        assert!(holds(Trig::sqrt(i), 2.0f64.sqrt()) && holds(Trig::sqrt(i), 3.0));
+        assert_eq!(Trig::sqrt(Ivl::new(-2.0, -1.0)), Ivl::whole());
     }
 
     #[test]

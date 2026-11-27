@@ -30,10 +30,12 @@ use std::sync::Arc;
 
 use scx_curve::arcs::Arcs;
 use scx_curve::{
-    AngleAxis, AngleLine2, AngleWave2, Circle, Circle2, Curve, Curve2, CurveError, Ellipse,
-    Ellipse2, Hyperbola, Hyperbola2, Line, Line2, Parabola, Parabola2,
+    AngleAxis, AngleLine2, AngleWave2, Chart, ChartKind, Circle, Circle2, Curve, Curve2,
+    CurveError, Ellipse, Ellipse2, Hyperbola, Hyperbola2, Line, Line2, OnChart, Parabola,
+    Parabola2,
 };
 use scx_num::Length;
+use scx_num::extent1d::Extent1d;
 use scx_num::frame::{Frame, Frame2, Sense};
 use scx_num::vector2d::{Point2, Vec2};
 use scx_num::vector3d::{Point3, Vec3};
@@ -90,6 +92,18 @@ tags! {
         Nurbs = 5, "nurbs";
         AngleLine = 6, "angle_line";
         AngleWave = 7, "angle_wave";
+        OnChart = 8, "on_chart";
+    }
+}
+
+tags! {
+    /// A [`Chart`]'s kind.
+    pub(crate) enum ChartTag: "chart" {
+        Plane = 0, "plane";
+        Cylinder = 1, "cylinder";
+        Cone = 2, "cone";
+        Sphere = 3, "sphere";
+        Torus = 4, "torus";
     }
 }
 
@@ -637,6 +651,14 @@ impl Record for Curve2 {
                 let (c, s) = a.amplitudes();
                 put_all(w, &[a.mean(), c, s])
             }
+            Self::OnChart(o) => {
+                w.tag(Curve2Kind::OnChart);
+                w.line();
+                o.curve().put(w)?;
+                o.chart().put(w)?;
+                let [a, b] = o.reference();
+                put_all(w, &[o.over().min(), o.over().max(), a.x, a.y, b.x, b.y])
+            }
             _ => Err(no_record(w, Curve2Kind::RECORD)),
         }
     }
@@ -706,7 +728,61 @@ impl Record for Curve2 {
                     .map(Self::AngleWave)
                     .map_err(curve_at(at))
             }
+            Curve2Kind::OnChart => {
+                r.line();
+                let curve = Curve::take(r)?;
+                let chart = Chart::take(r)?;
+                let at_over = r.at();
+                let [min, max, ax, ay, bx, by] = take_n::<6, _>(r)?;
+                let over = Extent1d::new(min, max)
+                    .ok_or_else(|| ReadError::new(at_over, ReadCause::BadInterval))?;
+                let reference = [Point2::new(ax, ay), Point2::new(bx, by)];
+                OnChart::new(curve, chart, over, reference)
+                    .map(Self::from)
+                    .map_err(curve_at(at))
+            }
         }
+    }
+}
+
+/// The kind's tag, the frame, the sense, then the kind's size (a cylinder's radius, a
+/// torus's major radius; the others have none).
+impl Record for Chart {
+    fn put<S: Sink>(&self, w: &mut S) -> Result<(), WriteError> {
+        let (tag, size) = match self.kind() {
+            ChartKind::Plane => (ChartTag::Plane, None),
+            ChartKind::Cylinder { radius } => (ChartTag::Cylinder, Some(radius)),
+            ChartKind::Cone => (ChartTag::Cone, None),
+            ChartKind::Sphere => (ChartTag::Sphere, None),
+            ChartKind::Torus { major } => (ChartTag::Torus, Some(major)),
+            _ => return Err(no_record(w, ChartTag::RECORD)),
+        };
+        w.tag(tag);
+        self.frame().put(w)?;
+        put_sense(w, self.sense());
+        match size {
+            Some(l) => put_length(w, l),
+            None => Ok(()),
+        }
+    }
+
+    fn take<R: Source>(r: &mut R) -> Result<Self, ReadError> {
+        let tag: ChartTag = r.tag()?;
+        let at = r.at();
+        let frame = Frame::take(r)?;
+        let sense = take_sense(r)?;
+        let kind = match tag {
+            ChartTag::Plane => ChartKind::Plane,
+            ChartTag::Cylinder => ChartKind::Cylinder {
+                radius: take_length(r)?,
+            },
+            ChartTag::Cone => ChartKind::Cone,
+            ChartTag::Sphere => ChartKind::Sphere,
+            ChartTag::Torus => ChartKind::Torus {
+                major: take_length(r)?,
+            },
+        };
+        Chart::new(frame, sense, kind).map_err(curve_at(at))
     }
 }
 

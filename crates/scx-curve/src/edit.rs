@@ -215,6 +215,7 @@ impl Curve2 {
             Self::Nurbs(n) => restrict_nurbs(n, e).map(Self::Nurbs),
             Self::AngleLine(a) => restrict_angle(self, a.domain(), e),
             Self::AngleWave(a) => restrict_angle(self, a.domain(), e),
+            Self::OnChart(a) => Ok(Self::OnChart(Arc::new(a.restrict(e)?))),
         }
     }
 
@@ -224,6 +225,7 @@ impl Curve2 {
         match self {
             Self::AngleLine(a) => Self::AngleLine(a.reversed()),
             Self::AngleWave(a) => Self::AngleWave(a.reversed()),
+            Self::OnChart(a) => Self::OnChart(Arc::new(a.reversed())),
             Self::Line(l) => Self::Line(l.reversed()),
             Self::Circle(c) => Self::Circle(c.reversed()),
             Self::Ellipse(e) => Self::Ellipse(e.reversed()),
