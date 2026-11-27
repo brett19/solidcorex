@@ -14,15 +14,16 @@
 )]
 
 use scx_num::hash::Rng;
-use scx_testkit::analytic::{Cone, Cylinder, Frame, Line, Plane, Sphere, Torus, V3};
-use scx_testkit::curve_surface::{self as cs, step_uv_of, surface_point, CurveKind, SurfaceKind};
-use scx_testkit::dd::{self, Dd};
-use scx_testkit::gen;
-use scx_testkit::poly::to_dd;
-use scx_testkit::ssi::{
-    bernstein, cylinder_section, intersect, Contact, Curve, Error, Piece, Section, ARCS,
-};
 use scx_testkit::Rat;
+use scx_testkit::analytic::{Cone, Cylinder, Frame, Line, Plane, Sphere, Torus, V3};
+use scx_testkit::bound::rat_to_dd as to_dd;
+use scx_testkit::curve_surface::{self as cs, CurveKind, SurfaceKind, surface_point};
+use scx_testkit::dd::{self, Dd};
+use scx_testkit::quadric::Param;
+use scx_testkit::sample;
+use scx_testkit::ssi::{
+    ARCS, Contact, Curve, Error, Piece, Section, bernstein, cylinder_section, intersect,
+};
 
 fn norm(a: V3) -> f64 {
     dd::dot(&a, &a).sqrt().to_f64()
@@ -128,7 +129,8 @@ fn check(s1: &SurfaceKind, s2: &SurfaceKind, pieces: &[Piece], tol: f64) {
                     dist(on, s.point)
                 );
                 if let Some(pin) = s.pin_uv[i] {
-                    let back = surface_point(surf, step_uv_of(surf, pin));
+                    let back =
+                        surface_point(surf, cs::implicit(surf).unwrap().pin_layout().to_step(pin));
                     assert!(dist(back, s.point) < 1e3 * tol, "{surf:?} {s:?}");
                 }
             }
@@ -355,6 +357,28 @@ fn coaxial_quadrics_meet_in_circles_at_the_meridians_crossings() {
     );
 }
 
+/// A coaxial pair with a cone holds for every slope in the band: the same cone moved along
+/// its axis (one slope, so parallel generators: one circle, not a quadratic's two), and a
+/// cone through a torus's tube (its quartic, proved through its resultant in `k`).
+#[test]
+fn coaxial_cones_are_proved_over_the_slope_band() {
+    let moved = SurfaceKind::Cone(Cone {
+        frame: at([0.0, 0.0, 1.0]),
+        radius: 1.0,
+        semi_angle: 0.5,
+    });
+    let p = pieces(&cone(1.0, 0.5), &moved);
+    assert_eq!(kinds(&p), [("circle", X)]);
+    // rho = k h against (rho - 2)^2 + h^2 = 1: the line's distance from the tube's centre
+    // is 2 cos a, under 1 at a = 1.2, so each nappe crosses the tube twice.
+    let p = pieces(&cone(0.0, 1.2), &torus(0.0, 2.0, 1.0));
+    assert_eq!(kinds(&p), [("circle", X); 4]);
+    assert_eq!(
+        intersect(&cone(0.0, 0.7), &torus(0.0, 2.0, 1.0)).unwrap(),
+        Section::Empty
+    );
+}
+
 #[test]
 fn tori_meet_planes_quadrics_and_tori_across_their_axis() {
     let t = torus(0.0, 2.0, 1.0);
@@ -431,7 +455,7 @@ fn pairs_without_a_closed_form_and_bad_data_are_typed_causes() {
 fn t2_meets_at(rng: &mut Rng, s: &SurfaceKind, p: V3) {
     let line = CurveKind::Line(Line {
         origin: dd::round(p),
-        direction: gen::direction(rng),
+        direction: sample::direction(rng),
     });
     let cs::Meeting::Points(hits) = cs::intersect(&line, s).unwrap() else {
         return;
@@ -448,7 +472,7 @@ fn t2_meets_at(rng: &mut Rng, s: &SurfaceKind, p: V3) {
 fn random_plane_sections_are_on_both_surfaces_and_agree_with_t2() {
     let mut rng = Rng::new(0x7501);
     for i in 0..60 {
-        let f = gen::frame(&mut rng, 1.0);
+        let f = sample::frame(&mut rng, 1.0);
         let q = match i % 3 {
             0 => SurfaceKind::Cylinder(Cylinder {
                 frame: f,
@@ -464,8 +488,8 @@ fn random_plane_sections_are_on_both_surfaces_and_agree_with_t2() {
                 radius: 0.25 + rng.next_f64(),
             }),
         };
-        let on = gen::point_on(&mut rng, &q);
-        let p = SurfaceKind::Plane(gen::plane_through(&mut rng, on));
+        let on = sample::point_on(&mut rng, &q);
+        let p = SurfaceKind::Plane(sample::plane_through(&mut rng, on));
         let pieces = match intersect(&q, &p).unwrap() {
             Section::Curves(v) => v,
             other => panic!("{other:?}"),
@@ -487,9 +511,9 @@ fn random_coaxial_and_sphere_pairs_are_on_both_surfaces_and_agree_with_t2() {
     for i in 0..60 {
         // A random frame shared at one origin, or an axis frame shifted by a dyadic step.
         let f = if i % 2 == 0 {
-            gen::frame(&mut rng, 1.0)
+            sample::frame(&mut rng, 1.0)
         } else {
-            gen::axis_frame(&mut rng)
+            sample::axis_frame(&mut rng)
         };
         let shift = if i % 2 == 0 {
             0.0
@@ -497,8 +521,8 @@ fn random_coaxial_and_sphere_pairs_are_on_both_surfaces_and_agree_with_t2() {
             (rng.next_signed_unit() * 16.0).round() / 16.0
         };
         let (a, b) = (
-            gen::revolved(&mut rng, f),
-            gen::revolved(&mut rng, gen::along(f, shift)),
+            sample::revolved(&mut rng, f),
+            sample::revolved(&mut rng, sample::along(f, shift)),
         );
         let pairs = [
             (a, b),
@@ -541,7 +565,7 @@ fn near_degenerate_planes_stay_certified() {
     for i in 0..20 {
         // Within 1e-9 of tangent to a sphere: a small circle, or nothing.
         let gap = if i % 2 == 0 { -1e-9 } else { 1e-9 };
-        let (s, p) = gen::near_tangent_sphere_plane(&mut rng, gap);
+        let (s, p) = sample::near_tangent_sphere_plane(&mut rng, gap);
         let (s, p) = (SurfaceKind::Sphere(s), SurfaceKind::Plane(p));
         match intersect(&s, &p).unwrap() {
             Section::Curves(v) => {
@@ -560,13 +584,13 @@ fn near_degenerate_planes_stay_certified() {
             other => panic!("{other:?}"),
         }
         // Nearly parallel to a cylinder's axis: a long ellipse, certified to its size.
-        let f = gen::frame(&mut rng, 1.0);
+        let f = sample::frame(&mut rng, 1.0);
         let c = SurfaceKind::Cylinder(Cylinder {
             frame: f,
             radius: 0.5,
         });
         let eps = 1e-6 * (1.0 + rng.next_f64());
-        let p = SurfaceKind::Plane(gen::near_axial_plane(&mut rng, f.origin, f.z, eps));
+        let p = SurfaceKind::Plane(sample::near_axial_plane(&mut rng, f.origin, f.z, eps));
         let v = pieces(&c, &p);
         assert_eq!(kinds(&v), [("ellipse", X)]);
         let (_, a, b) = conic(&v[0]);
@@ -633,9 +657,15 @@ fn wr680_the_oblique_cylinder_section_is_exact_on_the_pins_nurbs_cylinder() {
     assert_eq!(kinds(&generic), [("ellipse", X)]);
     let c = dd::lift(cyl.frame.origin);
     let w = r(core::f64::consts::FRAC_1_SQRT_2);
+    let layout = cs::implicit(&SurfaceKind::Cylinder(cyl))
+        .unwrap()
+        .pin_layout();
+    let Param::Arcs { breaks, .. } = &layout.u else {
+        panic!("the cylinder's u is arcs")
+    };
     for (k, span) in spans.iter().enumerate() {
         assert_eq!(span.weights, [Rat::one(), w.clone(), Rat::one()]);
-        assert_eq!(span.knots.0, r(scx_testkit::pin_uv::CYLINDER_U_KNOTS[k]));
+        assert_eq!(span.knots.0, r(breaks[k]));
         // The pin's NURBS cylinder's net on this span, from its arc and the height.
         let rim: [[Rat; 3]; 3] = core::array::from_fn(|i| {
             let [a, b] = ARCS[k][i];
@@ -672,8 +702,11 @@ fn wr680_the_oblique_cylinder_section_is_exact_on_the_pins_nurbs_cylinder() {
             let rho = (lq[0] * lq[0] + lq[1] * lq[1]).sqrt().to_f64();
             assert!((rho - 1.5).abs() < 1e-15, "{rho}");
             // u(s) is the pin's u of the point's angle, to that rounding.
-            let theta = dd::atan2(lq[1], lq[0]);
-            let u = scx_testkit::pin_uv::cylinder_u(theta);
+            let mut theta = dd::atan2(lq[1], lq[0]);
+            if theta.hi < 0.0 {
+                theta = theta + dd::consts().pi * 2.0;
+            }
+            let u = layout.to_nurb((theta, Dd::new(0.0))).0;
             let us = to_dd(&span.u.eval(&s));
             let wrap = 4.0 * core::f64::consts::PI;
             let du = (u - us).to_f64();

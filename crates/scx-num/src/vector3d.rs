@@ -2,12 +2,14 @@
 // 03e16c9ee766de5b9b1ced845e5149d62ff493b8.
 // Upstream record (verbatim from that file): Upstream: `source/SMLib/inc/SmVector3d.h`,
 // `source/SMLib/src/SmVector3d.cpp`, `source/SMLib/src/SmMath.cpp`.
-// Changes: `NOZ` and `NOW` moved down from `nurbs/math.rs`; `is_valid_double` private; errors
-// are `NumError`; paths. No `SM_UNDEF_DOUBLE` sentinel (`docs/01-architecture.md` §10.1): `UNDEF`,
-// `set_uninitialized` and `is_initialized` are gone (an unset vector is `None`), `is_undef` is
-// `is_invalid` without the sentinel test, and `approx_eq` loses its two-unset-vectors case;
-// the test `upstream_my_test_vector3d` drops its unset-vector checks and
-// `operators_and_predicates` its `UNDEF` cases.
+// Changes: `is_valid_double` private; errors are `NumError`; paths. NLib's control-point
+// sentinels are gone (57 F12): no `NOZ`/`NOW`, `SmVector3d(double *, bool fromNL)` or `Is2d`
+// (homogeneous points live in `scx-nurbs`, a 2D point is a `Point2`), and the test
+// `operators_and_predicates` drops their cases. No `SM_UNDEF_DOUBLE` sentinel
+// (`docs/01-architecture.md` §10.1): `UNDEF`, `set_uninitialized` and `is_initialized` are
+// gone (an unset vector is `None`), `is_undef` is `is_invalid` without the sentinel test, and
+// `approx_eq` loses its two-unset-vectors case; the test `upstream_my_test_vector3d` drops
+// its unset-vector checks and `operators_and_predicates` its `UNDEF` cases.
 // Then the transcendental functions became `fmath`'s (correctly rounded, the same bits on every
 // platform) in place of the C library's, so results may differ from the pin's in the last bit.
 // Then `component(usize)` (0.0 past 2) and `component_mut` became `Index<Axis>` and
@@ -29,13 +31,11 @@
 //! | [`UnitVec3`]                                 | a unitized `SmVector3d`                          |
 //! | [`Vec3::new`]                                | `SmVector3d(double, double, double)`, `Set`      |
 //! | [`Vec3::from_array`], `From<[f64; 3]>`       | `SmVector3d(double *)`                           |
-//! | [`Vec3::from_nl`]                            | `SmVector3d(double *, bool fromNL)`              |
 //! | `Point3 - Point3`                            | `SmVector3d(const SmPoint3d&, const SmPoint3d&)` |
 //! | `From<Vec2>`                                 | `SmVector3d(const SmVector2d&)`                  |
 //! | `Copy` / assignment, `core::mem::swap`       | copy constructor, `operator=`, `Copy`, `Swap`    |
 //! | [`Vec3::is_invalid`]                         | `IsUndef` (without `SM_UNDEF_DOUBLE`)            |
 //! | [`Vec3::is_zero`]                            | `IsZero`                                         |
-//! | [`Vec3::is_2d`]                              | `Is2d`                                           |
 //! | [`Vec3::length_squared`], [`Vec3::length`]   | `LengthSquared`, `Length`                        |
 //! | [`Vec3::dot`]                                | `Dot`                                            |
 //! | [`Vec3::cross`]                              | `operator*(const SmVector3d&, const SmVector3d&)` |
@@ -108,18 +108,11 @@
 
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use crate::error::{NumError, NumFailure, Result};
+use crate::error::{Invalid, NumError, NumFailure, Result};
 use crate::interval::Ivl;
 use crate::math::{BIG_DOUBLE, EFF_ZERO, EFF_ZERO_SQ, PI};
 use crate::tol;
 use crate::vector2d::{Point2, Vec2};
-
-/// `NL_NOZ`: the `z` value marking a 2D control point (`+DBL_MAX`).
-/// (Moved down from solidcore `nurbs/math.rs`, where it was `nurbs::math::NOZ`.)
-pub const NOZ: f64 = f64::MAX;
-/// `NL_NOW`: the `w` value marking a non-rational control point (`-DBL_MAX`).
-/// (Moved down from solidcore `nurbs/math.rs`, where it was `nurbs::math::NOW`.)
-pub const NOW: f64 = -f64::MAX;
 
 // ---- SmMath.cpp ----------------------------------------------------------------------
 
@@ -127,11 +120,7 @@ pub const NOW: f64 = -f64::MAX;
 /// (upstream also flags an error below `-SM_EFF_ZERO_SQ`).
 #[must_use]
 pub fn sqrt(x: f64) -> f64 {
-    if x <= 0.0 {
-        0.0
-    } else {
-        x.sqrt()
-    }
+    if x <= 0.0 { 0.0 } else { x.sqrt() }
 }
 
 /// `sm_cbrt` (`smos_CubeRoot`): cube root.
@@ -629,20 +618,6 @@ impl Vec3 {
             .then(|| UnitVec3((self / length).canonical_axis_direction()))
     }
 
-    /// Converts an NLib control point `[x, y, z, w]` (`SmVector3d(double *, bool)`):
-    /// `z == NL_NOZ` becomes `0`, and unless `w == NL_NOW` the point is divided by `w`.
-    #[must_use]
-    pub fn from_nl(p: [f64; 4]) -> Self {
-        let [px, py, pz, pw] = p;
-        let mut v = Self::new(px, py, if pz == NOZ { 0.0 } else { pz });
-        if NOW != pw {
-            v.x /= pw;
-            v.y /= pw;
-            v.z /= pw;
-        }
-        v
-    }
-
     /// Whether every component is finite.
     #[must_use]
     pub fn is_finite(self) -> bool {
@@ -660,12 +635,6 @@ impl Vec3 {
     #[must_use]
     pub fn is_zero(self, tol: f64) -> bool {
         self.length_squared() < tol * tol
-    }
-
-    /// True when `z` is NLib's 2D marker `NL_NOZ` (`Is2d`).
-    #[must_use]
-    pub fn is_2d(self) -> bool {
-        self.z == NOZ
     }
 
     /// Squared Euclidean length, `(x*x) + (y*y) + (z*z)` (`LengthSquared`).
@@ -1006,7 +975,7 @@ impl Vec3 {
     pub fn make_unit_ortho_vectors(self, y_reference: Option<Self>) -> Result<[UnitVec3; 3]> {
         let x_axis = self.normalized().ok_or(NumError::InvalidInput {
             operation: "geom::vector3d::Vec3::make_unit_ortho_vectors",
-            reason: "zero-length or non-finite vector",
+            reason: Invalid::NoDirection,
         })?;
         let frame = |z_axis: UnitVec3| {
             let y_axis = UnitVec3(z_axis.cross(*x_axis).unit_or_z());
@@ -1152,7 +1121,7 @@ impl Vec3 {
         if tol::is_zero_squared(v1_len_sq) || tol::is_zero_squared(v2_len_sq) {
             return Err(NumError::InvalidInput {
                 operation: "geom::vector3d::Vec3::angle_between",
-                reason: "zero-length vector",
+                reason: Invalid::ZeroLength,
             });
         }
         let dot_prep = self.dot(o);
@@ -1186,7 +1155,7 @@ impl Vec3 {
         {
             return Err(NumError::InvalidInput {
                 operation: "geom::vector3d::Vec3::signed_unit_angle",
-                reason: "expected unit directions perpendicular to a unit normal",
+                reason: Invalid::NotPerpendicular,
             });
         }
         let sin = self.dot(start.cross(end));
@@ -1236,18 +1205,14 @@ impl Vec3 {
         if !(self.is_finite() && normal.is_finite() && line.is_finite()) {
             return Err(NumError::InvalidInput {
                 operation: "geom::vector3d::Vec3::square_turn",
-                reason: "non-finite vector",
+                reason: Invalid::NotFinite,
             });
         }
         // Only their directions count: scaled to a largest component of 1, so squaring a huge
         // (or tiny) finite vector can't overflow (or underflow) on the way.
         let scaled = |v: Self| {
             let m = v.x.abs().max(v.y.abs()).max(v.z.abs());
-            if m > 0.0 {
-                v / m
-            } else {
-                v
-            }
+            if m > 0.0 { v / m } else { v }
         };
         let (normal, line) = (scaled(normal), scaled(line));
         let target = self.cross(line);
@@ -1256,7 +1221,7 @@ impl Vec3 {
         {
             return Err(NumError::InvalidInput {
                 operation: "geom::vector3d::Vec3::square_turn",
-                reason: "a vector along the axis",
+                reason: Invalid::AlongAxis,
             });
         }
         let turn = self.ccw_angle_between(normal, target)?;
@@ -1571,9 +1536,11 @@ mod tests {
             assert!(a.dot(*b).abs() < 1e-15);
         }
         assert!(Vec3::ZERO.make_unit_ortho_vectors(None).is_err());
-        assert!(Vec3::new(f64::NAN, 0.0, 1.0)
-            .make_unit_ortho_vectors(None)
-            .is_err());
+        assert!(
+            Vec3::new(f64::NAN, 0.0, 1.0)
+                .make_unit_ortho_vectors(None)
+                .is_err()
+        );
     }
     use crate::math::EFF_ZERO_RAD;
 
@@ -1826,9 +1793,11 @@ mod tests {
             .make_unit_ortho_vectors(None)
             .unwrap();
         assert_eq!((*x, *y, *z), (Vec3::Y, Vec3::Z, Vec3::X));
-        assert!(Vec3::new(1.0, 2.0, 3.0)
-            .solve_two_linear_equations(Vec3::new(2.0, 4.0, 6.0))
-            .is_err());
+        assert!(
+            Vec3::new(1.0, 2.0, 3.0)
+                .solve_two_linear_equations(Vec3::new(2.0, 4.0, 6.0))
+                .is_err()
+        );
         // Rotation about the vector itself is the identity.
         assert_eq!(Vec3::Z.rotate_vec_about_axis(Vec3::Z, 1.0), Vec3::Z);
         assert!(Vec3::X.is_colinear_with(
@@ -1850,15 +1819,6 @@ mod tests {
         assert!(Vec3::new(f64::NAN, 0.0, 0.0).is_invalid());
         assert!(Vec3::new(1e19, 0.0, 0.0).is_invalid());
         assert!(!Vec3::new(1e17, 0.0, 0.0).is_invalid());
-        assert!(Vec3::new(0.0, 0.0, NOZ).is_2d());
-        assert_eq!(
-            Vec3::from_nl([2.0, 4.0, NOZ, 2.0]),
-            Vec3::new(1.0, 2.0, 0.0)
-        );
-        assert_eq!(
-            Vec3::from_nl([2.0, 4.0, 6.0, NOW]),
-            Vec3::new(2.0, 4.0, 6.0)
-        );
         assert_eq!(sqrt(-1.0), 0.0);
         assert_eq!(cbrt(27.0), 3.0);
         assert_eq!(acos(1.5), 0.0);

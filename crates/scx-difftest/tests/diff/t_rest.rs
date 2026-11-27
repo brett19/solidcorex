@@ -133,13 +133,17 @@ diff!(
 );
 diff!(mx_solve_linear_system, |a: MatR, b: List<f64>| m::mat(&a)
     .solve_linear_system(&b.0));
-diff!(mx_eigen, |a: MatR| {
-    let (mut p, mut q) = (m::mat(&a), m::mat(&a));
-    (
-        (p.eigen_system_jacobi(), p),
-        (q.compute_3x3_eigen_vectors(), q),
-    )
-});
+diff!(
+    mx_eigen,
+    pin_defect = crate::pin_defects::mx_eigen,
+    |a: MatR| {
+        let (mut p, mut q) = (m::mat(&a), m::mat(&a));
+        (
+            (p.eigen_system_jacobi(), p),
+            (q.compute_3x3_eigen_vectors(), q),
+        )
+    }
+);
 diff!(mx_svd, |a: MatR| {
     let mut p = m::mat(&a);
     (p.sv_decompose(), p)

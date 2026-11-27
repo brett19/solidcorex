@@ -19,11 +19,11 @@ use scx_testkit::analytic::{
     Circle, Cone, Cylinder, Ellipse, Frame, Line, Plane, Sphere, Torus, V3,
 };
 use scx_testkit::curve_surface::{
-    curve_point, intersect, pin_uv_of, residual, step_uv_of, surface_point, Contact, CurveKind,
-    Error, Hit, Meeting, SurfaceKind,
+    self as cs, Contact, CurveKind, Error, Hit, Meeting, SurfaceKind, curve_point, intersect,
+    pin_uv_of, residual, surface_point,
 };
 use scx_testkit::dd::{self, Dd};
-use scx_testkit::gen;
+use scx_testkit::sample;
 
 fn norm(a: V3) -> f64 {
     dd::dot(&a, &a).sqrt().to_f64()
@@ -48,11 +48,11 @@ fn at(origin: [f64; 3]) -> Frame {
 
 /// A circle (even `i`) or an ellipse through a random point of `s`.
 fn conic(rng: &mut Rng, s: &SurfaceKind, i: usize) -> CurveKind {
-    let p = gen::point_on(rng, s);
+    let p = sample::point_on(rng, s);
     if i % 2 == 0 {
-        gen::circle_through(rng, p)
+        sample::circle_through(rng, p)
     } else {
-        gen::ellipse_through(rng, p)
+        sample::ellipse_through(rng, p)
     }
 }
 
@@ -72,7 +72,7 @@ fn mults(h: &[Hit]) -> Vec<u32> {
 }
 
 fn surfaces(rng: &mut Rng) -> Vec<SurfaceKind> {
-    let f = |rng: &mut Rng| gen::frame(rng, 1.0);
+    let f = |rng: &mut Rng| sample::frame(rng, 1.0);
     vec![
         SurfaceKind::Plane(Plane { frame: f(rng) }),
         SurfaceKind::Cylinder(Cylinder {
@@ -109,7 +109,7 @@ fn check_hits(c: &CurveKind, s: &SurfaceKind, hits: &[Hit], tol: f64) {
             dist(on, h.point)
         );
         if let Some(p) = h.pin_uv {
-            let back = step_uv_of(s, p);
+            let back = cs::implicit(s).unwrap().pin_layout().to_step(p);
             assert!(dist(surface_point(s, back), h.point) < tol, "{s:?} {h:?}");
         }
         assert_eq!(h.contact == Contact::Crossing, h.multiplicity == 1);
@@ -125,9 +125,9 @@ fn check_hits(c: &CurveKind, s: &SurfaceKind, hits: &[Hit], tol: f64) {
 fn a_line_through_a_spheres_centre_meets_it_at_plus_minus_r_over_d() {
     let mut rng = Rng::new(0x7201);
     for _ in 0..50 {
-        let frame = gen::frame(&mut rng, 1.0);
+        let frame = sample::frame(&mut rng, 1.0);
         let r = 0.25 + rng.next_f64();
-        let d = gen::direction(&mut rng).map(|x| x * (0.5 + rng.next_f64()));
+        let d = sample::direction(&mut rng).map(|x| x * (0.5 + rng.next_f64()));
         let s = SurfaceKind::Sphere(Sphere { frame, radius: r });
         let c = CurveKind::Line(Line {
             origin: frame.origin,
@@ -459,7 +459,7 @@ fn lines_through_two_surface_points_meet_there() {
     let mut rng = Rng::new(0x7202);
     for _ in 0..20 {
         for s in surfaces(&mut rng) {
-            let (a, b) = gen::two_points_on(&mut rng, &s);
+            let (a, b) = sample::two_points_on(&mut rng, &s);
             let d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
             let c = CurveKind::Line(Line {
                 origin: a,
@@ -587,7 +587,7 @@ fn hits_are_at_zero_distance_by_the_closest_point() {
 fn a_line_near_tangent_to_a_sphere_splits_into_two_close_roots_or_none() {
     let mut rng = Rng::new(0x7206);
     for gap in [-1e-6, -1e-10, -1e-14, 1e-14, 1e-10] {
-        let (sphere, plane) = gen::near_tangent_sphere_plane(&mut rng, gap);
+        let (sphere, plane) = sample::near_tangent_sphere_plane(&mut rng, gap);
         let f = plane.frame;
         let c = CurveKind::Line(Line {
             origin: f.origin,
@@ -626,7 +626,8 @@ fn pin_uv_is_none_only_on_the_cones_far_nappe() {
     // On the far nappe the STEP u is the half-turn: x = (1 + v) cos u with 1 + v < 0.
     assert!((h[0].uv.0.to_f64() - core::f64::consts::PI).abs() < 1e-15);
     check_hits(&c, &s, &h, 1e-14);
-    let _ = pin_uv_of(&s, h[1].uv);
+    let layout = cs::implicit(&s).unwrap().pin_layout();
+    assert_eq!(pin_uv_of(&s, &layout, h[1].uv), h[1].pin_uv);
 }
 
 /// The first-order distance is the true distance off a plane, and off a sphere the closed
@@ -638,7 +639,7 @@ fn the_first_order_distance_is_the_closed_form_off_a_plane_and_a_sphere() {
     use scx_testkit::curve_surface::distance;
     let mut rng = Rng::new(0x7203);
     for _ in 0..50 {
-        let f = gen::axis_frame(&mut rng);
+        let f = sample::axis_frame(&mut rng);
         let r = 0.5 + rng.next_f64();
         let h = 1e-6 * rng.next_signed_unit();
         let sphere = SurfaceKind::Sphere(Sphere {
@@ -661,7 +662,7 @@ fn the_first_order_distance_is_the_closed_form_off_a_plane_and_a_sphere() {
             (got - want).abs() <= 1e-14 * want.max(1e-12),
             "{got} {want}"
         );
-        let on = gen::point_on(&mut rng, &sphere);
+        let on = sample::point_on(&mut rng, &sphere);
         assert_eq!(
             residual(&sphere, on).unwrap().is_zero(),
             distance(&sphere, on).unwrap() == 0.0

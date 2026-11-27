@@ -25,10 +25,10 @@
 //! centre line, beyond a cone's apex. The ellipse has no closest point here: its start is
 //! not closed-form, and Newton's method from a poor start can find the wrong foot.
 
+use crate::Partials;
 use crate::dd::{self, Dd};
 use crate::nurbs::Exact;
 use crate::rat::Rat;
-use crate::Partials;
 
 /// A 3D vector of double-doubles.
 pub type V3 = [Dd; 3];

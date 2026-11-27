@@ -10,11 +10,6 @@ diff!(sqrt, |a: f64| m::vector3d::sqrt(a));
 diff!(cbrt, |a: f64| m::vector3d::cbrt(a));
 diff!(acos, |a: f64| m::vector3d::acos(a));
 diff!(asin, |a: f64| m::vector3d::asin(a));
-diff!(
-    v3_noz_now,
-    || [scx_num::vector3d::NOZ, scx_num::vector3d::NOW],
-    [solidcore::nurbs::math::NOZ, solidcore::nurbs::math::NOW]
-);
 diff!(v3_consts, || [
     m::vector3d::Vec3::ZERO,
     m::vector3d::Vec3::X,
@@ -27,7 +22,6 @@ diff!(v3_unit_axis_direction, |a: V, t: f64| m::v3(a)
     .unit_axis_direction(t));
 diff!(v3_from_array, |a: V| m::vector3d::Vec3::from_array(a)
     .to_array());
-diff!(v3_from_nl, |a: [f64; 4]| m::vector3d::Vec3::from_nl(a));
 diff!(
     v3_between,
     |a: V, b: V| m::p3(b) - m::p3(a),
@@ -42,11 +36,11 @@ diff!(
     v3_predicates,
     |a: V| {
         let v = m::v3(a);
-        ((!pin_unset(&a)).then(|| v.is_invalid()), v.is_2d())
+        (!pin_unset(&a)).then(|| v.is_invalid())
     },
     {
         let v = m::v3(a);
-        ((!pin_unset(&a)).then(|| v.is_undef()), v.is_2d())
+        (!pin_unset(&a)).then(|| v.is_undef())
     }
 );
 diff!(v3_is_zero, |a: V, t: f64| m::v3(a).is_zero(t));

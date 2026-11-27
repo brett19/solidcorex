@@ -28,13 +28,18 @@
 //! relative of `tan a` (the double-double rounding with room), and decides a plane
 //! section's predicates as polynomials in `k`: zero when the zero polynomial, else the sign
 //! at `k` when no root lies within that band, else [`Error::Undecided`]. A coaxial pair
-//! with a cone is solved at the band's ends and at `k`, and is undecided when the three
-//! answers' shapes differ (a sampled, not a proved, decision: research 64 §4.4).
+//! with a cone is solved at `k` and proved for every slope in the band: its section
+//! polynomial's degree, discriminant and value at each apex keep their signs over the band
+//! (a bound on the polynomials in the slopes' errors; for a cone against a torus, the
+//! quartic's resultant with its derivative and its apex value as polynomials in `k`, by
+//! the band's root test), else it is [`Error::Undecided`] (research 64 §4.4).
 
 use crate::analytic::{Cylinder, Frame, Plane, V3};
-use crate::curve_surface::{self as cs, implicit, rcross, rdot, Implicit, Local, SurfaceKind, R3};
+use crate::bound::{dd_to_rat, rat_to_dd};
+use crate::curve_surface::{self as cs, R3, SurfaceKind, rcross, rdot};
 use crate::dd::{self, Dd};
-use crate::poly::{of_dd, to_dd, Poly};
+use crate::poly::Poly;
+use crate::quadric::{Exactly, Layout, Param, Shape};
 use crate::rat::Rat;
 
 /// Why a section has no answer here.
@@ -136,7 +141,7 @@ fn vscale(a: V3, s: Dd) -> V3 {
 }
 
 fn vdd(a: &R3) -> V3 {
-    a.each_ref().map(to_dd)
+    a.each_ref().map(rat_to_dd)
 }
 
 /// `e^z` as one double-double.
@@ -231,14 +236,15 @@ fn frame(s: &SurfaceKind) -> &Frame {
 /// A surface's frame coordinates, its axes and its implicit form.
 struct Space<'s> {
     surface: &'s SurfaceKind,
-    local: Local,
+    exact: Exactly,
     cols: [R3; 3],
-    form: Implicit,
+    layout: Layout,
 }
 
 impl<'s> Space<'s> {
     fn of(surface: &'s SurfaceKind) -> Result<Space<'s>, Error> {
-        let (local, form) = implicit(surface)?;
+        let exact = cs::exact(surface)?;
+        let layout = cs::implicit(surface)?.pin_layout();
         let f = frame(surface);
         let (x, y) = (cs::r3(f.x)?, cs::r3(f.y)?);
         let z = match surface {
@@ -247,9 +253,9 @@ impl<'s> Space<'s> {
         };
         Ok(Space {
             surface,
-            local,
+            exact,
             cols: [x, y, z],
-            form,
+            layout,
         })
     }
 
@@ -265,7 +271,7 @@ impl<'s> Space<'s> {
 
     /// `C + M l`.
     fn point(&self, l: &R3) -> R3 {
-        radd(&self.local.origin, &self.vector(l))
+        radd(&self.exact.origin, &self.vector(l))
     }
 
     /// `M l` for frame coordinates in double-double.
@@ -278,7 +284,7 @@ impl<'s> Space<'s> {
 
     /// `C + M l` for frame coordinates in double-double.
     fn point_dd(&self, l: V3) -> V3 {
-        vadd(vdd(&self.local.origin), self.vector_dd(l))
+        vadd(vdd(&self.exact.origin), self.vector_dd(l))
     }
 
     /// A plane, as `m . L = d` in these coordinates.
@@ -286,20 +292,16 @@ impl<'s> Space<'s> {
         let n = rcross(&cs::r3(p.frame.x)?, &cs::r3(p.frame.y)?);
         let m = self.cols.each_ref().map(|c| rdot(c, &n));
         let o = cs::r3(p.frame.origin)?;
-        let d = rdot(&n, &cs::rsub(&o, &self.local.origin));
+        let d = rdot(&n, &cs::rsub(&o, &self.exact.origin));
         Ok((m, d))
     }
 
     /// A point on this surface: its STEP and pin uv, and its first-order distance.
     fn on(&self, p: V3) -> ((Dd, Dd), Option<(Dd, Dd)>, f64) {
-        let l = self.local.of_dd(p);
-        let uv = cs::step_uv(self.surface, l);
-        let exact = p.map(|x| of_dd(x).unwrap_or_default());
-        let f = to_dd(&self.form.at(&self.local.of_point(&exact))).abs();
-        let g = self.local.gradient(self.form.grad(l));
-        let gn = dd::dot(&g, &g).sqrt();
-        let gap = if gn.hi > 0.0 { f / gn } else { f };
-        (uv, cs::pin_uv_of(self.surface, uv), gap.to_f64())
+        let uv = cs::step_uv(self.surface, self.exact.local_dd(p));
+        let exact = p.map(|x| dd_to_rat(x).unwrap_or_default());
+        let gap = self.exact.distance(&exact);
+        (uv, cs::pin_uv_of(self.surface, &self.layout, uv), gap)
     }
 }
 
@@ -352,9 +354,9 @@ struct Slope {
 }
 
 impl Slope {
-    fn of(form: &Implicit) -> Slope {
+    fn of(form: &Shape) -> Slope {
         match form {
-            Implicit::Cone { k, .. } => {
+            Shape::Cone { k, .. } => {
                 let w = k.abs().scale(-96);
                 Slope {
                     k: k.clone(),
@@ -368,15 +370,6 @@ impl Slope {
         }
     }
 
-    /// The slopes a coaxial answer is decided at: the value, then the band's ends.
-    fn checks(&self) -> Vec<Rat> {
-        let mut v = vec![self.k.clone()];
-        if let Some((lo, hi)) = &self.band {
-            v.extend([lo.clone(), hi.clone()]);
-        }
-        v
-    }
-
     /// The sign of `p` at the true slope (module docs).
     fn sign(&self, p: &Poly) -> Result<i32, Error> {
         if p.is_zero() {
@@ -384,7 +377,9 @@ impl Slope {
         }
         if let Some((lo, hi)) = &self.band {
             if p.degree().unwrap_or(0) > 0
-                && p.real_roots().iter().any(|r| r.lo <= *hi && *lo <= r.hi)
+                && p.real_roots(&cs::root_width())
+                    .iter()
+                    .any(|r| r.at.lo() <= hi && lo <= r.at.hi())
             {
                 return Err(Error::Undecided);
             }
@@ -410,15 +405,15 @@ fn at(v: &R3, j: usize) -> Rat {
 
 /// The quadric `sum_j Q_j L_j^2 + 2 q L_z + c0` with its coefficients as polynomials in
 /// the cone's slope; `None` for the plane and the torus.
-fn quadric(form: &Implicit) -> Option<([Poly; 3], Poly, Poly)> {
+fn quadric(form: &Shape) -> Option<([Poly; 3], Poly, Poly)> {
     let one = || Poly::constant(Rat::one());
     Some(match form {
-        Implicit::Cylinder { r2 } => (
+        Shape::Cylinder { r2 } => (
             [one(), one(), Poly::default()],
             Poly::default(),
             Poly::constant(-r2),
         ),
-        Implicit::Cone { r, .. } => (
+        Shape::Cone { r, .. } => (
             [
                 one(),
                 one(),
@@ -427,8 +422,8 @@ fn quadric(form: &Implicit) -> Option<([Poly; 3], Poly, Poly)> {
             Poly::new(vec![Rat::zero(), -r]),
             Poly::constant(-(r * r)),
         ),
-        Implicit::Sphere { r2 } => ([one(), one(), one()], Poly::default(), Poly::constant(-r2)),
-        Implicit::Plane | Implicit::Torus { .. } => return None,
+        Shape::Sphere { r2 } => ([one(), one(), one()], Poly::default(), Poly::constant(-r2)),
+        Shape::Plane | Shape::Torus { .. } => return None,
     })
 }
 
@@ -441,7 +436,7 @@ struct Conic {
 }
 
 impl Conic {
-    fn of(form: &Implicit, m: &R3, d: &Rat) -> Option<Conic> {
+    fn of(form: &Shape, m: &R3, d: &Rat) -> Option<Conic> {
         let (q, ql, c0) = quadric(form)?;
         let l0 = rscale(m, &d.checked_div(&rdot(m, m))?);
         // e1 = m x (the axis of m's least component), e2 = m x e1: exact and independent.
@@ -486,7 +481,7 @@ fn v2(x: &Rat, y: &Rat) -> [Rat; 2] {
 }
 
 fn sqrt(x: &Rat) -> Dd {
-    to_dd(x).sqrt()
+    rat_to_dd(x).sqrt()
 }
 
 /// The section of a quadric by a plane, decided exactly for the true slope (research 64
@@ -649,17 +644,17 @@ enum Meridian {
 }
 
 /// The meridian of a form whose own axial coordinate is `h - h0`, at slope `k`.
-fn meridian(form: &Implicit, h0: &Rat, k: &Rat) -> Option<Meridian> {
+fn meridian(form: &Shape, h0: &Rat, k: &Rat) -> Option<Meridian> {
     let z = Poly::linear(-h0, Rat::one());
     Some(match form {
-        Implicit::Plane => return None,
-        Implicit::Cylinder { r2 } => Meridian::RhoSq(Poly::constant(r2.clone())),
-        Implicit::Cone { r, .. } => {
+        Shape::Plane => return None,
+        Shape::Cylinder { r2 } => Meridian::RhoSq(Poly::constant(r2.clone())),
+        Shape::Cone { r, .. } => {
             let g = z.scale(k).add(&Poly::constant(r.clone()));
             Meridian::RhoSq(g.mul(&g))
         }
-        Implicit::Sphere { r2 } => Meridian::RhoSq(Poly::constant(r2.clone()).sub(&z.mul(&z))),
-        Implicit::Torus { big2, small2 } => Meridian::Torus {
+        Shape::Sphere { r2 } => Meridian::RhoSq(Poly::constant(r2.clone()).sub(&z.mul(&z))),
+        Shape::Torus { big2, small2 } => Meridian::Torus {
             big2: big2.clone(),
             small2: small2.clone(),
             h0: h0.clone(),
@@ -685,7 +680,7 @@ fn of_multiplicity(m: u32) -> Contact {
 /// The rings of `rho = R +- sqrt(disc)` at height `h`: two, one tangent, or none.
 fn split(h: &Rat, big: Dd, disc: &Rat) -> Vec<Ring> {
     let ring = |rho, contact| Ring {
-        h: to_dd(h),
+        h: rat_to_dd(h),
         rho,
         contact,
     };
@@ -709,13 +704,13 @@ fn rings_on(g: &Poly, p: &Poly) -> Option<Vec<Ring>> {
     if g.is_zero() {
         return None;
     }
-    let points = g.gcd(p).real_roots();
+    let points = g.gcd(p).real_roots(&cs::root_width());
     Some(
-        g.real_roots()
+        g.real_roots(&cs::root_width())
             .into_iter()
             .filter_map(|root| {
-                let h = root.value();
-                if points.iter().any(|q| q.lo <= root.hi && root.lo <= q.hi) {
+                let h = root.at.to_dd();
+                if points.iter().any(|q| q.at.meets(&root.at)) {
                     return Some(Ring {
                         h,
                         rho: Dd::new(0.0),
@@ -733,13 +728,16 @@ fn rings_on(g: &Poly, p: &Poly) -> Option<Vec<Ring>> {
     )
 }
 
+/// A torus's meridian `rho^2 - 2 R rho + (h - h0)^2 + R^2 - r^2 = 0` with `rho^2 = p(h)`,
+/// squared out: `(p + (h - h0)^2 + R^2 - r^2)^2 - 4 R^2 p`.
+fn torus_of(p: &Poly, big2: &Rat, small2: &Rat, h0: &Rat) -> Poly {
+    let z = Poly::linear(-h0, Rat::one());
+    let s = p.add(&z.mul(&z)).add(&Poly::constant(big2 - small2));
+    s.mul(&s).sub(&p.scale(&big2.scale(2)))
+}
+
 /// The coaxial section; `None` when the surfaces coincide.
 fn coaxial(m1: &Meridian, m2: &Meridian) -> Option<Vec<Ring>> {
-    let torus_of = |p: &Poly, big2: &Rat, small2: &Rat, h0: &Rat| {
-        let z = Poly::linear(-h0, Rat::one());
-        let s = p.add(&z.mul(&z)).add(&Poly::constant(big2 - small2));
-        s.mul(&s).sub(&p.scale(&big2.scale(2)))
-    };
     match (m1, m2) {
         (Meridian::Height(a), Meridian::Height(b)) => (a != b).then(Vec::new),
         (Meridian::Height(h), Meridian::RhoSq(p)) | (Meridian::RhoSq(p), Meridian::Height(h)) => {
@@ -774,7 +772,7 @@ fn coaxial(m1: &Meridian, m2: &Meridian) -> Option<Vec<Ring>> {
 /// (the positive root of the meridian's square, as `rho^2 + ... >= c_i > 0`).
 fn tori([b1, s1, a1]: [&Rat; 3], [b2, s2, a2]: [&Rat; 3]) -> Option<Vec<Ring>> {
     // R_i^2 is the square of a double, so R_i is that double exactly.
-    let big = |b2: &Rat| of_dd(sqrt(b2)).unwrap_or_default();
+    let big = |b2: &Rat| dd_to_rat(sqrt(b2)).unwrap_or_default();
     let (r1, r2) = (big(b1), big(b2));
     let (c1, c2) = (b1 - s1, b2 - s2);
     let z = |a: &Rat| Poly::linear(-a, Rat::one());
@@ -789,15 +787,15 @@ fn tori([b1, s1, a1]: [&Rat; 3], [b2, s2, a2]: [&Rat; 3]) -> Option<Vec<Ring>> {
         if rest.is_zero() {
             return None;
         }
-        return Some(
-            rest.real_roots()
-                .first()
-                .map(|root| {
-                    let zz = &root.lo - a1;
-                    split(&root.lo, to_dd(&r1), &(s1 - &(&zz * &zz)))
-                })
-                .unwrap_or_default(),
-        );
+        // Its one root, exactly: `-c_0 / c_1`.
+        return Some(match rest.coeffs() {
+            [c0, c1] => c0.checked_div(c1).map_or_else(Vec::new, |h| {
+                let h = -&h;
+                let zz = &h - a1;
+                split(&h, rat_to_dd(&r1), &(s1 - &(&zz * &zz)))
+            }),
+            _ => Vec::new(),
+        });
     }
     // rho = rest / 2 (R1 - R2), linear in h, into the first.
     let rho = rest.scale(&(&r1 - &r2).scale(1).recip().unwrap_or_default());
@@ -807,10 +805,10 @@ fn tori([b1, s1, a1]: [&Rat; 3], [b2, s2, a2]: [&Rat; 3]) -> Option<Vec<Ring>> {
         .add(&z1.mul(&z1))
         .add(&Poly::constant(c1));
     Some(
-        g.real_roots()
+        g.real_roots(&cs::root_width())
             .into_iter()
             .filter_map(|root| {
-                let h = root.value();
+                let h = root.at.to_dd();
                 let rho = rho.eval_dd(h);
                 (rho.hi > 0.0).then(|| Ring {
                     h,
@@ -820,11 +818,6 @@ fn tori([b1, s1, a1]: [&Rat; 3], [b2, s2, a2]: [&Rat; 3]) -> Option<Vec<Ring>> {
             })
             .collect(),
     )
-}
-
-/// The shape of a coaxial answer: whether it coincides, and each ring's kind and contact.
-fn shape(rings: Option<&Vec<Ring>>) -> Option<Vec<(bool, Contact)>> {
-    rings.map(|v| v.iter().map(|r| (r.rho.hi == 0.0, r.contact)).collect())
 }
 
 // ---------------------------------------------------------------- the truth
@@ -875,25 +868,27 @@ fn plane_surface(q: &Space, both: [&Space; 2], p: &Plane) -> Result<Section, Err
     let (m, d) = q.plane(p)?;
     let [mx, my, mz] = &m;
     let across = mx.is_zero() && my.is_zero();
-    if let Implicit::Torus { .. } = q.form {
+    if let Shape::Torus { .. } = q.exact.shape {
         if !across {
             return Err(Error::NoClosedForm);
         }
         let h = d.checked_div(mz).unwrap_or_default();
-        let torus = meridian(&q.form, &Rat::zero(), &Rat::zero()).ok_or(Error::NoClosedForm)?;
+        let torus =
+            meridian(&q.exact.shape, &Rat::zero(), &Rat::zero()).ok_or(Error::NoClosedForm)?;
         return Ok(rings(both, q, coaxial(&Meridian::Height(h), &torus)));
     }
-    let cn = Conic::of(&q.form, &m, &d).ok_or(Error::NoClosedForm)?;
-    let circular = across || matches!(q.form, Implicit::Sphere { .. });
-    let pieces = plane_quadric(q, &cn, &Slope::of(&q.form), circular)?;
+    let cn = Conic::of(&q.exact.shape, &m, &d).ok_or(Error::NoClosedForm)?;
+    let circular = across || matches!(q.exact.shape, Shape::Sphere { .. });
+    let pieces = plane_quadric(q, &cn, &Slope::of(&q.exact.shape), circular)?;
     Ok(sampled(both, pieces))
 }
 
 /// `|L|^2 = r1^2` and `|L - o|^2 = r2^2`: the radical plane `2 o . L = r1^2 - r2^2 + |o|^2`
 /// across the first.
 fn spheres(a: &Space, b: &Space) -> Result<Section, Error> {
-    let o = a.local.of_point(&b.local.origin);
-    let (Implicit::Sphere { r2: q1 }, Implicit::Sphere { r2: q2 }) = (&a.form, &b.form) else {
+    let o = a.exact.local(&b.exact.origin);
+    let (Shape::Sphere { r2: q1 }, Shape::Sphere { r2: q2 }) = (&a.exact.shape, &b.exact.shape)
+    else {
         return Err(Error::NoClosedForm);
     };
     let oo = rdot(&o, &o);
@@ -906,37 +901,365 @@ fn spheres(a: &Space, b: &Space) -> Result<Section, Error> {
     }
     let m = o.each_ref().map(|x| x.scale(1));
     let d = &(q1 - q2) + &oo;
-    let cn = Conic::of(&a.form, &m, &d).ok_or(Error::NoClosedForm)?;
-    let pieces = plane_quadric(a, &cn, &Slope::of(&a.form), true)?;
+    let cn = Conic::of(&a.exact.shape, &m, &d).ok_or(Error::NoClosedForm)?;
+    let pieces = plane_quadric(a, &cn, &Slope::of(&a.exact.shape), true)?;
     Ok(sampled([a, b], pieces))
 }
 
 /// Two surfaces of revolution on one axis, in the first's axial coordinate.
 fn revolved(a: &Space, b: &Space) -> Result<Section, Error> {
-    let o = a.local.of_point(&b.local.origin);
+    let o = a.exact.local(&b.exact.origin);
     let [ox, oy, oz] = &o;
     if !(ox.is_zero() && oy.is_zero()) {
         return Err(Error::NoClosedForm);
     }
-    let (ka, kb) = (Slope::of(&a.form).checks(), Slope::of(&b.form).checks());
-    let solve = |i: usize| -> Result<Option<Vec<Ring>>, Error> {
-        let pick = |ks: &[Rat]| {
-            ks.get(i)
-                .or_else(|| ks.first())
-                .cloned()
-                .unwrap_or_default()
-        };
-        let m1 = meridian(&a.form, &Rat::zero(), &pick(&ka)).ok_or(Error::NoClosedForm)?;
-        let m2 = meridian(&b.form, oz, &pick(&kb)).ok_or(Error::NoClosedForm)?;
-        Ok(coaxial(&m1, &m2))
-    };
-    let answer = solve(0)?;
-    for i in 1..ka.len().max(kb.len()) {
-        if shape(solve(i)?.as_ref()) != shape(answer.as_ref()) {
-            return Err(Error::Undecided);
+    let (sa, sb) = (&a.exact.shape, &b.exact.shape);
+    let (ka, kb) = (Slope::of(sa), Slope::of(sb));
+    let m1 = meridian(sa, &Rat::zero(), &ka.k).ok_or(Error::NoClosedForm)?;
+    let m2 = meridian(sb, oz, &kb.k).ok_or(Error::NoClosedForm)?;
+    banded::prove(sa, sb, oz)?;
+    Ok(rings([a, b], a, coaxial(&m1, &m2)))
+}
+
+/// The proof that a coaxial answer with a cone holds for the true slopes: each slope is
+/// `k_i + e_i` with `|e_i|` within its band, and the answer's shape is fixed by the signs
+/// of a few polynomials in `e` (the section polynomial's coefficients, its discriminant,
+/// and its value at each cone's apex). A sign is proved when the constant term outweighs
+/// the sum of the other terms at the band's corner, or when the polynomial is zero; any
+/// sign not proved is [`Error::Undecided`]. Two cones with the same slope share one `e`.
+mod banded {
+    use std::collections::BTreeMap;
+
+    use super::{Error, Meridian, Poly, Rat, Shape};
+
+    /// A polynomial in `(e_0, e_1)`, by exponent pair.
+    #[derive(Clone, Debug, Default)]
+    pub(super) struct E(BTreeMap<(u32, u32), Rat>);
+
+    impl E {
+        pub(super) fn constant(c: Rat) -> E {
+            let mut m = BTreeMap::new();
+            if !c.is_zero() {
+                m.insert((0, 0), c);
+            }
+            E(m)
+        }
+
+        /// `k + e_i`.
+        pub(super) fn slope(k: &Rat, i: usize) -> E {
+            let mut e = E::constant(k.clone());
+            e.0.insert(if i == 0 { (1, 0) } else { (0, 1) }, Rat::one());
+            e
+        }
+
+        fn add(&self, o: &E) -> E {
+            let mut m = self.0.clone();
+            for (p, c) in &o.0 {
+                let v = m.get(p).map_or_else(|| c.clone(), |x| x + c);
+                if v.is_zero() {
+                    m.remove(p);
+                } else {
+                    m.insert(*p, v);
+                }
+            }
+            E(m)
+        }
+
+        fn neg(&self) -> E {
+            E(self.0.iter().map(|(p, c)| (*p, -c)).collect())
+        }
+
+        pub(super) fn sub(&self, o: &E) -> E {
+            self.add(&o.neg())
+        }
+
+        pub(super) fn mul(&self, o: &E) -> E {
+            self.0.iter().fold(E::default(), |acc, ((i, j), a)| {
+                let t = E(o
+                    .0
+                    .iter()
+                    .map(|((k, l), b)| ((i + k, j + l), a * b))
+                    .collect());
+                acc.add(&t)
+            })
+        }
+
+        /// The sign over the band `|e_i| <= w_i`, when proved.
+        pub(super) fn sign(&self, w: &[Rat; 2]) -> Option<i32> {
+            let c = self.0.get(&(0, 0)).cloned().unwrap_or_default();
+            let pow = |x: &Rat, n: u32| (0..n).fold(Rat::one(), |p, _| &p * x);
+            let [w0, w1] = w;
+            let rest = self
+                .0
+                .iter()
+                .filter(|(p, _)| **p != (0, 0))
+                .fold(Rat::zero(), |s, ((i, j), a)| {
+                    &s + &(&a.abs() * &(&pow(w0, *i) * &pow(w1, *j)))
+                });
+            if c.is_zero() && rest.is_zero() {
+                return Some(0);
+            }
+            (c.abs() > rest).then(|| c.signum())
         }
     }
-    Ok(rings([a, b], a, answer))
+
+    /// A polynomial in the axial coordinate `h` with coefficients in `e`.
+    type H = Vec<E>;
+
+    fn hadd(a: &H, b: &H) -> H {
+        let n = a.len().max(b.len());
+        (0..n)
+            .map(|i| match (a.get(i), b.get(i)) {
+                (Some(x), Some(y)) => x.add(y),
+                (Some(x), None) | (None, Some(x)) => x.clone(),
+                (None, None) => E::default(),
+            })
+            .collect()
+    }
+
+    fn hmul(a: &H, b: &H) -> H {
+        let mut out = vec![E::default(); (a.len() + b.len()).saturating_sub(1)];
+        for (i, x) in a.iter().enumerate() {
+            for (j, y) in b.iter().enumerate() {
+                if let Some(o) = out.get_mut(i + j) {
+                    *o = o.add(&x.mul(y));
+                }
+            }
+        }
+        out
+    }
+
+    fn hneg(a: &H) -> H {
+        a.iter().map(E::neg).collect()
+    }
+
+    /// A meridian `rho^2 = p(h)` and, for a cone, its `rho = r + k (h - h0)`; `None` for a
+    /// form with another meridian (the torus).
+    fn meridian(form: &Shape, h0: &Rat, k: &E) -> Option<(H, Option<H>)> {
+        let c = |x: Rat| E::constant(x);
+        let z = vec![c(-h0), c(Rat::one())];
+        Some(match form {
+            Shape::Cylinder { r2 } => (vec![c(r2.clone())], None),
+            Shape::Cone { r, .. } => {
+                let l = hadd(&vec![c(r.clone())], &z.iter().map(|t| t.mul(k)).collect());
+                (hmul(&l, &l), Some(l))
+            }
+            Shape::Sphere { r2 } => (hadd(&vec![c(r2.clone())], &hneg(&hmul(&z, &z))), None),
+            Shape::Plane | Shape::Torus { .. } => return None,
+        })
+    }
+
+    /// `k^d g(h0 - r / k)` for `rho = r + k (h - h0)` written `l = [r - k h0, k]`: zero
+    /// exactly when `g` has a root at the cone's apex.
+    fn at_apex(g: &H, l: &H) -> E {
+        let (Some(l0), Some(l1)) = (l.first(), l.get(1)) else {
+            return E::default();
+        };
+        // the apex is h = -l0 / l1
+        let d = g.len().saturating_sub(1);
+        g.iter().enumerate().fold(E::default(), |s, (i, ci)| {
+            let mut t = ci.clone();
+            for _ in 0..i {
+                t = t.mul(&l0.neg());
+            }
+            for _ in i..d {
+                t = t.mul(l1);
+            }
+            s.add(&t)
+        })
+    }
+
+    /// The nodes the polynomials in `k` of a cone against a torus are interpolated at: more
+    /// than their degree (at most `7 * 4` for the quartic's resultant with its derivative,
+    /// its coefficients being of degree at most 4 in `k`).
+    const NODES: i64 = 30;
+
+    /// The polynomial of degree below [`NODES`] through `f` at `k = 1, ..., NODES` (Newton's
+    /// divided differences, exactly).
+    fn in_k(f: impl Fn(&Rat) -> Rat) -> Poly {
+        let xs: Vec<Rat> = (1..=NODES).map(Rat::from).collect();
+        let mut c: Vec<Rat> = xs.iter().map(&f).collect();
+        for j in 1..c.len() {
+            for i in (j..c.len()).rev() {
+                let (Some(xi), Some(xj)) = (xs.get(i), xs.get(i - j)) else {
+                    continue;
+                };
+                let d = c.get(i).cloned().unwrap_or_default()
+                    - c.get(i - 1).cloned().unwrap_or_default();
+                if let Some(ci) = c.get_mut(i) {
+                    *ci = d.checked_div(&(xi - xj)).unwrap_or_default();
+                }
+            }
+        }
+        c.iter()
+            .zip(&xs)
+            .rev()
+            .fold(Poly::default(), |p, (ci, xi)| {
+                p.mul(&Poly::linear(-xi, Rat::one()))
+                    .add(&Poly::constant(ci.clone()))
+            })
+    }
+
+    /// The determinant, by exact elimination.
+    fn det(mut m: Vec<Vec<Rat>>) -> Rat {
+        let n = m.len();
+        let mut d = Rat::one();
+        for c in 0..n {
+            let Some(p) = (c..n).find(|&r| {
+                m.get(r)
+                    .and_then(|row| row.get(c))
+                    .is_some_and(|x| !x.is_zero())
+            }) else {
+                return Rat::zero();
+            };
+            if p != c {
+                m.swap(p, c);
+                d = -&d;
+            }
+            let pivot = m.get(c).cloned().unwrap_or_default();
+            let pc = pivot.get(c).cloned().unwrap_or_default();
+            d = &d * &pc;
+            for row in m.iter_mut().skip(c + 1) {
+                let f = row
+                    .get(c)
+                    .cloned()
+                    .unwrap_or_default()
+                    .checked_div(&pc)
+                    .unwrap_or_default();
+                if f.is_zero() {
+                    continue;
+                }
+                for (x, y) in row.iter_mut().zip(&pivot).skip(c) {
+                    *x = &*x - &(&f * y);
+                }
+            }
+        }
+        d
+    }
+
+    /// The Sylvester resultant of `f` and `g` of formal degrees `m` and `n`.
+    fn resultant(f: &[Rat], m: usize, g: &[Rat], n: usize) -> Rat {
+        let size = m + n;
+        let row = |c: &[Rat], deg: usize, shift: usize| -> Vec<Rat> {
+            (0..size)
+                .map(|j| {
+                    // highest power first
+                    j.checked_sub(shift)
+                        .filter(|&i| i <= deg)
+                        .and_then(|i| c.get(deg - i))
+                        .cloned()
+                        .unwrap_or_default()
+                })
+                .collect()
+        };
+        det((0..n)
+            .map(|s| row(f, m, s))
+            .chain((0..m).map(|s| row(g, n, s)))
+            .collect())
+    }
+
+    /// A cone against a torus coaxially: the quartic's resultant with its derivative (its
+    /// degree and square-freeness) and its value at the apex, as polynomials in the one
+    /// slope `k`, keep their signs over the band (the slope's [`super::Slope::sign`]).
+    fn torus(a: &Shape, b: &Shape, oz: &Rat, slope: &super::Slope) -> Result<(), Error> {
+        const D: usize = 4;
+        let quartic = |k: &Rat| -> Vec<Rat> {
+            let m1 = super::meridian(a, &Rat::zero(), k);
+            let m2 = super::meridian(b, oz, k);
+            let g = match (m1, m2) {
+                (Some(Meridian::RhoSq(p)), Some(Meridian::Torus { big2, small2, h0 }))
+                | (Some(Meridian::Torus { big2, small2, h0 }), Some(Meridian::RhoSq(p))) => {
+                    super::torus_of(&p, &big2, &small2, &h0)
+                }
+                _ => Poly::default(),
+            };
+            (0..=D)
+                .map(|i| g.coeffs().get(i).cloned().unwrap_or_default())
+                .collect()
+        };
+        let cone = |k: &Rat| -> (Rat, Rat) {
+            // rho = r + k (h - h0): (r - k h0, k)
+            match (a, b) {
+                (Shape::Cone { r, .. }, _) => (r.clone(), k.clone()),
+                (_, Shape::Cone { r, .. }) => (r - &(k * oz), k.clone()),
+                _ => (Rat::zero(), Rat::zero()),
+            }
+        };
+        let squarefree = in_k(|k| {
+            let g = quartic(k);
+            let dg: Vec<Rat> = g
+                .iter()
+                .enumerate()
+                .skip(1)
+                .map(|(i, c)| c * &Rat::from(i as i64))
+                .collect();
+            resultant(&g, D, &dg, D - 1)
+        });
+        let apex = in_k(|k| {
+            let (l0, l1) = cone(k);
+            let g = quartic(k);
+            g.iter().enumerate().fold(Rat::zero(), |s, (i, ci)| {
+                let mut t = ci.clone();
+                for _ in 0..i {
+                    t = &t * &-&l0;
+                }
+                for _ in i..D {
+                    t = &t * &l1;
+                }
+                &s + &t
+            })
+        });
+        if slope.sign(&squarefree)? == 0 {
+            return Err(Error::Undecided);
+        }
+        slope.sign(&apex)?;
+        Ok(())
+    }
+
+    /// Proves the coaxial answer of `a` and `b` (at axial offset `oz`) at the slopes'
+    /// values holds over their bands (module docs); `Ok` too when neither is a cone.
+    pub(super) fn prove(a: &Shape, b: &Shape, oz: &Rat) -> Result<(), Error> {
+        let (ka, kb) = (super::Slope::of(a), super::Slope::of(b));
+        if ka.band.is_none() && kb.band.is_none() {
+            return Ok(());
+        }
+        let width = |s: &super::Slope| s.band.as_ref().map(|(lo, hi)| (hi - lo).scale(-1));
+        let shared = ka.band.is_some() && kb.band.is_some() && ka.k == kb.k;
+        let w = [
+            width(&ka).or_else(|| width(&kb)).unwrap_or_default(),
+            if shared || ka.band.is_none() {
+                Rat::zero()
+            } else {
+                width(&kb).unwrap_or_default()
+            },
+        ];
+        let ea = E::slope(&ka.k, 0);
+        let eb = E::slope(&kb.k, usize::from(ka.band.is_some() && !shared));
+        let (Some((p1, l1)), Some((p2, l2))) =
+            (meridian(a, &Rat::zero(), &ea), meridian(b, oz, &eb))
+        else {
+            return torus(a, b, oz, if ka.band.is_some() { &ka } else { &kb });
+        };
+        let proved = |e: &E| e.sign(&w).ok_or(Error::Undecided);
+        let mut g = hadd(&p1, &hneg(&p2));
+        // the degree: the highest coefficient not zero is nonzero over the band
+        while let Some(top) = g.last() {
+            if proved(top)? != 0 {
+                break;
+            }
+            g.pop();
+        }
+        // a quadratic's roots keep their count and contact when its discriminant's sign does
+        if let [c0, c1, c2] = g.as_slice() {
+            let four = E::constant(Rat::from(4));
+            proved(&c1.mul(c1).sub(&four.mul(c2).mul(c0)))?;
+        }
+        // a root at a cone's apex (a point on the axis) stays one, or never is
+        for l in [l1, l2].iter().flatten() {
+            proved(&at_apex(&g, l))?;
+        }
+        Ok(())
+    }
 }
 
 /// Coaxial rings as section pieces, in the frame of `axis`.
@@ -1034,14 +1357,14 @@ pub fn cylinder_section(cyl: &Cylinder, plane: &Plane) -> Result<[Span; 4], Erro
         .iter()
         .zip(&weights)
         .fold(Poly::default(), |s, (bi, wi)| s.add(&bi.scale(wi)));
-    let knot = |k: usize| {
-        cs::rf(
-            crate::pin_uv::CYLINDER_U_KNOTS
-                .get(k)
-                .copied()
-                .unwrap_or(0.0),
-        )
+    let breaks = match cs::implicit(&SurfaceKind::Cylinder(cyl.clone()))?
+        .pin_layout()
+        .u
+    {
+        Param::Arcs { breaks, .. } => breaks,
+        Param::Linear { .. } => Vec::new(),
     };
+    let knot = |k: usize| cs::rf(breaks.get(k).copied().unwrap_or(0.0));
     let span = |k: usize, arc: &[[i64; 2]; 3]| -> Result<Span, Error> {
         let (lo, hi) = (knot(k)?, knot(k + 1)?);
         let mut points: [R3; 3] = Default::default();
@@ -1075,14 +1398,14 @@ pub fn cylinder_section(cyl: &Cylinder, plane: &Plane) -> Result<[Span; 4], Erro
 
 #[cfg(test)]
 mod tests {
-    use super::{Error, Implicit, Poly, Rat, Slope};
+    use super::{Error, Poly, Rat, Shape, Slope};
 
     /// A predicate with a root inside the slope's band is undecided; one just outside it,
     /// or the zero polynomial, is decided.
     #[test]
     fn the_slope_band_decides_or_refuses() {
         let k = Rat::from(3).scale(-2);
-        let slope = Slope::of(&Implicit::Cone {
+        let slope = Slope::of(&Shape::Cone {
             r: Rat::one(),
             k: k.clone(),
         });
@@ -1094,5 +1417,19 @@ mod tests {
         assert_eq!(slope.sign(&at(&k).mul(&at(&k))), Err(Error::Undecided));
         assert_eq!(slope.sign(&Poly::default()), Ok(0));
         assert_eq!(slope.sign(&Poly::constant(Rat::from(-2))), Ok(-1));
+    }
+
+    /// A polynomial in the slopes' errors is signed over the band only when its constant
+    /// term outweighs the rest at the band's corner; the zero polynomial is zero.
+    #[test]
+    fn the_band_bound_decides_or_refuses() {
+        let k = Rat::from(3).scale(-2);
+        let w = [k.scale(-96), Rat::zero()];
+        let e =
+            |c: &Rat| super::banded::E::slope(&k, 0).sub(&super::banded::E::constant(c.clone()));
+        assert_eq!(e(&(&k + &k.scale(-100))).sign(&w), None);
+        assert_eq!(e(&(&k + &k.scale(-90))).sign(&w), Some(-1));
+        assert_eq!(e(&k).mul(&e(&k)).sign(&w), None);
+        assert_eq!(e(&k).sub(&e(&k)).sign(&w), Some(0));
     }
 }

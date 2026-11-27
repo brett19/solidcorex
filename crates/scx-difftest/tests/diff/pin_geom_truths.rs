@@ -29,7 +29,7 @@ use scx_num::hash::Rng;
 use scx_testkit::analytic::{Cone, Cylinder, Frame, Line, Plane, Sphere, Torus};
 use scx_testkit::curve_surface::{self as cs, CurveKind, Meeting, SurfaceKind};
 use scx_testkit::dd::{self, Dd};
-use scx_testkit::gen;
+use scx_testkit::sample;
 use scx_testkit::ssi::{self, Section};
 use solidcore::curve::curve::Curve as PinCurve;
 use solidcore::curve::ellipse::Ellipse as PinEllipse;
@@ -370,7 +370,7 @@ fn curve_distance(c: &CurveKind, p: P) -> f64 {
 fn line_through(rng: &mut Rng, p: P) -> CurveKind {
     CurveKind::Line(Line {
         origin: p,
-        direction: gen::direction(rng),
+        direction: sample::direction(rng),
     })
 }
 
@@ -437,7 +437,7 @@ fn crossing_tol(sine: f64) -> f64 {
 
 /// A line tangent to `s` at `p`: along a direction perpendicular to the normal there.
 fn tangent_line(rng: &mut Rng, s: &SurfaceKind, p: P) -> CurveKind {
-    let d = cross(normal(s, p), gen::direction(rng));
+    let d = cross(normal(s, p), sample::direction(rng));
     CurveKind::Line(Line {
         origin: p,
         direction: d.map(|v| v / dot(d, d).sqrt()),
@@ -445,7 +445,7 @@ fn tangent_line(rng: &mut Rng, s: &SurfaceKind, p: P) -> CurveKind {
 }
 
 fn random_surface(rng: &mut Rng, i: usize) -> SurfaceKind {
-    let f = gen::frame(rng, 1.0);
+    let f = sample::frame(rng, 1.0);
     match i % 5 {
         0 => SurfaceKind::Plane(Plane { frame: f }),
         1 => SurfaceKind::Cylinder(Cylinder {
@@ -475,7 +475,7 @@ fn random_surface(rng: &mut Rng, i: usize) -> SurfaceKind {
 /// A point on `s` inside its pin window.
 fn point_in(rng: &mut Rng, b: &Bounded) -> P {
     loop {
-        let p = gen::point_on(rng, &b.truth);
+        let p = sample::point_on(rng, &b.truth);
         if b.inside(p, 0.25) {
             return p;
         }
@@ -638,8 +638,8 @@ fn pin_curve_surface_against_t2() {
         let p = point_in(&mut rng, &b);
         let (what, curve) = match i / 5 {
             0 => ("line", line_through(&mut rng, p)),
-            1 => ("circle", gen::circle_through(&mut rng, p)),
-            _ => ("ellipse", gen::ellipse_through(&mut rng, p)),
+            1 => ("circle", sample::circle_through(&mut rng, p)),
+            _ => ("ellipse", sample::ellipse_through(&mut rng, p)),
         };
         let what = format!("{what} through {p:?} and {:?}", b.truth);
         check_curve_surface(&k, &what, &probe(&k, curve), &b, &mut t);
@@ -847,13 +847,13 @@ fn pin_plane_sections_against_t5() {
     for i in 0..12 {
         let q = match i % 4 {
             0 => SurfaceKind::Plane(Plane {
-                frame: gen::frame(&mut rng, 1.0),
+                frame: sample::frame(&mut rng, 1.0),
             }),
             j => random_surface(&mut rng, j),
         };
         let qb = Bounded::new(&k, q);
         let p = point_in(&mut rng, &qb);
-        let plane = Bounded::new(&k, SurfaceKind::Plane(gen::plane_through(&mut rng, p)));
+        let plane = Bounded::new(&k, SurfaceKind::Plane(sample::plane_through(&mut rng, p)));
         let what = format!("{:?} and {:?}", q, plane.truth);
         check_surfaces(&k, &what, &qb, &plane, &mut t);
     }
@@ -868,11 +868,11 @@ fn pin_revolved_pairs_against_t5() {
     let k = Kernel::default();
     let mut t = Tally::default();
     for i in 0..12 {
-        let f = gen::axis_frame(&mut rng);
+        let f = sample::axis_frame(&mut rng);
         let shift = (rng.next_signed_unit() * 16.0).round() / 16.0;
         let (a, b) = match i % 3 {
             0 => {
-                let g = gen::frame(&mut rng, 1.0);
+                let g = sample::frame(&mut rng, 1.0);
                 let o = core::array::from_fn(|j| g.origin[j] + 0.75 * rng.next_signed_unit());
                 (
                     SurfaceKind::Sphere(Sphere {
@@ -886,8 +886,8 @@ fn pin_revolved_pairs_against_t5() {
                 )
             }
             1 => (
-                gen::revolved(&mut rng, f),
-                gen::revolved(&mut rng, gen::along(f, shift)),
+                sample::revolved(&mut rng, f),
+                sample::revolved(&mut rng, sample::along(f, shift)),
             ),
             _ => {
                 let minor = 0.25 + 0.5 * rng.next_f64();
@@ -898,7 +898,7 @@ fn pin_revolved_pairs_against_t5() {
                         minor,
                     }),
                     SurfaceKind::Plane(Plane {
-                        frame: gen::along(f, shift * minor),
+                        frame: sample::along(f, shift * minor),
                     }),
                 )
             }

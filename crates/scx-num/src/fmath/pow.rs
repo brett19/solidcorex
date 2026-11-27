@@ -33,13 +33,9 @@ pub(super) fn powi(x: f64, n: i32) -> f64 {
         let r = if big { f64::INFINITY } else { 0.0 };
         return if neg { -r } else { r };
     }
-    // a = m 2^e with m in [1, 2).
-    let e = dd::exponent(a);
-    let mut base = (
-        (a * dd::pow2(-e.max(-1022))) * dd::pow2((-e - 1022).max(0)),
-        0.0,
-    );
-    let mut base_e = i64::from(e);
+    // a = m 2^e with m in [1, 2), exactly (also for e = 1023 and the subnormals).
+    let mut base = (dd::mantissa(a), 0.0);
+    let mut base_e = i64::from(dd::exponent(a));
     let mut acc = (1.0, 0.0);
     let mut acc_e = 0i64;
     let mut k = n.unsigned_abs();
@@ -64,16 +60,12 @@ pub(super) fn powi(x: f64, n: i32) -> f64 {
         (base, base_e) = norm(dd::mul(base, base), 2 * base_e);
     }
     if n < 0 {
-        // 1/(acc 2^acc_e) with 1/acc in (1/2, 1].
+        // 1/(acc 2^acc_e), with 1/acc inside the band again.
         acc = dd::recip(acc);
         acc_e = -acc_e;
     }
     let r = round_scaled(acc.0, acc.1, acc_e.clamp(-4000, 4000) as i32);
-    if neg {
-        -r
-    } else {
-        r
-    }
+    if neg { -r } else { r }
 }
 
 /// Whether a finite `y` is an integer, and whether it is odd.

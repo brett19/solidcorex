@@ -24,8 +24,8 @@
 
 use core::fmt;
 
-use scx_num::error::ErrorKind;
 use scx_num::NumError;
+use scx_num::error::ErrorKind;
 
 /// What a solver needs to know about an evaluator's error.
 pub trait EvalError: fmt::Debug + fmt::Display {
@@ -70,8 +70,9 @@ impl SolveFailure {
     #[must_use]
     pub const fn kind(&self) -> ErrorKind {
         match self {
-            Self::BrentDidNotConverge { .. } => ErrorKind::StageFailed,
-            Self::ZeroDifferenceStep { .. } => ErrorKind::Failed,
+            Self::BrentDidNotConverge { .. } | Self::ZeroDifferenceStep { .. } => {
+                ErrorKind::Unsupported
+            }
         }
     }
 }
@@ -85,10 +86,8 @@ impl fmt::Display for SolveFailure {
                 bracket,
             } => write!(
                 f,
-                "{}: the Brent solve did not converge after {iterations} iterations (at {at}, bracket [{}, {}])",
-                ErrorKind::StageFailed,
-                bracket[0],
-                bracket[1]
+                "the Brent solve did not converge after {iterations} iterations (at {at}, bracket [{}, {}])",
+                bracket[0], bracket[1]
             ),
             Self::ZeroDifferenceStep { parameter, at } => write!(
                 f,

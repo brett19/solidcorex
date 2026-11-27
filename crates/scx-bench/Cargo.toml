@@ -1,0 +1,46 @@
+# Written for solidcorex.
+[package]
+name = "scx-bench"
+description = "Benchmarks: scx-num and scx-algo against the pinned solidcore, one criterion group per case, on shared seeded inputs"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+# gungraun 0.20 needs 1.88 and criterion 0.8 1.86; the workspace's version covers both
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+scx-num = { path = "../scx-num" }
+scx-algo = { path = "../scx-algo" }
+# The pinned solidcore (commit 03e16c9ee766de5b9b1ced845e5149d62ff493b8), as scx-difftest
+# links it: a read-only worktree beside this repository, `<parent>/sc-wt/scx-pin`.
+solidcore = { path = "../../../sc-wt/scx-pin/solidcore/crates/solidcore" }
+
+[dev-dependencies]
+# The timing harness (layers.txt [bench-external]): here only, as a dev-dependency. No
+# plots, HTML reports or rayon: the statistics and the `cargo bench` command line.
+criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
+# The instruction-count harness (layers.txt [bench-external]), under valgrind's callgrind:
+# the `<crate>_ic` targets. Running them needs `gungraun-runner` of the same version.
+gungraun = "0.20.0"
+
+# One bench target per library crate: `cargo bench -p scx-bench --bench num`.
+[[bench]]
+name = "num"
+harness = false
+
+[[bench]]
+name = "algo"
+harness = false
+
+# The same cases counted in instructions: `cargo bench -p scx-bench --bench num_ic`.
+[[bench]]
+name = "num_ic"
+harness = false
+
+[[bench]]
+name = "algo_ic"
+harness = false
+
+[lints]
+workspace = true

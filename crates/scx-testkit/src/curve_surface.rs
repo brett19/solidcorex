@@ -30,9 +30,10 @@
 //! double-double rounding.
 
 use crate::analytic::{Circle, Cone, Cylinder, Ellipse, Line, Plane, Sphere, Torus, V3};
+use crate::bound::rat_to_dd;
 use crate::dd::{self, Dd};
-use crate::pin_uv;
-use crate::poly::{of_dd, to_dd, Poly, Root};
+use crate::poly::{Poly, Root};
+use crate::quadric::{self, Exactly, Implicit};
 use crate::rat::Rat;
 
 /// A curve the truths take.
@@ -113,7 +114,7 @@ pub struct Hit {
     /// The surface's STEP parameters: angles in radians, `u` in `[0, 2 pi)`; `u` is zero on
     /// a sphere's pole, a cone's apex.
     pub uv: (Dd, Dd),
-    /// The pin's uv (D13, [`crate::pin_uv`]); `None` on a cone's far nappe, which the pin's
+    /// The pin's uv (D13, [`Implicit::pin_layout`]); `None` on a cone's far nappe, which the pin's
     /// surface does not reach.
     pub pin_uv: Option<(Dd, Dd)>,
     /// The root's multiplicity.
@@ -165,96 +166,7 @@ pub(crate) fn rsub(a: &R3, b: &R3) -> R3 {
     [a0 - b0, a1 - b1, a2 - b2]
 }
 
-/// The exact frame coordinates `L = M^-1 (P - C)`: `L_i = (P - C) . row_i / det`.
-pub(crate) struct Local {
-    pub(crate) origin: R3,
-    /// The rows of `det M^-1`: `Y x Z`, `Z x X`, `X x Y`.
-    pub(crate) rows: [R3; 3],
-    pub(crate) det: Rat,
-}
-
-impl Local {
-    pub(crate) fn new(
-        origin: [f64; 3],
-        x: [f64; 3],
-        y: [f64; 3],
-        z: [f64; 3],
-    ) -> Result<Local, Error> {
-        Local::of(r3(origin)?, &r3(x)?, &r3(y)?, &r3(z)?)
-    }
-
-    pub(crate) fn of(origin: R3, x: &R3, y: &R3, z: &R3) -> Result<Local, Error> {
-        let yz = rcross(y, z);
-        let det = rdot(x, &yz);
-        if det.is_zero() {
-            return Err(Error::DegenerateFrame);
-        }
-        let rows = [yz, rcross(z, x), rcross(x, y)];
-        Ok(Local { origin, rows, det })
-    }
-
-    /// The coordinates of a homogeneous point `(p(t), w(t))`, each over `w(t)`, as
-    /// polynomials `L_i(t) w(t)`.
-    fn poly(&self, p: &[Poly; 3], w: &Poly) -> [Poly; 3] {
-        let inv = self.det.recip().unwrap_or_default();
-        let d: Vec<Poly> = (0..3)
-            .map(|i| {
-                let pi = p.get(i).cloned().unwrap_or_default();
-                let oi = self.origin.get(i).cloned().unwrap_or_default();
-                pi.sub(&w.scale(&oi))
-            })
-            .collect();
-        self.rows.clone().map(|row| {
-            d.iter()
-                .zip(&row)
-                .fold(Poly::default(), |s, (di, ri)| s.add(&di.scale(ri)))
-                .scale(&inv)
-        })
-    }
-
-    /// The coordinates of a double-double point, in double-double.
-    pub(crate) fn of_dd(&self, p: V3) -> [Dd; 3] {
-        let o = self.origin.each_ref().map(to_dd);
-        let [p0, p1, p2] = p;
-        let [o0, o1, o2] = o;
-        let d = [p0 - o0, p1 - o1, p2 - o2];
-        let inv = to_dd(&self.det.recip().unwrap_or_default());
-        self.rows
-            .each_ref()
-            .map(|row| dd::dot(&d, &row.each_ref().map(to_dd)) * inv)
-    }
-
-    /// The gradient in world coordinates of a function of the frame coordinates whose
-    /// gradient there is `g`: `M^-T g`.
-    pub(crate) fn gradient(&self, g: [Dd; 3]) -> V3 {
-        let inv = to_dd(&self.det.recip().unwrap_or_default());
-        let rows = self.rows.each_ref().map(|r| r.each_ref().map(to_dd));
-        let [g0, g1, g2] = g;
-        let [r0, r1, r2] = rows;
-        core::array::from_fn(|i| {
-            let c = |r: &[Dd; 3]| r.get(i).copied().unwrap_or(Dd::new(0.0));
-            (g0 * c(&r0) + g1 * c(&r1) + g2 * c(&r2)) * inv
-        })
-    }
-
-    /// The coordinates of a point, exactly.
-    pub(crate) fn of_point(&self, p: &R3) -> R3 {
-        let d = rsub(p, &self.origin);
-        let inv = self.det.recip().unwrap_or_default();
-        self.rows.clone().map(|row| &rdot(&d, &row) * &inv)
-    }
-}
-
 // ---------------------------------------------------------------- the surfaces
-
-/// A surface's exact implicit form in its frame coordinates.
-pub(crate) enum Implicit {
-    Plane,
-    Cylinder { r2: Rat },
-    Cone { r: Rat, k: Rat },
-    Sphere { r2: Rat },
-    Torus { big2: Rat, small2: Rat },
-}
 
 /// A cone's slope `tan a` in double-double.
 pub(crate) fn slope(semi_angle: f64) -> Dd {
@@ -262,8 +174,10 @@ pub(crate) fn slope(semi_angle: f64) -> Dd {
     s / c
 }
 
-/// The frame coordinates and implicit form of a surface.
-pub(crate) fn implicit(s: &SurfaceKind) -> Result<(Local, Implicit), Error> {
+/// The surface as an [`Implicit`] kind (the cone's slope its semi-angle's tangent in
+/// double-double), checked: radii not negative, a cone's semi-angle in `(0, pi/2)`, a ring
+/// torus.
+pub fn implicit(s: &SurfaceKind) -> Result<Implicit, Error> {
     let pos = |r: f64| {
         if r >= 0.0 {
             Ok(())
@@ -271,138 +185,82 @@ pub(crate) fn implicit(s: &SurfaceKind) -> Result<(Local, Implicit), Error> {
             Err(Error::DegenerateSurface)
         }
     };
-    Ok(match s {
-        SurfaceKind::Plane(p) => {
-            let f = &p.frame;
-            let (x, y) = (r3(f.x)?, r3(f.y)?);
-            let n = rcross(&x, &y);
-            (Local::of(r3(f.origin)?, &x, &y, &n)?, Implicit::Plane)
-        }
+    Ok(match *s {
+        SurfaceKind::Plane(p) => Implicit::Plane { frame: p.frame },
         SurfaceKind::Cylinder(c) => {
             pos(c.radius)?;
-            let f = &c.frame;
-            let r = rf(c.radius)?;
-            (
-                Local::new(f.origin, f.x, f.y, f.z)?,
-                Implicit::Cylinder { r2: &r * &r },
-            )
+            Implicit::Cylinder {
+                frame: c.frame,
+                radius: c.radius,
+            }
         }
         SurfaceKind::Cone(c) => {
             pos(c.radius)?;
             if !(c.semi_angle > 0.0 && c.semi_angle < core::f64::consts::FRAC_PI_2) {
                 return Err(Error::DegenerateSurface);
             }
-            let f = &c.frame;
-            let k = of_dd(slope(c.semi_angle)).ok_or(Error::NonFinite)?;
-            (
-                Local::new(f.origin, f.x, f.y, f.z)?,
-                Implicit::Cone {
-                    r: rf(c.radius)?,
-                    k,
-                },
-            )
+            Implicit::Cone {
+                frame: c.frame,
+                radius: c.radius,
+                slope: slope(c.semi_angle),
+            }
         }
         SurfaceKind::Sphere(c) => {
             pos(c.radius)?;
-            let f = &c.frame;
-            let r = rf(c.radius)?;
-            (
-                Local::new(f.origin, f.x, f.y, f.z)?,
-                Implicit::Sphere { r2: &r * &r },
-            )
+            Implicit::Sphere {
+                frame: c.frame,
+                radius: c.radius,
+            }
         }
         SurfaceKind::Torus(t) => {
             if !(t.minor > 0.0 && t.major > t.minor) {
                 return Err(Error::DegenerateSurface);
             }
-            let f = &t.frame;
-            let (a, b) = (rf(t.major)?, rf(t.minor)?);
-            (
-                Local::new(f.origin, f.x, f.y, f.z)?,
-                Implicit::Torus {
-                    big2: &a * &a,
-                    small2: &b * &b,
-                },
-            )
+            Implicit::Torus {
+                frame: t.frame,
+                major: t.major,
+                minor: t.minor,
+            }
         }
     })
 }
 
-impl Implicit {
-    /// `w^k F(L / w)` for homogeneous coordinates `L w` and weight `w`.
-    fn homogeneous(&self, l: &[Poly; 3], w: &Poly) -> Poly {
-        let [x, y, z] = l;
-        let rho2 = x.mul(x).add(&y.mul(y));
-        let w2 = w.mul(w);
-        match self {
-            Implicit::Plane => z.clone(),
-            Implicit::Cylinder { r2 } => rho2.sub(&w2.scale(r2)),
-            Implicit::Cone { r, k } => {
-                let g = w.scale(r).add(&z.scale(k));
-                rho2.sub(&g.mul(&g))
-            }
-            Implicit::Sphere { r2 } => rho2.add(&z.mul(z)).sub(&w2.scale(r2)),
-            Implicit::Torus { big2, small2 } => {
-                let s = rho2.add(&z.mul(z)).add(&w2.scale(&(big2 - small2)));
-                s.mul(&s).sub(&w2.mul(&rho2).scale(&big2.scale(2)))
-            }
-        }
-    }
+/// The surface's exact equation in its frame coordinates.
+pub(crate) fn exact(s: &SurfaceKind) -> Result<Exactly, Error> {
+    Ok(implicit(s)?.exactly()?)
+}
 
-    /// `F` at exact frame coordinates.
-    pub(crate) fn at(&self, l: &R3) -> Rat {
-        let [x, y, z] = l;
-        let rho2 = &(x * x) + &(y * y);
-        match self {
-            Implicit::Plane => z.clone(),
-            Implicit::Cylinder { r2 } => &rho2 - r2,
-            Implicit::Cone { r, k } => {
-                let g = r + &(k * z);
-                &rho2 - &(&g * &g)
-            }
-            Implicit::Sphere { r2 } => &(&rho2 + &(z * z)) - r2,
-            Implicit::Torus { big2, small2 } => {
-                let s = &(&rho2 + &(z * z)) + &(big2 - small2);
-                &(&s * &s) - &(&rho2 * &big2.scale(2))
-            }
-        }
-    }
-
-    /// The gradient of `F` at frame coordinates, in double-double.
-    pub(crate) fn grad(&self, l: [Dd; 3]) -> [Dd; 3] {
-        let [x, y, z] = l;
-        let zero = Dd::new(0.0);
-        match self {
-            Implicit::Plane => [zero, zero, Dd::new(1.0)],
-            Implicit::Cylinder { .. } => [x * 2.0, y * 2.0, zero],
-            Implicit::Cone { r, k } => {
-                let k = to_dd(k);
-                let g = to_dd(r) + k * z;
-                [x * 2.0, y * 2.0, -(k * g * 2.0)]
-            }
-            Implicit::Sphere { .. } => [x * 2.0, y * 2.0, z * 2.0],
-            Implicit::Torus { big2, small2 } => {
-                let s = x * x + y * y + z * z + to_dd(&(big2 - small2));
-                let b = to_dd(big2) * 8.0;
-                [x * (s * 4.0 - b), y * (s * 4.0 - b), z * s * 4.0]
-            }
-        }
-    }
-
-    /// The nominal degree `k` of `F`.
-    fn degree(&self) -> usize {
-        match self {
-            Implicit::Plane => 1,
-            Implicit::Torus { .. } => 4,
-            _ => 2,
+impl From<quadric::Error> for Error {
+    fn from(e: quadric::Error) -> Error {
+        match e {
+            quadric::Error::NonFinite => Error::NonFinite,
+            quadric::Error::SingularFrame => Error::DegenerateFrame,
+            // Only a NURB check meets these, never an equation.
+            quadric::Error::Nurbs(_)
+            | quadric::Error::NonPositiveWeight
+            | quadric::Error::NarrowSpan => Error::DegenerateSurface,
         }
     }
 }
 
-/// The STEP uv of frame coordinates on the surface.
+/// `theta` reduced into `[0, 2 pi)`.
+pub(crate) fn turn(theta: Dd) -> Dd {
+    let two_pi = dd::consts().pi * 2.0;
+    let mut t = theta;
+    while t.hi < 0.0 {
+        t = t + two_pi;
+    }
+    while t.hi >= two_pi.hi {
+        t = t - two_pi;
+    }
+    t
+}
+
+/// The STEP uv of frame coordinates on the surface: angles in `[0, 2 pi)`, a latitude in
+/// `[-pi/2, pi/2]`.
 pub(crate) fn step_uv(s: &SurfaceKind, l: [Dd; 3]) -> (Dd, Dd) {
     let [x, y, z] = l;
-    let angle = |y: Dd, x: Dd| pin_uv::turn(dd::atan2(y, x));
+    let angle = |y: Dd, x: Dd| turn(dd::atan2(y, x));
     let rho = (x * x + y * y).sqrt();
     match s {
         SurfaceKind::Plane(_) => (x, y),
@@ -418,33 +276,17 @@ pub(crate) fn step_uv(s: &SurfaceKind, l: [Dd; 3]) -> (Dd, Dd) {
         SurfaceKind::Sphere(_) => (angle(y, x), dd::atan2(z, rho)),
         SurfaceKind::Torus(t) => {
             let v = dd::atan2(z, rho - Dd::new(t.major));
-            (angle(y, x), pin_uv::turn(v))
+            (angle(y, x), turn(v))
         }
     }
 }
 
-/// The pin's uv (D13) of a STEP uv on the surface; `None` on the cone's far nappe.
-pub fn pin_uv_of(s: &SurfaceKind, (u, v): (Dd, Dd)) -> Option<(Dd, Dd)> {
+/// The pin's uv (D13) of a STEP uv on the surface, under its [`Implicit::pin_layout`];
+/// `None` on the cone's far nappe, which the pin's surface does not reach.
+pub fn pin_uv_of(s: &SurfaceKind, layout: &quadric::Layout, uv: (Dd, Dd)) -> Option<(Dd, Dd)> {
     match s {
-        SurfaceKind::Plane(_) => Some((u, v)),
-        SurfaceKind::Cylinder(_) => Some((pin_uv::cylinder_u(u), v)),
-        SurfaceKind::Cone(c) => {
-            let g = Dd::new(c.radius) + slope(c.semi_angle) * v;
-            (g.hi >= 0.0).then(|| (pin_uv::turn_fraction(u), v))
-        }
-        SurfaceKind::Sphere(_) => Some((pin_uv::turn_fraction(u), pin_uv::latitude_fraction(v))),
-        SurfaceKind::Torus(_) => Some((pin_uv::turn_fraction(u), pin_uv::turn_fraction(v))),
-    }
-}
-
-/// The STEP uv of a pin uv (D13) on the surface.
-pub fn step_uv_of(s: &SurfaceKind, (u, v): (Dd, Dd)) -> (Dd, Dd) {
-    match s {
-        SurfaceKind::Plane(_) => (u, v),
-        SurfaceKind::Cylinder(_) => (pin_uv::cylinder_angle(u), v),
-        SurfaceKind::Cone(_) => (pin_uv::fraction_turn(u), v),
-        SurfaceKind::Sphere(_) => (pin_uv::fraction_turn(u), pin_uv::fraction_latitude(v)),
-        SurfaceKind::Torus(_) => (pin_uv::fraction_turn(u), pin_uv::fraction_turn(v)),
+        SurfaceKind::Cone(c) if (Dd::new(c.radius) + slope(c.semi_angle) * uv.1).hi < 0.0 => None,
+        _ => Some(layout.to_nurb(uv)),
     }
 }
 
@@ -530,10 +372,11 @@ fn homogeneous(c: &CurveKind) -> Result<([Poly; 3], Poly, Variable), Error> {
 
 /// Where `curve` meets `surface`: every point, or that the curve lies on the surface.
 pub fn intersect(curve: &CurveKind, surface: &SurfaceKind) -> Result<Meeting, Error> {
-    let (local, f) = implicit(surface)?;
+    let f = exact(surface)?;
+    let layout = implicit(surface)?.pin_layout();
     let (p, w, var) = homogeneous(curve)?;
-    let l = local.poly(&p, &w);
-    let eq = f.homogeneous(&l, &w);
+    let l = f.local_poly(&p, &w);
+    let eq = f.shape.homogeneous(&l, &w);
     if eq.is_zero() {
         return Ok(Meeting::OnSurface);
     }
@@ -549,7 +392,7 @@ pub fn intersect(curve: &CurveKind, surface: &SurfaceKind) -> Result<Meeting, Er
             t_radius,
             point: curve_point(curve, t),
             uv,
-            pin_uv: pin_uv_of(surface, uv),
+            pin_uv: pin_uv_of(surface, &layout, uv),
             multiplicity,
             contact: if multiplicity == 1 {
                 Contact::Crossing
@@ -558,25 +401,25 @@ pub fn intersect(curve: &CurveKind, surface: &SurfaceKind) -> Result<Meeting, Er
             },
         });
     };
-    for root in eq.real_roots() {
-        let s = root.value();
+    for root in eq.real_roots(&root_width()) {
+        let s = root.at.to_dd();
         let (t, rad) = match var {
-            Variable::HalfAngle => (pin_uv::turn(dd::atan(s) * 2.0), 2.0 * root.radius()),
-            Variable::Parameter => (s, root.radius()),
+            Variable::HalfAngle => (turn(dd::atan(s) * 2.0), 2.0 * root.at.radius()),
+            Variable::Parameter => (s, root.at.radius()),
         };
         add(t, rad, coords(s), root.multiplicity);
     }
     if var == Variable::HalfAngle {
         // The degree's drop below its nominal 2k is the root at infinity, t = pi, with that
         // multiplicity; the coordinates there are the leading coefficients' ratios.
-        let nominal = 2 * f.degree();
+        let nominal = 2 * f.shape.degree();
         let deg = eq.degree().unwrap_or(0);
         if deg < nominal {
             let lead = |q: &Poly| q.coeffs().get(2).cloned().unwrap_or_default();
             let wl = lead(&w);
             let lc = [0, 1, 2].map(|i| {
                 l.get(i).map_or(Dd::new(0.0), |q| {
-                    to_dd(&lead(q).checked_div(&wl).unwrap_or_default())
+                    rat_to_dd(&lead(q).checked_div(&wl).unwrap_or_default())
                 })
             });
             add(dd::consts().pi, 0.0, lc, (nominal - deg) as u32);
@@ -589,31 +432,30 @@ pub fn intersect(curve: &CurveKind, surface: &SurfaceKind) -> Result<Meeting, Er
 /// The exact equation in the curve parameter (`t` for a line, `tan(t/2)` for a conic)
 /// whose real roots [`intersect`] reports: for the self-tests.
 pub fn equation(curve: &CurveKind, surface: &SurfaceKind) -> Result<Poly, Error> {
-    let (local, f) = implicit(surface)?;
     let (p, w, _) = homogeneous(curve)?;
-    Ok(f.homogeneous(&local.poly(&p, &w), &w))
+    Ok(exact(surface)?.homogeneous(&p, &w))
+}
+
+/// The width the roots of the equations here are refined to: `2^-110`, well below a
+/// double-double's resolution at the parameters' sizes.
+pub(crate) fn root_width() -> Rat {
+    Rat::one().scale(-110)
 }
 
 /// The real roots of [`equation`], for the self-tests.
 pub fn roots(curve: &CurveKind, surface: &SurfaceKind) -> Result<Vec<Root>, Error> {
-    Ok(equation(curve, surface)?.real_roots())
+    Ok(equation(curve, surface)?.real_roots(&root_width()))
 }
 
 /// The surface's implicit value at a world point, exactly (zero exactly on the surface):
 /// for the self-tests and generators.
 pub fn residual(surface: &SurfaceKind, p: [f64; 3]) -> Result<Rat, Error> {
-    let (local, f) = implicit(surface)?;
-    Ok(f.at(&local.of_point(&r3(p)?)))
+    Ok(exact(surface)?.residual(&r3(p)?))
 }
 
-/// A world point's first-order distance from the surface, `|F(p)| / |grad F(p)|`: `F`
-/// exact at `p`, the gradient in double-double. It is the distance to within a relative
-/// `O(d / size)` (zero exactly on the surface); at a point where the gradient vanishes
-/// (a cone's apex) it is `|F|`.
+/// A world point's first-order distance from the surface, `|F(p)| / |grad F(p)|`, exact
+/// and then rounded: the distance to within a relative `O(d / size)` (zero exactly on the
+/// surface); infinite at a point off the surface where the gradient vanishes.
 pub fn distance(surface: &SurfaceKind, p: [f64; 3]) -> Result<f64, Error> {
-    let (local, f) = implicit(surface)?;
-    let value = to_dd(&f.at(&local.of_point(&r3(p)?))).abs();
-    let g = local.gradient(f.grad(local.of_dd(p.map(Dd::new))));
-    let norm = dd::dot(&g, &g).sqrt();
-    Ok(if norm.hi > 0.0 { value / norm } else { value }.to_f64())
+    Ok(exact(surface)?.distance(&r3(p)?))
 }

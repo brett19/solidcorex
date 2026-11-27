@@ -14,7 +14,7 @@
 //! Each truth applies where scx and the pin disagree (`Applies::Disagreeing`), and is a
 //! total oracle: it gives the true value on every input of its test.
 
-use crate::harness::{want, Applies, Out, TruthDefect};
+use crate::harness::{Applies, Out, TruthDefect, want};
 use scx_num::math::{BIG_DOUBLE, EFF_ZERO, INFINITE_PARAMETER, INFINITE_PARAMETER_SQRT};
 
 type I = [f64; 2];
@@ -103,11 +103,7 @@ fn moved_out(e: I, d: f64) -> I {
 
 /// The interval grown by `d`; a `d` that is not above zero moves nothing.
 fn expanded(e: I, d: f64) -> I {
-    if d > 0.0 {
-        moved_out(e, d)
-    } else {
-        e
-    }
+    if d > 0.0 { moved_out(e, d) } else { e }
 }
 
 /// The interval grown by `f` of its length; an `f` that is not above zero moves nothing.
@@ -123,11 +119,7 @@ fn expanded_relative(e: I, f: f64) -> I {
 fn scaled(e: I, s: f64) -> I {
     let t = |x: f64| if infinite_param(x) { x } else { x * s };
     let (a, b) = (t(e[0]), t(e[1]));
-    if a > b {
-        [b, a]
-    } else {
-        [a, b]
-    }
+    if a > b { [b, a] } else { [a, b] }
 }
 
 fn union(e: I, f: I) -> I {
@@ -485,7 +477,7 @@ pub fn pe_set_min_max() -> TruthDefect<(V, bool, f64, f64, Option<f64>, bool)> {
         let r = if x < 0.0 || x > p || y < 0.0 || y > p {
             Err(scx_num::NumError::InvalidInput {
                 operation: "geom::periodic_extent1d::PeriodicExtent1d::set_min_max",
-                reason: "min and max are not both within [0, period]",
+                reason: scx_num::error::Invalid::OutsidePeriod,
             })
         } else {
             Ok(())

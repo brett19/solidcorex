@@ -633,3 +633,92 @@ change to `scx-num`'s value types, made before step 2.
 7. **07 §9 rule 5**: the naming, bool, out-param, conversion and facade rules of 5.2.
 8. **01 §2.1, §2.6 and §5.1**: `RegionKind`, named change records, one item-failure type, and
    `Defect::at` as a `Location`.
+
+## 8. `scx-nurbs` (step 2): decisions made while porting
+
+Written 11-27 by the builder of `scx-nurbs` (01 §10.2 step 2: knot vectors, basis functions,
+Bezier helpers, NURBS curves as plain data). The pin's sources are `nurbs/knots`,
+`nurbs/basis_basic`, `nurbs/bezier`, `nurbs/crv_*` and `nurbs/math`. Each item names the pin's
+shape, what replaced it, and why. Items marked "(ruling)" are proposals for the owner.
+
+- **One validated value per concept; no setters.** The pin's curve is a long-lived struct with
+  `knots_mut`, `cpts_mut` and per-call checks of counts and indices (`NurbsFailure::Index`,
+  `ControlPointsShort`). Here `KnotVector::new` and `NurbsCurve::new`/`from_homogeneous` check
+  everything once (degree, counts, finiteness, non-decreasing knots, multiplicity, positive
+  weights, finite `w P`), and every edit (`inserted`, `removed`, `insert_knot`, `split`,
+  `elevate`) returns a new value. The index errors have no counterpart: a built curve cannot
+  have the wrong count.
+- **Rationality in the type (F12).** `NOZ`/`NOW` marked "not rational" per point; a mixed curve
+  could exist. Here a curve holds `Option<Rational { weights, weighted }>`: `None` is polynomial,
+  and both `P` and `w P` are kept so neither form is recomputed per evaluation.
+  `from_homogeneous` is the rational constructor from `(w P, w)`. F12's removal from `scx-num`
+  (`NOZ`, `NOW`, `from_nl`, `is_2d`) is its own commit; research 63 §2.2 has
+  `scx-nurbs-surface` follow this exactly.
+- **`Approach::{Below, Above}` replaces `from_left: bool`** (63 X5, ruled L4). The pin's
+  `Side::Left` is the span starting at the knot, which is `Approach::Above`. The testkit's
+  `Side` is renamed to match when its owner next touches it; no crate exports `Side`.
+- **Span finding is exact.** The pin's `find_span` moves the end spans inwards past spans
+  shorter than an absolute `1e-12` (`U[spn+1] < U[spn] + 1e-12`), a threshold with no scale.
+  Here the span is found by comparison alone (`partition_point` on `<` or `<=` by approach),
+  and only spans of exactly zero length are skipped. Every difftest point away from the domain
+  ends agrees with the pin bit for bit.
+- **The domain ends evaluate.** The pin's `basis_eval` and `crv_eval` return
+  `SolidError::Unsupported` at `u = U[p]` and `u = U[m-p]`; upstream callers evaluated the end
+  control points themselves. Here both ends take the end span, which is the limit the pin's
+  callers wanted. Outside the domain each end piece continues as its polynomial (59 §8 item 4).
+- **A knot difference fails only when it is exactly zero or not finite.** The pin errs below
+  `1e-24` (`NurbsFailure::Numerical`), a threshold with no scale. Here `NurbsError::Degenerate`
+  carries the parameter.
+- **Kernels return `Option`, mapped once to `Degenerate` (M8).** The inner loops iterate and do
+  not index; where a slot could in principle be missing they return `None`, and the public call
+  maps it to `NurbsError::Degenerate`. No silent fallback value is produced. (ruling: this is
+  M8's pattern; the alternative is `debug_assert` plus a default, which 57 M8 rejected.)
+- **Fixed-order derivatives as const generics.** The pin's `crv_derivs(u, d, out: &mut
+  Vec<Vec3>)` and `basis_derivs(.., n, out)` are out-params sized at run time. Here
+  `derivs::<K>(u, approach) -> [[f64; D]; K]` and `basis_derivs::<K>` return arrays on the stack
+  (63 D3's fixed-order jets); `K - 1` above the degree gives zeros for a polynomial curve, and the
+  rational quotient rule runs to any `K <= MAX_ORDER + 1`.
+- **Degree caps: `MAX_DEGREE = 31`, `MAX_ORDER = 31`** (ruling). The pin's limit is
+  `p < MAX_DEGREE` with its Bezier binomials from an 18-row Pascal table, so its degree
+  elevation stops at 17. Here binomials are computed exactly in integers (`None` above `2^53`);
+  31 bounds the stack scratch and keeps every binomial the rational derivatives and elevation
+  use exact. Any cap from 25 up keeps that exactness.
+- **Unclamped knots, and interior multiplicity up to `p + 1`, are valid** (ruling). The pin's
+  `validate` (`N_KnotVectorIsValid`) requires end multiplicity exactly `p + 1` and interior
+  multiplicity at most `p`. Here the domain is `[U[p], U[m-p]]` whatever the end knots
+  (`is_clamped` reports it), and an interior knot of full multiplicity is a break in the curve
+  whose two one-sided limits `Approach` selects; the testkit's truth treats both the same way.
+  Above `p + 1` is `NurbsError::Multiplicity`. Insertion still keeps the result continuous
+  (multiplicity at most `p` after it).
+  [Changed 11-27 by 04's scx-nurbs ruling (2): the knot vector stays as said, but
+  `NurbsCurve::new` and `from_homogeneous` refuse an interior knot of multiplicity `p + 1`
+  (`KnotVector::check_continuous`, `NurbsError::Multiplicity` with `max = p`), so every curve
+  is C0 and a break is a split. `elevate`'s own check for it went, as no curve can have one.
+  The pin's `Curve::new` builds such curves (it checks only for empty inputs), so the
+  difftests on `Knots::Multiple` curves with a break are pin defects (`break_refused`, its
+  truth: the exact curve's limits either side of the knot differ).]
+- **Affine for insertion and splitting, `combine2` for elevation.** The pin's `affine2` keeps a
+  coordinate exactly when both points have it (a plane stays exactly a plane); its
+  `elevate_degree` uses `combine2(alf, a, 1 - alf, b)` throughout. scx follows both, in the pin's
+  order. Using `affine` in elevation too was tried: it differed from the pin on 210 elevation
+  inputs, against 110 with `combine2` (all 110 the refusals below), so the pin's choice stays.
+- **`NurbsError::Unstable` for an elevation that loses the curve.** A5.9 removes the inserted
+  knots by extrapolating across the neighbouring spans, so a span ratio near `1e16` (knots a few
+  ulps apart) multiplies the rounding by that much. The pin returns the result, with zero or
+  negative weights on rational curves and errors up to `1e32`; scx refuses with `Unstable`
+  (`ErrorKind::Degenerate`) when the elevated weights or points are no longer valid. Its
+  polynomial answers on such curves are the pin's bit for bit, and as inaccurate: the ignored
+  test `elevation_of_near_coincident_knots` holds the truth check for a stable elevation
+  (Bezier decomposition with exact blossoms, or knot removal by least squares), a step-5
+  follow-up (ruling: whether that is wanted before step 5).
+- **Bezier helpers take any `u`.** The pin's `eval_one_basis` refuses `i > p` and `u` outside
+  `[0, 1]`, and `split` refuses `u` outside `[0, 1]`. `B[i, n]` is `0` for `i > n` and both are
+  polynomials defined everywhere, so scx answers (a Bezier curve extended past its ends). Both
+  refuse a non-finite `u` with `ParameterNotFinite`, where the pin's `eval_one_basis` returned
+  NaN as a value for a NaN `u`.
+- **Typed errors per crate.** `NurbsError` is `#[non_exhaustive]`, `Copy`, with `kind() ->
+  ErrorKind` per 62's taxonomy and a table from the pin's `NurbsFailure` in `error.rs`.
+- **Not yet done, and shaped for.** The scalar-generic evaluation (`eval<T: Ring>`) that 63 §3
+  wants for interval jets, `eval_many`, `tangent_dir`, fitting, deviation, enclosures and IGES 126
+  are not here. The curve's fields are private and every edit is by value, so these add methods
+  without changing the type.

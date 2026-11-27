@@ -11,8 +11,13 @@
 )]
 
 use scx_num::hash::Rng;
-use scx_testkit::poly::Poly;
 use scx_testkit::Rat;
+use scx_testkit::poly::Poly;
+
+/// The width the roots are refined to.
+fn w() -> Rat {
+    Rat::one().scale(-110)
+}
 
 fn r(x: f64) -> Rat {
     Rat::from_f64(x).unwrap()
@@ -43,11 +48,11 @@ fn known_roots_come_back_exactly_with_their_multiplicities() {
             .mul(&Poly::new(vec![r(1.5), r(0.25), r(1.0)]))
             .scale(&r(-0.375));
         want.sort();
-        let got = p.real_roots();
+        let got = p.real_roots(&w());
         assert_eq!(got.len(), want.len());
         for (g, (x, m)) in got.iter().zip(&want) {
             assert_eq!(g.multiplicity, *m);
-            assert!(g.lo <= *x && *x <= g.hi);
+            assert!(g.at.contains(x));
         }
     }
 }
@@ -61,15 +66,15 @@ fn irrational_roots_are_isolated_and_refined() {
         (q.clone(), 1),
         (q.mul(&q).mul(&Poly::linear(r(-1.0), Rat::one())), 2),
     ] {
-        let roots = p.real_roots();
+        let roots = p.real_roots(&w());
         let sq: Vec<_> = roots.iter().filter(|x| x.multiplicity == m).collect();
         assert_eq!(sq.len(), 2);
-        assert!((sq[0].value().to_f64() + s2).abs() <= 2.3e-16);
-        assert!((sq[1].value().to_f64() - s2).abs() <= 2.3e-16);
+        assert!((sq[0].at.to_dd().to_f64() + s2).abs() <= 2.3e-16);
+        assert!((sq[1].at.to_dd().to_f64() - s2).abs() <= 2.3e-16);
         for x in &sq {
-            assert!(x.radius() < 1e-32);
+            assert!(x.at.radius() < 1e-32);
             // The interval holds a sign change of x^2 - 2.
-            assert!(q.eval(&x.lo).signum() * q.eval(&x.hi).signum() <= 0);
+            assert!(q.sign_at(x.at.lo()) * q.sign_at(x.at.hi()) <= 0);
         }
     }
 }
@@ -92,9 +97,9 @@ fn the_multiplicities_agree_with_the_rational_factorisation() {
         let by_rat: u32 = p
             .square_free()
             .iter()
-            .map(|(f, m)| f.real_roots().len() as u32 * m)
+            .map(|(f, m)| f.real_roots(&w()).len() as u32 * m)
             .sum();
-        let by_int: u32 = p.real_roots().iter().map(|x| x.multiplicity).sum();
+        let by_int: u32 = p.real_roots(&w()).iter().map(|x| x.multiplicity).sum();
         assert_eq!(by_rat, by_int);
     }
 }

@@ -128,7 +128,7 @@ pub(super) fn sin(x: f64) -> f64 {
     if x.abs() < TINY {
         return x;
     }
-    sin_cos_dd(x).0 .0
+    sin_cos_dd(x).0.0
 }
 
 /// `cos(x)`.
@@ -139,7 +139,7 @@ pub(super) fn cos(x: f64) -> f64 {
     if x.abs() < TINY {
         return 1.0;
     }
-    sin_cos_dd(x).1 .0
+    sin_cos_dd(x).1.0
 }
 
 /// `(sin x, cos x)`.

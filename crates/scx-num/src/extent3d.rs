@@ -96,12 +96,12 @@
 //! - `SmExtent3d(const SmPseudoBox&)` and `Circumscribe` (`from_pseudo_box`,
 //!   `circumscribe` in solidcore) stay with the pseudo box, above this layer.
 
-use crate::error::{NumError, Result};
+use crate::error::{Invalid, NumError, Result};
 use crate::extent1d::{Extent1d, Hull1d};
 use crate::math::{
-    is_infinite_param, Point3, Vec3, BIG_DOUBLE, EFF_ZERO, EFF_ZERO_SQ, INFINITE_PARAMETER, PI,
+    BIG_DOUBLE, EFF_ZERO, EFF_ZERO_SQ, INFINITE_PARAMETER, PI, Point3, Vec3, is_infinite_param,
 };
-use crate::vector3d::{asin, sqrt, Axis, UnitVec3};
+use crate::vector3d::{Axis, UnitVec3, asin, sqrt};
 
 /// Classification of one interval of an extent (`SmBoundaryType`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -942,7 +942,7 @@ impl Extent3d {
         if nan_box || !line.iter().all(|c| c.is_finite()) || dir.length_squared() < EFF_ZERO_SQ {
             return Err(NumError::InvalidInput {
                 operation: "geom::extent3d::Extent3d::intersect_line",
-                reason: "zero-length line direction, or an undefined box or line",
+                reason: Invalid::UndefinedLine,
             });
         }
         let (tmin_x, tmax_x) = slab(self.min.x, self.max.x, point.x, dir.x);

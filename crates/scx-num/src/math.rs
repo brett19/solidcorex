@@ -194,17 +194,13 @@ impl Affine {
     /// `InvalidInput` for a point, axis or angle not finite, an axis whose squared
     /// length is below [`EFF_ZERO_SQ`], or a translation too large to represent.
     pub fn rotation(point: Point3, axis: Vec3, angle: f64) -> crate::error::Result<Self> {
-        use crate::error::NumError;
+        use crate::error::{Invalid, NumError};
         if !(point.is_finite() && axis.is_finite() && angle.is_finite()) {
-            return Err(NumError::invalid_input(
-                OP_MAPS,
-                "a turn's numbers not finite",
-            ));
+            return Err(NumError::invalid_input(OP_MAPS, Invalid::NotFinite));
         }
-        let k = axis.normalized().ok_or(NumError::invalid_input(
-            OP_MAPS,
-            "a turn's axis of no length",
-        ))?;
+        let k = axis
+            .normalized()
+            .ok_or(NumError::invalid_input(OP_MAPS, Invalid::ZeroLength))?;
         let (s, c) = crate::fmath::sin_cos(angle);
         let v = 1.0 - c;
         let (x, y, z) = (k.x, k.y, k.z);
@@ -225,12 +221,9 @@ impl Affine {
     /// `InvalidInput` for a centre or factor not finite, or a factor of zero (a map with
     /// no inverse).
     pub fn uniform_scaling(centre: Point3, factor: f64) -> crate::error::Result<Self> {
-        use crate::error::NumError;
+        use crate::error::{Invalid, NumError};
         if !(centre.is_finite() && factor.is_finite()) || factor == 0.0 {
-            return Err(NumError::invalid_input(
-                OP_MAPS,
-                "a scale's numbers not finite, or a factor of zero",
-            ));
+            return Err(NumError::invalid_input(OP_MAPS, Invalid::ScaleFactor));
         }
         Ok(Self::about(
             centre,
@@ -250,19 +243,13 @@ impl Affine {
     /// `InvalidInput` for an origin or normal not finite, a normal whose squared length
     /// is below [`EFF_ZERO_SQ`], or a translation too large to represent.
     pub fn reflection(origin: Point3, normal: Vec3) -> crate::error::Result<Self> {
-        use crate::error::NumError;
+        use crate::error::{Invalid, NumError};
         if !(origin.is_finite() && normal.is_finite()) {
-            return Err(NumError::invalid_input(
-                OP_MAPS,
-                "a mirror's numbers not finite",
-            ));
+            return Err(NumError::invalid_input(OP_MAPS, Invalid::NotFinite));
         }
         let n = normal
             .normalized()
-            .ok_or(NumError::invalid_input(
-                OP_MAPS,
-                "a mirror's normal of no length",
-            ))?
+            .ok_or(NumError::invalid_input(OP_MAPS, Invalid::ZeroLength))?
             .as_vec();
         let column = |e: Vec3, ni: f64| e - n * (2.0 * ni);
         Self::from_axes(
@@ -287,15 +274,11 @@ impl Affine {
     /// ([`Vec3::normalized`]), an `x̂ × ŷ` whose squared length is below [`EFF_ZERO_SQ`]
     /// (axes along one line), or a translation too large to represent.
     pub fn into_plane_frame(origin: Point3, x: Vec3, y: Vec3) -> crate::error::Result<Self> {
-        use crate::error::NumError;
+        use crate::error::{Invalid, NumError};
         if !(origin.is_finite() && x.is_finite() && y.is_finite()) {
-            return Err(NumError::invalid_input(
-                OP_MAPS,
-                "a plane's numbers not finite",
-            ));
+            return Err(NumError::invalid_input(OP_MAPS, Invalid::NotFinite));
         }
-        let none =
-            NumError::invalid_input(OP_MAPS, "a plane's axes of no length or along one line");
+        let none = NumError::invalid_input(OP_MAPS, Invalid::DependentAxes);
         let x = x.normalized().ok_or_else(|| none.clone())?.as_vec();
         let y = y.normalized().ok_or_else(|| none.clone())?;
         let n = x.cross(*y).normalized().ok_or(none)?.as_vec();
@@ -322,7 +305,7 @@ impl Affine {
         } else {
             Err(crate::error::NumError::invalid_input(
                 OP_MAPS,
-                "a map too large to represent",
+                crate::error::Invalid::Unrepresentable,
             ))
         }
     }
@@ -406,7 +389,7 @@ impl Affine {
     /// SolidCraft's station-map check, `maps_ok`.
     #[must_use]
     pub fn is_regular(&self, ratio: f64) -> crate::certified::Verdict {
-        use crate::certified::{gamma, Bounded, Verdict};
+        use crate::certified::{Bounded, Verdict, gamma};
         if !self.is_finite() || ratio.is_nan() || ratio < 0.0 || ratio.is_infinite() {
             return Verdict::No;
         }
@@ -592,7 +575,7 @@ impl Affine {
         if !point.is_finite() || !length.is_finite() || length <= 1e-9 {
             return Err(crate::error::NumError::InvalidInput {
                 operation: OP_MAPS,
-                reason: "the axis has no finite point and direction",
+                reason: crate::error::Invalid::NoFiniteAxis,
             });
         }
         Ok((point, (direction / length).canonical_axis_direction()))
@@ -609,7 +592,7 @@ impl Affine {
     /// underflow, and then by one more double for the subtraction or addition.
     #[must_use]
     pub fn transformed_box(&self, b: Extent3d) -> Option<Extent3d> {
-        use crate::certified::{gamma, next_down, next_up};
+        use crate::certified::gamma;
         let (lo, hi) = (b.min(), b.max());
         let ([tx, ty, tz], td) = (self.axes, self.shift);
         let g = gamma(5);
@@ -636,7 +619,7 @@ impl Affine {
                 size(td.y, tx.y, ty.y, tz.y),
                 size(td.z, tx.z, ty.z, tz.z),
             );
-            let (down, up) = ((p - e).map(next_down), (p + e).map(next_up));
+            let (down, up) = ((p - e).map(f64::next_down), (p + e).map(f64::next_up));
             min = Point3::new(min.x.min(down.x), min.y.min(down.y), min.z.min(down.z));
             max = Point3::new(max.x.max(up.x), max.y.max(up.y), max.z.max(up.z));
         }
@@ -694,7 +677,7 @@ impl Affine {
     /// Non-finite coordinates, axes of no length, or a degenerate mapped pair.
     pub fn rigid_plane_axes(&self, u: Vec3, v: Vec3) -> crate::error::Result<[Vec3; 2]> {
         use crate::certified::gamma;
-        use crate::error::NumError;
+        use crate::error::{Invalid, NumError};
         let (a, b) = (u.length(), v.length());
         if !(u.is_finite()
             && v.is_finite()
@@ -703,25 +686,17 @@ impl Affine {
             && (a * b).is_finite()
             && self.is_finite())
         {
-            return Err(NumError::invalid_input(
-                OP_MAPS,
-                "invalid plane axes or motion",
-            ));
+            return Err(NumError::invalid_input(OP_MAPS, Invalid::PlaneAxesOrMotion));
         }
         let (mu, mv) = (self.apply_vec(u), self.apply_vec(v));
         if !(mu.is_finite() && mv.is_finite()) {
-            return Err(NumError::invalid_input(
-                OP_MAPS,
-                "non-finite mapped plane axes",
-            ));
+            return Err(NumError::invalid_input(OP_MAPS, Invalid::Overflows));
         }
         if u.dot(v).abs() > gamma(3) * a * b {
             return Ok([mu, mv]);
         }
-        mv.normalized().ok_or(NumError::invalid_input(
-            OP_MAPS,
-            "a mapped plane axis of no length",
-        ))?;
+        mv.normalized()
+            .ok_or(NumError::invalid_input(OP_MAPS, Invalid::ZeroLength))?;
         let [x, y, _] = mu.make_unit_ortho_vectors(Some(mv))?;
         Ok([x * a, y * b])
     }
@@ -743,7 +718,7 @@ impl Affine {
         if !origin.is_finite() {
             return Err(crate::error::NumError::invalid_input(
                 OP_MAPS,
-                "non-finite plane origin",
+                crate::error::Invalid::NotFinite,
             ));
         }
         Ok((origin, axes))
@@ -780,7 +755,7 @@ impl TryFrom<[[f64; 4]; 4]> for Affine {
         if !(x[3] == 0.0 && y[3] == 0.0 && z[3] == 0.0 && t[3] == 1.0) {
             return Err(crate::error::NumError::invalid_input(
                 OP_MAPS,
-                "a projective column",
+                crate::error::Invalid::Projective,
             ));
         }
         let v = |r: [f64; 4]| Vec3::new(r[0], r[1], r[2]);
@@ -1035,12 +1010,12 @@ pub struct PointSetSummary {
 /// [`crate::error::NumError::InvalidInput`] for an empty set, a non-finite point, or a
 /// non-finite intermediate or result.
 pub fn centroid_and_mean_radius(points: &[Point2]) -> crate::error::Result<PointSetSummary> {
-    use crate::error::NumError;
+    use crate::error::{Invalid, NumError};
     if points.is_empty() {
-        return Err(NumError::invalid_input(OP_CENTROID, "empty point set"));
+        return Err(NumError::invalid_input(OP_CENTROID, Invalid::Empty));
     }
     if points.iter().any(|p| !p.x.is_finite() || !p.y.is_finite()) {
-        return Err(NumError::invalid_input(OP_CENTROID, "non-finite point"));
+        return Err(NumError::invalid_input(OP_CENTROID, Invalid::NotFinite));
     }
 
     let (mut x, mut y) = (0.0, 0.0);
@@ -1048,44 +1023,29 @@ pub fn centroid_and_mean_radius(points: &[Point2]) -> crate::error::Result<Point
         x += point.x;
         y += point.y;
         if !x.is_finite() || !y.is_finite() {
-            return Err(NumError::invalid_input(
-                OP_CENTROID,
-                "point centroid overflows",
-            ));
+            return Err(NumError::invalid_input(OP_CENTROID, Invalid::Overflows));
         }
     }
     let count = points.len() as f64;
     let centroid = Point2::new(x / count, y / count);
     if !centroid.x.is_finite() || !centroid.y.is_finite() {
-        return Err(NumError::invalid_input(
-            OP_CENTROID,
-            "point centroid is not finite",
-        ));
+        return Err(NumError::invalid_input(OP_CENTROID, Invalid::Overflows));
     }
 
     let mut total_distance = 0.0;
     for point in points {
         let distance = point.distance(centroid);
         if !distance.is_finite() {
-            return Err(NumError::invalid_input(
-                OP_CENTROID,
-                "point distance overflows",
-            ));
+            return Err(NumError::invalid_input(OP_CENTROID, Invalid::Overflows));
         }
         total_distance += distance;
         if !total_distance.is_finite() {
-            return Err(NumError::invalid_input(
-                OP_CENTROID,
-                "mean point distance overflows",
-            ));
+            return Err(NumError::invalid_input(OP_CENTROID, Invalid::Overflows));
         }
     }
     let mean_distance = total_distance / count;
     if !mean_distance.is_finite() {
-        return Err(NumError::invalid_input(
-            OP_CENTROID,
-            "mean point distance is not finite",
-        ));
+        return Err(NumError::invalid_input(OP_CENTROID, Invalid::Overflows));
     }
     Ok(PointSetSummary {
         centroid,
@@ -1881,16 +1841,14 @@ mod tests {
         assert!(centroid_and_mean_radius(&[]).is_err());
         assert!(centroid_and_mean_radius(&[Point2::new(f64::NAN, 0.0)]).is_err());
         assert!(centroid_and_mean_radius(&[Point2::new(0.0, f64::INFINITY)]).is_err());
-        assert!(centroid_and_mean_radius(&[
-            Point2::new(f64::MAX, 0.0),
-            Point2::new(f64::MAX, 0.0),
-        ])
-        .is_err());
-        assert!(centroid_and_mean_radius(&[
-            Point2::new(-f64::MAX, 0.0),
-            Point2::new(f64::MAX, 0.0),
-        ])
-        .is_err());
+        assert!(
+            centroid_and_mean_radius(&[Point2::new(f64::MAX, 0.0), Point2::new(f64::MAX, 0.0),])
+                .is_err()
+        );
+        assert!(
+            centroid_and_mean_radius(&[Point2::new(-f64::MAX, 0.0), Point2::new(f64::MAX, 0.0),])
+                .is_err()
+        );
     }
 
     #[test]

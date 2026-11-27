@@ -84,16 +84,16 @@
 
 use crate::error::{EvalError, SolveError, SolveFailure};
 use crate::local_solve1d::Domain1d;
+use scx_num::NumError;
 use scx_num::math::{BIG_DOUBLE, EFF_ZERO, EFF_ZERO_SQ, EFF_ZERO_SQRT};
 use scx_num::matrix::Matrix;
-use scx_num::NumError;
 
 /// Whether the Jacobian system's solve failed with `SM_ERR` (the system is not solvable),
 /// which ends the iteration: by its status, so also a typed failure that replaced the
-/// `Upstream` (#13790). Every layer-0 `Failed` has status `SM_ERR`; `InvalidInput` has
+/// `Upstream` (#13790). Every layer-0 `Failed` and `Call` has status `SM_ERR`; `InvalidInput` has
 /// `SM_ERR_INVALID_INPUT`.
 fn is_bad_jacobian(error: &NumError) -> bool {
-    matches!(error, NumError::Failed { .. })
+    matches!(error, NumError::Failed { .. } | NumError::Call { .. })
 }
 
 /// How a solve treats next guesses that leave the domain's intervals
@@ -774,7 +774,7 @@ impl<const N: usize, C: ConvergedNd<N>> LocalSolveNd<N, C> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use scx_num::error::NumFailure;
+    use scx_num::error::{Invalid, NumFailure};
     use scx_num::extent1d::Extent1d;
 
     /// The test equation sets' error: the classes the pin's tests use.
@@ -1155,7 +1155,7 @@ mod tests {
         assert!(is_bad_jacobian(&NumError::call(op)(singular)));
         assert!(!is_bad_jacobian(&NumError::InvalidInput {
             operation: op,
-            reason: "rhs size differs",
+            reason: Invalid::SizeMismatch,
         }));
     }
 }

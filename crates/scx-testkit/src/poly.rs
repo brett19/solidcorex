@@ -1,7 +1,6 @@
 // Written for solidcorex. Apache-2.0.
-//! Exact polynomials over the rationals, and every real root of one, certified: each root
-//! is held in a rational interval that contains it and no other root, with its
-//! multiplicity.
+//! Polynomials with exact rational coefficients, and their real roots isolated with
+//! certainty.
 //!
 //! The method is the textbook one, exact throughout so nothing is a judgement:
 //!
@@ -10,12 +9,15 @@
 //! - a Sturm sequence of each `f_i` counts its roots in any half-open interval `(a, b]`, so
 //!   bisection from Cauchy's bound isolates them;
 //! - an isolated root of a square-free factor changes its sign, so bisection on the sign
-//!   alone refines it, to `2^-110` relative (a root met exactly at a bisection point is
-//!   reported as a point interval).
+//!   alone refines it to the width asked for; roots of different factors are distinct, so
+//!   any two enclosures that meet are refined until they do not.
 //!
-//! Slow and plain: Sturm sequences over the rationals grow their coefficients, which is
-//! fine for the degrees here (at most eight) and the numbers of a few doubles each.
+//! The work is done on integer polynomials with the primitive pseudo-remainder sequence
+//! (see `Z`), since reducing rationals at every step dominates the time otherwise. Every
+//! real root comes back once, as an interval sure to hold it and no other root, with its
+//! multiplicity; a root met at a bisection point comes back as that exact point.
 
+use crate::bound::{Bound, rat_to_dd};
 use crate::dd::Dd;
 use crate::exact::Int;
 use crate::rat::Rat;
@@ -25,41 +27,13 @@ use crate::rat::Rat;
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Default)]
 pub struct Poly(Vec<Rat>);
 
-/// A real root: it lies in `[lo, hi]`, which holds no other root; `lo == hi` when it was
-/// met exactly.
+/// A real root: an interval holding it and no other root, and how many times it repeats.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Root {
-    /// The interval's lower end.
-    pub lo: Rat,
-    /// The interval's upper end.
-    pub hi: Rat,
-    /// How many times the polynomial has it.
+    /// The enclosure; a single point when the root is that point exactly.
+    pub at: Bound,
+    /// Its multiplicity, at least one.
     pub multiplicity: u32,
-}
-
-impl Root {
-    /// The midpoint, as a double-double (within `2^-104` relative of the root's interval).
-    pub fn value(&self) -> Dd {
-        to_dd(&(&self.lo + &self.hi).scale(-1))
-    }
-
-    /// Half the interval's width: a bound on `|root - value()|`, up to the rounding of
-    /// [`Root::value`] itself.
-    pub fn radius(&self) -> f64 {
-        (&self.hi - &self.lo).scale(-1).to_f64()
-    }
-}
-
-/// `r` as a double-double: the nearest double and the nearest double to the rest.
-pub fn to_dd(r: &Rat) -> Dd {
-    let hi = r.to_f64();
-    let lo = Rat::from_f64(hi).map_or(0.0, |h| (r - &h).to_f64());
-    Dd { hi, lo }
-}
-
-/// A double-double exactly, as a rational; `None` when not finite.
-pub fn of_dd(x: Dd) -> Option<Rat> {
-    Some(Rat::from_f64(x.hi)? + Rat::from_f64(x.lo)?)
 }
 
 /// A polynomial with integer coefficients, lowest first, no trailing zero: the working
@@ -194,11 +168,7 @@ impl Z {
             a = b;
             b = r;
         }
-        if a.lead().is_negative() {
-            a.neg()
-        } else {
-            a
-        }
+        if a.lead().is_negative() { a.neg() } else { a }
     }
 
     /// Yun's square-free factorisation, as [`Poly::square_free`], each factor primitive.
@@ -278,8 +248,9 @@ impl Z {
         Rat::one().scale(i64::try_from(top.saturating_sub(lead)).unwrap_or(0) + 2)
     }
 
-    /// The roots of a square-free `p`, each in an isolating interval refined to the width.
-    fn isolate(&self) -> Vec<(Rat, Rat)> {
+    /// The roots of a square-free `p`, each alone in `(a, c]` with `p(c)` not zero, or
+    /// met exactly at a bisection point.
+    fn isolate(&self) -> Vec<Isolated> {
         let s = self.sturm();
         let changes = |x: &Rat| -> u32 {
             let signs: Vec<i32> = s.iter().map(|p| p.sign_at(x)).filter(|&g| g != 0).collect();
@@ -287,16 +258,16 @@ impl Z {
         };
         let b = self.bound();
         let mut out = Vec::new();
-        // (a, b] with its count.
+        // (a, c] with its count and the counts at its ends.
         let lo = -&b;
         let (cl, ch) = (changes(&lo), changes(&b));
         let mut stack = vec![(lo, b, cl.saturating_sub(ch), cl, ch)];
         while let Some((a, c, n, va, vc)) = stack.pop() {
             match n {
                 0 => {}
-                1 => out.push(self.refine(a, c)),
+                1 => out.push(Isolated::new(self, a, c)),
                 _ => {
-                    let m = (&a + &c).scale(-1);
+                    let m = a.midpoint(&c);
                     let vm = changes(&m);
                     stack.push((a, m.clone(), va.saturating_sub(vm), va, vm));
                     stack.push((m, c, vm.saturating_sub(vc), vm, vc));
@@ -305,31 +276,52 @@ impl Z {
         }
         out
     }
+}
 
-    /// The one root of a square-free `p` in `(a, c]`, refined by the sign.
-    fn refine(&self, mut a: Rat, mut c: Rat) -> (Rat, Rat) {
-        let sc = self.sign_at(&c);
-        if sc == 0 {
-            return (c.clone(), c);
+/// One root of the square-free `f`, alone in `(lo, hi]`: `lo == hi` when it was met exactly,
+/// otherwise `f(hi)` has the sign `high`, not zero, and the root is inside `(lo, hi)`.
+struct Isolated {
+    f: Z,
+    lo: Rat,
+    hi: Rat,
+    high: i32,
+    multiplicity: u32,
+}
+
+impl Isolated {
+    fn new(f: &Z, lo: Rat, hi: Rat) -> Isolated {
+        let high = f.sign_at(&hi);
+        let lo = if high == 0 { hi.clone() } else { lo };
+        Isolated {
+            f: f.clone(),
+            lo,
+            hi,
+            high,
+            multiplicity: 0,
         }
-        for _ in 0..4000 {
-            let width = &c - &a;
-            let size = if a.abs() > c.abs() { a.abs() } else { c.abs() };
-            if width <= size.scale(-110) || width <= Rat::one().scale(-1080) {
-                break;
-            }
-            let m = (&a + &c).scale(-1);
-            let sm = self.sign_at(&m);
-            if sm == 0 {
-                return (m.clone(), m);
-            }
-            if sm == sc {
-                c = m;
-            } else {
-                a = m;
-            }
+    }
+
+    fn is_exact(&self) -> bool {
+        self.lo == self.hi
+    }
+
+    /// Whether `[lo, hi]`, closed, is certain to hold this root alone: an exact point, or
+    /// `f` not zero at `lo` either (`lo` may be another root of `f`, met exactly).
+    fn is_closed(&self) -> bool {
+        self.is_exact() || self.f.sign_at(&self.lo) != 0
+    }
+
+    /// One bisection step on the sign.
+    fn halve(&mut self) {
+        if self.is_exact() {
+            return;
         }
-        (a, c)
+        let m = self.lo.midpoint(&self.hi);
+        match self.f.sign_at(&m) {
+            0 => (self.lo, self.hi) = (m.clone(), m),
+            s if s == self.high => self.hi = m,
+            _ => self.lo = m,
+        }
     }
 }
 
@@ -379,13 +371,18 @@ impl Poly {
             .fold(Rat::zero(), |acc, c| &(&acc * x) + c)
     }
 
+    /// The sign of the value at `x`.
+    pub fn sign_at(&self, x: &Rat) -> i32 {
+        self.eval(x).signum()
+    }
+
     /// The value at a double-double `x`, in double-double (the coefficients rounded to
     /// double-doubles first).
     pub fn eval_dd(&self, x: Dd) -> Dd {
         self.0
             .iter()
             .rev()
-            .fold(Dd::new(0.0), |acc, c| acc * x + to_dd(c))
+            .fold(Dd::new(0.0), |acc, c| acc * x + rat_to_dd(c))
     }
 
     /// The derivative.
@@ -535,22 +532,109 @@ impl Poly {
         }
     }
 
-    /// Every real root, ascending, each isolated and refined to `2^-110` relative of its
-    /// magnitude (or met exactly), with its multiplicity. Empty for the zero polynomial
-    /// (every point is a root: the caller tells that case apart) and for a constant.
-    pub fn real_roots(&self) -> Vec<Root> {
-        let mut roots: Vec<Root> = Z::of(self)
-            .square_free()
+    /// Every real root, ascending, each enclosed in an interval of width at most `width` (or
+    /// an exact point) holding no other root, the intervals pairwise disjoint, with its
+    /// multiplicity. Empty for a constant, and for the zero polynomial (every point is a
+    /// root: the caller tells that case apart).
+    pub fn real_roots(&self, width: &Rat) -> Vec<Root> {
+        let mut found: Vec<Isolated> = Vec::new();
+        for (f, m) in Z::of(self).square_free() {
+            found.extend(f.isolate().into_iter().map(|mut r| {
+                r.multiplicity = m;
+                r
+            }));
+        }
+        for r in &mut found {
+            while !r.is_exact() && (&r.hi - &r.lo > *width || !r.is_closed()) {
+                r.halve();
+            }
+        }
+        found.sort_by(|a, b| a.lo.cmp(&b.lo));
+        // Roots of different factors are distinct: narrow any two that meet.
+        loop {
+            let mut moved = false;
+            for i in 1..found.len() {
+                let meet = matches!((found.get(i - 1), found.get(i)),
+                    (Some(a), Some(b)) if a.hi >= b.lo);
+                if meet {
+                    for j in [i - 1, i] {
+                        if let Some(r) = found.get_mut(j) {
+                            r.halve();
+                        }
+                    }
+                    moved = true;
+                }
+            }
+            if !moved {
+                break;
+            }
+            found.sort_by(|a, b| a.lo.cmp(&b.lo));
+        }
+        found
             .into_iter()
-            .flat_map(|(f, m)| {
-                f.isolate().into_iter().map(move |(lo, hi)| Root {
-                    lo,
-                    hi,
-                    multiplicity: m,
+            .filter_map(|r| {
+                Some(Root {
+                    at: Bound::new(r.lo, r.hi)?,
+                    multiplicity: r.multiplicity,
                 })
             })
-            .collect();
-        roots.sort_by(|a, b| a.lo.cmp(&b.lo));
-        roots
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn p(c: &[i64]) -> Poly {
+        Poly::new(c.iter().map(|&x| Rat::from(x)).collect())
+    }
+
+    fn width() -> Rat {
+        Rat::one().scale(-60)
+    }
+
+    #[test]
+    fn roots_of_known_polynomials() {
+        // (x - 1)^2 (x + 2) (x^2 - 2) = roots 1 (twice), -2, +-sqrt 2.
+        let g = p(&[1, -2, 1]); // (x-1)^2
+        let h = p(&[2, 1]); // x + 2
+        let k = p(&[-2, 0, 1]); // x^2 - 2
+        let f2 = g.mul(&h).mul(&k);
+        let roots = f2.real_roots(&width());
+        assert_eq!(roots.len(), 4);
+        assert_eq!(roots[0].at, Bound::exact(Rat::from(-2)));
+        assert_eq!(roots[1].multiplicity, 1);
+        assert!(roots[1].at.hi() < &Rat::from(-1));
+        assert_eq!(roots[2].at, Bound::exact(Rat::from(1)));
+        assert_eq!(roots[2].multiplicity, 2);
+        assert!(roots[3].at.width() <= width());
+        // the enclosure holds sqrt 2: lo^2 < 2 < hi^2
+        assert!(&roots[3].at.lo().clone() * roots[3].at.lo() < Rat::from(2));
+        assert!(&roots[3].at.hi().clone() * roots[3].at.hi() > Rat::from(2));
+    }
+
+    #[test]
+    fn no_real_roots_and_constants() {
+        assert!(p(&[1, 0, 1]).real_roots(&width()).is_empty());
+        assert!(p(&[3]).real_roots(&width()).is_empty());
+        assert!(Poly::new(vec![]).real_roots(&width()).is_empty());
+        let r = p(&[0, 0, 0, 1]).real_roots(&width()); // x^3
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].multiplicity, 3);
+        assert_eq!(r[0].at, Bound::exact(Rat::zero()));
+    }
+
+    #[test]
+    fn close_roots_separate() {
+        // (x - 1)(x - 1 - 2^-80): two simple roots 2^-80 apart.
+        let e = Rat::one().scale(-80);
+        let a = Rat::one();
+        let b = &a + &e;
+        let f = Poly::new(vec![&a * &b, -(&a + &b), Rat::one()]);
+        let r = f.real_roots(&Rat::one().scale(-100));
+        assert_eq!(r.len(), 2);
+        assert!(r[0].at.below(&r[1].at));
+        assert!(r[0].at.contains(&a) && r[1].at.contains(&b));
     }
 }

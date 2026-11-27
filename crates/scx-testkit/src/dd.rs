@@ -59,11 +59,7 @@ impl Dd {
     /// `|self|`.
     #[must_use]
     pub fn abs(self) -> Dd {
-        if self.hi < 0.0 {
-            -self
-        } else {
-            self
-        }
+        if self.hi < 0.0 { -self } else { self }
     }
 
     /// `self 2^k`, exact whenever both parts stay normal.
@@ -154,22 +150,45 @@ fn spent(t: f64, bound: f64) -> bool {
     t.partial_cmp(&bound) != Some(core::cmp::Ordering::Greater)
 }
 
-/// `2^k` for `k` in `[-1022, 1023]`.
+/// `2^k` for any `k`: a normal power of two for `k` in `[-1022, 1023]`, a subnormal one
+/// down to `-1074`, zero below and infinity above.
 pub fn pow2(k: i32) -> f64 {
-    f64::from_bits(((k + 1023) as u64) << 52)
+    if k > 1023 {
+        f64::INFINITY
+    } else if k >= -1022 {
+        f64::from_bits(((k + 1023) as u64) << 52)
+    } else if k >= -1074 {
+        f64::from_bits(1u64 << (k + 1074))
+    } else {
+        0.0
+    }
 }
 
-/// `x 2^k`, exact whenever the result is normal.
-pub fn scale(mut x: f64, mut k: i32) -> f64 {
-    while k > 1000 {
-        x *= pow2(1000);
-        k -= 1000;
+/// `x 2^k` for finite `x` and any `k`, rounded once (ties to even): exact whenever the
+/// result is normal, correctly rounded when it is subnormal, infinite when it overflows.
+pub fn scale(x: f64, k: i32) -> f64 {
+    if x == 0.0 || !x.is_finite() {
+        return x;
     }
-    while k < -1000 {
-        x *= pow2(-1000);
-        k += 1000;
+    // x = m 2^e with |m| in [1, 2), exactly, the significand read from the bits.
+    let e = exponent(x);
+    let b = if e < -1022 {
+        (x * pow2(64)).to_bits()
+    } else {
+        x.to_bits()
+    };
+    let m = f64::from_bits((b & 0x800f_ffff_ffff_ffff) | 0x3ff0_0000_0000_0000);
+    let t = e.saturating_add(k);
+    if t > 1023 {
+        f64::INFINITY.copysign(x)
+    } else if t >= -1022 {
+        m * pow2(t)
+    } else if t >= -1080 {
+        // m 2^-1022 is exact; the second product is the one rounding.
+        m * pow2(-1022) * pow2(t + 1022)
+    } else {
+        0.0f64.copysign(x)
     }
-    x * pow2(k)
 }
 
 /// `floor(log2 |x|)` for a finite nonzero `x`.
@@ -375,11 +394,7 @@ pub fn atan2(y: Dd, x: Dd) -> Dd {
         }
     } else {
         let a = atan(x / y);
-        if y.hi > 0.0 {
-            k.pio2 - a
-        } else {
-            -k.pio2 - a
-        }
+        if y.hi > 0.0 { k.pio2 - a } else { -k.pio2 - a }
     }
 }
 

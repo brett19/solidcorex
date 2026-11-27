@@ -20,7 +20,7 @@ use core::ops::{Add, Div, Mul, Neg, Sub};
 use scx_num::eft::{two_prod, two_sum};
 use scx_num::fmath;
 use scx_num::hash::Rng;
-use scx_testkit::dd::{self, consts, exponent, pow2, scale, ulp_err, Consts as K, Dd};
+use scx_testkit::dd::{self, Consts as K, Dd, consts, exponent, pow2, scale, ulp_err};
 
 /// The largest error allowed, in ulps of the reference. `fmath` measures at or below
 /// 0.5 ulp (correctly rounded) on every input checked; the margin covers only the
@@ -167,7 +167,7 @@ fn any_finite(rng: &mut Rng) -> f64 {
 
 /// Input `i` of `f` (both arguments).
 fn input(f: &str, rng: &mut Rng, i: usize) -> (f64, f64) {
-    let half = i % 2 == 0;
+    let half = i.is_multiple_of(2);
     let u = rng.next_signed_unit();
     let x = match f {
         "exp" => {
@@ -365,6 +365,69 @@ fn references_at_known_values() {
     assert!(ulp_err(core::f64::consts::PI, k.pi, 0) <= 0.5);
     assert!(ulp_err(core::f64::consts::LN_2, k.ln2, 0) <= 0.5);
     assert!(ulp_err(core::f64::consts::LN_10, k.ln10, 0) <= 0.5);
+}
+
+/// `powi` bit for bit against the exact power (exact rationals, rounded once), across the
+/// whole exponent range: the largest binade (where `2^-e` is no normal double) and the
+/// subnormals included, with results that overflow, underflow or land subnormal.
+#[test]
+fn powi_is_the_exact_power_rounded() {
+    use scx_testkit::Rat;
+    let mut xs = vec![
+        f64::MAX,
+        1.5 * pow2(1023),
+        pow2(1023),
+        f64::MIN_POSITIVE,
+        f64::from_bits(1),
+        f64::from_bits(3),
+        f64::from_bits((1 << 52) - 1),
+        2.0,
+        3.0,
+        0.1,
+        1.0 + f64::EPSILON,
+        1.0 - f64::EPSILON / 2.0,
+        1e-300,
+        1e300,
+    ];
+    let mut rng = Rng::new(7);
+    for _ in 0..60 {
+        let e = (rng.next_u64() % 2098) as i32 - 1074;
+        xs.push(scale(1.0 + rng.next_f64(), e));
+    }
+    let more: Vec<f64> = xs.iter().map(|x| -x).collect();
+    xs.extend(more);
+    let ns: Vec<i32> = (-40..=40).chain([-1100, -64, 64, 1100]).collect();
+    for &x in &xs {
+        let r = Rat::from_f64(x).unwrap();
+        for &n in &ns {
+            // Large powers only near 1, where the result stays in range (and cheap).
+            if n.abs() > 64 && (x.abs() - 1.0).abs() > 1e-3 {
+                continue;
+            }
+            let mut p = Rat::one();
+            let mut b = r.clone();
+            let mut k = n.unsigned_abs();
+            while k > 0 {
+                if k & 1 == 1 {
+                    p = &p * &b;
+                }
+                b = &b * &b;
+                k >>= 1;
+            }
+            if n < 0 {
+                p = p.recip().unwrap();
+            }
+            let want = p
+                .to_f64()
+                .copysign(if x < 0.0 && n % 2 != 0 { -1.0 } else { 1.0 });
+            let got = fmath::powi(x, n);
+            assert_eq!(
+                got.to_bits(),
+                want.to_bits(),
+                "powi({x:e}, {n}) = {got:e}, exact {want:e}"
+            );
+        }
+    }
 }
 
 /// C99 Annex F's special values, bit for bit; every NaN result is [`f64::NAN`].
