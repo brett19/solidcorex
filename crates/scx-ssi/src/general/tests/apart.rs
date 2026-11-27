@@ -456,3 +456,67 @@ fn the_tolerance_is_the_coincidence() {
     );
     assert!(matches!(kept, Err(SsiError::Unresolved { .. })), "{kept:?}");
 }
+
+/// The cylinder of radius `r` about the line through `(x, 0)` along z, `|z| <= 4`.
+fn cylinder_at(x: f64, r: f64) -> Part {
+    let (f, t) = fr([x, 0.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]);
+    let c = Cylinder::new(f, mm(r), Sense::Forward).unwrap();
+    (
+        Surface::Cylinder(c),
+        Extent2d::from_bounds(0.0, -4.0, TAU * r, 4.0).unwrap(),
+        SurfaceKind::Cylinder(tk::Cylinder {
+            frame: t,
+            radius: r,
+        }),
+    )
+}
+
+/// The research-73 truths (`ssi_truth`, row SM0) decide each pair: no contact is proved
+/// empty, a contact (a touch or a curve) is refused where it lies and never dropped.
+#[test]
+fn the_sm0_truths_decide_spheres_and_parallel_cylinders() {
+    use scx_testkit::ssi_truth::{cylinders_parallel, sphere_sphere};
+    // Two spheres 1 and 1.5 at distance d.
+    for d in [
+        4.0,
+        2.6,
+        2.5 + p2(10),
+        2.5,
+        2.4,
+        1.0,
+        0.6,
+        0.5 + p2(10),
+        0.5,
+        0.4,
+    ] {
+        let truth = sphere_sphere([0.0; 3], 1.0, [d, 0.0, 0.0], 1.5).unwrap();
+        let out = run(&sphere([0.0; 3], 1.0), &sphere([d, 0.0, 0.0], 1.5));
+        if truth.is_empty() {
+            // Apart (d > 2.5) or one inside the other (d < 0.5): no contact. Only the first
+            // is a proof by apartness.
+            if d > 2.5 {
+                assert_eq!(out.map(|t| t.is_empty()), Ok(true), "spheres at {d}");
+            }
+        } else {
+            assert!(
+                matches!(out, Err(SsiError::Unresolved { .. })),
+                "spheres at {d}: {out:?}"
+            );
+        }
+    }
+    // Two parallel cylinders of radii 1 and 0.5 with axes e apart.
+    for e in [3.0, 1.6, 1.5 + p2(8), 1.5, 1.2, 0.5] {
+        let truth = cylinders_parallel(1.0, 0.5, e, 4.0).unwrap();
+        let out = run(&cylinder_at(0.0, 1.0), &cylinder_at(e, 0.5));
+        if truth.is_empty() {
+            if e > 1.5 {
+                assert_eq!(out.map(|t| t.is_empty()), Ok(true), "cylinders at {e}");
+            }
+        } else {
+            assert!(
+                matches!(out, Err(SsiError::Unresolved { .. })),
+                "cylinders at {e}: {out:?}"
+            );
+        }
+    }
+}
