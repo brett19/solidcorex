@@ -655,6 +655,8 @@ fn aligned(
             .ok()
             .map(Curve2::AngleLine)
         }
+        // The chart's periods are the domain's.
+        Curve2::OnChart(o) => o.shifted(m).ok().map(Curve2::from),
         _ => None,
     }
 }

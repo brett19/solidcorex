@@ -398,16 +398,38 @@ pub(crate) fn stack(dice: &mut Dice, n: usize) -> Result<Draft> {
 /// the solid and the outside by turns, so the sides say nothing of the order and only the
 /// geometry fixes it. Seed 0: unit cells.
 pub(crate) fn checker(dice: &mut Dice, n: usize, one: bool) -> Result<Draft> {
+    lattice_blocks(dice, [n + 1, n + 1, 1], |[i, j, _]| (i + j) % 2 == 0, one)
+}
+
+/// Two unit-ish blocks that meet at one corner vertex and nothing else (a pinched vertex:
+/// its link is two circles), each its own solid region and shell, or, when `one`, one solid
+/// region of one shell. Seed 0: unit cells.
+pub(crate) fn corner_touch(dice: &mut Dice, one: bool) -> Result<Draft> {
+    lattice_blocks(dice, [2, 2, 2], |[i, j, k]| i == j && j == k, one)
+}
+
+/// The blocks of an `nx x ny x nz` lattice whose cell `keep` accepts, cells meeting at their
+/// shared lattice vertices and edges (see [`checker`]).
+fn lattice_blocks(
+    dice: &mut Dice,
+    dims: [usize; 3],
+    keep: impl Fn([usize; 3]) -> bool,
+    one: bool,
+) -> Result<Draft> {
     let place = Place {
         frame: dice.frame(),
     };
-    let m = n + 1;
+    let [mx, my, mz] = dims;
     let (w, d) = (dice.range(0.5, 3.0, 1.0), dice.range(0.5, 3.0, 1.0));
     let h = dice.range(0.5, 3.0, 1.0);
     let axes = [
-        breaks(dice, m, w * m as f64),
-        breaks(dice, m, d * m as f64),
-        vec![0.0, h],
+        breaks(dice, mx, w * mx as f64),
+        breaks(dice, my, d * my as f64),
+        if mz == 1 {
+            vec![0.0, h]
+        } else {
+            breaks(dice, mz, h * mz as f64)
+        },
     ];
     let mut b = Builder::new();
     let outside = b.d.add_shell(ShellRecord::new(RegionId::OUTSIDE))?;
@@ -418,53 +440,53 @@ pub(crate) fn checker(dice: &mut Dice, n: usize, one: bool) -> Result<Draft> {
     };
     let mut vertices: BTreeMap<[usize; 3], VertexId> = BTreeMap::new();
     let mut lines = Lines::default();
-    for i in 0..m {
-        for j in 0..m {
-            if (i + j) % 2 != 0 {
-                continue;
+    for (i, j, k) in
+        (0..mx).flat_map(|i| (0..my).flat_map(move |j| (0..mz).map(move |k| (i, j, k))))
+    {
+        if !keep([i, j, k]) {
+            continue;
+        }
+        let shell = match welded {
+            Some(s) => s,
+            None => b.region_shell(true)?,
+        };
+        let lo = [i, j, k];
+        let mut corner = |b: &mut Builder, c: [usize; 3]| -> Result<VertexId> {
+            let idx = [lo[0] + c[0], lo[1] + c[1], lo[2] + c[2]];
+            if let Some(&v) = vertices.get(&idx) {
+                return Ok(v);
             }
-            let shell = match welded {
-                Some(s) => s,
-                None => b.region_shell(true)?,
-            };
-            let lo = [i, j, 0];
-            let mut corner = |b: &mut Builder, c: [usize; 3]| -> Result<VertexId> {
-                let idx = [lo[0] + c[0], lo[1] + c[1], c[2]];
-                if let Some(&v) = vertices.get(&idx) {
-                    return Ok(v);
-                }
-                let mut l = [0.0; 3];
-                for (a, slot) in l.iter_mut().enumerate() {
-                    let at = idx.get(a).copied().unwrap_or(0);
-                    *slot = axes
-                        .get(a)
-                        .and_then(|x| x.get(at))
-                        .copied()
-                        .ok_or(GenError::Degenerate("checker"))?;
-                }
-                let v = b.vertex(place.point(l))?;
-                vertices.insert(idx, v);
-                Ok(v)
-            };
-            // The block's six faces, fronts outward, as `lattice_box` makes a cell's.
-            for axis in 0..3 {
-                let (u, v) = ((axis + 1) % 3, (axis + 2) % 3);
-                for side in [0, 1] {
-                    let mut ring = Vec::with_capacity(4);
-                    for (du, dv) in [(0, 0), (1, 0), (1, 1), (0, 1)] {
-                        let mut c = [0; 3];
-                        for (a, value) in [(axis, side), (u, du), (v, dv)] {
-                            if let Some(slot) = c.get_mut(a) {
-                                *slot = value;
-                            }
+            let mut l = [0.0; 3];
+            for (a, slot) in l.iter_mut().enumerate() {
+                let at = idx.get(a).copied().unwrap_or(0);
+                *slot = axes
+                    .get(a)
+                    .and_then(|x| x.get(at))
+                    .copied()
+                    .ok_or(GenError::Degenerate("checker"))?;
+            }
+            let v = b.vertex(place.point(l))?;
+            vertices.insert(idx, v);
+            Ok(v)
+        };
+        // The block's six faces, fronts outward, as `lattice_box` makes a cell's.
+        for axis in 0..3 {
+            let (u, v) = ((axis + 1) % 3, (axis + 2) % 3);
+            for side in [0, 1] {
+                let mut ring = Vec::with_capacity(4);
+                for (du, dv) in [(0, 0), (1, 0), (1, 1), (0, 1)] {
+                    let mut c = [0; 3];
+                    for (a, value) in [(axis, side), (u, du), (v, dv)] {
+                        if let Some(slot) = c.get_mut(a) {
+                            *slot = value;
                         }
-                        ring.push(corner(&mut b, c)?);
                     }
-                    if side == 0 {
-                        ring.reverse();
-                    }
-                    polygon(&mut b, &mut lines, [outside, shell], &[ring])?;
+                    ring.push(corner(&mut b, c)?);
                 }
+                if side == 0 {
+                    ring.reverse();
+                }
+                polygon(&mut b, &mut lines, [outside, shell], &[ring])?;
             }
         }
     }

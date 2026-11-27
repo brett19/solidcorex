@@ -12,12 +12,12 @@ use std::f64::consts::PI;
 
 use scx_brep::op::{Cx, Done, NoTrace, Scratch, Settings};
 use scx_brep::{Brep, Changes, Document, EdgeId, Entity, FaceId, Origin};
-use scx_make::torus;
 use scx_mass::RelAccuracy;
 use scx_num::budget::{Budget, Stop};
 use scx_num::frame::Frame;
 use scx_num::units::Length;
 use scx_num::vector3d::Vec3;
+use scx_testkit::bodies::made::torus;
 
 use super::face_face::{X, Z, ball, cyl};
 use super::{cuboid, pt};
@@ -43,7 +43,7 @@ pub(super) fn checked(a: &Brep, b: &Brep, which: BooleanOp, doc: Document) -> Do
     let stop = Stop::new();
     let settings = Settings::new();
     let cx = Cx::new(&doc, &settings, &mut scratch, &stop, &NoTrace);
-    if let Err(e) = scx_check::contract(&done.body, &cx) {
+    if let Err(e) = scx_check::contract(&done.body, &cx, scx_check::Contacts::Refused) {
         panic!("{which:?}: contract {e:?}");
     }
     done
@@ -142,6 +142,26 @@ fn a_cylinder_through_a_plate_unites_bores_and_intersects() {
     // The cylinder less the plate: two lumps.
     let two = checked(&b, &a, SUBTRACT, doc);
     near(volume(&two.body), 2.0 * PI, 1e-9);
+}
+
+#[test]
+fn two_unit_spheres_a_radius_apart_unite_subtract_and_intersect() {
+    // They meet in the circle x = 1/2, whose pcurves go through each sphere's chart. The
+    // lens between them is two caps of height 1/2: pi h^2 (3 r - h) / 3 each, 5 pi / 12 in
+    // all.
+    let doc = Document::default();
+    let a = ball([0.0; 3], 1.0, doc);
+    let b = ball([1.0, 0.0, 0.0], 1.0, doc);
+    let ball_v = 4.0 * PI / 3.0;
+    let lens = 5.0 * PI / 12.0;
+    for (which, v) in [
+        (UNION, 2.0 * ball_v - lens),
+        (SUBTRACT, ball_v - lens),
+        (INTERSECT, lens),
+    ] {
+        let done = checked(&a, &b, which, doc);
+        near(volume(&done.body), v, 1e-9);
+    }
 }
 
 #[test]
@@ -490,7 +510,7 @@ fn the_operands_are_read_only() {
 
 /// A 10 x 10 x 20 box turned 45 degrees about z, then about x, its edge crossing the cube's
 /// edge y = z = 10 at depth `d`.
-fn crease(d: f64, doc: Document) -> Brep {
+pub(super) fn crease(d: f64, doc: Document) -> Brep {
     let (c, s) = (0.5_f64.sqrt(), 0.5_f64.sqrt());
     // Rx(45) * Rz(45).
     let rz = |v: [f64; 3]| [c * v[0] - s * v[1], s * v[0] + c * v[1], v[2]];
@@ -508,7 +528,9 @@ fn crease(d: f64, doc: Document) -> Brep {
     )
     .unwrap();
     let size = [10.0, 10.0, 20.0].map(Length::from_mm);
-    scx_make::block(&frame, size, &doc).unwrap().body
+    scx_testkit::bodies::made::block(&frame, size, &doc)
+        .unwrap()
+        .body
 }
 
 #[test]

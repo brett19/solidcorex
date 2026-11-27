@@ -2,8 +2,8 @@
 //! Where a result meets itself, or one lump nests in another's cavity (BO7, 72 §14.36).
 //! D5: a vertex or edge contact is built (a vertex of two regions, an edge of four fins in
 //! radial order); a touch inside a face needs a point loop scx-brep lacks and is
-//! `NonManifold`. Every built result passes `scx_check::contract`, except an empty one or
-//! one with an edge of four fins, which the contract refuses by design (see [`result`]);
+//! `NonManifold`. Every built result passes `scx_check::contract`, an empty one excepted,
+//! and one with an edge of four fins passes it only with `Contacts::Radial` (see [`result`]);
 //! every volume is the closed form's.
 //!
 //! Ported (judged by outcome, against closed forms): solidcore's `boolean_api` cases
@@ -18,8 +18,7 @@ use std::f64::consts::PI;
 use scx_bodyq::{PointClass, classify_point};
 use scx_brep::op::{Cx, NoTrace, Scratch, Settings};
 use scx_brep::{Brep, Document, Entity, RegionId};
-use scx_check::{Breach, ContractError};
-use scx_make::torus;
+use scx_check::{Breach, Contacts, ContractError};
 use scx_mass::RelAccuracy;
 use scx_num::budget::{Budget, Stop};
 use scx_num::fmath;
@@ -27,6 +26,7 @@ use scx_num::frame::Frame;
 use scx_num::units::Length;
 use scx_num::vector3d::Vec3;
 use scx_tess::{TessSpec, tessellate};
+use scx_testkit::bodies::made::torus;
 
 use super::face_face::{X, Z, ball, cyl};
 use super::whole::{INTERSECT, SUBTRACT, UNION, checked, near, op, volume};
@@ -63,9 +63,9 @@ fn non_manifold(a: &Brep, b: &Brep, which: BooleanOp, doc: Document, name: &str)
 
 /// The Boolean's result, checked. A body with no face is the empty result (the contract
 /// refuses it by its first test, so it is not run). A body with an edge of more than two
-/// fins is a pinch D5 builds and the contract refuses by its third test: it must fail
-/// there and nowhere sooner, and its orientation is proved by `scx_mass::outward` (the
-/// contract's fifth test). Any other body passes the whole contract.
+/// fins is a pinch D5 builds: the default contract must refuse it at exactly that edge
+/// (its third test), and the contract that allows radial edges (CK3) must prove it, which
+/// includes the shells' orientation. Any other body passes the default contract.
 fn result(a: &Brep, b: &Brep, which: BooleanOp, doc: Document) -> Brep {
     let body = op(a, b, which, doc)
         .unwrap_or_else(|e| panic!("{which:?}: {e:?}"))
@@ -81,14 +81,14 @@ fn result(a: &Brep, b: &Brep, which: BooleanOp, doc: Document) -> Brep {
     let stop = Stop::new();
     let settings = Settings::new();
     let cx = Cx::new(&doc, &settings, &mut scratch, &stop, &NoTrace);
-    match scx_check::contract(&body, &cx) {
+    match scx_check::contract(&body, &cx, Contacts::Refused) {
         Err(ContractError::Broken(Breach::NonManifoldEdge { edge, fins })) => {
             assert_eq!((edge, fins), (pinch.id(), pinch.fins().len()), "{which:?}");
         }
         other => panic!("{which:?}: contract {other:?}"),
     }
-    scx_mass::outward(&body, &mut Budget::unlimited(), &stop)
-        .unwrap_or_else(|e| panic!("{which:?}: outward {e:?}"));
+    scx_check::contract(&body, &cx, Contacts::Radial)
+        .unwrap_or_else(|e| panic!("{which:?}: contract with radial edges {e:?}"));
     body
 }
 

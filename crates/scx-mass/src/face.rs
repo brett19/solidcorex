@@ -31,6 +31,7 @@ use scx_num::frame::Sense;
 use scx_num::vector2d::{Point2, Vec2};
 use scx_num::vector3d::{Point3, Vec3};
 use scx_nurbs::Approach;
+use scx_nurbs_surface::ParamAxis;
 use scx_surface::Surface;
 
 use crate::breaks::{Dir, crossings, curve_breaks, surface_breaks};
@@ -38,6 +39,7 @@ use crate::closure::{self, Strip};
 use crate::error::{MassDefect, MassError, MassUnsupported};
 use crate::integrand::Set;
 use crate::kronrod::{self, Fail, K7, K15, MAX_COMPONENTS, Meter, Tol};
+use crate::rounding::{gamma, larger};
 
 /// The samples a piece is read at to find its crossings, its extent and its length.
 const SAMPLES: u32 = 16;
@@ -295,6 +297,8 @@ struct Inner<'a> {
     surface: &'a Surface,
     set: Set,
     reference: Vec3,
+    /// What its points and derivatives are summed from.
+    terms: Terms,
     base: f64,
     accuracy: f64,
     /// Per component, the floor per unit of `u` times `v`.
@@ -303,14 +307,205 @@ struct Inner<'a> {
     v_breaks: Vec<f64>,
 }
 
+/// The largest of an inner integrand and of its change along `u`, per component, over the
+/// nodes of one `G(u, v)`.
+#[derive(Clone, Copy)]
+struct Peaks {
+    f: [f64; MAX_COMPONENTS],
+    du: [f64; MAX_COMPONENTS],
+}
+
+impl Peaks {
+    const ZERO: Self = Self {
+        f: [0.0; MAX_COMPONENTS],
+        du: [0.0; MAX_COMPONENTS],
+    };
+}
+
+/// The roundings a curved analytic surface's point is taken to carry, of its local terms'
+/// size per axis: the local point's own (a radius times a cosine and its trigonometry's),
+/// its products by the axes, and the additions after them (72 §14.31).
+const POINT_ROUNDINGS: u32 = 8;
+/// A plane's point `(O + X u) + Y v` per axis: a product and two additions on the `u` term,
+/// one less on the `v` term. Its derivatives are its axes, stored: no rounding.
+const PLANE_ROUNDINGS: u32 = 3;
+/// The roundings of the frame's origin in an analytic surface's point: the jets add it
+/// last (one), the plane's point after its `u` term (two). Far from the world's origin it
+/// is most of the point, and of its rounding.
+const ORIGIN_ROUNDINGS: u32 = 2;
+/// The roundings each of an analytic surface's first derivatives is taken to carry, of its
+/// terms' size per axis.
+const DERIVATIVE_ROUNDINGS: u32 = 8;
+/// The roundings a pcurve's point and derivative are taken to carry, of their size: a line
+/// or a circle's centre and radius terms, or a cubic's de Boor steps.
+const PCURVE_ROUNDINGS: u32 = 8;
+/// The roundings of a component's own evaluation from the point and normal: the powers,
+/// the products, the normal's length.
+const EVAL_ROUNDINGS: u32 = 10;
+
+fn max_abs(v: Vec3) -> f64 {
+    v.x.abs().max(v.y.abs()).max(v.z.abs())
+}
+
+fn abs3(v: Vec3) -> Vec3 {
+    Vec3::new(v.x.abs(), v.y.abs(), v.z.abs())
+}
+
+/// What a surface's point and first derivatives are summed from, per axis: the size their
+/// rounding is relative to (72 §14.31).
+#[derive(Clone, Copy)]
+enum Terms {
+    /// An analytic kind: its frame's origin plus a local point along the three axes, the
+    /// local point's `x` and `y` a radius by a cosine and a sine (or a plane's `u`, `v`) and
+    /// its `z` along the axis, each rounded relative to its own size.
+    Frame {
+        /// `gamma` of the local terms' roundings in the point, and in the derivatives.
+        point: f64,
+        derivative: f64,
+        origin: Vec3,
+        axes: [Vec3; 3],
+        /// Per world axis, `|x_i| + |y_i|`, `|z_i|` and `|origin_i|`.
+        radial: Vec3,
+        along: Vec3,
+        at: Vec3,
+    },
+    /// A NURBS surface: a convex combination of its control points, per axis the largest
+    /// control point's size, and the roundings of its de Boor steps and division.
+    Hull { size: Vec3, rounds: u32 },
+    /// A kind this crate does not know: the point's largest axis, on every axis.
+    Unknown,
+}
+
+impl Terms {
+    fn of(surface: &Surface) -> Self {
+        let curved = (gamma(POINT_ROUNDINGS), gamma(DERIVATIVE_ROUNDINGS));
+        let ((point, derivative), frame) = match surface {
+            Surface::Plane(k) => ((gamma(PLANE_ROUNDINGS), 0.0), k.frame()),
+            Surface::Cylinder(k) => (curved, k.frame()),
+            Surface::Cone(k) => (curved, k.frame()),
+            Surface::Sphere(k) => (curved, k.frame()),
+            Surface::Torus(k) => (curved, k.frame()),
+            Surface::Nurbs(n) => {
+                let size =
+                    n.points()
+                        .points()
+                        .iter()
+                        .fold(Vec3::new(0.0, 0.0, 0.0), |m: Vec3, p| {
+                            let [x, y, z] = *p;
+                            Vec3::new(m.x.max(x.abs()), m.y.max(y.abs()), m.z.max(z.abs()))
+                        });
+                let degrees = n.degree(ParamAxis::U) + n.degree(ParamAxis::V);
+                // Each de Boor step is two products and a sum; a rational one divides.
+                let rounds = u32::try_from(3 * degrees + 4).unwrap_or(u32::MAX);
+                return Self::Hull { size, rounds };
+            }
+            _ => return Self::Unknown,
+        };
+        let origin = frame.origin() - Point3::new(0.0, 0.0, 0.0);
+        let (x, y, z) = (*frame.x(), *frame.y(), *frame.z());
+        Self::Frame {
+            point,
+            derivative,
+            origin,
+            axes: [x, y, z],
+            radial: abs3(x) + abs3(y),
+            along: abs3(z),
+            at: abs3(origin),
+        }
+    }
+
+    /// Per axis, the rounding of the point `s` and of the derivatives `su`, `sv`; `None`
+    /// for derivatives that are exact.
+    fn rounding(self, s: Vec3, su: Vec3, sv: Vec3) -> (Vec3, Option<(Vec3, Vec3)>) {
+        match self {
+            Self::Frame {
+                point,
+                derivative,
+                origin,
+                axes: [x, y, z],
+                radial,
+                along,
+                at,
+            } => {
+                // A local vector's terms per world axis: its radial part (`x`, `y`) along
+                // both radial axes, its `z` part along the axis.
+                let terms = |v: Vec3| {
+                    let (vx, vy) = (v.dot(x), v.dot(y));
+                    radial * (vx * vx + vy * vy).sqrt() + along * v.dot(z).abs()
+                };
+                let at = at * gamma(ORIGIN_ROUNDINGS) + terms(s - origin) * point;
+                let derivatives =
+                    (derivative != 0.0).then(|| (terms(su) * derivative, terms(sv) * derivative));
+                (at, derivatives)
+            }
+            Self::Hull { size, rounds } => {
+                let g = gamma(rounds);
+                let s = abs3(s);
+                let point = Vec3::new(size.x.max(s.x), size.y.max(s.y), size.z.max(s.z)) * g;
+                let (a, b) = (max_abs(su) * g, max_abs(sv) * g);
+                (point, Some((Vec3::new(a, a, a), Vec3::new(b, b, b))))
+            }
+            Self::Unknown => {
+                let g = gamma(POINT_ROUNDINGS);
+                let (p, a, b) = (max_abs(s) * g, max_abs(su) * g, max_abs(sv) * g);
+                (
+                    Vec3::new(p, p, p),
+                    Some((Vec3::new(a, a, a), Vec3::new(b, b, b))),
+                )
+            }
+        }
+    }
+}
+
 impl Inner<'_> {
-    /// `G(u, v)` into `g` and its error into `ge`.
+    /// The rounding of the components at the surface point `s` (`p` about the reference)
+    /// with normal `n = su x sv`, into `error`, and their change per unit `u` through the
+    /// point, into `along`: the point's rounding and the reference's subtraction, the
+    /// derivatives' carried through the cross product and its own, moved through each
+    /// component ([`Set::rounding`]), and the components' evaluation.
+    fn sample_rounding(
+        &self,
+        (s, p): (Vec3, Vec3),
+        (su, sv): (Vec3, Vec3),
+        n: Vec3,
+        error: &mut [f64],
+        along: &mut [f64],
+    ) {
+        let (point, derivatives) = self.terms.rounding(s, su, sv);
+        let dp = point + abs3(p) * gamma(1);
+        let (a, b) = (abs3(su), abs3(sv));
+        // Each axis of `su x sv` is two products less one another: their rounding, and the
+        // derivatives' carried through them. Exact derivatives (a plane's stored axes)
+        // carry nothing, and their zero terms are left out: every term is a finite size,
+        // so adding `+0` would leave the same bits.
+        let g2 = gamma(2);
+        let own = Vec3::new(
+            g2 * (a.y * b.z + a.z * b.y),
+            g2 * (a.z * b.x + a.x * b.z),
+            g2 * (a.x * b.y + a.y * b.x),
+        );
+        let dn = match derivatives {
+            None => own,
+            Some((du, dv)) => Vec3::new(
+                own.x + du.y * b.z + a.y * dv.z + du.z * b.y + a.z * dv.y,
+                own.y + du.z * b.x + a.z * dv.x + du.x * b.z + a.x * dv.z,
+                own.z + du.x * b.y + a.x * dv.y + du.y * b.x + a.y * dv.x,
+            ),
+        };
+        self.set
+            .rounding((p, n), (dp, dn), su, gamma(EVAL_ROUNDINGS), error, along);
+    }
+
+    /// `G(u, v)` into `g` and its error into `ge`, and into `peak` the largest of the
+    /// integrand (`f`) and of its change along `u` through the point (`du`) at the nodes:
+    /// what an error in `v` or in `u` moves `G` by, per unit.
     fn at(
         &self,
         u: f64,
         v: f64,
         g: &mut [f64],
         ge: &mut [f64],
+        peak: &mut Peaks,
         meter: &mut Meter<'_>,
     ) -> Result<(), Fail> {
         let (lo, hi, sign) = if v >= self.base {
@@ -351,8 +546,21 @@ impl Inner<'_> {
                     let (Some(su), Some(sv)) = (j.get(1, 0), j.get(0, 1)) else {
                         return Err(Fail::NotFinite);
                     };
-                    self.set
-                        .eval(j.point() - self.reference, su.cross(sv), out.value);
+                    let p = j.point() - self.reference;
+                    let nrm = su.cross(sv);
+                    self.set.eval(p, nrm, out.value);
+                    for (f, v) in peak.f.iter_mut().zip(out.value.iter()) {
+                        *f = larger(v.abs(), *f);
+                    }
+                    if out.rounds {
+                        let mut along = [0.0; MAX_COMPONENTS];
+                        let along = along.get_mut(..out.rounding.len()).unwrap_or_default();
+                        let at = (j.point(), p);
+                        self.sample_rounding(at, (su, sv), nrm, out.rounding, along);
+                        for (d, a) in peak.du.iter_mut().zip(along.iter()) {
+                            *d = larger(*a, *d);
+                        }
+                    }
                     Ok(())
                 },
             )?;
@@ -481,6 +689,7 @@ fn attempt(
         surface,
         set,
         reference: reference - Point3::new(0.0, 0.0, 0.0),
+        terms: Terms::of(surface),
         base,
         accuracy: held,
         density,
@@ -524,16 +733,25 @@ fn attempt(
                     }
                     let mut g = [0.0; MAX_COMPONENTS];
                     let mut ge = [0.0; MAX_COMPONENTS];
-                    inner.at(q.x, q.y, &mut g, &mut ge, meter)?;
-                    for (((v, e), gv), gerr) in out
-                        .value
-                        .iter_mut()
-                        .zip(out.error.iter_mut())
-                        .zip(&g)
-                        .zip(&ge)
+                    let mut peak = Peaks::ZERO;
+                    inner.at(q.x, q.y, &mut g, &mut ge, &mut peak, meter)?;
+                    // The pcurve's rounding (72 §14.31): a point off by `dq` in `v` moves
+                    // `G` by the integrand there times `dq`, and in `u` by `G`'s change
+                    // along `u`, at most the integrand's over the span from the base; the
+                    // derivative off by its own rounding; the product's.
+                    let dq = gamma(PCURVE_ROUNDINGS) * q.x.abs().max(q.y.abs());
+                    let dd = gamma(PCURVE_ROUNDINGS) * d.x.abs().max(d.y.abs());
+                    let span = (q.y - inner.base).abs();
+                    let dx = d.x.abs();
+                    let reads = g.iter().zip(&ge).zip(peak.f.iter().zip(&peak.du));
+                    for ((v, e), ((gv, gerr), (pf, pu))) in
+                        out.value.iter_mut().zip(out.error.iter_mut()).zip(reads)
                     {
                         *v = -gv * d.x;
-                        *e = (gerr * d.x).abs();
+                        *e = gerr * dx
+                            + gamma(1) * (gv * d.x).abs()
+                            + gv.abs() * dd
+                            + (pf + span * pu) * dq * dx;
                     }
                     Ok(())
                 },
@@ -615,7 +833,12 @@ fn attempt(
             .chain(&to.strip)
             .fold(0.0_f64, |m, s| m.max(s.tol));
         let polygon = [q_end, e_end, vertex, e_start, q_start].map(|p| p - reference);
-        closure::fan(set, &polygon, &mut value);
+        let mut fan = [0.0; MAX_COMPONENTS];
+        closure::fan(set, &polygon, &mut fan);
+        for ((v, e), f) in value.iter_mut().zip(error.iter_mut()).zip(&fan).take(n) {
+            *v += f;
+            *e += gamma(1) * v.abs();
+        }
         closure::model_error(
             set,
             4.0 / 3.0 * std::f64::consts::PI * tol * tol * tol,

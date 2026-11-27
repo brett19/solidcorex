@@ -45,6 +45,14 @@ pub enum Breach {
         /// Its fins.
         fins: usize,
     },
+    /// An edge of an even number of fins over two, which [`Contacts::Radial`](crate::Contacts)
+    /// admits only in strict radial order with solid and void sectors by turns, does not
+    /// keep it: its fins are out of order, two are tangent, or two solid (or two void)
+    /// sectors are adjacent.
+    EdgeNotRadial {
+        /// The edge.
+        edge: EdgeId,
+    },
     /// A shell holds a vertex on no edge.
     LoneVertex {
         /// The vertex.
@@ -54,6 +62,14 @@ pub enum Breach {
     FaceUnbounded {
         /// The face.
         face: FaceId,
+    },
+    /// The vertex's faces fall into more than one piece: two solids or sheets meet at it
+    /// (or a face touches itself there) and no edge joins them.
+    VertexNotManifold {
+        /// The vertex.
+        vertex: VertexId,
+        /// The pieces round it, at least two.
+        pieces: usize,
     },
     /// The shell faces the wrong way: a positive shell of the outside, or the shell of a
     /// solid region with no positive shell.
@@ -93,8 +109,10 @@ impl Breach {
             Self::Empty => "empty",
             Self::FaceNotBounding { .. } => "face_not_bounding",
             Self::NonManifoldEdge { .. } => "non_manifold_edge",
+            Self::EdgeNotRadial { .. } => "edge_not_radial",
             Self::LoneVertex { .. } => "lone_vertex",
             Self::FaceUnbounded { .. } => "face_unbounded",
+            Self::VertexNotManifold { .. } => "vertex_not_manifold",
             Self::NotOutward { .. } => "not_outward",
         }
     }
@@ -110,9 +128,15 @@ impl fmt::Display for Breach {
             Self::NonManifoldEdge { edge, fins } => {
                 write!(f, "{edge}: {fins} fins where a manifold edge has 2")
             }
+            Self::EdgeNotRadial { edge } => {
+                write!(f, "{edge}: its fins are not in strict radial order")
+            }
             Self::LoneVertex { vertex } => write!(f, "{vertex}: a vertex on no edge"),
             Self::FaceUnbounded { face } => {
                 write!(f, "{face}: no box, its region is unbounded")
+            }
+            Self::VertexNotManifold { vertex, pieces } => {
+                write!(f, "{vertex}: its faces fall into {pieces} pieces")
             }
             Self::NotOutward { shell } => {
                 write!(f, "{shell}: its faces do not face out of its region")
@@ -144,3 +168,48 @@ impl std::error::Error for ContractError {
         }
     }
 }
+
+/// Why [`check`](crate::check) did not finish. A body's defects are not errors: they are the
+/// [`Findings`](crate::Findings).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CheckError {
+    /// The budget ran out.
+    Exhausted {
+        /// The budget's limit.
+        limit: u64,
+    },
+    /// The stop flag was set.
+    Cancelled,
+}
+
+impl CheckError {
+    /// The kind.
+    #[must_use]
+    pub const fn kind(&self) -> ErrorKind {
+        match self {
+            Self::Exhausted { .. } => ErrorKind::Exhausted,
+            Self::Cancelled => ErrorKind::Cancelled,
+        }
+    }
+
+    /// A stable name.
+    #[must_use]
+    pub const fn name(&self) -> &'static str {
+        match self {
+            Self::Exhausted { .. } => "budget_exhausted",
+            Self::Cancelled => "stopped",
+        }
+    }
+}
+
+impl fmt::Display for CheckError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Exhausted { limit } => write!(f, "the work budget of {limit} units ran out"),
+            Self::Cancelled => f.write_str("the caller stopped the check"),
+        }
+    }
+}
+
+impl std::error::Error for CheckError {}

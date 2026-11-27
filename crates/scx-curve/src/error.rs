@@ -25,6 +25,7 @@
 //! | none: a NURBS curve's inversion runs the general solver | [`Unsupported::NurbsInversion`] |
 //! | new (63 §4.11): an angle line's 2-D inversion | [`Unsupported::AngleLineInversion`] |
 //! | new (63 §4.14): an angle wave's 2-D inversion | [`Unsupported::AngleWaveInversion`] |
+//! | new (73 §21): a curve on a chart's 2-D inversion runs out of budget, or is stopped | [`CurveError::Exhausted`], [`CurveError::Stopped`] |
 //!
 //! `TooLarge` and `Solve` (63 §3.2) join with the first operation that can produce them.
 //! Analytic inversion (CU4) cannot: an outside foot is
@@ -32,6 +33,7 @@
 
 use core::fmt;
 
+use scx_num::budget::{Exhausted, Stopped};
 use scx_num::error::ErrorKind;
 use scx_num::extent1d::Extent1d;
 use scx_nurbs::NurbsError;
@@ -56,6 +58,10 @@ pub enum CurveError {
     Nurbs(NurbsError),
     /// A query this kind does not answer yet.
     Unsupported(Unsupported),
+    /// A search (a curve on a chart's inversion) ran out of its budget.
+    Exhausted(Exhausted),
+    /// The caller stopped a search.
+    Stopped,
 }
 
 /// A query no arm answers yet.
@@ -154,6 +160,8 @@ impl CurveError {
             }
             Self::Nurbs(e) => e.kind(),
             Self::Unsupported(_) => ErrorKind::Unsupported,
+            Self::Exhausted(e) => e.kind(),
+            Self::Stopped => Stopped.kind(),
         }
     }
 
@@ -178,6 +186,8 @@ impl CurveError {
             Self::Unsupported(Unsupported::AngleWaveInversion) => {
                 "unsupported_angle_wave_inversion"
             }
+            Self::Exhausted(e) => e.name(),
+            Self::Stopped => Stopped.name(),
         }
     }
 }
@@ -251,11 +261,25 @@ impl fmt::Display for CurveError {
             Self::Unsupported(Unsupported::AngleWaveInversion) => {
                 f.write_str("an angle wave's inversion is not built")
             }
+            Self::Exhausted(e) => e.fmt(f),
+            Self::Stopped => Stopped.fmt(f),
         }
     }
 }
 
 impl std::error::Error for CurveError {}
+
+impl From<Exhausted> for CurveError {
+    fn from(e: Exhausted) -> Self {
+        Self::Exhausted(e)
+    }
+}
+
+impl From<Stopped> for CurveError {
+    fn from(_: Stopped) -> Self {
+        Self::Stopped
+    }
+}
 
 impl From<NurbsError> for CurveError {
     fn from(e: NurbsError) -> Self {
@@ -307,5 +331,12 @@ mod tests {
         let e = CurveError::from(nurbs);
         assert_eq!((e.kind(), e.name()), (nurbs.kind(), nurbs.name()));
         assert_eq!(e.to_string(), nurbs.to_string());
+        let out = Exhausted { limit: 3 };
+        let e = CurveError::from(out);
+        assert_eq!((e.kind(), e.name()), (ErrorKind::Exhausted, out.name()));
+        assert_eq!(e.to_string(), out.to_string());
+        let e = CurveError::from(Stopped);
+        assert_eq!((e.kind(), e.name()), (ErrorKind::Cancelled, Stopped.name()));
+        assert_eq!(e.to_string(), Stopped.to_string());
     }
 }

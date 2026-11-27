@@ -8,15 +8,21 @@
 //!   Gauss-Kronrod quadrature (the 7-point rule outside, the 15-point rule inside, the
 //!   pin's nodes and weights). See the `face` module.
 //! - **Reads only.** Each function takes the body (or a face, an edge), the accuracy,
-//!   `&mut Scratch` for the face memo (research 72's MA3; not filled yet), the budget and
-//!   the stop flag: the pieces of a `Cx` it reads, no more.
+//!   `&mut Scratch` for the face memo, the budget and the stop flag: the pieces of a `Cx`
+//!   it reads, no more.
 //! - **The face's own reference.** Each face is integrated about its box's middle rounded
 //!   to a power-of-two grid, so its result depends on the face alone; it is moved to the
 //!   body's reference by an exact binomial shift and summed in face id order. A result is
 //!   deterministic: the same body gives the same bits.
+//! - **The face memo.** A face's integral (values and stated error) is kept in the
+//!   caller's `Scratch`, keyed by the bits it reads: the set, the accuracy, the face's box,
+//!   its surface (sense included) and its uses' images and bounds, not its ids or sides. A
+//!   face a Boolean keeps is read back, the same bits as a recompute, and charges the work
+//!   its fill recorded (the `memo` module).
 //! - **Accuracy.** A [`RelAccuracy`] is requested, not proved: each piece's Kronrod-Gauss
 //!   difference is held to a tenth of it, and every result returns the summed estimate
-//!   ([`Estimate`], [`MassErrors`]).
+//!   ([`Estimate`], [`MassErrors`]) with a first-order bound of its rounding added (the
+//!   `rounding` module; sums are compensated).
 //! - **Which faces.** The volume counts each face between a solid and a void region,
 //!   signed so the solid is inside; the area every face not between two solids. A finished
 //!   body's fins agree about their sides (`scx_brep`'s `SidesDisagree` check), so a solid
@@ -49,7 +55,9 @@ mod face;
 mod guard;
 mod integrand;
 mod kronrod;
+mod memo;
 mod patch;
+mod rounding;
 mod spec;
 mod tseries;
 

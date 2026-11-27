@@ -253,10 +253,13 @@ const fn nesting() -> BooleanError {
 
 /// Gives every shell in `shells` its region (see the module doc). `mirrored` lists the
 /// (material, void) pairs no link touched: the void's sign is the material's turned over.
+/// `known` holds the signs already settled (a set that is an operand shell whole); the
+/// rest are measured.
 pub(crate) fn nest(
     draft: &mut Draft,
     shells: &[ShellId],
     mirrored: &[(ShellId, ShellId)],
+    known: &BTreeMap<ShellId, Sign>,
     doc: Document,
     budget: &mut Budget,
     stop: &Stop,
@@ -265,7 +268,11 @@ pub(crate) fn nest(
     let mirror: BTreeMap<ShellId, ShellId> = mirrored.iter().map(|&(m, v)| (v, m)).collect();
     let mut sign: BTreeMap<ShellId, Sign> = BTreeMap::new();
     for &s in shells.iter().filter(|s| !mirror.contains_key(s)) {
-        sign.insert(s, volume_sign(&body, s, budget, stop).map_err(mass)?);
+        let v = match known.get(&s) {
+            Some(&v) => v,
+            None => volume_sign(&body, s, budget, stop).map_err(mass)?,
+        };
+        sign.insert(s, v);
     }
     for (&v, &m) in &mirror {
         let turned = match sign.get(&m).copied().ok_or_else(defect)? {
