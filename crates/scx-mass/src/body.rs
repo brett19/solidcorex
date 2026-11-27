@@ -8,10 +8,11 @@ use scx_num::budget::{Budget, Stop};
 use scx_num::vector3d::{Point3, Vec3};
 
 use crate::error::{MassError, MassRefusal, MassUnsupported};
-use crate::face::{self, reference};
+use crate::face::reference;
 use crate::guard::Shells;
 use crate::integrand::{FIRST_MONOMIAL, Set, monomial, shift};
 use crate::kronrod::{MAX_COMPONENTS, Meter};
+use crate::memo;
 use crate::rounding::{Sum, gamma};
 use crate::spec::{Estimate, Mass, MassErrors, MassSpec, RelAccuracy, Sym3};
 
@@ -58,7 +59,9 @@ fn body_reference(body: &Brep, about: Option<Point3>) -> Result<Point3, MassErro
 
 /// The volume enclosed by the solid regions, with its error estimate.
 ///
-/// `scratch` is the memo of face integrals (not filled yet: research 72's MA3).
+/// `scratch` holds the memo of face integrals (the `memo` module): a face integrated
+/// before with the same bits is read from it, its recorded work charged, with the same
+/// bits as a recompute.
 ///
 /// # Errors
 ///
@@ -74,7 +77,6 @@ pub fn volume(
     budget: &mut Budget,
     stop: &Stop,
 ) -> Result<Estimate, MassError> {
-    let _ = scratch;
     let about = body_reference(body, None)?;
     let mut meter = Meter::new(budget, stop);
     let (mut value, mut error) = (Sum::default(), 0.0);
@@ -85,7 +87,7 @@ pub fn volume(
             shells.skip(f);
             continue;
         }
-        let mut r = face::integrate(f, Set::Volume, accuracy.get(), &mut meter)?;
+        let mut r = memo::integrate(f, Set::Volume, accuracy.get(), scratch, &mut meter)?;
         shift(Set::Volume, r.reference - about, &mut r.value, &mut r.error);
         value.add(sign * r.value[1]);
         error += r.error[1];
@@ -110,11 +112,10 @@ pub fn area(
     budget: &mut Budget,
     stop: &Stop,
 ) -> Result<Estimate, MassError> {
-    let _ = scratch;
     let mut meter = Meter::new(budget, stop);
     let (mut value, mut error) = (Sum::default(), 0.0);
     for f in body.faces().filter(|&f| counts_in_area(f)) {
-        let r = face::integrate(f, Set::Area, accuracy.get(), &mut meter)?;
+        let r = memo::integrate(f, Set::Area, accuracy.get(), scratch, &mut meter)?;
         value.add(r.value[0]);
         error += r.error[0];
     }
@@ -136,9 +137,8 @@ pub fn face_area(
     budget: &mut Budget,
     stop: &Stop,
 ) -> Result<Estimate, MassError> {
-    let _ = scratch;
     let mut meter = Meter::new(budget, stop);
-    let r = face::integrate(face, Set::Area, accuracy.get(), &mut meter)?;
+    let r = memo::integrate(face, Set::Area, accuracy.get(), scratch, &mut meter)?;
     Ok(Estimate {
         value: r.value[0],
         error: r.error[0],
@@ -158,7 +158,6 @@ pub fn mass(
     budget: &mut Budget,
     stop: &Stop,
 ) -> Result<Mass, MassError> {
-    let _ = scratch;
     let density = spec.density;
     if !(density.is_finite() && density > 0.0) {
         return Err(MassError::Refused(MassRefusal::BadDensity {
@@ -180,7 +179,7 @@ pub fn mass(
         if sign == 0.0 && !in_area {
             continue;
         }
-        let mut r = face::integrate(f, Set::Full, spec.accuracy.get(), &mut meter)?;
+        let mut r = memo::integrate(f, Set::Full, spec.accuracy.get(), scratch, &mut meter)?;
         shift(Set::Full, r.reference - about, &mut r.value, &mut r.error);
         if sign != 0.0 {
             let at = |a: &[f64; MAX_COMPONENTS]| a.get(vi).copied().unwrap_or(0.0);
