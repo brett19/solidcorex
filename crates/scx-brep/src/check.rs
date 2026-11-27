@@ -4,9 +4,12 @@
 //! [`geometry`] check. Each walks records in kind order, then id order, and stops at the
 //! first failure, so the cause is the same on every run.
 //!
-//! The whole body is checked. 01 §2.3 checks what the draft touched; that needs the
-//! draft's events (BR3), and until then a whole-body check is the same answer at a cost
-//! linear in the body.
+//! A draft made from a finished body checks only the records its edit could have changed
+//! ([`run_touched`], research 63 §6.14): every rule is a pass over records of one kind, each
+//! record's instance reading a few others, and the body it was made from passed every
+//! instance. An instance none of whose inputs changed passes again, so walking the changed
+//! instances in the same order finds the same first failure. [`Touched`] says which they
+//! are.
 
 mod geometry;
 
@@ -17,10 +20,44 @@ use scx_num::units::Resolution;
 
 use crate::finish::{FinishCause, StructureCause};
 use crate::id::{EdgeId, Entity, FaceId, RegionId, ShellId, VertexId};
-use crate::record::{EdgeShape, FaceSide, Fin, UseGeom};
+use crate::record::{
+    EdgeAdj, EdgeGeom, EdgeShape, FaceRecord, FaceSide, Fin, ShellRecord, UseGeom,
+};
+use crate::table::{Id, Table};
 use crate::tables::Tables;
+use crate::touched::Touched;
 
-/// Every check, in order; the first failure is the cause.
+/// The records of one kind a pass walks: every live one, or the live ones of a sorted list.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Sel<'a, I> {
+    All,
+    Only(&'a [I]),
+}
+
+/// `f` on each selected live record, in id order, up to the first failure.
+fn each<I: Id, T, E>(
+    table: &Table<I, T>,
+    sel: Sel<'_, I>,
+    mut f: impl FnMut(I, &T) -> Result<(), E>,
+) -> Result<(), E> {
+    match sel {
+        Sel::All => {
+            for (id, r) in table.iter() {
+                f(id, r)?;
+            }
+        }
+        Sel::Only(ids) => {
+            for &id in ids {
+                if let Some(r) = table.get(id) {
+                    f(id, r)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Every check over the whole body, in order; the first failure is the cause.
 pub(crate) fn run(
     t: &Tables,
     pending: &BTreeSet<EdgeId>,
@@ -31,52 +68,139 @@ pub(crate) fn run(
     }
     references(t).map_err(FinishCause::Structure)?;
     structure(t).map_err(FinishCause::Structure)?;
-    geometry::check(t, res).map_err(FinishCause::Geometry)
+    geometry::check(t, res, Sel::All, Sel::All).map_err(FinishCause::Geometry)
 }
 
-/// The outside region is there and void, every id a record names is live, and every fin has
-/// its use: what lets a finished body's views look across records without an `Option`.
-/// Records are walked in kind order, then id order.
-pub(crate) fn references(t: &Tables) -> Result<(), StructureCause> {
+/// Every check over the instances `touched` names, in the order [`run`] takes them, with
+/// the same first failure. On success, the faces whose geometry check ran: those whose
+/// boxes may differ from the body the draft was made from.
+pub(crate) fn run_touched(
+    t: &Tables,
+    pending: &BTreeSet<EdgeId>,
+    res: Resolution,
+    touched: &Touched,
+) -> Result<Vec<FaceId>, FinishCause> {
+    if let Some(&edge) = pending.first() {
+        return Err(FinishCause::MissingCurve { edge });
+    }
+    let plan = touched.plan(t);
+    let some_shells = plan.shells.as_deref().map_or(Sel::All, Sel::Only);
+    let s = |e| FinishCause::Structure(e);
+    outside(t).map_err(s)?;
+    each(&t.shells, some_shells, |id, r| shell_refs(t, id, r)).map_err(s)?;
+    each(&t.faces, Sel::Only(&plan.faces), |id, r| {
+        face_refs(t, id, r)
+    })
+    .map_err(s)?;
+    each(&t.edges, Sel::Only(&plan.edges), |id, r| {
+        edge_refs(t, id, r)
+    })
+    .map_err(s)?;
+    // The uses of every face a selected fin names, sorted as `references` sorts them all.
+    let mut named: Vec<FaceId> = plan
+        .edges
+        .iter()
+        .filter_map(|&e| t.adjacency.get(e))
+        .flat_map(|a| a.fins.iter().map(|f| f.face))
+        .collect();
+    named.sort_unstable();
+    named.dedup();
+    let uses = use_keys(
+        named
+            .iter()
+            .filter_map(|&f| Some((f, t.faces.get(f)?.as_ref()))),
+    );
+    each(&t.adjacency, Sel::Only(&plan.edges), |id, a| {
+        fin_refs(t, id, a, &uses)
+    })
+    .map_err(s)?;
+    each(&t.shells, some_shells, |id, r| shell_wires(t, id, r)).map_err(s)?;
+    each(&t.faces, Sel::Only(&plan.faces), |id, r| faces(t, id, r)).map_err(s)?;
+    let mut wires: Option<Vec<EdgeId>> = None;
+    each(&t.edges, Sel::Only(&plan.edges), |id, r| {
+        edge_structure(t, id, r, |e| {
+            let w = wires.get_or_insert_with(|| {
+                let mut w: Vec<EdgeId> = t
+                    .shells
+                    .iter()
+                    .flat_map(|(_, s)| s.wires.iter().copied())
+                    .collect();
+                w.sort_unstable();
+                w
+            });
+            w.binary_search(&e).is_ok()
+        })
+    })
+    .map_err(s)?;
+    if let Some(vertex) = touched.first_loose(t, &plan) {
+        return Err(s(StructureCause::LooseVertex { vertex }));
+    }
+    if !touched.shells_unchanged(t) {
+        shells(t).map_err(s)?;
+    }
+    regions(t).map_err(s)?;
+    let (edges, faces) = touched.geometry(t, &plan);
+    geometry::check(t, res, Sel::Only(&edges), Sel::Only(&faces)).map_err(FinishCause::Geometry)?;
+    Ok(faces)
+}
+
+/// The outside region is there and void.
+fn outside(t: &Tables) -> Result<(), StructureCause> {
     if t.regions.get(RegionId::OUTSIDE).is_none_or(|r| r.solid) {
         return Err(StructureCause::Outside);
     }
-    let dangling = |from: Entity, to: Entity| StructureCause::Dangling { from, to };
-    for (id, shell) in t.shells.iter() {
-        if t.regions.get(shell.region).is_none() {
-            return Err(dangling(id.into(), shell.region.into()));
-        }
-        if let Some(&e) = shell.wires.iter().find(|&&e| t.edges.get(e).is_none()) {
-            return Err(dangling(id.into(), e.into()));
-        }
-        if let Some(&v) = shell
-            .lone_vertices
-            .iter()
-            .find(|&&v| t.vertices.get(v).is_none())
-        {
-            return Err(dangling(id.into(), v.into()));
-        }
+    Ok(())
+}
+
+fn dangling(from: Entity, to: Entity) -> StructureCause {
+    StructureCause::Dangling { from, to }
+}
+
+/// The shell's region, wires and lone vertices are live.
+fn shell_refs(t: &Tables, id: ShellId, shell: &ShellRecord) -> Result<(), StructureCause> {
+    if t.regions.get(shell.region).is_none() {
+        return Err(dangling(id.into(), shell.region.into()));
     }
-    for (id, face) in t.faces.iter() {
-        if let Some(&s) = face.sides.iter().find(|&&s| t.shells.get(s).is_none()) {
-            return Err(dangling(id.into(), s.into()));
-        }
-        let uses = face.loops.iter().flat_map(|l| &l.uses);
-        if let Some(u) = uses.clone().find(|u| t.edges.get(u.edge).is_none()) {
-            return Err(dangling(id.into(), u.edge.into()));
-        }
+    if let Some(&e) = shell.wires.iter().find(|&&e| t.edges.get(e).is_none()) {
+        return Err(dangling(id.into(), e.into()));
     }
-    for (id, edge) in t.edges.iter() {
-        if let Some(&v) = edge.ends.iter().find(|&&v| t.vertices.get(v).is_none()) {
-            return Err(dangling(id.into(), v.into()));
-        }
-    }
-    // Every use as `(face, edge, forward)`, sorted once, so each fin finds its use by a
-    // binary search: linear in the body up to a log, where scanning the face's uses for
-    // each fin is quadratic in a long loop's length.
-    let mut uses: Vec<(FaceId, EdgeId, bool)> = t
-        .faces
+    if let Some(&v) = shell
+        .lone_vertices
         .iter()
+        .find(|&&v| t.vertices.get(v).is_none())
+    {
+        return Err(dangling(id.into(), v.into()));
+    }
+    Ok(())
+}
+
+/// The face's sides and its uses' edges are live.
+fn face_refs(t: &Tables, id: FaceId, face: &FaceRecord) -> Result<(), StructureCause> {
+    if let Some(&s) = face.sides.iter().find(|&&s| t.shells.get(s).is_none()) {
+        return Err(dangling(id.into(), s.into()));
+    }
+    let mut uses = face.loops.iter().flat_map(|l| &l.uses);
+    if let Some(u) = uses.find(|u| t.edges.get(u.edge).is_none()) {
+        return Err(dangling(id.into(), u.edge.into()));
+    }
+    Ok(())
+}
+
+/// The edge's end vertices are live.
+fn edge_refs(t: &Tables, id: EdgeId, edge: &EdgeGeom) -> Result<(), StructureCause> {
+    if let Some(&v) = edge.ends.iter().find(|&&v| t.vertices.get(v).is_none()) {
+        return Err(dangling(id.into(), v.into()));
+    }
+    Ok(())
+}
+
+/// Every use of the faces given as `(face, edge, forward)`, sorted, so each fin finds its
+/// use by a binary search: linear in the faces' uses up to a log, where scanning the face's
+/// uses for each fin is quadratic in a long loop's length.
+fn use_keys<'a>(
+    faces: impl Iterator<Item = (FaceId, &'a FaceRecord)>,
+) -> Vec<(FaceId, EdgeId, bool)> {
+    let mut uses: Vec<(FaceId, EdgeId, bool)> = faces
         .flat_map(|(id, face)| {
             face.loops
                 .iter()
@@ -85,18 +209,39 @@ pub(crate) fn references(t: &Tables) -> Result<(), StructureCause> {
         })
         .collect();
     uses.sort_unstable();
-    for (id, adj) in t.adjacency.iter() {
-        for &fin in &adj.fins {
-            if t.faces.get(fin.face).is_none() {
-                return Err(dangling(id.into(), fin.face.into()));
-            }
-            let key = (fin.face, id, fin.sense == Sense::Forward);
-            if uses.binary_search(&key).is_err() {
-                return Err(StructureCause::FinWithoutUse { edge: id, fin });
-            }
+    uses
+}
+
+/// Each of the edge's fins names a live face that uses the edge in the fin's sense; `uses`
+/// holds the uses of every face the fins name.
+fn fin_refs(
+    t: &Tables,
+    id: EdgeId,
+    adj: &EdgeAdj,
+    uses: &[(FaceId, EdgeId, bool)],
+) -> Result<(), StructureCause> {
+    for &fin in &adj.fins {
+        if t.faces.get(fin.face).is_none() {
+            return Err(dangling(id.into(), fin.face.into()));
+        }
+        let key = (fin.face, id, fin.sense == Sense::Forward);
+        if uses.binary_search(&key).is_err() {
+            return Err(StructureCause::FinWithoutUse { edge: id, fin });
         }
     }
     Ok(())
+}
+
+/// The outside region is there and void, every id a record names is live, and every fin has
+/// its use: what lets a finished body's views look across records without an `Option`.
+/// Records are walked in kind order, then id order.
+pub(crate) fn references(t: &Tables) -> Result<(), StructureCause> {
+    outside(t)?;
+    each(&t.shells, Sel::All, |id, r| shell_refs(t, id, r))?;
+    each(&t.faces, Sel::All, |id, r| face_refs(t, id, r))?;
+    each(&t.edges, Sel::All, |id, r| edge_refs(t, id, r))?;
+    let uses = use_keys(t.faces.iter().map(|(id, f)| (id, f.as_ref())));
+    each(&t.adjacency, Sel::All, |id, a| fin_refs(t, id, a, &uses))
 }
 
 /// The side of a face a fin's use faces next, turning about the edge by the right-hand
@@ -109,54 +254,69 @@ const fn after(sense: Sense) -> FaceSide {
     }
 }
 
+/// The shell's wires have no fins.
+fn shell_wires(t: &Tables, id: ShellId, shell: &ShellRecord) -> Result<(), StructureCause> {
+    for &e in &shell.wires {
+        if t.adjacency.get(e).is_some_and(|a| !a.fins.is_empty()) {
+            return Err(StructureCause::WireWithFins { shell: id, edge: e });
+        }
+    }
+    Ok(())
+}
+
+/// One edge: a collapsed edge's ends are one vertex, the edge has a fin or is a wire, and
+/// each pair of fins meeting across a sector agrees on the shell between them.
+fn edge_structure(
+    t: &Tables,
+    id: EdgeId,
+    edge: &EdgeGeom,
+    mut is_wire: impl FnMut(EdgeId) -> bool,
+) -> Result<(), StructureCause> {
+    if edge.shape == EdgeShape::Collapsed && edge.ends[0] != edge.ends[1] {
+        return Err(StructureCause::CollapsedEnds { edge: id });
+    }
+    let fins = t.adjacency.get(id).map_or(&[][..], |a| &a.fins);
+    if fins.is_empty() && !is_wire(id) {
+        return Err(StructureCause::LooseEdge { edge: id });
+    }
+    for (fin, next) in radial(t, id) {
+        let shell = |f: Fin, side: FaceSide| t.faces.get(f.face).map(|r| r.side(side));
+        if shell(fin, after(fin.sense)) != shell(next, after(next.sense).other()) {
+            return Err(StructureCause::SidesDisagree {
+                edge: id,
+                fins: [fin, next],
+            });
+        }
+    }
+    Ok(())
+}
+
 /// The body invariants, after [`references`] has made every id resolve. First what each
 /// record must hold with its neighbours, in kind order (shells' wires, faces' loops and
 /// uses, edges' fins, vertices), then what holds of shells and regions as wholes, which
 /// relies on the sides the edge pass checked.
 pub(crate) fn structure(t: &Tables) -> Result<(), StructureCause> {
+    each(&t.shells, Sel::All, |id, r| shell_wires(t, id, r))?;
     let mut wire = vec![false; t.edges.slots()];
-    for (id, shell) in t.shells.iter() {
+    for (_, shell) in t.shells.iter() {
         for &e in &shell.wires {
-            if t.adjacency.get(e).is_some_and(|a| !a.fins.is_empty()) {
-                return Err(StructureCause::WireWithFins { shell: id, edge: e });
-            }
             if let Some(w) = wire.get_mut(e.index()) {
                 *w = true;
             }
         }
     }
+    each(&t.faces, Sel::All, |id, r| faces(t, id, r))?;
+    each(&t.edges, Sel::All, |id, r| {
+        edge_structure(t, id, r, |e| wire.get(e.index()).copied().unwrap_or(false))
+    })?;
     let mut ends = vec![false; t.vertices.slots()];
-    for (id, face) in t.faces.iter() {
-        faces(t, id, face)?;
-    }
-    for (id, edge) in t.edges.iter() {
-        if edge.shape == EdgeShape::Collapsed && edge.ends[0] != edge.ends[1] {
-            return Err(StructureCause::CollapsedEnds { edge: id });
-        }
-        for v in edge.ends {
-            if let Some(e) = ends.get_mut(v.index()) {
-                *e = true;
-            }
-        }
-        let fins = t.adjacency.get(id).map_or(&[][..], |a| &a.fins);
-        if fins.is_empty() && !wire.get(id.index()).copied().unwrap_or(false) {
-            return Err(StructureCause::LooseEdge { edge: id });
-        }
-        for (fin, next) in radial(t, id) {
-            let shell = |f: Fin, side: FaceSide| t.faces.get(f.face).map(|r| r.side(side));
-            if shell(fin, after(fin.sense)) != shell(next, after(next.sense).other()) {
-                return Err(StructureCause::SidesDisagree {
-                    edge: id,
-                    fins: [fin, next],
-                });
-            }
-        }
-    }
-    for (_, shell) in t.shells.iter() {
-        for &v in &shell.lone_vertices {
-            if let Some(e) = ends.get_mut(v.index()) {
-                *e = true;
-            }
+    let lone = t
+        .shells
+        .iter()
+        .flat_map(|(_, s)| s.lone_vertices.iter().copied());
+    for v in t.edges.iter().flat_map(|(_, e)| e.ends).chain(lone) {
+        if let Some(e) = ends.get_mut(v.index()) {
+            *e = true;
         }
     }
     if let Some((vertex, _)) = t
@@ -173,7 +333,7 @@ pub(crate) fn structure(t: &Tables) -> Result<(), StructureCause> {
 /// One face's loops and uses: loops present, non-empty and connected end to start; each
 /// use's geometry of its edge's kind, over its interval, with exactly one fin; no edge used
 /// twice in one sense; no vertex on two loops.
-fn faces(t: &Tables, id: FaceId, face: &crate::record::FaceRecord) -> Result<(), StructureCause> {
+fn faces(t: &Tables, id: FaceId, face: &FaceRecord) -> Result<(), StructureCause> {
     if face.loops.is_empty() {
         return Err(StructureCause::FaceWithoutLoop { face: id });
     }
@@ -266,10 +426,10 @@ fn faces(t: &Tables, id: FaceId, face: &crate::record::FaceRecord) -> Result<(),
 }
 
 /// Disjoint sets over slots, with path halving.
-struct Sets(Vec<u32>);
+pub(crate) struct Sets(Vec<u32>);
 
 impl Sets {
-    fn new(n: usize) -> Self {
+    pub(crate) fn new(n: usize) -> Self {
         Self(
             (0..n)
                 .map(|i| u32::try_from(i).unwrap_or(u32::MAX))
@@ -277,7 +437,7 @@ impl Sets {
         )
     }
 
-    fn root(&mut self, mut i: usize) -> usize {
+    pub(crate) fn root(&mut self, mut i: usize) -> usize {
         while let Some(&p) = self.0.get(i) {
             let p = p as usize;
             if p == i {
@@ -292,7 +452,7 @@ impl Sets {
         i
     }
 
-    fn join(&mut self, a: usize, b: usize) {
+    pub(crate) fn join(&mut self, a: usize, b: usize) {
         let (ra, rb) = (self.root(a), self.root(b));
         let (lo, hi) = (ra.min(rb), ra.max(rb));
         if let Some(slot) = self.0.get_mut(hi) {

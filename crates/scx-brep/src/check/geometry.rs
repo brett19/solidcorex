@@ -32,6 +32,7 @@ use scx_num::vector3d::Point3;
 use scx_nurbs::Approach;
 use scx_surface::{Pole, Surface};
 
+use super::{Sel, each};
 use crate::finish::GeometryCause;
 use crate::id::{EdgeId, FaceId};
 use crate::record::{EdgeGeom, EdgeShape, EdgeUse, FaceRecord, UseGeom};
@@ -113,15 +114,15 @@ fn outside(dom: &ParamDomain, x: f64) -> f64 {
     }
 }
 
-/// Every check, edges then faces.
-pub(super) fn check(t: &Tables, res: Resolution) -> Result<(), GeometryCause> {
-    for (id, edge) in t.edges.iter() {
-        edge_check(t, res, id, edge)?;
-    }
-    for (id, face) in t.faces.iter() {
-        face_check(t, res, id, face)?;
-    }
-    Ok(())
+/// Every check on the selected edges, then the selected faces.
+pub(super) fn check(
+    t: &Tables,
+    res: Resolution,
+    edges: Sel<'_, EdgeId>,
+    faces: Sel<'_, FaceId>,
+) -> Result<(), GeometryCause> {
+    each(&t.edges, edges, |id, edge| edge_check(t, res, id, edge))?;
+    each(&t.faces, faces, |id, face| face_check(t, res, id, face))
 }
 
 fn edge_check(
