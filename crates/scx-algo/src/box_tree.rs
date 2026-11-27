@@ -14,7 +14,11 @@
 //! The answer is a sorted `Vec` of item indices. It does not depend on the tree's shape,
 //! and the shape depends only on the boxes and their order. The build splits each node at
 //! the median of its items' centres, on the axis where the centres spread most, with ties
-//! broken by item index.
+//! broken by item index. The median is found by selection, not a full sort: the key is a
+//! strict total order, so the halves hold the same items either way. A half that becomes a
+//! leaf is sorted, and so is a half whose union has a zero bound its items hold with both
+//! signs (the one case where the union's bits depend on the order), so the tree is the one a
+//! full sort per node builds, bit for bit.
 
 use scx_num::extent1d::Extent1d;
 use scx_num::extent2d::Extent2d;
@@ -127,6 +131,26 @@ fn has_nan<B: Bounds>(b: &B) -> bool {
         .any(|&a| b.lo(a).is_nan() || b.hi(a).is_nan())
 }
 
+/// The union of `items`' boxes, folded in their order, or `None` when there are none.
+fn union_of<B: Bounds>(boxes: &[B], items: &[usize]) -> Option<B> {
+    let mut boxes = items.iter().filter_map(|&i| boxes.get(i));
+    let first = *boxes.next()?;
+    Some(boxes.fold(first, |u, b| u.union(b)))
+}
+
+/// Some bound of `u`, the union of `items`' boxes, is a zero that an item holds with the
+/// other sign: the one case in which the union's bits depend on the order of the fold.
+fn zero_tie<B: Bounds>(boxes: &[B], items: &[usize], u: &B) -> bool {
+    let differs = |x: f64, y: f64| x == 0.0 && y == 0.0 && x.to_bits() != y.to_bits();
+    B::AXES.iter().any(|&a| {
+        (u.lo(a) == 0.0 || u.hi(a) == 0.0)
+            && items
+                .iter()
+                .filter_map(|&i| boxes.get(i))
+                .any(|b| differs(u.lo(a), b.lo(a)) || differs(u.hi(a), b.hi(a)))
+    })
+}
+
 fn centre<B: Bounds>(b: &B, axis: B::Axis) -> f64 {
     0.5 * (b.lo(axis) + b.hi(axis))
 }
@@ -135,6 +159,12 @@ impl<B: Bounds> BoxTree<B> {
     /// The tree over `boxes`; item `i` is `boxes[i]`.
     #[must_use]
     pub fn new(boxes: &[B]) -> Self {
+        Self::build::<false>(boxes)
+    }
+
+    /// The tree over `boxes`, its nodes split by selection, or by a full sort with
+    /// `FULL_SORT`.
+    fn build<const FULL_SORT: bool>(boxes: &[B]) -> Self {
         let (order, unplaced): (Vec<usize>, Vec<usize>) =
             (0..boxes.len()).partition(|&i| boxes.get(i).is_some_and(|b| !has_nan(b)));
         let mut tree = Self {
@@ -147,7 +177,7 @@ impl<B: Bounds> BoxTree<B> {
             tree.nodes.push(root);
             let mut stack = vec![0];
             while let Some(k) = stack.pop() {
-                if let Some(children) = tree.split(k) {
+                if let Some(children) = tree.split::<FULL_SORT>(k) {
                     stack.push(children.1);
                     stack.push(children.0);
                 }
@@ -176,19 +206,18 @@ impl<B: Bounds> BoxTree<B> {
 
     /// The items `order[start..end]` as a leaf, or `None` when there are none.
     fn node(&self, start: usize, end: usize) -> Option<Node<B>> {
-        let items = self.order.get(start..end)?;
-        let mut boxes = items.iter().filter_map(|&i| self.boxes.get(i));
-        let first = *boxes.next()?;
         Some(Node {
-            bounds: boxes.fold(first, |u, b| u.union(b)),
+            bounds: union_of(&self.boxes, self.order.get(start..end)?)?,
             start,
             end,
             children: None,
         })
     }
 
-    /// Splits node `k` if it holds more than [`LEAF`] items; returns its children.
-    fn split(&mut self, k: usize) -> Option<(usize, usize)> {
+    /// Splits node `k` if it holds more than [`LEAF`] items; returns its children. The
+    /// halves come from selection; with `FULL_SORT` (the tests' reference build) from a full
+    /// sort of the node, which gives the same tree.
+    fn split<const FULL_SORT: bool>(&mut self, k: usize) -> Option<(usize, usize)> {
         let Node { start, end, .. } = *self.nodes.get(k)?;
         if end - start <= LEAF {
             return None;
@@ -211,10 +240,50 @@ impl<B: Bounds> BoxTree<B> {
             }
         }
         let key = |i: usize| boxes.get(i).map_or(0.0, |b| centre(b, axis));
-        items.sort_unstable_by(|&p, &q| key(p).total_cmp(&key(q)).then(p.cmp(&q)));
-        let mid = start + (end - start) / 2;
-        let left = self.node(start, mid)?;
-        let right = self.node(mid, end)?;
+        let cmp = |p: &usize, q: &usize| key(*p).total_cmp(&key(*q)).then(p.cmp(q));
+        let half = (end - start) / 2;
+        if FULL_SORT {
+            items.sort_unstable_by(cmp);
+        } else {
+            // The key is a strict total order, so selection puts the same items in each half
+            // as a full sort.
+            items.select_nth_unstable_by(half, cmp);
+        }
+        let mut halves = [None, None];
+        let (lo, hi) = items.split_at_mut(half);
+        for (part, out) in [lo, hi].into_iter().zip(&mut halves) {
+            // A half that will be a leaf is sorted, so its items stand in the order a full
+            // sort gives; a larger half is reordered by its own split.
+            if !FULL_SORT && part.len() <= LEAF {
+                part.sort_unstable_by(cmp);
+            }
+            let mut bounds = union_of(boxes, part);
+            // The union is the same for any order of the items but for the sign of a zero
+            // bound, when both zeros are bounds (`f64::min` may return either). Then the half
+            // is sorted and its union taken again, in the full sort's order.
+            if !FULL_SORT && part.len() > LEAF && bounds.is_some_and(|u| zero_tie(boxes, part, &u))
+            {
+                part.sort_unstable_by(cmp);
+                bounds = union_of(boxes, part);
+            }
+            *out = bounds;
+        }
+        let mid = start + half;
+        let [Some(lb), Some(rb)] = halves else {
+            return None;
+        };
+        let left = Node {
+            bounds: lb,
+            start,
+            end: mid,
+            children: None,
+        };
+        let right = Node {
+            bounds: rb,
+            start: mid,
+            end,
+            children: None,
+        };
         let l = self.nodes.len();
         self.nodes.push(left);
         self.nodes.push(right);
@@ -339,11 +408,92 @@ impl<B: Bounds> BoxTree<B> {
 
     /// The pairs `i < j` of items whose boxes are not disjoint within `tol` (`boxes[i]`
     /// tested against `boxes[j]`), ascending.
+    ///
+    /// A self-join: each unordered pair is reached once. A node against itself goes to its
+    /// children against themselves and to its two children against each other, whose items
+    /// are distinct.
     #[must_use]
     pub fn self_pairs(&self, tol: f64) -> Vec<(usize, usize)> {
-        let mut out = self.pairs(self, tol);
-        out.retain(|&(i, j)| i < j);
+        let mut out = Vec::new();
+        // `(k, k)` is node `k` against itself; `(ka, kb)` with `ka != kb`, two disjoint sets.
+        let mut stack: Vec<(usize, usize)> = if self.nodes.is_empty() {
+            Vec::new()
+        } else {
+            vec![(0, 0)]
+        };
+        while let Some((ka, kb)) = stack.pop() {
+            let (Some(na), Some(nb)) = (self.nodes.get(ka), self.nodes.get(kb)) else {
+                continue;
+            };
+            if ka == kb {
+                // Both items of a pair lie in the node's box, so a box disjoint from itself
+                // holds no pair.
+                if na.bounds.are_disjoint(&na.bounds, tol) {
+                    continue;
+                }
+                if let Some((a, b)) = na.children {
+                    stack.push((a, b));
+                    stack.push((b, b));
+                    stack.push((a, a));
+                } else {
+                    let items = self.items(na);
+                    for (p, &i) in items.iter().enumerate() {
+                        for &j in items.get(p + 1..).unwrap_or(&[]) {
+                            self.push_self_pair(&mut out, i, j, tol);
+                        }
+                    }
+                }
+                continue;
+            }
+            // A pair is tested lower index first, and that item may be on either side, so
+            // the nodes are skipped only when disjoint in both orders.
+            if na.bounds.are_disjoint(&nb.bounds, tol) && nb.bounds.are_disjoint(&na.bounds, tol) {
+                continue;
+            }
+            let descend_a = match (na.children, nb.children) {
+                (None, None) => {
+                    for &i in self.items(na) {
+                        for &j in self.items(nb) {
+                            self.push_self_pair(&mut out, i, j, tol);
+                        }
+                    }
+                    continue;
+                }
+                (Some(_), None) => true,
+                (None, Some(_)) => false,
+                // Descend the side with more items.
+                (Some(_), Some(_)) => na.end - na.start >= nb.end - nb.start,
+            };
+            if descend_a {
+                if let Some((a0, a1)) = na.children {
+                    stack.push((a1, kb));
+                    stack.push((a0, kb));
+                }
+            } else if let Some((b0, b1)) = nb.children {
+                stack.push((ka, b1));
+                stack.push((ka, b0));
+            }
+        }
+        // Pairs with an unplaced item, one by one.
+        for (p, &u) in self.unplaced.iter().enumerate() {
+            for &j in &self.order {
+                self.push_self_pair(&mut out, u, j, tol);
+            }
+            for &v in self.unplaced.get(p + 1..).unwrap_or(&[]) {
+                self.push_self_pair(&mut out, u, v, tol);
+            }
+        }
+        out.sort_unstable();
         out
+    }
+
+    /// Pushes the distinct items `i` and `j` as `(lower, higher)` if the lower's box is not
+    /// disjoint from the higher's.
+    fn push_self_pair(&self, out: &mut Vec<(usize, usize)>, i: usize, j: usize, tol: f64) {
+        let (i, j) = if i < j { (i, j) } else { (j, i) };
+        if self.boxes.get(i).is_some_and(|bi| self.met_by(j, bi, tol)) {
+            out.push((i, j));
+        }
     }
 }
 
@@ -384,6 +534,149 @@ mod tests {
             }
         }
         out
+    }
+
+    /// The pairs as before the self-join: `pairs(self, self)`, keeping `i < j`.
+    fn self_pairs_by_pairs<B: Bounds>(t: &BoxTree<B>, tol: f64) -> Vec<(usize, usize)> {
+        let mut out = t.pairs(t, tol);
+        out.retain(|&(i, j)| i < j);
+        out
+    }
+
+    /// Every bound's bits.
+    fn bits<B: Bounds>(b: &B) -> Vec<(u64, u64)> {
+        B::AXES
+            .iter()
+            .map(|&a| (b.lo(a).to_bits(), b.hi(a).to_bits()))
+            .collect()
+    }
+
+    /// The tree built by selection is the one a full sort per node builds, field by field
+    /// and bit for bit: the same nodes in the same order (ranges, children, boxes), the
+    /// same item order (so the same leaves), the same unplaced items.
+    fn assert_same_tree<B: Bounds>(boxes: &[B], what: &str) {
+        let (a, b) = (BoxTree::new(boxes), BoxTree::build::<true>(boxes));
+        assert_eq!(a.order, b.order, "{what}");
+        assert_eq!(a.unplaced, b.unplaced, "{what}");
+        assert_eq!(
+            a.boxes.iter().map(bits).collect::<Vec<_>>(),
+            b.boxes.iter().map(bits).collect::<Vec<_>>(),
+            "{what}"
+        );
+        assert_eq!(a.nodes.len(), b.nodes.len(), "{what}");
+        for (k, (x, y)) in a.nodes.iter().zip(&b.nodes).enumerate() {
+            assert_eq!(
+                (x.start, x.end, x.children),
+                (y.start, y.end, y.children),
+                "{what} node {k}"
+            );
+            assert_eq!(bits(&x.bounds), bits(&y.bounds), "{what} node {k}");
+        }
+    }
+
+    /// The self-join gives the same pairs, in the same order, as `pairs(self, self)`.
+    fn assert_same_self_pairs<B: Bounds>(boxes: &[B], what: &str) {
+        let t = BoxTree::new(boxes);
+        for tol in [0.0, 0.1, 0.5, -0.1, -0.0, 1e-300, f64::NAN] {
+            assert_eq!(
+                t.self_pairs(tol),
+                self_pairs_by_pairs(&t, tol),
+                "{what} tol {tol}"
+            );
+        }
+    }
+
+    /// Seeded box sets of every kind the build must order the same way: random; centres
+    /// on a coarse grid (tied keys, different boxes); each box repeated (tied keys and
+    /// equal boxes); all one box; bounds at `-0.0` and `+0.0` mixed (a union that could
+    /// depend on the fold order); and decimal grid values that touch, where the two orders
+    /// of a disjointness test can round differently.
+    fn box_sets(seed: u64) -> Vec<(String, Vec<Extent3d>)> {
+        let mut rng = Rng::new(seed);
+        let mut out = Vec::new();
+        for n in [0, 1, 4, 5, 8, 9, 10, 17, 64, 100, 257, 1000, 3000] {
+            out.push((format!("random {n}"), random_boxes(&mut rng, n)));
+            let grid: Vec<Extent3d> = (0..n)
+                .map(|_| {
+                    let mut g = || (4.0 * rng.next_f64()).floor();
+                    let c = Point3::new(g(), g(), g());
+                    let h = Vec3::new(rng.next_f64(), rng.next_f64(), rng.next_f64());
+                    Extent3d::spanning(c - h, c + h).unwrap()
+                })
+                .collect();
+            out.push((format!("tied {n}"), grid));
+            let base = random_boxes(&mut rng, n / 3 + 1);
+            let dup: Vec<Extent3d> = (0..n).map(|i| base[(i * 7) % base.len()]).collect();
+            out.push((format!("repeated {n}"), dup));
+            out.push((
+                format!("one box {n}"),
+                base.iter().take(1).cycle().take(n).copied().collect(),
+            ));
+            let zeros: Vec<Extent3d> = (0..n)
+                .map(|i| {
+                    let z = if (rng.next_u64() & 1) == 0 { 0.0 } else { -0.0 };
+                    let y = rng.next_signed_unit();
+                    let (lo, hi) = if i % 2 == 0 {
+                        (z, rng.next_f64())
+                    } else {
+                        (-rng.next_f64(), -z)
+                    };
+                    Extent3d::from_bounds(lo, y, z, hi, y + 1.0, -z).unwrap()
+                })
+                .collect();
+            out.push((format!("signed zeros {n}"), zeros));
+            let decimal: Vec<Extent3d> = (0..n)
+                .map(|_| {
+                    let mut d = || f64::from(u32::try_from(rng.next_u64() % 30).unwrap()) * 0.1;
+                    let (x, y, z) = (d(), d(), d());
+                    Extent3d::from_bounds(x, y, z, x + 0.3, y + 0.1, z + 0.7).unwrap()
+                })
+                .collect();
+            out.push((format!("decimal {n}"), decimal));
+        }
+        out
+    }
+
+    #[test]
+    fn selection_builds_the_full_sort_tree() {
+        for seed in [1, 2, 3, Rng::DEFAULT_SEED] {
+            for (what, boxes) in box_sets(seed) {
+                assert_same_tree(&boxes, &what);
+                let flat: Vec<Extent1d> = boxes
+                    .iter()
+                    .map(|b| Extent1d::spanning(b.min().x, b.max().x).unwrap())
+                    .collect();
+                assert_same_tree(&flat, &what);
+                let rects: Vec<Extent2d> = boxes
+                    .iter()
+                    .map(|b| {
+                        Extent2d::spanning(
+                            Point2::new(b.min().x, b.min().y),
+                            Point2::new(b.max().x, b.max().y),
+                        )
+                        .unwrap()
+                    })
+                    .collect();
+                assert_same_tree(&rects, &what);
+            }
+        }
+    }
+
+    #[test]
+    fn self_join_matches_pairs_with_itself() {
+        for seed in [4, 5] {
+            for (what, boxes) in box_sets(seed) {
+                if boxes.len() > 300 {
+                    continue;
+                }
+                assert_same_self_pairs(&boxes, &what);
+                let flat: Vec<Extent1d> = boxes
+                    .iter()
+                    .map(|b| Extent1d::spanning(b.min().x, b.max().x).unwrap())
+                    .collect();
+                assert_same_self_pairs(&flat, &what);
+            }
+        }
     }
 
     #[test]
