@@ -9,9 +9,10 @@ use scx_brep::{
     Absent, Brep, Document, Draft, EdgeGeom, EdgeId, EdgeShape, FaceId, FaceRecord, RegionId,
     ShellId, ShellRecord, VertexId, VertexRecord,
 };
-use scx_curve::{Curve, Line};
+use scx_curve::{Circle, Curve, Line};
 use scx_num::extent1d::Extent1d;
-use scx_num::frame::Sense;
+use scx_num::frame::{Frame, Sense};
+use scx_num::units::Length;
 use scx_num::vector3d::Point3;
 use scx_surface::Surface;
 
@@ -59,6 +60,27 @@ impl<'d> Assembly<'d> {
         Ok(self
             .draft
             .add_edge(EdgeGeom::new(EdgeShape::Curve { curve, interval }, ends))?)
+    }
+
+    /// The collapsed edge at `v`: a pole's or an apex's, used once by the face round it.
+    pub(crate) fn collapsed(&mut self, v: VertexId) -> Result<EdgeId, MakeError> {
+        Ok(self
+            .draft
+            .add_edge(EdgeGeom::new(EdgeShape::Collapsed, [v, v]))?)
+    }
+
+    /// The closed edge round the circle of `radius` about `frame`'s z axis, counter-clockwise
+    /// about it over one turn from its one vertex, which is made at `frame`'s x axis.
+    pub(crate) fn circle(
+        &mut self,
+        frame: Frame,
+        radius: f64,
+    ) -> Result<(EdgeId, VertexId), MakeError> {
+        let v = self.vertex(frame.origin() + *frame.x() * radius)?;
+        let circle = Circle::new(frame, Length::from_mm(radius), Sense::Forward)?;
+        let turn = Extent1d::new(0.0, core::f64::consts::TAU)
+            .ok_or(MakeError::Defect(Defect::Interval))?;
+        Ok((self.edge(Curve::Circle(circle), turn, [v, v])?, v))
     }
 
     /// The straight edge between `a` and `b`, made the first time, with the sense of a use
