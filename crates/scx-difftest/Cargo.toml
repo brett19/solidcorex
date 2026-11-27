@@ -31,6 +31,8 @@ scx-p21 = { path = "../scx-p21" }
 scx-testkit = { path = "../scx-testkit", features = ["bodies"] }
 # The bodies the testkit generates (`t_bodies`).
 scx-brep = { path = "../scx-brep" }
+# The mass properties against the pin's (`t_mass`).
+scx-mass = { path = "../scx-mass" }
 
 [lints]
 workspace = true

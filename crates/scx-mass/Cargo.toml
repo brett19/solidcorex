@@ -1,0 +1,23 @@
+# Written for solidcorex.
+[package]
+name = "scx-mass"
+description = "Mass properties of a body: volume, area, moments, by boundary integrals over its faces"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+scx-brep = { path = "../scx-brep" }
+scx-curve = { path = "../scx-curve" }
+scx-nurbs = { path = "../scx-nurbs" }
+scx-num = { path = "../scx-num" }
+scx-nurbs-surface = { path = "../scx-nurbs-surface" }
+scx-surface = { path = "../scx-surface" }
+
+[dev-dependencies]
+scx-testkit = { path = "../scx-testkit", features = ["bodies"] }
+
+[lints]
+workspace = true

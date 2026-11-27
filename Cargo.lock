@@ -521,6 +521,7 @@ dependencies = [
  "scx-algo",
  "scx-brep",
  "scx-curve",
+ "scx-mass",
  "scx-num",
  "scx-nurbs",
  "scx-nurbs-surface",
@@ -530,6 +531,19 @@ dependencies = [
  "scx-testkit",
  "solidcore",
  "solidcore-record",
+]
+
+[[package]]
+name = "scx-mass"
+version = "0.1.0"
+dependencies = [
+ "scx-brep",
+ "scx-curve",
+ "scx-num",
+ "scx-nurbs",
+ "scx-nurbs-surface",
+ "scx-surface",
+ "scx-testkit",
 ]
 
 [[package]]
