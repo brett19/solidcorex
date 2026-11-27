@@ -1846,6 +1846,104 @@ The enum's batches cost 5% (`eval_many`: the chunk copies) and 14% (`eval_grid`:
 buffer and its copy) over the direct calls; both are recorded in 05 as open, to go when
 `Point3` gets a layout that lets the surface write into `out` directly.
 
+### 4.8 SU3 as built (11-27)
+
+Decided by analysis and an adversarial pass; proposed for review, not yet ruled.
+
+```rust
+impl Plane /* and Cylinder, Cone, Sphere, Torus */ {
+    pub fn to_nurbs(&self, over: &Extent2d) -> Result<NurbsSurface<3>, SurfaceError>;
+}
+impl Surface {
+    pub fn to_nurbs(&self, over: &Extent2d) -> Result<NurbsSurface<3>, SurfaceError>;
+}
+// new SurfaceError arms: EmptyExtent { axis, at }, OutsideDomain { axis, min, max },
+// Conversion(NurbsSurfaceError)
+```
+
+The image is a tensor product of the kind's two directions. A length (the plane's u and v, the
+height of a cylinder or cone) is degree 1, the parameter itself. An angle is the rational
+quadratic arcs of SU1's `Arcs` (`Arcs::bezier`): one span per quarter arc crossed, each a
+sub-arc of the pin's quarter arc written through the homogeneous blossom
+`H(x, y) = (1 - xy, x + y, 1 + xy)` of SU1's half-angle form, so the span's control values are
+`H(ta, ta)`, `H(ta, tb)`, `H(tb, tb)` turned by the arc's middle. The control point at `(i, j)`
+is the kind's own formula `O + f D + g Z` at the directions' control values (affine in each
+direction's homogeneous point, so this is exact), and the weight is `wu wv`. Plane, cylinder
+and cone are degree (1, 1), (2, 1), (2, 1); sphere and torus (2, 2).
+
+- **Keeps the pin's uv (D13), so the image is off the surface by rounding; the alternative was
+  rational weights exactly on it.** In the pin's parameter a quarter arc's middle weight is
+  `cos(pi/4)` of its ends' (the arc is symmetric in its parameter, so its end weights are equal,
+  and that fixes the middle). No double holds `cos(pi/4)`, so the control data is rounded and
+  T4's `Implicit::check` reports the image off, by a first-order distance at most 1.0e-16 of
+  the case's scale (38 extents over 10 surfaces, two of each kind; the pin's difftest tolerance `ON_TOL` is 1e-14
+  relative). Alternative: weights `(1, 1, 2)` with `w1^2 = w0 w2 / 2` (the testkit's exact
+  `circle()`), exactly on the quadric in doubles. Against: that is a different parameter of the
+  same arc, so the image and the kind would disagree at the same uv, which is what D13 and 4.2
+  rule out (a pcurve would need a map across every conversion). Kept: uv. The plane, being
+  polynomial, is exactly on in an integer frame over an integer extent (tested). 4.4's "lies
+  exactly on" holds in the reals, and is checked to rounding.
+- **`Result`, not 4.3's infallible sketch.** 4.2 argued totality from `Extent2d` being finite.
+  It is finite, but not every finite extent is a domain of the kind: a zero-width side
+  (`EmptyExtent`), more than one turn of a periodic direction, a sphere's v outside `[0, 1]`
+  (past a pole), a cone's v past its apex onto the other nappe (`OutsideDomain`). Alternative:
+  clamp or wrap the extent silently. Against: a caller asking for two turns gets one, or a
+  sphere that folds back over its pole, and finds out from a wrong intersection. The NURBS
+  constructors' own errors (none expected, kept so no `unwrap` sits in the crate) come back as
+  `Conversion(NurbsSurfaceError)`, its kind passed through and its source exposed.
+- **One period, anywhere.** A turn may start at any u (the seam crossing is one more span, not a
+  rewrap), and `hi - lo <= period` exactly, so at most 5 spans. Alternative: accept several turns
+  as repeated arcs. Against: the image would cover the surface twice, which no B-rep face does;
+  refused instead.
+- **A break is placed exactly.** At a quarter break the control point is the axis itself
+  (`(1, 0)`, `(0, 1)`, ...), not the formula's rounding of it, so a full turn's knots are
+  `[0,0,0, L,L, 2L,2L, 3L,3L, P,P,P]` and a sphere's pole rows are its pole exactly (tested).
+  Interior breaks are double knots, the arcs' own `C1` joints; a single knot vector across the
+  turn (`C1` rational B-spline) was the alternative, but it gives a different parameter.
+- **Every weight is positive.** Splitting at each break keeps `|tau| <= tan(pi/8)`, so
+  `1 + xy > 0`; T4's check needs positive weights and NS's evaluator does not divide by zero.
+- **`Surface::to_nurbs` restricts the `Nurbs` arm** (`NurbsSurface::split` at each end strictly
+  inside the domain, the surface itself on its whole domain), with the same refusals.
+  Alternative: no `to_nurbs` on the enum. Against: step 5's B-spline-against-analytic pairs and
+  SU7 want one call for "the NURB of this face over this extent" whatever the arm.
+
+Truth (`tests/truth.rs`, 4 new tests, about 22 s in a debug build for the exact check): per
+case the whole range, a random piece, a piece from break to break, and one crossing each
+seam, over 40 surfaces. The kind's `point` and the testkit's `point_at` (u wrapped into the period) agree with
+the image at random uv, the extent's ends and its breaks, to 3.2e-16 of scale (bound 8e-16).
+The structure, the exact plane, the refusals by kind and name, and the enum's agreement with
+each kind (`==`) and its restriction of a `Nurbs` arm (at the same uv) are checked.
+
+Cost (A3; release build, ns per call, one quiet run; `point` and NURBS `point` for scale, the
+image's `point` with `Approach::Above`):
+
+| | `point` | `to_nurbs`, whole | `to_nurbs`, one span | image `point` |
+|---|---:|---:|---:|---:|
+| plane | 6.5 | 125 | 122 | 63 |
+| cylinder | 10.3 | 360 | 186 | 78 |
+| cone | 13.3 | 378 | 196 | 78 |
+| sphere | 19.8 | 586 | 232 | 84 |
+| torus | 21.0 | 899 | 244 | 83 |
+
+"Whole" is one turn each way (the plane `[0, 1]^2`); "one span" an extent inside one quarter
+arc each way. So a whole torus costs about 11 image evaluations, a trimmed patch about 3; mostly the four
+`Vec`s (knots, points, weights) the NURBS takes. 9 A3's comparison against one inversion is
+deferred to SU4, which builds the inversion; A3's verdict (one conversion per intersection
+call, not per evaluation) stands on these numbers.
+
+From research 66: no technique there changes this conversion. Its implicitisation (§8.4) is
+an approximate implicit form to seed SSI; our kinds have exact implicit forms already, which
+T4's check uses. Its exact predicates (§16) are runtime float filters for orientation tests;
+T4's check is exact rationals in the testkit, test-only, so there is nothing to adopt here.
+Its "keep derived data, do not rebuild" (§1 point 3) and OCCT's per-boolean intersection
+context (§14) match A3: if the conversion ever shows in a profile, memoise it in the caller's
+`Scratch`, keyed by the kind's bits and the extent, never on the kind. Its allocation-free
+inner loops (§1 point 4) would ask for a caller-provided buffer; not taken, as the conversion
+runs once per intersection call and `NurbsSurface` owns its storage.
+
+Open from SU3: the inversion cost comparison (SU4); a `to_nurbs` into a caller's buffer if a
+profile ever asks.
+
 ## 5. `scx-ssi`, the analytic part
 
 The pin's sources are `intersect/surface_intersector` (`p1`-`p5`) and `adv_surface_intersector`.

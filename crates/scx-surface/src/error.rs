@@ -17,6 +17,7 @@
 use core::fmt;
 
 use scx_num::error::ErrorKind;
+use scx_nurbs_surface::{NurbsSurfaceError, ParamAxis};
 
 /// A size of an analytic kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -66,6 +67,29 @@ pub enum SurfaceError {
         /// The minor radius.
         minor: f64,
     },
+    /// `to_nurbs` was asked for an extent that is a single value along `axis`: no NURBS
+    /// has an empty domain.
+    EmptyExtent {
+        /// The direction.
+        axis: ParamAxis,
+        /// The value.
+        at: f64,
+    },
+    /// `to_nurbs` was asked for an extent that leaves the surface's domain along `axis`:
+    /// more than one period of a periodic direction, past a pole of the sphere, past the
+    /// cone's apex, or outside a NURBS surface's domain.
+    OutsideDomain {
+        /// The direction.
+        axis: ParamAxis,
+        /// The extent's low end.
+        min: f64,
+        /// The extent's high end.
+        max: f64,
+    },
+    /// `to_nurbs` could not build or restrict the NURBS surface: a context frame over the
+    /// `scx-nurbs-surface` error, whose kind it has. From finite sizes and extents only an
+    /// overflow reaches it (sizes near the largest double).
+    Conversion(NurbsSurfaceError),
 }
 
 impl SurfaceError {
@@ -78,6 +102,8 @@ impl SurfaceError {
                 ErrorKind::Refused
             }
             Self::SelfIntersecting { .. } => ErrorKind::Unsupported,
+            Self::EmptyExtent { .. } | Self::OutsideDomain { .. } => ErrorKind::Refused,
+            Self::Conversion(e) => e.kind(),
         }
     }
 
@@ -89,6 +115,9 @@ impl SurfaceError {
             Self::Degenerate { .. } => "size_degenerate",
             Self::Negative { .. } => "size_negative",
             Self::SelfIntersecting { .. } => "torus_self_intersecting",
+            Self::EmptyExtent { .. } => "extent_empty",
+            Self::OutsideDomain { .. } => "extent_outside_domain",
+            Self::Conversion(_) => "nurbs_conversion",
         }
     }
 }
@@ -117,11 +146,26 @@ impl fmt::Display for SurfaceError {
                 "a torus with minor radius {minor} not below its major radius {major} \
                  intersects itself"
             ),
+            Self::EmptyExtent { axis, at } => {
+                write!(f, "the extent is the single value {at} along {axis}")
+            }
+            Self::OutsideDomain { axis, min, max } => write!(
+                f,
+                "the extent [{min}, {max}] along {axis} leaves the surface's domain"
+            ),
+            Self::Conversion(_) => f.write_str("the NURBS image could not be built"),
         }
     }
 }
 
-impl std::error::Error for SurfaceError {}
+impl std::error::Error for SurfaceError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Conversion(e) => Some(e),
+            _ => None,
+        }
+    }
+}
 
 /// A finite, positive size.
 pub(crate) fn positive(size: Size, value: f64) -> Result<f64, SurfaceError> {
