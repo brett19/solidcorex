@@ -19,15 +19,18 @@
 // used a 3-D conic of dimension 2.
 
 use scx_num::domain::ParamDomain;
+use scx_num::fmath;
 use scx_num::frame::{Frame, Frame2, Sense};
 use scx_num::jet::{CurveJet, CurveJet2};
-use scx_num::math::EFF_ZERO;
+use scx_num::math::{Affine, EFF_ZERO};
 use scx_num::trig::Trig;
 use scx_num::units::Length;
 use scx_num::vector2d::{Point2, Vec2};
 use scx_num::vector3d::{Point3, Vec3};
 use scx_nurbs::Approach;
 
+use crate::curve::Curve;
+use crate::edit::ParamShift;
 use crate::error::{CurveError, Degenerate, Part, SemiAxis};
 
 /// The circle `centre + r (cos t x + sin t y)` in a [`Frame`], `t` the angle in radians
@@ -143,6 +146,46 @@ impl Circle {
         let r = self.radius.mm();
         jet3(&self.frame, r, r * self.sense.sign(), t)
     }
+
+    /// The same circle run the other way, `C'(t) = C(-t)`: the sense reversed, the frame
+    /// and radius kept. Exact: `C'(t)` has `C(-t)`'s bits (the sine is odd and the cosine
+    /// even to the bit).
+    #[must_use]
+    pub fn reversed(&self) -> Self {
+        Self {
+            sense: self.sense.reversed(),
+            ..*self
+        }
+    }
+
+    /// The image under `a`, and the shift of its parameter: with `(c, s)` the result,
+    /// `c.point(t + s.by())` is `a(self.point(t))` up to rounding.
+    ///
+    /// Where `a` is a similarity on the circle's plane (its images of the frame's x and y
+    /// are square and of one length, to 16 roundings) the image is a circle on the image
+    /// frame, its radius scaled, the shift zero. Otherwise it is an [`Ellipse`] on its
+    /// principal axes, its angle shifted by the turn from the image of x to the major or
+    /// minor axis nearest it (within an eighth of a turn). The sense is kept: the frame's z
+    /// is the right-handed normal of the images of x and y, and a mirror leaves the image
+    /// running the same way about it (research 63 §3.9).
+    ///
+    /// # Errors
+    ///
+    /// [`CurveError::NotFinite`] for a map that is not finite ([`Part::Map`]) or an image
+    /// that overflows; a degenerate radius or semi-axis, or [`Degenerate::Plane`], where
+    /// `a` flattens the circle.
+    pub fn transformed(&self, a: &Affine) -> crate::Result<(Curve, ParamShift)> {
+        let r = self.radius.mm();
+        let im = image(&self.frame, r, r * self.sense.sign(), a, true)?;
+        let shift = ParamShift::new(im.shift);
+        Ok(if im.similar {
+            let radius = Length::from_mm(0.5 * (im.a + im.b));
+            (Self::new(im.frame, radius, im.sense)?.into(), shift)
+        } else {
+            let (a, b) = (Length::from_mm(im.a), Length::from_mm(im.b));
+            (Ellipse::new(im.frame, a, b, im.sense)?.into(), shift)
+        })
+    }
 }
 
 impl Ellipse {
@@ -240,6 +283,34 @@ impl Ellipse {
             t,
         )
     }
+
+    /// The same ellipse run the other way, `C'(t) = C(-t)`: the sense reversed, the frame
+    /// and semi-axes kept. Exact: `C'(t)` has `C(-t)`'s bits (the sine is odd and the cosine
+    /// even to the bit).
+    #[must_use]
+    pub fn reversed(&self) -> Self {
+        Self {
+            sense: self.sense.reversed(),
+            ..*self
+        }
+    }
+
+    /// The image under `a`, and the shift of its parameter, as [`Circle::transformed`]: an
+    /// ellipse always. Under a similarity on its plane the image keeps the images of its
+    /// axes and the shift is zero; otherwise it is placed on its principal axes.
+    ///
+    /// # Errors
+    ///
+    /// As [`Circle::transformed`].
+    pub fn transformed(&self, a: &Affine) -> crate::Result<(Self, ParamShift)> {
+        let b = self.semi_y.mm() * self.sense.sign();
+        let im = image(&self.frame, self.semi_x.mm(), b, a, false)?;
+        let (sx, sy) = (Length::from_mm(im.a), Length::from_mm(im.b));
+        Ok((
+            Self::new(im.frame, sx, sy, im.sense)?,
+            ParamShift::new(im.shift),
+        ))
+    }
 }
 
 impl Circle2 {
@@ -313,6 +384,17 @@ impl Circle2 {
     pub fn jet_over<T: Trig, const D: usize>(&self, t: T) -> CurveJet2<D, T> {
         let r = self.radius.mm();
         jet2(&self.frame, r, r * self.sense.sign(), t)
+    }
+
+    /// The same circle run the other way, `C'(t) = C(-t)`: the sense reversed, the frame
+    /// and radius kept. Exact: `C'(t)` has `C(-t)`'s bits (the sine is odd and the cosine
+    /// even to the bit).
+    #[must_use]
+    pub fn reversed(&self) -> Self {
+        Self {
+            sense: self.sense.reversed(),
+            ..*self
+        }
     }
 }
 
@@ -410,6 +492,17 @@ impl Ellipse2 {
             t,
         )
     }
+
+    /// The same ellipse run the other way, `C'(t) = C(-t)`: the sense reversed, the frame
+    /// and semi-axes kept. Exact: `C'(t)` has `C(-t)`'s bits (the sine is odd and the cosine
+    /// even to the bit).
+    #[must_use]
+    pub fn reversed(&self) -> Self {
+        Self {
+            sense: self.sense.reversed(),
+            ..*self
+        }
+    }
 }
 
 // ---------------------------------------------------------------- the one evaluator
@@ -494,6 +587,84 @@ fn lift3<T: Trig>(v: Vec3) -> Vec3<T> {
 
 fn lift2<T: Trig>(v: Vec2) -> Vec2<T> {
     v.map(T::lift)
+}
+
+// ---------------------------------------------------------------- the affine image
+
+/// The relative misfit (`|p - q|` and `|m|` against `p + q`, for the squared lengths `p`,
+/// `q` of the images of the frame's x and y and their dot product `m`) at or below which a
+/// map is taken as a similarity on a conic's plane: 16 roundings, three times the most a
+/// computed rotation and uniform scale showed (5.2 over 200,000 random ones), so a turned
+/// circle stays a circle. Snapping costs at most twice the misfit, relative to the size.
+const SIMILAR: f64 = 16.0 * f64::EPSILON;
+
+/// A conic's image under an affine map, placed: `frame.origin + a cos t x + b sin t y'`
+/// with `y'` the frame's y times `sense`, at `t` the old angle plus `shift`.
+struct Image {
+    frame: Frame,
+    a: f64,
+    b: f64,
+    sense: Sense,
+    shift: f64,
+    similar: bool,
+}
+
+/// The image of `o + a cos t x + b sin t y` (`b` signed by the sense) under `m`.
+///
+/// The image is `m(o) + U cos t + V sin t` with `U = a A x`, `V = b A y`. Under a
+/// similarity on the plane (`A x` and `A y` square and of one length) `U` and `V` are
+/// already square, so the frame takes `A x` and the shift is zero. Otherwise the principal
+/// axes are at the angle `t0` with `tan 2 t0 = 2 U.V / (|U|^2 - |V|^2)`, taken in
+/// `[-pi/4, pi/4]` (so `U.V = 0` gives `t0 = 0` exactly), and
+/// `U cos t + V sin t = U' cos (t - t0) + V' sin (t - t0)` with `U' = U cos t0 + V sin t0`
+/// and `V' = V cos t0 - U sin t0`, square. The frame's z is the right-handed normal of
+/// `A x` and `A y` in both cases, and the sense the side of `V'` (or `V`) about it.
+/// `circle` names a circle's causes for a circle's sizes under a similarity.
+fn image(f: &Frame, a: f64, b: f64, m: &Affine, circle: bool) -> crate::Result<Image> {
+    if !m.is_finite() {
+        return Err(CurveError::NotFinite(Part::Map));
+    }
+    let origin = m.apply(f.origin());
+    if !origin.is_finite() {
+        return Err(CurveError::NotFinite(Part::Origin));
+    }
+    let ax = m.apply_vec(f.x().as_vec());
+    let ay = m.apply_vec(f.y().as_vec());
+    let (p, q, r) = (ax.dot(ax), ay.dot(ay), ax.dot(ay));
+    let similar = (p - q).abs() <= SIMILAR * (p + q) && r.abs() <= SIMILAR * (p + q);
+    let (x, y, t0) = if similar {
+        (ax * a, ay * b, 0.0)
+    } else {
+        let (u, v) = (ax * a, ay * b);
+        let (p, q, r) = (u.dot(u), v.dot(v), u.dot(v));
+        let s = if p >= q { 1.0 } else { -1.0 };
+        let t0 = 0.5 * fmath::atan2(2.0 * r * s, (p - q) * s);
+        let (sn, cs) = Trig::sin_cos(t0);
+        (u * cs + v * sn, v * cs - u * sn, t0)
+    };
+    let (len_x, len_y) = (x.length(), y.length());
+    if circle && similar {
+        radius_ok(Length::from_mm(len_x))?;
+        radius_ok(Length::from_mm(len_y))?;
+    } else {
+        semi_axis_ok(SemiAxis::X, Length::from_mm(len_x))?;
+        semi_axis_ok(SemiAxis::Y, Length::from_mm(len_y))?;
+    }
+    let frame =
+        Frame::new(origin, ax.cross(ay), x).ok_or(CurveError::Degenerate(Degenerate::Plane))?;
+    let sense = if y.dot(frame.y().as_vec()) < 0.0 {
+        Sense::Reversed
+    } else {
+        Sense::Forward
+    };
+    Ok(Image {
+        frame,
+        a: len_x,
+        b: len_y,
+        sense,
+        shift: -t0,
+        similar,
+    })
 }
 
 // ---------------------------------------------------------------- validation

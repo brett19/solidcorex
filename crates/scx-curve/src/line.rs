@@ -14,7 +14,7 @@
 
 use scx_num::domain::ParamDomain;
 use scx_num::jet::{CurveJet, CurveJet2};
-use scx_num::math::EFF_ZERO;
+use scx_num::math::{Affine, EFF_ZERO};
 use scx_num::ring::Ring;
 use scx_num::vector2d::{Point2, Vec2};
 use scx_num::vector3d::{Point3, Vec3};
@@ -122,6 +122,32 @@ impl Line {
             d: core::array::from_fn(|k| if k == 0 { d1 } else { zero }),
         }
     }
+
+    /// The same line run the other way, `L'(t) = L(-t)`: the direction negated. Exact:
+    /// `L'(t)` has `L(-t)`'s bits.
+    #[must_use]
+    pub fn reversed(&self) -> Self {
+        Self {
+            origin: self.origin,
+            direction: -self.direction,
+        }
+    }
+
+    /// The image under `a`, on the same parameter: `a(o) + t A d`, which is `a(L(t))` up to
+    /// rounding. The direction is the image of the velocity, so under a map that is not a
+    /// similarity the parameter still names the image of the same point (no shift).
+    ///
+    /// # Errors
+    ///
+    /// [`CurveError::NotFinite`] for a map that is not finite ([`Part::Map`]) or an image
+    /// that overflows; [`Degenerate::Direction`] where `a` takes the direction to one
+    /// shorter than [`EFF_ZERO`](scx_num::math::EFF_ZERO).
+    pub fn transformed(&self, a: &Affine) -> crate::Result<Self> {
+        if !a.is_finite() {
+            return Err(CurveError::NotFinite(Part::Map));
+        }
+        Self::new(a.apply(self.origin), a.apply_vec(self.direction))
+    }
 }
 
 impl Line2 {
@@ -198,6 +224,15 @@ impl Line2 {
         CurveJet2 {
             point: self.point_over(t),
             d: core::array::from_fn(|k| if k == 0 { d1 } else { zero }),
+        }
+    }
+
+    /// The same line run the other way, as [`Line::reversed`].
+    #[must_use]
+    pub fn reversed(&self) -> Self {
+        Self {
+            origin: self.origin,
+            direction: -self.direction,
         }
     }
 }

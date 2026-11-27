@@ -1319,6 +1319,143 @@ polynomial (P) and rational (R).
     knot arrays from the `f64` instance.
 - **An interval point costs 11 to 24 times an `f64` point.** That is the outward-rounded
   products.
+- **Follow-up landed (11-27).** The `f64` instances of `jet` and `point_over` now take the
+  `f64` basis directly and keep no knot arrays. The kernel is still the same one, with the same
+  bits; `derivs_into` and `curve.rs` are untouched. Same machine and method as above,
+  degree 9, ns per call: `jet::<2>` went from 376-424 to 279-340 (`derivs::<3>` 312-375 in
+  the same runs), and `point_over::<f64>` from 184-193 to 125-133. In callgrind, `point_over`
+  at p9 polynomial dropped from 3,409 instructions to 3,017. The jet went from 5,466 to 12,834,
+  which is mostly zeroing the scratch rows: it is faster even so. The `Ivl` forms changed
+  by under 0.5% (point 38,191 to 38,308, jet 107,907 to 108,289).
+
+### 3.9 CU5 as built (11-27)
+
+Proposed for review, not yet ruled.
+
+```rust
+// scx-curve, src/edit.rs (new)
+impl Curve {
+    pub fn restrict(&self, e: Extent1d) -> Result<Self>;
+    pub fn reversed(&self) -> Self;                                    // C'(t) = C(-t)
+    pub fn transformed(&self, a: &Affine) -> Result<(Self, ParamShift)>;
+}
+impl Curve2 { pub fn restrict(..) -> Result<Self>; pub fn reversed(&self) -> Self; }
+pub struct ParamShift { .. }   // NONE, by(), apply(t) = t + by, extent(e)
+
+impl Line    { pub fn reversed(&self) -> Self; pub fn transformed(&self, a: &Affine) -> Result<Self>; }
+impl Circle  { pub fn reversed(&self) -> Self;
+               pub fn transformed(&self, a: &Affine) -> Result<(Curve, ParamShift)>; }
+impl Ellipse { pub fn reversed(&self) -> Self;
+               pub fn transformed(&self, a: &Affine) -> Result<(Self, ParamShift)>; }
+// Line2, Circle2, Ellipse2: reversed only
+
+// scx-nurbs
+impl<const D: usize> NurbsCurve<D> { pub fn reversed(&self) -> Self; }   // src/reverse.rs (new)
+impl KnotVector { pub fn negated(&self) -> Self; }                        // knots.rs, one hunk
+
+// CurveError gains OutsideDomain { extent, domain } and Nurbs(NurbsError) (transparent
+// kind and name); Degenerate gains Extent { at } and Plane; Part gains Map.
+```
+
+- **The edits are by value** (04, `&self -> Result<Self>`), as the brief says. An infallible
+  edit returns `Self`. `reversed` is total for every kind, so it takes no `Result`.
+- **Reversal is `C'(t) = C(-t)` for every kind, not the pin's `a + b - t`.**
+  - A line negates its direction. A conic flips its sense (`Sense::reversed`). Both are
+    bit for bit, because `fmath`'s sine is odd and its cosine even, and a test checks it
+    over every analytic curve of the CU2 fixtures.
+  - A NURBS curve negates its knots in reverse order (`KnotVector::negated`, exact) and
+    reverses its points and weights. The domain `[a, b]` becomes `[-b, -a]`, and an
+    edge's interval negates exactly with it. A second reversal is the curve bit for bit.
+    The values agree to rounding only (the basis sums run the other way).
+  - Against: the pin keeps the domain, `[a, b]` to `[a, b]`, and that is what scx-nurbs-surface's
+    `reversed` does for a surface direction. A caller that pairs a curve with a surface
+    direction must negate the interval, not keep it.
+  - For: `a + b - t` rounds each knot. Two close knots can merge, or a knot can cross
+    its neighbour, so the pin's reversal can fail or change the curve. Negation cannot.
+    The surface's form is left alone here (outside CU5's files) and noted for SU7.
+- **`restrict` keeps the parameter.** A line and a conic carry no extent, because an
+  edge holds its interval (§3.2), so they return a clone for any `e`.
+  - A NURBS curve is `split` at each end of `e` that lies strictly inside its domain.
+    An `e` equal to the domain returns the same `Arc`, so nothing is copied.
+  - It refuses `OutsideDomain` for an `e` past the domain, `Degenerate::Extent` for an
+    `e` of zero length, and the split's own cause otherwise.
+  - Against a no-op `restrict` on each analytic kind: the enum arm already clones, so
+    the kinds would only gain a method that does nothing.
+  - Against clamping `e` to the domain: a request past the domain is the caller's bug,
+    and the cause says so.
+- **`transformed` returns a `ParamShift` with the image.** It holds
+  `image.point(shift.apply(t)) ≈ a(self.point(t))`.
+  - A line maps its origin and its direction (unnormalised, so `t` keeps its meaning,
+    and no rescale is needed). A NURBS curve maps its control points and keeps its knots
+    and weights, then is rebuilt through `NurbsCurve::new`, which re-checks them. Both
+    have a zero shift.
+  - A conic's image comes from `p = |Ax|²`, `q = |Ay|²` and `m = Ax·Ay`, with `x` and `y`
+    the frame's axes scaled by the radii.
+    - Where the map is a similarity on the plane (`|p - q|` and `|m|` within 16
+      roundings of `p + q`), the frame takes `Ax` and the shift is zero. A circle stays a
+      `Circle`, with radius `½(|Ax| + |Ay|)`.
+    - Otherwise the image is put on its principal axes:
+      `t0 = ½ atan2(2m s, (p - q) s)` with `s = sign(p - q)`, so `t0` is in `[-π/4, π/4]`
+      and the nearest axis is chosen. Then `U' = U cos t0 + V sin t0`,
+      `V' = V cos t0 - U sin t0`, and the shift is `-t0`. A circle under a map that is
+      not a similarity becomes an `Ellipse`. This is an exact image, so no kind becomes NURBS (§3.2).
+  - Against `Option<ParamShift>` or a shift folded into the curve: the curve has no
+    parameter offset field, and an edge's interval must move with the image anyway
+    (`ParamShift::extent`).
+  - Against a NURBS image for a non-similarity map (the pin's `Transform` refuses
+    anything but a uniform scale on a conic): an affine image of a conic is a conic, and
+    the closed form is exact.
+- **The 16-rounding similarity threshold.** Measured: the worst misfit over 200,000 random
+  computed rotations times uniform scales was 5.25 roundings. A turned circle therefore
+  stays a circle, with a margin of three. Snapping costs at most twice the misfit
+  relative to the size, 32 roundings. Just past the threshold the principal axes are
+  ill-conditioned (the angle is `atan2` of two tiny numbers), but the image is not: every
+  point still maps to a few roundings, and a test checks both sides of the threshold.
+  Against 64 roundings, the first draft: a near-similar map at 1e-14 snapped and
+  cost `2e-15` at size 1, which is a needless error.
+- **A mirror keeps the sense.** The image frame's z is the normal of `Ax × Ay`, and the
+  sense is read from the image `y` against the frame's y.
+  - Under a mirror, the image runs the same way about that normal as the original
+    does about its own z. That agrees with the pin's points and with the geometry.
+  - D14 says "keeps the frame right-handed and reverses the kind's sense". That is the
+    same curve described from the other side, with z taken as `A z`.
+  - Against `Frame::transformed`: it maps z by `A`, so it would refuse a projection
+    along the plane's normal. Under such a map the image of z is not used, and the circle
+    still maps to a circle or an ellipse in its own plane.
+  - A map that flattens the plane itself (`Ax × Ay` too short) is `Degenerate::Plane`. A
+    flattened axis is the size's own `Degenerate::SemiAxis` or `Radius`.
+- **`Curve2` has no `transformed`.** scx-num has no 2-D affine map, and a body's transform
+  keeps its pcurves (D14). It is added when a caller needs one.
+- **`NurbsCurve::reversed` is in a new file, `scx-nurbs/src/reverse.rs`.** This keeps it out of
+  `curve.rs`, where elevation work is under way. Its only other hunk is
+  `KnotVector::negated` in `knots.rs`. The NURBS transform needs no new scx-nurbs op.
+- **`CurveError` carries `NurbsError` (`Nurbs(..)`), with its kind and name passed through.**
+  Against: `CurveError` grows from 16 to 40 bytes. `Result<Line>` stays at 56, and
+  `Result<(Curve, ParamShift)>` is 104, the same as `Curve`'s bound. For: a NURBS edit's
+  cause reaches the caller typed (typed errors goal), not flattened to `Refused`.
+
+Tests (scx-curve `edit.rs`, 6 tests; scx-nurbs `reverse.rs`, 1; `error.rs` extended):
+- **Reversal of analytic kinds, 3-D and 2-D.** Point and jet at `-t` against `t`, bit for
+  bit (odd derivatives negated), and a double reversal.
+- **Reversal of NURBS, 3-D and 2-D.** Domain negated exactly. Point and first derivative
+  on swapped sides within rounding, and a double reversal bit for bit. In scx-nurbs,
+  `derivs::<3>` on both sides at 65 parameters, polynomial and rational.
+- **Restriction.** Analytic kinds unchanged. NURBS over interior, end-touching and `1e-9`-wide
+  extents against the original's points, and the same `Arc` for the full domain.
+  `OutsideDomain` and `Degenerate::Extent` are checked too.
+- **Transform: every kind under random affine maps** (sizes 1e-3 to 1e3, with translations and
+  mirrors). Point and tangent within a bound from the map's largest column times the
+  curve's reach. A line has no shift, and a circle under a non-similarity becomes an ellipse.
+- **Transform: closed forms.** Rotation, uniform scale, a mirror (`x → -X`, z flipped, sense
+  kept), axis scales, a shear with the golden-ratio axes, a projection along z (circle
+  kept), a projection along y (`SemiAxis` Y zero), and a NaN map (`NotFinite(Map)`).
+- **Transform: near similarities and degenerate images.** Maps 1e-15 to 1e-10 from a
+  rotation, on both sides of the threshold. A line taken to a point, and NURBS points
+  overflowing to the curve's own cause.
+
+Work added to existing paths: none. These are new functions. The only change to shared code
+is `curve.rs`'s test helpers becoming `pub(crate)` and the error enum's larger size, which
+the constructors' `Result`s mostly absorb.
 
 ## 4. `scx-surface`
 
