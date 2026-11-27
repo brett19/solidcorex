@@ -32,7 +32,7 @@ use scx_num::units::{Length, Resolution};
 use scx_num::vector2d::{Point2, Vec2};
 use scx_num::vector3d::{Point3, Vec3};
 use scx_ssi::analytic::{Intersection, section_by_plane};
-use scx_surface::{Closed, Cone, Cylinder, Plane, Sphere, Surface};
+use scx_surface::{Closed, Cone, Cylinder, Plane, Sphere, Surface, pcurve_of};
 use scx_testkit::bodies::{Kind, generate};
 use scx_testkit::topology::{dog_leg, jumps, passes_pole};
 
@@ -523,20 +523,19 @@ fn refusals_by_cause() {
         |d: &Draft, s: &Surface, l: Vec<(EdgeId, Sense)>| d.exact_loops(s, &[l], &doc).unwrap_err();
 
     // An oblique section of a sphere and one of a cone (SS5 gives an ellipse) have no
-    // closed-form pcurve, so they are written through the surface's chart (73 SM1).
+    // closed-form pcurve but one through the surface's chart (73 SM1). Each goes round the
+    // axis, so alone it winds and needs a seam, as a parallel does.
     let tilted = Plane::new(Frame::new(o + z * 0.2, z + x * 0.7, y).unwrap());
     let (c, iv) = section(&sphere, &tilted);
     let tilted = Plane::new(Frame::new(o + z * 2.0, z + x * 0.3, y).unwrap());
     let (k, kv) = section(&cone, &tilted);
     assert!(matches!(k, Curve::Ellipse(_)));
     for (s, c, iv) in [(&sphere, c, iv), (&cone, k, kv)] {
+        let pc = pcurve_of(&c, s, iv, doc.resolution());
+        assert!(matches!(pc, Ok(Curve2::OnChart(_))), "{pc:?}");
         let v = vertex(&mut d, c.point(iv.min()));
         let e = edge(&mut d, c, iv, [v, v]);
-        let got = d.exact_loops(s, &[vec![(e, FWD)]], &doc).unwrap();
-        let UseGeom::Pcurve { curve, .. } = &got[0].uses[0].geom else {
-            panic!("{got:?}")
-        };
-        assert!(matches!(curve, Curve2::OnChart(_)), "{curve:?}");
+        assert_eq!(err(&d, s, vec![(e, FWD)]), PcurveWriteError::Winds { lp: 0 });
     }
 
     // A NURBS surface has no chart: a circle on a plane given as NURBS needs a fit.
