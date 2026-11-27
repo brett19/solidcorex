@@ -620,9 +620,12 @@ fn check_radial(b: &Brep) -> Result<Proved, ContractError> {
 /// are allowed.
 #[test]
 fn radial_edges_pass_only_when_allowed() {
-    for seed in 0..4 {
-        for size in 1..=3 {
-            let b = kind(Kind::Touching, seed, size);
+    for (k, seed, size) in [Kind::Touching, Kind::Checker]
+        .into_iter()
+        .flat_map(|k| (0..4).flat_map(move |seed| (1..=3).map(move |size| (k, seed, size))))
+    {
+        {
+            let b = kind(k, seed, size);
             let pinch = b.edges().find(|e| e.fins().len() == 4).unwrap();
             assert_eq!(
                 broken(&b),
@@ -630,9 +633,10 @@ fn radial_edges_pass_only_when_allowed() {
                     edge: pinch.id(),
                     fins: 4
                 },
-                "seed {seed} size {size}"
+                "{k:?} seed {seed} size {size}"
             );
-            let p = check_radial(&b).unwrap_or_else(|e| panic!("seed {seed} size {size}: {e}"));
+            let p =
+                check_radial(&b).unwrap_or_else(|e| panic!("{k:?} seed {seed} size {size}: {e}"));
             assert_eq!(p.body().faces().len(), b.faces().len());
         }
     }
@@ -647,7 +651,7 @@ fn the_allowance_leaves_every_other_answer() {
         assert!(check_radial(&b).is_ok(), "{k:?}");
     }
     // A sheet's border has one fin, a stack has faces between solids.
-    for k in [Kind::QuadSheet, Kind::TriSheet, Kind::Stack, Kind::Checker] {
+    for k in [Kind::QuadSheet, Kind::TriSheet, Kind::Stack] {
         let b = kind(k, 0, 2);
         assert_eq!(
             check_radial(&b).unwrap_err(),
