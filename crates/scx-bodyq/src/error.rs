@@ -5,7 +5,7 @@
 
 use core::fmt;
 
-use scx_brep::{Entity, FaceId};
+use scx_brep::{Entity, FaceId, ShellId};
 use scx_num::budget::{Exhausted, Stopped};
 use scx_num::error::ErrorKind;
 use scx_surface::SurfaceError;
@@ -35,6 +35,11 @@ pub enum BodyqError {
 pub enum BodyqRefusal {
     /// A point with a coordinate that is not finite.
     NotFinite,
+    /// A shell the body does not have.
+    NoShell {
+        /// The shell asked for.
+        shell: ShellId,
+    },
 }
 
 /// What this method does not answer yet.
@@ -96,6 +101,11 @@ pub enum BodyqDefect {
     /// No boundary point was found for a point inside the body's box: a body whose faces
     /// do not enclose its box.
     NoBoundary,
+    /// A shell whose cells give a negative first Betti number (`betti`).
+    Betti {
+        /// The shell.
+        shell: ShellId,
+    },
 }
 
 impl BodyqError {
@@ -116,6 +126,7 @@ impl BodyqError {
     pub const fn name(&self) -> &'static str {
         match self {
             Self::Refused(BodyqRefusal::NotFinite) => "not_finite",
+            Self::Refused(BodyqRefusal::NoShell { .. }) => "no_shell",
             Self::Unsupported(BodyqUnsupported::Nurbs { .. }) => "nurbs",
             Self::Unsupported(BodyqUnsupported::NonManifold { .. }) => "non_manifold",
             Self::Unsupported(BodyqUnsupported::NoClearSide { .. }) => "no_clear_side",
@@ -127,6 +138,7 @@ impl BodyqError {
             Self::Defect(BodyqDefect::NoNormal { .. }) => "no_normal",
             Self::Defect(BodyqDefect::Ray) => "ray",
             Self::Defect(BodyqDefect::NoBoundary) => "no_boundary",
+            Self::Defect(BodyqDefect::Betti { .. }) => "betti",
         }
     }
 
@@ -164,6 +176,7 @@ impl fmt::Display for BodyqError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             Self::Refused(BodyqRefusal::NotFinite) => f.write_str("the point is not finite"),
+            Self::Refused(BodyqRefusal::NoShell { shell }) => write!(f, "{shell}: no such shell"),
             Self::Unsupported(BodyqUnsupported::Nurbs { at }) => {
                 write!(f, "{at}: NURBS geometry is not queried yet")
             }
@@ -184,6 +197,9 @@ impl fmt::Display for BodyqError {
                 write!(f, "{at}: no normal at the nearest point")
             }
             Self::Defect(BodyqDefect::Ray) => f.write_str("a ray from the point was refused"),
+            Self::Defect(BodyqDefect::Betti { shell }) => {
+                write!(f, "{shell}: the cells give a negative first Betti number")
+            }
             Self::Defect(BodyqDefect::NoBoundary) => {
                 f.write_str("no boundary point inside the body's box")
             }
