@@ -83,7 +83,7 @@ type Circle = Option<([f64; 2], f64, f64)>;
 /// `1 / sqrt(1 - q^2)` as `q` nears 1. Its squares of differences overflow from about
 /// `1e154`, where the circle is finite and the pin answers `None`.
 ///
-/// The true value is computed in the check, exactly in integers ([`crate::exact`]): the
+/// The true value is computed in the check, exactly in integers ([`scx_testkit::exact`]): the
 /// area and the decisions exactly, the centre `t + N / (2 a x b)` and the radius
 /// `|s - centre|` from exact numerators each rounded once (within `2^-51`; whether each is
 /// finite decided exactly, against `2^1024 - 2^970`), and the sweep as
@@ -262,8 +262,8 @@ fn pin_ill_conditioned(s: P, e: P, t: P) -> bool {
 /// The true `three_point_circle_2d(s, e, t)`, in exact integers, each result rounded once
 /// (within `2^-51`): see [`three_point_circle_2d`].
 fn true_circle(s: P, e: P, t: P) -> Circle {
-    use crate::exact::{ldexp, ratio, sqrt_ratio, Int};
     use core::cmp::Ordering::{Greater, Less};
+    use scx_testkit::exact::{ldexp, ratio, sqrt_ratio, Int};
     if !s.iter().chain(&e).chain(&t).all(|v| v.is_finite()) {
         return None;
     }

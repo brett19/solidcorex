@@ -5,7 +5,9 @@
 //!   (normal, build or dev) only on libraries listed above it and on the external crates
 //!   `layers.txt` `[external]` names (none today). The differential-test crates may
 //!   depend on any library and alone on the pinned solidcore; tool crates depend on no
-//!   workspace crate.
+//!   workspace crate. The test-kit crates (`[testkit]`) may depend on any library, are
+//!   depended on only as a dev-dependency (by a library or a difftest crate), and say
+//!   `publish = false` in their own manifest.
 //! - `headers`: every `.rs` file under `crates/` and `xtask/` opens with a derivation
 //!   header (`Moved from solidcore ...` or `Derived from solidcore ...` `at commit <pin>`,
 //!   its `Upstream record` and its `Changes:`) or says it was written for solidcorex. For
@@ -24,7 +26,7 @@
 //!   `bodydiff`, `cov`.
 //! - `fast`: `cargo fmt --check` of every member, clippy with warnings denied (the default
 //!   members, then the difftest crate), `layers`, `headers`, the tier-1 tests (`cargo test
-//!   -p <crate>` for each crate named, default every library) and xtask's own tests.
+//!   -p <crate>` for each crate named, default every library and test kit) and xtask's own tests.
 //!
 //! No dependencies: the manifests are read line by line, which is enough for the plain
 //! manifests this repository writes.
@@ -86,7 +88,27 @@ enum Role {
     /// A library at this position, 0 the lowest.
     Library(usize),
     Difftest,
+    /// Test support: references and generators, never published, a dev-dependency only.
+    Testkit,
     Tool,
+}
+
+/// The table a dependency is listed in.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Kind {
+    Normal,
+    Dev,
+    Build,
+}
+
+/// What `layers` reads from a member's manifest.
+#[derive(Debug, Default)]
+struct Manifest {
+    name: Option<String>,
+    /// Every dependency, by crate name (a rename's `package`), with its table.
+    deps: Vec<(String, Kind)>,
+    /// `[package] publish`, as written (`None` when absent).
+    publish: Option<String>,
 }
 
 /// `layers.txt`: the crates in order and the external crates libraries may use.
@@ -124,6 +146,7 @@ fn parse_layers(text: &str) -> Result<Layers, String> {
                 Role::Library(libs - 1)
             }
             "difftest" => Role::Difftest,
+            "testkit" => Role::Testkit,
             "tool" => Role::Tool,
             "external" => {
                 if line == PINNED {
@@ -193,11 +216,20 @@ fn workspace_members(root: &Path) -> Result<Vec<String>, String> {
     Ok(members)
 }
 
-/// A member's package name and the crate names it depends on (every dependency table).
-fn manifest_deps(manifest: &str) -> (Option<String>, Vec<String>) {
+/// A member's package name, the crate names it depends on (every dependency table) and
+/// its `publish` setting.
+fn manifest_deps(manifest: &str) -> Manifest {
     let mut section = String::new();
-    let mut name = None;
-    let mut deps = Vec::new();
+    let mut out = Manifest::default();
+    let kind_of = |section: &str| {
+        if section.contains("dev-dependencies") {
+            Kind::Dev
+        } else if section.contains("build-dependencies") {
+            Kind::Build
+        } else {
+            Kind::Normal
+        }
+    };
     for raw in manifest.lines() {
         let line = strip_comment(raw).trim();
         if line.is_empty() {
@@ -205,13 +237,14 @@ fn manifest_deps(manifest: &str) -> (Option<String>, Vec<String>) {
         }
         if line.starts_with('[') {
             section = line.trim_matches(|c| c == '[' || c == ']').to_string();
-            // `[dependencies.foo]`
-            for table in ["dependencies.", "dev-dependencies.", "build-dependencies."] {
-                if let Some(pos) = section.find(table) {
-                    if let Some(dep) = section.get(pos + table.len()..) {
-                        deps.push(dep.trim_matches('"').to_string());
-                    }
-                }
+            // `[dependencies.foo]`: the first table that matches, as `dependencies.` is
+            // inside the other two.
+            let table = ["dev-dependencies.", "build-dependencies.", "dependencies."]
+                .into_iter()
+                .find_map(|t| section.find(t).map(|pos| pos + t.len()));
+            if let Some(dep) = table.and_then(|start| section.get(start..)) {
+                out.deps
+                    .push((dep.trim_matches('"').to_string(), kind_of(&section)));
             }
             continue;
         }
@@ -220,7 +253,10 @@ fn manifest_deps(manifest: &str) -> (Option<String>, Vec<String>) {
         };
         let key = key.trim();
         if section == "package" && key == "name" {
-            name = Some(value.trim().trim_matches('"').to_string());
+            out.name = Some(value.trim().trim_matches('"').to_string());
+        }
+        if section == "package" && key == "publish" {
+            out.publish = Some(value.trim().to_string());
         }
         if section.ends_with("dependencies") {
             let dep = key.split('.').next().unwrap_or(key).trim_matches('"');
@@ -228,10 +264,13 @@ fn manifest_deps(manifest: &str) -> (Option<String>, Vec<String>) {
                 .split_once("package")
                 .and_then(|(_, p)| p.split('"').nth(1))
                 .map(str::to_string);
-            deps.push(renamed.unwrap_or_else(|| dep.to_string()));
+            out.deps.push((
+                renamed.unwrap_or_else(|| dep.to_string()),
+                kind_of(&section),
+            ));
         }
     }
-    (name, deps)
+    out
 }
 
 fn layers(root: &Path) -> Result<String, String> {
@@ -239,9 +278,11 @@ fn layers(root: &Path) -> Result<String, String> {
     let mut crates = Vec::new();
     for member in workspace_members(root)? {
         let text = read(&root.join(&member).join("Cargo.toml"))?;
-        let (name, deps) = manifest_deps(&text);
-        let name = name.ok_or_else(|| format!("{member}/Cargo.toml has no package name"))?;
-        crates.push((name, deps));
+        let manifest = manifest_deps(&text);
+        if manifest.name.is_none() {
+            return Err(format!("{member}/Cargo.toml has no package name"));
+        }
+        crates.push(manifest);
     }
     let errors = check_layers(&layers, &crates);
     if errors.is_empty() {
@@ -253,22 +294,33 @@ fn layers(root: &Path) -> Result<String, String> {
 
 /// Every breach of the order, one per line (empty when there is none). A library depends
 /// only on libraries above it in `layers.txt` and on crates `[external]` names; the
-/// difftest crates also on the libraries and on the pinned solidcore; a tool on no
-/// workspace crate and only on `[external]` crates.
-fn check_layers(layers: &Layers, crates: &[(String, Vec<String>)]) -> String {
+/// difftest crates also on the libraries and on the pinned solidcore; a test kit on the
+/// libraries; a tool on no workspace crate and only on `[external]` crates. A test kit is
+/// a dev-dependency only (of a library or a difftest crate) and is never published.
+fn check_layers(layers: &Layers, crates: &[Manifest]) -> String {
     let role_of = |n: &str| layers.roles.iter().find(|(m, _)| m == n).map(|(_, r)| *r);
-    let names: Vec<&str> = crates.iter().map(|(n, _)| n.as_str()).collect();
+    let names: Vec<&str> = crates.iter().filter_map(|m| m.name.as_deref()).collect();
     let mut errors = String::new();
-    for (name, deps) in crates {
+    for manifest in crates {
+        let Some(name) = manifest.name.as_deref() else {
+            continue;
+        };
         let Some(role) = role_of(name) else {
             let _ = writeln!(errors, "{name} is not listed in layers.txt");
             continue;
         };
-        for dep in deps {
+        if role == Role::Testkit && manifest.publish.as_deref() != Some("false") {
+            let _ = writeln!(
+                errors,
+                "{name} is a test kit: its manifest must say `publish = false`"
+            );
+        }
+        for (dep, kind) in &manifest.deps {
             let ok = if names.contains(&dep.as_str()) {
                 match (role, role_of(dep)) {
                     (Role::Library(me), Some(Role::Library(it))) => it < me,
-                    (Role::Difftest, Some(Role::Library(_))) => true,
+                    (Role::Difftest | Role::Testkit, Some(Role::Library(_))) => true,
+                    (Role::Library(_) | Role::Difftest, Some(Role::Testkit)) => *kind == Kind::Dev,
                     _ => false,
                 }
             } else if dep == PINNED {
@@ -277,7 +329,9 @@ fn check_layers(layers: &Layers, crates: &[(String, Vec<String>)]) -> String {
                 layers.external.iter().any(|e| e == dep)
             };
             if !ok {
-                let why = if names.contains(&dep.as_str()) {
+                let why = if role_of(dep) == Some(Role::Testkit) {
+                    " (a test kit is a dev-dependency of a library or difftest crate only)"
+                } else if names.contains(&dep.as_str()) {
                     ""
                 } else if dep == PINNED {
                     " (only the difftest crate may use the pinned solidcore)"
@@ -613,8 +667,7 @@ fn fast(root: &Path, crates: &[String]) -> Result<String, String> {
     // `--all` would take in solidcore too, a path dependency of the difftest crate.
     let mut fmt = vec!["fmt".to_string(), "--check".to_string()];
     for member in workspace_members(root)? {
-        let (name, _) = manifest_deps(&read(&root.join(&member).join("Cargo.toml"))?);
-        if let Some(n) = name {
+        if let Some(n) = manifest_deps(&read(&root.join(&member).join("Cargo.toml"))?).name {
             fmt.push("-p".to_string());
             fmt.push(n);
         }
@@ -640,7 +693,7 @@ fn fast(root: &Path, crates: &[String]) -> Result<String, String> {
         layer_roles(root)?
             .roles
             .into_iter()
-            .filter(|(_, r)| matches!(r, Role::Library(_)))
+            .filter(|(_, r)| matches!(r, Role::Library(_) | Role::Testkit))
             .map(|(n, _)| n)
             .collect()
     } else {
@@ -662,23 +715,42 @@ mod tests {
         let m = "[package]\nname = \"a\"\n[dependencies]\nb = { path = \"../b\" }\n\
                  [dev-dependencies]\nc.workspace = true\nx = { package = \"d\", path = \"p\" }\n\
                  [dependencies.e]\npath = \"../e\"\n";
-        let (name, deps) = manifest_deps(m);
-        assert_eq!(name.as_deref(), Some("a"));
-        assert_eq!(deps, ["b", "c", "d", "e"]);
+        let m = manifest_deps(m);
+        assert_eq!(m.name.as_deref(), Some("a"));
+        let names: Vec<&str> = m.deps.iter().map(|(d, _)| d.as_str()).collect();
+        assert_eq!(names, ["b", "c", "d", "e"]);
+        let kinds: Vec<Kind> = m.deps.iter().map(|(_, k)| *k).collect();
+        assert_eq!(kinds, [Kind::Normal, Kind::Dev, Kind::Dev, Kind::Normal]);
+        let m = manifest_deps(
+            "[package]\nname = \"k\"\npublish = false\n[target.'cfg(unix)'.dev-dependencies]\n\
+             a = { path = \"../a\" }\n[build-dependencies.b]\npath = \"../b\"\n",
+        );
+        assert_eq!(m.publish.as_deref(), Some("false"));
+        assert_eq!(
+            m.deps,
+            [("a".to_string(), Kind::Dev), ("b".to_string(), Kind::Build)]
+        );
     }
 
-    fn crates(list: &[(&str, &[&str])]) -> Vec<(String, Vec<String>)> {
+    /// Manifests: each dependency `"x"` is normal, `"dev:x"` a dev-dependency; every crate
+    /// says `publish = false`.
+    fn crates(list: &[(&str, &[&str])]) -> Vec<Manifest> {
         list.iter()
-            .map(|(n, d)| {
-                (
-                    (*n).to_string(),
-                    d.iter().map(|s| (*s).to_string()).collect(),
-                )
+            .map(|(n, d)| Manifest {
+                name: Some((*n).to_string()),
+                deps: d
+                    .iter()
+                    .map(|s| match s.strip_prefix("dev:") {
+                        Some(dev) => (dev.to_string(), Kind::Dev),
+                        None => ((*s).to_string(), Kind::Normal),
+                    })
+                    .collect(),
+                publish: Some("false".to_string()),
             })
             .collect()
     }
 
-    const LAYERS: &str = "a\nb # above a\n[difftest]\nd\n[tool]\nt\n[external]\n";
+    const LAYERS: &str = "a\nb # above a\n[difftest]\nd\n[testkit]\nk\n[tool]\nt\n[external]\n";
 
     #[test]
     fn the_order_holds() {
@@ -686,10 +758,34 @@ mod tests {
         let ok = crates(&[
             ("a", &[]),
             ("b", &["a"]),
-            ("d", &["a", "b", "solidcore"]),
+            ("d", &["a", "b", "solidcore", "dev:k"]),
+            ("k", &["a", "b"]),
             ("t", &[]),
         ]);
         assert_eq!(check_layers(&l, &ok), "");
+    }
+
+    #[test]
+    fn a_test_kit_is_a_dev_dependency_never_published() {
+        let l = parse_layers(LAYERS).unwrap();
+        // The breaking cases: a normal dependency on the kit, a tool on it, the kit on
+        // the pin, and a kit its manifest would let be published.
+        let mut bad = crates(&[
+            ("a", &["dev:k"]),
+            ("b", &["k"]),
+            ("d", &[]),
+            ("k", &["solidcore"]),
+            ("t", &["dev:k"]),
+        ]);
+        if let Some(k) = bad.iter_mut().find(|m| m.name.as_deref() == Some("k")) {
+            k.publish = None;
+        }
+        let e = check_layers(&l, &bad);
+        assert!(!e.contains("a may not"), "{e}");
+        assert!(e.contains("b may not depend on k (a test kit"), "{e}");
+        assert!(e.contains("t may not depend on k (a test kit"), "{e}");
+        assert!(e.contains("k may not depend on solidcore"), "{e}");
+        assert!(e.contains("k is a test kit: its manifest must say"), "{e}");
     }
 
     #[test]
@@ -701,6 +797,7 @@ mod tests {
             ("a", &["solidcore", "b"]),
             ("b", &["rand"]),
             ("d", &[]),
+            ("k", &[]),
             ("t", &["a"]),
         ]);
         let e = check_layers(&l, &bad);
@@ -717,7 +814,13 @@ mod tests {
         let allowed = parse_layers(&format!("{LAYERS}rand\n")).unwrap();
         let e = check_layers(
             &allowed,
-            &crates(&[("a", &[]), ("b", &["rand"]), ("d", &[]), ("t", &[])]),
+            &crates(&[
+                ("a", &[]),
+                ("b", &["rand"]),
+                ("d", &[]),
+                ("k", &[]),
+                ("t", &[]),
+            ]),
         );
         assert_eq!(e, "");
         assert!(parse_layers(&format!("{LAYERS}solidcore\n")).is_err());
@@ -727,10 +830,10 @@ mod tests {
     fn comments_and_quotes() {
         assert_eq!(strip_comment("a = \"x#y\" # c"), "a = \"x#y\" ");
         assert_eq!(strip_comment("a = \"x\\\"#\" # c"), "a = \"x\\\"#\" ");
-        let (_, deps) = manifest_deps(
+        let m = manifest_deps(
             "[package]\nname = \"a\"\n[dependencies]\nb = { path = \"../b#1\" } # c\n",
         );
-        assert_eq!(deps, ["b"]);
+        assert_eq!(m.deps, [("b".to_string(), Kind::Normal)]);
     }
 
     #[test]

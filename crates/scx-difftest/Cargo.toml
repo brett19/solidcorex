@@ -15,5 +15,9 @@ scx-algo = { path = "../scx-algo" }
 # worktree beside this repository: `<parent>/sc-wt/scx-pin`.
 solidcore = { path = "../../../sc-wt/scx-pin/solidcore/crates/solidcore" }
 
+[dev-dependencies]
+# The truth references (layers.txt [testkit]), for the exact checks of the pin defects.
+scx-testkit = { path = "../scx-testkit" }
+
 [lints]
 workspace = true
