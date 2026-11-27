@@ -439,6 +439,9 @@ impl Extent3d {
     }
 
     /// The smallest box containing both boxes (`Union`).
+    ///
+    /// Each end is `f64::min`/`f64::max` of the two, so `min(0.0, -0.0)` may give either
+    /// zero; no result reads the sign of a zero end.
     #[must_use]
     pub fn union(self, other: Self) -> Self {
         Self {

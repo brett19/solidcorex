@@ -180,12 +180,9 @@ pub struct Extent1d {
 ///
 /// It starts at the identity of the union, `[+inf, -inf]`, so [`Hull1d::add`] needs no
 /// branch; [`Hull1d::finish`] is `None` until a value other than NaN was added, and `None`
-/// once ±inf was. A NaN value is passed over, as upstream's comparisons pass it.
-///
-/// The ends are never NaN, so each step is one ordered comparison (`v < min`), which a NaN
-/// `v` fails: a single `minsd`/`maxsd` on x86-64, where `f64::min` needs four more
-/// instructions to pass a NaN on either side. It also fixes which of two equal zeros is
-/// kept (the first), which `f64::min` leaves open.
+/// once ±inf was. A NaN value is passed over (`f64::min` and `f64::max`), as upstream's
+/// comparisons pass it. `f64::min(0.0, -0.0)` may give either zero, so the sign of a zero
+/// end is open; no result reads it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Hull1d {
     min: f64,
@@ -208,23 +205,23 @@ impl Hull1d {
     /// Grows the hull to cover `v` (`AddValue`).
     #[inline]
     pub fn add(&mut self, v: f64) {
-        self.min = lower(self.min, v);
-        self.max = upper(self.max, v);
+        self.min = self.min.min(v);
+        self.max = self.max.max(v);
     }
 
-    /// Grows the hull to cover the interval `e` (a NaN end is passed over).
+    /// Grows the hull to cover the interval `e`.
     #[inline]
     pub fn add_extent(&mut self, e: Extent1d) {
-        self.min = lower(self.min, e.min);
-        self.max = upper(self.max, e.max);
+        self.min = self.min.min(e.min);
+        self.max = self.max.max(e.max);
     }
 
     /// The hull of both.
     #[must_use]
     pub fn union(self, other: Self) -> Self {
         Self {
-            min: lower(self.min, other.min),
-            max: upper(self.max, other.max),
+            min: self.min.min(other.min),
+            max: self.max.max(other.max),
         }
     }
 
@@ -233,18 +230,6 @@ impl Hull1d {
     pub fn finish(self) -> Option<Extent1d> {
         Extent1d::new(self.min, self.max)
     }
-}
-
-/// `v` when it is below `min`, else `min`: a hull's step, for a `min` that is never NaN.
-#[inline]
-fn lower(min: f64, v: f64) -> f64 {
-    if v < min { v } else { min }
-}
-
-/// `v` when it is above `max`, else `max`: a hull's step, for a `max` that is never NaN.
-#[inline]
-fn upper(max: f64, v: f64) -> f64 {
-    if v > max { v } else { max }
 }
 
 impl FromIterator<f64> for Hull1d {
@@ -406,6 +391,9 @@ impl Extent1d {
     }
 
     /// The smallest interval containing both (`Union`).
+    ///
+    /// Each end is `f64::min`/`f64::max` of the two, so `min(0.0, -0.0)` may give either
+    /// zero; no result reads the sign of a zero end.
     #[must_use]
     pub fn union(self, other: Self) -> Self {
         Self {
