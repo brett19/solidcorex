@@ -1586,3 +1586,65 @@ difftest and T12 should too. The area is `2 (10^4 - 48 pi) + 4000 + 480 pi`.
 **Open.** Cones with a negative-slope frustum (`r1 > r0`) work (slice radius is linear); a
 cone with an apex inside the height range (a double cone) is two recipes. A membership oracle
 for these shapes is T10's, not here: the tests carry their own small ones.
+
+### 14.3 T11 as built (11-27)
+
+`scx-testkit::profile` (`crates/scx-testkit/src/profile.rs`, tests in `tests/profile.rs`).
+
+- **Shape.** `Seg { Line, Arc }` of `[f64; 2]` points; `Fixture { name, outer, holes, resolution,
+  verdict }`; `Verdict { Accepted { area, outer_reversed, holes_reversed }, Refused(Cause) }`;
+  `Cause { Open { loop_index, gap }, Crossing, Touching, HoleOutside, HoleInHole }`. `fixtures()`
+  returns 23 fixtures in a fixed order. PL1 adapts each with one function and compares outcomes.
+- **Arcs** are centre, start, end and a sense, never an angle pair, so ends are exact data. Every
+  coordinate is an integer or a power-of-two fraction and every arc is on a Pythagorean circle
+  (3-4-5), so the gaps, touches and crossings are exactly as stated.
+- **Kinds covered:** closed (square, D, circle, rounded top, closed within resolution); open by a
+  hair (outer, at an arc end, a hole; gap 2^-20 against resolution 1e-9, and a 2^-40 gap that
+  closes); touching (vertex on an edge, figure of eight at a vertex, arc tangent to a line, hole
+  corner on the outer loop); crossing (bow tie, line through an arc); nested (square and round
+  holes, two holes, hole outside, hole in a hole); reversed (outer, hole, both).
+- **Verdicts are by hand**, from the picture in each comment, and checked for self-consistency by
+  `self_check` against closed forms (shoelace plus circular segment, independent of any library):
+  loops chain, arcs' ends are on their circle, declared gaps are the measured ones, areas and
+  orientation flags agree. It does not decide Crossing or Touching; those stay hand-decided (each
+  is one visible incidence).
+- **Decision: a reversed loop is `Accepted` with a flag**, per 72 §4.3 (orientation is not the
+  caller's error). The flags let PL1 check it reversed the right loops.
+- **Decision: one cause per fixture.** Cases for a multi-cause list: more complete. Against: the
+  library's order of checks becomes the oracle's, and a fixture would pin it. Each fixture is
+  built to have exactly one fault, so the answer is order-free. The one exception is closure:
+  an open loop is judged first (the other checks assume closed loops), and no refused-for-
+  another-cause fixture is open.
+- **Decision: area is in the verdict**, so PL1 can check the built region's area against truth.
+- **Dependency on 72 §12:** the `Region::new` checks of §4.3 only (closure, no crossing or
+  touching, holes inside and apart, orientation fixed up).
+
+### 14.4 T13 as built (11-27)
+
+`scx-testkit::mesh` (`crates/scx-testkit/src/mesh.rs`, tests in `tests/mesh.rs`).
+
+- **Shape.** `Mesh { vertices: Vec<[f64; 3]>, triangles: Vec<[u32; 3]> }`, outward right-hand
+  windings; `violations(&Mesh, Limits) -> Vec<Violation>` (empty is a pass); `volume_gap(&Mesh,
+  reference, bound) -> VolumeGap` with `holds()`; `chord_bound(chord, area)`.
+- **Violations:** `IndexOutOfRange`, `NonFinite`, `Boundary` (an edge used once), `NonManifoldEdge`
+  (more than two uses), `Orientation` (two uses in the same direction), `NonManifoldVertex` (the
+  triangles around a vertex do not form one fan), `Degenerate`, `Fold`. Bad indices and
+  non-finite data return alone, since the rest cannot be computed.
+- **Gap bound.** `|V_mesh - V_ref| <= chord * area`: the mesh differs from the solid only in a
+  shell of the surface's area and at most chord thick. Tested on a subdivided octahedron with
+  vertices on a sphere (chord = the largest edge-midpoint sagitta): the bound holds at each of 4
+  refinements, the gap shrinks, and a bound 100x tighter fails. The caller states the bound; the
+  oracle does not pick one.
+- **Decision: fold means neighbouring normals opposed** (dot of unit normals below `fold_cos`,
+  default -0.99), not 72 §6.4's "normal within 90 degrees of the surface normal", which needs the
+  surface. The plain-mesh oracle cannot see a surface. Cases against: a fold within one face's
+  flat region is caught only across an edge; a slow whole-mesh inversion is caught by the signed
+  volume instead. The surface-normal and on-surface checks of §6.4 stay as TS3's own tests
+  (they need the surface); the oracle covers the surface-free ones.
+- **Decision: degenerate by area ratio** (doubled area below `min_area_ratio` of the longest edge
+  squared, default 1e-9) as well as exact repeats, so slivers are found. `0.0` flags only zero area.
+- **Volume** is summed with Neumaier compensation about the vertex mean, so a mesh at 1e7 keeps
+  its volume to 1e-8 in the test.
+- **Not covered:** self-intersection of non-adjacent triangles (a test needs a triangle-triangle
+  intersection oracle; deferred to TS3 if wanted), and multiple shells or genus (the oracle
+  takes the whole mesh as one surface; `NonManifoldVertex` is per vertex).
