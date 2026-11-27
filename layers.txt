@@ -15,10 +15,21 @@ scx-difftest
 # its own manifest).
 [testkit]
 scx-testkit
+# Benchmarks against the pin (docs/02-testing.md, "Benchmarks"): may depend on any library,
+# on the pinned solidcore, on a test kit as a dev-dependency, and on the [bench-external]
+# crates as dev-dependencies; nothing may depend on it; never published.
+[bench]
+scx-bench
 [tool]
 xtask
 
 # Crates outside the workspace that a library or tool may depend on, one per line. Empty:
 # the libraries use only the standard library. The pinned solidcore may never be listed
-# here; only a [difftest] crate may depend on it.
+# here; only a [difftest] or [bench] crate may depend on it.
 [external]
+
+# Crates outside the workspace that a [bench] crate alone may use, as dev-dependencies only:
+# the timing and instruction-count harnesses.
+[bench-external]
+criterion
+gungraun

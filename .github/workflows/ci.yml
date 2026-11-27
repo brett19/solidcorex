@@ -61,6 +61,8 @@ jobs:
       - id: has
         run: test -d crates/scx-bench && echo "yes=true" >> "$GITHUB_OUTPUT" || echo "yes=false" >> "$GITHUB_OUTPUT"
       - if: steps.has.outputs.yes == 'true'
+        uses: ./.github/actions/pin # scx-bench links the pin, as scx-difftest does
+      - if: steps.has.outputs.yes == 'true'
         uses: Swatinem/rust-cache@v2
       - if: steps.has.outputs.yes == 'true'
         run: cargo check --benches -p scx-bench

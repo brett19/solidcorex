@@ -184,6 +184,67 @@ count of cells filled, as reported by the test harness's own `FaceCell` wrappers
 - **Fixtures built in code** by `scx-testkit`, not read from large files, and shared: a finished body is
   immutable, so one can be built once and used by many tests. Corpus data is permissive-licence only.
 
+<<<<<<< HEAD
+### 8.1 Benchmarks (`scx-bench`)
+
+Added 11-27 (proposed; 04 §3). scx against the pin, case by case: wall time with criterion,
+instruction counts with gungraun under valgrind's callgrind.
+
+- **Where.** A separate workspace crate, `crates/scx-bench`: `publish = false`, not a default
+  member. Its external crates are criterion and gungraun, both dev-dependencies only
+  (layers.txt `[bench]` and `[bench-external]`, checked by `cargo xtask layers`). The libraries
+  stay std only. It finds the pin as `scx-difftest` does, and its build script refuses any other
+  checkout. It is one crate, not dev-dependencies of each library, for three reasons:
+  - the pin comparison would put the pin into every library's dev-dependencies;
+  - dev-dependencies are built by every `cargo test` of the crate, so the fast tier would build
+    the harnesses and the pin;
+  - there is one layering exception instead of one per library.
+- **The cases.** The library holds them, one module per library crate (`scx_bench::num`,
+  `scx_bench::algo`, and so on as crates move). Each module's `cases()` returns a `Case` per
+  case: a name, the batch length, and one batch of each side. Both harnesses run the same
+  `Case`s, so they measure the same work.
+  - A case is named `<crate>/<case>`; its edge inputs are a separate case, `<crate>/<case>/edge`.
+- **Two targets per library.**
+  - `benches/num.rs` (criterion): `cargo bench -p scx-bench --bench num`. Each case is a group
+    holding the functions `scx` and `pin`.
+  - `benches/num_ic.rs` (gungraun): `cargo bench -p scx-bench --bench num_ic`. Each case is a
+    benchmark id under the functions `scx` and `pin`, and one batch is counted. The setup that
+    builds the inputs is not counted. It needs valgrind and `gungraun-runner` at the version in
+    the manifest. The case list is written out in the file; a library test checks that it
+    names every case `cases()` makes, so the two targets cannot drift apart.
+- **Fairness rules.** `Case::map` and `Case::fold` enforce them. A case only supplies its
+  inputs and the two calls.
+  1. Every input goes through `black_box`: the slice and each element as it is read. Every
+     output is consumed whole: `Consume` (`scx_bench`) folds each scalar of a result into a
+     checksum, and the checksum is black-boxed. Its test checks that each bit of each bound
+     reaches the sum. A result read in part lets the compiler drop the work that produces the
+     rest.
+  2. The scx and pin functions read one seeded input set (`scx_bench::seeded`, SplitMix64),
+     converted to each side's types before measuring, and sit in one group.
+  3. A batch is 1,024 inputs (`BATCH`), and criterion reports throughput per input. The loop's
+     overhead is shared out, and the branch predictor sees varied data.
+  4. Edge inputs (NaN, infinities, degenerate values) are a separate case. The edge set is
+     cycled to 1,024 entries in a seeded order, and never mixes into the main figures.
+  5. A new type gets a `Consume` impl that reads every field it holds. A new case goes through
+     `map` (one call per input) or `fold` (one call per batch), and into the `_ic` file.
+- **Which signal for what.**
+  - Before and after on a branch: instruction counts. They do not move with machine load, so
+    they can be taken on a loaded build server, and a difference of one instruction per input
+    is real. They do not see cache misses, latency or the CPU's parallelism, so they are not a
+    time.
+  - The absolute comparison of scx against the pin: criterion's wall time and its confidence
+    interval, on the less-loaded machine.
+- **Running.**
+  - `cargo xtask bench` builds every benchmark target without running one; `cargo xtask fast`
+    lints them with the rest of the workspace, and runs no benchmark.
+  - Instruction counts: `cargo bench -p scx-bench --bench num_ic` on the branch's base, then on
+    the branch. gungraun keeps the last run and prints the difference.
+  - Wall time: on the less-loaded build machine, pinned to one core, against a saved baseline:
+    `taskset -c <core> cargo bench -p scx-bench --bench num -- --save-baseline before`, then
+    the same with `--baseline before`. Quote criterion's confidence interval, not a best of N.
+    A case is slower only where the intervals do not overlap.
+  - Both are local evidence, never a gate: section 7's counts are the gate.
+=======
 ## 8a. CI
 
 `.github/workflows/ci.yml` runs on every push and pull request, read-only (`contents: read`; it cannot
@@ -194,7 +255,7 @@ push or publish). A builder pushes a branch and the owner reviews the design, no
 | `fast` | `cargo xtask fast` (fmt, clippy `-D warnings`, layers, headers, pin, tier-1 tests), then `clippy --workspace --all-targets -D warnings`, which adds `scx-difftest` |
 | `xplat` | the golden hash tests (`fmath_pin`, `xplat_pin`) on `wasm32-wasip1` under wasmtime and on aarch64 (GitHub's native `ubuntu-24.04-arm` runner). The aarch64 leg is `continue-on-error` until the aarch64 `powi` fix merges (TODO in the workflow) |
 | `difftest` | `cargo test -p scx-difftest`, the full pin comparison |
-| `bench-compile` | `cargo check --benches -p scx-bench`; a no-op until `crates/scx-bench` exists |
+| `bench-compile` | `cargo check --benches -p scx-bench`, with the pin checked out (section 8.1) |
 
 The pin is rebuilt in CI by `.github/scripts/pin.sh`: a one-commit repository at `../sc-wt/scx-pin`
 holding the public mirror tangency-labs/solidcore at a commit whose tree is the pin's `solidcore/`
@@ -202,6 +263,7 @@ tree (`c5c43059c9`). Its commit hash differs from the pin's, so the difftest bui
 `cargo xtask pin` accept either the pin commit or that tree. Every job that loads the workspace needs
 it, because cargo reads `scx-difftest`'s manifest even to test another crate. The toolchain comes from
 `rust-toolchain.toml`; `Swatinem/rust-cache` keeps the registry and `target/`.
+>>>>>>> main
 
 ## 9. What replaces the goldens
 
