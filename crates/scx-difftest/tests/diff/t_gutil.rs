@@ -26,7 +26,7 @@ pub(crate) fn xv(a: V) -> XV {
 pub(crate) fn xpt(a: V) -> XP {
     XP::new(a[0], a[1], a[2])
 }
-fn sv(a: V) -> SV {
+pub(crate) fn sv(a: V) -> SV {
     SV::new(a[0], a[1], a[2])
 }
 /// scx's unit vector of `a`, given to both sides.
@@ -269,7 +269,7 @@ impl Gen for Pts {
     }
 }
 
-fn xtype(t: xfit::PointSetType) -> &'static str {
+pub(crate) fn xtype(t: xfit::PointSetType) -> &'static str {
     match t {
         xfit::PointSetType::Void => "Void",
         xfit::PointSetType::PointSized => "PointSized",
@@ -278,7 +278,7 @@ fn xtype(t: xfit::PointSetType) -> &'static str {
         xfit::PointSetType::Scattered => "Scattered",
     }
 }
-fn stype(t: s1::PointSetType) -> &'static str {
+pub(crate) fn stype(t: s1::PointSetType) -> &'static str {
     match t {
         s1::PointSetType::Unknown => "Unknown",
         s1::PointSetType::Void => "Void",
@@ -289,10 +289,10 @@ fn stype(t: s1::PointSetType) -> &'static str {
     }
 }
 /// The pin's zero direction ("none fitted") is scx's `None`.
-fn sdir(v: SV) -> Option<[f64; 3]> {
+pub(crate) fn sdir(v: SV) -> Option<[f64; 3]> {
     (v != SV::ZERO).then_some([v.x, v.y, v.z])
 }
-fn xdir(u: Option<XU>) -> Option<[f64; 3]> {
+pub(crate) fn xdir(u: Option<XU>) -> Option<[f64; 3]> {
     u.map(|u| [u.x, u.y, u.z])
 }
 

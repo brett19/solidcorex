@@ -2244,3 +2244,112 @@ pub fn gu_sort() -> PinDefect<(List<f64>,), Vec<f64>> {
         },
     }
 }
+
+// ---- point sets ----------------------------------------------------------------------
+
+use crate::t_pset::{SetOut, XBox};
+
+/// Whether the pin's `unitize_or_z` loses `v`: its squared length is past `f64::MAX`
+/// (the pin divides by an infinite length and gets the zero vector) or under
+/// `SM_EFF_ZERO_SQ` (it answers `Z`).
+/// Only vectors scx makes unit: it refuses the others as well.
+fn ps_unitize_lost(v: &V) -> bool {
+    let l = v.iter().map(|c| c * c).sum::<f64>();
+    crate::t_gutil::unit(*v).is_some() && (!l.is_finite() || l < 1e-24)
+}
+
+/// The set's fit is [`gu_best_fit_plane`]'s, whose pin defect (a signed gap) makes a set
+/// bent to one side of its plane `Planar` in the pin and `Scattered` in scx; the type
+/// picks the tight box's hull-edge alignment, so the boxes, and through a `Linear`/
+/// `Planar` frame the loop's answers, follow. The check: scx's fit passes
+/// [`gu_best_fit_plane`]'s truth check, and the pin's fit has the other type.
+fn ps_fit_moved(pts: &Pts, tol: f64) -> Result<&'static str, String> {
+    use crate::t_gutil::{stype, xdir, xtype};
+    let xp: Vec<scx_num::vector3d::Point3> = pts
+        .0
+        .iter()
+        .map(|q| scx_num::vector3d::Point3::new(q[0], q[1], q[2]))
+        .collect();
+    let tol = tol.abs();
+    let f = scx_algo::geom::fit::best_fit_plane(&xp, tol).map_err(|e| format!("{e:?}"))?;
+    let out: FitOut = (
+        xtype(f.set_type),
+        f.point,
+        xdir(f.direction),
+        f.max_plane_gap,
+        f.max_centroid_gap,
+    );
+    (gu_best_fit_plane().check)(&(pts.clone(), tol), &Some(out))?;
+    let sp: Vec<solidcore::geom::vector3d::Vec3> = pts
+        .0
+        .iter()
+        .map(|q| solidcore::geom::vector3d::Vec3::new(q[0], q[1], q[2]))
+        .collect();
+    let s = solidcore::geom::geom_utility::p2::best_fit_plane_to_points(&sp, tol)
+        .map_err(|e| format!("the pin fits these points: {e:?}"))?;
+    if stype(s.set_type) == out.0 {
+        return Err(format!(
+            "both fits are {}: the disagreement is not the fit's",
+            out.0
+        ));
+    }
+    Ok(out.0)
+}
+
+pub fn ps_set() -> PinDefect<(Pts, f64), Option<SetOut>> {
+    PinDefect {
+        reason: "the pin's set takes its type from the signed-gap plane fit",
+        applies: Applies::Disagreeing,
+        check: |(pts, tol), r| {
+            let kind = ps_fit_moved(pts, *tol)?;
+            let got = r.as_ref().ok_or("scx builds this set")?.0;
+            if got == kind {
+                Ok(())
+            } else {
+                Err(format!("the set is {got}, its fit {kind}"))
+            }
+        },
+    }
+}
+
+pub fn ps_tight_about() -> PinDefect<(Pts, f64, V), Option<Option<XBox>>> {
+    PinDefect {
+        reason: "the pin's set takes its type, which picks the alignment, from the signed-gap plane fit; and its unitize_or_z loses a z whose squared length is past f64::MAX or under SM_EFF_ZERO_SQ",
+        applies: Applies::Disagreeing,
+        check: |(pts, tol, z), r| {
+            if ps_unitize_lost(z) {
+                let b = r.as_ref().ok_or("scx takes this z")?;
+                // no points: no box either side
+                return match b {
+                    Some(_) => ps_box_along(b, *z),
+                    None => Err("the pin and scx both have no box".into()),
+                };
+            }
+            ps_fit_moved(pts, *tol).map(|_| ())
+        },
+    }
+}
+
+/// The box's third vector is `z`'s direction (the check for a `z` the pin loses).
+fn ps_box_along(b: &Option<XBox>, z: V) -> Result<(), String> {
+    let (v, _) = b.as_ref().ok_or("scx boxes these points")?;
+    along(v[2].to_array(), z)
+}
+
+pub fn ps_with_normal() -> PinDefect<(Pts, f64, V), Option<SetOut>> {
+    PinDefect {
+        reason: "the pin's unitize_or_z loses a normal whose squared length is past f64::MAX or under SM_EFF_ZERO_SQ, and fits the points instead",
+        applies: Applies::Inputs(|(_, _, n)| ps_unitize_lost(n)),
+        check: |(_, _, n), r| {
+            let (kind, _, normal, _, tight) = r.as_ref().ok_or("scx builds this set")?;
+            if *kind != "Planar" {
+                return Err(format!("a set with a given normal is {kind}"));
+            }
+            along(normal.ok_or("a set has a normal")?, *n)?;
+            match tight {
+                Some(_) => ps_box_along(tight, *n),
+                None => Ok(()),
+            }
+        },
+    }
+}

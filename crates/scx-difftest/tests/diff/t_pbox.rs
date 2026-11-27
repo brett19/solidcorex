@@ -330,7 +330,7 @@ type SIv = solidcore::geom::extent1d::Extent1d;
 pub(crate) fn xparts(b: &xp::PseudoBox) -> ([XV; 3], [XIv; 3]) {
     (b.basis().vectors(), *b.intervals())
 }
-fn sparts(b: &sp::PseudoBox) -> ([SV; 3], [SIv; 3]) {
+pub(crate) fn sparts(b: &sp::PseudoBox) -> ([SV; 3], [SIv; 3]) {
     (*b.basis(), *b.intervals())
 }
 
