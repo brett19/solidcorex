@@ -1570,7 +1570,9 @@ mod tests {
                 ..
             })
         ));
-        assert!(IterQueue1d::try_new(NonZeroUsize::new(1 << 60).unwrap()).is_err());
+        // one slot past the allocation cap, so the size is valid on 32-bit targets too
+        let over_cap = scx_num::limits::MAX_ALLOC_BYTES / size_of::<f64>() + 1;
+        assert!(IterQueue1d::try_new(NonZeroUsize::new(over_cap).unwrap()).is_err());
     }
 
     #[test]
