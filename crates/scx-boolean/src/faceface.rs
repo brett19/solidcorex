@@ -4,7 +4,9 @@
 //! For each face pair of stage 1, [`analytic::intersect`] gives where the two surfaces meet
 //! over the faces' uv boxes: curve pieces and isolated points, a coincident overlap, or
 //! nothing. Nothing here searches: an answer without a closed form is
-//! [`BooleanUnsupported::SsiPair`], never a grid or a marcher.
+//! [`BooleanUnsupported::SsiPair`], never a grid or a marcher, unless the two faces are
+//! proved apart (an enclosure of each surface's distance over boxes holding both faces,
+//! bisected a bounded number of times): such a pair has nothing to answer and is dropped.
 //!
 //! - **Curves.** Each piece is cut at the merged points of stage 3 that pass through both
 //!   faces (an edge or vertex of the face, or the face itself) and lie on the curve, found
@@ -41,6 +43,8 @@ use scx_curve::Curve;
 use scx_num::budget::{Budget, Stop};
 use scx_num::extent1d::Extent1d;
 use scx_num::extent3d::Extent3d;
+use scx_num::fmath;
+use scx_num::frame::Frame;
 use scx_num::units::Accuracy;
 use scx_num::vector2d::Point2;
 use scx_num::vector3d::{Point3, Vec3};
@@ -538,6 +542,178 @@ fn same_sense(sa: &Surface, sb: &Surface, o: &Overlap) -> bool {
     true
 }
 
+/// The deepest bisection of a pair's shared box in [`apart`]: at most
+/// `2^(APART_DEPTH + 1) - 1` boxes, one work unit each.
+const APART_DEPTH: u32 = 8;
+
+/// The least and greatest `|t|` over `[lo, hi]`.
+fn abs_range(lo: f64, hi: f64) -> [f64; 2] {
+    let near = if lo <= 0.0 && 0.0 <= hi {
+        0.0
+    } else {
+        lo.abs().min(hi.abs())
+    };
+    [near, lo.abs().max(hi.abs())]
+}
+
+/// The box `x` in `f`'s coordinates, `[lo, hi]` per axis: the box of its corners'
+/// coordinates, which holds every point of `x` (a box is the hull of its corners and the
+/// map is affine). With a bound on the coordinates' size, for the rounding slack.
+fn local(f: &Frame, x: &Extent3d) -> ([[f64; 2]; 3], f64) {
+    let o = f.origin();
+    let axes = [f.x().as_vec(), f.y().as_vec(), f.z().as_vec()];
+    let mut out = [[f64::INFINITY, f64::NEG_INFINITY]; 3];
+    let mut size: f64 = 0.0;
+    for c in x.corners() {
+        let d = c - o;
+        size = size.max(c.x.abs() + o.x.abs() + c.y.abs() + o.y.abs() + c.z.abs() + o.z.abs());
+        for (r, a) in out.iter_mut().zip(axes) {
+            let t = d.dot(a);
+            r[0] = r[0].min(t);
+            r[1] = r[1].max(t);
+        }
+    }
+    (out, size)
+}
+
+/// An enclosure `[lo, hi]` of `g` over the box `x`, where `g` is a function zero exactly on
+/// the surface `s` and 1-Lipschitz (so `|g(p)|` is at most `p`'s distance from `s`), with
+/// the size of the numbers it is computed from; `None` for a NURBS surface.
+///
+/// In the kind's frame, with `rho` the distance from the z axis and `h` the height: a plane
+/// `h`; a cylinder `rho - r`; a sphere `|p| - r`; a cone `rho cos(a) - h sin(a) - r cos(a)`
+/// (the signed distance in the half-plane of `(rho, h)` from the line `rho = r + h tan(a)`,
+/// whose part at `rho >= 0` is the one nappe the cone has); a torus
+/// `hypot(rho - R, h) - r` (a ring torus, `r < R`, which the kind enforces: a spindle's
+/// inner part is not this zero set). Each is monotone in `|x|`, `|y|`, `rho`, `h` or `|rho - R|`,
+/// so the ends of those ranges over the box give its range.
+fn level_range(s: &Surface, x: &Extent3d) -> Option<([f64; 2], f64)> {
+    let frame = match s {
+        Surface::Plane(k) => k.frame(),
+        Surface::Cylinder(k) => k.frame(),
+        Surface::Cone(k) => k.frame(),
+        Surface::Sphere(k) => k.frame(),
+        Surface::Torus(k) => k.frame(),
+        _ => return None,
+    };
+    let ([lx, ly, lz], size) = local(frame, x);
+    let [ax, bx] = abs_range(lx[0], lx[1]);
+    let [ay, by] = abs_range(ly[0], ly[1]);
+    let rho = [fmath::hypot(ax, ay), fmath::hypot(bx, by)];
+    Some(match s {
+        Surface::Plane(_) => (lz, size),
+        Surface::Cylinder(k) => {
+            let r = k.radius().mm();
+            ([rho[0] - r, rho[1] - r], size + r)
+        }
+        Surface::Sphere(k) => {
+            let r = k.radius().mm();
+            let [az, bz] = abs_range(lz[0], lz[1]);
+            let d = [fmath::hypot(rho[0], az), fmath::hypot(rho[1], bz)];
+            ([d[0] - r, d[1] - r], size + r)
+        }
+        Surface::Cone(k) => {
+            let r = k.radius().mm();
+            let (sin, cos) = fmath::sin_cos(k.half_angle());
+            let [hs0, hs1] = [lz[0] * sin, lz[1] * sin];
+            let (hs_lo, hs_hi) = (hs0.min(hs1), hs0.max(hs1));
+            (
+                [
+                    rho[0] * cos - hs_hi - r * cos,
+                    rho[1] * cos - hs_lo - r * cos,
+                ],
+                size + r,
+            )
+        }
+        Surface::Torus(k) => {
+            let (big, r) = (k.major().mm(), k.minor().mm());
+            let [ar, br] = abs_range(rho[0] - big, rho[1] - big);
+            let [az, bz] = abs_range(lz[0], lz[1]);
+            (
+                [fmath::hypot(ar, az) - r, fmath::hypot(br, bz) - r],
+                size + big + r,
+            )
+        }
+        _ => return None,
+    })
+}
+
+/// Whether `s` has no point within `reach` of the box `x`, by [`level_range`] outside
+/// `[-reach, reach]` with a slack for the rounding of the frame's coordinates.
+fn clear_of(s: &Surface, x: &Extent3d, reach: f64) -> bool {
+    level_range(s, x).is_some_and(|([lo, hi], size)| {
+        let slack = 64.0 * f64::EPSILON * (1.0 + size);
+        lo > reach + slack || hi < -(reach + slack)
+    })
+}
+
+/// The two halves of `x` across its longest side.
+fn halves(x: Extent3d) -> Option<[Extent3d; 2]> {
+    let (lo, hi) = (x.min(), x.max());
+    let s = x.size();
+    let (mut a, mut b) = (hi, lo);
+    if s.x >= s.y && s.x >= s.z {
+        let m = 0.5 * (lo.x + hi.x);
+        a.x = m;
+        b.x = m;
+    } else if s.y >= s.z {
+        let m = 0.5 * (lo.y + hi.y);
+        a.y = m;
+        b.y = m;
+    } else {
+        let m = 0.5 * (lo.z + hi.z);
+        a.z = m;
+        b.z = m;
+    }
+    Some([
+        Extent3d::from_corners(lo, a)?,
+        Extent3d::from_corners(b, hi)?,
+    ])
+}
+
+/// Whether two faces provably have no points within `reach` of each other (72
+/// §14.30): asked of a pair with no closed form before refusing it, so a pair whose
+/// boxes meet but whose faces do not is dropped instead.
+///
+/// The faces lie in their boxes `xa` and `xb`. Two points `p` of `a` and `q` of `b` within
+/// `reach` both lie in the boxes each grown by `reach`, and there `p` is on `sa` and within
+/// `reach` of `sb`. So if every piece of a cover of the grown boxes' overlap is clear of one
+/// of the surfaces by more than `reach` ([`clear_of`]), there are no such points. The
+/// overlap is bisected across its longest side, depth first, down to [`APART_DEPTH`]; the
+/// first piece at that depth clear of neither answers `false` (it may touch). Never `true`
+/// for faces that touch; `false` is only "not proved".
+fn apart(
+    sa: &Surface,
+    xa: Extent3d,
+    sb: &Surface,
+    xb: Extent3d,
+    reach: f64,
+    budget: &mut Budget,
+) -> Result<bool, BooleanError> {
+    let (Some(ga), Some(gb)) = (xa.expanded(reach), xb.expanded(reach)) else {
+        return Ok(false);
+    };
+    let Some(shared) = ga.intersect(gb) else {
+        return Ok(true);
+    };
+    let mut stack = vec![(shared, 0)];
+    while let Some((x, depth)) = stack.pop() {
+        budget.charge(1)?;
+        if clear_of(sa, &x, reach) || clear_of(sb, &x, reach) {
+            continue;
+        }
+        if depth >= APART_DEPTH {
+            return Ok(false);
+        }
+        let Some([lo, hi]) = halves(x) else {
+            return Ok(false);
+        };
+        stack.push((hi, depth + 1));
+        stack.push((lo, depth + 1));
+    }
+    Ok(true)
+}
+
 /// Stage 4 over the stages before it.
 ///
 /// # Errors
@@ -607,8 +783,17 @@ pub(crate) fn face_face(
             b: fb,
             kinds: [SurfaceKind::of(sa), SurfaceKind::of(sb)],
         });
-        // `General`, and any partial answer a later step adds: no closed form here.
+        // No closed form here (`General`, or an answer of a kind this stage does not read):
+        // the pair is dropped when its faces provably cannot touch, else refused.
+        let cannot_touch =
+            |budget: &mut Budget| match (face_a.bounding_box(), face_b.bounding_box()) {
+                (Some(xa), Some(xb)) => apart(sa, xa, sb, xb, reach, budget),
+                _ => Ok(false),
+            };
         let Closed::Solved(answer) = analytic::intersect(sa, &ua, sb, &ub, acc, res) else {
+            if cannot_touch(budget)? {
+                continue;
+            }
             return Err(no_form);
         };
         let worst = if pa.accuracy >= pb.accuracy {
@@ -675,7 +860,11 @@ pub(crate) fn face_face(
                 }
             }
             // A kind of answer this stage does not read yet.
-            _ => return Err(no_form),
+            _ => {
+                if !cannot_touch(budget)? {
+                    return Err(no_form);
+                }
+            }
         }
     }
     for span in &found.spans {
