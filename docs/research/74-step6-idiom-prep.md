@@ -1533,6 +1533,33 @@ is renumbered. "Changed" names the sections that now carry the fix.
 3. Leaf queries keep `(&mut Budget, &Stop)`. Queries that keep a memo take `&mut Cx` (F8, R8).
 4. Stored re-identification goes in bodyq's `still_names`, and scx-record calls it (F4).
 
+## 16. LY1 as built (11-27)
+
+`layers.txt` now lists `scx-make` last, after `scx-boolean`, with a comment where `scx-stitch`,
+`scx-hlr` (after `scx-check`) and `scx-step` go when added. `cargo xtask layers` enforces the
+order by position (a library may depend, dev-dependencies included, only on libraries above it),
+so no xtask change was needed; it passed after the move.
+
+- **Scope wider than the row.** Four crates dev-depended on `scx-make`, not two: `scx-bodyq`,
+  `scx-check`, `scx-tess` and `scx-boolean` (tess and boolean sit below make too, so the check
+  would fail on them). All four are moved. `scx-difftest` keeps its edge (difftest may use any
+  library).
+- **Where the bodies come from.** `scx_testkit::bodies::made` (feature `bodies`) holds a copy of
+  `scx-make`'s constructors (block, cylinder, cone, sphere, torus, extrude, with `Made`, the
+  face records, `MakeError` and the shared writer), with the same API and the same bodies, so
+  every call site changed only its `use` path. The testkit gains an optional `scx-planar`
+  dependency for extrude, under `bodies` (the same pattern as `scx-brep`, which dev-depends on
+  the testkit and is a dependency of it). `tess` and `boolean` now enable the testkit's `bodies`
+  feature.
+- **For and against the copy.** For: no test changes, meaning kept exactly; step-6 crates take
+  bodies from testkit. Against: two copies of ~1,400 lines that can drift. Decided: the copy is
+  the fixed test builder and `scx-make` is free to change (loft, revolve, ...); the testkit's
+  copy is not to be extended with new constructors, and a body a test needs that make cannot
+  build goes into the testkit as its own generator. Trimming the copy's error type to what tests
+  use is a later cleanup.
+- **Tests.** None changed, none removed; only import paths, and prose in three comments naming
+  the constructor. `scx-make`'s own tests still run on the real constructors.
+
 ## 21. CO4 as built (11-27)
 
 Trust: the model count, the entity scan, the sizes and the timings are MEASURED on 11-27 by

@@ -19,7 +19,6 @@ use scx_bodyq::{PointClass, classify_point};
 use scx_brep::op::{Cx, NoTrace, Scratch, Settings};
 use scx_brep::{Brep, Document, Entity, RegionId};
 use scx_check::{Breach, Contacts, ContractError};
-use scx_make::torus;
 use scx_mass::RelAccuracy;
 use scx_num::budget::{Budget, Stop};
 use scx_num::fmath;
@@ -27,6 +26,7 @@ use scx_num::frame::Frame;
 use scx_num::units::Length;
 use scx_num::vector3d::Vec3;
 use scx_tess::{TessSpec, tessellate};
+use scx_testkit::bodies::made::torus;
 
 use super::face_face::{X, Z, ball, cyl};
 use super::whole::{INTERSECT, SUBTRACT, UNION, checked, near, op, volume};
