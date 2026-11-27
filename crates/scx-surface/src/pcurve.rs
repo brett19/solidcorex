@@ -18,6 +18,7 @@
 //! | meridian over an interval that crosses a pole | [`PcurveError::CrossesPole`]: split it there |
 //! | any other curve on a cylinder, cone, sphere or torus (a tilted circle on a sphere, a cone's conic section) | [`OnChart`]: the curve through the surface's chart inverse, at its own parameter (73 SM1) |
 //! | such a curve through a pole or a cone's apex inside the interval | [`PcurveError::CrossesPole`]: split it there |
+//! | such a curve whose certified axis or band check (interval subdivision) can neither pass nor fail | [`PcurveError::Undecided`] |
 //! | such a curve meeting the axis at an end, or whose angle spans a band half a period wide or more about the straight line between its ends' | [`PcurveError::NoClosedForm`] |
 //! | any curve on a NURBS surface | [`PcurveError::NoClosedForm`] |
 //!
@@ -64,6 +65,7 @@ use scx_num::vector2d::{Point2, Vec2};
 use scx_num::vector3d::{Point3, Vec3};
 use scx_nurbs::NurbsCurve;
 
+use crate::chart_check::{Verdict, certify};
 use crate::common::Axes;
 use crate::{Cone, Plane, Surface};
 
@@ -199,6 +201,28 @@ pub enum PcurveError {
         /// The curve's parameter at the pole.
         at: f64,
     },
+    /// A curve through the chart ([`OnChart`]) whose sampled checks passed, but whose
+    /// certified [`Check`], by interval subdivision, could neither prove nor refute near `at`: it runs within
+    /// rounding of the tolerance from the axis, or of half a period from the reference
+    /// line, or the walk's box budget ran out. Never a pass (73 §21).
+    Undecided {
+        /// The parameter where the walk stood.
+        at: f64,
+        /// Which check was undecided.
+        check: Check,
+    },
+}
+
+/// A certified check on a curve through the chart (73 §21).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Check {
+    /// The curve stays farther than the tolerance from the surface's axis (its poles, its
+    /// apex).
+    Axis,
+    /// Each periodic coordinate's continuous lift stays under half a period from the
+    /// reference line `OnChart` lifts by.
+    Band,
 }
 
 impl PcurveError {
@@ -211,7 +235,9 @@ impl PcurveError {
             Self::EmptyInterval { .. } | Self::NotOnSurface { .. } | Self::CrossesPole { .. } => {
                 ErrorKind::Refused
             }
-            Self::NoClosedForm { .. } | Self::Inexact { .. } => ErrorKind::Unsupported,
+            Self::NoClosedForm { .. } | Self::Inexact { .. } | Self::Undecided { .. } => {
+                ErrorKind::Unsupported
+            }
         }
     }
 
@@ -224,6 +250,7 @@ impl PcurveError {
             Self::NoClosedForm { .. } => "pcurve_no_closed_form",
             Self::Inexact { .. } => "pcurve_inexact",
             Self::CrossesPole { .. } => "pcurve_crosses_pole",
+            Self::Undecided { .. } => "pcurve_undecided",
         }
     }
 }
@@ -276,6 +303,14 @@ impl fmt::Display for PcurveError {
                     "the meridian crosses a pole at {at}: split the curve there"
                 )
             }
+            Self::Undecided { at, check } => write!(
+                f,
+                "the curve's {} check could not be decided near {at}",
+                match check {
+                    Check::Axis => "axis",
+                    Check::Band => "lift band",
+                }
+            ),
         }
     }
 }
@@ -294,7 +329,9 @@ impl std::error::Error for PcurveError {}
 /// [`PcurveError::NotOnSurface`] when a sample of the curve is more than `res.approx()` from the
 /// surface, at the sample farthest from it; [`PcurveError::NoClosedForm`] for a pair with no closed form here (see the
 /// module's table); [`PcurveError::CrossesPole`] for a meridian across a pole;
-/// [`PcurveError::Inexact`] when the closed form fails the lifting check.
+/// [`PcurveError::Inexact`] when the closed form fails the lifting check;
+/// [`PcurveError::Undecided`] when a curve through the chart passes the sampled checks but
+/// not their certified forms.
 pub fn pcurve_of(
     curve: &Curve,
     surface: &Surface,
@@ -510,7 +547,8 @@ fn on_chart(
         i => lo + (hi - lo) * (i as f64 / (DENSE - 1) as f64),
     });
     let points = ts.map(|t| curve.point(t));
-    if !matches!(surface, Surface::Plane(_) | Surface::Cylinder(_)) {
+    let axis = !matches!(surface, Surface::Plane(_) | Surface::Cylinder(_));
+    if axis {
         if off_axis(lo) <= tol || off_axis(hi) <= tol {
             return Ok(None);
         }
@@ -558,9 +596,13 @@ fn on_chart(
         }
     }
     let [r0, r1] = reference.map(|r| Point2::new(r[0], r[1]));
-    Ok(OnChart::new(curve.clone(), chart, over, [r0, r1])
-        .ok()
-        .map(Curve2::from))
+    let Ok(pc) = OnChart::new(curve.clone(), chart, over, [r0, r1]) else {
+        return Ok(None);
+    };
+    match certify(curve, &pc, &axes, over, tol, axis, periods)? {
+        Verdict::Clear => Ok(Some(Curve2::from(pc))),
+        Verdict::Band => Ok(None),
+    }
 }
 
 fn coord(at: [f64; 2], k: usize) -> f64 {
@@ -646,7 +688,7 @@ fn axis_crossing(
 
 /// The least of `f` over `[a, b]` by golden section, `(t, f(t))`, for `f` with one local
 /// least there.
-fn golden_min(f: &impl Fn(f64) -> f64, mut a: f64, mut b: f64) -> (f64, f64) {
+pub(crate) fn golden_min(f: &impl Fn(f64) -> f64, mut a: f64, mut b: f64) -> (f64, f64) {
     const G: f64 = 0.618_033_988_749_894_8;
     let mut c = b - G * (b - a);
     let mut d = a + G * (b - a);
@@ -1579,5 +1621,142 @@ mod tests {
         assert_eq!(e.name(), "pcurve_no_closed_form", "{e}");
         let pc = exact(&c, &sphere, span(0.5, 5.5), 1.0);
         assert!(matches!(pc, Curve2::OnChart(_)), "{pc:?}");
+    }
+
+    /// The circle on the unit sphere about the axis `alpha` off z with angular radius
+    /// `beta`: it comes within angle `|alpha - beta|` of the north pole at `t = 0`.
+    fn about(alpha: f64, beta: f64) -> Curve {
+        let f = Frame::WORLD;
+        let (o, x, z) = (f.origin(), *f.x(), *f.z());
+        let n = Vec3::from(
+            (z * fmath::cos(alpha) + x * fmath::sin(alpha))
+                .normalized()
+                .unwrap(),
+        );
+        let w = Vec3::from(
+            (z * fmath::sin(alpha) - x * fmath::cos(alpha))
+                .normalized()
+                .unwrap(),
+        );
+        let frame = Frame::new(o + n * fmath::cos(beta), n, w).unwrap();
+        Curve::Circle(Circle::new(frame, mm(fmath::sin(beta)), Sense::Forward).unwrap())
+    }
+
+    fn unit_sphere() -> Surface {
+        Surface::Sphere(Sphere::new(Frame::WORLD, mm(1.0), Sense::Forward).unwrap())
+    }
+
+    /// A circle passing within `d` of the unit sphere's pole: refused as crossing it while
+    /// `d` is within the tolerance (`5e-6`), accepted and lifting past it. Over a whole turn
+    /// the nearest approach is at the span's ends, which is no closed form while within the
+    /// tolerance. Both sides of the pole: the circle about it (`beta > alpha`, winding once)
+    /// and beside it.
+    #[test]
+    fn near_pole_circles_are_refused_or_accepted_by_their_distance() {
+        let sphere = unit_sphere();
+        let tol = 5e-6;
+        for d in [1e-9, 1e-8, 1e-7, 1e-6, 4e-6, 6e-6, 1e-5, 1e-4, 1e-3] {
+            for sgn in [1.0, -1.0] {
+                let c = about(0.7, 0.7 - sgn * d);
+                for (lo, hi) in [(-1.0, 1.5), (-0.3, 0.2), (0.0, TAU)] {
+                    let over = span(lo, hi);
+                    let got = pcurve_of(&c, &sphere, over, res(tol));
+                    if d < tol {
+                        match got {
+                            Err(PcurveError::CrossesPole { at }) if lo < 0.0 => {
+                                assert!(at.abs() < 1e-9, "{d} {lo}: {at}");
+                            }
+                            Err(PcurveError::NoClosedForm { .. }) if lo == 0.0 => {}
+                            other => panic!("{d} {sgn} [{lo}, {hi}]: {other:?}"),
+                        }
+                    } else {
+                        let pc = got.unwrap_or_else(|e| panic!("{d} {sgn} [{lo}, {hi}]: {e}"));
+                        assert!(matches!(pc, Curve2::OnChart(_)), "{pc:?}");
+                        lifts(&c, &sphere, &pc, over, 1.0);
+                        // The lift is continuous through the near approach, where the
+                        // azimuth turns fastest.
+                        for i in 0..=2000 {
+                            let t = -1e-3 + 2e-3 * f64::from(i) / 2000.0;
+                            if lo < t && t < hi {
+                                let got = sphere.point(pc.point(t));
+                                assert!((got - c.point(t)).length() <= 1e-12, "{d}: {t}");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// A circle that stays off the pole by less than rounding can resolve: the walk gives
+    /// up with [`PcurveError::Undecided`] (an axis check), not a pass. Just past it, it is
+    /// accepted.
+    #[test]
+    fn an_approach_within_rounding_of_the_tolerance_is_undecided() {
+        let sphere = unit_sphere();
+        let c = about(0.7, 0.7 - 1e-3);
+        let p = c.point(0.0);
+        let rho = fmath::hypot(p.x, p.y);
+        let e = pcurve_of(&c, &sphere, span(-1.0, 1.5), res(rho * (1.0 - 1e-15))).unwrap_err();
+        let PcurveError::Undecided { at, check } = e else {
+            panic!("{e:?}");
+        };
+        assert_eq!(check, Check::Axis);
+        assert!(at.abs() < 1e-6, "{at}");
+        assert_eq!(e.kind(), ErrorKind::Unsupported);
+        assert_eq!(e.name(), "pcurve_undecided");
+        assert!(e.to_string().contains("axis"), "{e}");
+        let pc = pcurve_of(&c, &sphere, span(-1.0, 1.5), res(rho * (1.0 - 1e-6))).unwrap();
+        lifts(&c, &sphere, &pc, span(-1.0, 1.5), 1.0);
+    }
+
+    /// The walk's band rule, given straight to `certify`: the parallel at height 0.6 with a
+    /// constant reference (its start), so its lifted azimuth runs from the line by the
+    /// fraction of a turn swept. Just under half a turn is clear, just over is the band's
+    /// refusal; a circle through the pole is a crossing.
+    #[test]
+    fn the_band_and_the_axis_are_certified() {
+        let sphere = unit_sphere();
+        let chart = sphere.chart().unwrap();
+        let axes = Axes::new(chart.frame(), chart.sense());
+        let periods = chart.periods();
+        let frame = Frame::new(Point3::new(0.0, 0.0, 0.6), Vec3::Z, Vec3::X).unwrap();
+        let c = Curve::Circle(Circle::new(frame, mm(0.8), Sense::Forward).unwrap());
+        let start = chart.inverse(c.point(0.0));
+        for (half, want) in [(0.5 - 1e-6, Verdict::Clear), (0.5 + 1e-6, Verdict::Band)] {
+            let over = span(0.0, TAU * half);
+            let pc = OnChart::new(c.clone(), chart, over, [start, start]).unwrap();
+            let got = certify(&c, &pc, &axes, over, 1e-9, true, periods).unwrap();
+            assert_eq!(got, want, "{half}");
+        }
+        let c = about(0.7, 0.7);
+        let over = span(-1.0, 1.5);
+        let r = chart.inverse(c.point(-1.0));
+        let pc = OnChart::new(c.clone(), chart, over, [r, r]).unwrap();
+        let e = certify(&c, &pc, &axes, over, 1e-9, true, periods).unwrap_err();
+        let PcurveError::CrossesPole { at } = e else {
+            panic!("{e:?}");
+        };
+        assert!(at.abs() < 1e-7, "{at}");
+    }
+
+    /// The same pair gives the same pcurve, to the bit, every time.
+    #[test]
+    fn certified_pcurves_are_deterministic() {
+        let sphere = unit_sphere();
+        for d in [1e-5, 1e-3] {
+            let c = about(0.7, 0.7 - d);
+            let over = span(-1.0, 1.5);
+            let a = pcurve_of(&c, &sphere, over, res(5e-6)).unwrap();
+            let b = pcurve_of(&c, &sphere, over, res(5e-6)).unwrap();
+            for i in 0..=50 {
+                let t = -1.0 + 2.5 * f64::from(i) / 50.0;
+                let (p, q) = (a.point(t), b.point(t));
+                assert_eq!(
+                    (p.x.to_bits(), p.y.to_bits()),
+                    (q.x.to_bits(), q.y.to_bits())
+                );
+            }
+        }
     }
 }

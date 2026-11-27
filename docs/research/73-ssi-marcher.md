@@ -1420,3 +1420,186 @@ before and 429 after (both proved), `2^-6` refused (the `FRONT` policy) before a
   interval form's dependency between the axes' terms).
 - SM5's loop-free stop replaces `FRONT`; the diagonal near-touch is the case to try it on.
 
+## 21. SM1b as built (11-27)
+
+SM1b closes §13.8 items 1 and 3 (the 04 SM1 ruling's follow-up). `pcurve_of` keeps SM1's
+sampled pole/apex and lift-band checks. When they pass, the new `scx-surface` `chart_check`
+proves both by interval. Point inversion onto an `OnChart` pcurve, which answered
+`Unsupported`, is now a certified search in uv (`scx-curve` `chart_invert`).
+
+### 21.1 What exists
+
+- **`chart_check::certify(curve, pc, axes, over, tol, axis, periods)`.** It walks from the
+  span's start to its end over boxes `B = [a, b]`, halving each box it cannot decide.
+  - **Axis check.** It encloses the local `x` and `y` by the centred form
+    `q(m) + q'(B)(B - m)`, met with the plain enclosure `q(B)`, both through the 3-D curve's
+    own `point_over`/`jet_over` in `Ivl`. `B` is clear when the enclosure of `x^2 + y^2` lies
+    above `tol^2`, rounded up. If the middle of an undecided box is within `tol` of the axis,
+    the box holds a crossing, refined by the same golden section the sampled check uses. The
+    halves of a box already clear of the axis are not checked again.
+  - **Band check.** For each periodic coordinate, let `D(t)` be the continuous lift less the
+    reference line of slope `s`. The bound is `D(B) ⊂ D(a) + (w'(B) - s)[0, b - a]`, with
+    `w'(B)` the pcurve's own `jet_over` (a lift does not change a derivative). It must hold
+    inside `±(1 - 1e-9) p/2`. `D(b)` is then met with `OnChart`'s own value at `b`, and the
+    walk goes on from there.
+    - It refuses (the band rule's `NoClosedForm`) only when `D(a) + (w'(B) - s)(b - a)` lies
+      wholly at or past half a period. That is a proof the lift leaves the band.
+  - **Undecided.** A box that holds no `f64` inside, or the 16,384th box tried (`BOXES`),
+    gives `PcurveError::Undecided { at, check: Check::{Axis, Band} }`.
+- **`PcurveError::Undecided` and `scx_surface::Check`** (`#[non_exhaustive]`). The kind is
+  `Unsupported` and the name `pcurve_undecided`.
+- **`OnChart::closest(p, &mut Budget, &Stop) -> Result<Foot<f64, Point2>, CurveError>`** and
+  **`OnChart::invert(p, domain, &mut Budget, &Stop) -> Result<Inversion<f64, Point2>, CurveError>`.**
+  The search, in order:
+  - It starts from 16 even seed pieces of `over`, met with a bounded 3-D domain.
+  - It drops a piece when the distance bound from its Ivl box is not below the incumbent less
+    `eps`. It also drops one where `(uv - p) . uv'` keeps one sign.
+  - It halves the piece with the least bound (ties go to the earlier piece) and runs Newton
+    on `g = (uv - p) . uv'`.
+    - A Newton step is taken when it lowers the distance. It is also taken when it halves
+      `|g|` while the distance stays within the run's start plus `eps`.
+    - The final incumbent is polished once if it was not already.
+  - `eps = GAP_REL (1e-12) x` (the seeds' uv diagonal plus the first incumbent's distance).
+  - The foot is the global nearest to `2 eps`. A non-finite `p` gives a NaN foot.
+- **`Curve2::closest` and `Curve2::invert` now take `(budget, stop)`** for every kind.
+  `CurveError` gains `Exhausted` and `Stopped` (with `From` for both), and
+  `Unsupported::OnChartInversion` is gone.
+
+### 21.2 Decisions, for and against
+
+1. **The certifier runs after the samples and can only refuse.** It never turns a sampled
+   refusal into a pass, and it never changes the `OnChart` it is given.
+   - For: answers the samples accepted and the proof confirms are bit-identical to SM1's. The
+     cheap sampled refusals (an end on the axis, a sampled band) stay first.
+   - Against: the samples are now redundant on a pass, at 64 evaluations. They are kept
+     because they make the reference line the certifier checks against.
+2. **The certified condition is `|D| < p/2` over the whole span, against `OnChart`'s own
+   reference line.**
+   - For: this is exactly when "the copy nearest the line" is the continuous lift. It proves
+     the value `OnChart` evaluates, not a stand-in for it.
+   - Against: the margin `1e-9` of a half period refuses a lift that runs within `1e-9 p/2` of
+     the band's edge. A real curve there would be split, as at the band refusal.
+3. **A fixed box cap (`BOXES = 16384`), not a `Budget` through `pcurve_of`.**
+   - For: `pcurve_of` is called in stage 5 and mass, where no budget is threaded. A span
+     clear of the axis by `g` takes about `log2(span/g)` boxes at each near approach: 87 at
+     `d = 1e-5` and 47 at `1e-3`. The cap is reached only by a curve that runs within rounding
+     of `tol` along a stretch. The walk takes no choice from the cap, so a decided span gives
+     the same answer every time.
+   - Against: it is a fixed cap, which 73 §6 avoids. It is a limit on a proof, though, not on
+     a result: hitting it is `Undecided`, never a pass or a truncated answer. A `Budget`
+     parameter is the change if `pcurve_of` ever takes one.
+4. **`Undecided` is kind `Unsupported`, not `Refused`.**
+   - For: the input may be valid. The walk only failed to prove it (within rounding of `tol`).
+     It sits with `NoClosedForm` and `Inexact`.
+   - Against: a caller that splits on `CrossesPole` gets no split point it can trust. `at` is
+     where the walk stood, which is an approach to within rounding of `tol`, so splitting
+     there is a sound retry.
+5. **Inversion is a branch and bound in uv, not the chart-inverse-of-the-3-D-foot route.**
+   - For: a `Chart` holds only what its inverse needs, not the surface's forward map (a
+     sphere's radius, a cone's angle). Also, the nearest point in 3-D is the nearest in uv only
+     for a query on the curve. The uv search proves the uv answer.
+   - Against: it costs 15–26 µs on the curve and 46–235 µs off it (§21.4), where a closed
+     form costs nanoseconds. No hot path calls it today (it was `Unsupported`). A caller with
+     a 3-D point should invert the 3-D edge.
+6. **`Curve2::closest`/`invert` take `(budget, stop)` for every kind**, one signature (the
+   cache work's rule), rather than an OnChart-only method.
+   - For: callers do not branch on kind, and only OnChart and NURBS-like kinds charge.
+   - Against: line and conic callers pass a budget they never use. `Budget::new(0)` is free
+     for them.
+7. **The `2 eps` gap and the polish rule.** Near the foot, the distance is flat to the uv's
+   rounding (about `1e-15`). A pure "distance decreases" rule stopped Newton with
+   `g ≈ 1e-8`. Accepting a step that halves `|g|` within the start plus `eps` reaches
+   stationarity (`|g| <= 1e-9 (1 + |d|)` in every test) and gives up at most one more `eps`.
+   - Against: the bound is `2 eps`, not `eps`.
+8. **Search span = `over` met with a bounded 3-D domain.** This is the span the lift was made
+   and certified over. Outside it, the nearest-to-the-line copy is not proved continuous.
+
+### 21.3 Tests
+
+`scx-surface` `pcurve` (four new):
+
+- `near_pole_circles_are_refused_or_accepted_by_their_distance`.
+  - The fixtures are circles on the unit sphere passing within `d` of the pole, for
+    `d` = 1e-9, 1e-8, 1e-7, 1e-6, 4e-6, 6e-6, 1e-5, 1e-4, 1e-3. Each is taken from both sides
+    of the pole and over three spans; `tol = 5e-6`.
+  - Within `tol`, the answer is `CrossesPole` at `|at| < 1e-9`, or `NoClosedForm` on `[0, τ]`
+    (approach at the ends).
+  - Otherwise the answer is `OnChart`, checked by lifting and by 2,001 points through the
+    approach to `1e-12`.
+- `an_approach_within_rounding_of_the_tolerance_is_undecided`.
+  - `tol = rho (1 - 1e-15)` gives `Undecided { check: Axis }`, with its kind, name and
+    message.
+  - `rho (1 - 1e-6)` passes.
+- `the_band_and_the_axis_are_certified`.
+  - The fixture is a parallel with a constant reference line.
+  - A sweep of `τ (0.5 - 1e-6)` is `Clear`, and one of `τ (0.5 + 1e-6)` is `Band`.
+  - A circle through the pole is `CrossesPole` at `|at| < 1e-7`.
+- `certified_pcurves_are_deterministic`.
+
+`scx-curve` `chart_invert` (four new, over SM1's 14 analytic pairs plus the sphere section
+`x = 1.2` in both senses):
+
+- `points_on_the_curve_invert_to_their_parameter`.
+- `off_curve_feet_are_the_global_nearest`. Each foot is within `1e-11` of a dense brute-force
+  least and stationary.
+- `the_search_is_deterministic`. Results are the same bits. The exact budget used succeeds;
+  one unit fewer fails `Exhausted`.
+- `limits_and_edges`. Covers:
+  - `Exhausted { limit: 5 }` and `Stopped`
+  - a NaN and an infinite query (`Outside`)
+  - inside and outside a domain
+  - `Curve2` dispatch, and a query before the start of a closed curve
+
+No test was removed. The `scx-curve` error test now covers `Exhausted` and `Stopped` in place
+of `OnChartInversion`.
+
+A fixture lesson: a test pcurve must be validly lifted. A tilted sphere circle over a whole
+turn with a constant reference jumps a period, and is not an `OnChart` the certifier would
+pass.
+
+### 21.4 Added cost (release, server, throwaway timers and counters, not committed)
+
+`pcurve_of` on pairs with no closed form (all others are unchanged; the torus tube circle
+stays at 0.95 µs):
+
+| case | before (samples only) | with certify | boxes |
+| --- | --- | --- | --- |
+| two-sphere circle | 7.0 µs | 36 µs | 21 |
+| tilted unit-sphere circle | 6.9 µs | 22–24 µs | 11 |
+| cone ellipse | 6.3 µs | 21 µs | 15 |
+| near pole, `d = 1e-3` | 14.5 µs | 62–65 µs | 47 |
+| near pole, `d = 1e-5` | 12.4 µs | 103–111 µs | 87 |
+| pole inside, `d = 1e-5` (refused) | 10 µs | 111–114 µs | 95 |
+
+A box costs about 1.26 µs:
+
+| part | cost |
+| --- | --- |
+| the pcurve's `jet_over` | 670 ns |
+| the pcurve's `point_over` | 350 ns |
+| the curve's `jet_over` | 150 ns |
+| the curve's `point_over` | 90 ns |
+| the pcurve's `f64` point | 57 ns |
+
+Across the scx-boolean, scx-mass, scx-ssi and scx-brep suites (release), `certify` ran 46
+times, all `Clear`, for 0.69 ms in total (80 µs at most). There were no `Undecided` results
+and the suites passed. Timings were taken on a loaded machine and are noisy to about 10%.
+
+Inversion over the 16 test pcurves, 2,000 queries each (one unit = one evaluation or piece):
+
+| query | time | units |
+| --- | --- | --- |
+| on the curve | 15–26 µs | 37–38 |
+| 0.3 off the curve | 46–235 µs | 96–311 |
+
+### 21.5 Open questions
+
+1. **Cheaper boxes.** Taking the azimuth rate from the 3-D jet's local `x`, `y` in place of
+   the pcurve's `jet_over` would drop the dearest part of a box. The rate is
+   `u' = (x y' - y x') / (2 pi rho^2)` for the sphere's arc parameter, per kind. Sharing the
+   curve's jet inside `OnChart::jet_over` would also help. Both are expected to cut certify
+   by about 2 times; neither is needed by any suite's cost today.
+2. **Inversion cost.** Most of an off-curve query is spent proving there is no second foot.
+   A first-order prune is likely to cut that 2 to 3 times: drop pieces whose ends' `g` signs
+   and a `g'` enclosure prove a single foot. It waits for a caller that needs it.
+3. **A `Budget` through `pcurve_of`** (§21.2 item 3), if stage 5 gains one.
