@@ -44,6 +44,7 @@ use core::fmt;
 use scx_num::fmath;
 
 use crate::analytic::Frame;
+use crate::profile::Seg;
 
 /// The stated relative error of every result, against the largest term in it.
 pub const REL_ERR: f64 = 1e-13;
@@ -426,44 +427,6 @@ pub fn torus(big: f64, small: f64) -> Result<Solid, SolidError> {
 // ---------------------------------------------------------------------------------------
 // Profiles of lines and arcs
 
-/// One piece of a profile's boundary, from the end of the one before.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Seg {
-    /// A straight line to a point.
-    Line {
-        /// The end.
-        to: [f64; 2],
-    },
-    /// A circular arc about `center` to a point, counter-clockwise or not. `to` equal to
-    /// the start is the whole circle.
-    Arc {
-        /// The end (on the circle through the start).
-        to: [f64; 2],
-        /// The centre.
-        center: [f64; 2],
-        /// The direction of travel.
-        ccw: bool,
-    },
-}
-
-impl Seg {
-    fn to(&self) -> [f64; 2] {
-        match *self {
-            Seg::Line { to } | Seg::Arc { to, .. } => to,
-        }
-    }
-}
-
-/// A closed loop in the `xy` plane. Counter-clockwise loops add area, clockwise loops (holes)
-/// subtract.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Loop {
-    /// Where it starts and ends.
-    pub start: [f64; 2],
-    /// Its pieces, the last ending at `start`.
-    pub segs: Vec<Seg>,
-}
-
 /// The planar integrals `A`, `int x`, `int y`, `int x^2`, `int x y`, `int y^2`, and the
 /// length of the boundary.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -501,15 +464,9 @@ fn trig(a: u32, b: u32, t0: f64, t1: f64) -> f64 {
 }
 
 /// `oint x^p y^q dy` along one segment from `p0`, for `p + q <= 3`.
-fn dy_integral(
-    p0: [f64; 2],
-    seg: &Seg,
-    start_sweep: Option<(f64, f64, f64)>,
-    p: u32,
-    q: u32,
-) -> f64 {
+fn dy_integral(seg: &Seg, start_sweep: Option<(f64, f64, f64)>, p: u32, q: u32) -> f64 {
     match *seg {
-        Seg::Line { to } => {
+        Seg::Line { start: p0, end: to } => {
             // x = x0 + t dx, y = y0 + t dy: the integrand x^p y^q dy is a polynomial of
             // degree <= 3 in t, integrated exactly by 3-point Gauss-Legendre (exact to 5).
             let (dx, dy) = (to[0] - p0[0], to[1] - p0[1]);
@@ -521,7 +478,7 @@ fn dy_integral(
                 .map(|&(t, wt)| wt * ipow(p0[0] + t * dx, p) * ipow(p0[1] + t * dy, q) * dy)
                 .sum()
         }
-        Seg::Arc { center, .. } => {
+        Seg::Arc { centre: center, .. } => {
             // x = cx + r cos t, y = cy + r sin t, dy = r cos t dt; expand by the binomial
             // theorem into terms cos^a sin^b.
             let (r, t0, t1) = start_sweep.unwrap_or((0.0, 0.0, 0.0));
@@ -551,7 +508,7 @@ fn binom(n: u32, k: u32) -> f64 {
     b
 }
 
-fn planar_raw(loops: &[Loop]) -> Result<Planar, SolidError> {
+fn planar_raw(loops: &[Vec<Seg>]) -> Result<Planar, SolidError> {
     let mut out = Planar {
         area: 0.0,
         qx: 0.0,
@@ -562,12 +519,24 @@ fn planar_raw(loops: &[Loop]) -> Result<Planar, SolidError> {
         length: 0.0,
     };
     for lp in loops {
-        let mut p0 = lp.start;
-        if lp.segs.is_empty() || !(lp.start[0].is_finite() && lp.start[1].is_finite()) {
+        let Some(first) = lp.first() else {
+            return Err(SolidError::Profile("empty loop"));
+        };
+        let origin = first.start();
+        if !(origin[0].is_finite() && origin[1].is_finite()) {
             return Err(SolidError::Profile("empty loop"));
         }
-        for seg in &lp.segs {
-            let to = seg.to();
+        let mut p0 = origin;
+        for seg in lp {
+            // Each piece starts where the one before ends.
+            let start = seg.start();
+            if (start[0] - p0[0]).abs() > 1e-9 * (1.0 + p0[0].abs())
+                || (start[1] - p0[1]).abs() > 1e-9 * (1.0 + p0[1].abs())
+            {
+                return Err(SolidError::Profile("loop is not closed"));
+            }
+            p0 = start;
+            let to = seg.end();
             let sweep = match *seg {
                 Seg::Line { .. } => {
                     out.length += ((to[0] - p0[0]) * (to[0] - p0[0])
@@ -575,10 +544,10 @@ fn planar_raw(loops: &[Loop]) -> Result<Planar, SolidError> {
                         .sqrt();
                     None
                 }
-                Seg::Arc { center, ccw, .. } => {
+                Seg::Arc { centre, ccw, .. } => {
                     let (a, b) = (
-                        [p0[0] - center[0], p0[1] - center[1]],
-                        [to[0] - center[0], to[1] - center[1]],
+                        [p0[0] - centre[0], p0[1] - centre[1]],
+                        [to[0] - centre[0], to[1] - centre[1]],
                     );
                     let (ra, rb) = (
                         (a[0] * a[0] + a[1] * a[1]).sqrt(),
@@ -608,7 +577,7 @@ fn planar_raw(loops: &[Loop]) -> Result<Planar, SolidError> {
                     Some((ra, t0, t1))
                 }
             };
-            let i = |p, q| dy_integral(p0, seg, sweep, p, q);
+            let i = |p, q| dy_integral(seg, sweep, p, q);
             out.area += i(1, 0);
             out.qx += i(2, 0) / 2.0;
             out.qy += i(1, 1);
@@ -617,8 +586,8 @@ fn planar_raw(loops: &[Loop]) -> Result<Planar, SolidError> {
             out.yy += i(1, 2);
             p0 = to;
         }
-        if (p0[0] - lp.start[0]).abs() > 1e-9 * (1.0 + lp.start[0].abs())
-            || (p0[1] - lp.start[1]).abs() > 1e-9 * (1.0 + lp.start[1].abs())
+        if (p0[0] - origin[0]).abs() > 1e-9 * (1.0 + origin[0].abs())
+            || (p0[1] - origin[1]).abs() > 1e-9 * (1.0 + origin[1].abs())
         {
             return Err(SolidError::Profile("loop is not closed"));
         }
@@ -633,25 +602,34 @@ fn planar_raw(loops: &[Loop]) -> Result<Planar, SolidError> {
 /// The planar integrals, computed about the first loop's start (the boundary integrals
 /// cancel badly for a small region far from the origin) and moved back: with the region
 /// shifted by `o`, `Q' = Q + A o`, `I_xx' = I_xx + 2 o_x Q_x + A o_x^2`, and so on.
-fn planar(loops: &[Loop]) -> Result<Planar, SolidError> {
-    let o = loops.first().map_or([0.0; 2], |l| l.start);
+fn planar(loops: &[Vec<Seg>]) -> Result<Planar, SolidError> {
+    let o = loops
+        .first()
+        .and_then(|l| l.first())
+        .map_or([0.0; 2], Seg::start);
     let sh = |p: [f64; 2]| [p[0] - o[0], p[1] - o[1]];
-    let shifted: Vec<Loop> = loops
+    let shifted: Vec<Vec<Seg>> = loops
         .iter()
-        .map(|l| Loop {
-            start: sh(l.start),
-            segs: l
-                .segs
-                .iter()
+        .map(|l| {
+            l.iter()
                 .map(|s| match *s {
-                    Seg::Line { to } => Seg::Line { to: sh(to) },
-                    Seg::Arc { to, center, ccw } => Seg::Arc {
-                        to: sh(to),
-                        center: sh(center),
+                    Seg::Line { start, end } => Seg::Line {
+                        start: sh(start),
+                        end: sh(end),
+                    },
+                    Seg::Arc {
+                        centre,
+                        start,
+                        end,
+                        ccw,
+                    } => Seg::Arc {
+                        centre: sh(centre),
+                        start: sh(start),
+                        end: sh(end),
                         ccw,
                     },
                 })
-                .collect(),
+                .collect()
         })
         .collect();
     let p = planar_raw(&shifted)?;
@@ -668,14 +646,14 @@ fn planar(loops: &[Loop]) -> Result<Planar, SolidError> {
 
 /// The planar area of a region bounded by `loops` (outer counter-clockwise, holes clockwise),
 /// by Green's theorem.
-pub fn profile_area(loops: &[Loop]) -> Result<f64, SolidError> {
+pub fn profile_area(loops: &[Vec<Seg>]) -> Result<f64, SolidError> {
     Ok(planar(loops)?.area)
 }
 
 /// The prism of `loops` from `z = 0` to `z = h`: `V = A h`, `F = (Q_x h, Q_y h, A h^2 / 2)`,
 /// `S_xx = I_xx h`, `S_zz = A h^3 / 3`, `S_xz = Q_x h^2 / 2`, ...; the area is `2 A + P h`
 /// with `P` the length of all the loops.
-pub fn extrusion(loops: &[Loop], h: f64) -> Result<Solid, SolidError> {
+pub fn extrusion(loops: &[Vec<Seg>], h: f64) -> Result<Solid, SolidError> {
     let h = positive(h, "h")?;
     let p = planar(loops)?;
     let second = [
@@ -788,19 +766,26 @@ pub fn gear(
     if count > 1 && 2.0 * fmath::atan2(half, root) >= pitch {
         return Err(SolidError::Apart);
     }
-    let slot = Loop {
-        start: [root, -half],
-        segs: vec![
-            Seg::Line { to: [rim_x, -half] },
-            Seg::Arc {
-                to: [rim_x, half],
-                center: [0.0, 0.0],
-                ccw: true,
-            },
-            Seg::Line { to: [root, half] },
-            Seg::Line { to: [root, -half] },
-        ],
-    };
+    let slot = vec![
+        Seg::Line {
+            start: [root, -half],
+            end: [rim_x, -half],
+        },
+        Seg::Arc {
+            centre: [0.0, 0.0],
+            start: [rim_x, -half],
+            end: [rim_x, half],
+            ccw: true,
+        },
+        Seg::Line {
+            start: [rim_x, half],
+            end: [root, half],
+        },
+        Seg::Line {
+            start: [root, half],
+            end: [root, -half],
+        },
+    ];
     let slot = extrusion(&[slot], h)?;
     let mut moments = cylinder(radius, h)?.moments;
     for i in 0..count {
