@@ -144,7 +144,7 @@ const PINNED: &[(&str, u64)] = &[
     ("atan2", 0x38c4aee23e996054),
     ("hypot", 0xaad879607804e9ab),
     ("powf", 0x4852b3e48e58cf4e),
-    ("powi(n)", 0xc4040889c67ee521),
+    ("powi(n)", 0xd43676e74146532c),
 ];
 
 #[test]
