@@ -360,6 +360,36 @@ same files.
   - Its `x` evaluators become closures over the same recorders, so call sequences still compare
     one for one. 10 cases are in `t_solve.rs`.
   - `Outcome::Best` maps to the pin's `found == false`.
+- **Done (idiom builder C):** as the table, with these choices the table left open.
+  - **Closures.** 1-D Newton and Brent take `FnMut(f64) -> Result<(f64, f64), E>`. Brent is not
+    derivative-free here: the pin's `SolveByBrent` reads `F'` to pick its step, so it keeps the
+    pair. Only bisection is derivative-free (`FnMut(f64) -> Result<f64, E>`). N-D takes
+    `FnMut(&[f64; N]) -> Result<([f64; N], [[f64; N]; N]), E>`, row-major.
+  - **Convergence.** The evaluator's "found" (`found_answer`, `is_converged`) becomes a test in
+    the options: `with_convergence(|t, f| ..)` (1-D) and `|x, f| ..` (N-D), traits `Converged1d`
+    and `ConvergedNd`. The default, `Residual`, never declares a root early, which is what every
+    pin evaluator that left `found_answer` false did. The pin's N-D `IsConverged` (accept a
+    guess whose residual is below the desired accuracy) is a second trait method with a default
+    of yes, so the default needs no setting.
+  - **`SolverAlgorithm`** is `Newton` or `Brent(Goal)`. `SM_SA_BISECTION` is gone: the pin
+    solves it as Newton (no branch reads it). The codes live in the difftest facade.
+  - **`solve_by_brent`** returns the `F` it evaluated, not the pin's `-F` when maximising; the
+    sign flip is the iteration's business.
+  - **`TerminationReason`** keeps the five finished outcomes and adds `GuessUnevaluated` for the
+    pin's `guess_unevaluated` flag (the pin reports it as `UnableToConverge` plus the flag);
+    `Undefined` and `StillIterating` went.
+  - **Brackets and iterates** are `Option<Sample>` (`Sample { t, f }`, named for what it is, not
+    `Bracket`, since an evaluated point is also what bisection takes) and
+    `Option<IterationValue>`; `found_accuracy` is `Option<f64>`.
+  - **`solve_traced`** stays, behind `#[cfg(any(test, feature = "trace"))]`. The difftest turns
+    the feature on; no other crate sees it. It returns the state only with an outcome: on an
+    error there is no state to read, so the difftest compares failed solves by error and log.
+  - **`IterQueue1d`** stores the steps only (it read nothing else), and `try_new` gives
+    `NumError` for an allocation that fails.
+  - **`jacobian(f, x, domain)`** has no `fx` argument: the pin's `ComputeJacobian` is central
+    differences and never reads the value at `x`.
+  - **`EvalError::defect`** went with the defaults. The solvers' tests that proved the defaults
+    failed went with them (listed in the commit).
 
 ### M7. Krawczyk takes `&dyn Fn` and a `dyn` alias
 
@@ -393,6 +423,14 @@ same files.
     surface, nurbs and eval).
 - **Difftest:** comparable, with no adapter change. `t_kraw.rs`'s 9 cases pass closures, which
   coerce to either form.
+- **Done (idiom builder C):** `krawczyk`, `krawczyk_region` and `newton` take their callbacks by
+  value as generic `FnMut`, so a caller passes `&f`, `&mut f` or a closure. The inverse is not a
+  parameter: `newton` requires `[[f64; N]; N]: Invert`, a trait with the three closed-form
+  inverses (sizes 2, 3, 4), each keeping its own rounding, so there is one name and no generic
+  Gauss-Jordan that would round differently. `krawczyk_region` returns `ProvedRoot { root,
+  region }` in place of a pair, which is what removed the last `type_complexity` allow. The
+  `Inverse` alias went. The difftest's pin facade gains the same `Invert`, `newton` and
+  `ProvedRoot` names over the pin's functions.
 
 ### M8. Silent fallbacks forced by `indexing_slicing = deny`
 
