@@ -1,19 +1,31 @@
 // Written for solidcorex. Apache-2.0.
 //! Polynomials with exact rational coefficients, and their real roots isolated with
-//! certainty: square-free factors by Yun's algorithm, then Sturm sequences and bisection.
+//! certainty.
 //!
-//! Every real root comes back once, as an interval sure to hold it and no other root, with
-//! its multiplicity; a root that is a bisection point comes back as that exact point.
+//! The method is the textbook one, exact throughout so nothing is a judgement:
+//!
+//! - Yun's square-free factorisation `p = c f_1 f_2^2 f_3^3 ...` (each `f_i` square-free,
+//!   pairwise coprime) gives the multiplicities, by exact `gcd`s;
+//! - a Sturm sequence of each `f_i` counts its roots in any half-open interval `(a, b]`, so
+//!   bisection from Cauchy's bound isolates them;
+//! - an isolated root of a square-free factor changes its sign, so bisection on the sign
+//!   alone refines it to the width asked for; roots of different factors are distinct, so
+//!   any two enclosures that meet are refined until they do not.
+//!
+//! The work is done on integer polynomials with the primitive pseudo-remainder sequence
+//! (see `Z`), since reducing rationals at every step dominates the time otherwise. Every
+//! real root comes back once, as an interval sure to hold it and no other root, with its
+//! multiplicity; a root met at a bisection point comes back as that exact point.
 
-use crate::bound::Bound;
+use crate::bound::{Bound, rat_to_dd};
+use crate::dd::Dd;
 use crate::exact::Int;
 use crate::rat::Rat;
 
-/// `c[0] + c[1] x + ... + c[n] x^n`, with `c[n]` not zero (the zero polynomial is empty).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Poly {
-    c: Vec<Rat>,
-}
+/// A polynomial `sum c_i x^i` with rational coefficients, lowest first, with no trailing
+/// zero (the zero polynomial has none).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Default)]
+pub struct Poly(Vec<Rat>);
 
 /// A real root: an interval holding it and no other root, and how many times it repeats.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -24,33 +36,336 @@ pub struct Root {
     pub multiplicity: u32,
 }
 
+/// A polynomial with integer coefficients, lowest first, no trailing zero: the working
+/// form of [`Poly::real_roots`]. Remainders are pseudo-remainders with the content divided
+/// out (the primitive remainder sequence), so no step reduces a rational: the rationals'
+/// gcds dominate the time otherwise.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+struct Z(Vec<Int>);
+
+impl Z {
+    fn new(mut c: Vec<Int>) -> Z {
+        while c.last().is_some_and(Int::is_zero) {
+            c.pop();
+        }
+        Z(c)
+    }
+
+    /// A positive multiple of `p`: times the odd denominators' lcm and the least power of
+    /// two.
+    fn of(p: &Poly) -> Z {
+        let lo = p.0.iter().map(|c| c.parts().2).min().unwrap_or(0);
+        let lcm = p.0.iter().fold(Int::from(1u64), |l, c| {
+            let d = c.parts().1;
+            let g = l.gcd(d);
+            l.mul(&d.div_exact(&g))
+        });
+        Z::new(
+            p.0.iter()
+                .map(|c| {
+                    let (n, d, e) = c.parts();
+                    n.mul(&lcm.div_exact(d)).shl(e.abs_diff(lo))
+                })
+                .collect(),
+        )
+    }
+
+    fn degree(&self) -> usize {
+        self.0.len().saturating_sub(1)
+    }
+
+    fn lead(&self) -> Int {
+        self.0.last().cloned().unwrap_or_default()
+    }
+
+    fn is_zero(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    fn derivative(&self) -> Z {
+        Z::new(
+            self.0
+                .iter()
+                .enumerate()
+                .skip(1)
+                .map(|(i, c)| c.mul(&Int::from(i as u64)))
+                .collect(),
+        )
+    }
+
+    fn neg(&self) -> Z {
+        Z(self.0.iter().map(Int::neg).collect())
+    }
+
+    fn sub(&self, o: &Z) -> Z {
+        let n = self.0.len().max(o.0.len());
+        let at = |v: &[Int], i: usize| v.get(i).cloned().unwrap_or_default();
+        Z::new((0..n).map(|i| at(&self.0, i).sub(&at(&o.0, i))).collect())
+    }
+
+    /// Divided by the (positive) gcd of its coefficients.
+    fn primitive(&self) -> Z {
+        let g = self.0.iter().fold(Int::default(), |g, c| g.gcd(c));
+        if g.is_zero() || g.is_one() {
+            return self.clone();
+        }
+        Z(self.0.iter().map(|c| c.div_exact(&g)).collect())
+    }
+
+    /// `|lc(b)|^k a - q b` of degree below `b`'s, for the steps `k`: a positive multiple of
+    /// the remainder.
+    fn prem(&self, b: &Z) -> Z {
+        let lb = b.lead();
+        let (mag, sign) = (lb.abs(), lb.signum());
+        let mut r = self.clone();
+        while !r.is_zero() && r.degree() >= b.degree() {
+            let shift = r.degree() - b.degree();
+            let f = if sign < 0 { r.lead().neg() } else { r.lead() };
+            let mut next: Vec<Int> = r.0.iter().map(|c| c.mul(&mag)).collect();
+            for (i, c) in b.0.iter().enumerate() {
+                if let Some(slot) = next.get_mut(i + shift) {
+                    *slot = slot.sub(&f.mul(c));
+                }
+            }
+            next.pop();
+            r = Z::new(next);
+        }
+        r
+    }
+
+    /// `a / b` for a primitive `b` dividing `a` over the rationals (so over the integers,
+    /// by Gauss's lemma).
+    fn div_exact(&self, b: &Z) -> Z {
+        let lb = b.lead();
+        let mut r = self.0.clone();
+        let (n, m) = (self.0.len(), b.0.len());
+        if m == 0 || n < m {
+            return Z::default();
+        }
+        let mut q = vec![Int::default(); n - m + 1];
+        for k in (0..=n - m).rev() {
+            let f = r.get(k + m - 1).cloned().unwrap_or_default().div_exact(&lb);
+            for (i, c) in b.0.iter().enumerate() {
+                if let Some(slot) = r.get_mut(k + i) {
+                    *slot = slot.sub(&f.mul(c));
+                }
+            }
+            if let Some(slot) = q.get_mut(k) {
+                *slot = f;
+            }
+        }
+        Z::new(q)
+    }
+
+    /// The primitive gcd, leading coefficient positive.
+    fn gcd(&self, o: &Z) -> Z {
+        let (mut a, mut b) = (self.primitive(), o.primitive());
+        if a.degree() < b.degree() {
+            core::mem::swap(&mut a, &mut b);
+        }
+        while !b.is_zero() {
+            let r = a.prem(&b).primitive();
+            a = b;
+            b = r;
+        }
+        if a.lead().is_negative() { a.neg() } else { a }
+    }
+
+    /// Yun's square-free factorisation, as [`Poly::square_free`], each factor primitive.
+    fn square_free(&self) -> Vec<(Z, u32)> {
+        let mut out = Vec::new();
+        if self.degree() == 0 {
+            return out;
+        }
+        let d = self.derivative();
+        let a = self.gcd(&d);
+        let mut b = self.div_exact(&a);
+        let mut c = d.div_exact(&a);
+        let mut i = 1;
+        loop {
+            let dd = c.sub(&b.derivative());
+            let f = b.gcd(&dd);
+            if f.degree() > 0 {
+                out.push((f.clone(), i));
+            }
+            b = b.div_exact(&f);
+            if b.degree() == 0 {
+                return out;
+            }
+            c = dd.div_exact(&f);
+            i += 1;
+        }
+    }
+
+    /// The Sturm sequence `p, p', -rem, ...`, each scaled by a positive factor.
+    fn sturm(&self) -> Vec<Z> {
+        let mut s = vec![self.clone(), self.derivative().primitive()];
+        loop {
+            let (Some(a), Some(b)) = (s.get(s.len() - 2), s.last()) else {
+                return s;
+            };
+            if b.degree() == 0 {
+                return s;
+            }
+            let r = a.prem(b);
+            if r.is_zero() {
+                return s;
+            }
+            s.push(r.neg().primitive());
+        }
+    }
+
+    /// The sign at `x`: of `d^n p(n / d)` by homogeneous Horner, `d > 0`.
+    fn sign_at(&self, x: &Rat) -> i32 {
+        let (num, den, e) = x.parts();
+        let (n, d) = if e >= 0 {
+            (num.shl(e.unsigned_abs()), den.clone())
+        } else {
+            (num.clone(), den.shl(e.unsigned_abs()))
+        };
+        let mut acc = Int::default();
+        let mut dk = Int::from(1u64);
+        for c in self.0.iter().rev() {
+            acc = acc.mul(&n).add(&c.mul(&dk));
+            dk = dk.mul(&d);
+        }
+        acc.signum()
+    }
+
+    /// A power of two above Cauchy's bound `1 + max |c_i / c_n|`: every root is inside
+    /// `(-b, b)`.
+    fn bound(&self) -> Rat {
+        let lead = self.lead().bit_len();
+        let top = self
+            .0
+            .iter()
+            .rev()
+            .skip(1)
+            .map(Int::bit_len)
+            .max()
+            .unwrap_or(0);
+        // |c_i / c_n| < 2^(top - lead + 1), so the bound is below 2^(that + 1).
+        Rat::one().scale(i64::try_from(top.saturating_sub(lead)).unwrap_or(0) + 2)
+    }
+
+    /// The roots of a square-free `p`, each alone in `(a, c]` with `p(c)` not zero, or
+    /// met exactly at a bisection point.
+    fn isolate(&self) -> Vec<Isolated> {
+        let s = self.sturm();
+        let changes = |x: &Rat| -> u32 {
+            let signs: Vec<i32> = s.iter().map(|p| p.sign_at(x)).filter(|&g| g != 0).collect();
+            signs.windows(2).filter(|w| w.first() != w.get(1)).count() as u32
+        };
+        let b = self.bound();
+        let mut out = Vec::new();
+        // (a, c] with its count and the counts at its ends.
+        let lo = -&b;
+        let (cl, ch) = (changes(&lo), changes(&b));
+        let mut stack = vec![(lo, b, cl.saturating_sub(ch), cl, ch)];
+        while let Some((a, c, n, va, vc)) = stack.pop() {
+            match n {
+                0 => {}
+                1 => out.push(Isolated::new(self, a, c)),
+                _ => {
+                    let m = a.midpoint(&c);
+                    let vm = changes(&m);
+                    stack.push((a, m.clone(), va.saturating_sub(vm), va, vm));
+                    stack.push((m, c, vm.saturating_sub(vc), vm, vc));
+                }
+            }
+        }
+        out
+    }
+}
+
+/// One root of the square-free `f`, alone in `(lo, hi]`: `lo == hi` when it was met exactly,
+/// otherwise `f(hi)` has the sign `high`, not zero, and the root is inside `(lo, hi)`.
+struct Isolated {
+    f: Z,
+    lo: Rat,
+    hi: Rat,
+    high: i32,
+    multiplicity: u32,
+}
+
+impl Isolated {
+    fn new(f: &Z, lo: Rat, hi: Rat) -> Isolated {
+        let high = f.sign_at(&hi);
+        let lo = if high == 0 { hi.clone() } else { lo };
+        Isolated {
+            f: f.clone(),
+            lo,
+            hi,
+            high,
+            multiplicity: 0,
+        }
+    }
+
+    fn is_exact(&self) -> bool {
+        self.lo == self.hi
+    }
+
+    /// Whether `[lo, hi]`, closed, is certain to hold this root alone: an exact point, or
+    /// `f` not zero at `lo` either (`lo` may be another root of `f`, met exactly).
+    fn is_closed(&self) -> bool {
+        self.is_exact() || self.f.sign_at(&self.lo) != 0
+    }
+
+    /// One bisection step on the sign.
+    fn halve(&mut self) {
+        if self.is_exact() {
+            return;
+        }
+        let m = self.lo.midpoint(&self.hi);
+        match self.f.sign_at(&m) {
+            0 => (self.lo, self.hi) = (m.clone(), m),
+            s if s == self.high => self.hi = m,
+            _ => self.lo = m,
+        }
+    }
+}
+
 impl Poly {
-    /// From the coefficients, lowest degree first; trailing zeros are dropped.
+    /// From coefficients, lowest first (trailing zeros dropped).
     pub fn new(mut c: Vec<Rat>) -> Poly {
         while c.last().is_some_and(Rat::is_zero) {
             c.pop();
         }
-        Poly { c }
+        Poly(c)
     }
 
-    /// The coefficients, lowest degree first.
+    /// The constant `c`.
+    pub fn constant(c: Rat) -> Poly {
+        Poly::new(vec![c])
+    }
+
+    /// `a + b x`.
+    pub fn linear(a: Rat, b: Rat) -> Poly {
+        Poly::new(vec![a, b])
+    }
+
+    /// The coefficients, lowest first.
     pub fn coeffs(&self) -> &[Rat] {
-        &self.c
-    }
-
-    /// The degree; `None` for the zero polynomial.
-    pub fn degree(&self) -> Option<usize> {
-        self.c.len().checked_sub(1)
+        &self.0
     }
 
     /// Whether this is the zero polynomial.
     pub fn is_zero(&self) -> bool {
-        self.c.is_empty()
+        self.0.is_empty()
+    }
+
+    /// The degree; `None` for the zero polynomial.
+    pub fn degree(&self) -> Option<usize> {
+        self.0.len().checked_sub(1)
+    }
+
+    fn lead(&self) -> Rat {
+        self.0.last().cloned().unwrap_or_default()
     }
 
     /// The value at `x`, exactly (Horner).
     pub fn eval(&self, x: &Rat) -> Rat {
-        self.c
+        self.0
             .iter()
             .rev()
             .fold(Rat::zero(), |acc, c| &(&acc * x) + c)
@@ -61,11 +376,20 @@ impl Poly {
         self.eval(x).signum()
     }
 
+    /// The value at a double-double `x`, in double-double (the coefficients rounded to
+    /// double-doubles first).
+    pub fn eval_dd(&self, x: Dd) -> Dd {
+        self.0
+            .iter()
+            .rev()
+            .fold(Dd::new(0.0), |acc, c| acc * x + rat_to_dd(c))
+    }
+
     /// The derivative.
     #[must_use]
     pub fn derivative(&self) -> Poly {
         Poly::new(
-            self.c
+            self.0
                 .iter()
                 .enumerate()
                 .skip(1)
@@ -74,51 +398,95 @@ impl Poly {
         )
     }
 
-    /// `self * k` for a rational `k`.
+    /// `c p`.
     #[must_use]
-    pub fn scaled(&self, k: &Rat) -> Poly {
-        Poly::new(self.c.iter().map(|c| c * k).collect())
+    pub fn scale(&self, c: &Rat) -> Poly {
+        Poly::new(self.0.iter().map(|x| x * c).collect())
     }
 
-    /// `self - o`.
+    /// `p + q`.
     #[must_use]
-    pub fn minus(&self, o: &Poly) -> Poly {
-        let n = self.c.len().max(o.c.len());
+    pub fn add(&self, q: &Poly) -> Poly {
+        let n = self.0.len().max(q.0.len());
         Poly::new(
             (0..n)
-                .map(|i| {
-                    let a = self.c.get(i).cloned().unwrap_or_default();
-                    let b = o.c.get(i).cloned().unwrap_or_default();
-                    a - b
+                .map(|i| match (self.0.get(i), q.0.get(i)) {
+                    (Some(a), Some(b)) => a + b,
+                    (Some(a), None) | (None, Some(a)) => a.clone(),
+                    (None, None) => Rat::zero(),
                 })
                 .collect(),
         )
     }
 
-    /// `(q, r)` with `self = q d + r` and `deg r < deg d`; `None` when `d` is zero.
-    pub fn div_rem(&self, d: &Poly) -> Option<(Poly, Poly)> {
-        let lead = d.c.last()?.recip()?;
-        let dn = d.c.len() - 1;
-        let mut r = self.c.clone();
-        let mut q = vec![Rat::zero(); r.len().saturating_sub(dn)];
-        while r.len() > dn && !r.is_empty() {
-            let top = r.len() - 1;
-            let k = r.last().map_or_default(|t| t * &lead);
-            let shift = top - dn;
-            for (j, dc) in d.c.iter().enumerate() {
-                if let Some(rj) = r.get_mut(shift + j) {
-                    *rj = &*rj - &(&k * dc);
+    /// `p - q`.
+    #[must_use]
+    pub fn sub(&self, q: &Poly) -> Poly {
+        self.add(&q.scale(&Rat::from(-1)))
+    }
+
+    /// `p q`.
+    #[must_use]
+    pub fn mul(&self, q: &Poly) -> Poly {
+        if self.is_zero() || q.is_zero() {
+            return Poly::default();
+        }
+        let mut c = vec![Rat::zero(); self.0.len() + q.0.len() - 1];
+        for (i, a) in self.0.iter().enumerate() {
+            for (j, b) in q.0.iter().enumerate() {
+                if let Some(slot) = c.get_mut(i + j) {
+                    *slot = &*slot + &(a * b);
                 }
             }
-            if let Some(qs) = q.get_mut(shift) {
-                *qs = k;
+        }
+        Poly::new(c)
+    }
+
+    /// `p^k`.
+    #[must_use]
+    pub fn pow(&self, k: u32) -> Poly {
+        (0..k).fold(Poly::constant(Rat::one()), |acc, _| acc.mul(self))
+    }
+
+    /// `(quotient, remainder)` of the division by `d`; `None` when `d` is zero.
+    pub fn div_rem(&self, d: &Poly) -> Option<(Poly, Poly)> {
+        let dn = d.degree()?;
+        let inv = d.lead().recip()?;
+        let mut r = self.0.clone();
+        let mut q = vec![Rat::zero(); self.0.len().saturating_sub(dn)];
+        while let Some(rn) = Poly::new(r.clone()).degree() {
+            if rn < dn {
+                break;
             }
-            r.pop(); // its leading coefficient is now zero exactly
-            while r.last().is_some_and(Rat::is_zero) {
-                r.pop();
+            r.truncate(rn + 1);
+            let f = &r.last().cloned().unwrap_or_default() * &inv;
+            for (j, c) in d.0.iter().enumerate() {
+                if let Some(slot) = r.get_mut(rn - dn + j) {
+                    *slot = &*slot - &(&f * c);
+                }
+            }
+            r.pop(); // cancelled exactly
+            if let Some(slot) = q.get_mut(rn - dn) {
+                *slot = f;
             }
         }
         Some((Poly::new(q), Poly::new(r)))
+    }
+
+    /// `p / d` for a `d` that divides `p` exactly (the quotient otherwise); zero for a
+    /// zero `d`.
+    #[must_use]
+    pub fn div_exact(&self, d: &Poly) -> Poly {
+        self.div_rem(d).map_or_else(Poly::default, |(q, _)| q)
+    }
+
+    /// `p` divided by its leading coefficient's magnitude: the same roots and signs.
+    #[must_use]
+    pub fn normalised(&self) -> Poly {
+        match self.lead().abs().recip() {
+            Some(s) => self.scale(&s),
+            None => Poly::default(),
+        }
     }
 
     /// The monic greatest common divisor (zero when both are zero).
@@ -126,57 +494,19 @@ impl Poly {
     pub fn gcd(&self, o: &Poly) -> Poly {
         let (mut a, mut b) = (self.clone(), o.clone());
         while !b.is_zero() {
-            let Some((_, r)) = a.div_rem(&b) else { break };
-            (a, b) = (b, r);
+            let r = a.div_rem(&b).map_or_else(Poly::default, |(_, r)| r);
+            a = b;
+            b = r.normalised();
         }
-        a.monic()
-    }
-
-    /// Divided by its leading coefficient (zero stays zero).
-    #[must_use]
-    pub fn monic(&self) -> Poly {
-        match self.c.last().and_then(Rat::recip) {
-            Some(k) => self.scaled(&k),
-            None => self.clone(),
+        match a.lead().recip() {
+            Some(s) => a.scale(&s),
+            None => a,
         }
     }
 
-    /// A positive multiple with integer coefficients sharing no factor: the same signs
-    /// everywhere, with short numbers.
-    #[must_use]
-    pub fn primitive(&self) -> Poly {
-        let Some(e) = self
-            .c
-            .iter()
-            .filter(|c| !c.is_zero())
-            .map(|c| c.parts().2)
-            .min()
-        else {
-            return self.clone();
-        };
-        let mut lcm = Int::from(1u64);
-        for c in &self.c {
-            let d = c.parts().1;
-            let g = lcm.gcd(d);
-            lcm = lcm.mul(&d.div_exact(&g));
-        }
-        let ints: Vec<Rat> = self
-            .c
-            .iter()
-            .map(|c| c * &Rat::from_int(&lcm, -e))
-            .collect();
-        let mut content = Int::default();
-        for c in &ints {
-            content = content.gcd(c.parts().0);
-        }
-        match Rat::from_int(&content, 0).recip() {
-            Some(k) => Poly::new(ints.iter().map(|c| c * &k).collect()),
-            None => Poly::new(ints),
-        }
-    }
-
-    /// The square-free factors with their multiplicities (Yun): `self` is a constant times
-    /// the product of `f^m`, the factors pairwise coprime and none constant.
+    /// Yun's square-free factorisation: `(f_i, i)` with `p = c prod f_i^i`, each `f_i`
+    /// monic, square-free, of positive degree, and coprime to the others. Empty for a
+    /// constant (or zero) polynomial.
     pub fn square_free(&self) -> Vec<(Poly, u32)> {
         let mut out = Vec::new();
         if self.degree().unwrap_or(0) == 0 {
@@ -184,72 +514,49 @@ impl Poly {
         }
         let d = self.derivative();
         let a = self.gcd(&d);
-        let (Some((mut b, _)), Some((c, _))) = (self.div_rem(&a), d.div_rem(&a)) else {
-            return out;
-        };
-        let mut dd = c.minus(&b.derivative());
-        let mut m = 1;
-        while b.degree().unwrap_or(0) > 0 {
-            let a = b.gcd(&dd);
-            let (Some((nb, _)), Some((c, _))) = (b.div_rem(&a), dd.div_rem(&a)) else {
-                break;
-            };
-            if a.degree().unwrap_or(0) > 0 {
-                out.push((a, m));
+        let mut b = self.div_exact(&a);
+        let mut c = d.div_exact(&a);
+        let mut i = 1;
+        loop {
+            let dd = c.sub(&b.derivative());
+            let f = b.gcd(&dd);
+            if f.degree().unwrap_or(0) > 0 {
+                out.push((f.clone(), i));
             }
-            dd = c.minus(&nb.derivative());
-            b = nb;
-            m += 1;
-        }
-        out
-    }
-
-    /// The Sturm sequence of a square-free `self`, each term made primitive (a positive
-    /// multiple, so the sign changes are the same).
-    fn sturm(&self) -> Vec<Poly> {
-        let mut seq = vec![self.primitive(), self.derivative().primitive()];
-        while let (Some(a), Some(b)) = (seq.get(seq.len() - 2), seq.last()) {
+            b = b.div_exact(&f);
             if b.degree().unwrap_or(0) == 0 {
-                break;
+                return out;
             }
-            let Some((_, r)) = a.div_rem(b) else { break };
-            if r.is_zero() {
-                break;
-            }
-            seq.push(r.scaled(&Rat::from(-1)).primitive());
+            c = dd.div_exact(&f);
+            i += 1;
         }
-        seq
     }
 
-    /// Every real root, each enclosed in an interval of width at most `width` (or an exact
-    /// point), sorted, the intervals pairwise disjoint. Empty for the zero polynomial.
+    /// Every real root, ascending, each enclosed in an interval of width at most `width` (or
+    /// an exact point) holding no other root, the intervals pairwise disjoint, with its
+    /// multiplicity. Empty for a constant, and for the zero polynomial (every point is a
+    /// root: the caller tells that case apart).
     pub fn real_roots(&self, width: &Rat) -> Vec<Root> {
         let mut found: Vec<Isolated> = Vec::new();
-        for (f, m) in self.square_free() {
-            let f = f.primitive();
-            let seq = f.sturm();
-            for (lo, hi) in isolate(&f, &seq) {
-                found.push(Isolated {
-                    f: f.clone(),
-                    lo,
-                    hi,
-                    multiplicity: m,
-                });
-            }
+        for (f, m) in Z::of(self).square_free() {
+            found.extend(f.isolate().into_iter().map(|mut r| {
+                r.multiplicity = m;
+                r
+            }));
         }
         for r in &mut found {
-            while !r.is_exact() && &r.hi - &r.lo > *width {
+            while !r.is_exact() && (&r.hi - &r.lo > *width || !r.is_closed()) {
                 r.halve();
             }
         }
         found.sort_by(|a, b| a.lo.cmp(&b.lo));
-        // Roots of different factors are distinct: narrow any two that overlap.
+        // Roots of different factors are distinct: narrow any two that meet.
         loop {
             let mut moved = false;
             for i in 1..found.len() {
-                let overlap = matches!((found.get(i - 1), found.get(i)),
+                let meet = matches!((found.get(i - 1), found.get(i)),
                     (Some(a), Some(b)) if a.hi >= b.lo);
-                if overlap {
+                if meet {
                     for j in [i - 1, i] {
                         if let Some(r) = found.get_mut(j) {
                             r.halve();
@@ -275,110 +582,6 @@ impl Poly {
     }
 }
 
-/// A root of the square-free `f` alone in `[lo, hi]`: `lo == hi` exactly, or the open
-/// interval with `f` of opposite non-zero signs at the ends.
-struct Isolated {
-    f: Poly,
-    lo: Rat,
-    hi: Rat,
-    multiplicity: u32,
-}
-
-impl Isolated {
-    fn is_exact(&self) -> bool {
-        self.lo == self.hi
-    }
-
-    /// One bisection step.
-    fn halve(&mut self) {
-        if self.is_exact() {
-            return;
-        }
-        let m = self.lo.midpoint(&self.hi);
-        let s = self.f.sign_at(&m);
-        if s == 0 {
-            (self.lo, self.hi) = (m.clone(), m);
-        } else if s == self.f.sign_at(&self.lo) {
-            self.lo = m;
-        } else {
-            self.hi = m;
-        }
-    }
-}
-
-/// Sign changes of the sequence at `x`, zeros skipped.
-fn changes(seq: &[Poly], x: &Rat) -> u32 {
-    let mut last = 0;
-    let mut n = 0;
-    for p in seq {
-        let s = p.sign_at(x);
-        if s != 0 {
-            if last != 0 && s != last {
-                n += 1;
-            }
-            last = s;
-        }
-    }
-    n
-}
-
-/// A power of two above every root's magnitude (Cauchy: `1 + max |c_i / c_n|`).
-fn root_bound(f: &Poly) -> Rat {
-    let Some(lead) = f.c.last().and_then(Rat::recip) else {
-        return Rat::one();
-    };
-    let big =
-        f.c.iter()
-            .map(|c| (c * &lead).abs())
-            .max()
-            .unwrap_or_default();
-    let l = (&big + &Rat::one()).log2_approx().unwrap_or(0);
-    Rat::one().scale(l + 1)
-}
-
-/// Each root of the square-free `f` in its own interval: `(m, m)` for an exact root `m`,
-/// otherwise `(a, b)` with one root inside and `f(a) f(b) < 0`.
-fn isolate(f: &Poly, seq: &[Poly]) -> Vec<(Rat, Rat)> {
-    let b = root_bound(f);
-    let a = -&b;
-    let mut out = Vec::new();
-    let mut work = vec![(changes(seq, &a), a, changes(seq, &b), b)];
-    while let Some((va, a, vb, b)) = work.pop() {
-        let n = va.saturating_sub(vb);
-        if n == 0 {
-            continue;
-        }
-        if n == 1 {
-            out.push((a, b));
-            continue;
-        }
-        let m = a.midpoint(&b);
-        if f.sign_at(&m) != 0 {
-            let vm = changes(seq, &m);
-            work.push((va, a, vm, m.clone()));
-            work.push((vm, m, vb, b));
-            continue;
-        }
-        // An exact root: step off it both ways until the ends are not roots and only it lies
-        // between them.
-        let mut delta = (&b - &a).scale(-2);
-        loop {
-            let (l, r) = (&m - &delta, &m + &delta);
-            if f.sign_at(&l) != 0 && f.sign_at(&r) != 0 {
-                let (vl, vr) = (changes(seq, &l), changes(seq, &r));
-                if vl.saturating_sub(vr) == 1 {
-                    out.push((m.clone(), m.clone()));
-                    work.push((va, a.clone(), vl, l));
-                    work.push((vr, r, vb, b.clone()));
-                    break;
-                }
-            }
-            delta = delta.scale(-1);
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -397,16 +600,7 @@ mod tests {
         let g = p(&[1, -2, 1]); // (x-1)^2
         let h = p(&[2, 1]); // x + 2
         let k = p(&[-2, 0, 1]); // x^2 - 2
-        let prod = |a: &Poly, b: &Poly| {
-            let mut c = vec![Rat::zero(); a.c.len() + b.c.len() - 1];
-            for (i, x) in a.c.iter().enumerate() {
-                for (j, y) in b.c.iter().enumerate() {
-                    c[i + j] = &c[i + j] + &(x * y);
-                }
-            }
-            Poly::new(c)
-        };
-        let f2 = prod(&prod(&g, &h), &k);
+        let f2 = g.mul(&h).mul(&k);
         let roots = f2.real_roots(&width());
         assert_eq!(roots.len(), 4);
         assert_eq!(roots[0].at, Bound::exact(Rat::from(-2)));

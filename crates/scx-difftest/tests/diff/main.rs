@@ -21,6 +21,7 @@ mod harness;
 mod odes;
 mod pin_defects;
 mod pin_extent;
+mod pin_geom_truths;
 mod pin_project;
 mod pin_quadric;
 mod pin_truths;
@@ -45,6 +46,7 @@ mod t_pset;
 mod t_rest;
 mod t_rng;
 mod t_solve;
+mod t_surface;
 mod t_tol;
 mod t_vector;
 

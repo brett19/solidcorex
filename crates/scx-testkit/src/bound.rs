@@ -265,6 +265,11 @@ pub fn rat_to_dd(x: &Rat) -> Dd {
     Dd::of((hi, lo))
 }
 
+/// A double-double exactly, as a rational; `None` when it is not finite.
+pub fn dd_to_rat(x: Dd) -> Option<Rat> {
+    Some(Rat::from_f64(x.hi)? + Rat::from_f64(x.lo)?)
+}
+
 /// A double at least `x`.
 pub fn up(x: &Rat) -> f64 {
     let f = x.to_f64();

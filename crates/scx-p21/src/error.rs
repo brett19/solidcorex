@@ -87,7 +87,12 @@ impl P21Error {
                 Refusal::Entity { id, .. } | Refusal::Unwritable { id: Some(id), .. },
             )
             | Self::Unsupported(Unsupported::Entity { id, .. })
-            | Self::Exhausted(Limit::TooDeep { id, .. } | Limit::TooManyInstances { id, .. })
+            | Self::Exhausted(
+                Limit::TooDeep { id, .. }
+                | Limit::TooManyInstances { id, .. }
+                | Limit::TooManyItems { id, .. }
+                | Limit::DegreeTooHigh { id, .. },
+            )
             | Self::Within { id, .. } => Some(*id),
             _ => None,
         }
@@ -213,6 +218,27 @@ pub enum Limit {
         /// The most nodes made.
         limit: usize,
     },
+    /// Instance `#id` lists more items of one kind than the reader takes (a resource limit,
+    /// not bad data: the list is well formed).
+    TooManyItems {
+        /// The instance whose list is too long.
+        id: u64,
+        /// What the list holds.
+        what: Counted,
+        /// How many it holds (for a surface's control net, all rows together).
+        count: usize,
+        /// The most the reader takes.
+        limit: usize,
+    },
+    /// Instance `#id` is a B-spline of a higher degree than the reader takes.
+    DegreeTooHigh {
+        /// The instance.
+        id: u64,
+        /// The degree it gives.
+        degree: i64,
+        /// The highest degree the reader takes.
+        limit: usize,
+    },
 }
 
 impl Limit {
@@ -225,6 +251,8 @@ impl Limit {
             Self::NeedsMemory { .. } => "needs_memory",
             Self::TooDeep { .. } => "too_deep",
             Self::TooManyInstances { .. } => "too_many_instances",
+            Self::TooManyItems { .. } => "too_many_items",
+            Self::DegreeTooHigh { .. } => "degree_too_high",
         }
     }
 }
@@ -251,6 +279,15 @@ impl fmt::Display for Limit {
             Self::TooManyInstances { id, limit } => {
                 write!(f, "#{id}: expands to more than {limit} instances")
             }
+            Self::TooManyItems {
+                id,
+                what,
+                count,
+                limit,
+            } => write!(f, "#{id}: {count} {what}, more than the {limit} allowed"),
+            Self::DegreeTooHigh { id, degree, limit } => {
+                write!(f, "#{id}: degree {degree}, higher than the {limit} allowed")
+            }
         }
     }
 }
@@ -267,6 +304,10 @@ pub enum Counted {
     Records,
     /// Parameters, at every depth, header and data.
     Params,
+    /// The control points of a B-spline curve or surface.
+    ControlPoints,
+    /// The points of a polyline.
+    Points,
 }
 
 impl fmt::Display for Counted {
@@ -275,6 +316,8 @@ impl fmt::Display for Counted {
             Self::Instances => "entity instances",
             Self::Records => "records",
             Self::Params => "parameters",
+            Self::ControlPoints => "control points",
+            Self::Points => "points",
         })
     }
 }
@@ -665,8 +708,6 @@ pub enum InvalidValue {
     SurfaceCurveItems,
     /// A pcurve representation without exactly one item.
     PcurveItems,
-    /// A B-spline with more than 1 000 000 control points.
-    CurveControlPoints,
     /// A cylinder radius that is not positive.
     CylinderRadius,
     /// A cone with a negative radius or a semi angle outside (0, π/2) in size.
@@ -677,8 +718,6 @@ pub enum InvalidValue {
     TorusMinorRadius,
     /// A torus major radius that is not finite.
     TorusMajorRadius,
-    /// A B-spline surface with more than 1 000 000 control points.
-    SurfaceControlPoints,
     /// A B-spline control net that is empty or ragged.
     ControlNet,
 }
@@ -705,13 +744,11 @@ impl InvalidValue {
             Self::ParabolaFocalDistance => "parabola_focal_distance",
             Self::SurfaceCurveItems => "surface_curve_items",
             Self::PcurveItems => "pcurve_items",
-            Self::CurveControlPoints => "curve_control_points",
             Self::CylinderRadius => "cylinder_radius",
             Self::ConeShape => "cone_shape",
             Self::SphereRadius => "sphere_radius",
             Self::TorusMinorRadius => "torus_minor_radius",
             Self::TorusMajorRadius => "torus_major_radius",
-            Self::SurfaceControlPoints => "surface_control_points",
             Self::ControlNet => "control_net",
         }
     }
@@ -741,7 +778,6 @@ impl fmt::Display for InvalidValue {
             Self::ParabolaFocalDistance => "a parabola focal distance of zero",
             Self::SurfaceCurveItems => "a surface curve with more than two associated items",
             Self::PcurveItems => "a pcurve representation without exactly one item",
-            Self::CurveControlPoints => "a B-spline with more than 1 000 000 control points",
             Self::CylinderRadius => "a cylinder radius that is not positive",
             Self::ConeShape => {
                 "a cone with a negative radius or a semi angle outside (0, π/2) in size"
@@ -749,9 +785,6 @@ impl fmt::Display for InvalidValue {
             Self::SphereRadius => "a sphere radius that is not positive",
             Self::TorusMinorRadius => "a torus minor radius that is not positive",
             Self::TorusMajorRadius => "a torus major radius that is not finite",
-            Self::SurfaceControlPoints => {
-                "a B-spline surface with more than 1 000 000 control points"
-            }
             Self::ControlNet => "a B-spline control net that is empty or ragged",
         })
     }
@@ -868,6 +901,17 @@ mod tests {
             },
             Limit::TooDeep { id: 0, limit: 0 },
             Limit::TooManyInstances { id: 0, limit: 0 },
+            Limit::TooManyItems {
+                id: 0,
+                what: Counted::ControlPoints,
+                count: 0,
+                limit: 0,
+            },
+            Limit::DegreeTooHigh {
+                id: 0,
+                degree: 0,
+                limit: 0,
+            },
         ];
         let syntax = [
             Syntax::Expected('x'),
@@ -927,13 +971,11 @@ mod tests {
             EntityCause::Invalid(InvalidValue::ParabolaFocalDistance),
             EntityCause::Invalid(InvalidValue::SurfaceCurveItems),
             EntityCause::Invalid(InvalidValue::PcurveItems),
-            EntityCause::Invalid(InvalidValue::CurveControlPoints),
             EntityCause::Invalid(InvalidValue::CylinderRadius),
             EntityCause::Invalid(InvalidValue::ConeShape),
             EntityCause::Invalid(InvalidValue::SphereRadius),
             EntityCause::Invalid(InvalidValue::TorusMinorRadius),
             EntityCause::Invalid(InvalidValue::TorusMajorRadius),
-            EntityCause::Invalid(InvalidValue::SurfaceControlPoints),
             EntityCause::Invalid(InvalidValue::ControlNet),
         ];
         let errors: Vec<P21Error> = limits

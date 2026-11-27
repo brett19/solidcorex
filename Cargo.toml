@@ -7,6 +7,7 @@ members = [
     "crates/scx-algo",
     "crates/scx-p21",
     "crates/scx-nurbs-surface",
+    "crates/scx-surface",
     "crates/scx-testkit",
     "crates/scx-difftest",
     "crates/scx-bench",
@@ -20,6 +21,7 @@ default-members = [
     "crates/scx-algo",
     "crates/scx-p21",
     "crates/scx-nurbs-surface",
+    "crates/scx-surface",
     "crates/scx-testkit",
     "xtask",
 ]
@@ -74,3 +76,11 @@ assert_is_empty = "allow"
 # minutes; optimised, seconds. Only this crate, so every other build is unchanged.
 [profile.dev.package.scx-testkit]
 opt-level = 3
+
+# The pin, built optimised in dev and test builds too: the difftest's time is in its
+# intersectors. Rust never reassociates floats, so optimising changes no result.
+[profile.dev.package.solidcore]
+opt-level = 2
+
+[profile.dev.package.solidcore-record]
+opt-level = 2

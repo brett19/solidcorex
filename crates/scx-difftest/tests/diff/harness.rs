@@ -784,6 +784,24 @@ pub fn run_defect<A: Args, RX: Bits, RS: Bits>(
     );
 }
 
+/// [`run_defect`], at the tolerance `tol`.
+pub fn run_defect_tol<A: Args, RX: Bits, RS: Bits>(
+    name: &str,
+    tol: Tol,
+    defect: &PinDefect<A, RX>,
+    xf: impl Fn(A) -> RX,
+    sf: impl Fn(A) -> RS,
+) {
+    let check = |c: &A, r: &RX, _: &Out| (defect.check)(c, r);
+    run_with(
+        name,
+        tol,
+        Some((defect.reason, &defect.applies, &check)),
+        xf,
+        sf,
+    );
+}
+
 /// [`run`], with a known defect of the pin judged by an oracle.
 pub fn run_truth<A: Args, RX: Bits, RS: Bits>(
     name: &str,

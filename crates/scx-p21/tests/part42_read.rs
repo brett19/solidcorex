@@ -36,12 +36,14 @@ use std::f64::consts::{FRAC_1_SQRT_2, PI};
 use std::fmt::Write as _;
 use std::sync::Arc;
 
+use scx_num::error::ErrorKind;
+use scx_p21::error::Counted;
 use scx_p21::error::{EntityCause, InvalidValue, Limit, Unsupported};
 use scx_p21::part42::geom::{
     Associated, Axis1, Curve, CurveForm, KnotSpec, Logical, Placement, PreferredRep, Surface,
     SurfaceCurveKind, SurfaceForm, Trim, TrimPreference, Vector,
 };
-use scx_p21::part42::read::{MAX_GEOM_DEPTH, Reader};
+use scx_p21::part42::read::{MAX_CTRL, MAX_DEGREE, MAX_GEOM_DEPTH, Reader};
 use scx_p21::units::Units;
 use scx_p21::{Exchange, P21Error, parse};
 
@@ -756,13 +758,11 @@ fn refusals_say_why() {
         (
             "#10=B_SPLINE_CURVE_WITH_KNOTS('',99,(#1,#1),.UNSPECIFIED.,.F.,.F.,(1,1),(0.,1.),.UNSPECIFIED.);",
             10,
-            Err(P21Error::entity(
-                10,
-                EntityCause::BadParam {
-                    index: 1,
-                    expected: "a degree from 1 to 32",
-                },
-            )),
+            Err(P21Error::Exhausted(Limit::DegreeTooHigh {
+                id: 10,
+                degree: 99,
+                limit: MAX_DEGREE,
+            })),
         ),
         (
             "#10=B_SPLINE_CURVE_WITH_KNOTS('',1,(#1,#1),.UNSPECIFIED.,.F.,.F.,(4000000000000,1),(0.,1.),.UNSPECIFIED.);",
@@ -1726,4 +1726,105 @@ fn a_nested_refusal_names_its_path() {
     );
     assert_eq!(e.id(), Some(10));
     assert_eq!(e.innermost().id(), Some(4));
+}
+
+/// `n` references to `#1` as a Part 21 list: `(#1,#1,...)`.
+fn refs(n: usize) -> String {
+    format!("({})", vec!["#1"; n].join(",   "))
+}
+
+fn too_many(id: u64, what: Counted, count: usize) -> P21Error {
+    P21Error::Exhausted(Limit::TooManyItems {
+        id,
+        what,
+        count,
+        limit: MAX_CTRL,
+    })
+}
+
+#[test]
+fn polyline_over_the_point_cap_is_exhausted() {
+    // The cap itself is read; one past it is a limit, and fewer than 2 is bad data.
+    let at = curve_err(&format!("#10=POLYLINE('',{});", refs(MAX_CTRL)), 10, MM);
+    assert!(matches!(&*at.unwrap(), Curve::Polyline(p) if p.len() == MAX_CTRL));
+    let over = curve_err(&format!("#10=POLYLINE('',{});", refs(MAX_CTRL + 1)), 10, MM).unwrap_err();
+    assert_eq!(over, too_many(10, Counted::Points, MAX_CTRL + 1));
+    assert_eq!(over.kind(), ErrorKind::Exhausted);
+    assert_eq!(over.name(), "too_many_items");
+    assert_eq!(
+        over.to_string(),
+        format!(
+            "#10: {} points, more than the {MAX_CTRL} allowed",
+            MAX_CTRL + 1
+        )
+    );
+    let few = curve_err("#10=POLYLINE('',(#1));", 10, MM).unwrap_err();
+    assert_eq!(few.kind(), ErrorKind::Refused);
+}
+
+#[test]
+fn bspline_curve_over_the_control_point_cap_is_exhausted() {
+    let over = curve_err(
+        &format!(
+            "#10=B_SPLINE_CURVE_WITH_KNOTS('',1,{},.UNSPECIFIED.,.F.,.F.,(2,2),(0.,1.),.UNSPECIFIED.);",
+            refs(MAX_CTRL + 1)
+        ),
+        10,
+        MM,
+    )
+    .unwrap_err();
+    assert_eq!(over, too_many(10, Counted::ControlPoints, MAX_CTRL + 1));
+    assert_eq!(over.kind(), ErrorKind::Exhausted);
+}
+
+#[test]
+fn bspline_surface_over_the_control_point_cap_is_exhausted() {
+    // Two rows of half the cap each, plus one: the count is the whole net.
+    let half = MAX_CTRL / 2 + 1;
+    let over = surface_err(
+        &format!(
+            "#14=B_SPLINE_SURFACE_WITH_KNOTS('',1,1,({},{}),.PLANE_SURF.,.F.,.F.,.F.,(2,2),(2,2),(0.,1.),(0.,1.),.UNSPECIFIED.);",
+            refs(half),
+            refs(half)
+        ),
+        14,
+        MM,
+    )
+    .unwrap_err();
+    assert_eq!(over, too_many(14, Counted::ControlPoints, 2 * half));
+    assert_eq!(over.kind(), ErrorKind::Exhausted);
+}
+
+#[test]
+fn degree_over_the_cap_is_exhausted_and_a_non_degree_is_refused() {
+    let d = MAX_DEGREE + 1;
+    let over = curve_err(
+        &format!(
+            "#10=B_SPLINE_CURVE_WITH_KNOTS('',{d},(#1,#1),.UNSPECIFIED.,.F.,.F.,(2,2),(0.,1.),.UNSPECIFIED.);"
+        ),
+        10,
+        MM,
+    )
+    .unwrap_err();
+    assert_eq!(
+        over,
+        P21Error::Exhausted(Limit::DegreeTooHigh {
+            id: 10,
+            degree: d as i64,
+            limit: MAX_DEGREE
+        })
+    );
+    assert_eq!(over.kind(), ErrorKind::Exhausted);
+    assert_eq!(over.name(), "degree_too_high");
+    for bad in ["0", "-1"] {
+        let e = curve_err(
+            &format!(
+                "#10=B_SPLINE_CURVE_WITH_KNOTS('',{bad},(#1,#1),.UNSPECIFIED.,.F.,.F.,(2,2),(0.,1.),.UNSPECIFIED.);"
+            ),
+            10,
+            MM,
+        )
+        .unwrap_err();
+        assert_eq!(e.kind(), ErrorKind::Refused, "{bad}");
+    }
 }
