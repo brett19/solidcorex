@@ -15,6 +15,8 @@
 //! - Edits by value: `reversed` and `transformed` on each kind and on [`Surface`], with the
 //!   [`UvMap`] from the original's parameters to the edit's, and [`Surface::restrict`]
 //!   (63 SU7).
+//! - [`Closed`]: a closed-form answer or [`Closed::General`] (research 63 D6), shared with
+//!   `scx-ssi`.
 //! - [`AnyCurve`]: a free [`Curve`](scx_curve::Curve), or a [`CurveOnSurface`] (a uv curve on
 //!   a shared [`Surface`]) with its point and its jet by the chain rule (63 §4.10).
 //!
@@ -43,6 +45,7 @@
 
 mod any_curve;
 mod arcs;
+mod closed;
 mod common;
 mod cone;
 mod cylinder;
@@ -55,6 +58,7 @@ mod to_nurbs;
 mod torus;
 
 pub use any_curve::{AnyCurve, CurveOnSurface};
+pub use closed::Closed;
 pub use cone::Cone;
 pub use cylinder::Cylinder;
 pub use edit::UvMap;

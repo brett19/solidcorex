@@ -550,6 +550,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "scx-ssi"
+version = "0.1.0"
+dependencies = [
+ "scx-curve",
+ "scx-num",
+ "scx-nurbs",
+ "scx-surface",
+ "scx-testkit",
+]
+
+[[package]]
 name = "scx-surface"
 version = "0.1.0"
 dependencies = [
