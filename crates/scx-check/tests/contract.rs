@@ -24,7 +24,7 @@
 
 use scx_brep::op::{Cx, NoTrace, Scratch, Settings};
 use scx_brep::{Brep, Document, Draft, FaceId, FaceSide, FinishCause, ShellId, StructureCause};
-use scx_check::{Breach, ContractError, Proved, contract};
+use scx_check::{Breach, Contacts, ContractError, Proved, contract};
 use scx_make::{Span, block, cone, cylinder, extrude, sphere, torus};
 use scx_mass::{MassError, MassRefusal, RelAccuracy, Sign, outward, volume, volume_sign};
 use scx_num::budget::{Budget, Stop};
@@ -46,7 +46,7 @@ fn check_with(b: &Brep, settings: &Settings, stop: &Stop) -> Result<Proved, Cont
     let doc = Document::with_resolution(b.resolution());
     let mut scratch = Scratch::default();
     let cx = Cx::new(&doc, settings, &mut scratch, stop, &NoTrace);
-    contract(b, &cx)
+    contract(b, &cx, Contacts::Refused)
 }
 
 fn check(b: &Brep) -> Result<Proved, ContractError> {
@@ -604,4 +604,72 @@ fn proved_holds_the_body() {
     let back = p.into_body();
     assert_eq!(back.bounding_box(), b.bounding_box());
     assert!(b.faces().zip(back.faces()).all(|(x, y)| x.id() == y.id()));
+}
+
+fn check_radial(b: &Brep) -> Result<Proved, ContractError> {
+    let doc = Document::with_resolution(b.resolution());
+    let settings = Settings::new();
+    let stop = Stop::new();
+    let mut scratch = Scratch::default();
+    let cx = Cx::new(&doc, &settings, &mut scratch, &stop, &NoTrace);
+    contract(b, &cx, Contacts::Radial)
+}
+
+/// CK3 (72 §14.37): a body of blocks touching along edges (four fins, solid and void by
+/// turns) is refused by default at its lowest four-fin edge, and proved when radial edges
+/// are allowed.
+#[test]
+fn radial_edges_pass_only_when_allowed() {
+    for (k, seed, size) in [Kind::Touching, Kind::Checker]
+        .into_iter()
+        .flat_map(|k| (0..4).flat_map(move |seed| (1..=3).map(move |size| (k, seed, size))))
+    {
+        {
+            let b = kind(k, seed, size);
+            let pinch = b.edges().find(|e| e.fins().len() == 4).unwrap();
+            assert_eq!(
+                broken(&b),
+                Breach::NonManifoldEdge {
+                    edge: pinch.id(),
+                    fins: 4
+                },
+                "{k:?} seed {seed} size {size}"
+            );
+            let p =
+                check_radial(&b).unwrap_or_else(|e| panic!("{k:?} seed {seed} size {size}: {e}"));
+            assert_eq!(p.body().faces().len(), b.faces().len());
+        }
+    }
+}
+
+/// The allowance changes nothing else: bodies without a four-fin edge give the same answer
+/// either way, and every other breach is still found.
+#[test]
+fn the_allowance_leaves_every_other_answer() {
+    for k in [Kind::Block, Kind::Cylinder, Kind::Torus, Kind::Cavity] {
+        let b = kind(k, 0, 2);
+        assert!(check_radial(&b).is_ok(), "{k:?}");
+    }
+    // A sheet's border has one fin, a stack has faces between solids.
+    for k in [Kind::QuadSheet, Kind::TriSheet, Kind::Stack] {
+        let b = kind(k, 0, 2);
+        assert_eq!(
+            check_radial(&b).unwrap_err(),
+            check(&b).unwrap_err(),
+            "{k:?}"
+        );
+    }
+}
+
+/// An edge whose fins are out of radial order is not a body: `finish` refuses it, so the
+/// contract never sees one; the order test itself is the unit tests in `lib.rs`.
+#[test]
+fn fins_out_of_radial_order_do_not_finish() {
+    let b = kind(Kind::Touching, 0, 1);
+    let e = b.edges().find(|e| e.fins().len() == 4).unwrap().id();
+    for swap in [(0, 2), (0, 1)] {
+        let mut d = b.edit();
+        d.adjacency_mut(e).unwrap().fins.swap(swap.0, swap.1);
+        assert!(d.finish(&Document::default()).is_err(), "swap {swap:?}");
+    }
 }

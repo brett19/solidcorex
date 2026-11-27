@@ -3469,6 +3469,96 @@ A box is mapped into the kind's frame as the box of its 8 corners' coordinates, 
 
 **Proposed 04 row.** "BO2b (72 §14.30): before refusing a pair with no closed form, stage 4 proves whether its faces can touch. It encloses each surface's 1-Lipschitz level function (plane `h`, cylinder `rho - r`, sphere `|p| - r`, cone line distance, ring torus `hypot(rho - R, h) - r`) over the overlap of the faces' boxes grown by the coincidence, bisected depth first to depth 8, and drops the pair when every piece is clear of one surface by more than the coincidence. Otherwise it refuses `SsiPair` as before. The seam-vertex torus-box case now names `sides[3]` (`x = 6.5`, the face the torus touches), and the other BO5 cases are unchanged. The cost is 1 box on the torus-box drops and 10-28 boxes (3-7 µs) on pairs that touch. Against: the bound is first order, so oblique near-misses below about half the box size are still refused. Change if real models refuse oblique near-misses, or when step 5 answers these pairs."
 
+### 14.31 MA6 as built (11-27)
+
+`scx-mass`'s stated error now bounds the floating-point rounding as well as estimating the truncation, so a value whose terms cancel states what the cancellation cost. Before, the stated error was the Kronrod and Gauss values' difference alone. That difference is zero wherever the rules are exact (planes, polynomial integrands) whatever the rounding, so CK1's quarter shell (1e4, 1e-3) stated 0 against a miss of 9.3e-9 (§14.22 Q1). No public API changes. `Estimate`'s and the crate's docs say what the error now holds: truncation estimated, rounding bounded to first order.
+
+**The method.** Three parts, in `crates/scx-mass/src/rounding.rs`, `kronrod.rs`, `face.rs`, `integrand.rs`, `body.rs`, `guard.rs`.
+
+1. *Compensated sums.* Every sum whose terms can cancel (a rule's nodes, a face's pieces, the body's faces, a shell's fluxes) is Ogita, Rump and Oishi's `Sum2` (cascaded `TwoSum`), with its proved bound `u |s| + gamma(n-1)^2 sum |x|`. Cancellation in a sum then costs about one rounding of the result, not of the terms.
+2. *Each term bounded by its operands.* A sample carries, beside its value, a first-order bound of its rounding (`gamma(k)` times the absolute sizes it was made from). A piece's rounding is `2 half most + gamma(3) |k| + half gamma(2m+1) spread + place (spread + w0 jump) / nearest`: the samples' rounding (`most`, the largest over the nodes), the rule's value, its weighted sum (`spread`, the sum of `w |v|`) and the nodes' placement (`place = 2u (|mid| + half)`, each node's `x` off by that, moving its sample by its slope, taken to first order from the samples' differences: `jump`, the largest sample minus the centre). The shifts to the body's reference add their binomial terms' rounding; `mass`'s division by 3 adds one.
+3. *The integrand's inputs.* The points, normals and pcurves the integrands read carry a model of their evaluation's rounding, per world axis (`face::Terms`):
+   - an analytic surface is its frame's origin plus a local point along the axes. The origin carries `gamma(2)` (the jets add it last, the plane's point after its `u` term), the local terms `gamma(8)` of their size (`gamma(3)` on a plane, whose derivatives are its stored axes and carry nothing);
+   - a NURBS surface carries `gamma(3 (p + q) + 4)` of the larger of its largest control point and the point;
+   - a kind the crate does not know carries `gamma(8)` of the point's largest axis, on every axis;
+   - a pcurve's point and derivative carry `gamma(8)` of their size. A `v` off by `dq` moves `G` by the integrand there times `dq`; a `u` off moves it by `G`'s change along `u`, at most the integrand's over the span from the base;
+   - each component's own evaluation from the point and normal carries `gamma(10)`.
+
+   The inner rule (K15 over `v`) reads the samples' rounding only at the centre and the outer node pair (the samples' rounding is smooth along the line, so the largest is near an end or the middle). The outer rule (K7 along the trims) reads it at every node. The pass that computes it (`Set::rounding`) takes the powers once.
+
+**Decisions, with the cases for and against.**
+
+| Decision | For | Against | Chosen |
+|---|---|---|---|
+| A priori `gamma(n) sum |x|` over each sum, plain sums kept | cheapest (one extra sum of absolute values) | states the cancelled terms' full rounding, about 1e8 eps on CK1 (1e-8 relative, past the accuracy asked); the values stay as inaccurate as before | no |
+| A running error bound (Higham's `mu`) on plain sums | tighter than a priori, cheap | the values still lose the cancellation; the bound is near the a priori one when every term is large | no |
+| `Sum2` plus per-term first-order bounds | the values gain (CK1 at 1e-12: mass volume miss 4.3e-8 to 9.3e-9); the sum's own share is a proved bound; the terms' share is first order, standard for forward error | about 1.3x to 1.4x instructions; the term bounds rest on evaluation models (below) | **yes** |
+| Interval arithmetic or double-double throughout | proved | 10x or more; every surface and curve evaluation would need an interval or double-double form; the enclosure (`enclose_volume`) already gives proved bounds when they are needed | no |
+| Surface rounding by a per-kind frame model | tracks where the size is: a body far from the world origin rounds by its origin, a curved local point by its radius | each kind's constant is a model of `scx-surface`'s evaluation, not a proof; a change there could invalidate it silently | **yes**, constants named and documented |
+| Surface rounding by the point's max-norm on every axis | kind-agnostic, simple | `scx-make`'s far boxes stated 8 `c eps / s` against a slack of 4 (one axis's size charged to all three); the round bar six times looser | fallback for unknown kinds only |
+| Node placement by the samples' jump from the centre | first order in the slope, and independent of the piece count | a model: a sample's slope taken from differences, exact for linear and good for smooth samples | **yes** |
+| Node placement by the peak sample per node (built first) | simpler | grows with the number of pieces, and dominated the round bar (6.4e-12 against 7.0e-13 now) | replaced |
+| K15 reads every node's rounding | no sparse model | about 5M more instructions on the block (of 69M) | sparse reads |
+
+**Constants.** `POINT_ROUNDINGS = 8`, `PLANE_ROUNDINGS = 3`, `ORIGIN_ROUNDINGS = 2`, `DERIVATIVE_ROUNDINGS = 8`, `PCURVE_ROUNDINGS = 8`, `EVAL_ROUNDINGS = 10`, a NURBS surface `3 (p + q) + 4`. Each is in `face.rs` with the evaluation steps it counts.
+
+**Limits (open).**
+
+- The pcurve terms are max-norm and dominate CK1: there the stated error (1.0e-6) is about 100 times the miss (9.3e-9), about 45 eps of the 1e8 fluxes.
+- The NURBS and unknown-kind models are coarse.
+- The normal's own change with `u` is left out of the `u` term.
+- The strips and corner fans of the closure, and the enclosure, are unchanged (the enclosure is proved already).
+- The sparse K15 read and the slopes from differences are models: first order, not proofs.
+- A constant offset of every point (a body far from the world origin) is charged in full, although over a closed body it cancels exactly. The tilted extrusion at 2500 from the origin states 4.9e-10 against a real miss of 4e-12. Seeing the correlation would need the error kept per axis with sign, and is left.
+- *Pre-existing, unchanged:* `mass` on the shells (1e5, 1e-3) and (1e3, 1e-6) at 1e-9 and 1e-12 fails `Defect(StepControl)` on face 4, before and after. `mass`'s volume error on CK1 at 1e-6 (0.18) is also as before.
+
+**Stated volume error, before and after** (`volume` at 1e-9 unless named; the miss is against the closed form, unchanged unless shown):
+
+| Body | Before | After | Miss |
+|---|---|---|---|
+| CK1 shell (1e4, 1e-3), at 1e-6, 1e-9, 1e-12 | 0 (false) | 1.0e-6 | 9.3e-9 |
+| shell (1e4, 1e-5) | 1.5e-8 | 1.0e-6 | 4.3e-9 |
+| cube 2e-4 at 1e3 | 0 (false) | 1.8e-20 | 2.0e-21 |
+| cube 1e-3 at 1e4 | 0 (false) | 4.4e-18 | 2.0e-19 |
+| slab 1 x 1 x 1e-6 at 1e4 | 1.2e-15 (false) | 4.4e-12 | 3.4e-13 |
+| cube 1 at 1e6 | 0 | 4.4e-10 | 0 |
+| unit block | 0 | 5.1e-15 | 0 |
+| cylinder, sphere, torus (generated, n1) | 1.1e-10, 6.4e-10, 2.1e-10 | the same | - |
+| holed block (n1) | 0 | 1.3e-13 | - |
+
+Over the 51-row probe (blocks, prisms, cylinders, cones, spheres, tori, holed and cavity bodies, each also at 1e4; thin shells; far cubes; slabs), 9 rows stated less than their miss before, and none do after. The curved bodies' errors are unchanged: their truncation estimate dwarfs the rounding.
+
+**Cost.** Instruction counts by callgrind (wall time on the shared machine was too noisy to read), main against this branch, each `volume` plus `mass` three times at 1e-9:
+
+| Body | Before | After | Ratio |
+|---|---|---|---|
+| generated block, n3 | 52.3M | 69.5M | 1.33x |
+| generated cylinder, n3 | 295M | 416M | 1.41x |
+| generated sphere, n3 | 710M | 913M | 1.29x |
+
+What remains is the per-node rounding pass, the sums' `TwoSum`s, and the pieces' `spread`, `jump` and `most`.
+
+**Tests.**
+
+New in `crates/scx-mass/tests/rounding.rs`, each with the stated error at least the miss against the closed form for `volume`, `mass`'s volume and (where given) `area`:
+
+- `ck1s_shell_states_its_rounding`: at 1e-6, 1e-9 and 1e-12, with the error at most 1e-5;
+- `thinner_shells_state_their_rounding`;
+- `far_small_cubes_state_their_rounding`: with the error within 1e3 eps of the fluxes;
+- `a_far_thin_slab_states_its_rounding`;
+- `an_ordinary_cube_is_not_loosened`: at most 100 eps.
+
+Changed on purpose:
+
+- `kronrod`'s `a_constant_is_exact`: the error was asserted 0. It is now positive and at most 8 eps of the value, because a constant's sum still rounds.
+- `rounding`'s own sum test is new.
+- `enclosure.rs`'s `a_thin_shells_estimate_holds_its_closed_form` is strict now: the miss within the stated error, the "or the accuracy asked" escape gone.
+- `scx-make`'s `extrude.rs`:
+  - `a_round_bar_has_one_wall_and_a_seam` at 1e-14 now allows a stated error of twice the accuracy, not once (7.0e-13 on 62.8, about 50 eps; the value check at 1e-14 is unchanged);
+  - `volume_and_area_match_the_closed_forms` allows the volume's error `tol V + 4 eps |origin| A`, the faces' points' rounding where the tilted frame puts them (2500 from the world origin). The value checks are unchanged.
+
+No test was removed.
+
 ### 14.32 BX1 as built (11-27)
 
 **What it is.** Test wiring for BO6, BO7 and DT3 ahead of BO4, in one new file, `crates/scx-boolean/tests/recipes.rs` (a dev-dependency on `scx-testkit` is the only other change). No source under `scx-boolean/src` and no difftest file changed: T12's `recipe::all` already carries every operand, truth value and hand-stated topology the three tasks need, and `t_slice` already runs each Boolean recipe as `NotYet(Boolean)`, so its counts stay 157 pass, 0 fail, 326 not yet. DT3 flips `scx_gap`; nothing else in `t_slice` needs a new entry.
@@ -3778,3 +3868,68 @@ BO7 builds what D5 allows: a result whose two solids share only a vertex, and a 
 4. Tangent fins at a pinch edge: should they be ordered by bend, as scx-brep's radial check does, instead of refused?
 
 **Proposed 04 row.** "BO7 (72 §14.36): the Boolean builds D5's contacts. An edge of the result with four fins is kept with its fins in radial order (d = sense N x T about the tangent, sampled at the edge's middle). The shells across it are joined by a union-find so that scx-brep's radial rule holds. Tangent fins (within 1e-9 rad) and missing pcurves are `NonManifold`. A vertex contact keeps two outer shells. Nesting signs each shell (mirrored voids by negation), filters holders by box, and only when the boxes leave a choice uses `classify_point` against a body of the candidate shell; the innermost holder is the smallest box, so two lumps with a cavity now build. No new API or variant. The added cost on non-contact cases is about 2 us per call. Against: edge-contact results fail `scx_check::contract`'s two-fin rule by design. Change if the contract admits D5 edges, or if tangent pinches reach a case."
+
+### 14.37 CK3 as built (11-27)
+
+**What was asked.** BO7's edge-contact results have an edge of four fins, which CK1 refuses by design. The coordinator ruled that `contract` keeps refusing such edges by default, and that a caller may pass an allowance for D5 radial edges, checked for radial order.
+
+**What was built** (`scx-check`, with a new dependency on `scx-nurbs` for `Approach`).
+
+- `contract(&Brep, &Cx, Contacts) -> Result<Proved, ContractError>`, with `Contacts::{Refused (the default), Radial}` (`#[non_exhaustive]`, `Default`). The option is a typed value in the call, not a setter or a flags struct. Four callers took the extra argument (`scx-boolean` tests, the difftest's `t_slice`, `scx-check`'s tests), all `Contacts::Refused` but BO7's contact results.
+- With `Radial`, an edge of an even number of fins over two passes test 3 if it passes the radial test, else `Breach::EdgeNotRadial { edge }` (new, `edge_not_radial`). An odd count, or one or no fin, stays `NonManifoldEdge { edge, fins }`, so a sheet's border is refused as before. Collapsed edges are skipped as before.
+- The radial test, at the middle of the edge's interval with `T` the tangent: each fin's face leaves in `d = sense (N x T)`, `N` the face's normal at the use's pcurve. In the edge's order, the angles of `d` from the first fin's, counter-clockwise about `T`, must increase strictly; each gap and the wrap-round gap must exceed 1e-9 rad (BO7's tie tolerance, so a tangent fin is refused, not ordered by bend); and the region after each fin (the front of a forward use, the back of a reversed one) must be solid and void by turns, including across the wrap. Only edges of more than two fins are tested.
+- Every other test is unchanged and runs first (a face between two solids is `FaceNotBounding`, and so on). The outward certificate is as before, so BO7's shells' orientation is proved by the contract itself, no longer by a separate `outward` call.
+
+**Decisions, with cases for and against.**
+
+- *A parameter on `contract`, not a second function.* For: one signature per operation (the cache work's goal); the default is the strict one and the call says what it allows. Against: every caller changed (4 sites). A `contract_radial` would have left callers alone but is the fallback pair the goal rejects.
+- *A new breach, `EdgeNotRadial`, for the failures of an even count, and `NonManifoldEdge` for a wrong count.* For: the first says which rule failed, and `NonManifoldEdge` keeps its meaning (the count). Against: two names for one edge; a caller matching on edges must match both.
+- *The test re-reads the geometry, though `finish` already refuses a wrong order.* For: `finish` orders tangent faces by bend and, where that ties, accepts the caller's order; the contract refuses them, as BO7 does, so an accepted edge is one whose order one sample decides. It also checks the sectors, the ground the contract's alternation rests on. Against: an out-of-order edge is not a `Brep` at all (`finish` refuses it: `fins_out_of_radial_order_do_not_finish`), so the test's refusals on order are reached only through the unit tests on the pure function (`is_radial`), and the tangent case only there too. No end-to-end body for tangent fins exists in the testkit.
+- *One sample, at the middle.* For: BO7 orders at the middle, so contract and builder agree on every result; `finish` re-checks at a quarter and three quarters when a pair is undecided. Against: an edge whose faces cross each other away from the middle is not seen.
+- *`Contacts::Radial` leaves vertex contacts alone.* They already pass (two shells at one vertex; vertex manifoldness is untested, CK1's open item).
+
+**Tests.** Unit (`is_radial`, 4): four and six fins in order from any start pass; swapped and reversed orders, tangent fins (a gap of 1e-11, at the wrap, equal) and sectors not by turns (a solid beside a solid, an odd count) are refused. Integration (3 new in `tests/contract.rs`): `Touching` and `Checker` bodies (seeds 0-3, sizes 1-3, 24 bodies, 1 to 9 four-fin edges each) fail by default at their lowest four-fin edge with 4 fins and pass with `Radial`; the other kinds give the same answer either way (blocks, cylinders, tori and cavities pass; sheets and a stack fail identically); swapped fins do not finish. BO7's `result` (`scx-boolean/src/tests/contacts.rs`) now requires `Contacts::Refused` to fail at exactly the pinch edge and `Contacts::Radial` to prove the result, instead of calling `outward` alone. The existing 13 CK1 tests and CK2's pass unchanged.
+
+**Cost** (release, one thread, 20 calls, best of 5, under load). A body with no edge over two fins takes the same path as before, one more comparison per edge: block 174.0 us (`Refused`) against 173.5 us (`Radial`), torus 11.10 ms against 10.93 ms, cavity (size 2) 1.339 ms against 1.344 ms. All within noise, so the added cost is zero. On bodies with pinches the test is not separable from the certificate: `Touching` 3 with 9 four-fin edges 1.35 ms, `Touching` 6 with 36 such edges 4.2 ms, both mostly the certificate.
+
+**Found, not mine.** `blocks_touching_at_a_vertex_or_along_an_edge_are_built` in `scx-boolean/tests/recipes.rs` fails on this branch: `genus` asserts `Euler characteristic 3 is odd` on an edge-contact result. The test does not call the contract and this branch changes nothing it calls, so it is BO6's genus check meeting BO7's four-fin edge, probably the formula's count of cells at a pinch. The cause was not investigated, and it was not run on main separately.
+
+**Proposed 04 row.** "CK3 (72 §14.37): `scx_check::contract(&Brep, &Cx, Contacts)` takes `Contacts::Refused` (default; an edge of other than two fins is `NonManifoldEdge`) or `Contacts::Radial`, which admits an edge of an even number of fins over two when, at the middle of the edge, the faces' directions `d = sense N x T` are strictly counter-clockwise in the edge's order (each gap above 1e-9 rad, so tangent fins are refused) and the sectors are solid and void by turns; any other such edge is `Breach::EdgeNotRadial`, an odd count `NonManifoldEdge`. BO7's edge-contact results now prove with `Radial`. No cost on bodies without such edges (measured). Against: the order is read at one sample, and a four-fin edge is not a `Brep` the test can refuse for order (`finish` does). Change if: tangent pinches reach a case (order by bend), or vertex manifoldness is wanted at the edge."
+### 14.38 DT3 as built (11-27)
+
+**What was asked.** The Boolean cases in `t_slice` (BO recipes, the expected `Unsupported` ones included), compared by outcome against the pin under truth-over-pin, and the work baseline committed.
+
+**What was built.** One test file changed (`crates/scx-difftest/tests/diff/t_slice.rs`), one data file added (`tests/diff/slice_work.txt`), and `scx-difftest` gains a dev dependency on `scx-boolean`. No kernel code and no counter is added.
+
+- *scx's run.* `scx_run` builds the base and each tool by the constructors and folds `scx_boolean::boolean` over the steps in one document, summing `Report::work`. `scx_gap` and `NotYet` are gone: every check runs. A part's frame that is not orthonormal, a constructor refusal and a Boolean error are one `ScxError`.
+- *Outcome by name.* Built or `Open` recipes pass on a body. `Unsupported(NonManifold)` passes on `BooleanUnsupported::NonManifold`. `Unsupported(SsiPair)` passes on `SsiPair` of the same two surface kinds, as a set. An `Open` recipe also passes on any `Unsupported` or `Refused`. A constructor refusal matches as before. Anything else fails with truth's outcome and scx's error.
+- *Checks on a built Boolean.* The same as the constructors: volume, area, topology, T10 classification, contract, mesh, determinism by the record encoding, no dangling vertices; and lineage (below) and work.
+- *Lineage* (the four `issue_1462` recipes, which `NotYet(Lineage)` held). Each result face's origins come from `Changes` (its `created` origins, or its own id where `Changes` is silent, plus what it merged), mapped through `BlockFaces` to truth's `BoxFace`, with the face's area from `scx_mass::face_area`; the list is compared with truth's by the pin's own `lineage_differs`. New edges are the result edges with no operand edge in their lineage; halved edges are those whose operand edge is longer than the result's. All four pass, including `new_edges` and `halved_edges`.
+- *Work* (the baseline). See the decision below.
+- *Pin against scx.* The summary prints which recipes one side builds and the other refuses. 16 of 68 differ. 15 are recipes truth refuses or calls `Unsupported` and the pin builds (its recorded defects), constructors and Booleans; the 16th is `cylinder-minus-itself`, which truth builds empty and scx fails (gap 1). Each side is judged against truth, not against the other.
+
+**Changes to the harness's reading of truth, with cases for and against.**
+- *Topology counts per sheet.* T12 counts a vertex or an edge two solid shells share (a pinch, BO7) once for each ("counted per sheet"), and `scx_topology` counted it once. It now counts each vertex and edge per solid shell. For: the Euler characteristic of two cubes sharing a corner is 4 only counted that way, and truth's 16 vertices and 24 edges are stated so; the old count gave an odd characteristic. Against: it is a convention, and a record that stores one shared vertex is not wrong. Change if T12's cells are restated per body.
+- *`Valid` of an empty result.* `scx_check::contract` refuses a body with no face (`Empty`), and `block-minus-itself` has truth's empty body. For an empty truth the check is that scx's body has no face and no solid region. For: the contract is for solids, and no other answer is right. Against: the contract itself is not run on it.
+- *`Valid` of a pinched result with `Contacts::Radial`.* `edge-contact-union` has an edge of four fins, which the default contract refuses by design; CK3 (§14.37) adds the allowance, and the pinched recipes (T12's `pinched()`, which lack `Manifold`) are judged by `contract(.., Contacts::Radial)`, whole. For: the contract proves the body, outward included. Against: the default's refusal is no longer exercised on a recipe; BO7's tests keep it.
+- *No topology of an `Open` recipe.* `crease-0.3c` is `Open` ("no claim"), yet asked for a topology the harness cannot judge. The check is dropped for `Open` recipes; their other invariants stay.
+
+**Decision: the work baseline is `Report::work`, committed as test data.** The units are public values (`Report::work`, the budget used, summed over a recipe's steps), so no counter is added. `slice_work.txt` has one line per built Boolean recipe (26 lines), and a rise of more than 10% fails (01 §9.4); a fall passes and is printed, so the file is re-blessed by `SCX_BLESS_WORK=1` when a change meant to lower it lands. A built recipe with no line fails, so a new recipe comes with its number.
+- For: it uses only what the operation already reports, it is deterministic (the budget is, 04 11-27 on work counts), and the same file serves the review gate of 04's 11-23 row.
+- Against: `Report::work` is one total. It does not say which stage did the work, and it is not the pin's pairs-tried count (572 for `gear-60`, 288 for `plate-12`; 72 §11's row 4 asks for that against the pin). The comparison with the pin's pairs needs the stage's own number, which is not a public value today.
+- *Alternative proposed* for the per-stage numbers: `Report` gains no field. The stage-level counts stay in `scx-boolean`'s `src/tests` through crate-private values (as BO6 measured them with a throwaway switch), and a stage that wants a gate in DT3 reports its units through `Report::work` alone. No counter in kernel code.
+- *Not stored: cells filled.* 72 §8.1's row also names "cells filled". No cache cell exists in `scx-brep` yet to count, so there is nothing to record.
+
+**Recorded gaps in scx (`scx_gaps`, like the pin's defects).** Each is a check on a recipe where scx contradicts truth. An entry must still fail with its recorded text, or the run fails (the fix removes it). They are for BO to fix; none is judged against the pin.
+1. `cylinder-minus-itself`: `Defect(Seeds)` at the cylinder's first face (BO6's seed cross-check). Truth is the empty body, and `block-minus-itself` builds it. All 9 checks of the recipe fail on it.
+2. `coplanar-offset-0.1c` and `-0.5c`: the two fronts merge to one face (6 faces, volume and points right), but the four jog vertices and four jog edges of the step stay: 12 vertices and 16 edges where truth has 8 and 12. At 0 and from 4c the cells are right.
+3. `crease-0.3c` (`Open`): the body builds and its mesh has a vertex where the surface meets itself (`NonManifoldVertex`); T12 asks the mesh invariants of any built body in an `Open` recipe. Either the body is pinched there (T12's recipe should say `pinched()`) or the tessellation is wrong; this was not settled.
+
+**Measurements** (release, 24 cores, `t_slice` and `t_slice_controls`, the run after the build; one thread per recipe).
+- Before (main): 68 recipes, scx 157 pass, 0 fail, 326 not yet; `t_slice` 26.9 s.
+- After: 68 recipes, 429 scx checks pass, 0 fail, 12 known gaps (441 checks, none not yet; all 26 refused or unsupported recipes pass by name). `t_slice` 21 to 33 s on the same machine, which is the noise of other builds on the machine; the added work is 42 recipes built and judged (26 Boolean recipes' meshes, points and mass at 1e-9). `plate-12` and `gear-60` are in it.
+- The work units: `box-box-union` 121, `plate-12` 26,496, `gear-60` 26,300, `corner-contact-union` 2,403, `edge-contact-union` 5,713, `disjoint-union` 2,334, `box-cavity` 2,336. The last four are about twenty times `box-box-union`'s for operands that do not cross, which looks like one stage charging per face pair or per nesting test regardless of the contact. Not investigated here.
+
+**Open questions.** (1) The three gaps above, for BO. (2) The units of the contact and cavity cases (above): a stage charging for work it does not do would show here. (3) CK3's "found, not mine" (`recipes.rs`'s genus asserting an odd Euler characteristic on an edge contact) is probably the same per-sheet count above (not run here): it counts the shared vertex once; the difftest counts per sheet and passes. (4) The pin's pairs-tried comparison needs a per-stage number.
+
+**Proposed 04 row.** "DT3 (72 §14.38): `t_slice` runs every Boolean recipe in scx beside the pin, each judged against truth. Outcomes are matched by name (`NonManifold`, `SsiPair` with its two kinds as a set), the built ones get volume, area, topology (counted per sheet), classification, contract (an empty body judged for what it is, a four-fin edge with `Contacts::Radial`), mesh, determinism and, on the four `issue_1462` recipes, lineage from `Changes`. scx: 429 pass, 0 fail, 12 recorded gaps (a cylinder less itself, two jog-vertex cases, one crease mesh). `Report::work` (a public value, summed over steps) is committed as test data in `slice_work.txt`; a rise over 10% fails, `SCX_BLESS_WORK=1` rewrites. No counter in kernel code; the pin's pairs-tried comparison would need a stage-level number that is not public. Change if: a recorded gap stops failing (the entry then fails the run) or the per-stage work needs a gate."

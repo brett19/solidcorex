@@ -317,9 +317,13 @@ fn volume_and_area_match_the_closed_forms(frame: Frame) {
                     .place(&truth_frame(&frame, lo));
                 let (v, ve, a, ae) = volume_and_area(&m.body, frame.origin(), tol);
                 let (dv, da) = (rel(v, truth.volume()), rel(a, truth.area));
-                // The tolerance, and the Estimate's error bound within it.
+                // The tolerance, and the Estimate's error within it; the volume's also carries
+                // the rounding of the faces' points where they lie (a few `eps` of the frame's
+                // distance from the world origin, over the area: research 72 §14.31).
+                let far = 4.0 * f64::EPSILON * (frame.origin() - Point3::ORIGIN).length();
+                let ve_max = tol * truth.volume() + far * truth.area;
                 assert!(
-                    dv <= tol && da <= tol && ve <= tol * truth.volume() && ae <= tol * truth.area,
+                    dv <= tol && da <= tol && ve <= ve_max && ae <= tol * truth.area,
                     "{name} {span:?}: {v} (err {ve:e}) vs {}, {a} (err {ae:e}) vs {}",
                     truth.volume(),
                     truth.area
@@ -524,9 +528,11 @@ fn a_round_bar_has_one_wall_and_a_seam() {
     assert_eq!(counts(&m.body), (3, 3, 2));
     assert_eq!(m.faces.walls, vec![vec![m.faces.walls[0][0]]]);
     let (v, ve, a, ae) = volume_and_area(&m.body, Point3::ORIGIN, 1e-14);
+    // The stated error carries the samples' rounding (research 72 §14.31), some tens of
+    // `eps` here: within twice the accuracy asked, not within it.
     let (tv, ta) = (20.0 * PI, 2.0 * 4.0 * PI + 4.0 * PI * 5.0);
     assert!(
-        rel(v, tv) < 1e-14 && rel(a, ta) < 1e-14 && ve < 1e-14 * tv && ae < 1e-14 * ta,
+        rel(v, tv) < 1e-14 && rel(a, ta) < 1e-14 && ve < 2e-14 * tv && ae < 2e-14 * ta,
         "{v} (err {ve:e}) {a} (err {ae:e})"
     );
 }

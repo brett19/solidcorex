@@ -45,6 +45,14 @@ pub enum Breach {
         /// Its fins.
         fins: usize,
     },
+    /// An edge of an even number of fins over two, which [`Contacts::Radial`](crate::Contacts)
+    /// admits only in strict radial order with solid and void sectors by turns, does not
+    /// keep it: its fins are out of order, two are tangent, or two solid (or two void)
+    /// sectors are adjacent.
+    EdgeNotRadial {
+        /// The edge.
+        edge: EdgeId,
+    },
     /// A shell holds a vertex on no edge.
     LoneVertex {
         /// The vertex.
@@ -93,6 +101,7 @@ impl Breach {
             Self::Empty => "empty",
             Self::FaceNotBounding { .. } => "face_not_bounding",
             Self::NonManifoldEdge { .. } => "non_manifold_edge",
+            Self::EdgeNotRadial { .. } => "edge_not_radial",
             Self::LoneVertex { .. } => "lone_vertex",
             Self::FaceUnbounded { .. } => "face_unbounded",
             Self::NotOutward { .. } => "not_outward",
@@ -109,6 +118,9 @@ impl fmt::Display for Breach {
             }
             Self::NonManifoldEdge { edge, fins } => {
                 write!(f, "{edge}: {fins} fins where a manifold edge has 2")
+            }
+            Self::EdgeNotRadial { edge } => {
+                write!(f, "{edge}: its fins are not in strict radial order")
             }
             Self::LoneVertex { vertex } => write!(f, "{vertex}: a vertex on no edge"),
             Self::FaceUnbounded { face } => {

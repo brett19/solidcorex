@@ -196,7 +196,31 @@ impl Arcs {
     }
 
     /// `(cos phi, sin phi)` at `t` with the formula of `piece`, in any ring.
+    ///
+    /// For a range `t` that lies on the arc of `piece`, each of the two is monotone in `t`
+    /// (a quarter arc of the circle), so the range is the hull of the formula at the two
+    /// ends, tight to rounding where the formula's interval form (with `tau` in the numerator
+    /// and the denominator) is 20 percent loose. The formula's constants are rounded, which
+    /// can put its turning point inside the arc by a few ulps of its argument, a second-order
+    /// excess far below the `8 eps` the hull is widened by.
     pub fn cos_sin<T: Ring>(self, t: T, piece: Piece) -> (T, T) {
+        if let Some((lo, hi)) = t.range_ends()
+            && lo <= hi
+            && self.start_of(piece.k) <= lo
+            && hi <= self.start_of(piece.k.saturating_add(1))
+        {
+            let (a, b) = (
+                self.cos_sin_at(T::lift(lo), piece),
+                self.cos_sin_at(T::lift(hi), piece),
+            );
+            let pad = 8.0 * f64::EPSILON;
+            return (a.0.join_padded(b.0, pad), a.1.join_padded(b.1, pad));
+        }
+        self.cos_sin_at(t, piece)
+    }
+
+    /// The formula of `piece` at `t`.
+    fn cos_sin_at<T: Ring>(self, t: T, piece: Piece) -> (T, T) {
         let tau = self.tau(t, piece);
         let one = T::lift(1.0);
         let tt = tau * tau;
@@ -416,6 +440,50 @@ impl Arcs {
         (value, d.map(|x| x / rate))
     }
 
+    /// [`Self::of_direction`]'s formula on arc `q` (`0..4` on the turn, `0..2` on the half
+    /// turn) as a truncated Taylor series in any ring: `x`, `y` and `r` hold the leading
+    /// coefficients of a direction's components and of its length `|(x, y)|`, and `out`
+    /// receives as many of the parameter's (the shortest slice decides how many).
+    ///
+    /// `(x, y)` is turned back by the arc's middle angle to `(x', y')`; then
+    /// `tau = y' / (r + x')` and the parameter is `(q + 1/2) L + tau / a`. The division is
+    /// the series quotient `tau_n = (y'_n - sum_{j=1..n} (r + x')_j tau_{n-j}) / (r + x')_0`,
+    /// so no allocation and `n^2 / 2` products. On the arc the denominator is at least
+    /// `(1 + cos(pi/4)) r`; past it the formula continues smoothly to the opposite direction.
+    pub(crate) fn direction_series<T: Ring>(
+        self,
+        q: usize,
+        x: &[T],
+        y: &[T],
+        r: &[T],
+        out: &mut [T],
+    ) {
+        let (cm, sm) = self.mid(q);
+        let (cm, sm) = (T::lift(cm), T::lift(sm));
+        let n = out.len().min(x.len()).min(y.len()).min(r.len());
+        let at = |s: &[T], i: usize| s.get(i).copied().unwrap_or_else(|| T::lift(0.0));
+        let den = |i: usize| at(r, i) + (cm * at(x, i) + sm * at(y, i));
+        let num = |i: usize| cm * at(y, i) - sm * at(x, i);
+        let d0 = den(0);
+        for i in 0..n {
+            let mut acc = num(i);
+            for j in 1..=i {
+                acc = acc - den(j) * at(out, i - j);
+            }
+            if let Some(slot) = out.get_mut(i) {
+                *slot = acc / d0;
+            }
+        }
+        let rate = T::lift(self.rate());
+        for (i, slot) in out.iter_mut().take(n).enumerate() {
+            *slot = if i == 0 {
+                T::lift((q as f64 + 0.5) * self.span) + *slot / rate
+            } else {
+                *slot / rate
+            };
+        }
+    }
+
     /// Whether this is a periodic turn (else the half turn).
     pub fn is_turn(self) -> bool {
         self.sweep == Sweep::Turn
@@ -566,6 +634,61 @@ mod tests {
                     assert!(p.q < a.count(), "{t}: {p:?}");
                 }
             }
+        }
+    }
+
+    /// A range inside one arc gives the range of its cos and sin: they hold every sample and
+    /// are tight to rounding (a quarter arc's cosine over `[0, 1/4]` is `[0, 1]`); a range
+    /// across a break still holds them (the formula's own interval form).
+    #[test]
+    fn a_range_on_an_arc_has_the_tight_cos_and_sin() {
+        use scx_num::interval::Ivl;
+        let a = Arcs::turn(1.0);
+        let piece = |t: f64| a.piece(t, Approach::Above);
+        let (c, s) = a.cos_sin(Ivl::new(0.0, 0.25), piece(0.0));
+        assert!(
+            c.lo <= 1e-14 && c.lo >= -1e-14 && c.hi >= 1.0 && c.hi <= 1.0 + 1e-14,
+            "{c:?}"
+        );
+        assert!(
+            s.lo <= 1e-14 && s.lo >= -1e-14 && s.hi >= 1.0 && s.hi <= 1.0 + 1e-14,
+            "{s:?}"
+        );
+        for (lo, hi) in [
+            (0.3, 0.45),
+            (0.5, 0.7),
+            (0.76, 0.99),
+            (0.0, 0.1),
+            (0.6, 0.6),
+        ] {
+            let (c, s) = a.cos_sin(Ivl::new(lo, hi), piece(lo));
+            let (phi0, phi1) = (a.angle(lo), a.angle(hi));
+            let n = 40;
+            for k in 0..=n {
+                let t = lo + (hi - lo) * (f64::from(k) / f64::from(n));
+                let phi = a.angle(t);
+                let (ex, ey) = (fmath::cos(phi), fmath::sin(phi));
+                assert!(c.lo <= ex && ex <= c.hi && s.lo <= ey && ey <= s.hi, "{t}");
+            }
+            // Tight: the width is that of the angles' cosine and sine at the two ends.
+            let (x0, x1) = (fmath::cos(phi0), fmath::cos(phi1));
+            let (y0, y1) = (fmath::sin(phi0), fmath::sin(phi1));
+            assert!(
+                c.hi - c.lo <= (x0 - x1).abs() + 1e-13,
+                "{c:?} for {lo}..{hi}"
+            );
+            assert!(
+                s.hi - s.lo <= (y0 - y1).abs() + 1e-13,
+                "{s:?} for {lo}..{hi}"
+            );
+        }
+        // Across a break: the formula's own form holds the samples.
+        let (c, s) = a.cos_sin(Ivl::new(0.2, 0.3), piece(0.2));
+        for k in 0..=20 {
+            let t = 0.2 + 0.1 * (f64::from(k) / 20.0);
+            let phi = a.angle(t);
+            assert!(c.lo <= fmath::cos(phi) && fmath::cos(phi) <= c.hi);
+            assert!(s.lo <= fmath::sin(phi) && fmath::sin(phi) <= s.hi);
         }
     }
 
