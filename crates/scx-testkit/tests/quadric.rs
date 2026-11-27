@@ -125,7 +125,7 @@ fn exact_kinds(rng: &mut Rng) -> Vec<(Implicit, Surface<3>)> {
             Implicit::Cone {
                 frame: f,
                 radius: 3.0,
-                slope: 0.5,
+                slope: Dd::new(0.5),
             },
             revolve(&f, &c, &segment([2.0, -2.0], [5.0, 4.0])),
         ),
@@ -341,7 +341,7 @@ fn the_arc_map_is_the_standard_form_arcs_angle() {
             let t = b0 + (b1 - b0) * rng.next_f64();
             let s = Dd::diff(t, b0) / Dd::diff(b1, b0);
             let want = arc_angle(start, sweep, n, i, s);
-            let got = param.to_step(t);
+            let got = param.to_step(Dd::new(t));
             worst = worst.max((got - want).abs().hi);
             let back = param.to_nurb(got);
             assert!(
@@ -377,8 +377,8 @@ fn the_linear_map_round_trips_and_the_layout_swaps() {
         nurb: (0.0, 5.0),
         step: (2.0, -8.0),
     };
-    assert_eq!(lin.to_step(0.0), Dd::new(2.0));
-    assert_eq!(lin.to_step(5.0), Dd::new(-8.0));
+    assert_eq!(lin.to_step(Dd::new(0.0)), Dd::new(2.0));
+    assert_eq!(lin.to_step(Dd::new(5.0)), Dd::new(-8.0));
     assert_eq!(lin.to_nurb(Dd::new(-3.0)), Dd::new(2.5));
     let arcs = Param::arcs((0.0, 1.0), Dd::new(0.0), dd::consts().pi * 2.0);
     let same = Layout {
@@ -391,8 +391,8 @@ fn the_linear_map_round_trips_and_the_layout_swaps() {
         v: arcs,
         order: Order::Swapped,
     };
-    let (a, b) = same.to_step((0.3, 1.0));
-    assert_eq!(swapped.to_step((1.0, 0.3)), (a, b));
+    let (a, b) = same.to_step((Dd::new(0.3), Dd::new(1.0)));
+    assert_eq!(swapped.to_step((Dd::new(1.0), Dd::new(0.3))), (a, b));
     let (x, y) = swapped.to_nurb((a, b));
     assert!((x - Dd::new(1.0)).abs().hi < 1e-30 && (y - Dd::new(0.3)).abs().hi < 1e-30);
 }
@@ -414,7 +414,7 @@ fn the_closed_form_point_satisfies_the_exact_equation() {
             Implicit::Cone {
                 frame,
                 radius: 1.5,
-                slope: -0.3,
+                slope: Dd::new(-0.3),
             },
             Implicit::Sphere { frame, radius: 2.5 },
             Implicit::Torus {

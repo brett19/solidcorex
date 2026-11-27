@@ -12,6 +12,7 @@
 //! | [`Frame::new`]       | its constructor from a location, axis and ref direction     |
 //! | [`Frame::to_affine`] | `GetTransform` (local to world)                              |
 //! | [`Frame::transformed`] | `Transform`, with the handedness returned as a [`Sense`] |
+//! | [`Frame2`]           | `SmAxis2Placement2d` (location, ref direction)              |
 //!
 //! Deviations:
 //! - The axes are unit and orthogonal by construction: [`Frame::new`] refuses an axis or a
@@ -23,6 +24,7 @@
 //!   carries the sense and evaluates with the axis `sense · z`.
 
 use crate::math::Affine;
+use crate::vector2d::{Point2, UnitVec2, Vec2};
 use crate::vector3d::{Point3, UnitVec3, Vec3};
 
 /// Whether a placed kind runs with its frame or against it.
@@ -146,6 +148,56 @@ impl Frame {
             return None;
         };
         Some((frame, sense))
+    }
+}
+
+/// A placement in the plane: an origin and a unit x axis, `y` its quarter turn
+/// counter-clockwise, so the basis is right-handed (counter-clockwise) by construction. A
+/// placed 2-D kind (circle, ellipse) runs clockwise by carrying [`Sense::Reversed`].
+///
+/// Upstream: `SmAxis2Placement2d` (location, ref direction).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Frame2 {
+    origin: Point2,
+    x: UnitVec2,
+}
+
+impl Frame2 {
+    /// The world frame of the plane: the origin and the X and Y axes.
+    pub const WORLD: Self = Self {
+        origin: Point2::ORIGIN,
+        x: UnitVec2::X,
+    };
+
+    /// The frame at `origin` with x axis the direction of `x`. `None` when `origin` is not
+    /// finite or `x` has no direction ([`Vec2::normalized`]).
+    #[must_use]
+    pub fn new(origin: Point2, x: Vec2) -> Option<Self> {
+        if !(origin.x.is_finite() && origin.y.is_finite()) {
+            return None;
+        }
+        Some(Self {
+            origin,
+            x: x.normalized()?,
+        })
+    }
+
+    /// The origin.
+    #[must_use]
+    pub const fn origin(&self) -> Point2 {
+        self.origin
+    }
+
+    /// The x axis: where a kind's angle parameter starts.
+    #[must_use]
+    pub const fn x(&self) -> UnitVec2 {
+        self.x
+    }
+
+    /// The y axis, x turned a quarter counter-clockwise.
+    #[must_use]
+    pub const fn y(&self) -> UnitVec2 {
+        self.x.perp()
     }
 }
 

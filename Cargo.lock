@@ -493,14 +493,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "scx-curve"
+version = "0.1.0"
+dependencies = [
+ "scx-num",
+ "scx-nurbs",
+ "scx-testkit",
+]
+
+[[package]]
 name = "scx-difftest"
 version = "0.1.0"
 dependencies = [
  "scx-algo",
+ "scx-curve",
  "scx-num",
  "scx-nurbs",
  "scx-nurbs-surface",
  "scx-p21",
+ "scx-surface",
  "scx-testkit",
  "solidcore",
  "solidcore-record",
@@ -535,6 +546,15 @@ name = "scx-p21"
 version = "0.1.0"
 dependencies = [
  "scx-num",
+]
+
+[[package]]
+name = "scx-surface"
+version = "0.1.0"
+dependencies = [
+ "scx-num",
+ "scx-nurbs",
+ "scx-testkit",
 ]
 
 [[package]]

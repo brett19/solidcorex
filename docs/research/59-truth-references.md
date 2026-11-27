@@ -279,6 +279,22 @@ takes about 0.5 s; each of its tests is under 0.7 s alone.
     degenerate queries (the centre, with its tie and the exact `t = pi`; inside the evolute's cusp;
     on a circle's axis) and queries from 1e-6 to 1e-15 off the evolute, where two stationary points
     nearly meet, stay certified.
+- **`tests/ellipse_foot.rs`** (T1, against facts that do not use the quartic; 0.3 s in debug).
+  - The residual `(q - C(t)) . C'(t)`, enclosed by certified `sin_cos` on the frame as given, has
+    opposite certified signs at the two ends of every simple foot's angle enclosure, in the direction
+    its kind says, so a true foot lies inside it: 16 random queries and 12 near the evolute, in the
+    plane and lifted off it.
+  - An exact rational evolute point, `(9, -32)` for `a = 75, b = 50`, gives one `Flat` foot at
+    `t = 2 atan(1/2)`, the exact point `(45, 40)` at distance `sqrt(6480)`, with one residual sign on
+    both sides; moved `2^-20` either way it splits into two simple feet or goes.
+  - Queries mirrored in `x`, `y` or the plane give the mirrored feet (`pi - t`, `-t`, `t`) with
+    equal kinds and distances, and so does an exact move (a signed permutation frame at a dyadic
+    origin); a query on an axis is its own mirror, its nearest pair tied.
+  - The circle (`a = b`) matches its closed form (feet at `atan2(q_y, q_x)` and opposite, squared
+    distances `(rho -+ r)^2 + z^2`); its centre, in the plane and above it, is one `Locus::Circle`,
+    the residual exactly zero all round.
+  - In every case a 4,096-point `f64` sample finds no point nearer than the certified nearest's
+    lower end, less its own rounding.
   - Torus (ring, horn, spindle) and cone, in exactly orthonormal frames: each stationary point has a
     gradient of the squared distance under 1e-27 and a Hessian with its kind's signs, the Morse count
     `#min - #saddle + #max = 0` holds on a ring torus, and no sample of a 40 by 40 grid is nearer.
@@ -288,6 +304,24 @@ takes about 0.5 s; each of its tests is under 0.7 s alone.
     `a = 2^-30` is the cylinder (`|rho - 1|` to `(|h| + 1) a`, and `|rho - 1 - h a|` to 1e-14).
   - The degenerate queries: on the axis, the tube's centre circle, a horn's centre, a spindle's pinch
     (exactly 0), the apex (exactly 0), on the axis above and below the apex for one nappe and both.
+- **`tests/project_t3.rs`** (T3, against facts that do not use its closed forms).
+  - Certified orthogonality: at every foot, the implicit equation of the ideal surface of
+    revolution and the cross product of the residual with its gradient are evaluated in interval
+    arithmetic over the foot's certified box. Both hold zero and are narrow (width under 1e-24 of
+    the scale), in exact and rotated frames, for ring, horn and spindle tori and both nappe choices
+    of the cone; a one-nappe foot is on the nappe. Circles of feet are checked at two opposite
+    points, and singular points (apex, pinches) are checked on the surface.
+  - Symmetry: a quarter turn of the query about the axis, a mirror in a meridian plane, and (torus)
+    a mirror in the equator leave the sorted distance enclosures and kinds bit for bit; points move
+    with the query, `u` by the turn, `v` fixed (negated by the equator). A turn by any angle,
+    rounded, agrees to 1e-13.
+  - Dense sampling: no point of a 73 by 73 grid over the whole parameter range (the admitted nappe
+    only, for one nappe), nor of a fine grid round each minimum, is nearer than the certified
+    nearest's lower end less 1e-26, nor nearer than that minimum; random, axis and equator queries.
+  - Axis and apex: an axis query gives a ring torus exactly two circles (a minimum and a maximum,
+    the near one at `sqrt(h^2 + R^2) - r`), a spindle its circles and both pinches, a cone the apex
+    and a circle at `|h| sin a` (none below the apex for one nappe); the apex itself gives distance
+    exactly zero, and a query `2^-40` below it inside the dual cone has the apex nearest.
 - **`tests/sample.rs`.**
   - Equal seeds give equal data.
   - Every generated curve is valid and clamped.
@@ -338,6 +372,8 @@ Use:
   by inserting again with the references.
 - There is no exact on-surface check for surfaces of revolution with a general profile, or for offsets.
   `quadric` covers the five analytic kinds only.
+
+- Intersection truths (63's T2 and T5) are in `curve_surface` and `ssi`: research 64.
 
 ## 8. Decisions taken here (for review)
 

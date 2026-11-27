@@ -28,7 +28,9 @@
 //!   the differential suite runs (`xtask/cov.sh`, written under `target/cov/`).
 //! - `movecheck`: the standing steps of a move, in order: `pin`, `layers`, `headers`,
 //!   `bodydiff`, `cov`.
-//! - `fast`: `cargo fmt --check` of every member, clippy with warnings denied (the default
+//! - `conflicts`: fails when a tracked file holds a merge-conflict marker line (`<<<<<<<`,
+//!   `=======` or `>>>>>>>` at the start of a line, then a space or the line's end).
+//! - `fast`: the `conflicts` check, then `cargo fmt --check` of every member, clippy with warnings denied (the default
 //!   members, then the difftest and bench crates, the benchmarks included), `layers`,
 //!   `headers`, the tier-1 tests (`cargo test -p <crate>` for each crate named, default every
 //!   library and test kit), the bench crate's own tests and xtask's.
@@ -62,9 +64,10 @@ fn main() -> ExitCode {
         Some("bodydiff") => bodydiff(&root),
         Some("cov") => cov(&root, args.get(1..).unwrap_or(&[])),
         Some("movecheck") => movecheck(&root, args.get(1..).unwrap_or(&[])),
+        Some("conflicts") => conflicts(&root),
         Some("fast") => fast(&root, args.get(1..).unwrap_or(&[])),
         Some("bench") => bench(&root),
-        _ => Err("usage: cargo xtask <layers | headers | pin | bodydiff | cov [crate ...] | movecheck [crate ...] | fast [crate ...] | bench>".to_string()),
+        _ => Err("usage: cargo xtask <layers | headers | pin | bodydiff | cov [crate ...] | movecheck [crate ...] | conflicts | fast [crate ...] | bench>".to_string()),
     };
     match result {
         Ok(msg) => {
@@ -724,7 +727,30 @@ fn cargo(root: &Path, args: &[&str]) -> Result<(), String> {
     }
 }
 
+/// The pattern of a conflict-marker line, for `git grep -E`.
+const CONFLICT_PATTERN: &str = "^(<<<<<<<|=======|>>>>>>>)( |$)";
+
+fn conflicts(root: &Path) -> Result<String, String> {
+    let out = Command::new("git")
+        .args(["grep", "-nE", CONFLICT_PATTERN])
+        .current_dir(root)
+        .output()
+        .map_err(|e| format!("git grep: {e}"))?;
+    match out.status.code() {
+        Some(1) => Ok("conflicts: none".to_string()),
+        Some(0) => Err(format!(
+            "conflict markers in tracked files:\n{}",
+            String::from_utf8_lossy(&out.stdout).trim_end()
+        )),
+        _ => Err(format!(
+            "git grep failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim_end()
+        )),
+    }
+}
+
 fn fast(root: &Path, crates: &[String]) -> Result<String, String> {
+    println!("{}", conflicts(root)?);
     // `--all` would take in solidcore too, a path dependency of the difftest crate.
     let mut fmt = vec!["fmt".to_string(), "--check".to_string()];
     for member in workspace_members(root)? {

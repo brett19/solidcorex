@@ -3261,6 +3261,435 @@ pub fn iges_128_surface() -> PinDefect<(Ent,), Option<Read>> {
     }
 }
 
+// ---- scx-nurbs-surface edits ----------------------------------------------------------------
+
+use crate::t_nurbs_surface_edit::{Along, Raise};
+use scx_nurbs_surface::ParamAxis;
+
+/// The exact surface both sides are given: the homogeneous points `(w P, w)` as stored.
+pub fn stored(r: &Raw) -> Result<tk::Surface<3>, String> {
+    let hom = r.hom();
+    match &r.weights {
+        None => tk::Surface::new(r.degrees, &r.knots_u, &r.knots_v, &r.points, None),
+        Some(_) => {
+            let wp: Vec<[f64; 3]> = hom.iter().map(|h| [h[0], h[1], h[2]]).collect();
+            let w: Vec<f64> = hom.iter().map(|h| h[3]).collect();
+            tk::Surface::from_homogeneous(r.degrees, &r.knots_u, &r.knots_v, &wp, &w)
+        }
+    }
+    .map_err(|e| format!("{e:?}"))
+}
+
+/// The exact surface a read-back denotes.
+fn read_surface((p, q, ku, kv, hom): &Read) -> Result<tk::Surface<3>, String> {
+    let wp: Vec<[f64; 3]> = hom.iter().map(|h| [h[0], h[1], h[2]]).collect();
+    let w: Vec<f64> = hom.iter().map(|h| h[3]).collect();
+    tk::Surface::from_homogeneous((*p, *q), ku, kv, &wp, &w).map_err(|e| format!("{e:?}"))
+}
+
+/// How far `got` is from `want` (rounded): `INFINITY` for other degrees or knots, else the
+/// largest difference of homogeneous coordinates over the largest of them (at least 1).
+pub fn surface_off(got: &Read, want: &tk::Surface<3>) -> f64 {
+    let d = want.rounded();
+    let (p, q, ku, kv, hom) = got;
+    if (*p, *q) != d.degrees || *ku != d.knots_u || *kv != d.knots_v || hom.len() != d.points.len()
+    {
+        return f64::INFINITY;
+    }
+    let ws = d.weights.unwrap_or_else(|| vec![1.0; d.points.len()]);
+    let want: Vec<[f64; 4]> = d
+        .points
+        .iter()
+        .zip(&ws)
+        .map(|(p, &w)| [w * p[0], w * p[1], w * p[2], w])
+        .collect();
+    let scale = want.iter().flatten().fold(1.0_f64, |m, x| m.max(x.abs()));
+    hom.iter()
+        .zip(&want)
+        .flat_map(|(a, b)| a.iter().zip(b).map(|(x, y)| (x - y).abs()))
+        .fold(0.0, worst)
+        / scale
+}
+
+/// `scx_nurbs_surface::NurbsSurface::elevate`: where scx answers it is within `1e-12` of the
+/// exact elevation (`1e-11` from degree 9, the curve elevation's known error passed through);
+/// where it refuses (`Unstable`, near-coincident knots), the pin's answer has a weight that is
+/// not positive, or is more than `1e-6` from the original surface somewhere (evaluated
+/// exactly: an elevation is the same surface).
+pub fn nurbs_surface_elevate() -> PinDefect<(Raise,), Option<Read>> {
+    PinDefect {
+        reason: "the pin's A5.9 loses the surface across near-coincident knots, as for curves",
+        applies: Applies::Disagreeing,
+        check: |(a,), r| {
+            let e = &a.0;
+            let t = stored(&e.r)?;
+            let Some(x) = r else {
+                let pin = crate::t_nurbs_surface_edit::s::elevate(e).ok_or("both refused")?;
+                if pin.4.iter().any(|h| h[3] <= 0.0 || h[3].is_nan()) {
+                    return Ok(()); // a weight that is not positive: not a surface at all
+                }
+                let off = surface_gap(&read_surface(&pin)?, &t)?;
+                return if off > 1e-6 {
+                    Ok(())
+                } else {
+                    Err(format!("scx refused; the pin is {off:e} from the surface"))
+                };
+            };
+            let want = match e.axis {
+                ParamAxis::U => t.elevate_u(e.times),
+                ParamAxis::V => t.elevate_v(e.times),
+            }
+            .map_err(|err| format!("{err:?}"))?;
+            let p = match e.axis {
+                ParamAxis::U => e.r.degrees.0,
+                ParamAxis::V => e.r.degrees.1,
+            };
+            let tol = if p >= 9 { 1e-11 } else { 1e-12 };
+            let off = surface_off(x, &want);
+            if off <= tol {
+                Ok(())
+            } else {
+                Err(format!("scx is {off:e} from the exact elevation"))
+            }
+        },
+    }
+}
+
+/// The largest distance between `a` and `b` at a few parameters spread over their (shared)
+/// domain, relative to the larger coordinate (at least 1).
+fn surface_gap(a: &tk::Surface<3>, b: &tk::Surface<3>) -> Result<f64, String> {
+    let ((u0, u1), (v0, v1)) = b.domain();
+    let side = (tk::Side::Above, tk::Side::Above);
+    let mut off = 0.0_f64;
+    for (fu, fv) in [(0.0, 0.0), (0.3, 0.9), (0.71, 0.45), (0.5, 0.5)] {
+        let uv = (u0 + fu * (u1 - u0), v0 + fv * (v1 - v0));
+        let g = a.point(uv, side).map_err(|e| format!("{e:?}"))?.rounded;
+        let w = b.point(uv, side).map_err(|e| format!("{e:?}"))?.rounded;
+        for (x, y) in g.iter().zip(&w) {
+            off = worst(off, (x - y).abs() / (1.0 + y.abs()));
+        }
+    }
+    Ok(off)
+}
+
+/// `scx_nurbs_surface::NurbsSurface::reversed` on unclamped knots: scx reflects them about
+/// the domain `[a, b]` (`t` to `a + b - t`), which it keeps; the pin reflects them about
+/// `U[0] + U[m]`, which moves the domain where the end knots lie outside it. The check: scx
+/// keeps the domain, flips the net exactly, maps each knot to `a + b - t` within rounding,
+/// and (degrees up to 3) is the original surface reversed at a point inside the domain.
+pub fn nurbs_surface_reversed() -> PinDefect<(Along,), Option<Read>> {
+    PinDefect {
+        reason: "the pin reflects unclamped knots about U[0] + U[m], moving the domain",
+        applies: Applies::Disagreeing,
+        check: |(a,), r| {
+            let e = &a.0;
+            let x = r.as_ref().ok_or("scx refused")?;
+            let (p, knots, rows, cols) = match e.axis {
+                ParamAxis::U => (e.r.degrees.0, &e.r.knots_u, e.r.rows(), e.r.cols),
+                ParamAxis::V => (e.r.degrees.1, &e.r.knots_v, e.r.rows(), e.r.cols),
+            };
+            let got = match e.axis {
+                ParamAxis::U => &x.2,
+                ParamAxis::V => &x.3,
+            };
+            let m = knots.len() - 1;
+            let (lo, hi) = (knots[p], knots[m - p]);
+            if (got[p], got[m - p]) != (lo, hi) {
+                return Err(format!(
+                    "scx's domain is [{}, {}], not [{lo}, {hi}]",
+                    got[p],
+                    got[m - p]
+                ));
+            }
+            if let Some(pin) = crate::t_nurbs_surface_edit::s::reverse(e) {
+                let pk = match e.axis {
+                    ParamAxis::U => &pin.2,
+                    ParamAxis::V => &pin.3,
+                };
+                if (pk[p], pk[m - p]) == (lo, hi) {
+                    return Err("the pin keeps the domain too".to_owned());
+                }
+            }
+            let c = lo + hi;
+            for (k, &g) in got.iter().enumerate() {
+                let want = c - knots[m - k];
+                if (g - want).abs() > 4.0 * f64::EPSILON * c.abs().max(want.abs()).max(1.0) {
+                    return Err(format!("knot {k} is {g}, not {want}"));
+                }
+            }
+            let hom = e.r.hom();
+            for i in 0..rows {
+                for j in 0..cols {
+                    let (fi, fj) = match e.axis {
+                        ParamAxis::U => (rows - 1 - i, j),
+                        ParamAxis::V => (i, cols - 1 - j),
+                    };
+                    if x.4[i * cols + j] != hom[fi * cols + fj] {
+                        return Err(format!("point ({i}, {j}) is not the flipped point"));
+                    }
+                }
+            }
+            // The exact references are slow at high degree; the structure above is the
+            // definition, the points a cross-check on the low degrees.
+            if e.r.degrees.0.max(e.r.degrees.1) > 3 {
+                return Ok(());
+            }
+            let (t, rev) = (stored(&e.r)?, read_surface(x)?);
+            let ((u0, u1), (v0, v1)) = t.domain();
+            let side = (tk::Side::Above, tk::Side::Above);
+            let uv = (u0 + 0.3 * (u1 - u0), v0 + 0.9 * (v1 - v0));
+            let back = match e.axis {
+                ParamAxis::U => (c - uv.0, uv.1),
+                ParamAxis::V => (uv.0, c - uv.1),
+            };
+            let g = rev.point(back, side).map_err(|e| format!("{e:?}"))?.rounded;
+            let w = t.point(uv, side).map_err(|e| format!("{e:?}"))?.rounded;
+            if g.iter()
+                .zip(&w)
+                .any(|(a, b)| (a - b).abs() > 1e-9 * (1.0 + b.abs()))
+            {
+                return Err(format!("at {uv:?}: {g:?} reversed, {w:?} original"));
+            }
+            Ok(())
+        },
+    }
+}
+
+/// `scx_surface`'s `jet` on a periodic direction's seam, from the side off the domain: from
+/// below at `u = 0` (or a torus's `v = 0`), from above at the period's end.
+///
+/// The surface is periodic, so the arc on that side is the one at the seam's other end: scx
+/// wraps to it. The pin's NURB has no span past its ends and clamps to the end span, whose
+/// second derivatives differ (each quarter arc's rational parameterisation has its own
+/// `S_uu`). The true value is the jet from the same side at the other end of the seam,
+/// which the pin computes inside its domain; the check holds scx to that at the test's
+/// tolerance.
+pub fn surface_jet() -> PinDefect<(crate::t_surface::Spec,), Vec<[f64; 3]>> {
+    PinDefect {
+        reason: "the pin's NURB clamps at a periodic seam instead of wrapping",
+        applies: Applies::Inputs(|(s,)| s.across_seam().is_some()),
+        check: |(s,), r| {
+            let t = s.across_seam().ok_or("not on a seam")?;
+            let w = crate::t_surface::s::jet(&t);
+            let tol = crate::t_surface::TOL;
+            let ok = r.len() == w.len()
+                && r.iter()
+                    .flatten()
+                    .zip(w.iter().flatten())
+                    .all(|(&a, &b)| tol.floats_agree(a, b));
+            if ok {
+                Ok(())
+            } else {
+                Err(format!("the truth (across the seam) is {w:?}"))
+            }
+        },
+    }
+}
+
+// ---- scx-curve ------------------------------------------------------------------------------
+
+use crate::t_curve::{Angle, ConicIn, GoodConic, LineIn, axes2, axes3};
+use scx_testkit::analytic;
+use scx_testkit::dd::Dd;
+
+/// The definition of a line: finite data and a direction no shorter than `EFF_ZERO` (the
+/// pin's own degenerate-line threshold). scx builds exactly that line, as given, and refuses
+/// the rest.
+fn line_answer(o: &[f64], d: &[f64], got: &Option<Vec<f64>>) -> Result<(), String> {
+    let finite = o.iter().chain(d).all(|x| x.is_finite());
+    let length = d.iter().map(|x| x * x).sum::<f64>().sqrt();
+    let is_line = finite && length >= scx_num::math::EFF_ZERO;
+    let want = is_line.then(|| o.iter().chain(d).copied().collect::<Vec<_>>());
+    if *got == want {
+        Ok(())
+    } else {
+        Err(format!("the definition gives {want:?}"))
+    }
+}
+
+/// `Line::new` where the pin builds what is no line: `Line::infinite` divides by the length,
+/// so a zero direction gives NaN data and a non-finite one is kept. Truth: [`line_answer`].
+pub fn curve_line_new() -> PinDefect<(LineIn,), Option<Vec<f64>>> {
+    PinDefect {
+        reason: "the pin builds lines from zero and non-finite directions",
+        applies: Applies::Disagreeing,
+        check: |(l,), r| line_answer(&l.o, &l.d, r),
+    }
+}
+
+/// `Line::through` where the pin builds what is no line: `from_points` turns a segment
+/// shorter than `EFF_ZERO` into the X axis over `[0, 0]` and keeps non-finite points.
+/// Truth: [`line_answer`] on `(start, end - start)`.
+pub fn curve_line_through() -> PinDefect<(LineIn,), Option<Vec<f64>>> {
+    PinDefect {
+        reason: "the pin turns a degenerate segment into the X axis over [0, 0]",
+        applies: Applies::Disagreeing,
+        check: |(l,), r| {
+            let d: Vec<f64> = l.d.iter().zip(&l.o).map(|(e, s)| e - s).collect();
+            line_answer(&l.o, &d, r)
+        },
+    }
+}
+
+/// `Line2::new`, as [`curve_line_new`] on the x and y coordinates.
+pub fn curve_line2_new() -> PinDefect<(LineIn,), Option<Vec<f64>>> {
+    PinDefect {
+        reason: "as curve_line_new",
+        applies: Applies::Disagreeing,
+        check: |(l,), r| line_answer(&l.o[..2], &l.d[..2], r),
+    }
+}
+
+/// The definition of a conic: finite radii above `EFF_ZERO` (the pin's circle rule, for
+/// both radii). scx builds exactly that conic on its frame, and refuses the rest.
+fn conic_answer(
+    axes: ([f64; 3], [f64; 3], [f64; 3]),
+    a: f64,
+    b: f64,
+    got: &Option<Vec<f64>>,
+) -> Result<(), String> {
+    let ok = |r: f64| r.is_finite() && r > scx_num::math::EFF_ZERO;
+    let want = (ok(a) && ok(b)).then(|| {
+        let mut v: Vec<f64> = [axes.0, axes.1, axes.2].iter().flatten().copied().collect();
+        v.extend([a, b]);
+        v
+    });
+    if *got == want {
+        Ok(())
+    } else {
+        Err(format!("the definition gives {want:?}"))
+    }
+}
+
+/// `Circle::new` where the pin builds what is no circle: `create_canonical_circle` refuses
+/// a NaN radius or one not above `EFF_ZERO`, but builds an infinite one. Truth:
+/// [`conic_answer`].
+pub fn curve_circle_new() -> PinDefect<(ConicIn,), Option<Vec<f64>>> {
+    PinDefect {
+        reason: "the pin builds a circle of infinite radius",
+        applies: Applies::Disagreeing,
+        check: |(c,), r| conic_answer(axes3(c), c.a, c.a, r),
+    }
+}
+
+/// `Ellipse::new` where the pin builds what is no ellipse: `Ellipse::new` checks no radius,
+/// so zero, negative, infinite and NaN radii build. Truth: [`conic_answer`].
+pub fn curve_ellipse_new() -> PinDefect<(ConicIn,), Option<Vec<f64>>> {
+    PinDefect {
+        reason: "the pin's Ellipse::new builds any radii",
+        applies: Applies::Disagreeing,
+        check: |(c,), r| conic_answer(axes3(c), c.a, c.b, r),
+    }
+}
+
+/// `Circle2::new`, as [`curve_circle_new`].
+pub fn curve_circle2_new() -> PinDefect<(ConicIn,), Option<Vec<f64>>> {
+    PinDefect {
+        reason: "as curve_circle_new",
+        applies: Applies::Disagreeing,
+        check: |(c,), r| conic_answer(axes2(c), c.a, c.a, r),
+    }
+}
+
+/// `Ellipse2::new`, as [`curve_ellipse_new`].
+pub fn curve_ellipse2_new() -> PinDefect<(ConicIn,), Option<Vec<f64>>> {
+    PinDefect {
+        reason: "as curve_ellipse_new",
+        applies: Applies::Disagreeing,
+        check: |(c,), r| conic_answer(axes2(c), c.a, c.b, r),
+    }
+}
+
+/// A conic's point and derivatives against the double-double truth at the radian angle,
+/// each coordinate within 6 roundings of its terms' size (`|o| + |a x| + |b y|`). For a
+/// non-finite angle every coordinate is NaN.
+fn conic_jet_answer<const N: usize>(
+    axes: ([f64; 3], [f64; 3], [f64; 3]),
+    a: f64,
+    b: f64,
+    t: f64,
+    got: &[[f64; N]],
+) -> Result<(), String> {
+    if !t.is_finite() {
+        return if got.iter().flatten().all(|x| x.is_nan()) {
+            Ok(())
+        } else {
+            Err(format!("not NaN at t = {t}: {got:?}"))
+        };
+    }
+    let (o, x, y) = axes;
+    let r = analytic::Ellipse {
+        frame: analytic::Frame {
+            origin: o,
+            x,
+            y,
+            z: [0.0, 0.0, 1.0],
+        },
+        semi_x: a,
+        semi_y: b,
+    };
+    let want = r.derivs(t, 3);
+    for (k, v) in got.iter().enumerate() {
+        for i in 0..N {
+            let w = want[k][i];
+            let o_i = if k == 0 { o[i].abs() } else { 0.0 };
+            let scale = o_i + (a * x[i]).abs() + (b * y[i]).abs();
+            let err = (Dd::new(v[i]) - w).abs().hi;
+            if err > 6.0 * U * scale + f64::MIN_POSITIVE {
+                return Err(format!(
+                    "C^({k})[{i}] = {} off the truth {w:?} by {err}",
+                    v[i]
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A conic's point or jet where the pin is off the truth: the pin evaluates at the angle in
+/// degrees, `t 180 / pi` rounded and folded into `[0, 360]`, then `* pi / 180` again, two
+/// roundings of the angle that grow with `|t|` (at `t = 1e5` about `1e-11` of the radius),
+/// and its derivatives carry `(pi / 180)^k` rounded per factor. A coordinate that cancels
+/// near zero differs past the relative tolerance too. scx takes `sin_cos` of the radian
+/// angle itself. Truth: [`conic_jet_answer`].
+const CONIC_STEP: &str = "the pin's degree round trip of the angle";
+
+macro_rules! conic_defects {
+    ($($name:ident: $r:ty, $axes:ident, $circle:expr, $wrap:expr;)*) => {$(
+        #[doc = concat!("`", stringify!($name), "`: see [`CONIC_STEP`].")]
+        pub fn $name() -> PinDefect<(GoodConic, Angle), $r> {
+            PinDefect {
+                reason: CONIC_STEP,
+                applies: Applies::Disagreeing,
+                check: |(c, t), r| {
+                    let c = &c.0;
+                    let b = if $circle { c.a } else { c.b };
+                    conic_jet_answer($axes(c), c.a, b, t.0, $wrap(r))
+                },
+            }
+        }
+    )*};
+}
+
+fn one<const N: usize>(r: &[f64; N]) -> &[[f64; N]] {
+    core::slice::from_ref(r)
+}
+
+fn all<const N: usize>(r: &Vec<[f64; N]>) -> &[[f64; N]] {
+    r
+}
+
+conic_defects! {
+    curve_circle_point: [f64; 3], axes3, true, one;
+    curve_circle_jet: Vec<[f64; 3]>, axes3, true, all;
+    curve_ellipse_point: [f64; 3], axes3, false, one;
+    curve_ellipse_jet: Vec<[f64; 3]>, axes3, false, all;
+    curve_circle2_point: [f64; 2], axes2, true, one;
+    curve_circle2_jet: Vec<[f64; 2]>, axes2, true, all;
+    curve_ellipse2_point: [f64; 2], axes2, false, one;
+    curve_ellipse2_jet: Vec<[f64; 2]>, axes2, false, all;
+}
+
 /// The real roots of `c` (ascending, every coefficient finite) as exact rationals, each to
 /// within a width far below the spacing of doubles at `scale`; `None` for a coefficient not
 /// finite or the zero polynomial.

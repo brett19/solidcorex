@@ -152,6 +152,14 @@ pub fn solve_pin(e: SolveError<XErr>) -> SolidError {
             SolveFailure::NoNodeToSubdivide { trees } => {
                 Failure::new(operation, GeomFailure::NoNodeToSubdivide { trees })
             }
+            // the pin's fixed branch limit is an invalid input
+            SolveFailure::BranchesExhausted { .. } => {
+                return SolidError::InvalidInput {
+                    operation,
+                    reason: "solve visits more than MAX_SOLVE_BRANCHES branches",
+                };
+            }
+            SolveFailure::Cancelled => return SolidError::Cancelled { operation },
         }
         .into_error(),
         SolveError::Num(n) => num_pin(n),

@@ -7,10 +7,12 @@
 //! angles in radians, the frame's vectors used as given). With `M = [X Y Z]` (the frame's
 //! axes as columns, taken exactly) and `L = M^-1 (P - C)` the frame-local point:
 //!
-//! - plane `L_z = 0`;
+//! - plane `L_z = 0`, with `X x Y` for the third axis (the frame's `Z` is not used: any
+//!   axis off the plane gives the same zero set);
 //! - cylinder `L_x^2 + L_y^2 = r^2`;
-//! - cone `L_x^2 + L_y^2 = (r + k L_z)^2`, `k` the slope (the semi-angle's tangent) held as
-//!   a double, exactly;
+//! - cone `L_x^2 + L_y^2 = (r + k L_z)^2`, `k` the slope held as a double-double, exactly
+//!   (a ratio of doubles is one double; a semi-angle's tangent is not, and its
+//!   double-double is within `2^-104` relative);
 //! - sphere `|L|^2 = r^2`;
 //! - torus `(|L|^2 + R^2 - r^2)^2 = 4 R^2 (L_x^2 + L_y^2)`.
 //!
@@ -36,13 +38,16 @@
 //! of `2 h` the angle from its start at the span's local parameter `s` in `[0, 1]` is
 //! `h + 2 atan((2 s - 1) tan(h / 2))`, and back, `s = (1 + tan((phi - h) / 2) / tan(h / 2)) / 2`.
 //! [`Param`] and [`Layout`] hold that map; [`Implicit::point_at`] is the closed-form point
-//! at a NURB parameter.
+//! at a NURB parameter, and [`Implicit::pin_layout`] the layout of the pin's canonical
+//! NURB of each kind (research 64 §2).
 
 use core::fmt;
 
 use crate::analytic::{self, Frame, V3};
+use crate::bound::{dd_to_rat, rat_to_dd};
 use crate::dd::{self, Dd, lift};
 use crate::nurbs::{self, Side, Surface};
+use crate::poly::Poly;
 use crate::rat::Rat;
 
 /// Why a check could not be made.
@@ -92,7 +97,7 @@ impl From<nurbs::Error> for Error {
 pub enum Implicit {
     /// `C + u X + v Y`.
     Plane {
-        /// `C`, `X`, `Y`, and `Z` off the plane (it fixes `L_z`).
+        /// `C`, `X` and `Y` (`Z` is not used).
         frame: Frame,
     },
     /// `C + r (cos u X + sin u Y) + v Z`.
@@ -109,7 +114,7 @@ pub enum Implicit {
         /// `r`, the radius at `v = 0`.
         radius: f64,
         /// `k`, the change of radius per unit along the axis (the semi-angle's tangent).
-        slope: f64,
+        slope: Dd,
     },
     /// `C + r cos v (cos u X + sin u Y) + r sin v Z`.
     Sphere {
@@ -157,18 +162,26 @@ pub struct Off {
 }
 
 /// The kind's equation in exact rationals: `L = inverse (P - origin)`, then `F(L)`.
-struct Exactly {
-    origin: [Rat; 3],
+#[derive(Clone, Debug)]
+pub(crate) struct Exactly {
+    pub(crate) origin: [Rat; 3],
     /// The rows of `M^-1`.
-    inverse: [[Rat; 3]; 3],
-    shape: Shape,
+    pub(crate) inverse: [[Rat; 3]; 3],
+    pub(crate) shape: Shape,
 }
 
-enum Shape {
+/// `F` in the frame coordinates `L`.
+#[derive(Clone, Debug)]
+pub(crate) enum Shape {
+    /// `L_z`.
     Plane,
+    /// `L_x^2 + L_y^2 - r^2`.
     Cylinder { r2: Rat },
+    /// `L_x^2 + L_y^2 - (r + k L_z)^2`.
     Cone { r: Rat, k: Rat },
+    /// `|L|^2 - r^2`.
     Sphere { r2: Rat },
+    /// `(|L|^2 + R^2 - r^2)^2 - 4 R^2 (L_x^2 + L_y^2)`.
     Torus { big2: Rat, small2: Rat },
 }
 
@@ -207,44 +220,142 @@ fn sq(x: &Rat) -> Rat {
 }
 
 impl Exactly {
-    fn residual_and_gradient(&self, p: &[Rat; 3]) -> (Rat, [Rat; 3]) {
+    /// The frame `origin` and axes `[X Y Z]`, exactly; `None` when the axes are dependent.
+    pub(crate) fn new(origin: [Rat; 3], [x, y, z]: [[Rat; 3]; 3], shape: Shape) -> Option<Exactly> {
+        let det = dot(&x, &cross(&y, &z));
+        let inv = det.recip()?;
+        let row = |v: [Rat; 3]| v.map(|e| &e * &inv);
+        Some(Exactly {
+            origin,
+            inverse: [row(cross(&y, &z)), row(cross(&z, &x)), row(cross(&x, &y))],
+            shape,
+        })
+    }
+
+    /// The frame coordinates `L` of a point, exactly.
+    pub(crate) fn local(&self, p: &[Rat; 3]) -> [Rat; 3] {
         let d = [
             &p[0] - &self.origin[0],
             &p[1] - &self.origin[1],
             &p[2] - &self.origin[2],
         ];
+        self.inverse.each_ref().map(|row| dot(row, &d))
+    }
+
+    /// The frame coordinates of a double-double point, in double-double.
+    pub(crate) fn local_dd(&self, p: V3) -> [Dd; 3] {
+        let [p0, p1, p2] = p;
+        let [o0, o1, o2] = self.origin.each_ref().map(rat_to_dd);
+        let d = [p0 - o0, p1 - o1, p2 - o2];
+        self.inverse
+            .each_ref()
+            .map(|row| dd::dot(&d, &row.each_ref().map(rat_to_dd)))
+    }
+
+    /// `w^k F(L(P / w))` for a homogeneous point `(P(t), w(t))` of polynomials: zero
+    /// exactly where the point is on the surface.
+    pub(crate) fn homogeneous(&self, p: &[Poly; 3], w: &Poly) -> Poly {
+        self.shape.homogeneous(&self.local_poly(p, w), w)
+    }
+
+    /// `F(P)` exactly.
+    pub(crate) fn residual(&self, p: &[Rat; 3]) -> Rat {
+        self.shape.at(&self.local(p))
+    }
+
+    /// The frame coordinates of a homogeneous point of polynomials, each times `w`.
+    pub(crate) fn local_poly(&self, p: &[Poly; 3], w: &Poly) -> [Poly; 3] {
+        let d: [Poly; 3] = core::array::from_fn(|i| match (p.get(i), self.origin.get(i)) {
+            (Some(pi), Some(o)) => pi.sub(&w.scale(o)),
+            _ => Poly::default(),
+        });
+        self.inverse.each_ref().map(|row| {
+            d.iter()
+                .zip(row)
+                .fold(Poly::default(), |s, (di, ri)| s.add(&di.scale(ri)))
+        })
+    }
+
+    /// The first-order distance `|F| / |grad F|` of `P` (module docs).
+    pub(crate) fn distance(&self, p: &[Rat; 3]) -> f64 {
+        let (f, g) = self.residual_and_gradient(p);
+        first_order(&f, &g)
+    }
+
+    fn residual_and_gradient(&self, p: &[Rat; 3]) -> (Rat, [Rat; 3]) {
         let [a, b, c] = &self.inverse;
-        let (x, y, z) = (dot(a, &d), dot(b, &d), dot(c, &d));
+        let l = self.local(p);
+        let f = self.shape.at(&l);
+        let [x, y, z] = l;
         let two = Rat::from(2);
         let zero = Rat::zero();
-        // F and its gradient in L
-        let (f, g) = match &self.shape {
-            Shape::Plane => (z.clone(), [zero.clone(), zero, Rat::one()]),
-            Shape::Cylinder { r2 } => (&(&sq(&x) + &sq(&y)) - r2, [&two * &x, &two * &y, zero]),
+        // grad_L F
+        let g = match &self.shape {
+            Shape::Plane => [zero.clone(), zero, Rat::one()],
+            Shape::Cylinder { .. } => [&two * &x, &two * &y, zero],
             Shape::Cone { r, k } => {
                 let rho = r + &(k * &z);
-                (
-                    &(&sq(&x) + &sq(&y)) - &sq(&rho),
-                    [&two * &x, &two * &y, -&(&(&two * k) * &rho)],
-                )
+                [&two * &x, &two * &y, -&(&(&two * k) * &rho)]
             }
-            Shape::Sphere { r2 } => (
-                &(&(&sq(&x) + &sq(&y)) + &sq(&z)) - r2,
-                [&two * &x, &two * &y, &two * &z],
-            ),
+            Shape::Sphere { .. } => [&two * &x, &two * &y, &two * &z],
             Shape::Torus { big2, small2 } => {
                 let s = &(&(&(&sq(&x) + &sq(&y)) + &sq(&z)) + big2) - small2;
-                let four = Rat::from(4);
-                let f = &sq(&s) - &(&(&four * big2) * &(&sq(&x) + &sq(&y)));
-                let gs = &four * &s;
+                let gs = &Rat::from(4) * &s;
                 let gr = &gs - &(&Rat::from(8) * big2);
-                (f, [&gr * &x, &gr * &y, &gs * &z])
+                [&gr * &x, &gr * &y, &gs * &z]
             }
         };
         // grad_P F = M^-T grad_L F
         let [g0, g1, g2] = &g;
         let grad = add3(&add3(&scale3(a, g0), &scale3(b, g1)), &scale3(c, g2));
         (f, grad)
+    }
+}
+
+impl Shape {
+    /// `F` at exact frame coordinates.
+    pub(crate) fn at(&self, l: &[Rat; 3]) -> Rat {
+        let [x, y, z] = l;
+        let rho2 = &sq(x) + &sq(y);
+        match self {
+            Shape::Plane => z.clone(),
+            Shape::Cylinder { r2 } => &rho2 - r2,
+            Shape::Cone { r, k } => &rho2 - &sq(&(r + &(k * z))),
+            Shape::Sphere { r2 } => &(&rho2 + &sq(z)) - r2,
+            Shape::Torus { big2, small2 } => {
+                let s = &(&rho2 + &sq(z)) + &(big2 - small2);
+                &sq(&s) - &(&rho2 * &big2.scale(2))
+            }
+        }
+    }
+
+    /// `w^k F(L / w)` for homogeneous frame coordinates `L w` and weight `w`.
+    pub(crate) fn homogeneous(&self, l: &[Poly; 3], w: &Poly) -> Poly {
+        let [x, y, z] = l;
+        let rho2 = x.mul(x).add(&y.mul(y));
+        let w2 = w.mul(w);
+        match self {
+            Shape::Plane => z.clone(),
+            Shape::Cylinder { r2 } => rho2.sub(&w2.scale(r2)),
+            Shape::Cone { r, k } => {
+                let g = w.scale(r).add(&z.scale(k));
+                rho2.sub(&g.mul(&g))
+            }
+            Shape::Sphere { r2 } => rho2.add(&z.mul(z)).sub(&w2.scale(r2)),
+            Shape::Torus { big2, small2 } => {
+                let s = rho2.add(&z.mul(z)).add(&w2.scale(&(big2 - small2)));
+                s.mul(&s).sub(&w2.mul(&rho2).scale(&big2.scale(2)))
+            }
+        }
+    }
+
+    /// The degree `k` of `F`.
+    pub(crate) fn degree(&self) -> usize {
+        match self {
+            Shape::Plane => 1,
+            Shape::Torus { .. } => 4,
+            _ => 2,
+        }
     }
 }
 
@@ -269,12 +380,14 @@ impl Implicit {
         }
     }
 
-    fn exactly(&self) -> Result<Exactly, Error> {
+    /// The exact equation (module docs).
+    pub(crate) fn exactly(&self) -> Result<Exactly, Error> {
         let f = self.frame();
-        let (x, y, z) = (rat3(f.x)?, rat3(f.y)?, rat3(f.z)?);
-        let det = dot(&x, &cross(&y, &z));
-        let inv = det.recip().ok_or(Error::SingularFrame)?;
-        let row = |v: [Rat; 3]| v.map(|e| &e * &inv);
+        let (x, y) = (rat3(f.x)?, rat3(f.y)?);
+        let z = match self {
+            Implicit::Plane { .. } => cross(&x, &y),
+            _ => rat3(f.z)?,
+        };
         let shape = match *self {
             Implicit::Plane { .. } => Shape::Plane,
             Implicit::Cylinder { radius, .. } => Shape::Cylinder {
@@ -282,7 +395,7 @@ impl Implicit {
             },
             Implicit::Cone { radius, slope, .. } => Shape::Cone {
                 r: rat(radius)?,
-                k: rat(slope)?,
+                k: dd_to_rat(slope).ok_or(Error::NonFinite)?,
             },
             Implicit::Sphere { radius, .. } => Shape::Sphere {
                 r2: sq(&rat(radius)?),
@@ -292,23 +405,18 @@ impl Implicit {
                 small2: sq(&rat(minor)?),
             },
         };
-        Ok(Exactly {
-            origin: rat3(f.origin)?,
-            inverse: [row(cross(&y, &z)), row(cross(&z, &x)), row(cross(&x, &y))],
-            shape,
-        })
+        Exactly::new(rat3(f.origin)?, [x, y, z], shape).ok_or(Error::SingularFrame)
     }
 
     /// `F(P)` exactly: zero exactly when `P` lies on the surface.
     pub fn residual(&self, p: &[Rat; 3]) -> Result<Rat, Error> {
-        Ok(self.exactly()?.residual_and_gradient(p).0)
+        Ok(self.exactly()?.residual(p))
     }
 
     /// The first-order distance `|F| / |grad F|` of `P` from the surface (zero on it,
     /// infinite where the gradient is zero off it).
     pub fn distance(&self, p: &[Rat; 3]) -> Result<f64, Error> {
-        let (f, g) = self.exactly()?.residual_and_gradient(p);
-        Ok(first_order(&f, &g))
+        Ok(self.exactly()?.distance(p))
     }
 
     /// Whether the rational surface lies exactly on the kind, by exact evaluation on a grid
@@ -364,7 +472,7 @@ impl Implicit {
                 slope,
             } => {
                 let (s, c) = dd::sin_cos(u);
-                let rho = Dd::new(radius) + v * Dd::new(slope);
+                let rho = Dd::new(radius) + v * slope;
                 let (o, x, y, z) = (
                     lift(frame.origin),
                     lift(frame.x),
@@ -395,7 +503,39 @@ impl Implicit {
 
     /// The closed-form point at NURB parameters `(t_u, t_v)` under `layout` (D13).
     pub fn point_at(&self, layout: &Layout, t: (f64, f64)) -> V3 {
-        self.point(layout.to_step(t))
+        self.point(layout.to_step((Dd::new(t.0), Dd::new(t.1))))
+    }
+
+    /// The layout of the pin's canonical NURB of this kind (a full turn, `swap_uv` and
+    /// `inside_out` off; research 64 §2): every angle in four quarter arcs from the frame's
+    /// `X`, the sphere's latitude in two from the south pole; the cylinder's u over
+    /// `[0, 4 pi]` (knots `k pi`), every other angle over `[0, 1]`; a length (the plane's
+    /// uv, the cylinder's and cone's height) the STEP parameter itself.
+    pub fn pin_layout(&self) -> Layout {
+        let two_pi = dd::consts().pi * 2.0;
+        let same = || Param::Linear {
+            nurb: (0.0, 1.0),
+            step: (0.0, 1.0),
+        };
+        let turn = || Param::arcs((0.0, 1.0), Dd::new(0.0), two_pi);
+        let (u, v) = match self {
+            Implicit::Plane { .. } => (same(), same()),
+            Implicit::Cylinder { .. } => (
+                Param::arcs((0.0, 4.0 * core::f64::consts::PI), Dd::new(0.0), two_pi),
+                same(),
+            ),
+            Implicit::Cone { .. } => (turn(), same()),
+            Implicit::Sphere { .. } => (
+                turn(),
+                Param::arcs((0.0, 1.0), -dd::consts().pio2, dd::consts().pi),
+            ),
+            Implicit::Torus { .. } => (turn(), turn()),
+        };
+        Layout {
+            u,
+            v,
+            order: Order::Same,
+        }
     }
 }
 
@@ -478,7 +618,7 @@ pub struct Layout {
 
 impl Layout {
     /// STEP's `(u, v)` at NURB parameters `(t_u, t_v)`.
-    pub fn to_step(&self, (tu, tv): (f64, f64)) -> (Dd, Dd) {
+    pub fn to_step(&self, (tu, tv): (Dd, Dd)) -> (Dd, Dd) {
         let (a, b) = (self.u.to_step(tu), self.v.to_step(tv));
         match self.order {
             Order::Same => (a, b),
@@ -535,10 +675,10 @@ impl Param {
     }
 
     /// The STEP parameter at NURB parameter `t` (past the ends, the end span's formula).
-    pub fn to_step(&self, t: f64) -> Dd {
+    pub fn to_step(&self, t: Dd) -> Dd {
         match self {
             Param::Linear { nurb, step } => {
-                let f = Dd::diff(t, nurb.0) / Dd::diff(nurb.1, nurb.0);
+                let f = (t - Dd::new(nurb.0)) / Dd::diff(nurb.1, nurb.0);
                 Dd::new(step.0) + f * Dd::diff(step.1, step.0)
             }
             Param::Arcs {
@@ -547,12 +687,16 @@ impl Param {
                 sweep,
             } => {
                 let n = breaks.len().saturating_sub(1).max(1);
-                let i = breaks.iter().take(n).rposition(|&b| b <= t).unwrap_or(0);
+                let i = breaks
+                    .iter()
+                    .take(n)
+                    .rposition(|&b| (t - Dd::new(b)).hi >= 0.0)
+                    .unwrap_or(0);
                 let (b0, b1) = (
                     breaks.get(i).copied().unwrap_or(0.0),
                     breaks.get(i + 1).copied().unwrap_or(1.0),
                 );
-                let s = Dd::diff(t, b0) / Dd::diff(b1, b0);
+                let s = (t - Dd::new(b0)) / Dd::diff(b1, b0);
                 let arc = *sweep / n as f64;
                 let h = arc * 0.5;
                 let local = h + dd::atan((s * 2.0 - Dd::new(1.0)) * tan(h * 0.5)) * 2.0;
