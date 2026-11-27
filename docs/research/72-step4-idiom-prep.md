@@ -2208,6 +2208,59 @@ No test was removed.
 
 **Proposed 04 row.** "MK3: `extrude(&Region, &Frame, Span, &Document)` makes one wall per segment of each loop (plane for a line, cylinder for an arc or a whole circle) and a planar cap at each height, with topology known and exact pcurves. `ExtrudeFaces { start, end, walls[loop][segment as given] }`. The region must be at the document's resolution. `Span` is two heights in either order, finite and more than the zone apart. Planar refusals come through as `Refused(Profile)`, and `Undecided` as `Unsupported(Profile)`. `scx-planar` gains `Segment::Circle { centre, radius, sense }`, a loop on its own. Change if: a caller needs a region at a finer resolution, or a sheet (uncapped) extrusion."
 
+### 14.13 DT1 as built (11-27)
+
+**What.** `crates/scx-difftest/tests/diff/t_slice.rs` with two tests, `t_slice` (all 68 T12 recipes, about 40 s in release, one thread per recipe) and `t_slice_controls`; `pin_defects::slice()` holds the pin's contradictions of truth. Each recipe runs at the default resolution `c = 1e-5`, in the pin and in scx, and each is judged against truth (T9's closed forms, T10's oracle, T12's outcome, topology and lineage), never against the other side.
+
+- **Checks** (`Check`): `Outcome`, `Volume`, `Area`, `Topology`, `Classification`, `Valid`, `Manifold`, `Mesh`, `Deterministic`, `Lineage`, `NoDanglingVertices`, `Work`; a recipe gets `Outcome` and `Work` always, and its T12 invariants when it is `Built` or `Open`.
+- **scx's side** answers each check `Pass`, `Fail(why)` or `NotYet(gap)`. `NotYet` is typed, so DT2 and DT3 switch on it: `Make(Primitive)` (MK2 cylinder, cone, sphere, torus; MK3 extrusion), `Boolean` (BO), `Mass` (MA1), `Classify` (BQ), `Mesh` (TS), `Contract` (CK1), `Work` (BO6), `Lineage` (BO). Today scx builds only blocks (`scx_make::block`): outcome (built, or refused with the named `Size` dimension), topology (regions, shells, genus from Euler, and the patch complex where each patch is one face), determinism (`scx_record::encode` equal in bytes over two builds) and no dangling vertices pass on the 17 block checks; 466 are `NotYet`.
+- **The pin's side.** A fresh `Kernel` per run; parts built axis-aligned at the origin and placed with `p5::transform` (or built in place when the frame is the world's); extrusions by `create_linear_sweep` of lines and `create_arc`s; Booleans folded over the steps; every call under `catch_unwind`. Facts read off the body: `brep_volume_default` and `brep_area` at 1e-6, the topology (solid regions, shells cut apart at pinches, genus from the Euler characteristic of each shell, patches by surface kind), `is_manifold_solid`, `integrity::check`, dangling vertex references, `point_3d_classify` of every point at `c`, lineage (below) and every vertex's bits.
+- **Patches without the pin's own merge flags.** Each pin face is put on the first operand surface ("sheet", built from the recipe in the part's frame) on which all of nine uv samples lie within 1e-6; a patch is faces joined across two-use edges on one sheet. A face on no sheet is counted (`off_sheet`) and is a topology finding.
+- **Lineage** as the `issue_1462` tests do it: each block operand's faces tagged `Attribute::long(10007 + 10 operand + BoxFace, Copy)` before the first step, the result's faces grouped into patches with their areas summed, compared with T12's list as multisets at 1e-6 relative.
+- **Points.** 1,000 seeded points in the box grown 10% plus T10's probes (4 per face, at coincidence `c`, extent 5), capped at a seeded subset of 1,000; T10 decides each at `sqrt(3) c`. Certain points are judged; `Band` points are counted, not judged (row 7). The recipes where fewer than 95% of the box points are certain are printed with their share.
+- **Run twice.** The pin's whole `PinRun` (outcome, facts, vertex bits) on two fresh kernels must be equal; scx's two bodies must encode to equal bytes.
+- **The summary** matches each pin finding to exactly one `SliceDefect` whose `check` is the finding's and whose `applies(recipe)` selects it, and that entry's `holds(recipe, points, run)` must still see the recorded contradiction. An unmatched finding fails, a matched entry that no longer holds fails, an entry that applies where the pin passes fails (except for classification, below), and an entry that meets no finding fails as stale.
+- **Controls** (`t_slice_controls`, on `block-far-turned`): a truth volume one part in 1e4 off gives a `Volume` finding and an unrecorded failure; an entry that applies to nothing fails as stale.
+
+**Measurements.** The first version took 284 s, about 220,000 points, with the pin's classification of up to 11,500 probes per plate on both runs dominating. Capping the probes at 1,000 brings the total to 98,387 inputs (68 recipes and 98,319 points) in 40-43 s of wall time on 68 threads. The slowest recipes take about 17 s each under that contention: the sphere, torus and seam cases, where each pin classification is expensive. Alone, the blocks take under 1 s. One run of the test makes every pin call twice. Nothing is added to the library.
+
+**Pin defects** (`pin_defects::slice`, 43 findings on 41 recipes, all recorded; 27 recipes agree with truth):
+
+| Check | Selected by | Recipes | What the pin does | Holds while |
+|---|---|---|---|---|
+| Outcome | a constructor block with an extent in `(0, c]` | block-x-at-resolution, block-x-below-resolution | builds the block (fev 6/12/4 and 2/4/4): its floor is `SM_EFF_ZERO`, not the resolution, where truth refuses `Size(X)` | the pin answers a body |
+| Manifold | one difference step whose tool is the base | block-minus-itself, cylinder-minus-itself | builds the empty body (no faces, edges or vertices), which its own `is_manifold_solid` rejects | fev `[0, 0, 0]` and `is_manifold_solid` false |
+| Topology | two operands with parallel planes `(1e-6 c, c]` apart | coplanar-offset-0.1c, coplanar-offset-0.5c | keeps the near-coplanar faces apart: 7 and 8 plane patches where the merged points rule makes 6 | more patches than truth |
+| Classification | every recipe truth does not refuse | 37 recipes | puts 4 to 52 of about 1,300 certain points on the wrong side. Every one lies within `1.5 sqrt(3) c` of the boundary; most are `2c` outside a face, which the pin calls In. A few, on the cylinder's top and the cylinder-sphere seams, are `2c` inside, which the pin calls Out. | some point misplaced, and all within 1.5 times the band |
+
+The 19 recipes the classification entry selects without a mismatch on their points are counted in the summary ("sampled entries not met"). These are the turned frames, the cones, sphere, torus, two extrusions, and the sphere and torus Booleans.
+
+**Band** (box points certain, where below 95%): block-small-at-1e4 0.896, block-size-twice-resolution 0.185, block-x-at-resolution 0.179, block-x-below-resolution 0.183. All are blocks whose extent is a few `c`, where most of the grown box is within the band.
+
+**Decisions** (cases for and against).
+- **The resolution is the scx default, `c = 1e-5`, and the pin gets the same value as its point-classification zone.** For: truth's band and the merged points rule are both stated in `c`, and the pin's Boolean zone is close to it. Against: the pin's own merge threshold is not `c` (§14.9 open). Its near-coplanar defect is therefore recorded as a defect of the pin, with the offsets chosen away from `c`.
+- **Patches are recognised geometrically, from the operands' surfaces, not from the pin's `faces_continue`.** For: truth counts patches by surface record, and the operands' surfaces are known exactly from the recipe. The pin's flags would test the pin against itself. Against: a face is assigned by samples, so one that strays from its sheet by more than 1e-6 is miscounted. That shows as `off_sheet`, a finding, and none occurs.
+- **The area's slack is the recipe's volume slack over `cbrt(V)`.** T12 states one slack, on the volume, and the area's in the length scale. For: dimensionally right, and it is zero except for the merge recipes. Against: `cbrt(V)` is a crude length for thin bodies. It only widens an allowance that is otherwise 1e-6 relative.
+- **A classification entry that selects a recipe without a mismatch on its points is counted, not failed.** For: the check is sampled. The contradiction is in a 1.5c shell about the boundary, and whether one of 2,000 seeded points lands in it depends on the recipe's faces, not on whether the pin's defect is there. A rule that fails such recipes would force a predicate on the seed. Against: an entry wider than the defect hides nothing today, but could hide a new mismatch of another kind. It cannot, because `holds` requires every misplaced point within 1.5 times the band, so a far misplacement fails. The other checks are not sampled and keep the strict rule.
+- **The probes are a seeded subset of 1,000.** For: they cut the time sevenfold, the subset is deterministic, and every recipe still has about 1,000 on-purpose points. Against: fewer probes near the plates' 144 holes. The probe subset is drawn uniformly over the probes, so each hole keeps a share.
+- **One thread per recipe.** For: the recipes are independent, and the pin's `Kernel` is per run. Against: 68 threads oversubscribe a small machine. The wall time is the slowest recipe's either way.
+- **The scx side refuses the frame by `Fail`, not a panic.** A recipe frame `scx_num::frame::Frame::new` does not accept fails every check with the reason.
+
+**Deviations from §8.1.**
+- Band points are counted, not judged (row 7). §8.1 asked that they classify On or on the side T10 gives at the band's edge.
+- T10's probes are capped at 1,000 per recipe (above).
+- Lineage is checked on T12's 4 `issue_1462` recipes, not 7: T12 states 4.
+- The pin's validity is `integrity::check` (Valid) and `is_manifold_solid` (Manifold), checked separately.
+- `NoClearRay` per run (A4's revision) and `Report::work` are scx-side counts. They are `NotYet(Classify)` and `NotYet(Work)` until BQ and BO6 land; the work baseline is DT3's.
+- Meshes are `NotYet(Mesh)` on the scx side and not run on the pin's, as §8.1 says.
+
+**Open.**
+- *Why the pin misclassifies at 2c.* The pin answers In for a point `2c` off a face, at a zone of `c`. Its classifier may widen the zone to its edge tolerance (about `2c`), or a ray may graze. It is a side record; nothing is filed upstream.
+- *The empty body.* If BO4 types an empty result, `block-minus-itself` and `cylinder-minus-itself` change on scx's side; the pin's entry stays.
+- *DT2's switch.* As MK2 and MK3 land, `scx_gap` loses a `Make` arm and `scx_build` gains a shape; the pin side and the defects need no change.
+
+**Proposed 04 row.** "DT1 (72 §14.13): `t_slice` runs every T12 recipe in the pin and in scx at `c = 1e-5`, judges each against truth (outcome, volume, area, topology with patches, classification of about 2,000 seeded and on-purpose points, validity, lineage, no dangling vertices, run-twice determinism) and records the pin's contradictions as `pin_defects::slice` entries with input predicates (4 entries cover 43 findings). scx answers typed `NotYet` for everything but blocks. About 40 s in release. Change if: a pin contradiction appears that no entry covers, or truth's band leaves fewer than 95% of points certain on a recipe that is not a few `c` across."
+
 ### 14.15 TS1 as built (11-27)
 
 New crate `crates/scx-tess` (dependencies `scx-brep`, `scx-curve`, `scx-num`, `scx-nurbs`, `scx-surface`; dev-dependency `scx-make`). Public API:
