@@ -1,7 +1,7 @@
 // Written for solidcorex. Apache-2.0.
 //! The benchmarks of scx-num and scx-algo against the pinned solidcore
 //! (docs/02-testing.md §8.1). The cases live here, one module per library crate
-//! ([`num`], [`algo`]), and two bench targets per crate run them: `<crate>` times each with
+//! ([`num`], [`algo`] and its parts, such as [`algo_gsolve`]), and two bench targets per crate run them: `<crate>` times each with
 //! criterion, `<crate>_ic` counts its instructions under Callgrind (gungraun). Both are thin:
 //! the rules are kept here.
 //!
@@ -22,6 +22,8 @@ pub mod case;
 // The cases' setup and evaluators index fixed-size arrays.
 #[allow(clippy::indexing_slicing)]
 pub mod algo;
+#[allow(clippy::indexing_slicing)]
+pub mod algo_gsolve;
 #[allow(clippy::indexing_slicing)]
 pub mod num;
 
