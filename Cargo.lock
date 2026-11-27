@@ -498,7 +498,9 @@ version = "0.1.0"
 dependencies = [
  "scx-curve",
  "scx-num",
+ "scx-nurbs",
  "scx-surface",
+ "scx-testkit",
 ]
 
 [[package]]

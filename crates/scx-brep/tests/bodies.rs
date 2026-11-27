@@ -430,6 +430,14 @@ fn a_rewritten_face_leaves_the_original_body_alone() {
         }
     }
     assert_eq!(walk(&body), before);
+    // Turned over with its sides and surface left as they were, the face disagrees with
+    // its neighbours about which shell lies between them.
+    let refused = d.finish(&Document::default()).unwrap_err();
+    assert_eq!(refused.name(), "sides_disagree");
+    // A rewrite that keeps the face a face: its loop starts at another use.
+    let mut d = body.edit();
+    d.face_mut(first).unwrap().loops[0].uses.rotate_left(1);
+    assert_eq!(walk(&body), before);
     let (edited, _) = d.finish(&Document::default()).unwrap();
     let after = edited.face(first).unwrap().uses().next().unwrap();
     assert_ne!(

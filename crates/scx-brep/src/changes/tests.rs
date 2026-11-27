@@ -117,8 +117,11 @@ fn edit_of(n: usize) -> (Strip, Brep) {
     (Strip { draft, ..s }, body)
 }
 
+/// Finishes `d`, checking only its references: these edits are bookkeeping, and most do not
+/// leave a valid body (a removed face's edges left loose, a lone vertex beside a face), which
+/// the full check refuses.
 fn done(d: Draft) -> (Brep, Changes) {
-    d.finish(&Document::default()).unwrap()
+    d.finish_references_only(Document::default()).unwrap()
 }
 
 #[test]

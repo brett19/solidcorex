@@ -73,7 +73,27 @@ impl Draft {
     ///
     /// [`Unfinished`], holding the draft unchanged and the [`FinishCause`](crate::FinishCause).
     pub fn finish(self, doc: &Document) -> Result<(Brep, Changes), Box<Unfinished>> {
-        match check::run(&self.t, &self.pending) {
+        match check::run(&self.t, &self.pending, doc.resolution()) {
+            Ok(()) => {
+                let changes = self.log.changes(&self.t);
+                Ok((Brep::from_tables(self.t, doc.resolution()), changes))
+            }
+            Err(cause) => Err(Box::new(Unfinished { draft: self, cause })),
+        }
+    }
+
+    /// [`finish`](Self::finish) checking only the references (BR1's check), for the tests of
+    /// `Changes`, whose edits are bookkeeping and need not leave a valid body.
+    #[cfg(test)]
+    pub(crate) fn finish_references_only(
+        self,
+        doc: Document,
+    ) -> Result<(Brep, Changes), Box<Unfinished>> {
+        let checked = match self.pending.first() {
+            Some(&edge) => Err(crate::FinishCause::MissingCurve { edge }),
+            None => check::references(&self.t).map_err(crate::FinishCause::Structure),
+        };
+        match checked {
             Ok(()) => {
                 let changes = self.log.changes(&self.t);
                 Ok((Brep::from_tables(self.t, doc.resolution()), changes))

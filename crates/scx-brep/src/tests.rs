@@ -156,7 +156,12 @@ fn a_vertex_or_edge_write_copies_no_face_with_empty_cells() {
 fn a_pending_edge_has_no_shape_until_attached() {
     let mut s = sheet();
     let v = s.vertex;
-    let e = s.draft.add_edge_pending([v, v]).unwrap();
+    // The wire runs from the lone vertex to a second one, where its line will end.
+    let w = s
+        .draft
+        .add_vertex(VertexRecord::new(Point3::new(1.0, 0.0, 0.0)))
+        .unwrap();
+    let e = s.draft.add_edge_pending([v, w]).unwrap();
     assert_eq!(s.draft.edge(e).unwrap().shape(), None);
     assert_eq!(
         s.draft.edge(s.edge).unwrap().shape(),
