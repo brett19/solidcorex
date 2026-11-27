@@ -545,6 +545,7 @@ dependencies = [
  "scx-make",
  "scx-mass",
  "scx-num",
+ "scx-nurbs",
  "scx-planar",
  "scx-testkit",
 ]

@@ -1598,7 +1598,7 @@ fn scx_contract(b: &scx_brep::Brep) -> Verdict {
     let settings = Settings::new();
     let stop = scx_num::budget::Stop::new();
     let cx = Cx::new(&doc, &settings, &mut scratch, &stop, &NoTrace);
-    match scx_check::contract(b, &cx) {
+    match scx_check::contract(b, &cx, scx_check::Contacts::Refused) {
         Ok(_) => Verdict::Pass,
         Err(e) => Verdict::Fail(format!("contract: {e} ({e:?})")),
     }
