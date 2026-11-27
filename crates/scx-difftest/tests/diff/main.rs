@@ -55,6 +55,7 @@ mod t_pcurve_write;
 mod t_pset;
 mod t_rest;
 mod t_rng;
+mod t_slice;
 mod t_solve;
 mod t_ssi;
 mod t_ssi_coaxial;
