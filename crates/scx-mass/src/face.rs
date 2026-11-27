@@ -17,15 +17,16 @@
 //! - Consecutive pieces of a loop meet where the next starts: a pole (a point use) is
 //!   closed by the straight path between the pcurves either side, along the pole's line;
 //!   a jump by whole periods (a loop crossing a seam) is no path at all, the seam's `du`
-//!   being zero. A gap left after that is closed by a straight path ([`join`], the place
-//!   for MA2's gap closure onto the edge's curve).
+//!   being zero. A gap left after that is closed by a straight path ([`join`]); where
+//!   either use has a recorded accuracy, the corner also gets its fan of the gap closure
+//!   ([`crate::closure`]), and each such use its strip.
 //! - Each face is integrated about its own reference ([`reference`]), so its subdivision and
 //!   rounding depend on the face alone; the caller shifts the result.
 //! - Not ported: the pin's banding of a long trim into twelve strips (`MIN_BANDS`). It only
 //!   changes how the work is split; the step control here bisects where it is needed.
 
-use scx_brep::{Entity, Face, FaceId, UseGeom};
-use scx_curve::Curve2;
+use scx_brep::{EdgeShape, Entity, Face, FaceId, UseGeom};
+use scx_curve::{Curve, Curve2};
 use scx_num::frame::Sense;
 use scx_num::vector2d::{Point2, Vec2};
 use scx_num::vector3d::{Point3, Vec3};
@@ -33,6 +34,7 @@ use scx_nurbs::Approach;
 use scx_surface::Surface;
 
 use crate::breaks::{Dir, crossings, curve_breaks, surface_breaks};
+use crate::closure::{self, Strip};
 use crate::error::{MassDefect, MassError, MassUnsupported};
 use crate::integrand::Set;
 use crate::kronrod::{self, Fail, K7, K15, MAX_COMPONENTS, Meter, Tol};
@@ -63,6 +65,15 @@ struct Piece<'a> {
     path: Path<'a>,
     lo: f64,
     hi: f64,
+    /// The edge to close onto, for a use with a recorded accuracy.
+    strip: Option<Strip<'a>>,
+}
+
+/// A corner between two consecutive pieces, at least one with a recorded accuracy.
+#[derive(Clone, Copy)]
+struct Corner<'a> {
+    from: Piece<'a>,
+    to: Piece<'a>,
 }
 
 impl Piece<'_> {
@@ -82,6 +93,14 @@ impl Piece<'_> {
         match self.path {
             Path::Curve { curve, .. } => curve.point(t),
             Path::Segment { a, d } => a + d * t,
+        }
+    }
+
+    /// The parameter where the loop enters the piece, and where it leaves it.
+    fn params(&self) -> (f64, f64) {
+        match self.path {
+            Path::Curve { sign, .. } if sign < 0.0 => (self.hi, self.lo),
+            _ => (self.lo, self.hi),
         }
     }
 
@@ -124,8 +143,8 @@ fn reduce(x: f64, period: Option<f64>) -> f64 {
 /// The path that closes a loop from `from` (where a piece ends) to `to` (where the next
 /// starts), once whole periods are dropped: none where it runs along `v` alone, whose `du`
 /// is zero. Exact pcurves meet at their vertex, so this closes only a pole and the rounding
-/// of a pcurve's end; MA2's gap closure onto the edge's curve joins here, for a use with a
-/// recorded accuracy.
+/// of a pcurve's end. A use with a recorded accuracy is closed onto its edge's curve by
+/// [`crate::closure`], with a fan at this corner ([`pieces`] records it).
 fn join<'a>(from: Point2, to: Point2, periods: Periods) -> (Vec2, Option<Piece<'a>>) {
     let gap = to - from;
     let d = Vec2::new(reduce(gap.x, periods.0), reduce(gap.y, periods.1));
@@ -133,14 +152,19 @@ fn join<'a>(from: Point2, to: Point2, periods: Periods) -> (Vec2, Option<Piece<'
         path: Path::Segment { a: from, d },
         lo: 0.0,
         hi: 1.0,
+        strip: None,
     });
     (d, piece)
 }
 
 /// The face's loops as pieces, joined; refuses the windings the integral cannot close.
-fn pieces(face: Face<'_>, periods: Periods) -> Result<Vec<Piece<'_>>, MassError> {
+fn pieces(
+    face: Face<'_>,
+    periods: Periods,
+) -> Result<(Vec<Piece<'_>>, Vec<Corner<'_>>), MassError> {
     let id = face.id();
     let mut out = Vec::new();
+    let mut corners = Vec::new();
     let mut net_u = 0.0;
     for lp in face.loops() {
         let curves: Vec<Piece<'_>> = lp
@@ -156,6 +180,7 @@ fn pieces(face: Face<'_>, periods: Periods) -> Result<Vec<Piece<'_>>, MassError>
                     },
                     lo: interval.min(),
                     hi: interval.max(),
+                    strip: strip(u),
                 }),
                 UseGeom::Point(_) => None,
             })
@@ -169,6 +194,12 @@ fn pieces(face: Face<'_>, periods: Periods) -> Result<Vec<Piece<'_>>, MassError>
             wind_v += (e.y - s.y) + d.y;
             out.push(*p);
             out.extend(closing);
+            if p.strip.is_some() || next.strip.is_some() {
+                corners.push(Corner {
+                    from: *p,
+                    to: *next,
+                });
+            }
         }
         if let Some(pv) = periods.1
             && wind_v.abs() > 0.5 * pv
@@ -184,7 +215,22 @@ fn pieces(face: Face<'_>, periods: Periods) -> Result<Vec<Piece<'_>>, MassError>
             face: id,
         }));
     }
-    Ok(out)
+    Ok((out, corners))
+}
+
+/// The edge a use with a recorded accuracy is closed onto; `None` for a use within the
+/// body's resolution (an exact pcurve, nothing to close) or one of a collapsed edge.
+fn strip(u: scx_brep::Use<'_>) -> Option<Strip<'_>> {
+    let bound = u.bound()?;
+    let EdgeShape::Curve { curve, .. } = u.edge().shape() else {
+        return None;
+    };
+    Some(Strip {
+        edge: curve,
+        tol: bound.acc.length().mm(),
+        start: u.start().point(),
+        end: u.end().point(),
+    })
 }
 
 /// `2^floor(log2 d)` for a finite `d > 0` in the normal range; 1 otherwise.
@@ -318,7 +364,7 @@ pub(crate) fn integrate(
     let surface = face.surface();
     let domain = surface.domain();
     let periods = (domain.u.period(), domain.v.period());
-    let pieces = pieces(face, periods)?;
+    let (pieces, corners) = pieces(face, periods)?;
 
     // Each piece's samples: the extents, the base, the lengths and the crossings.
     let mut sampled = Vec::with_capacity(pieces.len());
@@ -433,6 +479,88 @@ pub(crate) fn integrate(
             )
             .map_err(|f| fail(at, f))?;
         }
+        let shift = reference - Point3::new(0.0, 0.0, 0.0);
+        if let Some(strip) = p.strip.filter(|_| set != Set::Area) {
+            let sign = match p.path {
+                Path::Curve { sign, .. } => sign,
+                Path::Segment { .. } => 1.0,
+            };
+            let mut ends = ends.clone();
+            if let Curve::Nurbs(c) = strip.edge {
+                ends.extend(c.knots().iter().copied().filter(|&k| p.lo < k && k < p.hi));
+                ends.sort_by(f64::total_cmp);
+                ends.dedup();
+            }
+            for w in ends.windows(2) {
+                let [a, b] = *w else { continue };
+                let share = len / total * (b - a) / width;
+                let mut floor = [0.0; MAX_COMPONENTS];
+                for (f, s) in floor.iter_mut().zip(&scale) {
+                    *f = s * share;
+                }
+                let tol = Tol {
+                    accuracy: accuracy / 10.0,
+                    floor: floor.get(..n).unwrap_or_default(),
+                };
+                kronrod::integrate(
+                    &K7,
+                    (a, b),
+                    tol,
+                    value.get_mut(..n).unwrap_or_default(),
+                    error.get_mut(..n).unwrap_or_default(),
+                    meter,
+                    |t, out, _| {
+                        closure::strip_at(set, surface, &strip, sign, shift, p.at(t), t, out.value)
+                    },
+                )
+                .map_err(|f| fail(at, f))?;
+            }
+            let mut length = 0.0;
+            let mut last = strip.edge.point(p.lo);
+            for i in 1..=SAMPLES {
+                let t = p.lo + (p.hi - p.lo) * f64::from(i) / f64::from(SAMPLES);
+                let q = strip.edge.point(t);
+                length += (q - last).length();
+                last = q;
+            }
+            closure::model_error(
+                set,
+                std::f64::consts::PI * strip.tol * strip.tol * length,
+                size,
+                &mut error,
+            );
+        }
+    }
+    for Corner { from, to } in corners {
+        if set == Set::Area {
+            break;
+        }
+        let (_, leave) = from.params();
+        let (enter, _) = to.params();
+        let q_end = surface.point(from.end());
+        let q_start = surface.point(to.start());
+        let e_end = from.strip.map_or(q_end, |s| s.edge.point(leave));
+        let e_start = to.strip.map_or(q_start, |s| s.edge.point(enter));
+        let Some(vertex) = from
+            .strip
+            .map(|s| s.end)
+            .or_else(|| to.strip.map(|s| s.start))
+        else {
+            continue;
+        };
+        let tol = from
+            .strip
+            .iter()
+            .chain(&to.strip)
+            .fold(0.0_f64, |m, s| m.max(s.tol));
+        let polygon = [q_end, e_end, vertex, e_start, q_start].map(|p| p - reference);
+        closure::fan(set, &polygon, &mut value);
+        closure::model_error(
+            set,
+            4.0 / 3.0 * std::f64::consts::PI * tol * tol * tol,
+            size,
+            &mut error,
+        );
     }
     Ok(FaceIntegral {
         reference,

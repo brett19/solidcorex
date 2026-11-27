@@ -1953,21 +1953,6 @@ pub struct BlockFaces { pub bottom: FaceId, pub top: FaceId, pub sides: [FaceId;
 
 **Open.** Whether `volume_sign` (MA4's certified sign) should replace the region sign used here once it exists; whether `Kronrod` should move to `scx-algo` when a second caller appears; the rational multi-span patch of `issue_2091` and the quarter annuli wait for a loft and a sweep.
 
-### 14.10 FU3 as built (11-27)
-
-One segment type, `profile::Seg`: `Line { start, end }` and `Arc { centre, start, end, ccw }`, ends equal for a whole circle. `solid::Seg` and `solid::Loop` and `csg::Seg` are gone; a loop is a `Vec<Seg>` and `solid::extrusion` and `profile_area` take `&[Vec<Seg>]`. `solid` reads each piece's own start (as `profile` does) and refuses a loop whose pieces do not chain, `"loop is not closed"`, as it did a loop that does not return.
-
-**What the others carried that `profile::Seg` lacked, and the decision.**
-- `csg::Seg::Arc` gave radius, start angle and a signed sweep; `Circle` was a variant. Decided: derive them in double-double from the ends (radius from the start, angles by `atan2`, sweep in the sense, equal ends the whole circle). For: one meaning of an arc in all three modules; the ends are the data a planar layer will hold, so the oracle now judges the arc the profile names and not one a rounded `sin_cos` moves off it by 1e-16. Against: an angle-specified arc is a different input once its ends are rounded; the old `sweep > 2 pi` and `start` range refusals have no input to refuse; an end off the circle is a new refusal (`Size`, beyond a relative `1e-9`). Adversarial: the Lipschitz argument needs only a closed set and the right parity, not that the ends are on the circle, and the junction gap and arithmetic term already bound a stray end, so soundness does not change. A whole circle with a clockwise sense used to be an arc of sweep `-2 pi` whose chord angle was noise about zero; it is now `Kind::Circle` in either sense (angle `2 pi` inside), which is the sound reading.
-- `solid::Seg` had implicit starts and `to` equal to the start for a whole circle: the same convention, kept.
-- `profile::Seg` had neither; `loop_area` and `swept` already give `2 pi` and the full disc for equal ends, so the doc now says so (the fixtures still spell a circle as two arcs).
-
-**Results.** `solid`: `profile_area` and `extrusion` of four loops (stadium, stadium with a hole, an off-origin reflex loop, three quarters) and `gear` are bit-identical (Debug output of every field compared old to new, release). `csg`: `signed_distance` at 300 seeded points on each of six profiles is bit-identical, including the arc ones; line-only profiles, whole circles started at angle 0 and a ring are bit-identical in enclosures, `gap`, `bounds` and probes too. Arc profiles with an end on a multiple of pi/2 differ in the enclosure by a few ulp, 3e-16 at most seen (it is tighter: the old junction gap was the `1e-16` by which `cos(pi/2)` is not 0, now only the `2^-90` arithmetic term) and in the probes by at most 8e-16. That the old enclosure was wider for the same drawn profile is the old input's rounding, not a defect; the new one is the truth for the ends as given. Tests in `scx-testkit` in release: 165 pass, 0 fail; no difftest uses these modules.
-
-**Tests.** None removed. Two assertions changed with the type: the `csg` error test's arc of sweep `7.0` expecting `Size` is now an arc whose end is off its circle (the sweep is no longer a field), and the `csg` tests that built arcs by angle use a test helper `arc_at` that rounds the ends the way `fmath::sin_cos` does.
-
-**Proposed 04 row.** "FU3: the testkit has one segment type, `profile::Seg`, a line or an arc by its ends, centre and sense (equal ends a whole circle); `csg` and `solid` take it and derive radius and angles in double-double. Change if: an oracle needs an arc the rounded ends cannot name (a radius with no ends)."
-
 ### 14.9 T12 as built (11-27)
 
 **What.** `crates/scx-testkit/src/recipe/` (`mod.rs`, `make.rs`, `boolean.rs`, `convex.rs`) and `crates/scx-testkit/tests/recipe.rs` (21 tests, 16 s in debug, nearly all of it the Monte Carlo test). Plain data, no library type. `recipe::all(resolution) -> Vec<Recipe>` returns 68 recipes in a fixed order: 29 constructors, 39 Booleans; outcomes 42 built, 12 refused, 13 unsupported, 1 open.
@@ -2019,6 +2004,21 @@ One segment type, `profile::Seg`: `Line { start, end }` and `Arc { centre, start
 - *Edge counts of the lineage cases beyond the pin's* (`new_edges`, `halved_edges`) are stated only for the three boxes-at-a-corner Booleans.
 
 **Proposed 04 row.** "T12 (72 §14.9): `scx_testkit::recipe::all(resolution)` lists 68 step-4 recipes (29 constructors, 39 Booleans) as data: inputs, expected outcome (built with hand-stated topology, `Refused`, `Unsupported` with its cause, or `Open`), closed-form volume and area (T9, and clipping for two blocks), lineage for the four two-block `issue_1462` cases and the invariants to check. Every stated topology satisfies Euler-Poincare and every truth agrees with T10's oracle at 5 sigma. T9's `plate_12` correction: 144 holes. Change if: BO4 represents an empty result as a typed `Empty`, or BO7 refuses the corner and line contacts."
+
+### 14.10 FU3 as built (11-27)
+
+One segment type, `profile::Seg`: `Line { start, end }` and `Arc { centre, start, end, ccw }`, ends equal for a whole circle. `solid::Seg` and `solid::Loop` and `csg::Seg` are gone; a loop is a `Vec<Seg>` and `solid::extrusion` and `profile_area` take `&[Vec<Seg>]`. `solid` reads each piece's own start (as `profile` does) and refuses a loop whose pieces do not chain, `"loop is not closed"`, as it did a loop that does not return.
+
+**What the others carried that `profile::Seg` lacked, and the decision.**
+- `csg::Seg::Arc` gave radius, start angle and a signed sweep; `Circle` was a variant. Decided: derive them in double-double from the ends (radius from the start, angles by `atan2`, sweep in the sense, equal ends the whole circle). For: one meaning of an arc in all three modules; the ends are the data a planar layer will hold, so the oracle now judges the arc the profile names and not one a rounded `sin_cos` moves off it by 1e-16. Against: an angle-specified arc is a different input once its ends are rounded; the old `sweep > 2 pi` and `start` range refusals have no input to refuse; an end off the circle is a new refusal (`Size`, beyond a relative `1e-9`). Adversarial: the Lipschitz argument needs only a closed set and the right parity, not that the ends are on the circle, and the junction gap and arithmetic term already bound a stray end, so soundness does not change. A whole circle with a clockwise sense used to be an arc of sweep `-2 pi` whose chord angle was noise about zero; it is now `Kind::Circle` in either sense (angle `2 pi` inside), which is the sound reading.
+- `solid::Seg` had implicit starts and `to` equal to the start for a whole circle: the same convention, kept.
+- `profile::Seg` had neither; `loop_area` and `swept` already give `2 pi` and the full disc for equal ends, so the doc now says so (the fixtures still spell a circle as two arcs).
+
+**Results.** `solid`: `profile_area` and `extrusion` of four loops (stadium, stadium with a hole, an off-origin reflex loop, three quarters) and `gear` are bit-identical (Debug output of every field compared old to new, release). `csg`: `signed_distance` at 300 seeded points on each of six profiles is bit-identical, including the arc ones; line-only profiles, whole circles started at angle 0 and a ring are bit-identical in enclosures, `gap`, `bounds` and probes too. Arc profiles with an end on a multiple of pi/2 differ in the enclosure by a few ulp, 3e-16 at most seen (it is tighter: the old junction gap was the `1e-16` by which `cos(pi/2)` is not 0, now only the `2^-90` arithmetic term) and in the probes by at most 8e-16. That the old enclosure was wider for the same drawn profile is the old input's rounding, not a defect; the new one is the truth for the ends as given. Tests in `scx-testkit` in release: 165 pass, 0 fail; no difftest uses these modules.
+
+**Tests.** None removed. Two assertions changed with the type: the `csg` error test's arc of sweep `7.0` expecting `Size` is now an arc whose end is off its circle (the sweep is no longer a field), and the `csg` tests that built arcs by angle use a test helper `arc_at` that rounds the ends the way `fmath::sin_cos` does.
+
+**Proposed 04 row.** "FU3: the testkit has one segment type, `profile::Seg`, a line or an arc by its ends, centre and sense (equal ends a whole circle); `csg` and `solid` take it and derive radius and angles in double-double. Change if: an oracle needs an arc the rounded ends cannot name (a radius with no ends)."
 
 ### 14.11 MK2 as built (11-27)
 
@@ -2079,6 +2079,135 @@ pub struct TorusFaces { pub face: FaceId }
 
 **Proposed 04 row.** "`scx-make` (MK2): a periodic surface is one face whose loop runs round a seam edge used twice; poles and apexes are collapsed edges; a cone radius is exactly zero (an apex) or a size, both zero refused; a torus with radii within the zone of each other is `Unsupported { HornTorus }`, beyond that `Refused { SelfIntersecting }`; `sphere` takes a frame; `Dimension` stays one enum. Change if: BR2's pole rules cover an apex on the axis (the horn torus), or a caller needs partial primitives."
 
+MK2b (11-27): MK1's, MK2's and MK3's volume, area and centroid checks now use `scx_mass::mass` (scx-mass a dev-dependency, below scx-make in `layers.txt`), still against the T9 closed forms at the same tolerances, each also required to hold the Estimate's error within it, and the local divergence-theorem `mass`/`volume_and_area` stand-ins and their Gauss-Legendre helpers are deleted, as they proved nothing beyond what scx-mass's own truth tests prove. Cost: with scx-mass unoptimised in the dev profile `--test extrude` took 42 s and `--test round` 12 s (a sphere's `mass` at 1e-13 alone 2-4 s, 56 and 19 calls; main's stand-ins 0.47 s and 0.20 s); `[profile.dev.package.scx-mass] opt-level = 3` brings them to 1.7 s and 0.75 s with no tolerance changed (about 20 us to 350 ms per call), and splitting the T9 sweep into a plain-frame and a tilted-frame test (run side by side) to 0.9 s and 0.8 s. Defect: `Defect(StepControl)` comes back where the accuracy asked is out of reach (a 2e-4 cube at 1e3 about its far corner at 1e-12 and 1e-13, though 1e-9 is met; a 0.1 cube at 1e8 even at 1e-9; a 5e3 cube at 1e12 at 1e-13, and at 1e-12 the call did not return within minutes), so the far-box row asks accuracy equal to its tolerance and MK3's extrusions each their own; a defect means a kernel bug, so scx-mass should meet the accuracy or answer with a typed `Refused`/`Exhausted`. Smallest repro: `block` at frame origin (1e3, 1e3, 1e3), side 2e-4, `mass` with `about` that point, `RelAccuracy` 1e-12; the fix is routed to MA3 and should make it a typed refusal (or met).
+
+### 14.12 MK3 as built (11-27)
+
+`scx_make::extrude` and `scx_planar::Segment::Circle`. `scx-make` now depends on `scx-planar` (below it in `layers.txt`). Public API added:
+
+```rust
+// scx-make
+pub fn extrude(region: &Region, frame: &Frame, span: Span, doc: &Document) -> Result<Made<ExtrudeFaces>, MakeError>;
+pub struct Span { pub start: Length, pub end: Length }            // Span::new; either order
+pub struct ExtrudeFaces { pub start: FaceId, pub end: FaceId, pub walls: Vec<Vec<FaceId>> } // [loop][segment as given]
+Refusal::{Profile(PlanarError), Span { start: f64, end: f64, floor: Length }, Resolution { region: Resolution, document: Resolution }}
+#[non_exhaustive] pub enum Unsupported { Profile(PlanarError), Segment(SegmentRef) }   // MakeError::Unsupported
+Defect::Surface(SurfaceError)
+impl From<PlanarError> for MakeError   // Undecided -> Unsupported::Profile, the rest -> Refused(Profile)
+impl From<SurfaceError> for MakeError
+// scx-planar
+Segment::Circle { centre: Point2, radius: f64, sense: Sense }  // Segment::circle(..)
+PlanarError::CircleWithOthers { at: SegmentRef }
+```
+
+`Unsupported`, `MakeError::Unsupported`, `Defect::Surface` and `From<SurfaceError>` are the same shape MK2 adds for its constructors, so the merge only joins the enum variants.
+
+**What it does.** A region point `(x, y)` at height `z` is `origin + x X + y Y + z Z`, placed once. Each loop gives a ring of vertices at each height, one per segment start (a whole circle has one, at its seam `centre + r X`). Between them:
+- the rim edges: a line is the shared straight edge; an arc is a circle edge from its counter-clockwise-first end over `(0, 2 pi)`, framed with `x` towards that end, radius the mean of its two ends' distances; a whole circle is a circle edge over `[0, 2 pi]` from its seam vertex to itself;
+- a vertical edge at each ring vertex;
+- one wall per segment, its loop along the bottom rim, up at the segment's end, back along the top, down at its start. A line's wall is a plane whose normal is to the right of travel; an arc's or circle's is a cylinder about its centre's vertical, `Forward` (convex) for a counter-clockwise arc and `Reversed` for a clockwise one. Because the region runs the outer loop counter-clockwise and the holes clockwise, the right of travel always faces away from the solid;
+- the caps: the top a plane with normal `Z` taking each loop as the region gives it, the bottom with normal `-Z` taking each loop reversed.
+
+All of it goes into one `Draft` (both regions decided at construction, pcurves from `exact_loops`), then `finish`. No stitch, no ray fire. A round bar is 3 faces, 3 edges and 2 vertices, the cylinder's topology.
+
+**Decision: `Segment::Circle` now, as a variant (04's PL1 row).** For:
+- An extruded round bar then has `cylinder`'s topology (one wall, one seam) and the face record's meaning is stable: one wall per circle, not two half-walls whose split is an artefact of how a circle had to be spelled.
+- A plate hole is one face, as in `solid::plate` and T12's `plate_12`.
+- `csg::Seg` had a whole circle, and FU3's `profile::Seg` reads equal ends as one.
+
+Against: work in PL1's contact and winding code. That work was small:
+- contact treats a circle as an arc whose angular range holds every direction, with its seam as both ends. This is sound because the seam is a point of the circle, so testing it against the other segment tests a point of the circle;
+- winding gives a whole turn about a point certified inside the circle;
+- the signed area is `pi r^2` in the circle's sense.
+
+Adversarial pass:
+- Could a two-arc circle simply be merged by `extrude`? That would hide the split in one consumer and leave it in every other one (`classify`, offsets, the record).
+- Could an `Arc` with equal ends mean a whole circle, FU3's convention? Then a degenerate arc and a circle would be the same data, and the one that is an error could not be refused. PL1 refuses equal ends as `Short`, and that stays.
+
+**Deviation: the variant has a `sense`.** 04 wrote `Segment::Circle { centre, radius }`. Without a sense, orienting a hole could not flip it (`reversed`), and a loop's direction would have to be stored beside it. With one, `Loop` stays self-describing and `reversed()` stays an involution on every segment. A circle in a loop with other segments is `CircleWithOthers`: a circle has no joint for its neighbours to meet. Its radius must be proved above the resolution (`Degenerate::Radius`).
+
+**Decision: the region's resolution must equal the document's** (`Refusal::Resolution`).
+- A finer region has not proved its segments apart at the document's zone.
+- A coarser one may have snapped an arc end off its circle by more than the zone, so `finish` would refuse a valid profile as a `Defect`.
+
+Against: a caller building regions at a finer resolution for a coarse document must rebuild them. Kept, because it is the honest answer and the error names both values.
+
+**Decision: `Span` in either order.** The end below the start extrudes along `-z`. The start cap is at the start height, with its front facing away from the end. Heights must be finite and more than the zone apart (`Refusal::Span`), and the difference must be finite too (`-MAX` to `MAX` is refused). For: the pin's direction-and-distance pair says the same thing, and a frame already gives the direction. Against: a signed distance from 0 would be one number, but it could not say where the start cap is.
+
+**Decision: `walls` are in the caller's order.** If the region reversed a loop, the walls are mapped back, so `walls[k][i]` is the wall of segment `i` of loop `k` as given to `Region::new`, where loop 0 is the outer loop and loop `1 + j` is hole `j`. For: the caller names segments by what it gave. Against: the region's own order is one fewer step. The mapping is a reverse of a `Vec`.
+
+**Decision: `Segment` is `#[non_exhaustive]`, so a kind `extrude` does not sweep is `Unsupported::Segment(at)`**, never treated as a line. It is unreachable today, and 72 §4.2 names it ("profile segment kind").
+
+**Decision: an arc's radius is the mean of its ends' distances.** The region allows ends that sit off a common circle by up to the resolution (`EndOffCircle`), and the mean puts each end within half of that. Against: the centre-to-start distance would make one end exact. The mean was chosen because it is symmetric under reversal.
+
+**Pin tests (`sweep/extrude.rs`).**
+- `a_long_direction_extrudes_the_distance`: ported as a frame given a `1e6`-long z hint. The bounds are exactly `(0, 0, 0)` to `(2, 2, 3)` and the counts 6/12/8. Its zero-direction refusal is removed on purpose: the direction is a frame's unit z axis, so a zero direction cannot be written.
+- `a_draft_goes_the_way_the_direction_points`: the undrafted half is ported as `a_reversed_span_goes_the_other_way`. The draft half is deferred to `scx-taper` (step 8).
+- `a_draft_across_the_profile_or_an_open_profile_is_refused`: the open half is ported as `an_open_profile_is_refused` (`Refused(Profile(Open { Outer, .. }))`, kind `Refused`, name `profile`, with a source). The draft half is removed on purpose, because there is no draft argument.
+- `a_profile_with_a_short_cubic_extrudes_to_a_valid_solid`: deferred to step 5 (NURBS profile segments).
+- `an_uncapped_profile_with_a_short_segment_keeps_every_wall`: ported, capped, as `a_short_segment_keeps_its_wall`. For lengths 3e-5, 1.7e-4 and 3.9e-4 it gives 7/15/10, two edges of that length, and volume 120 to 1e-13. The uncapped (open sheet) half is removed on purpose: there is no `cap: bool` and no sheet constructor. It proved that a wall is kept when its segment is short, and the capped case still proves that.
+- `a_rounded_rectangle_drafted_slightly_inward_keeps_every_corner_wall`: ported undrafted with the pin's `a, b, r`. At heights 2, 2.01 and 2.5 it gives 10/24/16 and volume `h (4ab - (4 - pi) r^2)` to 1e-12. The draft half is deferred to `scx-taper`.
+
+**Added tests.**
+- `volume_and_area_match_the_closed_forms` (T9): 7 profiles (square, rounded rectangle, round bar, ring, a concave-arc bite, a slot with a slot hole and a circle hole, a plate with 12 circle holes) at the world frame and at a skew frame far from the origin. Spans `[0, 3]`, `[5, -2]` and `[-1, 0.25]`. The volume and area come from the body's faces by the divergence theorem, against `solid::extrusion(..).place(..)`. The worst relative error is 7e-14 on volume and 5e-14 on area; the bound is 1e-12.
+- `points_off_every_face_are_on_the_right_side` (T10): the same profiles and two spans. On every face there are points: cap points on a grid where the region's `classify` says `Inside`, three interior points on each plane wall, three on each cylinder wall along its rim arc. Offsets of `±1e-3` along the front normal are `Out` and `In` against `csg::Primitive::Extrusion`, with `delta` 1e-6.
+- `every_profile_fixture_comes_through` (T11): all 23 fixtures at a document of the fixture's resolution. Each accepted fixture extrudes to a closed body of volume `area x 1.5`, to 1e-10. Each refused fixture is `MakeError::Refused(Refusal::Profile(e))`, with `e` of the fixture's cause.
+- `the_record_names_every_face_by_role`: an outer loop and two holes given counter-clockwise, so the region reverses both. Each wall is checked on its own segment's plane or cylinder axis, with the cylinder's sense following convexity. The record holds every face once. Each cap is at its height with its front away from the other, for both span orders.
+- `a_round_bar_has_one_wall_and_a_seam` (3/3/2, exact volume and area).
+- `circle_holes_give_one_wall_each` (18/48/32, against `solid::plate`).
+- `whole_circle_edges_run_one_turn`.
+- `bad_spans_are_refused`.
+- `a_region_at_another_resolution_is_refused`.
+- `an_undecided_profile_is_unsupported`.
+- `extrusion_is_deterministic` (Debug output of the body, compared).
+- Every body is also checked by `assert_closed_solid`: two regions, two opposite fins per edge, front outside and back solid, and every pcurve exact. The pcurve is `Line2` for a line on either a plane or a cylinder, `Circle2` for a circle on a plane, and `AngleLine2` for a circle on a cylinder.
+- Mutation check (local, not committed): scaling an arc wall's radius by `1 + 1e-6` fails 5 of these tests.
+
+`scx-planar/tests/circles.rs` covers:
+- a disc's area and `classify`;
+- a clockwise circle turned and flagged;
+- circle holes in a square;
+- a ring;
+- tangent and crossing circles;
+- a circle within the resolution of a line;
+- a line through a circle;
+- a tangent line, and one on the far side from the seam;
+- `CircleWithOthers`;
+- radius zero, negative, below the resolution, NaN and infinity;
+- hole outside, hole in a hole, and a hole round the outer;
+- a circle against a slot's arcs.
+
+No test was removed.
+
+**Measurements** (throwaway release timer, not committed; build plus `finish` per extrusion, height 10 at the world frame; `Region::new` timed separately):
+
+| segments | lines only, us | us/segment | lines and arcs alternating, us | us/segment | `Region::new` (lines), us |
+|---|---|---|---|---|---|
+| 4 | 21.4 | 5.35 | 34.3 | 8.57 | 4.7 |
+| 16 | 72.9 | 4.56 | 134.8 | 8.43 | 14.1 |
+| 64 | 293 | 4.58 | 544 | 8.50 | 56 |
+| 256 | 1293 | 5.05 | 2201 | 8.60 | 221 |
+| 1024 | 5690 | 5.56 | 8953 | 8.74 | 900 |
+| 4096 | 23940 | 5.84 | 39079 | 9.54 | 3780 |
+
+- Growth is linear, rising slowly from the `BTreeMap` of shared lines and from `finish`.
+- An arc costs about 1.7 times a line: a circle frame, and a cylinder with `AngleLine2` pcurves.
+- The 4-segment square takes 21.4 us, against MK1's block at 18.3 us.
+- Added work against the pin: none. The pin builds through `create_linear_sweep` with planar faces from 3-D curves and a stitch.
+
+**Deviations from 72.**
+- `Segment::Circle` has a `sense` (above).
+- `walls` are in the given order (72 says only `[loop][segment]`).
+- The equal-resolution refusal is new.
+- The `MakeError` kinds follow §4.2. The profile segment kind is `Unsupported::Segment`, and an undecided profile is `Unsupported::Profile`.
+
+**Open questions.**
+1. Should `extrude` take a region at a finer resolution than the document's? It would be sound only if the region's closure snaps were within the document's zone, and the region does not record that.
+2. `ExtrudeFaces::walls` as a `Vec<Vec<FaceId>>` allocates per loop. A flat `Vec` with loop offsets would be one allocation, but it would be read by index arithmetic.
+3. The pin's draft tests return with `scx-taper`. Whether taper reuses this ring builder is for step 8.
+
+**Proposed 04 row.** "MK3: `extrude(&Region, &Frame, Span, &Document)` makes one wall per segment of each loop (plane for a line, cylinder for an arc or a whole circle) and a planar cap at each height, with topology known and exact pcurves. `ExtrudeFaces { start, end, walls[loop][segment as given] }`. The region must be at the document's resolution. `Span` is two heights in either order, finite and more than the zone apart. Planar refusals come through as `Refused(Profile)`, and `Undecided` as `Unsupported(Profile)`. `scx-planar` gains `Segment::Circle { centre, radius, sense }`, a loop on its own. Change if: a caller needs a region at a finer resolution, or a sheet (uncapped) extrusion."
+
 ### 14.15 TS1 as built (11-27)
 
 New crate `crates/scx-tess` (dependencies `scx-brep`, `scx-curve`, `scx-num`, `scx-nurbs`, `scx-surface`; dev-dependency `scx-make`). Public API:
@@ -2120,7 +2249,7 @@ pub fn wireframe(body: &Brep, spec: &TessSpec, budget: &mut Budget, stop: &Stop)
 **Decisions, with cases.**
 - **Budget and `Stop` now, not at step 5** (against §6.2 item 6, with §12.4 row 6). For: §12.4 row 6 rules the signature with both, and an edge count can be huge at a fine chord. Against: a closed-form count is cheap and cannot loop. Kept: one signature from the start.
 - **Normals per triangle corner** (`Vec<[Vec3; 3]>`, against §6.3's per position). For: a position shared across a sharp edge carries one normal per face, and sharing is what makes the mesh watertight. Against: three times the memory, and a viewer wants per-vertex arrays. Kept: a viewer can split positions from this, while a shared normal could not be split back.
-- **Layer: after `scx-make`, before `scx-mass`** (against §11's order, which puts `scx-tess` before `scx-make`). For: a crate may depend, even as a dev-dependency, only on crates above it, and the tests build MK2 bodies. Against: a mesher does not need constructors. Kept: no normal dependency of tess is below make, so nothing is lost.
+- **Layer: after `scx-make`, last of the library crates** (against §11's order, which puts `scx-tess` before `scx-mass` and `scx-make`). For: a crate may depend, even as a dev-dependency, only on crates above it, and the tests build MK2 bodies. Against: a mesher does not need constructors, and a later crate (a viewer query, `scx-check`) may want to sit between. Kept: no normal dependency of tess is below `scx-brep`, so the order can be relaxed later without code changes.
 - **`κ_f` none for a plane, cylinder or cone.** For: they are developable, and along an edge their normal curvature never exceeds the edge curve's own curvature, which the curve's count already holds. Against: a cylinder's curvature across the edge is `1/r`. Kept, with a condition for TS3: its per-triangle test on these kinds must use the developable bound (the chord across a ruling), not `L_f`.
 - **No quarter-turn floor for NURBS.** For: the enclosed turn `M2 / m1` is loose, and a free floor on it raised a rational circle's count to 136 against the exact circle's 23. Against: a conic has the floor (the pin's `QUARTER_TURN`), so a NURBS circle and an exact one differ. Kept: a caller wanting a turn limit sets an angle, and that bound is then honoured for every kind.
 - **`LEAF = 2.0`, `GAIN = 0.95`, `MAX_DEPTH = 12`** for `grow`. For: an enclosure costs about 2-3.5 us and a segment about 30 ns (below), so halving enclosures is worth a few more segments; at `LEAF = 1` the rational circle r 1, c 1e-3 took 92 segments and 252 enclosures, at 2 it takes 108 and 124; at r 10 and r 100 the segment count is the same and the enclosures fall from 748 to 508 and 1788 to 1020. Against: TS3's interior points grow with the edge count, so fewer segments may pay later. Kept, to re-tune when TS3 measures faces.
@@ -2151,3 +2280,38 @@ About 25-30 ns per point on conic edges. NURBS (unit tests' curves): 0.1-1.5 ms 
 3. `FaceKind` has no integration test: no body with a NURBS face can be made on main yet.
 
 **Proposed 04 row.** "`scx-tess` (TS1): edge samples are a pure function of the edge, the count the largest of the curve's need and each adjacent face's need `L_f = sqrt(8c / κ_f)`; circle and ellipse counts in closed form, NURBS from interval enclosures of `C'` and `C''` per knot span; the chord is a proved bound reported per polyline; no NURBS quarter-turn floor; budget and stop on every entry; normals per triangle corner; `scx-tess` sits after `scx-make`. Change if: TS3's per-triangle test needs a different face need, or step 5 brings a curvature bound for rational edges."
+
+### 14.17 MA2 as built (11-27)
+
+`scx-mass` closes a face onto its edges for each use whose pcurve carries a recorded accuracy (`Use::bound`), through `face::pieces` (where MA1's `join` runs); a use with none is unchanged. New module `crates/scx-mass/src/closure.rs`; new testkit generator `scx_testkit::bodies::loose`. No public mass API changed.
+
+**The method (the pin's #16735, `gap_closure`).** A pcurve with a recorded bound lies within the bound of its edge, not on it, so two faces of an edge leave a gap and the divergence theorem's fields leak through it, to first order in the bound and differently at each reference. Each such use gets a **strip**, the ruled surface from `P(t) = S(p(t))` to the edge's curve `E(t)`, and each corner of the loop beside one a **fan** over the polygon `P_end, E_end, vertex, E_start, P_start` from its centroid. The faces then share the edges and vertices and bound one closed surface. Both are fluxes of the volume integrands only (`Set::volume_start`): the area is the face's own and gets nothing. The strips are integrated along `t` by the face's own step control (K7, a tenth of the accuracy, the same pieces as the use's Green integral plus the edge's NURBS knots); the ruling is taken by the 3-point Gauss rule, exact for the degree 4 integrands.
+
+**Decisions, with cases for and against.**
+
+- **The correspondence is `t = t`, not a nearest-point grid.** The pin marches 64 nearest points from the trim to the edge and keeps a table. A use's pcurve runs over the edge's own interval and its recorded claim is `|S(p(t)) - C(t)|` at the same `t` (`Claim::PcurveOnSurface`), so `E(t)` is the partner the record states. For: no search, no table, no `correspondence_bends`/`polynomial_strip` special case; a planar use is one K7 piece (7 evaluations); the closed surface is exactly the one the bound speaks of. Against: a recorded bound that is true but whose parameters slip (a pcurve fitted with a different speed) gives an oblique strip, a larger but still closed one; the nearest point would give a thinner strip. The tube term below covers the width the bound states, and `loose` slips parameters on purpose (a half-offset along the pcurve on every second use) and closes exactly on planar faces. Change if a producer records a bound that holds only by nearest point.
+- **Closed uses are those with `Use::bound`, not edge or vertex accuracy.** The use's bound is the one that says the pcurve may be off its edge; `finish` allows a use end off its vertex by `use + edge + vertex` accuracy. For: the use's own bound is the pcurve's gap and nothing else's. Against: a use with no bound beside a vertex with a recorded accuracy (a merge that moved a point) has its end off that vertex by up to the vertex's bound, and is not closed there. The rule in 72 §12.1 row 3 names "a gap recorded"; the pcurves such a merge moves would record theirs. Open: confirm when BO's merge exists.
+- **A corner is closed when either neighbour is.** The unclosed neighbour contributes its pcurve end as both its pcurve and its edge point (it is exact). No corner with neither is made, so a body with none pays nothing.
+- **The pin's gap cones are not made.** A straight uv piece `join` adds (a pole's line, or the gap between two recorded pcurve ends) is part of the face's boundary; the pin closes it onto the vertex by a cone and a corner on each side. Here the corner polygon closes with the chord from `P_start` to `P_end`, which cancels the face's own straight piece exactly on a plane and differs by a sliver of order `gap^2 kappa` elsewhere, inside the ball term below. For: one fan per corner, no extra sides. Against: not watertight to the second order in the gap on a curved surface.
+- **The closure's error enters the result.** (1) The strips' Kronrod-Gauss estimates add to the face's error as every piece's do. (2) The tube between the recorded surface and the closed one is added by the divergence of each component's field over that volume: `pi tol^2 L` per closed use (`L` the edge's 16-sample polyline length, `tol` the use's bound) and `4/3 pi tol^3` per corner, times `c R^(a+b+c-1)` for the monomial `x^a y^b z^c n_z`, `R` the face box's longest side (0 for `c = 0`: its field is divergence free). For: the stated error is what the closed surface can differ from the recorded one by, as the pin's doc states (`sum pi tol^2 L`), not only the integration's. Against: it is conservative (the cylinder at offset 1e-3 states 1.1e-4 for a miss of 0, since the planar and vertical strips are exact); and the 16-sample length and `R = size` are estimates, as the crate's other errors are. The area terms get none.
+- **`Set::Area` does no closure.** `area`, `face_area` read no strips and no corner; the volume group does.
+
+**The testkit body (`bodies::loose(kind, seed, size, offset)`).** A valid body of `kind` with every line, constant-`v` angle line and circle pcurve moved off its edge: along the loop's left normal by `offset` (a circle by its radius), and by half as much along the pcurve on every second use of a loop; each moved use records the largest distance it measured by 24 samples, rounded up 0.1 percent (`Basis::Measured`), and the others stay exact. `finish` accepts it under the default resolution because the bound says the pcurve may be off; with the bounds forgotten it needs a resolution of the offset (the tests do that to read the unclosed body), which is the check the `Use::bound` exists to satisfy.
+
+**Tests** (`crates/scx-mass/tests/closure.rs`, 5):
+
+- `a_loose_block_closes_to_its_closed_form`: offsets 1e-2, 2e-2, 1e-4: volume, first and second moments equal `solid::block` within 1e-12 (the strips and fans lie in each face's plane, so they close exactly, corners included: the slip leaves the pcurve ends apart, so the fans are not degenerate); the unclosed body leaks at least half the offset; the result about another reference is the same.
+- `a_cubes_strips_close_in_one_piece_per_edge_use` (the port of the pin's `a_cubes_strips_close_in_one_piece_per_edge_use`): the closure adds exactly 24 x 7 evaluations to `volume`.
+- `an_exact_body_pays_nothing`: a valid block's `volume` is 798 evaluations, MA1's figure.
+- `a_loose_curved_body_holds_within_its_stated_error` (the cylinder's strips in `a_cylinders_strips_keep_the_grid`, a cone beside it): within 1e-12 of the closed form, the stated error covers the miss, the unclosed body leaks at least a tenth of the offset, and the closure's tube makes the stated error more than ten times the exact body's.
+- `an_exact_pcurve_off_its_edge_is_refused_by_finish` (A8, 72 §10): `broken(PcurveOffEdge)` is refused by `finish`, so a pcurve with no recorded accuracy that is off its edge is a defect found there, not a gap mass closes.
+
+**Not ported, on purpose.** `an_edge_off_its_trims_...`: it reads the pin's tolerant-edge builder, which has no counterpart; the cylinder's circles (exact beside moved lines) and the cone's apex corner cover an edge whose two uses differ. The corpus parity test needs the benchmark corpus (step 6).
+
+**Measurements** (bit-identical before and after: the 84 lines of `mass` over every generated kind at sizes 1 to 3 at accuracy 1e-6 and 1e-9, printed with `{:?}` and the work charged, before and after the change, are equal). Cost where a use records an accuracy: 7 K7 evaluations per planar use (24 for a cube's `volume`, 168 of 966), a corner fan costs none charged (its integral is exact). Cost where none does: a `Use::bound` read per use and nothing else.
+
+**Deviations from 72.** None in signature; §2.2's "gap closure onto the edge's curve" is by `t = t`, not nearest point (above).
+
+**Open questions.** (1) Whether a vertex's or an edge's recorded accuracy alone (no use bound) should close its uses (above). (2) The 1.1e-4 stated against a miss of 0 on the cylinder: a tighter tube bound needs the strip's width per use, which the use's bound already is; what would tighten it is the divergence of the field over the actual swept volume, not `c R^(d-1)`. (3) `loose` moves no pcurve of a sphere's lunes or a torus's patches (angle lines along `v`, and the `finish` pole and seam rules refuse larger offsets); a closure on a pole needs a producer that records one.
+
+**Proposed 04 row.** "`scx-mass` (MA2): a use whose pcurve records an accuracy is closed onto its edge's curve by a strip, `E(t)` against `S(p(t))` at the same `t`, and a fan at each corner beside one, in the volume terms only; the strips' integration error and the tube `pi tol^2 L` (a ball at a corner) are in the stated error; a use with none costs nothing and the results are bit-identical. Change if a producer records a bound that holds only by nearest point, or a vertex's accuracy alone must close its uses."

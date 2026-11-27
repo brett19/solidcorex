@@ -67,6 +67,16 @@ impl Set {
         }
     }
 
+    /// The first component that is a volume term: the closure of a gap adds to these alone,
+    /// the area terms having no counterpart there.
+    pub(crate) const fn volume_start(self) -> usize {
+        match self {
+            Self::Area => 1,
+            Self::Volume => 0,
+            Self::Full => FIRST_MONOMIAL,
+        }
+    }
+
     /// Each component's length dimension past the area's: the power of a length its size
     /// grows by.
     pub(crate) fn powers(self) -> [u32; MAX_COMPONENTS] {
