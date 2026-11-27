@@ -416,6 +416,50 @@ impl Arcs {
         (value, d.map(|x| x / rate))
     }
 
+    /// [`Self::of_direction`]'s formula on arc `q` (`0..4` on the turn, `0..2` on the half
+    /// turn) as a truncated Taylor series in any ring: `x`, `y` and `r` hold the leading
+    /// coefficients of a direction's components and of its length `|(x, y)|`, and `out`
+    /// receives as many of the parameter's (the shortest slice decides how many).
+    ///
+    /// `(x, y)` is turned back by the arc's middle angle to `(x', y')`; then
+    /// `tau = y' / (r + x')` and the parameter is `(q + 1/2) L + tau / a`. The division is
+    /// the series quotient `tau_n = (y'_n - sum_{j=1..n} (r + x')_j tau_{n-j}) / (r + x')_0`,
+    /// so no allocation and `n^2 / 2` products. On the arc the denominator is at least
+    /// `(1 + cos(pi/4)) r`; past it the formula continues smoothly to the opposite direction.
+    pub(crate) fn direction_series<T: Ring>(
+        self,
+        q: usize,
+        x: &[T],
+        y: &[T],
+        r: &[T],
+        out: &mut [T],
+    ) {
+        let (cm, sm) = self.mid(q);
+        let (cm, sm) = (T::lift(cm), T::lift(sm));
+        let n = out.len().min(x.len()).min(y.len()).min(r.len());
+        let at = |s: &[T], i: usize| s.get(i).copied().unwrap_or_else(|| T::lift(0.0));
+        let den = |i: usize| at(r, i) + (cm * at(x, i) + sm * at(y, i));
+        let num = |i: usize| cm * at(y, i) - sm * at(x, i);
+        let d0 = den(0);
+        for i in 0..n {
+            let mut acc = num(i);
+            for j in 1..=i {
+                acc = acc - den(j) * at(out, i - j);
+            }
+            if let Some(slot) = out.get_mut(i) {
+                *slot = acc / d0;
+            }
+        }
+        let rate = T::lift(self.rate());
+        for (i, slot) in out.iter_mut().take(n).enumerate() {
+            *slot = if i == 0 {
+                T::lift((q as f64 + 0.5) * self.span) + *slot / rate
+            } else {
+                *slot / rate
+            };
+        }
+    }
+
     /// Whether this is a periodic turn (else the half turn).
     pub fn is_turn(self) -> bool {
         self.sweep == Sweep::Turn
