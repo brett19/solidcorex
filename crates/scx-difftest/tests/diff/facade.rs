@@ -202,10 +202,48 @@ pub mod x {
         series, small_matrix, taylor_model, transform, vector2d, vector3d,
     };
     helpers!();
+    use vector2d::{Axis2, Vec2};
+    use vector3d::{Alignment, Axis, Vec3};
+    fn axis3(i: usize) -> Option<Axis> {
+        Axis::ALL.get(i).copied()
+    }
+    fn axis2(i: usize) -> Option<Axis2> {
+        Axis2::ALL.get(i).copied()
+    }
+    /// The pin's degree angle tolerance as scx's radians, by the pin's own `SM_DEG2RAD`.
+    pub fn angle_tol(deg: f64) -> f64 {
+        deg * (scx_num::math::PI / 180.0)
+    }
+    /// The pin's `operator[] const` over an axis: 0.0 past 2.
+    pub fn component3(v: Vec3, i: usize) -> f64 {
+        axis3(i).map_or(0.0, |a| v[a])
+    }
+    /// The pin's `operator[]` write: whether `i` names an axis.
+    pub fn set3(v: &mut Vec3, i: usize, x: f64) -> bool {
+        axis3(i).map(|a| v[a] = x).is_some()
+    }
+    pub fn component2(v: Vec2, i: usize) -> Option<f64> {
+        axis2(i).map(|a| v[a])
+    }
+    pub fn set2(v: &mut Vec2, i: usize, x: f64) -> bool {
+        axis2(i).map(|a| v[a] = x).is_some()
+    }
+    /// `GetMin(i)`, `GetMax(i)`: 0.0 past 2.
+    pub fn e3_at(e: &extent3d::Extent3d, i: usize) -> (f64, f64) {
+        axis3(i).map_or((0.0, 0.0), |a| (e.min_at(a), e.max_at(a)))
+    }
+    /// The alignment, as the pin's `(parallel, anti)` says it: 0 neither, 1 same, 2 opposite.
+    pub fn alignment(a: Vec3, b: Vec3, deg: f64) -> u32 {
+        match a.alignment(b, angle_tol(deg)) {
+            Alignment::Neither => 0,
+            Alignment::Same => 1,
+            Alignment::Opposite => 2,
+        }
+    }
     /// The series' vector of scalars (the pin's `series::V3`): `Vec3<T>`.
-    pub type SerV3<T> = vector3d::Vec3<T>;
+    pub type SerV3<T> = Vec3<T>;
     pub fn sv3<T>(x: T, y: T, z: T) -> SerV3<T> {
-        vector3d::Vec3::new(x, y, z)
+        Vec3::new(x, y, z)
     }
     /// The pin's `geom::interval_vector` functions, over arrays: `Vec3<Ivl>`'s methods.
     pub mod interval_vector {
@@ -562,6 +600,31 @@ pub mod s {
         pub use solidcore::geom::geom_utility::p2::{inverse_4x4, mult_4x4};
     }
     helpers!();
+    pub fn angle_tol(deg: f64) -> f64 {
+        deg
+    }
+    pub fn component3(v: vector3d::Vec3, i: usize) -> f64 {
+        v.component(i)
+    }
+    pub fn set3(v: &mut vector3d::Vec3, i: usize, x: f64) -> bool {
+        v.component_mut(i).map(|c| *c = x).is_ok()
+    }
+    pub fn component2(v: vector2d::Vec2, i: usize) -> Option<f64> {
+        v.component(i).ok()
+    }
+    pub fn set2(v: &mut vector2d::Vec2, i: usize, x: f64) -> bool {
+        v.component_mut(i).map(|c| *c = x).is_ok()
+    }
+    pub fn e3_at(e: &extent3d::Extent3d, i: usize) -> (f64, f64) {
+        (e.min_at(i), e.max_at(i))
+    }
+    pub fn alignment(a: vector3d::Vec3, b: vector3d::Vec3, deg: f64) -> u32 {
+        match a.parallel_sense(b, deg) {
+            (false, _) => 0,
+            (true, Some(true)) => 2,
+            (true, _) => 1,
+        }
+    }
     pub type SerV3<T> = series::V3<T>;
     pub fn sv3<T>(x: T, y: T, z: T) -> SerV3<T> {
         series::V3 { x, y, z }

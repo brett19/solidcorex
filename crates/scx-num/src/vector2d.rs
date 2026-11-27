@@ -8,6 +8,8 @@
 // `upstream_my_test_vector2d` drops its unset-vector checks.
 // Then the transcendental functions became `fmath`'s (correctly rounded, the same bits on every
 // platform) in place of the C library's, so results may differ from the pin's in the last bit.
+// Then `component(usize) -> Result<f64>` and `component_mut` became `Index<Axis2>` and
+// `IndexMut<Axis2>`, so no index is out of range; their failure tests went with them.
 //! Two-dimensional vectors and points ([`Vec2`] / [`Point2`]), usually surface
 //! parameters `(u, v)`: arithmetic, lengths, distances, unitizing, rotation and angles.
 //!
@@ -39,8 +41,7 @@
 //! | [`Vec2::rotate`]                       | `Rotate`                                         |
 //! | [`Vec2::approx_eq`]                    | `operator==`                                     |
 //! | [`Vec2::approx_ne`]                    | `operator!=`                                     |
-//! | [`Vec2::component`]                    | `operator[](ULONG) const`                        |
-//! | [`Vec2::component_mut`]                | `operator[](ULONG)`                              |
+//! | `v[Axis2::X]` ([`Axis2`], `Index`/`IndexMut`) | `operator[](ULONG) const`, `operator[](ULONG)` |
 //! | [`Vec2::angle_between`]                | `AngleBetween`                                   |
 //! | [`Vec2::ccw_angle_between`]            | `CCWAngleBetween`                                |
 //!
@@ -57,9 +58,8 @@
 //!   [`Vec2::approx_ne`]; Rust `==` (`PartialEq`) is exact component equality.
 //! - `Default` is the zero vector. Upstream's default constructor gives an unset vector
 //!   (both components `SM_UNDEF_DOUBLE`); here an unset vector is an `Option<Vec2>`.
-//! - `operator[]` with an index other than 0 or 1 returns `0.0` (const) or
-//!   dereferences `NULL` (non-const) after logging `SM_ERR`; Rust returns
-//!   a [`NumFailure`](crate::error::NumFailure) with status 1001 (`SM_ERR`) for both.
+//! - `operator[]` takes an [`Axis2`], so no index is out of range. Upstream's answered `0.0`
+//!   (const) or dereferenced `NULL` (non-const) for an index other than 0 or 1.
 //! - `SM_ASSERT_BREAK` checks are compiled out upstream (release build) and omitted.
 //! - `sm_sqrt`, `sm_acos`, `sm_asin` (`SmMath.cpp`) come from [`crate::vector3d`];
 //!   `SM_IS_ZERO_SQUARED` = `SmTol::InTol(a, SmTol::GetScaledZeroSq())` calls
@@ -67,7 +67,7 @@
 
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use crate::error::{NumError, NumFailure, Result};
+use crate::error::{NumError, Result};
 use crate::math::{Vec3, EFF_ZERO, EFF_ZERO_SQ, PI};
 use crate::tol;
 use crate::vector3d::{acos as sm_acos, asin as sm_asin, sqrt as sm_sqrt};
@@ -91,6 +91,58 @@ pub struct Point2 {
     pub x: f64,
     /// Y (or `v`) coordinate.
     pub y: f64,
+}
+
+/// A coordinate axis of the plane: what indexes a [`Vec2`] or a [`Point2`] (`v[Axis2::Y]`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Axis2 {
+    /// The x (or `u`) axis.
+    X,
+    /// The y (or `v`) axis.
+    Y,
+}
+
+impl Axis2 {
+    /// Both axes, x first.
+    pub const ALL: [Self; 2] = [Self::X, Self::Y];
+}
+
+impl core::ops::Index<Axis2> for Vec2 {
+    type Output = f64;
+    fn index(&self, axis: Axis2) -> &f64 {
+        match axis {
+            Axis2::X => &self.x,
+            Axis2::Y => &self.y,
+        }
+    }
+}
+
+impl core::ops::IndexMut<Axis2> for Vec2 {
+    fn index_mut(&mut self, axis: Axis2) -> &mut f64 {
+        match axis {
+            Axis2::X => &mut self.x,
+            Axis2::Y => &mut self.y,
+        }
+    }
+}
+
+impl core::ops::Index<Axis2> for Point2 {
+    type Output = f64;
+    fn index(&self, axis: Axis2) -> &f64 {
+        match axis {
+            Axis2::X => &self.x,
+            Axis2::Y => &self.y,
+        }
+    }
+}
+
+impl core::ops::IndexMut<Axis2> for Point2 {
+    fn index_mut(&mut self, axis: Axis2) -> &mut f64 {
+        match axis {
+            Axis2::X => &mut self.x,
+            Axis2::Y => &mut self.y,
+        }
+    }
 }
 
 /// A 2D direction: a [`Vec2`] of length 1 (its square within [`EFF_ZERO_SQ`] of 1), both
@@ -241,31 +293,6 @@ impl Vec2 {
         let scale = 1.0 + self.max_dimension();
         let dist = (self.x - o.x).abs() + (self.y - o.y).abs();
         dist >= EFF_ZERO * scale
-    }
-
-    /// Component `0` (`x`) or `1` (`y`) (`operator[] const`).
-    pub fn component(self, index: usize) -> Result<f64> {
-        match index {
-            0 => Ok(self.x),
-            1 => Ok(self.y),
-            _ => Err(Self::bad_index(index)),
-        }
-    }
-
-    /// Mutable component `0` (`x`) or `1` (`y`) (`operator[]`).
-    pub fn component_mut(&mut self, index: usize) -> Result<&mut f64> {
-        match index {
-            0 => Ok(&mut self.x),
-            1 => Ok(&mut self.y),
-            _ => Err(Self::bad_index(index)),
-        }
-    }
-
-    fn bad_index(index: usize) -> NumError {
-        NumError::failed(
-            "geom::vector2d::Vec2::component",
-            NumFailure::IndexOutOfRange { index, len: 2 },
-        )
     }
 
     /// Angle between two vectors in radians, in `[0, PI]` (`AngleBetween`).
@@ -566,9 +593,12 @@ mod tests {
         assert_eq!(v11, Vec2::new(30.0, 6.0));
         assert_eq!(v8 / 2.0, Vec2::new(2.5, 0.5));
         assert_eq!(2.0 * v8, v8 * 2.0);
-        assert_eq!(v8.component(0).unwrap(), 5.0);
-        *v11.component_mut(1).unwrap() = 6.0;
+        assert_eq!(v8[Axis2::X], 5.0);
+        v11[Axis2::Y] = 6.0;
         assert_eq!(v11.y, 6.0);
+        let mut p = Point2::new(1.0, 2.0);
+        p[Axis2::X] = 3.0;
+        assert_eq!(Axis2::ALL.map(|a| p[a]), [3.0, 2.0]);
 
         let r = v5.rotate(PI / 2.0);
         assert!(close(r.x, -4.0) && close(r.y, 3.0));
@@ -630,8 +660,6 @@ mod tests {
     fn misc() {
         let mut v = Vec2::new(1.0, 2.0);
         assert_eq!(v.swap_xy(), Vec2::new(2.0, 1.0));
-        assert!(v.component(2).is_err());
-        assert!(v.component_mut(5).is_err());
         v -= Vec2::new(1.0, 1.0);
         assert_eq!(v, Vec2::new(0.0, 1.0));
         assert!(v.is_zero(1.5));

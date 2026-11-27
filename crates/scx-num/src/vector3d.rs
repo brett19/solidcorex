@@ -10,6 +10,10 @@
 // `operators_and_predicates` its `UNDEF` cases.
 // Then the transcendental functions became `fmath`'s (correctly rounded, the same bits on every
 // platform) in place of the C library's, so results may differ from the pin's in the last bit.
+// Then `component(usize)` (0.0 past 2) and `component_mut` became `Index<Axis>` and
+// `IndexMut<Axis>` on `Vec3` and `Point3`. Angle tolerances are radians:
+// `is_parallel_to(o, max_angle)`, `is_perpendicular_to(o, max_angle)`, and
+// `alignment(o, max_angle) -> Alignment` in place of `parallel_sense`'s `(bool, Option<bool>)`.
 //! Three-dimensional vectors, points and unit vectors ([`Vec3`] / [`Point3`] /
 //! [`UnitVec3`]): affine arithmetic, lengths,
 //! angles, projections, rotation, orthonormal frames and derivatives of unit vectors,
@@ -42,7 +46,7 @@
 //! | [`Vec3::triple_product`]                     | `TripleProduct`                                  |
 //! | [`Vec3::normal_in_plane`]                    | `NormalInPlane`                                  |
 //! | [`Vec3::max_dimension`], [`Vec3::min_dimension`] | `GetMaxDimension`, `GetMinDimension`         |
-//! | [`Vec3::is_parallel_to`], [`Vec3::parallel_sense`] | `IsParallelTo`                             |
+//! | [`Vec3::is_parallel_to`], [`Vec3::alignment`] | `IsParallelTo`                                  |
 //! | [`Vec3::is_perpendicular_to`]                | `IsPerpendicularTo`                              |
 //! | [`Vec3::project_to_plane`]                   | `ProjectToPlane`                                 |
 //! | [`Point3::project_point_to_plane`]           | `ProjectPointToPlane`                            |
@@ -55,7 +59,7 @@
 //! | [`Vec3::multiply`]                           | `Multiply`                                       |
 //! | [`Vec3::derivative_of_cross_product`]        | `DerivativeOfCrossProduct`                       |
 //! | [`Vec3::solve_two_linear_equations`]         | `SolveTwoLinearEquations`                        |
-//! | [`Vec3::component`], [`Vec3::component_mut`] | `operator[] const`, `operator[]`                 |
+//! | `v[Axis::X]` ([`Axis`], `Index`/`IndexMut`)   | `operator[] const`, `operator[]`                 |
 //! | [`Vec3::approx_eq`]                          | `operator==`                                     |
 //! | [`Vec3::is_inside_sector`]                   | `IsInsideSector`                                 |
 //! | [`Vec3::make_unit_ortho_vectors`]            | `MakeUnitOrthoVectors`                           |
@@ -86,14 +90,14 @@
 //! - `UnitizedDerivative2`/`3` return `SM_ERR` *and* the input derivatives for a
 //!   degenerate `self`; the Rust versions return `Err(inputs)` so callers that ignore
 //!   the status (`.unwrap_or_else(|d| d)`) see the same values.
-//! - `IsParallelTo`'s optional anti-parallel out-flag is [`Vec3::parallel_sense`].
+//! - Angles are radians. `IsParallelTo`'s degree tolerance and its optional anti-parallel
+//!   out-flag are [`Vec3::alignment`]'s radian threshold and [`Alignment`].
 //! - Upstream's tolerant `operator==` is [`Vec3::approx_eq`]; Rust `==`
 //!   (`PartialEq`) is exact component equality.
 //! - `Default` is the zero vector. Upstream's default constructor gives an unset vector
 //!   (all components `SM_UNDEF_DOUBLE`); here an unset vector is an `Option<Vec3>`.
-//! - `operator[] const` with an index above 2 returns `0.0` (its `SE(SM_ERR)` is a no-op
-//!   in the release build), as [`Vec3::component`] does. The non-const `operator[]`
-//!   dereferences `NULL`; [`Vec3::component_mut`] returns `SM_ERR` instead.
+//! - `operator[]` takes an [`Axis`], so no index is out of range. Upstream's `operator[] const`
+//!   answered `0.0` above 2 and the non-const one dereferenced `NULL`.
 //! - `operator/=` keeps the vector unchanged when `|d|` is negligible against every
 //!   component; `operator/` always divides. `DivAssign` and `Div` differ the same way.
 //! - Statuses ignored upstream through `SE(...)` (a no-op in the release build) are
@@ -162,11 +166,6 @@ pub fn asin(x: f64) -> f64 {
     crate::fmath::asin(x)
 }
 
-/// `SM_DEG2RAD(a)` = `a * (SM_PI / 180.0)`.
-fn deg_to_rad(a: f64) -> f64 {
-    a * (PI / 180.0)
-}
-
 /// `SM_IS_VALID_DOUBLE(a)`: not NaN, finite and within `±SM_BIG_DOUBLE / 100`.
 fn is_valid_double(a: f64) -> bool {
     // `(a) == (a)` is `!a.is_nan()`.
@@ -203,6 +202,33 @@ pub struct Point3<T = f64> {
     pub y: T,
     /// Z coordinate.
     pub z: T,
+}
+
+/// A coordinate axis of 3-space: what indexes a [`Vec3`] or a [`Point3`] (`v[Axis::Y]`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Axis {
+    /// The x axis.
+    X,
+    /// The y axis.
+    Y,
+    /// The z axis.
+    Z,
+}
+
+impl Axis {
+    /// Every axis, in x, y, z order.
+    pub const ALL: [Self; 3] = [Self::X, Self::Y, Self::Z];
+}
+
+/// How two directions lie ([`Vec3::alignment`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Alignment {
+    /// Parallel and pointing the same way.
+    Same,
+    /// Parallel and pointing opposite ways.
+    Opposite,
+    /// Not parallel, or one has no direction.
+    Neither,
 }
 
 /// A direction: a [`Vec3`] of length 1 (its square within [`EFF_ZERO_SQ`] of 1), every
@@ -434,6 +460,48 @@ impl Point3 {
         let eye_point_diff = self - eye_point;
         eye_point
             + eye_point_diff * (eye_plane_diff.dot(plane_normal) / eye_point_diff.dot(plane_normal))
+    }
+}
+
+impl<T> core::ops::Index<Axis> for Vec3<T> {
+    type Output = T;
+    fn index(&self, axis: Axis) -> &T {
+        match axis {
+            Axis::X => &self.x,
+            Axis::Y => &self.y,
+            Axis::Z => &self.z,
+        }
+    }
+}
+
+impl<T> core::ops::IndexMut<Axis> for Vec3<T> {
+    fn index_mut(&mut self, axis: Axis) -> &mut T {
+        match axis {
+            Axis::X => &mut self.x,
+            Axis::Y => &mut self.y,
+            Axis::Z => &mut self.z,
+        }
+    }
+}
+
+impl<T> core::ops::Index<Axis> for Point3<T> {
+    type Output = T;
+    fn index(&self, axis: Axis) -> &T {
+        match axis {
+            Axis::X => &self.x,
+            Axis::Y => &self.y,
+            Axis::Z => &self.z,
+        }
+    }
+}
+
+impl<T> core::ops::IndexMut<Axis> for Point3<T> {
+    fn index_mut(&mut self, axis: Axis) -> &mut T {
+        match axis {
+            Axis::X => &mut self.x,
+            Axis::Y => &mut self.y,
+            Axis::Z => &mut self.z,
+        }
     }
 }
 
@@ -719,39 +787,50 @@ impl Vec3 {
         d
     }
 
-    /// True when `self` and `o` are parallel or anti-parallel within `ang_tol_deg`
-    /// degrees (`IsParallelTo`; upstream default [`crate::math::EFF_ZERO_DEG`]).
-    /// Zero-length vectors are parallel to nothing.
+    /// True when `self` and `o` are parallel or anti-parallel within `max_angle` radians
+    /// (`IsParallelTo`, whose tolerance is in degrees). Zero-length vectors are parallel to
+    /// nothing.
     #[must_use]
-    pub fn is_parallel_to(self, o: Self, ang_tol_deg: f64) -> bool {
-        self.parallel_sense(o, ang_tol_deg).0
+    pub fn is_parallel_to(self, o: Self, max_angle: f64) -> bool {
+        self.alignment(o, max_angle) != Alignment::Neither
     }
 
-    /// [`Vec3::is_parallel_to`] plus `IsParallelTo`'s anti-parallel out-flag: `Some(true)`
-    /// when the angle exceeds `PI/2`, `Some(false)` otherwise, `None` (flag untouched
-    /// upstream) when either vector has zero length.
+    /// How `self` and `o` lie: [`Alignment::Same`] or [`Alignment::Opposite`] when they are
+    /// parallel within `max_angle` radians, as their angle is at most or more than a right
+    /// angle; [`Alignment::Neither`] otherwise, and when either has zero length
+    /// (`IsParallelTo` with its anti-parallel out-flag).
     #[must_use]
-    pub fn parallel_sense(self, o: Self, ang_tol_deg: f64) -> (bool, Option<bool>) {
-        let mut parallel = false;
-        let mut anti = None;
-        if self.length_squared() > EFF_ZERO_SQ && o.length_squared() > EFF_ZERO_SQ {
-            // SE(): a failed AngleBetween leaves 0.0.
-            let mut ang = self.angle_between(o).unwrap_or(0.0);
-            if ang > PI / 2.0 {
-                ang = PI - ang;
-                anti = Some(true);
-            } else {
-                anti = Some(false);
+    pub fn alignment(self, o: Self, max_angle: f64) -> Alignment {
+        match self.angle_off_line(o) {
+            Some((ang, opposite)) if ang < max_angle => {
+                if opposite {
+                    Alignment::Opposite
+                } else {
+                    Alignment::Same
+                }
             }
-            if ang < deg_to_rad(ang_tol_deg) {
-                parallel = true;
-            }
+            _ => Alignment::Neither,
         }
-        (parallel, anti)
+    }
+
+    /// The angle between the lines of `self` and `o`, in `[0, PI/2]`, and whether they point
+    /// more than a right angle apart; `None` when either has zero length.
+    fn angle_off_line(self, o: Self) -> Option<(f64, bool)> {
+        if self.length_squared() <= EFF_ZERO_SQ || o.length_squared() <= EFF_ZERO_SQ {
+            return None;
+        }
+        // Both have a length, so only a non-finite one fails; it reads as angle 0, as the
+        // pin's ignored status left it.
+        let ang = self.angle_between(o).unwrap_or(0.0);
+        Some(if ang > PI / 2.0 {
+            (PI - ang, true)
+        } else {
+            (ang, false)
+        })
     }
 
     /// Not upstream: this direction, reversed when it points more than a right angle away from
-    /// `like` ([`Vec3::parallel_sense`]'s anti-parallel flag): a line's direction given the sense
+    /// `like` (by their angle, as [`Vec3::alignment`] reads it): a line's direction given the sense
     /// of another, as a turn about an edge found again keeps the sense it was picked with.
     /// `None` when either has zero length or a coordinate that is not finite. The two are
     /// compared scaled by their largest coordinate, so a vector whose squared length overflows
@@ -765,18 +844,19 @@ impl Vec3 {
             return None;
         }
         let scaled = |v: Self| v * (1.0 / v.x.abs().max(v.y.abs()).max(v.z.abs()));
-        let anti = scaled(self).parallel_sense(scaled(like), 0.0).1?;
-        Some(if anti { -self } else { self })
+        let (_, opposite) = scaled(self).angle_off_line(scaled(like))?;
+        Some(if opposite { -self } else { self })
     }
 
-    /// True when `self` and `o` are perpendicular within `ang_tol_deg` degrees
-    /// (`IsPerpendicularTo`). Zero-length vectors are perpendicular to nothing.
+    /// True when `self` and `o` are perpendicular within `max_angle` radians
+    /// (`IsPerpendicularTo`, whose tolerance is in degrees). Zero-length vectors are
+    /// perpendicular to nothing.
     #[must_use]
-    pub fn is_perpendicular_to(self, o: Self, ang_tol_deg: f64) -> bool {
+    pub fn is_perpendicular_to(self, o: Self, max_angle: f64) -> bool {
         if self.length_squared() > EFF_ZERO_SQ && o.length_squared() > EFF_ZERO_SQ {
             // SE(): a failed AngleBetween leaves 0.0.
             let ang = self.angle_between(o).unwrap_or(0.0);
-            if (ang - PI / 2.0).abs() < deg_to_rad(ang_tol_deg) {
+            if (ang - PI / 2.0).abs() < max_angle {
                 return true;
             }
         }
@@ -859,35 +939,6 @@ impl Vec3 {
             "geom::vector3d::Vec3::solve_two_linear_equations",
             NumFailure::Singular { measure: denom },
         ))
-    }
-
-    /// Component `0` (`x`), `1` (`y`) or `2` (`z`); `0.0` for any other index
-    /// (`operator[] const`).
-    #[must_use]
-    pub fn component(self, index: usize) -> f64 {
-        match index {
-            0 => self.x,
-            1 => self.y,
-            2 => self.z,
-            _ => 0.0,
-        }
-    }
-
-    /// Mutable component `0` (`x`), `1` (`y`) or `2` (`z`) (`operator[]`).
-    ///
-    /// # Errors
-    ///
-    /// `SM_ERR` ([`NumFailure`](crate::error::NumFailure)) for any other index.
-    pub fn component_mut(&mut self, index: usize) -> Result<&mut f64> {
-        match index {
-            0 => Ok(&mut self.x),
-            1 => Ok(&mut self.y),
-            2 => Ok(&mut self.z),
-            _ => Err(NumError::failed(
-                "geom::vector3d::Vec3::component_mut",
-                NumFailure::IndexOutOfRange { index, len: 3 },
-            )),
-        }
     }
 
     /// Upstream's tolerant equality (`operator==`): the L1 distance is below
@@ -1514,7 +1565,7 @@ mod tests {
             .make_unit_ortho_vectors(None)
             .is_err());
     }
-    use crate::math::EFF_ZERO_DEG;
+    use crate::math::EFF_ZERO_RAD;
 
     fn close(a: f64, b: f64) -> bool {
         (a - b).abs() <= EFF_ZERO
@@ -1568,9 +1619,12 @@ mod tests {
         v11 /= 2.0;
         assert!(close3(v11, 15.0, 3.0, 6.0));
         assert!(close3(v8.multiply(v9), 5.0, 3.0, 12.0));
-        assert_eq!(v8.component(0), 5.0);
-        *v11.component_mut(1).unwrap() = 7.0;
+        assert_eq!(v8[Axis::X], 5.0);
+        v11[Axis::Y] = 7.0;
         assert_eq!(v11.y, 7.0);
+        let mut p = v8.to_point();
+        p[Axis::Z] = -1.0;
+        assert_eq!(Axis::ALL.map(|a| p[a]), [5.0, 1.0, -1.0]);
 
         let mut tmp0 = Vec3::new(0.0, 0.0, 1.0);
         let mut tmp1 = Vec3::new(0.0, 1.0, 0.0);
@@ -1583,9 +1637,9 @@ mod tests {
         tmp0 = Vec3::new(1.0, 1.0, 1.0);
         tmp1 = Vec3::new(3.0, 3.0, 3.0);
         assert!(tmp0.is_colinear_with(tmp1, Point3::ORIGIN, Point3::new(1.0, 1.0, 1.0)));
-        assert!(tmp0.is_parallel_to(tmp1, 0.000001));
+        assert!(tmp0.is_parallel_to(tmp1, 1.0e-6_f64.to_radians()));
         tmp1 = Vec3::new(-3.0, 2.0, 1.0);
-        assert!(tmp0.is_perpendicular_to(tmp1, 0.000001));
+        assert!(tmp0.is_perpendicular_to(tmp1, 1.0e-6_f64.to_radians()));
         v21 = Vec3::new(0.0, 2.0, 1.0);
         assert!(tmp0.is_inside_sector(tmp1, v21, v22));
         assert!(close(tmp0.triple_product(v21, v22), -1.0));
@@ -1742,12 +1796,14 @@ mod tests {
         assert_eq!(Vec3::ZERO.unitized_derivative2(d, -d), Err([d, -d]));
         assert_eq!(Vec3::ZERO.unitized_derivative3(d, d, d), Err([d, d, d]));
         // Zero vectors are neither parallel nor perpendicular.
-        assert_eq!(Vec3::ZERO.parallel_sense(Vec3::X, 1.0), (false, None));
+        assert_eq!(Vec3::ZERO.alignment(Vec3::X, 1.0), Alignment::Neither);
         assert!(!Vec3::X.is_perpendicular_to(Vec3::ZERO, 1.0));
         assert_eq!(
-            Vec3::X.parallel_sense(-Vec3::X, EFF_ZERO_DEG),
-            (true, Some(true))
+            Vec3::X.alignment(-Vec3::X, EFF_ZERO_RAD),
+            Alignment::Opposite
         );
+        assert_eq!(Vec3::X.alignment(Vec3::X, EFF_ZERO_RAD), Alignment::Same);
+        assert_eq!(Vec3::X.alignment(Vec3::Y, 1.0), Alignment::Neither);
         assert!(Vec3::X.angle_between(Vec3::ZERO).is_err());
         // Parallel to the projection axis gives 0.
         assert_eq!(Vec3::Z.ccw_angle_between(Vec3::Z, Vec3::X).unwrap(), 0.0);
@@ -1781,8 +1837,6 @@ mod tests {
         z /= 0.0;
         assert_eq!(z, Vec3::ZERO);
         assert!((Vec3::ZERO / 0.0).x.is_nan());
-        assert_eq!(v.component(3), 0.0);
-        assert!(v.component_mut(3).is_err());
         assert!(Vec3::new(f64::NAN, 0.0, 0.0).is_invalid());
         assert!(Vec3::new(1e19, 0.0, 0.0).is_invalid());
         assert!(!Vec3::new(1e17, 0.0, 0.0).is_invalid());

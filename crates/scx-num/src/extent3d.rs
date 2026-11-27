@@ -99,7 +99,7 @@ use crate::math::{
     is_infinite_param, max2, min2, Point3, Vec3, BIG_DOUBLE, EFF_ZERO, EFF_ZERO_SQ,
     INFINITE_PARAMETER, PI,
 };
-use crate::vector3d::{asin, sqrt, UnitVec3};
+use crate::vector3d::{asin, sqrt, Axis, UnitVec3};
 
 /// Classification of one interval of an extent (`SmBoundaryType`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -402,17 +402,16 @@ impl Extent3d {
         self.max.z
     }
 
-    /// Minimum along axis `i` (0 = x, 1 = y, 2 = z); `0.0` for any other `i`, as
-    /// upstream's `SmVector3d::operator[]` (`GetMin(ULONG)`).
+    /// Minimum along `axis` (`GetMin(ULONG)`, which answered 0.0 past 2).
     #[must_use]
-    pub fn min_at(&self, i: usize) -> f64 {
-        self.min.to_vec().component(i)
+    pub fn min_at(&self, axis: Axis) -> f64 {
+        self.min[axis]
     }
 
-    /// Maximum along axis `i`; `0.0` for `i > 2` (`GetMax(ULONG)`).
+    /// Maximum along `axis` (`GetMax(ULONG)`).
     #[must_use]
-    pub fn max_at(&self, i: usize) -> f64 {
-        self.max.to_vec().component(i)
+    pub fn max_at(&self, axis: Axis) -> f64 {
+        self.max[axis]
     }
 
     /// Largest side length (`GetMaxLength`).
@@ -673,11 +672,11 @@ impl Extent3d {
     #[must_use]
     pub fn span_along(&self, origin: Point3, direction: Vec3) -> [f64; 2] {
         let (mut low, mut high) = (0.0, 0.0);
-        for i in 0..3 {
-            let d = direction.component(i);
+        for axis in Axis::ALL {
+            let d = direction[axis];
             let ends = [
-                (self.min_at(i) - origin.to_vec().component(i)) * d,
-                (self.max_at(i) - origin.to_vec().component(i)) * d,
+                (self.min_at(axis) - origin[axis]) * d,
+                (self.max_at(axis) - origin[axis]) * d,
             ];
             low += ends[0].min(ends[1]);
             high += ends[0].max(ends[1]);
@@ -1282,8 +1281,8 @@ mod tests {
         assert!(f.set_v_max(-3.0).is_err());
         f.set_v_min(4.0).unwrap();
         assert_eq!(f.min(), p(5.0, 4.0, -2.0));
-        assert_eq!(f.min_at(7), 0.0);
-        assert_eq!(f.max_at(2), 2.0);
+        assert_eq!(f.min_at(Axis::Y), 4.0);
+        assert_eq!(f.max_at(Axis::Z), 2.0);
     }
 
     #[test]

@@ -19,15 +19,19 @@
 use scx_num::extent1d::Extent1d;
 use scx_num::extent2d::Extent2d;
 use scx_num::extent3d::Extent3d;
+use scx_num::vector2d::Axis2;
+use scx_num::vector3d::Axis;
 
 /// An axis-aligned box the tree can hold: [`Extent1d`], [`Extent2d`] or [`Extent3d`].
 pub trait Bounds: Copy {
-    /// The number of axes.
-    const AXES: usize;
-    /// The lower bound on `axis` (below [`Bounds::AXES`]).
-    fn lo(&self, axis: usize) -> f64;
+    /// An axis of the box.
+    type Axis: Copy + 'static;
+    /// Every axis, in order.
+    const AXES: &'static [Self::Axis];
+    /// The lower bound on `axis`.
+    fn lo(&self, axis: Self::Axis) -> f64;
     /// The upper bound on `axis`.
-    fn hi(&self, axis: usize) -> f64;
+    fn hi(&self, axis: Self::Axis) -> f64;
     /// The smallest box holding both.
     #[must_use]
     fn union(&self, other: &Self) -> Self;
@@ -36,11 +40,12 @@ pub trait Bounds: Copy {
 }
 
 impl Bounds for Extent1d {
-    const AXES: usize = 1;
-    fn lo(&self, _: usize) -> f64 {
+    type Axis = ();
+    const AXES: &'static [()] = &[()];
+    fn lo(&self, (): ()) -> f64 {
         self.min()
     }
-    fn hi(&self, _: usize) -> f64 {
+    fn hi(&self, (): ()) -> f64 {
         self.max()
     }
     fn union(&self, other: &Self) -> Self {
@@ -52,19 +57,18 @@ impl Bounds for Extent1d {
 }
 
 impl Bounds for Extent2d {
-    const AXES: usize = 2;
-    fn lo(&self, axis: usize) -> f64 {
-        if axis == 0 {
-            self.u_min()
-        } else {
-            self.v_min()
+    type Axis = Axis2;
+    const AXES: &'static [Axis2] = &Axis2::ALL;
+    fn lo(&self, axis: Axis2) -> f64 {
+        match axis {
+            Axis2::X => self.u_min(),
+            Axis2::Y => self.v_min(),
         }
     }
-    fn hi(&self, axis: usize) -> f64 {
-        if axis == 0 {
-            self.u_max()
-        } else {
-            self.v_max()
+    fn hi(&self, axis: Axis2) -> f64 {
+        match axis {
+            Axis2::X => self.u_max(),
+            Axis2::Y => self.v_max(),
         }
     }
     fn union(&self, other: &Self) -> Self {
@@ -76,11 +80,12 @@ impl Bounds for Extent2d {
 }
 
 impl Bounds for Extent3d {
-    const AXES: usize = 3;
-    fn lo(&self, axis: usize) -> f64 {
+    type Axis = Axis;
+    const AXES: &'static [Axis] = &Axis::ALL;
+    fn lo(&self, axis: Axis) -> f64 {
         self.min_at(axis)
     }
-    fn hi(&self, axis: usize) -> f64 {
+    fn hi(&self, axis: Axis) -> f64 {
         self.max_at(axis)
     }
     fn union(&self, other: &Self) -> Self {
@@ -117,10 +122,12 @@ pub struct BoxTree<B> {
 }
 
 fn has_nan<B: Bounds>(b: &B) -> bool {
-    (0..B::AXES).any(|a| b.lo(a).is_nan() || b.hi(a).is_nan())
+    B::AXES
+        .iter()
+        .any(|&a| b.lo(a).is_nan() || b.hi(a).is_nan())
 }
 
-fn centre<B: Bounds>(b: &B, axis: usize) -> f64 {
+fn centre<B: Bounds>(b: &B, axis: B::Axis) -> f64 {
     0.5 * (b.lo(axis) + b.hi(axis))
 }
 
@@ -188,9 +195,9 @@ impl<B: Bounds> BoxTree<B> {
         }
         let boxes = &self.boxes;
         let items = self.order.get_mut(start..end)?;
-        let mut axis = 0;
+        let mut axis = *B::AXES.first()?;
         let mut spread = f64::NEG_INFINITY;
-        for a in 0..B::AXES {
+        for &a in B::AXES {
             let (lo, hi) = items
                 .iter()
                 .filter_map(|&i| boxes.get(i))

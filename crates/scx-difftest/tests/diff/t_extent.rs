@@ -330,10 +330,7 @@ diff!(e3_queries2, |a: B| {
         (e.boundary_types(), e.is_bounded(), e.any_bounds()),
     )
 });
-diff!(e3_min_max_at, |a: B, i: usize| (
-    m::e3(a).min_at(i),
-    m::e3(a).max_at(i)
-));
+diff!(e3_min_max_at, |a: B, i: usize| m::e3_at(&m::e3(a), i));
 diff!(e3_set_intervals, |a: B, i: I| {
     let (mut e, mut f) = (m::e3(a), m::e3(a));
     e.set_u_interval(&m::e1(i));

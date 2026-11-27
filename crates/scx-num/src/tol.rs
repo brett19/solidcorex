@@ -108,7 +108,7 @@
 use crate::certified::gamma;
 use crate::extent1d::Extent1d;
 use crate::extent3d::Extent3d;
-use crate::math::{max2, rad_to_deg, Vec3, EFF_ZERO, EFF_ZERO_SQ};
+use crate::math::{max2, Vec3, EFF_ZERO, EFF_ZERO_SQ};
 #[cfg(doc)]
 use crate::math::{EFF_ZERO_PARAM, EFF_ZERO_RAD, EFF_ZERO_SQRT};
 use crate::units::{coincident, Accuracy, Length, ParamTol, Resolution};
@@ -400,7 +400,7 @@ pub fn is_degenerate(v: Vec3, tol: Length) -> bool {
 /// [`crate::consts::PARALLEL_ANGLE_RAD`], which a caller now names).
 #[must_use]
 pub fn are_parallel(v1: Vec3, v2: Vec3, max_angle: f64) -> bool {
-    v1.is_parallel_to(v2, rad_to_deg(max_angle))
+    v1.is_parallel_to(v2, max_angle)
 }
 
 /// True when `v1` and `v2` are perpendicular within `max_angle` radians
@@ -408,7 +408,7 @@ pub fn are_parallel(v1: Vec3, v2: Vec3, max_angle: f64) -> bool {
 /// [`crate::consts::PARALLEL_ANGLE_RAD`]).
 #[must_use]
 pub fn are_perpendicular(v1: Vec3, v2: Vec3, max_angle: f64) -> bool {
-    v1.is_perpendicular_to(v2, rad_to_deg(max_angle))
+    v1.is_perpendicular_to(v2, max_angle)
 }
 
 // ---- parameter-space mapping ------------------------------------------------------

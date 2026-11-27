@@ -75,13 +75,16 @@ diff!(v3_triple_product, |a: V, b: V, c: V| m::v3(a)
 diff!(v3_normal_in_plane, |a: V, b: V| m::v3(a)
     .normal_in_plane(m::v3(b)));
 diff!(v3_is_parallel_to, |a: V, b: V, t: f64| m::v3(a)
-    .is_parallel_to(m::v3(b), t));
-diff!(v3_parallel_sense, |a: V, b: V, t: f64| m::v3(a)
-    .parallel_sense(m::v3(b), t));
+    .is_parallel_to(m::v3(b), m::angle_tol(t)));
+diff!(v3_alignment, |a: V, b: V, t: f64| m::alignment(
+    m::v3(a),
+    m::v3(b),
+    t
+));
 diff!(v3_with_sense_of, |a: V, b: V| m::v3(a)
     .with_sense_of(m::v3(b)));
 diff!(v3_is_perpendicular_to, |a: V, b: V, t: f64| m::v3(a)
-    .is_perpendicular_to(m::v3(b), t));
+    .is_perpendicular_to(m::v3(b), m::angle_tol(t)));
 diff!(v3_project_to_plane, |a: V, b: V| m::v3(a)
     .project_to_plane(m::v3(b)));
 diff!(v3_project_point_to_plane, |a: V, b: V, c: V| m::p3(a)
@@ -121,10 +124,10 @@ diff!(v3_derivative_of_cross_product, |a: V, b: V, c: V, d: V| {
 });
 diff!(v3_solve_two_linear_equations, |a: V, b: V| m::v3(a)
     .solve_two_linear_equations(m::v3(b)));
-diff!(v3_component, |a: V, i: usize| m::v3(a).component(i));
+diff!(v3_component, |a: V, i: usize| m::component3(m::v3(a), i));
 diff!(v3_component_mut, |a: V, i: usize, x: f64| {
     let mut v = m::v3(a);
-    let r = v.component_mut(i).map(|c| *c = x);
+    let r = m::set3(&mut v, i, x);
     (r, v)
 });
 diff!(v3_approx_eq, |a: V, b: V| (!pin_unset(&a)
@@ -228,10 +231,10 @@ diff!(v2_approx, |a: P, b: P| (
     m::v2(a).approx_eq(m::v2(b)),
     m::v2(a).approx_ne(m::v2(b))
 ));
-diff!(v2_component, |a: P, i: usize| m::v2(a).component(i));
+diff!(v2_component, |a: P, i: usize| m::component2(m::v2(a), i));
 diff!(v2_component_mut, |a: P, i: usize, x: f64| {
     let mut v = m::v2(a);
-    let r = v.component_mut(i).map(|c| *c = x);
+    let r = m::set2(&mut v, i, x);
     (r, v)
 });
 diff!(v2_angle_between, |a: P, b: P| m::v2(a)
