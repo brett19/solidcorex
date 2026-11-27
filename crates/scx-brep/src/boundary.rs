@@ -292,19 +292,17 @@ impl Tree {
         old: Option<(&FaceRecord, &Self)>,
     ) -> Option<(Self, Vec<Option<usize>>)> {
         // `old`'s runs by their loop's first use.
-        let by_first: BTreeMap<(EdgeId, bool), Vec<usize>> = old
-            .map(|(r, t)| {
-                let mut m: BTreeMap<_, Vec<usize>> = BTreeMap::new();
-                for (i, run) in t.runs.iter().enumerate() {
-                    if let Some(u) = r.loops.get(run.lp as usize).and_then(|l| l.uses.first()) {
-                        m.entry((u.edge, u.sense == Sense::Forward))
-                            .or_default()
-                            .push(i);
-                    }
+        let by_first: BTreeMap<(EdgeId, bool), Vec<usize>> = old.map_or_default(|(r, t)| {
+            let mut m: BTreeMap<_, Vec<usize>> = BTreeMap::new();
+            for (i, run) in t.runs.iter().enumerate() {
+                if let Some(u) = r.loops.get(run.lp as usize).and_then(|l| l.uses.first()) {
+                    m.entry((u.edge, u.sense == Sense::Forward))
+                        .or_default()
+                        .push(i);
                 }
-                m
-            })
-            .unwrap_or_default();
+            }
+            m
+        });
         let mut pieces = Vec::new();
         let mut runs = Vec::new();
         let mut from = Vec::new();
@@ -456,13 +454,12 @@ impl Tree {
         let mut total = Ivl::from(0.0);
         for r in 0..self.runs.len() {
             let run = *self.runs.get(r)?;
-            let part = match run.area.get(at).copied().flatten() {
-                Some(a) => a,
-                None => {
-                    let a = self.run_area(rec, &run, c, k)?;
-                    *self.runs.get_mut(r)?.area.get_mut(at)? = Some(a);
-                    a
-                }
+            let part = if let Some(a) = run.area.get(at).copied().flatten() {
+                a
+            } else {
+                let a = self.run_area(rec, &run, c, k)?;
+                *self.runs.get_mut(r)?.area.get_mut(at)? = Some(a);
+                a
             };
             total = total + part;
         }
