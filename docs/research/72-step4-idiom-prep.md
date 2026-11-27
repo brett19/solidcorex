@@ -1464,3 +1464,80 @@ Proposed row 8 amends 01's plan text, not an 04 row:
   checks, not the exact triangle counts, which are the pin's output, not truth.
 - It did not check whether `scx-brep`'s `finish` accepts a vertex shared by two solid regions. That
   is D5's question.
+
+## 14. Built (11-27)
+
+### 14.1 T9 as built (11-27): `scx_testkit::solid`
+
+**What.** `crates/scx-testkit/src/solid.rs` (always on, plain `f64` data, no geometry type) and
+`crates/scx-testkit/tests/solid.rs` (11 tests, 1.5 s in debug).
+
+- `Moments { volume, first, second }`: `int 1`, `int x`, `int x x^T` at unit density about the
+  placement's origin. `plus`, `minus`, `translated`, `rotated`, `placed(&Frame)`, `centroid`,
+  `inertia_about_centroid`. `Solid { moments, area }` with `place(&Frame)`.
+- Recipes at the standard placement (axis `z`, base on `z = 0`; sphere, cap and torus centred on
+  the origin): `block`, `cylinder`, `cone(r0, r1, h)` (a frustum; `r1 = 0` a cone), `sphere`,
+  `sphere_cap(r, h)`, `torus_sector(R, r, sweep)` and `torus` (sweep `2 pi`; `pi` is half a
+  torus), `plate(dx, dy, dz, &[Hole])` (a block less through-cylinders), `gear(R, h, count,
+  root, gap, phase)` (`gear_60`), and `extrusion(&[Loop], h)` with `Loop { start, segs: Vec<Seg> }`,
+  `Seg::{Line, Arc}`, plus `profile_area`.
+- `SolidError::{Dimension, Range, Profile, Apart}` for a recipe with no solid (holes that
+  overlap or leave the plate, a slot wider than the pitch, an open loop, an arc whose ends differ
+  in radius, a clockwise outer loop).
+- `REL_ERR = 1e-13`, the stated error, against the largest term in the result.
+
+**Derivations** are in the doc comments: bodies of revolution by slice polynomials integrated
+exactly (`V = pi int rho^2`, `S_xx = pi/4 int rho^4`, ...); the torus sector by the tube's
+disk integrals; planar profiles by Green's theorem with closed-form `int cos^a sin^b` on arcs
+(the reduction formulas); the gear by the formula of §2.4 for volume and area, and by the same
+profile machinery for its moments (a slot is a loop of three lines and one arc, turned about
+`z` and subtracted).
+
+**Checked by** (each an independent route, `tests/solid.rs`):
+1. textbook formulas (block, cylinder, cone and frustum, sphere, hemisphere and cap, torus,
+   half torus; the degenerate cases `cone(r, r) = cylinder`, `cap(2 r) = sphere`, two half
+   tori = a torus, a circle profile = a cylinder, a rectangle = a block, plate + holes = block);
+2. double-double evaluation of the stated error (sphere, cylinder, torus, `plate_12`, `gear_60`;
+   all within `REL_ERR`);
+3. Monte Carlo with `scx_num::hash::Rng`, all ten integrands (`1, x, y, z, xx, ...`) of the body
+   placed at the world frame and two seeded random frames, within 5 sigma of the sample
+   variance (300,000 to 400,000 samples; five primitives, three torus sweeps, the cap, `plate_12`,
+   `gear_60`);
+4. nested quadrature of a gear slot (3-point Gauss on 4,000 panels) against the profile
+   machinery's slot moments;
+5. polygon moments (shoelace) of arcs cut into 40,000 chords for profiles with a hole, a
+   clockwise arc, a reflex arc and a loop far from the origin (1e-8);
+6. rigid motion: volume and area bit-equal, the centroid moves as a point, the inertia turns as
+   `R I R^T`, and placing twice equals placing by the composed frame; the gear turned by one
+   pitch is the same gear.
+
+**Decisions** (cases for and against).
+- *Moments as `int x x^T` about the placement's origin, not an inertia tensor.* For: they add and
+  subtract under Boolean recipes and move under a rigid motion by two short formulas, and the
+  tensor is a view. Against: a reader wants inertia; `inertia_about_centroid` gives it.
+- *`f64` with a stated bound, not double-double throughout.* For: the difftest compares with
+  `f64` bodies at 1e-9 relative, four orders looser than `REL_ERR`; the double-double check in
+  the tests shows the bound holds. Against: a cancelling sum (a plate with many large holes)
+  loses digits against its remainder; the bound is stated against the largest term for that
+  reason. A region small and far from its arcs' centres (the gear's slot, 45 from the centre,
+  1 wide) loses `(distance / size)^3` more; the slot's moments agree with quadrature to 1e-10.
+  The gear's total is unaffected, as the slots are 3% of it.
+- *Planar integrals taken about the first loop's start.* For: lines stop cancelling when the
+  region is small and far from the origin. Against: arcs still cancel against their centre.
+- *Slots and holes assumed apart and inside, refused otherwise (`Apart`).* For: the closed form
+  is then exact; the recipes (T12) all satisfy it. Against: an overlapping case has a closed form
+  too, but not a simple one, and a refusal is honest.
+- *The 3-point Gauss rule on lines in `extrusion`.* The integrand `x^p y^q dy` is a polynomial of
+  degree at most 3 along a line, so the rule (exact to degree 5) is exact: it is arithmetic, not
+  quadrature error.
+- *A gear's "box" is cut to the disk.* The pin's box (10 x gap x 12, from `x = 45`) is wider than
+  the disk and taller than the gear; only the part inside the cylinder removes material.
+
+**Deviation from 72 §2.4.** The text gives `plate_12` as `100000 - 5760 pi`. Twelve holes of
+radius 2 through height 10 remove `12 * pi * 4 * 10 = 480 pi` (5760 is 12 times too many; the
+volume would be `81,905`, not `98,492`). The code and tests use `100000 - 480 pi`; the
+difftest and T12 should too. The area is `2 (10^4 - 48 pi) + 4000 + 480 pi`.
+
+**Open.** Cones with a negative-slope frustum (`r1 > r0`) work (slice radius is linear); a
+cone with an apex inside the height range (a double cone) is two recipes. A membership oracle
+for these shapes is T10's, not here: the tests carry their own small ones.
