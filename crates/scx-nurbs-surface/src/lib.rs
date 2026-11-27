@@ -17,6 +17,7 @@
 //! The by-value edits (insertion, elevation, splitting, reversal, swapping, transformation)
 //! and enclosures build on these types (research 63 §2.5, NS3 and NS4).
 
+mod edit;
 mod error;
 mod eval;
 pub mod iges;

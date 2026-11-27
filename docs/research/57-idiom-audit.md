@@ -483,6 +483,90 @@ same files.
 - **Blast radius:** one impl. Every later crate copies it.
 - **Difftest:** unaffected. Errors are compared by variant and text.
 
+### M10. The global solver: a mutable solver object with virtual hooks
+
+Decided 11-27 while porting `geom/global_solver.rs` and `geom/solution_array.rs` (the
+pin's `SmGlobalSolver`, `SmSolution`, `SmSolutionArray`) to `scx-algo`'s `global_solve`,
+`solution` and `split_tree`. Each decision below was argued for and then against; the
+difftest is `scx-difftest/tests/diff/t_gsolve.rs`.
+
+- **The C++ shapes found:**
+  - `GlobalSolver` is a long-lived mutable object: `SolveIt` copies its arguments into
+    fields (operation, category, tolerance, `opt_vectors`, best so far), swaps the caller's
+    `SolutionArray` in and out, and keeps a recursion depth, a branch count and a cancel
+    token. The hooks (`GlobalSolve`'s virtuals) read those fields.
+  - The operation's vectors are `opt_vectors[i]`, indexed by convention per operation.
+    `OperationCategory` is a second enum derived from the first.
+  - "No best answer yet" is the sentinel `SM_BIG_DOUBLE` (1e20), reset to 0 for two of the
+    three maximising operations.
+  - `SolutionRequested` is a mode flag read deep inside `AddSortedSolution`.
+  - `Solution` is all public fields with counts beside fixed arrays
+    (`num_variables`/`parameters`, `num_objects`/`objects`).
+  - `LocalSolve` returns a bool, "needs more subdivision".
+- **Replacement:**
+  - `solve(trees, accumulator, hooks) -> Result<Accumulator, SolveError<E>>`, a pure call.
+    `SolveOptions { operation, keep, tolerance, incumbent_sq }` is the options value.
+    `Accumulator` holds the options, the best so far and the sorted solutions, and is
+    the only state a hook can change (`add_sorted`, `push`). The hooks are the trait
+    `BranchSolver<T, O, N>`: `local_solve` is required; `may_contain`, `is_ready` and
+    `split_choice` default to the module's generic tests (`may_contain`, `split_choice`,
+    free functions a hook can call). Against: a hook that needs per-solve state must carry
+    it itself. That is the point: the pin's hooks read solver fields that only `SolveIt`
+    set.
+  - `Operation` carries the vectors its generic tests read (`Rayfire { direction }`,
+    `Directed* { normal, direction }`, `PerspectiveIntersect { plane_point, normal, eye }`
+    and so on). Operations whose vectors only a hook reads carry none: the hook holds them.
+    `Goal` replaces `OperationCategory`, as a method.
+  - "No best yet" is `incumbent_sq: None`. It starts the maximising operations at 0 and
+    the others at infinity. The pin started `ProjectedMaximize` at 1e20, so it returned
+    no solution (pin defect `gsolve_projected_maximize`). Infinity also stops 1e20 from
+    culling boxes more than 1e10 apart. The skip of a solution valued `SM_BIG_DOUBLE` is
+    dropped, since no solver here makes the sentinel.
+  - `Keep { All, Best, Nodes }` replaces `SolutionRequested`. `FindAmbiguities` is unused
+    upstream and is left out.
+  - `Next { Done, Split }` replaces the bool. A split is
+    `Split { tree, order: ChildOrder }`, not `(usize, bool)`.
+  - `Solution<O>` has private counts. It is built by `point`, `range` and `nodes` with
+    const-generic arrays, then `with_objects`/`with_nodes`. `SolutionKind`, `EndClass`,
+    `Pairing`/`Prefer` and `SortKey` are enums. The object is a trait
+    (`parameter_count`, `parameter_interval`, `tolerance`) where the pin had `kind()` plus
+    a dozen defaulted geometry lookups. The geometry queries of `Solution` (`point`,
+    `point_of`) and the `SideRecord` stay with the crates that own the geometry.
+  - The traversal is an explicit stack in the order of the pin's recursion: first half
+    first, all of it. So there is no depth bound. `MAX_BRANCHES` (2^23) bounds the work, as
+    solidcore's `MAX_SOLVE_BRANCHES` did.
+  - There is no cancel token. A hook that is cancelled returns its own error, which ends
+    the solve.
+- **Corrections (results change; each is checked against brute force):**
+  - The rayfire child order reads the children of the tree being split. The pin read the
+    second tree's and failed when that was a leaf (pin defect `gsolve_rayfire`).
+  - A two-tree ordering asked of a third tree leaves its children in order. The pin
+    failed.
+  - `object_for_parameter` reads each object's own parameter count. The pin read object
+    0's kind on every pass and fell out of the loop answering object 0 (pin defect
+    `object_for_parameter`).
+- **Split from the pin's `tree.rs`:** `SplitTree<T>` is the global solver's tree: built
+  bottom up, immutable, with an item `T` per node. The spatial object tree
+  (`AddObject`/`GetObjectsInBox`) is `box_tree`. The surface neighbour searches belong to
+  the surface crate, and the span data (`BezierSpan`) to the curve crate, as their `T`.
+- **Not ported:** the `SurfaceProjectedIntersect` curve-on-surface test (it reads curves:
+  the curve crate's hook) and `PolySingleValue` (the poly solver's type).
+- **Difftest:** `t_gsolve`, 144 seeded scenarios per operation (Intersect as ranges,
+  Intersect keeping nodes, Minimize, Minimize keeping the best, Maximize,
+  ProjectedMinimize, ProjectedMaximize, Rayfire). It compares the solutions, the best
+  value and the order the leaf pairs were solved in. `gsolve_truths` checks 2,100
+  scenarios against brute force.
+- **Speed (MEASURED, 11-27):** the same hooks on both sides over 1,024 seeded scenarios,
+  trees built outside the loop, inputs through `black_box`, every field of every result
+  folded into a checksum, the two sides interleaved, 11 runs on one core, the median.
+  scx takes 0.49 to 0.51 of the pin's time on trees of up to 9 and 12 pieces (0.8 to 3.6
+  us a solve), and 0.56 to 0.63 on trees of up to 64 and 96 (37 to 126 us), but 0.91 for
+  Intersect there, whose time is in joining the ranges. In `scx-bench` (`algo/gsolve_*`,
+  criterion, one core, the batch of 1,024): Intersect 0.613 against 1.249 ms, Minimize
+  1.458 / 2.973, keeping the best 1.552 / 2.991, Maximize 1.517 / 3.114, ProjectedMinimize
+  3.503 / 6.728, and Minimize on the large trees 40.06 / 72.21 ms (0.49 to 0.55). The
+  private line and plane helpers are now `geom`'s; the times did not move.
+
 ## 3. Fix when touched
 
 Each item gives where it is, the pattern, and the replacement. The blast radius is MEASURED as
@@ -722,3 +806,98 @@ shape, what replaced it, and why. Items marked "(ruling)" are proposals for the 
   wants for interval jets, `eval_many`, `tangent_dir`, fitting, deviation, enclosures and IGES 126
   are not here. The curve's fields are private and every edit is by value, so these add methods
   without changing the type.
+
+## 9. M11: `scx-algo` geometry helpers, sort, pseudo boxes and point sets
+
+These decisions were made while porting `geom` (`smgu_*`: `plane`, `line`, `polygon`, `fit`),
+`sort`, `pseudo_box` and `point_set`. Each module's header lists its full Deviations; this
+section records the choices that the owner should rule on or that a later port should follow.
+
+- **`None` for an answer that is not finite or that overflows** (for the owner's ruling).
+  A parameter, distance, crossing or common point that is not finite gives `None`. That
+  covers input that is not finite, and a result past `f64`'s range. The pin answers NaN or
+  infinity as a value, or a silent 0 (`smgu_LineClosestPoint`'s zero-direction branch).
+  Where only an intermediate square overflows (components past `1e154`), the answer is
+  taken scaled and given: `line_closest_point` by `v / max |v_i|`; `point_project_to_plane`
+  along the unit normal when `k = d·n / |n|²` overflows; `triangle_decomposition` over the
+  longest side. The segment functions are the exception. A segment of zero length keeps the
+  pin's parameter 0, because a point is a fine segment. A segment with no answer gives the
+  parameter NaN, because the result is a struct of a parameter and a point that callers
+  read whole. Typing that struct as `Option` is the follow-up when the segment helpers next
+  change. The alternative was to keep the pin's values, so callers would test
+  `is_finite` themselves. In `t_gutil`, these answers are among the truth-checked pin defects
+  (`line_closest_point` has 1551 of them, and `point_project_to_plane` has 1507; some of
+  those are other causes).
+- **Not ported, on purpose.** `smgu_SolveQuadraticEqn` is a one-line forward to
+  `crate::polynomial::solve_quadratic`, so callers use that directly. The 3x3 and 4x4
+  determinant, inverse and multiply helpers are already in `scx_num::small_matrix`.
+  `smgu_VectorProjectToPlane` is `Vec3::project_to_plane`, with the same expression. The
+  `smgu_*Copy` helpers are not needed, because arrays are `Copy`. `geom/mod.rs` holds the
+  table from each upstream name to its replacement.
+- **`det3`'s term order.** `smgu_Determinant3Vectors` maps to `Vec3::triple_product`
+  (`a · (b × c)`). That has the same value, but it rounds differently. `pseudo_box` keeps a
+  private `det3` with upstream's six terms, in upstream's order:
+  `ax by cz - ax bz cy + ay bz cx - ay bx cz + az bx cy - az by cx`. A box's coordinates
+  are three such ratios, so a point exactly on a face classifies as upstream's does: the
+  roundings must match bit for bit where a coordinate is compared with an interval end.
+  `plane::intersect_three_planes` uses `triple_product`, because no
+  on-boundary decision hangs on it. 140 of its answers are within tolerance and none is a
+  mismatch. Where a sign or a zero decides a classification, keep the six terms; anywhere
+  else, use `triple_product`.
+- **Idiom: the fit structs are SMLib's out-parameter bag.** `PointFit`, `LineFit` and
+  `PlaneFit` are flat structs. Each has a `set_type`, an `Option` direction and gaps, all as
+  public fields, the shape of `smgu_BestFit*ToPoints`' out-params. The type does not tie
+  them together: `direction` is `Some` exactly for `Linear`, `Planar` and `Scattered`, and
+  `max_plane_gap` means the line gap for a linear set. Only the docs say so. The idiomatic
+  shape is one enum per fit, for example `PlaneFit::{Void, PointSized { center, gap },
+  Linear { point, direction, gap }, Planar { .. }, Scattered { .. }}`, so a caller cannot
+  read a normal that is not there. They were kept flat for this port so that the difftest
+  compares field for field with the pin's structs. `point_set` is the first caller, and it
+  already maps `set_type` and `direction` together. Change them when the fit next changes, or
+  before `scx-geom` adds callers (§3 rule: fix when touched).
+- **`point_set`'s given normal is a `UnitVec3` and is not written back.** The pin's
+  `PointSet3d::new(.., Option<&mut Vec3>)` unitizes the caller's vector in place, which is an
+  out-parameter. `PointSet::with_normal` takes a `UnitVec3`, so the type carries the
+  contract, and the caller keeps what it passed. The pin's `unitize_or_z` loses huge and
+  tiny vectors (it gives z). This is in `ps_with_normal`'s pin defect.
+- **Pseudo boxes hold finite intervals (63 §8 P0, carried into `pseudo_box`).** Main's P0
+  made an extent's ends finite by construction, so a pseudo box built from them is finite
+  too. `PseudoBox::unbounded` (`SetUnbounded`), `is_bounded` and `boundary_types`
+  (`IsBounded`) are removed, because they described ends that can no longer exist.
+  `expanded` and `circumscribing_extent` return `Option`, and are `None` where an end or a
+  corner leaves the finite range. In the global solver, a box grown past the range prunes
+  nothing (`continue`), and so does a ray box with no finite span (`is_none_or`), which is
+  what the pin's infinite box did. `segment_point_angle_to_perp` clamps to `0..=1` directly
+  instead of building the unit extent. In the difftest, the pin's `±SM_INFINITE_PARAMETER`
+  boxes are `None` on both sides (`plain_ends`). `pb_bounding` no longer compares the
+  unbounded box, and its check takes the basis from the input's unit directions.
+  `pb_frame` compares the axis map and the circumscribing extent only.
+- **The pin's `SpatialIndex` is `BoxTree`; not ported.** The pin's call-local
+  `SpatialIndex` (`topology/brep/validation/spatial.rs`) is a median-split tree over
+  `Option<Extent3d>`. Callers use it in `IntersectTopology`'s face-pair and vertex/edge
+  searches, in `FaceVertexIndex` and in `SmFace::AssertValid`'s coincident-vertex test.
+  `crate::box_tree::BoxTree` gives the same candidates on every well-formed input. Here,
+  well-formed means boxes that are finite with `min <= max`, a finite query and
+  `tol >= 0`. Map it this way:
+  - `SpatialIndex::new(boxes)` becomes `BoxTree::new`, with `None` taken as the unbounded
+    box. That box is never disjoint, so it is always reported, as `SpatialIndex` reports it.
+  - `boxes_in_box(q, tol)` becomes `overlapping(q, tol)`. Both use the same `are_disjoint`
+    predicate.
+  - `near_point(p, tol)` becomes `overlapping(&Extent3d::from_point(p), tol)`.
+
+  The two differ only on degenerate inputs, where `SpatialIndex` returns a superset:
+  - It always reports an inside-out box or a box with an infinite bound. `BoxTree` tests
+    each of them exactly.
+  - It returns every item when the query is not finite or `tol` is negative or not finite.
+    `BoxTree` tests each item.
+  - `near_point` compares `q - max > tol`, where `are_disjoint` compares `q > max + tol`.
+    These round differently once the coordinates are much larger than `tol`.
+
+  Every caller re-checks the candidates with its own predicate: a distance below
+  `EFF_ZERO` against a pad of `2 EFF_ZERO`, or the exact pair test that the boolean already
+  ran before the index was added. The superset therefore never changes a result. On the
+  rounding difference: when `q > max + tol` fails to exclude an item that `q - max > tol`
+  would exclude, the native check still rejects it. When the rounding goes the other way
+  (`max + tol` rounds to `max`), `q - max` is at least an ulp of `q`, which is above the
+  pad, so the native check rejects that item too. The difftest of the first caller ported
+  (`FaceVertexIndex` or the boolean's pair search) should confirm this on its own inputs.

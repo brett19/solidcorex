@@ -37,8 +37,9 @@ impl<const D: usize> NurbsSurface<D> {
     /// `S(u, v)` and its partials `S^(i,j)` for every `i + j <= N`, on the pieces `side`
     /// picks.
     ///
-    /// `jet::<0>` is [`NurbsSurface::point`] bit for bit, and so is the point of every jet;
-    /// `jet::<2>` holds what the fundamental forms need.
+    /// `N` is the highest total order, inclusive: `jet::<2>` holds the second partials (what
+    /// the fundamental forms need), where the curve's `derivs::<K>` counts its `K` rows.
+    /// `jet::<0>` is [`NurbsSurface::point`] bit for bit, and so is the point of every jet.
     ///
     /// Errors as [`NurbsSurface::point`], and with [`NurbsSurfaceError::Basis`] over
     /// `NurbsError::DerivativeOrder` when `N` is above [`scx_nurbs::MAX_ORDER`].
