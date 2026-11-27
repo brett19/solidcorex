@@ -519,6 +519,7 @@ dependencies = [
  "scx-nurbs",
  "scx-ssi",
  "scx-surface",
+ "scx-testkit",
 ]
 
 [[package]]
