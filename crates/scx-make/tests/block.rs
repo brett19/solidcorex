@@ -383,3 +383,23 @@ fn making_is_deterministic() {
     };
     assert_eq!(bits(&a), bits(&b));
 }
+
+/// Smallest repro of an `scx_mass` defect: a 2e-4 cube at (1e3, 1e3, 1e3), measured about
+/// its far corner at relative accuracy 1e-12, returns `Defect(StepControl)` (as does 1e-13;
+/// 1e-9 is met). A defect means a kernel bug: the accuracy is out of reach at this
+/// size and distance, so the answer should be met or a typed `Refused` or `Exhausted`.
+#[test]
+#[ignore = "scx-mass returns Defect(StepControl) for an unreachable accuracy; should be a typed refusal"]
+fn far_small_box_at_1e_12_is_met_or_refused_not_a_defect() {
+    let m = cube(&at(1e3), 2e-4).unwrap();
+    let spec =
+        MassSpec::new(RelAccuracy::new(1e-12).unwrap()).with_about(Point3::new(1e3, 1e3, 1e3));
+    let r = mass(
+        &m.body,
+        &spec,
+        &mut Scratch::new(),
+        &mut Budget::unlimited(),
+        &Stop::new(),
+    );
+    assert!(!matches!(r, Err(scx_mass::MassError::Defect(_))), "{r:?}");
+}

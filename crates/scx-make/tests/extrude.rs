@@ -291,12 +291,23 @@ fn rel(a: f64, b: f64) -> f64 {
     (a - b).abs() / b.abs()
 }
 
-/// T9: every profile at both frames and spans of either sign, against `solid::extrusion`.
+/// T9: every profile at the plain frame and at the tilted one (two tests, so they run side
+/// by side) and spans of either sign, against `solid::extrusion`.
 #[test]
-fn volume_and_area_match_the_closed_forms() {
+fn volume_and_area_match_the_closed_forms_plain() {
+    volume_and_area_match_the_closed_forms(plain());
+}
+
+#[test]
+fn volume_and_area_match_the_closed_forms_tilted() {
+    volume_and_area_match_the_closed_forms(tilted());
+}
+
+fn volume_and_area_match_the_closed_forms(frame: Frame) {
     let mut worst = (0.0_f64, 0.0_f64);
     for (name, loops) in profiles() {
-        for (frame, tol) in [(plain(), 1e-12), (tilted(), 1e-12)] {
+        {
+            let tol = 1e-12;
             for span in [[0.0, 3.0], [5.0, -2.0], [-1.0, 0.25]] {
                 let m = make(&loops, &frame, span);
                 assert_closed_solid(&m.body);
