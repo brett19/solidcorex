@@ -247,6 +247,31 @@ fn every_write_path_resets_what_it_hands_out() {
 }
 
 #[test]
+fn edit_face_carries_the_cells_it_can() {
+    let sh = sheet();
+    let s = ids(&sh);
+    let (body, _) = sh.draft.finish(&Document::default()).unwrap();
+    // A face no read has boxed: nothing to carry.
+    let mut d = body.edit();
+    d.edit_face(s.face, |_| ()).unwrap();
+    assert!(face_cells_empty(d.tables(), s.face));
+    // A boxed face keeps its cells through an edit, filled as a read would fill them; the
+    // body's own are untouched.
+    fill(&body, &s);
+    let mut d = body.edit();
+    d.edit_face(s.face, |_| ()).unwrap();
+    let (now, was) = (
+        d.tables().faces.get(s.face).unwrap(),
+        body.tables().faces.get(s.face).unwrap(),
+    );
+    assert!(!now.cells.is_empty());
+    assert_eq!(format!("{:?}", now.cells), format!("{:?}", was.cells));
+    // `face_mut` still hands out a reset record.
+    d.face_mut(s.face).unwrap();
+    assert!(face_cells_empty(d.tables(), s.face));
+}
+
+#[test]
 fn body_cells_stay_small() {
     let sh = sheet();
     let s = ids(&sh);

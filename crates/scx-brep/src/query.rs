@@ -105,7 +105,7 @@ fn margin(acc: Option<Accuracy>, resolution: Resolution) -> f64 {
 
 /// The face's grown box (see [`Face::bounding_box`]).
 pub(crate) fn face_box(t: &Tables, rec: &FaceRecord, resolution: Resolution) -> Option<Extent3d> {
-    let SurfaceBox(bx) = *SurfaceBox::of(rec);
+    let bx = SurfaceBox::of(rec).get();
     grown(bx?, margin(face_accuracy(t, rec), resolution))
 }
 

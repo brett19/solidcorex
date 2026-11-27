@@ -29,6 +29,7 @@
 //! interval, so a lift by a period is certified too.
 
 use core::cmp::Ordering;
+use std::collections::BTreeMap;
 
 use scx_curve::{Circle2, Curve2};
 use scx_num::domain::ParamDomain;
@@ -39,6 +40,7 @@ use scx_num::vector2d::Point2;
 use scx_nurbs::Approach;
 
 use crate::cells::parts;
+use crate::id::EdgeId;
 use crate::record::{FaceRecord, UseGeom};
 
 /// Where a uv point lies against a face's region, as far as the enclosures prove.
@@ -89,12 +91,15 @@ struct Tree {
     w_in: i32,
 }
 
-/// One loop's pieces, `first..end`, and its tree's root.
+/// One loop's pieces, `first..end`, its tree's root, the loop's index, and its part of the
+/// signed area at each refinement tried (`None` where not tried), about `c`.
 #[derive(Debug, Clone, Copy)]
 struct Run {
     first: u32,
     end: u32,
     root: u32,
+    lp: u32,
+    area: [Option<Ivl>; AREA_REFINE.len()],
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -131,13 +136,27 @@ struct Node {
 impl Boundary {
     /// The boundary of `rec`.
     pub(crate) fn build(rec: &FaceRecord) -> Self {
+        Self::carried(rec, None).0
+    }
+
+    /// The boundary of `rec`, the same bits as [`Boundary::build`], taking each loop's
+    /// pieces (and its part of the area, where the centre is the same) from `old`'s run
+    /// of an equal loop, and for each of `rec`'s runs the index of the run of `old` it took.
+    pub(crate) fn carried(
+        rec: &FaceRecord,
+        old: Option<(&FaceRecord, &Self)>,
+    ) -> (Self, Vec<Option<usize>>) {
         let window = window(&rec.surface);
-        let Some(mut tree) = Tree::build(rec) else {
-            return Self {
-                uv_box: None,
-                tree: None,
-                decided: false,
-            };
+        let old = old.and_then(|(r, b)| Some((r, b.tree.as_ref()?)));
+        let Some((mut tree, from)) = Tree::build(rec, old) else {
+            return (
+                Self {
+                    uv_box: None,
+                    tree: None,
+                    decided: false,
+                },
+                Vec::new(),
+            );
         };
         let sign = if tree.runs.is_empty() {
             Some(Ordering::Less)
@@ -152,11 +171,29 @@ impl Boundary {
             Some(_) => (window, true),
             None => (tree.hull.zip(window).map(|(h, w)| h.union(w)), false),
         };
-        Self {
-            uv_box,
-            tree: Some(tree),
-            decided,
-        }
+        (
+            Self {
+                uv_box,
+                tree: Some(tree),
+                decided,
+            },
+            from,
+        )
+    }
+
+    /// Each run's pieces' boxes, the runs in loop order.
+    pub(crate) fn run_boxes(
+        &self,
+    ) -> impl Iterator<Item = impl Iterator<Item = Extent2d> + '_> + '_ {
+        self.tree.iter().flat_map(|t| {
+            t.runs.iter().map(|r| {
+                t.pieces
+                    .get(r.first as usize..r.end as usize)
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|p| p.bx)
+            })
+        })
     }
 
     /// A box holding the face's region in uv: the hull of its loops when it has an outer
@@ -174,11 +211,6 @@ impl Boundary {
     /// Whether the region is bounded by an outer loop, proved.
     pub(crate) fn is_bounded_region(&self) -> bool {
         self.decided && self.tree.as_ref().is_some_and(|t| t.w_in == 1)
-    }
-
-    /// The pieces' boxes, in loop order.
-    pub(crate) fn piece_boxes(&self) -> impl Iterator<Item = Extent2d> + '_ {
-        self.tree.iter().flat_map(|t| t.pieces.iter().map(|p| p.bx))
     }
 
     /// How many pieces, and how many bytes the cell holds on the heap.
@@ -251,16 +283,82 @@ impl Boundary {
 }
 
 impl Tree {
-    /// The pieces and tree of `rec`'s loops; `None` when a piece cannot be enclosed.
-    fn build(rec: &FaceRecord) -> Option<Self> {
+    /// The pieces and tree of `rec`'s loops; `None` when a piece cannot be enclosed. A
+    /// loop equal to one of `old`'s that has a run takes that run's pieces (their boxes and
+    /// starts are a function of the loop alone); the second part is, for each run, the run
+    /// of `old` it took.
+    fn build(
+        rec: &FaceRecord,
+        old: Option<(&FaceRecord, &Self)>,
+    ) -> Option<(Self, Vec<Option<usize>>)> {
+        // `old`'s runs by their loop's first use.
+        let by_first: BTreeMap<(EdgeId, bool), Vec<usize>> = old
+            .map(|(r, t)| {
+                let mut m: BTreeMap<_, Vec<usize>> = BTreeMap::new();
+                for (i, run) in t.runs.iter().enumerate() {
+                    if let Some(u) = r.loops.get(run.lp as usize).and_then(|l| l.uses.first()) {
+                        m.entry((u.edge, u.sense == Sense::Forward))
+                            .or_default()
+                            .push(i);
+                    }
+                }
+                m
+            })
+            .unwrap_or_default();
         let mut pieces = Vec::new();
         let mut runs = Vec::new();
+        let mut from = Vec::new();
         for (li, lp) in rec.loops.iter().enumerate() {
             if lp.uses.iter().all(|u| matches!(u.geom, UseGeom::Point(_))) {
                 // A loop of points (or none) bounds no area.
                 continue;
             }
             let first = pieces.len();
+            let same = old.zip(lp.uses.first()).and_then(|((r, t), u)| {
+                let i = by_first
+                    .get(&(u.edge, u.sense == Sense::Forward))?
+                    .iter()
+                    .copied()
+                    .find(|&i| {
+                        t.runs
+                            .get(i)
+                            .and_then(|run| r.loops.get(run.lp as usize))
+                            .is_some_and(|l| l == lp)
+                    })?;
+                Some((i, t.runs.get(i)?, t))
+            });
+            if let Some((i, run, t)) = same {
+                let li = li as u32;
+                pieces.extend(
+                    t.pieces
+                        .get(run.first as usize..run.end as usize)?
+                        .iter()
+                        .map(|p| Piece {
+                            src: match p.src {
+                                Src::Part {
+                                    us, lo, hi, rev, ..
+                                } => Src::Part {
+                                    lp: li,
+                                    us,
+                                    lo,
+                                    hi,
+                                    rev,
+                                },
+                                Src::Gap => Src::Gap,
+                            },
+                            ..*p
+                        }),
+                );
+                runs.push(Run {
+                    first: first as u32,
+                    end: pieces.len() as u32,
+                    root: 0,
+                    lp: li,
+                    area: run.area,
+                });
+                from.push(Some(i));
+                continue;
+            }
             let ends: Vec<(P, P)> = lp.uses.iter().map(use_ends).collect::<Option<_>>()?;
             for (ui, u) in lp.uses.iter().enumerate() {
                 if let UseGeom::Pcurve { curve, interval } = &u.geom {
@@ -303,7 +401,10 @@ impl Tree {
                     first: first as u32,
                     end: pieces.len() as u32,
                     root: 0,
+                    lp: li as u32,
+                    area: [None; AREA_REFINE.len()],
                 });
+                from.push(None);
             }
         }
         let mut nodes = Vec::new();
@@ -311,22 +412,32 @@ impl Tree {
             run.root = node(&pieces, run.first, run.end, &mut nodes)?;
         }
         let hull = pieces.iter().map(|p| p.bx).reduce(Extent2d::union);
+        // An area part is about the hull's centre: kept only where that is the same.
+        let c = |h: Option<Extent2d>| h.map(|h| h.mid().x.to_bits());
+        if old.is_none_or(|(_, t)| c(t.hull) != c(hull)) {
+            for run in &mut runs {
+                run.area = [None; AREA_REFINE.len()];
+            }
+        }
         pieces.shrink_to_fit();
         nodes.shrink_to_fit();
         runs.shrink_to_fit();
-        Some(Self {
-            pieces,
-            nodes,
-            runs,
-            hull,
-            w_in: 0,
-        })
+        Some((
+            Self {
+                pieces,
+                nodes,
+                runs,
+                hull,
+                w_in: 0,
+            },
+            from,
+        ))
     }
 
     /// The sign of the chains' signed area, refined until it shows.
-    fn area_sign(&self, rec: &FaceRecord) -> Option<Ordering> {
-        for k in AREA_REFINE {
-            let a = self.area(rec, k)?;
+    fn area_sign(&mut self, rec: &FaceRecord) -> Option<Ordering> {
+        for (at, k) in AREA_REFINE.into_iter().enumerate() {
+            let a = self.area(rec, at, k)?;
             if a.lo > 0.0 {
                 return Some(Ordering::Greater);
             }
@@ -338,46 +449,63 @@ impl Tree {
     }
 
     /// An enclosure of `sum ∮ (u - c) dv` over every chain, each curved part cut `k` more
-    /// times: a straight piece's integral exactly, a curved part's by the mean value form
-    /// `(b - a) (u(I) - c) v'(I)`.
-    fn area(&self, rec: &FaceRecord, k: usize) -> Option<Ivl> {
+    /// times (refinement `at`): the sum of the runs' parts in loop order, each kept in its
+    /// run.
+    fn area(&mut self, rec: &FaceRecord, at: usize, k: usize) -> Option<Ivl> {
         let c = Ivl::from(self.hull?.mid().x);
         let mut total = Ivl::from(0.0);
-        for run in &self.runs {
-            for i in run.first..run.end {
-                let piece = self.pieces.get(i as usize)?;
-                let end = self.end_of(run, i)?;
-                let straight = |a: P, b: P| ((a.x + b.x) * Ivl::from(0.5) - c) * (b.y - a.y);
-                total = total
-                    + match piece.src {
-                        Src::Gap => straight(piece.start, end),
-                        Src::Part {
-                            lp,
-                            us,
-                            lo,
-                            hi,
-                            rev,
-                        } => {
-                            let curve = pcurve(rec, lp, us)?;
-                            if matches!(curve, Curve2::Line(_)) {
-                                straight(piece.start, end)
-                            } else if let Curve2::Circle(circle) = curve {
-                                let sum = arc_area(circle, curve, lo, hi, c)?;
-                                if rev { neg(sum) } else { sum }
-                            } else {
-                                let mut sum = Ivl::from(0.0);
-                                for (a, b) in parts(lo, hi, k) {
-                                    let j =
-                                        curve.jet_over::<Ivl, 1>(Ivl::new(a, b), Approach::Above);
-                                    let [d] = j.d;
-                                    let w = Ivl::from(b) - Ivl::from(a);
-                                    sum = sum + w * (j.point.x - c) * d.y;
-                                }
-                                if rev { neg(sum) } else { sum }
+        for r in 0..self.runs.len() {
+            let run = *self.runs.get(r)?;
+            let part = match run.area.get(at).copied().flatten() {
+                Some(a) => a,
+                None => {
+                    let a = self.run_area(rec, &run, c, k)?;
+                    *self.runs.get_mut(r)?.area.get_mut(at)? = Some(a);
+                    a
+                }
+            };
+            total = total + part;
+        }
+        total.is_finite().then_some(total)
+    }
+
+    /// Run `run`'s part of [`Tree::area`]: a straight piece's integral exactly, a circular
+    /// part's in closed form, any other curved part's by the mean value form
+    /// `(b - a) (u(I) - c) v'(I)`.
+    fn run_area(&self, rec: &FaceRecord, run: &Run, c: Ivl, k: usize) -> Option<Ivl> {
+        let mut total = Ivl::from(0.0);
+        for i in run.first..run.end {
+            let piece = self.pieces.get(i as usize)?;
+            let end = self.end_of(run, i)?;
+            let straight = |a: P, b: P| ((a.x + b.x) * Ivl::from(0.5) - c) * (b.y - a.y);
+            total = total
+                + match piece.src {
+                    Src::Gap => straight(piece.start, end),
+                    Src::Part {
+                        lp,
+                        us,
+                        lo,
+                        hi,
+                        rev,
+                    } => {
+                        let curve = pcurve(rec, lp, us)?;
+                        if matches!(curve, Curve2::Line(_)) {
+                            straight(piece.start, end)
+                        } else if let Curve2::Circle(circle) = curve {
+                            let sum = arc_area(circle, curve, lo, hi, c)?;
+                            if rev { neg(sum) } else { sum }
+                        } else {
+                            let mut sum = Ivl::from(0.0);
+                            for (a, b) in parts(lo, hi, k) {
+                                let j = curve.jet_over::<Ivl, 1>(Ivl::new(a, b), Approach::Above);
+                                let [d] = j.d;
+                                let w = Ivl::from(b) - Ivl::from(a);
+                                sum = sum + w * (j.point.x - c) * d.y;
                             }
+                            if rev { neg(sum) } else { sum }
                         }
-                    };
-            }
+                    }
+                };
         }
         total.is_finite().then_some(total)
     }
@@ -852,6 +980,67 @@ mod tests {
         let (pieces, heap) = disc.footprint();
         assert!(pieces <= 5, "{pieces} pieces");
         assert!(heap <= 1024, "{heap} bytes");
+    }
+
+    /// A clockwise square hole of side 0.1 at `(x, y)`.
+    fn hole(x: f64, y: f64) -> LoopRecord {
+        polygon(&[(x, y), (x, y + 0.1), (x + 0.1, y + 0.1), (x + 0.1, y)])
+    }
+
+    #[test]
+    fn a_carried_boundary_is_the_one_built() {
+        let outer = polygon(&[(-3.0, -3.0), (3.0, -3.0), (3.0, 3.0), (-3.0, 3.0)]);
+        let disc = circle(0.5, Sense::Reversed);
+        let old = face(
+            plane(),
+            vec![outer.clone(), hole(1.0, 1.0), disc.clone(), hole(-2.0, 1.0)],
+        );
+        let was = Boundary::build(&old);
+        // Loops kept in another order, one dropped, one new: the same centre, so the kept
+        // runs' areas carry too.
+        let new = face(
+            plane(),
+            vec![outer, hole(-2.0, 1.0), hole(2.0, -2.0), disc.clone()],
+        );
+        let (got, from) = Boundary::carried(&new, Some((&old, &was)));
+        assert_eq!(from, [Some(0), Some(3), None, Some(2)]);
+        assert_eq!(format!("{got:?}"), format!("{:?}", Boundary::build(&new)));
+        // A new outer loop moves the centre: the kept hole's pieces carry, its area is
+        // found again, and the bits are still the built ones.
+        let wider = polygon(&[(-3.0, -3.0), (4.0, -3.0), (4.0, 3.0), (-3.0, 3.0)]);
+        let moved = face(plane(), vec![wider, disc]);
+        let (got, from) = Boundary::carried(&moved, Some((&new, &got)));
+        assert_eq!(from, [None, Some(3)]);
+        assert_eq!(format!("{got:?}"), format!("{:?}", Boundary::build(&moved)));
+    }
+
+    #[test]
+    fn carried_cells_are_the_ones_filled() {
+        use crate::cells::{FaceCell, FaceCells, SurfaceBox};
+        let outer = polygon(&[(-3.0, -3.0), (3.0, -3.0), (3.0, 3.0), (-3.0, 3.0)]);
+        let tilted = Surface::Plane(Plane::new(
+            Frame::new(
+                scx_num::vector3d::Point3::new(1.0, 2.0, 3.0),
+                scx_num::vector3d::Vec3::new(0.3, 0.4, 1.0),
+                scx_num::vector3d::Vec3::new(1.0, 0.0, -0.3),
+            )
+            .unwrap(),
+        ));
+        let old = face(tilted.clone(), vec![outer.clone(), hole(1.0, 1.0)]);
+        let _ = SurfaceBox::of(&old);
+        let new = face(tilted, vec![outer, hole(1.0, 1.0), hole(-2.0, -2.0)]);
+        let carried = FaceCells::carried(&old, &new);
+        let _ = SurfaceBox::of(&new);
+        assert!(carried.is_filled());
+        assert_eq!(format!("{carried:?}"), format!("{:?}", new.cells));
+        // Another surface: the boundary carries, the surface box waits for a read.
+        let flat = face(plane(), new.loops.clone());
+        let carried = FaceCells::carried(&old, &flat);
+        let _ = Boundary::of(&flat);
+        assert_eq!(format!("{carried:?}"), format!("{:?}", flat.cells));
+        // Nothing filled, nothing carried.
+        let unread = face(plane(), flat.loops.clone());
+        assert!(!FaceCells::carried(&unread, &new).is_filled());
     }
 
     #[test]
