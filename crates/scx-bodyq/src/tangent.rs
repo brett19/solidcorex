@@ -48,8 +48,8 @@ pub enum Tangency {
 /// The normals are each face's surface normal at the foot of the curve's point along that
 /// surface's normal field (a closed form on analytic surfaces; no pcurve is read), signed
 /// to the faces' orientation across the edge, so a smooth edge's angle is 0 and a box edge's
-/// is pi / 2. A seam, or any edge with one surface on both sides oriented alike, is
-/// `Tangent` with bound 0, whatever its kind.
+/// is pi / 2. A seam, or any edge with one analytic surface on both sides oriented alike,
+/// is `Tangent` with bound 0; a NURBS seam waits with every NURBS face.
 ///
 /// # Errors
 ///

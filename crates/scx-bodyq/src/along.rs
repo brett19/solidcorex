@@ -394,8 +394,8 @@ impl<T: Num> Mul for Ser<T> {
 
 /// The two faces across an edge.
 pub(crate) enum Faces {
-    /// One surface on both sides with one oriented normal field (a seam, or two faces of one
-    /// surface): every drop across the edge is exactly 0.
+    /// One analytic surface on both sides with one oriented normal field (a seam, or two
+    /// faces of one surface): every drop across the edge is exactly 0.
     Same,
     /// Two fields, each signed to its face's orientation across the edge.
     Two(Box<[Field; 2]>),
@@ -443,7 +443,11 @@ impl<'a> Edge<'a> {
         };
         let (sa, sb) = (surface(fa.face)?, surface(fb.face)?);
         let turn = if fa.sense == fb.sense { -1.0 } else { 1.0 };
-        let faces = if sa == sb && turn > 0.0 {
+        // One analytic surface oriented alike on both sides: its normal is a function of the
+        // point, so the two sides agree to every order. A NURBS surface's two sides of a seam
+        // are at different parameters, where its normals need not agree (the seam angle,
+        // SU6b): that waits with every NURBS face.
+        let faces = if sa == sb && turn > 0.0 && Field::of(sa).is_some() {
             Faces::Same
         } else {
             let field = |s: &Surface, f: FaceId| {

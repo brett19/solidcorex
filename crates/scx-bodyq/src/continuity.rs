@@ -106,8 +106,8 @@ const STATIONS: usize = 9;
 /// angle between their oriented normals; G2 to G4 the jumps in the curvature of the normal
 /// section across the edge (the plane of the normal and the direction square to the curve),
 /// in its arc-length rate, and in that rate's rate, each read from the face's implicit
-/// equation at its foot. A seam (one surface on both sides, oriented alike) is G4 with
-/// zero drops, whatever its kind.
+/// equation at its foot. A seam (one analytic surface on both sides, oriented alike) is G4
+/// with zero drops.
 ///
 /// # Errors
 ///
