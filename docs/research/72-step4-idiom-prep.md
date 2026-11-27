@@ -1587,6 +1587,117 @@ difftest and T12 should too. The area is `2 (10^4 - 48 pi) + 4000 + 480 pi`.
 cone with an apex inside the height range (a double cone) is two recipes. A membership oracle
 for these shapes is T10's, not here: the tests carry their own small ones.
 
+### 14.2 T10 as built (11-27): `scx_testkit::csg`
+
+**What.** `crates/scx-testkit/src/csg/` (`mod.rs`, `ivl.rs`, `profile.rs`, `probe.rs`) and
+`crates/scx-testkit/tests/csg.rs` (21 tests, 1.2 s). Plain `f64` data; no library type.
+
+- `Csg::leaf(&Frame, Primitive) -> Result<Csg, CsgError>`, then by-value `union`,
+  `intersection`, `difference` and `complement`. `Primitive` is `HalfSpace`, `Slab`, `Block`
+  (corner at the origin), `Cylinder`, `Frustum` (`radius1 = 0` is the cone), `Sphere`, `Torus`
+  and `Extrusion { profile, height }`. `Profile::new(&[Vec<Seg>])` takes loops of
+  `Seg::{Line, Arc, Circle}`. Loops may nest, and odd winding is inside.
+- `side(p, delta) -> Side::{In, Out, Band}` is §12.4 row 7: `Band` iff the outward-rounded
+  interval enclosure of the tree's `f` over the box `p ± delta` holds 0. `enclose` returns that
+  enclosure. Union is min, intersection is max, difference is `max(a, -b)` and complement is
+  `-f`, all exact on intervals. A leaf maps the box into its frame by `R^-1` as intervals, so
+  any non-singular axes work (a sheared ellipsoid is tested).
+- `census(points, delta) -> Census { inside, outside, band }` with `certain_fraction()` is the
+  sampler helper row 7 asks for. `box_points(lo, hi, grow, count, seed)` gives the 1,000
+  points in the box grown 10%.
+- `probes(&ProbeSpec) -> Vec<Probe>` gives the points on purpose. Each `Probe` has a `point`,
+  a `feature` (leaf, plus `Face`, `Edge`, `Vertex` or `Meet { other }`), a `dir` and an
+  `offset`.
+  - Seeded points are taken on each face, edge and vertex (with seams, poles and cap centres
+    on purpose), and on the meets of two leaves' surfaces, found by walking parameter lines and
+    bisecting the other leaf's sign change.
+  - A point is kept only if the tree is certainly `In` and certainly `Out` among its offsets of
+    ±10 coincidences, so faces buried in another leaf and the shared face of a coplanar union
+    give none.
+  - Each kept point gives an offset 0 probe and offsets ±{½, 2, 10}·c along each normal and the
+    normals' sum. At a meet the normals' difference is added too: a meet's normals are each
+    leaf's own, and the solid may lie in any of the four quarters they bound. Without it, the
+    rim of a hole gave no meets.
+- `CsgError` (`#[non_exhaustive]`) has `Frame`, `Size { what }`, `ProfileShape` and
+  `ProfileOpen { gap }`. A non-finite point, a negative width or a magnitude of 1e150 or more
+  is `Band`: the oracle makes no claim there.
+
+**Tested against** truth independent of the oracle:
+- Plain-`f64` signed distances written in the test: box, cylinder as a 2D box in (ρ, z),
+  frustum by its meridian segments, sphere and torus. Every certain answer must be farther than
+  `delta` on its side, at 40 random frames × 3 widths × 300 points per kind.
+- The analytic `Sphere::closest` and `Torus::closest`.
+- Exact `Rat` signs for a half-space at width 0, at points within 3 ulps of its plane.
+- Mirror symmetry, and turning a frame about its axis.
+- Equivalent trees never contradict each other (no point is `In` for one tree and `Out` for
+  another), and at least 85-90% agree with certainty:
+  - a block, six half-spaces, three slabs and an extruded rectangle;
+  - a cylinder, an extruded circle, two half arcs, a clockwise full arc and a straight frustum;
+  - a rounded rectangle and the union of two blocks and four cylinders;
+  - a ring extrusion and a cylinder minus a cylinder.
+- Commutativity and De Morgan, with enclosures equal in bits.
+- Profile winding against an exact `i128` crossing test (points on an edge are skipped), with
+  loops reversed.
+- Arc distances against the closed form.
+
+**Decision: interval enclosure, no Lipschitz bound** (row 7 as ruled). For: it is sound by the
+inclusion property alone. A boundary point has `f = 0` by continuity, so every point within
+`delta` of the boundary is `Band`, and the ∞-norm box contains the ball. Against: the band is
+wider than `delta`, as measured below. Each `f` is a max of pieces, not a distance.
+
+**Decision: an extrusion's `g` is the profile's signed distance at the box centre, ± (half the
+box diagonal + its error bound).** For: signed distance is 1-Lipschitz (a theorem, not a
+per-primitive proof), and it is one double-double evaluation, tight to the box. Against: soundness
+rests on the stated error bound `E = gap + 2^-90 (S + |c|) + 2^-52 |d|` in `profile.rs`, rather
+than on interval rounding. The sign is the winding parity from double-double `atan2` sums. It is
+checked against the exact crossing test, but it is not itself exact.
+
+**Decision: the frustum's slant term is divided by `sqrt(1 + s^2)`**, so its width is a
+distance's. For: before that, a flat cone's band reached about `|s|` widths. Against: one more
+interval division (sound, and the divisor is ≥ 1).
+
+**Measured** with throwaway timers (opt-level 3, as the testkit builds in dev):
+- `side` costs about 3.1 µs a call on a four-leaf tree (block minus cylinder, plus frustum,
+  plus sphere) over 100,000 points.
+- `probes` gives 3,239 probes in 12 ms on that tree.
+- In the recipe test, `census` at `delta = sqrt 3 · 1e-6` keeps at least 95% certain (asserted).
+  The timing run's 100,000 points had no `Band` at all.
+- Band reach, as the largest `|sd| / delta` over `Band` points at random rotated frames, scaled by
+  `sin(θ/2)` for the sharpest edge angle θ: block 1.47, cylinder 1.72, frustum 2.01, sphere 2.69,
+  torus 2.76.
+  - Unrotated, the block's band stays within `sqrt 3 · delta` and the sphere's within 1.01 of it.
+  - Rotation can grow the box's bounding box to `sqrt 3 · delta` a side, whose corner is
+    `3 · delta` away.
+  - A max of planes reads `d sin(θ/2)` beyond an edge of angle θ, so a flat frustum's rim widens
+    the band by `1 / sin(θ/2)` (10.6 widths measured, unscaled). This is sound; it costs certain
+    points only near sharp edges.
+
+**Deviations from 72.**
+- §3.4 says `Band` is "within a stated distance of the truth boundary". As built, `Band` *contains*
+  every point within `delta`, but it reaches farther (above). The guarantee is one-sided, which is
+  what row 7 needs.
+- §8.1's classification row says band points "must classify `On` or the side T10 gives at the
+  band's edge". T10 gives no such side. Row 7 supersedes this: band points are counted, not judged.
+  DT1 should follow row 7.
+- Extrusions of line-and-arc profiles are added, as the task names them, and the cone is a
+  `Frustum` with `radius1 = 0`.
+
+**Open.**
+- *Three segment types.* `csg::Seg` (an angle-swept arc and a full circle), T9's `solid::Seg`
+  and T11's `profile::Seg` (an arc by centre, two exact ends and a sense) each describe line-and-arc
+  loops. Case for unifying on T11's: exact ends, already the fixtures' form. Case against now: it
+  touches three tasks' files, and `csg` would derive angles by `atan2` anyway. Recommendation: one
+  follow-up moves `csg` and `solid` onto `profile::Seg`, with `Circle` as two arcs.
+- *Extrusion caps get no meet walks.* Meets of a cap with another leaf are found only from the
+  other leaf's walks. Enough for the tests here; a cap-only meet (a pin tip on a lid) would be
+  missed.
+- *Profile normals assume simple loops.* An edge between pieces takes the next piece's normal
+  with this piece's outward sign. A self-touching loop could flip it, and the probe is then
+  dropped by the ±10c filter rather than kept wrong.
+- *Band width per edge angle.* If DT1 finds the 95% share hard to keep near sharp edges, a
+  meridian signed distance for the frustum (as the extrusion does) would remove the
+  `1 / sin(θ/2)`.
+
 ### 14.3 T11 as built (11-27)
 
 `scx-testkit::profile` (`crates/scx-testkit/src/profile.rs`, tests in `tests/profile.rs`).
