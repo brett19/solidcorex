@@ -1,6 +1,6 @@
 // Written for solidcorex. Apache-2.0. Mirrors, for the local solvers, how solidcore at
 // 03e16c9ee766de5b9b1ced845e5149d62ff493b8 reports their failures (`error/geom.rs`
-// `GeomFailure::{BrentDidNotConverge, ZeroDifferenceStep, CallFailed, Defect}`,
+// `GeomFailure::{BrentDidNotConverge, ZeroDifferenceStep, CallFailed}`,
 // `SolidError::geom_call`, `error.rs` `ignored`), one for one (report 53, section 12).
 //! Errors of the local solvers, generic over the evaluator's error.
 //!
@@ -42,12 +42,6 @@ pub trait EvalError: fmt::Debug + fmt::Display {
     /// for, missing face trims and a blend certificate that ran out of work (solidcore
     /// `ignored`).
     fn never_ignored(&self) -> bool;
-
-    /// The error of an evaluator that does not implement a method the solver called
-    /// (solidcore `SolidError::geom(operation, GeomFailure::Defect { why })`).
-    fn defect(operation: &'static str, why: &'static str) -> Self
-    where
-        Self: Sized;
 }
 
 /// A local solver's own failure.

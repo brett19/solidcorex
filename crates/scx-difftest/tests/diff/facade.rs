@@ -407,24 +407,77 @@ pub mod s {
     }
     /// `geom::krawczyk`'s items are `pub(crate)` at the pin: the pin's file, made public by
     /// the build script (`build.rs`, `pin_krawczyk`), over the pin's own types.
-    #[allow(clippy::all, clippy::pedantic, dead_code, unused_imports)]
     pub mod krawczyk {
-        pub use solidcore::blend::fillet_section::certificate::inverse4;
-        use solidcore::blend::fillet_section::interval::{round_up, Ivl};
-        /// The pin's `interval::cmax` (`pub(crate)` there), as its file writes it.
-        fn cmax(a: f64, b: f64) -> f64 {
-            if a < b {
-                b
-            } else {
-                a
+        #[allow(clippy::all, clippy::pedantic, dead_code, unused_imports)]
+        mod pin {
+            pub use solidcore::blend::fillet_section::certificate::inverse4;
+            use solidcore::blend::fillet_section::interval::{round_up, Ivl};
+            /// The pin's `interval::cmax` (`pub(crate)` there), as its file writes it.
+            fn cmax(a: f64, b: f64) -> f64 {
+                if a < b {
+                    b
+                } else {
+                    a
+                }
+            }
+            pub use solidcore::blend::fillet_section::station::solve4;
+            use solidcore::blend::fillet_section::tay::Ring;
+            use solidcore::blend::fillet_section::taylor_model::TmN;
+            use solidcore::error::Result;
+            use solidcore::geom::vector3d::Vec3;
+            include!(concat!(env!("OUT_DIR"), "/pin_krawczyk.rs"));
+        }
+        pub use pin::*;
+        use solidcore::blend::fillet_section::interval::Ivl;
+        use solidcore::error::Result;
+
+        /// scx's `Invert`: the pin's three inverses under one name.
+        pub trait Invert: Sized {
+            fn inverse_of_columns(&self) -> Option<Self>;
+        }
+        impl Invert for [[f64; 2]; 2] {
+            fn inverse_of_columns(&self) -> Option<Self> {
+                inverse_of_columns2(self)
             }
         }
-        pub use solidcore::blend::fillet_section::station::solve4;
-        use solidcore::blend::fillet_section::tay::Ring;
-        use solidcore::blend::fillet_section::taylor_model::TmN;
-        use solidcore::error::Result;
-        use solidcore::geom::vector3d::Vec3;
-        include!(concat!(env!("OUT_DIR"), "/pin_krawczyk.rs"));
+        impl Invert for [[f64; 3]; 3] {
+            fn inverse_of_columns(&self) -> Option<Self> {
+                inverse_of_columns3(self)
+            }
+        }
+        impl Invert for [[f64; 4]; 4] {
+            fn inverse_of_columns(&self) -> Option<Self> {
+                inverse_of_columns4(self)
+            }
+        }
+
+        /// The pin's `newton` with the inverse of its size, as scx's.
+        pub fn newton<const N: usize>(
+            start: [f64; N],
+            at: &dyn Fn([f64; N]) -> Result<Linearised<N>>,
+        ) -> Result<Option<[f64; N]>>
+        where
+            [[f64; N]; N]: Invert,
+        {
+            pin::newton(start, at, &|j: &[[f64; N]; N]| j.inverse_of_columns())
+        }
+
+        /// scx's `ProvedRoot`: the pin's `(root, region)` pair.
+        pub struct ProvedRoot<const N: usize> {
+            pub root: [Ivl; N],
+            pub region: [Ivl; N],
+        }
+
+        /// The pin's `krawczyk_region`, its pair as a [`ProvedRoot`].
+        pub fn krawczyk_region<const N: usize>(
+            mid: [f64; N],
+            c: [[f64; N]; N],
+            value: &dyn Fn([Ivl; N]) -> Result<Option<[Ivl; N]>>,
+            jacobian: &dyn Fn([Ivl; N]) -> Result<Option<[[Ivl; N]; N]>>,
+        ) -> Result<Option<ProvedRoot<N>>> {
+            Ok(pin::krawczyk_region(mid, c, value, jacobian)?
+                .map(|(root, region)| ProvedRoot { root, region }))
+        }
     }
     /// A Krawczyk-module error as (class, operation, failure): `solve4`'s singular system.
     pub fn kz_err(e: &solidcore::SolidError) -> (String, &'static str, String) {
