@@ -90,9 +90,6 @@ pub enum BooleanUnsupported {
         /// ([`BooleanError::of_ssi`]).
         cause: SsiError,
     },
-    /// A stage of the method not built yet: the operands got past every stage before it.
-    /// Each later task removes the stage it builds (72 §5.8).
-    Stage(Stage),
     /// A face whose new loops need a pcurve with no exact form here (a fitted one, say:
     /// two spheres' circle on either sphere): step 5's fitter writes it.
     Pcurve {
@@ -101,14 +98,15 @@ pub enum BooleanUnsupported {
         /// The face.
         face: FaceId,
     },
-}
-
-/// A stage of the Boolean (72 §5.4), in pipeline order.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[non_exhaustive]
-pub enum Stage {
-    /// Classification of the imprinted faces against the other operand (BO4).
-    Classify,
+    /// An edge of the result with more than two faces, or a point classification that
+    /// met one: the non-manifold result is BO7's (D5).
+    NonManifold {
+        /// The result's edge, or the operand's entity the classification met.
+        at: Entity,
+    },
+    /// Two or more of the result's surfaces enclose each other in a way the shell
+    /// placement does not decide: more than one outer surface with a cavity among them.
+    Nesting,
 }
 
 /// The method's own failure on valid operands.
@@ -208,6 +206,27 @@ pub enum BooleanDefect {
     /// The draft refused an entity or a lineage record the imprint wrote, or lost one it
     /// read.
     Draft,
+    /// One component of the imprinted faces (faces joined across edges where the operands
+    /// do not meet) took two answers: two seeds disagree, or a coincident piece is joined
+    /// to one that is not. The lowest face of the component.
+    Seeds {
+        /// The operand.
+        operand: Operand,
+        /// The draft's face.
+        face: FaceId,
+    },
+    /// A face's piece the classification could not place against the other operand: no
+    /// point inside it, or a point inside it on the other operand's boundary away from any
+    /// face coincident with it.
+    Classify {
+        /// The operand.
+        operand: Operand,
+        /// The draft's face.
+        face: FaceId,
+    },
+    /// The result's draft did not finish, or an edge of it bounds one face only: the
+    /// classification or selection left it open.
+    Build,
 }
 
 impl BooleanError {
@@ -234,7 +253,8 @@ impl BooleanError {
             Self::Unsupported(BooleanUnsupported::Nurbs { .. }) => "nurbs",
             Self::Unsupported(BooleanUnsupported::Chain { .. }) => "chain",
             Self::Unsupported(BooleanUnsupported::SsiPair { .. }) => "ssi_pair",
-            Self::Unsupported(BooleanUnsupported::Stage(Stage::Classify)) => "stage_classify",
+            Self::Unsupported(BooleanUnsupported::NonManifold { .. }) => "non_manifold",
+            Self::Unsupported(BooleanUnsupported::Nesting) => "nesting",
             Self::Unsupported(BooleanUnsupported::Pcurve { .. }) => "no_exact_pcurve",
             Self::Exhausted { .. } => "exhausted",
             Self::Cancelled => "cancelled",
@@ -251,6 +271,9 @@ impl BooleanError {
             Self::Defect(BooleanDefect::Loops { .. }) => "imprint_loops",
             Self::Defect(BooleanDefect::Piece { .. }) => "imprint_piece",
             Self::Defect(BooleanDefect::Draft) => "imprint_draft",
+            Self::Defect(BooleanDefect::Seeds { .. }) => "classify_seeds",
+            Self::Defect(BooleanDefect::Classify { .. }) => "classify_point",
+            Self::Defect(BooleanDefect::Build) => "build",
         }
     }
 
@@ -330,8 +353,11 @@ impl fmt::Display for BooleanError {
             Self::Unsupported(BooleanUnsupported::Pcurve { operand, face }) => {
                 write!(f, "{operand}: {face}: a new loop needs a fitted pcurve")
             }
-            Self::Unsupported(BooleanUnsupported::Stage(Stage::Classify)) => {
-                f.write_str("the classification stage is not built yet")
+            Self::Unsupported(BooleanUnsupported::NonManifold { at }) => {
+                write!(f, "{at}: a non-manifold result is not built yet")
+            }
+            Self::Unsupported(BooleanUnsupported::Nesting) => {
+                f.write_str("the result's surfaces nest in a way not placed yet")
             }
             Self::Exhausted { limit } => write!(f, "the budget of {limit} ran out"),
             Self::Cancelled => f.write_str("stopped"),
@@ -389,6 +415,13 @@ impl fmt::Display for BooleanError {
             Self::Defect(BooleanDefect::Draft) => {
                 f.write_str("the draft refused or lost an entity the imprint wrote")
             }
+            Self::Defect(BooleanDefect::Seeds { operand, face }) => {
+                write!(f, "{operand}: {face}: a component took two answers")
+            }
+            Self::Defect(BooleanDefect::Classify { operand, face }) => {
+                write!(f, "{operand}: {face}: a piece could not be placed")
+            }
+            Self::Defect(BooleanDefect::Build) => f.write_str("the result's draft did not close"),
         }
     }
 }
