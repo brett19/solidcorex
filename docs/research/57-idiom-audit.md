@@ -795,3 +795,86 @@ shape, what replaced it, and why. Items marked "(ruling)" are proposals for the 
   wants for interval jets, `eval_many`, `tangent_dir`, fitting, deviation, enclosures and IGES 126
   are not here. The curve's fields are private and every edit is by value, so these add methods
   without changing the type.
+
+## 9. M11: `scx-algo` geometry helpers, sort, pseudo boxes and point sets
+
+These decisions were made while porting `geom` (`smgu_*`: `plane`, `line`, `polygon`, `fit`),
+`sort`, `pseudo_box` and `point_set`. Each module's header lists its full Deviations; this
+section records the choices that the owner should rule on or that a later port should follow.
+
+- **`None` for an answer that is not finite or that overflows** (for the owner's ruling).
+  A parameter, distance, crossing or common point that is not finite gives `None`. That
+  covers input that is not finite, and a result past `f64`'s range. The pin answers NaN or
+  infinity as a value, or a silent 0 (`smgu_LineClosestPoint`'s zero-direction branch).
+  Where only an intermediate square overflows (components past `1e154`), the answer is
+  taken scaled and given: `line_closest_point` by `v / max |v_i|`; `point_project_to_plane`
+  along the unit normal when `k = d·n / |n|²` overflows; `triangle_decomposition` over the
+  longest side. The segment functions are the exception. A segment of zero length keeps the
+  pin's parameter 0, because a point is a fine segment. A segment with no answer gives the
+  parameter NaN, because the result is a struct of a parameter and a point that callers
+  read whole. Typing that struct as `Option` is the follow-up when the segment helpers next
+  change. The alternative was to keep the pin's values, so callers would test
+  `is_finite` themselves. In `t_gutil`, these answers are among the truth-checked pin defects
+  (`line_closest_point` has 1551 of them, and `point_project_to_plane` has 1507; some of
+  those are other causes).
+- **Not ported, on purpose.** `smgu_SolveQuadraticEqn` is a one-line forward to
+  `crate::polynomial::solve_quadratic`, so callers use that directly. The 3x3 and 4x4
+  determinant, inverse and multiply helpers are already in `scx_num::small_matrix`.
+  `smgu_VectorProjectToPlane` is `Vec3::project_to_plane`, with the same expression. The
+  `smgu_*Copy` helpers are not needed, because arrays are `Copy`. `geom/mod.rs` holds the
+  table from each upstream name to its replacement.
+- **`det3`'s term order.** `smgu_Determinant3Vectors` maps to `Vec3::triple_product`
+  (`a · (b × c)`). That has the same value, but it rounds differently. `pseudo_box` keeps a
+  private `det3` with upstream's six terms, in upstream's order:
+  `ax by cz - ax bz cy + ay bz cx - ay bx cz + az bx cy - az by cx`. A box's coordinates
+  are three such ratios, so a point exactly on a face classifies as upstream's does: the
+  roundings must match bit for bit where a coordinate is compared with an interval end.
+  `plane::intersect_three_planes` uses `triple_product`, because no
+  on-boundary decision hangs on it. 140 of its answers are within tolerance and none is a
+  mismatch. Where a sign or a zero decides a classification, keep the six terms; anywhere
+  else, use `triple_product`.
+- **Idiom: the fit structs are SMLib's out-parameter bag.** `PointFit`, `LineFit` and
+  `PlaneFit` are flat structs. Each has a `set_type`, an `Option` direction and gaps, all as
+  public fields, the shape of `smgu_BestFit*ToPoints`' out-params. The type does not tie
+  them together: `direction` is `Some` exactly for `Linear`, `Planar` and `Scattered`, and
+  `max_plane_gap` means the line gap for a linear set. Only the docs say so. The idiomatic
+  shape is one enum per fit, for example `PlaneFit::{Void, PointSized { center, gap },
+  Linear { point, direction, gap }, Planar { .. }, Scattered { .. }}`, so a caller cannot
+  read a normal that is not there. They were kept flat for this port so that the difftest
+  compares field for field with the pin's structs. `point_set` is the first caller, and it
+  already maps `set_type` and `direction` together. Change them when the fit next changes, or
+  before `scx-geom` adds callers (§3 rule: fix when touched).
+- **`point_set`'s given normal is a `UnitVec3` and is not written back.** The pin's
+  `PointSet3d::new(.., Option<&mut Vec3>)` unitizes the caller's vector in place, which is an
+  out-parameter. `PointSet::with_normal` takes a `UnitVec3`, so the type carries the
+  contract, and the caller keeps what it passed. The pin's `unitize_or_z` loses huge and
+  tiny vectors (it gives z). This is in `ps_with_normal`'s pin defect.
+- **The pin's `SpatialIndex` is `BoxTree`; not ported.** The pin's call-local
+  `SpatialIndex` (`topology/brep/validation/spatial.rs`) is a median-split tree over
+  `Option<Extent3d>`. Callers use it in `IntersectTopology`'s face-pair and vertex/edge
+  searches, in `FaceVertexIndex` and in `SmFace::AssertValid`'s coincident-vertex test.
+  `crate::box_tree::BoxTree` gives the same candidates on every well-formed input. Here,
+  well-formed means boxes that are finite with `min <= max`, a finite query and
+  `tol >= 0`. Map it this way:
+  - `SpatialIndex::new(boxes)` becomes `BoxTree::new`, with `None` taken as the unbounded
+    box. That box is never disjoint, so it is always reported, as `SpatialIndex` reports it.
+  - `boxes_in_box(q, tol)` becomes `overlapping(q, tol)`. Both use the same `are_disjoint`
+    predicate.
+  - `near_point(p, tol)` becomes `overlapping(&Extent3d::from_point(p), tol)`.
+
+  The two differ only on degenerate inputs, where `SpatialIndex` returns a superset:
+  - It always reports an inside-out box or a box with an infinite bound. `BoxTree` tests
+    each of them exactly.
+  - It returns every item when the query is not finite or `tol` is negative or not finite.
+    `BoxTree` tests each item.
+  - `near_point` compares `q - max > tol`, where `are_disjoint` compares `q > max + tol`.
+    These round differently once the coordinates are much larger than `tol`.
+
+  Every caller re-checks the candidates with its own predicate: a distance below
+  `EFF_ZERO` against a pad of `2 EFF_ZERO`, or the exact pair test that the boolean already
+  ran before the index was added. The superset therefore never changes a result. On the
+  rounding difference: when `q > max + tol` fails to exclude an item that `q - max > tol`
+  would exclude, the native check still rejects it. When the rounding goes the other way
+  (`max + tol` rounds to `max`), `q - max` is at least an ulp of `q`, which is above the
+  pad, so the native check rejects that item too. The difftest of the first caller ported
+  (`FaceVertexIndex` or the boolean's pair search) should confirm this on its own inputs.
