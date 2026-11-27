@@ -733,12 +733,36 @@ fn shells(
         all.sort_unstable();
         all.dedup();
         // `pairs` is in `comps`' order: each set beside its shells.
-        let known: BTreeMap<ShellId, Sign> = pairs
+        let whole: Vec<Option<Sign>> = pairs
             .iter()
             .zip(comps.values())
-            .filter(|(p, _)| mirrored.contains(p))
-            .filter_map(|(&(mat, _), faces)| Some((mat, whole_shell(ops, m, kept, faces)?)))
+            .map(|(_, faces)| whole_shell(ops, m, kept, faces))
             .collect();
+        let mut known: BTreeMap<ShellId, Sign> = BTreeMap::new();
+        // A shell is made of the sets of the pairs it holds (one when no link joined it).
+        // Signed volume adds over closed sets, so where every set is an operand shell whole
+        // and all are of one sign, the shell has it (a void shell the opposite). Anything
+        // else is measured.
+        let mut joined: BTreeMap<ShellId, Vec<Option<Sign>>> = BTreeMap::new();
+        let mut voids: BTreeMap<ShellId, Vec<Option<Sign>>> = BTreeMap::new();
+        for (&(mat, void), &s) in pairs.iter().zip(&whole) {
+            joined.entry(to(mat)).or_default().push(s);
+            voids.entry(to(void)).or_default().push(s);
+        }
+        let all_of = |v: &[Option<Sign>]| match v.first().copied().flatten() {
+            Some(first) if v.iter().all(|&s| s == Some(first)) => Some(first),
+            _ => None,
+        };
+        for (root, v) in &joined {
+            if let Some(s) = all_of(v) {
+                known.insert(*root, s);
+            }
+        }
+        for (root, v) in &voids {
+            if let Some(s) = all_of(v) {
+                known.insert(*root, flip(s));
+            }
+        }
         pinch::nest(&mut m.draft, &all, &mirrored, &known, doc, budget, stop)?;
         unused(m, &claimed);
     }
@@ -746,7 +770,7 @@ fn shells(
 }
 
 /// The sign of the volume a set of kept faces bounds from its material side, where the set
-/// is one operand shell whole: each face the only piece of its operand face, all of one
+/// is one operand shell whole: each face with all the pieces of its operand face, all of one
 /// operand, all the shell's faces, each once (no sheet), its material on one side of that
 /// shell. Its surface is the operand shell's, so its sign is the operand's: a shell of
 /// the outside is negative, the one shell of a region positive (a valid operand's, as
@@ -770,14 +794,23 @@ fn whole_shell(
         }
     };
     let shell = body.face(first.of)?.shell(at(first));
+    let set: BTreeSet<FaceId> = faces.iter().copied().collect();
     let mut ofs = BTreeSet::new();
+    let mut pieces = 0;
     for f in faces {
         let k = kept.get(f)?;
-        let whole = m.pieces.get(&(k.side, k.of)).is_some_and(|p| p.len() == 1);
-        if k.side != first.side || !whole || body.face(k.of)?.shell(at(k)).id() != shell.id() {
+        // Every piece of its operand face is in the set (a face cut by a contact edge still
+        // covers its surface).
+        let all = m.pieces.get(&(k.side, k.of))?;
+        if k.side != first.side
+            || !all.iter().all(|p| set.contains(p))
+            || body.face(k.of)?.shell(at(k)).id() != shell.id()
+        {
             return None;
         }
-        ofs.insert(k.of);
+        if ofs.insert(k.of) {
+            pieces += all.len();
+        }
     }
     let mut sides = 0;
     for (f, _) in shell.faces() {
@@ -786,7 +819,7 @@ fn whole_shell(
             return None;
         }
     }
-    if sides != ofs.len() || ofs.len() != faces.len() {
+    if sides != ofs.len() || pieces != faces.len() {
         return None;
     }
     let region = shell.region();
@@ -796,6 +829,15 @@ fn whole_shell(
         Some(Sign::Positive)
     } else {
         None
+    }
+}
+
+/// The opposite sign.
+const fn flip(s: Sign) -> Sign {
+    match s {
+        Sign::Positive => Sign::Negative,
+        Sign::Negative => Sign::Positive,
+        Sign::Zero => Sign::Zero,
     }
 }
 
