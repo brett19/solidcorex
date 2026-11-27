@@ -16,6 +16,7 @@
 //! The reader of this manifest in `scx-testkit` is a second copy of the parse: a tool crate
 //! depends on no workspace crate (`layers.txt`).
 
+use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -131,8 +132,8 @@ impl Sha256 {
 
     fn block(h: &mut [u32; 8], b: &[u8]) {
         let mut w = [0u32; 64];
-        for (wi, c) in w.iter_mut().zip(b.chunks_exact(4)) {
-            *wi = c.iter().fold(0u32, |a, &x| a << 8 | u32::from(x));
+        for (wi, c) in w.iter_mut().zip(b.as_chunks::<4>().0) {
+            *wi = u32::from_be_bytes(*c);
         }
         for i in 16..64 {
             let g = |k: usize| w.get(i - k).copied().unwrap_or(0);
@@ -184,7 +185,10 @@ impl Sha256 {
             self.update(&[0]);
         }
         self.update(&bits.to_be_bytes());
-        self.h.iter().map(|x| format!("{x:08x}")).collect()
+        self.h.iter().fold(String::new(), |mut s, x| {
+            let _ = write!(s, "{x:08x}");
+            s
+        })
     }
 }
 
