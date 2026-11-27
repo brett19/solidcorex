@@ -8,9 +8,9 @@
 //! `primitive_infinite_region_searches` as one test that each region is the one built, and
 //! the size, torus and cone refusals of `api_primitives`.
 //!
-//! There is no mass crate yet, so volume, area and centroid are read off the finished
-//! body's faces by the divergence theorem: Gauss-Legendre over a curved face's uv box (each
-//! of these faces is its whole box), and Green's theorem over a planar cap's pcurves.
+//! Volume, area and centroid are read by `scx_mass::mass` (relative accuracy `1e-13`) and
+//! compared to the closed forms; each tolerance is also checked against the Estimate's error
+//! bound, so the bound supports it.
 
 #![allow(
     clippy::unwrap_used,
@@ -22,12 +22,14 @@
 
 use std::f64::consts::PI;
 
-use scx_brep::{Brep, Document, EdgeShape, FaceSide, UseGeom, UvSide};
+use scx_brep::op::Scratch;
+use scx_brep::{Brep, Document, EdgeShape, FaceSide, UvSide};
 use scx_make::{
     ConeFaces, Dimension, MakeError, Refusal, Unsupported, block, cone, cylinder, sphere, torus,
 };
+use scx_mass::{Mass, MassSpec, RelAccuracy, mass};
+use scx_num::budget::{Budget, Stop};
 use scx_num::error::ErrorKind;
-use scx_num::fmath;
 use scx_num::frame::Frame;
 use scx_num::units::{Length, Resolution};
 use scx_num::vector2d::Point2;
@@ -141,124 +143,59 @@ fn assert_closed_with(b: &Brep, genus: i64, tol: Tolerance) {
     assert!(bad.is_empty(), "{bad:?}");
 }
 
-/// The `n`-point Gauss-Legendre nodes and weights on `[-1, 1]`, by Newton on `P_n`.
-fn gauss(n: usize) -> Vec<(f64, f64)> {
-    (0..n)
-        .map(|i| {
-            let mut x = fmath::cos(PI * (i as f64 + 0.75) / (n as f64 + 0.5));
-            let mut dp = 0.0;
-            for _ in 0..100 {
-                let (mut p0, mut p1) = (1.0, x);
-                for k in 2..=n {
-                    let k = k as f64;
-                    let p2 = ((2.0 * k - 1.0) * x * p1 - (k - 1.0) * p0) / k;
-                    p0 = p1;
-                    p1 = p2;
-                }
-                dp = n as f64 * (x * p1 - p0) / (x * x - 1.0);
-                let dx = p1 / dp;
-                x -= dx;
-                if dx.abs() < 1e-16 {
-                    break;
-                }
-            }
-            (x, 2.0 / ((1.0 - x * x) * dp * dp))
-        })
-        .collect()
+/// The body's mass properties about `o`, by `scx_mass::mass` at relative accuracy `1e-13`.
+fn measure(b: &Brep, o: Point3) -> Mass {
+    let spec = MassSpec::new(RelAccuracy::new(1e-13).unwrap()).with_about(o);
+    mass(
+        b,
+        &spec,
+        &mut Scratch::new(),
+        &mut Budget::unlimited(),
+        &Stop::new(),
+    )
+    .unwrap()
 }
 
-/// `(t, w)` over `[a, b]` in `panels` equal panels of 16 nodes.
-fn rule(a: f64, b: f64, panels: usize) -> Vec<(f64, f64)> {
-    let g = gauss(16);
-    let h = (b - a) / panels as f64;
-    (0..panels)
-        .flat_map(|k| {
-            let lo = a + h * k as f64;
-            g.iter()
-                .map(move |&(x, w)| (lo + 0.5 * h * (x + 1.0), 0.5 * h * w))
-        })
-        .collect()
+/// `got` within `tol` of `want` (a relative size `want` times `tol`, or `tol` absolute for a
+/// zero `want`), and its estimated error within the same: the estimate, not only the
+/// outcome, supports the tolerance.
+fn assert_within(got: f64, error: f64, want: f64, tol: f64, what: &str) {
+    let allowed = tol * want.abs().max(1e-300);
+    assert!(
+        (got - want).abs() <= allowed && error <= allowed,
+        "{what}: {got:e} (estimated error {error:e}) vs {want:e}, allowed {allowed:e}"
+    );
 }
 
-/// The body's volume, area and first moment about `o`, by the divergence theorem over its
-/// faces: `V = (1/3) sum q.n dA`, `M_i = (1/2) sum q_i^2 n_i dA` with `q = p - o`.
-fn mass(b: &Brep, o: Point3) -> (f64, f64, Vec3) {
-    let (mut vol, mut area, mut first) = (0.0, 0.0, Vec3::ZERO);
-    let mut add = |q: Vec3, da: Vec3| {
-        // `da` is the outward normal times the area element.
-        vol += q.dot(da) / 3.0;
-        area += da.length();
-        first += Vec3::new(q.x * q.x * da.x, q.y * q.y * da.y, q.z * q.z * da.z) * 0.5;
-    };
-    for face in b.faces() {
-        let s = face.surface();
-        if let Surface::Plane(pl) = s {
-            // The plane in its frame's metric uv: integrate over the region by Green's
-            // theorem, each boundary point's strip along u from the frame's v axis.
-            let n: Vec3 = *pl.frame().z();
-            for u in face.uses() {
-                let UseGeom::Pcurve { curve, interval } = u.geom() else {
-                    panic!("a point use on a plane")
-                };
-                let sign = u.sense().sign();
-                for (t, w) in rule(interval.min(), interval.max(), 16) {
-                    let jet = curve.jet::<1>(t, Approach::Above);
-                    let (end, dv) = (jet.point, jet.d[0].y * w * sign);
-                    // The strip from (0, v) to (end.x, v), dA = du dv.
-                    for (s_, ws) in rule(0.0, end.x, 1) {
-                        let p = pl.point(Point2::new(s_, end.y));
-                        add(p - o, n * (ws * dv));
-                    }
-                }
-            }
-        } else {
-            let uv = face.uv_box().unwrap();
-            let (iu, iv) = (uv.x_interval(), uv.y_interval());
-            // The face is its whole box.
-            assert_eq!(
-                face.contains_uv(Point2::new(iu.mid(), iv.mid())),
-                Some(UvSide::Inside)
-            );
-            for (v, wv) in rule(iv.min(), iv.max(), 8) {
-                for (u, wu) in rule(iu.min(), iu.max(), 8) {
-                    let jet = s.jet::<1>(Point2::new(u, v), [Approach::Above; 2]);
-                    let (p, su, sv) = (
-                        jet.get(0, 0).unwrap(),
-                        jet.get(1, 0).unwrap(),
-                        jet.get(0, 1).unwrap(),
-                    );
-                    add(p - o.to_vec(), su.cross(sv) * (wu * wv));
-                }
-            }
-        }
-    }
-    (vol, area, first)
-}
-
-/// Checks the body against `truth` (in its standard placement) carried to `frame`: volume,
-/// area and centroid to `tol` relative (the centroid relative to the body's size `scale`).
+/// Checks the body against `truth` (in its standard placement) carried to `frame`: volume
+/// and area to `tol` relative, each with `scx_mass`'s error estimate within the same, and
+/// the centroid to `tol` of the body's size `scale`.
 fn assert_mass(b: &Brep, frame: &Frame, truth: &Solid, scale: f64, tol: f64, what: &str) {
     let placed = truth.place(&truth_frame(frame));
-    let o = frame.origin();
-    let (vol, area, first) = mass(b, o);
-    assert!(
-        (vol / placed.volume() - 1.0).abs() < tol,
-        "{what}: volume {vol} vs {}",
-        placed.volume()
+    let m = measure(b, frame.origin());
+    assert_within(
+        m.volume,
+        m.error.volume,
+        placed.volume(),
+        tol,
+        &format!("{what}: volume"),
     );
-    assert!(
-        (area / placed.area - 1.0).abs() < tol,
-        "{what}: area {area} vs {}",
-        placed.area
+    assert_within(
+        m.area,
+        m.error.area,
+        placed.area,
+        tol,
+        &format!("{what}: area"),
     );
-    // The centroid about the frame's origin.
-    let got = (first / vol).to_array();
+    let got = m.centroid().unwrap().to_array();
     let want = placed.moments.centroid();
-    let o = o.to_array();
     for i in 0..3 {
+        // The centroid's error is the first moment's error and the volume's, over the volume.
+        let err = [m.error.first.x, m.error.first.y, m.error.first.z][i] / m.volume
+            + (got[i] - m.about.to_array()[i]).abs() * m.error.volume / m.volume;
         assert!(
-            (got[i] - (want[i] - o[i])).abs() < tol * scale,
-            "{what}: centroid {got:?} vs {want:?} less {o:?}"
+            (got[i] - want[i]).abs() <= tol * scale && err <= tol * scale,
+            "{what}: centroid {got:?} (estimated error {err:e}) vs {want:?}"
         );
     }
 }
@@ -445,14 +382,14 @@ fn precise_sphere_properties_scale_and_translate() {
     for (r, c) in [(2.0, [0.0; 3]), (5.0, [1.0, -2.0, 0.5])] {
         let frame = at(c);
         let m = sphere(&frame, mm(r), &doc()).unwrap();
-        let (vol, area, _) = mass(&m.body, frame.origin());
-        assert!(
-            (area / (4.0 * PI * r * r) - 1.0).abs() < 1e-9,
-            "r {r}: {area}"
-        );
-        assert!(
-            (vol / (4.0 / 3.0 * PI * r * r * r) - 1.0).abs() < 1e-9,
-            "r {r}: {vol}"
+        let m = measure(&m.body, frame.origin());
+        assert_within(m.area, m.error.area, 4.0 * PI * r * r, 1e-9, "sphere area");
+        assert_within(
+            m.volume,
+            m.error.volume,
+            4.0 / 3.0 * PI * r * r * r,
+            1e-9,
+            "sphere volume",
         );
     }
 }
@@ -544,8 +481,8 @@ fn each_region_is_the_one_built() {
             let away = s.point(mid) - Point3::new(c[0], c[1], c[2]);
             assert!(n.dot(away) > 0.0, "{what} {:?}", face.id());
         }
-        let (vol, _, _) = mass(&b, frame.origin());
-        assert!((vol / truth.volume() - 1.0).abs() < 1e-11, "{what}: {vol}");
+        let m = measure(&b, frame.origin());
+        assert_within(m.volume, m.error.volume, truth.volume(), 1e-11, what);
     }
 }
 
