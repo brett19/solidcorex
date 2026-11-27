@@ -15,19 +15,23 @@
     clippy::unwrap_used
 )]
 
+mod berns;
 mod facade;
 mod harness;
+mod odes;
 mod pin_defects;
 mod pin_extent;
 mod pin_truths;
 mod solvers;
 mod t_algo;
+mod t_bern;
 mod t_extent;
 mod t_gsolve;
 mod t_hash;
 mod t_interval;
 mod t_kraw;
 mod t_math;
+mod t_ode;
 mod t_p21;
 mod t_pbox;
 mod t_rest;

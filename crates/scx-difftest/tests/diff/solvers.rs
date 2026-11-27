@@ -16,6 +16,7 @@ use scx_algo::error::{EvalError, SolveError, SolveFailure};
 use scx_num::error::NumFailure;
 use scx_num::NumError;
 use solidcore::error::geom::GeomFailure;
+use solidcore::error::mass::MassFailure;
 use solidcore::error::Failure;
 use solidcore::SolidError;
 
@@ -161,26 +162,30 @@ pub fn solve_pin(e: SolveError<XErr>) -> SolidError {
         SolveError::InvalidInput { operation, reason } => {
             SolidError::InvalidInput { operation, reason }
         }
-        SolveError::Failed { operation, failure } => Failure::new(
-            operation,
-            match failure {
-                SolveFailure::BrentDidNotConverge {
-                    iterations,
-                    at,
-                    bracket,
-                } => GeomFailure::BrentDidNotConverge {
+        SolveError::Failed { operation, failure } => match failure {
+            SolveFailure::BrentDidNotConverge {
+                iterations,
+                at,
+                bracket,
+            } => Failure::new(
+                operation,
+                GeomFailure::BrentDidNotConverge {
                     iterations,
                     at,
                     bracket,
                 },
-                SolveFailure::ZeroDifferenceStep { parameter, at } => {
-                    GeomFailure::ZeroDifferenceStep { parameter, at }
-                }
-                SolveFailure::NoNodeToSubdivide { trees } => {
-                    GeomFailure::NoNodeToSubdivide { trees }
-                }
-            },
-        )
+            ),
+            SolveFailure::ZeroDifferenceStep { parameter, at } => {
+                Failure::new(operation, GeomFailure::ZeroDifferenceStep { parameter, at })
+            }
+            // the integrator's (report 53 section 13): upstream's one status, the reason
+            // only in the operation's name
+            SolveFailure::StepControl(_) => Failure::new(operation, MassFailure::StepControl),
+            SolveFailure::IntegrandNotFinite => Failure::new(operation, MassFailure::Integrand),
+            SolveFailure::NoNodeToSubdivide { trees } => {
+                Failure::new(operation, GeomFailure::NoNodeToSubdivide { trees })
+            }
+        }
         .into_error(),
         SolveError::Num(n) => num_pin(n),
         SolveError::CallFailed { operation, cause } => Failure::new(

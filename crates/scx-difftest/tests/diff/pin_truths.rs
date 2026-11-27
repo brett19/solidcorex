@@ -505,3 +505,15 @@ pub fn pe_pair() -> TruthDefect<(V, bool, V, bool)> {
         want((e.is_contained_by(&h), e.are_disjoint(&h)))
     })
 }
+
+const ODE_POWF: &str = "the pin's step factors take the platform's powf, whose last bit can \
+                        differ from fmath::powf's and move the steps; the truth is the pin's \
+                        own integrator with fmath::powf (odes::pinf)";
+
+/// The ODE integrator's tests (`t_ode`): where the platform's `powf` moves the pin's steps,
+/// the truth is the same run on the pin's own `mass/integrator.rs` with `fmath::powf` for
+/// its two step factors and every other line unchanged (`odes::pinf`, written by the build
+/// script). The steps' accuracy is held to closed forms by `t_ode`'s `truth_*` tests.
+pub fn ode_powf<A>(truth: fn(&A) -> Out) -> TruthDefect<A> {
+    on_disagreement(ODE_POWF, truth)
+}

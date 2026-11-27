@@ -5,7 +5,9 @@
 //! Reruns when the checkout's HEAD or index changes or a file under solidcore's crate
 //! directory does (cargo scans a directory named by `rerun-if-changed` recursively).
 //! Also writes the pin's `geom/krawczyk.rs` items, made public, for the difftest
-//! ([`pin_krawczyk`]).
+//! ([`pin_krawczyk`]), the pin's `mass/integrator.rs` with the deterministic `powf`
+//! ([`pin_integrator`]), and the pin's `bernstein_roots` with its two helpers
+//! ([`pin_bernstein_roots`]).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -85,8 +87,95 @@ fn pin_krawczyk() -> Result<(), String> {
     std::fs::write(dir.join("pin_krawczyk.rs"), out.join("\n")).map_err(|e| e.to_string())
 }
 
+/// The pin's `mass/integrator.rs` with `fmath::powf` for the platform's `powf` in its two
+/// step factors, the oracle for the inputs on which the platform's last bit moves the pin's
+/// steps (`odes::pinf`): written to `OUT_DIR/pin_integrator.rs` without its module docs,
+/// its `use` lines, its submodule (`properties`) and its tests, and with its two
+/// `pub(crate)` error constructors renamed to the difftest's copies (`odes::pinf`). Every
+/// other line is the pin's, unchanged; a replacement not found fails the build.
+fn pin_integrator() -> Result<(), String> {
+    let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").map_err(|e| e.to_string())?);
+    let src =
+        manifest.join("../../../sc-wt/scx-pin/solidcore/crates/solidcore/src/mass/integrator.rs");
+    let text = std::fs::read_to_string(&src).map_err(|e| format!("{}: {e}", src.display()))?;
+    let mut body: String = text
+        .split("#[cfg(test)]")
+        .next()
+        .unwrap_or("")
+        .lines()
+        .filter(|l| !l.starts_with("//!") && !l.starts_with("use ") && !l.starts_with("pub mod "))
+        .collect::<Vec<_>>()
+        .join("\n");
+    for (from, to, count) in [
+        ("errmax.powf(-0.2)", "scx_num::fmath::powf(errmax, -0.2)", 1),
+        (
+            "errmax.powf(-0.25)",
+            "scx_num::fmath::powf(errmax, -0.25)",
+            1,
+        ),
+        ("SolidError::mass(", "pin_mass(", 2),
+        ("SolidError::nurbs_routine(", "pin_nurbs_routine(", 1),
+    ] {
+        let found = body.matches(from).count();
+        if found != count {
+            return Err(format!(
+                "{}: `{from}` occurs {found} times, not {count}",
+                src.display()
+            ));
+        }
+        body = body.replace(from, to);
+    }
+    if body.contains(".powf(") {
+        return Err(format!("{}: a `powf` left unreplaced", src.display()));
+    }
+    let dir = PathBuf::from(std::env::var("OUT_DIR").map_err(|e| e.to_string())?);
+    std::fs::write(dir.join("pin_integrator.rs"), body).map_err(|e| e.to_string())
+}
+
+/// The pin's `bernstein_value`, `bernstein_halves` and `bernstein_roots` (the last
+/// `pub(crate)`, the helpers private, in `query/tangent_edge.rs`), made public, written to
+/// `OUT_DIR/pin_bernstein_roots.rs`: the lines from the first one's doc to the item after
+/// the last, unchanged but for the visibility. A marker not found once fails the build.
+fn pin_bernstein_roots() -> Result<(), String> {
+    let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").map_err(|e| e.to_string())?);
+    let src = manifest
+        .join("../../../sc-wt/scx-pin/solidcore/crates/solidcore/src/query/tangent_edge.rs");
+    let text = std::fs::read_to_string(&src).map_err(|e| format!("{}: {e}", src.display()))?;
+    let (start, end) = (
+        "/// The value at `s` of the polynomial with Bernstein coefficients",
+        "/// The two uses' values at one point",
+    );
+    for marker in [start, end] {
+        let found = text.matches(marker).count();
+        if found != 1 {
+            return Err(format!(
+                "{}: `{marker}` occurs {found} times, not once",
+                src.display()
+            ));
+        }
+    }
+    let body = text
+        .split_once(start)
+        .and_then(|(_, rest)| rest.split_once(end))
+        .map_or("", |(body, _)| body);
+    let body = format!("{start}{body}")
+        .replace("pub(crate) fn ", "pub fn ")
+        .replace("\nfn bernstein_", "\npub fn bernstein_");
+    for name in ["bernstein_value", "bernstein_halves", "bernstein_roots"] {
+        if !body.contains(&format!("pub fn {name}(")) {
+            return Err(format!("{}: `{name}` not found", src.display()));
+        }
+    }
+    let dir = PathBuf::from(std::env::var("OUT_DIR").map_err(|e| e.to_string())?);
+    std::fs::write(dir.join("pin_bernstein_roots.rs"), body).map_err(|e| e.to_string())
+}
+
 fn main() -> std::process::ExitCode {
-    match check().and_then(|()| pin_krawczyk()) {
+    match check()
+        .and_then(|()| pin_krawczyk())
+        .and_then(|()| pin_integrator())
+        .and_then(|()| pin_bernstein_roots())
+    {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("scx-difftest build: {e}");
