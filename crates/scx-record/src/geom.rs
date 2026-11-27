@@ -144,7 +144,7 @@ tags! {
 
 // ---- small parts -------------------------------------------------------------------------
 
-fn put_all<S: Sink>(w: &mut S, xs: &[f64]) -> Result<(), WriteError> {
+pub(crate) fn put_all<S: Sink>(w: &mut S, xs: &[f64]) -> Result<(), WriteError> {
     for &x in xs {
         w.f64(x)?;
     }
@@ -159,14 +159,14 @@ fn take_n<const N: usize, R: Source>(r: &mut R) -> Result<[f64; N], ReadError> {
     Ok(out)
 }
 
-fn put_sense<S: Sink>(w: &mut S, sense: Sense) {
+pub(crate) fn put_sense<S: Sink>(w: &mut S, sense: Sense) {
     w.tag(match sense {
         Sense::Forward => SenseTag::Forward,
         Sense::Reversed => SenseTag::Reversed,
     });
 }
 
-fn take_sense<R: Source>(r: &mut R) -> Result<Sense, ReadError> {
+pub(crate) fn take_sense<R: Source>(r: &mut R) -> Result<Sense, ReadError> {
     Ok(match r.tag()? {
         SenseTag::Forward => Sense::Forward,
         SenseTag::Reversed => Sense::Reversed,
