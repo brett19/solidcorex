@@ -78,122 +78,127 @@ macro_rules! state {
     }};
 }
 
-diff!(ht_voxels, |seed: usize, cnt: [f64; 3], scale: f64| {
-    use m::hash_table::{FindPairsOptions, GAP_HISTOGRAM_BUCKETS, ObjsInVoxels};
-    let mut r = seed as u64 * 0x1234_5678 + cnt[0].to_bits();
-    let dims = cnt.map(|c| (c.abs() as usize) % 5);
-    let unit = m::e3([0.0, 0.0, 0.0, scale, scale, scale]);
-    let bbox = unit.as_ref().filter(|_| seed % 4 != 0);
-    let mut out: Vec<Rec> = Vec::new();
-    let mut v = match ObjsInVoxels::<u32>::new(dims[0], dims[1], dims[2], bbox, seed % 70) {
-        Ok(v) => v,
-        Err(e) => return vec![(0, Vec::new(), Vec::new(), Some(m::err_text(&e)))],
-    };
-    out.push(state!(v));
-    let q = |r: &mut u64| (next(r) % 9) as f64 / 8.0 * scale + (next(r) % 3) as f64 * 1e-7;
-    for _ in 0..160 {
-        let op = next(&mut r) % 12;
-        let rec: Rec = match op {
-            0..=4 => {
-                let id = (next(&mut r) % 40) as u32;
-                let p = m::p3([q(&mut r), q(&mut r), q(&mut r)]);
-                let zt = [0.0, 1e-6, 1e-3, 0.1][(next(&mut r) % 4) as usize];
-                let mut upd = Vec::new();
-                let res = if next(&mut r).is_multiple_of(2) {
-                    v.add(id, p, zt, Some(&mut upd))
-                } else {
-                    v.add(id, p, zt, None)
-                };
-                match res {
-                    Ok(x) => (1, [vec![o(x)], upd].concat(), Vec::new(), None),
-                    Err(e) => (1, upd, Vec::new(), Some(m::err_text(&e))),
+diff!(
+    ht_voxels,
+    pin_defect = crate::pin_defects::ht_voxels,
+    |seed: usize, cnt: [f64; 3], scale: f64| {
+        use m::hash_table::{FindPairsOptions, GAP_HISTOGRAM_BUCKETS, ObjsInVoxels};
+        let mut r = seed as u64 * 0x1234_5678 + cnt[0].to_bits();
+        let dims = cnt.map(|c| (c.abs() as usize) % 5);
+        let unit = m::e3([0.0, 0.0, 0.0, scale, scale, scale]);
+        let bbox = unit.as_ref().filter(|_| seed % 4 != 0);
+        let mut out: Vec<Rec> = Vec::new();
+        let mut v = match ObjsInVoxels::<u32>::new(dims[0], dims[1], dims[2], bbox, seed % 70) {
+            Ok(v) => v,
+            Err(e) => return vec![(0, Vec::new(), Vec::new(), Some(m::err_text(&e)))],
+        };
+        out.push(state!(v));
+        let q = |r: &mut u64| (next(r) % 9) as f64 / 8.0 * scale + (next(r) % 3) as f64 * 1e-7;
+        for _ in 0..160 {
+            let op = next(&mut r) % 12;
+            let rec: Rec = match op {
+                0..=4 => {
+                    let id = (next(&mut r) % 40) as u32;
+                    let p = m::p3([q(&mut r), q(&mut r), q(&mut r)]);
+                    let zt = [0.0, 1e-6, 1e-3, 0.1][(next(&mut r) % 4) as usize];
+                    let mut upd = Vec::new();
+                    let res = if next(&mut r).is_multiple_of(2) {
+                        v.add(id, p, zt, Some(&mut upd))
+                    } else {
+                        v.add(id, p, zt, None)
+                    };
+                    match res {
+                        Ok(x) => (1, [vec![o(x)], upd].concat(), Vec::new(), None),
+                        Err(e) => (1, upd, Vec::new(), Some(m::err_text(&e))),
+                    }
                 }
-            }
-            5 | 6 => {
-                let id = (next(&mut r) % 40) as u32;
-                (
-                    2,
-                    vec![v.remove(id), v.find_point_items(id).len()],
-                    Vec::new(),
-                    None,
-                )
-            }
-            7 | 8 => {
-                let mut hist = [0u64; GAP_HISTOGRAM_BUCKETS];
-                let bl: Vec<usize> = (0..next(&mut r) % 4)
-                    .map(|_| (next(&mut r) % 80) as usize)
-                    .collect();
-                let mode = next(&mut r);
-                let opts = FindPairsOptions {
-                    limit_index: mode.is_multiple_of(3).then(|| (next(&mut r) % 30) as usize),
-                    buckets: mode.is_multiple_of(5).then_some(&bl[..]),
-                    histogram: mode.is_multiple_of(2).then_some(&mut hist),
-                };
-                match m::ht_find_pairs(&mut v, opts) {
-                    Ok(p) => (
-                        3,
-                        [p.first, p.second, hist.map(|h| h as usize).to_vec()].concat(),
+                5 | 6 => {
+                    let id = (next(&mut r) % 40) as u32;
+                    (
+                        2,
+                        vec![v.remove(id), v.find_point_items(id).len()],
                         Vec::new(),
                         None,
-                    ),
-                    Err(e) => (3, Vec::new(), Vec::new(), Some(m::err_text(&e))),
+                    )
                 }
-            }
-            9 => {
-                let p = m::p3([q(&mut r) * 1.3 - 0.1, q(&mut r), q(&mut r) * 0.9]);
-                let i = (next(&mut r) % 70) as usize;
-                let (ix, iy, iz) = (
-                    (next(&mut r) % 5) as usize,
-                    (next(&mut r) % 5) as usize,
-                    (next(&mut r) % 5) as usize,
-                );
-                let hit = v.map_point_to_voxel(p);
-                let mut ints = vec![v.map_indices_to_voxel_index(ix, iy, iz)];
-                let mut nums = Vec::new();
-                if let Some(b) = m::ht_voxel_bbox(&v, i) {
-                    let (lo, hi) = (b.min(), b.max());
-                    nums.extend([lo.x, lo.y, lo.z, hi.x, hi.y, hi.z]);
-                }
-                if let Some(h) = hit {
-                    ints.extend([h.index, h.ix, h.iy, h.iz]);
-                    let (lo, hi) = (h.extent.min(), h.extent.max());
-                    nums.extend([lo.x, lo.y, lo.z, hi.x, hi.y, hi.z]);
-                }
-                let err = match v.map_voxel_index_to_indices(i) {
-                    Ok((a, b, c)) => {
-                        ints.extend([a, b, c]);
-                        None
+                7 | 8 => {
+                    let mut hist = [0u64; GAP_HISTOGRAM_BUCKETS];
+                    let bl: Vec<usize> = (0..next(&mut r) % 4)
+                        .map(|_| (next(&mut r) % 80) as usize)
+                        .collect();
+                    let mode = next(&mut r);
+                    let opts = FindPairsOptions {
+                        limit_index: mode.is_multiple_of(3).then(|| (next(&mut r) % 30) as usize),
+                        buckets: mode.is_multiple_of(5).then_some(&bl[..]),
+                        histogram: mode.is_multiple_of(2).then_some(&mut hist),
+                    };
+                    match m::ht_find_pairs(&mut v, opts) {
+                        Ok(p) => (
+                            3,
+                            [p.first, p.second, hist.map(|h| h as usize).to_vec()].concat(),
+                            Vec::new(),
+                            None,
+                        ),
+                        Err(e) => (3, Vec::new(), Vec::new(), Some(m::err_text(&e))),
                     }
-                    Err(e) => Some(m::err_text(&e)),
-                };
-                (4, ints, nums, err)
-            }
-            10 => {
-                let d = [next(&mut r) % 4, next(&mut r) % 4, next(&mut r) % 4].map(|x| x as usize);
-                let res = v.set_size(d[0], d[1], d[2], bbox, (next(&mut r) % 70) as usize);
-                (
-                    5,
-                    d.to_vec(),
-                    Vec::new(),
-                    res.err().map(|e| m::err_text(&e)),
-                )
-            }
-            _ => {
-                let gaps = [0.0, 1e-9, 1e-6, 1e-3, 0.5, 2.0, f64::NAN];
-                let g = gaps[(next(&mut r) % 7) as usize];
-                (
-                    6,
-                    vec![m::hash_table::gap_histogram_index(g)],
-                    Vec::new(),
-                    None,
-                )
-            }
-        };
-        out.push(rec);
-        out.push(state!(v));
+                }
+                9 => {
+                    let p = m::p3([q(&mut r) * 1.3 - 0.1, q(&mut r), q(&mut r) * 0.9]);
+                    let i = (next(&mut r) % 70) as usize;
+                    let (ix, iy, iz) = (
+                        (next(&mut r) % 5) as usize,
+                        (next(&mut r) % 5) as usize,
+                        (next(&mut r) % 5) as usize,
+                    );
+                    let hit = v.map_point_to_voxel(p);
+                    let mut ints = vec![v.map_indices_to_voxel_index(ix, iy, iz)];
+                    let mut nums = Vec::new();
+                    if let Some(b) = m::ht_voxel_bbox(&v, i) {
+                        let (lo, hi) = (b.min(), b.max());
+                        nums.extend([lo.x, lo.y, lo.z, hi.x, hi.y, hi.z]);
+                    }
+                    if let Some(h) = hit {
+                        ints.extend([h.index, h.ix, h.iy, h.iz]);
+                        let (lo, hi) = (h.extent.min(), h.extent.max());
+                        nums.extend([lo.x, lo.y, lo.z, hi.x, hi.y, hi.z]);
+                    }
+                    let err = match v.map_voxel_index_to_indices(i) {
+                        Ok((a, b, c)) => {
+                            ints.extend([a, b, c]);
+                            None
+                        }
+                        Err(e) => Some(m::err_text(&e)),
+                    };
+                    (4, ints, nums, err)
+                }
+                10 => {
+                    let d =
+                        [next(&mut r) % 4, next(&mut r) % 4, next(&mut r) % 4].map(|x| x as usize);
+                    let res = v.set_size(d[0], d[1], d[2], bbox, (next(&mut r) % 70) as usize);
+                    (
+                        5,
+                        d.to_vec(),
+                        Vec::new(),
+                        res.err().map(|e| m::err_text(&e)),
+                    )
+                }
+                _ => {
+                    let gaps = [0.0, 1e-9, 1e-6, 1e-3, 0.5, 2.0, f64::NAN];
+                    let g = gaps[(next(&mut r) % 7) as usize];
+                    (
+                        6,
+                        vec![m::hash_table::gap_histogram_index(g)],
+                        Vec::new(),
+                        None,
+                    )
+                }
+            };
+            out.push(rec);
+            out.push(state!(v));
+        }
+        out
     }
-    out
-});
+);
 
 diff!(ht_table, |seed: usize, estimate: usize, buckets: usize| {
     use m::hash_table::HashTable;

@@ -15,7 +15,7 @@
 //! total oracle: it gives the true value on every input of its test.
 
 use crate::harness::{Applies, Out, TruthDefect, want};
-use scx_num::math::{BIG_DOUBLE, EFF_ZERO, INFINITE_PARAMETER, INFINITE_PARAMETER_SQRT};
+use scx_num::math::{BIG_DOUBLE, EFF_ZERO};
 
 type I = [f64; 2];
 type R = [f64; 4];
@@ -56,15 +56,26 @@ fn least(v: &[f64]) -> f64 {
         .fold(f64::NAN, |m, x| if m.is_nan() || x < m { x } else { m })
 }
 
-/// The smallest interval holding the values that are not NaN; `None` when none is.
+/// The smallest interval holding the values that are not NaN; `None` when none is, or when
+/// an end is infinite (an extent's ends are finite).
 fn hull(v: &[f64]) -> Option<I> {
-    let (lo, hi) = (least(v), most(v));
-    (!lo.is_nan()).then_some([lo, hi])
+    finite([least(v), most(v)])
 }
 
-/// The interval `[a0, a1]` as scx holds it: `None` when inverted; NaN bounds are kept.
+/// The interval when both its ends are finite.
+fn finite(e: I) -> Option<I> {
+    (e[0].is_finite() && e[1].is_finite()).then_some(e)
+}
+
+/// The box when every end is finite.
+fn finite_n<const N: usize>(e: [I; N]) -> Option<[I; N]> {
+    e.iter().all(|x| finite(*x).is_some()).then_some(e)
+}
+
+/// The interval `[a0, a1]` as the diffs build it: `None` when inverted or an end is not a
+/// plain finite value ([`crate::facade::plain_ends`]).
 fn ivl(a: I) -> Option<I> {
-    (a[0].partial_cmp(&a[1]) != Some(std::cmp::Ordering::Greater)).then_some(a)
+    (crate::facade::plain_ends(&a) && a[0] <= a[1]).then_some(a)
 }
 
 /// The box with corners `a[..N]` and `a[N..]`, as one interval per axis.
@@ -91,14 +102,9 @@ fn e3(e: [I; 3]) -> ((f64, f64, f64), (f64, f64, f64)) {
     ((e[0][0], e[1][0], e[2][0]), (e[0][1], e[1][1], e[2][1]))
 }
 
-fn infinite_param(a: f64) -> bool {
-    a.abs() == INFINITE_PARAMETER || a.abs() == INFINITE_PARAMETER_SQRT
-}
-
-/// Each bound that is not an infinite parameter moved out by `d` (in by `-d`).
+/// Each bound moved out by `d` (in by `-d`).
 fn moved_out(e: I, d: f64) -> I {
-    let keep = |x: f64, m: f64| if infinite_param(x) { x } else { m };
-    [keep(e[0], e[0] - d), keep(e[1], e[1] + d)]
+    [e[0] - d, e[1] + d]
 }
 
 /// The interval grown by `d`; a `d` that is not above zero moves nothing.
@@ -115,40 +121,16 @@ fn expanded_relative(e: I, f: f64) -> I {
     }
 }
 
-/// The image of the interval under `x -> s x`, ordered; infinite parameters stay.
+/// The image of the interval under `x -> s x`, ordered.
 fn scaled(e: I, s: f64) -> I {
-    let t = |x: f64| if infinite_param(x) { x } else { x * s };
-    let (a, b) = (t(e[0]), t(e[1]));
+    let (a, b) = (e[0] * s, e[1] * s);
     if a > b { [b, a] } else { [a, b] }
 }
 
-fn union(e: I, f: I) -> I {
-    [least(&[e[0], f[0]]), most(&[e[1], f[1]])]
-}
-
-/// The overlap; `None` when the intervals are apart (touching is not apart).
-fn intersect(e: I, f: I) -> Option<I> {
-    (!(e[0] > f[1] || e[1] < f[0])).then(|| [most(&[e[0], f[0]]), least(&[e[1], f[1]])])
-}
-
-fn union_n<const N: usize>(e: [I; N], f: [I; N]) -> [I; N] {
-    core::array::from_fn(|i| union(e[i], f[i]))
-}
-
-/// The overlap of boxes: `None` when apart on any axis.
-fn intersect_n<const N: usize>(e: [I; N], f: [I; N]) -> Option<[I; N]> {
-    let mut r = [[0.0; 2]; N];
-    for (i, x) in r.iter_mut().enumerate() {
-        *x = intersect(e[i], f[i])?;
-    }
-    Some(r)
-}
-
 /// The hull of an interval and a value, bound by bound: the least of its min and the value,
-/// and the most of its max and the value, a NaN skipped; `None` when a bound is NaN either way.
+/// and the most of its max and the value, a NaN skipped; `None` when a bound is not finite.
 fn hull_value(e: I, v: f64) -> Option<I> {
-    let (lo, hi) = (least(&[e[0], v]), most(&[e[1], v]));
-    (!lo.is_nan() && !hi.is_nan()).then_some([lo, hi])
+    finite([least(&[e[0], v]), most(&[e[1], v])])
 }
 
 /// The hull of a box and a point, axis by axis ([`hull_value`]).
@@ -167,12 +149,6 @@ fn hull_two<const N: usize>(a: [f64; N], b: [f64; N]) -> Option<[I; N]> {
         *x = hull(&[a[i], b[i]])?;
     }
     Some(r)
-}
-
-/// The largest absolute bound.
-fn max_dimension(e: &[I]) -> f64 {
-    let v: Vec<f64> = e.iter().flatten().map(|x| x.abs()).collect();
-    most(&v)
 }
 
 // --- math: the extremes of two to four numbers.
@@ -219,15 +195,6 @@ pub fn scaled_zero_of_each() -> TruthDefect<(f64, P, V, I)> {
     })
 }
 
-pub fn scaled_zero_of_boxes() -> TruthDefect<(B, R)> {
-    on_disagreement(NAN_OPERAND, |&(e, f)| {
-        want(axes::<3, 6>(e).zip(axes::<2, 4>(f)).map(|_| {
-            let (ze, zf) = (scaled_zero(&e), scaled_zero(&f));
-            [ze.0, zf.0, ze.1, zf.2]
-        }))
-    })
-}
-
 pub fn scaled_zero_n() -> TruthDefect<(f64, V, I, B)> {
     on_disagreement(NAN_OPERAND, |&(a, b, c, d)| {
         want(ivl(c).zip(axes::<3, 6>(d)).map(|_| {
@@ -246,14 +213,14 @@ pub fn scaled_zero_n() -> TruthDefect<(f64, V, I, B)> {
 pub fn e1_hull() -> TruthDefect<(f64, f64)> {
     on_disagreement(HULL_START, |&(a, b)| want(hull(&[a, b]).map(e1)))
 }
-pub fn e1_max_dimension() -> TruthDefect<(I,)> {
-    on_disagreement(NAN_OPERAND, |&(a,)| {
-        want(ivl(a).map(|e| max_dimension(&[e])))
-    })
-}
 pub fn e1_expanded() -> TruthDefect<(I, f64)> {
     on_disagreement(NAN_MOVE, |&(a, v)| {
-        want(ivl(a).map(|e| (e1(expanded(e, v.abs())), e1(expanded_relative(e, v.abs())))))
+        want(ivl(a).map(|e| {
+            (
+                finite(expanded(e, v.abs())).map(e1),
+                finite(expanded_relative(e, v.abs())).map(e1),
+            )
+        }))
     })
 }
 pub fn e1_hull_value() -> TruthDefect<(I, f64)> {
@@ -264,38 +231,10 @@ pub fn e1_hull_value() -> TruthDefect<(I, f64)> {
         }))
     })
 }
-pub fn e1_union_intersect() -> TruthDefect<(I, I)> {
-    on_disagreement(NAN_OPERAND, |&(a, b)| {
-        want(
-            ivl(a)
-                .zip(ivl(b))
-                .map(|(e, f)| (e1(union(e, f)), intersect(e, f).map(e1))),
-        )
-    })
-}
-/// Whether `v` is on a boundary of the interval, periodic of length `p`, to within `t`, and
-/// its distance to the nearer end: the smaller of its distances to the two ends (the pin's
-/// own, compared in `e1_periodic_value`), a NaN one skipped.
-pub fn e1_periodic_boundary() -> TruthDefect<(I, f64, f64, f64)> {
-    on_disagreement(NAN_OPERAND, |&(a, v, p, t)| {
-        #[allow(unused_imports)]
-        use crate::facade::s::ext::*;
-        want(crate::facade::s::e1(a).map(|e| {
-            let c = e.contains_periodic_value(v, p, t);
-            let on = c.dist_to_min < t || c.dist_to_max < t;
-            (on, least(&[c.dist_to_min, c.dist_to_max]))
-        }))
-    })
-}
 
 // --- Extent2d
 pub fn e2_hull() -> TruthDefect<(P, P)> {
     on_disagreement(HULL_START, |&(a, b)| want(hull_two(a, b).map(e2)))
-}
-pub fn e2_max_dimension() -> TruthDefect<(R,)> {
-    on_disagreement(NAN_OPERAND, |&(a,)| {
-        want(axes::<2, 4>(a).map(|e| max_dimension(&e)))
-    })
 }
 pub fn e2_hull_point() -> TruthDefect<(R, P)> {
     on_disagreement(HULL_START, |&(a, p)| {
@@ -310,24 +249,19 @@ pub fn e2_expand_scale() -> TruthDefect<(R, f64, Option<f64>)> {
         want(axes::<2, 4>(a).map(|e| {
             let (sx, sy) = (d, w.unwrap_or(d));
             (
-                e2(e.map(|x| expanded(x, d.abs()))),
-                e2(e.map(|x| expanded_relative(x, d.abs()))),
-                e2([scaled(e[0], sx), scaled(e[1], sy)]),
+                finite_n(e.map(|x| expanded(x, d.abs()))).map(e2),
+                finite_n(e.map(|x| expanded_relative(x, d.abs()))).map(e2),
+                finite_n([scaled(e[0], sx), scaled(e[1], sy)]).map(e2),
             )
         }))
     })
 }
 pub fn e2_expanded_vec() -> TruthDefect<(R, P)> {
     on_disagreement(NAN_MOVE, |&(a, d)| {
-        want(axes::<2, 4>(a).map(|e| e2([expanded(e[0], d[0].abs()), expanded(e[1], d[1].abs())])))
-    })
-}
-pub fn e2_union_intersect() -> TruthDefect<(R, R)> {
-    on_disagreement(NAN_OPERAND, |&(a, b)| {
         want(
-            axes::<2, 4>(a)
-                .zip(axes::<2, 4>(b))
-                .map(|(e, f)| (e2(union_n(e, f)), intersect_n(e, f).map(e2))),
+            axes::<2, 4>(a).map(|e| {
+                finite_n([expanded(e[0], d[0].abs()), expanded(e[1], d[1].abs())]).map(e2)
+            }),
         )
     })
 }
@@ -368,19 +302,6 @@ pub fn e2_intersect_with_infinite_line() -> TruthDefect<LineArgs> {
 pub fn e3_hull() -> TruthDefect<(V, V)> {
     on_disagreement(HULL_START, |&(a, b)| want(hull_two(a, b).map(e3)))
 }
-/// The largest side length.
-pub fn e3_max_length() -> TruthDefect<(B,)> {
-    on_disagreement(NAN_OPERAND, |&(a,)| {
-        want(axes::<3, 6>(a).map(|e| most(&e.map(|x| x[1] - x[0]))))
-    })
-}
-/// The bounding sphere's smallest half side: from the centre (each axis at `min + 0.5
-/// (max - min)`) to the max corner.
-pub fn e3_sphere_min_radius() -> TruthDefect<(B,)> {
-    on_disagreement(NAN_OPERAND, |&(a,)| {
-        want(axes::<3, 6>(a).map(|e| least(&e.map(|x| (x[0] + 0.5 * (x[1] - x[0]) - x[1]).abs()))))
-    })
-}
 pub fn e3_hull_point() -> TruthDefect<(B, V)> {
     on_disagreement(HULL_START, |&(a, p)| {
         want(axes::<3, 6>(a).map(|e| {
@@ -389,23 +310,12 @@ pub fn e3_hull_point() -> TruthDefect<(B, V)> {
         }))
     })
 }
-/// The union, the overlap, and the largest distance between points of the two boxes: the
-/// union's diagonal (and its square).
-pub fn e3_union_intersect_far() -> TruthDefect<(B, B)> {
-    on_disagreement(NAN_OPERAND, |&(a, b)| {
-        want(axes::<3, 6>(a).zip(axes::<3, 6>(b)).map(|(e, f)| {
-            let u = union_n(e, f);
-            let sq: f64 = u.iter().map(|x| (x[1] - x[0]) * (x[1] - x[0])).sum();
-            (e3(u), intersect_n(e, f).map(e3), sq, sq.sqrt())
-        }))
-    })
-}
 pub fn e3_expand() -> TruthDefect<(B, f64)> {
     on_disagreement(NAN_MOVE, |&(a, d)| {
         want(axes::<3, 6>(a).map(|e| {
             (
-                e3(e.map(|x| expanded_relative(x, d.abs()))),
-                e3(e.map(|x| expanded(x, d.abs()))),
+                finite_n(e.map(|x| expanded_relative(x, d.abs()))).map(e3),
+                finite_n(e.map(|x| expanded(x, d.abs()))).map(e3),
             )
         }))
     })

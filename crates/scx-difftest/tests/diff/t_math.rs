@@ -9,7 +9,85 @@ type V = [f64; 3];
 type P = [f64; 2];
 type M = [[f64; 4]; 4];
 
-diff!(is_infinite_param, |a: f64| m::math::is_infinite_param(a));
+// The pin's sampling half-size, `SM_BOUNDED_INFINITE_PARAM`, as scx's `Clamp::Sample` rule
+// (scx has no end marker, so no `is_infinite_param`).
+diff!(
+    clamp_sample,
+    || scx_num::domain::Clamp::Sample.half_width(),
+    m::math::BOUNDED_INFINITE_PARAM
+);
+// A parameter domain's working range against the pin's `ApproximateUnbounded(0, half)` on the
+// extent whose missing ends are `SM_INFINITE_PARAMETER`: kind 0 has no end, 1 runs from `a`, 2
+// up to `a`, 3 is `[a, b]`. The rule is `Clamp::Sample` (the pin's 33) or `Clamp::Linear` of
+// reach `h`. An end the pin cannot hold (not finite, or its marker) is no domain on both sides.
+diff!(
+    domain_working,
+    pin_defect = crate::pin_defects::domain_working,
+    |kind: usize, a: f64, b: f64, h: f64, sample: bool| {
+        use scx_num::domain::{Clamp, ParamDomain, Reach};
+        let rule = if sample {
+            Some(Clamp::Sample)
+        } else {
+            Reach::new(h).map(Clamp::Linear)
+        };
+        let domain = crate::facade::plain_ends(&[a, b])
+            .then(|| match kind % 4 {
+                0 => Some(ParamDomain::Unbounded),
+                1 => ParamDomain::at_least(a),
+                2 => ParamDomain::at_most(a),
+                _ => scx_num::extent1d::Extent1d::new(a, b).map(ParamDomain::Bounded),
+            })
+            .flatten();
+        rule.zip(domain).map(|(r, d)| {
+            let e = d.working(r);
+            (e.min(), e.max())
+        })
+    },
+    {
+        use solidcore::geom::extent1d::Extent1d;
+        use solidcore::math::{BOUNDED_INFINITE_PARAM, INFINITE_PARAMETER as MARK};
+        let half = if sample {
+            Some(BOUNDED_INFINITE_PARAM)
+        } else {
+            (h.is_finite() && h > 0.0).then_some(h)
+        };
+        let ends = crate::facade::plain_ends(&[a, b])
+            .then(|| match kind % 4 {
+                0 => Some((-MARK, MARK)),
+                1 => Some((a, MARK)),
+                2 => Some((-MARK, a)),
+                _ => (a <= b).then_some((a, b)),
+            })
+            .flatten();
+        half.zip(ends).map(|(h, (lo, hi))| {
+            let e = Extent1d::from_min_max(lo, hi).approximate_unbounded(0.0, h);
+            (e.min(), e.max())
+        })
+    }
+);
+// A frame from an origin, an axis and a reference direction against the pin's
+// `SetSTEPCanonical`: the axes, and a point mapped from frame coordinates (`TransformPoint`).
+diff!(
+    frame_new,
+    pin_defect = crate::pin_defects::frame_new,
+    |o: V, z: V, h: V, q: V| {
+        let a = |v: scx_num::vector3d::Vec3| [v.x, v.y, v.z];
+        scx_num::frame::Frame::new(m::p3(o), m::v3(z), m::v3(h)).map(|f| {
+            let p = f.to_affine().apply(m::p3(q));
+            ([a(*f.x()), a(*f.y()), a(*f.z())], [p.x, p.y, p.z])
+        })
+    },
+    {
+        let a = |v: solidcore::geom::vector3d::Vec3| [v.x, v.y, v.z];
+        let mut f = solidcore::geom::axis2_placement::Axis2Placement::IDENTITY;
+        f.set_step_canonical(m::p3(o), m::v3(z), m::v3(h))
+            .ok()
+            .map(|()| {
+                let p = f.transform_point(m::p3(q));
+                ([a(f.x_axis()), a(f.y_axis()), a(f.z_axis())], a(p))
+            })
+    }
+);
 diff!(
     max2,
     truth_defect = crate::pin_truths::max2,
@@ -272,7 +350,4 @@ diff!(constants, || [
     m::math::EFF_ZERO_DEG,
     m::math::EFF_ZERO_RAD,
     m::math::BIG_DOUBLE,
-    m::math::INFINITE_PARAMETER,
-    m::math::INFINITE_PARAMETER_SQRT,
-    m::math::BOUNDED_INFINITE_PARAM,
 ]);

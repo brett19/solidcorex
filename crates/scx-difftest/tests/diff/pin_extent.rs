@@ -3,7 +3,8 @@
 //!
 //! Each adapter is the pin's own call, shaped the way scx takes and returns it:
 //! - transforms by value;
-//! - `Option` where scx refuses an inverted result;
+//! - `Option` where scx refuses an inverted result, or one with an end that is not finite
+//!   (scx's ends are finite by construction; the pin's may be ±inf or NaN);
 //! - `x`/`y`/`z` names;
 //! - the hull accumulators;
 //! - `AtSeam` and `ParamOrder` in place of the pin's bools.
@@ -44,7 +45,9 @@ pub mod extent1d {
             Self(Extent1d::union(&self.0, &o.0))
         }
         pub fn finish(self) -> Option<Extent1d> {
-            (!self.0.has_negative_length()).then_some(self.0)
+            (!self.0.has_negative_length())
+                .then_some(self.0)
+                .and_then(super::finite1)
         }
     }
     impl FromIterator<f64> for Hull1d {
@@ -84,7 +87,9 @@ pub mod extent2d {
             Self(Extent2d::union(&self.0, &o.0))
         }
         pub fn finish(self) -> Option<Extent2d> {
-            (!self.0.has_negative_area()).then_some(self.0)
+            (!self.0.has_negative_area())
+                .then_some(self.0)
+                .and_then(super::finite2)
         }
     }
     impl FromIterator<Point2> for Hull2d {
@@ -117,7 +122,9 @@ pub mod extent3d {
             Self(Extent3d::union(&self.0, &o.0))
         }
         pub fn finish(self) -> Option<Extent3d> {
-            (!self.0.has_negative_volume()).then_some(self.0)
+            (!self.0.has_negative_volume())
+                .then_some(self.0)
+                .and_then(super::finite3)
         }
     }
     impl FromIterator<Point3> for Hull3d {
@@ -140,6 +147,41 @@ fn unless<T>(t: T, inverted: bool) -> Option<T> {
     (!inverted).then_some(t)
 }
 
+/// The interval when both its ends are finite (scx holds no other).
+pub fn finite1(e: Extent1d) -> Option<Extent1d> {
+    (e.min().is_finite() && e.max().is_finite()).then_some(e)
+}
+
+/// The box when every end is finite.
+pub fn finite2(e: Extent2d) -> Option<Extent2d> {
+    [e.u_min(), e.u_max(), e.v_min(), e.v_max()]
+        .iter()
+        .all(|x| x.is_finite())
+        .then_some(e)
+}
+
+/// The box when every end is finite.
+pub fn finite3(e: Extent3d) -> Option<Extent3d> {
+    [
+        e.u_min(),
+        e.u_max(),
+        e.v_min(),
+        e.v_max(),
+        e.w_min(),
+        e.w_max(),
+    ]
+    .iter()
+    .all(|x| x.is_finite())
+    .then_some(e)
+}
+
+/// scx's `Extent1d::new(min, max)` (the pin's `new` takes no ends): `set_min_max`, refused
+/// where the pin refuses or an end is not finite.
+pub fn interval(min: f64, max: f64) -> Option<Extent1d> {
+    let mut e = Extent1d::new();
+    e.set_min_max(min, max).ok().map(|()| e).and_then(finite1)
+}
+
 /// The pin's `ExtentNd::new(dim)` with each interval set through `get_mut`.
 pub fn end(v: Vec<Extent1d>) -> ExtentNd {
     let mut n = ExtentNd::new(v.len());
@@ -152,66 +194,61 @@ pub fn end(v: Vec<Extent1d>) -> ExtentNd {
 }
 
 pub trait E1: Sized {
-    fn point(v: f64) -> Self;
-    fn spanning(a: f64, b: f64) -> Self;
-    fn from_bounds(min: f64, max: f64) -> Option<Self>;
+    fn point(v: f64) -> Option<Self>;
+    fn spanning(a: f64, b: f64) -> Option<Self>;
     fn hull<I: IntoIterator<Item = f64>>(values: I) -> Option<Self>;
     fn with_min(self, min: f64) -> Option<Self>;
     fn with_max(self, max: f64) -> Option<Self>;
     fn negated(self) -> Self;
-    fn translated(self, v: f64) -> Self;
-    fn expanded(self, d: f64) -> Self;
+    fn translated(self, v: f64) -> Option<Self>;
+    fn expanded(self, d: f64) -> Option<Self>;
     fn shrunk(self, d: f64) -> Option<Self>;
-    fn expanded_relative(self, factor: f64) -> Self;
-    fn scaled(self, s: f64) -> Self;
+    fn expanded_relative(self, factor: f64) -> Option<Self>;
+    fn scaled(self, s: f64) -> Option<Self>;
     fn union(self, other: Self) -> Self;
     fn intersect(self, other: Self) -> Option<Self>;
     fn intersect_periodic(self, other: &Self, period: f64, at: AtSeam) -> Result<Vec<Self>>;
 }
 
 impl E1 for Extent1d {
-    fn point(v: f64) -> Self {
-        Self::from_value(v)
+    fn point(v: f64) -> Option<Self> {
+        finite1(Self::from_value(v))
     }
-    fn spanning(a: f64, b: f64) -> Self {
-        Self::from_min_max(a, b)
-    }
-    fn from_bounds(min: f64, max: f64) -> Option<Self> {
-        let mut e = Self::new();
-        e.set_min_max(min, max).ok().map(|()| e)
+    fn spanning(a: f64, b: f64) -> Option<Self> {
+        finite1(Self::from_min_max(a, b))
     }
     fn hull<I: IntoIterator<Item = f64>>(values: I) -> Option<Self> {
         values.into_iter().collect::<Hull1d>().finish()
     }
     fn with_min(mut self, min: f64) -> Option<Self> {
-        self.set_min(min).ok().map(|()| self)
+        self.set_min(min).ok().map(|()| self).and_then(finite1)
     }
     fn with_max(mut self, max: f64) -> Option<Self> {
-        self.set_max(max).ok().map(|()| self)
+        self.set_max(max).ok().map(|()| self).and_then(finite1)
     }
     fn negated(mut self) -> Self {
         self.negate();
         self
     }
-    fn translated(mut self, v: f64) -> Self {
+    fn translated(mut self, v: f64) -> Option<Self> {
         self.translate(v);
-        self
+        finite1(self)
     }
-    fn expanded(mut self, d: f64) -> Self {
+    fn expanded(mut self, d: f64) -> Option<Self> {
         self.expand_absolute(d);
-        self
+        finite1(self)
     }
     fn shrunk(mut self, d: f64) -> Option<Self> {
         self.expand_absolute(-d);
-        unless(self, self.has_negative_length())
+        unless(self, self.has_negative_length()).and_then(finite1)
     }
-    fn expanded_relative(mut self, factor: f64) -> Self {
+    fn expanded_relative(mut self, factor: f64) -> Option<Self> {
         self.expand_relative(factor);
-        self
+        finite1(self)
     }
-    fn scaled(mut self, s: f64) -> Self {
+    fn scaled(mut self, s: f64) -> Option<Self> {
         self.scale(s);
-        self
+        finite1(self)
     }
     fn union(self, other: Self) -> Self {
         Self::union(&self, &other)
@@ -225,19 +262,19 @@ impl E1 for Extent1d {
 }
 
 pub trait E2: Sized {
-    fn spanning(a: Point2, b: Point2) -> Self;
+    fn spanning(a: Point2, b: Point2) -> Option<Self>;
     fn from_corners(min: Point2, max: Point2) -> Option<Self>;
     fn from_intervals(x: Extent1d, y: Extent1d) -> Self;
     fn hull<I: IntoIterator<Item = Point2>>(points: I) -> Option<Self>;
     fn with_x_interval(self, ivl: Extent1d) -> Self;
     fn with_y_interval(self, ivl: Extent1d) -> Self;
     fn transposed(self) -> Self;
-    fn expanded(self, d: f64) -> Self;
-    fn expanded_vec(self, d: Vec2) -> Self;
+    fn expanded(self, d: f64) -> Option<Self>;
+    fn expanded_vec(self, d: Vec2) -> Option<Self>;
     fn shrunk(self, d: f64) -> Option<Self>;
-    fn expanded_relative(self, factor: f64) -> Self;
-    fn scaled(self, s: f64) -> Self;
-    fn scaled_xy(self, sx: f64, sy: f64) -> Self;
+    fn expanded_relative(self, factor: f64) -> Option<Self>;
+    fn scaled(self, s: f64) -> Option<Self>;
+    fn scaled_xy(self, sx: f64, sy: f64) -> Option<Self>;
     fn x_min(&self) -> f64;
     fn x_max(&self) -> f64;
     fn y_min(&self) -> f64;
@@ -252,12 +289,12 @@ pub trait E2: Sized {
 }
 
 impl E2 for Extent2d {
-    fn spanning(a: Point2, b: Point2) -> Self {
-        Self::from_points(a, b)
+    fn spanning(a: Point2, b: Point2) -> Option<Self> {
+        finite2(Self::from_points(a, b))
     }
     fn from_corners(min: Point2, max: Point2) -> Option<Self> {
         let mut e = Self::new();
-        e.set_min_max(min, max).ok().map(|()| e)
+        e.set_min_max(min, max).ok().map(|()| e).and_then(finite2)
     }
     fn from_intervals(x: Extent1d, y: Extent1d) -> Self {
         Self::from_bounds(x.min(), y.min(), x.max(), y.max())
@@ -277,29 +314,29 @@ impl E2 for Extent2d {
         self.transpose();
         self
     }
-    fn expanded(mut self, d: f64) -> Self {
+    fn expanded(mut self, d: f64) -> Option<Self> {
         self.expand_absolute(d);
-        self
+        finite2(self)
     }
-    fn expanded_vec(mut self, d: Vec2) -> Self {
+    fn expanded_vec(mut self, d: Vec2) -> Option<Self> {
         self.expand_absolute_vec(d);
-        self
+        finite2(self)
     }
     fn shrunk(mut self, d: f64) -> Option<Self> {
         self.expand_absolute(-d);
-        unless(self, self.has_negative_area())
+        unless(self, self.has_negative_area()).and_then(finite2)
     }
-    fn expanded_relative(mut self, factor: f64) -> Self {
+    fn expanded_relative(mut self, factor: f64) -> Option<Self> {
         self.expand_relative(factor);
-        self
+        finite2(self)
     }
-    fn scaled(mut self, s: f64) -> Self {
+    fn scaled(mut self, s: f64) -> Option<Self> {
         self.scale(s, None);
-        self
+        finite2(self)
     }
-    fn scaled_xy(mut self, sx: f64, sy: f64) -> Self {
+    fn scaled_xy(mut self, sx: f64, sy: f64) -> Option<Self> {
         self.scale(sx, Some(sy));
-        self
+        finite2(self)
     }
     fn x_min(&self) -> f64 {
         self.u_min()
@@ -337,7 +374,7 @@ impl E2 for Extent2d {
 }
 
 pub trait E3: Sized {
-    fn spanning(a: Point3, b: Point3) -> Self;
+    fn spanning(a: Point3, b: Point3) -> Option<Self>;
     fn from_corners(min: Point3, max: Point3) -> Option<Self>;
     fn from_intervals(x: Extent1d, y: Extent1d, z: Extent1d) -> Self;
     fn hull<I: IntoIterator<Item = Point3>>(points: I) -> Option<Self>;
@@ -354,18 +391,18 @@ pub trait E3: Sized {
     fn with_y_interval(self, ivl: Extent1d) -> Self;
     fn union(self, other: Self) -> Self;
     fn intersect(self, other: Self) -> Option<Self>;
-    fn expanded(self, d: f64) -> Self;
+    fn expanded(self, d: f64) -> Option<Self>;
     fn shrunk(self, d: f64) -> Option<Self>;
-    fn expanded_relative(self, factor: f64) -> Self;
+    fn expanded_relative(self, factor: f64) -> Option<Self>;
 }
 
 impl E3 for Extent3d {
-    fn spanning(a: Point3, b: Point3) -> Self {
-        Self::from_points(a, b)
+    fn spanning(a: Point3, b: Point3) -> Option<Self> {
+        finite3(Self::from_points(a, b))
     }
     fn from_corners(min: Point3, max: Point3) -> Option<Self> {
         let mut e = Self::new();
-        e.set_min_max(min, max).ok().map(|()| e)
+        e.set_min_max(min, max).ok().map(|()| e).and_then(finite3)
     }
     fn from_intervals(x: Extent1d, y: Extent1d, z: Extent1d) -> Self {
         Self::from_bounds(x.min(), y.min(), z.min(), x.max(), y.max(), z.max())
@@ -414,16 +451,16 @@ impl E3 for Extent3d {
     fn intersect(self, other: Self) -> Option<Self> {
         Self::intersect(&self, &other).ok()
     }
-    fn expanded(mut self, d: f64) -> Self {
+    fn expanded(mut self, d: f64) -> Option<Self> {
         self.expand_absolute(d);
-        self
+        finite3(self)
     }
     fn shrunk(mut self, d: f64) -> Option<Self> {
         self.expand_absolute(-d);
-        unless(self, self.has_negative_volume())
+        unless(self, self.has_negative_volume()).and_then(finite3)
     }
-    fn expanded_relative(mut self, factor: f64) -> Self {
+    fn expanded_relative(mut self, factor: f64) -> Option<Self> {
         self.expand_relative(factor);
-        self
+        finite3(self)
     }
 }

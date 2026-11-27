@@ -21,6 +21,7 @@
 pub mod cert;
 pub mod certified;
 pub mod consts;
+pub mod domain;
 pub mod eft;
 pub mod error;
 pub(crate) mod expansion;
@@ -28,6 +29,7 @@ pub mod extent1d;
 pub mod extent2d;
 pub mod extent3d;
 pub mod fmath;
+pub mod frame;
 pub mod hash;
 pub mod interval;
 pub mod limits;

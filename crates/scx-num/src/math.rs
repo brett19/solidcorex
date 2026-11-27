@@ -42,7 +42,7 @@
 //! | [`Affine::apply_vec`]        | `SmTransform::TransformVector`                 |
 //! | [`Affine::rotation`], [`Affine::uniform_scaling`], [`Affine::reflection`] | (not upstream) |
 //! | [`EFF_ZERO`] etc.            | `SM_EFF_ZERO` etc.                             |
-//! | [`is_infinite_param`]        | `SM_IS_INFINITE`                               |
+//! | [`Clamp`](crate::domain::Clamp) | `SM_INFINITE_PARAMETER`, `SM_INFINITE_PARAMETER_SQRT`, `SM_BOUNDED_INFINITE_PARAM` (as bounds; no end marker, so no `SM_IS_INFINITE`) |
 //! | `f64::max`, `f64::min`       | `smos_Max`, `smos_Min`, `smos_3Max` etc. (a NaN operand is dropped) |
 //! | [`rad_to_deg`]               | `SM_RAD2DEG`                                   |
 //!
@@ -84,23 +84,6 @@ pub const EFF_ZERO_DEG: f64 = 1.0e-4;
 pub const EFF_ZERO_RAD: f64 = EFF_ZERO_DEG * PI / 180.0;
 /// `SM_BIG_DOUBLE`: a value larger than any coordinate (used for "inside out" extents).
 pub const BIG_DOUBLE: f64 = 1.0e20;
-/// `SM_INFINITE_PARAMETER`: the value that marks an unbounded interval end.
-pub const INFINITE_PARAMETER: f64 = 1234567.0;
-/// `SM_INFINITE_PARAMETER_SQRT`: unbounded marker for representations that square it.
-pub const INFINITE_PARAMETER_SQRT: f64 = 1111.111;
-/// `SM_BOUNDED_INFINITE_PARAM`: half size used to approximate an unbounded interval.
-pub const BOUNDED_INFINITE_PARAM: f64 = 33.0;
-
-/// `SM_IS_INFINITE(a)`: true when `a` is `±INFINITE_PARAMETER` or
-/// `±INFINITE_PARAMETER_SQRT` (exact comparison, as upstream).
-#[must_use]
-pub fn is_infinite_param(a: f64) -> bool {
-    a == INFINITE_PARAMETER
-        || a == -INFINITE_PARAMETER
-        || a == INFINITE_PARAMETER_SQRT
-        || a == -INFINITE_PARAMETER_SQRT
-}
-
 /// `SM_RAD2DEG(a)` = `a * (180.0 / SM_PI)`: radians to degrees.
 #[must_use]
 pub fn rad_to_deg(a: f64) -> f64 {
@@ -624,9 +607,9 @@ impl Affine {
             max = Point3::new(max.x.max(up.x), max.y.max(up.y), max.z.max(up.z));
         }
         Some(Extent3d::from_intervals(
-            Extent1d::from_bounds(min.x, max.x)?,
-            Extent1d::from_bounds(min.y, max.y)?,
-            Extent1d::from_bounds(min.z, max.z)?,
+            Extent1d::new(min.x, max.x)?,
+            Extent1d::new(min.y, max.y)?,
+            Extent1d::new(min.z, max.z)?,
         ))
     }
 
@@ -1514,7 +1497,7 @@ mod tests {
     fn transformed_box_holds_its_moved_corners() {
         // A quarter turn about z, then a move by (10, 20, 30): x goes to y, y to -x.
         let map = Affine::from_axes(Vec3::Y, -Vec3::X, Vec3::Z, Point3::new(10.0, 20.0, 30.0));
-        let b = Extent3d::spanning(Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 2.0, 3.0));
+        let b = Extent3d::spanning(Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 2.0, 3.0)).unwrap();
         let image = map.transformed_box(b).unwrap();
         let (lo, hi) = (image.min(), image.max());
         let (want_lo, want_hi) = (Point3::new(8.0, 20.0, 30.0), Point3::new(10.0, 21.0, 33.0));
@@ -1533,7 +1516,9 @@ mod tests {
         let tiny = crate::fmath::powi(2.0, -53);
         let shift = Affine::translation(Vec3::new(1.0, 0.0, 0.0));
         let p = Point3::new(tiny, 0.0, 0.0);
-        let image = shift.transformed_box(Extent3d::from_point(p)).unwrap();
+        let image = shift
+            .transformed_box(Extent3d::from_point(p).unwrap())
+            .unwrap();
         let (lo, hi) = (image.min(), image.max());
         assert!(lo.x < 1.0 && hi.x > 1.0 && hi.x - lo.x < 1e-14);
     }

@@ -1130,8 +1130,9 @@ impl<C: Converged1d> Run<'_, C> {
                     Goal::Minimize => a < b,
                 };
                 if beats(curr.f, prev1.f) && beats(curr.f, prev2.f) {
-                    let ext = Extent1d::spanning(prev1.t, prev2.t);
-                    if ext.contains_value(curr.t, 0.0) {
+                    let bracketed = Extent1d::spanning(prev1.t, prev2.t)
+                        .is_some_and(|ext| ext.contains_value(curr.t, 0.0));
+                    if bracketed {
                         let bracket = Bracket3 {
                             a: prev1.t,
                             b: curr.t,
@@ -1307,7 +1308,7 @@ mod tests {
     /// Newton on `[lo, hi]`, accepting `|F| < 1e-9`.
     fn bounded(lo: f64, hi: f64) -> LocalSolve1d {
         LocalSolve1d {
-            domain: Domain1d::Bounded(Extent1d::spanning(lo, hi)),
+            domain: Domain1d::Bounded(Extent1d::spanning(lo, hi).unwrap()),
             ..line()
         }
     }
