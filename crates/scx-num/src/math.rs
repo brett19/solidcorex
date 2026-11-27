@@ -15,8 +15,13 @@
 // `Undecided`.
 // Then `max3`, `min3`, `max4` and `min4` removed: `smos_3Max(a, b, c)` is
 // `max2(max2(a, b), c)` to the bit, NaN included, and `smos_4Max` was already nested `max2`.
+// Then `Transform` (upstream's row-vector 4×4 with a public `m`) became `Affine`, column-vector,
+// with no projective column: `concat` became `Mul` (`outer * inner`), `transform_point` and
+// friends `apply*`, `inverse` answers `Option`, `is_rigid` lost its projective tolerance, and
+// `transform_points` went (its one caller mapped points one by one). A composition's linear part
+// no longer takes NaN from a translation not finite (`0 * inf` in `smgu_4x4Mult`).
 //! Small `f64` linear-algebra types: [`Vec3`]/[`Point3`], [`Vec2`]/[`Point2`],
-//! [`Transform`], and the numeric constants of `SmMath.h`.
+//! [`Affine`], and the numeric constants of `SmMath.h`.
 //!
 //! Upstream: `source/SMLib/inc/SmVector3d.h`, `SmVector2d.h`, `SmCoreTypes.h`,
 //! `SmMath.h`, `SmTransform.h` / `src/SmTransform.cpp`, and `smgu_4x4Mult` in
@@ -26,11 +31,11 @@
 //! |------------------------------|------------------------------------------------|
 //! | [`Vec3`] / [`Point3`]        | `SmVector3d` / `SmPoint3d` (re-exported from [`crate::vector3d`]) |
 //! | [`Vec2`] / [`Point2`]        | `SmVector2d` / `SmPoint2d` (re-exported from [`crate::vector2d`]) |
-//! | [`Transform`]                | `SmTransform` (`m_adT[4][4]`)                  |
-//! | [`Transform::concat`]        | `SmTransform::ConcatTransform` / `smgu_4x4Mult`|
-//! | [`Transform::transform_point`]  | `SmTransform::TransformPoint`               |
-//! | [`Transform::transform_vector`] | `SmTransform::TransformVector`              |
-//! | [`Transform::rotation`], [`Transform::uniform_scaling`], [`Transform::reflection`] | (not upstream) |
+//! | [`Affine`]                   | `SmTransform` (`m_adT[4][4]`, affine only)     |
+//! | `outer * inner` ([`Affine`]'s `Mul`) | `SmTransform::ConcatTransform` / `smgu_4x4Mult` |
+//! | [`Affine::apply`]            | `SmTransform::TransformPoint`                  |
+//! | [`Affine::apply_vec`]        | `SmTransform::TransformVector`                 |
+//! | [`Affine::rotation`], [`Affine::uniform_scaling`], [`Affine::reflection`] | (not upstream) |
 //! | [`EFF_ZERO`] etc.            | `SM_EFF_ZERO` etc.                             |
 //! | [`is_infinite_param`]        | `SM_IS_INFINITE`                               |
 //! | [`max2`], [`min2`]           | `smos_Max`, `smos_Min` (`smos_3Max` etc.: nested [`max2`]) |
@@ -128,198 +133,269 @@ pub fn det3(m: &[[f64; 4]; 3]) -> f64 {
         + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
 }
 
-/// An affine 3D transform stored as upstream's row-vector 4×4 matrix
-/// (`SmTransform::m_adT`): `out = [p.x p.y p.z 1] * m`.
+/// An affine 3D map in the column-vector convention: `p' = A p + t`, the linear part `A`
+/// (whose columns are the images of the X, Y and Z axes) and the translation `t` (the image
+/// of the origin). `a * b` applies `b` first.
 ///
-/// Rows 0..3 are the images of the X, Y, Z axes; row 3 is the translation.
+/// It holds no projective part: [`TryFrom<[[f64; 4]; 4]>`](#impl-TryFrom%3C%5B%5Bf64;+4%5D;+4%5D%3E-for-Affine)
+/// reads upstream's row-vector `SmTransform::m_adT` and refuses a fourth column other than
+/// `(0, 0, 0, 1)`. Every map sums its terms in upstream's order (`TransformPoint`,
+/// `TransformVector`, `smgu_4x4Mult`), so its results are upstream's to the bit.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Transform {
-    /// The 4×4 matrix, `m[row][col]`.
-    pub m: [[f64; 4]; 4],
+pub struct Affine {
+    /// The images of the X, Y and Z axes: the linear part's columns.
+    axes: [Vec3; 3],
+    /// The translation.
+    shift: Vec3,
 }
 
-impl Default for Transform {
+impl Default for Affine {
     fn default() -> Self {
         Self::IDENTITY
     }
 }
 
-impl Transform {
-    /// The identity transform.
+/// The operation name of the refusals of the maps built from their numbers.
+const OP_MAPS: &str = "math::Affine";
+
+impl Affine {
+    // ---- Constructors ----
+
+    /// The identity map.
     pub const IDENTITY: Self = Self {
-        m: [
-            [1.0, 0.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0, 0.0],
-            [0.0, 0.0, 1.0, 0.0],
-            [0.0, 0.0, 0.0, 1.0],
-        ],
+        axes: [Vec3::X, Vec3::Y, Vec3::Z],
+        shift: Vec3::ZERO,
     };
 
     /// A pure translation by `d`.
     #[must_use]
     pub const fn translation(d: Vec3) -> Self {
-        let mut t = Self::IDENTITY;
-        t.m[3] = [d.x, d.y, d.z, 1.0];
-        t
+        Self {
+            axes: Self::IDENTITY.axes,
+            shift: d,
+        }
     }
 
-    /// Builds a transform from the images of the axes and the origin
+    /// The map that takes the X, Y and Z axes to `x`, `y` and `z` and the origin to `origin`
     /// (`SetToXAxis`/`SetToYAxis`/`SetToZAxis`/`SetToDisp`).
     #[must_use]
     pub const fn from_axes(x: Vec3, y: Vec3, z: Vec3, origin: Point3) -> Self {
         Self {
-            m: [
-                [x.x, x.y, x.z, 0.0],
-                [y.x, y.y, y.z, 0.0],
-                [z.x, z.y, z.z, 0.0],
-                [origin.x, origin.y, origin.z, 1.0],
-            ],
+            axes: [x, y, z],
+            shift: Vec3::new(origin.x, origin.y, origin.z),
         }
     }
+
+    /// The linear map with columns `x`, `y` and `z` about the point `fixed`, which it keeps:
+    /// `p' = A (p - fixed) + fixed`, its translation `fixed - A fixed`. A `fixed` whose image
+    /// overflows is taken at an eighth and the translation scaled back (exact, a power of
+    /// two), so a point far out on the map's own axis keeps a translation.
+    fn about(fixed: Point3, x: Vec3, y: Vec3, z: Vec3) -> Self {
+        let shift = |f: Vec3| f - (x * f.x + y * f.y + z * f.z);
+        let near = shift(fixed.to_vec());
+        let t = if near.is_finite() {
+            near
+        } else {
+            shift(fixed.to_vec() * 0.125) * 8.0
+        };
+        Self::from_axes(x, y, z, t.to_point())
+    }
+
+    /// Not upstream: the turn by `angle` radians, right-handed about `axis`, about the line
+    /// through `point` along `axis` (any length, made unit here): Rodrigues' rotation formula,
+    /// `R = c I + s [k]x + (1 - c) k kᵀ` with `k` the unit axis, `c` and `s` the cosine and
+    /// sine of the angle.
+    ///
+    /// # Errors
+    ///
+    /// `InvalidInput` for a point, axis or angle not finite, an axis whose squared
+    /// length is below [`EFF_ZERO_SQ`], or a translation too large to represent.
+    pub fn rotation(point: Point3, axis: Vec3, angle: f64) -> crate::error::Result<Self> {
+        use crate::error::NumError;
+        if !(point.is_finite() && axis.is_finite() && angle.is_finite()) {
+            return Err(NumError::invalid_input(
+                OP_MAPS,
+                "a turn's numbers not finite",
+            ));
+        }
+        let k = axis.normalized().ok_or(NumError::invalid_input(
+            OP_MAPS,
+            "a turn's axis of no length",
+        ))?;
+        let (s, c) = crate::fmath::sin_cos(angle);
+        let v = 1.0 - c;
+        let (x, y, z) = (k.x, k.y, k.z);
+        Self::about(
+            point,
+            Vec3::new(c + x * x * v, x * y * v + z * s, x * z * v - y * s),
+            Vec3::new(x * y * v - z * s, c + y * y * v, y * z * v + x * s),
+            Vec3::new(x * z * v + y * s, y * z * v - x * s, c + z * z * v),
+        )
+        .represented()
+    }
+
+    /// Not upstream: the scale by `factor` in every direction about `centre`, which it keeps.
+    /// A negative factor turns the scale through the centre as well.
+    ///
+    /// # Errors
+    ///
+    /// `InvalidInput` for a centre or factor not finite, or a factor of zero (a map with
+    /// no inverse).
+    pub fn uniform_scaling(centre: Point3, factor: f64) -> crate::error::Result<Self> {
+        use crate::error::NumError;
+        if !(centre.is_finite() && factor.is_finite()) || factor == 0.0 {
+            return Err(NumError::invalid_input(
+                OP_MAPS,
+                "a scale's numbers not finite, or a factor of zero",
+            ));
+        }
+        Ok(Self::about(
+            centre,
+            Vec3::new(factor, 0.0, 0.0),
+            Vec3::new(0.0, factor, 0.0),
+            Vec3::new(0.0, 0.0, factor),
+        ))
+    }
+
+    /// Not upstream: the mirror in the plane through `origin` square to `normal` (any length,
+    /// made unit here): `p' = p - 2 ((p - origin)·n) n`, its linear part `I - 2 n nᵀ` and its
+    /// translation `2 (origin·n) n`. For a normal along an axis every entry is exact, so the
+    /// mirror twice is the identity exactly.
+    ///
+    /// # Errors
+    ///
+    /// `InvalidInput` for an origin or normal not finite, a normal whose squared length
+    /// is below [`EFF_ZERO_SQ`], or a translation too large to represent.
+    pub fn reflection(origin: Point3, normal: Vec3) -> crate::error::Result<Self> {
+        use crate::error::NumError;
+        if !(origin.is_finite() && normal.is_finite()) {
+            return Err(NumError::invalid_input(
+                OP_MAPS,
+                "a mirror's numbers not finite",
+            ));
+        }
+        let n = normal
+            .normalized()
+            .ok_or(NumError::invalid_input(
+                OP_MAPS,
+                "a mirror's normal of no length",
+            ))?
+            .as_vec();
+        let column = |e: Vec3, ni: f64| e - n * (2.0 * ni);
+        Self::from_axes(
+            column(Vec3::X, n.x),
+            column(Vec3::Y, n.y),
+            column(Vec3::Z, n.z),
+            (n * far_dot(origin.to_vec(), n) * 2.0).to_point(),
+        )
+        .represented()
+    }
+
+    /// Not upstream: the rigid map from world coordinates into the frame of the plane through
+    /// `origin` with x axis along `x` and y axis on `y`'s side in the plane of the two (each
+    /// any length): the unit axes `x̂`, `n = unit(x̂ × y)` and `ŷ = n × x̂` become X, Z and Y,
+    /// and `origin` the origin. A point's Z after the map is its level above the plane along
+    /// its normal. The linear part's rows are `x̂`, `ŷ` and `n`, its translation
+    /// `-(origin·x̂, origin·ŷ, origin·n)`.
+    ///
+    /// # Errors
+    ///
+    /// `InvalidInput` for an origin or axis not finite, an `x` or `y` of no direction
+    /// ([`Vec3::normalized`]), an `x̂ × ŷ` whose squared length is below [`EFF_ZERO_SQ`]
+    /// (axes along one line), or a translation too large to represent.
+    pub fn into_plane_frame(origin: Point3, x: Vec3, y: Vec3) -> crate::error::Result<Self> {
+        use crate::error::NumError;
+        if !(origin.is_finite() && x.is_finite() && y.is_finite()) {
+            return Err(NumError::invalid_input(
+                OP_MAPS,
+                "a plane's numbers not finite",
+            ));
+        }
+        let none =
+            NumError::invalid_input(OP_MAPS, "a plane's axes of no length or along one line");
+        let x = x.normalized().ok_or_else(|| none.clone())?.as_vec();
+        let y = y.normalized().ok_or_else(|| none.clone())?;
+        let n = x.cross(*y).normalized().ok_or(none)?.as_vec();
+        let y = n.cross(x);
+        Self::from_axes(
+            Vec3::new(x.x, y.x, n.x),
+            Vec3::new(x.y, y.y, n.y),
+            Vec3::new(x.z, y.z, n.z),
+            (-Vec3::new(
+                far_dot(origin.to_vec(), x),
+                far_dot(origin.to_vec(), y),
+                far_dot(origin.to_vec(), n),
+            ))
+            .to_point(),
+        )
+        .represented()
+    }
+
+    /// `Ok(self)` when every entry is finite; otherwise the refusal of a map whose entries
+    /// overflow (finite inputs far enough out that the translation is too large to represent).
+    fn represented(self) -> crate::error::Result<Self> {
+        if self.is_finite() {
+            Ok(self)
+        } else {
+            Err(crate::error::NumError::invalid_input(
+                OP_MAPS,
+                "a map too large to represent",
+            ))
+        }
+    }
+
+    // ---- Queries ----
 
     /// Image of the X axis (`GetToXAxis`).
     #[must_use]
     pub const fn x_axis(&self) -> Vec3 {
-        Vec3::new(self.m[0][0], self.m[0][1], self.m[0][2])
+        self.axes[0]
     }
 
     /// Image of the Y axis (`GetToYAxis`).
     #[must_use]
     pub const fn y_axis(&self) -> Vec3 {
-        Vec3::new(self.m[1][0], self.m[1][1], self.m[1][2])
+        self.axes[1]
     }
 
     /// Image of the Z axis (`GetToZAxis`).
     #[must_use]
     pub const fn z_axis(&self) -> Vec3 {
-        Vec3::new(self.m[2][0], self.m[2][1], self.m[2][2])
+        self.axes[2]
     }
 
-    /// Translation part (`GetToDisp` / `GetToOrigin`).
+    /// The translation, the image of the origin (`GetToDisp` / `GetToOrigin`).
     #[must_use]
     pub const fn translation_part(&self) -> Vec3 {
-        Vec3::new(self.m[3][0], self.m[3][1], self.m[3][2])
+        self.shift
     }
 
-    /// `self * next`: apply `self`, then `next` (`ConcatTransform`, `smgu_4x4Mult`,
-    /// same summation order).
+    /// Whether every entry is finite.
     #[must_use]
-    pub fn concat(&self, next: &Self) -> Self {
-        let mut r = [[0.0; 4]; 4];
-        // Loop order is kk-outer instead of upstream's jj-outer, but each r[ii][jj] still
-        // accumulates 0.0 + a[ii][0]*b[0][jj] + ... + a[ii][3]*b[3][jj] in kk order,
-        // so the result is bit-identical.
-        for (r_row, a_row) in r.iter_mut().zip(self.m.iter()) {
-            for (a_val, b_row) in a_row.iter().zip(next.m.iter()) {
-                for (r_val, b_val) in r_row.iter_mut().zip(b_row.iter()) {
-                    *r_val += a_val * b_val;
-                }
-            }
-        }
-        Self { m: r }
+    pub fn is_finite(&self) -> bool {
+        self.axes.iter().all(|a| a.is_finite()) && self.shift.is_finite()
     }
 
-    /// Maps a point (`SmTransform::TransformPoint`).
-    #[must_use]
-    pub fn transform_point(&self, p: Point3) -> Point3 {
-        let (tx, ty, tz, td) = (
-            self.x_axis(),
-            self.y_axis(),
-            self.z_axis(),
-            self.translation_part(),
-        );
-        Point3::new(
-            td.x + p.x * tx.x + p.y * ty.x + p.z * tz.x,
-            td.y + p.x * tx.y + p.y * ty.y + p.z * tz.y,
-            td.z + p.x * tx.z + p.y * ty.z + p.z * tz.z,
-        )
-    }
-
-    /// Maps a list of point coordinates in place, preserving their order.
-    /// Each point uses [`Self::transform_point`]'s row-vector convention and rounding.
-    pub fn transform_points(&self, points: &mut [[f64; 3]]) {
-        for point in points {
-            let [x, y, z] = *point;
-            let image = self.transform_point(Point3::new(x, y, z));
-            *point = [image.x, image.y, image.z];
-        }
-    }
-
-    /// The axis-aligned box around the eight corners of the box `lo`..`hi` mapped by
-    /// [`Self::transform_point`]: it holds the exact image of every point of the box, and for
-    /// a map that turns it is larger than the image itself. An empty box (`lo` above `hi` on
-    /// any axis) maps to itself.
-    ///
-    /// Rounding: each mapped coordinate `t + x a + y b + z c` is four terms summed in order,
-    /// within `gamma_4` of the sum of their sizes; the sizes' sum is itself rounded, so each
-    /// side moves out by `gamma_5` of it, plus the smallest normal number for products that
-    /// underflow, and then by one more double for the subtraction or addition.
-    #[must_use]
-    pub fn transformed_box(&self, lo: Point3, hi: Point3) -> (Point3, Point3) {
-        use crate::certified::{gamma, next_down, next_up};
-        if lo.x > hi.x || lo.y > hi.y || lo.z > hi.z {
-            return (lo, hi);
-        }
-        let (tx, ty, tz, td) = (
-            self.x_axis(),
-            self.y_axis(),
-            self.z_axis(),
-            self.translation_part(),
-        );
-        let g = gamma(5);
-        let mut min = Point3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
-        let mut max = Point3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
-        for i in 0..8 {
-            let corner = Point3::new(
-                if i & 1 == 0 { lo.x } else { hi.x },
-                if i & 2 == 0 { lo.y } else { hi.y },
-                if i & 4 == 0 { lo.z } else { hi.z },
-            );
-            let p = self.transform_point(corner);
-            let size = |t: f64, a: f64, b: f64, c: f64| {
-                g * (t.abs() + (corner.x * a).abs() + (corner.y * b).abs() + (corner.z * c).abs())
-                    + f64::MIN_POSITIVE
-            };
-            let e = Vec3::new(
-                size(td.x, tx.x, ty.x, tz.x),
-                size(td.y, tx.y, ty.y, tz.y),
-                size(td.z, tx.z, ty.z, tz.z),
-            );
-            min = Point3::new(
-                min.x.min(next_down(p.x - e.x)),
-                min.y.min(next_down(p.y - e.y)),
-                min.z.min(next_down(p.z - e.z)),
-            );
-            max = Point3::new(
-                max.x.max(next_up(p.x + e.x)),
-                max.y.max(next_up(p.y + e.y)),
-                max.z.max(next_up(p.z + e.z)),
-            );
-        }
-        (min, max)
-    }
-
-    /// The lengths of the linear part's rows (the images of the axes), each within
+    /// The lengths of the images of the axes (the linear part's columns), each within
     /// `gamma_4` of exact, relatively.
     #[must_use]
-    pub fn row_lengths(&self) -> [f64; 3] {
-        let len = |c: &[f64; 4]| (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]).sqrt();
-        [len(&self.m[0]), len(&self.m[1]), len(&self.m[2])]
+    pub fn axis_lengths(&self) -> [f64; 3] {
+        self.axes
+            .map(|a| (a.x * a.x + a.y * a.y + a.z * a.z).sqrt())
     }
 
-    /// Whether the transform is a regular affine map, proved: every entry finite, the
-    /// last column `(0, 0, 0, 1)`, and its linear part's conditioning, the ratio of its
-    /// smallest scale to its largest (singular values `s_min / s_max`), above `ratio`.
-    /// `ratio` of 0 asks only for a non-zero determinant; a uniform scale of any size has
-    /// conditioning 1, a map that flattens one direction against the others (a scale of
-    /// `(1e-300, 1, 1)`) conditioning that small.
+    /// Not upstream: whether the map is regular, proved: every entry finite and its linear
+    /// part's conditioning, the ratio of its smallest scale to its largest (singular values
+    /// `s_min / s_max`), above `ratio`. `ratio` of 0 asks only for a non-zero determinant; a
+    /// uniform scale of any size has conditioning 1, a map that flattens one direction against
+    /// the others (a scale of `(1e-300, 1, 1)`) conditioning that small. `Undecided` when the
+    /// rounding leaves it open.
     ///
-    /// The conditioning is bounded below without a solve. With `r_i` the rows (the images
-    /// of the axes), `F = sum |r_i|^2` and `C = sum_{i<j} |r_i|^2 |r_j|^2`:
-    /// `s_max <= |A|_F = sqrt F`, and `s_max s_mid` is the largest singular value of the
-    /// cofactor matrix, whose rows are the cross products `r_i x r_j` with
-    /// `|r_i x r_j| <= |r_i| |r_j|`, so `s_max s_mid <= sqrt C`. Then
-    /// `s_min = |det| / (s_max s_mid) >= |det| / sqrt C`, and
+    /// The conditioning is bounded below without a solve. With `r_i` the images of the axes,
+    /// `F = sum |r_i|^2` and `C = sum_{i<j} |r_i|^2 |r_j|^2`: `s_max <= |A|_F = sqrt F`, and
+    /// `s_max s_mid` is the largest singular value of the cofactor matrix, whose columns are
+    /// the cross products `r_i x r_j` with `|r_i x r_j| <= |r_i| |r_j|`, so
+    /// `s_max s_mid <= sqrt C`. Then `s_min = |det| / (s_max s_mid) >= |det| / sqrt C`, and
     /// `s_min / s_max >= |det| / sqrt(F C)`: the map is proved regular when `|det|` is
     /// proved above `ratio sqrt(F C)`. (The bound is within a factor 3 of the conditioning
     /// for a rigid motion; a stretch `(2, 3, 4)`, of conditioning 0.5, proves 0.28.)
@@ -331,10 +407,10 @@ impl Transform {
     /// and the product with `ratio` two more roundings (`gamma_15` in all). Entries far
     /// below the largest underflow:
     /// - a scaled entry below `1e-100` (judged from the source entry, so an entry flushed
-    ///   to 0 by the scaling, in a row spanning more than `2^1074`, is counted too) moves
-    ///   each product of the determinant by a few subnormal units at most, which an absolute
-    ///   term of 256 of them covers (the cofactors are at most 8, an entry moves by half a
-    ///   unit);
+    ///   to 0 by the scaling, in an axis image spanning more than `2^1074`, is counted too)
+    ///   moves each product of the determinant by a few subnormal units at most, which an
+    ///   absolute term of 256 of them covers (the cofactors are at most 8, an entry moves by
+    ///   half a unit);
     /// - a 2x2 minor that cancels to a subnormal, times an entry of at least `1e-100`, rounds
     ///   by at most half a subnormal unit, far inside `gamma_5 size` (that term of `size` is at
     ///   least `1e-300`);
@@ -344,24 +420,15 @@ impl Transform {
     ///   absolutely, so `sqrt(F C)` by under `1e-159` (`F` is at most 12), which the
     ///   absolute term `ratio * 1e-150` covers.
     ///
-    /// Not upstream (SolidCraft's station-map check, `maps_ok`).
+    /// SolidCraft's station-map check, `maps_ok`.
     #[must_use]
     pub fn is_regular(&self, ratio: f64) -> crate::certified::Verdict {
         use crate::certified::{gamma, Bounded, Verdict};
-        let finite = self.m.iter().flatten().all(|x| x.is_finite());
-        let affine = self.m[0][3] == 0.0
-            && self.m[1][3] == 0.0
-            && self.m[2][3] == 0.0
-            && self.m[3][3] == 1.0;
-        if !finite || !affine || ratio.is_nan() || ratio < 0.0 || ratio.is_infinite() {
+        if !self.is_finite() || ratio.is_nan() || ratio < 0.0 || ratio.is_infinite() {
             return Verdict::No;
         }
-        let big = self
-            .m
-            .iter()
-            .take(3)
-            .flat_map(|r| r.iter().take(3))
-            .fold(0.0_f64, |b, v| b.max(v.abs()));
+        let src = self.axes.map(Vec3::to_array);
+        let big = src.iter().flatten().fold(0.0_f64, |b, v| b.max(v.abs()));
         if big == 0.0 {
             return Verdict::No;
         }
@@ -379,7 +446,7 @@ impl Transform {
         let scale = crate::fmath::powi(2.0, -e);
         let mut m = [[0.0_f64; 3]; 3];
         let mut tiny_entry = false;
-        for (row, src) in m.iter_mut().zip(&self.m) {
+        for (row, src) in m.iter_mut().zip(&src) {
             for (r, &v) in row.iter_mut().zip(src) {
                 *r = (v * pre) * scale;
                 // from the source entry: one the scaling flushes to 0 counts too
@@ -416,9 +483,9 @@ impl Transform {
             return Verdict::Yes;
         }
         // Proved not regular: every product of the determinant exactly 0 (no entry
-        // underflowed), or the conditioning's upper bound `|r_min| / |r_max|` (each row is
-        // the image of a unit vector, between `s_min` and `s_max` long) at most `ratio`,
-        // the squares' rounding and underflow counted against it.
+        // underflowed), or the conditioning's upper bound `|r_min| / |r_max|` (each axis
+        // image is the image of a unit vector, between `s_min` and `s_max` long) at most
+        // `ratio`, the squares' rounding and underflow counted against it.
         let (q_min, q_max) = (q0.min(q1).min(q2), q0.max(q1).max(q2));
         let flat = size == 0.0 && !tiny_entry;
         let thin =
@@ -430,21 +497,17 @@ impl Transform {
         }
     }
 
-    /// Whether this finite affine map is a rotation or reflection and a translation.
-    /// Axis lengths and mutual dot products use `axis_tol`; the homogeneous entries use
-    /// `affine_tol`. Both tolerances must be finite and positive.
+    /// Not upstream: whether this finite map is a rotation or reflection and a translation:
+    /// the images of the axes unit and square to each other within `axis_tol`, which must be
+    /// finite and positive.
     #[must_use]
-    pub fn is_rigid(&self, axis_tol: f64, affine_tol: f64) -> bool {
-        let [x, y, z, t] = &self.m;
-        let (a, b, c) = (self.x_axis(), self.y_axis(), self.z_axis());
+    pub fn is_rigid(&self, axis_tol: f64) -> bool {
+        let [a, b, c] = self.axes;
         axis_tol.is_finite()
             && axis_tol > 0.0
-            && affine_tol.is_finite()
-            && affine_tol > 0.0
-            && self.m.iter().flatten().all(|v| v.is_finite())
-            && [x, y, z].iter().all(|r| r[3].abs() < affine_tol)
-            && (t[3] - 1.0).abs() < affine_tol
-            && [a, b, c]
+            && self.is_finite()
+            && self
+                .axes
                 .iter()
                 .all(|v| (v.length() - 1.0).abs() < axis_tol)
             && a.dot(b).abs() < axis_tol
@@ -452,7 +515,7 @@ impl Transform {
             && c.dot(a).abs() < axis_tol
     }
 
-    /// The orientation-preserving 2D map induced on an orthonormal plane frame.
+    /// Not upstream: the orientation-preserving 2D map induced on an orthonormal plane frame.
     /// Translation normal to the plane is discarded, as for an orthogonal projection.
     /// Returns none for an identity within `identity_tol`, a changed normal, or a 2D
     /// determinant differing from one by at least `tol`. The caller establishes rigidity.
@@ -465,6 +528,17 @@ impl Transform {
         tol: f64,
         identity_tol: f64,
     ) -> Option<([[f64; 2]; 2], Vec2)> {
+        let near_identity = || {
+            let id = Self::IDENTITY;
+            self.axes
+                .into_iter()
+                .chain([self.shift])
+                .zip(id.axes.into_iter().chain([id.shift]))
+                .all(|(a, b)| {
+                    let d = a - b;
+                    d.x.abs() < identity_tol && d.y.abs() < identity_tol && d.z.abs() < identity_tol
+                })
+        };
         if !(tol.is_finite()
             && tol > 0.0
             && identity_tol.is_finite()
@@ -472,67 +546,163 @@ impl Transform {
             && origin.is_finite()
             && x.is_finite()
             && y.is_finite()
-            && self.m.iter().flatten().all(|v| v.is_finite()))
-            || self
-                .m
-                .iter()
-                .flatten()
-                .zip(Self::IDENTITY.m.iter().flatten())
-                .all(|(a, b)| (a - b).abs() < identity_tol)
+            && self.is_finite())
+            || near_identity()
         {
             return None;
         }
         let n = x.cross(y);
-        if (self.transform_vector(n) - n).length() > tol {
+        if (self.apply_vec(n) - n).length() > tol {
             return None;
         }
-        let (rx, ry) = (self.transform_vector(x), self.transform_vector(y));
-        let shift = self.transform_point(origin) - origin;
+        let (rx, ry) = (self.apply_vec(x), self.apply_vec(y));
+        let shift = self.apply(origin) - origin;
         let a = [[rx.dot(x), ry.dot(x)], [rx.dot(y), ry.dot(y)]];
         let det = a[0][0] * a[1][1] - a[0][1] * a[1][0];
         let b = Vec2::new(shift.dot(x), shift.dot(y));
         ((det - 1.0).abs() < tol && b.x.is_finite() && b.y.is_finite()).then_some((a, b))
     }
 
-    /// The unit, orthogonal frame axes nearest to `x` and `y`: `x` normalized, and `y` made
-    /// perpendicular to it and normalized (the kernel picks a perpendicular when `y` is parallel to
-    /// `x` or has no length). Restores a frame carried through a rigid motion to exactly unit and
-    /// orthogonal axes.
+    // ---- Maps ----
+
+    /// Maps a point (`SmTransform::TransformPoint`): `t + p.x X' + p.y Y' + p.z Z'`, summed
+    /// in that order.
+    #[must_use]
+    pub fn apply(&self, p: Point3) -> Point3 {
+        let ([tx, ty, tz], td) = (self.axes, self.shift);
+        Point3::new(
+            td.x + p.x * tx.x + p.y * ty.x + p.z * tz.x,
+            td.y + p.x * tx.y + p.y * ty.y + p.z * tz.y,
+            td.z + p.x * tx.z + p.y * ty.z + p.z * tz.z,
+        )
+    }
+
+    /// Maps a vector, ignoring translation (`SmTransform::TransformVector`).
+    #[must_use]
+    pub fn apply_vec(&self, v: Vec3) -> Vec3 {
+        let [tx, ty, tz] = self.axes;
+        Vec3::new(
+            v.x * tx.x + v.y * ty.x + v.z * tz.x,
+            v.x * tx.y + v.y * ty.y + v.z * tz.y,
+            v.x * tx.z + v.y * ty.z + v.z * tz.z,
+        )
+    }
+
+    /// Not upstream: maps a point on a line and its direction. Translation affects only the
+    /// point.
+    #[must_use]
+    pub fn apply_line(&self, point: Point3, direction: Vec3) -> (Point3, Vec3) {
+        (self.apply(point), self.apply_vec(direction))
+    }
+
+    /// Not upstream: maps an undirected axis and orients its unit direction here.
     ///
     /// # Errors
-    /// Non-finite coordinates or an `x` of no length.
-    pub fn orthonormal_frame(x: Vec3, y: Vec3) -> crate::error::Result<[Vec3; 2]> {
-        let [x, y, _] = x.make_unit_ortho_vectors(Some(y))?;
-        Ok([x.as_vec(), y.as_vec()])
+    /// Refuses a non-finite point or a direction with length at most 1e-9.
+    pub fn apply_axis(
+        &self,
+        point: Point3,
+        direction: Vec3,
+    ) -> crate::error::Result<(Point3, Vec3)> {
+        let (point, direction) = self.apply_line(point, direction);
+        let length = direction.length();
+        if !point.is_finite() || !length.is_finite() || length <= 1e-9 {
+            return Err(crate::error::NumError::InvalidInput {
+                operation: OP_MAPS,
+                reason: "the axis has no finite point and direction",
+            });
+        }
+        Ok((point, (direction / length).canonical_axis_direction()))
     }
 
-    /// Not upstream: plane axes `x` and `y` with each coordinate smaller than `noise` dropped,
-    /// each made unit again. A flat face's plane read back from a body comes tilted by rounding
-    /// (about 2e-15); a cut by that plane meets the face only nearly, where the same plane with
-    /// the rounding dropped meets it exactly. Axes with nothing to drop come back unit and
-    /// otherwise unchanged. `None` when a coordinate or `noise` is not finite, `noise` is
-    /// negative, an axis has no length once cleaned, or the cleaned axes are parallel: the
-    /// caller then keeps the axes it has.
+    /// Not upstream: the axis-aligned box around the eight corners of the box `lo`..`hi`
+    /// mapped by [`Self::apply`]: it holds the exact image of every point of the box, and for
+    /// a map that turns it is larger than the image itself. An empty box (`lo` above `hi` on
+    /// any axis) maps to itself.
+    ///
+    /// Rounding: each mapped coordinate `t + x a + y b + z c` is four terms summed in order,
+    /// within `gamma_4` of the sum of their sizes; the sizes' sum is itself rounded, so each
+    /// side moves out by `gamma_5` of it, plus the smallest normal number for products that
+    /// underflow, and then by one more double for the subtraction or addition.
     #[must_use]
-    pub fn axis_squared_frame(x: Vec3, y: Vec3, noise: f64) -> Option<[Vec3; 2]> {
-        if !(x.is_finite() && y.is_finite() && noise.is_finite() && noise >= 0.0) {
+    pub fn transformed_box(&self, lo: Point3, hi: Point3) -> (Point3, Point3) {
+        use crate::certified::{gamma, next_down, next_up};
+        if lo.x > hi.x || lo.y > hi.y || lo.z > hi.z {
+            return (lo, hi);
+        }
+        let ([tx, ty, tz], td) = (self.axes, self.shift);
+        let g = gamma(5);
+        let mut min = Point3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
+        let mut max = Point3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+        for i in 0..8 {
+            let corner = Point3::new(
+                if i & 1 == 0 { lo.x } else { hi.x },
+                if i & 2 == 0 { lo.y } else { hi.y },
+                if i & 4 == 0 { lo.z } else { hi.z },
+            );
+            let p = self.apply(corner);
+            let size = |t: f64, a: f64, b: f64, c: f64| {
+                g * (t.abs() + (corner.x * a).abs() + (corner.y * b).abs() + (corner.z * c).abs())
+                    + f64::MIN_POSITIVE
+            };
+            let e = Vec3::new(
+                size(td.x, tx.x, ty.x, tz.x),
+                size(td.y, tx.y, ty.y, tz.y),
+                size(td.z, tx.z, ty.z, tz.z),
+            );
+            min = Point3::new(
+                min.x.min(next_down(p.x - e.x)),
+                min.y.min(next_down(p.y - e.y)),
+                min.z.min(next_down(p.z - e.z)),
+            );
+            max = Point3::new(
+                max.x.max(next_up(p.x + e.x)),
+                max.y.max(next_up(p.y + e.y)),
+                max.z.max(next_up(p.z + e.z)),
+            );
+        }
+        (min, max)
+    }
+
+    /// The map that undoes this one, when [`Self::is_regular`] proves it regular at ratio 0:
+    /// `p = A⁻¹ (p' - t)`. With `a`, `b`, `c` the images of the axes (the columns of `A`),
+    /// `A⁻¹`'s rows are `b × c`, `c × a` and `a × b` over `a · (b × c)`, its translation
+    /// `-A⁻¹ t`. A mirror in a plane through the origin square to an axis is its own inverse
+    /// exactly. `None` for an entry not finite or a determinant not proved apart from 0.
+    #[must_use]
+    pub fn inverse(&self) -> Option<Self> {
+        if !self.is_regular(0.0).is_yes() {
             return None;
         }
-        let clean = |v: Vec3| {
-            let c = |a: f64| if a.abs() < noise { 0.0 } else { a };
-            Vec3::new(c(v.x), c(v.y), c(v.z))
-                .normalized()
-                .map(UnitVec3::as_vec)
-        };
-        let (x, y) = (clean(x)?, clean(y)?);
-        x.cross(y).normalized()?;
-        Some([x, y])
+        let [a, b, c] = self.axes;
+        let (bc, ca, ab) = (b.cross(c), c.cross(a), a.cross(b));
+        let s = 1.0 / a.dot(bc);
+        let linear = Self::from_axes(
+            Vec3::new(bc.x, ca.x, ab.x) * s,
+            Vec3::new(bc.y, ca.y, ab.y) * s,
+            Vec3::new(bc.z, ca.z, ab.z) * s,
+            Point3::ORIGIN,
+        );
+        Some(Self {
+            shift: -linear.apply_vec(self.shift),
+            ..linear
+        })
     }
 
-    /// Carry a plane's axes by a rigid motion, preserving its UV scales and orthogonality.
-    /// Source axes square to the same dot-product rounding as the plane constructor are
-    /// reconstructed as an orthogonal pair after the move. Genuinely skew axes keep their
-    /// parametrisation and are mapped directly. Call this only for a rigid motion.
+    /// Not upstream: how far the linear part of this map (no translation) takes the point
+    /// `pivot` from where it was, as the move it adds to the map's turn about `pivot`:
+    /// `pivot - apply_vec(pivot)`. A turn about the origin followed by this move is the
+    /// same turn about `pivot`.
+    #[must_use]
+    pub fn pivot_displacement(&self, pivot: Vec3) -> Vec3 {
+        pivot - self.apply_vec(pivot)
+    }
+
+    /// Not upstream: carry a plane's axes by a rigid motion, preserving its UV scales and
+    /// orthogonality. Source axes square to the same dot-product rounding as the plane
+    /// constructor are reconstructed as an orthogonal pair after the move. Genuinely skew
+    /// axes keep their parametrisation and are mapped directly. Call this only for a rigid
+    /// motion.
     ///
     /// This prevents the rounding of successive rotations from accumulating into a skew
     /// plane. It does not widen the plane constructor's rounding bound.
@@ -548,14 +718,14 @@ impl Transform {
             && a > 0.0
             && b > 0.0
             && (a * b).is_finite()
-            && self.m.iter().flatten().all(|x| x.is_finite()))
+            && self.is_finite())
         {
             return Err(NumError::invalid_input(
                 OP_MAPS,
                 "invalid plane axes or motion",
             ));
         }
-        let (mu, mv) = (self.transform_vector(u), self.transform_vector(v));
+        let (mu, mv) = (self.apply_vec(u), self.apply_vec(v));
         if !(mu.is_finite() && mv.is_finite()) {
             return Err(NumError::invalid_input(
                 OP_MAPS,
@@ -573,9 +743,9 @@ impl Transform {
         Ok([x * a, y * b])
     }
 
-    /// Carry a plane given by three points through a rigid motion, returning its origin
-    /// and axes. Keeping axes instead of reconstructing endpoints avoids cancellation when
-    /// the plane's parametrisation is read back.
+    /// Not upstream: carry a plane given by three points through a rigid motion, returning
+    /// its origin and axes. Keeping axes instead of reconstructing endpoints avoids
+    /// cancellation when the plane's parametrisation is read back.
     ///
     /// # Errors
     /// Those of [`Self::rigid_plane_axes`], or a non-finite origin.
@@ -586,7 +756,7 @@ impl Transform {
         v: Point3,
     ) -> crate::error::Result<(Point3, [Vec3; 2])> {
         let axes = self.rigid_plane_axes(u - origin, v - origin)?;
-        let origin = self.transform_point(origin);
+        let origin = self.apply(origin);
         if !origin.is_finite() {
             return Err(crate::error::NumError::invalid_input(
                 OP_MAPS,
@@ -595,59 +765,89 @@ impl Transform {
         }
         Ok((origin, axes))
     }
+}
 
-    /// Maps a vector, ignoring translation (`SmTransform::TransformVector`).
-    #[must_use]
-    pub fn transform_vector(&self, v: Vec3) -> Vec3 {
-        let (tx, ty, tz) = (self.x_axis(), self.y_axis(), self.z_axis());
-        Vec3::new(
-            v.x * tx.x + v.y * ty.x + v.z * tz.x,
-            v.x * tx.y + v.y * ty.y + v.z * tz.y,
-            v.x * tx.z + v.y * ty.z + v.z * tz.z,
-        )
-    }
-
-    /// Map a point on a line and its direction. Translation affects only the point.
-    #[must_use]
-    pub fn transform_line(&self, point: Point3, direction: Vec3) -> (Point3, Vec3) {
-        (
-            self.transform_point(point),
-            self.transform_vector(direction),
-        )
-    }
-
-    /// Map an undirected axis to this frame and orient its unit direction here.
-    ///
-    /// # Errors
-    /// Refuses a non-finite point or a direction with length at most 1e-9.
-    pub fn transform_canonical_axis(
-        &self,
-        point: Point3,
-        direction: Vec3,
-    ) -> crate::error::Result<(Point3, Vec3)> {
-        let (point, direction) = self.transform_line(point, direction);
-        let length = direction.length();
-        if !point.is_finite() || !length.is_finite() || length <= 1e-9 {
-            return Err(crate::error::NumError::InvalidInput {
-                operation: OP_MAPS,
-                reason: "the axis has no finite point and direction",
-            });
+/// `outer * inner`: `inner` first, then `outer` (`inner.ConcatTransform(outer)`,
+/// `smgu_4x4Mult(inner, outer)`), with upstream's sums: each image of an axis is
+/// `outer.apply_vec` of `inner`'s, the translation `outer.apply_vec(inner's) + outer's`.
+/// Upstream's product also adds `0 * outer`'s translation into each entry of the linear part,
+/// which makes it NaN for a translation not finite; the linear part of a composition does not
+/// depend on a translation, and here it does not.
+impl core::ops::Mul for Affine {
+    type Output = Self;
+    #[allow(clippy::suspicious_arithmetic_impl)] // the translation adds: an affine product
+    fn mul(self, inner: Self) -> Self {
+        Self {
+            axes: inner.axes.map(|a| self.apply_vec(a)),
+            shift: self.apply_vec(inner.shift) + self.shift,
         }
-        Ok((point, (direction / length).canonical_axis_direction()))
-    }
-
-    /// Not upstream: how far the linear part of this map (its rows 0 to 2, no translation) takes
-    /// the point `pivot` from where it was, as the move it adds to the map's turn about `pivot`:
-    /// `pivot - transform_vector(pivot)`. A turn about the origin followed by this move is the
-    /// same turn about `pivot`.
-    #[must_use]
-    pub fn pivot_displacement(&self, pivot: Vec3) -> Vec3 {
-        pivot - self.transform_vector(pivot)
     }
 }
 
-/// The operation name of the refusals of the maps built from their numbers.
-const OP_MAPS: &str = "math::Transform";
+/// Reads upstream's row-vector 4×4 matrix (`SmTransform::m_adT`, `out = [p.x p.y p.z 1] m`):
+/// rows 0 to 2 the images of the axes, row 3 the translation. Exact.
+impl TryFrom<[[f64; 4]; 4]> for Affine {
+    type Error = crate::error::NumError;
+
+    /// # Errors
+    /// `InvalidInput` for a fourth column other than `(0, 0, 0, 1)` (NaN included): a
+    /// projective map, which an `Affine` cannot hold.
+    fn try_from(m: [[f64; 4]; 4]) -> Result<Self, Self::Error> {
+        let [x, y, z, t] = m;
+        if !(x[3] == 0.0 && y[3] == 0.0 && z[3] == 0.0 && t[3] == 1.0) {
+            return Err(crate::error::NumError::invalid_input(
+                OP_MAPS,
+                "a projective column",
+            ));
+        }
+        let v = |r: [f64; 4]| Vec3::new(r[0], r[1], r[2]);
+        Ok(Self::from_axes(v(x), v(y), v(z), v(t).to_point()))
+    }
+}
+
+/// Writes upstream's row-vector 4×4 matrix: the inverse of the [`TryFrom`] above. Exact.
+impl From<Affine> for [[f64; 4]; 4] {
+    fn from(a: Affine) -> Self {
+        let r = |v: Vec3, w: f64| [v.x, v.y, v.z, w];
+        let [x, y, z] = a.axes;
+        [r(x, 0.0), r(y, 0.0), r(z, 0.0), r(a.shift, 1.0)]
+    }
+}
+
+/// Not upstream: the unit, orthogonal frame axes nearest to `x` and `y`: `x` normalized, and
+/// `y` made perpendicular to it and normalized (the kernel picks a perpendicular when `y` is
+/// parallel to `x` or has no length). Restores a frame carried through a rigid motion to
+/// exactly unit and orthogonal axes.
+///
+/// # Errors
+/// Non-finite coordinates or an `x` of no length.
+pub fn orthonormal_frame(x: Vec3, y: Vec3) -> crate::error::Result<[Vec3; 2]> {
+    let [x, y, _] = x.make_unit_ortho_vectors(Some(y))?;
+    Ok([x.as_vec(), y.as_vec()])
+}
+
+/// Not upstream: plane axes `x` and `y` with each coordinate smaller than `noise` dropped,
+/// each made unit again. A flat face's plane read back from a body comes tilted by rounding
+/// (about 2e-15); a cut by that plane meets the face only nearly, where the same plane with
+/// the rounding dropped meets it exactly. Axes with nothing to drop come back unit and
+/// otherwise unchanged. `None` when a coordinate or `noise` is not finite, `noise` is
+/// negative, an axis has no length once cleaned, or the cleaned axes are parallel: the
+/// caller then keeps the axes it has.
+#[must_use]
+pub fn axis_squared_frame(x: Vec3, y: Vec3, noise: f64) -> Option<[Vec3; 2]> {
+    if !(x.is_finite() && y.is_finite() && noise.is_finite() && noise >= 0.0) {
+        return None;
+    }
+    let clean = |v: Vec3| {
+        let c = |a: f64| if a.abs() < noise { 0.0 } else { a };
+        Vec3::new(c(v.x), c(v.y), c(v.z))
+            .normalized()
+            .map(UnitVec3::as_vec)
+    };
+    let (x, y) = (clean(x)?, clean(y)?);
+    x.cross(y).normalized()?;
+    Some([x, y])
+}
 
 /// Not upstream: the corners of a parallelogram on a plane, such as a reference image pinned to
 /// points of a sketch. Its bottom edge runs from `bl` to `br`; its top-left corner is
@@ -742,14 +942,14 @@ pub enum AxisRefusal {
 
 /// `axis` (a direction in the outer frame) as the placed body's own frame sees it, unit: the
 /// linear part of the inverse of `placement` applied to it, unitized.
-fn own_direction(placement: &Transform, axis: Vec3) -> Result<Vec3, AxisRefusal> {
-    if !placement.m.iter().flatten().all(|v| v.is_finite()) || !axis.is_finite() {
+fn own_direction(placement: &Affine, axis: Vec3) -> Result<Vec3, AxisRefusal> {
+    if !placement.is_finite() || !axis.is_finite() {
         return Err(AxisRefusal::NotFinite);
     }
-    let inverse = placement.inverse().map_err(|_| AxisRefusal::FlatMap)?;
+    let inverse = placement.inverse().ok_or(AxisRefusal::FlatMap)?;
     // The unit axis: a long one would overflow through the map, and only its direction counts.
     let axis = axis.normalized().ok_or(AxisRefusal::ZeroAxis)?;
-    let own = inverse.transform_vector(*axis);
+    let own = inverse.apply_vec(*axis);
     if !own.is_finite() {
         return Err(AxisRefusal::NotFinite);
     }
@@ -771,7 +971,7 @@ fn own_direction(placement: &Transform, axis: Vec3) -> Result<Vec3, AxisRefusal>
 pub fn box_extent_along(
     min: Point3,
     max: Point3,
-    placement: &Transform,
+    placement: &Affine,
     axis: Vec3,
 ) -> Result<f64, AxisRefusal> {
     let own = own_direction(placement, axis)?;
@@ -793,7 +993,7 @@ pub fn box_extent_along(
 ///
 /// # Errors
 /// [`AxisRefusal`] for a number not finite, a zero `axis`, or a `placement` that flattens space.
-pub fn axis_along_own_axes(placement: &Transform, axis: Vec3) -> Result<bool, AxisRefusal> {
+pub fn axis_along_own_axes(placement: &Affine, axis: Vec3) -> Result<bool, AxisRefusal> {
     let own = own_direction(placement, axis)?;
     Ok([own.x, own.y, own.z].iter().any(|c| c.abs() >= 1.0 - 1e-9))
 }
@@ -808,12 +1008,12 @@ pub fn axis_along_own_axes(placement: &Transform, axis: Vec3) -> Result<bool, Ax
 /// # Errors
 /// [`AxisRefusal`] for a `placement` or `axis` with a number not finite, or a zero `axis`.
 pub fn plane_offset_square_to(
-    placement: &Transform,
+    placement: &Affine,
     origin: Point3,
     normal: Vec3,
     axis: Vec3,
 ) -> Result<Option<f64>, AxisRefusal> {
-    if !placement.m.iter().flatten().all(|v| v.is_finite()) || !axis.is_finite() {
+    if !placement.is_finite() || !axis.is_finite() {
         return Err(AxisRefusal::NotFinite);
     }
     let axis = axis.normalized().ok_or(AxisRefusal::ZeroAxis)?.as_vec();
@@ -822,7 +1022,7 @@ pub fn plane_offset_square_to(
     }
     let Some(placed) = normal
         .normalized()
-        .and_then(|n| placement.transform_vector(*n).normalized())
+        .and_then(|n| placement.apply_vec(*n).normalized())
     else {
         return Ok(None);
     };
@@ -830,9 +1030,7 @@ pub fn plane_offset_square_to(
         return Ok(None);
     }
     Ok(Some(
-        placement
-            .transform_point(origin)
-            .distance_along(Point3::ORIGIN, axis),
+        placement.apply(origin).distance_along(Point3::ORIGIN, axis),
     ))
 }
 
@@ -921,206 +1119,6 @@ fn far_dot(p: Vec3, u: Vec3) -> f64 {
         d
     } else {
         (p * 0.125).dot(u) * 8.0
-    }
-}
-
-/// Not upstream: the rigid motions and scalings an application asks for by their numbers
-/// (a turn about a line, a scale about a point, a mirror in a plane), built here so the
-/// layers above the kernel only pass the numbers on. Each is in the row-vector convention
-/// of [`Transform`]: rows 0 to 2 the images of x, y and z, row 3 the translation.
-impl Transform {
-    /// The linear map whose rows are `x`, `y` and `z`, about the point `fixed`, which it
-    /// keeps: `p' = (p - fixed) A + fixed`, its translation `fixed - fixed A`. A `fixed`
-    /// whose image overflows is taken at an eighth and the translation scaled back (exact,
-    /// a power of two), so a point far out on the map's own axis keeps a translation.
-    fn about(fixed: Point3, x: Vec3, y: Vec3, z: Vec3) -> Self {
-        let shift = |f: Vec3| f - (x * f.x + y * f.y + z * f.z);
-        let near = shift(fixed.to_vec());
-        let t = if near.is_finite() {
-            near
-        } else {
-            shift(fixed.to_vec() * 0.125) * 8.0
-        };
-        Self::from_axes(x, y, z, t.to_point())
-    }
-
-    /// The turn by `angle` radians, right-handed about `axis`, about the line through
-    /// `point` along `axis` (any length, made unit here): Rodrigues' rotation formula,
-    /// `R = c I + s [k]x + (1 - c) k kᵀ` with `k` the unit axis, `c` and `s` the cosine and
-    /// sine of the angle, transposed for the row-vector convention.
-    ///
-    /// # Errors
-    ///
-    /// `InvalidInput` for a point, axis or angle not finite, an axis whose squared
-    /// length is below [`EFF_ZERO_SQ`], or a translation too large to represent.
-    pub fn rotation(point: Point3, axis: Vec3, angle: f64) -> crate::error::Result<Self> {
-        use crate::error::NumError;
-        if !(point.is_finite() && axis.is_finite() && angle.is_finite()) {
-            return Err(NumError::invalid_input(
-                OP_MAPS,
-                "a turn's numbers not finite",
-            ));
-        }
-        let k = axis.normalized().ok_or(NumError::invalid_input(
-            OP_MAPS,
-            "a turn's axis of no length",
-        ))?;
-        let (s, c) = crate::fmath::sin_cos(angle);
-        let v = 1.0 - c;
-        let (x, y, z) = (k.x, k.y, k.z);
-        Self::about(
-            point,
-            Vec3::new(c + x * x * v, x * y * v + z * s, x * z * v - y * s),
-            Vec3::new(x * y * v - z * s, c + y * y * v, y * z * v + x * s),
-            Vec3::new(x * z * v + y * s, y * z * v - x * s, c + z * z * v),
-        )
-        .represented()
-    }
-
-    /// The scale by `factor` in every direction about `centre`, which it keeps. A negative
-    /// factor turns the scale through the centre as well.
-    ///
-    /// # Errors
-    ///
-    /// `InvalidInput` for a centre or factor not finite, or a factor of zero (a map with
-    /// no inverse).
-    pub fn uniform_scaling(centre: Point3, factor: f64) -> crate::error::Result<Self> {
-        use crate::error::NumError;
-        if !(centre.is_finite() && factor.is_finite()) || factor == 0.0 {
-            return Err(NumError::invalid_input(
-                OP_MAPS,
-                "a scale's numbers not finite, or a factor of zero",
-            ));
-        }
-        Ok(Self::about(
-            centre,
-            Vec3::new(factor, 0.0, 0.0),
-            Vec3::new(0.0, factor, 0.0),
-            Vec3::new(0.0, 0.0, factor),
-        ))
-    }
-
-    /// The mirror in the plane through `origin` square to `normal` (any length, made unit
-    /// here): `p' = p - 2 ((p - origin)·n) n`, its linear part `I - 2 n nᵀ` (symmetric, so
-    /// the same in either convention) and its translation `2 (origin·n) n`. For a normal
-    /// along an axis every entry is exact, so the mirror twice is the identity exactly.
-    ///
-    /// # Errors
-    ///
-    /// `InvalidInput` for an origin or normal not finite, a normal whose squared length
-    /// is below [`EFF_ZERO_SQ`], or a translation too large to represent.
-    pub fn reflection(origin: Point3, normal: Vec3) -> crate::error::Result<Self> {
-        use crate::error::NumError;
-        if !(origin.is_finite() && normal.is_finite()) {
-            return Err(NumError::invalid_input(
-                OP_MAPS,
-                "a mirror's numbers not finite",
-            ));
-        }
-        let n = normal
-            .normalized()
-            .ok_or(NumError::invalid_input(
-                OP_MAPS,
-                "a mirror's normal of no length",
-            ))?
-            .as_vec();
-        let row = |e: Vec3, ni: f64| e - n * (2.0 * ni);
-        Self::from_axes(
-            row(Vec3::X, n.x),
-            row(Vec3::Y, n.y),
-            row(Vec3::Z, n.z),
-            (n * far_dot(origin.to_vec(), n) * 2.0).to_point(),
-        )
-        .represented()
-    }
-
-    /// The rigid map from world coordinates into the frame of the plane through `origin` with
-    /// x axis along `x` and y axis on `y`'s side in the plane of the two (each any length):
-    /// the unit axes `x̂`, `n = unit(x̂ × y)` and `ŷ = n × x̂` become X, Z and Y, and `origin`
-    /// the origin. A point's Z after the map is its level above the plane along its normal.
-    /// The linear part's columns are `x̂`, `ŷ` and `n` (the transpose of the frame's rows),
-    /// its translation `-(origin·x̂, origin·ŷ, origin·n)`.
-    ///
-    /// # Errors
-    ///
-    /// `InvalidInput` for an origin or axis not finite, an `x` or `y` of no direction
-    /// ([`Vec3::normalized`]), an `x̂ × ŷ` whose squared length is below [`EFF_ZERO_SQ`]
-    /// (axes along one line), or a translation too large to represent.
-    pub fn into_plane_frame(origin: Point3, x: Vec3, y: Vec3) -> crate::error::Result<Self> {
-        use crate::error::NumError;
-        if !(origin.is_finite() && x.is_finite() && y.is_finite()) {
-            return Err(NumError::invalid_input(
-                OP_MAPS,
-                "a plane's numbers not finite",
-            ));
-        }
-        let none =
-            NumError::invalid_input(OP_MAPS, "a plane's axes of no length or along one line");
-        let x = x.normalized().ok_or_else(|| none.clone())?.as_vec();
-        let y = y.normalized().ok_or_else(|| none.clone())?;
-        let n = x.cross(*y).normalized().ok_or(none)?.as_vec();
-        let y = n.cross(x);
-        Self::from_axes(
-            Vec3::new(x.x, y.x, n.x),
-            Vec3::new(x.y, y.y, n.y),
-            Vec3::new(x.z, y.z, n.z),
-            (-Vec3::new(
-                far_dot(origin.to_vec(), x),
-                far_dot(origin.to_vec(), y),
-                far_dot(origin.to_vec(), n),
-            ))
-            .to_point(),
-        )
-        .represented()
-    }
-
-    /// `Ok(self)` when every entry is finite; otherwise the refusal of a map whose entries
-    /// overflow (finite inputs far enough out that the translation is too large to represent).
-    fn represented(self) -> crate::error::Result<Self> {
-        if self.m.iter().flatten().all(|v| v.is_finite()) {
-            Ok(self)
-        } else {
-            Err(crate::error::NumError::invalid_input(
-                OP_MAPS,
-                "a map too large to represent",
-            ))
-        }
-    }
-
-    /// The map that undoes this one: `p = (p' - t) A⁻¹`, its linear part `A⁻¹` (the adjugate
-    /// over the determinant: with `a`, `b`, `c` the rows of `A`, row `i` holds the `i`-th
-    /// components of `b × c`, `c × a` and `a × b`, over `a · (b × c)`) and its translation
-    /// `-t A⁻¹`. A mirror in a plane through the origin square to an axis is its own inverse
-    /// exactly.
-    ///
-    /// # Errors
-    ///
-    /// `InvalidInput` for a map not proved regular ([`Transform::is_regular`] at ratio 0: an
-    /// entry not finite, a fourth column that is not `(0, 0, 0, 1)`, a determinant not
-    /// proved apart from 0).
-    pub fn inverse(&self) -> crate::error::Result<Self> {
-        if !self.is_regular(0.0).is_yes() {
-            return Err(crate::error::NumError::invalid_input(
-                OP_MAPS,
-                "a map not proved regular has no inverse",
-            ));
-        }
-        let (a, b, c) = (self.x_axis(), self.y_axis(), self.z_axis());
-        let (bc, ca, ab) = (b.cross(c), c.cross(a), a.cross(b));
-        let s = 1.0 / a.dot(bc);
-        let linear = Self::from_axes(
-            Vec3::new(bc.x, ca.x, ab.x) * s,
-            Vec3::new(bc.y, ca.y, ab.y) * s,
-            Vec3::new(bc.z, ca.z, ab.z) * s,
-            Point3::ORIGIN,
-        );
-        let t = linear.transform_vector(self.translation_part());
-        Ok(Self::from_axes(
-            linear.x_axis(),
-            linear.y_axis(),
-            linear.z_axis(),
-            (-t).to_point(),
-        ))
     }
 }
 
@@ -1407,7 +1405,7 @@ mod tests {
     /// non-finite axes and a bad `noise` give `None`.
     #[test]
     fn an_axis_squared_frame_drops_only_the_rounding() {
-        let tilted = Transform::axis_squared_frame(
+        let tilted = axis_squared_frame(
             Vec3::new(1.0, 2e-15, 0.0),
             Vec3::new(-3e-16, 1.0, 1e-15),
             1e-12,
@@ -1415,54 +1413,46 @@ mod tests {
         assert_eq!(tilted, Some([Vec3::X, Vec3::Y]));
         let (s, c) = (crate::fmath::sin(0.3), crate::fmath::cos(0.3));
         let real = [Vec3::new(c, s, 0.0), Vec3::new(-s, c, 0.0)];
+        assert_eq!(axis_squared_frame(real[0], real[1], 1e-12), Some(real));
         assert_eq!(
-            Transform::axis_squared_frame(real[0], real[1], 1e-12),
-            Some(real)
-        );
-        assert_eq!(
-            Transform::axis_squared_frame(Vec3::X, Vec3::new(1.0, 1e-15, 0.0), 1e-12),
+            axis_squared_frame(Vec3::X, Vec3::new(1.0, 1e-15, 0.0), 1e-12),
             None,
             "parallel once cleaned"
         );
         assert_eq!(
-            Transform::axis_squared_frame(Vec3::new(1e-13, 0.0, 0.0), Vec3::Y, 1e-12),
+            axis_squared_frame(Vec3::new(1e-13, 0.0, 0.0), Vec3::Y, 1e-12),
             None,
             "no length once cleaned"
         );
         assert_eq!(
-            Transform::axis_squared_frame(Vec3::new(f64::NAN, 0.0, 0.0), Vec3::Y, 1e-12),
+            axis_squared_frame(Vec3::new(f64::NAN, 0.0, 0.0), Vec3::Y, 1e-12),
             None
         );
         for noise in [-1.0, f64::INFINITY, f64::NAN] {
-            assert_eq!(Transform::axis_squared_frame(Vec3::X, Vec3::Y, noise), None);
+            assert_eq!(axis_squared_frame(Vec3::X, Vec3::Y, noise), None);
         }
     }
 
     #[test]
     fn rigid_maps_include_reflections_but_reject_scale_shear_and_hostile_entries() {
-        let rigid = |m: Transform| m.is_rigid(1e-6, 1e-12);
-        assert!(rigid(Transform::IDENTITY));
-        assert!(rigid(Transform::translation(Vec3::new(3.0, -4.0, 5.0))));
+        let rigid = |m: Affine| m.is_rigid(1e-6);
+        assert!(rigid(Affine::IDENTITY));
+        assert!(rigid(Affine::translation(Vec3::new(3.0, -4.0, 5.0))));
         assert!(rigid(
-            Transform::rotation(Point3::ORIGIN, Vec3::Z, 0.7).unwrap()
+            Affine::rotation(Point3::ORIGIN, Vec3::Z, 0.7).unwrap()
         ));
-        assert!(rigid(
-            Transform::reflection(Point3::ORIGIN, Vec3::X).unwrap()
-        ));
+        assert!(rigid(Affine::reflection(Point3::ORIGIN, Vec3::X).unwrap()));
         for (row, col, value) in [
             (0, 0, 2.0),
             (1, 0, 0.01),
-            (0, 3, 1e-6),
-            (3, 3, 0.0),
             (3, 0, f64::INFINITY),
             (2, 1, f64::NAN),
         ] {
-            let mut m = Transform::IDENTITY;
-            m.m[row][col] = value;
+            let m = with_entry(Affine::IDENTITY, row, col, value);
             assert!(!rigid(m), "{row} {col} {value}");
         }
-        assert!(!Transform::IDENTITY.is_rigid(f64::NAN, 1e-12));
-        assert!(!Transform::IDENTITY.is_rigid(1e-6, 0.0));
+        assert!(!Affine::IDENTITY.is_rigid(f64::NAN));
+        assert!(!Affine::IDENTITY.is_rigid(0.0));
     }
 
     #[test]
@@ -1470,48 +1460,58 @@ mod tests {
         // Plane normal X, with local axes Y and Z, away from the world origin.
         // A quarter turn about X maps (10, 20, 30) to (10, -30, 20).
         let origin = Point3::new(10.0, 20.0, 30.0);
-        let motion = |m: Transform| m.plane_motion(origin, Vec3::Y, Vec3::Z, 1e-9, 1e-12);
-        let turn = Transform::from_axes(Vec3::X, Vec3::Z, -Vec3::Y, Point3::ORIGIN);
+        let motion = |m: Affine| m.plane_motion(origin, Vec3::Y, Vec3::Z, 1e-9, 1e-12);
+        let turn = Affine::from_axes(Vec3::X, Vec3::Z, -Vec3::Y, Point3::ORIGIN);
         let (a, b) = motion(turn).unwrap();
         assert_eq!(a, [[0.0, -1.0], [1.0, 0.0]]);
         assert_eq!(b, Vec2::new(-50.0, -10.0));
-        assert!(motion(Transform::IDENTITY).is_none());
-        assert!(motion(Transform::rotation(Point3::ORIGIN, Vec3::Y, 0.2).unwrap()).is_none());
-        assert!(motion(Transform::reflection(Point3::ORIGIN, Vec3::Y).unwrap()).is_none());
+        assert!(motion(Affine::IDENTITY).is_none());
+        assert!(motion(Affine::rotation(Point3::ORIGIN, Vec3::Y, 0.2).unwrap()).is_none());
+        assert!(motion(Affine::reflection(Point3::ORIGIN, Vec3::Y).unwrap()).is_none());
         // A normal displacement leaves every projected coordinate unchanged.
-        let (a, b) = motion(Transform::translation(Vec3::X * 5.0)).unwrap();
+        let (a, b) = motion(Affine::translation(Vec3::X * 5.0)).unwrap();
         assert_eq!(a, [[1.0, 0.0], [0.0, 1.0]]);
         assert_eq!(b, Vec2::ZERO);
-        assert!(motion(Transform::translation(Vec3::new(f64::NAN, 0.0, 0.0))).is_none());
+        assert!(motion(Affine::translation(Vec3::new(f64::NAN, 0.0, 0.0))).is_none());
+    }
+
+    /// `a` with upstream's matrix entry `[row][col]` (row-vector, `col` below 3) set to `value`.
+    fn with_entry(a: Affine, row: usize, col: usize, value: f64) -> Affine {
+        let mut m: [[f64; 4]; 4] = a.into();
+        m[row][col] = value;
+        Affine::try_from(m).unwrap()
     }
 
     #[test]
-    fn point_arrays_keep_their_order_under_an_affine_map() {
-        let map = Transform {
-            m: [
-                [2.0, 0.0, 0.0, 0.0],
-                [1.0, -1.0, 0.0, 0.0],
-                [0.0, 0.0, 1.0, 0.0],
-                [10.0, 20.0, 30.0, 1.0],
-            ],
-        };
-        let mut points = [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]];
-        map.transform_points(&mut points);
-        assert_eq!(points, [[14.0, 18.0, 33.0], [23.0, 15.0, 36.0]]);
-        map.transform_points(&mut []);
+    fn upstream_matrices_read_back_exactly_and_a_projective_one_is_refused() {
+        let m = [
+            [2.0, 0.0, 0.0, 0.0],
+            [1.0, -1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [10.0, 20.0, 30.0, 1.0],
+        ];
+        let map = Affine::try_from(m).unwrap();
+        assert_eq!(<[[f64; 4]; 4]>::from(map), m);
+        assert_eq!(
+            map.apply(Point3::new(1.0, 2.0, 3.0)),
+            Point3::new(14.0, 18.0, 33.0)
+        );
+        assert_eq!(map.x_axis(), Vec3::new(2.0, 0.0, 0.0));
+        assert_eq!(map.translation_part(), Vec3::new(10.0, 20.0, 30.0));
+        for (row, value) in [(0, 1.0), (1, 1e-300), (2, f64::NAN), (3, 0.0), (3, 2.0)] {
+            let mut p = m;
+            p[row][3] = value;
+            assert!(matches!(
+                Affine::try_from(p),
+                Err(crate::error::NumError::InvalidInput { operation, .. }) if operation == OP_MAPS
+            ));
+        }
     }
 
     #[test]
     fn transformed_box_holds_its_moved_corners_and_an_empty_box_stays_empty() {
         // A quarter turn about z, then a move by (10, 20, 30): x goes to y, y to -x.
-        let map = Transform {
-            m: [
-                [0.0, 1.0, 0.0, 0.0],
-                [-1.0, 0.0, 0.0, 0.0],
-                [0.0, 0.0, 1.0, 0.0],
-                [10.0, 20.0, 30.0, 1.0],
-            ],
-        };
+        let map = Affine::from_axes(Vec3::Y, -Vec3::X, Vec3::Z, Point3::new(10.0, 20.0, 30.0));
         let (lo, hi) = map.transformed_box(Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 2.0, 3.0));
         let (want_lo, want_hi) = (Point3::new(8.0, 20.0, 30.0), Point3::new(10.0, 21.0, 33.0));
         for (got, want, out) in [
@@ -1529,7 +1529,7 @@ mod tests {
         assert_eq!(map.transformed_box(empty.0, empty.1), empty);
         // 1 + 2^-53 rounds to 1: the box still holds it.
         let tiny = crate::fmath::powi(2.0, -53);
-        let shift = Transform::translation(Vec3::new(1.0, 0.0, 0.0));
+        let shift = Affine::translation(Vec3::new(1.0, 0.0, 0.0));
         let p = Point3::new(tiny, 0.0, 0.0);
         let (lo, hi) = shift.transformed_box(p, p);
         assert!(lo.x < 1.0 && hi.x > 1.0 && hi.x - lo.x < 1e-14);
@@ -1538,8 +1538,8 @@ mod tests {
     #[test]
     fn repeated_rigid_turns_keep_plane_axes_square_and_keep_uv_scales() {
         use crate::certified::gamma;
-        let tilt = Transform::rotation(Point3::ORIGIN, Vec3::X, 1.5e-6).unwrap();
-        let turn = Transform::rotation(Point3::ORIGIN, Vec3::Z, 1_f64.to_radians()).unwrap();
+        let tilt = Affine::rotation(Point3::ORIGIN, Vec3::X, 1.5e-6).unwrap();
+        let turn = Affine::rotation(Point3::ORIGIN, Vec3::Z, 1_f64.to_radians()).unwrap();
         let [mut u, mut v] = tilt.rigid_plane_axes(Vec3::X * 2.0, Vec3::Y * 3.0).unwrap();
         for _ in 0..360 {
             [u, v] = turn.rigid_plane_axes(u, v).unwrap();
@@ -1551,8 +1551,7 @@ mod tests {
 
     #[test]
     fn a_rigid_turn_preserves_a_skew_plane_parametrisation() {
-        let turn =
-            Transform::rotation(Point3::ORIGIN, Vec3::Z, core::f64::consts::FRAC_PI_2).unwrap();
+        let turn = Affine::rotation(Point3::ORIGIN, Vec3::Z, core::f64::consts::FRAC_PI_2).unwrap();
         let [u, v] = turn
             .rigid_plane_axes(Vec3::new(2.0, 0.0, 0.0), Vec3::new(1.0, 3.0, 0.0))
             .unwrap();
@@ -1562,10 +1561,11 @@ mod tests {
     }
 
     /// The largest difference between two matrices' entries.
-    fn apart(a: &Transform, b: &Transform) -> f64 {
-        a.m.iter()
+    fn apart(a: &Affine, b: &Affine) -> f64 {
+        let (a, b): ([[f64; 4]; 4], [[f64; 4]; 4]) = ((*a).into(), (*b).into());
+        a.iter()
             .flatten()
-            .zip(b.m.iter().flatten())
+            .zip(b.iter().flatten())
             .map(|(x, y)| (x - y).abs())
             .fold(0.0, f64::max)
     }
@@ -1574,28 +1574,24 @@ mod tests {
     fn a_quarter_turn_about_z_takes_x_to_y_and_keeps_its_line() {
         use crate::certified::Verdict;
         let q = core::f64::consts::FRAC_PI_2;
-        let turn = Transform::rotation(Point3::ORIGIN, Vec3::new(0.0, 0.0, 2.0), q).unwrap();
-        let want = Transform::from_axes(Vec3::Y, -Vec3::X, Vec3::Z, Point3::ORIGIN);
+        let turn = Affine::rotation(Point3::ORIGIN, Vec3::new(0.0, 0.0, 2.0), q).unwrap();
+        let want = Affine::from_axes(Vec3::Y, -Vec3::X, Vec3::Z, Point3::ORIGIN);
         assert!(apart(&turn, &want) <= 1e-15, "{turn:?}");
         // about the line through (10, 0, 0) along z: that point stays, (11, 0, 0) goes to
         // (10, 1, 0)
         let p = Point3::new(10.0, 0.0, 0.0);
-        let turn = Transform::rotation(p, Vec3::Z, q).unwrap();
-        assert!(turn.transform_point(p).distance(p) <= 1e-14);
-        let image = turn.transform_point(Point3::new(11.0, 0.0, 0.0));
+        let turn = Affine::rotation(p, Vec3::Z, q).unwrap();
+        assert!(turn.apply(p).distance(p) <= 1e-14);
+        let image = turn.apply(Point3::new(11.0, 0.0, 0.0));
         assert!(
             image.distance(Point3::new(10.0, 1.0, 0.0)) <= 1e-14,
             "{image:?}"
         );
         // a turn about a skew axis keeps lengths and its axis
         let axis = Vec3::new(1.0, 2.0, 2.0);
-        let turn = Transform::rotation(p, axis, 0.7).unwrap();
-        assert!(
-            turn.transform_point(p + axis * 3.0)
-                .distance(p + axis * 3.0)
-                <= 1e-12
-        );
-        for r in turn.row_lengths() {
+        let turn = Affine::rotation(p, axis, 0.7).unwrap();
+        assert!(turn.apply(p + axis * 3.0).distance(p + axis * 3.0) <= 1e-12);
+        for r in turn.axis_lengths() {
             assert!((r - 1.0).abs() <= 1e-14);
         }
         assert_eq!(turn.is_regular(1e-9), Verdict::Yes);
@@ -1604,87 +1600,79 @@ mod tests {
     #[test]
     fn a_scale_keeps_its_centre_and_a_mirror_twice_is_the_identity() {
         let c = Point3::new(1.0, -2.0, 3.0);
-        let scale = Transform::uniform_scaling(c, 2.5).unwrap();
-        assert!(scale.transform_point(c).distance(c) <= 1e-14);
-        let p = scale.transform_point(c + Vec3::X);
+        let scale = Affine::uniform_scaling(c, 2.5).unwrap();
+        assert!(scale.apply(c).distance(c) <= 1e-14);
+        let p = scale.apply(c + Vec3::X);
         assert!(p.distance(c + Vec3::X * 2.5) <= 1e-14, "{p:?}");
         // the mirror in y = 5, an axis normal of any length: every entry exact
         let mirror =
-            Transform::reflection(Point3::new(7.0, 5.0, -1.0), Vec3::new(0.0, 3.0, 0.0)).unwrap();
+            Affine::reflection(Point3::new(7.0, 5.0, -1.0), Vec3::new(0.0, 3.0, 0.0)).unwrap();
         assert_eq!(
-            mirror.transform_point(Point3::new(1.0, 2.0, 3.0)),
+            mirror.apply(Point3::new(1.0, 2.0, 3.0)),
             Point3::new(1.0, 8.0, 3.0)
         );
-        assert_eq!(mirror.concat(&mirror), Transform::IDENTITY);
+        assert_eq!(mirror * mirror, Affine::IDENTITY);
         // a slanted mirror keeps its plane's points and reverses its normal
         let n = Vec3::new(1.0, 1.0, 0.0);
-        let mirror = Transform::reflection(c, n).unwrap();
-        assert!(mirror.transform_point(c).distance(c) <= 1e-14);
-        let back = mirror.transform_point(c + n);
+        let mirror = Affine::reflection(c, n).unwrap();
+        assert!(mirror.apply(c).distance(c) <= 1e-14);
+        let back = mirror.apply(c + n);
         assert!(back.distance(c - n) <= 1e-14, "{back:?}");
     }
 
     #[test]
     fn a_map_after_its_inverse_is_the_identity_and_a_singular_one_has_none() {
         // a turn about a line off the origin, then a move and a scale
-        let turn = Transform::rotation(Point3::new(1.0, 2.0, 3.0), Vec3::new(1.0, -2.0, 2.0), 0.7)
-            .unwrap();
-        let map = turn
-            .concat(&Transform::translation(Vec3::new(4.0, -5.0, 6.0)))
-            .concat(&Transform::uniform_scaling(Point3::new(-1.0, 0.5, 2.0), 2.5).unwrap());
+        let turn =
+            Affine::rotation(Point3::new(1.0, 2.0, 3.0), Vec3::new(1.0, -2.0, 2.0), 0.7).unwrap();
+        let map = Affine::uniform_scaling(Point3::new(-1.0, 0.5, 2.0), 2.5).unwrap()
+            * Affine::translation(Vec3::new(4.0, -5.0, 6.0))
+            * turn;
         let inv = map.inverse().unwrap();
-        let size = map.m.iter().flatten().fold(1.0_f64, |a, x| a.max(x.abs()));
+        let size = <[[f64; 4]; 4]>::from(map)
+            .iter()
+            .flatten()
+            .fold(1.0_f64, |a, x| a.max(x.abs()));
         for (p, q) in [(map, inv), (inv, map)] {
-            let back = p.concat(&q);
-            assert!(
-                apart(&back, &Transform::IDENTITY) <= 1e-15 * size,
-                "{back:?}"
-            );
+            let back = q * p;
+            assert!(apart(&back, &Affine::IDENTITY) <= 1e-15 * size, "{back:?}");
         }
         // a mirror in a plane square to an axis is its own inverse, exactly
-        let mirror = Transform::reflection(Point3::new(7.0, 5.0, -1.0), Vec3::Y).unwrap();
+        let mirror = Affine::reflection(Point3::new(7.0, 5.0, -1.0), Vec3::Y).unwrap();
         assert_eq!(mirror.inverse().unwrap(), mirror);
-        // a flattening and a projective map have none
-        let mut flat = Transform::IDENTITY;
-        flat.m[2] = [0.0; 4];
-        let mut projective = Transform::IDENTITY;
-        projective.m[0][3] = 1.0;
-        for m in [flat, projective] {
-            assert!(matches!(
-                m.inverse(),
-                Err(crate::error::NumError::InvalidInput { operation, .. }) if operation == OP_MAPS
-            ));
-        }
+        // a flattening has none
+        let flat = Affine::from_axes(Vec3::X, Vec3::Y, Vec3::ZERO, Point3::ORIGIN);
+        assert_eq!(flat.inverse(), None);
     }
 
     #[test]
     fn maps_from_numbers_refuse_what_is_not_finite_or_has_no_size() {
-        let bad = |r: crate::error::Result<Transform>| matches!(r, Err(crate::error::NumError::InvalidInput { operation, .. }) if operation == OP_MAPS);
-        assert!(bad(Transform::rotation(Point3::ORIGIN, Vec3::ZERO, 1.0)));
-        assert!(bad(Transform::rotation(Point3::ORIGIN, Vec3::Z, f64::NAN)));
-        assert!(bad(Transform::rotation(
+        let bad = |r: crate::error::Result<Affine>| matches!(r, Err(crate::error::NumError::InvalidInput { operation, .. }) if operation == OP_MAPS);
+        assert!(bad(Affine::rotation(Point3::ORIGIN, Vec3::ZERO, 1.0)));
+        assert!(bad(Affine::rotation(Point3::ORIGIN, Vec3::Z, f64::NAN)));
+        assert!(bad(Affine::rotation(
             Point3::new(f64::INFINITY, 0.0, 0.0),
             Vec3::Z,
             1.0
         )));
-        assert!(bad(Transform::uniform_scaling(Point3::ORIGIN, 0.0)));
-        assert!(bad(Transform::uniform_scaling(Point3::ORIGIN, f64::NAN)));
-        assert!(bad(Transform::reflection(Point3::ORIGIN, Vec3::ZERO)));
-        assert!(bad(Transform::reflection(
+        assert!(bad(Affine::uniform_scaling(Point3::ORIGIN, 0.0)));
+        assert!(bad(Affine::uniform_scaling(Point3::ORIGIN, f64::NAN)));
+        assert!(bad(Affine::reflection(Point3::ORIGIN, Vec3::ZERO)));
+        assert!(bad(Affine::reflection(
             Point3::ORIGIN,
             Vec3::new(f64::NAN, 1.0, 0.0)
         )));
-        assert!(bad(Transform::into_plane_frame(
+        assert!(bad(Affine::into_plane_frame(
             Point3::ORIGIN,
             Vec3::ZERO,
             Vec3::Y
         )));
-        assert!(bad(Transform::into_plane_frame(
+        assert!(bad(Affine::into_plane_frame(
             Point3::ORIGIN,
             Vec3::X,
             Vec3::new(-3.0, 0.0, 0.0)
         )));
-        assert!(bad(Transform::into_plane_frame(
+        assert!(bad(Affine::into_plane_frame(
             Point3::new(f64::NAN, 0.0, 0.0),
             Vec3::X,
             Vec3::Y
@@ -1702,19 +1690,13 @@ mod tests {
         let n = Vec3::new(s, s, 0.0);
         let skew = Vec3::new(1.0, -1.0, 7.0);
         for y in [Vec3::new(1.0, -1.0, 0.0), skew] {
-            let t = Transform::into_plane_frame(o, Vec3::new(0.0, 0.0, 2.0), y).unwrap();
+            let t = Affine::into_plane_frame(o, Vec3::new(0.0, 0.0, 2.0), y).unwrap();
             let near = |a: Point3, b: Point3| (a - b).length() < 1e-12;
-            assert!(near(t.transform_point(o), Point3::ORIGIN));
+            assert!(near(t.apply(o), Point3::ORIGIN));
+            assert!(near(t.apply(o + Vec3::Z * 2.5), Point3::new(2.5, 0.0, 0.0)));
+            assert!(near(t.apply(o + n * 4.0), Point3::new(0.0, 0.0, 4.0)));
             assert!(near(
-                t.transform_point(o + Vec3::Z * 2.5),
-                Point3::new(2.5, 0.0, 0.0)
-            ));
-            assert!(near(
-                t.transform_point(o + n * 4.0),
-                Point3::new(0.0, 0.0, 4.0)
-            ));
-            assert!(near(
-                t.transform_point(o + Vec3::new(s, -s, 0.0)),
+                t.apply(o + Vec3::new(s, -s, 0.0)),
                 Point3::new(0.0, 1.0, 0.0)
             ));
             assert!(t.is_regular(0.0).is_yes());
@@ -1724,7 +1706,7 @@ mod tests {
     #[test]
     fn a_rigid_motion_is_regular_and_a_flattening_is_not() {
         use crate::certified::Verdict;
-        let turn = Transform::from_axes(
+        let turn = Affine::from_axes(
             Vec3::new(0.6, 0.8, 0.0),
             Vec3::new(-0.8, 0.6, 0.0),
             Vec3::Z,
@@ -1733,7 +1715,7 @@ mod tests {
         assert_eq!(turn.is_regular(1e-9), Verdict::Yes);
         // Scaled by 2, 3, 4: conditioning 0.5; the lower bound proves 24 / sqrt(29 * 244)
         // = 0.285, the rows' lengths cap it at 2 / 4.
-        let stretch = Transform::from_axes(
+        let stretch = Affine::from_axes(
             Vec3::new(2.0, 0.0, 0.0),
             Vec3::new(0.0, 3.0, 0.0),
             Vec3::new(0.0, 0.0, 4.0),
@@ -1744,30 +1726,22 @@ mod tests {
         assert_eq!(stretch.is_regular(0.5), Verdict::Undecided);
         assert_eq!(stretch.is_regular(0.51), Verdict::No);
         // The identity's bound is 1 / 3 exactly: not proved above it.
-        assert_eq!(
-            Transform::IDENTITY.is_regular(1.0 / 3.0),
-            Verdict::Undecided
-        );
+        assert_eq!(Affine::IDENTITY.is_regular(1.0 / 3.0), Verdict::Undecided);
         // Every product of its determinant is exactly 0: proved singular.
-        let flat = Transform::from_axes(Vec3::X, Vec3::Y, Vec3::new(1.0, 1.0, 0.0), Point3::ORIGIN);
+        let flat = Affine::from_axes(Vec3::X, Vec3::Y, Vec3::new(1.0, 1.0, 0.0), Point3::ORIGIN);
         assert_eq!(flat.is_regular(0.0), Verdict::No);
         assert_eq!(flat.is_regular(1e-9), Verdict::No);
         // Nearly flat: a determinant of 1e-300 rounds relatively, so it is proved non-zero.
-        let thin = Transform::from_axes(
+        let thin = Affine::from_axes(
             Vec3::X,
             Vec3::Y,
             Vec3::new(0.3, 0.7, 1e-300),
             Point3::ORIGIN,
         );
         assert_eq!(thin.is_regular(0.0), Verdict::Yes);
-        let mut nan = Transform::IDENTITY;
-        nan.m[3][0] = f64::NAN;
+        let nan = Affine::translation(Vec3::new(f64::NAN, 0.0, 0.0));
         assert_eq!(nan.is_regular(0.0), Verdict::No);
-        let mut projective = Transform::IDENTITY;
-        projective.m[0][3] = 1.0;
-        assert_eq!(projective.is_regular(0.0), Verdict::No);
-        let mut zero_row = Transform::IDENTITY;
-        zero_row.m[1] = [0.0; 4];
+        let zero_row = Affine::from_axes(Vec3::X, Vec3::ZERO, Vec3::Z, Point3::ORIGIN);
         assert_eq!(zero_row.is_regular(0.0), Verdict::No);
     }
 
@@ -1778,7 +1752,7 @@ mod tests {
     fn a_flattening_against_the_other_directions_is_refused() {
         use crate::certified::Verdict;
         let diag = |a: f64, b: f64, c: f64| {
-            Transform::from_axes(
+            Affine::from_axes(
                 Vec3::new(a, 0.0, 0.0),
                 Vec3::new(0.0, b, 0.0),
                 Vec3::new(0.0, 0.0, c),
@@ -1790,7 +1764,7 @@ mod tests {
         assert_eq!(diag(1.0, 1.0, 1e-5).is_regular(1e-9), Verdict::Yes);
         // A row spanning more than 2^1022: the scaling flushes its small entry and the other
         // rows' products underflow; never a wrong answer (conditioning about 1e-300).
-        let wide = Transform::from_axes(
+        let wide = Affine::from_axes(
             Vec3::new(1e300, 1e-300, 0.0),
             Vec3::Y,
             Vec3::Z,
@@ -1806,10 +1780,12 @@ mod tests {
     #[test]
     fn a_tiny_or_huge_uniform_scale_is_regular() {
         for s in [1e-110, 1e110, 1e-300, 1e300, 1e-310, f64::from_bits(1)] {
-            let mut m = Transform::IDENTITY;
-            for (i, row) in m.m.iter_mut().enumerate().take(3) {
-                row[i] = s;
-            }
+            let m = Affine::from_axes(
+                Vec3::new(s, 0.0, 0.0),
+                Vec3::new(0.0, s, 0.0),
+                Vec3::new(0.0, 0.0, s),
+                Point3::ORIGIN,
+            );
             assert_eq!(m.is_regular(1e-9), crate::certified::Verdict::Yes, "{s}");
         }
     }
@@ -1838,30 +1814,31 @@ mod tests {
     }
 
     #[test]
-    fn transform_point_vector_concat() {
-        let rot_z = Transform::from_axes(Vec3::Y, -Vec3::X, Vec3::Z, Point3::ORIGIN);
-        let tr = Transform::translation(Vec3::new(1.0, 2.0, 3.0));
+    fn apply_apply_vec_and_mul() {
+        let rot_z = Affine::from_axes(Vec3::Y, -Vec3::X, Vec3::Z, Point3::ORIGIN);
+        let tr = Affine::translation(Vec3::new(1.0, 2.0, 3.0));
         let p = Point3::new(1.0, 0.0, 0.0);
-        assert_eq!(rot_z.transform_point(p), Point3::new(0.0, 1.0, 0.0));
-        // concat applies self first, then the argument.
-        let both = rot_z.concat(&tr);
-        assert_eq!(both.transform_point(p), Point3::new(1.0, 3.0, 3.0));
-        assert_eq!(both.transform_vector(p.to_vec()), Vec3::new(0.0, 1.0, 0.0));
-        assert_eq!(Transform::IDENTITY.concat(&both), both);
-        assert_eq!(Transform::default(), Transform::IDENTITY);
+        assert_eq!(rot_z.apply(p), Point3::new(0.0, 1.0, 0.0));
+        // `a * b` applies `b` first, then `a`.
+        let both = tr * rot_z;
+        assert_eq!(both.apply(p), Point3::new(1.0, 3.0, 3.0));
+        assert_eq!(both.apply_vec(p.to_vec()), Vec3::new(0.0, 1.0, 0.0));
+        assert_eq!(both * Affine::IDENTITY, both);
+        assert_eq!(Affine::IDENTITY * both, both);
+        assert_eq!(Affine::default(), Affine::IDENTITY);
     }
 
     #[test]
     fn pivot_displacement_makes_a_turn_about_the_origin_a_turn_about_the_pivot() {
-        let rot_z = Transform::from_axes(Vec3::Y, -Vec3::X, Vec3::Z, Point3::ORIGIN);
+        let rot_z = Affine::from_axes(Vec3::Y, -Vec3::X, Vec3::Z, Point3::ORIGIN);
         let pivot = Vec3::new(0.0, 10.0, 0.0);
         let d = rot_z.pivot_displacement(pivot);
         assert_eq!(d, Vec3::new(10.0, 10.0, 0.0));
         // The pivot stays where it is under the turn followed by the displacement.
-        assert_eq!(rot_z.transform_vector(pivot) + d, pivot);
+        assert_eq!(rot_z.apply_vec(pivot) + d, pivot);
         // No turn, no displacement; a translation in the map is not read as a turn.
-        assert_eq!(Transform::IDENTITY.pivot_displacement(pivot), Vec3::ZERO);
-        let tr = Transform::translation(Vec3::new(1.0, 2.0, 3.0));
+        assert_eq!(Affine::IDENTITY.pivot_displacement(pivot), Vec3::ZERO);
+        let tr = Affine::translation(Vec3::new(1.0, 2.0, 3.0));
         assert_eq!(tr.pivot_displacement(pivot), Vec3::ZERO);
     }
 

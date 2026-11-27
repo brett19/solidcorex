@@ -124,9 +124,6 @@ macro_rules! helpers {
         pub fn pe(a: [f64; 3], full: bool) -> periodic_extent1d::PeriodicExtent1d {
             periodic_extent1d::PeriodicExtent1d::from_parts(a[0], a[1], a[2], full)
         }
-        pub fn mt(m: [[f64; 4]; 4]) -> math::Transform {
-            math::Transform { m }
-        }
         pub fn tf(r: &TfR) -> transform::Transform {
             transform::Transform::new(p3(r.0), v3(r.1), v3(r.2), r.3.map(v3))
         }
@@ -169,6 +166,22 @@ macro_rules! helpers {
 }
 
 /// scx-num and scx-algo, by solidcore's module names.
+/// The generated 4x4 matrix made affine: column 3 set to `(0, 0, 0, 1)` (scx's `Affine` holds
+/// no projective part; [`x::mt`] and [`s::mt`] read the same 12 entries).
+pub fn affine_part(mut m: [[f64; 4]; 4]) -> [[f64; 4]; 4] {
+    for (i, row) in m.iter_mut().enumerate() {
+        row[3] = if i == 3 { 1.0 } else { 0.0 };
+    }
+    m
+}
+
+/// Fingerprint an upstream row-vector matrix's affine entries: rows 0 to 3, columns 0 to 2.
+fn affine_bits(m: &[[f64; 4]; 4], o: &mut Out) {
+    for row in m {
+        row[..3].bits(o);
+    }
+}
+
 pub mod x {
     pub use crate::solvers::x as sv;
     pub use scx_algo::hash_table;
@@ -202,6 +215,11 @@ pub mod x {
         series, small_matrix, taylor_model, transform, vector2d, vector3d,
     };
     helpers!();
+    /// The affine map type: scx's column-vector `Affine`, the pin's row-vector `Transform`.
+    pub type Map = math::Affine;
+    pub fn mt(m: [[f64; 4]; 4]) -> math::Affine {
+        math::Affine::try_from(super::affine_part(m)).unwrap()
+    }
     use vector2d::{Axis2, Vec2};
     use vector3d::{Alignment, Axis, Vec3};
     fn axis3(i: usize) -> Option<Axis> {
@@ -600,6 +618,12 @@ pub mod s {
         pub use solidcore::geom::geom_utility::p2::{inverse_4x4, mult_4x4};
     }
     helpers!();
+    pub type Map = math::Transform;
+    pub fn mt(m: [[f64; 4]; 4]) -> math::Transform {
+        math::Transform {
+            m: super::affine_part(m),
+        }
+    }
     pub fn angle_tol(deg: f64) -> f64 {
         deg
     }
@@ -777,7 +801,16 @@ both!(periodic_extent1d::PeriodicExtent1d => |e, o| {
     e.period().bits(o);
     e.is_full_period().bits(o);
 });
-both!(math::Transform => |e, o| { e.m.bits(o); });
+impl Bits for x::math::Affine {
+    fn bits(&self, o: &mut Out) {
+        affine_bits(&(*self).into(), o);
+    }
+}
+impl Bits for s::math::Transform {
+    fn bits(&self, o: &mut Out) {
+        affine_bits(&self.m, o);
+    }
+}
 both!(transform::Transform => |e, o| { e.matrix().bits(o); });
 both!(matrix::Matrix => |e, o| {
     e.num_rows().bits(o);

@@ -9,7 +9,7 @@ use scx_num::certified::Verdict;
 
 type M = [[f64; 4]; 4];
 
-/// `Transform::is_regular` on a linear part whose largest entry is of `f64::MAX`'s scale
+/// `Affine::is_regular` on a linear part whose largest entry is of `f64::MAX`'s scale
 /// (its correctly rounded `log2` is 1024), at a positive finite `ratio`.
 ///
 /// The pin scales the matrix by `f64::powi(2, -floor(log2(big)))`: `log2` of `f64::MAX` is
@@ -33,14 +33,10 @@ pub fn tr_is_regular() -> PinDefect<(M, f64), Verdict> {
     PinDefect {
         reason: "the pin's scale powi(2, -1024) is 0",
         applies: Applies::Inputs(|(t, ratio)| {
+            let t = &crate::facade::affine_part(*t);
             let finite = t.iter().flatten().all(|x| x.is_finite());
-            let affine = t[0][3] == 0.0 && t[1][3] == 0.0 && t[2][3] == 0.0 && t[3][3] == 1.0;
             let big = linear(t).fold(0.0_f64, |b, v| b.max(v.abs()));
-            finite
-                && affine
-                && ratio.is_finite()
-                && *ratio > 0.0
-                && scx_num::fmath::log2(big) == 1024.0
+            finite && ratio.is_finite() && *ratio > 0.0 && scx_num::fmath::log2(big) == 1024.0
         }),
         check: |(t, ratio), v| {
             // the identity but one off-diagonal entry: the only shape with a true value here
@@ -56,6 +52,42 @@ pub fn tr_is_regular() -> PinDefect<(M, f64), Verdict> {
                 },
                 _ => Err("no true value known for this matrix: extend the check".to_owned()),
             }
+        },
+    }
+}
+
+/// `outer * inner` (the pin: `inner.concat(&outer)`) where the outer map's translation is not
+/// finite.
+///
+/// The pin's `smgu_4x4Mult` sums all four products into each entry, so each entry of the
+/// linear part takes `0 * outer translation`: NaN for a translation infinite or NaN. The linear
+/// part of a composition is the product of the linear parts, which no translation enters; scx
+/// sums only those three products. The true value is that product: the check computes each
+/// entry from the inputs, in the pin's order without the fourth term, and the translation with
+/// it, and asks for scx's entries to be those bits (NaN where the product itself is NaN).
+pub fn tr_concat() -> PinDefect<(M, M), scx_num::math::Affine> {
+    PinDefect {
+        reason: "the pin's linear part takes 0 * a translation not finite",
+        applies: Applies::Disagreeing,
+        check: |(inner, outer), r| {
+            let (a, b) = (
+                crate::facade::affine_part(*inner),
+                crate::facade::affine_part(*outer),
+            );
+            let got: M = (*r).into();
+            for i in 0..4 {
+                for j in 0..3 {
+                    let mut want = a[i][0] * b[0][j] + a[i][1] * b[1][j] + a[i][2] * b[2][j];
+                    if i == 3 {
+                        want += b[3][j];
+                    }
+                    let g = got[i][j];
+                    if !(g == want || (g.is_nan() && want.is_nan())) {
+                        return Err(format!("entry [{i}][{j}] is {g}, the product's {want}"));
+                    }
+                }
+            }
+            Ok(())
         },
     }
 }
@@ -470,7 +502,7 @@ pub fn e2_mid() -> PinDefect<([f64; 4],), scx_num::vector2d::Point2> {
 // tighter than the harness's agreement tolerance, so on these inputs scx is also nearer the
 // truth than the pin.
 
-type Map = scx_num::math::Transform;
+type Map = scx_num::math::Affine;
 const BASIS: [V; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
 /// The length below which a vector has no direction (`EFF_ZERO`), and around it the band
 /// where scx's rounded test and this one may fall either way.
@@ -550,21 +582,16 @@ fn map_is(t: &Map, lin: impl Fn(V) -> V, lin_tol: f64, shift: V, tol: f64) -> Re
     for e in BASIS {
         near3(
             "the map of an axis",
-            t.transform_vector(vec(e)).to_array(),
+            t.apply_vec(vec(e)).to_array(),
             lin(e),
             lin_tol,
         )?;
     }
     let o = scx_num::vector3d::Point3::ORIGIN;
-    near3(
-        "the translation",
-        t.transform_point(o).to_array(),
-        shift,
-        tol,
-    )
+    near3("the translation", t.apply(o).to_array(), shift, tol)
 }
 
-/// `Transform::reflection(origin, normal)`: `p' = p - 2 ((p - origin)·n) n`.
+/// `Affine::reflection(origin, normal)`: `p' = p - 2 ((p - origin)·n) n`.
 pub fn tr_reflection() -> PinDefect<(V, V), scx_num::Result<Map>> {
     PinDefect {
         reason: "the pin's unit of an overflowing normal is zero, so its mirror is the identity",
@@ -593,7 +620,7 @@ pub fn tr_reflection() -> PinDefect<(V, V), scx_num::Result<Map>> {
     }
 }
 
-/// `Transform::rotation(point, axis, angle)`: Rodrigues' formula in vector form,
+/// `Affine::rotation(point, axis, angle)`: Rodrigues' formula in vector form,
 /// `R v = c v + s (k × v) + (1 - c)(k·v) k`, with `std`'s sine and cosine, about `point`.
 pub fn tr_rotation() -> PinDefect<(V, V, f64), scx_num::Result<Map>> {
     PinDefect {
@@ -629,7 +656,7 @@ pub fn tr_rotation() -> PinDefect<(V, V, f64), scx_num::Result<Map>> {
     }
 }
 
-/// `Transform::into_plane_frame(origin, x, y)`: the unit axes `x̂`, `n = unit(x̂ × ŷ)` and
+/// `Affine::into_plane_frame(origin, x, y)`: the unit axes `x̂`, `n = unit(x̂ × ŷ)` and
 /// `n × x̂` go to X, Z and Y, and `origin` to the origin.
 pub fn tr_into_plane_frame() -> PinDefect<(V, V, V), scx_num::Result<Map>> {
     PinDefect {
@@ -660,19 +687,14 @@ pub fn tr_into_plane_frame() -> PinDefect<(V, V, V), scx_num::Result<Map>> {
             for (u, e) in [(xh, BASIS[0]), (yv, BASIS[1]), (n, BASIS[2])] {
                 near3(
                     "the map of a frame axis",
-                    t.transform_vector(vec(u)).to_array(),
+                    t.apply_vec(vec(u)).to_array(),
                     e,
                     tol,
                 )?;
             }
             let o = scx_num::vector3d::Point3::ORIGIN;
             let tt = (tol + 1e-14) * biggest(p);
-            near3(
-                "the translation",
-                t.transform_point(o).to_array(),
-                shift,
-                tt,
-            )
+            near3("the translation", t.apply(o).to_array(), shift, tt)
         },
     }
 }
@@ -698,7 +720,7 @@ fn frame_is(a: V, b: Option<V>, x: V, y: V) -> Result<(), String> {
     near3("y", y, want, 16.0 * f64::EPSILON / lc)
 }
 
-/// `Transform::orthonormal_frame(x, y)`, `make_unit_ortho_vectors`'s first two axes.
+/// `math::orthonormal_frame(x, y)`, `make_unit_ortho_vectors`'s first two axes.
 pub fn tr_orthonormal_frame() -> PinDefect<(V, V), scx_num::Result<[scx_num::vector3d::Vec3; 2]>> {
     PinDefect {
         reason: "the pin's unit of an overflowing vector is zero, so it finds no perpendicular",
@@ -713,7 +735,7 @@ pub fn tr_orthonormal_frame() -> PinDefect<(V, V), scx_num::Result<[scx_num::vec
     }
 }
 
-/// `Transform::axis_squared_frame(x, y, noise)`: each axis with its coordinates below `noise`
+/// `math::axis_squared_frame(x, y, noise)`: each axis with its coordinates below `noise`
 /// dropped, made unit; none when an axis has no direction once cleaned or the two are along
 /// one line.
 pub fn tr_axis_squared_frame() -> PinDefect<(V, V, f64), Option<[scx_num::vector3d::Vec3; 2]>> {
@@ -744,17 +766,18 @@ pub fn tr_axis_squared_frame() -> PinDefect<(V, V, f64), Option<[scx_num::vector
 }
 
 /// `axis` as a placed body's own frame sees it, by its definition: the unit axis through the
-/// inverse map (`Transform::inverse`, held to the pin by `tr_inverse`), unit. `Ok(None)` when
+/// inverse map (`Affine::inverse`, held to the pin by `tr_inverse`), unit. `Ok(None)` when
 /// that image's length is in the band about [`NO_LENGTH`] where either answer is right.
 fn own_axis(t: &M, axis: V) -> Result<Option<V>, scx_num::math::AxisRefusal> {
     use scx_num::math::AxisRefusal as Ax;
+    let t = &crate::facade::affine_part(*t);
     if !(t.iter().all(|r| finite(r)) && finite(&axis)) {
         return Err(Ax::NotFinite);
     }
-    let map = Map { m: *t };
-    let inverse = map.inverse().map_err(|_| Ax::FlatMap)?;
+    let map = Map::try_from(*t).unwrap();
+    let inverse = map.inverse().ok_or(Ax::FlatMap)?;
     let a = dir3(axis).ok_or(Ax::ZeroAxis)?;
-    let own = inverse.transform_vector(vec(a)).to_array();
+    let own = inverse.apply_vec(vec(a)).to_array();
     if !finite(&own) {
         return Err(Ax::NotFinite);
     }
@@ -824,13 +847,14 @@ pub fn plane_offset_square_to() -> PinDefect<(M, V, V, V), AxisAnswer> {
         applies: Applies::Disagreeing,
         check: |(t, o, n, axis), r| {
             use scx_num::math::AxisRefusal as Ax;
+            let t = &crate::facade::affine_part(*t);
             let want = if !(t.iter().all(|r| finite(r)) && finite(axis)) {
                 Err(Ax::NotFinite)
             } else if let Some(a) = dir3(*axis) {
-                let map = Map { m: *t };
+                let map = Map::try_from(*t).unwrap();
                 let image = dir3(*n)
                     .filter(|_| finite(o))
-                    .map(|n| map.transform_vector(vec(n)).to_array());
+                    .map(|n| map.apply_vec(vec(n)).to_array());
                 if image.is_some_and(|i| (0.5 * NO_LENGTH..2.0 * NO_LENGTH).contains(&len3(i))) {
                     return Ok(());
                 }
@@ -840,7 +864,7 @@ pub fn plane_offset_square_to() -> PinDefect<(M, V, V, V), AxisAnswer> {
                     Some(c) if c > 1e-9 => Ok(None),
                     Some(_) => {
                         let at = scx_num::vector3d::Point3::from_array(*o);
-                        Ok(Some((map.transform_point(at).to_array(), a)))
+                        Ok(Some((map.apply(at).to_array(), a)))
                     }
                 }
             } else {

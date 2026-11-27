@@ -17,7 +17,7 @@ use scx_num::extent1d::Extent1d;
 use scx_num::extent2d::Extent2d;
 use scx_num::extent3d::Extent3d;
 use scx_num::fmath;
-use scx_num::math::Transform;
+use scx_num::math::Affine;
 use scx_num::matrix::Matrix;
 use scx_num::small_matrix::{
     determinate_3x3, determinate_4x4, inverse_3x3, inverse_4x4, mult_4x4, vec_triple_product,
@@ -243,10 +243,10 @@ fn translation_round_trip_is_exact() {
     for _ in 0..CASES {
         let d = fvec(ivec(&mut r, 1 << 20));
         let p = fvec(ivec(&mut r, 1 << 20)).to_point();
-        let t = Transform::translation(d);
-        let q = t.transform_point(p);
+        let t = Affine::translation(d);
+        let q = t.apply(p);
         assert_eq!(q.to_array(), (p + d).to_array());
-        let back = t.inverse().unwrap().transform_point(q);
+        let back = t.inverse().unwrap().apply(q);
         assert_eq!(back.to_array(), p.to_array());
     }
 }

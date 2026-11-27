@@ -12,7 +12,11 @@
 //!
 //! Upstream: `source/SMLib/inc/SmTransform.h`, `source/SMLib/src/SmTransform.cpp`.
 //!
-//! | Rust                                              | Upstream                                              |
+//! This module moves to `scx-surface` at step 5, with the other volume maps
+//! (`docs/research/56-crate-granularity.md`). The affine maps the kernel builds and applies
+//! are [`crate::math::Affine`].
+//!
+//! | Rust                                             | Upstream                                              |
 //! |---------------------------------------------------|-------------------------------------------------------|
 //! | [`Transform`]                                     | `SmTransform`                                         |
 //! | [`Transform::IDENTITY`], `Default`                | `SmTransform(const SmContext* = NULL)` (identity)     |
