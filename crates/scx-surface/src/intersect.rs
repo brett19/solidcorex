@@ -1,6 +1,6 @@
 // Written for solidcorex. Apache-2.0.
 //! Where a line, circle or ellipse meets a plane, cylinder, cone, sphere or torus (research
-//! 63 §4.2, SU6; §4.11 has the decisions).
+//! 63 §4.2, SU6; §4.13 has the decisions).
 //!
 //! **The equation.** The curve is taken into the surface's axes (its frame, z times its
 //! sense) as a polynomial in a parameter `u` on `[0, 1]`, in Bernstein form and homogeneous:
@@ -46,7 +46,7 @@
 //! **The uv** is the foot of the hit's point on the surface in D13's parameters, with no
 //! transcendental function (the arcs' `of_direction`), then wrapped by the surface's periods
 //! into `se`; a point whose uv is outside `se` is dropped. An overlap is not clipped by `se`
-//! (§4.11).
+//! (§4.13).
 
 use core::f64::consts::{PI, TAU};
 
@@ -61,10 +61,10 @@ use scx_num::units::Length;
 use scx_num::vector2d::Point2;
 use scx_num::vector3d::{Point3, Vec3};
 
-use scx_curve::arcs::Arcs;
 use crate::common::Axes;
 use crate::error::SurfaceError;
 use crate::surface::Surface;
+use scx_curve::arcs::Arcs;
 
 /// How the curve meets the surface at a point.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -151,7 +151,11 @@ pub fn intersect_curve(
         for (places, kind) in [(roots.places, Kind::Root), (turns.places, Kind::Turn)] {
             for u in places {
                 let t = piece.map.t(u);
-                let t = if kind == Kind::Root { path.polish(&target, t) } else { t };
+                let t = if kind == Kind::Root {
+                    path.polish(&target, t)
+                } else {
+                    t
+                };
                 if let Some(t) = path.place(t) {
                     events.push(Event::new(c, &target, t, kind, tol));
                 }
@@ -168,7 +172,9 @@ pub fn intersect_curve(
         events.push(Event::new(c, &target, t, kind, tol));
     }
     events.sort_by(|a, b| a.t.total_cmp(&b.t).then(a.kind.cmp(&b.kind)));
-    events.dedup_by(|b, a| a.kind == b.kind && (b.t - a.t).abs() <= 8.0 * f64::EPSILON * a.t.abs().max(1.0));
+    events.dedup_by(|b, a| {
+        a.kind == b.kind && (b.t - a.t).abs() <= 8.0 * f64::EPSILON * a.t.abs().max(1.0)
+    });
     if events.iter().all(|e| e.near) {
         return Ok(vec![CurveSurfaceHit::Overlap { t: path.extent }]);
     }
@@ -524,9 +530,7 @@ impl Target {
             ),
             Surface::Sphere(c) => (
                 Axes::new(c.frame(), c.sense()),
-                Shape::Sphere {
-                    r: c.radius().mm(),
-                },
+                Shape::Sphere { r: c.radius().mm() },
             ),
             Surface::Torus(c) => (
                 Axes::new(c.frame(), c.sense()),
@@ -578,7 +582,11 @@ impl Target {
                 let b = 4.0 * big * big;
                 (
                     s * s - b * rad2,
-                    [4.0 * s * x - 2.0 * b * x, 4.0 * s * y - 2.0 * b * y, 4.0 * s * z],
+                    [
+                        4.0 * s * x - 2.0 * b * x,
+                        4.0 * s * y - 2.0 * b * y,
+                        4.0 * s * z,
+                    ],
                 )
             }
         }

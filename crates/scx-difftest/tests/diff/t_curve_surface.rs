@@ -36,12 +36,22 @@ pub const AGREE: Tol = Tol {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Kind {
     Plane,
-    Cylinder { r: f64 },
+    Cylinder {
+        r: f64,
+    },
     /// Radius at `v = 0`, half-angle in radians (either sign; the top radius stays above
     /// zero).
-    Cone { r: f64, a: f64 },
-    Sphere { r: f64 },
-    Torus { big: f64, small: f64 },
+    Cone {
+        r: f64,
+        a: f64,
+    },
+    Sphere {
+        r: f64,
+    },
+    Torus {
+        big: f64,
+        small: f64,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -192,7 +202,11 @@ impl Gen for Case {
                     let y = cross(n.map(|c| c / l), x);
                     let a = rng.uniform(0.5, 12.0);
                     let circle = j == 3;
-                    let b = if circle { a } else { a * rng.uniform(0.2, 0.95) };
+                    let b = if circle {
+                        a
+                    } else {
+                        a * rng.uniform(0.2, 0.95)
+                    };
                     Shape::Conic {
                         c: p,
                         x,
@@ -202,7 +216,10 @@ impl Gen for Case {
                         circle,
                     }
                 };
-                out.push(Case { curve, ..base.clone() });
+                out.push(Case {
+                    curve,
+                    ..base.clone()
+                });
             }
         }
         out
@@ -237,7 +254,10 @@ pub mod x {
                 Cone::new(f, len(r), a, fw).unwrap().into(),
                 b(0.0, 0.0, 1.0, HEIGHT),
             ),
-            Kind::Sphere { r } => (Sphere::new(f, len(r), fw).unwrap().into(), b(0.0, 0.0, 1.0, 1.0)),
+            Kind::Sphere { r } => (
+                Sphere::new(f, len(r), fw).unwrap().into(),
+                b(0.0, 0.0, 1.0, 1.0),
+            ),
             Kind::Torus { big, small } => (
                 Torus::new(f, len(big), len(small), fw).unwrap().into(),
                 b(0.0, 0.0, 1.0, 1.0),
@@ -249,7 +269,9 @@ pub mod x {
     pub fn curve(c: &Case) -> (Curve, Extent1d) {
         match c.curve {
             Shape::Segment { p, q } => (
-                Line::through(Point3::from(p), Point3::from(q)).unwrap().into(),
+                Line::through(Point3::from(p), Point3::from(q))
+                    .unwrap()
+                    .into(),
                 Extent1d::new(0.0, 1.0).unwrap(),
             ),
             Shape::Conic {
@@ -267,7 +289,9 @@ pub mod x {
                 let k: Curve = if circle {
                     Circle::new(f, len(a), Sense::Forward).unwrap().into()
                 } else {
-                    Ellipse::new(f, len(a), len(b), Sense::Forward).unwrap().into()
+                    Ellipse::new(f, len(a), len(b), Sense::Forward)
+                        .unwrap()
+                        .into()
                 };
                 (k, turn)
             }
@@ -291,7 +315,9 @@ pub mod x {
 
     pub fn answer(c: &Case) -> Answer {
         let h = hits(c);
-        let overlap = h.iter().any(|h| matches!(h, CurveSurfaceHit::Overlap { .. }));
+        let overlap = h
+            .iter()
+            .any(|h| matches!(h, CurveSurfaceHit::Overlap { .. }));
         let pts = h
             .iter()
             .filter_map(|h| match h {
@@ -351,7 +377,8 @@ pub mod s {
             }
             Kind::Cone { r, a } => {
                 let top = r + scx_num::fmath::tan(a) * HEIGHT;
-                let mut s = Cone::new_bounded(o, x, y, r, top, 0.0, 360.0, HEIGHT, false, false, true);
+                let mut s =
+                    Cone::new_bounded(o, x, y, r, top, 0.0, 360.0, HEIGHT, false, false, true);
                 s.make_nurb(k).unwrap();
                 Surface::from(s)
             }
@@ -381,7 +408,8 @@ pub mod s {
                 if circle {
                     let place = Axis2Placement::new(p3(o), v3(x), v3(y));
                     PinCurve::from(
-                        PinEllipse::create_canonical_circle(k, &place, a, None, Some(false)).unwrap(),
+                        PinEllipse::create_canonical_circle(k, &place, a, None, Some(false))
+                            .unwrap(),
                     )
                 } else {
                     let opts = EllipseOptions {

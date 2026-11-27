@@ -1,5 +1,6 @@
 // Written for solidcorex. Apache-2.0.
-//! Why an analytic surface cannot be built.
+//! Why an analytic surface cannot be built, or a query on one (the curve intersection) cannot
+//! answer.
 //!
 //! Errors follow research 62 §10: every cause has a kind ([`SurfaceError::kind`]), a stable
 //! [`SurfaceError::name`] and a one-frame Display. A kind is validated once, when it is built;
@@ -194,9 +195,9 @@ impl fmt::Display for SurfaceError {
                 "the transform is not a similarity, so the image is not a surface of the kind",
             ),
             Self::Nurbs(_) => f.write_str("the NURBS surface could not be built or edited"),
-            Self::NurbsIntersection => f.write_str(
-                "intersecting a NURBS curve or surface with a curve is not built yet",
-            ),
+            Self::NurbsIntersection => {
+                f.write_str("intersecting a NURBS curve or surface with a curve is not built yet")
+            }
             Self::Exhausted(e) => write!(f, "{e}"),
             Self::Stopped => write!(f, "{Stopped}"),
         }

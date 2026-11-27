@@ -4602,10 +4602,12 @@ pub fn nurbs_surface_enclose_piece() -> EncDefect {
 /// within `1e-9` of a T2 root; every tangent within the tolerance of the surface; and every
 /// T2 root inside the extents (off their edges by `1e-7`) found, by a crossing at it or by
 /// a tangent joined to it by a stretch of curve within the tolerance (roots the tolerance
-/// does not tell apart). What the pin gets wrong there is in 63 §4.11.
-pub fn curve_surface() -> PinDefect<(crate::t_curve_surface::Case,), crate::t_curve_surface::Answer> {
+/// does not tell apart). What the pin gets wrong there is in 63 §4.13.
+pub fn curve_surface() -> PinDefect<(crate::t_curve_surface::Case,), crate::t_curve_surface::Answer>
+{
     PinDefect {
-        reason: "the pin's GlobalCurveIntersect misses or moves points T2 has (63 §4.11)",
+        reason: "the pin reports a coincident stretch where the curve leaves the surface by more \
+                 than its tolerance (63 §4.13)",
         applies: Applies::Disagreeing,
         check: |(c,), _| curve_surface_truth(c),
     }
