@@ -500,6 +500,7 @@ dependencies = [
  "scx-num",
  "scx-nurbs",
  "scx-surface",
+ "scx-testkit",
 ]
 
 [[package]]

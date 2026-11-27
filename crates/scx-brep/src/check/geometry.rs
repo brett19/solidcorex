@@ -46,7 +46,7 @@ const JUMP: f64 = 0.9;
 
 /// Probes toward an end at a pole, at `2^-1` to `2^-PROBES` of the interval from it: a
 /// dog-leg shorter than an eighth of the use falls between the regular samples.
-const PROBES: i32 = 10;
+const PROBES: usize = 10;
 
 /// The slack, relative to the period, on the span of a face's loops in a closed direction:
 /// the rounding of a pcurve's ends at a seam, not a distance.
@@ -79,7 +79,7 @@ fn dist(a: Point3, b: Point3) -> f64 {
 /// The surface's speeds `(|S_u|, |S_v|)` at `uv`.
 fn speeds(surface: &Surface, uv: Point2) -> (f64, f64) {
     let jet = surface.jet::<1>(uv, [Approach::Above; 2]);
-    let len = |d: Option<scx_num::vector3d::Vec3>| d.map_or(0.0, |v| v.length());
+    let len = |d: Option<scx_num::vector3d::Vec3>| d.map_or(0.0, scx_num::vector3d::Vec3::length);
     (len(jet.get(1, 0)), len(jet.get(0, 1)))
 }
 
@@ -124,7 +124,12 @@ pub(super) fn check(t: &Tables, res: Resolution) -> Result<(), GeometryCause> {
     Ok(())
 }
 
-fn edge_check(t: &Tables, res: Resolution, id: EdgeId, edge: &EdgeGeom) -> Result<(), GeometryCause> {
+fn edge_check(
+    t: &Tables,
+    res: Resolution,
+    id: EdgeId,
+    edge: &EdgeGeom,
+) -> Result<(), GeometryCause> {
     let EdgeShape::Curve { curve, interval } = &edge.shape else {
         return Ok(());
     };
@@ -148,11 +153,13 @@ fn edge_check(t: &Tables, res: Resolution, id: EdgeId, edge: &EdgeGeom) -> Resul
         }
     }
     let ps = params(*interval).map(|s| curve.point(s));
-    let length: f64 = ps.windows(2).map(|w| match w {
-        [a, b] => dist(*a, *b),
-        _ => 0.0,
-    })
-    .sum();
+    let length: f64 = ps
+        .windows(2)
+        .map(|w| match w {
+            [a, b] => dist(*a, *b),
+            _ => 0.0,
+        })
+        .sum();
     if length.is_nan() || length <= re {
         return Err(GeometryCause::EdgeTooShort {
             edge: id,
@@ -170,7 +177,12 @@ struct Joint {
     budget: f64,
 }
 
-fn face_check(t: &Tables, res: Resolution, id: FaceId, face: &FaceRecord) -> Result<(), GeometryCause> {
+fn face_check(
+    t: &Tables,
+    res: Resolution,
+    id: FaceId,
+    face: &FaceRecord,
+) -> Result<(), GeometryCause> {
     let surface = &face.surface;
     let dom = surface.domain();
     // The hull of every sample, per closed direction.
@@ -205,7 +217,9 @@ fn face_check(t: &Tables, res: Resolution, id: FaceId, face: &FaceRecord) -> Res
             let open = [dom.u, dom.v].iter().any(|d| {
                 matches!(
                     d,
-                    ParamDomain::AtLeast { .. } | ParamDomain::AtMost { .. } | ParamDomain::Unbounded
+                    ParamDomain::AtLeast { .. }
+                        | ParamDomain::AtMost { .. }
+                        | ParamDomain::Unbounded
                 )
             });
             let ok = if lp == 0 {
@@ -222,7 +236,10 @@ fn face_check(t: &Tables, res: Resolution, id: FaceId, face: &FaceRecord) -> Res
         if let (Some(period), Some((lo, hi))) = (d.period(), h)
             && hi - lo > period * (1.0 + WRAP_SLACK)
         {
-            return Err(GeometryCause::FaceWraps { face: id, direction });
+            return Err(GeometryCause::FaceWraps {
+                face: id,
+                direction,
+            });
         }
     }
     Ok(())
@@ -240,7 +257,12 @@ fn shoelace(ring: &[Point2]) -> f64 {
 /// Each use ends where the next starts in uv, within the two ends' budgets taken to uv by
 /// the surface's larger speed there: the tighter of the two, so a pole's line is crossed
 /// only by a pcurve along it.
-fn closure(surface: &Surface, id: FaceId, lp: usize, joints: &[Joint]) -> Result<(), GeometryCause> {
+fn closure(
+    surface: &Surface,
+    id: FaceId,
+    lp: usize,
+    joints: &[Joint],
+) -> Result<(), GeometryCause> {
     let n = joints.len();
     for (i, a) in joints.iter().enumerate() {
         let Some(b) = joints.get((i + 1) % n) else {
@@ -285,7 +307,11 @@ fn use_check(
     let rb = reach(u.bound.as_ref(), res);
     let re = reach(edge.accuracy.as_ref(), res);
     let (first, last) = (edge.start(u.sense), edge.end(u.sense));
-    let vertex = |v| t.vertices.get(v).map(|r| (r.point, reach(r.accuracy.as_ref(), res)));
+    let vertex = |v| {
+        t.vertices
+            .get(v)
+            .map(|r| (r.point, reach(r.accuracy.as_ref(), res)))
+    };
     let cause = |at: f64| (id, u.edge, u.sense, at);
     let out = |uv: Point2| outside(&dom.u, uv.x).max(outside(&dom.v, uv.y));
     let off_domain = |uv: Point2, at: f64| -> Result<(), GeometryCause> {
@@ -451,12 +477,15 @@ fn pole_check(
             .enumerate()
             .filter(|&(k, _)| k.abs_diff(k_end) * 2 <= SEGMENTS)
             .map(|(_, (&s, &uv))| (s, uv));
-        let probes = (1..=PROBES).map(|j| {
-            let s = t_end + toward * span * 2f64.powi(-j);
-            (s, curve.point(s))
+        // Halving is exact, so the probes are the same on every platform.
+        let probes = (0..PROBES).scan(span, |h, _| {
+            *h *= 0.5;
+            let s = t_end + toward * *h;
+            Some((s, curve.point(s)))
         });
         for (s, uv) in half.chain(probes) {
-            if at_pole(uv) && !((uv.x - uv_end.x).abs() <= tol_u) {
+            let du = (uv.x - uv_end.x).abs();
+            if at_pole(uv) && (du.is_nan() || du > tol_u) {
                 let (face, edge, sense, at) = cause(s);
                 return Err(GeometryCause::DogLeg {
                     face,
@@ -468,4 +497,81 @@ fn pole_check(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+    use scx_curve::{Curve2, Line2};
+    use scx_num::frame::Frame;
+    use scx_num::vector2d::Vec2;
+    use scx_surface::Sphere;
+    use scx_testkit::topology::{dog_leg, passes_pole};
+
+    fn sphere() -> Surface {
+        Surface::Sphere(Sphere::new(Frame::WORLD, Length::from_mm(1.0), Sense::Forward).unwrap())
+    }
+
+    fn uv_line(o: (f64, f64), d: (f64, f64)) -> Curve2 {
+        Curve2::Line(Line2::new(Point2::new(o.0, o.1), Vec2::new(d.0, d.1)).unwrap())
+    }
+
+    /// The pole rules for `curve` over `[0, 1]` on the unit sphere, both poles.
+    fn poles_of(curve: &Curve2) -> Result<(), GeometryCause> {
+        let s = sphere();
+        let ts = params(Extent1d::new(0.0, 1.0).unwrap());
+        let uvs = ts.map(|t| curve.point(t));
+        let cause = |at| (FaceId::from_raw(0), EdgeId::from_raw(0), Sense::Forward, at);
+        for &i in poles(&s) {
+            if let Some(p) = pole(&s, i) {
+                pole_check(&s, p, 2e-5, curve, &ts, &uvs, cause)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The oracle's verdicts on 1001 samples of `curve` at the north pole: (dog-leg, pass).
+    fn oracle(curve: &Curve2) -> (bool, bool) {
+        let uv: Vec<[f64; 2]> = (0..=1000)
+            .map(|k| {
+                let p = curve.point(f64::from(k) / 1000.0);
+                [p.x, p.y]
+            })
+            .collect();
+        (
+            dog_leg(&uv, 1.0, 1e-12, 1e-12).is_some(),
+            passes_pole(&uv, 1.0, 1e-12).is_some(),
+        )
+    }
+
+    #[test]
+    fn a_pcurve_arriving_at_a_pole_passes() {
+        let up = uv_line((0.25, 0.5), (0.0, 0.5));
+        assert_eq!(poles_of(&up), Ok(()));
+        assert_eq!(oracle(&up), (false, false));
+    }
+
+    #[test]
+    fn a_pcurve_along_a_poles_line_is_a_dog_leg() {
+        // Every sample lifts to the north pole; the use's u moves from 0 to 1/2.
+        let leg = uv_line((0.0, 1.0), (0.5, 0.0));
+        assert!(matches!(
+            poles_of(&leg),
+            Err(GeometryCause::DogLeg { at, .. }) if at == 0.125
+        ));
+        assert_eq!(oracle(&leg), (true, false));
+    }
+
+    #[test]
+    fn a_pcurve_through_a_pole_inside_the_use_is_refused() {
+        // Up through v = 1 at t = 1/2, neither end at the pole.
+        let through = uv_line((0.25, 0.5), (0.0, 1.0));
+        assert!(matches!(
+            poles_of(&through),
+            Err(GeometryCause::PoleNotVertex { at, .. }) if at == 0.5
+        ));
+        assert_eq!(oracle(&through), (false, true));
+    }
 }

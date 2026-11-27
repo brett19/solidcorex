@@ -265,7 +265,10 @@ impl fmt::Display for StructureCause {
                 fin.face
             ),
             Self::WireWithFins { shell, edge } => {
-                write!(f, "shell {shell} lists edge {edge} as a wire, but it has fins")
+                write!(
+                    f,
+                    "shell {shell} lists edge {edge} as a wire, but it has fins"
+                )
             }
             Self::FaceWithoutLoop { face } => write!(f, "face {face} has no loop"),
             Self::EmptyLoop { face, lp } => write!(f, "loop {lp} of face {face} is empty"),
@@ -283,11 +286,9 @@ impl fmt::Display for StructureCause {
                 "face {face}'s {} use of edge {edge} has no fin",
                 sense_word(sense)
             ),
-            Self::RepeatedFin { edge, fin } => write!(
-                f,
-                "edge {edge} lists its fin on face {} twice",
-                fin.face
-            ),
+            Self::RepeatedFin { edge, fin } => {
+                write!(f, "edge {edge} lists its fin on face {} twice", fin.face)
+            }
             Self::PointUseOfCurve { face, edge } => write!(
                 f,
                 "face {face} uses edge {edge} as a point, but the edge has a curve"
@@ -313,7 +314,10 @@ impl fmt::Display for StructureCause {
                 fins[0].face, fins[1].face
             ),
             Self::LooseVertex { vertex } => {
-                write!(f, "vertex {vertex} ends no edge and is no shell's lone vertex")
+                write!(
+                    f,
+                    "vertex {vertex} ends no edge and is no shell's lone vertex"
+                )
             }
             Self::EmptyShell { shell } => write!(f, "shell {shell} bounds nothing"),
             Self::ShellNotConnected { shell } => write!(f, "shell {shell} is in pieces"),

@@ -128,8 +128,7 @@ pub(crate) fn structure(t: &Tables) -> Result<(), StructureCause> {
         if fins.is_empty() && !wire.get(id.index()).copied().unwrap_or(false) {
             return Err(StructureCause::LooseEdge { edge: id });
         }
-        for (i, &fin) in fins.iter().enumerate() {
-            let next = fins.get(i + 1).copied().unwrap_or(fins[0]);
+        for (fin, next) in radial(t, id) {
             let shell = |f: Fin, side: FaceSide| t.faces.get(f.face).map(|r| r.side(side));
             if shell(fin, after(fin.sense)) != shell(next, after(next.sense).other()) {
                 return Err(StructureCause::SidesDisagree {
@@ -211,8 +210,10 @@ fn faces(t: &Tables, id: FaceId, face: &crate::record::FaceRecord) -> Result<(),
         }
     }
     seen.sort_unstable();
-    if let Some(w) = seen.windows(2).find(|w| w[0] == w[1]) {
-        let (edge, forward) = w[0];
+    if let Some(&(edge, forward)) = seen.windows(2).find_map(|w| match w {
+        [a, b] if a == b => Some(a),
+        _ => None,
+    }) {
         let sense = if forward {
             Sense::Forward
         } else {
@@ -241,11 +242,11 @@ fn faces(t: &Tables, id: FaceId, face: &crate::record::FaceRecord) -> Result<(),
     }
     on.sort_unstable();
     on.dedup();
-    if let Some(w) = on.windows(2).find(|w| w[0].0 == w[1].0) {
-        return Err(StructureCause::VertexOnTwoLoops {
-            face: id,
-            vertex: w[0].0,
-        });
+    if let Some(vertex) = on.windows(2).find_map(|w| match *w {
+        [(a, _), (b, _)] if a == b => Some(a),
+        _ => None,
+    }) {
+        return Err(StructureCause::VertexOnTwoLoops { face: id, vertex });
     }
     Ok(())
 }
@@ -255,7 +256,11 @@ struct Sets(Vec<u32>);
 
 impl Sets {
     fn new(n: usize) -> Self {
-        Self((0..n).map(|i| u32::try_from(i).unwrap_or(u32::MAX)).collect())
+        Self(
+            (0..n)
+                .map(|i| u32::try_from(i).unwrap_or(u32::MAX))
+                .collect(),
+        )
     }
 
     fn root(&mut self, mut i: usize) -> usize {
@@ -282,6 +287,23 @@ impl Sets {
     }
 }
 
+/// Each fin of the edge with the next, cyclically: the pairs that meet across a sector.
+/// A collapsed edge has no length to turn about, so no radial order and no pairs: a pole's
+/// single fin has its face on both sides.
+fn radial(t: &Tables, id: EdgeId) -> impl Iterator<Item = (Fin, Fin)> + '_ {
+    let collapsed = t
+        .edges
+        .get(id)
+        .is_none_or(|e| e.shape == EdgeShape::Collapsed);
+    let fins = match t.adjacency.get(id) {
+        Some(a) if !collapsed => &a.fins[..],
+        _ => &[][..],
+    };
+    fins.iter()
+        .copied()
+        .zip(fins.iter().copied().cycle().skip(1))
+}
+
 /// Every shell bounds something and is one piece. The pieces are face sides, wires and
 /// lone vertices; two face sides are joined across an edge where they meet radially (the
 /// sides [`structure`] checked), and any two pieces of one shell at a common vertex.
@@ -292,10 +314,8 @@ fn shells(t: &Tables) -> Result<(), StructureCause> {
     let wire_slot = |e: EdgeId| nf + e.index();
     let lone_slot = |v: VertexId| nf + ne + v.index();
     let mut sets = Sets::new(nf + ne + t.vertices.slots());
-    for (id, adj) in t.adjacency.iter() {
-        let _ = id;
-        for (i, &fin) in adj.fins.iter().enumerate() {
-            let next = adj.fins.get(i + 1).copied().unwrap_or(adj.fins[0]);
+    for (id, _) in t.edges.iter() {
+        for (fin, next) in radial(t, id) {
             sets.join(
                 side_slot(fin.face, after(fin.sense)),
                 side_slot(next.face, after(next.sense).other()),
@@ -329,8 +349,10 @@ fn shells(t: &Tables) -> Result<(), StructureCause> {
     }
     at.sort_unstable();
     for w in at.windows(2) {
-        if (w[0].0, w[0].1) == (w[1].0, w[1].1) {
-            sets.join(w[0].2, w[1].2);
+        if let [(s0, v0, a), (s1, v1, b)] = *w
+            && (s0, v0) == (s1, v1)
+        {
+            sets.join(a, b);
         }
     }
     // The root of each shell's first piece; another root is a second piece.
