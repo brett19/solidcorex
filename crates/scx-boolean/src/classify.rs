@@ -20,6 +20,12 @@
 //!   section's sides were [`NoClearSide`](scx_bodyq::BodyqUnsupported::NoClearSide)) is
 //!   classified by [`classify_point`] at the middle of its first edge where the operands do
 //!   not meet, or else at a point inside its first face.
+//! - **The seeds' check.** Each seeded component is checked by a [`classify_point`] at one
+//!   such edge middle, and one on the other side from its seed is
+//!   [`BooleanDefect::Seeds`] (§14.35). A component with no free curve edge (a disk the
+//!   sections alone bound) is not checked: a lone wrong piece leaves a section edge with
+//!   one or three kept fins, which the build refuses, and a section whose sides are
+//!   swapped flips its partner piece too, which has such an edge.
 //!
 //! A lying piece carries no contact, so it seeds nothing: the components on either side of
 //! it are classified by a point (BQ2's first question, §14.29).
@@ -211,6 +217,21 @@ pub(crate) fn classify(
             }
         }
     }
+    // Each seeded component checked by one point (§14.35): a seed that reads the wrong
+    // side would otherwise spread over its whole component unseen.
+    for (&root, faces) in &comps {
+        let Some(&seed) = answer.get(&set.root(root)) else {
+            continue;
+        };
+        if matches!(seed, Class::On { .. }) {
+            continue;
+        }
+        let Some(&(side, _)) = owner.get(&root) else {
+            continue;
+        };
+        stop.check()?;
+        check_seed(ops, m, side, faces, &met, seed, budget, stop)?;
+    }
     // The fallback.
     for (&root, faces) in &comps {
         if answer.contains_key(&set.root(root)) {
@@ -263,18 +284,95 @@ fn by_point(
     budget: &mut Budget,
     stop: &Stop,
 ) -> Result<Class, BooleanError> {
-    let other = ops.of(side.other());
     let first = *faces
         .first()
         .ok_or(BooleanError::Defect(BooleanDefect::Draft))?;
+    point_class(ops, m, side, faces, met, budget, stop)?.ok_or_else(|| {
+        BooleanError::Defect(BooleanDefect::Classify {
+            operand: side.operand(),
+            face: first,
+        })
+    })
+}
+
+/// Checks a seeded component of `side` with `faces` by [`classify_point`] at the middle of
+/// one of its first [`MIDDLES`] curve edges where the operands do not meet:
+/// [`BooleanDefect::Seeds`] if that point lies on the other side from the seed's. A
+/// component with no such edge, whose middles all fall on the other operand, or whose
+/// point the query cannot place, is not checked: a point inside its face costs about ten
+/// times as much (§14.35).
+pub(crate) fn check_seed(
+    ops: Operands<'_>,
+    m: &Imprint,
+    side: Side,
+    faces: &[FaceId],
+    met: &BTreeSet<EdgeId>,
+    seed: Class,
+    budget: &mut Budget,
+    stop: &Stop,
+) -> Result<(), BooleanError> {
+    let Some(&first) = faces.first() else {
+        return Ok(());
+    };
+    match by_middles(ops, m, side, faces, met, budget, stop) {
+        Ok(Some(c)) if c != seed => Err(BooleanError::Defect(BooleanDefect::Seeds {
+            operand: side.operand(),
+            face: first,
+        })),
+        // A point the query cannot place leaves the seed unchecked, as before the check.
+        Ok(_) | Err(BooleanError::Defect(BooleanDefect::Classify { .. })) => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+/// The class of a component of `side` with `faces` by one point in a region of the other
+/// operand: by [`by_middles`], else a point inside its first face. `None` when every point
+/// tried is on the other operand.
+fn point_class(
+    ops: Operands<'_>,
+    m: &Imprint,
+    side: Side,
+    faces: &[FaceId],
+    met: &BTreeSet<EdgeId>,
+    budget: &mut Budget,
+    stop: &Stop,
+) -> Result<Option<Class>, BooleanError> {
+    if let Some(c) = by_middles(ops, m, side, faces, met, budget, stop)? {
+        return Ok(Some(c));
+    }
+    let first = *faces
+        .first()
+        .ok_or(BooleanError::Defect(BooleanDefect::Draft))?;
+    let other = ops.of(side.other());
+    let q = inside(ops, m, side, first)?;
+    match classify_point(other, q, budget, stop).map_err(|x| bodyq(x, side, first))? {
+        PointClass::In(r) => Ok(Some(class_of(other, r))),
+        _ => Ok(None),
+    }
+}
+
+/// The class of a component of `side` with `faces` at the middle of one of its first
+/// [`MIDDLES`] curve edges where the operands do not meet: the first in a region of the
+/// other operand answers. `None` when there is no such edge or every middle tried is on
+/// the other operand.
+fn by_middles(
+    ops: Operands<'_>,
+    m: &Imprint,
+    side: Side,
+    faces: &[FaceId],
+    met: &BTreeSet<EdgeId>,
+    budget: &mut Budget,
+    stop: &Stop,
+) -> Result<Option<Class>, BooleanError> {
+    let other = ops.of(side.other());
     let mut tried = 0;
-    'faces: for &f in faces {
+    for &f in faces {
         let Some(view) = m.draft.face(f) else {
             continue;
         };
         for u in view.uses() {
             if tried >= MIDDLES {
-                break 'faces;
+                return Ok(None);
             }
             let e = u.record().edge;
             if met.contains(&e) {
@@ -291,18 +389,11 @@ fn by_point(
             if let PointClass::In(r) =
                 classify_point(other, p, budget, stop).map_err(|x| bodyq(x, side, f))?
             {
-                return Ok(class_of(other, r));
+                return Ok(Some(class_of(other, r)));
             }
         }
     }
-    let q = inside(ops, m, side, first)?;
-    match classify_point(other, q, budget, stop).map_err(|x| bodyq(x, side, first))? {
-        PointClass::In(r) => Ok(class_of(other, r)),
-        _ => Err(BooleanError::Defect(BooleanDefect::Classify {
-            operand: side.operand(),
-            face: first,
-        })),
-    }
+    Ok(None)
 }
 
 /// In or out, by the other operand's region `r`.

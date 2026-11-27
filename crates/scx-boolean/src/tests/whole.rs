@@ -32,7 +32,7 @@ fn op(a: &Brep, b: &Brep, which: BooleanOp, doc: Document) -> Result<Done<NoItem
 }
 
 /// The Boolean, checked by the contract.
-fn checked(a: &Brep, b: &Brep, which: BooleanOp, doc: Document) -> Done<NoItems> {
+pub(super) fn checked(a: &Brep, b: &Brep, which: BooleanOp, doc: Document) -> Done<NoItems> {
     let done = op(a, b, which, doc).unwrap_or_else(|e| panic!("{which:?}: {e:?}"));
     let mut scratch = Scratch::new();
     let stop = Stop::new();
@@ -44,7 +44,7 @@ fn checked(a: &Brep, b: &Brep, which: BooleanOp, doc: Document) -> Done<NoItems>
     done
 }
 
-fn volume(body: &Brep) -> f64 {
+pub(super) fn volume(body: &Brep) -> f64 {
     scx_mass::volume(
         body,
         RelAccuracy::new(1e-10).unwrap(),
@@ -56,7 +56,7 @@ fn volume(body: &Brep) -> f64 {
     .value
 }
 
-fn area(body: &Brep, f: FaceId) -> f64 {
+pub(super) fn area(body: &Brep, f: FaceId) -> f64 {
     scx_mass::face_area(
         body.face(f).unwrap(),
         RelAccuracy::new(1e-10).unwrap(),
@@ -81,7 +81,7 @@ fn length(body: &Brep, e: EdgeId) -> f64 {
 }
 
 #[track_caller]
-fn near(got: f64, want: f64, rel: f64) {
+pub(super) fn near(got: f64, want: f64, rel: f64) {
     assert!(
         (got - want).abs() <= rel * want.abs().max(1.0),
         "{got} against {want}"
@@ -278,7 +278,7 @@ fn interleaved_grids_on_one_plane_unite() {
 
 /// Where a result face came from: the operand faces (operand, face) whose lineage it
 /// carries, sorted.
-fn face_from(c: &Changes, f: FaceId) -> Vec<(u32, FaceId)> {
+pub(super) fn face_from(c: &Changes, f: FaceId) -> Vec<(u32, FaceId)> {
     let mut out = Vec::new();
     let mut add = |o: &Origin| match *o {
         Origin::Face(g) => out.push((0, g)),

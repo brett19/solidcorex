@@ -44,6 +44,10 @@ use crate::imprint::{Imprint, loops_error, ring, shoelace};
 /// Two uses' middles closer than this in uv are one place: a cut, not a seam.
 const SAME_UV: f64 = 1e-7;
 
+/// Faces whose normals at a shared edge are further apart than 60 degrees (or nearer than
+/// 120) are not on one surface, which the merge then need not test.
+const PARALLEL: f64 = 0.5;
+
 /// A kept face: its operand face, and whether its material is behind it.
 #[derive(Debug, Clone, Copy)]
 struct Kept {
@@ -137,17 +141,21 @@ fn merge(
         let (Some(f0), Some(f1), 2) = (fins.first(), fins.get(1), fins.len()) else {
             continue;
         };
-        if f0.face == f1.face || f0.sense == f1.sense {
+        if f0.face == f1.face {
             continue;
         }
         let (Some(&k0), Some(&k1)) = (kept.get(&f0.face), kept.get(&f1.face)) else {
             continue;
         };
-        if (k0.side, k0.of) == (k1.side, k1.of) {
-            set.join(f0.face, f1.face);
+        // Faces turned against each other (one material behind, the other's in front)
+        // run their loops opposite ways about one normal, so they use the edge in one
+        // sense; faces turned alike use it in opposite senses.
+        let turned = k0.back != k1.back;
+        if (f0.sense == f1.sense) != turned {
             continue;
         }
-        if k0.back != k1.back {
+        if (k0.side, k0.of) == (k1.side, k1.of) {
+            set.join(f0.face, f1.face);
             continue;
         }
         let (Some(v0), Some(v1)) = (m.draft.face(f0.face), m.draft.face(f1.face)) else {
@@ -157,7 +165,31 @@ fn merge(
         if core::mem::discriminant(s0) != core::mem::discriminant(s1) {
             continue;
         }
-        if s0 != s1 {
+        if s0 == s1 {
+            // One surface, so one natural normal: turned faces have material either side.
+            if turned {
+                continue;
+            }
+        } else {
+            // On one surface, the material lies on one side where the natural normals
+            // agree and the faces are turned alike, or they are opposite and the faces
+            // turned against each other (a subtraction's turned piece beside a face of
+            // `a`, §14.35). Coincident surfaces have parallel normals where they meet, so
+            // the normals, read first, also spare the surface test for faces at an angle.
+            let n = |f: FaceId| -> Option<scx_num::vector3d::UnitVec3> {
+                let face = m.draft.face(f)?;
+                let u = face.uses().find(|u| u.record().edge == e)?;
+                let uv = use_mid(u.geom())?;
+                face.surface()
+                    .normal(uv, [Approach::Above, Approach::Above])
+            };
+            let (Some(n0), Some(n1)) = (n(f0.face), n(f1.face)) else {
+                continue;
+            };
+            let dot = n0.as_vec().dot(n1.as_vec());
+            if dot.abs() < PARALLEL || (dot < 0.0) != turned {
+                continue;
+            }
             let key = (k0.side, k0.of, k1.side, k1.of);
             let on = if let Some(&on) = same_surface.get(&key) {
                 on
@@ -169,20 +201,6 @@ fn merge(
                 on
             };
             if !on {
-                continue;
-            }
-            // Fins of opposite senses on one surface: the natural normals agree there.
-            let n = |f: FaceId| -> Option<scx_num::vector3d::UnitVec3> {
-                let face = m.draft.face(f)?;
-                let u = face.uses().find(|u| u.record().edge == e)?;
-                let uv = use_mid(u.geom())?;
-                face.surface()
-                    .normal(uv, [Approach::Above, Approach::Above])
-            };
-            let (Some(n0), Some(n1)) = (n(f0.face), n(f1.face)) else {
-                continue;
-            };
-            if n0.as_vec().dot(n1.as_vec()) <= 0.0 {
                 continue;
             }
         }
@@ -315,9 +333,18 @@ fn splice(
         twin.insert(p, q);
         twin.insert(q, p);
     }
+    // A face turned against the survivor (§14.35) runs its loops the other way about the
+    // survivor's normal: it is walked backwards, each use against its own sense.
+    let back = |f: FaceId| kept.get(&f).map(|k| k.back);
+    let turned: BTreeSet<FaceId> = faces
+        .iter()
+        .copied()
+        .filter(|&f| back(f) != back(survivor))
+        .collect();
     let next = |at: At| -> At {
         let n = lens.get(&(at.0, at.1)).copied().unwrap_or(1);
-        (at.0, at.1, (at.2 + 1) % n)
+        let step = if turned.contains(&at.0) { n - 1 } else { 1 };
+        (at.0, at.1, (at.2 + step) % n)
     };
     let total: usize = lens.values().sum();
     let mut seen: BTreeSet<At> = BTreeSet::new();
@@ -370,7 +397,15 @@ fn splice(
         .into_iter()
         .map(|c| {
             c.into_iter()
-                .map(|at| record(at).map(|u| (u.edge, u.sense)).ok_or_else(defect))
+                .map(|at| {
+                    let u = record(at).ok_or_else(defect)?;
+                    let sense = if turned.contains(&at.0) {
+                        u.sense.reversed()
+                    } else {
+                        u.sense
+                    };
+                    Ok::<_, BooleanError>((u.edge, sense))
+                })
                 .collect::<Result<Vec<_>, _>>()
         })
         .collect::<Result<_, _>>()?;

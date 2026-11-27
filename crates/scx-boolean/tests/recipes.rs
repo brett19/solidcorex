@@ -20,14 +20,18 @@
     clippy::indexing_slicing
 )]
 
+use scx_bodyq::{PointClass, classify_point};
 use scx_boolean::{BooleanError, BooleanOp, boolean};
 use scx_brep::op::{Cx, NoTrace, Scratch, Settings};
 use scx_brep::{Brep, Document};
 use scx_num::budget::{Budget, Stop};
 use scx_num::frame::Frame;
+use scx_num::hash::mix;
 use scx_num::units::Length;
 use scx_num::vector3d::{Point3, Vec3};
-use scx_testkit::recipe::{self, Op, Outcome, Part, Recipe, Shape, Unsupported};
+use scx_surface::Surface;
+use scx_testkit::csg::{Csg, ProbeSpec, Side, box_points};
+use scx_testkit::recipe::{self, Op, Outcome, Part, Recipe, Shape, Topology, Unsupported};
 
 /// Plate-and-gear benchmark bodies (BO6): many cylinder or block cuts in one result.
 const BENCH: [&str; 4] = ["box-cyl-hole", "plate-4", "plate-12", "gear-60"];
@@ -151,8 +155,9 @@ fn measure(
     .value
 }
 
-/// Judge one case against its recipe: built with the stated volume, area and region and
-/// shell counts, or `Unsupported` (a refusal never applies to these).
+/// Judge one case against its recipe: built with the stated volume (T9), area, region and
+/// shell counts and genus, and T10's points where the recipe has no slack; or `Unsupported`
+/// (a refusal never applies to these).
 fn check(name: &str) {
     let r = case(name);
     let got = run(&r);
@@ -178,6 +183,11 @@ fn check(name: &str) {
             let shells: usize = solid.iter().map(|r| r.shells().count()).sum();
             assert_eq!(solid.len() as u32, t.solid_regions, "{name}: regions");
             assert_eq!(shells as u32, t.shells, "{name}: shells");
+            assert_eq!(genus(&body, t), t.genus, "{name}: genus");
+            // A merged gap moves the boundary by up to the slack, past the probes' offsets.
+            if truth.slack == 0.0 {
+                points(name, &body, &r.csg().unwrap());
+            }
         }
         Outcome::Unsupported(u) => {
             let e = got.expect_err(name);
@@ -192,6 +202,98 @@ fn check(name: &str) {
         }
         other => panic!("{name}: not a case here: {other:?}"),
     }
+}
+
+/// The genus of `body` from the Euler-Poincare relation over its own cells:
+/// `V - E + sum (2 - 2 g_f - L_f) = 2 (S - G)`, with `L_f` the face's loops and `g_f` one
+/// only for a torus face with no loop. A seam is an edge like any other (the face it cuts
+/// open is a disc), so no edge is dropped.
+fn genus(body: &Brep, t: &Topology) -> u32 {
+    let faces: i64 = body
+        .faces()
+        .map(|f| {
+            let loops = f.loops().len() as i64;
+            let g = i64::from(loops == 0 && matches!(f.surface(), Surface::Torus(_)));
+            2 - 2 * g - loops
+        })
+        .sum();
+    let chi = body.vertices().count() as i64 - body.edges().count() as i64 + faces;
+    assert_eq!(chi % 2, 0, "Euler characteristic {chi} is odd");
+    let shells = i64::from(t.shells);
+    u32::try_from(shells - chi / 2).unwrap_or_else(|_| panic!("chi {chi} over {shells} shells"))
+}
+
+/// The coincidence the points are spaced by: the default resolution.
+const C: f64 = 1e-5;
+/// Seeded points in the result's grown box, and the most points on purpose taken.
+const BOX_POINTS: usize = 300;
+const PROBES: usize = 300;
+
+/// T10's points against the result (72 §8.1): seeded points through its box, and points
+/// on purpose (on each face, edge, vertex and meet of the recipe's parts that lies on the
+/// result's boundary, and `1/2`, `2` and `10` coincidences off it). Each is classified by
+/// `classify_point` on the result and judged by the recipe's CSG tree: a point on the
+/// boundary is `On` and within 1.5 coincidences of the tree's; a point two coincidences
+/// clear of it is in the region the tree says, solid or not.
+fn points(name: &str, body: &Brep, csg: &Csg) {
+    let (lo, hi) = csg.bounds().expect("a bounded recipe");
+    let seed = mix(&[name.len() as u64, 0x0b06]);
+    let mut at: Vec<([f64; 3], bool)> = box_points(lo, hi, 0.1, BOX_POINTS, seed)
+        .into_iter()
+        .map(|p| (p, false))
+        .collect();
+    let mut probes: Vec<(u64, [f64; 3], bool)> = csg
+        .probes(&ProbeSpec {
+            seed: mix(&[seed, 1]),
+            per_face: 2,
+            coincidence: C,
+            extent: 5.0,
+        })
+        .into_iter()
+        .enumerate()
+        .map(|(i, p)| (mix(&[seed, 2, i as u64]), p.point, p.offset == 0.0))
+        .collect();
+    probes.sort_by_key(|&(k, ..)| k);
+    at.extend(probes.into_iter().take(PROBES).map(|(_, p, on)| (p, on)));
+    let [mut on, mut inside, mut outside] = [0usize; 3];
+    for (p, on_feature) in at {
+        let got = classify_point(
+            body,
+            Point3::new(p[0], p[1], p[2]),
+            &mut Budget::unlimited(),
+            &Stop::new(),
+        )
+        .unwrap_or_else(|e| panic!("{name} {p:?}: {e}"));
+        let solid = match got {
+            PointClass::On(_) => None,
+            PointClass::In(r) => Some(body.region(r).is_some_and(scx_brep::Region::is_solid)),
+            _ => panic!("{name} {p:?}: {got:?}"),
+        };
+        let truth = csg.side(p, 2.0 * C);
+        let ok = match solid {
+            None => csg.side(p, 1.5 * C) == Side::Band,
+            Some(true) => {
+                truth == Side::In || (truth == Side::Band && csg.side(p, 1e-9) != Side::Out)
+            }
+            Some(false) => {
+                truth == Side::Out || (truth == Side::Band && csg.side(p, 1e-9) != Side::In)
+            }
+        };
+        assert!(ok, "{name} {p:?}: {got:?}, truth {truth:?}");
+        assert!(
+            !on_feature || solid.is_none(),
+            "{name} {p:?}: on the boundary, but {got:?}"
+        );
+        match solid {
+            None => on += 1,
+            Some(true) => inside += 1,
+            Some(false) => outside += 1,
+        }
+    }
+    assert!(
+        on > 20 && inside > 20 && outside > 20,
+        "{name}: {on} on, {inside} in, {outside} out"
+    );
 }
 
 // ---------------------------------------------------------------------------------------
