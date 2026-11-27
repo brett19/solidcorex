@@ -1,5 +1,5 @@
 // Written for solidcorex. Apache-2.0.
-//! The certified gaps of a body (research 74 §28, CF2a): each edge against its faces, its
+//! The certified gaps of a body (research 74 §28, `CF2a`): each edge against its faces, its
 //! uses and its vertices, its own extent, and (under [`Scope::Full`]) the ratio limit.
 //!
 //! **The allowances are finish's** (09 §3: a vertex is a ball, an edge a tube, distances
@@ -94,7 +94,10 @@ pub(crate) fn run(
 /// The ratio limit (09 §6), free: a recorded accuracy at or past 1000 zones.
 fn wide(body: &Brep, res: Resolution, out: &mut Found) {
     let limit = res.zone().mm() * MAX_ACCURACY_RATIO;
-    let over = |r: Option<&Recorded>| r.map(|r| r.acc.length()).filter(|acc| !(acc.mm() < limit));
+    let over = |r: Option<&Recorded>| {
+        r.map(|r| r.acc.length())
+            .filter(|acc| acc.mm().partial_cmp(&limit) != Some(Ordering::Less))
+    };
     for v in body.vertices() {
         if let Some(accuracy) = over(v.accuracy()) {
             out.list.push(Finding::WideVertex {
@@ -529,9 +532,11 @@ fn degenerate(
         .collect();
     let _ = budget.charge(DIAMETER_SAMPLES as u64);
     let mut lower = 0.0_f64;
-    for &from in [0, DIAMETER_SAMPLES / 2].iter() {
+    for p in [samples.first(), samples.get(DIAMETER_SAMPLES / 2)]
+        .into_iter()
+        .flatten()
+    {
         for q in &samples {
-            let p = samples[from];
             let d = norm([p[0] - q[0], p[1] - q[1], p[2] - q[2]]);
             if d.lo.is_finite() {
                 lower = lower.max(d.lo);
@@ -553,15 +558,13 @@ fn degenerate(
             .collect();
         let mut far = 0.0_f64;
         for (i, a) in boxes.iter().enumerate() {
-            for b in &boxes[i..] {
+            for b in boxes.iter().skip(i) {
                 // The farthest two points of the boxes: per axis the larger end difference.
-                let axis = |k: usize| {
-                    let x = (b[k] - Ivl::from(a[k].lo))
-                        .hi
-                        .max((a[k] - Ivl::from(b[k].lo)).hi);
+                let axis = |a: Ivl, b: Ivl| {
+                    let x = (b - Ivl::from(a.lo)).hi.max((a - Ivl::from(b.lo)).hi);
                     Ivl::from(x.max(0.0))
                 };
-                far = far.max(norm([axis(0), axis(1), axis(2)]).hi);
+                far = far.max(norm([axis(a[0], b[0]), axis(a[1], b[1]), axis(a[2], b[2])]).hi);
             }
         }
         upper = upper.min(if far.is_nan() { f64::INFINITY } else { far });

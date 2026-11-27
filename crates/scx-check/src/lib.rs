@@ -65,7 +65,7 @@
 //! ([`Breach::VertexNotManifold`]). It is the pass [`check`] runs (`structure`'s
 //! `pinched`), reported there as a finding.
 //!
-//! **Gaps** (CF2a, research 74 §28). After the structure, [`check`] certifies the
+//! **Gaps** (`CF2a`, research 74 §28). After the structure, [`check`] certifies the
 //! geometry against finish's allowances: each edge against its faces, its uses and its
 //! vertices, a degenerate edge, and under [`Scope::Full`] a vertex or edge too wide for the
 //! resolution. Each answer is proved or listed as [`Undecided`]; NURBS faces are

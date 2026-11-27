@@ -18,7 +18,7 @@
 //! - [`Findings::class`]: [`Class`], whether the body is a solid, a sheet or a mix. A sheet
 //!   is valid input (an importer's open shell), so the class is a fact, not a defect;
 //!
-//! and, by certified gaps on the geometry (research 74 §28, CF2a; [`crate::gaps`]):
+//! and, by certified gaps on the geometry (research 74 §28, task `CF2a`; [`crate::gaps`]):
 //!
 //! - [`Finding::EdgeOffFace`], [`Finding::PcurveOffEdge`], [`Finding::VertexOffEdge`]: an
 //!   edge further from a face's surface than its reach, a use's lift further from its edge
@@ -49,7 +49,7 @@ use crate::structure::{Class, classify, pinched};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[non_exhaustive]
 pub enum Scope {
-    /// Structure, gaps against the recorded accuracies and (CF2b) clearance: the default at
+    /// Structure, gaps against the recorded accuracies and (`CF2b`) clearance: the default at
     /// import. An accuracy past the ratio limit is not a defect of imported data (09 §6: it
     /// is a recorded raise with a warning, and clearance is what holds it), so no
     /// [`Finding::WideVertex`] or [`Finding::WideEdge`] is made.
@@ -58,7 +58,7 @@ pub enum Scope {
     /// As [`Scope::Import`], for a body a stitch produced. The pin's `ValidityScope::Stitched`
     /// excuses a gap past half a vertex's tolerance up to the sum of the two zones; here every
     /// allowance already is that sum (09 §3: distances add), so the two scopes ask the same
-    /// gaps, and the clearance the pin then proves is CF2b's.
+    /// gaps, and the clearance the pin then proves is `CF2b`'s.
     Stitched,
     /// Everything: as [`Scope::Import`], the ratio limit of results of our own operations
     /// ([`Finding::WideVertex`], [`Finding::WideEdge`]) and, later, faces crossing.
@@ -309,8 +309,8 @@ pub fn check(body: &Brep, cx: &mut Cx<'_>, scope: Scope) -> Result<Findings, Che
     let found = gaps::run(body, scope, &mut budget, cx.stop)?;
     list.extend(found.list);
     let mut undecided = found.undecided;
-    list.sort_by(|a, b| gaps::finding_key(a).cmp(&gaps::finding_key(b)));
-    undecided.sort_by(|a, b| gaps::undecided_key(a).cmp(&gaps::undecided_key(b)));
+    list.sort_by_key(gaps::finding_key);
+    undecided.sort_by_key(gaps::undecided_key);
     Ok(Findings {
         list,
         undecided,
