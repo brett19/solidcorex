@@ -17,6 +17,8 @@
 //! - [`pin_uv`]: the pin's NURBS-compatible uv of the analytic surfaces (research 63 D13).
 //! - [`curve_surface`]: certified intersections of a line, circle or ellipse with a plane,
 //!   cylinder, cone, sphere or torus (research 63 T2).
+//! - [`ssi`]: analytic surface-surface sections in closed form, with certified samples
+//!   (research 63 T5).
 //! - [`gen`]: seeded generators of well- and ill-conditioned inputs.
 
 pub mod analytic;
@@ -29,6 +31,7 @@ pub mod nurbs;
 pub mod pin_uv;
 pub mod poly;
 pub mod rat;
+pub mod ssi;
 
 pub use rat::Rat;
 

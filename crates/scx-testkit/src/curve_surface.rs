@@ -167,10 +167,10 @@ pub(crate) fn rsub(a: &R3, b: &R3) -> R3 {
 
 /// The exact frame coordinates `L = M^-1 (P - C)`: `L_i = (P - C) . row_i / det`.
 pub(crate) struct Local {
-    origin: R3,
+    pub(crate) origin: R3,
     /// The rows of `det M^-1`: `Y x Z`, `Z x X`, `X x Y`.
-    rows: [R3; 3],
-    det: Rat,
+    pub(crate) rows: [R3; 3],
+    pub(crate) det: Rat,
 }
 
 impl Local {
@@ -209,6 +209,31 @@ impl Local {
                 .zip(&row)
                 .fold(Poly::default(), |s, (di, ri)| s.add(&di.scale(ri)))
                 .scale(&inv)
+        })
+    }
+
+    /// The coordinates of a double-double point, in double-double.
+    pub(crate) fn of_dd(&self, p: V3) -> [Dd; 3] {
+        let o = self.origin.each_ref().map(to_dd);
+        let [p0, p1, p2] = p;
+        let [o0, o1, o2] = o;
+        let d = [p0 - o0, p1 - o1, p2 - o2];
+        let inv = to_dd(&self.det.recip().unwrap_or_default());
+        self.rows
+            .each_ref()
+            .map(|row| dd::dot(&d, &row.each_ref().map(to_dd)) * inv)
+    }
+
+    /// The gradient in world coordinates of a function of the frame coordinates whose
+    /// gradient there is `g`: `M^-T g`.
+    pub(crate) fn gradient(&self, g: [Dd; 3]) -> V3 {
+        let inv = to_dd(&self.det.recip().unwrap_or_default());
+        let rows = self.rows.each_ref().map(|r| r.each_ref().map(to_dd));
+        let [g0, g1, g2] = g;
+        let [r0, r1, r2] = rows;
+        core::array::from_fn(|i| {
+            let c = |r: &[Dd; 3]| r.get(i).copied().unwrap_or(Dd::new(0.0));
+            (g0 * c(&r0) + g1 * c(&r1) + g2 * c(&r2)) * inv
         })
     }
 
@@ -339,6 +364,27 @@ impl Implicit {
             Implicit::Torus { big2, small2 } => {
                 let s = &(&rho2 + &(z * z)) + &(big2 - small2);
                 &(&s * &s) - &(&rho2 * &big2.scale(2))
+            }
+        }
+    }
+
+    /// The gradient of `F` at frame coordinates, in double-double.
+    pub(crate) fn grad(&self, l: [Dd; 3]) -> [Dd; 3] {
+        let [x, y, z] = l;
+        let zero = Dd::new(0.0);
+        match self {
+            Implicit::Plane => [zero, zero, Dd::new(1.0)],
+            Implicit::Cylinder { .. } => [x * 2.0, y * 2.0, zero],
+            Implicit::Cone { r, k } => {
+                let k = to_dd(k);
+                let g = to_dd(r) + k * z;
+                [x * 2.0, y * 2.0, -(k * g * 2.0)]
+            }
+            Implicit::Sphere { .. } => [x * 2.0, y * 2.0, z * 2.0],
+            Implicit::Torus { big2, small2 } => {
+                let s = x * x + y * y + z * z + to_dd(&(big2 - small2));
+                let b = to_dd(big2) * 8.0;
+                [x * (s * 4.0 - b), y * (s * 4.0 - b), z * s * 4.0]
             }
         }
     }
@@ -558,4 +604,16 @@ pub fn roots(curve: &CurveKind, surface: &SurfaceKind) -> Result<Vec<Root>, Erro
 pub fn residual(surface: &SurfaceKind, p: [f64; 3]) -> Result<Rat, Error> {
     let (local, f) = implicit(surface)?;
     Ok(f.at(&local.of_point(&r3(p)?)))
+}
+
+/// A world point's first-order distance from the surface, `|F(p)| / |grad F(p)|`: `F`
+/// exact at `p`, the gradient in double-double. It is the distance to within a relative
+/// `O(d / size)` (zero exactly on the surface); at a point where the gradient vanishes
+/// (a cone's apex) it is `|F|`.
+pub fn distance(surface: &SurfaceKind, p: [f64; 3]) -> Result<f64, Error> {
+    let (local, f) = implicit(surface)?;
+    let value = to_dd(&f.at(&local.of_point(&r3(p)?))).abs();
+    let g = local.gradient(f.grad(local.of_dd(p.map(Dd::new))));
+    let norm = dd::dot(&g, &g).sqrt();
+    Ok(if norm.hi > 0.0 { value / norm } else { value }.to_f64())
 }

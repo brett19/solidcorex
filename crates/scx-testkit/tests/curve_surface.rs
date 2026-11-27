@@ -628,3 +628,43 @@ fn pin_uv_is_none_only_on_the_cones_far_nappe() {
     check_hits(&c, &s, &h, 1e-14);
     let _ = pin_uv_of(&s, h[1].uv);
 }
+
+/// The first-order distance is the true distance off a plane, and off a sphere the closed
+/// form `(rho^2 - r^2) / (2 rho)` at the radius `rho`; zero on each. The frames are exact
+/// (signed world axes): a rounded frame's image of the sphere is off it by about `1e-16 r`,
+/// which the closed form would not see.
+#[test]
+fn the_first_order_distance_is_the_closed_form_off_a_plane_and_a_sphere() {
+    use scx_testkit::curve_surface::distance;
+    let mut rng = Rng::new(0x7203);
+    for _ in 0..50 {
+        let f = gen::axis_frame(&mut rng);
+        let r = 0.5 + rng.next_f64();
+        let h = 1e-6 * rng.next_signed_unit();
+        let sphere = SurfaceKind::Sphere(Sphere {
+            frame: f,
+            radius: r,
+        });
+        let plane = SurfaceKind::Plane(Plane { frame: f });
+        let rho = r + h;
+        let p = core::array::from_fn(|i| f.origin[i] + rho * f.x[i]);
+        // The point as rounded: its radius and height, recomputed in double-double.
+        let l = core::array::from_fn::<Dd, 3, _>(|i| Dd::new(p[i]) - Dd::new(f.origin[i]));
+        let rho = dd::dot(&l, &l).sqrt();
+        let want = ((rho * rho - Dd::new(r) * r) / (rho * 2.0)).abs().to_f64();
+        let got = distance(&sphere, p).unwrap();
+        assert!((got - want).abs() <= 1e-12 * want, "{got} {want}");
+        let z: [Dd; 3] = f.z.map(Dd::new);
+        let want = dd::dot(&l, &z).abs().to_f64() / dd::dot(&z, &z).sqrt().to_f64();
+        let got = distance(&plane, p).unwrap();
+        assert!(
+            (got - want).abs() <= 1e-14 * want.max(1e-12),
+            "{got} {want}"
+        );
+        let on = gen::point_on(&mut rng, &sphere);
+        assert_eq!(
+            residual(&sphere, on).unwrap().is_zero(),
+            distance(&sphere, on).unwrap() == 0.0
+        );
+    }
+}

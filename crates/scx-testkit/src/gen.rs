@@ -8,7 +8,7 @@
 
 use scx_num::hash::Rng;
 
-use crate::analytic::{Circle, Ellipse, Frame, Line, Plane, Sphere};
+use crate::analytic::{Circle, Cone, Cylinder, Ellipse, Frame, Line, Plane, Sphere, Torus};
 use crate::curve_surface::{self, CurveKind, SurfaceKind};
 use crate::data::{CurveData, SurfaceData};
 use crate::dd::{self, Dd};
@@ -336,4 +336,78 @@ pub fn ellipse_through(rng: &mut Rng, p: [f64; 3]) -> CurveKind {
         semi_x,
         semi_y,
     })
+}
+
+/// A random plane through `p`.
+pub fn plane_through(rng: &mut Rng, p: [f64; 3]) -> Plane {
+    Plane {
+        frame: frame_at(rng, p),
+    }
+}
+
+/// A random surface of revolution (cylinder, cone, sphere or ring torus) on `frame`, for
+/// coaxial pairs: radii in `[1/4, 5/4)`, a torus's major radius above its minor.
+pub fn revolved(rng: &mut Rng, frame: Frame) -> SurfaceKind {
+    let radius = 0.25 + rng.next_f64();
+    match below(rng, 4) {
+        0 => SurfaceKind::Cylinder(Cylinder { frame, radius }),
+        1 => SurfaceKind::Cone(Cone {
+            frame,
+            radius,
+            semi_angle: 0.1 + 1.2 * rng.next_f64(),
+        }),
+        2 => SurfaceKind::Sphere(Sphere { frame, radius }),
+        _ => SurfaceKind::Torus(Torus {
+            frame,
+            major: radius + 0.25 + rng.next_f64(),
+            minor: radius,
+        }),
+    }
+}
+
+/// A random frame whose axes are the world axes, signed and permuted, at a dyadic origin:
+/// shifts along its `z` by dyadic steps stay exactly on its axis.
+pub fn axis_frame(rng: &mut Rng) -> Frame {
+    let e = |i: usize, s: f64| core::array::from_fn(|j| if j == i { s } else { 0.0 });
+    let sign = |rng: &mut Rng| if below(rng, 2) == 0 { 1.0 } else { -1.0 };
+    let (i, j) = (below(rng, 3), below(rng, 2));
+    let j = (i + 1 + j) % 3;
+    let (x, y): ([f64; 3], [f64; 3]) = (e(i, sign(rng)), e(j, sign(rng)));
+    let origin = core::array::from_fn(|_| (below(rng, 33) as f64 - 16.0) / 16.0);
+    Frame {
+        origin,
+        x,
+        y,
+        z: cross(x, y),
+    }
+}
+
+/// `frame` moved along its `z` by `t` (exactly, for an axis frame and a dyadic `t`).
+pub fn along(frame: Frame, t: f64) -> Frame {
+    Frame {
+        origin: offset(frame.origin, t, frame.z),
+        ..frame
+    }
+}
+
+/// A plane through `p` whose normal is `eps` (radians, small) off perpendicular to `axis`:
+/// it meets a cylinder on `axis` in a long ellipse.
+pub fn near_axial_plane(rng: &mut Rng, p: [f64; 3], axis: [f64; 3], eps: f64) -> Plane {
+    let f = frame_at(rng, p);
+    let side = cross(axis, f.x);
+    let n2: f64 = side.iter().map(|v| v * v).sum();
+    let side = side.map(|v| v / n2.sqrt());
+    // The plane's x along the axis tilted by eps, its y across.
+    let mut x = axis;
+    for (xi, ci) in x.iter_mut().zip(cross(side, axis)) {
+        *xi += eps * ci;
+    }
+    Plane {
+        frame: Frame {
+            origin: p,
+            x,
+            y: side,
+            z: cross(x, side),
+        },
+    }
 }
