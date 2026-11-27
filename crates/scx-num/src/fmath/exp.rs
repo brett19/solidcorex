@@ -6,13 +6,14 @@
 //! `e^x = 2^(k/128) e^r`; the table holds `2^(j/128)` for `j = k mod 128` as a
 //! double-double, and `e^r - 1` is a polynomial to `r^6` (truncation below `2^-71`).
 
-use super::dd::{at, round_int, round_scaled};
+use super::accurate;
+use super::dd::{at, round_int, round_scaled_or};
 use super::tables::{EXP2_J, INV_LN2_128, LN2, LN2_128_HI, LN2_128_LO};
 use crate::eft::{fast_two_sum, two_prod, two_sum};
 
 /// `e^(rh + rl) * 2^(k/128)` as `((hi, lo), m)`, meaning `(hi + lo) * 2^m`, for
 /// `|rh| <= ln(2)/256` (a little over is harmless) and any `k`. `hi` lies in `[0.99, 2.01]`.
-fn exp_reduced(k: i32, rh: f64, rl: f64) -> ((f64, f64), i32) {
+pub(super) fn exp_reduced(k: i32, rh: f64, rl: f64) -> ((f64, f64), i32) {
     // e^r - 1 = r + r^2/2 + r^3/6 + ... + r^6/720 (the next term is below 2^-71).
     let q = rh
         * rh
@@ -27,7 +28,7 @@ fn exp_reduced(k: i32, rh: f64, rl: f64) -> ((f64, f64), i32) {
 }
 
 /// `e^(xh + xl)` as `((hi, lo), m)`, meaning `(hi + lo) * 2^m`, for a double-double with
-/// `|xh| < 1400`. Relative error below `2^-68`.
+/// `|xh| < 1400`. Relative error below `2^-68` (the largest seen is `2^-69.2`).
 pub(super) fn exp_core(xh: f64, xl: f64) -> ((f64, f64), i32) {
     let k = round_int(xh * INV_LN2_128);
     // k * LN2_128_HI is exact (35 + 18 bits) and xh - k * LN2_128_HI is exact
@@ -51,8 +52,12 @@ pub(super) fn exp(x: f64) -> f64 {
         return 0.0;
     }
     let ((hi, lo), m) = exp_core(x, 0.0);
-    round_scaled(hi, lo, m)
+    round_scaled_or(hi, lo, EXP_ERR, m, || accurate::exp(x))
 }
+
+/// The error radius of [`exp_core`] and [`exp_reduced`] for the rounding test, relative
+/// (`hi` is positive): `2^-67`, twice the bound.
+pub(super) const EXP_ERR: f64 = 6.776263578034403e-21; // 2^-67
 
 /// `2^x`.
 pub(super) fn exp2(x: f64) -> f64 {
@@ -71,5 +76,5 @@ pub(super) fn exp2(x: f64) -> f64 {
     let (rh, e) = two_prod(f, LN2.0);
     let (rh, rl) = fast_two_sum(rh, e + f * LN2.1);
     let ((hi, lo), m) = exp_reduced(k as i32, rh, rl);
-    round_scaled(hi, lo, m)
+    round_scaled_or(hi, lo, EXP_ERR, m, || accurate::exp2(x))
 }

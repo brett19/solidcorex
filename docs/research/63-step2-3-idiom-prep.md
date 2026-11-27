@@ -2220,9 +2220,25 @@ image's `point` with `Approach::Above`):
 
 "Whole" is one turn each way (the plane `[0, 1]^2`); "one span" an extent inside one quarter
 arc each way. So a whole torus costs about 11 image evaluations, a trimmed patch about 3; mostly the four
-`Vec`s (knots, points, weights) the NURBS takes. 9 A3's comparison against one inversion is
-deferred to SU4, which builds the inversion; A3's verdict (one conversion per intersection
-call, not per evaluation) stands on these numbers.
+`Vec`s (knots, points, weights) the NURBS takes. A3's comparison against one analytic
+inversion, measured 11-27 after SU4 (release build, ns per call, best of 9 timed batches in the
+best of three runs, pinned to one core; the inversion is `invert(p, None)` over 64 queries
+around the surface, global, closed form):
+
+| | `to_nurbs`, whole | `to_nurbs`, one span | `invert` | whole / `invert` | span / `invert` |
+|---|---:|---:|---:|---:|---:|
+| plane | 94.5 | 94.9 | 8.1 | 11.7 | 11.7 |
+| cylinder | 285.1 | 145.5 | 51.2 | 5.6 | 2.8 |
+| cone | 297.2 | 150.8 | 50.6 | 5.9 | 3.0 |
+| sphere | 464.8 | 186.7 | 60.7 | 7.7 | 3.1 |
+| torus | 680.2 | 176.5 | 59.2 | 11.5 | 3.0 |
+
+("Whole" is the kind's whole uv extent, so the sphere and torus are one turn each way and the
+cone is `v` over `[0.5, 2]`; the three runs agreed within 2%, and the conversion is a little
+faster than the table above, whose figures are one earlier run.) A conversion costs 3 to 12
+inversions, so the verdict stands and sharpens: convert once per intersection call, never per
+query; inverting a point against the analytic kind is cheaper than the NURBS image's own
+`point` (63-78 ns), so nothing should convert in order to invert.
 
 From research 66: no technique there changes this conversion. Its implicitisation (§8.4) is
 an approximate implicit form to seed SSI; our kinds have exact implicit forms already, which
@@ -2234,8 +2250,8 @@ context (§14) match A3: if the conversion ever shows in a profile, memoise it i
 inner loops (§1 point 4) would ask for a caller-provided buffer; not taken, as the conversion
 runs once per intersection call and `NurbsSurface` owns its storage.
 
-Open from SU3: the inversion cost comparison (SU4); a `to_nurbs` into a caller's buffer if a
-profile ever asks.
+Open from SU3: a `to_nurbs` into a caller's buffer if a profile ever asks (the inversion cost
+comparison is closed above).
 
 ### 4.9 SU7 as built (11-27)
 

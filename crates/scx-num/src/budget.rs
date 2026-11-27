@@ -14,10 +14,9 @@
 //!   and one that sees it set returns [`Stopped`] (kind `Cancelled`), never a partial answer
 //!   as if complete.
 //!
-//! The global solver's own bounds have the same meaning: `SolveOptions::max_branches` is a
-//! budget of `max_branches` branches, of which a solve completes that many and fails on the
-//! next, as a [`Budget`] of that limit charged one per branch does; and
-//! `BranchSolver::cancelled` is [`Stop::is_set`], asked at every branch after the budget.
+//! The global solver (`scx_algo::global_solve::solve`) takes both: it charges one unit a
+//! branch, so a limit of `n` completes `n` branches and fails on the next, and polls
+//! [`Stop::is_set`] at every branch after the budget (04, 11-27).
 
 use core::fmt;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -226,7 +225,9 @@ mod tests {
         );
     }
 
+    // wasm32-wasip1 cannot spawn threads; the xplat job runs this crate there.
     #[test]
+    #[cfg_attr(target_os = "wasi", ignore = "wasi has no threads")]
     fn stop_is_shared_across_threads() {
         fn shared<T: Send + Sync>() {}
         shared::<Stop>();
