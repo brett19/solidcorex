@@ -15,14 +15,15 @@ use std::sync::Arc;
 
 use scx_curve::Curve;
 use scx_num::extent1d::Extent1d;
+use scx_num::frame::Sense;
 
 use crate::brep::Brep;
-use crate::changes::Changes;
+use crate::changes::{Changes, LineageError, Log, Operand, Origin, Tracked};
 use crate::check;
 use crate::document::Document;
 use crate::error::{Absent, TableFull};
 use crate::finish::Unfinished;
-use crate::id::{EdgeId, FaceId, RegionId, ShellId, VertexId};
+use crate::id::{EdgeId, Entity, FaceId, RegionId, ShellId, VertexId};
 use crate::record::{
     EdgeAdj, EdgeGeom, EdgeShape, FaceRecord, Fin, RegionRecord, ShellRecord, VertexRecord,
 };
@@ -36,6 +37,8 @@ pub struct Draft {
     /// Edges whose curve is not yet attached (63 A10): their stored shape is a placeholder
     /// no view shows.
     pending: BTreeSet<EdgeId>,
+    /// What the edit has done, for [`Changes`].
+    log: Log,
 }
 
 impl Default for Draft {
@@ -51,8 +54,9 @@ impl Draft {
         Self::from_tables(Tables::empty())
     }
 
-    pub(crate) const fn from_tables(t: Tables) -> Self {
+    pub(crate) fn from_tables(t: Tables) -> Self {
         Self {
+            log: Log::new(&t),
             t,
             pending: BTreeSet::new(),
         }
@@ -62,17 +66,18 @@ impl Draft {
         At::drafting(&self.t, &self.pending)
     }
 
-    /// Checks the draft and stamps it with `doc`'s resolution.
+    /// Checks the draft and stamps it with `doc`'s resolution, and says what the edit
+    /// changed since the draft was made.
     ///
     /// # Errors
     ///
     /// [`Unfinished`], holding the draft unchanged and the [`FinishCause`](crate::FinishCause).
     pub fn finish(self, doc: &Document) -> Result<(Brep, Changes), Box<Unfinished>> {
         match check::run(&self.t, &self.pending) {
-            Ok(()) => Ok((
-                Brep::from_tables(self.t, doc.resolution()),
-                Changes::default(),
-            )),
+            Ok(()) => {
+                let changes = self.log.changes(&self.t);
+                Ok((Brep::from_tables(self.t, doc.resolution()), changes))
+            }
             Err(cause) => Err(Box::new(Unfinished { draft: self, cause })),
         }
     }
@@ -190,10 +195,59 @@ impl Draft {
     ///
     /// The fins do not follow a loop edit: a caller that adds, removes or re-senses a use
     /// writes its edges' fins with [`Draft::adjacency_mut`] to match.
+    ///
+    /// The first write to a face the draft started with keeps its record as it was, for
+    /// [`Changes`]: after [`Brep::into_draft`] that write copies the record once.
     pub fn face_mut(&mut self, id: FaceId) -> Option<&mut FaceRecord> {
-        let face = Arc::make_mut(self.t.faces.get_mut(id)?);
+        let face = self.t.faces.get_mut(id)?;
+        self.log.face_written(id, face);
+        let face = Arc::make_mut(face);
         face.cells.reset();
         Some(face)
+    }
+
+    /// Edits the face's record with `edit`, as [`Draft::face_mut`], and then keeps its
+    /// edges' fins in step with its uses: a use removed takes one fin of its sense off its
+    /// edge, and a use added appends one. Where an edge has more than two fins, the caller
+    /// puts them in radial order with [`Draft::adjacency_mut`]. `None` when the draft holds
+    /// no such face.
+    pub fn edit_face<R>(
+        &mut self,
+        id: FaceId,
+        edit: impl FnOnce(&mut FaceRecord) -> R,
+    ) -> Option<R> {
+        let mut was = fin_keys(self.t.faces.get(id)?);
+        let face = self.face_mut(id)?;
+        let out = edit(face);
+        let mut now = fin_keys(face);
+        was.sort_unstable();
+        now.sort_unstable();
+        let (mut i, mut j) = (0, 0);
+        loop {
+            match (was.get(i), now.get(j)) {
+                (Some(a), Some(b)) if a == b => {
+                    i += 1;
+                    j += 1;
+                }
+                (Some(&(edge, forward)), b) if b.is_none_or(|b| (edge, forward) < *b) => {
+                    let fin = Fin::new(id, sense(forward));
+                    if let Some(adj) = self.t.adjacency.get_mut(edge)
+                        && let Some(at) = adj.fins.iter().position(|f| *f == fin)
+                    {
+                        adj.fins.remove(at);
+                    }
+                    i += 1;
+                }
+                (_, Some(&(edge, forward))) => {
+                    if let Some(adj) = self.t.adjacency.get_mut(edge) {
+                        adj.fins.push(Fin::new(id, sense(forward)));
+                    }
+                    j += 1;
+                }
+                (_, None) => break,
+            }
+        }
+        Some(out)
     }
 
     /// The edge's geometry part, to write. Resets its cells and those of every face it has
@@ -204,6 +258,7 @@ impl Draft {
             reset_faces(&mut self.t.faces, adj);
         }
         let geom = self.t.edges.get_mut(id)?;
+        self.log.edge_written(id, geom);
         geom.cells.reset();
         Some(geom)
     }
@@ -216,7 +271,7 @@ impl Draft {
     /// The vertex's record, to write. Resets the cells of every edge that starts or ends
     /// at it and of their faces. Scans the edge table.
     pub fn vertex_mut(&mut self, id: VertexId) -> Option<&mut VertexRecord> {
-        self.t.vertices.get(id)?;
+        self.log.vertex_written(id, self.t.vertices.get(id)?);
         let Tables {
             faces,
             edges,
@@ -256,6 +311,13 @@ impl Draft {
 
     /// Removes the face, and its fins from its edges.
     pub fn remove_face(&mut self, id: FaceId) -> Option<FaceRecord> {
+        let face = self.drop_face(id)?;
+        self.log.removed(id.into());
+        Some(face)
+    }
+
+    /// Removes the face and its fins, recording nothing.
+    fn drop_face(&mut self, id: FaceId) -> Option<FaceRecord> {
         let face = self.t.faces.remove(id)?;
         let mut edges: Vec<EdgeId> = face
             .loops
@@ -275,6 +337,12 @@ impl Draft {
 
     /// Removes the edge, both parts.
     pub fn remove_edge(&mut self, id: EdgeId) -> Option<(EdgeGeom, EdgeAdj)> {
+        let removed = self.drop_edge(id)?;
+        self.log.removed(id.into());
+        Some(removed)
+    }
+
+    fn drop_edge(&mut self, id: EdgeId) -> Option<(EdgeGeom, EdgeAdj)> {
         let geom = self.t.edges.remove(id)?;
         let adj = self.t.adjacency.remove(id).unwrap_or_default();
         self.pending.remove(&id);
@@ -283,7 +351,110 @@ impl Draft {
 
     /// Removes the vertex.
     pub fn remove_vertex(&mut self, id: VertexId) -> Option<VertexRecord> {
-        self.t.vertices.remove(id)
+        let vertex = self.t.vertices.remove(id)?;
+        self.log.removed(id.into());
+        Some(vertex)
+    }
+
+    // Lineage (01 §2.6): what the operation declares for `Changes`.
+
+    /// Records that the new entity `new` came from `origin`; an entity may have several.
+    /// An origin naming another new entity stands for that entity's origins as declared so
+    /// far. A new entity with none declared is [`Origin::Free`].
+    ///
+    /// # Errors
+    ///
+    /// [`LineageError::NotCreated`] when `new` is not live or the draft started with it;
+    /// [`LineageError::UnknownOrigin`] when `origin` names this body's entity that the draft
+    /// neither started with nor holds, or a region or shell of it.
+    pub fn derive<I: Tracked>(&mut self, new: I, origin: Origin) -> Result<(), LineageError> {
+        let entity: Entity = new.into();
+        if self.log.started_with(entity) || !self.holds(entity) {
+            return Err(LineageError::NotCreated { entity });
+        }
+        let own = match origin {
+            Origin::Offset(e) => Some(e),
+            o => o.part_of(),
+        };
+        if let Some(e) = own
+            && (Origin::of(e).is_none() || !(self.log.started_with(e) || self.holds(e)))
+        {
+            return Err(LineageError::UnknownOrigin { origin });
+        }
+        let origins = self.log.resolve(origin);
+        self.log.derive(entity, origins);
+        Ok(())
+    }
+
+    /// Records that `operand`'s `entity` lies on `onto`, which takes its place.
+    ///
+    /// # Errors
+    ///
+    /// [`Absent`] when the draft holds no `onto`.
+    pub fn coincident<I: Tracked>(
+        &mut self,
+        operand: Operand,
+        entity: I,
+        onto: I,
+    ) -> Result<(), Absent> {
+        let onto: Entity = onto.into();
+        if !self.holds(onto) {
+            return Err(Absent { entity: onto });
+        }
+        self.log.coincident(operand, entity.into(), onto);
+        Ok(())
+    }
+
+    /// Merges the face `absorbed` into `survivor`: removes it, and its fins, and gives it
+    /// back. The caller makes `survivor`'s loops whole (with [`Draft::edit_face`]). `None`
+    /// when either is not live, or they are one face.
+    pub fn merge_face(&mut self, absorbed: FaceId, survivor: FaceId) -> Option<FaceRecord> {
+        self.t.faces.get(survivor)?;
+        if absorbed == survivor {
+            return None;
+        }
+        let face = self.drop_face(absorbed)?;
+        self.log.absorbed(absorbed.into(), survivor.into());
+        Some(face)
+    }
+
+    /// Merges the edge `absorbed` into `survivor`: removes it, both parts, and gives it
+    /// back. `None` when either is not live, or they are one edge.
+    pub fn merge_edge(
+        &mut self,
+        absorbed: EdgeId,
+        survivor: EdgeId,
+    ) -> Option<(EdgeGeom, EdgeAdj)> {
+        self.t.edges.get(survivor)?;
+        if absorbed == survivor {
+            return None;
+        }
+        let edge = self.drop_edge(absorbed)?;
+        self.log.absorbed(absorbed.into(), survivor.into());
+        Some(edge)
+    }
+
+    /// Merges the vertex `absorbed` into `survivor`: removes it and gives it back. `None`
+    /// when either is not live, or they are one vertex.
+    pub fn merge_vertex(&mut self, absorbed: VertexId, survivor: VertexId) -> Option<VertexRecord> {
+        self.t.vertices.get(survivor)?;
+        if absorbed == survivor {
+            return None;
+        }
+        let vertex = self.t.vertices.remove(absorbed)?;
+        self.log.absorbed(absorbed.into(), survivor.into());
+        Some(vertex)
+    }
+
+    /// Whether the draft holds `entity`.
+    fn holds(&self, entity: Entity) -> bool {
+        match entity {
+            Entity::Region(r) => self.t.regions.get(r).is_some(),
+            Entity::Shell(s) => self.t.shells.get(s).is_some(),
+            Entity::Face(f) => self.t.faces.get(f).is_some(),
+            Entity::Edge(e) => self.t.edges.get(e).is_some(),
+            Entity::Vertex(v) => self.t.vertices.get(v).is_some(),
+        }
     }
 
     // Reading: the same views as a `Brep`'s, at the draft stage.
@@ -356,6 +527,24 @@ impl Draft {
     #[cfg(test)]
     pub(crate) const fn tables(&self) -> &Tables {
         &self.t
+    }
+}
+
+/// The `(edge, sense)` of each of `face`'s uses: the fins it needs.
+/// The sense as `Forward`, to sort by (`Sense` has no order).
+fn fin_keys(face: &FaceRecord) -> Vec<(EdgeId, bool)> {
+    face.loops
+        .iter()
+        .flat_map(|l| &l.uses)
+        .map(|u| (u.edge, u.sense == Sense::Forward))
+        .collect()
+}
+
+const fn sense(forward: bool) -> Sense {
+    if forward {
+        Sense::Forward
+    } else {
+        Sense::Reversed
     }
 }
 

@@ -4126,6 +4126,117 @@ in for BR8's largest generated body, which does not exist yet.
 - At 10,000 faces (about 1.4 MB of face records) the walk falls out of L2.
 - Research 51's 4.9 ns per face is met up to 1,024 faces.
 
+### 6.8 BR3 as built (11-27)
+
+Decided by analysis and an adversarial pass. Proposed for review; not yet ruled.
+
+**What was built** (`crates/scx-brep/src/changes.rs`, the recording in `draft.rs`):
+
+- `Draft::finish` returns honest `Changes`: for faces, edges and vertices, an `EntityChanges<I>`
+  with `replaced: Vec<(I, Touch)>`, `created: Vec<(I, Origins)>`, `merged: Vec<Merge<I>>`,
+  `coincident: Vec<Coincidence<I>>`, `removed: Vec<I>` and `split: Vec<Split<I>>`. Every list is in
+  id order; split pieces follow the key below.
+- `Touch` is `Boundary` (loops, sides, an edge's ends) or `Geometry` (surface, curve, interval,
+  accuracy, a vertex's point).
+- `Origin` is `Face`, `Edge`, `Vertex` (part of an entity the edit started with), `Offset(Entity)`,
+  `Operand(Operand, Entity)` (from a tool body) or `Free`. `Origins` is sorted, without repeats,
+  never empty; `[Free]` costs no allocation.
+- Draft calls added: `derive(new, origin) -> Result<(), LineageError>`,
+  `coincident(operand, entity, onto) -> Result<(), Absent>`, `merge_face`, `merge_edge`,
+  `merge_vertex` (remove the absorbed entity and name its survivor), and
+  `edit_face(id, |&mut FaceRecord| ..) -> Option<R>`.
+- `carry(changes, own, operands, rule) -> BTreeMap<I, T>` with `trait Carry<T>` (`split`, `merge`,
+  `coincident`, each returning `Option<T>`). `IdMap::renumber` carries an application table across
+  `compact`.
+- `Tracked` (sealed; `FaceId`, `EdgeId`, `VertexId`) makes all of it generic over the kind.
+
+**Decisions**, each with the case for and against:
+
+1. *Touch is found by diff, not by logging each write.* The first `face_mut`, `edge_mut` or
+   `vertex_mut` on an entity the draft started with keeps its record as it was (a face's `Arc`, an
+   edge's geometry without cells, a vertex); `finish` compares. For: a write that changes nothing
+   reports nothing (an edit that touches nothing gives empty `Changes`, 63 §6.3's identity oracle),
+   and no mutation path can forget to log. Against: one copy per first write, and the touch is
+   record-level only: a face around a moved vertex, or an edge whose radial order changed, is not
+   listed. Change if an application needs "faces whose geometry moved through a vertex": that is
+   derivable from `vertices.replaced` and the stars.
+2. *Under `into_draft`, the first write to a before-face copies it once*, since the kept snapshot
+   shares its `Arc`. BR1's test `into_draft_writes_in_place_when_unshared` now asserts in-place
+   writes for edges and for faces the draft added. For: honest `Changes` need the old record.
+   Against: `into_draft`'s "no copy" promise is weaker. Change if a profile shows it: a draft could
+   take a "no changes" flag.
+3. *Vertices get a full `EntityChanges`* (01 §2.6 has a smaller `VertexChanges`). For: one generic
+   `carry`, and vertex merges and coincidences are real (a boolean's coincident corners). Against:
+   a few unused lists. Kept.
+4. *Named `Merge` and `Coincidence` records* (57 §5.1) and a `split` list. A split is read off the
+   created entities that name a kept or removed entity as their part: `Split { from, pieces }` lists
+   `from` itself among the pieces when it survives.
+5. *Split piece order* is a total key: the lineage of the bounding entities (a face's edges, an
+   edge's vertices), then the uv midpoints of its boundary (`total_cmp`), then the id. For: stable
+   across executors and independent of creation order in the common case. Against: 01 §2.6 says an
+   interior point; boundary midpoints are cheaper and need no point-in-face test, but two pieces
+   with the same bounding lineage and the same boundary midpoints fall to the id, which is creation
+   order. Change if BR7's ports show a case where that matters.
+6. *`Origin::Offset`* added beyond 01, for offset and thicken (the pin's `offset_history`,
+   `issue_1973_*`). It carries by the same-kind rule (an offset face takes the face's values).
+7. *`derive` resolves at call time*: an origin naming a created entity stands for that entity's
+   origins as they are then. For: lineage always ends at the before-body or an operand. Against: a
+   later `derive` on the intermediate does not flow forward. `derive` on a before-id, or naming an
+   absent origin, is refused (`LineageError::NotCreated`, `UnknownOrigin`).
+8. *A created entity absorbed into a before-id drops its lineage*; one absorbed into a created id
+   adds its origins. A chain of merges is followed to the end; an absorbed entity whose survivor is
+   gone counts as removed.
+9. *`Carry` rules return `Option`* (01 has `T`), so "no value" is expressible, as the pin's
+   attribute handlers allow (`issue_1730_application_attribute_handlers`). Cross-kind origins carry
+   nothing.
+10. *`carry` takes `operands: &[&BTreeMap<I, T>]`*, indexed by `Operand`, for the boolean
+    attribute tests (`issue_1462_boolean_*`). The tables are `BTreeMap`, as `IdMap` is taken by
+    `compact`.
+11. *BR1's question, loop edits keeping fins in step: yes.* `edit_face` diffs the face's
+    `(edge, sense)` uses before and after the closure and fixes only the changed fins, so a seam's
+    two fins stay distinct. `face_mut` is kept for edits that do not move uses. `attach_curve`
+    needed nothing: its touch comes from the diff.
+12. *Regions and shells are not reported.* No pin test reads them; add when one does.
+13. *No difftest*: the pin has no equivalent of `Changes` to compare against (its history is
+    callbacks into application code). BR7 ports the tests themselves.
+14. Research 66 has nothing on provenance.
+
+**Tests** (15 in `changes/tests.rs`): each mutation's event and touch (including a re-attach of the
+same curve giving none), adds and removes, splits ordered by bound and by place, merges through
+chains, refused derives, coincidences following the survivor, the same edit twice giving equal
+`Changes`, carry over a split, merge, coincidence and offset, carry across an edit then `compact`,
+and `edit_face` on a seam.
+
+**Cost** (MEASURED, throwaway timer, a 100×100 quad sheet: 10,000 faces, 20,200 edges, 10,201
+vertices; best of 9; ns per call or µs per finish; the host was loaded, so ±15%):
+
+| Step | Before | After |
+|---|---|---|
+| `add_*`, per entity | 50–72 | 60–80 |
+| `face_mut`, first write | 90–124 | 127–142 |
+| `face_mut`, later write | 37–49 | 53 |
+| `edge_mut`, first write | 12–18 | 35–41 |
+| `vertex_mut` (the star scan dominates) | 16,000–26,000 | 16,000–29,000 |
+| `remove_face` / `remove_edge` / `remove_vertex` | 106–137 / 42–58 / 10–13 | 116–152 / 52–67 / 9–11 |
+| `finish`, built draft (40,401 created) | 700–1,200 | 1,800–2,000 |
+| `finish`, untouched edit | 260–500 | 320–540 |
+| `finish`, `face_mut` on every face | 540–950 | 940–1,400 |
+| `finish`, `face_mut` on 100 faces | 300–540 | 320–540 |
+| `edit_face`, no change / rotated loop | | 156–175 / 171–204 |
+| split every face via `derive`, then `finish` | | 5,400–8,200 |
+
+Snapshots are a bit per slot plus a list in first-write order, so a repeat write costs a bit test.
+The remaining first-write cost is the copy itself (an edge's curve clone). `finish` on a fully
+built draft pays for the 40,401-entry created lists.
+
+**Open**:
+
+- `Changes::then`, the composition oracle (63 §6.3), is not built; it needs a rule for a split of a
+  merged entity.
+- Whether `Offset` should carry by its own rule rather than the same-kind one.
+- Touch of faces around moved edges and vertices (decision 1).
+- The `into_draft` copy (decision 2).
+
 ## 7. `scx-record`
 
 The pin's sources are `topology/api_files`, `topology/part_file`, `topology/database_io` and
