@@ -288,6 +288,24 @@ takes about 0.5 s; each of its tests is under 0.7 s alone.
     `a = 2^-30` is the cylinder (`|rho - 1|` to `(|h| + 1) a`, and `|rho - 1 - h a|` to 1e-14).
   - The degenerate queries: on the axis, the tube's centre circle, a horn's centre, a spindle's pinch
     (exactly 0), the apex (exactly 0), on the axis above and below the apex for one nappe and both.
+- **`tests/project_t3.rs`** (T3, against facts that do not use its closed forms).
+  - Certified orthogonality: at every foot, the implicit equation of the ideal surface of
+    revolution and the cross product of the residual with its gradient are evaluated in interval
+    arithmetic over the foot's certified box. Both hold zero and are narrow (width under 1e-24 of
+    the scale), in exact and rotated frames, for ring, horn and spindle tori and both nappe choices
+    of the cone; a one-nappe foot is on the nappe. Circles of feet are checked at two opposite
+    points, and singular points (apex, pinches) are checked on the surface.
+  - Symmetry: a quarter turn of the query about the axis, a mirror in a meridian plane, and (torus)
+    a mirror in the equator leave the sorted distance enclosures and kinds bit for bit; points move
+    with the query, `u` by the turn, `v` fixed (negated by the equator). A turn by any angle,
+    rounded, agrees to 1e-13.
+  - Dense sampling: no point of a 73 by 73 grid over the whole parameter range (the admitted nappe
+    only, for one nappe), nor of a fine grid round each minimum, is nearer than the certified
+    nearest's lower end less 1e-26, nor nearer than that minimum; random, axis and equator queries.
+  - Axis and apex: an axis query gives a ring torus exactly two circles (a minimum and a maximum,
+    the near one at `sqrt(h^2 + R^2) - r`), a spindle its circles and both pinches, a cone the apex
+    and a circle at `|h| sin a` (none below the apex for one nappe); the apex itself gives distance
+    exactly zero, and a query `2^-40` below it inside the dual cone has the apex nearest.
 - **`tests/sample.rs`.**
   - Equal seeds give equal data.
   - Every generated curve is valid and clamped.
