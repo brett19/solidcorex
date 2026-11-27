@@ -4334,177 +4334,224 @@ fn batch_is_point_each(
     wrong.unwrap_or(Ok(()))
 }
 
-/// The real roots of `c` (ascending, every coefficient finite) as exact rationals, each to
-/// within a width far below the spacing of doubles at `scale`; `None` for a coefficient not
-/// finite or the zero polynomial.
-fn true_real_roots(c: &[f64], scale: f64) -> Option<(scx_testkit::poly::Poly, Vec<Rat>)> {
-    let rc: Option<Vec<Rat>> = c.iter().map(|&x| Rat::from_f64(x)).collect();
-    let p = scx_testkit::poly::Poly::new(rc?);
-    if p.is_zero() {
-        return None;
-    }
-    // 2^-64 of the spacing at the smallest root measured, never below 2^-1200
-    let e = if scale == 0.0 || !scale.is_finite() {
-        -1200
-    } else {
-        (scx_num::fmath::log2(scale.abs()).floor() as i64 - 116).max(-1200)
-    };
-    let roots = p
-        .real_roots(&Rat::one().scale(e))
-        .iter()
-        .map(|t| t.at.mid())
-        .collect();
-    Some((p, roots))
+/// The contract's `η` (module docs of `scx_algo::polynomial`): `2^-90`.
+const POLY_ETA: f64 = 8.077935669463161e-28;
+
+/// `Σ |c_i| |x|^i`.
+fn poly_size(c: &[f64], x: f64) -> f64 {
+    c.iter().rev().fold(0.0, |s, a| s * x.abs() + a.abs())
 }
 
-/// How far `z` is from the truth: the distance to the nearest true real root when one lies
-/// within `1e-4` of `|z|` (`Ok`), else the exact residual `|p(z)|` (`Err`: a grazing root
-/// of a complex pair near the axis, which has no real root to be near, or one root reported
-/// for a cluster, as `[0, 1e-9, 1e-9]` reported once near `7e-10`, which is near no one
-/// root of it on its own scale).
-fn root_error(p: &scx_testkit::poly::Poly, roots: &[Rat], z: f64) -> Result<f64, f64> {
-    let Some(rz) = Rat::from_f64(z) else {
-        return Err(f64::INFINITY);
-    };
-    let near = roots.iter().map(|r| (&rz - r).abs()).min();
-    match near {
-        Some(d) if d.to_f64() <= 1e-4 * z.abs() => Ok(d.to_f64()),
-        _ => Err(p.eval(&rz).abs().to_f64()),
+/// The distinct real roots of `c` (every coefficient finite, not all zero) as exact
+/// rationals with their multiplicities, ascending, each to within `2^-116` of the least
+/// nonzero root's magnitude (from Cauchy's lower bound), never coarser than needed to tell
+/// doubles apart there. A zero root is exactly zero.
+fn exact_real_roots(c: &[f64]) -> (scx_testkit::poly::Poly, Vec<(Rat, u32)>) {
+    let rc: Vec<Rat> = c.iter().filter_map(|&x| Rat::from_f64(x)).collect();
+    let p = scx_testkit::poly::Poly::new(rc);
+    let zeros = c.iter().take_while(|&&v| v == 0.0).count();
+    let rest = c.get(zeros..).unwrap_or(&[]);
+    let mut roots = Vec::new();
+    if let Some((&low, high)) = rest.split_first() {
+        // every nonzero root has `|r| >= |c_k| / (|c_k| + max_{i>k} |c_i|)`
+        let top = high.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+        let bound = low.abs() / (low.abs() + top);
+        let e = if bound > 0.0 && bound.is_finite() {
+            (scx_num::fmath::log2(bound).floor() as i64 - 116).max(-1200)
+        } else {
+            -1200
+        };
+        let q =
+            scx_testkit::poly::Poly::new(rest.iter().filter_map(|&x| Rat::from_f64(x)).collect());
+        roots = q
+            .real_roots(&Rat::one().scale(e))
+            .into_iter()
+            .map(|r| (r.at.mid(), r.multiplicity))
+            .collect();
     }
+    if zeros > 0 {
+        let at = roots.partition_point(|(r, _)| *r < Rat::zero());
+        roots.insert(at, (Rat::zero(), zeros as u32));
+    }
+    (p, roots)
 }
 
-/// The polished roots `got` against the pin's `pin` for the polynomial `c`: the same count,
-/// and each root, paired in order, at least as close to the true real root as the pin's
-/// (to one spacing of doubles at the root), or, for a grazing root with no real root near,
-/// of no larger exact residual (to one part in 10^6: the closed forms differ from the
-/// pin's in the last bit of `fmath`). Pairs within the difftest's tolerance are not judged.
-fn poly_roots_no_worse(c: &[f64], got: &[f64], pin: &[f64]) -> Result<(), String> {
-    if got.len() != pin.len() {
-        return Err(format!("{} roots, the pin's {}", got.len(), pin.len()));
+/// Twice the contract's bound at the true root `r` (half an ulp plus the pseudo-zero radius
+/// `min_k (k! η S(r) / |p^(k)(r)|)^(1/k)`), doubled so that half the least subnormal's
+/// spacing is not rounded away.
+fn poly_root_bound(p: &scx_testkit::poly::Poly, c: &[f64], r: &Rat) -> f64 {
+    let x = r.to_f64();
+    let s = poly_size(c, x);
+    let (mut d, mut fact, mut best) = (p.clone(), 1.0, f64::INFINITY);
+    for k in 1..c.len() {
+        d = d.derivative();
+        fact *= k as f64;
+        let v = d.eval(r).to_f64().abs();
+        if v > 0.0 {
+            let y = fact * POLY_ETA * s / v;
+            let root = match k {
+                1 => y,
+                2 => y.sqrt(),
+                3 => scx_num::fmath::cbrt(y),
+                _ => y.sqrt().sqrt(),
+            };
+            best = best.min(root);
+        }
     }
-    let tol = crate::harness::Tol::DEFAULT;
-    let moved: Vec<(f64, f64)> = got
-        .iter()
-        .zip(pin)
-        .map(|(&x, &s)| (x, s))
-        .filter(|&(x, s)| {
-            !(x == s
-                || (x.is_nan() && s.is_nan())
-                || (x - s).abs() <= tol.abs.max(tol.rel * x.abs().max(s.abs())))
-        })
-        .collect();
-    if moved.is_empty() {
-        return Ok(());
+    (x.abs().next_up() - x.abs()) + 2.0 * best
+}
+
+/// The roots `got` of the polynomial `c` (lowest coefficient first) against the contract of
+/// `scx_algo::polynomial` and the exact truth: ascending and distinct; each true real root
+/// in the double range with a returned root within half an ulp plus its pseudo-zero radius
+/// (a cluster may be reported once); each returned root that near a true root, or a point where the exact
+/// `|p|` is within `η S`. No roots for a coefficient that is not finite; anything for the
+/// zero polynomial (every number is a root).
+fn poly_meets_contract(c: &[f64], got: &[f64]) -> Result<(), String> {
+    if !c.iter().all(|v| v.is_finite()) {
+        return if got.is_empty() {
+            Ok(())
+        } else {
+            Err(format!("{got:?} for a coefficient not finite"))
+        };
     }
-    let scale = moved
-        .iter()
-        .flat_map(|&(x, s)| [x.abs(), s.abs()])
-        .filter(|&v| v > 0.0)
-        .fold(f64::INFINITY, f64::min);
     if c.iter().all(|&v| v == 0.0) {
-        // every number is a root of the zero polynomial
         return Ok(());
     }
-    let (p, roots) = true_real_roots(c, scale)
-        .ok_or_else(|| format!("{c:?}: a root moved, and no exact truth for these"))?;
-    for (x, s) in moved {
-        let ulp = x.abs().next_up() - x.abs();
-        match (root_error(&p, &roots, x), root_error(&p, &roots, s)) {
-            (Ok(ex), Ok(es)) if ex <= es + ulp => {}
-            // scx is near a real root and the pin is near none
-            (Ok(_), Err(_)) => {}
-            (Err(rx), Err(rs)) if rx <= rs * (1.0 + 1e-6) => {}
-            (ex, es) => {
-                return Err(format!(
-                    "{x:e} is {ex:?} from the truth, the pin's {s:e} {es:?}"
-                ));
-            }
+    if got.windows(2).any(|w| !(w[0] < w[1])) || got.len() + 1 > c.len() {
+        return Err(format!("{got:?}: not distinct and ascending"));
+    }
+    let (p, truth) = exact_real_roots(c);
+    // twice the distance, as the bound
+    let dist = |x: f64, r: &Rat| {
+        Rat::from_f64(x).map_or(f64::INFINITY, |rx| (&rx - r).abs().scale(1).to_f64())
+    };
+    // a root past the double range has no double to be returned
+    for (r, m) in truth.iter().filter(|(r, _)| r.to_f64().is_finite()) {
+        let b = poly_root_bound(&p, c, r);
+        let near = got
+            .iter()
+            .map(|&x| dist(x, r))
+            .fold(f64::INFINITY, f64::min);
+        if !(near <= b) {
+            return Err(format!(
+                "true root {:e} (multiplicity {m}) has none within {:.3e} (nearest {:.3e})",
+                r.to_f64(),
+                0.5 * b,
+                0.5 * near
+            ));
+        }
+    }
+    for &x in got {
+        let Some(rx) = Rat::from_f64(x) else {
+            return Err(format!("returned {x}"));
+        };
+        let near = truth
+            .iter()
+            .any(|(r, _)| dist(x, r) <= poly_root_bound(&p, c, r));
+        if !(near || p.eval(&rx).abs().to_f64() <= POLY_ETA * poly_size(c, x)) {
+            return Err(format!("returned {x:e} is no root"));
         }
     }
     Ok(())
 }
 
-/// `solve_cubic` where scx's roots and the pin's disagree. scx takes the closed form's
-/// roots (the pin's, but for `fmath`'s last bits) and polishes each with at most two Newton
-/// steps on the given cubic, each kept only when it lowers the compensated-Horner residual
-/// `|p|`. The closed form loses up to half the digits at near-double roots and at large
-/// coefficient ratios (`acos` and `cbrt` of a cancelled discriminant), which the pin keeps.
+/// `solve_cubic` where scx's roots and the pin's disagree. scx brackets each root between
+/// the critical points (signs certified by Horner's error bound, else compensated Horner)
+/// and finishes it by compensated Newton steps (research 71); the pin's closed form
+/// (`acos` and `cbrt` of a discriminant judged against absolute tolerances) loses up to
+/// half the digits at near-double roots and miscounts roots at large coefficient ratios.
 /// The truth: the exact real roots of the cubic with the input's coefficients, isolated by
-/// Sturm sequences in rationals ([`scx_testkit::poly`]). The check ([`poly_roots_no_worse`]):
-/// the pin's count, and each root at least as close to its true root as the pin's.
+/// Sturm sequences in rationals ([`scx_testkit::poly`]). The check
+/// ([`poly_meets_contract`]): scx's roots meet the solver's contract against that truth,
+/// whatever the pin returns; the quadratic below the tolerance matches the pin to the bit.
 pub fn poly_cubic() -> PinDefect<([f64; 4], f64), Vec<f64>> {
     PinDefect {
-        reason: "the pin's closed-form cubic roots are unpolished",
+        reason: "the pin's closed-form cubic roots break the contract near clusters",
         applies: Applies::Disagreeing,
-        check: |(c, tol), got| {
-            let pin = solidcore::geom::polynomial::solve_cubic(c, *tol).to_vec();
-            let used: &[f64] = if c[3].abs() < *tol { &c[..3] } else { c };
-            poly_roots_no_worse(used, got, &pin)
-        },
+        check: |(c, tol), got| poly_check(cubic_used(c, *tol), got, *tol),
     }
 }
 
-/// `solve_quartic` where scx's roots and the pin's disagree: as [`poly_cubic`], the
-/// quartic's roots (Ferrari's method through the resolvent cubic, which loses digits at
-/// clustered roots) polished on the given quartic, or on the cubic when the leading
-/// coefficient is below the tolerance.
+/// `solve_quartic` where scx's roots and the pin's disagree: as [`poly_cubic`], against
+/// the pin's Ferrari's method through the resolvent cubic (which loses digits and roots at
+/// clustered roots); the quartic, or the cubic when the leading coefficient is below the
+/// tolerance.
 pub fn poly_quartic() -> PinDefect<([f64; 4], f64, f64), Vec<f64>> {
     PinDefect {
-        reason: "the pin's closed-form quartic roots are unpolished",
+        reason: "the pin's closed-form quartic roots break the contract near clusters",
         applies: Applies::Disagreeing,
         check: |([a, b, d, f], e, tol), got| {
             let c = [*a, *b, *d, *f, *e];
-            let pin = solidcore::geom::polynomial::solve_quartic(&c, *tol).to_vec();
-            poly_roots_no_worse(quartic_used(&c, *tol), got, &pin)
+            poly_check(quartic_used(&c, *tol), got, *tol)
         },
     }
 }
 
-/// The polynomial the quartic solver solves: the quartic, or the cubic below it when the
-/// leading coefficient is below the tolerance (then the quadratic, as the cubic does).
-/// Decided as the solvers decide, so a NaN tolerance keeps the quartic.
-fn quartic_used(c: &[f64; 5], tol: f64) -> &[f64] {
-    if c[3].abs() < tol && c[4].abs() < tol {
+/// [`poly_meets_contract`] for a cubic or quartic; a quadratic (below the tolerance, or
+/// given), whose solver is the pin's, must match the pin's quadratic to the bit.
+fn poly_check(used: &[f64], got: &[f64], tol: f64) -> Result<(), String> {
+    let [c0, c1, c2] = *used else {
+        return poly_meets_contract(used, got);
+    };
+    let pin = solidcore::geom::polynomial::solve_quadratic(&[c0, c1, c2], tol).to_vec();
+    let same = got.len() == pin.len()
+        && got
+            .iter()
+            .zip(&pin)
+            .all(|(x, s)| x.to_bits() == s.to_bits());
+    if same {
+        Ok(())
+    } else {
+        Err(format!("{got:?}, the pin's quadratic {pin:?}"))
+    }
+}
+
+/// The polynomial the cubic solver solves: the cubic, or the quadratic below it when the
+/// leading coefficient is below the tolerance (or zero). Decided as the solver decides.
+fn cubic_used(c: &[f64; 4], tol: f64) -> &[f64] {
+    if c[3].abs() < tol || c[3] == 0.0 {
         &c[..3]
-    } else if c[4].abs() < tol {
-        &c[..4]
     } else {
         c
     }
 }
 
+/// The polynomial the quartic solver solves: the quartic, or what the cubic solver solves
+/// when the leading coefficient is below the tolerance (or zero). Decided as the solvers
+/// decide, so a NaN tolerance keeps the quartic.
+fn quartic_used(c: &[f64; 5], tol: f64) -> &[f64] {
+    let below = |v: f64| v.abs() < tol || v == 0.0;
+    match c {
+        [.., c3, c4] if below(*c4) && below(*c3) => &c[..3],
+        [.., c4] if below(*c4) => &c[..4],
+        _ => c,
+    }
+}
+
 /// `poly_from_roots` (every structured polynomial at one tolerance) where scx's roots and
 /// the pin's disagree: [`poly_cubic`] and [`poly_quartic`] on each of its cubics and
-/// quartics; its quadratics are not polished and must match the pin to the bit.
+/// quartics; its quadratics must match the pin to the bit.
 pub fn poly_from_roots() -> PinDefect<(f64,), Vec<Vec<f64>>> {
     PinDefect {
-        reason: "the pin's closed-form cubic and quartic roots are unpolished",
+        reason: "the pin's closed-form cubic and quartic roots break the contract near clusters",
         applies: Applies::Disagreeing,
         check: |(tol,), got| {
             use crate::t_algo::{arr, cases};
-            use solidcore::geom::polynomial as pp;
             let mut got = got.iter();
             let mut next = || got.next().ok_or("fewer results than cases");
             for c in cases(2) {
-                let pin = pp::solve_quadratic(&arr::<3>(&c), *tol).to_vec();
-                let g = next()?;
-                let same = g.len() == pin.len()
-                    && g.iter().zip(&pin).all(|(x, s)| x.to_bits() == s.to_bits());
-                if !same {
-                    return Err(format!("quadratic {c:?}: {g:?}, the pin's {pin:?}"));
-                }
+                poly_check(&arr::<3>(&c), next()?, *tol)
+                    .map_err(|e| format!("quadratic {c:?}: {e}"))?;
             }
             for c in cases(3) {
                 let k = arr::<4>(&c);
-                let pin = pp::solve_cubic(&k, *tol).to_vec();
-                let used: &[f64] = if k[3].abs() < *tol { &k[..3] } else { &k };
-                poly_roots_no_worse(used, next()?, &pin)
+                poly_check(cubic_used(&k, *tol), next()?, *tol)
                     .map_err(|e| format!("cubic {c:?}: {e}"))?;
             }
             for c in cases(4) {
                 let k = arr::<5>(&c);
-                let pin = pp::solve_quartic(&k, *tol).to_vec();
-                poly_roots_no_worse(quartic_used(&k, *tol), next()?, &pin)
+                poly_check(quartic_used(&k, *tol), next()?, *tol)
                     .map_err(|e| format!("quartic {c:?}: {e}"))?;
             }
             Ok(())

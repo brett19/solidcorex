@@ -65,7 +65,7 @@ fn separated(roots: &[f64], gap: f64) -> bool {
         .all(|(i, a)| roots.iter().skip(i + 1).all(|b| (a - b).abs() > gap))
 }
 
-/// `gap`: how far apart the known roots must be for each to be required (before research 70
+/// `gap`: how far apart the known roots must be for each to be required (before research 71
 /// the quartic needed 0.5: Ferrari's method returned 2.6065 for a root at 2.6105 with
 /// others 0.04 to 0.3 away, report 53).
 fn check(deg: usize, gap: f64, solve: impl Fn(&[f64]) -> Vec<f64>, seed: u64) -> (usize, usize) {

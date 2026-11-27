@@ -14,9 +14,10 @@
 //! certainty by `scx_testkit::poly` (Sturm sequences) to `2^-100`.
 //!
 //! `solve_cubic` and `solve_quartic` take the power basis, at the `zero_tol` callers pass
-//! (`EFF_ZERO`). Their claim (module docs) is that a polished simple root is the true root
-//! correctly rounded. Each case's `(returned, within half an ulp, true)` is pinned in
-//! [`CLOSED`], which marks the cases that meet the claim and the known bugs.
+//! (`EFF_ZERO`). Every case must meet their contract (module docs): each true root has a
+//! returned root within half an ulp plus its pseudo-zero radius, and each returned root is
+//! that near a true root or is a pseudo-zero. A separated simple root must be correctly
+//! rounded, and `2^a p(2^b x)` must give the same roots scaled, bit for bit.
 //!
 //! `bernstein_roots` takes the Bernstein coefficients on `[0, 1]`, of degrees up to 20.
 //! Its claim is a place certified by a sign change of de Casteljau's value, so each true
@@ -174,13 +175,20 @@ fn breaches(name: &str, c: &[f64]) -> (Vec<String>, Vec<f64>) {
     let t = truth(&p);
     let got = solve(c);
     let mut out = Vec::new();
-    if got.len() > c.len() - 1 || got.windows(2).any(|w| !(w[0] < w[1])) {
+    if got.len() > c.len() - 1
+        || got
+            .windows(2)
+            .any(|w| w[0].partial_cmp(&w[1]) != Some(core::cmp::Ordering::Less))
+    {
         out.push(format!("{name}: not distinct and ascending: {got:?}"));
     }
     let dist = |x: f64, r: &Rat| (&rat(x) - r).abs().to_f64();
     for (r, m) in &t {
         let b = root_bound(&p, c, r);
-        let near = got.iter().map(|&x| dist(x, r)).fold(f64::INFINITY, f64::min);
+        let near = got
+            .iter()
+            .map(|&x| dist(x, r))
+            .fold(f64::INFINITY, f64::min);
         if near > b {
             out.push(format!(
                 "{name}: true root {:e} (multiplicity {m}) has none within {b:.3e} (nearest {near:.3e})",
@@ -307,18 +315,42 @@ fn closed_cases() -> Vec<Case> {
         x2(a).add(&Poly::constant(b2))
     };
     let lin = |r: Rat| Poly::linear(-r, Rat::one());
-    let multiple: [(&str, Poly); 11] = [
+    let multiple: [(&str, Poly); 12] = [
         ("(x - 1)^2 (x + 2)", x2(int(1)).mul(&lin(int(-2)))),
         ("(x - 1)^3", lin(int(1)).pow(3)),
         ("(x - 0.1)^3", lin(q(1, 10)).pow(3)),
         ("(x - 1/3)^2 (x - 3)", x2(q(1, 3)).mul(&lin(int(3)))),
         ("(x - 1)^4", lin(int(1)).pow(4)),
         ("(x - 1)^2 (x + 2)^2", x2(int(1)).mul(&x2(int(-2)))),
-        ("(x - 0.5)^3 (x + 3)", lin(q(1, 2)).pow(3).mul(&lin(int(-3)))),
-        ("(x - 0.7)^2 (x - 2) (x + 1)", x2(q(7, 10)).mul(&lin(int(2))).mul(&lin(int(-1)))),
-        ("((x - 1)^2 + 2^-60) (x + 2)", quad(int(1), Rat::one().scale(-60)).mul(&lin(int(-2)))),
-        ("((x - 1)^2 + 2^-60) (x - 3)^2", quad(int(1), Rat::one().scale(-60)).mul(&x2(int(3)))),
-        ("((x - 1)^2 + 2^-30) ((x + 1)^2 + 2^-30)", quad(int(1), Rat::one().scale(-30)).mul(&quad(int(-1), Rat::one().scale(-30)))),
+        (
+            "(x - 0.5)^3 (x + 3)",
+            lin(q(1, 2)).pow(3).mul(&lin(int(-3))),
+        ),
+        (
+            "(x - 0.7)^2 (x - 2) (x + 1)",
+            x2(q(7, 10)).mul(&lin(int(2))).mul(&lin(int(-1))),
+        ),
+        (
+            "((x - 1)^2 + 2^-60) (x + 2)",
+            quad(int(1), Rat::one().scale(-60)).mul(&lin(int(-2))),
+        ),
+        (
+            "((x - 1)^2 + 2^-60) (x - 3)^2",
+            quad(int(1), Rat::one().scale(-60)).mul(&x2(int(3))),
+        ),
+        (
+            "((x - 1)^2 + 2^-30) ((x + 1)^2 + 2^-30)",
+            quad(int(1), Rat::one().scale(-30)).mul(&quad(int(-1), Rat::one().scale(-30))),
+        ),
+        // no real root, and a critical point where the derivative has a triple root, so
+        // its curvature tells nothing of how near the critical point is (the difftest's
+        // `(x + 3)^4 + 1e-13`)
+        (
+            "(x + 3)^4 + 2^-43",
+            lin(int(-3))
+                .pow(4)
+                .add(&Poly::constant(Rat::one().scale(-43))),
+        ),
     ];
     for (name, p) in multiple {
         cases.push(case(name, &p));
@@ -329,7 +361,7 @@ fn closed_cases() -> Vec<Case> {
 // Every case meets the contract of `scx_algo::polynomial` (module docs) against the exact
 // truth: each true root has a returned root within half an ulp plus its pseudo-zero radius,
 // each returned root is that near a true root or a pseudo-zero, and the roots are
-// distinct and ascending. Before research 70 the closed forms broke it on 20 of the 33
+// distinct and ascending. Before research 71 the closed forms broke it on 20 of the 33
 // family cases (absolute tolerances on Cardano's discriminant and Ferrari's `u`, `v`).
 #[test]
 fn closed_forms_meet_the_contract() {
@@ -364,13 +396,21 @@ fn separated_roots_are_correctly_rounded() {
         "mignotte 3, a = 10",
         "mignotte 4, a = 10",
     ];
-    for k in closed_cases().iter().filter(|k| names.contains(&k.name.as_str())) {
+    for k in closed_cases()
+        .iter()
+        .filter(|k| names.contains(&k.name.as_str()))
+    {
         let t = truth(&exact(&k.c));
         let got = solve(&k.c);
         assert_eq!(got.len(), t.len(), "{}", k.name);
         for (&x, (r, _)) in got.iter().zip(&t) {
             let d = (&rat(x) - r).abs().to_f64();
-            assert!(d <= 0.5 * ulp(r.to_f64()), "{}: {x:e} is {d:e} from {:e}", k.name, r.to_f64());
+            assert!(
+                d <= 0.5 * ulp(r.to_f64()),
+                "{}: {x:e} is {d:e} from {:e}",
+                k.name,
+                r.to_f64()
+            );
         }
     }
 }
@@ -387,12 +427,11 @@ fn closed_forms_scale_exactly() {
     for k in &closed_cases() {
         let base = solve(&k.c);
         for (a, b) in [(-40, 3), (25, -7), (0, 20), (300, -60), (-500, 40)] {
-            let c: Vec<f64> = k
-                .c
-                .iter()
-                .enumerate()
-                .map(|(i, &v)| v * pow2(a - b * i as i32))
-                .collect();
+            let c: Vec<f64> =
+                k.c.iter()
+                    .enumerate()
+                    .map(|(i, &v)| v * pow2(a - b * i as i32))
+                    .collect();
             let scaled: Vec<f64> = solve_at(&c, 0.0).iter().map(|&x| x * pow2(-b)).collect();
             assert_eq!(scaled, base, "{} at 2^{a}, 2^{b}", k.name);
         }
