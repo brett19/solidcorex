@@ -3070,6 +3070,48 @@ The added cost is stage 4 itself: about as much again as stages 1-3 (0.3x to 1.2
 
 **Proposed 04 row.** "`scx-boolean` stage 4 (BO2): each pair's surfaces by `scx_ssi::analytic::intersect` over the uv boxes; `General` is `Unsupported(SsiPair { a, b, kinds })`, no fallback. Curves cut at the merged points through both faces (inversion onto the curve), each sub-span kept when a sample is inside both faces, dropped when outside one, and dropped as a lying edge when it runs along a boundary edge; every kept piece ends at merged points (else `Defect(LooseSection)`), a closed conic with none kept whole. Stage-2 spans cut the same way into lying pieces. Coincident pairs keep SS4's pieces of some width and their normals' sense. Isolated points are touches when inside one face. Change if a stage-2 miss shows as a wrong section, or BO3 needs the boundary crossings themselves."
 
+### 14.25 DT2 as built (11-27)
+
+(§14.24 is BO2's; this is the next free number.) The constructor and extrusion recipes in `t_slice` now answer `Valid`, `Manifold` and `Mesh` from scx. `NotYet::Mesh` and `NotYet::Contract` are removed; `Boolean`, `Work` and `Lineage` stay. `scx-difftest` gains `scx-check` and `scx-tess` as dev dependencies.
+
+**Result.** scx: 157 pass, 0 fail, 326 not yet (Boolean 297, Work 29); DT1c had 109 pass and 374 not yet. The 48 new passes are `Valid` and `Manifold` on the 16 constructor recipes that build (32) and `Mesh` on the 16 (16). `cargo test -p scx-difftest --release t_slice`: 2 tests passed, 40.75 s test time (the pin's time; the scx side adds little). No scx failure was found.
+
+**The checks.**
+- `Valid` and `Manifold` are both `scx_check::contract` (a `Proved` is `Pass`, an error is `Fail` with the first breach and its `Debug`). For: CK1's tests (closed, two fins per edge, regions proved, certified outward) cover both of T12's statements, and the pin's two checks (`integrity::check`, `is_manifold_solid`) are likewise one question of a built body. Against: a failure of one cannot be told from the other except by the breach's name, which is printed.
+- `Mesh` is `scx_tess::tessellate` at chord `0.01 cbrt(V)`, never below `10 c`, with no angle or edge-length bound. It passes when T13's oracle (`violations`, default limits) finds nothing (closed, manifold, outward, no fold-over, no degenerate triangle), every face's stated `chord_bound` is within the chord, and the signed volume is within `chord x truth area + 1e-9 V` of truth's volume (`volume_gap`). For: this is TS3's own test, judged against T9's closed forms and not against the pin's mesh, and the chord scales with the body so a 1e4 body and a 1e-4 one are both asked for the same relative fidelity. Against: one chord per recipe; finer chords, tilted frames and the angle and edge-length bounds are in `scx-tess/tests/curved.rs` and not repeated here. A recipe with no stated area is judged on the oracle and the bound only (none of the constructors lacks one).
+- Judged as DT1c judged classification: against truth, never against the pin, no tolerance widened to pass. A refused recipe has no body and keeps its outcome check only.
+
+**Not done, left typed.** Booleans (297 `Boolean`), `Work` (BO6) and `Lineage` (BO). The pin's mesh is still not run (as DT1 said).
+
+**Proposed 04 row.** "DT2 (72 §14.25): `t_slice` runs `scx_check::contract` (as `Valid` and `Manifold`) and `scx_tess::tessellate` (T13's oracle, face bounds within the chord, volume within chord times truth's area) on every constructor and extrusion recipe, judged against truth. scx: 157 pass, 0 fail, 326 not yet (Boolean 297, Work 29). Change if: a recipe fails either check, or the Boolean results should be meshed and proved the same way (DT3)."
+### 14.28 BO5 as built (11-27)
+
+Four tests in `crates/scx-boolean/src/tests/unsupported.rs` (one new `mod` line in `tests.rs`) cover the pin's `boolean_api.rs` cases that step 4 does not answer: `tpipe`, `seam-cylinder-sphere` and `off-seam-cylinder-sphere`, `seam-torus-sphere`, `seam-torus-box` and `seam-vertex-torus-box`. Operands are the pin's (mm), rebuilt with `scx-make` (the pin's tpipe branch is a cylinder turned onto +y by a frame with z = +y, x = +z). No library code changed.
+
+**Result: every case is `Unsupported(SsiPair { a, b, kinds })`, a real cause; none reaches `Stage(Imprint)`.** So no test here changes when BO3 removes that variant, and there is no unbuilt-stage finding to record. Each asserts the exact variant, both faces and both kinds, and `name() == "ssi_pair"`; each also runs the operands swapped and expects the faces and kinds swapped.
+
+| Case | Pair named (a, b) | Why out of scope |
+|---|---|---|
+| tpipe | pipe wall, branch wall; `[Cylinder, Cylinder]` | unlike radii (2 and 1.5), axes crossing at right angles: a quartic, closed form only for equal radii |
+| seam-cylinder-sphere, off-seam-cylinder-sphere | cylinder wall, sphere; `[Cylinder, Sphere]` | sphere centre 5 from the axis, not on it: a quartic (closed form only coaxial); seam or not, the same pair |
+| seam-torus-sphere | torus, sphere; `[Torus, Sphere]` | sphere off the torus axis: no closed form |
+| seam-torus-box (on the equator at (0, 6.5, 0)) | torus, block `sides[0]`; `[Torus, Plane]` | a plane parallel to the torus axis meets it in a spiric section (quartic) |
+| seam-vertex-torus-box (at (6.5, 0, 0)) | torus, block `sides[0]`; `[Torus, Plane]` | the same |
+
+**Decisions, with cases for and against.**
+
+- *Assert only the first pair stage 4 stops at, derived by hand from pair order* against *asserting every General pair of each case.* For: `face_face` stops at the first pair it cannot answer (pairs sorted by a's id, then b's), so the first pair is the whole observable answer; the ids come from the `Made` face records, not literals. Against: a case with several General pairs (the torus with each of a block's side planes) shows only the first; if BO3 or step 5 starts answering some pairs the test moves with it, which is the point.
+- *Name the pair even where the faces do not touch.* The torus-box case at (6.5, 0, 0) names the torus with the block's `y = -3` face: the faces' boxes meet, the surfaces are General, but the torus never reaches that face (at `y = -3` it has `x <= 5.77`, the face starts at 6.5). The touching face is `sides[1]`, later in pair order. Same for the first case: its first side is the face the torus touches. Finding: `SsiPair` is answered from surfaces over boxes, not from whether the faces touch, so a Boolean fails whole on a pair that has no contact. A cheaper reject (a box-and-surface test before `analytic::intersect`, or deferring `General` until the pair's faces are shown to meet) would turn some of these cases into answers; step 5's marcher makes it moot. Not changed here.
+- *Both orders for each case.* For: pins the face and kind swap, which a pair stored `[a, b]` can get wrong. Against: doubles the calls; each is microseconds.
+- *Merge the six pin cases into four tests* (by cause: cylinders, cylinder-sphere, torus-sphere, torus-box) against six tests. For: the pairs in each test share operands and cause. Against: a failure names the test, not the case within it; the seam and off-seam variants differ only in where the contact falls, so one failure would show in both.
+- *Seam placement is not asserted to matter.* The pin's seam cases exist to catch a cleanup that moved a seam vertex; here the Boolean stops before contact is classified, so they pass for the same reason as the off-seam ones. They are kept because the operands are the pin's and will matter when step 5 answers the pair.
+
+**Deviations from 72.** None. 72 §11 BO5 asks for tests naming their cause; the five bullet cases are six pin cases.
+
+**Open questions.** (1) Whether to reject General pairs whose faces cannot touch (above) before step 5. (2) When step 5 answers these pairs the six cases become BO cases against the pin (DT3), with the pin's volumes (`tpipe` 308.9567, torus + sphere, torus + 144, ...).
+
+**Proposed 04 row.** "BO5: the pin's out-of-scope Boolean cases (tpipe, cylinder-sphere on and off the seam, torus-sphere, torus-box on the seam circle and at the seam vertex) are expected `Unsupported(SsiPair)` tests naming the first pair stage 4 stops at, with kinds, in both operand orders; none reaches `Stage(Imprint)`. `SsiPair` is answered from surfaces over boxes, so it can name a pair whose faces do not touch. Change when step 5 answers the pairs."
+
 ### 14.27 BQ2 as built (11-27)
 
 `scx-bodyq` gains the side of a face where a face of the other body meets it (`side.rs`), and now depends on `scx-ssi` (for `Contact`; it is below `scx-bodyq` in the layers).

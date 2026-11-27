@@ -39,6 +39,9 @@ scx-record = { path = "../scx-record" }
 scx-bodyq = { path = "../scx-bodyq" }
 # The mass properties against the pin's (`t_mass`).
 scx-mass = { path = "../scx-mass" }
+# The contract and the mesh, judged on the constructors (`t_slice`).
+scx-check = { path = "../scx-check" }
+scx-tess = { path = "../scx-tess" }
 
 [lints]
 workspace = true
