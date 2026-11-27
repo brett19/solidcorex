@@ -9,13 +9,15 @@
 //!
 //! - line `P + t D`;
 //! - circle `C + r (cos t X + sin t Y)`; ellipse `C + a cos t X + b sin t Y`;
+//! - parabola `C + F t^2 X + 2 F t Y`; hyperbola `C + a cosh t X + b sinh t Y`;
 //! - plane `P + u X + v Y`;
 //! - cylinder `C + r (cos u X + sin u Y) + v Z`;
 //! - cone `C + (r + v tan a) (cos u X + sin u Y) + v Z`;
 //! - sphere `C + r cos v (cos u X + sin u Y) + r sin v Z`;
 //! - torus `C + (R + r cos v) (cos u X + sin u Y) + r sin v Z`.
 //!
-//! Every one is a sum of terms `f(u) g(v) V` with `f` and `g` of the form
+//! Every one but the parabola and the hyperbola (whose derivatives are written out) is a
+//! sum of terms `f(u) g(v) V` with `f` and `g` of the form
 //! `a + b t + c cos t + d sin t`, so one derivative rule serves them all.
 //!
 //! Closest points: exact for the line and the plane; for the others Newton's method in
@@ -24,11 +26,14 @@
 //! unique or the start is meaningless: on a circle's or surface's axis, at a torus tube's
 //! centre line, beyond a cone's apex. The ellipse has no Newton foot here: its start is
 //! not closed-form, and Newton's method from a poor start can find the wrong foot. Its
-//! certified feet are [`Ellipse::stationary`](crate::project) (T1).
+//! certified feet are [`Ellipse::stationary`](crate::project) (T1). The parabola's and the
+//! hyperbola's are the certified real roots of an exact cubic and quartic
+//! ([`Parabola::stationary`], [`Hyperbola::stationary`]).
 
 use crate::Partials;
 use crate::dd::{self, Dd};
 use crate::nurbs::Exact;
+use crate::poly::Poly;
 use crate::rat::Rat;
 
 /// A 3D vector of double-doubles.
@@ -382,6 +387,164 @@ impl Ellipse {
         ])
         .derivs(t.into(), order)
     }
+}
+
+/// The parabola `C + F t^2 X + 2 F t Y` (STEP's), its vertex `C`, axis `X`, focal
+/// distance `F`. A reversed one is the same with `Y` negated in the frame.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Parabola {
+    /// The vertex and axes.
+    pub frame: Frame,
+    /// `F`.
+    pub focal: f64,
+}
+
+impl Parabola {
+    /// `C^(k)(t)` for `k = 0..=order`.
+    pub fn derivs(&self, t: impl Into<Dd>, order: usize) -> Vec<V3> {
+        let t = t.into();
+        let f = Dd::new(self.focal);
+        let (o, x, y) = (
+            lift(self.frame.origin),
+            lift(self.frame.x),
+            lift(self.frame.y),
+        );
+        (0..=order)
+            .map(|k| match k {
+                0 => add(o, add(scaled(x, f * t * t), scaled(y, f * t * 2.0))),
+                1 => add(scaled(x, f * t * 2.0), scaled(y, f * 2.0)),
+                2 => scaled(x, f * 2.0),
+                _ => [ZERO; 3],
+            })
+            .collect()
+    }
+
+    /// Every stationary point of the distance from `q`, from the real roots of the exact
+    /// cubic `C'(s) . (C(s) - q) = 2|A|^2 s^3 + 3 A.B s^2 + (|B|^2 + 2 A.D) s + B.D` with
+    /// `A = F X`, `B = 2 F Y`, `D = C - q`, each isolated with certainty; `None` for a
+    /// non-finite value.
+    pub fn stationary(&self, q: [f64; 3]) -> Option<Vec<Dd>> {
+        let f = Rat::from_f64(self.focal)?;
+        let two = Rat::from_f64(2.0)?;
+        let a = rat3(self.frame.x)?.map(|v| &v * &f);
+        let b = rat3(self.frame.y)?.map(|v| &(&v * &f) * &two);
+        let d = rsub(&rat3(self.frame.origin)?, &rat3(q)?);
+        let three = Rat::from_f64(3.0)?;
+        let poly = Poly::new(vec![
+            rdot(&b, &d),
+            rdot(&b, &b) + &two * &rdot(&a, &d),
+            &three * &rdot(&a, &b),
+            &two * &rdot(&a, &a),
+        ]);
+        Some(roots(&poly).into_iter().map(|r| r.at.to_dd()).collect())
+    }
+
+    /// The nearest stationary point to `q`; `None` where two are within `2^-80` relative
+    /// of each other's distance (a tie the double result may take either way).
+    pub fn nearest(&self, q: [f64; 3]) -> Option<Foot<Dd>> {
+        let feet = self.stationary(q)?;
+        nearest(
+            feet.into_iter()
+                .filter_map(|t| Some((t, self.derivs(t, 0).into_iter().next()?))),
+            q,
+        )
+    }
+}
+
+/// One branch of the hyperbola `C + a cosh t X + b sinh t Y` (STEP's), its centre `C`, the
+/// branch about `+X`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Hyperbola {
+    /// The centre and axes.
+    pub frame: Frame,
+    /// `a`, along `X`.
+    pub semi_x: f64,
+    /// `b`, along `Y` (signed: negative for a reversed one).
+    pub semi_y: f64,
+}
+
+impl Hyperbola {
+    /// `C^(k)(t)` for `k = 0..=order`.
+    pub fn derivs(&self, t: impl Into<Dd>, order: usize) -> Vec<V3> {
+        let (sh, ch) = dd::sinh_cosh(t.into());
+        let (a, b) = (Dd::new(self.semi_x), Dd::new(self.semi_y));
+        let (o, x, y) = (
+            lift(self.frame.origin),
+            lift(self.frame.x),
+            lift(self.frame.y),
+        );
+        (0..=order)
+            .map(|k| {
+                let (cx, cy) = if k % 2 == 0 {
+                    (a * ch, b * sh)
+                } else {
+                    (a * sh, b * ch)
+                };
+                let v = add(scaled(x, cx), scaled(y, cy));
+                if k == 0 { add(o, v) } else { v }
+            })
+            .collect()
+    }
+
+    /// Every stationary point of the distance from `q`: with `x = e^t`, `4 x^2` times
+    /// `C'(t) . (C(t) - q)` is the exact quartic
+    /// `(|A|^2 + |B|^2)(x^4 - 1) + 2 A.B (x^4 + 1) + 2 A.D (x^3 - x) + 2 B.D (x^3 + x)`
+    /// with `A = a X`, `B = b Y`, `D = C - q`; its positive roots, isolated with certainty,
+    /// are the feet as `t = ln x`. `None` for a non-finite value.
+    pub fn stationary(&self, q: [f64; 3]) -> Option<Vec<Dd>> {
+        let (sa, sb) = (Rat::from_f64(self.semi_x)?, Rat::from_f64(self.semi_y)?);
+        let a = rat3(self.frame.x)?.map(|v| &v * &sa);
+        let b = rat3(self.frame.y)?.map(|v| &v * &sb);
+        let d = rsub(&rat3(self.frame.origin)?, &rat3(q)?);
+        let two = Rat::from_f64(2.0)?;
+        let k = rdot(&a, &a) + rdot(&b, &b);
+        let ab = &two * &rdot(&a, &b);
+        let (ad, bd) = (&two * &rdot(&a, &d), &two * &rdot(&b, &d));
+        let poly = Poly::new(vec![&ab - &k, &bd - &ad, Rat::zero(), &ad + &bd, &k + &ab]);
+        Some(
+            roots(&poly)
+                .into_iter()
+                .filter(|r| r.at.lo().signum() > 0)
+                .map(|r| dd::ln_dd(r.at.to_dd()))
+                .collect(),
+        )
+    }
+
+    /// The nearest stationary point to `q`, as [`Parabola::nearest`].
+    pub fn nearest(&self, q: [f64; 3]) -> Option<Foot<Dd>> {
+        let feet = self.stationary(q)?;
+        nearest(
+            feet.into_iter()
+                .filter_map(|t| Some((t, self.derivs(t, 0).into_iter().next()?))),
+            q,
+        )
+    }
+}
+
+/// The real roots of `p`, each to `2^-110`.
+fn roots(p: &Poly) -> Vec<crate::poly::Root> {
+    p.real_roots(&Rat::one().scale(-110))
+}
+
+/// The nearest of `feet` to `q`, `None` for none or a near tie.
+fn nearest(feet: impl Iterator<Item = (Dd, V3)>, q: [f64; 3]) -> Option<Foot<Dd>> {
+    let q = lift(q);
+    let mut all: Vec<Foot<Dd>> = feet
+        .map(|(param, point)| Foot {
+            param,
+            point,
+            distance: norm(sub(point, q)),
+        })
+        .collect();
+    all.sort_by(|a, b| a.distance.hi.total_cmp(&b.distance.hi));
+    let first = *all.first()?;
+    if let Some(second) = all.get(1) {
+        let gap = (second.distance - first.distance).hi;
+        if gap <= dd::pow2(-80) * second.distance.hi.max(f64::MIN_POSITIVE) {
+            return None;
+        }
+    }
+    Some(first)
 }
 
 // ---------------------------------------------------------------- surfaces

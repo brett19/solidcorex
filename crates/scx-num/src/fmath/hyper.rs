@@ -1,6 +1,6 @@
 // Written for solidcorex. Apache-2.0.
-//! `sinh`, `cosh` and `tanh`, from the double-double exponential; near zero, from their
-//! series.
+//! `sinh`, `cosh`, both at once, and `tanh`, from the double-double exponential; near zero,
+//! from their series.
 
 use super::accurate;
 use super::dd::{self, round_ball_or, round_or, round_scaled_or};
@@ -123,6 +123,46 @@ pub(super) fn cosh(x: f64) -> f64 {
     }
 }
 
+/// `(sinh(x), cosh(x))`, each with the bits of [`sinh`] and [`cosh`] (the same rounding
+/// tests and fallbacks), the exponential and its reciprocal taken once for both.
+pub(super) fn sinh_cosh(x: f64) -> (f64, f64) {
+    if x.is_nan() {
+        return (f64::NAN, f64::NAN);
+    }
+    if x.is_infinite() {
+        return (x, f64::INFINITY);
+    }
+    let a = x.abs();
+    if a < TINY {
+        return (x, 1.0);
+    }
+    let (s, c) = if a <= ONE_SIDED {
+        let e = exp_dd(a);
+        let r = dd::recip(e);
+        let (h, l) = dd::add(e, r);
+        let c = round_or(0.5 * h, 0.5 * l, COSH_ERR, || accurate::cosh(a));
+        let s = if a < SERIES {
+            let (h, l) = sinh_series(a);
+            round_or(h, l, SERIES_ERR, || accurate::sinh(a))
+        } else {
+            let (h, l) = dd::add(e, (-r.0, -r.1));
+            let err = EXP_ERR * 0.5 * (e.0 + r.0) + DD_ERR * h;
+            round_ball_or(0.5 * h, 0.5 * l, err, || accurate::sinh(a))
+        };
+        (s, c)
+    } else if a > 711.0 {
+        (f64::INFINITY, f64::INFINITY)
+    } else {
+        // Both `e^a / 2` ([`half_exp`]), each with its own fallback.
+        let ((h, l), m) = exp_core(a, 0.0);
+        (
+            round_scaled_or(h, l, EXP_ERR, m - 1, || accurate::sinh(a)),
+            round_scaled_or(h, l, EXP_ERR, m - 1, || accurate::cosh(a)),
+        )
+    };
+    (s.copysign(x), c)
+}
+
 /// `tanh(x)`.
 pub(super) fn tanh(x: f64) -> f64 {
     if x.is_nan() {
@@ -150,4 +190,44 @@ pub(super) fn tanh(x: f64) -> f64 {
         round_ball_or(h, l, err, || accurate::tanh(a))
     };
     r.copysign(x)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hash::Rng;
+
+    fn same(x: f64) {
+        let (s, c) = sinh_cosh(x);
+        assert_eq!(s.to_bits(), sinh(x).to_bits(), "sinh {x:e}");
+        assert_eq!(c.to_bits(), cosh(x).to_bits(), "cosh {x:e}");
+    }
+
+    #[test]
+    fn sinh_cosh_has_the_bits_of_each() {
+        let edges = [TINY, SERIES, ONE_SIDED, 711.0, 710.0];
+        for e in edges {
+            for x in [e, e.next_up(), e.next_down()] {
+                same(x);
+                same(-x);
+            }
+        }
+        for x in [
+            0.0,
+            -0.0,
+            1e-300,
+            5e-324,
+            f64::INFINITY,
+            -f64::INFINITY,
+            1e300,
+        ] {
+            same(x);
+        }
+        assert!(sinh_cosh(f64::NAN).0.is_nan() && sinh_cosh(f64::NAN).1.is_nan());
+        let mut r = Rng::new(3);
+        for _ in 0..20_000 {
+            let x = r.next_signed_unit() * crate::fmath::exp2(r.next_signed_unit() * 12.0);
+            same(x);
+        }
+    }
 }

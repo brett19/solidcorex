@@ -9,7 +9,7 @@
 //!
 //! | curve on surface | pcurve |
 //! |---|---|
-//! | line, circle, ellipse, NURBS curve on a plane | [`Line2`], [`Circle2`], [`Ellipse2`], the NURBS curve through the plane's affine uv |
+//! | line, circle, ellipse, parabola, hyperbola, NURBS curve on a plane | [`Line2`], [`Circle2`], [`Ellipse2`], [`Parabola2`], [`Hyperbola2`], the NURBS curve through the plane's affine uv |
 //! | line along a cylinder's or cone's ruling | [`Line2`]: `u` fixed, `v` the height, affine in `t` |
 //! | circle about the axis of a cylinder, cone, sphere or torus (a parallel) | [`AngleLine2`] in `u`, `v` fixed |
 //! | ellipse on a cylinder (a plane's oblique section, centre on the axis) | [`AngleWave2`]: `u` the azimuth's arc parameter, `v` a sinusoid in `t` |
@@ -48,7 +48,8 @@ use core::f64::consts::{FRAC_PI_2, PI, TAU};
 
 use scx_curve::arcs::Arcs;
 use scx_curve::{
-    AngleAxis, AngleLine2, AngleWave2, Circle, Circle2, Curve, Curve2, Ellipse, Ellipse2, Line2,
+    AngleAxis, AngleLine2, AngleWave2, Circle, Circle2, Curve, Curve2, Ellipse, Ellipse2,
+    Hyperbola2, Line2, Parabola2,
 };
 use scx_num::domain::ParamDomain;
 use scx_num::error::ErrorKind;
@@ -85,6 +86,10 @@ pub enum CurveKind {
     Circle,
     /// An ellipse.
     Ellipse,
+    /// A parabola.
+    Parabola,
+    /// A hyperbola's branch.
+    Hyperbola,
     /// A NURBS curve.
     Nurbs,
     /// A kind `scx-curve` gained after this crate was written (its `Curve` is
@@ -100,6 +105,8 @@ impl CurveKind {
             Curve::Line(_) => Self::Line,
             Curve::Circle(_) => Self::Circle,
             Curve::Ellipse(_) => Self::Ellipse,
+            Curve::Parabola(_) => Self::Parabola,
+            Curve::Hyperbola(_) => Self::Hyperbola,
             Curve::Nurbs(_) => Self::Nurbs,
             _ => Self::Other,
         }
@@ -188,7 +195,8 @@ pub enum PcurveError {
 
 impl PcurveError {
     /// The error's kind: [`ErrorKind::Refused`] for the interval, the tolerance, a curve
-    /// off the surface and a meridian across a pole, [`ErrorKind::Unsupported`] for a pair with no closed form.
+    /// off the surface and a meridian across a pole, [`ErrorKind::Unsupported`] for a pair
+    /// with no closed form.
     #[must_use]
     pub const fn kind(&self) -> ErrorKind {
         match self {
@@ -220,6 +228,8 @@ impl fmt::Display for CurveKind {
             Self::Line => "line",
             Self::Circle => "circle",
             Self::Ellipse => "ellipse",
+            Self::Parabola => "parabola",
+            Self::Hyperbola => "hyperbola",
             Self::Nurbs => "NURBS curve",
             Self::Other => "curve",
         })
@@ -668,6 +678,14 @@ fn on_plane(curve: &Curve, plane: &Plane) -> Option<Curve2> {
             let (frame, sense) = conic_frame(e.frame(), e.sense(), at, along, z)?;
             Curve2::Ellipse(Ellipse2::new(frame, e.semi_x(), e.semi_y(), sense).ok()?)
         }
+        Curve::Parabola(c) => {
+            let (frame, sense) = conic_frame(c.frame(), c.sense(), at, along, z)?;
+            Curve2::Parabola(Parabola2::new(frame, c.focal(), sense).ok()?)
+        }
+        Curve::Hyperbola(h) => {
+            let (frame, sense) = conic_frame(h.frame(), h.sense(), at, along, z)?;
+            Curve2::Hyperbola(Hyperbola2::new(frame, h.semi_x(), h.semi_y(), sense).ok()?)
+        }
         Curve::Nurbs(n) => {
             let points = n.points().iter().map(|p| {
                 let q = at(Point3::new(p[0], p[1], p[2]));
@@ -746,7 +764,7 @@ mod tests {
     use super::*;
     use crate::{Cylinder, Sphere, Torus};
     use core::f64::consts::FRAC_PI_2;
-    use scx_curve::{Circle, Ellipse, Line};
+    use scx_curve::{Circle, Ellipse, Hyperbola, Line, Parabola};
     use scx_num::frame::Frame;
     use scx_num::hash::Rng;
     use scx_num::math::PI;
@@ -817,6 +835,12 @@ mod tests {
                     let e = Ellipse::new(fc, mm(0.9 * scale), mm(0.4 * scale), sense).unwrap();
                     let pc = exact(&Curve::Ellipse(e), &plane, span(0.5, 2.0), size);
                     assert!(matches!(pc, Curve2::Ellipse(_)));
+                    let p = Parabola::new(fc, mm(0.3 * scale), sense).unwrap();
+                    let pc = exact(&Curve::Parabola(p), &plane, span(-2.0, 1.5), size * 4.0);
+                    assert!(matches!(pc, Curve2::Parabola(_)));
+                    let h = Hyperbola::new(fc, mm(0.5 * scale), mm(0.2 * scale), sense).unwrap();
+                    let pc = exact(&Curve::Hyperbola(h), &plane, span(-1.5, 2.0), size * 4.0);
+                    assert!(matches!(pc, Curve2::Hyperbola(_)));
                 }
                 // A rational quarter circle.
                 let w = core::f64::consts::FRAC_1_SQRT_2;
@@ -933,6 +957,20 @@ mod tests {
                 surface: SurfaceKind::Cone
             }
         );
+        // A hyperbola on a cone (its section by a plane along the axis), named as one.
+        let k = fmath::tan(0.5);
+        let cone = Surface::Cone(Cone::new(f, mm(0.0), 0.5, Sense::Forward).unwrap());
+        let fh = Frame::new(o + y, y, z).unwrap();
+        let h = Hyperbola::new(fh, mm(1.0 / k), mm(1.0), Sense::Forward).unwrap();
+        let e = pcurve_of(&Curve::Hyperbola(h), &cone, span(-1.0, 1.0), mm(1e-9)).unwrap_err();
+        assert_eq!(
+            e,
+            PcurveError::NoClosedForm {
+                curve: CurveKind::Hyperbola,
+                surface: SurfaceKind::Cone
+            }
+        );
+        assert!(e.to_string().contains("hyperbola"), "{e}");
         let sphere = Surface::Sphere(Sphere::new(f, mm(1.0), Sense::Forward).unwrap());
         let n = (z + x).normalized().map(Vec3::from).unwrap();
         let small = Frame::new(o + n * 0.6, n, y).unwrap();

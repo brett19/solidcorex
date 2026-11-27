@@ -415,6 +415,35 @@ pub fn sinh_cosh_series(x: f64) -> (Dd, Dd) {
     }
 }
 
+/// `(sinh x, cosh x)` for a double-double `|x|` below about 700: the series below `1/2`
+/// (no cancellation), `(e^x -+ e^-x) / 2` above (at most a bit lost to the difference).
+pub fn sinh_cosh(x: Dd) -> (Dd, Dd) {
+    if x.hi.abs() < 0.5 {
+        let x2 = x * x;
+        let (mut ts, mut s, mut tc, mut c, mut i) = (x, x, Dd::new(1.0), Dd::new(1.0), 0.0);
+        loop {
+            tc = tc * x2 / ((i + 1.0) * (i + 2.0));
+            ts = ts * x2 / ((i + 2.0) * (i + 3.0));
+            i += 2.0;
+            c = c + tc;
+            s = s + ts;
+            if spent(tc.hi, 1e-34) && spent(ts.hi.abs(), s.hi.abs() * 1e-34) {
+                return (s, c);
+            }
+        }
+    }
+    let (e, n) = exp(x);
+    let e = e.scale(n);
+    let r = Dd::new(1.0) / e;
+    ((e - r) * 0.5, (e + r) * 0.5)
+}
+
+/// `ln x` for a positive double-double: `ln(hi) + lo / hi` (the next term is below
+/// `2^-106` relative).
+pub fn ln_dd(x: Dd) -> Dd {
+    ln(x.hi) + Dd::new(x.lo / x.hi)
+}
+
 /// `a . b` for vectors of double-doubles.
 pub fn dot<const N: usize>(a: &[Dd; N], b: &[Dd; N]) -> Dd {
     a.iter().zip(b).fold(Dd::new(0.0), |s, (x, y)| s + *x * *y)

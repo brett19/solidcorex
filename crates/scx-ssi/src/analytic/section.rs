@@ -34,6 +34,16 @@ impl Found {
             .push(Raw::new(Shape::Conic { c, a, b, circle }, contact));
     }
 
+    fn parabola(&mut self, v: Point3, x: Vec3, y: Vec3) {
+        self.raws
+            .push(Raw::new(Shape::Parabola { v, x, y }, Transversal));
+    }
+
+    fn hyperbola(&mut self, c: Point3, a: Vec3, b: Vec3) {
+        self.raws
+            .push(Raw::new(Shape::Hyperbola { c, a, b }, Transversal));
+    }
+
     fn line(&mut self, o: Point3, d: Vec3, contact: super::Contact) -> Option<()> {
         let d = *d.normalized()?;
         self.raws.push(Raw::new(Shape::Line { o, d }, contact));
@@ -270,12 +280,18 @@ fn cylinder(
     Some(())
 }
 
-/// A cone: an ellipse, a circle, generators, the apex, or `General` for a parabola or
-/// hyperbola.
+/// A cone: an ellipse, a circle, a parabola, a hyperbola's branch, generators or the apex.
 ///
 /// Worked from the apex, where the cone is `rho = k z'` and the plane is `n . p' = delta`:
 /// every size is then `delta` times a factor of the plane's lean, with no cancellation (a
 /// plane through the apex gives the apex, not a rounding-sized ellipse).
+///
+/// In the plane's coordinates `delta n + alpha e1 + beta e_t`, `e1 = -nz e_r + s z`, the
+/// section is `e alpha^2 - g alpha + beta^2 + c0 = 0` with `e = nz^2 - k^2 s^2`,
+/// `g = 2 delta s nz (1 + k^2)` and `c0 = delta^2 (s^2 - k^2 nz^2)`; `e` decides the kind.
+/// A parabola is taken where dropping `e alpha^2` moves no point of the extent's heights by
+/// more than the tolerance: there the exact ellipse or hyperbola is longer than its
+/// precision, and the parabola is within the tolerance of it (research 63 §3.12).
 fn cone(k: &Cone, se: &Extent2d, n: Vec3, p0: Point3, tol: f64, found: &mut Found) -> Option<()> {
     let axes = Axes::new(k.frame(), k.sense());
     let r = k.radius().mm();
@@ -309,7 +325,13 @@ fn cone(k: &Cone, se: &Extent2d, n: Vec3, p0: Point3, tol: f64, found: &mut Foun
         }
     }
     let e = nz * nz - kk * kk * s * s;
-    if e > 0.0 {
+    let g = 2.0 * delta * s * nz * (1.0 + kk * kk);
+    // alpha's reach over the heights (linear in the height, so at the ends); the parabola
+    // moves a point by e alpha^2 / g to first order, the factor 2 covering the rest.
+    let alpha = |v: f64| ((v - za) - delta * nz) / s;
+    let reach = alpha(v0).abs().max(alpha(v1).abs());
+    let parabolic = s != 0.0 && 2.0 * e.abs() * reach * reach <= tol * g.abs();
+    if e > 0.0 && !parabolic {
         // An ellipse about apex + delta n + alpha_c e1, e1 = -nz e_r + s z in the plane:
         // semi-axes |delta k| / e along e1 and |delta k| / sqrt(e) along e_t, on the nappe
         // where k delta nz > 0.
@@ -329,6 +351,40 @@ fn cone(k: &Cone, se: &Extent2d, n: Vec3, p0: Point3, tol: f64, found: &mut Foun
         let e1 = add(scale(e_r, -nz), scale(Z, s));
         let c = apex + axes.vec(add(scale(nl, delta), scale(e1, ac)));
         found.conic(c, axes.vec(e1) * sa, axes.vec(e_t) * sb, false, Transversal);
+        return Some(());
+    }
+    if delta.abs() > tol && parabolic {
+        // The parabola beta^2 = g alpha - c0: its vertex at alpha_v = c0 / g, opening along
+        // sign(g) e1, beta = 2 F t for F = |g| / 4. It lies on the nappe where
+        // k delta nz > 0, as the ellipse does.
+        if kk * delta * nz < 0.0 {
+            return Some(());
+        }
+        let c0 = delta * delta * (s * s - kk * kk * nz * nz);
+        let av = c0 / g;
+        let f = 0.25 * g.abs();
+        if f.max(av.abs()) * PRECISION > tol {
+            return None;
+        }
+        let e1 = add(scale(e_r, -nz), scale(Z, s));
+        let v = apex + axes.vec(add(scale(nl, delta), scale(e1, av)));
+        let x = axes.vec(e1) * (f * g.signum());
+        found.parabola(v, x, axes.vec(e_t) * (2.0 * f));
+        return Some(());
+    }
+    if delta.abs() > tol && e < 0.0 {
+        // A hyperbola about the ellipse's centre, semi-axes |delta k| / |e| along e1 and
+        // |delta k| / sqrt|e| along e_t; its vertices at z' = (delta nz +- s |delta k|) / e,
+        // so the branch on the nappe (k z' > 0) opens along sign(k) e1.
+        let sa = (delta * kk).abs() / -e;
+        let sb = (delta * kk).abs() / (-e).sqrt();
+        let ac = delta * s * nz * (1.0 + kk * kk) / e;
+        if sa.max(ac.abs()) * PRECISION > tol {
+            return None;
+        }
+        let e1 = add(scale(e_r, -nz), scale(Z, s));
+        let c = apex + axes.vec(add(scale(nl, delta), scale(e1, ac)));
+        found.hyperbola(c, axes.vec(e1) * (sa * kk.signum()), axes.vec(e_t) * sb);
         return Some(());
     }
     if delta.abs() > tol || s == 0.0 {

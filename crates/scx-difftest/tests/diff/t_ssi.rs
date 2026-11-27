@@ -15,6 +15,8 @@
 //! - a line: its two ends, in a fixed order;
 //! - a whole circle or ellipse (`conic`): its centre and its two radii, smaller first;
 //! - a part of one (`arc`): those and its two ends;
+//! - a parabola's or hyperbola's piece (scx's open conic kinds, `parabola`, `hyperbola`;
+//!   the pin has neither and leaves those sections general): its two ends;
 //! - a point (scx's isolated point, the pin's `Touching` curve): the point.
 //!
 //! The pieces are in a fixed order (by a weighted sum of their numbers), so the order of
@@ -410,6 +412,8 @@ pub mod x {
                         out.push(("arc", k, v));
                     }
                 }
+                Curve::Parabola(_) => out.push(("parabola", k, ends(a, b))),
+                Curve::Hyperbola(_) => out.push(("hyperbola", k, ends(a, b))),
                 _ => out.push(("nurbs", k, vec![])),
             }
         }
@@ -680,6 +684,30 @@ pub mod truth {
         out
     }
 
+    /// What a cone's section owes from the cone alone: each of 2000 generators met with the
+    /// plane (one division), where that lies inside both extents. Empty for another kind.
+    fn generators(c: &Case) -> Vec<Point3> {
+        let Kind::Cone { r, a, .. } = c.kind else {
+            return Vec::new();
+        };
+        let f = c.surface_frame();
+        let kk = scx_num::fmath::tan(a);
+        let (x, y, z) = (*f.x(), *f.y(), *f.z());
+        let apex = f.origin() + z * (-r / kk);
+        let pf = c.plane_frame();
+        let n = *pf.z();
+        let delta = n.dot(pf.origin() - apex);
+        (0..2000)
+            .filter_map(|i| {
+                let (sn, cs) = scx_num::fmath::sin_cos(TAU * f64::from(i) / 2000.0);
+                let dir = (x * cs + y * sn) * kk + z;
+                let lambda = delta / n.dot(dir);
+                (lambda.is_finite() && lambda * kk >= 0.0).then(|| apex + dir * lambda)
+            })
+            .filter(|&q| inside(c, q, -MARGIN))
+            .collect()
+    }
+
     /// The distance from `q` to the curve over `[t0, t1]`: the nearest of a sampling, then
     /// a golden-section search beside it (across the ends on a whole turn).
     pub fn distance_to(c: &Curve, t0: f64, t1: f64, q: Point3) -> f64 {
@@ -760,12 +788,6 @@ pub mod truth {
             Closed::General => {
                 return match &truth {
                     Err(ssi::Error::NoClosedForm | ssi::Error::Undecided) => Ok(()),
-                    Ok(Section::Curves(t))
-                        if t.iter()
-                            .any(|q| matches!(q.curve, ssi::Curve::Hyperbola { .. })) =>
-                    {
-                        Ok(())
-                    }
                     t => Err(format!("General where the truth is {t:?}")),
                 };
             }
@@ -785,6 +807,14 @@ pub mod truth {
             Ok(Section::Empty) => Vec::new(),
             Err(ssi::Error::NoClosedForm)
                 if curves.is_empty() && points.is_empty() && off_the_plane(c) =>
+            {
+                Vec::new()
+            }
+            // A cone's parabola, which the exact truth never reaches: the generators below
+            // owe its points.
+            Err(ssi::Error::NoClosedForm)
+                if matches!(c.kind, Kind::Cone { .. })
+                    && curves.iter().all(|k| matches!(k.curve, Curve::Parabola(_))) =>
             {
                 Vec::new()
             }
@@ -824,7 +854,7 @@ pub mod truth {
                 }
             }
         }
-        for q in owed(c, &tpieces) {
+        for q in owed(c, &tpieces).into_iter().chain(generators(c)) {
             let near = curves
                 .iter()
                 .map(|k| distance_to(&k.curve, k.span.min(), k.span.max(), q))

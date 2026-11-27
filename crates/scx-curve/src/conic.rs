@@ -596,7 +596,7 @@ fn lift2<T: Trig>(v: Vec2) -> Vec2<T> {
 /// map is taken as a similarity on a conic's plane: 16 roundings, three times the most a
 /// computed rotation and uniform scale showed (5.2 over 200,000 random ones), so a turned
 /// circle stays a circle. Snapping costs at most twice the misfit, relative to the size.
-const SIMILAR: f64 = 16.0 * f64::EPSILON;
+pub(crate) const SIMILAR: f64 = 16.0 * f64::EPSILON;
 
 /// A conic's image under an affine map, placed: `frame.origin + a cos t x + b sin t y'`
 /// with `y'` the frame's y times `sense`, at `t` the old angle plus `shift`.

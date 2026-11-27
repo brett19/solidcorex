@@ -1749,6 +1749,186 @@ analytic kind, the NURBS cusps on both sides, 2-D against 3-D).
 it. A smooth NURBS point costs one `derivs::<2>`; the higher derivatives are computed
 only where the first vanishes.
 
+### 3.12 Conic kinds as built (11-27)
+
+Proposed for review, not yet ruled. Decided by analysis and an adversarial pass, below.
+
+```rust
+// scx-curve, src/open_conic.rs (new)
+pub struct Parabola  { /* frame, focal: Length, sense */ }   // vertex + F t^2 x + 2 F t y
+pub struct Hyperbola { /* frame, semi_x, semi_y, sense */ }  // centre + a cosh t x + b sinh t y
+// and Parabola2, Hyperbola2; each: new(..) -> Result, point, jet::<D>(t, Approach),
+// point_over / jet_over (f64, Ivl), domain() = Unbounded, reversed, transformed -> (Self, ParamShift),
+// closest(p) -> Closest, invert(p, Option<&Extent1d>) -> Inversion
+// Curve::{Parabola, Hyperbola}, Curve2::{Parabola, Hyperbola}: every dispatched method
+// ParamShift gains a stretch: (t + by) / stretch (one but for a parabola's affine image)
+
+// scx-ssi::analytic: a cone's section is now a parabola or a hyperbola's branch where it is one
+// scx-surface: pcurve_of on a plane keeps the kind (Parabola2, Hyperbola2); on the other
+//   kinds NoClosedForm { curve: Parabola | Hyperbola, .. } (Unsupported), never empty;
+//   intersect_curve takes both against all five kinds
+```
+
+**The parametrisation: STEP's, the pin's.** A parabola is `O + F t^2 X + 2 F t Y` and a
+hyperbola one branch `C + a cosh t X + b sinh t Y`, over every `t`.
+
+- Alternatives weighed:
+  - **the parabola by its y**, `(t^2 / 4F, t)`: the parameter is a length, so a uniform
+    scale moves it, and every STEP read and write would remap it;
+  - **a rational form** (a quadratic Bezier, or `sec`/`tan` for the hyperbola): the NURBS
+    code could evaluate it, but `sec`/`tan` has poles inside the branch's natural range, the
+    Bezier is bounded to one span, and either needs a remap to and from STEP;
+  - **`e^t` for the hyperbola**, `(a (s + 1/s) / 2, b (s - 1/s) / 2)`: a polynomial after
+    clearing `s`, which T2 and the clip use internally (below), but `s` runs over `(0, inf)`
+    only, the reversal `t -> -t` becomes `s -> 1/s`, and the derivatives lose their
+    two-term cycle.
+- For STEP's: the AP242 `parabola` and `hyperbola` entities take exactly these, so a part
+  reads and writes with no parameter map; the pin's `evaluate_step` is the same function, so
+  the difftest compares like with like; reversal is `t -> -t` with the sense flipped, as the
+  closed conics (CU5); a uniform scale or rigid motion leaves `t` alone; and the
+  derivatives are closed forms of any order (the parabola's vanish past the second; the
+  hyperbola's alternate between two terms).
+- Against, and what was done:
+  - **a hyperbola point needs `sinh` and `cosh`**: `fmath::sinh_cosh` (new in scx-num) gives
+    both from one double-double exponential, with the bits of `sinh` and `cosh` (their
+    rounding tests and fallbacks, research 70, so correctly rounded); a point costs about
+    20 ns against the parabola's 4;
+  - **`cosh` overflows past `|t| ~ 710`**: there the point is infinite, as a line's at an
+    infinite `t`; an edge's interval never reaches it (the branch is then past `1e308`);
+  - **a parabola's parameter is not affine-invariant**: under a map that is not a similarity
+    the vertex moves and the parameter stretches. `transformed` returns the map as a
+    `ParamShift` with a stretch, `(t + by) / stretch`, and an edge's interval moves with it,
+    as CU5's ellipse.
+
+**Deviations from the pin.**
+
+- **Plain data, validated once.** A frame, the sizes as `Length` and a `Sense`, refused at
+  `new` for a non-finite size or one not above `EFF_ZERO` (`Degenerate::Focal`,
+  `Degenerate::SemiAxis`). The pin built any size, kept an analytic domain and a NURB
+  twin, and clamped `t` to the domain inside `evaluate_step`. Here the domain is
+  `Unbounded`: an arc is an edge's interval (CU5).
+- **The parabola's x term is `F (t t)`**, the pin's `(F t) t`. Both are one rounding of the
+  same product apart; `F (t t)` keeps `t t` exact in the interval form, so the enclosure is
+  tight. The difftest agrees with the pin within the tolerance at every input.
+- **The foot is the true nearest point.** The pin's `step_inversion` is the parameter of a
+  point assumed on the curve (`y / 2F`, `asinh(y / b)`). `closest` and `invert` (CU4) take
+  the query into the frame:
+  - the parabola's stationary cubic `F s^3 + (2F - u) s - v` has one root on the query's
+    side; Cardano's root (stable forms) seeds a bracketed Newton polish. On the axis, past
+    the evolute's cusp (`u > 2F`), two equal feet `+-sqrt((u - 2F) / F)`;
+  - the hyperbola's `k sinh t - a u tanh t - b v` (`k = a^2 + b^2`) has one root on the
+    query's side, below `asinh((max(a u, 0) + b v) / k)`; the pin's `asinh(v / b)` seeds a
+    bracketed Newton polish. On the axis past the cusp, `+-acosh(a u / k)`.
+  - No quartic fallback: the hyperbola's equation is a quartic in `e^t`, but the bracket is
+    certified (the function is convex on the side, with a sign change at its ends), so the
+    bracketed Newton converges from any seed in it. A foot outside the domain is reported as
+    `Outside`, never clamped (CU4, CU6). Held to the testkit's certified nearest (cubic for
+    the parabola, isolated roots for the hyperbola) in scx-curve's tests.
+- **Bounding** is the interval form, as for the closed conics: `point_over::<Ivl>` over an
+  interval of `t` encloses the arc (tested against samples).
+
+**Wired in.**
+
+- **scx-surface `pcurve_of`**: on a plane the kind is kept in its affine uv (`Parabola2`,
+  `Hyperbola2`); on a cylinder, cone, sphere or torus the answer is
+  `PcurveError::NoClosedForm { curve, surface }` (`ErrorKind::Unsupported`), never an empty
+  or approximate curve. Exact pcurves off the plane would follow §4.14's `AngleWave2`
+  (an oblique cylinder section), which has no open-conic analogue yet.
+- **scx-surface `intersect_curve`**: both kinds against all five surfaces. The parabola is a
+  polynomial quadratic in `u` (its parameter affine in `u`, as a line's); the hyperbola is a
+  rational quadratic whose middle control point is where the ends' tangents meet, with
+  weight `cosh w`, and a new `Map::Hyper` takes `u` back to `t`
+  (`t = m + 2 atanh(k (2u - 1))`, kept as sums of positive terms). Degrees as for a conic.
+  §4.14's overlap clipping by `se` takes both: a side's plane meets the parabola where a
+  quadratic in `t` vanishes and the hyperbola where `alpha cosh t + beta sinh t + gamma`
+  does, a quadratic in `e^t` (only its positive roots); `overlaps_are_clipped_by_se` runs
+  both in a plane and on a cone (a generator-parallel parabola, an axis-parallel branch).
+- **Testkit T2** takes both curves: the parabola in `t`, the hyperbola in `s = e^t` (a new
+  `Variable::Exp`), with only `s > 0` on the branch.
+
+**The cone section (63 §5.6).** From the apex, in the plane's coordinates
+`delta n + alpha e1 + beta e_t`, the section is `e alpha^2 - g alpha + beta^2 + c0 = 0`
+(`e = nz^2 - k^2 s^2`, `g = 2 delta s nz (1 + k^2)`, `c0 = delta^2 (s^2 - k^2 nz^2)`).
+
+- `e > 0` is an ellipse, `e < 0` a hyperbola and `e = 0` a parabola. A rounded `e` is never
+  exactly zero, so **a parabola is taken where dropping `e alpha^2` moves no point of the
+  extent's heights by more than the tolerance**: `2 |e| reach^2 <= tol |g|`, `reach` the
+  largest `|alpha|` over the two rims. There the exact ellipse or hyperbola is longer than
+  its precision and the parabola is within the tolerance of it.
+  - Against: the true curve is an ellipse or hyperbola, and a parabola changes its kind.
+  - For: 04's primitive rule (a section within the tolerance of a simpler kind is that kind)
+    and the ellipse's own precision bound; outside the threshold the exact kind is kept.
+- The hyperbola is the branch on the nappe the cone's extent lies on (`k z' > 0`); the
+  other branch is on the far nappe and is dropped, as the generators' far halves are.
+- Between the parabola threshold and the ellipse or hyperbola precision bound
+  (`size * 2^-50 > tol`) the answer stays `General`. Both tests are exact statements of
+  what a double can hold; the band between them stays open, and
+  closing it would need a kind that is neither.
+- The clip: a parabola's crossings with a linear side are a quadratic in `t`; a
+  hyperbola's are a quadratic in `e^t`, roots with `e^t > 0` only. Spans are kept as a
+  line's.
+
+**The cylinder's too-long ellipse does not fall out.** A near-axial cut of a cylinder is
+an ellipse longer than its precision, but it is not near a parabola: its flanks are the
+cylinder's two nearly straight generators, and its ends turn with the cylinder's radius.
+Where the generators are within the tolerance over the extent's height it is already two
+lines (§5.6); between that and the precision bound it stays `General`.
+
+**Tests.** scx-curve: 7 unit tests in `open_conic.rs` (points and jets to order 5 against
+the double-double truth, interval enclosure, reversal to the bit, the 2-D twins, refusals,
+`transformed` against closed forms, the inverse hyperbolics) and 3 in `invert.rs` (the foot
+against the certified nearest over every scale and sense, the two feet past the cusp, an
+outside foot reported). scx-num: `sinh_cosh` to the bit of each, and the `Ranged`
+enclosures. scx-surface: `pcurve_of` on a plane and the typed refusal on a cone;
+`intersect_curve` against T2 for both kinds, with the plane's overlap and the vertex touch.
+Testkit: the new truths checked exactly.
+
+| difftest | inputs | exact | within tolerance | pin defects | mismatches |
+|---|---:|---:|---:|---:|---:|
+| `curve_parabola_point` | 380 | 330 | 50 | 0 | 0 |
+| `curve_parabola_jet` | 380 | 154 | 226 | 0 | 0 |
+| `curve_parabola2_jet` | 380 | 144 | 236 | 0 | 0 |
+| `curve_hyperbola_point` | 380 | 309 | 71 | 0 | 0 |
+| `curve_hyperbola_jet` | 380 | 324 | 56 | 0 | 0 |
+| `curve_hyperbola2_jet` | 380 | 312 | 68 | 0 | 0 |
+
+`t_open_conic` compares against the pin's `Parabola::evaluate_step` and
+`Hyperbola::evaluate_step` on `t_curve`'s conic pool, at parameters inside the pin's domain
+(it clamps; scx does not). The within-tolerance rows are an ulp or two of the sum's order.
+
+**Timings.** Side-channel, a throwaway timer, not committed; release, per call:
+
+| call | scx | pin |
+|---|---:|---:|
+| parabola point | 4.2 ns | 17.4 ns |
+| parabola jet, order 3 | 7.5 ns | 16.5 ns |
+| hyperbola point | 20.1 ns | 24.2 ns |
+| hyperbola jet, order 3 | 24.3 ns | 54.3 ns |
+
+The pin allocates a `Vec` per call; scx's hyperbola is mostly `sinh_cosh`.
+
+**Other kernels (research 66).** Nothing applies: 66 §8.2 records only OCCT's IntAna for
+quadric pairs (docs only), and none of 66's techniques is about conic evaluation or feet.
+The `e^t` substitution and the tangent-meeting control point are the textbook conic as a
+rational quadratic.
+
+**SS2 coverage (63 §5.5).** SS2 is plane-plane and plane-quadric through `intersect`.
+`intersect` puts the plane second and answers by `section_by_plane`, so both pairs are
+built. `plane_sections` now runs every case (fixed and 400 random, both senses) through
+`intersect` both ways: the surface first equals `section_by_plane`, and the plane first gives
+the same pieces run the other way (a tangent curve either way, its `n_a x n_b` vanishing),
+the same points, and a coincidence's extents swapped. The difftest compares
+`section_by_plane` with the pin. Still missing from SS2:
+
+- the cylinder's too-long ellipse and the cone's band between the parabola threshold and the
+  precision bound (`General`, above);
+- the torus's spiric sections (`General`; step 5's marcher);
+- exact pcurves off the plane: the cone's conics, open and closed (`pcurve_of` answers
+  `NoClosedForm`; the cylinder's oblique ellipse is built, §4.14);
+- the difftest goes through `section_by_plane` only, not `intersect`'s plane-first order
+  (the pin's `intersect_with_plane` has one order);
+- SS4 (classification at the tolerance); SS3 (the coaxial pairs, §5.7) is built.
+
 ## 4. `scx-surface`
 
 The step-2 slice covers plane, cylinder, cone, sphere, torus and B-spline, with point inversion,
@@ -3182,7 +3362,7 @@ pub fn section_by_plane(s: &Surface, se: &Extent2d, plane: &Plane, pe: &Extent2d
 |---|---|---|
 | plane | a line, coincident, or empty | never |
 | cylinder | an ellipse, a circle, two lines or a tangent line, or empty | an ellipse so long that `2^-50` of its semi-axis passes the tolerance |
-| cone | an ellipse, a circle, two generators or a tangent generator, the apex, or empty | a parabola or hyperbola; an ellipse that long |
+| cone | an ellipse, a circle, a parabola, the branch of a hyperbola on the nappe, two generators or a tangent generator, the apex, or empty (§3.12, 11-27) | an ellipse or hyperbola that long and not within the tolerance of a parabola |
 | sphere | a circle, a touch point, or empty | never |
 | torus | one or two circles across the axis, two meridian circles along it, or empty | every other plane (a spiric section) |
 
@@ -3263,7 +3443,9 @@ the span merge across the turn's start, and the `pcurve_of` seam.
 
 The difftest `t_ssi::ssi_section_by_plane` compares against the pin's `intersect_with_plane`.
 It uses 1,000 inputs aimed at the cases above. Results: 378 exact, 532 within tolerance,
-90 pin defects, 0 mismatches, 0 nondeterministic.
+90 pin defects, 0 mismatches, 0 nondeterministic. With the open conics (§3.12, 11-27): 323
+exact, 532 within tolerance, 145 pin defects, 0 mismatches, 0 nondeterministic; the 55 new
+defects are the last four rows below.
 
 Each pin defect is judged against T5 by `t_ssi::truth::check`, in these classes (pool counts):
 
@@ -3276,6 +3458,10 @@ Each pin defect is judged against T5 by `t_ssi::truth::check`, in these classes 
 | Cone seam | 10 | splits the arc at `u = 0` | one piece |
 | Bounded cylinder or cone missed | 8 | general | empty |
 | Torus missed | 15 | general | empty |
+| Cone hyperbola | 19 + 12 | general | the branch on the nappe, in one piece or two |
+| Cone parabola | 13 + 5 | general | the parabola, in one piece or two |
+| Cone cut along a generator, off the apex | 4 | general | empty (the parabola on the other nappe or outside the extent) |
+| Cone hyperbola clipped to nothing | 2 | general | empty |
 
 **Timings.** These were measured side-channel with a throwaway timer, not committed. The
 timer ran over the difftest pool on prebuilt surfaces, 200 repetitions, per call. Each
@@ -3292,6 +3478,12 @@ figure is scx against the pin:
 The torus gap is mostly the pin's general fallback on the spiric cases. scx gives up on
 those cases at once and the caller pays later; the comparison is on what each call does.
 
+With the open conics (§3.12, 11-27), on the pool's cone cases, release: a hyperbola section
+1.70 us (31 cases) and a parabola 0.94 us (17) against the pin's 0.70 and 0.65 us, which
+answer `general` and leave the curve to the marcher; the other cone cases 0.89 us against
+3.17 us. The hyperbola's cost over the ellipse's is its clip (a quadratic in `e^t`, a `ln`
+per root) and `sinh_cosh` at the span's ends.
+
 **Other kernels (research 66).** §8.2 records that OCCT's IntAna does analytic quadric pairs.
 Its docs only were read, and no code. The techniques adopted here are ours:
 
@@ -3304,9 +3496,11 @@ Both are exact and deterministic. Nothing was taken that depends on a search or 
 
 - WR-680's oblique cylinder section in `pcurve_of`: done, an `AngleWave2` at the
   ellipse's parameter (§4.14). An oblique section of a cone is still `NoClosedForm`.
-- Parabola and hyperbola kinds in `scx-curve`. SS5 answers `General` for them until those
-  kinds exist.
-- SS2 to SS4.
+- ~~Parabola and hyperbola kinds in `scx-curve`.~~ Built 11-27 (§3.12); a cone's
+  parabola and hyperbola are solved.
+- The cylinder's ellipse too long for its precision, and the cone's band between the
+  parabola threshold and that bound: `General` (§3.12).
+- SS2's remaining gaps are listed in §3.12; SS4.
 
 ### 5.7 SS3 as built (11-27)
 
@@ -3669,6 +3863,268 @@ pub fn transform(b: &Brep, a: &Affine) -> Result<Brep, TransformError>;
 | BR7 | port the provenance and history tests onto `Changes` (01 §2.6) | BR3 |
 | BR8 | body generators in the testkit | BR1 |
 | BR9 | step 5: fitted pcurves by the writer, eagerly, to D10's target, with the recorded basis; the D4 refit | BR5, the `scx-nurbs` fitter (step 5) |
+
+### 6.6 BR1 as built (11-27)
+
+Decided by analysis and an adversarial pass. Proposed for review; not yet ruled.
+
+`crates/scx-brep` (layer 5, after `scx-ssi`) holds the ids, the records, `Brep` and `Draft`,
+the views and their iterators, and a `finish` that checks references only. BR2 to BR6 each
+have a seam left for them:
+
+- BR2: `check::run`, which runs after `check::references`.
+- BR3: the `Changes` stub, empty and `#[non_exhaustive]`.
+- BR4: `FaceCells` and `EdgeCells` with `reset()`, which hold no fields yet.
+- BR5: `UseGeom`, which the writer fills.
+- BR6: `Brep::edit` and `into_draft`.
+
+**The public surface.**
+
+```rust
+pub struct RegionId(u32); /* ShellId, FaceId, EdgeId, VertexId */  // from_raw, raw, index, Display "f3"
+impl RegionId { pub const OUTSIDE: Self; }
+pub enum EntityKind { Region, Shell, Face, Edge, Vertex }           // name()
+pub enum Entity { Region(RegionId), /* ... */ }                     // kind(), Display
+pub struct IdMap { /* per kind */ }  // region(old) -> Option<RegionId>, ..., is_identity()
+
+pub struct RegionRecord { pub solid: bool }
+pub struct ShellRecord { pub region: RegionId, pub wires: Vec<EdgeId>, pub lone_vertices: Vec<VertexId> }
+pub enum FaceSide { Front, Back }                                   // other(), BOTH
+pub struct FaceRecord { pub surface: Surface, pub sides: [ShellId; 2], pub loops: Vec<LoopRecord>, cells }
+pub struct LoopRecord { pub uses: Vec<EdgeUse> }
+pub struct EdgeUse { pub edge: EdgeId, pub sense: Sense, pub geom: UseGeom, pub bound: Option<Arc<Recorded>> }
+pub enum UseGeom { Pcurve { curve: Curve2, interval: Extent1d }, Point(Point2) }
+pub enum EdgeShape { Curve { curve: Curve, interval: Extent1d }, Collapsed }
+pub struct EdgeGeom { pub shape: EdgeShape, pub ends: [VertexId; 2], pub accuracy: Option<Arc<Recorded>>, cells }
+pub struct Fin { pub face: FaceId, pub sense: Sense }
+pub struct EdgeAdj { pub fins: Vec<Fin> }                           // radial order
+pub struct VertexRecord { pub point: Point3, pub accuracy: Option<Arc<Recorded>> }
+// every record #[non_exhaustive], built by its `new`
+
+impl Brep {   // Clone is cheap: tables are Arc'd
+    pub fn edit(&self) -> Draft;  pub fn into_draft(self) -> Draft;
+    pub fn compact(&self) -> (Brep, IdMap);
+    pub fn resolution(&self) -> Length;
+    pub fn region(&self, RegionId) -> Option<Region<'_>>;  /* shell, face, edge, vertex */
+    pub fn outside(&self) -> Region<'_>;
+    pub fn faces(&self) -> impl ExactSizeIterator<Item = Face<'_>> + DoubleEndedIterator + Clone; /* each kind */
+    pub fn face_slots(&self) -> usize;  /* edge_slots, vertex_slots: bitset sizes */
+}
+impl Draft {
+    pub fn new() -> Self;
+    pub fn finish(self, &Document) -> Result<(Brep, Changes), Box<Unfinished>>;
+    pub fn add_region(&mut self, solid: bool) -> Result<RegionId, TableFull>;
+    pub fn add_shell(&mut self, ShellRecord) -> Result<ShellId, TableFull>;
+    pub fn add_face(&mut self, FaceRecord) -> Result<FaceId, TableFull>;     // appends its fins
+    pub fn add_edge(&mut self, EdgeGeom) -> Result<EdgeId, TableFull>;
+    pub fn add_edge_pending(&mut self, ends: [VertexId; 2]) -> Result<EdgeId, TableFull>;  // A10
+    pub fn attach_curve(&mut self, EdgeId, Curve, Extent1d) -> Result<(), Absent>;
+    pub fn add_vertex(&mut self, VertexRecord) -> Result<VertexId, TableFull>;
+    pub fn face_mut(&mut self, FaceId) -> Option<&mut FaceRecord>;  /* region_, shell_, edge_, adjacency_, vertex_mut */
+    pub fn remove_face(&mut self, FaceId) -> Option<FaceRecord>;    /* each kind; remove_region(OUTSIDE) is None */
+    pub fn face(&self, FaceId) -> Option<Face<'_, Drafting<'_>>>;   /* each view, each iterator */
+}
+pub struct Face<'a, S: Stage = Finished>;  /* Region, Shell, Loop, Use, Edge, Vertex: Copy */
+pub trait Stage: sealed { type Look<T>; }  // Finished: Look<T> = T; Drafting: Look<T> = Option<T>
+pub struct Document;  // Default, with_resolution, resolution()
+pub enum FinishCause { MissingCurve { edge }, Structure(StructureCause) }  // #[non_exhaustive]
+pub enum StructureCause { Outside, Dangling { from: Entity, to: Entity }, FinWithoutUse { edge, fin } }
+pub struct Unfinished { pub draft: Draft, pub cause: FinishCause }  // kind(), name(), Error
+pub struct TableFull { pub kind: EntityKind }   // Exhausted, "table_full"
+pub struct Absent { pub entity: Entity }        // Refused, "absent"
+```
+
+Every public type is `Send + Sync`, checked by a `const` assertion in `lib.rs`. The views are
+checked at `'static`.
+
+**The decisions.** For each, the case for, the case against, and what would change it.
+
+- **The table is copy-on-write as a whole: `Arc<Vec<Option<T>>>` plus a live count.** Faces sit
+  in it as `Arc<FaceRecord>`. `edit` costs one `Arc` clone per table. The first write to a table
+  copies its slot vector. For faces, that copies pointers, and then only the written face is
+  copied.
+  - *For:* this is 01 §2.3's sharing at the least code. Reads go through one index. A face, the
+    largest record and the one most often left untouched, is never copied unless it is written.
+  - *Against:* the first edge or vertex write copies the whole edge or vertex table. For a body of
+    1e5 edges that is about 13 MB of `EdgeGeom` per edit that touches one edge.
+  - *Change if:* a profile shows edit cost growing with body size. Chunked tables (`Arc<[Chunk]>`)
+    can then go behind the same `Table` type without changing its API.
+- **An edge is two lockstep tables, geometry and adjacency, under one `EdgeId`.**
+  - *For:* `add_face` and `remove_face` write the radial order, and doing so copies no curve.
+    Most edits to topology leave the geometry alone.
+  - *Against:* two tables must stay in step. `add_edge` and `remove_edge` are the only writers of
+    both, and `check::references` reads them together.
+  - *Change if:* never; the split costs one `Arc` per edit.
+- **A fin is `(FaceId, Sense)`, not `(FaceId, u32)` with a use index (§6.3).** A fin is found
+  again by scanning the face's uses for that edge and sense. `Use::fin` and `Edge::uses` do this.
+  - *For:* a fin survives every loop edit that keeps the use: an insert, a split, a reorder.
+    With a use index, every one of those edits must rewrite every fin after the edit point,
+    because the positions shift. A seam, used twice by one face, still tells its two fins apart,
+    because the two uses have opposite senses.
+  - *Against:* finding a fin's use is linear in the face's uses, where an index is O(1). A face
+    that uses one edge twice in the same sense would be ambiguous. That is invalid: BR2 refuses it.
+  - *Change if:* profiles show `Edge::uses` hot on faces with many uses. A face cell can then map
+    each fin to its use, built lazily and reset with the face.
+- **Views are generic over a sealed `Stage` with a GAT.** In `Brep` they are total
+  (`Look<T> = T`). In `Draft` they return `Option` (`Look<T> = Option<T>`), because a draft may
+  dangle. One view type serves both stages.
+  - *For:* a finished body never returns an `Option` for a reference that `finish` proved live.
+    A draft never panics on one it has not proved. There is one implementation, not two.
+  - *Against:* a GAT in the signatures (`S::Look<Edge<'a, S>>`) is harder to read. `Finished`
+    turns an impossible `None` into `unreachable!`. That is sound only because `finish` runs
+    `check::references` and no `Brep` is built any other way. `compact` and `from_tables` keep
+    the invariant by construction.
+  - *Change if:* a second way to build a `Brep` appears, such as a decoder that skips `finish`.
+    That way must run `references` too.
+- **A pending curve (A10) is the draft's `pending: BTreeSet<EdgeId>`.** The stored shape is
+  `Collapsed` as a placeholder. Every view of a pending edge's shape returns `None`, and `finish`
+  reports the lowest pending edge as `MissingCurve`, kinded `Defect`.
+  - *For:* `EdgeShape` stays the two-case D8 enum. A finished body cannot hold a pending edge,
+    because the set lives only in `Draft`.
+  - *Against:* inside the draft, the record's `shape` reads `Collapsed` through `edge_mut`. A
+    writer that reads the record rather than the view sees a wrong answer.
+  - *Change if:* a writer trips on it. Then add an `EdgeShape::Pending` that only a draft can
+    hold, refused by `finish`.
+- **No stored face sense (unlike §6.3's `sense: Sense`).** The surface carries its own sense
+  (D14). The face's front side is the side of the surface's natural normal.
+  - *For:* one sense, not two that can disagree. Mirroring flips the kind's sense once.
+  - *Against:* flipping a face means rebuilding its surface value, not toggling a bit. That costs
+    a copy of up to 104 bytes.
+  - *Change if:* never.
+- **No stored face accuracy (unlike §6.3's `accuracy`).** It is derived from the uses' bounds
+  and the edges' accuracies, so it becomes a BR4 cell.
+  - *For:* 01 records accuracy where a writer measures it: on the use, the edge and the vertex.
+    A stored face figure would be a cache that can go stale.
+  - *Against:* if a writer ever measures a face-level figure (a surface fitted to within some
+    distance), it has nowhere to go.
+  - *Change if:* step 5's surface fitting records one. Then it is added as
+    `FaceRecord::accuracy`, `#[non_exhaustive]` allowing.
+- **Recorded accuracy is `Option<Arc<Recorded>>`, not 01's `Option<Recorded>`.** The use's
+  field is named `bound`, as 01 has it. `Recorded` is 72 bytes. Inline, it makes `EdgeUse`
+  152 bytes, `EdgeGeom` 192 and `VertexRecord` 96. With the `Arc` they are 88, 128 and 32.
+  - *For:* most entities have no recorded accuracy, because they are within the resolution (01
+    C4). Each pays 8 bytes rather than 72. A walk over uses touches about half the cache lines.
+  - *Against:* a tolerant body pays a pointer chase on each read, and an allocation on each write.
+  - *Change if:* profiles of tolerant bodies show accuracy reads. Then split the record into an
+    inline figure plus an `Arc`'d basis.
+- **`ShellRecord` stores no face list.** `Shell::faces` and `Region::shells` scan the face and
+  shell tables. `Vertex::edges` scans the edges.
+  - *For:* one owner per fact. A face names its shells, and no second list can disagree with it.
+  - *Against:* each of those calls is O(body). An algorithm that walks shell by shell is
+    quadratic.
+  - *Change if:* a BR4 body cell (shell to faces, vertex to edges) is built lazily from the scan.
+    That is the planned home, and the record does not change.
+- **Each add returns `Result<_, TableFull>`.** A table that has given every `u32` id is
+  `Exhausted`, not a panic or a wrap.
+  - *For:* 01 §2.2's "never reused" stays true. Library code panics on nothing.
+  - *Against:* every builder writes a `?` for a case no real body reaches.
+  - *Change if:* never.
+- **`attach_curve` returns `Result<(), Absent>`.** It refuses an edge that is not live. An edge
+  that is live but not pending simply takes the curve.
+  - *For:* a caller that names a dead id hears about it.
+  - *Against:* replacing a curve that is already attached gives no signal.
+  - *Change if:* BR3's event recording needs to tell an attach from a replace.
+- **`add_face` appends its fins; `face_mut` does not update them.** `remove_face` drops its
+  fins. A writer that edits loops through `face_mut` must fix the fins by hand, through
+  `adjacency_mut`. `finish` reports `FinWithoutUse` for a fin left behind. A use without its fin
+  is BR2's check.
+  - *For:* the common build path, add a face, is right by construction. Editing loops in place
+    is the rare writer's job, and the check catches it.
+  - *Against:* half of the radial invariant is maintained, and half is checked.
+  - *Change if:* BR3's event recording gives loop edits their own calls. Those calls can keep
+    the fins.
+- **A cell reset skips cells that are already empty.** `edge_mut` resets the cells of the faces
+  that use the edge, and `vertex_mut` those of its star. Faces whose cells are empty are skipped,
+  so a face is not copied just to reset nothing.
+  - *For:* without the skip, every edge write would copy each adjacent face. That is the face
+    copy the face `Arc` exists to avoid.
+  - *Against:* until BR4 the cells are always empty, so the reset path is not exercised. The
+    test `an_edge_or_vertex_write_copies_no_face` pins the skip, not the reset.
+  - *Change if:* BR4 must test the reset with real cells.
+- **`finish` checks references now.** It checks that the outside exists and is void, that every
+  id a record names is live, and that every fin has its use. Records are walked in kind order,
+  then id order, and the lowest failure is the cause.
+  - *For:* the total views need it, so it cannot wait for BR2.
+  - *Against:* BR2 will put its structure check next to this one, so the order of causes is
+    shared ground.
+  - *Change if:* BR2 needs a different order. The order is the function's.
+- **How the causes are kinded.** `StructureCause` is `Refused`, because the caller built a bad
+  draft. `MissingCurve` is `Defect`, per D8.
+  - *Against:* a decoder's dangling id is the input's fault, not the caller's. It may want
+    `Invalid`.
+  - *Change if:* the record decoder (`scx-record`) maps it. This is open.
+- **`Document` holds only the resolution.** 01's units and size class have no types yet.
+  - *Change if:* they land. `Document` is `#[non_exhaustive]` with `Default`, so adding fields
+    breaks no caller.
+- **`compact` is built; `shed_cells` is not.** There are no cells yet. `compact` returns a clone
+  when the `IdMap` is the identity.
+- **Live iteration skips empty slots without a live list.** Research 66 §14 measured deleted
+  slots costing about 3× in the pin's arena walks. The tables keep a live count, so each `len`
+  is exact, and the walk skips `None` slots.
+  - *For:* this is the least state to keep. `compact` is how a long edit sequence gets dense
+    again.
+  - *Against:* a body that has had many deletions and was never compacted walks its dead slots.
+  - *Change if:* profiles show it. Then add a live bitset to `Table`, behind the same `iter`.
+- **No Morton ordering** (66 §14: rejected). Id order is the order.
+
+**Tests.** There are 19 unit tests: ids, tables, errors, sharing and copy-on-write, writes in
+place on `into_draft`, no face copied by an edge or vertex write, pending and `MissingCurve`,
+each structure cause and its order, the draft views, fin removal, `compact`, and record sizes.
+There are three integration tests in `tests/bodies.rs`:
+
+- A unit block is built by hand and every view and iterator is walked:
+  - counts of 2 regions, 2 shells, 6 faces, 12 edges and 8 vertices;
+  - Euler's formula;
+  - every vertex star of 3;
+  - every `next`/`prev` ring;
+  - every fin to its use and back;
+  - the draft walk equals the finished walk;
+  - an edit and finish round trip, and `compact`;
+  - the body is read from a second thread.
+- A capped cylinder is walked the same way. Its wall uses the seam twice, at positions 1 and 3,
+  with fins Forward then Reversed.
+- A rewritten face leaves the original body alone.
+
+There is no difftest against the pin: its topology is four use levels, and no single call
+matches one view.
+
+**Measured** (throwaway timer, not committed; release build, best of 7). The walk is A9's: all
+faces, then their loops, then their uses, marking each edge in a bitset.
+
+Record sizes, in bytes:
+
+| scx-brep | Bytes | Pin | Bytes |
+|---|---|---|---|
+| `FaceRecord` | 136 | `Face` | 408 |
+| `LoopRecord` | 24 | `Loop` + `Loopuse` | 40 + 40 |
+| `EdgeUse` | 88 | `Edgeuse` | 472 |
+| `EdgeGeom` + `EdgeAdj` | 128 + 24 | `Edge` | 392 |
+| `VertexRecord` | 32 | `Vertex` | 64 |
+| `ShellRecord` | 56 | | |
+
+The walk, in ns per face:
+
+| Body | Faces | Through `Use::record().edge` | Through `Use::edge().id()` |
+|---|---|---|---|
+| scx quad sheet 1×1 | 1 | 4.4 | 6.7 |
+| scx quad sheet 8×8 | 64 | 5.3 | 6.4 |
+| scx quad sheet 32×32 | 1,024 | 4.4 | 7.0 |
+| scx quad sheet 100×100 | 10,000 | 11.3 | 17.6 |
+| pin box, `Loop::edges` (port-only list) | 6 | 6.1 | |
+| pin box, `loop_edgeuses` (the edge-use ring) | 6 | 38.3 | |
+| pin cylinder, `Loop::edges` | 3 | 4.8 | |
+| pin cylinder, `loop_edgeuses` | 3 | 33.4 | |
+
+The pin was measured on its primitives, because it has no grid builder. The quad sheet stands
+in for BR8's largest generated body, which does not exist yet.
+
+- On equal ground the walk matches the pin's fastest path, its port-only `Loop::edges` list.
+- It is about 7× faster than the pin's faithful edge-use ring, which allocates a `Vec` per loop
+  and goes through a `Result` per step.
+- The view path's extra cost over the record is the edge-table lookup that makes the `Edge`
+  view.
+- At 10,000 faces (about 1.4 MB of face records) the walk falls out of L2.
+- Research 51's 4.9 ns per face is met up to 1,024 faces.
 
 ## 7. `scx-record`
 

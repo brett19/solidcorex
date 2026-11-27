@@ -5,7 +5,7 @@
 
 use core::f64::consts::{FRAC_PI_2, TAU};
 
-use scx_curve::{Circle, Curve, Ellipse, Line};
+use scx_curve::{Circle, Curve, Ellipse, Hyperbola, Line, Parabola};
 use scx_num::extent1d::Extent1d;
 use scx_num::extent2d::Extent2d;
 use scx_num::fmath;
@@ -88,6 +88,10 @@ pub(super) enum Shape {
         b: Vec3,
         circle: bool,
     },
+    /// `v + t^2 x + t y`, `x` square to `y` and `|y| = 2 |x|`: [`Parabola`]'s parameter.
+    Parabola { v: Point3, x: Vec3, y: Vec3 },
+    /// The branch `c + cosh t a + sinh t b`, `a` square to `b`.
+    Hyperbola { c: Point3, a: Vec3, b: Vec3 },
 }
 
 impl Shape {
@@ -97,6 +101,11 @@ impl Shape {
             Self::Conic { c, a, b, .. } => {
                 let (s, co) = fmath::sin_cos(t);
                 c + a * co + b * s
+            }
+            Self::Parabola { v, x, y } => v + x * (t * t) + y * t,
+            Self::Hyperbola { c, a, b } => {
+                let (sh, ch) = fmath::sinh_cosh(t);
+                c + a * ch + b * sh
             }
         }
     }
@@ -108,11 +117,17 @@ impl Shape {
                 let (s, co) = fmath::sin_cos(t);
                 b * co - a * s
             }
+            Self::Parabola { x, y, .. } => x * (2.0 * t) + y,
+            Self::Hyperbola { a, b, .. } => {
+                let (sh, ch) = fmath::sinh_cosh(t);
+                a * sh + b * ch
+            }
         }
     }
 
     /// The crossings of the side with the curve, pushed onto `out`: on a conic in
-    /// `[0, 2 pi)`.
+    /// `[0, 2 pi)`. A side touching an open conic may be missed: the spans either side of
+    /// a touch are both in or both out, and merge.
     fn crossings(&self, side: &Side, out: &mut Vec<f64>) {
         match *self {
             Self::Line { o, d } => {
@@ -142,6 +157,26 @@ impl Shape {
                     out.push(t.rem_euclid(TAU));
                 }
             }
+            Self::Parabola { v, x, y } => {
+                let gamma = side.w.dot(v.to_vec()) + side.c;
+                quadratic(side.w.dot(x), side.w.dot(y), gamma, out);
+            }
+            Self::Hyperbola { c, a, b } => {
+                // alpha cosh t + beta sinh t + gamma = 0 is, times 2 e^t, a quadratic in
+                // e^t; only its positive roots are crossings.
+                let (alpha, beta) = (side.w.dot(a), side.w.dot(b));
+                let gamma = side.w.dot(c.to_vec()) + side.c;
+                let mut roots = Vec::with_capacity(2);
+                quadratic(alpha + beta, 2.0 * gamma, alpha - beta, &mut roots);
+                for x in roots {
+                    if x > 0.0 {
+                        let t = fmath::ln(x);
+                        if t.is_finite() {
+                            out.push(t);
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -155,6 +190,8 @@ impl Shape {
                 b: -b,
                 circle,
             },
+            Self::Parabola { v, x, y } => Self::Parabola { v, x, y: -y },
+            Self::Hyperbola { c, a, b } => Self::Hyperbola { c, a, b: -b },
         }
     }
 
@@ -176,7 +213,47 @@ impl Shape {
                         .map(Curve::Ellipse)
                 }
             }
+            Self::Parabola { v, x, y } => {
+                let frame = Frame::new(v, x.cross(y), x)?;
+                Parabola::new(frame, Length::from_mm(x.length()), Sense::Forward)
+                    .ok()
+                    .map(Curve::Parabola)
+            }
+            Self::Hyperbola { c, a, b } => {
+                let frame = Frame::new(c, a.cross(b), a)?;
+                let (la, lb) = (Length::from_mm(a.length()), Length::from_mm(b.length()));
+                Hyperbola::new(frame, la, lb, Sense::Forward)
+                    .ok()
+                    .map(Curve::Hyperbola)
+            }
         }
+    }
+}
+
+/// The finite real roots of `a t^2 + b t + c = 0` onto `out`, without cancellation
+/// (Numerical Recipes 5.6); a double root once, none when the discriminant is negative.
+fn quadratic(a: f64, b: f64, c: f64, out: &mut Vec<f64>) {
+    let mut push = |t: f64| {
+        if t.is_finite() {
+            out.push(t);
+        }
+    };
+    if a == 0.0 {
+        if b != 0.0 {
+            push(-c / b);
+        }
+        return;
+    }
+    let disc = b * b - 4.0 * a * c;
+    if disc.is_nan() || disc < 0.0 {
+        return;
+    }
+    let q = -0.5 * (b + disc.sqrt().copysign(b));
+    if q == 0.0 {
+        push(0.0);
+    } else {
+        push(q / a);
+        push(c / q);
     }
 }
 
@@ -574,7 +651,9 @@ impl<'a> Clip<'a> {
         let inside = |t0: f64, t1: f64| self.contains(shape.at(0.5 * (t0 + t1)));
         let mut out: Vec<[f64; 2]> = Vec::new();
         match shape {
-            Shape::Line { .. } => {
+            // An open curve is bounded by the plane's rectangle, so its pieces lie between
+            // crossings.
+            Shape::Line { .. } | Shape::Parabola { .. } | Shape::Hyperbola { .. } => {
                 for w in cuts.windows(2) {
                     if let [t0, t1] = *w
                         && inside(t0, t1)
@@ -632,7 +711,7 @@ fn normalised(t0: f64, t1: f64) -> [f64; 2] {
 /// `[0, 2 pi)`).
 fn flipped(shape: &Shape, [t0, t1]: [f64; 2]) -> [f64; 2] {
     match shape {
-        Shape::Line { .. } => [-t1, -t0],
+        Shape::Line { .. } | Shape::Parabola { .. } | Shape::Hyperbola { .. } => [-t1, -t0],
         Shape::Conic { .. } => normalised(-t1, -t0),
     }
 }
