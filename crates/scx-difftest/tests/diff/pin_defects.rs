@@ -4511,3 +4511,85 @@ pub fn poly_from_roots() -> PinDefect<(f64,), Vec<Vec<f64>>> {
         },
     }
 }
+
+/// `NurbsSurface::partials_over` and `partials_over_piece` on a polynomial surface, where
+/// scx skips the weight function and the rational quotient (research 63 §2.6, NS4 as
+/// built). The pin takes the quotient there too, with a weight function whose enclosures
+/// hold 1 (order 0) and 0 (the others) but are intervals wider than those points, and
+/// shifts `about` by its weight interval, not by 1: every interval it divides by or
+/// subtracts is wider than scx's point, so scx's numerator is the pin's result taken with
+/// narrower operands and, by inclusion isotonicity, lies inside it. The check: the pin's
+/// result recomputed, every scx interval inside the pin's one; where the pin refuses
+/// (its weight function not proved positive over a wide box, which a polynomial's weight 1
+/// never is for scx), any answer. A rational surface is the pin's bits and never excused.
+fn enclose_inside(
+    b: &crate::t_nurbs_surface_enclose::BoxAt,
+    got: &Option<crate::t_nurbs_surface_enclose::Enc>,
+    pin: Option<crate::t_nurbs_surface_enclose::Enc>,
+) -> Result<(), String> {
+    if b.raw.weights.is_some() {
+        return Err("a rational surface's enclosure is the pin's".into());
+    }
+    let (Some(got), Some(pin)) = (got, pin) else {
+        return if got.is_some() {
+            Ok(())
+        } else {
+            Err("scx refused a box the pin encloses".into())
+        };
+    };
+    if got.len() != pin.len() {
+        return Err(format!("{} partials, the pin's {}", got.len(), pin.len()));
+    }
+    for (k, (g, s)) in got.iter().zip(&pin).enumerate() {
+        for e in 0..3 {
+            let (gl, gh, sl, sh) = (g[2 * e], g[2 * e + 1], s[2 * e], s[2 * e + 1]);
+            if !(sl <= gl && gh <= sh) {
+                return Err(format!(
+                    "partial {k} [{e}]: [{gl}, {gh}] not inside the pin's [{sl}, {sh}]"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+type EncDefect = PinDefect<
+    (crate::t_nurbs_surface_enclose::BoxAt,),
+    Option<crate::t_nurbs_surface_enclose::Enc>,
+>;
+
+/// [`enclose_inside`] for `partials_over::<2>`.
+pub fn nurbs_surface_enclose_over() -> EncDefect {
+    PinDefect {
+        reason: "a polynomial surface's enclosure skips the quotient: inside the pin's",
+        applies: Applies::Disagreeing,
+        check: |(b,), r| enclose_inside(b, r, crate::t_nurbs_surface_enclose::s::over::<2>(b)),
+    }
+}
+
+/// [`enclose_inside`] for `partials_over::<4>`.
+pub fn nurbs_surface_enclose_over4() -> EncDefect {
+    PinDefect {
+        reason: "as nurbs_surface_enclose_over",
+        applies: Applies::Disagreeing,
+        check: |(b,), r| enclose_inside(b, r, crate::t_nurbs_surface_enclose::s::over::<4>(b)),
+    }
+}
+
+/// [`enclose_inside`] for `partials_over::<0>`.
+pub fn nurbs_surface_enclose_point() -> EncDefect {
+    PinDefect {
+        reason: "as nurbs_surface_enclose_over",
+        applies: Applies::Disagreeing,
+        check: |(b,), r| enclose_inside(b, r, crate::t_nurbs_surface_enclose::s::over::<0>(b)),
+    }
+}
+
+/// [`enclose_inside`] for `partials_over_piece::<1>`.
+pub fn nurbs_surface_enclose_piece() -> EncDefect {
+    PinDefect {
+        reason: "as nurbs_surface_enclose_over",
+        applies: Applies::Disagreeing,
+        check: |(b,), r| enclose_inside(b, r, crate::t_nurbs_surface_enclose::s::piece::<1>(b)),
+    }
+}

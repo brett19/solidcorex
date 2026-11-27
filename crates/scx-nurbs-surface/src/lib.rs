@@ -7,6 +7,9 @@
 //! - [`NurbsSurfaceError`]: why a net or a surface cannot be built or evaluated;
 //! - evaluation: [`NurbsSurface::point`], [`NurbsSurface::jet`] (the partials to a fixed
 //!   total order, a [`scx_num::jet::SurfaceJet`]) and [`NurbsSurface::eval_many`];
+//! - enclosures: [`NurbsSurface::partials_over`] and [`NurbsSurface::partials_over_piece`],
+//!   every partial to a total order over a box of parameters as intervals, about the point
+//!   [`About`] picks;
 //! - [`iges`]: IGES entity 128 to and from a surface.
 //!
 //! The knot vectors, their degree cap ([`scx_nurbs::MAX_DEGREE`]), [`scx_nurbs::Approach`]
@@ -15,16 +18,18 @@
 //! every check runs once, in [`NurbsSurface::new`] or [`NurbsSurface::from_homogeneous`].
 //!
 //! The by-value edits (insertion, elevation, splitting, reversal, swapping, transformation)
-//! and enclosures build on these types (research 63 §2.5, NS3 and NS4).
+//! and the enclosures build on these types (research 63 §2.5 and §2.6, NS3 and NS4).
 
 mod edit;
+mod enclose;
 mod error;
 mod eval;
 pub mod iges;
 mod net;
 mod surface;
 
-pub use error::{NetCause, NurbsSurfaceError, WeightCause};
+pub use enclose::About;
+pub use error::{EnclosureCause, NetCause, NurbsSurfaceError, WeightCause};
 pub use net::Net;
 pub use surface::{NurbsSurface, ParamAxis};
 
@@ -40,4 +45,6 @@ const _: () = {
     ok::<NurbsSurfaceError>();
     ok::<NetCause>();
     ok::<WeightCause>();
+    ok::<EnclosureCause>();
+    ok::<About<3>>();
 };

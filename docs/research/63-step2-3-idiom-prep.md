@@ -881,6 +881,120 @@ Ratios against the pin, measured in one session on a loaded machine (best of 5):
 What is left is one copy of the lines, and the `w P / w` and check passes on the way in and out.
 Reverse (2.1) and swap (4.1) are copies of three nets and are unchanged.
 
+#### NS4 as built (11-27)
+
+Proposed for review, not yet ruled. The code is in `crates/scx-nurbs-surface/src/enclose.rs`.
+The pin's `geom::nurbs_enclosure` encloses every partial `S^(a,b)`, `a + b <= N`, over a box of
+parameters as intervals, by a centred Taylor form. NS4 ports it.
+
+- **A method, not a cell.** The table row says "as a cell", but the enclosure depends on the
+  box, the order and the point it is taken about, so a per-surface `OnceLock` has nothing to
+  hold. Two alternatives were weighed:
+  - A cell of each piece's Taylor coefficients. It would save the basis at the middle, but the
+    middle moves with the box, so the coefficients would have to be re-centred, a
+    `(p + 1)²(q + 1)²` interval pass. That is the same order of work as computing them, and it
+    widens every interval. It loses on both counts.
+  - A cell of enclosure tables, keyed by boxes. That is a cache across calls, and it belongs in
+    the caller's `Scratch` (X4), not in the surface.
+
+  So the API is `partials_over_piece::<N>(span, uv, about)` and `partials_over::<N>(uv,
+  continuity, about)` on `&self`, returning `SurfaceJet<[Ivl; D], N>` like `jet::<N>`.
+- **`About` replaces the pin's four entry points and `Shift`.** The `About` variants are
+  `Origin`, `Point(o)` (the pin's `_about` forms) and `Middle`. The pin's `Shift::Middle` is
+  crate-only, but it is the form its callers use, so scx keeps it. The difftest cannot reach
+  it, so the unit tests check it against the exact partials. The alternative was a
+  `Option<[f64; D]>` argument: it reads well, but it cannot say `Middle`.
+- **The rational path is the pin's arithmetic; the polynomial path skips the quotient.** On a
+  rational surface the homogeneous partials, the shift, the Taylor sums and A4.4's interval
+  quotient run in the pin's order. The difftest bit-checks this: 768 rational calls, all
+  bit-identical. On a polynomial surface the pin still divides by a weight function. That
+  function's enclosures hold 1 and 0 but are wider than those points, and the pin shifts `o`
+  by its weight interval. scx sums the numerator alone and shifts by `o`. Every operand is
+  then narrower than the pin's, so by inclusion isotonicity the result lies inside the pin's,
+  and it is about 20 to 40 % cheaper. The alternative was to copy the pin's weight lane: same
+  bits, but wider and slower for no gain. The pin defect checks containment.
+- **Errors are typed and mostly `Refused`.** `EnclosureCause` has five variants:
+  - `NotAPiece`;
+  - `BoxNotFinite`;
+  - `BoxOutside`;
+  - `BelowContinuity` (`box_crosses_rough_knot`);
+  - `WeightsNotPositive`.
+
+  All are `Refused` except `WeightsNotPositive`, which is `Unsupported`: a smaller box may prove
+  the weights positive. The pin returns `Unsupported` for all of them, but they are the
+  caller's data (62 D11). The pin also trusts a span index and never checks a box. scx checks
+  both, because an unchecked span makes the method index outside the net.
+- **The order cap is 31 (`MAX_ORDER`), not the pin's `MAX_K` = 13.** It is refused as `Basis {
+  cause: DerivativeOrder }`, as `jet` refuses it. The binomials are exact to 31. The pin's
+  `p!/(p-k)!` is a double, exact while it is below 2^53, which covers every degree the pin
+  allows (17 or less). scx forms it in `u128` and takes an outward interval past 2^53. The pin
+  has no defect here, since it refuses those degrees.
+- **Box cuts use the knot vector's spans.** A box is cut at the knot lines strictly inside it,
+  and each part is enclosed on its own piece. A zero-width box on an interior knot gives both
+  sides' pieces. A crossed line whose continuity is below `continuity` is refused before any
+  part is enclosed, u before v. The pin finds a span by its own search, which returns an empty
+  span at an unclamped end. scx uses `KnotVector::span` with `Approach::Above`/`Below`, so
+  every part is a real piece.
+- **Research 66 §4.1 (sizing the scratch by order): adopted.** One buffer holds the basis
+  rows, the A2.3 work, the homogeneous partials and the powers. It lives on the stack (512
+  `Ivl`, 8 KiB) up to degree 7 each way at `D = 3`, and in a `Vec` past that. This is
+  OpenNURBS's shape. It is bit-identical, because only the storage changes. The pin allocates
+  several `Vec`s per piece.
+- **Research 66's explicit span hint: not adopted.** A span is one binary search per direction
+  per call, against `O(p²q²D)` interval products. It would be unmeasurable, and it would add
+  an argument that can be wrong. `partials_over_piece` already takes the span for a caller
+  that has one.
+- **Not ported:**
+  - The pin's crate-only `weights: Option<Ivl>` cut, which narrows the weight enclosure to a
+    caller's certificate. A cut that no caller can check is unsound in a public method.
+  - A public hull helper.
+- **CU3's `eval_over`/`Ranged` is not used.** It is direct interval evaluation, not the
+  centred form. It is wider on small boxes, and its bits are not the pin's.
+
+Unit tests (`enclose/tests.rs`, 8): every `About`, on near and far surfaces, holds the exact
+(rational) partials at sample points of the box, both sides of a knot included. They also
+check that a point box is tight (within `1e-11` of the jet's largest entry), that a near `o`
+is narrower, that the piece continues past its span, degrees 5, 19 and 25 (the heap path),
+every refusal, a weight function not proved positive, and the cuts.
+
+Difftest `t_nurbs_surface_enclose`: 4 tests, 1,592 inputs, against
+`nurbs_partials_over_box(_about)` and `nurbs_partials_over_piece(_about)`. The inputs are the
+`t_nurbs_surface` surfaces that both sides build. The boxes are a random point, the whole
+domain, a narrow box, both ends, and for an interior knot the point on it, a box across it and
+a box ending on it. The about points cycle through the origin, a control point and a far
+point, and the continuity cycles through 0 to 2.
+
+| Test | Inputs | Exact | Within tolerance | Pin defects | Mismatches |
+|---|---|---|---|---|---|
+| `nurbs_surface_enclose_over` (order 2) | 400 | 207 | 13 | 180 | 0 |
+| `nurbs_surface_enclose_over4` (order 4) | 400 | 206 | 0 | 194 | 0 |
+| `nurbs_surface_enclose_point` (order 0) | 392 | 198 | 175 | 19 | 0 |
+| `nurbs_surface_enclose_piece` (order 1) | 400 | 200 | 75 | 125 | 0 |
+
+Every input within tolerance and every pin defect is a polynomial surface. The pin defect
+(`nurbs_surface_enclose_*`) recomputes the pin's result and requires each scx interval to lie
+inside the pin's. It never applies to a rational surface. Where the pin refuses, the defect
+accepts any scx answer, and on these inputs both sides refused the same 18 polynomial calls.
+
+**Perf (local release loop, best of 5).** The test is `partials_over::<2>` about a point, on a
+box `[0.31, 0.47] × [0.22, 0.61]` of a surface with uniform knots and `p + 4` points each way,
+so the box crosses knot lines in both directions.
+
+| Degrees | Rational | scx | pin | scx / pin |
+|---|---|---|---|---|
+| (1, 1) | no | 4.5 µs | 7.6 µs | 0.59 |
+| (3, 3) | no | 41.0 µs | 49.9 µs | 0.82 |
+| (3, 3) | yes | 53.3 µs | 50.5 µs | 1.05 |
+| (5, 5) | yes | 242 µs | 225 µs | 1.07 |
+| (7, 7) | yes | 636 µs | 636 µs | 1.00 |
+| (9, 9) | yes | 1,485 µs | 1,482 µs | 1.00 |
+
+The rational path does the pin's arithmetic, so it costs the same. The extra 5 to 7 % at
+degrees 3 to 5 is the checks and the span searches. The cost is all interval products, which
+round outward through `checked`. A faster form would change the bits: a Horner Taylor sum, or
+products of the basis rows before the net sum. That is a separate decision, recorded here and
+not taken.
+
 ## 3. `scx-curve`
 
 The step-2 slice covers line, circle, ellipse and B-spline, in 3-D and 2-D, with `Curve` and its
@@ -1559,6 +1673,8 @@ seeded queries, from a throwaway bench since deleted.
   bench passed a degree interval and a degree guess to a solve that runs on the carried
   NURB's parameter, so the figure is not a fair comparison and is not claimed.
 
+**Perf follow-up (11-27).** The ellipse foot took 1.11 us a query because every query solved the quartic for a seed. `quadrant_root` now seeds with the foot of a point on the curve, `atan2(a v, b u)`, and polishes with the same safeguarded Newton (6 steps at most); a query that does not converge in them is redone from the quartic as before. No certificate is needed: the first-quadrant root of `g` is unique and the bracket `(0, pi/2)` holds every step, so either seed ends at the global nearest foot. The fast polish also stops where `g` is within rounding of zero (`|g| <= 4 eps (|k sin cos| + a u sin + b v cos)`) and the Newton step is within `4 eps s`; the quartic path keeps its old stop. Added work per query: one `atan2`, and a `sin_cos` per step, 1.0 to 3.6 steps on or within 1e-3 of the curve (the quartic ran every query before; it now runs for 0 to 6% of those, 2 to 39% of far points). Per query, best of 3 runs of 100 passes over 2,000 points, four ellipses (5/3, 10/1, 2/1.9, 1/8): on the curve 783/980/558/439 ns before, 136/175/127/104 after; 1e-9 off 786/1001/576/450 before, 180/227/169/148 after; 1e-3 off 802/1021/558/452 before, 206/317/204/212 after; far 842/857/756/807 before, 312/421/246/503 after. Some output bits change (7,147 of 22,400 test queries, on the angle in the last ulps); against the testkit's certified nearest the new distances are equally or more correct (the mean distance error is at or below the old on each of 7 ellipses, 1.9e-16 against 2.8e-16 and 2.6e-15 against 3.4e-15 at most; worst 8.9e-14 against 9.0e-14, the same ill-conditioned 100/0.01 ellipse), and the angles are as close (worst 1.9e-13 both). The pin's 33.5 ns answers only points on the curve.
+
 ### 3.11 CU6 as built (11-27)
 
 Proposed for review, not yet ruled.
@@ -2236,6 +2352,119 @@ vector validation or continuity check (each a pass over the knots). No evaluatio
 changed: the kinds gained only `const` rebuild helpers, `Surface` keeps its size (104
 bytes), and the difftest's `nurbs_surface_reversed` pin defect now checks negation (exact
 knots, the exactly flipped net, and the point at `-t` from the other side for degrees up to 3).
+### 4.10 SU8 as built (11-27)
+
+Decided by analysis and an adversarial pass; proposed for review, not yet ruled.
+
+```rust
+#[non_exhaustive] #[derive(Debug, Clone, PartialEq)]
+pub enum AnyCurve { Free(Curve), OnSurface(CurveOnSurface) }   // at most 112 bytes
+pub struct CurveOnSurface { uv: Curve2, surface: Arc<Surface> } // private fields
+impl CurveOnSurface {
+    pub fn new(uv: Curve2, surface: impl Into<Arc<Surface>>) -> Self;
+    pub fn uv(&self) -> &Curve2;  pub fn surface(&self) -> &Arc<Surface>;
+    pub fn domain(&self) -> ParamDomain;  pub fn point(&self, t: f64) -> Point3;
+    pub fn jet<const D: usize>(&self, t: f64, side: Approach) -> CurveJet<D>;
+    pub fn eval_many(&self, ts: &[f64], out: &mut [Point3]);
+}
+// AnyCurve: domain, point, jet::<D>, eval_many by match; From<Curve>, From<CurveOnSurface>.
+```
+
+Why SU8 next, not SU5 or SU6: SU5 moved to `scx-ssi` as SS5 (M3). SU6 depends on CU4, which
+is not on main. SU8 depends on CU2 and SU2, both done.
+
+- **A struct, not a one-arm `SurfaceCurve` enum.** 56 §7.1 names the arm `OnSurface(SurfaceCurve)`.
+  Only the parameter-space curve exists in step 2, so an enum would have one arm and nothing
+  to tell apart. Against it: speculative structure. The struct can become an arm of such an
+  enum when another kind of on-surface curve exists.
+- **The surface behind an `Arc`, not held by value.** The curves on one face share one
+  surface. By value, `Surface` (up to 128 bytes) would sit in every pcurve and push
+  `AnyCurve` past the free curve's size. With the `Arc`, the arm is a `Curve2` (at most
+  64 bytes) and a pointer, and `AnyCurve` stays at 112 bytes or less. `new` takes
+  `impl Into<Arc<Surface>>`, so a caller can pass a `Surface` or an `Arc` it already holds.
+- **None of the pin's extra state.** The pin's `CrvOnSurf` holds a uv domain of interest,
+  owner flags, a break cache, an approximation cache and a curve cache. The `Arc` replaces
+  the owner flags. The domain is the uv curve's, and the caller trims as it does for any
+  curve. The caches are derived data, which A3 says to memoise in the caller if a profile
+  asks. Against keeping them: interior mutability in a value type, and a `PartialEq` that
+  would have to ignore them.
+- **`new` cannot fail.** Every `Curve2` has a point at every `t`, and every surface has a
+  point at every `uv`. A NURBS surface continues its end pieces past its knots, and the
+  analytic kinds are defined everywhere. The pin's constructor checks only its nesting
+  depth, which does not arise here. Against `Result`: no arm of it is reachable.
+- **The surface's side in each direction follows the curve, not `side`** (more correct than
+  the pin). The pin's `evaluate` passes `from_left` as the side in both u and v. Where the uv
+  curve crosses a knot line backward (u falling as t rises), that takes the partials of the
+  piece the curve is leaving. scx reads the side from the sign of the coordinate's first
+  nonzero derivative, turned for an odd order when `t` moves down. When every derivative to
+  order D is zero, no partial along that direction reaches the result, and `side` is used.
+  This also handles a curve tangent to a knot line (`u' = 0`, `u'' < 0`), which stays below
+  the line on both sides. Tested on a C0 crease, `(2u, v, 0)` meeting `(1, v, 2u - 1)`: each
+  case matches the one-sided difference, and swapping in the pin's rule fails both tests.
+  Where the sides agree, the result is the pin's.
+- **Chain rule to any order, written out to 3; the pin caps at 3.** Orders 1 to 3 use the
+  pin's `lift_second_derivative` and `lift_third_derivative` with the same grouping and sum
+  order, so from the same partials they give the pin's bits. Past order 3, the Taylor series
+  is used: with `du = sum u^(k) h^k / k!`, take `sum S^(i,j)/(i! j!) du^i dv^j` truncated to
+  degree D, then multiply by `n!`. The alternative was Taylor for every order: one code path,
+  but it cost +40 to +100 ns at order 3 against +6 ns for the written-out form (table
+  below). Both paths are checked to D = 6 against the composite polynomial in exact
+  rationals, with random dyadic jets, to 1e-14 of the absolute-value bound. They agree with
+  each other at D ≤ 3, bit for bit at order 1.
+- **No `point_over` yet.** `Surface` has no scalar-generic evaluation (open from SU2), so the
+  composite has none.
+- **`eval_many` goes through a 64-point stack buffer of uv points** into `Surface::eval_many`,
+  so it needs no allocation and gives `point`'s bits.
+- **`#[non_exhaustive]` and a size assert (≤ 112 bytes).** The intersection-curve arm (step 5)
+  and the in-volume and projected arms (56 §7.1) join later without breaking callers.
+
+Truth:
+
+- Unit tests (3): the exact composite to D = 6; written-out against Taylor; the side rule.
+- `tests/any_curve.rs` (7):
+  - a uv `Circle2` on a `Plane` equals the 3-D `Circle` to order 8, at 1e-13 of scale, 40
+    random frames;
+  - the crease crossed backward, and the crease touched;
+  - `eval_many` against `point` bit for bit, over 0 to 200 points on a sphere, a NURBS and
+    the free arm, plus the length panic;
+  - the `Free` arm bit for bit against `Curve`'s calls;
+  - the `OnSurface` arm as `Surface::point` at `Curve2::point`.
+
+No difftest. Orders 1 to 3 are the pin's formulas term for term. The surface jets are already
+difftested in `t_surface`, the uv curve jets in CU2, and the side rule differs from the pin on
+purpose.
+
+Cost (A3; release build, ns per call, best of 7 over 1e6 calls). The box was loaded (load
+average 8 to 12), so the figures are good to about 5%. "Before" is the direct calls a caller
+makes today, with the pin's written-out lift added for jets.
+
+| | before | `AnyCurve` |
+|---|---:|---:|
+| free circle `point` (`Curve::point`) | 29.1 | 29.9 |
+| free circle `jet::<2>` | 27.4 | 27.5 |
+| sphere `point` (`Curve2::point` + `Surface::point`) | 47.8 | 48.0 |
+| sphere `jet::<2>` (uv jet + surface jet + lift) | 88.0 | 94.6 |
+| sphere `jet::<3>` | 115.8 | 126.2 |
+| bicubic NURBS `point` | 126.0 | 125.6 |
+| bicubic NURBS `jet::<2>` | 321.7 | 315.3 |
+| bicubic NURBS `jet::<3>` | 443.5 | 405.1 |
+| sphere `eval_many`, per point (against a loop of `point`) | 50.3 | 41.9 |
+| bicubic NURBS `eval_many`, per point | 123.6 | 108.1 |
+
+The free arm and `point` cost the same as before. On the sphere, jets cost up to 9% more. The
+added work is the side rule: two scans of D values each. On the NURBS surface the
+differences are within noise. Before the written-out path, the Taylor-only lift cost 224 ns
+at order 3 on the sphere and 588 ns on the NURBS surface.
+
+From research 66: nothing more to take. Its "keep derived data, do not rebuild" (§1 point 3)
+is A3's memoise-in-the-caller, which is why there is no cache here.
+
+Open from SU8:
+- `point_over` waits for a scalar-generic `Surface` evaluation;
+- the intersection-curve arm comes in step 5;
+- normals along the curve (the pin's `evaluate_surface_normal`) are left to callers, which use
+  `Surface::normal` at `uv().point(t)` with the sides from the same rule. The rule would be
+  exposed if a second caller needs it.
 
 ### 4.11 pcurve as built (11-27)
 

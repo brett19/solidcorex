@@ -21,6 +21,9 @@
 //! | none: non-finite points and weights pass | [`NetCause::NotFinite`], [`NetCause::WeightedNotFinite`], [`WeightCause::NotPositive`] |
 //! | `Surface::eval`, `Surface::derivs`: the errors of `KnotVector::basis_eval` (a parameter outside the domain, a knot difference below `1e-24`) | [`NurbsSurfaceError::Basis`] over `NurbsError::ParameterNotFinite`, `Degenerate` or `DerivativeOrder`; outside the domain the end pieces continue |
 //! | none: a non-finite point is returned | [`NurbsSurfaceError::Degenerate`] |
+//! | `nurbs_partials_over_box`: `Unsupported` (a box past the knots, a crossed knot below the continuity) | [`NurbsSurfaceError::Enclosure`] over [`EnclosureCause::BoxOutside`], [`EnclosureCause::BelowContinuity`]: `Refused` |
+//! | `nurbs_partials_over_piece`: `SectionNotProved(FaceWeightPositive)` | [`EnclosureCause::WeightsNotPositive`]: `Unsupported` |
+//! | none: a span index and a box are trusted | [`EnclosureCause::NotAPiece`], [`EnclosureCause::BoxNotFinite`] |
 //!
 //! [`kind`]: NurbsSurfaceError::kind
 //! [`name`]: NurbsSurfaceError::name
@@ -28,6 +31,7 @@
 use core::fmt;
 
 use scx_num::error::ErrorKind;
+use scx_num::interval::Ivl;
 use scx_nurbs::NurbsError;
 
 use crate::ParamAxis;
@@ -81,6 +85,9 @@ pub enum NurbsSurfaceError {
     AffineNotFinite,
     /// A transformed control point, or its homogeneous point, overflowed to infinity.
     Overflow(NetCause),
+    /// An enclosure over a box of parameters cannot be taken
+    /// ([`NurbsSurface::partials_over`](crate::NurbsSurface::partials_over)).
+    Enclosure(EnclosureCause),
     /// A step failed through the crate's own fault: values that the edited surface's
     /// invariants guarantee were refused or missing. A bug.
     Defect {
@@ -155,11 +162,128 @@ pub enum WeightCause {
     },
 }
 
+/// Why an enclosure over a box cannot be taken.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub enum EnclosureCause {
+    /// `span` is not a non-empty span of the `axis` knots (`p <= span < count`, `U[span] <
+    /// U[span + 1]`).
+    NotAPiece {
+        /// The direction.
+        axis: ParamAxis,
+        /// The span index given.
+        span: usize,
+    },
+    /// The `axis` range of the box has an end that is infinite or NaN, or its ends are out
+    /// of order.
+    BoxNotFinite {
+        /// The direction.
+        axis: ParamAxis,
+        /// The range `[lo, hi]` given.
+        range: [f64; 2],
+    },
+    /// The `axis` range of the box is not inside the domain (where the surface is not
+    /// defined, no piece is the surface).
+    BoxOutside {
+        /// The direction.
+        axis: ParamAxis,
+        /// The range `[lo, hi]` given.
+        range: [f64; 2],
+        /// The domain of that direction.
+        domain: [f64; 2],
+    },
+    /// The box crosses the `axis` knot line at `knot`, where the surface is continuous to
+    /// order `continuity` (the degree minus the knot's multiplicity), below the `needed`
+    /// asked for. Cut the box there.
+    BelowContinuity {
+        /// The direction.
+        axis: ParamAxis,
+        /// The knot crossed.
+        knot: f64,
+        /// The surface's continuity there.
+        continuity: usize,
+        /// The continuity asked for.
+        needed: usize,
+    },
+    /// The weight function's enclosure over the box, `weight`, is not positive: the box is
+    /// too wide for the form to prove the weights positive, and a smaller one may.
+    WeightsNotPositive {
+        /// The enclosure of the weight function.
+        weight: Ivl,
+    },
+}
+
+impl EnclosureCause {
+    /// The cause's kind: [`ErrorKind::Refused`] for the caller's spans and boxes,
+    /// [`ErrorKind::Unsupported`] for weights the form cannot prove positive.
+    #[must_use]
+    pub const fn kind(&self) -> ErrorKind {
+        match self {
+            Self::WeightsNotPositive { .. } => ErrorKind::Unsupported,
+            Self::NotAPiece { .. }
+            | Self::BoxNotFinite { .. }
+            | Self::BoxOutside { .. }
+            | Self::BelowContinuity { .. } => ErrorKind::Refused,
+        }
+    }
+
+    /// The cause's stable name.
+    #[must_use]
+    pub const fn name(&self) -> &'static str {
+        match self {
+            Self::NotAPiece { .. } => "span_not_a_piece",
+            Self::BoxNotFinite { .. } => "box_not_finite",
+            Self::BoxOutside { .. } => "box_outside_domain",
+            Self::BelowContinuity { .. } => "box_crosses_rough_knot",
+            Self::WeightsNotPositive { .. } => "weights_not_proved_positive",
+        }
+    }
+}
+
+impl fmt::Display for EnclosureCause {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            Self::NotAPiece { axis, span } => {
+                write!(f, "{span} is not a span of the {axis} knots")
+            }
+            Self::BoxNotFinite {
+                axis,
+                range: [lo, hi],
+            } => write!(
+                f,
+                "the {axis} range [{lo}, {hi}] is not finite and in order"
+            ),
+            Self::BoxOutside {
+                axis,
+                range: [lo, hi],
+                domain: [a, b],
+            } => write!(
+                f,
+                "the {axis} range [{lo}, {hi}] is not inside the domain [{a}, {b}]"
+            ),
+            Self::BelowContinuity {
+                axis,
+                knot,
+                continuity,
+                needed,
+            } => write!(
+                f,
+                "the box crosses the {axis} knot {knot}, of continuity {continuity}, below {needed}"
+            ),
+            Self::WeightsNotPositive { weight } => write!(
+                f,
+                "the weights are not proved positive over the box: [{}, {}]",
+                weight.lo, weight.hi
+            ),
+        }
+    }
+}
+
 impl NurbsSurfaceError {
     /// The error's kind: [`ErrorKind::Refused`] (the net, weights, matrix and parameters are
     /// the caller's), the `scx-nurbs` cause's under [`Self::BadKnots`], [`Self::Basis`] and
     /// [`Self::Edit`] (62 D11), [`ErrorKind::Unsupported`] for a result with no double form, and
-    /// [`ErrorKind::Defect`].
+    /// [`ErrorKind::Defect`]; an enclosure's cause's ([`EnclosureCause::kind`]).
     #[must_use]
     pub const fn kind(&self) -> ErrorKind {
         match self {
@@ -171,6 +295,7 @@ impl NurbsSurfaceError {
             | Self::Degenerate { .. }
             | Self::AffineNotFinite => ErrorKind::Refused,
             Self::Overflow(_) => ErrorKind::Unsupported,
+            Self::Enclosure(c) => c.kind(),
             Self::Defect { .. } => ErrorKind::Defect,
         }
     }
@@ -187,6 +312,7 @@ impl NurbsSurfaceError {
             Self::Edit { .. } => "line_edit_failed",
             Self::AffineNotFinite => "affine_not_finite",
             Self::Overflow(_) => "transform_overflow",
+            Self::Enclosure(c) => c.name(),
             Self::Defect { .. } => "defect",
         }
     }
@@ -229,6 +355,7 @@ impl fmt::Display for NurbsSurfaceError {
             Self::Edit { axis, .. } => write!(f, "the edit along {axis} failed"),
             Self::AffineNotFinite => f.write_str("the transform is not finite"),
             Self::Overflow(c) => write!(f, "the transform overflows: {c}"),
+            Self::Enclosure(c) => c.fmt(f),
             Self::Defect { why } => write!(f, "internal defect: {why}"),
         }
     }
@@ -294,6 +421,7 @@ impl std::error::Error for NurbsSurfaceError {
             | Self::Degenerate { .. }
             | Self::AffineNotFinite
             | Self::Overflow(_)
+            | Self::Enclosure(_)
             | Self::Defect { .. } => None,
         }
     }
@@ -364,6 +492,28 @@ mod tests {
                 row: at.0,
                 col: at.1,
             }),
+            NurbsSurfaceError::Enclosure(EnclosureCause::NotAPiece {
+                axis: ParamAxis::U,
+                span: 1,
+            }),
+            NurbsSurfaceError::Enclosure(EnclosureCause::BoxNotFinite {
+                axis: ParamAxis::V,
+                range: [0.5, f64::NAN],
+            }),
+            NurbsSurfaceError::Enclosure(EnclosureCause::BoxOutside {
+                axis: ParamAxis::U,
+                range: [-1.0, 0.5],
+                domain: [0.0, 1.0],
+            }),
+            NurbsSurfaceError::Enclosure(EnclosureCause::BelowContinuity {
+                axis: ParamAxis::V,
+                knot: 0.5,
+                continuity: 0,
+                needed: 1,
+            }),
+            NurbsSurfaceError::Enclosure(EnclosureCause::WeightsNotPositive {
+                weight: Ivl::new(-1.0, 2.0),
+            }),
             NurbsSurfaceError::Defect { why: "a test" },
         ]
     }
@@ -391,7 +541,10 @@ mod tests {
                 NurbsSurfaceError::BadKnots { .. } | NurbsSurfaceError::Edit { .. } => {
                     ErrorKind::Refused
                 }
-                NurbsSurfaceError::Overflow(_) => ErrorKind::Unsupported,
+                NurbsSurfaceError::Overflow(_)
+                | NurbsSurfaceError::Enclosure(EnclosureCause::WeightsNotPositive { .. }) => {
+                    ErrorKind::Unsupported
+                }
                 NurbsSurfaceError::Defect { .. } => ErrorKind::Defect,
                 _ => ErrorKind::Refused,
             };
