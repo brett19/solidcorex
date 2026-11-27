@@ -83,7 +83,7 @@ column says; "—" means the crate takes no kernel code. The figures move as cra
 | 1 | `scx-p21` | STEP Part 21 read and write, Part 42 entities as data, units, product structure | num | — (part of `solidcore-step`) |
 | 2 | `scx-nurbs-surface` | NURBS surfaces as plain data: evaluation, surface fitting and approximation, match and seam, Gordon and n-sided patches at the NURBS level, surface enclosures and deviations, the `Nurbs` record, IGES entity 128 | nurbs, algo | 19,386 |
 | 2 | `scx-curve` | every free curve kind, 2-D and 3-D (analytic, B-spline, the 2-D curves of pcurves), `Curve` and its dispatch, evaluation generic over the scalar, natural parameterisation, `restrict`, transforms, closed-form properties, curve-curve queries and joins, length bounds, `Procedural` | nurbs, algo | 63,747 |
-| 3 | `scx-surface` | every surface kind: analytic, NURBS, procedural (offset, blend with its section, station and certificate mathematics, sweep); `AnyCurve` with the curves defined on surfaces and in volumes and the intersection curve with its point refinement on two surfaces; the volume maps and their images; `SurfaceFn` approximation; the geometry queries: point inversion, projection with the tracer, curve-surface intersection, recognition (with exact blends), plane fitting, distance, certified gap bounds | curve, nurbs-surface | 201,369 |
+| 3 | `scx-surface` | every surface kind: analytic, NURBS, procedural (offset, blend with its section, station and certificate mathematics, sweep); the one blend section generator (chord, circle, Gⁿ orders 2-4 with fullness solved per station, conic) and the blend's exact classes, with the conic's rational quadratic extrusion and revolution beside the circle's (research 61 §7); `AnyCurve` with the curves defined on surfaces and in volumes and the intersection curve with its point refinement on two surfaces; the volume maps and their images; `SurfaceFn` approximation; the geometry queries: point inversion, projection with the tracer, curve-surface intersection, recognition (with exact blends), plane fitting, distance, certified gap bounds | curve, nurbs-surface | 201,369 |
 | 3 | `scx-planar` | 2-D regions from loops, their Booleans and offsets, profiles and line families, arc conversion and loop recognition, fill, cell grids, paper gaps, projection of curves into a plane, bounded 2-D intersections for drawings | curve | 14,915 |
 | 4 | `scx-sketch` | constraint residuals over dual numbers and their solver, sketch arc arithmetic | planar | 363 |
 | 4 | `scx-teeth` | gear and spline tooth profiles, involutes | planar | 11,826 |
@@ -106,8 +106,8 @@ column says; "—" means the crate takes no kernel code. The figures move as cra
 | 9 | `scx-mesh` | mesh to B-rep reconstruction, mesh reduction, faceted bodies and their exact volume, STL and 3MF | make, tess, mass | 5,565 |
 | 9 | `scx-sheetmetal` | flat pattern and fold of sheet metal parts | make | 7,358 |
 | 9 | `scx-taper` | taper (the draft-angle feature) | make | 773 |
-| 10 | `scx-blend` | fillet and chamfer (constant and variable; chamfer by two distances or by distance and angle), vertex blends with setbacks, full rounds, law-curve intersection. G2 and conic fillets are deferred (research 60 §6) | local, repair | 150,425 |
-| 11 | `scx-offset` | offset faces, shell, thicken, thin features, sheet offsets, local operations; a rounded join (face slabs, edge tubes, vertex balls) as a second join mode, never a fallback | blend, taper | 36,702 |
+| 10 | `scx-blend` | fillet and chamfer on the new fillet system only, the generic rolling-ball construction (constant and variable; chamfer by two distances or by distance and angle, as the chord section): the `Section` enum (chord, circle, G2-G4 with a typed fullness, conic) in the fillet spec; the corner events End, Join, Turn, Ball, Chamfer, Roll-over and Setback, the Setback ending in one N-sided hole fill that records `Unproven` when it cannot certify; the exact round classes with no flag; overflow trimmed at the crease; refusals that name the size; full rounds; law-curve intersection; the shared station, trace, intersector, corner helpers and face insertion. Not ported: the analytic try-chain, the old Linear and Circular section classes, the old 4x3, 3x2, Nx2 and NxN corner classes, the Eiffel tower and secant solvers (about 10,000 to 15,000 lines; research 61 §0.7, §7). (Corrected 11-27: this row said "G2 and conic fillets are deferred (research 60 §6)". G2 is solidcore's new-system Gⁿ section and is ported; the conic is adopted as new work; research 61 §7) | local, repair | 150,425 (about 135,000 to 140,000 ported) |
+| 11 | `scx-offset` | offset faces, shell, thicken, thin features, sheet offsets, local operations; a rounded join (face slabs, edge tubes, vertex balls) as a second join mode, never a fallback; reblend carries each blend's recorded section, so a G2 or conic round stays one (research 61 §7; the pin forces a circle) | blend, taper | 36,702 |
 
 The four edges `scx-bodyq` → `scx-ssi`, `scx-check` → `scx-mass`, `scx-local` → `scx-mass` and
 `scx-mesh` → `scx-mass` are the ones added to the ruled graph (04 §1, 11-27; research 56 C.2): a
@@ -734,6 +734,8 @@ Where each record lives:
   the records of its edges and vertices. It is a face cell and never stored (research 54).
 - `Unproven` covers research 55's case. A fallback trim on an offset or procedural-blend surface
   records a conservative bound marked unproven until a certified bound exists (04, 11-26).
+  - It also covers a blend span whose certificate runs out of budget, and a Setback's hole fill
+    that does not certify. Both succeed with the measured bound and a warning (research 61 §7).
 - `Stated` covers imported entities that cannot be measured. They keep the file's value.
 
 ### 4.2 Rules
@@ -845,6 +847,16 @@ pub enum BlendError {
   - a singular transform is `Refused` (2.4);
   - a draft whose curve or p-curve ends miss their vertex balls is `Unfinished` with a
     `Geometry` cause (2.3).
+- Causes ruled with research 61 (11-27), in `BlendCause`:
+  - a corner the new system does not yet build, not even with the Setback's `Unproven` hole fill,
+    is `Unsupported(CornerUnsupported { kind })`, naming the corner kind (for example a conic
+    Setback, Ball or Mitre, a Roll-over, or edges tangent at the vertex). It is never `Refused`;
+  - a blend whose size does not fit is `Refused` with the size that fits;
+  - a G2 corner that can only be built G1 is a success with G1 recorded on the face and
+    `Warning::ContinuityLowered { face, reached }`. It is `Unsupported(ContinuityNotReached)` only
+    when the caller stated G2 as a hard requirement through the fillet spec's typed continuity
+    option;
+  - an exhausted certificate budget is not an error: `Basis::Unproven` and a warning (4.1).
 - **`Defect`** is `Defect { at: &'static str, what: DefectKind }`. Apps report it and never handle
   it. Library code never panics; the workspace lints already deny it.
 - **`Exhausted` and `Cancelled`** come only from crates that take a budget or a `Stop`.
@@ -1283,12 +1295,12 @@ early.
 | 2 | **Vertical slice, geometry:** `scx-nurbs` evaluation and knots; `scx-nurbs-surface` evaluation and the `Nurbs` record; `scx-curve` for line, circle, ellipse, B-spline curve; `scx-surface` for plane, cylinder, cone, sphere, torus, B-spline surface, with point inversion, closed-form analytic projection and curve-surface intersection; the analytic part of `scx-ssi` | function-by-function difftest on those |
 | 3 | **Vertical slice, body:** `scx-brep` (regions, sides, cells, `Changes`, `carry`, stamp); the provenance and history tests ported; `scx-record`; the pin-record converter | round trip keeps ids and bytes; cells empty after both edit paths; provenance tests pass |
 | 4 | **Vertical slice, end to end:** `scx-mass`; `scx-bodyq` classification; `scx-make` primitives and extrude; `scx-boolean` on analytic bodies; `scx-tess`. The crates these depend on (`scx-planar`, `scx-check`, `scx-stitch`, `scx-hlr`) exist from here, holding what the slice calls | **the end-to-end difftest by outcome runs from here on**; first performance measurement (9.4) |
-| 5 | Widen geometry (layers 1-4): all NURBS work, fitting with per-span certificates, procedural kinds, the volume maps, B-spline SSI, `scx-planar`, `scx-sketch`, `scx-teeth`, `scx-dxf`, `scx-p21` | difftest per function; certified bounds checked; DXF corpus |
+| 5 | Widen geometry (layers 1-4): all NURBS work, fitting with per-span certificates, procedural kinds (the blend definition with the one section generator: chord, circle, Gⁿ G2-G4 with `Fullness`, and the conic, with their exact classes; research 61 §7), the volume maps, B-spline SSI, `scx-planar`, `scx-sketch`, `scx-teeth`, `scx-dxf`, `scx-p21` | difftest per function; certified bounds checked; the section truth checks of research 61 §4.4; DXF corpus |
 | 6 | Widen bodies (layers 5-7 without Booleans): full `scx-bodyq` (contact, continuity, pick), `scx-check`, `scx-stitch`, `scx-hlr`, `scx-step` | the STEP corpus imports and passes the check; drawings |
 | 7 | Layers 7-8: `scx-boolean` full, `scx-deform`, `scx-make` full, `scx-repair` | Boolean suite, algebra properties, difftest by outcome |
 | 8 | Layer 9: `scx-local`, `scx-mesh`, `scx-sheetmetal`, `scx-taper` | each family by outcome, kept-face counts; mesh round trips |
-| 9 | Layer 10: `scx-blend` | as above |
-| 10 | Layer 11: `scx-offset` | as above |
+| 9 | Layer 10: `scx-blend`, the new fillet system only (1.1; research 61 §7). **Gate:** before the app switches, side-channel counts (not committed) of which corner path each of the pin's 326 fillet cases reaches decide the order of the corner work | as above; every corner the old classes took is built (or `Unsupported` by name), none refused; results that move from the pin are checked against the truth |
+| 10 | Layer 11: `scx-offset`; reblend carries the recorded section | as above; a G2 round offset and reblended stays G2 |
 | 11 | Helpers: `scx-fates`, `scx-features`, `scx-frames`, `scx-weld`, `scx-cadir`, `scx-import-sc` | every row of 1.3 has a home that passes its tests; the app's design corpus runs on solidcorex |
 | 12 | Cross-platform | `fmath` hashes equal on x86_64, aarch64 and wasm32 |
 | 13 | App switch | in one go, checked against the 1.3 inventory and the 9.4 target |

@@ -90,8 +90,9 @@ Section 4 has the full list. In short:
   - mirror and affine transforms (the pin has both; 01 had only rigid moves);
   - a rounded offset;
   - screw sweeps and the convex hull of points;
-  - G2 and conic fillets. Setback vertex blends, full rounds and the distance-and-angle chamfer are
-    in the pin (corrected).
+  - conic fillets. (Corrected 11-27, research 61: G2 fillets are in the pin, as the new fillet
+    system's certified Gⁿ section, orders 2-4.) Setback vertex blends, full rounds and the
+    distance-and-angle chamfer are in the pin (corrected).
 - **Output:** edge flags in the display mesh (crease or smooth, seam, the faces each edge joins).
 
 ### 1.4 Owner decisions
@@ -100,7 +101,8 @@ Section 5 has these in full.
 
 1. D1: is the budget a total, metered in index order, or a split made in advance (01 §6.3)?
 2. X2: does the plan gain affine transforms (a `Mapped` surface kind, or images of each kind)?
-3. Should G2 and conic fillets be built, when solidcore has no algorithm for them (R5)?
+3. Should G2 and conic fillets be built, when solidcore has no algorithm for them (R5)? (Corrected
+   11-27, research 61: solidcore has G2; only the conic is new.)
 4. V1: does `finish` also check geometry that is cheap to check, or does each operation call a
    fast check itself?
 5. T1: when a component holds two vertices of one operand, is that a refusal, or a defect of the
@@ -498,8 +500,8 @@ task's list of what solidcore lacks; to be confirmed at each crate's start, 01 �
 | Screw (helical) sweep | contract `screw`; cadrs `sweep` (helix) | `scx-make` | sweep yes, exact screw no | |
 | Sweep along a path with frames | contract `sweep_path` | `scx-make` | sweep yes | The task lists `sweep_path` as missing at the pin's ops seam |
 | Convex hull of points | geomsolver README | `scx-make` | no | |
-| G2 fillet, G2 setback | contract B39 | `scx-blend` | no | Owner decision 3 |
-| Conic fillet | contract `fillet_conic` | `scx-blend` | no | Owner decision 3 |
+| G2 fillet, G2 setback | contract B39 | `scx-blend` | yes (corrected 11-27, research 61): the Gⁿ section, `blend/fillet_section/`; G2 Setback corners in `blend/blend_setback/` | Ported (research 61 §7) |
+| Conic fillet | contract `fillet_conic` | `scx-blend` | no | Adopted as new work (research 61 §7) |
 | Setback vertex blend | contract `fillet_setback` | `scx-blend` | yes (corrected): `blend/blend_corner.rs` | Name the setback form in the spec |
 | Full round | contract `full_round`; cadrs `fillet` | `scx-blend` | yes (corrected): two rounds whose rails meet (`blend/fillet_geom/p1.rs`, test `a_full_round_whose_rails_meet_along_part_of_one_of_them`) | |
 | Chamfer by distance and angle | springrep `blend` | `scx-blend` | yes (corrected): `blend/blend_refusal.rs`, `ChamferAngleTooLarge` | |
@@ -529,6 +531,9 @@ Also offered by these kernels, judged out of scope for the core:
 3. **G2 and conic fillets.** The contract asks for them and solidcore has none. Building them means
    new algorithms, outside "keep solidcore's algorithms" (R5). Recommendation: leave them out of
    01 until the blend port lands, then research them on their own.
+   - **Corrected 11-27 (research 61).** The premise was wrong for G2. solidcore has G2/Gⁿ (orders
+     2-4, certified), the new fillet system's section (the fork's step 3), and it is ported with
+     the blend. Only the conic is new; it is adopted as new work (research 61 §7).
 4. **Cheap geometric checks in `finish` (V1).** This adds loop-end and p-curve-end gaps for touched
    records to `finish`. The alternative is a `scx-check::fast` that each operation calls. The first
    is impossible to forget; the second keeps `scx-brep` free of evaluation. Recommendation: in
@@ -631,6 +636,9 @@ changes, the review's version is the one adopted. The rulings are written into 0
 - **O1**: the rounded offset is a second join mode, never a fallback.
 - **G2 and conic fillets** (decision 3) are deferred. The pin already has the distance-and-angle
   chamfer, setback corners and the full round; the completeness rows are corrected.
+  - **Corrected 11-27 (research 61; 04 §3 supersedes the deferral).** G2 is not deferred: it is
+    solidcore's new-system Gⁿ section and is ported. The conic is adopted as new work.
+    `scx-blend` ports the new fillet system only (research 61 §7).
 
 **Exchange and provenance.**
 
