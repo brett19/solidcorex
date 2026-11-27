@@ -750,6 +750,72 @@ fn villarceau_matches_the_truth() {
     }
 }
 
+/// Planes through a torus's centre (the difftest's tori, its `bitangent` cases among them):
+/// at the bitangent tilt the Villarceau circles, at the equator two circles, at any other
+/// tilt `General`, and never `Empty` while the plane's square reaches the tube. Inside the
+/// hole (a square closer to the centre than `big - small`) the section is empty, rightly.
+#[test]
+fn planes_through_the_torus_centre() {
+    for (big, small) in [
+        (2.239825293870964, 0.41452704416627156),
+        (3.9845306506997993, 1.255209407596167),
+        (4.182438453853573, 2.4112502391765753),
+    ] {
+        let torus = Surf::Torus {
+            centre: [0.3, -0.2, 0.1],
+            axis: varr(*v(-0.17, 0.01, 0.98).normalized().unwrap()),
+            major: big,
+            minor: small,
+        };
+        let a = side_of(&torus, TURN);
+        let Surf::Torus { centre, axis, .. } = torus else {
+            panic!()
+        };
+        let (z, o) = (va(axis), pa(centre));
+        let x = square_to(z);
+        let y = z.cross(x);
+        let bitangent = fmath::asin(small / big);
+        for turn in [0.0, 1.0, 2.5, 4.0] {
+            let (st, ct) = (fmath::sin(turn), fmath::cos(turn));
+            for tilt in [
+                bitangent,
+                0.0,
+                bitangent + 0.05,
+                bitangent - 0.05,
+                1.0,
+                FRAC_PI_2,
+            ] {
+                let n = (x * ct + y * st) * fmath::sin(tilt) + z * fmath::cos(tilt);
+                let name = format!("torus {big} {small}, tilt {tilt}, turn {turn}");
+                let plane = |h: f64| {
+                    side_of(
+                        &Surf::Plane {
+                            point: arr(o),
+                            normal: varr(n),
+                        },
+                        [-h, h],
+                    )
+                };
+                let ans = solve(&a, &plane(2.0 * (big + small)));
+                assert!(
+                    !matches!(ans, Closed::Solved(Intersection::Empty)),
+                    "{name}: {ans:?}"
+                );
+                let hole = solve(&a, &plane(0.6 * (big - small)));
+                if tilt == bitangent {
+                    let (curves, points) = pieces(&name, ans);
+                    assert_eq!((curves.len(), points.len()), (4, 2), "{name}");
+                    assert_eq!(hole, Closed::Solved(Intersection::Empty), "{name}");
+                } else if tilt == 0.0 || tilt == FRAC_PI_2 {
+                    assert!(matches!(ans, Closed::Solved(_)), "{name}: {ans:?}");
+                } else {
+                    assert_eq!(ans, Closed::General, "{name}");
+                }
+            }
+        }
+    }
+}
+
 /// The plane turned or moved off the bitangent one by half the tolerance over the torus's
 /// reach is the same pair; by twice, `General` (a spiric section).
 #[test]
