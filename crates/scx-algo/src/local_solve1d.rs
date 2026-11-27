@@ -115,6 +115,29 @@ use scx_num::tol::in_tol;
 /// `ZEPS` of `SolveByBrent`.
 const ZEPS: f64 = 1.0e-12;
 
+/// `delta_t` limited to 8% of the length of `ivl` (a hair under, to avoid an exact
+/// half), keeping its sign.
+///
+/// Not inlined, on purpose: inlined, the compiler hoists this arithmetic out of the
+/// `Domain1d::interval` test in the Newton loop and runs it on every solve, including a
+/// [`Domain1d::Line`] solve, on whatever stale bytes the variant leaves where an
+/// interval would be. An address or a small integer read as an `f64` is subnormal, and
+/// subnormal arithmetic takes microcode assists: measured about 250 ns per solve on an
+/// E-core and 30 ns on a P-core (i9-13900), when the whole solve takes 30 to 100 ns.
+/// The compiler does not hoist a call out of the test.
+#[inline(never)]
+fn limit_step(delta_t: f64, ivl: Extent1d) -> f64 {
+    let mut step_limit = ivl.length() * 0.08 + EFF_ZERO;
+    if delta_t.abs() > step_limit {
+        step_limit *= 0.99; // just to avoid exact half
+        if delta_t < 0.0 {
+            step_limit = -step_limit;
+        }
+        return step_limit;
+    }
+    delta_t
+}
+
 /// `SMSIGN(a, b)`: `|a|` with the sign of `b` (`b >= 0` counts as positive).
 fn sign(a: f64, b: f64) -> f64 {
     if b >= 0.0 { a.abs() } else { -a.abs() }
@@ -1010,14 +1033,7 @@ impl<C: Converged1d> Run<'_, C> {
             // Newton step, never huge (even 0.10 can be too big).
             let mut delta_t = -self.st.curr.f / self.st.curr.f_prime;
             if let Some(ivl) = self.o.domain.interval() {
-                let mut step_limit = ivl.length() * 0.08 + EFF_ZERO;
-                if delta_t.abs() > step_limit {
-                    step_limit *= 0.99; // just to avoid exact half
-                    if delta_t < 0.0 {
-                        step_limit = -step_limit;
-                    }
-                    delta_t = step_limit;
-                }
+                delta_t = limit_step(delta_t, ivl);
             }
 
             // Before giving up, cut the step size and allow 20 more tries.

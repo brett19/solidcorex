@@ -69,51 +69,123 @@ fn payne_hanek(x: f64) -> (i32, (f64, f64)) {
     (n, dd::mul((hi * s, lo * s), PIO2))
 }
 
-/// `(sin y, cos y)` as double-doubles, for `|y| <= 0.8`.
-fn kernel(y: (f64, f64)) -> ((f64, f64), (f64, f64)) {
-    let neg = y.0 < 0.0;
-    let (yh, yl) = if neg { (-y.0, -y.1) } else { y };
-    let i = round_int(yh * 64.0);
-    let h = yh - i * (1.0 / 64.0);
-    let (sh, sl, ch, cl) = at(&SINCOS_TAB, i as usize);
-    // sin(h + yl) - h and cos(h + yl) - 1, to about 2^-75.
-    let (h2, h2e) = two_prod(h, h);
-    let ds =
-        h * h2 * (-1.0 / 6.0 + h2 * (1.0 / 120.0 - h2 * (1.0 / 5040.0))) + yl * (1.0 - 0.5 * h2);
-    let dch = -0.5 * h2;
-    let dcl = -0.5 * h2e + h2 * h2 * (1.0 / 24.0 - h2 * (1.0 / 720.0)) - h * yl;
-    let dc = dch + dcl;
-    // sin(a + h) = sin a + sin a (cos h - 1) + cos a sin h.
-    let (p, pe) = two_prod(ch, h);
-    let (s, se) = two_sum(sh, p);
-    let (q, qe) = two_prod(sh, dch);
-    let (s2, s2e) = two_sum(s, q);
-    let s_lo = se + pe + s2e + qe + sl + cl * h + ch * ds + sh * dcl + sl * dc;
-    let sin = fast_two_sum(s2, s_lo);
-    // cos(a + h) = cos a + cos a (cos h - 1) - sin a sin h.
-    let (p, pe) = two_prod(sh, -h);
-    let (c, ce) = two_sum(ch, p);
-    let (q, qe) = two_prod(ch, dch);
-    let (c2, c2e) = two_sum(c, q);
-    let c_lo = ce + pe + c2e + qe + cl - sl * h - sh * ds + ch * dcl + cl * dc;
-    let cos = fast_two_sum(c2, c_lo);
-    if neg {
-        ((-sin.0, -sin.1), cos)
-    } else {
-        (sin, cos)
+/// The pieces shared by `sin y` and `cos y`, for `|y| <= 0.8`: `y = ±(a + h)` with
+/// `a = i/64` from the table and `|h| <= 1/128`.
+struct Kernel {
+    neg: bool,
+    h: f64,
+    /// `sin a` and `cos a` as double-doubles.
+    sh: f64,
+    sl: f64,
+    ch: f64,
+    cl: f64,
+    /// `sin(h + yl) - h`, and `cos(h + yl) - 1` as `dch + dcl` (sum `dc`), to about 2^-75.
+    ds: f64,
+    dch: f64,
+    dcl: f64,
+    dc: f64,
+}
+
+impl Kernel {
+    fn new(y: (f64, f64)) -> Self {
+        let neg = y.0 < 0.0;
+        let (yh, yl) = if neg { (-y.0, -y.1) } else { y };
+        let i = round_int(yh * 64.0);
+        let h = yh - i * (1.0 / 64.0);
+        let (sh, sl, ch, cl) = at(&SINCOS_TAB, i as usize);
+        let (h2, h2e) = two_prod(h, h);
+        let ds = h * h2 * (-1.0 / 6.0 + h2 * (1.0 / 120.0 - h2 * (1.0 / 5040.0)))
+            + yl * (1.0 - 0.5 * h2);
+        let dch = -0.5 * h2;
+        let dcl = -0.5 * h2e + h2 * h2 * (1.0 / 24.0 - h2 * (1.0 / 720.0)) - h * yl;
+        let dc = dch + dcl;
+        Self {
+            neg,
+            h,
+            sh,
+            sl,
+            ch,
+            cl,
+            ds,
+            dch,
+            dcl,
+            dc,
+        }
     }
+
+    /// `sin y`: `sin(a + h) = sin a + sin a (cos h - 1) + cos a sin h`.
+    fn sin(&self) -> (f64, f64) {
+        let Self {
+            neg,
+            h,
+            sh,
+            sl,
+            ch,
+            cl,
+            ds,
+            dch,
+            dcl,
+            dc,
+        } = *self;
+        let (p, pe) = two_prod(ch, h);
+        let (s, se) = two_sum(sh, p);
+        let (q, qe) = two_prod(sh, dch);
+        let (s2, s2e) = two_sum(s, q);
+        let s_lo = se + pe + s2e + qe + sl + cl * h + ch * ds + sh * dcl + sl * dc;
+        let sin = fast_two_sum(s2, s_lo);
+        if neg { (-sin.0, -sin.1) } else { sin }
+    }
+
+    /// `cos y`: `cos(a + h) = cos a + cos a (cos h - 1) - sin a sin h`.
+    fn cos(&self) -> (f64, f64) {
+        let Self {
+            h,
+            sh,
+            sl,
+            ch,
+            cl,
+            ds,
+            dch,
+            dcl,
+            dc,
+            ..
+        } = *self;
+        let (p, pe) = two_prod(sh, -h);
+        let (c, ce) = two_sum(ch, p);
+        let (q, qe) = two_prod(ch, dch);
+        let (c2, c2e) = two_sum(c, q);
+        let c_lo = ce + pe + c2e + qe + cl - sl * h - sh * ds + ch * dcl + cl * dc;
+        fast_two_sum(c2, c_lo)
+    }
+}
+
+fn neg(v: (f64, f64)) -> (f64, f64) {
+    (-v.0, -v.1)
 }
 
 /// `(sin x, cos x)` as double-doubles, for finite `x`.
 fn sin_cos_dd(x: f64) -> ((f64, f64), (f64, f64)) {
     let (n, y) = reduce(x);
-    let (s, c) = kernel(y);
-    let neg = |v: (f64, f64)| (-v.0, -v.1);
+    let k = Kernel::new(y);
+    let (s, c) = (k.sin(), k.cos());
     match n {
         0 => (s, c),
         1 => (c, neg(s)),
         2 => (neg(s), neg(c)),
         _ => (neg(c), s),
+    }
+}
+
+/// `sin(x + quarters pi/2)` as a double-double, for finite `x`: only the half of the
+/// kernel the quadrant picks is computed (`cos x` is `quarters = 1`).
+fn sin_dd(x: f64, quarters: i32) -> (f64, f64) {
+    let (n, y) = reduce(x);
+    let k = Kernel::new(y);
+    match (n + quarters) & 3 {
+        0 => k.sin(),
+        1 => k.cos(),
+        2 => neg(k.sin()),
+        _ => neg(k.cos()),
     }
 }
 
@@ -128,7 +200,7 @@ pub(super) fn sin(x: f64) -> f64 {
     if x.abs() < TINY {
         return x;
     }
-    sin_cos_dd(x).0.0
+    sin_dd(x, 0).0
 }
 
 /// `cos(x)`.
@@ -139,7 +211,7 @@ pub(super) fn cos(x: f64) -> f64 {
     if x.abs() < TINY {
         return 1.0;
     }
-    sin_cos_dd(x).1.0
+    sin_dd(x, 1).0
 }
 
 /// `(sin x, cos x)`.
