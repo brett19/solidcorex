@@ -11,7 +11,9 @@
 //! what it needs, and a file that does not describe a closed profile is an error, not a
 //! guess.
 
-use std::fmt;
+use std::fmt::{self, Write as _};
+
+use scx_num::fmath::{cos, hypot, sin};
 
 /// Why a manifest or a truth file was refused.
 #[derive(Clone, Debug, PartialEq)]
@@ -348,8 +350,8 @@ impl Piece {
                 start,
                 ..
             } => [
-                center[0] + radius * start.cos(),
-                center[1] + radius * start.sin(),
+                center[0] + radius * cos(start),
+                center[1] + radius * sin(start),
             ],
         }
     }
@@ -364,7 +366,7 @@ impl Piece {
                 sweep,
             } => {
                 let t = start + sweep;
-                [center[0] + radius * t.cos(), center[1] + radius * t.sin()]
+                [center[0] + radius * cos(t), center[1] + radius * sin(t)]
             }
         }
     }
@@ -424,7 +426,7 @@ fn check_closed(p: &[Piece]) -> Result<(), CorpusError> {
     for q in p {
         if let Some(e) = prev {
             let b = q.begin();
-            let gap = (e[0] - b[0]).hypot(e[1] - b[1]);
+            let gap = hypot(e[0] - b[0], e[1] - b[1]);
             if gap > tol {
                 return Err(CorpusError::Open { gap });
             }
@@ -452,10 +454,10 @@ fn revolve_integral(p: &[Piece]) -> f64 {
                 // a = ca + R cos t, r = cr + R sin t, da = -R sin t dt.
                 let cr = center[1];
                 let big = |t: f64| {
-                    let cs = t.cos();
+                    let cs = cos(t);
                     -radius
                         * (cr * cr * -cs
-                            + 2.0 * cr * radius * (t / 2.0 - (2.0 * t).sin() / 4.0)
+                            + 2.0 * cr * radius * (t / 2.0 - sin(2.0 * t) / 4.0)
                             + radius * radius * (-cs + cs * cs * cs / 3.0))
                 };
                 s += big(start + sweep) - big(start);
@@ -481,8 +483,8 @@ fn loop_area(p: &[Piece]) -> f64 {
                 s += 0.5
                     * (radius * radius * sweep
                         + radius
-                            * (center[0] * (t1.sin() - start.sin())
-                                - center[1] * (t1.cos() - start.cos())));
+                            * (center[0] * (sin(t1) - sin(start))
+                                - center[1] * (cos(t1) - cos(start))));
             }
         }
     }
@@ -560,10 +562,11 @@ pub fn references_tsv(
             continue;
         };
         if let Some(v) = truth_volume(&read(t)?)? {
-            out.push_str(&format!(
-                "{}\t{v}\t{} (closed form from its .truth.json)\n",
+            let _ = writeln!(
+                out,
+                "{}\t{v}\t{} (closed form from its .truth.json)",
                 r.sha256, r.name
-            ));
+            );
         }
     }
     Ok(out)
