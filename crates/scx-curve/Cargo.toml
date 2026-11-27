@@ -1,7 +1,7 @@
 # Written for solidcorex.
 [package]
 name = "scx-curve"
-description = "solidcorex layer 2: analytic curves as plain data (line, circle, ellipse, in 3-D and 2-D): validated construction, points, fixed-order jets, scalar-generic evaluation"
+description = "solidcorex layer 2: analytic curves as plain data (line, circle, ellipse, in 3-D and 2-D): validated construction, points, fixed-order jets, scalar-generic evaluation, and the Curve and Curve2 enums that dispatch them"
 edition.workspace = true
 license.workspace = true
 version.workspace = true

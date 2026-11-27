@@ -634,6 +634,34 @@ A follow-up can recover this without changing the API. It would add a crate-priv
 line constructor in `scx-nurbs`, or a strided curve edit, so that u is edited in place. That
 would fold the swaps and the per-line checks into one pass.
 
+**NS3b (11-27): the follow-up, done.** The strided edit is the cleaner of the two. An unchecked
+constructor would have to be public in `scx-nurbs`, and then a `NurbsCurve` would no longer be
+valid by construction. Instead, `scx-nurbs` has a new public type, `CompatibleCurves<D>`. It holds
+curves of one knot vector, one polygon after another (Piegl and Tiller's compatible curves: a
+net's lines, and later the sections that skinning takes). It is checked as `NurbsCurve` is, and
+an error names the index within its curve.
+
+Its `insert_knot`, `split` and `elevate` do the knot work once: the checks, the new knot vector,
+the insertion plan and the elevation matrix. Each polygon then goes through the same private
+A5.1 and A5.9 code as `NurbsCurve`, so curve `i` of the result is the edit of curve `i`, bit for
+bit. A unit test checks this, results and errors, over every knot and weight kind.
+
+The surface edits now copy the lines once, transposed along u, into one `CompatibleCurves`, and
+assemble the result from its parts; there are no swaps and no per-line checks. Every surface
+edit result is unchanged: a dump of 32,708 results, errors included, is byte-identical before and
+after.
+
+Ratios against the pin, measured in one session on a loaded machine (best of 5):
+
+| Edit | before | after |
+|---|---|---|
+| insert | 2.70 | 1.32 |
+| split | 3.49 | 1.44 |
+| elevate | 1.53 | 0.90 |
+
+What is left is one copy of the lines, and the `w P / w` and check passes on the way in and out.
+Reverse (2.1) and swap (4.1) are copies of three nets and are unchanged.
+
 ## 3. `scx-curve`
 
 The step-2 slice covers line, circle, ellipse and B-spline, in 3-D and 2-D, with `Curve` and its
@@ -831,6 +859,97 @@ the definition or the truth (pin defects `curve_*`):
 2,520 exact, 2,819 within tolerance, 507 pin defects passing their checks, 0 mismatches, 0
 nondeterministic (0.2 s in debug, one thread). Line points and jets need no defect: none is
 past the tolerance.
+
+### 3.7 CU2 as built (11-27)
+
+Decided by analysis and an adversarial pass; proposed for review, not yet ruled.
+
+```rust
+#[non_exhaustive] #[derive(Clone, Debug, PartialEq)]
+pub enum Curve { Line(Line), Circle(Circle), Ellipse(Ellipse) }
+#[non_exhaustive] #[derive(Clone, Debug, PartialEq)]
+pub enum Curve2 { Line(Line2), Circle(Circle2), Ellipse(Ellipse2) }
+
+impl Curve {   // Curve2 the same, with Point2 and CurveJet2
+    pub fn domain(&self) -> ParamDomain;
+    pub fn point(&self, t: f64) -> Point3;
+    pub fn jet<const D: usize>(&self, t: f64, side: Approach) -> CurveJet<D>;
+    pub fn point_over<T: Trig>(&self, t: T) -> Point3<T>;
+    pub fn jet_over<T: Trig, const D: usize>(&self, t: T, side: Approach) -> CurveJet<D, T>;
+    pub fn eval_many(&self, ts: &[f64], out: &mut [Point3]);  // panics if the lengths differ
+}
+impl From<Line> for Curve { .. }  // and every other kind into its arm
+```
+
+- **`#[non_exhaustive]`, as 01 C10 chose.** Against: a match outside the crate needs a
+  wildcard arm, so CU3's `Nurbs` arm will not show as a compile error at every outside
+  match. For: it is 01's choice for every kind enum, adding `Nurbs`, `Parabola`,
+  `Hyperbola` and `Procedural` is then not breaking (01 §7.4), and inside the crate (where
+  every dispatch is) matches stay exhaustive. Outside callers should dispatch through the
+  enum's methods rather than match.
+- **Not `Copy`**, although every arm is today. Against: callers must `clone`. For: the
+  `Nurbs` arm holds an `Arc` (§3.3), so `Copy` would be taken away in CU3, which breaks
+  every caller that relied on it.
+- **Size asserted**: `Curve` at most 104 bytes (the ellipse, 96, plus the tag) and `Curve2`
+  at most 64 (A7). An arm past that goes behind an `Arc`.
+- **The enum's `point_over` and `jet_over` are generic over `Trig`**, the conics' bound
+  (lines need only `Ring`). Against: the `Nurbs` arm has no generic evaluator yet
+  (`scx-nurbs` evaluates in `f64` only), so CU3 must add one or this bound cannot hold for
+  it. For: §3.2 asks for the scalar-generic form on every kind, certification (SSI, the
+  bounds of 01 C10) takes a `&Curve`, and leaving it off the enum would make every
+  certifying caller match the kinds itself. This is a CU3 dependency: an `Ivl` NURBS
+  evaluation in `scx-nurbs` or in the wrapper.
+- **The enum's `jet_over` takes `side`; the kinds' does not.** Against: an unused argument
+  today. For: the `Nurbs` arm needs it at a knot exactly as `jet` does, and adding it in CU3
+  would change the signature under every caller. `point_over` takes no side, as `point`
+  (a point is continuous, CU1).
+- **`eval_many` writes into `&mut [Point3]`, and panics on a length mismatch.** §3.3, X9
+  and 01 §9.4 sketch a slice. SU1's kinds took `&mut Vec<Point3>` (cleared first), which
+  cannot mismatch. Against the slice: a mismatch is a programmer error the type does not
+  rule out. For: the caller's storage can be any slice (a column of a larger buffer, an
+  array on the stack) with no allocation and no capacity question; a silent zip over the
+  shorter would hide the error, so it panics, as `copy_from_slice` does. SU2 should pick
+  one of the two for both enums; this is the one 63 drew.
+- **One `match` per batch, and a conic reads its frame once.** Each conic arm calls a
+  crate-private `fill` that lifts the origin, x and y (`y` a cross product, D12) once and
+  then runs the same operations in the same order as `point`, so every point has
+  `point`'s bits (tested). It is not cached anywhere (X4): it is a local of one call.
+  `fill` stays crate-private; the kinds' public surface is unchanged.
+- **The dispatch methods are `#[inline]`.** Without it the line's `jet::<2>` through the
+  enum took 7.5 ns against 3.3 ns direct (the generic call was not inlined into the
+  caller); with it 3.4 ns.
+- **`From` each kind into its arm.** A caller builds a kind and writes `.into()`.
+- **No `tangent_dir`** (§3.3's sketch) yet: CU6's facade is its first user, and it needs
+  the `Nurbs` arm's degenerate case to be defined.
+- **No difftest through the enum.** CU6 adds the facade adapters (§3.5); the unit tests
+  prove the enum gives the kind's bits, so the pin comparison would add nothing until then.
+- **"Bit for bit" treats every NaN as one value.** Rust leaves a NaN's sign and payload
+  unspecified, so the tests compare bits after mapping NaN to one pattern. Signed zeros are
+  kept apart.
+
+Tests (unit, `curve.rs`): every method of both enums against the kind's own call, bit for
+bit, over 60 seeded instances of each kind at three scales, both senses, both sides, at
+33 parameters each (signed zero, `1e-300`, `±1e6`, an infinity, a NaN), with interval
+parameters for the generic forms; `eval_many` against `point` per element; the length
+panic; the conversions. Send and Sync are checked at compile time in `lib.rs`.
+
+Timings (release, one core, a loaded build machine, best of 7 runs of 4,000 batches of
+1,024 seeded parameters; outputs written to a slice and black-boxed; a throwaway example,
+deleted):
+
+| ns per call | direct | via `Curve` | `eval_many` |
+|---|---:|---:|---:|
+| line `point` | 1.8 | 1.9 | 0.45 |
+| line `jet::<2>` | 3.4 | 3.4 | |
+| circle `point` | 36.2 | 35.3 | 32.9 |
+| circle `jet::<2>` | 37.9 | 37.6 | |
+| ellipse `point` | 36.6 | 36.3 | 33.0 |
+| ellipse `jet::<2>` | 37.2 | 39.0 | |
+| mixed kinds, one parameter each | | 24.5 | |
+
+Dispatch costs nothing measurable over a direct call (the conic rows are within the
+run-to-run spread of about 2 ns). `eval_many` saves 9% on a conic (the frame read once)
+and 75% on a line (the loop vectorises).
 
 ## 4. `scx-surface`
 

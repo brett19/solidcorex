@@ -26,7 +26,7 @@ use crate::point::{Control, Weighted};
 use crate::{Approach, KnotVector, MAX_DEGREE, NurbsError, Result};
 
 /// A control point, knot or scratch index the built curve's invariants rule out: a bug.
-const MISSING_POINT: NurbsError = NurbsError::Defect {
+pub(crate) const MISSING_POINT: NurbsError = NurbsError::Defect {
     why: "a curve routine read an index its counts rule out",
 };
 
@@ -103,6 +103,21 @@ impl<const D: usize> NurbsCurve<D> {
             points,
             rational: Some(Rational { weights, weighted }),
         })
+    }
+
+    /// The curve of parts that already satisfy every invariant [`NurbsCurve::new`] checks,
+    /// `weighted[i] = points[i] * weights[i]` for a rational curve.
+    pub(crate) fn from_valid_parts(
+        knots: KnotVector,
+        points: Vec<[f64; D]>,
+        rational: Option<(Vec<f64>, Vec<[f64; D]>)>,
+    ) -> Self {
+        let rational = rational.map(|(weights, weighted)| Rational { weights, weighted });
+        Self {
+            knots,
+            points,
+            rational,
+        }
     }
 
     /// The knot vector.
@@ -412,7 +427,7 @@ impl<const D: usize> Rational<D> {
     }
 }
 
-fn split_weights<const D: usize>(points: Vec<Weighted<D>>) -> (Vec<[f64; D]>, Vec<f64>) {
+pub(crate) fn split_weights<const D: usize>(points: Vec<Weighted<D>>) -> (Vec<[f64; D]>, Vec<f64>) {
     points.into_iter().map(|q| (q.point, q.weight)).unzip()
 }
 
@@ -427,14 +442,14 @@ fn check_points<const D: usize>(knots: &KnotVector, points: &[[f64; D]]) -> Resu
     check_finite(points)
 }
 
-fn check_finite<const D: usize>(points: &[[f64; D]]) -> Result<()> {
+pub(crate) fn check_finite<const D: usize>(points: &[[f64; D]]) -> Result<()> {
     match points.iter().position(|p| p.iter().any(|x| !x.is_finite())) {
         Some(index) => Err(NurbsError::PointNotFinite { index }),
         None => Ok(()),
     }
 }
 
-fn check_weights(weights: &[f64], count: usize) -> Result<()> {
+pub(crate) fn check_weights(weights: &[f64], count: usize) -> Result<()> {
     if weights.len() != count {
         return Err(NurbsError::WeightCount {
             count: weights.len(),
@@ -483,18 +498,30 @@ fn set<T>(v: &mut [T], i: isize, x: T) -> Option<()> {
 }
 
 /// The control points of a knot insertion (A5.1).
-struct Insertion<'a> {
-    knots: &'a [f64],
-    degree: usize,
+pub(crate) struct Insertion<'a> {
+    pub(crate) knots: &'a [f64],
+    pub(crate) degree: usize,
     /// The span of `u` from above.
-    span: usize,
-    multiplicity: usize,
-    times: usize,
-    u: f64,
+    pub(crate) span: usize,
+    pub(crate) multiplicity: usize,
+    pub(crate) times: usize,
+    pub(crate) u: f64,
 }
 
 impl Insertion<'_> {
-    fn points<P: Control>(&self, pw: &[P]) -> Option<Vec<P>> {
+    pub(crate) fn points<P: Control>(&self, pw: &[P]) -> Option<Vec<P>> {
+        let mut qw = vec![P::ZERO; pw.len() + self.times];
+        self.points_into(pw, &mut qw, &mut Vec::with_capacity(self.degree + 1))?;
+        Some(qw)
+    }
+
+    /// [`Insertion::points`] into `qw` (`pw.len() + times` long), with the scratch `rw`.
+    pub(crate) fn points_into<P: Control>(
+        &self,
+        pw: &[P],
+        qw: &mut [P],
+        rw: &mut Vec<P>,
+    ) -> Option<()> {
         let (up, u) = (self.knots, self.u);
         let to = |x: usize| isize::try_from(x).ok();
         let (p, k, s, r) = (
@@ -504,17 +531,19 @@ impl Insertion<'_> {
             to(self.times)?,
         );
         let n = to(pw.len())? - 1;
-        let mut qw = vec![P::ZERO; pw.len() + self.times];
-        let mut rw: Vec<P> = Vec::with_capacity(self.degree + 1);
+        if qw.len() != pw.len() + self.times {
+            return None;
+        }
+        rw.clear();
         for i in 0..=p - s {
             rw.push(get(pw, k - p + i)?);
         }
         // The unaltered control points.
         for i in 0..=k - p {
-            set(&mut qw, i, get(pw, i)?)?;
+            set(qw, i, get(pw, i)?)?;
         }
         for i in k - s..=n {
-            set(&mut qw, i + r, get(pw, i)?)?;
+            set(qw, i + r, get(pw, i)?)?;
         }
         // The new ones.
         let mut l = k - p;
@@ -522,32 +551,32 @@ impl Insertion<'_> {
             l = k - p + i;
             for j in 0..=p - i - s {
                 let alf = (u - get(up, l + j)?) / (get(up, k + j + 1)? - get(up, l + j)?);
-                let c = P::affine(alf, get(&rw, j + 1)?, get(&rw, j)?);
-                set(&mut rw, j, c)?;
+                let c = P::affine(alf, get(rw, j + 1)?, get(rw, j)?);
+                set(rw, j, c)?;
             }
-            set(&mut qw, l, get(&rw, 0)?)?;
-            set(&mut qw, k + r - i - s, get(&rw, p - i - s)?)?;
+            set(qw, l, get(rw, 0)?)?;
+            set(qw, k + r - i - s, get(rw, p - i - s)?)?;
         }
         for i in l + 1..k - s {
-            set(&mut qw, i, get(&rw, i - l)?)?;
+            set(qw, i, get(rw, i - l)?)?;
         }
-        Some(qw)
+        Some(())
     }
 }
 
 /// The control points and knots of a degree elevation (A5.9).
-struct Elevation<'a> {
-    knots: &'a [f64],
-    degree: usize,
-    times: usize,
+pub(crate) struct Elevation<'a> {
+    pub(crate) knots: &'a [f64],
+    pub(crate) degree: usize,
+    pub(crate) times: usize,
     /// The number of non-empty spans.
-    spans: usize,
-    matrix: &'a [Vec<f64>],
+    pub(crate) spans: usize,
+    pub(crate) matrix: &'a [Vec<f64>],
 }
 
 impl Elevation<'_> {
     #[allow(clippy::many_single_char_names, clippy::similar_names)] // A5.9's names
-    fn points<P: Control>(&self, pw: &[P]) -> Option<(Vec<P>, Vec<f64>)> {
+    pub(crate) fn points<P: Control>(&self, pw: &[P]) -> Option<(Vec<P>, Vec<f64>)> {
         let up = self.knots;
         let to = |x: usize| isize::try_from(x).ok();
         let (p, t) = (to(self.degree)?, to(self.times)?);
