@@ -7,7 +7,11 @@
 //! - [`Ellipse`] and [`Ellipse2`]: `centre + a cos t x + b sin t y`, likewise;
 //! - [`Curve`] and [`Curve2`]: any of these or a NURBS curve, dispatched by `match`, with the batched
 //!   [`Curve::eval_many`];
-//! - [`CurveError`]: why one cannot be built.
+//! - [`Line::closest`], [`Circle::closest`], [`Ellipse::closest`] and their `invert` against a
+//!   domain: the nearest points as values ([`Foot`], [`Closest`], [`Inversion`]);
+//! - [`Curve::tangent_dir`] and [`Curve2::tangent_dir`]: the direction of travel, defined
+//!   where the first derivative vanishes;
+//! - [`CurveError`]: why one cannot be built, or a query not answered.
 //!
 //! Every kind is validated once, when built, and is then plain data (`Clone`, `Send`,
 //! `Sync`, `PartialEq`; 63 X3) with no cache (X4). Each has one evaluator (X12), generic
@@ -19,17 +23,19 @@
 //! are the pin's (63 D13), angles in radians (X11). A conic's orientation is a
 //! [`Sense`](scx_num::frame::Sense): reversed runs it clockwise about its frame's z (D14).
 //!
-//! Inversion, restriction, reversal and transformation build on these types (63 §3.5, CU4
-//! and CU5).
+//! Restriction, reversal and transformation build on these types (63 §3.5, CU5).
 
 mod conic;
 mod curve;
 mod error;
+mod invert;
 mod line;
+mod tangent;
 
 pub use conic::{Circle, Circle2, Ellipse, Ellipse2};
 pub use curve::{Curve, Curve2};
-pub use error::{CurveError, Degenerate, Part, SemiAxis};
+pub use error::{CurveError, Degenerate, Part, SemiAxis, Unsupported};
+pub use invert::{Closest, Foot, Inversion, POLISH_STEPS};
 pub use line::{Line, Line2};
 
 /// `Result` with [`CurveError`].
@@ -47,6 +53,9 @@ const _: () = {
     ok::<Curve>();
     ok::<Curve2>();
     ok::<CurveError>();
+    ok::<Foot>();
+    ok::<Inversion>();
+    ok::<Closest>();
 };
 
 #[cfg(test)]

@@ -29,6 +29,7 @@ mod solvers;
 mod t_algo;
 mod t_bern;
 mod t_curve;
+mod t_curve_query;
 mod t_extent;
 mod t_gsolve;
 mod t_gutil;

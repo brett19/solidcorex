@@ -1,9 +1,9 @@
 // Written for solidcorex. Apache-2.0.
-//! Why an analytic curve cannot be built.
+//! Why an analytic curve cannot be built, or a query on a curve cannot be answered.
 //!
 //! Errors follow research 62 §10: every cause has a kind ([`CurveError::kind`]), a stable
-//! name ([`CurveError::name`]) and a Display of one frame. Every cause here is the caller's
-//! data, kind `Refused` (63 X13). Evaluation of these kinds never fails: a point and a jet
+//! name ([`CurveError::name`]) and a Display of one frame. A construction cause is the
+//! caller's data, kind `Refused` (63 X13); a query no arm answers yet is `Unsupported`. Evaluation of these kinds never fails: a point and a jet
 //! are closed forms, total over `f64` (a NaN parameter gives NaN coordinates).
 //!
 //! | solidcore at the pin | here |
@@ -15,8 +15,11 @@
 //! | none: `Ellipse::new` builds any radii | [`Degenerate::SemiAxis`], [`CurveError::NotFinite`] |
 //! | none: non-finite points and vectors build | [`CurveError::NotFinite`] (a [`Frame`](scx_num::frame::Frame) refuses them itself) |
 //!
+//! | none: a NURBS curve's inversion runs the general solver | [`Unsupported::NurbsInversion`] |
+//!
 //! `OutsideDomain`, `TooLarge` and `Solve` (63 §3.2) join with the first operation that can
-//! produce them (inversion, CU4); nothing here can.
+//! produce them. Analytic inversion (CU4) cannot: an outside foot is
+//! [`Inversion::Outside`](crate::Inversion), not an error, and every arm is bounded.
 
 use core::fmt;
 
@@ -30,6 +33,17 @@ pub enum CurveError {
     Degenerate(Degenerate),
     /// A coordinate or size is infinite or NaN.
     NotFinite(Part),
+    /// A query this kind does not answer yet.
+    Unsupported(Unsupported),
+}
+
+/// A query no arm answers yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Unsupported {
+    /// A NURBS curve's closest point or inversion: it needs the iterative solve under a
+    /// budget (63 X13), which is not built.
+    NurbsInversion,
 }
 
 /// A size or direction too small to give a curve. The threshold is the pin's
@@ -80,11 +94,13 @@ pub enum Part {
 }
 
 impl CurveError {
-    /// The error's kind: always [`ErrorKind::Refused`] (the data is the caller's).
+    /// The error's kind: [`ErrorKind::Refused`] for the caller's data,
+    /// [`ErrorKind::Unsupported`] for a query not built.
     #[must_use]
     pub const fn kind(&self) -> ErrorKind {
         match self {
             Self::Degenerate(_) | Self::NotFinite(_) => ErrorKind::Refused,
+            Self::Unsupported(_) => ErrorKind::Unsupported,
         }
     }
 
@@ -96,6 +112,7 @@ impl CurveError {
             Self::Degenerate(Degenerate::Radius { .. }) => "degenerate_radius",
             Self::Degenerate(Degenerate::SemiAxis { .. }) => "degenerate_semi_axis",
             Self::NotFinite(_) => "not_finite",
+            Self::Unsupported(Unsupported::NurbsInversion) => "unsupported_nurbs_inversion",
         }
     }
 }
@@ -133,6 +150,9 @@ impl fmt::Display for CurveError {
                 write!(f, "an ellipse {axis} semi-axis of {length} is not positive")
             }
             Self::NotFinite(part) => write!(f, "{part} is not finite"),
+            Self::Unsupported(Unsupported::NurbsInversion) => {
+                f.write_str("a NURBS curve's inversion is not built")
+            }
         }
     }
 }
@@ -145,7 +165,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     #[test]
-    fn every_cause_is_refused_named_and_displayed() {
+    fn every_cause_is_kinded_named_and_displayed() {
         let all = [
             CurveError::Degenerate(Degenerate::Direction { length: 0.0 }),
             CurveError::Degenerate(Degenerate::Radius { radius: -1.0 }),
@@ -158,6 +178,10 @@ mod tests {
         ];
         let names: BTreeSet<_> = all.iter().map(CurveError::name).collect();
         assert_eq!(names.len(), 4);
+        let unsupported = CurveError::Unsupported(Unsupported::NurbsInversion);
+        assert_eq!(unsupported.kind(), ErrorKind::Unsupported);
+        assert!(!names.contains(unsupported.name()));
+        assert!(!unsupported.to_string().is_empty());
         for e in all {
             assert_eq!(e.kind(), ErrorKind::Refused);
             assert!(!e.to_string().is_empty());

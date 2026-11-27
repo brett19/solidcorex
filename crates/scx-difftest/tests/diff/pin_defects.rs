@@ -3690,6 +3690,89 @@ conic_defects! {
     curve_ellipse2_jet: Vec<[f64; 2]>, axes2, false, all;
 }
 
+// ---- scx-curve queries (`t_curve_query`) -----------------------------------------------------
+
+use crate::t_curve_query::{NurbsAt, OnConic};
+
+/// The limiting direction from `side` by its definition: the first derivative `C^(k)` that
+/// does not vanish, signed `(-1)^(k-1)` from below; `None` when all vanish. A derivative
+/// vanishes when it is shorter than `1.1 EFF_ZERO (1 + max|C(u)|)`, the contract's floor, so
+/// a first derivative of `1e-18` (a tripled point a hair past the knot, a weight of `1e-12`)
+/// counts as zero. The exact derivatives are the testkit's, rounded once. The tolerance is
+/// `1e-9`: a derivative past the first of a rational curve loses digits to the spread of its
+/// weights (`1e-11` at a spread of `1e6`).
+fn tangent_answer(a: &NurbsAt, from_left: bool, got: &Option<[f64; 3]>) -> Result<(), String> {
+    let side = if from_left {
+        tk::Side::Above
+    } else {
+        tk::Side::Below
+    };
+    let c = a.0.curve.exact().map_err(|e| format!("{e:?}"))?;
+    let d = c.derivs(a.0.u, side, 8).map_err(|e| format!("{e:?}"))?;
+    let max = d[0].rounded.iter().fold(0.0_f64, |m, x| m.max(x.abs()));
+    let floor = 1.1 * scx_num::math::EFF_ZERO * (1.0 + max);
+    let first = d
+        .iter()
+        .enumerate()
+        .skip(1)
+        .find(|(_, e)| e.rounded.iter().map(|x| x * x).sum::<f64>() >= floor * floor);
+    let want = first.and_then(|(k, e)| {
+        let flip = side == tk::Side::Below && k % 2 == 0;
+        let v = e.rounded.map(|x| if flip { -x } else { x });
+        let v = scx_num::vector3d::Vec3::from(v);
+        (v / v.max_dimension())
+            .normalized()
+            .map(|u| u.as_vec().to_array())
+    });
+    let ok = match (got, &want) {
+        (Some(g), Some(w)) => (0..3).all(|i| (g[i] - w[i]).abs() <= 1e-9),
+        (None, None) => true,
+        _ => false,
+    };
+    if ok {
+        Ok(())
+    } else {
+        Err(format!("the limiting direction is {want:?}"))
+    }
+}
+
+/// `Curve::tangent_dir` on a NURBS curve where the pin's `non_zero_tangents` points the wrong
+/// way or nowhere: where the first derivative vanishes the pin takes the second, negated
+/// past the middle of the domain whichever side is asked, so a cusp at a double knot inside
+/// the domain's first half runs backwards from below and one past the middle backwards from
+/// above; where the second vanishes too (a tripled control point) the pin keeps the zero
+/// first derivative. scx reads the side and goes on to the first derivative that does not
+/// vanish. Truth: [`tangent_answer`].
+pub fn curve_nurbs_tangent() -> PinDefect<(NurbsAt, bool), Option<[f64; 3]>> {
+    PinDefect {
+        reason: "the pin's zero-tangent fallback signs by the domain's middle, not the side",
+        applies: Applies::Disagreeing,
+        check: |(a, from_left), r| tangent_answer(a, *from_left, r),
+    }
+}
+
+/// An ellipse's foot of a point on it where the pin's angle differs: the two angles name the
+/// same point a turn apart at the seam, or differ by `atan2`'s rounding on a thin ellipse.
+/// Truth: the point at scx's angle is the query, within 64 roundings of the ellipse's size.
+pub fn curve_ellipse_invert_on() -> PinDefect<(GoodConic, OnConic), f64> {
+    PinDefect {
+        reason: "the seam's turn, and atan2's rounding",
+        applies: Applies::Disagreeing,
+        check: |(c, t), r| {
+            let e = crate::t_curve_query::x::ellipse(c);
+            let q = crate::t_curve_query::x::on_ellipse(c, t.0);
+            let p = e.point(*r).to_array();
+            let size = c.0.o.iter().fold(0.0_f64, |m, x| m.max(x.abs())) + c.0.a.max(c.0.b);
+            let d = (0..3).map(|i| (p[i] - q[i]).abs()).fold(0.0, f64::max);
+            if d <= 64.0 * U * size {
+                Ok(())
+            } else {
+                Err(format!("the point at {r} is {d} from the query"))
+            }
+        },
+    }
+}
+
 use crate::berns::BernR;
 
 /// One call's roots: the places and whether every root was isolated.
