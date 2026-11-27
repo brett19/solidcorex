@@ -9,10 +9,13 @@ use core::fmt;
 use scx_brep::{EdgeId, Entity, FaceId, Operand, VertexId};
 use scx_num::budget::{Exhausted, Stopped};
 use scx_num::error::ErrorKind;
+use scx_ssi::SsiError;
 use scx_surface::{SurfaceError, SurfaceKind};
 
 /// Why a Boolean did not finish.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// `PartialEq` only: an [`SsiPair`](BooleanUnsupported::SsiPair) cause names a point.
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub enum BooleanError {
     /// The operands are not ones a Boolean takes.
@@ -52,7 +55,7 @@ pub enum BooleanRefusal {
 }
 
 /// What this method does not answer yet.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub enum BooleanUnsupported {
     /// A NURBS face or edge where the operands meet: step 5 builds their intersections.
@@ -81,6 +84,11 @@ pub enum BooleanUnsupported {
         b: FaceId,
         /// The two surfaces' kinds.
         kinds: [SurfaceKind; 2],
+        /// Why the intersector did not answer, and where: one of its refusals (kind
+        /// `Unsupported`), never its budget or stop, which are
+        /// [`BooleanError::Exhausted`] and [`BooleanError::Cancelled`]
+        /// ([`BooleanError::of_ssi`]).
+        cause: SsiError,
     },
     /// A stage of the method not built yet: the operands got past every stage before it.
     /// Each later task removes the stage it builds (72 §5.8).
@@ -259,6 +267,22 @@ impl BooleanError {
         }
     }
 
+    /// The error the intersector gave for faces `a` and `b`, of these kinds: its budget
+    /// and stop as the Boolean's own, a refusal as [`BooleanUnsupported::SsiPair`] with it
+    /// as the cause.
+    pub(crate) const fn of_ssi(
+        cause: SsiError,
+        a: FaceId,
+        b: FaceId,
+        kinds: [SurfaceKind; 2],
+    ) -> Self {
+        match cause {
+            SsiError::Budget(e) => Self::of_budget(e),
+            SsiError::Stopped => Self::Cancelled,
+            _ => Self::Unsupported(BooleanUnsupported::SsiPair { a, b, kinds, cause }),
+        }
+    }
+
     /// The budget's exhaustion.
     pub(crate) const fn of_budget(e: Exhausted) -> Self {
         Self::Exhausted { limit: e.limit }
@@ -298,9 +322,10 @@ impl fmt::Display for BooleanError {
                 a,
                 b,
                 kinds: [ka, kb],
+                cause,
             }) => write!(
                 f,
-                "operand 0 {a} ({ka}) and operand 1 {b} ({kb}) meet in no closed form yet"
+                "operand 0 {a} ({ka}) and operand 1 {b} ({kb}) meet in no closed form yet: {cause}"
             ),
             Self::Unsupported(BooleanUnsupported::Pcurve { operand, face }) => {
                 write!(f, "{operand}: {face}: a new loop needs a fitted pcurve")

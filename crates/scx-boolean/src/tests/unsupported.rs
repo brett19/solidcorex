@@ -20,6 +20,7 @@ use scx_num::fmath;
 use scx_num::frame::Frame;
 use scx_num::units::Length;
 use scx_num::vector3d::Vec3;
+use scx_ssi::SsiError;
 use scx_surface::SurfaceKind;
 
 use super::{call, pt};
@@ -43,29 +44,29 @@ fn mm(x: f64) -> Length {
 
 /// A pair that must answer `SsiPair` with these faces and kinds, in either operand order:
 /// swapped, the faces and kinds swap with the operands (the first pair in `a`'s id order
-/// is the same pair in each of these cases).
+/// is the same pair in each of these cases). The cause is an undecided region, the same
+/// one either way: the proof that clears regions reads both surfaces alike.
 fn expect_ssi_pair(a: &Brep, b: &Brep, faces: [FaceId; 2], kinds: [SurfaceKind; 2]) {
     let doc = Document::default();
     let settings = Settings::new();
+    let pair = |e: BooleanError| {
+        let BooleanError::Unsupported(BooleanUnsupported::SsiPair { a, b, kinds, cause }) = e
+        else {
+            panic!("{e:?}");
+        };
+        assert!(
+            matches!(cause, SsiError::Unresolved { size, .. } if size.mm() > 0.0),
+            "{cause:?}"
+        );
+        ([a, b], kinds, cause)
+    };
     let e = call(a, b, doc, &settings);
-    assert_eq!(
-        e,
-        BooleanError::Unsupported(BooleanUnsupported::SsiPair {
-            a: faces[0],
-            b: faces[1],
-            kinds,
-        })
-    );
     assert_eq!(e.name(), "ssi_pair");
-    let e = call(b, a, doc, &settings);
-    assert_eq!(
-        e,
-        BooleanError::Unsupported(BooleanUnsupported::SsiPair {
-            a: faces[1],
-            b: faces[0],
-            kinds: [kinds[1], kinds[0]],
-        })
-    );
+    let (fwd, kf, cause) = pair(e);
+    assert_eq!((fwd, kf), (faces, kinds));
+    let (rev, kr, swapped) = pair(call(b, a, doc, &settings));
+    assert_eq!((rev, kr), ([faces[1], faces[0]], [kinds[1], kinds[0]]));
+    assert_eq!(swapped, cause);
 }
 
 /// The pin's `tpipe`: an R=2 pipe along z from -10 to 10 and an r=1.5 branch from the axis
