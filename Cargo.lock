@@ -493,6 +493,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "scx-brep"
+version = "0.1.0"
+dependencies = [
+ "scx-curve",
+ "scx-num",
+ "scx-surface",
+]
+
+[[package]]
 name = "scx-curve"
 version = "0.1.0"
 dependencies = [

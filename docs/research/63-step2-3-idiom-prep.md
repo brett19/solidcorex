@@ -4055,6 +4055,379 @@ pub fn transform(b: &Brep, a: &Affine) -> Result<Brep, TransformError>;
 | BR8 | body generators in the testkit | BR1 |
 | BR9 | step 5: fitted pcurves by the writer, eagerly, to D10's target, with the recorded basis; the D4 refit | BR5, the `scx-nurbs` fitter (step 5) |
 
+### 6.6 BR1 as built (11-27)
+
+Decided by analysis and an adversarial pass. Proposed for review; not yet ruled.
+
+`crates/scx-brep` (layer 5, after `scx-ssi`) holds the ids, the records, `Brep` and `Draft`,
+the views and their iterators, and a `finish` that checks references only. BR2 to BR6 each
+have a seam left for them:
+
+- BR2: `check::run`, which runs after `check::references`.
+- BR3: the `Changes` stub, empty and `#[non_exhaustive]`.
+- BR4: `FaceCells` and `EdgeCells` with `reset()`, which hold no fields yet.
+- BR5: `UseGeom`, which the writer fills.
+- BR6: `Brep::edit` and `into_draft`.
+
+**The public surface.**
+
+```rust
+pub struct RegionId(u32); /* ShellId, FaceId, EdgeId, VertexId */  // from_raw, raw, index, Display "f3"
+impl RegionId { pub const OUTSIDE: Self; }
+pub enum EntityKind { Region, Shell, Face, Edge, Vertex }           // name()
+pub enum Entity { Region(RegionId), /* ... */ }                     // kind(), Display
+pub struct IdMap { /* per kind */ }  // region(old) -> Option<RegionId>, ..., is_identity()
+
+pub struct RegionRecord { pub solid: bool }
+pub struct ShellRecord { pub region: RegionId, pub wires: Vec<EdgeId>, pub lone_vertices: Vec<VertexId> }
+pub enum FaceSide { Front, Back }                                   // other(), BOTH
+pub struct FaceRecord { pub surface: Surface, pub sides: [ShellId; 2], pub loops: Vec<LoopRecord>, cells }
+pub struct LoopRecord { pub uses: Vec<EdgeUse> }
+pub struct EdgeUse { pub edge: EdgeId, pub sense: Sense, pub geom: UseGeom, pub bound: Option<Arc<Recorded>> }
+pub enum UseGeom { Pcurve { curve: Curve2, interval: Extent1d }, Point(Point2) }
+pub enum EdgeShape { Curve { curve: Curve, interval: Extent1d }, Collapsed }
+pub struct EdgeGeom { pub shape: EdgeShape, pub ends: [VertexId; 2], pub accuracy: Option<Arc<Recorded>>, cells }
+pub struct Fin { pub face: FaceId, pub sense: Sense }
+pub struct EdgeAdj { pub fins: Vec<Fin> }                           // radial order
+pub struct VertexRecord { pub point: Point3, pub accuracy: Option<Arc<Recorded>> }
+// every record #[non_exhaustive], built by its `new`
+
+impl Brep {   // Clone is cheap: tables are Arc'd
+    pub fn edit(&self) -> Draft;  pub fn into_draft(self) -> Draft;
+    pub fn compact(&self) -> (Brep, IdMap);
+    pub fn resolution(&self) -> Length;
+    pub fn region(&self, RegionId) -> Option<Region<'_>>;  /* shell, face, edge, vertex */
+    pub fn outside(&self) -> Region<'_>;
+    pub fn faces(&self) -> impl ExactSizeIterator<Item = Face<'_>> + DoubleEndedIterator + Clone; /* each kind */
+    pub fn face_slots(&self) -> usize;  /* edge_slots, vertex_slots: bitset sizes */
+}
+impl Draft {
+    pub fn new() -> Self;
+    pub fn finish(self, &Document) -> Result<(Brep, Changes), Box<Unfinished>>;
+    pub fn add_region(&mut self, solid: bool) -> Result<RegionId, TableFull>;
+    pub fn add_shell(&mut self, ShellRecord) -> Result<ShellId, TableFull>;
+    pub fn add_face(&mut self, FaceRecord) -> Result<FaceId, TableFull>;     // appends its fins
+    pub fn add_edge(&mut self, EdgeGeom) -> Result<EdgeId, TableFull>;
+    pub fn add_edge_pending(&mut self, ends: [VertexId; 2]) -> Result<EdgeId, TableFull>;  // A10
+    pub fn attach_curve(&mut self, EdgeId, Curve, Extent1d) -> Result<(), Absent>;
+    pub fn add_vertex(&mut self, VertexRecord) -> Result<VertexId, TableFull>;
+    pub fn face_mut(&mut self, FaceId) -> Option<&mut FaceRecord>;  /* region_, shell_, edge_, adjacency_, vertex_mut */
+    pub fn remove_face(&mut self, FaceId) -> Option<FaceRecord>;    /* each kind; remove_region(OUTSIDE) is None */
+    pub fn face(&self, FaceId) -> Option<Face<'_, Drafting<'_>>>;   /* each view, each iterator */
+}
+pub struct Face<'a, S: Stage = Finished>;  /* Region, Shell, Loop, Use, Edge, Vertex: Copy */
+pub trait Stage: sealed { type Look<T>; }  // Finished: Look<T> = T; Drafting: Look<T> = Option<T>
+pub struct Document;  // Default, with_resolution, resolution()
+pub enum FinishCause { MissingCurve { edge }, Structure(StructureCause) }  // #[non_exhaustive]
+pub enum StructureCause { Outside, Dangling { from: Entity, to: Entity }, FinWithoutUse { edge, fin } }
+pub struct Unfinished { pub draft: Draft, pub cause: FinishCause }  // kind(), name(), Error
+pub struct TableFull { pub kind: EntityKind }   // Exhausted, "table_full"
+pub struct Absent { pub entity: Entity }        // Refused, "absent"
+```
+
+Every public type is `Send + Sync`, checked by a `const` assertion in `lib.rs`. The views are
+checked at `'static`.
+
+**The decisions.** For each, the case for, the case against, and what would change it.
+
+- **The table is copy-on-write as a whole: `Arc<Vec<Option<T>>>` plus a live count.** Faces sit
+  in it as `Arc<FaceRecord>`. `edit` costs one `Arc` clone per table. The first write to a table
+  copies its slot vector. For faces, that copies pointers, and then only the written face is
+  copied.
+  - *For:* this is 01 §2.3's sharing at the least code. Reads go through one index. A face, the
+    largest record and the one most often left untouched, is never copied unless it is written.
+  - *Against:* the first edge or vertex write copies the whole edge or vertex table. For a body of
+    1e5 edges that is about 13 MB of `EdgeGeom` per edit that touches one edge.
+  - *Change if:* a profile shows edit cost growing with body size. Chunked tables (`Arc<[Chunk]>`)
+    can then go behind the same `Table` type without changing its API.
+- **An edge is two lockstep tables, geometry and adjacency, under one `EdgeId`.**
+  - *For:* `add_face` and `remove_face` write the radial order, and doing so copies no curve.
+    Most edits to topology leave the geometry alone.
+  - *Against:* two tables must stay in step. `add_edge` and `remove_edge` are the only writers of
+    both, and `check::references` reads them together.
+  - *Change if:* never; the split costs one `Arc` per edit.
+- **A fin is `(FaceId, Sense)`, not `(FaceId, u32)` with a use index (§6.3).** A fin is found
+  again by scanning the face's uses for that edge and sense. `Use::fin` and `Edge::uses` do this.
+  - *For:* a fin survives every loop edit that keeps the use: an insert, a split, a reorder.
+    With a use index, every one of those edits must rewrite every fin after the edit point,
+    because the positions shift. A seam, used twice by one face, still tells its two fins apart,
+    because the two uses have opposite senses.
+  - *Against:* finding a fin's use is linear in the face's uses, where an index is O(1). A face
+    that uses one edge twice in the same sense would be ambiguous. That is invalid: BR2 refuses it.
+  - *Change if:* profiles show `Edge::uses` hot on faces with many uses. A face cell can then map
+    each fin to its use, built lazily and reset with the face.
+- **Views are generic over a sealed `Stage` with a GAT.** In `Brep` they are total
+  (`Look<T> = T`). In `Draft` they return `Option` (`Look<T> = Option<T>`), because a draft may
+  dangle. One view type serves both stages.
+  - *For:* a finished body never returns an `Option` for a reference that `finish` proved live.
+    A draft never panics on one it has not proved. There is one implementation, not two.
+  - *Against:* a GAT in the signatures (`S::Look<Edge<'a, S>>`) is harder to read. `Finished`
+    turns an impossible `None` into `unreachable!`. That is sound only because `finish` runs
+    `check::references` and no `Brep` is built any other way. `compact` and `from_tables` keep
+    the invariant by construction.
+  - *Change if:* a second way to build a `Brep` appears, such as a decoder that skips `finish`.
+    That way must run `references` too.
+- **A pending curve (A10) is the draft's `pending: BTreeSet<EdgeId>`.** The stored shape is
+  `Collapsed` as a placeholder. Every view of a pending edge's shape returns `None`, and `finish`
+  reports the lowest pending edge as `MissingCurve`, kinded `Defect`.
+  - *For:* `EdgeShape` stays the two-case D8 enum. A finished body cannot hold a pending edge,
+    because the set lives only in `Draft`.
+  - *Against:* inside the draft, the record's `shape` reads `Collapsed` through `edge_mut`. A
+    writer that reads the record rather than the view sees a wrong answer.
+  - *Change if:* a writer trips on it. Then add an `EdgeShape::Pending` that only a draft can
+    hold, refused by `finish`.
+- **No stored face sense (unlike §6.3's `sense: Sense`).** The surface carries its own sense
+  (D14). The face's front side is the side of the surface's natural normal.
+  - *For:* one sense, not two that can disagree. Mirroring flips the kind's sense once.
+  - *Against:* flipping a face means rebuilding its surface value, not toggling a bit. That costs
+    a copy of up to 104 bytes.
+  - *Change if:* never.
+- **No stored face accuracy (unlike §6.3's `accuracy`).** It is derived from the uses' bounds
+  and the edges' accuracies, so it becomes a BR4 cell.
+  - *For:* 01 records accuracy where a writer measures it: on the use, the edge and the vertex.
+    A stored face figure would be a cache that can go stale.
+  - *Against:* if a writer ever measures a face-level figure (a surface fitted to within some
+    distance), it has nowhere to go.
+  - *Change if:* step 5's surface fitting records one. Then it is added as
+    `FaceRecord::accuracy`, `#[non_exhaustive]` allowing.
+- **Recorded accuracy is `Option<Arc<Recorded>>`, not 01's `Option<Recorded>`.** The use's
+  field is named `bound`, as 01 has it. `Recorded` is 72 bytes. Inline, it makes `EdgeUse`
+  152 bytes, `EdgeGeom` 192 and `VertexRecord` 96. With the `Arc` they are 88, 128 and 32.
+  - *For:* most entities have no recorded accuracy, because they are within the resolution (01
+    C4). Each pays 8 bytes rather than 72. A walk over uses touches about half the cache lines.
+  - *Against:* a tolerant body pays a pointer chase on each read, and an allocation on each write.
+  - *Change if:* profiles of tolerant bodies show accuracy reads. Then split the record into an
+    inline figure plus an `Arc`'d basis.
+- **`ShellRecord` stores no face list.** `Shell::faces` and `Region::shells` scan the face and
+  shell tables. `Vertex::edges` scans the edges.
+  - *For:* one owner per fact. A face names its shells, and no second list can disagree with it.
+  - *Against:* each of those calls is O(body). An algorithm that walks shell by shell is
+    quadratic.
+  - *Change if:* a BR4 body cell (shell to faces, vertex to edges) is built lazily from the scan.
+    That is the planned home, and the record does not change.
+- **Each add returns `Result<_, TableFull>`.** A table that has given every `u32` id is
+  `Exhausted`, not a panic or a wrap.
+  - *For:* 01 §2.2's "never reused" stays true. Library code panics on nothing.
+  - *Against:* every builder writes a `?` for a case no real body reaches.
+  - *Change if:* never.
+- **`attach_curve` returns `Result<(), Absent>`.** It refuses an edge that is not live. An edge
+  that is live but not pending simply takes the curve.
+  - *For:* a caller that names a dead id hears about it.
+  - *Against:* replacing a curve that is already attached gives no signal.
+  - *Change if:* BR3's event recording needs to tell an attach from a replace.
+- **`add_face` appends its fins; `face_mut` does not update them.** `remove_face` drops its
+  fins. A writer that edits loops through `face_mut` must fix the fins by hand, through
+  `adjacency_mut`. `finish` reports `FinWithoutUse` for a fin left behind. A use without its fin
+  is BR2's check.
+  - *For:* the common build path, add a face, is right by construction. Editing loops in place
+    is the rare writer's job, and the check catches it.
+  - *Against:* half of the radial invariant is maintained, and half is checked.
+  - *Change if:* BR3's event recording gives loop edits their own calls. Those calls can keep
+    the fins.
+- **A cell reset skips cells that are already empty.** `edge_mut` resets the cells of the faces
+  that use the edge, and `vertex_mut` those of its star. Faces whose cells are empty are skipped,
+  so a face is not copied just to reset nothing.
+  - *For:* without the skip, every edge write would copy each adjacent face. That is the face
+    copy the face `Arc` exists to avoid.
+  - *Against:* until BR4 the cells are always empty, so the reset path is not exercised. The
+    test `an_edge_or_vertex_write_copies_no_face` pins the skip, not the reset.
+  - *Change if:* BR4 must test the reset with real cells.
+- **`finish` checks references now.** It checks that the outside exists and is void, that every
+  id a record names is live, and that every fin has its use. Records are walked in kind order,
+  then id order, and the lowest failure is the cause.
+  - *For:* the total views need it, so it cannot wait for BR2.
+  - *Against:* BR2 will put its structure check next to this one, so the order of causes is
+    shared ground.
+  - *Change if:* BR2 needs a different order. The order is the function's.
+- **How the causes are kinded.** `StructureCause` is `Refused`, because the caller built a bad
+  draft. `MissingCurve` is `Defect`, per D8.
+  - *Against:* a decoder's dangling id is the input's fault, not the caller's. It may want
+    `Invalid`.
+  - *Change if:* the record decoder (`scx-record`) maps it. This is open.
+- **`Document` holds only the resolution.** 01's units and size class have no types yet.
+  - *Change if:* they land. `Document` is `#[non_exhaustive]` with `Default`, so adding fields
+    breaks no caller.
+- **`compact` is built; `shed_cells` is not.** There are no cells yet. `compact` returns a clone
+  when the `IdMap` is the identity.
+- **Live iteration skips empty slots without a live list.** Research 66 §14 measured deleted
+  slots costing about 3× in the pin's arena walks. The tables keep a live count, so each `len`
+  is exact, and the walk skips `None` slots.
+  - *For:* this is the least state to keep. `compact` is how a long edit sequence gets dense
+    again.
+  - *Against:* a body that has had many deletions and was never compacted walks its dead slots.
+  - *Change if:* profiles show it. Then add a live bitset to `Table`, behind the same `iter`.
+- **No Morton ordering** (66 §14: rejected). Id order is the order.
+
+**Tests.** There are 19 unit tests: ids, tables, errors, sharing and copy-on-write, writes in
+place on `into_draft`, no face copied by an edge or vertex write, pending and `MissingCurve`,
+each structure cause and its order, the draft views, fin removal, `compact`, and record sizes.
+There are three integration tests in `tests/bodies.rs`:
+
+- A unit block is built by hand and every view and iterator is walked:
+  - counts of 2 regions, 2 shells, 6 faces, 12 edges and 8 vertices;
+  - Euler's formula;
+  - every vertex star of 3;
+  - every `next`/`prev` ring;
+  - every fin to its use and back;
+  - the draft walk equals the finished walk;
+  - an edit and finish round trip, and `compact`;
+  - the body is read from a second thread.
+- A capped cylinder is walked the same way. Its wall uses the seam twice, at positions 1 and 3,
+  with fins Forward then Reversed.
+- A rewritten face leaves the original body alone.
+
+There is no difftest against the pin: its topology is four use levels, and no single call
+matches one view.
+
+**Measured** (throwaway timer, not committed; release build, best of 7). The walk is A9's: all
+faces, then their loops, then their uses, marking each edge in a bitset.
+
+Record sizes, in bytes:
+
+| scx-brep | Bytes | Pin | Bytes |
+|---|---|---|---|
+| `FaceRecord` | 136 | `Face` | 408 |
+| `LoopRecord` | 24 | `Loop` + `Loopuse` | 40 + 40 |
+| `EdgeUse` | 88 | `Edgeuse` | 472 |
+| `EdgeGeom` + `EdgeAdj` | 128 + 24 | `Edge` | 392 |
+| `VertexRecord` | 32 | `Vertex` | 64 |
+| `ShellRecord` | 56 | | |
+
+The walk, in ns per face:
+
+| Body | Faces | Through `Use::record().edge` | Through `Use::edge().id()` |
+|---|---|---|---|
+| scx quad sheet 1×1 | 1 | 4.4 | 6.7 |
+| scx quad sheet 8×8 | 64 | 5.3 | 6.4 |
+| scx quad sheet 32×32 | 1,024 | 4.4 | 7.0 |
+| scx quad sheet 100×100 | 10,000 | 11.3 | 17.6 |
+| pin box, `Loop::edges` (port-only list) | 6 | 6.1 | |
+| pin box, `loop_edgeuses` (the edge-use ring) | 6 | 38.3 | |
+| pin cylinder, `Loop::edges` | 3 | 4.8 | |
+| pin cylinder, `loop_edgeuses` | 3 | 33.4 | |
+
+The pin was measured on its primitives, because it has no grid builder. The quad sheet stands
+in for BR8's largest generated body, which does not exist yet.
+
+- On equal ground the walk matches the pin's fastest path, its port-only `Loop::edges` list.
+- It is about 7× faster than the pin's faithful edge-use ring, which allocates a `Vec` per loop
+  and goes through a `Result` per step.
+- The view path's extra cost over the record is the edge-table lookup that makes the `Edge`
+  view.
+- At 10,000 faces (about 1.4 MB of face records) the walk falls out of L2.
+- Research 51's 4.9 ns per face is met up to 1,024 faces.
+
+### 6.8 BR3 as built (11-27)
+
+Decided by analysis and an adversarial pass. Proposed for review; not yet ruled.
+
+**What was built** (`crates/scx-brep/src/changes.rs`, the recording in `draft.rs`):
+
+- `Draft::finish` returns honest `Changes`: for faces, edges and vertices, an `EntityChanges<I>`
+  with `replaced: Vec<(I, Touch)>`, `created: Vec<(I, Origins)>`, `merged: Vec<Merge<I>>`,
+  `coincident: Vec<Coincidence<I>>`, `removed: Vec<I>` and `split: Vec<Split<I>>`. Every list is in
+  id order; split pieces follow the key below.
+- `Touch` is `Boundary` (loops, sides, an edge's ends) or `Geometry` (surface, curve, interval,
+  accuracy, a vertex's point).
+- `Origin` is `Face`, `Edge`, `Vertex` (part of an entity the edit started with), `Offset(Entity)`,
+  `Operand(Operand, Entity)` (from a tool body) or `Free`. `Origins` is sorted, without repeats,
+  never empty; `[Free]` costs no allocation.
+- Draft calls added: `derive(new, origin) -> Result<(), LineageError>`,
+  `coincident(operand, entity, onto) -> Result<(), Absent>`, `merge_face`, `merge_edge`,
+  `merge_vertex` (remove the absorbed entity and name its survivor), and
+  `edit_face(id, |&mut FaceRecord| ..) -> Option<R>`.
+- `carry(changes, own, operands, rule) -> BTreeMap<I, T>` with `trait Carry<T>` (`split`, `merge`,
+  `coincident`, each returning `Option<T>`). `IdMap::renumber` carries an application table across
+  `compact`.
+- `Tracked` (sealed; `FaceId`, `EdgeId`, `VertexId`) makes all of it generic over the kind.
+
+**Decisions**, each with the case for and against:
+
+1. *Touch is found by diff, not by logging each write.* The first `face_mut`, `edge_mut` or
+   `vertex_mut` on an entity the draft started with keeps its record as it was (a face's `Arc`, an
+   edge's geometry without cells, a vertex); `finish` compares. For: a write that changes nothing
+   reports nothing (an edit that touches nothing gives empty `Changes`, 63 §6.3's identity oracle),
+   and no mutation path can forget to log. Against: one copy per first write, and the touch is
+   record-level only: a face around a moved vertex, or an edge whose radial order changed, is not
+   listed. Change if an application needs "faces whose geometry moved through a vertex": that is
+   derivable from `vertices.replaced` and the stars.
+2. *Under `into_draft`, the first write to a before-face copies it once*, since the kept snapshot
+   shares its `Arc`. BR1's test `into_draft_writes_in_place_when_unshared` now asserts in-place
+   writes for edges and for faces the draft added. For: honest `Changes` need the old record.
+   Against: `into_draft`'s "no copy" promise is weaker. Change if a profile shows it: a draft could
+   take a "no changes" flag.
+3. *Vertices get a full `EntityChanges`* (01 §2.6 has a smaller `VertexChanges`). For: one generic
+   `carry`, and vertex merges and coincidences are real (a boolean's coincident corners). Against:
+   a few unused lists. Kept.
+4. *Named `Merge` and `Coincidence` records* (57 §5.1) and a `split` list. A split is read off the
+   created entities that name a kept or removed entity as their part: `Split { from, pieces }` lists
+   `from` itself among the pieces when it survives.
+5. *Split piece order* is a total key: the lineage of the bounding entities (a face's edges, an
+   edge's vertices), then the uv midpoints of its boundary (`total_cmp`), then the id. For: stable
+   across executors and independent of creation order in the common case. Against: 01 §2.6 says an
+   interior point; boundary midpoints are cheaper and need no point-in-face test, but two pieces
+   with the same bounding lineage and the same boundary midpoints fall to the id, which is creation
+   order. Change if BR7's ports show a case where that matters.
+6. *`Origin::Offset`* added beyond 01, for offset and thicken (the pin's `offset_history`,
+   `issue_1973_*`). It carries by the same-kind rule (an offset face takes the face's values).
+7. *`derive` resolves at call time*: an origin naming a created entity stands for that entity's
+   origins as they are then. For: lineage always ends at the before-body or an operand. Against: a
+   later `derive` on the intermediate does not flow forward. `derive` on a before-id, or naming an
+   absent origin, is refused (`LineageError::NotCreated`, `UnknownOrigin`).
+8. *A created entity absorbed into a before-id drops its lineage*; one absorbed into a created id
+   adds its origins. A chain of merges is followed to the end; an absorbed entity whose survivor is
+   gone counts as removed.
+9. *`Carry` rules return `Option`* (01 has `T`), so "no value" is expressible, as the pin's
+   attribute handlers allow (`issue_1730_application_attribute_handlers`). Cross-kind origins carry
+   nothing.
+10. *`carry` takes `operands: &[&BTreeMap<I, T>]`*, indexed by `Operand`, for the boolean
+    attribute tests (`issue_1462_boolean_*`). The tables are `BTreeMap`, as `IdMap` is taken by
+    `compact`.
+11. *BR1's question, loop edits keeping fins in step: yes.* `edit_face` diffs the face's
+    `(edge, sense)` uses before and after the closure and fixes only the changed fins, so a seam's
+    two fins stay distinct. `face_mut` is kept for edits that do not move uses. `attach_curve`
+    needed nothing: its touch comes from the diff.
+12. *Regions and shells are not reported.* No pin test reads them; add when one does.
+13. *No difftest*: the pin has no equivalent of `Changes` to compare against (its history is
+    callbacks into application code). BR7 ports the tests themselves.
+14. Research 66 has nothing on provenance.
+
+**Tests** (15 in `changes/tests.rs`): each mutation's event and touch (including a re-attach of the
+same curve giving none), adds and removes, splits ordered by bound and by place, merges through
+chains, refused derives, coincidences following the survivor, the same edit twice giving equal
+`Changes`, carry over a split, merge, coincidence and offset, carry across an edit then `compact`,
+and `edit_face` on a seam.
+
+**Cost** (MEASURED, throwaway timer, a 100×100 quad sheet: 10,000 faces, 20,200 edges, 10,201
+vertices; best of 9; ns per call or µs per finish; the host was loaded, so ±15%):
+
+| Step | Before | After |
+|---|---|---|
+| `add_*`, per entity | 50–72 | 60–80 |
+| `face_mut`, first write | 90–124 | 127–142 |
+| `face_mut`, later write | 37–49 | 53 |
+| `edge_mut`, first write | 12–18 | 35–41 |
+| `vertex_mut` (the star scan dominates) | 16,000–26,000 | 16,000–29,000 |
+| `remove_face` / `remove_edge` / `remove_vertex` | 106–137 / 42–58 / 10–13 | 116–152 / 52–67 / 9–11 |
+| `finish`, built draft (40,401 created) | 700–1,200 | 1,800–2,000 |
+| `finish`, untouched edit | 260–500 | 320–540 |
+| `finish`, `face_mut` on every face | 540–950 | 940–1,400 |
+| `finish`, `face_mut` on 100 faces | 300–540 | 320–540 |
+| `edit_face`, no change / rotated loop | | 156–175 / 171–204 |
+| split every face via `derive`, then `finish` | | 5,400–8,200 |
+
+Snapshots are a bit per slot plus a list in first-write order, so a repeat write costs a bit test.
+The remaining first-write cost is the copy itself (an edge's curve clone). `finish` on a fully
+built draft pays for the 40,401-entry created lists.
+
+**Open**:
+
+- `Changes::then`, the composition oracle (63 §6.3), is not built; it needs a rule for a split of a
+  merged entity.
+- Whether `Offset` should carry by its own rule rather than the same-kind one.
+- Touch of faces around moved edges and vertices (decision 1).
+- The `into_draft` copy (decision 2).
+
 ## 7. `scx-record`
 
 The pin's sources are `topology/api_files`, `topology/part_file`, `topology/database_io` and
