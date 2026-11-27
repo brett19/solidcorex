@@ -2481,3 +2481,88 @@ deterministic branch and bound returning a `Bracket` or a typed `GapError`
 `(Aim, &mut Budget, &Stop)` with one budget unit per point evaluated; edge-to-surface is to the
 kind's whole surface, the face's gap is bounded above by the pcurve at the same parameter;
 curve-to-curve is one-sided; NURBS surfaces are pending until step 5's piece bounds.
+
+## 30. SU8 as built (11-27)
+
+`scx_surface::{axial_section, holds_axis, facing_trough, points_meet}`, branch `su8`, in
+`axial.rs`, `trough.rs` and `meet.rs` (each module's doc holds the table from the pin's
+function to this one). No new Cargo edge. SU6's `gap` gained one crate-private
+`point_point_gap` (the interval distance of two points, exact zero for the same point); the
+axial section uses `vertex_curve_gap` to certify each cut. The pin has no callers inside the
+kernel (the app calls them), so the contract is from the doc comments and tests.
+
+```rust
+pub fn holds_axis(&Surface, &Plane, over: &Extent3d, tol: Resolution) -> Result<Holds, AxialError>;
+pub enum Holds { Yes, Off { by: Length }, Across }
+pub fn axial_section<E>(&Surface, &Plane, over: &Extent3d, tol: Resolution, cuts: &[Point3],
+    on_face: impl FnMut(Point3) -> Result<bool, E>) -> Result<Vec<AxialPiece>, AxialError<E>>;
+pub enum AxialError<E = Infallible> { NotRevolved, AxisOff{by}, AxisAcross, CutNotFinite{index},
+    CutOffSection{index, gap: Bracket}, Defect{reason}, OnFace(E) }
+pub fn facing_trough(&Cylinder, near: Point3, travel: Vec3, over: &Extent3d, res: Resolution)
+    -> Result<Trough, TroughError>;        // TroughError { NotFinite, AlongAxis, OnEdge{offset} }
+pub fn points_meet(a: Point3, a_acc: Accuracy, b: Point3, b_acc: Accuracy)
+    -> Result<Meet, MeetError>;            // Meet { One{accuracy}, Apart, Undecided{distance} }
+```
+
+**Failing defaults removed.** `Revolved` bare numbers become the `Surface` kinds, so a bad
+radius, a zero normal, a non-positive tolerance and a box of non-finite corners cannot be
+built. `false`/`None` for "the plane misses the axis" becomes `Holds::Off{by}` /
+`AxisOff{by}` (how far), `Across` for an axis square to the plane. `facing_trough`'s four
+`None`s become three named causes.
+
+**Choices, with cases for and against.**
+
+- *A cut must lie on a meridian (new refusal).* The pin puts each cut on the nearest meridian
+  whatever its distance. For: a cut far off the section is a caller bug that would silently
+  split the wrong line; the check is one certified `vertex_curve_gap` per cut. Against: valid
+  input could be refused if its cuts are computed less accurately than `tol.xsect()`. The
+  caller passes a `Resolution` that is the coincidence of its entities (`coincident(..)` fed to
+  `Resolution::new`), which widens the allowance.
+- *`OnEdge` in length, not cosine.* The pin's `abs(cos) < 1e-9` between the pick and the
+  travel; here the pick's offset from the plane through the axis square to the travel is
+  within the resolution. For: the document's one resolution decides, and a pick on the axis
+  is the same case. Against: at a radius of 10 the pin's threshold is 1e-8 mm and ours 1e-7
+  by default, so picks between them now refuse.
+- *Reach margin relative, not 1 mm.* `(far + radius) * (1 + 1/16)`. For: 1 mm is nothing on
+  a metre part and huge on a 0.01 mm one. Against: results differ from the pin's.
+- *`points_meet` is three-way.* The pin decides ties to the last bit (a 3-4-5 triangle with
+  accuracies 2 and 3 meets); the enclosure of a distance is a few ulps wide, so the tie and
+  one ulp either side are `Undecided` with the bracket. For: R2. Against: an exact tie is
+  where the pin said "one". An exact decision needs `scx-num`'s expansions, which are
+  crate-private. The joined accuracy is rounded up so it holds the other ball (the pin's
+  rounds to nearest).
+- *A sphere's circle starts on the plane's own x axis*, not an arbitrary orthogonal vector.
+
+**Tests** (30, closed forms on a tilted frame away from the origin): `tests/axial_section.rs`
+(17): holds/off/across, tilt by reach times sine, a plane or NURBS refused, cylinder strips,
+one-sided face, missed face, cut merge within `tol`, cones both signs and from the apex,
+sphere whole/arc/wrapping arc, torus circles and arc, cut off the section (certified gap),
+cut not finite, `on_face` error, determinism. `tests/facing_trough.rs` (7): the pin's three
+tests ported, half by outward normal over a 72-pick ring on an oblique travel, reach over
+box corners, resolution edge, determinism. `tests/vertex_meet.rs` (6): the pin's two tests
+ported (tie to `Undecided`), larger accuracy, joined ball holds the other at five scales,
+non-finite, determinism. The pin has no test for `axial_section`. Nothing removed.
+
+**Cost.** Side-channel timer, release build, a loaded build host, 200,000 calls, the pin against
+this on the same case:
+
+| call | pin | here |
+|---|---:|---:|
+| `axial_section`, cylinder, 4 cuts | 269 ns | 581 ns |
+| `axial_section`, torus, whole circles | 184 ns | 216 ns |
+| `holds_axis`, cylinder | 59 ns | 40 ns |
+| `facing_trough` | 44 ns | 75 ns |
+| `points_meet` | 0.3 ns (folded to a constant; not a real figure) | 38 ns |
+
+The section is about 2 times slower where it certifies each cut (a `Curve` built and one
+interval distance per cut, about 70 ns); `points_meet` pays for the interval distance. All are
+under a microsecond and none is on an existing path, so no existing path got slower.
+
+**Open.** (1) Exact ties in `points_meet` (expose an exact sum-of-squares sign from
+`scx-num`?). (2) Callers' `Resolution` for the cut allowance (above).
+
+**Proposed 04 row.** SU8: `holds_axis`/`axial_section` take a `Surface`, `Plane`, `Extent3d`
+and `Resolution` and return typed results (`Holds`, `AxialError<E>`); cuts are certified
+within `tol.xsect()` by `vertex_curve_gap`; `facing_trough` takes a `Cylinder` and decides
+`OnEdge` by length against the resolution; `points_meet` returns `Meet::{One, Apart,
+Undecided}` from the certified point distance.
