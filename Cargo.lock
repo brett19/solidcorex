@@ -521,6 +521,7 @@ dependencies = [
  "scx-nurbs",
  "scx-ssi",
  "scx-surface",
+ "scx-tess",
  "scx-testkit",
 ]
 
