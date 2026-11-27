@@ -37,8 +37,8 @@
 use scx_algo::polynomial::solve_quartic;
 use scx_num::extent1d::Extent1d;
 use scx_num::fmath::{acos, asin, atan, atan2, sin_cos};
+pub use scx_num::invert::{Foot, Inversion};
 use scx_num::math::{EFF_ZERO, HALF_PI, PI, TWO_PI};
-use scx_num::units::Length;
 use scx_num::vector2d::{Point2, Vec2};
 use scx_num::vector3d::{Point3, Vec3};
 
@@ -50,61 +50,6 @@ use crate::line::{Line, Line2};
 /// The most steps the ellipse's polish takes. Bisection alone closes the quarter turn's
 /// bracket to below an ulp of the angle in under 60.
 pub const POLISH_STEPS: u32 = 64;
-
-/// A point of a curve nearest a query: its parameter `at`, the point there, and the
-/// distance from the query.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Foot<A = f64, Q = Point3> {
-    /// The parameter.
-    pub at: A,
-    /// The curve's point at `at`.
-    pub point: Q,
-    /// The distance from the query to `point`.
-    pub distance: f64,
-}
-
-impl<A, Q> Foot<A, Q> {
-    /// The query lies on the curve within `tol`: `distance <= tol`. A zero tolerance is
-    /// zero; a NaN distance is never on.
-    #[must_use]
-    pub fn is_on(&self, tol: Length) -> bool {
-        self.distance <= tol.mm()
-    }
-}
-
-/// A curve's inversion of a point: the nearest foot, inside or outside the domain asked
-/// about (57 F6, without `Failed`; 63 D7).
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Inversion<A = f64, Q = Point3> {
-    /// The foot's parameter lies in the domain.
-    Inside(Foot<A, Q>),
-    /// It does not; the foot is still the kind's nearest point.
-    Outside(Foot<A, Q>),
-}
-
-impl<A, Q> Inversion<A, Q> {
-    /// The foot, inside or not.
-    #[must_use]
-    pub const fn foot(&self) -> &Foot<A, Q> {
-        match self {
-            Self::Inside(f) | Self::Outside(f) => f,
-        }
-    }
-
-    /// The foot, by value.
-    #[must_use]
-    pub fn into_foot(self) -> Foot<A, Q> {
-        match self {
-            Self::Inside(f) | Self::Outside(f) => f,
-        }
-    }
-
-    /// The foot lies in the domain.
-    #[must_use]
-    pub const fn is_inside(&self) -> bool {
-        matches!(self, Self::Inside(_))
-    }
-}
 
 /// Every nearest point of a curve to a query.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -601,6 +546,7 @@ mod tests {
     use crate::truth::{U, near};
     use scx_num::frame::{Frame, Frame2, Sense};
     use scx_num::hash::Rng;
+    use scx_num::units::Length;
     use scx_nurbs::{KnotVector, NurbsCurve};
     use scx_testkit::analytic;
     use scx_testkit::dd::Dd;
