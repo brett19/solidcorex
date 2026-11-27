@@ -26,7 +26,10 @@
 // is new: instances are read in id order across DATA sections, the first definition of an
 // id winning, as `Exchange::get` finds it. The expansion node is `Node` (the pin's
 // `Instance`, a name this crate gives the exchange's instances). Module doc without issue
-// references.
+// references. A refusal met through an occurrence, a mapped item, a representation map, a
+// relationship, a transformation operator or a styled item is wrapped in
+// `P21Error::Within` naming it (the pin prefixed the message: "occurrence #90: …");
+// `read_frame` (new) is `frame`'s body, which wraps it.
 //! The product structure of a STEP file as plain data: the products and their definitions
 //! (ISO 10303-41), the shape representations with their items and contexts (ISO 10303-43),
 //! the relationships between representations with or without a transformation and the
@@ -588,6 +591,10 @@ pub fn operator_attributes(e: &Instance) -> &[Param] {
 
 /// A placement or a transformation operator, in `units`.
 fn frame(ex: &Exchange, id: u64, units: Units) -> Result<Frame> {
+    read_frame(ex, id, units).map_err(|e| e.within(id))
+}
+
+fn read_frame(ex: &Exchange, id: u64, units: Units) -> Result<Frame> {
     let e = entity(ex, id)?;
     let reader = Reader::new(ex, units);
     match e.name() {
@@ -901,8 +908,8 @@ fn transformation(
     };
     Ok(Some(Transformation::Items {
         entity: op,
-        item_1: frame(ex, item_1, units_of(rep_1))?,
-        item_2: frame(ex, item_2, units_of(rep_2))?,
+        item_1: frame(ex, item_1, units_of(rep_1)).map_err(|e| e.within(op))?,
+        item_2: frame(ex, item_2, units_of(rep_2)).map_err(|e| e.within(op))?,
     }))
 }
 
@@ -1046,7 +1053,8 @@ pub fn read(ex: &Exchange) -> Result<ProductStructure> {
                 let map = reference(item, ip, 1)?;
                 ItemKind::Mapped {
                     map: index_of(ex, &map_index, map, "REPRESENTATION_MAP")?,
-                    target: frame(ex, reference(item, ip, 2)?, ctx.units)?,
+                    target: frame(ex, reference(item, ip, 2)?, ctx.units)
+                        .map_err(|e| e.within(item))?,
                 }
             } else {
                 ItemKind::Other(ie.name().to_string())
@@ -1076,7 +1084,7 @@ pub fn read(ex: &Exchange) -> Result<ProductStructure> {
             .map_or_else(Units::default, |r| r.units.units);
         out.maps.push(RepresentationMap {
             entity: m,
-            origin: frame(ex, reference(m, p, 0)?, units)?,
+            origin: frame(ex, reference(m, p, 0)?, units).map_err(|e| e.within(m))?,
             representation,
         });
     }
@@ -1104,7 +1112,8 @@ pub fn read(ex: &Exchange) -> Result<ProductStructure> {
             reference(id, l.reps, 3)?,
             "a representation",
         )?;
-        let transformation = transformation(ex, &out, id, (rep_1, rep_2), l.operator)?;
+        let transformation =
+            transformation(ex, &out, id, (rep_1, rep_2), l.operator).map_err(|e| e.within(id))?;
         links.insert(id, out.links.len());
         out.links.push(Link {
             entity: id,
@@ -1130,8 +1139,10 @@ pub fn read(ex: &Exchange) -> Result<ProductStructure> {
             id: text(p.first()),
             name: text(p.get(1)),
             description: text(p.get(2)),
-            parent: index_of(ex, &definitions, parent, "PRODUCT_DEFINITION")?,
-            child: index_of(ex, &definitions, child, "PRODUCT_DEFINITION")?,
+            parent: index_of(ex, &definitions, parent, "PRODUCT_DEFINITION")
+                .map_err(|e| e.within(id))?,
+            child: index_of(ex, &definitions, child, "PRODUCT_DEFINITION")
+                .map_err(|e| e.within(id))?,
             reference_designator: p.get(5).and_then(Param::as_str).map(str::to_string),
             placements: Vec::new(),
         });
@@ -1189,7 +1200,7 @@ pub fn read(ex: &Exchange) -> Result<ProductStructure> {
         .collect();
     // Styles.
     for &(id, e) in &all {
-        if let Some(s) = styled_item(ex, id, e)? {
+        if let Some(s) = styled_item(ex, id, e).map_err(|e| e.within(id))? {
             out.styles.push(s);
         }
     }

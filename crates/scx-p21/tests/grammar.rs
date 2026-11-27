@@ -706,5 +706,5 @@ fn progress_is_told_and_can_stop() {
     assert_eq!(all.checks.into_inner(), 1 + 20_000 / 4096);
     let stopped = parse_with(&t, Limits::default(), &watch(2)).unwrap_err();
     assert_eq!(stopped, P21Error::Cancelled);
-    assert_eq!(stopped.kind(), ErrorKind::Failed);
+    assert_eq!(stopped.kind(), ErrorKind::Cancelled);
 }

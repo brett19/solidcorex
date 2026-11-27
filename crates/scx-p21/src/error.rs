@@ -21,18 +21,62 @@ pub enum P21Error {
     Unsupported(Unsupported),
     /// The caller's [`Progress`](crate::Progress) asked to stop.
     Cancelled,
+    /// Reading instance `#id` needed another instance, and reading that one failed: the
+    /// error `source` names the inner instance, and a chain of these names the whole path
+    /// from the instance read to the one at fault.
+    Within {
+        /// The instance being read.
+        id: u64,
+        /// Why reading what it uses failed.
+        source: Box<P21Error>,
+    },
 }
 
 impl P21Error {
     /// The class of the error (docs/01-architecture.md §5.1).
-    ///
-    /// `scx-num`'s [`ErrorKind`] has no `Unsupported` or `Cancelled` class yet; until it
-    /// gains them both read as [`ErrorKind::Failed`].
     #[must_use]
-    pub const fn kind(&self) -> ErrorKind {
+    pub fn kind(&self) -> ErrorKind {
+        match self.innermost() {
+            Self::Refused(_) | Self::Within { .. } => ErrorKind::InvalidInput,
+            Self::Unsupported(_) => ErrorKind::Unsupported,
+            Self::Cancelled => ErrorKind::Cancelled,
+        }
+    }
+
+    /// The error at the end of a chain of [`P21Error::Within`]: itself, when it is not one.
+    #[must_use]
+    pub fn innermost(&self) -> &Self {
+        let mut e = self;
+        while let Self::Within { source, .. } = e {
+            e = source;
+        }
+        e
+    }
+
+    /// The instance the error names first, if it names one.
+    #[must_use]
+    pub const fn id(&self) -> Option<u64> {
         match self {
-            Self::Refused(_) => ErrorKind::InvalidInput,
-            Self::Unsupported(_) | Self::Cancelled => ErrorKind::Failed,
+            Self::Refused(
+                Refusal::Entity { id, .. } | Refusal::Unwritable { id: Some(id), .. },
+            )
+            | Self::Unsupported(Unsupported::Entity { id, .. })
+            | Self::Within { id, .. } => Some(*id),
+            _ => None,
+        }
+    }
+
+    /// The error as met while reading instance `#id`: wrapped in [`P21Error::Within`], unless
+    /// it already names `#id` first, or is a cancellation, which is the caller's and belongs
+    /// to no instance.
+    #[must_use]
+    pub fn within(self, id: u64) -> Self {
+        if matches!(self, Self::Cancelled) || self.id() == Some(id) {
+            return self;
+        }
+        Self::Within {
+            id,
+            source: Box::new(self),
         }
     }
 
@@ -49,11 +93,24 @@ impl P21Error {
 }
 
 impl fmt::Display for P21Error {
+    /// The innermost error's class, the path of instances to it, and its cause: "STEP input
+    /// refused: in #90: in #20: #4: no such instance".
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Refused(r) => write!(f, "STEP input refused: {r}"),
-            Self::Unsupported(u) => write!(f, "STEP input not supported: {u}"),
-            Self::Cancelled => f.write_str("STEP reading cancelled"),
+        let leaf = self.innermost();
+        f.write_str(match leaf {
+            Self::Refused(_) | Self::Within { .. } => "STEP input refused: ",
+            Self::Unsupported(_) => "STEP input not supported: ",
+            Self::Cancelled => "STEP reading cancelled",
+        })?;
+        let mut e = self;
+        while let Self::Within { id, source } = e {
+            write!(f, "in #{id}: ")?;
+            e = source;
+        }
+        match leaf {
+            Self::Refused(r) => r.fmt(f),
+            Self::Unsupported(u) => u.fmt(f),
+            Self::Cancelled | Self::Within { .. } => Ok(()),
         }
     }
 }
@@ -63,6 +120,7 @@ impl std::error::Error for P21Error {
         match self {
             Self::Refused(r) => Some(r),
             Self::Unsupported(u) => Some(u),
+            Self::Within { source, .. } => Some(source.as_ref()),
             Self::Cancelled => None,
         }
     }

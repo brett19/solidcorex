@@ -15,7 +15,9 @@
 // and `implied_knots_and_repeated_knots`; `trims_on_a_curve_over_a_conic_are_angles` cites
 // ISO 10303-42 in its doc, not an issue; new: `intersection_and_bounded_surface_curves`,
 // `uniform_and_quasi_uniform_surfaces`, `a_2d_trimmed_curve_shares_its_basis`,
-// `parameter_space_refusals` and `bspline_refusals_name_the_record_position`.
+// `parameter_space_refusals` and `bspline_refusals_name_the_record_position`. Refusals met
+// inside another instance expect the path to them (`within`, new), and
+// `a_nested_refusal_names_its_path` (new) walks it through `source()`.
 //! ISO 10303-42 geometry read one entity at a time: what the reader stores for each kind, in
 //! file units and in inches and degrees, and what it refuses, as typed causes. Expected values
 //! are the file's numbers times the unit factors, written as the same products, so every
@@ -42,6 +44,16 @@ use scx_p21::part42::geom::{
 use scx_p21::part42::read::{Reader, MAX_GEOM_DEPTH};
 use scx_p21::units::Units;
 use scx_p21::{parse, Exchange, P21Error};
+
+/// `leaf`, met through the instances of `path`, the instance read first.
+fn within(path: &[u64], leaf: P21Error) -> P21Error {
+    path.iter()
+        .rev()
+        .fold(leaf, |source, &id| P21Error::Within {
+            id,
+            source: Box::new(source),
+        })
+}
 
 /// The refusal of `#id`, an instance called `name`, as valid input not read.
 fn unsupported(id: u64, name: &str) -> P21Error {
@@ -615,11 +627,14 @@ fn nesting_is_bounded() {
     assert!(curve_err(&trimmed_chain(n), 20, MM).is_ok());
     assert_eq!(
         curve_err(&trimmed_chain(n + 1), 20, MM),
-        Err(P21Error::entity(
-            11,
-            EntityCause::TooDeep {
-                limit: MAX_GEOM_DEPTH
-            }
+        Err(within(
+            &(20..=32).collect::<Vec<_>>(),
+            P21Error::entity(
+                11,
+                EntityCause::TooDeep {
+                    limit: MAX_GEOM_DEPTH
+                }
+            )
         ))
     );
     // A curve that is its own basis.
@@ -637,11 +652,11 @@ fn nesting_is_bounded() {
 fn refusals_say_why() {
     for (data, id, why) in [
         // A missing reference, and a reference to the wrong kind.
-        ("#10=CIRCLE('',#99,1.);", 10, Err(P21Error::entity(99, EntityCause::Missing))),
+        ("#10=CIRCLE('',#99,1.);", 10, Err(within(&[10], P21Error::entity(99, EntityCause::Missing)))),
         (
             "#10=LINE('',#1,#1);",
             10,
-            Err(P21Error::entity(1, EntityCause::WrongType { expected: "VECTOR", found: "CARTESIAN_POINT".into() })),
+            Err(within(&[10], P21Error::entity(1, EntityCause::WrongType { expected: "VECTOR", found: "CARTESIAN_POINT".into() }))),
         ),
         (
             "#10=LINE('',#1,$);",
@@ -667,17 +682,17 @@ fn refusals_say_why() {
         (
             "#10=VECTOR('',#3,-1.);#11=LINE('',#1,#10);",
             11,
-            Err(P21Error::entity(10, EntityCause::Invalid { what: "a vector magnitude that is negative" })),
+            Err(within(&[11], P21Error::entity(10, EntityCause::Invalid { what: "a vector magnitude that is negative" }))),
         ),
         (
             "#10=VECTOR('',#3,0.);#11=LINE('',#1,#10);",
             11,
-            Err(P21Error::entity(10, EntityCause::Invalid { what: "a vector of magnitude zero" })),
+            Err(within(&[11], P21Error::entity(10, EntityCause::Invalid { what: "a vector of magnitude zero" }))),
         ),
         (
             "#10=DIRECTION('',(0.,0.,0.));#11=VECTOR('',#10,1.);#12=LINE('',#1,#11);",
             12,
-            Err(P21Error::entity(10, EntityCause::Invalid { what: "a direction whose ratios are all zero" })),
+            Err(within(&[12, 11], P21Error::entity(10, EntityCause::Invalid { what: "a direction whose ratios are all zero" }))),
         ),
         // Knots.
         (
@@ -720,7 +735,7 @@ fn refusals_say_why() {
         (
             "#10=TRIMMED_CURVE('',#4,(),(PARAMETER_VALUE(1.)),.T.,.PARAMETER.);",
             10,
-            Err(unsupported(4, "AXIS2_PLACEMENT_3D")),
+            Err(within(&[10], unsupported(4, "AXIS2_PLACEMENT_3D"))),
         ),
         (
             "#10=CIRCLE('',#4,1.);#11=TRIMMED_CURVE('',#10,(),(PARAMETER_VALUE(1.)),.T.,.PARAMETER.);",
@@ -1139,7 +1154,7 @@ fn conics_in_parameter_space() {
     ));
     assert_eq!(
         Reader::new(&ex, INCH_DEG).pcurve(26),
-        Err(unsupported(23, "CIRCLE"))
+        Err(within(&[26], unsupported(23, "CIRCLE")))
     );
     // In millimetres and radians both factors are 1.
     assert!(matches!(*Reader::new(&ex, MM).pcurve(26).unwrap().curve,
@@ -1154,7 +1169,7 @@ fn conics_in_parameter_space() {
     ));
     assert_eq!(
         Reader::new(&ex, MM).pcurve(26),
-        Err(unsupported(23, "OFFSET_CURVE_3D"))
+        Err(within(&[26], unsupported(23, "OFFSET_CURVE_3D")))
     );
 }
 
@@ -1171,11 +1186,14 @@ fn nesting_in_parameter_space_is_bounded() {
     ));
     assert_eq!(
         Reader::new(&ex, MM).pcurve(26),
-        Err(P21Error::entity(
-            23,
-            EntityCause::TooDeep {
-                limit: MAX_GEOM_DEPTH
-            }
+        Err(within(
+            &[26],
+            P21Error::entity(
+                23,
+                EntityCause::TooDeep {
+                    limit: MAX_GEOM_DEPTH
+                }
+            )
         ))
     );
     // A surface that is its own basis.
@@ -1235,9 +1253,9 @@ fn surface_refusals_say_why() {
         ),
         (
             "#10=PLANE('',#3);",
-            Err(P21Error::entity(3, EntityCause::WrongType { expected: "AXIS2_PLACEMENT_3D", found: "DIRECTION".into() })),
+            Err(within(&[10], P21Error::entity(3, EntityCause::WrongType { expected: "AXIS2_PLACEMENT_3D", found: "DIRECTION".into() }))),
         ),
-        ("#10=PLANE('',#99);", Err(P21Error::entity(99, EntityCause::Missing))),
+        ("#10=PLANE('',#99);", Err(within(&[10], P21Error::entity(99, EntityCause::Missing)))),
         (
             "#10=CURVE_BOUNDED_SURFACE('',#4,(),.F.);",
             Err(unsupported(10, "CURVE_BOUNDED_SURFACE")),
@@ -1256,12 +1274,15 @@ fn surface_refusals_say_why() {
             11,
             MM
         ),
-        Err(P21Error::entity(
-            4,
-            EntityCause::WrongType {
-                expected: "AXIS1_PLACEMENT",
-                found: "AXIS2_PLACEMENT_3D".into()
-            }
+        Err(within(
+            &[11],
+            P21Error::entity(
+                4,
+                EntityCause::WrongType {
+                    expected: "AXIS1_PLACEMENT",
+                    found: "AXIS2_PLACEMENT_3D".into()
+                }
+            )
         ))
     );
 }
@@ -1454,12 +1475,15 @@ fn parameter_space_refusals() {
     ));
     assert_eq!(
         Reader::new(&ex, MM).pcurve(26).map(|_| ()),
-        Err(P21Error::entity(
-            20,
-            EntityCause::BadParam {
-                index: 1,
-                expected: "one or two coordinates"
-            }
+        Err(within(
+            &[26, 23],
+            P21Error::entity(
+                20,
+                EntityCause::BadParam {
+                    index: 1,
+                    expected: "one or two coordinates"
+                }
+            )
         ))
     );
     // A representation with two items: a pcurve is one curve.
@@ -1471,11 +1495,14 @@ fn parameter_space_refusals() {
     ));
     assert_eq!(
         Reader::new(&ex, MM).pcurve(26).map(|_| ()),
-        Err(P21Error::entity(
-            25,
-            EntityCause::Invalid {
-                what: "a pcurve representation without exactly one item"
-            }
+        Err(within(
+            &[26],
+            P21Error::entity(
+                25,
+                EntityCause::Invalid {
+                    what: "a pcurve representation without exactly one item"
+                }
+            )
         ))
     );
     // A 3D placement in a parameter space.
@@ -1485,12 +1512,15 @@ fn parameter_space_refusals() {
     ));
     assert_eq!(
         Reader::new(&ex, MM).pcurve(26).map(|_| ()),
-        Err(P21Error::entity(
-            4,
-            EntityCause::WrongType {
-                expected: "AXIS2_PLACEMENT_2D",
-                found: "AXIS2_PLACEMENT_3D".into()
-            }
+        Err(within(
+            &[26, 23],
+            P21Error::entity(
+                4,
+                EntityCause::WrongType {
+                    expected: "AXIS2_PLACEMENT_2D",
+                    found: "AXIS2_PLACEMENT_3D".into()
+                }
+            )
         ))
     );
 }
@@ -1540,4 +1570,55 @@ fn bspline_refusals_name_the_record_position() {
         .map(|_| ()),
         Err(unsupported(10, "BOUNDED_SURFACE"))
     );
+}
+
+/// A refusal met inside a curve names its whole path, the curve read first, through
+/// `source()`; the class is the innermost error's.
+#[test]
+fn a_nested_refusal_names_its_path() {
+    use scx_num::error::ErrorKind;
+    let e = curve_err(
+        "#10=DIRECTION('',(0.,0.,0.));#11=VECTOR('',#10,1.);#12=LINE('',#1,#11);",
+        12,
+        MM,
+    )
+    .map(|_| ())
+    .unwrap_err();
+    assert_eq!(e.kind(), ErrorKind::InvalidInput);
+    assert_eq!(
+        e.to_string(),
+        "STEP input refused: in #12: in #11: #10: a direction whose ratios are all zero"
+    );
+    let mut path = Vec::new();
+    let mut at: &dyn std::error::Error = &e;
+    while let Some(P21Error::Within { id, .. }) = at.downcast_ref::<P21Error>() {
+        path.push(*id);
+        at = at.source().unwrap();
+    }
+    assert_eq!(path, [12, 11]);
+    assert_eq!(
+        at.downcast_ref::<P21Error>(),
+        Some(&P21Error::entity(
+            10,
+            EntityCause::Invalid {
+                what: "a direction whose ratios are all zero"
+            }
+        ))
+    );
+    assert_eq!(e.innermost(), at.downcast_ref::<P21Error>().unwrap());
+    // Valid input not read keeps its class through the path.
+    let e = curve_err(
+        "#10=TRIMMED_CURVE('',#4,(),(PARAMETER_VALUE(1.)),.T.,.PARAMETER.);",
+        10,
+        MM,
+    )
+    .map(|_| ())
+    .unwrap_err();
+    assert_eq!(e.kind(), ErrorKind::Unsupported);
+    assert_eq!(
+        e.to_string(),
+        "STEP input not supported: in #10: #4: `AXIS2_PLACEMENT_3D` is not read here"
+    );
+    assert_eq!(e.id(), Some(10));
+    assert_eq!(e.innermost().id(), Some(4));
 }

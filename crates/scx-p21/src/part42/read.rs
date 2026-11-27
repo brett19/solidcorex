@@ -26,7 +26,10 @@
 // level, the basis of a 2D trimmed curve too (was re-read each time); `Reader::curve_at`
 // (new) is the one cached read. `Reader::new`, `Reader::units`, `Reader::factor`,
 // `Reader::param_kinds`, `Reader::curve_param_kind`, `curve_form`, `surface_form` and
-// `knot_spec` are the pin's.
+// `knot_spec` are the pin's. A refusal met through a curve, surface, pcurve, placement,
+// axis or vector names it in `P21Error::Within` (the pin named only the innermost
+// instance): `read_placement`, `read_axis1`, `read_vector` and `read_pcurve` (new) are the
+// bodies of `placement_in`, `axis1`, `vector_in` and `pcurve_in`, which wrap them.
 //! ISO 10303-42 geometry entities read into the plain data of [`super::geom`], from a parsed
 //! [`Exchange`] in one representation context's [`Units`].
 //!
@@ -645,6 +648,10 @@ impl<'a> Reader<'a> {
 
     /// `AXIS2_PLACEMENT_3D` in 3D, or `AXIS2_PLACEMENT_2D` (no axis) in 2D.
     fn placement_in(&self, id: u64, sp: Space) -> Result<Placement> {
+        self.read_placement(id, sp).map_err(|e| e.within(id))
+    }
+
+    fn read_placement(&self, id: u64, sp: Space) -> Result<Placement> {
         let e = entity(self.ex, id)?;
         let expected = match sp.dim {
             Dim::Three => "AXIS2_PLACEMENT_3D",
@@ -700,6 +707,10 @@ impl<'a> Reader<'a> {
 
     /// An `AXIS1_PLACEMENT` in millimetres.
     pub fn axis1(&self, id: u64) -> Result<Axis1> {
+        self.read_axis1(id).map_err(|e| e.within(id))
+    }
+
+    fn read_axis1(&self, id: u64) -> Result<Axis1> {
         let e = entity(self.ex, id)?;
         if e.name() != "AXIS1_PLACEMENT" {
             return refuse(
@@ -722,6 +733,10 @@ impl<'a> Reader<'a> {
     /// A `VECTOR`: its orientation's ratios and its magnitude as written, with the factors of
     /// `sp`. Refused when the magnitude is negative or zero.
     fn vector_in(&self, id: u64, sp: Space) -> Result<Vector> {
+        self.read_vector(id, sp).map_err(|e| e.within(id))
+    }
+
+    fn read_vector(&self, id: u64, sp: Space) -> Result<Vector> {
         let e = entity(self.ex, id)?;
         if e.name() != "VECTOR" {
             return refuse(
@@ -763,7 +778,7 @@ impl<'a> Reader<'a> {
             if let Some(c) = self.curves.get(&id) {
                 return Ok(c.clone());
             }
-            let c = Arc::new(self.read_curve(id, sp, depth)?);
+            let c = Arc::new(self.read_curve(id, sp, depth).map_err(|e| e.within(id))?);
             self.curves.insert(id, c.clone());
             Ok(c)
         } else {
@@ -772,7 +787,7 @@ impl<'a> Reader<'a> {
             if let Some(c) = self.curves_2d.get(&key) {
                 return Ok(c.clone());
             }
-            let c = Arc::new(self.read_curve(id, sp, depth)?);
+            let c = Arc::new(self.read_curve(id, sp, depth).map_err(|e| e.within(id))?);
             self.curves_2d.insert(key, c.clone());
             Ok(c)
         }
@@ -986,6 +1001,10 @@ impl<'a> Reader<'a> {
     }
 
     fn pcurve_in(&mut self, id: u64, depth: usize) -> Result<Pcurve> {
+        self.read_pcurve(id, depth).map_err(|e| e.within(id))
+    }
+
+    fn read_pcurve(&mut self, id: u64, depth: usize) -> Result<Pcurve> {
         let e = entity(self.ex, id)?;
         if e.name() != "PCURVE" {
             return refuse(
@@ -1120,7 +1139,7 @@ impl<'a> Reader<'a> {
                 },
             );
         }
-        let s = Arc::new(self.read_surface(id, depth)?);
+        let s = Arc::new(self.read_surface(id, depth).map_err(|e| e.within(id))?);
         self.surfaces.insert(id, s.clone());
         Ok(s)
     }

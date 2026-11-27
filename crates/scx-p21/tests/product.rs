@@ -12,7 +12,8 @@
 // causes naming the instance at fault where the pin compared strings (the latter two also
 // check the new causes' text); `an_assembly_with_a_shared_sub_assembly` expects `Node`s (the
 // pin's `Instance`); `an_operator_written_without_its_description` cites no issue; new:
-// `transform_items_written_the_other_way_round`.
+// `transform_items_written_the_other_way_round`. Refusals met inside another instance
+// expect the path to them (`within`, new) where the pin's message carried a prefix.
 //! The product structure (ISO 10303-41, -43, -44, -46) one case at a time: a part, an
 //! assembly with a shared sub-assembly, mapped items, colours, names with escapes, and what is
 //! refused, as typed causes naming the instance at fault. Lengths are the file's numbers times
@@ -41,6 +42,16 @@ use scx_p21::{parse, Exchange, P21Error};
 /// The refusal of `#id` for `cause`.
 fn at(id: u64, cause: EntityCause) -> P21Error {
     P21Error::entity(id, cause)
+}
+
+/// `leaf`, met through the instances of `path`, the instance read first.
+fn within(path: &[u64], leaf: P21Error) -> P21Error {
+    path.iter()
+        .rev()
+        .fold(leaf, |source, &id| P21Error::Within {
+            id,
+            source: Box::new(source),
+        })
 }
 
 fn file(data: &str) -> Exchange {
@@ -745,16 +756,22 @@ fn refusals_say_why() {
     let itself = two() + "#90=NEXT_ASSEMBLY_USAGE_OCCURRENCE('1','','',#50,#50,$);\n";
     assert_eq!(refused(&itself), at(50, EntityCause::Cycle));
     let missing_child = two() + "#90=NEXT_ASSEMBLY_USAGE_OCCURRENCE('1','','',#50,#999,$);\n";
-    assert_eq!(refused(&missing_child), at(999, EntityCause::Missing));
+    assert_eq!(
+        refused(&missing_child),
+        within(&[90], at(999, EntityCause::Missing))
+    );
     let not_a_definition = two() + "#90=NEXT_ASSEMBLY_USAGE_OCCURRENCE('1','','',#50,#51,$);\n";
     assert_eq!(
         refused(&not_a_definition),
-        at(
-            51,
-            EntityCause::WrongType {
-                expected: "PRODUCT_DEFINITION",
-                found: "PRODUCT".into(),
-            }
+        within(
+            &[90],
+            at(
+                51,
+                EntityCause::WrongType {
+                    expected: "PRODUCT_DEFINITION",
+                    found: "PRODUCT".into(),
+                }
+            )
         )
     );
     let missing_product = String::from(BASE)
@@ -807,46 +824,58 @@ fn refusals_say_why() {
             "#110=MAPPED_ITEM('',#111,#112);",
             "#110=MAPPED_ITEM('',#111,#114);#114=CARTESIAN_TRANSFORMATION_OPERATOR_3D('','',$,$,#113,0.,$);"
         )),
-        at(
-            114,
-            EntityCause::BadParam {
-                index: 5,
-                expected: "a number other than zero, smaller than 1e9 in size",
-            }
+        within(
+            &[110],
+            at(
+                114,
+                EntityCause::BadParam {
+                    index: 5,
+                    expected: "a number other than zero, smaller than 1e9 in size",
+                }
+            )
         )
     );
     assert_eq!(
         refused(&mapped(
             "#111=REPRESENTATION_MAP(#113,#120);\n#120=SHAPE_REPRESENTATION('',(#101),$);\n"
         )),
-        at(
-            113,
-            EntityCause::WrongType {
-                expected: "a placement or a cartesian transformation operator",
-                found: "CARTESIAN_POINT".into(),
-            }
+        within(
+            &[111],
+            at(
+                113,
+                EntityCause::WrongType {
+                    expected: "a placement or a cartesian transformation operator",
+                    found: "CARTESIAN_POINT".into(),
+                }
+            )
         )
     );
     let styled = |rest: &str| two() + rest;
     assert_eq!(
         refused(&styled("#170=STYLED_ITEM('',(),#999);\n")),
-        at(999, EntityCause::Missing)
+        within(&[170], at(999, EntityCause::Missing))
     );
     assert_eq!(
         refused(&styled(
             "#170=STYLED_ITEM('',(#171),#101);\n#171=PRESENTATION_STYLE_ASSIGNMENT((#172));\n#172=SURFACE_STYLE_USAGE(.BOTH.,#173);\n#173=SURFACE_SIDE_STYLE('',(#174));\n#174=SURFACE_STYLE_RENDERING(.NORMAL_SHADING.,#175);\n#175=COLOUR_RGB('',1.,$,0.);\n"
         )),
-        at(
-            175,
-            EntityCause::BadParam {
-                index: 2,
-                expected: "a number smaller than 1e9 in size",
-            }
+        within(
+            &[170],
+            at(
+                175,
+                EntityCause::BadParam {
+                    index: 2,
+                    expected: "a number smaller than 1e9 in size",
+                }
+            )
         )
     );
     let placed = two()
         + "#60=SHAPE_REPRESENTATION('',(),$);\n#80=SHAPE_REPRESENTATION('',(),$);\n#90=NEXT_ASSEMBLY_USAGE_OCCURRENCE('1','','',#50,#70,$);\n#91=PRODUCT_DEFINITION_SHAPE('','',#90);\n#93=(REPRESENTATION_RELATIONSHIP('','',#60,#80)REPRESENTATION_RELATIONSHIP_WITH_TRANSFORMATION(#92)SHAPE_REPRESENTATION_RELATIONSHIP());\n#94=CONTEXT_DEPENDENT_SHAPE_REPRESENTATION(#93,#91);\n";
-    assert_eq!(refused(&placed), at(92, EntityCause::Missing));
+    assert_eq!(
+        refused(&placed),
+        within(&[93], at(92, EntityCause::Missing))
+    );
 }
 
 /// An `ITEM_DEFINED_TRANSFORMATION` written with its items the other way round from the
