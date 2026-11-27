@@ -146,30 +146,39 @@ fn the_makers_bodies() {
     let doc = Document::default();
     let bodies = [
         (
-            scx_make::block(&f, [mm(1.0), mm(2.0), mm(3.0)], &doc)
+            scx_testkit::bodies::made::block(&f, [mm(1.0), mm(2.0), mm(3.0)], &doc)
                 .unwrap()
                 .body,
             BALL,
         ),
         (
-            scx_make::cylinder(&f, mm(1.0), mm(2.0), &doc).unwrap().body,
-            BALL,
-        ),
-        (
-            scx_make::cone(&f, [mm(1.0), mm(0.5)], mm(2.0), &doc)
+            scx_testkit::bodies::made::cylinder(&f, mm(1.0), mm(2.0), &doc)
                 .unwrap()
                 .body,
             BALL,
         ),
         (
-            scx_make::cone(&f, [mm(1.0), mm(0.0)], mm(2.0), &doc)
+            scx_testkit::bodies::made::cone(&f, [mm(1.0), mm(0.5)], mm(2.0), &doc)
                 .unwrap()
                 .body,
             BALL,
         ),
-        (scx_make::sphere(&f, mm(1.0), &doc).unwrap().body, BALL),
         (
-            scx_make::torus(&f, mm(3.0), mm(1.0), &doc).unwrap().body,
+            scx_testkit::bodies::made::cone(&f, [mm(1.0), mm(0.0)], mm(2.0), &doc)
+                .unwrap()
+                .body,
+            BALL,
+        ),
+        (
+            scx_testkit::bodies::made::sphere(&f, mm(1.0), &doc)
+                .unwrap()
+                .body,
+            BALL,
+        ),
+        (
+            scx_testkit::bodies::made::torus(&f, mm(3.0), mm(1.0), &doc)
+                .unwrap()
+                .body,
             TORUS,
         ),
     ];

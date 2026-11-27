@@ -45,6 +45,18 @@ impl<S: Stage> Face<'_, S> {
     }
 }
 
+impl<S: Stage> Face<'_, S> {
+    /// Where the whole of the uv box `cell` lies against the face's region:
+    /// [`UvSide::Outside`] or [`UvSide::Inside`] only when no piece of the boundary can
+    /// reach the cell and the pcurves' enclosures show the side, else [`UvSide::Near`]
+    /// (the cell may meet the boundary); `None` when they cannot tell (see
+    /// [`Face::contains_uv`]). A cell proved `Outside` holds no point of the face.
+    #[must_use]
+    pub fn side_of_cell(self, cell: Extent2d) -> Option<UvSide> {
+        Boundary::of(self.rec).side_cell(self.rec, cell)
+    }
+}
+
 impl Face<'_, Finished> {
     /// The face's accuracy: the largest recorded bound of its uses, its edges and their
     /// end vertices; `None` when all are within the body's resolution. Derived on each

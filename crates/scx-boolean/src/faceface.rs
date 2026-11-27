@@ -926,7 +926,8 @@ fn sections(
         }
     }
     cuts.sort_by(|p, q| p.0.total_cmp(&q.0).then(p.1.cmp(&q.1)));
-    cuts.dedup_by_key(|c| c.1);
+    // No dedup: `near` lists each point once (a face's points are pushed once per point), and
+    // a point gives one cut, so two cuts at one point cannot arise here (§14.43).
     for (t, ends) in pieces(&c.curve, c.span, closed, &cuts, reach) {
         match judge(ops, ix, of, &c.curve, t, acc, budget, stop)? {
             Verdict::Drop | Verdict::Along(..) => {}
@@ -1000,7 +1001,16 @@ fn lying(
             || slack(t).distance(slack(hi)) <= reach
     });
     cuts.sort_by(|p, q| p.0.total_cmp(&q.0).then(p.1.cmp(&q.1)));
-    cuts.dedup_by_key(|c| c.1);
+    // One point named twice (inside the edge and at its end) is one cut; the two ends of a
+    // closed edge at one vertex are two, a curve's length apart. Same point only if the
+    // curve stays within reach of it from one cut to the other (eight samples).
+    cuts.dedup_by(|q, p| {
+        q.1 == p.1
+            && (1..8).all(|k| {
+                let t = p.0 + (q.0 - p.0) * f64::from(k) / 8.0;
+                slack(t).distance(slack(p.0)) <= reach
+            })
+    });
     let of = [Of { side: fside, face }];
     let worst = if acc >= parts.accuracy {
         acc

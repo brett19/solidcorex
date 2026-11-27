@@ -15,7 +15,6 @@ scx-num = { path = "../scx-num" }
 scx-nurbs = { path = "../scx-nurbs" }
 
 [dev-dependencies]
-scx-make = { path = "../scx-make" }
 scx-planar = { path = "../scx-planar" }
 scx-testkit = { path = "../scx-testkit", features = ["bodies"] }
 

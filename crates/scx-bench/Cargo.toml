@@ -23,6 +23,16 @@ criterion = { version = "0.8.2", default-features = false, features = ["cargo_be
 # The instruction-count harness (layers.txt [bench-external]), under valgrind's callgrind:
 # the `<crate>_ic` targets. Running them needs `gungraun-runner` of the same version.
 gungraun = "0.20.0"
+# The libraries the step-4 slice cases run (`benches/common/slice_cases.rs`), against the pin.
+scx-brep = { path = "../scx-brep" }
+scx-make = { path = "../scx-make" }
+scx-planar = { path = "../scx-planar" }
+scx-boolean = { path = "../scx-boolean" }
+scx-mass = { path = "../scx-mass" }
+scx-bodyq = { path = "../scx-bodyq" }
+scx-tess = { path = "../scx-tess" }
+# The recipes of the step-4 slice (T12): the parts and Boolean steps both sides build.
+scx-testkit = { path = "../scx-testkit" }
 
 # One bench target per library crate: `cargo bench -p scx-bench --bench num`.
 [[bench]]
@@ -40,6 +50,15 @@ harness = false
 
 [[bench]]
 name = "algo_ic"
+harness = false
+
+# The step-4 slice, end to end (`benches/common/slice_cases.rs`).
+[[bench]]
+name = "slice"
+harness = false
+
+[[bench]]
+name = "slice_ic"
 harness = false
 
 [lints]

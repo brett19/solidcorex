@@ -98,6 +98,18 @@ impl Surface {
     /// `None` when the box cannot be enclosed (as [`Surface::box_over`]).
     #[must_use]
     pub fn range_along(&self, dir: Vec3, uv: Extent2d) -> Option<Ivl> {
+        self.along(dir, uv).map(|a| a.range)
+    }
+
+    /// [`Surface::range_along`] with the enclosures of the two partials of `dir . S` over
+    /// the same box: where either excludes 0, `dir . S` has no critical point in `uv`, so
+    /// over a region its extremes are on the region's boundary. A partial is the hull over
+    /// the parts of the box (a NURBS surface's knot lines among them, so across a knot
+    /// where it is only continuous the partial holds both sides' values).
+    ///
+    /// `None` when the box cannot be enclosed (as [`Surface::box_over`]).
+    #[must_use]
+    pub fn along(&self, dir: Vec3, uv: Extent2d) -> Option<Along> {
         let u = (uv.min().x, uv.max().x);
         let v = (uv.min().y, uv.max().y);
         let d = [Ivl::from(dir.x), Ivl::from(dir.y), Ivl::from(dir.z)];
@@ -123,6 +135,29 @@ impl Surface {
             Self::Sphere(s) => along!(s, (Some(sphere::U), 1), (Some(sphere::V), 1)),
             Self::Torus(s) => along!(s, (Some(torus::TURN), 1), (Some(torus::TURN), 1)),
             Self::Nurbs(n) => nurbs_along(n, d, uv),
+        }
+    }
+}
+
+/// The range of `dir . S` over a box and the ranges of its two partials there (see
+/// [`Surface::along`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Along {
+    /// Holds `dir . S(u, v)` over the box.
+    pub range: Ivl,
+    /// Holds `dir . S_u` over the box.
+    pub du: Ivl,
+    /// Holds `dir . S_v` over the box.
+    pub dv: Ivl,
+}
+
+impl Along {
+    /// The hull of two.
+    fn hull(self, b: Self) -> Self {
+        Self {
+            range: self.range.hull(b.range),
+            du: self.du.hull(b.du),
+            dv: self.dv.hull(b.dv),
         }
     }
 }
@@ -208,10 +243,10 @@ fn along_parts(
     d: [Ivl; 3],
     eval_g: impl Fn(Grad, Grad, Point2) -> Point3<Grad>,
     eval_i: impl Fn(Ivl, Ivl, Point2) -> Point3<Ivl>,
-) -> Option<Ivl> {
+) -> Option<Along> {
     let us = parts(u, cut_u)?;
     let vs = parts(v, cut_v)?;
-    let mut out: Option<Ivl> = None;
+    let mut out: Option<Along> = None;
     for &(u0, u1) in &us {
         for &(v0, v1) in &vs {
             let (ui, vi) = (Ivl::new(u0, u1), Ivl::new(v0, v1));
@@ -243,7 +278,12 @@ fn along_parts(
             if !r.is_finite() {
                 return None;
             }
-            out = Some(out.map_or(r, |o| o.hull(r)));
+            let a = Along {
+                range: r,
+                du: su,
+                dv: sv,
+            };
+            out = Some(out.map_or(a, |o| o.hull(a)));
         }
     }
     out
@@ -256,12 +296,12 @@ fn dot_ivl(d: [Ivl; 3], p: Point3<Ivl>) -> Ivl {
 
 /// The range along `d` of a NURBS surface over `uv`: the hull over its knot-span parts of
 /// each part's mean-value range (see [`Surface::range_along`]).
-fn nurbs_along(n: &NurbsSurface<3>, d: [Ivl; 3], uv: Extent2d) -> Option<Ivl> {
+fn nurbs_along(n: &NurbsSurface<3>, d: [Ivl; 3], uv: Extent2d) -> Option<Along> {
     let ku = n.knot_vector(ParamAxis::U);
     let kv = n.knot_vector(ParamAxis::V);
     let us = knot_parts(ku, uv.min().x, uv.max().x)?;
     let vs = knot_parts(kv, uv.min().y, uv.max().y)?;
-    let mut out: Option<Ivl> = None;
+    let mut out: Option<Along> = None;
     for &(u0, u1, su) in &us {
         for &(v0, v1, sv) in &vs {
             let r = patch_along(n, d, [su, sv], [Ivl::new(u0, u1), Ivl::new(v0, v1)], BISECT)?;
@@ -279,7 +319,7 @@ fn patch_along(
     span: [usize; 2],
     uv: [Ivl; 2],
     depth: u32,
-) -> Option<Ivl> {
+) -> Option<Along> {
     let dot = |a: [Ivl; 3]| d[0] * a[0] + d[1] * a[1] + d[2] * a[2];
     let [u, v] = uv;
     let (mu, mv) = (u.mid(), v.mid());
@@ -295,7 +335,12 @@ fn patch_along(
             let hv = Ivl::new(-ivl_half(v, mv), ivl_half(v, mv));
             let mean = dot(m.point()) + dot(su) * hu + dot(sv) * hv;
             let boxed = dot(j.point());
-            Some(meet(mean, boxed))
+            let (du, dv) = (dot(su), dot(sv));
+            Some(Along {
+                range: meet(mean, boxed),
+                du,
+                dv,
+            })
         }
         (Err(NurbsSurfaceError::Enclosure(EnclosureCause::WeightsNotPositive { .. })), _)
         | (_, Err(NurbsSurfaceError::Enclosure(EnclosureCause::WeightsNotPositive { .. })))

@@ -1303,6 +1303,139 @@ the tolerance used. Change the tolerance rule only with a decision on that, not 
 7. **Zero cost on `xtask fast`.** The full run is `#[ignore]`d. The inline tests take 0.7 s
    in a debug build; with a corpus the smoke subset adds four cases and the surface checks.
 
+## 17. SM2 as built (11-27)
+
+Branch `sm2`. §4.2's closed forms are in `scx_ssi::analytic`, in front of the general path:
+each runs only where the dispatch answered `General` before (two curved surfaces off one axis,
+and a torus's plane past its circles), so no pair that was solved changes its path.
+
+### 17.1 What exists
+
+- `analytic/quadric.rs` (new): `pair` for two curved surfaces whose axes `coaxial` found apart.
+  - **Parallel cylinders.** `b`'s axis turned onto `a`'s direction moves no point of its extent
+    by more than `delta = tilt * reach`; within the tolerance the pair is two circles in `a`'s
+    cross-section, solved by `coaxial::circles` (the meridian meet) with slack `tol + delta`, and
+    each meeting point is a line along the axes: two lines, one tangent line, or empty. The
+    coincident pair stays `coaxial`'s.
+  - **Miller-Goldman.** A cylinder or cone tangent to the sphere `S = |x - O|^2 - rho^2` along a
+    circle is `S = L^2`, `L` linear (a cylinder's `L = (x - O) . z`, a cone's
+    `((x - O) . V - rho^2) / sqrt(|V|^2 - rho^2)`, `V` its apex from `O`). Two of them meet on
+    the planes `L_a = +- L_b`, so the answer is `a`'s plane sections (`section::cylinder`,
+    `section::cone`, unchanged), each lying on `b` too. Two cylinders of one radius whose axes
+    meet (the Steinmetz pair, and any angle between the axes) are this case: the bisecting
+    planes, two ellipses of semi-axes `r / sin(phi/2)` and `r / cos(phi/2)`.
+  - The branch points are where both circles of contact meet (`L_a = L_b = 0` on the sphere): the
+    two points `y0 +- along * half` on the line of the planes.
+- `section.rs`: `torus` adds the **Villarceau** planes. A plane through the centre at
+  `sin t = r / R` from the axis (within the tolerance: `|d| + |turn| (R + r)`) gives two circles
+  of radius `R` about `+- r e_t`, crossing at the two points of tangency `+- R cv e1`. `clipped`
+  (new, shared) cuts the curves at branch points and adds them as points.
+- `clip.rs`: `Shape::param` (a point's parameter on a line, conic, parabola or hyperbola), and
+  `Raw::branch_at`. A curve through a branch point is cut there, and each piece is oriented
+  along its own `n_a x n_b`, which turns over across the node.
+- **Branch points are `IntersectionPoint`s with `Contact::Tangent`**, beside the curves through
+  them (the surfaces are tangent there).
+- `tests/corpus/score.rs`: the component signature joins both sides' curves through the case's
+  singular points (decision 6).
+
+### 17.2 Decisions, for and against
+
+1. **The forms run only after `shared()` fails, and at the torus's last `None`.**
+   - For: the plane sections and coaxial pairs keep their path and their answers bit for bit;
+     the added work there is a branch-list check per raw (measured: none).
+   - Against: a pair that is both coaxial-near and Miller-Goldman-near goes to `coaxial` first,
+     which answers `General` past its own tolerance. That is the right answer for both.
+2. **One test, "moving `b` onto the closed form's shape moves no point by more than the
+   tolerance", decides each form, as SS3's axis test.** Parallel: the tilt times the reach.
+   Miller-Goldman: the axes' distance plus the two spheres' radii apart (`b` moved through `a`'s
+   nearest point and given its radius). Villarceau: the plane's offset plus its turn times
+   `R + r`. Between the tolerance and that slack the answer is `General`.
+   - For: one measure across the forms and the coaxial pairs; an `Empty` is answered only where
+     every point is apart by more than the widened tolerance.
+   - Against: the radii term for cones measures the sphere, not the surface; a cone's surface
+     moves by at most that over the reach, so it is no looser than the cylinder's.
+3. **A Miller-Goldman pair whose sections hold a tangent piece or a touch is `General`, and so
+   is one whose circles of contact touch (one node within the tolerance).**
+   - For: there one plane runs along a generator of `a`, and the surfaces touch along a line the
+     sections' depth rule does not measure on `b`; answering it would decide on `a` alone what is
+     a contact of both. The general path (and SM5's tangent tracing) is the right owner.
+   - Against: a real case (cone and cylinder whose contact circles touch) stays unsolved by a
+     closed form. Test `miller_goldman_branch_points_merge_and_part` pins it as `General`, with
+     two nodes and none on either side.
+4. **Villarceau only on the whole tube.** A tube extent that is part of the turn is `General`.
+   - For: the circles' parametrisation in the tube angle is not linear, so the clipper's
+     half-line sides do not hold; the whole tube is the modelling case (pipes, rings).
+   - Against: a torus face split at the tube seam into halves loses the form. The clipper's
+     tube-angle side would need the circles' own sides; left open.
+5. **The depth rule is unchanged; SM10's six class-7 failures are not the closed forms' fault.**
+   The cases' depth (a 5e-7 strip, a 5e-9 cap) is under the tolerance the corpus runs at, so no
+   method can tell the two lines or the loop from one tangent piece there; it is the truth at
+   that tolerance, and these are N/A until the corpus's tolerance resolves them.
+   `the_depth_rule_resolves_at_a_finer_tolerance` shows the same pairs give two lines and a
+   circle at a tolerance under their depth.
+   - For: truth over pin; the corpus's width is not a measure of separation along the surface.
+   - Against: the corpus counts them as failures; its per-case tolerance (`min(1e-6,
+     feature / 10)`, 16.4 decision 3) uses width, not depth. Changing that is SM10's, open.
+6. **The scorer joins both sides through the singular points.** The truth's two Steinmetz
+   ellipses are closed and the answer's four arcs end at the nodes; joining only at free ends
+   made the truth two components and the answer one.
+   - For: the union is one connected set at a node, however a method cuts it; applied to both
+     sides, and `singular_ok` still holds the answer to passing through each node.
+   - Against: a scorer change in a form's own PR. It moves no other case (the table below).
+7. **Each piece across a node is oriented on its own.** `n_a x n_b` vanishes and turns over at
+   a node, so one orientation per conic is wrong on half of it.
+
+### 17.3 Tests
+
+`tests/quadrics.rs`, 17 tests, each against SM0's `ssi_truth` (curves, nodes, touches) where it
+has the pair and always against the implicit forms (every answer point on both surfaces;
+every generator of `a` meeting `b` inside both extents covered, at least 100 points):
+parallel cylinders (two lines, across both tangencies, tilted past the tolerance), Steinmetz
+(four arcs and two nodes; clipped to one node), equal cylinders at five angles and across the
+tolerance, Miller-Goldman cylinder and cone, two cones, the nodes' merge and parting, across the
+tolerance, other crossed cylinders `General`, Villarceau against the truth, across the
+tolerance and on part of the tube, and the depth rule at a finer tolerance. No test removed.
+`coaxial.rs`'s `near_axes` changed on purpose: its cylinder tilted by 1e-3 still meets the
+first's axis (at `z = -1`), so it is now the Miller-Goldman pair (solved) rather than `General`;
+the same tilt moved off the meeting keeps the `General` check; its square cylinders of one
+radius are now the Steinmetz pair (solved), and two radii keep the `General` check.
+
+Difftest `t_ssi::ssi_section_by_plane` (an scx-ssi analytic change's gate, outside `xtask fast`'s
+default members): its pool's `bitangent` tori are Villarceau planes, which the exact testkit truth
+answers `NoClosedForm`, so the first merge's 24 cases failed its check (not the pin). The check now
+takes, for a torus whose truth has no closed form, circles of radius `big` or none, and owes the
+plane's crossings with 2000 meridian circles (as a cone's 2000 generators), each inside both
+extents; and two pieces may meet at their ends only at an answer's point (a branch point). The one
+`empty` among them is a plane square inside the hole (nearer the centre than `big - small`), where
+no meridian meets it; `planes_through_the_torus_centre` holds the difftest's three tori, at the
+bitangent tilt (four arcs, two points; empty inside the hole), the equator and the meridian plane
+(solved) and four other tilts (`General`), never `Empty` while the square reaches the tube.
+
+Corpus (`score_corpus`, 113 cases): before `pass 38; refused 69; failed 6`, after
+`pass 40; refused 67; failed 6`. `c2_cyl_cyl_external` (refused to pass) and `c4_steinmetz`
+(refused to pass, with decision 6; wrong topology without it). No case changed otherwise.
+
+### 17.4 Added cost (release, throwaway harness, best of 5 x 200,000 calls, not committed)
+
+| path | before | after |
+|---|---|---|
+| plane x cylinder, ellipse | 575 ns | 569 to 574 ns |
+| plane x half cylinder | 905 to 910 ns | 900 to 910 ns |
+| plane x torus, circles | 952 to 968 ns | 960 to 963 ns |
+| plane x cone | 600 to 613 ns | 603 to 612 ns |
+| coaxial cylinder x sphere | 1443 to 1463 ns | 1445 to 1460 ns |
+| skew cylinders (`General` both) | 190 to 193 ns | 192 ns |
+| cylinder x sphere off axis (`General` both) | 267 to 270 ns | 270 ns |
+
+Within noise on every existing path.
+
+### 17.5 Open
+
+- Contact-circle tangency (decision 3) and part-tube Villarceau (decision 4).
+- The corpus's per-case tolerance by depth rather than width (decision 5), SM10's.
+- `scx-boolean` takes the branch points as touches; the pairs were `General` before, so no
+  built case changes, but a face pair through a node now reaches D5's contacts.
+
 ## 20. SM4b as built (11-27)
 
 The perf follow-up of SM4 (§15.4, §15.5): cell-level pairing within a small factor of the pin, and
@@ -1420,3 +1553,326 @@ before and 429 after (both proved), `2^-6` refused (the `FRONT` policy) before a
   interval form's dependency between the axes' terms).
 - SM5's loop-free stop replaces `FRONT`; the diagonal near-touch is the case to try it on.
 
+## 19. SM6a as built (11-27)
+
+Row SM6a (§7), to §4.3 item 3, §4.5's field path, §4.6, §4.7b, §4.9 and §4.10. The code is in
+`crates/scx-ssi/src/general/`: `implicit.rs` (the forms), `net.rs` (a piece in rational Bernstein
+form), `field.rs` (the apartness proof and the trace); `pieces.rs` and `mod.rs` call them.
+
+### 19.1 What exists
+
+- **Implicit forms** (`Implicit::of`): plane, cylinder, cone, sphere and torus as a canonical
+  `f0` of degree 1, 2, 2, 2 and 4 in the kind's frame. `Implicit::field` builds
+  `G = W^k f0(M (H - O W) / W)` over a net in `Bounded` arithmetic, so every coefficient carries a
+  bound of its distance from the exact one. The frame's rows are unit and orthogonal only to
+  rounding; `Implicit::shift` bounds how far the computed form's zero set is from the kind's own
+  surface (from `|M M^T - I|`), and the bounds below add it.
+- **Nets** (`Net::of`): the one Bézier patch of `Surface::to_nurbs` over a piece, with `delta`, a
+  bound of the distance between the net's point and the surface's own. A piece that is not one
+  patch on exactly its uv, or has a weight not positive, has no net: the field path refuses there.
+- **Side choice** (`field_side`): of the sides with a form, the one whose field has the least
+  degree, `k` times the other side's degree sum; then the least `k`; then side 0. The choice does
+  not depend on the work order, so the answer is fixed.
+- **Apartness by sign** (`field::apart`, called last in `Candidates::prove`): with `L` an upper
+  bound of `|grad f|` over the piece's box grown by twice the coincidence and
+  `d = tol + shift + delta`, `g - L d W^k > 0` or `g + L d W^k < 0` (every coefficient past its
+  rounding bound) proves no point of the piece is within the coincidence of the form's surface.
+- **Coincidence**: with `m` a lower bound of `|grad f|`, `|g| < m (tol - shift - delta) W^k` over a
+  whole piece puts every point of it within the coincidence. The piece is clipped to the field
+  side's extent and returned as `Traced::coincident` (`Overlap`, in both surfaces' uv, as the
+  closed forms give it). Extents that only abut give a zero-width piece, as the closed forms do.
+- **The trace**: dyadic squares of each piece's unit square, each dropped (boxes or sign),
+  coincident (whole piece only), a graph cell (`g_t` or `g_s` strictly signed) or split. Edge
+  crossings come from `bernstein_roots` on the restriction to each edge segment, once per
+  segment, with parity matched to one sign per grid point (zero counted positive). So two squares
+  sharing a segment see the same crossings at the same bits. A graph cell's arcs follow from a
+  sweep; vertices are column roots, as many as the chord sag needs to stay within half the
+  coincidence. Arcs link through their ports into chains. Chains are cut where the field side's
+  inverse (`Surface::invert`) leaves its extent (a bisection on the chord) and at periodic seams.
+- **Output**: branches of degree-1 curves in the net side's uv. Both pcurves are `OnSurface::Within`
+  with the vertex distance bound. Nodes are `Seam` or `Pole` only.
+
+### 19.2 Decisions, for and against
+
+- **Column roots, not Newton on `g` (deviation from §4.5).** For: a root of the 1D restriction by
+  Bernstein isolation is certified and depends on nothing but the column. The trace has no step
+  control, so it cannot stall, and it is deterministic by construction. Against: one root per
+  vertex costs more than a Newton step. The vertex count goes as `1/sqrt(tol)` (sag), so at
+  `1e-9` a T-pipe takes 565k budget units and 1.3 s. Refitting to one knot vector is SM8's; until
+  then branches are dense.
+- **Coincident only for a whole piece.** For: a piece within the coincidence everywhere is a
+  coincident patch with no doubt. A part of one within it is where the surfaces touch or run
+  tangent, which is SM6b's case. Against: a coincident region whose border crosses a piece is
+  refused until SM6b, not returned.
+- **Zero counted positive at grid points.** For: one sign per grid point makes the crossings on a
+  shared segment the same for both squares, so chains link without matching tolerances. Against:
+  a curve that runs exactly along the rim of the net side's extent has `g` of one sign inside and
+  is invisible to the grid signs. That was `c5n_curve_on_edge`, answered empty (INCOMPLETE).
+  Now a square whose edge on the rim has `|g|` within the coincidence all along is refused
+  (`runs_along_the_rim`). A curve that touches the rim at one point from inside is still a touch
+  for SM6b.
+- **Topology up to the coincidence (04 R73, Q3).** Roots within the coincidence of an edge's end,
+  or clusters no wider than that, are taken at the end or as one root per the parity. For: this
+  matches SS4's depth rule. Against: two roots closer than the coincidence are merged, so a
+  loop smaller than the tolerance is a touch or nothing.
+- **Field-sign proof last in `prove`.** For: the boxes and slabs are cheaper and settle most
+  pairs; the field is built only for pairs they leave. Against: the net and field are built again
+  for each pair on the same piece. A cache by piece would cut it; nothing measured needs it yet.
+- **Field path before `settle`.** When a side has a form, `intersect` answers by the trace and
+  never by `FRONT` halving. For: one path per pair kind. Against: a touching pair the trace cannot
+  classify is refused deeper, after more work (see 19.4).
+
+### 19.3 Tests
+
+New, in `general/tests/field.rs`, at accuracy `1e-6`:
+
+- `the_field_is_within_its_bound_of_the_exact_rationals`: forms of all five kinds in a tilted
+  frame, both senses, over a tilted plane net and a cylinder quarter net. At 25 dyadic points,
+  `scx-testkit` `Rat` de Casteljau of the exact field against the computed coefficients evaluated
+  exactly: the difference is within `err`, and `err <= 1e-12 max(size, 1)`.
+- `the_field_path_traces_the_sm0_truths`: sphere vs NURBS plane, NURBS sphere vs plane, the
+  T-pipe, sphere vs NURBS sphere, cylinder vs NURBS cylinder, torus vs NURBS plane. Each has
+  branches; nodes only `Seam` or `Pole`; residual and vertex bounds hold; truth samples lie within
+  twice the accuracy of the chords.
+- `a_coincident_patch_is_told_from_a_coplanar_neighbour`: overlapping, abutting and beside, each
+  equal to the closed forms' `Overlap`. The overlap is `[0, 1]^2`.
+- `a_parallel_plane_is_coincident_only_within_the_accuracy`: `0.5` accuracy off is coincident,
+  `3` accuracies off is empty.
+- `a_curve_along_the_rim_is_refused_not_dropped`: a plane through a NURBS patch's edge is
+  `Unresolved`, never empty; the same plane `1e-3` inside is one branch.
+- `a_curve_along_a_knot_line_is_traced_once`: a plane through a NURBS torus's equators, which
+  lie on knot lines, over four `v` ranges: one branch each. Over the whole torus the outer circle
+  lies on the rim `v = 0`, and the answer is `Unresolved`.
+- `the_field_answer_is_the_same_bits_under_any_budget_that_suffices`: two runs equal, the used
+  budget gives the same bits, one unit less is `Budget(Exhausted)`.
+
+Changed: in `general/tests.rs` the size bound of a refusal allows `1e-12` relative for the
+rounding of the NURBS images' boxes; `apart.rs` asserts that field-sign proofs never drop a touching
+pair. None removed.
+
+### 19.4 Measured (release, SM10 corpus, tolerance `1e-6`)
+
+SM10 score (113 cases):
+
+| | pass | refused | failed |
+|---|---|---|---|
+| before (main at the branch point) | 38 | 69 | 6 (incomplete 1, wrong topology 5) |
+| after | 54 | 53 | 6 (the same six: class 7's closed-form depth rule) |
+
+New passes: the six `c7_angle_planes_*`, `c1n_cylN_plane_ellipse`, `c1n_parab_plane_circle`,
+`c1n_saddle_plane_hyperbola`, `c9n_many_spans_plane_sphere`, `c9n_rational_deg5_cyl_arc`,
+`c1_cyl_cyl_two_loops`, `c1_sphere_cyl_two_loops`,
+`c8n_sphereN_polar_cap`, `c9n_deg6_circle` and `c9n_refined_torus_sphere` (16). No verdict got
+worse. The intersections take 1,612 ms in total over the 113 cases, against 1,001 ms before (slowest
+`c9n_deg6_circle`, 198 ms).
+
+Intersect time per case (the harness's column; throwaway timer, not committed), before against after:
+
+- cases that pass in both: 0.3 ms total, against 0.8;
+- new passes: from 3.7 to 155 ms each (T-pipe-like loops 100 to 155 ms);
+- cases still refused: 922 ms total, against 1,534. The field path refuses tangencies deeper than
+  `FRONT` did: `c8_sphere_cyl_through_poles` 4.8 to 155 ms, `c4_viviani_figure8` 5.5 to 92 ms,
+  `y23_fig1b_two_arcs_and_point` 128 to 278 ms.
+
+The harness's judging (32 samples per knot span, quadratic in the vertices) takes 30 to 120 s on
+the dense degree-1 branches, far more than the intersection. That cost is the scorer's, but it
+returns to SSI with SM8's refit.
+
+### 19.5 Open
+
+- Refusals cost more (above). SM6b resolves most of these cases instead of refusing them. If it
+  does not land soon, an early exit (a square at a depth where `g` and `grad g` both lie within
+  the band) would restore the old cost.
+- Vertex density goes as `1/sqrt(tol)` until SM8 refits.
+- A net and field per pair in `prove`, not per piece (19.2).
+- A curve touching the extent's rim at one point from inside (19.2).
+- A curve on a closed rim that is not marked periodic (a NURBS torus's `v = 0`,
+  `c8n_torusN_equator_seam`; a NURBS cylinder's seam, `c8n_cylN_seam_line`) is refused. Before
+  the rim check the first was answered with one circle of two and the second passed. Seeing that the opposite rim is the same edge (equal control rows) would trace it, as a
+  knot line is traced.
+- Poles are not divided out (§4.5); a NURBS sphere's pole piece has a zero-width row, and the
+  trace refuses when it cannot split it.
+
+## 21. SM1b as built (11-27)
+
+SM1b closes §13.8 items 1 and 3 (the 04 SM1 ruling's follow-up). `pcurve_of` keeps SM1's
+sampled pole/apex and lift-band checks. When they pass, the new `scx-surface` `chart_check`
+proves both by interval. Point inversion onto an `OnChart` pcurve, which answered
+`Unsupported`, is now a certified search in uv (`scx-curve` `chart_invert`).
+
+### 21.1 What exists
+
+- **`chart_check::certify(curve, pc, axes, over, tol, axis, periods)`.** It walks from the
+  span's start to its end over boxes `B = [a, b]`, halving each box it cannot decide.
+  - **Axis check.** It encloses the local `x` and `y` by the centred form
+    `q(m) + q'(B)(B - m)`, met with the plain enclosure `q(B)`, both through the 3-D curve's
+    own `point_over`/`jet_over` in `Ivl`. `B` is clear when the enclosure of `x^2 + y^2` lies
+    above `tol^2`, rounded up. If the middle of an undecided box is within `tol` of the axis,
+    the box holds a crossing, refined by the same golden section the sampled check uses. The
+    halves of a box already clear of the axis are not checked again.
+  - **Band check.** For each periodic coordinate, let `D(t)` be the continuous lift less the
+    reference line of slope `s`. The bound is `D(B) ⊂ D(a) + (w'(B) - s)[0, b - a]`, with
+    `w'(B)` the pcurve's own `jet_over` (a lift does not change a derivative). It must hold
+    inside `±(1 - 1e-9) p/2`. `D(b)` is then met with `OnChart`'s own value at `b`, and the
+    walk goes on from there.
+    - It refuses (the band rule's `NoClosedForm`) only when `D(a) + (w'(B) - s)(b - a)` lies
+      wholly at or past half a period. That is a proof the lift leaves the band.
+  - **Undecided.** A box that holds no `f64` inside, or the 16,384th box tried (`BOXES`),
+    gives `PcurveError::Undecided { at, check: Check::{Axis, Band} }`.
+- **`PcurveError::Undecided` and `scx_surface::Check`** (`#[non_exhaustive]`). The kind is
+  `Unsupported` and the name `pcurve_undecided`.
+- **`OnChart::closest(p, &mut Budget, &Stop) -> Result<Foot<f64, Point2>, CurveError>`** and
+  **`OnChart::invert(p, domain, &mut Budget, &Stop) -> Result<Inversion<f64, Point2>, CurveError>`.**
+  The search, in order:
+  - It starts from 16 even seed pieces of `over`, met with a bounded 3-D domain.
+  - It drops a piece when the distance bound from its Ivl box is not below the incumbent less
+    `eps`. It also drops one where `(uv - p) . uv'` keeps one sign.
+  - It halves the piece with the least bound (ties go to the earlier piece) and runs Newton
+    on `g = (uv - p) . uv'`.
+    - A Newton step is taken when it lowers the distance. It is also taken when it halves
+      `|g|` while the distance stays within the run's start plus `eps`.
+    - The final incumbent is polished once if it was not already.
+  - `eps = GAP_REL (1e-12) x` (the seeds' uv diagonal plus the first incumbent's distance).
+  - The foot is the global nearest to `2 eps`. A non-finite `p` gives a NaN foot.
+- **`Curve2::closest` and `Curve2::invert` now take `(budget, stop)`** for every kind.
+  `CurveError` gains `Exhausted` and `Stopped` (with `From` for both), and
+  `Unsupported::OnChartInversion` is gone.
+
+### 21.2 Decisions, for and against
+
+1. **The certifier runs after the samples and can only refuse.** It never turns a sampled
+   refusal into a pass, and it never changes the `OnChart` it is given.
+   - For: answers the samples accepted and the proof confirms are bit-identical to SM1's. The
+     cheap sampled refusals (an end on the axis, a sampled band) stay first.
+   - Against: the samples are now redundant on a pass, at 64 evaluations. They are kept
+     because they make the reference line the certifier checks against.
+2. **The certified condition is `|D| < p/2` over the whole span, against `OnChart`'s own
+   reference line.**
+   - For: this is exactly when "the copy nearest the line" is the continuous lift. It proves
+     the value `OnChart` evaluates, not a stand-in for it.
+   - Against: the margin `1e-9` of a half period refuses a lift that runs within `1e-9 p/2` of
+     the band's edge. A real curve there would be split, as at the band refusal.
+3. **A fixed box cap (`BOXES = 16384`), not a `Budget` through `pcurve_of`.**
+   - For: `pcurve_of` is called in stage 5 and mass, where no budget is threaded. A span
+     clear of the axis by `g` takes about `log2(span/g)` boxes at each near approach: 87 at
+     `d = 1e-5` and 47 at `1e-3`. The cap is reached only by a curve that runs within rounding
+     of `tol` along a stretch. The walk takes no choice from the cap, so a decided span gives
+     the same answer every time.
+   - Against: it is a fixed cap, which 73 §6 avoids. It is a limit on a proof, though, not on
+     a result: hitting it is `Undecided`, never a pass or a truncated answer. A `Budget`
+     parameter is the change if `pcurve_of` ever takes one.
+4. **`Undecided` is kind `Unsupported`, not `Refused`.**
+   - For: the input may be valid. The walk only failed to prove it (within rounding of `tol`).
+     It sits with `NoClosedForm` and `Inexact`.
+   - Against: a caller that splits on `CrossesPole` gets no split point it can trust. `at` is
+     where the walk stood, which is an approach to within rounding of `tol`, so splitting
+     there is a sound retry.
+5. **Inversion is a branch and bound in uv, not the chart-inverse-of-the-3-D-foot route.**
+   - For: a `Chart` holds only what its inverse needs, not the surface's forward map (a
+     sphere's radius, a cone's angle). Also, the nearest point in 3-D is the nearest in uv only
+     for a query on the curve. The uv search proves the uv answer.
+   - Against: it costs 15–26 µs on the curve and 46–235 µs off it (§21.4), where a closed
+     form costs nanoseconds. No hot path calls it today (it was `Unsupported`). A caller with
+     a 3-D point should invert the 3-D edge.
+6. **`Curve2::closest`/`invert` take `(budget, stop)` for every kind**, one signature (the
+   cache work's rule), rather than an OnChart-only method.
+   - For: callers do not branch on kind, and only OnChart and NURBS-like kinds charge.
+   - Against: line and conic callers pass a budget they never use. `Budget::new(0)` is free
+     for them.
+7. **The `2 eps` gap and the polish rule.** Near the foot, the distance is flat to the uv's
+   rounding (about `1e-15`). A pure "distance decreases" rule stopped Newton with
+   `g ≈ 1e-8`. Accepting a step that halves `|g|` within the start plus `eps` reaches
+   stationarity (`|g| <= 1e-9 (1 + |d|)` in every test) and gives up at most one more `eps`.
+   - Against: the bound is `2 eps`, not `eps`.
+8. **Search span = `over` met with a bounded 3-D domain.** This is the span the lift was made
+   and certified over. Outside it, the nearest-to-the-line copy is not proved continuous.
+
+### 21.3 Tests
+
+`scx-surface` `pcurve` (four new):
+
+- `near_pole_circles_are_refused_or_accepted_by_their_distance`.
+  - The fixtures are circles on the unit sphere passing within `d` of the pole, for
+    `d` = 1e-9, 1e-8, 1e-7, 1e-6, 4e-6, 6e-6, 1e-5, 1e-4, 1e-3. Each is taken from both sides
+    of the pole and over three spans; `tol = 5e-6`.
+  - Within `tol`, the answer is `CrossesPole` at `|at| < 1e-9`, or `NoClosedForm` on `[0, τ]`
+    (approach at the ends).
+  - Otherwise the answer is `OnChart`, checked by lifting and by 2,001 points through the
+    approach to `1e-12`.
+- `an_approach_within_rounding_of_the_tolerance_is_undecided`.
+  - `tol = rho (1 - 1e-15)` gives `Undecided { check: Axis }`, with its kind, name and
+    message.
+  - `rho (1 - 1e-6)` passes.
+- `the_band_and_the_axis_are_certified`.
+  - The fixture is a parallel with a constant reference line.
+  - A sweep of `τ (0.5 - 1e-6)` is `Clear`, and one of `τ (0.5 + 1e-6)` is `Band`.
+  - A circle through the pole is `CrossesPole` at `|at| < 1e-7`.
+- `certified_pcurves_are_deterministic`.
+
+`scx-curve` `chart_invert` (four new, over SM1's 14 analytic pairs plus the sphere section
+`x = 1.2` in both senses):
+
+- `points_on_the_curve_invert_to_their_parameter`.
+- `off_curve_feet_are_the_global_nearest`. Each foot is within `1e-11` of a dense brute-force
+  least and stationary.
+- `the_search_is_deterministic`. Results are the same bits. The exact budget used succeeds;
+  one unit fewer fails `Exhausted`.
+- `limits_and_edges`. Covers:
+  - `Exhausted { limit: 5 }` and `Stopped`
+  - a NaN and an infinite query (`Outside`)
+  - inside and outside a domain
+  - `Curve2` dispatch, and a query before the start of a closed curve
+
+No test was removed. The `scx-curve` error test now covers `Exhausted` and `Stopped` in place
+of `OnChartInversion`.
+
+A fixture lesson: a test pcurve must be validly lifted. A tilted sphere circle over a whole
+turn with a constant reference jumps a period, and is not an `OnChart` the certifier would
+pass.
+
+### 21.4 Added cost (release, server, throwaway timers and counters, not committed)
+
+`pcurve_of` on pairs with no closed form (all others are unchanged; the torus tube circle
+stays at 0.95 µs):
+
+| case | before (samples only) | with certify | boxes |
+| --- | --- | --- | --- |
+| two-sphere circle | 7.0 µs | 36 µs | 21 |
+| tilted unit-sphere circle | 6.9 µs | 22–24 µs | 11 |
+| cone ellipse | 6.3 µs | 21 µs | 15 |
+| near pole, `d = 1e-3` | 14.5 µs | 62–65 µs | 47 |
+| near pole, `d = 1e-5` | 12.4 µs | 103–111 µs | 87 |
+| pole inside, `d = 1e-5` (refused) | 10 µs | 111–114 µs | 95 |
+
+A box costs about 1.26 µs:
+
+| part | cost |
+| --- | --- |
+| the pcurve's `jet_over` | 670 ns |
+| the pcurve's `point_over` | 350 ns |
+| the curve's `jet_over` | 150 ns |
+| the curve's `point_over` | 90 ns |
+| the pcurve's `f64` point | 57 ns |
+
+Across the scx-boolean, scx-mass, scx-ssi and scx-brep suites (release), `certify` ran 46
+times, all `Clear`, for 0.69 ms in total (80 µs at most). There were no `Undecided` results
+and the suites passed. Timings were taken on a loaded machine and are noisy to about 10%.
+
+Inversion over the 16 test pcurves, 2,000 queries each (one unit = one evaluation or piece):
+
+| query | time | units |
+| --- | --- | --- |
+| on the curve | 15–26 µs | 37–38 |
+| 0.3 off the curve | 46–235 µs | 96–311 |
+
+### 21.5 Open questions
+
+1. **Cheaper boxes.** Taking the azimuth rate from the 3-D jet's local `x`, `y` in place of
+   the pcurve's `jet_over` would drop the dearest part of a box. The rate is
+   `u' = (x y' - y x') / (2 pi rho^2)` for the sphere's arc parameter, per kind. Sharing the
+   curve's jet inside `OnChart::jet_over` would also help. Both are expected to cut certify
+   by about 2 times; neither is needed by any suite's cost today.
+2. **Inversion cost.** Most of an off-curve query is spent proving there is no second foot.
+   A first-order prune is likely to cut that 2 to 3 times: drop pieces whose ends' `g` signs
+   and a `g'` enclosure prove a single foot. It waits for a caller that needs it.
+3. **A `Budget` through `pcurve_of`** (§21.2 item 3), if stage 5 gains one.

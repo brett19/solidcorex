@@ -241,6 +241,12 @@ fn traced_output(t: &Traced, case: &Case) -> Output {
         .extend(t.nodes.iter().map(|n| [n.point.x, n.point.y, n.point.z]));
     o.points
         .extend(t.touches.iter().map(|n| [n.point.x, n.point.y, n.point.z]));
+    o.coincident = !t.coincident.is_empty();
+    o.regions = t
+        .coincident
+        .iter()
+        .map(|p| polygon_points(&case.sides[0], &p.on_a))
+        .collect();
     o
 }
 
@@ -510,10 +516,14 @@ pub fn judge(case: &Case, out: &Output) -> Row {
         .singular
         .iter()
         .all(|s| set_dist(*s, &out_polys) <= cov);
-    // Components are compared where no coincident piece is involved.
+    // Components are compared where no coincident piece is involved. The singular points
+    // join both sides' curves through them: curves crossing at a node are one connected
+    // set, whether an answer runs each through it or cuts them there (`singular_ok` holds
+    // the output to passing through each).
+    let with_singular = |points: &[P3]| [points, &case.singular[..]].concat();
     let same = has_region
-        || signature(&truth_curves, &case.isolated, cov)
-            == signature(&out_curves, &out.points, cov);
+        || signature(&truth_curves, &with_singular(&case.isolated), cov)
+            == signature(&out_curves, &with_singular(&out.points), cov);
 
     row.verdict = if !truth_polys.iter().any(|p| !p.is_empty()) && out_polys.is_empty() {
         Verdict::Pass

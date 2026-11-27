@@ -21,11 +21,13 @@ use super::clip::{Axes, Clip, Part, Raw, Shape, Side, step_bounds};
 /// the last place.
 const PRECISION: f64 = 8.881_784_197_001_252e-16;
 
-/// What a kind's section found before clipping.
+/// What a kind's section found before clipping: the curves, the touch points and the
+/// branch points where the curves cross (the surfaces tangent there).
 #[derive(Default)]
-struct Found {
-    raws: Vec<Raw>,
-    touches: Vec<Point3>,
+pub(super) struct Found {
+    pub(super) raws: Vec<Raw>,
+    pub(super) touches: Vec<Point3>,
+    pub(super) branches: Vec<Point3>,
 }
 
 impl Found {
@@ -104,11 +106,27 @@ pub(super) fn section(
     if solved.is_none() {
         return Closed::General;
     }
+    clipped(&clip, found, tol)
+}
+
+/// The found curves and points clipped to both extents, the curves cut at the branch points
+/// on them (each within `tol` of a curve).
+pub(super) fn clipped(clip: &Clip<'_>, found: Found, tol: f64) -> Closed<Intersection> {
+    let Found {
+        mut raws,
+        touches,
+        branches,
+    } = found;
+    for raw in &mut raws {
+        for &p in &branches {
+            raw.branch_at(p, tol);
+        }
+    }
     let (mut curves, mut points) = (Vec::new(), Vec::new());
-    if clip.clip(found.raws, &mut curves, &mut points).is_none() {
+    if clip.clip(raws, &mut curves, &mut points).is_none() {
         return Closed::General;
     }
-    for p in found.touches {
+    for p in touches.into_iter().chain(branches) {
         clip.point(p, Tangent, &mut points);
     }
     Closed::Solved(Intersection::pieces(curves, points))
@@ -198,7 +216,7 @@ fn corners_of(e: &Extent2d) -> [(f64, f64); 4] {
 }
 
 /// A cylinder: an ellipse, a circle, two lines or a tangent line.
-fn cylinder(
+pub(super) fn cylinder(
     k: &Cylinder,
     se: &Extent2d,
     n: Vec3,
@@ -276,7 +294,14 @@ fn cylinder(
 /// A parabola is taken where dropping `e alpha^2` moves no point of the extent's heights by
 /// more than the tolerance: there the exact ellipse or hyperbola is longer than its
 /// precision, and the parabola is within the tolerance of it (research 63 §3.12).
-fn cone(k: &Cone, se: &Extent2d, n: Vec3, p0: Point3, tol: f64, found: &mut Found) -> Option<()> {
+pub(super) fn cone(
+    k: &Cone,
+    se: &Extent2d,
+    n: Vec3,
+    p0: Point3,
+    tol: f64,
+    found: &mut Found,
+) -> Option<()> {
     let axes = Axes::new(k.frame(), k.sense());
     let r = k.radius().mm();
     let kk = fmath::tan(k.half_angle());
@@ -430,7 +455,7 @@ fn torus(
 ) -> Option<()> {
     let axes = Axes::new(k.frame(), k.sense());
     let (big, small) = (k.major().mm(), k.minor().mm());
-    let (nl, s, _, e_t) = lean(&axes, n);
+    let (nl, s, e_r, e_t) = lean(&axes, n);
     let nz = nl[2];
     let d = n.dot(p0 - axes.o);
     if d.abs() - (s * big + small) > tol {
@@ -482,5 +507,50 @@ fn torus(
         }
         return Some(());
     }
-    None
+    villarceau(&axes, clip, [big, small], s, nz, d, e_r, e_t, tol, found)
+}
+
+/// A bitangent plane through the torus's centre (`s = small / big`): the two Villarceau
+/// circles of radius `big` about `+- small e_t`, in the plane of `e_t` and
+/// `e1 = -nz e_r + s z`, crossing at `+- sqrt(big^2 - small^2) e1`, where the plane touches
+/// the torus. The plane is that one when turning it about `e_t` onto it and moving it onto
+/// the centre moves no point of the torus by more than the tolerance; else `None`, as for
+/// every other spiric section, and for a tube angle short of a whole turn (its sides are no
+/// linear functions on these circles).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the torus section's own quantities"
+)]
+fn villarceau(
+    axes: &Axes,
+    clip: &Clip<'_>,
+    [big, small]: [f64; 2],
+    s: f64,
+    nz: f64,
+    d: f64,
+    e_r: [f64; 3],
+    e_t: [f64; 3],
+    tol: f64,
+    found: &mut Found,
+) -> Option<()> {
+    if s == 0.0 || clip.tube().is_some() {
+        return None;
+    }
+    let sv = small / big;
+    let cv = ((big - small) * (big + small)).sqrt() / big;
+    // The angle between the plane's lean and the bitangent one's, both off the axis.
+    let turn = (fmath::atan2(s, nz.abs()) - fmath::atan2(sv, cv)).abs();
+    if d.abs() + turn * (big + small) > tol {
+        return None;
+    }
+    let e1 = axes.vec(add(scale(e_r, -cv.copysign(nz)), scale(Z, sv)));
+    let et = axes.vec(e_t);
+    for side in [1.0, -1.0] {
+        let c = axes.o + et * (side * small);
+        found.conic(c, et * big, e1 * big, true, Transversal);
+    }
+    for side in [1.0, -1.0] {
+        found.branches.push(axes.o + e1 * (side * big * cv));
+    }
+    Some(())
 }

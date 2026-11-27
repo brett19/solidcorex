@@ -92,6 +92,17 @@ fn nurbs_sphere_and_plane() -> [(Surface, Extent2d); 2] {
     ]
 }
 
+/// A pair with both sides as their NURBS images: no implicit form on either side, so the
+/// field path (row `SM6a`) does not apply and the pair waits for the march (row `SM7`).
+fn as_nurbs(pair: [(Surface, Extent2d); 2]) -> [(Surface, Extent2d); 2] {
+    pair.map(|(s, e)| (Surface::Nurbs(Arc::new(s.to_nurbs(&e).unwrap())), e))
+}
+
+/// The pairs the general method refuses until row SM7: NURBS against NURBS.
+fn refused_pairs() -> [[(Surface, Extent2d); 2]; 2] {
+    [as_nurbs(tpipe()), as_nurbs(nurbs_sphere_and_plane())]
+}
+
 fn run(
     pair: &[(Surface, Extent2d); 2],
     budget: &mut Budget,
@@ -110,7 +121,7 @@ fn unresolved(e: SsiError) -> (Point3, Length) {
 
 #[test]
 fn a_general_pair_is_refused_by_name_where_it_lies() {
-    for pair in [tpipe(), nurbs_sphere_and_plane()] {
+    for pair in refused_pairs() {
         let mut budget = Budget::unlimited();
         let e = run(&pair, &mut budget, &Stop::new()).unwrap_err();
         assert_eq!(
@@ -120,12 +131,19 @@ fn a_general_pair_is_refused_by_name_where_it_lies() {
         let (at, size) = unresolved(e);
         assert_eq!(e.at(), Some(at));
         // Inside both surfaces' boxes over their extents, sized by a piece pair's overlap
-        // (no larger than the whole's).
+        // (no larger than the whole's, to the rounding of the NURBS images' boxes).
         let [(a, ae), (b, be)] = &pair;
         let (xa, xb) = (a.box_over(*ae).unwrap(), b.box_over(*be).unwrap());
         let shared = xa.intersect(xb).unwrap_or_else(|| xa.union(xb));
         assert!(xa.union(xb).contains_point(at, 0.0), "{at:?}");
-        assert!(size.mm() <= shared.union(xa).union(xb).max_length());
+        assert!(
+            size.mm() <= shared.union(xa).union(xb).max_length() * (1.0 + 1e-12),
+            "{} {:?} {:?} {:?}",
+            size.mm(),
+            at,
+            xa,
+            xb
+        );
         assert!(size.mm().is_finite() && size.mm() > 0.0);
         // The pair of pieces, then each piece pair's proofs, were charged.
         assert!(budget.used() > 1);
@@ -174,20 +192,20 @@ fn closed_forms_answer_first_and_spend_nothing() {
     assert!(matches!(answer, Answer::Closed(_)), "{answer:?}");
     assert_eq!(none.used(), 0);
     // A pair with no closed form goes on to the general method, which charges and refuses.
-    let [(a, ae), (b, be)] = tpipe();
+    let [(a, ae), (b, be)] = as_nurbs(tpipe());
     let mut budget = Budget::unlimited();
     let e =
         crate::intersect(&a, &ae, &b, &be, acc(), res(), &mut budget, &Stop::new()).unwrap_err();
     assert_eq!(
         e,
-        run(&tpipe(), &mut Budget::unlimited(), &Stop::new()).unwrap_err()
+        run(&as_nurbs(tpipe()), &mut Budget::unlimited(), &Stop::new()).unwrap_err()
     );
     assert!(budget.used() > 1);
 }
 
 #[test]
 fn the_answer_is_the_same_bits_every_run_and_under_any_budget_that_suffices() {
-    for pair in [tpipe(), nurbs_sphere_and_plane()] {
+    for pair in refused_pairs() {
         let bits = |budget: &mut Budget| {
             let (at, size) = unresolved(run(&pair, budget, &Stop::new()).unwrap_err());
             [
@@ -205,7 +223,7 @@ fn the_answer_is_the_same_bits_every_run_and_under_any_budget_that_suffices() {
 
 #[test]
 fn swapping_the_operands_names_the_same_place() {
-    for pair in [tpipe(), nurbs_sphere_and_plane()] {
+    for pair in refused_pairs() {
         let [p, q] = pair;
         let fwd = unresolved(
             run(
@@ -338,3 +356,4 @@ fn an_empty_trace_is_the_proof_of_no_meeting() {
 }
 
 mod apart;
+mod field;

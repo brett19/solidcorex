@@ -53,6 +53,7 @@
 //! knots) are not kinds here; reading them is the reader's map, as STEP's is.
 
 mod any_curve;
+mod chart_check;
 mod closed;
 mod common;
 mod cone;
@@ -67,6 +68,7 @@ mod invert;
 mod nurbs_invert;
 mod pcurve;
 mod plane;
+mod recognize;
 mod sphere;
 mod surface;
 mod to_nurbs;
@@ -77,6 +79,7 @@ pub use closed::Closed;
 pub use cone::Cone;
 pub use cylinder::Cylinder;
 pub use edit::UvMap;
+pub use enclose::Along;
 pub use error::{Size, SurfaceError};
 pub use gap::{
     Aim, Bracket, GapError, Pending, Short, curve_curve_gap, curve_surface_gap, pcurve_edge_gap,
@@ -85,8 +88,9 @@ pub use gap::{
 pub use hull::{Hull, Hulls};
 pub use intersect::{Contact, CurveSurfaceHit, intersect_curve};
 pub use invert::{Closest, Foot, Inversion};
-pub use pcurve::{CurveKind, PcurveError, SurfaceKind, pcurve_of};
+pub use pcurve::{Check, CurveKind, PcurveError, SurfaceKind, pcurve_of};
 pub use plane::Plane;
+pub use recognize::{Recognized, Written, recognize, recognize_written};
 pub use sphere::Sphere;
 pub use surface::Surface;
 pub use torus::Torus;
@@ -115,6 +119,8 @@ const _: () = {
     ok::<Sphere>();
     ok::<Torus>();
     ok::<Surface>();
+    ok::<Recognized>();
+    ok::<Written>();
     ok::<Pole>();
     ok::<CurveSurfaceHit>();
     ok::<UvMap>();

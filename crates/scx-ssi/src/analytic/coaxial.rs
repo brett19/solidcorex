@@ -34,7 +34,7 @@ use super::overlap::{Map1, Span1, apart_angle, rectangles, spans};
 
 /// A surface of revolution's form, in its own axes (z times the sense).
 #[derive(Clone, Copy, Debug)]
-enum Form {
+pub(super) enum Form {
     Cylinder { r: f64 },
     Cone { r: f64, k: f64 },
     Sphere { r: f64 },
@@ -43,24 +43,24 @@ enum Form {
 
 /// A surface of revolution over its extent.
 #[derive(Clone, Copy, Debug)]
-struct Revolution {
-    axes: Axes,
-    form: Form,
+pub(super) struct Revolution {
+    pub(super) axes: Axes,
+    pub(super) form: Form,
     /// The extent's heights along its own axis (a sphere's and a torus's whole heights:
     /// wider than the extent's, never narrower).
-    heights: [f64; 2],
+    pub(super) heights: [f64; 2],
     /// The extent's angles about its own axis (STEP's `u`, from the frame's x to its y).
     around: [f64; 2],
     /// The extent's STEP `v`: a height, a latitude or a tube angle.
     along: [f64; 2],
     /// The farthest the extent reaches along and off its axis together (`max |h|` plus
     /// `max rho`): a tilt `w` of the axis moves no point by more than `w` times it.
-    reach: f64,
+    pub(super) reach: f64,
 }
 
 impl Revolution {
     /// `None` for a plane or a NURBS surface.
-    fn of(s: &Surface, e: &Extent2d) -> Option<Self> {
+    pub(super) fn of(s: &Surface, e: &Extent2d) -> Option<Self> {
         let far = |[v0, v1]: [f64; 2]| v0.abs().max(v1.abs());
         Some(match s {
             Surface::Cylinder(k) => {
@@ -167,7 +167,7 @@ enum Meridian {
 }
 
 /// Where two meridians meet.
-enum Meet {
+pub(super) enum Meet {
     /// They are one, within the tolerance.
     Coincident,
     /// At these points of the half-plane (none: apart by more than the slack).
@@ -201,7 +201,15 @@ fn meet(m1: &Meridian, m2: &Meridian, tol: f64, slack: f64) -> Option<Meet> {
             line_circle(p, u, apex, c, r, tol, slack)
         }
         (Meridian::Circle { c: c1, r: r1, .. }, Meridian::Circle { c: c2, r: r2, .. }) => {
-            circles(c1, r1, c2, r2, tol, slack)
+            circles(c1, r1, c2, r2, tol, slack).map(|m| match m {
+                // Two spheres' meridians are mirror images across the axis: one circle, not
+                // two.
+                Meet::Points(mut found) if found.len() == 2 => {
+                    found.retain(|(q, _)| q.x >= -tol);
+                    Meet::Points(found)
+                }
+                other => other,
+            })
         }
     }
 }
@@ -292,9 +300,17 @@ fn line_circle(
     (near > slack).then(|| Meet::Points(Vec::new()))
 }
 
-/// Two circles: coincident, apart, a touch, or two crossings on their radical line (the
-/// half-chord by Heron's product of the gaps, after the pin's WR-79).
-fn circles(c1: Point2, r1: f64, c2: Point2, r2: f64, tol: f64, slack: f64) -> Option<Meet> {
+/// Two circles in a plane: coincident, apart, a touch, or two crossings on their radical
+/// line (the half-chord by Heron's product of the gaps, after the pin's WR-79). Two meridians
+/// and two parallel cylinders' cross-sections alike.
+pub(super) fn circles(
+    c1: Point2,
+    r1: f64,
+    c2: Point2,
+    r2: f64,
+    tol: f64,
+    slack: f64,
+) -> Option<Meet> {
     let v = c2 - c1;
     let d = v.length();
     let dr = (r1 - r2).abs();
@@ -350,10 +366,10 @@ fn circles(c1: Point2, r1: f64, c2: Point2, r2: f64, tol: f64, slack: f64) -> Op
     let x = 0.5 * (d + (r1 - r2) * (r1 + r2) / d);
     let half = (out * (d + r1 + r2) * (d - r1 + r2) * (d + r1 - r2)).sqrt() / (2.0 * d);
     let w = Vec2::new(-u.y, u.x) * half;
-    let mut found = vec![(at(x) - w, Transversal), (at(x) + w, Transversal)];
-    // Two spheres' meridians are mirror images across the axis: one circle, not two.
-    found.retain(|(q, _)| q.x >= -tol);
-    Some(Meet::Points(found))
+    Some(Meet::Points(vec![
+        (at(x) - w, Transversal),
+        (at(x) + w, Transversal),
+    ]))
 }
 
 /// How `b`'s angle about `a`'s axis maps: `b`'s `u` at `a`'s `x` is `turn (x - phi)`, `phi`
@@ -608,7 +624,7 @@ pub(super) fn coaxial(
         }
     }
     let Some(on) = shared(&ra, &rb, tol) else {
-        return Closed::General;
+        return super::quadric::pair((a, ae), b, [&ra, &rb], &Clip::new(pa, pb, tol), tol);
     };
     let [ma, mb] = on.meridians;
     let Some(found) = meet(&ma, &mb, tol, tol + on.delta) else {

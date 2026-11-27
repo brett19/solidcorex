@@ -21,6 +21,9 @@
 //! - a plane against a plane, cylinder, cone, sphere or torus: [`section_by_plane`];
 //! - two spheres, or two of cylinder, cone, sphere and torus on one axis: circles about the
 //!   axis (the coaxial sections below);
+//! - two cylinders with parallel axes, and two cylinders or cones sharing an inscribed
+//!   sphere (Miller-Goldman, two cylinders of one radius whose axes meet among them): the
+//!   off-axis pairs below (research 73 §4.2);
 //! - every other pair: [`Closed::General`] for now (63 SS2).
 //!
 //! # The plane sections
@@ -31,7 +34,7 @@
 //! | cylinder | an ellipse, a circle, two lines or one tangent line, or empty | an ellipse too long for its precision |
 //! | cone | an ellipse, a circle, a parabola (the plane parallel to a generator), the branch of a hyperbola on the nappe (steeper), two generators or one tangent generator, the apex, or empty | a conic too long for its precision and not within the tolerance of a parabola |
 //! | sphere | a circle or a touch point, or empty | never |
-//! | torus | one or two circles across the axis, two meridian circles along it, or empty | every other plane (a spiric section) |
+//! | torus | one or two circles across the axis, two meridian circles along it, two Villarceau circles (the plane through the centre tangent to the tube twice, the two branch points), or empty | every other plane (a spiric section), and a Villarceau plane on part of the tube |
 //!
 //! A section within the tolerance of a simpler one is that one: a cylinder or cone cut
 //! nearly square to its axis is a circle when every point of the true ellipse lies within
@@ -78,6 +81,16 @@
 //! an `Empty` is only answered where every point is apart by more. The circles are clipped
 //! to both extents like the plane sections'.
 //!
+//! # The off-axis pairs
+//!
+//! | pair | solved | `General` |
+//! |---|---|---|
+//! | two cylinders, axes parallel | two lines, one tangent line, or empty | a tilt moving a point more than the tolerance, or a gap between the tolerance and its slack |
+//! | two cylinders or cones about one inscribed sphere | `a`'s sections by the two planes `L_a = +- L_b` (conics), cut at the branch points where the circles of contact cross, each a `Tangent` point | the axes' distance plus the spheres' radii apart past the tolerance; a section holding a tangent piece or a touch; the circles of contact touching |
+//!
+//! A curve that runs through a branch point is cut there: the surfaces are tangent at it,
+//! and `n_a x n_b` turns over across it, so each piece runs along its own.
+//!
 //! Coincident patches give their overlap's pieces, rectangles of both surfaces' uv split at
 //! either one's seam. Two spheres one within the tolerance whose axes differ by more are
 //! [`Closed::General`]: the overlap of their latitude and longitude patches is no rectangle
@@ -86,6 +99,7 @@
 mod clip;
 mod coaxial;
 mod overlap;
+mod quadric;
 mod section;
 
 use section::Order;
@@ -123,8 +137,9 @@ pub struct IntersectionCurve {
 pub struct IntersectionPoint {
     /// The point.
     pub point: Point3,
-    /// How the surfaces meet there: `Tangent` for a touch, `Transversal` for a crossing
-    /// curve whose piece inside the extents is no longer than the tolerance.
+    /// How the surfaces meet there: `Tangent` for a touch or a branch point (where curves
+    /// cross, the surfaces tangent), `Transversal` for a crossing curve whose piece inside
+    /// the extents is no longer than the tolerance.
     pub contact: Contact,
 }
 
