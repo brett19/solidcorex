@@ -1751,18 +1751,33 @@ IGES 126 yet, so this sets the shape that 126 should mirror.
   finite and positive (no `[1e-3, 100]`); `w P` finite; bounds `U[p] <= U(0) < U(1) <= U[m-p]`
   written to refuse NaN. All `Refused`; an index outside an array in the ported loops is a
   `Defect` (never reached by the difftest pool).
-- **Repairs** are the pin's, on homogeneous points, in the pin's arithmetic order. They keep
-  the surface on the bounds for clamping; the multiplicity reduction averages points and does
-  not (as the pin: it is a repair of malformed data). A surface that needs no repair keeps its
-  points and weights exactly.
+- **Repairs: ruled 11-27 (coordinator), for Brett's review.** scx does not port the pin's
+  averaging reduction (`N_IgesCorrectSrfKnots`): it changes the surface, and a result must be
+  the surface the data defines. Clamping to the bounds is the pin's, on homogeneous points, in
+  its arithmetic order, and keeps the surface on the bounds.
+  - An interior knot repeated `p + 1` times is a break (two surfaces): refused through the
+    surface's own check (`BadKnots` over `NurbsError::Multiplicity`), Refused. Bounds that leave
+    the break outside the domain are fine.
+  - An end knot repeated more than `p + 1` times is dropped with its row or column of points,
+    exactly: its basis function is zero on the domain, so the points cannot matter (the pin
+    keeps the point whose function is zero and drops the next, which is wrong). The drop runs
+    first, on the points given, so those kept are exact and rationality is decided on the
+    surviving weights. The testkit's exact model takes no such knots, so the unit test
+    `surplus_end_knots_drop_exactly` proves it by construction: a surface with its end knots
+    repeated once more and rows and columns of arbitrary points added returns as the surface,
+    equal exactly.
+  - A surface that needs no clamping keeps its points and weights exactly.
 - **Round trip.** `from_iges(&to_iges(s)) == s` exactly for clamped `s`. Exceptions, by
   design: a rational surface of all-equal weights returns as its polynomial form; an unclamped
   surface returns clamped to its domain (the same surface there).
-- **Adversarial pass.** Keeping weights whenever given (so equal weights round-trip) would
+- **Adversarial pass.** Porting the averaging as the pin does would make the pair total on
+  malformed files, but returns a different surface than the data defines; rejected (ruling
+  above). Keeping weights whenever given (so equal weights round-trip) would
   differ from the pin's stored form for no gain in the surface; rejected. `to_iges` refusing
   unclamped surfaces would make the pair total only on clamped data; rejected, since the IGES
   entity allows unclamped knots and `from_iges` defines what they mean.
 - **Pin defect `iges_128_surface`** (`pin_defects.rs`): the pin refuses degrees 18 to 31 and
   weights outside `[1e-3, 100]`, reads a prefix of long knot arrays, and builds from NaN
-  weights, knots, bounds and points and from overflowing `w P`; scx answers by the definition.
+  weights, knots, bounds and points and from overflowing `w P`, and averages away breaks and
+  surplus end knots; scx answers by the definition.
 

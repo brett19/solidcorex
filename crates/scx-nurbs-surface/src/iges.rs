@@ -4,8 +4,11 @@
 //! - [`Iges128`]: the entity's parameter list as the pin's `N_Iges128Srf` takes it (the counts
 //!   `K1`, `K2` are the net's shape, the degrees `M1`, `M2`, the knots `S`, `T`, the weights
 //!   `W`, the points `X Y Z`, the bounds `U(0..1)`, `V(0..1)`);
-//! - [`from_iges`]: the pin's `N_Iges128Srf` with its repairs: clamp the knots to the bounds
-//!   (`N_IgesClampSrf`), reduce the multiplicities (`N_IgesCorrectSrfKnots`);
+//! - [`from_iges`]: the pin's `N_Iges128Srf` with its clamp of the knots to the bounds
+//!   (`N_IgesClampSrf`). Not its averaging reduction of repeated knots
+//!   (`N_IgesCorrectSrfKnots`), which changes the surface: an end knot repeated more than
+//!   `p + 1` times is dropped exactly (with its row or column of points, whose basis function
+//!   is zero on the domain), and an interior knot repeated `p + 1` times, a break, is refused;
 //! - [`to_iges`]: the entity of a surface, which the pin has no counterpart of.
 //!
 //! The file format (records, the `P` section, fixed-width fields) is out of scope: the pin's
@@ -81,9 +84,11 @@ pub fn to_iges(s: &NurbsSurface<3>) -> Iges128 {
 /// The surface is rational unless every weight equals the first. The checks, in order: the
 /// degrees; the knot counts, finiteness and order; the points and weights (finite, positive
 /// weights, finite `w P`); the bounds against the knots (`U[p] <= U(0) < U(1) <= U[m - p]`,
-/// each direction); then the repairs, which refuse when no control point is left.
+/// each direction); then the surplus end knots are dropped and the knots clamped, which
+/// refuses when no control point is left; then the surface's own checks, which refuse a break
+/// (an interior knot repeated `p + 1` times).
 ///
-/// The repairs change the stored form but not the surface on the bounds. The control points
+/// Neither step changes the surface on the bounds. The control points
 /// of a repaired surface are `w P / w` of the repaired homogeneous points; a surface that
 /// needs no repair keeps its points exactly.
 pub fn from_iges(e: &Iges128) -> Result<NurbsSurface<3>> {
@@ -149,7 +154,27 @@ pub fn from_iges(e: &Iges128) -> Result<NurbsSurface<3>> {
         }
     }
 
-    let rational = !all_equal(weights);
+    // An end knot repeated more than p + 1 times: the extra basis functions are zero on the
+    // domain, so the extra knots go with their rows and columns, exactly, before anything else
+    // (the points kept are the ones given).
+    let (mut ks, mut kt) = (s.clone(), t.clone());
+    let mut pw: Vec<Vec<([f64; 3], f64)>> = points
+        .rows()
+        .zip(weights.rows())
+        .map(|(prow, wrow)| prow.iter().copied().zip(wrow.iter().copied()).collect())
+        .collect();
+    drop_ends(&mut ks, &mut pw, m1);
+    let mut cols = transpose(&pw);
+    drop_ends(&mut kt, &mut cols, m2);
+    let pw = transpose(&cols);
+    let (nr, nc) = (pw.len(), pw.first().map_or(0, Vec::len));
+    let flat: Vec<([f64; 3], f64)> = pw.into_iter().flatten().collect();
+    let points =
+        Net::new(nr, nc, flat.iter().map(|x| x.0).collect()).map_err(IgesError::Surface)?;
+    let weights =
+        Net::new(nr, nc, flat.iter().map(|x| x.1).collect()).map_err(IgesError::Surface)?;
+
+    let rational = !all_equal(&weights);
     let mut rows_h: Vec<Vec<H>> = points
         .rows()
         .zip(weights.rows())
@@ -166,8 +191,7 @@ pub fn from_iges(e: &Iges128) -> Result<NurbsSurface<3>> {
                 .collect()
         })
         .collect();
-    let (mut ks, mut kt) = (s.clone(), t.clone());
-    let changed = repair(&mut rows_h, &mut ks, &mut kt, (m1, m2), u, v)?;
+    let changed = clamp(&mut rows_h, &mut ks, &mut kt, (m1, m2), u, v)?;
 
     let (ku, kv) = (basis(ParamAxis::U, m1, ks)?, basis(ParamAxis::V, m2, kt)?);
     let surface = if changed {
@@ -182,7 +206,7 @@ pub fn from_iges(e: &Iges128) -> Result<NurbsSurface<3>> {
         }
     } else {
         // The data as given: the points exactly.
-        NurbsSurface::new(ku, kv, points.clone(), rational.then(|| weights.clone()))
+        NurbsSurface::new(ku, kv, points, rational.then_some(weights))
     };
     surface.map_err(IgesError::Surface)
 }
@@ -238,10 +262,10 @@ struct Oob;
 
 type Idx<T> = core::result::Result<T, Oob>;
 
-/// The two repair passes over the net and knots: clamping, then knot correction. Returns
+/// The clamping of the net and knots to the bounds, u then v. Returns
 /// whether the net changed. On a defect, which axis is not known here, so it is `U`'s; callers
 /// map it.
-fn repair(
+fn clamp(
     rows: &mut Vec<Vec<H>>,
     s: &mut Vec<f64>,
     t: &mut Vec<f64>,
@@ -275,36 +299,6 @@ fn repair(
         changed = true;
     }
     *rows = transpose(&cols);
-
-    // Knot correction (`N_IgesCorrectSrfKnots`): u, then v.
-    let (n, m) = (rows.len() - 1, cols.len() - 1);
-    let (nn, rr) = correct_dir(
-        s,
-        rows,
-        n,
-        p,
-        |a, b| sum_rows(a, b),
-        |d, a| scale_rows(d, a),
-    )
-    .map_err(defect(ParamAxis::U))?;
-    rows.truncate(nn + 1);
-    let mut cols = transpose(rows);
-    let (mm, ss) = correct_dir(
-        t,
-        &mut cols,
-        m,
-        q,
-        |a, b| sum_rows(a, b),
-        |d, a| scale_rows(d, a),
-    )
-    .map_err(defect(ParamAxis::V))?;
-    if nn < n || mm < m {
-        cols.truncate(mm + 1);
-        s.truncate(rr + 1);
-        t.truncate(ss + 1);
-        *rows = transpose(&cols);
-        changed = true;
-    }
     Ok(changed)
 }
 
@@ -315,7 +309,7 @@ fn all_equal(weights: &Net<f64>) -> bool {
 }
 
 /// `net[i][j]` -> `out[j][i]`.
-fn transpose(net: &[Vec<H>]) -> Vec<Vec<H>> {
+fn transpose<T: Copy>(net: &[Vec<T>]) -> Vec<Vec<T>> {
     let cols = net.first().map_or(0, Vec::len);
     (0..cols)
         .map(|j| net.iter().filter_map(|row| row.get(j).copied()).collect())
@@ -335,22 +329,6 @@ fn comb(alf: f64, a: &H, oma: f64, b: &H) -> H {
 
 fn comb_rows(alf: f64, a: &[H], oma: f64, b: &[H]) -> Vec<H> {
     a.iter().zip(b).map(|(a, b)| comb(alf, a, oma, b)).collect()
-}
-
-/// `A + B` (`N_Sum2CPts`).
-fn sum_rows(a: &[H], b: &[H]) -> Vec<H> {
-    a.iter()
-        .zip(b)
-        .map(|(a, b)| {
-            let ([a0, a1, a2, a3], [b0, b1, b2, b3]) = (*a, *b);
-            [a0 + b0, a1 + b1, a2 + b2, a3 + b3]
-        })
-        .collect()
-}
-
-/// `d A` (`N_ScaleCPt`).
-fn scale_rows(d: f64, a: &[H]) -> Vec<H> {
-    a.iter().map(|a| a.map(|x| d * x)).collect()
 }
 
 /// `a[i]` for a signed index.
@@ -483,106 +461,27 @@ fn clamp_dir<T: Clone>(
     Ok(Some((qw, uq)))
 }
 
-/// `N_IgesCorrectCrvKnots` / one direction of `N_IgesCorrectSrfKnots`, in place, over knots
-/// `up` (`m + 1` of them) and control points `pw[0..=n]` of degree `p`: interior knots
-/// repeated more than `p` times are reduced to `p` (the replaced points averaged), end knots
-/// more than `p + 1` times to `p + 1`. Returns the new `(n, m)`.
-fn correct_dir<T: Clone>(
-    up: &mut [f64],
-    pw: &mut [T],
-    n: usize,
-    p: usize,
-    sum: impl Fn(&T, &T) -> T,
-    scale: impl Fn(f64, &T) -> T,
-) -> Idx<(usize, usize)> {
-    let conv = |x: usize| isize::try_from(x).map_err(|_| Oob);
-    let mut nn = conv(n)?;
-    let mut mm = conv(up.len())? - 1;
-    let p = conv(p)?;
-
-    // Eliminate internal multiplicities greater than p.
-    let us = at(up, 0)?;
-    let ue = at(up, mm)?;
-    let mut ii = p + 1;
-    while at(up, ii)? == at(up, ii - 1)? {
-        ii += 1;
-    }
-    while at(up, ii)? < ue {
-        // Multiplicity of UP[ii].
-        let mut mult = 1;
-        while at(up, ii)? == at(up, ii + mult)? {
-            mult += 1;
-        }
-        if mult > p {
-            // Reduce to multiplicity p.
-            let mut k1 = ii - 1; // first control point to replace
-            let k2 = k1 + mult - p; // last control point to replace
-            let k3 = k2 - k1;
-            for jj in (k1 + 1)..=k2 {
-                let a = at(pw, k1)?;
-                let b = at(pw, jj)?;
-                *at_mut(pw, k1)? = sum(&a, &b);
+/// Drops the knots an end repeats beyond `p + 1` times, with the items (rows or columns of
+/// control points) of the same index.
+fn drop_ends<T>(knots: &mut Vec<f64>, items: &mut Vec<T>, p: usize) {
+    let repeated = |k: &[f64], at_end: bool| {
+        let end = if at_end { k.last() } else { k.first() };
+        let run = k.iter();
+        k.len() > p + 2
+            && if at_end {
+                run.rev().take(p + 2).all(|x| Some(x) == end)
+            } else {
+                run.take(p + 2).all(|x| Some(x) == end)
             }
-            let d = 1.0 / (k3 as f64 + 1.0);
-            let a = at(pw, k1)?;
-            *at_mut(pw, k1)? = scale(d, &a);
-            k1 += 1;
-            for jj in (k2 + 1)..=nn {
-                let a = at(pw, jj)?;
-                *at_mut(pw, k1)? = a;
-                k1 += 1;
-            }
-            nn -= k3;
-            k1 = ii + p;
-            for jj in (ii + mult)..=mm {
-                let a = at(up, jj)?;
-                *at_mut(up, k1)? = a;
-                k1 += 1;
-            }
-            mm -= k3;
-            mult = p;
-        }
-        ii += mult;
+    };
+    while repeated(knots, false) {
+        knots.remove(0);
+        items.remove(0);
     }
-
-    // The multiplicity of UP[0] is at most p + 1.
-    let mut mult = 0;
-    while us == at(up, p + mult + 1)? {
-        mult += 1;
+    while repeated(knots, true) {
+        knots.pop();
+        items.pop();
     }
-    if mult > 0 {
-        let mut k1 = p + 1;
-        for jj in (p + mult + 1)..=mm {
-            let a = at(up, jj)?;
-            *at_mut(up, k1)? = a;
-            k1 += 1;
-        }
-        mm -= mult;
-        k1 = 1;
-        for jj in (mult + 1)..=nn {
-            let a = at(pw, jj)?;
-            *at_mut(pw, k1)? = a;
-            k1 += 1;
-        }
-        nn -= mult;
-    }
-
-    // The multiplicity of UP[mm] is at most p + 1.
-    let mut mult = 0;
-    while ue == at(up, mm - p - mult - 1)? {
-        mult += 1;
-    }
-    if mult > 0 {
-        mm -= mult;
-        let a = at(pw, nn)?;
-        *at_mut(pw, nn - mult)? = a;
-        nn -= mult;
-    }
-
-    Ok((
-        usize::try_from(nn).map_err(|_| Oob)?,
-        usize::try_from(mm).map_err(|_| Oob)?,
-    ))
 }
 
 #[cfg(test)]
@@ -758,27 +657,69 @@ mod tests {
         assert_eq!(got.points().points(), d.points.as_slice());
     }
 
+    /// An end knot repeated `p + 2` times: the extra knot goes with its row (or column). The
+    /// testkit's exact model takes no such knots, so the proof is by construction: take a
+    /// surface, repeat its end knots once more with rows and columns of arbitrary points, and
+    /// the result is the surface exactly. (The basis function of the extra point is zero on
+    /// the domain, so the points cannot matter.)
     #[test]
-    fn multiplicities_are_reduced() {
-        // Degree 2, uniform 5 x 5 net; make an interior u knot of multiplicity 3 (a break),
-        // and the start knots of multiplicity 4 (above p + 1).
+    fn surplus_end_knots_drop_exactly() {
+        let mut rng = Rng::new(10);
+        for w in [Weights::Unit, Weights::Moderate] {
+            let d = data(&mut rng, (2, 3), Knots::Uniform, w);
+            let s = build(&d).unwrap();
+            let mut e = to_iges(&s);
+            // Rationality is decided on all the weights given, as the pin does.
+            let junk_weight = if s.is_rational() { 2.0 } else { 1.0 };
+            let (rows, cols) = (e.points.nrows(), e.points.ncols());
+            // One more knot at each end of each direction, and a row and column of junk.
+            e.s.insert(0, e.s[0]);
+            e.s.push(e.s[e.s.len() - 1]);
+            e.t.insert(0, e.t[0]);
+            e.t.push(e.t[e.t.len() - 1]);
+            let grid = |f: &dyn Fn(usize, usize) -> Option<usize>, fill: f64| {
+                let mut pts = Vec::new();
+                let mut ws = Vec::new();
+                for i in 0..rows + 2 {
+                    for j in 0..cols + 2 {
+                        if let (Some(a), Some(b)) = (f(i, rows), f(j, cols)) {
+                            pts.push(e.points.get(a, b).copied().unwrap());
+                            ws.push(e.weights.get(a, b).copied().unwrap());
+                        } else {
+                            pts.push([fill, -fill, 7.0 * fill]);
+                            ws.push(junk_weight);
+                        }
+                    }
+                }
+                (pts, ws)
+            };
+            let inner = |i: usize, n: usize| (i >= 1 && i <= n).then(|| i - 1);
+            let (pts, ws) = grid(&inner, 123.0);
+            e.points = Net::new(rows + 2, cols + 2, pts).unwrap();
+            e.weights = Net::new(rows + 2, cols + 2, ws).unwrap();
+            assert_eq!(from_iges(&e).unwrap(), s);
+        }
+    }
+
+    /// An interior knot repeated `p + 1` times is a break: refused, not averaged.
+    #[test]
+    fn a_break_is_refused() {
         let mut rng = Rng::new(10);
         let mut d = data(&mut rng, (2, 2), Knots::Uniform, Weights::Unit);
         d.knots_u = vec![0.0, 0.0, 0.0, 0.5, 0.5, 0.5, 1.0, 1.0, 1.0];
-        d.knots_v = vec![0.0, 0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0];
-        let n = 6 * 5;
-        d.points = d.points.iter().copied().cycle().take(n).collect();
+        d.points = d.points.iter().copied().cycle().take(6 * 5).collect();
         let e = entity(&d, [0.0, 1.0], [0.0, 1.0]);
-        let got = from_iges(&e).unwrap();
-        assert_eq!(
-            got.knots(ParamAxis::U),
-            &[0.0, 0.0, 0.0, 0.5, 0.5, 1.0, 1.0, 1.0]
-        );
-        assert_eq!(
-            got.knots(ParamAxis::V),
-            &[0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0]
-        );
-        assert_eq!((got.points().nrows(), got.points().ncols()), (5, 4));
+        let Err(IgesError::Surface(err @ NurbsSurfaceError::BadKnots { axis, cause })) =
+            from_iges(&e)
+        else {
+            panic!("a break was not refused");
+        };
+        assert_eq!(axis, ParamAxis::U);
+        assert!(matches!(cause, scx_nurbs::NurbsError::Multiplicity { .. }));
+        assert_eq!(err.kind(), scx_num::error::ErrorKind::Refused);
+        // Bounds that leave the break outside are fine.
+        let e = entity(&d, [0.0, 0.4], [0.0, 1.0]);
+        assert!(from_iges(&e).is_ok());
     }
 
     #[test]

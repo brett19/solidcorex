@@ -1981,7 +1981,8 @@ use crate::t_nurbs_surface_iges::Ent;
 /// Why `e` is not IGES 128 data for a surface, or `None` when it is: the entity's definition,
 /// as scx's rulings read it.
 ///
-/// The net is a whole rectangle with one weight per point; each degree is from 1 to 31 and
+/// The net is a whole rectangle with one weight per point; no knot strictly inside the bounds
+/// repeats `p + 1` times (a break: two surfaces); each degree is from 1 to 31 and
 /// the knots number `points + degree + 1` along it, finite and non-decreasing; the bounds
 /// satisfy `U[p] <= U(0) < U(1) <= U[m - p]` (and the same in v); every point is finite, every
 /// weight finite and positive, and `w P` finite when the weights differ.
@@ -2010,6 +2011,10 @@ fn not_an_entity(e: &Ent) -> Option<String> {
         if !(k[d] <= b[0] && b[0] < b[1] && b[1] <= k[k.len() - 1 - d]) {
             return Some(format!("{axis} bounds {b:?} outside the domain"));
         }
+        let run = |x: f64| k.iter().filter(|&&y| y == x).count();
+        if k.iter().any(|&x| b[0] < x && x < b[1] && run(x) > d) {
+            return Some(format!("a break in the {axis} domain"));
+        }
     }
     if e.points.iter().flatten().any(|x| !x.is_finite()) {
         return Some("a control point is not finite".to_owned());
@@ -2029,18 +2034,16 @@ fn not_an_entity(e: &Ent) -> Option<String> {
     None
 }
 
-/// Whether the repairs of the entity change its surface: a knot repeated more than `p` times
-/// inside the domain or more than `p + 1` times at an end (the repair averages points, so the
-/// surface is not kept).
-fn needs_lossy_repair(e: &Ent) -> bool {
+/// Whether an end knot of `e` is repeated more than `p + 1` times. scx drops the surplus
+/// knots with their rows and columns (exact: the dropped basis functions are zero on the
+/// domain, proved by the unit test `surplus_end_knots_drop_exactly`); the testkit's exact model
+/// takes no such knots, so these are checked structurally here.
+fn has_surplus_end_knots(e: &Ent) -> bool {
     [(e.degrees.0, &e.knots_u), (e.degrees.1, &e.knots_v)]
         .into_iter()
         .any(|(p, k)| {
-            let (low, high) = (k[p], k[k.len() - 1 - p]);
-            k.iter().any(|&x| {
-                let run = k.iter().filter(|&&y| y == x).count();
-                run > p + 1 || (run > p && x != low && x != high)
-            })
+            let run = |x: Option<&f64>| k.iter().filter(|&&y| Some(&y) == x).count();
+            run(k.first()) > p + 1 || run(k.last()) > p + 1
         })
 }
 
@@ -2077,7 +2080,7 @@ fn iges_answer(e: &Ent, built: &Option<Read>) -> Result<(), String> {
     // The exact evaluation is rational arithmetic on doubles of every exponent: small nets of
     // moderate weights only (the rest are checked structurally above).
     let moderate = e.weights.iter().all(|w| (1e-3..=1e3).contains(w));
-    if needs_lossy_repair(e) || e.points.len() > 20 || !moderate {
+    if has_surplus_end_knots(e) || e.points.len() > 20 || !moderate {
         return Ok(());
     }
     let want = Surface::<3>::new(
@@ -2114,19 +2117,22 @@ fn iges_answer(e: &Ent, built: &Option<Read>) -> Result<(), String> {
     Ok(())
 }
 
-/// `from_iges` where scx and the pin disagree on acceptance. The pin's `N_Iges128Srf` refuses
-/// what is an entity: degrees 18 to 31 (its cap is 17) and weights outside `[1e-3, 100]`
-/// (the surface does not change when every weight is scaled, so no range is a property of
-/// it); it reads a prefix of arrays longer than its counts say (an extra knot), and builds
-/// from NaN weights, knots, bounds and points, and from `w P` that overflows (the
-/// comparisons `w < 1e-3 || w > 100` and `up > v[0]` are false for NaN, nothing checks a
-/// coordinate). Truth: the definition ([`not_an_entity`]); scx must answer by it, and a
-/// surface it builds must be clamped to the bounds and the entity's surface on them
-/// ([`iges_answer`]).
+/// `from_iges` where scx and the pin disagree. The pin's `N_Iges128Srf` refuses what is an
+/// entity: degrees 18 to 31 (its cap is 17) and weights outside `[1e-3, 100]` (the surface
+/// does not change when every weight is scaled). It reads a prefix of arrays longer than its
+/// counts say, builds from NaN weights, knots, bounds and points and from `w P` that overflows
+/// (`w < 1e-3 || w > 100` and `up > v[0]` are false for NaN; nothing checks a coordinate), and
+/// "repairs" by averaging control points: a break (an interior knot repeated `p + 1` times, two
+/// surfaces) and a surplus end knot (it drops the point after the first, where the first is the
+/// one whose basis function is zero on the domain). Both change the surface. Truth: the
+/// definition ([`not_an_entity`]): scx refuses the break and drops the surplus end knot with its
+/// row or column, exactly; a surface it builds is clamped to the bounds and is the entity's
+/// surface on them ([`iges_answer`]).
 pub fn iges_128_surface() -> PinDefect<(Ent,), Option<Read>> {
     PinDefect {
         reason: "the pin refuses degrees above 17 and weights outside [1e-3, 100], reads a \
-                 prefix of long arrays, and passes NaN weights, knots, bounds and points",
+                 prefix of long arrays, passes NaN weights, knots, bounds and points, and \
+                 averages away breaks and surplus end knots, changing the surface",
         applies: Applies::Disagreeing,
         check: |(e,), b| iges_answer(e, b),
     }
