@@ -4426,7 +4426,28 @@ fn poly_size(c: &[f64], x: f64) -> f64 {
 /// rationals with their multiplicities, ascending, each to within `2^-116` of the least
 /// nonzero root's magnitude (from Cauchy's lower bound), never coarser than needed to tell
 /// doubles apart there. A zero root is exactly zero.
-fn exact_real_roots(c: &[f64]) -> (scx_testkit::poly::Poly, Vec<(Rat, u32)>) {
+///
+/// The result depends on `c` alone, and the sweep asks for the same `c` at every tolerance and
+/// from several tests, so the results are kept by the coefficients' bits (a pure function, so
+/// nothing but the time changes).
+fn exact_real_roots(c: &[f64]) -> std::sync::Arc<(scx_testkit::poly::Poly, Vec<(Rat, u32)>)> {
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex, OnceLock};
+    type Roots = Arc<(scx_testkit::poly::Poly, Vec<(Rat, u32)>)>;
+    static CACHE: OnceLock<Mutex<HashMap<Vec<u64>, Roots>>> = OnceLock::new();
+    let key: Vec<u64> = c.iter().map(|x| x.to_bits()).collect();
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some(hit) = cache.lock().ok().and_then(|m| m.get(&key).cloned()) {
+        return hit;
+    }
+    let fresh = Arc::new(exact_real_roots_uncached(c));
+    if let Ok(mut m) = cache.lock() {
+        m.insert(key, fresh.clone());
+    }
+    fresh
+}
+
+fn exact_real_roots_uncached(c: &[f64]) -> (scx_testkit::poly::Poly, Vec<(Rat, u32)>) {
     let rc: Vec<Rat> = c.iter().filter_map(|&x| Rat::from_f64(x)).collect();
     let p = scx_testkit::poly::Poly::new(rc);
     let zeros = c.iter().take_while(|&&v| v == 0.0).count();
@@ -4505,14 +4526,15 @@ fn poly_meets_contract(c: &[f64], got: &[f64]) -> Result<(), String> {
     {
         return Err(format!("{got:?}: not distinct and ascending"));
     }
-    let (p, truth) = exact_real_roots(c);
+    let exact = exact_real_roots(c);
+    let (p, truth) = (&exact.0, &exact.1);
     // twice the distance, as the bound
     let dist = |x: f64, r: &Rat| {
         Rat::from_f64(x).map_or(f64::INFINITY, |rx| (&rx - r).abs().scale(1).to_f64())
     };
     // a root past the double range has no double to be returned
     for (r, m) in truth.iter().filter(|(r, _)| r.to_f64().is_finite()) {
-        let b = poly_root_bound(&p, c, r);
+        let b = poly_root_bound(p, c, r);
         let near = got
             .iter()
             .map(|&x| dist(x, r))
@@ -4535,7 +4557,7 @@ fn poly_meets_contract(c: &[f64], got: &[f64]) -> Result<(), String> {
         };
         let near = truth
             .iter()
-            .any(|(r, _)| dist(x, r) <= poly_root_bound(&p, c, r));
+            .any(|(r, _)| dist(x, r) <= poly_root_bound(p, c, r));
         if !(near || p.eval(&rx).abs().to_f64() <= POLY_ETA * poly_size(c, x)) {
             return Err(format!("returned {x:e} is no root"));
         }
