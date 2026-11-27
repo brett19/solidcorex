@@ -23,8 +23,12 @@
 //!    kept where inside both; the stage-2 spans cut the same way and kept where inside the
 //!    face; coincident pairs with their overlap and sense; isolated touch points. A pair
 //!    with no closed form is [`BooleanUnsupported::SsiPair`].
-//! 5. **Imprint** (BO3), **classify** and **select and build** (BO4): not built yet.
-//!    [`boolean`] runs stages 1 to 4 and then answers [`BooleanUnsupported::Stage`].
+//! 5. **Imprint** (BO3). Into `a.edit()`: each operand edge cut at the merged points in
+//!    it, each section a new edge, each face split by its cuts with exact pcurves, and
+//!    `b`'s faces copied in sharing the new edges, with lineage from both operands. A
+//!    loop that needs a fitted pcurve is [`BooleanUnsupported::Pcurve`].
+//! 6. **Classify** and **select and build** (BO4): not built yet. [`boolean`] runs stages
+//!    1 to 5 and then answers [`BooleanUnsupported::Stage`].
 //!
 //! **Reads only.** Both operands are `&Brep`; their box trees and boundary trees are filled
 //! on first read by `scx-brep`, and the work charged does not depend on whether they were
@@ -38,6 +42,7 @@ mod contact;
 mod error;
 mod faceface;
 mod geom;
+mod imprint;
 mod pairs;
 mod points;
 

@@ -128,10 +128,17 @@ fn frame(o: [f64; 3], z: [f64; 3], x: [f64; 3]) -> Frame {
     .unwrap()
 }
 
-const Z: [f64; 3] = [0.0, 0.0, 1.0];
-const X: [f64; 3] = [1.0, 0.0, 0.0];
+pub(super) const Z: [f64; 3] = [0.0, 0.0, 1.0];
+pub(super) const X: [f64; 3] = [1.0, 0.0, 0.0];
 
-fn cyl(o: [f64; 3], z: [f64; 3], x: [f64; 3], radius: f64, h: f64, doc: Document) -> Brep {
+pub(super) fn cyl(
+    o: [f64; 3],
+    z: [f64; 3],
+    x: [f64; 3],
+    radius: f64,
+    h: f64,
+    doc: Document,
+) -> Brep {
     cylinder(
         &frame(o, z, x),
         Length::from_mm(radius),
@@ -142,7 +149,7 @@ fn cyl(o: [f64; 3], z: [f64; 3], x: [f64; 3], radius: f64, h: f64, doc: Document
     .body
 }
 
-fn ball(o: [f64; 3], radius: f64, doc: Document) -> Brep {
+pub(super) fn ball(o: [f64; 3], radius: f64, doc: Document) -> Brep {
     sphere(&frame(o, Z, X), Length::from_mm(radius), &doc)
         .unwrap()
         .body
@@ -335,16 +342,16 @@ fn crossed_cylinders_have_no_closed_form_here() {
 }
 
 #[test]
-fn the_public_call_stops_at_imprint() {
+fn the_public_call_stops_at_classification() {
     let doc = Document::default();
     let a = cuboid([-2.0, -2.0, 0.0], [2.0, 2.0, 1.0], doc);
     let b = cyl([0.0, 0.0, -1.0], Z, X, 1.0, 3.0, doc);
     let e = call(&a, &b, doc, &Settings::new());
     assert_eq!(
         e,
-        BooleanError::Unsupported(BooleanUnsupported::Stage(Stage::Imprint))
+        BooleanError::Unsupported(BooleanUnsupported::Stage(Stage::Classify))
     );
-    assert_eq!(e.name(), "stage_imprint");
+    assert_eq!(e.name(), "stage_classify");
 }
 
 #[test]

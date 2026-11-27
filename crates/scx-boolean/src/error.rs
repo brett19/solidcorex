@@ -85,14 +85,22 @@ pub enum BooleanUnsupported {
     /// A stage of the method not built yet: the operands got past every stage before it.
     /// Each later task removes the stage it builds (72 §5.8).
     Stage(Stage),
+    /// A face whose new loops need a pcurve with no exact form here (a fitted one, say:
+    /// two spheres' circle on either sphere): step 5's fitter writes it.
+    Pcurve {
+        /// The operand.
+        operand: Operand,
+        /// The face.
+        face: FaceId,
+    },
 }
 
 /// A stage of the Boolean (72 §5.4), in pipeline order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
 pub enum Stage {
-    /// Imprint: splitting each face by its sections and lying edges (BO3).
-    Imprint,
+    /// Classification of the imprinted faces against the other operand (BO4).
+    Classify,
 }
 
 /// The method's own failure on valid operands.
@@ -166,6 +174,32 @@ pub enum BooleanDefect {
         /// The edge.
         edge: EdgeId,
     },
+    /// The imprint's walk around a cut face's half-edges found no next one, or came back
+    /// to a half-edge it had left.
+    Trace {
+        /// The operand.
+        operand: Operand,
+        /// The face.
+        face: FaceId,
+    },
+    /// The pcurve writer refused a loop the imprint traced on a face.
+    Loops {
+        /// The operand.
+        operand: Operand,
+        /// The face.
+        face: FaceId,
+    },
+    /// A piece of an edge the imprint looked for (by parameter, or along the other
+    /// operand's edge) is not there.
+    Piece {
+        /// The operand.
+        operand: Operand,
+        /// The edge.
+        edge: EdgeId,
+    },
+    /// The draft refused an entity or a lineage record the imprint wrote, or lost one it
+    /// read.
+    Draft,
 }
 
 impl BooleanError {
@@ -192,7 +226,8 @@ impl BooleanError {
             Self::Unsupported(BooleanUnsupported::Nurbs { .. }) => "nurbs",
             Self::Unsupported(BooleanUnsupported::Chain { .. }) => "chain",
             Self::Unsupported(BooleanUnsupported::SsiPair { .. }) => "ssi_pair",
-            Self::Unsupported(BooleanUnsupported::Stage(Stage::Imprint)) => "stage_imprint",
+            Self::Unsupported(BooleanUnsupported::Stage(Stage::Classify)) => "stage_classify",
+            Self::Unsupported(BooleanUnsupported::Pcurve { .. }) => "no_exact_pcurve",
             Self::Exhausted { .. } => "exhausted",
             Self::Cancelled => "cancelled",
             Self::Defect(BooleanDefect::NoFaceBox { .. }) => "no_face_box",
@@ -204,6 +239,10 @@ impl BooleanError {
             Self::Defect(BooleanDefect::LooseSection { .. }) => "loose_section",
             Self::Defect(BooleanDefect::LooseSpan { .. }) => "loose_span",
             Self::Defect(BooleanDefect::NoEdge { .. }) => "no_edge",
+            Self::Defect(BooleanDefect::Trace { .. }) => "imprint_trace",
+            Self::Defect(BooleanDefect::Loops { .. }) => "imprint_loops",
+            Self::Defect(BooleanDefect::Piece { .. }) => "imprint_piece",
+            Self::Defect(BooleanDefect::Draft) => "imprint_draft",
         }
     }
 
@@ -263,8 +302,11 @@ impl fmt::Display for BooleanError {
                 f,
                 "operand 0 {a} ({ka}) and operand 1 {b} ({kb}) meet in no closed form yet"
             ),
-            Self::Unsupported(BooleanUnsupported::Stage(Stage::Imprint)) => {
-                f.write_str("the imprint stage is not built yet")
+            Self::Unsupported(BooleanUnsupported::Pcurve { operand, face }) => {
+                write!(f, "{operand}: {face}: a new loop needs a fitted pcurve")
+            }
+            Self::Unsupported(BooleanUnsupported::Stage(Stage::Classify)) => {
+                f.write_str("the classification stage is not built yet")
             }
             Self::Exhausted { limit } => write!(f, "the budget of {limit} ran out"),
             Self::Cancelled => f.write_str("stopped"),
@@ -306,6 +348,21 @@ impl fmt::Display for BooleanError {
             }
             Self::Defect(BooleanDefect::NoEdge { operand, edge }) => {
                 write!(f, "{operand}: {edge}: missing")
+            }
+            Self::Defect(BooleanDefect::Trace { operand, face }) => {
+                write!(f, "{operand}: {face}: the imprint's walk lost its way")
+            }
+            Self::Defect(BooleanDefect::Loops { operand, face }) => {
+                write!(
+                    f,
+                    "{operand}: {face}: the pcurve writer refused a traced loop"
+                )
+            }
+            Self::Defect(BooleanDefect::Piece { operand, edge }) => {
+                write!(f, "{operand}: {edge}: a piece the imprint needs is missing")
+            }
+            Self::Defect(BooleanDefect::Draft) => {
+                f.write_str("the draft refused or lost an entity the imprint wrote")
             }
         }
     }

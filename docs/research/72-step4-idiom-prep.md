@@ -3084,6 +3084,121 @@ The added cost is stage 4 itself: about as much again as stages 1-3 (0.3x to 1.2
 **Not done, left typed.** Booleans (297 `Boolean`), `Work` (BO6) and `Lineage` (BO). The pin's mesh is still not run (as DT1 said).
 
 **Proposed 04 row.** "DT2 (72 §14.25): `t_slice` runs `scx_check::contract` (as `Valid` and `Manifold`) and `scx_tess::tessellate` (T13's oracle, face bounds within the chord, volume within chord times truth's area) on every constructor and extrusion recipe, judged against truth. scx: 157 pass, 0 fail, 326 not yet (Boolean 297, Work 29). Change if: a recipe fails either check, or the Boolean results should be meshed and proved the same way (DT3)."
+### 14.26 BO3 as built (11-27)
+
+`scx-boolean` gains stage 5, the imprint (`imprint.rs`), and now depends on `scx-nurbs` (for `Approach`, to read an edge's parameter at a point). The public call runs stages 1-5 and answers `Unsupported(Stage(Classify))`; `Stage::Imprint` is gone (BO4 removes `Classify`).
+
+**Public API changes.**
+
+- `Stage::Imprint` replaced by `Stage::Classify` (name `stage_classify`, "the classification stage is not built yet").
+- `BooleanUnsupported::Pcurve { operand, face }` (`no_exact_pcurve`): a new loop on the face needs a pcurve with no closed form (`Draft::exact_loops` answers `Unsupported`), for example the circle where two spheres meet, on either sphere. Fitted pcurves are step 5's.
+- `BooleanDefect::{Trace { operand, face }, Loops { operand, face }, Piece { operand, edge }, Draft}` (`imprint_trace`, `imprint_loops`, `imprint_piece`, `imprint_draft`): a face whose half-edges do not close into cycles, a face whose cycles `exact_loops` refuses for a reason other than a missing closed form, an edge piece the imprint could not place, and the draft refusing a call the imprint made (an id table full, a lineage call refused).
+- Stage 5 is crate-private: `imprint(ops, &Interference, &FaceFace, doc, budget, stop) -> Imprint { draft, pieces, cuts }`. `draft` is `a.edit()` holding both operands whole, cut where they meet; `pieces` maps each operand face, by `(Side, FaceId)`, to its pieces in the draft; `cuts` lists the new edges where the operands cross (the sections, and the lying pieces inside a face), for BO4's classification to start from.
+
+**The stage.**
+
+1. *Vertices.* Each merged point is one draft vertex. When `a` has a vertex there, that vertex is used, and a `b` vertex there is recorded `coincident` onto it. When only `b` has one, it is copied. Otherwise a new vertex is made, derived from every entity through the point, and `Measured` by the point's gap when that is above the zone. Every other `b` vertex is copied (`Origin::Operand(1, Vertex)`).
+2. *Edges.* Each operand edge is cut at the merged points inside it, in parameter order. For an edge of `a`, the first piece keeps the edge's id and the others are new, derived from it. `a`'s edges are written first. Then `b`'s pieces that run along one of `a`'s are matched: the two pieces must have the same end vertices, the nearest midpoint wins, and the sense comes from the ends (or from the tangents for a closed piece). Each matched piece is `a`'s edge, with `b`'s edge recorded `coincident` onto it. Every other `b` piece is new, from `Operand(1, Edge)`. Each section is a new edge between its merged points, derived from both faces. A closed section that no point lies on gets a new vertex at its start. Each lying piece with `along: None` becomes a cut of the other side's face. An edge whose curve ends farther from its vertex than the two reaches allow records that gap as its accuracy (`Measured`).
+3. *Shells.* `b`'s shells and regions are copied, and its faces' sides point at the copies.
+4. *Faces*, for `a`'s faces and then `b`'s, in id order.
+   - A face with no cut keeps its loops. A use of a split edge becomes its pieces' uses, each with the same pcurve restricted to the piece's interval, so the bits stay (72 §9 row 5). A use of a piece shared with `a` gets a fresh exact pcurve from `exact_loops`.
+   - A face with cuts is traced. Each boundary piece and each cut, both ways, is a half-edge. Cuts with a free end are pruned first. At each vertex, the next half-edge is the first one clockwise from the way back, measured about the surface normal there (`S_u × S_v`). Two directions within `TIE` (1e-7 rad) are separated by their chords at 1/64 of the half-edge.
+   - Each cycle is written by `exact_loops`, and the shoelace of its uv samples decides what it is. A positive cycle bounds a piece. A negative one is a hole of the smallest piece that contains a point just left of it, trying ±period shifts on a periodic face. A pole the cycle passes gets the face's collapsed edge there (a pole-segment `Pcurve` use).
+   - The piece of `a`'s face that holds the face's first boundary use keeps the face's id. The other pieces are new, from `Face(f)` or `Operand(1, Face(f))`.
+   - A face that traces to a single cycle and has no holes reuses that cycle's loop rather than writing the loops twice.
+   - Work: 1 unit per face changed and 1 per normal inversion, plus that inversion's own charge.
+
+**Decisions, with cases for and against.**
+
+- *BO2's open question: regroup per face inside the imprint, and keep BO2's lists in pair order.* The imprint builds a `cut` map, `(Side, FaceId) -> cut edges`, as it writes the sections and lying pieces. It costs one map insert per section side.
+  - For: stage 4's order is its natural one (one SSI call per pair) and is deterministic. The grouping is local to the only consumer that needs it. A section is written once, as one edge, and filed under both faces, which a per-face list in stage 4 would duplicate. BO4 reads `pieces` and `cuts`, not stage 4's lists.
+  - Against: a second consumer wanting per-face sections would build the map again. None is planned.
+  - Adversarial check: if a section were filed under only one face, the other face would keep an uncut loop. The tests' per-face piece counts on both sides would show that. They do not.
+- *Split faces by tracing in 3D by angle, rather than by a planar graph in uv.*
+  - For: one rule serves planes, cylinders and spheres, with no seam or pole special cases in the graph. A half-edge's direction at a vertex is its curve's tangent, which exists at a pole where uv is degenerate. Periodic faces need no unwrapping, because the uv only decides outer or hole, after `exact_loops` has written the pcurves.
+  - Against: the order at a vertex rests on tangents. Two half-edges tangent at a vertex (a section grazing a boundary edge) are told apart only by their chords, which is a heuristic at 1/64 of the curve. A uv graph would order such a pair by exact pcurve evaluation. The tangent-cylinder and tangent-sphere cases pass. A tangency at a vertex has not been tested.
+- *Uncut faces keep their pcurves, restricted; cut faces get fresh exact pcurves.*
+  - For: 72 §9 row 5 asks that untouched geometry keep its bits. A cut face's new loop must have pcurves for the new edges in any case, and `exact_loops` gives the closed form, the same one MK uses.
+  - Against: an `a` edge on a cut face gets a recomputed pcurve. It is the same closed form, so it may differ only in the last bits, and every test checks it within 1e-9 of the edge.
+- *A seam the cut crosses stays an edge between two pieces.* A sphere cut by a plane through its poles gives 3 faces, not 2: the seam splits one hemisphere.
+  - For: joining pieces across a seam is a merge, and BO4's merge does that on the kept faces anyway. Doing it here would rebuild faces BO4 may discard.
+  - Against: BO4 must merge, and the counts here are not the final ones.
+- *More than two fins on an edge are not ordered radially.* An edge shared by `a`'s and `b`'s faces keeps its fins in the order they were added.
+  - For: the draft is never finished as one body here. BO4 removes faces before finishing, which leaves two fins.
+  - Against: a consumer that walked the draft by fin order before BO4 would see a wrong order. None does.
+- *Touches are not imprinted, and `b`'s wires and lone vertices are not copied.*
+  - For: a touch point is not a new edge, and no face splits there. BO4's classification reads stage 4's touches directly. Booleans in step 4 are on solids.
+  - Against: a touch inside a face leaves no vertex there, so a result that needs one (a non-manifold vertex result) has nowhere to put it. That is BO4's call.
+- *Cuts with a free end are pruned before the trace.*
+  - For: a cut that ends inside a face bounds nothing. Keeping it would leave a half-edge cycle that runs out and back along the cut.
+  - Against: a stage-4 miss that leaves a real cut dangling is hidden, rather than surfacing as `Defect(Trace)`. It still shows downstream as a wrong face count.
+- *`Unsupported(Pcurve)` rather than a fitted pcurve.*
+  - For: 72 §5.5. Step 4 has no fitter, and a fit is step 5's.
+  - Against: two spheres, and any non-planar pair whose section has no closed pcurve on one of the faces, fail whole.
+- *Pass `Document` by value.* It is `Copy`, and clippy asks for it.
+
+**Tests** (`crates/scx-boolean/src/tests/imprint.rs`, 11). Every expected count was worked by hand from the geometry. For each case:
+
+- Each side alone (a clone of the draft with the other side's faces, loose edges, vertices, empty shells and regions removed) passes `finish`.
+- Its volume by `scx_mass::volume` matches the operand's within 1e-8 relative, so the pieces tile the face exactly.
+- Every use's pcurve matches its edge within 1e-9. This covers curve pcurves, `Point` uses and the pole segments on collapsed edges.
+
+| Case | a's pieces per face | b's pieces per face | Faces [a, b] | Other checks |
+|---|---|---|---|---|
+| Cubes offset by half | 1,1,1,2,2,2 | 1,1,1,2,2,2 | 9, 9 | 6 cuts, 36 draft edges |
+| A block through a side | 1,1,1,1,2,2 | 1,1,2,2,2,2 | 8, 10 | 7 cuts |
+| Blocks sharing a face | all 1 | all 1 | 6, 6 | no cuts; 20 edges and 12 vertices; 4 edge and 4 vertex coincidences, from the `b`-only finish |
+| A cylinder through a block | 1,1,1,1,2,2 | 1,1,3 | 8, 5 | The pierced face keeps its id; its holed piece has 2 loops and the disk 1. Cut origins hold `Operand(1, Face(wall))` and a face of `a`. |
+| A cylinder on a block's side | 1,1,1,2,2,3 | 1,1,2 | 10, 4 | the x = 2 face cut into 3 strips; the wall into the patch and the rest, which has the patch as a hole |
+| A plane through a sphere's centre | 3 | 1,1,1,1,1,2 | 3, 7 | the seam stays, so 3 sphere pieces |
+| Two spheres | | | | `Unsupported(Pcurve)`, name `no_exact_pcurve` |
+| A plane tangent to a cylinder | 1,1,2 | 1,1,1,1,1,2 | 4, 7 | |
+| A plane tangent to a sphere | 1 | | 1, 6 | no cuts |
+| Determinism | | | | two runs give equal work, pieces, cuts and draft (`Debug`) |
+| An operand swap | 1,1,3 | 1,1,1,1,2,2 | 5, 8 | `b`'s pieces derive from `Operand(1, Face(f))` |
+
+BO1's and BO2's public-call tests now expect `Stage(Classify)`. BO2's is renamed `the_public_call_stops_at_classification`. No test removed. `scx_check::contract` cannot run here: the draft holds two operands' faces overlapping, so it is not a body. The contract waits for BO4 to build a result body.
+
+**Measurements.** Release build, load average about 0.6 to 1.2, our bench and the pin's run back to back. The stage-5 column is `imprint` alone; stages 1-3 and stage 4 are given for scale. The pin column is its `boolean::intersect_insert_relate` profile scope, which holds intersection, imprint and relate together. It bounds the pin's corresponding work from above (as in §14.20 and §14.24), so the comparison is not like for like. The pin's whole union is also given.
+
+| Case | Faces in the draft | Stage 5 work | Stages 1-3 | Stage 4 | Stage 5 | Pin scope | Pin union |
+|---|---|---|---|---|---|---|---|
+| cubes offset 0.5 | 18 | 51 | 8.9 us | 7.5 us | 44 us | 0.46 ms | 0.78 ms |
+| block through a side | 18 | 48 | 20 us | 12 us | 38 us | 0.56 ms | 0.89 ms |
+| blocks sharing a face | 12 | 6 | 116 us | 26 us | 12 us | 0.75 ms | 1.14 ms |
+| cylinder through a block | 13 | 19 | 3.5 us | 3.4 us | 31 us | 1.75 ms | 4.68 ms |
+| cylinder on a block's side | 14 | 32 | 5.1 us | 5.7 us | 44 us | 1.60 ms | 2.11 ms |
+| sphere half in a box | 10 | 15 | 3.2 us | 2.3 us | 26 us | 2.51 ms | 2.75 ms |
+| two spheres (`Unsupported(Pcurve)`) | | 5 | 28 us | 2.7 us | 7.3 us | 22.0 ms | 31.8 ms |
+| prisms N = 8 | 52 | 195 | 58 us | 55 us | 182 us | 2.6 ms | 3.5 ms |
+| prisms N = 32 | 196 | 771 | 232 us | 245 us | 724 us | 14.1 ms | 17.5 ms |
+| prisms N = 128 | 772 | 3,075 | 0.85 ms | 1.00 ms | 2.81 ms | 129 ms | 151 ms |
+| prisms N = 512 | 3,076 | 12,291 | 3.35 ms | 4.16 ms | 11.5 ms | 1.89 s | 2.22 s |
+
+- The added cost is stage 5 itself: about 2.5x to 3x stages 1-4 on the prisms, where every face is rewritten.
+- It is linear: 4.08x in time from N = 128 to 512, and exactly 4.0x in work.
+- The single-cycle loop reuse cut stage 5 by 20 to 60% (before it, cubes took 112 us and N = 512 took 14.6 ms).
+- Where the time goes inside the stage was not profiled: `perf` was not permitted on the machine.
+- The timers were throwaway, and nothing is counted in the repo.
+
+**Deviations from 72.**
+
+- §5.4's imprint is built as specified, with four additions:
+  1. Faces are split by the 3D angular trace above, a choice §5.4 leaves open.
+  2. Seams are not joined; that is left to BO4's merge.
+  3. Uncut faces keep restricted pcurves, while cut faces get fresh exact ones.
+  4. The new error variants `Unsupported(Pcurve)` and `Defect(Trace | Loops | Piece | Draft)`, which §5.5 does not name.
+- Lineage follows §5.6: `derive` for `a`'s pieces, `Operand(1, ...)` for `b`'s copies, both faces for a section, and `coincident` for a `b` vertex or edge onto `a`'s.
+
+**Open questions.**
+
+1. A closed section on a periodic face that no merged point lies on (`ends: None`) gets a vertex at its start. If that start falls where the loop must wind, `exact_loops` may answer `Winds`, which becomes `Defect(Loops)`. No test reaches this case: a cylinder cut by a plane across its axis, with the circle away from the seam, was cut at the seam ruling in every measured case.
+2. Two half-edges tangent at a vertex are ordered by chords at 1/64. An exact rule (curvature, or uv by pcurve) waits for a case that needs it.
+3. Whether BO4 wants the seam merge done here, to save it a pass over the kept faces.
+4. More than two fins on one edge are not ordered radially. This becomes a question if BO4 keeps faces from both operands along one edge, as a non-manifold result would.
+
+**Proposed 04 row.** "`scx-boolean` stage 5 (BO3): the imprint into `a.edit()`. Each merged point is one draft vertex (`a`'s first, then `b`'s copy, else new and `Measured` by its gap). Operand edges are cut at their points; `a`'s first piece keeps its id, and `b`'s pieces along `a`'s are `a`'s, recorded `coincident`. Sections and inside lying pieces are new edges from both faces. A face with no cut keeps restricted pcurves. A face with cuts is traced in 3D (next half-edge clockwise about `S_u × S_v`), its cycles written by `exact_loops`, with outer or hole decided by the uv shoelace. `b`'s faces are copied, sharing the new edges. Seams are not joined (BO4's merge), and an edge with no exact pcurve is `Unsupported(Pcurve)`. Lineage is per §5.6. The stage regroups stage 4's sections per face; stage 4 stays in pair order. Change if a vertex tangency needs an exact order, or BO4 wants seams joined here."
+
 ### 14.27 BQ2 as built (11-27)
 
 `scx-bodyq` gains the side of a face where a face of the other body meets it (`side.rs`), and now depends on `scx-ssi` (for `Contact`; it is below `scx-bodyq` in the layers).

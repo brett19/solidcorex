@@ -13,11 +13,13 @@ scx-algo = { path = "../scx-algo" }
 scx-brep = { path = "../scx-brep" }
 scx-curve = { path = "../scx-curve" }
 scx-num = { path = "../scx-num" }
+scx-nurbs = { path = "../scx-nurbs" }
 scx-ssi = { path = "../scx-ssi" }
 scx-surface = { path = "../scx-surface" }
 
 [dev-dependencies]
 scx-make = { path = "../scx-make" }
+scx-mass = { path = "../scx-mass" }
 
 [lints]
 workspace = true
