@@ -21,8 +21,7 @@
 //! `SCX_BLESS_WORK=1 cargo test ... t_slice` rewrites the file from the run.
 //!
 //! **A body with an edge of four fins** (the pinched recipes, BO7) is judged `Valid` by the
-//! contract failing at exactly that breach: `scx_check::contract` refuses such an edge by
-//! design (CK1's test 3), so the contract cannot say more of it.
+//! contract with `Contacts::Radial` (CK3): the default refuses such an edge by design.
 //!
 //! **The pin.** It runs every recipe and is judged against truth, never the other way. A
 //! check where it contradicts truth is a finding; each finding must be covered by a
@@ -1716,13 +1715,17 @@ fn scx_area(b: &scx_brep::Brep, r: &Recipe) -> Verdict {
 /// named. It answers `Valid` and `Manifold` alike, as the pin's two checks both ask of a
 /// body that every edge has two fins and every face bounds the solid.
 fn scx_contract(b: &scx_brep::Brep) -> Verdict {
+    scx_contract_with(b, scx_check::Contacts::Refused)
+}
+
+fn scx_contract_with(b: &scx_brep::Brep, contacts: scx_check::Contacts) -> Verdict {
     use scx_brep::op::{Cx, NoTrace, Scratch, Settings};
     let doc = scx_brep::Document::with_resolution(b.resolution());
     let mut scratch = Scratch::default();
     let settings = Settings::new();
     let stop = scx_num::budget::Stop::new();
     let cx = Cx::new(&doc, &settings, &mut scratch, &stop, &NoTrace);
-    match scx_check::contract(b, &cx, scx_check::Contacts::Refused) {
+    match scx_check::contract(b, &cx, contacts) {
         Ok(_) => Verdict::Pass,
         Err(e) => Verdict::Fail(format!("contract: {e} ({e:?})")),
     }
@@ -1850,24 +1853,10 @@ fn scx_contract_empty(b: &scx_brep::Brep) -> Verdict {
     }
 }
 
-/// The contract, for a recipe whose body has an edge of four fins: the contract refuses such
-/// an edge by design (CK1's test 3), so it passes when it fails there and nowhere else
-/// (`scx_check::contract` stops at the first breach, which is the structure test).
+/// The contract with D5's radial edges admitted (`Contacts::Radial`), for a recipe whose
+/// body has an edge of four fins: the default refuses such an edge by design (CK1's test 3).
 fn scx_contract_pinched(b: &scx_brep::Brep) -> Verdict {
-    use scx_brep::op::{Cx, NoTrace, Scratch, Settings};
-    let doc = scx_brep::Document::with_resolution(b.resolution());
-    let mut scratch = Scratch::default();
-    let settings = Settings::new();
-    let stop = scx_num::budget::Stop::new();
-    let cx = Cx::new(&doc, &settings, &mut scratch, &stop, &NoTrace);
-    match scx_check::contract(b, &cx) {
-        Ok(_)
-        | Err(scx_check::ContractError::Broken(scx_check::Breach::NonManifoldEdge {
-            fins: 4,
-            ..
-        })) => Verdict::Pass,
-        Err(e) => Verdict::Fail(format!("contract: {e} ({e:?})")),
-    }
+    scx_contract_with(b, scx_check::Contacts::Radial)
 }
 
 /// The face's box origin of an operand face.
