@@ -42,3 +42,6 @@ const _: () = {
     ok::<Ellipse2>();
     ok::<CurveError>();
 };
+
+#[cfg(test)]
+mod truth;

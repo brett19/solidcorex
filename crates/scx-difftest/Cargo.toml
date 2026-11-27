@@ -1,7 +1,7 @@
 # Written for solidcorex.
 [package]
 name = "scx-difftest"
-description = "Differential tests: scx-num, scx-nurbs, scx-nurbs-surface, scx-algo and scx-p21 against the pinned solidcore: deterministic, and within tolerance of the pin"
+description = "Differential tests: scx-num, scx-nurbs, scx-nurbs-surface, scx-curve, scx-algo and scx-p21 against the pinned solidcore: deterministic, and within tolerance of the pin"
 edition.workspace = true
 license.workspace = true
 version.workspace = true
@@ -15,6 +15,7 @@ scx-num = { path = "../scx-num" }
 # Used by the tests only; the library holds the shared helpers.
 scx-nurbs = { path = "../scx-nurbs" }
 scx-nurbs-surface = { path = "../scx-nurbs-surface" }
+scx-curve = { path = "../scx-curve" }
 scx-algo = { path = "../scx-algo", features = ["trace"] }
 # The pinned solidcore (commit 03e16c9ee766de5b9b1ced845e5149d62ff493b8), a read-only
 # worktree beside this repository: `<parent>/sc-wt/scx-pin`.

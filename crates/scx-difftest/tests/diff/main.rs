@@ -24,6 +24,7 @@ mod pin_quadric;
 mod pin_truths;
 mod solvers;
 mod t_algo;
+mod t_curve;
 mod t_extent;
 mod t_hash;
 mod t_interval;

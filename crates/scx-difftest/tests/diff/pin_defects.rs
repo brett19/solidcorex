@@ -2137,3 +2137,207 @@ pub fn iges_128_surface() -> PinDefect<(Ent,), Option<Read>> {
         check: |(e,), b| iges_answer(e, b),
     }
 }
+
+// ---- scx-curve ------------------------------------------------------------------------------
+
+use crate::t_curve::{Angle, ConicIn, GoodConic, LineIn, axes2, axes3};
+use scx_testkit::analytic;
+use scx_testkit::dd::Dd;
+
+/// The definition of a line: finite data and a direction no shorter than `EFF_ZERO` (the
+/// pin's own degenerate-line threshold). scx builds exactly that line, as given, and refuses
+/// the rest.
+fn line_answer(o: &[f64], d: &[f64], got: &Option<Vec<f64>>) -> Result<(), String> {
+    let finite = o.iter().chain(d).all(|x| x.is_finite());
+    let length = d.iter().map(|x| x * x).sum::<f64>().sqrt();
+    let is_line = finite && length >= scx_num::math::EFF_ZERO;
+    let want = is_line.then(|| o.iter().chain(d).copied().collect::<Vec<_>>());
+    if *got == want {
+        Ok(())
+    } else {
+        Err(format!("the definition gives {want:?}"))
+    }
+}
+
+/// `Line::new` where the pin builds what is no line: `Line::infinite` divides by the length,
+/// so a zero direction gives NaN data and a non-finite one is kept. Truth: [`line_answer`].
+pub fn curve_line_new() -> PinDefect<(LineIn,), Option<Vec<f64>>> {
+    PinDefect {
+        reason: "the pin builds lines from zero and non-finite directions",
+        applies: Applies::Disagreeing,
+        check: |(l,), r| line_answer(&l.o, &l.d, r),
+    }
+}
+
+/// `Line::through` where the pin builds what is no line: `from_points` turns a segment
+/// shorter than `EFF_ZERO` into the X axis over `[0, 0]` and keeps non-finite points.
+/// Truth: [`line_answer`] on `(start, end - start)`.
+pub fn curve_line_through() -> PinDefect<(LineIn,), Option<Vec<f64>>> {
+    PinDefect {
+        reason: "the pin turns a degenerate segment into the X axis over [0, 0]",
+        applies: Applies::Disagreeing,
+        check: |(l,), r| {
+            let d: Vec<f64> = l.d.iter().zip(&l.o).map(|(e, s)| e - s).collect();
+            line_answer(&l.o, &d, r)
+        },
+    }
+}
+
+/// `Line2::new`, as [`curve_line_new`] on the x and y coordinates.
+pub fn curve_line2_new() -> PinDefect<(LineIn,), Option<Vec<f64>>> {
+    PinDefect {
+        reason: "as curve_line_new",
+        applies: Applies::Disagreeing,
+        check: |(l,), r| line_answer(&l.o[..2], &l.d[..2], r),
+    }
+}
+
+/// The definition of a conic: finite radii above `EFF_ZERO` (the pin's circle rule, for
+/// both radii). scx builds exactly that conic on its frame, and refuses the rest.
+fn conic_answer(
+    axes: ([f64; 3], [f64; 3], [f64; 3]),
+    a: f64,
+    b: f64,
+    got: &Option<Vec<f64>>,
+) -> Result<(), String> {
+    let ok = |r: f64| r.is_finite() && r > scx_num::math::EFF_ZERO;
+    let want = (ok(a) && ok(b)).then(|| {
+        let mut v: Vec<f64> = [axes.0, axes.1, axes.2].iter().flatten().copied().collect();
+        v.extend([a, b]);
+        v
+    });
+    if *got == want {
+        Ok(())
+    } else {
+        Err(format!("the definition gives {want:?}"))
+    }
+}
+
+/// `Circle::new` where the pin builds what is no circle: `create_canonical_circle` refuses
+/// a NaN radius or one not above `EFF_ZERO`, but builds an infinite one. Truth:
+/// [`conic_answer`].
+pub fn curve_circle_new() -> PinDefect<(ConicIn,), Option<Vec<f64>>> {
+    PinDefect {
+        reason: "the pin builds a circle of infinite radius",
+        applies: Applies::Disagreeing,
+        check: |(c,), r| conic_answer(axes3(c), c.a, c.a, r),
+    }
+}
+
+/// `Ellipse::new` where the pin builds what is no ellipse: `Ellipse::new` checks no radius,
+/// so zero, negative, infinite and NaN radii build. Truth: [`conic_answer`].
+pub fn curve_ellipse_new() -> PinDefect<(ConicIn,), Option<Vec<f64>>> {
+    PinDefect {
+        reason: "the pin's Ellipse::new builds any radii",
+        applies: Applies::Disagreeing,
+        check: |(c,), r| conic_answer(axes3(c), c.a, c.b, r),
+    }
+}
+
+/// `Circle2::new`, as [`curve_circle_new`].
+pub fn curve_circle2_new() -> PinDefect<(ConicIn,), Option<Vec<f64>>> {
+    PinDefect {
+        reason: "as curve_circle_new",
+        applies: Applies::Disagreeing,
+        check: |(c,), r| conic_answer(axes2(c), c.a, c.a, r),
+    }
+}
+
+/// `Ellipse2::new`, as [`curve_ellipse_new`].
+pub fn curve_ellipse2_new() -> PinDefect<(ConicIn,), Option<Vec<f64>>> {
+    PinDefect {
+        reason: "as curve_ellipse_new",
+        applies: Applies::Disagreeing,
+        check: |(c,), r| conic_answer(axes2(c), c.a, c.b, r),
+    }
+}
+
+/// A conic's point and derivatives against the double-double truth at the radian angle,
+/// each coordinate within 6 roundings of its terms' size (`|o| + |a x| + |b y|`). For a
+/// non-finite angle every coordinate is NaN.
+fn conic_jet_answer<const N: usize>(
+    axes: ([f64; 3], [f64; 3], [f64; 3]),
+    a: f64,
+    b: f64,
+    t: f64,
+    got: &[[f64; N]],
+) -> Result<(), String> {
+    if !t.is_finite() {
+        return if got.iter().flatten().all(|x| x.is_nan()) {
+            Ok(())
+        } else {
+            Err(format!("not NaN at t = {t}: {got:?}"))
+        };
+    }
+    let (o, x, y) = axes;
+    let r = analytic::Ellipse {
+        frame: analytic::Frame {
+            origin: o,
+            x,
+            y,
+            z: [0.0, 0.0, 1.0],
+        },
+        semi_x: a,
+        semi_y: b,
+    };
+    let want = r.derivs(t, 3);
+    for (k, v) in got.iter().enumerate() {
+        for i in 0..N {
+            let w = want[k][i];
+            let o_i = if k == 0 { o[i].abs() } else { 0.0 };
+            let scale = o_i + (a * x[i]).abs() + (b * y[i]).abs();
+            let err = (Dd::new(v[i]) - w).abs().hi;
+            if err > 6.0 * U * scale + f64::MIN_POSITIVE {
+                return Err(format!(
+                    "C^({k})[{i}] = {} off the truth {w:?} by {err}",
+                    v[i]
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A conic's point or jet where the pin is off the truth: the pin evaluates at the angle in
+/// degrees, `t 180 / pi` rounded and folded into `[0, 360]`, then `* pi / 180` again, two
+/// roundings of the angle that grow with `|t|` (at `t = 1e5` about `1e-11` of the radius),
+/// and its derivatives carry `(pi / 180)^k` rounded per factor. A coordinate that cancels
+/// near zero differs past the relative tolerance too. scx takes `sin_cos` of the radian
+/// angle itself. Truth: [`conic_jet_answer`].
+const CONIC_STEP: &str = "the pin's degree round trip of the angle";
+
+macro_rules! conic_defects {
+    ($($name:ident: $r:ty, $axes:ident, $circle:expr, $wrap:expr;)*) => {$(
+        #[doc = concat!("`", stringify!($name), "`: see [`CONIC_STEP`].")]
+        pub fn $name() -> PinDefect<(GoodConic, Angle), $r> {
+            PinDefect {
+                reason: CONIC_STEP,
+                applies: Applies::Disagreeing,
+                check: |(c, t), r| {
+                    let c = &c.0;
+                    let b = if $circle { c.a } else { c.b };
+                    conic_jet_answer($axes(c), c.a, b, t.0, $wrap(r))
+                },
+            }
+        }
+    )*};
+}
+
+fn one<const N: usize>(r: &[f64; N]) -> &[[f64; N]] {
+    core::slice::from_ref(r)
+}
+
+fn all<const N: usize>(r: &Vec<[f64; N]>) -> &[[f64; N]] {
+    r
+}
+
+conic_defects! {
+    curve_circle_point: [f64; 3], axes3, true, one;
+    curve_circle_jet: Vec<[f64; 3]>, axes3, true, all;
+    curve_ellipse_point: [f64; 3], axes3, false, one;
+    curve_ellipse_jet: Vec<[f64; 3]>, axes3, false, all;
+    curve_circle2_point: [f64; 2], axes2, true, one;
+    curve_circle2_jet: Vec<[f64; 2]>, axes2, true, all;
+    curve_ellipse2_point: [f64; 2], axes2, false, one;
+    curve_ellipse2_jet: Vec<[f64; 2]>, axes2, false, all;
+}

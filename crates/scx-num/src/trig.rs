@@ -108,7 +108,12 @@ mod tests {
         let mut r = Rng::new(7);
         for _ in 0..4000 {
             let a = r.next_signed_unit() * 20.0;
-            let w = (r.next_signed_unit().abs() * 8.0) * if r.next_signed_unit() > 0.0 { 1.0 } else { 1e-6 };
+            let w = (r.next_signed_unit().abs() * 8.0)
+                * if r.next_signed_unit() > 0.0 {
+                    1.0
+                } else {
+                    1e-6
+                };
             let i = Ivl::new(a, a + w);
             let (s, c) = Trig::sin_cos(i);
             assert!(s.lo >= -1.0 && s.hi <= 1.0 && c.lo >= -1.0 && c.hi <= 1.0);
