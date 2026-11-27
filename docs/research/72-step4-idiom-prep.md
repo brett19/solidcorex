@@ -3778,3 +3778,90 @@ BO7 builds what D5 allows: a result whose two solids share only a vertex, and a 
 4. Tangent fins at a pinch edge: should they be ordered by bend, as scx-brep's radial check does, instead of refused?
 
 **Proposed 04 row.** "BO7 (72 §14.36): the Boolean builds D5's contacts. An edge of the result with four fins is kept with its fins in radial order (d = sense N x T about the tangent, sampled at the edge's middle). The shells across it are joined by a union-find so that scx-brep's radial rule holds. Tangent fins (within 1e-9 rad) and missing pcurves are `NonManifold`. A vertex contact keeps two outer shells. Nesting signs each shell (mirrored voids by negation), filters holders by box, and only when the boxes leave a choice uses `classify_point` against a body of the candidate shell; the innermost holder is the smallest box, so two lumps with a cavity now build. No new API or variant. The added cost on non-contact cases is about 2 us per call. Against: edge-contact results fail `scx_check::contract`'s two-fin rule by design. Change if the contract admits D5 edges, or if tangent pinches reach a case."
+
+### 14.39 PF1 as built (11-27)
+
+**What was asked.** Bench targets for the step-4 slice against the pin (make, Boolean, mass, classify, tess), then a profile of Boolean build (BO4 open question 4) and of mass, with each cost named and written as a follow-up. Nothing is fixed here. Figures are local evidence and are not committed.
+
+**Built.** `crates/scx-bench/benches/common/slice_cases.rs` and two targets, `slice` (criterion) and `slice_ic` (gungraun, instruction counts). A case is `slice/<phase>/<recipe>`, one whole body operation run on both sides over the same T12 recipe, with a fresh kernel (pin) or fresh scratch (scx) per run.
+- `make` for `block-3x4x5`, `cylinder-r2-h10`, `cone-frustum-3-1`, `sphere-r5`, `torus-5-1.5`, `extrude-d`.
+- For `box-cyl-hole`, `plate-4`, `plate-12` and `gear-60` (the BX1 and BO6 recipes): `parts` (every operand made, no Boolean), `build` (parts and every Boolean), `mass` (volume and area at 1e-6), `mass_full` (scx's `mass`: volume, area, centroid, inertia), `classify` (200 seeded points in the truth's box grown 10%), `tess` and `wire`.
+- The Boolean cost alone is `build` less `parts`. A Boolean-only case is not possible: the pin consumes its operands and has no `Clone`.
+- `SLICE_FILTER=<substring>` limits the criterion target to the cases whose name holds it (setup of every case is minutes). `slice_ic` builds only the case it runs (`case(name)`); it needs `gungraun-runner` 0.20.0 on the path, and each benchmark id must be given in full to the runner binary (`--bench slice_ic::slice::scx::build_plate_12`), since a cargo filter matches only a prefix of the full id.
+- Two unit tests (in `tests/slice.rs`) (`small_cases_run_on_both_sides`, `names_are_distinct`). They skip plate and gear, which the targets build. The cases live beside the targets, not in the `scx_bench` library: they read the testkit's recipes, and `layers.txt` allows a test kit to a bench crate as a dev-dependency only. `tests/slice.rs` includes the file to run the tests. The library crates become regular dependencies of scx-bench.
+
+**Decisions.**
+- *The pin has no face mesher.* `tess` compares scx's `tessellate` (triangles and edges) with the pin's `tessellate_boundaries` (edge points only), and `wire` scx's `wireframe` with the same. Neither is like for like (the pin's spec is an angle, scx's a chord of 1% of the cube root of the volume). Read them as "scx's mesher against the pin's whole tessellation surface", never as a speed claim.
+- *mass compares volume plus area on both sides.* `mass_full` is scx doing more than the pin (the pin has no inertia call in this slice), so it is shown but not gated.
+- *Memoised wall time.* A pin mass call fills caches in its `Brep`, and an scx body fills its box caches on first query. A criterion loop therefore times the warm second run for `mass`, `classify`, `tess` and `wire` (the pin's `mass` rows come out at 20 to 40 billion instructions per second, which no core does). The instruction counts are the first, cold run and are the figures to trust there. `make`, `parts` and `build` rebuild their bodies each run and are cold in both.
+- *Machine.* Server2 was not idle: load average 19 to 23 on 24 cores (other builders' difftests), so wall times carry that noise (the same pin work timed 4.4 and 7.9 ms in two runs of one case). Instruction counts do not depend on it.
+
+**Results.** Instructions in millions, wall time in ms, scx / pin ratio (below 1 is faster).
+
+| recipe | case | scx Minstr | pin Minstr | ratio | scx ms | pin ms | ratio |
+|---|---|---|---|---|---|---|---|
+| block-3x4x5 | make | 0.26 | 9.8 | 0.026 | 0.014 | 0.5 | 0.028 |
+| cone-frustum-3-1 | make | 0.17 | 133.5 | 0.001 | 0.011 | 6.7 | 0.002 |
+| cylinder-r2-h10 | make | 0.16 | 70.7 | 0.002 | 0.010 | 3.9 | 0.002 |
+| extrude-d | make | 0.27 | 295.1 | 0.001 | 0.018 | 15.0 | 0.001 |
+| sphere-r5 | make | 0.15 | 166.7 | 0.001 | 0.012 | 8.4 | 0.001 |
+| torus-5-1.5 | make | 0.15 | 244.8 | 0.001 | 0.011 | 16.7 | 0.001 |
+| box-cyl-hole | parts | 0.41 | 87.8 | 0.005 | 0.025 | 4.8 | 0.005 |
+| box-cyl-hole | build | 2.17 | 156.3 | 0.014 | 0.143 | 10.3 | 0.014 |
+| box-cyl-hole | mass | 8.48 | 109.1 | 0.078 | 0.508 | 5.0 | 0.101 |
+| box-cyl-hole | mass_full | 15.80 | 109.1 | 0.145 | 0.594 | 4.7 | 0.126 |
+| box-cyl-hole | classify | 3.94 | 286.4 | 0.014 | 0.195 | 11.9 | 0.016 |
+| box-cyl-hole | tess | 0.90 | 2.5 | 0.360 | 0.051 | 0.1 | 0.412 |
+| box-cyl-hole | wire | 0.11 | 2.5 | 0.045 | 0.002 | 0.1 | 0.012 |
+| gear-60 | parts | 14.00 | 1,134.5 | 0.012 | 0.869 | 54.7 | 0.016 |
+| gear-60 | build | 1,290.13 | 6,921.9 | 0.186 | 131.960 | 546.9 | 0.241 |
+| gear-60 | mass | 180.06 | 2,034.1 | 0.089 | 9.383 | 119.8 | 0.078 |
+| gear-60 | mass_full | 256.00 | 2,034.1 | 0.126 | 11.893 | 165.7 | 0.072 |
+| gear-60 | classify | 45.35 | 190.3 | 0.238 | 2.344 | 20.1 | 0.117 |
+| gear-60 | tess | 25.59 | 7.7 | 3.322 | 2.446 | 0.3 | 8.670 |
+| gear-60 | wire | 5.73 | 7.7 | 0.743 | 0.097 | 0.2 | 0.487 |
+| plate-12 | parts | 22.11 | 11,213.7 | 0.002 | 1.415 | 508.2 | 0.003 |
+| plate-12 | build | 3,287.03 | 22,857.4 | 0.144 | 295.180 | 2,082.0 | 0.142 |
+| plate-12 | mass | 881.75 | 10,817.6 | 0.082 | 52.194 | 497.6 | 0.105 |
+| plate-12 | mass_full | 1,999.50 | 10,817.6 | 0.185 | 83.579 | 482.1 | 0.173 |
+| plate-12 | classify | 41.73 | 1,142.3 | 0.037 | 1.095 | 76.6 | 0.014 |
+| plate-12 | tess | 44.80 | 348.4 | 0.129 | 3.027 | 18.2 | 0.167 |
+| plate-12 | wire | 5.76 | 348.4 | 0.017 | 0.166 | 26.9 | 0.006 |
+| plate-4 | parts | 2.66 | 1,252.0 | 0.002 | 0.166 | 55.7 | 0.003 |
+| plate-4 | build | 64.66 | 2,365.5 | 0.027 | 4.973 | 128.7 | 0.039 |
+| plate-4 | mass | 100.18 | 1,225.7 | 0.082 | 6.057 | 49.6 | 0.122 |
+| plate-4 | mass_full | 218.62 | 1,225.7 | 0.178 | 8.378 | 50.0 | 0.168 |
+| plate-4 | classify | 7.49 | 337.4 | 0.022 | 0.264 | 15.5 | 0.017 |
+| plate-4 | tess | 5.17 | 38.8 | 0.133 | 0.312 | 2.2 | 0.144 |
+| plate-4 | wire | 0.69 | 38.8 | 0.018 | 0.012 | 1.9 | 0.006 |
+
+Every case but two is under the 1.25 gate; build wall time is 4 to 7 times less on the two big recipes. The two:
+- `tess/gear-60` (3.3 times the instructions, 8.7 times the wall) against the pin's edges only. scx meshes every face and the pin meshes none, so this is not a regression.
+- `wire/gear-60` is under 1 on instructions (0.74) and wall (0.49).
+The expected direction in section 8.2 held: build is 7 times fewer instructions on plate-12 (3.29 G against 22.9 G) and 5.4 times on gear-60. The correctly rounded `fmath` shows in the profile below, and mass (volume and area) is 11 to 13 times fewer instructions than the pin on every body.
+
+**Profile: Boolean build (BO4 open question 4).** Callgrind (instruction counts, inclusive, one run of `build`), stage by stage:
+
+| stage | plate-12 (3,287 M) | gear-60 (1,290 M) |
+|---|---|---|
+| 1 `face_pairs` (the operands' boxes) | 1,442 M, 44% | 444 M, 34% |
+| 5 `imprint` | 1,136 M, 35% | 335 M, 26% |
+| 7 `build` | 438 M, 13% | 260 M, 20% |
+| 3 `face_face` | 85 M, 2.6% | 75 M, 5.8% |
+| 6 `classify` (BO6's seed check included) | 68 M, 2.1% | 65 M, 5.0% |
+
+- *Classify is not the cost.* Build (stage 7) is 6.4 times classify on plate-12 and 4.0 times on gear-60, which is BO6's "3 to 5 times"; the stage is 2% and 5% of the whole.
+- *Cost 1, the boxes are rebuilt every step.* 1.38 G of plate-12 (42%) and 0.44 G of gear-60 (34%) is `OnceLock<SurfaceBox>::initialize` through `Boxes::build`. A Boolean's result starts with empty box caches, so step k of plate-12 re-boxes all of the k holes' cylinder faces: 144 steps over a growing body, quadratic in the holes. Inside it `analytic_with` and `Circle::point` (1.37 M calls, 199 M) dominate. **Follow-up PF2:** `boolean` carries the SurfaceBox of every face the Boolean leaves untouched (same surface, same trims) into the result. Expected: about 35% of plate-12 (1.2 G of 3.29 G), about 25% of gear-60, linear in the holes after it, no result bit changed. Needs `scx-brep`'s cache ownership (a `Draft` carrying a face's box with it).
+- *Cost 2, exact loops for faces nothing touched.* `Draft::exact_loop` runs 86,988 times in plate-12 (about 600 per step, which is every face of the running body each step): 482 M (14.7%), plus 311 M in `Draft::fini` (9.5%); gear-60 100 M (7.7%) and 154 M (11.9%). The interval work is `conic::point2` and `jet2` over `Ivl::sin_cos` (1.6 M calls, 233 M). **Follow-up PF3:** an edited face with no cut keeps its loops' exactness proof, so `exact_loops` runs only for the faces imprint changed. Expected: up to 14% plate-12, up to 8% gear-60. Same shape as PF2 and best done with it.
+- *Cost 3, scalar trigonometry.* `sin_cos` is 775 M inclusive on plate-12 (23.6%): 233 M interval, 199 M `Circle::point`, 172 M in `trig::reduce`; `Ivl::mul` and `Ivl::checked` are 12% and 9% self. Most disappears with PF2 and PF3, since both feed from the same faces. Not worth its own task before them; re-profile afterwards.
+
+**Profile: mass (MA6's added cost).** Callgrind of `slice/mass/plate-12` (volume 457 M, area 421 M of 882 M):
+- 62% is the inner Gauss-Kronrod loop: `kronrod::sample` over `Inner::at` 373 M self (42%) and `kronrod::integrate` 174 M (20%). The rounding bound's accumulation (`size` per component, `ROUNDING_PASS`) lives inside these two, so it cannot be split out by function. On main there is no build without MA6 to difference against, and MA6b (§14.40) is the branch that targets it: run `slice/mass/*` on it, and on gear-60 (`mass` 180 M) for a body of curved faces.
+- 12% is plane evaluation: `Frame::y` (a cross product each call) 59 M self (6.7%) and `Plane::point` 47 M self (5.3%), recomputed at every sample. **Follow-up PF4:** the plane's `y` axis (and origin) read once per face in `face::Inner`, not once per point. Expected 6 to 9% of plate-12's mass and nothing changes in the bits.
+- Volume and area are separate passes over the faces. A caller wanting both pays them twice, and `mass` (one pass, all moments) costs 2.27 times `volume` plus `area` on plate-12 (2.0 G against 0.88 G) because it integrates the other monomials. **Follow-up PF5, a question not a task:** a `volume_and_area` call that shares the face pass; expected a large part of one pass (not estimated closely: the integrands differ). Worth it only if a caller wants exactly that pair, as the slice's `brep_volume` plus `area` pair does.
+
+**What it does not do.** No cost was fixed; PF2 to PF5 are proposals. `mass_full` and `tess` have no like-for-like pin side. Wall times for `mass`, `classify`, `tess` and `wire` are warm-cache and on a loaded machine. Torus rows other than `torus-5-1.5` are not measured (`torus-spindle` is refused by scx's `torus`).
+
+**Open questions.** (1) Whether PF2 belongs in `scx-boolean` (carry the box into the result) or in `scx-brep` (box ownership moves with the face). (2) Whether the slice should become a CI gate on instructions (deterministic) rather than a local record. (3) MA6b's effect on `slice/mass/*`, unmeasured here.
+
+**Proposed 04 row.** "PF1 (72 §14.39): `scx-bench` has `slice` and `slice_ic` targets, 34 cases over `make`, `parts`, `build`, `mass`, `mass_full`, `classify`, `tess` and `wire` for the BX1 and BO6 recipes against the pin, instruction counts and wall time. Every case is under the 1.25 gate except `tess/gear-60`, whose pin side meshes no faces. Boolean build is 5 to 7 times fewer instructions than the pin on plate-12 and gear-60, mass 11 to 13 times fewer. Profile: build is 44% and 34% box construction repeated every step (PF2), 15% and 8% exact loops of untouched faces (PF3), classify 2% and 5%; mass is 62% the inner Kronrod loop and 12% plane evaluation (PF4). No fix is made here. Against: wall times are warm-cache and from a loaded machine. Change if a pass gates on instruction counts."

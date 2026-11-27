@@ -216,6 +216,11 @@ instruction counts with gungraun under valgrind's callgrind.
     builds the inputs is not counted. It needs valgrind and `gungraun-runner` at the version in
     the manifest. The case list is written out in the file; a library test checks that it
     names every case `cases()` makes, so the two targets cannot drift apart.
+- **The step-4 slice** (`slice`, `slice_ic`; the cases are `benches/common/slice_cases.rs`, 72 §14.39). Cases are whole
+  body operations on the T12 recipes, `slice/<phase>/<recipe>`, built by `case(name)`.
+  `SLICE_FILTER=<text>` limits the criterion target to matching cases. Wall time of `mass`,
+  `classify`, `tess` and `wire` is warm-cache (both sides memoise on the body); instruction
+  counts are the first run.
 - **Fairness rules.** `Case::map` and `Case::fold` enforce them. A case only supplies its
   inputs and the two calls.
   1. Every input goes through `black_box`: the slice and each element as it is read. Every

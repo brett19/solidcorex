@@ -488,7 +488,15 @@ dependencies = [
  "criterion",
  "gungraun",
  "scx-algo",
+ "scx-bodyq",
+ "scx-boolean",
+ "scx-brep",
+ "scx-make",
+ "scx-mass",
  "scx-num",
+ "scx-planar",
+ "scx-tess",
+ "scx-testkit",
  "solidcore",
 ]
 
