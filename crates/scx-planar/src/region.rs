@@ -73,8 +73,9 @@ impl Region {
     /// The checks run in this order, and the first that fails is the one cause returned:
     ///
     /// 1. every coordinate is finite ([`PlanarError::NotFinite`]) and in range
-    ///    ([`PlanarError::OutOfRange`]), and no loop is empty ([`PlanarError::Empty`]):
-    ///    closure cannot be judged on a NaN;
+    ///    ([`PlanarError::OutOfRange`]), no loop is empty ([`PlanarError::Empty`]) and a
+    ///    whole circle is alone in its loop ([`PlanarError::CircleWithOthers`]): closure
+    ///    cannot be judged on a NaN, nor between a circle and another segment;
     /// 2. every loop closes ([`PlanarError::Open`]): each segment ends within `res` of
     ///    where the next starts, the outer loop first, then the holes, the first joint
     ///    first. The joints are then made exact: each segment's end becomes the next
@@ -233,6 +234,19 @@ fn check_numbers(l: &Pending) -> Result<(), PlanarError> {
             return Err(PlanarError::OutOfRange { at });
         }
     }
+    if l.segments.len() > 1
+        && let Some(segment) = l
+            .segments
+            .iter()
+            .position(|s| matches!(s, Segment::Circle { .. }))
+    {
+        return Err(PlanarError::CircleWithOthers {
+            at: SegmentRef {
+                in_loop: l.id,
+                segment,
+            },
+        });
+    }
     Ok(())
 }
 
@@ -270,6 +284,13 @@ fn check_degenerate(l: &Pending, res: f64) -> Result<(), PlanarError> {
             segment: i,
         };
         let fail = |why| Err(PlanarError::Degenerate { at, why });
+        if let Segment::Circle { radius, .. } = *s {
+            // No ends: only the radius can be degenerate.
+            if greater(Iv::exact(radius), ires) != Verdict::Yes {
+                return fail(Degenerate::Radius);
+            }
+            continue;
+        }
         if let Segment::Arc {
             centre, start, end, ..
         } = *s
