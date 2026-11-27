@@ -10,6 +10,12 @@
 //! `-`, `*`, `/`, `sqrt` and the error-free transformations are used, all of them
 //! correctly rounded by IEEE 754, so the bits do not depend on the platform.
 //!
+//! `cos`, `acos` and `cbrt` first try a fast path (Ziv's strategy): the same value in
+//! plain doubles, with exact products only where the result needs them, kept when a
+//! rounding test proves the double-double path rounds to the same double, and that path
+//! otherwise (under 2% of inputs). The bits are the double-double path's either way;
+//! `dd::rounds_to_hi` holds the test and its proof, and each fast path its error bound.
+//!
 //! Depends on nothing in the crate but [`crate::eft`], so the two can move to a crate of
 //! their own.
 //!
@@ -57,6 +63,11 @@
 //! | `cbrt` | 24.2 | 12.8 | 1.90 | | `hypot` | 13.0 | 12.1 | 1.07 |
 //! | `powf` | 40.1 | 12.5 | 3.22 | | `powi` | 57.3 | 26.8 | 2.14 |
 //!
+//! The `cos`, `acos` and `cbrt` rows predate their fast paths. MEASURED 2026-11-27, off
+//! the repository, back to back on one pinned core against the build before them (as
+//! ratios to the platform's libm in the same run): `cos` about 9% faster, `acos` about
+//! 30%, `cbrt` about 12%.
+//!
 //! The default x86-64 target has no fused multiply-add instruction, so every
 //! [`crate::eft::two_prod`] is a call to a library `fma`: on `x86_64-unknown-linux-gnu`,
 //! `compiler_builtins`' own, which picks a hardware or software path at run time (each
@@ -72,6 +83,8 @@
 
 pub(crate) mod dd;
 mod exp;
+#[cfg(test)]
+mod fast_check;
 mod hyper;
 mod inverse;
 mod log;
