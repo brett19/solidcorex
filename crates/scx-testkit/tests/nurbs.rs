@@ -188,7 +188,7 @@ fn de_boor_sweep(per_kind: usize, spread: bool, extra: usize, min_checked: usize
 
 #[test]
 fn de_boor_and_the_basis_sum_agree_exactly() {
-    de_boor_sweep(2, true, 0, 50);
+    de_boor_sweep(2, true, 1, 50);
 }
 
 /// Full sweep (6 curves per kind, 6 extra samples per curve); run with
@@ -315,7 +315,7 @@ fn insertion_sweep(per_kind: usize, spread: bool, rounds: usize, extra: usize) {
 
 #[test]
 fn knot_insertion_leaves_the_shape_exactly_unchanged() {
-    insertion_sweep(2, true, 1, 0);
+    insertion_sweep(2, true, 1, 1);
 }
 
 /// Full sweep (5 curves per kind, 3 insertions each); run with
@@ -391,7 +391,7 @@ fn elevation_sweep(per_kind: usize, spread: bool, max_times: u64, extra: usize) 
 
 #[test]
 fn degree_elevation_leaves_the_shape_exactly_unchanged() {
-    elevation_sweep(2, true, 1, 0);
+    elevation_sweep(2, true, 1, 1);
 }
 
 /// Full sweep (4 curves per kind, elevated by 1 or 2 degrees, 8 extra samples); run with
