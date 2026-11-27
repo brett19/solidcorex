@@ -30,6 +30,7 @@ mod curved;
 mod loose;
 mod mesh;
 mod planar;
+mod shell;
 mod wreck;
 
 use core::fmt;
@@ -46,6 +47,7 @@ use scx_surface::{PcurveError, SurfaceError};
 
 pub use check::Invariant;
 pub use loose::loose;
+pub use shell::quarter_shell;
 pub use wreck::broken;
 
 /// The resolution the generators build pcurves to: its approximation tolerance is

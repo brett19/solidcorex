@@ -17,6 +17,8 @@ scx-surface = { path = "../scx-surface" }
 
 [dev-dependencies]
 scx-make = { path = "../scx-make" }
+scx-mass = { path = "../scx-mass" }
+scx-planar = { path = "../scx-planar" }
 
 [lints]
 workspace = true
