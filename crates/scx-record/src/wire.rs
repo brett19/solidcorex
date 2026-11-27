@@ -22,7 +22,7 @@ pub const FORMAT_VERSION: u16 = 1;
 /// The four bytes that open a top-level record and say which record it is: ASCII letters
 /// and digits, so the text encoding writes them as a word.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Magic([u8; 4]);
+pub struct Magic(pub(crate) [u8; 4]);
 
 impl Magic {
     /// The magic `bytes`, if all four are ASCII letters or digits.

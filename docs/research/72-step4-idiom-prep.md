@@ -399,7 +399,7 @@ pub enum MassError {
   - the five primitives;
   - a spherical cap;
   - half a torus;
-  - a box minus n through-cylinders (plate_12: 100000 − 480π, corrected in §14.1);
+  - a box minus n through-cylinders (plate_12: 144 holes, 100000 − 5760π; see §14.9);
   - gear_60, whose cross-section is a disk less 60 clipped rectangles. Its area is
     `π·50² − 60·∫_{−g/2}^{g/2} (√(2500 − y²) − 45) dy`, closed form, times h = 10. The rectangles
     are apart, since g ≈ 2.12 against a pitch of 4.71 at r = 45.
@@ -804,7 +804,7 @@ Everything else is `Unsupported(SsiPair { a, b, kinds })`, by name, and never a 
 | seam-torus-sphere | torus-sphere off axis | `Unsupported` (SS2) |
 | seam-torus-box, seam-vertex-torus-box | plane parallel to the torus axis, touching the outer equator (spiric) | `Unsupported` (spiric section) |
 
-- So 10 of the 15 named cases are in step 4, and 5 are expected `Unsupported` until step 5. The
+- (Counted again by T12, §14.9: the table names 17 cases, not 15: 5 are built, 6 are `Unsupported(NonManifold)` by D5 and 6 are `Unsupported(SsiPair)`.) So 10 of the 15 named cases are in step 4, and 5 are expected `Unsupported` until step 5. The
   expected-`Unsupported` tests are ported as such, so step 5 sees them flip.
 - Both performance cases are in:
   - gear_60's rotated box planes are parallel to the cylinder's axis (lines) or square to it
@@ -943,7 +943,7 @@ Each operation declares its lineage through the `Draft` calls built in BR3/BR7. 
   - its T10 predicate;
   - its expected outcome (`Ok`, or `Unsupported` with the cause's name).
 - **Expected topology** for the in-scope cases: the number of solid regions, shells and the genus,
-  stated by hand from the geometry (for example, plate_12 has genus 12). Face counts are not truth:
+  stated by hand from the geometry (for example, plate_12 has genus 144: 12 x 12 holes). Face counts are not truth:
   the pin's 7 faces for box-cyl-hole count a seam policy, not the solid.
 
 ### 5.8 Builder tasks
@@ -1578,10 +1578,7 @@ profile machinery for its moments (a slot is a loop of three lines and one arc, 
 - *A gear's "box" is cut to the disk.* The pin's box (10 x gap x 12, from `x = 45`) is wider than
   the disk and taller than the gear; only the part inside the cylinder removes material.
 
-**Deviation from 72 §2.4.** The text gives `plate_12` as `100000 - 5760 pi`. Twelve holes of
-radius 2 through height 10 remove `12 * pi * 4 * 10 = 480 pi` (5760 is 12 times too many; the
-volume would be `81,905`, not `98,492`). The code and tests use `100000 - 480 pi`; the
-difftest and T12 should too. The area is `2 (10^4 - 48 pi) + 4000 + 480 pi`.
+**72 §2.4's `plate_12` figure was right; this "deviation" was wrong (corrected by T12, §14.9).** The text gives `plate_12` as `100000 - 5760 pi`. The benchmark's `plate_holes_12` is 12 x 12 = 144 holes (68's "twelve" is per side; the benchmark table says "12×12 holes" and 150 live faces = 6 + 144), so `144 * 40 pi = 5760 pi` and `100000 - 5760 pi` is the volume (81904.42; the pin's 81904.95 is its own error). T9's `plate` function is general and correct; its test's twelve-hole plate is a fine test, named `plate_12` by mistake. T12 uses 144 holes. The area is `2 (10^4 - 576 pi) + 4000 + 5760 pi`.
 
 **Open.** Cones with a negative-slope frustum (`r1 > r0`) work (slice radius is linear); a
 cone with an apex inside the height range (a double cone) is two recipes. A membership oracle
@@ -1928,6 +1925,116 @@ One segment type, `profile::Seg`: `Line { start, end }` and `Arc { centre, start
 
 **Proposed 04 row.** "FU3: the testkit has one segment type, `profile::Seg`, a line or an arc by its ends, centre and sense (equal ends a whole circle); `csg` and `solid` take it and derive radius and angles in double-double. Change if: an oracle needs an arc the rounded ends cannot name (a radius with no ends)."
 
+### 14.9 T12 as built (11-27)
+
+**What.** `crates/scx-testkit/src/recipe/` (`mod.rs`, `make.rs`, `boolean.rs`, `convex.rs`) and `crates/scx-testkit/tests/recipe.rs` (21 tests, 16 s in debug, nearly all of it the Monte Carlo test). Plain data, no library type. `recipe::all(resolution) -> Vec<Recipe>` returns 68 recipes in a fixed order: 29 constructors, 39 Booleans; outcomes 42 built, 12 refused, 13 unsupported, 1 open.
+
+- **`Recipe { name, source, base: Part, steps: Vec<Step>, outcome, truth, lineage, invariants }`.** A `Part` is a `Shape` (block, cylinder, cone, sphere, torus, extrusion of a `profile::Seg` loop with holes) at a `Frame`; a `Step` is `Op` and a `Part`; the Boolean is the left fold of the steps over the base. `Part::solid()` gives T9's closed form at the frame; `Part::csg()` and `Recipe::csg()` give T10's tree. A constructor recipe has no steps.
+- **`Outcome`:** `Built(Topology)`, `Refused(Refusal)`, `Unsupported(Unsupported)` or `Open(reason)`. Causes by name: `Refusal::{Size(Dimension), NoBody, SelfIntersecting, Span}`; `Unsupported::{HornTorus, SsiPair { kinds }, NonManifold { at }}`. No `Defect` and no `Exhausted`: no recipe is meant to give them.
+- **`Truth { volume, area: Option, slack }`.** From T9 (`solid`, `plate`, `gear`, `torus_sector`, `sphere_cap`) and sums of them; where the Boolean overlaps (box-box-union and its siblings) by hand from the overlap's volume and area. It is stated for `Unsupported` recipes too, as the body the lifting step will build.
+- **`Topology { solid_regions, shells, genus, cells }`** with `Cells { vertices, edges, patches: Vec<PatchClass { kind, loops, genus, count }>, cubic }`: the patch complex of the module docs (seams are not edges; a patch is a 72 A12 maximal smooth patch). `euler_defect()` is `V - E + sum (2 - 2 g - L) - 2 (S - G)`; `cubic` says every vertex has three edges.
+- **`Lineage { faces: Vec<FaceOrigin { area, origins: Vec<(operand, BoxFace)> }>, new_edges, halved_edges }`** for the four two-block `issue_1462` recipes (union, difference, intersection, the flush union), `BoxFace` named by plane in `BlockFaces` order (`Bottom`, `Top`, `Front` y=0, `Right`, `Back`, `Left`).
+- **`Invariant`**: `Valid`, `Manifold`, `Volume`, `Area`, `Topology`, `Classification`, `Mesh`, `Deterministic`, `Lineage`, `NoDanglingVertices`; each recipe lists what applies (built: the common set plus area and lineage where stated; the crease recipes add `NoDanglingVertices`; the two pinched bodies drop `Manifold` and `Mesh`; refused and unsupported recipes: `Deterministic`).
+
+**The recipes.**
+- *Constructors (29):* block (plain, far and turned, small at 1e4 in units of the resolution, twice the resolution), cylinder (two frames), frustum both ways, apex both ways, sphere, torus, extrusions of T11's square, D, rounded top and square-with-square-hole; refusals: block size zero, negative, NaN, at and below the resolution, cylinder radius zero and infinite height, sphere radius negative, torus minor zero, cone with both radii zero, spindle torus, zero span; `Unsupported(HornTorus)`.
+- *`boolean_api` (17, not 15):* box-cyl-hole, box-box-union, sphere-and-box, coplanar-union, torus-minus-box are **built**. The six `NonManifold` (tangent-sphere-box, seam-sphere-box, seam-box-sphere, off-seam-sphere-box, seam-sphere-sphere, seam-box-minus-sphere) are each a touch inside a face, with the contact points listed. The six `SsiPair` are tpipe (cylinder, cylinder), the two cylinder-sphere seams, torus-sphere and the two torus-box seams (plane, torus).
+- *Coplanar and lineage (10):* the flush union (the merged-caps case of `issue_1462`), box-box-difference and -intersection, and five `coplanar-offset-*` fronts at 0, 0.1, 0.5, 4 and 10 resolutions; the first three merge to a 6-face box, the last two stay apart (10 patches).
+- *`boolean_no_dangling_vertex_refs` (3):* the crease at 0.3 (`Open`), 3 and 10 resolutions.
+- *Topology cases (6, new):* corner contact and a line contact (a diamond prism whose edge lies on a cube's face), two disjoint cubes, a cube with a cavity, a block and a cylinder cut by their own copy (empty).
+- *Benchmark bodies (4):* `plate-4`, `plate-12` (144 holes), `gear-60`, and the interleaved-grid unions at n = 4 and 8 of `boolean_coplanar_merge`.
+
+**Checks of the data** (`tests/recipe.rs`), each an independent route:
+1. Euler-Poincare on every stated cell count (under both test resolutions), and `3 V = 2 E` where `cubic`; a prism's counts from its plan polygon (`2 n, 3 n, n + 2`); and for all-planar cubic bodies the edge count recomputed from patches, loops, shells and genus.
+2. Closed forms against textbook formulas written out again (every constructor, every Boolean that has an area), against SMLib's recorded volumes in the pin's table at 1e-6, and the T-pipe's quadrature against the pin's numerical integral (1e-9).
+3. **T10's oracle against T9's truth on the whole Boolean tree**, by Monte Carlo in the tree's bounding box at 5 sigma (plus the band's share and a floor of one point in n at a share of 0 or 1): 59 recipes with a truth. Sabotaging a patch count or a volume fails the Euler, the closed-form and the oracle tests.
+4. Contact points lie in `Band` of both operands (the enclosure over a 1e-9 box holds zero), 11 points.
+5. The clipping route (`recipe::convex`): the overlap of two blocks by Sutherland-Hodgman, exact against the closed form for 400 random aligned pairs (volume, area, union), against the oracle for turned pairs, and it supplies the crease recipes' truth. Used only where no two faces are coplanar (it returns `None` otherwise).
+6. Lineage: each operand face is the origin of at most one result face, the surviving faces number 12, 12, 9, 6 as the pin's tests have them, the areas sum to the truth's area, and the face list is as long as the patch count.
+7. The refused recipes' inputs really are invalid in T9 and T10 (or at or below the resolution), the profiles equal T11's fixtures, and `frame_turned` gives right-handed orthonormal axes.
+
+**Decisions** (cases for and against).
+- **A recipe is data with no operation, so a check is a function of the answer.** For: the DT and BO tasks compare their output with `Outcome`, `Truth`, `Topology` and `Lineage` and need nothing from the testkit but the data. Against: the harness that runs a `Recipe` through the pin is DT1's, so a recipe's `Part` has two readers' conversions to write. Kept: there is one conversion each, and the pin's primitives are axis-aligned with a placement afterwards, so the pin's side is a transform of the same parts.
+- **Counts are patch counts of a patch complex, with Euler checked on them.** For: the only count that is truth (72 A12), and the cell counts give the consistency check the task asks for. Against: hand counts are one more thing to get wrong. Mitigation: every one passes Euler (V, E, F, loops and genus are redundant), and the grids' 66 and 226 patches equal the pin's face counts, which were not used to derive them.
+- **Pinches are counted per sheet.** The two touching cubes have 16 vertices, not 15: Euler's relation then holds with `S` = 2. For: it keeps one relation for every recipe. Against: DT1 must count vertices the same way for those two recipes. DT1 does not compare vertex or edge counts, only patches, genus, regions and shells.
+- **`Open` for the sub-resolution crease.** For: at 0.3 resolutions the crease touches the cube's edge and the merged-points row may build, refuse or identify, and a recipe must not claim what the plan has not decided. Against: one recipe with no claim is a weak test. Kept: its invariants still apply if built. Likewise the near-coplanar fronts at 0.5 resolutions state `Built` (they merge) with a slack on the volume of 1000 resolutions, since the merged body differs from the exact union by the gap times the area; the pin's own threshold (5e-9, a fraction of its zone) is not scx's.
+- **Contacts built, and the empty body as `Built` with no region.** For: D5 says a vertex and line contact is built (BO7, BR10); the empty result has to have some representation. Against: both depend on rows not yet built. If BO4 returns a typed `Empty`, `block-minus-itself` and `cylinder-minus-itself` change in one place each.
+- **`Unsupported::SsiPair` names a pair of kinds, not an order.** The library's dispatch is asymmetric (the plane second, the first surface keys it), so recipes give the kinds in `Kind` order and a test says compare as a set.
+- **Resolution-dependent recipes take the resolution as a parameter of `all`.** Sizes near it are in its units (`block-x-at-resolution`, the offsets, the creases). A test lists exactly which recipes change between a 1e-5 and a 1e-3 document.
+- **No `#[non_exhaustive]` on the recipe enums.** A new outcome or cause should break the DT harness's match.
+- **No fillets and no parabolic or hyperbolic edges.** 72 plans neither for step 4 (fillets are step 8; D8 `EdgeKind` has no in-scope case). A cone cut by a plane parallel to a generator would be the recipe for D8; it waits for a use.
+
+**Findings that change 72.**
+1. **T9's `plate_12` "deviation" was a mistake in T9, not in 72.** The benchmark is 12 x 12 = 144 holes (the bench results table, 150 live faces = 6 + 144, 81904.42 = `100000 - 5760 pi`). §14.1 and §5.7 are corrected above. T9's tests compute the formula for a twelve-hole plate and call it `plate_12`; the function is right and the label is wrong. Nothing else in T9 changes.
+2. **The `boolean_api` table names 17 cases, not 15**; by 72's own rulings 5 are built, 6 `Unsupported(NonManifold)` (D5: every touch is inside a face) and 6 `Unsupported(SsiPair)`. §5.2's "10 in, 5 out" understates both: the point-contact cases `BO7` was to build are the `NonManifold` ones, and what BO7 builds is the corner and line contacts T12 adds.
+3. **The crease's overlap is a sliver** (volume about 1e-15 at 3 resolutions), so it has no volume to test; its value is the validity and no-dangling-reference invariants.
+
+**Open.**
+- *The pin's near-coplanar threshold is not scx's.* If scx's merge distance differs from the resolution (it is the `max` of resolution and accuracies, plus the rounding of copies), the offsets' split at 0.5 and 4 resolutions still holds; the recipes avoid 1.
+- *Lineage names the pin's faces by plane.* The harness maps the pin's attribute ids to `BoxFace` through the pin's face order (index 0 bottom and 1 top are known from the pin test; the sides are for DT1 to read).
+- *The plate's pitch is not recorded* (68 gives none): the recipe takes cell centres at 100/12. Volume, area and counts do not depend on it.
+- *Edge counts of the lineage cases beyond the pin's* (`new_edges`, `halved_edges`) are stated only for the three boxes-at-a-corner Booleans.
+
+**Proposed 04 row.** "T12 (72 §14.9): `scx_testkit::recipe::all(resolution)` lists 68 step-4 recipes (29 constructors, 39 Booleans) as data: inputs, expected outcome (built with hand-stated topology, `Refused`, `Unsupported` with its cause, or `Open`), closed-form volume and area (T9, and clipping for two blocks), lineage for the four two-block `issue_1462` cases and the invariants to check. Every stated topology satisfies Euler-Poincare and every truth agrees with T10's oracle at 5 sigma. T9's `plate_12` correction: 144 holes. Change if: BO4 represents an empty result as a typed `Empty`, or BO7 refuses the corner and line contacts."
+
+### 14.11 MK2 as built (11-27)
+
+`crates/scx-make` gains `cylinder`, `cone`, `sphere` and `torus` (new modules `cylinder.rs`, `cone.rs`, `sphere.rs`, `torus.rs`). Dev-dependencies: `scx-nurbs` (for `Approach` in the tests) and `scx-testkit` with `bodies` (the BR8 oracle). Public API added:
+
+```rust
+pub fn cylinder(frame: &Frame, radius: Length, height: Length, doc: &Document) -> Result<Made<CylinderFaces>, MakeError>;
+pub fn cone(frame: &Frame, radii: [Length; 2], height: Length, doc: &Document) -> Result<Made<ConeFaces>, MakeError>;
+pub fn sphere(frame: &Frame, radius: Length, doc: &Document) -> Result<Made<SphereFaces>, MakeError>;
+pub fn torus(frame: &Frame, major: Length, minor: Length, doc: &Document) -> Result<Made<TorusFaces>, MakeError>;
+pub struct CylinderFaces { pub bottom: FaceId, pub top: FaceId, pub wall: FaceId }
+pub struct ConeFaces { pub bottom: Option<FaceId>, pub top: Option<FaceId>, pub wall: FaceId }
+pub struct SphereFaces { pub face: FaceId }
+pub struct TorusFaces { pub face: FaceId }
+// MakeError gains Unsupported(Unsupported), kind Unsupported:
+#[non_exhaustive] pub enum Unsupported { HornTorus { major: f64, minor: f64 } }
+// Refusal gains ZeroRadii and SelfIntersecting { major, minor }; Defect gains Surface(SurfaceError);
+// Dimension gains Radius, Height, BaseRadius, TopRadius, Major, Minor.
+```
+
+**What it does.** Each body is one `Draft` written with its topology known, as MK1's block is: no stitch, no orientation pass, no ray fire, pcurves from `Draft::exact_loops` with every `bound` `None`, then `finish`. A periodic surface is one face whose loop runs round its seam, so each wall's loop is counter-clockwise in uv over one period and its front is the outside.
+
+| body | faces | edges | vertices | loop of the curved face |
+|---|---|---|---|---|
+| cylinder; frustum (both radii above zero) | 3 | 3: two rim circles, the seam ruling at the frame's x axis | 2 | bottom rim forward, seam up, top rim reversed, seam down |
+| cone to an apex (one radius exactly zero) | 2 | 3: the rim, the seam ruling, the apex's collapsed edge | 2 | rim, seam, apex, seam back (apex on top); top rim reversed, seam down, apex, seam up (apex at the base) |
+| sphere | 1 | 3: the seam meridian through the frame's x axis, a collapsed edge at each pole | 2 (the poles, on the frame's z axis) | meridian down, south pole, meridian up a period on, north pole |
+| torus | 1 | 2 closed: the outer equator and the meridian through the frame's x axis | 1 (at `major + minor` on the frame's x axis) | equator, meridian, equator reversed, meridian reversed |
+
+`Assembly` gains `collapsed(v)` (a pole or apex, used once by the face round it) and `circle(frame, radius)` (a closed edge over `[0, 2 pi]` and its one vertex at the frame's x axis). A seam needs nothing new: the same edge is used twice in one loop with opposite senses, and `exact_loops` shifts the second use a period on. The cylinder and the frustum share `walled`. The size check is now one crate-private `error::size`, which `block` also uses (no change in its answers).
+
+**Decisions, with cases.**
+- **`sphere` takes a `Frame`, not §4.3's `centre: Point3`** (a deviation). For: §4.2 says every constructor takes a frame; the frame places the seam and the poles, which a caller cutting the sphere later (a Boolean's seam cases, BO5/BO7) needs to control, and it costs a caller with only a centre one `Frame::new`. Against: a sphere is symmetric, so the frame's rotation is invisible in the solid, and the sketch is shorter. Kept: the B-rep is not symmetric even when the solid is.
+- **`Dimension` stays one enum** (MK1's open question 2). For: one `Refusal::Size` variant across all constructors, a typed name a caller can match, and five constructors add only six variants (`Radius`, `Height`, `BaseRadius`, `TopRadius`, `Major`, `Minor`). Against: some variants mean nothing for some constructors (`X` for a sphere), so the type does not say which a constructor can return; per-constructor enums would. Kept: the doc of each constructor names its dimensions and the test pins them; per-constructor enums would multiply `Refusal` variants for no caller.
+- **A cone's radius is exactly zero (an apex) or a size above the zone.** A radius in `(0, zone]` is `Refused { Size }`, not an apex. For: a radius within the zone would be a cap smaller than the resolution, which `finish` refuses as a defect, and silently turning it into an apex would change the body the caller asked for. Against: the pin skips a cap "within the tolerance" and builds the apex. Kept: refusal names the size, and 0 is the documented exception. Both zero is `Refused { ZeroRadii }`.
+- **Equal radii build a cylinder wall.** `Cone::new` refuses a zero half-angle (a cylinder is its own kind), so `cone(r, r)` builds the `Cylinder` surface and keeps `ConeFaces`. Against: a caller asking for a cone gets a cylinder surface. Kept: it is the same solid, exact, and refusing would push the branch onto every caller.
+- **`ConeFaces` holds `Option` caps**, not an enum of frustum, apex-on-top and apex-at-base. For: one record, field access unchanged across the three, `None` means "no face here" with nothing hidden (not a failing default: no value stands in for an absent one). Against: the type allows both `None`, which no cone returns. Kept: an enum makes the common read (`faces.bottom`) a match for no gain.
+- **Torus kinds and their band.** The sizes are checked first (so the pin's `(2e-12, 0.5)` is `Size { Major }`, not a tube-crosses-axis refusal). Then `|minor - major| <= zone` is `Unsupported { HornTorus }` (D3), on both sides of equality; `minor > major + zone` is `Refused { SelfIntersecting }`. For: radii within the resolution of each other are one length, so a ring torus whose tube is closer to the axis than the zone is a horn torus at this document and cannot be made safely. Against: a caller asking for `minor = major - zone/2` gets `Unsupported` for a valid ring torus. Kept: the alternative is a body whose tube touches its axis within the resolution. The pin built the horn torus; this is on purpose.
+- **Collapsed edges at the poles and the apex.** The pin's sphere is `(1, 1, 2)` (no pole edges); this one is `(1, 3, 2)`. `exact_loops` refuses a loop that crosses a pole without one (`PoleNeedsEdge`), and the BR2 rules give each pole a uv segment through it. The Euler count over these bodies is taken over the curve edges, `V - E + F - (L - F) = 2 - 2 genus`, since a collapsed edge is a pole, not a side.
+- **`Defect::Surface(SurfaceError)`** for a surface constructor refusing sizes already validated. It cannot happen with the checks above; the alternative was `expect`, which the workspace forbids.
+
+**Pin tests.**
+- `primitives_are_closed_solids_with_analytic_properties`: ported for the cylinder r5 h20 and the cone r5 to 2 h20 at the origin, with the two apex cones and a frustum widening upward added, each again at a tilted frame at (120, -40, 7.5). Each asserts counts, collapsed-edge count, caps by role, the closed-solid structure (two regions and shells, two opposite fins per curve edge and one per collapsed edge, front in the outside, no pcurve bound), the Euler count, BR8's `violations` empty, volume, area and centroid against `solid::cylinder` and `solid::cone` placed (1e-12 relative), and membership against T10 (`Csg::leaf` with `Cylinder` or `Frustum`): every face sampled on an 11 x 11 uv grid where `contains_uv` is `Inside`, the point `Band`, a step along the front normal `Out`, one back `In`. Not ported: the pyramid spec (not a step-4 constructor, §4.2); the box spec (MK1's); the tight bounding box (below).
+- `complete_spheres_and_tori_have_analytic_properties`: ported for the sphere r3 at (1, -2, 0.5) and the torus R5 r1.5 at (0, 1, -1), each also at a tilted frame, with the same assertions (genus 1 for the torus) against `solid::sphere` and `solid::torus` and T10's `Sphere` and `Torus`. Not ported, on purpose: "sphere r3 (no pole)" (the pin's `create_sphere_no_pole_with_tolerance` built fitted patches to avoid its own pole handling; scx has one exact sphere, poles included), and the partial sphere and partial torus (partial primitives are not in step 4, §4.2). The pin's `tight: true` bounding box is asserted only as holding the sphere: `Brep::bounding_box` is the conservative box `scx-brep` keeps for pruning (MEASURED: on the r3 sphere at the world frame its half-widths are 4.40 mm across x and y and 3.63 mm along z), and there is no tight-box query yet.
+- `precise_sphere_properties_scale_and_translate`: ported for radii 2 at the origin and 5 at (1, -2, 0.5), area `4 pi r^2` and volume `4/3 pi r^3` to the pin's 1e-9 (MEASURED: within 2.2e-14 relative). The pole-free halves of its rows are not ported (above).
+- `primitive_infinite_region_searches` (5 tests) becomes `each_region_is_the_one_built`: the cylinder r4 h14 at (10, 20, -1), the thin cylinder (h 5e-4), the far cylinder at (600, 0, 0), the cones 5 to 0 and 5 to 2 of height 7, the box 8 x 14 x 3, and the huge box 1000 x 1e7 x 4e7 at a 1e-9 mm document. Each has exactly two regions, the outside not solid and one solid; every face's front is the outside's shell, its front normal at its middle points away from the solid, and the volume is the truth's. The pin's search counts go: there is no search. Not ported: the test that adds a box to a B-rep holding another, which is a union, the Boolean's job (S1, BO4).
+- `api_primitives` refusals: `a_sphere_radius_not_above_zero_is_refused_naming_the_radius` and the size lines of `invalid_inputs_are_rejected_before_the_kernel` become `sizes_not_above_the_resolution_are_refused_by_name` (-3, minus the zone, 0, the zone, NaN, both infinities, on every size of all four constructors; 0 is not a refusal for a cone radius); `validators_match_upstream`'s cone lines become `a_cone_with_both_radii_zero_is_refused`; `a_torus_whose_tube_crosses_its_axis_is_refused_naming_the_radii` and `the_horn_torus_is_still_built` become `spindle_tori_are_refused_and_horn_tori_unsupported` ((1, 2), (1, 1e9) and (2, 2 + 4 zone) refused; (2, 2) and 2 +- zone/2 `Unsupported`; 2 - 2 zone builds). The horn torus flips from built to `Unsupported` on purpose (D3). `complete_solids_construct`'s counts are in the property tests above.
+- MK1's handed-over far-cylinder row becomes `far_cylinders_build_closed_and_valid`: cylinders of each radius and length of the pin's cylindrical-box rows ((1, 1, 2), (1e-3, 1, 2), (1, 1e-3, 2e-3)) at 1e3, 1e6 and 1e8, plus both apex cones, a sphere and a torus at a tilted frame there, all closed and BR8-clean. The tube itself (inner and outer radius) is a profile's extrusion and waits for `extrude`. The BR8 oracle's default tolerances (1e-7 mm, 1e-9 in uv) are below one ulp at 1e8, and the tilted apex cone there shows a `UvGap` at them (a seam pcurve inverted from rounded vertices), so these rows use `max(default, 8 eps c)`; `finish` accepts every row at the document's own resolution.
+- Added: `a_cone_of_equal_radii_is_a_cylinder`, `making_is_deterministic` (bit-for-bit vertices and equal records).
+
+**Mass stand-in.** scx-mass (MA1) is not on main, so the tests read volume, area and centroid off the body by the divergence theorem: tensor Gauss-Legendre (16 nodes, 8 x 8 panels, aligned with the quarter arcs) over a curved face's uv box, after checking the face is its whole box, and Green's theorem over a planar cap's pcurves. To be replaced by scx-mass when MA1 lands.
+
+**Measurements** (throwaway timer, not committed; release build, 20,000 repetitions after 2,000 warm-up, at the world frame, build plus `finish`; two runs on a loaded machine, so ranges): cylinder r5 h20 **10.8-11.9 us**; frustum 5 to 2 **11.3-12.8 us**; cone 5 to 0 **8.0-9.0 us**; cone 0 to 5 **8.5-8.8 us**; sphere r3 **9.2-10.3 us**; torus 5, 1.5 **10.0-11.3 us**; the block in the same runs 16.8-20.7 us (MK1 measured 18.3). Each is cheaper than the block: fewer faces and edges. Added work against the pin: none (the pin stitches and, for its infinite-region search, fires rays; this does neither). The block's change to the shared `error::size` adds no work.
+
+**Deviations from 72.** `sphere` takes a `Frame` (above). `MakeError::Defect` carries a cause, as in MK1. The spindle refusal uses 72's name `SelfIntersecting`; the horn band is the zone.
+
+**Open questions.** (1) A tight bounding-box query (the pin's `tight: true`) for the property tests' box check: a query task, not a constructor's. (2) Whether the BR8 oracle's tolerances should scale with position by default. (3) Partial primitives stay `Unsupported` by not existing; no caller needs them yet.
+
+**Proposed 04 row.** "`scx-make` (MK2): a periodic surface is one face whose loop runs round a seam edge used twice; poles and apexes are collapsed edges; a cone radius is exactly zero (an apex) or a size, both zero refused; a torus with radii within the zone of each other is `Unsupported { HornTorus }`, beyond that `Refused { SelfIntersecting }`; `sphere` takes a frame; `Dimension` stays one enum. Change if: BR2's pole rules cover an apex on the axis (the horn torus), or a caller needs partial primitives."
 
 ### 14.12 MK3 as built (11-27)
 

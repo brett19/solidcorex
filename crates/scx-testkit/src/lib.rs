@@ -38,6 +38,9 @@
 //!   nested, reversed) with the verdict a region builder must give (research 72 T11).
 //! - [`mesh`]: a triangle mesh's invariants (closed, manifold, oriented, no degenerate or folded
 //!   triangles) and its volume gap against a reference (research 72 T13).
+//! - [`recipe`]: the step-4 test cases as data: constructors and Booleans with their expected
+//!   outcome (built, `Refused`, `Unsupported`), closed-form volume and area, hand-stated topology
+//!   and lineage (research 72 T12).
 //! - `bodies` (feature `bodies`): seeded valid and broken B-rep bodies, the one module that
 //!   builds library types (`scx-brep`'s `Draft`), with an independent structure oracle.
 
@@ -58,6 +61,7 @@ pub mod profile;
 pub mod project;
 pub mod quadric;
 pub mod rat;
+pub mod recipe;
 pub mod sample;
 pub mod solid;
 pub mod ssi;

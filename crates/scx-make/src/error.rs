@@ -21,6 +21,18 @@ pub enum Dimension {
     Y,
     /// The extent along the frame's z axis.
     Z,
+    /// A cylinder's or sphere's radius.
+    Radius,
+    /// A cylinder's or cone's height, along the frame's z axis.
+    Height,
+    /// A cone's radius on the frame's `z = 0`.
+    BaseRadius,
+    /// A cone's radius on `z = height`.
+    TopRadius,
+    /// A torus's major radius: the frame's origin to the tube's centre.
+    Major,
+    /// A torus's minor radius: the tube's.
+    Minor,
 }
 
 impl Dimension {
@@ -31,6 +43,12 @@ impl Dimension {
             Self::X => "x",
             Self::Y => "y",
             Self::Z => "z",
+            Self::Radius => "radius",
+            Self::Height => "height",
+            Self::BaseRadius => "base_radius",
+            Self::TopRadius => "top_radius",
+            Self::Major => "major",
+            Self::Minor => "minor",
         }
     }
 }
@@ -69,6 +87,16 @@ pub enum Refusal {
         /// The document's.
         document: Resolution,
     },
+    /// A cone whose radii are both zero: a segment, not a solid.
+    ZeroRadii,
+    /// A spindle torus: the minor radius exceeds the major one by more than the resolution,
+    /// so the tube crosses its own axis.
+    SelfIntersecting {
+        /// The major radius (mm).
+        major: f64,
+        /// The minor radius (mm).
+        minor: f64,
+    },
 }
 
 /// Valid input this build does not make yet, by name.
@@ -79,6 +107,14 @@ pub enum Unsupported {
     Profile(PlanarError),
     /// A profile segment of a kind this constructor does not sweep yet.
     Segment(SegmentRef),
+    /// A horn torus: the radii are equal within the resolution, so the tube meets the axis
+    /// at one point, a singular point that the pole rules do not cover (72 D3).
+    HornTorus {
+        /// The major radius (mm).
+        major: f64,
+        /// The minor radius (mm).
+        minor: f64,
+    },
 }
 
 /// A fault of the constructor itself, detected: our bug.
@@ -139,6 +175,9 @@ impl MakeError {
             Self::Refused(Refusal::Resolution { .. }) => "resolution",
             Self::Unsupported(Unsupported::Profile(_)) => "profile_undecided",
             Self::Unsupported(Unsupported::Segment(_)) => "segment_kind",
+            Self::Refused(Refusal::ZeroRadii) => "zero_radii",
+            Self::Refused(Refusal::SelfIntersecting { .. }) => "self_intersecting",
+            Self::Unsupported(Unsupported::HornTorus { .. }) => "horn_torus",
             Self::Defect(Defect::Surface(_)) => "surface",
             Self::Defect(Defect::Curve(_)) => "curve",
             Self::Defect(Defect::Absent(_)) => "absent",
@@ -182,6 +221,15 @@ impl fmt::Display for MakeError {
             Self::Unsupported(Unsupported::Segment(at)) => {
                 write!(f, "{at} is of a kind not swept yet")
             }
+            Self::Refused(Refusal::ZeroRadii) => write!(f, "both radii of the cone are zero"),
+            Self::Refused(Refusal::SelfIntersecting { major, minor }) => write!(
+                f,
+                "the torus's minor radius {minor} mm exceeds its major radius {major} mm: the tube crosses its axis"
+            ),
+            Self::Unsupported(Unsupported::HornTorus { major, minor }) => write!(
+                f,
+                "the horn torus (major {major} mm, minor {minor} mm) is not made yet: its tube meets the axis"
+            ),
             Self::Defect(Defect::Surface(e)) => write!(f, "a surface of the body: {e}"),
             Self::Defect(Defect::Curve(e)) => write!(f, "a curve of the body: {e}"),
             Self::Defect(Defect::Absent(e)) => e.fmt(f),
@@ -245,5 +293,20 @@ impl From<PlanarError> for MakeError {
             ErrorKind::Unsupported => Self::Unsupported(Unsupported::Profile(e)),
             _ => Self::Refused(Refusal::Profile(e)),
         }
+    }
+}
+
+/// `value` in mm if it is finite and above `floor`, else [`Refusal::Size`] naming
+/// `dimension`. NaN is not above the floor, so it is refused too.
+pub(crate) fn size(dimension: Dimension, value: Length, floor: Length) -> Result<f64, MakeError> {
+    let mm = value.mm();
+    if mm.is_finite() && mm > floor.mm() {
+        Ok(mm)
+    } else {
+        Err(MakeError::Refused(Refusal::Size {
+            dimension,
+            value: mm,
+            floor,
+        }))
     }
 }

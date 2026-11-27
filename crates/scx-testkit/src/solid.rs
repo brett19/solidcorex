@@ -692,8 +692,8 @@ pub struct Hole {
 /// A block `dx` x `dy` x `dz` (corner on the origin) minus cylinders through its `z` extent.
 /// The holes must lie inside the plate and apart (a hole touching a wall or another is
 /// [`SolidError::Apart`]). `V = dx dy dz - dz sum pi r^2`; `A = 2 (dx dy - sum pi r^2) +
-/// 2 (dx + dy) dz + dz sum 2 pi r`. (Research 72 §2.4 prints `plate_12` as `100000 - 5760 pi`;
-/// twelve holes of radius 2 through 10 are `12 * pi * 4 * 10 = 480 pi`.)
+/// 2 (dx + dy) dz + dz sum 2 pi r`. (`plate_12` has 12 x 12 = 144 holes of radius 2 through 10, so `100000 - 5760 pi`,
+/// which matches the pin's recorded volume 81904.43; research 72 §14.9.)
 pub fn plate(dx: f64, dy: f64, dz: f64, holes: &[Hole]) -> Result<Solid, SolidError> {
     let b = block(dx, dy, dz)?;
     let mut moments = b.moments;

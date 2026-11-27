@@ -234,6 +234,18 @@ impl Brep {
         &self.cells
     }
 
+    /// One past the highest region id ever given, the outside's included.
+    #[must_use]
+    pub fn region_slots(&self) -> usize {
+        self.t.regions.slots()
+    }
+
+    /// One past the highest shell id ever given.
+    #[must_use]
+    pub fn shell_slots(&self) -> usize {
+        self.t.shells.slots()
+    }
+
     /// One past the highest face id ever given: the length of a dense side table or bitset
     /// keyed by face id.
     #[must_use]

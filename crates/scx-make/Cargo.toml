@@ -16,7 +16,8 @@ scx-planar = { path = "../scx-planar" }
 scx-surface = { path = "../scx-surface" }
 
 [dev-dependencies]
-scx-testkit = { path = "../scx-testkit" }
+scx-nurbs = { path = "../scx-nurbs" }
+scx-testkit = { path = "../scx-testkit", features = ["bodies"] }
 
 [lints]
 workspace = true

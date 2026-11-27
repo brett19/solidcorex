@@ -18,18 +18,30 @@
 //! - **Sizes are validated by type.** Each is a [`Length`](scx_num::units::Length) that must
 //!   be finite and above the document's resolution; otherwise [`Refusal::Size`].
 //!
+//! - **Seams and poles.** A periodic surface (the cylinder's, cone's, sphere's and torus's)
+//!   is one face whose loop runs round a seam edge used twice in opposite senses; a sphere's
+//!   poles and a cone's apex are collapsed edges.
+//!
 //! The pattern the next constructors reuse is the one in `block`: a table of roles over
 //! vertex corners, the [`Assembly`](crate::assembly) that writes them, and a record struct
 //! of [`FaceId`](scx_brep::FaceId)s by role.
 
 mod assembly;
 mod block;
+mod cone;
+mod cylinder;
 mod error;
 mod extrude;
+mod sphere;
+mod torus;
 
 pub use block::{BlockFaces, block};
+pub use cone::{ConeFaces, cone};
+pub use cylinder::{CylinderFaces, cylinder};
 pub use error::{Defect, Dimension, MakeError, Refusal, Unsupported};
 pub use extrude::{ExtrudeFaces, Span, extrude};
+pub use sphere::{SphereFaces, sphere};
+pub use torus::{TorusFaces, torus};
 
 use scx_brep::Brep;
 
