@@ -501,6 +501,7 @@ dependencies = [
  "scx-make",
  "scx-num",
  "scx-nurbs",
+ "scx-ssi",
  "scx-surface",
  "scx-testkit",
 ]
@@ -561,6 +562,7 @@ dependencies = [
  "scx-algo",
  "scx-bodyq",
  "scx-brep",
+ "scx-check",
  "scx-curve",
  "scx-make",
  "scx-mass",
@@ -572,6 +574,7 @@ dependencies = [
  "scx-record",
  "scx-ssi",
  "scx-surface",
+ "scx-tess",
  "scx-testkit",
  "solidcore",
  "solidcore-record",

@@ -26,6 +26,7 @@ use crate::{BooleanError, BooleanOp, BooleanRefusal, BooleanUnsupported, Stage, 
 
 mod face_face;
 mod imprint;
+mod unsupported;
 
 fn pt(p: [f64; 3]) -> Point3 {
     Point3::new(p[0], p[1], p[2])

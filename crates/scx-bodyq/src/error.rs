@@ -54,6 +54,16 @@ pub enum BodyqUnsupported {
         /// The edge or vertex.
         at: Entity,
     },
+    /// No side of `face` could be read where `other` meets it (BQ2): the crossing is too
+    /// shallow at every sample, the surfaces agree to second order across the curve or
+    /// round the touch point, or neither has a normal there. The caller falls back to
+    /// classifying a point.
+    NoClearSide {
+        /// The face whose sides were asked for.
+        face: FaceId,
+        /// The other body's face.
+        other: FaceId,
+    },
 }
 
 /// The query's own failure on a valid body.
@@ -108,6 +118,7 @@ impl BodyqError {
             Self::Refused(BodyqRefusal::NotFinite) => "not_finite",
             Self::Unsupported(BodyqUnsupported::Nurbs { .. }) => "nurbs",
             Self::Unsupported(BodyqUnsupported::NonManifold { .. }) => "non_manifold",
+            Self::Unsupported(BodyqUnsupported::NoClearSide { .. }) => "no_clear_side",
             Self::Exhausted { .. } => "exhausted",
             Self::Cancelled => "cancelled",
             Self::Defect(BodyqDefect::NoFaceBox { .. }) => "no_face_box",
@@ -158,6 +169,9 @@ impl fmt::Display for BodyqError {
             }
             Self::Unsupported(BodyqUnsupported::NonManifold { at }) => {
                 write!(f, "{at}: the normal cone names no one region")
+            }
+            Self::Unsupported(BodyqUnsupported::NoClearSide { face, other }) => {
+                write!(f, "{face}: no clear side where {other} meets it")
             }
             Self::Exhausted { limit } => write!(f, "the budget of {limit} ran out"),
             Self::Cancelled => f.write_str("stopped"),

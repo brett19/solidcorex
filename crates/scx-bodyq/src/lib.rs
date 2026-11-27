@@ -36,6 +36,12 @@
 //! their boxes, then id) and rays in table order, so the same
 //! body and point give the same answer and the same work. The answer does not depend on
 //! which clean ray decides: any clean ray gives the same region (a test checks every one).
+//!
+//! **Sides at a meeting** (72 §3.5 BQ2, §14.27). [`sides_along`] says which of the other
+//! body's regions a face lies in on each side of a curve where a face of the other body
+//! meets it, and [`side_at_touch`] round a point where the two touch: the Boolean's seeds
+//! (BO4). Both read the two surfaces' normals and curvatures at the meeting (see
+//! the note on [`sides_along`]).
 
 mod classify;
 mod error;
@@ -43,10 +49,12 @@ mod geom;
 mod near;
 mod on;
 mod rays;
+mod side;
 
 pub use classify::{PointClass, classify_point};
 pub use error::{BodyqDefect, BodyqError, BodyqRefusal, BodyqUnsupported};
 pub use rays::RAYS;
+pub use side::{Along, Sides, side_at_touch, sides_along};
 
 #[cfg(test)]
 mod tests;
