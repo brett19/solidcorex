@@ -16,6 +16,7 @@ scx-planar = { path = "../scx-planar" }
 scx-surface = { path = "../scx-surface" }
 
 [dev-dependencies]
+scx-mass = { path = "../scx-mass" }
 scx-nurbs = { path = "../scx-nurbs" }
 scx-record = { path = "../scx-record" }
 scx-testkit = { path = "../scx-testkit", features = ["bodies"] }

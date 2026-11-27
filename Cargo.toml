@@ -91,6 +91,11 @@ assert_is_empty = "allow"
 [profile.dev.package.scx-testkit]
 opt-level = 3
 
+# The mass integrals (adaptive Gauss-Kronrod over every trim) dominate the make tests' time
+# in an unoptimised build; optimising changes no result.
+[profile.dev.package.scx-mass]
+opt-level = 3
+
 # The pin, built optimised in dev and test builds too: the difftest's time is in its
 # intersectors. Rust never reassociates floats, so optimising changes no result.
 [profile.dev.package.solidcore]
