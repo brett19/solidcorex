@@ -539,6 +539,7 @@ dependencies = [
  "scx-brep",
  "scx-curve",
  "scx-num",
+ "scx-record",
  "scx-surface",
  "scx-testkit",
 ]
