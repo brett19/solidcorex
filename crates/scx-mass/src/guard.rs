@@ -17,11 +17,12 @@ use scx_num::budget::{Budget, Stop};
 
 use crate::enclose::outward;
 use crate::error::{MassDefect, MassError};
+use crate::rounding::Sum;
 
 /// The estimate's volume per shell: its sum and summed error.
 #[derive(Default)]
 pub(crate) struct Shells {
-    sums: BTreeMap<ShellId, (f64, f64)>,
+    sums: BTreeMap<ShellId, (Sum, f64)>,
     /// Shells with a face the estimate skipped (between two solids or two voids): their
     /// sums are not their volumes.
     partial: Vec<ShellId>,
@@ -39,8 +40,8 @@ impl Shells {
             return;
         }
         for (s, w) in [(back, 1.0), (front, -1.0)] {
-            let e = self.sums.entry(s).or_insert((0.0, 0.0));
-            e.0 += w * flux;
+            let e = self.sums.entry(s).or_default();
+            e.0.add(w * flux);
             e.1 += error;
         }
     }
@@ -54,7 +55,7 @@ impl Shells {
     /// The first shell whose estimate contradicts its region, if any.
     fn contradicted(&self, body: &Brep) -> Option<ShellId> {
         let whole = |s: ShellId| !self.partial.contains(&s);
-        let sum = |s: ShellId| self.sums.get(&s).copied();
+        let sum = |s: ShellId| self.sums.get(&s).map(|(v, e)| (v.value(), e + v.bound()));
         for region in body.regions() {
             let shells: Vec<ShellId> = region
                 .shells()

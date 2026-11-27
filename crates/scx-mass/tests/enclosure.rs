@@ -216,14 +216,9 @@ fn a_thin_shells_estimate_holds_its_closed_form() {
         )
         .unwrap();
         let miss = (e.value - want).abs();
-        // Within the stated error or the accuracy asked. On the widest shell the stated
-        // error is 0 against a miss of 9e-9 (6e-10 of the volume: the faces' fluxes cancel
-        // from 1e8 and their rounding is not in the estimate), an open question for the
-        // estimate (72 §14.22).
-        assert!(
-            miss <= e.error || miss <= 1e-9 * want,
-            "r {r} t {t}: {e:?}, miss {miss:e}"
-        );
+        // Within the stated error: the faces' fluxes cancel from 1e8 on the widest shell,
+        // and their rounding is in the error (72 §14.31; it was 0 against a miss of 9e-9).
+        assert!(miss <= e.error, "r {r} t {t}: {e:?}, miss {miss:e}");
     }
 }
 
