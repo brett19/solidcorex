@@ -196,9 +196,9 @@ worst! {
     ln => "log", 0;
     log2 => "log2", 0;
     log10 => "log10", 0;
-    sin_and_sin_cos => "sin", 458;
-    cos_and_sin_cos => "cos", 522;
-    tan => "tan", 262;
+    sin_and_sin_cos => "sin", 0;
+    cos_and_sin_cos => "cos", 0;
+    tan => "tan", 0;
     asin => "asin", 23;
     acos => "acos", 78;
     atan => "atan", 166;

@@ -1,6 +1,6 @@
 // Written for solidcorex. Apache-2.0.
 //! The accurate phase of every `fmath` function: the value recomputed in [`Big`] at 128
-//! bits, then 512 ([`big::ziv`]), when the double-double result's rounding test fails, and
+//! bits, then 512 ([`ziv`]), when the double-double result's rounding test fails, and
 //! the exact checks that decide the cases no precision can (`hypot` and `cbrt` midpoints,
 //! `powf`'s exact powers). Each function is `#[cold]`: it runs for about one input in
 //! 10^3 to 10^4 (`docs/research/70-fmath-correct-rounding.md`).
@@ -13,7 +13,7 @@
 //! argument. Every step loses at most a few units of `2^(1 - 64p)`, which the error
 //! constant [`C`] (`2^C` such units) covers with room to spare.
 
-use super::big::{self, Big, ziv};
+use super::big::{Big, ziv};
 use super::dd;
 use super::tables::{INV_LN2, LN2_BIG, LN10_BIG, PIO2_BIG, TWO_OVER_PI_BITS};
 
