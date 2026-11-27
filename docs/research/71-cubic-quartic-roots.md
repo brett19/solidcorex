@@ -309,3 +309,77 @@ Remaining gap: the quartic is 4.3x the pin in time and the cubic 3.1x. The cost 
 contract: compensated evaluation at every root (the pin's closed forms stop at plain
 double), the critical points of a quartic (a cubic solve inside), and the runtime `fma`
 on baseline x86-64 (an `x86-64-v3` build inlines it; research 67).
+
+## 7. Speed, second pass
+
+Branch `pf2`, 11-27. Every result is the same bits as `main`'s: 0 of the 4,000,000 local
+corpus inputs differ, and so do 0 of the 80,000 contract-scan inputs (§6's four classes).
+The golden hashes are unchanged on x86_64 and wasm32. So the contract checks of §6 carry
+over as they stand. The code is bound by latency: a Newton step waits on the evaluation
+before it, so shortening the chain of dependent operations gained more time than cutting
+instructions did.
+
+Instructions per batch of 1,024 calls (`algo_ic`, callgrind):
+
+| case | before | after | change | pin | after / pin |
+|---|---|---|---|---|---|
+| cubic | 1,696,725 | 1,670,519 | -1.5% | 458,538 | 3.64 |
+| cubic edge | 262,165 | 262,018 | -0.1% | 104,954 | 2.50 |
+| quartic | 3,513,126 | 3,439,248 | -2.1% | 761,284 | 4.52 |
+| quartic edge | 1,231,221 | 1,216,752 | -1.2% | 341,194 | 3.57 |
+
+Wall time (criterion, pinned to one core, in two rounds). In the second round the builds
+alternated with the pin at the same speed. The first round ran at a faster machine state
+(the pin's cubic took 35 us against 50 us), so its ratios are the ones to read:
+
+| case | before | after | change | pin | after / pin |
+|---|---|---|---|---|---|
+| cubic | 193 us | 175 us | -9% | 50-51 us | 3.45 (3.52 in round 1) |
+| cubic edge | 17.3 us | 16.7 us | -3% | 5.1-5.7 us | 3.0-3.3 |
+| quartic | 489 us | 416 us | -15% | 98-102 us | 4.07 (3.85 in round 1) |
+| quartic edge | 109 us | 109 us | 0% | 32-33 us | 3.3 |
+
+What changed:
+
+- **The cubic model start by a fit.** `smooth_inner` solves `3 t^2 - 2 t^3 = q` for the
+  inner root's place in its bracket. It now starts from a degree-six fit of `t / sqrt(q)`
+  in `sqrt(q)` at Chebyshev nodes (relative error below `2^-16.9`). The model's own Newton
+  then always takes two steps, where before it took 3.57 on average from `sqrt(q / 3)`,
+  each step waiting on the last.
+- **No model convergence inside a quartic's search.** When `roots_between` brackets a
+  quartic's roots, it uses `smooth_inner` only to start `quartic_inner`, which refines
+  `t` itself. So the fit alone is enough there (`converge = false`). `quartic_inner`'s step
+  count is unchanged (4.37 on average).
+- **Estrin's scheme in plain evaluation.** `horner` evaluates degrees three and four in
+  powers of `x^2`, which shortens the dependent chain of every plain Newton step and sign
+  test. Its terms see at most `2n - 1` roundings, so Horner's `γ_2n` bound (and every
+  sign test built on it) still holds. Past `|x| = 2^250` it falls back to Horner's rule,
+  where `x^4` could overflow and give `inf - inf` while Horner's nested form does not.
+  Below that point, with coefficients below `2^16` (balanced ones are below 2, their
+  derivatives' below 8), every term is below `2^1016` and neither form can overflow. The
+  guard costs about 130 instructions a quartic (a compare and the out-of-line fallback's
+  register setup in the Newton loop). Checking the result for finiteness after the fact
+  cost more: 3,399 against 3,293 instructions per quartic call.
+- **Balancing by constant divisors.** `balanced` rounds `(e_low - e_lead) / span` with a
+  match over the span, so each division is by a constant (a multiply). This gains about 1%.
+
+Tried and dropped (each measured in callgrind and in time, against the 4M corpus):
+
+- **Stopping plain Newton at `2^-15`, not `2^-30`:** 7 results changed, and no faster.
+- **Halley's method in `quartic_inner`:** 4.37 steps fell to 3.29, but with more
+  instructions and no gain in time.
+- **Laguerre's method for the fallback outer roots** (`outer_start`, 66% of quartics, 5.37
+  plain steps each): 568k steps fell to 444k per 100k quartics, but with more instructions
+  and no gain in time. A Laguerre start from the sample alone gained little.
+- **Estrin's scheme in the third compensated pass:** 5 results changed, and no faster.
+- **One Newton step after the fit, or a predicted stop for the model's Newton:** slower;
+  the predicted stop changed 15 results.
+- **A compensated step straight away from a model start** (skipping the plain step):
+  fewer instructions, but slower, and 2 results changed.
+- **A Shewchuk-style filter on polish:** polish's stop `2 (u |v| + γ² S)` is below what any
+  plain bound certifies (§6), so no filter can accept without changing bits.
+- **Research 65 §2.5's trig-free cubic:** not built, for the reason given in §6.
+
+Remaining gap: the quartic is about 4x the pin in time and the cubic about 3.5x. The cost
+is the contract as before (§6): compensated polish at every root, the quartic's critical
+points, and the runtime `fma` on baseline x86-64.
