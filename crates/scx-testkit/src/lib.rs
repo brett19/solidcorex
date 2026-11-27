@@ -13,14 +13,21 @@
 //! - [`dd`]: double-double arithmetic and elementary functions.
 //! - [`analytic`]: lines, circles, ellipses, planes, cylinders, cones, spheres and tori in
 //!   double-double (exact for the rational cases), with closest points.
+//! - [`poly`]: exact univariate polynomials with certified real roots (Sturm sequences).
+//! - [`pin_uv`]: the pin's NURBS-compatible uv of the analytic surfaces (research 63 D13).
+//! - [`curve_surface`]: certified intersections of a line, circle or ellipse with a plane,
+//!   cylinder, cone, sphere or torus (research 63 T2).
 //! - [`gen`]: seeded generators of well- and ill-conditioned inputs.
 
 pub mod analytic;
+pub mod curve_surface;
 pub mod data;
 pub mod dd;
 pub mod exact;
 pub mod gen;
 pub mod nurbs;
+pub mod pin_uv;
+pub mod poly;
 pub mod rat;
 
 pub use rat::Rat;

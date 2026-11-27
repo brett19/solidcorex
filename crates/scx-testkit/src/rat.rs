@@ -81,6 +81,11 @@ impl Rat {
         }
     }
 
+    /// `(num, den, exp)` of `num / den * 2^exp`, reduced (`den` odd and positive).
+    pub(crate) fn parts(&self) -> (&Int, &Int, i64) {
+        (&self.num, &self.den, self.exp)
+    }
+
     /// Whether this is zero.
     pub fn is_zero(&self) -> bool {
         self.num.is_zero()

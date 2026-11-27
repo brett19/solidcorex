@@ -8,8 +8,10 @@
 
 use scx_num::hash::Rng;
 
-use crate::analytic::{Circle, Frame, Line, Plane, Sphere};
+use crate::analytic::{Circle, Ellipse, Frame, Line, Plane, Sphere};
+use crate::curve_surface::{self, CurveKind, SurfaceKind};
 use crate::data::{CurveData, SurfaceData};
+use crate::dd::{self, Dd};
 
 /// How interior knots are placed in a clamped knot vector on `[0, 1]`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -126,7 +128,7 @@ pub fn weights(rng: &mut Rng, count: usize, kind: Weights) -> Option<Vec<f64>> {
                 .map(|_| {
                     if below(rng, 3) == 0 {
                         let e = 20 + below(rng, 21) as i32;
-                        (1.0 + rng.next_f64()) * crate::dd::pow2(-e)
+                        (1.0 + rng.next_f64()) * dd::pow2(-e)
                     } else {
                         moderate(rng)
                     }
@@ -261,4 +263,77 @@ pub fn near_tangent_sphere_plane(rng: &mut Rng, gap: f64) -> (Sphere, Plane) {
             },
         },
     )
+}
+
+/// A random STEP uv on a surface: angles anywhere, heights in `[-1, 1]`, a cone's on its
+/// near nappe, a sphere's latitude off the poles, a plane's in `[-1, 1]^2`.
+pub fn uv_on(rng: &mut Rng, s: &SurfaceKind) -> (f64, f64) {
+    let turn = 2.0 * core::f64::consts::PI;
+    let u = turn * rng.next_f64();
+    match s {
+        SurfaceKind::Plane(_) => (rng.next_signed_unit(), rng.next_signed_unit()),
+        SurfaceKind::Cylinder(_) => (u, rng.next_signed_unit()),
+        SurfaceKind::Cone(c) => {
+            // r + v tan a > 0 for v > -r / tan a; the slope's double is close enough.
+            let k = curve_surface::slope(c.semi_angle).to_f64();
+            let lo = (-0.9 * c.radius / k).max(-1.0);
+            (u, lo + (1.0 - lo) * rng.next_f64())
+        }
+        SurfaceKind::Sphere(_) => (u, 1.5 * rng.next_signed_unit()),
+        SurfaceKind::Torus(_) => (u, turn * rng.next_f64()),
+    }
+}
+
+/// A random point of a surface, rounded (so on it to the rounding).
+pub fn point_on(rng: &mut Rng, s: &SurfaceKind) -> [f64; 3] {
+    let (u, v) = uv_on(rng, s);
+    dd::round(curve_surface::surface_point(s, (Dd::new(u), Dd::new(v))))
+}
+
+/// Two random points of a surface at least `1/16` apart.
+pub fn two_points_on(rng: &mut Rng, s: &SurfaceKind) -> ([f64; 3], [f64; 3]) {
+    let a = point_on(rng, s);
+    loop {
+        let b = point_on(rng, s);
+        let d: f64 = a.iter().zip(&b).map(|(x, y)| (x - y) * (x - y)).sum();
+        if d > 1.0 / 256.0 {
+            return (a, b);
+        }
+    }
+}
+
+/// A random frame at `origin`.
+fn frame_at(rng: &mut Rng, origin: [f64; 3]) -> Frame {
+    Frame {
+        origin,
+        ..frame(rng, 1.0)
+    }
+}
+
+/// A random circle through `p` at its `t = 0`.
+pub fn circle_through(rng: &mut Rng, p: [f64; 3]) -> CurveKind {
+    let f = frame_at(rng, [0.0; 3]);
+    let radius = 0.25 + 1.5 * rng.next_f64();
+    CurveKind::Circle(Circle {
+        frame: Frame {
+            origin: offset(p, -radius, f.x),
+            ..f
+        },
+        radius,
+    })
+}
+
+/// A random ellipse through `p` at its `t = 0`.
+pub fn ellipse_through(rng: &mut Rng, p: [f64; 3]) -> CurveKind {
+    let f = frame_at(rng, [0.0; 3]);
+    let semi_x = 0.25 + 1.5 * rng.next_f64();
+    let semi_y = 0.25 + 1.5 * rng.next_f64();
+    CurveKind::Ellipse(Ellipse {
+        frame: Frame {
+            origin: offset(p, -semi_x, f.x),
+            ..f
+        },
+        semi_x,
+        semi_y,
+    })
 }
