@@ -3998,3 +3998,54 @@ Unchanged and passing: every MA6 test in `tests/rounding.rs`, the changed-on-pur
 
 - Whether a looser but cheaper bound (the per-application row above, or sparse K7 reads) is wanted. It would need a ruling, since it trades the round bar's and far boxes' tightness for about 10% to 15%.
 - `Set::eval`'s unrolling also helps any future integrand. MA5's per-face memo is separate, and the two compose.
+
+### 14.41 MA5 as built (11-27)
+
+`scx-mass` keeps each face's integral in the caller's `Scratch` (new module `crates/scx-mass/src/memo.rs`), so a face a Boolean keeps is read back, not integrated again. The entry is the face's `FaceIntegral` about its own reference, before the shift to the body's: the values and the stated error with MA6's rounding bound (§14.31), so a hit states the same error as a recompute, bit for bit. `volume`, `area`, `face_area` and `mass` go through it; no public API changed (the `Scratch` they already took is now used). `scx-mass` gains a dependency on `scx-record` (above it in `layers.txt`).
+
+**The key.** The bits the integral reads, written by the record format's own writers (`scx_record::Record` into a `Writer`), folded into the `u64` scratch key by `scx_num::hash::mix`:
+
+- the set (`Area`, `Volume` or `Full`) and the accuracy's bits;
+- the face's grown box (`Face::bounding_box`): it fixes the reference, the floors and MA3's rounding test, and carries the face's accuracy and the body's resolution;
+- the surface, its sense included;
+- each loop's uses in order: the use's sense, its pcurve and interval (or point), its recorded bound, and, for a use with a bound on a curve edge, what MA2's closure reads (the edge's curve, the use's end vertices' points).
+
+**Decisions, with cases for and against.**
+
+| Decision | For | Against | Chosen |
+|---|---|---|---|
+| Key on what the integral reads, not the whole face record: ids and sides left out, the box and the closure's edge data put in (deviation from §2.5's "the face record's bits") | the integral reads no id (an id appears only in an error, never kept) and no side (the body applies the side's sign after); so a face a Boolean renumbers, or a subtract turns over (sides swapped, loops kept, §14.29), still hits; and the box and the closure's edge curves are read, so must be in the key or a hit could be wrong | the key now names what `face::integrate` reads, so a change there must change `memo::write` too (said in the module's doc) | **yes** |
+| Write the bits with `scx_record`'s writers | every surface and curve kind's bits, already canonical and complete, sense included | a new dependency of `scx-mass`; a kind with no record yet is integrated without the memo | **yes** |
+| Hash per kind inside `scx-mass` | no dependency | duplicates the record format for every kind; a missed field is a wrong hit | no |
+| Key by the face record's `Arc` pointer (copy-on-write keeps a kept face's record shared) | near free | not bits: an address is reused after a free (a wrong hit), and a record copied for a write misses | no |
+| Store the full bits and compare them on a hit | a hash collision can only replace an entry, never give a wrong hit | memory: the bits per entry (a few KB for plate-12's top face, 144 circle loops) | **yes** |
+| A hit charges the work its fill recorded, at once | 04 11-27 (work does not depend on warmth): the budget runs out on a hit exactly where a recompute does, the same `Exhausted { limit }` | `Budget::used` after running out holds the face's whole work, where a recompute stops partway (said in the doc; no result reads it) | **yes** |
+| Keep only finished integrals | an error (budget, stop, step control) is never a memo; 04 11-27: an item cut by the budget is never memoized | a face that always fails is integrated again on every call | **yes** |
+| One entry per set | each set has its own step control (`Full` judges 22 components, `Volume` 2), so their bits differ | `volume` after `mass` misses | **yes** |
+
+**Tests.**
+
+- `memo::tests::a_flipped_sense_another_set_or_accuracy_is_another_key` (unit): the same face gives the same bits; the cylinder wall with its sense flipped, another set, another accuracy, and the accuracy one bit up each give other bits.
+- `crates/scx-mass/tests/memo.rs`:
+  - `a_warm_memo_gives_the_cold_bits_and_work`: on a block, a holed block, cylinder, cone, sphere, torus and a loose cylinder (MA2's strips), `mass` on a warm scratch equals a cold one in every value and stated error bit and in the work charged; one entry per face; a third call adds nothing; `volume` and `area` likewise.
+  - `another_accuracy_or_bound_misses`: another accuracy, or one bit of it, is an entry for every face; a loose block with another offset (the uses' bounds) misses on every face.
+  - `a_hit_runs_out_of_budget_where_a_recompute_does`: at limits 0, 1, a third, a half, one short and the total, warm and cold give the same result or error; a call cut by the budget keeps only the faces it finished and the next call's bits are the cold ones.
+- `crates/scx-boolean/tests/mass_memo.rs`, across a Boolean that keeps faces: each bench recipe run to its last step, `mass` of the body before it filling the scratch, then `mass` of the result. Warm equals cold in every bit and in work; a third call adds nothing; a scratch filled in another order (`volume` at 1e-6, then the result, then the body before) gives the same bits. `box-cyl-hole` and `plate-4` miss fewer than their faces; plate-12 misses 3 of 150 faces (its top and bottom, one more loop each, and the new wall); gear-60 misses 7 of 242.
+
+No test was removed.
+
+**Cost** (callgrind instructions of one `mass` at 1e-9 on the recipe's result, the Boolean chain outside the count; main against this branch; release):
+
+| Body | Main (no memo) | Cold memo | Warm memo (after the body before the last step) |
+|---|---:|---:|---:|
+| plate-12 (150 faces, 3 misses) | 10,279.5M | 10,281.3M (+0.02%) | 7,728.1M (0.75x) |
+| gear-60 (242 faces, 7 misses) | 361.2M | 364.0M (+0.8%) | 213.8M (0.59x) |
+
+Work charged is the same in all three (4,443,502 and 149,746 units). Wall time (best of 15, shared machine): plate-12 400 to 469 ms cold (noise), 301 ms warm; gear-60 13.7 ms cold, 7.9 ms warm. The cold overhead is the key's bits, the hash and the insert, about 11.6K instructions a face on gear-60.
+
+**Open.**
+
+1. What is left warm is the faces the last step changed, and on these bodies they dominate: plate-12's top and bottom carry 144 circle loops each. A per-loop memo would not be exact as built: a face's `base` (the loops' lowest `v`), its reference and its floors come from all its loops and its box. Making loops separable (a fixed base and floors per face kind) would change the method's bits, so it is for a later task, judged against T9.
+2. The memo has no eviction: a caller that keeps one `Scratch` over many bodies keeps every face's entry. `Scratch` has no size policy yet; none of step 4's callers needs one.
+
+**Proposed 04 row.** "MA5 (72 §14.41): `scx-mass` keeps each face's integral (about its own reference, values and MA6's stated error) in the caller's `Scratch`, keyed by the bits the integral reads: the set, the accuracy, the face's grown box, the surface with its sense, and each use's sense, pcurve or point, recorded bound and, for a bounded use, its edge's curve and end points, written by `scx_record`'s writers; ids and sides are not in the key (not read), so a renumbered or turned-over face hits. The full bits are stored and compared, so a collision only replaces an entry. A hit charges the recorded work at once (the same `Exhausted` as a recompute); only finished integrals are kept. Warm equals cold bit for bit across the bench recipes' last steps; plate-12 warm 0.75x and gear-60 0.59x instructions, cold +0.02% and +0.8%. Against: the key names what `face::integrate` reads, so the two change together; no eviction. Change if a per-loop memo is wanted (method change), or a caller needs a bounded `Scratch`."
