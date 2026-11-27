@@ -134,3 +134,30 @@ fn shells_that_are_operand_shells_whole_cost_no_volume_signs() {
         .filter(|r| !r.is_solid() && !r.is_outside());
     assert_eq!(voids.count(), 1);
 }
+
+#[test]
+fn shells_linked_from_operand_shells_whole_cost_no_volume_signs() {
+    // Two cubes sharing an edge: the links join their lumps (and their voids) into one
+    // shell each, from sets that are each an operand shell whole, so the signs come from
+    // the operands and nothing is measured.
+    let doc = Document::default();
+    let cube = cuboid([0.0; 3], [10.0; 3], doc);
+    let edge = cuboid([10.0, 10.0, 0.0], [20.0, 20.0, 10.0], doc);
+    let d = op(&cube, &edge, UNION, doc).unwrap();
+    // Measuring the linked shells' signs cost 5,700 units; the stages' own are under 300.
+    assert!(d.report.work < 1000, "{}", d.report.work);
+    near(volume(&d.body), 2000.0, 1e-9);
+    assert_eq!(d.body.regions().filter(|r| r.is_solid()).count(), 2);
+    // A cavity in an operand (mixed signs in the link) is still measured and still right.
+    let holed = checked(&cube, &cuboid([3.0; 3], [7.0; 3], doc), SUBTRACT, doc).body;
+    let d = op(&holed, &edge, UNION, doc).unwrap();
+    near(volume(&d.body), 2000.0 - 64.0, 1e-9);
+    assert_eq!(d.body.regions().filter(|r| r.is_solid()).count(), 2);
+    assert_eq!(
+        d.body
+            .regions()
+            .filter(|r| !r.is_solid() && !r.is_outside())
+            .count(),
+        1
+    );
+}

@@ -733,12 +733,36 @@ fn shells(
         all.sort_unstable();
         all.dedup();
         // `pairs` is in `comps`' order: each set beside its shells.
-        let known: BTreeMap<ShellId, Sign> = pairs
+        let whole: Vec<Option<Sign>> = pairs
             .iter()
             .zip(comps.values())
-            .filter(|(p, _)| mirrored.contains(p))
-            .filter_map(|(&(mat, _), faces)| Some((mat, whole_shell(ops, m, kept, faces)?)))
+            .map(|(_, faces)| whole_shell(ops, m, kept, faces))
             .collect();
+        let mut known: BTreeMap<ShellId, Sign> = BTreeMap::new();
+        // A shell is made of the sets of the pairs it holds (one when no link joined it).
+        // Signed volume adds over closed sets, so where every set is an operand shell whole
+        // and all are of one sign, the shell has it (a void shell the opposite). Anything
+        // else is measured.
+        let mut joined: BTreeMap<ShellId, Vec<Option<Sign>>> = BTreeMap::new();
+        let mut voids: BTreeMap<ShellId, Vec<Option<Sign>>> = BTreeMap::new();
+        for (&(mat, void), &s) in pairs.iter().zip(&whole) {
+            joined.entry(to(mat)).or_default().push(s);
+            voids.entry(to(void)).or_default().push(s);
+        }
+        let all_of = |v: &[Option<Sign>]| match v.first().copied().flatten() {
+            Some(first) if v.iter().all(|&s| s == Some(first)) => Some(first),
+            _ => None,
+        };
+        for (root, v) in &joined {
+            if let Some(s) = all_of(v) {
+                known.insert(*root, s);
+            }
+        }
+        for (root, v) in &voids {
+            if let Some(s) = all_of(v) {
+                known.insert(*root, flip(s));
+            }
+        }
         pinch::nest(&mut m.draft, &all, &mirrored, &known, doc, budget, stop)?;
         unused(m, &claimed);
     }
@@ -796,6 +820,15 @@ fn whole_shell(
         Some(Sign::Positive)
     } else {
         None
+    }
+}
+
+/// The opposite sign.
+const fn flip(s: Sign) -> Sign {
+    match s {
+        Sign::Positive => Sign::Negative,
+        Sign::Negative => Sign::Positive,
+        Sign::Zero => Sign::Zero,
     }
 }
 
