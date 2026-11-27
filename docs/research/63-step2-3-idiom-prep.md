@@ -2465,7 +2465,6 @@ Open from SU8:
 - normals along the curve (the pin's `evaluate_surface_normal`) are left to callers, which use
   `Surface::normal` at `uv().point(t)` with the sides from the same rule. The rule would be
   exposed if a second caller needs it.
-
 ### 4.11 pcurve as built (11-27)
 
 Ruled by the coordinator 11-27 for Brett's review (option 3 of four), built in two
@@ -2579,6 +2578,119 @@ pcurve and 9 surface evaluations (the lifting check). `AngleLine2::point` is one
 `Arcs::parameter` (one `sin`, one `cos` and a division) per call. Existing paths gain no
 work: `Curve2` gains one match arm, the `Arcs` move changes no code, and nothing yet
 calls `pcurve_of` (BR5 will).
+
+### 4.12 SU4 as built (11-27)
+
+Inversion of a surface (63 §4.2, X8, D7; research 66), in the form CU4 uses for the
+curves, in two parameters. Decided by analysis and an adversarial pass; proposed for
+review, not yet ruled.
+
+```rust
+// scx-surface::invert
+pub use scx_num::invert::{Foot, Inversion};  // unchanged
+pub enum Closest {
+    One(Foot<Point2>),
+    AlongU { v: f64, distance: f64 },  // an axis query: a circle of feet, or a pole
+    AlongV { u: f64, distance: f64 },  // a query on a torus's tube centre circle
+    Every { distance: f64 },           // a sphere's centre
+}
+impl Closest { pub const fn distance(&self) -> f64; }
+impl Plane {  // and Cylinder, Cone, Sphere, Torus
+    pub fn closest(&self, p: Point3) -> Closest;
+    pub fn invert(&self, p: Point3, domain: Option<&Extent2d>) -> Inversion<Point2>;
+}
+impl Surface {
+    pub fn invert(&self, p: Point3, near: Option<Point2>, domain: Option<&Extent2d>,
+                  budget: &mut Budget, stop: &Stop) -> Result<Inversion<Point2>, SurfaceError>;
+}
+pub enum SurfaceError { .., Exhausted(Exhausted), Stopped, Defect { reason: &'static str } }
+```
+
+- **Each analytic kind is a closed form, global, infallible.** Every kind is a plane or a
+  surface of revolution, so the nearest points lie in the query's meridian plane: the
+  projection, the radial foot, the foot on the generator of the query's half-plane or the
+  apex (cone), the foot on the near meridian circle (torus). The `uv` is read by `Arcs`'
+  inverse with no transcendental, so the foot's `point` is the kind's `point(at)` exactly.
+  Alternative: one Newton for every kind. Against: a local answer, a budget and an error
+  where none can happen.
+- **`Closest` names the sets of feet; `invert` picks one.** Alternative: always one foot.
+  Against: a caller building an SSI start or a degenerate-case test needs to know the answer
+  is a circle, not a point that happened to be chosen. For picking in `invert`: the domain
+  decides it (the foot at the domain's start in the free parameter), and periodic
+  parameters wrap by whole periods to start at the domain's min, so an outside foot is
+  reported `Outside`, never moved in.
+- **`Surface::invert` takes `&mut Budget` and `&Stop`, which only the NURBS arm uses.**
+  Alternative: a separate `Surface::closest` for the analytic arms and a NURBS-only call.
+  Against: every caller of the enum would dispatch again. For: one signature; the analytic
+  arms ignore both and `near`, and return `Ok`.
+- **NURBS: a certified branch and bound over Bezier patches through `global_solve`**, per
+  research 66: no presearch grid. Each knot span pair is one patch, its homogeneous points
+  read off by blossoming (unclamped knots need nothing more). The search walks a balanced
+  tree of the patches, nearer half first, pruning a node whose bound is not below the
+  incumbent less `eps`; a leaf it reaches is refined best first, keyed by (bound, sequence
+  index), a total order, so the bits never depend on a tie. `eps` is `GAP_REL` (1e-12) of the
+  control net's diagonal plus the first incumbent's distance. The incumbent starts at the
+  best patch corner, polished by Newton from it and from `near`; a corner that beats it by
+  more than `eps` starts another run. Newton is on `|S - q|^2 / 2` with an active set at the
+  domain's edges, Gauss-Newton where the Hessian is not positive, a gradient step where that
+  is singular, and a step kept only when it lowers the distance. Alternative: Newton from a
+  grid of starts (solidcore's shape). Against: research 66, and no certificate: a narrow
+  valley between grid points is missed.
+- **Two lower bounds per piece, the larger taken.** `N / W` with `N = D . D`, `W = w^2`,
+  `D = w (S - q)` in Bernstein form (`scx_algo::bernstein`), bounded below by the least
+  coefficient ratio; exact where the distance is constant (a query at a sphere's centre is
+  certified in 3 units). And a hull bound: `(S - q) . n` is a positive-weighted mean of the
+  `(D_k . n) / w_k`, so no less than their least, for `n` the unit direction toward the
+  corners. Against `N / W` alone: next to a tiny weight, `N`'s coefficients are tiny against
+  its largest and the bound stays near zero however small the piece; the hull bound takes no
+  product and stays sharp there.
+- **Every coefficient carries its own error bound.** Alternative: `Bounded`'s one bound for
+  every coefficient. Against: it is absolute and inherited by subdivision, so beside a
+  weight near `2^-40` it swamps that weight's coefficients and the bound stays useless
+  however small the piece; the search did not finish on such surfaces. For per-coefficient
+  errors: each step of the blossom is taken from its nearer end (`a + s (b - a)` or
+  `b + r (a - b)`, `r` from the knots, so no cancellation beside clustered knots), a step
+  at a knot is exact, and the error of a mix is the mix of the errors. scx-algo is unchanged: the forms are seeded with the largest error.
+- **Anisotropic halving; one-ulp spans become edges.** A piece is halved by de Casteljau at
+  1/2 along the parameter whose control polygon is more than twice as long, else in both.
+  Against quartering only: a tiny weight crowds the surface into a thin strip that quartering
+  covers with about `1 / width` pieces. A parameter whose interval holds no float strictly
+  inside (a knot span of one ulp, whose patch can still be long) is not halved: the piece
+  becomes its two edges, the only `uv`s that exist there. So the result is the global
+  nearest over the floating point `uv`s, to `eps`.
+- **The budget is the one bound.** One unit per tree node tested, piece refined and Newton
+  evaluation; the stop flag is polled at the same points and by the solve before each
+  branch. Both end in an error, never a partial foot, and a search that finishes gives the
+  same bits whatever the limit. The solve's own branch limit is set to `u64::MAX`.
+  **Recommended for later (not done here):** `global_solve::solve` should take
+  `&mut Budget` and `&Stop` itself, as every other iterating call does; today the solver
+  carries them inside its `BranchSolver` and maps them out through `Unfinished`, and its
+  `max_branches` is a second, weaker bound to lift.
+- **Errors.** `SurfaceError` gains `Exhausted(Exhausted)` (kind `Exhausted`, the budget's
+  own name), `Stopped` (kind `Cancelled`) and `Defect { reason }` (kind `Defect`,
+  `inversion_defect`: a patch's Bernstein form could not be built, a bug).
+- **Placement.** `Closest` lives in scx-surface, not scx-num: it names the kinds' parameters
+  (`AlongU`, a pole). Commit 99b897b carries only the scx-num half of c6b24fa (`Foot`,
+  `Inversion`, unchanged), with `Budget` and `Stop` from c57177f.
+
+Tests (`tests/invert.rs`, 6; `tests/nurbs_invert.rs`, 8), against truth, not the pin: plane
+feet are projections; cylinder and sphere feet match double-double references; cone and
+torus feet are no farther than a 121 by 121 sample of the uv domain; every set of feet
+(axis, pole, apex, tube circle, centre); placement against domains, wrapped and not. NURBS:
+random B-splines and NURBS (unit, moderate and near-zero weights, down to `2^-40`)
+and an unclamped B-spline, each foot the
+surface's own point, no farther than a 61 by 61 sample, and stationary where it is interior
+and off a knot; exact NURBS spheres, cylinders and tori give the analytic distance; the
+budget and the stop flag end the search, and a clear flag or a warm start change only the
+work.
+
+Work, in budget units, over the 330 random queries: median 78, p90 368, max 53045. A
+sphere's centre: 3. Cold against warm (started at the cold foot) on one wavy surface, ten
+queries: 78/74, 85/104, 175/202, 68/82, 111/70, 149/195, 44/50, 53/54, 71/63, 52/63; the
+distance agrees to `eps` every time. A warm start buys little and sometimes costs: the
+certificate, not finding the foot, is most of the work (likely too: an incumbent that
+differs by rounding prunes differently; not measured). So `near` is kept as a hint, not
+relied on for speed.
 
 ## 5. `scx-ssi`, the analytic part
 

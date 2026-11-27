@@ -17,6 +17,7 @@ use scx_nurbs_surface::{NurbsSurface, ParamAxis};
 
 use crate::common::{Axes, check_lengths, unit};
 use crate::error::{Size, SurfaceError, positive};
+use crate::invert::{self, Closest, Inversion, Periods};
 use crate::to_nurbs::{Dir, Reach, build};
 use scx_curve::arcs::Arcs;
 use scx_num::jet::SurfaceJet;
@@ -188,5 +189,54 @@ impl Torus {
     #[must_use]
     pub fn from_step(&self, step: Point2) -> Point2 {
         Point2::new(TURN.parameter(step.x), TURN.parameter(step.y))
+    }
+}
+
+impl Torus {
+    /// The nearest point to `p`, from the tube's centre circle: the point of the near
+    /// meridian circle (centre `R` along `p`'s radial direction) along the direction from
+    /// that centre to `p`. On the axis every centre is as near, so the feet are the circle
+    /// of `u` at that `v` ([`Closest::AlongU`]); on the centre circle itself they are the
+    /// meridian circle there ([`Closest::AlongV`]).
+    ///
+    /// The global nearest of a ring torus: the distance to the surface is `|d - r|` for `d`
+    /// the distance to the centre circle, met where the nearest centre's meridian circle
+    /// crosses the line to `p`; the far circle's centre is farther (`(rho + R)^2 + h^2`
+    /// against `(rho - R)^2 + h^2`), and so are the other two stationary points.
+    #[must_use]
+    pub fn closest(&self, p: Point3) -> Closest {
+        let (x, y, z) = self.axes().local(p);
+        let at = |uv: Point2| invert::foot(p, uv, self.point(uv));
+        if x == 0.0 && y == 0.0 {
+            let v = TURN.of_direction(-self.major, z);
+            return Closest::AlongU {
+                v,
+                distance: at(Point2::new(0.0, v)).distance,
+            };
+        }
+        let rho = (x * x + y * y).sqrt();
+        let u = TURN.of_direction(x, y);
+        let off = rho - self.major;
+        if off == 0.0 && z == 0.0 {
+            return Closest::AlongV {
+                u,
+                distance: at(Point2::new(u, 0.0)).distance,
+            };
+        }
+        Closest::One(at(Point2::new(u, TURN.of_direction(off, z))))
+    }
+
+    /// The nearest point to `p`, inside `domain` (both parameters wrapped by their period
+    /// of 1) or not (`None`: the whole torus). Of a circle of feet, the one at the domain's
+    /// start in the free parameter.
+    #[must_use]
+    pub fn invert(&self, p: Point3, domain: Option<&Extent2d>) -> Inversion<Point2> {
+        let periods = Periods {
+            u: Some(1.0),
+            v: Some(1.0),
+        };
+        invert::invert(self.closest(p), periods, domain, |uv| {
+            invert::foot(p, uv, self.point(uv))
+        })
     }
 }

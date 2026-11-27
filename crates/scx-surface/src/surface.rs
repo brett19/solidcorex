@@ -24,6 +24,7 @@
 
 use std::sync::Arc;
 
+use scx_num::budget::{Budget, Stop};
 use scx_num::domain::{ParamDomain, UvDomain};
 use scx_num::extent2d::Extent2d;
 use scx_num::jet::SurfaceJet;
@@ -34,6 +35,8 @@ use scx_nurbs_surface::NurbsSurface;
 
 use crate::common::check_lengths;
 use crate::error::SurfaceError;
+use crate::invert::Inversion;
+use crate::nurbs_invert;
 use crate::to_nurbs::restrict;
 use crate::{Cone, Cylinder, Plane, Sphere, Torus};
 
@@ -224,6 +227,37 @@ impl Surface {
             k => grid_by_point(us, vs, out, |uv| k.point(uv)),
             n => nurbs_grid(n, us, vs, out)
         );
+    }
+
+    /// The nearest point of the surface to `p`, placed against `domain` (`None`: the
+    /// surface's own), as [`Inversion::Inside`] or [`Inversion::Outside`] it; the foot is the
+    /// nearest point over the whole surface either way (63 §4.2, X8).
+    ///
+    /// An analytic kind's foot is its closed form (each kind's `invert`), which takes no
+    /// budget and cannot fail. A NURBS surface's is a certified search over its Bezier
+    /// patches ([`crate::nurbs_invert`]): the global nearest to a gap of `1e-12` of the
+    /// control net's size, charged to `budget` and polled against `stop`; `near` is a warm
+    /// start for it (the analytic arms ignore it), which changes only the work, not the
+    /// foot's place beyond that gap.
+    ///
+    /// # Errors
+    ///
+    /// For a NURBS surface only: [`SurfaceError::Exhausted`] when `budget` runs out,
+    /// [`SurfaceError::Stopped`] when `stop` is set, and [`SurfaceError::Defect`] where the
+    /// search fails inside. None of these returns a partial foot.
+    pub fn invert(
+        &self,
+        p: Point3,
+        near: Option<Point2>,
+        domain: Option<&Extent2d>,
+        budget: &mut Budget,
+        stop: &Stop,
+    ) -> Result<Inversion<Point2>, SurfaceError> {
+        dispatch!(
+            self,
+            k => Ok(k.invert(p, domain)),
+            n => nurbs_invert::invert(n, p, near, domain, budget, stop)
+        )
     }
 }
 

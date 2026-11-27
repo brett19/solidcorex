@@ -20,6 +20,7 @@ use scx_nurbs_surface::{NurbsSurface, ParamAxis};
 
 use crate::common::{Axes, check_lengths, linear, unit};
 use crate::error::{Size, SurfaceError, positive};
+use crate::invert::{self, Closest, Inversion, Periods};
 use crate::to_nurbs::{Dir, Reach, build};
 use scx_curve::arcs::Arcs;
 use scx_num::jet::SurfaceJet;
@@ -172,5 +173,36 @@ impl Cylinder {
     #[must_use]
     pub fn from_step(&self, step: Point2) -> Point2 {
         Point2::new(self.arcs().parameter(step.x), step.y)
+    }
+}
+
+impl Cylinder {
+    /// The nearest point to `p`: the radial foot at `p`'s angle and height, or the circle
+    /// at `p`'s height ([`Closest::AlongU`]) for `p` on the axis.
+    #[must_use]
+    pub fn closest(&self, p: Point3) -> Closest {
+        let (x, y, z) = self.axes().local(p);
+        if x == 0.0 && y == 0.0 {
+            let distance = invert::foot(p, Point2::new(0.0, z), self.point(Point2::new(0.0, z)));
+            return Closest::AlongU {
+                v: z,
+                distance: distance.distance,
+            };
+        }
+        let uv = Point2::new(self.arcs().of_direction(x, y), z);
+        Closest::One(invert::foot(p, uv, self.point(uv)))
+    }
+
+    /// The nearest point to `p`, inside `domain` (`u` wrapped by the period `2 pi r`) or not
+    /// (`None`: the whole cylinder). On the axis the foot is at the domain's start in `u`.
+    #[must_use]
+    pub fn invert(&self, p: Point3, domain: Option<&Extent2d>) -> Inversion<Point2> {
+        let periods = Periods {
+            u: Some(self.period()),
+            v: None,
+        };
+        invert::invert(self.closest(p), periods, domain, |uv| {
+            invert::foot(p, uv, self.point(uv))
+        })
     }
 }

@@ -12,6 +12,10 @@
 //!   cone has a normal everywhere and returns it directly; the cone's is `None` at its apex.
 //! - [`Surface`]: every kind as one value (the five and a NURBS surface behind an `Arc`),
 //!   dispatched by `match` with the kind's bits (63 §4.7).
+//! - Inversion: each analytic kind's `closest` (a [`Closest`]: one foot or a set) and
+//!   `invert` against a uv domain ([`Inversion`] of a [`Foot`]) are closed forms and the
+//!   global nearest; [`Surface::invert`] adds a NURBS surface's, a certified search over its
+//!   Bezier patches that takes a work budget and a stop flag (63 §4.2, research 66).
 //! - Edits by value: `reversed` and `transformed` on each kind and on [`Surface`], with the
 //!   [`UvMap`] from the original's parameters to the edit's, and [`Surface::restrict`]
 //!   (63 SU7).
@@ -49,6 +53,8 @@ mod cone;
 mod cylinder;
 mod edit;
 mod error;
+mod invert;
+mod nurbs_invert;
 mod pcurve;
 mod plane;
 mod sphere;
@@ -61,6 +67,7 @@ pub use cone::Cone;
 pub use cylinder::Cylinder;
 pub use edit::UvMap;
 pub use error::{Size, SurfaceError};
+pub use invert::{Closest, Foot, Inversion};
 pub use pcurve::{CurveKind, PcurveError, SurfaceKind, pcurve_of};
 pub use plane::Plane;
 pub use sphere::Sphere;
