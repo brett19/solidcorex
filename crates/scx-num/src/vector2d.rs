@@ -10,6 +10,10 @@
 // platform) in place of the C library's, so results may differ from the pin's in the last bit.
 // Then `component(usize) -> Result<f64>` and `component_mut` became `Index<Axis2>` and
 // `IndexMut<Axis2>`, so no index is out of range; their failure tests went with them.
+// Then `Vec2` and `Point2` became generic over their scalar (`T = f64`), as `Vec3` and `Point3`
+// are: `new`, `map`, `Neg`, `Add`, `Sub`, `Mul<T>` and point ± vector for any ring, so a 2-D
+// curve evaluates in intervals (research 63 §3); everything else stays `f64`. `UnitVec2::perp`,
+// `UnitVec2::X` and `UnitVec2::Y` are new (a 2-D frame's axes).
 //! Two-dimensional vectors and points ([`Vec2`] / [`Point2`]), usually surface
 //! parameters `(u, v)`: arithmetic, lengths, distances, unitizing, rotation and angles.
 //!
@@ -75,22 +79,22 @@ use crate::vector3d::{acos as sm_acos, asin as sm_asin, sqrt as sm_sqrt};
 /// A 2D displacement or direction (`SmVector2d` in its vector role), such as a step in a
 /// surface's parameters. A position is a [`Point2`].
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct Vec2 {
+pub struct Vec2<T = f64> {
     /// X (or `u`) component.
-    pub x: f64,
+    pub x: T,
     /// Y (or `v`) component.
-    pub y: f64,
+    pub y: T,
 }
 
 /// A 2D position (`SmPoint2d`, an alias of `SmVector2d` upstream), typically a surface
 /// parameter pair `(u, v)`. Affine as [`Point3`](crate::vector3d::Point3) is: `point - point`
 /// is a [`Vec2`], `point ± vec` a point.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct Point2 {
+pub struct Point2<T = f64> {
     /// X (or `u`) coordinate.
-    pub x: f64,
+    pub x: T,
     /// Y (or `v`) coordinate.
-    pub y: f64,
+    pub y: T,
 }
 
 /// A coordinate axis of the plane: what indexes a [`Vec2`] or a [`Point2`] (`v[Axis2::Y]`).
@@ -156,6 +160,17 @@ impl UnitVec2 {
     pub const fn as_vec(self) -> Vec2 {
         self.0
     }
+
+    /// Unit X.
+    pub const X: Self = Self(Vec2::new(1.0, 0.0));
+    /// Unit Y.
+    pub const Y: Self = Self(Vec2::new(0.0, 1.0));
+
+    /// The direction turned a quarter turn counter-clockwise, `(-y, x)`: exact, so unit.
+    #[must_use]
+    pub const fn perp(self) -> Self {
+        Self(Vec2::new(-self.0.y, self.0.x))
+    }
 }
 
 impl core::ops::Deref for UnitVec2 {
@@ -171,15 +186,37 @@ impl From<UnitVec2> for Vec2 {
     }
 }
 
+impl<T> Vec2<T> {
+    /// Creates a vector from its components (`SmVector2d(dX, dY)`, `Set`).
+    #[must_use]
+    pub const fn new(x: T, y: T) -> Self {
+        Self { x, y }
+    }
+
+    /// The vector with each component mapped by `f`, x first.
+    #[must_use]
+    pub fn map<U>(self, mut f: impl FnMut(T) -> U) -> Vec2<U> {
+        Vec2::new(f(self.x), f(self.y))
+    }
+}
+
+impl<T> Point2<T> {
+    /// Creates a point from its coordinates.
+    #[must_use]
+    pub const fn new(x: T, y: T) -> Self {
+        Self { x, y }
+    }
+
+    /// The point with each coordinate mapped by `f`, x first.
+    #[must_use]
+    pub fn map<U>(self, mut f: impl FnMut(T) -> U) -> Point2<U> {
+        Point2::new(f(self.x), f(self.y))
+    }
+}
+
 impl Vec2 {
     /// The zero vector.
     pub const ZERO: Self = Self::new(0.0, 0.0);
-
-    /// Creates a vector from its components (`SmVector2d(dX, dY)`, `Set`).
-    #[must_use]
-    pub const fn new(x: f64, y: f64) -> Self {
-        Self { x, y }
-    }
 
     /// Creates a vector from `[x, y]` (`SmVector2d(double *)`).
     #[must_use]
@@ -352,12 +389,6 @@ impl Point2 {
     /// The origin.
     pub const ORIGIN: Self = Self::new(0.0, 0.0);
 
-    /// Creates a point from its coordinates.
-    #[must_use]
-    pub const fn new(x: f64, y: f64) -> Self {
-        Self { x, y }
-    }
-
     /// Creates a point from `[x, y]`.
     #[must_use]
     pub const fn from_array(a: [f64; 2]) -> Self {
@@ -441,30 +472,30 @@ impl From<[f64; 2]> for Point2 {
     }
 }
 
-impl Neg for Vec2 {
+impl<T: Neg<Output = T>> Neg for Vec2<T> {
     type Output = Self;
     fn neg(self) -> Self {
         Self::new(-self.x, -self.y)
     }
 }
 
-impl Add for Vec2 {
+impl<T: Add<Output = T>> Add for Vec2<T> {
     type Output = Self;
     fn add(self, o: Self) -> Self {
         Self::new(self.x + o.x, self.y + o.y)
     }
 }
 
-impl Sub for Vec2 {
+impl<T: Sub<Output = T>> Sub for Vec2<T> {
     type Output = Self;
     fn sub(self, o: Self) -> Self {
         Self::new(self.x - o.x, self.y - o.y)
     }
 }
 
-impl Mul<f64> for Vec2 {
+impl<T: Copy + Mul<Output = T>> Mul<T> for Vec2<T> {
     type Output = Self;
-    fn mul(self, d: f64) -> Self {
+    fn mul(self, d: T) -> Self {
         Self::new(self.x * d, self.y * d)
     }
 }
@@ -513,25 +544,25 @@ impl MulAssign<f64> for Vec2 {
 }
 
 /// A point moved by a displacement.
-impl Add<Vec2> for Point2 {
+impl<T: Add<Output = T>> Add<Vec2<T>> for Point2<T> {
     type Output = Self;
-    fn add(self, v: Vec2) -> Self {
+    fn add(self, v: Vec2<T>) -> Self {
         Self::new(self.x + v.x, self.y + v.y)
     }
 }
 
 /// A point moved back by a displacement.
-impl Sub<Vec2> for Point2 {
+impl<T: Sub<Output = T>> Sub<Vec2<T>> for Point2<T> {
     type Output = Self;
-    fn sub(self, v: Vec2) -> Self {
+    fn sub(self, v: Vec2<T>) -> Self {
         Self::new(self.x - v.x, self.y - v.y)
     }
 }
 
 /// The displacement from `o` to `self`.
-impl Sub for Point2 {
-    type Output = Vec2;
-    fn sub(self, o: Self) -> Vec2 {
+impl<T: Sub<Output = T>> Sub for Point2<T> {
+    type Output = Vec2<T>;
+    fn sub(self, o: Self) -> Vec2<T> {
         Vec2::new(self.x - o.x, self.y - o.y)
     }
 }
