@@ -736,3 +736,92 @@ mod truth {
         assert!(got.len() == 2 && (got[0] - 3.0).abs() < 1e-12 && (got[1] - 5.0).abs() < 1e-12);
     }
 }
+
+/// The `bern_roots` defect's check ([`crate::pin_defects::bern_roots`]) on roots where scx's
+/// place is a double or two further from the exact root than the pin's: there f64 de
+/// Casteljau's sign flips more than once within a few doubles, each side picks a different
+/// flip, and both lie inside the evaluator's error band, so they pass as equally correct.
+/// A place moved outside the band still fails.
+mod band {
+    use crate::berns::{s, x};
+    use crate::pin_defects::{roots_no_worse, ulps_to_root};
+    use scx_testkit::Rat;
+
+    /// Found by random sampling against exact roots: a quintic over five decades with its
+    /// root near `1.0343e-4`, and a sextic with its root near `1.5086e-5`.
+    const WORSE: [&[f64]; 2] = [
+        &[
+            -0.000_957_169_814_952_617_3,
+            -0.035_617_880_065_931_14,
+            9_117.435_094_196_338,
+            0.001_008_931_698_894_193_2,
+            -0.629_255_208_279_967_8,
+            4.312_797_009_462_344,
+        ],
+        &[
+            9.094_804_001_090_591e-6,
+            -0.100_478_654_779_256_47,
+            0.047_713_825_350_485_205,
+            0.009_958_740_979_142_792,
+            -0.012_092_245_217_683_45,
+            -0.011_301_591_229_015_378,
+            -0.005_839_453_262_802_614,
+        ],
+    ];
+
+    fn exact(c: &[f64]) -> Vec<Rat> {
+        c.iter().filter_map(|&v| Rat::from_f64(v)).collect()
+    }
+
+    /// The first place where scx and the pin differ, with each one's distance in doubles
+    /// to an exact sign change.
+    fn moved(c: &[f64]) -> (usize, f64, f64, i64, i64) {
+        let (xs, _) = x::roots(c, 0.0, 1.0, 48, 4096);
+        let (ps, _) = s::roots(c, 0.0, 1.0, 48, 4096);
+        let i = xs
+            .iter()
+            .zip(&ps)
+            .position(|(a, b)| a.to_bits() != b.to_bits())
+            .unwrap_or(usize::MAX);
+        let (g, w) = (
+            xs.get(i).copied().unwrap_or(f64::NAN),
+            ps.get(i).copied().unwrap_or(f64::NAN),
+        );
+        let k = |p: f64| {
+            ulps_to_root(&exact(c), 0.0, 1.0, p)
+                .ok()
+                .flatten()
+                .unwrap_or(i64::MAX)
+        };
+        (i, g, w, k(g), k(w))
+    }
+
+    #[test]
+    fn worse_by_a_double_inside_the_band_passes() {
+        for c in WORSE {
+            let (_, g, w, kx, kp) = moved(c);
+            assert!(
+                kx > kp,
+                "{c:?}: scx {g} ({kx}) is not further than the pin's {w} ({kp})"
+            );
+            let xr = x::roots(c, 0.0, 1.0, 48, 4096);
+            let pr = s::roots(c, 0.0, 1.0, 48, 4096);
+            assert_eq!(roots_no_worse(c, 0.0, 1.0, &xr, &pr), Ok(()), "{c:?}");
+        }
+    }
+
+    #[test]
+    fn a_place_outside_the_band_fails() {
+        for c in WORSE {
+            let (i, g, _, _, _) = moved(c);
+            let mut xr = x::roots(c, 0.0, 1.0, 48, 4096);
+            let pr = s::roots(c, 0.0, 1.0, 48, 4096);
+            // 256 doubles off: further than the pin and outside the band (about 8 to 16
+            // doubles wide at the first root, 32 to 64 at the second)
+            if let Some(p) = xr.0.get_mut(i) {
+                *p = f64::from_bits(g.to_bits() + 256);
+            }
+            assert!(roots_no_worse(c, 0.0, 1.0, &xr, &pr).is_err(), "{c:?}");
+        }
+    }
+}

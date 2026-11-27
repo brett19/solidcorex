@@ -3489,25 +3489,79 @@ pub fn surface_jet() -> PinDefect<(crate::t_surface::Spec,), Vec<[f64; 3]>> {
 use crate::berns::BernR;
 
 /// One call's roots: the places and whether every root was isolated.
-type RootsOut = (Vec<f64>, bool);
+pub(crate) type RootsOut = (Vec<f64>, bool);
 
 /// `t_bern::bern_roots`'s four calls.
 type FourRoots = (RootsOut, RootsOut, RootsOut, RootsOut);
 
-/// The polynomial with Bernstein coefficients `c` on `[lo, hi]`, exactly, at `g`: its sign.
-fn bern_sign(c: &[Rat], lo: &Rat, hi: &Rat, g: f64) -> Result<i32, String> {
-    let t = (&rat(g)? - lo)
-        .checked_div(&(hi - lo))
-        .ok_or("an empty interval")?;
-    let s = &Rat::one() - &t;
+/// Exact de Casteljau of `c` at the local parameter `t`.
+fn casteljau_rat(c: &[Rat], t: &Rat) -> Rat {
+    let s = &Rat::one() - t;
     let mut b = c.to_vec();
     while b.len() > 1 {
-        b = b
-            .windows(2)
-            .map(|w| &(&s * &w[0]) + &(&t * &w[1]))
-            .collect();
+        b = b.windows(2).map(|w| &(&s * &w[0]) + &(t * &w[1])).collect();
     }
-    Ok(b.first().map_or(0, Rat::signum))
+    b.first().cloned().unwrap_or_else(Rat::zero)
+}
+
+/// The local parameter of the global place `g` on `[lo, hi]`, exactly.
+fn local_t(lo: &Rat, hi: &Rat, g: f64) -> Result<Rat, String> {
+    (&rat(g)? - lo)
+        .checked_div(&(hi - lo))
+        .ok_or_else(|| "an empty interval".to_string())
+}
+
+/// The polynomial with Bernstein coefficients `c` on `[lo, hi]`, exactly, at `g`: its sign.
+fn bern_sign(c: &[Rat], lo: &Rat, hi: &Rat, g: f64) -> Result<i32, String> {
+    Ok(casteljau_rat(c, &local_t(lo, hi, g)?).signum())
+}
+
+/// Whether every place within `k` doubles of `g` lies inside the f64 evaluator's error band
+/// around a root of `c` on `[lo, hi]`, where de Casteljau's computed sign cannot be trusted
+/// and no double is more correct than another. `k` is `g`'s distance from an exact sign
+/// change, so the root lies within `d`, the wider side of those `k` doubles.
+///
+/// The band is the a-priori bound of f64 de Casteljau (Mainar and Peña): degree `n` takes
+/// `n` levels of two products and a sum, and `1 - t` rounds once more, so the computed value
+/// is within `γ_{3n} Σ|b_i| B_i(t)` of the exact one, `γ_m = m u / (1 - m u)`, `u = 2^-53`.
+/// Divided by the exact slope `|f'(t)|` it is a width in `t`. Mapped out by
+/// `lo + (hi - lo) t` it widens by `|hi - lo|` and gains the map's own rounding,
+/// `u (|g| + 2|g - lo|)`. A zero slope gives no band, and the place is then held to the
+/// distance rule alone.
+fn in_error_band(c: &[Rat], lo: f64, hi: f64, g: f64, k: i64) -> Result<bool, String> {
+    let n = c.len().saturating_sub(1);
+    if n == 0 {
+        return Ok(false);
+    }
+    let (rl, rh) = (rat(lo)?, rat(hi)?);
+    let t = local_t(&rl, &rh, g)?;
+    let diffs: Vec<Rat> = c.windows(2).map(|w| &w[1] - &w[0]).collect();
+    let degree = Rat::from(i64::try_from(n).map_err(|e| e.to_string())?);
+    let slope = (&casteljau_rat(&diffs, &t) * &degree).abs();
+    if slope.is_zero() {
+        return Ok(false);
+    }
+    let abs: Vec<Rat> = c.iter().map(Rat::abs).collect();
+    let u = rat(f64::EPSILON / 2.0)?;
+    let mu = &u * &Rat::from(i64::try_from(3 * n).map_err(|e| e.to_string())?);
+    let gamma = mu.checked_div(&(&Rat::one() - &mu)).ok_or("no γ")?;
+    let width_t = (&gamma * &casteljau_rat(&abs, &t))
+        .checked_div(&slope)
+        .ok_or("no slope")?;
+    let rg = rat(g)?;
+    let map = &u * &(&rg.abs() + &(&rg - &rl).abs().scale(1));
+    let band = &(&width_t * &(&rh - &rl).abs()) + &map;
+    let d = [ulps_from(g, -k), ulps_from(g, k)]
+        .into_iter()
+        .filter(|x| x.is_finite())
+        .map(|x| rat(x).map(|r| (&r - &rg).abs()))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .fold(
+            Rat::zero(),
+            |a, b| if (&b - &a).signum() > 0 { b } else { a },
+        );
+    Ok((&band - &d).signum() >= 0)
 }
 
 /// `g` moved `k` doubles up (`k` negative: down), by the order of the doubles.
@@ -3522,7 +3576,7 @@ fn ulps_from(g: f64, k: i64) -> f64 {
 
 /// The fewest doubles `k` from `g` within which the exact polynomial changes sign (0 where
 /// `g` is an exact zero), searched in `[lo, hi]` up to `2^40`; `None` past that.
-fn ulps_to_root(c: &[Rat], lo: f64, hi: f64, g: f64) -> Result<Option<i64>, String> {
+pub(crate) fn ulps_to_root(c: &[Rat], lo: f64, hi: f64, g: f64) -> Result<Option<i64>, String> {
     let (rl, rh) = (rat(lo)?, rat(hi)?);
     let s0 = bern_sign(c, &rl, &rh, g)?;
     if s0 == 0 {
@@ -3556,9 +3610,17 @@ fn ulps_to_root(c: &[Rat], lo: f64, hi: f64, g: f64) -> Result<Option<i64>, Stri
 }
 
 /// scx's roots of `c` on `[lo, hi]` against the pin's: the same number of places, the same
-/// `isolated`, and every place that differs at least as near an exact sign change of the
-/// polynomial (in doubles) as the pin's.
-fn roots_no_worse(c: &[f64], lo: f64, hi: f64, x: &RootsOut, p: &RootsOut) -> Result<(), String> {
+/// `isolated`, and every place that differs either at least as near an exact sign change of
+/// the polynomial (in doubles) as the pin's, or inside the f64 evaluator's error band around
+/// that root ([`in_error_band`]): there the computed sign is noise, so both answers are
+/// equally correct.
+pub(crate) fn roots_no_worse(
+    c: &[f64],
+    lo: f64,
+    hi: f64,
+    x: &RootsOut,
+    p: &RootsOut,
+) -> Result<(), String> {
     if x.0.len() != p.0.len() || x.1 != p.1 {
         return Err(format!("the shape moved: the pin has {p:?}"));
     }
@@ -3575,7 +3637,11 @@ fn roots_no_worse(c: &[f64], lo: f64, hi: f64, x: &RootsOut, p: &RootsOut) -> Re
         if kx.is_none() && kp.is_none() {
             return Err(format!("neither {g} nor the pin's {w} is near a root"));
         }
-        if far(kx) > far(kp) {
+        let banded = match kx {
+            Some(k) => in_error_band(&exact, lo, hi, g, k)?,
+            None => false,
+        };
+        if far(kx) > far(kp) && !banded {
             return Err(format!(
                 "{g} is {kx:?} doubles from a root, the pin's {w} {kp:?}"
             ));
@@ -3593,7 +3659,8 @@ fn roots_no_worse(c: &[f64], lo: f64, hi: f64, x: &RootsOut, p: &RootsOut) -> Re
 /// `1e-12 / 0.2545316193337256 = 3.92878496831807...e-12`; scx answers
 /// `3.928784968318077e-12`, the pin `3.9287849503636535e-12`, `1.4e-8` relatively off. The
 /// check: the same places but for those, the same `isolated`, and every place that moved
-/// at least as near (in doubles) an exact sign change of the input polynomial as the pin's.
+/// at least as near (in doubles) an exact sign change of the input polynomial as the pin's,
+/// or inside the f64 evaluator's error band around it ([`roots_no_worse`]).
 pub fn bern_roots() -> PinDefect<(List<f64>, f64, f64), FourRoots> {
     PinDefect {
         reason: "the pin's 64 halvings stop short of rounding near a piece's start",
