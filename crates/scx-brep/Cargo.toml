@@ -1,0 +1,19 @@
+# Written for solidcorex.
+[package]
+name = "scx-brep"
+description = "The boundary representation: ids, records, the finished Brep and the editable Draft, views and iterators"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+scx-curve = { path = "../scx-curve" }
+scx-num = { path = "../scx-num" }
+scx-surface = { path = "../scx-surface" }
+
+[dev-dependencies]
+
+[lints]
+workspace = true
