@@ -3332,3 +3332,102 @@ A box is mapped into the kind's frame as the box of its 8 corners' coordinates, 
 **Open questions.** (1) Whether step 5's marcher should take over these refusals outright, which would make this check a prefilter only. (2) A second-order (exact distance) test would be needed if a real model has near-misses on oblique pairs that are smaller than the bisection resolves.
 
 **Proposed 04 row.** "BO2b (72 §14.30): before refusing a pair with no closed form, stage 4 proves whether its faces can touch. It encloses each surface's 1-Lipschitz level function (plane `h`, cylinder `rho - r`, sphere `|p| - r`, cone line distance, ring torus `hypot(rho - R, h) - r`) over the overlap of the faces' boxes grown by the coincidence, bisected depth first to depth 8, and drops the pair when every piece is clear of one surface by more than the coincidence. Otherwise it refuses `SsiPair` as before. The seam-vertex torus-box case now names `sides[3]` (`x = 6.5`, the face the torus touches), and the other BO5 cases are unchanged. The cost is 1 box on the torus-box drops and 10-28 boxes (3-7 µs) on pairs that touch. Against: the bound is first order, so oblique near-misses below about half the box size are still refused. Change if real models refuse oblique near-misses, or when step 5 answers these pairs."
+
+### 14.32 BX1 as built (11-27)
+
+**What it is.** Test wiring for BO6, BO7 and DT3 ahead of BO4, in one new file, `crates/scx-boolean/tests/recipes.rs` (a dev-dependency on `scx-testkit` is the only other change). No source under `scx-boolean/src` and no difftest file changed: T12's `recipe::all` already carries every operand, truth value and hand-stated topology the three tasks need, and `t_slice` already runs each Boolean recipe as `NotYet(Boolean)`, so its counts stay 157 pass, 0 fail, 326 not yet. DT3 flips `scx_gap`; nothing else in `t_slice` needs a new entry.
+
+**Tests.**
+- Live: `every_named_case_exists_and_states_its_truth` (21 names exist, each has a truth, each built topology satisfies Euler-Poincare) and `every_operand_builds_with_the_closed_form_volume` (every part of the 21 cases builds with `scx-make` and `scx_mass::volume` is `Part::solid`'s to 1e-7).
+- `#[ignore = "awaits BO4 classify"]`, running each recipe's steps through `boolean` on the running body and judging volume and area (1e-9 plus the truth's slack), solid regions and shells, or the named `Unsupported` cause: `plate_12_has_144_holes`, `gear_60_has_sixty_slots`, `smaller_hole_cases`, `blocks_touching_at_a_vertex_or_along_an_edge_are_built`, `touches_inside_a_face_are_unsupported`, `coincident_and_near_coincident_faces`. Today each fails with `Unsupported(Stage(Classify))` (checked with `--include-ignored`), which is the reason in the attribute. BO4 removes the attributes.
+
+**Cases and truth** (volume, area, regions/shells/genus, vertices/edges/patches; resolution 1e-5):
+
+| Case | Steps | Volume | Area | Topology |
+|---|---|---|---|---|
+| box-cyl-hole | 1 | 874.336294 | 700.530965 | 1/1/1, 10/14/7 |
+| plate-4 | 16 | 97989.380702 | 25608.495439 | 1/1/16, 40/44/22 |
+| plate-12 | 144 | 81904.426315 | 38476.458948 | 1/1/144, 296/300/150 |
+| gear-60 | 60 | 72182.859480 | 23564.577139 | 1/1/0, 480/720/242 |
+| corner-contact-union | 1 | 2000 | 1200 | 2/2/0, 16/24/12 |
+| edge-contact-union | 1 | 1500 | 982.842712 | 2/2/0, 18/27/13 |
+| box-box-union-flush | 1 | 1750 | 950 | 1/1/0, 16/24/10 |
+| coplanar-union | 1 | 1500 | 900 | 1/1/0, 12/18/8 |
+| coplanar-offset-0, 0.1c, 0.5c | 1 | 1500 (+50 dy) | 800 (+30 dy), slack 0.01 | merged: 1/1/0, 8/12/6 |
+| coplanar-offset-4c, 10c | 1 | 1500.002, 1500.005 | 800.0012, 800.003 | 1/1/0, 16/24/10 |
+| interleaved-grids-4 | 7 | 80 | 248 | 1/1/9, 146/219/66 |
+| interleaved-grids-8 | 15 | 320 | 944 | 1/1/49, 546/819/226 |
+| tangent-sphere-box, seam-sphere-box, seam-box-sphere, off-seam-sphere-box, seam-sphere-sphere, seam-box-minus-sphere | 1 | (of the body a later step would build) 1113.097, 3079.646, 3079.646, 3079.646, 146.608, 476.401 | 713.097, 1556.858, 1556.858, 1556.858, 163.363, 914.159 | `Unsupported(NonManifold)`; 1, 1, 1, 1, 1 and 6 contact points |
+
+**Decision: the in-face touches expect `non_manifold` by name.** For: the recipes say D5 makes a touch inside a face `Unsupported(NonManifold)`, and the named variant is what BO7 must add (it does not exist in `BooleanUnsupported` yet); asserting only `Unsupported(_)` would pass on any later refusal. Against: the name is proposed, so BO7 may rename it, and the one-line match in `check` then changes. Kept the name.
+
+**Decision: the cases run through the public `boolean`, not `scx-boolean`'s `src/tests`.** For: no BO4 file is touched, the integration test sees only the public API BO6 and DT3 will use, and `plate-12` and `gear-60` are benchmark-sized (144 and 60 steps). Against: an integration test cannot see `pub(crate)` stage outputs; BO6's stage-level checks belong in `src/tests`.
+
+**Not done / open.** (1) No new generators: nothing T12 lacked was found. (2) The `Lineage` and `Mesh` invariants the recipes list are DT3's, not wired here. (3) Area slack for the merged `coplanar-offset` cases is applied unscaled, looser than `t_slice`'s `slack / area_scale`.
+
+**Proposed 04 row.** "BX1 (72 §14.32): `scx-boolean/tests/recipes.rs` runs T12's plate, gear, contact and coincident-face recipes (21 cases) through `boolean`, `#[ignore = \"awaits BO4 classify\"]` until BO4; operand volumes are live. Change if: BO7 names the in-face touch differently from `non_manifold`."
+
+### 14.34 CK2 as built (11-27)
+
+**What was asked.** CK1's `contract` cost 2 to 400 times a volume estimate (a torus about 33 ms). CK2 makes it cheaper without weakening what it proves. The changes stay in `scx-check`, and `scx-mass` is untouched, since MA6 is changing its error bound in parallel.
+
+**Where the time goes.** A call-graph profile of the torus (release build, a throwaway bench, valgrind's callgrind) puts 97.7% of the contract in `scx_mass::outward`, that is in `volume_sign`. Inside that, 70% is `Torus::eval` over Taylor series (44% series multiplication, 20% copying). Tests 1 to 4 (structure, regions, boxes) are under 1%. Two facts follow.
+
+1. `outward` certifies every shell of every region. Once tests 1 to 3 pass, each face lies between a solid and a void, so the shells come in pairs: a body's skin seen from its solid and from the outside, or a cavity's lining seen from the solid and from the void. Each pair has the same faces with opposite weights, so the work is done twice.
+2. Most of each certificate is spent on "range cells". `crosses` tests a cell's parameter interval for a break line strictly inside it, but the interval is rounded outward, so a quarter-arc join (or 0 or 1) sitting exactly at a cell's end is seen as inside. Such a cell is enclosed only to order zero (the integrand's range times the cell's area) and shrinks only by bisection, which is linear. For the torus, 392 of its 529 span cells were range cells.
+
+**What was built.** Test 5 is now a local copy of `scx_mass::outward`'s rule, with its loop order, its refusal and its naming (regions, then their shells, by id), and with each shell's sign certified once per mirror pair. `Signs::new` reads every shell's weights (+1 for each back side, -1 for each front side, a face with both sides in the shell cancelling, zeros dropped). A shell's candidate mirror is the other shell of its first weighted face. The pair counts only if the two weight maps have the same length and every weight is negated. `Signs::of` returns a known sign, else the negation of its mirror's known sign, else `scx_mass::volume_sign` (stored). There is no new public API.
+
+Why this is exact, not an approximation. The certified volume of a shell is a sum of each weighted face's flux enclosure. A mirror has the same faces, uses, strips, caps and reference height `z0`, with each weight negated. So its enclosure is the exact negation, cell for cell (a debug run showed equal cell counts with negated bounds), and its sign is the opposite. The pairing is read from the weights on every call, never assumed. A shell with no exact mirror (any body whose records do not pair) is certified on its own, as before.
+
+**Decisions.**
+
+- *Pair mirror shells in `scx-check`*, against *a memo in `Scratch`* (sign per shell keyed by body).
+  - For: it halves the work on every body that passes tests 1 to 3, it is exact, and it needs no `&mut Cx`. `Proved` already serves as the memo across calls: a caller holding one never pays again.
+  - Against: it repeats `outward`'s rule, ten lines, in a second place. A change to `outward`'s rule must be made here too. The agreement test below would catch a drift.
+- *Rejected: a cheap first test from the volume estimate.* The estimate's sign is not a proof. MA4's guard already shows contradictions smaller than its error slip through (`a_contradiction_smaller_than_the_error_is_refused`), so the full certificate would still be needed on every body and nothing is saved on a valid one.
+- *Rejected: an extreme-point test* (the outward normal at the body's farthest point). It proves the skin's sign only when the shell is not self-crossing. It says nothing about a cavity's lining, and it differs from the volume sign on shells that are wound twice, so it could prove what `outward` refuses.
+- *Rejected: a sign from the tessellation.* A mesh's signed volume would need a bound from the mesh to the faces, to the volume's accuracy. TS1 to TS3 prove chord sags per triangle but give no such bound for the enclosed volume. It would also cost more than the certificate on a torus.
+- *Proposed, not built: exact break ends in `scx-mass`.* This changes `scx-mass` internals, which MA6 owns right now. A throwaway prototype (not committed) did two things. First, `cell_ranges` intersects the span's interval with the exact hull of its end values, so a constant end at a break line is exact. Second, when a cell's only break-line contact is a sliver at its end, it splits off that sliver, (t1 - t0) 2^-20 wide, so the sliver shrinks geometrically, not linearly. On `outward` the prototype cut the work units as follows (planar bodies unchanged, the cone 6502 to 6858):
+
+  | body | before | after |
+  |---|---:|---:|
+  | torus | 59208 | 28160 |
+  | sphere | 30592 | 14584 |
+  | torus size 4 | 89452 | 49952 |
+
+  It also cut the torus shell's cells from 569 to 126. With mirror pairing on top, the torus contract would be about a quarter of CK1's work. It is left as a follow-up for MA once MA6 lands. It must be judged against the closed-form volumes, and it should leave the estimate path (`volume`, `mass`) unchanged.
+
+**Measurements.** Release build with a throwaway bench (not committed), seed 0, under load from other builds, so the times are noisy. The work units are exact: CK2 halves them on every body. The table gives the time of the new `contract` against the old `scx_mass::outward` alone, both in the same run, 20 repetitions. "Step-5 bodies" is read as the rest of CK1's table: the size-4 block, torus and cavity, the holed block, the prism, and the two thin quarter shells.
+
+| Body | Faces | Old outward work | Contract work | Old outward (ms) | Contract (ms) |
+|---|---:|---:|---:|---:|---:|
+| block | 6 | 2328 | 1164 | 0.71 | 0.37 |
+| cylinder | 3 | 6164 | 3082 | 2.39 | 1.20 |
+| cone | 2 | 6502 | 3251 | 2.64 | 1.34 |
+| sphere | 1 | 30592 | 15296 | 28.9 | 14.4 |
+| torus | 1 | 59208 | 29604 | 36.6 | 18.6 |
+| block size 4 | 96 | 37248 | 18624 | 8.62 | 4.39 |
+| torus size 4 | 16 | 89452 | 44726 | 57.3 | 28.8 |
+| cavity size 4 | 192 | 74496 | 37248 | 16.2 | 8.2 |
+| holed | 10 | 4856 | 2428 | 1.11 | 0.56 |
+| prism | 6 | 2428 | 1214 | 0.59 | 0.30 |
+| thin (1e4, 1e-3) | 6 | 19684 | 9842 | 6.81 | 3.43 |
+| thin (10, 1e-6) | 6 | 36020 | 18010 | 12.1 | 6.06 |
+| `scx_make::torus` | 1 | 56308 | 28154 | 32.2 | 16.2 |
+
+On a quieter machine (load 2.7) the CK1 contract took 22.9 ms on the torus, so at half the work CK2's torus should take about 11 ms there. The ratio of time to a volume estimate is halved too: still 2 to 200 times, with the torus the worst, since its estimate is cheap and its certificate is not.
+
+**Tests.** CK1's 13 tests all pass unchanged; each already shows a failing body still failing: sheets, partial shells, stacked and touching solids, bodies and cavities inside out, an inverted cavity, a cavity labelled the outside, the contradiction below the error, the reversed loops, one face inside out, a zero budget, a set stop. Three tests are new.
+
+- `outward_agrees_with_scx_mass_on_every_case`. On over 30 bodies the contract gives `scx_mass::outward`'s answer: proved where it passes, and the same shell named where it refuses (at least a third are refused). The bodies are generated solids at two seeds and sizes, each also set inside out; the tilted torus and sphere primitives; each cavity of a size-3 cavity body, inverted and labelled the outside; and both thin shells, each also inside out.
+- `mirror_shells_have_opposite_signs`. Over the same bodies, every shell has exactly one mirror, and each pair, certified separately by `volume_sign`, has opposite nonzero signs (over 30 pairs).
+- `the_contract_spends_half_the_work`. Under a budget of half `outward`'s work on the torus, the contract proves it and `outward` is exhausted.
+
+No test was removed.
+
+**Deviations from 72.** None in the plan. The contract's test 5 is now `outward`'s rule in `scx-check` rather than a call to `outward`; its answers are the same, but an `Exhausted` may come later (less work is needed) or not at all.
+
+**Open questions.** (1) The exact-break-end change in `scx-mass` (above), for MA after MA6. Of the two it is the larger lever on curved bodies. (2) Whether `scx_mass` should offer the paired rule itself (`outward` certifying once per pair), so that the rule lives in one place. That is a one-function change for whoever next owns `enclose.rs`.
+
+**Proposed 04 row.** "CK2 (72 §14.34): `scx_check::contract` certifies each mirror shell pair once. Once the structure tests pass, every face lies between a solid and a void, so shells pair with exactly negated face weights. Their certified volumes are exact negatives, so one `volume_sign` gives both signs. Pairs are read from the weights on each call, and a shell without one is certified alone. The rule, order and naming of `scx_mass::outward` are kept in `scx-check`, with no API change. Work is exactly halved on every body, about 18 ms on the torus under load (CK1 37 ms in the same run). Most of what is left is `scx-mass` range cells at quarter-arc break lines that outward rounding places inside a cell. An exact end hull with geometric sliver splitting halves that again (prototype), proposed for MA after MA6. Against: the rule is repeated outside `scx-mass`. Change if `scx_mass::outward` takes the pairing itself, or its rule changes."

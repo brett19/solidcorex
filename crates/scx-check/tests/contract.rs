@@ -4,6 +4,8 @@
 //! solids, bodies and cavities set inside out, a contradiction smaller than the volume
 //! estimate's error, and the pin's far thin shell with each face's loop reversed
 //! (`the_far_thin_shells_loops_reversed_are_caught` of its #2972 tests).
+//! CK2's pairing (research 72 §14.34) is checked against `scx_mass::outward` on the same
+//! cases, passing and failing.
 //!
 //! Not ported, each by intent: the pin's `SolidTest` cases for a loose vertex tolerance
 //! (`PointersInvalid`) and a negated plane (`Invalid`), which this crate's records cannot
@@ -21,10 +23,10 @@
 )]
 
 use scx_brep::op::{Cx, NoTrace, Scratch, Settings};
-use scx_brep::{Brep, Document, Draft, FaceId, FinishCause, StructureCause};
+use scx_brep::{Brep, Document, Draft, FaceId, FaceSide, FinishCause, ShellId, StructureCause};
 use scx_check::{Breach, ContractError, Proved, contract};
 use scx_make::{Span, block, cone, cylinder, extrude, sphere, torus};
-use scx_mass::{MassError, RelAccuracy, volume};
+use scx_mass::{MassError, MassRefusal, RelAccuracy, Sign, outward, volume, volume_sign};
 use scx_num::budget::{Budget, Stop};
 use scx_num::error::ErrorKind;
 use scx_num::fmath;
@@ -446,6 +448,150 @@ fn the_budget_and_the_stop_flag_end_it() {
     let got = check_with(&sheet, &Settings::new().with_budget(0), &stop);
     assert!(matches!(got, Err(ContractError::Broken(_))), "{got:?}");
     assert_eq!(got.unwrap_err().kind(), ErrorKind::Refused);
+}
+
+/// Bodies that pass the structure tests, both proved and set wrong in each outward way:
+/// generated solids and primitives, set inside out, a cavity's lining inverted, a cavity
+/// labelled the outside, the thin shells and the thinnest set inside out.
+fn outward_cases() -> Vec<(String, Brep)> {
+    let mut out = Vec::new();
+    let doc = Document::default();
+    for k in [
+        Kind::Block,
+        Kind::Cylinder,
+        Kind::Cone,
+        Kind::Sphere,
+        Kind::Torus,
+        Kind::Holed,
+        Kind::Cavity,
+    ] {
+        for (seed, size) in [(0, 1), (1, 3)] {
+            let g = kind(k, seed, size);
+            let inv = finish(swapped(g.edit(), &all_faces(&g)));
+            out.push((format!("{k:?} {seed} {size}"), g));
+            out.push((format!("{k:?} {seed} {size} inside out"), inv));
+        }
+    }
+    let f = &frames()[1];
+    out.push((
+        "torus primitive".into(),
+        torus(f, mm(3.0), mm(1.0), &doc).unwrap().body,
+    ));
+    out.push((
+        "sphere primitive".into(),
+        sphere(f, mm(2.0), &doc).unwrap().body,
+    ));
+    let g = kind(Kind::Cavity, 0, 3);
+    for void in g.regions().filter(|r| !r.is_solid() && !r.is_outside()) {
+        let lining: Vec<FaceId> = void
+            .shells()
+            .flat_map(|s| s.faces().map(|(f, _)| f.id()).collect::<Vec<_>>())
+            .collect();
+        out.push((
+            format!("cavity {} lining inverted", void.id()),
+            finish(swapped(g.edit(), &lining)),
+        ));
+        let shell = void.shells().next().unwrap().id();
+        let mut d = g.edit();
+        d.shell_mut(shell).unwrap().region = g.outside().id();
+        d.remove_region(void.id()).unwrap();
+        out.push((format!("cavity {} labelled outside", void.id()), finish(d)));
+    }
+    let doc = Document::with_resolution(build_resolution());
+    for (r, t) in [(1e4, 1e-3), (10.0, 1e-6)] {
+        let g = finish_in(quarter_shell(r, t, 1.0).unwrap(), &doc);
+        let inv = finish_in(swapped(g.edit(), &all_faces(&g)), &doc);
+        out.push((format!("thin ({r}, {t})"), g));
+        out.push((format!("thin ({r}, {t}) inside out"), inv));
+    }
+    out
+}
+
+/// CK2: the contract's outward test, which certifies one shell of each mirror pair, gives
+/// `scx_mass::outward`'s answer on every case: proved where it passes, and the same shell
+/// named where it refuses. At least a third of the cases are refused.
+#[test]
+fn outward_agrees_with_scx_mass_on_every_case() {
+    let cases = outward_cases();
+    let mut refused = 0;
+    for (what, b) in &cases {
+        let want = outward(b, &mut Budget::unlimited(), &Stop::new());
+        match (check(b), want) {
+            (Ok(_), Ok(())) => {}
+            (
+                Err(ContractError::Broken(Breach::NotOutward { shell })),
+                Err(MassError::Refused(MassRefusal::NotOutward { shell: s })),
+            ) => {
+                assert_eq!(shell, s, "{what}");
+                refused += 1;
+            }
+            (got, want) => panic!("{what}: {got:?} against {want:?}"),
+        }
+    }
+    assert!(3 * refused >= cases.len(), "{refused} of {}", cases.len());
+}
+
+/// The shell's faces with their weights: +1 for a back side, -1 for a front side, both
+/// sides cancelling.
+fn weights(b: &Brep, shell: ShellId) -> Vec<(FaceId, i32)> {
+    let mut w = std::collections::BTreeMap::new();
+    for (f, side) in b.shell(shell).unwrap().faces() {
+        *w.entry(f.id()).or_insert(0) += if side == FaceSide::Back { 1 } else { -1 };
+    }
+    w.into_iter().filter(|&(_, x)| x != 0).collect()
+}
+
+/// CK2's premise, from the certified sign itself: two shells whose weighted faces are
+/// negatives of each other have opposite signs, each certified on its own. Every case's
+/// shells pair this way, so each pair is certified once.
+#[test]
+fn mirror_shells_have_opposite_signs() {
+    let mut pairs = 0;
+    for (what, b) in outward_cases() {
+        let shells: Vec<ShellId> = b.shells().map(|s| s.id()).collect();
+        for &a in &shells {
+            let wa = weights(&b, a);
+            let neg: Vec<(FaceId, i32)> = wa.iter().map(|&(f, x)| (f, -x)).collect();
+            let mirrors: Vec<ShellId> = shells
+                .iter()
+                .copied()
+                .filter(|&m| m != a && weights(&b, m) == neg)
+                .collect();
+            assert_eq!(mirrors.len(), 1, "{what}: shell {a}");
+            let m = mirrors[0];
+            if m < a {
+                continue;
+            }
+            let sa = volume_sign(&b, a, &mut Budget::unlimited(), &Stop::new()).unwrap();
+            let sm = volume_sign(&b, m, &mut Budget::unlimited(), &Stop::new()).unwrap();
+            assert_ne!(sa, Sign::Zero, "{what}: shell {a}");
+            let flipped = if sa == Sign::Positive {
+                Sign::Negative
+            } else {
+                Sign::Positive
+            };
+            assert_eq!(sm, flipped, "{what}: shells {a}, {m}");
+            pairs += 1;
+        }
+    }
+    assert!(pairs > 30, "{pairs} pairs");
+}
+
+/// CK2's saving, in budget units: the contract proves the torus on half the work
+/// `scx_mass::outward` spends, which is exhausted on that budget.
+#[test]
+fn the_contract_spends_half_the_work() {
+    let b = torus(&frames()[0], mm(3.0), mm(1.0), &Document::default())
+        .unwrap()
+        .body;
+    let mut full = Budget::unlimited();
+    outward(&b, &mut full, &Stop::new()).unwrap();
+    let half = full.used().div_ceil(2);
+    let got = check_with(&b, &Settings::new().with_budget(half), &Stop::new());
+    assert!(got.is_ok(), "{got:?}");
+    let mut budget = Budget::new(half);
+    let old = outward(&b, &mut budget, &Stop::new());
+    assert!(matches!(old, Err(MassError::Exhausted { .. })), "{old:?}");
 }
 
 /// The proved body is the body: the same tables, shared.
