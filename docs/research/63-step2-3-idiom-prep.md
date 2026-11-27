@@ -765,6 +765,73 @@ here and is not yet in `scx-num` (section 8, P1). `Budget` and `Stop` are 01 §6
 | CU5 | `restrict`, `reversed`, `transformed` | CU2, CU3 |
 | CU6 | difftest facade adapters for the slice (facade maps `from_left` to `Approach`, `non_zero_tangents` to `tangent_dir`) | CU2 |
 
+### 3.6 CU1 as built (11-27)
+
+Decided by analysis and an adversarial pass; proposed for review, not yet ruled.
+
+- **`Line { origin, direction }`, the direction unnormalised.** The pin's point, unit vector and
+  scale are one vector here: `point(t) = origin + direction t` is the pin's STEP parameter
+  (D13) with one rounding fewer. `Line::through(a, b)` is `new(a, b - a)`, so `t = 0` and
+  `t = 1` are the ends, as the pin's `from_points`.
+- **`point(t)` takes no side.** A point is continuous on every kind of curve (NURBS curves are
+  C0, ruling 2), so only `jet` takes `Approach`; analytic kinds ignore it. This narrows
+  §3.2's `point(t)` nowhere, and section 9's question stays open for `jet`.
+- **One evaluator per kind, `point_over<T>` and `jet_over<T, D>`** (X12): generic over
+  `scx_num::ring::Ring` for lines and the new `scx_num::trig::Trig` (`Ring` plus `sin_cos`) for
+  conics; `point` and `jet` are their `f64` forms. `Trig` is `fmath::sin_cos` for `f64` and an
+  enclosure for `Ivl` (the end values widened past `fmath`'s half ulp, plus every
+  extremum inside; a span of a turn or more gives `[-1, 1]`).
+- **`scx-num` gains** generic `Vec2<T>`/`Point2<T>` (as `Vec3<T>`), `Frame2 { origin, x }`
+  (y = x turned a quarter, right-handed), `trig::Trig`, `jet::CurveJet<D, T>` and `CurveJet2`
+  (`jet/curve.rs`, beside NS2's `jet/surface.rs`) and `ParamDomain::TURN` (`[0, 2 pi)`
+  periodic).
+- **Conic jets are any order `D`.** Derivative `k` is the point's two terms rotated a quarter `k`
+  times (`coeffs(k % 4)`), so there is no cap where the pin stopped at three.
+- **The sense folds into `b`.** `Sense::Reversed` evaluates with `-b` on the frame's `y`, so the
+  frame stays right-handed (D14) and the evaluator has no branch. `y` is recomputed per
+  evaluation from the frame (D12 stores x and z), a cross product per call; caching it would
+  break X4.
+- **Thresholds: the pin's `EFF_ZERO`.** A line's direction shorter than `EFF_ZERO` is refused
+  (the pin's `from_points` rule, which `Line::infinite` lacked). A circle's radius not above
+  `EFF_ZERO` is refused (`create_canonical_circle`'s rule), and the same rule holds for each
+  semi-axis of an ellipse, where the pin's `Ellipse::new` built any radii. Non-finite data is
+  refused everywhere (`CurveError::NotFinite(Part)`).
+- **`CurveError` has `Degenerate` and `NotFinite` only**, both `Refused`; `OutsideDomain`,
+  `TooLarge` and `Solve` (§3.2) join with the first operation that needs them (CU4, CU5):
+  nothing in CU1 can be outside a domain (every kind is total over `t`) or too large.
+- **No `scx-algo` dependency yet**; CU4's budgeted ellipse foot adds it.
+- **No `eval_many` yet.** It belongs with the dispatch (CU2), where a slice loop over a `match`
+  is the saving; per kind it would be a loop over `point`.
+- **No difftest for `domain()`.** The pin's domain is an `Extent1d` sentinel pair, not the
+  periodic or unbounded domain; the unit tests check `Unbounded` and `TURN`.
+- **NURBS and `CurveJet`.** `NurbsCurve::derivs::<K>` returns its own array. CU3's `Nurbs` arm
+  should wrap it as `jet::<D>(t, side) -> CurveJet<D>` in `scx-curve`, leaving `scx-nurbs`
+  as it is (`scx-nurbs` is layer 1 and has `[f64; D]` points, not `Point3`).
+
+Truth: `scx_testkit::analytic` in double-double. Lines: point within 2 roundings, the
+derivatives exact. Conics: each coordinate within 6 roundings of `|o| + |a x| + |b y|`, points
+and jets to order 3, both senses, 2-D twins embedded at z = 0; `Ivl` evaluation encloses the
+truth, narrow and wide.
+
+Difftest `t_curve`, 19 tests, 5,846 inputs: against `Line::infinite`/`from_points` and
+`Ellipse::new`/`create_canonical_circle`/`new_circle` (dimension 2 for the twins), read back
+through `canonical`, and `evaluate_step` at `t 180 / pi` with derivative `k` times
+`(180 / pi)^k`. Where acceptance or values differ past the tolerance, scx is checked against
+the definition or the truth (pin defects `curve_*`):
+
+| Input | pin | scx | Why scx is right |
+|---|---|---|---|
+| a zero or sub-`EFF_ZERO` direction (`Line::infinite`) | builds NaN data | refuses | no direction, no line |
+| a segment shorter than `EFF_ZERO` (`from_points`) | the X axis over `[0, 0]` | refuses | the points give no direction |
+| a non-finite origin or direction | builds | refuses | not a line |
+| an infinite circle radius | builds | refuses | not a circle |
+| an ellipse radius zero, negative, below `EFF_ZERO`, infinite or NaN | builds | refuses | not an ellipse (the pin's own circle rule) |
+| a conic at a large angle or a coordinate cancelling near zero | the degree round trip rounds the angle twice | `sin_cos` of the radian angle | within 6 roundings of the double-double truth |
+
+2,520 exact, 2,819 within tolerance, 507 pin defects passing their checks, 0 mismatches, 0
+nondeterministic (0.2 s in debug, one thread). Line points and jets need no defect: none is
+past the tolerance.
+
 ## 4. `scx-surface`
 
 The step-2 slice covers plane, cylinder, cone, sphere, torus and B-spline, with point inversion,

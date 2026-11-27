@@ -1,0 +1,21 @@
+# Written for solidcorex.
+[package]
+name = "scx-curve"
+description = "solidcorex layer 2: analytic curves as plain data (line, circle, ellipse, in 3-D and 2-D): validated construction, points, fixed-order jets, scalar-generic evaluation"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# scx-algo (01's crate row) joins when a step uses it (inversion budgets, CU4).
+[dependencies]
+scx-num = { path = "../scx-num" }
+scx-nurbs = { path = "../scx-nurbs" }
+
+# The double-double references the unit tests check against (layers.txt [testkit]).
+[dev-dependencies]
+scx-testkit = { path = "../scx-testkit" }
+
+[lints]
+workspace = true
