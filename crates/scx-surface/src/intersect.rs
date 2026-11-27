@@ -69,7 +69,7 @@ use scx_num::extent1d::Extent1d;
 use scx_num::extent2d::Extent2d;
 use scx_num::fmath;
 use scx_num::frame::{Frame, Sense};
-use scx_num::units::Length;
+use scx_num::units::Resolution;
 use scx_num::vector2d::Point2;
 use scx_num::vector3d::{Point3, Vec3};
 
@@ -125,7 +125,7 @@ impl CurveSurfaceHit {
 }
 
 /// Every place where the curve `c` over `ce` meets the surface `s` inside `se`, within
-/// `tol`, sorted by `t`, then `u`, then `v` (63 A14).
+/// `res.zone()` (`tol` below), sorted by `t`, then `u`, then `v` (63 A14).
 ///
 /// A point lies on the curve at its `t` and within `tol` of the surface (a crossing within
 /// the rounding of the root); its uv is the surface's foot of that point. A conic's `t` is
@@ -135,8 +135,6 @@ impl CurveSurfaceHit {
 ///
 /// # Errors
 ///
-/// - [`SurfaceError::BadTolerance`] (Refused) when `tol` is not a positive finite length,
-///   checked first.
 /// - [`SurfaceError::NurbsIntersection`] (Unsupported) when the curve or the surface is a
 ///   NURBS one: not built yet, never an empty answer.
 /// - [`SurfaceError::Exhausted`] when `budget` runs out, [`SurfaceError::Stopped`] when
@@ -146,21 +144,17 @@ pub fn intersect_curve(
     ce: &Extent1d,
     s: &Surface,
     se: &Extent2d,
-    tol: Length,
+    res: Resolution,
     budget: &mut Budget,
     stop: &Stop,
 ) -> Result<Vec<CurveSurfaceHit>, SurfaceError> {
-    // NaN refuses too (07 §6 rule 5).
-    if !(tol.mm().is_finite() && tol.mm() > 0.0) {
-        return Err(SurfaceError::BadTolerance { value: tol.mm() });
-    }
     let Some(target) = Target::of(s) else {
         return Err(SurfaceError::NurbsIntersection);
     };
     let Some(path) = Path::of(c, ce) else {
         return Err(SurfaceError::NurbsIntersection);
     };
-    let tol = tol.mm();
+    let tol = res.zone().mm();
     let mut events = Vec::with_capacity(16);
     for piece in path.pieces(&target) {
         stop.check().map_err(|_| SurfaceError::Stopped)?;

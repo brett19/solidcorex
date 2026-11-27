@@ -414,7 +414,7 @@ impl Draft {
         let (start_budget, end_budget) = (budget(&ends[0]), budget(&ends[1]));
         let kind = match shape {
             EdgeShape::Curve { curve, interval } => {
-                match pcurve_of(curve, surface, *interval, res.approx()) {
+                match pcurve_of(curve, surface, *interval, res) {
                     Ok(pc) => Kind::Curve {
                         pc,
                         interval: *interval,

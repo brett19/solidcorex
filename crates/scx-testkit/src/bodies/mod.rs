@@ -36,7 +36,7 @@ use scx_curve::{Curve2, CurveError, Line2};
 use scx_num::domain::UvDomain;
 use scx_num::frame::{Frame, Sense};
 use scx_num::hash::Rng;
-use scx_num::units::Length;
+use scx_num::units::{Length, Resolution};
 use scx_num::vector2d::{Point2, Vec2};
 use scx_num::vector3d::{Point3, Vec3};
 use scx_surface::{PcurveError, SurfaceError};
@@ -44,8 +44,13 @@ use scx_surface::{PcurveError, SurfaceError};
 pub use check::Invariant;
 pub use wreck::broken;
 
-/// The tolerance the generators build pcurves to: far inside any resolution.
-pub const BUILD_TOL: Length = Length::from_mm(1e-9);
+/// The resolution the generators build pcurves to: its approximation tolerance is
+/// 1e-9 mm, far inside any resolution.
+#[must_use]
+pub fn build_resolution() -> Resolution {
+    // 2e-9 is finite and above zero.
+    Resolution::new(Length::from_mm(2e-9)).unwrap_or_default()
+}
 
 /// A valid generator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

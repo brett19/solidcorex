@@ -49,7 +49,7 @@ use scx_num::error::ErrorKind;
 use scx_num::extent1d::Extent1d;
 use scx_num::frame::Sense;
 use scx_num::math::Affine;
-use scx_num::units::{Accuracy, Length};
+use scx_num::units::{Accuracy, Length, Resolution};
 use scx_num::vector2d::{Point2, Vec2};
 use scx_num::vector3d::Vec3;
 use scx_surface::{PcurveError, Surface, SurfaceError, UvMap, pcurve_of};
@@ -391,7 +391,12 @@ impl Draft {
                                 let reach = bounds
                                     .reach(bound.as_ref())
                                     .max(bounds.reach(image.accuracy.as_ref()));
-                                let geom = use_image(id, u, image, &surface, &uv, reach)?;
+                                // `pcurve_of` reads the approximation tolerance, half the zone.
+                                // A recorded bound is above the zone, so the fallback to the
+                                // document's resolution never fires.
+                                let res = Resolution::new(reach * 2.0)
+                                    .unwrap_or_else(|| doc.resolution());
+                                let geom = use_image(id, u, image, &surface, &uv, res)?;
                                 let mut out = EdgeUse::new(u.edge, u.sense, geom);
                                 out.bound = bound;
                                 Ok(out)
@@ -452,7 +457,7 @@ fn use_image(
     edge: &EdgeImage,
     surface: &Surface,
     uv: &UvMap,
-    tol: Length,
+    res: Resolution,
 ) -> Result<UseGeom> {
     let kind = || TransformError::PcurveKind { face, edge: u.edge };
     let (curve, interval) = match &u.geom {
@@ -492,7 +497,7 @@ fn use_image(
     else {
         return Err(kind());
     };
-    let made = pcurve_of(moved, surface, *over, tol).map_err(|cause| TransformError::Pcurve {
+    let made = pcurve_of(moved, surface, *over, res).map_err(|cause| TransformError::Pcurve {
         face,
         edge: u.edge,
         cause,

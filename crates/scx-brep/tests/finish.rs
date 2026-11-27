@@ -19,13 +19,15 @@ use scx_brep::{
 use scx_curve::{AngleLine2, Circle, Curve, Curve2, Line, Line2};
 use scx_num::extent1d::Extent1d;
 use scx_num::frame::{Frame, Sense};
-use scx_num::units::Length;
+use scx_num::units::{Length, Resolution};
 use scx_num::vector2d::{Point2, Vec2};
 use scx_num::vector3d::{Point3, Vec3};
 use scx_surface::{Cone, Cylinder, Plane, Sphere, Surface, pcurve_of};
 use scx_testkit::topology::{self, Violation};
 
-const TOL: Length = Length::from_mm(1e-9);
+fn tol() -> Resolution {
+    Resolution::new(Length::from_mm(2e-9)).unwrap()
+}
 
 fn ext(a: f64, b: f64) -> Extent1d {
     Extent1d::new(a, b).unwrap()
@@ -33,7 +35,7 @@ fn ext(a: f64, b: f64) -> Extent1d {
 
 fn pcurve(edge: &Curve, interval: Extent1d, surface: &Surface) -> UseGeom {
     UseGeom::Pcurve {
-        curve: pcurve_of(edge, surface, interval, TOL).unwrap(),
+        curve: pcurve_of(edge, surface, interval, tol()).unwrap(),
         interval,
     }
 }
