@@ -39,6 +39,9 @@ use std::process::{Command, ExitCode};
 
 /// The solidcore commit every moved file derives from.
 const PIN: &str = "03e16c9ee766de5b9b1ced845e5149d62ff493b8";
+/// The tree of `solidcore/` at [`PIN`]. A checkout rebuilt from the public mirror (CI) has a
+/// different commit hash and this same tree, which is the same content.
+const PIN_TREE: &str = "c5c43059c99ed6b4d36e5ddf2c76dcb1992848ab";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -505,18 +508,29 @@ fn git_in(dir: &Path, args: &[&str]) -> Result<String, String> {
     }
 }
 
-/// The pinned checkout is at [`PIN`] and clean (the difftest's build script checks the
-/// same before it links solidcore).
+/// The revision that names the pin in the pinned checkout: [`PIN`] itself, or `HEAD` when
+/// the checkout is a rebuild from the public mirror whose `solidcore/` tree is [`PIN_TREE`].
+fn pin_rev(dir: &Path) -> Result<&'static str, String> {
+    let head = git_in(dir, &["rev-parse", "HEAD"])?;
+    if head.trim() == PIN {
+        return Ok(PIN);
+    }
+    let tree = git_in(dir, &["rev-parse", "HEAD:solidcore"])?;
+    if tree.trim() == PIN_TREE {
+        return Ok("HEAD");
+    }
+    Err(format!(
+        "pin: {} is at {}, not {PIN} (nor the same solidcore/ tree {PIN_TREE})",
+        dir.display(),
+        head.trim()
+    ))
+}
+
+/// The pinned checkout is at [`PIN`] (or has its tree) and clean (the difftest's build
+/// script checks the same before it links solidcore).
 fn pin(root: &Path) -> Result<String, String> {
     let dir = pin_dir(root);
-    let head = git_in(&dir, &["rev-parse", "HEAD"])?;
-    if head.trim() != PIN {
-        return Err(format!(
-            "pin: {} is at {}, not {PIN}",
-            dir.display(),
-            head.trim()
-        ));
-    }
+    pin_rev(&dir)?;
     let dirty = git_in(&dir, &["status", "--porcelain"])?;
     if !dirty.trim().is_empty() {
         return Err(format!("pin: {} has changes:\n{dirty}", dir.display()));
@@ -526,7 +540,9 @@ fn pin(root: &Path) -> Result<String, String> {
 
 /// `git show PIN:<path>` in the pinned checkout.
 fn pin_show(root: &Path, path: &str) -> Result<String, String> {
-    git_in(&pin_dir(root), &["show", &format!("{PIN}:{path}")])
+    let dir = pin_dir(root);
+    let rev = pin_rev(&dir).map_err(|e| format!("{path}: {e}"))?;
+    git_in(&dir, &["show", &format!("{rev}:{path}")])
         .map_err(|_| format!("{path} does not exist at the pin"))
 }
 
