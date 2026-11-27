@@ -2807,9 +2807,11 @@ The rules:
 
 - **The overlap is not clipped by `se`.** An `Overlap` covers the whole `ce`. Clipping a
   curve's stretch to a uv box needs the curve's pcurve, which `pcurve_of` (§4.11) now
-  gives. Until then the caller clips.
+  gives. Until then the caller clips. (Done 11-27, §4.14: clipped into pieces, without a
+  pcurve.)
 - **A NaN `tol` gives no tangents.** It is not refused. `pcurve_of` refuses a bad
-  tolerance (`BadTolerance`), so a typed refusal may be the consistent rule here too.
+  tolerance (`BadTolerance`), so a typed refusal may be the consistent rule here too. (Done
+  11-27, §4.14: `SurfaceError::BadTolerance`.)
 - **A closed `ce`** (a turn or more) is the one turn from `ce.min()`.
 
 **Errors.**
@@ -2893,6 +2895,161 @@ here is 65 row 1.
 **Added work.** All the code is new. No existing path gains work. `Arcs::of_direction`
 became `pub` because `Arcs` moved to `scx-curve`. `Axes::local` is the same as SU4's, and
 `Cone::slope` is main's.
+
+### 4.14 pcurve and SU6 follow-ups as built (11-27)
+
+Three items were left open by §4.11, §4.13 and §5.6: WR-680's oblique cylinder section in
+`pcurve_of`, the overlap left unclipped by `se`, and a bad `tol` in `intersect_curve`.
+
+**The oblique section.** A plane that cuts a cylinder of radius `r` off square gives an
+ellipse `O + a cos t X + s_e b sin t Y`. With `O` on the axis, the parts of `a X` and
+`s_e b Y` across the axis are perpendicular and both `r` long, so:
+
+- the azimuth is exactly `alpha + s t`: `alpha` is the azimuth of `a X`, and `s` is the
+  sign of the turn from it to `s_e b Y`;
+- the height is `v = h + (a X . z) cos t + (s_e b Y . z) sin t`, with `h` the height of
+  `O`.
+
+In D13's uv, `u` is the arcs parameter of that azimuth, the same coordinate as a
+parallel's. So the exact pcurve, at the ellipse's own parameter `t`, is a new kind:
+
+```rust
+pub struct AngleWave2 { arcs, start, sense, mean, amp_cos, amp_sin }  // scx-curve
+// u = arcs.parameter(start + s t), v = mean + amp_cos cos t + amp_sin sin t
+pub enum Curve2 { .., AngleLine(AngleLine2), AngleWave(AngleWave2) }
+AngleWave2::new(arcs, start, sense, mean, amp_cos, amp_sin) -> Result<Self, CurveError>
+```
+
+It has the same methods as `AngleLine2`: `point`, `jet`, `point_over`, `jet_over`,
+`domain`, `angle`, `reversed`, and `restrict` through the enum. The `u` half shares
+`AngleLine2`'s code (`angle_domain`, `angle_jet`), and `AngleLine2` stays bit for bit the
+same (tested). `v`'s derivatives rotate `(cos, sin)` a quarter turn each order.
+`reversed` flips the sense and negates `amp_sin`, bit for bit `C(-t)`. Inverting one is
+`Unsupported::AngleWaveInversion`, as an angle line's inversion was.
+
+`pcurve_of` builds it when the centre is within `NEAR * r` of the axis. Everything else
+goes through the same on-surface and lifting checks as every other answer. A section of a
+cone is still `NoClosedForm`.
+
+**Decision: a new kind, by analysis and adversarial analysis.**
+
+- *Option 1, a `Curve2::Nurbs` (the pin's answer).* The exact rational uv curve exists
+  (testkit T5's `cylinder_section`, the pin's `cylinder_section.rs`). But its parameter is
+  the section NURB's, not the ellipse's angle, and the 04 ruling is that the pcurve keeps
+  the edge's own parameter. Matching the parameter would need a reparameterisation, which
+  is a fit or a composition. It is rejected for that.
+- *Option 2, widen `AngleLine2` with a sinusoid.* That would give one kind for both. But
+  every parallel and meridian would then carry three more words and a `cos`/`sin` it
+  never needs, and the name would be wrong. It is rejected.
+- *Option 3, `AngleWave2` (chosen).* It is exact at the ellipse's parameter, it is plain
+  data like the other kinds, and its `u` code is shared with `AngleLine2`.
+- *The adversarial case against 3.*
+  - "Another enum arm everyone must match." `Curve2` is `#[non_exhaustive]`, so a new arm
+    costs one line per dispatch, and the dispatch test covers it bit for bit.
+  - "A STEP writer wants a B-spline." It can convert at write time, exactly (T5's form
+    over the same span). That conversion is a cost at export, not on the kernel's paths.
+  - "A square cut now has two answers." A square cut given as a `Circle` is a parallel
+    (`AngleLine2`). The same cut given as an `Ellipse` with equal semi-axes gets an
+    `AngleWave2` with zero amplitudes. That is exact, only less specific.
+  - None of these overturns 3.
+
+**Truth check.**
+
+- `cylinder_sections_are_angle_waves` (unit, 3,840 cases): scales 1, 1e3 and 1e-3, both
+  senses of cylinder and ellipse, tilts from 1e-9 to 1.2, either axis first and the
+  ellipse's z either way, five intervals (negative, short, past a turn). Each case is
+  lifted at 101 samples to 1e-12 of size.
+- `oblique_cylinder_sections_have_the_rational_uv` (`tests/truth.rs`): 24 sections, at 8
+  points on each of T5's exact rational spans, give the same uv as T5's NURBS uv, scaled
+  by `2 pi r / 4 pi`. The ellipse's parameter of each point is checked to 1e-12.
+- Six `AngleWave2` tests in scx-curve:
+  - against its definition;
+  - finite differences;
+  - the side at a break;
+  - reversal bit for bit;
+  - interval enclosure;
+  - `NotFinite`.
+- Difftest `t_pcurve` (new): 240 arcs of oblique sections against the pin's
+  `drop_curve_to_srf`, compared at 17 stations of the ellipse's angle. On the pin side,
+  bisection finds the NURB parameter whose point has that angle.
+  - The result: 212 within tolerance, 28 pin defects, 0 mismatches.
+  - Both uv are the same (the pin's bounded cylinder's `u` runs `[0, 2 pi r]`).
+  - The defect: the pin's drop runs at a 3-D tolerance of 10. Its `DropIsoCurve` takes a
+    gently tilted section for the iso line at its start height and answers a constant
+    `v`. scx's stations there are held to the exact uv: `v` the height, `u` T4's arcs
+    parameter of the azimuth in double-double, within 1e-9 of size
+    (`pin_defects::oblique_pcurve`).
+  - The pin also returns its uv curve twice, or split where scx keeps one piece. The
+    fingerprint takes the first piece that holds each station.
+
+**The overlap clipped by `se`.** An `Overlap` is now the pieces of `ce` whose uv lies in
+`se`.
+
+- *Decision: one overlap can become several pieces.* A circle on a plane crossing a
+  rectangle leaves and re-enters it up to four times. A single extent would have to cover
+  the outside runs or drop the inside ones. Both are wrong. The variant stays
+  `Overlap { t: Extent1d }`, and one hit is returned per piece, in `t` order.
+- *How.* The cuts are where the curve meets the planes, in the surface's axes, that
+  carry `se`'s sides:
+  - the plane's sides `x = u` and `y = v`;
+  - a cylinder's or cone's `z = v`;
+  - a sphere's `z = r sin(angle(v))`;
+  - a torus's `z = small sin(angle(v))`, skipped when the `v` range is a turn or more;
+  - a side of constant `u` on a revolution kind: the plane through the axis at that
+    azimuth, skipped when the `u` range is a period or more.
+
+  These planes hold every boundary crossing (a superset: a plane through the axis also
+  meets the opposite half). A line's root is linear, and a conic's are `psi ± acos(-gamma
+  / R)`. Between adjacent cuts, the middle's uv is tested with the same `uv_in` as a
+  point hit, and adjacent kept pieces merge. No transcendental search, no tolerance.
+- *Edges.*
+  - When nothing leaves `se`, the original `ce` is returned unchanged.
+  - On a closed conic, a piece across the turn's start is joined into one extent that
+    runs past `ce.min() + 2 pi`. The `Overlap` doc says so.
+  - A touch of no length (the curve grazes a side from inside) is dropped. It is a
+    point of the curve on the surface, but not a stretch, and a point hit would claim a
+    crossing that is not there.
+- *Truth check.*
+  - `overlaps_are_clipped_by_se`: 30 rounds of the 11 on-surface cases (every kind),
+    each with a random `se` (its `u` sometimes a period or more), 200 parameters each. The
+    oracle is the surface's own inversion placed against `se`: a parameter is in a piece
+    exactly when its foot is inside, except within 1e-6 of a piece's end. The test asserts
+    more than 10 cases in several pieces, more than 20 with none, more than 5 whole, and
+    more than 50,000 parameters checked.
+  - `a_circle_in_a_box_is_its_arcs`: exact arc ends.
+  - `rulings_and_parallels_clip_exactly`.
+  - `curves_on_the_surface_overlap_it` now has an oblique ellipse on a cylinder and
+    asserts 220 overlaps.
+  - `t_curve_surface` is unchanged at 0 mismatches. Its fingerprint is only whether
+    there is an overlap.
+
+**A bad `tol`.** `intersect_curve` now refuses a `tol` that is not finite or not above
+zero as `SurfaceError::BadTolerance { value }` (Refused, `intersect_tolerance_invalid`).
+It is checked first, before the NURBS check, so a NaN never reaches the solve
+(`a_bad_tolerance_is_refused_first`). `pcurve_of` still accepts a zero `tol` (its checks
+then ask for an exact lift). The two now differ on zero. That is left for review: making
+`pcurve_of` refuse zero too is a one-line change if it is ruled.
+
+**Added work.** Timed side-channel with a throwaway timer (best of 7, release, not
+committed). `main` and the branch were run back to back under the same load:
+
+| Path | main | branch |
+| --- | ---: | ---: |
+| `pcurve_of` of a parallel | 1365 ns | 1370 ns |
+| `Curve2` angle-line `point` | 38.9 ns | 37.4 ns |
+| `pcurve_of` of an oblique ellipse | 507 ns (refused) | 1573 ns (built and checked) |
+| `intersect_curve` line-cylinder | 1880 ns | 1799 ns |
+| overlap, parallel, `se` the whole turn | 6501 ns | 6531 ns |
+| overlap, parallel, `se` part of the turn | 6497 ns | 7153 ns |
+| overlap, circle on a plane in a box | 2500 ns | 3191 ns |
+
+- Paths that do not clip are unchanged within noise. The load was 6 to 10, and earlier
+  runs swung by 25% on both sides.
+- An oblique `pcurve_of` now does the work every other answer does: 9 + 9 evaluations for
+  the checks, one `atan2`.
+- A clipped overlap adds, per side of `se`: one plane, a `hypot`, an `atan2` and an
+  `acos`. Then one curve point and one `uv_in` per sub-interval (at most 9 here).
+- A plain hit gains one comparison for `tol`.
 
 ## 5. `scx-ssi`, the analytic part
 
@@ -3145,7 +3302,8 @@ Both are exact and deterministic. Nothing was taken that depends on a search or 
 
 **Open.**
 
-- WR-680's rational pcurve of an oblique cylinder section, in `pcurve_of`.
+- WR-680's oblique cylinder section in `pcurve_of`: done, an `AngleWave2` at the
+  ellipse's parameter (§4.14). An oblique section of a cone is still `NoClosedForm`.
 - Parabola and hyperbola kinds in `scx-curve`. SS5 answers `General` for them until those
   kinds exist.
 - SS2 to SS4.

@@ -48,6 +48,7 @@ mod t_nurbs_surface_iges;
 mod t_ode;
 mod t_p21;
 mod t_pbox;
+mod t_pcurve;
 mod t_pset;
 mod t_rest;
 mod t_rng;
