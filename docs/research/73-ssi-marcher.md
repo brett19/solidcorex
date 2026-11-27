@@ -1303,6 +1303,123 @@ the tolerance used. Change the tolerance rule only with a decision on that, not 
 7. **Zero cost on `xtask fast`.** The full run is `#[ignore]`d. The inline tests take 0.7 s
    in a debug build; with a corpus the smoke subset adds four cases and the surface checks.
 
+## 20. SM4b as built (11-27)
+
+The perf follow-up of SM4 (§15.4, §15.5): cell-level pairing within a small factor of the pin, and
+the near-touching analytic pairs cleared at the cells. Results only equal or tighter; no pair is
+dropped without proof.
+
+### 20.1 What changed
+
+- **Hull ranges for NURBS pieces** (`scx-surface`, `hull.rs`). `Surface::hulls()` takes the
+  Bézier patches of `nurbs_invert` (each homogeneous control coordinate with its error bound),
+  divides each point by its weight in interval arithmetic (the weight's interval must be
+  positive, else no hulls), and keeps the points as boxes. `Hull::range_along(dir)` is the
+  least and greatest interval dot product, outward rounded: certified by the convex-hull
+  property of a rational Bézier patch with positive weights, and as cheap as the control points.
+  `Hull::bbox()` is the box of the points. `Hull::axis()` is the mean of the unit normals of
+  the net's quadrilaterals (floating-point: any direction proves, a good one proves more).
+  `Hulls::containing(uv)` finds the patch by its rectangle. Only a NURBS surface has hulls: an
+  analytic kind's rational image rounds its data (§15.2 item 4), so the kinds keep their own
+  formulas.
+- **Piece cache** (`general/pieces.rs`). A `Piece` now carries two slabs, each an axis, the
+  piece's own certified range along it and the coincidence scaled by an upper bound of the axis's
+  length, computed once when the piece is made (before: twice per pair, per piece). The first
+  axis is the hull's mean normal for a whole patch (else the surface's normal at the middle), the
+  second the surface's normal at the middle where that differs. A pair is dropped when any of
+  up to four slabs separates it; each costs one range of the other piece (a hull range for a
+  whole patch, `range_along` for a half). A whole patch takes its box from the hull; a half
+  made by halving takes `box_over`. `Piece` has private fields now: `Candidates::piece_of_a` and
+  `piece_of_b` make a piece for a uv rectangle.
+- **Tight cos and sin on an arc** (`scx-curve`, `Arcs::cos_sin`; `scx-num`, `Ring`). A range
+  that lies on one quarter arc has monotone `cos` and `sin`, so its result is the hull of the
+  formula at the two ends, widened by `8 eps` (the formula's constants are rounded, which can
+  put its turning point a few ulps inside the arc: a second-order excess). The interval form of
+  the same formula was about 20 percent wide, because `tau` appears in the numerator and the
+  denominator. `Ring` gains two provided methods (`range_ends`, `join_padded`) that only `Ivl`
+  overrides; a ring of points evaluates as before. `range_along` takes its natural range from
+  the interval formula (now tight) in place of the ring-of-values one.
+
+### 20.2 Decisions, for and against
+
+1. **Hull and surface box are not met for a whole patch; the hull stands.**
+   - For: cheaper (no `partials_over_piece` per cell), and the pairs came out no more than the
+     met form's in every case (below).
+   - Against: for a strongly curved patch the Taylor-form enclosure can be tighter than the
+     control hull; a half patch still takes that form.
+2. **Two axes.** One axis (the hull's mean normal) gave 2,168 pairs over the corpus; adding the
+   surface's normal at the middle gave 2,081 (the pin: 2,083) for about a third more time.
+   Against: the extra range per pair; it is cheap on a hull.
+3. **Where a hull is not valid it is not used**: a piece that is part of a patch (halving) or
+   whose rectangle is not exactly a patch's. The rectangle is compared as stored, so a clipped
+   extent falls to the surface's own enclosure, never to a looser hull.
+4. **Tight arcs by a hook on `Ring`, not by a new interval type.** The kinds' `eval` is generic
+   in the ring, so the hook is what reaches it without a second formula per kind.
+   - Against: `scx-num` gets two methods only `Ivl` uses, and the monotone claim rests on the
+     caller passing a range on the arc (checked in `cos_sin`, which falls back outside it).
+5. **The axis hint of halving may now be a hull axis.** The halving rule picks the axis from the
+   best slab; with four candidates the hint differs on some pairs, so a refusing NURBS pair spends
+   a few units more or fewer (two unit NURBS spheres on a diagonal at `2^-4`: 239 against 221
+   units, both refused). No pair is dropped that was not before.
+
+### 20.3 Tests
+
+`apart` tests all pass, with changes of premise in two other places that assumed the loose boxes:
+`scx-boolean`'s `a_block_just_clear_of_a_torus_is_dropped_pair_by_pair` no longer finds the pair with
+the block's `x = 8` face (the torus's box is exact, `|x| <= 6.5`, so stage 1 drops it; five of six
+faces stay), and `scx-surface`'s `nurbs_boxes_hold_the_surface` asserted the analytic torus box within
+5 percent of the NURBS one; now it is within the NURBS one's width, which is up to 12 percent more
+(the quarter arcs' control hull). In `apart`, two changes of premise: `halving_proves_what_the_cells_cannot` now
+uses spheres `2^-4` apart along a diagonal (axis-aligned near-touching spheres are cleared at
+the cells now, so the old premise, that the cells do not prove them, no longer holds), and
+`a_dropped_pair_is_apart_by_sampling...` builds its pieces with `piece_of_a` and `piece_of_b`.
+New: `near_touching_analytic_spheres_are_cleared_at_the_cells` (`2^-10`, `2^-20`, `2^-29`: one
+unit, no halving), `a_tilted_near_touch_is_still_cheap`; in `scx-surface` `hull.rs`
+(`hulls_hold_dense_samples`: every patch of a torus and a sphere as NURBS, 25 by 25 samples,
+four directions, and the box; `a_bilinear_patch_has_its_exact_range`: the range along four
+directions is the corners' to `1e-14`; `analytic_kinds_have_none`; `hulls_are_deterministic`) and
+`enclose.rs` (`a_spheres_extrema_are_exact`: whole sphere `[-r, r]`, octant `[0, r]`, ranges
+along z and x, to `1e-13`; `a_cylinder_quarter_is_exact`); in `scx-curve`
+`a_range_on_an_arc_has_the_tight_cos_and_sin` (holds 40 samples per range, width within `1e-13` of
+the ends' difference, and across a break still holds).
+
+### 20.4 Measured (release, throwaway harness, tolerance 1e-9)
+
+119 corpus cases as exact NURBS patches, pairing at the cell level (`Candidates::new`), the pin's
+pieces and `pieces_apart` for comparison (the same run, so the machine is the same):
+
+| | pin | SM4 | SM4b |
+|---|---|---|---|
+| median per case | 7.3 to 8.2 us | 125 us (17.7 times the pin's) | 8.4 us (1.4 times the pin's) |
+| total, 119 cases | 10.9 ms | 190.9 ms | 8.5 ms |
+| surviving pairs | 2,083 | 2,736 | 2,081 |
+
+Run to run on a shared machine the medians move by 20 percent (the pin's own between 7.2 and 10.9 us);
+the ratio and the totals are what hold. SM4b never keeps a pair SM4 dropped, and keeps fewer in 22
+cases; it keeps more than the pin's uncertified control points in 2 (`c9n_many_spans_plane_sphere`,
+582 against 580; `y23_t3_ex2_torus_ellipsoid`, 72 against 68). The results of the full `intersect`
+(refusal or proof) are unchanged in all 119. With one axis only (the hull's mean normal) the totals
+were 6.9 ms, median 8.7 us, and 2,168 pairs.
+
+Two unit spheres `2^-10` and `2^-20` apart (analytic kinds, `intersect` end to end):
+
+| | SM4 | SM4b |
+|---|---|---|
+| `2^-10` | 4,305 units, 63 ms | 1 unit, 0.14 ms |
+| `2^-20` | 9,089 units, 134 ms | 1 unit, 0.14 ms |
+
+The same on a diagonal (boxes overlap at the nearest points) stays hard: `2^-4` 1,025 units
+before and 429 after (both proved), `2^-6` refused (the `FRONT` policy) before and 813 units proved after,
+`2^-10` refused by both. Halving of NURBS pairs still uses `partials_over_piece`; its cost is not changed here.
+
+### 20.5 Open
+
+- Hulls for the halves of a patch (de Casteljau of the homogeneous interval points) would make the
+  halving rounds as cheap as the cells.
+- Exact extrema over a uv box for a kind in a general frame (the sphere in a tilted frame keeps the
+  interval form's dependency between the axes' terms).
+- SM5's loop-free stop replaces `FRONT`; the diagonal near-touch is the case to try it on.
+
 ## 21. SM1b as built (11-27)
 
 SM1b closes §13.8 items 1 and 3 (the 04 SM1 ruling's follow-up). `pcurve_of` keeps SM1's

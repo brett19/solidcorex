@@ -3933,3 +3933,119 @@ BO7 builds what D5 allows: a result whose two solids share only a vertex, and a 
 **Open questions.** (1) The three gaps above, for BO. (2) The units of the contact and cavity cases (above): a stage charging for work it does not do would show here. (3) CK3's "found, not mine" (`recipes.rs`'s genus asserting an odd Euler characteristic on an edge contact) is probably the same per-sheet count above (not run here): it counts the shared vertex once; the difftest counts per sheet and passes. (4) The pin's pairs-tried comparison needs a per-stage number.
 
 **Proposed 04 row.** "DT3 (72 §14.38): `t_slice` runs every Boolean recipe in scx beside the pin, each judged against truth. Outcomes are matched by name (`NonManifold`, `SsiPair` with its two kinds as a set), the built ones get volume, area, topology (counted per sheet), classification, contract (an empty body judged for what it is, a four-fin edge with `Contacts::Radial`), mesh, determinism and, on the four `issue_1462` recipes, lineage from `Changes`. scx: 429 pass, 0 fail, 12 recorded gaps (a cylinder less itself, two jog-vertex cases, one crease mesh). `Report::work` (a public value, summed over steps) is committed as test data in `slice_work.txt`; a rise over 10% fails, `SCX_BLESS_WORK=1` rewrites. No counter in kernel code; the pin's pairs-tried comparison would need a stage-level number that is not public. Change if: a recorded gap stops failing (the entry then fails the run) or the per-stage work needs a gate."
+
+### 14.40 MA6b as built (11-27)
+
+MA6's rounding bound (§14.31) cost 1.29x to 1.41x instructions on `volume` plus `mass`. MA6b brings `scx-mass` below its pre-MA6 count. The values and stated errors are **bit-identical to main**: 288 printed results matched bit for bit. They cover eight generated kinds (block, prism, cylinder, cone, sphere, torus, holed, cavity), sizes 1 to 3, the world frame and a far tilted one, and accuracies 1e-6, 1e-9 and 1e-12. No bound changed, so every stated error still bounds its miss exactly as MA6 proved and tested. No public API changes.
+
+**Profile first** (callgrind, main's generated cylinder at n3, 415M in all):
+
+| Cost | Instructions | Note |
+|---|---|---|
+| `Set::eval` | 113.5M | predates MA6: about 500 instructions a call, the monomial loop's three table lookups and power indexing not unrolled |
+| `Inner::sample_rounding` | 60.7M | of which `Set::rounding` 48.6M (the same loop shape as `eval`, with the derivatives); the frame terms and the normal's `dn` make up the rest |
+| K15's extras | about 51M | `spread`, `jump`, `most`, each piece's rounding formula and the `Sum2` adds, all over a runtime component count (1 to 24) with bounds checks |
+
+Most of the cost was not the bound's arithmetic. It was the code shape around it: runtime-length loops over the components and an integrand loop that the compiler could not unroll.
+
+**What changed.** Four steps, each kept only once the outputs matched bit for bit:
+
+1. *Unrolled monomials* (`integrand.rs`). `Set::eval`'s and `Set::rounding`'s full branches expand the 20 monomials at compile time (`each_monomial!`, with const-generic exponents). They read the powers from one `Powers` table taken once per sample. Exponents of zero drop their terms at compile time, so they leave out the `1.0 *` factors (LLVM folds those, so the bits are the same). In the derivative sums they leave out the `0.0 *` terms: the sum starts from `-0.0`, the identity of addition, and adding `+0` to a finite sum leaves its bits. A unit test (`each_monomial_is_in_order`) pins the expansion to `MONOMIALS`.
+2. *A const-generic rule* (`kronrod.rs`). `integrate` dispatches the component count to `integrate_n::<N>` with N of 1, 2 or `MAX_COMPONENTS`, so every per-component loop has a compile-time length. Gauss terms with a zero weight are skipped. Their product is `+0` and adding it changes no bits, because a Gauss sum is never `-0` here: it starts from `+0`.
+3. *Side-by-side sums* (`rounding.rs`). `Sums<N>` holds each component's `Sum2` total, carry and absolute sum as arrays, with one count. It runs the same `TwoSum` per lane in the same order as `[Sum; N]`, but the lanes vectorise and share the count. A unit test (`sums_are_sum_side_by_side`) checks the bits against `Sum`.
+4. *Exact derivatives carry nothing* (`face.rs`). `Terms::rounding` gives `None` for derivatives that carry no rounding (a plane's stored axes). `sample_rounding` then leaves out the zero derivative terms in the normal's `dn`. Bit-identical for finite inputs, as in 1.
+
+**Cost** (callgrind instructions, each run three times `volume` plus `mass` at 1e-9, measured off the tree and not committed):
+
+| Body, n3 | pre-MA6 | main (MA6) | step 1 | step 2 | step 3 | MA6b (step 4) | MA6b / pre-MA6 | MA6b / main |
+|---|---|---|---|---|---|---|---|---|
+| generated block | 51.7M | 68.9M | 55.0M | 49.3M | 47.1M | 46.3M | 0.90x | 0.67x |
+| generated cylinder | 294M | 415M | 293M | 268M | 254M | 250M | 0.85x | 0.60x |
+| generated sphere | 708M | 911M | 673M | 639M | 620M | 620M | 0.87x | 0.68x |
+
+(The pre-MA6 and main counts differ slightly from §14.31's: this harness differs.)
+
+After merging main (MA5's per-face memo, §14.41, and changes to `scx-mass`'s breaks and enclosure and to the surfaces' pcurves and hulls), the merged branch is again bit-identical to main over the 288 results: main 71.8M, 416M, 940M; this branch 49.3M, 250M, 646M (0.69x, 0.60x, 0.69x of main; 0.95x, 0.85x, 0.91x of pre-MA6). The memo's bookkeeping adds about 3M to the block on both.
+
+**What the rounding still costs.** Steps 1 to 3 speed up the code shape for both halves. So, to be fair, the rounding should also be measured against the same shape with its work removed: the branch with the sample rounding, `spread`, `jump`, `most` and the piece formula stubbed out and plain sums in place of `Sum2`. That is 35.1M, 169M and 454M. The rounding therefore still costs 1.32x (block), 1.48x (cylinder) and 1.37x (sphere) against that shape, about the same share as MA6. Unrolling `eval` alone on pre-MA6 gives 41.3M, 204M and 531M. The ratio of the target (1.1x of pre-MA6) is met because the shared code got faster, not because the bound got cheaper. On this branch's cylinder the remaining rounding share is:
+
+- `sample_rounding` at about 25M (`Set::rounding` 17M, the frame terms and `dn` the rest);
+- `spread` 7.2M;
+- `most` 2.3M;
+- `jump` 1.8M;
+- the peaks 7M;
+- the `TwoSum`s and the piece formula.
+
+**Decisions, with the cases for and against.**
+
+| Decision | For | Against | Chosen |
+|---|---|---|---|
+| Codegen only (unrolling, const-generic lengths, side-by-side sums), bounds unchanged | bit-identical results, so MA6's proofs and tests carry over untouched; also speeds the value path | leaves the bound's own share near 1.3x to 1.5x of the same shape | **yes** |
+| One term bound per rule application (`gamma(k)` times the rule's weights times a magnitude bound) in place of per-node sample rounding | removes most of `sample_rounding` (about 25M on the cylinder) | the magnitude bound would be the peak over the nodes: looser than MA6's per-node bound wherever the samples vary (the round bar's 7.0e-13 would grow), so the errors would loosen, not tighten | no; open for a ruling if speed is worth looser errors |
+| Sparser rounding reads on K7 (centre and ends, as K15 already does) | about a third of `sample_rounding` on the outer rule | a model with no proof that the rounding is smooth along the trim; it would change the stated errors (looser or tighter by the node) | no; open |
+| Fuse the per-node rounding pass into `eval` (one pass sharing the powers) | about 2M on the cylinder | `eval` runs on every sample and the rounding only where it is read; fusing pays the derivative work on samples that never read it | no |
+| Dispatch N of {1, 2, `MAX_COMPONENTS`} | the counts used are 1 (`volume`, `area`) and 2 (`mass`'s parts) or the full set; three instantiations keep the code size small | a count between 3 and 23 runs the 24-lane loops on padding lanes (lanes past `n` stay zero and are ignored) | **yes** |
+| `Sums<N>` beside `Sum` (not replacing it) | `body.rs`'s face and shell sums are scalar, and `Sum` reads plainly there | two forms of one algorithm; the test ties their bits | **yes** |
+
+**Tests.** New:
+
+- `integrand.rs`'s `each_monomial_is_in_order`: the macro's exponents equal `MONOMIALS`;
+- `rounding.rs`'s `sums_are_sum_side_by_side`: `Sums<2>` gives `[Sum; 2]`'s bits.
+
+Unchanged and passing: every MA6 test in `tests/rounding.rs`, the changed-on-purpose `kronrod`, `enclosure.rs` and `scx-make` `extrude.rs` tests, and the rest of `scx-mass`. No test was removed.
+
+**Open.**
+
+- Whether a looser but cheaper bound (the per-application row above, or sparse K7 reads) is wanted. It would need a ruling, since it trades the round bar's and far boxes' tightness for about 10% to 15%.
+- `Set::eval`'s unrolling also helps any future integrand. MA5's per-face memo is separate, and the two compose.
+
+### 14.41 MA5 as built (11-27)
+
+`scx-mass` keeps each face's integral in the caller's `Scratch` (new module `crates/scx-mass/src/memo.rs`), so a face a Boolean keeps is read back, not integrated again. The entry is the face's `FaceIntegral` about its own reference, before the shift to the body's: the values and the stated error with MA6's rounding bound (§14.31), so a hit states the same error as a recompute, bit for bit. `volume`, `area`, `face_area` and `mass` go through it; no public API changed (the `Scratch` they already took is now used). `scx-mass` gains a dependency on `scx-record` (above it in `layers.txt`).
+
+**The key.** The bits the integral reads, written by the record format's own writers (`scx_record::Record` into a `Writer`), folded into the `u64` scratch key by `scx_num::hash::mix`:
+
+- the set (`Area`, `Volume` or `Full`) and the accuracy's bits;
+- the face's grown box (`Face::bounding_box`): it fixes the reference, the floors and MA3's rounding test, and carries the face's accuracy and the body's resolution;
+- the surface, its sense included;
+- each loop's uses in order: the use's sense, its pcurve and interval (or point), its recorded bound, and, for a use with a bound on a curve edge, what MA2's closure reads (the edge's curve, the use's end vertices' points).
+
+**Decisions, with cases for and against.**
+
+| Decision | For | Against | Chosen |
+|---|---|---|---|
+| Key on what the integral reads, not the whole face record: ids and sides left out, the box and the closure's edge data put in (deviation from §2.5's "the face record's bits") | the integral reads no id (an id appears only in an error, never kept) and no side (the body applies the side's sign after); so a face a Boolean renumbers, or a subtract turns over (sides swapped, loops kept, §14.29), still hits; and the box and the closure's edge curves are read, so must be in the key or a hit could be wrong | the key now names what `face::integrate` reads, so a change there must change `memo::write` too (said in the module's doc) | **yes** |
+| Write the bits with `scx_record`'s writers | every surface and curve kind's bits, already canonical and complete, sense included | a new dependency of `scx-mass`; a kind with no record yet is integrated without the memo | **yes** |
+| Hash per kind inside `scx-mass` | no dependency | duplicates the record format for every kind; a missed field is a wrong hit | no |
+| Key by the face record's `Arc` pointer (copy-on-write keeps a kept face's record shared) | near free | not bits: an address is reused after a free (a wrong hit), and a record copied for a write misses | no |
+| Store the full bits and compare them on a hit | a hash collision can only replace an entry, never give a wrong hit | memory: the bits per entry (a few KB for plate-12's top face, 144 circle loops) | **yes** |
+| A hit charges the work its fill recorded, at once | 04 11-27 (work does not depend on warmth): the budget runs out on a hit exactly where a recompute does, the same `Exhausted { limit }` | `Budget::used` after running out holds the face's whole work, where a recompute stops partway (said in the doc; no result reads it) | **yes** |
+| Keep only finished integrals | an error (budget, stop, step control) is never a memo; 04 11-27: an item cut by the budget is never memoized | a face that always fails is integrated again on every call | **yes** |
+| One entry per set | each set has its own step control (`Full` judges 22 components, `Volume` 2), so their bits differ | `volume` after `mass` misses | **yes** |
+
+**Tests.**
+
+- `memo::tests::a_flipped_sense_another_set_or_accuracy_is_another_key` (unit): the same face gives the same bits; the cylinder wall with its sense flipped, another set, another accuracy, and the accuracy one bit up each give other bits.
+- `crates/scx-mass/tests/memo.rs`:
+  - `a_warm_memo_gives_the_cold_bits_and_work`: on a block, a holed block, cylinder, cone, sphere, torus and a loose cylinder (MA2's strips), `mass` on a warm scratch equals a cold one in every value and stated error bit and in the work charged; one entry per face; a third call adds nothing; `volume` and `area` likewise.
+  - `another_accuracy_or_bound_misses`: another accuracy, or one bit of it, is an entry for every face; a loose block with another offset (the uses' bounds) misses on every face.
+  - `a_hit_runs_out_of_budget_where_a_recompute_does`: at limits 0, 1, a third, a half, one short and the total, warm and cold give the same result or error; a call cut by the budget keeps only the faces it finished and the next call's bits are the cold ones.
+- `crates/scx-boolean/tests/mass_memo.rs`, across a Boolean that keeps faces: each bench recipe run to its last step, `mass` of the body before it filling the scratch, then `mass` of the result. Warm equals cold in every bit and in work; a third call adds nothing; a scratch filled in another order (`volume` at 1e-6, then the result, then the body before) gives the same bits. `box-cyl-hole` and `plate-4` miss fewer than their faces; plate-12 misses 3 of 150 faces (its top and bottom, one more loop each, and the new wall); gear-60 misses 7 of 242.
+
+No test was removed.
+
+**Cost** (callgrind instructions of one `mass` at 1e-9 on the recipe's result, the Boolean chain outside the count; main against this branch; release):
+
+| Body | Main (no memo) | Cold memo | Warm memo (after the body before the last step) |
+|---|---:|---:|---:|
+| plate-12 (150 faces, 3 misses) | 10,279.5M | 10,281.3M (+0.02%) | 7,728.1M (0.75x) |
+| gear-60 (242 faces, 7 misses) | 361.2M | 364.0M (+0.8%) | 213.8M (0.59x) |
+
+Work charged is the same in all three (4,443,502 and 149,746 units). Wall time (best of 15, shared machine): plate-12 400 to 469 ms cold (noise), 301 ms warm; gear-60 13.7 ms cold, 7.9 ms warm. The cold overhead is the key's bits, the hash and the insert, about 11.6K instructions a face on gear-60.
+
+**Open.**
+
+1. What is left warm is the faces the last step changed, and on these bodies they dominate: plate-12's top and bottom carry 144 circle loops each. A per-loop memo would not be exact as built: a face's `base` (the loops' lowest `v`), its reference and its floors come from all its loops and its box. Making loops separable (a fixed base and floors per face kind) would change the method's bits, so it is for a later task, judged against T9.
+2. The memo has no eviction: a caller that keeps one `Scratch` over many bodies keeps every face's entry. `Scratch` has no size policy yet; none of step 4's callers needs one.
+
+**Proposed 04 row.** "MA5 (72 §14.41): `scx-mass` keeps each face's integral (about its own reference, values and MA6's stated error) in the caller's `Scratch`, keyed by the bits the integral reads: the set, the accuracy, the face's grown box, the surface with its sense, and each use's sense, pcurve or point, recorded bound and, for a bounded use, its edge's curve and end points, written by `scx_record`'s writers; ids and sides are not in the key (not read), so a renumbered or turned-over face hits. The full bits are stored and compared, so a collision only replaces an entry. A hit charges the recorded work at once (the same `Exhausted` as a recompute); only finished integrals are kept. Warm equals cold bit for bit across the bench recipes' last steps; plate-12 warm 0.75x and gear-60 0.59x instructions, cold +0.02% and +0.8%. Against: the key names what `face::integrate` reads, so the two change together; no eviction. Change if a per-loop memo is wanted (method change), or a caller needs a bounded `Scratch`."

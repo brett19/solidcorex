@@ -35,7 +35,7 @@ use scx_num::units::{Accuracy, Length, Resolution, coincident};
 use scx_num::vector3d::Vec3;
 use scx_nurbs::Approach;
 use scx_nurbs_surface::ParamAxis;
-use scx_surface::Surface;
+use scx_surface::{Hulls, Surface};
 
 use crate::error::SsiError;
 
@@ -47,6 +47,20 @@ pub struct Piece {
     pub uv: Extent2d,
     /// A box holding the surface over `uv` ([`Surface::box_over`]).
     pub bbox: Extent3d,
+    /// The slab across the piece, with its own range along it, computed once.
+    slabs: [Option<Slab>; 2],
+    /// The index of the piece's Bézier hull in its surface's [`Hulls`], when it is a whole
+    /// patch of a NURBS surface.
+    cell: Option<usize>,
+}
+
+/// A direction across a piece with the piece's own certified range along it and the
+/// coincidence scaled by an upper bound of the direction's length.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Slab {
+    axis: Vec3,
+    own: Ivl,
+    tol: f64,
 }
 
 /// A piece of the first surface with a piece of the second whose boxes and slabs do not
@@ -104,6 +118,8 @@ impl PiecePair {
 #[derive(Debug)]
 pub struct Candidates<'s> {
     surfaces: [&'s Surface; 2],
+    /// The Bézier hulls of each surface, when it is a NURBS surface with certified weights.
+    hulls: [Option<Hulls>; 2],
     /// The coincidence, `coincident(res, acc_a, acc_b)`, in mm.
     tol: f64,
     /// The resolution, in mm: pieces no larger are not halved.
@@ -135,10 +151,17 @@ impl<'s> Candidates<'s> {
     ) -> Result<Self, SsiError> {
         budget.charge(1)?;
         stop.check()?;
-        let (Some(pa), Some(pb)) = (cells(a, ae), cells(b, be)) else {
+        let tol = coincident(res, acc[0], acc[1]).mm();
+        let mut out = Self {
+            surfaces: [a, b],
+            hulls: [a.hulls(), b.hulls()],
+            tol,
+            floor: res.zone().mm(),
+            pairs: Vec::new(),
+        };
+        let (Some(pa), Some(pb)) = (out.cells(0, ae), out.cells(1, be)) else {
             return Err(whole_pair(a, ae, b, be));
         };
-        let tol = coincident(res, acc[0], acc[1]).mm();
         let boxes = |ps: &[Piece]| ps.iter().map(|p| p.bbox).collect::<Vec<_>>();
         let (ba, bb) = (boxes(&pa), boxes(&pb));
         let reach = ba
@@ -148,12 +171,6 @@ impl<'s> Candidates<'s> {
         let tree_a = BoxTree::new(&ba);
         let tree_b = BoxTree::new(&bb);
         let found = tree_a.pairs(&tree_b, box_tolerance(tol, reach));
-        let mut out = Self {
-            surfaces: [a, b],
-            tol,
-            floor: res.zone().mm(),
-            pairs: Vec::new(),
-        };
         let mut kept = Vec::new();
         for (i, j) in found {
             budget.charge(1)?;
@@ -162,7 +179,7 @@ impl<'s> Candidates<'s> {
                 continue;
             };
             let pair = PiecePair::new(p, q);
-            if let Some((next, axis)) = out.prove(&PiecePair::new(p, q)) {
+            if let Some((next, axis)) = out.prove(&pair) {
                 kept.push(PiecePair { next, axis, ..pair });
             }
         }
@@ -174,6 +191,19 @@ impl<'s> Candidates<'s> {
     #[must_use]
     pub fn pairs(&self) -> &[PiecePair] {
         &self.pairs
+    }
+
+    /// The piece of the first surface over `uv`, with its certified box and slabs (as the
+    /// pieces of [`Candidates::pairs`] have them). `None` when a box cannot be enclosed.
+    #[must_use]
+    pub fn piece_of_a(&self, uv: Extent2d) -> Option<Piece> {
+        self.piece(0, uv, None)
+    }
+
+    /// The piece of the second surface over `uv` (see [`Candidates::piece_of_a`]).
+    #[must_use]
+    pub fn piece_of_b(&self, uv: Extent2d) -> Option<Piece> {
+        self.piece(1, uv, None)
     }
 
     /// The coincidence the proofs use, in mm.
@@ -199,34 +229,95 @@ impl<'s> Candidates<'s> {
         }
         // The best axis so far: its overlap (negative: a gap) and the wider piece.
         let mut best: Option<(f64, usize, Vec3)> = None;
-        let [sa, sb] = self.surfaces;
-        for (s, p) in [(sa, &pair.a), (sb, &pair.b)] {
-            let Some(n) = s.normal(p.uv.mid(), [Approach::Above; 2]) else {
-                continue;
-            };
-            let n = n.as_vec();
-            let (Some(ra), Some(rb)) = (sa.range_along(n, pair.a.uv), sb.range_along(n, pair.b.uv))
-            else {
-                continue;
-            };
-            // The gap along `n` is at most the distance when `|n|` is at most 1: scale the
-            // tolerance by an upper bound of `|n|`.
-            let len = Vec3::new(Ivl::from(n.x), Ivl::from(n.y), Ivl::from(n.z))
-                .norm()
-                .hi;
-            let tol = (Ivl::from(self.tol) * Ivl::from(len)).hi;
-            let gap_up = Ivl::from(rb.lo) - Ivl::from(ra.hi);
-            let gap_down = Ivl::from(ra.lo) - Ivl::from(rb.hi);
-            if gap_up.lo > tol || gap_down.lo > tol {
-                return None;
-            }
-            let overlap = ra.hi.min(rb.hi) - ra.lo.max(rb.lo);
-            let wider = usize::from(rb.hi - rb.lo > ra.hi - ra.lo);
-            if overlap.is_finite() && best.is_none_or(|(o, _, _)| overlap < o) {
-                best = Some((overlap, wider, n));
+        for (k, (p, q)) in [(&pair.a, &pair.b), (&pair.b, &pair.a)]
+            .into_iter()
+            .enumerate()
+        {
+            for slab in p.slabs.into_iter().flatten() {
+                let Some(other) = self.range(1 - k, q, slab.axis) else {
+                    continue;
+                };
+                let (ra, rb) = if k == 0 {
+                    (slab.own, other)
+                } else {
+                    (other, slab.own)
+                };
+                // The gap along the axis is at most the distance when its length is at most
+                // 1: the tolerance is scaled by an upper bound of that length.
+                let gap_up = Ivl::from(rb.lo) - Ivl::from(ra.hi);
+                let gap_down = Ivl::from(ra.lo) - Ivl::from(rb.hi);
+                if gap_up.lo > slab.tol || gap_down.lo > slab.tol {
+                    return None;
+                }
+                let overlap = ra.hi.min(rb.hi) - ra.lo.max(rb.lo);
+                let wider = usize::from(rb.hi - rb.lo > ra.hi - ra.lo);
+                if overlap.is_finite() && best.is_none_or(|(o, _, _)| overlap < o) {
+                    best = Some((overlap, wider, slab.axis));
+                }
             }
         }
         Some(best.map_or((pair.next, None), |(_, w, n)| (w, Some(n))))
+    }
+
+    /// A certified range of surface `side` over `p` along `dir`: the Bézier hull of its
+    /// patch when `p` is one, else [`Surface::range_along`].
+    fn range(&self, side: usize, p: &Piece, dir: Vec3) -> Option<Ivl> {
+        if let (Some(h), Some(k)) = (self.hulls.get(side)?.as_ref(), p.cell)
+            && let Some(hull) = h.get(k)
+        {
+            return Some(hull.range_along(dir));
+        }
+        self.surfaces.get(side)?.range_along(dir, p.uv)
+    }
+
+    /// The piece of surface `side` over `uv` with its box and slab; `cell` is the index of
+    /// its patch's hull when the piece is the whole patch.
+    fn piece(&self, side: usize, uv: Extent2d, cell: Option<usize>) -> Option<Piece> {
+        let s = *self.surfaces.get(side)?;
+        let hull = cell.and_then(|k| self.hulls.get(side)?.as_ref()?.get(k));
+        let bbox = match hull.and_then(scx_surface::Hull::bbox) {
+            Some(b) => b,
+            None => s.box_over(uv)?,
+        };
+        self.piece_in(side, uv, bbox, cell)
+    }
+
+    /// [`Self::piece`] with the box given.
+    fn piece_in(
+        &self,
+        side: usize,
+        uv: Extent2d,
+        bbox: Extent3d,
+        cell: Option<usize>,
+    ) -> Option<Piece> {
+        let s = *self.surfaces.get(side)?;
+        let hull = cell.and_then(|k| self.hulls.get(side)?.as_ref()?.get(k));
+        let mut piece = Piece {
+            uv,
+            bbox,
+            slabs: [None; 2],
+            cell,
+        };
+        let normal = s
+            .normal(uv.mid(), [Approach::Above; 2])
+            .map(scx_num::vector3d::UnitVec3::as_vec);
+        let axes = [hull.and_then(scx_surface::Hull::axis).or(normal), normal];
+        let slab = |axis: Option<Vec3>| {
+            let n = axis?;
+            let own = self.range(side, &piece, n)?;
+            let len = Vec3::new(Ivl::from(n.x), Ivl::from(n.y), Ivl::from(n.z))
+                .norm()
+                .hi;
+            Some(Slab {
+                axis: n,
+                own,
+                tol: (Ivl::from(self.tol) * Ivl::from(len)).hi,
+            })
+        };
+        // The second slab is the surface's normal at the middle, when the net's own differs.
+        let second = if axes[0] == axes[1] { None } else { axes[1] };
+        piece.slabs = [slab(axes[0]), slab(second)];
+        Some(piece)
     }
 
     /// The children of `pair` that survive the proofs: its larger piece (by box) halved on
@@ -249,15 +340,11 @@ impl<'s> Candidates<'s> {
         // The hinted piece first; the other when it cannot be split.
         let order = if pair.next == 0 { [0, 1] } else { [1, 0] };
         for which in order {
-            let (surface, piece) = if which == 0 {
-                (self.surfaces[0], &pair.a)
-            } else {
-                (self.surfaces[1], &pair.b)
-            };
+            let piece = if which == 0 { &pair.a } else { &pair.b };
             if piece.bbox.max_length() <= self.floor {
                 continue;
             }
-            let Some(halves) = split(surface, piece, pair.axis) else {
+            let Some(halves) = self.split(which, piece, pair.axis) else {
                 continue;
             };
             let mut out = Vec::with_capacity(2);
@@ -377,42 +464,92 @@ fn boxes_apart(a: &Extent3d, b: &Extent3d, tol: f64) -> bool {
         || gap(b.z_min(), a.z_max())
 }
 
-/// A surface's pieces over `extent`: the cells of its Bézier form with their certified
-/// boxes, u-major. The extent itself as the one cell when the form cannot be built (the
-/// box then is still certified, by the surface). `None` when a box cannot be enclosed.
-fn cells(s: &Surface, extent: &Extent2d) -> Option<Vec<Piece>> {
-    let (us, vs) = match s.to_nurbs(extent) {
-        Ok(n) => (
-            breaks(
-                &n,
-                ParamAxis::U,
-                extent.x_interval().min(),
-                extent.x_interval().max(),
+impl Candidates<'_> {
+    /// Surface `side`'s pieces over `extent`: the cells of its Bézier form with their
+    /// certified boxes, u-major. The extent itself as the one cell when the form cannot be
+    /// built (the box then is still certified, by the surface). `None` when a box cannot be
+    /// enclosed.
+    fn cells(&self, side: usize, extent: &Extent2d) -> Option<Vec<Piece>> {
+        let s = *self.surfaces.get(side)?;
+        let (us, vs) = match s.to_nurbs(extent) {
+            Ok(n) => (
+                breaks(
+                    &n,
+                    ParamAxis::U,
+                    extent.x_interval().min(),
+                    extent.x_interval().max(),
+                ),
+                breaks(
+                    &n,
+                    ParamAxis::V,
+                    extent.y_interval().min(),
+                    extent.y_interval().max(),
+                ),
             ),
-            breaks(
-                &n,
-                ParamAxis::V,
-                extent.y_interval().min(),
-                extent.y_interval().max(),
+            Err(_) => (
+                vec![extent.x_min(), extent.x_max()],
+                vec![extent.y_min(), extent.y_max()],
             ),
-        ),
-        Err(_) => (
-            vec![extent.x_min(), extent.x_max()],
-            vec![extent.y_min(), extent.y_max()],
-        ),
-    };
-    let mut out = Vec::with_capacity(us.len().saturating_sub(1) * vs.len().saturating_sub(1));
-    for u in us.windows(2) {
-        for v in vs.windows(2) {
-            let (&[u0, u1], &[v0, v1]) = (u.first_chunk()?, v.first_chunk()?);
-            let uv = Extent2d::from_bounds(u0, v0, u1, v1)?;
-            out.push(Piece {
-                uv,
-                bbox: s.box_over(uv)?,
-            });
+        };
+        let hulls = self.hulls.get(side)?.as_ref();
+        let mut out = Vec::with_capacity(us.len().saturating_sub(1) * vs.len().saturating_sub(1));
+        for u in us.windows(2) {
+            for v in vs.windows(2) {
+                let (&[u0, u1], &[v0, v1]) = (u.first_chunk()?, v.first_chunk()?);
+                let uv = Extent2d::from_bounds(u0, v0, u1, v1)?;
+                // The hull serves a piece that is a whole patch; a part of one is enclosed
+                // by the surface (tighter than the patch's hull).
+                let cell = hulls
+                    .and_then(|h| h.containing(&uv))
+                    .filter(|(_, h)| h.uv() == uv)
+                    .map(|(k, _)| k);
+                out.push(self.piece(side, uv, cell)?);
+            }
         }
+        Some(out)
     }
-    Some(out)
+
+    /// A piece's two halves on the uv side that narrows them most, each with its certified
+    /// box: by their range along `axis` where there is one (the direction the proof that is
+    /// failing looks along), else by their boxes' longest side. `None` when no side splits
+    /// (a middle equal to an end) or a box cannot be enclosed. The first half is the lower.
+    fn split(&self, side: usize, p: &Piece, axis: Option<Vec3>) -> Option<[Piece; 2]> {
+        let s = *self.surfaces.get(side)?;
+        let (lo, hi) = (p.uv.min(), p.uv.max());
+        let halves = |across_u: bool| -> Option<[(Extent2d, Extent3d); 2]> {
+            let (a, b) = if across_u { (lo.x, hi.x) } else { (lo.y, hi.y) };
+            let m = 0.5 * (a + b);
+            if !(m > a && m < b) {
+                return None;
+            }
+            let (e0, e1) = if across_u {
+                (
+                    Extent2d::from_bounds(lo.x, lo.y, m, hi.y)?,
+                    Extent2d::from_bounds(m, lo.y, hi.x, hi.y)?,
+                )
+            } else {
+                (
+                    Extent2d::from_bounds(lo.x, lo.y, hi.x, m)?,
+                    Extent2d::from_bounds(lo.x, m, hi.x, hi.y)?,
+                )
+            };
+            Some([(e0, s.box_over(e0)?), (e1, s.box_over(e1)?)])
+        };
+        let worst = |h: &[(Extent2d, Extent3d); 2]| {
+            let width = |&(uv, bbox): &(Extent2d, Extent3d)| {
+                axis.and_then(|n| s.range_along(n, uv))
+                    .map_or_else(|| bbox.max_length(), |r| r.hi - r.lo)
+            };
+            width(&h[0]).max(width(&h[1]))
+        };
+        let chosen = match (halves(true), halves(false)) {
+            (Some(u), Some(v)) => Some(if worst(&v) < worst(&u) { v } else { u }),
+            (Some(h), None) | (None, Some(h)) => Some(h),
+            (None, None) => None,
+        }?;
+        let make = |(uv, bbox): (Extent2d, Extent3d)| self.piece_in(side, uv, bbox, None);
+        Some([make(chosen[0])?, make(chosen[1])?])
+    }
 }
 
 /// The distinct knots of a direction within `[lo, hi]`, with `lo` and `hi` themselves as the
@@ -426,52 +563,4 @@ fn breaks(n: &scx_nurbs_surface::NurbsSurface<3>, axis: ParamAxis, lo: f64, hi: 
     }
     out.push(hi);
     out
-}
-
-/// A piece's two halves on the uv side that narrows them most, each with its certified box:
-/// by their range along `axis` where there is one (the direction the proof that is failing
-/// looks along), else by their boxes' longest side. `None` when no side splits (a middle
-/// equal to an end) or a box cannot be enclosed. The first half is the lower.
-fn split(s: &Surface, p: &Piece, axis: Option<Vec3>) -> Option<[Piece; 2]> {
-    let (lo, hi) = (p.uv.min(), p.uv.max());
-    let halves = |across_u: bool| -> Option<[Piece; 2]> {
-        let (a, b) = if across_u { (lo.x, hi.x) } else { (lo.y, hi.y) };
-        let m = 0.5 * (a + b);
-        if !(m > a && m < b) {
-            return None;
-        }
-        let (e0, e1) = if across_u {
-            (
-                Extent2d::from_bounds(lo.x, lo.y, m, hi.y)?,
-                Extent2d::from_bounds(m, lo.y, hi.x, hi.y)?,
-            )
-        } else {
-            (
-                Extent2d::from_bounds(lo.x, lo.y, hi.x, m)?,
-                Extent2d::from_bounds(lo.x, m, hi.x, hi.y)?,
-            )
-        };
-        Some([
-            Piece {
-                uv: e0,
-                bbox: s.box_over(e0)?,
-            },
-            Piece {
-                uv: e1,
-                bbox: s.box_over(e1)?,
-            },
-        ])
-    };
-    let worst = |h: &[Piece; 2]| {
-        let width = |q: &Piece| {
-            axis.and_then(|n| s.range_along(n, q.uv))
-                .map_or_else(|| q.bbox.max_length(), |r| r.hi - r.lo)
-        };
-        width(&h[0]).max(width(&h[1]))
-    };
-    match (halves(true), halves(false)) {
-        (Some(u), Some(v)) => Some(if worst(&v) < worst(&u) { v } else { u }),
-        (Some(h), None) | (None, Some(h)) => Some(h),
-        (None, None) => None,
-    }
 }

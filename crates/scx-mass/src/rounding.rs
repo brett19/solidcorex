@@ -70,6 +70,49 @@ impl Sum {
     }
 }
 
+/// `N` compensated sums added to together, as [`Sum`] each (the same operations, the same
+/// bits), their terms laid out per operation so the additions run side by side.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Sums<const N: usize> {
+    total: [f64; N],
+    carry: [f64; N],
+    abs: [f64; N],
+    count: u32,
+}
+
+impl<const N: usize> Sums<N> {
+    pub(crate) const ZERO: Self = Self {
+        total: [0.0; N],
+        carry: [0.0; N],
+        abs: [0.0; N],
+        count: 0,
+    };
+
+    /// Adds `x[i]` to sum `i`.
+    pub(crate) fn add(&mut self, x: &[f64; N]) {
+        let totals = self.total.iter_mut().zip(self.carry.iter_mut());
+        for (((t, c), a), x) in totals.zip(self.abs.iter_mut()).zip(x) {
+            let s = *t + x;
+            let z = s - *t;
+            let e = (*t - (s - z)) + (x - z);
+            *t = s;
+            *c += e;
+            *a += x.abs();
+        }
+        self.count = self.count.saturating_add(1);
+    }
+
+    /// Each sum and the bound on its rounding, as [`Sum::value`] and [`Sum::bound`].
+    pub(crate) fn each(&self) -> impl Iterator<Item = (f64, f64)> + '_ {
+        let g = gamma(self.count.saturating_sub(1));
+        let parts = self.total.iter().zip(&self.carry).zip(&self.abs);
+        parts.map(move |((t, c), a)| {
+            let value = t + c;
+            (value, gamma(1) * value.abs() + g * g * a)
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -93,6 +136,24 @@ mod tests {
             plain += x;
         }
         assert_eq!(plain, 0.0, "the plain sum loses the 1");
+    }
+
+    /// [`Sums`] is [`Sum`] side by side: the same bits.
+    #[test]
+    fn sums_are_sum_side_by_side() {
+        let xs = [[1e16, 1.0], [1.0, -3.5], [-1e16, 1e-300], [1e-3, 7.0]];
+        let mut one = [Sum::default(); 2];
+        let mut many = Sums::<2>::ZERO;
+        for x in xs {
+            for (s, v) in one.iter_mut().zip(x) {
+                s.add(v);
+            }
+            many.add(&x);
+        }
+        for (s, (v, b)) in one.iter().zip(many.each()) {
+            assert_eq!(s.value().to_bits(), v.to_bits());
+            assert_eq!(s.bound().to_bits(), b.to_bits());
+        }
     }
 
     #[test]
