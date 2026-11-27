@@ -3257,8 +3257,8 @@ scx-nurbs, scx-nurbs-surface and scx-brep was checked for a tolerance argument.
 
 | Entry point | Tolerance | Zero, negative, non-finite |
 | --- | --- | --- |
-| `scx_surface::pcurve_of` | `tol: Length` | `PcurveError::BadTolerance` (Refused), since BR5 |
-| `scx_surface::intersect_curve` | `tol: Length` | `SurfaceError::BadTolerance` (Refused), checked first |
+| `scx_surface::pcurve_of` | was `tol: Length`, now `Resolution` | was `PcurveError::BadTolerance` (Refused), since BR5; now not representable |
+| `scx_surface::intersect_curve` | was `tol: Length`, now `Resolution` | was `SurfaceError::BadTolerance` (Refused), checked first; now not representable |
 | `scx_ssi::analytic::intersect` | `[Accuracy; 2]`, `Resolution` | not representable: `Resolution::new` is `None` for any of them, and `Accuracy::new` for a negative or non-finite one |
 | `scx_ssi::analytic::section_by_plane` | was `tol: Length`, now `Resolution` | was unchecked; now not representable |
 | `scx_brep::Draft::{finish, write_pcurves, exact_loops, transform}` | `&Document` (its `Resolution`) | not representable |
@@ -3271,8 +3271,32 @@ scx-nurbs, scx-nurbs-surface and scx-brep was checked for a tolerance argument.
   - It returns `Closed<Intersection>` with no error channel. A `Result` only for the tolerance
     would make every caller handle a case the type can rule out.
   - The callers in the tests and the difftest build a `Resolution` instead.
-- *Left for review:* `pcurve_of` and `intersect_curve` could also take a `Resolution`. That
-  would remove both `BadTolerance` variants. They are kept as ruled (SU6, BR5).
+- *Done as FU2 (11-27):* `pcurve_of` and `intersect_curve` take a `Resolution`, and both
+  `BadTolerance` variants are removed.
+  - Why `Resolution` and not `Accuracy`: both tolerances are per operation (how close the
+    lift must land; how close a curve must come to count as meeting or touching the
+    surface), not a bound on a stored entity, and `Accuracy` admits zero, which is the
+    case `BadTolerance` refused.
+  - `pcurve_of` reads `res.approx()`, the distance a fitted entity may stand from the one
+    it stands for. `intersect_curve` reads `res.zone()`.
+  - Results are bit-identical: each caller that passed `t` now passes a resolution whose
+    `approx()` is `t` (a zone of `2t`, a doubling and halving that is exact). BR5's writer
+    passed `res.approx()` and now passes `res`. `Draft::transform` passes the zone-or-bound
+    reach doubled, with the document's resolution as the fallback for a reach that is not
+    a resolution (a recorded bound is above the zone, so it never fires).
+  - Removed tests, on purpose; each proved only that a bad tolerance was refused, which the
+    type now rules out:
+    - `scx-surface/tests/intersect.rs` `a_bad_tolerance_is_refused_first`: for a zero,
+      negative, NaN and infinite `tol`, on a sphere and its NURBS image, `intersect_curve`
+      returned `SurfaceError::BadTolerance` (Refused, `intersect_tolerance_invalid`) before
+      the NURBS check.
+    - `scx-surface/src/pcurve.rs` `refusals_are_typed`, the two tolerance arms only (the
+      test stays for its other causes): a NaN `tol` gave `pcurve_tolerance_invalid`, and
+      zero, `-0`, negative and infinite gave `PcurveError::BadTolerance { value }`
+      (Refused).
+    - `scx-surface/src/error.rs`'s name-and-kind check for `BadTolerance`
+      (`intersect_tolerance_invalid`, Refused), one assertion in `kinds_and_names`.
+    - Every other test keeps its checks; their tolerance arguments are now resolutions.
 - *Not geometry entry points, recorded not changed:*
   - `scx_num::invert::Foot::is_on(tol)` is a predicate. A zero `tol` is the exact test, and a
     NaN or negative one is never on, so it needs no refusal.

@@ -179,6 +179,7 @@ pub mod x {
     use scx_num::extent1d::Extent1d;
     use scx_num::frame::{Frame, Sense};
     use scx_num::units::Length;
+    use scx_num::units::Resolution;
     use scx_num::vector3d::{Point3, Vec3};
     use scx_surface::{Cylinder, Surface, pcurve_of};
 
@@ -200,7 +201,13 @@ pub mod x {
         .into();
         let over = Extent1d::new(c.t[0], c.t[1]).unwrap();
         let size = 10.0 + c.a.max(c.b) + HEIGHT;
-        let pc = pcurve_of(&k, &s, over, Length::from_mm(1e-9 * size)).ok()?;
+        let pc = pcurve_of(
+            &k,
+            &s,
+            over,
+            Resolution::new(Length::from_mm(2e-9 * size)).unwrap(),
+        )
+        .ok()?;
         if !matches!(pc, Curve2::AngleWave(_)) {
             return None;
         }

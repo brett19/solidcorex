@@ -17,7 +17,7 @@ use scx_num::vector2d::{Point2, Vec2};
 use scx_num::vector3d::{Point3, Vec3};
 use scx_surface::{Plane, Surface, pcurve_of};
 
-use super::{BUILD_TOL, GenError, Result, aligned, use_ends};
+use super::{GenError, Result, aligned, build_resolution, use_ends};
 
 /// An edge as the builder knows it: its id, and its curve and interval unless collapsed.
 #[derive(Debug, Clone)]
@@ -263,7 +263,12 @@ fn loop_record(surface: &Surface, steps: &[Step]) -> Result<LoopRecord> {
         .map(|s| match s {
             Step::Use(e, _) => {
                 let (curve, interval) = e.curve.as_ref().ok_or(GenError::Degenerate("use"))?;
-                Ok(Some(pcurve_of(curve, surface, *interval, BUILD_TOL)?))
+                Ok(Some(pcurve_of(
+                    curve,
+                    surface,
+                    *interval,
+                    build_resolution(),
+                )?))
             }
             Step::Pole(..) => Ok(None),
         })

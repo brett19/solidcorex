@@ -16,7 +16,7 @@ use scx_curve::Curve2;
 use scx_num::error::ErrorKind;
 use scx_num::extent3d::Extent3d;
 use scx_num::math::Affine;
-use scx_num::units::Length;
+use scx_num::units::{Length, Resolution};
 use scx_num::vector3d::{Point3, Vec3};
 use scx_surface::pcurve_of;
 use scx_testkit::bodies::{Kind, generate};
@@ -274,8 +274,13 @@ fn scaled_pcurves_keep_their_kind_and_match_pcurve_of() {
                                 kind.name(),
                                 g.id()
                             );
-                            let made =
-                                pcurve_of(c, g.surface(), *over, Length::from_mm(1e-9)).unwrap();
+                            let made = pcurve_of(
+                                c,
+                                g.surface(),
+                                *over,
+                                Resolution::new(Length::from_mm(2e-9)).unwrap(),
+                            )
+                            .unwrap();
                             for i in 0..=8 {
                                 let t = interval.min()
                                     + (interval.max() - interval.min()) * f64::from(i) / 8.0;

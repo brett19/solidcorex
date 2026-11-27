@@ -306,7 +306,7 @@ pub mod x {
             &ce,
             &s,
             &se,
-            Length::from_mm(TOL),
+            scx_num::units::Resolution::new(Length::from_mm(TOL)).unwrap(),
             &mut Budget::unlimited(),
             &Stop::new(),
         )
