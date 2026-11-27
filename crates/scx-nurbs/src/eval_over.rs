@@ -251,25 +251,31 @@ fn join<T: Ranged, const D: usize>(mut a: [T; D], b: [T; D]) -> [T; D] {
 /// [`crate::basis::values_into`] over `T`, its knot differences [`Ranged::gap`].
 fn values_over<T: Ranged, const N: usize>((below, above): (&[f64], &[f64]), u: T, n: &mut [T; N]) {
     let zero = T::lift(0.0);
-    // left[j-1] = u - U[span+1-j], right[j-1] = U[span+j] - u, for j in 1..=p.
-    let (mut left, mut lk) = ([zero; N], [0.0; N]);
-    let (mut right, mut rk) = ([zero; N], [0.0; N]);
-    for ((l, lk), &k) in left.iter_mut().zip(&mut lk).zip(below.iter().rev()) {
-        (*l, *lk) = (u - T::lift(k), k);
+    // left[j-1] = u - U[span+1-j], right[j-1] = U[span+j] - u, for j in 1..=p. The knots
+    // themselves are read from the window where `gap` needs them, not copied beside these,
+    // so an `f64` instance, whose `gap` does not read them, keeps no second pair of arrays.
+    let mut left = [zero; N];
+    let mut right = [zero; N];
+    for (l, &k) in left.iter_mut().zip(below.iter().rev()) {
+        *l = u - T::lift(k);
     }
-    for ((r, rk), &k) in right.iter_mut().zip(&mut rk).zip(above) {
-        (*r, *rk) = (T::lift(k) - u, k);
+    for (r, &k) in right.iter_mut().zip(above) {
+        *r = T::lift(k) - u;
     }
     *n = [zero; N];
     if let Some(first) = n.first_mut() {
         *first = T::lift(1.0);
     }
-    for j in 1..=above.len() {
+    let p = above.len();
+    for j in 1..=p {
         let mut saved = zero;
-        let lefts = left.iter().zip(&lk).take(j).rev();
-        let mut pairs = right.iter().zip(&rk).zip(lefts);
+        let mut pairs = right.iter().zip(left.iter().take(j).rev()).enumerate();
         for value in n.iter_mut().take(j + 1) {
-            if let Some(((&rr, &high), (&ll, &low))) = pairs.next() {
+            if let Some((i, (&rr, &ll))) = pairs.next() {
+                // rr = U[span + 1 + i] - u, ll = u - U[span + 1 - j + i]. The knots are read
+                // without a failure path, so where `gap` ignores them (`f64`) they go.
+                let high = above.get(i).copied().unwrap_or(f64::NAN);
+                let low = below.get(p + i - j).copied().unwrap_or(f64::NAN);
                 let delta = T::gap(rr, ll, high, low);
                 let temp = *value;
                 *value = saved + temp * (rr / delta);
@@ -291,15 +297,14 @@ fn derivs_over<T: Ranged, const N: usize, const K: usize>(
 ) -> Option<()> {
     let p = above.len();
     let zero = T::lift(0.0);
-    let (mut left, mut lk) = ([zero; N], [0.0; N]);
-    let (mut right, mut rk) = ([zero; N], [0.0; N]);
-    for (i, &k) in below.iter().rev().enumerate() {
-        *left.get_mut(i + 1)? = u - T::lift(k);
-        *lk.get_mut(i + 1)? = k;
+    // As in `values_over`, the knots `gap` takes are read from the window, not copied.
+    let mut left = [zero; N];
+    let mut right = [zero; N];
+    for (l, &k) in left.iter_mut().skip(1).zip(below.iter().rev()) {
+        *l = u - T::lift(k);
     }
-    for (i, &k) in above.iter().enumerate() {
-        *right.get_mut(i + 1)? = T::lift(k) - u;
-        *rk.get_mut(i + 1)? = k;
+    for (r, &k) in right.iter_mut().skip(1).zip(above) {
+        *r = T::lift(k) - u;
     }
 
     // ndu[r][j] (r <= j): the basis functions of degree j. ndu[j][r] (j > r): the knot
@@ -309,8 +314,9 @@ fn derivs_over<T: Ranged, const N: usize, const K: usize>(
     for j in 1..=p {
         let mut saved = zero;
         for r in 0..j {
-            let (rr, high) = (*right.get(r + 1)?, *rk.get(r + 1)?);
-            let (ll, low) = (*left.get(j - r)?, *lk.get(j - r)?);
+            // left[j - r] = u - U[span + 1 - (j - r)], right[r + 1] = U[span + 1 + r] - u.
+            let (rr, high) = (*right.get(r + 1)?, *above.get(r)?);
+            let (ll, low) = (*left.get(j - r)?, *below.get(p - (j - r))?);
             let den = T::gap(rr, ll, high, low);
             *ndu.get_mut(j)?.get_mut(r)? = den;
             let prev = *ndu.get(r)?.get(j - 1)?;

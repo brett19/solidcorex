@@ -6,12 +6,16 @@
 //! product), so the mirror needs nothing more.
 
 use crate::common::check_lengths;
+use crate::error::SurfaceError;
+use crate::to_nurbs::{Dir, Reach, build};
 use scx_num::domain::{ParamDomain, UvDomain};
+use scx_num::extent2d::Extent2d;
 use scx_num::frame::Frame;
 use scx_num::ring::Ring;
 use scx_num::vector2d::Point2;
 use scx_num::vector3d::{Point3, UnitVec3, Vec3};
 use scx_nurbs::Approach;
+use scx_nurbs_surface::{NurbsSurface, ParamAxis};
 
 use scx_num::jet::SurfaceJet;
 
@@ -90,6 +94,20 @@ impl Plane {
     #[must_use]
     pub const fn domain(&self) -> UvDomain {
         UvDomain::new(ParamDomain::Unbounded, ParamDomain::Unbounded)
+    }
+
+    /// The exact rational image over `over`, in the same uv (63 §4.2, §4.8; D4, D13): the
+    /// NURBS surface at `uv` is `point(uv)` within the rounding of its control data. Polynomial of degree 1 in each direction, its four corners `point` at the extent's.
+    ///
+    /// # Errors
+    ///
+    /// `Refused`: [`SurfaceError::EmptyExtent`] for an extent that is a single value along a
+    /// direction, and [`SurfaceError::OutsideDomain`] for one that leaves the domain.
+    /// [`SurfaceError::Nurbs`] only on overflow, for sizes near the largest double.
+    pub fn to_nurbs(&self, over: &Extent2d) -> Result<NurbsSurface<3>, SurfaceError> {
+        let u = Dir::new(ParamAxis::U, over.x_interval(), Reach::Any)?;
+        let v = Dir::new(ParamAxis::V, over.y_interval(), Reach::Any)?;
+        build(u, v, false, |(a, _), (b, _)| self.point(Point2::new(a, b)))
     }
 
     /// STEP's `(u, v)` at `uv`: the same.

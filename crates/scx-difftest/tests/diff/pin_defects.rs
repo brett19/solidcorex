@@ -3374,50 +3374,31 @@ fn surface_gap(a: &tk::Surface<3>, b: &tk::Surface<3>) -> Result<f64, String> {
     Ok(off)
 }
 
-/// `scx_nurbs_surface::NurbsSurface::reversed` on unclamped knots: scx reflects them about
-/// the domain `[a, b]` (`t` to `a + b - t`), which it keeps; the pin reflects them about
-/// `U[0] + U[m]`, which moves the domain where the end knots lie outside it. The check: scx
-/// keeps the domain, flips the net exactly, maps each knot to `a + b - t` within rounding,
-/// and (degrees up to 3) is the original surface reversed at a point inside the domain.
+/// `scx_nurbs_surface::NurbsSurface::reversed`: scx negates the parameter (`t` to `-t`,
+/// the domain `[a, b]` to `[-b, -a]`), as the curves' reversal does (research 63 §3.9);
+/// the pin reflects the knots about `U[0] + U[m]`, which rounds them and moves the domain
+/// to `[U[0] + U[m] - b, U[0] + U[m] - a]`. The answers differ by a shift of the parameter,
+/// so they disagree wherever the knots are not symmetric about zero. The check: scx's knots
+/// are exactly the given ones negated in reverse order, its net is the given net flipped
+/// exactly, and (degrees up to 3) it is the original surface at `-t` from the other side.
 pub fn nurbs_surface_reversed() -> PinDefect<(Along,), Option<Read>> {
     PinDefect {
-        reason: "the pin reflects unclamped knots about U[0] + U[m], moving the domain",
+        reason: "the pin reflects the knots about U[0] + U[m]; scx negates the parameter",
         applies: Applies::Disagreeing,
         check: |(a,), r| {
             let e = &a.0;
             let x = r.as_ref().ok_or("scx refused")?;
-            let (p, knots, rows, cols) = match e.axis {
-                ParamAxis::U => (e.r.degrees.0, &e.r.knots_u, e.r.rows(), e.r.cols),
-                ParamAxis::V => (e.r.degrees.1, &e.r.knots_v, e.r.rows(), e.r.cols),
+            let (knots, rows, cols) = match e.axis {
+                ParamAxis::U => (&e.r.knots_u, e.r.rows(), e.r.cols),
+                ParamAxis::V => (&e.r.knots_v, e.r.rows(), e.r.cols),
             };
             let got = match e.axis {
                 ParamAxis::U => &x.2,
                 ParamAxis::V => &x.3,
             };
-            let m = knots.len() - 1;
-            let (lo, hi) = (knots[p], knots[m - p]);
-            if (got[p], got[m - p]) != (lo, hi) {
-                return Err(format!(
-                    "scx's domain is [{}, {}], not [{lo}, {hi}]",
-                    got[p],
-                    got[m - p]
-                ));
-            }
-            if let Some(pin) = crate::t_nurbs_surface_edit::s::reverse(e) {
-                let pk = match e.axis {
-                    ParamAxis::U => &pin.2,
-                    ParamAxis::V => &pin.3,
-                };
-                if (pk[p], pk[m - p]) == (lo, hi) {
-                    return Err("the pin keeps the domain too".to_owned());
-                }
-            }
-            let c = lo + hi;
-            for (k, &g) in got.iter().enumerate() {
-                let want = c - knots[m - k];
-                if (g - want).abs() > 4.0 * f64::EPSILON * c.abs().max(want.abs()).max(1.0) {
-                    return Err(format!("knot {k} is {g}, not {want}"));
-                }
+            let want: Vec<f64> = knots.iter().rev().map(|k| -k).collect();
+            if *got != want {
+                return Err(format!("scx's knots are {got:?}, not {want:?}"));
             }
             let hom = e.r.hom();
             for i in 0..rows {
@@ -3438,13 +3419,16 @@ pub fn nurbs_surface_reversed() -> PinDefect<(Along,), Option<Read>> {
             }
             let (t, rev) = (stored(&e.r)?, read_surface(x)?);
             let ((u0, u1), (v0, v1)) = t.domain();
-            let side = (tk::Side::Above, tk::Side::Above);
             let uv = (u0 + 0.3 * (u1 - u0), v0 + 0.9 * (v1 - v0));
-            let back = match e.axis {
-                ParamAxis::U => (c - uv.0, uv.1),
-                ParamAxis::V => (uv.0, c - uv.1),
+            let (back, side) = match e.axis {
+                ParamAxis::U => ((-uv.0, uv.1), (tk::Side::Below, tk::Side::Above)),
+                ParamAxis::V => ((uv.0, -uv.1), (tk::Side::Above, tk::Side::Below)),
             };
-            let g = rev.point(back, side).map_err(|e| format!("{e:?}"))?.rounded;
+            let above = (tk::Side::Above, tk::Side::Above);
+            let g = rev
+                .point(back, above)
+                .map_err(|e| format!("{e:?}"))?
+                .rounded;
             let w = t.point(uv, side).map_err(|e| format!("{e:?}"))?.rounded;
             if g.iter()
                 .zip(&w)
@@ -3690,6 +3674,89 @@ conic_defects! {
     curve_circle2_jet: Vec<[f64; 2]>, axes2, true, all;
     curve_ellipse2_point: [f64; 2], axes2, false, one;
     curve_ellipse2_jet: Vec<[f64; 2]>, axes2, false, all;
+}
+
+// ---- scx-curve queries (`t_curve_query`) -----------------------------------------------------
+
+use crate::t_curve_query::{NurbsAt, OnConic};
+
+/// The limiting direction from `side` by its definition: the first derivative `C^(k)` that
+/// does not vanish, signed `(-1)^(k-1)` from below; `None` when all vanish. A derivative
+/// vanishes when it is shorter than `1.1 EFF_ZERO (1 + max|C(u)|)`, the contract's floor, so
+/// a first derivative of `1e-18` (a tripled point a hair past the knot, a weight of `1e-12`)
+/// counts as zero. The exact derivatives are the testkit's, rounded once. The tolerance is
+/// `1e-9`: a derivative past the first of a rational curve loses digits to the spread of its
+/// weights (`1e-11` at a spread of `1e6`).
+fn tangent_answer(a: &NurbsAt, from_left: bool, got: &Option<[f64; 3]>) -> Result<(), String> {
+    let side = if from_left {
+        tk::Side::Above
+    } else {
+        tk::Side::Below
+    };
+    let c = a.0.curve.exact().map_err(|e| format!("{e:?}"))?;
+    let d = c.derivs(a.0.u, side, 8).map_err(|e| format!("{e:?}"))?;
+    let max = d[0].rounded.iter().fold(0.0_f64, |m, x| m.max(x.abs()));
+    let floor = 1.1 * scx_num::math::EFF_ZERO * (1.0 + max);
+    let first = d
+        .iter()
+        .enumerate()
+        .skip(1)
+        .find(|(_, e)| e.rounded.iter().map(|x| x * x).sum::<f64>() >= floor * floor);
+    let want = first.and_then(|(k, e)| {
+        let flip = side == tk::Side::Below && k % 2 == 0;
+        let v = e.rounded.map(|x| if flip { -x } else { x });
+        let v = scx_num::vector3d::Vec3::from(v);
+        (v / v.max_dimension())
+            .normalized()
+            .map(|u| u.as_vec().to_array())
+    });
+    let ok = match (got, &want) {
+        (Some(g), Some(w)) => (0..3).all(|i| (g[i] - w[i]).abs() <= 1e-9),
+        (None, None) => true,
+        _ => false,
+    };
+    if ok {
+        Ok(())
+    } else {
+        Err(format!("the limiting direction is {want:?}"))
+    }
+}
+
+/// `Curve::tangent_dir` on a NURBS curve where the pin's `non_zero_tangents` points the wrong
+/// way or nowhere: where the first derivative vanishes the pin takes the second, negated
+/// past the middle of the domain whichever side is asked, so a cusp at a double knot inside
+/// the domain's first half runs backwards from below and one past the middle backwards from
+/// above; where the second vanishes too (a tripled control point) the pin keeps the zero
+/// first derivative. scx reads the side and goes on to the first derivative that does not
+/// vanish. Truth: [`tangent_answer`].
+pub fn curve_nurbs_tangent() -> PinDefect<(NurbsAt, bool), Option<[f64; 3]>> {
+    PinDefect {
+        reason: "the pin's zero-tangent fallback signs by the domain's middle, not the side",
+        applies: Applies::Disagreeing,
+        check: |(a, from_left), r| tangent_answer(a, *from_left, r),
+    }
+}
+
+/// An ellipse's foot of a point on it where the pin's angle differs: the two angles name the
+/// same point a turn apart at the seam, or differ by `atan2`'s rounding on a thin ellipse.
+/// Truth: the point at scx's angle is the query, within 64 roundings of the ellipse's size.
+pub fn curve_ellipse_invert_on() -> PinDefect<(GoodConic, OnConic), f64> {
+    PinDefect {
+        reason: "the seam's turn, and atan2's rounding",
+        applies: Applies::Disagreeing,
+        check: |(c, t), r| {
+            let e = crate::t_curve_query::x::ellipse(c);
+            let q = crate::t_curve_query::x::on_ellipse(c, t.0);
+            let p = e.point(*r).to_array();
+            let size = c.0.o.iter().fold(0.0_f64, |m, x| m.max(x.abs())) + c.0.a.max(c.0.b);
+            let d = (0..3).map(|i| (p[i] - q[i]).abs()).fold(0.0, f64::max);
+            if d <= 64.0 * U * size {
+                Ok(())
+            } else {
+                Err(format!("the point at {r} is {d} from the query"))
+            }
+        },
+    }
 }
 
 use crate::berns::BernR;
@@ -4442,5 +4509,87 @@ pub fn poly_from_roots() -> PinDefect<(f64,), Vec<Vec<f64>>> {
             }
             Ok(())
         },
+    }
+}
+
+/// `NurbsSurface::partials_over` and `partials_over_piece` on a polynomial surface, where
+/// scx skips the weight function and the rational quotient (research 63 §2.6, NS4 as
+/// built). The pin takes the quotient there too, with a weight function whose enclosures
+/// hold 1 (order 0) and 0 (the others) but are intervals wider than those points, and
+/// shifts `about` by its weight interval, not by 1: every interval it divides by or
+/// subtracts is wider than scx's point, so scx's numerator is the pin's result taken with
+/// narrower operands and, by inclusion isotonicity, lies inside it. The check: the pin's
+/// result recomputed, every scx interval inside the pin's one; where the pin refuses
+/// (its weight function not proved positive over a wide box, which a polynomial's weight 1
+/// never is for scx), any answer. A rational surface is the pin's bits and never excused.
+fn enclose_inside(
+    b: &crate::t_nurbs_surface_enclose::BoxAt,
+    got: &Option<crate::t_nurbs_surface_enclose::Enc>,
+    pin: Option<crate::t_nurbs_surface_enclose::Enc>,
+) -> Result<(), String> {
+    if b.raw.weights.is_some() {
+        return Err("a rational surface's enclosure is the pin's".into());
+    }
+    let (Some(got), Some(pin)) = (got, pin) else {
+        return if got.is_some() {
+            Ok(())
+        } else {
+            Err("scx refused a box the pin encloses".into())
+        };
+    };
+    if got.len() != pin.len() {
+        return Err(format!("{} partials, the pin's {}", got.len(), pin.len()));
+    }
+    for (k, (g, s)) in got.iter().zip(&pin).enumerate() {
+        for e in 0..3 {
+            let (gl, gh, sl, sh) = (g[2 * e], g[2 * e + 1], s[2 * e], s[2 * e + 1]);
+            if !(sl <= gl && gh <= sh) {
+                return Err(format!(
+                    "partial {k} [{e}]: [{gl}, {gh}] not inside the pin's [{sl}, {sh}]"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+type EncDefect = PinDefect<
+    (crate::t_nurbs_surface_enclose::BoxAt,),
+    Option<crate::t_nurbs_surface_enclose::Enc>,
+>;
+
+/// [`enclose_inside`] for `partials_over::<2>`.
+pub fn nurbs_surface_enclose_over() -> EncDefect {
+    PinDefect {
+        reason: "a polynomial surface's enclosure skips the quotient: inside the pin's",
+        applies: Applies::Disagreeing,
+        check: |(b,), r| enclose_inside(b, r, crate::t_nurbs_surface_enclose::s::over::<2>(b)),
+    }
+}
+
+/// [`enclose_inside`] for `partials_over::<4>`.
+pub fn nurbs_surface_enclose_over4() -> EncDefect {
+    PinDefect {
+        reason: "as nurbs_surface_enclose_over",
+        applies: Applies::Disagreeing,
+        check: |(b,), r| enclose_inside(b, r, crate::t_nurbs_surface_enclose::s::over::<4>(b)),
+    }
+}
+
+/// [`enclose_inside`] for `partials_over::<0>`.
+pub fn nurbs_surface_enclose_point() -> EncDefect {
+    PinDefect {
+        reason: "as nurbs_surface_enclose_over",
+        applies: Applies::Disagreeing,
+        check: |(b,), r| enclose_inside(b, r, crate::t_nurbs_surface_enclose::s::over::<0>(b)),
+    }
+}
+
+/// [`enclose_inside`] for `partials_over_piece::<1>`.
+pub fn nurbs_surface_enclose_piece() -> EncDefect {
+    PinDefect {
+        reason: "as nurbs_surface_enclose_over",
+        applies: Applies::Disagreeing,
+        check: |(b,), r| enclose_inside(b, r, crate::t_nurbs_surface_enclose::s::piece::<1>(b)),
     }
 }

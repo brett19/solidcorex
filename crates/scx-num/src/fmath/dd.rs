@@ -167,6 +167,31 @@ pub(crate) fn sqrt(a: (f64, f64)) -> (f64, f64) {
     fast_two_sum(s, r / (2.0 * s))
 }
 
+/// Ziv's rounding test, in the form `CRlibm` uses (Ziv, "Fast evaluation of elementary
+/// mathematical functions with correctly rounded last bit", ACM TOMS 17, 1991; de
+/// Dinechin, Lauter and Muller, "Fast and correctly rounded logarithms in
+/// double-precision", RAIRO-ITA 41, 2007), with its constant derived here: whether every
+/// real within `eps |hi|` of `hi + lo` rounds to `hi`, for a normal nonzero `hi`, a `lo`
+/// whose product with `e` does not underflow, and `e > (1 + 2^-53) / (1 - 2^54 eps)`.
+///
+/// Derivation (round to nearest). Let `w = fl(lo e)`, so `|lo| e <= |w| (1 + 2^-53)`.
+/// The test `hi + w == hi` holds only if `|w|` is at most half the gap `g` between `hi`
+/// and its neighbour on the side of `lo`, so `|lo| <= (g/2)(1 + 2^-53)/e`. For
+/// `hi` in `[2^k, 2^(k+1))` that half-gap is `2^(k-53)`, or `2^(k-54)` below an exact
+/// power of two, and so never below `2^-54 |hi|`. A real `v` with `|v - hi - lo| <= eps
+/// |hi|` then has `|v - hi| <= (g/2)(1 + 2^-53)/e + eps |hi| < g/2` exactly when
+/// `eps |hi| < (g/2)(1 - (1 + 2^-53)/e)`, which `eps < 2^-54 (1 - (1 + 2^-53)/e)`
+/// guarantees: `v` is strictly inside the rounding interval of `hi`, no tie included.
+///
+/// Each fast path below states its own `eps` and the `e` it uses. The `eps` covers the
+/// fast path's error and the double-double path's together, both against the same exact
+/// value, so a passing test means the double-double path rounds to the same `hi`: the
+/// fast path changes no result, only how often the slow path runs.
+#[inline]
+pub(super) fn rounds_to_hi(hi: f64, lo: f64, e: f64) -> bool {
+    hi + lo * e == hi
+}
+
 /// A table entry, with a zero fallback that a masked index never reaches (library code
 /// may not index unchecked).
 #[inline]

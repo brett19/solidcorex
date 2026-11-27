@@ -327,6 +327,19 @@ impl KnotVector {
             .collect();
         Self::new(self.degree, knots)
     }
+
+    /// The knots mirrored about zero, `U'[i] = -U[m - i]`: the knot vector of a curve run
+    /// the other way with the parameter `-t` ([`NurbsCurve::reversed`](crate::NurbsCurve::reversed)).
+    /// Negation does not round, so this is exact and valid whenever `self` is; the domain is
+    /// [`Extent1d::negated`].
+    #[must_use]
+    pub fn negated(&self) -> Self {
+        Self {
+            degree: self.degree,
+            knots: self.knots.iter().rev().map(|&k| -k).collect(),
+            domain: self.domain.negated(),
+        }
+    }
 }
 
 /// Checks that no value of the sorted `knots` repeats more than `max` times.
