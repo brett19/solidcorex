@@ -16,7 +16,8 @@
 //!    is not ([`Breach::FaceNotBounding`]): a sheet, a face inside a solid, or a face
 //!    between two solids (a stack) is refused.
 //! 3. **Manifold.** Every edge with a curve has exactly two fins
-//!    ([`Breach::NonManifoldEdge`]); a wire edge has none. A collapsed edge (a pole or an
+//!    ([`Breach::NonManifoldEdge`]); a wire edge has none. [`Contacts::Radial`] lets an edge
+//!    of an even number of fins past if it passes the radial test below. A collapsed edge (a pole or an
 //!    apex) is a point and bounds nothing, so it is not counted: finish proves each of its
 //!    uses lies on its one vertex. No shell holds a lone vertex ([`Breach::LoneVertex`]).
 //! 4. **Every face is bounded and proved.** Its region's orientation is decided by the
@@ -37,6 +38,23 @@
 //! the weights themselves, not assumed; a shell with no mirror is certified on its own. A
 //! certificate is about half of what `scx_mass::outward`, which signs every shell, spends.
 //!
+//! **Radial edges** ([`Contacts`], 72 §14.37). Where a body meets itself along an edge
+//! (two blocks sharing a corner line, D5), the edge has four or more fins. The default
+//! [`Contacts::Refused`] refuses it; [`Contacts::Radial`] admits it when, at the middle of
+//! the edge's interval with `T` the tangent, each fin's face leaves the edge in
+//! `d = sense (N x T)` (`N` the face's normal at the use's pcurve), and
+//!
+//! - the count is even,
+//! - the fins in the edge's order have strictly increasing counter-clockwise angles of `d`
+//!   about `T` from the first, each gap and the wrap-round gap above `1e-9` rad (faces
+//!   leaving in one direction are tangent, and the edge's order cannot be read from one
+//!   sample; they are refused), and
+//! - the region after each fin is solid and void by turns.
+//!
+//! Anything else is [`Breach::NonManifoldEdge`] (an odd count, or a count under two) or
+//! [`Breach::EdgeNotRadial`] (the angles or the sectors), naming the edge. Only edges of
+//! more than two fins are tested, so a body without one costs what it did.
+//!
 //! **Closed** follows from 2 and 3 with finish: two fins per edge, both faces bounding the
 //! same solid and void (finish's radial check), leave no edge of a shell open.
 //!
@@ -52,11 +70,28 @@ mod error;
 use std::collections::BTreeMap;
 
 use scx_brep::op::Cx;
-use scx_brep::{Brep, EdgeShape, FaceId, FaceSide, ShellId};
+use scx_brep::{Brep, Edge, EdgeShape, FaceId, FaceSide, ShellId, UseGeom};
 use scx_mass::{MassError, MassRefusal, Sign};
 use scx_num::budget::{Budget, Stop};
+use scx_num::fmath;
+use scx_num::frame::Sense;
+use scx_num::vector3d::Vec3;
+use scx_nurbs::Approach;
 
 pub use error::{Breach, ContractError};
+
+/// What [`contract`] does with an edge of more than two fins (a body meeting itself along
+/// a line, D5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
+pub enum Contacts {
+    /// Refuse it ([`Breach::NonManifoldEdge`]).
+    #[default]
+    Refused,
+    /// Admit an edge whose fins are in strict radial order with solid and void sectors by
+    /// turns (see the crate doc); refuse any other.
+    Radial,
+}
 
 /// A body that [`contract`] proved: manifold, closed and outward. Only `contract` builds it.
 #[derive(Debug, Clone)]
@@ -82,7 +117,8 @@ impl AsRef<Brep> for Proved {
     }
 }
 
-/// Proves `body` keeps the contract (see the crate doc) and returns it as [`Proved`].
+/// Proves `body` keeps the contract (see the crate doc) and returns it as [`Proved`];
+/// `contacts` says whether an edge of more than two fins may pass.
 ///
 /// # Errors
 ///
@@ -90,8 +126,8 @@ impl AsRef<Brep> for Proved {
 /// [`ContractError::Undecided`] for a face whose region the loops' area cannot sign;
 /// [`ContractError::Mass`] when the certified sign cannot be finished (a sign still
 /// undecided at its cap, the budget, the stop flag).
-pub fn contract(body: &Brep, cx: &Cx<'_>) -> Result<Proved, ContractError> {
-    structure(body).map_err(ContractError::Broken)?;
+pub fn contract(body: &Brep, cx: &Cx<'_>, contacts: Contacts) -> Result<Proved, ContractError> {
+    structure(body, contacts).map_err(ContractError::Broken)?;
     for f in body.faces() {
         if !f.is_region_proved() {
             return Err(ContractError::Undecided { face: f.id() });
@@ -216,7 +252,7 @@ const fn negated(s: Sign) -> Sign {
 }
 
 /// Tests 1 to 3: the records alone.
-fn structure(body: &Brep) -> Result<(), Breach> {
+fn structure(body: &Brep, contacts: Contacts) -> Result<(), Breach> {
     if body.faces().len() == 0 {
         return Err(Breach::Empty);
     }
@@ -228,7 +264,14 @@ fn structure(body: &Brep) -> Result<(), Breach> {
     }
     for e in body.edges() {
         let fins = e.fins().len();
-        if fins != 2 && !matches!(e.shape(), EdgeShape::Collapsed) {
+        if fins == 2 || matches!(e.shape(), EdgeShape::Collapsed) {
+            continue;
+        }
+        if contacts == Contacts::Radial && fins > 2 && fins % 2 == 0 {
+            if !radial(e) {
+                return Err(Breach::EdgeNotRadial { edge: e.id() });
+            }
+        } else {
             return Err(Breach::NonManifoldEdge { edge: e.id(), fins });
         }
     }
@@ -238,4 +281,127 @@ fn structure(body: &Brep) -> Result<(), Breach> {
         }
     }
     Ok(())
+}
+
+/// Two directions closer than this, in radians, are one: the faces are tangent.
+const TIED: f64 = 1e-9;
+
+/// Whether the fins of `edge` (an even number, over two) leave it in strict radial order
+/// with solid and void sectors by turns (see the crate doc).
+fn radial(edge: Edge<'_>) -> bool {
+    let EdgeShape::Curve { curve, interval } = edge.shape() else {
+        return false;
+    };
+    let s = 0.5 * (interval.min() + interval.max());
+    let Some(tan) = curve.tangent_dir(s, Approach::Above) else {
+        return false;
+    };
+    let tan = tan.as_vec();
+    let mut fins = Vec::with_capacity(edge.fins().len());
+    for u in edge.uses() {
+        let UseGeom::Pcurve { curve: pc, .. } = u.geom() else {
+            return false;
+        };
+        let Some(n) = u.face().surface().normal(pc.point(s), [Approach::Above; 2]) else {
+            return false;
+        };
+        let Some(d) = (n.as_vec().cross(tan) * u.sense().sign()).normalized() else {
+            return false;
+        };
+        // The sector after the fin: the front of a forward use, the back of a reversed one.
+        let side = match u.sense() {
+            Sense::Forward => FaceSide::Front,
+            Sense::Reversed => FaceSide::Back,
+        };
+        fins.push((d.as_vec(), u.face().shell(side).region().is_solid()));
+    }
+    is_radial(tan, &fins)
+}
+
+/// The test of the crate doc on each fin's direction `d` and whether the sector after it is
+/// solid, in the edge's order, about the unit tangent `tan`.
+fn is_radial(tan: Vec3, fins: &[(Vec3, bool)]) -> bool {
+    let Some(&(e1, _)) = fins.first() else {
+        return false;
+    };
+    let e2 = tan.cross(e1);
+    let mut last = 0.0;
+    for &(d, _) in fins.iter().skip(1) {
+        let a = fmath::atan2(d.dot(e2), d.dot(e1));
+        let a = if a < 0.0 {
+            a + core::f64::consts::TAU
+        } else {
+            a
+        };
+        // A direction behind the first is a second turn; one at or before the last is out
+        // of order; one within `TIED` of its neighbour is tangent to it.
+        if !(a - last > TIED && core::f64::consts::TAU - a > TIED) {
+            return false;
+        }
+        last = a;
+    }
+    fins.windows(2)
+        .all(|w| matches!(w, [(_, x), (_, y)] if x != y))
+        && matches!((fins.first(), fins.last()), (Some((_, x)), Some((_, y))) if x != y)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const T: Vec3 = Vec3::new(0.0, 0.0, 1.0);
+
+    fn dir(angle: f64) -> Vec3 {
+        Vec3::new(angle.cos(), angle.sin(), 0.0)
+    }
+
+    fn fins(angles: &[f64]) -> Vec<(Vec3, bool)> {
+        angles
+            .iter()
+            .enumerate()
+            .map(|(i, &a)| (dir(a), i % 2 == 0))
+            .collect()
+    }
+
+    const Q: f64 = core::f64::consts::FRAC_PI_2;
+
+    #[test]
+    fn four_fins_in_order_with_sectors_by_turns_pass() {
+        assert!(is_radial(
+            T,
+            &fins(&[0.3, 0.3 + Q, 0.3 + 2.0 * Q, 0.3 + 3.0 * Q])
+        ));
+        // Any rotation of the list, and a start behind the wrap.
+        assert!(is_radial(
+            T,
+            &fins(&[5.0, 5.0 + Q, 5.0 + 2.0 * Q, 5.0 + 3.0 * Q])
+        ));
+        assert!(is_radial(T, &fins(&[0.0, 0.5, 3.0, 3.5, 4.0, 5.0])));
+    }
+
+    #[test]
+    fn a_swapped_or_reversed_order_is_refused() {
+        assert!(!is_radial(T, &fins(&[0.0, 2.0 * Q, Q, 3.0 * Q])));
+        assert!(!is_radial(T, &fins(&[0.0, 3.0 * Q, 2.0 * Q, Q])));
+        assert!(!is_radial(T, &fins(&[0.0, 0.5, 3.0, 2.0, 4.0, 5.0])));
+    }
+
+    #[test]
+    fn tangent_fins_are_refused() {
+        assert!(!is_radial(T, &fins(&[0.0, Q, Q + 1e-11, 3.0 * Q])));
+        assert!(!is_radial(
+            T,
+            &fins(&[0.0, Q, 2.0 * Q, core::f64::consts::TAU - 1e-11])
+        ));
+        assert!(!is_radial(T, &fins(&[0.0, 0.0, 2.0 * Q, 3.0 * Q])));
+    }
+
+    #[test]
+    fn sectors_that_do_not_alternate_are_refused() {
+        let mut f = fins(&[0.0, Q, 2.0 * Q, 3.0 * Q]);
+        f[1].1 = true;
+        assert!(!is_radial(T, &f));
+        // Alternating over the list but not across the wrap: an odd count.
+        assert!(!is_radial(T, &fins(&[0.0, Q, 2.0 * Q])));
+    }
 }
