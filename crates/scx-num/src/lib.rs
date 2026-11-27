@@ -21,6 +21,7 @@
 pub mod cert;
 pub mod certified;
 pub mod consts;
+pub mod domain;
 pub mod eft;
 pub mod error;
 pub(crate) mod expansion;

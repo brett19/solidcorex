@@ -262,8 +262,8 @@ fn intervals_union_and_intersect() {
             r.uniform(-1e3, 1e3),
             r.uniform(-1e3, 1e3),
         );
-        let a = Extent1d::spanning(a0, a1);
-        let b = Extent1d::spanning(b0, b1);
+        let a = Extent1d::spanning(a0, a1).unwrap();
+        let b = Extent1d::spanning(b0, b1).unwrap();
         let (alo, ahi) = (a0.min(a1), a0.max(a1));
         let (blo, bhi) = (b0.min(b1), b0.max(b1));
         assert_eq!((a.min(), a.max()), (alo, ahi));
@@ -317,7 +317,7 @@ fn boxes_bound_their_points() {
 
         let (u0, u1) = (r.uniform(-10.0, 10.0), r.uniform(-10.0, 10.0));
         let (v0, v1) = (r.uniform(-10.0, 10.0), r.uniform(-10.0, 10.0));
-        let b = Extent2d::spanning(Point2::new(u0, v0), Point2::new(u1, v1));
+        let b = Extent2d::spanning(Point2::new(u0, v0), Point2::new(u1, v1)).unwrap();
         let p = Point2::new(r.uniform(-12.0, 12.0), r.uniform(-12.0, 12.0));
         let away = [u0, u1].iter().all(|s| (p.x - s).abs() > 1e-6)
             && [v0, v1].iter().all(|s| (p.y - s).abs() > 1e-6);

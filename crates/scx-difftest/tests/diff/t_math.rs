@@ -9,7 +9,13 @@ type V = [f64; 3];
 type P = [f64; 2];
 type M = [[f64; 4]; 4];
 
-diff!(is_infinite_param, |a: f64| m::math::is_infinite_param(a));
+// The pin's sampling half-size, `SM_BOUNDED_INFINITE_PARAM`, as scx's `Clamp::Sample` rule
+// (scx has no end marker, so no `is_infinite_param`).
+diff!(
+    clamp_sample,
+    || scx_num::domain::Clamp::Sample.half_width(),
+    m::math::BOUNDED_INFINITE_PARAM
+);
 diff!(
     max2,
     truth_defect = crate::pin_truths::max2,
@@ -272,7 +278,4 @@ diff!(constants, || [
     m::math::EFF_ZERO_DEG,
     m::math::EFF_ZERO_RAD,
     m::math::BIG_DOUBLE,
-    m::math::INFINITE_PARAMETER,
-    m::math::INFINITE_PARAMETER_SQRT,
-    m::math::BOUNDED_INFINITE_PARAM,
 ]);

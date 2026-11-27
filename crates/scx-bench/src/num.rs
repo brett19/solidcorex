@@ -25,6 +25,7 @@ type M = [[f64; 4]; 4];
 
 const NAN: f64 = f64::NAN;
 const INF: f64 = f64::INFINITY;
+const MAX: f64 = f64::MAX;
 
 #[allow(clippy::unnecessary_wraps)] // the shape `both` takes
 fn xp(a: &[f64; 3]) -> Option<XP3> {
@@ -46,7 +47,7 @@ fn pb(a: &[[f64; 3]; 2]) -> Option<PE3> {
     Some(PE3::from_points(pv(&a[0])?, pv(&a[1])?))
 }
 fn xi(a: &[f64; 2]) -> Option<XE1> {
-    XE1::from_bounds(a[0], a[1])
+    XE1::new(a[0], a[1])
 }
 #[allow(clippy::unnecessary_wraps)] // the shape `both` takes
 fn pi(a: &[f64; 2]) -> Option<PE1> {
@@ -100,11 +101,12 @@ const EDGE_POINTS: [[f64; 3]; 8] = [
     [1.0, NAN, NAN],
 ];
 
-/// Edge boxes: points, the whole space, half-infinite, huge and denormal.
+/// Edge boxes: points, the whole `f64` range, reaching to one end of it, huge and denormal
+/// (an extent's ends are finite).
 const EDGE_BOXES: [[[f64; 3]; 2]; 6] = [
     [[1.0, 2.0, 3.0], [1.0, 2.0, 3.0]],
-    [[-INF, -INF, -INF], [INF, INF, INF]],
-    [[0.0, -INF, 0.0], [1.0, 0.0, INF]],
+    [[-MAX, -MAX, -MAX], [MAX, MAX, MAX]],
+    [[0.0, -MAX, 0.0], [1.0, 0.0, MAX]],
     [[-1e300, -1e300, -1e300], [1e300, 1e300, 1e300]],
     [[0.0, 0.0, 0.0], [5e-324, 5e-324, 5e-324]],
     [[-0.0, 0.0, -0.0], [0.0, -0.0, 0.0]],
@@ -176,8 +178,8 @@ fn folds(out: &mut Vec<Case>) {
         6,
         &[
             [1.0, 1.0],
-            [-INF, INF],
-            [0.0, INF],
+            [-MAX, MAX],
+            [0.0, MAX],
             [-1e300, 1e300],
             [-0.0, 0.0],
         ],

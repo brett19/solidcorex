@@ -297,14 +297,14 @@ diff!(solve_nd_fail, |share: usize| {
     out
 });
 
+// The point interval at `(a, b)` is skipped where an end is not a plain finite value: it has
+// no scx extent (`plain_ends`).
 diff!(solve_nd_jacobian, |a: f64, b: f64| {
     let mut rec = crate::solvers::RecN::new(0, usize::MAX, false, Class::SmErr);
     let mut out = Vec::new();
-    for ivl in [
-        None,
-        Some([[-2.0, 2.0], [-2.0, 2.0]]),
-        Some([[a, a], [b, b]]),
-    ] {
+    let point = crate::facade::plain_ends(&[a, b]).then_some([[a, a], [b, b]]);
+    let ivls = [None, Some([[-2.0, 2.0], [-2.0, 2.0]])];
+    for ivl in ivls.into_iter().chain(point.map(Some)) {
         out.push(m::sv::jacobian_at(&mut rec, [a, b], ivl));
     }
     (out, rec.log)
@@ -314,6 +314,7 @@ diff!(solve_nd_sizes, |n: usize| m::sv::solve_diag(n % 5));
 
 // The default's interval is not compared: scx's default domain is the whole line, with
 // no interval to read (the pin's is the unused inside-out `Extent1d::new()`).
+// An interval end that is not a plain finite value has no scx extent (`plain_ends`).
 diff!(solve1d_settings, |code: i32, lo: f64, hi: f64, acc: f64| {
-    m::sv::settings(code, lo, hi, acc)
+    crate::facade::plain_ends(&[lo, hi]).then(|| m::sv::settings(code, lo, hi, acc))
 });

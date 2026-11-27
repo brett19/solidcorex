@@ -1021,19 +1021,25 @@ type Periodic = Option<scx_num::Result<Vec<scx_num::extent1d::Extent1d>>>;
 /// `Extent1d::intersect_periodic` at period 0 of intervals that are apart (`b` wholly above
 /// or below `a`): the plain intersection, which has none. The pin's error names its inner
 /// `intersect` as the failing routine; scx names the routine called. The check holds scx to
-/// a `Disjoint` failure of `intersect_periodic` that carries the two intervals. With a NaN
-/// bound, the pin's overlap is NaN or not by operand order; scx's is the overlap of the
-/// bounds that are not NaN (as `e1_union_intersect` checks), which the check recomputes.
+/// a `Disjoint` failure of `intersect_periodic` that carries the two intervals.
+///
+/// A period that is not finite (NaN, ±inf) is no period, so no periodic intersection is
+/// defined: scx refuses it (`InvalidInput`). The pin answers on: an empty list for NaN, and
+/// for ±inf the first interval whole, even when the two are apart.
 pub fn e1_intersect_periodic() -> PinDefect<([f64; 2], [f64; 2], f64, bool), Periodic> {
     PinDefect {
-        reason: "the pin names its inner intersect as the failing routine, and takes the \
-                 overlap with a NaN bound by operand order (scx skips the NaN)",
+        reason: "the pin names its inner intersect as the failing routine, and intersects \
+                 at a period that is not finite (scx refuses it)",
         applies: Applies::Inputs(|(a, b, p, _)| {
             let ordered = |e: &[f64; 2]| not_inverted(e[0], e[1]);
-            let nan = a.iter().chain(b).any(|x| x.is_nan());
-            *p == 0.0 && ordered(a) && ordered(b) && (nan || apart(a, b))
+            let plain = crate::facade::plain_ends(a) && crate::facade::plain_ends(b);
+            plain && ordered(a) && ordered(b) && (!p.is_finite() || (*p == 0.0 && apart(a, b)))
         }),
-        check: |(a, b, ..), r| match r {
+        check: |(a, b, p, _), r| match r {
+            Some(Err(scx_num::NumError::InvalidInput {
+                operation: "geom::extent1d::Extent1d::intersect_periodic",
+                ..
+            })) if !p.is_finite() => Ok(()),
             Some(Err(scx_num::NumError::Failed {
                 operation: "geom::extent1d::Extent1d::intersect_periodic",
                 failure: scx_num::error::NumFailure::Disjoint { a: x, b: y },
@@ -1044,28 +1050,19 @@ pub fn e1_intersect_periodic() -> PinDefect<([f64; 2], [f64; 2], f64, bool), Per
             {
                 Ok(())
             }
-            // With a NaN bound: the overlap of the bounds that are not NaN, one interval.
-            Some(Ok(v)) if !apart(a, b) && v.len() == 1 => {
-                let w = [a[0].max(b[0]), a[1].min(b[1])];
-                let got = [v[0].min(), v[0].max()];
-                if got.map(f64::to_bits) == w.map(f64::to_bits) {
-                    Ok(())
-                } else {
-                    Err(format!("the overlap is {w:?}, not {got:?}"))
-                }
-            }
-            _ => Err(format!("{a:?} and {b:?}: not {r:?}")),
+            _ => Err(format!("{a:?} and {b:?} at period {p}: not {r:?}")),
         },
     }
 }
 
-/// A box with a NaN bound has no defined extent along that axis, and a line through a point
-/// or along a direction that is not finite is no line, so no clip is defined: scx refuses
-/// them (`InvalidInput`). The pin clips on, its slab extremes NaN or not by operand order
-/// and its parameters `inf - inf`, and answers a miss, a touch or a crossing.
+/// A line through a point or along a direction that is not finite is no line, so no clip is
+/// defined: scx refuses it (`InvalidInput`). The pin clips on, its parameters `inf - inf`, and
+/// answers a miss, a touch or a crossing. (A box with an end that is not finite is no box on
+/// either side: the facade builds none.)
 fn nan_line(a: &[f64; 6], p: &V, d: &V) -> bool {
-    let undefined = a.iter().any(|x| x.is_nan()) || !p.iter().chain(d).all(|x| x.is_finite());
-    undefined && (0..3).all(|i| not_inverted(a[i], a[i + 3]))
+    let undefined = !p.iter().chain(d).all(|x| x.is_finite());
+    let boxed = crate::facade::plain_ends(a) && (0..3).all(|i| a[i] <= a[i + 3]);
+    undefined && boxed
 }
 fn refused_line<T: std::fmt::Debug>(r: &Option<scx_num::Result<T>>) -> Result<(), String> {
     match r {
@@ -1086,6 +1083,25 @@ pub fn e3_line_hit_count() -> PinDefect<([f64; 6], V, V), Option<scx_num::Result
         reason: "the pin clips an undefined line or box",
         applies: Applies::Inputs(|(a, p, d)| nan_line(a, p, d)),
         check: |_, r| refused_line(r),
+    }
+}
+
+/// One operation's record in `t_hash::ht_voxels`: kind, integers, numbers, error text.
+type VoxelRec = (usize, Vec<usize>, Vec<f64>, Option<String>);
+
+/// The voxel model over a box that reaches the end of the `f64` range: the voxel grid's
+/// ends `min + i * step` round past it. The pin stores those ends as infinity (the last
+/// voxel of the box itself among them); an extent's ends are finite in scx, so its last
+/// voxel closes on the box's max and a voxel past the counts with an end past the range has
+/// no box. The check holds scx to finite numbers throughout.
+pub fn ht_voxels() -> PinDefect<(usize, [f64; 3], f64), Vec<VoxelRec>> {
+    PinDefect {
+        reason: "the pin's voxel boxes at the end of the f64 range have infinite ends",
+        applies: Applies::Inputs(|(_, _, scale)| scale.abs() > f64::MAX / 4.0),
+        check: |_, r| match r.iter().flat_map(|rec| &rec.2).find(|x| !x.is_finite()) {
+            None => Ok(()),
+            Some(x) => Err(format!("scx records {x}")),
+        },
     }
 }
 

@@ -100,8 +100,7 @@ pub fn thresholds() -> Vec<f64> {
     use scx_num::certified::UNDERFLOW_ROOT;
     use scx_num::consts::{EPS_PARAM, PARALLEL_ANGLE_RAD, ZONE_DEFAULT};
     use scx_num::math::{
-        BIG_DOUBLE, EFF_ZERO, EFF_ZERO_DEG, EFF_ZERO_RAD, EFF_ZERO_SQ, EFF_ZERO_SQRT,
-        INFINITE_PARAMETER, TWO_PI,
+        BIG_DOUBLE, EFF_ZERO, EFF_ZERO_DEG, EFF_ZERO_RAD, EFF_ZERO_SQ, EFF_ZERO_SQRT, TWO_PI,
     };
     // (each one ulp either side too: `threshold_f64`)
     vec![
@@ -124,7 +123,9 @@ pub fn thresholds() -> Vec<f64> {
         solidcore::math::UNDEF_DOUBLE,
         UNDERFLOW_ROOT,
         BIG_DOUBLE,
-        INFINITE_PARAMETER,
+        // the pin's `SM_INFINITE_PARAMETER` end marker (scx: none; an extent's ends are
+        // finite values, and no value marks a missing end)
+        solidcore::math::INFINITE_PARAMETER,
         // the pin's `SM_USE_DEFAULT`, which its `*_tol3d` helpers replace (scx: `None`)
         solidcore::geom::tol::USE_DEFAULT,
     ]

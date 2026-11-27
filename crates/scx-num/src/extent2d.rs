@@ -12,6 +12,8 @@
 // and the transforms take and return the value (`scale(s, Option<f64>)` is `scaled` and
 // `scaled_xy`, which reorder a negated axis where upstream left it inverted). u/v are x/y.
 // `intersect` answers `Option`; `switch_params: bool` is `ParamOrder`.
+// Then the ends became finite by construction (research 63 P0, D1): every constructor and
+// transform refuses a non-finite end (`Option`), and `boundary_types`/`is_bounded` went.
 //! Axis-aligned 2D extents (`[min, max]` rectangles, usually a surface's `(u, v)`
 //! parameter domain): construction, growth, set operations, containment and boundary
 //! classification, periodic containment, normalised evaluation/inversion, line
@@ -48,7 +50,6 @@
 //! | [`Extent2d::are_disjoint`]             | `AreDisjoint`                                  |
 //! | [`Extent2d::are_equal`]                | `AreEqual`                                     |
 //! | [`Extent2d::is_degenerate`]            | `IsDegenerate`                                 |
-//! | [`Extent2d::boundary_types`], [`Extent2d::is_bounded`] | `IsBounded`                    |
 //! | [`Extent2d::is_contained_by`]          | `IsContainedBy`                                |
 //! | [`Extent2d::contains_point`], [`Extent2d::contains_point_dist`] | `ContainsPoint2d`     |
 //! | [`Extent2d::classify_point`]           | `ClassifyPoint2d`                              |
@@ -88,13 +89,16 @@
 //!   return the extent.
 //! - No extent is inverted: a fold starts a [`Hull2d`] at ±inf (upstream ±1e20), and `Scale`
 //!   by a negative factor reorders that axis.
+//! - Every end is finite, as [`Extent1d`]'s (research 63 D1): upstream's
+//!   `±SM_INFINITE_PARAMETER` markers and `IsBounded` have no counterpart, and a constructor
+//!   or transform whose end would be ±inf or NaN answers `None`.
 //! - The destructor's "undefined" sentinel values have no Rust counterpart.
 //! - `SM_ASSERT*` checks and the error-log side effect of `SE(...)` are not ported
 //!   (they do not change results in the release build).
 
 use crate::error::{NumError, Result};
 use crate::extent1d::{Extent1d, ExtentPointType, Hull1d};
-use crate::extent3d::{BoundaryType, Extent3d};
+use crate::extent3d::Extent3d;
 use crate::math::{BIG_DOUBLE, EFF_ZERO, EFF_ZERO_SQRT};
 use crate::tol::{are_same, are_same_to_tol, is_zero_to_tol, scaled_zero, ScaledZero};
 use crate::vector2d::{Point2, Vec2};
@@ -137,9 +141,8 @@ fn normalise(num: f64, den: f64) -> f64 {
 /// An axis-aligned rectangle `[min, max]` in the plane (`SmExtent2d`), often a
 /// surface's parameter domain; never inverted.
 ///
-/// The invariant is `!(min > max)` on each axis (a NaN end is held). An extent that may be
-/// absent is an `Option<Extent2d>`; a fold over points is a [`Hull2d`]. Unbounded interval
-/// ends are stored as `±INFINITE_PARAMETER`.
+/// The invariant is `min <= max` on each axis with every end finite. An extent that may be
+/// absent is an `Option<Extent2d>`; a fold over points is a [`Hull2d`].
 ///
 /// `PartialEq` compares the corner points exactly (not upstream `operator==`, which
 /// is [`Extent2d::are_same`]).
@@ -187,7 +190,8 @@ impl Hull2d {
         }
     }
 
-    /// The extent covered, `None` when no point was added (or an axis has only NaN).
+    /// The extent covered, `None` when no point was added (or an axis has only NaN, or
+    /// ±inf was added).
     #[must_use]
     pub fn finish(self) -> Option<Extent2d> {
         Some(Extent2d::from_intervals(self.x.finish()?, self.y.finish()?))
@@ -219,30 +223,39 @@ impl ScaledZero for Extent2d {
 }
 
 impl Extent2d {
-    /// The point-sized extent at `p` (`SmExtent2d(rMinAndMax)`).
+    /// The point-sized extent at `p`, `None` when a coordinate is not finite
+    /// (`SmExtent2d(rMinAndMax)`).
     #[must_use]
-    pub const fn from_point(p: Point2) -> Self {
-        Self { min: p, max: p }
+    pub const fn from_point(p: Point2) -> Option<Self> {
+        if p.x.is_finite() && p.y.is_finite() {
+            Some(Self { min: p, max: p })
+        } else {
+            None
+        }
     }
 
     /// The rectangle spanned by two corner points; coordinates are swapped per axis
-    /// so that `min <= max` (`SmExtent2d(rMin, rMax)`).
+    /// so that `min <= max`, `None` when a coordinate is not finite
+    /// (`SmExtent2d(rMin, rMax)`).
     #[must_use]
-    pub fn spanning(a: Point2, b: Point2) -> Self {
-        Self::from_intervals(Extent1d::spanning(a.x, b.x), Extent1d::spanning(a.y, b.y))
-    }
-
-    /// The rectangle with corners `min` and `max`, `None` when `min > max` on an axis
-    /// (`SetMinMax(rMin, rMax)`, which refuses it).
-    #[must_use]
-    pub fn from_corners(min: Point2, max: Point2) -> Option<Self> {
+    pub fn spanning(a: Point2, b: Point2) -> Option<Self> {
         Some(Self::from_intervals(
-            Extent1d::from_bounds(min.x, max.x)?,
-            Extent1d::from_bounds(min.y, max.y)?,
+            Extent1d::spanning(a.x, b.x)?,
+            Extent1d::spanning(a.y, b.y)?,
         ))
     }
 
-    /// The rectangle with the given bounds, `None` when one is inverted
+    /// The rectangle with corners `min` and `max`, `None` when `min > max` on an axis or a
+    /// coordinate is not finite (`SetMinMax(rMin, rMax)`, which refuses the inverted pair).
+    #[must_use]
+    pub fn from_corners(min: Point2, max: Point2) -> Option<Self> {
+        Some(Self::from_intervals(
+            Extent1d::new(min.x, max.x)?,
+            Extent1d::new(min.y, max.y)?,
+        ))
+    }
+
+    /// The rectangle with the given bounds, `None` when one is inverted or not finite
     /// (`SmExtent2d(UMin, VMin, UMax, VMax)`, `SetMinMax(double x4)`).
     #[must_use]
     pub fn from_bounds(x_min: f64, y_min: f64, x_max: f64, y_max: f64) -> Option<Self> {
@@ -297,26 +310,27 @@ impl Extent2d {
         Self::from_intervals(self.y_interval(), self.x_interval())
     }
 
-    /// Every bounded end moved outward by `d`; unbounded ends stay (`ExpandAbsolute(double)`
-    /// with `d >= 0`). A `d` below zero or NaN leaves the extent: shrinking is
+    /// Every end moved outward by `d` (`ExpandAbsolute(double)` with `d >= 0`), `None` when
+    /// an end would not be finite. A `d` below zero or NaN leaves the extent: shrinking is
     /// [`Extent2d::shrunk`].
     #[must_use]
-    pub fn expanded(self, d: f64) -> Self {
+    pub fn expanded(self, d: f64) -> Option<Self> {
         self.expanded_vec(Vec2::new(d, d))
     }
 
-    /// The bounded x ends moved outward by `d.x` and the y ends by `d.y`
-    /// (`ExpandAbsolute(const SmVector2d)`); a component below zero or NaN leaves its axis.
+    /// The x ends moved outward by `d.x` and the y ends by `d.y`
+    /// (`ExpandAbsolute(const SmVector2d)`), `None` when an end would not be finite; a
+    /// component below zero or NaN leaves its axis.
     #[must_use]
-    pub fn expanded_vec(self, d: Vec2) -> Self {
-        Self::from_intervals(
-            self.x_interval().expanded(d.x),
-            self.y_interval().expanded(d.y),
-        )
+    pub fn expanded_vec(self, d: Vec2) -> Option<Self> {
+        Some(Self::from_intervals(
+            self.x_interval().expanded(d.x)?,
+            self.y_interval().expanded(d.y)?,
+        ))
     }
 
-    /// Every bounded end moved inward by `d` (`ExpandAbsolute(-d)`), `None` when that
-    /// inverts an axis.
+    /// Every end moved inward by `d` (`ExpandAbsolute(-d)`), `None` when that inverts an
+    /// axis or an end is not finite.
     #[must_use]
     pub fn shrunk(self, d: f64) -> Option<Self> {
         Some(Self::from_intervals(
@@ -325,28 +339,32 @@ impl Extent2d {
         ))
     }
 
-    /// Every bounded end moved outward by `factor` times its interval's length
-    /// (`ExpandRelative` with `factor >= 0`; below zero or NaN leaves the extent).
+    /// Every end moved outward by `factor` times its interval's length (`ExpandRelative`
+    /// with `factor >= 0`; below zero or NaN leaves the extent), `None` when an end would
+    /// not be finite.
     #[must_use]
-    pub fn expanded_relative(self, factor: f64) -> Self {
-        Self::from_intervals(
-            self.x_interval().expanded_relative(factor),
-            self.y_interval().expanded_relative(factor),
-        )
+    pub fn expanded_relative(self, factor: f64) -> Option<Self> {
+        Some(Self::from_intervals(
+            self.x_interval().expanded_relative(factor)?,
+            self.y_interval().expanded_relative(factor)?,
+        ))
     }
 
-    /// Every bounded end scaled by `s`; unbounded ends stay (`Scale(s)`).
+    /// Every end scaled by `s` (`Scale(s)`), `None` when an end would not be finite.
     #[must_use]
-    pub fn scaled(self, s: f64) -> Self {
+    pub fn scaled(self, s: f64) -> Option<Self> {
         self.scaled_xy(s, s)
     }
 
-    /// The bounded x ends scaled by `sx` and the y ends by `sy`; unbounded ends stay
-    /// (`Scale(sx, &sy)`). A negative factor reorders its axis, where upstream leaves it
-    /// inverted.
+    /// The x ends scaled by `sx` and the y ends by `sy` (`Scale(sx, &sy)`), `None` when an
+    /// end would not be finite. A negative factor reorders its axis, where upstream leaves
+    /// it inverted.
     #[must_use]
-    pub fn scaled_xy(self, sx: f64, sy: f64) -> Self {
-        Self::from_intervals(self.x_interval().scaled(sx), self.y_interval().scaled(sy))
+    pub fn scaled_xy(self, sx: f64, sy: f64) -> Option<Self> {
+        Some(Self::from_intervals(
+            self.x_interval().scaled(sx)?,
+            self.y_interval().scaled(sy)?,
+        ))
     }
 
     /// Minimum corner (`GetMin`).
@@ -492,21 +510,6 @@ impl Extent2d {
     #[must_use]
     pub fn is_degenerate(&self, tol: f64) -> bool {
         self.min.x >= self.max.x - tol || self.min.y >= self.max.y - tol
-    }
-
-    /// Classification of the u and v intervals (`IsBounded`'s optional output).
-    #[must_use]
-    pub fn boundary_types(&self) -> [BoundaryType; 2] {
-        [
-            self.x_interval().boundary_type(),
-            self.y_interval().boundary_type(),
-        ]
-    }
-
-    /// True when no end is an unbounded marker (`IsBounded`).
-    #[must_use]
-    pub fn is_bounded(&self) -> bool {
-        self.boundary_types() == [BoundaryType::Bounded, BoundaryType::Bounded]
     }
 
     /// True when `self` lies inside `other` enlarged by `tol` (`IsContainedBy`,
@@ -835,7 +838,6 @@ impl Extent2d {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::math::INFINITE_PARAMETER;
 
     fn p(x: f64, y: f64) -> Point2 {
         Point2::new(x, y)
@@ -845,30 +847,29 @@ mod tests {
         Extent2d::from_bounds(x_min, y_min, x_max, y_max).unwrap()
     }
 
-    /// `Scale` (#1765): bounded ends scale, by the y factor in y; an unbounded end stays,
-    /// and a negative factor reorders its axis (upstream left it inverted).
+    /// `Scale` (#1765): the ends scale, by the y factor in y, and a negative factor reorders
+    /// its axis (upstream left it inverted).
     #[test]
     fn scale_scales_the_bounded_ends() {
-        let e = Extent2d::spanning(p(-1.0, 2.0), p(3.0, 4.0)).scaled(2.0);
+        let e = Extent2d::spanning(p(-1.0, 2.0), p(3.0, 4.0))
+            .unwrap()
+            .scaled(2.0)
+            .unwrap();
         assert_eq!((e.min(), e.max()), (p(-2.0, 4.0), p(6.0, 8.0)));
-        let e = e.scaled_xy(0.5, -1.0).scaled(1.0);
+        let e = e.scaled_xy(0.5, -1.0).unwrap().scaled(1.0).unwrap();
         assert_eq!((e.min(), e.max()), (p(-1.0, -8.0), p(3.0, -4.0)));
-        let u = bx(-2.0, 1.0, INFINITE_PARAMETER, INFINITE_PARAMETER).scaled_xy(3.0, 2.0);
-        assert_eq!(
-            (u.min(), u.max()),
-            (p(-6.0, 2.0), p(INFINITE_PARAMETER, INFINITE_PARAMETER))
-        );
+        assert_eq!(e.scaled_xy(1.0, f64::MAX), None);
     }
 
     /// `my_test_extent2d` (`tests/prog_test/src/smCurveTest.cpp:2688`), owned parts.
     #[test]
     fn upstream_my_test_extent2d() {
-        let e1 = Extent2d::spanning(p(1.0, 2.0), p(3.0, 4.0));
+        let e1 = Extent2d::spanning(p(1.0, 2.0), p(3.0, 4.0)).unwrap();
         assert_eq!(e1.min(), p(1.0, 2.0));
         assert_eq!(e1.max(), p(3.0, 4.0));
         let e3 = bx(11.0, 12.0, 13.0, 14.0);
         assert_eq!((e3.min(), e3.max()), (p(11.0, 12.0), p(13.0, 14.0)));
-        let e4 = Extent2d::from_point(p(1.0, 2.0));
+        let e4 = Extent2d::from_point(p(1.0, 2.0)).unwrap();
         assert_eq!(e4.max(), p(1.0, 2.0));
         let x3 = Extent3d::from_bounds(1.0, 2.0, 3.0, 4.0, 5.0, 6.0).unwrap();
         assert_eq!(Extent2d::from(x3).max(), p(4.0, 5.0));
@@ -893,19 +894,19 @@ mod tests {
         assert_eq!(e1.intersect(e6), None);
 
         let e2 = e2
-            .with_x_interval(Extent1d::spanning(7.0, 8.0))
-            .with_y_interval(Extent1d::spanning(4.0, 5.0));
+            .with_x_interval(Extent1d::spanning(7.0, 8.0).unwrap())
+            .with_y_interval(Extent1d::spanning(4.0, 5.0).unwrap());
         assert_eq!((e2.min(), e2.max()), (p(7.0, 4.0), p(8.0, 5.0)));
 
         let e2 = bx(2.0, 3.0, 5.0, 6.0).transposed();
         assert_eq!(e2.min(), p(3.0, 2.0));
-        let e2 = e2.expanded(1.0);
+        let e2 = e2.expanded(1.0).unwrap();
         assert_eq!(e2.min(), p(2.0, 1.0));
-        let e2 = e2.expanded_relative(1.0);
+        let e2 = e2.expanded_relative(1.0).unwrap();
         assert_eq!((e2.min(), e2.max()), (p(-3.0, -4.0), p(12.0, 11.0)));
         assert_eq!(e2.size(), Vec2::new(15.0, 15.0));
-        assert_eq!(e2.x_interval(), Extent1d::spanning(-3.0, 12.0));
-        assert_eq!(e2.y_interval(), Extent1d::spanning(-4.0, 11.0));
+        assert_eq!(e2.x_interval(), Extent1d::spanning(-3.0, 12.0).unwrap());
+        assert_eq!(e2.y_interval(), Extent1d::spanning(-4.0, 11.0).unwrap());
         assert_eq!((e2.x_length(), e2.y_length()), (15.0, 15.0));
         assert_eq!(e2.max_dimension(), 12.0);
 
@@ -919,7 +920,7 @@ mod tests {
         assert!(!e2.is_degenerate(0.0));
         assert_eq!(bx(0.0, 0.0, 0.0, 0.0).shrunk(0.1), None);
 
-        let e2 = e1.expanded(0.01);
+        let e2 = e1.expanded(0.01).unwrap();
         assert!(e2.is_contained_by(&e1, 0.1));
         assert!(!e2.is_contained_by(&e1, 0.0));
 
@@ -983,18 +984,23 @@ mod tests {
         assert_eq!(Extent2d::from_bounds(0.0, 2.0, 1.0, 1.0), None);
     }
 
+    /// No constructor or transform stores ±inf or NaN (research 63 D1).
     #[test]
-    fn unbounded_ends_do_not_expand() {
-        let e = bx(-INFINITE_PARAMETER, 0.0, 1.0, INFINITE_PARAMETER);
+    fn non_finite_ends_are_refused() {
+        let (inf, nan) = (f64::INFINITY, f64::NAN);
+        assert_eq!(Extent2d::from_bounds(-inf, 0.0, 1.0, 1.0), None);
+        assert_eq!(Extent2d::from_corners(p(0.0, 0.0), p(1.0, nan)), None);
+        assert_eq!(Extent2d::spanning(p(0.0, inf), p(1.0, 1.0)), None);
+        assert_eq!(Extent2d::from_point(p(nan, 0.0)), None);
+        assert_eq!(Extent2d::hull([p(0.0, 0.0), p(1.0, -inf)]), None);
+        let e = bx(0.0, 0.0, 1.0, f64::MAX);
+        assert_eq!(e.expanded(f64::MAX), None);
         assert_eq!(
-            e.boundary_types(),
-            [BoundaryType::UnboundedMin, BoundaryType::UnboundedMax]
+            e.expanded_vec(Vec2::new(1.0, 0.0)),
+            Some(bx(-1.0, 0.0, 2.0, f64::MAX))
         );
-        assert!(!e.is_bounded());
-        assert_eq!(
-            e.expanded(1.0),
-            bx(-INFINITE_PARAMETER, -1.0, 2.0, INFINITE_PARAMETER)
-        );
+        assert_eq!(e.expanded_relative(1.0), None);
+        assert_eq!(e.scaled(nan), None);
     }
 
     #[test]

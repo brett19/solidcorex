@@ -21,6 +21,9 @@
 // Then `tol3d` went (`f64::abs` in its place): the pair tolerance is the sum's `abs()`.
 // Then the inside-out empty box went: an unsized model's box is `None` (`bbox()` answers
 // `Option<Extent3d>`), and `map_voxel_index_to_bbox` answers `None` where it answered `Init()`.
+// Then an extent's ends became finite: `map_voxel_index_to_bbox` closes the last voxel on each
+// axis on the box's max where upstream's `min + n * step` rounds to infinity, and answers `None`
+// for a voxel past the counts with an end past the `f64` range; other ends are unchanged.
 //! Voxel bucket hash of point-located items for fast coincident-pair searches
 //!
 //! Iteration order is deterministic and documented: [`ObjsInVoxels::find_coincident_pairs`]
@@ -709,27 +712,39 @@ impl<T: Copy + PartialEq> ObjsInVoxels<T> {
     }
 
     /// Box of voxel `index` (`MapVoxelIndexToBBox`); `None` when the model has no box
-    /// or no voxels, the index is out of range, or the computed corners are out of order
+    /// or no voxels, the index is out of range, or a corner is not finite or out of order
     /// (where upstream ignores the `SetMinMax` failure and answers the `Init()` box).
+    ///
+    /// Each end is upstream's `min + i * step`, save that the last voxel on each axis closes
+    /// on the box's max where that rounds to infinity (a box that reaches the end of the `f64`
+    /// range). An index past the counts extrapolates the grid, as upstream does, and has no
+    /// box where an end is past the `f64` range.
     #[must_use]
     pub fn map_voxel_index_to_bbox(&self, index: usize) -> Option<Extent3d> {
         let bbox = self.bbox?;
         if self.voxel_count() == 0 {
             return None;
         }
-        let dx = bbox.x_length() / self.x_cnt as f64;
-        let dy = bbox.y_length() / self.y_cnt as f64;
-        let dz = bbox.z_length() / self.z_cnt as f64;
         let (ix, iy, iz) = self.map_voxel_index_to_indices(index).ok()?;
-        let (ix, iy, iz) = (ix as f64, iy as f64, iz as f64);
-        let m = bbox.min();
+        let (lo, hi) = (bbox.min(), bbox.max());
+        // The end after `i` steps of `1 / n` of `[lo, hi]`; the grid's last end is the box's
+        // max where the steps round past the `f64` range.
+        let end = |lo: f64, hi: f64, i: usize, n: usize| {
+            let e = lo + i as f64 * ((hi - lo) / n as f64);
+            if i == n && !e.is_finite() {
+                hi
+            } else {
+                e
+            }
+        };
+        let (nx, ny, nz) = (self.x_cnt, self.y_cnt, self.z_cnt);
         Extent3d::from_bounds(
-            m.x + ix * dx,
-            m.y + iy * dy,
-            m.z + iz * dz,
-            m.x + (ix + 1.0) * dx,
-            m.y + (iy + 1.0) * dy,
-            m.z + (iz + 1.0) * dz,
+            end(lo.x, hi.x, ix, nx),
+            end(lo.y, hi.y, iy, ny),
+            end(lo.z, hi.z, iz, nz),
+            end(lo.x, hi.x, ix + 1, nx),
+            end(lo.y, hi.y, iy + 1, ny),
+            end(lo.z, hi.z, iz + 1, nz),
         )
     }
 
@@ -955,7 +970,7 @@ mod tests {
     use scx_num::math::Point3;
 
     fn unit_box() -> Extent3d {
-        Extent3d::spanning(Point3::ORIGIN, Point3::new(1.0, 1.0, 1.0))
+        Extent3d::spanning(Point3::ORIGIN, Point3::new(1.0, 1.0, 1.0)).unwrap()
     }
 
     fn sorted_item_pairs(v: &ObjsInVoxels<u32>, p: &CoincidentPairs) -> Vec<(u32, u32)> {
@@ -1096,6 +1111,26 @@ mod tests {
         let u: ObjsInVoxels<u32> = ObjsInVoxels::new(2, 2, 2, None, 0).unwrap();
         assert!(u.map_point_to_voxel(Point3::ORIGIN).is_none());
         assert_eq!(u.map_voxel_index_to_bbox(0), None);
+    }
+
+    /// Voxels tile the model box with finite ends, including a box out to the end of the
+    /// `f64` range, where `min + n * step` rounds past the max.
+    #[test]
+    fn voxels_tile_the_box_to_the_f64_range() {
+        for (lo, hi) in [(0.0, f64::MAX), (f64::MAX / 2.0, f64::MAX), (0.0, 1.0)] {
+            let b = Extent3d::from_bounds(lo, lo, lo, hi, hi, hi).unwrap();
+            for n in 1..=7 {
+                let v: ObjsInVoxels<u32> = ObjsInVoxels::new(n, 1, 1, Some(&b), 0).unwrap();
+                let boxes: Vec<_> = (0..n)
+                    .map(|i| v.map_voxel_index_to_bbox(i).unwrap())
+                    .collect();
+                assert_eq!(boxes[0].min().x, lo);
+                assert_eq!(boxes[n - 1].max().x, hi);
+                for w in boxes.windows(2) {
+                    assert_eq!(w[0].max().x, w[1].min().x);
+                }
+            }
+        }
     }
 
     #[test]

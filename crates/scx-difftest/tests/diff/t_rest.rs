@@ -171,12 +171,7 @@ diff!(tf_new, |r: TfR| m::tf(&r));
 diff!(tf_queries, |r: TfR| {
     let t = m::tf(&r);
     (
-        (
-            t.natural_param_domain(),
-            t.to_origin(),
-            t.to_x_axis(),
-            t.to_y_axis(),
-        ),
+        (t.to_origin(), t.to_x_axis(), t.to_y_axis()),
         (
             t.to_z_axis(),
             t.to_disp(),

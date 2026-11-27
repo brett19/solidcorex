@@ -184,10 +184,10 @@ fn extents() -> u64 {
             };
             put(&mut s, Some(x.union(y)));
             put(&mut s, x.intersect(y));
-            put(&mut s, Some(x.expanded(r.next_f64())));
-            put(&mut s, Some(x.expanded_relative(r.next_f64())));
+            put(&mut s, x.expanded(r.next_f64()));
+            put(&mut s, x.expanded_relative(r.next_f64()));
             put(&mut s, x.shrunk(r.next_f64()));
-            put(&mut s, Some(x.scaled(r.next_signed_unit())));
+            put(&mut s, x.scaled(r.next_signed_unit()));
             s.fs(&[x.mid(), x.length(), x.distance_from(c), x.clamp_value(d)]);
         }
         let pts = [pt(&mut r), pt(&mut r), pt(&mut r), pt(&mut r)];
@@ -210,8 +210,9 @@ fn extents() -> u64 {
             let sb = x.sphere_bound();
             s.p(sb.center);
             s.fs(&[sb.radius, sb.min_radius]);
-            let e = x.expanded_relative(r.next_f64());
-            s.v(e.size());
+            if let Some(e) = x.expanded_relative(r.next_f64()) {
+                s.v(e.size());
+            }
             s.fs(&x.span_along(pts[1], vec(&mut r)));
             match x.cone_bound_to(&y) {
                 Ok((axis, ang)) => {

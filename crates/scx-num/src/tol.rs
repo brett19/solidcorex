@@ -559,7 +559,8 @@ mod tests {
         let e3 = Extent3d::spanning(
             Point3::new(0.0, -30.0, -600.0),
             Point3::new(2000.0, 100.0, 10000.0),
-        );
+        )
+        .unwrap();
         assert_eq!(v2.scaled_zero(), EFF_ZERO * 81.0);
         assert_eq!(v3.scaled_zero(), EFF_ZERO * 1001.0);
         assert_eq!(e3.scaled_zero(), EFF_ZERO * 10001.0);

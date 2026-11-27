@@ -13,9 +13,13 @@
 // `from_bounds` and `from_corners` answer `Option`, the swapping constructor is `spanning`, an
 // axis is replaced by `with_x_interval`.., and the expansions take and return the value. u/v/w
 // are x/y/z. `intersect` answers `Option`.
+// Then the ends became finite by construction (research 63 P0, D1): every constructor and
+// transform refuses a non-finite end (`Option`); `UNBOUNDED`, `BoundaryType`,
+// `boundary_types`, `is_bounded`, `any_bounds` and `approximate_unbounded*` went (a missing end
+// is a `ParamDomain` variant, and its working extent carries WR-4's lesson), and so did the
+// unbounded-marker branches of `intersect_line`'s slabs.
 //! Axis-aligned 3D extents (bounding boxes): construction, growth, set operations,
-//! distances, containment and classification predicates, line clipping, and
-//! approximation of unbounded extents.
+//! distances, containment and classification predicates, and line clipping.
 //!
 //! Upstream: `source/SMLib/src/SmExtent3d.cpp`, `source/SMLib/inc/SmExtent3d.h`.
 //!
@@ -28,7 +32,6 @@
 //! | [`Extent3d::from_bounds`]              | `SmExtent3d(double x6)`, `SetMinMax(double x6)` (`None` where it fails) |
 //! | [`Extent3d::from_corners`]             | `SetMinMax(const SmPoint3d&, const SmPoint3d&)` (`None` where it fails) |
 //! | [`Extent3d::from_intervals`]           | (the three intervals set)                      |
-//! | [`Extent3d::UNBOUNDED`]                | `SetUnbounded`                                 |
 //! | [`Extent3d::min`], [`Extent3d::max`], [`Extent3d::mid`] | `GetMin()`, `GetMax()`, `GetMid()` |
 //! | [`Extent3d::x_min`] .. [`Extent3d::z_max`] | `GetUMin` .. `GetWMax`                     |
 //! | [`Extent3d::min_at`], [`Extent3d::max_at`] | `GetMin(ULONG)`, `GetMax(ULONG)`           |
@@ -58,15 +61,11 @@
 //! | [`Extent3d::contains_line_seg`]        | `ContainsLineSeg3d`                            |
 //! | [`Extent3d::is_point_on_boundary`]     | `IsPoint3dOnBoundary`                          |
 //! | [`Extent3d::intersect_line`], [`LineHit`] | `IntersectLine`                             |
-//! | [`Extent3d::boundary_types`], [`Extent3d::is_bounded`] | `IsBounded`                    |
-//! | [`Extent3d::any_bounds`]               | `AnyBounds`                                    |
 //! | [`Extent3d::x_interval`], [`Extent3d::y_interval`], [`Extent3d::z_interval`] | `GetUInterval`, `GetVInterval`, `GetWInterval` |
 //! | [`Extent3d::with_x_interval`], [`Extent3d::with_y_interval`], [`Extent3d::with_z_interval`] | `SetUInterval`, `SetVInterval`; with [`Extent1d::with_min`] and [`Extent1d::with_max`], `SetUMin`..`SetVMax` |
-//! | [`Extent3d::approximate_unbounded`], [`Extent3d::approximate_unbounded_expanded`] | `ApproximateUnbounded` |
 //! | [`Extent3d::max_distance_to_point`]    | (not upstream) the farthest of the corners from a point |
 //! | [`Extent3d::span_along`]               | (not upstream) the box's reach along a direction |
 //! | [`Extent3d::meets_ray`]                | (not upstream) whether a forward ray meets the padded box |
-//! | [`BoundaryType`]                       | `SmBoundaryType` (`SmTypes.h`)                 |
 //!
 //! Deviations:
 //! - Out-params become return values ([`LineHit`], [`SphereBound`], tuples, arrays).
@@ -74,12 +73,12 @@
 //! - `IntersectLine` leaves `rdTEnter`/`rdTExit` unset when nothing is found; the
 //!   [`LineHit`] variants carry only the parameters upstream sets.
 //! - `ComputeSphereBound`'s optional inner radius is always computed.
-//! - `ApproximateUnbounded`'s optional expanded extent is returned as an `Option`:
-//!   `None` where upstream's `SetMinMax` rejects it and leaves the caller's extent
-//!   untouched. Upstream mutates `sMin` in place before reading it in
-//!   `SM_BT_UNBOUNDED_MAX`, which is bit-identical to reading the original `min` on all
-//!   binary64 inputs (WR-4;
-//!   `plan/upstream-issues/WR-4--addendum-2026-10-31-approx-unbounded-original-min.md`).
+//! - Every end is finite, as [`Extent1d`]'s (research 63 D1). Upstream's
+//!   `±SM_INFINITE_PARAMETER` markers, `SetUnbounded`, `IsBounded`, `AnyBounds`,
+//!   `ApproximateUnbounded` and `SmBoundaryType` have no counterpart on the box: a missing end
+//!   is a [`ParamDomain`](crate::domain::ParamDomain) variant, and its working extent keeps
+//!   `ApproximateUnbounded`'s rule (WR-4). A constructor or transform whose end would be ±inf
+//!   or NaN answers `None`, and `IntersectLine`'s slabs need no marker branch.
 //! - Status codes: `SM_ERR_INVALID_INPUT` is [`NumError::InvalidInput`]; `Intersect`'s
 //!   failure (an `Init()` result) is `None`; the `SM_ERR` of `ComputeConeBoundTo` is [`NumFailure`](crate::error::NumFailure) with code 1001.
 //! - `SetUInterval`/`SetVInterval` only validate their argument under
@@ -98,40 +97,8 @@
 
 use crate::error::{NumError, Result};
 use crate::extent1d::{Extent1d, Hull1d};
-use crate::math::{
-    is_infinite_param, Point3, Vec3, BIG_DOUBLE, EFF_ZERO, EFF_ZERO_SQ, INFINITE_PARAMETER, PI,
-};
+use crate::math::{Point3, Vec3, BIG_DOUBLE, EFF_ZERO, EFF_ZERO_SQ, PI};
 use crate::vector3d::{asin, sqrt, Axis, UnitVec3};
-
-/// Classification of one interval of an extent (`SmBoundaryType`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum BoundaryType {
-    /// `SM_BT_UNKNOWN`: not classified yet.
-    Unknown,
-    /// `SM_BT_BOUNDED`: bounded below and above.
-    Bounded,
-    /// `SM_BT_UNBOUNDED_MIN`: the minimum is `-INFINITE_PARAMETER`.
-    UnboundedMin,
-    /// `SM_BT_UNBOUNDED_MAX`: the maximum is `INFINITE_PARAMETER`.
-    UnboundedMax,
-    /// `SM_BT_UNBOUNDED`: unbounded in both directions.
-    Unbounded,
-}
-
-impl BoundaryType {
-    /// Classifies the interval `[min, max]` (the per-axis expression of `IsBounded`).
-    fn classify(min: f64, max: f64) -> Self {
-        if is_infinite_param(max) && is_infinite_param(min) {
-            Self::Unbounded
-        } else if is_infinite_param(min) {
-            Self::UnboundedMin
-        } else if is_infinite_param(max) {
-            Self::UnboundedMax
-        } else {
-            Self::Bounded
-        }
-    }
-}
 
 /// Result of [`Extent3d::intersect_line`].
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -179,9 +146,8 @@ pub struct SphereBound {
 /// An axis-aligned 3D box `[min, max]` (`SmExtent3d`), often a bounding box; never
 /// inverted.
 ///
-/// The invariant is `!(min > max)` on each axis (a NaN end is held). A box that may be
-/// absent is an `Option<Extent3d>`; a fold over points is a [`Hull3d`]. Unbounded interval
-/// ends are stored as `±INFINITE_PARAMETER`.
+/// The invariant is `min <= max` on each axis with every end finite. A box that may be
+/// absent is an `Option<Extent3d>`; a fold over points is a [`Hull3d`].
 ///
 /// `PartialEq` compares the corner points exactly (not upstream `operator==`).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -233,7 +199,8 @@ impl Hull3d {
         }
     }
 
-    /// The box covered, `None` when no point was added (or an axis has only NaN).
+    /// The box covered, `None` when no point was added (or an axis has only NaN, or ±inf
+    /// was added).
     #[must_use]
     pub fn finish(self) -> Option<Extent3d> {
         Some(Extent3d::from_intervals(
@@ -257,108 +224,57 @@ impl FromIterator<Point3> for Hull3d {
 /// `IntersectLine`'s slab parameters `(tmin, tmax)` along one axis.
 fn slab(min: f64, max: f64, p: f64, v: f64) -> (f64, f64) {
     if v > EFF_ZERO {
-        let lo = if is_infinite_param(min) {
-            -INFINITE_PARAMETER
-        } else {
-            (min - p) / v
-        };
-        let hi = if is_infinite_param(max) {
-            INFINITE_PARAMETER
-        } else {
-            (max - p) / v
-        };
-        (lo, hi)
+        ((min - p) / v, (max - p) / v)
     } else if v < -EFF_ZERO {
-        let hi = if is_infinite_param(min) {
-            INFINITE_PARAMETER
-        } else {
-            (min - p) / v
-        };
-        let lo = if is_infinite_param(max) {
-            -INFINITE_PARAMETER
-        } else {
-            (max - p) / v
-        };
-        (lo, hi)
+        ((max - p) / v, (min - p) / v)
     } else {
         (-BIG_DOUBLE, BIG_DOUBLE)
     }
 }
 
-/// One axis of `ApproximateUnbounded`: the replacement `(min, max)` of an interval
-/// classified as `ty`. `center` is the caller's optional centre, `c` its value or 0.
-///
-/// Upstream mutates `sMin` in place before computing `sMax`, but in
-/// `SM_BT_UNBOUNDED_MAX` `sMin` changes only when `!(min > pc - h)` (becoming
-/// `v = pc - h`), for which `v > v` is false on every binary64 value (including
-/// `±0.0`, `±inf`, and `NaN`); reading `min` directly is therefore bit-identical
-/// across all inputs (WR-4).
-fn approx_axis(
-    ty: BoundaryType,
-    min: f64,
-    max: f64,
-    center: Option<f64>,
-    c: f64,
-    h: f64,
-) -> (f64, f64) {
-    // Upstream: `(pUnboundedCenter == NULL || <cmp>) ? <near> : <centred>`; the same
-    // comparisons are used so NaN inputs take the same branch.
-    let max_near_center = center.is_none_or(|pc| max < pc + h);
-    let min_near_center = center.is_none_or(|pc| min > pc - h);
-    let new_min = match (ty, center) {
-        (BoundaryType::UnboundedMin, Some(pc)) if !max_near_center => pc - h,
-        (BoundaryType::UnboundedMin, _) => max - 2.0 * h,
-        (BoundaryType::UnboundedMax, Some(pc)) if !min_near_center => pc - h,
-        (BoundaryType::Unbounded, _) => c - h,
-        (BoundaryType::UnboundedMax | BoundaryType::Bounded | BoundaryType::Unknown, _) => min,
-    };
-    let new_max = match (ty, center) {
-        (BoundaryType::UnboundedMin, Some(pc)) if !max_near_center => pc + h,
-        (BoundaryType::UnboundedMax, Some(pc)) if !min_near_center => pc + h,
-        (BoundaryType::UnboundedMax, _) => min + 2.0 * h,
-        (BoundaryType::Unbounded, _) => c + h,
-        (BoundaryType::UnboundedMin | BoundaryType::Bounded | BoundaryType::Unknown, _) => max,
-    };
-    (new_min, new_max)
-}
-
 impl Extent3d {
-    /// Every interval `[-INFINITE_PARAMETER, INFINITE_PARAMETER]` (`SetUnbounded`).
-    pub const UNBOUNDED: Self = Self::from_intervals(
-        Extent1d::UNBOUNDED,
-        Extent1d::UNBOUNDED,
-        Extent1d::UNBOUNDED,
-    );
-
     /// The box spanned by two corner points; coordinates are swapped per axis so
-    /// that `min <= max` (`SmExtent3d(rMin, rMax)`).
+    /// that `min <= max`, `None` when a coordinate is not finite (`SmExtent3d(rMin, rMax)`).
     #[must_use]
-    pub fn spanning(a: Point3, b: Point3) -> Self {
-        Self::from_intervals(
-            Extent1d::spanning(a.x, b.x),
-            Extent1d::spanning(a.y, b.y),
-            Extent1d::spanning(a.z, b.z),
-        )
+    pub fn spanning(a: Point3, b: Point3) -> Option<Self> {
+        let sorted = |a: f64, b: f64| if a > b { (b, a) } else { (a, b) };
+        let ((x0, x1), (y0, y1), (z0, z1)) = (sorted(a.x, b.x), sorted(a.y, b.y), sorted(a.z, b.z));
+        // `&`, not `&&`: every check runs, so the test compiles without a branch per axis.
+        let finite = a.x.is_finite()
+            & a.y.is_finite()
+            & a.z.is_finite()
+            & b.x.is_finite()
+            & b.y.is_finite()
+            & b.z.is_finite();
+        finite.then_some(Self {
+            min: Point3::new(x0, y0, z0),
+            max: Point3::new(x1, y1, z1),
+        })
     }
 
-    /// The point-sized box at `p` (`SmExtent3d(rMinAndMax)`).
+    /// The point-sized box at `p`, `None` when a coordinate is not finite
+    /// (`SmExtent3d(rMinAndMax)`).
     #[must_use]
-    pub const fn from_point(p: Point3) -> Self {
-        Self { min: p, max: p }
+    pub const fn from_point(p: Point3) -> Option<Self> {
+        if p.x.is_finite() && p.y.is_finite() && p.z.is_finite() {
+            Some(Self { min: p, max: p })
+        } else {
+            None
+        }
     }
 
-    /// The box with corners `min` and `max`, `None` when `min > max` on an axis
-    /// (`SetMinMax(rMin, rMax)`, which refuses it).
+    /// The box with corners `min` and `max`, `None` when `min > max` on an axis or a
+    /// coordinate is not finite (`SetMinMax(rMin, rMax)`, which refuses the inverted pair).
     #[must_use]
     pub fn from_corners(min: Point3, max: Point3) -> Option<Self> {
         Some(Self::from_intervals(
-            Extent1d::from_bounds(min.x, max.x)?,
-            Extent1d::from_bounds(min.y, max.y)?,
-            Extent1d::from_bounds(min.z, max.z)?,
+            Extent1d::new(min.x, max.x)?,
+            Extent1d::new(min.y, max.y)?,
+            Extent1d::new(min.z, max.z)?,
         ))
     }
 
-    /// The box with the given bounds, `None` when one is inverted
+    /// The box with the given bounds, `None` when one is inverted or not finite
     /// (`SmExtent3d(UMin, VMin, WMin, UMax, VMax, WMax)`, `SetMinMax(double x6)`).
     #[must_use]
     pub fn from_bounds(
@@ -639,31 +555,32 @@ impl Extent3d {
         sqrt(self.min_distance_squared(other))
     }
 
-    /// Every bounded side moved outwards by `factor` times the box size on that axis;
-    /// unbounded ends stay (`ExpandRelative` with `factor >= 0`; below zero or NaN leaves the
-    /// box).
+    /// Every side moved outwards by `factor` times the box size on that axis
+    /// (`ExpandRelative` with `factor >= 0`; below zero or NaN leaves the box), `None` when
+    /// an end would not be finite.
     #[must_use]
-    pub fn expanded_relative(self, factor: f64) -> Self {
-        Self::from_intervals(
-            self.x_interval().expanded_relative(factor),
-            self.y_interval().expanded_relative(factor),
-            self.z_interval().expanded_relative(factor),
-        )
+    pub fn expanded_relative(self, factor: f64) -> Option<Self> {
+        Some(Self::from_intervals(
+            self.x_interval().expanded_relative(factor)?,
+            self.y_interval().expanded_relative(factor)?,
+            self.z_interval().expanded_relative(factor)?,
+        ))
     }
 
-    /// Every bounded side moved outwards by `d`; unbounded ends stay (`ExpandAbsolute` with
-    /// `d >= 0`). A `d` below zero or NaN leaves the box: shrinking is [`Extent3d::shrunk`].
+    /// Every side moved outwards by `d` (`ExpandAbsolute` with `d >= 0`), `None` when an
+    /// end would not be finite. A `d` below zero or NaN leaves the box: shrinking is
+    /// [`Extent3d::shrunk`].
     #[must_use]
-    pub fn expanded(self, d: f64) -> Self {
-        Self::from_intervals(
-            self.x_interval().expanded(d),
-            self.y_interval().expanded(d),
-            self.z_interval().expanded(d),
-        )
+    pub fn expanded(self, d: f64) -> Option<Self> {
+        Some(Self::from_intervals(
+            self.x_interval().expanded(d)?,
+            self.y_interval().expanded(d)?,
+            self.z_interval().expanded(d)?,
+        ))
     }
 
-    /// Every bounded side moved inwards by `d` (`ExpandAbsolute(-d)`), `None` when that
-    /// inverts an axis.
+    /// Every side moved inwards by `d` (`ExpandAbsolute(-d)`), `None` when that inverts an
+    /// axis or an end is not finite.
     #[must_use]
     pub fn shrunk(self, d: f64) -> Option<Self> {
         Some(Self::from_intervals(
@@ -929,20 +846,16 @@ impl Extent3d {
         (on, Vec3::new(du, dv, dw))
     }
 
-    /// Clips the line `point + t * dir` against the box (any mix of unbounded
-    /// intervals is allowed) (`IntersectLine`).
+    /// Clips the line `point + t * dir` against the box (`IntersectLine`).
     ///
-    /// Fails when `dir` is shorter than `EFF_ZERO`, when a bound of the box is NaN, or when
-    /// `point` or `dir` is not finite: no clip of an undefined box or line is defined.
+    /// Fails when `dir` is shorter than `EFF_ZERO`, or when `point` or `dir` is not finite:
+    /// no clip of an undefined line is defined.
     pub fn intersect_line(&self, point: Point3, dir: Vec3) -> Result<LineHit> {
-        let nan_box = [self.min, self.max]
-            .iter()
-            .any(|c| c.x.is_nan() || c.y.is_nan() || c.z.is_nan());
         let line = [point.x, point.y, point.z, dir.x, dir.y, dir.z];
-        if nan_box || !line.iter().all(|c| c.is_finite()) || dir.length_squared() < EFF_ZERO_SQ {
+        if !line.iter().all(|c| c.is_finite()) || dir.length_squared() < EFF_ZERO_SQ {
             return Err(NumError::InvalidInput {
                 operation: "geom::extent3d::Extent3d::intersect_line",
-                reason: "zero-length line direction, or an undefined box or line",
+                reason: "zero-length line direction, or an undefined line",
             });
         }
         let (tmin_x, tmax_x) = slab(self.min.x, self.max.x, point.x, dir.x);
@@ -1031,98 +944,11 @@ impl Extent3d {
         }
         t_lo <= t_hi
     }
-
-    /// Classification of the x, y and z intervals (the out-param of `IsBounded`).
-    #[must_use]
-    pub fn boundary_types(&self) -> [BoundaryType; 3] {
-        [
-            BoundaryType::classify(self.min.x, self.max.x),
-            BoundaryType::classify(self.min.y, self.max.y),
-            BoundaryType::classify(self.min.z, self.max.z),
-        ]
-    }
-
-    /// True when no interval end is an unbounded marker (`IsBounded`).
-    #[must_use]
-    pub fn is_bounded(&self) -> bool {
-        self.boundary_types() == [BoundaryType::Bounded; 3]
-    }
-
-    /// True when some interval is bounded at one end or more (`AnyBounds`).
-    #[must_use]
-    pub fn any_bounds(&self) -> bool {
-        self.boundary_types()
-            .iter()
-            .any(|t| *t != BoundaryType::Unbounded)
-    }
-
-    /// A bounded extent approximating this one: unbounded ends are replaced using
-    /// `half_size` and the optional `center` (`[0, 0, 0]` if `None`); a bounded
-    /// extent is returned unchanged (`ApproximateUnbounded` without the expanded
-    /// output; upstream's default `half_size` is
-    /// [`BOUNDED_INFINITE_PARAM`](crate::math::BOUNDED_INFINITE_PARAM)).
-    #[must_use]
-    pub fn approximate_unbounded(&self, center: Option<Point3>, half_size: f64) -> Self {
-        self.approximate_unbounded_expanded(center, half_size).0
-    }
-
-    /// [`Extent3d::approximate_unbounded`] plus upstream's optional second extent,
-    /// which pushes the replaced ends out by a further `half_size / 12` (used for
-    /// graphics). The second value is `None` where upstream's `SetMinMax` rejects it
-    /// (an inverted interval), leaving its output untouched.
-    #[must_use]
-    pub fn approximate_unbounded_expanded(
-        &self,
-        center: Option<Point3>,
-        half_size: f64,
-    ) -> (Self, Option<Self>) {
-        let c = center.unwrap_or(Point3::ORIGIN);
-        let types = self.boundary_types();
-        let bounded = types == [BoundaryType::Bounded; 3];
-        let (mut lo, mut hi) = (self.min, self.max);
-        if !bounded {
-            let h = half_size;
-            let [tx, ty, tz] = types;
-            (lo.x, hi.x) = approx_axis(tx, lo.x, hi.x, center.map(|p| p.x), c.x, h);
-            (lo.y, hi.y) = approx_axis(ty, lo.y, hi.y, center.map(|p| p.y), c.y, h);
-            (lo.z, hi.z) = approx_axis(tz, lo.z, hi.z, center.map(|p| p.z), c.z, h);
-        }
-
-        let (mut lo_inc, mut hi_inc) = (lo, hi);
-        if !bounded {
-            let inc = half_size / 12.0;
-            let grows_min =
-                |t: BoundaryType| matches!(t, BoundaryType::UnboundedMin | BoundaryType::Unbounded);
-            let grows_max =
-                |t: BoundaryType| matches!(t, BoundaryType::UnboundedMax | BoundaryType::Unbounded);
-            let [tx, ty, tz] = types;
-            if grows_min(tx) {
-                lo_inc.x -= inc;
-            }
-            if grows_max(tx) {
-                hi_inc.x += inc;
-            }
-            if grows_min(ty) {
-                lo_inc.y -= inc;
-            }
-            if grows_max(ty) {
-                hi_inc.y += inc;
-            }
-            if grows_min(tz) {
-                lo_inc.z -= inc;
-            }
-            if grows_max(tz) {
-                hi_inc.z += inc;
-            }
-        }
-        (Self::spanning(lo, hi), Self::from_corners(lo_inc, hi_inc))
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::math::BOUNDED_INFINITE_PARAM;
 
     fn p(x: f64, y: f64, z: f64) -> Point3 {
         Point3::new(x, y, z)
@@ -1140,7 +966,7 @@ mod tests {
     /// outside and from a corner itself.
     #[test]
     fn the_largest_distance_to_a_point_is_to_the_farthest_corner() {
-        let e = Extent3d::spanning(p(-1.0, 0.0, 2.0), p(3.0, 5.0, 4.0));
+        let e = Extent3d::spanning(p(-1.0, 0.0, 2.0), p(3.0, 5.0, 4.0)).unwrap();
         for at in [
             p(0.0, 1.0, 3.0),
             p(10.0, -2.0, 0.0),
@@ -1162,7 +988,7 @@ mod tests {
     /// longer one and from an origin inside the box.
     #[test]
     fn the_span_along_a_direction_runs_from_the_lowest_corner_to_the_highest() {
-        let e = Extent3d::spanning(p(-1.0, 0.0, 2.0), p(3.0, 5.0, 4.0));
+        let e = Extent3d::spanning(p(-1.0, 0.0, 2.0), p(3.0, 5.0, 4.0)).unwrap();
         for (origin, direction, want) in [
             (p(0.0, 0.0, 0.0), v(0.0, 0.0, 1.0), [2.0, 4.0]),
             (p(0.0, 0.0, 0.0), v(0.6, 0.0, -0.8), [-3.8, 0.2]),
@@ -1188,26 +1014,26 @@ mod tests {
     #[test]
     fn upstream_my_test_extent3d() {
         let (v1, v2) = (p(1.0, 1.0, 1.0), p(2.0, 2.0, 1.0));
-        let e1 = Extent3d::spanning(v1, v2);
+        let e1 = Extent3d::spanning(v1, v2).unwrap();
         assert_eq!(e1.min(), v1);
-        assert_eq!(Extent3d::from_point(v2).max(), v2);
+        assert_eq!(Extent3d::from_point(v2).unwrap().max(), v2);
         assert_eq!(Hull3d::EMPTY.finish(), None);
         let (v3, v4, v5) = (p(6.0, 6.0, 6.0), p(5.0, 5.0, 5.0), p(7.0, 7.0, 7.0));
         let e4 = Extent3d::hull([v3, v4, v5]).unwrap();
         assert_eq!((e4.min(), e4.max()), (v4, v5));
         let e5 = Extent3d::from_corners(v4, v5).unwrap();
-        let e6 = Extent3d::spanning(p(-7.0, -7.0, -7.0), p(-5.0, -5.0, -5.0));
+        let e6 = Extent3d::spanning(p(-7.0, -7.0, -7.0), p(-5.0, -5.0, -5.0)).unwrap();
         assert!(e5.are_disjoint(&e6, 0.0));
         let u = e5.union(e6);
         assert_eq!((u.min(), u.max()), (p(-7.0, -7.0, -7.0), v5));
-        let e7 = Extent3d::spanning(v4, v5);
+        let e7 = Extent3d::spanning(v4, v5).unwrap();
         assert_eq!(e4.intersect(e7), Some(e7));
         assert_eq!(e5.intersect(e6), None);
     }
 
     #[test]
     fn swap_and_replaced_intervals() {
-        let e = Extent3d::spanning(p(3.0, -1.0, 2.0), p(1.0, 4.0, -2.0));
+        let e = Extent3d::spanning(p(3.0, -1.0, 2.0), p(1.0, 4.0, -2.0)).unwrap();
         assert_eq!(e.min(), p(1.0, -1.0, -2.0));
         assert_eq!(e.max(), p(3.0, 4.0, 2.0));
         assert_eq!(
@@ -1226,7 +1052,7 @@ mod tests {
 
     #[test]
     fn evaluate_exact_ends_and_corners() {
-        let e = Extent3d::spanning(p(0.1, 0.2, 0.3), p(0.7, 1.9, 2.3));
+        let e = Extent3d::spanning(p(0.1, 0.2, 0.3), p(0.7, 1.9, 2.3)).unwrap();
         assert_eq!(e.evaluate(1.0, 1.0, 1.0), e.max());
         assert_eq!(e.corners()[3], p(0.7, 1.9, 0.3));
         let edges = e.edges();
@@ -1237,8 +1063,8 @@ mod tests {
 
     #[test]
     fn distances() {
-        let a = Extent3d::spanning(p(0.0, 0.0, 0.0), p(1.0, 1.0, 1.0));
-        let b = Extent3d::spanning(p(4.0, 5.0, 1.0), p(6.0, 6.0, 2.0));
+        let a = Extent3d::spanning(p(0.0, 0.0, 0.0), p(1.0, 1.0, 1.0)).unwrap();
+        let b = Extent3d::spanning(p(4.0, 5.0, 1.0), p(6.0, 6.0, 2.0)).unwrap();
         assert_eq!(a.min_distance_squared(&b), 9.0 + 16.0);
         assert_eq!(a.min_distance(&b), 5.0);
         assert_eq!(a.max_distance_squared(&b), 36.0 + 36.0 + 4.0);
@@ -1247,7 +1073,7 @@ mod tests {
 
     #[test]
     fn line_intersections() {
-        let e = Extent3d::spanning(p(0.0, 0.0, 0.0), p(1.0, 1.0, 1.0));
+        let e = Extent3d::spanning(p(0.0, 0.0, 0.0), p(1.0, 1.0, 1.0)).unwrap();
         let hit = e
             .intersect_line(p(-1.0, 0.5, 0.5), v(1.0, 0.0, 0.0))
             .unwrap();
@@ -1271,39 +1097,14 @@ mod tests {
     }
 
     #[test]
-    fn bounded_and_approximation() {
-        let e = Extent3d::UNBOUNDED;
-        assert!(!e.is_bounded() && !e.any_bounds());
-        let a = e.approximate_unbounded(None, BOUNDED_INFINITE_PARAM);
-        assert_eq!(a.min(), p(-33.0, -33.0, -33.0));
-        let half = bx(-INFINITE_PARAMETER, 0.0, 0.0, 2.0, 1.0, 1.0);
-        assert_eq!(
-            half.boundary_types(),
-            [
-                BoundaryType::UnboundedMin,
-                BoundaryType::Bounded,
-                BoundaryType::Bounded
-            ]
-        );
-        assert!(half.any_bounds());
-        let (a, x) = half.approximate_unbounded_expanded(None, 10.0);
-        assert_eq!((a.x_min(), a.x_max()), (-18.0, 2.0));
-        let x = x.unwrap();
-        assert_eq!(x.x_min(), -18.0 - 10.0 / 12.0);
-        // A bounded extent is copied unchanged.
-        let b = Extent3d::spanning(p(0.0, 0.0, 0.0), p(1.0, 2.0, 3.0));
-        assert_eq!(b.approximate_unbounded(None, 1.0), b);
-    }
-
-    #[test]
     fn sphere_and_cone() {
-        let a = Extent3d::spanning(p(0.0, 0.0, 0.0), p(2.0, 2.0, 2.0));
+        let a = Extent3d::spanning(p(0.0, 0.0, 0.0), p(2.0, 2.0, 2.0)).unwrap();
         let s = a.sphere_bound();
         assert_eq!(s.center, p(1.0, 1.0, 1.0));
         assert_eq!(s.min_radius, 1.0);
         let (axis, ang) = a.cone_bound_to(&a).unwrap();
         assert_eq!((axis, ang), (Vec3::Z, PI));
-        let far = Extent3d::spanning(p(100.0, 0.0, 0.0), p(102.0, 2.0, 2.0));
+        let far = Extent3d::spanning(p(100.0, 0.0, 0.0), p(102.0, 2.0, 2.0)).unwrap();
         let (axis, ang) = a.cone_bound_to(&far).unwrap();
         assert_eq!(axis, v(100.0, 0.0, 0.0));
         assert!(ang > 0.0 && ang < 0.1);
@@ -1311,7 +1112,7 @@ mod tests {
 
     #[test]
     fn predicates() {
-        let e = Extent3d::spanning(p(0.0, 0.0, 0.0), p(1.0, 1.0, 1.0));
+        let e = Extent3d::spanning(p(0.0, 0.0, 0.0), p(1.0, 1.0, 1.0)).unwrap();
         assert!(e.contains_point(p(1.0 + 1e-13, 0.5, 0.5), 1e-12));
         assert!(!e.contains_point(p(1.1, 0.5, 0.5), 0.0));
         // Upstream bug kept: one end inside is enough.
@@ -1319,204 +1120,19 @@ mod tests {
         let (on, bn) = e.is_point_on_boundary(p(0.0, 1.0, 0.5), EFF_ZERO);
         assert!(on);
         assert_eq!(bn, v(1.0, -1.0, 0.0));
-        assert!(Extent3d::from_point(p(1.0, 1.0, 1.0)).is_point_sized(EFF_ZERO));
+        assert!(Extent3d::from_point(p(1.0, 1.0, 1.0))
+            .unwrap()
+            .is_point_sized(EFF_ZERO));
         assert!(e.is_contained_by(&e, 0.0));
-        let g = e.expanded(1.0);
+        let g = e.expanded(1.0).unwrap();
         assert_eq!(g.min(), p(-1.0, -1.0, -1.0));
         assert_eq!(e.shrunk(0.6), None);
         assert_eq!(e.shrunk(0.25).map(|b| b.min()), Some(p(0.25, 0.25, 0.25)));
-        let g = g.expanded_relative(0.5);
+        let g = g.expanded_relative(0.5).unwrap();
         assert_eq!(g.max(), p(3.5, 3.5, 3.5));
         assert_eq!(g.max_length(), 6.0);
         assert_eq!(g.max_dimension(), 3.5);
         assert_eq!(e.mid(), p(0.5, 0.5, 0.5));
-    }
-
-    /// Upstream's literal two-step `SmExtent3d::ApproximateUnbounded` axis evaluation
-    /// (`SmExtent3d.cpp:1784-1849`), which mutates `sMin` in place before computing `sMax`.
-    fn upstream_mutated_approx_axis(
-        ty: BoundaryType,
-        min: f64,
-        max: f64,
-        center: Option<f64>,
-        c: f64,
-        h: f64,
-    ) -> (f64, f64) {
-        let max_near_center = center.is_none_or(|pc| max < pc + h);
-        let min_near_center = center.is_none_or(|pc| min > pc - h);
-        let new_min = match (ty, center) {
-            (BoundaryType::UnboundedMin, Some(pc)) if !max_near_center => pc - h,
-            (BoundaryType::UnboundedMin, _) => max - 2.0 * h,
-            (BoundaryType::UnboundedMax, Some(pc)) if !min_near_center => pc - h,
-            (BoundaryType::Unbounded, _) => c - h,
-            (BoundaryType::UnboundedMax | BoundaryType::Bounded | BoundaryType::Unknown, _) => min,
-        };
-        let new_min_near_center = center.is_none_or(|pc| new_min > pc - h);
-        let new_max = match (ty, center) {
-            (BoundaryType::UnboundedMin, Some(pc)) if !max_near_center => pc + h,
-            (BoundaryType::UnboundedMax, Some(pc)) if !new_min_near_center => pc + h,
-            (BoundaryType::UnboundedMax, _) => new_min + 2.0 * h,
-            (BoundaryType::Unbounded, _) => c + h,
-            (BoundaryType::UnboundedMin | BoundaryType::Bounded | BoundaryType::Unknown, _) => max,
-        };
-        (new_min, new_max)
-    }
-
-    fn same_bits(a: f64, b: f64) -> bool {
-        (a.is_nan() && b.is_nan()) || a.to_bits() == b.to_bits()
-    }
-
-    #[test]
-    fn wr4_unbounded_max_center_regimes_and_expanded() {
-        // 1. center = None: keeps original min, max = min + 2*h, expanded pushes max by h/12.
-        let e = bx(-5.0, 1.0, -2.0, INFINITE_PARAMETER, 3.0, 4.0);
-        let (a, x) = e.approximate_unbounded_expanded(None, 10.0);
-        assert_eq!(a, bx(-5.0, 1.0, -2.0, 15.0, 3.0, 4.0));
-        assert_eq!(e.approximate_unbounded(None, 10.0), a);
-        assert_eq!(x, Some(bx(-5.0, 1.0, -2.0, 15.0 + 10.0 / 12.0, 3.0, 4.0)));
-
-        // 2. center = Some(pc) with min > pc - h (-5.0 > -10.0): keeps original min.
-        let (a, x) = e.approximate_unbounded_expanded(Some(p(0.0, 50.0, 50.0)), 10.0);
-        assert_eq!(a, bx(-5.0, 1.0, -2.0, 15.0, 3.0, 4.0));
-        assert_eq!(x, Some(bx(-5.0, 1.0, -2.0, 15.0 + 10.0 / 12.0, 3.0, 4.0)));
-
-        // 3. center = Some(pc) with min == pc - h (-10.0 == -10.0): focuses on [pc - h, pc + h].
-        let tie = bx(-10.0, 1.0, -2.0, INFINITE_PARAMETER, 3.0, 4.0);
-        let (a, x) = tie.approximate_unbounded_expanded(Some(p(0.0, 50.0, 50.0)), 10.0);
-        assert_eq!(a, bx(-10.0, 1.0, -2.0, 10.0, 3.0, 4.0));
-        assert_eq!(x, Some(bx(-10.0, 1.0, -2.0, 10.0 + 10.0 / 12.0, 3.0, 4.0)));
-
-        // 4. center = Some(pc) with min < pc - h (-100.0 < -6.0): focuses on [pc - h, pc + h].
-        let deep = bx(-100.0, 1.0, -2.0, INFINITE_PARAMETER, 3.0, 4.0);
-        let (a, x) = deep.approximate_unbounded_expanded(Some(p(4.0, 50.0, 50.0)), 10.0);
-        assert_eq!(a, bx(-6.0, 1.0, -2.0, 14.0, 3.0, 4.0));
-        assert_eq!(x, Some(bx(-6.0, 1.0, -2.0, 14.0 + 10.0 / 12.0, 3.0, 4.0)));
-
-        // 5. 1-ULP witness where `(pc - h) + 2*h != pc + h` (`pc = 1.0, h = 0.3`):
-        // because `(pc - h) > (pc - h)` is false, both upstream's mutated-`sMin`
-        // expression and `approx_axis` select `pc + h` directly.
-        let (pc, h) = (1.0_f64, 0.3_f64);
-        assert_ne!(((pc - h) + 2.0 * h).to_bits(), (pc + h).to_bits());
-        let (lo_dir, hi_dir) = approx_axis(
-            BoundaryType::UnboundedMax,
-            -10.0,
-            INFINITE_PARAMETER,
-            Some(pc),
-            pc,
-            h,
-        );
-        let (lo_mut, hi_mut) = upstream_mutated_approx_axis(
-            BoundaryType::UnboundedMax,
-            -10.0,
-            INFINITE_PARAMETER,
-            Some(pc),
-            pc,
-            h,
-        );
-        assert_eq!(lo_dir.to_bits(), (pc - h).to_bits());
-        assert_eq!(hi_dir.to_bits(), (pc + h).to_bits());
-        assert_eq!(lo_dir.to_bits(), lo_mut.to_bits());
-        assert_eq!(hi_dir.to_bits(), hi_mut.to_bits());
-    }
-
-    #[test]
-    fn wr4_mixed_boundary_types_and_negative_half_size() {
-        // X: UnboundedMin [-inf, 2], Y: UnboundedMax [-50, +inf], Z: Unbounded [-inf, +inf].
-        let mixed = bx(
-            -INFINITE_PARAMETER,
-            -50.0,
-            -INFINITE_PARAMETER,
-            2.0,
-            INFINITE_PARAMETER,
-            INFINITE_PARAMETER,
-        );
-        let (a0, x0) = mixed.approximate_unbounded_expanded(None, 12.0);
-        assert_eq!(a0, bx(-22.0, -50.0, -12.0, 2.0, -26.0, 12.0));
-        assert_eq!(x0, Some(bx(-23.0, -50.0, -13.0, 2.0, -25.0, 13.0)));
-
-        let (a1, x1) = mixed.approximate_unbounded_expanded(Some(p(-20.0, 5.0, 3.0)), 12.0);
-        assert_eq!(a1, bx(-32.0, -7.0, -9.0, -8.0, 17.0, 15.0));
-        assert_eq!(x1, Some(bx(-33.0, -7.0, -10.0, -8.0, 18.0, 16.0)));
-
-        // Bounded extent is returned unchanged even when a center is supplied.
-        let bounded = Extent3d::spanning(p(-2.0, 0.0, 1.0), p(3.0, 4.0, 5.0));
-        let (ab, xb) = bounded.approximate_unbounded_expanded(Some(p(100.0, 200.0, 300.0)), 12.0);
-        assert_eq!(ab, bounded);
-        assert_eq!(xb, Some(bounded));
-
-        // Negative half_size: primary extent swaps per-axis via `spanning`, whereas
-        // `SetMinMax` rejects the inverted expanded extent (`None`).
-        let umax = bx(3.0, 0.0, 0.0, INFINITE_PARAMETER, 1.0, 1.0);
-        let (an0, xn0) = umax.approximate_unbounded_expanded(None, -6.0);
-        assert_eq!(an0, bx(-9.0, 0.0, 0.0, 3.0, 1.0, 1.0));
-        assert_eq!(xn0, None);
-
-        let (an1, xn1) = umax.approximate_unbounded_expanded(Some(p(0.0, 0.0, 0.0)), -6.0);
-        assert_eq!(an1, bx(-6.0, 0.0, 0.0, 6.0, 1.0, 1.0));
-        assert_eq!(xn1, None);
-    }
-
-    #[test]
-    fn wr4_approx_axis_bit_identical_to_mutated_min_across_ieee754() {
-        let vals = [
-            f64::NEG_INFINITY,
-            -1.0e300,
-            -INFINITE_PARAMETER,
-            -100.0,
-            -10.0,
-            -1.0,
-            -0.3,
-            -1.0e-300,
-            -0.0,
-            0.0,
-            1.0e-300,
-            0.1,
-            0.3,
-            1.0 / 3.0,
-            1.0,
-            10.0,
-            100.0,
-            INFINITE_PARAMETER,
-            1.0e300,
-            f64::INFINITY,
-            f64::NAN,
-        ];
-        let centers: Vec<Option<f64>> = core::iter::once(None)
-            .chain(vals.into_iter().map(Some))
-            .collect();
-
-        for v in vals {
-            for &center in &centers {
-                let c = center.unwrap_or(0.0);
-                for h in vals {
-                    for (ty, min, max) in [
-                        (BoundaryType::UnboundedMax, v, INFINITE_PARAMETER),
-                        (BoundaryType::UnboundedMin, -INFINITE_PARAMETER, v),
-                        (
-                            BoundaryType::Unbounded,
-                            -INFINITE_PARAMETER,
-                            INFINITE_PARAMETER,
-                        ),
-                        (BoundaryType::Bounded, v, 5.0),
-                        (BoundaryType::Unknown, v, 5.0),
-                    ] {
-                        let (lo_a, hi_a) = approx_axis(ty, min, max, center, c, h);
-                        let (lo_b, hi_b) = upstream_mutated_approx_axis(ty, min, max, center, c, h);
-                        assert!(
-                            same_bits(lo_a, lo_b) && same_bits(hi_a, hi_b),
-                            "mismatch for {ty:?} min={min} max={max} center={center:?} h={h}: \
-                             direct=({lo_a}, {hi_a}) vs mutated=({lo_b}, {hi_b})"
-                        );
-                    }
-                }
-            }
-        }
-
-        // NaN coordinate / center / half_size through the public API neither panics nor diverges.
-        let nan_ext = bx(f64::NAN, 0.0, 0.0, INFINITE_PARAMETER, 1.0, 1.0);
-        let (a_nan, x_nan) = nan_ext.approximate_unbounded_expanded(Some(p(2.0, 0.0, 0.0)), 5.0);
-        assert_eq!(a_nan, bx(-3.0, 0.0, 0.0, 7.0, 1.0, 1.0));
-        assert_eq!(x_nan, Some(bx(-3.0, 0.0, 0.0, 7.0 + 5.0 / 12.0, 1.0, 1.0)));
     }
 
     #[test]
@@ -1530,9 +1146,32 @@ mod tests {
         assert!(b.meets_ray(p(10.05, 5.0, 50.0), v(0.0, 0.0, -1.0), 0.01));
         assert!(!b.meets_ray(p(5.0, 5.0, 50.0), v(0.0, 0.0, 1.0), 1e-6));
         assert!(!b.meets_ray(p(25.0, 5.0, 50.0), v(0.0, 0.0, -1.0), 1e-6));
-        // Non-finite inputs return true conservatively.
-        let nan_box = bx(f64::NAN, 0.0, 0.0, 10.0, 10.0, 10.0);
-        assert!(nan_box.meets_ray(p(5.0, 5.0, 50.0), v(0.0, 0.0, -1.0), 1e-6));
+        // Non-finite inputs return true conservatively (a box cannot hold one).
         assert!(b.meets_ray(p(f64::NAN, 5.0, 50.0), v(0.0, 0.0, -1.0), 1e-6));
+    }
+
+    #[test]
+    fn non_finite_ends_are_refused() {
+        let inf = f64::INFINITY;
+        assert_eq!(Extent3d::from_bounds(0.0, 0.0, 0.0, 1.0, inf, 1.0), None);
+        assert_eq!(
+            Extent3d::from_bounds(f64::NAN, 0.0, 0.0, 1.0, 1.0, 1.0),
+            None
+        );
+        assert_eq!(Extent3d::from_bounds(0.0, 0.0, 2.0, 1.0, 1.0, 1.0), None);
+        assert_eq!(
+            Extent3d::spanning(p(0.0, 0.0, 0.0), p(-inf, 0.0, 0.0)),
+            None
+        );
+        assert_eq!(Extent3d::from_point(p(0.0, f64::NAN, 0.0)), None);
+        let b = bx(0.0, 0.0, 0.0, 1.0, 1.0, 1.0);
+        assert_eq!(
+            bx(0.0, 0.0, 0.0, f64::MAX, 1.0, 1.0).expanded(f64::MAX),
+            None
+        );
+        assert_eq!(b.expanded(inf), None);
+        assert_eq!(b.expanded(f64::NAN), Some(b));
+        assert_eq!(b.expanded_relative(-1.0), Some(b));
+        assert_eq!(b.expanded(0.5), Some(bx(-0.5, -0.5, -0.5, 1.5, 1.5, 1.5)));
     }
 }

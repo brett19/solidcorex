@@ -1206,6 +1206,49 @@ pub struct ReadError { pub at: usize, pub cause: ReadCause }
     The bound is sized from the model, not fixed, because the pin's 1.2e6 rounds by 3.4e-11 in
     double (#18922).
   - Neither ±inf nor a sentinel is ever stored.
+  - **Built 11-27 (builder K).** Decisions taken in the build, for review:
+    - `Extent1d::from_bounds` is now `Extent1d::new(min, max) -> Option<Extent1d>`: `None` for
+      a non-finite or reversed end. `Extent2d`/`Extent3d::from_bounds` keep their names (they
+      take per-axis ends) and refuse the same.
+    - Every constructor or transform whose result could leave the finite range returns
+      `Option`: `point`, `spanning`, `translated`, `scaled`, `expanded`, `expanded_relative`
+      on `Extent1d`; `from_point`, `spanning`, `expanded`, `expanded_vec`,
+      `expanded_relative`, `scaled`, `scaled_xy` on `Extent2d`; `spanning`, `from_point`,
+      `expanded`, `expanded_relative` on `Extent3d`. `None` means an end overflowed (or an
+      input was not finite); no caller in the workspace reaches it on its data. `Hull`'s
+      finish is `None` when a fed value is infinite.
+    - `Extent1d::intersect_periodic` refuses a period that is not finite (`InvalidInput`).
+      The pin answers on (NaN: no pieces; ±inf: the first interval whole, even when the two
+      are apart); pin defect `e1_intersect_periodic` holds scx to the refusal.
+    - Removed: `UNBOUNDED`, `BoundaryType`, `boundary_type(s)`, `is_bounded`, `any_bounds`,
+      `approximate_unbounded*` (the half-size of 12 for an unbounded end; P2's
+      `ParamDomain::working` replaces it with a named rule), `math::{INFINITE_PARAMETER,
+      INFINITE_PARAMETER_SQRT, BOUNDED_INFINITE_PARAM, is_infinite_param}` and
+      `Transform::natural_param_domain` (it answered an all-unbounded box; P2 brings it back
+      as one `ParamDomain` per direction).
+    - `scx_num::domain::{Clamp, Reach}`: `Clamp::Sample` (33), `Clamp::Squared(Reach)` (the
+      root of the reach, rounded down so its square never exceeds the reach; at reach 1234567
+      it is the pin's 1111.111 to 1e-3) and, beyond the brief, **`Clamp::Linear(Reach)`** for
+      the kinds whose point is linear in the parameter (the pin's 1234567 used as a bound).
+      `Reach::covering(model_box, origin)` is twice the farthest-corner distance. *For
+      ruling:* whether `Linear` should exist, and whether `Reach` comes from the model box
+      (proposed) or the resolution.
+    - `scx-algo`: `ObjsInVoxels::map_voxel_index_to_bbox` closes the last voxel on each axis
+      on the box's max where the pin's `min + n * step` rounds to infinity (a box reaching the
+      end of the `f64` range); other ends are the pin's bits. `local_solve_nd`'s clamp lost
+      its `is_bounded` guards (a bounded domain is always bounded).
+    - Difftest: the facade maps the pin's extents with a non-finite or `±SM_INFINITE_PARAMETER`
+      end (`plain_ends`) to no extent on both sides. Nine truth defects whose disagreements
+      were NaN-bound extents now apply to no input and were removed (`e1_max_dimension`,
+      `e1_union_intersect`, `e1_periodic_boundary`, `e2_max_dimension`, `e2_union_intersect`,
+      `e3_max_length`, `e3_sphere_min_radius`, `e3_union_intersect_far`,
+      `scaled_zero_of_boxes`); pin defect `ht_voxels` is new (the pin's voxel boxes at the
+      `f64` range end have infinite ends); `e3_intersect_line`/`e3_line_hit_count` now cover
+      only a line that is not finite through a real box. Totals after the rebase onto the
+      landed `scx-nurbs` and `scx-bench`: 356 diffs, 830,314 inputs, 0 mismatches.
+    - Migrations from the rebase: `scx_nurbs::KnotVector` holds its domain as one `Extent1d`
+      (built once in `new`; `domain()` is now `const`); `scx-bench` calls `Extent1d::new`, and its edge intervals and boxes reach to `f64::MAX` where
+      they reached to infinity.
 - **P1. `Frame` (and `Rigid`) in `scx-num`.**
   - Every analytic kind is a frame plus sizes. 01 §1.1 promises frames in `scx-num`, and 57 §5.2
     lists `From<Frame> for Rigid`.
