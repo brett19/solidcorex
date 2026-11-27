@@ -1944,6 +1944,120 @@ runs once per intersection call and `NurbsSurface` owns its storage.
 Open from SU3: the inversion cost comparison (SU4); a `to_nurbs` into a caller's buffer if a
 profile ever asks.
 
+### 4.9 SU8 as built (11-27)
+
+Decided by analysis and an adversarial pass; proposed for review, not yet ruled.
+
+```rust
+#[non_exhaustive] #[derive(Debug, Clone, PartialEq)]
+pub enum AnyCurve { Free(Curve), OnSurface(CurveOnSurface) }   // at most 112 bytes
+pub struct CurveOnSurface { uv: Curve2, surface: Arc<Surface> } // private fields
+impl CurveOnSurface {
+    pub fn new(uv: Curve2, surface: impl Into<Arc<Surface>>) -> Self;
+    pub fn uv(&self) -> &Curve2;  pub fn surface(&self) -> &Arc<Surface>;
+    pub fn domain(&self) -> ParamDomain;  pub fn point(&self, t: f64) -> Point3;
+    pub fn jet<const D: usize>(&self, t: f64, side: Approach) -> CurveJet<D>;
+    pub fn eval_many(&self, ts: &[f64], out: &mut [Point3]);
+}
+// AnyCurve: domain, point, jet::<D>, eval_many by match; From<Curve>, From<CurveOnSurface>.
+```
+
+Why SU8 next, not SU5 or SU6: SU5 moved to `scx-ssi` as SS5 (M3). SU6 depends on CU4, which
+is not on main. SU8 depends on CU2 and SU2, both done.
+
+- **A struct, not a one-arm `SurfaceCurve` enum.** 56 §7.1 names the arm `OnSurface(SurfaceCurve)`.
+  Only the parameter-space curve exists in step 2, so an enum would have one arm and nothing
+  to tell apart. Against it: speculative structure. The struct can become an arm of such an
+  enum when another kind of on-surface curve exists.
+- **The surface behind an `Arc`, not held by value.** The curves on one face share one
+  surface. By value, `Surface` (up to 128 bytes) would sit in every pcurve and push
+  `AnyCurve` past the free curve's size. With the `Arc`, the arm is a `Curve2` (at most
+  64 bytes) and a pointer, and `AnyCurve` stays at 112 bytes or less. `new` takes
+  `impl Into<Arc<Surface>>`, so a caller can pass a `Surface` or an `Arc` it already holds.
+- **None of the pin's extra state.** The pin's `CrvOnSurf` holds a uv domain of interest,
+  owner flags, a break cache, an approximation cache and a curve cache. The `Arc` replaces
+  the owner flags. The domain is the uv curve's, and the caller trims as it does for any
+  curve. The caches are derived data, which A3 says to memoise in the caller if a profile
+  asks. Against keeping them: interior mutability in a value type, and a `PartialEq` that
+  would have to ignore them.
+- **`new` cannot fail.** Every `Curve2` has a point at every `t`, and every surface has a
+  point at every `uv`. A NURBS surface continues its end pieces past its knots, and the
+  analytic kinds are defined everywhere. The pin's constructor checks only its nesting
+  depth, which does not arise here. Against `Result`: no arm of it is reachable.
+- **The surface's side in each direction follows the curve, not `side`** (more correct than
+  the pin). The pin's `evaluate` passes `from_left` as the side in both u and v. Where the uv
+  curve crosses a knot line backward (u falling as t rises), that takes the partials of the
+  piece the curve is leaving. scx reads the side from the sign of the coordinate's first
+  nonzero derivative, turned for an odd order when `t` moves down. When every derivative to
+  order D is zero, no partial along that direction reaches the result, and `side` is used.
+  This also handles a curve tangent to a knot line (`u' = 0`, `u'' < 0`), which stays below
+  the line on both sides. Tested on a C0 crease, `(2u, v, 0)` meeting `(1, v, 2u - 1)`: each
+  case matches the one-sided difference, and swapping in the pin's rule fails both tests.
+  Where the sides agree, the result is the pin's.
+- **Chain rule to any order, written out to 3; the pin caps at 3.** Orders 1 to 3 use the
+  pin's `lift_second_derivative` and `lift_third_derivative` with the same grouping and sum
+  order, so from the same partials they give the pin's bits. Past order 3, the Taylor series
+  is used: with `du = sum u^(k) h^k / k!`, take `sum S^(i,j)/(i! j!) du^i dv^j` truncated to
+  degree D, then multiply by `n!`. The alternative was Taylor for every order: one code path,
+  but it cost +40 to +100 ns at order 3 against +6 ns for the written-out form (table
+  below). Both paths are checked to D = 6 against the composite polynomial in exact
+  rationals, with random dyadic jets, to 1e-14 of the absolute-value bound. They agree with
+  each other at D ≤ 3, bit for bit at order 1.
+- **No `point_over` yet.** `Surface` has no scalar-generic evaluation (open from SU2), so the
+  composite has none.
+- **`eval_many` goes through a 64-point stack buffer of uv points** into `Surface::eval_many`,
+  so it needs no allocation and gives `point`'s bits.
+- **`#[non_exhaustive]` and a size assert (≤ 112 bytes).** The intersection-curve arm (step 5)
+  and the in-volume and projected arms (56 §7.1) join later without breaking callers.
+
+Truth:
+
+- Unit tests (3): the exact composite to D = 6; written-out against Taylor; the side rule.
+- `tests/any_curve.rs` (7):
+  - a uv `Circle2` on a `Plane` equals the 3-D `Circle` to order 8, at 1e-13 of scale, 40
+    random frames;
+  - the crease crossed backward, and the crease touched;
+  - `eval_many` against `point` bit for bit, over 0 to 200 points on a sphere, a NURBS and
+    the free arm, plus the length panic;
+  - the `Free` arm bit for bit against `Curve`'s calls;
+  - the `OnSurface` arm as `Surface::point` at `Curve2::point`.
+
+No difftest. Orders 1 to 3 are the pin's formulas term for term. The surface jets are already
+difftested in `t_surface`, the uv curve jets in CU2, and the side rule differs from the pin on
+purpose.
+
+Cost (A3; release build, ns per call, best of 7 over 1e6 calls). The box was loaded (load
+average 8 to 12), so the figures are good to about 5%. "Before" is the direct calls a caller
+makes today, with the pin's written-out lift added for jets.
+
+| | before | `AnyCurve` |
+|---|---:|---:|
+| free circle `point` (`Curve::point`) | 29.1 | 29.9 |
+| free circle `jet::<2>` | 27.4 | 27.5 |
+| sphere `point` (`Curve2::point` + `Surface::point`) | 47.8 | 48.0 |
+| sphere `jet::<2>` (uv jet + surface jet + lift) | 88.0 | 94.6 |
+| sphere `jet::<3>` | 115.8 | 126.2 |
+| bicubic NURBS `point` | 126.0 | 125.6 |
+| bicubic NURBS `jet::<2>` | 321.7 | 315.3 |
+| bicubic NURBS `jet::<3>` | 443.5 | 405.1 |
+| sphere `eval_many`, per point (against a loop of `point`) | 50.3 | 41.9 |
+| bicubic NURBS `eval_many`, per point | 123.6 | 108.1 |
+
+The free arm and `point` cost the same as before. On the sphere, jets cost up to 9% more. The
+added work is the side rule: two scans of D values each. On the NURBS surface the
+differences are within noise. Before the written-out path, the Taylor-only lift cost 224 ns
+at order 3 on the sphere and 588 ns on the NURBS surface.
+
+From research 66: nothing more to take. Its "keep derived data, do not rebuild" (§1 point 3)
+is A3's memoise-in-the-caller, which is why there is no cache here.
+
+Open from SU8:
+- `point_over` waits for a scalar-generic `Surface` evaluation;
+- the intersection-curve arm comes in step 5;
+- normals along the curve (the pin's `evaluate_surface_normal`) are left to callers, which use
+  `Surface::normal` at `uv().point(t)` with the sides from the same rule. The rule would be
+  exposed if a second caller needs it.
+
 ## 5. `scx-ssi`, the analytic part
 
 The pin's sources are `intersect/surface_intersector` (`p1`-`p5`) and `adv_surface_intersector`.

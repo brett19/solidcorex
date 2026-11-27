@@ -12,6 +12,8 @@
 //!   cone has a normal everywhere and returns it directly; the cone's is `None` at its apex.
 //! - [`Surface`]: every kind as one value (the five and a NURBS surface behind an `Arc`),
 //!   dispatched by `match` with the kind's bits (63 §4.7).
+//! - [`AnyCurve`]: a free [`Curve`](scx_curve::Curve), or a [`CurveOnSurface`] (a uv curve on
+//!   a shared [`Surface`]) with its point and its jet by the chain rule (63 §4.9).
 //!
 //! # The uv (research 63 D13)
 //!
@@ -36,6 +38,7 @@
 //! The pin's other layouts (swapped or reversed directions, part turns, reparameterised
 //! knots) are not kinds here; reading them is the reader's map, as STEP's is.
 
+mod any_curve;
 mod arcs;
 mod common;
 mod cone;
@@ -47,6 +50,7 @@ mod surface;
 mod to_nurbs;
 mod torus;
 
+pub use any_curve::{AnyCurve, CurveOnSurface};
 pub use cone::Cone;
 pub use cylinder::Cylinder;
 pub use error::{Size, SurfaceError};
