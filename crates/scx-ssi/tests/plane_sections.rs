@@ -32,7 +32,7 @@ use scx_testkit::curve_surface::{self as cs, SurfaceKind};
 use scx_testkit::dd::Dd;
 use scx_testkit::ssi::{self, Section};
 
-/// The tolerance asked for: the pin's default (`EFF_ZERO_SQRT`).
+/// The tolerance asked for: `2^-26`, tighter than the pin's default (`EFF_ZERO_SQRT`, 1e-6).
 const TOL: f64 = 1.490_116_119_384_765_6e-8;
 /// How far an answer's point may lie from a surface (the closed forms' rounding).
 const ON: f64 = 1e-9;
@@ -346,6 +346,10 @@ fn owed(s: &Side, pl: &Side, truth: &[ssi::Piece]) -> Vec<Point3> {
                     .map(|i| o + d * (t0 - span + 2.0 * span * f64::from(i) / 1000.0))
                     .collect()
             }
+            // A branch runs both ways from its vertex.
+            ssi::Curve::Hyperbola { .. } => (0..=4000)
+                .map(|i| tpoint(piece.curve.point(Dd::new(-10.0 + 20.0 * f64::from(i) / 4000.0))))
+                .collect(),
             _ => (0..720)
                 .map(|i| tpoint(piece.curve.point(Dd::new(TAU * f64::from(i) / 720.0))))
                 .collect(),
@@ -408,12 +412,19 @@ fn check(name: &str, s: &Side, pl: &Side, expect: Expect) -> Closed<Intersection
     );
     assert_eq!(via, got, "{name}: intersect differs from section_by_plane");
     let truth = ssi::intersect(&s.kind, &pl.kind);
-    if expect == Expect::General {
+    // A cylinder or cone wholly off the plane is empty even where its section has no
+    // closed form: the truth's samples check it below.
+    let off = matches!(got.as_solved(), Some(Intersection::Empty))
+        && matches!(s.surface, Surface::Cylinder(_) | Surface::Cone(_));
+    if expect == Expect::General && !off {
         if let (Some(Intersection::Empty), Surface::Torus(k)) = (got.as_solved(), &s.surface) {
-            // Past the bounding sphere, where the truth has no closed form.
-            let d = n_of(pl).dot(pl_origin(pl) - k.frame().origin());
+            // Past the torus's extent along the normal (the core circle's `major s` and the
+            // tube's `minor`), where the truth has no closed form.
+            let n = n_of(pl);
+            let d = n.dot(pl_origin(pl) - k.frame().origin());
+            let s = n.cross(*k.frame().z()).length();
             assert!(
-                d.abs() > k.major().mm() + k.minor().mm(),
+                d.abs() > s * k.major().mm() + k.minor().mm(),
                 "{name}: torus empty inside the bound"
             );
             return got;

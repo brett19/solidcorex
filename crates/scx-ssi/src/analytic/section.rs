@@ -112,6 +112,21 @@ fn scale(a: [f64; 3], k: f64) -> [f64; 3] {
 
 const Z: [f64; 3] = [0.0, 0.0, 1.0];
 
+/// Whether the part of a cylinder or cone between two rims, each `(height, radius)` in its
+/// axes, lies off the plane `n . p = d` (`nz` and `s` the normal's axial and radial parts)
+/// by more than `tol` on one side. Each generator is a segment from one rim to the other,
+/// so the part lies in the rims' convex hull; a rim's signed distances from the plane span
+/// `nz v - d` give or take `|rho| s`.
+fn apart(d: f64, nz: f64, s: f64, rims: [(f64, f64); 2], tol: f64) -> bool {
+    let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+    for (v, rho) in rims {
+        let (c, w) = (nz * v - d, rho.abs() * s);
+        lo = lo.min(c - w);
+        hi = hi.max(c + w);
+    }
+    lo > tol || hi < -tol
+}
+
 enum PlanePlane {
     Coincident,
     Other,
@@ -190,6 +205,9 @@ fn cylinder(
     let nz = nl[2];
     let d = n.dot(p0 - axes.o);
     let (_, [v0, v1]) = step_bounds(|p| k.to_step(p), se);
+    if apart(d, nz, s, [(v0, r), (v1, r)], tol) {
+        return Some(());
+    }
     if nz != 0.0 && r * s <= tol * nz.abs() {
         // Square to the axis within the tolerance: a circle.
         let c = axes.point([0.0, 0.0, d / nz]);
@@ -256,6 +274,10 @@ fn cone(k: &Cone, se: &Extent2d, n: Vec3, p0: Point3, tol: f64, found: &mut Foun
     let apex = axes.point([0.0, 0.0, za]);
     let delta = n.dot(p0 - apex);
     let (_, [v0, v1]) = step_bounds(|p| k.to_step(p), se);
+    let d = n.dot(p0 - axes.o);
+    if apart(d, nz, s, [(v0, r + kk * v0), (v1, r + kk * v1)], tol) {
+        return Some(());
+    }
     let den = nz.abs() - s * kk.abs();
     if nz != 0.0 && den > 0.0 {
         let hc = delta / nz;
@@ -352,8 +374,9 @@ fn torus(
     let (nl, s, _, e_t) = lean(&axes, n);
     let nz = nl[2];
     let d = n.dot(p0 - axes.o);
-    if d.abs() - (big + small) > tol {
-        // Past the bounding sphere.
+    if d.abs() - (s * big + small) > tol {
+        // Past the torus's extent along `n`: the core circle's `big s`, and the tube's
+        // `small` about it (the torus is the circle swept by a ball).
         return Some(());
     }
     if nz != 0.0 && s * (big + small) <= tol * nz.abs() {
