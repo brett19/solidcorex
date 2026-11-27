@@ -1455,6 +1455,51 @@ Proposed row 8 amends 01's plan text, not an 04 row:
 | D7 | Partial primitives (angle ranges) | in step 4; later | later, `Unsupported` by name (no slice caller) |
 | D8 | Parabola and hyperbola edges against faces | widen SU6 in step 4; `Unsupported(EdgeKind)` | `Unsupported`; no in-scope case makes one |
 
+### 12.4 Rulings after the adversarial pass (11-27, coordinator, for Brett's review)
+
+A second, independent reviewer read §12.1 and §12.3 against the pin and scx-brep on main. These rulings replace the proposals where they differ.
+
+1. **Signatures (row 1): kept.** Operations take finished `&Brep` operands and return `Done`. Whole-body edits that read no cells are `Draft` methods. Constructors return `Made<R>`. There is never a `&mut Brep`.
+   - b's copied faces get new ids in a's draft, with lineage through the operand tag.
+   - Record-identical operands are not special-cased in step 4.
+   - Change if: DT3 shows table copy-on-write above 10% of op time in a feature chain. Then operands the operation consumes take `Brep` by value (`into_draft`).
+2. **Classification (row 2): changed.** The signature is `classify_point(&Brep, p, &mut Budget, &Stop) -> Result<PointClass, BodyqError>`.
+   - **On test first.** A point is `On` when its distance to an entity is within coincidence. A uv that is only near, with no edge within coincidence, is not On.
+   - **Rays.** Then the nearest clean hit over a fixed table of directions in general position: irrational components, none in a coordinate plane. A rhombic dodecahedron centred on p defeats an axis and diagonal table.
+   - **Fallback.** If no ray is clean, the nearest boundary point decides. It is found by closed-form projection onto the nearby analytic faces, edges and vertices, pruned by the box tree. The answer comes from the face side, or at an edge or vertex from its normal cone (angle-weighted pseudonormal).
+   - There is no `Unknown`, and no `Unsupported` for analytic bodies.
+3. **Boolean scope (row 3): kept.** The five out-of-scope `boolean_api` cases are ported as expected-`Unsupported` tests, each naming the step that lifts it.
+4. **Boolean construction (row 4): changed.** Lower dimension first, imprint into `a.edit()` with shared edges, no stitch, and no rewriting of operand records.
+   - **Same operand.** Two vertices of one operand within coincidence are `Refused`, as the merged-points row has it. Vertex clearance is a property of one body.
+   - **Across operands.** A vertex of a and a vertex of b within coincidence are identified: a's record is kept, b's accuracy is folded in as `Measured`, and `Changes` records a coincident lineage for b's vertex. Mated parts and coplanar-union share corners, so refusing them would refuse valid input.
+   - **This amends the 11-27 merged-points row,** which is now read per operand.
+   - **Measured gaps.** Every new vertex and edge end records its measured gap against its curves and p-curves as `Measured` accuracy when it exceeds the resolution, not only after a merge. This covers the grazing-cut gap the pin's `update_tolerances_after_boolean` patched (pin #16187, Test #82).
+   - **Change if:** an import operand's accuracy swallows a feature of the other operand (the pin's `matched_tolerances` case, #3292). That gets a T12 recipe in step 6.
+   - **One resolution.** An operation takes one `Document`, so its operands share one resolution. Joining bodies from two documents goes through an explicit rebase operation, which is a later task, and is not an operation-time `Refused`.
+5. **Mass (row 5): kept, with D2.** It takes the pieces it reads.
+6. **Tessellation (row 6): changed.** The signature is `tessellate(&Brep, &TessSpec, &mut Budget, &Stop) -> Result<Mesh, TessError>`, with `Exhausted` and `Cancelled` as everywhere else.
+   - The chord is a bound on analytic faces, proved per triangle by a refinement test on the kind's maximum curvature over the patch.
+   - For a torus, that is max(1/r, 1/|R−r|). §6 is to be read with that correction, not its largest radius.
+   - Edge sagittas bound edge chords only. Interior triangles need the per-triangle test.
+7. **Outcome difftest (row 7): changed for T10.** A point p is in the `Band` when the interval enclosure of the CSG function over p ± δ contains 0, with δ ≥ √3·coincidence.
+   - Points outside the band are judged In or Out. Band points accept any answer and are counted, not judged.
+   - Samplers keep at least 95% of points certain.
+   - The determinism dump writes through scx-record's format.
+   - The work baseline is side-channel counts against the pin's pairs tried (572/288), with a 10% gate.
+8. **Row 8: kept.** `scx-stitch` and `scx-hlr` are created with their first ported function. The planned layer edges are a comment in `layers.txt`.
+
+**Open decisions**
+- D1: `scx_brep::op`.
+- D2: the pieces.
+- D3: `Unsupported { HornTorus }`.
+- D4: our own constrained Delaunay on scx-num's predicates.
+- D6: decided in step 5.
+- D7: later, as `Unsupported` by name.
+- D8: `Unsupported(EdgeKind)`.
+- **D5: changed.** finish already accepts a vertex shared by two solid regions and an edge with more than two fins (check.rs has no vertex-manifold rule and no fin limit). So BO7 builds vertex and edge contacts in step 4.
+  - A touch inside a face (a sphere tangent to a box face) needs a point loop, which scx-brep does not have. It is `Unsupported(NonManifold)` until a point-loop row exists.
+  - New task **BR10**: finish gains a geometric radial-order check for edges with more than two fins. The order is only the caller's duty today, so a wrong order passes.
+
 ## 13. What this note did not do
 
 - It measured no scx performance. §8.2's direction is INFERRED from 68's shares.
