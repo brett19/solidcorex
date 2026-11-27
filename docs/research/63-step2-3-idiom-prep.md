@@ -523,6 +523,117 @@ Both refuse: degree 0 and 32, a break, extra or missing rows and columns, ragged
 counts that do not match, decreasing knots, infinite end knots, an empty domain, end
 multiplicity `p + 2`, zero, negative and infinite weights, and `w P` that overflows.
 
+#### NS3 as built (11-27)
+
+Decided by analysis and an adversarial pass; proposed for review, not yet ruled. The code is in
+`crates/scx-nurbs-surface/src/edit.rs`.
+
+- **Names follow the curve methods, not the sketch.** `insert_knot(axis, t, times)`,
+  `elevate(axis, times)`, `split(axis, t)`, `reversed(axis)`, `swapped()` and `transformed(&Affine)`.
+  The sketch's `with_knot_inserted`/`elevated`/`split_at` would give the surface a second
+  vocabulary for the same edits as `NurbsCurve::insert_knot`/`elevate`/`split`. All take `&self`
+  and return a new surface; none edits in place.
+- **Each edit returns `Result`.** The only infallible one is `swapped`, which is
+  `#[must_use]`, as is every edit. A curve's refusal on a line is wrapped in one context frame,
+  `NurbsSurfaceError::Edit { axis, cause }`, which inherits the curve cause's kind (62 D11). So
+  a parameter outside the domain, a multiplicity above the degree and elevating unclamped knots are
+  `Refused`; a degree above 31 is `Exhausted`; `Unstable` elevation is `Unsupported`. A line of a
+  valid surface that is refused as a curve, or edited lines that do not form one net, are
+  `Defect`.
+- **One edit per direction; no `Direction::UV`.** Along v each row of the net is a curve and gets
+  the curve edit. Along u the surface is swapped, edited along v and swapped back. The two
+  directions therefore share one path and the curves' algorithms, checks and accuracy. The edited
+  rows share one knot vector, so the result is assembled without validating it again
+  (`from_valid_parts`, crate-private).
+- **`times == 0` still checks.** `insert_knot(axis, t, 0)` and `elevate(axis, 0)` refuse the
+  arguments that the edit would refuse, then return a copy. Zero is not a way around the checks.
+- **Reversal keeps the domain.** Knots are reflected about the domain `[a, b]`: `t` maps to
+  `a + b - t`, `a` and `b` map to each other exactly, and interior knots are clamped into
+  `[a, b]`. The pin reflects about `U[0] + U[m]`, which moves the domain whenever the end knots
+  are unclamped (pin defect `nurbs_surface_reversed`). Where the reflected knots have no form in
+  doubles, the result is `Reversal { axis, cause }` (`Unsupported`). That happens when a knot
+  merges with an end and makes a break, or when `a + b` overflows.
+- **Transform is affine only, on `NurbsSurface<3>`.** Control points map through `Affine::apply`
+  and the weights are kept. A projective map does not map a NURBS surface through its control
+  points with the weights kept. The pin's 4x4 accepts a projective row 3 and divides each point
+  by it, which gives a surface that is not the image. A non-finite coefficient is refused as
+  `AffineNotFinite`; a mapped point or `w P` that overflows is `Overflow` (`Unsupported`). main's new
+  `scx_num::frame::Frame` does not fit here: it is orthonormal, and a net maps under any affine
+  map, including shears and scales.
+- **Accuracy is the curves'.** Insertion and splitting match the exact edits within `1e-13`,
+  comparing homogeneous points relative to the largest weight. Elevation matches within `1e-12`
+  below degree 9. From degree 9, the curve elevation's known error of a few `1e-12` (05,
+  `scx-nurbs`) passes through unchanged, at about `1.3e-12` in points and `3e-12` in control
+  points. It is not fixed here.
+- **Rational control points are compared in homogeneous form.** A control point whose weight is
+  orders below its neighbours' is ill-conditioned (`P = w P / w`): it differs from the exact
+  point by up to about `1e-8` while the surface agrees to `1e-13`. Tests and pin-defect checks
+  compare `(w P, w)` relative to the largest weight.
+
+Difftest `t_nurbs_surface_edit`: 6 tests against `srf_tool::p1::insert_knot`/`split`,
+`p2::elevate_degree`, `Surface::reversed`, `swap_uv` and `transform`. The inputs are 140
+valid surfaces at degrees (1,1) to (15,1), with every knot and weight kind, clamped and
+unclamped.
+
+| Test | Inputs | Exact | Within tolerance | Pin defects | Mismatches |
+|---|---|---|---|---|---|
+| `nurbs_surface_insert_knot` (`times` 0 to 3; inside a span, at a knot, `1e-9` past it, at the end) | 4,416 | 4,416 | 0 | 0 | 0 |
+| `nurbs_surface_split` | 1,136 | 1,136 | 0 | 0 | 0 |
+| `nurbs_surface_elevate` (`times` 0 to 3, result degree at most 17) | 1,112 | 1,107 | 0 | 5 | 0 |
+| `nurbs_surface_reversed` | 1,120 | 560 | 0 | 560 | 0 |
+| `nurbs_surface_swapped` | 140 | 140 | 0 | 0 | 0 |
+| `nurbs_surface_transformed` (identity, shear, turn and scale, far translation) | 560 | 242 | 318 | 0 | 0 |
+
+The pin defects:
+
+- **`nurbs_surface_elevate`.** In all 5 cases scx refuses with `Unstable`, at near-coincident
+  knots, and the pin answers. Each pin answer has a weight that is not positive, or is more than
+  `1e-6` from the original surface when evaluated exactly.
+- **`nurbs_surface_reversed`.** These are the 560 unclamped inputs, all of them. The pin moves
+  the domain (it reflects about `U[0] + U[m]`). The check confirms that scx keeps the domain,
+  flips the net exactly, maps each knot to `a + b - t` within 4 ulp, and, for degrees up to 3,
+  is the original surface reversed at a point evaluated exactly.
+
+The transform's 318 inputs within tolerance are rational. The pin computes `P = w P / w`, maps
+it and multiplies back, while scx maps its stored `P`, so the two differ only in the last bits.
+
+**High-degree elevation.** This is a finding about `scx-nurbs`, and the curve elevation is not
+fixed here. On the degree-15 surfaces, A5.9 gives the same answer as the pin to the bit, and it is
+far from the exact elevation:
+
+- `7e-13` to `7e-11` on uniform knots and on knots with multiplicities;
+- `2e-11` to `3e-5` on random knots;
+- on clustered knots, about `1e81` for the polynomial surface, which `Unstable` does not catch
+  (every weight stays positive and every point finite), and `Unstable` for the rational ones,
+  where the pin is `1e82` off.
+
+At degree 9 the worst seen is `1.1e-11`. Above the pin's cap of 17, the pin refuses and scx
+answers with the same error, so the difftest leaves out elevations to a degree above 17. No
+check against the truth can excuse those answers. The curve elevation needs an accuracy bound,
+or a refusal, that grows with the degree and the knot spacing. That belongs to `scx-nurbs`.
+
+**Perf (local release loop, the edit alone on prebuilt surfaces, best of 3).**
+
+| Edit | Inputs | scx | pin | scx / pin |
+|---|---|---|---|---|
+| insert | 4,416 | 1.61 µs | 0.61 µs | 2.66 |
+| split | 1,104 | 4.62 µs | 1.34 µs | 3.45 |
+| elevate | 1,080 | 2.29 µs | 1.50 µs | 1.53 |
+| reverse | 1,120 | 0.47 µs | 0.22 µs | 2.12 |
+| swap (the pin's on a clone) | 138 | 0.40 µs | 0.10 µs | 4.15 |
+| transform (the pin's on a clone) | 552 | 0.12 µs | 0.76 µs | 0.16 |
+
+The added work has these sources:
+
+- Each line becomes a `NurbsCurve`, which checks it again (`from_homogeneous` and `new`) and
+  clones the knot vector.
+- Along u, the surface is swapped twice.
+- A rational surface keeps three nets (`P`, `w`, `w P`) where the pin keeps one.
+
+A follow-up can recover this without changing the API. It would add a crate-private unchecked
+line constructor in `scx-nurbs`, or a strided curve edit, so that u is edited in place. That
+would fold the swaps and the per-line checks into one pass.
+
 ## 3. `scx-curve`
 
 The step-2 slice covers line, circle, ellipse and B-spline, in 3-D and 2-D, with `Curve` and its

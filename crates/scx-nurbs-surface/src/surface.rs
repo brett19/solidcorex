@@ -117,6 +117,23 @@ impl<const D: usize> NurbsSurface<D> {
         })
     }
 
+    /// The surface from parts an edit built from a valid surface, which satisfy every check
+    /// of [`Self::new`] by construction: nothing is checked again. `rational` is the weights
+    /// and the homogeneous points `w P`, each the shape of `points`.
+    pub(crate) fn from_valid_parts(
+        u: KnotVector,
+        v: KnotVector,
+        points: Net<[f64; D]>,
+        rational: Option<(Net<f64>, Net<[f64; D]>)>,
+    ) -> Self {
+        Self {
+            u,
+            v,
+            points,
+            rational: rational.map(|(weights, weighted)| Rational { weights, weighted }),
+        }
+    }
+
     /// The knot vector of a direction.
     #[must_use]
     pub const fn knot_vector(&self, axis: ParamAxis) -> &KnotVector {
