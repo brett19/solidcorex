@@ -1303,6 +1303,139 @@ the tolerance used. Change the tolerance rule only with a decision on that, not 
 7. **Zero cost on `xtask fast`.** The full run is `#[ignore]`d. The inline tests take 0.7 s
    in a debug build; with a corpus the smoke subset adds four cases and the surface checks.
 
+## 17. SM2 as built (11-27)
+
+Branch `sm2`. §4.2's closed forms are in `scx_ssi::analytic`, in front of the general path:
+each runs only where the dispatch answered `General` before (two curved surfaces off one axis,
+and a torus's plane past its circles), so no pair that was solved changes its path.
+
+### 17.1 What exists
+
+- `analytic/quadric.rs` (new): `pair` for two curved surfaces whose axes `coaxial` found apart.
+  - **Parallel cylinders.** `b`'s axis turned onto `a`'s direction moves no point of its extent
+    by more than `delta = tilt * reach`; within the tolerance the pair is two circles in `a`'s
+    cross-section, solved by `coaxial::circles` (the meridian meet) with slack `tol + delta`, and
+    each meeting point is a line along the axes: two lines, one tangent line, or empty. The
+    coincident pair stays `coaxial`'s.
+  - **Miller-Goldman.** A cylinder or cone tangent to the sphere `S = |x - O|^2 - rho^2` along a
+    circle is `S = L^2`, `L` linear (a cylinder's `L = (x - O) . z`, a cone's
+    `((x - O) . V - rho^2) / sqrt(|V|^2 - rho^2)`, `V` its apex from `O`). Two of them meet on
+    the planes `L_a = +- L_b`, so the answer is `a`'s plane sections (`section::cylinder`,
+    `section::cone`, unchanged), each lying on `b` too. Two cylinders of one radius whose axes
+    meet (the Steinmetz pair, and any angle between the axes) are this case: the bisecting
+    planes, two ellipses of semi-axes `r / sin(phi/2)` and `r / cos(phi/2)`.
+  - The branch points are where both circles of contact meet (`L_a = L_b = 0` on the sphere): the
+    two points `y0 +- along * half` on the line of the planes.
+- `section.rs`: `torus` adds the **Villarceau** planes. A plane through the centre at
+  `sin t = r / R` from the axis (within the tolerance: `|d| + |turn| (R + r)`) gives two circles
+  of radius `R` about `+- r e_t`, crossing at the two points of tangency `+- R cv e1`. `clipped`
+  (new, shared) cuts the curves at branch points and adds them as points.
+- `clip.rs`: `Shape::param` (a point's parameter on a line, conic, parabola or hyperbola), and
+  `Raw::branch_at`. A curve through a branch point is cut there, and each piece is oriented
+  along its own `n_a x n_b`, which turns over across the node.
+- **Branch points are `IntersectionPoint`s with `Contact::Tangent`**, beside the curves through
+  them (the surfaces are tangent there).
+- `tests/corpus/score.rs`: the component signature joins both sides' curves through the case's
+  singular points (decision 6).
+
+### 17.2 Decisions, for and against
+
+1. **The forms run only after `shared()` fails, and at the torus's last `None`.**
+   - For: the plane sections and coaxial pairs keep their path and their answers bit for bit;
+     the added work there is a branch-list check per raw (measured: none).
+   - Against: a pair that is both coaxial-near and Miller-Goldman-near goes to `coaxial` first,
+     which answers `General` past its own tolerance. That is the right answer for both.
+2. **One test, "moving `b` onto the closed form's shape moves no point by more than the
+   tolerance", decides each form, as SS3's axis test.** Parallel: the tilt times the reach.
+   Miller-Goldman: the axes' distance plus the two spheres' radii apart (`b` moved through `a`'s
+   nearest point and given its radius). Villarceau: the plane's offset plus its turn times
+   `R + r`. Between the tolerance and that slack the answer is `General`.
+   - For: one measure across the forms and the coaxial pairs; an `Empty` is answered only where
+     every point is apart by more than the widened tolerance.
+   - Against: the radii term for cones measures the sphere, not the surface; a cone's surface
+     moves by at most that over the reach, so it is no looser than the cylinder's.
+3. **A Miller-Goldman pair whose sections hold a tangent piece or a touch is `General`, and so
+   is one whose circles of contact touch (one node within the tolerance).**
+   - For: there one plane runs along a generator of `a`, and the surfaces touch along a line the
+     sections' depth rule does not measure on `b`; answering it would decide on `a` alone what is
+     a contact of both. The general path (and SM5's tangent tracing) is the right owner.
+   - Against: a real case (cone and cylinder whose contact circles touch) stays unsolved by a
+     closed form. Test `miller_goldman_branch_points_merge_and_part` pins it as `General`, with
+     two nodes and none on either side.
+4. **Villarceau only on the whole tube.** A tube extent that is part of the turn is `General`.
+   - For: the circles' parametrisation in the tube angle is not linear, so the clipper's
+     half-line sides do not hold; the whole tube is the modelling case (pipes, rings).
+   - Against: a torus face split at the tube seam into halves loses the form. The clipper's
+     tube-angle side would need the circles' own sides; left open.
+5. **The depth rule is unchanged; SM10's six class-7 failures are not the closed forms' fault.**
+   The cases' depth (a 5e-7 strip, a 5e-9 cap) is under the tolerance the corpus runs at, so no
+   method can tell the two lines or the loop from one tangent piece there; it is the truth at
+   that tolerance, and these are N/A until the corpus's tolerance resolves them.
+   `the_depth_rule_resolves_at_a_finer_tolerance` shows the same pairs give two lines and a
+   circle at a tolerance under their depth.
+   - For: truth over pin; the corpus's width is not a measure of separation along the surface.
+   - Against: the corpus counts them as failures; its per-case tolerance (`min(1e-6,
+     feature / 10)`, 16.4 decision 3) uses width, not depth. Changing that is SM10's, open.
+6. **The scorer joins both sides through the singular points.** The truth's two Steinmetz
+   ellipses are closed and the answer's four arcs end at the nodes; joining only at free ends
+   made the truth two components and the answer one.
+   - For: the union is one connected set at a node, however a method cuts it; applied to both
+     sides, and `singular_ok` still holds the answer to passing through each node.
+   - Against: a scorer change in a form's own PR. It moves no other case (the table below).
+7. **Each piece across a node is oriented on its own.** `n_a x n_b` vanishes and turns over at
+   a node, so one orientation per conic is wrong on half of it.
+
+### 17.3 Tests
+
+`tests/quadrics.rs`, 17 tests, each against SM0's `ssi_truth` (curves, nodes, touches) where it
+has the pair and always against the implicit forms (every answer point on both surfaces;
+every generator of `a` meeting `b` inside both extents covered, at least 100 points):
+parallel cylinders (two lines, across both tangencies, tilted past the tolerance), Steinmetz
+(four arcs and two nodes; clipped to one node), equal cylinders at five angles and across the
+tolerance, Miller-Goldman cylinder and cone, two cones, the nodes' merge and parting, across the
+tolerance, other crossed cylinders `General`, Villarceau against the truth, across the
+tolerance and on part of the tube, and the depth rule at a finer tolerance. No test removed.
+`coaxial.rs`'s `near_axes` changed on purpose: its cylinder tilted by 1e-3 still meets the
+first's axis (at `z = -1`), so it is now the Miller-Goldman pair (solved) rather than `General`;
+the same tilt moved off the meeting keeps the `General` check; its square cylinders of one
+radius are now the Steinmetz pair (solved), and two radii keep the `General` check.
+
+Difftest `t_ssi::ssi_section_by_plane` (an scx-ssi analytic change's gate, outside `xtask fast`'s
+default members): its pool's `bitangent` tori are Villarceau planes, which the exact testkit truth
+answers `NoClosedForm`, so the first merge's 24 cases failed its check (not the pin). The check now
+takes, for a torus whose truth has no closed form, circles of radius `big` or none, and owes the
+plane's crossings with 2000 meridian circles (as a cone's 2000 generators), each inside both
+extents; and two pieces may meet at their ends only at an answer's point (a branch point). The one
+`empty` among them is a plane square inside the hole (nearer the centre than `big - small`), where
+no meridian meets it; `planes_through_the_torus_centre` holds the difftest's three tori, at the
+bitangent tilt (four arcs, two points; empty inside the hole), the equator and the meridian plane
+(solved) and four other tilts (`General`), never `Empty` while the square reaches the tube.
+
+Corpus (`score_corpus`, 113 cases): before `pass 38; refused 69; failed 6`, after
+`pass 40; refused 67; failed 6`. `c2_cyl_cyl_external` (refused to pass) and `c4_steinmetz`
+(refused to pass, with decision 6; wrong topology without it). No case changed otherwise.
+
+### 17.4 Added cost (release, throwaway harness, best of 5 x 200,000 calls, not committed)
+
+| path | before | after |
+|---|---|---|
+| plane x cylinder, ellipse | 575 ns | 569 to 574 ns |
+| plane x half cylinder | 905 to 910 ns | 900 to 910 ns |
+| plane x torus, circles | 952 to 968 ns | 960 to 963 ns |
+| plane x cone | 600 to 613 ns | 603 to 612 ns |
+| coaxial cylinder x sphere | 1443 to 1463 ns | 1445 to 1460 ns |
+| skew cylinders (`General` both) | 190 to 193 ns | 192 ns |
+| cylinder x sphere off axis (`General` both) | 267 to 270 ns | 270 ns |
+
+Within noise on every existing path.
+
+### 17.5 Open
+
+- Contact-circle tangency (decision 3) and part-tube Villarceau (decision 4).
+- The corpus's per-case tolerance by depth rather than width (decision 5), SM10's.
+- `scx-boolean` takes the branch points as touches; the pairs were `General` before, so no
+  built case changes, but a face pair through a node now reaches D5's contacts.
+
 ## 20. SM4b as built (11-27)
 
 The perf follow-up of SM4 (§15.4, §15.5): cell-level pairing within a small factor of the pin, and
