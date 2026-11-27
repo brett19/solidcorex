@@ -1395,6 +1395,10 @@ parallel cylinders (two lines, across both tangencies, tilted past the tolerance
 tolerance, Miller-Goldman cylinder and cone, two cones, the nodes' merge and parting, across the
 tolerance, other crossed cylinders `General`, Villarceau against the truth, across the
 tolerance and on part of the tube, and the depth rule at a finer tolerance. No test removed.
+`coaxial.rs`'s `near_axes` changed on purpose: its cylinder tilted by 1e-3 still meets the
+first's axis (at `z = -1`), so it is now the Miller-Goldman pair (solved) rather than `General`;
+the same tilt moved off the meeting keeps the `General` check; its square cylinders of one
+radius are now the Steinmetz pair (solved), and two radii keep the `General` check.
 
 Corpus (`score_corpus`, 113 cases): before `pass 38; refused 69; failed 6`, after
 `pass 40; refused 67; failed 6`. `c2_cyl_cyl_external` (refused to pass) and `c4_steinmetz`
