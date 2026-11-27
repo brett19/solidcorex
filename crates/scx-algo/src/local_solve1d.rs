@@ -356,7 +356,7 @@ impl Walls {
             ParamDomain::Periodic { .. } => Self::Wrap(domain.working(Clamp::Sample)),
             ParamDomain::AtLeast { from, .. } => Self::Below(from),
             ParamDomain::AtMost { to, .. } => Self::Above(to),
-            _ => Self::Free,
+            ParamDomain::Unbounded => Self::Free,
         }
     }
 
