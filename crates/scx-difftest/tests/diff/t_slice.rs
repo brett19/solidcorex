@@ -5,14 +5,23 @@
 //! states, the T10 classification oracle, validity, the lineage of the `issue_1462` boxes and
 //! run-twice determinism.
 //!
-//! **scx.** Most of the operations are not written yet. Each check scx cannot run answers a
-//! typed [`NotYet`] naming the missing piece and its task (BO, BO6), so DT3
-//! replaces one arm at a time: today the constructors run (`scx_make`'s block,
-//! cylinder, cone, sphere, torus and extrusion), judged on outcome, volume and area
-//! (`scx_mass` at 1e-9), topology, classification (`scx_bodyq::classify_point`, judged as
-//! the pin is), validity and manifoldness (`scx_check::contract`), the mesh (`scx_tess` at a
-//! chord of 1% of `cbrt(V)`, against T13's oracle and truth's volume), determinism by the `scx-record` encoding and dangling vertices. Every check
-//! scx runs must pass.
+//! **scx.** Every check runs: the constructors (`scx_make`'s block, cylinder, cone, sphere,
+//! torus and extrusion) and the Booleans (`scx_boolean::boolean`, folded over the recipe's
+//! steps on one document). Each is judged on outcome (built, refused, or `Unsupported` with
+//! its cause, by name), volume and area (`scx_mass` at 1e-9), topology, classification
+//! (`scx_bodyq::classify_point`, judged as the pin is), validity and manifoldness
+//! (`scx_check::contract`), the mesh (`scx_tess` at a chord of 1% of `cbrt(V)`, against T13's
+//! oracle and truth's volume), determinism by the `scx-record` encoding, dangling vertices,
+//! the lineage of the `issue_1462` boxes (from `Changes`) and the work (`Report::work`,
+//! summed over the steps) against the committed baseline `slice_work.txt`. Every check scx
+//! runs must pass.
+//!
+//! **Work.** `Report::work` is a public value, so the baseline is test data: one line per
+//! built Boolean recipe. A rise of more than 10% fails; a fall passes and is printed.
+//! `SCX_BLESS_WORK=1 cargo test ... t_slice` rewrites the file from the run.
+//!
+//! **A body with an edge of four fins** (the pinched recipes, BO7) is judged `Valid` by the
+//! contract with `Contacts::Radial` (CK3): the default refuses such an edge by design.
 //!
 //! **The pin.** It runs every recipe and is judged against truth, never the other way. A
 //! check where it contradicts truth is a finding; each finding must be covered by a
@@ -119,21 +128,6 @@ pub enum Check {
 }
 
 impl Check {
-    const ALL: [Check; 12] = [
-        Check::Outcome,
-        Check::Volume,
-        Check::Area,
-        Check::Topology,
-        Check::Classification,
-        Check::Valid,
-        Check::Manifold,
-        Check::Mesh,
-        Check::Deterministic,
-        Check::Lineage,
-        Check::NoDanglingVertices,
-        Check::Work,
-    ];
-
     fn of(i: Invariant) -> Check {
         match i {
             Invariant::Valid => Check::Valid,
@@ -150,35 +144,21 @@ impl Check {
     }
 }
 
-/// Why scx cannot run a check yet: the missing piece, by the task that adds it. DT2 and DT3
-/// replace an arm with the real call when its task lands; [`NotYet::task`] names it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum NotYet {
-    /// The Boolean (BO).
-    Boolean,
-    /// `Report::work` and its baseline (BO6).
-    Work,
-    /// The Boolean's `Changes` (BO).
-    Lineage,
-}
-
-impl NotYet {
-    /// The 72 task that lifts it.
-    pub fn task(self) -> &'static str {
-        match self {
-            NotYet::Boolean | NotYet::Lineage => "BO",
-            NotYet::Work => "BO6",
-        }
-    }
-}
-
 /// The checks a recipe asks for: the outcome always, the recipe's invariants where a body
-/// is (or may be) built, and the work record for every case scx runs (72 §8.1's last row).
+/// is (or may be) built, and the work record for every Boolean that is built (72 §8.1's last
+/// row; a constructor has no `Report`).
 fn checks_of(r: &Recipe) -> BTreeSet<Check> {
-    let mut c: BTreeSet<Check> = BTreeSet::from([Check::Outcome, Check::Work]);
+    let mut c: BTreeSet<Check> = BTreeSet::from([Check::Outcome]);
     let built = matches!(r.outcome, Outcome::Built(_) | Outcome::Open(_));
     if built {
         c.extend(r.invariants.iter().map(|&i| Check::of(i)));
+        if matches!(r.outcome, Outcome::Open(_)) {
+            // No topology is claimed of a body whose existence is open.
+            c.remove(&Check::Topology);
+        }
+        if !r.is_constructor() {
+            c.insert(Check::Work);
+        }
     }
     c
 }
@@ -1244,8 +1224,57 @@ pub enum Verdict {
     Pass,
     /// It does not.
     Fail(String),
-    /// It cannot run yet.
-    NotYet(NotYet),
+}
+
+/// A place where scx contradicts truth and is known to: recorded with the evidence, as
+/// the pin's are in `pin_defects.rs`. Each of `checks` on `recipe` must still fail with
+/// `shows` in its message; an entry that no longer holds fails the run, so the fix removes it.
+struct ScxGap {
+    recipe: &'static str,
+    checks: &'static [Check],
+    shows: &'static str,
+    reason: &'static str,
+}
+
+/// scx's recorded shortfalls against truth (72 §14.38). They are scx's to fix, not truth's
+/// to change.
+fn scx_gaps() -> Vec<ScxGap> {
+    vec![
+        ScxGap {
+            recipe: "coplanar-offset-0.1c",
+            checks: &[Check::Topology],
+            shows: "cells [12, 16]",
+            reason: "the two fronts 0.1c apart merge to one face, but the four jog vertices and four jog edges of the step stay (12 vertices, 16 edges; truth 8, 12)",
+        },
+        ScxGap {
+            recipe: "coplanar-offset-0.5c",
+            checks: &[Check::Topology],
+            shows: "cells [12, 16]",
+            reason: "as coplanar-offset-0.1c, at 0.5c",
+        },
+        ScxGap {
+            recipe: "crease-0.3c",
+            checks: &[Check::Mesh],
+            shows: "NonManifoldVertex",
+            reason: "a crease 0.3c inside the cube's edge builds, and its mesh has a vertex where the surface meets itself; T12 leaves the recipe open but asks the mesh invariants of any body built",
+        },
+        ScxGap {
+            recipe: "cylinder-minus-itself",
+            checks: &[
+                Check::Outcome,
+                Check::Volume,
+                Check::Area,
+                Check::Topology,
+                Check::Classification,
+                Check::Valid,
+                Check::Manifold,
+                Check::Mesh,
+                Check::Deterministic,
+            ],
+            shows: "Defect(Seeds",
+            reason: "a cylinder less itself fails the seed cross-check (BO6) on its first face, where truth is the empty body (block-minus-itself builds it)",
+        },
+    ]
 }
 
 fn mm(v: f64) -> scx_num::units::Length {
@@ -1259,11 +1288,6 @@ fn scx_frame(f: &TFrame) -> Option<scx_num::frame::Frame> {
         V::new(f.z[0], f.z[1], f.z[2]),
         V::new(f.x[0], f.x[1], f.x[2]),
     )
-}
-
-/// The first piece scx lacks to build the recipe's body.
-fn scx_gap(r: &Recipe) -> Option<NotYet> {
-    (!r.is_constructor()).then_some(NotYet::Boolean)
 }
 
 /// Truth's name for the size scx refuses; a cone's two radii are truth's `Radius`, and a
@@ -1329,22 +1353,29 @@ fn scx_segment(s: &Seg) -> scx_planar::Segment {
     }
 }
 
+/// A part as scx builds it: the body, and a block's faces by role (the lineage maps them to
+/// truth's `BoxFace`).
 fn scx_build(
     frame: &scx_num::frame::Frame,
     p: &Part,
-) -> Result<scx_brep::Brep, scx_make::MakeError> {
+) -> Result<(scx_brep::Brep, Option<scx_make::BlockFaces>), scx_make::MakeError> {
     let doc = scx_brep::Document::default();
+    let plain = |m: Result<scx_brep::Brep, scx_make::MakeError>| m.map(|b| (b, None));
     match &p.shape {
-        Shape::Block { size } => scx_make::block(frame, size.map(mm), &doc).map(|m| m.body),
+        Shape::Block { size } => {
+            scx_make::block(frame, size.map(mm), &doc).map(|m| (m.body, Some(m.faces)))
+        }
         Shape::Cylinder { radius, height } => {
-            scx_make::cylinder(frame, mm(*radius), mm(*height), &doc).map(|m| m.body)
+            plain(scx_make::cylinder(frame, mm(*radius), mm(*height), &doc).map(|m| m.body))
         }
         Shape::Cone { radii, height } => {
-            scx_make::cone(frame, radii.map(mm), mm(*height), &doc).map(|m| m.body)
+            plain(scx_make::cone(frame, radii.map(mm), mm(*height), &doc).map(|m| m.body))
         }
-        Shape::Sphere { radius } => scx_make::sphere(frame, mm(*radius), &doc).map(|m| m.body),
+        Shape::Sphere { radius } => {
+            plain(scx_make::sphere(frame, mm(*radius), &doc).map(|m| m.body))
+        }
         Shape::Torus { major, minor } => {
-            scx_make::torus(frame, mm(*major), mm(*minor), &doc).map(|m| m.body)
+            plain(scx_make::torus(frame, mm(*major), mm(*minor), &doc).map(|m| m.body))
         }
         Shape::Extrusion {
             outer,
@@ -1361,9 +1392,91 @@ fn scx_build(
             )
             .map_err(|e| scx_make::MakeError::Refused(scx_make::Refusal::Profile(e)))?;
             let span = scx_make::Span::new(mm(0.0), mm(*height));
-            scx_make::extrude(&region, frame, span, &doc).map(|m| m.body)
+            plain(scx_make::extrude(&region, frame, span, &doc).map(|m| m.body))
         }
     }
+}
+
+/// Why scx's run of a recipe stopped.
+#[derive(Debug)]
+enum ScxError {
+    /// A part's frame is not orthonormal.
+    Frame,
+    /// A part's constructor.
+    Make(scx_make::MakeError),
+    /// A Boolean step.
+    Boolean(scx_boolean::BooleanError),
+}
+
+impl core::fmt::Display for ScxError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            ScxError::Frame => write!(f, "a frame that is not orthonormal"),
+            ScxError::Make(e) => write!(f, "{e}"),
+            ScxError::Boolean(e) => write!(f, "{e:?}"),
+        }
+    }
+}
+
+/// What a single-step Boolean says of its faces: the `Changes`, the two operands and the
+/// faces of each, for the lineage check.
+struct ScxLineage {
+    changes: scx_brep::Changes,
+    operands: [scx_brep::Brep; 2],
+    faces: [scx_make::BlockFaces; 2],
+}
+
+/// scx's run of a recipe: the base, then each Boolean step on the running result.
+struct ScxRun {
+    body: scx_brep::Brep,
+    /// `Report::work` summed over the steps.
+    work: u64,
+    /// For a one-step recipe on two blocks.
+    lineage: Option<ScxLineage>,
+}
+
+fn scx_boolean_op(o: Op) -> scx_boolean::BooleanOp {
+    match o {
+        Op::Union => scx_boolean::BooleanOp::Union,
+        Op::Intersection => scx_boolean::BooleanOp::Intersect,
+        Op::Difference => scx_boolean::BooleanOp::Subtract,
+    }
+}
+
+fn scx_operand(p: &Part) -> Result<(scx_brep::Brep, Option<scx_make::BlockFaces>), ScxError> {
+    let frame = scx_frame(&p.frame).ok_or(ScxError::Frame)?;
+    scx_build(&frame, p).map_err(ScxError::Make)
+}
+
+fn scx_run(r: &Recipe) -> Result<ScxRun, ScxError> {
+    use scx_brep::op::{Cx, NoTrace, Scratch, Settings};
+    let doc = scx_brep::Document::default();
+    let settings = Settings::new();
+    let mut scratch = Scratch::new();
+    let stop = scx_num::budget::Stop::new();
+    let (mut body, base_faces) = scx_operand(&r.base)?;
+    let mut work = 0u64;
+    let mut lineage = None;
+    for step in &r.steps {
+        let (tool, tool_faces) = scx_operand(&step.tool)?;
+        let mut cx = Cx::new(&doc, &settings, &mut scratch, &stop, &NoTrace);
+        let done = scx_boolean::boolean(&body, &tool, scx_boolean_op(step.op), &mut cx)
+            .map_err(ScxError::Boolean)?;
+        work += done.report.work;
+        if let (1, Some(a), Some(b)) = (r.steps.len(), base_faces, tool_faces) {
+            lineage = Some(ScxLineage {
+                changes: done.changes,
+                operands: [body.clone(), tool],
+                faces: [a, b],
+            });
+        }
+        body = done.body;
+    }
+    Ok(ScxRun {
+        body,
+        work,
+        lineage,
+    })
 }
 
 /// scx's topology, as truth counts it: solid regions, their shells, the genus from the
@@ -1376,10 +1489,17 @@ fn scx_topology(b: &scx_brep::Brep, t: &Topology) -> Verdict {
     let faces: Vec<_> = b.faces().collect();
     let index: HashMap<_, _> = faces.iter().enumerate().map(|(i, f)| (f.id(), i)).collect();
     // Truth's complex has no seams and no poles (T12): drop the edges a face meets
-    // twice and the collapsed ones, and count what is left.
+    // twice and the collapsed ones, and count what is left. A vertex or an edge two solid
+    // shells share (a pinch, BO7) counts once for each: T12 counts per sheet.
+    let mut sheet = vec![usize::MAX; faces.len()];
+    for (k, sh) in solid.iter().flat_map(|r| r.shells()).enumerate() {
+        for (f, _) in sh.faces() {
+            sheet[index[&f.id()]] = k;
+        }
+    }
     let mut patch = Uf::new(faces.len());
     let mut kept: Vec<Vec<[scx_brep::VertexId; 2]>> = vec![Vec::new(); faces.len()];
-    let mut ends = BTreeSet::new();
+    let mut ends: BTreeSet<(usize, scx_brep::VertexId)> = BTreeSet::new();
     let mut edges = 0i64;
     for e in b.edges() {
         let fins: Vec<_> = e.fins().map(|f| index[&f.face]).collect();
@@ -1387,8 +1507,11 @@ fn scx_topology(b: &scx_brep::Brep, t: &Topology) -> Verdict {
         if seam || matches!(e.shape(), scx_brep::EdgeShape::Collapsed) {
             continue;
         }
-        edges += 1;
-        ends.extend(e.ends());
+        let sheets: BTreeSet<usize> = fins.iter().map(|&f| sheet[f]).collect();
+        edges += sheets.len() as i64;
+        for &k in &sheets {
+            ends.extend(e.ends().map(|v| (k, v)));
+        }
         for &f in &fins {
             kept[f].push(e.ends());
         }
@@ -1592,13 +1715,17 @@ fn scx_area(b: &scx_brep::Brep, r: &Recipe) -> Verdict {
 /// named. It answers `Valid` and `Manifold` alike, as the pin's two checks both ask of a
 /// body that every edge has two fins and every face bounds the solid.
 fn scx_contract(b: &scx_brep::Brep) -> Verdict {
+    scx_contract_with(b, scx_check::Contacts::Refused)
+}
+
+fn scx_contract_with(b: &scx_brep::Brep, contacts: scx_check::Contacts) -> Verdict {
     use scx_brep::op::{Cx, NoTrace, Scratch, Settings};
     let doc = scx_brep::Document::with_resolution(b.resolution());
     let mut scratch = Scratch::default();
     let settings = Settings::new();
     let stop = scx_num::budget::Stop::new();
     let cx = Cx::new(&doc, &settings, &mut scratch, &stop, &NoTrace);
-    match scx_check::contract(b, &cx, scx_check::Contacts::Refused) {
+    match scx_check::contract(b, &cx, contacts) {
         Ok(_) => Verdict::Pass,
         Err(e) => Verdict::Fail(format!("contract: {e} ({e:?})")),
     }
@@ -1664,37 +1791,257 @@ fn scx_mesh(b: &scx_brep::Brep, r: &Recipe) -> Verdict {
     }
 }
 
-/// Every check of the recipe on scx's side.
-pub fn scx_checks(r: &Recipe, pts: &Points) -> BTreeMap<Check, Verdict> {
-    let checks = checks_of(r);
-    if let Some(gap) = scx_gap(r) {
-        return checks
-            .into_iter()
-            .map(|c| (c, Verdict::NotYet(gap)))
-            .collect();
+/// Truth's kind for scx's surface kind (a NURBS face is no recipe's).
+fn scx_kind(k: scx_surface::SurfaceKind) -> Option<Kind> {
+    use scx_surface::SurfaceKind as K;
+    match k {
+        K::Plane => Some(Kind::Plane),
+        K::Cylinder => Some(Kind::Cylinder),
+        K::Cone => Some(Kind::Cone),
+        K::Sphere => Some(Kind::Sphere),
+        K::Torus => Some(Kind::Torus),
+        _ => None,
     }
-    let Some(frame) = scx_frame(&r.base.frame) else {
-        let why = Verdict::Fail("scx refuses the recipe's frame as not orthonormal".into());
-        return checks.into_iter().map(|c| (c, why.clone())).collect();
+}
+
+/// Whether scx's answer to the recipe is the outcome truth states, the `Unsupported` ones by
+/// name (a touch inside a face is `NonManifold`, a pair with no closed form `SsiPair` of the
+/// same two kinds), and an `Open` recipe either built or refused as unsupported.
+fn scx_outcome(got: &Result<ScxRun, ScxError>, want: &Outcome) -> Verdict {
+    use scx_boolean::{BooleanError as E, BooleanUnsupported as U};
+    let ok = match (got, want) {
+        (Ok(_), Outcome::Built(_) | Outcome::Open(_)) => true,
+        (Err(ScxError::Make(e)), want) => scx_outcome_matches(e, want),
+        (
+            Err(ScxError::Boolean(E::Unsupported(U::NonManifold { .. }))),
+            Outcome::Unsupported(RecipeUnsupported::NonManifold { .. }),
+        ) => true,
+        (
+            Err(ScxError::Boolean(E::Unsupported(U::SsiPair { kinds, .. }))),
+            Outcome::Unsupported(RecipeUnsupported::SsiPair { kinds: want }),
+        ) => {
+            let mut got = kinds.map(scx_kind);
+            let mut want = want.map(Some);
+            got.sort();
+            want.sort();
+            got == want
+        }
+        (Err(ScxError::Boolean(E::Unsupported(_) | E::Refused(_))), Outcome::Open(_)) => true,
+        _ => false,
     };
-    let run = || scx_build(&frame, &r.base);
-    let first = run();
-    let second = run();
+    if ok {
+        Verdict::Pass
+    } else {
+        Verdict::Fail(format!(
+            "truth {want:?}; scx {}",
+            match got {
+                Ok(_) => "builds".to_owned(),
+                Err(e) => e.to_string(),
+            }
+        ))
+    }
+}
+
+/// The contract, for a recipe whose truth is an empty body (no solid region): the contract
+/// refuses a body with no face, and that is the answer ("the body has no face"), so it is
+/// passed there and only there.
+fn scx_contract_empty(b: &scx_brep::Brep) -> Verdict {
+    if b.faces().next().is_none() && b.regions().all(|r| !r.is_solid()) {
+        Verdict::Pass
+    } else {
+        Verdict::Fail("an empty result has a face or a solid region".into())
+    }
+}
+
+/// The contract with D5's radial edges admitted (`Contacts::Radial`), for a recipe whose
+/// body has an edge of four fins: the default refuses such an edge by design (CK1's test 3).
+fn scx_contract_pinched(b: &scx_brep::Brep) -> Verdict {
+    scx_contract_with(b, scx_check::Contacts::Radial)
+}
+
+/// The face's box origin of an operand face.
+fn box_face(f: &scx_make::BlockFaces, id: scx_brep::FaceId) -> Option<BoxFace> {
+    let by_role = [
+        (f.bottom, BoxFace::Bottom),
+        (f.top, BoxFace::Top),
+        (f.sides[0], BoxFace::Front),
+        (f.sides[1], BoxFace::Right),
+        (f.sides[2], BoxFace::Back),
+        (f.sides[3], BoxFace::Left),
+    ];
+    by_role.iter().find(|(g, _)| *g == id).map(|&(_, b)| b)
+}
+
+/// The operand entities (operand, entity) a result entity carries the lineage of: its
+/// origins, or itself where `Changes` is silent (an untouched face of `a`), with what it
+/// merged in.
+fn lineage_of<I: scx_brep::Tracked>(
+    changes: &scx_brep::EntityChanges<I>,
+    id: I,
+    own: impl Fn(scx_brep::Origin) -> Option<(u32, I)>,
+) -> Vec<(u32, I)> {
+    let mut out = Vec::new();
+    let mut add = |o: scx_brep::Origin| out.extend(own(o));
+    match changes.origins(id) {
+        Some(os) => os.iter().for_each(|&o| add(o)),
+        None => add(I::origin(id)),
+    }
+    for m in changes.merged.iter().filter(|m| m.survivor == id) {
+        for &g in &m.absorbed {
+            add(g.origin());
+        }
+        m.taken.iter().for_each(|&o| add(o));
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+fn scx_lineage(run: &ScxRun, want: &recipe::Lineage) -> Verdict {
+    use scx_brep::{Entity, Origin};
+    let Some(l) = &run.lineage else {
+        return Verdict::Fail(
+            "lineage asked of a recipe that is not one step on two blocks".into(),
+        );
+    };
+    let acc = match scx_mass::RelAccuracy::new(1e-10) {
+        Ok(a) => a,
+        Err(e) => return Verdict::Fail(e.to_string()),
+    };
+    let face_own = |o: Origin| match o {
+        Origin::Face(g) => Some((0, g)),
+        Origin::Operand(op, Entity::Face(g)) => Some((op.raw(), g)),
+        _ => None,
+    };
+    let edge_own = |o: Origin| match o {
+        Origin::Edge(g) => Some((0, g)),
+        Origin::Operand(op, Entity::Edge(g)) => Some((op.raw(), g)),
+        _ => None,
+    };
+    let mut got: Vec<PinFace> = Vec::new();
+    for f in run.body.faces() {
+        let mut origins = Vec::new();
+        for (k, g) in lineage_of(&l.changes.faces, f.id(), face_own) {
+            match box_face(&l.faces[k as usize], g) {
+                Some(b) => origins.push((k as u8, b)),
+                None => return Verdict::Fail(format!("{:?} names {g:?}, no block face", f.id())),
+            }
+        }
+        let area = match scx_mass::face_area(
+            f,
+            acc,
+            &mut scx_brep::op::Scratch::new(),
+            &mut scx_num::budget::Budget::unlimited(),
+            &scx_num::budget::Stop::new(),
+        ) {
+            Ok(a) => a.value,
+            Err(e) => return Verdict::Fail(format!("{:?} area: {e}", f.id())),
+        };
+        origins.sort_unstable();
+        got.push((area, origins));
+    }
+    if let Some(why) = lineage_differs(&want.faces, &got) {
+        return Verdict::Fail(why);
+    }
+    let length = |b: &scx_brep::Brep, e: scx_brep::EdgeId| -> Option<f64> {
+        scx_mass::edge_length(
+            b.edge(e)?,
+            acc,
+            &mut scx_brep::op::Scratch::new(),
+            &mut scx_num::budget::Budget::unlimited(),
+            &scx_num::budget::Stop::new(),
+        )
+        .ok()
+        .map(|e| e.value)
+    };
+    let (mut fresh, mut halved, mut seen) = (0u32, [0u32; 2], BTreeSet::new());
+    for e in run.body.edges() {
+        let from = lineage_of(&l.changes.edges, e.id(), edge_own);
+        match from.as_slice() {
+            [] => fresh += 1,
+            [(k, g)] => {
+                seen.insert((*k, *g));
+                let (Some(was), Some(is)) = (
+                    length(&l.operands[*k as usize], *g),
+                    length(&run.body, e.id()),
+                ) else {
+                    return Verdict::Fail(format!("{:?}: no length", e.id()));
+                };
+                if is < was - 1e-9 * was.max(1.0) {
+                    halved[*k as usize] += 1;
+                }
+            }
+            _ => return Verdict::Fail(format!("{:?} from {from:?}", e.id())),
+        }
+    }
+    if let Some(n) = want.new_edges
+        && n != fresh
+    {
+        return Verdict::Fail(format!("new edges: truth {n}, scx {fresh}"));
+    }
+    if let Some(h) = want.halved_edges
+        && h != halved
+    {
+        return Verdict::Fail(format!("halved edges: truth {h:?}, scx {halved:?}"));
+    }
+    Verdict::Pass
+}
+
+// ---------------------------------------------------------------------------------------
+// The work baseline
+
+/// The committed `Report::work` of each built Boolean recipe (test data: the value is public).
+const WORK_BASELINE: &str = include_str!("slice_work.txt");
+/// The file's path, for `SCX_BLESS_WORK`.
+const WORK_FILE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/diff/slice_work.txt");
+/// A rise over this share of the baseline fails (01 §9.4).
+const WORK_RISE: f64 = 0.10;
+
+fn work_baseline(name: &str) -> Option<u64> {
+    WORK_BASELINE
+        .lines()
+        .filter(|l| !l.starts_with('#'))
+        .find_map(|l| {
+            let (n, w) = l.split_once(' ')?;
+            (n == name).then(|| w.trim().parse().ok())?
+        })
+}
+
+fn scx_work(r: &Recipe, got: Option<u64>) -> Verdict {
+    let Some(work) = got else {
+        // An open recipe scx refuses has no report.
+        return Verdict::Pass;
+    };
+    match work_baseline(r.name) {
+        None => Verdict::Fail(format!(
+            "work {work}: no baseline (SCX_BLESS_WORK=1 writes slice_work.txt)"
+        )),
+        Some(base) if work as f64 > base as f64 * (1.0 + WORK_RISE) => Verdict::Fail(format!(
+            "work {work} against baseline {base}: a rise of {:.0}%",
+            100.0 * (work as f64 / base as f64 - 1.0)
+        )),
+        Some(_) => Verdict::Pass,
+    }
+}
+
+/// Every check of the recipe on scx's side, the work of the run (none if it did not build)
+/// and whether it built a body.
+pub fn scx_checks(r: &Recipe, pts: &Points) -> (BTreeMap<Check, Verdict>, Option<u64>, bool) {
+    let checks = checks_of(r);
+    let first = scx_run(r);
+    let second = scx_run(r);
+    let work = first.as_ref().ok().map(|b| b.work);
+    let pinched = r.invariants.contains(&Invariant::Valid)
+        && !r.invariants.contains(&Invariant::Manifold)
+        && matches!(r.outcome, Outcome::Built(_));
     let mut out = BTreeMap::new();
     for c in checks {
         let v = match (c, &first, &r.outcome) {
-            (Check::Outcome, Ok(_), Outcome::Built(_)) => Verdict::Pass,
-            (Check::Outcome, Err(e), want) if scx_outcome_matches(e, want) => Verdict::Pass,
-            (Check::Outcome, got, want) => Verdict::Fail(format!(
-                "truth {want:?}; scx {}",
-                match got {
-                    Ok(_) => "builds".to_owned(),
-                    Err(e) => format!("{e}"),
-                }
-            )),
-            (Check::Topology, Ok(b), Outcome::Built(t)) => scx_topology(b, t),
-            (Check::Deterministic, Ok(a), _) => match (&second, scx_record::encode(a)) {
-                (Ok(b), Ok(ea)) => match scx_record::encode(b) {
+            (Check::Outcome, got, want) => scx_outcome(got, want),
+            (Check::Work, _, _) => scx_work(r, work),
+            (Check::Topology, Ok(b), Outcome::Built(t)) => scx_topology(&b.body, t),
+            (Check::Deterministic, Ok(a), _) => match (&second, scx_record::encode(&a.body)) {
+                (Ok(b), Ok(ea)) => match scx_record::encode(&b.body) {
                     Ok(eb) if ea == eb => Verdict::Pass,
                     Ok(_) => Verdict::Fail("two runs encode differently".into()),
                     Err(e) => Verdict::Fail(format!("encode: {e}")),
@@ -1702,7 +2049,8 @@ pub fn scx_checks(r: &Recipe, pts: &Points) -> BTreeMap<Check, Verdict> {
                 (Err(e), _) => Verdict::Fail(format!("the second run fails: {e}")),
                 (_, Err(e)) => Verdict::Fail(format!("encode: {e}")),
             },
-            (Check::NoDanglingVertices, Ok(b), _) => {
+            (Check::NoDanglingVertices, Ok(run), _) => {
+                let b = &run.body;
                 let vs: BTreeSet<_> = b.vertices().map(|v| v.id()).collect();
                 let dangling = b
                     .edges()
@@ -1714,19 +2062,25 @@ pub fn scx_checks(r: &Recipe, pts: &Points) -> BTreeMap<Check, Verdict> {
                     Verdict::Fail(format!("{dangling} edges name a missing vertex"))
                 }
             }
-            (Check::Volume, Ok(b), _) => scx_volume(b, r),
-            (Check::Area, Ok(b), _) => scx_area(b, r),
-            (Check::Classification, Ok(b), _) => scx_classification(b, pts),
-            (Check::Valid | Check::Manifold, Ok(b), _) => scx_contract(b),
-            (Check::Mesh, Ok(b), _) => scx_mesh(b, r),
-            (Check::Lineage, _, _) => Verdict::NotYet(NotYet::Lineage),
-            (Check::Work, _, _) => Verdict::NotYet(NotYet::Work),
+            (Check::Volume, Ok(b), _) => scx_volume(&b.body, r),
+            (Check::Area, Ok(b), _) => scx_area(&b.body, r),
+            (Check::Classification, Ok(b), _) => scx_classification(&b.body, pts),
+            (Check::Valid | Check::Manifold, Ok(b), Outcome::Built(t)) if t.solid_regions == 0 => {
+                scx_contract_empty(&b.body)
+            }
+            (Check::Valid, Ok(b), _) if pinched => scx_contract_pinched(&b.body),
+            (Check::Valid | Check::Manifold, Ok(b), _) => scx_contract(&b.body),
+            (Check::Mesh, Ok(b), _) => scx_mesh(&b.body, r),
+            (Check::Lineage, Ok(b), _) => match &r.lineage {
+                Some(want) => scx_lineage(b, want),
+                None => Verdict::Fail("lineage asked with none stated".into()),
+            },
             (c, Err(e), _) => Verdict::Fail(format!("{c:?}: no body ({e})")),
             (c, Ok(_), o) => Verdict::Fail(format!("{c:?} asked of {o:?}")),
         };
         out.insert(c, v);
     }
-    out
+    (out, work, first.is_ok())
 }
 
 // ---------------------------------------------------------------------------------------
@@ -1739,6 +2093,10 @@ struct Case {
     runs: [PinRun; 2],
     findings: Vec<Finding>,
     scx: BTreeMap<Check, Verdict>,
+    /// `Report::work` of scx's run, where it built a Boolean.
+    work: Option<u64>,
+    /// Whether scx built a body.
+    scx_built: bool,
 }
 
 fn case(r: &Recipe) -> Case {
@@ -1759,13 +2117,15 @@ fn case(r: &Recipe) -> Case {
     };
     let runs = [pin_run(r, &points), pin_run(r, &points)];
     let findings = judge_pin(r, &points, &runs);
-    let scx = scx_checks(r, &points);
+    let (scx, work, scx_built) = scx_checks(r, &points);
     Case {
         points,
         band,
         runs,
         findings,
         scx,
+        work,
+        scx_built,
     }
 }
 
@@ -1775,7 +2135,12 @@ struct Summary {
     failures: Vec<String>,
 }
 
-fn summarise(recipes: &[Recipe], cases: &[Case], defects: &[SliceDefect]) -> Summary {
+fn summarise(
+    recipes: &[Recipe],
+    cases: &[Case],
+    defects: &[SliceDefect],
+    gaps: &[ScxGap],
+) -> Summary {
     let mut lines = Vec::new();
     let mut failures = Vec::new();
     let points: usize = cases.iter().map(|c| c.points.at.len()).sum();
@@ -1783,7 +2148,7 @@ fn summarise(recipes: &[Recipe], cases: &[Case], defects: &[SliceDefect]) -> Sum
     let mut unsampled = 0usize;
     let (mut pin_defects, mut pin_ok, mut pin_listed) = (0, 0, 0);
     let mut verdicts: BTreeMap<&str, usize> = BTreeMap::new();
-    let mut gaps: BTreeMap<NotYet, usize> = BTreeMap::new();
+    let mut gap_hits: BTreeSet<(usize, Check)> = BTreeSet::new();
     for (r, c) in recipes.iter().zip(cases) {
         let mut line = format!(
             "  {:<28} pin {:<10} fev {:<14} findings {}",
@@ -1854,12 +2219,16 @@ fn summarise(recipes: &[Recipe], cases: &[Case], defects: &[SliceDefect]) -> Sum
             match v {
                 Verdict::Pass => *verdicts.entry("pass").or_insert(0) += 1,
                 Verdict::Fail(why) => {
-                    *verdicts.entry("fail").or_insert(0) += 1;
-                    failures.push(format!("{r}: scx {check:?}: {why}"));
-                }
-                Verdict::NotYet(g) => {
-                    *verdicts.entry("not yet").or_insert(0) += 1;
-                    *gaps.entry(*g).or_insert(0) += 1;
+                    let known = gaps.iter().position(|g| {
+                        g.recipe == r.name && g.checks.contains(check) && why.contains(g.shows)
+                    });
+                    if let Some(i) = known {
+                        gap_hits.insert((i, *check));
+                        *verdicts.entry("known gap").or_insert(0) += 1;
+                    } else {
+                        *verdicts.entry("fail").or_insert(0) += 1;
+                        failures.push(format!("{r}: scx {check:?}: {why}"));
+                    }
                 }
             }
         }
@@ -1874,6 +2243,16 @@ fn summarise(recipes: &[Recipe], cases: &[Case], defects: &[SliceDefect]) -> Sum
     for (i, d) in defects.iter().enumerate() {
         if used[i] == 0 {
             failures.push(format!("pin defect ({}) applies to no recipe", d.reason));
+        }
+    }
+    for (i, g) in gaps.iter().enumerate() {
+        for c in g.checks {
+            if !gap_hits.contains(&(i, *c)) {
+                failures.push(format!(
+                    "{}: scx gap ({}) no longer holds on {c:?}",
+                    g.recipe, g.reason
+                ));
+            }
         }
     }
     let unstable = cases.iter().filter(|c| c.runs[0] != c.runs[1]).count();
@@ -1894,20 +2273,56 @@ fn summarise(recipes: &[Recipe], cases: &[Case], defects: &[SliceDefect]) -> Sum
             recipes.len() - pin_ok
         ),
     );
-    let gaps: Vec<String> = gaps
-        .iter()
-        .map(|(g, n)| format!("{g:?} ({}) {n}", g.task()))
-        .collect();
+    let count = |k: &str| *verdicts.get(k).unwrap_or(&0);
+    let built = cases.iter().filter(|c| c.work.is_some()).count();
     lines.insert(
         2,
         format!(
-            "difftest t_slice scx: {} pass, {} fail, {} not yet: {}",
-            verdicts.get("pass").unwrap_or(&0),
-            verdicts.get("fail").unwrap_or(&0),
-            verdicts.get("not yet").unwrap_or(&0),
-            gaps.join(", ")
+            "difftest t_slice scx: {} pass, {} fail, {} known gaps; {built} recipes built, {} refused or unsupported as truth says",
+            count("pass"),
+            count("fail"),
+            count("known gap"),
+            recipes.len() - built
         ),
     );
+    // Each side is judged against truth; where the two disagree with each other, say so.
+    let differ: Vec<String> = recipes
+        .iter()
+        .zip(cases)
+        .filter(|(_, c)| (c.runs[0].outcome == PinOutcome::Body) != c.scx_built)
+        .map(|(r, c)| {
+            format!(
+                "{} (pin {}, scx {})",
+                r.name,
+                if c.runs[0].outcome == PinOutcome::Body {
+                    "builds"
+                } else {
+                    "refuses"
+                },
+                if c.scx_built { "builds" } else { "refuses" }
+            )
+        })
+        .collect();
+    lines.insert(
+        3,
+        format!(
+            "difftest t_slice outcome, pin against scx: {} of {} recipes differ{}{}",
+            differ.len(),
+            recipes.len(),
+            if differ.is_empty() { "" } else { ": " },
+            differ.join(", ")
+        ),
+    );
+    for (r, c) in recipes.iter().zip(cases) {
+        if let (Some(w), Some(base)) = (c.work, work_baseline(r.name))
+            && w < base
+        {
+            lines.push(format!(
+                "difftest t_slice work: {} fell from {base} to {w}",
+                r.name
+            ));
+        }
+    }
     Summary { lines, failures }
 }
 
@@ -1918,7 +2333,19 @@ fn t_slice() {
         let handles: Vec<_> = recipes.iter().map(|r| s.spawn(|| case(r))).collect();
         handles.into_iter().map(|h| h.join().unwrap()).collect()
     });
-    let summary = summarise(&recipes, &cases, &pin_defects::slice());
+    if std::env::var_os("SCX_BLESS_WORK").is_some() {
+        let mut text = String::from(
+            "# Report::work of scx's Boolean on each built Boolean recipe (steps summed), 72 section 14.38.\n# A rise of more than 10% fails t_slice. SCX_BLESS_WORK=1 rewrites this file.\n",
+        );
+        for (r, c) in recipes.iter().zip(&cases) {
+            if let Some(w) = c.work.filter(|_| !r.is_constructor()) {
+                let _ = writeln!(text, "{} {w}", r.name);
+            }
+        }
+        std::fs::write(WORK_FILE, text).expect("write the work baseline");
+        return;
+    }
+    let summary = summarise(&recipes, &cases, &pin_defects::slice(), &scx_gaps());
     for l in &summary.lines {
         println!("{l}");
     }
@@ -1928,7 +2355,6 @@ fn t_slice() {
         summary.failures.len(),
         summary.failures.join("\n")
     );
-    let _ = Check::ALL;
 }
 
 /// The harness catches what it exists to catch: a wrong truth, an unrecorded contradiction and
@@ -1951,7 +2377,12 @@ fn t_slice_controls() {
         findings: f,
         ..case(&wrong)
     };
-    let s = summarise(std::slice::from_ref(&wrong), std::slice::from_ref(&w), &[]);
+    let s = summarise(
+        std::slice::from_ref(&wrong),
+        std::slice::from_ref(&w),
+        &[],
+        &[],
+    );
     assert!(
         s.failures.iter().any(|l| l.contains("pin Volume")),
         "{:?}",
@@ -1964,7 +2395,12 @@ fn t_slice_controls() {
         applies: |_| false,
         holds: |_, _, _| Ok(()),
     };
-    let s = summarise(std::slice::from_ref(r), std::slice::from_ref(&c), &[stale]);
+    let s = summarise(
+        std::slice::from_ref(r),
+        std::slice::from_ref(&c),
+        &[stale],
+        &[],
+    );
     assert!(
         s.failures
             .iter()
@@ -1972,8 +2408,51 @@ fn t_slice_controls() {
         "{:?}",
         s.failures
     );
+    // a recorded scx gap that the check no longer shows is stale
+    let gap = ScxGap {
+        recipe: r.name,
+        checks: &[Check::Volume],
+        shows: "volume",
+        reason: "control",
+    };
+    let s = summarise(
+        std::slice::from_ref(r),
+        std::slice::from_ref(&c),
+        &[],
+        &[gap],
+    );
+    assert!(
+        s.failures.iter().any(|l| l.contains("no longer holds")),
+        "{:?}",
+        s.failures
+    );
+    // an unrecorded scx failure fails the run, and a recorded one does not
+    let mut w = case(r);
+    w.scx
+        .insert(Check::Volume, Verdict::Fail("volume: control".into()));
+    let s = summarise(std::slice::from_ref(r), std::slice::from_ref(&w), &[], &[]);
+    assert!(
+        s.failures.iter().any(|l| l.contains("scx Volume")),
+        "{:?}",
+        s.failures
+    );
+    let gap = ScxGap {
+        recipe: r.name,
+        checks: &[Check::Volume],
+        shows: "volume",
+        reason: "control",
+    };
+    let s = summarise(
+        std::slice::from_ref(r),
+        std::slice::from_ref(&w),
+        &[],
+        &[gap],
+    );
+    assert!(s.failures.is_empty(), "{:?}", s.failures);
     // scx's classification passes the true sides and fails the swapped ones
-    let b = scx_build(&scx_frame(&r.base.frame).unwrap(), &r.base).unwrap();
+    let b = scx_build(&scx_frame(&r.base.frame).unwrap(), &r.base)
+        .unwrap()
+        .0;
     assert_eq!(scx_classification(&b, &c.points), Verdict::Pass);
     let swapped = Points {
         at: c.points.at.clone(),

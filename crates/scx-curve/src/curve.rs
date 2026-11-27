@@ -28,6 +28,7 @@ use scx_num::vector3d::{Point3, Vec3};
 use scx_nurbs::{Approach, NurbsCurve};
 
 use crate::angle_line::{AngleLine2, AngleWave2};
+use crate::chart::OnChart;
 use crate::conic::{Circle, Circle2, Ellipse, Ellipse2};
 use crate::line::{Line, Line2};
 use crate::open_conic::{Hyperbola, Hyperbola2, Parabola, Parabola2};
@@ -73,6 +74,9 @@ pub enum Curve2 {
     /// of an angle linear in `t`, `v` a sinusoid in `t`, `t` the ellipse's own angle in
     /// radians (63 §4.14).
     AngleWave(AngleWave2),
+    /// An exact 3-D curve through an analytic surface's closed-form chart inverse, at the
+    /// curve's own parameter ([`OnChart`], research 73 SM1); behind an `Arc` for its size.
+    OnChart(Arc<OnChart>),
 }
 
 // The largest arm (an ellipse: a frame of nine `f64`, two semi-axes and a sense) plus the
@@ -103,6 +107,7 @@ macro_rules! dispatch {
             Self::Nurbs($n) => $nurbs,
             Self::AngleLine($a) => $angle,
             Self::AngleWave($a) => $angle,
+            Self::OnChart($a) => $angle,
         }
     };
 }
@@ -295,6 +300,7 @@ impl Curve2 {
             }
             Self::AngleLine(a) => a.fill(ts, out),
             Self::AngleWave(a) => a.fill(ts, out),
+            Self::OnChart(a) => a.fill(ts, out),
         }
     }
 }
@@ -311,6 +317,12 @@ macro_rules! from_kind {
 
 from_kind!(Curve: Line => Line, Circle => Circle, Ellipse => Ellipse, Parabola => Parabola, Hyperbola => Hyperbola);
 from_kind!(Curve2: Line2 => Line, Circle2 => Circle, Ellipse2 => Ellipse, Parabola2 => Parabola, Hyperbola2 => Hyperbola, AngleLine2 => AngleLine, AngleWave2 => AngleWave);
+
+impl From<OnChart> for Curve2 {
+    fn from(c: OnChart) -> Self {
+        Self::OnChart(Arc::new(c))
+    }
+}
 
 macro_rules! from_nurbs {
     ($enum:ident, $d:literal) => {
@@ -614,6 +626,11 @@ pub(crate) mod tests {
             .into_iter()
             .chain(angle_lines())
             .chain(angle_waves())
+            .chain(
+                crate::chart::tests::pairs()
+                    .into_iter()
+                    .map(|(c, _)| c.into()),
+            )
         {
             for t in params(&mut rng) {
                 let w = Ivl::new(t, t + 0.25);
@@ -661,6 +678,7 @@ pub(crate) mod tests {
                         Curve2::Hyperbola(k) => check!(k),
                         Curve2::AngleLine(a) => angle_check!(a),
                         Curve2::AngleWave(a) => angle_check!(a),
+                        Curve2::OnChart(a) => angle_check!(a),
                         Curve2::Nurbs(n) => {
                             let nan = [[f64::NAN; 2]; 5];
                             let p = n.point(t, Approach::Above).unwrap_or(nan[0]);

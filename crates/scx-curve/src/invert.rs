@@ -366,6 +366,7 @@ impl Curve2 {
             Self::Nurbs(_) => Err(CurveError::Unsupported(Unsupported::NurbsInversion)),
             Self::AngleLine(_) => Err(CurveError::Unsupported(Unsupported::AngleLineInversion)),
             Self::AngleWave(_) => Err(CurveError::Unsupported(Unsupported::AngleWaveInversion)),
+            Self::OnChart(_) => Err(CurveError::Unsupported(Unsupported::OnChartInversion)),
         }
     }
 
@@ -375,7 +376,8 @@ impl Curve2 {
     ///
     /// [`Unsupported::NurbsInversion`] for a NURBS curve,
     /// [`Unsupported::AngleLineInversion`] for an angle line,
-    /// [`Unsupported::AngleWaveInversion`] for an angle wave.
+    /// [`Unsupported::AngleWaveInversion`] for an angle wave,
+    /// [`Unsupported::OnChartInversion`] for a curve on a chart.
     #[inline]
     pub fn invert(
         &self,
@@ -391,6 +393,7 @@ impl Curve2 {
             Self::Nurbs(_) => Err(CurveError::Unsupported(Unsupported::NurbsInversion)),
             Self::AngleLine(_) => Err(CurveError::Unsupported(Unsupported::AngleLineInversion)),
             Self::AngleWave(_) => Err(CurveError::Unsupported(Unsupported::AngleWaveInversion)),
+            Self::OnChart(_) => Err(CurveError::Unsupported(Unsupported::OnChartInversion)),
         }
     }
 }

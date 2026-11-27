@@ -24,9 +24,11 @@
 
 use std::sync::Arc;
 
+use scx_curve::{Chart, ChartKind};
 use scx_num::budget::{Budget, Stop};
 use scx_num::domain::{ParamDomain, UvDomain};
 use scx_num::extent2d::Extent2d;
+use scx_num::frame::Sense;
 use scx_num::jet::SurfaceJet;
 use scx_num::vector2d::Point2;
 use scx_num::vector3d::{Point3, UnitVec3, Vec3};
@@ -127,6 +129,26 @@ fn nurbs_normal(n: &NurbsSurface<3>, uv: Point2, side: [Approach; 2]) -> Option<
 }
 
 impl Surface {
+    /// The closed-form inverse of the kind's uv (63 D13), as a [`Chart`]: `None` for a
+    /// NURBS surface, which has none.
+    #[must_use]
+    pub fn chart(&self) -> Option<Chart> {
+        let (frame, sense, kind) = match self {
+            Self::Plane(p) => (p.frame(), Sense::Forward, ChartKind::Plane),
+            Self::Cylinder(c) => (
+                c.frame(),
+                c.sense(),
+                ChartKind::Cylinder { radius: c.radius() },
+            ),
+            Self::Cone(c) => (c.frame(), c.sense(), ChartKind::Cone),
+            Self::Sphere(s) => (s.frame(), s.sense(), ChartKind::Sphere),
+            Self::Torus(t) => (t.frame(), t.sense(), ChartKind::Torus { major: t.major() }),
+            Self::Nurbs(_) => return None,
+        };
+        // Every surface's sizes passed the same checks the chart makes.
+        Chart::new(*frame, sense, kind).ok()
+    }
+
     /// The parameter's domain: the kind's, and [`ParamDomain::Bounded`] by its knots in
     /// each direction for a NURBS surface.
     #[inline]

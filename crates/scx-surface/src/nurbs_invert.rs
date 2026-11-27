@@ -93,7 +93,7 @@ const HALVINGS: u32 = 30;
 const ABOVE: [Approach; 2] = [Approach::Above, Approach::Above];
 
 /// A homogeneous point `(w x, w y, w z, w)`.
-type H = [f64; 4];
+pub(crate) type H = [f64; 4];
 
 /// Why a search stopped.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -217,16 +217,16 @@ fn nearest(
 
 /// One Bezier patch: its uv rectangle, its homogeneous points with their error bounds
 /// (`(p + 1) x (q + 1)`, row `i` along `u`), and the box of its control points.
-struct Patch {
-    lo: Point2,
-    hi: Point2,
-    degrees: (usize, usize),
-    net: Vec<Hb>,
+pub(crate) struct Patch {
+    pub(crate) lo: Point2,
+    pub(crate) hi: Point2,
+    pub(crate) degrees: (usize, usize),
+    pub(crate) net: Vec<Hb>,
     bbox: Extent3d,
 }
 
 /// A homogeneous point as computed, with a bound of each coordinate's error.
-type Hb = (H, H);
+pub(crate) type Hb = (H, H);
 
 /// `x (1 + 4 eps)` and a little more: an error bound rounded up, underflow included.
 fn up(x: f64) -> f64 {
@@ -355,7 +355,7 @@ fn spans(t: &[f64], p: usize, c: &[Hb]) -> Vec<(f64, f64, Vec<Hb>)> {
 }
 
 /// Every Bezier patch of `n`, `u` spans outer.
-fn patches(n: &NurbsSurface<3>) -> Vec<Patch> {
+pub(crate) fn patches(n: &NurbsSurface<3>) -> Vec<Patch> {
     let (p, q) = (n.degree(ParamAxis::U), n.degree(ParamAxis::V));
     let (tu, tv) = (n.knots(ParamAxis::U), n.knots(ParamAxis::V));
     let points = n.points();
