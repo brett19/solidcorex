@@ -12,14 +12,16 @@
 //! | line, circle, ellipse, parabola, hyperbola, NURBS curve on a plane | [`Line2`], [`Circle2`], [`Ellipse2`], [`Parabola2`], [`Hyperbola2`], the NURBS curve through the plane's affine uv |
 //! | line along a cylinder's or cone's ruling | [`Line2`]: `u` fixed, `v` the height, affine in `t` |
 //! | circle about the axis of a cylinder, cone, sphere or torus (a parallel) | [`AngleLine2`] in `u`, `v` fixed |
+//! | ellipse on a cylinder (a plane's oblique section, centre on the axis) | [`AngleWave2`]: `u` the azimuth's arc parameter, `v` a sinusoid in `t` |
 //! | sphere's great circle through the poles (a meridian), on one side of them | [`AngleLine2`] in `v`, `u` fixed |
 //! | torus's tube circle (a meridian) | [`AngleLine2`] in `v`, `u` fixed |
 //! | meridian over an interval that crosses a pole | [`PcurveError::CrossesPole`]: split it there |
 //! | anything else, or any curve on a NURBS surface | [`PcurveError::NoClosedForm`] |
 //!
 //! A circle is tried as a parallel or a meridian when its axis and centre are within
-//! `1e-6` (relative) of that configuration; the lifting check then decides, so a circle
-//! near one but not in it is [`PcurveError::Inexact`] and one far from both is
+//! `1e-6` (relative) of that configuration, an ellipse on a cylinder as a section when its
+//! centre is within `1e-6` of the axis; the lifting check then decides, so a curve near
+//! one but not in it is [`PcurveError::Inexact`] and one far from all is
 //! [`PcurveError::NoClosedForm`].
 //!
 //! The period window (07 §3 rule 5): where a direction is periodic, the pcurve's coordinate
@@ -33,6 +35,11 @@
 //! arc parameters (63 D13), so a parallel or a meridian is an [`AngleLine2`] at the
 //! circle's own parameter. The pin also lets a sphere's meridian run past a pole (latitude
 //! beyond `pi/2`); here that is [`PcurveError::CrossesPole`] (63 §4.11).
+//!
+//! The pin refuses an ellipse on a cylinder in `eval/pcurve.rs`; its drop of the curve
+//! onto the surface (WR-680, `cylinder_section.rs`) builds a rational spline in the
+//! azimuth, not in the ellipse's parameter. Here the pcurve keeps the edge's parameter,
+//! which needs the sinusoid in `v`: an [`AngleWave2`] (63 §4.14).
 
 use core::fmt;
 use std::sync::Arc;
@@ -41,7 +48,8 @@ use core::f64::consts::{FRAC_PI_2, PI, TAU};
 
 use scx_curve::arcs::Arcs;
 use scx_curve::{
-    AngleAxis, AngleLine2, Circle, Circle2, Curve, Curve2, Ellipse2, Hyperbola2, Line2, Parabola2,
+    AngleAxis, AngleLine2, AngleWave2, Circle, Circle2, Curve, Curve2, Ellipse, Ellipse2,
+    Hyperbola2, Line2, Parabola2,
 };
 use scx_num::domain::ParamDomain;
 use scx_num::error::ErrorKind;
@@ -390,6 +398,9 @@ fn closed_form(
             let u = s.domain().u;
             match curve {
                 Curve::Circle(c) => turn(u).and_then(|a| parallel(c, &axes, over, a, u, |h, _| h)),
+                Curve::Ellipse(e) => {
+                    turn(u).and_then(|a| section(e, &axes, s.radius().mm(), over, a, u))
+                }
                 _ => ruling(curve, &axes, points, from_step, u),
             }
         }
@@ -502,6 +513,45 @@ fn parallel(
     let start = place(alpha, s, over.min(), arcs, window);
     let line = AngleLine2::new(arcs, AngleAxis::U, start, s, v_of(h, rho), 0.0).ok()?;
     Some(Curve2::AngleLine(line))
+}
+
+/// A plane's oblique section of a cylinder (an ellipse whose centre is on the axis): `u` the
+/// arc parameter of the azimuth `alpha + s t`, `v = h + p cos t + q sin t` (63 §4.14).
+/// `None` when the centre is not within `NEAR` of the axis.
+///
+/// The ellipse runs `O + a cos t X + sigma b sin t Y`. Along the axis it projects onto the
+/// cylinder's circle, so `A = a X_h` and `B = sigma b Y_h` (the parts across the axis) are
+/// conjugate semi-diameters of a circle of radius `r`: perpendicular and of length `r`.
+/// Then the projection is `r (cos(alpha + s t), sin(alpha + s t))` with `alpha` the azimuth
+/// of `A` and `s` the turn from `A` to `B`, and the height is `(O - o).z + (A_z) cos t +
+/// (B_z) sin t` for the axial parts. Both hold for every `t`, so the pcurve keeps the
+/// ellipse's parameter; the lifting check catches an ellipse near this but not in it.
+fn section(
+    e: &Ellipse,
+    axes: &Axes,
+    r: f64,
+    over: Extent1d,
+    arcs: Arcs,
+    window: ParamDomain,
+) -> Option<Curve2> {
+    let d = e.frame().origin() - axes.o;
+    let h = d.dot(axes.z);
+    if (d - axes.z * h).length() > NEAR * r {
+        return None;
+    }
+    let a = *e.frame().x() * e.semi_x().mm();
+    let b = *e.frame().y() * (e.semi_y().mm() * e.sense().sign());
+    let (ax, ay) = (a.dot(axes.x), a.dot(axes.y));
+    let (bx, by) = (b.dot(axes.x), b.dot(axes.y));
+    let alpha = fmath::atan2(ay, ax);
+    let s = if ax * by - ay * bx >= 0.0 {
+        Sense::Forward
+    } else {
+        Sense::Reversed
+    };
+    let start = place(alpha, s, over.min(), arcs, window);
+    let wave = AngleWave2::new(arcs, start, s, h, a.dot(axes.z), b.dot(axes.z)).ok()?;
+    Some(Curve2::AngleWave(wave))
 }
 
 /// `u` of the azimuth of the horizontal unit vector `d`, in the window.
@@ -880,19 +930,31 @@ mod tests {
         let e = pcurve_of(&Curve::Line(skew), &cyl, span(-1.0, 1.0), mm(1e-6)).unwrap_err();
         assert_eq!(e.name(), "pcurve_inexact", "{e}");
         assert_eq!(e.kind(), ErrorKind::Unsupported);
-        // No closed form here: an oblique section of a cylinder (an ellipse; the SS5
-        // section gap, 63 §4.11), a small circle of a sphere tilted off its axis, a curve on
-        // a NURBS surface.
-        let (y, tilt) = (*f.y(), 0.4_f64);
-        let major = x * fmath::cos(tilt) - z * fmath::sin(tilt);
-        let fe = Frame::new(o, major.cross(y), major).unwrap();
-        let oblique = Ellipse::new(fe, mm(1.0 / fmath::cos(tilt)), mm(1.0), Sense::Forward);
-        let e = pcurve_of(&Curve::Ellipse(oblique.unwrap()), &cyl, span(0.0, 1.0), tol);
+        // No closed form here: a plane's section of a cone (an ellipse), a small circle of a
+        // sphere tilted off its axis, a curve on a NURBS surface.
+        let y = *f.y();
+        let (r, m) = (1.0, 0.5);
+        let cone = Cone::new(f, mm(r), 0.4, Sense::Forward).unwrap();
+        let c = cone.slope() * m;
+        let y0 = r * c / (1.0 - c * c);
+        let up = (y + z * m) * (1.0 / fmath::hypot(1.0, m));
+        let fe = Frame::new(o + (y + z * m) * y0, x.cross(up), x).unwrap();
+        let (sa, sb) = (
+            r / (1.0 - c * c).sqrt(),
+            r / (1.0 - c * c) * fmath::hypot(1.0, m),
+        );
+        let on_cone = Ellipse::new(fe, mm(sa), mm(sb), Sense::Forward).unwrap();
+        let e = pcurve_of(
+            &Curve::Ellipse(on_cone),
+            &Surface::Cone(cone),
+            span(0.0, 6.0),
+            tol,
+        );
         assert_eq!(
             e.unwrap_err(),
             PcurveError::NoClosedForm {
                 curve: CurveKind::Ellipse,
-                surface: SurfaceKind::Cylinder
+                surface: SurfaceKind::Cone
             }
         );
         // A hyperbola on a cone (its section by a plane along the axis), named as one.
@@ -971,6 +1033,59 @@ mod tests {
         (-20.0, -19.5),
         (3.0, 3.1),
     ];
+
+    /// A plane's section of a cylinder through each tilt and turn about the axis, each sense
+    /// of ellipse and cylinder, the ellipse's z with and against the plane's normal and its
+    /// x the major or the minor axis, over intervals across the seam: an angle wave at the
+    /// ellipse's own parameter, `u` in the window at the interval's start.
+    #[test]
+    fn cylinder_sections_are_angle_waves() {
+        let mut rng = Rng::new(0x9c_0007);
+        let mut n = 0;
+        for scale in [1.0, 1e3, 1e-3] {
+            for _ in 0..4 {
+                let f = frame(&mut rng, scale);
+                let r = 0.8 * scale;
+                for sense in [Sense::Forward, Sense::Reversed] {
+                    let a = Axes::new(&f, sense);
+                    let cyl = Surface::Cylinder(Cylinder::new(f, mm(r), sense).unwrap());
+                    for (tilt, psi) in [(0.4, 0.0), (1.2, 2.5), (0.05, -1.0), (1e-9, 0.3)] {
+                        let (st, ct) = (fmath::sin(tilt), fmath::cos(tilt));
+                        let (sp, cp) = (fmath::sin(psi), fmath::cos(psi));
+                        let normal = (a.x * cp + a.y * sp) * st + a.z * ct;
+                        let w = a.z.cross(normal).normalized().map(Vec3::from).unwrap();
+                        let steep = normal.cross(w);
+                        let centre = a.o + a.z * (0.3 * scale);
+                        let size = 1.0 + 4.0 * scale / ct;
+                        for (zc, xc, sx, sy) in [
+                            (normal, w, r, r / ct),
+                            (-normal, w, r, r / ct),
+                            (normal, steep, r / ct, r),
+                            (-normal, -steep, r / ct, r),
+                        ] {
+                            for es in [Sense::Forward, Sense::Reversed] {
+                                let fe = Frame::new(centre, zc, xc).unwrap();
+                                let e = Ellipse::new(fe, mm(sx), mm(sy), es).unwrap();
+                                for (lo, hi) in SPANS {
+                                    let over = span(lo, hi);
+                                    let pc = exact(&Curve::Ellipse(e), &cyl, over, size);
+                                    let Curve2::AngleWave(wave) = pc else {
+                                        panic!("{pc:?}");
+                                    };
+                                    let u0 = wave.point(lo).x;
+                                    let period = cyl.domain().u.period().unwrap();
+                                    let slack = 1e-15 * period;
+                                    assert!(u0 >= -slack && u0 <= period + slack, "{wave:?}");
+                                    n += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(n, 3 * 4 * 2 * 4 * 4 * 2 * SPANS.len());
+    }
 
     /// A circle about the axis of each surface of revolution, each sense of circle and
     /// surface, its z with and against the axis, is an angle line in `u` with `v` fixed.

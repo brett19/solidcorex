@@ -11,6 +11,8 @@
 //! - [`AngleLine2`]: a line in angle and height in the NURBS-compatible uv, one coordinate
 //!   the [`arcs::Arcs`] parameter of the angle (a circle's pcurve on a surface of revolution,
 //!   63 §4.11);
+//! - [`AngleWave2`]: the same angle coordinate with a sinusoid in the other, a plane's
+//!   oblique section of a cylinder in that uv (63 §4.14);
 //! - [`arcs`]: that uv's angle directions, shared with the surfaces (63 D13);
 //! - [`Curve`] and [`Curve2`]: any of these or a NURBS curve, dispatched by `match`, with the batched
 //!   [`Curve::eval_many`];
@@ -44,7 +46,7 @@ mod line;
 mod open_conic;
 mod tangent;
 
-pub use angle_line::{AngleAxis, AngleLine2};
+pub use angle_line::{AngleAxis, AngleLine2, AngleWave2};
 pub use conic::{Circle, Circle2, Ellipse, Ellipse2};
 pub use curve::{Curve, Curve2};
 pub use edit::ParamShift;
@@ -72,6 +74,7 @@ const _: () = {
     ok::<Curve>();
     ok::<Curve2>();
     ok::<AngleLine2>();
+    ok::<AngleWave2>();
     ok::<arcs::Arcs>();
     ok::<CurveError>();
     ok::<Foot>();

@@ -1790,7 +1790,8 @@ hyperbola one branch `C + a cosh t X + b sinh t Y`, over every `t`.
   hyperbola's alternate between two terms).
 - Against, and what was done:
   - **a hyperbola point needs `sinh` and `cosh`**: `fmath::sinh_cosh` (new in scx-num) gives
-    both from one double-double exponential, each within an ulp or two; a point costs about
+    both from one double-double exponential, with the bits of `sinh` and `cosh` (their
+    rounding tests and fallbacks, research 70, so correctly rounded); a point costs about
     20 ns against the parabola's 4;
   - **`cosh` overflows past `|t| ~ 710`**: there the point is infinite, as a line's at an
     infinite `t`; an edge's interval never reaches it (the branch is then past `1e308`);
@@ -1831,13 +1832,17 @@ hyperbola one branch `C + a cosh t X + b sinh t Y`, over every `t`.
 - **scx-surface `pcurve_of`**: on a plane the kind is kept in its affine uv (`Parabola2`,
   `Hyperbola2`); on a cylinder, cone, sphere or torus the answer is
   `PcurveError::NoClosedForm { curve, surface }` (`ErrorKind::Unsupported`), never an empty
-  or approximate curve. Exact pcurves off the plane belong with WR-680's oblique cylinder
-  section.
+  or approximate curve. Exact pcurves off the plane would follow §4.14's `AngleWave2`
+  (an oblique cylinder section), which has no open-conic analogue yet.
 - **scx-surface `intersect_curve`**: both kinds against all five surfaces. The parabola is a
   polynomial quadratic in `u` (its parameter affine in `u`, as a line's); the hyperbola is a
   rational quadratic whose middle control point is where the ends' tangents meet, with
   weight `cosh w`, and a new `Map::Hyper` takes `u` back to `t`
   (`t = m + 2 atanh(k (2u - 1))`, kept as sums of positive terms). Degrees as for a conic.
+  §4.14's overlap clipping by `se` takes both: a side's plane meets the parabola where a
+  quadratic in `t` vanishes and the hyperbola where `alpha cosh t + beta sinh t + gamma`
+  does, a quadratic in `e^t` (only its positive roots); `overlaps_are_clipped_by_se` runs
+  both in a plane and on a cone (a generator-parallel parabola, an axis-parallel branch).
 - **Testkit T2** takes both curves: the parabola in `t`, the hyperbola in `s = e^t` (a new
   `Variable::Exp`), with only `s > 0` on the branch.
 
@@ -1918,11 +1923,11 @@ the same points, and a coincidence's extents swapped. The difftest compares
 - the cylinder's too-long ellipse and the cone's band between the parabola threshold and the
   precision bound (`General`, above);
 - the torus's spiric sections (`General`; step 5's marcher);
-- exact pcurves off the plane: WR-680's oblique cylinder section and the cone's conics
-  (`pcurve_of` answers `NoClosedForm`);
+- exact pcurves off the plane: the cone's conics, open and closed (`pcurve_of` answers
+  `NoClosedForm`; the cylinder's oblique ellipse is built, §4.14);
 - the difftest goes through `section_by_plane` only, not `intersect`'s plane-first order
   (the pin's `intersect_with_plane` has one order);
-- SS3 (sphere-sphere, coaxial pairs) and SS4 (classification at the tolerance).
+- SS4 (classification at the tolerance); SS3 (the coaxial pairs, §5.7) is built.
 
 ## 4. `scx-surface`
 
@@ -2395,9 +2400,25 @@ image's `point` with `Approach::Above`):
 
 "Whole" is one turn each way (the plane `[0, 1]^2`); "one span" an extent inside one quarter
 arc each way. So a whole torus costs about 11 image evaluations, a trimmed patch about 3; mostly the four
-`Vec`s (knots, points, weights) the NURBS takes. 9 A3's comparison against one inversion is
-deferred to SU4, which builds the inversion; A3's verdict (one conversion per intersection
-call, not per evaluation) stands on these numbers.
+`Vec`s (knots, points, weights) the NURBS takes. A3's comparison against one analytic
+inversion, measured 11-27 after SU4 (release build, ns per call, best of 9 timed batches in the
+best of three runs, pinned to one core; the inversion is `invert(p, None)` over 64 queries
+around the surface, global, closed form):
+
+| | `to_nurbs`, whole | `to_nurbs`, one span | `invert` | whole / `invert` | span / `invert` |
+|---|---:|---:|---:|---:|---:|
+| plane | 94.5 | 94.9 | 8.1 | 11.7 | 11.7 |
+| cylinder | 285.1 | 145.5 | 51.2 | 5.6 | 2.8 |
+| cone | 297.2 | 150.8 | 50.6 | 5.9 | 3.0 |
+| sphere | 464.8 | 186.7 | 60.7 | 7.7 | 3.1 |
+| torus | 680.2 | 176.5 | 59.2 | 11.5 | 3.0 |
+
+("Whole" is the kind's whole uv extent, so the sphere and torus are one turn each way and the
+cone is `v` over `[0.5, 2]`; the three runs agreed within 2%, and the conversion is a little
+faster than the table above, whose figures are one earlier run.) A conversion costs 3 to 12
+inversions, so the verdict stands and sharpens: convert once per intersection call, never per
+query; inverting a point against the analytic kind is cheaper than the NURBS image's own
+`point` (63-78 ns), so nothing should convert in order to invert.
 
 From research 66: no technique there changes this conversion. Its implicitisation (§8.4) is
 an approximate implicit form to seed SSI; our kinds have exact implicit forms already, which
@@ -2409,8 +2430,8 @@ context (§14) match A3: if the conversion ever shows in a profile, memoise it i
 inner loops (§1 point 4) would ask for a caller-provided buffer; not taken, as the conversion
 runs once per intersection call and `NurbsSurface` owns its storage.
 
-Open from SU3: the inversion cost comparison (SU4); a `to_nurbs` into a caller's buffer if a
-profile ever asks.
+Open from SU3: a `to_nurbs` into a caller's buffer if a profile ever asks (the inversion cost
+comparison is closed above).
 
 ### 4.9 SU7 as built (11-27)
 
@@ -2966,9 +2987,11 @@ The rules:
 
 - **The overlap is not clipped by `se`.** An `Overlap` covers the whole `ce`. Clipping a
   curve's stretch to a uv box needs the curve's pcurve, which `pcurve_of` (§4.11) now
-  gives. Until then the caller clips.
+  gives. Until then the caller clips. (Done 11-27, §4.14: clipped into pieces, without a
+  pcurve.)
 - **A NaN `tol` gives no tangents.** It is not refused. `pcurve_of` refuses a bad
-  tolerance (`BadTolerance`), so a typed refusal may be the consistent rule here too.
+  tolerance (`BadTolerance`), so a typed refusal may be the consistent rule here too. (Done
+  11-27, §4.14: `SurfaceError::BadTolerance`.)
 - **A closed `ce`** (a turn or more) is the one turn from `ce.min()`.
 
 **Errors.**
@@ -3052,6 +3075,161 @@ here is 65 row 1.
 **Added work.** All the code is new. No existing path gains work. `Arcs::of_direction`
 became `pub` because `Arcs` moved to `scx-curve`. `Axes::local` is the same as SU4's, and
 `Cone::slope` is main's.
+
+### 4.14 pcurve and SU6 follow-ups as built (11-27)
+
+Three items were left open by §4.11, §4.13 and §5.6: WR-680's oblique cylinder section in
+`pcurve_of`, the overlap left unclipped by `se`, and a bad `tol` in `intersect_curve`.
+
+**The oblique section.** A plane that cuts a cylinder of radius `r` off square gives an
+ellipse `O + a cos t X + s_e b sin t Y`. With `O` on the axis, the parts of `a X` and
+`s_e b Y` across the axis are perpendicular and both `r` long, so:
+
+- the azimuth is exactly `alpha + s t`: `alpha` is the azimuth of `a X`, and `s` is the
+  sign of the turn from it to `s_e b Y`;
+- the height is `v = h + (a X . z) cos t + (s_e b Y . z) sin t`, with `h` the height of
+  `O`.
+
+In D13's uv, `u` is the arcs parameter of that azimuth, the same coordinate as a
+parallel's. So the exact pcurve, at the ellipse's own parameter `t`, is a new kind:
+
+```rust
+pub struct AngleWave2 { arcs, start, sense, mean, amp_cos, amp_sin }  // scx-curve
+// u = arcs.parameter(start + s t), v = mean + amp_cos cos t + amp_sin sin t
+pub enum Curve2 { .., AngleLine(AngleLine2), AngleWave(AngleWave2) }
+AngleWave2::new(arcs, start, sense, mean, amp_cos, amp_sin) -> Result<Self, CurveError>
+```
+
+It has the same methods as `AngleLine2`: `point`, `jet`, `point_over`, `jet_over`,
+`domain`, `angle`, `reversed`, and `restrict` through the enum. The `u` half shares
+`AngleLine2`'s code (`angle_domain`, `angle_jet`), and `AngleLine2` stays bit for bit the
+same (tested). `v`'s derivatives rotate `(cos, sin)` a quarter turn each order.
+`reversed` flips the sense and negates `amp_sin`, bit for bit `C(-t)`. Inverting one is
+`Unsupported::AngleWaveInversion`, as an angle line's inversion was.
+
+`pcurve_of` builds it when the centre is within `NEAR * r` of the axis. Everything else
+goes through the same on-surface and lifting checks as every other answer. A section of a
+cone is still `NoClosedForm`.
+
+**Decision: a new kind, by analysis and adversarial analysis.**
+
+- *Option 1, a `Curve2::Nurbs` (the pin's answer).* The exact rational uv curve exists
+  (testkit T5's `cylinder_section`, the pin's `cylinder_section.rs`). But its parameter is
+  the section NURB's, not the ellipse's angle, and the 04 ruling is that the pcurve keeps
+  the edge's own parameter. Matching the parameter would need a reparameterisation, which
+  is a fit or a composition. It is rejected for that.
+- *Option 2, widen `AngleLine2` with a sinusoid.* That would give one kind for both. But
+  every parallel and meridian would then carry three more words and a `cos`/`sin` it
+  never needs, and the name would be wrong. It is rejected.
+- *Option 3, `AngleWave2` (chosen).* It is exact at the ellipse's parameter, it is plain
+  data like the other kinds, and its `u` code is shared with `AngleLine2`.
+- *The adversarial case against 3.*
+  - "Another enum arm everyone must match." `Curve2` is `#[non_exhaustive]`, so a new arm
+    costs one line per dispatch, and the dispatch test covers it bit for bit.
+  - "A STEP writer wants a B-spline." It can convert at write time, exactly (T5's form
+    over the same span). That conversion is a cost at export, not on the kernel's paths.
+  - "A square cut now has two answers." A square cut given as a `Circle` is a parallel
+    (`AngleLine2`). The same cut given as an `Ellipse` with equal semi-axes gets an
+    `AngleWave2` with zero amplitudes. That is exact, only less specific.
+  - None of these overturns 3.
+
+**Truth check.**
+
+- `cylinder_sections_are_angle_waves` (unit, 3,840 cases): scales 1, 1e3 and 1e-3, both
+  senses of cylinder and ellipse, tilts from 1e-9 to 1.2, either axis first and the
+  ellipse's z either way, five intervals (negative, short, past a turn). Each case is
+  lifted at 101 samples to 1e-12 of size.
+- `oblique_cylinder_sections_have_the_rational_uv` (`tests/truth.rs`): 24 sections, at 8
+  points on each of T5's exact rational spans, give the same uv as T5's NURBS uv, scaled
+  by `2 pi r / 4 pi`. The ellipse's parameter of each point is checked to 1e-12.
+- Six `AngleWave2` tests in scx-curve:
+  - against its definition;
+  - finite differences;
+  - the side at a break;
+  - reversal bit for bit;
+  - interval enclosure;
+  - `NotFinite`.
+- Difftest `t_pcurve` (new): 240 arcs of oblique sections against the pin's
+  `drop_curve_to_srf`, compared at 17 stations of the ellipse's angle. On the pin side,
+  bisection finds the NURB parameter whose point has that angle.
+  - The result: 212 within tolerance, 28 pin defects, 0 mismatches.
+  - Both uv are the same (the pin's bounded cylinder's `u` runs `[0, 2 pi r]`).
+  - The defect: the pin's drop runs at a 3-D tolerance of 10. Its `DropIsoCurve` takes a
+    gently tilted section for the iso line at its start height and answers a constant
+    `v`. scx's stations there are held to the exact uv: `v` the height, `u` T4's arcs
+    parameter of the azimuth in double-double, within 1e-9 of size
+    (`pin_defects::oblique_pcurve`).
+  - The pin also returns its uv curve twice, or split where scx keeps one piece. The
+    fingerprint takes the first piece that holds each station.
+
+**The overlap clipped by `se`.** An `Overlap` is now the pieces of `ce` whose uv lies in
+`se`.
+
+- *Decision: one overlap can become several pieces.* A circle on a plane crossing a
+  rectangle leaves and re-enters it up to four times. A single extent would have to cover
+  the outside runs or drop the inside ones. Both are wrong. The variant stays
+  `Overlap { t: Extent1d }`, and one hit is returned per piece, in `t` order.
+- *How.* The cuts are where the curve meets the planes, in the surface's axes, that
+  carry `se`'s sides:
+  - the plane's sides `x = u` and `y = v`;
+  - a cylinder's or cone's `z = v`;
+  - a sphere's `z = r sin(angle(v))`;
+  - a torus's `z = small sin(angle(v))`, skipped when the `v` range is a turn or more;
+  - a side of constant `u` on a revolution kind: the plane through the axis at that
+    azimuth, skipped when the `u` range is a period or more.
+
+  These planes hold every boundary crossing (a superset: a plane through the axis also
+  meets the opposite half). A line's root is linear, and a conic's are `psi ± acos(-gamma
+  / R)`. Between adjacent cuts, the middle's uv is tested with the same `uv_in` as a
+  point hit, and adjacent kept pieces merge. No transcendental search, no tolerance.
+- *Edges.*
+  - When nothing leaves `se`, the original `ce` is returned unchanged.
+  - On a closed conic, a piece across the turn's start is joined into one extent that
+    runs past `ce.min() + 2 pi`. The `Overlap` doc says so.
+  - A touch of no length (the curve grazes a side from inside) is dropped. It is a
+    point of the curve on the surface, but not a stretch, and a point hit would claim a
+    crossing that is not there.
+- *Truth check.*
+  - `overlaps_are_clipped_by_se`: 30 rounds of the 11 on-surface cases (every kind),
+    each with a random `se` (its `u` sometimes a period or more), 200 parameters each. The
+    oracle is the surface's own inversion placed against `se`: a parameter is in a piece
+    exactly when its foot is inside, except within 1e-6 of a piece's end. The test asserts
+    more than 10 cases in several pieces, more than 20 with none, more than 5 whole, and
+    more than 50,000 parameters checked.
+  - `a_circle_in_a_box_is_its_arcs`: exact arc ends.
+  - `rulings_and_parallels_clip_exactly`.
+  - `curves_on_the_surface_overlap_it` now has an oblique ellipse on a cylinder and
+    asserts 220 overlaps.
+  - `t_curve_surface` is unchanged at 0 mismatches. Its fingerprint is only whether
+    there is an overlap.
+
+**A bad `tol`.** `intersect_curve` now refuses a `tol` that is not finite or not above
+zero as `SurfaceError::BadTolerance { value }` (Refused, `intersect_tolerance_invalid`).
+It is checked first, before the NURBS check, so a NaN never reaches the solve
+(`a_bad_tolerance_is_refused_first`). `pcurve_of` still accepts a zero `tol` (its checks
+then ask for an exact lift). The two now differ on zero. That is left for review: making
+`pcurve_of` refuse zero too is a one-line change if it is ruled.
+
+**Added work.** Timed side-channel with a throwaway timer (best of 7, release, not
+committed). `main` and the branch were run back to back under the same load:
+
+| Path | main | branch |
+| --- | ---: | ---: |
+| `pcurve_of` of a parallel | 1365 ns | 1370 ns |
+| `Curve2` angle-line `point` | 38.9 ns | 37.4 ns |
+| `pcurve_of` of an oblique ellipse | 507 ns (refused) | 1573 ns (built and checked) |
+| `intersect_curve` line-cylinder | 1880 ns | 1799 ns |
+| overlap, parallel, `se` the whole turn | 6501 ns | 6531 ns |
+| overlap, parallel, `se` part of the turn | 6497 ns | 7153 ns |
+| overlap, circle on a plane in a box | 2500 ns | 3191 ns |
+
+- Paths that do not clip are unchanged within noise. The load was 6 to 10, and earlier
+  runs swung by 25% on both sides.
+- An oblique `pcurve_of` now does the work every other answer does: 9 + 9 evaluations for
+  the checks, one `atan2`.
+- A clipped overlap adds, per side of `se`: one plane, a `hypot`, an `atan2` and an
+  `acos`. Then one curve point and one `uv_in` per sub-interval (at most 9 here).
+- A plain hit gains one comparison for `tol`.
 
 ## 5. `scx-ssi`, the analytic part
 
@@ -3316,12 +3494,170 @@ Both are exact and deterministic. Nothing was taken that depends on a search or 
 
 **Open.**
 
-- WR-680's rational pcurve of an oblique cylinder section, in `pcurve_of`.
+- WR-680's oblique cylinder section in `pcurve_of`: done, an `AngleWave2` at the
+  ellipse's parameter (§4.14). An oblique section of a cone is still `NoClosedForm`.
 - ~~Parabola and hyperbola kinds in `scx-curve`.~~ Built 11-27 (§3.12); a cone's
   parabola and hyperbola are solved.
 - The cylinder's ellipse too long for its precision, and the cone's band between the
   parabola threshold and that bound: `General` (§3.12).
-- SS2's remaining gaps are listed in §3.12; SS3 and SS4.
+- SS2's remaining gaps are listed in §3.12; SS4.
+
+### 5.7 SS3 as built (11-27)
+
+Decided by analysis and an adversarial pass. Proposed for review; not yet ruled.
+
+No public signature changes. `intersect` now answers two spheres, and any two of cylinder,
+cone, sphere and torus on one axis, in `analytic/coaxial.rs`. The answer is §5.6's
+`Closed<Intersection>`. Every other pair stays `General` (SS2). Inside the crate, `Clip` now
+takes two `Part`s (a surface's region and its normal) instead of a surface and a plane, so
+the plane sections and the coaxial circles share one clipper and one orientation rule
+(`n_a x n_b`).
+
+**The method.** Each surface of revolution is reduced to its meridian in the half-plane
+(distance from the axis, height along it):
+
+- a cylinder or cone is a line;
+- a sphere or torus is a circle;
+- each carries the heights its extent allows.
+
+Two meridians meet at points, and each point is a circle about the axis, or a touch point
+when it lies on the axis. The circles are then clipped to both extents by `Clip`.
+
+The axis is chosen as follows:
+
+- Two spheres share the line of their centres.
+- A sphere shares the other surface's axis when its centre lies on it.
+- Otherwise the axes must agree, and their tilt and offset, carried over the second's
+  reach, become `δ`. When `δ` is past the tolerance, the answer is `General`.
+
+| Meridians | Solved | `General` |
+|---|---|---|
+| two lines (cylinder, cone) | one circle; coincident over the shared heights; empty | a gap between `tol` and `tol + δ`; a crossing past both apexes that the apex distance cannot settle |
+| line and circle | one or two circles, a tangent circle, or empty | the same |
+| two circles | one or two circles, a tangent circle, coincident, or empty | the same |
+
+**Choices, with the case against and the case for each.**
+
+- **One meridian solver for every coaxial pair, not one function per pair.** The pin has
+  `intersect_with_sphere` and `intersect_with_cone` per kind.
+  - Against: a function per pair is easier to compare with the pin's line by line.
+  - For: the geometry is the same in every case, either lines and circles meeting in a
+    plane, so ten pairs need three meeting rules (`lines`, `line_circle`, `circles`).
+    The torus pairs come with no extra code. The pin solves the torus pairs only through
+    its general intersector.
+- **Two circles by the pin's WR-79 Heron form.** The half-chord is computed as
+  `sqrt` of the product of the four gaps, not by `r^2 - d^2`.
+  - Against: none found. It is the pin's lesson, and it is exact up to rounding.
+  - For: near a tangency the difference of squares cancels, while the product of gaps does
+    not.
+- **Empty only from exact bounds.** Three bounds give Empty:
+  - the heights apart;
+  - parallel meridians apart;
+  - a crossing past both apexes, where each apex is farther than `tol + δ` from the other
+    meridian.
+
+  Each is a distance in the meridian plane that the surfaces cannot close. Between `tol`
+  and `tol + δ` the answer is `General`, not a guess.
+  - Against: a pair that is slightly off-axis and far apart could have been called empty by
+    a looser bound.
+  - For: §5.6 and 04 say a solved empty is final. `General` costs the marcher a call, and a
+    false empty loses a curve.
+- **Coincident when the meridians agree within `tol` over shared heights longer than `tol`.**
+  Two cones that share only their apex are not coincident: they meet at that apex only. Two
+  spheres with the same centre and radius are coincident, and so are two tori with the same
+  tube.
+  - Against: none found for these surfaces. A turned coaxial frame matters only for the
+    `around` range, and the clip handles that range.
+  - For: the truth (T5) agrees on every case the tests build.
+- **Concentric spheres are answered without looking at their extents.** They are
+  coincident when the radii agree within `tol`, and empty otherwise.
+  - Against: two sphere patches on opposite sides of one sphere do not overlap, and the
+    answer still says `Coincident`.
+  - For: `Coincident { on_a, on_b }` carries both whole extents, as for two planes in
+    §5.6. Bounding the overlap of two latitude and longitude patches is SS4's
+    classification work. A caller that needs the overlap intersects `on_a` with `on_b`.
+    This is a deviation, listed for review.
+- **A torus's heights are its whole tube's** (`[-small, small]`), whatever its extent's
+  tube angle. The clip then cuts the circles to the tube angle.
+  - Against: a tighter height range would reject more pairs as empty before the clip runs.
+  - For: the bound stays exact. The clip is exact as well, so no curve is lost, and a
+    rejected pair would only have been cheaper.
+- **Touch points on the axis.** Where the meridians meet at distance 0 (`|x| <= tol`), the
+  answer is a tangent point, not a circle of radius 0. Examples are a sphere touching a cone's
+  apex, and two spheres touching end to end.
+- **No seam splitting.** This is §5.6's rule: a circle is one piece over its span, even when
+  the span passes the turn's start.
+
+**Tests and the truth extension.**
+
+- **T5 extension.** T5's `shared_axes` now accepts frames whose x and y axes are a signed
+  permutation of each other's, in `scx-testkit/src/ssi.rs`. Before, it needed equal axes.
+  This lets the truth answer pairs that are turned or mirrored about the shared axis. It is
+  tested in `scx-testkit/tests/ssi.rs`.
+- **Shared test helpers.** The helpers of `plane_sections` moved to `tests/common`, so
+  `tests/coaxial.rs` can use them too.
+- **`tests/coaxial.rs`** has 6 tests that check every answer against T5, in both orders,
+  with the same checks as `plane_sections`:
+  - on both surfaces;
+  - inside both extents;
+  - the truth's circle and contact;
+  - direction along `n_a x n_b`;
+  - every owed truth point covered.
+
+  The cases are:
+  - fixed cases for each pair kind, including turned and mirrored frames;
+  - near-axis pairs: a tilt or offset of `1e-12` is solved; `1e-3` and square axes are
+    `General`;
+  - 800 random pairs.
+- **Unit test change.** The unit test `other_pairs_are_general` now uses a sphere off the
+  cylinder's axis.
+
+**Difftest.** `t_ssi_coaxial::ssi_coaxial` compares scx against the pin's
+`intersect_with_sphere` and `intersect_with_cone` on 900 inputs: sphere, cylinder and cone
+pairs on exact signed-axis frames. The pin has no closed-form torus pairs. Results:
+
+- 501 exact;
+- 129 within tolerance;
+- 270 pin defects;
+- 0 mismatches;
+- 0 nondeterministic.
+
+Each pin defect is judged against T5 by `t_ssi_coaxial::truth::check`:
+
+| Class | Count | Pin answer | scx answer |
+|---|---:|---|---|
+| Cones crossing | 41 | general | one circle |
+| Cones apart | 58 | general | empty |
+| Cones coincident | 6 | general | coincident |
+| Cylinder and cone crossing | 64 | general | one circle |
+| Cylinder and cone apart | 28 | general | empty |
+| Cylinders of one radius | 46 | coincident or tangent arcs and lines along the overlap | coincident |
+| Sphere and cylinder of its radius | 27 | the equator, transversal | the equator, tangent (as T5) |
+
+**Timings.** Side-channel and throwaway, as in §5.6: the difftest pool on prebuilt surfaces,
+200 repetitions, release build, per call. Each figure is scx against the pin:
+
+| Pair | scx | pin |
+|---|---:|---:|
+| sphere-sphere | 0.92 us | 1.44 us |
+| sphere-cylinder | 0.72 us | 1.70 us |
+| sphere-cone | 0.76 us | 1.37 us |
+| cylinder-cylinder | 0.28 us | 115 us |
+| cylinder-cone | 0.70 us | 0.37 us |
+| cone-cone | 0.68 us | 0.39 us |
+
+The pin is faster on cone pairs only because it answers `General` at once and leaves the
+work to the marcher. scx solves these pairs. The pin's cylinder pairs are slow because it
+builds arcs and lines along the overlap.
+
+**Other kernels (research 66).** §8.2 has only OCCT's docs on IntAna, and research 66 lists
+nothing for coaxial pairs. Nothing was adopted from it. The meridian reduction is the
+textbook one for surfaces of revolution, and it is exact and deterministic.
+
+**Open.**
+
+- SS4: the overlap of coincident patches, and tangency classification at the tolerance.
+- SS2: non-coaxial quadric pairs.
 
 ## 6. `scx-brep`
 

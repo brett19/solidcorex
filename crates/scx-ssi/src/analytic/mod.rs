@@ -18,8 +18,9 @@
 //! [`intersect`] puts the pair in order (a plane second when there is one) and answers:
 //!
 //! - a plane against a plane, cylinder, cone, sphere or torus: [`section_by_plane`];
-//! - every other pair: [`Closed::General`] for now (63 SS2, SS3 add sphere pairs and the
-//!   coaxial pairs).
+//! - two spheres, or two of cylinder, cone, sphere and torus on one axis: circles about the
+//!   axis (the coaxial sections below);
+//! - every other pair: [`Closed::General`] for now (63 SS2).
 //!
 //! # The plane sections
 //!
@@ -46,9 +47,35 @@
 //! on a hyperbola and of a linear function on a line. The spans between crossings are kept
 //! where their middles lie in both extents within the tolerance, and neighbours merge
 //! (across the turn's start on a conic). A piece no longer than the tolerance is a point.
+//!
+//! # The coaxial sections
+//!
+//! Two surfaces of revolution on one axis meet where their meridians (the half-plane
+//! sections, as functions of the distance from the axis and the height along it) meet: each
+//! meeting point is a circle about the axis, or a touch point on it. Two spheres share the
+//! line of their centres; a sphere shares any axis through its centre.
+//!
+//! | meridians | solved | `General` |
+//! |---|---|---|
+//! | two lines (cylinder, cone) | one circle, the surfaces coincident over their shared heights, or empty | a gap between the tolerance and the tolerance widened by the axes' offset |
+//! | a line and a circle (sphere, torus) | one or two circles, a tangent circle, or empty | as above |
+//! | two circles (spheres, tori) | one or two circles, a tangent circle, the surfaces coincident, or empty | as above |
+//!
+//! A crossing past an apex (a negative distance from the axis) is on the cone's other
+//! nappe, outside any extent: the pair is empty when the apex is farther than the widened
+//! tolerance from the other meridian, and `General` otherwise.
+//!
+//! The axes are one when the second's tilt and offset, carried over its reach, are within
+//! the tolerance; past it the pair is [`Closed::General`], however far apart. Everything
+//! else (the heights' overlap, a meridian's slack) widens the tolerance by that offset, so
+//! an `Empty` is only answered where every point is apart by more. The circles are clipped
+//! to both extents like the plane sections'.
 
 mod clip;
+mod coaxial;
 mod section;
+
+use section::Order;
 
 use scx_curve::Curve;
 use scx_num::extent1d::Extent1d;
@@ -99,7 +126,8 @@ pub enum Intersection {
         points: Vec<IntersectionPoint>,
     },
     /// The surfaces are one surface, within the tolerance, over the overlap of these
-    /// extents (on the first surface and on the second): two planes.
+    /// extents (on the first surface and on the second): two planes, two concentric spheres
+    /// of one radius, or two surfaces of revolution on one axis with one meridian.
     Coincident {
         /// The first surface's extent.
         on_a: Extent2d,
@@ -152,11 +180,11 @@ pub fn intersect(
     let [acc_a, acc_b] = acc;
     let tol = coincident(res, acc_a, acc_b);
     match (a, b) {
-        (_, Surface::Plane(p)) => section::section(a, ae, p, be, tol, 1.0),
+        (_, Surface::Plane(p)) => section::section(a, ae, p, be, tol, Order::PlaneSecond),
         (Surface::Plane(p), _) => {
-            section::section(b, be, p, ae, tol, -1.0).map(Intersection::swapped)
+            section::section(b, be, p, ae, tol, Order::PlaneFirst).map(Intersection::swapped)
         }
-        _ => Closed::General,
+        _ => coaxial::coaxial(a, ae, b, be, tol),
     }
 }
 
@@ -171,7 +199,7 @@ pub fn section_by_plane(
     pe: &Extent2d,
     tol: Length,
 ) -> Closed<Intersection> {
-    section::section(s, se, plane, pe, tol, 1.0)
+    section::section(s, se, plane, pe, tol, Order::PlaneSecond)
 }
 
 #[cfg(test)]

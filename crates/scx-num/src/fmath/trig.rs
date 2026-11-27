@@ -3,13 +3,21 @@
 //!
 //! Reduction to `x = n pi/2 + y` with `|y| <= pi/4` (a hair over is harmless): below
 //! `2^20` by Cody-Waite with `pi/2` in four pieces (152 bits); above, by Payne-Hanek with
-//! a 192-bit window of the bits of `2/pi` and exact integer products. Either way `y` is
-//! a double-double good to about `2^-120` absolute, and no double lies closer than about
-//! `2^-62` to a multiple of `pi/2`, so `y` keeps over 60 bits of relative accuracy.
+//! a 192-bit window of the bits of `2/pi` and exact integer products. `y` is a
+//! double-double within `2^-104 |y|` plus `2^-127.3` of the true reduced argument
+//! (Cody-Waite: the one rounded sum `ae + be - k PIO2_4`, below `2^-52 |y| + 2^-84`, and
+//! the `2^-137` of `k` times `PIO2_4`'s rounding; Payne-Hanek: the fraction truncated to
+//! 128 bits of a quadrant, and the window's end). No double lies closer than `2^-60.89`
+//! to a multiple of `pi/2` (at `6381956970095103 2^797`; Muller, "Elementary Functions",
+//! ch. 11), so `y` is within `2^-66.4 |y|` (the largest seen: `2^-68.2`).
 //!
-//! Kernel: `y = i/64 + h` with `|h| <= 1/128`; `sin` and `cos` of `i/64` come from a
+//! Kernels: `y = i/64 + h` with `|h| <= 1/128`; `sin` and `cos` of `i/64` come from a
 //! double-double table, and of `h` from short series.
+//!
+//! Rounding: a fast kernel in doubles with a Ziv test, then the double-double kernel
+//! with its own, then the multi-precision fallback.
 
+use super::accurate;
 use super::dd::{self, at, round_int};
 use super::tables::{INV_PIO2, PIO2, PIO2_1, PIO2_2, PIO2_3, PIO2_4, SINCOS_TAB, TWO_OVER_PI};
 use crate::eft::{fast_two_sum, two_prod, two_sum};
@@ -69,93 +77,73 @@ fn payne_hanek(x: f64) -> (i32, (f64, f64)) {
     (n, dd::mul((hi * s, lo * s), PIO2))
 }
 
-/// The pieces shared by `sin y` and `cos y`, for `|y| <= 0.8`: `y = ±(a + h)` with
-/// `a = i/64` from the table and `|h| <= 1/128`.
-struct Kernel {
-    neg: bool,
-    h: f64,
-    /// `sin a` and `cos a` as double-doubles.
-    sh: f64,
-    sl: f64,
-    ch: f64,
-    cl: f64,
-    /// `sin(h + yl) - h`, and `cos(h + yl) - 1` as `dch + dcl` (sum `dc`), to about 2^-75.
-    ds: f64,
-    dch: f64,
-    dcl: f64,
-    dc: f64,
+/// `1/6` as a double-double.
+const SIXTH: (f64, f64) = (
+    f64::from_bits(0x3fc5555555555555),
+    f64::from_bits(0x3c65555555555555),
+);
+
+/// `(sin y, cos y)` as double-doubles, for the reduced `|y| <= 0.8`: `|y| = a + t` with
+/// `a = i/64` from the table and `t = h + yl` (`|h| <= 1/128`), and
+/// `sin(a + t) = sin a + sin a (cos t - 1) + cos a sin t`,
+/// `cos(a + t) = cos a + cos a (cos t - 1) - sin a sin t`.
+///
+/// Error, relative to `sin y` and `cos y` of the double-double `y`, below `2^-82.6`.
+/// With `u = fl(t^2)`, `sin t - t = t^3 (-1/6 + w)` and `cos t - 1 = t^2 (-1/2 + v)`,
+/// `w` and `v` in doubles: both within `2^-51.2` of themselves (four roundings), so
+/// `sin t` within `2^-85.9 |t|` (`|w| <= 2^-20.9`, `t^2/6 <= 2^-16.6`) and `cos t - 1`
+/// within `2^-83.8` (`|v| <= 2^-18.6`, `t^2 <= 2^-14`). The series stop at `t^9/9!` and
+/// `t^8/8!` (dropped: `2^-95.2 |t|` and `2^-91.8`). `sin a <= 2 |sin y|` and `cos y >=
+/// 0.69`, so the `cos t - 1` term gives at most `2^-82.8` of either result and `sin t`
+/// `2^-85.4`; the double-double products and sums (about `2^-104` each, of terms below
+/// `2 |sin y|`) and the table's `2^-106` add below `2^-97`.
+fn precise(y: (f64, f64)) -> ((f64, f64), (f64, f64)) {
+    let p = Precise::new(y);
+    (p.sin(), p.cos())
 }
 
-impl Kernel {
+/// The parts [`precise`] shares between `sin y` and `cos y`.
+struct Precise {
+    neg: bool,
+    /// `sin a`, `cos a`, `sin t` and `cos t - 1`.
+    sa: (f64, f64),
+    ca: (f64, f64),
+    st: (f64, f64),
+    cm: (f64, f64),
+}
+
+impl Precise {
     fn new(y: (f64, f64)) -> Self {
-        let neg = y.0 < 0.0;
-        let (yh, yl) = if neg { (-y.0, -y.1) } else { y };
+        let neg_y = y.0 < 0.0;
+        let (yh, yl) = if neg_y { neg(y) } else { y };
         let i = round_int(yh * 64.0);
-        let h = yh - i * (1.0 / 64.0);
+        let t = two_sum(yh - i * (1.0 / 64.0), yl);
         let (sh, sl, ch, cl) = at(&SINCOS_TAB, i as usize);
-        let (h2, h2e) = two_prod(h, h);
-        let ds = h * h2 * (-1.0 / 6.0 + h2 * (1.0 / 120.0 - h2 * (1.0 / 5040.0)))
-            + yl * (1.0 - 0.5 * h2);
-        let dch = -0.5 * h2;
-        let dcl = -0.5 * h2e + h2 * h2 * (1.0 / 24.0 - h2 * (1.0 / 720.0)) - h * yl;
-        let dc = dch + dcl;
+        let t2 = dd::mul(t, t);
+        let u = t2.0;
+        let w = u * (1.0 / 120.0 + u * (-1.0 / 5040.0 + u * (1.0 / 362_880.0)));
+        let (ps, pse) = two_sum(-SIXTH.0, w);
+        let st = dd::add(t, dd::mul(dd::mul(t2, t), (ps, pse - SIXTH.1)));
+        let v = u * (1.0 / 24.0 + u * (-1.0 / 720.0 + u * (1.0 / 40_320.0)));
+        let cm = dd::mul(t2, two_sum(-0.5, v));
         Self {
-            neg,
-            h,
-            sh,
-            sl,
-            ch,
-            cl,
-            ds,
-            dch,
-            dcl,
-            dc,
+            neg: neg_y,
+            sa: (sh, sl),
+            ca: (ch, cl),
+            st,
+            cm,
         }
     }
 
-    /// `sin y`: `sin(a + h) = sin a + sin a (cos h - 1) + cos a sin h`.
     fn sin(&self) -> (f64, f64) {
-        let Self {
-            neg,
-            h,
-            sh,
-            sl,
-            ch,
-            cl,
-            ds,
-            dch,
-            dcl,
-            dc,
-        } = *self;
-        let (p, pe) = two_prod(ch, h);
-        let (s, se) = two_sum(sh, p);
-        let (q, qe) = two_prod(sh, dch);
-        let (s2, s2e) = two_sum(s, q);
-        let s_lo = se + pe + s2e + qe + sl + cl * h + ch * ds + sh * dcl + sl * dc;
-        let sin = fast_two_sum(s2, s_lo);
-        if neg { (-sin.0, -sin.1) } else { sin }
+        let (sa, ca) = (self.sa, self.ca);
+        let sin = dd::add(sa, dd::add(dd::mul(sa, self.cm), dd::mul(ca, self.st)));
+        if self.neg { neg(sin) } else { sin }
     }
 
-    /// `cos y`: `cos(a + h) = cos a + cos a (cos h - 1) - sin a sin h`.
     fn cos(&self) -> (f64, f64) {
-        let Self {
-            h,
-            sh,
-            sl,
-            ch,
-            cl,
-            ds,
-            dch,
-            dcl,
-            dc,
-            ..
-        } = *self;
-        let (p, pe) = two_prod(sh, -h);
-        let (c, ce) = two_sum(ch, p);
-        let (q, qe) = two_prod(ch, dch);
-        let (c2, c2e) = two_sum(c, q);
-        let c_lo = ce + pe + c2e + qe + cl - sl * h - sh * ds + ch * dcl + cl * dc;
-        fast_two_sum(c2, c_lo)
+        let (sa, ca) = (self.sa, self.ca);
+        dd::add(ca, dd::add(dd::mul(ca, self.cm), neg(dd::mul(sa, self.st))))
     }
 }
 
@@ -163,31 +151,36 @@ fn neg(v: (f64, f64)) -> (f64, f64) {
     (-v.0, -v.1)
 }
 
-/// `(sin x, cos x)` as double-doubles, for finite `x`.
-fn sin_cos_dd(x: f64) -> ((f64, f64), (f64, f64)) {
-    let (n, y) = reduce(x);
-    let k = Kernel::new(y);
-    let (s, c) = (k.sin(), k.cos());
-    match n {
-        0 => (s, c),
-        1 => (c, neg(s)),
-        2 => (neg(s), neg(c)),
-        _ => (neg(c), s),
+/// `sin(x + quarters pi/2)` rounded, for the reduction `(n, y)` of a finite `x`: the
+/// fast kernel when its test passes, else [`slow`].
+#[allow(clippy::inline_always)] // one call site per function; out of line it costs a call on the fast path
+#[inline(always)]
+fn sin_quadrant(x: f64, quarters: i32, n: i32, y: (f64, f64)) -> f64 {
+    let q = (n + quarters) & 3;
+    let (hi, lo) = if q & 1 == 0 { fast_sin(y) } else { fast_cos(y) };
+    if dd::rounds_to_hi(hi, lo, FAST_TEST) {
+        return if q >= 2 { -hi } else { hi };
     }
+    slow(x, quarters, q, y)
 }
 
-/// `sin(x + quarters pi/2)` as a double-double, for finite `x`: only the half of the
-/// kernel the quadrant picks is computed (`cos x` is `quarters = 1`).
-fn sin_dd(x: f64, quarters: i32) -> (f64, f64) {
-    let (n, y) = reduce(x);
-    let k = Kernel::new(y);
-    match (n + quarters) & 3 {
-        0 => k.sin(),
-        1 => k.cos(),
-        2 => neg(k.sin()),
-        _ => neg(k.cos()),
-    }
+/// [`sin_quadrant`] by [`precise`], else the multi-precision fallback. The test's radius is
+/// twice the bound: [`precise`]'s `2^-82.6`, with the reduction's `2^-104 |y|` relative
+/// (moving `sin y` and `cos y` by no more, relatively) and `2^-127.3` absolute (by no
+/// more, absolutely).
+#[inline(never)]
+fn slow(x: f64, quarters: i32, q: i32, y: (f64, f64)) -> f64 {
+    let p = Precise::new(y);
+    let v = if q & 1 == 0 { p.sin() } else { p.cos() };
+    let (h, l) = if q >= 2 { neg(v) } else { v };
+    let err = PRECISE_ERR * h.abs() + RED_ABS;
+    dd::round_ball_or(h, l, err, || accurate::sin_quadrant(x, quarters as u32))
 }
+
+/// `2^-81.5`.
+const PRECISE_ERR: f64 = 2.9245251020114406e-25;
+/// `2^-126`, over twice the reduction's absolute error.
+const RED_ABS: f64 = 1.1754943508222875e-38;
 
 /// Below this, `sin x` rounds to `x` and `cos x` to 1.
 const TINY: f64 = 7.450580596923828e-9; // 2^-27
@@ -200,11 +193,11 @@ pub(super) fn sin(x: f64) -> f64 {
     if x.abs() < TINY {
         return x;
     }
-    sin_dd(x, 0).0
+    let (n, y) = reduce(x);
+    sin_quadrant(x, 0, n, y)
 }
 
-/// `cos(x)`: the fast kernel when its rounding test passes, else the double-double one,
-/// on the same reduced argument; the bits are the double-double path's either way.
+/// `cos(x)`, as `sin(x + pi/2)`.
 pub(super) fn cos(x: f64) -> f64 {
     if !x.is_finite() {
         return f64::NAN;
@@ -213,27 +206,14 @@ pub(super) fn cos(x: f64) -> f64 {
         return 1.0;
     }
     let (n, y) = reduce(x);
-    // cos x = sin(x + pi/2): quadrant n + 1 of the sine.
-    let q = (n + 1) & 3;
-    let (hi, lo) = if q & 1 == 0 { fast_sin(y) } else { fast_cos(y) };
-    if dd::rounds_to_hi(hi, lo, FAST_TEST) {
-        return if q >= 2 { -hi } else { hi };
-    }
-    let k = Kernel::new(y);
-    match q {
-        0 => k.sin().0,
-        1 => k.cos().0,
-        2 => -k.sin().0,
-        _ => -k.cos().0,
-    }
+    sin_quadrant(x, 1, n, y)
 }
 
 /// The rounding-test constant for [`fast_sin`] and [`fast_cos`]: `1 + 2^-6`, good for
-/// `eps < 2^-54 (1 - (1 + 2^-53)/(1 + 2^-6)) = 2^-60.02` ([`dd::rounds_to_hi`]). Their
-/// `eps` is at most `2^-62` for the fast kernel plus `2^-63` for [`Kernel`], both against
-/// `sin` or `cos` of the same double-double `y`, so `2^-61.4`: a margin of 2.6 over that,
-/// and of about 7 over the sums of the error budgets below. The test fails, and the
-/// double-double kernel runs, for about 1.5% of arguments in `[-4, 4]`.
+/// `eps < 2^-54 (1 - (1 + 2^-53)/(1 + 2^-6)) = 2^-60.02` ([`dd::rounds_to_hi`]). Against
+/// the true value their error is at most `2^-62` for the fast kernel plus the reduction's
+/// `2^-66.4`, so `2^-61.93`: a margin of 3.8 (the largest seen: `2^-65.4`). The test
+/// fails, and the double-double kernel runs, for about 1.5% of arguments in `[-4, 4]`.
 const FAST_TEST: f64 = 1.015_625;
 
 /// The table index, the offset and the two short series shared by [`fast_sin`] and
@@ -297,11 +277,14 @@ pub(super) fn sin_cos(x: f64) -> (f64, f64) {
     if x.abs() < TINY {
         return (x, 1.0);
     }
-    let (s, c) = sin_cos_dd(x);
-    (s.0, c.0)
+    let (n, y) = reduce(x);
+    (sin_quadrant(x, 0, n, y), sin_quadrant(x, 1, n, y))
 }
 
-/// `tan(x)`.
+/// `tan(x)`: `sin y / cos y` or `-cos y / sin y` by the fast kernel when its test passes
+/// ([`FAST_TEST`]: the fast pair's `2^-62` and `2^-63`, the division's `2^-104` and the
+/// reduction's `2^-66.4` give `2^-61.2`, a margin of 2.3), else by [`precise`], else the
+/// multi-precision fallback.
 pub(super) fn tan(x: f64) -> f64 {
     if !x.is_finite() {
         return f64::NAN;
@@ -309,8 +292,36 @@ pub(super) fn tan(x: f64) -> f64 {
     if x.abs() < TINY {
         return x;
     }
-    let (s, c) = sin_cos_dd(x);
-    dd::div(s, c).0
+    let (n, y) = reduce(x);
+    let (s, c) = (fast_sin(y), fast_cos(y));
+    let (hi, lo) = if n & 1 == 0 {
+        dd::div(s, c)
+    } else {
+        neg(dd::div(c, s))
+    };
+    if dd::rounds_to_hi(hi, lo, FAST_TEST) {
+        return hi;
+    }
+    tan_slow(x, n, y)
+}
+
+/// [`tan`] by [`precise`]: each half within `2^-82.6`, the quotient within `2^-81.6`; the
+/// reduction's error moves `tan` by at most `2.2` times its relative error in `y`, which
+/// `2^-127.3` absolute makes at most `2.2 2^-127.3 (1 + tan^2)` absolute (`|tan y|/|y| <=
+/// 1 + tan^2 y` and `|cot y|/|y| <= 1 + cot^2 y`). Twice each. `|tan x|` lies in
+/// `[2^-61, 2^61]`, so the result is normal.
+#[inline(never)]
+fn tan_slow(x: f64, n: i32, y: (f64, f64)) -> f64 {
+    const REL: f64 = 5.849050204022881e-25; // 2^-80.5
+    const ABS: f64 = 2.350988701644575e-38; // 2^-125
+    let (s, c) = precise(y);
+    let (h, l) = if n & 1 == 0 {
+        dd::div(s, c)
+    } else {
+        neg(dd::div(c, s))
+    };
+    let err = REL * h.abs() + ABS * (1.0 + h * h);
+    dd::round_ball_or(h, l, err, || accurate::tan(x))
 }
 
 #[cfg(test)]
@@ -319,23 +330,39 @@ mod tests {
     use super::*;
     use crate::hash::Rng;
 
-    /// `cos` against its double-double path alone, bit for bit.
+    /// `cos`, `sin` and `tan` against their slow paths alone, bit for bit.
     fn check(x: f64, st: &mut Stats) {
-        let slow = if !x.is_finite() {
+        for (quarters, got) in [(1, cos(x)), (0, sin(x))] {
+            let want = if !x.is_finite() {
+                f64::NAN
+            } else if x.abs() < TINY {
+                if quarters == 1 { 1.0 } else { x }
+            } else {
+                let (n, y) = reduce(x);
+                slow(x, quarters, (n + quarters) & 3, y)
+            };
+            assert_eq!(
+                got.to_bits(),
+                want.to_bits(),
+                "sin(x + {quarters} pi/2), x = {x:e}"
+            );
+        }
+        let want = if !x.is_finite() {
             f64::NAN
         } else if x.abs() < TINY {
-            1.0
+            x
         } else {
-            sin_dd(x, 1).0
+            let (n, y) = reduce(x);
+            tan_slow(x, n, y)
         };
-        assert_eq!(cos(x).to_bits(), slow.to_bits(), "cos({x:e})");
+        assert_eq!(tan(x).to_bits(), want.to_bits(), "tan({x:e})");
         if x.is_finite() && x.abs() >= TINY {
             let (n, y) = reduce(x);
-            let k = Kernel::new(y);
+            let (ks, kc) = precise(y);
             let ((fh, fl), dd) = if n & 1 == 0 {
-                (fast_cos(y), k.cos())
+                (fast_cos(y), kc)
             } else {
-                (fast_sin(y), k.sin())
+                (fast_sin(y), ks)
             };
             st.add((fh, fl), dd::rounds_to_hi(fh, fl, FAST_TEST), dd);
         }

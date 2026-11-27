@@ -601,8 +601,17 @@ pub mod truth {
     }
 
     fn kinds(c: &Case) -> (SurfaceKind, SurfaceKind) {
-        let frame = tframe(&c.surface_frame());
-        let s = match c.kind {
+        let s = kind_of(c.kind, &c.surface_frame());
+        let p = SurfaceKind::Plane(ta::Plane {
+            frame: tframe(&c.plane_frame()),
+        });
+        (s, p)
+    }
+
+    /// The testkit's form of a kind in a frame (forward sense).
+    pub fn kind_of(kind: Kind, f: &Frame) -> SurfaceKind {
+        let frame = tframe(f);
+        match kind {
             Kind::Plane => SurfaceKind::Plane(ta::Plane { frame }),
             Kind::Cylinder { r } => SurfaceKind::Cylinder(ta::Cylinder { frame, radius: r }),
             // The testkit's cone widens along its z: a narrowing one is the same cone with
@@ -626,11 +635,7 @@ pub mod truth {
                 major: big,
                 minor: small,
             }),
-        };
-        let p = SurfaceKind::Plane(ta::Plane {
-            frame: tframe(&c.plane_frame()),
-        });
-        (s, p)
+        }
     }
 
     fn local(f: &Frame, q: Point3) -> [f64; 3] {
@@ -705,7 +710,7 @@ pub mod truth {
 
     /// The distance from `q` to the curve over `[t0, t1]`: the nearest of a sampling, then
     /// a golden-section search beside it (across the ends on a whole turn).
-    fn distance_to(c: &Curve, t0: f64, t1: f64, q: Point3) -> f64 {
+    pub fn distance_to(c: &Curve, t0: f64, t1: f64, q: Point3) -> f64 {
         const N: usize = 256;
         let f = |t: f64| c.point(t).distance(q);
         let h = (t1 - t0) / N as f64;

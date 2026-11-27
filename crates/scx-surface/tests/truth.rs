@@ -1025,3 +1025,116 @@ fn surface_to_nurbs_is_the_kinds_and_restricts_nurbs() {
         }
     }
 }
+
+/// The rational quadratic `sum w_i B_i(s) P_i / sum w_i B_i(s)` at `s`, exactly.
+fn bezier(points: &[[Rat; 3]; 3], weights: &[Rat; 3], s: &Rat) -> [Rat; 3] {
+    let b = scx_testkit::ssi::bernstein();
+    let mut num = [Rat::zero(), Rat::zero(), Rat::zero()];
+    let mut den = Rat::zero();
+    for i in 0..3 {
+        let c = &b[i].eval(s) * &weights[i];
+        den = &den + &c;
+        for j in 0..3 {
+            num[j] = &num[j] + &(&c * &points[i][j]);
+        }
+    }
+    num.map(|x| x.checked_div(&den).unwrap())
+}
+
+/// WR-680 (63 §4.14): a plane's oblique section of a cylinder, an ellipse, has the exact
+/// pcurve `pcurve_of` gives. The truth is the testkit's exact rational section on the
+/// pin's NURBS cylinder, span by span: at each rational `s` its point (on the plane and the
+/// cylinder exactly) and its uv `(u(s), H(s) / W(s))`, `u` in the pin's quarter-arc layout
+/// (period `4 pi`, here `2 pi r`). The ellipse's parameter at the point is read off its
+/// frame; the pcurve there is the truth's uv, `u` modulo the period.
+#[test]
+fn oblique_cylinder_sections_have_the_rational_uv() {
+    use scx_curve::{Curve, Curve2, Ellipse};
+    use scx_num::extent1d::Extent1d;
+    use scx_surface::pcurve_of;
+    use scx_testkit::ssi::cylinder_section;
+
+    let mut rng = Rng::new(0x9c_0680);
+    let mut n = 0;
+    for _ in 0..24 {
+        let f = frame(&mut rng);
+        let cs = sense(&mut rng);
+        let r = 0.5 + 4.0 * rng.next_f64();
+        let cyl = Cylinder::new(f, Length::from_mm(r), cs).unwrap();
+        let tf = tk(&f, cs);
+        let z = *f.z() * cs.sign();
+        // A plane through a point near the axis, its normal tilted off the axis.
+        let pf = {
+            let g = sample::frame(&mut rng, 10.0);
+            let normal = Vec3::new(g.z[0], g.z[1], g.z[2]);
+            let normal = Vec3::from((z * (0.3 + rng.next_f64()) + normal).normalized().unwrap());
+            let origin = f.origin() + z * (5.0 * rng.next_signed_unit());
+            let x = z.cross(normal).normalized().unwrap();
+            Frame::new(origin, normal, Vec3::from(x)).unwrap()
+        };
+        let a = |v: Vec3| [v.x, v.y, v.z];
+        let po = pf.origin();
+        let tplane = analytic::Plane {
+            frame: analytic::Frame {
+                origin: [po.x, po.y, po.z],
+                x: a(*pf.x()),
+                y: a(*pf.y()),
+                z: [0.0; 3],
+            },
+        };
+        // The ellipse: centre where the plane meets the axis, semi-axes `r` across the
+        // axis (along the plane's x) and `r / cos tilt` up the plane (its y).
+        let nz = pf.z().dot(z);
+        let centre = f.origin() + z * ((po - f.origin()).dot(*pf.z()) / nz);
+        let es = sense(&mut rng);
+        let fe = Frame::new(centre, *pf.z(), *pf.x()).unwrap();
+        let e = Ellipse::new(fe, Length::from_mm(r), Length::from_mm(r / nz.abs()), es).unwrap();
+        let curve = Curve::Ellipse(e);
+        let size = 10.0 + r / nz.abs();
+        let lo = 6.0 * rng.next_signed_unit();
+        let over = Extent1d::new(lo, lo + 7.0).unwrap();
+        let surface = AnySurface::Cylinder(cyl);
+        let pc = pcurve_of(&curve, &surface, over, Length::from_mm(1e-9 * size)).unwrap();
+        assert!(matches!(pc, Curve2::AngleWave(_)), "{pc:?}");
+        let period = 2.0 * PI * r;
+        let scale = period / (4.0 * PI);
+        let spans = cylinder_section(
+            &analytic::Cylinder {
+                frame: tf,
+                radius: r,
+            },
+            &tplane,
+        )
+        .unwrap();
+        for span in &spans {
+            for j in 0..8 {
+                let s = Rat::from_f64(if j == 0 { 0.0 } else { rng.next_f64() }).unwrap();
+                let q = bezier(&span.points, &span.weights, &s).map(|x| x.to_f64());
+                let q = Point3::new(q[0], q[1], q[2]);
+                let u = span.u.eval(&s).to_f64() * scale;
+                let v = span
+                    .v_num
+                    .eval(&s)
+                    .checked_div(&span.weight.eval(&s))
+                    .unwrap()
+                    .to_f64();
+                // The ellipse's parameter of `q`, moved into `over`.
+                let d = q - centre;
+                let (cx, sy) = (d.dot(*fe.x()) / r, d.dot(*fe.y()) * nz.abs() / r);
+                let t0 = fmath::atan2(sy * es.sign(), cx);
+                let t = t0 + ((lo - t0) / (2.0 * PI)).ceil() * 2.0 * PI;
+                assert!((curve.point(t) - q).length() < 1e-12 * size);
+                let got = pc.point(t);
+                let du = (got.x - u) / period;
+                assert!(
+                    (du - du.round()).abs() * period < 1e-12 * size,
+                    "u {} vs {u} at {t}",
+                    got.x
+                );
+                assert!((got.y - v).abs() < 1e-12 * size, "v {} vs {v}", got.y);
+                n += 1;
+            }
+        }
+    }
+    assert_eq!(n, 24 * 4 * 8);
+}
