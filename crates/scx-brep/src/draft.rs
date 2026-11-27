@@ -17,6 +17,8 @@
 //! had, which check instances read it, so `finish` checks only those and the records the
 //! draft made (research 63 §6.14).
 
+mod transform;
+
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -39,6 +41,8 @@ use crate::record::{
 use crate::tables::Tables;
 use crate::touched::Touched;
 use crate::view::{At, Drafting, Edge, Face, Region, Shell, Vertex};
+
+pub use transform::TransformError;
 
 /// A body being edited.
 #[derive(Debug, Clone)]

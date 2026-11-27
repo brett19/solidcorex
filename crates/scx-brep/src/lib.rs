@@ -31,6 +31,7 @@ mod draft;
 pub mod error;
 pub mod finish;
 pub mod id;
+pub mod pcurve;
 mod query;
 pub mod record;
 mod table;
@@ -45,10 +46,11 @@ pub use changes::{
     Split, Touch, Tracked, carry,
 };
 pub use document::Document;
-pub use draft::Draft;
+pub use draft::{Draft, TransformError};
 pub use error::{Absent, TableFull};
 pub use finish::{FinishCause, GeometryCause, StructureCause, Unfinished};
 pub use id::{EdgeId, Entity, EntityKind, FaceId, IdMap, RegionId, ShellId, VertexId};
+pub use pcurve::PcurveWriteError;
 pub use record::{
     EdgeAdj, EdgeGeom, EdgeShape, EdgeUse, FaceRecord, FaceSide, Fin, LoopRecord, RegionRecord,
     ShellRecord, UseGeom, VertexRecord,
@@ -70,6 +72,8 @@ const _: () = {
     ok::<Merge<VertexId>>();
     ok::<Coincidence<FaceId>>();
     ok::<LineageError>();
+    ok::<PcurveWriteError>();
+    ok::<TransformError>();
     ok::<Document>();
     ok::<IdMap>();
     ok::<FaceRecord>();

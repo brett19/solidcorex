@@ -4559,7 +4559,7 @@ Decided by analysis and an adversarial pass. Proposed for review; not yet ruled.
    absent origin, is refused (`LineageError::NotCreated`, `UnknownOrigin`).
 8. *A created entity absorbed into a before-id drops its lineage*; one absorbed into a created id
    adds its origins. A chain of merges is followed to the end; an absorbed entity whose survivor is
-   gone counts as removed.
+   gone counts as removed. (Superseded by §6.13 decisions 3 and 4: lineage is kept whichever survives.)
 9. *`Carry` rules return `Option`* (01 has `T`), so "no value" is expressible, as the pin's
    attribute handlers allow (`issue_1730_application_attribute_handlers`). Cross-kind origins carry
    nothing.
@@ -5044,6 +5044,579 @@ in ns per face.
 5. `EdgeAdj` has only `Default`, so a builder fills its fins through `adjacency_mut`.
    `Draft::add_face` appends fins loop by loop, which is enough for the generators. No API
    was added to `scx-brep`.
+
+### 6.11 BR5 as built (11-27)
+
+Decided by analysis and an adversarial pass. Proposed for review; not yet ruled.
+
+`scx_brep::pcurve` is the exact pcurve writer, step 3 of the pcurve plan. Each use of a face
+gets the closed form that `scx_surface::pcurve_of` gives for its edge's curve on the face's
+surface, moved by whole periods into the window its loop needs. A collapsed edge at a pole
+gets the pole's segment. Where there is no closed form the writer refuses with
+`PcurveWriteError::NeedsFit { edge }` (Unsupported) and writes nothing. Fitting is BR9's.
+
+**The public surface.**
+
+```rust
+impl Draft {
+    pub fn exact_loops(&self, surface: &Surface, loops: &[Vec<(EdgeId, Sense)>], doc: &Document)
+        -> Result<Vec<LoopRecord>, PcurveWriteError>;
+    pub fn write_pcurves(&mut self, face: FaceId, doc: &Document) -> Result<(), PcurveWriteError>;
+}
+```
+
+- `exact_loops` computes the loops of a face that is not built yet (`add_face` takes them).
+- `write_pcurves` rewrites a face's uses in place through `face_mut`. It computes everything
+  first, so on any error the face is unchanged. Every use it writes carries `bound = None`.
+- `PcurveWriteError` is `Copy` and `#[non_exhaustive]`, with a stable `name()`. Its
+  variants:
+
+| Variant | Kind | When |
+|---|---|---|
+| `NeedsFit { edge }` | Unsupported | `pcurve_of` has no closed form or is inexact, or the curve is within the edge's reach of the surface but not within the approximation tolerance |
+| `NoCurveUse { lp }` | Unsupported | a loop of collapsed uses only (nothing to place it by) |
+| `CollapsedRun { lp, at }` | Unsupported | two collapsed uses in a row |
+| `Absent(Absent)` | Refused | no such face or edge |
+| `Pending { edge }` | Refused | the edge's curve is not attached (A10) |
+| `OffSurface { edge, at, miss }` | Refused | the curve leaves the surface beyond the edge's reach |
+| `CrossesPole { edge, at }` | Refused | a meridian runs through a pole inside one use |
+| `LoopOpen { lp, at, gap }` | Refused | consecutive uses do not meet, even after whole-period moves |
+| `PoleNeedsEdge { lp, at }` | Refused | they fail to meet at a pole, where a collapsed edge is missing |
+| `Winds { lp }` | Refused | the loop closes a whole period away (it needs a seam) |
+| `Pcurve { edge, cause }` | the cause's | another `PcurveError` |
+
+**The rules.** These are 07 §3 rule 5 and the checks BR2's `finish` makes.
+
+- *Periods.* A loop's first curve use keeps `pcurve_of`'s base window. Each later use moves
+  by `round(gap / period)` periods toward the use before it. What remains must be within
+  the two ends' budgets (record, edge reach, vertex reach), converted to uv by the
+  surface's speed, as `finish` measures it.
+- *Poles.* A collapsed use whose vertex is a pole (a sphere's two, a cone's apex, within
+  zone + edge reach + vertex reach) becomes a `Line2` along `u` at the pole's `v`, over
+  `[0, 1]`. It runs from where the loop arrives to where it leaves, with its length moved
+  into `(0, period]`; a zero gap becomes a whole turn. It runs toward `-u` when the face
+  lies below the pole and toward `+u` above, so the face stays on the left. For a
+  `Reversed` use the line is reversed. A collapsed use away from a pole becomes
+  `UseGeom::Point` where the loop stands. No pcurve runs along a pole's line, and none
+  passes a pole inside a use.
+- *Inner loops* move by whole periods so that their centre is nearest the first loop's.
+
+This answers §6.10's open question 1 for the writer's side. A collapsed edge's use is a
+segment over `[0, 1]`, one collapsed edge per pole per face, as the generator makes it.
+`finish` accepts it, and `contains_uv` closes on it.
+
+**Decisions, with cases for and against.**
+
+1. *The tolerance is `res.approx()` (half the zone).*
+   - For: `pcurve_of` checks at 9 parameters. A sinusoidal miss between two samples is at
+     most `1 / cos(pi / 8)` (1.08) times the larger sampled one. Checking at half the zone
+     therefore keeps the pcurve within the zone everywhere, so `bound = None` is honest.
+   - Against: a curve that lifts at 0.6 zone is refused as `NeedsFit`, even though `finish`
+     would pass it.
+   - Answer: that edge then gets a fitted pcurve with a recorded bound (BR9). An exact claim
+     that might not hold is worse.
+2. *Near the surface is `NeedsFit`, not `OffSurface`.* A `NotOnSurface` whose miss is within
+   the edge's reach means a fit can carry it.
+   - Against: `pcurve_of` reports the first failing sample's miss, not the largest, so a
+     curve that leaves the surface after a near first sample is called `NeedsFit`.
+   - Answer: BR9's fitter measures the whole curve and refuses it then. The writer never
+     writes such a curve. Open question 2 below.
+3. *The pole direction comes from the arriving pcurve's middle `v`.*
+   - For: it uses only data the writer already has. It is right for every face that does
+     not touch the pole on both sides.
+   - Against: on a face whose arriving use is itself at the pole's `v` this is undefined.
+   - Answer: no pcurve may run along a pole's line, so that arriving use does not exist.
+4. *One pole segment per joint.* Two collapsed uses in a row (`CollapsedRun`) and a loop of
+   collapsed uses only (`NoCurveUse`) are Unsupported rather than Refused. They are legal
+   in principle (a degenerate face at a pole), and nothing builds them yet.
+5. *Shifting.* Only `Line2`, `AngleLine2` and `AngleWave2` can be moved by a period. These
+   are all `pcurve_of` gives on periodic surfaces; any other kind is `NeedsFit`, which is
+   unreachable today.
+6. *Zero tolerance in `pcurve_of`* (the 11-27 04 follow-up) is now refused:
+   `PcurveError::BadTolerance` for zero, negative, infinite and NaN, Refused.
+
+**Tests** (`crates/scx-brep/tests/pcurve.rs`, 7; the dense judge stands in for T6):
+
+- *The judge.* At 1001 parameters per use, the lift is on the edge's curve within the zone
+  and `bound` is `None`. There are no period jumps (T7 `jumps`). Wherever the surface has
+  poles, there is no dog-leg and no pole passed (T7 `dog_leg`, `passes_pole`).
+- Every generated body (11 kinds × seeds 0..5 × sizes 1..=4) is rewritten face by face. It
+  agrees with the generator up to whole periods, finishes, and passes the judge.
+- `contains_uv` on the written pcurves (BR4): just left of every curve use's middle is
+  `Inside` and just right is `Outside`. The right-hand check is skipped on faces that wrap
+  a whole period, where the far side is the face again. Over 100 checks.
+- A plane-section oblique cylinder in three frames (SS5 `section_by_plane`): the wall loop
+  is circle (`AngleLine2`), seam (`Line2`), ellipse (`AngleWave2`), seam. The plane caps get
+  the circle and the ellipse. The body finishes and passes the judge.
+- A spherical cap cut by a plane, with a collapsed use at the north pole. The pole segment
+  is a whole turn toward `-u`, and the cap finishes. The same cap with its uses re-sensed
+  has its segment run backward and still finishes.
+- Each refusal by its cause: `NeedsFit` (an oblique sphere section's circle, an oblique
+  cone section's ellipse), `OffSurface`, `CrossesPole`, `Winds`, `PoleNeedsEdge`,
+  `LoopOpen`, `NoCurveUse`, `CollapsedRun`, `Pending`, an absent face and an absent edge.
+  A refused write changes nothing.
+
+**Difftest** (`t_pcurve_write`) against the pin's `eval::pcurve::exact_pcurves`.
+
+- *Setup.* Every generated body (11 kinds × seeds 0..3 × sizes 1..=3) is used. Each face's
+  surface and curves are passed to the pin as its plain-data records. Their frames are
+  read off scx's geometry at STEP parameters and checked against the pin's formulas to
+  1e-12. The pin's radian uv are mapped by the surface's `from_step` and compared per use,
+  up to one whole period, at 33 samples.
+- *Result.* 5,160 inputs: 1,183 exact, 3,977 within 1e-9 (relative), 0 pin defects,
+  0 mismatches, 0 nondeterministic.
+- The pin has no exact pcurve for 54 uses: circles on planes, since its plane closed forms
+  cover only lines and polylines and fit the rest. Those uses are judged against truth on
+  scx's side alone, and all lift within the zone.
+
+**Cost** (release, throwaway timer over seeds 0..5).
+
+| Bodies | Write cost per use | Generator's construction per face |
+|---|---|---|
+| Planar | 175–295 ns (0.6–1.2 µs per face) | 1.2–2.9 µs |
+| Sphere | 0.66–0.69 µs | 2.8–3.0 µs |
+| Cone | 0.79–0.83 µs | 3.6–4.0 µs |
+| Cylinder | 1.0–1.1 µs | 4.6–5.5 µs |
+| Torus | 2.4–2.5 µs | 9.4–10.2 µs |
+
+- The curved faces cost about what the generator spends making the same pcurves through
+  `pcurve_of`. The lifting check's surface evaluations dominate.
+- The writer is not on any existing path; it only adds cost where it is called. Research 66
+  names no technique for writing exact pcurves. Its pcurve items are boxes and filtered trim
+  predicates, which belong to BR4 and the tessellator.
+
+**Deviations from §6.5.**
+
+- T6 does not exist, so the dense judge stands in for it.
+- SS5's sections arrive as ordinary curves: the writer does not know an edge came from a
+  section. Its exact forms are `pcurve_of`'s, including `AngleWave2` for an oblique cylinder
+  section.
+
+**Open questions.**
+
+1. `finish`'s closure check measures the joint between uses `a` and `b` with `b`'s *end*
+   budget (BR2, `check/geometry.rs`). The writer uses `b`'s start budget. These agree
+   unless a vertex's reach differs at the two ends of one edge. Is BR2's choice intended?
+2. `pcurve_of`'s `NotOnSurface` could report the largest sampled miss rather than the first
+   one, so the writer could split `NeedsFit` from `OffSurface` exactly.
+3. Should a degenerate face at a pole (decision 4) ever be built? If so, it needs a
+   two-segment or point rule.
+
+### 6.12 BR6 as built (11-27)
+
+Decided by analysis and an adversarial pass. Proposed for review; not yet ruled.
+
+`Draft::transform` moves a body by an affine map. It is built on CU5's `Curve::transformed`
+and SU7's `Surface::transformed`, in `crates/scx-brep/src/draft/transform.rs`.
+
+```rust
+impl Draft {
+    pub fn transform(&mut self, a: &Affine, doc: &Document) -> Result<(), TransformError>;
+}
+
+#[non_exhaustive]
+pub enum TransformError {
+    MapNotFinite,
+    MapSingular,
+    Pending { edge: EdgeId },
+    Surface { face: FaceId, cause: SurfaceError },
+    Curve { edge: EdgeId, cause: CurveError },
+    Pcurve { face: FaceId, edge: EdgeId, cause: PcurveError },
+    PcurveKind { face: FaceId, edge: EdgeId },
+    MissingEdge { face: FaceId, edge: EdgeId },
+    Overflow { entity: Entity },
+}
+```
+
+- `kind()` and `name()` delegate to the cause where there is one.
+- A surface of revolution under a map that is not a similarity is `Surface { cause:
+  NotSimilar }`, which is `(Unsupported, "map_not_similar")` until BR9's refit.
+- `PcurveKind` is `Unsupported` (`pcurve_kind_unmapped`).
+- Every other refusal is `Refused`: `map_not_finite`, `map_singular`, `edge_pending`,
+  `use_edge_missing` (a use naming an edge the draft lacks), `transform_overflow`.
+- The draft is unchanged on every error. Every new record is made first and written only
+  when all of them are.
+
+**What the map does to each record.**
+
+- **Vertices.** Each point is mapped by the map.
+- **Edges.** Each curve goes through `Curve::transformed`, and its interval moves by the
+  curve's `ParamShift`. A collapsed edge keeps its shape.
+- **Faces.** Each surface goes through `Surface::transformed`, which also returns the
+  `UvMap`. The record is replaced whole with fresh cells: `put_face` logs the first write
+  and stores a new `Arc`, so there is no copy-on-write clone of the old face. Edges go
+  through `edge_mut`, which resets their cells. So every face's and edge's boxes and
+  boundary trees are reset, and `BodyCells` is rebuilt at `finish` (BR4).
+- **Topology.** It is kept: the same ids, loops, uses and senses.
+- **`Changes`.** `finish` reports every face and vertex, and every edge with a curve, as
+  `replaced` with `Touch::Geometry`. No record is created or removed, and `carry` is the
+  identity.
+- **Identity.** An exact identity returns at once with no writes, so `Changes` is empty.
+
+**Pcurves.** These are the decisions, in order:
+
+1. A `Point` use is mapped by the `UvMap`.
+2. A pcurve is kept where the edge's shift is none and the `UvMap` is within 16 ε of the
+   identity. This holds for a sphere, a torus or a NURBS face under any map it takes, and
+   for a plane or cylinder under a rigid motion or a mirror, whose `k` can come out as
+   1 − 3ε. Then `S'(p(t)) = A S(p(t)) = C'(t)`, and the error is at most 16 ε |uv|.
+3. Otherwise a `Line2` is mapped by the `UvMap`: an affine map of uv keeps a line a line
+   and keeps its parameter. This covers every planar line, every ruling and every pole
+   segment.
+4. Any other pcurve is made again by `pcurve_of` on the new curve and surface. It is then
+   moved by whole periods so that it starts where the `UvMap` takes the old start, which
+   keeps the loop in its period window.
+5. A collapsed edge's pcurve that is not a line is `PcurveKind`.
+
+**Orientation under a mirror.**
+
+- When `det A < 0`, the natural normal `S_u × S_v` maps to `det(A) A^-T n / det(UvMap)`.
+  `det(UvMap)` is positive for every kind, so the new natural normal is the image of the
+  old back side.
+- Each face's two sides therefore swap, and each edge's fins reverse: counter-clockwise
+  about the direction becomes clockwise. Loops, senses and pcurves stay.
+- This is the pin's `Mirror`, which swaps the faceuse shells and reverses the radial order
+  of the edge uses. BR2's `finish` accepts the result for every generated kind.
+- *For:* uv is unchanged, so pcurves are kept, and it costs one swap per face and one
+  reversal per edge.
+- *Against:* the alternative reverses every surface (`u ↦ −u`), so that fronts keep
+  pointing the same way relative to the solid. That costs a pcurve rewrite per use and
+  needs a reversal that some kinds lack.
+- Answer: which side is the front is the record's choice, and both forms are valid.
+  Swapping is cheaper and exact.
+
+**Accuracy.**
+
+- A distance grows by at most the map's largest stretch. For a similarity (axis lengths
+  equal and axes orthogonal, to 16 ε) that is its scale, snapped to 1 within 16 ε.
+  Otherwise it is the Frobenius norm, an upper bound.
+- Each recorded bound becomes stretch × reach, where reach is the recorded value, or the
+  resolution's zone for `None`. A result at or under the zone stays `None`.
+- A `None` widened past the zone becomes a shared `Measured` record.
+- A `Certified` or `Unproven` bound becomes `Unproven`, scaled. The certificate read the
+  old geometry, and rounding in the map is not certified.
+- *Against* keeping certificates under a rigid motion: the map's rounding (a few ulps of
+  |p|) is not in the certificate. Re-certifying is BR9's or the checker's work.
+- This is why the method takes `&Document`: the resolution sizes the bounds of `None`
+  records.
+- Tolerances scale under a uniform scale: a bound of `Some(zone)` under a scale of 8
+  becomes `Some(8 zone)`, and the inverse takes it back to `None`.
+- Under a rigid motion `None` stays `None`.
+
+**Deviation from 63 §6.3.**
+
+- 63 §6.3 sketched `transform(&Brep, &Affine) -> Result<Brep, _>`. It is built as a `Draft`
+  method instead.
+- *For:*
+  - `Changes` come from `finish`, so a free function would either drop them or need a
+    second signature that returns them.
+  - One signature serves both a finished body (`b.edit()`) and a draft in progress.
+  - It keeps one signature per op (01 §2.6's edits are `Draft` methods).
+- *Against:* a caller holding a `Brep` writes three calls (`edit`, `transform`, `finish`)
+  instead of one. A helper can be added if callers want it.
+
+**Tests.**
+
+`crates/scx-brep/tests/transform.rs` has 8 tests, all on BR8's generated bodies:
+
+- `every_body_moves_under_rigid_scale_and_mirror`: every kind, seeds 0 and 7, under a
+  rigid motion, scales of 2.5 and 0.375, a mirror, and a mirror after a rigid motion. It
+  checks:
+  - the counts;
+  - each point is its old point's image;
+  - pcurves lie on their edges;
+  - body, edge and face boxes enclose the samples;
+  - sides swap and fins reverse under a mirror;
+  - every record is replaced with Geometry;
+  - carry is the identity.
+- `the_identity_writes_nothing`.
+- `a_map_and_its_inverse_return_the_body`: within 1e-10.
+- `exact_maps_return_the_body_to_the_bit`: a mirror through the origin applied twice, and
+  a scale by 4 about the origin with its inverse. Every record comes back bit for bit,
+  except a plane's z, which is within 4 ε (open question 1).
+- `bounds_scale_with_the_map`.
+- `a_planar_body_takes_any_regular_map`: a shear on the planar kinds.
+- `a_surface_of_revolution_refuses_a_map_not_similar`: the error is `(Unsupported,
+  "map_not_similar")`, and the draft is unchanged.
+- `a_map_not_regular_or_not_finite_is_refused`.
+
+**Difftest.**
+
+`crates/scx-difftest/tests/diff/t_transform.rs` runs against the pin's `transform_matrix`
+and `mirror` (`topology/brep/mirror.rs`).
+
+- **Setup.** Each map is applied to seed-0 generated bodies (sizes 1 to 3) and to the pin's
+  primitives of the same five solids.
+- **The truth.** Both sides are judged against the moved solid: every sampled point must
+  lie on one of its sheets, at the inverse image.
+- **Corners.** The block's corners must agree between the sides.
+- **Determinism.** The scx transform runs twice and must give the same draft.
+- **Results.** Each map has 5,275 inputs, 0 pin defects, 0 mismatches and 0
+  nondeterministic:
+
+  | Map | Exact | Within tolerance |
+  |---|---|---|
+  | rigid | 2,927 | 2,348 |
+  | scale up | 4,311 | 964 |
+  | scale down | 4,865 | 410 |
+  | mirror | 1,688 | 3,587 |
+  | mirror after rigid | 899 | 4,376 |
+
+**Cost.**
+
+Throwaway timer, not committed; test profile, one machine, 20 repetitions, seed 3. Figures are ns per face. *Copy* is `edit` plus `face_mut`, `edge_mut` and
+`vertex_mut` on every record. *Finish* includes `finish`.
+
+| Body | Faces | Copy | Rigid | Scale 2.5 | Mirror | Rigid + finish | Finish alone |
+|---|---|---|---|---|---|---|---|
+| block | 2,400 | 456 | 634 | 736 | 774 | 2,093 | 1,349 |
+| cylinder | 202 | 319 | 930 | 4,761 | 1,064 | 5,610 | 4,589 |
+| sphere | 200 | 270 | 709 | 748 | 824 | 6,565 | 5,809 |
+| torus | 900 | 264 | 784 | 838 | 867 | 5,282 | 4,471 |
+| cone | 201 | 284 | 786 | 2,637 | 881 | 4,351 | 3,512 |
+
+- A transform costs 1.4 to 3 times a plain copy, and less than the `finish` after it.
+- The exceptions are the cylinder and cone under a scale. There, `(k, k)` or `(1, k)`
+  rescales the angle-parameterised pcurves (circles and angle lines), and `pcurve_of`
+  makes them again.
+- Before the near-identity rule, a mirror cost 18,538 ns per face on the cylinder, because
+  `k` came out as 1 − 3ε and every pcurve was re-derived.
+- Research 66 §11.4: boxes are not moved through the map (Manifold refits except under
+  axis-aligned maps; OpenNURBS's moved box is not rounded outward). BR6 resets every cell
+  and BR4 refits on read, which is the certified choice. Moving boxes exactly for signed
+  permutations, power-of-two scales and translations, and lazy transforms held on an
+  operand, are left for a measured follow-up.
+
+**Open questions.**
+
+1. **SU7's plane z.** `Plane::transformed` rebuilds z as `Ax × Ay`, normalised, so a skewed
+   plane's z is not bit-exact under an exact map. Taking `sign · Az / k` under a similarity
+   would make the round trips exact.
+2. **Direct pcurve mapping.** `AngleLine2` and `Circle2` could be mapped directly under
+   `(k, k)` instead of going through `pcurve_of`. That would bring the cylinder and cone
+   scale figures to the others.
+3. **Snapping `k` in SU7 and CU5.** Snapping `k` to 1 within 16 ε there was rejected: the
+   scx-surface tests pin the mean scale. The snap is in BR6's stretch and near-identity
+   rule instead.
+4. **Large coordinates.** Rounding after a rigid move at large coordinates (pin #19910) is
+   not modelled in the accuracy. It is covered only by the zone.
+5. **A free function.** A `transform(&Brep, …) -> (Brep, Changes)` helper could be added if
+   callers want it (see the deviation above).
+
+### 6.13 BR7 as built (11-27)
+
+Decided by analysis and an adversarial pass. Proposed for review; not yet ruled.
+
+**What was built.** The pin's provenance, history and attribute tests are ported onto BR3's
+`Changes`, `Origin`, `Carry` and `carry`, in `crates/scx-brep/src/changes/tests/ports.rs`. The
+operations are not in scx yet, so each test builds by hand the edit the pin's operation makes,
+declares the lineage that operation would declare, and checks what the pin checks. These are
+bookkeeping edits, finished through the references-only check. Each test names the pin tests it
+ports.
+
+The ports found two lineage bugs in BR3 and settled its open questions. The API changes in
+`changes.rs` are:
+
+- `Carry::offset(&self, from: &T) -> Option<T>`, a required method. It gives what an offset copy
+  holds (decision 1).
+- `Merge<I>` gains `pub taken: Vec<Origin>`: the lineage of the new entities this edit made and
+  then merged into a kept survivor. It is sorted, without `Free`. A `Merge` may now have an
+  empty `absorbed` (decision 3).
+- A kept entity merged into a new one is listed in `removed`, and is an origin of the new entity
+  (decision 4).
+- The split piece key for edges gains the lineage of the faces each piece bounds, between
+  `bound` and `at` (decision 2).
+- `Origin::Edge` and `Origin::Vertex` doc: for a new entity of the same kind it always means a
+  piece. A blend's rail, made along an edge but not lying on it, names the faces it lies on, or
+  nothing (decision 6).
+
+**Decisions**, each with the case for and against:
+
+1. *Offset's carry rule: a required `Carry::offset`.*
+   - For:
+     - SMLib's `Temp` behaviour is "not copied". It must be able to drop an offset copy, and
+       with the same-kind rule it could not.
+     - Every path that puts a value on a new entity now goes through the rule, as a split does.
+   - Against: one more method on every rule. A provided default (copy) was rejected because it
+     hides the choice.
+
+   The ports `an_offset_reads_as_the_pins_history` and
+   `a_thickened_sheet_marks_its_edges_and_their_offsets` check both: a copied mark goes to the
+   offset, a temporary one does not.
+2. *Equal-bounds piece order: by the faces each edge piece bounds.*
+   - The case: two pieces of an edge with the same ends and the same interval, such as an edge
+     two solids touch along, cut into one edge per solid (`order_pieces.rs`).
+   - Before this change they tied on `bound` and `at`, and fell to the id. That is the order
+     the operation happened to create them in, so the order depended on which piece kept the
+     id.
+   - The key now compares the sorted lineage of the faces of each piece's fins:
+     - `Face(..)`, the edited body's, sorts before `Operand(..)`, the tool's;
+     - a created face's own declared origins are used.
+
+   For: deterministic and independent of the id kept; it is computed only for split pieces.
+   Against: it uses the created faces' declared origins, not their final lineage, because the
+   faces' lineage is resolved after the edges'. Face pieces still tie to the id when bound and
+   place agree; no pin test reaches that.
+3. *A merge keeps lineage whichever entity survives* (`Merge::taken`, and `Log::held` in the
+   recording).
+   - The bug, found by the port of `stitch_and_orient_splits_a_long_edge_onto_both_pieces`:
+     - BR3 dropped the lineage of a new entity absorbed into a kept one (BR3 decision 8).
+     - So a stitch that cut a long edge and glued the new piece to a short edge kept the long
+       edge's origin only if it kept the piece's id.
+     - The answer (the pin's 2 edges carrying, or 1) depended on the operation's choice of
+       survivor.
+   - Now:
+     - the survivor holds what it took in, and a piece derived from it later in the same edit
+       stands for that too;
+     - `lineage` reports what came from new entities as `Merge::taken`;
+     - the split map counts a kept survivor that took in a new piece of `f` as a piece of `f`;
+     - `carry` merges `taken`'s values into the survivor.
+   - For: survivor choice is an executor detail and must not change results. Against: a `Merge`
+     with an empty `absorbed` is a new shape for readers to handle.
+4. *A kept entity merged into a new one is `removed`.*
+   - The bug: BR3 made it an origin of the new entity and listed it nowhere else, so `carry`
+     kept its value on an id no longer in the body.
+   - Found by the port of `coplanar_faces_merged_by_the_cleanup_keep_both_origins`, run with the
+     tool's face as the survivor.
+   - For: `removed` now means every before-entity that is gone except those a kept survivor
+     absorbed.
+   - Against: none found. The entity is still named, as an origin.
+5. *Regions and shells: not needed.* No pin provenance, history or attribute test reads a value
+   on a region or a shell. Kept out until one does (`Changes` is `#[non_exhaustive]`).
+6. *Rails are not pieces.*
+   - The fillet ports show that declaring a blend's rails `Origin::Edge(e)` makes them pieces of
+     `e`, and hands them `e`'s value, which the pin forbids.
+   - The doc now says so. The counter-case is in
+     `a_blend_keeps_the_faces_and_drops_the_blended_edge`.
+   - For: one meaning for a same-kind origin. Against: an operation must know which faces a rail
+     lies on; it does.
+7. *The temporary mark on trimmed faces.*
+   - The pin keeps `Temp` only on faces its union leaves whole. SMLib trims by splitting and
+     deleting the waste, and a split drops the mark.
+   - In scx a trimmed face keeps its id and is `replaced`. `carry` keeps the mark, and an
+     application that wants "not persistent" filters on `replaced`. The port checks both.
+   - This is truth over pin: the face is the same face, trimmed.
+   - Open: a `Carry::replaced` hook, if an application wants the rule to decide.
+8. *The id-keeping piece.* `imprint_splits_run_the_application_split_handler` gives the piece
+   that keeps the id a different value. `Carry::split` stays symmetric: it is told nothing
+   about the piece. An application finds the kept piece as `Split::from` among `pieces`.
+   - For: a split's pieces are peers, and which piece keeps the id is an executor detail.
+   - Against: the application does a second pass.
+9. *`Changes::then` is not built.*
+   - Carrying edit by edit is exact. `carry` folds over a sequence of `Changes`, and every pin
+     test with two operations (`remove_topological_vertices_unions_the_merged_edges`,
+     `a_copy_faces_copy_merged_keeps_its_attributes`, the boolean tree) ports as two edits.
+   - A composition cannot be exact:
+     - One `EntityChanges` cannot say whether a merge came before or after a split.
+     - For a rule whose split shares a quantity out (`Halve`: a split halves, a merge sums),
+       merge f1 into f0 and then cut f0. As two edits each piece gets 1. As one edit, which is
+       what `then` would report, each piece gets 1.5
+       (`a_merge_then_a_cut_is_carried_edit_by_edit`).
+   - For every copy-like rule the two agree. That includes the pin's `Copy`, `Reference` and
+     `Temp`.
+   - The rule for a split of a merged entity, had `then` been built: each piece inherits the
+     survivor's merged lineage. This is decision 3's "a piece of a survivor stands for what it
+     took in", so it already holds within one edit.
+   - For not building it: no test needs it, and it would be wrong for quantity rules. Against:
+     63 §6.3's composition oracle has no `then` to test. The oracle can compare a carry over
+     two edits with the carry over the same events in one, for copy-like rules, as the port
+     does.
+   - Within one edit `carry` applies splits before merges (module doc). An edit whose result
+     depends on the order is two edits.
+10. *No difftest.* The pin's history is callbacks into its attribute store; there is no
+    `Changes` equivalent to compare against (as BR3 decision 13).
+11. Research 66 has nothing on provenance.
+
+**Ports** (20 tests). Pin paths are under `solidcore/crates/`, and `solidcore/tests/` is
+abbreviated `t/`.
+
+| scx test | Pin tests ported |
+|---|---|
+| `a_cut_hands_its_origin_to_both_pieces` | `solidcore-ops/src/tests.rs::provenance_goes_through_splits_and_merges`; `t/issue_1462_split_attributes.rs::{slice_by_a_sheet_keeps_the_origins_of_the_trimmed_faces, imprint_of_a_box_by_a_plate_keeps_the_origin_on_both_pieces, imprint_of_a_copy_keeps_the_copied_origins, merge_curves_on_surface_splits_a_face_onto_both_pieces}`; `t/issue_1462_fillet_attributes.rs::issue_1462_a_surface_fillet_splits_the_base_faces_with_their_origins`; `t/issue_1462_boolean_family_attributes.rs::plain_edits_split_and_delete_as_upstream`; `t/issue_1462_boolean_2d_attributes.rs::{boolean_2d_union_keeps_both_pieces_of_a_split_edge_marked, boolean_2d_intersection_keeps_the_split_edges_marks}` |
+| `a_boolean_gives_each_face_one_origin` | `t/issue_1462_boolean_attributes.rs::{union_of_overlapping_boxes_keeps_one_origin_per_face, difference_of_overlapping_boxes, intersection_of_overlapping_boxes}`; `t/issue_1462_boolean_2d_attributes.rs::{boolean_2d_difference_keeps_the_face_and_edge_marks, boolean_2d_preserves_attributes_from_both_operands}`; `t/issue_1462_boolean_family_attributes.rs::boolean_lists_carry_list_attributes_to_every_component` |
+| `a_reference_stays_shared_and_a_temporary_mark_stays_put` | `t/issue_1462_boolean_attributes.rs::temporary_attributes_are_not_propagated_and_references_stay_shared` (truth over pin, decision 7) |
+| `a_coplanar_merge_keeps_both_origins` | `t/issue_1462_boolean_attributes.rs::coplanar_faces_merged_by_the_cleanup_keep_both_origins`; `solidcore-ops/src/tests.rs::{a_union_keeps_both_boxes_provenance_on_what_it_merges, a_face_merge_by_delete_edge_keeps_both_faces_provenance}` |
+| `a_coincident_edge_adds_its_source_once` | `t/issue_1462_boolean_2d_attributes.rs::{boolean_2d_coincident_edges_keep_both_sources, boolean_2d_coincident_edges_with_the_same_id_keep_one_value}` (the pin accepts 1 or 2 values; scx's rule decides, so 1 exactly); `solidcore-ops/src/tests.rs::provenance_goes_through_merges_and_coincidences` |
+| `a_body_made_of_operands_keeps_each_operand_apart` | `t/issue_1462_boolean_family_attributes.rs::{merge_breps_fold_of_three_boxes_keeps_each_face_origin, boolean_tree_union_then_difference}` |
+| `a_stitch_unions_the_glued_edges` | `t/issue_1462_split_attributes.rs::stitch_and_orient_unions_the_glued_edges` |
+| `a_stitch_cuts_a_long_edge_onto_both_glued_pieces` | `t/issue_1462_split_attributes.rs::stitch_and_orient_splits_a_long_edge_onto_both_pieces` (both survivor choices; decision 3) |
+| `a_cut_edge_merged_back_holds_every_tag` | `t/issue_1462_split_attributes.rs::remove_topological_vertices_unions_the_merged_edges` (two edits) |
+| `a_blend_keeps_the_faces_and_drops_the_blended_edge` | `t/issue_1462_fillet_attributes.rs::{issue_1462_a_rounded_box_edge_keeps_the_box_origins, issue_1462_per_edge_and_variable_radius_rounds_keep_the_box_origins, issue_1462_chamfered_and_circular_rounded_boxes_keep_the_face_origins}`; `t/issue_1462_boolean_attributes.rs::edges_crossed_by_the_other_operand_keep_their_origin_on_the_surviving_piece` (a trimmed edge keeps id and value) |
+| `an_offset_reads_as_the_pins_history` | `solidcore-ops/tests/offset_history.rs::{a_shelled_box_s_inner_walls_are_its_faces_offsets, a_thickened_sheet_s_walls_stand_on_its_edges, a_moved_face_is_modified}`; `t/issue_1462_offset_attributes.rs::{offset_box_faces_copy_their_source_faces, shell_box_inner_faces_carry_their_sources}` |
+| `an_offset_made_anew_keeps_no_face` | `solidcore-ops/tests/offset_history.rs::an_offset_whose_loops_cross_keeps_the_rebuilt_faces_roles` |
+| `a_thickened_sheet_marks_its_edges_and_their_offsets` | `t/issue_1973_thicken_sheet_edge_attributes.rs::{issue_1973_a_thickened_flat_sheet_keeps_its_edges_marks_on_both_sides, issue_1973_a_thickened_l_of_two_flat_faces_keeps_its_edges_marks, issue_1973_a_thickened_curved_sheet_keeps_its_edges_marks}`; `t/issue_1973_thicken_flat_sheet_edge_attributes.rs::thicken_of_a_flat_sheet_keeps_the_sheet_edges_marks` (the pin's 12 edges, 8 carrying) |
+| `a_rounded_offset_puts_each_edge_on_both_copies` | `t/issue_1462_offset_attributes.rs::rounded_offset_edges_keep_their_sources_through_the_stitch` |
+| `pieces_with_the_same_ends_are_ordered_by_their_faces` | `solidcore-convert/tests/order_pieces.rs::an_edge_solids_touch_along_is_two_pieces` (decision 2); `::a_box_has_no_pieces` is BR3's `an_edit_that_touches_nothing_changes_nothing` |
+| `the_application_rule_runs_once_per_event` | `t/issue_1730_application_attribute_handlers.rs::{issue_minimal_test_split_merge_coincident_copy, copy_onto_a_tagged_target_keeps_the_targets_tag, merge_runs_once_per_attribute_id, imprint_splits_run_the_application_split_handler}` (decision 8) |
+| `copied_faces_merged_later_hold_both` | `t/merge_after_copy_faces_keeps_attributes.rs::a_copy_faces_copy_merged_keeps_its_attributes`; `t/issue_1462_split_attributes.rs::copy_faces_with_a_merge_copies_the_face_attributes` (two edits) |
+| `a_local_operation_keeps_every_mark` | `t/issue_1875_local_operation_marks.rs::{the_moved_face_keeps_the_mark_of_the_face_it_moves, each_moved_face_keeps_its_own_mark}`; `t/issue_1462_split_attributes.rs::local_operation_keeps_every_face_origin`; `t/issue_1980_cliff_overflow_edge_attributes.rs::an_edge_tag_crosses_a_cliff_overflow`; `t/issue_1462_sweep_attributes.rs::{linear_sweep_of_a_tagged_face_carries_its_origins, revolve_of_a_tagged_face_carries_its_origins}` (in place: the box keeps its marks, the swept block is bare) |
+| `a_removed_face_drops_its_value_and_a_copy_keeps_all` | `t/issue_1462_boolean_family_attributes.rs::plain_remove_faces_clears_the_deleted_face_attributes`; `t/issue_1462_boolean_attributes.rs::clone_copies_attributes_and_dead_entities_have_none`; `solidcore-ops/src/tests.rs::{a_copy_keeps_the_provenance_on_its_faces_and_edges, attached_provenance_reads_back_by_record_index, a_copy_maps_record_order_through_renumbered_entities}`; `t/copy_faces_merge_key_aliasing.rs::copies_through_the_merge_carry_only_their_own_sources_attributes`; `t/issue_2010_plain_brep_copy.rs` |
+| `a_merge_then_a_cut_is_carried_edit_by_edit` | none: the evidence for decision 9 |
+
+**Cannot port yet:**
+
+- `t/issue_1462_sweep_attributes.rs::tag_ordinals_step_by_sweep_step_delta` needs a repeated
+  sweep. Each step's ordinal is the application's naming from the step's `Origin::Edge` side
+  faces; port it with the sweep.
+- Every port above is a hand-made edit. When an operation lands, its own test should replace the
+  hand edit and assert the same lineage, using the same tables and rules.
+
+**Not applicable** (no lineage question; the attribute store's own plumbing, which scx has no
+counterpart for):
+
+- `t/brep_file_round_trip.rs`, `t/panic_fuzz.rs`, `t/subdivide_face_v_knots.rs`,
+  `t/issue_1937_bottle_sweep.rs`, the `t/issue_16735_*` tests, `t/fork_69c5198_closure_both_sides.rs`,
+  and the attribute parts of `solidcore-convert`'s `brep.rs` tests and the fillet session's
+  executive tests. These test store serialisation, the store under fuzzing, or marks used as
+  test probes for geometry fixes.
+- `solidcore-ops/src/tests.rs::one_provenance_type_per_id`: one registered provenance type per
+  id. scx's `carry` is generic, with no registry.
+- `solidcore-ops/src/tests.rs::a_copy_refuses_an_order_entry_without_a_copy`: the copy order
+  table. In scx a copy has the same ids, and `compact` gives an `IdMap`.
+- `solidcore-ops/src/tests.rs::an_unmatched_ring_does_not_export_the_input_for_history`: the
+  history export's buffer. `Changes` comes from `finish`, so nothing is exported.
+- `solidcore-ops/src/offset/tests.rs::the_moved_marks_live_inside_the_call`: the pin's marks
+  scoped to one call. scx keeps no marks on entities.
+- `t/issue_1440_identity_of_copy.rs`, `t/issue_1628_copy_faces_into_nonempty_brep.rs`,
+  `t/issue_1869_copy_faces_merge_into_empty.rs`: copy-face plumbing (identity keys, notify
+  objects, an empty destination).
+- `t/issue_1176_fillet_cleanup_keeps_by_identity.rs`: a heap address reused for a new edge. scx
+  ids are never reused.
+- `t/copy_keeps_attributes_default_naming.rs` (its five tests) and
+  `t/copy_faces_merge_key_aliasing.rs::{one_naming_for_both_breps_is_refused_where_the_source_has_attributes, one_naming_for_both_breps_without_attributes_still_copies}`:
+  the store's naming of owners.
+- `t/issue_1730_application_attribute_handlers.rs::{join_replaces_a_foreign_attribute_of_the_tag_id, application_values_clone_and_compare_through_the_box}`:
+  the store's boxed value types. A `Carry<T>` is typed.
+- `t/issue_1462_boolean_family_attributes.rs::{api_brep_copy_keeps_copy_and_reference_and_drops_temp, boolean_lists_reference_users_are_the_result_objects}`:
+  a body copy is `Clone` with the same ids, so whether a mark is copied is the application's
+  choice for its own table, and reference-user lists are the store's.
+
+**Cost** (MEASURED, throwaway timer, not committed). The edit is a 10,000-face strip with 5,000
+face merges, 5,000 face splits and 5,000 edge splits. Each figure is the minimum of 31
+`finish` calls, from three runs each; the host load was about 9.
+
+| | Before | After |
+|---|---|---|
+| `finish` | 11.5–18.8 ms | 12.6–14.5 ms |
+
+The added work:
+
+- one map move per merge (`held`);
+- a fin-face lookup and a small sorted `Vec` per edge piece (`sides`), computed only for split
+  pieces;
+- a filter over `held` at `finish`.
+
+The best-case difference is about 1 ms on 15,000 events, inside the noise of the loaded host.
+Edits with no merges or splits do no new work.
+
+**Open**:
+
+- A `Carry::replaced` hook, if an application wants the rule to decide a temporary mark on a
+  written entity (decision 7).
+- The within-edit order of splits before merges (decision 9), if an operation needs a
+  quantity-like rule exact in one edit.
+- Face pieces that tie on bound and place still fall to the id (decision 2).
+- Touches through moved vertices (BR3 decision 1), unchanged.
 
 ### 6.14 BR2b as built (11-27)
 
