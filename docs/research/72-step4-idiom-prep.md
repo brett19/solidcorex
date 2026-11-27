@@ -3332,3 +3332,37 @@ A box is mapped into the kind's frame as the box of its 8 corners' coordinates, 
 **Open questions.** (1) Whether step 5's marcher should take over these refusals outright, which would make this check a prefilter only. (2) A second-order (exact distance) test would be needed if a real model has near-misses on oblique pairs that are smaller than the bisection resolves.
 
 **Proposed 04 row.** "BO2b (72 §14.30): before refusing a pair with no closed form, stage 4 proves whether its faces can touch. It encloses each surface's 1-Lipschitz level function (plane `h`, cylinder `rho - r`, sphere `|p| - r`, cone line distance, ring torus `hypot(rho - R, h) - r`) over the overlap of the faces' boxes grown by the coincidence, bisected depth first to depth 8, and drops the pair when every piece is clear of one surface by more than the coincidence. Otherwise it refuses `SsiPair` as before. The seam-vertex torus-box case now names `sides[3]` (`x = 6.5`, the face the torus touches), and the other BO5 cases are unchanged. The cost is 1 box on the torus-box drops and 10-28 boxes (3-7 µs) on pairs that touch. Against: the bound is first order, so oblique near-misses below about half the box size are still refused. Change if real models refuse oblique near-misses, or when step 5 answers these pairs."
+
+### 14.32 BX1 as built (11-27)
+
+**What it is.** Test wiring for BO6, BO7 and DT3 ahead of BO4, in one new file, `crates/scx-boolean/tests/recipes.rs` (a dev-dependency on `scx-testkit` is the only other change). No source under `scx-boolean/src` and no difftest file changed: T12's `recipe::all` already carries every operand, truth value and hand-stated topology the three tasks need, and `t_slice` already runs each Boolean recipe as `NotYet(Boolean)`, so its counts stay 157 pass, 0 fail, 326 not yet. DT3 flips `scx_gap`; nothing else in `t_slice` needs a new entry.
+
+**Tests.**
+- Live: `every_named_case_exists_and_states_its_truth` (21 names exist, each has a truth, each built topology satisfies Euler-Poincare) and `every_operand_builds_with_the_closed_form_volume` (every part of the 21 cases builds with `scx-make` and `scx_mass::volume` is `Part::solid`'s to 1e-7).
+- `#[ignore = "awaits BO4 classify"]`, running each recipe's steps through `boolean` on the running body and judging volume and area (1e-9 plus the truth's slack), solid regions and shells, or the named `Unsupported` cause: `plate_12_has_144_holes`, `gear_60_has_sixty_slots`, `smaller_hole_cases`, `blocks_touching_at_a_vertex_or_along_an_edge_are_built`, `touches_inside_a_face_are_unsupported`, `coincident_and_near_coincident_faces`. Today each fails with `Unsupported(Stage(Classify))` (checked with `--include-ignored`), which is the reason in the attribute. BO4 removes the attributes.
+
+**Cases and truth** (volume, area, regions/shells/genus, vertices/edges/patches; resolution 1e-5):
+
+| Case | Steps | Volume | Area | Topology |
+|---|---|---|---|---|
+| box-cyl-hole | 1 | 874.336294 | 700.530965 | 1/1/1, 10/14/7 |
+| plate-4 | 16 | 97989.380702 | 25608.495439 | 1/1/16, 40/44/22 |
+| plate-12 | 144 | 81904.426315 | 38476.458948 | 1/1/144, 296/300/150 |
+| gear-60 | 60 | 72182.859480 | 23564.577139 | 1/1/0, 480/720/242 |
+| corner-contact-union | 1 | 2000 | 1200 | 2/2/0, 16/24/12 |
+| edge-contact-union | 1 | 1500 | 982.842712 | 2/2/0, 18/27/13 |
+| box-box-union-flush | 1 | 1750 | 950 | 1/1/0, 16/24/10 |
+| coplanar-union | 1 | 1500 | 900 | 1/1/0, 12/18/8 |
+| coplanar-offset-0, 0.1c, 0.5c | 1 | 1500 (+50 dy) | 800 (+30 dy), slack 0.01 | merged: 1/1/0, 8/12/6 |
+| coplanar-offset-4c, 10c | 1 | 1500.002, 1500.005 | 800.0012, 800.003 | 1/1/0, 16/24/10 |
+| interleaved-grids-4 | 7 | 80 | 248 | 1/1/9, 146/219/66 |
+| interleaved-grids-8 | 15 | 320 | 944 | 1/1/49, 546/819/226 |
+| tangent-sphere-box, seam-sphere-box, seam-box-sphere, off-seam-sphere-box, seam-sphere-sphere, seam-box-minus-sphere | 1 | (of the body a later step would build) 1113.097, 3079.646, 3079.646, 3079.646, 146.608, 476.401 | 713.097, 1556.858, 1556.858, 1556.858, 163.363, 914.159 | `Unsupported(NonManifold)`; 1, 1, 1, 1, 1 and 6 contact points |
+
+**Decision: the in-face touches expect `non_manifold` by name.** For: the recipes say D5 makes a touch inside a face `Unsupported(NonManifold)`, and the named variant is what BO7 must add (it does not exist in `BooleanUnsupported` yet); asserting only `Unsupported(_)` would pass on any later refusal. Against: the name is proposed, so BO7 may rename it, and the one-line match in `check` then changes. Kept the name.
+
+**Decision: the cases run through the public `boolean`, not `scx-boolean`'s `src/tests`.** For: no BO4 file is touched, the integration test sees only the public API BO6 and DT3 will use, and `plate-12` and `gear-60` are benchmark-sized (144 and 60 steps). Against: an integration test cannot see `pub(crate)` stage outputs; BO6's stage-level checks belong in `src/tests`.
+
+**Not done / open.** (1) No new generators: nothing T12 lacked was found. (2) The `Lineage` and `Mesh` invariants the recipes list are DT3's, not wired here. (3) Area slack for the merged `coplanar-offset` cases is applied unscaled, looser than `t_slice`'s `slack / area_scale`.
+
+**Proposed 04 row.** "BX1 (72 §14.32): `scx-boolean/tests/recipes.rs` runs T12's plate, gear, contact and coincident-face recipes (21 cases) through `boolean`, `#[ignore = \"awaits BO4 classify\"]` until BO4; operand volumes are live. Change if: BO7 names the in-face touch differently from `non_manifold`."
