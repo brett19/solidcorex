@@ -5,8 +5,8 @@
 // data of [`super::geom`], from a parsed [`Exchange`] (ISO 10303-21) in one representation
 // context's [`Units`].
 // Changes: every refusal is a typed `P21Error` (was a `String`): `EntityCause::Missing`,
-// `WrongType`, `BadParam` (with the parameter's position in its record), `Invalid` and
-// `TooDeep`, or `Unsupported::Entity` for valid input not read here; so `entity`,
+// `WrongType`, `BadParam` (with the parameter's position in its record) and `Invalid`, the
+// limit `Limit::TooDeep`, or `Unsupported::Entity` for valid input not read here; so `entity`,
 // `reference`, `num`, `logical`, `boolean`, `positive`, `knots`, `implied_knots`, `weights`,
 // `degree`, `bspline_params`, `Reader::length`, `Reader::angle`, `Reader::point_in`,
 // `Reader::point`, `Reader::ratios`, `Reader::direction`, `Reader::placement_in`,
@@ -61,7 +61,7 @@ use super::geom::{
     Placement, PreferredRep, Surface, SurfaceCurveKind, SurfaceForm, Trim, TrimPreference, Vector,
     P3,
 };
-use crate::error::{EntityCause, P21Error, Unsupported};
+use crate::error::{EntityCause, Limit, P21Error, Unsupported};
 use crate::exchange::{Exchange, Instance, Param};
 use crate::units::Units;
 
@@ -825,12 +825,11 @@ impl<'a> Reader<'a> {
 
     fn read_curve(&mut self, id: u64, sp: Space, depth: usize) -> Result<Curve> {
         if depth > MAX_GEOM_DEPTH {
-            return refuse(
+            return Err(Limit::TooDeep {
                 id,
-                EntityCause::TooDeep {
-                    limit: MAX_GEOM_DEPTH,
-                },
-            );
+                limit: MAX_GEOM_DEPTH,
+            }
+            .into());
         }
         let e = entity(self.ex, id)?;
         if e.is_complex() {
@@ -1132,12 +1131,11 @@ impl<'a> Reader<'a> {
             return Ok(s.clone());
         }
         if depth > MAX_GEOM_DEPTH {
-            return refuse(
+            return Err(Limit::TooDeep {
                 id,
-                EntityCause::TooDeep {
-                    limit: MAX_GEOM_DEPTH,
-                },
-            );
+                limit: MAX_GEOM_DEPTH,
+            }
+            .into());
         }
         let s = Arc::new(self.read_surface(id, depth).map_err(|e| e.within(id))?);
         self.surfaces.insert(id, s.clone());

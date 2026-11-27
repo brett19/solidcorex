@@ -78,6 +78,7 @@
 //!   `Draw`, `AssertValid`, `operator=` / `operator==` are not ported (`Clone`
 //!   covers assignment).
 
+use scx_num::error::Limit;
 use scx_num::extent3d::Extent3d;
 use scx_num::math::Point3;
 use scx_num::{NumError, Result};
@@ -202,15 +203,17 @@ impl HashTable {
     ///
     /// # Errors
     ///
-    /// [`NumError::InvalidInput`] when `bucket_count` buckets cannot be allocated.
+    /// [`NumError::Exhausted`] when `bucket_count` buckets cannot be allocated.
     pub fn init_size(&mut self, item_estimate: usize, bucket_count: usize) -> Result<()> {
         self.used_buckets = None;
         self.buckets.clear();
         self.buckets
             .try_reserve_exact(bucket_count)
-            .map_err(|_| NumError::InvalidInput {
+            .map_err(|_| NumError::Exhausted {
                 operation: "geom::hash_table::HashTable::init_size",
-                reason: "bucket count too large",
+                limit: Limit::Allocation {
+                    count: bucket_count,
+                },
             })?;
         self.buckets.resize(bucket_count, None);
         self.bucket_items.clear();

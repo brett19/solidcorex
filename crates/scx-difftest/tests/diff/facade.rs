@@ -998,6 +998,25 @@ pub fn num_as_pin(e: &scx_num::NumError) -> solidcore::SolidError {
         NumError::InvalidInput { operation, reason } => {
             SolidError::InvalidInput { operation, reason }
         }
+        // The pin reports a limit as invalid input, with these reasons.
+        NumError::Exhausted { operation, limit } => {
+            use scx_num::error::Limit as L;
+            let reason = match (limit, *operation) {
+                (L::Allocation { .. }, "geom::hash_table::HashTable::init_size") => {
+                    "bucket count too large"
+                }
+                (L::Allocation { .. }, "geom::local_solve1d::IterQueue1d::try_new") => {
+                    "queue size too large to allocate"
+                }
+                (L::Allocation { .. }, _) => "matrix too large to allocate",
+                (L::MatrixSize { .. }, _) => "matrix larger than MAX_MATRIX_SIZE",
+                (L::DerivativeOrder { .. }, _) => "highest derivative exceeds GW_MAX_DERIV",
+                (L::SeriesOrder { .. }, _) => "a series' orders exceed SM_GN_MAXS or SM_GN_MAXE",
+                // `Limit` is `#[non_exhaustive]`: a new limit mismatches until mapped
+                _ => "a layer-0 limit the facade does not map",
+            };
+            SolidError::InvalidInput { operation, reason }
+        }
         NumError::Failed { operation, failure } => {
             let g = match *failure {
                 N::Disjoint { a, b } => G::Disjoint { a, b },

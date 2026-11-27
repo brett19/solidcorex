@@ -25,7 +25,9 @@
 // kind is its own (62 §3.1); the pin's class and text of each cause are the difftest
 // facade's mapping, not this file's. Written here: `ErrorKind::name`, the `Display` impls'
 // `fmt`, `NumFailure::kind`, `NumError::invalid_input`, `NumError::failed`,
-// `NumError::call`, `NumError::kind`, `NumError::operation`, `NumError::failure`,
+// `NumError::call`, `Limit` and `NumError::Exhausted` (62 T13: the fixed caps and soft
+// allocation failures solidcore reports as `InvalidInput`), `NumError::kind`,
+// `NumError::limit`, `NumError::operation`, `NumError::failure`,
 // `NumError::cause`, `Error::source`, and the tests.
 //! Why a layer-0 routine fails.
 //!
@@ -39,6 +41,7 @@
 //! | solidcore at the pin                               | here                                  |
 //! |----------------------------------------------------|---------------------------------------|
 //! | `SolidError::InvalidInput { operation, reason }`   | [`NumError::InvalidInput`]            |
+//! | `SolidError::InvalidInput` for a fixed cap or a failed allocation | [`NumError::Exhausted`] with a [`Limit`] |
 //! | `SolidError::Failed` with `Reason::Geom(g)`        | [`NumError::Failed`] with the same-named [`NumFailure`] |
 //! | `SolidError::geom(op, g)`                          | [`NumError::failed`]                  |
 //! | `SolidError::geom_call(op)` (`GeomFailure::CallFailed`) | [`NumError::call`] ([`NumError::Call`]) |
@@ -241,6 +244,75 @@ impl fmt::Display for NumFailure {
     }
 }
 
+/// A limit that ran out, with what was asked and the limit ([`ErrorKind::Exhausted`],
+/// research 62 M1: a limit the caller or the machine sets, fixed caps on input size
+/// included).
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Limit {
+    /// `count` values could not be allocated: they would take more than
+    /// [`crate::limits::MAX_ALLOC_BYTES`], or the machine refused the reservation.
+    Allocation {
+        /// The values asked for.
+        count: usize,
+    },
+    /// A linear system has more rows than the solver's fixed scale buffer holds
+    /// ([`crate::matrix::MAX_MATRIX_SIZE`]).
+    MatrixSize {
+        /// The system's rows.
+        rows: usize,
+        /// The most rows solved.
+        limit: usize,
+    },
+    /// A derivative order above the highest the routine evaluates
+    /// ([`crate::transform::MAX_DERIV`]).
+    DerivativeOrder {
+        /// The order asked for.
+        order: usize,
+        /// The highest order evaluated.
+        limit: usize,
+    },
+    /// A series truncation keeps more orders than a series stores
+    /// ([`crate::series::MAX_S`], [`crate::series::MAX_E`]).
+    SeriesOrder {
+        /// The `sigma` order asked for.
+        s: usize,
+        /// The `eps` order asked for.
+        e: usize,
+        /// The highest `sigma` order stored.
+        limit_s: usize,
+        /// The highest `eps` order stored at that `s`.
+        limit_e: usize,
+    },
+}
+
+impl fmt::Display for Limit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Allocation { count } => write!(f, "{count} values could not be allocated"),
+            Self::MatrixSize { rows, limit } => {
+                write!(
+                    f,
+                    "the system has {rows} rows, more than the {limit} solved"
+                )
+            }
+            Self::DerivativeOrder { order, limit } => write!(
+                f,
+                "derivative order {order} is above the highest evaluated, {limit}"
+            ),
+            Self::SeriesOrder {
+                s,
+                e,
+                limit_s,
+                limit_e,
+            } => write!(
+                f,
+                "series orders ({s}, {e}) exceed the stored orders ({limit_s}, {limit_e})"
+            ),
+        }
+    }
+}
+
 /// A layer-0 error.
 #[derive(Debug, Clone, PartialEq)]
 pub enum NumError {
@@ -258,6 +330,14 @@ pub enum NumError {
         operation: &'static str,
         /// What failed.
         failure: NumFailure,
+    },
+    /// A limit ran out (upstream `SM_ERR_INVALID_INPUT` for a fixed cap, or a soft
+    /// allocation failure). [`ErrorKind::Exhausted`].
+    Exhausted {
+        /// The solidcore path of the routine whose limit ran out.
+        operation: &'static str,
+        /// The limit, and what was asked.
+        limit: Limit,
     },
     /// A context frame: `operation` reports a callee's error as its own (solidcore
     /// `GeomFailure::CallFailed`). Its kind is the cause's (research 62 §2.3 rule 1:
@@ -297,6 +377,7 @@ impl NumError {
     pub fn kind(&self) -> ErrorKind {
         match self {
             Self::InvalidInput { .. } => ErrorKind::Refused,
+            Self::Exhausted { .. } => ErrorKind::Exhausted,
             Self::Failed { failure, .. } => failure.kind(),
             Self::Call { cause, .. } => cause.kind(),
         }
@@ -307,6 +388,7 @@ impl NumError {
     pub const fn operation(&self) -> &'static str {
         match self {
             Self::InvalidInput { operation, .. }
+            | Self::Exhausted { operation, .. }
             | Self::Failed { operation, .. }
             | Self::Call { operation, .. } => operation,
         }
@@ -317,7 +399,16 @@ impl NumError {
     pub const fn failure(&self) -> Option<&NumFailure> {
         match self {
             Self::Failed { failure, .. } => Some(failure),
-            Self::InvalidInput { .. } | Self::Call { .. } => None,
+            Self::InvalidInput { .. } | Self::Exhausted { .. } | Self::Call { .. } => None,
+        }
+    }
+
+    /// The limit that ran out, for [`NumError::Exhausted`].
+    #[must_use]
+    pub const fn limit(&self) -> Option<&Limit> {
+        match self {
+            Self::Exhausted { limit, .. } => Some(limit),
+            Self::InvalidInput { .. } | Self::Failed { .. } | Self::Call { .. } => None,
         }
     }
 
@@ -326,7 +417,7 @@ impl NumError {
     pub fn cause(&self) -> Option<&Self> {
         match self {
             Self::Call { cause, .. } => Some(cause),
-            Self::InvalidInput { .. } | Self::Failed { .. } => None,
+            Self::InvalidInput { .. } | Self::Exhausted { .. } | Self::Failed { .. } => None,
         }
     }
 }
@@ -337,6 +428,7 @@ impl fmt::Display for NumError {
             Self::InvalidInput { operation, reason } => {
                 write!(f, "{operation}: invalid input: {reason}")
             }
+            Self::Exhausted { operation, limit } => write!(f, "{operation}: {limit}"),
             Self::Failed { operation, failure } => write!(f, "{operation}: {failure}"),
             Self::Call { operation, cause } => {
                 write!(
@@ -443,6 +535,13 @@ mod tests {
             names,
             ["refused", "unsupported", "exhausted", "cancelled", "defect"]
         );
+        let full = NumError::Exhausted {
+            operation: "op",
+            limit: Limit::Allocation { count: 7 },
+        };
+        assert_eq!(full.kind(), ErrorKind::Exhausted);
+        assert_eq!(full.limit(), Some(&Limit::Allocation { count: 7 }));
+        assert_eq!(NumError::call("outer")(full).kind(), ErrorKind::Exhausted);
         let caused = NumError::call("outer")(NumError::invalid_input("inner", "why"));
         assert!(std::error::Error::source(&caused).is_some());
         assert_eq!(NumError::invalid_input("x", "y").failure(), None);

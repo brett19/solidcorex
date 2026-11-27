@@ -13,7 +13,7 @@
 use std::error::Error as _;
 
 use scx_num::error::ErrorKind;
-use scx_p21::error::{Counted, Unwritable};
+use scx_p21::error::{Counted, Limit, Unwritable};
 use scx_p21::parse::{MAX_BYTES, PEAK_PER_BYTE};
 use scx_p21::{
     parse, parse_with, Instance, Limits, P21Error, Param, Progress, Refusal, Syntax, Warning,
@@ -567,7 +567,7 @@ fn limits() {
         parse_with(t, l, &scx_p21::Unwatched)
     };
     let too_many = |r: Result<_, P21Error>| match r {
-        Err(P21Error::Refused(Refusal::TooMany { what, limit })) => Some((what, limit)),
+        Err(P21Error::Exhausted(Limit::TooMany { what, limit })) => Some((what, limit)),
         _ => None,
     };
     // With no header, so that only these count. `$`, the list, its `$`, the typed value and
@@ -602,7 +602,7 @@ fn limits() {
     let t = file("#1=A($);");
     assert_eq!(
         at(&t, &|l| l.bytes = t.len() - 1).unwrap_err(),
-        P21Error::Refused(Refusal::TooLarge {
+        P21Error::Exhausted(Limit::TooLarge {
             bytes: t.len(),
             limit: t.len() - 1
         })
@@ -632,7 +632,7 @@ fn memory_is_checked_first() {
         &scx_p21::Unwatched
     )
     .is_ok());
-    let refused = P21Error::Refused(Refusal::NeedsMemory {
+    let refused = P21Error::Exhausted(Limit::NeedsMemory {
         needed,
         available: needed - 1,
     });
@@ -656,9 +656,10 @@ fn memory_is_checked_first() {
         &scx_p21::Unwatched,
     )
     .unwrap_err();
-    assert!(matches!(e, P21Error::Refused(Refusal::NeedsMemory { .. })));
+    assert!(matches!(e, P21Error::Exhausted(Limit::NeedsMemory { .. })));
+    assert_eq!(e.kind(), ErrorKind::Exhausted);
     assert_eq!(
-        Refusal::NeedsMemory {
+        Limit::NeedsMemory {
             needed: 11 << 30,
             available: 8 << 30
         }

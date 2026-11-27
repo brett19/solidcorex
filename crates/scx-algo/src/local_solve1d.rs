@@ -105,6 +105,7 @@
 use crate::error::{ignored, EvalError, SolveError, SolveFailure};
 pub use crate::local_solve_nd::{Outcome, Residual, TerminationReason};
 use core::num::NonZeroUsize;
+use scx_num::error::Limit;
 use scx_num::extent1d::Extent1d;
 use scx_num::limits::try_filled;
 use scx_num::math::{EFF_ZERO, EFF_ZERO_SQ};
@@ -236,13 +237,14 @@ impl IterQueue1d {
     ///
     /// # Errors
     ///
-    /// [`NumError::InvalidInput`] when `size` slots cannot be allocated or would take
+    /// [`NumError::Exhausted`] when `size` slots cannot be allocated or would take
     /// more than [`scx_num::limits::MAX_ALLOC_BYTES`] (upstream's `SetSize` then fails
     /// softly and `Add` writes past the empty array).
     pub fn try_new(size: NonZeroUsize) -> Result<Self, NumError> {
-        let steps = try_filled(size.get(), 0.0).ok_or(NumError::InvalidInput {
+        let count = size.get();
+        let steps = try_filled(count, 0.0).ok_or(NumError::Exhausted {
             operation: "geom::local_solve1d::IterQueue1d::try_new",
-            reason: "queue size too large to allocate",
+            limit: Limit::Allocation { count },
         })?;
         Ok(Self::with_slots(steps))
     }
@@ -1458,7 +1460,10 @@ mod tests {
         // fuzz regression: a caller-chosen size that cannot be allocated fails softly
         assert!(matches!(
             IterQueue1d::try_new(NonZeroUsize::MAX),
-            Err(NumError::InvalidInput { .. })
+            Err(NumError::Exhausted {
+                limit: Limit::Allocation { count: usize::MAX },
+                ..
+            })
         ));
         assert!(IterQueue1d::try_new(NonZeroUsize::new(1 << 60).unwrap()).is_err());
     }

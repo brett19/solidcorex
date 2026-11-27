@@ -48,8 +48,8 @@
 //!   ones are `calloc`ed); `set_size` to the current size keeps the values, as
 //!   upstream.
 //! - [`Matrix::try_new`] (caller-chosen sizes) and [`Matrix::set_size`] return
-//!   `InvalidInput` when `rows * cols` overflows, storage exceeds
-//!   [`crate::limits::MAX_ALLOC_BYTES`], or cannot be allocated, leaving the
+//!   `InvalidInput` when `rows * cols` overflows and `Exhausted` when storage exceeds
+//!   [`crate::limits::MAX_ALLOC_BYTES`] or cannot be allocated, leaving the
 //!   matrix unchanged (upstream's `smos_Calloc` returns `NULL` and the row-pointer
 //!   loop writes through it). [`Matrix::new`] is for small sizes fixed at the call
 //!   site.
@@ -80,7 +80,7 @@
 //!   by `lMaxIters` (30) per singular value, as upstream; no recursion.
 
 use crate::error::NumFailure;
-use crate::error::{NumError, Result};
+use crate::error::{Limit, NumError, Result};
 use crate::math::EFF_ZERO;
 use crate::tol::is_zero;
 use crate::vector3d::{sqrt, Vec3};
@@ -192,8 +192,9 @@ impl Matrix {
     ///
     /// # Errors
     ///
-    /// [`NumError::InvalidInput`] when `rows * cols` overflows, storage exceeds
-    /// [`crate::limits::MAX_ALLOC_BYTES`], or the elements cannot be allocated
+    /// [`NumError::InvalidInput`] when `rows * cols` overflows;
+    /// [`NumError::Exhausted`] ([`Limit::Allocation`]) when storage exceeds
+    /// [`crate::limits::MAX_ALLOC_BYTES`] or the elements cannot be allocated
     /// (upstream's `smos_Calloc` then returns `NULL` and the constructor writes
     /// through it).
     pub fn try_new(rows: usize, cols: usize) -> Result<Self> {
@@ -202,9 +203,9 @@ impl Matrix {
             operation: OP,
             reason: "element count overflows",
         })?;
-        let data = crate::limits::try_filled(len, 0.0).ok_or(NumError::InvalidInput {
+        let data = crate::limits::try_filled(len, 0.0).ok_or(NumError::Exhausted {
             operation: OP,
-            reason: "matrix too large to allocate",
+            limit: Limit::Allocation { count: len },
         })?;
         Ok(Self { rows, cols, data })
     }
@@ -511,8 +512,8 @@ impl Matrix {
     /// Solves `Ax = b` by LU decomposition of a copy of the matrix
     /// (`SolveLinearSystem`).
     ///
-    /// Errors: `InvalidInput` when the matrix is not square, `rhs` does not match it,
-    /// or it has more than [`MAX_MATRIX_SIZE`] rows; `SM_ERR` when the decomposition
+    /// Errors: `InvalidInput` when the matrix is not square or `rhs` does not match it;
+    /// `Exhausted` ([`Limit::MatrixSize`]) when it has more than [`MAX_MATRIX_SIZE`] rows; `SM_ERR` when the decomposition
     /// or the back substitution fails. A near-zero pivot is not an error (see
     /// [`LinearSolution::near_singular`]).
     pub fn solve_linear_system(&self, rhs: &[f64]) -> Result<LinearSolution> {
@@ -530,9 +531,12 @@ impl Matrix {
             });
         }
         if self.rows > MAX_MATRIX_SIZE {
-            return Err(NumError::InvalidInput {
+            return Err(NumError::Exhausted {
                 operation: OP,
-                reason: "matrix larger than MAX_MATRIX_SIZE",
+                limit: Limit::MatrixSize {
+                    rows: self.rows,
+                    limit: MAX_MATRIX_SIZE,
+                },
             });
         }
         let mut tmp = self.clone();
@@ -1219,7 +1223,13 @@ mod tests {
         let big = Matrix::new(MAX_MATRIX_SIZE + 1, MAX_MATRIX_SIZE + 1);
         assert!(matches!(
             big.solve_linear_system(&vec![0.0; MAX_MATRIX_SIZE + 1]),
-            Err(NumError::InvalidInput { .. })
+            Err(NumError::Exhausted {
+                limit: Limit::MatrixSize {
+                    rows: 1001,
+                    limit: 1000
+                },
+                ..
+            })
         ));
         let empty = Matrix::new(0, 0);
         assert_eq!(empty.solve_linear_system(&[]).unwrap().x, Vec::<f64>::new());
@@ -1283,7 +1293,7 @@ mod tests {
     }
 
     /// Fuzz regression: caller-chosen sizes whose element count overflows or cannot
-    /// be allocated return `InvalidInput` instead of aborting.
+    /// be allocated return `InvalidInput` or `Exhausted` instead of aborting.
     #[test]
     fn huge_sizes_fail_softly() {
         assert!(matches!(
@@ -1292,7 +1302,7 @@ mod tests {
         ));
         assert!(matches!(
             Matrix::try_new(usize::MAX / 8, 2),
-            Err(NumError::InvalidInput { .. })
+            Err(NumError::Exhausted { .. })
         ));
         let mut a = m(2, 2, &[1.0, 2.0, 3.0, 4.0]);
         let keep = a.clone();
@@ -1307,10 +1317,10 @@ mod tests {
         let rows = crate::limits::MAX_ALLOC_BYTES / size_of::<f64>() + 1;
         assert!(matches!(
             Matrix::try_new(rows, 1),
-            Err(NumError::InvalidInput {
+            Err(NumError::Exhausted {
                 operation: "geom::matrix::Matrix::try_new",
-                reason: "matrix too large to allocate",
-            })
+                limit: Limit::Allocation { count },
+            }) if count == rows
         ));
     }
 
@@ -1330,11 +1340,11 @@ mod tests {
         let mut a = m(2, 3, &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
         let keep = a.clone();
         let rows = crate::limits::MAX_ALLOC_BYTES / size_of::<f64>() + 1;
-        for (rows, cols) in [(rows, 1), (usize::MAX, 2)] {
-            assert!(matches!(
-                a.set_size(rows, cols),
-                Err(NumError::InvalidInput { .. })
-            ));
+        for (rows, cols, kind) in [
+            (rows, 1, ErrorKind::Exhausted),
+            (usize::MAX, 2, ErrorKind::Refused),
+        ] {
+            assert_eq!(a.set_size(rows, cols).map_err(|e| e.kind()), Err(kind));
             assert_eq!(a, keep);
         }
     }

@@ -620,9 +620,10 @@ pub mod x {
     /// size, and `is_oscillating` after each of 20 alternating steps.
     pub fn queue(size: NonZeroUsize) -> (bool, Result<(), String>, Vec<bool>) {
         let ok = IterQueue1d::try_new(size).is_ok();
+        // The pin's text for the error (D5: the facade maps the cause).
         let big = IterQueue1d::try_new(NonZeroUsize::MAX)
             .map(|_| ())
-            .map_err(|e| e.to_string());
+            .map_err(|e| crate::facade::num_as_pin(&e).to_string());
         let mut q = IterQueue1d::new(size);
         let mut osc = Vec::new();
         for i in 0..20u32 {

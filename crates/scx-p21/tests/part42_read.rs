@@ -36,7 +36,7 @@ use std::f64::consts::{FRAC_1_SQRT_2, PI};
 use std::fmt::Write as _;
 use std::sync::Arc;
 
-use scx_p21::error::{EntityCause, Unsupported};
+use scx_p21::error::{EntityCause, Limit, Unsupported};
 use scx_p21::part42::geom::{
     Associated, Axis1, Curve, CurveForm, KnotSpec, Logical, Placement, PreferredRep, Surface,
     SurfaceCurveKind, SurfaceForm, Trim, TrimPreference, Vector,
@@ -629,12 +629,10 @@ fn nesting_is_bounded() {
         curve_err(&trimmed_chain(n + 1), 20, MM),
         Err(within(
             &(20..=32).collect::<Vec<_>>(),
-            P21Error::entity(
-                11,
-                EntityCause::TooDeep {
-                    limit: MAX_GEOM_DEPTH
-                }
-            )
+            P21Error::Exhausted(Limit::TooDeep {
+                id: 11,
+                limit: MAX_GEOM_DEPTH
+            })
         ))
     );
     // A curve that is its own basis.
@@ -644,7 +642,10 @@ fn nesting_is_bounded() {
             10,
             MM
         ),
-        Err(P21Error::entity(10, EntityCause::TooDeep { limit: MAX_GEOM_DEPTH }))
+        Err(P21Error::Exhausted(Limit::TooDeep {
+            id: 10,
+            limit: MAX_GEOM_DEPTH
+        }))
     );
 }
 
@@ -1188,23 +1189,19 @@ fn nesting_in_parameter_space_is_bounded() {
         Reader::new(&ex, MM).pcurve(26),
         Err(within(
             &[26],
-            P21Error::entity(
-                23,
-                EntityCause::TooDeep {
-                    limit: MAX_GEOM_DEPTH
-                }
-            )
+            P21Error::Exhausted(Limit::TooDeep {
+                id: 23,
+                limit: MAX_GEOM_DEPTH
+            })
         ))
     );
     // A surface that is its own basis.
     assert_eq!(
         surface_err("#10=OFFSET_SURFACE('',#10,1.,.F.);", 10, MM),
-        Err(P21Error::entity(
-            10,
-            EntityCause::TooDeep {
-                limit: MAX_GEOM_DEPTH
-            }
-        ))
+        Err(P21Error::Exhausted(Limit::TooDeep {
+            id: 10,
+            limit: MAX_GEOM_DEPTH
+        }))
     );
 }
 

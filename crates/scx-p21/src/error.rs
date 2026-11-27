@@ -14,9 +14,11 @@ use scx_num::error::ErrorKind;
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum P21Error {
-    /// The input is not valid: the text breaks the exchange structure, is beyond a limit,
-    /// or holds a value Part 21 cannot write.
+    /// The input is not valid: the text breaks the exchange structure, or holds a value
+    /// Part 21 cannot write.
     Refused(Refusal),
+    /// The input is beyond a limit the caller or the reader sets (research 62 M1).
+    Exhausted(Limit),
     /// Valid input this crate does not read: an entity kind the reader has no mapping for.
     Unsupported(Unsupported),
     /// The caller's [`Progress`](crate::Progress) asked to stop.
@@ -39,6 +41,7 @@ impl P21Error {
         match self.innermost() {
             Self::Refused(_) | Self::Within { .. } => ErrorKind::Refused,
             Self::Unsupported(_) => ErrorKind::Unsupported,
+            Self::Exhausted(_) => ErrorKind::Exhausted,
             Self::Cancelled => ErrorKind::Cancelled,
         }
     }
@@ -61,6 +64,7 @@ impl P21Error {
                 Refusal::Entity { id, .. } | Refusal::Unwritable { id: Some(id), .. },
             )
             | Self::Unsupported(Unsupported::Entity { id, .. })
+            | Self::Exhausted(Limit::TooDeep { id, .. } | Limit::TooManyInstances { id, .. })
             | Self::Within { id, .. } => Some(*id),
             _ => None,
         }
@@ -100,6 +104,7 @@ impl fmt::Display for P21Error {
         f.write_str(match leaf {
             Self::Refused(_) | Self::Within { .. } => "STEP input refused: ",
             Self::Unsupported(_) => "STEP input not supported: ",
+            Self::Exhausted(_) => "STEP input beyond a limit: ",
             Self::Cancelled => "STEP reading cancelled",
         })?;
         let mut e = self;
@@ -110,6 +115,7 @@ impl fmt::Display for P21Error {
         match leaf {
             Self::Refused(r) => r.fmt(f),
             Self::Unsupported(u) => u.fmt(f),
+            Self::Exhausted(l) => l.fmt(f),
             Self::Cancelled | Self::Within { .. } => Ok(()),
         }
     }
@@ -120,6 +126,7 @@ impl std::error::Error for P21Error {
         match self {
             Self::Refused(r) => Some(r),
             Self::Unsupported(u) => Some(u),
+            Self::Exhausted(l) => Some(l),
             Self::Within { source, .. } => Some(source.as_ref()),
             Self::Cancelled => None,
         }
@@ -131,6 +138,82 @@ impl From<Refusal> for P21Error {
         Self::Refused(r)
     }
 }
+
+impl From<Limit> for P21Error {
+    fn from(l: Limit) -> Self {
+        Self::Exhausted(l)
+    }
+}
+
+/// A limit the input is beyond: the fixed caps on input size and the caller's
+/// [`Limits`](crate::Limits) (research 62 M1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Limit {
+    /// The text is longer than the limit.
+    TooLarge {
+        /// The text's length in bytes.
+        bytes: usize,
+        /// The limit in bytes.
+        limit: usize,
+    },
+    /// More of something than the limit.
+    TooMany {
+        /// What was counted.
+        what: Counted,
+        /// The limit.
+        limit: usize,
+    },
+    /// Reading the text would take more memory than the caller can spare.
+    NeedsMemory {
+        /// The memory reading it would take, in bytes.
+        needed: usize,
+        /// The memory the caller can spare, in bytes.
+        available: usize,
+    },
+    /// References from instance `#id` nested deeper than the reader follows (or a cycle).
+    TooDeep {
+        /// The instance read at the limit.
+        id: u64,
+        /// The deepest nesting followed.
+        limit: usize,
+    },
+    /// Expanding the structure from instance `#id` gives more nodes than the reader makes.
+    TooManyInstances {
+        /// The instance expanded.
+        id: u64,
+        /// The most nodes made.
+        limit: usize,
+    },
+}
+
+impl fmt::Display for Limit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::TooLarge { bytes, limit } => write!(
+                f,
+                "the file is too large ({} MB, limit {} MB)",
+                bytes >> 20,
+                limit >> 20
+            ),
+            Self::TooMany { what, limit } => write!(f, "the file has more than {limit} {what}"),
+            Self::NeedsMemory { needed, available } => write!(
+                f,
+                "reading the file needs about {} MB of memory, more than the {} MB available",
+                needed >> 20,
+                available >> 20
+            ),
+            Self::TooDeep { id, limit } => {
+                write!(f, "#{id}: references nested more than {limit} deep")
+            }
+            Self::TooManyInstances { id, limit } => {
+                write!(f, "#{id}: expands to more than {limit} instances")
+            }
+        }
+    }
+}
+
+impl std::error::Error for Limit {}
 
 /// What a limit counts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -169,27 +252,6 @@ pub enum Refusal {
         /// What was wrong.
         cause: Syntax,
     },
-    /// The text is longer than the limit.
-    TooLarge {
-        /// The text's length in bytes.
-        bytes: usize,
-        /// The limit in bytes.
-        limit: usize,
-    },
-    /// More of something than the limit.
-    TooMany {
-        /// What was counted.
-        what: Counted,
-        /// The limit.
-        limit: usize,
-    },
-    /// Reading the text would take more memory than the caller can spare.
-    NeedsMemory {
-        /// The memory reading it would take, in bytes.
-        needed: usize,
-        /// The memory the caller can spare, in bytes.
-        available: usize,
-    },
     /// A value has no Part 21 form.
     Unwritable {
         /// The instance it is in (`None`: the header or a section's parameters).
@@ -212,19 +274,6 @@ impl fmt::Display for Refusal {
             Self::NotStep => f.write_str("not a STEP file (no ISO-10303-21 header)"),
             Self::MissingEnd => f.write_str("the file ends without END-ISO-10303-21"),
             Self::Syntax { line, cause } => write!(f, "syntax error at line {line}: {cause}"),
-            Self::TooLarge { bytes, limit } => write!(
-                f,
-                "the file is too large ({} MB, limit {} MB)",
-                bytes >> 20,
-                limit >> 20
-            ),
-            Self::TooMany { what, limit } => write!(f, "the file has more than {limit} {what}"),
-            Self::NeedsMemory { needed, available } => write!(
-                f,
-                "reading the file needs about {} MB of memory, more than the {} MB available",
-                needed >> 20,
-                available >> 20
-            ),
             Self::Unwritable {
                 id: Some(id),
                 cause,
@@ -425,19 +474,9 @@ pub enum EntityCause {
         /// What was wrong.
         what: &'static str,
     },
-    /// References nested deeper than the reader follows (or a cycle).
-    TooDeep {
-        /// The deepest nesting followed.
-        limit: usize,
-    },
     /// The instance is part of a cycle where the file's structure must be a tree or a
     /// directed acyclic graph (an assembly using itself, a mapped item mapping itself).
     Cycle,
-    /// Expanding the structure from the instance gives more nodes than the reader makes.
-    TooManyInstances {
-        /// The most nodes made.
-        limit: usize,
-    },
 }
 
 impl fmt::Display for EntityCause {
@@ -451,11 +490,7 @@ impl fmt::Display for EntityCause {
                 write!(f, "parameter {index}: expected {expected}")
             }
             Self::Invalid { what } => f.write_str(what),
-            Self::TooDeep { limit } => write!(f, "references nested more than {limit} deep"),
             Self::Cycle => f.write_str("part of a cycle"),
-            Self::TooManyInstances { limit } => {
-                write!(f, "expands to more than {limit} instances")
-            }
         }
     }
 }

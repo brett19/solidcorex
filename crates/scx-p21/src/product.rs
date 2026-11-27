@@ -9,8 +9,8 @@
 // colours the presentation styles give items. Read from a parsed [`Exchange`] by [`read`].
 // Changes: every refusal is a typed `P21Error` naming the instance at fault (was a `String`
 // with the path of entities that led to it): `EntityCause::Missing`, `WrongType`, `BadParam`
-// (with the parameter's position in its record), `TooDeep`, and the new `Cycle` and
-// `TooManyInstances`; so `entity`, `reference`, `colour_number`, `optional_direction`,
+// (with the parameter's position in its record), and the new `Cycle`, or the limits
+// `Limit::TooDeep` and the new `Limit::TooManyInstances`; so `entity`, `reference`, `colour_number`, `optional_direction`,
 // `optional_scale`, `refs`, `colour`, `surface_style`, `styled_item`, `index_of`, `frame`,
 // `read`, `impl ProductStructure::instances` and `impl ProductStructure::expand` take the
 // instance and the position instead of a label; new for that: `refuse`, `bad`, `not_a`,
@@ -59,7 +59,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::error::EntityCause;
+use crate::error::{EntityCause, Limit};
 use crate::exchange::{Exchange, Instance, Param};
 use crate::part42::geom::{Placement, P3};
 use crate::part42::read::{Reader, MAX_COORD};
@@ -798,7 +798,12 @@ struct Graph<'a> {
 
 impl Graph<'_> {
     fn refuse(&self, n: usize, cause: EntityCause) -> P21Error {
-        P21Error::entity(self.entities.get(n).copied().unwrap_or(0), cause)
+        P21Error::entity(self.entity(n), cause)
+    }
+
+    /// The instance of node `n` (0 when there is none).
+    fn entity(&self, n: usize) -> u64 {
+        self.entities.get(n).copied().unwrap_or(0)
     }
 
     /// The height of node `n` (the longest path below it), checking that no path from a root
@@ -812,18 +817,19 @@ impl Graph<'_> {
         memo: &mut [Option<usize>],
         on_path: &mut [bool],
     ) -> Result<usize> {
-        let too_deep = EntityCause::TooDeep {
+        let too_deep = || Limit::TooDeep {
+            id: self.entity(n),
             limit: MAX_ASSEMBLY_DEPTH,
         };
         if depth > MAX_ASSEMBLY_DEPTH {
-            return Err(self.refuse(n, too_deep));
+            return Err(too_deep().into());
         }
         if on_path.get(n).copied().unwrap_or(false) {
             return Err(self.refuse(n, EntityCause::Cycle));
         }
         if let Some(Some(h)) = memo.get(n).copied() {
             if depth + h > MAX_ASSEMBLY_DEPTH {
-                return Err(self.refuse(n, too_deep));
+                return Err(too_deep().into());
             }
             return Ok(h);
         }
@@ -921,7 +927,7 @@ fn transformation(
 /// missing or of the wrong kind ([`EntityCause::Missing`], [`EntityCause::WrongType`]), a
 /// parameter of the wrong kind ([`EntityCause::BadParam`]), an assembly or chain of mapped
 /// items that cycles ([`EntityCause::Cycle`]) or nests past [`MAX_ASSEMBLY_DEPTH`]
-/// ([`EntityCause::TooDeep`]), or a placement the geometry reader refuses.
+/// ([`Limit::TooDeep`]), or a placement the geometry reader refuses.
 #[allow(clippy::too_many_lines)]
 pub fn read(ex: &Exchange) -> Result<ProductStructure> {
     let all = in_id_order(ex);
@@ -1213,8 +1219,8 @@ impl ProductStructure {
     ///
     /// # Errors
     ///
-    /// [`EntityCause::TooManyInstances`] on the root whose expansion passes [`MAX_VISITS`]
-    /// nodes, and [`EntityCause::TooDeep`] on a definition nested past
+    /// [`Limit::TooManyInstances`] on the root whose expansion passes [`MAX_VISITS`]
+    /// nodes, and [`Limit::TooDeep`] on a definition nested past
     /// [`MAX_ASSEMBLY_DEPTH`] (which [`read`] has checked; a structure built by hand may not
     /// be).
     pub fn instances(&self) -> Result<Vec<Node>> {
@@ -1252,15 +1258,18 @@ impl ProductStructure {
         out: &mut Vec<Node>,
     ) -> Result<()> {
         if depth > MAX_ASSEMBLY_DEPTH {
-            return refuse(
-                self.entity_of(definition),
-                EntityCause::TooDeep {
-                    limit: MAX_ASSEMBLY_DEPTH,
-                },
-            );
+            return Err(Limit::TooDeep {
+                id: self.entity_of(definition),
+                limit: MAX_ASSEMBLY_DEPTH,
+            }
+            .into());
         }
         if out.len() >= MAX_VISITS {
-            return refuse(at.root, EntityCause::TooManyInstances { limit: MAX_VISITS });
+            return Err(Limit::TooManyInstances {
+                id: at.root,
+                limit: MAX_VISITS,
+            }
+            .into());
         }
         let me = out.len();
         out.push(Node {
