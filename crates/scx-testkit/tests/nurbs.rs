@@ -555,3 +555,406 @@ fn surface_insertion_and_elevation_leave_the_shape_exactly_unchanged() {
         same_surface(&s, &e, &mut rng, &format!("{data:?} elevate"));
     }
 }
+
+// ---------------------------------------------------------------- order 3 and higher; splitting
+
+/// Random surfaces of degrees up to 4 in each direction.
+fn high_surfaces(seed: u64, count: usize) -> Vec<scx_testkit::data::SurfaceData<3>> {
+    let mut rng = Rng::new(seed);
+    (0..count)
+        .map(|i| {
+            let (du, dv) = (1 + i % 4, 1 + (i * 3 + 2) % 4);
+            let spec = |degree: usize, k: usize| Spec {
+                degree,
+                count: degree + 1 + k % 3,
+                knots: KNOTS[k % 4],
+            };
+            gen::surface(&mut rng, (spec(du, i), spec(dv, i + 1)), WEIGHTS[i % 3])
+        })
+        .collect()
+}
+
+#[test]
+fn surface_de_boor_and_basis_sum_agree_exactly_to_order_five() {
+    let mut rng = Rng::new(12);
+    let mut checked = 0;
+    for data in high_surfaces(120, 12) {
+        let s = data.exact().unwrap();
+        for uv in surface_samples(&mut rng, &s, 0).into_iter().take(5) {
+            let side = SIDE2[checked % 4];
+            let a = s.derivs(uv, side, 5).unwrap();
+            let b = s.derivs_by_basis(uv, side, 5).unwrap();
+            assert_eq!(a.order(), 5);
+            assert_eq!(a, b, "{data:?} {uv:?} {side:?}");
+            checked += 1;
+        }
+    }
+    assert!(checked > 50, "{checked}");
+}
+
+/// The power-basis coefficients of the Bernstein polynomials of degree `p`:
+/// `B_i(t) = sum_k c[i][k] t^k`.
+fn bernstein_to_power(p: usize) -> Vec<Vec<Rat>> {
+    (0..=p)
+        .map(|i| {
+            (0..=p)
+                .map(|k| {
+                    if k < i {
+                        Rat::zero()
+                    } else {
+                        let c = binomial(p, i) * binomial(p - i, k - i);
+                        Rat::from(if (k - i) % 2 == 0 { c } else { -c })
+                    }
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// `d^k/dt^k t^a` at `t`.
+fn power_deriv(a: usize, k: usize, t: &Rat) -> Rat {
+    if k > a {
+        return Rat::zero();
+    }
+    let falling = (a - k + 1..=a).fold(1i64, |f, x| f * x as i64);
+    &Rat::from(falling) * &pow(t, a - k)
+}
+
+/// The partials up to `order` of the Bezier patch of degrees `(p, q)` on
+/// `[u0, u1] x [v0, v1]` with homogeneous points `h[i][j]` (`w P`, `w`), by expanding to the
+/// power basis and differentiating each monomial, then the quotient rule (Leibniz):
+/// `S^(k,l) = (A^(k,l) - sum_{(i,j) != 0} C(k,i) C(l,j) w^(i,j) S^(k-i,l-j)) / w`.
+fn power_truth(
+    (p, q): (usize, usize),
+    (du, dv): ((f64, f64), (f64, f64)),
+    h: &[Vec<[Rat; 4]>],
+    (u, v): (f64, f64),
+    order: usize,
+) -> Vec<Vec<[Rat; 3]>> {
+    let (cu, cv) = (bernstein_to_power(p), bernstein_to_power(q));
+    // the monomial coefficients of the homogeneous polynomial in (s, t)
+    let mut mono = vec![vec![[Rat::zero(), Rat::zero(), Rat::zero(), Rat::zero()]; q + 1]; p + 1];
+    for (i, row) in h.iter().enumerate() {
+        for (j, hij) in row.iter().enumerate() {
+            for a in 0..=p {
+                for b in 0..=q {
+                    let c = &cu[i][a] * &cv[j][b];
+                    for (m, x) in mono[a][b].iter_mut().zip(hij) {
+                        *m = &*m + &(&c * x);
+                    }
+                }
+            }
+        }
+    }
+    let local = |x: f64, (a, b): (f64, f64)| (&r(x) - &r(a)).checked_div(&(&r(b) - &r(a))).unwrap();
+    let (s, t) = (local(u, du), local(v, dv));
+    let (ku, kv) = (
+        (&r(du.1) - &r(du.0)).recip().unwrap(),
+        (&r(dv.1) - &r(dv.0)).recip().unwrap(),
+    );
+    let homo = |k: usize, l: usize| -> [Rat; 4] {
+        let mut out = [Rat::zero(), Rat::zero(), Rat::zero(), Rat::zero()];
+        for a in 0..=p {
+            for b in 0..=q {
+                let f = &power_deriv(a, k, &s) * &power_deriv(b, l, &t);
+                for (o, m) in out.iter_mut().zip(&mono[a][b]) {
+                    *o = &*o + &(&f * m);
+                }
+            }
+        }
+        let scale = &pow(&ku, k) * &pow(&kv, l);
+        out.map(|x| &x * &scale)
+    };
+    let a: Vec<Vec<[Rat; 4]>> = (0..=order)
+        .map(|k| (0..=order - k).map(|l| homo(k, l)).collect())
+        .collect();
+    let w0 = a[0][0][3].recip().unwrap();
+    let mut out: Vec<Vec<[Rat; 3]>> = Vec::new();
+    for k in 0..=order {
+        let mut row = Vec::new();
+        for l in 0..=order - k {
+            let mut num: [Rat; 3] = core::array::from_fn(|c| a[k][l][c].clone());
+            for i in 0..=k {
+                for j in 0..=l {
+                    if i == 0 && j == 0 {
+                        continue;
+                    }
+                    let c = Rat::from(binomial(k, i) * binomial(l, j));
+                    let wij = &c * &a[i][j][3];
+                    let prev: &[Rat; 3] = if i == 0 {
+                        &row[l - j]
+                    } else {
+                        &out[k - i][l - j]
+                    };
+                    for (n, x) in num.iter_mut().zip(prev) {
+                        *n = &*n - &(&wij * x);
+                    }
+                }
+            }
+            row.push(num.map(|n| &n * &w0));
+        }
+        out.push(row);
+    }
+    out
+}
+
+#[test]
+fn high_order_partials_are_the_power_basis_truth_before_and_after_insertion() {
+    let mut rng = Rng::new(13);
+    let mut checked = 0;
+    for n in 0..8 {
+        let (p, q) = (1 + n % 4, 1 + (n * 3 + 1) % 4);
+        // dyadic ends keep the exact values small
+        let du = (-1.0 - (n % 3) as f64 * 0.25, 2.5);
+        let dv = (0.5 * (n % 2) as f64 - 1.0, 3.0);
+        let ends = |d: (f64, f64), p: usize| {
+            let mut k = vec![d.0; p + 1];
+            k.extend(vec![d.1; p + 1]);
+            k
+        };
+        let pts = gen::points::<3>(&mut rng, (p + 1) * (q + 1), 2.0);
+        let w = if n % 2 == 0 {
+            vec![1.0; pts.len()]
+        } else {
+            gen::weights(&mut rng, pts.len(), Weights::Moderate).unwrap()
+        };
+        let s = Surface::new((p, q), &ends(du, p), &ends(dv, q), &pts, Some(&w)).unwrap();
+        let h: Vec<Vec<[Rat; 4]>> = (0..=p)
+            .map(|i| {
+                (0..=q)
+                    .map(|j| {
+                        let k = i * (q + 1) + j;
+                        let wk = r(w[k]);
+                        let x = pts[k].map(|c| &r(c) * &wk);
+                        [x[0].clone(), x[1].clone(), x[2].clone(), wk]
+                    })
+                    .collect()
+            })
+            .collect();
+        // past a degree, so vanishing partials are checked too
+        let order = (p + q + 1).min(6);
+        // parameters of 16 bits keep the exact values small
+        let mut short = || (rng.next_u64() % (1 << 16)) as f64 / 65536.0;
+        let iu = du.0 + (du.1 - du.0) * short();
+        let iv = dv.0 + (dv.1 - dv.0) * short();
+        let inserted = s
+            .insert_knot_u(iu, 1 + n % p.max(1))
+            .unwrap()
+            .insert_knot_v(iv, 1)
+            .unwrap();
+        for _ in 0..2 {
+            let uv = (
+                du.0 + (du.1 - du.0) * short(),
+                dv.0 + (dv.1 - dv.0) * short(),
+            );
+            let want = power_truth((p, q), (du, dv), &h, uv, order);
+            for t in [&s, &inserted] {
+                let got = t.derivs(uv, SIDE2[checked % 4], order).unwrap();
+                for (k, row) in want.iter().enumerate() {
+                    for (l, x) in row.iter().enumerate() {
+                        assert_eq!(&got.get(k, l).unwrap().exact, x, "n {n} {uv:?} ({k}, {l})");
+                    }
+                }
+                checked += 1;
+            }
+        }
+    }
+    assert_eq!(checked, 32);
+}
+
+/// The `u`-lines (fixed `j`) or `v`-lines (fixed `i`) of a surface as curves of its data.
+fn lines(data: &scx_testkit::data::SurfaceData<3>, along_u: bool) -> Vec<Curve<3>> {
+    let (nu, nv) = (
+        data.knots_u.len() - data.degrees.0 - 1,
+        data.knots_v.len() - data.degrees.1 - 1,
+    );
+    let (outer, inner) = if along_u { (nv, nu) } else { (nu, nv) };
+    (0..outer)
+        .map(|o| {
+            let at = |i: usize| if along_u { i * nv + o } else { o * nv + i };
+            let pts: Vec<[f64; 3]> = (0..inner).map(|i| data.points[at(i)]).collect();
+            let w: Option<Vec<f64>> = data
+                .weights
+                .as_ref()
+                .map(|w| (0..inner).map(|i| w[at(i)]).collect());
+            let (p, k) = if along_u {
+                (data.degrees.0, &data.knots_u)
+            } else {
+                (data.degrees.1, &data.knots_v)
+            };
+            Curve::new(p, k, &pts, w.as_deref()).unwrap()
+        })
+        .collect()
+}
+
+/// The homogeneous control points of a surface's `u`- or `v`-lines.
+fn surface_lines(s: &Surface<3>, along_u: bool) -> Vec<(Vec<[Rat; 3]>, Vec<Rat>)> {
+    let (nu, nv) = s.counts();
+    let (pts, w) = (s.points(), s.weights());
+    let (outer, inner) = if along_u { (nv, nu) } else { (nu, nv) };
+    (0..outer)
+        .map(|o| {
+            let at = |i: usize| if along_u { i * nv + o } else { o * nv + i };
+            (
+                (0..inner).map(|i| pts[at(i)].clone()).collect(),
+                (0..inner).map(|i| w[at(i)].clone()).collect(),
+            )
+        })
+        .collect()
+}
+
+fn same_lines(s: &Surface<3>, curves: &[Curve<3>], along_u: bool, what: &str) {
+    let got = surface_lines(s, along_u);
+    assert_eq!(got.len(), curves.len(), "{what}");
+    for (g, c) in got.iter().zip(curves) {
+        assert_eq!(g.0, c.points(), "{what}");
+        assert_eq!(g.1, c.weights(), "{what}");
+    }
+}
+
+#[test]
+fn tensor_product_insertion_elevation_and_split_are_the_curve_operations_per_line() {
+    let mut rng = Rng::new(14);
+    for data in high_surfaces(140, 8) {
+        let s = data.exact().unwrap();
+        let (du, dv) = s.domain();
+        let u = gen::parameter(&mut rng, &data.knots_u, du);
+        let v = gen::parameter(&mut rng, &data.knots_v, dv);
+        for along_u in [true, false] {
+            let (t, k) = if along_u {
+                (u, &data.knots_u)
+            } else {
+                (v, &data.knots_v)
+            };
+            let curves = lines(&data, along_u);
+            let what = format!("{data:?} along_u {along_u} at {t}");
+            let ins = if along_u {
+                s.insert_knot_u(t, 2)
+            } else {
+                s.insert_knot_v(t, 2)
+            };
+            let each: Result<Vec<_>, _> = curves.iter().map(|c| c.insert_knot(t, 2)).collect();
+            match (ins, each) {
+                (Ok(a), Ok(b)) => {
+                    same_lines(&a, &b, along_u, &what);
+                    let knots = if along_u { a.knots().0 } else { a.knots().1 };
+                    assert_eq!(knots, b[0].knots(), "{what}");
+                }
+                (a, b) => assert_eq!(a.err(), b.err(), "{what}"),
+            }
+            let el = if along_u {
+                s.elevate_u(2)
+            } else {
+                s.elevate_v(2)
+            }
+            .unwrap();
+            let each: Vec<_> = curves.iter().map(|c| c.elevate(2).unwrap()).collect();
+            same_lines(&el, &each, along_u, &what);
+            let mid = {
+                let (a, b) = if along_u { du } else { dv };
+                let x = gen::parameter(&mut rng, k, (a, b));
+                if a < x && x < b {
+                    x
+                } else {
+                    a + (b - a) * 0.5
+                }
+            };
+            let (lo, hi) = if along_u {
+                s.split_u(mid)
+            } else {
+                s.split_v(mid)
+            }
+            .unwrap();
+            let halves: Vec<_> = curves.iter().map(|c| c.split(mid).unwrap()).collect();
+            let (l, h): (Vec<_>, Vec<_>) = halves.into_iter().unzip();
+            same_lines(&lo, &l, along_u, &what);
+            same_lines(&hi, &h, along_u, &what);
+        }
+    }
+}
+
+#[test]
+fn tensor_product_operations_commute_across_directions() {
+    let mut rng = Rng::new(15);
+    for data in high_surfaces(150, 8) {
+        let s = data.exact().unwrap();
+        let (du, dv) = s.domain();
+        let u = gen::parameter(&mut rng, &data.knots_u, du);
+        let v = gen::parameter(&mut rng, &data.knots_v, dv);
+        if let (Ok(a), Ok(b)) = (
+            s.insert_knot_u(u, 1).and_then(|t| t.insert_knot_v(v, 2)),
+            s.insert_knot_v(v, 2).and_then(|t| t.insert_knot_u(u, 1)),
+        ) {
+            assert_eq!(a, b, "{data:?} insert {u} {v}");
+        }
+        let a = s.elevate_u(1).unwrap().elevate_v(2).unwrap();
+        let b = s.elevate_v(2).unwrap().elevate_u(1).unwrap();
+        assert_eq!(a, b, "{data:?} elevate");
+    }
+}
+
+#[test]
+fn split_halves_are_the_surface_on_each_side() {
+    let mut rng = Rng::new(16);
+    for data in high_surfaces(160, 6) {
+        let s = data.exact().unwrap();
+        let ((u0, u1), (v0, v1)) = s.domain();
+        let u = u0 + (u1 - u0) * (0.1 + 0.8 * rng.next_f64());
+        let v = data.knots_v[data.knots_v.len() / 2].clamp(v0, v1);
+        let v = if v0 < v && v < v1 {
+            v
+        } else {
+            v0 + (v1 - v0) * 0.5
+        };
+        for (along_u, t) in [(true, u), (false, v)] {
+            let (lo, hi) = if along_u { s.split_u(t) } else { s.split_v(t) }.unwrap();
+            let what = format!("{data:?} along_u {along_u} at {t}");
+            let (ld, hd) = (lo.domain(), hi.domain());
+            let (a, b) = if along_u { (ld.0, hd.0) } else { (ld.1, hd.1) };
+            assert_eq!((a.1, b.0), (t, t), "{what}");
+            for uv in surface_samples(&mut rng, &s, 0) {
+                let x = if along_u { uv.0 } else { uv.1 };
+                let side = SIDE2[(x.to_bits() % 4) as usize];
+                let want = s.derivs(uv, side, 3).unwrap();
+                let below = if along_u { side.0 } else { side.1 } == Side::Below;
+                // a half holds the side of `t` it lies on, with that side's limits at `t`
+                if x < t || (x == t && below) {
+                    assert_eq!(lo.derivs(uv, side, 3).unwrap(), want, "{what} {uv:?} lo");
+                }
+                if x > t || (x == t && !below) {
+                    assert_eq!(hi.derivs(uv, side, 3).unwrap(), want, "{what} {uv:?} hi");
+                }
+            }
+        }
+        assert_eq!(s.split_u(u0).err(), Some(Error::OutsideDomain));
+        assert_eq!(s.split_v(v1).err(), Some(Error::OutsideDomain));
+    }
+}
+
+#[test]
+fn curve_split_halves_are_the_curve_on_each_side() {
+    let mut rng = Rng::new(17);
+    for data in curves(170, 2) {
+        let c = data.exact().unwrap();
+        let (a, b) = c.domain();
+        let u = a + (b - a) * (0.1 + 0.8 * rng.next_f64());
+        let (lo, hi) = c.split(u).unwrap();
+        assert_eq!((lo.domain(), hi.domain()), ((a, u), (u, b)), "{data:?}");
+        for x in samples(&mut rng, &data.knots, (a, b), 3)
+            .into_iter()
+            .chain([u])
+        {
+            for side in SIDES {
+                let want = c.derivs(x, side, 3).unwrap();
+                if x < u || (x == u && side == Side::Below) {
+                    assert_eq!(lo.derivs(x, side, 3).unwrap(), want, "{data:?} {u} {x}");
+                }
+                if x > u || (x == u && side == Side::Above) {
+                    assert_eq!(hi.derivs(x, side, 3).unwrap(), want, "{data:?} {u} {x}");
+                }
+            }
+        }
+        assert_eq!(c.split(a).err(), Some(Error::OutsideDomain));
+        assert_eq!(c.split(f64::NAN).err(), Some(Error::NonFinite));
+    }
+}
