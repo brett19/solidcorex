@@ -11,5 +11,9 @@ publish.workspace = true
 # No dependencies: the bottom layer depends on nothing in the workspace and nothing outside it.
 [dependencies]
 
+# The test kit's references (layers.txt [testkit]: a dev-dependency only, never published).
+[dev-dependencies]
+scx-testkit = { path = "../scx-testkit" }
+
 [lints]
 workspace = true

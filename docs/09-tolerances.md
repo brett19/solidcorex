@@ -130,9 +130,18 @@ Two quantities, never one field serving both.
 - **Default.** It is 1e-5 mm for parts sized 0.5 to 500 mm, which is today's zone, so nothing moves
   by default.
 
-An operation's decisions read both. Two entities coincide when their distance is at most
-`resolution + acc₁ + acc₂`. That is how today's `coincidence_tol_3d` and `xsect_tol_3d_from_zones`
-combine, made explicit.
+An operation's decisions read both. Changed 11-27 (research 60, review-60 §0): two entities
+coincide when their distance is at most `max(resolution, acc₁, acc₂)`, plus the rounding of
+coordinate copies (`num::tol`). That is today's `coincidence_tol_3d` (§1.2), and `scx-num`'s
+`coincident`. The sum `acc₁ + acc₂` is only the gap allowed at an intersection, where two constructed
+points each lie off the exact meeting by their own bound (`xsect_tol_3d_from_zones`). The earlier
+text here said coincidence was `resolution + acc₁ + acc₂`; that was wrong. The pin left the sum on
+purpose: at the sum, a groove 1.5e-5 deep in a block at a 1e-5 tolerance comes out as no groove
+(pin `docs/booleans.md` §5, §10).
+
+**Merged points** take the rule of 01 §4.2: components of "within coincidence", numbered in
+item-index order; an operand vertex is the merged point; the spread is a `Measured` accuracy with a
+warning, never a `Defect`; the vertex ball covers every edge and p-curve end the merge moves.
 
 There is no angle tolerance (changed 11-26, 01 §4.2: 04 row 42 read as "no angle tolerance at all").
 Coincidence angles come from accuracy divided by size. The 20°, 25° and 3° literals become named,
@@ -147,13 +156,15 @@ that use them: they are algorithm thresholds, not tolerances.
 | `Brep.tolerance` (body zone) | resolution, used as an accuracy floor | removed from the body; the resolution is the document's, and the body keeps only a stamp of it (01 C7). An imported entity that cannot be measured keeps the file's value as a `Basis::Stated` accuracy. |
 | record `Brep.tolerance` ("XSectTol3d") | ambiguous (D8) | the `Record` stores the body's resolution stamp; the pin-record converter reads the pin's value |
 | `Tolerances::zone_tol_3d`, `contact_tol_3d`, `context_zone_tol_3d` | resolution | `Document::resolution` |
-| `xsect_tol_3d_from_zones`, `coincidence_tol_3d` | resolution + accuracies | `num::coincident(res, acc1, acc2)` |
+| `coincidence_tol_3d` | the larger of resolution and accuracies | `num::coincident(res, acc1, acc2)`, through the `num::tol` helpers |
+| `xsect_tol_3d_from_zones` | the gap allowed at an intersection: the sum of the accuracies | `acc1 + acc2`, named at its use |
 | `approx_tol_3d` (zone / 2) | a fitting budget | an explicit `budget: Length` argument to fitters, derived from the accuracy being certified |
 | `fit_tolerance` (`k/topology/edgeuse/p3.rs:426`) | a fitting budget (D7) | `budget = acc_e + acc_f − G` per research 34/35 |
 | `ang_tol_deg` | angle threshold | no angle tolerance: operation parameters and named constants (01 §4.2) |
 | `tol_gap_gain` 1.1 | a margin on a *sample* | deleted: a bound needs no margin |
 | `model_size_estimate`, size table | resolution policy | the rule that picks the size class at `Document` creation (01 §4.3) |
-| `large_small_size_ratio` | validity limit (Test 82) | `num::consts::MAX_ACCURACY_RATIO`, documented as a validity limit |
+| `large_small_size_ratio` | validity limit (Test 82) | `num::consts::MAX_ACCURACY_RATIO`: a validity limit for results of our own operations, a warning on imports (§6) |
+| search distances (stitch's sewing tolerance, pick radii, nearest-point windows) | how far a search looks | `num::SearchRadius`, which cannot be passed as a coincidence length (research 60 T5) |
 | `EFF_ZERO`, `scaled_zero`, `EFF_ZERO_PARAM` | numeric zeros | `num::EPS_LEN`, `EPS_REL`, `EPS_PARAM` (07 §6), not tolerances |
 | `map_to_1d` | resolution in parameter space | `num::ParamTol`, from a resolution and a derivative bound |
 | `blend_net_tolerance` | an evaluation switch | an argument choosing definition or net |
@@ -175,8 +186,9 @@ In solidcorex there is no body tolerance to combine:
 3. **New entities** (intersection edges, split faces) take the accuracy of their certificate.
 4. **Imported operands with stated values** larger than the document's resolution keep them as
    `Stated` accuracies. An accuracy past the resolution gives `Warning::AccuracyPastResolution`, never
-   a refusal; the ratio limit `MAX_ACCURACY_RATIO` is a validity limit. The coarse operand is never
-   lowered or raised.
+   a refusal. On an imported operand, a ratio past `MAX_ACCURACY_RATIO` is a warning too; the ratio is
+   a validity limit only for results of our own operations (§6). The coarse operand is never lowered
+   or raised.
 5. **The result's stamp** is the document's.
 
 Alternative: keep "larger of the two", for fidelity. Rejected, because it makes a fine part coarser
@@ -207,7 +219,7 @@ pub enum Claim {
 
 - Changed 11-26 (01 §4.1). Where a `Cert` lives: on an edge, vertex or `EdgeUse` as a `Recorded`
   (`Option<Recorded>`, `None` meaning within the resolution stamp), and, for a surface's accuracy, per
-  span in the procedural kind's payload in `scx-geom`, never in a side table.
+  span in the procedural kind's payload in `scx-curve` (`Procedural`), never in a side table.
 - `reads` names the inputs (curve, surface, vertex positions) by entity id. Because a changed entity
   is a new entity in a `Draft`, a certificate can never outlive its inputs.
 - An edge's or vertex's accuracy is its `Recorded::acc`. A face's accuracy is derived (the maximum of
@@ -224,7 +236,8 @@ pub enum Claim {
   - `Method` is `Interval`, `Bernstein`, `Taylor` or `Krawczyk`. There is no `Exact`, per the
     bullet above; the code comment in the sketch still lists it.
 - An operation declares what it preserves: a rigid move keeps every `Cert`, a uniform scale
-  multiplies bounds, and a Boolean keeps those of untouched faces.
+  multiplies bounds, an affine map multiplies them by its largest singular value (01 §2.4), and a
+  Boolean keeps those of untouched faces.
 
 Today's analogues: the definitions doc §4.1 (ε for nets), `Verdict` (`k/geom/certified.rs:56`),
 ops' `Outward` keyed by settings (`ops/body.rs:62-100`), and `TrimCoverRaises`.
@@ -237,7 +250,10 @@ A raise is an increase of an entity's accuracy after it was set. It is legitimat
 2. **The gap is enclosed**, not sampled. A bound comes from an interval, Bernstein or Taylor
    enclosure.
 3. **The tube stays clear.** The raised tube or ball reaches no entity it does not bound (spec §8,
-   invariant 7), and the ratio stays within `MAX_ACCURACY_RATIO`.
+   invariant 7). Changed 11-27 (research 60 E1): a raise past `MAX_ACCURACY_RATIO` is still made and
+   recorded, with a warning. A real healed import needs it: CTC-05 needs 2.05e-2 at a 1e-5
+   resolution, a ratio of 2050. The ratio stays a validity limit for results of our own
+   operations.
 4. **It is recorded** as a `Raise { entity, before, after, cert }` in the body's import report, and
    in the `Record` when the body is written back.
 
@@ -247,6 +263,11 @@ input cannot be built within its budget). In particular:
 - **Creating a pcurve never raises.** It is fitted to its budget, as in design T (research 35).
 - **The tree build and the validity check never write** (spec invariant 11).
 - **Healing may shrink an accuracy** only to a proved bound. The shrink is recorded like a raise.
+- **A new entity inside an input's ball is not a raise** (research 60 T4, as changed by review-60).
+  A new entity's accuracy is set when it is made, so it is never raised. When it does not exceed the
+  input accuracies it lies within, no accuracy was lost: there is no `AccuracyPastResolution`
+  warning, and its basis is `Measured`, the containment test being the measurement. It is not
+  `Stated`, which would claim an importer stated it.
 
 ## 7. Migration (JUDGED)
 
@@ -272,7 +293,7 @@ What each old step's work becomes:
 
 ### 7.2 What waits for its layer
 
-- **Bound routines** (was step C): `scx-geomq`, step 2 for closed forms, step 5 for fitting with
+- **Bound routines** (was step C): `scx-surface`, step 2 for closed forms, step 5 for fitting with
   per-span certificates and B-spline SSI.
 - **Entities with accuracy** (was steps E and K): `scx-brep` is built without a body tolerance and with
   recorded accuracies from the start (step 3). There is no later step that removes `Brep.tolerance`.

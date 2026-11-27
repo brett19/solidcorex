@@ -18,7 +18,13 @@
 // Changes: only these items of certificate.rs and station.rs moved (the rest needs the
 // kernel and surfaces). The callbacks' error is generic: `krawczyk`, `krawczyk_region` and
 // `newton` take closures returning `Result<_, E>` and return `E`, where the pin fixed
-// `SolidError`; their bodies are unchanged. `solve4` (so `inverse4`) reports a singular system
+// `SolidError`; the closures are generic `FnMut` parameters, where the pin took `&dyn Fn`
+// (an evaluator may memoise, and the calls are direct), and `newton` inverts by the
+// `Invert` trait, where the pin took an `&Inverse<N>` (`dyn Fn`) argument: its three
+// implementations are the pin's `inverse_of_columns2`, `3` and `4`, rounding unchanged,
+// and the `Inverse` alias is gone; `krawczyk_region` returns a `ProvedRoot { root, region }`
+// where the pin returned the pair `(root, region)` (research 57 M7); their bodies are
+// unchanged. `solve4` (so `inverse4`) reports a singular system
 // as `NumError::failed(OP, NumFailure::Singular { measure })` with `measure` the pivot, where
 // the pin reported `BlendFailure::SectionDegenerate(SectionDegeneracy::NormalsAgree)`: the same
 // class (`Degenerate`), operation and inputs; the text names the pivot in place of the
@@ -44,8 +50,8 @@
 //!
 //! | Rust | Upstream |
 //! |------|----------|
-//! | [`krawczyk`], [`newton`], [`KRAWCZYK_STEPS`], [`NEWTON_STEPS`] | (not upstream: #15009's, moved) |
-//! | [`inverse3`], [`inverse_of_columns2`], [`inverse_of_columns3`], [`inverse_of_columns4`] | (not upstream: #15009's, moved) |
+//! | [`krawczyk`], [`krawczyk_region`], [`ProvedRoot`], [`newton`], [`KRAWCZYK_STEPS`], [`NEWTON_STEPS`] | (not upstream: #15009's, moved) |
+//! | [`inverse3`], [`Invert`] | (not upstream: #15009's `inverse_of_columns2`/`3`/`4`, moved) |
 //! | [`contraction`], [`k_operator`] | `sm_GnEncloseOver`'s `C`, `q` and `K` (the fork's order), extracted (#15140) |
 //! | [`inverse4`], [`solve4`] | `sm_Inverse4`, `sm_Solve4` (the fork's `SmFilletSection.cpp`; from solidcore's certificate and station) |
 //! | [`KNumber`], [`start_minus_y`], [`plus_c_times`] | `K`'s two sums, in the same order, for the feet's Taylor-model tube (not upstream: #14405's, #15140) |
@@ -127,29 +133,45 @@ pub fn inverse3(c: [Vec3; 3]) -> Option<[[f64; 3]; 3]> {
 /// # Errors
 ///
 /// Those of `value` and `jacobian` (in solidcore, a cancel).
-#[allow(clippy::type_complexity)] // the closures' types, as at the pin
-pub fn krawczyk<E, const N: usize>(
+pub fn krawczyk<E, V, J, const N: usize>(
     mid: [f64; N],
     c: [[f64; N]; N],
-    value: &dyn Fn([Ivl; N]) -> Result<Option<[Ivl; N]>, E>,
-    jacobian: &dyn Fn([Ivl; N]) -> Result<Option<[[Ivl; N]; N]>, E>,
-) -> Result<Option<[Ivl; N]>, E> {
-    Ok(krawczyk_region(mid, c, value, jacobian)?.map(|(root, _)| root))
+    value: V,
+    jacobian: J,
+) -> Result<Option<[Ivl; N]>, E>
+where
+    V: FnMut([Ivl; N]) -> Result<Option<[Ivl; N]>, E>,
+    J: FnMut([Ivl; N]) -> Result<Option<[[Ivl; N]; N]>, E>,
+{
+    Ok(krawczyk_region(mid, c, value, jacobian)?.map(|r| r.root))
+}
+
+/// A box proved to hold a root, and the box the proof ran on ([`krawczyk_region`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ProvedRoot<const N: usize> {
+    /// [`krawczyk`]'s box: `K(Y) ∩ Y`, holding the root.
+    pub root: [Ivl; N],
+    /// `Y`, in which the root is the only one (Krawczyk's strict inclusion `K(Y) ⊂ int Y`
+    /// proves it unique there).
+    pub region: [Ivl; N],
 }
 
 /// [`krawczyk`]'s box and the box its test ran on, `Y`, in which the root it holds is the
-/// only one (Krawczyk's strict inclusion `K(Y) ⊂ int Y` proves it unique there).
+/// only one: see [`ProvedRoot`].
 ///
 /// # Errors
 ///
 /// As [`krawczyk`].
-#[allow(clippy::type_complexity)] // the closures' types, as at the pin
-pub fn krawczyk_region<E, const N: usize>(
+pub fn krawczyk_region<E, V, J, const N: usize>(
     mid: [f64; N],
     c: [[f64; N]; N],
-    value: &dyn Fn([Ivl; N]) -> Result<Option<[Ivl; N]>, E>,
-    jacobian: &dyn Fn([Ivl; N]) -> Result<Option<[[Ivl; N]; N]>, E>,
-) -> Result<Option<([Ivl; N], [Ivl; N])>, E> {
+    mut value: V,
+    mut jacobian: J,
+) -> Result<Option<ProvedRoot<N>>, E>
+where
+    V: FnMut([Ivl; N]) -> Result<Option<[Ivl; N]>, E>,
+    J: FnMut([Ivl; N]) -> Result<Option<[[Ivl; N]; N]>, E>,
+{
     let Some(f) = value(mid.map(Ivl::from))? else {
         return Ok(None);
     };
@@ -187,7 +209,10 @@ pub fn krawczyk_region<E, const N: usize>(
             for (o, b) in out.iter_mut().zip(&y) {
                 *o = Ivl::new(o.lo.max(b.lo), o.hi.min(b.hi));
             }
-            return Ok(Some((out, y)));
+            return Ok(Some(ProvedRoot {
+                root: out,
+                region: y,
+            }));
         }
         for ((r, ki), &m) in radius.iter_mut().zip(&k).zip(&mid) {
             let reach = (ki.lo - m).abs().max((ki.hi - m).abs());
@@ -283,23 +308,68 @@ pub fn k_operator<const N: usize>(
 /// `F` at a point and its columns there, as numbers ([`newton`]).
 pub type Linearised<const N: usize> = Option<([f64; N], [[f64; N]; N])>;
 
-/// A square matrix's inverse (rows) from its columns, `None` where it is singular.
-pub type Inverse<const N: usize> = dyn Fn(&[[f64; N]; N]) -> Option<[[f64; N]; N]>;
+/// A square matrix, given by columns, whose inverse has a closed form: the 2 × 2, 3 × 3
+/// and 4 × 4 matrices [`newton`] and its callers invert.
+pub trait Invert: Sized {
+    /// The inverse (rows) of the matrix of columns `self`, `None` where it is singular
+    /// in floating point.
+    fn inverse_of_columns(&self) -> Option<Self>;
+}
 
-/// Newton's root of `F` from `start` (`at` gives `F` and its columns there): the root, or
-/// `None` where a step is not defined or the steps do not settle.
-pub fn newton<E, const N: usize>(
-    start: [f64; N],
-    at: &dyn Fn([f64; N]) -> Result<Linearised<N>, E>,
-    inverse: &Inverse<N>,
-) -> Result<Option<[f64; N]>, E> {
+impl Invert for [[f64; 2]; 2] {
+    /// Cramer's rule.
+    fn inverse_of_columns(&self) -> Option<Self> {
+        let [[a, c], [b, d]] = *self;
+        let det = a * d - b * c;
+        if !(det.is_finite() && det != 0.0) {
+            return None;
+        }
+        let inv = [[d / det, -b / det], [-c / det, a / det]];
+        inv.iter().flatten().all(|x| x.is_finite()).then_some(inv)
+    }
+}
+
+impl Invert for [[f64; 3]; 3] {
+    /// [`inverse3`] of the columns.
+    fn inverse_of_columns(&self) -> Option<Self> {
+        inverse3(self.map(|[x, y, z]| Vec3::new(x, y, z)))
+    }
+}
+
+impl Invert for [[f64; 4]; 4] {
+    /// [`inverse4`] of the transpose.
+    fn inverse_of_columns(&self) -> Option<Self> {
+        let mut rows = [[0.0_f64; 4]; 4];
+        for (jj, col) in self.iter().enumerate() {
+            for (row, &x) in rows.iter_mut().zip(col) {
+                if let Some(r) = row.get_mut(jj) {
+                    *r = x;
+                }
+            }
+        }
+        let inv = inverse4(&rows).ok()?;
+        inv.iter().flatten().all(|x| x.is_finite()).then_some(inv)
+    }
+}
+
+/// Newton's root of `F` from `start` (`at` gives `F` and its columns there, inverted by
+/// [`Invert`]): the root, or `None` where a step is not defined or the steps do not settle.
+///
+/// # Errors
+///
+/// Those of `at`.
+pub fn newton<E, F, const N: usize>(start: [f64; N], mut at: F) -> Result<Option<[f64; N]>, E>
+where
+    F: FnMut([f64; N]) -> Result<Linearised<N>, E>,
+    [[f64; N]; N]: Invert,
+{
     let mut y = start;
     let mut last = f64::INFINITY;
     for _ in 0..NEWTON_STEPS {
         let Some((f, j)) = at(y)? else {
             return Ok(None);
         };
-        let Some(c) = inverse(&j) else {
+        let Some(c) = j.inverse_of_columns() else {
             return Ok(None);
         };
         let mut size = 0.0_f64;
@@ -322,36 +392,6 @@ pub fn newton<E, const N: usize>(
     }
     // a start only: Krawczyk's box decides whether a root is near
     Ok(y.iter().all(|x| x.is_finite()).then_some(y))
-}
-
-/// The inverse (rows) of a 3 × 3 matrix given by columns.
-pub fn inverse_of_columns3(j: &[[f64; 3]; 3]) -> Option<[[f64; 3]; 3]> {
-    inverse3(j.map(|[x, y, z]| Vec3::new(x, y, z)))
-}
-
-/// The inverse (rows) of a 4 × 4 matrix given by columns.
-pub fn inverse_of_columns4(j: &[[f64; 4]; 4]) -> Option<[[f64; 4]; 4]> {
-    let mut rows = [[0.0_f64; 4]; 4];
-    for (jj, col) in j.iter().enumerate() {
-        for (row, &x) in rows.iter_mut().zip(col) {
-            if let Some(r) = row.get_mut(jj) {
-                *r = x;
-            }
-        }
-    }
-    let inv = inverse4(&rows).ok()?;
-    inv.iter().flatten().all(|x| x.is_finite()).then_some(inv)
-}
-
-/// The inverse (rows) of a 2 × 2 matrix given by columns.
-pub fn inverse_of_columns2(j: &[[f64; 2]; 2]) -> Option<[[f64; 2]; 2]> {
-    let [[a, c], [b, d]] = *j;
-    let det = a * d - b * c;
-    if !(det.is_finite() && det != 0.0) {
-        return None;
-    }
-    let inv = [[d / det, -b / det], [-c / det, a / det]];
-    inv.iter().flatten().all(|x| x.is_finite()).then_some(inv)
 }
 
 /// `smos_Max(a, b)`: `(a > b) ? a : b`.
@@ -542,9 +582,9 @@ mod tests {
 
     #[test]
     fn a_singular_jacobian_has_no_inverse_and_newton_refuses_it() {
-        assert_eq!(inverse_of_columns2(&[[1.0, 2.0], [2.0, 4.0]]), None);
+        assert_eq!([[1.0, 2.0], [2.0, 4.0]].inverse_of_columns(), None);
         assert_eq!(
-            inverse_of_columns3(&[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 1.0, 0.0]]),
+            [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 1.0, 0.0]].inverse_of_columns(),
             None
         );
         // F(x, y) = (x + y − 1, 2x + 2y − 2): its Jacobian's columns are dependent everywhere
@@ -554,6 +594,6 @@ mod tests {
                 [[1.0, 2.0], [1.0, 2.0]],
             )))
         };
-        assert_eq!(newton([0.0, 0.0], &at, &inverse_of_columns2).unwrap(), None);
+        assert_eq!(newton([0.0, 0.0], at).unwrap(), None);
     }
 }

@@ -8,6 +8,11 @@ scx-algo
 # solidcore); `tool` crates depend on no workspace crate. Nothing may depend on either.
 [difftest]
 scx-difftest
+# Test support (references, generators): may depend on any library; a library or difftest
+# crate may depend on it as a dev-dependency only; never published (`publish = false` in
+# its own manifest).
+[testkit]
+scx-testkit
 [tool]
 xtask
 

@@ -782,6 +782,10 @@ or analysis that removes holes and rounds. Such a tool avoids the roughly 150,00
 
 ### 5.1 Core crates
 
+> **Superseded in part.** Re-review 2 of review-56 (ruled 11-27, 04 §3) changes this graph. The
+> table below is the first measured graph; appendix C has the graph as ruled, measured on the
+> same complete call graph of the pin, with the edges it still needs.
+
 The layer is the longest path from `scx-num`. "Deps" lists direct dependencies only. "Kernel
 lines" is the non-test lines of the pin's kernel crate that section 9 assigns to the crate. A
 crate that also takes a whole sibling crate from 01 §1.3 (`solidcore-record`, the tessellator,
@@ -1646,3 +1650,149 @@ Each type below moves together with its inherent methods.
   `curve/curve`, `surface.rs`, `curve.rs`.
 
 The removals of 9.3 are `REMOVE` in the same file. The dependencies of 5.1 are `DEPS`.
+
+## Appendix C: the graph after Re-review 2 (MEASURED)
+
+Re-review 2 of review-56 judged a 31-crate graph (E1 to E8, ruled 11-27). `assignment.py` now
+holds that graph: the crate dependencies of its table, the moves of E1 to E4 and E8, and a
+removal under a named design of 01 for each edge that the ruling drops rather than moves. The
+proof ran on the same complete call graph of the pin as section 9.
+
+### C.1 Result
+
+- 918 files (50 test), 48,982 units, 222,584 unit edges (545,129 references).
+- **Removed by design changes: 323** (286 before). The 37 new ones:
+
+  | Removed edge | Design (01) |
+  |---|---|
+  | the intersection curve's dispatch arms in `eval/curve.rs` | §7.3: a procedural kind over two surfaces, like the on-surface kinds (S6) |
+  | `make_topology` → `heal_made` | §1.1 row 6, §11.1: the reader decodes the exact stored form and does not heal it (E2) |
+  | `mirror_in` → `find_and_set_infinite_region`, `BrepQuery` | §2.1: the region is stored; `RegionId(0)` is the infinite one |
+  | `transform_in` → `cover_moved_trims` | §2.4, §2.1: a transform keeps ids and the pcurves on its edge uses |
+  | the face boundary-tree fill → the body point classifier | §3.2 rule 2: a fill reads its face record and the geometry it names; the tree labels its leaves from the face's own loops |
+  | `calculate_bounding_box_in` → `tight_face_box` | §3.1: the face box is a cell; the pin's `tight` flag becomes a separate tight-box read in bodyq |
+  | mass `estimate` → the tight body box | §3.1: mass uses the box only for its midpoint, which the body box cell gives |
+  | `end_shell` → `validate_pointers` | §2.3: the structure check is `Draft::finish`'s |
+  | `assert_valid_with_walk` → the curve-bounded and offset checks | §2.3: geometric validity is the check's |
+
+- Unassigned files: none.
+- **References outside the declared graph: 16, in 12 unit edges.** All 16 are in four edges
+  that the ruling dropped (C.2).
+- **Cycles: none.**
+- **Trait impls: 10 moved to their trait's or type's crate; 7 are left in neither** (34 and 21
+  before). The seven:
+  - `boolean/merge/p4/arena_pair.rs`: `ClassGeometry` and `CurveOnClassifyObjects` for a local
+    type, in boolean;
+  - `offset/offset_geometry_creation.rs`: `From for Curve`, in offset;
+  - `query/face/p2.rs`: `ClassObject for EntityRef`, in brep;
+  - `surface/surf_of_extrusion/p2.rs`: `ClassGeometry for ClassifyGeometry`, in bodyq;
+  - `topology/brep/p5.rs`: `FaceEdgeBackend for ArenaFaceEdge`, in bodyq;
+  - `topology/vertexuse.rs`: `SectorBrep for Changing`, in bodyq.
+- Whole sinks: surface ← blend only (262 units, 8,650 lines). Re-review 2 drops brep ← bodyq
+  (E4) and ssi ← check (E8). The proof sinks 1,126 units in all; bodyq now rises whole, so an edit
+  that classifies goes up with its classification.
+- **Moved code: 59,951 non-test lines** of 892,037 ported, in 2,187 units.
+
+### C.2 Edges the code still needs
+
+None of these is added in `assignment.py`. Each is a read that 01 §1.1 placed in bodyq when
+bodyq held mass and the surface intersections, so each is a real need, not an incidental call.
+With the four added, the proof gives 0 references outside and no cycles.
+
+| Edge | Refs | Pin items | Need |
+|---|---:|---|---|
+| bodyq → ssi | 5 | `curve_class/witness.rs` `tangency_point` → `global_surface_intersect`; `curve_class/p2.rs` `refine_on_pair` → `SurfaceIntersector::new`, `refine_point`; `topology/brep/p1.rs` `create_parallel_projection_curves` → `Surface::create_parallel_projection_curves_with_context` | curve classification at a tangent contact refines on the two surfaces; projecting onto a body intersects surfaces |
+| check → mass | 2 | `valid_and_outward_failure` and `validation/soundness.rs` `volume_sign` → `mass/enclosure.rs` `volume_sign` | the outward test is a signed volume |
+| local → mass | 8 | `feature_executive.rs` and `feature_executive/annular.rs` `bounds_material` → `partition_face`, `sheet_face` | deciding which side holds material integrates the faces |
+| mesh → mass | 1 | `mesh_reconstruction/native.rs` `volume` → `brep_volume_default` | the mesh reconstruction reads the body's exact volume |
+
+E1 rules the tangency witness to boolean. It sinks back into bodyq, because the curve
+classifier (`curve_class/p1.rs:626`) calls it.
+
+### C.3 Places where the pin contradicts the ruling
+
+- **E4, the face cells.** At the pin the boundary-tree fill and the tight face box call the body
+  point classifier. The assignment takes the design of 01 §3.2 rule 2 and removes those edges
+  (C.1). Moving `intersect/point_class` into brep instead also gives no brep → bodyq edge and no
+  cycle (brep 91,527 lines, bodyq 66,435). But it brings into brep the classifier's topology
+  trait, the ray preparation that makes trims on read (01 §11.1), and live ray contexts, which
+  E4 rules out.
+- **E8, `is_outward_solid`.** E8 calls it an orientation read for bodyq. At the pin it runs the
+  full validity check (`check_brep`) and then the volume sign, so it stays in check. Its caller
+  `radial_sweep` (with `contract_complete_cone`) goes to make, the lowest crate that holds
+  everything it calls.
+- `scx-check` declares ssi, but its code uses ssi only through bodyq; boolean's code uses only
+  ssi and stitch directly.
+
+### C.4 The measured table
+
+"Uses" lists the direct dependencies that the crate's kernel code uses. A dagger marks a use
+outside the declared graph (C.2). With the C.2 edges added, bodyq is 73,693 lines and check
+8,653; the rest are unchanged.
+
+| Layer | Crate | Deps | Uses | Kernel lines |
+|---:|---|---|---|---:|
+| 0 | `scx-num` | std | — | 16,992 |
+| 1 | `scx-algo` | num | num | 17,515 |
+| 1 | `scx-nurbs` | num | num | 28,669 |
+| 2 | `scx-curve` | nurbs, algo | nurbs, algo | 63,747 |
+| 2 | `scx-nurbs-surface` | nurbs, algo | nurbs | 19,386 |
+| 3 | `scx-planar` | curve | curve | 14,915 |
+| 3 | `scx-surface` | nurbs-surface, curve | nurbs-surface, curve | 201,369 |
+| 4 | `scx-brep` | surface | surface | 84,299 |
+| 4 | `scx-sketch` | planar | curve | 363 |
+| 4 | `scx-ssi` | surface | surface | 18,118 |
+| 4 | `scx-teeth` | planar | planar | 11,826 |
+| 5 | `scx-bodyq` | brep, planar | brep, planar, ssi† | 73,663 |
+| 5 | `scx-mass` | brep | brep | 4,792 |
+| 5 | `scx-record` | brep | brep | 8,155 |
+| 5 | `scx-tess` | brep | brep | 1,158 |
+| 6 | `scx-check` | bodyq, ssi | bodyq, mass†, ssi | 8,683 |
+| 6 | `scx-hlr` | bodyq | bodyq | 10,948 |
+| 6 | `scx-stitch` | bodyq | bodyq | 12,766 |
+| 7 | `scx-boolean` | bodyq, ssi, stitch | ssi, stitch | 47,303 |
+| 7 | `scx-deform` | check, stitch | — | — |
+| 8 | `scx-make` | boolean, stitch, planar, check, hlr | boolean, check, hlr | 34,082 |
+| 8 | `scx-repair` | boolean, stitch, check | stitch | 1,240 |
+| 9 | `scx-frames` | make | planar | 948 |
+| 9 | `scx-local` | make | make, mass† | 9,374 |
+| 9 | `scx-mesh` | tess, make | make, mass† | 5,565 |
+| 9 | `scx-sheetmetal` | make | make | 7,358 |
+| 9 | `scx-taper` | make | bodyq | 773 |
+| 10 | `scx-blend` | local, repair | local | 150,425 |
+| 11 | `scx-offset` | blend, taper | blend | 36,702 |
+| 11 | `scx-weld` | blend | blend | 903 |
+| 12 | `scx-features` | offset | — | — |
+
+Not ported: 39,980 lines, as in 9.2.
+
+### C.5 The main flows
+
+The flows over 600 lines:
+
+| From → to | Units | Lines | What |
+|---|---:|---:|---|
+| brep → bodyq | 208 | 12,901 | the edits that classify (188 units, 12,538 lines rise): `make_faces_with_curves`, `make_edge_in_face_with_vu`, `move_seam_notified`, `is_inner_shell_of`, `build_face`, `glue_edges_general_searching`, `split_closed`, `orient_body`, and `mirror_in` by another path |
+| blend → surface | 296 | 9,598 | the whole sink, plus the blend-surface items of 4.7 |
+| bodyq → brep | 341 | 6,048 | sinks from `query/face`, `query/edge` and `query/loop`, and the face cells (E4) |
+| curve → surface | 30 | 2,379 | the surface half of `eval/` (E3) and the dispatch arms of on-surface kinds |
+| brep → record | 65 | 2,221 | body record encoding (7.3) |
+| make → boolean | 61 | 1,990 | the planar boolean (P1) |
+| surface → record | 58 | 1,985 | surface record encoding |
+| algo → num | 150 | 1,847 | solver and matrix helpers |
+| make → surface | 69 | 1,589 | surface constructions in sweep |
+| mass → brep | 84 | 1,578 | the face and loop measures that brep's edits call: `loop_area_sign`, `face_properties_in`, `boundary_properties` |
+| bodyq → surface | 65 | 1,417 | face-evaluation helpers the surface kinds call |
+| curve → record | 27 | 1,277 | curve record encoding |
+| surface → ssi | 21 | 1,203 | `global_surface_intersect` and its family |
+| hlr → surface | 36 | 1,179 | silhouette helpers |
+| brep → boolean | 19 | 1,037 | the brep-level boolean entry points (E1) and copy-and-merge |
+| surface → curve | 70 | 966 | curve helpers in surface files |
+| bodyq → planar | 54 | 867 | 2-D loop recognition (3.4) |
+| ssi → surface | 83 | 854 | the intersector's point and index types |
+| brep → stitch | 26 | 802 | brep's stitch entry points and `end_shell` |
+| check → bodyq | 22 | 671 | the clearance proof, which classifies (E4) |
+| boolean → bodyq | 15 | 625 | the tangency witness (C.2) and helpers the classifier calls |
+| nurbs-surface → nurbs | 33 | 609 | NLib curve helpers in surface files |
+
+The rising rule still places each unit by its edges alone, as in 9.2.

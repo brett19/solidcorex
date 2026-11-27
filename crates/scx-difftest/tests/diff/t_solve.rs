@@ -3,10 +3,12 @@
 //!
 //! Every run compares the whole iteration: the outcome or the error (its `Display` text
 //! and the pin's error it maps onto, class, operation, typed failure and cause), the
-//! evaluator's log (each point evaluated, in order, with `signal_errors` or whether a
-//! Jacobian was asked, and whether that call failed), and the solver's public state after
-//! the run (iteration counter, current and previous values, brackets, found accuracy,
-//! boundary hits, termination reason).
+//! evaluator's log (each point evaluated, in order, with whether a Jacobian was asked, and
+//! whether that call failed), and the solver's state after a 1-D solve (iteration counter,
+//! current and previous values, brackets, found accuracy, boundary hits, termination
+//! reason) or an N-D solve's report (termination reason, iterations, whether the guess
+//! went unevaluated). A failed 1-D solve's state is not compared: scx returns it only with
+//! an outcome.
 //!
 //! The `*_clean` tests run every configuration with an evaluator that never fails. The
 //! `*_fail` tests take a smaller set of configurations, count the calls of the clean run,
@@ -124,41 +126,31 @@ fn cfgs1(full: bool) -> Vec<Cfg1> {
     out
 }
 
-/// One 1-D run under `m`: (outcome or error, log, state).
+/// One 1-D run under `m`: (outcome or error, log).
 macro_rules! run1 {
     ($c:expr, $k:expr, $persist:expr, $class:expr) => {{
         let c: Cfg1 = $c;
-        let mut ev = m::sv::Rec1::new(c.func, $k, $persist, $class);
-        let mut s = m::sv::solver1d(c.ivl, c.alg);
+        let mut rec = crate::solvers::Rec1::new(c.func, $k, $persist, $class);
         let (a, b) = c.ab;
-        let (r, state) = match c.entry {
-            0 => {
-                let (r, st) = m::sv::solve1d(&mut s, &mut ev, c.guess, c.acc);
-                (r.map(|o| (o.found, o.t, 0.0)), Some(st))
-            }
-            1 | 2 => (
-                s.solve_by_brent(&mut ev, a, c.guess, b, c.acc, c.entry == 2)
-                    .map(|(t, f)| (false, t, f)),
-                None,
-            ),
+        let r = match c.entry {
+            0 => m::sv::solve1d(&mut rec, c.ivl, c.alg, c.guess, c.acc)
+                .map(|((found, t), st)| ((found, t, 0.0), Some(st))),
+            1 | 2 => m::sv::brent(&mut rec, (a, c.guess, b), c.acc, c.entry == 2)
+                .map(|(t, f)| ((false, t, f), None)),
             _ => {
                 let (fa, fb) = (
                     crate::solvers::f1(c.func, a).0,
                     crate::solvers::f1(c.func, b).0,
                 );
-                let (lo, hi, flo, fhi) = if fa <= fb {
-                    (a, b, fa, fb)
+                let (lo, hi) = if fa <= fb {
+                    ((a, fa), (b, fb))
                 } else {
-                    (b, a, fb, fa)
+                    ((b, fb), (a, fa))
                 };
-                (
-                    s.solve_by_bisection(&mut ev, c.levels, lo, hi, flo, fhi)
-                        .map(|(t, f)| (false, t, f)),
-                    None,
-                )
+                m::sv::bisection(&mut rec, c.levels, lo, hi).map(|(t, f)| ((false, t, f), None))
             }
         };
-        (r.map_err(m::sv::pin), ev.log, state)
+        (r, rec.log)
     }};
 }
 
@@ -192,43 +184,9 @@ diff!(solve1d_fail, |share: usize| {
     out
 });
 
-diff!(solve1d_default_evaluate, || {
-    let mut s = m::sv::local_solve1d::LocalSolve1d::with_interval(
-        m::sv::extent1d::Extent1d::from_min_max(0.0, 1.0),
-        false,
-    );
-    let a = s
-        .solve_it(&mut m::sv::Base1, 0.5, 1e-9)
-        .map(|o| (o.found, o.t));
-    let b = s
-        .solve_by_brent(&mut m::sv::Base1, 0.0, 0.5, 1.0, 1e-9, false)
-        .map(|_| ());
-    let c = m::sv::local_solve1d::LocalSolve1d::new()
-        .solve_it(&mut m::sv::Base1, 0.5, 1e-9)
-        .map(|o| (o.found, o.t));
-    (
-        a.map_err(m::sv::pin),
-        b.map_err(m::sv::pin),
-        c.map_err(m::sv::pin),
-    )
-});
-
-diff!(solve1d_queue, |size: usize| {
-    let q = m::sv::local_solve1d::IterQueue1d::try_new(size as u64).is_ok();
-    let big = m::sv::local_solve1d::IterQueue1d::try_new(u64::MAX)
-        .map(|_| ())
-        .map_err(|e| e.to_string());
-    let mut q2 = m::sv::local_solve1d::IterQueue1d::new(size as u64);
-    let mut osc = Vec::new();
-    for i in 0..20u32 {
-        q2.add(&m::sv::local_solve1d::IterationValue {
-            prev_step: if i % 2 == 0 { 1.0 } else { -1.01 },
-            ..Default::default()
-        });
-        osc.push((q2.is_oscillating(2), q2.is_oscillating(3)));
-    }
-    (q, big, osc)
-});
+diff!(solve1d_queue, |size: usize| m::sv::queue(
+    core::num::NonZeroUsize::new(size).unwrap_or(core::num::NonZeroUsize::MIN)
+));
 
 /// An N-D run.
 #[derive(Clone, Copy)]
@@ -297,38 +255,15 @@ fn cfgsn(full: bool) -> Vec<CfgN> {
     out
 }
 
-/// One N-D run under `m`: (solution or error, log, state).
+/// One N-D run under `m`: (report or error, log).
 macro_rules! runn {
     ($c:expr, $k:expr, $persist:expr, $class:expr) => {{
         let c: CfgN = $c;
-        let mut ev = m::sv::RecN::new(c.func, $k, $persist, $class);
-        let ivls = c.ivl.map(|a| {
-            let mut e = m::sv::extent1d::ExtentNd::new(2);
-            for (i, [lo, hi]) in a.into_iter().enumerate() {
-                if let Some(s) = e.get_mut(i) {
-                    *s = m::sv::extent1d::Extent1d::from_min_max(lo, hi);
-                }
-            }
-            e
-        });
-        let per = [true, false];
-        let periodicities = c.periodic.then_some(&per[..]);
-        let mut s = m::sv::local_solve_nd::LocalSolveNd::new(&mut ev, ivls.as_ref(), periodicities);
-        s.set_step_cutting_enabled(c.cutting);
-        s.set_maximum_iterations(c.maxit);
-        let handler = match c.handler {
-            0 => m::sv::local_solve_nd::BoundaryHandler::TotalBoundaryHits,
-            1 => m::sv::local_solve_nd::BoundaryHandler::HitsAllBoundaries,
-            _ => m::sv::local_solve_nd::BoundaryHandler::IgnoreBoundaryHits,
-        };
-        s.set_boundary_handler(handler, 3);
-        let r = s.solve_it(&c.guess, c.acc).map(|n| (n.found, n.x));
-        let state = (
-            s.termination_reason().code(),
-            s.current_iteration(),
-            s.guess_unevaluated(),
+        let mut rec = crate::solvers::RecN::new(c.func, $k, $persist, $class);
+        let r = m::sv::solve_nd(
+            &mut rec, c.ivl, c.periodic, c.handler, c.cutting, c.guess, c.maxit, c.acc,
         );
-        (r.map_err(m::sv::pin), ev.log, state)
+        (r, rec.log)
     }};
 }
 
@@ -363,107 +298,22 @@ diff!(solve_nd_fail, |share: usize| {
 });
 
 diff!(solve_nd_jacobian, |a: f64, b: f64| {
-    let mut ev = m::sv::RecN::new(0, usize::MAX, false, Class::SmErr);
+    let mut rec = crate::solvers::RecN::new(0, usize::MAX, false, Class::SmErr);
     let mut out = Vec::new();
     for ivl in [
         None,
         Some([[-2.0, 2.0], [-2.0, 2.0]]),
         Some([[a, a], [b, b]]),
     ] {
-        let e = ivl.map(|v: [[f64; 2]; 2]| {
-            v.map(|[lo, hi]| m::sv::extent1d::Extent1d::from_min_max(lo, hi))
-        });
-        let mut x = [a, b];
-        let f = [0.0, 0.0];
-        let mut j = m::sv::matrix::Matrix::new(2, 2);
-        let r = m::sv::local_solve_nd::compute_jacobian(
-            &mut ev,
-            &mut x,
-            &f,
-            &mut j,
-            e.as_ref().map(|v| &v[..]),
-        );
-        let ja: Vec<f64> = (0..4)
-            .map(|i| j.at(i / 2, i % 2).unwrap_or(f64::NAN))
-            .collect();
-        out.push((r.map_err(m::sv::pin), x, ja));
+        out.push(m::sv::jacobian_at(&mut rec, [a, b], ivl));
     }
-    (out, ev.log)
+    (out, rec.log)
 });
 
-diff!(solve_nd_sizes, |n: usize| {
-    let n = n % 5;
-    let mut out = Vec::new();
-    for (ivl_dim, per_len) in [(2, None), (n, None), (2, Some(n)), (n, Some(1))] {
-        let mut ev = m::sv::RecN::new(0, usize::MAX, false, Class::SmErr);
-        let mut e = m::sv::extent1d::ExtentNd::new(ivl_dim);
-        for i in 0..ivl_dim {
-            if let Some(s) = e.get_mut(i) {
-                *s = m::sv::extent1d::Extent1d::from_min_max(-2.0, 2.0);
-            }
-        }
-        let per = per_len.map(|k| vec![false; k]);
-        let guess = vec![0.25; n];
-        let mut s = m::sv::local_solve_nd::LocalSolveNd::new(&mut ev, Some(&e), per.as_deref());
-        let r = s.solve_it(&guess, 1e-9).map(|o| (o.found, o.x));
-        let code = s.termination_reason().code();
-        out.push((r.map_err(m::sv::pin), code, ev.log.len()));
-    }
-    out
-});
+diff!(solve_nd_sizes, |n: usize| m::sv::solve_diag(n % 5));
 
 // The default's interval is not compared: scx's default domain is the whole line, with
 // no interval to read (the pin's is the unused inside-out `Extent1d::new()`).
-diff!(
-    solve1d_settings,
-    |code: i32, lo: f64, hi: f64, acc: f64| {
-        let alg = m::sv::local_solve1d::SolverAlgorithm::from_code(code);
-        let codes = alg.map(|a| (a.code(), a.is_brent()));
-        let d = m::sv::local_solve1d::LocalSolve1d::default();
-        let mut s = m::sv::local_solve1d::LocalSolve1d::with_interval(
-            m::sv::extent1d::Extent1d::from_min_max(-3.0, 3.0),
-            false,
-        );
-        s.domain = m::sv::local_solve1d::Domain1d::Bounded(
-            m::sv::extent1d::Extent1d::from_min_max(lo, hi),
-        );
-        s.desired_accuracy = acc.abs();
-        let ivl = s.domain.interval().unwrap_or_default();
-        let mut ev = m::sv::Rec1::new(0, usize::MAX, false, Class::SmErr);
-        let r = s.solve_it(&mut ev, 1.0, 1e-3).map(|o| (o.found, o.t));
-        (
-            codes,
-            d.desired_accuracy,
-            (ivl.min(), ivl.max(), s.desired_accuracy),
-            r.map_err(m::sv::pin),
-            ev.log,
-        )
-    },
-    {
-        let alg = m::sv::local_solve1d::SolverAlgorithm::from_code(code);
-        let codes = alg.map(|a| (a.code(), a.is_brent()));
-        let d = m::sv::local_solve1d::LocalSolve1d::default();
-        let mut s = m::sv::local_solve1d::LocalSolve1d::with_interval(
-            m::sv::extent1d::Extent1d::from_min_max(-3.0, 3.0),
-            false,
-        );
-        s.set_solution_interval(m::sv::extent1d::Extent1d::from_min_max(lo, hi));
-        s.set_desired_accuracy(acc.abs());
-        let ivl = s.interval();
-        let mut ev = m::sv::Rec1::new(0, usize::MAX, false, Class::SmErr);
-        let r = s.solve_it(&mut ev, 1.0, 1e-3).map(|o| (o.found, o.t));
-        (
-            codes,
-            d.desired_accuracy(),
-            (ivl.min(), ivl.max(), s.desired_accuracy()),
-            r.map_err(m::sv::pin),
-            ev.log,
-        )
-    }
-);
-
-diff!(solve_nd_defaults, || {
-    use m::sv::local_solve_nd::EvalNFunctions;
-    let ev = m::sv::RecN::new(0, usize::MAX, false, Class::SmErr);
-    (ev.solution_size(), ev.scaled_zero(), ev.is_converged())
+diff!(solve1d_settings, |code: i32, lo: f64, hi: f64, acc: f64| {
+    m::sv::settings(code, lo, hi, acc)
 });

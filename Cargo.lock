@@ -83,15 +83,26 @@ version = "0.1.0"
 dependencies = [
  "scx-algo",
  "scx-num",
+ "scx-testkit",
  "solidcore",
 ]
 
 [[package]]
 name = "scx-num"
 version = "0.1.0"
+dependencies = [
+ "scx-testkit",
+]
 
 [[package]]
 name = "scx-p21"
+version = "0.1.0"
+dependencies = [
+ "scx-num",
+]
+
+[[package]]
+name = "scx-testkit"
 version = "0.1.0"
 dependencies = [
  "scx-num",

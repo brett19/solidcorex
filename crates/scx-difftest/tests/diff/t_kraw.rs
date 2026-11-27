@@ -22,17 +22,21 @@ fn inject(fail: usize, k: usize) -> Option<bool> {
     (fail % 3 != 0 && k == fail / 3).then_some(fail % 3 == 1)
 }
 
-diff!(kz_inverse4, |a: [[f64; 4]; 4], b: [f64; 4]| (
-    m::krawczyk::inverse4(&a).map_err(|e| m::kz_err(&e)),
-    m::krawczyk::solve4(&a, &b).map_err(|e| m::kz_err(&e)),
-    m::krawczyk::inverse_of_columns4(&a),
-));
+diff!(kz_inverse4, |a: [[f64; 4]; 4], b: [f64; 4]| {
+    use m::krawczyk::Invert;
+    (
+        m::krawczyk::inverse4(&a).map_err(|e| m::kz_err(&e)),
+        m::krawczyk::solve4(&a, &b).map_err(|e| m::kz_err(&e)),
+        a.inverse_of_columns(),
+    )
+});
 
 diff!(kz_inverse23, |a: [f64; 4], c: [f64; 6], d: [f64; 3]| {
+    use m::krawczyk::Invert;
     let cols = [[c[0], c[1], c[2]], [c[3], c[4], c[5]], d];
     (
-        m::krawczyk::inverse_of_columns2(&[[a[0], a[1]], [a[2], a[3]]]),
-        m::krawczyk::inverse_of_columns3(&cols),
+        [[a[0], a[1]], [a[2], a[3]]].inverse_of_columns(),
+        cols.inverse_of_columns(),
         m::krawczyk::inverse3(cols.map(m::v3)),
     )
 });
@@ -57,7 +61,7 @@ diff!(kz_newton, |start: [f64; 2], p: [f64; 4], fail: usize| {
             [[2.0 * dx, p[2]], [2.0 * y[1], p[3]]],
         )))
     };
-    let r = m::krawczyk::newton(start, &at, &m::krawczyk::inverse_of_columns2);
+    let r = m::krawczyk::newton(start, &at);
     (r.map_err(|e| (e.to_string(), e)), log.into_inner().unwrap())
 });
 
@@ -85,7 +89,7 @@ diff!(kz_newton3, |start: [f64; 3], fail: usize| {
             ],
         )))
     };
-    let r = m::krawczyk::newton(start, &at, &m::krawczyk::inverse_of_columns3);
+    let r = m::krawczyk::newton(start, &at);
     (r.map_err(|e| (e.to_string(), e)), log.into_inner().unwrap())
 });
 
@@ -115,7 +119,8 @@ diff!(kz_krawczyk1, |a: f64, mid: f64, fail: usize| {
         Ok(Some([[Ivl::from(2.0) * x[0]]]))
     };
     let c = [[1.0 / (2.0 * mid)]];
-    let r = m::krawczyk::krawczyk_region([mid], c, &value, &jacobian);
+    let r = m::krawczyk::krawczyk_region([mid], c, &value, &jacobian)
+        .map(|o| o.map(|p| (p.root, p.region)));
     let r2 = m::krawczyk::krawczyk([mid], c, &value, &jacobian);
     (
         r.map_err(|e| (e.to_string(), e)),
@@ -128,6 +133,7 @@ diff!(kz_krawczyk1, |a: f64, mid: f64, fail: usize| {
 diff!(kz_krawczyk2, |start: [f64; 2], p: [f64; 4], fail: usize| {
     // the circle and line of `kz_newton`, about that side's Newton root from `start`
     use m::interval::Ivl;
+    use m::krawczyk::Invert;
     let at = |y: [f64; 2]| -> Result<Option<([f64; 2], [[f64; 2]; 2])>, SolidError> {
         let dx = y[0] - p[1];
         Ok(Some((
@@ -138,13 +144,13 @@ diff!(kz_krawczyk2, |start: [f64; 2], p: [f64; 4], fail: usize| {
             [[2.0 * dx, p[2]], [2.0 * y[1], p[3]]],
         )))
     };
-    let Ok(Some(mid)) = m::krawczyk::newton(start, &at, &m::krawczyk::inverse_of_columns2) else {
+    let Ok(Some(mid)) = m::krawczyk::newton(start, &at) else {
         return None;
     };
     let Ok(Some((_, jm))) = at(mid) else {
         return None;
     };
-    let c = m::krawczyk::inverse_of_columns2(&jm)?;
+    let c = jm.inverse_of_columns()?;
     let log = Mutex::new(Vec::new());
     let value = |x: [Ivl; 2]| -> Result<Option<[Ivl; 2]>, SolidError> {
         let k = log.lock().unwrap().len();
@@ -174,7 +180,8 @@ diff!(kz_krawczyk2, |start: [f64; 2], p: [f64; 4], fail: usize| {
             [two * x[1], Ivl::from(p[3])],
         ]))
     };
-    let r = m::krawczyk::krawczyk_region(mid, c, &value, &jacobian);
+    let r = m::krawczyk::krawczyk_region(mid, c, &value, &jacobian)
+        .map(|o| o.map(|p| (p.root, p.region)));
     Some((
         mid,
         c,

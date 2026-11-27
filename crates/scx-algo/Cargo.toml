@@ -12,5 +12,9 @@ publish.workspace = true
 [dependencies]
 scx-num = { path = "../scx-num" }
 
+# `LocalSolve1d::solve_traced`, for the difftest.
+[features]
+trace = []
+
 [lints]
 workspace = true
