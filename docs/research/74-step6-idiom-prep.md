@@ -2481,3 +2481,163 @@ deterministic branch and bound returning a `Bracket` or a typed `GapError`
 `(Aim, &mut Budget, &Stop)` with one budget unit per point evaluated; edge-to-surface is to the
 kind's whole surface, the face's gap is bounded above by the pcurve at the same parameter;
 curve-to-curve is one-sided; NURBS surfaces are pending until step 5's piece bounds.
+
+## 31. PL6 as built (11-27)
+
+`scx_planar::crossings(&Curve2, &Curve2, Resolution, &mut Budget, &Stop) -> Result<Crossings,
+CrossError>`, in `crates/scx-planar/src/cross.rs`. No new Cargo edge: scx-planar keeps scx-algo and
+scx-num (scx-testkit as a dev-dependency); `binomial` comes from `scx_algo::bernstein`.
+
+### 31.1 Public API
+
+- `Curve2` (`#[non_exhaustive]`): `Line { start, end }`, `Conic { start, apex, end, weight }` (a
+  rational quadratic Bézier, ends of weight 1, any positive middle weight: ellipse, parabola or
+  hyperbola arc), `Bezier { points, weights }` (degree 3 and up; always `Pending`).
+- `Crossings { meets: Vec<Meet>, overlaps: Vec<Overlap> }`, sorted by `a`'s parameter.
+- `Meet { a: [f64; 2], b: [f64; 2], at: Point2, multiplicity: u32, exact: bool }`: each curve's
+  parameter bracket, a point, and the multiplicity of contact. `exact` means the multiplicity is
+  certified (a simple crossing, or an exact zero of known order); otherwise it is the certified upper
+  bound of a cluster within the resolution. `crosses()` is odd multiplicity.
+- `Overlap { a, b }`: a shared stretch; `b` runs high to low when the curves run opposite ways.
+- `CrossError`, with `kind()`, `name()`, `Display`, `From<Exhausted>`, `From<Stopped>`:
+  `NotFinite { curve }`, `OutOfRange { curve }` (a coordinate or weight outside `[1e-100, 1e9]`
+  in magnitude, other than a coordinate 0, where the exact predicates would lose exactness),
+  `Degenerate { curve }` (a line whose ends are one point, a weight not above 0, a Bézier whose
+  points and weights differ in number) are `Refused`; a conic whose apex is on its chord is
+  accepted as a flat conic;
+  `Pending(Pending::Bezier { degree } | Pending::FlatPair)` and `Undecided { curve, range }` are
+  `Unsupported`; `Exhausted` and `Stopped` keep scx-num's kinds. `Which { A, B }` names the curve.
+
+### 31.2 Method
+
+One curve is written implicitly and composed with the other's rational Bernstein form, so the
+crossings are the roots on [0, 1] of one Bernstein polynomial `F` of degree at most 4:
+
+- a line by its orientation `F = w_j orient(B0, B1, P_j)`, its bounded range by the two dot
+  products `(P - B0)·d >= 0` and `(B1 - P)·d >= 0`;
+- a conic arc by its barycentric equation over its control triangle, `A1^2 - 4 w^2 A0 A2`, with
+  `A_i` the orientation against the side opposite `q_i`; its bounded range is `A0, A2 >= 0` on
+  the triangle's side (the arc is the part of the conic inside the triangle).
+
+Which curve is implicit is canonical (line before conic before flat conic, then by the bits of the
+input), so `crossings(b, a)` is `crossings(a, b)` with the brackets swapped, bit for bit. Both curves
+are first scaled by one exact power of two so the largest coordinate is near 1.
+
+Every coefficient is an interval rounded outward with, where it is one orientation or dot product of
+input points, its exact sign (scx-planar's exact predicates). Signs then propagate through the sums
+and products where they are implied, and a sum or product of two exact values that the rounding does
+not change stays an exact point (two_sum / two_prod error 0), so a zero at a dyadic parameter (the
+midpoint of a symmetric arc, the crossing of two lines at 1/2) is an exact zero, found exactly.
+
+A range is dropped when it is certified off the implicit curve's bounded range or `F` is certified
+one-signed. Its roots are settled when every coefficient between the exact zeros at its ends has a
+certified sign and the signs change at most once (Descartes on the Bernstein form): the end zeros are
+meets of the exact multiplicity the zero coefficients give, and one change is one simple root, refined
+by halving to the resolution and 12 halvings more to settle whether it is inside the implicit range.
+A range whose image is within the resolution is a leaf. A run of adjacent leaves is one meet; its
+multiplicity is bounded by the least derivative of the root `F` that `order_on` certifies one-signed
+over the run (Rolle), and fixed by parity when both end signs are known. A range where no derivative
+is certified and every point is proved within the resolution of the implicit support (and that is
+inside the bounded range, or a leaf) is an `Overlap`. Anything else is halved, to depth 100; past it,
+`Undecided`.
+
+### 31.3 Choices, with cases for and against
+
+- **Implicitisation, not a 2-D Newton or a subdivision of both curves.** For: one univariate
+  polynomial of degree at most 4 per pair, so completeness is Descartes plus Rolle, and the bounded
+  range is a sign, never a parameter compared with a tolerance. Against: a degree-3 curve would give
+  `F` of degree 6 against a conic and needs the cubic's implicit form for the other way round; that is
+  step 5's widening (31.6).
+- **Exact signs on coefficients.** For: a shared joint, a point exactly on the other curve, and an
+  exact tangency at a joint are exact zeros of exact multiplicity, never rounding accidents; the pin's
+  `disc < 0` touch-at-the-foot fallback has no counterpart. Against: two extra exact predicates per
+  control point (`dot_sign`, new in `cert.rs`), a few ns each in the fast path.
+- **Exact point sums and products in `Iv` and `Coef`.** For: zeros that are exact in doubles are found
+  exactly (`a: [0.5, 0.5]`) instead of as a bracket of 1-2 ulps; one two_sum or two_prod per operation
+  on points only. Against: this changes `Iv` for all of scx-planar (narrower, still sound intervals:
+  a point is returned only when the error-free transform's error is 0; products near underflow, below
+  2^-900, keep the outward rounding). The other scx-planar tests are unchanged.
+- **The truth of the input, not of its intent.** With exact signs a near-tangency the rounding of
+  `cos` put 1e-17 off is certified apart and dropped, as the contract says (a miss is certified, a
+  touch is reported). For: deterministic, and truth over pin. Against: a caller that rounded a
+  tangent construction gets 0 or 2 by the rounding's side; HLR must not rely on a tangency it did not
+  build exactly (it gets a double meet only when the curves are proved within the resolution).
+- **Clusters at the resolution, not exact algebraic multiplicity.** For: bounded work, the resolution
+  is the model's own (`Resolution`), and the bound is certified (Rolle). Against: a cluster whose end
+  signs are not both known reports the bound with `exact: false`.
+
+### 31.4 The pin, and which side is correct
+
+| solidcore at the pin | here | correct |
+|---|---|---|
+| `api_queries::segment_2d_intersection`: the first hit of two segments within a tolerance | every meet and the overlap | here: a second crossing or an overlap is not dropped |
+| `geom_utility::p2::segment_segment_intersect`: ends on the other within a tolerance, then one closest point, clamped | ends are exact zeros; the interior crossing is certified | here: a clamped closest point of two segments that miss is not a meet |
+| `prism::profile::crossing::line_circle`: `disc < 0` is a touch at the foot, however far the miss | a miss is certified apart and dropped; a touch within the resolution is a double meet | here: the pin's fallback reports a touch for any miss, left to a later tolerance filter |
+| `crossing::circle_circle`: `h2 < 0` is a touch on the line of centres | same as above | here |
+| `crossing::line_line`: parallel when the cross product is within `1e-14` of the lengths' product, then "on one line" within `tol` | parallel only when the exact orientation says so; a near-parallel crossing (1e-9) is found; collinear is an `Overlap` with both brackets | here: the pin drops a real crossing of nearly parallel lines |
+| `crossing::on_arc`: within the sweep by `atan2` with slack `tol / r` | inside the control triangle by exact orientations, plus 12 halvings | here: no slack, no `atan2` (libm, not deterministic across platforms) |
+| `geom_utility::p1::circle_coplanar_circle_intersect_in_contact`: tolerance and contact-tolerance bands (#15429) | no tolerance but the resolution; coincident circles are an `Overlap` | here for crossings; the contact bands are a modelling policy that belongs to the caller |
+| `hlr` crossings: chords sampled, tolerance `1e-9` times the scale | the exact curves, no sampling | here: sampling misses a crossing between samples |
+
+### 31.5 Tests (`crates/scx-planar/tests/crossings.rs`, 18; `cert.rs` +2)
+
+Truth is closed form. Circle-circle (two crossings at the closed-form points, multiplicity 1,
+exact); a line tangent to an ellipse quarter at its exact end (multiplicity 2, exact, at (0, 1)),
+and the same line against the [pi/4, 3pi/4] piece from rounded cosines (0 or 2, by the rounding's
+side); an exact interior tangency (a symmetric arc's middle at a dyadic point: `a == [0.5, 0.5]`,
+exact); near tangency at 1e-9 below (two simple crossings at +-8.9e-5), 1e-9 above (none), 1e-15
+below (total multiplicity 2 at (0, 1)); an osculating circle (contact 4); an arc against itself, a
+split arc against its halves and reversed (overlaps with the right brackets); consecutive arcs of one
+circle (only at the joint); line-circle; lines crossing at exactly 1/2, collinear (one overlap),
+parallel 1e-9 apart (nothing), nearly parallel (one crossing); corner and tangent joints (one meet,
+the tangent one exact of multiplicity 2); parabola and hyperbola arcs; a flat conic; Bezier pending;
+the refusals; budget and stop; symmetry and determinism (swapped calls agree bit for bit). In
+`cert.rs`: `dot_sign` is exact at a right angle; exact sums and products stay points and inexact
+ones widen. No test removed.
+
+### 31.6 Cost
+
+Release build, one thread, the build server under other load; throwaway timers (20,000 calls per
+pair, not committed), resolution 1e-6. Units are budget units charged (one per range examined).
+
+| pair | ns per call | results | units |
+|---|---|---|---|
+| line x line, crossing | 1,113 | 1 meet | 2 |
+| line x line, parallel 1e-9 apart | 455 | none | 1 |
+| line x line, collinear | 1,457 | 1 overlap | 3 |
+| line x arc, crossing | 12,563 | 1 meet | 22 |
+| arc x arc, crossing | 16,149 | 1 meet | 22 |
+| arc x arc, boxes apart | 1,359 | none | 1 |
+| arc x line, exact tangency at the end | 741 | 1 meet (m = 2) | 1 |
+| arc x line, 1e-15 near tangency | 24,376 | 2 meets | 43 |
+| arc x itself | 9,627 | 1 overlap | 7 |
+
+The pin's closed forms (`line_circle`, `circle_circle`) are a few tens of ns but are not complete
+(31.4). Most of a crossing's cost is the refinement of a simple root to the resolution and 12
+halvings more (about 20 ranges, each a de Casteljau split of `F`, the range polynomials and the
+homogeneous coordinates); a root-polishing step (Newton on `F` inside the certified bracket) would cut
+that, and is left for when HL2 measures it in a drawing. The other users of `Iv` in scx-planar pay one
+two_sum or two_prod per operation whose operands are both points (not timed separately; their tests'
+times are unchanged at this precision).
+
+### 31.7 Limits and open questions
+
+- Rational Bézier of degree 3 and up and splines are `Pending::Bezier`; two flat conics are
+  `Pending::FlatPair` (neither has an implicit form here). Both wait on step 5's planar widening.
+- The isolator (`Coef`, Descartes runs, `order_on`) is private to scx-planar; when step 5 widens
+  planar to splines it should move to scx-algo next to `bernstein`, so 2-D and 3-D share it.
+- A cluster with an end whose sign the rounding hides reports the Rolle bound, `exact: false`; an
+  even bound with no proof the curves are near is `Undecided`. No test reaches the second.
+- Two arcs of one circle meeting at a joint may report a stretch no longer than the resolution there
+  as an `Overlap` rather than a meet (the test accepts either within 1e-5 of the joint).
+- A run of leaves next to a range certified outside the bounded range, with an undecided end sign,
+  is `Undecided` rather than guessed.
+
+### 31.8 Proposed 04 row
+
+PL6 (74 §31): `scx_planar::crossings` returns every meet (with multiplicity, exact or a certified
+bound at the resolution) and every overlap of two bounded lines or conic arcs, or a typed
+`Undecided`; degree 3 and up and flat pairs are `Pending` until step 5. One implicit curve composed
+with the other (degree <= 4), exact signs on coefficients, exact point arithmetic where the rounding
+is exact; no tolerance but the `Resolution`. The pin's touch-at-the-foot, 1e-14 parallel and `atan2`
+slack rules are not ported.
