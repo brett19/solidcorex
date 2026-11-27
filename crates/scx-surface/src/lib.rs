@@ -21,6 +21,9 @@
 //!   (63 SU7).
 //! - [`Closed`]: a closed-form answer or [`Closed::General`] (research 63 D6), shared with
 //!   `scx-ssi`.
+//! - [`intersect_curve`]: where a line, circle or ellipse meets a kind, every point in
+//!   the curve's `t` and the kind's uv, crossing or tangent at the tolerance, or the curve
+//!   lying on it ([`CurveSurfaceHit`]); closed forms, a NURBS pair `Unsupported` (63 SU6).
 //! - [`pcurve_of`]: the exact pcurve of a curve lying on a surface, checked by lifting, or a
 //!   typed [`PcurveError`] (63 D10, §4.11).
 //! - [`AnyCurve`]: a free [`Curve`](scx_curve::Curve), or a [`CurveOnSurface`] (a uv curve on
@@ -56,6 +59,7 @@ mod cone;
 mod cylinder;
 mod edit;
 mod error;
+mod intersect;
 mod invert;
 mod nurbs_invert;
 mod pcurve;
@@ -71,6 +75,7 @@ pub use cone::Cone;
 pub use cylinder::Cylinder;
 pub use edit::UvMap;
 pub use error::{Size, SurfaceError};
+pub use intersect::{Contact, CurveSurfaceHit, intersect_curve};
 pub use invert::{Closest, Foot, Inversion};
 pub use pcurve::{CurveKind, PcurveError, SurfaceKind, pcurve_of};
 pub use plane::Plane;
@@ -103,6 +108,7 @@ const _: () = {
     ok::<Torus>();
     ok::<Surface>();
     ok::<Pole>();
+    ok::<CurveSurfaceHit>();
     ok::<UvMap>();
     ok::<SurfaceError>();
     ok::<Size>();
