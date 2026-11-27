@@ -1,0 +1,67 @@
+# Written for solidcorex. Apache-2.0.
+# Routine checks, so a builder pushes a branch and reviews only the design (docs/02-testing.md, CI).
+# The toolchain comes from rust-toolchain.toml; cargo installs it on first use.
+name: ci
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+jobs:
+  fast:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/pin # xtask fast lints scx-difftest, which links the pin
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo xtask fast # fmt --check, clippy -D warnings, layers, headers, pin, tests
+      - run: cargo clippy --workspace --all-targets -- -D warnings # every member, difftest too
+
+  xplat:
+    name: xplat (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    # TODO: drop continue-on-error on the aarch64 leg once builder I's aarch64 powi fix merges.
+    continue-on-error: ${{ matrix.experimental }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: wasm32-wasip1, os: ubuntu-24.04, target: wasm32-wasip1, experimental: false }
+          - { name: aarch64, os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, experimental: true }
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup target add ${{ matrix.target }}
+      - if: matrix.target == 'wasm32-wasip1'
+        uses: bytecodealliance/actions/wasmtime/setup@v1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Golden hash tests
+        env:
+          CARGO_TARGET_WASM32_WASIP1_RUNNER: wasmtime
+        run: cargo test --target ${{ matrix.target }} -p scx-num --test fmath_pin -p scx-algo --test xplat_pin
+
+  difftest:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/pin
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p scx-difftest
+
+  bench-compile:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - id: has
+        run: test -d crates/scx-bench && echo "yes=true" >> "$GITHUB_OUTPUT" || echo "yes=false" >> "$GITHUB_OUTPUT"
+      - if: steps.has.outputs.yes == 'true'
+        uses: Swatinem/rust-cache@v2
+      - if: steps.has.outputs.yes == 'true'
+        run: cargo check --benches -p scx-bench
