@@ -1286,3 +1286,63 @@ pub fn p21_lower_hex() -> PinDefect<(Text<LOWER_HEX>,), XRead> {
         },
     }
 }
+
+/// `global_solve::solve` of `ProjectedMaximize` started with no best answer
+/// (`t_gsolve::gsolve_projected_maximize`).
+///
+/// The pin resets "no best yet" (`SM_BIG_DOUBLE`, 1e20) to 0 for `Maximize` and
+/// `DirectedMaximize` only, so a `ProjectedMaximize` starts with a best of 1e20 squared: every
+/// solution is "far from the best" and the pin returns none. The true answer is the largest
+/// projected distance over the leaf pairs (brute force over every pair); scx starts the
+/// maximising operations at 0 and returns it first, with its square as the best.
+pub fn gsolve_projected_maximize() -> PinDefect<(u64, u64), crate::t_gsolve::Res> {
+    use crate::t_gsolve::{holds_the_best, scenario, Case};
+    PinDefect {
+        reason: "the pin starts ProjectedMaximize at the 1e20 sentinel",
+        applies: Applies::Disagreeing,
+        check: |&(a, b), r| holds_the_best(&scenario(a, b, false), Case::ProjectedMaximize, r),
+    }
+}
+
+/// `global_solve::solve` of `Rayfire` (`t_gsolve::gsolve_rayfire`).
+///
+/// The pin's `FindBestSubdivisionNode` orders the halves of the node it splits by reading
+/// the children of the second tree's node, whatever tree it splits. Splitting the ray tree
+/// (the first) once the second is down to a leaf, that is a null child and the pin fails.
+/// scx reads the children of the tree it splits. The scenario's ray tree has every leaf at
+/// the ray's start, so the true answer is the smallest ray parameter of the pieces the ray
+/// passes within the radius of (brute force over every pair), or no solution when it
+/// passes none.
+pub fn gsolve_rayfire() -> PinDefect<(u64, u64), crate::t_gsolve::Res> {
+    use crate::t_gsolve::{holds_the_best, scenario, Case};
+    PinDefect {
+        reason: "the pin reads tree 1's children for the rayfire order",
+        applies: Applies::Disagreeing,
+        check: |&(a, b), r| holds_the_best(&scenario(a, b, true), Case::Rayfire, r),
+    }
+}
+
+/// `Solution::object_for_parameter` on objects of mixed kinds
+/// (`t_gsolve::sol_object_for_parameter`).
+///
+/// The pin's `GetObjectIndexForParameterIndex` reads the kind of object 0 on every pass of
+/// its loop (it indexes by `object_index`, set only on the way out, not by the loop's `ii`),
+/// so past a first object of another kind it counts the wrong parameters; and when no object
+/// holds the parameter (vertices only) it falls out of the loop answering object 0, axis 0.
+/// The truth is the object reached by counting each object's own parameters; scx counts them.
+pub fn object_for_parameter() -> PinDefect<(usize, usize, usize), Option<(usize, usize)>> {
+    use crate::t_gsolve::{object_for_parameter_case, object_for_parameter_truth};
+    PinDefect {
+        reason: "the pin reads object 0's kind for every object",
+        applies: Applies::Disagreeing,
+        check: |&a, r| {
+            let (counts, index) = object_for_parameter_case(a);
+            let want = object_for_parameter_truth(&counts, index);
+            if *r == want {
+                Ok(())
+            } else {
+                Err(format!("{r:?}, the truth is {want:?}"))
+            }
+        },
+    }
+}
