@@ -93,6 +93,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo test -p scx-difftest
       - run: cargo test -p scx-testkit --test nurbs -- --ignored # the full sweeps `tests` skips
+      - run: cargo test -p scx-testkit --test ssi_truth -- --ignored # the SSI truths' full sweeps
 
   bench-compile:
     runs-on: ubuntu-24.04

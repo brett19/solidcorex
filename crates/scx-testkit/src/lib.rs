@@ -65,6 +65,7 @@ pub mod recipe;
 pub mod sample;
 pub mod solid;
 pub mod ssi;
+pub mod ssi_truth;
 pub mod topology;
 
 pub use rat::Rat;
