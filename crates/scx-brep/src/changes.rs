@@ -16,7 +16,12 @@
 //!   where a new entity came from, `merge_*` names a survivor, and
 //!   [`Draft::coincident`](crate::Draft::coincident) an operand's entity landing on one of
 //!   this body's. Splits follow from the origins: the pieces of `f` are `f`, if it is still
-//!   there, and the new entities of `f`'s kind whose origins name it.
+//!   there, and the new entities of `f`'s kind whose origins name it, or that a kept
+//!   survivor took in ([`Merge::taken`]). A merge keeps lineage whichever entity survives:
+//!   a new entity absorbed into a kept one hands it its origins, a kept one absorbed into a
+//!   new one becomes an origin of it (and is listed removed).
+//! - **Within one edit**, `carry` applies splits before merges; an edit whose result
+//!   depends on the order (a quantity a split shares out) is two edits, carried in turn.
 //!
 //! The pin's notify events and its attribute store (`geom/attribute.rs`,
 //! `solidcore-ops/src/provenance.rs`, READ) have no counterpart; [`Carry`] is the
@@ -87,9 +92,11 @@ impl fmt::Display for Operand {
 pub enum Origin {
     /// Part of this face: a piece of it when its kind is a face.
     Face(FaceId),
-    /// Part of this edge, or made along it (a blend face, a wall).
+    /// Part of this edge, or made along it (a blend face, a wall). For a new edge it always
+    /// means a piece: an edge made along `e` but not lying on it (a blend's rail) names the
+    /// faces it lies on, or nothing.
     Edge(EdgeId),
-    /// Part of this vertex, or made at it.
+    /// Part of this vertex, or made at it. For a new vertex it always means a piece.
     Vertex(VertexId),
     /// An offset of this entity: a shell's inner wall, a thickened sheet's other side. Not a
     /// piece of it, so never a split.
@@ -199,6 +206,10 @@ pub struct Merge<I> {
     pub survivor: I,
     /// The entities it took in, ascending. They are gone, and are not listed as removed.
     pub absorbed: Vec<I>,
+    /// What the entities this edit made and then merged into it came from, sorted: such an
+    /// entity has no id before or after the edit, so its lineage is handed on here. A
+    /// survivor that took in only new entities has `absorbed` empty.
+    pub taken: Vec<Origin>,
 }
 
 /// An operand's entity found lying on one of the body's, which takes its place (57 §5.1).
@@ -235,7 +246,8 @@ pub struct EntityChanges<I> {
     pub merged: Vec<Merge<I>>,
     /// Coincidences, by operand then operand entity.
     pub coincident: Vec<Coincidence<I>>,
-    /// Entities the edit started with that are gone, other than those absorbed by a merge.
+    /// Entities the edit started with that are gone, other than those a kept survivor
+    /// absorbed (`merged`); one merged into a new entity is here, and an origin of it.
     pub removed: Vec<I>,
     /// Splits, by the entity cut.
     pub split: Vec<Split<I>>,
@@ -381,6 +393,10 @@ pub trait Carry<T> {
     /// What `onto`, holding `onto` (if anything), holds after an operand's entity holding
     /// `from` is found lying on it.
     fn coincident(&self, onto: Option<&T>, from: &T) -> Option<T>;
+
+    /// What an offset of an entity holding `from` holds: a copy beside it, not a piece of it
+    /// (a temporary mark is not copied, a shared reference is).
+    fn offset(&self, from: &T) -> Option<T>;
 }
 
 /// `own`, an application table over the edited body's entities of one kind, carried across
@@ -389,10 +405,12 @@ pub trait Carry<T> {
 ///
 /// - A removed or absorbed entity's value goes; a kept one's stays, replaced or not.
 /// - Each piece of a split gets `rule.split` of what was cut.
-/// - A new entity takes the values of its origins of its own kind (each through
-///   `rule.split` if that origin was split), offsets and operand entities included: one
-///   value is taken as it is, several are merged. Origins of another kind carry nothing.
-/// - A survivor takes `rule.merge` of its own value and the absorbed entities'.
+/// - A new entity takes the values of its origins of its own kind: a piece's through
+///   `rule.split` if that origin was split, an offset's through `rule.offset`, an operand
+///   entity's as it is. One value is taken as it is, several are merged. Origins of another
+///   kind carry nothing.
+/// - A survivor takes `rule.merge` of its own value, the absorbed entities', and those of
+///   [`Merge::taken`] (handed on as a new entity's would be).
 /// - Coincidences come last.
 #[must_use]
 pub fn carry<I: Tracked, T: Clone>(
@@ -417,6 +435,14 @@ pub fn carry<I: Tracked, T: Clone>(
             Some(v.clone())
         }
     };
+    // What an origin hands on: a part's value, an offset's, an operand entity's.
+    let from = |o: Origin| -> Option<T> {
+        match o {
+            Origin::Offset(e) => rule.offset(&from_own(I::of(e)?)?),
+            Origin::Operand(k, e) => operands.get(k.index())?.get(&I::of(e)?).cloned(),
+            o => from_own(I::of(o.part_of()?)?),
+        }
+    };
     let mut out: BTreeMap<I, T> = own
         .iter()
         .filter(|(id, _)| !gone(id))
@@ -426,14 +452,7 @@ pub fn carry<I: Tracked, T: Clone>(
         })
         .collect();
     for (id, origins) in &changes.created {
-        let values: Vec<T> = origins
-            .into_iter()
-            .filter_map(|o| match *o {
-                Origin::Offset(e) => from_own(I::of(e)?),
-                Origin::Operand(k, e) => operands.get(k.index())?.get(&I::of(e)?).cloned(),
-                o => from_own(I::of(o.part_of()?)?),
-            })
-            .collect();
+        let values: Vec<T> = origins.into_iter().filter_map(|&o| from(o)).collect();
         let value = match values.as_slice() {
             [] => None,
             [one] => Some(one.clone()),
@@ -444,9 +463,11 @@ pub fn carry<I: Tracked, T: Clone>(
         }
     }
     for m in &changes.merged {
+        let taken: Vec<T> = m.taken.iter().filter_map(|&o| from(o)).collect();
         let mut values: Vec<&T> = out.get(&m.survivor).into_iter().collect();
         let had_own = !values.is_empty();
         values.extend(m.absorbed.iter().filter_map(|a| own.get(a)));
+        values.extend(&taken);
         if values.len() < 2 && had_own {
             continue;
         }
@@ -587,6 +608,9 @@ pub(crate) struct Log {
     origins: BTreeMap<Entity, Vec<Origin>>,
     /// Absorbed entity to survivor.
     heirs: BTreeMap<Entity, Entity>,
+    /// What each entity the draft started with has taken in by merges so far, as origins:
+    /// the entities it absorbed and the origins of new entities it absorbed.
+    held: BTreeMap<Entity, Vec<Origin>>,
     coincident: Vec<(Operand, Entity, Entity)>,
 }
 
@@ -604,6 +628,7 @@ impl Log {
             removed: Vec::new(),
             origins: BTreeMap::new(),
             heirs: BTreeMap::new(),
+            held: BTreeMap::new(),
             coincident: Vec::new(),
         }
     }
@@ -653,17 +678,33 @@ impl Log {
         }
     }
 
-    /// `absorbed` was merged into `survivor`.
+    /// `absorbed` was merged into `survivor`, which takes what it held: a new entity's
+    /// origins, or an old one and what it took in.
     pub(crate) fn absorbed(&mut self, absorbed: Entity, survivor: Entity) {
+        let what = if self.started_with(absorbed) {
+            let mut what: Vec<Origin> = Origin::of(absorbed).into_iter().collect();
+            what.extend(self.held.remove(&absorbed).unwrap_or_default());
+            what
+        } else {
+            self.origins.remove(&absorbed).unwrap_or_default()
+        };
+        let into = if self.started_with(survivor) {
+            &mut self.held
+        } else {
+            &mut self.origins
+        };
+        into.entry(survivor).or_default().extend(what);
         self.heirs.insert(absorbed, survivor);
     }
 
     /// `origin`, resolved: an origin naming a new entity stands for that entity's origins
-    /// as they are now.
+    /// as they are now, and one naming a survivor of a merge for it and what it took in.
     pub(crate) fn resolve(&self, origin: Origin) -> Vec<Origin> {
         let own = |e: Entity| {
             if self.started_with(e) {
-                vec![Origin::of(e).unwrap_or(Origin::Free)]
+                let mut own = vec![Origin::of(e).unwrap_or(Origin::Free)];
+                own.extend(self.held.get(&e).into_iter().flatten());
+                own
             } else {
                 self.origins
                     .get(&e)
@@ -709,10 +750,22 @@ impl Log {
                 .vertices
                 .get(v)
                 .map_or_default(|r| vec![r.point.x, r.point.y, r.point.z]),
+            sides: Vec::new(),
         });
         let vertices = with_touches(vertices, &self.vertices, &t.vertices, vertex_touch);
+        // A face's lineage as declared: the faces' own lineage is found after the edges'.
+        let face = |f: FaceId| {
+            if f.index() < self.start.faces {
+                vec![Origin::Face(f)]
+            } else {
+                self.origins
+                    .get(&f.into())
+                    .cloned()
+                    .unwrap_or_else(|| vec![Origin::Free])
+            }
+        };
         let edges = self.lineage(&t.edges, self.start.edges, |e| {
-            edge_key(t, self.start.vertices, &vertices, e)
+            edge_key(t, self.start.vertices, &vertices, &face, e)
         });
         let edges = with_touches(edges, &self.edges, &t.edges, edge_touch);
         let faces = self.lineage(&t.faces, self.start.faces, |f| {
@@ -758,6 +811,8 @@ impl Log {
             } else if before(t) {
                 merged.entry(t).or_default().push(a);
             } else {
+                // Gone into a new entity, which names it as an origin: no merge lists it.
+                removed.push(a);
                 origins.entry(t).or_default().push(a.origin());
             }
         }
@@ -775,11 +830,40 @@ impl Log {
                 })
             })
             .collect();
-        let merged = merged
+        // What new entities merged into a kept survivor came from: its holdings less the
+        // old entities it absorbed, which `absorbed` lists.
+        let mut taken: BTreeMap<I, Vec<Origin>> = BTreeMap::new();
+        for (&s, held) in &self.held {
+            let Some(s) = I::of(s).filter(|&s| live(s) && !self.heirs.contains_key(&s.into()))
+            else {
+                continue;
+            };
+            let absorbed = merged.get(&s);
+            let mut new: Vec<Origin> = held
+                .iter()
+                .filter(|&&o| {
+                    o != Origin::Free
+                        && o != s.origin()
+                        && !absorbed.is_some_and(|a| a.iter().any(|a| a.origin() == o))
+                })
+                .copied()
+                .collect();
+            new.sort_unstable();
+            new.dedup();
+            if !new.is_empty() {
+                merged.entry(s).or_default();
+                taken.insert(s, new);
+            }
+        }
+        let merged: Vec<Merge<I>> = merged
             .into_iter()
             .map(|(survivor, mut absorbed)| {
                 absorbed.sort_unstable();
-                Merge { survivor, absorbed }
+                Merge {
+                    survivor,
+                    absorbed,
+                    taken: taken.remove(&survivor).unwrap_or_default(),
+                }
             })
             .collect();
         let mut coincident: Vec<Coincidence<I>> = self
@@ -796,11 +880,18 @@ impl Log {
             .collect();
         coincident.sort_unstable();
         coincident.dedup();
-        // The pieces of each entity cut: created entities naming it as a part.
+        // The pieces of each entity cut: created entities naming it as a part, and kept
+        // survivors that took in a new entity naming it.
         let mut pieces: BTreeMap<I, Vec<I>> = BTreeMap::new();
-        for (id, o) in &created {
-            for f in o.into_iter().filter_map(|o| I::of(o.part_of()?)) {
-                pieces.entry(f).or_default().push(*id);
+        let named = created
+            .iter()
+            .map(|(id, o)| (*id, o.as_slice()))
+            .chain(merged.iter().map(|m| (m.survivor, m.taken.as_slice())));
+        for (id, o) in named {
+            for f in o.iter().filter_map(|o| I::of(o.part_of()?)) {
+                if f != id {
+                    pieces.entry(f).or_default().push(id);
+                }
             }
         }
         let split = pieces
@@ -871,11 +962,14 @@ fn vertex_touch(was: &VertexRecord, now: &VertexRecord) -> Option<Touch> {
 }
 
 /// A piece's place among its split's pieces (01 §2.6, research 60 P1): the edited body's
-/// entities that bound it, then where it lies, compared exactly.
+/// entities that bound it, then where it lies, compared exactly, then (for an edge) the
+/// lineage of the faces using it, which tells apart pieces of a non-manifold edge with the
+/// same ends and interval.
 #[derive(Debug, Default)]
 struct PieceKey {
     bound: Vec<Origin>,
     at: Vec<f64>,
+    sides: Vec<Origin>,
 }
 
 impl PartialEq for PieceKey {
@@ -894,13 +988,16 @@ impl PartialOrd for PieceKey {
 
 impl Ord for PieceKey {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.bound.cmp(&other.bound).then_with(|| {
-            let pairs = self.at.iter().zip(&other.at);
-            pairs
-                .map(|(a, b)| a.total_cmp(b))
-                .find(|o| o.is_ne())
-                .unwrap_or_else(|| self.at.len().cmp(&other.at.len()))
-        })
+        self.bound
+            .cmp(&other.bound)
+            .then_with(|| {
+                let pairs = self.at.iter().zip(&other.at);
+                pairs
+                    .map(|(a, b)| a.total_cmp(b))
+                    .find(|o| o.is_ne())
+                    .unwrap_or_else(|| self.at.len().cmp(&other.at.len()))
+            })
+            .then_with(|| self.sides.cmp(&other.sides))
     }
 }
 
@@ -938,14 +1035,17 @@ fn face_key(t: &Tables, edge_start: usize, edges: &EntityChanges<EdgeId>, f: Fac
     PieceKey {
         bound,
         at: points.into_iter().flatten().collect(),
+        sides: Vec::new(),
     }
 }
 
-/// An edge piece's key: the lineage of its ends, then its interval.
+/// An edge piece's key: the lineage of its ends, then its interval, then the lineage of
+/// its fins' faces.
 fn edge_key(
     t: &Tables,
     vertex_start: usize,
     vertices: &EntityChanges<VertexId>,
+    face: &impl Fn(FaceId) -> Vec<Origin>,
     e: EdgeId,
 ) -> PieceKey {
     let Some(geom) = t.edges.get(e) else {
@@ -962,5 +1062,11 @@ fn edge_key(
         EdgeShape::Curve { interval, .. } => vec![interval.min(), interval.max()],
         EdgeShape::Collapsed => Vec::new(),
     };
-    PieceKey { bound, at }
+    let mut sides: Vec<Origin> = t
+        .adjacency
+        .get(e)
+        .map_or_default(|a| a.fins.iter().flat_map(|fin| face(fin.face)).collect());
+    sides.sort_unstable();
+    sides.dedup();
+    PieceKey { bound, at, sides }
 }
