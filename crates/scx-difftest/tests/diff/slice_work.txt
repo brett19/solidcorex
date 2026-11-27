@@ -17,13 +17,13 @@ crease-0.3c 64
 crease-3c 139
 crease-10c 129
 corner-contact-union 75
-edge-contact-union 5713
+edge-contact-union 175
 disjoint-union 6
 box-cavity 8
 block-minus-itself 1056
 cylinder-minus-itself 214
 plate-4 896
 plate-12 26496
-gear-60 26300
+gear-60 26166
 interleaved-grids-4 4893
 interleaved-grids-8 18445
