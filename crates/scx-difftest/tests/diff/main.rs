@@ -28,6 +28,7 @@ mod pin_truths;
 mod solvers;
 mod t_algo;
 mod t_bern;
+mod t_bodies;
 mod t_btree;
 mod t_curve;
 mod t_curve_query;
