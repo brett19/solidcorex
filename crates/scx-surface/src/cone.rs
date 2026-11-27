@@ -21,7 +21,7 @@ use crate::Pole;
 use crate::arcs::Arcs;
 use crate::common::{Axes, linear, unit};
 use crate::error::{Size, SurfaceError, at_least_zero};
-use crate::jet::SurfaceJet;
+use scx_num::jet::SurfaceJet;
 
 /// The `u` direction: a turn over `[0, 1]`.
 const U: Arcs = Arcs::turn(1.0);

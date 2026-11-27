@@ -1331,8 +1331,9 @@ Built 11-27, proposed for review: decided by analysis and an adversarial pass, n
   - The difftest uses the bounded forms (`new_cylinder_bounded`, `new_bounded`), whose `v`
     knots are `[0, h]`.
   - This is recorded here as a pin precision limit, not filed as a pin defect.
-- **`SurfaceJet` is a crate-private stand-in** with NS2's `from_fn`, `point` and `get`, and no
-  re-export. It is swapped for `scx_num::jet::SurfaceJet` when NS2 lands.
+- **The jet is `scx_num::jet::SurfaceJet`** (NS2). SU1 first built on a crate-private stand-in
+  with the same `from_fn`, `point` and `get`; it was swapped for the real type 11-27, with the
+  truth tests and the `t_surface` difftest unchanged.
 
 ## 5. `scx-ssi`, the analytic part
 

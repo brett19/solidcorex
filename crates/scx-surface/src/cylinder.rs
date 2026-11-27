@@ -19,7 +19,7 @@ use scx_nurbs::Approach;
 use crate::arcs::Arcs;
 use crate::common::{Axes, linear, unit};
 use crate::error::{Size, SurfaceError, positive};
-use crate::jet::SurfaceJet;
+use scx_num::jet::SurfaceJet;
 
 /// A circular cylinder about the frame's z axis.
 #[derive(Clone, Copy, Debug, PartialEq)]

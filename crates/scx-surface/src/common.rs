@@ -13,7 +13,7 @@ use scx_num::ring::Ring;
 use scx_num::vector3d::{Point3, UnitVec3, Vec3};
 
 use crate::arcs::Trig;
-use crate::jet::SurfaceJet;
+use scx_num::jet::SurfaceJet;
 
 /// A frame's origin and axes, z times the sense.
 #[derive(Clone, Copy, Debug)]
