@@ -10,8 +10,8 @@
 //!
 //! Stage 4 takes the pairs in order (a's face id, then b's) and stops at the first one
 //! it cannot answer, so each case names that first pair, worked out by hand. A pair is
-//! any two faces whose boxes meet, whether or not the faces touch: the named pair need
-//! not be the one where the operands touch.
+//! any two faces whose boxes meet; one with no closed form whose faces provably cannot
+//! touch is dropped (72 §14.30), so the pair named is one that may touch.
 
 use scx_brep::op::Settings;
 use scx_brep::{Brep, Document, FaceId};
@@ -136,11 +136,13 @@ fn torus_sphere_off_axis_meets_in_a_curve_with_no_closed_form() {
 /// touching its outer equator (a seam circle) at (0, 6.5, 0), or at (6.5, 0, 0) where its
 /// two seams cross (the torus's one vertex). The block's side planes are parallel to the
 /// torus's axis, and a plane parallel to the axis meets the torus in a spiric section, a
-/// quartic. The block's bottom and top (z = -3 and 3) are clear of the tube (|z| <= 1.5),
-/// so the first pair is the torus with the block's first side, the face on `y = 6.5` in
-/// the first case (the face the torus touches) and on `y = -3` in the second (a face the
-/// torus does not touch: the touching face on `x = 6.5` is the second side, and the pair
-/// is any two faces whose boxes meet).
+/// quartic. The block's bottom and top (z = -3 and 3) are clear of the tube (|z| <= 1.5).
+/// In the first case the first side (`y = 6.5`) is the face the torus touches. In the
+/// second the first side is on `y = -3`: its box meets the torus's, but the torus never
+/// reaches it (at `y = -3` it has `x <= sqrt(6.5^2 - 9)`, about 5.77, and the face starts
+/// at 6.5), so stage 4 drops it as provably apart (72 §14.30). `sides[1]` (`x =
+/// 10.5`) is clear of the torus's box, and `sides[2]` (`y = 3`) is apart like `y = -3`:
+/// the pair named is the one the torus touches, `sides[3]` on `x = 6.5`.
 #[test]
 fn torus_box_on_a_seam_circle_and_at_the_seam_vertex_meets_in_a_spiric_section() {
     let doc = Document::default();
@@ -157,11 +159,11 @@ fn torus_box_on_a_seam_circle_and_at_the_seam_vertex_meets_in_a_spiric_section()
         &doc,
     )
     .unwrap();
-    for b in [on_circle, at_vertex] {
+    for (b, side) in [(on_circle, 0), (at_vertex, 3)] {
         expect_ssi_pair(
             &t.body,
             &b.body,
-            [t.faces.face, b.faces.sides[0]],
+            [t.faces.face, b.faces.sides[side]],
             [SurfaceKind::Torus, SurfaceKind::Plane],
         );
     }
