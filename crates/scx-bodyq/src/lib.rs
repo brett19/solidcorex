@@ -43,6 +43,7 @@
 //! (BO4). Both read the two surfaces' normals and curvatures at the meeting (see
 //! the note on [`sides_along`]).
 
+mod betti;
 mod classify;
 mod error;
 mod geom;
@@ -51,6 +52,7 @@ mod on;
 mod rays;
 mod side;
 
+pub use betti::{Betti, betti};
 pub use classify::{PointClass, classify_point};
 pub use error::{BodyqDefect, BodyqError, BodyqRefusal, BodyqUnsupported};
 pub use rays::RAYS;
