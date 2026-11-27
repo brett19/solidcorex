@@ -648,7 +648,10 @@ pub(super) fn recipes(res: f64) -> Vec<Recipe> {
     // A 10^3 cube united with a 10 x 10 x 20 block turned 45 degrees twice, whose crease
     // passes `d` into the cube's edge y = z = 10. Both are convex and no faces are coplanar,
     // so volume and area come from clipping (`convex`). Below the resolution the crease
-    // touches the edge: the merged points rule may settle it either way.
+    // touches the edge: the merged points rule may settle it either way. At 0.3c the overlap
+    // is a tetrahedron about `d` across, every corner of it within the resolution of one
+    // point, so a body that keeps the overlap meets itself there: two lumps at one vertex,
+    // a pinch (D5, 72 §14.42), and the mesh's non-manifold vertex is the truth.
     for (name, k) in [
         ("crease-0.3c", 0.3),
         ("crease-3c", 3.0),
@@ -691,6 +694,11 @@ pub(super) fn recipes(res: f64) -> Vec<Recipe> {
             )
             .also(Invariant::NoDanglingVertices),
         );
+        if k < 1.0
+            && let Some(r) = v.pop()
+        {
+            v.push(r.pinched());
+        }
     }
 
     // --- contacts, regions, shells, empty results (72 §8.1) --------------------------------

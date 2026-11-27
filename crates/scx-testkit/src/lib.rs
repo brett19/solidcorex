@@ -41,6 +41,8 @@
 //! - [`recipe`]: the step-4 test cases as data: constructors and Booleans with their expected
 //!   outcome (built, `Refused`, `Unsupported`), closed-form volume and area, hand-stated topology
 //!   and lineage (research 72 T12).
+//! - [`corpus`]: the STEP corpus's manifest and the `references.tsv` generator, volumes from
+//!   each part's closed-form truth file (research 74 §14).
 //! - `bodies` (feature `bodies`): seeded valid and broken B-rep bodies, the one module that
 //!   builds library types (`scx-brep`'s `Draft`), with an independent structure oracle.
 
@@ -48,6 +50,7 @@ pub mod analytic;
 #[cfg(feature = "bodies")]
 pub mod bodies;
 pub mod bound;
+pub mod corpus;
 pub mod csg;
 pub mod curve_surface;
 pub mod data;
