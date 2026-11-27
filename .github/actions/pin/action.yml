@@ -1,0 +1,8 @@
+# Written for solidcorex. Apache-2.0.
+name: pin
+description: Check out the pinned solidcore beside the workspace, where scx-difftest expects it.
+runs:
+  using: composite
+  steps:
+    - run: ${{ github.workspace }}/.github/scripts/pin.sh "${{ github.workspace }}/../sc-wt/scx-pin"
+      shell: bash
