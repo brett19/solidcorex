@@ -6,15 +6,15 @@
 //! [`interval`], [`taylor_model`], [`series`], [`ring`]; an interval vector is a `Vec3<Ivl>`), the
 //! certificate types ([`cert`]), the fixed-order jets of curves and surfaces ([`jet`]),
 //! the one fixed hash and random generator ([`hash`]), the work budget and stop flag of an
-//! iterating routine ([`budget`]), and the
+//! iterating routine ([`budget`]), a query's nearest point as a value ([`invert`]), and the
 //! error-free transformations ([`eft`]) and the transcendental functions on them
 //! ([`fmath`]).
 //! Depends on nothing.
 //!
-//! Every module but [`budget`], [`cert`], [`consts`], [`eft`], [`fmath`], [`hash`], [`jet`], [`trig`],
-//! [`units`], [`error`] and the crate's own `expansion` (exact sums and products) is moved from
-//! solidcore at commit `03e16c9ee766de5b9b1ced845e5149d62ff493b8` with its results
-//! unchanged bit for bit (`docs/research/52-num-move.md`; the interval modules,
+//! Every module but [`budget`], [`cert`], [`consts`], [`eft`], [`fmath`], [`hash`], [`invert`],
+//! [`jet`], [`trig`], [`units`], [`error`] and the crate's own `expansion` (exact sums and
+//! products) is moved from solidcore at commit `03e16c9ee766de5b9b1ced845e5149d62ff493b8`
+//! with its results unchanged bit for bit (`docs/research/52-num-move.md`; the interval modules,
 //! `53-interval-and-algo.md`), except that the transcendental functions are [`fmath`]'s in
 //! place of the C library's, which may differ in the last bit, and that
 //! [`math::three_point_circle_2d`] is computed exactly and rounded once, where the pin's
@@ -35,6 +35,7 @@ pub mod fmath;
 pub mod frame;
 pub mod hash;
 pub mod interval;
+pub mod invert;
 pub mod jet;
 pub mod limits;
 pub mod math;
