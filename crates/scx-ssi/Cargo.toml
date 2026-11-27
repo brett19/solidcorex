@@ -11,11 +11,11 @@ publish.workspace = true
 [dependencies]
 scx-curve = { path = "../scx-curve" }
 scx-num = { path = "../scx-num" }
+scx-nurbs = { path = "../scx-nurbs" }
 scx-surface = { path = "../scx-surface" }
 
 # The exact references the tests check against (layers.txt [testkit]).
 [dev-dependencies]
-scx-nurbs = { path = "../scx-nurbs" }
 scx-testkit = { path = "../scx-testkit" }
 
 [lints]
