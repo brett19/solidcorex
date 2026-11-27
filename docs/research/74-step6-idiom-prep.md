@@ -1240,6 +1240,55 @@ Revised 11-27 after the review (§15).
 - It did not measure the check's cost on scx bodies. It cites the pin's numbers only.
 - It did not verify the dan335/step-conformance licence file (CO2 does).
 - It read no code from other kernels for this note.
+
+## 13. BW1 as built (11-27)
+
+`scx_bodyq::betti(&Brep, ShellId) -> Result<Betti, BodyqError>` with `Betti { b0, b1, b2 }`.
+Commits on branch `bw1`: the function and its tests, then `recipes.rs` using it.
+
+**What changed from §2.3.**
+
+- It returns a `Result`: a shell the body lacks is `Refused(NoShell)`, and a shell whose cells give
+  a negative `b1` (or overflow the elimination) is `Defect(Betti)`. The row said `-> Betti`; a
+  failing default for a bad id would break R-rules, so the error is typed.
+- `b2` is not "closed shells". The first version counted closed components, and the testkit
+  `Touching` kind (five blocks of one shell pinched along four edges of four fins) gave a negative
+  `b1`. `b2` is now the nullity of the face-by-edge boundary matrix over the rationals (each face
+  once, oriented by its own loops), found by exact integer elimination (rows shortest first,
+  `i128`, overflow is the `Defect`). `b1 = b0 + b2 - chi`. A face's side does not matter (a flipped
+  column has the same nullity), so a sheet (both sides in the shell) is one disc and gives `b2 = 0`.
+
+**How shared cells are counted (agrees with recipes.rs `genus`).** The complex is one shell's own
+faces, wire edges and lone vertices. A vertex or edge used by faces of two shells is one cell in
+each shell's complex, so bodies touching at a vertex or along an edge, each its own shell, keep
+their own numbers (corner-contact-union and edge-contact-union give two spheres). Two faces of one
+shell meeting at a vertex or edge share that cell: `Touching` gives `b0 = 1`, `b2 = K` blocks,
+`b1 = n^2 - K + 1`, the cycles of the graph of blocks. A face is a sphere with one hole per loop
+(`2 - L`), except a loopless torus (`0`). A collapsed (pole) edge is no 1-cell; a seam is.
+
+**recipes.rs.** Its private `genus` is gone. The test's genus is the sum of `b1 / 2` over the shells of
+solid regions, checking `b1` even and the shell count. All eight recipes tests pass unchanged (D5
+contacts, gear-60, plate-12 with b1 = 288 for 144 holes). The old and new answers are equal on every
+case.
+
+**Tests** (`crates/scx-bodyq/tests/betti.rs`): every shell of Block, Prism, Cylinder, Cone, Sphere,
+Cavity, Stack is (1,0,1); Torus and Holed (1,2,1), over three seeds and sizes 1, 2, 4; a cavity's two
+solid shells; sheets (1,0,0); Checker's blocks (1,0,1) and Touching's closed form at sizes 1 to 4;
+the makers' block, cylinder, cone (truncated and to an apex), sphere and torus; determinism and the
+missing shell. Nothing removed.
+
+**Cost** (side-channel timers, release, a 24-core build host, one call): torus 1 face 14 us; torus 400 faces
+1.4 ms; block 2,400 faces 8.3 ms; Touching 1,326 faces 3.3 ms; plate-12's solid shell 5.8 ms. The
+call is not on any existing path; recipes.rs now makes one per shell where it counted before
+(microseconds).
+
+**Open.** `b1` of a non-manifold shell is the complex's, not the "surface's"; a caller wanting handles
+of each lump should split the shell first. A face of genus above zero with loops is not
+representable in the rule `2 - L`; a loopless non-torus periodic face is taken as a sphere.
+
+**Proposed 04 row.** `betti` is exact rational homology of a shell's cell complex, per shell, cells
+counted once per shell; typed refusal for a missing shell.
+
 - The 11-27 revision (§15) measured nothing new either. It re-read the pin's ops modules for the
   ledger and checked the review's citations and corpus claims against the pin's files.
 
