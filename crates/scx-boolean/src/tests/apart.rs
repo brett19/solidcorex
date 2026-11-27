@@ -17,6 +17,7 @@ use scx_num::budget::{Budget, Stop};
 use scx_num::frame::Frame;
 use scx_num::units::Length;
 use scx_num::vector3d::Vec3;
+use scx_ssi::SsiError;
 use scx_surface::SurfaceKind;
 
 use super::{pt, run};
@@ -95,19 +96,40 @@ fn a_block_just_clear_of_a_torus_is_dropped_pair_by_pair() {
 /// Touching at `(x0, -3, 0)` (a point of the outer equator), or clear by half the
 /// coincidence, which is touching too: `sides[0]` is clear by `sqrt(x0^2 + 16) - 6.5`,
 /// about 0.53, and dropped; `sides[2]` (`y = -3`) holds the touch on its edge and is the
-/// first pair kept, refused for its spiric section.
+/// first pair kept, refused for its spiric section. The refusal names the region the
+/// bisection could not clear: the touch lies in it.
 #[test]
 fn a_block_touching_a_torus_keeps_the_touching_pair() {
     for gap in [0.0, 5e-6] {
         let Case { t, b, f, .. } = torus_and_block(gap);
+        let e = f.unwrap_err();
+        let BooleanError::Unsupported(BooleanUnsupported::SsiPair {
+            a,
+            b: fb,
+            kinds,
+            cause: SsiError::Unresolved { at, size },
+        }) = e
+        else {
+            panic!("gap {gap}: {e:?}");
+        };
         assert_eq!(
-            f.unwrap_err(),
-            BooleanError::Unsupported(BooleanUnsupported::SsiPair {
-                a: t.face,
-                b: b.sides[2],
-                kinds: [SurfaceKind::Torus, SurfaceKind::Plane],
-            }),
+            (a, fb, kinds),
+            (t.face, b.sides[2], [SurfaceKind::Torus, SurfaceKind::Plane]),
             "gap {gap}"
+        );
+        let x0 = ((6.5 + gap) * (6.5 + gap) - 9.0).sqrt();
+        let touch = pt([x0, -3.0, 0.0]);
+        assert!(
+            at.distance(touch) <= size.mm(),
+            "gap {gap}: {at:?} {size:?}"
+        );
+        // Eight halvings of the overlap: a piece well under the block's 1 mm depth.
+        assert!(size.mm() < 0.25, "gap {gap}: {size:?}");
+        assert_eq!(e.name(), "ssi_pair");
+        assert!(
+            e.to_string()
+                .ends_with("is neither proved apart nor loop-free"),
+            "{e}"
         );
     }
 }
