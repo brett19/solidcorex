@@ -1,6 +1,7 @@
 # Written for solidcorex. The libraries, bottom to top: a crate may depend (normal, build or
 # dev) only on crates listed above it. Checked by `cargo xtask layers`.
 scx-num
+scx-nurbs
 scx-p21
 scx-algo
 

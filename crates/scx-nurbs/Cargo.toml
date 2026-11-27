@@ -1,0 +1,20 @@
+# Written for solidcorex.
+[package]
+name = "scx-nurbs"
+description = "solidcorex layer 1: knot vectors, B-spline basis functions, Bezier helpers and NURBS curves as plain data (evaluation, derivatives, knot insertion, splitting, degree elevation)"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# Only the layer below.
+[dependencies]
+scx-num = { path = "../scx-num" }
+
+# The exact references the unit tests check against (layers.txt [testkit]).
+[dev-dependencies]
+scx-testkit = { path = "../scx-testkit" }
+
+[lints]
+workspace = true
