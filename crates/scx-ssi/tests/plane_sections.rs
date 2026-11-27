@@ -124,16 +124,15 @@ enum Expect {
 /// `back`, the plane-first answer, is `got` seen from the plane: the same kinds of piece in
 /// the same order, each between the same ends run the other way (a tangent curve either
 /// way, as `n_a x n_b` vanishes along it; a whole turn by its kind only), the same touch
-/// points, and a coincidence's extents swapped.
+/// points, and a coincidence's pieces as many (each judged against the sides).
 fn reversed(name: &str, got: &Closed<Intersection>, back: &Closed<Intersection>) {
     let near = |p: Point3, q: Point3| p.distance(q) <= 1e-9 * (1.0 + p.to_vec().length());
     match (got.as_solved(), back.as_solved()) {
         (None, None) => {}
         (Some(Intersection::Empty), Some(Intersection::Empty)) => {}
-        (
-            Some(Intersection::Coincident { on_a, on_b }),
-            Some(Intersection::Coincident { on_a: ba, on_b: bb }),
-        ) => assert_eq!((on_a, on_b), (bb, ba), "{name}: coincident extents"),
+        (Some(Intersection::Coincident(p)), Some(Intersection::Coincident(bp))) => {
+            assert_eq!(p.len(), bp.len(), "{name}: coincident pieces {p:?} {bp:?}")
+        }
         (
             Some(Intersection::Pieces { curves, points }),
             Some(Intersection::Pieces {
@@ -241,8 +240,12 @@ fn check(name: &str, s: &Side, pl: &Side, expect: Expect) -> Closed<Intersection
     };
     let n_p = *plane.frame().z();
     let (curves, points) = match answer {
-        Intersection::Coincident { .. } => {
+        Intersection::Coincident(p) => {
             assert_eq!(truth, Ok(Section::Coincident), "{name}");
+            judge_overlap(name, s, pl, p);
+            if let Some(Intersection::Coincident(bp)) = back.as_solved() {
+                judge_overlap(&format!("{name} (plane first)"), pl, s, bp);
+            }
             return got;
         }
         Intersection::Empty => (&[][..], &[][..]),
@@ -259,14 +262,18 @@ fn check(name: &str, s: &Side, pl: &Side, expect: Expect) -> Closed<Intersection
         (Ok(Section::Empty), _) => Vec::new(),
         (other, _) => panic!("{name}: truth {other:?}"),
     };
-    let on = |q: Point3| {
+    // On both surfaces: a crossing to rounding, a touch within the tolerance (63 SS4).
+    let on = |q: Point3, contact: Contact| {
         let (a, b) = (
             cs::distance(&s.kind, arr(q)).unwrap(),
             cs::distance(&pl.kind, arr(q)).unwrap(),
         );
-        let scale = 1.0 + q.to_vec().length();
+        let tol = match contact {
+            Contact::Transversal => ON * (1.0 + q.to_vec().length()),
+            Contact::Tangent => touch_tol(q),
+        };
         assert!(
-            a <= ON * scale && b <= ON * scale,
+            a <= tol && b <= tol,
             "{name}: {q:?} off the surfaces by {a:e}, {b:e}"
         );
         assert!(
@@ -277,9 +284,13 @@ fn check(name: &str, s: &Side, pl: &Side, expect: Expect) -> Closed<Intersection
     for c in curves {
         let (t0, t1) = (c.span.min(), c.span.max());
         for i in 0..=32 {
-            on(c.curve.point(t0 + (t1 - t0) * f64::from(i) / 32.0));
+            on(
+                c.curve.point(t0 + (t1 - t0) * f64::from(i) / 32.0),
+                c.contact,
+            );
         }
-        if expect == Expect::Truth {
+        // A touch may stand for crossings within the tolerance (the owed points judge it).
+        if expect == Expect::Truth && c.contact == Contact::Transversal {
             let k = class(&c.curve);
             assert!(
                 tpieces
@@ -310,8 +321,8 @@ fn check(name: &str, s: &Side, pl: &Side, expect: Expect) -> Closed<Intersection
         _ => false,
     };
     for q in points {
-        on(q.point);
-        if expect == Expect::Truth {
+        on(q.point, q.contact);
+        if expect == Expect::Truth && q.contact == Contact::Transversal {
             assert!(
                 tpieces
                     .iter()
@@ -333,13 +344,15 @@ fn check(name: &str, s: &Side, pl: &Side, expect: Expect) -> Closed<Intersection
             .map(|x| x.point.distance(q))
             .fold(f64::INFINITY, f64::min);
         assert!(
-            near_curve.min(near_point) <= 1e-7 * (1.0 + q.to_vec().length()),
+            near_curve.min(near_point) <= 1e-7 * (1.0 + q.to_vec().length())
+                || absorbed(s, pl, curves, points, q),
             "{name}: truth point {q:?} missed by {}; got {got:?}; truth {tpieces:?}; extent {:?} step {:?}",
             near_curve.min(near_point),
             s.extent,
             s.step
         );
     }
+    judge_depth(name, s, pl, curves);
     got
 }
 
@@ -384,7 +397,7 @@ fn plane_plane() {
     );
     assert!(matches!(
         check("coincident", &a, &same, Expect::Truth).solved(),
-        Some(Intersection::Coincident { .. })
+        Some(Intersection::Coincident(_))
     ));
     let far = plane_side(
         frame(p(40.0, 0.0, 0.0), v(0.0, 0.0, 1.0), v(1.0, 0.0, 0.0)),
@@ -404,6 +417,36 @@ fn plane_plane() {
         Length::from_mm(TOL),
     );
     assert_eq!(got.solved(), Some(Intersection::Empty));
+    judge_overlap("far", &far, &a, &[]);
+    // Turned a little and moved: a polygon, judged by samples of each plane's extent.
+    for (n, turn) in [0.3_f64, 1.0, 2.5, -0.7].into_iter().enumerate() {
+        let (sn, cs) = fmath::sin_cos(turn);
+        let b = plane_side(
+            frame(
+                p(2.0, 2.5, 0.0),
+                v(0.0, 0.0, if n % 2 == 0 { 1.0 } else { -1.0 }),
+                v(cs, sn, 0.0),
+            ),
+            [-1.5, 2.0],
+            [-1.0, 1.25],
+        );
+        let got = check(&format!("turned {n}"), &a, &b, Expect::Truth);
+        assert!(matches!(got.solved(), Some(Intersection::Coincident(pc)) if pc.len() == 1));
+    }
+    // Edge to edge: a piece of no width.
+    let next = plane_side(
+        frame(p(4.0, 0.0, 0.0), v(0.0, 0.0, -1.0), v(-1.0, 0.0, 0.0)),
+        [-1.0, 1.0],
+        [-1.0, 1.0],
+    );
+    let got = check("edge to edge", &a, &next, Expect::Truth);
+    let Some(Intersection::Coincident(pc)) = got.as_solved() else {
+        panic!("edge to edge: {got:?}")
+    };
+    assert!(
+        pc.len() == 1 && pc[0].on_a.iter().all(|q| q.x == 3.0),
+        "{pc:?}"
+    );
     // A plane crossing the plane outside the extent: empty, checked.
     let off = big_plane(p(10.0, 0.0, 0.0), v(1.0, 0.0, 0.0), v(0.0, 1.0, 0.0));
     assert_eq!(
@@ -599,6 +642,87 @@ fn sphere_sections() {
 }
 
 // ---------------------------------------------------------------- tori
+
+/// The depth rule (63 SS4): a plane within the tolerance of a surface's top, inside or
+/// out, touches it once at the deepest point; past the tolerance it crosses (inside) or
+/// misses (outside). Each answer is checked against the truth, whose crossings a touch
+/// stands for when the run between them stays within the tolerance.
+#[test]
+fn depth_rule() {
+    // (depth inside the surface, the answer's kinds)
+    let cases = |touch: Vec<(Class, Contact)>, cross: Vec<(Class, Contact)>| {
+        [
+            (0.5 * TOL, touch.clone()),
+            (0.0, touch.clone()),
+            (-0.5 * TOL, touch),
+            (4.0 * TOL, cross),
+            (-4.0 * TOL, Vec::new()),
+        ]
+    };
+    let s = sphere(world(), 2.0, Sense::Forward, TURN, [-FRAC_PI_2, FRAC_PI_2]);
+    for (n, (d, want)) in cases(vec![], vec![(Class::Circle, Contact::Transversal)])
+        .into_iter()
+        .enumerate()
+    {
+        let pl = big_plane(p(0.0, 0.0, 2.0 - d), v(0.0, 0.0, 1.0), v(1.0, 0.0, 0.0));
+        let got = check(&format!("sphere {n}"), &s, &pl, Expect::Truth);
+        assert_eq!(kinds(&got), want, "sphere {n}: {got:?}");
+        assert_eq!(counts(&got).1, usize::from(n < 3), "sphere {n}: {got:?}");
+    }
+    let c = cylinder(world(), 1.0, Sense::Forward, TURN, [-2.0, 2.0]);
+    let lines = vec![
+        (Class::Line, Contact::Transversal),
+        (Class::Line, Contact::Transversal),
+    ];
+    for (n, (d, want)) in cases(vec![(Class::Line, Contact::Tangent)], lines)
+        .into_iter()
+        .enumerate()
+    {
+        let pl = big_plane(p(1.0 - d, 0.0, 0.0), v(1.0, 0.0, 0.0), v(0.0, 1.0, 0.0));
+        let got = check(&format!("cylinder {n}"), &c, &pl, Expect::Truth);
+        assert_eq!(kinds(&got), want, "cylinder {n}: {got:?}");
+    }
+    let t = torus(world(), 2.0, 0.5, Sense::Forward, TURN, TURN);
+    let rings = vec![
+        (Class::Circle, Contact::Transversal),
+        (Class::Circle, Contact::Transversal),
+    ];
+    for (n, (d, want)) in cases(vec![(Class::Circle, Contact::Tangent)], rings)
+        .into_iter()
+        .enumerate()
+    {
+        let pl = big_plane(p(0.0, 0.0, 0.5 - d), v(0.0, 0.0, 1.0), v(1.0, 0.0, 0.0));
+        let got = check(&format!("torus {n}"), &t, &pl, Expect::Truth);
+        assert_eq!(kinds(&got), want, "torus {n}: {got:?}");
+    }
+    // A cone's tangent plane along a generator, turned about the apex across it: within
+    // the tolerance over the extent, one touch; turned further, two generators.
+    let k = cone(world(), 1.0, 0.5, Sense::Forward, TURN, [-1.0, 1.0]);
+    let (sa, ca) = fmath::sin_cos(0.5);
+    let apex = p(0.0, 0.0, -1.0 / fmath::tan(0.5));
+    let along = v(sa, 0.0, ca);
+    for (n, (tilt, want)) in [
+        (1e-12, vec![(Class::Line, Contact::Tangent)]),
+        (
+            1e-3,
+            vec![
+                (Class::Line, Contact::Transversal),
+                (Class::Line, Contact::Transversal),
+            ],
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        // The tangent plane's normal, turned about the generator's square in the plane.
+        let nrm = v(ca, 0.0, -sa) * fmath::cos(tilt) + along * fmath::sin(tilt);
+        let pl = big_plane(apex, nrm, v(0.0, 1.0, 0.0));
+        // The apex is not exact in doubles, so the truth meets a slight hyperbola: the
+        // pieces are checked against the generators instead.
+        let got = check(&format!("cone {n}"), &k, &pl, Expect::Generators);
+        assert_eq!(kinds(&got), want, "cone {n}: {got:?}");
+    }
+}
 
 #[test]
 fn torus_sections() {

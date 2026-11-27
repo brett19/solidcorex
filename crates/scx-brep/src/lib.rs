@@ -12,10 +12,13 @@
 //!   body a reference across records is the record itself; over a draft it is an `Option`
 //!   ([`Stage`]).
 //!
+//! - Every draft write is recorded: [`Draft::finish`] says what the edit changed
+//!   ([`Changes`]), and [`carry`] takes an application's data across it (01 §2.6).
+//!
 //! Seams for the tasks that follow (research 63 §6.5): the structure and geometry checks
-//! (BR2) go in `check` and [`finish`]; event recording and [`Changes`] (BR3) in `changes`
-//! and the draft's writes; cells (BR4, 63 §6.9) in `cells`, `boundary`, `body` and the reads
-//! in `query`; pcurves (BR5) and `transform` (BR6) build records through [`Draft`].
+//! (BR2) go in `check` and [`finish`]; cells (BR4, 63 §6.9) in `cells`, `boundary`, `body`
+//! and the reads in `query`; pcurves (BR5) and `transform` (BR6) build records through
+//! [`Draft`].
 
 mod body;
 mod boundary;
@@ -36,11 +39,14 @@ mod view;
 
 pub use boundary::UvSide;
 pub use brep::Brep;
-pub use changes::Changes;
+pub use changes::{
+    Carry, Changes, Coincidence, EntityChanges, LineageError, Merge, Operand, Origin, Origins,
+    Split, Touch, Tracked, carry,
+};
 pub use document::Document;
 pub use draft::Draft;
 pub use error::{Absent, TableFull};
-pub use finish::{FinishCause, StructureCause, Unfinished};
+pub use finish::{FinishCause, GeometryCause, StructureCause, Unfinished};
 pub use id::{EdgeId, Entity, EntityKind, FaceId, IdMap, RegionId, ShellId, VertexId};
 pub use record::{
     EdgeAdj, EdgeGeom, EdgeShape, EdgeUse, FaceRecord, FaceSide, Fin, LoopRecord, RegionRecord,
@@ -55,7 +61,14 @@ const _: () = {
     ok::<Draft>();
     ok::<Unfinished>();
     ok::<FinishCause>();
+    ok::<GeometryCause>();
     ok::<Changes>();
+    ok::<EntityChanges<FaceId>>();
+    ok::<Origins>();
+    ok::<Split<EdgeId>>();
+    ok::<Merge<VertexId>>();
+    ok::<Coincidence<FaceId>>();
+    ok::<LineageError>();
     ok::<Document>();
     ok::<IdMap>();
     ok::<FaceRecord>();

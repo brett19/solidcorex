@@ -123,10 +123,18 @@ fn an_edit_shares_until_written_and_writes_one_face() {
 fn into_draft_writes_in_place_when_unshared() {
     let s = sheet();
     let (body, _) = s.draft.finish(&Document::default()).unwrap();
-    let before: *const FaceRecord = &raw const **body.tables().faces.get(s.face).unwrap();
+    let before: *const EdgeGeom = body.tables().edges.get(s.edge).unwrap();
     let mut d = body.into_draft();
-    let after: *const FaceRecord = &raw const *d.face_mut(s.face).unwrap();
+    let after: *const EdgeGeom = d.edge_mut(s.edge).unwrap();
     assert_eq!(before, after);
+    // A face the draft started with is copied once on its first write, since `Changes`
+    // keeps it as it was (BR3); a face the draft made is written in place.
+    let f = d
+        .add_face(d.face(s.face).unwrap().record().clone())
+        .unwrap();
+    let made: *const FaceRecord = &raw const **d.tables().faces.get(f).unwrap();
+    let written: *const FaceRecord = &raw const *d.face_mut(f).unwrap();
+    assert_eq!(made, written);
 }
 
 /// The sheet's ids, kept once its draft is finished.
@@ -205,7 +213,8 @@ fn every_write_path_resets_what_it_hands_out() {
     let e = d.add_edge(geom).unwrap();
     assert!(d.tables().edges.get(e).unwrap().cells.is_empty());
     // A finished draft starts with empty body cells.
-    let (again, _) = d.finish(&Document::default()).unwrap();
+    drop(d);
+    let (again, _) = body.edit().finish(&Document::default()).unwrap();
     assert!(again.body_cells().is_empty());
     // `into_draft`, unshared: written in place, and reset.
     let (mut body, _) = sheet().draft.finish(&Document::default()).unwrap();
@@ -256,7 +265,12 @@ fn body_cells_stay_small() {
 fn a_pending_edge_has_no_shape_until_attached() {
     let mut s = sheet();
     let v = s.vertex;
-    let e = s.draft.add_edge_pending([v, v]).unwrap();
+    // The wire runs from the lone vertex to a second one, where its line will end.
+    let w = s
+        .draft
+        .add_vertex(VertexRecord::new(Point3::new(1.0, 0.0, 0.0)))
+        .unwrap();
+    let e = s.draft.add_edge_pending([v, w]).unwrap();
     assert_eq!(s.draft.edge(e).unwrap().shape(), None);
     assert_eq!(
         s.draft.edge(s.edge).unwrap().shape(),

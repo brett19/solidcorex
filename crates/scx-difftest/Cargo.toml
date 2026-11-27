@@ -28,7 +28,9 @@ solidcore-record = { path = "../../../sc-wt/scx-pin/solidcore/crates/solidcore-r
 scx-p21 = { path = "../scx-p21" }
 # The truth references (layers.txt [testkit]), for the exact checks of the pin defects and
 # the seeded curves of `t_nurbs`.
-scx-testkit = { path = "../scx-testkit" }
+scx-testkit = { path = "../scx-testkit", features = ["bodies"] }
+# The bodies the testkit generates (`t_bodies`).
+scx-brep = { path = "../scx-brep" }
 
 [lints]
 workspace = true

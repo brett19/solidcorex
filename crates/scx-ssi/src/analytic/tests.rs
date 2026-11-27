@@ -7,6 +7,7 @@
 use core::f64::consts::{PI, TAU};
 
 use scx_num::extent2d::Extent2d;
+use scx_num::fmath;
 use scx_num::frame::{Frame, Sense};
 use scx_num::units::{Accuracy, Length, Resolution};
 use scx_num::vector3d::{Point3, Vec3};
@@ -92,28 +93,121 @@ fn order_reverses_direction() {
     assert!(dx.dot(dy_at) < 0.0, "{dx:?} {dy:?} {dy_at:?}");
 }
 
-/// Two planes over the same place, either way round: coincident, the extents in the order
-/// asked.
+/// The overlap's pieces as sets of vertex pairs, `(on_a, on_b)`, rounded to `1e-12`.
+fn pairs(got: &Closed<Intersection>) -> Vec<Vec<[i64; 4]>> {
+    let Closed::Solved(Intersection::Coincident(pieces)) = got else {
+        panic!("not coincident: {got:?}");
+    };
+    let r = |x: f64| (x * 1e12).round() as i64;
+    pieces
+        .iter()
+        .map(|o| {
+            assert_eq!(o.on_a.len(), o.on_b.len());
+            let mut v: Vec<[i64; 4]> = o
+                .on_a
+                .iter()
+                .zip(&o.on_b)
+                .map(|(a, b)| [r(a.x), r(a.y), r(b.x), r(b.y)])
+                .collect();
+            v.sort_unstable();
+            v
+        })
+        .collect()
+}
+
+fn flip(p: &[Vec<[i64; 4]>]) -> Vec<Vec<[i64; 4]>> {
+    p.iter()
+        .map(|v| {
+            let mut w: Vec<[i64; 4]> = v.iter().map(|&[a, b, c, d]| [c, d, a, b]).collect();
+            w.sort_unstable();
+            w
+        })
+        .collect()
+}
+
+/// Two planes over the same place, either way round: coincident, the overlap the smaller
+/// square's in each plane's uv, its pieces swapped with the order asked.
 #[test]
-fn coincident_extents_follow_order() {
+fn coincident_overlap_follows_order() {
     let a = Surface::Plane(Plane::new(frame(
         [0.0; 3],
         [0.0, 0.0, 1.0],
         [1.0, 0.0, 0.0],
     )));
+    // u along world y, v along world x less a half.
     let b = Surface::Plane(Plane::new(frame(
         [0.5, 0.0, 0.0],
         [0.0, 0.0, -1.0],
         [0.0, 1.0, 0.0],
     )));
     let (ae, be) = (square(1.0), square(2.0));
+    let fwd = pairs(&intersect(&a, &ae, &b, &be, acc(), res()));
+    let r = |x: f64| (x * 1e12).round() as i64;
+    let mut want: Vec<[i64; 4]> = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)]
+        .iter()
+        .map(|&(x, y): &(f64, f64)| [r(x), r(y), r(y), r(x - 0.5)])
+        .collect();
+    want.sort_unstable();
+    assert_eq!(fwd, vec![want]);
     assert_eq!(
-        intersect(&a, &ae, &b, &be, acc(), res()),
-        Closed::Solved(Intersection::Coincident { on_a: ae, on_b: be })
+        pairs(&intersect(&b, &be, &a, &ae, acc(), res())),
+        flip(&fwd)
     );
+}
+
+/// A square and the same square turned an eighth of a turn: an octagon, each vertex on
+/// both squares' edges.
+#[test]
+fn coincident_planes_turned_give_an_octagon() {
+    let a = Surface::Plane(Plane::new(frame(
+        [0.0; 3],
+        [0.0, 0.0, 1.0],
+        [1.0, 0.0, 0.0],
+    )));
+    let h = core::f64::consts::FRAC_1_SQRT_2;
+    let b = Surface::Plane(Plane::new(frame([0.0; 3], [0.0, 0.0, 1.0], [h, h, 0.0])));
+    let e = square(1.0);
+    let Closed::Solved(Intersection::Coincident(p)) = intersect(&a, &e, &b, &e, acc(), res())
+    else {
+        panic!()
+    };
+    assert_eq!(p.len(), 1);
+    assert_eq!(p[0].on_a.len(), 8, "{p:?}");
+    for (q, w) in p[0].on_a.iter().zip(&p[0].on_b) {
+        let edge = |x: f64, y: f64| (x.abs().max(y.abs()) - 1.0).abs() <= 1e-12;
+        assert!(edge(q.x, q.y) && edge(w.x, w.y), "{q:?} {w:?}");
+        assert!((fmath::hypot(q.x, q.y) - fmath::hypot(w.x, w.y)).abs() <= 1e-12);
+    }
+}
+
+/// Coincident planes whose squares share an edge (within the tolerance): a piece of no
+/// width along it; a little further apart: empty.
+#[test]
+fn coincident_planes_touching_and_apart() {
+    let a = Surface::Plane(Plane::new(frame(
+        [0.0; 3],
+        [0.0, 0.0, 1.0],
+        [1.0, 0.0, 0.0],
+    )));
+    let at = |x: f64| {
+        Surface::Plane(Plane::new(frame(
+            [x, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 0.0],
+        )))
+    };
+    let e = square(1.0);
+    let Closed::Solved(Intersection::Coincident(p)) =
+        intersect(&a, &e, &at(2.0 + 5e-10), &e, acc(), res())
+    else {
+        panic!()
+    };
+    assert_eq!(p.len(), 1);
+    assert!(p[0].on_a.iter().all(|q| q.x == 1.0), "{p:?}");
+    assert!(p[0].on_b.iter().all(|q| q.x == -1.0), "{p:?}");
     assert_eq!(
-        intersect(&b, &be, &a, &ae, acc(), res()),
-        Closed::Solved(Intersection::Coincident { on_a: be, on_b: ae })
+        intersect(&a, &e, &at(2.0 + 1e-6), &e, acc(), res()),
+        Closed::Solved(Intersection::Empty)
     );
 }
 

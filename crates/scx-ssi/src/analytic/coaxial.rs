@@ -19,8 +19,6 @@
 //! than `tol` apart: that is the only `Empty` here, besides the extents' heights apart.
 //! Between `tol` and `tol + delta` the answer is [`Closed::General`].
 
-use core::f64::consts::{FRAC_PI_2, TAU};
-
 use scx_num::extent2d::Extent2d;
 use scx_num::fmath;
 use scx_num::frame::Frame;
@@ -32,6 +30,7 @@ use scx_surface::{Closed, Surface};
 use super::Contact::{self, Tangent, Transversal};
 use super::Intersection;
 use super::clip::{Axes, Clip, Part, Raw, Shape, step_bounds};
+use super::overlap::{Map1, Span1, apart_angle, rectangles, spans};
 
 /// A surface of revolution's form, in its own axes (z times the sense).
 #[derive(Clone, Copy, Debug)]
@@ -52,6 +51,8 @@ struct Revolution {
     heights: [f64; 2],
     /// The extent's angles about its own axis (STEP's `u`, from the frame's x to its y).
     around: [f64; 2],
+    /// The extent's STEP `v`: a height, a latitude or a tube angle.
+    along: [f64; 2],
     /// The farthest the extent reaches along and off its axis together (`max |h|` plus
     /// `max rho`): a tilt `w` of the axis moves no point by more than `w` times it.
     reach: f64,
@@ -70,6 +71,7 @@ impl Revolution {
                     form: Form::Cylinder { r },
                     heights: v,
                     around: u,
+                    along: v,
                     reach: far(v) + r,
                 }
             }
@@ -81,11 +83,12 @@ impl Revolution {
                     form: Form::Cone { r, k },
                     heights: v,
                     around: u,
+                    along: v,
                     reach: far(v) + far(v.map(|h| r + k * h)),
                 }
             }
             Surface::Sphere(k) => {
-                let (u, _) = step_bounds(|p| k.to_step(p), e);
+                let (u, v) = step_bounds(|p| k.to_step(p), e);
                 let r = k.radius().mm();
                 Self {
                     axes: Axes::new(k.frame(), k.sense()),
@@ -93,17 +96,19 @@ impl Revolution {
                     // The axis may not be the sphere's own: its heights there are its whole.
                     heights: [-r, r],
                     around: u,
+                    along: v,
                     reach: 2.0 * r,
                 }
             }
             Surface::Torus(k) => {
-                let (u, _) = step_bounds(|p| k.to_step(p), e);
+                let (u, v) = step_bounds(|p| k.to_step(p), e);
                 let (big, small) = (k.major().mm(), k.minor().mm());
                 Self {
                     axes: Axes::new(k.frame(), k.sense()),
                     form: Form::Torus { big, small },
                     heights: [-small, small],
                     around: u,
+                    along: v,
                     reach: big + 2.0 * small,
                 }
             }
@@ -137,18 +142,16 @@ impl Revolution {
             Form::Sphere { r } => Meridian::Circle {
                 c: Point2::new(0.0, h0),
                 r,
-                heights,
             },
             Form::Torus { big, small } => Meridian::Circle {
                 c: Point2::new(big, h0),
                 r: small,
-                heights,
             },
         }
     }
 }
 
-/// A meridian in the half-plane `(rho, h)`, with its extent's heights.
+/// A meridian in the half-plane `(rho, h)`, a line with its extent's heights.
 #[derive(Clone, Copy, Debug)]
 enum Meridian {
     /// The line through `p` along the unit `u` (`rho` growing along it); a cone's is the
@@ -160,30 +163,7 @@ enum Meridian {
         heights: [f64; 2],
     },
     /// The circle about `c` of radius `r`.
-    Circle {
-        c: Point2,
-        r: f64,
-        heights: [f64; 2],
-    },
-}
-
-impl Meridian {
-    const fn heights(&self) -> [f64; 2] {
-        match *self {
-            Self::Line { heights, .. } | Self::Circle { heights, .. } => heights,
-        }
-    }
-
-    /// Its least distance from the axis over the heights `[lo, hi]` (never below zero).
-    fn nearest(&self, [lo, hi]: [f64; 2]) -> f64 {
-        match *self {
-            Self::Line { p, u, .. } => {
-                let rho = |h: f64| p.x + u.x * (h - p.y) / u.y;
-                rho(lo).min(rho(hi)).max(0.0)
-            }
-            Self::Circle { c, r, .. } => (c.x - r).max(0.0),
-        }
-    }
+    Circle { c: Point2, r: f64 },
 }
 
 /// Where two meridians meet.
@@ -292,14 +272,13 @@ fn line_circle(
             return None;
         }
         found.push((foot, Tangent));
+    } else if r - dist <= tol {
+        // The line no deeper than the tolerance into the circle: one touch.
+        found.push((foot, Tangent));
     } else {
         let half = ((r - dist) * (r + dist)).sqrt();
-        if half <= tol {
-            found.push((foot, Tangent));
-        } else {
-            found.push((p + u * (t0 - half), Transversal));
-            found.push((p + u * (t0 + half), Transversal));
-        }
+        found.push((p + u * (t0 - half), Transversal));
+        found.push((p + u * (t0 + half), Transversal));
     }
     found.retain(|(q, _)| q.x >= -tol);
     if !found.is_empty() {
@@ -356,11 +335,20 @@ fn circles(c1: Point2, r1: f64, c2: Point2, r2: f64, tol: f64, slack: f64) -> Op
             None
         };
     }
+    // Crossing: the lens between them no thicker than the tolerance (`out` across the
+    // overlap, `inn` across the gap of one nearly inside the other) is one touch.
+    if out <= inn && out <= tol {
+        return touch(0.5 * (d + r1 - r2));
+    }
+    if inn <= tol {
+        return touch(if r1 >= r2 {
+            0.5 * (r1 + d + r2)
+        } else {
+            0.5 * (d - r2 - r1)
+        });
+    }
     let x = 0.5 * (d + (r1 - r2) * (r1 + r2) / d);
     let half = (out * (d + r1 + r2) * (d - r1 + r2) * (d + r1 - r2)).sqrt() / (2.0 * d);
-    if half <= tol {
-        return touch(x);
-    }
     let w = Vec2::new(-u.y, u.x) * half;
     let mut found = vec![(at(x) - w, Transversal), (at(x) + w, Transversal)];
     // Two spheres' meridians are mirror images across the axis: one circle, not two.
@@ -368,32 +356,153 @@ fn circles(c1: Point2, r1: f64, c2: Point2, r2: f64, tol: f64, slack: f64) -> Op
     Some(Meet::Points(found))
 }
 
-/// How far apart the two extents' angles about the shared axis keep them, per unit of
-/// distance from the axis: `sin g` for the angle `g` between their arcs (1 past a right
-/// angle), 0 when the arcs overlap. A point at `rho >= rho_min` and one at angle `g` from it
-/// are at least `rho_min sin g` apart (`rho_min` past a right angle). Only `a`'s axis is
-/// shared here: two spheres are never coincident without being concentric.
-fn turned_apart(axis: &Axes, a: &Revolution, b: &Revolution) -> f64 {
-    let width = |[u0, u1]: [f64; 2]| u1 - u0;
-    let (wa, wb) = (width(a.around), width(b.around));
-    if wa >= TAU || wb >= TAU {
-        return 0.0;
+/// How `b`'s angle about `a`'s axis maps: `b`'s `u` at `a`'s `x` is `turn (x - phi)`, `phi`
+/// the angle of `b`'s x in `a`'s frame and `turn` the sign of their frames' z against each
+/// other (STEP's `u` runs from a frame's x to its y).
+fn around(a: &Revolution, b: &Revolution) -> Map1 {
+    let (xa, ya, xb, yb) = (a.axes.x, a.axes.y, b.axes.x, b.axes.y);
+    Map1 {
+        s: xb.cross(yb).dot(xa.cross(ya)).signum(),
+        shift: fmath::atan2(xb.dot(ya), xb.dot(xa)),
+        turns: true,
     }
-    // `b`'s angles in the axis's frame: from the angle of its x, turning with its handedness.
-    let (xb, yb) = (b.axes.x, b.axes.y);
-    let phi = fmath::atan2(xb.dot(axis.y), xb.dot(axis.x));
-    let turn = xb.cross(yb).dot(axis.x.cross(axis.y)).signum();
-    let [u0, u1] = b.around.map(|u| phi + turn * u);
-    let b0 = u0.min(u1);
-    let a0 = a.around[0];
-    let start_in = |s: f64, from: f64, w: f64| (s - from).rem_euclid(TAU) <= w;
-    if start_in(b0, a0, wa) || start_in(a0, b0, wb) {
-        return 0.0;
+}
+
+/// The overlap of two coincident patches from the pieces of their `v` (`vs`, `along` its
+/// map) and the distances from the axis those keep (`rho`: least and most), the angle
+/// clipped with `slack` (module docs of [`super::overlap`]).
+fn overlap(
+    pair: [(&Surface, &Revolution); 2],
+    vs: Option<Vec<Span1>>,
+    rho: impl Fn(&[Span1]) -> (f64, f64),
+    tol: f64,
+    slack: f64,
+) -> Closed<Intersection> {
+    let [(a, ra), (b, rb)] = pair;
+    let Some(vs) = vs else {
+        return Closed::General;
+    };
+    if vs.is_empty() {
+        return Closed::Solved(Intersection::Empty);
     }
-    let g = (b0 - (a0 + wa))
-        .rem_euclid(TAU)
-        .min((a0 - (b0 + wb)).rem_euclid(TAU));
-    if g >= FRAC_PI_2 { 1.0 } else { fmath::sin(g) }
+    let (rho_min, rho_max) = rho(&vs);
+    let touch = if rho_max > 0.0 {
+        tol / rho_max
+    } else {
+        f64::INFINITY
+    };
+    let Some(us) = spans(
+        ra.around,
+        rb.around,
+        around(ra, rb),
+        touch,
+        apart_angle(rho_min, slack),
+    ) else {
+        return Closed::General;
+    };
+    if us.is_empty() {
+        return Closed::Solved(Intersection::Empty);
+    }
+    match rectangles(a, b, &us, &vs) {
+        Some(pieces) => Closed::Solved(Intersection::Coincident(pieces)),
+        None => Closed::General,
+    }
+}
+
+/// Two spheres one within the tolerance (centres `d` apart): their overlap when their axes
+/// agree within it, else `General` (the map between their uv is a rotation, and the
+/// overlap of two latitude and longitude patches is no rectangle of either's).
+fn spheres(
+    a: &Surface,
+    b: &Surface,
+    ra: &Revolution,
+    rb: &Revolution,
+    d: f64,
+    tol: f64,
+) -> Closed<Intersection> {
+    let Form::Sphere { r } = ra.form else {
+        return Closed::General;
+    };
+    let dir = rb.axes.z.dot(ra.axes.z).signum();
+    let delta = d + (rb.axes.z - ra.axes.z * dir).length() * r;
+    if delta > tol {
+        return Closed::General;
+    }
+    let slack = tol + delta;
+    let lat = Map1 {
+        s: dir,
+        shift: 0.0,
+        turns: false,
+    };
+    let vs = spans(ra.along, rb.along, lat, tol / r, slack / r);
+    let rho = |vs: &[Span1]| {
+        let (mut lo, mut hi) = (f64::INFINITY, 0.0_f64);
+        for v in vs {
+            let [v0, v1] = v.a;
+            let far = v0.abs().max(v1.abs());
+            let near = if v0 <= 0.0 && v1 >= 0.0 {
+                0.0
+            } else {
+                v0.abs().min(v1.abs())
+            };
+            lo = lo.min(r * fmath::cos(far));
+            hi = hi.max(r * fmath::cos(near));
+        }
+        (lo.max(0.0), hi)
+    };
+    overlap([(a, ra), (b, rb)], vs, rho, tol, slack)
+}
+
+/// Two surfaces of revolution on `a`'s axis with one meridian (a cylinder or cone pair, or
+/// two tori), `b`'s snap `delta`: their overlap.
+fn revolved(
+    a: &Surface,
+    b: &Surface,
+    ra: &Revolution,
+    rb: &Revolution,
+    tol: f64,
+    delta: f64,
+) -> Closed<Intersection> {
+    let slack = tol + delta;
+    let dir = rb.axes.z.dot(ra.axes.z).signum();
+    match (ra.form, rb.form) {
+        (Form::Torus { big, small }, Form::Torus { .. }) => {
+            let tube = Map1 {
+                s: dir,
+                shift: 0.0,
+                turns: true,
+            };
+            let vs = spans(ra.along, rb.along, tube, tol / small, slack / small);
+            let rho = |_: &[Span1]| ((big - small).max(0.0), big + small);
+            overlap([(a, ra), (b, rb)], vs, rho, tol, slack)
+        }
+        (Form::Cylinder { .. } | Form::Cone { .. }, Form::Cylinder { .. } | Form::Cone { .. }) => {
+            let (h, _) = on_axis(&ra.axes, rb.axes.o);
+            let height = Map1 {
+                s: dir,
+                shift: h,
+                turns: false,
+            };
+            let vs = spans(ra.along, rb.along, height, tol, slack);
+            let at = |v: f64| match ra.form {
+                Form::Cone { r, k } => (r + k * v).abs(),
+                Form::Cylinder { r } | Form::Sphere { r } => r,
+                Form::Torus { big, .. } => big,
+            };
+            let rho = |vs: &[Span1]| {
+                let (mut lo, mut hi) = (f64::INFINITY, 0.0_f64);
+                for v in vs {
+                    for x in v.a {
+                        lo = lo.min(at(x));
+                        hi = hi.max(at(x));
+                    }
+                }
+                (lo, hi)
+            };
+            overlap([(a, ra), (b, rb)], vs, rho, tol, slack)
+        }
+        _ => Closed::General,
+    }
 }
 
 /// An axis in space: its point, a frame square to it, and its direction.
@@ -487,18 +596,16 @@ pub(super) fn coaxial(
     ) else {
         return Closed::General;
     };
-    if let (Form::Sphere { r: r1 }, Form::Sphere { r: r2 }) = (ra.form, rb.form)
-        && ra.axes.o == rb.axes.o
-    {
-        // Concentric: one sphere or none.
-        return Closed::Solved(if (r1 - r2).abs() <= tol {
-            Intersection::Coincident {
-                on_a: *ae,
-                on_b: *be,
-            }
-        } else {
-            Intersection::Empty
-        });
+    if let (Form::Sphere { r: r1 }, Form::Sphere { r: r2 }) = (ra.form, rb.form) {
+        let d = (rb.axes.o - ra.axes.o).length();
+        if d + (r1 - r2).abs() <= tol {
+            // One sphere, within the tolerance.
+            return spheres(a, b, &ra, &rb, d, tol);
+        }
+        if d == 0.0 {
+            // Concentric, of radii apart by more.
+            return Closed::Solved(Intersection::Empty);
+        }
     }
     let Some(on) = shared(&ra, &rb, tol) else {
         return Closed::General;
@@ -508,22 +615,7 @@ pub(super) fn coaxial(
         return Closed::General;
     };
     let points = match found {
-        Meet::Coincident => {
-            // Over the heights and angles both extents share, if they share any.
-            let ([a0, a1], [b0, b1]) = (ma.heights(), mb.heights());
-            let (lo, hi) = (a0.max(b0), a1.min(b1));
-            let slack = tol + on.delta;
-            let apart = lo - hi > slack
-                || turned_apart(&on.axis, &ra, &rb) * ma.nearest([lo.min(hi), lo.max(hi)]) > slack;
-            return Closed::Solved(if apart {
-                Intersection::Empty
-            } else {
-                Intersection::Coincident {
-                    on_a: *ae,
-                    on_b: *be,
-                }
-            });
-        }
+        Meet::Coincident => return revolved(a, b, &ra, &rb, tol, on.delta),
         Meet::Points(points) => points,
     };
     let axis = on.axis;
