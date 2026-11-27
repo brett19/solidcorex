@@ -1424,3 +1424,108 @@ is renumbered. "Changed" names the sections that now carry the fix.
 2. Revision pairs are a smoke column, not pre-qualified and scored (F7, Q7).
 3. Leaf queries keep `(&mut Budget, &Stop)`. Queries that keep a memo take `&mut Cx` (F8, R8).
 4. Stored re-identification goes in bodyq's `still_names`, and scx-record calls it (F4).
+
+## 20. SU7 as built (11-27)
+
+`scx_surface::recognize` and `scx_surface::recognize_written`, in `crates/scx-surface/src/recognize.rs`
+(module docs hold the method and every bound). No Cargo edges. `nurbs_invert`'s `up` and `halved`
+became `pub(crate)` to share the Bezier split and the upward rounding; nothing else outside the new
+module changed.
+
+**Shape.**
+
+- `recognize(&Surface, over: &Extent2d, Accuracy, &mut Budget, &Stop) -> Result<Option<Recognized>,
+  SurfaceError>`, with `Recognized { surface, deviation: Length }` (`#[non_exhaustive]`).
+  - A cone over `over` is the plane square to its axis at the middle height when the height
+    half-range is within the accuracy, else the coaxial cylinder of the middle radius when the
+    radius half-range is, else itself. Closed form, deviation the half-range plus rounding.
+  - A NURBS surface is proposed each kind from points, normals and principal curvatures at a 5 x 5
+    grid (plane, sphere, cylinder, cone, torus, simplest first), checked at a 9 x 9 grid with
+    edges, refined by Levenberg-Marquardt where that grid or the certificate does not pass, and
+    accepted only on a certificate: over each Bezier patch, the kind's implicit form in Bernstein
+    form with running error bounds, halved until every piece's bound is within the accuracy. A
+    sample beyond the accuracy refutes (R2: a sample may refute, never prove).
+  - Other analytic kinds come back as they are, deviation 0.
+- `recognize_written(&Written, Accuracy) -> Result<Recognized, SurfaceError>` takes the sizes a file
+  writes where the kind refuses them: `Written::Cone` with half-angle 0 is the cylinder; a
+  `Written::Torus` of major radius 0 is the sphere of its minor radius (deviation 0), one with
+  `0 < major <= minor` is that sphere within `major` when `major` is within the accuracy, else
+  `Torus::new`'s `SelfIntersecting`.
+
+**What changed from the §8 row's signature, and why.**
+
+- The extent, budget and stop are arguments. Analytic domains are unbounded, so "a cone of near-zero
+  angle is a cylinder" holds only over a face's extent (the pin's flat cone uses the face's `v`
+  range too). The certificate is a leaf query (R8), and running out is `Exhausted` (R6), not `None`.
+- It returns `Result<Option<..>>`: `None` is "not proved", the errors are the extent's (`restrict`'s
+  `EmptyExtent`/`OutsideDomain`), `Exhausted`, `Stopped`, and `Defect` for a Bernstein form that
+  cannot be built.
+- The written-sizes half is a separate function, because a cone of angle 0 and a spindle torus
+  cannot be a `Surface` to pass in (their constructors refuse them).
+- The deviation is one-sided: the largest distance from the given surface's points over the extent
+  to the recognised surface. That is what a face's edges and the importer need (the face's points
+  move by at most that). The reverse direction (does the recognised surface reach beyond the given
+  one) is the extent's business, not the surface's.
+- No `UvMap` is returned: the recognised surface has its own parameters; callers that keep pcurves
+  re-project (SP2b, HL1 use points and normals only).
+
+**Decisions, with cases against.**
+
+- *Certificate by implicit forms, not by inverting samples.* For: proves every point, cost a few
+  hundred Bernstein products per patch, deterministic. Against: needs a factor bound per kind
+  (`Q = delta * (rho + r)` and the torus's two-factor product), each argued in the module docs; the
+  factor's reach `delta_max` is set at most twice the accuracy's radial reach so the loss is about
+  `acc / r`.
+- *A piece with a corner within 1/64 of the accuracy is not proved.* The bound tends to the piece's
+  largest distance as it is halved, but only quadratically, so a surface whose deviation is just
+  under the accuracy would halve to float resolution. This makes the effective accuracy at most
+  1/64 tighter. Against: a real quadric written at exactly the accuracy edge returns `None`. For:
+  the importer's case is an exact rational form (deviation near rounding) or a fit far inside.
+- *Least squares, not minimax.* The refined fit minimises the squared distances at the 9 x 9 grid.
+  A non-rational approximation is proved at about 0.65 to 1.1 times its first fit's sampled
+  distance (cylinder 0.75x, sphere 0.75x, torus 1.5x in the test sweep), not at the minimax
+  distance. A minimax step (IRLS) would close the gap; not needed for exact forms.
+- *Orientation from the middle point.* The recognised surface's normal is made to agree with the
+  given one's at the middle of the extent (reversed by `ParamAxis::U`, or the plane's frame turned
+  over). A given surface whose normal flips inside the extent is not a quadric within the accuracy
+  anyway except at a crease, which the certificate does not see. Open question 2 below.
+- *Prefilter at 64 accuracies (or 1e-6 of the size).* A generic surface is rejected on the 25 jets
+  and the five closed-form fits, before any refinement or certificate.
+
+**Tests** (`crates/scx-surface/tests/recognize.rs`, 11 tests, no pin output used):
+
+- kernel case 4005 rebuilt: cone r 5, angle 8e-12, height 10 is the cylinder of radius `5 + 5k`,
+  deviation in `[5k, 4.1e-11]`;
+- kernel case 4006 rebuilt: cone r 4 at z 3, angle `pi/2 - 7e-12`, radii 4 to 10, is the plane at
+  `z = 3` facing `-z` (the cone's normal side), deviation at most `2.2e-11`;
+- cone thresholds: cylinder at `1 + 1e-6` of the radius half-range, the cone itself at `1 - 1e-6`;
+  plane at `1 + 2e-4` of the height half-range, the cone at `1 - 2e-4`;
+- written sizes: angle-0 cone, `R = 0` torus, spindle torus within and beyond the accuracy, a ring
+  torus and an ordinary cone;
+- the exact rational NURBS of each kind (plane, sphere, cylinder of reversed sense, cone, torus):
+  the kind, sizes to 1e-9, twice to the bit;
+- a cone of angle 1e-5 as NURBS: a cylinder at 1e-3, a cone at 1e-7;
+- a rational cylinder with a control point moved 1e-9 (recognised at 1e-6) and 1e-3 (refuted);
+- non-rational quarter-turn cubic approximations of a cylinder, a sphere zone and a torus: the kind
+  at 0.01, none at 1e-5, and a sweep near the error;
+- a generic bicubic: none at 1e-6, 1e-3, 1e-2;
+- budget exhaustion, stop, and an extent outside the domain.
+
+Every accepted case is checked against the closed-form distance at a 33 x 33 grid (the deviation
+bounds the sampled distance from above) and for the normal's side. No tests removed.
+
+**Measurements** (release build, a throwaway timer not committed, 2000 and 50 calls):
+
+- generic bicubic reject: 9.5 us per call, budget 25 (the 25 jets);
+- exact rational forms, accepted: plane 12 us, cylinder 17 us, cone 20 us, sphere 25 us, torus
+  52 us; budget 107 to 112 units (81 dense points, plus one per certificate piece).
+
+**Open questions.**
+
+1. Should `recognize` also simplify other analytic kinds over an extent (a sphere of huge radius as
+   a plane, a torus of tiny minor radius)? Not built: no caller needs it, and it would change
+   `Surface` kinds the importer keeps.
+2. Orientation is decided at one point. Good enough for faces; a caller that needs it proved
+   everywhere would compare normals on the certificate's pieces.
+3. A minimax refinement, if non-rational fits near the accuracy matter on the corpus (measure on
+   the corpus once SP2b lands).
