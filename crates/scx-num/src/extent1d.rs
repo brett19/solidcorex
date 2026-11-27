@@ -181,7 +181,8 @@ pub struct Extent1d {
 /// It starts at the identity of the union, `[+inf, -inf]`, so [`Hull1d::add`] needs no
 /// branch; [`Hull1d::finish`] is `None` until a value other than NaN was added, and `None`
 /// once ±inf was. A NaN value is passed over (`f64::min` and `f64::max`), as upstream's
-/// comparisons pass it.
+/// comparisons pass it. `f64::min(0.0, -0.0)` may give either zero, so the sign of a zero
+/// end is open; no result reads it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Hull1d {
     min: f64,
@@ -390,6 +391,9 @@ impl Extent1d {
     }
 
     /// The smallest interval containing both (`Union`).
+    ///
+    /// Each end is `f64::min`/`f64::max` of the two, so `min(0.0, -0.0)` may give either
+    /// zero; no result reads the sign of a zero end.
     #[must_use]
     pub fn union(self, other: Self) -> Self {
         Self {
