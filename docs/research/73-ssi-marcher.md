@@ -780,3 +780,12 @@ from §4.10 and §4.11, and the case for and against each choice.
 - `apart` returns a box it already held instead of a `bool`. The refusal path builds one
   `SsiError` (a midpoint and a longest side) once per refused Boolean.
 - No loop gained work.
+
+### 14.5 Ruling (11-27)
+
+The coordinator accepted SM3 as built.
+
+- `Answer` and `Traced` stay separate from `IntersectionCurve` for now, as a stepping stone. SM9
+  merges them.
+- SM9 also narrows `SsiPair`'s cause to a refusal-only type, so that `Budget` and `Stopped`
+  cannot be represented there (§14.2 items 1 and 8).
