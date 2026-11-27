@@ -3233,6 +3233,57 @@ committed). `main` and the branch were run back to back under the same load:
   `acos`. Then one curve point and one `uv_in` per sub-interval (at most 9 here).
 - A plain hit gains one comparison for `tol`.
 
+**FU1 (11-27): the largest miss, and the tolerance audit.**
+
+*3. `NotOnSurface` reports the largest miss.* `pcurve_of` stopped at the first sample past
+`tol` and reported that one. BR5's writer splits on the miss: within the edge's reach it is
+`NeedsFit`, past it `OffSurface`. So an edge whose first sample past `tol` was within reach,
+but which left the surface farther on, came back `NeedsFit` (Unsupported) instead of
+`OffSurface` (Refused).
+
+- Now, once one sample fails, the rest are measured too and the largest miss is reported, with
+  its parameter. A NaN counts as the largest.
+- The success path does the same work as before: one `distance` per sample and nothing more.
+  The extra samples are measured only after a failure.
+- *Tests.*
+  - `not_on_surface_reports_the_largest_miss` (scx-surface): a line leaving a plane is
+    reported at its end, and a tilted circle at its middle.
+  - In `refusals_by_cause` (scx-brep `tests/pcurve.rs`): a line whose first miss past half
+    the zone is 0.75 zone and whose last is 6 zones is `OffSurface` at `t = 1`. It came back
+    `NeedsFit` before the fix.
+
+*4. Which entry points take a tolerance.* Every public `fn` in scx-curve, scx-surface, scx-ssi,
+scx-nurbs, scx-nurbs-surface and scx-brep was checked for a tolerance argument.
+
+| Entry point | Tolerance | Zero, negative, non-finite |
+| --- | --- | --- |
+| `scx_surface::pcurve_of` | `tol: Length` | `PcurveError::BadTolerance` (Refused), since BR5 |
+| `scx_surface::intersect_curve` | `tol: Length` | `SurfaceError::BadTolerance` (Refused), checked first |
+| `scx_ssi::analytic::intersect` | `[Accuracy; 2]`, `Resolution` | not representable: `Resolution::new` is `None` for any of them, and `Accuracy::new` for a negative or non-finite one |
+| `scx_ssi::analytic::section_by_plane` | was `tol: Length`, now `Resolution` | was unchecked; now not representable |
+| `scx_brep::Draft::{finish, write_pcurves, exact_loops, transform}` | `&Document` (its `Resolution`) | not representable |
+| `scx_brep::Document::with_resolution` | `Resolution` | not representable |
+
+- `section_by_plane` was the one inconsistent entry point. It passed any `Length` to the
+  section, and a NaN fails every comparison, so it could have given a solved, and final,
+  `Empty`.
+  - It now takes a `Resolution` and reads its zone, like `intersect`.
+  - It returns `Closed<Intersection>` with no error channel. A `Result` only for the tolerance
+    would make every caller handle a case the type can rule out.
+  - The callers in the tests and the difftest build a `Resolution` instead.
+- *Left for review:* `pcurve_of` and `intersect_curve` could also take a `Resolution`. That
+  would remove both `BadTolerance` variants. They are kept as ruled (SU6, BR5).
+- *Not geometry entry points, recorded not changed:*
+  - `scx_num::invert::Foot::is_on(tol)` is a predicate. A zero `tol` is the exact test, and a
+    NaN or negative one is never on, so it needs no refusal.
+  - scx-algo's ported solvers and boxes take raw `f64` tolerances with SMLib's meaning: zero is
+    the exact test, and `PointSet` takes `|tol|`. These are `BoxTree::{overlapping, pairs,
+    self_pairs}`, `best_fit_{point, line, plane}`, `SolveOptions::new`, `may_contain`,
+    `HashTable::add`, `solve_by_brent`, the ODE and quadrature controls, `PointSet` and
+    `PseudoBox`. Their callers are scx's own, and typing them belongs to scx-algo's idiom pass.
+  - scx-num's extents and `is_zero` are the same kind of predicate.
+- The difftests `t_ssi` and the rest are unchanged at 0 mismatches.
+
 ## 5. `scx-ssi`, the analytic part
 
 The pin's sources are `intersect/surface_intersector` (`p1`-`p5`) and `adv_surface_intersector`.
@@ -5403,6 +5454,77 @@ Throwaway timer, not committed; test profile, one machine, 20 repetitions, seed 
    not modelled in the accuracy. It is covered only by the zone.
 5. **A free function.** A `transform(&Brep, …) -> (Brep, Changes)` helper could be added if
    callers want it (see the deviation above).
+
+**FU1 (11-27): open questions 1 and 2.**
+
+*1. Exact frames under exact maps.* The fix is in `scx_num::Frame::transformed`, which every
+surface kind's transform goes through. It was not only the plane: a cylinder, cone, sphere
+or torus on a skewed frame also missed by an ulp or two, because `Frame::new` renormalised
+both axes. BR6's bodies sit on world frames, which is why only the plane showed it.
+
+- Where the map keeps the axes square, the image axes are the images scaled back by their
+  own stretch: `x' = A x · |x| / |A x|` and `z' = ±A z · |z| / |A z|`, with the sign the
+  sense's. They are stored as they are, without a second normalisation, when they are unit
+  and square to 8 roundings and `A y` lies in their plane to the same. Otherwise z comes
+  from `A x × A y`, normalised, as before.
+- The lengths are summed smallest first (`Vec3::length_any_order`, new), so a signed
+  permutation keeps them to the bit. Under a scale by a power of two, a mirror in a
+  coordinate plane or a quarter turn about a world axis, the stretch is then exact, and so
+  is each axis.
+- The scales use the same stretch. A surface's `k` is the mean of `|A v| / |v|` over its
+  three axes, not the mean of `|A v|`, so a stored axis an ulp off unit still gives an exact
+  `k`. The plane's `UvMap` takes `|A x| / |x|` as its `u` scale. The plane now gets its
+  frame from `Frame::transformed`, and falls back to `A x × A y` only for a map that takes
+  z into the plane.
+- *For:* exact maps now round-trip to the bit for every kind on any frame, and the stored
+  axes are about as accurate as the renormalised ones.
+- *Against:* a frame's axes may now be unit to 8 roundings rather than 1 to 2. Repeated
+  rigid moves would let that drift grow, so past 8 roundings the axes are renormalised,
+  which bounds it. Taking `±A z / k` with one `k` from the map, as the open question
+  suggested, would not be exact under a permutation, because the length is summed in a
+  different order.
+- *Tests.*
+  - `exact_maps_and_their_inverses_return_the_frame_to_the_bit` (scx-num): 2,000 random
+    frames under 6 maps.
+  - `exact_maps_return_every_surface_to_the_bit` (scx-surface): every analytic kind on
+    random frames, with the surface and the composed `UvMap` both bit-equal.
+  - In `crates/scx-brep/tests/transform.rs`, `exact_maps_return_the_body_to_the_bit` now
+    compares surfaces with `==`, so the 4 ε exception for a plane's z is gone. It also adds
+    a quarter turn and a mirror times two. On main the prism already fails under the plain
+    mirror.
+  - `t_transform` is unchanged at 0 mismatches.
+- Still open: CU5's conics (`scx-curve`, `conic.rs`) build their image frame the old way,
+  so a circle on a skewed frame is not bit-exact under an exact map either. None of the
+  generated bodies has one.
+
+*2. Pcurves mapped, not made again.* When the map keeps the edge's parameter, `use_image` in
+`draft/transform.rs` now maps more kinds through the `UvMap`, as it already did for lines.
+The image pcurve is then `uv ∘ p` exactly, so it is on the moved edge.
+
+- A circle, an ellipse or a hyperbola's branch under a uniform `(k, k)` with `k > 0` (a
+  plane under a similarity) keeps its axes and sense. Its centre is mapped and its
+  semi-axes are multiplied by `k` (new `Frame2::moved_to`).
+- An angle line or an angle wave under a diagonal map (a cylinder's `(k, k)`, a cone's
+  `(1, k)`) keeps its angle. It goes on the new surface's arcs when the angle scale is the
+  new period over the old to 16 ε and the angle offset is zero. The other coordinate is
+  mapped as a line's.
+- Still made by `pcurve_of`: a parabola, whose parameter a scale stretches, so its edge is
+  shifted; a NURBS pcurve; any map with a shear or a mirror in uv; and a shifted edge.
+- *Cost* (release, ns a face, best of 7 × 20 transforms on the generated bodies).
+
+  | Kind | Rigid | Scale 2.5 before | Scale 2.5 after | Mirror |
+  |---|---:|---:|---:|---:|
+  | cylinder | 861 | 6354 | 1345 | 909 |
+  | cone | 743 | 3487 | 1127 | 782 |
+  | block | 592 | 938 | 909 | 624 |
+  | torus | 723 | 1048 | 1017 | 770 |
+  | sphere | 588 | 934 | 898 | 635 |
+
+  Rigid and mirror were near-identity in uv already, so they do not change.
+- *Test:* `scaled_pcurves_keep_their_kind_and_match_pcurve_of` (scx-brep `transform.rs`).
+  Under scales 2.5 and 0.375, every use keeps its kind and agrees with `pcurve_of` for the
+  moved edge to 1e-12 relative, up to whole periods. `t_transform` and `t_pcurve*` are
+  unchanged at 0 mismatches.
 
 ### 6.13 BR7 as built (11-27)
 

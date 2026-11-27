@@ -286,7 +286,7 @@ impl std::error::Error for PcurveError {}
 ///
 /// [`PcurveError::EmptyInterval`] or [`PcurveError::BadTolerance`] for the arguments;
 /// [`PcurveError::NotOnSurface`] when a sample of the curve is more than `tol` from the
-/// surface; [`PcurveError::NoClosedForm`] for a pair with no closed form here (see the
+/// surface, at the sample farthest from it; [`PcurveError::NoClosedForm`] for a pair with no closed form here (see the
 /// module's table); [`PcurveError::CrossesPole`] for a meridian across a pole;
 /// [`PcurveError::Inexact`] when the closed form fails the lifting check.
 pub fn pcurve_of(
@@ -308,11 +308,11 @@ pub fn pcurve_of(
     };
     let ts = samples(over);
     let points = ts.map(|t| curve.point(t));
-    for (&t, &p) in ts.iter().zip(&points) {
+    for (i, (&t, &p)) in ts.iter().zip(&points).enumerate() {
         let miss = distance(surface, p).ok_or(no_form)?;
         // NaN refuses (07 §6 rule 5).
         if miss.is_nan() || miss > tol {
-            return Err(PcurveError::NotOnSurface { at: t, miss });
+            return Err(worst_miss(surface, &ts, &points, i, t, miss));
         }
     }
     let pc = closed_form(curve, surface, &points, over)?.ok_or(no_form)?;
@@ -323,6 +323,31 @@ pub fn pcurve_of(
         }
     }
     Ok(pc)
+}
+
+/// [`PcurveError::NotOnSurface`] at the largest miss over the samples from `first` on, the
+/// first sample off the surface (`t`, `miss`): a caller that tells a near miss from a far
+/// one (BR5's writer, `NeedsFit` against `OffSurface`) must see the far one. A NaN miss is
+/// the largest. Only the failure path pays for the rest of the samples.
+fn worst_miss(
+    surface: &Surface,
+    ts: &[f64; SAMPLES],
+    points: &[Point3; SAMPLES],
+    first: usize,
+    t: f64,
+    miss: f64,
+) -> PcurveError {
+    let (mut at, mut worst) = (t, miss);
+    for (&t, &p) in ts.iter().zip(points).skip(first + 1) {
+        if worst.is_nan() {
+            break;
+        }
+        let miss = distance(surface, p).unwrap_or(f64::NAN);
+        if miss.is_nan() || miss > worst {
+            (at, worst) = (t, miss);
+        }
+    }
+    PcurveError::NotOnSurface { at, miss: worst }
 }
 
 /// `SAMPLES` parameters evenly across `over`, its ends exact.
@@ -807,6 +832,30 @@ mod tests {
             .unwrap_or_else(|e| panic!("{curve:?} on {surface:?}: {e}"));
         lifts(curve, surface, &pc, over, size);
         pc
+    }
+
+    /// A curve off the surface is reported at its farthest sample, not its first one past
+    /// the tolerance (FU1): a line leaving a plane at its end, a tilted circle at its middle.
+    #[test]
+    fn not_on_surface_reports_the_largest_miss() {
+        let plane = Surface::Plane(Plane::new(Frame::WORLD));
+        let line = Line::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 1e-3)).unwrap();
+        let got = pcurve_of(&Curve::Line(line), &plane, span(0.0, 1.0), mm(1e-4));
+        let Err(PcurveError::NotOnSurface { at, miss }) = got else {
+            panic!("{got:?}")
+        };
+        assert_eq!(at, 1.0);
+        let end = line.point(1.0).z;
+        assert!((miss - end).abs() <= 1e-15, "{miss} against {end}");
+        let tilted = Frame::new(Point3::ORIGIN, Vec3::new(0.0, -0.01, 1.0), Vec3::X).unwrap();
+        let c = Circle::new(tilted, mm(2.0), Sense::Forward).unwrap();
+        let got = pcurve_of(&Curve::Circle(c), &plane, span(0.0, PI), mm(1e-3));
+        let Err(PcurveError::NotOnSurface { at, miss }) = got else {
+            panic!("{got:?}")
+        };
+        assert!((at - FRAC_PI_2).abs() <= 1e-15, "{at}");
+        let top = c.point(FRAC_PI_2).z.abs();
+        assert!((miss - top).abs() <= 1e-15, "{miss} against {top}");
     }
 
     /// Lines, circles, ellipses and a rational NURBS curve in a plane give the same kinds.

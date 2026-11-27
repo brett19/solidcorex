@@ -154,13 +154,21 @@ impl Frame {
     ///
     /// `None` when the image is not finite or `a` flattens the frame (its linear part is
     /// singular on the frame's axes).
+    ///
+    /// Where the map keeps the axes square (a similarity, or any map whose image of z is
+    /// square to the image plane), the axes are the images scaled back by their own stretch,
+    /// `x' = A x · |x| / |A x|` and `z' = ±A z · |z| / |A z|`, kept as they are when they are
+    /// unit and square to 8 roundings. Under a map whose matrix is exact (a
+    /// scale by a power of two, a mirror in a coordinate plane, a quarter turn about a
+    /// coordinate axis) these are exact, so the map and its inverse give the frame back to the
+    /// bit. Otherwise z is made again from `A x × A y` and normalised.
     #[must_use]
     pub fn transformed(&self, a: &Affine) -> Option<(Self, Sense)> {
         let ax = a.apply_vec(*self.x);
         let ay = a.apply_vec(*self.y());
         let az = a.apply_vec(*self.z);
         let normal = ax.cross(ay);
-        let frame = Self::new(a.apply(self.origin), normal, ax)?;
+        let origin = a.apply(self.origin);
         let side = az.dot(normal);
         let sense = if side > 0.0 {
             Sense::Forward
@@ -170,9 +178,46 @@ impl Frame {
             // z maps into the image plane (or the image is not finite).
             return None;
         };
-        Some((frame, sense))
+        if let Some(frame) = self.square_image(origin, ax, ay, az, sense) {
+            return Some((frame, sense));
+        }
+        Some((Self::new(origin, normal, ax)?, sense))
+    }
+
+    /// [`Frame::transformed`]'s exact path: the images of x and z scaled back by their own
+    /// stretch, z's sign the sense's. `None` where the image is not finite, or where the
+    /// result is not unit and square to [`IMAGE_SQUARE`] roundings or `A y` leaves its plane
+    /// by more (the map is not square on the axes), and the caller normalises instead.
+    fn square_image(
+        &self,
+        origin: Point3,
+        ax: Vec3,
+        ay: Vec3,
+        az: Vec3,
+        sense: Sense,
+    ) -> Option<Self> {
+        // Lengths summed in any order, so a signed permutation's stretch is exact too.
+        let x = ax * (self.x.length_any_order() / ax.length_any_order());
+        let z = az * (sense.sign() * self.z.length_any_order() / az.length_any_order());
+        let tol = IMAGE_SQUARE;
+        let fits = origin.is_finite()
+            && x.is_finite()
+            && z.is_finite()
+            && (x.length_squared() - 1.0).abs() <= tol
+            && (z.length_squared() - 1.0).abs() <= tol
+            && x.dot(z).abs() <= tol
+            && ay.dot(z).abs() <= tol * ay.length();
+        fits.then_some(Self {
+            origin,
+            x: UnitVec3::kept(x),
+            z: UnitVec3::kept(z),
+        })
     }
 }
+
+/// The roundings within which [`Frame::transformed`] keeps the scaled images of the axes as
+/// they are: each unit, and square to the other and to the image of y.
+const IMAGE_SQUARE: f64 = 8.0 * f64::EPSILON;
 
 /// A placement in the plane: an origin and a unit x axis, `y` its quarter turn
 /// counter-clockwise, so the basis is right-handed (counter-clockwise) by construction. A
@@ -203,6 +248,12 @@ impl Frame2 {
             origin,
             x: x.normalized()?,
         })
+    }
+
+    /// The same axes at `origin`, x kept to the bit. `None` when `origin` is not finite.
+    #[must_use]
+    pub fn moved_to(&self, origin: Point2) -> Option<Self> {
+        (origin.x.is_finite() && origin.y.is_finite()).then_some(Self { origin, x: self.x })
     }
 
     /// The origin.
@@ -406,6 +457,33 @@ mod tests {
             let (h, back) = g.transformed(&m).unwrap();
             assert_eq!(back, Sense::Reversed, "each mirror reverses once more");
             assert!(near(*h.x(), *f.x(), 1e-13) && near(*h.z(), *f.z(), 1e-13));
+        }
+    }
+
+    /// Property (FU1): under a map whose matrix is exact (a power-of-two scale, a mirror in a
+    /// coordinate plane, a quarter turn about a coordinate axis, through the origin) and its
+    /// inverse, a frame on no world axis comes back to the bit, and each image is orthonormal.
+    #[test]
+    fn exact_maps_and_their_inverses_return_the_frame_to_the_bit() {
+        let mut r = Rng::new(0xf4a3_e008);
+        let o = Point3::ORIGIN;
+        let maps = [
+            Affine::uniform_scaling(o, 4.0).unwrap(),
+            Affine::uniform_scaling(o, 0.125).unwrap(),
+            Affine::reflection(o, Vec3::Y).unwrap(),
+            Affine::from_axes(Vec3::Y, -Vec3::X, Vec3::Z, o),
+            Affine::from_axes(Vec3::X, -Vec3::Z, Vec3::Y, o),
+            Affine::uniform_scaling(o, 2.0).unwrap() * Affine::reflection(o, Vec3::X).unwrap(),
+        ];
+        for _ in 0..2_000 {
+            let f = random_frame(&mut r);
+            for a in &maps {
+                let (g, sense) = f.transformed(a).unwrap();
+                assert!(orthonormal(&g));
+                let (h, back) = g.transformed(&a.inverse().unwrap()).unwrap();
+                assert_eq!(h, f, "{a:?}");
+                assert_eq!(back, sense);
+            }
         }
     }
 
