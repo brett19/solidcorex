@@ -18,6 +18,11 @@
 //!
 //! Soundness rests on `fmath`'s accuracy, which is measured (`fmath`'s module doc), not
 //! proved, as for the rest of the interval functions here.
+//!
+//! [`Ranged`], which [`Trig`] requires, is what a piecewise evaluator (a NURBS curve's) needs
+//! besides: the range a value spans, to pick the pieces it meets, and the knot difference a
+//! basis divides by, which an interval takes exactly rather than as a sum of two intervals
+//! that grows with the parameter's width.
 
 use core::ops::Neg;
 
@@ -25,8 +30,83 @@ use crate::interval::{Ivl, cmax, cmin};
 use crate::math::HALF_PI;
 use crate::ring::{Ring, wide};
 
+/// A ring whose values span a range of the line: `f64` (one point) and [`Ivl`].
+pub trait Ranged: Ring + Neg<Output = Self> {
+    /// The lowest and highest values: `(x, x)` for an `f64`.
+    fn ends(self) -> (f64, f64);
+
+    /// The part of `self` inside `[lo, hi]`, for a `self` that meets it: `self` for an `f64`.
+    #[must_use]
+    fn clip(self, lo: f64, hi: f64) -> Self;
+
+    /// The smallest value holding both: for an `f64`, `self` if the two are the same value
+    /// and NaN otherwise (an `f64` holds one point).
+    #[must_use]
+    fn join(self, other: Self) -> Self;
+
+    /// The value standing for an undefined result: NaN, or the whole line.
+    fn undefined() -> Self;
+
+    /// The knot difference `high - low` a basis divides by, given `right = high - u` and
+    /// `left = u - low`: `right + left` for an `f64` (the pin's arithmetic, with its
+    /// rounding), and for an interval an enclosure of `high - low` itself, which holds the
+    /// true difference however wide `u` is.
+    #[must_use]
+    fn gap(right: Self, left: Self, high: f64, low: f64) -> Self;
+}
+
+impl Ranged for f64 {
+    #[inline]
+    fn ends(self) -> (f64, f64) {
+        (self, self)
+    }
+    #[inline]
+    fn clip(self, _lo: f64, _hi: f64) -> Self {
+        self
+    }
+    #[inline]
+    fn join(self, other: Self) -> Self {
+        if self.to_bits() == other.to_bits() {
+            self
+        } else {
+            f64::NAN
+        }
+    }
+    #[inline]
+    fn undefined() -> Self {
+        f64::NAN
+    }
+    #[inline]
+    fn gap(right: Self, left: Self, _high: f64, _low: f64) -> Self {
+        right + left
+    }
+}
+
+impl Ranged for Ivl {
+    #[inline]
+    fn ends(self) -> (f64, f64) {
+        (self.lo, self.hi)
+    }
+    #[inline]
+    fn clip(self, lo: f64, hi: f64) -> Self {
+        Ivl::new(self.lo.max(lo), self.hi.min(hi))
+    }
+    #[inline]
+    fn join(self, other: Self) -> Self {
+        self.hull(other)
+    }
+    #[inline]
+    fn undefined() -> Self {
+        Ivl::whole()
+    }
+    #[inline]
+    fn gap(_right: Self, _left: Self, high: f64, low: f64) -> Self {
+        Ivl::from(high) - Ivl::from(low)
+    }
+}
+
 /// A ring with sine and cosine: `f64` and [`Ivl`].
-pub trait Trig: Ring + Neg<Output = Self> {
+pub trait Trig: Ranged {
     /// `(sin x, cos x)`; for an interval, an enclosure of both over the interval.
     fn sin_cos(self) -> (Self, Self);
 }
@@ -145,6 +225,31 @@ mod tests {
         // A tight interval away from the critical points stays tight.
         let (s, c) = Trig::sin_cos(Ivl::new(0.5, 0.5 + 1e-9));
         assert!(s.hi - s.lo < 2e-9 && c.hi - c.lo < 2e-9);
+    }
+
+    #[test]
+    fn ranged_ends_clip_join_gap() {
+        assert_eq!(Ranged::ends(2.5), (2.5, 2.5));
+        assert_eq!(Ranged::clip(2.5, 3.0, 4.0), 2.5);
+        assert_eq!(Ranged::join(2.5, 2.5), 2.5);
+        assert!(Ranged::join(2.5, 3.0).is_nan());
+        assert!(<f64 as Ranged>::undefined().is_nan());
+        // The pin's sum, rounding and all.
+        assert_eq!(
+            <f64 as Ranged>::gap(0.7 - 0.1, 0.1 - 0.3, 0.7, 0.3),
+            (0.7 - 0.1) + (0.1 - 0.3)
+        );
+        let i = Ivl::new(-1.0, 5.0);
+        assert_eq!(i.ends(), (-1.0, 5.0));
+        assert_eq!(i.clip(0.0, 2.0), Ivl::new(0.0, 2.0));
+        assert_eq!(i.join(Ivl::new(6.0, 7.0)), Ivl::new(-1.0, 7.0));
+        assert_eq!(<Ivl as Ranged>::undefined(), Ivl::whole());
+        // Exact however wide u is: here the two sums would hold zero.
+        let u = Ivl::new(0.0, 1.0);
+        let g = Ivl::gap(Ivl::from(1.0) - u, u - Ivl::from(0.0), 1.0, 0.0);
+        assert!(g.lo <= 1.0 && 1.0 <= g.hi && g.hi - g.lo < 1e-15);
+        let g = Ivl::gap(u, u, 0.7, 0.1);
+        assert!(g.lo <= 0.6 && 0.6 <= g.hi && g.lo > 0.59);
     }
 
     #[test]
