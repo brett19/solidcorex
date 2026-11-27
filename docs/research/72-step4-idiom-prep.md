@@ -2261,6 +2261,11 @@ The 19 recipes the classification entry selects without a mismatch on their poin
 
 **Proposed 04 row.** "DT1 (72 §14.13): `t_slice` runs every T12 recipe in the pin and in scx at `c = 1e-5`, judges each against truth (outcome, volume, area, topology with patches, classification of about 2,000 seeded and on-purpose points, validity, lineage, no dangling vertices, run-twice determinism) and records the pin's contradictions as `pin_defects::slice` entries with input predicates (4 entries cover 43 findings). scx answers typed `NotYet` for everything but blocks. About 40 s in release. Change if: a pin contradiction appears that no entry covers, or truth's band leaves fewer than 95% of points certain on a recipe that is not a few `c` across."
 
+**DT1b (11-27).** The cylinder, cone, sphere, torus and extrusion recipes now build in scx through scx-make, and scx's volume and area come from scx-mass. `NotYet::Make`, `NotYet::Mass` and the `Primitive` enum are removed; every constructor recipe is judged against truth as the blocks are. The scx split is 93 pass, 0 fail, 390 not yet (Boolean 297, Classify 16, Mesh 16, Contract 32, Work 29); DT1 had 17 pass and 466 not yet. The run takes 47.7 s in release. No new scx failure was found. Decisions (cases for and against):
+- *Seams and poles are not cells.* scx's closed surfaces carry a seam edge (both fins on one face) and collapsed pole edges (`EdgeShape::Collapsed`). T12's complex has neither. The scx side drops both before it counts: V and E are the kept edges and their ends, and a face's boundary count is the number of connected pieces of its kept edges. A torus face with no kept boundary counts genus 1. For: this is T12's definition, and without it all 8 curved constructors failed on cells and the apex cones and sphere on genus, which is a harness artifact and not a defect. Against: a real fault that adds a stray seam would pass this check. Validity and the scx body's own checks still see it.
+- *Mass is asked and judged at `1e-9` relative* (`SCX_ACCURACY`), with T12's slack as for the pin. scx's error estimate is not added to the allowance. For: §8.1 asks for 1e-9, and an estimate that exceeded it would be scx's failure. Against: none. A miss would show as a finding.
+- *Refusals map by meaning.* A cone's base and top radii map to truth's `Radius`. The torus major radius has no truth dimension, so a refusal on it never matches. `ZeroRadii` matches `NoBody`, and `HornTorus` matches the horn-torus `Unsupported`. A `PlanarError` from the extrusion profile is `Refused(Profile)` and matches no truth outcome. For: truth names the quantity, not the parameter. Against: a refused radius on the wrong end of a cone would pass. No recipe has radii that would tell the two ends apart.
+
 ### 14.14 BQ1 as built (11-27)
 
 New crate `crates/scx-bodyq`, placed last in `layers.txt` (after `scx-tess`) and after `scx-tess` in the workspace. Dependencies: `scx-brep`, `scx-curve`, `scx-nurbs` (for `Approach`), `scx-num`, `scx-surface`; dev-dependencies `scx-make` and `scx-testkit` with `bodies`. Public API:
@@ -2474,6 +2479,59 @@ About 25-30 ns per point on conic edges. NURBS (unit tests' curves): 0.1-1.5 ms 
 
 **Proposed 04 row.** "`scx-tess` (TS1): edge samples are a pure function of the edge, the count the largest of the curve's need and each adjacent face's need `L_f = sqrt(8c / κ_f)`; circle and ellipse counts in closed form, NURBS from interval enclosures of `C'` and `C''` per knot span; the chord is a proved bound reported per polyline; no NURBS quarter-turn floor; budget and stop on every entry; normals per triangle corner; `scx-tess` sits after `scx-make`. Change if: TS3's per-triangle test needs a different face need, or step 5 brings a curvature bound for rational edges."
 
+### 14.16 MA4 as built (11-27)
+
+`scx-mass` gains the pin's `enclosure.rs` as `enclose` (with `tseries`, `patch` and `guard`): `enclose_volume(body, width, budget, stop)` and `enclose_shell(body, shell, width, budget, stop)` return a `VolumeEnclosure { lo, hi, settle, cells }` that holds the true volume; `volume_sign(body, shell, budget, stop) -> Sign` (`Positive`, `Negative`, `Zero`) refines until the enclosure excludes zero; `outward(body, budget, stop)` checks every shell against its region. `Settle` is `Reached`, `CellCap` (`CELL_BUDGET` = 2^17 cells) or `Floor`. New errors: `MassRefusal::{BadWidth, NoShell, NotOutward, OpenBoundary}`, `MassUnsupported::{NoSeries, SignUndecided}`, `MassDefect::EstimateMissed`.
+
+**The method.** The pin's: the volume as the flux of `(0, 0, z - z0)` by Green's theorem in each face's uv, the estimate's own cells (each trim piece over `t`, the span from the face's base to `v(t)` over `s`), each enclosed by a Taylor polynomial at its middle integrated exactly plus a Lagrange remainder from the coefficients over the whole cell, all in `Ivl`. The series ring `Ser` (two variables, degree at most 9, exact zeros kept exact) evaluates each surface kind's own `eval<T: Ring>` and a NURBS patch by Cox-de Boor with constant knot differences. A cell over a surface break (an analytic kind's quarter-arc join, a knot) is enclosed by its range hulled over the patches it meets and split until clear. Each use adds a strip from `S(pcurve(t))` to the edge's `C(t)` bounded by area times the largest `|z - z0|`, each loop corner a cap bounded by its perimeter; with the edges' uses balanced (checked: `OpenBoundary`), the boundary closes. The widest cell is refined first (ties by age: deterministic), raised to order 8 or split, and the result is the intersection of every rigorous sum, so spending never widens it.
+
+**Decisions, with cases for and against.**
+
+- **How MA4's sign relates to MA1's region sign: the region sign stays, guarded.** `volume` and `mass` keep counting each face `[back solid] - [front solid]`, and add each face's flux to its back shell and take it from its front shell. A shell whose sum contradicts its region by more than its summed error (an outside shell surely positive; a region whose shells are all whole and all surely negative) calls `outward`. `outward` refuses (`NotOutward { shell }`) or passes; a pass means the estimate was wrong, `Defect(EstimateMissed { shell })`. Never a silent pick.
+  - For: a valid body pays nothing but two map updates per face (MEASURED: across the 33 integration tests, 175 guarded calls passed without certifying; the 2 that certified are the inside-out box's `volume` and `mass`, both refused `NotOutward`). The certificate costs 1 ms (block) to 0.9 s (torus) per body, 8 to 10^4 times the estimate (table below); on every call it would dominate every mass query. The labels are what a finished `Brep` promises; the guard catches the case the labels lie about, a body set inside out, by its own numbers.
+  - Against: a contradiction inside the error is missed (the error is an estimate, not a bound), and so is a lie that keeps every shell's sign (two disjoint solids, one inverted, shows on that one's shell, which is caught; a region with one inverted void inside a larger outward shell is not, since the region still has its positive shell). Shells with a face between two solids or two voids are partial and not judged. Those cases are CK1's (`scx-check` calls `outward` on every solid shell, 72 §7). Using MA4's sign in `volume` would close them at the certificate's cost on every call.
+  - Change if: a caller measures bodies it has not checked and needs the certificate, then a `MassSpec` flag, not a second function.
+- **`volume_sign` takes a `ShellId`, not 72's `RegionId`** (a deviation). For: a sign is a property of a closed surface, and a region of a cavity body has two shells of opposite signs; a region's sign would be a sum that hides which shell is wrong, and `NotOutward` names the shell. Against: CK1 asks per region; it iterates the region's shells (`outward` does).
+- **`SignUndecided` is `Unsupported`, not `Defect`.** An enclosure still holding zero at the cell cap or the floor is a body this method cannot decide (a gap as large as the volume, a volume below the rounding), not a bug. Running out of budget is `Exhausted`, never a sign.
+- **The enclosure reads the boundary alone.** `z0` is placed from the edges' boxes, and a strip's `|z - z0|` from the surface's certified box over its trim's uv box (`Surface::box_over`) and the edge's box, not the face's box. For: the pin's thin shells (radius 1e4, thickness 1e-3) have annular planar caps whose loops' boxes overlap, so `scx-brep` cannot prove their uv region's orientation and `Face::bounding_box` is `None` (MEASURED on the quarter shell); the enclosure needs only the boundary. Against: the surface's box over a whole quarter arc is wider than the face's box (up to 1.6 times, 63 §6.9), so a strip's bound is looser; on exact pcurves the strips' areas are zero and it does not show.
+- **A constant coordinate is exact.** A piece along a line or join at constant `u` or `v` (a `Line2` or segment with that direction component zero, an `AngleLine` at rate zero) gives that coordinate's Taylor coefficients exactly, `[c, 0, ...]`; and a sample lying exactly on a break line is a column end. For: interval rounding blurred `u = pi/2` to `[pi/2 - ulp, pi/2 + ulp]`, so a seam or meridian piece was taken as crossing its own break line and every cell on it was enclosed by its range (MEASURED: the sphere went from 29,283 cells in 1.7 s to 3,942 in 0.34 s, the torus from 114,076 in 5.5 s to 15,779 in 0.96 s, both holding their truths). Against: none found; it reads the curve's structure, not a tolerance.
+- **The strips are bounded, not integrated.** A strip's flux is at most its area times `|z - z0|`, so the width cannot fall below twice the strips' bounds: the block with one face moved 5e-5 holds `120 + 30 * 5e-5` but is about 7e-3 wide at best. The pin's gap cases ask for the sign, which this decides. Integrating the strip as a ruled cell would narrow it; no caller needs it yet.
+
+**Tests** (33 new: 5 unit, 12 in `tests/enclosure.rs`, 1 in `tests/knot_spans.rs`; plus the `tseries` and `patch` unit tests, 3 more). The truths are closed forms (`scx_testkit::solid` and `pi/4 ((r + t)^2 - r^2) L`), never the pin's output.
+
+- `tests/enclosure.rs`: the pin's box 4 x 5 x 6 at (1, 2, 3) holds 120 at 1e-3 and 1e-9, `Reached`; its inside-out twin (every face's sides swapped) is `Negative`, refused `NotOutward` by `outward`, `volume` and `mass`; the cylinder, cone, sphere (seam and poles), torus (a patch over both seams), cavity (a void shell negative inside its region) and the touching blocks hold their closed forms at relative width 1e-6 with every shell's sign as its region gives it; the thin quarter shells (1e4, 1e-3), (10, 1e-4) and (10, 1e-6) positive and holding their volume; the (10, 1e-4) shell carried to (1e4, -1e4, 1e4) still outward; the gap closed by strips; a sheet's shell `Zero`; budgets 0 and 10 `Exhausted`, a set stop `Cancelled`; spending never widens (1e-9 against `f64::MIN_POSITIVE`); widths 1e-6, 1e-8, 1e-11 on a radius-2 sphere falling, `Reached` exactly when within the width asked, the last within 1e-9; `BadWidth` (negative, NaN, infinite) and `NoShell` by name; a shell counted from either side (120 and -120).
+- `tests/knot_spans.rs`: the bumped block (a NURBS top C0 at a double knot) holds `1 + added` to 1e-9 and is outward.
+- `enclose` unit tests: `bounds_round_up`, `moments_hold_their_closed_forms`, `a_face_use_without_its_mate_is_refused_by_name` (`OpenBoundary` naming an edge of the missing face), `constant_u_is_exact_on_the_piece`, `a_piece_on_a_break_line_adds_no_column` (one column along `u = pi/2` on a cylinder, two across it). `tseries`: `series_multiply_and_differentiate_as_polynomials`, a box series enclosing every point's coefficients. `patch`: each kind's series point and partials hold its jet.
+- `scx_testkit::bodies::quarter_shell(r, t, length)`: the pin's cylindrical box between two radii over 0 to 90 degrees, six faces.
+
+**Removed or left, on purpose** (pin test, what it proved, why not here):
+
+- `loops_reversed_caught`: `check_brep` finding a reversed loop; no `check_brep` here (CK1's).
+- `rounded_box`, `g2_round`, `nurb_fillet_pole`: need fillets or an upstream file.
+- `face_areas_enclosed`, `face_area_relative`, `far_rational_rounds_area`, `a_sheet_face_has_an_area_enclosure`, `the_relative_stop_needs_a_finite_enclosure`: the area enclosure and the relative stop; this crate encloses volumes, to an absolute width. `mass_properties_enclosed`: the moments' enclosures, likewise; the volume is.
+- `gap_as_large_as_the_volume_undecided` (r 10, t 1e-6): undecided in the pin because its pcurves were approximate; here they are exact and the sign decides (ported as a positive case, at a 2e-9 mm document since the shell is thinner than the default resolution).
+- `no_nurbs_form_gives_an_error`: an offset surface; here a kind with no series is `NoSeries`, and no generator builds one yet.
+- `strips_that_meet_shrink_with_the_cube_on_knot_lines`, `strips_apart_on_knot_lines_hold_their_closed_form`, `breaks_are_interior_knots_of_full_multiplicity`, `a_body_with_many_trims_refines_within_half_its_starting_cells`, `enclosures_that_do_not_overlap_are_a_failure`, `a_far_rational_cells_partials_are_taken_about_the_cell`: pin internals (its strip shapes, starting-cell counts, a defect path the intersection rule removes); the outcomes are covered by the gap, knot-span, far-shell and spending tests.
+
+**Measurements** (release, local machine, throwaway timer, `enclose_volume` at width `1e-6 max(V, 1)`, seed-0 size 2; `volume` at 1e-6 for scale, mean of 20):
+
+| body | cells | `enclose_volume` | `volume` |
+|---|---:|---:|---:|
+| block | 144 | 1.0 ms | 0.13 ms |
+| cylinder | 341 | 9.0 ms | 0.27 ms |
+| cone | 423 | 13 ms | 0.29 ms |
+| sphere | 3,942 | 332 ms | 0.17 ms |
+| torus | 15,200 | 892 ms | 0.09 ms |
+| cavity | 288 | 1.8 ms | 0.23 ms |
+
+The sphere's and torus's cost is the cells along their break lines (the poles' pieces and the arc joins), enclosed by range at depth. The guard's added work on valid bodies: two map updates per face and one pass over the regions; no enclosure.
+
+**Deviations from 72.** `volume_sign` per shell, not per region; `SignUndecided` is `Unsupported`; the enclosure's boxes from the boundary, not the face.
+
+**Open.** (1) `face::crossings` (MA1's estimate) misses a break a sample lands on exactly, as the enclosure did before `on_lines`; the estimate only loses accuracy there, not correctness, and `breaks.rs` is shared with MA2, so it is left for a follow-up. (2) `Face::bounding_box` is `None` for a thin annular planar face (its region's orientation unproved from overlapping loop boxes): an `scx-brep` limit that the estimate's `body_reference` still hits (`volume` on the quarter shell is `NoBox`). (3) Integrating strips as ruled cells, if a caller needs narrow enclosures of gapped bodies.
+
+**Proposed 04 row.** "`scx-mass` (MA4): `volume`/`mass` keep the region sign; the estimate is summed per shell, and a shell contradicting its region beyond its error calls the certified `outward`, which refuses (`NotOutward`) or reports `EstimateMissed`; never a silent pick. `volume_sign` is per shell; an undecided sign is `Unsupported { SignUndecided }`. Change if: a caller measures unchecked bodies and needs the certificate on every call, or CK1 finds a lie the per-shell guard misses that matters to a mass query."
+
 ### 14.17 MA2 as built (11-27)
 
 `scx-mass` closes a face onto its edges for each use whose pcurve carries a recorded accuracy (`Use::bound`), through `face::pieces` (where MA1's `join` runs); a use with none is unchanged. New module `crates/scx-mass/src/closure.rs`; new testkit generator `scx_testkit::bodies::loose`. No public mass API changed.
@@ -2535,3 +2593,97 @@ About 25-30 ns per point on conic edges. NURBS (unit tests' curves): 0.1-1.5 ms 
 **Open questions.** (1) The typed refusal above, if a caller wants one. (2) The three bodies in the report were not the coordinator's exactly (a transformed testkit block, not `scx_make::block`); the numbers are the same kind. (3) `finish` refuses most testkit kinds at 1e12 with the default resolution (`EdgeEndOffVertex`), so far tests of curved kinds stop at 1e9.
 
 **Proposed 04 row.** "`scx-mass` (MA3): where `8 eps` times the largest coordinate over the box's longest side is above a tenth of the accuracy, a face or edge is first integrated as before within 200,000 evaluations; if that gives up, it is integrated again with each piece held to that rounding and the rounding times the scale is added to the stated error, so far from the origin the result is returned with its error instead of `Defect(StepControl)` or a run of minutes. A request that converges is unchanged bit for bit. Change if a caller needs a typed refusal rather than a stated shortfall."
+
+### 14.19 TS2 as built (11-27)
+
+Planar faces, by a constrained Delaunay triangulation in `uv` on exact predicates (§11 TS2, D4 in §12.3). Public API:
+
+```rust
+// scx-num
+pub mod predicates {
+    pub const FILTER_FLOOR: f64; // 1e-250
+    pub fn orient2d(a: Point2, b: Point2, c: Point2) -> Ordering;            // adaptive, exact
+    pub fn orient2d_exact(a: Point2, b: Point2, c: Point2) -> Ordering;      // expansion only
+    pub fn incircle(a: Point2, b: Point2, c: Point2, d: Point2) -> Ordering; // adaptive, exact
+    pub fn incircle_exact(a: Point2, b: Point2, c: Point2, d: Point2) -> Ordering;
+}
+// scx-tess
+pub fn tessellate(body: &Brep, spec: &TessSpec, budget: &mut Budget, stop: &Stop) -> Result<Mesh, TessError>;
+pub fn tessellate_faces(body: &Brep, spec: &TessSpec, faces: &[FaceId], budget: &mut Budget, stop: &Stop) -> Result<Mesh, TessError>;
+// new variants
+TessRefusal::NoFace { face }                // "no_face"
+TessDefect::Crossing { face }               // "crossing"
+TessDefect::Duplicate { face }              // "duplicate"
+TessDefect::Triangulation { face }          // "triangulation"
+```
+
+`orient2d` is `Greater` for counter-clockwise; `incircle(a, b, c, d)` is `Greater` when `d` is inside the circle through the counter-clockwise `a, b, c`. A zero of either sign is `Equal`. The CDT (`scx-tess/src/cdt.rs`) is crate-private: `triangulate(points, segments, budget) -> Result<Vec<[u32; 3]>, Fault>`.
+
+**What it does.**
+- **Predicates.** Shewchuk's adaptive stages. A is the static filter, skipped below `FILTER_FLOOR` (a product may have underflowed). B is the exact determinant of the rounded differences, in fixed-size stack expansions. C adds the differences' first-order tails. D is the crate's exponent-carrying `Expansion`, exact for all finite doubles. B and C run only when every coordinate is 0 or within `[2^-200, 2^250]`; otherwise D decides at once. Each stage returns only a sign it has proved.
+- **CDT.** The points, with `-0.0` taken as `0.0`, are inserted along a Hilbert curve (order 16) over their box, with ties in `(x, y)` order. Equal points are `Fault::Duplicate`. The structure starts from one triangle 4 spans out. Insertion is a visibility walk from the last triangle made, a 1-to-3 or 2-to-4 split, then Lawson flips. A flip happens only when `incircle` is strictly `Greater`. Segments are sorted by their ends' places in the insertion order. Each segment is inserted by walking its crossed sides; a point exactly on a segment splits it, and a crossed constraint is `Fault::Crossing`. Sloan's flips then clear the crossed sides (only a strictly convex quadrilateral is flipped; otherwise the side is requeued), and Lawson flips restore the new sides, never across a constraint. Each side counts its constraint uses. The region is a parity flood from the outer triangle's corner, toggling across sides used an odd number of times, so a slit used twice does not toggle. A conflict, or a kept triangle with an outer corner, is `Fault::Parity`.
+- **Faces.** `tessellate_faces` sorts and dedups the ids. An unknown id is `Refused(NoFace)`. A face that is not a plane is `Unsupported(FaceKind)`; this is checked before any work. Then it runs `wireframe`, then each plane face in id order, with `stop` checked per face. A face's points come from its loops' edge polylines (TS1): a forward use drops its last point, and a reversed use takes `points[1..]` reversed. They are projected onto the plane frame's `x` and `y`. The boundary segments are each ring's consecutive pairs. Triangles come out counter-clockwise from outside the solid: they are flipped when the front is solid and the back is not, and their normals are the plane's on that side. `chord_bound` is the largest chord of the face's polylines. The faults map to `Defect(Duplicate)`, `Defect(Crossing)`, `Defect(Triangulation)` (Lost and Parity) and `Exhausted`.
+- **Budget.** One unit per point inserted and per flip, on top of the wireframe's.
+
+**Decisions, with cases.**
+- **The predicates are in `scx-num`, not `scx-tess`.** For: `scx-planar` (whose `cert.rs` has its own orient) and the boolean need the same exact signs, and `eft` and `expansion` already live there. Against: `scx-num` grows, and every change to it needs the wasm32 check. Kept: one exact orient for the workspace. Moving `scx-planar` onto it is open question 3.
+- **Native adaptive stages B and C under a range gate.** For: with only A and D, the cost was about 10-16 us per triangle on near-cocircular circle samples. B and C brought it to 2-3 us. Against: about 250 more lines, and the stages' bounds hold only without underflow or overflow. Kept: the gate (`[2^-200, 2^250]`, every coordinate a model holds) sends anything else to D. A unit test checks that A-C agree with D near degeneracy, and the inputs were chosen so that B, C and D each decide some cases (seen with throwaway counters).
+- **One enclosing triangle, not a hull walk or ghost triangles.** For: simple, and every insertion is inside. Against: its corners are not input points, so a crossed side can end at one, and the fan of an outer corner is open. Kept: `side()` looks up from the other end of such a side. A kept triangle with an outer corner is a `Parity` fault, never output.
+- **The inside is decided by parity flood.** For: it needs no loop orientation or nesting. Holes, islands and slits (a constraint used twice does not toggle) all fall out. Against: segments that bound no region (an open chain) fail as `Parity`, not as a named error. Kept: a face's loops always close.
+- **Deterministic order: Hilbert insertion, ties by `(x, y)`, no flip on `Equal`.** For: the triangles are a function of the point set and segment set, whatever order or indices they come in (tested by shuffling). A cocircular tie keeps the edge it has, and the fixed order makes that a fixed rule. The Hilbert order cut the walks from long runs (in `(x, y)` order) to a few steps. Against: the output on a cocircular grid is one valid Delaunay choice, not a canonical one (such as a symbolic perturbation's). Kept: bitwise determinism is what the brief asks for, and it holds.
+- **No Steiner points.** For: every boundary side is a polyline segment, so two faces at an edge share indices and a closed body meshes closed by construction. A plane needs no point for the chord, and the angle bound concerns normals, which are constant on a plane. Against: thin triangles (circle samples fan to far corners), which a viewer shades fine but an FE user would not want. Kept: shape refinement (the pin runs Ruppert on flat faces) is not asked of `TessSpec`.
+- **`edge_length` does not bound interior triangle sides.** For: only edge samples carry it (TS1). Bounding interior sides needs interior points, against the previous decision. Against: a caller setting `edge_length` may expect it on every side. Kept, as open question 5.
+- **`tessellate_faces` as well as `tessellate`.** For: TS3 can grow face by face, and a caller can mesh the planar subset of a body today (`tessellate` refuses the first non-plane face). Against: two entries. Kept: `tessellate` is `tessellate_faces` over every face.
+- **uv by projection onto the plane frame.** For: exact enough, needs no pcurves, and is the same map for every edge of the face. Against: TS3's curved faces need pcurve parameters instead. Kept for planes only.
+- **Crossing and Duplicate are Defects, not Refusals.** For: on a valid body they mean two edges closer than their chords allow, or loops that touch. That is the model's or the sampler's failing, not a request the caller can change, apart from a finer chord. Against: a finer chord would sometimes cure a Crossing, which reads like a refusal. Kept: a Defect names the face. Edge refinement on a crossing is open question 2.
+
+**Tests.** Unit (`scx-num/src/predicates.rs`, 7): orientation signs; exactness on Shewchuk's near-collinear grid (`0.5 + k ulp`); orientation at extreme exponents (tiny, huge, mixed, through stage D); incircle signs and cocircular points; the filter against the exact path on random inputs; stages A-C against D near degeneracy; invariance under cyclic order and a sign flip on a swap. Unit (`scx-tess/src/cdt.rs`, 11, each through a `check` of strict CCW, each side used once or twice, segments present, local Delaunay on every non-constraint side, and the count `V − 2 + 2h`):
+- a square is two triangles;
+- stars with holes hold every rule;
+- a comb needs many flips to constrain;
+- the result is a function of the point and segment sets (shuffled);
+- collinear runs are kept whole;
+- cocircular points and grids triangulate deterministically;
+- points one ulp apart are distinct;
+- a point on a segment splits it;
+- a slit used twice keeps both sides;
+- crossings and duplicates are refused;
+- the budget bounds the work.
+
+Integration (`scx-tess/tests/face.rs`, 6):
+- MK1 blocks, axis-aligned and tilted: 12 triangles, 8 positions, closed, volume 6000.
+- MK3 extrusions with square, triangle and L holes: closed, counts as expected, per-face area against `scx_mass::face_area`, volume.
+- The mesh is a function of the body.
+- Caps with circular holes and a slot with arc ends, at chords 0.1, 0.01 and 0.001: each boundary polyline segment is used by exactly one cap triangle side. The area is within chord times perimeter of `face_area`. `tessellate` on the whole body is `Unsupported(FaceKind { Cylinder })`.
+- Non-plane faces are unsupported, and unknown ids are refused.
+- Budget and stop end the work.
+
+No tests were removed.
+
+**Measurements** (throwaway timer, not committed, release; the machine was shared and loaded, and the same run varied by up to 2x):
+- TS1's `wireframe` cost 26-30 ns per point unloaded (55-60 when loaded).
+- A planar cap is a 200 mm square with circular holes. Cap time is `tessellate_faces` on the cap minus `wireframe`. Unloaded it is 2.1-2.7 us per triangle (in the loaded run, 2.8-3.6 us against a wireframe of 31-56 ns/pt), so about 80-100 times the cost per point of TS1.
+- Breakdown for one circle at chord 1e-4 (1,575 triangles): 18k orient and 14.5k incircle calls; 4k incircle calls reach stage B, 1.6k reach C, none reach D; 5k flips, 7.4k walk steps. By phase: sort 0.1 ms, insertion 2.8 ms, constraints 0.19 ms, flood 0.04 ms. The cost is the adaptive incircle on near-cocircular samples, and the holes' interiors are triangulated too, then dropped.
+- Against the pin's mesher: the pin's planar fill is spade 2.15's CDT, plus Ruppert refinement for shape. Spade on the same points and segments, with no exterior removal and no refinement:
+
+| case | spade `bulk_load_cdt` | spade incremental (the pin's path) | ours |
+|---|---|---|---|
+| 1 circle, chord 1e-3 | 0.55 ms | 1.09 ms | 1.1-1.2 ms |
+| 1 circle, chord 1e-4 | 2.0 ms | 3.3 ms | ~3.1 ms |
+| 9 circles, chord 1e-4 | 33.7 ms | 50 ms | ~21 ms |
+
+So ours is on par with the pin's incremental path, and up to 1.5x slower than spade's bulk load on one circle (but faster on nine). The pin also adds Ruppert points on every flat face, which ours does not, so its full planar cost is higher. The added work against TS1 is the CDT itself; `wireframe` is unchanged.
+
+**Deviations from 72.**
+- Watertightness on MK3 extrusions with circles is tested on the caps only (boundary coverage), because their cylinder walls are `Unsupported` until TS3. Bodies with only planar faces are tested closed.
+- `tessellate_faces` is new.
+- The CDT is crate-private in `scx-tess`; only the predicates are public, in `scx-num`.
+
+**Open questions.**
+1. TS3: curved faces need `uv` from the edges' pcurve parameters, not projection, and the same CDT then refines inside for the chord.
+2. A chord-induced crossing (two edges of a face closer than their chords) is a `Defect(Crossing)`. Refining the two edges' samples locally until they separate would cure it; that needs a hook back into TS1's sampler.
+3. `scx-planar`'s own orientation test in `cert.rs` should move to `scx_num::predicates::orient2d`.
+4. Stage B on near-cocircular samples is most of the cost. A cheaper path for circle samples (a symbolic or precomputed cocircularity) could halve it.
+5. Should `edge_length` bound interior triangle sides (needs interior points, so a Steiner policy)?
+
+**Proposed 04 row.** "`scx-tess` (TS2): planar faces are a constrained Delaunay triangulation in the plane frame's `uv`. The points are only the edges' TS1 samples (no Steiner points), so faces share boundary indices and a closed planar body meshes closed. It runs on `scx_num::predicates` (`orient2d`, `incircle`): Shewchuk's adaptive stages over the crate's own `eft` and `expansion`, exact for every finite double, with no spade. The output is a function of the point and segment sets: Hilbert insertion with ties by `(x, y)`, segments by rank, no flip on an exact tie. The inside is a parity flood (slits do not toggle). Crossing and duplicate boundary points are `Defect`s naming the face. `tessellate` and `tessellate_faces` refuse a non-plane face as `Unsupported(FaceKind)` until TS3. One budget unit per point and per flip."

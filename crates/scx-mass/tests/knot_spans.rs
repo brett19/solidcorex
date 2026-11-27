@@ -264,3 +264,14 @@ fn the_bumped_face_moves_the_centroid_upward() {
     let c = m.centroid().unwrap();
     assert!(added > 0.0 && c.z > 0.5, "{c:?}");
 }
+
+/// The certified enclosure across the same knots (the pin's NURBS cases of #2972): the
+/// bumped block's enclosure holds `1 + added` to 1e-9, and its shells are outward.
+#[test]
+fn an_enclosure_across_a_c0_knot_holds_its_closed_form() {
+    let (b, _, added) = bumped();
+    let want = 1.0 + added;
+    let e = scx_mass::enclose_volume(&b, 1e-9, &mut Budget::unlimited(), &Stop::new()).unwrap();
+    assert!(e.holds(want) && e.width() <= 1e-9, "{e:?} against {want}");
+    scx_mass::outward(&b, &mut Budget::unlimited(), &Stop::new()).unwrap();
+}

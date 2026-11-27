@@ -8,7 +8,7 @@
 //! the one fixed hash and random generator ([`hash`]), the work budget and stop flag of an
 //! iterating routine ([`budget`]), a query's nearest point as a value ([`invert`]), and the
 //! error-free transformations ([`eft`]) and the transcendental functions on them
-//! ([`fmath`]).
+//! ([`fmath`]), and the exact plane predicates ([`predicates`]).
 //! Depends on nothing.
 //!
 //! Every module but [`budget`], [`cert`], [`consts`], [`eft`], [`fmath`], [`hash`], [`invert`],
@@ -41,6 +41,7 @@ pub mod limits;
 pub mod math;
 pub mod matrix;
 pub mod periodic_extent1d;
+pub mod predicates;
 pub mod ring;
 pub mod series;
 pub mod small_matrix;

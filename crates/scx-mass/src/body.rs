@@ -9,6 +9,7 @@ use scx_num::vector3d::{Point3, Vec3};
 
 use crate::error::{MassError, MassRefusal, MassUnsupported};
 use crate::face::{self, reference};
+use crate::guard::Shells;
 use crate::integrand::{FIRST_MONOMIAL, Set, monomial, shift};
 use crate::kronrod::{MAX_COMPONENTS, Meter};
 use crate::spec::{Estimate, Mass, MassErrors, MassSpec, RelAccuracy, Sym3};
@@ -61,7 +62,10 @@ fn body_reference(body: &Brep, about: Option<Point3>) -> Result<Point3, MassErro
 /// # Errors
 ///
 /// [`MassError`]: a face with no box or a winding this method does not close
-/// (`Unsupported`), the budget, the stop flag, and the integrator's defects.
+/// (`Unsupported`), the budget, the stop flag, and the integrator's defects. A shell
+/// whose estimate contradicts its region calls the certified sign ([`crate::outward`]):
+/// [`MassRefusal::NotOutward`] for a body set inside out, its errors, or
+/// [`MassDefect::EstimateMissed`](crate::MassDefect::EstimateMissed) when it is outward.
 pub fn volume(
     body: &Brep,
     accuracy: RelAccuracy,
@@ -73,16 +77,20 @@ pub fn volume(
     let about = body_reference(body, None)?;
     let mut meter = Meter::new(budget, stop);
     let (mut value, mut error) = (0.0, 0.0);
+    let mut shells = Shells::default();
     for f in body.faces() {
         let sign = volume_sign(f);
         if sign == 0.0 {
+            shells.skip(f);
             continue;
         }
         let mut r = face::integrate(f, Set::Volume, accuracy.get(), &mut meter)?;
         shift(Set::Volume, r.reference - about, &mut r.value, &mut r.error);
         value += sign * r.value[1];
         error += r.error[1];
+        shells.add(f, r.value[1], r.error[1]);
     }
+    shells.check(body, budget, stop)?;
     Ok(Estimate { value, error })
 }
 
@@ -135,7 +143,7 @@ pub fn face_area(
 /// # Errors
 ///
 /// [`MassRefusal::BadDensity`] and [`MassRefusal::BadReference`] for the spec; otherwise
-/// as [`volume`].
+/// as [`volume`], the guard included.
 pub fn mass(
     body: &Brep,
     spec: &MassSpec,
@@ -154,14 +162,23 @@ pub fn mass(
     let mut meter = Meter::new(budget, stop);
     let mut sum = [0.0; MAX_COMPONENTS];
     let mut sum_err = [0.0; MAX_COMPONENTS];
+    let mut shells = Shells::default();
+    let vi = monomial([0, 0, 1]);
     for f in body.faces() {
         let sign = volume_sign(f);
         let in_area = counts_in_area(f);
+        if sign == 0.0 {
+            shells.skip(f);
+        }
         if sign == 0.0 && !in_area {
             continue;
         }
         let mut r = face::integrate(f, Set::Full, spec.accuracy.get(), &mut meter)?;
         shift(Set::Full, r.reference - about, &mut r.value, &mut r.error);
+        if sign != 0.0 {
+            let at = |a: &[f64; MAX_COMPONENTS]| a.get(vi).copied().unwrap_or(0.0);
+            shells.add(f, at(&r.value), at(&r.error));
+        }
         for (i, ((s, e), (v, ve))) in sum
             .iter_mut()
             .zip(sum_err.iter_mut())
@@ -177,6 +194,7 @@ pub fn mass(
             *e += w.abs() * ve;
         }
     }
+    shells.check(body, budget, stop)?;
     let m = |a: [u8; 3], c: f64| {
         let i = monomial(a);
         let at = |a: &[f64; MAX_COMPONENTS]| a.get(i).copied().unwrap_or(0.0);
