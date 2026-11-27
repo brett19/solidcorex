@@ -30,7 +30,8 @@
 // `NumError::limit`, `NumError::operation`, `NumError::failure`,
 // `NumError::cause`, `Error::source`, `chain` (research 62 §2.4: each `Display` prints
 // one frame, where solidcore's `CallFailed` printed its cause too), `Invalid` (62 T4: the
-// typed reason of an invalid input, where solidcore's is text), and the tests.
+// typed reason of an invalid input, where solidcore's is text), each cause's `name` and
+// `NumError::name` (62 D6), and the tests.
 //! Why a layer-0 routine fails.
 //!
 //! A check of the caller's argument that fails is [`NumError::InvalidInput`]; a
@@ -183,6 +184,27 @@ pub enum NumFailure {
 }
 
 impl NumFailure {
+    /// The cause's stable name, unique in the crate (research 62 D6).
+    #[must_use]
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Disjoint { .. } => "disjoint",
+            Self::Defect { .. } => "defect",
+            Self::IndexOutOfRange { .. } => "index_out_of_range",
+            Self::JacobiDidNotConverge { .. } => "jacobi_did_not_converge",
+            Self::NoPerpendicular => "no_perpendicular",
+            Self::NotSquare { .. } => "not_square",
+            Self::NotSymmetric => "not_symmetric",
+            Self::PointOutsideExtent { .. } => "point_outside_extent",
+            Self::Singular { .. } => "singular",
+            Self::SpanOutsidePeriod { .. } => "span_outside_period",
+            Self::VectorVanishes => "vector_vanishes",
+            Self::TooFewRows { .. } => "too_few_rows",
+        }
+    }
+}
+
+impl NumFailure {
     /// The failure's kind (research 62 §3.1).
     #[must_use]
     pub const fn kind(&self) -> ErrorKind {
@@ -288,6 +310,19 @@ pub enum Limit {
     },
 }
 
+impl Limit {
+    /// The cause's stable name, unique in the crate (research 62 D6).
+    #[must_use]
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Allocation { .. } => "allocation",
+            Self::MatrixSize { .. } => "matrix_size",
+            Self::DerivativeOrder { .. } => "derivative_order",
+            Self::SeriesOrder { .. } => "series_order",
+        }
+    }
+}
+
 impl fmt::Display for Limit {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -385,6 +420,37 @@ pub enum Invalid {
     UndefinedLine,
     /// A voxel model has no voxels.
     NoVoxels,
+}
+
+impl Invalid {
+    /// The cause's stable name, unique in the crate (research 62 D6).
+    #[must_use]
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::NotFinite => "not_finite",
+            Self::ZeroLength => "zero_length",
+            Self::NoDirection => "no_direction",
+            Self::ScaleFactor => "scale_factor",
+            Self::DependentAxes => "dependent_axes",
+            Self::Unrepresentable => "unrepresentable",
+            Self::NoFiniteAxis => "no_finite_axis",
+            Self::PlaneAxesOrMotion => "plane_axes_or_motion",
+            Self::Projective => "projective",
+            Self::Empty => "empty",
+            Self::Overflows => "overflows",
+            Self::MatrixNotSquare { .. } => "matrix_not_square",
+            Self::MatrixNot3x3 { .. } => "matrix_not_3x3",
+            Self::ElementCount { .. } => "element_count",
+            Self::RhsSize { .. } => "rhs_size",
+            Self::SizeMismatch => "size_mismatch",
+            Self::IndexOutside => "index_outside",
+            Self::OutsidePeriod => "outside_period",
+            Self::AlongAxis => "along_axis",
+            Self::NotPerpendicular => "not_perpendicular",
+            Self::UndefinedLine => "undefined_line",
+            Self::NoVoxels => "no_voxels",
+        }
+    }
 }
 
 impl fmt::Display for Invalid {
@@ -491,6 +557,18 @@ impl NumError {
             Self::Exhausted { .. } => ErrorKind::Exhausted,
             Self::Failed { failure, .. } => failure.kind(),
             Self::Call { cause, .. } => cause.kind(),
+        }
+    }
+
+    /// The stable name of the cause at the end of the chain, unique in the crate
+    /// (research 62 D6): with the kind and the call, the error's signature.
+    #[must_use]
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::InvalidInput { reason, .. } => reason.name(),
+            Self::Exhausted { limit, .. } => limit.name(),
+            Self::Failed { failure, .. } => failure.name(),
+            Self::Call { cause, .. } => cause.name(),
         }
     }
 
@@ -687,5 +765,90 @@ mod tests {
             "top: a routine it calls failed: outer: a routine it calls failed: inner: invalid input: an empty set"
         );
         assert_eq!(NumError::invalid_input("x", Invalid::Empty).failure(), None);
+    }
+
+    /// Every cause's name is unique in the crate (research 62 D6), and the error's name is
+    /// its last cause's.
+    #[test]
+    fn cause_names_are_unique() {
+        let failures = [
+            NumFailure::Disjoint {
+                a: [0.0; 2],
+                b: [0.0; 2],
+            },
+            NumFailure::IndexOutOfRange { index: 0, len: 0 },
+            NumFailure::JacobiDidNotConverge {
+                sweeps: 0,
+                off_diagonal: 0.0,
+            },
+            NumFailure::NotSquare { rows: 0, cols: 0 },
+            NumFailure::NotSymmetric,
+            NumFailure::SpanOutsidePeriod {
+                from: 0.0,
+                to: 0.0,
+                period: 0.0,
+            },
+            NumFailure::TooFewRows { rows: 0, cols: 0 },
+            NumFailure::NoPerpendicular,
+            NumFailure::Singular { measure: 0.0 },
+            NumFailure::VectorVanishes,
+            NumFailure::PointOutsideExtent { u: 0.0, v: 0.0 },
+            NumFailure::Defect { why: "" },
+        ];
+        let limits = [
+            Limit::Allocation { count: 0 },
+            Limit::MatrixSize { rows: 0, limit: 0 },
+            Limit::DerivativeOrder { order: 0, limit: 0 },
+            Limit::SeriesOrder {
+                s: 0,
+                e: 0,
+                limit_s: 0,
+                limit_e: 0,
+            },
+        ];
+        let invalid = [
+            Invalid::NotFinite,
+            Invalid::ZeroLength,
+            Invalid::NoDirection,
+            Invalid::ScaleFactor,
+            Invalid::DependentAxes,
+            Invalid::Unrepresentable,
+            Invalid::NoFiniteAxis,
+            Invalid::PlaneAxesOrMotion,
+            Invalid::Projective,
+            Invalid::Empty,
+            Invalid::Overflows,
+            Invalid::MatrixNotSquare { rows: 0, cols: 0 },
+            Invalid::MatrixNot3x3 { rows: 0, cols: 0 },
+            Invalid::ElementCount {
+                rows: 0,
+                cols: 0,
+                len: 0,
+            },
+            Invalid::RhsSize { rows: 0, len: 0 },
+            Invalid::SizeMismatch,
+            Invalid::IndexOutside,
+            Invalid::OutsidePeriod,
+            Invalid::AlongAxis,
+            Invalid::NotPerpendicular,
+            Invalid::UndefinedLine,
+            Invalid::NoVoxels,
+        ];
+        let names: Vec<&str> = failures
+            .iter()
+            .map(NumFailure::name)
+            .chain(limits.iter().map(Limit::name))
+            .chain(invalid.iter().map(Invalid::name))
+            .collect();
+        let mut sorted = names.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), names.len(), "{names:?}");
+        assert!(names.iter().all(|n| n
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')));
+        let inner = NumError::failed("b", NumFailure::NotSymmetric);
+        assert_eq!(NumError::call("a")(inner).name(), "not_symmetric");
+        assert_eq!(NumError::invalid_input("a", Invalid::Empty).name(), "empty");
     }
 }

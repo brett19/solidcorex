@@ -47,6 +47,20 @@ impl P21Error {
         }
     }
 
+    /// The stable name of the cause at the end of the chain, unique in the crate
+    /// (research 62 D6): with the kind and the call, the error's signature.
+    #[must_use]
+    pub fn name(&self) -> &'static str {
+        match self.innermost() {
+            Self::Refused(r) => r.name(),
+            Self::Exhausted(l) => l.name(),
+            Self::Unsupported(u) => u.name(),
+            Self::Cancelled => "cancelled",
+            // `innermost` passes every `Within`
+            Self::Within { source, .. } => source.name(),
+        }
+    }
+
     /// The error at the end of a chain of [`P21Error::Within`]: itself, when it is not one.
     #[must_use]
     pub fn innermost(&self) -> &Self {
@@ -188,6 +202,20 @@ pub enum Limit {
     },
 }
 
+impl Limit {
+    /// The cause's stable name, unique in the crate (research 62 D6).
+    #[must_use]
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::TooLarge { .. } => "too_large",
+            Self::TooMany { .. } => "too_many",
+            Self::NeedsMemory { .. } => "needs_memory",
+            Self::TooDeep { .. } => "too_deep",
+            Self::TooManyInstances { .. } => "too_many_instances",
+        }
+    }
+}
+
 impl fmt::Display for Limit {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -269,6 +297,20 @@ pub enum Refusal {
     },
 }
 
+impl Refusal {
+    /// The stable name of the refusal's cause, unique in the crate (research 62 D6).
+    #[must_use]
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::NotStep => "not_step",
+            Self::MissingEnd => "missing_end",
+            Self::Syntax { cause, .. } => cause.name(),
+            Self::Unwritable { cause, .. } => cause.name(),
+            Self::Entity { cause, .. } => cause.name(),
+        }
+    }
+}
+
 impl fmt::Display for Refusal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -344,6 +386,32 @@ pub enum Syntax {
     },
 }
 
+impl Syntax {
+    /// The cause's stable name, unique in the crate (research 62 D6).
+    #[must_use]
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Expected(..) => "expected_char",
+            Self::ExpectedKeyword => "expected_keyword",
+            Self::UnexpectedEnd => "unexpected_end",
+            Self::Unexpected(..) => "unexpected_char",
+            Self::UnexpectedKeyword(..) => "unexpected_keyword",
+            Self::UnterminatedComment => "unterminated_comment",
+            Self::UnterminatedString => "unterminated_string",
+            Self::UnterminatedSection(..) => "unterminated_section",
+            Self::HeaderWithoutEndsec => "header_without_endsec",
+            Self::BadNumber(..) => "bad_number",
+            Self::IntegerOutOfRange(..) => "integer_out_of_range",
+            Self::BadReference => "bad_reference",
+            Self::BadBinary(..) => "bad_binary",
+            Self::BadEnumeration => "bad_enumeration",
+            Self::TypedArity(..) => "typed_arity",
+            Self::NestedTooDeeply { .. } => "nested_too_deeply",
+            Self::TooManyParts { .. } => "too_many_parts",
+        }
+    }
+}
+
 impl fmt::Display for Syntax {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -399,6 +467,21 @@ pub enum Unwritable {
     Geometry(NoPart42Form),
 }
 
+impl Unwritable {
+    /// The cause's stable name, unique in the crate (research 62 D6).
+    #[must_use]
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::NonFiniteReal(..) => "non_finite_real",
+            Self::BadKeyword(..) => "unwritable_keyword",
+            Self::BadEnumeration(..) => "unwritable_enumeration",
+            Self::BadBinary(..) => "unwritable_binary",
+            Self::EmptyComplex => "empty_complex",
+            Self::Geometry(g) => g.name(),
+        }
+    }
+}
+
 /// Geometry that ISO 10303-42 cannot state, as [`crate::part42::write`] meets it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -412,6 +495,19 @@ pub enum NoPart42Form {
     AxisInParameterSpace,
     /// A surface curve or a 3D offset curve, in a 2D parameter space.
     SpaceCurveInParameterSpace,
+}
+
+impl NoPart42Form {
+    /// The cause's stable name, unique in the crate (research 62 D6).
+    #[must_use]
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::OffParameterPlane => "off_parameter_plane",
+            Self::MixedUnitVector => "mixed_unit_vector",
+            Self::AxisInParameterSpace => "axis_in_parameter_space",
+            Self::SpaceCurveInParameterSpace => "space_curve_in_parameter_space",
+        }
+    }
 }
 
 impl fmt::Display for NoPart42Form {
@@ -483,6 +579,20 @@ pub enum EntityCause {
     /// The instance is part of a cycle where the file's structure must be a tree or a
     /// directed acyclic graph (an assembly using itself, a mapped item mapping itself).
     Cycle,
+}
+
+impl EntityCause {
+    /// The cause's stable name, unique in the crate (research 62 D6).
+    #[must_use]
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Missing => "missing",
+            Self::WrongType { .. } => "wrong_type",
+            Self::BadParam { .. } => "bad_param",
+            Self::Invalid(v) => v.name(),
+            Self::Cycle => "cycle",
+        }
+    }
 }
 
 impl fmt::Display for EntityCause {
@@ -560,6 +670,40 @@ pub enum InvalidValue {
     ControlNet,
 }
 
+impl InvalidValue {
+    /// The cause's stable name, unique in the crate (research 62 D6).
+    #[must_use]
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::KnotsDecrease => "knots_decrease",
+            Self::KnotVector => "knot_vector",
+            Self::KnotCount => "knot_count",
+            Self::TooFewControlPoints => "too_few_control_points",
+            Self::BezierSegments => "bezier_segments",
+            Self::WeightNotPositive => "weight_not_positive",
+            Self::WeightCount => "weight_count",
+            Self::NetWeightCount => "net_weight_count",
+            Self::ZeroDirection => "zero_direction",
+            Self::NegativeMagnitude => "negative_magnitude",
+            Self::ZeroMagnitude => "zero_magnitude",
+            Self::CircleRadius => "circle_radius",
+            Self::EllipseSemiAxis => "ellipse_semi_axis",
+            Self::HyperbolaSemiAxis => "hyperbola_semi_axis",
+            Self::ParabolaFocalDistance => "parabola_focal_distance",
+            Self::SurfaceCurveItems => "surface_curve_items",
+            Self::PcurveItems => "pcurve_items",
+            Self::CurveControlPoints => "curve_control_points",
+            Self::CylinderRadius => "cylinder_radius",
+            Self::ConeShape => "cone_shape",
+            Self::SphereRadius => "sphere_radius",
+            Self::TorusMinorRadius => "torus_minor_radius",
+            Self::TorusMajorRadius => "torus_major_radius",
+            Self::SurfaceControlPoints => "surface_control_points",
+            Self::ControlNet => "control_net",
+        }
+    }
+}
+
 impl fmt::Display for InvalidValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
@@ -611,6 +755,16 @@ pub enum Unsupported {
         /// Its (first record's) entity name.
         name: String,
     },
+}
+
+impl Unsupported {
+    /// The cause's stable name, unique in the crate (research 62 D6).
+    #[must_use]
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Entity { .. } => "unsupported_entity",
+        }
+    }
 }
 
 impl fmt::Display for Unsupported {
@@ -678,5 +832,132 @@ impl fmt::Display for Warning {
                 write!(f, "line {line}: text after END-ISO-10303-21 ignored")
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every cause's name is unique in the crate (research 62 D6), and an error's name is
+    /// its last cause's.
+    #[test]
+    fn cause_names_are_unique() {
+        let limits = [
+            Limit::TooLarge { bytes: 0, limit: 0 },
+            Limit::TooMany {
+                what: Counted::Instances,
+                limit: 0,
+            },
+            Limit::NeedsMemory {
+                needed: 0,
+                available: 0,
+            },
+            Limit::TooDeep { id: 0, limit: 0 },
+            Limit::TooManyInstances { id: 0, limit: 0 },
+        ];
+        let syntax = [
+            Syntax::Expected('x'),
+            Syntax::ExpectedKeyword,
+            Syntax::UnexpectedEnd,
+            Syntax::Unexpected('x'),
+            Syntax::UnexpectedKeyword(String::new()),
+            Syntax::UnterminatedComment,
+            Syntax::UnterminatedString,
+            Syntax::UnterminatedSection(String::new()),
+            Syntax::HeaderWithoutEndsec,
+            Syntax::BadNumber(String::new()),
+            Syntax::IntegerOutOfRange(String::new()),
+            Syntax::BadReference,
+            Syntax::BadBinary(String::new()),
+            Syntax::BadEnumeration,
+            Syntax::TypedArity(String::new()),
+            Syntax::NestedTooDeeply { limit: 0 },
+            Syntax::TooManyParts { limit: 0 },
+        ];
+        let unwritable = [
+            Unwritable::NonFiniteReal(0.0),
+            Unwritable::BadKeyword(String::new()),
+            Unwritable::BadEnumeration(String::new()),
+            Unwritable::BadBinary(String::new()),
+            Unwritable::EmptyComplex,
+            Unwritable::Geometry(NoPart42Form::OffParameterPlane),
+            Unwritable::Geometry(NoPart42Form::MixedUnitVector),
+            Unwritable::Geometry(NoPart42Form::AxisInParameterSpace),
+            Unwritable::Geometry(NoPart42Form::SpaceCurveInParameterSpace),
+        ];
+        let entity = [
+            EntityCause::Missing,
+            EntityCause::WrongType {
+                expected: "",
+                found: String::new(),
+            },
+            EntityCause::BadParam {
+                index: 0,
+                expected: "",
+            },
+            EntityCause::Cycle,
+            EntityCause::Invalid(InvalidValue::KnotsDecrease),
+            EntityCause::Invalid(InvalidValue::KnotVector),
+            EntityCause::Invalid(InvalidValue::KnotCount),
+            EntityCause::Invalid(InvalidValue::TooFewControlPoints),
+            EntityCause::Invalid(InvalidValue::BezierSegments),
+            EntityCause::Invalid(InvalidValue::WeightNotPositive),
+            EntityCause::Invalid(InvalidValue::WeightCount),
+            EntityCause::Invalid(InvalidValue::NetWeightCount),
+            EntityCause::Invalid(InvalidValue::ZeroDirection),
+            EntityCause::Invalid(InvalidValue::NegativeMagnitude),
+            EntityCause::Invalid(InvalidValue::ZeroMagnitude),
+            EntityCause::Invalid(InvalidValue::CircleRadius),
+            EntityCause::Invalid(InvalidValue::EllipseSemiAxis),
+            EntityCause::Invalid(InvalidValue::HyperbolaSemiAxis),
+            EntityCause::Invalid(InvalidValue::ParabolaFocalDistance),
+            EntityCause::Invalid(InvalidValue::SurfaceCurveItems),
+            EntityCause::Invalid(InvalidValue::PcurveItems),
+            EntityCause::Invalid(InvalidValue::CurveControlPoints),
+            EntityCause::Invalid(InvalidValue::CylinderRadius),
+            EntityCause::Invalid(InvalidValue::ConeShape),
+            EntityCause::Invalid(InvalidValue::SphereRadius),
+            EntityCause::Invalid(InvalidValue::TorusMinorRadius),
+            EntityCause::Invalid(InvalidValue::TorusMajorRadius),
+            EntityCause::Invalid(InvalidValue::SurfaceControlPoints),
+            EntityCause::Invalid(InvalidValue::ControlNet),
+        ];
+        let errors: Vec<P21Error> = limits
+            .into_iter()
+            .map(P21Error::Exhausted)
+            .chain([Refusal::NotStep, Refusal::MissingEnd].map(P21Error::Refused))
+            .chain(
+                syntax
+                    .into_iter()
+                    .map(|cause| P21Error::Refused(Refusal::Syntax { line: 1, cause })),
+            )
+            .chain(
+                unwritable
+                    .into_iter()
+                    .map(|cause| P21Error::Refused(Refusal::Unwritable { id: None, cause })),
+            )
+            .chain(entity.into_iter().map(|cause| P21Error::entity(1, cause)))
+            .chain([
+                P21Error::Unsupported(Unsupported::Entity {
+                    id: 1,
+                    name: String::new(),
+                }),
+                P21Error::Cancelled,
+            ])
+            .collect();
+        let names: Vec<&str> = errors.iter().map(P21Error::name).collect();
+        let mut sorted = names.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), names.len(), "{names:?}");
+        assert!(names.iter().all(|n| n
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')));
+        let within = P21Error::Within {
+            id: 2,
+            source: Box::new(P21Error::entity(1, EntityCause::Cycle)),
+        };
+        assert_eq!(within.name(), "cycle");
     }
 }
