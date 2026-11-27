@@ -213,7 +213,11 @@ fn two_over_pi_chunk(i: i64, i0: i64) -> u64 {
     };
     if start < i0 {
         let drop = i0 - start;
-        c = if drop >= 64 { 0 } else { c & (u64::MAX >> drop) };
+        c = if drop >= 64 {
+            0
+        } else {
+            c & (u64::MAX >> drop)
+        };
     }
     c
 }
@@ -290,7 +294,11 @@ pub(super) fn reduce(a: f64, p: usize) -> (u32, Big) {
 }
 
 fn big_limb(s: &[u64; 16], i: i64) -> u64 {
-    if i < 0 { 0 } else { s.get(i as usize).copied().unwrap_or(0) }
+    if i < 0 {
+        0
+    } else {
+        s.get(i as usize).copied().unwrap_or(0)
+    }
 }
 
 /// `sin y` by its series, for `|y| <= pi/4`.
@@ -454,7 +462,11 @@ pub(super) fn atan2(y: f64, x: f64) -> f64 {
         } else {
             pio2.sub(atan_big(b.div(a), p))
         };
-        if x < 0.0 { pio2.mul_pow2(1).sub(th) } else { th }
+        if x < 0.0 {
+            pio2.mul_pow2(1).sub(th)
+        } else {
+            th
+        }
     });
     if y < 0.0 { -r } else { r }
 }
@@ -504,7 +516,7 @@ fn exact_pow(x: f64, y: f64) -> Option<f64> {
             if yf > 12 && e != 0 {
                 return None;
             }
-            i128::from(e) * i128::from(yn) << yf.clamp(0, 12)
+            (i128::from(e) * i128::from(yn)) << yf.clamp(0, 12)
         } else {
             let k = -yf;
             if k > 11 || e % (1i64 << k) != 0 {
@@ -606,7 +618,7 @@ pub(super) fn hypot_exact(a: f64, b: f64, r: f64) -> f64 {
         let mid = midpoint(r, up, P);
         s.sub(mid.mul(mid))
     };
-    nearest_root(r, |r, up| past(r, up))
+    nearest_root(r, past)
 }
 
 /// The double nearest `cbrt(x)` for a finite positive `x`, given `r` within one ulp of
@@ -630,7 +642,7 @@ fn midpoint(r: f64, up: bool, p: usize) -> Big {
     let field = (bits >> 52) as i64;
     let ulp_exp = field.max(1) - 1075;
     // Below a power of two (not the least normal) the gap is half as wide.
-    let half = if !up && bits & 0x000f_ffff_ffff_ffff == 0 && field > 1 {
+    let half = if !up && bits.trailing_zeros() >= 52 && field > 1 {
         ulp_exp - 2
     } else {
         ulp_exp - 1
@@ -698,7 +710,11 @@ mod tests {
 
     macro_rules! wc {
         ($name:literal) => {
-            inputs(include_str!(concat!("../../tests/data/core-math/", $name, ".wc")))
+            inputs(include_str!(concat!(
+                "../../tests/data/core-math/",
+                $name,
+                ".wc"
+            )))
         };
     }
 
@@ -724,7 +740,12 @@ mod tests {
             }
         }
         assert!(n > 0, "{name}: nothing checked");
-        assert!(bad.is_empty(), "{} of {n} wrong:\n{}", bad.len(), bad.join("\n"));
+        assert!(
+            bad.is_empty(),
+            "{} of {n} wrong:\n{}",
+            bad.len(),
+            bad.join("\n")
+        );
     }
 
     fn fin(x: f64) -> bool {
@@ -733,8 +754,20 @@ mod tests {
 
     #[test]
     fn exponentials_at_the_worst_cases() {
-        agree("exp", &wc!("exp"), |x, _| fin(x) && x.abs() < 1000.0, |x, _| exp(x), |x, _| mp::exp(x));
-        agree("exp2", &wc!("exp2"), |x, _| fin(x) && x.abs() < 1100.0, |x, _| exp2(x), |x, _| mp::exp2(x));
+        agree(
+            "exp",
+            &wc!("exp"),
+            |x, _| fin(x) && x.abs() < 1000.0,
+            |x, _| exp(x),
+            |x, _| mp::exp(x),
+        );
+        agree(
+            "exp2",
+            &wc!("exp2"),
+            |x, _| fin(x) && x.abs() < 1100.0,
+            |x, _| exp2(x),
+            |x, _| mp::exp2(x),
+        );
         let h = |x: f64, _| fin(x) && x.abs() < 1000.0;
         agree("sinh", &wc!("sinh"), h, |x, _| sinh(x), |x, _| mp::sinh(x));
         agree("cosh", &wc!("cosh"), h, |x, _| cosh(x), |x, _| mp::cosh(x));
@@ -745,25 +778,73 @@ mod tests {
     fn logarithms_at_the_worst_cases() {
         let pos = |x: f64, _| fin(x) && x > 0.0;
         agree("ln", &wc!("log"), pos, |x, _| ln(x), |x, _| mp::ln(x));
-        agree("log2", &wc!("log2"), pos, |x, _| log2(x), |x, _| mp::log2(x));
-        agree("log10", &wc!("log10"), pos, |x, _| log10(x), |x, _| mp::log10(x));
+        agree(
+            "log2",
+            &wc!("log2"),
+            pos,
+            |x, _| log2(x),
+            |x, _| mp::log2(x),
+        );
+        agree(
+            "log10",
+            &wc!("log10"),
+            pos,
+            |x, _| log10(x),
+            |x, _| mp::log10(x),
+        );
     }
 
     #[test]
     fn trigonometric_at_the_worst_cases() {
         let f = |x: f64, _| fin(x);
-        agree("sin", &wc!("sin"), f, |x, _| sin_quadrant(x, 0), |x, _| mp::sin(x));
-        agree("cos", &wc!("cos"), f, |x, _| sin_quadrant(x, 1), |x, _| mp::cos(x));
+        agree(
+            "sin",
+            &wc!("sin"),
+            f,
+            |x, _| sin_quadrant(x, 0),
+            |x, _| mp::sin(x),
+        );
+        agree(
+            "cos",
+            &wc!("cos"),
+            f,
+            |x, _| sin_quadrant(x, 1),
+            |x, _| mp::cos(x),
+        );
         agree("tan", &wc!("tan"), f, |x, _| tan(x), |x, _| mp::tan(x));
     }
 
     #[test]
     fn inverse_at_the_worst_cases() {
-        agree("atan", &wc!("atan"), |x, _| fin(x), |x, _| atan(x), |x, _| mp::atan(x));
+        agree(
+            "atan",
+            &wc!("atan"),
+            |x, _| fin(x),
+            |x, _| atan(x),
+            |x, _| mp::atan(x),
+        );
         let unit = |x: f64, _| fin(x) && x.abs() <= 1.0;
-        agree("asin", &wc!("asin"), unit, |x, _| asin(x), |x, _| mp::asin(x));
-        agree("acos", &wc!("acos"), |x, _| x.abs() <= 1.0, |x, _| acos(x), |x, _| mp::acos(x));
-        agree("atan2", &wc!("atan2"), |y, x| fin(x) && fin(y), atan2, mp::atan2);
+        agree(
+            "asin",
+            &wc!("asin"),
+            unit,
+            |x, _| asin(x),
+            |x, _| mp::asin(x),
+        );
+        agree(
+            "acos",
+            &wc!("acos"),
+            |x, _| x.abs() <= 1.0,
+            |x, _| acos(x),
+            |x, _| mp::acos(x),
+        );
+        agree(
+            "atan2",
+            &wc!("atan2"),
+            |y, x| fin(x) && fin(y),
+            atan2,
+            mp::atan2,
+        );
     }
 
     #[test]
@@ -788,14 +869,16 @@ mod tests {
         agree(
             "pow",
             &wc!("pow"),
-            |x, y| {
-                fin(x) && x > 0.0 && fin(y) && (y * crate::fmath::ln(x)).abs() < 740.0
-            },
+            |x, y| fin(x) && x > 0.0 && fin(y) && (y * crate::fmath::ln(x)).abs() < 740.0,
             pow,
             mp::pow,
         );
-        for (x, y) in [(1781.0, 5.0), (194701.5625, 2.5), (2f64.powi(-537), 2.0)] {
-            assert_eq!(pow(x, y).to_bits(), mp::pow(x, y).unwrap().to_bits(), "{x} {y}");
+        for (x, y) in [(1781.0, 5.0), (194701.5625, 2.5), (dd::pow2(-537), 2.0)] {
+            assert_eq!(
+                pow(x, y).to_bits(),
+                mp::pow(x, y).unwrap().to_bits(),
+                "{x} {y}"
+            );
         }
     }
 

@@ -108,7 +108,11 @@ fn round_log(h: f64, l: f64, e: f64, abs: f64, accurate: impl FnOnce() -> f64) -
         return dd::round_or(h, l, FAR, accurate);
     }
     let a = h.abs();
-    let err = if a < 0.001953125 { NEAR * a } else { abs + REL * a };
+    let err = if a < 0.001953125 {
+        NEAR * a
+    } else {
+        abs + REL * a
+    };
     dd::round_ball_or(h, l, err, accurate)
 }
 

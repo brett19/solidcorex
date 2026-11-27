@@ -78,7 +78,10 @@ fn payne_hanek(x: f64) -> (i32, (f64, f64)) {
 }
 
 /// `1/6` as a double-double.
-const SIXTH: (f64, f64) = (f64::from_bits(0x3fc5555555555555), f64::from_bits(0x3c65555555555555));
+const SIXTH: (f64, f64) = (
+    f64::from_bits(0x3fc5555555555555),
+    f64::from_bits(0x3c65555555555555),
+);
 
 /// `(sin y, cos y)` as double-doubles, for the reduced `|y| <= 0.8`: `|y| = a + t` with
 /// `a = i/64` from the table and `t = h + yl` (`|h| <= 1/128`), and
@@ -150,6 +153,7 @@ fn neg(v: (f64, f64)) -> (f64, f64) {
 
 /// `sin(x + quarters pi/2)` rounded, for the reduction `(n, y)` of a finite `x`: the
 /// fast kernel when its test passes, else [`slow`].
+#[allow(clippy::inline_always)] // one call site per function; out of line it costs a call on the fast path
 #[inline(always)]
 fn sin_quadrant(x: f64, quarters: i32, n: i32, y: (f64, f64)) -> f64 {
     let q = (n + quarters) & 3;
@@ -290,7 +294,11 @@ pub(super) fn tan(x: f64) -> f64 {
     }
     let (n, y) = reduce(x);
     let (s, c) = (fast_sin(y), fast_cos(y));
-    let (hi, lo) = if n & 1 == 0 { dd::div(s, c) } else { neg(dd::div(c, s)) };
+    let (hi, lo) = if n & 1 == 0 {
+        dd::div(s, c)
+    } else {
+        neg(dd::div(c, s))
+    };
     if dd::rounds_to_hi(hi, lo, FAST_TEST) {
         return hi;
     }
@@ -307,7 +315,11 @@ fn tan_slow(x: f64, n: i32, y: (f64, f64)) -> f64 {
     const REL: f64 = 5.849050204022881e-25; // 2^-80.5
     const ABS: f64 = 2.350988701644575e-38; // 2^-125
     let (s, c) = precise(y);
-    let (h, l) = if n & 1 == 0 { dd::div(s, c) } else { neg(dd::div(c, s)) };
+    let (h, l) = if n & 1 == 0 {
+        dd::div(s, c)
+    } else {
+        neg(dd::div(c, s))
+    };
     let err = REL * h.abs() + ABS * (1.0 + h * h);
     dd::round_ball_or(h, l, err, || accurate::tan(x))
 }
@@ -329,7 +341,11 @@ mod tests {
                 let (n, y) = reduce(x);
                 slow(x, quarters, (n + quarters) & 3, y)
             };
-            assert_eq!(got.to_bits(), want.to_bits(), "sin(x + {quarters} pi/2), x = {x:e}");
+            assert_eq!(
+                got.to_bits(),
+                want.to_bits(),
+                "sin(x + {quarters} pi/2), x = {x:e}"
+            );
         }
         let want = if !x.is_finite() {
             f64::NAN

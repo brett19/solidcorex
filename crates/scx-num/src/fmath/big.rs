@@ -273,12 +273,7 @@ impl Big {
         if let Some(s) = out.first_mut() {
             *s = carry as u64;
         }
-        Self::from_parts(
-            self.neg,
-            self.exp + 64,
-            out.get(..=p).unwrap_or(&[]),
-            p,
-        )
+        Self::from_parts(self.neg, self.exp + 64, out.get(..=p).unwrap_or(&[]), p)
     }
 
     /// `self / k`, for `k >= 1`.
@@ -350,7 +345,7 @@ impl Big {
 
     /// The double nearest the value (ties to even), with subnormals and overflow to
     /// infinity as IEEE 754 rounds them.
-    pub(super) fn to_f64(&self) -> f64 {
+    pub(super) fn to_f64(self) -> f64 {
         if self.is_zero() {
             return if self.neg { -0.0 } else { 0.0 };
         }
@@ -437,7 +432,7 @@ mod tests {
         }
         assert_eq!(b(0.1).add(b(0.2)).to_f64(), 0.1 + 0.2);
         assert_eq!(b(0.1).mul(b(0.2)).to_f64(), 0.1 * 0.2);
-        assert_eq!(b(1.0).sub(b(1.0)).is_zero(), true);
+        assert!(b(1.0).sub(b(1.0)).is_zero());
         assert_eq!(b(3.0).sub(b(5.0)).to_f64(), -2.0);
         assert_eq!(b(1.0).div(b(3.0)).to_f64(), 1.0 / 3.0);
         assert_eq!(b(2.0).sqrt().to_f64(), 2.0f64.sqrt());
@@ -470,10 +465,7 @@ mod tests {
         // MAX + half an ulp ties to even: infinity.
         let half_ulp = b(1.0).mul_pow2(970);
         assert_eq!(b(f64::MAX).add(half_ulp).to_f64(), f64::INFINITY);
-        assert_eq!(
-            b(f64::MAX).add(half_ulp).sub(b(1.0)).to_f64(),
-            f64::MAX
-        );
+        assert_eq!(b(f64::MAX).add(half_ulp).sub(b(1.0)).to_f64(), f64::MAX);
         assert_eq!(round_ball(&tie, 8), None);
         assert_eq!(round_ball(&up, 8), Some(1.0 + f64::EPSILON));
     }

@@ -42,9 +42,14 @@ fn atan_ratio<const P: bool>(n: (f64, f64), d: (f64, f64)) -> (f64, f64) {
     finish_any::<P>(i, dd::div(num, den))
 }
 
+#[allow(clippy::inline_always)] // a const generic per phase: inlined, `P = false` drops the precise tail
 #[inline(always)]
 fn finish_any<const P: bool>(i: f64, d: (f64, f64)) -> (f64, f64) {
-    if P { finish_precise(i, d) } else { finish(i, d) }
+    if P {
+        finish_precise(i, d)
+    } else {
+        finish(i, d)
+    }
 }
 
 /// The relative error of the double-double results with [`finish`], twice its bound. The
@@ -62,7 +67,10 @@ const FAST_ERR: f64 = 4.4032290636799467e-20; // 2^-64.3
 const PRECISE_ERR: f64 = 3.308722450212111e-24; // 2^-78
 
 /// `1/3` as a double-double.
-const THIRD: (f64, f64) = (f64::from_bits(0x3fd5555555555555), f64::from_bits(0x3c75555555555555));
+const THIRD: (f64, f64) = (
+    f64::from_bits(0x3fd5555555555555),
+    f64::from_bits(0x3c75555555555555),
+);
 
 /// [`finish`] with the series' `d^3 (-1/3 + w)` in double-double: `w` (below `2^-16.3`)
 /// within `2^-67.3`, so the tail within `2^-81.3 |d|`; the truncation (`d^13/13`) below
@@ -125,6 +133,7 @@ pub(super) fn atan(x: f64) -> f64 {
 }
 
 /// `atan(a)` for `a` in `[2^-27, 2^60]`.
+#[allow(clippy::inline_always)] // inlined into each phase, so `P` folds away
 #[inline(always)]
 fn atan_pos<const P: bool>(a: f64) -> (f64, f64) {
     if a > 1.0 {
@@ -167,7 +176,11 @@ pub(super) fn atan2(y: f64, x: f64) -> f64 {
         // m x): atan(y/x) rounds as y/x does. A subnormal ratio can be a midpoint, and
         // one just below 2^-1022 can round up to it, so only a quotient above it passes.
         let q = y / x;
-        return if q.abs() > f64::MIN_POSITIVE { q } else { accurate::atan2(y, x) };
+        return if q.abs() > f64::MIN_POSITIVE {
+            q
+        } else {
+            accurate::atan2(y, x)
+        };
     } else {
         let (h, l) = atan2_finite::<false>(ay, ax, x_neg);
         dd::round_or(h, l, FAST_ERR, || atan2_slow(ay, ax, x_neg, y, x))
@@ -184,6 +197,7 @@ fn atan2_slow(ay: f64, ax: f64, x_neg: bool, y: f64, x: f64) -> f64 {
 /// `atan2(ay, ax)` for finite positive `ay` and `ax`, mirrored to `pi - ...` when `x`
 /// was negative, before the sign of `y`: a result of at least `2^-60` (the tiny ratios
 /// are handled before), so normal.
+#[allow(clippy::inline_always)] // inlined into each phase, so `P` folds away
 #[inline(always)]
 fn atan2_finite<const P: bool>(ay: f64, ax: f64, x_neg: bool) -> (f64, f64) {
     let (mn, mx) = if ay > ax { (ax, ay) } else { (ay, ax) };
@@ -227,6 +241,7 @@ pub(super) fn asin(x: f64) -> f64 {
 }
 
 /// `asin(a)` for `a` in `[2^-27, 1]`.
+#[allow(clippy::inline_always)] // inlined into each phase, so `P` folds away
 #[inline(always)]
 fn asin_pos<const P: bool>(a: f64) -> (f64, f64) {
     let (c, p) = cos_of_sin(a);
@@ -375,7 +390,11 @@ mod tests {
         } else {
             acos_dd(x, a)
         };
-        let want = if x.is_nan() || a > 1.0 { f64::NAN } else { acos_slow(x, a) };
+        let want = if x.is_nan() || a > 1.0 {
+            f64::NAN
+        } else {
+            acos_slow(x, a)
+        };
         assert_eq!(acos(x).to_bits(), want.to_bits(), "acos({x:e})");
         if a < 1.0 {
             let (hi, lo) = fast_acos(x, a);
