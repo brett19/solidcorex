@@ -1660,3 +1660,46 @@ for these shapes is T10's, not here: the tests carry their own small ones.
 - **`Warning`** is `{ entity, kind: WarningKind }` with `AccuracyRaised` and `Coincident` (the 12.4 row 4 cross-operand identification). **`Raise`** is `{ entity, before, after: Accuracy }`; 09's `cert` field is left out until `Cert` is wanted by a consumer.
 - **`Done::new`** is `const`; chaining is `op2(&done.body, ...)`.
 - Tests: construction and splitting a `Cx`, chaining three `Done`s, seed draws fixed by inputs, `Report` order independent of input order.
+
+### 14.7 MK1 as built (11-27)
+
+`crates/scx-make` (new, in `layers.txt` after `scx-record`; depends on `scx-brep`, `scx-curve`, `scx-num`, `scx-surface`; `scx-testkit` as a dev-dependency). Public API:
+
+```rust
+pub fn block(frame: &Frame, size: [Length; 3], doc: &Document) -> Result<Made<BlockFaces>, MakeError>;
+pub struct Made<R> { pub body: Brep, pub faces: R }
+pub struct BlockFaces { pub bottom: FaceId, pub top: FaceId, pub sides: [FaceId; 4] }  // Copy
+#[non_exhaustive] pub enum MakeError { Refused(Refusal), Defect(Defect), Full(TableFull) }  // kind(), name(), Display, Error
+#[non_exhaustive] pub enum Refusal { Size { dimension: Dimension, value: f64, floor: Length } }
+#[non_exhaustive] pub enum Defect { Curve(CurveError), Absent(Absent), Interval, PlaneFrame, Pcurve(PcurveWriteError), Finish(FinishCause) }
+#[non_exhaustive] pub enum Dimension { X, Y, Z }
+```
+
+**What it does.** The block has its corner at the frame's origin and extents along the frame's axes (the placement T9's `solid::block(..).place(&frame)` answers for; the pin's `create_box` also puts its lower corner at `origin`). It writes 8 vertices, 12 edges and 6 planar faces into one `Draft`: each edge once, each face's ring counter-clockwise about its outward normal, front in the outside's shell and back in the solid's, both regions decided at construction, pcurves from `Draft::exact_loops` (BR5, every `bound` `None`), then `finish`. No stitch, no orientation pass, no ray fire. Vertices are `origin + (x dx + y dy + z dz)`, so each rounds once.
+
+**The pattern MK2 reuses.**
+- A `const` table of roles over corners (`Role { ring, axis, outward }`) and a record struct of `FaceId`s in the table's order. `BlockFaces` documents its order (bottom, top, sides counter-clockwise from the face on `y = 0`).
+- `assembly::Assembly` (crate-private): `new(doc)` (outside shell, solid region and shell), `vertex(point)`, `line(a, b)` (shared edge by end ids, with the sense of a use from `a`), `edge(curve, interval, ends)` (an unshared curved edge), `face(surface, &[loops of (EdgeId, Sense)])` and `finish()`. MK2 adds a collapsed-edge method (poles, apex) and seam edges to it; nothing else in it is block-specific.
+- `Made<R>` is the S6 shape. No `Changes` is returned: a new body has no inputs.
+- `MakeError` is `#[non_exhaustive]` and has no `Unsupported` yet because no cause exists; MK2 adds `Unsupported(..)` with `HornTorus` (D3) and `Dimension` gains `Radius` and the like.
+
+**Decisions, with cases.**
+- **The size floor is the document's zone, strictly above.** For: 72 §4.2 says "greater than the document's resolution", a box whose size is within the zone has its two ends one place, and `finish` would refuse it as a `Defect` where a `Refused` names the size. Against: the pin's floor is a constant (`SM_EFF_ZERO`), so a size between the two is a different answer at a coarse document. Kept: the answer follows the document, and the test pins both sides at the default and at a 0.01 mm document. NaN and infinity are refused with the same variant (a typed `value`, not a string).
+- **`Defect::Finish` carries the `FinishCause`, not `Box<Unfinished>`.** For: `Unfinished` holds the whole draft (not `PartialEq`, large; `result_large_err`), and a constructor's own draft has nothing for a caller to repair. Against: the draft would help to debug. A `Defect` is our bug and the test suite has no case of it; the cause names the lowest failing entity.
+- **A straight edge is `origin + t (q - p)` over `[0, 1]` from the lower vertex id to the higher.** Same as the testkit generators. Against: a unit-speed line would read lengths off the interval. Kept: the line is exact with no rounding of a direction, and `Line::through` is the type's own form.
+- **Vertices are created on first use, in the order of the role table**, so ids are the same on every run and no table is indexed (the workspace denies indexing). Asserted by a bit-for-bit repeat.
+- **No result contract run.** S8: ends at `finish`.
+
+**Pin tests.**
+- `boxes_far_from_the_origin_build_closed_and_valid`: ported with all 17 rows (sides 2e-4 to 5e3 at 1e3 to 1e12). Each asserts the 6/12/8 counts, two regions and shells, two opposite fins on each edge, front in the outside shell and back in the solid's, every pcurve a `Line2` with no bound, every vertex a corner within 4 ulp of the offset, and the volume and area (from the divergence theorem over the faces, about the frame origin, as there is no mass crate yet) against `solid::block`. The `check_brep` Level2 verdict is replaced by `finish` plus these. Not ported: the pin's second half, the quarter `create_cylindrical_box` rows at 1e3 to 1e8. A partial primitive is `Unsupported` by name until a caller needs it (§4.2). It is a removal on purpose: the rows proved that a cylinder's tangent test did not scale with the corner's position, which belongs to MK2's cylinder at a far frame (one row there).
+- `small_boxes_at_1e4_answer_as_at_the_origin`: ported; cubes of 1e-4 and 5e-5 at 1e4 answer as at the origin, and both answers are a built 6/12/8 body (the pin only said "the same answer", which a shared refusal would also satisfy).
+- `api_primitives`' size refusals: for the box, `invalid_inputs_are_rejected_before_the_kernel`'s box line becomes `a_size_that_is_not_finite_and_above_the_resolution_is_refused_naming_it` (zero, negative, NaN, both infinities, the zone itself and half of it, each on each axis, the variant naming the dimension, the value and the floor, kind `Refused`, name `size`). The sphere, cylinder, cone, pyramid and torus refusals (`a_sphere_radius_not_above_zero_is_refused_naming_the_radius`, `a_torus_whose_tube_crosses_its_axis_is_refused_naming_the_radii`, the horn torus one, `validators_match_upstream`'s cone line) belong to MK2, which owns those constructors. The pyramid is not in the step-4 constructor list (§4.2), so its refusal is not ported.
+- Added, with no pin counterpart: `the_size_floor_is_the_documents_resolution`; `a_rotated_block_matches_the_closed_form_and_its_roles` (a skew frame with unequal sizes: the eight corners, each face's outward normal and plane offset by role, volume, area and centroid against `solid::block(..).place(..)` to 1e-13); `every_pcurve_lies_on_its_edge` (plane of the pcurve at t equals the edge's curve at t, and a use's ends are its vertices); `making_is_deterministic`.
+
+**Measurements** (throwaway timer, not committed; release build, 20,000 repetitions after 2,000 warm-up, a 2 x 3 x 4 block at the world frame, build plus `finish`): **18.3 us per body**, the same on two runs. The build/finish split and the pin's `create_box` were not measured. Added work against the pin: none (the pin stitches and fires a ray; this does neither).
+
+**Deviations from 72.** None in signature (§4.3 gives `block(&Frame, [Length; 3], &Document)`). `MakeError::Defect` carries a cause where §4.2 says "carrying the `Unfinished` report" (above).
+
+**Open questions.** (1) Whether `Defect::Finish` should keep the draft for a debugging build. (2) `Dimension` as an enum of axes grows a variant per constructor's size; a `&'static str` would not grow, but would be untyped, and MK2 will say which it wants once it has seen five constructors' sizes.
+
+**Proposed 04 row.** "`scx-make` (MK1): constructors take a frame and `Length` sizes, are built with their topology known and return `Made<R> { body, faces }` with a typed face record; a size must be finite and above the document's zone or it is `Refused { Size }`; the result's only check is `Draft::finish`, whose refusal is a `Defect`. Change if: a caller needs the draft after a defect, or a constructor needs a size the zone does not bound."
