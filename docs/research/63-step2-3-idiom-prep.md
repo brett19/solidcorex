@@ -5813,6 +5813,7 @@ is always in.
 | `regions` | `RegionWithoutShell` | every shell's region | always (one pass over shells; cheap) |
 | `edge_check` | `EdgeEndOffVertex`, `EdgeTooShort` | the edge's curve and accuracy, its ends' points and accuracy | EG = written ∪ created edges ∪ the star of each written vertex, live only |
 | `use_check`, `closure`, `pole_check`, `face_check` | `OutsideDomain`, `PcurveOffEdge`, `UseEndOffVertex`, `PeriodJump`, `LoopOpenInUv`, `DogLeg`, `PoleNotVertex`, `LoopOrientation`, `FaceWraps` | the face, its uses' edges and their ends | FG = written ∪ created faces ∪ the faces of EG's final fins, live only |
+| `radial::check` (BR10, §6.15) | `RadialOrder` | the edge's curve and accuracy, its fins; each fin face's surface, uses, pcurves and bounds | the plan edges, live with more than two fins |
 
 The plan's selected instances are walked in id order inside each rule (`Sel::Only` takes a
 sorted list), and the rules run in the full check's order, so the order argument holds
@@ -5973,6 +5974,152 @@ snapshot hooks, extended with marks.
 2. An incremental body union, and refitting the tree in place when a few face boxes change
    instead of rebuilding it (the face replace row).
 3. The 8-samples question and research 66 were not taken up.
+
+### 6.15 BR10 as built (11-27)
+
+Decided by analysis and an adversarial pass. Proposed for review; not yet ruled.
+
+`finish` refuses an edge of more than two fins whose faces do not leave it counter-clockwise
+in the fins' order (research 72 §12, D5). Before this, the order was the caller's duty
+alone, and a wrong order passed whenever the sides happened to agree.
+
+**The public surface.** One new cause:
+
+```rust
+pub enum GeometryCause {
+    // ...
+    /// The faces of `edge`'s fins do not leave it in the fins' radial order, proved at
+    /// edge parameter `at`.
+    RadialOrder { edge: EdgeId, at: f64 },   // name "radial_order"
+}
+```
+
+The rule is the crate-private `check/radial.rs`. It runs last, after the faces' geometry
+pass, in both the full and the touched check.
+
+**When the sides already decide.** `edge_structure` checks that the region after each fin
+(Front after a forward fin, Back after a reversed one) is the region before the next. With
+the sectors about an edge naming distinct regions, that rule already forces the cyclic
+order. Two blocks of two regions sharing an edge, listed out of order, are refused by
+`SidesDisagree`. The geometry decides only where the sectors repeat: several blocks of
+*one* solid region touching along an edge, where the sectors are the solid and the outside
+by turns. A reversal of the four fins, or a swap of opposite fins, keeps the sectors
+alternating and passes the sides. Only the faces' directions show the order.
+
+**The rule.**
+
+1. At edge parameter `s`, each fin's face leaves in `d = σ N × T̂`. `T̂` is the edge's unit
+   tangent (`Approach::Above`), `N` the sensed surface normal at the use's pcurve point at
+   `s` (pcurves run over the edge's own interval), and `σ` the fin's sense.
+2. The counter-clockwise gap from `d_a` to `d_b` is `atan2((d_a × d_b)·T̂, d_a·d_b)` mapped
+   into (0, 2π). Taken around the fins in order, the true gaps add up to 2πk, with k = 1
+   exactly when the order is right.
+3. Each direction is known within its *spread*:
+   `κ_max·(reach(use bound) + reach(edge)) + γ₆₄`. The lift stands within the use's reach
+   and the edge's of the true edge; the normal turns by at most the largest principal
+   curvature (from the first and second fundamental forms) times that distance.
+4. Each gap has bounds from the spreads. **Wrong** iff the sum of lower bounds exceeds
+   2π(1 + slack): a second turn is proved, so a refusal is a proof. **Right** iff no gap is
+   undecided and the upper bounds sum below 4π. Otherwise **undecided**.
+5. Samples are taken at 0.5, then at 0.25 and 0.75 only while undecided. If all three are
+   undecided, the caller's order stands.
+
+*Tangent faces.* Two directions within their spreads of each other (|θ| ≤ spread_a +
+spread_b) are faces tangent along the edge. They are ordered by their bend
+`c = σ·κ_n(d)`, the normal curvature along the leaving direction with the use's sense. A
+larger bend is further counter-clockwise.
+
+- If b bends more, b is just after a: the gap's upper bound is the spread sum.
+- If b bends less, b is just before: the lower bound is 2π minus the spread sum.
+- Equal bends (within `bend_spread = 4κ²ρ + 1e-9·max(κ, |bend|)`) leave the gap undecided.
+
+Why this ordering holds within the resolution: in any reading where θ has the other sign,
+the two faces cross at distance `h* = 2θ/Δc` from the edge. Within that distance they stay
+within κρ²/2 of each other, which is coincident at the resolution. Past it, every reading
+shows the order the bends give.
+
+**Cases for and against the choices.**
+
+- *Sample at the midpoint first* (chosen). For: one sample decides every edge the tests
+  build, at one normal per fin. Against: a wrong order that is right at the midpoint and
+  wrong elsewhere passes. It needs faces crossing inside the edge's interior, which another
+  rule (face intersection) should catch, not this one. Change if a body with such a cross
+  reaches finish.
+- *Refuse only on a proof* (chosen). For: a spread or tangent tie never refuses a valid
+  body, so the rule adds no false refusals. Against: an order that is wrong only within
+  the spreads passes. The caller's order is then as good as any reading the resolution
+  can tell apart.
+- *A new `GeometryCause`, not a `StructureCause`*. For: it reads surfaces and curves, as the
+  geometry causes do, and runs after the faces' check. Against: a caller fixing fin
+  order might look in structure first. The cause names the edge.
+- *Sum of gaps, not pairwise comparisons*. For: one bound covers any number of fins and
+  any permutation; a cyclic shift of the list is the same order and is accepted. Against:
+  none found.
+
+**The touched closure (the §6.14 table gains a row).**
+
+| Rule (check fn) | Causes | Reads | Instances checked |
+|---|---|---|---|
+| `radial::check` | `RadialOrder` | the edge's curve and accuracy, its fins; each fin face's surface, uses, pcurves and bounds | the plan edges, live with more than two fins |
+
+Every write that feeds an instance is already in `plan.edges`: a geometry write (the edge's
+first-write snapshot), a fin write, the face hook's marks (every edge a written face's uses
+name), and created edges. A resolution change is whole mode, which checks all edges. The
+rule reads no vertex. A sabotage (running the rule over the geometry pass's edge set
+instead of the plan edges) fails both touched tests.
+
+**Testkit.** BR8's generator gains two kinds:
+
+- `checker`: an (n+1)×(n+1) one-layer checkerboard. Its black cells are blocks; diagonal
+  neighbours share an edge of four fins, and each block is its own region. n² four-fin
+  edges.
+- `touching`: the same blocks, all in one solid region and shell. It is the body where only
+  the geometry decides.
+
+`Invariant::RadialOrder` in the wreck now reverses a four-fin edge of `touching` (was a
+three-fin edge of `stack`). Its finish cause changed from `sides_disagree` to
+`radial_order`, as the rule now names it.
+
+**Tests.** `tests/radial.rs`:
+
+- four-fin edges in order finish (checker, touching; seeds 0–5, sizes 1–3);
+- two regions out of order give `sides_disagree`;
+- touching blocks reversed or swapped give exactly `RadialOrder { edge, at: 0.5 }`;
+- every one of the 24 orders of a four-fin edge is judged as the oracle judges it (rotations
+  finish; every other order is refused by sides or by the rule; all three outcomes reached);
+- reversing every two-fin edge of block, cylinder, sphere and quad sheet still finishes.
+
+The rule's unit tests cover the turning order, an unknown direction only letting an order
+stand, tangent faces (a plane and a cylinder lying on it) ordered by bend, and equal bends
+left to the caller. `tests/touched.rs` gains a valid "rotate fins" and an invalid "swap
+fins" op, and a test over stack, checker and touching where the radial rule is reached in
+touched mode (22 times at the seeds run) with the touched and full checks agreeing.
+
+**Measurements** (release, full check, throwaway timers):
+
+| Body | Faces | Edges (>2 fins) | Radial pass | Geometry pass | Finish |
+|---|---|---|---|---|---|
+| block, size 41 | 10,086 | 20,172 (0) | 12–20 µs | 6.9–7.4 ms | 15–17.7 ms |
+| checker, size 40 | 5,046 | 8,492 (1,600) | 0.56–0.57 ms | 3.4 ms | 7.7–7.9 ms |
+| touching, size 40 | 5,046 | 8,492 (1,600) | 0.55–0.56 ms | 3.4 ms | 7.7–7.9 ms |
+
+About 0.7 ns per two-fin edge (one branch) and about 350 ns per four-fin edge (four
+normals, four curvatures, one midpoint sample). On a body where every edge has four fins,
+the rule is about 7% of finish.
+
+**Open questions and change-ifs.**
+
+1. The tangent's error is not in the spread. An edge curve's tangent is exact for lines and
+   circles; for a NURBS edge it is not bounded. Change if a NURBS edge with tangent faces is
+   refused.
+2. NURBS curvature is not certified (`CURVATURE_SLACK = 1e-9` is generous for analytic kinds
+   and inferred for NURBS).
+3. A fin's use is found by a linear scan of its face's uses. Fine at the faces tested; a
+   face of thousands of uses on many-fin edges would want the use index.
+4. `bend_spread` is INFERRED, not derived from a bound on the second partials' rounding.
+5. Once the midpoint decides, the edge's interior is not checked (see above).
+6. The weak points are near-flat cones and NURBS faces with high curvature near the edge,
+   where the spread grows and more pairs are undecided. None is in the tests.
 
 ## 7. `scx-record`
 

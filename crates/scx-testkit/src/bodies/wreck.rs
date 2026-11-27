@@ -182,12 +182,14 @@ pub fn broken(invariant: Invariant, seed: u64, size: usize) -> Result<Option<Dra
             d
         }
         Invariant::RadialOrder => {
-            let mut d = base(Kind::Stack, size)?;
+            // Four fins whose sectors are the solid and the outside by turns: reversed, the
+            // sides still agree, and only the geometry shows the order is wrong.
+            let mut d = base(Kind::Touching, size)?;
             let e = d
                 .edges()
-                .find(|e| e.fins().len() >= 3)
+                .find(|e| e.fins().len() >= 4)
                 .map(scx_brep::Edge::id)
-                .ok_or(missing("three-fin edge"))?;
+                .ok_or(missing("four-fin edge"))?;
             adjacency(&mut d, e)?.reverse();
             d
         }

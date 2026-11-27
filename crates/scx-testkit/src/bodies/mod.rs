@@ -20,7 +20,8 @@
 //!
 //! The size is the subdivision: faces per side for a block, a sheet and a torus, wall
 //! faces for a cylinder, a cone and a sphere, sides past three for a prism and a hole, and
-//! blocks past one for a stack. Size 0 is size 1.
+//! blocks past one for a stack, and cells past one along a side for a checkerboard. Size
+//! 0 is size 1.
 
 pub mod check;
 mod curved;
@@ -74,11 +75,18 @@ pub enum Kind {
     /// `n + 1` blocks stacked, each its own solid region, sharing faces: edges of three
     /// fins in radial order.
     Stack,
+    /// An `(n + 1) x (n + 1)` checkerboard of blocks, each its own solid region, diagonal
+    /// neighbours sharing an edge: `n^2` edges of four fins in radial order.
+    Checker,
+    /// The checkerboard's blocks as one solid region of one shell, touching along the
+    /// edges of four fins: sectors the solid and the outside by turns, so only the
+    /// geometry fixes the radial order.
+    Touching,
 }
 
 impl Kind {
     /// Every generator.
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 13] = [
         Self::Block,
         Self::Prism,
         Self::QuadSheet,
@@ -90,6 +98,8 @@ impl Kind {
         Self::Holed,
         Self::Cavity,
         Self::Stack,
+        Self::Checker,
+        Self::Touching,
     ];
 
     /// A stable name.
@@ -106,6 +116,8 @@ impl Kind {
             Self::Holed => "holed",
             Self::Cavity => "cavity",
             Self::Stack => "stack",
+            Self::Checker => "checker",
+            Self::Touching => "touching",
         }
     }
 
@@ -219,6 +231,8 @@ pub fn generate(kind: Kind, seed: u64, size: usize) -> Result<Generated> {
         Kind::Holed => planar::holed(&mut dice, n),
         Kind::Cavity => planar::cavity(&mut dice, n),
         Kind::Stack => planar::stack(&mut dice, n),
+        Kind::Checker => planar::checker(&mut dice, n, false),
+        Kind::Touching => planar::checker(&mut dice, n, true),
         Kind::Cylinder => curved::cylinder(&mut dice, n),
         Kind::Cone => curved::cone(&mut dice, n),
         Kind::Sphere => curved::sphere(&mut dice, n),
@@ -296,6 +310,23 @@ fn counts(kind: Kind, n: usize) -> Counts {
             4 * n + 8,
             20 * n + 24,
         ),
+        Kind::Checker | Kind::Touching => {
+            // The black cells, the inner lattice edges they share, and the lattice
+            // points they reach: all but the two corners on white cells when `n` is odd.
+            let blocks = ((n + 1) * (n + 1)).div_ceil(2);
+            let r = if kind == Kind::Checker { blocks + 1 } else { 2 };
+            let v = 2 * ((n + 2) * (n + 2) - 2 * (n % 2));
+            (
+                r,
+                r,
+                6 * blocks,
+                6 * blocks,
+                12 * blocks - n * n,
+                0,
+                v,
+                24 * blocks,
+            )
+        }
     };
     let euler = v as i64 - (e - c) as i64 + f as i64 - (l - f) as i64;
     Counts {

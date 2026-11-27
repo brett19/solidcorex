@@ -77,6 +77,9 @@ fn euler_characteristics_are_the_topology() {
     assert_eq!(euler(Kind::Cavity), 4);
     // Three blocks: the complex of three cells.
     assert_eq!(euler(Kind::Stack), 4);
+    // Five blocks, two blocks to each of four shared edges: 2 x 5 - 4.
+    assert_eq!(euler(Kind::Checker), 6);
+    assert_eq!(euler(Kind::Touching), 6);
 }
 
 /// The signed area of a face's outer loop in uv, its pcurves sampled over their edges'
@@ -203,9 +206,10 @@ fn each_broken_body_breaks_its_invariant_alone() {
     }
 }
 
-/// `finish`'s cause for each broken invariant (63 §6.7). Shell openness, misorientation and
-/// a radial order out of turn all show as the sides of neighbouring faces disagreeing; a
-/// period jump and a pole gap as a loop open in uv.
+/// `finish`'s cause for each broken invariant (63 §6.7, §6.15). Shell openness and
+/// misorientation show as the sides of neighbouring faces disagreeing; a period jump and a
+/// pole gap as a loop open in uv. The broken radial order is one the sides cannot show
+/// (the touching blocks' edge reversed), so the geometry's rule refuses it.
 const FINISH_CAUSE: [(Invariant, &str); 17] = [
     (Invariant::OutsideVoid, "outside_region"),
     (Invariant::LiveReferences, "dangling_reference"),
@@ -222,7 +226,7 @@ const FINISH_CAUSE: [(Invariant, &str); 17] = [
     (Invariant::VertexOffEdge, "edge_end_off_vertex"),
     (Invariant::ShellOpen, "sides_disagree"),
     (Invariant::Misoriented, "sides_disagree"),
-    (Invariant::RadialOrder, "sides_disagree"),
+    (Invariant::RadialOrder, "radial_order"),
     (Invariant::OrphanVertex, "loose_vertex"),
 ];
 

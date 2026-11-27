@@ -4,10 +4,11 @@
 //!
 //! Every generated body (BR8) is finished, then edited a few rounds at random: valid edits
 //! that keep it finishing (a vertex nudged within the resolution, a face replaced, a wire
-//! added and removed, records written unchanged) and edits that break one rule or several
-//! (records removed under their references, loose vertices and edges, fins dropped or
-//! doubled, uses re-sensed, sides swapped, empty shells and regions, ends swapped, a curve
-//! left pending). Each round `finish` and `finish_checking_all` must agree; where both
+//! added and removed, records written unchanged, an edge's fins listed from another fin)
+//! and edits that break one rule or several (records removed under their references,
+//! loose vertices and edges, fins dropped, doubled or swapped out of radial order, uses
+//! re-sensed, sides swapped, empty shells and regions, ends swapped, a curve left
+//! pending). Each round `finish` and `finish_checking_all` must agree; where both
 //! finish, the bodies' boxes must agree too, with each other and with boxes built afresh.
 //! A round that finishes is the base of the next, so drafts of drafts, base wires and
 //! seeded boxes are covered.
@@ -54,13 +55,21 @@ fn edges(d: &Draft) -> Vec<EdgeId> {
 fn vertices(d: &Draft) -> Vec<VertexId> {
     d.vertices().map(scx_brep::Vertex::id).collect()
 }
+/// The edges of more than two fins.
+fn radial_edges(d: &Draft) -> Vec<EdgeId> {
+    d.edges()
+        .filter(|e| e.fins().len() > 2)
+        .map(scx_brep::Edge::id)
+        .collect()
+}
 fn shells(d: &Draft) -> Vec<ShellId> {
     d.shells().map(scx_brep::Shell::id).collect()
 }
 
 /// The ops, by name; the first `VALID` keep a valid body valid.
-const OPS: [&str; 37] = [
+const OPS: [&str; 39] = [
     "nudge vertex",
+    "rotate fins",
     "loosen vertex",
     "loosen edge",
     "replace face",
@@ -82,6 +91,7 @@ const OPS: [&str; 37] = [
     "re-sense use",
     "swap sides",
     "reverse fins",
+    "swap fins",
     "drop fin",
     "double fin",
     "wire with fins",
@@ -98,7 +108,7 @@ const OPS: [&str; 37] = [
     "pending edge",
     "move wire",
 ];
-const VALID: usize = 13;
+const VALID: usize = 14;
 
 /// A recorded accuracy far inside any check's reach, but enough to grow boxes.
 fn loose(dice: &mut Dice) -> Arc<Recorded> {
@@ -260,6 +270,17 @@ fn apply(d: &mut Draft, op: usize, dice: &mut Dice) -> Option<()> {
             let e = dice.pick(&edges(d))?;
             d.adjacency_mut(e)?.fins.reverse();
         }
+        "rotate fins" => {
+            // The same cyclic order, listed from another fin.
+            let e = dice.pick(&radial_edges(d))?;
+            d.adjacency_mut(e)?.fins.rotate_left(1);
+        }
+        "swap fins" => {
+            // Opposite fins of four, or two of three: out of radial order, and where the
+            // sectors are a solid and the outside by turns, with the sides still agreeing.
+            let e = dice.pick(&radial_edges(d))?;
+            d.adjacency_mut(e)?.fins.swap(0, 2);
+        }
         "drop fin" => {
             let e = dice.pick(&edges(d))?;
             d.adjacency_mut(e)?.fins.pop()?;
@@ -361,12 +382,16 @@ fn outcome(
     r.map(|(b, _)| b).map_err(|u| u.cause)
 }
 
-#[test]
-fn finishing_the_touched_records_agrees_with_checking_all() {
+/// Runs four rounds of edits on each of `kinds` for 32 seeds, each op drawn by `draw`, and
+/// checks `finish` against `finish_checking_all`; the outcomes by cause, and the ops run.
+fn rounds(
+    kinds: &[Kind],
+    mut draw: impl FnMut(&mut Dice) -> usize,
+) -> (BTreeMap<String, usize>, [usize; OPS.len()]) {
     let doc = Document::default();
     let mut tally: BTreeMap<String, usize> = BTreeMap::new();
     let mut ran = [0usize; OPS.len()];
-    for kind in Kind::ALL {
+    for &kind in kinds {
         for seed in 1..=32u64 {
             let mut dice = Dice(Rng::new(seed * 7919 + kind as u64));
             let size = 1 + dice.below(3);
@@ -389,12 +414,7 @@ fn finishing_the_touched_records_agrees_with_checking_all() {
                 };
                 let n = 1 + dice.below(3);
                 for _ in 0..n {
-                    // Valid ops half the time, so rounds go on.
-                    let op = if dice.chance(1, 2) {
-                        dice.below(VALID)
-                    } else {
-                        dice.below(OPS.len())
-                    };
+                    let op = draw(&mut dice);
                     if apply(&mut d, op, &mut dice).is_some() {
                         ran[op] += 1;
                     }
@@ -428,9 +448,48 @@ fn finishing_the_touched_records_agrees_with_checking_all() {
         }
     }
     eprintln!("outcomes: {tally:#?}");
+    (tally, ran)
+}
+
+#[test]
+fn finishing_the_touched_records_agrees_with_checking_all() {
+    // Valid ops half the time, so rounds go on.
+    let (tally, ran) = rounds(&Kind::ALL, |dice| {
+        if dice.chance(1, 2) {
+            dice.below(VALID)
+        } else {
+            dice.below(OPS.len())
+        }
+    });
     for (op, n) in OPS.iter().zip(ran) {
         assert!(n > 0, "op {op} never ran");
     }
-    // The run reaches many causes, not one.
+    // The run reaches many causes, not one, the radial order among them.
     assert!(tally.len() >= 12, "{tally:?}");
+    assert!(tally.contains_key("Geometry RadialOrder"), "{tally:?}");
+}
+
+#[test]
+fn the_radial_order_is_checked_where_an_edit_wrote_its_inputs() {
+    // Bodies with edges of three and four fins, under the edits that write what the rule
+    // reads: fins, faces, edges, and every record at once.
+    let ops = [
+        "rotate fins",
+        "swap fins",
+        "reverse fins",
+        "replace face",
+        "touch face",
+        "touch edge",
+        "face into new",
+        "move rigidly",
+        "mirror",
+    ]
+    .map(|name| OPS.iter().position(|&o| o == name).unwrap());
+    let (tally, _) = rounds(&[Kind::Stack, Kind::Checker, Kind::Touching], |dice| {
+        ops[dice.below(ops.len())]
+    });
+    assert!(
+        tally.get("Geometry RadialOrder").is_some_and(|&n| n >= 10),
+        "{tally:?}"
+    );
 }
