@@ -510,7 +510,7 @@ fn the_operands_are_read_only() {
 
 /// A 10 x 10 x 20 box turned 45 degrees about z, then about x, its edge crossing the cube's
 /// edge y = z = 10 at depth `d`.
-fn crease(d: f64, doc: Document) -> Brep {
+pub(super) fn crease(d: f64, doc: Document) -> Brep {
     let (c, s) = (0.5_f64.sqrt(), 0.5_f64.sqrt());
     // Rx(45) * Rz(45).
     let rz = |v: [f64; 3]| [c * v[0] - s * v[1], s * v[0] + c * v[1], v[2]];

@@ -3933,3 +3933,51 @@ BO7 builds what D5 allows: a result whose two solids share only a vertex, and a 
 **Open questions.** (1) The three gaps above, for BO. (2) The units of the contact and cavity cases (above): a stage charging for work it does not do would show here. (3) CK3's "found, not mine" (`recipes.rs`'s genus asserting an odd Euler characteristic on an edge contact) is probably the same per-sheet count above (not run here): it counts the shared vertex once; the difftest counts per sheet and passes. (4) The pin's pairs-tried comparison needs a per-stage number.
 
 **Proposed 04 row.** "DT3 (72 §14.38): `t_slice` runs every Boolean recipe in scx beside the pin, each judged against truth. Outcomes are matched by name (`NonManifold`, `SsiPair` with its two kinds as a set), the built ones get volume, area, topology (counted per sheet), classification, contract (an empty body judged for what it is, a four-fin edge with `Contacts::Radial`), mesh, determinism and, on the four `issue_1462` recipes, lineage from `Changes`. scx: 429 pass, 0 fail, 12 recorded gaps (a cylinder less itself, two jog-vertex cases, one crease mesh). `Report::work` (a public value, summed over steps) is committed as test data in `slice_work.txt`; a rise over 10% fails, `SCX_BLESS_WORK=1` rewrites. No counter in kernel code; the pin's pairs-tried comparison would need a stage-level number that is not public. Change if: a recorded gap stops failing (the entry then fails the run) or the per-stage work needs a gate."
+
+### 14.42 BO8 as built (11-27)
+
+**What was asked.** The four gaps DT3 recorded in `scx_gaps` (§14.38): `cylinder-minus-itself` failing `Defect(Seeds)`, the jog cells of `coplanar-offset-0.1c` and `-0.5c`, the non-manifold mesh vertex of `crease-0.3c` (pinched or wrong), and `Report::work` on operands that do not cross. Each fix removes its entry; `scx_gaps()` is now empty.
+
+**1. A cylinder less itself (`faceface.rs`, `lying`).** Cause: the cuts along an edge were sorted and deduplicated by vertex (`dedup_by_key(|c| c.1)`). A closed edge (each circle of the cylinder) has both ends at the seam's one vertex, so its far end's cut went and `pieces` took the whole circle for a stub. The circles were then never shared between the copies, each cap joined the wall in one component with an `On` piece, and the seed cross-check refused it. Now two cuts at one vertex are one only where the curve's point halfway between their parameters is within the coincidence of the first (one point named twice); the two ends of a closed edge, a curve's length apart, both stay. The subtract is empty, union and intersect are the cylinder (3 faces, 3 edges, 2 vertices, 40π).
+- For: it states what the dedup meant (one place), and keeps every other case as it was (two cuts at one vertex a short way apart are still one).
+- Against: the midpoint test assumes a curve between two cuts at one vertex is either short or goes round; an edge that leaves its vertex and comes back within the zone half way along would be wrongly kept as two cuts. No body in the tests or recipes has one. The like dedup in `sections` is left unchanged: no recipe reaches it with a closed edge.
+
+**2. Jog cells on merged near-coplanar fronts (`build.rs`, `join_plan`).** Two kept line edges either side of a vertex were joined only when collinear to 1e-12. The fronts 0.1c and 0.5c apart merge to one face (the faces' coincidence), but the edges of the two operands on its boundary lie on lines `dy` apart, so the jog vertices stayed. The line join now takes the coincidence of the two edges (`ops.coincidence` of their recorded accuracies, the zone when both are exact): every end of both edges within it of the kept line, the directions not opposed, the two accuracies equal. The kept edge's line carries the joined edge.
+- For: the faces were merged by the same tolerance, so the edges on their boundary now follow the faces; truth's cells (6, 12, 8) are met from 0 to 5e-6, and past the zone (4e-5) the step stays (10, 24, 16).
+- Against: the joined line moves the far end by up to the zone, within the edges' own coincidence; nothing is recorded for it. Edges of unequal recorded accuracy are not joined (conservative; no case needs it).
+
+**3. `crease-0.3c` is pinched.** Settled for pinched. At d = 0.3c the overlap of the cube and the turned block is a tetrahedron about d across: the crease meets z = 10 and y = 10 about 2d apart, and the cube's edge crosses the block's faces about 2d apart, so all its corners are within about 1.5d of one point, under the resolution. Stage 3 merges them, and any body at this resolution has the two lumps meet at one vertex (4 edges there; 2 solid regions, volume 3000): a D5 vertex contact. The mesh's `NonManifoldVertex` is at that vertex and nowhere else. T12's recipe now says `pinched()` for k below 1 (the oracle is right; the recipe asked the wrong invariants). It stays `Open`.
+- For: the geometry forces it, and the contract passes the body as built.
+- Against: a kernel that settled the merged points as one lump (dropping the tetrahedron) would have a manifold body and lose nothing to `pinched()`, since `Open` accepts it either way.
+
+**4. `Report::work` on operands that do not cross (`pinch::nest`).** Found with side-channel prints of `budget.used()` per stage (removed): stages 1 to 5 charged 6 units on `disjoint-union`, then `shells` charged about 2,330, all in `nest`'s `volume_sign` of each material shell. That is real work, but its answer was already known: each face set there is one operand shell, whole. Build now passes `nest` the signs it can read off the operands (`whole_shell`): a set whose faces are each the only piece of their operand face, all of one operand, all the faces of one operand shell, each once (no sheet), with the material on one side of that shell. Its surface is that shell's, so the sign is the operand's: negative for a shell of the outside, positive for the one shell of a region. A region of several shells (a cavity in an operand) is not settled this way and is measured, as are sets a link touched.
+- For: no answer changes; only the measuring of signs the operands already give goes. Classification already trusts the operands to face outward, which is what this reads.
+- Against: it trusts operand orientation where `volume_sign` would have caught an inside-out operand at this point. It would not have saved such an operand: classification answers wrong first.
+- Not done: `nest` still clones and finishes the draft for boxes and point-in-shell tests (not budget units; about 180 µs is the whole of `disjoint-union` now). Lazily finishing it is a further step.
+
+**Work baseline (`slice_work.txt`).** Re-blessed for falls only, and one new line: `disjoint-union` 2,334 to 6, `box-cavity` 2,336 to 8, `corner-contact-union` 2,403 to 75, `crease-0.3c` 2,961 to 64 (the cube's and the block's faces are uncut there, so each lump is an operand shell whole), and `cylinder-minus-itself` 214 (new: it now builds). Nothing rose; `edge-contact-union` stays 5,713 (its shells are linked at the four-fin edge, so their signs are measured).
+
+**Tests.** New in `scx-boolean`'s `tests/cleanup.rs`: `a_cylinder_less_itself_is_empty_and_with_itself_is_itself`, `near_coplanar_fronts_merge_without_their_jog` (dy 0, 1e-8, 1e-6, 5e-6 and 4e-5), `a_crease_inside_the_resolution_of_an_edge_pinches_at_one_vertex` (the mesh's only violations are non-manifold vertices at the pinch), `shells_that_are_operand_shells_whole_cost_no_volume_signs` (apart and cavity below a crossing pair's work, right volumes and regions; an operand with a cavity still nests). `whole::crease` is shared with them. No test removed. `t_slice`: every check passes, no gap recorded.
+
+**Measurements** (release, server, median per call of `scx_run` over 41 runs, 9 for the last two; before = the branch base).
+
+| recipe | before µs | after µs | work before | work after |
+|---|---|---|---|---|
+| cylinder-minus-itself | 477 (fails) | 468 | — | 214 |
+| block-minus-itself | 760 | 724 | 1,056 | 1,056 |
+| coplanar-offset-0.1c | 613 | 607 | 586 | 586 |
+| coplanar-offset-0.5c | 601 | 584 | 586 | 586 |
+| crease-0.3c | 1,259 | 252 | 2,961 | 64 |
+| crease-3c | 290 | 260 | 139 | 139 |
+| disjoint-union | 831 | 182 | 2,334 | 6 |
+| box-cavity | 806 | 181 | 2,336 | 8 |
+| corner-contact-union | 891 | 249 | 2,403 | 75 |
+| edge-contact-union | 2,008 | 1,930 | 5,713 | 5,713 |
+| plate-12 | 197,000 to 209,000 | 192,000 to 197,000 | 26,496 | 26,496 |
+| gear-60 | 88,000 to 91,000 | 88,000 to 91,000 | 26,300 | 26,300 |
+
+plate-12 and gear-60 are two alternating runs each (the machine's noise is larger than any difference); their work is unchanged. The new checks (the midpoint test per repeated vertex, four point-line distances per line join, a pass over each face set's faces) are not visible in any of these.
+
+**Open questions.** (1) `edge-contact-union`'s 5,713 units: linked shells' signs are measured; the link could carry the operands' signs too. (2) `nest`'s clone and finish when no test needs the body. (3) The `sections` dedup by vertex has the same shape as the one fixed; no case reaches it.
+
+**Proposed 04 row.** "BO8 (72 §14.42): the four DT3 gaps closed. A closed edge's two ends at one vertex are two cuts (a cylinder less itself is empty); line edges either side of a vertex join within their coincidence (near-coplanar fronts lose their jog cells); `crease-0.3c` is a D5 vertex pinch, so T12 marks it `pinched()`; a face set that is one operand shell whole takes its volume sign from the operand, so nesting measures none (work on disjoint, cavity and corner-contact cases 2,300 to under 100; no rise anywhere). `scx_gaps` empty. Change if: an edge returns to its vertex within the zone half way along, or operands are no longer trusted to face outward."

@@ -1239,42 +1239,8 @@ struct ScxGap {
 /// scx's recorded shortfalls against truth (72 §14.38). They are scx's to fix, not truth's
 /// to change.
 fn scx_gaps() -> Vec<ScxGap> {
-    vec![
-        ScxGap {
-            recipe: "coplanar-offset-0.1c",
-            checks: &[Check::Topology],
-            shows: "cells [12, 16]",
-            reason: "the two fronts 0.1c apart merge to one face, but the four jog vertices and four jog edges of the step stay (12 vertices, 16 edges; truth 8, 12)",
-        },
-        ScxGap {
-            recipe: "coplanar-offset-0.5c",
-            checks: &[Check::Topology],
-            shows: "cells [12, 16]",
-            reason: "as coplanar-offset-0.1c, at 0.5c",
-        },
-        ScxGap {
-            recipe: "crease-0.3c",
-            checks: &[Check::Mesh],
-            shows: "NonManifoldVertex",
-            reason: "a crease 0.3c inside the cube's edge builds, and its mesh has a vertex where the surface meets itself; T12 leaves the recipe open but asks the mesh invariants of any body built",
-        },
-        ScxGap {
-            recipe: "cylinder-minus-itself",
-            checks: &[
-                Check::Outcome,
-                Check::Volume,
-                Check::Area,
-                Check::Topology,
-                Check::Classification,
-                Check::Valid,
-                Check::Manifold,
-                Check::Mesh,
-                Check::Deterministic,
-            ],
-            shows: "Defect(Seeds",
-            reason: "a cylinder less itself fails the seed cross-check (BO6) on its first face, where truth is the empty body (block-minus-itself builds it)",
-        },
-    ]
+    // None open: BO8 closed the last four (72 §14.42).
+    Vec::new()
 }
 
 fn mm(v: f64) -> scx_num::units::Length {
