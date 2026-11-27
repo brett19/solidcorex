@@ -93,10 +93,10 @@ fn check_one(name: &str, a: &Side, b: &Side, expect: Expect) -> Closed<Intersect
         panic!("{name}: General, truth {truth:?}");
     };
     let (curves, points) = match answer {
-        Intersection::Coincident { on_a, on_b } => {
+        Intersection::Coincident(pieces) => {
             assert_eq!(truth, Ok(Section::Coincident), "{name}");
-            assert_eq!((*on_a, *on_b), (a.extent, b.extent), "{name}");
             assert_eq!(expect, Expect::Truth, "{name}: coincident, expected apart");
+            judge_overlap(name, a, b, pieces);
             return got;
         }
         Intersection::Empty => (&[][..], &[][..]),
@@ -106,6 +106,8 @@ fn check_one(name: &str, a: &Side, b: &Side, expect: Expect) -> Closed<Intersect
     let tpieces: Vec<ssi::Piece> = match (&truth, expect) {
         (Ok(Section::Coincident), Expect::Apart) => {
             assert!(curves.is_empty() && points.is_empty(), "{name}: {answer:?}");
+            // No piece: no sample of the first's extent well inside the second's.
+            judge_overlap(name, a, b, &[]);
             return got;
         }
         (Ok(Section::Coincident), Expect::Nappes) => Vec::new(),
@@ -113,14 +115,18 @@ fn check_one(name: &str, a: &Side, b: &Side, expect: Expect) -> Closed<Intersect
         (Ok(Section::Empty), Expect::Truth) => Vec::new(),
         (other, _) => panic!("{name}: truth {other:?}, got {answer:?}"),
     };
-    let on = |q: Point3| {
+    // On both surfaces: a crossing to rounding, a touch within the tolerance (63 SS4).
+    let on = |q: Point3, contact: Contact| {
         let (da, db) = (
             cs::distance(&a.kind, arr(q)).unwrap(),
             cs::distance(&b.kind, arr(q)).unwrap(),
         );
-        let scale = 1.0 + q.to_vec().length();
+        let tol = match contact {
+            Contact::Transversal => ON * (1.0 + q.to_vec().length()),
+            Contact::Tangent => touch_tol(q),
+        };
         assert!(
-            da <= ON * scale && db <= ON * scale,
+            da <= tol && db <= tol,
             "{name}: {q:?} off the surfaces by {da:e}, {db:e}"
         );
         assert!(
@@ -131,11 +137,16 @@ fn check_one(name: &str, a: &Side, b: &Side, expect: Expect) -> Closed<Intersect
     for c in curves {
         let (t0, t1) = (c.span.min(), c.span.max());
         for i in 0..=32 {
-            on(c.curve.point(t0 + (t1 - t0) * f64::from(i) / 32.0));
+            on(
+                c.curve.point(t0 + (t1 - t0) * f64::from(i) / 32.0),
+                c.contact,
+            );
         }
         assert_eq!(class(&c.curve), Class::Circle, "{name}: {c:?}");
+        // A touch may stand for crossings within the tolerance (the owed points judge it).
         assert!(
             expect == Expect::Nappes
+                || c.contact == Contact::Tangent
                 || tpieces
                     .iter()
                     .any(|q| truth_class(&q.curve) == Class::Circle
@@ -159,7 +170,7 @@ fn check_one(name: &str, a: &Side, b: &Side, expect: Expect) -> Closed<Intersect
         }
     }
     for q in points {
-        on(q.point);
+        on(q.point, q.contact);
         assert_eq!(q.contact, Contact::Tangent, "{name}: {q:?}");
     }
     for q in owed(a, b, &tpieces) {
@@ -172,11 +183,13 @@ fn check_one(name: &str, a: &Side, b: &Side, expect: Expect) -> Closed<Intersect
             .map(|x| x.point.distance(q))
             .fold(f64::INFINITY, f64::min);
         assert!(
-            near_curve.min(near_point) <= 1e-7 * (1.0 + q.to_vec().length()),
+            near_curve.min(near_point) <= 1e-7 * (1.0 + q.to_vec().length())
+                || absorbed(a, b, curves, points, q),
             "{name}: truth point {q:?} missed by {}; got {got:?}; truth {tpieces:?}",
             near_curve.min(near_point),
         );
     }
+    judge_depth(name, a, b, curves);
     got
 }
 
@@ -185,7 +198,7 @@ fn shape(got: &Closed<Intersection>) -> (u8, usize, usize) {
     match got.as_solved() {
         None => (0, 0, 0),
         Some(Intersection::Empty) => (1, 0, 0),
-        Some(Intersection::Coincident { .. }) => (2, 0, 0),
+        Some(Intersection::Coincident(p)) => (2, p.len(), 0),
         Some(Intersection::Pieces { curves, points }) => (3, curves.len(), points.len()),
         Some(_) => unreachable!(),
     }
@@ -213,7 +226,7 @@ fn is_empty(got: &Closed<Intersection>) -> bool {
 }
 
 fn is_coincident(got: &Closed<Intersection>) -> bool {
-    matches!(got.as_solved(), Some(Intersection::Coincident { .. }))
+    matches!(got.as_solved(), Some(Intersection::Coincident(_)))
 }
 
 fn at(o: Point3, z: Vec3, x: Vec3) -> Frame {
@@ -640,6 +653,170 @@ fn torus_pairs() {
     )));
 }
 
+// ---------------------------------------------------------------- depth
+
+/// Whether every piece of an answer touches (none crosses).
+fn touches(got: &Closed<Intersection>) -> bool {
+    match got.as_solved() {
+        Some(Intersection::Pieces { curves, points }) => {
+            curves.iter().all(|c| c.contact == Contact::Tangent)
+                && points.iter().all(|q| q.contact == Contact::Tangent)
+        }
+        _ => true,
+    }
+}
+
+/// The depth rule (63 SS4): meridians within the tolerance of each other between two
+/// crossings touch once, at the deepest point; past it they cross twice (or miss).
+#[test]
+fn depth_rule() {
+    let depths = [0.5 * TOL, 0.0, -0.5 * TOL, 4.0 * TOL, -4.0 * TOL];
+    // (circles, points) for each depth: a touch, a touch, a touch, two crossings, none.
+    let want = |touch: (usize, usize)| [touch, touch, touch, (2, 0), (0, 0)];
+    let s = sphere(world(), 2.0, Sense::Forward, TURN, ALL);
+    for (n, (&d, w)) in depths.iter().zip(want((1, 0))).enumerate() {
+        // A cylinder inside the sphere by `d` at the equator.
+        let c = cylinder(world(), 2.0 - d, Sense::Forward, TURN, [-1.0, 1.0]);
+        let got = check(&format!("sphere cylinder {n}"), &s, &c, Expect::Truth);
+        assert_eq!(counts(&got), w, "sphere cylinder {n}: {got:?}");
+        assert_eq!(touches(&got), n != 3, "sphere cylinder {n}: {got:?}");
+    }
+    for (n, (&d, w)) in depths.iter().zip(want((0, 1))).enumerate() {
+        // Two spheres overlapping by `d`: two crossings would be one circle; a touch a point.
+        let b = sphere(
+            at(p(0.0, 0.0, 3.0 - d), v(0.0, 0.0, 1.0), v(1.0, 0.0, 0.0)),
+            1.0,
+            Sense::Forward,
+            TURN,
+            ALL,
+        );
+        let got = check(&format!("spheres {n}"), &s, &b, Expect::Truth);
+        let w = if n == 3 { (1, 0) } else { w };
+        assert_eq!(counts(&got), w, "spheres {n}: {got:?}");
+        assert_eq!(touches(&got), n != 3, "spheres {n}: {got:?}");
+    }
+    let t = torus(world(), 2.0, 0.5, Sense::Forward, TURN, TURN);
+    for (n, (&d, w)) in depths.iter().zip(want((1, 0))).enumerate() {
+        // A cylinder in the tube's outside by `d`.
+        let c = cylinder(world(), 2.5 - d, Sense::Forward, TURN, [-1.0, 1.0]);
+        let got = check(&format!("torus cylinder {n}"), &t, &c, Expect::Truth);
+        assert_eq!(counts(&got), w, "torus cylinder {n}: {got:?}");
+        assert_eq!(touches(&got), n != 3, "torus cylinder {n}: {got:?}");
+    }
+}
+
+// ---------------------------------------------------------------- overlaps
+
+fn pieces(got: &Closed<Intersection>) -> Vec<analytic::Overlap> {
+    match got.as_solved() {
+        Some(Intersection::Coincident(p)) => p.clone(),
+        other => panic!("not coincident: {other:?}"),
+    }
+}
+
+/// Whether a piece has no width (a touch within the tolerance).
+fn thin(o: &analytic::Overlap) -> bool {
+    let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+    for q in &o.on_a {
+        lo = [lo[0].min(q.x), lo[1].min(q.y)];
+        hi = [hi[0].max(q.x), hi[1].max(q.y)];
+    }
+    hi[0] - lo[0] <= 1e-12 || hi[1] - lo[1] <= 1e-12
+}
+
+/// Coincident surfaces of revolution (63 SS4): the overlap of their patches, judged by
+/// samples of the first's extent; arcs that wrap past the other's start give two pieces;
+/// patches that only touch give one piece of no width; a sphere's frame tilted against the
+/// other's is `General`.
+#[test]
+fn overlaps() {
+    let c = cylinder(
+        world(),
+        1.0,
+        Sense::Forward,
+        [0.25 * PI, 1.75 * PI],
+        [-2.0, 2.0],
+    );
+    // Through the first's gap at `0`: `[1.5 pi, 2.5 pi]`, from a frame turned half a turn.
+    let wrap = cylinder(
+        frame(p(0.0, 0.0, 1.0), v(0.0, 0.0, 1.0), v(-1.0, 0.0, 0.0)),
+        1.0,
+        Sense::Reversed,
+        [0.5 * PI, 1.5 * PI],
+        [-1.0, 3.0],
+    );
+    let got = check("wrapped", &c, &wrap, Expect::Truth);
+    assert_eq!(pieces(&got).len(), 2, "{got:?}");
+    // Heights end to end, the axis reversed.
+    let stacked = cylinder(
+        frame(p(0.0, 0.0, 4.0), v(0.0, 0.0, -1.0), v(1.0, 0.0, 0.0)),
+        1.0,
+        Sense::Forward,
+        TURN,
+        [0.0, 2.0],
+    );
+    let got = check("stacked", &c, &stacked, Expect::Truth);
+    let p0 = pieces(&got);
+    assert!(!p0.is_empty() && p0.iter().all(thin), "{got:?}");
+    // Arcs end to end.
+    let after = cylinder(
+        world(),
+        1.0,
+        Sense::Forward,
+        [1.75 * PI, 1.95 * PI],
+        [-1.0, 1.0],
+    );
+    let got = check("arcs end to end", &c, &after, Expect::Truth);
+    let p1 = pieces(&got);
+    assert!(p1.len() == 1 && thin(&p1[0]), "{got:?}");
+    // A cone and the same cone from a turned frame (a moved origin's radius is not exact
+    // in doubles).
+    let k = cone(world(), 1.0, 0.5, Sense::Forward, TURN, [0.0, 2.0]);
+    let other = cone(
+        frame(p(0.0, 0.0, 0.0), v(0.0, 0.0, 1.0), v(0.0, 1.0, 0.0)),
+        1.0,
+        0.5,
+        Sense::Forward,
+        [0.5 * PI, 1.5 * PI],
+        [-0.5, 3.0],
+    );
+    let got = check("cone part", &k, &other, Expect::Truth);
+    assert_eq!(pieces(&got).len(), 1, "{got:?}");
+    // Tori: tube arcs that overlap from a frame turned upside down.
+    let t = torus(world(), 2.0, 0.5, Sense::Forward, TURN, [0.0, PI]);
+    let flipped = torus(
+        frame(p(0.0, 0.0, 0.0), v(0.0, 0.0, -1.0), v(1.0, 0.0, 0.0)),
+        2.0,
+        0.5,
+        Sense::Forward,
+        [0.0, PI],
+        [0.5 * PI, 1.5 * PI],
+    );
+    let got = check("tube arcs", &t, &flipped, Expect::Truth);
+    assert!(!pieces(&got).is_empty(), "{got:?}");
+    // Spheres: caps that overlap, about one axis either way.
+    let cap = sphere(world(), 2.0, Sense::Forward, [0.0, PI], [-0.5, 1.0]);
+    let under = sphere(
+        frame(p(0.0, 0.0, 0.0), v(0.0, 0.0, -1.0), v(0.0, 1.0, 0.0)),
+        2.0,
+        Sense::Reversed,
+        TURN,
+        [0.0, FRAC_PI_2],
+    );
+    // Two pieces: the second's seam (its frame's x, the world's y) cuts the first's arc.
+    let got = check("caps", &cap, &under, Expect::Truth);
+    assert_eq!(pieces(&got).len(), 2, "{got:?}");
+    // The same sphere from a frame tilted off the first's axis: no rectangle in either's uv.
+    let tilted = sphere(
+        frame(p(0.0, 0.0, 0.0), v(0.0, 0.3, 1.0), v(1.0, 0.0, 0.0)),
+        2.0,
+        Sense::Forward,
+        TURN,
+        [-0.5, 0.5],
+    );
+    assert!(solve(&cap, &tilted).is_general());
+}
+
 // ---------------------------------------------------------------- near one axis
 
 /// An axis moved by much less than the tolerance over the extent is the same axis; moved by
@@ -799,6 +976,7 @@ fn random_pairs() {
         let got = check(&name, &a, &b, expect);
         let (k, _, _) = shape(&got);
         seen[usize::from(k)] += 1;
+
         solved += 1;
     }
     assert!(skipped * 20 < solved, "{skipped} undecided of {solved}");

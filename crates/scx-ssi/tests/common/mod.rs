@@ -172,6 +172,10 @@ pub fn in_angle(t: f64, [a0, a1]: [f64; 2], tol: f64) -> bool {
         return true;
     }
     let t = a0 + (t - a0).rem_euclid(TAU);
+    if tol < 0.0 {
+        // By `-tol` inside: off both ends.
+        return t >= a0 - tol && t <= a1 + tol;
+    }
     t <= a1 + tol || t >= a0 + TAU - tol
 }
 
@@ -304,6 +308,11 @@ pub fn contact(c: ssi::Contact) -> Contact {
 /// The distance from `q` to the curve over `[t0, t1]`: the nearest of a coarse sampling,
 /// then a golden-section search beside it.
 pub fn distance_to(c: &Curve, t0: f64, t1: f64, q: Point3) -> f64 {
+    nearest_on(c, t0, t1, q).0
+}
+
+/// The nearest point to `q` on the curve over `[t0, t1]`, and its distance ([`distance_to`]).
+pub fn nearest_on(c: &Curve, t0: f64, t1: f64, q: Point3) -> (f64, Point3) {
     const N: usize = 256;
     let f = |t: f64| c.point(t).distance(q);
     let h = (t1 - t0) / N as f64;
@@ -331,5 +340,155 @@ pub fn distance_to(c: &Curve, t0: f64, t1: f64, q: Point3) -> f64 {
             a = c1;
         }
     }
-    best.0.min(f(0.5 * (a + b)))
+    let m = 0.5 * (a + b);
+    if f(m) < best.0 {
+        (f(m), c.point(m))
+    } else {
+        (best.0, c.point(best.1))
+    }
+}
+
+/// Whether the straight run from `p` to `q` stays within `tol` of both surfaces (sampled):
+/// the surfaces are no further apart than `tol` between the two (the depth rule, 63 SS4).
+pub fn shallow(a: &Side, b: &Side, p: Point3, q: Point3, tol: f64) -> bool {
+    (0..=16).all(|i| {
+        let x = p + (q - p) * (f64::from(i) / 16.0);
+        cs::distance(&a.kind, arr(x)).unwrap() <= tol
+            && cs::distance(&b.kind, arr(x)).unwrap() <= tol
+    })
+}
+
+/// The tolerance a touch's piece is held to: on both surfaces within the caller's, as the
+/// depth rule puts it at the deepest point between the crossings it stands for.
+pub fn touch_tol(q: Point3) -> f64 {
+    TOL * (1.0 + 1e-6) + ON * (1.0 + q.to_vec().length())
+}
+
+/// Whether truth point `q` is stood for by a touch: the run to the nearest point of a
+/// tangent piece stays within the tolerance of both surfaces.
+pub fn absorbed(
+    a: &Side,
+    b: &Side,
+    curves: &[analytic::IntersectionCurve],
+    points: &[analytic::IntersectionPoint],
+    q: Point3,
+) -> bool {
+    let near = curves
+        .iter()
+        .filter(|c| c.contact == Contact::Tangent)
+        .map(|c| nearest_on(&c.curve, c.span.min(), c.span.max(), q).1)
+        .chain(
+            points
+                .iter()
+                .filter(|x| x.contact == Contact::Tangent)
+                .map(|x| x.point),
+        );
+    let mut near: Vec<Point3> = near.collect();
+    near.sort_by(|x, y| x.distance(q).total_cmp(&y.distance(q)));
+    near.first()
+        .is_some_and(|&t| shallow(a, b, q, t, touch_tol(q)))
+}
+
+/// The depth judge (63 SS4): no two crossings of an answer should have been one touch.
+/// Crossing curves in pairs (a point of one, the nearest of the other) and a closed
+/// crossing curve across itself (opposite points) must not stay within half the tolerance
+/// of both surfaces between them.
+pub fn judge_depth(name: &str, a: &Side, b: &Side, curves: &[analytic::IntersectionCurve]) {
+    let cross: Vec<&analytic::IntersectionCurve> = curves
+        .iter()
+        .filter(|c| c.contact == Contact::Transversal)
+        .collect();
+    let half = |q: Point3| 0.5 * TOL - ON * (1.0 + q.to_vec().length());
+    for (i, c) in cross.iter().enumerate() {
+        let (t0, t1) = (c.span.min(), c.span.max());
+        if t1 - t0 >= TAU - 1e-9 && matches!(c.curve, Curve::Circle(_) | Curve::Ellipse(_)) {
+            for t in [t0, t0 + 0.5 * PI] {
+                let (p0, p1) = (c.curve.point(t), c.curve.point(t + PI));
+                assert!(
+                    !shallow(a, b, p0, p1, half(p0)),
+                    "{name}: crossing {c:?} across itself is a touch"
+                );
+            }
+        }
+        for d in &cross[i + 1..] {
+            for f in [0.25, 0.5, 0.75] {
+                let p0 = c.curve.point(t0 + (t1 - t0) * f);
+                let (_, p1) = nearest_on(&d.curve, d.span.min(), d.span.max(), p0);
+                assert!(
+                    !shallow(a, b, p0, p1, half(p0)),
+                    "{name}: crossings {c:?} and {d:?} are one touch"
+                );
+            }
+        }
+    }
+}
+
+/// Whether `q` is in the convex polygon `poly` within `slack` (either way round); a
+/// polygon of no area holds nothing.
+pub fn in_polygon(poly: &[Point2], q: Point2, slack: f64) -> bool {
+    let n = poly.len();
+    if n < 3 {
+        return false;
+    }
+    let cross =
+        |a: Point2, b: Point2, c: Point2| (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+    let area: f64 = (1..n - 1)
+        .map(|i| cross(poly[0], poly[i], poly[i + 1]))
+        .sum();
+    if area.abs() <= 1e-24 {
+        return false;
+    }
+    let s = area.signum();
+    (0..n).all(|i| {
+        let (a, b) = (poly[i], poly[(i + 1) % n]);
+        let len = fmath::hypot(b.x - a.x, b.y - a.y);
+        s * cross(a, b, q) >= -slack * len
+    })
+}
+
+/// Judges a coincidence's pieces (63 SS4) against the two sides: each vertex pair is one
+/// point, on both surfaces' extents; every sample of `a`'s extent well inside `b`'s lies in
+/// a piece, and none well outside `b`'s does.
+pub fn judge_overlap(name: &str, a: &Side, b: &Side, pieces: &[analytic::Overlap]) {
+    for o in pieces {
+        assert!(
+            !o.on_a.is_empty() && o.on_a.len() == o.on_b.len(),
+            "{name}: {o:?}"
+        );
+        for (&pa, &pb) in o.on_a.iter().zip(&o.on_b) {
+            let (qa, qb) = (a.surface.point(pa), b.surface.point(pb));
+            let scale = 1.0 + qa.to_vec().length();
+            assert!(
+                qa.distance(qb) <= 1e-7 * scale,
+                "{name}: vertex pair {pa:?} {pb:?} apart by {:e}",
+                qa.distance(qb)
+            );
+            assert!(
+                inside(a, qa, 1e-7) && inside(b, qa, 1e-7) && inside(b, qb, 1e-7),
+                "{name}: vertex {qa:?} outside an extent"
+            );
+        }
+    }
+    let (lo, hi) = (a.extent.min(), a.extent.max());
+    let n = 40;
+    for i in 0..=n {
+        for j in 0..=n {
+            let (fi, fj) = (f64::from(i) / f64::from(n), f64::from(j) / f64::from(n));
+            let uv = Point2::new(lo.x + (hi.x - lo.x) * fi, lo.y + (hi.y - lo.y) * fj);
+            let q = a.surface.point(uv);
+            if inside(b, q, -MARGIN) {
+                let held = pieces.iter().any(|o| in_polygon(&o.on_a, uv, 1e-9));
+                assert!(
+                    held,
+                    "{name}: {uv:?} ({q:?}) inside both, in no piece: {pieces:?}"
+                );
+            } else if !inside(b, q, MARGIN) {
+                let strict = pieces.iter().any(|o| in_polygon(&o.on_a, uv, -1e-9));
+                assert!(
+                    !strict,
+                    "{name}: {uv:?} ({q:?}) outside b, in a piece: {pieces:?}"
+                );
+            }
+        }
+    }
 }

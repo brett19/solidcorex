@@ -230,7 +230,7 @@ pub mod s {
 /// disagree (`pin_defects::ssi_coaxial`): scx's answer is judged on its own.
 pub mod truth {
     use super::{Case, HEIGHT, side};
-    use crate::t_ssi::truth::{distance_to, kind_of};
+    use crate::t_ssi::truth::{absorbed, depth, distance_to, kind_of, on_tol, overlap};
     use crate::t_surface::Kind;
     use core::f64::consts::TAU;
     use scx_num::frame::Frame;
@@ -241,8 +241,6 @@ pub mod truth {
     use scx_testkit::dd::Dd;
     use scx_testkit::ssi::{self, Section};
 
-    /// How far an answer's point may lie from a surface, relative to `1 + |p|`.
-    const ON: f64 = 1e-9;
     /// How far inside both extents a truth point must be to be owed.
     const MARGIN: f64 = 1e-6;
     /// How near an answer's piece an owed truth point must be, relative to `1 + |p|`.
@@ -300,12 +298,13 @@ pub mod truth {
                     t => Err(format!("General where the truth is {t:?}")),
                 };
             }
-            Closed::Solved(Intersection::Coincident { .. }) => {
-                return if truth == Ok(Section::Coincident) {
-                    Ok(())
-                } else {
-                    Err(format!("coincident; the truth is {truth:?}"))
-                };
+            Closed::Solved(Intersection::Coincident(pieces)) => {
+                if truth != Ok(Section::Coincident) {
+                    return Err(format!("coincident; the truth is {truth:?}"));
+                }
+                let a = crate::t_ssi::x::surface(&side(c.a));
+                let (b, _) = crate::t_ssi::x::surface(&side(c.b));
+                return overlap((&a.0, &a.1), &b, |q, tol| inside_one(c.b, q, tol), pieces);
             }
             Closed::Solved(Intersection::Empty) => (&[][..], &[][..]),
             Closed::Solved(Intersection::Pieces { curves, points }) => (&curves[..], &points[..]),
@@ -319,11 +318,12 @@ pub mod truth {
             Ok(Section::Coincident) if matches!(c.a.0, Kind::Cone { .. }) => Vec::new(),
             t => return Err(format!("the truth is {t:?}")),
         };
-        let on = |q: Point3| -> Result<(), String> {
+        // On both surfaces: a crossing to rounding, a touch within the snap (63 SS4).
+        let on = |q: Point3, contact: Contact| -> Result<(), String> {
             let da = cs::distance(&ka, [q.x, q.y, q.z]).map_err(|e| format!("{e:?}"))?;
             let db = cs::distance(&kb, [q.x, q.y, q.z]).map_err(|e| format!("{e:?}"))?;
-            let scale = 1.0 + q.to_vec().length();
-            if da > ON * scale || db > ON * scale {
+            let tol = on_tol(contact, q);
+            if da > tol || db > tol {
                 return Err(format!("{q:?} off the surfaces by {da:e}, {db:e}"));
             }
             if !inside(c, q, 1e-7) {
@@ -334,7 +334,10 @@ pub mod truth {
         for k in curves {
             let (t0, t1) = (k.span.min(), k.span.max());
             for i in 0..=32 {
-                on(k.curve.point(t0 + (t1 - t0) * f64::from(i) / 32.0))?;
+                on(
+                    k.curve.point(t0 + (t1 - t0) * f64::from(i) / 32.0),
+                    k.contact,
+                )?;
             }
             let q = k.curve.point(t0);
             let near =
@@ -343,17 +346,17 @@ pub mod truth {
                 ssi::Contact::Transversal => Contact::Transversal,
                 _ => Contact::Tangent,
             };
-            // The contact the truth's: or tangent where the truth has two crossing circles
-            // within the tolerance of each other (one tangent circle at the tolerance).
+            // The contact the truth's, or a touch standing for crossings within the snap
+            // (the owed points judge it, 63 SS4).
             let matched = tpieces.is_empty()
-                || tpieces.iter().filter(near).any(|t| contact(t) == k.contact)
-                || (k.contact == Contact::Tangent && tpieces.iter().filter(near).count() > 1);
+                || k.contact == Contact::Tangent
+                || tpieces.iter().filter(near).any(|t| contact(t) == k.contact);
             if !matched {
                 return Err(format!("{k:?} is no truth circle of its contact"));
             }
         }
         for q in points {
-            on(q.point)?;
+            on(q.point, q.contact)?;
         }
         for piece in &tpieces {
             let (n, t0, t1) = match piece.curve {
@@ -371,12 +374,14 @@ pub mod truth {
                     .map(|k| distance_to(&k.curve, k.span.min(), k.span.max(), q))
                     .chain(points.iter().map(|p| p.point.distance(q)))
                     .fold(f64::INFINITY, f64::min);
-                if near > NEAR * (1.0 + q.to_vec().length()) {
+                if near > NEAR * (1.0 + q.to_vec().length())
+                    && !absorbed(&ka, &kb, curves, points, q)
+                {
                     return Err(format!("truth point {q:?} missed by {near:e}"));
                 }
             }
         }
-        Ok(())
+        depth(&ka, &kb, curves)
     }
 }
 
