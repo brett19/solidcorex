@@ -12,10 +12,13 @@
 //! - **Vertices.** An edge no kept face bounds goes, and a vertex no edge ends at; a
 //!   vertex left between two edges on one curve, bounding the same faces, goes too: the
 //!   edges are one.
-//! - **Shells.** Each connected set of kept faces bounds one solid region, with a shell on
-//!   each side: the shells of its lowest face of `a` where it has one, else new ones. A set
-//!   whose material shell encloses negative volume is a cavity of the one set that encloses
-//!   positive volume; more than one such set is [`BooleanUnsupported::Nesting`].
+//! - **Shells.** Each set of kept faces connected across edges two faces bound bounds one
+//!   solid region, with a shell on each side: the shells of its lowest face of `a` where it
+//!   has one, else new ones. An edge more than two bound (the result touching itself or
+//!   another lump along a line) has its fins put in radial order, and the shells meeting
+//!   across each of its sectors are one ([`pinch`]). With more than one set, each shell
+//!   then goes to its region by its volume's sign and the shells holding it: a cavity's
+//!   wall to the lump round it, a lump inside a cavity to that cavity's void.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -24,7 +27,6 @@ use scx_brep::{
     ShellRecord, UseGeom, VertexId,
 };
 use scx_curve::Curve;
-use scx_mass::{MassError, Sign, volume_sign};
 use scx_num::budget::{Budget, Stop};
 use scx_num::extent1d::Extent1d;
 use scx_num::frame::Sense;
@@ -40,6 +42,7 @@ use crate::error::{BooleanDefect, BooleanError, BooleanUnsupported};
 use crate::faceface::Touch;
 use crate::geom::{Operands, Side};
 use crate::imprint::{Imprint, loops_error, ring, shoelace};
+use crate::pinch;
 
 /// Two uses' middles closer than this in uv are one place: a cut, not a seam.
 const SAME_UV: f64 = 1e-7;
@@ -381,9 +384,11 @@ fn splice(
         .map_err(|e| loops_error(e.kind(), side.operand(), survivor))
 }
 
-/// Removes the edges no face bounds; refuses an edge one face bounds or more than two do.
+/// Removes the edges no face bounds and refuses an edge one face bounds; puts the fins of
+/// an edge more than two bound in radial order ([`pinch::order_fins`]).
 fn edges(m: &mut Imprint) -> Result<(), BooleanError> {
     let mut gone = Vec::new();
+    let mut pinched = Vec::new();
     for e in m.draft.edges() {
         let fins: Vec<_> = e.fins().collect();
         let collapsed = matches!(e.shape(), Some(EdgeShape::Collapsed));
@@ -392,15 +397,14 @@ fn edges(m: &mut Imprint) -> Result<(), BooleanError> {
             [_] if collapsed => {}
             [_, _] => {}
             [_] => return Err(defect()),
-            _ => {
-                return Err(BooleanError::Unsupported(BooleanUnsupported::NonManifold {
-                    at: Entity::Edge(e.id()),
-                }));
-            }
+            _ => pinched.push(e.id()),
         }
     }
     for e in gone {
         m.draft.remove_edge(e);
+    }
+    for e in pinched {
+        pinch::order_fins(&mut m.draft, e)?;
     }
     Ok(())
 }
@@ -661,9 +665,20 @@ fn shells(
             }
         }
     }
+    let moved = pinch::link(&mut m.draft, &mut claimed)?;
     unused(m, &claimed);
     if pairs.len() > 1 {
-        nest(m, &pairs, doc, budget, stop)?;
+        let to = |s: ShellId| moved.get(&s).copied().unwrap_or(s);
+        let mirrored: Vec<(ShellId, ShellId)> = pairs
+            .iter()
+            .copied()
+            .filter(|(mat, void)| !moved.contains_key(mat) && !moved.contains_key(void))
+            .filter(|(mat, void)| !moved.values().any(|r| r == mat || r == void))
+            .collect();
+        let mut all: Vec<ShellId> = pairs.iter().flat_map(|&(a, b)| [to(a), to(b)]).collect();
+        all.sort_unstable();
+        all.dedup();
+        pinch::nest(&mut m.draft, &all, &mirrored, doc, budget, stop)?;
         unused(m, &claimed);
     }
     Ok(())
@@ -693,48 +708,5 @@ fn unused(m: &mut Imprint, claimed: &BTreeSet<ShellId>) {
         .collect();
     for r in gone {
         m.draft.remove_region(r);
-    }
-}
-
-/// Puts each set whose material shell encloses negative volume inside the one set that
-/// encloses positive volume, as a cavity.
-fn nest(
-    m: &mut Imprint,
-    pairs: &[(ShellId, ShellId)],
-    doc: Document,
-    budget: &mut Budget,
-    stop: &Stop,
-) -> Result<(), BooleanError> {
-    let (body, _) = m.draft.clone().finish(&doc).map_err(|_| defect())?;
-    let mut positive = Vec::new();
-    let mut negative = Vec::new();
-    for &(mat, void) in pairs {
-        match volume_sign(&body, mat, budget, stop).map_err(mass)? {
-            Sign::Positive => positive.push(mat),
-            Sign::Negative => negative.push((mat, void)),
-            Sign::Zero => return Err(defect()),
-        }
-    }
-    if negative.is_empty() {
-        return Ok(());
-    }
-    let [outer] = positive.as_slice() else {
-        return Err(BooleanError::Unsupported(BooleanUnsupported::Nesting));
-    };
-    let region = m.draft.shell(*outer).ok_or_else(defect)?.record().region;
-    for (mat, void) in negative {
-        m.draft.shell_mut(mat).ok_or_else(defect)?.region = region;
-        let cavity = m.draft.add_region(false).map_err(|_| defect())?;
-        m.draft.shell_mut(void).ok_or_else(defect)?.region = cavity;
-    }
-    Ok(())
-}
-
-/// A mass query's error, as the Boolean's.
-fn mass(e: MassError) -> BooleanError {
-    match e {
-        MassError::Exhausted { limit } => BooleanError::Exhausted { limit },
-        MassError::Cancelled => BooleanError::Cancelled,
-        _ => defect(),
     }
 }

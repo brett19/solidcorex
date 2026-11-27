@@ -10,9 +10,8 @@
 //!   Boolean's and not the operands'.
 //! - *The cases themselves,* judged against their truth. Cases whose recipe says
 //!   `Unsupported` (a touch inside a face, D5) expect that answer by name. The vertex and
-//!   edge contacts stay `#[ignore]`d for BO7: the edge contact's shared edge has four
-//!   faces, which the build answers `NonManifold` until then. Run it with
-//!   `cargo test -p scx-boolean --test recipes -- --ignored`.
+//!   edge contacts are built (BO7): a vertex of two regions, and an edge of four faces in
+//!   radial order.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -181,8 +180,8 @@ fn check(name: &str) {
         }
         Outcome::Unsupported(u) => {
             let e = got.expect_err(name);
-            // D5: a touch inside a face is named `non_manifold` (proposed; BO7 adds the
-            // variant); a pair with no closed form is `ssi_pair`.
+            // D5: a touch inside a face is named `non_manifold`; a pair with no closed
+            // form is `ssi_pair`.
             let want = match u {
                 Unsupported::NonManifold { .. } => "non_manifold",
                 Unsupported::SsiPair { .. } => "ssi_pair",
@@ -253,7 +252,6 @@ fn smaller_hole_cases() {
 // BO7: contacts
 
 #[test]
-#[ignore = "awaits BO7: the edge contact is an edge of four faces"]
 fn blocks_touching_at_a_vertex_or_along_an_edge_are_built() {
     for n in CONTACT_BUILT {
         check(n);

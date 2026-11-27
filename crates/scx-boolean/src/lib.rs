@@ -52,6 +52,7 @@ mod faceface;
 mod geom;
 mod imprint;
 mod pairs;
+mod pinch;
 mod points;
 
 pub use boolean::{BooleanOp, NoItems, boolean};

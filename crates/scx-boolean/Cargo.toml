@@ -22,6 +22,7 @@ scx-surface = { path = "../scx-surface" }
 [dev-dependencies]
 scx-check = { path = "../scx-check" }
 scx-make = { path = "../scx-make" }
+scx-tess = { path = "../scx-tess" }
 scx-testkit = { path = "../scx-testkit" }
 
 [lints]
