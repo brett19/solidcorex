@@ -4484,6 +4484,14 @@ of n uses), release, best of 3: n = 1,000: 1.79 to 1.74 ms; n = 4,000: 9.69 to 6
 16,000: 86.7 to 26.5 ms (5.4 to 1.66 µs per face, now flat in n). The 600-face blocks body is
 unchanged (1.09 µs per face).
 
+**Against BR8's bodies.** Every valid generated body (11 kinds, seeds 0 to 3, sizes 1 to 4)
+finishes, and every broken one (16 of BR8's 17 invariants; `UvGap` has no body yet) is refused,
+each invariant by one cause: `ShellOpen`, `Misoriented` and `RadialOrder` all as `sides_disagree`,
+`PeriodJump` and `PoleGap` as `loop_open_in_uv`, the rest by their own names. BR8's test of the
+three causes BR1 checked now asserts all of them (`finish_refuses_every_break_with_its_cause`).
+BR8's checker and T7 are both independent of `finish`; T7 is plain data for unit tests of the rules,
+BR8's reads a `Draft`. Folding them is left for review.
+
 **Merged with BR3.** Eight of BR3's `Changes` tests make bookkeeping edits that leave no valid
 body (a removed face's edges left loose, a lone vertex in a shell with faces, an edge's ends
 swapped), which the full check refuses. Their `done` now finishes through a test-only

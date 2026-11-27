@@ -203,15 +203,46 @@ fn each_broken_body_breaks_its_invariant_alone() {
     }
 }
 
+/// `finish`'s cause for each broken invariant (63 §6.7). Shell openness, misorientation and
+/// a radial order out of turn all show as the sides of neighbouring faces disagreeing; a
+/// period jump and a pole gap as a loop open in uv.
+const FINISH_CAUSE: [(Invariant, &str); 17] = [
+    (Invariant::OutsideVoid, "outside_region"),
+    (Invariant::LiveReferences, "dangling_reference"),
+    (Invariant::FinWithoutUse, "fin_without_use"),
+    (Invariant::UseWithoutFin, "use_without_fin"),
+    (Invariant::RepeatedFin, "repeated_fin"),
+    (Invariant::SameSenseTwice, "repeated_use"),
+    (Invariant::LoopChained, "loop_not_connected"),
+    (Invariant::PeriodJump, "loop_open_in_uv"),
+    (Invariant::PoleGap, "loop_open_in_uv"),
+    (Invariant::UvGap, "loop_open_in_uv"),
+    (Invariant::IntervalMismatch, "pcurve_interval"),
+    (Invariant::PcurveOffEdge, "pcurve_off_edge"),
+    (Invariant::VertexOffEdge, "edge_end_off_vertex"),
+    (Invariant::ShellOpen, "sides_disagree"),
+    (Invariant::Misoriented, "sides_disagree"),
+    (Invariant::RadialOrder, "sides_disagree"),
+    (Invariant::OrphanVertex, "loose_vertex"),
+];
+
 #[test]
-fn finish_refuses_the_breaks_it_checks_today() {
-    for inv in [
-        Invariant::OutsideVoid,
-        Invariant::LiveReferences,
-        Invariant::FinWithoutUse,
-    ] {
-        let d = broken(inv, 1, 2).unwrap().unwrap();
-        assert!(d.finish(&Document::default()).is_err(), "{inv:?}");
+fn finish_refuses_every_break_with_its_cause() {
+    assert_eq!(FINISH_CAUSE.map(|(inv, _)| inv), Invariant::ALL);
+    for (inv, name) in FINISH_CAUSE {
+        for seed in 0..4 {
+            for size in 1..5 {
+                let Some(d) = broken(inv, seed, size).unwrap() else {
+                    continue;
+                };
+                let refused = d.finish(&Document::default()).unwrap_err();
+                assert_eq!(
+                    refused.cause.name(),
+                    name,
+                    "{inv:?} seed {seed} size {size}"
+                );
+            }
+        }
     }
 }
 
