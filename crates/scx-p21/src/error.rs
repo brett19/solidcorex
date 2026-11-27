@@ -36,6 +36,12 @@ impl P21Error {
         }
     }
 
+    /// Instance `#id` is not what its reader needs.
+    #[must_use]
+    pub const fn entity(id: u64, cause: EntityCause) -> Self {
+        Self::Refused(Refusal::Entity { id, cause })
+    }
+
     /// A syntax error at `line`.
     pub(crate) const fn syntax(line: usize, cause: Syntax) -> Self {
         Self::Refused(Refusal::Syntax { line, cause })
