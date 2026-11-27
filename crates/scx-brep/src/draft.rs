@@ -5,10 +5,12 @@
 //! A draft made by [`Brep::edit`] shares every table with its body until it writes one;
 //! [`Brep::into_draft`] writes in place where the body held the only reference.
 //!
-//! The cell rules (01 §3.2) live here: the mutable accessors are the only way to write a
-//! record, and each resets what the write could make stale. A reset of a cell that holds
-//! nothing is skipped, so an edge write does not copy the records of faces with no filled
-//! cell.
+//! The cell rules (01 §3.2, research 63 §6.9) live here: the mutable accessors are the only
+//! way to write a record, and each resets what the write could make stale. A record's cells
+//! read that record alone, so [`Draft::face_mut`] and [`Draft::edge_mut`] reset the cells
+//! of the record they hand out and nothing else, `add_face` and `add_edge` reset the
+//! incoming record's, and an adjacency or vertex write resets none. A draft has no body
+//! cells; `finish` starts the body's empty.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -111,7 +113,8 @@ impl Draft {
     /// # Errors
     ///
     /// [`TableFull`] when the edge ids have run out.
-    pub fn add_edge(&mut self, edge: EdgeGeom) -> Result<EdgeId, TableFull> {
+    pub fn add_edge(&mut self, mut edge: EdgeGeom) -> Result<EdgeId, TableFull> {
+        edge.cells.reset();
         let id = self.t.edges.push(edge)?;
         // The two parts are in step, so this takes the same slot.
         self.t.adjacency.push(EdgeAdj::default())?;
@@ -157,7 +160,8 @@ impl Draft {
     /// # Errors
     ///
     /// [`TableFull`] when the face ids have run out.
-    pub fn add_face(&mut self, face: FaceRecord) -> Result<FaceId, TableFull> {
+    pub fn add_face(&mut self, mut face: FaceRecord) -> Result<FaceId, TableFull> {
+        face.cells.reset();
         let fins: Vec<_> = face
             .loops
             .iter()
@@ -196,13 +200,8 @@ impl Draft {
         Some(face)
     }
 
-    /// The edge's geometry part, to write. Resets its cells and those of every face it has
-    /// a fin on.
+    /// The edge's geometry part, to write. Resets its cells; no face's cell reads it.
     pub fn edge_mut(&mut self, id: EdgeId) -> Option<&mut EdgeGeom> {
-        self.t.edges.get(id)?;
-        if let Some(adj) = self.t.adjacency.get(id) {
-            reset_faces(&mut self.t.faces, adj);
-        }
         let geom = self.t.edges.get_mut(id)?;
         geom.cells.reset();
         Some(geom)
@@ -213,29 +212,8 @@ impl Draft {
         self.t.adjacency.get_mut(id)
     }
 
-    /// The vertex's record, to write. Resets the cells of every edge that starts or ends
-    /// at it and of their faces. Scans the edge table.
+    /// The vertex's record, to write. Resets no cell: no record's cell reads a vertex.
     pub fn vertex_mut(&mut self, id: VertexId) -> Option<&mut VertexRecord> {
-        self.t.vertices.get(id)?;
-        let Tables {
-            faces,
-            edges,
-            adjacency,
-            ..
-        } = &mut self.t;
-        let star: Vec<(EdgeId, bool)> = edges
-            .iter()
-            .filter(|(_, g)| g.ends.contains(&id))
-            .map(|(e, g)| (e, !g.cells.is_empty()))
-            .collect();
-        for (e, filled) in star {
-            if let (true, Some(g)) = (filled, edges.get_mut(e)) {
-                g.cells.reset();
-            }
-            if let Some(adj) = adjacency.get(e) {
-                reset_faces(faces, adj);
-            }
-        }
         self.t.vertices.get_mut(id)
     }
 
@@ -356,16 +334,5 @@ impl Draft {
     #[cfg(test)]
     pub(crate) const fn tables(&self) -> &Tables {
         &self.t
-    }
-}
-
-/// Resets the cells of each face `adj` has a fin on, skipping faces with none filled.
-fn reset_faces(faces: &mut crate::table::Table<FaceId, Arc<FaceRecord>>, adj: &EdgeAdj) {
-    for fin in &adj.fins {
-        if faces.get(fin.face).is_some_and(|f| !f.cells.is_empty())
-            && let Some(face) = faces.get_mut(fin.face)
-        {
-            Arc::make_mut(face).cells.reset();
-        }
     }
 }

@@ -4126,6 +4126,257 @@ in for BR8's largest generated body, which does not exist yet.
 - At 10,000 faces (about 1.4 MB of face records) the walk falls out of L2.
 - Research 51's 4.9 ns per face is met up to 1,024 faces.
 
+### 6.9 BR4 as built (11-27)
+
+Decided by analysis and an adversarial pass. Proposed for review; not yet ruled.
+
+BR4 fills BR1's empty `FaceCells` and `EdgeCells` and adds body cells. Cells are derived data,
+filled on first read by a pure function. They never change a result, only its speed.
+
+**Public API added.**
+
+```rust
+pub enum UvSide { Inside, Outside, Near }
+impl<S: Stage> Face<'_, S> {
+    pub fn uv_box(self) -> Option<Extent2d>;
+    pub fn contains_uv(self, p: Point2) -> Option<UvSide>;
+}
+impl Face<'_, Finished> {
+    pub fn accuracy(self) -> Option<Accuracy>;
+    pub fn bounding_box(self) -> Option<Extent3d>;
+}
+impl Edge<'_, Finished> { pub fn bounding_box(self) -> Option<Extent3d>; }
+impl Brep {
+    pub fn bounding_box(&self) -> Option<Extent3d>;
+    pub fn faces_meeting(&self, b: Extent3d) -> impl ExactSizeIterator<Item = Face<'_>>;
+    pub fn shed_cells(&mut self);
+}
+```
+
+`Region::shells`, `Shell::faces` and `Vertex::edges` keep their signatures. On a `Brep` they
+walk a body cell's row. On a `Draft` they scan the tables, as before.
+
+**What is built.**
+
+- **Face cells**, each a `OnceLock<Box<_>>`:
+  - The boundary tree. It holds the loops' pcurves as pieces: 4 parts per curved use, 1 per
+    line, and a straight gap piece wherever a use's end is not exactly the next use's start.
+    It also holds a box tree over the pieces (4 per leaf), the uv box, and the region's sense.
+  - The surface box: `Surface::box_over` of the uv box. On a plane, cylinder or cone (straight
+    along `v`) with a bounded region, it is cut down to the hull of the pieces' boxes mapped.
+- **The edge cell**: the curve's box, the hull of the interval enclosures over 8 parts of its
+  interval (1 for a line).
+- **Body cells**, an `Arc<BodyCells>` beside the tables, holding two `OnceLock`s:
+  - Adjacency rows (compressed rows by slot, each row in id order): each vertex's star, each
+    shell's face sides, each region's shells.
+  - Boxes: every face's grown box, a box tree over them (median split on the longest spread of
+    the box middles, ties broken by id, 4 per leaf), the unboxed faces, and the body's box.
+- **Point-in-face** (`contains_uv`) is a winding number along a ray.
+  - It tries four rays (`+u`, `-u`, `+v`, `-v`). A ray is undecided where a piece endpoint lies
+    level with the point.
+  - A subtree that lies wholly ahead of the point costs two endpoint tests, because the pieces
+    chain.
+  - A piece whose box holds the point is halved, down to depth 48 (then the answer is `Near`)
+    or until 4,096 halvings in all (then `None`).
+  - On a periodic surface the point is tried at its lifts, at most 8 per axis.
+- **The region's sense** is the sign of an enclosed signed area, refined over 1 to 16 parts per
+  use.
+  - Positive: the loops bound a region, and the uv box is the pieces' hull.
+  - Negative, or no loop with area: the loops are holes in the whole domain, and the uv box is one
+    window of the domain.
+  - Undecided: `contains_uv` returns `None`, and the uv box is the hull joined with the window.
+
+**Every box is a certified enclosure, never sampled.**
+
+- Every box comes from an interval evaluation (`point_over`) or `Surface::box_over`, rounded
+  outward.
+- A face's box is its surface box grown by `round_up(accuracy + zone)`. An edge's box is its curve
+  box grown by the edge's accuracy plus the zone. A collapsed edge uses its vertex's box. A
+  vertex's box is its point grown by its accuracy plus the zone.
+- The body's box is the union of all of these. It is `None` when the body is empty or any face or
+  edge has no box.
+- So each box holds every point of the exact entity, and every place within the resolution of it.
+
+The surface box's overshoot, on a full-turn cylinder (r = 1, h = 1, tilted frame), as the ratio
+of the box side to the exact side, per box:
+
+| Per-arc enclosure | Ratio (x / y / z) | Cost |
+|---|---|---|
+| interval, 1 part | 1.75 / 1.88 / 1.63 | 1.2 µs |
+| interval, 2 parts | 1.31 / 1.36 / 1.19 | 2.5–3.5 µs |
+| interval, 4 parts (chosen) | 1.21 / 1.24 / 1.10 | 4.0–4.8 µs |
+| interval, 8 parts | 1.11 / 1.12 / 1.05 | 5.4–6.0 µs |
+| interval, 16 parts | 1.06 / 1.06 / 1.02 | 10 µs |
+| Taylor model, 1 part | 1.39 / 1.40 / 1.05 | 20 µs |
+| Taylor model, 2 parts | 1.07 / 1.06 / 1.04 | 41 µs |
+| Taylor model, 4 parts | 1.01 / 1.00 / 1.01 | 81 µs |
+
+The tests check that a block's box sides stand off by between the zone and the zone plus
+1e-12. They check that a cylinder's box is within 1.25 of the exact side. They also check that
+every sampled point of every face and edge lies in its box, and that a 21 × 21 uv grid's
+`contains_uv` answers agree with the face box.
+
+**Decisions.**
+
+- **A record's cells read that record alone** (design B). BR1's planned
+  `FaceCell::fill(rec, &EdgeGeomTable, &VertexTable)` and its reset skip are replaced. A face
+  cell reads the surface and pcurves, and an edge cell reads the edge's shape. Anything that
+  crosses records is a body cell.
+  - `face_mut` and `edge_mut` reset only the record they hand out. `add_*` resets the record it
+    takes in. `vertex_mut` and `adjacency_mut` reset nothing, and `vertex_mut` no longer scans.
+  - *For:* BR1's skip was unsound. A face record shared by `Arc` with the body a draft came from
+    can be filled by that body (on another thread, or later) after the draft's reset, and the
+    draft then sees a cell derived from the old edge. Under design B no write has to reach
+    another record, so the writes are O(1). On main, `vertex_mut` scanned all edges (20,200 at
+    100 × 100) and `edge_mut` visited every fin's face.
+  - *Against:* a face's accuracy and 3D box read its edges and vertices, so they cannot be face
+    cells. The accuracy is derived on read, and the box is a body cell.
+  - *Change if:* a face cell needs cross-record data that is too slow to derive on read. It then
+    goes in the body cells, which a draft does not have.
+- **Body cells live behind an `Arc` in `Brep` and nowhere else.** `finish` and `compact` make
+  them fresh, clones share them, and a draft has none.
+  - *For:* no draft write can make a body cell stale, because no draft holds one. So there is
+    no reset bookkeeping across records.
+  - *Against:* after `edit` and `finish`, the whole body cell is rebuilt, even for a one-face
+    edit. At 10,000 faces that is about 0.9 ms for the stars and 14 ms for the boxes.
+  - *Change if:* profiles show edit loops that are rebuild-bound. Then make the rebuild
+    incremental from `Changes` (BR3).
+- **A clone carries its filled cells.** `OnceLock`'s derived `Clone` copies what is filled.
+  - *For:* a record enters a table only through `add_*` (which resets it) or as a faithful copy
+    (a copy-on-write, `compact`). So a carried cell always matches its fields. An edge-table
+    copy-on-write keeps every other edge's curve box. The test
+    `every_write_path_resets_what_it_hands_out` covers each path.
+  - *Against:* a user's clone that is mutated by field and inspected without being re-added
+    holds a stale cell. That cell cannot reach a body: it is crate-private, and `add_*` resets it.
+  - *Change if:* a path appears that puts a record into a table without `add_*`. A decoder must
+    go through `add_*`.
+- **Cells are boxed.** Each is a `OnceLock<Box<_>>`, 16 B inline.
+  - *For:* a face grows by 32 B, not by the cell's 600 to 900 B. An edge grows by 16 B. An empty
+    cell allocates nothing. The BR1 walk's cache footprint is unchanged.
+  - *Against:* one pointer chase per cell read.
+  - *Change if:* never at these sizes.
+- **Reads take `&Brep`: `OnceLock` cells, deterministic and `Send + Sync`.**
+  - *For:* one signature per op (`&` reads, `&mut` writes). Each fill is a pure function of its
+    inputs, so two threads that race store the same bits. The test
+    `cells_fill_the_same_bits_on_every_thread` fills on two threads, races two threads on one
+    body, and refills after `shed_cells`, comparing the bits each time. `OnceLock` is
+    `Send + Sync` for `Send + Sync` contents, and the crate's asserts keep `Brep` and the views
+    so.
+  - *Against:* a reader that meets a cell another thread is filling waits for that fill
+    (`OnceLock` runs one initializer). A filled cell cannot be freed through `&`, which is why
+    `shed_cells(&mut self)` exists. It frees the body cells and the cells of records the body
+    holds alone.
+  - *Change if:* a fill grows long enough that the wait shows in profiles. Then split
+    the cell, for example the box tree from the face boxes.
+- **Face accuracy is derived on each read, not cached.** It is the largest of the uses' bounds,
+  the edges' accuracies and their end vertices' accuracies, computed in O(uses).
+  - *For:* it reads other records, so as a face cell it would break design B. Measured at 9.4 ns
+    on a quad face, less than a body-cell lookup would save.
+  - *Against:* a face with hundreds of uses pays per read.
+  - *Change if:* profiles show it. It then becomes a column in the body boxes.
+- **The adjacency cells are built here** (BR1's "planned home"). `ShellRecord` still stores no
+  face list. The row is derived from the faces' `sides`.
+- **`faces_meeting` returns the tree hits plus the unboxed faces, in id order.** It uses a
+  closed-box test, so boxes that touch at a single shared bit count as meeting.
+  - *For:* the order does not depend on the tree's shape, so the tree can change without changing
+    any result. An unboxed face (one that reaches infinity) cannot be ruled out, so it is always
+    returned.
+  - *Against:* there is a sort per query.
+  - *Change if:* never.
+- **`rectangular_trim` (§6.2) is not built.** No reader exists yet. The boundary tree's uv box
+  plus a four-line loop would derive it.
+  - *Change if:* the first reader lands.
+- **No difftest.** The pin's `calculate_bounding_box` has a different contract:
+  - For a face with a linear direction, it boxes the vertices and edge curves, each grown by its
+    tolerance.
+  - For any other face, it boxes the whole control net, whatever the trim.
+  - Its `proved_bounding_box` is certified, but it is a different construction: the surface box
+    over the trimmed uv domain, grown by twice the largest tolerance.
+
+  None of these is bit-comparable with ours, and its point classification works on a different
+  topology. The truth tests above, which check the exact geometry against the boxes and against
+  `contains_uv`, stand in.
+
+**Research 66 adopted.** These are adopted:
+
+- the uv-box reject before point-in-face (§10.1 rank 1, §10.3);
+- a box tree over the faces (§6.1).
+
+The §10.3 conditions hold: pcurve boxes are interval enclosures rounded outward, and a loop over
+the seam stays on its unwrapped parameter, with the point tried at its lifts.
+
+**Tests.** There are 2 unit tests in `cells.rs` (parts, outward growth) and 7 in
+`boundary.rs`:
+
+- the square and its clockwise hole;
+- the annulus, with 200 points checked against their radius;
+- the cylinder band's lifts;
+- a face of points, a loop of no area, and a gap closing an open loop;
+- the boundary tree's size bound.
+
+In `tests.rs`, one reset test is new, one is rewritten with filled cells, and the
+body cells' size bound is new; the record size bounds grew by the cell slots.
+There are 3 new integration tests in
+`tests/bodies.rs`:
+
+- the block's boxes are tight, and `faces_meeting` equals brute force;
+- the cylinder's boxes and its seam;
+- fill determinism across threads.
+
+The block and cylinder walks now also compare each shell's faces, and each vertex star, between
+the draft scan and the finished rows.
+
+**Measured** (throwaway timer, not committed; release build).
+
+Per face (quad plane / circle cap / cylinder wall):
+
+| Measure | Quad plane | Circle cap | Cylinder wall |
+|---|---|---|---|
+| Boundary fill | 1.0–1.3 µs | 3.1–3.4 µs | 1.0 µs |
+| Surface box fill | 1.9 µs | 1.2 µs | 5.0 µs (was 23.8 before the period skip) |
+| Pieces | 8 (4 gaps) | 5 | 8 |
+| Boundary heap | 924 B | 636 B | 924 B |
+| `contains_uv` | 48 ns | 0.55 µs | 82 ns |
+
+Face accuracy costs 9.4 ns and a face box read 18 ns.
+
+On quad sheets of k × k faces:
+
+| Measure | 8 × 8 | 32 × 32 | 100 × 100 |
+|---|---|---|---|
+| All vertex stars, by scan | 14 µs | 2,395 µs | 525 ms |
+| All vertex stars, by rows | 2.4 µs | 27 µs | 0.29 ms |
+| Star fill (including `finish`) | 4.8 µs | 63.5 µs | 0.9 ms |
+| All shells' faces, by scan | 0.6 µs | 8.8 µs | 86 µs |
+| All shells' faces, by rows | 0.3 µs | 4.2 µs | 43 µs |
+| Adjacency rows, per face | 53.6 B | 52.3 B | 56.5 B |
+| Boxes fill, per face | 1.19 µs | 1.26 µs | 1.34–1.47 µs |
+| Boxes memory, per face | 88 B | 88 B | 88 B |
+| `faces_meeting` (a one-face box) | 47 ns | 58 ns | 70 ns |
+| Brute-force box filter | 2.5 µs | 21 µs | 292 µs |
+| `finish` alone | 1.1 µs | 14.9 µs | 370 µs |
+
+- The vertex-star scan is quadratic, so the rows win 1,800× at 10,000 faces.
+- `faces_meeting` is about 4,000× faster than the brute-force filter at that size.
+- Memory per face, fully filled: 32 B of slots, about 0.6–0.9 KB of boundary tree, under 64 B of
+  surface box, 88 B of boxes, and about 55 B of adjacency.
+
+**Open items.**
+
+- **The gap pieces double a line loop's pieces.** An interval endpoint is never an exact point,
+  so a gap goes in after every use. Dropping a gap between two overlapping endpoint enclosures
+  would leave the chain open by a few ulps. That is not sound unless the adjacent pieces' boxes
+  are proved to cover the gap.
+- **The boundary heap is about 1 KB per face.** It could be compressed with f32 boxes rounded
+  outward, or with node boxes shared with their pieces.
+- **A use index for fins** (§6.6) is still not built.
+- **Analytic point-in-face** for planes and quadrics (66 §10.1 M1) is not built: invert the
+  point to uv in closed form, then use `contains_uv`.
+- **A Morton radix build** of the face tree (66 §6.2) is not built. The median build is
+  1.3 µs per face, including the face boxes, and the trees are small.
+- **The hull-skip heuristic** (`spans_a_period`) is by uv width. A band just short of a full turn
+  still pays the hull, and the hull is then barely tighter.
+
 ## 7. `scx-record`
 
 The pin's sources are `topology/api_files`, `topology/part_file`, `topology/database_io` and

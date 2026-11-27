@@ -16,8 +16,8 @@
 //! Accuracy (01 §4.1): an edge's, a vertex's and a use's recorded bound are each an
 //! `Option<Arc<Recorded>>`, `None` meaning "within the resolution stamped on the body". The
 //! `Arc` keeps the common `None` at 8 bytes: a `Recorded` is 72, which inline would nearly
-//! double a use record. A face has no stored accuracy: it is derived from its uses' bounds,
-//! and is a cell (BR4).
+//! double a use record. A face has no stored accuracy: it is derived from its uses' bounds
+//! and their edges' and vertices', on each read ([`Face::accuracy`](crate::Face::accuracy)).
 
 use std::sync::Arc;
 
@@ -205,8 +205,8 @@ pub enum EdgeShape {
     Collapsed,
 }
 
-/// An edge's geometry part: its shape, end vertices and accuracy. A write to it resets the
-/// cells of every face that uses the edge.
+/// An edge's geometry part: its shape, end vertices and accuracy. A write to it resets its
+/// own cells; no face's cell reads it.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct EdgeGeom {
@@ -274,8 +274,7 @@ pub struct EdgeAdj {
     pub fins: Vec<Fin>,
 }
 
-/// A vertex: its point and accuracy. A write to it resets the cells of its edges and of
-/// their faces.
+/// A vertex: its point and accuracy. A write to it resets no cell.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct VertexRecord {

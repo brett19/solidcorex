@@ -14,9 +14,11 @@
 //!
 //! Seams for the tasks that follow (research 63 §6.5): the structure and geometry checks
 //! (BR2) go in `check` and [`finish`]; event recording and [`Changes`] (BR3) in `changes`
-//! and the draft's writes; cells (BR4) in `cells`, behind the reset rules the draft already
-//! keeps; pcurves (BR5) and `transform` (BR6) build records through [`Draft`].
+//! and the draft's writes; cells (BR4, 63 §6.9) in `cells`, `boundary`, `body` and the reads
+//! in `query`; pcurves (BR5) and `transform` (BR6) build records through [`Draft`].
 
+mod body;
+mod boundary;
 mod brep;
 mod cells;
 mod changes;
@@ -26,11 +28,13 @@ mod draft;
 pub mod error;
 pub mod finish;
 pub mod id;
+mod query;
 pub mod record;
 mod table;
 mod tables;
 mod view;
 
+pub use boundary::UvSide;
 pub use brep::Brep;
 pub use changes::Changes;
 pub use document::Document;
