@@ -2,9 +2,11 @@
 //! `extent1d.rs`, `extent2d.rs`, `extent3d.rs`, `periodic_extent1d.rs`.
 //!
 //! The diff bodies call scx's API. [`crate::pin_extent`] gives the pin the same names, made of the
-//! pin's own calls. An input box that is inverted is `None` on both sides, since scx holds no
-//! inverted extent. A transform that only grows (`expanded`) is given `|d|`; the shrinking
-//! direction is `shrunk`.
+//! pin's own calls. An input box that is inverted, or has an end that is not finite or is the
+//! pin's `SM_INFINITE_PARAMETER` marker, is `None` on both sides ([`crate::facade::plain_ends`]),
+//! since scx holds no inverted extent and no end that is not a finite value. A result with an
+//! end that is not finite is `None` on both sides too. A transform that only grows
+//! (`expanded`) is given `|d|`; the shrinking direction is `shrunk`.
 
 use crate::diff;
 use crate::harness::List;
@@ -27,23 +29,10 @@ diff!(
     truth_defect = crate::pin_truths::e1_hull,
     |a: f64, b: f64| m::extent1d::Extent1d::hull([a, b])
 );
-// scx's constant against the pin's `set_unbounded`.
-diff!(e1_unbounded, || m::extent1d::Extent1d::UNBOUNDED, {
-    let mut e = m::extent1d::Extent1d::new();
-    e.set_unbounded();
-    e
-});
-diff!(e1_queries, |a: I| m::e1(a).map(|e| (
-    (e.mid(), e.length()),
-    (e.boundary_type(), e.is_bounded()),
-)));
-diff!(
-    e1_max_dimension,
-    truth_defect = crate::pin_truths::e1_max_dimension,
-    |a: I| m::e1(a).map(|e| e.max_dimension())
-);
+diff!(e1_queries, |a: I| m::e1(a).map(|e| (e.mid(), e.length())));
+diff!(e1_max_dimension, |a: I| m::e1(a).map(|e| e.max_dimension()));
 diff!(e1_transforms, |a: I, v: f64| m::e1(a).map(|e| (
-    [e.negated(), e.translated(v), e.scaled(v)],
+    (e.negated(), e.translated(v), e.scaled(v)),
     e.shrunk(v.abs()),
 )));
 diff!(
@@ -81,13 +70,9 @@ diff!(e1_with_bounds, |a: I, x: f64, y: f64| m::e1(a).map(|e| (
 diff!(e1_pair, |a: I, b: I| m::e1(a)
     .zip(m::e1(b))
     .map(|(e, f)| e.are_same(&f)));
-diff!(
-    e1_union_intersect,
-    truth_defect = crate::pin_truths::e1_union_intersect,
-    |a: I, b: I| m::e1(a)
-        .zip(m::e1(b))
-        .map(|(e, f)| (e.union(f), e.intersect(f)))
-);
+diff!(e1_union_intersect, |a: I, b: I| m::e1(a)
+    .zip(m::e1(b))
+    .map(|(e, f)| (e.union(f), e.intersect(f))));
 diff!(e1_pair_tol, |a: I, b: I, t: f64| m::e1(a)
     .zip(m::e1(b))
     .map(|(e, f)| (
@@ -103,11 +88,6 @@ diff!(e1_value_tol, |a: I, v: f64, t: f64| m::e1(a).map(|e| (
     e.classify_point(v, t),
     e.is_degenerate(t),
 )));
-diff!(e1_approximate_unbounded, |a: I, c: f64, h: f64| m::e1(a)
-    .map(|e| (
-        e.approximate_unbounded(c, h),
-        e.approximate_unbounded_expanded(c, h),
-    )));
 diff!(e1_are_disjoint_periodic, |a: I, b: I, p: f64, t: f64| {
     m::e1(a)
         .zip(m::e1(b))
@@ -132,11 +112,10 @@ diff!(e1_periodic_value, |a: I, v: f64, p: f64, t: f64| m::e1(a)
         e.clamp_periodic_value(v, p, t),
         e.contains_periodic_value(v, p, t),
     )));
-diff!(
-    e1_periodic_boundary,
-    truth_defect = crate::pin_truths::e1_periodic_boundary,
-    |a: I, v: f64, p: f64, t: f64| m::e1(a).map(|e| e.is_value_on_periodic_boundary(v, p, t))
-);
+diff!(e1_periodic_boundary, |a: I, v: f64, p: f64, t: f64| m::e1(
+    a
+)
+.map(|e| e.is_value_on_periodic_boundary(v, p, t)));
 diff!(end_new_get, |d: usize, i: usize, a: I| m::e1(a).map(|e| {
     let mut n = m::end(vec![e; d]);
     if let Some(s) = n.get_mut(i) {
@@ -166,18 +145,23 @@ diff!(end_clamp_vector, |a: I,
 
 // --- Extent2d
 diff!(e2_constructors, |a: P, b: P| (
-    m::extent2d::Extent2d::from_point(m::p2(a)),
     m::extent2d::Extent2d::spanning(m::p2(a), m::p2(b)),
     m::extent2d::Extent2d::from_corners(m::p2(a), m::p2(b)),
     m::extent2d::Hull2d::EMPTY.finish()
 ));
+// scx's `from_point` refuses a point that is not finite; the pin's stores any.
+diff!(
+    e2_from_point,
+    |a: P| m::extent2d::Extent2d::from_point(m::p2(a)),
+    crate::pin_extent::finite2(m::extent2d::Extent2d::from_point(m::p2(a)))
+);
 diff!(
     e2_hull,
     truth_defect = crate::pin_truths::e2_hull,
     |a: P, b: P| m::extent2d::Extent2d::hull([m::p2(a), m::p2(b)])
 );
 // scx's four bounds against the pin's `set_min_max_coords` (the pin's `from_bounds` stores
-// any four numbers).
+// any four numbers), refused where an end is not finite.
 diff!(
     e2_from_bounds,
     |a: R| m::extent2d::Extent2d::from_bounds(a[0], a[1], a[2], a[3]),
@@ -186,6 +170,7 @@ diff!(
         e.set_min_max_coords(a[0], a[1], a[2], a[3])
             .ok()
             .map(|()| e)
+            .and_then(crate::pin_extent::finite2)
     }
 );
 diff!(e2_from_extent3d, |b: B| m::e3(b).map(|e| (
@@ -200,13 +185,8 @@ diff!(e2_queries, |a: R| m::e2(a).map(|e| (
     (e.x_min(), e.x_max(), e.y_min(), e.y_max()),
     (e.x_interval(), e.y_interval(), e.size()),
     (e.x_length(), e.y_length()),
-    (e.boundary_types(), e.is_bounded()),
 )));
-diff!(
-    e2_max_dimension,
-    truth_defect = crate::pin_truths::e2_max_dimension,
-    |a: R| m::e2(a).map(|e| e.max_dimension())
-);
+diff!(e2_max_dimension, |a: R| m::e2(a).map(|e| e.max_dimension()));
 diff!(
     e2_hull_point,
     truth_defect = crate::pin_truths::e2_hull_point,
@@ -255,13 +235,9 @@ diff!(
 diff!(e2_pair, |a: R, b: R| m::e2(a)
     .zip(m::e2(b))
     .map(|(e, f)| (e.are_same(&f), e.max_boundary_dist(&f))));
-diff!(
-    e2_union_intersect,
-    truth_defect = crate::pin_truths::e2_union_intersect,
-    |a: R, b: R| m::e2(a)
-        .zip(m::e2(b))
-        .map(|(e, f)| (e.union(f), e.intersect(f)))
-);
+diff!(e2_union_intersect, |a: R, b: R| m::e2(a)
+    .zip(m::e2(b))
+    .map(|(e, f)| (e.union(f), e.intersect(f))));
 diff!(e2_pair_tol, |a: R, b: R, t: f64| m::e2(a)
     .zip(m::e2(b))
     .map(|(e, f)| (
@@ -329,17 +305,22 @@ diff!(e2_consts, || [
 // --- Extent3d
 diff!(e3_constructors, |a: V, b: V| (
     m::extent3d::Extent3d::spanning(m::p3(a), m::p3(b)),
-    m::extent3d::Extent3d::from_point(m::p3(a)),
     m::extent3d::Extent3d::from_corners(m::p3(a), m::p3(b)),
     m::extent3d::Hull3d::EMPTY.finish()
 ));
+// scx's `from_point` refuses a point that is not finite; the pin's stores any.
+diff!(
+    e3_from_point,
+    |a: V| m::extent3d::Extent3d::from_point(m::p3(a)),
+    crate::pin_extent::finite3(m::extent3d::Extent3d::from_point(m::p3(a)))
+);
 diff!(
     e3_hull,
     truth_defect = crate::pin_truths::e3_hull,
     |a: V, b: V| m::extent3d::Extent3d::hull([m::p3(a), m::p3(b)])
 );
 // scx's six bounds against the pin's `set_min_max_coords` (the pin's `from_bounds` stores
-// any six numbers).
+// any six numbers), refused where an end is not finite.
 diff!(
     e3_from_bounds,
     |a: B| m::extent3d::Extent3d::from_bounds(a[0], a[1], a[2], a[3], a[4], a[5]),
@@ -348,37 +329,22 @@ diff!(
         e.set_min_max_coords(a[0], a[1], a[2], a[3], a[4], a[5])
             .ok()
             .map(|()| e)
+            .and_then(crate::pin_extent::finite3)
     }
 );
-// scx's constant against the pin's `set_unbounded`.
-diff!(e3_unbounded, || m::extent3d::Extent3d::UNBOUNDED, {
-    let mut e = m::extent3d::Extent3d::new();
-    e.set_unbounded();
-    e
-});
 diff!(e3_queries, |a: B| m::e3(a).map(|e| (
     (e.mid(), e.x_min(), e.x_max(), e.y_min(), e.y_max()),
     (e.z_min(), e.z_max(), e.x_interval(), e.y_interval()),
     (e.z_interval(), e.max_dimension(), e.size(), e.corners()),
     (e.edges(), e.planes(), e.x_length(), e.y_length()),
 )));
-diff!(
-    e3_max_length,
-    truth_defect = crate::pin_truths::e3_max_length,
-    |a: B| m::e3(a).map(|e| e.max_length())
-);
+diff!(e3_max_length, |a: B| m::e3(a).map(|e| e.max_length()));
 diff!(e3_queries2, |a: B| m::e3(a).map(|e| {
     let b = e.sphere_bound();
-    (
-        (e.z_length(), b.center, b.radius),
-        (e.boundary_types(), e.is_bounded(), e.any_bounds()),
-    )
+    (e.z_length(), b.center, b.radius)
 }));
-diff!(
-    e3_sphere_min_radius,
-    truth_defect = crate::pin_truths::e3_sphere_min_radius,
-    |a: B| m::e3(a).map(|e| e.sphere_bound().min_radius)
-);
+diff!(e3_sphere_min_radius, |a: B| m::e3(a)
+    .map(|e| e.sphere_bound().min_radius));
 diff!(e3_min_max_at, |a: B, i: usize| m::e3(a)
     .map(|e| m::e3_at(&e, i)));
 diff!(e3_with_intervals, |a: B, i: I| m::e3(a).zip(m::e1(i)).map(
@@ -418,16 +384,14 @@ diff!(e3_pair, |a: B, b: B| m::e3(a).zip(m::e3(b)).map(
         e.cone_bound_to(&f),
     )
 ));
-diff!(
-    e3_union_intersect_far,
-    truth_defect = crate::pin_truths::e3_union_intersect_far,
-    |a: B, b: B| m::e3(a).zip(m::e3(b)).map(|(e, f)| (
+diff!(e3_union_intersect_far, |a: B, b: B| m::e3(a)
+    .zip(m::e3(b))
+    .map(|(e, f)| (
         e.union(f),
         e.intersect(f),
         e.max_distance_squared(&f),
         e.max_distance(&f),
-    ))
-);
+    )));
 diff!(e3_pair_tol, |a: B, b: B, t: f64| m::e3(a)
     .zip(m::e3(b))
     .map(|(e, f)| (
@@ -478,14 +442,6 @@ diff!(
 );
 diff!(e3_shrunk, |a: B, d: f64| m::e3(a)
     .map(|e| e.shrunk(d.abs())));
-diff!(e3_approximate_unbounded, |a: B, c: Option<V>, h: f64| {
-    m::e3(a).map(|e| {
-        (
-            e.approximate_unbounded(c.map(m::p3), h),
-            e.approximate_unbounded_expanded(c.map(m::p3), h),
-        )
-    })
-});
 
 // --- PeriodicExtent1d
 diff!(pe_constructors, |a: V, f: bool| (
