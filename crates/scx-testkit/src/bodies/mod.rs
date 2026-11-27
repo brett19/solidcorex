@@ -27,6 +27,7 @@ pub mod check;
 mod curved;
 mod mesh;
 mod planar;
+mod shell;
 mod wreck;
 
 use core::fmt;
@@ -42,6 +43,7 @@ use scx_num::vector3d::{Point3, Vec3};
 use scx_surface::{PcurveError, SurfaceError};
 
 pub use check::Invariant;
+pub use shell::quarter_shell;
 pub use wreck::broken;
 
 /// The resolution the generators build pcurves to: its approximation tolerance is

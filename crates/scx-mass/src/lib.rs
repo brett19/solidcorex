@@ -21,6 +21,15 @@
 //!   signed so the solid is inside; the area every face not between two solids. A finished
 //!   body's fins agree about their sides (`scx_brep`'s `SidesDisagree` check), so a solid
 //!   region's boundary is always closed and no open-shell case arises.
+//! - **Certified volumes.** [`enclose_volume`] and [`enclose_shell`] enclose a volume in
+//!   proved bounds (interval Taylor series over each face's uv, strips over the gaps
+//!   between trims and edges); [`volume_sign`] is a shell's certified sign and [`outward`]
+//!   checks every shell against its region. See the `enclose` module.
+//! - **The guard.** [`volume`] and [`mass`] keep the region sign, and read their estimate
+//!   per shell: a shell whose sum contradicts its region by more than its error calls
+//!   [`outward`], which refuses the body ([`MassRefusal::NotOutward`]) or, when it is
+//!   outward after all, reports [`MassDefect::EstimateMissed`]. A valid body never pays
+//!   for an enclosure.
 //! - **Not yet.** Gap closure onto an edge's curve for a use with a recorded accuracy
 //!   (MA2, at `face::join`); a loop winding round a `v` period or `u` windings that do not
 //!   cancel ([`MassUnsupported`]).
@@ -30,13 +39,21 @@
 mod body;
 mod breaks;
 mod edge;
+mod enclose;
 mod error;
 mod face;
+mod guard;
 mod integrand;
 mod kronrod;
+mod patch;
 mod spec;
+mod tseries;
 
 pub use body::{area, face_area, mass, volume};
 pub use edge::edge_length;
+pub use enclose::{
+    CELL_BUDGET, ORDER, Settle, Sign, VolumeEnclosure, enclose_shell, enclose_volume, outward,
+    volume_sign,
+};
 pub use error::{MassDefect, MassError, MassRefusal, MassUnsupported};
 pub use spec::{Estimate, Mass, MassErrors, MassSpec, RelAccuracy, Sym3};

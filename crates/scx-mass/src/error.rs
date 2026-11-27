@@ -5,7 +5,7 @@
 
 use core::fmt;
 
-use scx_brep::{Entity, FaceId};
+use scx_brep::{EdgeId, Entity, FaceId, ShellId};
 use scx_num::error::ErrorKind;
 
 /// Why a measurement did not finish.
@@ -43,6 +43,28 @@ pub enum MassRefusal {
     },
     /// A reference point that is not finite.
     BadReference,
+    /// An enclosure width that is not finite and at least zero.
+    BadWidth {
+        /// The value asked for.
+        value: f64,
+    },
+    /// A shell the body does not have.
+    NoShell {
+        /// The shell.
+        shell: ShellId,
+    },
+    /// A shell whose certified volume sign is not the one its region gives it: the
+    /// outside's shell positive, or a region with no positive shell. Its faces face the
+    /// wrong way.
+    NotOutward {
+        /// The shell.
+        shell: ShellId,
+    },
+    /// The faces measured do not close: this edge's uses do not balance.
+    OpenBoundary {
+        /// The edge.
+        edge: EdgeId,
+    },
 }
 
 /// What this method does not measure yet.
@@ -66,6 +88,17 @@ pub enum MassUnsupported {
         /// The entity.
         at: Entity,
     },
+    /// A face kind with no series form for the enclosure.
+    NoSeries {
+        /// The face.
+        face: FaceId,
+    },
+    /// The volume enclosure still holds zero at its cell cap or floor: a gap between faces
+    /// as large as the volume, or a volume below the rounding.
+    SignUndecided {
+        /// The shell.
+        shell: ShellId,
+    },
 }
 
 /// The integrator's own failure on a valid body.
@@ -81,6 +114,12 @@ pub enum MassDefect {
     IntegrandNotFinite {
         /// The face or edge.
         at: Entity,
+    },
+    /// A shell's volume estimate contradicts its region by more than its error, yet the
+    /// certified signs say the body is outward: the estimate is wrong.
+    EstimateMissed {
+        /// The shell.
+        shell: ShellId,
     },
 }
 
@@ -104,13 +143,20 @@ impl MassError {
             Self::Refused(MassRefusal::BadAccuracy { .. }) => "bad_accuracy",
             Self::Refused(MassRefusal::BadDensity { .. }) => "bad_density",
             Self::Refused(MassRefusal::BadReference) => "bad_reference",
+            Self::Refused(MassRefusal::BadWidth { .. }) => "bad_width",
+            Self::Refused(MassRefusal::NoShell { .. }) => "no_shell",
+            Self::Refused(MassRefusal::NotOutward { .. }) => "not_outward",
+            Self::Refused(MassRefusal::OpenBoundary { .. }) => "open_boundary",
             Self::Unsupported(MassUnsupported::VWrap { .. }) => "v_wrap",
             Self::Unsupported(MassUnsupported::NetWinding { .. }) => "net_winding",
             Self::Unsupported(MassUnsupported::NoBox { .. }) => "no_box",
+            Self::Unsupported(MassUnsupported::NoSeries { .. }) => "no_series",
+            Self::Unsupported(MassUnsupported::SignUndecided { .. }) => "sign_undecided",
             Self::Exhausted { .. } => "exhausted",
             Self::Cancelled => "cancelled",
             Self::Defect(MassDefect::StepControl { .. }) => "step_control",
             Self::Defect(MassDefect::IntegrandNotFinite { .. }) => "integrand_not_finite",
+            Self::Defect(MassDefect::EstimateMissed { .. }) => "estimate_missed",
         }
     }
 }
@@ -127,6 +173,16 @@ impl fmt::Display for MassError {
             Self::Refused(MassRefusal::BadReference) => {
                 f.write_str("the reference point is not finite")
             }
+            Self::Refused(MassRefusal::BadWidth { value }) => {
+                write!(f, "enclosure width {value} is not finite and at least zero")
+            }
+            Self::Refused(MassRefusal::NoShell { shell }) => write!(f, "{shell}: no such shell"),
+            Self::Refused(MassRefusal::NotOutward { shell }) => {
+                write!(f, "{shell}: its faces do not face out of its region")
+            }
+            Self::Refused(MassRefusal::OpenBoundary { edge }) => {
+                write!(f, "{edge}: its uses do not balance, the faces do not close")
+            }
             Self::Unsupported(MassUnsupported::VWrap { face }) => {
                 write!(f, "{face}: a loop winds round the v period")
             }
@@ -134,6 +190,12 @@ impl fmt::Display for MassError {
                 write!(f, "{face}: the loops' u windings do not cancel")
             }
             Self::Unsupported(MassUnsupported::NoBox { at }) => write!(f, "{at}: no box"),
+            Self::Unsupported(MassUnsupported::NoSeries { face }) => {
+                write!(f, "{face}: the surface kind has no series form")
+            }
+            Self::Unsupported(MassUnsupported::SignUndecided { shell }) => {
+                write!(f, "{shell}: the volume enclosure still holds zero")
+            }
             Self::Exhausted { limit } => write!(f, "the budget of {limit} ran out"),
             Self::Cancelled => f.write_str("stopped"),
             Self::Defect(MassDefect::StepControl { at }) => {
@@ -144,6 +206,12 @@ impl fmt::Display for MassError {
             }
             Self::Defect(MassDefect::IntegrandNotFinite { at }) => {
                 write!(f, "{at}: the integrand is not finite")
+            }
+            Self::Defect(MassDefect::EstimateMissed { shell }) => {
+                write!(
+                    f,
+                    "{shell}: the volume estimate's error misses the certified sign"
+                )
             }
         }
     }
