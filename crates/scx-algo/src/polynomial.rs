@@ -478,19 +478,32 @@ impl<const N: usize> Poly<N> {
     /// `p(x)` by compensated Horner (Graillat, Langlois and Louvet, 2009), as accurate as
     /// Horner's rule in twice the working precision; `p'(x)` by plain Horner; and `S(x)`.
     fn compensated(&self, x: f64) -> (f64, f64, f64) {
+        // In three passes, the same operations as one: the sums, then the products'
+        // errors, then the errors' sum. Where a product's error is a library call (x86-64's
+        // `fma`), nothing else is live across it.
         let ax = x.abs();
-        let mut terms = self.hi.iter().zip(&self.lo).rev();
-        let Some((&lead, &lead_lo)) = terms.next() else {
+        let (Some((&lead, rest)), Some((&lo_lead, lo_rest))) =
+            (self.hi.split_last(), self.lo.split_last())
+        else {
             return (0.0, 0.0, 0.0);
         };
-        let (mut s, mut err, mut d, mut size) = (lead, lead_lo, 0.0, lead.abs());
-        for (&a, &a_lo) in terms {
+        let (mut s, mut d, mut size) = (lead, 0.0, lead.abs());
+        // per coefficient below the lead: the product's factor (then its error) and the
+        // sum's error
+        let mut errs = [(0.0, 0.0); N];
+        for (e, &a) in errs.iter_mut().zip(rest).rev() {
             d = d * x + s;
             size = size * ax + a.abs();
-            let (prod, prod_err) = two_prod(s, x);
-            let (sum, sum_err) = two_sum(prod, a);
+            let (sum, sum_err) = two_sum(s * x, a);
+            *e = (s, sum_err);
             s = sum;
-            err = err * x + (prod_err + sum_err + a_lo);
+        }
+        for (e, _) in errs.iter_mut().zip(rest) {
+            e.0 = two_prod(e.0, x).1;
+        }
+        let mut err = lo_lead;
+        for (&(prod_err, sum_err), &lo) in errs.iter().zip(lo_rest).rev() {
+            err = err * x + (prod_err + sum_err + lo);
         }
         (s + err, d, size)
     }
@@ -547,9 +560,17 @@ const PLAIN_STEP: f64 = 9.313225746154785e-10;
 /// remaining error (the square of the step, times `p'' / 2p'`) is far below one.
 const FINE_STEP: f64 = 4.440892098500626e-16;
 
-/// Newton steps per root at most. Every search starts where Newton's method converges
-/// monotonically, so this is a guard, not a budget.
+/// Newton steps per root at most, from near the root. A guard, not a budget.
 const MAX_STEPS: usize = 100;
+
+/// Plain Newton steps per root at most, from its start. A start can be far from the
+/// root, past a group of `k` others around a point `z` (the coefficients' sizes put
+/// groups up to `2^128` apart without a [`split`]): there `p ~ (x - z)^k` and each step
+/// closes only `1 / k` of the way to `z` (at least `0.41` bits for `k <= 4`), and the
+/// distance can span the doubles' range (`2^2098`); bisection of a bracket that wide
+/// takes as many halvings. So a guard, again, that does not end a search still making
+/// progress.
+const PLAIN_STEPS: usize = 8192;
 
 /// The roots of a cubic with positive leading coefficient, ascending and distinct, and the
 /// points that separated them: its critical points (where the derivative's discriminant is
@@ -597,13 +618,23 @@ fn derivative_discriminant(c1: f64, c2: f64, c3: f64) -> f64 {
 }
 
 /// A sample point of a polynomial: where it is, the sign of the value there (zero when the
-/// value cannot be told from zero), and the Taylor coefficients there (the value first,
-/// compensated when the sign needed it).
+/// value cannot be told from zero), and the value (compensated when the sign needed it).
 #[derive(Clone, Copy)]
-struct Sample<const N: usize> {
+struct Sample {
     x: f64,
     sign: i8,
-    taylor: [f64; N],
+    value: f64,
+}
+
+impl Sample {
+    /// The Taylor coefficients of `c` here, the value first (as sampled).
+    fn taylor<const N: usize>(&self, c: &[f64; N]) -> [f64; N] {
+        let mut t = taylor(c, self.x);
+        if let Some(t0) = t.first_mut() {
+            *t0 = self.value;
+        }
+        t
+    }
 }
 
 /// The real roots of `c` (positive leading coefficient), ascending, given the points that
@@ -620,7 +651,7 @@ fn roots_between<const N: usize>(
     let mut samples = [Sample {
         x: 0.0,
         sign: 0,
-        taylor: [0.0; N],
+        value: 0.0,
     }; 4];
     for (slot, &x) in samples.iter_mut().zip(points) {
         *slot = classify(c, x, extremum);
@@ -633,24 +664,30 @@ fn roots_between<const N: usize>(
     // `v1 + (v2 - v1) s(t)` at `x = c1 + (c2 - c1) t`, with `s(t) = 3 t^2 - 2 t^3`; so its
     // roots are those of `s` in plain arithmetic, which start every search. Between a
     // quartic's critical points the same form is a close model.
-    let model = |s: &Sample<N>, next: &Sample<N>, t: f64| s.x + (next.x - s.x) * t;
-    let value = |s: &Sample<N>| s.taylor.first().copied().unwrap_or(0.0);
+    let value = |s: &Sample| s.value;
     let mut inner = [None; 4];
+    // the model's inner root, for a cubic: with it, the outer two are a quadratic's
+    let mut inner_t = None;
     for ((slot, s), next) in inner.iter_mut().zip(samples).zip(samples.iter().skip(1)) {
         if s.sign * next.sign < 0 {
             let (lo, hi) = (s.x, next.x);
             let start = if extremum {
                 let (v1, v2) = (value(s), value(next));
-                let t = smooth_inner(v1, v2);
-                // a quartic is the cubic form plus `c4 h^4 t^2 (1 - t)^2` (`h = c2 - c1`)
+                let h = next.x - s.x;
+                // the model's root as a fraction `t` of `h` from the nearer end (`flip`:
+                // `next`), so that a root close to that end keeps its precision
+                let (t, flip) = smooth_inner(v1, v2);
+                inner_t = Some((t, flip));
+                // a quartic is the cubic form plus `c4 h^4 t^2 (1 - t)^2`, which is the
+                // same from either end
                 let t = match c.hi.get(4) {
                     Some(&c4) if N == 5 => {
-                        let h = next.x - s.x;
-                        quartic_inner(t, v1, v2, c4 * (h * h) * (h * h))
+                        let (near, far) = if flip { (v2, v1) } else { (v1, v2) };
+                        quartic_inner(t, near, far, c4 * (h * h) * (h * h))
                     }
                     _ => t,
                 };
-                model(s, next, t)
+                if flip { next.x - h * t } else { s.x + h * t }
             } else {
                 inflections
                     .iter()
@@ -663,7 +700,7 @@ fn roots_between<const N: usize>(
             } else {
                 lo + 0.5 * (hi - lo)
             };
-            *slot = Some(newton(c, lo, hi, s.sign < 0, start, finish));
+            *slot = Some(newton(c, lo, hi, s.sign < 0, start, finish, None));
         }
     }
     // the sign of p at minus infinity
@@ -693,25 +730,34 @@ fn roots_between<const N: usize>(
                 _ => fallback(),
             }
         };
-        let (left_model, right_model) = match (cubic, samples) {
+        // each side's model start, taken only for a side that has a root
+        let outer_model = |left: bool| match (cubic, samples) {
             (true, [s, next]) => {
                 let (v1, v2) = (value(s), value(next));
                 let w = v1 - v2;
-                (
-                    Some(model(s, next, -smooth_outer(v1 / w))),
-                    Some(model(s, next, 1.0 + smooth_outer(-v2 / w))),
-                )
+                let h = next.x - s.x;
+                // how far beyond its end each outer root is, in units of `h`: from the
+                // inner root when there is one (from the nearer end, exact enough), else
+                // by Newton's method
+                let u = match inner_t {
+                    Some((t, flip)) => {
+                        let (from_s, from_next) = if flip { (1.0 - t, t) } else { (t, 1.0 - t) };
+                        if left {
+                            outer_beyond(v1 / w, from_s)
+                        } else {
+                            outer_beyond(-v2 / w, from_next)
+                        }
+                    }
+                    None => smooth_outer(if left { v1 / w } else { -v2 / w }),
+                };
+                Some(if left { s.x - h * u } else { next.x + h * u })
             }
-            (true, [s]) => {
-                let m = monotone_start(s);
-                (m, m)
-            }
-            _ => (None, None),
+            (true, [s]) => monotone_start(s.x, &s.taylor(&c.hi)),
+            _ => None,
         };
         if left {
-            let start = pick(f64::NEG_INFINITY, first.x, left_model, &|| {
-                outer_start(first, -1.0)
-            });
+            let beyond = || outer_start(first.x, &first.taylor(&c.hi), -1.0);
+            let start = pick(f64::NEG_INFINITY, first.x, outer_model(true), &beyond);
             outer[0] = Some(newton(
                 c,
                 f64::NEG_INFINITY,
@@ -719,13 +765,21 @@ fn roots_between<const N: usize>(
                 first.sign > 0,
                 start,
                 finish,
+                Some(&beyond),
             ));
         }
         if right {
-            let start = pick(last.x, f64::INFINITY, right_model, &|| {
-                outer_start(last, 1.0)
-            });
-            outer[1] = Some(newton(c, last.x, f64::INFINITY, true, start, finish));
+            let beyond = || outer_start(last.x, &last.taylor(&c.hi), 1.0);
+            let start = pick(last.x, f64::INFINITY, outer_model(false), &beyond);
+            outer[1] = Some(newton(
+                c,
+                last.x,
+                f64::INFINITY,
+                true,
+                start,
+                finish,
+                Some(&beyond),
+            ));
         }
     }
     let mut roots = Roots::new();
@@ -747,10 +801,12 @@ fn roots_between<const N: usize>(
     roots
 }
 
-/// `t` in `(0, 1)` with `s(t) = 3 t^2 - 2 t^3 = v1 / (v1 - v2)` (`v1`, `v2` of opposite
-/// signs), in plain arithmetic: the inner root of the model cubic. Solved on the half
-/// nearer `v1`'s or `v2`'s end, where `s` is convex, from below.
-fn smooth_inner(v1: f64, v2: f64) -> f64 {
+/// The inner root of the model cubic, `t` in `(0, 1)` with
+/// `s(t) = 3 t^2 - 2 t^3 = v1 / (v1 - v2)` (`v1`, `v2` of opposite signs), in plain
+/// arithmetic: solved on the half nearer `v1`'s or `v2`'s end, where `s` is convex, from
+/// below, and given as the fraction of the way from that end, in `(0, 1/2]`, with whether
+/// it is `v2`'s.
+fn smooth_inner(v1: f64, v2: f64) -> (f64, bool) {
     let w = v1 - v2;
     let (q, flip) = if v1.abs() <= v2.abs() {
         (v1 / w, false)
@@ -762,7 +818,16 @@ fn smooth_inner(v1: f64, v2: f64) -> f64 {
     let t = scalar_newton(((q + 2.0 * t * t * t) / 3.0).sqrt(), |t| {
         (t * t * (3.0 - 2.0 * t) - q, 6.0 * t * (1.0 - t))
     });
-    if flip { 1.0 - t } else { t }
+    (t, flip)
+}
+
+/// `u > 0` with `3 u^2 + 2 u^3 = q` (the model cubic's outer root beyond the end where
+/// it is `q` of the way to the other end's value), given the inner root `t` measured from
+/// the same end: the model's three roots in `-u`, `t` and the third sum to `3/2` with
+/// product `-q / 2`, so `u^2 + (3/2 - t) u - q / (2 t) = 0`, solved without cancellation.
+fn outer_beyond(q: f64, t: f64) -> f64 {
+    let (sigma, p) = (1.5 - t, q / (2.0 * t));
+    2.0 * p / (sigma + (sigma * sigma + 4.0 * p).sqrt())
 }
 
 /// `t` in `(0, 1)` with `v1 + (v2 - v1) s(t) + k t^2 (1 - t)^2 = 0`, by Newton's method in
@@ -787,20 +852,20 @@ fn smooth_outer(q: f64) -> f64 {
     scalar_newton(u, |u| (u * u * (3.0 + 2.0 * u) - q, 6.0 * u * (1.0 + u)))
 }
 
-/// The root of a monotone cubic from its Taylor form at the inflection point `s`,
+/// The root of a monotone cubic from its Taylor form `taylor` at the inflection point `x`,
 /// `v + t1 d + t3 d^3` (no `d^2` term): `d = k u` with `k = sqrt(t1 / t3)` and
 /// `u + u^3 = -v / (t1 k)`, in plain arithmetic.
-fn monotone_start<const N: usize>(s: &Sample<N>) -> Option<f64> {
-    let (&v, &t1, &t3) = (s.taylor.first()?, s.taylor.get(1)?, s.taylor.get(3)?);
+fn monotone_start<const N: usize>(x: f64, taylor: &[f64; N]) -> Option<f64> {
+    let (&v, &t1, &t3) = (taylor.first()?, taylor.get(1)?, taylor.get(3)?);
     if !(t1 > 0.0 && t3 > 0.0) {
-        return Some(s.x + cbrt_estimate((v / t3).abs()).copysign(-v));
+        return Some(x + cbrt_estimate((v / t3).abs()).copysign(-v));
     }
     let k = (t1 / t3).sqrt();
     let q = (v / (t1 * k)).abs();
     let u = scalar_newton(q.min(cbrt_estimate(q)), |u| {
         (u * (1.0 + u * u) - q, 1.0 + 3.0 * u * u)
     });
-    Some(s.x + (k * u).copysign(-v))
+    Some(x + (k * u).copysign(-v))
 }
 
 /// Newton's method on a scalar function `f` (value and slope) from `t`, until the step is
@@ -853,16 +918,14 @@ fn deflated_roots<const N: usize>(
 /// compensated Newton steps, and the test then also allows for the distance still left to
 /// it. A value within the bound is zero: a double root, or a pair of roots or of complex
 /// roots too close to tell apart.
-fn classify<const N: usize>(c: &Poly<N>, x: f64, extremum: bool) -> Sample<N> {
+fn classify<const N: usize>(c: &Poly<N>, x: f64, extremum: bool) -> Sample {
     let g = gamma::<N>();
-    let taylor = taylor(&c.hi, x);
-    let value = taylor.first().copied().unwrap_or(0.0);
-    let (size, _) = magnitudes(&c.hi, x);
+    let (value, _, size) = horner(&c.hi, x);
     if value.abs() > g * size {
         return Sample {
             x,
             sign: sign_of(value),
-            taylor,
+            value,
         };
     }
     let mut x = x;
@@ -880,7 +943,7 @@ fn classify<const N: usize>(c: &Poly<N>, x: f64, extremum: bool) -> Sample<N> {
             }
         }
     }
-    let mut taylor = self::taylor(&c.hi, x);
+    let taylor = taylor(&c.hi, x);
     let (size, slope_size) = magnitudes(&c.hi, x);
     let (value, _, _) = c.compensated(x);
     let mut tol = 2.0 * (U * value.abs() + g * g * size);
@@ -918,14 +981,11 @@ fn classify<const N: usize>(c: &Poly<N>, x: f64, extremum: bool) -> Sample<N> {
             tol += (t.abs() + 2.0 * g * e) * power;
         }
     }
-    if let Some(t0) = taylor.first_mut() {
-        *t0 = value;
-    }
     Sample {
         x,
         // a NaN bound (an infinite distance times a zero term) is no bound: zero
         sign: if value.abs() > tol { sign_of(value) } else { 0 },
-        taylor,
+        value,
     }
 }
 
@@ -977,15 +1037,16 @@ fn horner<const N: usize>(c: &[f64; N], x: f64) -> (f64, f64, f64) {
     (p, d, s)
 }
 
-/// A start beyond the outermost sample `s` (in direction `dir`), at or past the root, so
-/// that Newton's method (the polynomial is convex there) converges monotonically: each
-/// Taylor term that pushes `p` towards zero would alone reach it within
-/// `(|p(s)| / |t_k|)^(1/k)`, and the root is nearer than the nearest of those.
-fn outer_start<const N: usize>(s: &Sample<N>, dir: f64) -> f64 {
-    let value = s.taylor.first().copied().unwrap_or(0.0);
+/// A start beyond the outermost sample `x` (in direction `dir`), where the Taylor
+/// coefficients are `taylor`, at or past the root, so that Newton's method (the polynomial
+/// is convex there) converges monotonically: each Taylor term that pushes `p` towards zero
+/// would alone reach it within `(|p(x)| / |t_k|)^(1/k)`, and the root is nearer than the
+/// nearest of those.
+fn outer_start<const N: usize>(x: f64, taylor: &[f64; N], dir: f64) -> f64 {
+    let value = taylor.first().copied().unwrap_or(0.0);
     let mut distance = f64::INFINITY;
     let mut dir_k = 1.0;
-    for (k, &t) in s.taylor.iter().enumerate().skip(1) {
+    for (k, &t) in taylor.iter().enumerate().skip(1) {
         dir_k *= dir;
         if t * dir_k * value < 0.0 {
             let r = (value / t).abs();
@@ -1000,9 +1061,9 @@ fn outer_start<const N: usize>(s: &Sample<N>, dir: f64) -> f64 {
     }
     if !distance.is_finite() {
         // unreachable: the leading term always pushes towards zero beyond the samples
-        distance = s.x.abs().max(1.0);
+        distance = x.abs().max(1.0);
     }
-    s.x + dir * distance
+    x + dir * distance
 }
 
 /// A cube root to within a few percent (Kahan's bit trick), for a start point.
@@ -1015,6 +1076,12 @@ fn cbrt_estimate(r: f64) -> f64 {
 /// [`Bracket::step`]). Plain steps until the step is small; then, with `finish`,
 /// compensated ones ([`polish`]). A plain value within its error bound also goes on to
 /// compensated steps, unless the root is well conditioned and `finish` is not asked.
+///
+/// An outer search (one end infinite) takes `beyond`, a start past the root (as a rule):
+/// when `start` turns out short of the root (its sign sure) and its Newton step lands
+/// further out than `beyond`, the search goes on from `beyond` instead. From short of an
+/// outer root, near the critical point where the slope vanishes, a Newton step can land
+/// far past the root, where the steps back are each only a fraction `1 / n` of the way.
 fn newton<const N: usize>(
     c: &Poly<N>,
     lo: f64,
@@ -1022,6 +1089,7 @@ fn newton<const N: usize>(
     rising: bool,
     start: f64,
     finish: bool,
+    mut beyond: Option<&dyn Fn() -> f64>,
 ) -> f64 {
     let g = gamma::<N>();
     let mut bracket = Bracket {
@@ -1032,7 +1100,7 @@ fn newton<const N: usize>(
         rising,
     };
     let mut x = start;
-    for _ in 0..MAX_STEPS {
+    for _ in 0..PLAIN_STEPS {
         let (p, d, size) = horner(&c.hi, x);
         if p.abs() <= g * size {
             // The sign is noise. Without `finish`, a root this well conditioned (the
@@ -1042,9 +1110,26 @@ fn newton<const N: usize>(
             }
             return polish(c, bracket, x);
         }
-        let Some((next, step)) = bracket.step(x, p, d) else {
+        let Some((mut next, mut step)) = bracket.step(x, p, d) else {
             break;
         };
+        if let Some(beyond) = beyond.take() {
+            // short of the root (`a`, rightwards, or `b`, leftwards, moved to `x`), and
+            // stepping further than `x` is from the sample, the search's finite end
+            let (short, end) = if hi.is_infinite() {
+                (bracket.a == x, lo)
+            } else {
+                (bracket.b == x, hi)
+            };
+            if short && step > (x - end).abs() {
+                let far = beyond();
+                if (hi.is_infinite() && x < far && far < next)
+                    || (lo.is_infinite() && next < far && far < x)
+                {
+                    (next, step) = (far, (far - x).abs());
+                }
+            }
+        }
         x = next;
         if step <= PLAIN_STEP * x.abs() {
             break;
@@ -1226,5 +1311,82 @@ mod tests {
         let r = solve_quartic(&[1.0, 0.0, -f64::MAX, 0.0, tiny], 0.0);
         let x = 1.0 / f64::MAX.sqrt();
         assert!(close(&r, &[-x, x], 1e-15 * x), "{r:?}");
+    }
+
+    /// `r` is `expected`, root for root, to `1e-15` relative.
+    fn assert_roots(r: &Roots, expected: &[f64]) {
+        assert_eq!(r.len(), expected.len(), "{r:?}");
+        for (&x, &e) in r.iter().zip(expected) {
+            assert!((x - e).abs() <= 1e-15 * e.abs(), "{r:?}");
+        }
+    }
+
+    // Groups of roots far apart (by less than a split): once found every root's
+    // search ran out of steps first, returning a point short of the root or none.
+    #[test]
+    fn roots_in_groups_far_apart() {
+        // from short of the outer roots, by the critical points, Newton's first step
+        // lands far past them
+        let r = solve_cubic(
+            &[
+                9.038942794798868e26,
+                -3.7147613634085717e-13,
+                -1.3042067502162137e48,
+                -2.2972721273366368e42,
+            ],
+            0.0,
+        );
+        assert_roots(
+            &r,
+            &[
+                -567_719.746_692_899_4,
+                -2.632_604_365_318_986_4e-11,
+                2.632_604_365_318_986e-11,
+            ],
+        );
+        // the derivative's roots near zero, from the model's root nearer its end
+        let r = solve_quartic(
+            &[
+                -2.4201697088465876e-19,
+                11_597_494_302_572.11,
+                -4.8463532864414455e-60,
+                -1.3132552959826555e18,
+                -1.3478078370677313e-14,
+            ],
+            0.0,
+        );
+        assert_roots(
+            &r,
+            &[
+                -9.743638965920781e31,
+                -0.002_971_717_374_894_825_7,
+                2.08680396446484e-32,
+                0.002_971_717_374_894_825_7,
+            ],
+        );
+        // from the critical point by -1.3e49, past three roots' group by zero: each
+        // step closes only a third of the way
+        let r = solve_quartic(
+            &[
+                -3.1712278131862046e48,
+                1.9694060740748343e-30,
+                -2.840282542925966e-57,
+                60_371_202_422_694.2,
+                3.5742165121151144e-36,
+            ],
+            0.0,
+        );
+        assert_roots(&r, &[-1.6890751362728257e49, 374_512_115_718.136_17]);
+        let r = solve_quartic(
+            &[
+                -3.2635846068652265e43,
+                2.9636090803364664e-10,
+                -2.6838777828702883e-49,
+                2.0237998505865052e38,
+                169_835_459.563_933_2,
+            ],
+            0.0,
+        );
+        assert_roots(&r, &[-1.1916238551023333e30, 54.430_514_422_102_76]);
     }
 }
