@@ -492,6 +492,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "scx-curve"
+version = "0.1.0"
+dependencies = [
+ "scx-num",
+ "scx-nurbs",
+ "scx-testkit",
+]
+
+[[package]]
 name = "scx-difftest"
 version = "0.1.0"
 dependencies = [
