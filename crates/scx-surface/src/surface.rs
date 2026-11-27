@@ -3,13 +3,14 @@
 //! an enum, not a trait object, as `scx_curve::Curve` is, 63 A7).
 //!
 //! Each method is the kind's own call under one `match`, so a dispatched result has the
-//! kind's bits. [`Surface::eval_many`] matches once per batch, outside the loop.
+//! kind's bits. [`Surface::eval_many`] and [`Surface::eval_grid`] match once per batch,
+//! outside the loop.
 //!
 //! The `Nurbs` arm holds its [`NurbsSurface`] behind an `Arc` (63 A7): cloning a surface is
 //! a count, and the enum keeps the size of its largest analytic arm. Its calls are the
-//! surface's own: [`NurbsSurface::point`] and [`NurbsSurface::eval_many`] on the pieces above
-//! `uv`, and [`NurbsSurface::jet`] on the pieces `side` picks. These calls cannot fail here,
-//! so where the surface's call errs (a parameter that is not finite, a value that overflows,
+//! surface's own: [`NurbsSurface::point`], [`NurbsSurface::eval_many`] and
+//! [`NurbsSurface::eval_grid`] on the pieces above `uv`, and [`NurbsSurface::jet`] on the
+//! pieces `side` picks. These calls cannot fail here, so where the surface's call errs (a parameter that is not finite, a value that overflows,
 //! a jet past [`scx_nurbs::MAX_ORDER`]) every coordinate is NaN, as an analytic kind's are at
 //! an infinite parameter.
 //!
@@ -188,22 +189,82 @@ impl Surface {
             Self::Nurbs(n) => nurbs_many(n, uv, out),
         }
     }
+
+    /// The points of the grid `us × vs`, into `out` row by row: `out[i * vs.len() + j]` is
+    /// [`Surface::point`]`((us[i], vs[j]))`, bit for bit. A NURBS surface computes each
+    /// basis once ([`NurbsSurface::eval_grid`]); an analytic kind evaluates each point.
+    ///
+    /// # Panics
+    ///
+    /// If `out.len()` is not `us.len() * vs.len()`.
+    pub fn eval_grid(&self, us: &[f64], vs: &[f64], out: &mut [Point3]) {
+        assert_eq!(
+            us.len().checked_mul(vs.len()),
+            Some(out.len()),
+            "eval_grid: out is not us.len() * vs.len() long"
+        );
+        dispatch!(
+            self,
+            k => grid_by_point(us, vs, out, |uv| k.point(uv)),
+            n => nurbs_grid(n, us, vs, out)
+        );
+    }
 }
 
-/// [`NurbsSurface::eval_many`] into `out`. The batch errs whole at its first bad point, so
-/// then each point is taken alone, NaN only where its own call errs.
+/// How many points the `Nurbs` arm of [`Surface::eval_many`] passes at a time: its `uv`
+/// and points go through buffers on the stack (`Point2` and `Point3` have no layout promise,
+/// and `unsafe` is forbidden), and a basis is recomputed only at a chunk's first point.
+const CHUNK: usize = 64;
+
+/// [`NurbsSurface::eval_many`] into `out`, a chunk at a time. A chunk errs at its first bad
+/// point, so then each of its points is taken alone, NaN only where its own call errs.
+#[inline(never)]
 fn nurbs_many(n: &NurbsSurface<3>, uv: &[Point2], out: &mut [Point3]) {
-    let at: Vec<[f64; 2]> = uv.iter().map(|p| p.to_array()).collect();
-    match n.eval_many(&at, ABOVE) {
-        Ok(ps) => {
-            for (o, p) in out.iter_mut().zip(ps) {
-                *o = point3(p);
+    let mut at = [[0.0; 2]; CHUNK];
+    let mut ps = [[0.0; 3]; CHUNK];
+    for (uv, out) in uv.chunks(CHUNK).zip(out.chunks_mut(CHUNK)) {
+        // Both buffers hold `CHUNK`, so the prefixes always exist.
+        let bufs = at.get_mut(..uv.len()).zip(ps.get_mut(..uv.len()));
+        let done = bufs.is_some_and(|(at, ps)| {
+            for (a, p) in at.iter_mut().zip(uv) {
+                *a = p.to_array();
             }
-        }
-        Err(_) => {
+            let ok = n.eval_many(at, ABOVE, ps).is_ok();
+            if ok {
+                for (o, &p) in out.iter_mut().zip(ps.iter()) {
+                    *o = point3(p);
+                }
+            }
+            ok
+        });
+        if !done {
             for (o, &p) in out.iter_mut().zip(uv) {
                 *o = nurbs_point(n, p);
             }
+        }
+    }
+}
+
+/// [`NurbsSurface::eval_grid`] into `out`, through one buffer of the grid's size; where the
+/// grid errs, each point is taken alone, NaN only where its own call errs.
+#[inline(never)]
+fn nurbs_grid(n: &NurbsSurface<3>, us: &[f64], vs: &[f64], out: &mut [Point3]) {
+    let mut ps = vec![[0.0; 3]; out.len()];
+    if n.eval_grid(us, vs, ABOVE, &mut ps).is_ok() {
+        for (o, p) in out.iter_mut().zip(ps) {
+            *o = point3(p);
+        }
+    } else {
+        grid_by_point(us, vs, out, |uv| nurbs_point(n, uv));
+    }
+}
+
+/// `out[i * vs.len() + j] = f((us[i], vs[j]))`.
+#[inline]
+fn grid_by_point(us: &[f64], vs: &[f64], out: &mut [Point3], f: impl Fn(Point2) -> Point3) {
+    for (&u, row) in us.iter().zip(out.chunks_mut(vs.len().max(1))) {
+        for (o, &v) in row.iter_mut().zip(vs) {
+            *o = f(Point2::new(u, v));
         }
     }
 }
@@ -484,6 +545,22 @@ mod tests {
                 assert_eq!(bits3(p.to_array()), bits3(s.point(q).to_array()), "{q:?}");
             }
             s.eval_many(&[], &mut []);
+            // Grids: from the same parameters (an infinity and a NaN among them, so a NURBS
+            // grid errs and takes the per-point path), and from finite ones (its batch path).
+            let us: Vec<f64> = uv.iter().map(|p| p.x).take(20).collect();
+            let vs: Vec<f64> = uv.iter().map(|p| p.y).skip(20).take(13).collect();
+            let finite =
+                |t: &[f64]| -> Vec<f64> { t.iter().copied().filter(|x| x.abs() < 2.0).collect() };
+            for (us, vs) in [(us.clone(), vs.clone()), (finite(&us), finite(&vs))] {
+                let mut out = vec![Point3::ORIGIN; us.len() * vs.len()];
+                s.eval_grid(&us, &vs, &mut out);
+                for (k, p) in out.iter().enumerate() {
+                    let q = Point2::new(us[k / vs.len()], vs[k % vs.len()]);
+                    assert_eq!(bits3(p.to_array()), bits3(s.point(q).to_array()), "{q:?}");
+                }
+            }
+            s.eval_grid(&[], &[0.5], &mut []);
+            s.eval_grid(&[0.5], &[], &mut []);
         }
     }
 
@@ -492,6 +569,13 @@ mod tests {
     fn eval_many_refuses_slices_of_different_lengths() {
         let s = Surface::from(Plane::new(Frame::WORLD));
         s.eval_many(&[Point2::ORIGIN; 2], &mut [Point3::ORIGIN]);
+    }
+
+    #[test]
+    #[should_panic(expected = "us.len() * vs.len()")]
+    fn eval_grid_refuses_an_output_of_the_wrong_length() {
+        let s = Surface::from(Plane::new(Frame::WORLD));
+        s.eval_grid(&[0.0, 1.0], &[0.0, 1.0], &mut [Point3::ORIGIN; 3]);
     }
 
     #[test]

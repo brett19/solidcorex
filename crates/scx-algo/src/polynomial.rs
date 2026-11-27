@@ -32,6 +32,8 @@
 //!   uninitialised `adCSol[0]` (undefined behaviour). The port uses `0.0` there
 //!   (see `plan/findings.md`, `geom.polynomial`).
 //! - The `SM_DEBUG_CODE` self-checks (disabled upstream) are not ported.
+//! - The quartic reads only the first root of its resolvent cubic, so only that root is
+//!   computed (upstream computes all three); the bits are the same.
 //! - [`solve_cubic`] and [`solve_quartic`] polish each closed-form root with up to two
 //!   Newton steps on the original polynomial, residual by compensated Horner, each kept
 //!   only when it strictly reduces `|p|`. The count and order of the roots are upstream's:
@@ -150,7 +152,7 @@ pub fn solve_quadratic(coefficients: &[f64; 3], zero_tol: f64) -> Roots {
 /// From Graphics Gems I; the roots are then polished (see the module's deviations).
 #[must_use]
 pub fn solve_cubic(coefficients: &[f64; 4], zero_tol: f64) -> Roots {
-    let mut roots = closed_cubic(coefficients, zero_tol);
+    let mut roots = closed_cubic::<true>(coefficients, zero_tol);
     // the quadratic fallback, decided as `closed_cubic` decides (a NaN `zero_tol` keeps
     // the cubic), is not polished
     if coefficients[3].abs() < zero_tol {
@@ -161,7 +163,9 @@ pub fn solve_cubic(coefficients: &[f64; 4], zero_tol: f64) -> Roots {
 }
 
 /// The closed form of [`solve_cubic`], unpolished: the roots the quartic's own steps read.
-fn closed_cubic(coefficients: &[f64; 4], zero_tol: f64) -> Roots {
+/// With `ALL` false only the first root is computed (the quartic's resolvent reads no
+/// other), the same bits as the first of all of them.
+fn closed_cubic<const ALL: bool>(coefficients: &[f64; 4], zero_tol: f64) -> Roots {
     let [c0, c1, c2, c3] = *coefficients;
     if c3.abs() < zero_tol {
         return solve_quadratic(&[c0, c1, c2], zero_tol);
@@ -186,7 +190,9 @@ fn closed_cubic(coefficients: &[f64; 4], zero_tol: f64) -> Roots {
             // One single and one double root.
             let u = cbrt(-q);
             roots.push(2.0 * u);
-            roots.push(-u);
+            if ALL {
+                roots.push(-u);
+            }
         }
     } else if d < 0.0 {
         // Three roots. Upstream uses the plain `sqrt` here, `smos_Sqrt` below.
@@ -194,8 +200,10 @@ fn closed_cubic(coefficients: &[f64; 4], zero_tol: f64) -> Roots {
         let t = 2.0 * sqrt(-p);
 
         roots.push(t * cos(phi));
-        roots.push(-t * cos(phi + PI / 3.0));
-        roots.push(-t * cos(phi - PI / 3.0));
+        if ALL {
+            roots.push(-t * cos(phi + PI / 3.0));
+            roots.push(-t * cos(phi - PI / 3.0));
+        }
     } else {
         // One real root.
         let sqrt_d = sqrt(d);
@@ -250,7 +258,7 @@ pub fn solve_quartic(coefficients: &[f64; 5], zero_tol: f64) -> Roots {
 
     if r.abs() < zero_tol {
         // No absolute term: y (y^3 + p y + q) = 0.
-        for &x in closed_cubic(&[q, p, 0.0, 1.0], zero_tol).iter() {
+        for &x in closed_cubic::<true>(&[q, p, 0.0, 1.0], zero_tol).iter() {
             add_solution(&mut roots, x, zero_tol);
         }
         add_solution(&mut roots, 0.0, zero_tol);
@@ -262,7 +270,7 @@ pub fn solve_quartic(coefficients: &[f64; 5], zero_tol: f64) -> Roots {
             -1.0 / 2.0 * p,
             1.0,
         ];
-        let z = closed_cubic(&resolvent, zero_tol)
+        let z = closed_cubic::<false>(&resolvent, zero_tol)
             .first()
             .copied()
             .unwrap_or(0.0);

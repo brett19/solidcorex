@@ -252,7 +252,7 @@ push or publish). A builder pushes a branch and the owner reviews the design, no
 | Job | What |
 |---|---|
 | `fast` | `cargo xtask fast` (fmt, clippy `-D warnings`, layers, headers, pin, tier-1 tests), then `clippy --workspace --all-targets -D warnings`, which adds `scx-difftest` |
-| `xplat` | the golden hash tests (`fmath_pin`, `xplat_pin`) on `wasm32-wasip1` under wasmtime and on aarch64 (GitHub's native `ubuntu-24.04-arm` runner). Both legs are hard checks |
+| `xplat` | the golden hash tests (`fmath_pin`, `xplat_pin`) and `scx-num`'s unit tests on `wasm32-wasip1` under wasmtime and on aarch64 (GitHub's native `ubuntu-24.04-arm` runner). Both legs are hard checks |
 | `difftest` | `cargo test -p scx-difftest`, the full pin comparison |
 | `bench-compile` | `cargo check --benches -p scx-bench`, with the pin checked out (section 8.1) |
 
