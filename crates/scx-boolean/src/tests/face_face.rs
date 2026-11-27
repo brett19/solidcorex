@@ -5,13 +5,13 @@ use core::f64::consts::{PI, TAU};
 
 use scx_brep::Brep;
 use scx_brep::Document;
-use scx_make::{cylinder, sphere};
 use scx_num::budget::{Budget, Stop};
 use scx_num::frame::Frame;
 use scx_num::units::Length;
 use scx_num::vector3d::Vec3;
 use scx_ssi::analytic::Contact;
 use scx_surface::SurfaceKind;
+use scx_testkit::bodies::made::{cylinder, sphere};
 
 use super::{cuboid, pt, run, unit};
 use crate::boolean::{Interference, interfere};

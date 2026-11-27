@@ -12,11 +12,12 @@ scx-ssi
 scx-brep
 scx-record
 scx-mass
-scx-make
 scx-tess
 scx-bodyq
 scx-check
 scx-boolean
+# scx-stitch and scx-hlr go here, when added (after scx-check); scx-step after them.
+scx-make
 scx-step
 
 # Crates outside the order. `difftest` may depend on any library (and on the pinned
