@@ -1870,3 +1870,161 @@ pub fn nurbs_surface_from_homogeneous() -> PinDefect<(Homog,), Option<Read>> {
         check: |(h,), b| surface_answer(&h.0, b),
     }
 }
+
+// ---- scx-nurbs-surface: IGES 128 ----------------------------------------------------------
+
+use crate::t_nurbs_surface_iges::Ent;
+
+/// Why `e` is not IGES 128 data for a surface, or `None` when it is: the entity's definition,
+/// as scx's rulings read it.
+///
+/// The net is a whole rectangle with one weight per point; each degree is from 1 to 31 and
+/// the knots number `points + degree + 1` along it, finite and non-decreasing; the bounds
+/// satisfy `U[p] <= U(0) < U(1) <= U[m - p]` (and the same in v); every point is finite, every
+/// weight finite and positive, and `w P` finite when the weights differ.
+fn not_an_entity(e: &Ent) -> Option<String> {
+    if !e.net_is_whole() {
+        return Some("the net is not a rectangle with a weight per point".to_owned());
+    }
+    let rows = e.rows();
+    let axes = [
+        ("u", e.degrees.0, &e.knots_u, rows, e.u),
+        ("v", e.degrees.1, &e.knots_v, e.cols, e.v),
+    ];
+    for (axis, d, k, count, b) in axes {
+        if !(1..=31).contains(&d) {
+            return Some(format!("{axis} degree {d}"));
+        }
+        if k.len() != count + d + 1 {
+            return Some(format!(
+                "{} {axis} knots for {count} points of degree {d}",
+                k.len()
+            ));
+        }
+        if k.iter().any(|x| !x.is_finite()) || k.windows(2).any(|w| w[1] < w[0]) {
+            return Some(format!("{axis} knots not finite and non-decreasing"));
+        }
+        if !(k[d] <= b[0] && b[0] < b[1] && b[1] <= k[k.len() - 1 - d]) {
+            return Some(format!("{axis} bounds {b:?} outside the domain"));
+        }
+    }
+    if e.points.iter().flatten().any(|x| !x.is_finite()) {
+        return Some("a control point is not finite".to_owned());
+    }
+    if e.weights.iter().any(|w| !(w.is_finite() && *w > 0.0)) {
+        return Some("a weight is not finite and positive".to_owned());
+    }
+    let w0 = e.weights[0];
+    if e.weights.iter().any(|&w| w != w0)
+        && e.points
+            .iter()
+            .zip(&e.weights)
+            .any(|(p, &w)| p.iter().any(|x| !(x * w).is_finite()))
+    {
+        return Some("a weighted point w P is not finite".to_owned());
+    }
+    None
+}
+
+/// Whether the repairs of the entity change its surface: a knot repeated more than `p` times
+/// inside the domain or more than `p + 1` times at an end (the repair averages points, so the
+/// surface is not kept).
+fn needs_lossy_repair(e: &Ent) -> bool {
+    [(e.degrees.0, &e.knots_u), (e.degrees.1, &e.knots_v)]
+        .into_iter()
+        .any(|(p, k)| {
+            let (low, high) = (k[p], k[k.len() - 1 - p]);
+            k.iter().any(|&x| {
+                let run = k.iter().filter(|&&y| y == x).count();
+                run > p + 1 || (run > p && x != low && x != high)
+            })
+        })
+}
+
+/// Checks scx's answer on `e` against [`not_an_entity`]: refused exactly when `e` is not an
+/// entity; otherwise a surface of the entity's degrees clamped to its bounds, and (when the
+/// repairs keep the surface) the entity's own surface on the bounds, by the testkit's exact
+/// evaluation, to rounding.
+fn iges_answer(e: &Ent, built: &Option<Read>) -> Result<(), String> {
+    use scx_testkit::nurbs::{Side, Surface};
+    match (not_an_entity(e), built) {
+        (Some(_), None) => return Ok(()),
+        (Some(why), Some(_)) => return Err(format!("scx built a surface from {}: {why}", e.edit)),
+        (None, None) => return Err(format!("scx refused an entity ({})", e.edit)),
+        (None, Some(_)) => {}
+    }
+    let Some((p, q, ku, kv, hom)) = built else {
+        return Ok(());
+    };
+    if (*p, *q) != e.degrees {
+        return Err("the degrees changed".to_owned());
+    }
+    for (d, k, b) in [(*p, ku, e.u), (*q, kv, e.v)] {
+        let clamped = k.len() > 2 * d + 1
+            && k.iter().take(d + 1).all(|&x| x == b[0])
+            && k.iter().rev().take(d + 1).all(|&x| x == b[1])
+            && k.windows(2).all(|w| w[0] <= w[1]);
+        if !clamped {
+            return Err(format!("knots {k:?} are not clamped to {b:?}"));
+        }
+    }
+    if hom.len() != (ku.len() - p - 1) * (kv.len() - q - 1) {
+        return Err("the net does not fit the knots".to_owned());
+    }
+    // The exact evaluation is rational arithmetic on doubles of every exponent: small nets of
+    // moderate weights only (the rest are checked structurally above).
+    let moderate = e.weights.iter().all(|w| (1e-3..=1e3).contains(w));
+    if needs_lossy_repair(e) || e.points.len() > 20 || !moderate {
+        return Ok(());
+    }
+    let want = Surface::<3>::new(
+        (*p, *q),
+        &e.knots_u,
+        &e.knots_v,
+        &e.points,
+        Some(&e.weights),
+    )
+    .map_err(|x| format!("the exact model refuses the entity: {x:?}"))?;
+    let (weighted, weights): (Vec<[f64; 3]>, Vec<f64>) =
+        hom.iter().map(|h| ([h[0], h[1], h[2]], h[3])).unzip();
+    let got = Surface::<3>::from_homogeneous((*p, *q), ku, kv, &weighted, &weights)
+        .map_err(|x| format!("the exact model refuses the result: {x:?}"))?;
+    // Two samples per direction: the exact evaluation is rational arithmetic.
+    for i in 0..2 {
+        for j in 0..2 {
+            let uv = (
+                e.u[0] + (e.u[1] - e.u[0]) * (0.13 + 0.5 * f64::from(i)),
+                e.v[0] + (e.v[1] - e.v[0]) * (0.27 + 0.4 * f64::from(j)),
+            );
+            let side = (Side::Above, Side::Above);
+            let (a, b) = (
+                want.point(uv, side).map_err(|x| format!("{x:?}"))?,
+                got.point(uv, side).map_err(|x| format!("{x:?}"))?,
+            );
+            for (x, y) in a.rounded.iter().zip(&b.rounded) {
+                if (x - y).abs() > 1e-6 * (1.0 + x.abs()) {
+                    return Err(format!("{} differs at {uv:?}: {x} against {y}", e.edit));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `from_iges` where scx and the pin disagree on acceptance. The pin's `N_Iges128Srf` refuses
+/// what is an entity: degrees 18 to 31 (its cap is 17) and weights outside `[1e-3, 100]`
+/// (the surface does not change when every weight is scaled, so no range is a property of
+/// it); it reads a prefix of arrays longer than its counts say (an extra knot), and builds
+/// from NaN weights, knots, bounds and points, and from `w P` that overflows (the
+/// comparisons `w < 1e-3 || w > 100` and `up > v[0]` are false for NaN, nothing checks a
+/// coordinate). Truth: the definition ([`not_an_entity`]); scx must answer by it, and a
+/// surface it builds must be clamped to the bounds and the entity's surface on them
+/// ([`iges_answer`]).
+pub fn iges_128_surface() -> PinDefect<(Ent,), Option<Read>> {
+    PinDefect {
+        reason: "the pin refuses degrees above 17 and weights outside [1e-3, 100], reads a \
+                 prefix of long arrays, and passes NaN weights, knots, bounds and points",
+        applies: Applies::Disagreeing,
+        check: |(e,), b| iges_answer(e, b),
+    }
+}
