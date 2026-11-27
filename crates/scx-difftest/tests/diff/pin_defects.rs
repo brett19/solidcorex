@@ -3485,3 +3485,420 @@ pub fn surface_jet() -> PinDefect<(crate::t_surface::Spec,), Vec<[f64; 3]>> {
         },
     }
 }
+
+// ---- scx-curve ------------------------------------------------------------------------------
+
+use crate::t_curve::{Angle, ConicIn, GoodConic, LineIn, axes2, axes3};
+use scx_testkit::analytic;
+use scx_testkit::dd::Dd;
+
+/// The definition of a line: finite data and a direction no shorter than `EFF_ZERO` (the
+/// pin's own degenerate-line threshold). scx builds exactly that line, as given, and refuses
+/// the rest.
+fn line_answer(o: &[f64], d: &[f64], got: &Option<Vec<f64>>) -> Result<(), String> {
+    let finite = o.iter().chain(d).all(|x| x.is_finite());
+    let length = d.iter().map(|x| x * x).sum::<f64>().sqrt();
+    let is_line = finite && length >= scx_num::math::EFF_ZERO;
+    let want = is_line.then(|| o.iter().chain(d).copied().collect::<Vec<_>>());
+    if *got == want {
+        Ok(())
+    } else {
+        Err(format!("the definition gives {want:?}"))
+    }
+}
+
+/// `Line::new` where the pin builds what is no line: `Line::infinite` divides by the length,
+/// so a zero direction gives NaN data and a non-finite one is kept. Truth: [`line_answer`].
+pub fn curve_line_new() -> PinDefect<(LineIn,), Option<Vec<f64>>> {
+    PinDefect {
+        reason: "the pin builds lines from zero and non-finite directions",
+        applies: Applies::Disagreeing,
+        check: |(l,), r| line_answer(&l.o, &l.d, r),
+    }
+}
+
+/// `Line::through` where the pin builds what is no line: `from_points` turns a segment
+/// shorter than `EFF_ZERO` into the X axis over `[0, 0]` and keeps non-finite points.
+/// Truth: [`line_answer`] on `(start, end - start)`.
+pub fn curve_line_through() -> PinDefect<(LineIn,), Option<Vec<f64>>> {
+    PinDefect {
+        reason: "the pin turns a degenerate segment into the X axis over [0, 0]",
+        applies: Applies::Disagreeing,
+        check: |(l,), r| {
+            let d: Vec<f64> = l.d.iter().zip(&l.o).map(|(e, s)| e - s).collect();
+            line_answer(&l.o, &d, r)
+        },
+    }
+}
+
+/// `Line2::new`, as [`curve_line_new`] on the x and y coordinates.
+pub fn curve_line2_new() -> PinDefect<(LineIn,), Option<Vec<f64>>> {
+    PinDefect {
+        reason: "as curve_line_new",
+        applies: Applies::Disagreeing,
+        check: |(l,), r| line_answer(&l.o[..2], &l.d[..2], r),
+    }
+}
+
+/// The definition of a conic: finite radii above `EFF_ZERO` (the pin's circle rule, for
+/// both radii). scx builds exactly that conic on its frame, and refuses the rest.
+fn conic_answer(
+    axes: ([f64; 3], [f64; 3], [f64; 3]),
+    a: f64,
+    b: f64,
+    got: &Option<Vec<f64>>,
+) -> Result<(), String> {
+    let ok = |r: f64| r.is_finite() && r > scx_num::math::EFF_ZERO;
+    let want = (ok(a) && ok(b)).then(|| {
+        let mut v: Vec<f64> = [axes.0, axes.1, axes.2].iter().flatten().copied().collect();
+        v.extend([a, b]);
+        v
+    });
+    if *got == want {
+        Ok(())
+    } else {
+        Err(format!("the definition gives {want:?}"))
+    }
+}
+
+/// `Circle::new` where the pin builds what is no circle: `create_canonical_circle` refuses
+/// a NaN radius or one not above `EFF_ZERO`, but builds an infinite one. Truth:
+/// [`conic_answer`].
+pub fn curve_circle_new() -> PinDefect<(ConicIn,), Option<Vec<f64>>> {
+    PinDefect {
+        reason: "the pin builds a circle of infinite radius",
+        applies: Applies::Disagreeing,
+        check: |(c,), r| conic_answer(axes3(c), c.a, c.a, r),
+    }
+}
+
+/// `Ellipse::new` where the pin builds what is no ellipse: `Ellipse::new` checks no radius,
+/// so zero, negative, infinite and NaN radii build. Truth: [`conic_answer`].
+pub fn curve_ellipse_new() -> PinDefect<(ConicIn,), Option<Vec<f64>>> {
+    PinDefect {
+        reason: "the pin's Ellipse::new builds any radii",
+        applies: Applies::Disagreeing,
+        check: |(c,), r| conic_answer(axes3(c), c.a, c.b, r),
+    }
+}
+
+/// `Circle2::new`, as [`curve_circle_new`].
+pub fn curve_circle2_new() -> PinDefect<(ConicIn,), Option<Vec<f64>>> {
+    PinDefect {
+        reason: "as curve_circle_new",
+        applies: Applies::Disagreeing,
+        check: |(c,), r| conic_answer(axes2(c), c.a, c.a, r),
+    }
+}
+
+/// `Ellipse2::new`, as [`curve_ellipse_new`].
+pub fn curve_ellipse2_new() -> PinDefect<(ConicIn,), Option<Vec<f64>>> {
+    PinDefect {
+        reason: "as curve_ellipse_new",
+        applies: Applies::Disagreeing,
+        check: |(c,), r| conic_answer(axes2(c), c.a, c.b, r),
+    }
+}
+
+/// A conic's point and derivatives against the double-double truth at the radian angle,
+/// each coordinate within 6 roundings of its terms' size (`|o| + |a x| + |b y|`). For a
+/// non-finite angle every coordinate is NaN.
+fn conic_jet_answer<const N: usize>(
+    axes: ([f64; 3], [f64; 3], [f64; 3]),
+    a: f64,
+    b: f64,
+    t: f64,
+    got: &[[f64; N]],
+) -> Result<(), String> {
+    if !t.is_finite() {
+        return if got.iter().flatten().all(|x| x.is_nan()) {
+            Ok(())
+        } else {
+            Err(format!("not NaN at t = {t}: {got:?}"))
+        };
+    }
+    let (o, x, y) = axes;
+    let r = analytic::Ellipse {
+        frame: analytic::Frame {
+            origin: o,
+            x,
+            y,
+            z: [0.0, 0.0, 1.0],
+        },
+        semi_x: a,
+        semi_y: b,
+    };
+    let want = r.derivs(t, 3);
+    for (k, v) in got.iter().enumerate() {
+        for i in 0..N {
+            let w = want[k][i];
+            let o_i = if k == 0 { o[i].abs() } else { 0.0 };
+            let scale = o_i + (a * x[i]).abs() + (b * y[i]).abs();
+            let err = (Dd::new(v[i]) - w).abs().hi;
+            if err > 6.0 * U * scale + f64::MIN_POSITIVE {
+                return Err(format!(
+                    "C^({k})[{i}] = {} off the truth {w:?} by {err}",
+                    v[i]
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A conic's point or jet where the pin is off the truth: the pin evaluates at the angle in
+/// degrees, `t 180 / pi` rounded and folded into `[0, 360]`, then `* pi / 180` again, two
+/// roundings of the angle that grow with `|t|` (at `t = 1e5` about `1e-11` of the radius),
+/// and its derivatives carry `(pi / 180)^k` rounded per factor. A coordinate that cancels
+/// near zero differs past the relative tolerance too. scx takes `sin_cos` of the radian
+/// angle itself. Truth: [`conic_jet_answer`].
+const CONIC_STEP: &str = "the pin's degree round trip of the angle";
+
+macro_rules! conic_defects {
+    ($($name:ident: $r:ty, $axes:ident, $circle:expr, $wrap:expr;)*) => {$(
+        #[doc = concat!("`", stringify!($name), "`: see [`CONIC_STEP`].")]
+        pub fn $name() -> PinDefect<(GoodConic, Angle), $r> {
+            PinDefect {
+                reason: CONIC_STEP,
+                applies: Applies::Disagreeing,
+                check: |(c, t), r| {
+                    let c = &c.0;
+                    let b = if $circle { c.a } else { c.b };
+                    conic_jet_answer($axes(c), c.a, b, t.0, $wrap(r))
+                },
+            }
+        }
+    )*};
+}
+
+fn one<const N: usize>(r: &[f64; N]) -> &[[f64; N]] {
+    core::slice::from_ref(r)
+}
+
+fn all<const N: usize>(r: &Vec<[f64; N]>) -> &[[f64; N]] {
+    r
+}
+
+conic_defects! {
+    curve_circle_point: [f64; 3], axes3, true, one;
+    curve_circle_jet: Vec<[f64; 3]>, axes3, true, all;
+    curve_ellipse_point: [f64; 3], axes3, false, one;
+    curve_ellipse_jet: Vec<[f64; 3]>, axes3, false, all;
+    curve_circle2_point: [f64; 2], axes2, true, one;
+    curve_circle2_jet: Vec<[f64; 2]>, axes2, true, all;
+    curve_ellipse2_point: [f64; 2], axes2, false, one;
+    curve_ellipse2_jet: Vec<[f64; 2]>, axes2, false, all;
+}
+
+use crate::berns::BernR;
+
+/// One call's roots: the places and whether every root was isolated.
+pub(crate) type RootsOut = (Vec<f64>, bool);
+
+/// `t_bern::bern_roots`'s four calls.
+type FourRoots = (RootsOut, RootsOut, RootsOut, RootsOut);
+
+/// Exact de Casteljau of `c` at the local parameter `t`.
+fn casteljau_rat(c: &[Rat], t: &Rat) -> Rat {
+    let s = &Rat::one() - t;
+    let mut b = c.to_vec();
+    while b.len() > 1 {
+        b = b.windows(2).map(|w| &(&s * &w[0]) + &(t * &w[1])).collect();
+    }
+    b.first().cloned().unwrap_or_else(Rat::zero)
+}
+
+/// The local parameter of the global place `g` on `[lo, hi]`, exactly.
+fn local_t(lo: &Rat, hi: &Rat, g: f64) -> Result<Rat, String> {
+    (&rat(g)? - lo)
+        .checked_div(&(hi - lo))
+        .ok_or_else(|| "an empty interval".to_string())
+}
+
+/// The polynomial with Bernstein coefficients `c` on `[lo, hi]`, exactly, at `g`: its sign.
+fn bern_sign(c: &[Rat], lo: &Rat, hi: &Rat, g: f64) -> Result<i32, String> {
+    Ok(casteljau_rat(c, &local_t(lo, hi, g)?).signum())
+}
+
+/// Whether every place within `k` doubles of `g` lies inside the f64 evaluator's error band
+/// around a root of `c` on `[lo, hi]`, where de Casteljau's computed sign cannot be trusted
+/// and no double is more correct than another. `k` is `g`'s distance from an exact sign
+/// change, so the root lies within `d`, the wider side of those `k` doubles.
+///
+/// The band is the a-priori bound of f64 de Casteljau (Mainar and Peña): degree `n` takes
+/// `n` levels of two products and a sum, and `1 - t` rounds once more, so the computed value
+/// is within `γ_{3n} Σ|b_i| B_i(t)` of the exact one, `γ_m = m u / (1 - m u)`, `u = 2^-53`.
+/// Divided by the exact slope `|f'(t)|` it is a width in `t`. Mapped out by
+/// `lo + (hi - lo) t` it widens by `|hi - lo|` and gains the map's own rounding,
+/// `u (|g| + 2|g - lo|)`. A zero slope gives no band, and the place is then held to the
+/// distance rule alone.
+fn in_error_band(c: &[Rat], lo: f64, hi: f64, g: f64, k: i64) -> Result<bool, String> {
+    let n = c.len().saturating_sub(1);
+    if n == 0 {
+        return Ok(false);
+    }
+    let (rl, rh) = (rat(lo)?, rat(hi)?);
+    let t = local_t(&rl, &rh, g)?;
+    let diffs: Vec<Rat> = c.windows(2).map(|w| &w[1] - &w[0]).collect();
+    let degree = Rat::from(i64::try_from(n).map_err(|e| e.to_string())?);
+    let slope = (&casteljau_rat(&diffs, &t) * &degree).abs();
+    if slope.is_zero() {
+        return Ok(false);
+    }
+    let abs: Vec<Rat> = c.iter().map(Rat::abs).collect();
+    let u = rat(f64::EPSILON / 2.0)?;
+    let mu = &u * &Rat::from(i64::try_from(3 * n).map_err(|e| e.to_string())?);
+    let gamma = mu.checked_div(&(&Rat::one() - &mu)).ok_or("no γ")?;
+    let width_t = (&gamma * &casteljau_rat(&abs, &t))
+        .checked_div(&slope)
+        .ok_or("no slope")?;
+    let rg = rat(g)?;
+    let map = &u * &(&rg.abs() + &(&rg - &rl).abs().scale(1));
+    let band = &(&width_t * &(&rh - &rl).abs()) + &map;
+    let d = [ulps_from(g, -k), ulps_from(g, k)]
+        .into_iter()
+        .filter(|x| x.is_finite())
+        .map(|x| rat(x).map(|r| (&r - &rg).abs()))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .fold(
+            Rat::zero(),
+            |a, b| if (&b - &a).signum() > 0 { b } else { a },
+        );
+    Ok((&band - &d).signum() >= 0)
+}
+
+/// `g` moved `k` doubles up (`k` negative: down), by the order of the doubles.
+fn ulps_from(g: f64, k: i64) -> f64 {
+    let key = |x: f64| {
+        let b = x.to_bits() as i64;
+        if b < 0 { i64::MIN - b } else { b }
+    };
+    let b = key(g).saturating_add(k);
+    f64::from_bits((if b < 0 { i64::MIN - b } else { b }) as u64)
+}
+
+/// The fewest doubles `k` from `g` within which the exact polynomial changes sign (0 where
+/// `g` is an exact zero), searched in `[lo, hi]` up to `2^40`; `None` past that.
+pub(crate) fn ulps_to_root(c: &[Rat], lo: f64, hi: f64, g: f64) -> Result<Option<i64>, String> {
+    let (rl, rh) = (rat(lo)?, rat(hi)?);
+    let s0 = bern_sign(c, &rl, &rh, g)?;
+    if s0 == 0 {
+        return Ok(Some(0));
+    }
+    let changes = |k: i64| -> Result<bool, String> {
+        for x in [ulps_from(g, -k), ulps_from(g, k)] {
+            if x.is_finite()
+                && x >= lo.min(hi)
+                && x <= lo.max(hi)
+                && bern_sign(c, &rl, &rh, x)? != s0
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    };
+    let mut k = 1_i64;
+    while !changes(k)? {
+        k *= 2;
+        if k > 1 << 40 {
+            return Ok(None);
+        }
+    }
+    let (mut a, mut b) = (k / 2, k);
+    while b - a > 1 {
+        let m = a + (b - a) / 2;
+        if changes(m)? { b = m } else { a = m }
+    }
+    Ok(Some(b))
+}
+
+/// scx's roots of `c` on `[lo, hi]` against the pin's: the same number of places, the same
+/// `isolated`, and every place that differs either at least as near an exact sign change of
+/// the polynomial (in doubles) as the pin's, or inside the f64 evaluator's error band around
+/// that root ([`in_error_band`]): there the computed sign is noise, so both answers are
+/// equally correct.
+pub(crate) fn roots_no_worse(
+    c: &[f64],
+    lo: f64,
+    hi: f64,
+    x: &RootsOut,
+    p: &RootsOut,
+) -> Result<(), String> {
+    if x.0.len() != p.0.len() || x.1 != p.1 {
+        return Err(format!("the shape moved: the pin has {p:?}"));
+    }
+    let exact: Vec<Rat> = c.iter().map(|&v| rat(v)).collect::<Result<_, _>>()?;
+    for (&g, &w) in x.0.iter().zip(&p.0) {
+        if g.to_bits() == w.to_bits() {
+            continue;
+        }
+        let far = |k: Option<i64>| k.unwrap_or(i64::MAX);
+        let (kx, kp) = (
+            ulps_to_root(&exact, lo, hi, g)?,
+            ulps_to_root(&exact, lo, hi, w)?,
+        );
+        if kx.is_none() && kp.is_none() {
+            return Err(format!("neither {g} nor the pin's {w} is near a root"));
+        }
+        let banded = match kx {
+            Some(k) => in_error_band(&exact, lo, hi, g, k)?,
+            None => false,
+        };
+        if far(kx) > far(kp) && !banded {
+            return Err(format!(
+                "{g} is {kx:?} doubles from a root, the pin's {w} {kp:?}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// `bernstein_roots` where a simple root is refined (`t_bern::bern_roots`): the pin bisects
+/// an isolated root from the whole piece for at most 64 halvings, which stop short of
+/// rounding for a root within about `5e-4` of the piece's start (the bracket is then still
+/// `2^-64` of the piece wide). scx refines it by Newton's method, certifies the sign change
+/// four doubles either side and bisects that to rounding. Example (`bern_roots_shapes`): the
+/// line with coefficients `[1e-12, -0.2545316193327256]` has its root at
+/// `1e-12 / 0.2545316193337256 = 3.92878496831807...e-12`; scx answers
+/// `3.928784968318077e-12`, the pin `3.9287849503636535e-12`, `1.4e-8` relatively off. The
+/// check: the same places but for those, the same `isolated`, and every place that moved
+/// at least as near (in doubles) an exact sign change of the input polynomial as the pin's,
+/// or inside the f64 evaluator's error band around it ([`roots_no_worse`]).
+pub fn bern_roots() -> PinDefect<(List<f64>, f64, f64), FourRoots> {
+    PinDefect {
+        reason: "the pin's 64 halvings stop short of rounding near a piece's start",
+        applies: Applies::Disagreeing,
+        check: |(c, lo, hi), r| {
+            let limits = [(48, 4096), (3, 2), (0, 4096), (48, 0)];
+            for (x, (depth, work)) in [&r.0, &r.1, &r.2, &r.3].into_iter().zip(limits) {
+                let p = crate::berns::s::roots(&c.0, *lo, *hi, depth, work);
+                roots_no_worse(&c.0, *lo, *hi, x, &p)?;
+            }
+            Ok(())
+        },
+    }
+}
+
+/// `bernstein_roots` over the recipes' coefficients (`t_bern::bern_roots_shapes`): the same
+/// defect as [`bern_roots`], and the same check.
+pub fn bern_roots_shapes() -> PinDefect<(BernR, usize), (RootsOut, RootsOut, RootsOut)> {
+    PinDefect {
+        reason: "the pin's 64 halvings stop short of rounding near a piece's start",
+        applies: Applies::Disagreeing,
+        check: |(p, d), r| {
+            let c = &p.0.2;
+            let deep = u32::try_from(*d).unwrap_or(u32::MAX);
+            let calls = [
+                (0.0, 1.0, 48, 4096),
+                (-2.0, 0.5, 48, 4096),
+                (0.0, 1.0, deep, *d),
+            ];
+            for (x, (lo, hi, depth, work)) in [&r.0, &r.1, &r.2].into_iter().zip(calls) {
+                let w = crate::berns::s::roots(c, lo, hi, depth, work);
+                roots_no_worse(c, lo, hi, x, &w)?;
+            }
+            Ok(())
+        },
+    }
+}

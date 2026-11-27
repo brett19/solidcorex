@@ -153,7 +153,9 @@ fn unit_or_z(v: Vec3) -> UnitVec3 {
 }
 
 /// The fit, and the scatter matrix when the points were scattered about their centroid.
-fn line_fit(points: &[Point3], tol_3d: f64) -> Result<(LineFit, Option<Matrix>)> {
+/// The line fit, and the eigenvectors of the scatter matrix (ascending) when a line was
+/// fitted: the plane fit's normal is the smallest, of the same matrix.
+fn line_fit(points: &[Point3], tol_3d: f64) -> Result<(LineFit, Option<[Vec3; 3]>)> {
     let fit = best_fit_point(points, tol_3d);
     let point = fit.center;
     if fit.set_type != PointSetType::Scattered {
@@ -166,9 +168,8 @@ fn line_fit(points: &[Point3], tol_3d: f64) -> Result<(LineFit, Option<Matrix>)>
         };
         return Ok((line, None));
     }
-    let m = scatter(points, point)?;
-    // eigen solve on a copy: the plane fit reads `m` again
-    let (_, [_, _, largest]) = m.clone().compute_3x3_eigen_vectors()?;
+    let (_, vectors) = scatter(points, point)?.compute_3x3_eigen_vectors()?;
+    let [_, _, largest] = vectors;
     // largest eigenvalue
     let direction = unit_or_z(largest);
 
@@ -191,7 +192,7 @@ fn line_fit(points: &[Point3], tol_3d: f64) -> Result<(LineFit, Option<Matrix>)>
         max_line_gap,
         max_centroid_gap: fit.max_gap,
     };
-    Ok((line, Some(m)))
+    Ok((line, Some(vectors)))
 }
 
 /// The least-squares line through `points` and whether they all lie within `tol_3d` of it
@@ -228,7 +229,7 @@ pub struct PlaneFit {
 /// # Errors
 /// The eigen solve's, when it does not converge (non-finite points).
 pub fn best_fit_plane(points: &[Point3], tol_3d: f64) -> Result<PlaneFit> {
-    let (line, m) = line_fit(points, tol_3d)?;
+    let (line, vectors) = line_fit(points, tol_3d)?;
     let fit = PlaneFit {
         set_type: line.set_type,
         point: line.point,
@@ -236,10 +237,9 @@ pub fn best_fit_plane(points: &[Point3], tol_3d: f64) -> Result<PlaneFit> {
         max_plane_gap: line.max_line_gap,
         max_centroid_gap: line.max_centroid_gap,
     };
-    let (PointSetType::Scattered, Some(mut m)) = (fit.set_type, m) else {
+    let (PointSetType::Scattered, Some([smallest, _, _])) = (fit.set_type, vectors) else {
         return Ok(fit);
     };
-    let (_, [smallest, _, _]) = m.compute_3x3_eigen_vectors()?;
     let normal = unit_or_z(smallest);
     let mut max_gap = 0.0;
     for &p in points {

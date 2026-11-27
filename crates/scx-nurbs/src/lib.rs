@@ -7,7 +7,9 @@
 //!   their derivatives;
 //! - [`bezier`]: binomials, Bernstein polynomials, Bezier degree elevation and subdivision;
 //! - [`NurbsCurve`]: a validated curve in `D` dimensions, polynomial or rational, with
-//!   evaluation, derivatives, knot insertion, splitting and degree elevation.
+//!   evaluation, derivatives, knot insertion, splitting and degree elevation;
+//! - [`CompatibleCurves`]: curves of one knot vector (a surface's net lines, skinning
+//!   sections), with the curve edits applied to all of them at once, bit for bit.
 //!
 //! A value that exists is valid: every check runs once, where it is built, so evaluation
 //! fails only for a parameter or arithmetic that cannot go on ([`NurbsError`]).
@@ -24,12 +26,14 @@
 mod basis;
 pub mod bezier;
 mod curve;
+mod curves;
 mod error;
 mod knots;
 mod point;
 
 pub use basis::{Basis, BasisDerivs};
 pub use curve::NurbsCurve;
+pub use curves::{CompatibleCurves, Homogeneous};
 pub use error::NurbsError;
 pub use knots::{Approach, KnotVector};
 
@@ -54,5 +58,7 @@ const _: () = {
     ok::<Basis>();
     ok::<BasisDerivs<3>>();
     ok::<NurbsCurve<3>>();
+    ok::<CompatibleCurves<3>>();
+    ok::<Homogeneous<3>>();
     ok::<NurbsError>();
 };

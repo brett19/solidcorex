@@ -148,6 +148,13 @@ pub enum ParamDomain {
 }
 
 impl ParamDomain {
+    /// One turn of an angle in radians: period `2 pi` from 0 (a circle's, an ellipse's, a
+    /// surface of revolution's u).
+    pub const TURN: Self = Self::Periodic {
+        period: crate::math::TWO_PI,
+        base: 0.0,
+    };
+
     /// A periodic direction, `None` unless `period` is finite and above zero, `base` is
     /// finite and `base + period` is finite.
     #[must_use]
