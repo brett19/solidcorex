@@ -203,7 +203,8 @@ pub(super) fn sin(x: f64) -> f64 {
     sin_dd(x, 0).0
 }
 
-/// `cos(x)`.
+/// `cos(x)`: the fast kernel when its rounding test passes, else the double-double one,
+/// on the same reduced argument; the bits are the double-double path's either way.
 pub(super) fn cos(x: f64) -> f64 {
     if !x.is_finite() {
         return f64::NAN;
@@ -211,7 +212,81 @@ pub(super) fn cos(x: f64) -> f64 {
     if x.abs() < TINY {
         return 1.0;
     }
-    sin_dd(x, 1).0
+    let (n, y) = reduce(x);
+    // cos x = sin(x + pi/2): quadrant n + 1 of the sine.
+    let q = (n + 1) & 3;
+    let (hi, lo) = if q & 1 == 0 { fast_sin(y) } else { fast_cos(y) };
+    if dd::rounds_to_hi(hi, lo, FAST_TEST) {
+        return if q >= 2 { -hi } else { hi };
+    }
+    let k = Kernel::new(y);
+    match q {
+        0 => k.sin().0,
+        1 => k.cos().0,
+        2 => -k.sin().0,
+        _ => -k.cos().0,
+    }
+}
+
+/// The rounding-test constant for [`fast_sin`] and [`fast_cos`]: `1 + 2^-6`, good for
+/// `eps < 2^-54 (1 - (1 + 2^-53)/(1 + 2^-6)) = 2^-60.02` ([`dd::rounds_to_hi`]). Their
+/// `eps` is at most `2^-62` for the fast kernel plus `2^-63` for [`Kernel`], both against
+/// `sin` or `cos` of the same double-double `y`, so `2^-61.4`: a margin of 2.6 over that,
+/// and of about 7 over the sums of the error budgets below. The test fails, and the
+/// double-double kernel runs, for about 1.5% of arguments in `[-4, 4]`.
+const FAST_TEST: f64 = 1.015_625;
+
+/// The table index, the offset and the two short series shared by [`fast_sin`] and
+/// [`fast_cos`]: `|y| = i/64 + h + yl` with `|h| <= 1/128`, `ds = sin(h + yl) - h` and
+/// `dc = cos(h + yl) - 1`, in doubles.
+///
+/// Error, absolute: `ds` has its truncation (`h^9/9!`, below `2^-81`), the dropped
+/// `yl (cos h - 1)` (below `2^-68 |y|`) and four roundings of a value below
+/// `h^3/6 <= 2^-16.6 |h|`, so is within `2^-67 |h|`. `dc` has its truncation (`h^8/8!`,
+/// below `2^-71.3`) and three roundings of a value below `h^2/2 <= 2^-15`: within
+/// `2^-65.9`.
+#[inline]
+fn fast_parts(y: (f64, f64)) -> (usize, f64, f64, f64) {
+    let (yh, yl) = if y.0 < 0.0 { (-y.0, -y.1) } else { y };
+    let i = round_int(yh * 64.0);
+    let h = yh - i * (1.0 / 64.0);
+    let h2 = h * h;
+    let ds = h * h2 * (-1.0 / 6.0 + h2 * (1.0 / 120.0 - h2 * (1.0 / 5040.0))) + yl;
+    let dc = h2 * (-0.5 + h2 * (1.0 / 24.0 - h2 * (1.0 / 720.0))) - h * yl;
+    (i as usize, h, ds, dc)
+}
+
+/// `sin y` as an unevaluated `hi + lo` (`|lo|` near `ulp(hi)/2`), for the reduced `y`,
+/// in doubles but for one exact product: `sin(a + h) = sin a + cos a h + sin a dc
+/// + cos a ds`, with `cos a h` exact and the rest, below `2^-13.7 |sin y|`, summed
+/// plainly. Relative error at most `2^-62`: `2^-64.1` from the eight roundings of the
+/// small terms, `2^-64.9` from `dc` (times `sin a <= 2 |sin y|`), `2^-66.7` from `ds`,
+/// `2^-67` from the dropped `sl dc`, and the table's `2^-106`.
+#[inline]
+fn fast_sin(y: (f64, f64)) -> (f64, f64) {
+    let (i, h, ds, dc) = fast_parts(y);
+    let (sh, sl, ch, cl) = at(&SINCOS_TAB, i);
+    let (p, pe) = two_prod(ch, h);
+    // |sh| >= sin(1/64) > 1/128 >= |p| unless sh is 0.
+    let (s, se) = fast_two_sum(sh, p);
+    let lo = se + pe + (sl + cl * h + sh * dc + ch * ds);
+    let (hi, lo) = fast_two_sum(s, lo);
+    if y.0 < 0.0 { (-hi, -lo) } else { (hi, lo) }
+}
+
+/// `cos y` as [`fast_sin`] gives `sin y`: `cos(a + h) = cos a - sin a h + cos a dc
+/// - sin a ds`, with `sin a h` exact. Relative error at most `2^-63`: the small terms
+/// are below `2^-14.5 |cos y|` (`cos y >= 0.7`), their six roundings `2^-64.9`, `dc`
+/// `2^-65.4`, the rest below `2^-68`.
+#[inline]
+fn fast_cos(y: (f64, f64)) -> (f64, f64) {
+    let (i, h, ds, dc) = fast_parts(y);
+    let (sh, sl, ch, cl) = at(&SINCOS_TAB, i);
+    let (p, pe) = two_prod(sh, h);
+    // ch >= cos(0.8) > |p|.
+    let (c, ce) = fast_two_sum(ch, -p);
+    let lo = ce - pe + (cl - sl * h + ch * dc - sh * ds);
+    fast_two_sum(c, lo)
 }
 
 /// `(sin x, cos x)`.
@@ -236,4 +311,70 @@ pub(super) fn tan(x: f64) -> f64 {
     }
     let (s, c) = sin_cos_dd(x);
     dd::div(s, c).0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::fast_check::{Stats, count, hard_cases, log_uniform, ulps, uniform};
+    use super::*;
+    use crate::hash::Rng;
+
+    /// `cos` against its double-double path alone, bit for bit.
+    fn check(x: f64, st: &mut Stats) {
+        let slow = if !x.is_finite() {
+            f64::NAN
+        } else if x.abs() < TINY {
+            1.0
+        } else {
+            sin_dd(x, 1).0
+        };
+        assert_eq!(cos(x).to_bits(), slow.to_bits(), "cos({x:e})");
+        if x.is_finite() && x.abs() >= TINY {
+            let (n, y) = reduce(x);
+            let k = Kernel::new(y);
+            let ((fh, fl), dd) = if n & 1 == 0 {
+                (fast_cos(y), k.cos())
+            } else {
+                (fast_sin(y), k.sin())
+            };
+            st.add((fh, fl), dd::rounds_to_hi(fh, fl, FAST_TEST), dd);
+        }
+    }
+
+    fn run(n: u64) {
+        let mut st = Stats::default();
+        let mut r = Rng::new(0x2195_C051);
+        let pio2 = PIO2.0;
+        for i in 0..n {
+            let x = match i % 4 {
+                // the cubic's arguments, and every scale Cody-Waite covers
+                0 => uniform(&mut r, -4.0, 4.0),
+                1 => log_uniform(&mut r, -27.0, 20.0),
+                // near a multiple of pi/2, where y loses its leading bits
+                2 => {
+                    let k = log_uniform(&mut r, 0.0, 20.0).round();
+                    ulps(k * pio2, (r.next_u64() % 17) as i64 - 8)
+                }
+                // Payne-Hanek's range
+                _ => log_uniform(&mut r, 20.0, 1024.0),
+            };
+            check(x, &mut st);
+        }
+        for x in hard_cases("cos") {
+            check(x, &mut st);
+        }
+        st.report("cos");
+    }
+
+    #[test]
+    fn fast_path_changes_no_bit() {
+        run(count(20_000));
+    }
+
+    /// The long run (release): `FMATH_FAST_N` inputs and the hard cases.
+    #[test]
+    #[ignore = "long: run in release with FMATH_FAST_N and FMATH_HARD_DIR"]
+    fn fast_path_changes_no_bit_long() {
+        run(count(100_000_000));
+    }
 }

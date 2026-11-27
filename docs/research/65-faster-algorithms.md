@@ -9,9 +9,10 @@ more correct against the truths, and it must stay bit-identical across x86-64, a
 
 Labels: READ (from the pin's or scx's code; pin paths are relative to the pin's `solidcore/src`
 unless another crate is named), MEASURED (figures already in 05 or the research it cites; nothing
-was measured for this report), INFERRED (operation counts and estimates made here). Every gain
-below is INFERRED unless marked otherwise. "Bit-identical" means the change leaves every result
-bit unchanged, so it needs no truth check beyond the difftest.
+was measured for this report but section 2.6, added with the change it records), INFERRED
+(operation counts and estimates made here). Every gain below is INFERRED unless marked otherwise.
+"Bit-identical" means the change leaves every result bit unchanged, so it needs no truth check
+beyond the difftest.
 
 ## 1. Ranked summary
 
@@ -33,6 +34,7 @@ Ranked by expected gain times confidence, for work solidcorex will actually run.
 | 12 | ODE integration | Cash-Karp RK4(5), Numerical Recipes step control | Dormand-Prince 5(4) with FSAL and Hairer's error scale | 10-30% fewer evaluations; fixes the vanishing-start give-up (53 §13) | medium | prototype (low priority) |
 | 13 | Bracketed 1-D root finding | Regula falsi clamped to [0.15, 0.85]; damped Newton (step ≤ 0.08 of the interval) | ITP (Oliveira-Takahashi 2020) or Chandrupatla | 1.2-2x fewer evaluations on bracketed cases | low-medium | prototype (low priority) |
 | 14 | Degree elevation | Decompose to Bezier, elevate, remove knots (A5.9); far from exact at degree 15 (63 §2.6) | Direct elevation (Prautzsch 1984; Huang, Hu, Martin 2005) | about 2x, and no knot removal, so more accurate | medium | prototype for accuracy |
+| 15 | Correctly rounded `fmath` (`cos`, `acos`, `cbrt`) | Double-double evaluation on every call, rounded once | Ziv's fast path: plain doubles with a proved bound, a rounding test, the double-double path on failure (under 2% of inputs) | `cos` -21%, `acos` -13%, `cbrt` -38% instructions; cubic -12%, quartic -6% (MEASURED, 2.6); bit-identical | high | adopted (2.6) |
 | - | Krawczyk operator | Classical, midpoint inverse, ε-inflation, N ≤ 4 | Hansen-Sengupta | small | high | keep |
 | - | Local N-D Newton | Newton, LU with partial pivoting, step scaling | Levenberg-Marquardt or dogleg | none in speed | high | keep |
 | - | Coincident points (`hash_table`) | Uniform voxels, all pairs in a bucket | Sort-and-sweep | only on clustered inputs | medium | keep |
@@ -209,6 +211,85 @@ also take the cubic below the current correctly-rounded-trig form, likely 1.5-3x
 module (exact real-root isolation) is the judge. Fully deterministic in f64 with `fmath`.
 
 **(e) Verdict.** Prototype and measure, together with 05's open item on Newton polishing.
+
+### 2.6 Correctly rounded `fmath`: a fast path before the double-double one
+
+**(a) Current.** READ: every `fmath` function evaluates in double-double and rounds once
+(`scx-num`'s `fmath` module docs). The cubic's trig form calls `acos`, `cos` and `cbrt`, and the
+quartic's resolvent calls them as well: MEASURED (05), the scx cubic costs 1,021 instructions
+against the pin's 448, and the gap is these calls.
+
+**(b) Alternative, adopted for `cos`, `acos` and `cbrt`.** Ziv's strategy (Ziv, ACM TOMS 17, 1991),
+in the form CRlibm uses (de Dinechin, Lauter and Muller, RAIRO-ITA 41, 2007), and the one CORE-MATH
+uses for its binary64 functions. First evaluate in plain doubles with a known error bound, as an
+unevaluated `hi + lo`. If a rounding test proves that every real within the bound rounds to `hi`,
+return `hi`. Otherwise run the existing double-double path. `dd::rounds_to_hi` holds the test,
+`hi + lo e == hi`, with the derivation of its constant: the test is valid when
+`eps < 2^-54 (1 - (1 + 2^-53)/e)`. Here `eps` covers the fast path's error and the double-double
+path's error together, both measured against the same exact value. A pass therefore means the
+double-double path rounds to the same double, so no result bit can change. No code was copied:
+CRlibm and CORE-MATH were cited, not read for code, and the worst-case input lists used in the
+check are CORE-MATH's (MIT).
+
+| Function | Fast path | Bound `eps` | Test constant `e` | Valid to | Fallback (MEASURED) |
+|---|---|---|---|---|---|
+| `cos` | the existing reduction's double-double `y`; table point plus a short Taylor correction in doubles, one exact product | `2^-62` fast + `2^-63` kernel | `1 + 2^-6` | `2^-60.02` | 1.5% of [-4, 4] |
+| `acos` | the double-double formulas, one exact product per step, low parts summed plainly and never renormalised | `2^-64` + `2^-64` | `1 + 2^-7` | `2^-61.01` | 0.8% of [-1, 1] |
+| `cbrt` | a degree-4 Chebyshev start rounded to 17 bits (so its cube is exact), then a binomial series to `t^4`; no fma | `2^-65` + `2^-95` | `1 + 2^-9` | `2^-63.01` | 0.2% |
+
+**(c) Gain.** MEASURED, 2026-11-27, off the repository: callgrind instructions per call over 4,096
+inputs (cos uniform in [-4, 4], acos uniform in [-1, 1], cbrt log-uniform over `2^±60` with either
+sign), before and after: `cos` 297 to 234, `acos` 316 to 274, `cbrt` 195 to 119. Back to back on one
+pinned core: `cos` about 9% faster, `acos` about 30%, `cbrt` about 12% (as ratios to the platform
+libm in the same run, the machine being loaded). The instruction counts understate the `acos` gain,
+because the fast path also shortens the dependency chain. In the benchmarks: `algo/cubic` 1,719,599
+to 1,512,679 instructions (-12%; the pin 458,535), `algo/quartic` 2,015,626 to 1,893,421 (-6%; the
+pin 761,284), the edge groups within 2.3%. New `num_ic` cases `num/cos`, `num/acos`, `num/cbrt`
+(against the platform libm): 308,192 to 244,478 (-21%), 327,980 to 286,574 (-13%), 203,659 to
+125,647 (-38%, now below libm's 175,949).
+
+**(d) The decisions, each against its alternative.**
+- *Reuse the reduction against reducing again in doubles.* The fast `cos` takes `reduce`'s
+  double-double `y`, the same one the slow kernel uses. Reduction error is therefore common to both
+  paths and drops out of `eps`. A plain-double reduction would save about 50 instructions, but it
+  needs its own error bound near multiples of π/2. That bound would also have to cover the slow
+  path's different reduction, which would tighten `e` and raise the fallback rate.
+- *Exact products only where the leading term needs them.* Rounding the largest product, as a
+  plain-double kernel does, costs `2^-53`, which no test can absorb. One exact product per leading
+  term (`two_prod`, one `fma` call of about 8 instructions on the default target) keeps it. Dekker's
+  split product (about 17 instructions) would avoid the call, but it costs more.
+- *The constants `e`.* A larger `e` accepts fewer inputs, and a smaller one leaves less margin over
+  the bound. Each constant leaves a margin of 2.6 to 4 over the declared `eps`, and a factor of 7 to
+  12 over the error budgets as summed. The measured largest fast-to-double-double difference sits
+  below each bound (`cos` `2^-65.4`, `acos` `2^-65.4`, `cbrt` `2^-67.0`).
+- *`cbrt`: a polynomial start against a Halley step.* A degree-4 start is good to `2^-14`, and
+  rounding it to the `2^-16` grid makes `y0^3` exact in doubles, so the residual `t` is exact up to
+  one division. A series to `t^4` then gives `2^-65`. A Halley step from a coarser start would need
+  two more divisions. A longer series would need a better start.
+- *`acos`: a lean mirror of the double-double formulas against a new polynomial.* An `asin` series
+  near 1 needs many terms, and fitting minimax polynomials needs tools (Sollya, mpmath) not
+  available here. The lean mirror reuses the table and the arguments for its formulas, and drops
+  the renormalisations. The check found two errors in a first version, and both are fixed and
+  recorded in `fast_acos`'s doc. One was a root of `1 - x^2`'s high part alone, which left a
+  second-order term of `2^-59` near `|x| = 1`. The other was an unnormalised low part, which the
+  series, seeing only the high part, would have lost.
+- *Which functions.* These three are the ones the closed forms call. `sin`, `tan`, `asin` and the
+  rest could take the same fast path, but they are left for when a caller needs them.
+
+**(e) Check (MEASURED, 2026-11-27).** Each function was compared bit for bit with its double-double
+path alone, and the long run is `#[ignore]`d in each module's tests:
+- 10^8 seeded random inputs per function, in release. The inputs are dense at the hard places:
+  arguments near multiples of π/2 and very large ones for `cos`; near ±1, near `x^2 = 1/2`, and
+  near 0 for `acos`; random bits including subnormals, near exact cubes, and near binade edges for
+  `cbrt`.
+- CORE-MATH's worst-case lists (`cos` 1,107,744 inputs, `acos` 264,099, `cbrt` 106,254).
+
+No bit differed, and the 20,000-input default run passes on x86-64, on x86-64 with `+fma`, on
+aarch64 under qemu, and on wasm32 under wasmtime. Acceptance on that mixed sample: `cos` 98.13%,
+`acos` 99.17%, `cbrt` 99.85%. The fmath and xplat pins, and the full scx-difftest, are unchanged.
+
+**(f) Verdict.** Adopted. The rest of the `fmath` functions can follow the same pattern when a
+benchmark shows them.
 
 ## 3. NURBS evaluation and edits
 
@@ -629,9 +710,9 @@ and fit, warm starts and multi-knot rounds are where the time goes.
 
 ## 9. What this report did not do
 
-- Nothing was timed for this report. Every gain is an operation count or a literature figure, and
-  each "prototype and measure" item needs the `scx-bench` harness (02 §8.1) with before and after
-  counts.
+- Nothing was timed for this report but section 2.6. Every other gain is an operation count or a
+  literature figure, and each "prototype and measure" item needs the `scx-bench` harness (02 §8.1)
+  with before and after counts.
 - The global solver's 8 µs per branch was not profiled. It is the first measurement to make.
 - The `ssi` crate's run time on the corpus was not measured, only its pass counts quoted from the
   pin's docs.
