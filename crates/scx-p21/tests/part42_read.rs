@@ -36,7 +36,7 @@ use std::f64::consts::{FRAC_1_SQRT_2, PI};
 use std::fmt::Write as _;
 use std::sync::Arc;
 
-use scx_p21::error::{EntityCause, Limit, Unsupported};
+use scx_p21::error::{EntityCause, InvalidValue, Limit, Unsupported};
 use scx_p21::part42::geom::{
     Associated, Axis1, Curve, CurveForm, KnotSpec, Logical, Placement, PreferredRep, Surface,
     SurfaceCurveKind, SurfaceForm, Trim, TrimPreference, Vector,
@@ -179,9 +179,7 @@ fn hyperbola_and_parabola() {
         curve_err("#10=PARABOLA('',#4,0.);", 10, MM),
         Err(P21Error::entity(
             10,
-            EntityCause::Invalid {
-                what: "a parabola focal distance of zero"
-            }
+            EntityCause::Invalid(InvalidValue::ParabolaFocalDistance)
         ))
     );
 }
@@ -305,7 +303,10 @@ fn implied_knots_and_repeated_knots() {
             14,
             MM
         ),
-        Err(P21Error::entity(14, EntityCause::Invalid { what: "a Bezier spline whose control points are not the degree times the segments, plus 1" }))
+        Err(P21Error::entity(
+            14,
+            EntityCause::Invalid(InvalidValue::BezierSegments)
+        ))
     );
     // A knot written twice is one knot.
     let rep = curve(
@@ -668,12 +669,12 @@ fn refusals_say_why() {
         (
             "#10=CIRCLE('',#4,-1.);",
             10,
-            Err(P21Error::entity(10, EntityCause::Invalid { what: "a circle radius that is not positive" })),
+            Err(P21Error::entity(10, EntityCause::Invalid(InvalidValue::CircleRadius))),
         ),
         (
             "#10=ELLIPSE('',#4,2.,0.);",
             10,
-            Err(P21Error::entity(10, EntityCause::Invalid { what: "an ellipse semi axis that is not positive" })),
+            Err(P21Error::entity(10, EntityCause::Invalid(InvalidValue::EllipseSemiAxis))),
         ),
         (
             "#10=CIRCLE('',#4,1.E10);",
@@ -683,28 +684,28 @@ fn refusals_say_why() {
         (
             "#10=VECTOR('',#3,-1.);#11=LINE('',#1,#10);",
             11,
-            Err(within(&[11], P21Error::entity(10, EntityCause::Invalid { what: "a vector magnitude that is negative" }))),
+            Err(within(&[11], P21Error::entity(10, EntityCause::Invalid(InvalidValue::NegativeMagnitude)))),
         ),
         (
             "#10=VECTOR('',#3,0.);#11=LINE('',#1,#10);",
             11,
-            Err(within(&[11], P21Error::entity(10, EntityCause::Invalid { what: "a vector of magnitude zero" }))),
+            Err(within(&[11], P21Error::entity(10, EntityCause::Invalid(InvalidValue::ZeroMagnitude)))),
         ),
         (
             "#10=DIRECTION('',(0.,0.,0.));#11=VECTOR('',#10,1.);#12=LINE('',#1,#11);",
             12,
-            Err(within(&[12, 11], P21Error::entity(10, EntityCause::Invalid { what: "a direction whose ratios are all zero" }))),
+            Err(within(&[12, 11], P21Error::entity(10, EntityCause::Invalid(InvalidValue::ZeroDirection)))),
         ),
         // Knots.
         (
             "#10=B_SPLINE_CURVE_WITH_KNOTS('',1,(#1,#1,#1),.UNSPECIFIED.,.F.,.F.,(2,2),(0.,1.),.UNSPECIFIED.);",
             10,
-            Err(P21Error::entity(10, EntityCause::Invalid { what: "knot multiplicities that do not match the control points" })),
+            Err(P21Error::entity(10, EntityCause::Invalid(InvalidValue::KnotCount))),
         ),
         (
             "#10=B_SPLINE_CURVE_WITH_KNOTS('',2,(#1,#1),.UNSPECIFIED.,.F.,.F.,(3,3),(0.,1.),.UNSPECIFIED.);",
             10,
-            Err(P21Error::entity(10, EntityCause::Invalid { what: "knot multiplicities that do not match the control points" })),
+            Err(P21Error::entity(10, EntityCause::Invalid(InvalidValue::KnotCount))),
         ),
         (
             "#10=B_SPLINE_CURVE_WITH_KNOTS('',99,(#1,#1),.UNSPECIFIED.,.F.,.F.,(1,1),(0.,1.),.UNSPECIFIED.);",
@@ -719,17 +720,17 @@ fn refusals_say_why() {
         (
             "#10=B_SPLINE_CURVE_WITH_KNOTS('',1,(#1,#1),.UNSPECIFIED.,.F.,.F.,(2,2),(1.,0.),.UNSPECIFIED.);",
             10,
-            Err(P21Error::entity(10, EntityCause::Invalid { what: "knots that decrease, or not one multiplicity per knot" })),
+            Err(P21Error::entity(10, EntityCause::Invalid(InvalidValue::KnotsDecrease))),
         ),
         (
             "#10=(B_SPLINE_CURVE(1,(#1,#1),.UNSPECIFIED.,.F.,.F.)B_SPLINE_CURVE_WITH_KNOTS((2,2),(0.,1.),.UNSPECIFIED.)RATIONAL_B_SPLINE_CURVE((1.,-1.)));",
             10,
-            Err(P21Error::entity(10, EntityCause::Invalid { what: "a weight that is not positive" })),
+            Err(P21Error::entity(10, EntityCause::Invalid(InvalidValue::WeightNotPositive))),
         ),
         (
             "#10=(B_SPLINE_CURVE(1,(#1,#1),.UNSPECIFIED.,.F.,.F.)B_SPLINE_CURVE_WITH_KNOTS((2,2),(0.,1.),.UNSPECIFIED.)RATIONAL_B_SPLINE_CURVE((1.)));",
             10,
-            Err(P21Error::entity(10, EntityCause::Invalid { what: "weights that do not match the control points" })),
+            Err(P21Error::entity(10, EntityCause::Invalid(InvalidValue::WeightCount))),
         ),
         // Shapes.
         ("#10=POLYLINE('',(#1));", 10, Err(P21Error::entity(10, EntityCause::BadParam { index: 1, expected: "a list of 2 to 1 000 000 points" }))),
@@ -1210,39 +1211,39 @@ fn surface_refusals_say_why() {
     for (data, why) in [
         (
             "#10=CYLINDRICAL_SURFACE('',#4,0.);",
-            Err(P21Error::entity(10, EntityCause::Invalid { what: "a cylinder radius that is not positive" })),
+            Err(P21Error::entity(10, EntityCause::Invalid(InvalidValue::CylinderRadius))),
         ),
         (
             "#10=SPHERICAL_SURFACE('',#4,-3.);",
-            Err(P21Error::entity(10, EntityCause::Invalid { what: "a sphere radius that is not positive" })),
+            Err(P21Error::entity(10, EntityCause::Invalid(InvalidValue::SphereRadius))),
         ),
         (
             "#10=CONICAL_SURFACE('',#4,1.,2.);",
-            Err(P21Error::entity(10, EntityCause::Invalid { what: "a cone with a negative radius or a semi angle outside (0, π/2) in size" })),
+            Err(P21Error::entity(10, EntityCause::Invalid(InvalidValue::ConeShape))),
         ),
         (
             "#10=CONICAL_SURFACE('',#4,-1.,0.5);",
-            Err(P21Error::entity(10, EntityCause::Invalid { what: "a cone with a negative radius or a semi angle outside (0, π/2) in size" })),
+            Err(P21Error::entity(10, EntityCause::Invalid(InvalidValue::ConeShape))),
         ),
         (
             "#10=CONICAL_SURFACE('',#4,1.,0.);",
-            Err(P21Error::entity(10, EntityCause::Invalid { what: "a cone with a negative radius or a semi angle outside (0, π/2) in size" })),
+            Err(P21Error::entity(10, EntityCause::Invalid(InvalidValue::ConeShape))),
         ),
         (
             "#10=TOROIDAL_SURFACE('',#4,1.,-2.);",
-            Err(P21Error::entity(10, EntityCause::Invalid { what: "a torus minor radius that is not positive" })),
+            Err(P21Error::entity(10, EntityCause::Invalid(InvalidValue::TorusMinorRadius))),
         ),
         (
             "#10=B_SPLINE_SURFACE_WITH_KNOTS('',1,1,((#1,#1),(#1)),.UNSPECIFIED.,.F.,.F.,.F.,(2,2),(2,2),(0.,1.),(0.,1.),.UNSPECIFIED.);",
-            Err(P21Error::entity(10, EntityCause::Invalid { what: "a B-spline control net that is empty or ragged" })),
+            Err(P21Error::entity(10, EntityCause::Invalid(InvalidValue::ControlNet))),
         ),
         (
             "#10=B_SPLINE_SURFACE_WITH_KNOTS('',1,1,((#1,#1),(#1,#1)),.UNSPECIFIED.,.F.,.F.,.F.,(2,2),(2,1),(0.,1.),(0.,1.),.UNSPECIFIED.);",
-            Err(P21Error::entity(10, EntityCause::Invalid { what: "knot multiplicities that do not match the control points" })),
+            Err(P21Error::entity(10, EntityCause::Invalid(InvalidValue::KnotCount))),
         ),
         (
             "#10=(B_SPLINE_SURFACE(1,1,((#1,#1),(#1,#1)),.UNSPECIFIED.,.F.,.F.,.F.)B_SPLINE_SURFACE_WITH_KNOTS((2,2),(2,2),(0.,1.),(0.,1.),.UNSPECIFIED.)RATIONAL_B_SPLINE_SURFACE(((1.,1.))));",
-            Err(P21Error::entity(10, EntityCause::Invalid { what: "weights that do not match the control net" })),
+            Err(P21Error::entity(10, EntityCause::Invalid(InvalidValue::NetWeightCount))),
         ),
         (
             "#10=SURFACE_OF_REVOLUTION('',#10,#4);",
@@ -1348,9 +1349,7 @@ fn intersection_and_bounded_surface_curves() {
         .map(|_| ()),
         Err(P21Error::entity(
             13,
-            EntityCause::Invalid {
-                what: "a surface curve with more than two associated items"
-            }
+            EntityCause::Invalid(InvalidValue::SurfaceCurveItems)
         ))
     );
 }
@@ -1418,9 +1417,7 @@ fn uniform_and_quasi_uniform_surfaces() {
         .map(|_| ()),
         Err(P21Error::entity(
             20,
-            EntityCause::Invalid {
-                what: "no more control points than the degree"
-            }
+            EntityCause::Invalid(InvalidValue::TooFewControlPoints)
         ))
     );
 }
@@ -1494,12 +1491,7 @@ fn parameter_space_refusals() {
         Reader::new(&ex, MM).pcurve(26).map(|_| ()),
         Err(within(
             &[26],
-            P21Error::entity(
-                25,
-                EntityCause::Invalid {
-                    what: "a pcurve representation without exactly one item"
-                }
-            )
+            P21Error::entity(25, EntityCause::Invalid(InvalidValue::PcurveItems))
         ))
     );
     // A 3D placement in a parameter space.
@@ -1597,9 +1589,7 @@ fn a_nested_refusal_names_its_path() {
         at.downcast_ref::<P21Error>(),
         Some(&P21Error::entity(
             10,
-            EntityCause::Invalid {
-                what: "a direction whose ratios are all zero"
-            }
+            EntityCause::Invalid(InvalidValue::ZeroDirection)
         ))
     );
     assert_eq!(e.innermost(), at.downcast_ref::<P21Error>().unwrap());

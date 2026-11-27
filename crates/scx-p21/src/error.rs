@@ -479,10 +479,7 @@ pub enum EntityCause {
         expected: &'static str,
     },
     /// A value is out of its range or inconsistent with another.
-    Invalid {
-        /// What was wrong.
-        what: &'static str,
-    },
+    Invalid(InvalidValue),
     /// The instance is part of a cycle where the file's structure must be a tree or a
     /// directed acyclic graph (an assembly using itself, a mapped item mapping itself).
     Cycle,
@@ -498,13 +495,110 @@ impl fmt::Display for EntityCause {
             Self::BadParam { index, expected } => {
                 write!(f, "parameter {index}: expected {expected}")
             }
-            Self::Invalid { what } => f.write_str(what),
+            Self::Invalid(v) => v.fmt(f),
             Self::Cycle => f.write_str("part of a cycle"),
         }
     }
 }
 
 impl std::error::Error for EntityCause {}
+
+/// A value of an instance that is out of its range or inconsistent with another
+/// ([`EntityCause::Invalid`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum InvalidValue {
+    /// Knots that decrease, or not one multiplicity per knot.
+    KnotsDecrease,
+    /// A knot vector without two distinct knots, or a knot above the degree + 1.
+    KnotVector,
+    /// Knot multiplicities that do not match the control points.
+    KnotCount,
+    /// No more control points than the degree.
+    TooFewControlPoints,
+    /// A Bezier spline whose control points are not the degree times the segments, plus 1.
+    BezierSegments,
+    /// A weight that is not positive.
+    WeightNotPositive,
+    /// Weights that do not match the control points.
+    WeightCount,
+    /// Weights that do not match the control net.
+    NetWeightCount,
+    /// A direction whose ratios are all zero.
+    ZeroDirection,
+    /// A vector magnitude that is negative.
+    NegativeMagnitude,
+    /// A vector of magnitude zero.
+    ZeroMagnitude,
+    /// A circle radius that is not positive.
+    CircleRadius,
+    /// An ellipse semi axis that is not positive.
+    EllipseSemiAxis,
+    /// A hyperbola semi axis that is not positive.
+    HyperbolaSemiAxis,
+    /// A parabola focal distance of zero.
+    ParabolaFocalDistance,
+    /// A surface curve with more than two associated items.
+    SurfaceCurveItems,
+    /// A pcurve representation without exactly one item.
+    PcurveItems,
+    /// A B-spline with more than 1 000 000 control points.
+    CurveControlPoints,
+    /// A cylinder radius that is not positive.
+    CylinderRadius,
+    /// A cone with a negative radius or a semi angle outside (0, π/2) in size.
+    ConeShape,
+    /// A sphere radius that is not positive.
+    SphereRadius,
+    /// A torus minor radius that is not positive.
+    TorusMinorRadius,
+    /// A torus major radius that is not finite.
+    TorusMajorRadius,
+    /// A B-spline surface with more than 1 000 000 control points.
+    SurfaceControlPoints,
+    /// A B-spline control net that is empty or ragged.
+    ControlNet,
+}
+
+impl fmt::Display for InvalidValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::KnotsDecrease => "knots that decrease, or not one multiplicity per knot",
+            Self::KnotVector => {
+                "a knot vector without two distinct knots, or a knot above the degree + 1"
+            }
+            Self::KnotCount => "knot multiplicities that do not match the control points",
+            Self::TooFewControlPoints => "no more control points than the degree",
+            Self::BezierSegments => {
+                "a Bezier spline whose control points are not the degree times the segments, plus 1"
+            }
+            Self::WeightNotPositive => "a weight that is not positive",
+            Self::WeightCount => "weights that do not match the control points",
+            Self::NetWeightCount => "weights that do not match the control net",
+            Self::ZeroDirection => "a direction whose ratios are all zero",
+            Self::NegativeMagnitude => "a vector magnitude that is negative",
+            Self::ZeroMagnitude => "a vector of magnitude zero",
+            Self::CircleRadius => "a circle radius that is not positive",
+            Self::EllipseSemiAxis => "an ellipse semi axis that is not positive",
+            Self::HyperbolaSemiAxis => "a hyperbola semi axis that is not positive",
+            Self::ParabolaFocalDistance => "a parabola focal distance of zero",
+            Self::SurfaceCurveItems => "a surface curve with more than two associated items",
+            Self::PcurveItems => "a pcurve representation without exactly one item",
+            Self::CurveControlPoints => "a B-spline with more than 1 000 000 control points",
+            Self::CylinderRadius => "a cylinder radius that is not positive",
+            Self::ConeShape => {
+                "a cone with a negative radius or a semi angle outside (0, π/2) in size"
+            }
+            Self::SphereRadius => "a sphere radius that is not positive",
+            Self::TorusMinorRadius => "a torus minor radius that is not positive",
+            Self::TorusMajorRadius => "a torus major radius that is not finite",
+            Self::SurfaceControlPoints => {
+                "a B-spline surface with more than 1 000 000 control points"
+            }
+            Self::ControlNet => "a B-spline control net that is empty or ragged",
+        })
+    }
+}
 
 /// Valid input this crate does not read.
 #[derive(Clone, Debug, PartialEq, Eq)]
