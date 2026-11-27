@@ -414,8 +414,9 @@ impl Terms {
         }
     }
 
-    /// Per axis, the rounding of the point `s` and of the derivatives `su`, `sv`.
-    fn rounding(self, s: Vec3, su: Vec3, sv: Vec3) -> (Vec3, Vec3, Vec3) {
+    /// Per axis, the rounding of the point `s` and of the derivatives `su`, `sv`; `None`
+    /// for derivatives that are exact.
+    fn rounding(self, s: Vec3, su: Vec3, sv: Vec3) -> (Vec3, Option<(Vec3, Vec3)>) {
         match self {
             Self::Frame {
                 point,
@@ -433,19 +434,24 @@ impl Terms {
                     radial * (vx * vx + vy * vy).sqrt() + along * v.dot(z).abs()
                 };
                 let at = at * gamma(ORIGIN_ROUNDINGS) + terms(s - origin) * point;
-                (at, terms(su) * derivative, terms(sv) * derivative)
+                let derivatives =
+                    (derivative != 0.0).then(|| (terms(su) * derivative, terms(sv) * derivative));
+                (at, derivatives)
             }
             Self::Hull { size, rounds } => {
                 let g = gamma(rounds);
                 let s = abs3(s);
                 let point = Vec3::new(size.x.max(s.x), size.y.max(s.y), size.z.max(s.z)) * g;
                 let (a, b) = (max_abs(su) * g, max_abs(sv) * g);
-                (point, Vec3::new(a, a, a), Vec3::new(b, b, b))
+                (point, Some((Vec3::new(a, a, a), Vec3::new(b, b, b))))
             }
             Self::Unknown => {
                 let g = gamma(POINT_ROUNDINGS);
                 let (p, a, b) = (max_abs(s) * g, max_abs(su) * g, max_abs(sv) * g);
-                (Vec3::new(p, p, p), Vec3::new(a, a, a), Vec3::new(b, b, b))
+                (
+                    Vec3::new(p, p, p),
+                    Some((Vec3::new(a, a, a), Vec3::new(b, b, b))),
+                )
             }
         }
     }
@@ -465,17 +471,27 @@ impl Inner<'_> {
         error: &mut [f64],
         along: &mut [f64],
     ) {
-        let (point, du, dv) = self.terms.rounding(s, su, sv);
+        let (point, derivatives) = self.terms.rounding(s, su, sv);
         let dp = point + abs3(p) * gamma(1);
         let (a, b) = (abs3(su), abs3(sv));
         // Each axis of `su x sv` is two products less one another: their rounding, and the
-        // derivatives' carried through them.
+        // derivatives' carried through them. Exact derivatives (a plane's stored axes)
+        // carry nothing, and their zero terms are left out: every term is a finite size,
+        // so adding `+0` would leave the same bits.
         let g2 = gamma(2);
-        let dn = Vec3::new(
-            g2 * (a.y * b.z + a.z * b.y) + du.y * b.z + a.y * dv.z + du.z * b.y + a.z * dv.y,
-            g2 * (a.z * b.x + a.x * b.z) + du.z * b.x + a.z * dv.x + du.x * b.z + a.x * dv.z,
-            g2 * (a.x * b.y + a.y * b.x) + du.x * b.y + a.x * dv.y + du.y * b.x + a.y * dv.x,
+        let own = Vec3::new(
+            g2 * (a.y * b.z + a.z * b.y),
+            g2 * (a.z * b.x + a.x * b.z),
+            g2 * (a.x * b.y + a.y * b.x),
         );
+        let dn = match derivatives {
+            None => own,
+            Some((du, dv)) => Vec3::new(
+                own.x + du.y * b.z + a.y * dv.z + du.z * b.y + a.z * dv.y,
+                own.y + du.z * b.x + a.z * dv.x + du.x * b.z + a.x * dv.z,
+                own.z + du.x * b.y + a.x * dv.y + du.y * b.x + a.y * dv.x,
+            ),
+        };
         self.set
             .rounding((p, n), (dp, dn), su, gamma(EVAL_ROUNDINGS), error, along);
     }
