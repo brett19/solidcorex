@@ -532,6 +532,7 @@ name = "scx-difftest"
 version = "0.1.0"
 dependencies = [
  "scx-algo",
+ "scx-bodyq",
  "scx-brep",
  "scx-curve",
  "scx-make",
