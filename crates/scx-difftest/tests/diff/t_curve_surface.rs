@@ -159,7 +159,7 @@ impl Gen for Case {
                 },
                 2 => {
                     let r = rng.uniform(0.5, 8.0);
-                    let lim = (r / HEIGHT).atan().min(1.2);
+                    let lim = scx_num::fmath::atan(r / HEIGHT).min(1.2);
                     let a = if rng.below(2) == 0 {
                         rng.uniform(0.1, 1.2)
                     } else {

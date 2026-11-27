@@ -27,6 +27,7 @@ use scx_num::budget::{Budget, Stop};
 use scx_num::domain::ParamDomain;
 use scx_num::extent1d::Extent1d;
 use scx_num::extent2d::Extent2d;
+use scx_num::fmath;
 use scx_num::frame::{Frame, Sense};
 use scx_num::hash::Rng;
 use scx_num::units::Length;
@@ -457,7 +458,7 @@ fn interior_uv(rng: &mut Rng, s: &Surface) -> Point2 {
         Surface::Plane(_) => Point2::new(between(rng, -5.0, 5.0), between(rng, -5.0, 5.0)),
         Surface::Cylinder(c) => Point2::new(u * TAU * c.radius().mm(), between(rng, -5.0, 5.0)),
         Surface::Cone(c) => {
-            let k = c.half_angle().tan();
+            let k = fmath::tan(c.half_angle());
             let rho = between(rng, 0.5, 5.0);
             Point2::new(u, (rho - c.radius().mm()) / k)
         }
@@ -558,7 +559,7 @@ fn curves_on_the_surface_overlap_it() {
         let s = sense(&mut rng);
         let zs = z * s.sign();
         let phi = between(&mut rng, 0.0, TAU);
-        let dir = x * phi.cos() + y * phi.sin();
+        let dir = x * fmath::cos(phi) + y * fmath::sin(phi);
         let along = |c: Point3, r: f64, axis: Vec3, x: Vec3| {
             circle(
                 Frame::new(c, axis, x).unwrap(),
@@ -574,7 +575,7 @@ fn curves_on_the_surface_overlap_it() {
         cases.push((cylinder(f, r, s), line(o + dir * r, z, 40.0)));
         cases.push((cylinder(f, r, s), along(o + z * 3.0, r, z, dir)));
         let angle = between(&mut rng, 0.2, 1.2);
-        let k = angle.tan();
+        let k = fmath::tan(angle);
         let v = between(&mut rng, 0.5, 3.0);
         cases.push((
             cone(f, r, angle, s),
@@ -584,14 +585,19 @@ fn curves_on_the_surface_overlap_it() {
         let lat = between(&mut rng, -1.2, 1.2);
         cases.push((
             sphere(f, r, s),
-            along(o + z * (r * lat.sin()), r * lat.cos(), z, dir),
+            along(o + z * (r * fmath::sin(lat)), r * fmath::cos(lat), z, dir),
         ));
         cases.push((sphere(f, r, s), along(o, r, dir.cross(z), dir)));
         let small = r * between(&mut rng, 0.2, 0.8);
         let big = r;
         cases.push((
             torus(f, big, small, s),
-            along(o + z * (small * lat.sin()), big + small * lat.cos(), z, dir),
+            along(
+                o + z * (small * fmath::sin(lat)),
+                big + small * fmath::cos(lat),
+                z,
+                dir,
+            ),
         ));
         cases.push((
             torus(f, big, small, s),

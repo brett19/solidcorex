@@ -179,10 +179,10 @@ pub fn intersect_curve(
         return Ok(vec![CurveSurfaceHit::Overlap { t: path.extent }]);
     }
     // A closed curve's events are a cycle: start after a far one, so no run is cut in two.
-    if path.closed {
-        if let Some(i) = events.iter().position(|e| !e.near) {
-            events.rotate_left(i + 1);
-        }
+    if path.closed
+        && let Some(i) = events.iter().position(|e| !e.near)
+    {
+        events.rotate_left(i + 1);
     }
     let mut hits = Vec::new();
     for run in events.split(|e| !e.near) {
@@ -229,8 +229,8 @@ fn classify(run: &[Event]) -> Option<(f64, Contact)> {
             .iter()
             .find(|e| e.kind == Kind::End)
             .map(|e| (e.t, Contact::Crossing)),
-        1 => Some((roots[0].t, Contact::Crossing)),
-        n => Some((roots[n / 2].t, Contact::Tangent)),
+        1 => roots.first().map(|e| (e.t, Contact::Crossing)),
+        n => roots.get(n / 2).map(|e| (e.t, Contact::Tangent)),
     }
 }
 
@@ -397,10 +397,9 @@ impl Path {
                 let c = Vec3::new(cx, cy, cz);
                 let along = |v: Vec3| Vec3::new(v.dot(ax.x), v.dot(ax.y), v.dot(ax.z));
                 let (a, b) = (along(a), along(b));
-                for (k, t0) in [(0, 0.0), (1, PI)] {
-                    let s = if k == 0 { 1.0 } else { -1.0 };
+                for (slot, (t0, s)) in out.iter_mut().zip([(0.0, 1.0), (PI, -1.0)]) {
                     let (a, b) = (a * s, b * s);
-                    out[k] = Some(quad(
+                    *slot = Some(quad(
                         (c - b).to_array(),
                         a.to_array(),
                         (c + b).to_array(),
@@ -672,21 +671,28 @@ fn wrap(x: f64, period: Option<f64>, lo: f64, hi: f64) -> Option<f64> {
 /// points 9.
 const MAX: usize = 9;
 
-/// `C(n, k)` for `n <= MAX`.
-const BINOMIAL: [[f64; MAX + 1]; MAX + 1] = {
-    let mut b = [[0.0; MAX + 1]; MAX + 1];
-    let mut n = 0;
-    while n <= MAX {
-        b[n][0] = 1.0;
-        let mut k = 1;
-        while k <= n {
-            b[n][k] = b[n - 1][k - 1] + if k < n { b[n - 1][k] } else { 0.0 };
-            k += 1;
-        }
-        n += 1;
-    }
-    b
-};
+/// `C(n, k)` for `n <= MAX` (Pascal's triangle, exact).
+const BINOMIAL: [[f64; MAX + 1]; MAX + 1] = [
+    [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    [1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    [1.0, 2.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    [1.0, 3.0, 3.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    [1.0, 4.0, 6.0, 4.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    [1.0, 5.0, 10.0, 10.0, 5.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+    [1.0, 6.0, 15.0, 20.0, 15.0, 6.0, 1.0, 0.0, 0.0, 0.0],
+    [1.0, 7.0, 21.0, 35.0, 35.0, 21.0, 7.0, 1.0, 0.0, 0.0],
+    [1.0, 8.0, 28.0, 56.0, 70.0, 56.0, 28.0, 8.0, 1.0, 0.0],
+    [1.0, 9.0, 36.0, 84.0, 126.0, 126.0, 84.0, 36.0, 9.0, 1.0],
+];
+
+/// `C(n, k)`, zero past the table.
+fn binomial(n: usize, k: usize) -> f64 {
+    BINOMIAL
+        .get(n)
+        .and_then(|row| row.get(k))
+        .copied()
+        .unwrap_or(0.0)
+}
 
 /// A polynomial of degree `n <= 9` on `[0, 1]` in Bernstein form.
 #[derive(Clone, Copy, Debug)]
@@ -697,16 +703,19 @@ struct Bern {
 
 impl Bern {
     fn new(c: &[f64]) -> Self {
+        debug_assert!((1..=MAX + 1).contains(&c.len()));
         let mut out = [0.0; MAX + 1];
-        out[..c.len()].copy_from_slice(c);
+        for (o, x) in out.iter_mut().zip(c) {
+            *o = *x;
+        }
         Self {
             c: out,
-            n: c.len() - 1,
+            n: c.len().clamp(1, MAX + 1) - 1,
         }
     }
 
     fn coefficients(&self) -> &[f64] {
-        &self.c[..=self.n]
+        self.c.get(..=self.n).unwrap_or(&self.c)
     }
 
     fn mul(&self, o: &Self) -> Self {
@@ -714,11 +723,13 @@ impl Bern {
         let mut c = [0.0; MAX + 1];
         for (i, a) in self.coefficients().iter().enumerate() {
             for (j, b) in o.coefficients().iter().enumerate() {
-                c[i + j] += BINOMIAL[self.n][i] * BINOMIAL[o.n][j] * a * b;
+                if let Some(x) = c.get_mut(i + j) {
+                    *x += binomial(self.n, i) * binomial(o.n, j) * a * b;
+                }
             }
         }
         for (k, x) in c.iter_mut().enumerate().take(n + 1) {
-            *x /= BINOMIAL[n][k];
+            *x /= binomial(n, k);
         }
         Self { c, n }
     }
@@ -750,8 +761,9 @@ impl Bern {
             return Self::new(&[0.0]);
         }
         let mut c = [0.0; MAX + 1];
-        for (i, x) in c.iter_mut().enumerate().take(self.n) {
-            *x = self.n as f64 * (self.c[i + 1] - self.c[i]);
+        let k = self.coefficients();
+        for (x, (lo, hi)) in c.iter_mut().zip(k.iter().zip(k.iter().skip(1))) {
+            *x = self.n as f64 * (hi - lo);
         }
         Self { c, n: self.n - 1 }
     }
