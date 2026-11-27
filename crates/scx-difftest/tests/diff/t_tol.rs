@@ -10,7 +10,7 @@
 use crate::diff;
 use crate::facade::TolR;
 use scx_num::consts::{PARALLEL_ANGLE_DEG, PARALLEL_ANGLE_RAD, ZONE_DEFAULT};
-use scx_num::{Accuracy, Resolution};
+use scx_num::{Accuracy, Length, Resolution};
 
 type V = [f64; 3];
 type P = [f64; 2];
@@ -49,10 +49,14 @@ fn expressible(r: &TolR, reads: &[usize]) -> bool {
 /// scx's resolution for the pin's set `r`, where [`expressible`].
 fn res(r: &TolR, reads: &[usize]) -> Option<Resolution> {
     if expressible(r, reads) {
-        Resolution::from_mm(r.0[0])
+        Resolution::new(Length::from_mm(r.0[0]))
     } else {
         None
     }
+}
+/// scx's accuracies `a` and `b`, where both are ones.
+fn accs(a: f64, b: f64) -> Option<(Accuracy, Accuracy)> {
+    Accuracy::new(Length::from_mm(a)).zip(Accuracy::new(Length::from_mm(b)))
 }
 /// Whether `a` is an accuracy (finite, at least 0), as the pin reads a zone tolerance.
 fn acc_ok(a: f64) -> bool {
@@ -62,10 +66,10 @@ fn acc_ok(a: f64) -> bool {
 diff!(
     tolerances_default,
     || {
-        use m::tol::{approx_tol3d, xsect_tol3d, LARGE_SMALL_SIZE_RATIO, MODEL_SIZE_ESTIMATE};
+        use m::tol::{LARGE_SMALL_SIZE_RATIO, MODEL_SIZE_ESTIMATE};
         let k = Resolution::DEFAULT;
         (
-            [k.mm(), xsect_tol3d(k, None), approx_tol3d(k, None)],
+            [k.zone().mm(), k.xsect().mm(), k.approx().mm()],
             [
                 PARALLEL_ANGLE_DEG,
                 MODEL_SIZE_ESTIMATE,
@@ -148,7 +152,8 @@ diff!(
         scx_num::tol::MODEL_SIZE_ESTIMATE
     } else {
         s
-    }),
+    })
+    .mm(),
     solidcore::geom::tol::size_estimate_to_zone_tol_3d(s)
 );
 diff!(
@@ -192,7 +197,7 @@ diff!(
 diff!(
     zones,
     |r: TolR, a: f64, b: f64| {
-        let ab = Accuracy::from_mm(a).zip(Accuracy::from_mm(b));
+        let ab = accs(a, b);
         (
             ab.filter(|_| a + b != UD)
                 .map(|(a, b)| m::tol::xsect_tol_3d_from_zones(a, b)),
@@ -213,7 +218,7 @@ diff!(
 diff!(
     coincidence_reach_3d,
     |r: TolR, a: f64, b: f64, s: f64| {
-        let ab = Accuracy::from_mm(a).zip(Accuracy::from_mm(b));
+        let ab = accs(a, b);
         res(&r, &[])
             .zip(ab)
             .map(|(k, (a, b))| m::tol::coincidence_reach_3d(k, a, b, s))
@@ -228,7 +233,7 @@ diff!(
 diff!(
     within_coincidence_tol,
     |r: TolR, d: f64, a: f64, b: f64, s: f64| {
-        let ab = Accuracy::from_mm(a).zip(Accuracy::from_mm(b));
+        let ab = accs(a, b);
         res(&r, &[])
             .zip(ab)
             .map(|(k, (a, b))| m::tol::within_coincidence_tol(k, d, a, b, s))

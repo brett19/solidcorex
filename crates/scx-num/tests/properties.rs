@@ -348,16 +348,16 @@ fn zone_follows_the_size_table() {
             // Log-uniform strictly inside the range.
             let s = fmath::ln(lo) + r.uniform(0.0, 1.0) * fmath::ln(hi / lo);
             let s = fmath::exp(s).clamp(lo * (1.0 + 1e-12), hi * (1.0 - 1e-12));
-            assert_eq!(zone_for_size(s), zone, "{s}");
+            assert_eq!(zone_for_size(s).mm(), zone, "{s}");
         }
     }
     // The ends, as the table's half-open ranges give them.
-    assert_eq!(zone_for_size(0.00005), 1e-7);
-    assert_eq!(zone_for_size(0.005), 1e-6);
-    assert_eq!(zone_for_size(0.5), 1e-5);
-    assert_eq!(zone_for_size(500.0), 1e-5);
-    assert_eq!(zone_for_size(50000.0), 1e-4);
-    assert_eq!(zone_for_size(5e6), 1e-3);
+    assert_eq!(zone_for_size(0.00005).mm(), 1e-7);
+    assert_eq!(zone_for_size(0.005).mm(), 1e-6);
+    assert_eq!(zone_for_size(0.5).mm(), 1e-5);
+    assert_eq!(zone_for_size(500.0).mm(), 1e-5);
+    assert_eq!(zone_for_size(50000.0).mm(), 1e-4);
+    assert_eq!(zone_for_size(5e6).mm(), 1e-3);
 }
 
 /// A unitized vector has length 1 to a few ulps and points the same way.

@@ -88,7 +88,7 @@ fn table() -> Vec<(&'static str, u64)> {
         ("cbrt", fmath::cbrt),
         ("powi(2)", |x| fmath::powi(x, 2)),
         ("acos_clamped", acos_clamped),
-        ("zone_for_size", zone_for_size),
+        ("zone_for_size", |s| zone_for_size(s).mm()),
     ];
     let xs = inputs();
     let mut out = Vec::new();

@@ -195,11 +195,196 @@ pub mod x {
     }
     pub use scx_algo::polynomial;
     pub use scx_num::{
-        certified, extent1d, extent2d, extent3d, interval, interval_vector, limits, math, matrix,
-        periodic_extent1d, ring, series, small_matrix, taylor_model, tol, transform, vector2d,
-        vector3d,
+        certified, extent1d, extent2d, extent3d, interval, interval_vector, limits, matrix,
+        periodic_extent1d, ring, series, small_matrix, taylor_model, transform, vector2d, vector3d,
     };
     helpers!();
+
+    /// scx's `math`, with the pin's three- and four-operand maxima and minima as the
+    /// nested `max2`/`min2` that replace them.
+    pub mod math {
+        pub use scx_num::math::*;
+        pub fn max3(a: f64, b: f64, c: f64) -> f64 {
+            max2(max2(a, b), c)
+        }
+        pub fn min3(a: f64, b: f64, c: f64) -> f64 {
+            min2(min2(a, b), c)
+        }
+        pub fn max4(a: f64, b: f64, c: f64, d: f64) -> f64 {
+            max2(max2(a, b), max2(c, d))
+        }
+        pub fn min4(a: f64, b: f64, c: f64, d: f64) -> f64 {
+            min2(min2(a, b), min2(c, d))
+        }
+    }
+
+    /// scx's `tol`, with the pin's tolerance helpers by their names over scx's
+    /// replacements: the `Resolution` methods, `f64::abs`, the `math` constants and the
+    /// one `scaled_zero` over magnitudes.
+    pub mod tol {
+        use scx_num::extent1d::Extent1d;
+        use scx_num::extent2d::Extent2d;
+        use scx_num::extent3d::Extent3d;
+        use scx_num::math::{max2, Vec3, EFF_ZERO, EFF_ZERO_PARAM, EFF_ZERO_RAD};
+        use scx_num::math::{EFF_ZERO_SQ, EFF_ZERO_SQRT};
+        pub use scx_num::tol::*;
+        use scx_num::vector2d::Vec2;
+        use scx_num::{Accuracy, Length, Resolution};
+
+        pub fn tol3d(d: f64) -> f64 {
+            d.abs()
+        }
+        pub fn tol_mul(a: f64, b: f64) -> f64 {
+            a * b
+        }
+        pub fn zone_tol3d(k: Resolution, d: Option<f64>) -> f64 {
+            d.unwrap_or_else(|| k.zone().mm()).abs()
+        }
+        pub fn xsect_tol3d(k: Resolution, d: Option<f64>) -> f64 {
+            d.unwrap_or_else(|| k.xsect().mm()).abs()
+        }
+        pub fn approx_tol3d(k: Resolution, d: Option<f64>) -> f64 {
+            d.unwrap_or_else(|| k.approx().mm()).abs()
+        }
+        pub fn contact_tol_3d(k: Resolution) -> f64 {
+            k.contact().mm()
+        }
+        pub fn zone_tol_3d(k: Resolution, s: SmallTopoType) -> f64 {
+            k.topology_zone(s).mm()
+        }
+        pub fn approx_tol_3d(k: Resolution, s: SmallTopoType) -> f64 {
+            (k.topology_zone(s) * 0.5).mm()
+        }
+        pub fn xsect_tol_3d(k: Resolution, s: SmallTopoType) -> f64 {
+            (k.topology_zone(s) * 2.0).mm()
+        }
+        pub fn xsect_tol_3d_from_zones(a: Accuracy, b: Accuracy) -> f64 {
+            a.sum(b).mm()
+        }
+        pub fn coincidence_reach_3d(k: Resolution, a: Accuracy, b: Accuracy, s: f64) -> f64 {
+            scx_num::tol::coincidence_reach_3d(k, a, b, s).mm()
+        }
+        pub fn within_contact_tol(d: f64, c: f64, s: f64) -> bool {
+            scx_num::tol::within_contact_tol(d, Length::from_mm(c), s)
+        }
+        pub fn zone_reach_3d(z: f64, s: f64) -> f64 {
+            scx_num::tol::zone_reach_3d(Length::from_mm(z), s).mm()
+        }
+        /// The pin's override, where given, in place of the size-relative zero.
+        pub fn is_zero_speed(a: f64, d: f64, o: Option<f64>) -> bool {
+            match o {
+                Some(z) => a.abs() < z,
+                None => scx_num::tol::is_zero_speed(a, d),
+            }
+        }
+        /// The pin's override, where given, in place of the section tolerance.
+        pub fn is_degenerate_vec3(k: Resolution, v: Vec3, o: Option<f64>) -> bool {
+            is_degenerate(v, o.map_or_else(|| k.xsect(), Length::from_mm))
+        }
+        pub fn map_to_1d(t: f64, d: Vec3, i: &Extent1d) -> f64 {
+            scx_num::tol::map_to_1d(Length::from_mm(t), d, i).value()
+        }
+        pub fn eff_zero() -> f64 {
+            EFF_ZERO
+        }
+        pub fn eff_zero_sq() -> f64 {
+            EFF_ZERO_SQ
+        }
+        pub fn eff_zero_param() -> f64 {
+            EFF_ZERO_PARAM
+        }
+        pub fn eff_zero_ang_rad() -> f64 {
+            EFF_ZERO_RAD
+        }
+        pub fn scaled_zero() -> f64 {
+            EFF_ZERO
+        }
+        pub fn scaled_zero_sq() -> f64 {
+            EFF_ZERO_SQ
+        }
+        pub fn scaled_zero_sqrt() -> f64 {
+            EFF_ZERO_SQRT
+        }
+        pub fn scaled_zero_sq_of<A: ScaledZero>(a: &A) -> f64 {
+            let z = a.scaled_zero();
+            z * z
+        }
+        pub fn scaled_zero_sqrt_of<A: ScaledZero>(a: &A) -> f64 {
+            scx_num::vector3d::sqrt(a.scaled_zero())
+        }
+
+        /// A value's size, the magnitude `scaled_zero` reads for it: the size its
+        /// `ScaledZero` impl reads.
+        pub trait Mag {
+            fn mag(&self) -> f64;
+        }
+        impl Mag for f64 {
+            fn mag(&self) -> f64 {
+                self.abs()
+            }
+        }
+        impl Mag for Vec2 {
+            fn mag(&self) -> f64 {
+                self.max_dimension()
+            }
+        }
+        impl Mag for Vec3 {
+            fn mag(&self) -> f64 {
+                self.max_dimension()
+            }
+        }
+        impl Mag for Extent1d {
+            fn mag(&self) -> f64 {
+                self.max_dimension()
+            }
+        }
+        impl Mag for Extent2d {
+            fn mag(&self) -> f64 {
+                self.max_dimension()
+            }
+        }
+        impl Mag for Extent3d {
+            fn mag(&self) -> f64 {
+                self.max_dimension()
+            }
+        }
+
+        fn sz(m: &[f64]) -> f64 {
+            scx_num::tol::scaled_zero(m.iter().copied())
+        }
+        pub fn scaled_zero2(a: &impl Mag, b: &impl Mag) -> f64 {
+            sz(&[a.mag(), b.mag()])
+        }
+        pub fn scaled_zero_sq2(a: &impl Mag, b: &impl Mag) -> f64 {
+            let z = scaled_zero2(a, b);
+            z * z
+        }
+        pub fn scaled_zero_sqrt2(a: &impl Mag, b: &impl Mag) -> f64 {
+            scx_num::vector3d::sqrt(scaled_zero2(a, b))
+        }
+        pub fn scaled_zero3(a: &impl Mag, b: &impl Mag, c: &impl Mag) -> f64 {
+            sz(&[a.mag(), b.mag(), c.mag()])
+        }
+        pub fn scaled_zero_sq3(a: &impl Mag, b: &impl Mag, c: &impl Mag) -> f64 {
+            let z = scaled_zero3(a, b, c);
+            z * z
+        }
+        pub fn scaled_zero_sqrt3(a: &impl Mag, b: &impl Mag, c: &impl Mag) -> f64 {
+            scx_num::vector3d::sqrt(scaled_zero3(a, b, c))
+        }
+        /// The pin's four-operand maximum pairs its operands (`smos_4Max`), so the
+        /// adapter pairs the magnitudes the same way.
+        pub fn scaled_zero4(a: &impl Mag, b: &impl Mag, c: &impl Mag, d: &impl Mag) -> f64 {
+            sz(&[max2(a.mag(), b.mag()), max2(c.mag(), d.mag())])
+        }
+        pub fn scaled_zero_sq4(a: &impl Mag, b: &impl Mag, c: &impl Mag, d: &impl Mag) -> f64 {
+            let z = scaled_zero4(a, b, c, d);
+            z * z
+        }
+        pub fn scaled_zero_sqrt4(a: &impl Mag, b: &impl Mag, c: &impl Mag, d: &impl Mag) -> f64 {
+            scx_num::vector3d::sqrt(scaled_zero4(a, b, c, d))
+        }
+    }
 }
 
 /// The pinned solidcore.

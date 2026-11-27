@@ -27,6 +27,21 @@
 // `zone_for_size_boundaries_keep_todays_answers` and `small_topo_codes_round_trip`.
 // Then the transcendental functions became `fmath`'s (correctly rounded, the same bits on every
 // platform) in place of the C library's, so results may differ from the pin's in the last bit.
+// Then the tolerance helpers moved onto the newtypes (docs/research/57-idiom-audit.md M5, as
+// its review amends it): `zone_tol3d`, `xsect_tol3d` and `approx_tol3d` became
+// `Resolution::zone`, `xsect` and `approx` (an explicit tolerance is the caller's own
+// `Length`); their look-alikes `zone_tol_3d`, `xsect_tol_3d` and `approx_tol_3d` became
+// `Resolution::topology_zone` (the caller doubles or halves it); `contact_tol_3d` became
+// `Resolution::contact`; `xsect_tol_3d_from_zones` became `Accuracy::sum`; `tol3d` and
+// `tol_mul` removed (`f64::abs` and `*`); `eff_zero`, `eff_zero_sq`, `eff_zero_param`,
+// `eff_zero_ang_rad`, `scaled_zero()`, `scaled_zero_sq()` and `scaled_zero_sqrt()` removed
+// for the `math` constants they returned; `scaled_zero2`/`3`/`4`, their `_sq` and `_sqrt`
+// forms, `scaled_zero_sq_of` and `scaled_zero_sqrt_of` became one `scaled_zero` over
+// magnitudes (the caller squares it or takes its root); `is_degenerate_vec3(res, v, Option)`
+// became `is_degenerate(v, Length)`; `is_zero_speed` lost its override (a caller with one
+// compares); `zone_for_size`, `coincidence_reach_3d` and `zone_reach_3d` return a `Length`,
+// `within_contact_tol` and `zone_reach_3d` take one, and `map_to_1d` takes a `Length` and
+// returns a `ParamTol`. Tests read the new names.
 //! Tolerance policy (`SmTol`), the scalar part: the tolerance constructors, model-size
 //! based default tolerances, zone / intersection / approximation tolerances, the
 //! contact and coincidence rules, scaled zeros and simple tolerance predicates.
@@ -35,20 +50,21 @@
 //!
 //! | Rust                                   | Upstream                                       |
 //! |----------------------------------------|------------------------------------------------|
-//! | [`tol3d`]                              | `SmTol3d(double)`, `SmScaledZero(double)`, `SmTol2d(double)`, `SmTol1d(double)`, every `operator=(double)` of `SM_TOL_CALLS`, `SmTol3d::operator=(const SmTol3d)` |
-//! | [`zone_tol3d`]                         | `SmZoneTol3d(double)`                          |
-//! | [`xsect_tol3d`]                        | `SmXSectTol3d(double)`                         |
-//! | [`approx_tol3d`]                       | `SmApproxTol3d(double)`                        |
-//! | [`tol_mul`]                            | `operator*=(SmTol3d&, double)`                 |
-//! | (plain `f64`)                          | `operator double&`, `operator const double&` of every tolerance class |
+//! | (`f64::abs`)                           | `SmTol3d(double)`, `SmScaledZero(double)`, `SmTol2d(double)`, `SmTol1d(double)`, every `operator=(double)` of `SM_TOL_CALLS`, `SmTol3d::operator=(const SmTol3d)` |
+//! | [`Resolution::zone`]                   | `SmZoneTol3d(SM_USE_DEFAULT)`                  |
+//! | [`Resolution::xsect`]                  | `SmXSectTol3d(SM_USE_DEFAULT)`                 |
+//! | [`Resolution::approx`]                 | `SmApproxTol3d(SM_USE_DEFAULT)`                |
+//! | [`Length::from_mm`]                    | `SmZoneTol3d(double)`, `SmXSectTol3d(double)`, `SmApproxTol3d(double)` (an explicit tolerance) |
+//! | (`*`)                                  | `operator*=(SmTol3d&, double)`                 |
+//! | [`Length::mm`]                         | `operator double&`, `operator const double&` of every tolerance class |
 //! | [`SmallTopoType`]                      | `SmSmallTopoType`                              |
 //! | [`zone_for_size`]                      | `SmTol::SizeEstimateToZoneTol3d`               |
 //! | [`in_tol`]                             | `SmTol::InTol(double, const SmTol3d&)`         |
 //! | [`is_zero`], [`is_zero_squared`], [`is_zero_to_tol`] | `SM_IS_ZERO`, `SM_IS_ZERO_SQUARED`, `SM_IS_ZERO_TO_TOL` (`SmMath.h`) |
 //! | [`are_same`], [`are_same_to_tol`]      | `SM_ARE_SAME`, `SM_ARE_SAME_TO_TOL` (`SmMath.h`) |
-//! | [`eff_zero`], [`eff_zero_sq`], [`eff_zero_param`], [`eff_zero_ang_rad`] | `SmTol::GetEffZero`, `GetEffZeroSq`, `GetEffZeroParam`, `GetEffZeroAngRad` |
-//! | [`xsect_tol_3d_from_zones`]            | `SmTol::GetXSectTol3d(const SmZoneTol3d&, const SmZoneTol3d&)` |
-//! | [`contact_tol_3d`]                     | not upstream (WR-787, #15429): when circles a hair less than tangent touch |
+//! | [`EFF_ZERO`], [`EFF_ZERO_SQ`], [`EFF_ZERO_PARAM`], [`EFF_ZERO_RAD`] | `SmTol::GetEffZero`, `GetEffZeroSq`, `GetEffZeroParam`, `GetEffZeroAngRad` |
+//! | [`Accuracy::sum`]                      | `SmTol::GetXSectTol3d(const SmZoneTol3d&, const SmZoneTol3d&)` |
+//! | [`Resolution::contact`]                | not upstream (WR-787, #15429): when circles a hair less than tangent touch |
 //! | [`within_contact_tol`]                 | not upstream: the one reading of a contact at the tolerance, shared by every contact site |
 //! | [`crate::units::coincident`], [`coincidence_reach_3d`], [`within_coincidence_tol`] | not upstream: when two places are one, the larger of the contact tolerance and the two accuracies |
 //! | [`zone_reach_3d`]                      | not upstream: when two places are one within a body's own tolerance, no contact floor |
@@ -57,17 +73,12 @@
 //! | [`are_parallel`]                       | `SmTol::AreParallel`                           |
 //! | [`are_perpendicular`]                  | `SmTol::ArePerpendicular`                      |
 //! | [`is_zero_speed`]                      | `SmTol::IsZeroSpeed`                           |
-//! | [`is_degenerate_vec3`]                 | `SmTol::IsDegenerate(const SmVector3d, SmXSectTol3d*)` |
-//! | [`zone_tol_3d`]                        | `SmTol::GetZoneTol3d(SmSmallTopoType)` (system) |
-//! | [`approx_tol_3d`]                      | `SmTol::GetApproxTol3d(SmSmallTopoType)`       |
-//! | [`xsect_tol_3d`]                       | `SmTol::GetXSectTol3d(SmSmallTopoType)`        |
-//! | [`scaled_zero`], [`scaled_zero_sq`], [`scaled_zero_sqrt`] | `SmTol::GetScaledZero()`, `GetScaledZeroSq()`, `GetScaledZeroSqrt()` |
+//! | [`is_degenerate`]                      | `SmTol::IsDegenerate(const SmVector3d, SmXSectTol3d*)` (the caller passes [`Resolution::xsect`] or its own) |
+//! | [`Resolution::topology_zone`]          | `SmTol::GetZoneTol3d(SmSmallTopoType)` (system); `GetApproxTol3d` and `GetXSectTol3d(SmSmallTopoType)` are half and twice it |
+//! | [`EFF_ZERO`], [`EFF_ZERO_SQ`], [`EFF_ZERO_SQRT`] | `SmTol::GetScaledZero()`, `GetScaledZeroSq()`, `GetScaledZeroSqrt()` |
 //! | [`ScaledZero`] (`f64`, [`Vec2`], [`Vec3`], [`Extent1d`], `Extent2d`, [`Extent3d`]) | `SmTol::GetScaledZero(const double)`, `(const SmVector2d&)`, `(const SmVector3d&)`, `(const SmExtent1d&)`, `(const SmExtent2d&)` (impl in [`crate::extent2d`]), `(const SmExtent3d&)` |
 //! | [`map_to_1d`]                          | `SmTol::MapTo1d(SmTol3d&, SmVector3d&, const SmExtent1d&)` |
-//! | [`scaled_zero_sq_of`], [`scaled_zero_sqrt_of`] | unary `GetScaledZeroSq<cA>`, `GetScaledZeroSqrt<cA>` |
-//! | [`scaled_zero2`], [`scaled_zero_sq2`], [`scaled_zero_sqrt2`] | binary `GetScaledZero<cA,cB>`, `...Sq`, `...Sqrt` |
-//! | [`scaled_zero3`], [`scaled_zero_sq3`], [`scaled_zero_sqrt3`] | tertiary templates     |
-//! | [`scaled_zero4`], [`scaled_zero_sq4`], [`scaled_zero_sqrt4`] | quaternary templates   |
+//! | [`scaled_zero`]                        | the unary, binary, tertiary and quaternary `GetScaledZero<cA, ...>` templates (their `Sq` and `Sqrt` forms: the caller squares the result or takes its root) |
 //!
 //! System state: upstream keeps the system tolerances in thread-local statics
 //! (`s_ZoneTol3d`, `s_TolGapGain`, `s_ModelSizeEstimate`, `s_LargeSmallSizeRatio`), and
@@ -84,68 +95,32 @@
 //! `UpdateObjectTolerance`.
 //!
 //! Deviations:
-//! - The tolerance classes (`SmTol3d`, `SmZoneTol3d`, ...) are plain `f64` values; their
-//!   converting constructors are the functions [`tol3d`], [`zone_tol3d`],
-//!   [`xsect_tol3d`] and [`approx_tol3d`], applied exactly where upstream converts a
-//!   `double` into a tolerance class (a return statement, a cast, an initialisation),
-//!   so that `fabs` happens at the same places. `SM_USE_DEFAULT` ("use the system
-//!   value") is `None`.
-//! - Optional pointer arguments become `Option<f64>` holding the pointee's value.
+//! - The tolerance classes (`SmTol3d`, `SmZoneTol3d`, ...) are [`Length`] values (see
+//!   [`crate::units`] for where a `Length` meets `f64`); upstream's `fabs` on conversion is
+//!   `f64::abs` where the value can be negative, and nothing where it cannot.
+//!   `SM_USE_DEFAULT` ("use the system value") is the [`Resolution`] method; a caller with
+//!   its own tolerance passes it.
+//! - Optional pointer arguments are gone: the caller passes the value it has, or the
+//!   default by name.
 //! - `SM_ASSERT*`, `WARN`, `ERR_MSG` and `SM_DEBUG_CODE` blocks are not ported (they do
 //!   not change results in the release build).
 
 use crate::certified::gamma;
 use crate::extent1d::Extent1d;
 use crate::extent3d::Extent3d;
-use crate::math::{
-    max2, max3, max4, rad_to_deg, Vec3, EFF_ZERO, EFF_ZERO_PARAM, EFF_ZERO_RAD, EFF_ZERO_SQ,
-    EFF_ZERO_SQRT,
-};
-use crate::units::{coincident, Accuracy, Resolution};
+use crate::math::{max2, rad_to_deg, Vec3, EFF_ZERO, EFF_ZERO_SQ};
+#[cfg(doc)]
+use crate::math::{EFF_ZERO_PARAM, EFF_ZERO_RAD, EFF_ZERO_SQRT};
+use crate::units::{coincident, Accuracy, Length, ParamTol, Resolution};
 use crate::vector2d::Vec2;
-use crate::vector3d::sqrt as sm_sqrt;
 
 /// `SM_MODEL_SIZE_ESTIMATE`: the model size [`zone_for_size`] reads when none is given.
 pub const MODEL_SIZE_ESTIMATE: f64 = 50.0;
 /// `SM_LARGE_SMALL_SIZE_RATIO`: the large/small topology size ratio, the factor of a
-/// small-topology zone ([`zone_tol_3d`]). Owner: the tolerance policy. Its own literal,
-/// as at the pin: the validity limit [`crate::consts::MAX_ACCURACY_RATIO`] has the same
-/// value but is a separate decision.
+/// small-topology zone ([`Resolution::topology_zone`]). Owner: the tolerance policy. Its
+/// own literal, as at the pin: the validity limit [`crate::consts::MAX_ACCURACY_RATIO`] has
+/// the same value but is a separate decision.
 pub const LARGE_SMALL_SIZE_RATIO: f64 = 1000.0;
-
-// ---- tolerance values ------------------------------------------------------------
-
-/// `SmTol3d(double)` (and the `SmScaledZero`, `SmTol2d`, `SmTol1d` constructors and
-/// every `operator=(double)`): a tolerance is stored as `fabs(d)`.
-#[must_use]
-pub fn tol3d(d: f64) -> f64 {
-    d.abs()
-}
-
-/// `SmZoneTol3d(double)`: `fabs(d)`, or with no `d` (upstream's `SM_USE_DEFAULT`) the
-/// resolution.
-#[must_use]
-pub fn zone_tol3d(res: Resolution, d: Option<f64>) -> f64 {
-    tol3d(d.unwrap_or_else(|| res.mm()))
-}
-
-/// `SmXSectTol3d(double)`: `fabs(d)`, or with no `d` twice the resolution.
-#[must_use]
-pub fn xsect_tol3d(res: Resolution, d: Option<f64>) -> f64 {
-    tol3d(d.unwrap_or_else(|| res.mm() * 2.0))
-}
-
-/// `SmApproxTol3d(double)`: `fabs(d)`, or with no `d` half the resolution.
-#[must_use]
-pub fn approx_tol3d(res: Resolution, d: Option<f64>) -> f64 {
-    tol3d(d.unwrap_or_else(|| res.mm() / 2.0))
-}
-
-/// `operator*=(SmTol3d&, double)`: `tol * d` (no `fabs`, as upstream).
-#[must_use]
-pub fn tol_mul(tol: f64, d: f64) -> f64 {
-    tol * d
-}
 
 /// Control flags for small-topology tolerances (`SmSmallTopoType`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -215,11 +190,11 @@ impl SmallTopoType {
 /// gives the half-open ranges above.
 ///
 /// Outside them the zone is `10^floor(log10(|size|) / 2) * 1e-5`. Upstream's
-/// `SM_USE_DEFAULT` size (no estimate) is the caller's [`MODEL_SIZE_ESTIMATE`]. (The
-/// `SmZoneTol3d` conversions of the result only apply `fabs`.)
+/// `SM_USE_DEFAULT` size (no estimate) is the caller's [`MODEL_SIZE_ESTIMATE`]. A zero
+/// size gives a zero zone and a NaN size a NaN one, neither of them a [`Resolution`].
 #[must_use]
-pub fn zone_for_size(size: f64) -> f64 {
-    if (0.5..=500.0).contains(&size) {
+pub fn zone_for_size(size: f64) -> Length {
+    Length::from_mm(if (0.5..=500.0).contains(&size) {
         1.0e-5
     } else if (500.0..=50000.0).contains(&size) {
         1.0e-4
@@ -230,57 +205,41 @@ pub fn zone_for_size(size: f64) -> f64 {
     } else if (0.00005..=0.005).contains(&size) {
         1.0e-7
     } else {
-        tol3d(crate::fmath::powf(10.0, (crate::fmath::log10(size.abs()) / 2.0).floor()) * 1.0e-5)
+        (crate::fmath::powf(10.0, (crate::fmath::log10(size.abs()) / 2.0).floor()) * 1.0e-5).abs()
+    })
+}
+
+impl Resolution {
+    /// The zone tolerance for topology of size class `topo`
+    /// (`SmTol::GetZoneTol3d(SmSmallTopoType)`): the zone, multiplied by
+    /// [`LARGE_SMALL_SIZE_RATIO`] for small topology. Upstream's approximation and
+    /// intersection tolerances of a size class (`GetApproxTol3d`, `GetXSectTol3d`) are half
+    /// and twice it. (Upstream's uninitialised-tolerance branch has no counterpart: a
+    /// resolution is above 0.)
+    #[must_use]
+    pub fn topology_zone(self, topo: SmallTopoType) -> Length {
+        if topo.is_small() {
+            self.zone() * LARGE_SMALL_SIZE_RATIO
+        } else {
+            self.zone()
+        }
     }
-}
 
-/// The zone tolerance at resolution `res` (`SmTol::GetZoneTol3d(SmSmallTopoType)`):
-/// multiplied by [`LARGE_SMALL_SIZE_RATIO`] for small topology. (Upstream's
-/// uninitialised-tolerance branch has no counterpart: a resolution is above 0.)
-#[must_use]
-pub fn zone_tol_3d(res: Resolution, small: SmallTopoType) -> f64 {
-    let zone = res.mm();
-    if small.is_small() {
-        tol3d(tol3d(LARGE_SMALL_SIZE_RATIO) * zone)
-    } else {
-        zone
+    /// The tolerance up to which two circles or parallel cylinders, or a circle and a line
+    /// in its plane, that overlap past touching touch on the boolean's path (read by
+    /// [`within_contact_tol`]): the resolution, 1e-5 by default. Not upstream (WR-787,
+    /// #15429, #14599; solidcore's `contact_tol_3d`): one value for every site that decides
+    /// the contact (the walls, the rims, the curve/surface classifier), whatever tolerances
+    /// earlier operations grew the edges and faces to, so the same two holes give the same
+    /// topology whatever came before. The touching point midway lies δ/2 from each operand,
+    /// so below it the point lies within the approximation tolerance (half the zone
+    /// tolerance) of both, as the intersection curves through it do. At the intersection
+    /// tolerance (twice the zone tolerance) two through holes overlapping by 1.02e-5 to
+    /// 1.99e-5 came out a valid solid that kept the second tool whole, as a void.
+    #[must_use]
+    pub const fn contact(self) -> Length {
+        self.zone()
     }
-}
-
-/// The system approximation tolerance, half the zone tolerance
-/// (`SmTol::GetApproxTol3d(SmSmallTopoType)`).
-#[must_use]
-pub fn approx_tol_3d(res: Resolution, small: SmallTopoType) -> f64 {
-    tol3d(0.5 * zone_tol_3d(res, small))
-}
-
-/// The system intersection tolerance, twice the zone tolerance
-/// (`SmTol::GetXSectTol3d(SmSmallTopoType)`).
-#[must_use]
-pub fn xsect_tol_3d(res: Resolution, small: SmallTopoType) -> f64 {
-    tol3d(2.0 * zone_tol_3d(res, small))
-}
-
-/// The intersection tolerance of two objects with accuracies `a`, `b`: their sum
-/// (`SmTol::GetXSectTol3d(const SmZoneTol3d&, const SmZoneTol3d&)`).
-#[must_use]
-pub fn xsect_tol_3d_from_zones(a: Accuracy, b: Accuracy) -> f64 {
-    tol3d(a.sum(b).mm())
-}
-
-/// The tolerance up to which two circles or parallel cylinders, or a circle and a line in
-/// its plane, that overlap past touching touch on the boolean's path (read by
-/// [`within_contact_tol`]): the resolution, 1e-5 by default. Not upstream (WR-787, #15429, #14599): one value for every
-/// site that decides the contact (the walls, the rims, the curve/surface classifier),
-/// whatever tolerances earlier operations grew the edges and faces to, so the same two
-/// holes give the same topology whatever came before. The touching point midway lies δ/2 from each operand, so below it the
-/// point lies within the approximation tolerance (half the zone tolerance) of both, as
-/// the intersection curves through it do. At the intersection tolerance (twice the zone
-/// tolerance) two through holes overlapping by 1.02e-5 to 1.99e-5 came out a valid solid
-/// that kept the second tool whole, as a void.
-#[must_use]
-pub fn contact_tol_3d(res: Resolution) -> f64 {
-    zone_tol_3d(res, SmallTopoType::NormalSize)
 }
 
 /// Whether `distance`, a length that decides a contact (how far two circles, or a circle
@@ -290,7 +249,7 @@ pub fn contact_tol_3d(res: Resolution) -> f64 {
 /// contact rule, shared by every site that decides a contact
 /// (`circle_coplanar_circle_intersect_in_contact` and
 /// `line_coplanar_circle_intersect_distinct` in `geom::geom_utility`, which the walls, the
-/// rims and the curve/surface classifier call with [`contact_tol_3d`]; a plane's section
+/// rims and the curve/surface classifier call with [`Resolution::contact`]; a plane's section
 /// of a cylinder or a cone touching a side of the plane's domain,
 /// `Plane::make_new_plane_ellipse_in_contact`, with it too; and the plane's tangent line
 /// on a cylinder or a cone, `Cone::intersect_with_plane`, with the faces' zone
@@ -312,21 +271,21 @@ pub fn contact_tol_3d(res: Resolution) -> f64 {
 /// their copies at most 3.3 unit roundoffs of `size` apart). A distance proved past the
 /// tolerance by more than that is past it at every site.
 #[must_use]
-pub fn within_contact_tol(distance: f64, contact: f64, size: f64) -> bool {
-    distance <= contact + rounding_of_copies(size)
+pub fn within_contact_tol(distance: f64, contact: Length, size: f64) -> bool {
+    distance <= (contact + rounding_of_copies(size)).mm()
 }
 
 /// How far a distance read off two copies of the same geometry can stand past the true
 /// one by rounding alone: `γ_32` of `size`, the largest coordinate a point of either copy
 /// has ([`within_contact_tol`] derives it). Shared by the contact and the coincidence rule,
 /// so both read a length at their tolerance the same way.
-fn rounding_of_copies(size: f64) -> f64 {
-    gamma(32) * size.abs()
+fn rounding_of_copies(size: f64) -> Length {
+    Length::from_mm(gamma(32) * size.abs())
 }
 
 /// The largest distance at which two places coincide (are one place), on two objects of
 /// accuracies `a` and `b`: the tolerance [`crate::units::coincident`], the larger of the
-/// contact tolerance (the resolution, [`contact_tol_3d`]) and the two accuracies, and the
+/// contact tolerance (the resolution, [`Resolution::contact`]) and the two accuracies, and the
 /// rounding of the copies past it, `size` the largest coordinate of either place, as
 /// [`within_contact_tol`] reads a contact. Not upstream: one rule for every site
 /// that decides whether two places on two objects are one (as the sites move to it, a curve
@@ -350,20 +309,20 @@ fn rounding_of_copies(size: f64) -> f64 {
 /// lies within it is on it. Read by [`within_coincidence_tol`], at the tolerance or a
 /// rounding of the copies past it, as [`within_contact_tol`] reads a contact.
 #[must_use]
-pub fn coincidence_reach_3d(res: Resolution, a: Accuracy, b: Accuracy, size: f64) -> f64 {
-    coincident(res, a, b).mm() + rounding_of_copies(size)
+pub fn coincidence_reach_3d(res: Resolution, a: Accuracy, b: Accuracy, size: f64) -> Length {
+    coincident(res, a, b) + rounding_of_copies(size)
 }
 
 /// The largest distance at which two places held to tolerance `zone` are one place: that
 /// tolerance and the rounding of the copies past it, `size` the largest coordinate of either
 /// place. Not upstream. For a site where the body's own tolerances decide, so the contact
-/// tolerance ([`coincidence_tol_3d`]'s floor, which keeps a contact between two operands'
+/// tolerance ([`crate::units::coincident`]'s floor, which keeps a contact between two operands'
 /// curves and a coincidence of them in agreement) does not apply: the side test of an edge
 /// use, where a sample of the edge dropped onto its face's surface meets a side of that
 /// surface's domain, `zone` the larger of the two tolerances. A NaN zone tolerance gives
 /// NaN, within which nothing lies.
 #[must_use]
-pub fn zone_reach_3d(zone: f64, size: f64) -> f64 {
+pub fn zone_reach_3d(zone: Length, size: f64) -> Length {
     zone + rounding_of_copies(size)
 }
 
@@ -378,32 +337,7 @@ pub fn within_coincidence_tol(
     b: Accuracy,
     size: f64,
 ) -> bool {
-    distance <= coincidence_reach_3d(res, a, b, size)
-}
-
-/// `SM_EFF_ZERO` as a scaled zero (`SmTol::GetEffZero`).
-#[must_use]
-pub fn eff_zero() -> f64 {
-    tol3d(EFF_ZERO)
-}
-
-/// `SM_EFF_ZERO_SQ` as a scaled zero (`SmTol::GetEffZeroSq`).
-#[must_use]
-pub fn eff_zero_sq() -> f64 {
-    tol3d(EFF_ZERO_SQ)
-}
-
-/// `SM_EFF_ZERO_PARAM` as a scaled zero (`SmTol::GetEffZeroParam`): the smallest
-/// distance between distinct parameter values.
-#[must_use]
-pub fn eff_zero_param() -> f64 {
-    tol3d(EFF_ZERO_PARAM)
-}
-
-/// `SM_EFF_ZERO_RAD` as a scaled zero (`SmTol::GetEffZeroAngRad`).
-#[must_use]
-pub fn eff_zero_ang_rad() -> f64 {
-    tol3d(EFF_ZERO_RAD)
+    distance <= coincidence_reach_3d(res, a, b, size).mm()
 }
 
 // ---- predicates --------------------------------------------------------------------
@@ -414,62 +348,51 @@ pub fn in_tol(val: f64, tol: f64) -> bool {
     val.abs() <= tol
 }
 
-/// `SM_IS_ZERO(a)`: `|a| <=` [`scaled_zero`] (`SmMath.h`).
+/// `SM_IS_ZERO(a)`: `|a| <=` [`EFF_ZERO`] (`SmMath.h`).
 #[must_use]
 pub fn is_zero(a: f64) -> bool {
-    in_tol(a, scaled_zero())
+    in_tol(a, EFF_ZERO)
 }
 
-/// `SM_IS_ZERO_SQUARED(a)`: `|a| <=` [`scaled_zero_sq`] (`SmMath.h`).
+/// `SM_IS_ZERO_SQUARED(a)`: `|a| <=` [`EFF_ZERO_SQ`] (`SmMath.h`).
 #[must_use]
 pub fn is_zero_squared(a: f64) -> bool {
-    in_tol(a, scaled_zero_sq())
+    in_tol(a, EFF_ZERO_SQ)
 }
 
 /// `SM_IS_ZERO_TO_TOL(a, tol)`: `|a| <= |tol|` (`SmMath.h`).
 #[must_use]
 pub fn is_zero_to_tol(a: f64, tol: f64) -> bool {
-    in_tol(a, tol3d(tol))
+    in_tol(a, tol.abs())
 }
 
 /// `SM_ARE_SAME(a, b)`: `|a - b| <=` the larger scaled zero of `a` and `b`
 /// (`SmMath.h`).
 #[must_use]
 pub fn are_same(a: f64, b: f64) -> bool {
-    in_tol(a - b, scaled_zero2(&a, &b))
+    in_tol(a - b, scaled_zero([a, b]))
 }
 
 /// `SM_ARE_SAME_TO_TOL(a, b, tol)`: `|a - b| <= |tol|` (`SmMath.h`).
 #[must_use]
 pub fn are_same_to_tol(a: f64, b: f64, tol: f64) -> bool {
-    in_tol(a - b, tol3d(tol))
+    in_tol(a - b, tol.abs())
 }
 
 /// True when `speed` is zero relative to the size `max_pos_dimension`:
-/// `|speed| < override` or, without override, `|speed| < SM_EFF_ZERO * (1 + |max|)`
-/// (`SmTol::IsZeroSpeed`).
+/// `|speed| < SM_EFF_ZERO * (1 + |max|)` (`SmTol::IsZeroSpeed`; its override pointer,
+/// which no caller passes, is gone).
 #[must_use]
-pub fn is_zero_speed(
-    speed: f64,
-    max_pos_dimension: f64,
-    override_scaled_zero: Option<f64>,
-) -> bool {
-    speed.abs()
-        < match override_scaled_zero {
-            Some(z) => z,
-            None => EFF_ZERO * (1.0 + max_pos_dimension.abs()),
-        }
+pub fn is_zero_speed(speed: f64, max_pos_dimension: f64) -> bool {
+    speed.abs() < EFF_ZERO * (1.0 + max_pos_dimension.abs())
 }
 
-/// True when `v` is shorter than the intersection tolerance (the override, else
-/// [`xsect_tol_3d`] at `res`) (`SmTol::IsDegenerate(const SmVector3d, SmXSectTol3d*)`).
+/// True when `v` is shorter than `tol` (`SmTol::IsDegenerate(const SmVector3d,
+/// SmXSectTol3d*)`; solidcore's default, the section tolerance, is
+/// [`Resolution::xsect`], which a caller now names).
 #[must_use]
-pub fn is_degenerate_vec3(res: Resolution, v: Vec3, override_xsect_tol: Option<f64>) -> bool {
-    let tol = match override_xsect_tol {
-        Some(t) => t,
-        None => xsect_tol_3d(res, SmallTopoType::NormalSize),
-    };
-    v.is_zero(tol)
+pub fn is_degenerate(v: Vec3, tol: Length) -> bool {
+    v.is_zero(tol.mm())
 }
 
 /// True when `v1` and `v2` are parallel within `max_angle` radians
@@ -493,36 +416,28 @@ pub fn are_perpendicular(v1: Vec3, v2: Vec3, max_angle: f64) -> bool {
 /// Maps the 3D tolerance `tol` to a curve's parameter space at a point with first
 /// derivative `deriv`: `tol / |deriv|`, or `natural_interval.length() / 100` where the
 /// derivative is (near) zero (`SmTol::MapTo1d(SmTol3d&, SmVector3d&, const
-/// SmExtent1d&)`). `tol` is the value of an `SmTol3d` (already `fabs`).
+/// SmExtent1d&)`). `tol` is read as its size, as an `SmTol3d` is.
 #[must_use]
-pub fn map_to_1d(tol: f64, deriv: Vec3, natural_interval: &Extent1d) -> f64 {
-    let scaled_zero = scaled_zero();
+pub fn map_to_1d(tol: Length, deriv: Vec3, natural_interval: &Extent1d) -> ParamTol {
     let deriv_size = deriv.length();
-    tol3d(if deriv_size < scaled_zero {
-        natural_interval.length() / 100.0
+    ParamTol::new(if deriv_size < EFF_ZERO {
+        (natural_interval.length() / 100.0).abs()
     } else {
-        tol / deriv_size
+        (tol.mm() / deriv_size).abs()
     })
 }
 
 // ---- scaled zeros ------------------------------------------------------------------
 
-/// The default scaled zero, `SM_EFF_ZERO` (`SmTol::GetScaledZero()`).
+/// The largest scaled zero of `magnitudes`: `SM_EFF_ZERO * (1 + max |m|)` (the
+/// nullary to quaternary `SmTol::GetScaledZero` overloads in one). The maximum is a left
+/// fold with C's comparison ([`max2`]), so a NaN magnitude carries as `max2` carries
+/// it; no magnitudes give [`EFF_ZERO`]. A value's own magnitude is its
+/// [`ScaledZero`] size (`max_dimension`).
 #[must_use]
-pub fn scaled_zero() -> f64 {
-    tol3d(EFF_ZERO)
-}
-
-/// `SM_EFF_ZERO_SQ` (`SmTol::GetScaledZeroSq()`).
-#[must_use]
-pub fn scaled_zero_sq() -> f64 {
-    tol3d(EFF_ZERO_SQ)
-}
-
-/// `SM_EFF_ZERO_SQRT` (`SmTol::GetScaledZeroSqrt()`).
-#[must_use]
-pub fn scaled_zero_sqrt() -> f64 {
-    tol3d(EFF_ZERO_SQRT)
+#[inline]
+pub fn scaled_zero<I: IntoIterator<Item = f64>>(magnitudes: I) -> f64 {
+    EFF_ZERO * (1.0 + magnitudes.into_iter().fold(0.0, |m, x| max2(m, x.abs())))
 }
 
 /// Values with a size-relative numerical zero (the unary `SmTol::GetScaledZero`
@@ -535,28 +450,28 @@ pub trait ScaledZero {
 impl ScaledZero for f64 {
     /// `SmTol::GetScaledZero(const double)`: `SM_EFF_ZERO * (1 + |d|)`.
     fn scaled_zero(&self) -> f64 {
-        tol3d(EFF_ZERO * (1.0 + self.abs()))
+        scaled_zero([*self])
     }
 }
 
 impl ScaledZero for Vec2 {
     /// `SmTol::GetScaledZero(const SmVector2d&)`: `SM_EFF_ZERO * (1 + max |coord|)`.
     fn scaled_zero(&self) -> f64 {
-        tol3d(EFF_ZERO * (1.0 + self.max_dimension()))
+        scaled_zero([self.max_dimension()])
     }
 }
 
 impl ScaledZero for Vec3 {
     /// `SmTol::GetScaledZero(const SmVector3d&)`: `SM_EFF_ZERO * (1 + max |coord|)`.
     fn scaled_zero(&self) -> f64 {
-        tol3d(EFF_ZERO * (1.0 + self.max_dimension()))
+        scaled_zero([self.max_dimension()])
     }
 }
 
 impl ScaledZero for Extent1d {
     /// `SmTol::GetScaledZero(const SmExtent1d&)`: `SM_EFF_ZERO * (1 + max |end|)`.
     fn scaled_zero(&self) -> f64 {
-        tol3d(EFF_ZERO * (1.0 + self.max_dimension()))
+        scaled_zero([self.max_dimension()])
     }
 }
 
@@ -564,116 +479,8 @@ impl ScaledZero for Extent3d {
     /// `SmTol::GetScaledZero(const SmExtent3d&)`: `SM_EFF_ZERO * (1 + max |coord|)`
     /// over both corners.
     fn scaled_zero(&self) -> f64 {
-        tol3d(EFF_ZERO * (1.0 + max2(self.min().max_dimension(), self.max().max_dimension())))
+        scaled_zero([self.min().max_dimension(), self.max().max_dimension()])
     }
-}
-
-/// Square of the scaled zero of `a` (unary `SmTol::GetScaledZeroSq<cA>`).
-#[must_use]
-pub fn scaled_zero_sq_of<A: ScaledZero + ?Sized>(a: &A) -> f64 {
-    let r = a.scaled_zero();
-    tol3d(r * r)
-}
-
-/// Square root of the scaled zero of `a` (unary `SmTol::GetScaledZeroSqrt<cA>`).
-#[must_use]
-pub fn scaled_zero_sqrt_of<A: ScaledZero + ?Sized>(a: &A) -> f64 {
-    tol3d(sm_sqrt(a.scaled_zero()))
-}
-
-/// Largest scaled zero of two values (binary `SmTol::GetScaledZero<cA, cB>`).
-#[must_use]
-pub fn scaled_zero2<A: ScaledZero + ?Sized, B: ScaledZero + ?Sized>(a: &A, b: &B) -> f64 {
-    max2(a.scaled_zero(), b.scaled_zero())
-}
-
-/// Square of [`scaled_zero2`] (binary `SmTol::GetScaledZeroSq<cA, cB>`).
-#[must_use]
-pub fn scaled_zero_sq2<A: ScaledZero + ?Sized, B: ScaledZero + ?Sized>(a: &A, b: &B) -> f64 {
-    let r = scaled_zero2(a, b);
-    tol3d(r * r)
-}
-
-/// Square root of [`scaled_zero2`] (binary `SmTol::GetScaledZeroSqrt<cA, cB>`).
-#[must_use]
-pub fn scaled_zero_sqrt2<A: ScaledZero + ?Sized, B: ScaledZero + ?Sized>(a: &A, b: &B) -> f64 {
-    tol3d(sm_sqrt(scaled_zero2(a, b)))
-}
-
-/// Largest scaled zero of three values (tertiary `SmTol::GetScaledZero<cA, cB, cC>`).
-#[must_use]
-pub fn scaled_zero3<A, B, C>(a: &A, b: &B, c: &C) -> f64
-where
-    A: ScaledZero + ?Sized,
-    B: ScaledZero + ?Sized,
-    C: ScaledZero + ?Sized,
-{
-    max3(a.scaled_zero(), b.scaled_zero(), c.scaled_zero())
-}
-
-/// Square of [`scaled_zero3`] (tertiary `SmTol::GetScaledZeroSq`).
-#[must_use]
-pub fn scaled_zero_sq3<A, B, C>(a: &A, b: &B, c: &C) -> f64
-where
-    A: ScaledZero + ?Sized,
-    B: ScaledZero + ?Sized,
-    C: ScaledZero + ?Sized,
-{
-    let r = scaled_zero3(a, b, c);
-    tol3d(r * r)
-}
-
-/// Square root of [`scaled_zero3`] (tertiary `SmTol::GetScaledZeroSqrt`).
-#[must_use]
-pub fn scaled_zero_sqrt3<A, B, C>(a: &A, b: &B, c: &C) -> f64
-where
-    A: ScaledZero + ?Sized,
-    B: ScaledZero + ?Sized,
-    C: ScaledZero + ?Sized,
-{
-    tol3d(sm_sqrt(scaled_zero3(a, b, c)))
-}
-
-/// Largest scaled zero of four values (quaternary `SmTol::GetScaledZero`).
-#[must_use]
-pub fn scaled_zero4<A, B, C, D>(a: &A, b: &B, c: &C, d: &D) -> f64
-where
-    A: ScaledZero + ?Sized,
-    B: ScaledZero + ?Sized,
-    C: ScaledZero + ?Sized,
-    D: ScaledZero + ?Sized,
-{
-    max4(
-        a.scaled_zero(),
-        b.scaled_zero(),
-        c.scaled_zero(),
-        d.scaled_zero(),
-    )
-}
-
-/// Square of [`scaled_zero4`] (quaternary `SmTol::GetScaledZeroSq`).
-#[must_use]
-pub fn scaled_zero_sq4<A, B, C, D>(a: &A, b: &B, c: &C, d: &D) -> f64
-where
-    A: ScaledZero + ?Sized,
-    B: ScaledZero + ?Sized,
-    C: ScaledZero + ?Sized,
-    D: ScaledZero + ?Sized,
-{
-    let r = scaled_zero4(a, b, c, d);
-    tol3d(r * r)
-}
-
-/// Square root of [`scaled_zero4`] (quaternary `SmTol::GetScaledZeroSqrt`).
-#[must_use]
-pub fn scaled_zero_sqrt4<A, B, C, D>(a: &A, b: &B, c: &C, d: &D) -> f64
-where
-    A: ScaledZero + ?Sized,
-    B: ScaledZero + ?Sized,
-    C: ScaledZero + ?Sized,
-    D: ScaledZero + ?Sized,
-{
-    tol3d(sm_sqrt(scaled_zero4(a, b, c, d)))
 }
 
 #[cfg(test)]
@@ -682,33 +489,35 @@ mod tests {
     use crate::consts::{PARALLEL_ANGLE_RAD, ZONE_DEFAULT};
 
     fn res(mm: f64) -> Resolution {
-        Resolution::from_mm(mm).unwrap_or(Resolution::DEFAULT)
+        Resolution::new(Length::from_mm(mm)).unwrap_or(Resolution::DEFAULT)
     }
     fn acc(mm: f64) -> Accuracy {
-        Accuracy::from_mm(mm).unwrap_or(Accuracy::ZERO)
+        Accuracy::new(Length::from_mm(mm)).unwrap_or(Accuracy::ZERO)
     }
 
     #[test]
     fn size_estimate_table() {
         // SmTol.cpp sm_TemplateTrial.
-        assert_eq!(zone_for_size(50.0), 1.0e-5);
-        assert_eq!(zone_for_size(50000.0), 1.0e-4);
-        assert_eq!(zone_for_size(0.005), 1.0e-6);
-        assert_eq!(zone_for_size(MODEL_SIZE_ESTIMATE), 1.0e-5);
-        assert_eq!(zone_for_size(1.0e8), 1.0e-1);
-        assert_eq!(zone_for_size(0.0), 0.0);
+        let z = |size: f64| zone_for_size(size).mm();
+        assert_eq!(z(50.0), 1.0e-5);
+        assert_eq!(z(50000.0), 1.0e-4);
+        assert_eq!(z(0.005), 1.0e-6);
+        assert_eq!(z(MODEL_SIZE_ESTIMATE), 1.0e-5);
+        assert_eq!(z(1.0e8), 1.0e-1);
+        assert_eq!(z(0.0), 0.0);
     }
 
     #[test]
     fn system_tolerances() {
         let k = Resolution::DEFAULT;
-        assert_eq!(zone_tol_3d(k, SmallTopoType::NormalSize), 1.0e-5);
-        assert_eq!(xsect_tol_3d(k, SmallTopoType::NormalSize), 2.0e-5);
-        assert_eq!(approx_tol_3d(k, SmallTopoType::NormalSize), 5.0e-6);
-        assert_eq!(zone_tol_3d(k, SmallTopoType::SmallSize), 1000.0 * 1.0e-5);
-        let k = res(zone_for_size(50000.0));
+        assert_eq!(k.topology_zone(SmallTopoType::NormalSize).mm(), 1.0e-5);
         assert_eq!(
-            zone_tol_3d(k, SmallTopoType::ForceSmallSize),
+            k.topology_zone(SmallTopoType::SmallSize).mm(),
+            1000.0 * 1.0e-5
+        );
+        let k = res(zone_for_size(50000.0).mm());
+        assert_eq!(
+            k.topology_zone(SmallTopoType::ForceSmallSize).mm(),
             1000.0 * 1.0e-4
         );
     }
@@ -716,12 +525,12 @@ mod tests {
     #[test]
     fn tol_constructors() {
         let k = Resolution::DEFAULT;
-        assert_eq!(tol3d(-0.5), 0.5);
-        assert_eq!(zone_tol3d(k, None), 1.0e-5);
-        assert_eq!(xsect_tol3d(k, None), 2.0e-5);
-        assert_eq!(approx_tol3d(k, None), 5.0e-6);
-        assert_eq!(zone_tol3d(k, Some(-3.0)), 3.0);
-        assert_eq!(tol_mul(tol3d(-2.0), -3.0), -6.0);
+        assert_eq!(k.zone().mm(), 1.0e-5);
+        assert_eq!(k.xsect().mm(), 2.0e-5);
+        assert_eq!(k.approx().mm(), 5.0e-6);
+        assert_eq!(k.contact(), k.zone());
+        assert!(is_zero_to_tol(-2.0, -3.0));
+        assert!(are_same_to_tol(1.0, 3.5, -3.0));
     }
 
     #[test]
@@ -730,12 +539,11 @@ mod tests {
         assert!(in_tol(0.001, 0.004));
         assert!(in_tol(-0.001, 0.004));
         assert!(!in_tol(0.008, 0.004));
-        assert!(is_zero_speed(1e-13, 0.0, None));
-        assert!(!is_zero_speed(1e-11, 0.0, None));
-        assert!(is_zero_speed(0.5, 0.0, Some(1.0)));
+        assert!(is_zero_speed(1e-13, 0.0));
+        assert!(!is_zero_speed(1e-11, 0.0));
         let k = Resolution::DEFAULT;
-        assert!(is_degenerate_vec3(k, Vec3::new(1e-6, 0.0, 0.0), None));
-        assert!(!is_degenerate_vec3(k, Vec3::new(1e-4, 0.0, 0.0), None));
+        assert!(is_degenerate(Vec3::new(1e-6, 0.0, 0.0), k.xsect()));
+        assert!(!is_degenerate(Vec3::new(1e-4, 0.0, 0.0), k.xsect()));
         assert!(are_parallel(Vec3::X, -Vec3::X, PARALLEL_ANGLE_RAD));
         assert!(!are_parallel(Vec3::X, Vec3::Y, PARALLEL_ANGLE_RAD));
         assert!(are_perpendicular(Vec3::X, Vec3::Y, 0.1));
@@ -751,25 +559,21 @@ mod tests {
         assert_eq!(v2.scaled_zero(), EFF_ZERO * 81.0);
         assert_eq!(v3.scaled_zero(), EFF_ZERO * 1001.0);
         assert_eq!(e3.scaled_zero(), EFF_ZERO * 10001.0);
-        assert_eq!(scaled_zero2(&v2, &v3), EFF_ZERO * 1001.0);
-        assert_eq!(scaled_zero3(&v2, &v3, &e3), EFF_ZERO * 10001.0);
-        assert_eq!(scaled_zero4(&1.0, &v2, &v3, &e3), EFF_ZERO * 10001.0);
-        let z = 7.0f64.scaled_zero();
-        assert_eq!(scaled_zero_sq_of(&7.0), z * z);
-        assert_eq!(scaled_zero_sqrt_of(&7.0), z.sqrt());
-        assert_eq!(scaled_zero(), EFF_ZERO);
-        assert_eq!(scaled_zero_sq(), EFF_ZERO_SQ);
-        assert_eq!(scaled_zero_sqrt(), EFF_ZERO_SQRT);
-        assert_eq!(eff_zero_param(), EFF_ZERO_PARAM);
-        assert_eq!(eff_zero_ang_rad(), EFF_ZERO_RAD);
-        assert_eq!(eff_zero(), EFF_ZERO);
-        assert_eq!(eff_zero_sq(), EFF_ZERO_SQ);
+        let (m2, m3) = (v2.max_dimension(), v3.max_dimension());
+        assert_eq!(scaled_zero([m2, m3]), EFF_ZERO * 1001.0);
+        assert_eq!(scaled_zero([m2, m3, 10000.0]), EFF_ZERO * 10001.0);
+        assert_eq!(scaled_zero([1.0, m2, m3, -10000.0]), EFF_ZERO * 10001.0);
+        assert_eq!(scaled_zero([-7.0]), 7.0f64.scaled_zero());
+        assert_eq!(scaled_zero([]), EFF_ZERO);
+        // a NaN carries as C's `>` carries it: dropped before a number, kept after one
+        assert_eq!(scaled_zero([f64::NAN, 3.0]), EFF_ZERO * 4.0);
+        assert!(scaled_zero([3.0, f64::NAN]).is_nan());
     }
 
     #[test]
     fn coincidence_is_the_larger_tolerance() {
         let k = Resolution::DEFAULT;
-        let contact = contact_tol_3d(k);
+        let contact = k.contact().mm();
         assert_eq!(coincident(k, Accuracy::ZERO, Accuracy::ZERO).mm(), contact);
         assert_eq!(
             coincident(k, acc(4.0 * contact), acc(contact)).mm(),
@@ -796,23 +600,21 @@ mod tests {
             acc(contact),
             1.0
         ));
-        assert_eq!(
-            xsect_tol_3d_from_zones(acc(1.0e-5), acc(2.0e-5)),
-            1.0e-5 + 2.0e-5
-        );
+        assert_eq!(acc(1.0e-5).sum(acc(2.0e-5)).mm(), 1.0e-5 + 2.0e-5);
     }
 
     #[test]
     fn zone_for_size_boundaries_keep_todays_answers() {
         // the checks run 0.5..=500, 500..=50000, 0.005..=0.5, 50000..=5e6,
         // 0.00005..=0.005: a boundary takes the first range listed that holds it
-        assert_eq!(zone_for_size(0.5), 1.0e-5);
-        assert_eq!(zone_for_size(500.0), 1.0e-5);
-        assert_eq!(zone_for_size(50000.0), 1.0e-4);
-        assert_eq!(zone_for_size(0.005), 1.0e-6);
-        assert_eq!(zone_for_size(5e6), 1.0e-3);
-        assert_eq!(zone_for_size(0.00005), 1.0e-7);
-        assert!(zone_for_size(f64::NAN).is_nan());
+        let z = |size: f64| zone_for_size(size).mm();
+        assert_eq!(z(0.5), 1.0e-5);
+        assert_eq!(z(500.0), 1.0e-5);
+        assert_eq!(z(50000.0), 1.0e-4);
+        assert_eq!(z(0.005), 1.0e-6);
+        assert_eq!(z(5e6), 1.0e-3);
+        assert_eq!(z(0.00005), 1.0e-7);
+        assert!(z(f64::NAN).is_nan());
     }
 
     #[test]
@@ -831,13 +633,9 @@ mod tests {
         // solidcore's default `Tolerances`: zone 1e-5, xsect 2e-5, approx 5e-6, angle 0.5
         // degrees, model 50, ratio 1000
         let k = Resolution::DEFAULT;
-        assert_eq!(k.mm(), ZONE_DEFAULT);
+        assert_eq!(k.zone().mm(), ZONE_DEFAULT);
         assert_eq!(
-            (
-                zone_tol3d(k, None),
-                xsect_tol3d(k, None),
-                approx_tol3d(k, None)
-            ),
+            (k.zone().mm(), k.xsect().mm(), k.approx().mm()),
             (1.0e-5, 2.0e-5, 5.0e-6)
         );
         assert_eq!(crate::consts::PARALLEL_ANGLE_DEG, 0.5);

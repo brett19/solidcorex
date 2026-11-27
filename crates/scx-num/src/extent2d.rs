@@ -93,7 +93,7 @@ use crate::error::{NumError, Result};
 use crate::extent1d::{Extent1d, ExtentPointType};
 use crate::extent3d::{BoundaryType, Extent3d};
 use crate::math::{is_infinite_param, max2, min2, BIG_DOUBLE, EFF_ZERO, EFF_ZERO_SQRT};
-use crate::tol::{are_same, are_same_to_tol, is_zero_to_tol, tol3d, ScaledZero};
+use crate::tol::{are_same, are_same_to_tol, is_zero_to_tol, scaled_zero, ScaledZero};
 use crate::vector2d::{Point2, Vec2};
 use crate::vector3d::sqrt;
 
@@ -161,7 +161,7 @@ impl ScaledZero for Extent2d {
     /// `SmTol::GetScaledZero(const SmExtent2d&)`: `SM_EFF_ZERO * (1 + max |coord|)`
     /// over both corners.
     fn scaled_zero(&self) -> f64 {
-        tol3d(EFF_ZERO * (1.0 + max2(self.min.max_dimension(), self.max.max_dimension())))
+        scaled_zero([self.min.max_dimension(), self.max.max_dimension()])
     }
 }
 

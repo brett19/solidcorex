@@ -96,7 +96,7 @@
 use crate::error::{NumError, Result};
 use crate::extent1d::Extent1d;
 use crate::math::{
-    is_infinite_param, max2, max3, min2, min3, Point3, Vec3, BIG_DOUBLE, EFF_ZERO, EFF_ZERO_SQ,
+    is_infinite_param, max2, min2, Point3, Vec3, BIG_DOUBLE, EFF_ZERO, EFF_ZERO_SQ,
     INFINITE_PARAMETER, PI,
 };
 use crate::vector3d::{asin, sqrt};
@@ -419,7 +419,7 @@ impl Extent3d {
     /// Largest side length (`GetMaxLength`).
     #[must_use]
     pub fn max_length(&self) -> f64 {
-        max3(self.x_length(), self.y_length(), self.z_length())
+        max2(max2(self.x_length(), self.y_length()), self.z_length())
     }
 
     /// The x interval, ends swapped if inverted (`GetUInterval`).
@@ -987,8 +987,8 @@ impl Extent3d {
         let (tmin_x, tmax_x) = slab(self.min.x, self.max.x, point.x, dir.x);
         let (tmin_y, tmax_y) = slab(self.min.y, self.max.y, point.y, dir.y);
         let (tmin_z, tmax_z) = slab(self.min.z, self.max.z, point.z, dir.z);
-        let d_min = max3(tmin_z, tmin_x, tmin_y);
-        let d_max = min3(tmax_z, tmax_x, tmax_y);
+        let d_min = max2(max2(tmin_z, tmin_x), tmin_y);
+        let d_max = min2(min2(tmax_z, tmax_x), tmax_y);
 
         // Upstream note [B70]: in an extreme grazing case the midpoint can be far
         // from the box although the line passes within tolerance, so the ends are

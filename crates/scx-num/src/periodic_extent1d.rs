@@ -87,7 +87,7 @@ enum SeamCase {
 /// `SM_IS_CONTAINED(c, a, b)`: `c` inside or on `[a, b]` (either order), widened by
 /// `SmTol::GetScaledZero(a, b)`.
 fn is_contained(c: f64, a: f64, b: f64) -> bool {
-    let tz = tol::scaled_zero2(&a, &b);
+    let tz = tol::scaled_zero([a, b]);
     ((a <= c + tz) && (c - tz <= b)) || ((b <= c + tz) && (c - tz <= a))
 }
 
@@ -212,7 +212,7 @@ impl PeriodicExtent1d {
             self.full_period = false;
             self.min = BIG_DOUBLE;
             self.max = -BIG_DOUBLE;
-        } else if tol::in_tol(self.max - self.min, tol::tol3d(self.period.scaled_zero())) {
+        } else if tol::in_tol(self.max - self.min, self.period.scaled_zero()) {
             // Given Point Interval, Return Full Interval
             self.set_full();
         } else {
@@ -255,9 +255,7 @@ impl PeriodicExtent1d {
         let mut swapped = false; // remember switching case 2 into case 1
 
         // check for Full Period intervals
-        if self.is_full_period()
-            || (tol::in_tol(from, tol::tol3d(sz)) && tol::in_tol(to - self.period, tol::tol3d(sz)))
-        {
+        if self.is_full_period() || (tol::in_tol(from, sz) && tol::in_tol(to - self.period, sz)) {
             self.set_full();
             return Ok(());
         }

@@ -18,6 +18,7 @@
 // Results unchanged.
 // Then the transcendental functions became `fmath`'s (correctly rounded, the same bits on every
 // platform) in place of the C library's, so results may differ from the pin's in the last bit.
+// Then `tol3d` went (`f64::abs` in its place): the pair tolerance is the sum's `abs()`.
 //! Voxel bucket hash of point-located items for fast coincident-pair searches
 //!
 //! Iteration order is deterministic and documented: [`ObjsInVoxels::find_coincident_pairs`]
@@ -77,7 +78,6 @@
 
 use scx_num::extent3d::Extent3d;
 use scx_num::math::Point3;
-use scx_num::tol::tol3d;
 use scx_num::{NumError, Result};
 
 /// Number of gap-size histogram buckets (`SM_HISTOGRAM_GAPSIZE_BUCKETCNT`).
@@ -911,8 +911,8 @@ impl<T: Copy + PartialEq> ObjsInVoxels<T> {
                     let (Some(end_at), Some(beg_at)) = (end_item.placed, beg_item.placed) else {
                         continue;
                     };
-                    let xs = tol3d(beg_at.zone_tol + end_at.zone_tol);
-                    let xs_sq = tol3d(xs * xs);
+                    let xs = (beg_at.zone_tol + end_at.zone_tol).abs();
+                    let xs_sq = xs * xs;
                     let gap_sq = (beg_at.point - end_at.point).length_squared();
                     if let Some(h) = histogram.as_deref_mut() {
                         if let Some(c) = h.get_mut(gap_histogram_index(gap_sq.sqrt())) {

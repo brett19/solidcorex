@@ -298,6 +298,25 @@ The consequence (JUDGED):
   - in the pin: 228, 28 and 70.
 - **Difftest:** comparable. The adapters `zone_tol3d(tol, d)` and the others are kept in `x` with
   the pin's signatures, calling the new API. `t_tol.rs`'s 26 cases are unchanged.
+- **Where `Length` meets `f64` (decided, review-57 N2):** `Length` at the tolerance API, `f64`
+  inside the kernels. A tolerance is a `Length`, `Resolution` or `Accuracy` from where it is made
+  to where it is compared: `Resolution::{zone, xsect, approx, contact, topology_zone}`,
+  `coincident`, `coincidence_reach_3d`, `zone_reach_3d` and `zone_for_size` return `Length`, and
+  `is_degenerate`, `map_to_1d`, `within_contact_tol` take one. Geometry (coordinates, distances,
+  sizes, scaled zeros, parameter steps) stays `f64`. The one conversion is `Length::from_mm` in
+  and `Length::mm` out: no `From`, no `Deref`, and `Resolution`/`Accuracy` lost their own
+  `mm`/`from_mm`. A predicate converts at its comparison (`within_coincidence_tol`,
+  `is_degenerate`); a ported site that feeds a tolerance into `f64` arithmetic calls `.mm()` once,
+  where the arithmetic starts, so the pin's 228 sites take one `.mm()` each at most, not one per
+  operation. Written into `units.rs`'s module doc.
+- **Done (idiom builder B):** as above, with three choices the ruling left open. `max3`/`min3`/
+  `max4`/`min4` are gone, but `max2`/`min2` stay rather than becoming `f64::max` folds: `f64::max`
+  drops a NaN that C's `a > b ? a : b` keeps (`max2(1, NaN)` is NaN), so a fold would change
+  results; `smos_3Max(a, b, c)` is `max2(max2(a, b), c)` to the bit, and the call sites in
+  `extent3d.rs` nest it. `scaled_zero` is one iterator form (a left `max2` fold over magnitudes,
+  `EFF_ZERO` for none); the sq/sqrt variants went, a caller squares or roots. The small-topology
+  section and approximation tolerances fold into `Resolution::topology_zone` (no pin caller
+  passes a small size class).
 
 ### M6. The solver rewrite the 04 closure row rules, with the parts it does not name
 

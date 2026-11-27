@@ -115,7 +115,7 @@ use scx_num::math::{BIG_DOUBLE, EFF_ZERO, EFF_ZERO_SQ};
 /// parameter is recorded), so it stays here, private, until that defect is fixed on
 /// purpose (`docs/01-architecture.md` §10.1 item 10).
 const UNDEF_DOUBLE: f64 = 1.23456e-61;
-use scx_num::tol::{in_tol, scaled_zero};
+use scx_num::tol::in_tol;
 use scx_num::NumError;
 
 /// `ZEPS` of `SolveByBrent`.
@@ -1058,7 +1058,7 @@ impl Run {
             }
 
             // f'(t) near zero: use +/-1 to nudge in the right direction.
-            if in_tol(self.st.curr.f_prime, scaled_zero()) {
+            if in_tol(self.st.curr.f_prime, EFF_ZERO) {
                 self.st.curr.f_prime = if self.st.curr.f_prime < 0.0 {
                     -1.0
                 } else {

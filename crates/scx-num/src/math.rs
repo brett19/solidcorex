@@ -13,6 +13,8 @@
 // `Transform::is_regular` reads its scale's exponent from the bits, not `log2(..).floor()`;
 // for an entry `f64::MAX` it now answers `No` where the pin, whose `powi(2, -1024)` is 0, says
 // `Undecided`.
+// Then `max3`, `min3`, `max4` and `min4` removed: `smos_3Max(a, b, c)` is
+// `max2(max2(a, b), c)` to the bit, NaN included, and `smos_4Max` was already nested `max2`.
 //! Small `f64` linear-algebra types: [`Vec3`]/[`Point3`], [`Vec2`]/[`Point2`],
 //! [`Transform`], and the numeric constants of `SmMath.h`.
 //!
@@ -31,7 +33,7 @@
 //! | [`Transform::rotation`], [`Transform::uniform_scaling`], [`Transform::reflection`] | (not upstream) |
 //! | [`EFF_ZERO`] etc.            | `SM_EFF_ZERO` etc.                             |
 //! | [`is_infinite_param`]        | `SM_IS_INFINITE`                               |
-//! | [`max2`], [`min2`], [`max3`], [`min3`], [`max4`], [`min4`] | `smos_Max`, `smos_Min`, `smos_3Max`, `smos_3Min`, `smos_4Max`, `smos_4Min` |
+//! | [`max2`], [`min2`]           | `smos_Max`, `smos_Min` (`smos_3Max` etc.: nested [`max2`]) |
 //! | [`rad_to_deg`]               | `SM_RAD2DEG`                                   |
 //!
 //! ## Why not `glam`/`nalgebra`
@@ -90,7 +92,8 @@ pub fn is_infinite_param(a: f64) -> bool {
 /// `smos_Max(a, b)`: `a > b ? a : b`.
 ///
 /// Unlike [`f64::max`], the result for a NaN operand follows the comparison
-/// (`b` when either is NaN), as upstream's macro does.
+/// (`b` when either is NaN), as upstream's macro does. Three or four operands nest it,
+/// `max2(max2(a, b), c)`, which is `smos_3Max`'s order.
 #[must_use]
 pub fn max2(a: f64, b: f64) -> f64 {
     if a > b {
@@ -108,50 +111,6 @@ pub fn min2(a: f64, b: f64) -> f64 {
     } else {
         b
     }
-}
-
-/// `smos_3Max(a, b, c)`, with upstream's comparison order.
-#[must_use]
-pub fn max3(a: f64, b: f64, c: f64) -> f64 {
-    if a > b {
-        if a > c {
-            a
-        } else {
-            c
-        }
-    } else if b > c {
-        b
-    } else {
-        c
-    }
-}
-
-/// `smos_3Min(a, b, c)`, with upstream's comparison order.
-#[must_use]
-pub fn min3(a: f64, b: f64, c: f64) -> f64 {
-    if a < b {
-        if a < c {
-            a
-        } else {
-            c
-        }
-    } else if b < c {
-        b
-    } else {
-        c
-    }
-}
-
-/// `smos_4Max(a, b, c, d)` = `smos_Max(smos_Max(a, b), smos_Max(c, d))`.
-#[must_use]
-pub fn max4(a: f64, b: f64, c: f64, d: f64) -> f64 {
-    max2(max2(a, b), max2(c, d))
-}
-
-/// `smos_4Min(a, b, c, d)` = `smos_Min(smos_Min(a, b), smos_Min(c, d))`.
-#[must_use]
-pub fn min4(a: f64, b: f64, c: f64, d: f64) -> f64 {
-    min2(min2(a, b), min2(c, d))
 }
 
 /// `SM_RAD2DEG(a)` = `a * (180.0 / SM_PI)`: radians to degrees.

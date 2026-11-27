@@ -1,5 +1,9 @@
 // Written for solidcorex (docs/09-tolerances.md §7.1): the tolerance newtypes. The
 // scalar tolerance functions of `tol` read them in place of solidcore's `Tolerances`.
+// Then the zone, section and approximation tolerances moved onto `Resolution` as
+// `Length`s (`zone`, `xsect`, `approx`; `length` became `zone`), and the `mm`/`from_mm`
+// shortcuts on `Accuracy` and `Resolution` went, so `f64` meets a length only at
+// `Length::from_mm` and `Length::mm`.
 //! Typed lengths and tolerances.
 //!
 //! [`Length`] is a length in millimetres. [`Accuracy`] (per entity: a proved bound on
@@ -12,6 +16,19 @@
 //! Every field is private: a [`Resolution`] is above 0 and finite, an [`Accuracy`] at
 //! least 0 and finite, by construction, so no reader checks again. Angle tolerances are
 //! named constants ([`crate::consts::PARALLEL_ANGLE_RAD`]), not a type.
+//!
+//! # Where a length meets `f64`
+//!
+//! A tolerance is typed from where it is made to where it is compared: a [`Resolution`]
+//! gives its zone, section and approximation tolerances as [`Length`]s
+//! ([`Resolution::zone`], [`Resolution::xsect`], [`Resolution::approx`]), and sums,
+//! maxima and scalings of tolerances stay [`Length`]. Geometry (coordinates, distances,
+//! sizes, scaled zeros) stays `f64`. The two meet in one place only:
+//! [`Length::from_mm`] in and [`Length::mm`] out, with no `From`, `Deref` or
+//! `mm()` on the tolerance types. A predicate that compares a distance against a
+//! tolerance (`crate::tol::within_coincidence_tol`, `crate::tol::is_degenerate`) calls
+//! `mm()` at the comparison; a caller that feeds a tolerance into `f64` arithmetic calls
+//! it where the arithmetic starts.
 
 use core::ops::{Add, Div, Mul, Sub};
 
@@ -103,22 +120,10 @@ impl Accuracy {
         (b.is_finite() && b >= 0.0).then(|| Self(Length(b.abs())))
     }
 
-    /// [`Accuracy::new`] of `mm` millimetres.
-    #[must_use]
-    pub fn from_mm(mm: f64) -> Option<Self> {
-        Self::new(Length(mm))
-    }
-
     /// The bound, as a length.
     #[must_use]
     pub const fn length(self) -> Length {
         self.0
-    }
-
-    /// The bound in millimetres.
-    #[must_use]
-    pub const fn mm(self) -> f64 {
-        self.0 .0
     }
 
     /// The bound of two errors that add: `self + other`.
@@ -139,22 +144,25 @@ impl Resolution {
         (r.mm().is_finite() && r.mm() > 0.0).then_some(Self(r))
     }
 
-    /// [`Resolution::new`] of `mm` millimetres.
+    /// The zone tolerance: the resolution itself, the distance within which two places
+    /// are one (solidcore's `zone_tol3d`).
     #[must_use]
-    pub fn from_mm(mm: f64) -> Option<Self> {
-        Self::new(Length(mm))
-    }
-
-    /// The resolution, as a length.
-    #[must_use]
-    pub const fn length(self) -> Length {
+    pub const fn zone(self) -> Length {
         self.0
     }
 
-    /// The resolution in millimetres.
+    /// The section tolerance, twice the zone (solidcore's `xsect_tol3d`): how far a
+    /// computed intersection may stand from each of the entities it lies on.
     #[must_use]
-    pub const fn mm(self) -> f64 {
-        self.0 .0
+    pub fn xsect(self) -> Length {
+        self.0 * 2.0
+    }
+
+    /// The approximation tolerance, half the zone (solidcore's `approx_tol3d`): how far a
+    /// fitted entity may stand from the one it approximates.
+    #[must_use]
+    pub fn approx(self) -> Length {
+        self.0 * 0.5
     }
 }
 
@@ -194,8 +202,8 @@ mod tests {
     #[test]
     fn values_pass_through_unchanged() {
         let x = 1.0e-5;
-        let a = Accuracy::from_mm(x).map(Accuracy::mm);
-        let r = Resolution::from_mm(x).map(Resolution::mm);
+        let a = Accuracy::new(Length::from_mm(x)).map(|a| a.length().mm());
+        let r = Resolution::new(Length::from_mm(x)).map(|r| r.zone().mm());
         assert_eq!(a.map(f64::to_bits), Some(x.to_bits()));
         assert_eq!(r.map(f64::to_bits), Some(x.to_bits()));
         assert_eq!(Length::from_mm(x).mm().to_bits(), x.to_bits());
@@ -205,21 +213,22 @@ mod tests {
     #[test]
     fn only_checked_values_are_tolerances() {
         for bad in [0.0, -1.0e-5, f64::NAN, f64::INFINITY] {
-            assert_eq!(Resolution::from_mm(bad), None, "{bad}");
+            assert_eq!(Resolution::new(Length::from_mm(bad)), None, "{bad}");
         }
         for bad in [-1.0e-5, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
-            assert_eq!(Accuracy::from_mm(bad), None, "{bad}");
+            assert_eq!(Accuracy::new(Length::from_mm(bad)), None, "{bad}");
         }
-        assert_eq!(Accuracy::from_mm(-0.0).map(|a| a.mm().to_bits()), Some(0));
-        assert_eq!(Resolution::DEFAULT.mm(), crate::consts::ZONE_DEFAULT);
+        let neg_zero = Accuracy::new(Length::from_mm(-0.0));
+        assert_eq!(neg_zero.map(|a| a.length().mm().to_bits()), Some(0));
+        assert_eq!(Resolution::DEFAULT.zone().mm(), crate::consts::ZONE_DEFAULT);
     }
 
     #[test]
     fn coincident_is_the_largest() {
         let res = Resolution::DEFAULT;
         let small = Accuracy::ZERO;
-        let big = Accuracy::from_mm(4.0e-5).unwrap_or(Accuracy::ZERO);
-        assert_eq!(coincident(res, small, small), res.length());
+        let big = Accuracy::new(Length::from_mm(4.0e-5)).unwrap_or(Accuracy::ZERO);
+        assert_eq!(coincident(res, small, small), res.zone());
         assert_eq!(coincident(res, big, small), big.length());
         assert_eq!(coincident(res, small, big), big.length());
     }

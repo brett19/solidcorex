@@ -161,7 +161,7 @@ mod tests {
             reads: Reads::new(&[10, 11]).unwrap_or(Reads::NONE),
         };
         let rec = Recorded {
-            acc: Accuracy::from_mm(1.0e-6).unwrap_or(Accuracy::ZERO),
+            acc: Accuracy::new(Length::from_mm(1.0e-6)).unwrap_or(Accuracy::ZERO),
             basis: Basis::Certified(cert),
         };
         assert!(matches!(rec.basis, Basis::Certified(c) if c.reads.keys() == [10, 11]));
