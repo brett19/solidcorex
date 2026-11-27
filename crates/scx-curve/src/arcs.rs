@@ -148,11 +148,11 @@ impl Arcs {
         let mut k = if x.is_finite() { x as i64 } else { 0 };
         if t < self.start_of(k) {
             k = k.saturating_sub(1);
-        } else if t >= self.start_of(k + 1) {
-            k += 1;
+        } else if t >= self.start_of(k.saturating_add(1)) {
+            k = k.saturating_add(1);
         }
         if side == Approach::Below && t == self.start_of(k) {
-            k -= 1;
+            k = k.saturating_sub(1);
         }
         let n = self.count() as i64;
         match self.sweep {
@@ -316,7 +316,7 @@ impl Arcs {
         let x = (rel / FRAC_PI_2).floor();
         let mut k = if x.is_finite() { x as i64 } else { 0 };
         if side == Approach::Below && rel == k as f64 * FRAC_PI_2 {
-            k -= 1;
+            k = k.saturating_sub(1);
         }
         if self.sweep == Sweep::Half {
             k = k.clamp(0, 1);
@@ -554,6 +554,20 @@ impl Arcs {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn piece_of_a_huge_parameter_does_not_overflow() {
+        // `t / L` past `i64` saturates the index; stepping it must not overflow. A record
+        // reader can hand any finite parameter here.
+        for a in [Arcs::turn(1.0), Arcs::half()] {
+            for t in [1.0e19, -1.0e19, f64::MAX, -f64::MAX] {
+                for side in [Approach::Above, Approach::Below] {
+                    let p = a.piece(t, side);
+                    assert!(p.q < a.count(), "{t}: {p:?}");
+                }
+            }
+        }
+    }
 
     #[test]
     fn breaks_are_quarter_turns() {

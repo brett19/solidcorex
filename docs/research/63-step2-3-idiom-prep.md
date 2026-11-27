@@ -6681,6 +6681,184 @@ creating the writer; local evidence, not committed):
 3. Is `AXIS_TOLERANCE = 8 ε` right? It is also open whether a frame that is only nearly unit
    should be taken, or refused so that it can be renormalized by the caller.
 
+### 7.8 RE3 as built (11-27)
+
+Decided by analysis and an adversarial pass. Proposed for review; not yet ruled.
+
+**What was built.** `crates/scx-record/src/body.rs` holds the body record. It is written once
+through `Sink` and read once through `Source`, so the binary and the text come from one field
+order. The crate now depends on `scx-brep`, which is layer 5.
+
+```rust
+pub const BODY: Magic = Magic(*b"SCXB");
+#[non_exhaustive] pub struct Limits { pub slots: u32 }   // per table; DEFAULT = 1 << 20
+impl Limits { pub const DEFAULT: Self; pub const fn new(slots: u32) -> Self }
+pub fn encode(b: &Brep) -> Result<Vec<u8>, WriteError>;
+pub fn write_text(b: &Brep) -> Result<String, WriteError>;
+pub fn decode(bytes: &[u8], doc: &Document, limits: Limits) -> Result<Brep, ReadError>;
+pub fn read_text(text: &str, doc: &Document, limits: Limits) -> Result<Brep, ReadError>;
+
+pub enum ReadCause { /* RE1's and RE2's, and: */
+    BadInterval,                  // min > max: Extent1d::new refused (Refused)
+    BadAccuracy,                  // a negative accuracy (Refused); -0 is NonCanonical
+    BadReads { count: u32 },      // more than MAX_READS = 4 keys (Refused)
+    Invalid(Box<FinishCause>),    // "invalid": the kind and source() are the finish cause's
+}
+```
+
+`scx-brep` gains three small functions, which only the decoder needs today:
+
+- `Draft::skip(kind, count) -> Result<(), TableFull>` leaves `count` ids of one table unused, as
+  if each had been added and removed. It reports no `Changes`, because a gap was never a live
+  entity. For edges it skips the geometry and the adjacency together.
+- `Brep::region_slots()` and `Brep::shell_slots()`, beside the existing face, edge and vertex
+  counts.
+
+**The wire.** The header is `SCXB`, version 1. The tables follow in kind order, each as live
+records and runs of gaps (RE1's `slots`):
+
+| Table | Live record |
+|---|---|
+| regions, from id 1 | `solid` (bool) |
+| shells | region id; wires (list of edge ids); lone vertices (list of vertex ids) |
+| faces | surface (RE2); the two side shells; loops, each a list of uses |
+| a use | edge id; sense; `pcurve` (a `Curve2` and its interval) or `point` (u, v); bound |
+| edges | `curve` (a `Curve` and its interval) or `collapsed`; two end ids; accuracy; fins |
+| a fin | face id; sense |
+| vertices | x, y, z; accuracy |
+| bound, accuracy | `false`, or `true`, the length (mm), then `measured`, `stated`, or `certified` / `unproven` with a cert |
+| a cert | claim tag; bound (mm); method tag; the read keys (at most 4 u64) |
+
+The text puts each face's loops and uses on their own lines. Records are each a fixed point:
+`encode(decode(x)) == x` for every `x` that decodes, in both encodings.
+
+**Decisions** (each with its case against).
+
+1. **The reader builds a `Draft` and finishes it.** Every table is read whole, the input must end,
+   and then the records go in through `add_*` in id order, gaps through `Draft::skip`. Changes
+   from `finish` are dropped.
+   - *For:* a decoded body is a checked body by construction (01 §1.1, D11), so 7.4's "never
+     yields a body that fails `finish`" holds without a test of its own. Cells are reset by
+     `add_*`, as the BR1 cell rule requires.
+   - *Against:* the decode cost is mostly `finish` (below). A trusted fast path would skip it.
+   - *Change if:* a measured caller needs trusted loads. It would be a separate, named function.
+2. **Gaps go through a new `Draft::skip`, not through placeholders added and removed.**
+   - *For:* no fake record is built (a placeholder face needs a surface), and a run of a million
+     gaps costs one resize. It is capped by `Limits` before anything is allocated.
+   - *Against:* it is new public API on `Draft` that only the decoder uses.
+   - *Change if:* `compact` makes gaps rare enough that the record can drop them (ids would then
+     change across a save, which D11 rules out today).
+3. **The outside region is implied.** Regions are stored from id 1.
+   - *For:* every `Draft::new` starts with it, void, so storing it would be a second spelling.
+   - *Against:* the record depends on that `Draft::new` rule. If it changes, version 1 changes
+     meaning.
+   - *Change if:* the outside gains fields. It then gets a record and a new version.
+4. **Fins are stored per edge, in radial order.** `add_face` appends fins in face order; the
+   stored list replaces them.
+   - *For:* the radial order is a constructor input that the faces do not fix. BR10 accepts any
+     cyclic shift, and the sides decide only where the sectors differ. A test rotates four-fin
+     fins and reads the rotation back.
+   - *Against:* the fin set repeats what the uses say. A record can disagree with itself.
+   - *Why it is still sound:* `finish` checks the set against the uses (`UseWithoutFin`,
+     `FinWithoutUse`, `RepeatedFin`) and the order against the geometry (`RadialOrder`).
+5. **The resolution is not stored.** It is the reader's `Document`, as at every `finish`.
+   - *For:* one source for the setting. The same bytes are judged at the reader's resolution.
+   - *Against:* a body saved at a coarse resolution can be refused when read at a fine one.
+   - *Change if:* 01's units and size class land in `Document`. The record header may then carry
+     the document it was written under, and the reader would choose.
+6. **`encode` returns `Result`** (answers RE1 open question 1).
+   - *For:* `Cert.bound` is a bare `Length`, never checked finite, so a non-finite value can
+     reach the writer through the public API. Writing its bits would make a record no reader
+     takes.
+   - *Against:* almost every body writes without fail, and callers must handle an error that
+     needs a bug to happen.
+   - *Change if:* `Cert` checks its bound. Then the remaining failures (an over-long list, a
+     mixed rational) are defects and could panic instead.
+7. **`Invalid` sits at the input's end.** `finish` judges the whole body, so no byte offset
+   names the fault; the cause names the entity.
+   - *Against:* a reader of a long text file has to find the entity by id.
+8. **Structure faults keep their kind** (answers the BR1 open item on decoder dangling ids).
+   `Invalid` takes its kind from the finish cause: `Refused` for structure and geometry.
+   - *For:* to the decoder's caller, a bad record is a bad input, which `Refused` already means.
+     `MissingCurve` (`Defect`) cannot be reached from bytes (D8): every stored edge has a shape.
+   - *Against:* a corrupt file and a bad draft look the same by kind. Only the `ReadCause`
+     tells them apart. That is enough, since every decoded fault is inside `Invalid`.
+9. **`Limits` caps each table's slots**, default 2^20.
+   - *For:* a gap run is a few bytes for any count, so without a cap eight bytes could make
+     the reader allocate gigabytes. Live records cost bytes already.
+   - *Against:* one number for every table. A body with more than a million faces needs a
+     raised limit.
+10. **Pcurves are stored exactly** (D10), so a decoded body never refits. The plane-trim carry
+    stays held.
+11. **Read keys are stored as given.** They are opaque body-layer keys, and no producer assigns
+    them yet. See open question 1.
+
+**Tests** (`crates/scx-record/tests/body.rs`, 7; RE5's full suite comes after):
+
+- Every `scx_testkit::bodies` kind, seeds 0 to 2, sizes 1 and 2, round-trips to the bit in
+  both encodings. Slot counts, every record field and the resolution compare by `Debug` (shortest
+  round-trip `f64`, so `-0` and `0` differ). Each record is its own fixed point, and binary → text
+  → binary gives the same bytes.
+- Deleted slots in every table, in the middle and at the end (including a lone vertex past a
+  gap), plus recorded accuracy of every basis, claim and method on vertices, edges and uses,
+  round-trip.
+- A rotated radial order on four-fin edges reads back as stored.
+- A body `finish` refuses keeps its cause, in text:
+  - an edge end of 999 is `Invalid(Structure(Dangling))`, at the input's end, kind `Refused`,
+    with `source()` set;
+  - a moved vertex is `Invalid(Geometry(EdgeEndOffVertex))`;
+  - reversed fins on a four-fin edge are `Invalid(Geometry(RadialOrder { at: 0.5 }))`;
+  - an inverted interval is `BadInterval`, before `finish`.
+- The frame: a wrong magic is `BadMagic`; version 2 is `Unsupported` at byte 4; a trailing byte
+  is `Trailing`; `Limits::new(3)` is `TooMany` (`Exhausted`).
+- Corruption on four small bodies: every truncation is refused inside the input. 16,000 seeded
+  changes (12,000 binary byte changes, 4,000 text character changes) never panic. 4,075 decoded,
+  each re-encoding to its own input, and 5,152 were refused by `finish`.
+- `scx-curve` gains `piece_of_a_huge_parameter_does_not_overflow` (below).
+
+**Found by the sweep.** `Arcs::piece` overflowed `i64` when `t / span` was past `2^63`: the
+index saturated, and the step `k + 1` panicked in debug builds. A record can carry any finite
+parameter, so the reader reached it through `finish`. The steps now saturate (and so does the
+`Below` step in `arc_of_angle`). Results for parameters in range are unchanged.
+
+**No difftest.** The pin's checker has no record converter, so nothing in the pin reads these
+bytes. Later, the same bodies should be decoded on both sides once a converter exists. The
+converter must remap sphere and cone uv: the pin's are radians, and ours are arc parameters.
+
+**Measured** (one core, release, 200 passes each, seed 1; a throwaway timer, not committed):
+
+| Body | Faces | Binary | Text | Encode | Decode | Text write | Text read | `finish` alone |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| block 1 | 6 | 3.2 kB | 6.3 kB | 1.3 µs | 21 µs | 31 µs | 40 µs | 15 µs |
+| sphere 1 | 1 | 0.6 kB | 1.1 kB | 0.4 µs | 7.5 µs | 3.5 µs | 11 µs | 6.6 µs |
+| cylinder 16 | 18 | 14 kB | 30 kB | 3.7 µs | 91 µs | 87 µs | 198 µs | 75 µs |
+| torus 16 | 256 | 157 kB | 376 kB | 39 µs | 1.35 ms | 1.04 ms | 2.71 ms | 1.17 ms |
+| touching 16 | 870 | 426 kB | 882 kB | 126 µs | 2.0 ms | 2.9 ms | 5.5 ms | 1.39 ms |
+| cavity 16 | 3,072 | 1.6 MB | 3.4 MB | 446 µs | 6.7 ms | 10.9 ms | 20.5 ms | 4.7 ms |
+
+- About 520 B of binary per planar face. Text is about twice the binary.
+- `finish` is 60–90% of a binary decode; reading the bytes and `add_*` take the rest. The
+  `finish` time includes cloning the draft.
+- Nothing existing got slower. `Draft::skip` and the two slot counts are new. `Arcs::piece`
+  gains two saturating adds, which cost nothing measurable.
+
+**Deviations from §7.3.**
+
+- `encode` and `write_text` return `Result` (decision 6). `write_text` returns a `String`
+  rather than writing into a `fmt::Write`, as RE4's `TextWriter` does.
+- `decode` and `read_text` take `Limits`.
+- `Truncated`, `BadMagic`, `BadVersion` and `BadTag` are RE1's; RE3 adds `BadInterval`,
+  `BadAccuracy`, `BadReads` and `Invalid`.
+
+**Open questions.**
+
+1. Who assigns `Reads` keys, and are they stable across a save? Today they are stored as given.
+   If they name entities, a decoder that keeps ids keeps them right; after `compact` they would
+   go stale.
+2. Should a body record carry the resolution it was written under (decision 5), to report a
+   refusal as "written at 1e-5, read at 1e-7"?
+3. Should `Draft::skip` stay public, or become a crate-feature for decoders?
+
 ## 8. Prerequisites outside the six crates
 
 - **P0. Finite extents in `scx-num`** (D1 revised; ahead of RE1, BR1, CU1 and SU1). [Ruled 11-27:

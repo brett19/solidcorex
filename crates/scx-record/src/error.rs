@@ -8,6 +8,7 @@
 
 use core::fmt;
 
+use scx_brep::FinishCause;
 use scx_curve::CurveError;
 use scx_num::error::ErrorKind;
 use scx_num::frame::FrameError;
@@ -131,6 +132,28 @@ pub enum ReadCause {
         /// The record ([`Tag::RECORD`](crate::Tag::RECORD) of its kind).
         record: &'static str,
     },
+    /// An interval's ends are inverted (`min > max`): no [`Extent1d`] holds them.
+    /// [`ErrorKind::Refused`].
+    ///
+    /// [`Extent1d`]: scx_num::extent1d::Extent1d
+    BadInterval,
+    /// A recorded accuracy is negative: no [`Accuracy`] holds it. [`ErrorKind::Refused`].
+    ///
+    /// [`Accuracy`]: scx_num::units::Accuracy
+    BadAccuracy,
+    /// A certificate names more inputs than [`MAX_READS`]. [`ErrorKind::Refused`].
+    ///
+    /// [`MAX_READS`]: scx_num::cert::MAX_READS
+    BadReads {
+        /// The inputs named.
+        count: u32,
+    },
+    /// The body as read is not a body: [`Draft::finish`] refused it, and this is its cause.
+    /// The kind is the cause's: a structure or geometry fault is [`ErrorKind::Refused`].
+    /// The offset is the input's end, since the whole record is judged.
+    ///
+    /// [`Draft::finish`]: scx_brep::Draft::finish
+    Invalid(Box<FinishCause>),
 }
 
 impl ReadCause {
@@ -145,7 +168,11 @@ impl ReadCause {
             | Self::BadToken { .. }
             | Self::NonFinite
             | Self::BadRun
-            | Self::NonCanonical { .. } => ErrorKind::Refused,
+            | Self::NonCanonical { .. }
+            | Self::BadInterval
+            | Self::BadAccuracy
+            | Self::BadReads { .. } => ErrorKind::Refused,
+            Self::Invalid(e) => e.kind(),
             Self::Frame(e) => e.kind(),
             Self::Curve(e) => e.kind(),
             Self::Surface(e) => e.kind(),
@@ -178,6 +205,10 @@ impl ReadCause {
             Self::Curve(_) => "bad_curve",
             Self::Surface(_) => "bad_surface",
             Self::NonCanonical { .. } => "non_canonical",
+            Self::BadInterval => "bad_interval",
+            Self::BadAccuracy => "bad_accuracy",
+            Self::BadReads { .. } => "bad_reads",
+            Self::Invalid(_) => "invalid",
         }
     }
 }
@@ -206,6 +237,14 @@ impl fmt::Display for ReadCause {
             Self::NonCanonical { record } => {
                 write!(f, "a {record} record is not in its canonical form")
             }
+            Self::BadInterval => f.write_str("an interval's ends are inverted"),
+            Self::BadAccuracy => f.write_str("a recorded accuracy is negative"),
+            Self::BadReads { count } => write!(
+                f,
+                "a certificate names {count} inputs, over {}",
+                scx_num::cert::MAX_READS
+            ),
+            Self::Invalid(_) => f.write_str("the body as read does not finish"),
         }
     }
 }
@@ -216,6 +255,7 @@ impl std::error::Error for ReadCause {
             Self::Frame(e) => Some(e),
             Self::Curve(e) => Some(&**e),
             Self::Surface(e) => Some(&**e),
+            Self::Invalid(e) => Some(&**e),
             _ => None,
         }
     }
