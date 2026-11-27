@@ -12,6 +12,9 @@
 //!   cone has a normal everywhere and returns it directly; the cone's is `None` at its apex.
 //! - [`Surface`]: every kind as one value (the five and a NURBS surface behind an `Arc`),
 //!   dispatched by `match` with the kind's bits (63 §4.7).
+//! - Edits by value: `reversed` and `transformed` on each kind and on [`Surface`], with the
+//!   [`UvMap`] from the original's parameters to the edit's, and [`Surface::restrict`]
+//!   (63 SU7).
 //!
 //! # The uv (research 63 D13)
 //!
@@ -40,6 +43,7 @@ mod arcs;
 mod common;
 mod cone;
 mod cylinder;
+mod edit;
 mod error;
 mod plane;
 mod sphere;
@@ -49,6 +53,7 @@ mod torus;
 
 pub use cone::Cone;
 pub use cylinder::Cylinder;
+pub use edit::UvMap;
 pub use error::{Size, SurfaceError};
 pub use plane::Plane;
 pub use sphere::Sphere;
@@ -79,6 +84,7 @@ const _: () = {
     ok::<Torus>();
     ok::<Surface>();
     ok::<Pole>();
+    ok::<UvMap>();
     ok::<SurfaceError>();
     ok::<Size>();
     ok::<scx_num::jet::SurfaceJet<scx_num::vector3d::Vec3, 2>>();

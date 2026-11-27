@@ -108,6 +108,27 @@ impl Cone {
         self.sense
     }
 
+    /// The same sizes on `frame` in `sense`: the edits' rebuild of a validated kind (the
+    /// sizes are unchanged, so nothing is checked again).
+    pub(crate) const fn placed(&self, frame: Frame, sense: Sense) -> Self {
+        Self {
+            frame,
+            sense,
+            ..*self
+        }
+    }
+
+    /// The cone with its axis and half-angle negated: `v` runs the other way and the radius
+    /// at `-v` is the radius at `v`, to the bit (the slope is negated, not recomputed).
+    pub(crate) const fn axis_reversed(&self) -> Self {
+        Self {
+            half_angle: -self.half_angle,
+            slope: -self.slope,
+            sense: self.sense.reversed(),
+            ..*self
+        }
+    }
+
     fn axes(&self) -> Axes {
         Axes::new(&self.frame, self.sense)
     }
@@ -211,7 +232,7 @@ impl Cone {
     ///
     /// `Refused`: [`SurfaceError::EmptyExtent`] for an extent that is a single value along a
     /// direction, and [`SurfaceError::OutsideDomain`] for one that leaves the domain (`u` longer than a turn, or `v` past the apex).
-    /// [`SurfaceError::Conversion`] only on overflow, for sizes near the largest double.
+    /// [`SurfaceError::Nurbs`] only on overflow, for sizes near the largest double.
     pub fn to_nurbs(&self, over: &Extent2d) -> Result<NurbsSurface<3>, SurfaceError> {
         let u = Dir::new(ParamAxis::U, over.x_interval(), Reach::Arcs(U))?;
         let apex = self.apex_v();

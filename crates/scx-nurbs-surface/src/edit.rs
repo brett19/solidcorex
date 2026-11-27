@@ -22,7 +22,7 @@
 
 use scx_num::math::Affine;
 use scx_num::vector3d::Point3;
-use scx_nurbs::{CompatibleCurves, KnotVector, NurbsError};
+use scx_nurbs::{CompatibleCurves, NurbsError};
 
 use crate::{Net, NetCause, NurbsSurface, NurbsSurfaceError, ParamAxis, Result};
 
@@ -80,21 +80,20 @@ impl<const D: usize> NurbsSurface<D> {
         Ok((below, above))
     }
 
-    /// The same surface traversed the other way along `axis`, on the same domain: with
-    /// `[a, b]` the domain of `axis`, `S'(a + b - t, ·) = S(t, ·)` (the pin's
-    /// `Surface::reversed`). The knots are reflected (`t` to `a + b - t`, the domain ends to
-    /// each other exactly) and the net's lines along `axis` reversed. The normal
+    /// The same surface traversed the other way along `axis`, with that parameter negated:
+    /// `S'(-u, v) = S(u, v)` along u, `S'(u, -v) = S(u, v)` along v, on the domain with that
+    /// interval negated, as [`NurbsCurve::reversed`](scx_nurbs::NurbsCurve::reversed) does
+    /// for a curve (research 63 §3.9). The knots of `axis` are negated in reverse order
+    /// ([`KnotVector::negated`](scx_nurbs::KnotVector::negated)) and the net's lines along `axis` reversed. The normal
     /// `∂S/∂u × ∂S/∂v` flips.
     ///
-    /// The points and weights are kept exactly; the reflected knots are rounded once each.
-    /// Rounding can merge a knot within an ulp or so of a neighbour past the allowed
-    /// multiplicity, or `a + b` can overflow: then the reversal has no double form and this
-    /// errs with [`NurbsSurfaceError::Reversal`] (`Unsupported`). An interior knot is kept
-    /// inside the domain. The pin reflects about its first and last knots, `U[0] + U[m]`,
-    /// which moves the domain of unclamped knots; this reflects about the domain.
-    pub fn reversed(&self, axis: ParamAxis) -> Result<Self> {
-        let knots = reflect(self.knot_vector(axis))
-            .map_err(|cause| NurbsSurfaceError::Reversal { axis, cause })?;
+    /// Negation does not round, so the knots, points and weights are kept exactly, the edit is
+    /// total, and reversing twice gives the surface back bit for bit. The pin's
+    /// `Surface::reversed` reflects about the first and last knots (`U[0] + U[m] - t`), which
+    /// rounds each knot and can merge one with a neighbour; this follows the curves instead.
+    #[must_use]
+    pub fn reversed(&self, axis: ParamAxis) -> Self {
+        let knots = self.knot_vector(axis).negated();
         let (u, v) = match axis {
             ParamAxis::U => (knots, self.knot_vector(ParamAxis::V).clone()),
             ParamAxis::V => (self.knot_vector(ParamAxis::U).clone(), knots),
@@ -103,12 +102,7 @@ impl<const D: usize> NurbsSurface<D> {
             .weights()
             .zip(self.weighted_points())
             .map(|(w, wp)| (flip(w, axis), flip(wp, axis)));
-        Ok(Self::from_valid_parts(
-            u,
-            v,
-            flip(self.points(), axis),
-            rational,
-        ))
+        Self::from_valid_parts(u, v, flip(self.points(), axis), rational)
     }
 
     /// The same surface with u and v exchanged, `S'(v, u) = S(u, v)` exactly (the pin's
@@ -263,41 +257,13 @@ fn flip<P: Clone>(net: &Net<P>, axis: ParamAxis) -> Net<P> {
     }
 }
 
-/// The knots reflected about the domain `[a, b]`: in reverse order, `t` to `a + b - t`,
-/// with the domain ends mapped to each other exactly and interior knots kept inside it.
-fn reflect(knots: &KnotVector) -> core::result::Result<KnotVector, NurbsError> {
-    let (a, b) = knots.ends();
-    let c = a + b;
-    if !c.is_finite() {
-        return Err(NurbsError::KnotNotFinite { index: 0 });
-    }
-    let reflected = knots
-        .knots()
-        .iter()
-        .rev()
-        .map(|&t| {
-            if t == a {
-                b
-            } else if t == b {
-                a
-            } else if a < t && t < b {
-                (c - t).clamp(a, b)
-            } else {
-                c - t
-            }
-        })
-        .collect();
-    let out = KnotVector::new(knots.degree(), reflected)?;
-    out.check_continuous()?;
-    Ok(out)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use scx_num::error::ErrorKind;
     use scx_num::hash::Rng;
     use scx_num::vector3d::Vec3;
+    use scx_nurbs::KnotVector;
     use scx_testkit::data::SurfaceData;
     use scx_testkit::nurbs::{self as tk, Side};
     use scx_testkit::sample::{self, Knots, Spec, Weights};
@@ -516,37 +482,32 @@ mod tests {
         }
     }
 
-    /// Knots on a 1/64 grid reflect exactly (`1 - k/64`), so the reversed surface is the
-    /// original exactly: `S'(1 - u, v) = S(u, v)` in rationals.
+    /// Negation is exact, so the reversed surface is the original exactly:
+    /// `S'(-u, v) = S(u, v)` in rationals, from the other side of a break.
     #[test]
-    fn reversal_is_exact_on_dyadic_knots() {
-        let grid =
-            |k: &[f64]| -> Vec<f64> { k.iter().map(|x| (x * 64.0).floor() / 64.0).collect() };
+    fn reversal_negates_the_parameter_exactly() {
         let mut checked = 0;
-        for mut d in surfaces(5).into_iter().step_by(2) {
-            d.knots_u = grid(&d.knots_u);
-            d.knots_v = grid(&d.knots_v);
-            if has_break(&d) {
-                continue;
-            }
+        for d in surfaces(5).into_iter().step_by(2) {
             let s = build(&d);
             let truth = exact(&s);
             for axis in AXES {
-                let r = s.reversed(axis).unwrap();
-                assert_eq!(r.domain(), s.domain());
-                let back = r.reversed(axis).unwrap();
-                assert_eq!(back, s, "reversed twice");
+                let r = s.reversed(axis);
+                let d = s.domain();
+                let want_domain = match axis {
+                    ParamAxis::U => d.with_x_interval(d.x_interval().negated()),
+                    ParamAxis::V => d.with_y_interval(d.y_interval().negated()),
+                };
+                assert!(r.domain().are_same(&want_domain));
+                let negated: Vec<f64> = s.knots(axis).iter().rev().map(|k| -k).collect();
+                assert_eq!(r.knots(axis), negated);
+                assert_eq!(r.reversed(axis), s, "reversed twice");
                 let er = exact(&r);
                 for (fu, fv) in [(0.0, 0.0), (0.25, 0.5), (0.671_875, 1.0), (1.0, 0.125)] {
-                    let flipped = match axis {
-                        ParamAxis::U => (1.0 - fu, fv),
-                        ParamAxis::V => (fu, 1.0 - fv),
+                    let (flipped, side) = match axis {
+                        ParamAxis::U => ((-fu, fv), (Side::Below, Side::Above)),
+                        ParamAxis::V => ((fu, -fv), (Side::Above, Side::Below)),
                     };
                     let got = er.point(flipped, ABOVE).unwrap();
-                    let side = match axis {
-                        ParamAxis::U => (Side::Below, Side::Above),
-                        ParamAxis::V => (Side::Above, Side::Below),
-                    };
                     let want = truth.point((fu, fv), side).unwrap();
                     assert_eq!(got.exact, want.exact, "{s} reversed along {axis}");
                 }
@@ -556,62 +517,28 @@ mod tests {
         assert!(checked > 8, "{checked}");
     }
 
+    /// The knots that had no reflected double form (a knot an ulp from the end, or
+    /// `a + b` past the largest double) negate exactly.
     #[test]
-    fn reversal_of_unclamped_knots_keeps_the_domain() {
-        // The domain is [0, 1]; the pin reflects about U[0] + U[m] = 1.5 instead.
-        let u = KnotVector::new(2, vec![-1.0, -0.5, 0.0, 0.3, 1.0, 1.25, 2.5]).unwrap();
+    fn reversal_is_total() {
         let v = KnotVector::new(1, vec![0.0, 0.0, 1.0, 1.0]).unwrap();
-        let pts = (0..8).map(|k| [f64::from(k), 0.5, -1.0]).collect();
-        let s = NurbsSurface::new(u, v, Net::new(4, 2, pts).unwrap(), None).unwrap();
-        let r = s.reversed(ParamAxis::U).unwrap();
-        assert_eq!(
-            r.knots(ParamAxis::U),
-            [-1.5, -0.25, 0.0, 0.7, 1.0, 1.5, 2.0]
-        );
-        assert_eq!(r.domain(), s.domain());
-        let (e, er) = (exact(&s), exact(&r));
-        for t in [0.0, 0.25, 0.5, 1.0] {
-            let want = e.point((t, 0.4), ABOVE).unwrap().rounded;
-            let got = er
-                .point((1.0 - t, 0.4), (Side::Below, Side::Above))
-                .unwrap()
-                .rounded;
-            assert!(close(&got, &want, 1e-15), "{t}");
+        for (knots, n) in [
+            (vec![0.0, 0.0, 1e-17, 1.0, 1.0], 3),
+            (vec![1e308, 1e308, 1.5e308, 1.5e308], 2),
+            (vec![-1.0, -0.5, 0.0, 0.3, 1.0, 1.25, 2.5], 4),
+        ] {
+            let degree = if n == 4 { 2 } else { 1 };
+            let u = KnotVector::new(degree, knots.clone()).unwrap();
+            let pts = (0..2 * n)
+                .map(|k| [f64::from(k as u8), 0.5, -1.0])
+                .collect();
+            let s = NurbsSurface::new(u, v.clone(), Net::new(n, 2, pts).unwrap(), None).unwrap();
+            let r = s.reversed(ParamAxis::U);
+            let want: Vec<f64> = knots.iter().rev().map(|k| -k).collect();
+            assert_eq!(r.knots(ParamAxis::U), want);
+            assert_eq!(r.domain().x_interval(), s.domain().x_interval().negated());
+            assert_eq!(r.reversed(ParamAxis::U), s);
         }
-    }
-
-    /// A knot an ulp from the end reflects onto the end: the reflected knots have end
-    /// multiplicity `p + 2`, which no knot vector has.
-    #[test]
-    fn reversal_without_a_double_form_is_unsupported() {
-        let u = KnotVector::new(1, vec![0.0, 0.0, 1e-17, 1.0, 1.0]).unwrap();
-        let v = KnotVector::new(1, vec![0.0, 0.0, 1.0, 1.0]).unwrap();
-        let s = NurbsSurface::new(
-            u,
-            v.clone(),
-            Net::new(3, 2, vec![[0.0; 3]; 6]).unwrap(),
-            None,
-        )
-        .unwrap();
-        let e = s.reversed(ParamAxis::U).unwrap_err();
-        assert!(
-            matches!(
-                e,
-                NurbsSurfaceError::Reversal {
-                    axis: ParamAxis::U,
-                    ..
-                }
-            ),
-            "{e:?}"
-        );
-        assert_eq!(e.kind(), ErrorKind::Unsupported);
-        let huge = KnotVector::new(1, vec![1e308, 1e308, 1.5e308, 1.5e308]).unwrap();
-        let s =
-            NurbsSurface::new(huge, v, Net::new(2, 2, vec![[0.0; 3]; 4]).unwrap(), None).unwrap();
-        assert_eq!(
-            s.reversed(ParamAxis::U).unwrap_err().kind(),
-            ErrorKind::Unsupported
-        );
     }
 
     #[test]

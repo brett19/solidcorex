@@ -112,6 +112,29 @@ impl Frame {
         self.z
     }
 
+    /// The frame turned half a turn about its x axis: the origin and x kept, y and z
+    /// negated. Exact: no axis is rounded, and [`Frame::y`] of the result is the negated y
+    /// to the bit.
+    #[must_use]
+    pub fn half_turn_about_x(&self) -> Self {
+        Self {
+            origin: self.origin,
+            x: self.x,
+            z: -self.z,
+        }
+    }
+
+    /// The frame turned half a turn about its y axis: the origin and y kept, x and z
+    /// negated. Exact, as [`Frame::half_turn_about_x`].
+    #[must_use]
+    pub fn half_turn_about_y(&self) -> Self {
+        Self {
+            origin: self.origin,
+            x: -self.x,
+            z: -self.z,
+        }
+    }
+
     /// The map from frame coordinates to world coordinates: the X, Y and Z axes to x, y and
     /// z, the origin to [`Frame::origin`].
     #[must_use]
@@ -410,6 +433,20 @@ mod tests {
         assert_eq!(f.transformed(&flat), None);
         let nan = Affine::translation(Vec3::new(f64::NAN, 0.0, 0.0));
         assert_eq!(f.transformed(&nan), None);
+    }
+
+    #[test]
+    fn half_turns_negate_two_axes_exactly() {
+        let mut r = Rng::new(0xf4a3_e007);
+        for _ in 0..200 {
+            let f = Frame::new(p(&mut r, 10.0), v(&mut r, 1.0), v(&mut r, 1.0)).unwrap();
+            let h = f.half_turn_about_x();
+            assert_eq!((h.origin(), h.x(), h.z()), (f.origin(), f.x(), -f.z()));
+            assert_eq!(h.y(), -f.y());
+            let h = f.half_turn_about_y();
+            assert_eq!((h.origin(), h.x(), h.z()), (f.origin(), -f.x(), -f.z()));
+            assert_eq!(h.y(), f.y());
+        }
     }
 
     #[test]

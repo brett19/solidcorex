@@ -103,7 +103,7 @@ impl Plane {
     ///
     /// `Refused`: [`SurfaceError::EmptyExtent`] for an extent that is a single value along a
     /// direction, and [`SurfaceError::OutsideDomain`] for one that leaves the domain.
-    /// [`SurfaceError::Conversion`] only on overflow, for sizes near the largest double.
+    /// [`SurfaceError::Nurbs`] only on overflow, for sizes near the largest double.
     pub fn to_nurbs(&self, over: &Extent2d) -> Result<NurbsSurface<3>, SurfaceError> {
         let u = Dir::new(ParamAxis::U, over.x_interval(), Reach::Any)?;
         let v = Dir::new(ParamAxis::V, over.y_interval(), Reach::Any)?;

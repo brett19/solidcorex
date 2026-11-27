@@ -93,7 +93,7 @@ pub(crate) fn build(
     rational: bool,
     point: impl Fn((f64, f64), (f64, f64)) -> Point3,
 ) -> Result<NurbsSurface<3>, SurfaceError> {
-    let conv = SurfaceError::Conversion;
+    let conv = SurfaceError::Nurbs;
     let (rows, cols) = (u.ctrl.len(), v.ctrl.len());
     let mut points = Vec::with_capacity(rows * cols);
     let mut weights = Vec::with_capacity(if rational { rows * cols } else { 0 });
@@ -145,10 +145,10 @@ pub(crate) fn restrict(
             });
         }
         if lo > have.min() {
-            s = s.split(axis, lo).map_err(SurfaceError::Conversion)?.1;
+            s = s.split(axis, lo).map_err(SurfaceError::Nurbs)?.1;
         }
         if hi < have.max() {
-            s = s.split(axis, hi).map_err(SurfaceError::Conversion)?.0;
+            s = s.split(axis, hi).map_err(SurfaceError::Nurbs)?.0;
         }
     }
     Ok(s)

@@ -85,6 +85,16 @@ impl Torus {
         self.sense
     }
 
+    /// The same sizes on `frame` in `sense`: the edits' rebuild of a validated kind (the
+    /// sizes are unchanged, so nothing is checked again).
+    pub(crate) const fn placed(&self, frame: Frame, sense: Sense) -> Self {
+        Self {
+            frame,
+            sense,
+            ..*self
+        }
+    }
+
     fn axes(&self) -> Axes {
         Axes::new(&self.frame, self.sense)
     }
@@ -158,7 +168,7 @@ impl Torus {
     ///
     /// `Refused`: [`SurfaceError::EmptyExtent`] for an extent that is a single value along a
     /// direction, and [`SurfaceError::OutsideDomain`] for one that leaves the domain (either direction longer than a turn).
-    /// [`SurfaceError::Conversion`] only on overflow, for sizes near the largest double.
+    /// [`SurfaceError::Nurbs`] only on overflow, for sizes near the largest double.
     pub fn to_nurbs(&self, over: &Extent2d) -> Result<NurbsSurface<3>, SurfaceError> {
         let u = Dir::new(ParamAxis::U, over.x_interval(), Reach::Arcs(TURN))?;
         let v = Dir::new(ParamAxis::V, over.y_interval(), Reach::Arcs(TURN))?;

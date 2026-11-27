@@ -3374,50 +3374,31 @@ fn surface_gap(a: &tk::Surface<3>, b: &tk::Surface<3>) -> Result<f64, String> {
     Ok(off)
 }
 
-/// `scx_nurbs_surface::NurbsSurface::reversed` on unclamped knots: scx reflects them about
-/// the domain `[a, b]` (`t` to `a + b - t`), which it keeps; the pin reflects them about
-/// `U[0] + U[m]`, which moves the domain where the end knots lie outside it. The check: scx
-/// keeps the domain, flips the net exactly, maps each knot to `a + b - t` within rounding,
-/// and (degrees up to 3) is the original surface reversed at a point inside the domain.
+/// `scx_nurbs_surface::NurbsSurface::reversed`: scx negates the parameter (`t` to `-t`,
+/// the domain `[a, b]` to `[-b, -a]`), as the curves' reversal does (research 63 §3.9);
+/// the pin reflects the knots about `U[0] + U[m]`, which rounds them and moves the domain
+/// to `[U[0] + U[m] - b, U[0] + U[m] - a]`. The answers differ by a shift of the parameter,
+/// so they disagree wherever the knots are not symmetric about zero. The check: scx's knots
+/// are exactly the given ones negated in reverse order, its net is the given net flipped
+/// exactly, and (degrees up to 3) it is the original surface at `-t` from the other side.
 pub fn nurbs_surface_reversed() -> PinDefect<(Along,), Option<Read>> {
     PinDefect {
-        reason: "the pin reflects unclamped knots about U[0] + U[m], moving the domain",
+        reason: "the pin reflects the knots about U[0] + U[m]; scx negates the parameter",
         applies: Applies::Disagreeing,
         check: |(a,), r| {
             let e = &a.0;
             let x = r.as_ref().ok_or("scx refused")?;
-            let (p, knots, rows, cols) = match e.axis {
-                ParamAxis::U => (e.r.degrees.0, &e.r.knots_u, e.r.rows(), e.r.cols),
-                ParamAxis::V => (e.r.degrees.1, &e.r.knots_v, e.r.rows(), e.r.cols),
+            let (knots, rows, cols) = match e.axis {
+                ParamAxis::U => (&e.r.knots_u, e.r.rows(), e.r.cols),
+                ParamAxis::V => (&e.r.knots_v, e.r.rows(), e.r.cols),
             };
             let got = match e.axis {
                 ParamAxis::U => &x.2,
                 ParamAxis::V => &x.3,
             };
-            let m = knots.len() - 1;
-            let (lo, hi) = (knots[p], knots[m - p]);
-            if (got[p], got[m - p]) != (lo, hi) {
-                return Err(format!(
-                    "scx's domain is [{}, {}], not [{lo}, {hi}]",
-                    got[p],
-                    got[m - p]
-                ));
-            }
-            if let Some(pin) = crate::t_nurbs_surface_edit::s::reverse(e) {
-                let pk = match e.axis {
-                    ParamAxis::U => &pin.2,
-                    ParamAxis::V => &pin.3,
-                };
-                if (pk[p], pk[m - p]) == (lo, hi) {
-                    return Err("the pin keeps the domain too".to_owned());
-                }
-            }
-            let c = lo + hi;
-            for (k, &g) in got.iter().enumerate() {
-                let want = c - knots[m - k];
-                if (g - want).abs() > 4.0 * f64::EPSILON * c.abs().max(want.abs()).max(1.0) {
-                    return Err(format!("knot {k} is {g}, not {want}"));
-                }
+            let want: Vec<f64> = knots.iter().rev().map(|k| -k).collect();
+            if *got != want {
+                return Err(format!("scx's knots are {got:?}, not {want:?}"));
             }
             let hom = e.r.hom();
             for i in 0..rows {
@@ -3438,13 +3419,16 @@ pub fn nurbs_surface_reversed() -> PinDefect<(Along,), Option<Read>> {
             }
             let (t, rev) = (stored(&e.r)?, read_surface(x)?);
             let ((u0, u1), (v0, v1)) = t.domain();
-            let side = (tk::Side::Above, tk::Side::Above);
             let uv = (u0 + 0.3 * (u1 - u0), v0 + 0.9 * (v1 - v0));
-            let back = match e.axis {
-                ParamAxis::U => (c - uv.0, uv.1),
-                ParamAxis::V => (uv.0, c - uv.1),
+            let (back, side) = match e.axis {
+                ParamAxis::U => ((-uv.0, uv.1), (tk::Side::Below, tk::Side::Above)),
+                ParamAxis::V => ((uv.0, -uv.1), (tk::Side::Above, tk::Side::Below)),
             };
-            let g = rev.point(back, side).map_err(|e| format!("{e:?}"))?.rounded;
+            let above = (tk::Side::Above, tk::Side::Above);
+            let g = rev
+                .point(back, above)
+                .map_err(|e| format!("{e:?}"))?
+                .rounded;
             let w = t.point(uv, side).map_err(|e| format!("{e:?}"))?.rounded;
             if g.iter()
                 .zip(&w)
