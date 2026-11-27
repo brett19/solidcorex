@@ -15,6 +15,7 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
+use scx_num::domain::ParamDomain;
 use scx_num::extent1d::Extent1d;
 use scx_num::math::Affine;
 use scx_num::vector3d::Point3;
@@ -173,6 +174,14 @@ impl Curve2 {
         match self {
             Self::Line(_) | Self::Circle(_) | Self::Ellipse(_) => Ok(self.clone()),
             Self::Nurbs(n) => restrict_nurbs(n, e).map(Self::Nurbs),
+            Self::AngleLine(a) => match a.domain() {
+                ParamDomain::Bounded(domain)
+                    if e.min() < domain.min() || e.max() > domain.max() =>
+                {
+                    Err(CurveError::OutsideDomain { extent: e, domain })
+                }
+                _ => Ok(self.clone()),
+            },
         }
     }
 
@@ -180,6 +189,7 @@ impl Curve2 {
     #[must_use]
     pub fn reversed(&self) -> Self {
         match self {
+            Self::AngleLine(a) => Self::AngleLine(a.reversed()),
             Self::Line(l) => Self::Line(l.reversed()),
             Self::Circle(c) => Self::Circle(c.reversed()),
             Self::Ellipse(e) => Self::Ellipse(e.reversed()),
@@ -290,7 +300,7 @@ mod tests {
 
     fn bounded(c: &Curve) -> Option<Extent1d> {
         match c.domain() {
-            scx_num::domain::ParamDomain::Bounded(e) => Some(e),
+            ParamDomain::Bounded(e) => Some(e),
             _ => None,
         }
     }

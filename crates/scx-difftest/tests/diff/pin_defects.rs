@@ -3882,6 +3882,35 @@ pub(crate) fn ulps_to_root(c: &[Rat], lo: f64, hi: f64, g: f64) -> Result<Option
     Ok(Some(b))
 }
 
+/// The pin's roots with each place once, in increasing order. The pin reports a root that
+/// lies on a split point once for each halving level that ends there, and ahead of the roots
+/// of the piece it ends (a piece reports its zero ends, so the halves of a piece report the
+/// split point again); the places it reports for a piece it leaves undecided are the piece's
+/// ends, shared with the next. A root is one place: a place repeated is dropped, where the
+/// polynomial is exactly zero there (the root reported again), where the interval is a single point, or where it is an end of a
+/// piece left undecided (`isolated` false, the end shared by two pieces).
+fn once_each(c: &[f64], lo: f64, hi: f64, p: &RootsOut) -> Result<RootsOut, String> {
+    let mut places = p.0.clone();
+    places.sort_by(f64::total_cmp);
+    if lo > hi {
+        places.reverse();
+    }
+    let mut out: Vec<f64> = Vec::with_capacity(places.len());
+    for g in places {
+        if !g.is_nan() && out.last().map(|l| l.to_bits()) == Some(g.to_bits()) {
+            let a_root = || -> Result<bool, String> {
+                let exact: Vec<Rat> = c.iter().map(|&v| rat(v)).collect::<Result<_, _>>()?;
+                Ok(bern_sign(&exact, &rat(lo)?, &rat(hi)?, g)? == 0)
+            };
+            if !p.1 || lo == hi || a_root()? {
+                continue;
+            }
+        }
+        out.push(g);
+    }
+    Ok((out, p.1))
+}
+
 /// scx's roots of `c` on `[lo, hi]` against the pin's: the same number of places, the same
 /// `isolated`, and every place that differs either at least as near an exact sign change of
 /// the polynomial (in doubles) as the pin's, or inside the f64 evaluator's error band around
@@ -3894,13 +3923,34 @@ pub(crate) fn roots_no_worse(
     x: &RootsOut,
     p: &RootsOut,
 ) -> Result<(), String> {
+    // the truth: each root once, in increasing order (NaN places have no order)
+    if !(hi - lo).is_finite() || lo.abs().max(hi.abs()) > f64::MAX / 4.0 {
+        // no span the halvings and the map keep finite, no roots to compare: each place is NaN, infinite or inside the interval
+        let inside = |g: f64| !g.is_finite() || (lo.min(hi)..=lo.max(hi)).contains(&g);
+        return if x.1 == p.1 && x.0.iter().copied().all(inside) {
+            Ok(())
+        } else {
+            Err(format!(
+                "a non-finite span gives places inside it; scx has {x:?}"
+            ))
+        };
+    }
+    let forward = |a: f64, b: f64| if lo <= hi { a < b } else { a > b };
+    if x.0.iter().all(|g| !g.is_nan()) && x.0.windows(2).any(|w| !forward(w[0], w[1])) {
+        return Err(format!("scx's places are not strictly increasing: {x:?}"));
+    }
+    let once = once_each(c, lo, hi, p)?;
+    let p = &once;
     if x.0.len() != p.0.len() || x.1 != p.1 {
         return Err(format!("the shape moved: the pin has {p:?}"));
     }
-    let exact: Vec<Rat> = c.iter().map(|&v| rat(v)).collect::<Result<_, _>>()?;
+    let mut exact: Vec<Rat> = Vec::new();
     for (&g, &w) in x.0.iter().zip(&p.0) {
         if g.to_bits() == w.to_bits() {
             continue;
+        }
+        if exact.is_empty() {
+            exact = c.iter().map(|&v| rat(v)).collect::<Result<_, _>>()?;
         }
         let far = |k: Option<i64>| k.unwrap_or(i64::MAX);
         let (kx, kp) = (
@@ -3943,6 +3993,36 @@ pub fn bern_roots() -> PinDefect<(List<f64>, f64, f64), FourRoots> {
             for (x, (depth, work)) in [&r.0, &r.1, &r.2, &r.3].into_iter().zip(limits) {
                 let p = crate::berns::s::roots(&c.0, *lo, *hi, depth, work);
                 roots_no_worse(&c.0, *lo, *hi, x, &p)?;
+            }
+            Ok(())
+        },
+    }
+}
+
+/// `bernstein_roots` over the known products of `(s - r)` (`t_bern::bern_roots_known`): a
+/// root that lies on a split point, which the pin reports once for each halving level that
+/// ends there and ahead of the roots of the piece it ends (research: `bernstein_roots`
+/// reports the zero ends of every piece, so the halves of a piece whose end is zero report it
+/// again). Example (`bern_roots_known` case 5): the double root at 1/2 comes back from the pin
+/// as `[0.5, 0.5, 1.0]` with the root at 1, scx `[0.5, 1.0]`. scx reports a split point once,
+/// between its halves' places, and the ends of the whole interval once. The check: scx's
+/// places are strictly increasing, and equal the pin's once each ([`once_each`]) but for places
+/// no further from an exact sign change than the pin's ([`roots_no_worse`]).
+pub fn bern_roots_known() -> PinDefect<(usize,), (RootsOut, RootsOut, RootsOut)> {
+    PinDefect {
+        reason: "the pin reports a root on a split point once per halving level, out of order",
+        applies: Applies::Disagreeing,
+        check: |(k,), r| {
+            let cs = crate::t_bern::truth::known_cases();
+            let (c, _) = &cs[k % cs.len()];
+            let calls = [
+                (0.0, 1.0, 48, 4096),
+                (0.0, 1.0, 12, 64),
+                (1.0, 3.0, 48, 4096),
+            ];
+            for (x, (lo, hi, depth, work)) in [&r.0, &r.1, &r.2].into_iter().zip(calls) {
+                let w = crate::berns::s::roots(c, lo, hi, depth, work);
+                roots_no_worse(c, lo, hi, x, &w)?;
             }
             Ok(())
         },

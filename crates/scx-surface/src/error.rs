@@ -1,9 +1,12 @@
 // Written for solidcorex. Apache-2.0.
-//! Why an analytic surface cannot be built.
+//! Why a surface cannot be built or edited, or a NURBS surface's inversion did not finish.
 //!
 //! Errors follow research 62 §10: every cause has a kind ([`SurfaceError::kind`]), a stable
 //! [`SurfaceError::name`] and a one-frame Display. A kind is validated once, when it is built;
-//! its evaluation is a bounded closed form and cannot fail (63 X13).
+//! its evaluation is a bounded closed form and cannot fail (63 X13). The one iterating call,
+//! [`Surface::invert`](crate::Surface::invert) on a NURBS surface, ends with
+//! [`SurfaceError::Exhausted`] or [`SurfaceError::Stopped`] when its budget runs out or the
+//! caller stops it, and [`SurfaceError::Defect`] where the search itself goes wrong.
 //!
 //! | solidcore at the pin | here |
 //! |---|---|
@@ -16,6 +19,7 @@
 
 use core::fmt;
 
+use scx_num::budget::{Exhausted, Stopped};
 use scx_num::error::ErrorKind;
 use scx_nurbs_surface::{NurbsSurfaceError, ParamAxis};
 
@@ -101,13 +105,23 @@ pub enum SurfaceError {
     /// sizes and extents `to_nurbs` reaches it only on overflow (sizes near the largest
     /// double).
     Nurbs(NurbsSurfaceError),
+    /// The work budget of a NURBS surface's inversion ran out.
+    Exhausted(Exhausted),
+    /// The caller stopped a NURBS surface's inversion.
+    Stopped,
+    /// A NURBS surface's inversion went wrong inside: a bug, not the input's fault.
+    Defect {
+        /// What went wrong.
+        reason: &'static str,
+    },
 }
 
 impl SurfaceError {
     /// The error's kind: [`ErrorKind::Refused`] for sizes that make no surface and for an
     /// edit's extent or map, [`ErrorKind::Unsupported`] for a self-intersecting torus and a
-    /// kind's image under a map that is not a similarity, and the NURBS error's own kind
-    /// for [`SurfaceError::Nurbs`].
+    /// kind's image under a map that is not a similarity, the NURBS error's own kind for
+    /// [`SurfaceError::Nurbs`], and the inversion's [`ErrorKind::Exhausted`],
+    /// [`ErrorKind::Cancelled`] and [`ErrorKind::Defect`].
     #[must_use]
     pub const fn kind(&self) -> ErrorKind {
         match self {
@@ -120,6 +134,9 @@ impl SurfaceError {
             | Self::MapNotFinite
             | Self::MapFlattens => ErrorKind::Refused,
             Self::Nurbs(e) => e.kind(),
+            Self::Exhausted(_) => ErrorKind::Exhausted,
+            Self::Stopped => ErrorKind::Cancelled,
+            Self::Defect { .. } => ErrorKind::Defect,
         }
     }
 
@@ -137,6 +154,9 @@ impl SurfaceError {
             Self::MapFlattens => "map_flattens",
             Self::NotSimilar => "map_not_similar",
             Self::Nurbs(_) => "nurbs_failed",
+            Self::Exhausted(e) => e.name(),
+            Self::Stopped => Stopped.name(),
+            Self::Defect { .. } => "inversion_defect",
         }
     }
 }
@@ -178,6 +198,9 @@ impl fmt::Display for SurfaceError {
                 "the transform is not a similarity, so the image is not a surface of the kind",
             ),
             Self::Nurbs(_) => f.write_str("the NURBS surface could not be built or edited"),
+            Self::Exhausted(e) => write!(f, "{e}"),
+            Self::Stopped => write!(f, "{Stopped}"),
+            Self::Defect { reason } => write!(f, "the inversion failed inside: {reason}"),
         }
     }
 }
@@ -235,5 +258,19 @@ mod tests {
         };
         assert_eq!(t.kind(), ErrorKind::Unsupported);
         assert!(t.to_string().contains("intersects itself"));
+        let x = SurfaceError::Exhausted(Exhausted { limit: 3 });
+        assert_eq!(
+            (x.kind(), x.name()),
+            (ErrorKind::Exhausted, "budget_exhausted")
+        );
+        assert_eq!(x.to_string(), "the work budget of 3 units ran out");
+        let s = SurfaceError::Stopped;
+        assert_eq!((s.kind(), s.name()), (ErrorKind::Cancelled, "stopped"));
+        let d = SurfaceError::Defect { reason: "r" };
+        assert_eq!(
+            (d.kind(), d.name()),
+            (ErrorKind::Defect, "inversion_defect")
+        );
+        assert!(d.to_string().ends_with(": r"));
     }
 }

@@ -39,6 +39,8 @@ impl Executor for Serial {
 /// A fixed number of scoped worker threads (`std::thread::scope`), started for each call
 /// and joined before it returns. The workers take the next item index from a shared
 /// counter. With one worker, or at most one item, everything runs on the calling thread.
+/// Where a thread cannot be started (a target without threads), the items it would have
+/// taken run on the threads that did start, the calling thread among them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Scoped {
     workers: NonZeroUsize,
@@ -75,7 +77,11 @@ impl Executor for Scoped {
         };
         std::thread::scope(|s| {
             for _ in 1..threads {
-                s.spawn(work);
+                // A target without threads (wasm32-wasip1) refuses the spawn. The
+                // calling thread's own `work()` below then takes every item left.
+                if std::thread::Builder::new().spawn_scoped(s, work).is_err() {
+                    break;
+                }
             }
             work();
         });

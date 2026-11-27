@@ -11,6 +11,8 @@
 //!   derivatives by two independent methods (de Boor and the basis-function sum), knot
 //!   insertion, degree elevation and splitting.
 //! - [`dd`]: double-double arithmetic and elementary functions.
+//! - [`mp`]: correctly rounded elementary functions, by interval arithmetic at any
+//!   precision (Ziv's strategy), for the hardest-to-round inputs.
 //! - [`analytic`]: lines, circles, ellipses, planes, cylinders, cones, spheres and tori in
 //!   double-double (exact for the rational cases), with closest points.
 //! - [`quadric`]: the analytic surfaces as exact implicit equations, an exact on-surface
@@ -32,6 +34,7 @@ pub mod curve_surface;
 pub mod data;
 pub mod dd;
 pub mod exact;
+pub mod mp;
 pub mod nurbs;
 pub mod poly;
 pub mod project;

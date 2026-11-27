@@ -565,6 +565,7 @@ dependencies = [
 name = "scx-surface"
 version = "0.1.0"
 dependencies = [
+ "scx-algo",
  "scx-curve",
  "scx-num",
  "scx-nurbs",
