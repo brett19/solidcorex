@@ -15,6 +15,9 @@
 //! - Edits by value: `reversed` and `transformed` on each kind and on [`Surface`], with the
 //!   [`UvMap`] from the original's parameters to the edit's, and [`Surface::restrict`]
 //!   (63 SU7).
+//! - [`intersect_curve`]: where a line, circle or ellipse meets a kind, every point in
+//!   the curve's `t` and the kind's uv, crossing or tangent at the tolerance, or the curve
+//!   lying on it ([`CurveSurfaceHit`]); closed forms, a NURBS pair `Unsupported` (63 SU6).
 //! - [`AnyCurve`]: a free [`Curve`](scx_curve::Curve), or a [`CurveOnSurface`] (a uv curve on
 //!   a shared [`Surface`]) with its point and its jet by the chain rule (63 §4.10).
 //!
@@ -48,6 +51,7 @@ mod cone;
 mod cylinder;
 mod edit;
 mod error;
+mod intersect;
 mod plane;
 mod sphere;
 mod surface;
@@ -59,6 +63,7 @@ pub use cone::Cone;
 pub use cylinder::Cylinder;
 pub use edit::UvMap;
 pub use error::{Size, SurfaceError};
+pub use intersect::{Contact, CurveSurfaceHit, intersect_curve};
 pub use plane::Plane;
 pub use sphere::Sphere;
 pub use surface::Surface;
@@ -88,6 +93,7 @@ const _: () = {
     ok::<Torus>();
     ok::<Surface>();
     ok::<Pole>();
+    ok::<CurveSurfaceHit>();
     ok::<UvMap>();
     ok::<SurfaceError>();
     ok::<Size>();

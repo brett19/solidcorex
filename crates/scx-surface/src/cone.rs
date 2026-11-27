@@ -138,6 +138,11 @@ impl Cone {
         -self.radius / self.slope
     }
 
+    /// The slope `k = tan(half_angle)`: the radius at height `v` is `r + k v`.
+    pub(crate) const fn slope(&self) -> f64 {
+        self.slope
+    }
+
     /// `S(u, v)`.
     #[must_use]
     pub fn point(&self, uv: Point2) -> Point3 {

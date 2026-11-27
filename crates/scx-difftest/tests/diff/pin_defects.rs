@@ -4593,3 +4593,172 @@ pub fn nurbs_surface_enclose_piece() -> EncDefect {
         check: |(b,), r| enclose_inside(b, r, crate::t_nurbs_surface_enclose::s::piece::<1>(b)),
     }
 }
+
+/// `intersect_curve_surface` (`GlobalCurveIntersect` within `0.001`) where scx and the pin
+/// disagree: scx's answer is held to testkit T2's exact roots (`curve_surface::intersect`,
+/// double-double) inside the surface's extent and the curve's.
+///
+/// The check: an overlap exactly where T2 has the curve on the surface; every crossing
+/// within `1e-9` of a T2 root; every tangent within the tolerance of the surface; and every
+/// T2 root inside the extents (off their edges by `1e-7`) found, by a crossing at it or by
+/// a tangent joined to it by a stretch of curve within the tolerance (roots the tolerance
+/// does not tell apart). What the pin gets wrong there is in 63 §4.11.
+pub fn curve_surface() -> PinDefect<(crate::t_curve_surface::Case,), crate::t_curve_surface::Answer> {
+    PinDefect {
+        reason: "the pin's GlobalCurveIntersect misses or moves points T2 has (63 §4.11)",
+        applies: Applies::Disagreeing,
+        check: |(c,), _| curve_surface_truth(c),
+    }
+}
+
+fn curve_surface_truth(c: &crate::t_curve_surface::Case) -> Result<(), String> {
+    use crate::t_curve_surface::{Kind, Shape, TOL, x};
+    use core::f64::consts::{PI, TAU};
+    use scx_surface::{Contact, CurveSurfaceHit};
+    use scx_testkit::analytic::{self, Frame as KFrame};
+    use scx_testkit::curve_surface::{self as t2, CurveKind, Meeting, SurfaceKind};
+
+    let f = c.frame();
+    let kf = |z_sign: f64| KFrame {
+        origin: f.origin().to_array(),
+        x: f.x().as_vec().to_array(),
+        y: f.y().as_vec().to_array(),
+        z: (f.z().as_vec() * z_sign).to_array(),
+    };
+    let ks = match c.kind {
+        Kind::Plane => SurfaceKind::Plane(analytic::Plane { frame: kf(1.0) }),
+        Kind::Cylinder { r } => SurfaceKind::Cylinder(analytic::Cylinder {
+            frame: kf(1.0),
+            radius: r,
+        }),
+        Kind::Cone { r, a } => SurfaceKind::Cone(analytic::Cone {
+            frame: kf(a.signum()),
+            radius: r,
+            semi_angle: a.abs(),
+        }),
+        Kind::Sphere { r } => SurfaceKind::Sphere(analytic::Sphere {
+            frame: kf(1.0),
+            radius: r,
+        }),
+        Kind::Torus { big, small } => SurfaceKind::Torus(analytic::Torus {
+            frame: kf(1.0),
+            major: big,
+            minor: small,
+        }),
+    };
+    let kc = match c.curve {
+        Shape::Segment { p, q } => CurveKind::Line(analytic::Line {
+            origin: p,
+            direction: [q[0] - p[0], q[1] - p[1], q[2] - p[2]],
+        }),
+        Shape::Conic {
+            c: o,
+            x,
+            y,
+            a,
+            b,
+            circle,
+        } => {
+            let frame = KFrame {
+                origin: o,
+                x,
+                y,
+                z: cross3(x, y),
+            };
+            if circle {
+                CurveKind::Circle(analytic::Circle { frame, radius: a })
+            } else {
+                CurveKind::Ellipse(analytic::Ellipse {
+                    frame,
+                    semi_x: a,
+                    semi_y: b,
+                })
+            }
+        }
+    };
+    let line = matches!(c.curve, Shape::Segment { .. });
+    let (curve, _) = x::curve(c);
+    let (_, se) = x::surface(c);
+    let hits = x::hits(c);
+    let meeting = t2::intersect(&kc, &ks).map_err(|e| format!("T2: {e}"))?;
+    let roots = match meeting {
+        Meeting::OnSurface => {
+            return match hits[..] {
+                [CurveSurfaceHit::Overlap { .. }] => Ok(()),
+                _ => Err(format!("T2 has the curve on the surface; scx {hits:?}")),
+            };
+        }
+        Meeting::Points(r) => r,
+    };
+    let (lo, hi) = (se.min(), se.max());
+    let margin = 1e-7;
+    let inside = |r: &t2::Hit, m: f64| {
+        let t = r.t.to_f64();
+        let on_curve = !line || (-m..=1.0 + m).contains(&t);
+        on_curve
+            && r.pin_uv.is_some_and(|(u, v)| {
+                let (u, v) = (u.to_f64(), v.to_f64());
+                u >= lo.x - m && u <= hi.x + m && v >= lo.y - m && v <= hi.y + m
+            })
+    };
+    let distance = |t: f64| t2::distance(&ks, curve.point(t).to_array()).unwrap_or(f64::INFINITY);
+    let joined = |from: f64, to: f64| {
+        let to = if line {
+            to
+        } else {
+            from + (to - from + PI).rem_euclid(TAU) - PI
+        };
+        (0..=32).all(|i| distance(from + (to - from) * f64::from(i) / 32.0) <= TOL * 1.01 + 1e-9)
+    };
+    for h in &hits {
+        match *h {
+            CurveSurfaceHit::Overlap { .. } => {
+                return Err(format!("an overlap where T2 has points: {hits:?}"));
+            }
+            CurveSurfaceHit::Point {
+                point,
+                contact: Contact::Crossing,
+                ..
+            } => {
+                let near = roots
+                    .iter()
+                    .filter(|r| inside(r, margin))
+                    .map(|r| len3(sub3(point.to_array(), r.point.map(|x| x.to_f64()))))
+                    .fold(f64::INFINITY, f64::min);
+                if near > 1e-9 {
+                    return Err(format!("a crossing {near} from every T2 root: {point:?}"));
+                }
+            }
+            CurveSurfaceHit::Point {
+                t,
+                contact: Contact::Tangent,
+                ..
+            } => {
+                if distance(t) > TOL * 1.01 + 1e-9 {
+                    return Err(format!("a tangent {} from the surface", distance(t)));
+                }
+            }
+        }
+    }
+    for r in roots.iter().filter(|r| inside(r, -margin)) {
+        let q = r.point.map(|x| x.to_f64());
+        let tq = r.t.to_f64();
+        let found = hits.iter().any(|h| match *h {
+            CurveSurfaceHit::Point {
+                point,
+                contact: Contact::Crossing,
+                ..
+            } => len3(sub3(point.to_array(), q)) <= 1e-9,
+            CurveSurfaceHit::Point {
+                t,
+                contact: Contact::Tangent,
+                ..
+            } => joined(t, tq),
+            CurveSurfaceHit::Overlap { .. } => false,
+        });
+        if !found {
+            return Err(format!("T2's root {q:?} (t {tq}) missed: {hits:?}"));
+        }
+    }
+    Ok(())
+}
