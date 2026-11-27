@@ -513,7 +513,9 @@ dependencies = [
  "scx-brep",
  "scx-curve",
  "scx-make",
+ "scx-mass",
  "scx-num",
+ "scx-nurbs",
  "scx-ssi",
  "scx-surface",
 ]

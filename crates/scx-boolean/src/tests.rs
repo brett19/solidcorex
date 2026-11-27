@@ -25,6 +25,7 @@ use crate::geom::{Operands, Side};
 use crate::{BooleanError, BooleanOp, BooleanRefusal, BooleanUnsupported, Stage, boolean};
 
 mod face_face;
+mod imprint;
 
 fn pt(p: [f64; 3]) -> Point3 {
     Point3::new(p[0], p[1], p[2])
@@ -281,9 +282,9 @@ fn the_public_call_runs_every_built_stage_and_names_the_next() {
     let e = call(&a, &b, doc, &Settings::new());
     assert_eq!(
         e,
-        BooleanError::Unsupported(BooleanUnsupported::Stage(Stage::Imprint))
+        BooleanError::Unsupported(BooleanUnsupported::Stage(Stage::Classify))
     );
-    assert_eq!(e.name(), "stage_imprint");
+    assert_eq!(e.name(), "stage_classify");
     // The budget is the settings'.
     let e = call(&a, &b, doc, &Settings::new().with_budget(1));
     assert_eq!(e, BooleanError::Exhausted { limit: 1 });

@@ -9,6 +9,7 @@ use crate::contact::{Span, Touched, interferences};
 use crate::error::{BooleanError, BooleanRefusal, BooleanUnsupported, Stage};
 use crate::faceface::face_face;
 use crate::geom::{Operands, Side};
+use crate::imprint::imprint;
 use crate::pairs::face_pairs;
 use crate::points::{Point, merge};
 
@@ -45,8 +46,10 @@ pub enum NoItems {}
 /// - [`BooleanUnsupported::Nurbs`] for NURBS geometry where the operands meet.
 /// - [`BooleanUnsupported::SsiPair`] for a pair of analytic faces whose intersection has
 ///   no closed form here.
+/// - [`BooleanUnsupported::Pcurve`] where a face's new loops need a pcurve with no exact
+///   form (a fitted one).
 /// - [`BooleanUnsupported::Stage`] for operands that pass every stage built so far: the
-///   imprint stage is BO3's.
+///   classification stage is BO4's.
 /// - [`BooleanError::Exhausted`] when `cx`'s budget runs out, [`BooleanError::Cancelled`]
 ///   when `cx.stop` is set, and [`BooleanError::Defect`] for the method's own failure.
 pub fn boolean(
@@ -68,9 +71,10 @@ pub fn boolean(
     let mut budget = cx.budget();
     let ops = Operands { a, b };
     let found = interfere(ops, &mut budget, cx.stop)?;
-    let _sections = face_face(ops, &found, &mut budget, cx.stop)?;
+    let ff = face_face(ops, &found, &mut budget, cx.stop)?;
+    let _imprinted = imprint(ops, &found, &ff, *cx.doc, &mut budget, cx.stop)?;
     Err(BooleanError::Unsupported(BooleanUnsupported::Stage(
-        Stage::Imprint,
+        Stage::Classify,
     )))
 }
 
