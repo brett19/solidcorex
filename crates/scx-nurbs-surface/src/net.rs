@@ -116,6 +116,45 @@ impl<P> Net<P> {
         }
     }
 
+    /// The net with rows and columns exchanged: value `[j][i]` is this net's `[i][j]`.
+    pub(crate) fn transposed(&self) -> Self
+    where
+        P: Clone,
+    {
+        let points = (0..self.cols)
+            .flat_map(|j| self.points.iter().skip(j).step_by(self.cols).cloned())
+            .collect();
+        Self {
+            rows: self.cols,
+            cols: self.rows,
+            points,
+        }
+    }
+
+    /// The net with its rows in reverse order (the u direction reversed).
+    pub(crate) fn rows_reversed(&self) -> Self
+    where
+        P: Clone,
+    {
+        Self {
+            rows: self.rows,
+            cols: self.cols,
+            points: self.rows().rev().flatten().cloned().collect(),
+        }
+    }
+
+    /// The net with each row in reverse order (the v direction reversed).
+    pub(crate) fn columns_reversed(&self) -> Self
+    where
+        P: Clone,
+    {
+        Self {
+            rows: self.rows,
+            cols: self.cols,
+            points: self.rows().flat_map(|r| r.iter().rev()).cloned().collect(),
+        }
+    }
+
     /// Whether `other` has the same shape.
     pub(crate) const fn same_shape<Q>(&self, other: &Net<Q>) -> bool {
         self.rows == other.rows && self.cols == other.cols
@@ -144,6 +183,11 @@ mod tests {
         assert_eq!(n.find(|&x| x > 10), Some((1, 1, &11)));
         assert_eq!(n.map(|x| x * 2).points(), [0, 2, 4, 20, 22, 24]);
         assert_eq!(n.clone().into_points(), n.points());
+        assert_eq!(n.transposed().points(), [0, 10, 1, 11, 2, 12]);
+        assert_eq!((n.transposed().nrows(), n.transposed().ncols()), (3, 2));
+        assert_eq!(n.transposed().transposed(), n);
+        assert_eq!(n.rows_reversed().points(), [10, 11, 12, 0, 1, 2]);
+        assert_eq!(n.columns_reversed().points(), [2, 1, 0, 12, 11, 10]);
     }
 
     #[test]

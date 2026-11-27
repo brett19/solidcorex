@@ -61,7 +61,7 @@ use super::geom::{
     Pcurve, Placement, PreferredRep, Surface, SurfaceCurveKind, SurfaceForm, Trim, TrimPreference,
     Vector,
 };
-use crate::error::{EntityCause, InvalidValue, Limit, P21Error, Unsupported};
+use crate::error::{Counted, EntityCause, InvalidValue, Limit, P21Error, Unsupported};
 use crate::exchange::{Exchange, Instance, Param};
 use crate::units::Units;
 
@@ -459,12 +459,39 @@ fn weights(id: u64, index: usize, p: Option<&Param>, n: usize) -> Result<Vec<f64
     }
 }
 
+/// A list of `count` items of kind `what` in `#id`: [`Limit::TooManyItems`] past [`MAX_CTRL`].
+fn too_many(id: u64, what: Counted, count: usize) -> Result<()> {
+    if count > MAX_CTRL {
+        return Err(Limit::TooManyItems {
+            id,
+            what,
+            count,
+            limit: MAX_CTRL,
+        }
+        .into());
+    }
+    Ok(())
+}
+
 fn degree(f: Fields<'_>, i: usize) -> Result<usize> {
     f.get(i)
         .and_then(Param::as_i64)
-        .filter(|d| (1..=MAX_DEGREE as i64).contains(d))
-        .map(|d| d as usize)
+        .filter(|d| *d >= 1)
         .ok_or_else(|| f.bad(i, "a degree from 1 to 32"))
+        .and_then(|d| {
+            // A degree beyond the cap is a size limit; one below 1 is not a degree.
+            usize::try_from(d)
+                .ok()
+                .filter(|d| *d <= MAX_DEGREE)
+                .ok_or_else(|| {
+                    Limit::DegreeTooHigh {
+                        id: f.id,
+                        degree: d,
+                        limit: MAX_DEGREE,
+                    }
+                    .into()
+                })
+        })
 }
 
 /// The knot type a B-spline entity's (sub)type implies when it lists no knots.
@@ -873,9 +900,10 @@ impl<'a> Reader<'a> {
             | "QUASI_UNIFORM_CURVE" => self.bspline_curve(id, e, sp),
             "POLYLINE" => {
                 let ids = f.list(1, "a list of 2 to 1 000 000 points")?;
-                if ids.len() < 2 || ids.len() > MAX_CTRL {
+                if ids.len() < 2 {
                     return Err(f.bad(1, "a list of 2 to 1 000 000 points"));
                 }
+                too_many(id, Counted::Points, ids.len())?;
                 let pts = ids
                     .iter()
                     .map(|c| {
@@ -1068,9 +1096,7 @@ impl<'a> Reader<'a> {
             bspline_params(id, e, "B_SPLINE_CURVE", "B_SPLINE_CURVE_WITH_KNOTS")?;
         let degree = degree(base, 1)?;
         let ids = base.list(2, "a list of control points")?;
-        if ids.len() > MAX_CTRL {
-            return invalid(id, InvalidValue::CurveControlPoints);
-        }
+        too_many(id, Counted::ControlPoints, ids.len())?;
         let points: Vec<P3> = ids
             .iter()
             .map(|c| {
@@ -1241,7 +1267,12 @@ impl<'a> Reader<'a> {
                 .ok_or_else(|| base.bad(3, "a list of control point rows"))?;
             total = total.saturating_add(r.len());
             if total > MAX_CTRL {
-                return invalid(id, InvalidValue::SurfaceControlPoints);
+                // Report the whole net's size, not where the count stopped.
+                let all = rows
+                    .iter()
+                    .filter_map(Param::as_list)
+                    .fold(0usize, |n, r| n.saturating_add(r.len()));
+                too_many(id, Counted::ControlPoints, all)?;
             }
             points.push(
                 r.iter()

@@ -207,7 +207,7 @@ fn check(c: &Case, rng: &mut Rng, t: &mut Tally) {
             _ => (rng.next_f64(), rng.next_f64()),
         };
         let tuv = (u0 + (u1 - u0) * a, v0 + (v1 - v0) * b);
-        let step = layout.to_step(tuv);
+        let step = layout.to_step((Dd::new(tuv.0), Dd::new(tuv.1)));
         let truth = c.kind.point(step);
         // the map, in the pin's units (degrees for angles)
         let in_units = |x: Dd, d: Dir| if angular(d) { deg(x) } else { x };
@@ -449,7 +449,7 @@ fn pin_cone_and_cylinder() {
                     Implicit::Cone {
                         frame: f,
                         radius: bot,
-                        slope: (top - bot) / h,
+                        slope: Dd::new((top - bot) / h),
                     }
                 };
                 let sp = s.clone();
@@ -488,10 +488,39 @@ fn pin_plane() {
         let mut s = Plane::new(p3(f.origin), v3(f.x), v3(f.y), Vec2::new(1.0, 1.0), &ext);
         s.make_nurb().unwrap();
         let nurb = exact_nurb(s.base().gw_nurb().unwrap());
+        // The pin's plane uv is its STEP uv: the identity `pin_layout` gives the plane, which
+        // the intersection truths' pin uv relies on (research 64 §2).
+        let pin = Surface::from(s);
+        let identity = Implicit::Plane { frame: f }.pin_layout();
+        for _ in 0..8 {
+            let tuv = (
+                u0 + (u1 - u0) * rng.next_f64(),
+                v0 + (v1 - v0) * rng.next_f64(),
+            );
+            let want = identity.to_step((Dd::new(tuv.0), Dd::new(tuv.1)));
+            let k = Kernel::default();
+            match pin.convert_uv_from_nurbs_to_step(&k, Point2::new(tuv.0, tuv.1)) {
+                Ok(p) => {
+                    let e = (Dd::new(p.x) - want.0)
+                        .abs()
+                        .hi
+                        .max((Dd::new(p.y) - want.1).abs().hi);
+                    if exceeds(e, MAP_TOL) {
+                        t.failures.push(format!(
+                            "plane pin layout: nurb {tuv:?}: pin {:?}, identity error {e:e}",
+                            (p.x, p.y)
+                        ));
+                    }
+                }
+                Err(e) => t
+                    .failures
+                    .push(format!("plane pin layout: nurb {tuv:?}: pin error {e}")),
+            }
+        }
         let case = Case {
             what: format!("plane domain ({u0}, {v0})..({u1}, {v1})"),
             step_point: Box::new(|_| None),
-            pin: Surface::from(s),
+            pin,
             nurb,
             kind: Implicit::Plane { frame: f },
             dirs: (Dir::Length(u0, u1), Dir::Length(v0, v1)),

@@ -16,13 +16,19 @@
 //! - [`quadric`]: the analytic surfaces as exact implicit equations, an exact on-surface
 //!   decision for rational surfaces, and the NURB-to-STEP uv map in closed form.
 //! - [`bound`]: certified enclosures, intervals of rationals rounded outward.
-//! - [`poly`]: rational polynomials with their real roots isolated with certainty.
+//! - [`poly`]: rational polynomials with their real roots isolated with certainty, with
+//!   their multiplicities.
 //! - [`project`]: every stationary point of the distance to an ellipse, a torus and a cone,
 //!   certified, with the certified nearest.
+//! - [`curve_surface`]: certified intersections of a line, circle or ellipse with a plane,
+//!   cylinder, cone, sphere or torus (research 63 T2).
+//! - [`ssi`]: analytic surface-surface sections in closed form, with certified samples
+//!   (research 63 T5).
 //! - [`sample`]: seeded generators of well- and ill-conditioned inputs.
 
 pub mod analytic;
 pub mod bound;
+pub mod curve_surface;
 pub mod data;
 pub mod dd;
 pub mod exact;
@@ -32,6 +38,7 @@ pub mod project;
 pub mod quadric;
 pub mod rat;
 pub mod sample;
+pub mod ssi;
 
 pub use rat::Rat;
 

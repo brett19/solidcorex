@@ -279,6 +279,22 @@ takes about 0.5 s; each of its tests is under 0.7 s alone.
     degenerate queries (the centre, with its tie and the exact `t = pi`; inside the evolute's cusp;
     on a circle's axis) and queries from 1e-6 to 1e-15 off the evolute, where two stationary points
     nearly meet, stay certified.
+- **`tests/ellipse_foot.rs`** (T1, against facts that do not use the quartic; 0.3 s in debug).
+  - The residual `(q - C(t)) . C'(t)`, enclosed by certified `sin_cos` on the frame as given, has
+    opposite certified signs at the two ends of every simple foot's angle enclosure, in the direction
+    its kind says, so a true foot lies inside it: 16 random queries and 12 near the evolute, in the
+    plane and lifted off it.
+  - An exact rational evolute point, `(9, -32)` for `a = 75, b = 50`, gives one `Flat` foot at
+    `t = 2 atan(1/2)`, the exact point `(45, 40)` at distance `sqrt(6480)`, with one residual sign on
+    both sides; moved `2^-20` either way it splits into two simple feet or goes.
+  - Queries mirrored in `x`, `y` or the plane give the mirrored feet (`pi - t`, `-t`, `t`) with
+    equal kinds and distances, and so does an exact move (a signed permutation frame at a dyadic
+    origin); a query on an axis is its own mirror, its nearest pair tied.
+  - The circle (`a = b`) matches its closed form (feet at `atan2(q_y, q_x)` and opposite, squared
+    distances `(rho -+ r)^2 + z^2`); its centre, in the plane and above it, is one `Locus::Circle`,
+    the residual exactly zero all round.
+  - In every case a 4,096-point `f64` sample finds no point nearer than the certified nearest's
+    lower end, less its own rounding.
   - Torus (ring, horn, spindle) and cone, in exactly orthonormal frames: each stationary point has a
     gradient of the squared distance under 1e-27 and a Hessian with its kind's signs, the Morse count
     `#min - #saddle + #max = 0` holds on a ring torus, and no sample of a 40 by 40 grid is nearer.
@@ -338,6 +354,8 @@ Use:
   by inserting again with the references.
 - There is no exact on-surface check for surfaces of revolution with a general profile, or for offsets.
   `quadric` covers the five analytic kinds only.
+
+- Intersection truths (63's T2 and T5) are in `curve_surface` and `ssi`: research 64.
 
 ## 8. Decisions taken here (for review)
 
