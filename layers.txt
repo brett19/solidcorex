@@ -5,7 +5,8 @@ scx-p21
 scx-algo
 
 # Crates outside the order. `difftest` may depend on any library (and on the pinned
-# solidcore); `tool` crates depend on no workspace crate. Nothing may depend on either.
+# solidcore's `solidcore` and `solidcore-record`); `tool` crates depend on no workspace
+# crate. Nothing may depend on either.
 [difftest]
 scx-difftest
 # Test support (references, generators): may depend on any library; a library or difftest

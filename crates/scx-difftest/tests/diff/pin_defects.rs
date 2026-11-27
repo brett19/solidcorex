@@ -345,3 +345,201 @@ fn true_circle(s: P, e: P, t: P) -> Circle {
     };
     Some((centre, r, sweep))
 }
+
+// ---- scx-p21 against solidcore-record's Part 21 reader (`t_p21`) ---------------------------
+//
+// Each predicate reads the DATA section's text (the pools have no strings or comments that
+// could hide the construct). The clauses are those of ISO 10303-21:2016.
+
+use crate::t_p21::{
+    Text, XRead, EMPTY_COMPLEX, ENUM_DASH, LOWER_HEX, PAGE_LATIN, TYPED_MANY, TYPED_NONE,
+};
+use scx_p21::{P21Error, Param, Refusal, Syntax};
+
+/// scx's refusal cause, through any `Within` chain.
+fn syntax_cause(r: &XRead) -> Option<&Syntax> {
+    match r.0.as_ref().err().map(P21Error::innermost) {
+        Some(P21Error::Refused(Refusal::Syntax { cause, .. })) => Some(cause),
+        _ => None,
+    }
+}
+
+/// `#1`'s first parameter, as scx read it.
+fn first_param(r: &XRead) -> Result<&Param, String> {
+    let parsed = r.0.as_ref().map_err(|e| format!("scx refused: {e}"))?;
+    parsed
+        .exchange
+        .get(1)
+        .and_then(|e| e.params().first())
+        .ok_or_else(|| "scx read no #1 with a parameter".to_owned())
+}
+
+/// The number of values in each typed parameter `KEYWORD(...)` inside a record's
+/// parameters (a keyword directly before `(` at depth 1 or more).
+fn typed_arities(body: &str) -> Vec<usize> {
+    let b = body.as_bytes();
+    let mut out = Vec::new();
+    let mut depth = 0usize;
+    for (i, &c) in b.iter().enumerate() {
+        match c {
+            b'(' => {
+                let keyword = i > 0 && b[i - 1].is_ascii_alphabetic();
+                if keyword && depth >= 1 {
+                    // count the values up to the matching parenthesis
+                    let (mut d, mut commas, mut empty) = (0usize, 0usize, true);
+                    for &k in &b[i + 1..] {
+                        match k {
+                            b'(' => d += 1,
+                            b')' if d == 0 => break,
+                            b')' => d -= 1,
+                            b',' if d == 0 => commas += 1,
+                            _ => {}
+                        }
+                        empty = false;
+                    }
+                    out.push(if empty { 0 } else { commas + 1 });
+                }
+                depth += 1;
+            }
+            b')' => depth = depth.saturating_sub(1),
+            b';' => depth = 0,
+            _ => {}
+        }
+    }
+    out
+}
+
+/// `#n=();`: a complex instance with no records.
+///
+/// §5.5 `SUBSUPER_RECORD = "(" SIMPLE_RECORD_LIST ")"`, `SIMPLE_RECORD_LIST = SIMPLE_RECORD
+/// { SIMPLE_RECORD }`: at least one record. The true reading is a refusal; scx refuses with
+/// `Syntax::ExpectedKeyword` at the `)`. The pin accepts an instance with no records.
+pub fn p21_empty_complex() -> PinDefect<(Text<EMPTY_COMPLEX>,), XRead> {
+    PinDefect {
+        reason: "the pin reads an empty complex instance",
+        applies: |(t,)| t.0.replace(' ', "").contains("=();"),
+        check: |_, r| match syntax_cause(r) {
+            Some(Syntax::ExpectedKeyword) => Ok(()),
+            _ => Err(format!("§5.5 needs a record; scx: {:?}", r.0)),
+        },
+    }
+}
+
+/// `B(1,2)` as a parameter: a typed parameter with more than one value.
+///
+/// §5.5 `TYPED_PARAMETER = KEYWORD "(" PARAMETER ")"`: exactly one parameter (a list is one).
+/// The true reading is a refusal; scx refuses with `Syntax::TypedArity`. The pin accepts
+/// and keeps every value.
+pub fn p21_typed_many() -> PinDefect<(Text<TYPED_MANY>,), XRead> {
+    PinDefect {
+        reason: "the pin reads a typed parameter of several values",
+        applies: |(t,)| typed_arities(t.0).iter().any(|&n| n > 1),
+        check: |_, r| match syntax_cause(r) {
+            Some(Syntax::TypedArity(_)) => Ok(()),
+            _ => Err(format!("§5.5 allows one value; scx: {:?}", r.0)),
+        },
+    }
+}
+
+/// `B()` as a parameter: a typed parameter with no value.
+///
+/// The same clause as [`p21_typed_many`]: one parameter, so none is a syntax error. scx
+/// refuses with `Syntax::TypedArity`; the pin accepts a typed value with no values.
+pub fn p21_typed_none() -> PinDefect<(Text<TYPED_NONE>,), XRead> {
+    PinDefect {
+        reason: "the pin reads a typed parameter of no value",
+        applies: |(t,)| typed_arities(t.0).contains(&0),
+        check: |_, r| match syntax_cause(r) {
+            Some(Syntax::TypedArity(_)) => Ok(()),
+            _ => Err(format!("§5.5 needs one value; scx: {:?}", r.0)),
+        },
+    }
+}
+
+/// `.A-B.`: an enumeration value with a `-`.
+///
+/// §5.4 `ENUMERATION = "." UPPER { UPPER | DIGIT } "."` (with `_` among the upper-case
+/// characters, §5.3), and §6.4.5: no `-`. The true reading is a refusal; scx refuses with
+/// `Syntax::BadEnumeration`. The pin reads `A-B`.
+pub fn p21_enum_dash() -> PinDefect<(Text<ENUM_DASH>,), XRead> {
+    PinDefect {
+        reason: "the pin reads an enumeration with a dash",
+        applies: |(t,)| {
+            t.0.split('.').skip(1).step_by(2).any(|tok| {
+                tok.contains('-')
+                    && tok.bytes().all(|c| {
+                        c.is_ascii_uppercase() || c.is_ascii_digit() || c == b'_' || c == b'-'
+                    })
+            })
+        },
+        check: |_, r| match syntax_cause(r) {
+            Some(Syntax::BadEnumeration) => Ok(()),
+            _ => Err(format!("§6.4.5 has no '-'; scx: {:?}", r.0)),
+        },
+    }
+}
+
+/// `'\PA\\S\a'`: a string with a `\PA\` page directive.
+///
+/// §6.4.3.3: `\PA\` is a directive, not text; it selects ISO 8859-1 for the `\S\`
+/// directives that follow, and `\S\c` is the character at `c`'s code plus 0x80 in that
+/// part: `\S\a` is 0x61 + 0x80 = 0xE1, `á`. The pin does not read the page directive and
+/// keeps the string's text raw (`\PA\\S\a`, and `\PA\abc` for `abc`); scx reads `á` and
+/// `abc`. The check decodes the string independently: Latin-1 is
+/// the first 256 code points, so the character is `char::from(c + 0x80)`.
+pub fn p21_page_latin() -> PinDefect<(Text<PAGE_LATIN>,), XRead> {
+    PinDefect {
+        reason: "the pin keeps a \\PA\\ string raw",
+        applies: |(t,)| t.0.contains(r"\PA\"),
+        check: |(t,), r| {
+            let raw = t.0.split('\'').nth(1).ok_or("no string in the input")?;
+            let mut truth = String::new();
+            let mut rest = raw;
+            while !rest.is_empty() {
+                if let Some(r) = rest.strip_prefix(r"\PA\") {
+                    rest = r;
+                } else if let Some(r) = rest.strip_prefix(r"\S\") {
+                    let c = r.bytes().next().ok_or("\\S\\ at the end")?;
+                    truth.push(char::from(c + 0x80));
+                    rest = &r[1..];
+                } else {
+                    let c = rest.chars().next().unwrap();
+                    truth.push(c);
+                    rest = &rest[c.len_utf8()..];
+                }
+            }
+            match first_param(r)? {
+                Param::Str(s) if *s == truth => Ok(()),
+                p => Err(format!("§6.4.3.3 gives {truth:?}; scx: {p:?}")),
+            }
+        },
+    }
+}
+
+/// `"0f"`: a binary with lower-case hexadecimal digits.
+///
+/// §5.4 `BINARY = """" ("0" | "1" | "2" | "3") { HEX } """"`, `HEX` being `0`-`9` and
+/// `A`-`F` (§5.3, §6.4.6): lower case is outside the grammar. Both readers accept it
+/// (leniency kept for real files); scx normalises the digits to upper case, so the value
+/// it holds (and writes back) is valid, while the pin keeps `0f`. The check: scx holds the
+/// input's digits upper-cased.
+pub fn p21_lower_hex() -> PinDefect<(Text<LOWER_HEX>,), XRead> {
+    PinDefect {
+        reason: "the pin keeps lower-case hex in a binary",
+        applies: |(t,)| {
+            t.0.split('"')
+                .nth(1)
+                .is_some_and(|h| h.bytes().any(|c| c.is_ascii_lowercase()))
+        },
+        check: |(t,), r| {
+            let hex = t.0.split('"').nth(1).ok_or("no binary in the input")?;
+            match first_param(r)? {
+                Param::Binary(b) if *b == hex.to_ascii_uppercase() => Ok(()),
+                p => Err(format!(
+                    "the digits upper-cased are {:?}; scx: {p:?}",
+                    hex.to_ascii_uppercase()
+                )),
+            }
+        },
+    }
+}

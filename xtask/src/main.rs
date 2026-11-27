@@ -4,7 +4,8 @@
 //! - `layers`: every workspace crate is listed in `layers.txt`, and a library depends
 //!   (normal, build or dev) only on libraries listed above it and on the external crates
 //!   `layers.txt` `[external]` names (none today). The differential-test crates may
-//!   depend on any library and alone on the pinned solidcore; tool crates depend on no
+//!   depend on any library and alone on the pinned solidcore (`solidcore` and
+//!   `solidcore-record`); tool crates depend on no
 //!   workspace crate. The test-kit crates (`[testkit]`) may depend on any library, are
 //!   depended on only as a dev-dependency (by a library or a difftest crate), and say
 //!   `publish = false` in their own manifest.
@@ -119,8 +120,9 @@ struct Layers {
     external: Vec<String>,
 }
 
-/// The crate the differential crate may (alone) depend on: the pinned solidcore.
-const PINNED: &str = "solidcore";
+/// The crates the differential crate may (alone) depend on: the pinned solidcore, and its
+/// record crate (the Part 21 reader `scx-p21` is compared with).
+const PINNED: &[&str] = &["solidcore", "solidcore-record"];
 
 fn layer_roles(root: &Path) -> Result<Layers, String> {
     parse_layers(&read(&root.join("layers.txt"))?)
@@ -149,9 +151,9 @@ fn parse_layers(text: &str) -> Result<Layers, String> {
             "testkit" => Role::Testkit,
             "tool" => Role::Tool,
             "external" => {
-                if line == PINNED {
+                if PINNED.contains(&line) {
                     return Err(format!(
-                        "layers.txt: [external] may not name {PINNED} (only the difftest crate uses it)"
+                        "layers.txt: [external] may not name {line} (only the difftest crate uses it)"
                     ));
                 }
                 external.push(line.to_string());
@@ -323,7 +325,7 @@ fn check_layers(layers: &Layers, crates: &[Manifest]) -> String {
                     (Role::Library(_) | Role::Difftest, Some(Role::Testkit)) => *kind == Kind::Dev,
                     _ => false,
                 }
-            } else if dep == PINNED {
+            } else if PINNED.contains(&dep.as_str()) {
                 role == Role::Difftest
             } else {
                 layers.external.iter().any(|e| e == dep)
@@ -333,7 +335,7 @@ fn check_layers(layers: &Layers, crates: &[Manifest]) -> String {
                     " (a test kit is a dev-dependency of a library or difftest crate only)"
                 } else if names.contains(&dep.as_str()) {
                     ""
-                } else if dep == PINNED {
+                } else if PINNED.contains(&dep.as_str()) {
                     " (only the difftest crate may use the pinned solidcore)"
                 } else {
                     " (an external crate not in layers.txt [external])"
@@ -758,7 +760,7 @@ mod tests {
         let ok = crates(&[
             ("a", &[]),
             ("b", &["a"]),
-            ("d", &["a", "b", "solidcore", "dev:k"]),
+            ("d", &["a", "b", "solidcore", "solidcore-record", "dev:k"]),
             ("k", &["a", "b"]),
             ("t", &[]),
         ]);
@@ -794,7 +796,7 @@ mod tests {
         // The breaking case: a library on the pinned solidcore, or on any crate the
         // (empty) allow-list does not name; a library below on one above.
         let bad = crates(&[
-            ("a", &["solidcore", "b"]),
+            ("a", &["solidcore", "b", "solidcore-record"]),
             ("b", &["rand"]),
             ("d", &[]),
             ("k", &[]),
@@ -806,6 +808,10 @@ mod tests {
             "{e}"
         );
         assert!(e.contains("a may not depend on b\n"), "{e}");
+        assert!(
+            e.contains("a may not depend on solidcore-record (only the difftest"),
+            "{e}"
+        );
         assert!(
             e.contains("b may not depend on rand (an external crate"),
             "{e}"
@@ -824,6 +830,7 @@ mod tests {
         );
         assert_eq!(e, "");
         assert!(parse_layers(&format!("{LAYERS}solidcore\n")).is_err());
+        assert!(parse_layers(&format!("{LAYERS}solidcore-record\n")).is_err());
     }
 
     #[test]

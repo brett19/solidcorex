@@ -1,5 +1,5 @@
 // Written for solidcorex. Apache-2.0.
-//! Differential tests: every public scx-num and scx-algo function (interval modules in `t_interval`) against its counterpart in the
+//! Differential tests: every public scx-num and scx-algo function (interval modules in `t_interval`, scx-p21 in `t_p21`) against its counterpart in the
 //! pinned solidcore, on the same inputs. scx's result must be the same to the bit when run
 //! twice, and must agree with solidcore's within `harness::Tol` (same shape, floats close).
 //! Each test prints `difftest <name>: <n> inputs, <e> exact, <w> within tolerance,
@@ -25,6 +25,7 @@ mod t_hash;
 mod t_interval;
 mod t_kraw;
 mod t_math;
+mod t_p21;
 mod t_rest;
 mod t_rng;
 mod t_solve;
