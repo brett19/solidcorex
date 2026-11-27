@@ -2540,3 +2540,97 @@ About 25-30 ns per point on conic edges. NURBS (unit tests' curves): 0.1-1.5 ms 
 **Open questions.** (1) The typed refusal above, if a caller wants one. (2) The three bodies in the report were not the coordinator's exactly (a transformed testkit block, not `scx_make::block`); the numbers are the same kind. (3) `finish` refuses most testkit kinds at 1e12 with the default resolution (`EdgeEndOffVertex`), so far tests of curved kinds stop at 1e9.
 
 **Proposed 04 row.** "`scx-mass` (MA3): where `8 eps` times the largest coordinate over the box's longest side is above a tenth of the accuracy, a face or edge is first integrated as before within 200,000 evaluations; if that gives up, it is integrated again with each piece held to that rounding and the rounding times the scale is added to the stated error, so far from the origin the result is returned with its error instead of `Defect(StepControl)` or a run of minutes. A request that converges is unchanged bit for bit. Change if a caller needs a typed refusal rather than a stated shortfall."
+
+### 14.19 TS2 as built (11-27)
+
+Planar faces, by a constrained Delaunay triangulation in `uv` on exact predicates (§11 TS2, D4 in §12.3). Public API:
+
+```rust
+// scx-num
+pub mod predicates {
+    pub const FILTER_FLOOR: f64; // 1e-250
+    pub fn orient2d(a: Point2, b: Point2, c: Point2) -> Ordering;            // adaptive, exact
+    pub fn orient2d_exact(a: Point2, b: Point2, c: Point2) -> Ordering;      // expansion only
+    pub fn incircle(a: Point2, b: Point2, c: Point2, d: Point2) -> Ordering; // adaptive, exact
+    pub fn incircle_exact(a: Point2, b: Point2, c: Point2, d: Point2) -> Ordering;
+}
+// scx-tess
+pub fn tessellate(body: &Brep, spec: &TessSpec, budget: &mut Budget, stop: &Stop) -> Result<Mesh, TessError>;
+pub fn tessellate_faces(body: &Brep, spec: &TessSpec, faces: &[FaceId], budget: &mut Budget, stop: &Stop) -> Result<Mesh, TessError>;
+// new variants
+TessRefusal::NoFace { face }                // "no_face"
+TessDefect::Crossing { face }               // "crossing"
+TessDefect::Duplicate { face }              // "duplicate"
+TessDefect::Triangulation { face }          // "triangulation"
+```
+
+`orient2d` is `Greater` for counter-clockwise; `incircle(a, b, c, d)` is `Greater` when `d` is inside the circle through the counter-clockwise `a, b, c`. A zero of either sign is `Equal`. The CDT (`scx-tess/src/cdt.rs`) is crate-private: `triangulate(points, segments, budget) -> Result<Vec<[u32; 3]>, Fault>`.
+
+**What it does.**
+- **Predicates.** Shewchuk's adaptive stages. A is the static filter, skipped below `FILTER_FLOOR` (a product may have underflowed). B is the exact determinant of the rounded differences, in fixed-size stack expansions. C adds the differences' first-order tails. D is the crate's exponent-carrying `Expansion`, exact for all finite doubles. B and C run only when every coordinate is 0 or within `[2^-200, 2^250]`; otherwise D decides at once. Each stage returns only a sign it has proved.
+- **CDT.** The points, with `-0.0` taken as `0.0`, are inserted along a Hilbert curve (order 16) over their box, with ties in `(x, y)` order. Equal points are `Fault::Duplicate`. The structure starts from one triangle 4 spans out. Insertion is a visibility walk from the last triangle made, a 1-to-3 or 2-to-4 split, then Lawson flips. A flip happens only when `incircle` is strictly `Greater`. Segments are sorted by their ends' places in the insertion order. Each segment is inserted by walking its crossed sides; a point exactly on a segment splits it, and a crossed constraint is `Fault::Crossing`. Sloan's flips then clear the crossed sides (only a strictly convex quadrilateral is flipped; otherwise the side is requeued), and Lawson flips restore the new sides, never across a constraint. Each side counts its constraint uses. The region is a parity flood from the outer triangle's corner, toggling across sides used an odd number of times, so a slit used twice does not toggle. A conflict, or a kept triangle with an outer corner, is `Fault::Parity`.
+- **Faces.** `tessellate_faces` sorts and dedups the ids. An unknown id is `Refused(NoFace)`. A face that is not a plane is `Unsupported(FaceKind)`; this is checked before any work. Then it runs `wireframe`, then each plane face in id order, with `stop` checked per face. A face's points come from its loops' edge polylines (TS1): a forward use drops its last point, and a reversed use takes `points[1..]` reversed. They are projected onto the plane frame's `x` and `y`. The boundary segments are each ring's consecutive pairs. Triangles come out counter-clockwise from outside the solid: they are flipped when the front is solid and the back is not, and their normals are the plane's on that side. `chord_bound` is the largest chord of the face's polylines. The faults map to `Defect(Duplicate)`, `Defect(Crossing)`, `Defect(Triangulation)` (Lost and Parity) and `Exhausted`.
+- **Budget.** One unit per point inserted and per flip, on top of the wireframe's.
+
+**Decisions, with cases.**
+- **The predicates are in `scx-num`, not `scx-tess`.** For: `scx-planar` (whose `cert.rs` has its own orient) and the boolean need the same exact signs, and `eft` and `expansion` already live there. Against: `scx-num` grows, and every change to it needs the wasm32 check. Kept: one exact orient for the workspace. Moving `scx-planar` onto it is open question 3.
+- **Native adaptive stages B and C under a range gate.** For: with only A and D, the cost was about 10-16 us per triangle on near-cocircular circle samples. B and C brought it to 2-3 us. Against: about 250 more lines, and the stages' bounds hold only without underflow or overflow. Kept: the gate (`[2^-200, 2^250]`, every coordinate a model holds) sends anything else to D. A unit test checks that A-C agree with D near degeneracy, and the inputs were chosen so that B, C and D each decide some cases (seen with throwaway counters).
+- **One enclosing triangle, not a hull walk or ghost triangles.** For: simple, and every insertion is inside. Against: its corners are not input points, so a crossed side can end at one, and the fan of an outer corner is open. Kept: `side()` looks up from the other end of such a side. A kept triangle with an outer corner is a `Parity` fault, never output.
+- **The inside is decided by parity flood.** For: it needs no loop orientation or nesting. Holes, islands and slits (a constraint used twice does not toggle) all fall out. Against: segments that bound no region (an open chain) fail as `Parity`, not as a named error. Kept: a face's loops always close.
+- **Deterministic order: Hilbert insertion, ties by `(x, y)`, no flip on `Equal`.** For: the triangles are a function of the point set and segment set, whatever order or indices they come in (tested by shuffling). A cocircular tie keeps the edge it has, and the fixed order makes that a fixed rule. The Hilbert order cut the walks from long runs (in `(x, y)` order) to a few steps. Against: the output on a cocircular grid is one valid Delaunay choice, not a canonical one (such as a symbolic perturbation's). Kept: bitwise determinism is what the brief asks for, and it holds.
+- **No Steiner points.** For: every boundary side is a polyline segment, so two faces at an edge share indices and a closed body meshes closed by construction. A plane needs no point for the chord, and the angle bound concerns normals, which are constant on a plane. Against: thin triangles (circle samples fan to far corners), which a viewer shades fine but an FE user would not want. Kept: shape refinement (the pin runs Ruppert on flat faces) is not asked of `TessSpec`.
+- **`edge_length` does not bound interior triangle sides.** For: only edge samples carry it (TS1). Bounding interior sides needs interior points, against the previous decision. Against: a caller setting `edge_length` may expect it on every side. Kept, as open question 5.
+- **`tessellate_faces` as well as `tessellate`.** For: TS3 can grow face by face, and a caller can mesh the planar subset of a body today (`tessellate` refuses the first non-plane face). Against: two entries. Kept: `tessellate` is `tessellate_faces` over every face.
+- **uv by projection onto the plane frame.** For: exact enough, needs no pcurves, and is the same map for every edge of the face. Against: TS3's curved faces need pcurve parameters instead. Kept for planes only.
+- **Crossing and Duplicate are Defects, not Refusals.** For: on a valid body they mean two edges closer than their chords allow, or loops that touch. That is the model's or the sampler's failing, not a request the caller can change, apart from a finer chord. Against: a finer chord would sometimes cure a Crossing, which reads like a refusal. Kept: a Defect names the face. Edge refinement on a crossing is open question 2.
+
+**Tests.** Unit (`scx-num/src/predicates.rs`, 7): orientation signs; exactness on Shewchuk's near-collinear grid (`0.5 + k ulp`); orientation at extreme exponents (tiny, huge, mixed, through stage D); incircle signs and cocircular points; the filter against the exact path on random inputs; stages A-C against D near degeneracy; invariance under cyclic order and a sign flip on a swap. Unit (`scx-tess/src/cdt.rs`, 11, each through a `check` of strict CCW, each side used once or twice, segments present, local Delaunay on every non-constraint side, and the count `V − 2 + 2h`):
+- a square is two triangles;
+- stars with holes hold every rule;
+- a comb needs many flips to constrain;
+- the result is a function of the point and segment sets (shuffled);
+- collinear runs are kept whole;
+- cocircular points and grids triangulate deterministically;
+- points one ulp apart are distinct;
+- a point on a segment splits it;
+- a slit used twice keeps both sides;
+- crossings and duplicates are refused;
+- the budget bounds the work.
+
+Integration (`scx-tess/tests/face.rs`, 6):
+- MK1 blocks, axis-aligned and tilted: 12 triangles, 8 positions, closed, volume 6000.
+- MK3 extrusions with square, triangle and L holes: closed, counts as expected, per-face area against `scx_mass::face_area`, volume.
+- The mesh is a function of the body.
+- Caps with circular holes and a slot with arc ends, at chords 0.1, 0.01 and 0.001: each boundary polyline segment is used by exactly one cap triangle side. The area is within chord times perimeter of `face_area`. `tessellate` on the whole body is `Unsupported(FaceKind { Cylinder })`.
+- Non-plane faces are unsupported, and unknown ids are refused.
+- Budget and stop end the work.
+
+No tests were removed.
+
+**Measurements** (throwaway timer, not committed, release; the machine was shared and loaded, and the same run varied by up to 2x):
+- TS1's `wireframe` cost 26-30 ns per point unloaded (55-60 when loaded).
+- A planar cap is a 200 mm square with circular holes. Cap time is `tessellate_faces` on the cap minus `wireframe`. Unloaded it is 2.1-2.7 us per triangle (in the loaded run, 2.8-3.6 us against a wireframe of 31-56 ns/pt), so about 80-100 times the cost per point of TS1.
+- Breakdown for one circle at chord 1e-4 (1,575 triangles): 18k orient and 14.5k incircle calls; 4k incircle calls reach stage B, 1.6k reach C, none reach D; 5k flips, 7.4k walk steps. By phase: sort 0.1 ms, insertion 2.8 ms, constraints 0.19 ms, flood 0.04 ms. The cost is the adaptive incircle on near-cocircular samples, and the holes' interiors are triangulated too, then dropped.
+- Against the pin's mesher: the pin's planar fill is spade 2.15's CDT, plus Ruppert refinement for shape. Spade on the same points and segments, with no exterior removal and no refinement:
+
+| case | spade `bulk_load_cdt` | spade incremental (the pin's path) | ours |
+|---|---|---|---|
+| 1 circle, chord 1e-3 | 0.55 ms | 1.09 ms | 1.1-1.2 ms |
+| 1 circle, chord 1e-4 | 2.0 ms | 3.3 ms | ~3.1 ms |
+| 9 circles, chord 1e-4 | 33.7 ms | 50 ms | ~21 ms |
+
+So ours is on par with the pin's incremental path, and up to 1.5x slower than spade's bulk load on one circle (but faster on nine). The pin also adds Ruppert points on every flat face, which ours does not, so its full planar cost is higher. The added work against TS1 is the CDT itself; `wireframe` is unchanged.
+
+**Deviations from 72.**
+- Watertightness on MK3 extrusions with circles is tested on the caps only (boundary coverage), because their cylinder walls are `Unsupported` until TS3. Bodies with only planar faces are tested closed.
+- `tessellate_faces` is new.
+- The CDT is crate-private in `scx-tess`; only the predicates are public, in `scx-num`.
+
+**Open questions.**
+1. TS3: curved faces need `uv` from the edges' pcurve parameters, not projection, and the same CDT then refines inside for the chord.
+2. A chord-induced crossing (two edges of a face closer than their chords) is a `Defect(Crossing)`. Refining the two edges' samples locally until they separate would cure it; that needs a hook back into TS1's sampler.
+3. `scx-planar`'s own orientation test in `cert.rs` should move to `scx_num::predicates::orient2d`.
+4. Stage B on near-cocircular samples is most of the cost. A cheaper path for circle samples (a symbolic or precomputed cocircularity) could halve it.
+5. Should `edge_length` bound interior triangle sides (needs interior points, so a Steiner policy)?
+
+**Proposed 04 row.** "`scx-tess` (TS2): planar faces are a constrained Delaunay triangulation in the plane frame's `uv`. The points are only the edges' TS1 samples (no Steiner points), so faces share boundary indices and a closed planar body meshes closed. It runs on `scx_num::predicates` (`orient2d`, `incircle`): Shewchuk's adaptive stages over the crate's own `eft` and `expansion`, exact for every finite double, with no spade. The output is a function of the point and segment sets: Hilbert insertion with ties by `(x, y)`, segments by rank, no flip on an exact tie. The inside is a parity flood (slits do not toggle). Crossing and duplicate boundary points are `Defect`s naming the face. `tessellate` and `tessellate_faces` refuse a non-plane face as `Unsupported(FaceKind)` until TS3. One budget unit per point and per flip."
