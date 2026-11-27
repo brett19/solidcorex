@@ -174,7 +174,19 @@ cubic; the exponent fields are now added in one pass when every input and result
 normal, the roots scale back by one multiplication when their size is known to keep them
 normal, and the general paths are cold.
 
-Wall time per batch (criterion, pinned to one core): WALL_TABLE
+Wall time per batch of 1,024 calls (criterion, pinned to one core, two alternating runs
+of each build; the range covers both):
+
+| case | old scx | pin | this branch | / old | / pin |
+|---|---|---|---|---|---|
+| cubic | 191-193 us | 66-70 us | 234-242 us | 1.24 | 3.5 |
+| cubic edge | 21.0-21.7 us | 9.4-9.8 us | 20.6-21.3 us | 0.98 | 2.2 |
+| quartic | 234-235 us | 112-115 us | 505-513 us | 2.17 | 4.5 |
+| quartic edge | 99-111 us | 44-46 us | 139-141 us | 1.33 | 3.2 |
+
+The quartic's time grew more than its instructions (2.17x against 1.82x); not yet
+profiled for why (candidates: the runtime `fma` calls, divisions in the bracket steps,
+mispredicted branches between the plain and compensated paths).
 
 Where the quartic's instructions go (callgrind inclusive, per batch of 1,024 cubics and
 1,024 quartics, functions kept out of line to see them): the derivative's cubic about
@@ -188,7 +200,14 @@ on baseline x86-64 (an `x86-64-v3` build inlines them; research 67).
 Difftest: the three pin defects `poly_cubic`, `poly_quartic` and `poly_from_roots` now
 check scx's roots against the contract and the exact truth, whatever the pin returns; a
 quadratic (the degree dropped below the tolerance) must still match the pin's to the bit.
-DIFFTEST_COUNTS
+Counts after the change (release build): `poly_cubic` 3,121 inputs, 1,281 exact, 789
+within tolerance, 1,051 judged against the truth, 0 mismatches; `poly_quartic` 3,121
+inputs, 1,272 exact, 241 within tolerance, 1,608 judged against the truth, 0 mismatches;
+`poly_from_roots` 106 inputs, 15 exact, 91 judged against the truth, 0 mismatches;
+`poly_quadratic` 3,131 exact; 0 nondeterministic throughout. The curve and inversion
+tests that call the solvers (`curve_surface_intersect`, `curve_*_invert*`,
+`oblique_cylinder_pcurve` and the rest of `t_curve`) are 0 mismatches. The exact truth
+is slow: the three pin-defect tests take about 7 minutes together in release.
 
 Callers: `scx-curve`'s curve inversion (the quartic fallback) and curve-surface
 intersection keep passing. What they see: roots ascending (the closed form's order was
