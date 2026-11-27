@@ -1387,7 +1387,7 @@ and a torus's plane past its circles), so no pair that was solved changes its pa
 
 ### 17.3 Tests
 
-`tests/quadrics.rs`, 16 tests, each against SM0's `ssi_truth` (curves, nodes, touches) where it
+`tests/quadrics.rs`, 17 tests, each against SM0's `ssi_truth` (curves, nodes, touches) where it
 has the pair and always against the implicit forms (every answer point on both surfaces;
 every generator of `a` meeting `b` inside both extents covered, at least 100 points):
 parallel cylinders (two lines, across both tangencies, tilted past the tolerance), Steinmetz
@@ -1399,6 +1399,17 @@ tolerance and on part of the tube, and the depth rule at a finer tolerance. No t
 first's axis (at `z = -1`), so it is now the Miller-Goldman pair (solved) rather than `General`;
 the same tilt moved off the meeting keeps the `General` check; its square cylinders of one
 radius are now the Steinmetz pair (solved), and two radii keep the `General` check.
+
+Difftest `t_ssi::ssi_section_by_plane` (an scx-ssi analytic change's gate, outside `xtask fast`'s
+default members): its pool's `bitangent` tori are Villarceau planes, which the exact testkit truth
+answers `NoClosedForm`, so the first merge's 24 cases failed its check (not the pin). The check now
+takes, for a torus whose truth has no closed form, circles of radius `big` or none, and owes the
+plane's crossings with 2000 meridian circles (as a cone's 2000 generators), each inside both
+extents; and two pieces may meet at their ends only at an answer's point (a branch point). The one
+`empty` among them is a plane square inside the hole (nearer the centre than `big - small`), where
+no meridian meets it; `planes_through_the_torus_centre` holds the difftest's three tori, at the
+bitangent tilt (four arcs, two points; empty inside the hole), the equator and the meridian plane
+(solved) and four other tilts (`General`), never `Empty` while the square reaches the tube.
 
 Corpus (`score_corpus`, 113 cases): before `pass 38; refused 69; failed 6`, after
 `pass 40; refused 67; failed 6`. `c2_cyl_cyl_external` (refused to pass) and `c4_steinmetz`
