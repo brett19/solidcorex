@@ -5425,7 +5425,7 @@ both axes. BR6's bodies sit on world frames, which is why only the plane showed 
   frame from `Frame::transformed`, and falls back to `A x × A y` only for a map that takes
   z into the plane.
 - *For:* exact maps now round-trip to the bit for every kind on any frame, and the stored
-  axes are at least as accurate as the renormalised ones.
+  axes are about as accurate as the renormalised ones.
 - *Against:* a frame's axes may now be unit to 8 roundings rather than 1 to 2. Repeated
   rigid moves would let that drift grow, so past 8 roundings the axes are renormalised,
   which bounds it. Taking `±A z / k` with one `k` from the map, as the open question
@@ -5444,6 +5444,35 @@ both axes. BR6's bodies sit on world frames, which is why only the plane showed 
 - Still open: CU5's conics (`scx-curve`, `conic.rs`) build their image frame the old way,
   so a circle on a skewed frame is not bit-exact under an exact map either. None of the
   generated bodies has one.
+
+*2. Pcurves mapped, not made again.* When the map keeps the edge's parameter, `use_image` in
+`draft/transform.rs` now maps more kinds through the `UvMap`, as it already did for lines.
+The image pcurve is then `uv ∘ p` exactly, so it is on the moved edge.
+
+- A circle, an ellipse or a hyperbola's branch under a uniform `(k, k)` with `k > 0` (a
+  plane under a similarity) keeps its axes and sense. Its centre is mapped and its
+  semi-axes are multiplied by `k` (new `Frame2::moved_to`).
+- An angle line or an angle wave under a diagonal map (a cylinder's `(k, k)`, a cone's
+  `(1, k)`) keeps its angle. It goes on the new surface's arcs when the angle scale is the
+  new period over the old to 16 ε and the angle offset is zero. The other coordinate is
+  mapped as a line's.
+- Still made by `pcurve_of`: a parabola, whose parameter a scale stretches, so its edge is
+  shifted; a NURBS pcurve; any map with a shear or a mirror in uv; and a shifted edge.
+- *Cost* (release, ns a face, best of 7 × 20 transforms on the generated bodies).
+
+  | Kind | Rigid | Scale 2.5 before | Scale 2.5 after | Mirror |
+  |---|---:|---:|---:|---:|
+  | cylinder | 861 | 6354 | 1345 | 909 |
+  | cone | 743 | 3487 | 1127 | 782 |
+  | block | 592 | 938 | 909 | 624 |
+  | torus | 723 | 1048 | 1017 | 770 |
+  | sphere | 588 | 934 | 898 | 635 |
+
+  Rigid and mirror were near-identity in uv already, so they do not change.
+- *Test:* `scaled_pcurves_keep_their_kind_and_match_pcurve_of` (scx-brep `transform.rs`).
+  Under scales 2.5 and 0.375, every use keeps its kind and agrees with `pcurve_of` for the
+  moved edge to 1e-12 relative, up to whole periods. `t_transform` and `t_pcurve*` are
+  unchanged at 0 mismatches.
 
 ### 6.13 BR7 as built (11-27)
 

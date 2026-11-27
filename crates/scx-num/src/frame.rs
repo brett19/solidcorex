@@ -250,6 +250,12 @@ impl Frame2 {
         })
     }
 
+    /// The same axes at `origin`, x kept to the bit. `None` when `origin` is not finite.
+    #[must_use]
+    pub fn moved_to(&self, origin: Point2) -> Option<Self> {
+        (origin.x.is_finite() && origin.y.is_finite()).then_some(Self { origin, x: self.x })
+    }
+
     /// The origin.
     #[must_use]
     pub const fn origin(&self) -> Point2 {

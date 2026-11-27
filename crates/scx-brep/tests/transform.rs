@@ -12,10 +12,13 @@ use std::collections::BTreeMap;
 use scx_brep::{
     Brep, Carry, Changes, Document, EdgeShape, FaceSide, Touch, TransformError, UseGeom, carry,
 };
+use scx_curve::Curve2;
 use scx_num::error::ErrorKind;
 use scx_num::extent3d::Extent3d;
 use scx_num::math::Affine;
+use scx_num::units::Length;
 use scx_num::vector3d::{Point3, Vec3};
+use scx_surface::pcurve_of;
 use scx_testkit::bodies::{Kind, generate};
 
 fn doc() -> Document {
@@ -229,6 +232,72 @@ fn every_body_moves_under_rigid_scale_and_mirror() {
             }
         }
     }
+}
+
+/// Under a uniform scale the circles, ellipses, hyperbolas, angle lines and angle waves are
+/// mapped through the uv map, not made again (FU1, 63 §6.12 open question 2): each use keeps
+/// its kind, and its points are `pcurve_of`'s for the moved edge to rounding, up to whole
+/// periods.
+#[test]
+fn scaled_pcurves_keep_their_kind_and_match_pcurve_of() {
+    let mut mapped = 0;
+    for kind in Kind::ALL {
+        for seed in [0, 7] {
+            let b = body(kind, seed, 2);
+            for k in [2.5, 0.375] {
+                let (m, _) = moved(&b, &scale(k));
+                for (f, g) in b.faces().zip(m.faces()) {
+                    let domain = g.surface().domain();
+                    for (l, n) in f.loops().zip(g.loops()) {
+                        for (u, w) in l.uses().zip(n.uses()) {
+                            let (
+                                UseGeom::Pcurve { curve: old, .. },
+                                UseGeom::Pcurve { curve, interval },
+                                EdgeShape::Curve {
+                                    curve: c,
+                                    interval: over,
+                                },
+                            ) = (&u.record().geom, &w.record().geom, w.edge().shape())
+                            else {
+                                continue;
+                            };
+                            if !matches!(
+                                old,
+                                Curve2::Line(_) | Curve2::Nurbs(_) | Curve2::Parabola(_)
+                            ) {
+                                mapped += 1;
+                            }
+                            assert_eq!(
+                                core::mem::discriminant(old),
+                                core::mem::discriminant(curve),
+                                "{}: {:?}",
+                                kind.name(),
+                                g.id()
+                            );
+                            let made =
+                                pcurve_of(c, g.surface(), *over, Length::from_mm(1e-9)).unwrap();
+                            for i in 0..=8 {
+                                let t = interval.min()
+                                    + (interval.max() - interval.min()) * f64::from(i) / 8.0;
+                                let (p, q) = (curve.point(t), made.point(t));
+                                let off = |d: f64, period: Option<f64>| {
+                                    period.map_or(d, |w| d - w * (d / w).round()).abs()
+                                };
+                                let reach = 1e-12 * (1.0 + p.to_vec().length() + k * 100.0);
+                                assert!(
+                                    off(p.x - q.x, domain.u.period()) <= reach
+                                        && off(p.y - q.y, domain.v.period()) <= reach,
+                                    "{}: {p:?} against {q:?}",
+                                    kind.name()
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert!(mapped > 0);
 }
 
 #[test]
