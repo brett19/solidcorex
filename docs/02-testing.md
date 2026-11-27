@@ -143,7 +143,8 @@ save and load; across platforms, verified late.
 - **Lints and scans** (clippy `disallowed_methods`, an xtask scan) keep out what would break the above:
   hash iteration, `mul_add` outside `eft`, platform transcendentals outside `fmath`, thread-locals.
 - **Across platforms, late:** a golden table of record hashes checked on x86_64, aarch64 and wasm32.
-  Until then, `libm_table` pins today's values on one target.
+  Until then, `fmath_pin` (every `fmath` function) and `scx-algo`'s `xplat_pin` (expansions, `Affine`,
+  extents, polynomial roots, local solvers) pin today's values; both run in `cargo xtask fast`.
 
 ## 7. Work as a test, and the performance gate
 
