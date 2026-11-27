@@ -224,10 +224,29 @@ impl Z {
             (num.clone(), den.shl(e.unsigned_abs()))
         };
         let mut acc = Int::default();
+        if d.is_one() {
+            // d = 1: Horner without powers of d.
+            for c in self.0.iter().rev() {
+                acc = acc.mul(&n).add(c);
+            }
+            return acc.signum();
+        }
+        // A power of two d (the bisection points, once the odd numerator is split off) shifts
+        // instead of multiplying; any other d takes the powers.
+        let shift = if d.mag_is_power_of_two() {
+            d.trailing_zeros()
+        } else {
+            None
+        };
         let mut dk = Int::from(1u64);
-        for c in self.0.iter().rev() {
-            acc = acc.mul(&n).add(&c.mul(&dk));
-            dk = dk.mul(&d);
+        for (k, c) in self.0.iter().rev().enumerate() {
+            acc = if let Some(sh) = shift {
+                acc.mul(&n).add(&c.shl(sh * k as u64))
+            } else {
+                let t = acc.mul(&n).add(&c.mul(&dk));
+                dk = dk.mul(&d);
+                t
+            };
         }
         acc.signum()
     }

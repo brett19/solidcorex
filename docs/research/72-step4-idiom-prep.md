@@ -3332,3 +3332,43 @@ A box is mapped into the kind's frame as the box of its 8 corners' coordinates, 
 **Open questions.** (1) Whether step 5's marcher should take over these refusals outright, which would make this check a prefilter only. (2) A second-order (exact distance) test would be needed if a real model has near-misses on oblique pairs that are smaller than the bisection resolves.
 
 **Proposed 04 row.** "BO2b (72 §14.30): before refusing a pair with no closed form, stage 4 proves whether its faces can touch. It encloses each surface's 1-Lipschitz level function (plane `h`, cylinder `rho - r`, sphere `|p| - r`, cone line distance, ring torus `hypot(rho - R, h) - r`) over the overlap of the faces' boxes grown by the coincidence, bisected depth first to depth 8, and drops the pair when every piece is clear of one surface by more than the coincidence. Otherwise it refuses `SsiPair` as before. The seam-vertex torus-box case now names `sides[3]` (`x = 6.5`, the face the torus touches), and the other BO5 cases are unchanged. The cost is 1 box on the torus-box drops and 10-28 boxes (3-7 µs) on pairs that touch. Against: the bound is first order, so oblique near-misses below about half the box size are still refused. Change if real models refuse oblique near-misses, or when step 5 answers these pairs."
+
+### 14.33 GS2 as built (11-27)
+
+**Task.** Cut CI wall time per push, and (Brett's update) make the difftest itself fast wherever it runs. Measured on run 46054913714 (main, 25 min 35 s): `fast` 14 min 30 s, `difftest` 25 min, xplat 1 to 2 min, bench-compile 1 min 5 s.
+
+**Where the time went.** Compile was not the main cost (the cache restored, and workspace crates rebuild in a minute or two). The difftest binary ran 972 s for 529 tests, and four tests were the whole tail: `t_nurbs::nurbs_elevate` 866 s, `t_algo::poly_from_roots` 835 s, `t_slice::t_slice` 116 s and `t_nurbs_surface_edit::nurbs_surface_elevate` 100 s (the rest 130 s together), each run alone locally, 4 threads. Sampled with gdb (no `perf` here), the time was not in scx-nurbs or scx-algo (opt-level 2 on seven scx crates moved nurbs_surface_elevate 100 s to 87 s, so rejected), it was in the exact references of `scx-testkit`:
+- `nurbs_elevate` and `nurbs_surface_elevate`: the rational de Boor lerp, in `Rat::reduce` -> `Int::gcd`: a binary gcd that allocated a new number every step, and `div_exact` by bit-at-a-time long division.
+- `poly_from_roots`: the truth oracle `exact_real_roots` (Sturm isolation and bisection to 2^-116) run for every disagreeing case at every one of about thirty tolerances, and again in `poly_cubic` and `poly_quartic`, though it depends on the coefficients alone.
+- `t_slice`: the pin's own interval solver (`fillet_section::interval`); not touched.
+
+**What was changed.**
+1. `scx-testkit::exact`: Knuth algorithm D long division (was bit at a time), Lehmer's gcd with the leading 62 bits deciding a run of quotients (was binary gcd allocating per step). Results are exact integers, so every reference is bit-identical. New tests: the old bitwise division kept as a reference in the test module and compared on 6000 limb patterns of random, all ones, zero, one and 2^63 (hits the qhat correction and the add-back); Lehmer against Euclid on 4000 pairs and on pairs with a common factor.
+2. `scx-testkit::poly`: `Z::sign_at` shifts instead of multiplying when the denominator is a power of two (bisection points).
+3. `scx-difftest` `pin_defects::exact_real_roots`: results kept by the coefficients' bits (a pure function; the first caller computes, the rest read).
+4. CI (`.github/workflows/ci.yml`): `fast` split into `lint` plus four `tests` shards (`cargo xtask tests scx-surface` / `scx-mass` / `scx-ssi scx-record` / `--except` those four, which adds the bench crate's tests and xtask's, so the four together run exactly what `fast` runs); `xtask` gains `lint` and `tests`, and `fast` is `lint` then `tests` as before. `Swatinem/rust-cache` saves only on main (branch pushes restore main's cache and save nothing: fewer 600 MB uploads, less eviction). The pin's files get a fixed mtime in `pin.sh`: cargo fingerprints a path dependency by mtime and a fresh checkout stamps the clock, so the pin (`solidcore`, `solidcore-record`, opt-level 2, about 4 to 8 min on 4 vCPU) was rebuilt every run. `CARGO_PROFILE_DEV_DEBUG=line-tables-only` shortens compile and link and keeps backtrace lines. The `--ignored` nurbs sweeps stay in the difftest job. Concurrency was already one run per ref with cancel-in-progress; unchanged.
+
+**Measured (local, loaded 32-core box, times alone with `--exact`).**
+
+| Test | Before | After |
+|---|---|---|
+| `t_nurbs::nurbs_elevate` | 866 s | 168 s |
+| `t_algo::poly_from_roots` | 835 s (882 s coordinator) | 140 s |
+| `t_nurbs_surface_edit::nurbs_surface_elevate` | 100 s | 27 s |
+| `t_slice::t_slice` | 116 s | 56 to 98 s (noise; unchanged code) |
+| whole difftest, `--test-threads=4` | 972 s (CI) | 201 s |
+
+Work added: none (the changes remove work); the cache holds the oracle results in memory (distinct disagreeing coefficient sets, a few thousand polynomials).
+
+**Cases for and against, decisions.**
+- Opt-level for the scx crates in the hot path: against (no gain measured, every local build gets slower to compile). Not done.
+- nextest with hash shards for the difftest: for, it balances; against, each test in its own process loses the in-process oracle cache and the shared fixtures, and after the fix the whole suite is 200 s so sharding buys little. Tried in the draft, dropped; one difftest job.
+- Pin at opt-level 3 without debug assertions: `t_slice` 96 s to 65 s (a third), but the pin then runs unchecked and costs a 7 minute rebuild; against, not done. Open.
+- Moving the sweeps behind `--ignored`: not needed; coverage is whole.
+- Sharding `fast` by crate: for, the 4 vCPU runners were oversubscribed by 16 side-by-side cargo jobs; against, four jobs rebuild shared dependencies and take more job slots (20 concurrent on the free plan). Kept, with the shard lists in the workflow and `--except` so a new crate lands in the last shard by default.
+
+**Deviations from 72.** None.
+
+**Open questions.** (1) First CI run: does the pin come from the cache (watch `Compiling solidcore` in the difftest and tests logs; if it still builds, the fixed mtime is not enough and the cache key or target dir needs work)? (2) `fast`'s `lint` still builds clippy for the pin three times; one `cargo clippy --workspace` could replace the two member-wise ones. (3) `push` and `pull_request` both trigger on a PR branch; two runs of the same commit.
+
+**Proposed 04 row.** "GS2 (72 §14.33): the difftest's four slowest tests were `scx-testkit`'s exact arithmetic and one repeated oracle, not scx or the pin. Long division is Knuth's algorithm D, the gcd Lehmer's, the oracle results are kept by coefficient bits; nurbs_elevate 866 s to 168 s, poly_from_roots 835 s to 140 s, the whole difftest 972 s to 201 s on 4 threads, results unchanged. CI: `lint` and four test shards in place of `fast`, cache saved on main only, the pin's mtimes fixed so its build is cached. Against: more jobs per run; for: wall time is the slowest shard. Change if a shard becomes the floor." | GS2 |

@@ -34,6 +34,9 @@
 //!   members, then the difftest and bench crates, the benchmarks included), `layers`,
 //!   `headers`, the tier-1 tests (`cargo test -p <crate>` for each crate named, default every
 //!   library and test kit), the bench crate's own tests and xtask's.
+//! - `lint` and `tests [crate ... | --except crate ...]`: the two halves of `fast`, which CI runs
+//!   as separate jobs (`tests` shards by crate; `--except` takes the rest, with the bench crate's
+//!   tests and xtask's, so named shards and one `--except` shard together run all of `fast`).
 //! - `bench`: build the benchmarks in the bench profile without running them (`cargo bench
 //!   -p scx-bench --no-run`); docs/02-testing.md says how to run them.
 //!
@@ -66,8 +69,10 @@ fn main() -> ExitCode {
         Some("movecheck") => movecheck(&root, args.get(1..).unwrap_or(&[])),
         Some("conflicts") => conflicts(&root),
         Some("fast") => fast(&root, args.get(1..).unwrap_or(&[])),
+        Some("lint") => lint(&root),
+        Some("tests") => tests(&root, args.get(1..).unwrap_or(&[]), false),
         Some("bench") => bench(&root),
-        _ => Err("usage: cargo xtask <layers | headers | pin | bodydiff | cov [crate ...] | movecheck [crate ...] | conflicts | fast [crate ...] | bench>".to_string()),
+        _ => Err("usage: cargo xtask <layers | headers | pin | bodydiff | cov [crate ...] | movecheck [crate ...] | conflicts | fast [crate ...] | lint | tests [crate ... | --except crate ...] | bench>".to_string()),
     };
     match result {
         Ok(msg) => {
@@ -802,6 +807,13 @@ fn conflicts(root: &Path) -> Result<String, String> {
 }
 
 fn fast(root: &Path, crates: &[String]) -> Result<String, String> {
+    println!("{}", lint(root)?);
+    tests(root, crates, true)
+}
+
+/// The static checks of `fast`: conflict markers, fmt, clippy with warnings denied, layers and
+/// headers. CI runs them as a job of their own, beside the test shards.
+fn lint(root: &Path) -> Result<String, String> {
     println!("{}", conflicts(root)?);
     // `--all` would take in solidcore too, a path dependency of the difftest crate.
     let mut fmt = vec!["fmt".to_string(), "--check".to_string()];
@@ -841,15 +853,34 @@ fn fast(root: &Path, crates: &[String]) -> Result<String, String> {
     )?;
     println!("{}", layers(root)?);
     println!("{}", headers(root)?);
-    let libs: Vec<String> = if crates.is_empty() {
-        layer_roles(root)?
+    Ok("lint: passed".to_string())
+}
+
+/// The tier-1 tests of `fast`. `crates` names the crates to test (default every library and test
+/// kit); `--except a b` takes every one but those named. `extras` adds the bench crate's own tests
+/// and xtask's; `tests` (the CI shards) adds them only when `crates` is `--except ...`, so the
+/// shards together run exactly what `fast` runs.
+fn tests(root: &Path, crates: &[String], extras: bool) -> Result<String, String> {
+    let all = || -> Result<Vec<String>, String> {
+        Ok(layer_roles(root)?
             .roles
             .into_iter()
             .filter(|(_, r)| matches!(r, Role::Library(_) | Role::Testkit))
             .map(|(n, _)| n)
-            .collect()
-    } else {
-        crates.to_vec()
+            .collect())
+    };
+    let (libs, extras) = match crates.split_first() {
+        None => (all()?, true),
+        Some((flag, rest)) if flag == "--except" => {
+            if let Some(bad) = rest.iter().find(|c| !all().is_ok_and(|a| a.contains(c))) {
+                return Err(format!("tests: --except names no library: {bad}"));
+            }
+            (
+                all()?.into_iter().filter(|c| !rest.contains(c)).collect(),
+                true,
+            )
+        }
+        Some(_) => (crates.to_vec(), extras),
     };
     // Each crate keeps its own `-p` selection (its own feature set, so nothing is rebuilt),
     // but its test targets run as separate cargo invocations, side by side: a few test
@@ -907,12 +938,14 @@ fn fast(root: &Path, crates: &[String]) -> Result<String, String> {
     }
     let mut jobs = long;
     jobs.extend(short);
-    jobs.push(
-        ["test", "-p", "scx-bench", "--lib"]
-            .map(String::from)
-            .to_vec(),
-    );
-    jobs.push(["test", "-p", "xtask"].map(String::from).to_vec());
+    if extras {
+        jobs.push(
+            ["test", "-p", "scx-bench", "--lib"]
+                .map(String::from)
+                .to_vec(),
+        );
+        jobs.push(["test", "-p", "xtask"].map(String::from).to_vec());
+    }
     cargo_parallel(root, jobs)?;
     Ok(format!("fast: passed ({})", libs.join(", ")))
 }

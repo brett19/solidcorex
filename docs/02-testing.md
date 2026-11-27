@@ -256,9 +256,10 @@ push or publish). A builder pushes a branch and the owner reviews the design, no
 
 | Job | What |
 |---|---|
-| `fast` | `cargo xtask fast` (fmt, clippy `-D warnings`, layers, headers, pin, tier-1 tests), then `clippy --workspace --all-targets -D warnings`, which adds `scx-difftest` |
+| `lint` | `cargo xtask lint` (conflicts, fmt, clippy `-D warnings`, layers, headers), then `clippy --workspace --all-targets -D warnings`, which adds `scx-difftest` |
+| `tests` | four shards of `cargo xtask tests` (`scx-surface`; `scx-mass`; `scx-ssi` and `scx-record`; `--except` those, which also runs the bench crate's tests and xtask's): together exactly what `cargo xtask fast` tests |
 | `xplat` | the golden hash tests (`fmath_pin`, `xplat_pin`) and `scx-num`'s unit tests on `wasm32-wasip1` under wasmtime and on aarch64 (GitHub's native `ubuntu-24.04-arm` runner). Both legs are hard checks |
-| `difftest` | `cargo test -p scx-difftest`, the full pin comparison |
+| `difftest` | `cargo test -p scx-difftest`, the full pin comparison, then the `--ignored` nurbs sweeps |
 | `bench-compile` | `cargo check --benches -p scx-bench`, with the pin checked out (section 8.1) |
 
 The pin is rebuilt in CI by `.github/scripts/pin.sh`: a one-commit repository at `../sc-wt/scx-pin`
@@ -266,7 +267,7 @@ holding the public mirror tangency-labs/solidcore at a commit whose tree is the 
 tree (`c5c43059c9`). Its commit hash differs from the pin's, so the difftest build script and
 `cargo xtask pin` accept either the pin commit or that tree. Every job that loads the workspace needs
 it, because cargo reads `scx-difftest`'s manifest even to test another crate. The toolchain comes from
-`rust-toolchain.toml`; `Swatinem/rust-cache` keeps the registry and `target/`.
+`rust-toolchain.toml`; `Swatinem/rust-cache` keeps the registry and `target/` (saved on main only; `pin.sh` fixes the pin's file times so cargo keeps its build of the pin).
 
 ## 9. What replaces the goldens
 
