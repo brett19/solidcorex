@@ -125,7 +125,8 @@ pub fn intersect_two_planes(a: &Plane, b: &Plane) -> Option<PlanesIntersection> 
 
 /// The normal projection of `point` onto the plane through `plane_pnt` with normal
 /// `plane_norm` of any length (`smgu_PointProjectToPlane`); `None` when `plane_norm` has no
-/// direction (`|plane_norm|² < SM_EFF_ZERO_SQ`, or a component not finite).
+/// direction (`|plane_norm|² < SM_EFF_ZERO_SQ`, or a component not finite) or the
+/// projection is not finite.
 #[must_use]
 pub fn point_project_to_plane(
     point: Point3,
@@ -136,14 +137,18 @@ pub fn point_project_to_plane(
     if len_sq.is_nan() || len_sq < EFF_ZERO_SQ {
         return None;
     }
-    if !len_sq.is_finite() {
-        // the square overflows: project along the unit normal
-        let n = *plane_norm.normalized()?;
-        return Some(point - (point - plane_pnt).dot(n) * n);
+    if len_sq.is_finite() {
+        let k = ((point.x - plane_pnt.x) * plane_norm.x
+            + (point.y - plane_pnt.y) * plane_norm.y
+            + (point.z - plane_pnt.z) * plane_norm.z)
+            / len_sq;
+        let projected = point - k * plane_norm;
+        if projected.is_finite() {
+            return Some(projected);
+        }
     }
-    let k = ((point.x - plane_pnt.x) * plane_norm.x
-        + (point.y - plane_pnt.y) * plane_norm.y
-        + (point.z - plane_pnt.z) * plane_norm.z)
-        / len_sq;
-    Some(point - k * plane_norm)
+    // the square or the step overflows: project along the unit normal
+    let n = *plane_norm.normalized()?;
+    let projected = point - (point - plane_pnt).dot(n) * n;
+    projected.is_finite().then_some(projected)
 }

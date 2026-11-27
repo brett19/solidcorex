@@ -4,7 +4,7 @@
 // `source/SMLib/inc/SmGeomUtility.h`.
 // Changes: degenerate and parallel cases, and answers that are not finite, give `None` in
 // place of `SolidError`s, NaNs and the pin's silent parameter 0; a direction whose squared
-// length overflows is measured scaled; a segment with an end not finite answers NaN; the
+// length overflows is measured scaled; a segment with no answer has parameter NaN; the
 // angle to the perpendicular is in radians; out-params are tuples. Results unchanged
 // otherwise (the degrees-to-radians change is at the facade).
 //! Lines and segments: closest points, distances and plane crossings.
@@ -29,11 +29,14 @@
 //!   and [`line_point_distance`] give `None` where upstream returns parameter 0 (the
 //!   line's "beginning"). A direction with a component not finite has none either. The
 //!   segment functions keep upstream's answer for a segment of zero length (its start),
-//!   since a point is a fine segment; a segment with an end not finite is no segment, and
-//!   its parameter is NaN (upstream's 0 came from the zero-direction branch).
+//!   since a point is a fine segment; with an input not finite, or a parameter past
+//!   `f64`'s range, the parameter is NaN (upstream's 0 came from the zero-direction
+//!   branch).
 //! - A direction whose `|v|²` overflows (components past `1e154`) still has a closest
 //!   point: the parameter is taken with `v / max |v_i|`. Upstream divides by the infinite
-//!   square and answers 0 or NaN.
+//!   square and answers 0 or NaN. Likewise a distance or an angle whose squares overflow
+//!   is taken scaled (upstream answers infinity or NaN), and a parameter or distance that
+//!   is not finite is `None`.
 //! - `smgu_LineLineClosestPoint` and `smgu_LinePlaneIntersect` fail with
 //!   `SM_ERR_INVALID_INPUT` for a zero direction or normal and `SM_ERR` for parallel
 //!   input; both are `None` here: neither is the caller's fault, the question has no
@@ -55,26 +58,49 @@ fn param_along(d: Vec3, v: Vec3) -> Option<f64> {
     if len_sq.is_nan() || len_sq < EFF_ZERO_SQ {
         return None;
     }
-    if len_sq.is_finite() {
-        return Some(d.dot(v) / len_sq);
+    let t = if len_sq.is_finite() {
+        d.dot(v) / len_sq
+    } else {
+        let scale = v.max_dimension();
+        if !scale.is_finite() {
+            return None;
+        }
+        let w = v / scale;
+        d.dot(w) / w.length_squared() / scale
+    };
+    t.is_finite().then_some(t)
+}
+
+/// `|v|`, taken at `v / max |v_i|` when `|v|²` overflows; infinite only when `|v|` is.
+fn length(v: Vec3) -> f64 {
+    let len = v.length();
+    if len.is_finite() || !v.is_finite() {
+        return len;
     }
+    v.length_and_unit().map_or(len, |(len, _)| len)
+}
+
+/// `v` scaled to `max |v_i| = 1` when `|v|²` overflows, else `v`: the same direction.
+fn in_range(v: Vec3) -> Vec3 {
     let scale = v.max_dimension();
-    if !scale.is_finite() {
-        return None;
+    if v.length_squared().is_finite() || !scale.is_finite() {
+        v
+    } else {
+        v / scale
     }
-    let w = v / scale;
-    Some(d.dot(w) / w.length_squared() / scale)
 }
 
 /// The parameter of the point of the line (`line_pnt`, `line_vec`) closest to `test_point`
-/// (`smgu_LineClosestPoint`); `None` when `line_vec` has no direction.
+/// (`smgu_LineClosestPoint`); `None` when `line_vec` has no direction or the parameter is
+/// not finite.
 #[must_use]
 pub fn line_closest_point(line_pnt: Point3, line_vec: Vec3, test_point: Point3) -> Option<f64> {
     param_along(test_point - line_pnt, line_vec)
 }
 
 /// The distance from `test_point` to the line and the parameter of its closest point
-/// (`smgu_LinePointDistance`); `None` when `line_vec` has no direction.
+/// (`smgu_LinePointDistance`); `None` when `line_vec` has no direction or an answer is not
+/// finite.
 #[must_use]
 pub fn line_point_distance(
     line_pnt: Point3,
@@ -83,7 +109,8 @@ pub fn line_point_distance(
 ) -> Option<(f64, f64)> {
     let param = param_along(test_point - line_pnt, line_vec)?;
     let pnt = line_pnt + param * line_vec;
-    Some((pnt.distance(test_point), param))
+    let distance = length(pnt - test_point);
+    distance.is_finite().then_some((distance, param))
 }
 
 /// The parameters `(t1, t2)` of the closest points of two lines
@@ -172,11 +199,12 @@ pub fn line_plane_intersect_uv(
 }
 
 /// The line parameter nearest `test_point`: 0 for a zero-length segment (its start), NaN
-/// for a segment with an end not finite.
+/// when there is no answer (an input not finite, or a parameter past `f64`'s range).
 fn line_param(line_start: Point3, line_vec: Vec3, test_point: Point3) -> f64 {
     match line_closest_point(line_start, line_vec, test_point) {
         Some(t) => t,
-        None if line_vec.is_finite() => 0.0,
+        // a point is a fine segment: its start
+        None if line_vec.is_finite() && line_vec.length_squared() < EFF_ZERO_SQ => 0.0,
         None => f64::NAN,
     }
 }
@@ -198,7 +226,7 @@ pub fn segment_point_distance(
     let line_vec = line_end - line_start;
     let param = segment_param(line_start, line_vec, test_point);
     let found_pnt = line_start + param * line_vec;
-    (found_pnt.distance(test_point), param)
+    (length(found_pnt - test_point), param)
 }
 
 /// How far `test_point` is from square to the segment where it is nearest it
@@ -225,7 +253,7 @@ pub fn segment_point_angle_to_perp(
         return (0.0, param);
     }
     // gap/segment angle (0 to pi); undefined only for a point on the line
-    let Ok(ang) = vec_to_pnt.angle_between(line_vec) else {
+    let Ok(ang) = in_range(vec_to_pnt).angle_between(in_range(line_vec)) else {
         return (0.0, param);
     };
     ((ang - HALF_PI).abs(), param)

@@ -26,9 +26,8 @@
 //!   upstream divides by the zero sine. So are diagonals with a component not finite
 //!   (distances not finite, or past `f64`'s range), where upstream answers it.
 //! - `smgu_TriangleDecomposition` squares the sides, so sides past `1e154` give NaN
-//!   upstream. Here such sides are scaled by `2^-512` (exactly) and the answer scaled back.
+//!   upstream. Here such sides are taken over the longest one and the answer scaled back.
 
-use scx_num::fmath::sin;
 use scx_num::math::{Point3, EFF_ZERO};
 use scx_num::tol::is_zero;
 use scx_num::vector3d::{sqrt, UnitVec3, Vec3};
@@ -69,10 +68,6 @@ pub fn triangle_area_squared(p0: Point3, p1: Point3, p2: Point3) -> f64 {
         / 4.0
 }
 
-/// `2^-512` and `2^512`: scaling by them is exact (above the subnormals).
-const DOWN: f64 = f64::from_bits((1023 - 512) << 52);
-const UP: f64 = f64::from_bits((1023 + 512) << 52);
-
 /// Where the apex of the triangle with these side lengths stands over its base
 /// (`smgu_TriangleDecomposition`): `(along, height)`, the distance along the base from its
 /// left end to the apex's foot and the apex's height. `None` for a zero base, legs no longer
@@ -91,24 +86,28 @@ pub fn triangle_decomposition(
     if legs.is_nan() || least.is_nan() || legs < least {
         return None;
     }
-    let q = (left_leg_length * left_leg_length
-        - right_leg_length * right_leg_length
-        - base_length * base_length)
-        / (-2.0 * base_length);
-    if q.is_infinite() || (q.is_nan() && legs.is_finite() && base_length.is_finite()) {
-        // a square overflowed: decompose the triangle scaled by 2^-512, exactly
-        return triangle_decomposition(
-            base_length * DOWN,
-            left_leg_length * DOWN,
-            right_leg_length * DOWN,
-        )
-        .map(|(along, height)| (along * UP, height * UP));
+    let (q, height) = apex_foot(base_length, left_leg_length, right_leg_length)?;
+    Some((base_length - q, height))
+}
+
+/// The apex foot's distance `q` from the base's right end and the apex height, or `None`
+/// when the foot is beyond the right leg. When a square overflows (sides past `1e154`),
+/// the sides are taken over the longest one and the answer scaled back.
+fn apex_foot(base: f64, left: f64, right: f64) -> Option<(f64, f64)> {
+    let q = (left * left - right * right - base * base) / (-2.0 * base);
+    let longest = base.abs().max(left.abs()).max(right.abs());
+    if !q.is_finite() && longest.is_finite() && [base, left, right].iter().all(|s| s.is_finite()) {
+        let (b, l, r) = (base / longest, left / longest, right / longest);
+        let q = (l * l - r * r - b * b) / (-2.0 * b);
+        if q.is_nan() || q.abs() > r {
+            return None;
+        }
+        return Some((q * longest, sqrt(r * r - q * q) * longest));
     }
-    if q.is_nan() || right_leg_length.is_nan() || q.abs() > right_leg_length {
+    if q.is_nan() || right.is_nan() || q.abs() > right {
         return None;
     }
-    let height = sqrt(right_leg_length * right_leg_length - q * q);
-    Some((base_length - q, height))
+    Some((q, sqrt(right * right - q * q)))
 }
 
 /// The two diagonals of the parallelogram with sides along `base` and `side`, its top and
@@ -125,7 +124,9 @@ pub fn parallelogram_cross_vectors(
 ) -> Option<(Vec3, Vec3)> {
     let base = *base.normalized()?;
     let side = *side.normalized()?;
-    let sine_angle = sin(base.angle_between(side).ok()?);
+    // the sine as `|base × side|`, which is 0 for parallel units (upstream's
+    // `sin(angle_between)` is `1.2e-16` at `π`)
+    let sine_angle = base.cross(side).length();
     // parallel sides span no parallelogram (upstream divides by zero)
     if sine_angle.is_nan() || sine_angle == 0.0 {
         return None;

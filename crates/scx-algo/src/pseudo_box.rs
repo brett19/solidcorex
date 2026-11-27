@@ -498,9 +498,10 @@ impl PseudoBox {
             (1, [(_, d), ..]) => d,
             // closest to the edge the two planes meet at
             (2, [(a, _), (b, _), _]) => match intersect_two_planes(&a, &b) {
+                // no closest point (`p` not finite) is no distance
                 Some(PlanesIntersection::Line { point, direction }) => {
-                    let t = line_closest_point(point, *direction, p).unwrap_or(0.0);
-                    (point + t * *direction).distance(p)
+                    line_closest_point(point, *direction, p)
+                        .map_or(f64::NAN, |t| (point + t * *direction).distance(p))
                 }
                 _ => outside,
             },

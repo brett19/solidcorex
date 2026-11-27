@@ -23,6 +23,7 @@ mod pin_truths;
 mod solvers;
 mod t_algo;
 mod t_extent;
+mod t_gutil;
 mod t_hash;
 mod t_interval;
 mod t_kraw;
