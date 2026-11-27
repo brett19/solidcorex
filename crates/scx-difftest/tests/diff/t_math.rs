@@ -16,6 +16,55 @@ diff!(
     || scx_num::domain::Clamp::Sample.half_width(),
     m::math::BOUNDED_INFINITE_PARAM
 );
+// A parameter domain's working range against the pin's `ApproximateUnbounded(0, half)` on the
+// extent whose missing ends are `SM_INFINITE_PARAMETER`: kind 0 has no end, 1 runs from `a`, 2
+// up to `a`, 3 is `[a, b]`. The rule is `Clamp::Sample` (the pin's 33) or `Clamp::Linear` of
+// reach `h`. An end the pin cannot hold (not finite, or its marker) is no domain on both sides.
+diff!(
+    domain_working,
+    pin_defect = crate::pin_defects::domain_working,
+    |kind: usize, a: f64, b: f64, h: f64, sample: bool| {
+        use scx_num::domain::{Clamp, ParamDomain, Reach};
+        let rule = if sample {
+            Some(Clamp::Sample)
+        } else {
+            Reach::new(h).map(Clamp::Linear)
+        };
+        let domain = crate::facade::plain_ends(&[a, b])
+            .then(|| match kind % 4 {
+                0 => Some(ParamDomain::Unbounded),
+                1 => ParamDomain::at_least(a),
+                2 => ParamDomain::at_most(a),
+                _ => scx_num::extent1d::Extent1d::new(a, b).map(ParamDomain::Bounded),
+            })
+            .flatten();
+        rule.zip(domain).map(|(r, d)| {
+            let e = d.working(r);
+            (e.min(), e.max())
+        })
+    },
+    {
+        use solidcore::geom::extent1d::Extent1d;
+        use solidcore::math::{BOUNDED_INFINITE_PARAM, INFINITE_PARAMETER as MARK};
+        let half = if sample {
+            Some(BOUNDED_INFINITE_PARAM)
+        } else {
+            (h.is_finite() && h > 0.0).then_some(h)
+        };
+        let ends = crate::facade::plain_ends(&[a, b])
+            .then(|| match kind % 4 {
+                0 => Some((-MARK, MARK)),
+                1 => Some((a, MARK)),
+                2 => Some((-MARK, a)),
+                _ => (a <= b).then_some((a, b)),
+            })
+            .flatten();
+        half.zip(ends).map(|(h, (lo, hi))| {
+            let e = Extent1d::from_min_max(lo, hi).approximate_unbounded(0.0, h);
+            (e.min(), e.max())
+        })
+    }
+);
 diff!(
     max2,
     truth_defect = crate::pin_truths::max2,

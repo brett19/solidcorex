@@ -6,7 +6,7 @@
 // database and type-code members stay in solidcore); adds `from_matrix`; the 3x3/4x4
 // helpers come from `crate::small_matrix`. Tests: `concat_invert_scale` drops its
 // `transform_simple` line (needs a placement); added `singular_axes_do_not_invert` and
-// `predicates_and_domain` (its domain line went with `natural_param_domain`).
+// `predicates_and_domain` (its domain is one `ParamDomain::Unbounded` per direction).
 //! General linear (4x4 matrix) transforms from a `uvw` parameter space to an `xyz`
 //! projection space, the simplest volume map.
 //!
@@ -25,6 +25,7 @@
 //! | `Drop` (implicit)                                 | `~SmTransform`                                        |
 //! | [`Transform::approx_eq`]                          | `operator==` (the transform's own members)            |
 //! | [`Transform::matrix`]                             | `m_adT` (field access)                                |
+//! | [`Transform::natural_param_domain`]               | `GetNaturalParamDomain` (an extent with marked ends)  |
 //! | [`Transform::to_origin`], [`Transform::to_disp`]  | `GetToOrigin`, `GetToDisp`                            |
 //! | [`Transform::to_x_axis`], [`Transform::to_y_axis`], [`Transform::to_z_axis`] | `GetToXAxis`, `GetToYAxis`, `GetToZAxis` |
 //! | [`Transform::set_to_origin`], [`Transform::set_to_disp`] | `SetToOrigin`, `SetToDisp` (vector and three-double forms) |
@@ -69,6 +70,7 @@
 //!   `RotateAboutAxis*`, `DecomposeToAngles`, ... listed in
 //!   `harness/callgraph/unused_functions.txt`) are not part of this unit.
 
+use crate::domain::ParamDomain;
 use crate::error::{NumError, Result};
 use crate::small_matrix::{inverse_3x3, inverse_4x4, mult_4x4};
 use crate::tol::is_zero;
@@ -146,6 +148,13 @@ impl Transform {
             .flatten()
             .zip(other.m.iter().flatten())
             .all(|(a, b)| is_zero(a - b))
+    }
+
+    /// The parameter domain: no end in any direction (`GetNaturalParamDomain`, whose
+    /// extent marks every end with `SM_INFINITE_PARAMETER`).
+    #[must_use]
+    pub const fn natural_param_domain(&self) -> [ParamDomain; 3] {
+        [ParamDomain::Unbounded; 3]
     }
 
     /// The image of the parameter origin, row 3 (`GetToOrigin`).
@@ -529,6 +538,7 @@ mod tests {
         let t = Transform::IDENTITY;
         assert!(!t.is_bounded_simple());
         assert!(t.is_curve_in_param_domain_simple());
+        assert_eq!(t.natural_param_domain(), [ParamDomain::Unbounded; 3]);
         assert_eq!(Transform::from_matrix(*t.matrix()), t);
     }
 }

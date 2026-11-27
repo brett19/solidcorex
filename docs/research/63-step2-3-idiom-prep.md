@@ -1268,6 +1268,27 @@ pub struct ReadError { pub at: usize, pub cause: ReadCause }
   beside `PeriodicExtent1d` so curves and surfaces share it; a `UvDomain` is one per direction.
   `ParamDomain::working(&self, rule: Clamp) -> Extent1d` gives the finite extent numeric work
   runs on. It depends on P0.
+  - **Built 11-27 (builder K).** Decisions taken in the build, for review:
+    - `scx_num::domain::ParamDomain`: `Periodic { period, base }`, `Bounded(Extent1d)`,
+      `AtLeast { from }`, `AtMost { to }`, `Unbounded`. The variants that carry numbers are
+      `#[non_exhaustive]` struct variants, so outside `scx-num` they are built only through
+      `periodic(period, base)`, `at_least(from)`, `at_most(to)` (each `-> Option`: ends finite,
+      period finite and above zero, `base + period` finite) and matched with `..`. *For
+      ruling:* struct variants where the brief wrote `AtLeast(f64)`; a `#[non_exhaustive]`
+      tuple variant cannot be matched outside its crate at all.
+    - `working(&self, rule: Clamp) -> Extent1d` is total. With `h = rule.half_width()`:
+      bounded gives its range, periodic `[base, base + period]`, unbounded `[-h, h]`; from
+      `a`, `[a, a + 2h]` when `a > -h`, else `[-h, h]`; up to `b`, `[b - 2h, b]` when `b < h`,
+      else `[-h, h]`. This is the pin's `ApproximateUnbounded(center = 0, half)`; the window
+      end saturates at `±f64::MAX` where the pin's overflows to infinity. No arithmetic is done
+      on a missing end, and a real end equal to `1234567` is not taken for a missing one
+      (the pin swaps such an end with its marker): pin defect `domain_working`.
+    - `UvDomain { u, v }` with `working(&self, u: Clamp, v: Clamp) -> Extent2d`: one rule
+      per direction, since a kind can grow linearly in one and as a square in the other.
+    - `Transform::natural_param_domain` is back as `[ParamDomain; 3]`, all `Unbounded`.
+    - *For ruling:* `scx-algo`'s `local_solve1d::Domain1d { Line, Bounded, Periodic }` overlaps
+      `ParamDomain` (a solver's search range, not a kind's domain); left as it is.
+    - `period()` is the only accessor; a kind's domain is matched, not queried.
 - **Testkit additions (T1-T8)**, from the sections above. Each is an independent builder task on
   `scx-testkit`:
 

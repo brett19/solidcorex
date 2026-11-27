@@ -1634,3 +1634,34 @@ pub fn nurbs_bezier_split() -> PinDefect<(At,), Pieces> {
         },
     }
 }
+
+// ---- Parameter domains (`t_math`) -----------------------------------------------------------
+
+/// A domain kind, its ends, the reach and whether the rule is `Clamp::Sample`.
+type DomainIn = (usize, f64, f64, f64, bool);
+
+/// `ParamDomain::working`: where the pin's marked extent cannot hold the domain (a one-sided
+/// end past the marker `±1234567` swaps with it) or its window end overflows (`a + 2h` past
+/// `f64::MAX` is infinite), the check computes the window from the rule: `[a, a + 2h]` from
+/// `a > -h`, `[b - 2h, b]` up to `b < h`, `[-h, h]` otherwise, ends saturated at `±f64::MAX`.
+pub fn domain_working() -> PinDefect<DomainIn, Option<(f64, f64)>> {
+    PinDefect {
+        reason: "the pin's marked extent swaps an end past its marker and overflows a window",
+        applies: Applies::Disagreeing,
+        check: |&(kind, a, b, h, sample), r| {
+            let h = if sample { 33.0 } else { h };
+            let sat = |x: f64| x.clamp(-f64::MAX, f64::MAX);
+            let want = match kind % 4 {
+                0 => (-h, h),
+                1 if a > -h => (a, sat(a + 2.0 * h)),
+                2 if a < h => (sat(a - 2.0 * h), a),
+                1 | 2 => (-h, h),
+                _ => (a, b),
+            };
+            match r {
+                Some(got) if *got == want => Ok(()),
+                _ => Err(format!("want {want:?}, not {r:?}")),
+            }
+        },
+    }
+}
