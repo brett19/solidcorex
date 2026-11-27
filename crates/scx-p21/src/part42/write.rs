@@ -35,9 +35,9 @@
 //! other).
 
 use super::geom::{
-    Associated, Axis1, BSplineCurve, BSplineSurface, Curve, CurveForm, KnotSpec, Logical, Pcurve,
-    Placement, PreferredRep, Surface, SurfaceCurveKind, SurfaceForm, Trim, TrimPreference, Vector,
-    P3,
+    Associated, Axis1, BSplineCurve, BSplineSurface, Curve, CurveForm, KnotSpec, Logical, P3,
+    Pcurve, Placement, PreferredRep, Surface, SurfaceCurveKind, SurfaceForm, Trim, TrimPreference,
+    Vector,
 };
 use crate::error::{NoPart42Form, P21Error, Refusal, Unwritable};
 use crate::exchange::{Instance, Param, Record};

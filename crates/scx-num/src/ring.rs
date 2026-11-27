@@ -57,21 +57,13 @@ pub trait TayScalar: Ring {
 /// `smos_Min(a, b)`: `(a < b) ? a : b`.
 #[inline]
 fn smin(a: f64, b: f64) -> f64 {
-    if a < b {
-        a
-    } else {
-        b
-    }
+    if a < b { a } else { b }
 }
 
 /// `smos_Max(a, b)`: `(a > b) ? a : b`.
 #[inline]
 fn smax(a: f64, b: f64) -> f64 {
-    if a > b {
-        a
-    } else {
-        b
-    }
+    if a > b { a } else { b }
 }
 
 /// `sm_Acos(double)`: the arc cosine of x clamped to [-1, 1].

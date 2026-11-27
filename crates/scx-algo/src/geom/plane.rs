@@ -38,7 +38,7 @@
 //!   with `|n|² < SM_EFF_ZERO_SQ` or a component not finite gives `None`, and an
 //!   overflowing one is projected along by its unit.
 
-use scx_num::math::{Point3, EFF_ZERO, EFF_ZERO_SQ};
+use scx_num::math::{EFF_ZERO, EFF_ZERO_SQ, Point3};
 use scx_num::vector3d::{UnitVec3, Vec3};
 
 /// A plane through `point` with unit `normal`.

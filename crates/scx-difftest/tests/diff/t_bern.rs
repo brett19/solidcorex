@@ -162,7 +162,7 @@ diff!(bern_roots, |c: List<f64>, lo: f64, hi: f64| {
 
 diff!(bern_roots_shapes, |p: BernR, d: usize| {
     // each recipe's coefficients as one polynomial, on [0, 1] and on a shifted interval
-    let c = &p.0 .2;
+    let c = &p.0.2;
     (
         m::bern::roots(c, 0.0, 1.0, 48, 4096),
         m::bern::roots(c, -2.0, 0.5, 48, 4096),
@@ -184,7 +184,7 @@ diff!(bern_roots_known, |k: usize| {
 /// Exact arithmetic over the scx side alone.
 mod truth {
     use scx_algo::bernstein::{
-        bernstein_roots, binomial, Bernstein2, Bounded, Half, RootLimits, MAX_DEGREE,
+        Bernstein2, Bounded, Half, MAX_DEGREE, RootLimits, bernstein_roots, binomial,
     };
     use scx_num::fmath;
     use scx_testkit::Rat;

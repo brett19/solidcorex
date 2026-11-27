@@ -13,8 +13,8 @@
 )]
 
 use scx_num::hash::Rng;
-use scx_testkit::dd::Dd;
 use scx_testkit::Rat;
+use scx_testkit::dd::Dd;
 
 fn r(x: f64) -> Rat {
     Rat::from_f64(x).unwrap()
@@ -25,11 +25,7 @@ fn double(rng: &mut Rng, lo: i32, hi: i32) -> f64 {
     let e = lo + (rng.next_u64() % (hi - lo + 1) as u64) as i32;
     let m = 1.0 + rng.next_f64();
     let x = m * scx_testkit::dd::scale(1.0, e);
-    if rng.next_u64() & 1 == 0 {
-        x
-    } else {
-        -x
-    }
+    if rng.next_u64() & 1 == 0 { x } else { -x }
 }
 
 fn same(a: f64, b: f64) -> bool {

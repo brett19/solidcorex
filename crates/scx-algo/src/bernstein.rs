@@ -62,6 +62,7 @@
 //! Deviations: none (new code). Degrees are bounded by [`MAX_DEGREE`].
 
 use scx_num::certified::gamma;
+use scx_num::error::Invalid;
 use scx_num::vector3d::Vec3;
 use scx_num::{NumError, Result};
 use std::sync::OnceLock;
@@ -74,7 +75,7 @@ pub const OP: &str = "offset::construction::bernstein";
 /// rational septic net, `q1 (x2 + c^2)` of degree 100.
 pub const MAX_DEGREE: usize = 128;
 
-const fn invalid(reason: &'static str) -> NumError {
+const fn invalid(reason: Invalid) -> NumError {
     NumError::invalid_input(OP, reason)
 }
 
@@ -157,10 +158,10 @@ impl Bernstein2 {
     /// exceeds [`MAX_DEGREE`].
     pub fn new(du: usize, dv: usize, c: Vec<f64>) -> Result<Self> {
         if du > MAX_DEGREE || dv > MAX_DEGREE {
-            return Err(invalid("Bernstein degree too large"));
+            return Err(invalid(Invalid::Unrepresentable));
         }
         if c.len() != (du + 1) * (dv + 1) {
-            return Err(invalid("Bernstein coefficient count"));
+            return Err(invalid(Invalid::SizeMismatch));
         }
         Ok(Self { du, dv, c })
     }
@@ -227,7 +228,7 @@ impl Bernstein2 {
     pub fn mul(&self, other: &Self) -> Result<Self> {
         let (du, dv) = (self.du + other.du, self.dv + other.dv);
         if du > MAX_DEGREE || dv > MAX_DEGREE {
-            return Err(invalid("Bernstein product degree too large"));
+            return Err(invalid(Invalid::Unrepresentable));
         }
         let mut out = vec![0.0; (du + 1) * (dv + 1)];
         for (ia, ra) in self.rows().enumerate() {
@@ -259,7 +260,7 @@ impl Bernstein2 {
     /// `InvalidInput` for a degree below the polynomial's own or above [`MAX_DEGREE`].
     pub fn elevate(&self, du: usize, dv: usize) -> Result<Self> {
         if du < self.du || dv < self.dv {
-            return Err(invalid("Bernstein elevation below the degree"));
+            return Err(invalid(Invalid::SizeMismatch));
         }
         if du == self.du && dv == self.dv {
             return Ok(self.clone());

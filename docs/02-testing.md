@@ -184,7 +184,6 @@ count of cells filled, as reported by the test harness's own `FaceCell` wrappers
 - **Fixtures built in code** by `scx-testkit`, not read from large files, and shared: a finished body is
   immutable, so one can be built once and used by many tests. Corpus data is permissive-licence only.
 
-<<<<<<< HEAD
 ### 8.1 Benchmarks (`scx-bench`)
 
 Added 11-27 (proposed; 04 §3). scx against the pin, case by case: wall time with criterion,
@@ -244,7 +243,7 @@ instruction counts with gungraun under valgrind's callgrind.
     the same with `--baseline before`. Quote criterion's confidence interval, not a best of N.
     A case is slower only where the intervals do not overlap.
   - Both are local evidence, never a gate: section 7's counts are the gate.
-=======
+
 ## 8a. CI
 
 `.github/workflows/ci.yml` runs on every push and pull request, read-only (`contents: read`; it cannot
@@ -253,7 +252,7 @@ push or publish). A builder pushes a branch and the owner reviews the design, no
 | Job | What |
 |---|---|
 | `fast` | `cargo xtask fast` (fmt, clippy `-D warnings`, layers, headers, pin, tier-1 tests), then `clippy --workspace --all-targets -D warnings`, which adds `scx-difftest` |
-| `xplat` | the golden hash tests (`fmath_pin`, `xplat_pin`) on `wasm32-wasip1` under wasmtime and on aarch64 (GitHub's native `ubuntu-24.04-arm` runner). The aarch64 leg is `continue-on-error` until the aarch64 `powi` fix merges (TODO in the workflow) |
+| `xplat` | the golden hash tests (`fmath_pin`, `xplat_pin`) on `wasm32-wasip1` under wasmtime and on aarch64 (GitHub's native `ubuntu-24.04-arm` runner). Both legs are hard checks |
 | `difftest` | `cargo test -p scx-difftest`, the full pin comparison |
 | `bench-compile` | `cargo check --benches -p scx-bench`, with the pin checked out (section 8.1) |
 
@@ -263,7 +262,6 @@ tree (`c5c43059c9`). Its commit hash differs from the pin's, so the difftest bui
 `cargo xtask pin` accept either the pin commit or that tree. Every job that loads the workspace needs
 it, because cargo reads `scx-difftest`'s manifest even to test another crate. The toolchain comes from
 `rust-toolchain.toml`; `Swatinem/rust-cache` keeps the registry and `target/`.
->>>>>>> main
 
 ## 9. What replaces the goldens
 

@@ -18,7 +18,7 @@
 //! promise, and the weights to their exact rational values.
 
 use crate::diff;
-use crate::odes::{Cfg, OClass, Rec, FUNCS, OCLASSES, QUADRATURES};
+use crate::odes::{Cfg, FUNCS, OCLASSES, OClass, QUADRATURES, Rec};
 use scx_num::math::EFF_ZERO_SQ;
 
 /// Calls swept per configuration.
@@ -433,12 +433,12 @@ ode_diff!(quad_intervals, |a: f64, b: f64| {
 
 /// The truths: scx alone, against closed forms and exact rationals.
 mod truths {
-    use crate::odes::{x as od, OErr, Rec};
+    use crate::odes::{OErr, Rec, x as od};
     use scx_algo::error::{EvalError, SolveError, SolveFailure, StepControlFailure};
     use scx_algo::ode::{
-        self, OdeIntegrator, Quadrature, StepEstimate, DIVIDED_DIFFERENCE_5,
-        EMBEDDED_ERROR_WEIGHTS, FIFTH_ORDER_ERROR_ON_S5, OP, OP_INTEGRAND, OP_STEP_CONTROL,
-        QUADRATURE_ERROR_WEIGHTS,
+        self, DIVIDED_DIFFERENCE_5, EMBEDDED_ERROR_WEIGHTS, FIFTH_ORDER_ERROR_ON_S5, OP,
+        OP_INTEGRAND, OP_STEP_CONTROL, OdeIntegrator, QUADRATURE_ERROR_WEIGHTS, Quadrature,
+        StepEstimate,
     };
     use scx_num::fmath;
     use scx_num::math::PI;
@@ -792,18 +792,8 @@ mod truths {
         };
         let r = q.integrate(0.0, 1.0, |_| Err::<f64, _>(fail()));
         assert!(matches!(r, Err(SolveError::Eval(_))));
-        let r =
-            Quadrature::new(1e-6).integrate(
-                0.0,
-                1.0,
-                |t| {
-                    if t > 0.0 {
-                        Err(fail())
-                    } else {
-                        Ok(1.0)
-                    }
-                },
-            );
+        let r = Quadrature::new(1e-6)
+            .integrate(0.0, 1.0, |t| if t > 0.0 { Err(fail()) } else { Ok(1.0) });
         assert!(matches!(
             r,
             Err(SolveError::CallFailed { operation: OP, .. })
@@ -816,11 +806,7 @@ mod truths {
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     struct Q(i128, i128);
     fn gcd(a: i128, b: i128) -> i128 {
-        if b == 0 {
-            a.abs()
-        } else {
-            gcd(b, a % b)
-        }
+        if b == 0 { a.abs() } else { gcd(b, a % b) }
     }
     impl Q {
         fn new(n: i128, d: i128) -> Self {

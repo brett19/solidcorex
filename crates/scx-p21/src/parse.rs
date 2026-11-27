@@ -50,7 +50,7 @@ use std::collections::HashSet;
 
 use scx_num::hash::FixedState;
 
-use crate::error::{Counted, P21Error, Refusal, Syntax, Warning};
+use crate::error::{Counted, Limit, P21Error, Refusal, Syntax, Warning};
 use crate::exchange::{DataSection, Exchange, Header, Instance, Param, Record};
 use crate::text;
 
@@ -74,11 +74,7 @@ const MAX_COUNT: usize = if cfg!(target_pointer_width = "32") {
 
 /// `n`, at most [`MAX_COUNT`] (a no-op on 64-bit targets).
 const fn at_most_max_count(n: usize) -> usize {
-    if n < MAX_COUNT {
-        n
-    } else {
-        MAX_COUNT
-    }
+    if n < MAX_COUNT { n } else { MAX_COUNT }
 }
 
 /// The deepest parameter nesting read.
@@ -157,13 +153,13 @@ impl Limits {
     }
 }
 
-/// Whether reading a text of `len` bytes fits in `memory` bytes; [`Refusal::NeedsMemory`],
+/// Whether reading a text of `len` bytes fits in `memory` bytes; [`Limit::NeedsMemory`],
 /// naming [`PEAK_PER_BYTE`] times `len`, when it does not. A caller can ask before it reads
 /// the file.
 pub fn check_memory(len: usize, memory: usize) -> Result<(), P21Error> {
     let needed = len.saturating_mul(PEAK_PER_BYTE);
     if needed > memory {
-        return Err(Refusal::NeedsMemory {
+        return Err(Limit::NeedsMemory {
             needed,
             available: memory,
         }
@@ -209,7 +205,7 @@ pub fn parse(text: &str) -> Result<Parsed, P21Error> {
 /// Read `text` under `limits`, telling `progress` how far it is.
 pub fn parse_with(text: &str, limits: Limits, progress: &dyn Progress) -> Result<Parsed, P21Error> {
     if text.len() > limits.bytes {
-        return Err(Refusal::TooLarge {
+        return Err(Limit::TooLarge {
             bytes: text.len(),
             limit: limits.bytes,
         }
@@ -403,11 +399,7 @@ impl Lexer<'_> {
         let x = if t.ends_with('.') || t.contains(".E") || t.contains(".e") {
             fixed = {
                 let f = t.replace(".E", ".0E").replace(".e", ".0e");
-                if f.ends_with('.') {
-                    f + "0"
-                } else {
-                    f
-                }
+                if f.ends_with('.') { f + "0" } else { f }
             };
             fixed.parse::<f64>()
         } else {
@@ -512,7 +504,7 @@ impl Lexer<'_> {
             return self.fail(Syntax::NestedTooDeeply { limit: MAX_DEPTH });
         }
         if self.params >= self.limits.params {
-            return Err(Refusal::TooMany {
+            return Err(Limit::TooMany {
                 what: Counted::Params,
                 limit: self.limits.params,
             }
@@ -593,7 +585,7 @@ impl Lexer<'_> {
 
     fn record(&mut self) -> Result<Record, P21Error> {
         if self.records >= self.limits.records {
-            return Err(Refusal::TooMany {
+            return Err(Limit::TooMany {
                 what: Counted::Records,
                 limit: self.limits.records,
             }
@@ -677,7 +669,7 @@ impl Lexer<'_> {
 
     /// Count an instance against the limit and ask the progress watcher.
     fn count(&mut self) -> Result<(), P21Error> {
-        if self.instances % PROGRESS_EVERY == 0 {
+        if self.instances.is_multiple_of(PROGRESS_EVERY) {
             if self.progress.stop() {
                 return Err(P21Error::Cancelled);
             }
@@ -685,7 +677,7 @@ impl Lexer<'_> {
         }
         // A repeated id's records were read too, so it counts as an instance.
         if self.instances >= self.limits.instances {
-            return Err(Refusal::TooMany {
+            return Err(Limit::TooMany {
                 what: Counted::Instances,
                 limit: self.limits.instances,
             }

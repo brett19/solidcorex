@@ -67,8 +67,8 @@
 
 use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use crate::error::{NumError, Result};
-use crate::math::{Vec3, EFF_ZERO, EFF_ZERO_SQ, PI};
+use crate::error::{Invalid, NumError, Result};
+use crate::math::{EFF_ZERO, EFF_ZERO_SQ, PI, Vec3};
 use crate::tol;
 use crate::vector3d::{acos as sm_acos, asin as sm_asin, sqrt as sm_sqrt};
 
@@ -307,7 +307,7 @@ impl Vec2 {
         if tol::is_zero_squared(v1_len_sq) || tol::is_zero_squared(v2_len_sq) {
             return Err(NumError::InvalidInput {
                 operation: "geom::vector2d::Vec2::angle_between",
-                reason: "zero-length vector",
+                reason: Invalid::ZeroLength,
             });
         }
         let dot_prep = self.dot(o);

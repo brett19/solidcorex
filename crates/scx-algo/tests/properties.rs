@@ -47,11 +47,7 @@ fn rel_residual(c: &[f64], x: f64) -> f64 {
         s += (a * p).abs();
         p *= x;
     }
-    if s == 0.0 {
-        0.0
-    } else {
-        v.abs() / s
-    }
+    if s == 0.0 { 0.0 } else { v.abs() / s }
 }
 
 fn arr<const N: usize>(c: &[f64]) -> [f64; N] {

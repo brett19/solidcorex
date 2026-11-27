@@ -51,7 +51,7 @@
 //!   reads the empty extent's own `max - min` and takes the full period.
 
 use crate::error::NumFailure;
-use crate::error::{NumError, Result};
+use crate::error::{Invalid, NumError, Result};
 use crate::math::BIG_DOUBLE;
 use crate::tol::{self, ScaledZero};
 
@@ -438,7 +438,7 @@ impl PeriodicExtent1d {
         if bad {
             return Err(NumError::InvalidInput {
                 operation: "geom::periodic_extent1d::PeriodicExtent1d::set_min_max",
-                reason: "min and max are not both within [0, period]",
+                reason: Invalid::OutsidePeriod,
             });
         }
         Ok(())

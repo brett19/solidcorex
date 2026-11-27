@@ -46,7 +46,7 @@
 //!   returns radians (`|angle - π/2|`, from the same `AngleBetween`).
 
 use scx_num::extent1d::Extent1d;
-use scx_num::math::{Point3, EFF_ZERO, EFF_ZERO_SQ, HALF_PI};
+use scx_num::math::{EFF_ZERO, EFF_ZERO_SQ, HALF_PI, Point3};
 use scx_num::vector3d::Vec3;
 
 /// `d · v / |v|²`: how many `v`s `d` reaches along `v`; `None` when `v` has no direction

@@ -14,8 +14,8 @@
 //! app's.
 
 use core::num::NonZeroUsize;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Runs `n` independent items (C11).
 pub trait Executor: Sync {
@@ -101,7 +101,7 @@ pub fn map<T: Send + Sync>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use scx_num::hash::{mix, Rng};
+    use scx_num::hash::{Rng, mix};
 
     fn work(i: usize) -> u64 {
         let mut r = Rng::new(mix(&[0x5EED, i as u64]));

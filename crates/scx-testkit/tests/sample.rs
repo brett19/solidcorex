@@ -11,7 +11,7 @@
 )]
 
 use scx_num::hash::Rng;
-use scx_testkit::gen::{self, Knots, Spec, Weights};
+use scx_testkit::sample::{self, Knots, Spec, Weights};
 
 fn spec(degree: usize, count: usize, knots: Knots) -> Spec {
     Spec {
@@ -25,14 +25,14 @@ fn spec(degree: usize, count: usize, knots: Knots) -> Spec {
 fn equal_seeds_give_equal_data() {
     let make = |seed| {
         let mut rng = Rng::new(seed);
-        let c = gen::curve::<3>(&mut rng, spec(3, 9, Knots::Clustered), Weights::NearZero);
-        let s = gen::surface::<4>(
+        let c = sample::curve::<3>(&mut rng, spec(3, 9, Knots::Clustered), Weights::NearZero);
+        let s = sample::surface::<4>(
             &mut rng,
             (spec(2, 5, Knots::Multiple), spec(1, 3, Knots::Random)),
             Weights::Moderate,
         );
-        let u = gen::parameter(&mut rng, &c.knots, (0.0, 1.0));
-        (c, s, u, gen::frame(&mut rng, 1.0))
+        let u = sample::parameter(&mut rng, &c.knots, (0.0, 1.0));
+        (c, s, u, sample::frame(&mut rng, 1.0))
     };
     assert_eq!(make(7), make(7));
     assert_ne!(make(7), make(8));
@@ -55,7 +55,7 @@ fn generated_data_is_valid_and_ill_conditioned_where_asked() {
             Knots::Multiple,
         ] {
             for weights in [Weights::Unit, Weights::Moderate, Weights::NearZero] {
-                let c = gen::curve::<2>(&mut rng, spec(degree, count, knots), weights);
+                let c = sample::curve::<2>(&mut rng, spec(degree, count, knots), weights);
                 assert!(c.exact().is_ok(), "{c:?}");
                 assert_eq!(c.knots.first(), Some(&0.0));
                 assert_eq!(c.knots.last(), Some(&1.0));
@@ -86,7 +86,7 @@ fn parameters_land_on_and_beside_the_knots() {
     let knots = [0.0, 0.0, 0.25, 0.5, 0.5, 1.0, 1.0];
     let (mut on, mut beside) = (0, 0);
     for _ in 0..1000 {
-        let u = gen::parameter(&mut rng, &knots, (0.0, 1.0));
+        let u = sample::parameter(&mut rng, &knots, (0.0, 1.0));
         assert!((0.0..=1.0).contains(&u));
         if knots.contains(&u) {
             on += 1;

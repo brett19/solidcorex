@@ -33,7 +33,7 @@
 use scx_num::error::Result;
 use scx_num::math::Point3;
 use scx_num::matrix::Matrix;
-use scx_num::vector3d::{sqrt, UnitVec3, Vec3};
+use scx_num::vector3d::{UnitVec3, Vec3, sqrt};
 
 use crate::geom::line::line_point_distance;
 
@@ -73,14 +73,14 @@ pub fn best_fit_point(points: &[Point3], tol_3d: f64) -> PointFit {
                 set_type: PointSetType::Void,
                 center: Point3::ORIGIN,
                 max_gap: 0.0,
-            }
+            };
         }
         [only] => {
             return PointFit {
                 set_type: PointSetType::PointSized,
                 center: *only,
                 max_gap: 0.0,
-            }
+            };
         }
         _ => {}
     }

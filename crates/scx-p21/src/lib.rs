@@ -24,9 +24,9 @@ mod text;
 pub mod units;
 pub mod write;
 
-pub use error::{P21Error, Refusal, Syntax, Warning};
+pub use error::{Limit, P21Error, Refusal, Syntax, Warning};
 pub use exchange::{
     DataSection, Exchange, FileDescription, FileName, Header, Instance, Param, Record,
 };
-pub use parse::{check_memory, parse, parse_with, Limits, Parsed, Progress, Unwatched};
-pub use write::{write, write_into, Writer};
+pub use parse::{Limits, Parsed, Progress, Unwatched, check_memory, parse, parse_with};
+pub use write::{Writer, write, write_into};

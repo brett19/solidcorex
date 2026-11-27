@@ -20,16 +20,23 @@ use core::fmt;
 
 use scx_num::extent1d::Extent1d;
 
-use crate::basis::{check_order, derivs_into, values_into, FULL, SMALL};
+use crate::basis::{FULL, SMALL, check_order, derivs_into, values_into};
 use crate::bezier::{elevate_into, elevation_matrix};
 use crate::point::{Control, Weighted};
-use crate::{Approach, KnotVector, NurbsError, Result, MAX_DEGREE};
+use crate::{Approach, KnotVector, MAX_DEGREE, NurbsError, Result};
+
+/// A control point, knot or scratch index the built curve's invariants rule out: a bug.
+const MISSING_POINT: NurbsError = NurbsError::Defect {
+    why: "a curve routine read an index its counts rule out",
+};
 
 /// A NURBS curve in `D` dimensions: a [`KnotVector`] of degree `p`, `m - p` control points,
 /// and for a rational curve one positive weight per point.
 ///
-/// Built only by [`NurbsCurve::new`] or [`NurbsCurve::from_homogeneous`], which check the
-/// counts, that every coordinate is finite and that every weight is positive and finite.
+/// Built only by [`NurbsCurve::new`] or [`NurbsCurve::from_homogeneous`], which check that
+/// no interior knot repeats more than `p` times (the curve is C0,
+/// [`KnotVector::check_continuous`]), the counts, that every coordinate is finite and that
+/// every weight is positive and finite.
 /// Outside the domain the curve continues each end piece.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NurbsCurve<const D: usize> {
@@ -53,6 +60,7 @@ impl<const D: usize> NurbsCurve<D> {
         points: Vec<[f64; D]>,
         weights: Option<Vec<f64>>,
     ) -> Result<Self> {
+        knots.check_continuous()?;
         check_points(&knots, &points)?;
         let rational = match weights {
             None => None,
@@ -81,6 +89,7 @@ impl<const D: usize> NurbsCurve<D> {
         weighted: Vec<[f64; D]>,
         weights: Vec<f64>,
     ) -> Result<Self> {
+        knots.check_continuous()?;
         check_points(&knots, &weighted)?;
         check_weights(&weights, weighted.len())?;
         let points: Vec<[f64; D]> = weighted
@@ -156,7 +165,7 @@ impl<const D: usize> NurbsCurve<D> {
         } else {
             self.point_n::<FULL>(u, span)
         };
-        point
+        Some(point.ok_or(MISSING_POINT)?)
             .filter(|c| c.iter().all(|x| x.is_finite()))
             .ok_or(NurbsError::Degenerate { parameter: u })
     }
@@ -205,7 +214,7 @@ impl<const D: usize> NurbsCurve<D> {
         } else {
             self.derivs_n::<FULL, K>(u, span)
         };
-        derivs
+        Some(derivs.ok_or(MISSING_POINT)?)
             .filter(|c| c.iter().flatten().all(|x| x.is_finite()))
             .ok_or(NurbsError::Degenerate { parameter: u })
     }
@@ -279,7 +288,6 @@ impl<const D: usize> NurbsCurve<D> {
         }
         let knots = self.knots.inserted(u, times)?;
         let span = self.knots.span_of(u, Approach::Above);
-        let degenerate = NurbsError::Degenerate { parameter: u };
         let plan = Insertion {
             knots: self.knots.knots(),
             degree: self.degree(),
@@ -290,14 +298,14 @@ impl<const D: usize> NurbsCurve<D> {
         };
         match &self.rational {
             None => {
-                let points = plan.points(&self.points).ok_or(degenerate)?;
+                let points = plan.points(&self.points).ok_or(MISSING_POINT)?;
                 Self::new(knots, points, None)
             }
             Some(r) => {
                 let (weighted, weights) = plan
                     .points(&r.homogeneous())
                     .map(split_weights)
-                    .ok_or(degenerate)?;
+                    .ok_or(MISSING_POINT)?;
                 Self::from_homogeneous(knots, weighted, weights)
             }
         }
@@ -324,15 +332,14 @@ impl<const D: usize> NurbsCurve<D> {
         let right_knots = KnotVector::new(p, ends.chain(above.iter().copied()).collect())?;
         let left_count = left_knots.point_count();
         let right_from = full.points.len() - right_knots.point_count();
-        let degenerate = NurbsError::Degenerate { parameter: u };
         let piece = |knots: KnotVector, range: core::ops::Range<usize>| match &full.rational {
             None => {
-                let points = full.points.get(range).ok_or(degenerate)?;
+                let points = full.points.get(range).ok_or(MISSING_POINT)?;
                 Self::new(knots, points.to_vec(), None)
             }
             Some(r) => {
-                let weighted = r.weighted.get(range.clone()).ok_or(degenerate)?;
-                let weights = r.weights.get(range).ok_or(degenerate)?;
+                let weighted = r.weighted.get(range.clone()).ok_or(MISSING_POINT)?;
+                let weights = r.weights.get(range).ok_or(MISSING_POINT)?;
                 Self::from_homogeneous(knots, weighted.to_vec(), weights.to_vec())
             }
         };
@@ -345,8 +352,8 @@ impl<const D: usize> NurbsCurve<D> {
     /// The same curve with its degree raised by `times` (A5.9): every distinct knot gains
     /// `times` in multiplicity, so the continuity at each is kept.
     ///
-    /// The end knots must have multiplicity `p + 1` ([`NurbsError::Unclamped`]), no interior
-    /// knot may have multiplicity above `p`, and `p + times` must not exceed
+    /// The end knots must have multiplicity `p + 1` ([`NurbsError::Unclamped`]), and
+    /// `p + times` must not exceed
     /// [`MAX_DEGREE`](crate::MAX_DEGREE).
     ///
     /// Accuracy: A5.9 removes the knots it inserted by extrapolating across neighbouring
@@ -365,18 +372,6 @@ impl<const D: usize> NurbsCurve<D> {
         if !self.knots.is_clamped() {
             return Err(NurbsError::Unclamped);
         }
-        let (low, high) = self.knots.ends();
-        if let Some((knot, multiplicity)) = self
-            .knots
-            .breakpoints()
-            .find(|&(k, mult)| k != low && k != high && mult > p)
-        {
-            return Err(NurbsError::Multiplicity {
-                knot,
-                multiplicity,
-                max: p,
-            });
-        }
         if times == 0 {
             return Ok(self.clone());
         }
@@ -388,18 +383,17 @@ impl<const D: usize> NurbsCurve<D> {
             spans: self.knots.span_count(),
             matrix: &dm,
         };
-        let degenerate = NurbsError::Degenerate { parameter: low };
         let lost = |e| match e {
             NurbsError::PointNotFinite { .. } | NurbsError::Weight { .. } => NurbsError::Unstable,
             e => e,
         };
         match &self.rational {
             None => {
-                let (points, knots) = plan.points(&self.points).ok_or(degenerate)?;
+                let (points, knots) = plan.points(&self.points).ok_or(MISSING_POINT)?;
                 Self::new(KnotVector::new(p + times, knots)?, points, None).map_err(lost)
             }
             Some(r) => {
-                let (points, knots) = plan.points(&r.homogeneous()).ok_or(degenerate)?;
+                let (points, knots) = plan.points(&r.homogeneous()).ok_or(MISSING_POINT)?;
                 let (weighted, weights) = split_weights(points);
                 Self::from_homogeneous(KnotVector::new(p + times, knots)?, weighted, weights)
                     .map_err(lost)
@@ -710,8 +704,8 @@ impl<const D: usize> fmt::Display for NurbsCurve<D> {
 mod tests {
     use super::*;
     use scx_num::hash::Rng;
-    use scx_testkit::gen::{self, Knots, Spec, Weights};
     use scx_testkit::nurbs as tk;
+    use scx_testkit::sample::{self, Knots, Spec, Weights};
 
     const SIDES: [(Approach, tk::Side); 2] = [
         (Approach::Below, tk::Side::Below),
@@ -723,7 +717,16 @@ mod tests {
         NurbsCurve::new(knots, d.points.clone(), d.weights.clone()).unwrap()
     }
 
-    /// Random curves of every knot and weight kind, degrees 1..=5 and 9 (the wide kernel).
+    /// Whether an interior knot repeats `p + 1` times (`Knots::Multiple` makes some).
+    fn has_break(d: &scx_testkit::data::CurveData<3>) -> bool {
+        d.knots
+            .iter()
+            .filter(|&&k| k > 0.0 && k < 1.0)
+            .any(|&k| d.knots.iter().filter(|&&x| x == k).count() > d.degree)
+    }
+
+    /// Random curves of every knot and weight kind, degrees 1..=5 and 9 (the wide kernel);
+    /// the tests skip those [`has_break`] picks, which are not curves.
     fn curves(seed: u64) -> Vec<scx_testkit::data::CurveData<3>> {
         let mut rng = Rng::new(seed);
         let mut out = Vec::new();
@@ -740,7 +743,7 @@ mod tests {
                         count: degree + 4,
                         knots,
                     };
-                    out.push(gen::curve(&mut rng, spec, weights));
+                    out.push(sample::curve(&mut rng, spec, weights));
                 }
             }
         }
@@ -757,11 +760,11 @@ mod tests {
     #[test]
     fn points_and_derivatives_match_the_exact_curve() {
         let mut rng = Rng::new(7);
-        for data in curves(1) {
+        for data in curves(1).into_iter().filter(|d| !has_break(d)) {
             let c = ours(&data);
             let exact = data.exact().unwrap();
             for _ in 0..3 {
-                let u = gen::parameter(&mut rng, &data.knots, (-0.1, 1.1));
+                let u = sample::parameter(&mut rng, &data.knots, (-0.1, 1.1));
                 for (side, tside) in SIDES {
                     let want = exact.derivs(u, tside, 3).unwrap();
                     let d = c.derivs::<4>(u, side).unwrap();
@@ -791,7 +794,7 @@ mod tests {
 
     #[test]
     fn domain_ends_are_the_end_points() {
-        for data in curves(2) {
+        for data in curves(2).into_iter().filter(|d| !has_break(d)) {
             let c = ours(&data);
             let (first, last) = (c.points()[0], *c.points().last().unwrap());
             for side in [Approach::Below, Approach::Above] {
@@ -805,9 +808,13 @@ mod tests {
     fn insertion_split_and_elevation_keep_the_curve() {
         let mut rng = Rng::new(9);
         for data in curves(3).into_iter().step_by(2) {
+            // Drawn before the skip, so every curve meets the same parameter as before.
+            let u = sample::parameter(&mut rng, &data.knots, (0.05, 0.95));
+            if has_break(&data) {
+                continue;
+            }
             let c = ours(&data);
             let exact = data.exact().unwrap();
-            let u = gen::parameter(&mut rng, &data.knots, (0.05, 0.95));
             let free = c.degree() - c.knot_vector().multiplicity(u).min(c.degree());
             let check = |d: &NurbsCurve<3>, what: &str, tol: f64| {
                 for v in [0.03, 0.31, 0.5, 0.77, 0.97] {
@@ -842,15 +849,8 @@ mod tests {
                     "split of {c} at {u}"
                 );
             }
-            let interior_break = c
-                .knot_vector()
-                .breakpoints()
-                .any(|(k, m)| k > 0.0 && k < 1.0 && m > c.degree());
-            if !well_spaced(&c) {
-                // See `elevation_of_near_coincident_knots`.
-            } else if interior_break {
-                assert!(matches!(c.elevate(1), Err(NurbsError::Multiplicity { .. })));
-            } else {
+            // Near-coincident knots: see `elevation_of_near_coincident_knots`.
+            if well_spaced(&c) {
                 let e = c.elevate(2).unwrap();
                 let want = exact.elevate(2).unwrap().rounded();
                 assert_eq!(e.knots(), want.knots.as_slice());
@@ -878,13 +878,9 @@ mod tests {
     #[test]
     #[ignore = "known: A5.9 knot removal is ill-conditioned for near-coincident knots"]
     fn elevation_of_near_coincident_knots() {
-        for data in curves(3).into_iter().step_by(2) {
+        for data in curves(3).into_iter().step_by(2).filter(|d| !has_break(d)) {
             let c = ours(&data);
-            let simple = c
-                .knot_vector()
-                .breakpoints()
-                .all(|(k, m)| k == 0.0 || k == 1.0 || m <= c.degree());
-            if well_spaced(&c) || !simple {
+            if well_spaced(&c) {
                 continue;
             }
             let exact = data.exact().unwrap();
@@ -897,6 +893,56 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A knot of multiplicity `p + 1` inside the domain is a break, not a curve: both
+    /// constructors refuse it, while the knot vector itself is valid (04, 11-27 scx-nurbs
+    /// ruling 2). The truth: the exact curve's limits from either side of the knot are two
+    /// different control points.
+    #[test]
+    fn curves_with_a_break_are_refused() {
+        let mut broken = 0;
+        for data in (1..=5).flat_map(curves).filter(has_break) {
+            let knots = KnotVector::new(data.degree, data.knots.clone()).unwrap();
+            let (knot, p) = (
+                knots
+                    .breakpoints()
+                    .find(|&(k, m)| k > 0.0 && k < 1.0 && m > data.degree),
+                data.degree,
+            );
+            let (knot, _) = knot.unwrap();
+            let exact = data.exact().unwrap();
+            let below = exact.point(knot, tk::Side::Below).unwrap().rounded;
+            let above = exact.point(knot, tk::Side::Above).unwrap().rounded;
+            assert_ne!(below, above, "{data:?} is continuous at {knot}");
+            let want = NurbsError::Multiplicity {
+                knot,
+                multiplicity: p + 1,
+                max: p,
+            };
+            assert_eq!(knots.check_continuous(), Err(want));
+            let weighted = data.points.clone();
+            let weights = vec![1.0; weighted.len()];
+            assert_eq!(
+                NurbsCurve::new(knots.clone(), data.points.clone(), data.weights.clone()),
+                Err(want)
+            );
+            assert_eq!(
+                NurbsCurve::from_homogeneous(knots, weighted, weights),
+                Err(want)
+            );
+            broken += 1;
+        }
+        assert!(broken > 10, "only {broken} curves with a break");
+        // Multiplicity p at an interior knot (C0) and p + 1 at the ends are curves.
+        let k = KnotVector::new(2, vec![0.0, 0.0, 0.0, 0.5, 0.5, 1.0, 1.0, 1.0]).unwrap();
+        assert_eq!(k.check_continuous(), Ok(()));
+        assert!(NurbsCurve::new(k, vec![[0.0]; 5], None).is_ok());
+        let k = KnotVector::new(2, vec![0.0, 0.0, 0.0, 0.5, 0.5, 0.5, 1.0, 1.0, 1.0]).unwrap();
+        assert!(NurbsCurve::new(k, vec![[0.0]; 6], None).is_err());
+        // Unclamped knots with an interior knot of multiplicity p.
+        let k = KnotVector::new(2, vec![-2.0, -1.0, 0.0, 0.5, 0.5, 1.0, 2.0, 3.0]).unwrap();
+        assert_eq!(k.check_continuous(), Ok(()));
     }
 
     #[test]

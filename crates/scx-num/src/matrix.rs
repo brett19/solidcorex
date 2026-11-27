@@ -48,8 +48,8 @@
 //!   ones are `calloc`ed); `set_size` to the current size keeps the values, as
 //!   upstream.
 //! - [`Matrix::try_new`] (caller-chosen sizes) and [`Matrix::set_size`] return
-//!   `InvalidInput` when `rows * cols` overflows, storage exceeds
-//!   [`crate::limits::MAX_ALLOC_BYTES`], or cannot be allocated, leaving the
+//!   `InvalidInput` when `rows * cols` overflows and `Exhausted` when storage exceeds
+//!   [`crate::limits::MAX_ALLOC_BYTES`] or cannot be allocated, leaving the
 //!   matrix unchanged (upstream's `smos_Calloc` returns `NULL` and the row-pointer
 //!   loop writes through it). [`Matrix::new`] is for small sizes fixed at the call
 //!   site.
@@ -80,10 +80,10 @@
 //!   by `lMaxIters` (30) per singular value, as upstream; no recursion.
 
 use crate::error::NumFailure;
-use crate::error::{NumError, Result};
+use crate::error::{Invalid, Limit, NumError, Result};
 use crate::math::EFF_ZERO;
 use crate::tol::is_zero;
-use crate::vector3d::{sqrt, Vec3};
+use crate::vector3d::{Vec3, sqrt};
 
 /// `MAX_MATRIX_SIZE`: the largest system [`Matrix::solve_linear_system`] accepts.
 pub const MAX_MATRIX_SIZE: usize = 1000;
@@ -94,7 +94,7 @@ const JACOBI_MAX_SWEEPS: usize = 50;
 fn out_of_range(operation: &'static str) -> NumError {
     NumError::InvalidInput {
         operation,
-        reason: "matrix index out of range",
+        reason: Invalid::IndexOutside,
     }
 }
 
@@ -192,19 +192,20 @@ impl Matrix {
     ///
     /// # Errors
     ///
-    /// [`NumError::InvalidInput`] when `rows * cols` overflows, storage exceeds
-    /// [`crate::limits::MAX_ALLOC_BYTES`], or the elements cannot be allocated
+    /// [`NumError::InvalidInput`] when `rows * cols` overflows;
+    /// [`NumError::Exhausted`] ([`Limit::Allocation`]) when storage exceeds
+    /// [`crate::limits::MAX_ALLOC_BYTES`] or the elements cannot be allocated
     /// (upstream's `smos_Calloc` then returns `NULL` and the constructor writes
     /// through it).
     pub fn try_new(rows: usize, cols: usize) -> Result<Self> {
         const OP: &str = "geom::matrix::Matrix::try_new";
         let len = rows.checked_mul(cols).ok_or(NumError::InvalidInput {
             operation: OP,
-            reason: "element count overflows",
+            reason: Invalid::Overflows,
         })?;
-        let data = crate::limits::try_filled(len, 0.0).ok_or(NumError::InvalidInput {
+        let data = crate::limits::try_filled(len, 0.0).ok_or(NumError::Exhausted {
             operation: OP,
-            reason: "matrix too large to allocate",
+            limit: Limit::Allocation { count: len },
         })?;
         Ok(Self { rows, cols, data })
     }
@@ -215,7 +216,11 @@ impl Matrix {
         if rows.checked_mul(cols) != Some(data.len()) {
             return Err(NumError::InvalidInput {
                 operation: "geom::matrix::Matrix::from_row_major",
-                reason: "element count is not rows * cols",
+                reason: Invalid::ElementCount {
+                    rows,
+                    cols,
+                    len: data.len(),
+                },
             });
         }
         Ok(Self { rows, cols, data })
@@ -367,7 +372,10 @@ impl Matrix {
         if self.rows != self.cols {
             return Err(NumError::InvalidInput {
                 operation: OP,
-                reason: "matrix is not square",
+                reason: Invalid::MatrixNotSquare {
+                    rows: self.rows,
+                    cols: self.cols,
+                },
             });
         }
         let n = self.rows;
@@ -467,7 +475,7 @@ impl Matrix {
         if index.len() < n || rhs.len() < n || index.iter().take(n).any(|&i| i >= n) {
             return Err(NumError::InvalidInput {
                 operation: OP,
-                reason: "index or right-hand side does not match the matrix",
+                reason: Invalid::SizeMismatch,
             });
         }
         let zero_tol = EFF_ZERO;
@@ -511,8 +519,8 @@ impl Matrix {
     /// Solves `Ax = b` by LU decomposition of a copy of the matrix
     /// (`SolveLinearSystem`).
     ///
-    /// Errors: `InvalidInput` when the matrix is not square, `rhs` does not match it,
-    /// or it has more than [`MAX_MATRIX_SIZE`] rows; `SM_ERR` when the decomposition
+    /// Errors: `InvalidInput` when the matrix is not square or `rhs` does not match it;
+    /// `Exhausted` ([`Limit::MatrixSize`]) when it has more than [`MAX_MATRIX_SIZE`] rows; `SM_ERR` when the decomposition
     /// or the back substitution fails. A near-zero pivot is not an error (see
     /// [`LinearSolution::near_singular`]).
     pub fn solve_linear_system(&self, rhs: &[f64]) -> Result<LinearSolution> {
@@ -520,19 +528,28 @@ impl Matrix {
         if self.rows != self.cols {
             return Err(NumError::InvalidInput {
                 operation: OP,
-                reason: "matrix is not square",
+                reason: Invalid::MatrixNotSquare {
+                    rows: self.rows,
+                    cols: self.cols,
+                },
             });
         }
         if rhs.len() != self.rows {
             return Err(NumError::InvalidInput {
                 operation: OP,
-                reason: "right-hand side size differs from the matrix size",
+                reason: Invalid::RhsSize {
+                    rows: self.rows,
+                    len: rhs.len(),
+                },
             });
         }
         if self.rows > MAX_MATRIX_SIZE {
-            return Err(NumError::InvalidInput {
+            return Err(NumError::Exhausted {
                 operation: OP,
-                reason: "matrix larger than MAX_MATRIX_SIZE",
+                limit: Limit::MatrixSize {
+                    rows: self.rows,
+                    limit: MAX_MATRIX_SIZE,
+                },
             });
         }
         let mut tmp = self.clone();
@@ -550,8 +567,10 @@ impl Matrix {
     ///
     /// The matrix is used as work space: on success its upper triangle is restored
     /// from the lower triangle; when the solver fails to converge it is left rotated.
-    /// Errors: `SM_ERR` when the matrix is not symmetric ([`Matrix::is_symmetric`])
-    /// or the off-diagonal sum is not below `SM_EFF_ZERO` after 50 sweeps.
+    /// Errors: [`NumFailure::NotSymmetric`] when the matrix is not symmetric
+    /// ([`Matrix::is_symmetric`]); [`NumError::InvalidInput`] when an entry is not finite
+    /// (the pin sweeps it); [`NumFailure::JacobiDidNotConverge`] when the off-diagonal sum
+    /// is not below `SM_EFF_ZERO` after 50 sweeps.
     pub fn eigen_system_jacobi(&mut self) -> Result<EigenSystem> {
         const OP: &str = "geom::matrix::Matrix::eigen_system_jacobi";
         let st = self
@@ -579,6 +598,14 @@ impl Matrix {
         const OP: &str = "geom::matrix::Matrix::eigen_system_jacobi";
         if !self.is_symmetric() {
             return Ok(None);
+        }
+        // Non-finite input is refused, so that a solve that runs out of sweeps is the
+        // method's fault (research 62 M3). The pin sweeps it (eigenvalues of `inf` or NaN).
+        if !self.data.iter().all(|x| x.is_finite()) {
+            return Err(NumError::InvalidInput {
+                operation: OP,
+                reason: Invalid::NotFinite,
+            });
         }
         let n = self.rows;
         let mut d = vec![0.0; n];
@@ -715,14 +742,17 @@ impl Matrix {
     /// matrix as [`Matrix::eigen_system_jacobi`] does and returns the unconverged
     /// state when the solver runs out of sweeps.
     ///
-    /// Errors: `InvalidInput` when not 3x3; `SM_ERR` when not symmetric (upstream
-    /// returns uninitialized vectors there).
+    /// Errors: `InvalidInput` when not 3x3 or an entry is not finite (the pin sweeps it);
+    /// `SM_ERR` when not symmetric (upstream returns uninitialized vectors there).
     pub fn compute_3x3_eigen_vectors(&mut self) -> Result<([f64; 3], [Vec3; 3])> {
         const OP: &str = "geom::matrix::Matrix::compute_3x3_eigen_vectors";
         if self.rows != 3 || self.cols != 3 {
             return Err(NumError::InvalidInput {
                 operation: OP,
-                reason: "matrix is not 3x3",
+                reason: Invalid::MatrixNot3x3 {
+                    rows: self.rows,
+                    cols: self.cols,
+                },
             });
         }
         let st = self
@@ -1196,22 +1226,27 @@ mod tests {
         ));
         let z = m(2, 2, &[1.0, 2.0, 0.0, 0.0]);
         let singular = z.solve_linear_system(&[1.0, 2.0]).unwrap_err();
-        // status SM_ERR (1001): every `NumError::Failed` has it
-        assert!(matches!(singular, NumError::Failed { .. }));
+        // a call frame over the decomposition's singular system (upstream `SM_ERR`)
+        assert!(matches!(singular, NumError::Call { .. }));
+        assert!(matches!(
+            singular.cause().and_then(NumError::failure),
+            Some(&NumFailure::Singular { .. })
+        ));
+        assert_eq!(singular.kind(), ErrorKind::Refused);
         assert_eq!(
-            singular.failure(),
-            Some(&NumFailure::CallFailed {
-                class: ErrorKind::Degenerate
-            })
+            singular.cause().map(NumError::operation),
+            Some("geom::matrix::Matrix::lu_decompose")
         );
-        assert_eq!(singular.kind(), ErrorKind::Degenerate);
-        assert!(singular
-            .to_string()
-            .contains("; caused by geom::matrix::Matrix::lu_decompose"));
         let big = Matrix::new(MAX_MATRIX_SIZE + 1, MAX_MATRIX_SIZE + 1);
         assert!(matches!(
             big.solve_linear_system(&vec![0.0; MAX_MATRIX_SIZE + 1]),
-            Err(NumError::InvalidInput { .. })
+            Err(NumError::Exhausted {
+                limit: Limit::MatrixSize {
+                    rows: 1001,
+                    limit: 1000
+                },
+                ..
+            })
         ));
         let empty = Matrix::new(0, 0);
         assert_eq!(empty.solve_linear_system(&[]).unwrap().x, Vec::<f64>::new());
@@ -1275,7 +1310,7 @@ mod tests {
     }
 
     /// Fuzz regression: caller-chosen sizes whose element count overflows or cannot
-    /// be allocated return `InvalidInput` instead of aborting.
+    /// be allocated return `InvalidInput` or `Exhausted` instead of aborting.
     #[test]
     fn huge_sizes_fail_softly() {
         assert!(matches!(
@@ -1284,7 +1319,7 @@ mod tests {
         ));
         assert!(matches!(
             Matrix::try_new(usize::MAX / 8, 2),
-            Err(NumError::InvalidInput { .. })
+            Err(NumError::Exhausted { .. })
         ));
         let mut a = m(2, 2, &[1.0, 2.0, 3.0, 4.0]);
         let keep = a.clone();
@@ -1299,10 +1334,10 @@ mod tests {
         let rows = crate::limits::MAX_ALLOC_BYTES / size_of::<f64>() + 1;
         assert!(matches!(
             Matrix::try_new(rows, 1),
-            Err(NumError::InvalidInput {
+            Err(NumError::Exhausted {
                 operation: "geom::matrix::Matrix::try_new",
-                reason: "matrix too large to allocate",
-            })
+                limit: Limit::Allocation { count },
+            }) if count == rows
         ));
     }
 
@@ -1312,7 +1347,7 @@ mod tests {
             Matrix::try_new(usize::MAX, 2),
             Err(NumError::InvalidInput {
                 operation: "geom::matrix::Matrix::try_new",
-                reason: "element count overflows",
+                reason: Invalid::Overflows,
             })
         ));
     }
@@ -1322,11 +1357,11 @@ mod tests {
         let mut a = m(2, 3, &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
         let keep = a.clone();
         let rows = crate::limits::MAX_ALLOC_BYTES / size_of::<f64>() + 1;
-        for (rows, cols) in [(rows, 1), (usize::MAX, 2)] {
-            assert!(matches!(
-                a.set_size(rows, cols),
-                Err(NumError::InvalidInput { .. })
-            ));
+        for (rows, cols, kind) in [
+            (rows, 1, ErrorKind::Exhausted),
+            (usize::MAX, 2, ErrorKind::Refused),
+        ] {
+            assert_eq!(a.set_size(rows, cols).map_err(|e| e.kind()), Err(kind));
             assert_eq!(a, keep);
         }
     }
@@ -1358,17 +1393,26 @@ mod tests {
 
     #[test]
     fn jacobi_non_finite() {
+        // The eigenvalues of a matrix with an infinite or NaN entry are not defined (the
+        // pin returned `[0, inf]` and NaN here): refused.
         let mut a = m(2, 2, &[f64::INFINITY, 1.0, 1.0, 0.0]);
-        let e = a.eigen_system_jacobi().unwrap();
-        assert_eq!(e.values, vec![0.0, f64::INFINITY]);
+        assert!(matches!(
+            a.eigen_system_jacobi(),
+            Err(NumError::InvalidInput { .. })
+        ));
         let mut b = m(
             3,
             3,
             &[f64::INFINITY, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0],
         );
-        assert!(b.compute_3x3_eigen_vectors().is_ok());
+        assert!(matches!(
+            b.compute_3x3_eigen_vectors(),
+            Err(NumError::InvalidInput { .. })
+        ));
         let mut nan = m(1, 1, &[f64::NAN]);
-        let e = nan.eigen_system_jacobi().unwrap();
-        assert!(e.values[0].is_nan());
+        assert!(matches!(
+            nan.eigen_system_jacobi(),
+            Err(NumError::InvalidInput { .. })
+        ));
     }
 }

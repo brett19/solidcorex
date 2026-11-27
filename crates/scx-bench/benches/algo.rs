@@ -5,7 +5,7 @@
 
 mod common;
 
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 
 fn cases(c: &mut Criterion) {
     common::run(c, scx_bench::algo::cases());

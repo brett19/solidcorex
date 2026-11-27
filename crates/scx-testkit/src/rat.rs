@@ -7,7 +7,7 @@
 use core::cmp::Ordering;
 use core::ops::{Add, Mul, Neg, Sub};
 
-use crate::exact::{split, Int};
+use crate::exact::{Int, split};
 
 /// An exact rational `num / den * 2^exp`. Reduced: zero is `0 / 1 * 2^0`; otherwise `num`
 /// is odd, `den` odd and positive, and they share no factor. Equal values are equal
@@ -134,6 +134,64 @@ impl Rat {
         Some(self * &o.recip()?)
     }
 
+    /// `n * 2^exp`, exactly.
+    pub fn from_int(n: &Int, exp: i64) -> Rat {
+        Rat::reduce(n, &Int::from(1u64), exp)
+    }
+
+    /// `L` with `2^(L-1) < |self| < 2^(L+1)`; `None` for zero.
+    pub fn log2_approx(&self) -> Option<i64> {
+        (!self.is_zero()).then(|| self.num.bit_len() as i64 - self.den.bit_len() as i64 + self.exp)
+    }
+
+    /// The largest multiple of `2^-k` at most `self`.
+    #[must_use]
+    pub fn floor_at(&self, k: i64) -> Rat {
+        let e = self.exp + k;
+        let (n, d) = if e >= 0 {
+            (self.num.shl(e as u64), self.den.clone())
+        } else {
+            (self.num.clone(), self.den.shl(e.unsigned_abs()))
+        };
+        let Some((q, r)) = n.div_rem(&d) else {
+            return Rat::zero(); // den is never zero
+        };
+        // `q` is rounded toward zero: one lower for a negative value with a remainder.
+        let q = if n.is_negative() && !r.is_zero() {
+            q.sub(&Int::from(1u64))
+        } else {
+            q
+        };
+        Rat::from_int(&q, -k)
+    }
+
+    /// The smallest multiple of `2^-k` at least `self`.
+    #[must_use]
+    pub fn ceil_at(&self, k: i64) -> Rat {
+        -(-self).floor_at(k)
+    }
+
+    /// The largest multiple of `2^-k` at most `sqrt(self)`; `None` below zero.
+    pub fn sqrt_floor_at(&self, k: i64) -> Option<Rat> {
+        if self.signum() < 0 {
+            return None;
+        }
+        // floor(sqrt(x 2^2k)) = isqrt(floor(x 2^2k)).
+        let n = self.scale(2 * k).floor_at(0);
+        Some(Rat::from_int(&n.num.shl(n.exp.max(0) as u64).isqrt()?, -k))
+    }
+
+    /// `(self + o) / 2`.
+    #[must_use]
+    pub fn midpoint(&self, o: &Rat) -> Rat {
+        (self + o).scale(-1)
+    }
+
+    /// `(num, den, exp)` of `num / den * 2^exp`, reduced.
+    pub(crate) fn parts(&self) -> (&Int, &Int, i64) {
+        (&self.num, &self.den, self.exp)
+    }
+
     /// The bits a double would need to hold this exactly, a measure of its size: the
     /// numerator's and denominator's lengths.
     pub fn bits(&self) -> u64 {
@@ -189,11 +247,7 @@ impl Rat {
                 }
             }
         };
-        if neg {
-            -magnitude
-        } else {
-            magnitude
-        }
+        if neg { -magnitude } else { magnitude }
     }
 }
 
@@ -208,11 +262,7 @@ impl Ord for Rat {
             .num
             .mul(&o.den)
             .cmp_scaled(self.exp, &o.num.mul(&self.den), o.exp);
-        if a > 0 {
-            by
-        } else {
-            by.reverse()
-        }
+        if a > 0 { by } else { by.reverse() }
     }
 }
 

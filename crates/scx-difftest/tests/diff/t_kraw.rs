@@ -13,13 +13,13 @@
 
 use crate::diff;
 use crate::harness::List;
-use crate::solvers::{pin_error, Class};
+use crate::solvers::{Class, pin_error};
 use solidcore::SolidError;
 use std::sync::Mutex;
 
 /// Whether call `k` of a callback with injection `fail` fails, and how.
 fn inject(fail: usize, k: usize) -> Option<bool> {
-    (fail % 3 != 0 && k == fail / 3).then_some(fail % 3 == 1)
+    (!fail.is_multiple_of(3) && k == fail / 3).then_some(fail % 3 == 1)
 }
 
 diff!(kz_inverse4, |a: [[f64; 4]; 4], b: [f64; 4]| {

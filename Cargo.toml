@@ -6,6 +6,7 @@ members = [
     "crates/scx-nurbs",
     "crates/scx-algo",
     "crates/scx-p21",
+    "crates/scx-nurbs-surface",
     "crates/scx-testkit",
     "crates/scx-difftest",
     "crates/scx-bench",
@@ -18,15 +19,16 @@ default-members = [
     "crates/scx-nurbs",
     "crates/scx-algo",
     "crates/scx-p21",
+    "crates/scx-nurbs-surface",
     "crates/scx-testkit",
     "xtask",
 ]
 
 [workspace.package]
-edition = "2021"
+edition = "2024"
 license = "Apache-2.0"
 version = "0.1.0"
-rust-version = "1.85"
+rust-version = "1.100"
 publish = false
 
 # Mirrors solidcore's workspace lints at the pinned commit; the brief's denials
@@ -48,6 +50,9 @@ todo = "deny"
 unimplemented = "deny"
 dbg_macro = "deny"
 or_fun_call = "warn"
+# Research 62 D14: an error stays off the success path's size. Clippy's default threshold
+# (128 bytes); a cause field holding a lower error boxes it.
+result_large_err = "warn"
 float_cmp = "allow"
 many_single_char_names = "allow"
 similar_names = "allow"

@@ -498,6 +498,7 @@ dependencies = [
  "scx-algo",
  "scx-num",
  "scx-nurbs",
+ "scx-nurbs-surface",
  "scx-p21",
  "scx-testkit",
  "solidcore",
@@ -516,6 +517,15 @@ name = "scx-nurbs"
 version = "0.1.0"
 dependencies = [
  "scx-num",
+ "scx-testkit",
+]
+
+[[package]]
+name = "scx-nurbs-surface"
+version = "0.1.0"
+dependencies = [
+ "scx-num",
+ "scx-nurbs",
  "scx-testkit",
 ]
 

@@ -47,14 +47,14 @@ use crate::error::{SolveError, SolveFailure};
 use crate::geom;
 use crate::geom::plane::point_project_to_plane;
 use crate::solution::{
-    identical, End, EndClass, Pairing, Prefer, Solution, SolutionKind, SolutionObject, SortKey,
-    MAX_OBJECTS,
+    End, EndClass, MAX_OBJECTS, Pairing, Prefer, Solution, SolutionKind, SolutionObject, SortKey,
+    identical,
 };
 use crate::split_tree::{Node, NodeId, SplitTree};
 use scx_num::extent3d::Extent3d;
 use scx_num::math::{EFF_ZERO, EFF_ZERO_SQRT};
 use scx_num::tol::is_zero;
-use scx_num::vector3d::{sqrt, Point3, UnitVec3, Vec3};
+use scx_num::vector3d::{Point3, UnitVec3, Vec3, sqrt};
 
 /// The most branches one solve visits (not upstream: a bound on the work, as solidcore's
 /// `MAX_SOLVE_BRANCHES`); past it the solve fails with [`SolveError::InvalidInput`].
@@ -504,11 +504,7 @@ impl<O: SolutionObject> Accumulator<O> {
 
 /// `smos_Max` of two: `a > b ? a : b`.
 const fn max2(a: f64, b: f64) -> f64 {
-    if a > b {
-        a
-    } else {
-        b
-    }
+    if a > b { a } else { b }
 }
 
 /// Whether `new` is inserted before `held` (the insertion sort of `AddSortedSolution`).

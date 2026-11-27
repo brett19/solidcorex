@@ -10,8 +10,8 @@
 //! tight box taken (`point_set`), and a 12-point loop's containment of a point
 //! (`point_loop`). The four line and plane helpers have edge inputs too.
 
-use crate::case::{both, same, Case};
-use crate::{edges, seeded, Rng};
+use crate::case::{Case, both, same};
+use crate::{Rng, edges, seeded};
 
 use scx_algo::geom::{fit as xfit, line as xl, plane as xpl};
 use scx_algo::point_set as xs;

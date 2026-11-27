@@ -6,7 +6,7 @@
 //! holds the fit's centroid (the one scx keeps).
 
 use crate::diff;
-use crate::t_gutil::{sdir, stype, sv, unit, xdir, xpt, xtype, Pts};
+use crate::t_gutil::{Pts, sdir, stype, sv, unit, xdir, xpt, xtype};
 use crate::t_pbox::{sparts, xparts};
 
 use scx_algo::point_set as xs;

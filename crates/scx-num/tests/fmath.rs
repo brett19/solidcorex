@@ -20,7 +20,7 @@ use core::ops::{Add, Div, Mul, Neg, Sub};
 use scx_num::eft::{two_prod, two_sum};
 use scx_num::fmath;
 use scx_num::hash::Rng;
-use scx_testkit::dd::{self, consts, exponent, pow2, scale, ulp_err, Consts as K, Dd};
+use scx_testkit::dd::{self, Consts as K, Dd, consts, exponent, pow2, scale, ulp_err};
 
 /// The largest error allowed, in ulps of the reference. `fmath` measures at or below
 /// 0.5 ulp (correctly rounded) on every input checked; the margin covers only the
@@ -167,7 +167,7 @@ fn any_finite(rng: &mut Rng) -> f64 {
 
 /// Input `i` of `f` (both arguments).
 fn input(f: &str, rng: &mut Rng, i: usize) -> (f64, f64) {
-    let half = i % 2 == 0;
+    let half = i.is_multiple_of(2);
     let u = rng.next_signed_unit();
     let x = match f {
         "exp" => {

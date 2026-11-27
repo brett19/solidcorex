@@ -482,4 +482,59 @@ corrections. Each place in the body that a ruling overturns carries a bracketed 
 - **M6.** `chain()` must reproduce p21's current one-line form, or p21 keeps its own formatter over
   the chain.
 
-Migration: T1 to T13 (§7), all pending.
+Migration: T2, T3, T4 (scx-num), T7, T8 (scx-num, scx-p21, scx-nurbs), T9, T12 and T13 done on
+branch `errors-h` (§11); T1, T5, T6 and scx-algo's parts of T4, T8 and T12 wait for the algo port.
+
+## 11. Implementation notes (2026-11-27, branch `errors-h`)
+
+Decisions made while implementing, for review. None changes a ruling.
+
+- **Pin defect found (T2).** Jacobi at the pin runs on non-finite input and reports
+  non-convergence. The truth is that the eigenvalues are undefined. scx refuses at entry (M3).
+  4 inputs move from exact to `pin_defects.rs`.
+- **The facade maps to the pin's type (T2).** `num_as_pin` builds the pin's `SolidError` from an
+  scx error, with the pin's kind and text (D5). The difftest compares the two pin-shaped values.
+- **Which limits are `Exhausted` (T13, M1).**
+  - These fixed caps are `Exhausted` with a typed `Limit`:
+    - scx-num: `MAX_MATRIX_SIZE`, `GW_MAX_DERIV`, `SM_GN_MAXS`/`MAXE`, and an allocation that
+      fails softly.
+    - scx-p21: the byte, count and memory limits, plus `TooDeep` and `TooManyInstances`. These
+      two carry the instance id.
+  - An element count or voxel dimensions that overflow `usize` stay `Refused`. They are not a
+    limit anyone sets; the arithmetic overflows.
+  - p21's `NestedTooDeeply` and `TooManyParts` stay `Syntax` causes, because the header skip
+    catches `Refused(Syntax)`.
+  - **Needs a ruling:** p21's "more than 1 000 000 control points" caps are still
+    `EntityCause::Invalid`, kind `Refused`. By M1 they would be `Exhausted`.
+- **Frames (T3, T9; D12).**
+  - Context frames: `Refusal::Syntax`, `Refusal::Entity`, `Refusal::Unwritable { id: Some }`,
+    `NumError::Call` and `P21Error::Within`.
+  - Transparent frames: `P21Error::Refused`, `P21Error::Unsupported`, `P21Error::Exhausted`,
+    `Refusal::Unwritable { id: None }` and `Unwritable::Geometry`.
+  - p21 keeps its own formatter, `P21Error::one_line` (M6). It writes the class word, then
+    `chain`. Its output is the text that `Display` gave before.
+  - `SolveError::CallFailed` still prints its cause twice. That is left to T1.
+- **Typed reasons (T4, T7).**
+  - `NumError::InvalidInput` carries `Invalid`, which has 22 variants.
+  - `EntityCause::Invalid` carries `InvalidValue`, which has 25 variants. Each prints the old text.
+  - `WrongType.expected` and `BadParam.expected` stay text, because the crate has no typed entity
+    name.
+  - The facade compares an invalid input by class only: `pin_text` prints that frame as
+    "op: invalid input". It compares texts frame by frame, with the pin's "; caused by" removed.
+- **Names (T8, D6).**
+  - `name()` is defined on every cause enum.
+  - `NumError::name` and `P21Error::name` give the name of the last cause in the chain.
+  - A wrapping variant delegates to its cause, so the names are unique over the leaf causes.
+- **scx-nurbs (merged during the work), re-kinded under T2 and T8.**
+  - `Unstable` is `Unsupported`: the input is valid and the elevation cannot finish it.
+    `Degenerate` (a knot difference rounded to zero, or an overflow) was the old `Degenerate`
+    kind and is `Refused` per D2 and §3.1: the short span or far parameter is the caller's.
+  - A degree above `MAX_DEGREE` and a derivative order above `MAX_ORDER` are `Exhausted` (M1). A
+    degree of zero is `Refused`.
+  - A missing index that the built values' counts rule out is a new `NurbsError::Defect`. Before,
+    it was `Degenerate`.
+  - All other errors are `Refused`.
+- **Sizes (T12, D14).** No error type grew. `NumError` is 64 bytes and `P21Error` 56; `Result`
+  sizes are unchanged. `result_large_err` is set explicitly at clippy's default. The scx-algo
+  sizes are unchanged too: `SolveError<NumError>` is 80 bytes. Boxing them is left for after the
+  algo port.

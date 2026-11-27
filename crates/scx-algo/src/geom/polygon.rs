@@ -28,9 +28,9 @@
 //! - `smgu_TriangleDecomposition` squares the sides, so sides past `1e154` give NaN
 //!   upstream. Here such sides are taken over the longest one and the answer scaled back.
 
-use scx_num::math::{Point3, EFF_ZERO};
+use scx_num::math::{EFF_ZERO, Point3};
 use scx_num::tol::is_zero;
-use scx_num::vector3d::{sqrt, UnitVec3, Vec3};
+use scx_num::vector3d::{UnitVec3, Vec3, sqrt};
 
 /// The signed area of the closed polygon `points` seen along `unit_normal`
 /// (`smgu_PolygonArea`): `½ Σ (p_{i-1} × p_i) · n`, positive when the points run

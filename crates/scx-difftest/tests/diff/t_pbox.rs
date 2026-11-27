@@ -35,11 +35,7 @@ pub struct BoxR {
 const BIG: f64 = scx_num::math::INFINITE_PARAMETER;
 
 fn sorted(a: f64, b: f64) -> [f64; 2] {
-    if a <= b {
-        [a, b]
-    } else {
-        [b, a]
-    }
+    if a <= b { [a, b] } else { [b, a] }
 }
 
 impl Gen for BoxR {
@@ -359,11 +355,7 @@ fn xmap(m: Option<[xp::SignedAxis; 3]>) -> Option<[i32; 3]> {
                 Axis::Y => 2,
                 Axis::Z => 3,
             };
-            if s.reversed {
-                -k
-            } else {
-                k
-            }
+            if s.reversed { -k } else { k }
         })
     })
 }

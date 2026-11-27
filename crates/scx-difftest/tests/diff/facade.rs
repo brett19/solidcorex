@@ -192,6 +192,10 @@ pub mod x {
     pub use crate::odes::x as od;
     pub use crate::solvers::x as sv;
     pub use scx_algo::hash_table;
+    /// An error's text as the difftest compares it ([`crate::facade::pin_text`]).
+    pub fn err_text(e: &scx_num::NumError) -> String {
+        crate::facade::pin_text(&crate::facade::num_as_pin(e))
+    }
     /// `find_coincident_pairs`, which reads no tolerances.
     pub fn ht_find_pairs(
         v: &mut hash_table::ObjsInVoxels<u32>,
@@ -225,7 +229,11 @@ pub mod x {
             } => "singular".to_string(),
             other => format!("{other:?}"),
         };
-        (format!("{:?}", e.kind()), e.operation(), f)
+        (
+            format!("{:?}", crate::facade::num_as_pin(e).kind()),
+            e.operation(),
+            f,
+        )
     }
     pub use scx_algo::polynomial;
     pub use scx_num::{
@@ -335,7 +343,7 @@ pub mod x {
         use scx_num::extent1d::Extent1d;
         use scx_num::extent2d::Extent2d;
         use scx_num::extent3d::Extent3d;
-        use scx_num::math::{Vec3, EFF_ZERO, EFF_ZERO_PARAM, EFF_ZERO_RAD};
+        use scx_num::math::{EFF_ZERO, EFF_ZERO_PARAM, EFF_ZERO_RAD, Vec3};
         use scx_num::math::{EFF_ZERO_SQ, EFF_ZERO_SQRT};
         pub use scx_num::tol::*;
         use scx_num::vector2d::Vec2;
@@ -503,6 +511,10 @@ pub mod s {
     pub use crate::odes::s as od;
     pub use crate::solvers::s as sv;
     pub use solidcore::geom::hash_table;
+    /// An error's text as the difftest compares it ([`crate::facade::pin_text`]).
+    pub fn err_text(e: &solidcore::SolidError) -> String {
+        crate::facade::pin_text(e)
+    }
     /// `find_coincident_pairs` on the default kernel.
     pub fn ht_find_pairs(
         v: &mut hash_table::ObjsInVoxels<u32>,
@@ -534,14 +546,10 @@ pub mod s {
         #[allow(clippy::all, clippy::pedantic, dead_code, unused_imports)]
         mod pin {
             pub use solidcore::blend::fillet_section::certificate::inverse4;
-            use solidcore::blend::fillet_section::interval::{round_up, Ivl};
+            use solidcore::blend::fillet_section::interval::{Ivl, round_up};
             /// The pin's `interval::cmax` (`pub(crate)` there), as its file writes it.
             fn cmax(a: f64, b: f64) -> f64 {
-                if a < b {
-                    b
-                } else {
-                    a
-                }
+                if a < b { b } else { a }
             }
             pub use solidcore::blend::fillet_section::station::solve4;
             use solidcore::blend::fillet_section::tay::Ring;
@@ -702,8 +710,15 @@ pub mod s {
     use crate::facade::TolR;
     /// The pin's tolerance set of recipe `r` (scx has none: `Tolerances` is retired).
     pub fn tol_set(r: &TolR) -> Tolerances {
-        let [zone_tol_3d, xsect_tol_3d, approx_tol_3d, ang_tol_deg, tol_gap_gain, model_size_estimate, large_small_size_ratio] =
-            r.0;
+        let [
+            zone_tol_3d,
+            xsect_tol_3d,
+            approx_tol_3d,
+            ang_tol_deg,
+            tol_gap_gain,
+            model_size_estimate,
+            large_small_size_ratio,
+        ] = r.0;
         Tolerances {
             zone_tol_3d,
             xsect_tol_3d,
@@ -981,34 +996,109 @@ macro_rules! failure_bits {
     }};
 }
 
+/// The pin's error for a layer-0 error: the map from scx's causes to the pin's class and
+/// text (research 62 D5). scx's kinds and `Display` are its own; the difftest compares what
+/// the pin would report for the same cause, so each cause maps to the pin value it replaced
+/// (`GeomFailure` of the same name and fields, the series' two `BlendFailure`s, and a
+/// [`scx_num::NumError::Call`] frame to `GeomFailure::CallFailed` with the cause's class,
+/// as the pin's `geom_call` builds it). A cause not mapped here mismatches.
+pub fn num_as_pin(e: &scx_num::NumError) -> solidcore::SolidError {
+    use scx_num::NumError;
+    use scx_num::error::NumFailure as N;
+    use solidcore::SolidError;
+    use solidcore::error::Failure;
+    use solidcore::error::blend::{BlendFailure, SectionDegeneracy};
+    use solidcore::error::geom::GeomFailure as G;
+    match e {
+        // scx's reason is typed (`scx_num::error::Invalid`); the pin's is text. An
+        // invalid input compares by class only (research 62 T4), so every reason maps
+        // to one text, and `pin_text` leaves it out.
+        NumError::InvalidInput { operation, .. } => SolidError::InvalidInput {
+            operation,
+            reason: "a typed layer-0 reason",
+        },
+        // The pin reports a limit as invalid input, with these reasons.
+        NumError::Exhausted { operation, limit } => {
+            use scx_num::error::Limit as L;
+            let reason = match (limit, *operation) {
+                (L::Allocation { .. }, "geom::hash_table::HashTable::init_size") => {
+                    "bucket count too large"
+                }
+                (L::Allocation { .. }, "geom::local_solve1d::IterQueue1d::try_new") => {
+                    "queue size too large to allocate"
+                }
+                (L::Allocation { .. }, _) => "matrix too large to allocate",
+                (L::MatrixSize { .. }, _) => "matrix larger than MAX_MATRIX_SIZE",
+                (L::DerivativeOrder { .. }, _) => "highest derivative exceeds GW_MAX_DERIV",
+                (L::SeriesOrder { .. }, _) => "a series' orders exceed SM_GN_MAXS or SM_GN_MAXE",
+                // `Limit` is `#[non_exhaustive]`: a new limit mismatches until mapped
+                _ => "a layer-0 limit the facade does not map",
+            };
+            SolidError::InvalidInput { operation, reason }
+        }
+        NumError::Failed { operation, failure } => {
+            let g = match *failure {
+                N::Disjoint { a, b } => G::Disjoint { a, b },
+                N::IndexOutOfRange { index, len } => G::IndexOutOfRange { index, len },
+                N::JacobiDidNotConverge {
+                    sweeps,
+                    off_diagonal,
+                } => G::JacobiDidNotConverge {
+                    sweeps,
+                    off_diagonal,
+                },
+                N::NoPerpendicular => G::NoPerpendicular,
+                N::NotSquare { rows, cols } => G::NotSquare { rows, cols },
+                N::NotSymmetric => G::NotSymmetric,
+                N::PointOutsideExtent { u, v } => G::PointOutsideExtent { u, v },
+                N::Singular { measure } => G::Singular { measure },
+                N::SpanOutsidePeriod { from, to, period } => {
+                    G::SpanOutsidePeriod { from, to, period }
+                }
+                N::TooFewRows { rows, cols } => G::TooFewRows { rows, cols },
+                N::Defect { why } => {
+                    return Failure::new(operation, BlendFailure::Defect { why }).into_error();
+                }
+                N::VectorVanishes => {
+                    return Failure::new(
+                        operation,
+                        BlendFailure::SectionDegenerate(SectionDegeneracy::VectorVanishes),
+                    )
+                    .into_error();
+                }
+                // `NumFailure` is `#[non_exhaustive]`: a new cause mismatches until mapped
+                _ => G::Defect {
+                    why: "a layer-0 failure the facade does not map",
+                },
+            };
+            Failure::new(operation, g).into_error()
+        }
+        NumError::Call { operation, cause } => {
+            let cause = num_as_pin(cause);
+            Failure::new(
+                operation,
+                G::CallFailed {
+                    class: cause.kind(),
+                },
+            )
+            .caused_by(cause)
+            .into_error()
+        }
+    }
+}
+
+/// A layer-0 error, as the pin's error its causes map to ([`num_as_pin`]).
+impl Bits for scx_num::NumError {
+    fn bits(&self, o: &mut Out) {
+        num_as_pin(self).bits(o);
+    }
+}
+
 /// An error: its class, operation, `InvalidInput` reason or typed failure (fields by bits),
 /// its `Display` text, then its cause's. An `InvalidInput` refusal is compared by its class
 /// alone: which operation names the refusal and the words of its reason are text, free to
 /// change (a refused input is the decision compared; scx names its own operation where the
 /// pin names the helper that refused).
-impl Bits for scx_num::NumError {
-    fn bits(&self, o: &mut Out) {
-        use scx_num::error::NumFailure;
-        o.tag(&format!("{:?}", self.kind()));
-        let scx_num::NumError::Failed { failure, .. } = self else {
-            o.tag("InvalidInput");
-            return;
-        };
-        o.tag(self.operation());
-        match failure {
-            NumFailure::VectorVanishes => o.tag("VectorVanishes"),
-            NumFailure::Defect { why } => {
-                o.tag("Defect");
-                o.tag(why);
-            }
-            f => failure_bits!(f, o, scx_num::error::NumFailure),
-        }
-        o.tag(&self.to_string());
-        if let Some(c) = self.cause() {
-            c.bits(o);
-        }
-    }
-}
 impl Bits for solidcore::SolidError {
     fn bits(&self, o: &mut Out) {
         // The series' blend failures, by the names scx-num gives them (`NumFailure`).
@@ -1033,13 +1123,46 @@ impl Bits for solidcore::SolidError {
                 (None, None) => o.tag(&format!("no typed failure: {self:?}")),
             }
         }
-        o.tag(&self.to_string());
-        if let Some(c) =
-            std::error::Error::source(self).and_then(|c| c.downcast_ref::<solidcore::SolidError>())
-        {
+        o.tag(&pin_frame(self));
+        if let Some(c) = pin_source(self) {
             c.bits(o);
         }
     }
+}
+
+/// A pin error's cause, when it is a pin error.
+fn pin_source(e: &solidcore::SolidError) -> Option<&solidcore::SolidError> {
+    std::error::Error::source(e).and_then(|c| c.downcast_ref::<solidcore::SolidError>())
+}
+
+/// One frame of a pin error's text: its own words, without the "; caused by" text of
+/// its cause, and an invalid input's operation without its reason (compared by class
+/// only, research 62 T4).
+fn pin_frame(e: &solidcore::SolidError) -> String {
+    if let solidcore::SolidError::InvalidInput { operation, .. } = e {
+        return format!("{operation}: invalid input");
+    }
+    let full = e.to_string();
+    match pin_source(e) {
+        Some(c) => full
+            .strip_suffix(&format!("; caused by {c}"))
+            .map_or_else(|| full.clone(), str::to_owned),
+        None => full,
+    }
+}
+
+/// A pin error's text frame by frame, each as [`pin_frame`] gives it. The difftest
+/// compares errors' texts with this, on both sides, so an invalid input's reason,
+/// typed in scx and text in the pin, is never compared.
+pub fn pin_text(e: &solidcore::SolidError) -> String {
+    let mut text = pin_frame(e);
+    let mut at = e;
+    while let Some(c) = pin_source(at) {
+        text.push_str(": ");
+        text.push_str(&pin_frame(c));
+        at = c;
+    }
+    text
 }
 
 /// Unused-import guard: both facades are used by the test modules.

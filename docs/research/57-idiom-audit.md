@@ -770,6 +770,13 @@ shape, what replaced it, and why. Items marked "(ruling)" are proposals for the 
   whose two one-sided limits `Approach` selects; the testkit's truth treats both the same way.
   Above `p + 1` is `NurbsError::Multiplicity`. Insertion still keeps the result continuous
   (multiplicity at most `p` after it).
+  [Changed 11-27 by 04's scx-nurbs ruling (2): the knot vector stays as said, but
+  `NurbsCurve::new` and `from_homogeneous` refuse an interior knot of multiplicity `p + 1`
+  (`KnotVector::check_continuous`, `NurbsError::Multiplicity` with `max = p`), so every curve
+  is C0 and a break is a split. `elevate`'s own check for it went, as no curve can have one.
+  The pin's `Curve::new` builds such curves (it checks only for empty inputs), so the
+  difftests on `Knots::Multiple` curves with a break are pin defects (`break_refused`, its
+  truth: the exact curve's limits either side of the knot differ).]
 - **Affine for insertion and splitting, `combine2` for elevation.** The pin's `affine2` keeps a
   coordinate exactly when both points have it (a plane stays exactly a plane); its
   `elevate_degree` uses `combine2(alf, a, 1 - alf, b)` throughout. scx follows both, in the pin's

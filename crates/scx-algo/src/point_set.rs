@@ -64,7 +64,7 @@ use scx_num::extent3d::Extent3d;
 use scx_num::math::{BIG_DOUBLE, EFF_ZERO, PI};
 use scx_num::vector3d::{Point3, UnitVec3, Vec3};
 
-use crate::geom::fit::{best_fit_plane, best_fit_point, PointSetType};
+use crate::geom::fit::{PointSetType, best_fit_plane, best_fit_point};
 use crate::geom::line::segment_point_distance;
 use crate::geom::polygon::polygon_area;
 use crate::pseudo_box::{BoxBasis, PseudoBox};
@@ -384,19 +384,11 @@ impl Bound {
 
 /// Upstream's `SM_MIN2`: `b` unless `a < b`.
 fn min2(a: f64, b: f64) -> f64 {
-    if a < b {
-        a
-    } else {
-        b
-    }
+    if a < b { a } else { b }
 }
 /// Upstream's `SM_MAX2`: `b` unless `a > b`.
 fn max2(a: f64, b: f64) -> f64 {
-    if a > b {
-        a
-    } else {
-        b
-    }
+    if a > b { a } else { b }
 }
 
 /// A closed loop of points, each joined to the next and the last to the first
