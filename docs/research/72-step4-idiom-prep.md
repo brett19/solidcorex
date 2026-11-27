@@ -413,7 +413,7 @@ pub enum MassError {
 |---|---|---|
 | MA1 | `scx-mass` crate: `MassSpec`, `Mass`, `MassError`; face boundary integrals by the pin's method (Gauss-Kronrod with `scx_algo::ode`) over `&Brep`, about the face's own reference with the shift; `volume`, `area`, `mass`, `face_area`, `edge_length`; ports `issue_2091` (9), `edge_properties_hold_their_accuracy` (5), `precise_area_holds_its_accuracy` (1), `issue_383` (1), `issue_16735_volume_moves` (5) and properties' 23 inline tests where they test behaviour, not pin internals | CX1, T9 |
 | MA2 | gap closure only for uses with a recorded accuracy; test with a `broken`-style body whose trims carry an accuracy | MA1 |
-| MA3 | per-face memo in `Scratch`, keyed by the face record's bits, its sense and the accuracy; the work rule; a test that memo and recompute are bit-identical across a Boolean that keeps faces | MA1, BO4 |
+| MA5 | per-face memo in `Scratch`, keyed by the face record's bits, its sense and the accuracy; the work rule; a test that memo and recompute are bit-identical across a Boolean that keeps faces | MA1, BO4 |
 | MA4 | `volume_sign` from `enclosure.rs` over `&Brep`; ports `issue_2972` (19) and enclosure's 16 inline tests | MA1 |
 
 ## 3. `scx-bodyq`: classification
@@ -1341,7 +1341,7 @@ PL1 (after T11)
 | T13 | testkit: mesh invariants oracle | — | Sonnet |
 | MA1 | mass | CX1, T9 | Opus |
 | MA2 | mass | MA1 | Sonnet |
-| MA3 | mass | MA1, BO4 | Opus |
+| MA5 | mass | MA1, BO4 | Opus |
 | MA4 | mass | MA1 | Opus |
 | PL1 | planar | T11 | Opus |
 | MK1 | make | CX1, T9 | Sonnet |
