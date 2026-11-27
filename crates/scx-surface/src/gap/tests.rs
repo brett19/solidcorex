@@ -420,6 +420,76 @@ fn an_allowance_is_decided_or_undecided() {
     ));
 }
 
+/// A gap equal to its allowance, with no budget limit: `Decide` ends once the bracket is
+/// within its width, still straddling, so the caller reads it as undecided; off the
+/// allowance it decides as `Against` does.
+#[test]
+fn deciding_at_the_allowance_ends_within_the_width() {
+    let f = tilted();
+    let c = line(at(&f, 0.0, 0.0, 0.01), *f.x());
+    let s = plane(f);
+    let run = |allowance: f64| {
+        let mut budget = Budget::unlimited();
+        let b = curve_surface_gap(
+            &c,
+            &over(0.0, 1.0),
+            &s,
+            Aim::Decide {
+                allowance,
+                width: 1e-5 * allowance,
+            },
+            &mut budget,
+            &Stop::new(),
+        );
+        (b, budget.used())
+    };
+    for a in [0.001, 0.01, 0.1] {
+        let (b, used) = run(a);
+        let b = b.unwrap();
+        holds(b, 0.01);
+        assert!(used < 100, "{a}: {used} units");
+        // At the allowance itself the bracket may land either side by rounding, or
+        // straddle; off it, it decides.
+        if a != 0.01 {
+            assert_eq!(b.exceeds(a), Some(a < 0.01), "{a}: {b:?}");
+        }
+    }
+    for (allowance, width) in [
+        (f64::NAN, 1.0),
+        (-1.0, 1.0),
+        (1.0, 0.0),
+        (1.0, f64::INFINITY),
+    ] {
+        assert!(matches!(
+            curve_surface_gap(
+                &c,
+                &over(0.0, 1.0),
+                &s,
+                Aim::Decide { allowance, width },
+                &mut Budget::new(9),
+                &Stop::new()
+            ),
+            Err(GapError::BadAim { .. })
+        ));
+    }
+}
+
+#[test]
+fn a_bracket_is_built_only_in_order() {
+    let b = Bracket::new(1.0, 2.0).unwrap();
+    assert_eq!((b.lower(), b.upper()), (1.0, 2.0));
+    assert!(Bracket::new(0.0, f64::INFINITY).is_some());
+    for (l, u) in [
+        (2.0, 1.0),
+        (-1.0, 1.0),
+        (f64::NAN, 1.0),
+        (0.0, f64::NAN),
+        (f64::INFINITY, f64::INFINITY),
+    ] {
+        assert_eq!(Bracket::new(l, u), None, "{l} {u}");
+    }
+}
+
 #[test]
 fn the_same_call_gives_the_same_bracket() {
     let f = tilted();
@@ -461,6 +531,31 @@ fn a_circles_pcurve_on_a_cylinder_across_its_arc_breaks() {
     holds(pgap(&s, &p, &c, o), 0.0);
     // The edge a little outside its pcurve's circle, same parameter.
     holds(pgap(&s, &p, &circle(&f, (0.0, 0.0, 0.5), 2.001), o), 0.001);
+}
+
+#[test]
+fn a_seams_pcurve_is_decided_at_once() {
+    // A generator on an arc break: its `u` is enclosed a few ulps either side of the break,
+    // so each piece meets two arcs. Their jets hulled keep the chord bound; the natural
+    // bound alone shrinks only linearly (a testkit cylinder's seam ran out of 200,000).
+    let world = Frame::WORLD;
+    for f in [world, tilted()] {
+        let s = cylinder(f, 2.0);
+        let o = over(-1.0, 3.0);
+        for (x, y) in [(2.0, 0.0), (0.0, 2.0), (-2.0, 0.0)] {
+            let c = line(at(&f, x, y, -1.0), *f.z());
+            let p = pcurve_of(&c, &s, o, res()).unwrap();
+            let mut budget = Budget::new(1_000);
+            let aim = Aim::Decide {
+                allowance: 1e-5,
+                width: 1e-8,
+            };
+            let b = pcurve_edge_gap(&s, &p, &c, &o, aim, &mut budget, &Stop::new()).unwrap();
+            holds(b, 0.0);
+            assert!(b.upper() <= 1e-5, "{b:?}");
+            assert!(budget.used() < 64, "{} units at ({x}, {y})", budget.used());
+        }
+    }
 }
 
 #[test]

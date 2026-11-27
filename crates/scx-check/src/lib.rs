@@ -65,6 +65,12 @@
 //! ([`Breach::VertexNotManifold`]). It is the pass [`check`] runs (`structure`'s
 //! `pinched`), reported there as a finding.
 //!
+//! **Gaps** (CF2a, research 74 §28). After the structure, [`check`] certifies the
+//! geometry against finish's allowances: each edge against its faces, its uses and its
+//! vertices, a degenerate edge, and under [`Scope::Full`] a vertex or edge too wide for the
+//! resolution. Each answer is proved or listed as [`Undecided`]; NURBS faces are
+//! [`Undecided::Pending`].
+//!
 //! **Not tested** here: the self-intersection and coincidence of faces, which [`check`]
 //! owns.
 //!
@@ -73,6 +79,7 @@
 
 mod error;
 mod findings;
+mod gaps;
 mod structure;
 
 use std::collections::BTreeMap;
@@ -87,7 +94,8 @@ use scx_num::vector3d::Vec3;
 use scx_nurbs::Approach;
 
 pub use error::{Breach, CheckError, ContractError};
-pub use findings::{Finding, Findings, Scope, Spent, Undecided, check};
+pub use findings::{Finding, Findings, Scope, Spent, Undecided, Why, check};
+pub use scx_surface::{Bracket, Pending};
 pub use structure::{Class, Pinch};
 
 /// What [`contract`] does with an edge of more than two fins (a body meeting itself along

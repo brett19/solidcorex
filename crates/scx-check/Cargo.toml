@@ -10,9 +10,11 @@ publish.workspace = true
 
 [dependencies]
 scx-brep = { path = "../scx-brep" }
+scx-curve = { path = "../scx-curve" }
 scx-mass = { path = "../scx-mass" }
 scx-num = { path = "../scx-num" }
 scx-nurbs = { path = "../scx-nurbs" }
+scx-surface = { path = "../scx-surface" }
 
 [dev-dependencies]
 scx-planar = { path = "../scx-planar" }
