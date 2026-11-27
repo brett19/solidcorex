@@ -241,6 +241,7 @@ impl Arcs {
     /// `(x', y')`, and `tau = tan(psi / 2) = y' / (|(x, y)| + x')` (with `|psi| <= pi/4`, the
     /// denominator is at least `(1 + cos(pi/4)) |(x, y)|`, so no cancellation). A direction
     /// along an axis gets its break exactly. `(0, 0)` gives the start; a NaN, a NaN.
+    #[must_use]
     pub fn of_direction(self, x: f64, y: f64) -> f64 {
         let period = self.span * self.count() as f64;
         let q: usize = match self.sweep {

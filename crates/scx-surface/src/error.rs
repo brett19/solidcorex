@@ -1,10 +1,13 @@
 // Written for solidcorex. Apache-2.0.
-//! Why an analytic surface cannot be built, or a query on one (the curve intersection) cannot
-//! answer.
+//! Why a surface cannot be built or edited, a NURBS surface's inversion did not finish, or a
+//! curve-surface intersection cannot answer.
 //!
 //! Errors follow research 62 §10: every cause has a kind ([`SurfaceError::kind`]), a stable
 //! [`SurfaceError::name`] and a one-frame Display. A kind is validated once, when it is built;
-//! its evaluation is a bounded closed form and cannot fail (63 X13).
+//! its evaluation is a bounded closed form and cannot fail (63 X13). The one iterating call,
+//! [`Surface::invert`](crate::Surface::invert) on a NURBS surface, ends with
+//! [`SurfaceError::Exhausted`] or [`SurfaceError::Stopped`] when its budget runs out or the
+//! caller stops it, and [`SurfaceError::Defect`] where the search itself goes wrong.
 //!
 //! | solidcore at the pin | here |
 //! |---|---|
@@ -106,18 +109,25 @@ pub enum SurfaceError {
     /// A curve-surface intersection with a NURBS curve or a NURBS surface: not built yet
     /// (SU6 builds the analytic pairs). Named, never an empty answer.
     NurbsIntersection,
-    /// The work budget of an iterating call ran out.
+    /// The work budget of an iterating call (a NURBS surface's inversion, a curve-surface
+    /// intersection) ran out.
     Exhausted(Exhausted),
     /// The caller stopped an iterating call.
     Stopped,
+    /// A NURBS surface's inversion went wrong inside: a bug, not the input's fault.
+    Defect {
+        /// What went wrong.
+        reason: &'static str,
+    },
 }
 
 impl SurfaceError {
     /// The error's kind: [`ErrorKind::Refused`] for sizes that make no surface and for an
     /// edit's extent or map, [`ErrorKind::Unsupported`] for a self-intersecting torus and a
     /// kind's image under a map that is not a similarity and a NURBS curve-surface
-    /// intersection, the NURBS error's own kind for [`SurfaceError::Nurbs`], and
-    /// [`ErrorKind::Exhausted`] and [`ErrorKind::Cancelled`] for a budget and a stop.
+    /// intersection, the NURBS error's own kind for
+    /// [`SurfaceError::Nurbs`], and the inversion's [`ErrorKind::Exhausted`],
+    /// [`ErrorKind::Cancelled`] and [`ErrorKind::Defect`].
     #[must_use]
     pub const fn kind(&self) -> ErrorKind {
         match self {
@@ -134,6 +144,7 @@ impl SurfaceError {
             Self::Nurbs(e) => e.kind(),
             Self::Exhausted(_) => ErrorKind::Exhausted,
             Self::Stopped => ErrorKind::Cancelled,
+            Self::Defect { .. } => ErrorKind::Defect,
         }
     }
 
@@ -154,6 +165,7 @@ impl SurfaceError {
             Self::NurbsIntersection => "nurbs_intersection_unbuilt",
             Self::Exhausted(e) => e.name(),
             Self::Stopped => Stopped.name(),
+            Self::Defect { .. } => "inversion_defect",
         }
     }
 }
@@ -200,6 +212,7 @@ impl fmt::Display for SurfaceError {
             }
             Self::Exhausted(e) => write!(f, "{e}"),
             Self::Stopped => write!(f, "{Stopped}"),
+            Self::Defect { reason } => write!(f, "the inversion failed inside: {reason}"),
         }
     }
 }
@@ -270,5 +283,11 @@ mod tests {
         assert_eq!(x.to_string(), "the work budget of 3 units ran out");
         let s = SurfaceError::Stopped;
         assert_eq!((s.kind(), s.name()), (ErrorKind::Cancelled, "stopped"));
+        let d = SurfaceError::Defect { reason: "r" };
+        assert_eq!(
+            (d.kind(), d.name()),
+            (ErrorKind::Defect, "inversion_defect")
+        );
+        assert!(d.to_string().ends_with(": r"));
     }
 }

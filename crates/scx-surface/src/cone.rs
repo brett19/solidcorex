@@ -22,6 +22,7 @@ use scx_nurbs_surface::{NurbsSurface, ParamAxis};
 use crate::Pole;
 use crate::common::{Axes, check_lengths, linear, unit};
 use crate::error::{Size, SurfaceError, at_least_zero};
+use crate::invert::{self, Closest, Inversion, Periods};
 use crate::to_nurbs::{Dir, Reach, build};
 use scx_curve::arcs::Arcs;
 use scx_num::jet::SurfaceJet;
@@ -264,5 +265,55 @@ impl Cone {
     #[must_use]
     pub fn from_step(&self, step: Point2) -> Point2 {
         Point2::new(U.parameter(step.x), step.y)
+    }
+}
+
+impl Cone {
+    /// The nearest point to `p`, in `p`'s meridian half-plane: the foot of `p` on the
+    /// generator there, `v = ((rho - r) k + h) / (k^2 + 1)`, while that lies on the nappe
+    /// (`r + k v > 0`), else the apex. For `p` on the axis inside the opening the feet are the
+    /// circle at that `v` ([`Closest::AlongU`]); the apex is [`Closest::AlongU`] at its `v`
+    /// too, every `u` being the one point.
+    ///
+    /// The global nearest on the domain's one nappe: the generator of the opposite
+    /// half-plane is at angle `theta + a` from `p` about the apex, against `|theta - a|` for
+    /// the near one, so it is never nearer; a foot past the apex on the near generator leaves
+    /// the apex as the nearest point of both.
+    #[must_use]
+    pub fn closest(&self, p: Point3) -> Closest {
+        let (x, y, h) = self.axes().local(p);
+        let at = |uv: Point2| invert::foot(p, uv, self.point(uv));
+        let (r, k) = (self.radius, self.slope);
+        let rho = (x * x + y * y).sqrt();
+        let v = ((rho - r) * k + h) / (k * k + 1.0);
+        let on_axis = x == 0.0 && y == 0.0;
+        if r + k * v <= 0.0 {
+            let apex = self.apex_v();
+            return Closest::AlongU {
+                v: apex,
+                distance: at(Point2::new(0.0, apex)).distance,
+            };
+        }
+        if on_axis {
+            return Closest::AlongU {
+                v,
+                distance: at(Point2::new(0.0, v)).distance,
+            };
+        }
+        Closest::One(at(Point2::new(U.of_direction(x, y), v)))
+    }
+
+    /// The nearest point to `p`, inside `domain` (`u` wrapped by its period, 1) or not
+    /// (`None`: the cone's nappe). Of a circle of feet, and at the apex, the one at the
+    /// domain's start in `u`.
+    #[must_use]
+    pub fn invert(&self, p: Point3, domain: Option<&Extent2d>) -> Inversion<Point2> {
+        let periods = Periods {
+            u: Some(1.0),
+            v: None,
+        };
+        invert::invert(self.closest(p), periods, domain, |uv| {
+            invert::foot(p, uv, self.point(uv))
+        })
     }
 }
