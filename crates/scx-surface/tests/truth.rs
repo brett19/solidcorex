@@ -379,7 +379,7 @@ fn cases(seed: u64) -> Vec<Case> {
             implicit: Implicit::Cone {
                 frame: t,
                 radius: r,
-                slope: k,
+                slope: k.into(),
             },
             layout: layout(turn(1.0), same()),
             u: (0.0, 1.0, 0.25),
@@ -477,7 +477,7 @@ fn the_uv_map_is_the_layout_and_inverts() {
     for c in cases(2) {
         for uv in uvs(&mut rng, &c, 30) {
             let st = c.kind.to_step(uv);
-            let (a, b) = c.layout.to_step((uv.x, uv.y));
+            let (a, b) = c.layout.to_step((uv.x.into(), uv.y.into()));
             // Angles in radians, continuous: compare modulo a turn.
             let near = |x: f64, y: Dd| {
                 let d = (Dd::new(x) - y).to_f64();
