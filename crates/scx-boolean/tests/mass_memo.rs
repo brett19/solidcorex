@@ -34,9 +34,11 @@ fn operand(p: &Part, doc: Document) -> Brep {
     )
     .unwrap();
     match &p.shape {
-        Shape::Block { size } => scx_make::block(&f, size.map(mm), &doc).map(|m| m.body),
+        Shape::Block { size } => {
+            scx_testkit::bodies::made::block(&f, size.map(mm), &doc).map(|m| m.body)
+        }
         Shape::Cylinder { radius, height } => {
-            scx_make::cylinder(&f, mm(*radius), mm(*height), &doc).map(|m| m.body)
+            scx_testkit::bodies::made::cylinder(&f, mm(*radius), mm(*height), &doc).map(|m| m.body)
         }
         other => panic!("not a bench operand: {other:?}"),
     }

@@ -14,13 +14,13 @@
 
 use scx_brep::{Brep, Document, EdgeShape, UseGeom};
 use scx_curve::Curve;
-use scx_make::{block, cone, cylinder, sphere, torus};
 use scx_num::budget::{Budget, Stop};
 use scx_num::error::ErrorKind;
 use scx_num::frame::Frame;
 use scx_num::units::{Length, Resolution};
 use scx_num::vector3d::{Point3, Vec3};
 use scx_tess::{Mesh, TessError, TessRefusal, TessSpec, sample_edge, wireframe};
+use scx_testkit::bodies::made::{block, cone, cylinder, sphere, torus};
 
 fn mm(v: f64) -> Length {
     Length::from_mm(v)

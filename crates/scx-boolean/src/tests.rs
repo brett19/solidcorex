@@ -12,12 +12,12 @@ use std::sync::Arc;
 
 use scx_brep::op::{Cx, NoTrace, Scratch, Settings};
 use scx_brep::{Brep, Document, Operand};
-use scx_make::block;
 use scx_num::budget::{Budget, Stop};
 use scx_num::cert::{Basis, Recorded};
 use scx_num::frame::Frame;
 use scx_num::units::{Accuracy, Length, Resolution};
 use scx_num::vector3d::{Point3, Vec3};
+use scx_testkit::bodies::made::block;
 
 use crate::boolean::{Interference, interfere};
 use crate::contact::On;
