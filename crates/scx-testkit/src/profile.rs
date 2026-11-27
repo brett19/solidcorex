@@ -18,7 +18,9 @@ use std::f64::consts::PI;
 
 use scx_num::fmath;
 
-/// A segment of a loop, from `start` to `end`.
+/// A segment of a loop, from `start` to `end`: the one segment type of the testkit's
+/// line-and-arc profiles, shared by these fixtures, by [`crate::solid`]'s extrusions and by
+/// [`crate::csg`]'s profile oracle (research 72 §14.10).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Seg {
     /// The straight segment.
@@ -29,8 +31,8 @@ pub enum Seg {
         end: [f64; 2],
     },
     /// The circular arc about `centre`, from `start` to `end`, counter-clockwise when `ccw`
-    /// and clockwise otherwise. Both ends lie on the circle; equal ends are not used (a full
-    /// circle is two arcs).
+    /// and clockwise otherwise. Both ends lie on the circle. Equal ends are the whole circle
+    /// (the solid and CSG modules take it so; these fixtures spell a circle as two arcs).
     Arc {
         /// The circle's centre.
         centre: [f64; 2],
