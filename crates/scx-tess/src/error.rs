@@ -61,6 +61,11 @@ pub enum TessRefusal {
         /// The segments it would need.
         needed: f64,
     },
+    /// A face id that is not a live face of the body.
+    NoFace {
+        /// The id.
+        face: FaceId,
+    },
 }
 
 /// What this mesher does not bound yet.
@@ -104,6 +109,22 @@ pub enum TessDefect {
         /// The edge.
         edge: EdgeId,
     },
+    /// Two of a face's boundary segments cross in its `uv`: two edges closer than their
+    /// chords, or a face whose loops cross.
+    Crossing {
+        /// The face.
+        face: FaceId,
+    },
+    /// Two of a face's boundary points coincide in its `uv`.
+    Duplicate {
+        /// The face.
+        face: FaceId,
+    },
+    /// The triangulation lost its own structure, or its constraints bound no region.
+    Triangulation {
+        /// The face.
+        face: FaceId,
+    },
 }
 
 impl TessError {
@@ -128,6 +149,7 @@ impl TessError {
             Self::Refused(TessRefusal::EdgeLength { .. }) => "edge_length",
             Self::Refused(TessRefusal::Resolution { .. }) => "resolution",
             Self::Refused(TessRefusal::TooFine { .. }) => "too_fine",
+            Self::Refused(TessRefusal::NoFace { .. }) => "no_face",
             Self::Unsupported(TessUnsupported::EdgeKind { .. }) => "edge_kind",
             Self::Unsupported(TessUnsupported::FaceKind { .. }) => "face_kind",
             Self::Unsupported(TessUnsupported::NoBound { .. }) => "no_bound",
@@ -135,6 +157,9 @@ impl TessError {
             Self::Cancelled => "cancelled",
             Self::Defect(TessDefect::Sagitta { .. }) => "sagitta",
             Self::Defect(TessDefect::Unindexed { .. }) => "unindexed",
+            Self::Defect(TessDefect::Crossing { .. }) => "crossing",
+            Self::Defect(TessDefect::Duplicate { .. }) => "duplicate",
+            Self::Defect(TessDefect::Triangulation { .. }) => "triangulation",
         }
     }
 }
@@ -163,6 +188,7 @@ impl fmt::Display for TessError {
             Self::Refused(TessRefusal::TooFine { edge, needed }) => {
                 write!(f, "{edge}: {needed} segments are more than a mesh indexes")
             }
+            Self::Refused(TessRefusal::NoFace { face }) => write!(f, "{face} is not a live face"),
             Self::Unsupported(TessUnsupported::EdgeKind { edge, kind }) => {
                 write!(f, "{edge}: no sampling rule for a {kind} edge")
             }
@@ -179,6 +205,15 @@ impl fmt::Display for TessError {
             }
             Self::Defect(TessDefect::Unindexed { edge }) => {
                 write!(f, "{edge}: an end vertex is not live")
+            }
+            Self::Defect(TessDefect::Crossing { face }) => {
+                write!(f, "{face}: two boundary segments cross in uv")
+            }
+            Self::Defect(TessDefect::Duplicate { face }) => {
+                write!(f, "{face}: two boundary points coincide in uv")
+            }
+            Self::Defect(TessDefect::Triangulation { face }) => {
+                write!(f, "{face}: the triangulation failed")
             }
         }
     }

@@ -18,6 +18,7 @@ members = [
     "crates/scx-tess",
     "crates/scx-bodyq",
     "crates/scx-check",
+    "crates/scx-boolean",
     "crates/scx-testkit",
     "crates/scx-difftest",
     "crates/scx-bench",
@@ -42,6 +43,7 @@ default-members = [
     "crates/scx-tess",
     "crates/scx-bodyq",
     "crates/scx-check",
+    "crates/scx-boolean",
     "crates/scx-testkit",
     "xtask",
 ]
