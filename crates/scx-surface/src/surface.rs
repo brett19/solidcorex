@@ -25,6 +25,7 @@
 use std::sync::Arc;
 
 use scx_num::domain::{ParamDomain, UvDomain};
+use scx_num::extent2d::Extent2d;
 use scx_num::jet::SurfaceJet;
 use scx_num::vector2d::Point2;
 use scx_num::vector3d::{Point3, UnitVec3, Vec3};
@@ -32,6 +33,8 @@ use scx_nurbs::Approach;
 use scx_nurbs_surface::NurbsSurface;
 
 use crate::common::check_lengths;
+use crate::error::SurfaceError;
+use crate::to_nurbs::restrict;
 use crate::{Cone, Cylinder, Plane, Sphere, Torus};
 
 /// A surface in space: one of the kinds.
@@ -133,6 +136,19 @@ impl Surface {
                 ParamDomain::Bounded(e.y_interval()),
             )
         })
+    }
+
+    /// The exact NURBS image over `over`, in the same uv (63 §4.8): the analytic kind's
+    /// `to_nurbs`, and for a NURBS surface its restriction to `over` (split at each end of
+    /// `over` inside its domain; the surface itself, cloned, where `over` is its domain).
+    ///
+    /// # Errors
+    ///
+    /// The kind's (`EmptyExtent`, `OutsideDomain`, `Nurbs` on overflow); for a NURBS
+    /// surface, `EmptyExtent`, `OutsideDomain` past its knots' domain, and `Nurbs` with
+    /// the split's error.
+    pub fn to_nurbs(&self, over: &Extent2d) -> Result<NurbsSurface<3>, SurfaceError> {
+        dispatch!(self, k => k.to_nurbs(over), n => restrict(n, over))
     }
 
     /// `S(u, v)` (on the pieces above `uv` for a NURBS surface, which is continuous).

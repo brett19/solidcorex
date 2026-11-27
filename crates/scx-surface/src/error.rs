@@ -67,15 +67,17 @@ pub enum SurfaceError {
         /// The minor radius.
         minor: f64,
     },
-    /// An extent that is a single value along `axis`: no surface has an empty domain.
+    /// An extent that is a single value along `axis` (`restrict`, `to_nurbs`): no surface
+    /// has an empty domain.
     EmptyExtent {
         /// The direction.
         axis: ParamAxis,
         /// The value.
         at: f64,
     },
-    /// An extent that leaves the surface's domain along `axis`: past a pole of the sphere,
-    /// past the cone's apex, or outside a NURBS surface's domain.
+    /// An extent that leaves the surface's domain along `axis` (`restrict`, `to_nurbs`):
+    /// past a pole of the sphere, past the cone's apex, or outside a NURBS surface's domain;
+    /// for `to_nurbs` also more than one period of a periodic direction.
     OutsideDomain {
         /// The direction.
         axis: ParamAxis,
@@ -90,11 +92,14 @@ pub enum SurfaceError {
     /// The transform flattens the surface: its linear part is singular on the frame's axes.
     MapFlattens,
     /// A cylinder, cone, sphere or torus under a map that is not a similarity: the image is
-    /// not a surface of the kind, and its exact image as a NURBS surface is not built yet
-    /// (research 63 SU3). Refused, not snapped to the nearest similarity.
+    /// not a surface of the kind, and its exact image as a NURBS surface needs an extent the
+    /// kind does not carry (`to_nurbs`; research 63 §4.9). Refused, not snapped to the
+    /// nearest similarity.
     NotSimilar,
-    /// An edit of a NURBS surface failed: a context frame over the `scx-nurbs-surface`
-    /// error, whose kind it has.
+    /// Building, splitting or editing a NURBS surface failed (`to_nurbs`, `restrict`): a
+    /// context frame over the `scx-nurbs-surface` error, whose kind it has. From finite
+    /// sizes and extents `to_nurbs` reaches it only on overflow (sizes near the largest
+    /// double).
     Nurbs(NurbsSurfaceError),
 }
 
@@ -131,7 +136,7 @@ impl SurfaceError {
             Self::MapNotFinite => "map_not_finite",
             Self::MapFlattens => "map_flattens",
             Self::NotSimilar => "map_not_similar",
-            Self::Nurbs(_) => "nurbs_edit_failed",
+            Self::Nurbs(_) => "nurbs_failed",
         }
     }
 }
@@ -172,7 +177,7 @@ impl fmt::Display for SurfaceError {
             Self::NotSimilar => f.write_str(
                 "the transform is not a similarity, so the image is not a surface of the kind",
             ),
-            Self::Nurbs(_) => f.write_str("the NURBS surface edit failed"),
+            Self::Nurbs(_) => f.write_str("the NURBS surface could not be built or edited"),
         }
     }
 }

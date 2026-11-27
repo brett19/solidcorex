@@ -8,7 +8,7 @@
 //! | solidcore at the pin | here |
 //! |---|---|
 //! | `Surface::reversed(Direction)` on the NURB: the knots reflected about `U[0] + U[m]` | `reversed(axis)`: `S'(-u, v) = S(u, v)` (or in `v`) for every kind but the sphere's latitude, which runs `1 - v`; exact for the analytic kinds |
-//! | `Transform` of an analytic kind's NURB (any affine map; the kind is lost) | `transformed`: a plane under any affine map, a surface of revolution under a similarity, with the [`UvMap`]; any other map of a surface of revolution is [`SurfaceError::NotSimilar`] until its NURBS image is built (63 SU3) |
+//! | `Transform` of an analytic kind's NURB (any affine map; the kind is lost) | `transformed`: a plane under any affine map, a surface of revolution under a similarity, with the [`UvMap`]; any other map of a surface of revolution is [`SurfaceError::NotSimilar`] for now: its NURBS image needs an extent, and the signature for that is open (63 §4.9); a caller can write `to_nurbs(over)?.transformed(a)` |
 //! | `Trim` of a NURB | [`Surface::restrict`]: a NURBS surface split at each end inside its domain; an analytic kind carries no extent, so it is itself |
 
 use std::sync::Arc;
@@ -380,26 +380,13 @@ fn check_interval(axis: ParamAxis, e: Extent1d, d: ParamDomain) -> Result<()> {
     }
 }
 
-/// The NURBS surface over `e`, already checked inside its domain: split at each end of `e`
-/// inside the domain, in u and then in v.
+/// The NURBS surface over `e`, already checked inside its domain: SU3's restriction
+/// (split at each end inside the domain), the same `Arc` where `e` is the domain.
 fn restrict_nurbs(n: &Arc<NurbsSurface<3>>, e: Extent2d) -> Result<Arc<NurbsSurface<3>>> {
-    let d = n.domain();
-    if e.are_same(&d) {
+    if e.are_same(&n.domain()) {
         return Ok(Arc::clone(n));
     }
-    let mut s: NurbsSurface<3> = (**n).clone();
-    for (axis, want, have) in [
-        (ParamAxis::U, e.x_interval(), d.x_interval()),
-        (ParamAxis::V, e.y_interval(), d.y_interval()),
-    ] {
-        if want.min() > have.min() {
-            s = s.split(axis, want.min())?.1;
-        }
-        if want.max() < have.max() {
-            s = s.split(axis, want.max())?.0;
-        }
-    }
-    Ok(Arc::new(s))
+    crate::to_nurbs::restrict(n, &e).map(Arc::new)
 }
 
 impl Surface {
@@ -460,8 +447,9 @@ impl Surface {
     /// # Errors
     ///
     /// [`SurfaceError::NotSimilar`] (`Unsupported`) for a surface of revolution under a map
-    /// that is not a similarity: its exact image is a NURBS surface, which waits on the
-    /// kinds' NURBS form (63 SU3). [`SurfaceError::MapNotFinite`],
+    /// that is not a similarity: its exact image is a NURBS surface over an extent the kind
+    /// does not carry (for now `self.to_nurbs(over)?` and then the NURBS surface's own
+    /// transform; 63 §4.9). [`SurfaceError::MapNotFinite`],
     /// [`SurfaceError::MapFlattens`], an image size's cause, and a NURBS surface's own cause
     /// ([`SurfaceError::Nurbs`]).
     pub fn transformed(&self, a: &Affine) -> Result<(Self, UvMap)> {
@@ -837,5 +825,86 @@ mod tests {
             Point2::new(0.1, -7.0)
         );
         assert_eq!(UvMap::default(), UvMap::IDENTITY);
+    }
+    /// SU3's `to_nurbs` composes with the reversal: the image of a reversed kind over the
+    /// mapped extent is the reversal of the kind's image. Exact (knots, control points,
+    /// weights) wherever the reversal negates; the sphere's latitude, `1 - v`, is the NURBS
+    /// reversal shifted by 1, to rounding.
+    #[test]
+    fn to_nurbs_of_a_reversal_is_the_reversal_of_to_nurbs() {
+        let mut rng = Rng::new(0x5e7_0009);
+        let (mut checked, mut exact, mut total) = (0, 0, 0);
+        for s in analytic(&mut rng) {
+            for axis in AXES {
+                let (r, m) = s.reversed(axis);
+                let sphere_v = matches!(s, Surface::Sphere(_)) && axis == ParamAxis::V;
+                let p = params(&mut rng, &s);
+                let (a, b) = (p[0], p[1]);
+                let Some(e) =
+                    Extent2d::from_bounds(a.x.min(b.x), a.y.min(b.y), a.x.max(b.x), a.y.max(b.y))
+                else {
+                    continue;
+                };
+                let (lo, hi) = (m.apply(e.min()), m.apply(e.max()));
+                let mapped = Extent2d::from_bounds(
+                    lo.x.min(hi.x),
+                    lo.y.min(hi.y),
+                    lo.x.max(hi.x),
+                    lo.y.max(hi.y),
+                )
+                .unwrap();
+                let got = r.to_nurbs(&mapped).unwrap();
+                let want = s.to_nurbs(&e).unwrap().reversed(axis);
+                for ax in AXES {
+                    let (g, w) = (got.knot_vector(ax).knots(), want.knot_vector(ax).knots());
+                    assert_eq!(g.len(), w.len(), "{s:?} {axis} knots {ax}");
+                    for (g, w) in g.iter().zip(w) {
+                        if sphere_v && ax == ParamAxis::V {
+                            // The NURBS reversal negates; the sphere's maps to `1 - v`.
+                            assert!((g - (w + 1.0)).abs() <= 2.0 * f64::EPSILON, "{s:?} {g} {w}");
+                        } else {
+                            assert_eq!(g.to_bits(), w.to_bits(), "{s:?} {axis} knots {ax}");
+                        }
+                    }
+                }
+                let (gp, wp) = (got.points().points(), want.points().points());
+                assert_eq!(gp.len(), wp.len());
+                for (g, w) in gp.iter().zip(wp) {
+                    let (g, w) = (Point3::from(*g), Point3::from(*w));
+                    total += 1;
+                    if bits(g) == bits(w) {
+                        exact += 1;
+                    } else {
+                        assert!(near(g, w, 8.0 * f64::EPSILON), "{s:?} {axis}: {g:?} {w:?}");
+                        assert!(sphere_v, "{s:?} along {axis}: {g:?} {w:?} not exact");
+                    }
+                }
+                let gw = got.weights().map(|w| w.points().to_vec());
+                let ww = want.weights().map(|w| w.points().to_vec());
+                if sphere_v {
+                    for (g, w) in gw.unwrap().iter().zip(ww.unwrap().iter()) {
+                        assert!((g - w).abs() <= 4.0 * f64::EPSILON * w.abs());
+                    }
+                } else {
+                    assert_eq!(gw, ww, "{s:?} along {axis}: weights");
+                }
+                for _ in 0..8 {
+                    let (t, w) = (rng.next_f64(), rng.next_f64());
+                    let uv = [
+                        mapped.x_min() + t * (mapped.x_max() - mapped.x_min()),
+                        mapped.y_min() + w * (mapped.y_max() - mapped.y_min()),
+                    ];
+                    let at = Point3::from(got.point(uv, ABOVE).unwrap());
+                    let shift = if sphere_v { 1.0 } else { 0.0 };
+                    let bt = Point3::from(want.point([uv[0], uv[1] - shift], ABOVE).unwrap());
+                    assert!(near(at, bt, 8.0 * f64::EPSILON), "{s:?} {axis} at {uv:?}");
+                    assert!(near(at, r.point(Point2::new(uv[0], uv[1])), 1e-14), "{s:?}");
+                    checked += 1;
+                }
+            }
+        }
+        assert!(exact * 2 > total, "{exact} of {total}");
+        assert!(total > 1_000, "{total}");
+        assert!(checked > 1_000, "{checked}");
     }
 }

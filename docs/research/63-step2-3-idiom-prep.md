@@ -766,7 +766,7 @@ Proposed for review, not yet ruled. The code is in
   (`from_valid_parts`, crate-private).
 - **`times == 0` still checks.** `insert_knot(axis, t, 0)` and `elevate(axis, 0)` refuse the
   arguments that the edit would refuse, then return a copy. Zero is not a way around the checks.
-- **Reversal negates the parameter** (changed by SU7, §4.8, to agree with the curves'
+- **Reversal negates the parameter** (changed by SU7, §4.9, to agree with the curves'
   `C(-t)`, the 04 CU5 row). As built in NS3 it reflected the knots about the domain, `t` to
   `a + b - t`, which rounded each knot and could have no form in doubles (`Reversal`,
   removed). Now the knots of `axis` are negated in reverse order and the domain `[a, b]`
@@ -1846,7 +1846,106 @@ The enum's batches cost 5% (`eval_many`: the chunk copies) and 14% (`eval_grid`:
 buffer and its copy) over the direct calls; both are recorded in 05 as open, to go when
 `Point3` gets a layout that lets the surface write into `out` directly.
 
-### 4.8 SU7 as built (11-27)
+### 4.8 SU3 as built (11-27)
+
+Decided by analysis and an adversarial pass; proposed for review, not yet ruled.
+
+```rust
+impl Plane /* and Cylinder, Cone, Sphere, Torus */ {
+    pub fn to_nurbs(&self, over: &Extent2d) -> Result<NurbsSurface<3>, SurfaceError>;
+}
+impl Surface {
+    pub fn to_nurbs(&self, over: &Extent2d) -> Result<NurbsSurface<3>, SurfaceError>;
+}
+// new SurfaceError arms: EmptyExtent { axis, at }, OutsideDomain { axis, min, max },
+// Conversion(NurbsSurfaceError), folded into SU7's Nurbs(NurbsSurfaceError) (§4.9)
+```
+
+The image is a tensor product of the kind's two directions. A length (the plane's u and v, the
+height of a cylinder or cone) is degree 1, the parameter itself. An angle is the rational
+quadratic arcs of SU1's `Arcs` (`Arcs::bezier`): one span per quarter arc crossed, each a
+sub-arc of the pin's quarter arc written through the homogeneous blossom
+`H(x, y) = (1 - xy, x + y, 1 + xy)` of SU1's half-angle form, so the span's control values are
+`H(ta, ta)`, `H(ta, tb)`, `H(tb, tb)` turned by the arc's middle. The control point at `(i, j)`
+is the kind's own formula `O + f D + g Z` at the directions' control values (affine in each
+direction's homogeneous point, so this is exact), and the weight is `wu wv`. Plane, cylinder
+and cone are degree (1, 1), (2, 1), (2, 1); sphere and torus (2, 2).
+
+- **Keeps the pin's uv (D13), so the image is off the surface by rounding; the alternative was
+  rational weights exactly on it.** In the pin's parameter a quarter arc's middle weight is
+  `cos(pi/4)` of its ends' (the arc is symmetric in its parameter, so its end weights are equal,
+  and that fixes the middle). No double holds `cos(pi/4)`, so the control data is rounded and
+  T4's `Implicit::check` reports the image off, by a first-order distance at most 1.0e-16 of
+  the case's scale (38 extents over 10 surfaces, two of each kind; the pin's difftest tolerance `ON_TOL` is 1e-14
+  relative). Alternative: weights `(1, 1, 2)` with `w1^2 = w0 w2 / 2` (the testkit's exact
+  `circle()`), exactly on the quadric in doubles. Against: that is a different parameter of the
+  same arc, so the image and the kind would disagree at the same uv, which is what D13 and 4.2
+  rule out (a pcurve would need a map across every conversion). Kept: uv. The plane, being
+  polynomial, is exactly on in an integer frame over an integer extent (tested). 4.4's "lies
+  exactly on" holds in the reals, and is checked to rounding.
+- **`Result`, not 4.3's infallible sketch.** 4.2 argued totality from `Extent2d` being finite.
+  It is finite, but not every finite extent is a domain of the kind: a zero-width side
+  (`EmptyExtent`), more than one turn of a periodic direction, a sphere's v outside `[0, 1]`
+  (past a pole), a cone's v past its apex onto the other nappe (`OutsideDomain`). Alternative:
+  clamp or wrap the extent silently. Against: a caller asking for two turns gets one, or a
+  sphere that folds back over its pole, and finds out from a wrong intersection. The NURBS
+  constructors' own errors (none expected, kept so no `unwrap` sits in the crate) come back as
+  `Conversion(NurbsSurfaceError)`, its kind passed through and its source exposed (since
+  SU7, §4.9, the one wrapping arm `Nurbs(NurbsSurfaceError)`, named `nurbs_failed`).
+- **One period, anywhere.** A turn may start at any u (the seam crossing is one more span, not a
+  rewrap), and `hi - lo <= period` exactly, so at most 5 spans. Alternative: accept several turns
+  as repeated arcs. Against: the image would cover the surface twice, which no B-rep face does;
+  refused instead.
+- **A break is placed exactly.** At a quarter break the control point is the axis itself
+  (`(1, 0)`, `(0, 1)`, ...), not the formula's rounding of it, so a full turn's knots are
+  `[0,0,0, L,L, 2L,2L, 3L,3L, P,P,P]` and a sphere's pole rows are its pole exactly (tested).
+  Interior breaks are double knots, the arcs' own `C1` joints; a single knot vector across the
+  turn (`C1` rational B-spline) was the alternative, but it gives a different parameter.
+- **Every weight is positive.** Splitting at each break keeps `|tau| <= tan(pi/8)`, so
+  `1 + xy > 0`; T4's check needs positive weights and NS's evaluator does not divide by zero.
+- **`Surface::to_nurbs` restricts the `Nurbs` arm** (`NurbsSurface::split` at each end strictly
+  inside the domain, the surface itself on its whole domain), with the same refusals.
+  Alternative: no `to_nurbs` on the enum. Against: step 5's B-spline-against-analytic pairs and
+  SU7 want one call for "the NURB of this face over this extent" whatever the arm.
+
+Truth (`tests/truth.rs`, 4 new tests, about 22 s in a debug build for the exact check): per
+case the whole range, a random piece, a piece from break to break, and one crossing each
+seam, over 40 surfaces. The kind's `point` and the testkit's `point_at` (u wrapped into the period) agree with
+the image at random uv, the extent's ends and its breaks, to 3.2e-16 of scale (bound 8e-16).
+The structure, the exact plane, the refusals by kind and name, and the enum's agreement with
+each kind (`==`) and its restriction of a `Nurbs` arm (at the same uv) are checked.
+
+Cost (A3; release build, ns per call, one quiet run; `point` and NURBS `point` for scale, the
+image's `point` with `Approach::Above`):
+
+| | `point` | `to_nurbs`, whole | `to_nurbs`, one span | image `point` |
+|---|---:|---:|---:|---:|
+| plane | 6.5 | 125 | 122 | 63 |
+| cylinder | 10.3 | 360 | 186 | 78 |
+| cone | 13.3 | 378 | 196 | 78 |
+| sphere | 19.8 | 586 | 232 | 84 |
+| torus | 21.0 | 899 | 244 | 83 |
+
+"Whole" is one turn each way (the plane `[0, 1]^2`); "one span" an extent inside one quarter
+arc each way. So a whole torus costs about 11 image evaluations, a trimmed patch about 3; mostly the four
+`Vec`s (knots, points, weights) the NURBS takes. 9 A3's comparison against one inversion is
+deferred to SU4, which builds the inversion; A3's verdict (one conversion per intersection
+call, not per evaluation) stands on these numbers.
+
+From research 66: no technique there changes this conversion. Its implicitisation (§8.4) is
+an approximate implicit form to seed SSI; our kinds have exact implicit forms already, which
+T4's check uses. Its exact predicates (§16) are runtime float filters for orientation tests;
+T4's check is exact rationals in the testkit, test-only, so there is nothing to adopt here.
+Its "keep derived data, do not rebuild" (§1 point 3) and OCCT's per-boolean intersection
+context (§14) match A3: if the conversion ever shows in a profile, memoise it in the caller's
+`Scratch`, keyed by the kind's bits and the extent, never on the kind. Its allocation-free
+inner loops (§1 point 4) would ask for a caller-provided buffer; not taken, as the conversion
+runs once per intersection call and `NurbsSurface` owns its storage.
+
+Open from SU3: the inversion cost comparison (SU4); a `to_nurbs` into a caller's buffer if a
+profile ever asks.
+
+### 4.9 SU7 as built (11-27)
 
 Decided by analysis and an adversarial pass; proposed for review, not yet ruled. The model
 is CU5 (§3.9, ruled in 04 11-27), whose rules it follows: reversal negates the parameter,
@@ -1913,24 +2012,46 @@ impl Frame { pub fn half_turn_about_x(&self) -> Self; pub fn half_turn_about_y(&
   images square and of one length to 16 roundings. The frame comes from
   `Frame::transformed` (a mirror gives a right-handed frame and reverses the sense, D14),
   the sizes scale by the mean length. Under any other map the exact image is a NURBS
-  surface, which needs SU3's `to_nurbs` (not on main): until then it is
-  `SurfaceError::NotSimilar` (`Unsupported`), refused rather than snapped to the nearest
-  similarity. When SU3 lands, that arm becomes the NURBS image over the face's extent; the
-  signature then needs the extent (`transformed(&self, a, over: &Extent2d)`, the §4.3
-  sketch), or the caller converts first. Recorded as open, not decided here: an axial-only
-  scale keeps a cylinder a cylinder and a cone a cone, and could be added without NURBS.
+  surface, and it stays `SurfaceError::NotSimilar` (`Unsupported`), refused rather than
+  snapped to the nearest similarity.
+
+  **Follow-up, open: the NURBS image under a non-similarity.** SU3's `to_nurbs` (§4.8) now
+  gives every kind's exact image, and `NurbsSurface::transformed` maps it, so that arm can
+  be built. What blocks it is the signature. A kind carries no extent, and `to_nurbs` needs
+  one (one turn at most, inside the poles and the apex), so `transformed(&self, a)` cannot
+  build it alone. The options:
+  - (a) `transformed(&self, a, over: &Extent2d) -> Result<(Surface, UvMap)>`, the §4.3
+    sketch: one call per face. Against: the extent is unused on every similarity, and most
+    calls are similarities.
+  - (b) Keep `NotSimilar` and let the caller write `to_nurbs(over)?.transformed(a)`, with the
+    identity `UvMap`, which is what (a) would do inside. Against: every caller learns the
+    fallback.
+  - (c) A separate `transformed_over(a, over)` that tries the kind first and falls back.
+
+  Leaning (c) or (b), so the common call keeps its signature; to be ruled with the step
+  that first needs it (a non-uniform scale on import). Also open: an axial-only scale
+  keeps a cylinder a cylinder and a cone a cone, and could be added without NURBS.
 - **`restrict` checks the extent against the domain for every kind.** An analytic kind
   carries no extent, so it comes back unchanged; a NURBS surface is split at each end inside
-  its domain (the domain itself gives the same `Arc`). An extent of a single value in a
+  its domain by SU3's restriction (the domain itself gives the same `Arc`). An extent of a single value in a
   direction is `EmptyExtent`, one past an end of the domain (a pole, the apex, the knots) is
   `OutsideDomain`; periodic and endless directions have no end to pass. This differs from
   CU5's analytic curves, which take any extent: a line or conic has no ending domain, while
-  the sphere and cone do. The two extent variants have SU3's names, kinds and fields
-  (`extent_empty`, `extent_outside_domain`), so the two branches share them.
-- **Errors.** `SurfaceError` gains `EmptyExtent`, `OutsideDomain`, `MapNotFinite`,
-  `MapFlattens` (all `Refused`), `NotSimilar` (`Unsupported`) and `Nurbs(NurbsSurfaceError)`,
-  a context frame with the NURBS error's kind and `source`. It stays `Copy`; its size grows
-  from 24 to 48 bytes (the NURBS error's); `Surface` stays 104 bytes, under the 128-byte budget (62 D14).
+  the sphere and cone do. `restrict` and `to_nurbs` share the two extent variants (SU3's
+  names, kinds and fields, `extent_empty`, `extent_outside_domain`); `to_nurbs` alone also
+  refuses more than one turn of a periodic direction, since it builds the turns, while
+  `restrict` keeps an analytic kind's periodic parameter whole.
+- **Errors.** `SurfaceError` gains `MapNotFinite`, `MapFlattens` (both `Refused`) and
+  `NotSimilar` (`Unsupported`). It shares SU3's `EmptyExtent` and `OutsideDomain`. SU3's
+  `Conversion(NurbsSurfaceError)` is folded into one wrapping arm, `Nurbs(NurbsSurfaceError)`
+  (`nurbs_failed`), for conversions, splits and edits alike: a context frame with the NURBS
+  error's kind and `source`. It stays `Copy` at 48 bytes, the NURBS error's size, as on main
+  since SU3; `Surface` stays 104 bytes, under the 128-byte budget (62 D14).
+- **`to_nurbs` composes with `reversed`.** For every kind and direction, the image of the
+  reversed kind over the mapped extent equals the reversal of the kind's image. Where the
+  reversal negates, the knots, control points and weights match bit for bit. The sphere's
+  latitude matches the NURBS reversal shifted by 1, to rounding, because its map is `1 - v`
+  where the NURBS reversal's is `-v` (test `to_nurbs_of_a_reversal_is_the_reversal_of_to_nurbs`).
 
 Measured (`std::time::Instant`, best of 7 runs of 20,000 calls, a 20 by 20 rational cubic,
 reversed along u): 2298 ns before, 1573 ns after (-32%). The negation does strictly less work than the reflection:
