@@ -199,10 +199,10 @@ worst! {
     sin_and_sin_cos => "sin", 0;
     cos_and_sin_cos => "cos", 0;
     tan => "tan", 0;
-    asin => "asin", 23;
-    acos => "acos", 78;
-    atan => "atan", 166;
-    atan2 => "atan2", 195;
+    asin => "asin", 0;
+    acos => "acos", 0;
+    atan => "atan", 0;
+    atan2 => "atan2", 0;
     sinh => "sinh", 0;
     cosh => "cosh", 0;
     tanh => "tanh", 0;
