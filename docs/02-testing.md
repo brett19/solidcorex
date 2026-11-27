@@ -251,6 +251,8 @@ instruction counts with gungraun under valgrind's callgrind.
 
 ## 8a. CI
 
+Locally, `cargo xtask diff --changed-since <rev>` runs the difftest and skips its three slowest tests unless the change is in their subject's crates (72 §14.33); CI always runs them all.
+
 `.github/workflows/ci.yml` runs on every push and pull request, read-only (`contents: read`; it cannot
 push or publish). A builder pushes a branch and the owner reviews the design, not the routine checks.
 

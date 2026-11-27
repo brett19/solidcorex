@@ -3595,6 +3595,8 @@ No test was removed.
 
 Work added: none (the changes remove work); the cache holds the oracle results in memory (distinct disagreeing coefficient sets, a few thousand polynomials).
 
+**Local path rule.** `cargo xtask diff --changed-since REV` runs the difftest, skipping the three slow tests (`poly_from_roots`, `nurbs_elevate`, `nurbs_surface_elevate`; 526 of 529 run) unless a file changed against REV is under `scx-algo`, `scx-nurbs`, `scx-nurbs-surface`, `scx-num` or `scx-testkit` (their exact references, which the speed-up touched), the difftest files for them, or a manifest; the skip is printed. CI runs all 529.
+
 **Cases for and against, decisions.**
 - Opt-level for the scx crates in the hot path: against (no gain measured, every local build gets slower to compile). Not done.
 - nextest with hash shards for the difftest: for, it balances; against, each test in its own process loses the in-process oracle cache and the shared fixtures, and after the fix the whole suite is 200 s so sharding buys little. Tried in the draft, dropped; one difftest job.
