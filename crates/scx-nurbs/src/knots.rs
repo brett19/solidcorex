@@ -15,19 +15,19 @@ use crate::{NurbsError, Result, MAX_DEGREE};
 
 /// Which of the two pieces meeting at a knot a parameter on it belongs to.
 ///
-/// Away from knots both sides give the same span. At a knot `u`, [`Side::Above`] takes the
-/// span `[U[i], U[i+1])` that starts at `u`, and [`Side::Below`] the span `(U[i], U[i+1]]`
+/// Away from knots both sides give the same span. At a knot `u`, [`Approach::Above`] takes the
+/// span `[U[i], U[i+1])` that starts at `u`, and [`Approach::Below`] the span `(U[i], U[i+1]]`
 /// that ends there. At a knot of full multiplicity the two sides give the two one-sided
 /// limits. At the domain ends both sides take the end span.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Side {
+pub enum Approach {
     /// The span that ends at the parameter: the limit from below.
     Below,
     /// The span that starts at the parameter: the limit from above.
     Above,
 }
 
-impl fmt::Display for Side {
+impl fmt::Display for Approach {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::Below => "below",
@@ -188,9 +188,9 @@ impl KnotVector {
     /// The index `i` of the knot span `[U[i], U[i+1]]` that `u` lies in, with `p <= i < m - p`
     /// and `U[i] < U[i+1]`.
     ///
-    /// At a knot, `side` picks the span ([`Side`]). At or past an end of the domain the end
+    /// At a knot, `side` picks the span ([`Approach`]). At or past an end of the domain the end
     /// span is returned, so a parameter outside the domain evaluates the end piece.
-    pub fn span(&self, u: f64, side: Side) -> Result<usize> {
+    pub fn span(&self, u: f64, side: Approach) -> Result<usize> {
         if !u.is_finite() {
             return Err(NurbsError::ParameterNotFinite { parameter: u });
         }
@@ -198,20 +198,20 @@ impl KnotVector {
     }
 
     /// [`KnotVector::span`] for a finite `u`.
-    pub(crate) fn span_of(&self, u: f64, side: Side) -> usize {
+    pub(crate) fn span_of(&self, u: f64, side: Approach) -> usize {
         let (low, high) = (self.low, self.high);
         // Each count below is at least p + 1 (U[p] = low <= the bound) and at most m - p
         // (U[m-p] = high > the bound), so the span is in p..m-p.
-        let count = if u <= low && (side == Side::Below || u < low) {
+        let count = if u <= low && (side == Approach::Below || u < low) {
             // The first non-empty span: the last knot equal to the low end.
             self.knots.partition_point(|&k| k <= low)
-        } else if u >= high && (side == Side::Above || u > high) {
+        } else if u >= high && (side == Approach::Above || u > high) {
             // The last non-empty span: the last knot below the high end.
             self.knots.partition_point(|&k| k < high)
         } else {
             match side {
-                Side::Above => self.knots.partition_point(|&k| k <= u),
-                Side::Below => self.knots.partition_point(|&k| k < u),
+                Approach::Above => self.knots.partition_point(|&k| k <= u),
+                Approach::Below => self.knots.partition_point(|&k| k < u),
             }
         };
         count - 1
@@ -387,19 +387,19 @@ mod tests {
     fn spans_at_knots_and_ends() {
         let k = kv(2, &[0.0, 0.0, 0.0, 1.0, 2.0, 2.0, 3.0, 3.0, 3.0]);
         let span = |u, s| k.span(u, s).unwrap();
-        assert_eq!(span(0.5, Side::Above), 2);
-        assert_eq!(span(0.5, Side::Below), 2);
-        assert_eq!(span(1.0, Side::Above), 3);
-        assert_eq!(span(1.0, Side::Below), 2);
-        assert_eq!(span(2.0, Side::Above), 5);
-        assert_eq!(span(2.0, Side::Below), 3);
-        for s in [Side::Above, Side::Below] {
+        assert_eq!(span(0.5, Approach::Above), 2);
+        assert_eq!(span(0.5, Approach::Below), 2);
+        assert_eq!(span(1.0, Approach::Above), 3);
+        assert_eq!(span(1.0, Approach::Below), 2);
+        assert_eq!(span(2.0, Approach::Above), 5);
+        assert_eq!(span(2.0, Approach::Below), 3);
+        for s in [Approach::Above, Approach::Below] {
             assert_eq!(span(0.0, s), 2);
             assert_eq!(span(-1.0, s), 2);
             assert_eq!(span(3.0, s), 5);
             assert_eq!(span(9.0, s), 5);
         }
-        assert!(k.span(f64::NAN, Side::Above).is_err());
+        assert!(k.span(f64::NAN, Approach::Above).is_err());
         assert_eq!(k.multiplicity(2.0), 2);
         assert_eq!(k.multiplicity(2.5), 0);
         assert_eq!(
@@ -412,8 +412,8 @@ mod tests {
     fn spans_of_tiny_end_spans() {
         // The pin's absolute 1e-12 moves u = 1 into the span below a last span 1e-13 long.
         let k = kv(1, &[0.0, 0.0, 1.0 - 1e-13, 1.0, 1.0]);
-        assert_eq!(k.span(1.0, Side::Above).unwrap(), 2);
-        assert_eq!(k.span(1.0, Side::Below).unwrap(), 2);
+        assert_eq!(k.span(1.0, Approach::Above).unwrap(), 2);
+        assert_eq!(k.span(1.0, Approach::Below).unwrap(), 2);
     }
 
     #[test]

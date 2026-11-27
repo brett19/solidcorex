@@ -26,11 +26,16 @@ pub fn binomial(n: usize, k: usize) -> Option<f64> {
     (c <= 1 << 53).then_some(c as f64)
 }
 
-/// The Bernstein polynomial `B[i, degree](u)` (A1.2); `0` for `i > degree`.
-#[must_use]
-pub fn bernstein(degree: usize, i: usize, u: f64) -> f64 {
+/// The Bernstein polynomial `B[i, degree](u)` (A1.2); `0` for `i > degree`. Any finite `u`
+/// is allowed: outside `[0, 1]` it is the same polynomial.
+///
+/// Errors when `u` is not finite.
+pub fn bernstein(degree: usize, i: usize, u: f64) -> Result<f64> {
+    if !u.is_finite() {
+        return Err(NurbsError::ParameterNotFinite { parameter: u });
+    }
     if i > degree {
-        return 0.0;
+        return Ok(0.0);
     }
     // A1.2: temp[j] = u1 temp[j] + u temp[j-1] for j = degree down to k, written as a
     // forward walk that carries the old temp[j-1].
@@ -49,7 +54,7 @@ pub fn bernstein(degree: usize, i: usize, u: f64) -> f64 {
             prev = Some(here);
         }
     }
-    temp.last().copied().unwrap_or(0.0)
+    Ok(temp.last().copied().unwrap_or(0.0))
 }
 
 /// The degree elevation matrix from `p` to `p + t`, rows `0..=p+t` of `p + 1` entries:
@@ -194,11 +199,12 @@ mod tests {
     fn bernstein_values() {
         // B[1,3](u) = 3 u (1-u)^2.
         let u: f64 = 0.25;
-        assert!((bernstein(3, 1, u) - 3.0 * u * (1.0 - u) * (1.0 - u)).abs() < 1e-16);
-        let sum: f64 = (0..=5).map(|i| bernstein(5, i, 0.3)).sum();
+        assert!((bernstein(3, 1, u).unwrap() - 3.0 * u * (1.0 - u) * (1.0 - u)).abs() < 1e-16);
+        let sum: f64 = (0..=5).map(|i| bernstein(5, i, 0.3).unwrap()).sum();
         assert!((sum - 1.0).abs() < 1e-15);
-        assert_eq!(bernstein(2, 3, 0.5), 0.0);
-        assert_eq!(bernstein(0, 0, 0.7), 1.0);
+        assert_eq!(bernstein(2, 3, 0.5), Ok(0.0));
+        assert_eq!(bernstein(0, 0, 0.7), Ok(1.0));
+        assert!(bernstein(2, 1, f64::INFINITY).is_err());
     }
 
     #[test]
@@ -215,7 +221,7 @@ mod tests {
         let at = |p: &[[f64; 2]], u: f64| {
             let d = p.len() - 1;
             p.iter().enumerate().fold([0.0, 0.0], |a, (i, q)| {
-                let b = bernstein(d, i, u);
+                let b = bernstein(d, i, u).unwrap();
                 [a[0] + b * q[0], a[1] + b * q[1]]
             })
         };

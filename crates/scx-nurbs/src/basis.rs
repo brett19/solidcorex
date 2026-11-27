@@ -9,7 +9,7 @@
 //! produced is finite, since a difference that rounds to zero divides into an infinity or a
 //! NaN that reaches every value it touches.
 
-use crate::{KnotVector, NurbsError, Result, Side, MAX_DEGREE, MAX_ORDER};
+use crate::{Approach, KnotVector, NurbsError, Result, MAX_DEGREE, MAX_ORDER};
 
 /// The scratch width for degrees below it (the pin's `SMALL_DEGREE`).
 pub(crate) const SMALL: usize = 8;
@@ -160,7 +160,7 @@ pub struct Basis {
 
 impl Basis {
     /// The basis functions of `knots` at `u`, in the span `side` picks ([`KnotVector::span`]).
-    pub(crate) fn at(knots: &KnotVector, u: f64, side: Side) -> Result<Self> {
+    pub(crate) fn at(knots: &KnotVector, u: f64, side: Approach) -> Result<Self> {
         let span = knots.span(u, side)?;
         let window = knots
             .window(span)
@@ -208,7 +208,7 @@ pub struct BasisDerivs<const K: usize> {
 
 impl<const K: usize> BasisDerivs<K> {
     /// The basis functions of `knots` at `u` and their derivatives.
-    pub(crate) fn at(knots: &KnotVector, u: f64, side: Side) -> Result<Self> {
+    pub(crate) fn at(knots: &KnotVector, u: f64, side: Approach) -> Result<Self> {
         check_order(K)?;
         let span = knots.span(u, side)?;
         let degenerate = NurbsError::Degenerate { parameter: u };
@@ -260,13 +260,13 @@ impl KnotVector {
     ///
     /// Errors when `u` is not finite, or when a knot difference rounds to zero or a value
     /// overflows ([`NurbsError::Degenerate`]).
-    pub fn basis(&self, u: f64, side: Side) -> Result<Basis> {
+    pub fn basis(&self, u: f64, side: Approach) -> Result<Basis> {
         Basis::at(self, u, side)
     }
 
     /// The non-vanishing basis functions at `u` and their derivatives up to order `K - 1`
     /// (A2.3). Errors as [`KnotVector::basis`], and when `K - 1 > MAX_ORDER`.
-    pub fn basis_derivs<const K: usize>(&self, u: f64, side: Side) -> Result<BasisDerivs<K>> {
+    pub fn basis_derivs<const K: usize>(&self, u: f64, side: Approach) -> Result<BasisDerivs<K>> {
         BasisDerivs::at(self, u, side)
     }
 }
@@ -278,13 +278,13 @@ mod tests {
 
     /// The exact basis functions `N[span-p..=span]` at `u`: the curves whose control values
     /// are the unit vectors, evaluated by the testkit in rationals.
-    fn exact(p: usize, knots: &[f64], u: f64, side: Side) -> Vec<f64> {
+    fn exact(p: usize, knots: &[f64], u: f64, side: Approach) -> Vec<f64> {
         let kv = KnotVector::new(p, knots.to_vec()).unwrap();
         let first = kv.basis(u, side).unwrap().first();
         let n = kv.point_count();
         let tside = match side {
-            Side::Below => tk::Side::Below,
-            Side::Above => tk::Side::Above,
+            Approach::Below => tk::Side::Below,
+            Approach::Above => tk::Side::Above,
         };
         (first..=first + p)
             .map(|i| {
@@ -300,7 +300,7 @@ mod tests {
         let knots = [0.0, 0.0, 0.0, 0.0, 0.3, 0.3, 0.7, 1.0, 1.0, 1.0, 1.0];
         let kv = KnotVector::new(3, knots.to_vec()).unwrap();
         for u in [0.0, 0.1, 0.3, 0.5, 0.7, 0.9, 1.0, -0.25, 1.5] {
-            for side in [Side::Above, Side::Below] {
+            for side in [Approach::Above, Approach::Below] {
                 let b = kv.basis(u, side).unwrap();
                 let want = exact(3, &knots, u, side);
                 for (got, want) in b.values().iter().zip(&want) {
@@ -314,11 +314,11 @@ mod tests {
             }
         }
         assert_eq!(
-            kv.basis(0.0, Side::Above).unwrap().values(),
+            kv.basis(0.0, Approach::Above).unwrap().values(),
             [1.0, 0.0, 0.0, 0.0]
         );
         assert_eq!(
-            kv.basis(1.0, Side::Below).unwrap().values(),
+            kv.basis(1.0, Approach::Below).unwrap().values(),
             [0.0, 0.0, 0.0, 1.0]
         );
     }
@@ -327,7 +327,7 @@ mod tests {
     fn derivatives_of_a_cubic_bezier() {
         // N = Bernstein; N'(0) = [-3, 3, 0, 0], N''(0) = [6, -12, 6, 0], N''' = [-6, 18, -18, 6].
         let kv = KnotVector::new(3, vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0]).unwrap();
-        let d = kv.basis_derivs::<5>(0.0, Side::Above).unwrap();
+        let d = kv.basis_derivs::<5>(0.0, Approach::Above).unwrap();
         assert_eq!(d.row(1).unwrap(), [-3.0, 3.0, 0.0, 0.0]);
         assert_eq!(d.row(2).unwrap(), [6.0, -12.0, 6.0, 0.0]);
         assert_eq!(d.row(3).unwrap(), [-6.0, 18.0, -18.0, 6.0]);
@@ -339,14 +339,14 @@ mod tests {
     fn tiny_spans_evaluate_and_zero_differences_fail() {
         // A span 1e-30 long: the pin fails below 1e-24.
         let kv = KnotVector::new(1, vec![0.0, 0.0, 1e-30, 2e-30, 2e-30]).unwrap();
-        let b = kv.basis(0.5e-30, Side::Above).unwrap();
+        let b = kv.basis(0.5e-30, Approach::Above).unwrap();
         assert_eq!(b.values(), [0.5, 0.5]);
         // Far outside the domain the differences round away.
         let kv = KnotVector::new(1, vec![0.0, 0.0, 1e-300, 1.0, 1.0]).unwrap();
         assert!(matches!(
-            kv.basis(-1e300, Side::Above),
+            kv.basis(-1e300, Approach::Above),
             Ok(_) | Err(NurbsError::Degenerate { .. })
         ));
-        assert!(kv.basis_derivs::<40>(0.5, Side::Above).is_err());
+        assert!(kv.basis_derivs::<40>(0.5, Approach::Above).is_err());
     }
 }

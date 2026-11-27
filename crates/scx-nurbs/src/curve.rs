@@ -9,9 +9,12 @@
 //! - `crv_tool::p1::Curve::insert_knot` (A5.1) and `nurbs_crv::crv_split`;
 //! - `crv_tool::p1::Curve::elevate_degree` (A5.9) with `bezier::elevate_degree`.
 //!
-//! Where the pin combines two control points with `CPoint::combine2`, this uses the affine
-//! form (`CPoint::affine2`, [`Control::affine`]) throughout, which keeps a coordinate equal
-//! in both points exactly.
+//! Where the pin's knot insertion combines two control points with `CPoint::combine2`, this
+//! uses the affine form (`CPoint::affine2`, [`Control::affine`]), which keeps a coordinate
+//! equal in both points exactly, so insertion and splitting keep a plane exactly. Degree
+//! elevation keeps the pin's `combine2`: its Bezier sums lose that exactness anyway, and its
+//! knot removal amplifies rounding so much across near-coincident knots that any change of
+//! arithmetic there changes the (equally inaccurate) answer.
 
 use core::fmt;
 
@@ -20,7 +23,7 @@ use scx_num::extent1d::Extent1d;
 use crate::basis::{check_order, derivs_into, values_into, FULL, SMALL};
 use crate::bezier::{elevate_into, elevation_matrix};
 use crate::point::{Control, Weighted};
-use crate::{KnotVector, NurbsError, Result, Side, MAX_DEGREE};
+use crate::{Approach, KnotVector, NurbsError, Result, MAX_DEGREE};
 
 /// A NURBS curve in `D` dimensions: a [`KnotVector`] of degree `p`, `m - p` control points,
 /// and for a rational curve one positive weight per point.
@@ -141,12 +144,12 @@ impl<const D: usize> NurbsCurve<D> {
         self.rational.is_some()
     }
 
-    /// The point `C(u)`, on the piece `side` picks at a knot ([`Side`]).
+    /// The point `C(u)`, on the piece `side` picks at a knot ([`Approach`]).
     ///
     /// Errors when `u` is not finite, or when the evaluation is not finite
     /// ([`NurbsError::Degenerate`]: a knot difference rounds to zero, which needs a span far
     /// shorter than `u`'s magnitude, or a value overflows).
-    pub fn point(&self, u: f64, side: Side) -> Result<[f64; D]> {
+    pub fn point(&self, u: f64, side: Approach) -> Result<[f64; D]> {
         let span = self.knots.span(u, side)?;
         let point = if self.degree() < SMALL {
             self.point_n::<SMALL>(u, span)
@@ -194,7 +197,7 @@ impl<const D: usize> NurbsCurve<D> {
     ///
     /// Errors as [`NurbsCurve::point`], and when `K - 1` is above
     /// [`MAX_ORDER`](crate::MAX_ORDER).
-    pub fn derivs<const K: usize>(&self, u: f64, side: Side) -> Result<[[f64; D]; K]> {
+    pub fn derivs<const K: usize>(&self, u: f64, side: Approach) -> Result<[[f64; D]; K]> {
         check_order(K)?;
         let span = self.knots.span(u, side)?;
         let derivs = if self.degree() < SMALL {
@@ -275,7 +278,7 @@ impl<const D: usize> NurbsCurve<D> {
             return Ok(self.clone());
         }
         let knots = self.knots.inserted(u, times)?;
-        let span = self.knots.span_of(u, Side::Above);
+        let span = self.knots.span_of(u, Approach::Above);
         let degenerate = NurbsError::Degenerate { parameter: u };
         let plan = Insertion {
             knots: self.knots.knots(),
@@ -349,7 +352,8 @@ impl<const D: usize> NurbsCurve<D> {
     /// Accuracy: A5.9 removes the knots it inserted by extrapolating across neighbouring
     /// spans, so rounding error grows with the ratio of a span's neighbours to its length.
     /// Spans many orders of magnitude shorter than their neighbours (near-coincident knots)
-    /// lose most or all accuracy, as at the pin.
+    /// lose most or all accuracy, as at the pin; where a weight stops being positive or a
+    /// point finite this errs with [`NurbsError::Unstable`] (the pin returns the curve).
     pub fn elevate(&self, times: usize) -> Result<Self> {
         let p = self.degree();
         if p.saturating_add(times) > MAX_DEGREE {
@@ -385,15 +389,20 @@ impl<const D: usize> NurbsCurve<D> {
             matrix: &dm,
         };
         let degenerate = NurbsError::Degenerate { parameter: low };
+        let lost = |e| match e {
+            NurbsError::PointNotFinite { .. } | NurbsError::Weight { .. } => NurbsError::Unstable,
+            e => e,
+        };
         match &self.rational {
             None => {
                 let (points, knots) = plan.points(&self.points).ok_or(degenerate)?;
-                Self::new(KnotVector::new(p + times, knots)?, points, None)
+                Self::new(KnotVector::new(p + times, knots)?, points, None).map_err(lost)
             }
             Some(r) => {
                 let (points, knots) = plan.points(&r.homogeneous()).ok_or(degenerate)?;
                 let (weighted, weights) = split_weights(points);
                 Self::from_homogeneous(KnotVector::new(p + times, knots)?, weighted, weights)
+                    .map_err(lost)
             }
         }
     }
@@ -596,7 +605,10 @@ impl Elevation<'_> {
                     let s = mlt + j;
                     let mut k = p;
                     while k >= s {
-                        let c = P::affine(get(&alfs, k - s)?, get(&bw, k)?, get(&bw, k - 1)?);
+                        let c = {
+                            let al = get(&alfs, k - s)?;
+                            P::combine(al, get(&bw, k)?, 1.0 - al, get(&bw, k - 1)?)
+                        };
                         set(&mut bw, k, c)?;
                         k -= 1;
                     }
@@ -625,7 +637,7 @@ impl Elevation<'_> {
                     while j - i > tr {
                         if i < cind {
                             let alf = (get(up, b)? - get(&uq, i)?) / (get(up, a)? - get(&uq, i)?);
-                            let c = P::affine(alf, get(&qw, i)?, get(&qw, i - 1)?);
+                            let c = P::combine(alf, get(&qw, i)?, 1.0 - alf, get(&qw, i - 1)?);
                             set(&mut qw, i, c)?;
                         }
                         if j >= lbz {
@@ -634,7 +646,7 @@ impl Elevation<'_> {
                             } else {
                                 bet
                             };
-                            let c = P::affine(g, get(&dw, l)?, get(&dw, l + 1)?);
+                            let c = P::combine(g, get(&dw, l)?, 1.0 - g, get(&dw, l + 1)?);
                             set(&mut dw, l, c)?;
                         }
                         i += 1;
@@ -701,9 +713,9 @@ mod tests {
     use scx_testkit::gen::{self, Knots, Spec, Weights};
     use scx_testkit::nurbs as tk;
 
-    const SIDES: [(Side, tk::Side); 2] = [
-        (Side::Below, tk::Side::Below),
-        (Side::Above, tk::Side::Above),
+    const SIDES: [(Approach, tk::Side); 2] = [
+        (Approach::Below, tk::Side::Below),
+        (Approach::Above, tk::Side::Above),
     ];
 
     fn ours(d: &scx_testkit::data::CurveData<3>) -> NurbsCurve<3> {
@@ -782,7 +794,7 @@ mod tests {
         for data in curves(2) {
             let c = ours(&data);
             let (first, last) = (c.points()[0], *c.points().last().unwrap());
-            for side in [Side::Below, Side::Above] {
+            for side in [Approach::Below, Approach::Above] {
                 assert!(close(&c.point(0.0, side).unwrap(), &first, 1e-15));
                 assert!(close(&c.point(1.0, side).unwrap(), &last, 1e-15));
             }
@@ -800,7 +812,7 @@ mod tests {
             let check = |d: &NurbsCurve<3>, what: &str, tol: f64| {
                 for v in [0.03, 0.31, 0.5, 0.77, 0.97] {
                     let want = exact.point(v, tk::Side::Above).unwrap().rounded;
-                    let got = d.point(v, Side::Above).unwrap();
+                    let got = d.point(v, Approach::Above).unwrap();
                     assert!(
                         close(&got, &want, tol),
                         "{what} of {c} at {u}: {v} {got:?} {want:?} {:?} tol {tol}",
@@ -826,7 +838,7 @@ mod tests {
                 };
                 let want = exact.point(at, tk::Side::Above).unwrap().rounded;
                 assert!(
-                    close(&piece.point(at, Side::Below).unwrap(), &want, 1e-12),
+                    close(&piece.point(at, Approach::Below).unwrap(), &want, 1e-12),
                     "split of {c} at {u}"
                 );
             }
@@ -880,7 +892,7 @@ mod tests {
             for v in [0.03, 0.31, 0.5, 0.77, 0.97] {
                 let want = exact.point(v, tk::Side::Above).unwrap().rounded;
                 assert!(
-                    close(&e.point(v, Side::Above).unwrap(), &want, 1e-12),
+                    close(&e.point(v, Approach::Above).unwrap(), &want, 1e-12),
                     "{c} at {v}"
                 );
             }
@@ -916,13 +928,13 @@ mod tests {
         let c = NurbsCurve::new(k, pts, Some(vec![1.0, 3.0])).unwrap();
         assert_eq!(c.weighted_points().unwrap(), [[0.0, 0.0], [3.0, 3.0]]);
         // (3 u, 3 u) / (1 + 2 u) at u = 1/2: (3/4, 3/4).
-        assert_eq!(c.point(0.5, Side::Above).unwrap(), [0.75, 0.75]);
+        assert_eq!(c.point(0.5, Approach::Above).unwrap(), [0.75, 0.75]);
         assert!(matches!(
             c.split(1.0),
             Err(NurbsError::ParameterOutside { .. })
         ));
         assert!(matches!(
-            c.derivs::<33>(0.5, Side::Above),
+            c.derivs::<33>(0.5, Approach::Above),
             Err(NurbsError::DerivativeOrder { order: 32, .. })
         ));
         assert_eq!(

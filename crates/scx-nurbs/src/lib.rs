@@ -2,7 +2,7 @@
 //! solidcorex layer 1: NURBS as plain data over `scx-num`.
 //!
 //! - [`KnotVector`]: a validated, non-decreasing knot vector of a degree, with multiplicity,
-//!   span finding ([`Side`]), knot insertion and removal at the knot level;
+//!   span finding ([`Approach`]), knot insertion and removal at the knot level;
 //! - [`Basis`], [`BasisDerivs`]: the non-vanishing B-spline basis functions at a parameter and
 //!   their derivatives;
 //! - [`bezier`]: binomials, Bernstein polynomials, Bezier degree elevation and subdivision;
@@ -13,8 +13,8 @@
 //! fails only for a parameter or arithmetic that cannot go on ([`NurbsError`]).
 //!
 //! The algorithms are those of solidcore at the pin (Piegl and Tiller's A2.1-A2.3, A3.2,
-//! A5.1, A5.9, de Casteljau's, and the pin's rational basis derivatives), with the pin's arithmetic order, so results agree bit for
-//! bit where the inputs are the same. What differs is exactness at the edges: spans are found
+//! A5.1, A5.9, de Casteljau's, and the pin's rational basis derivatives), with the pin's
+//! arithmetic order, so results agree bit for bit where the inputs are the same. What differs is exactness at the edges: spans are found
 //! without the pin's absolute `1e-12` knot tolerance, a knot difference fails only when it is
 //! exactly zero (not below `1e-24`), and the ends of the domain evaluate.
 //!
@@ -31,7 +31,7 @@ mod point;
 pub use basis::{Basis, BasisDerivs};
 pub use curve::NurbsCurve;
 pub use error::NurbsError;
-pub use knots::{KnotVector, Side};
+pub use knots::{Approach, KnotVector};
 
 /// The highest degree supported, of a basis, a curve or a Bezier piece.
 ///
@@ -50,7 +50,7 @@ pub type Result<T> = core::result::Result<T, NurbsError>;
 const _: () = {
     const fn ok<T: Send + Sync>() {}
     ok::<KnotVector>();
-    ok::<Side>();
+    ok::<Approach>();
     ok::<Basis>();
     ok::<BasisDerivs<3>>();
     ok::<NurbsCurve<3>>();

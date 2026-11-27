@@ -14,6 +14,7 @@
 //! | `NurbsFailure::DerivativeOrder { given, max }` | [`NurbsError::DerivativeOrder`] |
 //! | `NurbsFailure::Degree`, `InvalidInput` (`p >= MAX_DEGREE`) | [`NurbsError::Degree`] |
 //! | `NurbsFailure::Index`, `ControlPointsShort`, `InvalidInput` (out of bounds) | none: a built curve has the right counts ([`NurbsError::PointCount`] at construction) |
+//! | none: `elevate_degree` returns zero or negative weights | [`NurbsError::Unstable`] |
 //! | `SolidError::Unsupported` at a domain end (`basis_eval`, `crv_eval`) | none: the ends evaluate |
 
 use core::fmt;
@@ -135,6 +136,11 @@ pub enum NurbsError {
         /// The parameter being evaluated.
         parameter: f64,
     },
+    /// Degree elevation lost the curve: removing the knots it inserted extrapolates across
+    /// neighbouring spans, and across near-coincident knots the rounding grew until a weight
+    /// was no longer positive or a point no longer finite. (Where it stays finite the answer
+    /// may still be inaccurate: see [`NurbsCurve::elevate`](crate::NurbsCurve::elevate).)
+    Unstable,
 }
 
 impl NurbsError {
@@ -142,7 +148,7 @@ impl NurbsError {
     #[must_use]
     pub const fn kind(&self) -> ErrorKind {
         match self {
-            Self::Degenerate { .. } => ErrorKind::Degenerate,
+            Self::Degenerate { .. } | Self::Unstable => ErrorKind::Degenerate,
             Self::Degree { .. }
             | Self::TooFewKnots { .. }
             | Self::KnotNotFinite { .. }
@@ -231,6 +237,11 @@ impl fmt::Display for NurbsError {
             Self::Degenerate { parameter } => write!(
                 f,
                 "{}: a knot difference rounded to zero or the result overflowed evaluating at {parameter}",
+                ErrorKind::Degenerate
+            ),
+            Self::Unstable => write!(
+                f,
+                "{}: degree elevation lost the curve across near-coincident knots",
                 ErrorKind::Degenerate
             ),
         }
