@@ -22,16 +22,19 @@ The index is large, so it is not kept in the repository. To rebuild it:
 
 ## Expected results
 
-`prove.py` should report:
+`prove.py` should report, for the graph as changed by Re-review 2 (56 appendix C):
 
 - 918 files (50 of them test files) and 48,982 units;
 - 222,584 unit edges carrying 545,129 references;
-- 286 references removed by design changes;
+- 323 references removed by design changes;
 - no unassigned files;
-- 0 references outside the declared graph;
-- no cycles.
+- 16 references outside the declared graph, in 12 unit edges, all in four edges the ruling
+  dropped: bodyq → ssi (5), check → mass (2), local → mass (8) and mesh → mass (1);
+- no cycles;
+- 10 trait impls moved to their trait's or type's crate and 7 left in neither.
 
-The crate table it prints is the one in 56 section 5.1.
+With those four edges added to `DEPS`, it reports 0 references outside and no cycles. The crate
+table it prints is the one in 56 appendix C.4.
 
 `crosscheck.py` counts file-to-file edges as follows:
 
