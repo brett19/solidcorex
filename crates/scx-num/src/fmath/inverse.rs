@@ -5,13 +5,19 @@
 //! Kernel: `t = c + (t - c)` with `c = i/64` the nearest table point, and
 //! `atan(t) = atan(c) + atan(d)`, `d = (t - c)/(1 + t c)`, `|d| <= 1/128`; `atan(d)` is
 //! its series to `d^9` (truncation below `2^-73`).
+//!
+//! Rounding: each function rounds that kernel's double-double with a Ziv test
+//! ([`FAST_ERR`]); when it fails, again with the series carried in double-double
+//! ([`PRECISE_ERR`]); then the multi-precision fallback.
 
+use super::accurate;
 use super::dd::{self, at, round_int};
 use super::tables::{ATAN_TAB, PI, PI3O4, PIO2, PIO4};
 use crate::eft::{fast_two_sum, two_prod, two_sum};
 
-/// `atan(t)` as a double-double for a double-double `t` in `[0, 1 + 1/128)`.
-fn atan_dd(t: (f64, f64)) -> (f64, f64) {
+/// `atan(t)` as a double-double for a double-double `t` in `[0, 1 + 1/128)`, the series by
+/// [`finish`] (`P` false) or [`finish_precise`] (`P` true).
+fn atan_dd<const P: bool>(t: (f64, f64)) -> (f64, f64) {
     let (th, tl) = t;
     let i = round_int(th * 64.0);
     let c = i * (1.0 / 64.0);
@@ -20,20 +26,67 @@ fn atan_dd(t: (f64, f64)) -> (f64, f64) {
     let (p, pe) = two_prod(th, c);
     let (s, se) = fast_two_sum(1.0, p);
     let den = fast_two_sum(s, se + pe + tl * c);
-    finish(i, dd::div(num, den))
+    finish_any::<P>(i, dd::div(num, den))
 }
 
 /// `atan(n/d)` as a double-double for double-doubles with `n/d` in `[0, 1 + 1/128)`
 /// and `|d| >= 2^-500`, without forming the ratio: `d' = (n - c d)/(d + c n)`, one
 /// division where `atan_dd(n/d)` would take two.
-fn atan_ratio(n: (f64, f64), d: (f64, f64)) -> (f64, f64) {
+fn atan_ratio<const P: bool>(n: (f64, f64), d: (f64, f64)) -> (f64, f64) {
     let i = round_int(n.0 / d.0 * 64.0);
     let c = i * (1.0 / 64.0);
     let (p, pe) = two_prod(c, d.0);
     let num = dd::add(n, (-p, -(pe + c * d.1)));
     let (q, qe) = two_prod(c, n.0);
     let den = dd::add(d, (q, qe + c * n.1));
-    finish(i, dd::div(num, den))
+    finish_any::<P>(i, dd::div(num, den))
+}
+
+#[allow(clippy::inline_always)] // a const generic per phase: inlined, `P = false` drops the precise tail
+#[inline(always)]
+fn finish_any<const P: bool>(i: f64, d: (f64, f64)) -> (f64, f64) {
+    if P {
+        finish_precise(i, d)
+    } else {
+        finish(i, d)
+    }
+}
+
+/// The relative error of the double-double results with [`finish`], twice its bound. The
+/// series' tail, below `|d|^3/3 <= 2^-15.6 |d|`, is in doubles to `2^-50.7` of itself
+/// (five roundings): `2^-66.3 |d|`. The dropped `-dl d^2` of `atan(dh + dl)` is below
+/// `2^-67 |d|`, the final low sum's roundings below `2^-68.6 |d|`, the truncation
+/// (`d^11/11`) below `2^-73.5 |d|`, the ratio `d` (one corrected division of
+/// double-double sums) and the table within `2^-100`. So `2^-65.3 |d|`, and `|d| <=
+/// 1.0003 atan(t)`; the `pi/2 -` and `pi -` steps take a value at most the result and
+/// add `2^-104`.
+const FAST_ERR: f64 = 4.4032290636799467e-20; // 2^-64.3
+
+/// [`FAST_ERR`] with [`finish_precise`]: twice `2^-79`, its `2^-81` plus the steps'
+/// `2^-100` and, for `asin` and `acos`, `sqrt(1 - a^2)`'s `2^-103`.
+const PRECISE_ERR: f64 = 3.308722450212111e-24; // 2^-78
+
+/// `1/3` as a double-double.
+const THIRD: (f64, f64) = (
+    f64::from_bits(0x3fd5555555555555),
+    f64::from_bits(0x3c75555555555555),
+);
+
+/// [`finish`] with the series' `d^3 (-1/3 + w)` in double-double: `w` (below `2^-16.3`)
+/// within `2^-67.3`, so the tail within `2^-81.3 |d|`; the truncation (`d^13/13`) below
+/// `2^-87.7 |d|`; the low sum adds only values below `2^-51 |d|`, and `dl` enters with
+/// its `1 - d^2`.
+#[inline(never)]
+fn finish_precise(i: f64, (dh, dl): (f64, f64)) -> (f64, f64) {
+    let (d2, d2e) = two_prod(dh, dh);
+    let w = d2 * (0.2 + d2 * (-1.0 / 7.0 + d2 * (1.0 / 9.0 - d2 * (1.0 / 11.0))));
+    let (ph, pe) = two_sum(-THIRD.0, w);
+    let (c3, c3e) = two_prod(d2, dh);
+    let tail = dd::mul((c3, c3e + d2e * dh), (ph, pe - THIRD.1));
+    let (ah, al) = at(&ATAN_TAB, i as usize);
+    let (s, se) = two_sum(ah, dh);
+    let (s2, s2e) = two_sum(s, tail.0);
+    fast_two_sum(s2, se + s2e + al + tail.1 + dl * (1.0 - d2))
 }
 
 /// `atan(i/64) + atan(d)` for `|d| <= 1/128`.
@@ -72,13 +125,29 @@ pub(super) fn atan(x: f64) -> f64 {
     let r = if a > BIG {
         // pi/2 - 1/a rounds to pi/2.
         PIO2.0
-    } else if a > 1.0 {
-        // atan(a) = pi/2 - atan(1/a).
-        sub(PIO2, atan_ratio((1.0, 0.0), (a, 0.0))).0
     } else {
-        atan_dd((a, 0.0)).0
+        let (h, l) = atan_pos::<false>(a);
+        dd::round_or(h, l, FAST_ERR, || atan_slow(a))
     };
     r.copysign(x)
+}
+
+/// `atan(a)` for `a` in `[2^-27, 2^60]`.
+#[allow(clippy::inline_always)] // inlined into each phase, so `P` folds away
+#[inline(always)]
+fn atan_pos<const P: bool>(a: f64) -> (f64, f64) {
+    if a > 1.0 {
+        // atan(a) = pi/2 - atan(1/a).
+        sub(PIO2, atan_ratio::<P>((1.0, 0.0), (a, 0.0)))
+    } else {
+        atan_dd::<P>((a, 0.0))
+    }
+}
+
+#[inline(never)]
+fn atan_slow(a: f64) -> f64 {
+    let (h, l) = atan_pos::<true>(a);
+    dd::round_or(h, l, PRECISE_ERR, || accurate::atan(a))
 }
 
 /// `atan2(y, x)`, with C99's special values.
@@ -101,18 +170,36 @@ pub(super) fn atan2(y: f64, x: f64) -> f64 {
     } else if ax == f64::INFINITY {
         if x_neg { PI.0 } else { 0.0 }
     } else if !x_neg && ay < ax * RATIO_TINY {
-        // atan(t) = t (1 - t^2/3 + ...) with t^2/3 below 2^-121: atan(y/x) rounds as y/x
-        // does (and y/x is correctly rounded, subnormal or not).
-        return y / x;
+        // atan(t) = t (1 - t^2/3 + ...) with t^2/3 below 2^-121. A normal y/x is no
+        // midpoint, and no closer to one than 2^-108 of itself (a midpoint m has 54
+        // significant bits, so y - m x is a nonzero multiple of 2^-106 ulp-units of
+        // m x): atan(y/x) rounds as y/x does. A subnormal ratio can be a midpoint, and
+        // one just below 2^-1022 can round up to it, so only a quotient above it passes.
+        let q = y / x;
+        return if q.abs() > f64::MIN_POSITIVE {
+            q
+        } else {
+            accurate::atan2(y, x)
+        };
     } else {
-        atan2_finite(ay, ax, x_neg)
+        let (h, l) = atan2_finite::<false>(ay, ax, x_neg);
+        dd::round_or(h, l, FAST_ERR, || atan2_slow(ay, ax, x_neg, y, x))
     };
     r.copysign(y)
 }
 
+#[inline(never)]
+fn atan2_slow(ay: f64, ax: f64, x_neg: bool, y: f64, x: f64) -> f64 {
+    let (h, l) = atan2_finite::<true>(ay, ax, x_neg);
+    dd::round_or(h, l, PRECISE_ERR, || accurate::atan2(y, x).abs())
+}
+
 /// `atan2(ay, ax)` for finite positive `ay` and `ax`, mirrored to `pi - ...` when `x`
-/// was negative, before the sign of `y`.
-fn atan2_finite(ay: f64, ax: f64, x_neg: bool) -> f64 {
+/// was negative, before the sign of `y`: a result of at least `2^-60` (the tiny ratios
+/// are handled before), so normal.
+#[allow(clippy::inline_always)] // inlined into each phase, so `P` folds away
+#[inline(always)]
+fn atan2_finite<const P: bool>(ay: f64, ax: f64, x_neg: bool) -> (f64, f64) {
     let (mn, mx) = if ay > ax { (ax, ay) } else { (ay, ax) };
     // Far from 1, scale the larger into [1, 2), so the error terms of the products cannot
     // underflow. The smaller may then round, below 2^-1022 of the larger, which is far
@@ -123,14 +210,14 @@ fn atan2_finite(ay: f64, ax: f64, x_neg: bool) -> f64 {
     } else {
         (dd::scale(mn, -e), dd::scale(mx, -e))
     };
-    let mut th = atan_ratio((mn, 0.0), (mx, 0.0));
+    let mut th = atan_ratio::<P>((mn, 0.0), (mx, 0.0));
     if ay > ax {
         th = sub(PIO2, th);
     }
     if x_neg {
         th = sub(PI, th);
     }
-    th.0
+    th
 }
 
 /// `sqrt(1 - a^2)` as a double-double for `a` in `[0, 1]`, with `a^2` exact.
@@ -149,17 +236,30 @@ pub(super) fn asin(x: f64) -> f64 {
     if a < TINY {
         return x;
     }
-    let (c, p) = cos_of_sin(a);
-    let r = if p <= 0.5 {
-        atan_ratio((a, 0.0), c)
-    } else {
-        sub(PIO2, atan_ratio(c, (a, 0.0)))
-    };
-    r.0.copysign(x)
+    let (h, l) = asin_pos::<false>(a);
+    dd::round_or(h, l, FAST_ERR, || asin_slow(a)).copysign(x)
 }
 
-/// `acos(x)`: [`fast_acos`] when its rounding test passes, else the double-double path
-/// below; the bits are the double-double path's either way.
+/// `asin(a)` for `a` in `[2^-27, 1]`.
+#[allow(clippy::inline_always)] // inlined into each phase, so `P` folds away
+#[inline(always)]
+fn asin_pos<const P: bool>(a: f64) -> (f64, f64) {
+    let (c, p) = cos_of_sin(a);
+    if p <= 0.5 {
+        atan_ratio::<P>((a, 0.0), c)
+    } else {
+        sub(PIO2, atan_ratio::<P>(c, (a, 0.0)))
+    }
+}
+
+#[inline(never)]
+fn asin_slow(a: f64) -> f64 {
+    let (h, l) = asin_pos::<true>(a);
+    dd::round_or(h, l, PRECISE_ERR, || accurate::asin(a))
+}
+
+/// `acos(x)`: [`fast_acos`] when its rounding test passes, else [`acos_dd`] with the
+/// precise series and [`PRECISE_ERR`], else the multi-precision fallback.
 pub(super) fn acos(x: f64) -> f64 {
     let a = x.abs();
     if x.is_nan() || a > 1.0 {
@@ -171,28 +271,32 @@ pub(super) fn acos(x: f64) -> f64 {
             return hi;
         }
     }
-    acos_dd(x, a).0
+    acos_slow(x, a)
 }
 
-/// `acos(x)` for `x` in `[-1, 1]` (`a = |x|`) in double-double; the high part is the
-/// result.
+#[inline(never)]
+fn acos_slow(x: f64, a: f64) -> f64 {
+    let (h, l) = acos_dd(x, a);
+    // acos(1) is 0 exactly, which passes; otherwise the result is above 2^-27.
+    dd::round_or(h, l, PRECISE_ERR, || accurate::acos(x))
+}
+
+/// `acos(x)` for `x` in `[-1, 1]` (`a = |x|`) in double-double, with the precise series.
 fn acos_dd(x: f64, a: f64) -> (f64, f64) {
     let (c, p) = cos_of_sin(a);
     // acos(a) for a = |x|, then pi - that for negative x.
     let r = if p <= 0.5 {
-        sub(PIO2, atan_ratio((a, 0.0), c))
+        sub(PIO2, atan_ratio::<true>((a, 0.0), c))
     } else {
-        atan_ratio(c, (a, 0.0))
+        atan_ratio::<true>(c, (a, 0.0))
     };
     if x < 0.0 { sub(PI, r) } else { r }
 }
 
 /// The rounding-test constant for [`fast_acos`]: `1 + 2^-7`, good for
 /// `eps < 2^-54 (1 - (1 + 2^-53)/(1 + 2^-7)) = 2^-61.01` ([`dd::rounds_to_hi`]). The fast
-/// path's error is at most `2^-64`, and so is the double-double path's (whose `atan`
-/// series is the same plain-double polynomial; its other steps are good to about
-/// `2^-100`), so `eps <= 2^-63`: a margin of 4 (and of about 12 over the budgets). The
-/// test fails for about 0.8% of arguments in `[-1, 1]`.
+/// path's error against the true value is at most `2^-64` (`2^-65.8` by the budget
+/// below): a margin of 8. The test fails for about 0.8% of arguments in `[-1, 1]`.
 const FAST_TEST: f64 = 1.007_812_5;
 
 /// `acos(x)` for `|x| < 1` (`a = |x|`) as an unevaluated `hi + lo`, relative error at
@@ -278,7 +382,7 @@ mod tests {
     use super::*;
     use crate::hash::Rng;
 
-    /// `acos` against its double-double path alone, bit for bit.
+    /// `acos` against its slow path alone, bit for bit.
     fn check(x: f64, st: &mut Stats) {
         let a = x.abs();
         let slow = if x.is_nan() || a > 1.0 {
@@ -286,7 +390,12 @@ mod tests {
         } else {
             acos_dd(x, a)
         };
-        assert_eq!(acos(x).to_bits(), slow.0.to_bits(), "acos({x:e})");
+        let want = if x.is_nan() || a > 1.0 {
+            f64::NAN
+        } else {
+            acos_slow(x, a)
+        };
+        assert_eq!(acos(x).to_bits(), want.to_bits(), "acos({x:e})");
         if a < 1.0 {
             let (hi, lo) = fast_acos(x, a);
             st.add((hi, lo), dd::rounds_to_hi(hi, lo, FAST_TEST), slow);

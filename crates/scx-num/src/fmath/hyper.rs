@@ -2,8 +2,9 @@
 //! `sinh`, `cosh` and `tanh`, from the double-double exponential; near zero, from their
 //! series.
 
-use super::dd::{self, round_scaled};
-use super::exp::exp_core;
+use super::accurate;
+use super::dd::{self, round_ball_or, round_or, round_scaled_or};
+use super::exp::{EXP_ERR, exp_core};
 use crate::eft::{fast_two_sum, two_prod};
 
 /// Below this, `sinh x` and `tanh x` round to `x` and `cosh x` to 1.
@@ -15,6 +16,18 @@ const SERIES: f64 = 0.125;
 
 /// Above this, `e^-x` is below `2^-104` of `e^x`.
 const ONE_SIDED: f64 = 36.0;
+
+/// The rounding test's error radii (`docs/research/70-fmath-correct-rounding.md`), each
+/// at least twice its bound: the series below `2^-69` relative (the doubles' tail, about
+/// `2^-19` of the result, to `2^-52` of itself), their quotient below `2^-67.5`, and `cosh`
+/// through `e^a` below `2^-68` (it adds and loses nothing). `sinh` and `tanh` through
+/// `e^a` state theirs absolutely, from `e^a`'s `2^-68` (`EXP_ERR` is twice it): their
+/// subtraction cancels, by up to `coth a < 8.1` and `2q / tanh a < 7.1`.
+const SERIES_ERR: f64 = 6.776263578034403e-21; // 2^-67
+const TANH_SERIES_ERR: f64 = 1.3552527156068805e-20; // 2^-66
+const COSH_ERR: f64 = 6.776263578034403e-21; // 2^-67
+/// The double-double sums' and reciprocals' part, `2^-100`, twice over.
+const DD_ERR: f64 = 1.5777218104420236e-30; // 2^-99
 
 /// `1/6` as a double-double.
 const SIXTH: (f64, f64) = (1.0 / 6.0, 9.251_858_538_542_97e-18);
@@ -55,13 +68,13 @@ fn exp_dd(a: f64) -> (f64, f64) {
     (h * p, l * p)
 }
 
-/// `e^a / 2` rounded, for `a > ONE_SIDED`.
-fn half_exp(a: f64) -> f64 {
+/// `e^a / 2` rounded, for `a > ONE_SIDED` (`cosh a`, and `sinh a` for `a > 0`).
+fn half_exp(a: f64, accurate: impl FnOnce() -> f64) -> f64 {
     if a > 711.0 {
         return f64::INFINITY;
     }
     let ((h, l), m) = exp_core(a, 0.0);
-    round_scaled(h, l, m - 1)
+    round_scaled_or(h, l, EXP_ERR, m - 1, accurate)
 }
 
 /// `sinh(x)`.
@@ -77,13 +90,17 @@ pub(super) fn sinh(x: f64) -> f64 {
         return x;
     }
     let r = if a < SERIES {
-        sinh_series(a).0
+        let (h, l) = sinh_series(a);
+        round_or(h, l, SERIES_ERR, || accurate::sinh(a))
     } else if a <= ONE_SIDED {
         let e = exp_dd(a);
         let r = dd::recip(e);
-        0.5 * dd::add(e, (-r.0, -r.1)).0
+        let (h, l) = dd::add(e, (-r.0, -r.1));
+        // e^a and e^-a each within 2^-68 (relative), the sum within 2^-104.
+        let err = EXP_ERR * 0.5 * (e.0 + r.0) + DD_ERR * h;
+        round_ball_or(0.5 * h, 0.5 * l, err, || accurate::sinh(a))
     } else {
-        half_exp(a)
+        half_exp(a, || accurate::sinh(a))
     };
     r.copysign(x)
 }
@@ -95,12 +112,14 @@ pub(super) fn cosh(x: f64) -> f64 {
     }
     let a = x.abs();
     if a < TINY {
-        1.0
-    } else if a <= ONE_SIDED {
+        return 1.0;
+    }
+    if a <= ONE_SIDED {
         let e = exp_dd(a);
-        0.5 * dd::add(e, dd::recip(e)).0
+        let (h, l) = dd::add(e, dd::recip(e));
+        round_or(0.5 * h, 0.5 * l, COSH_ERR, || accurate::cosh(a))
     } else {
-        half_exp(a)
+        half_exp(a, || accurate::cosh(a))
     }
 }
 
@@ -118,13 +137,17 @@ pub(super) fn tanh(x: f64) -> f64 {
         1.0
     } else if a < SERIES {
         // sinh / cosh, both from their series.
-        dd::div(sinh_series(a), cosh_series(a)).0
+        let (h, l) = dd::div(sinh_series(a), cosh_series(a));
+        round_or(h, l, TANH_SERIES_ERR, || accurate::tanh(a))
     } else {
         // 1 - 2 / (e^(2a) + 1).
         let e = exp_dd(2.0 * a);
         let d = dd::add(e, (1.0, 0.0));
         let q = dd::recip(d);
-        dd::add((1.0, 0.0), (-2.0 * q.0, -2.0 * q.1)).0
+        let (h, l) = dd::add((1.0, 0.0), (-2.0 * q.0, -2.0 * q.1));
+        // q within 2^-68 of 1/(e^(2a) + 1) (relative), the rest within 2^-100.
+        let err = EXP_ERR * 2.0 * q.0 + DD_ERR * h;
+        round_ball_or(h, l, err, || accurate::tanh(a))
     };
     r.copysign(x)
 }

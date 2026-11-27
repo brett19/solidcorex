@@ -3882,6 +3882,35 @@ pub(crate) fn ulps_to_root(c: &[Rat], lo: f64, hi: f64, g: f64) -> Result<Option
     Ok(Some(b))
 }
 
+/// The pin's roots with each place once, in increasing order. The pin reports a root that
+/// lies on a split point once for each halving level that ends there, and ahead of the roots
+/// of the piece it ends (a piece reports its zero ends, so the halves of a piece report the
+/// split point again); the places it reports for a piece it leaves undecided are the piece's
+/// ends, shared with the next. A root is one place: a place repeated is dropped, where the
+/// polynomial is exactly zero there (the root reported again), where the interval is a single point, or where it is an end of a
+/// piece left undecided (`isolated` false, the end shared by two pieces).
+fn once_each(c: &[f64], lo: f64, hi: f64, p: &RootsOut) -> Result<RootsOut, String> {
+    let mut places = p.0.clone();
+    places.sort_by(f64::total_cmp);
+    if lo > hi {
+        places.reverse();
+    }
+    let mut out: Vec<f64> = Vec::with_capacity(places.len());
+    for g in places {
+        if !g.is_nan() && out.last().map(|l| l.to_bits()) == Some(g.to_bits()) {
+            let a_root = || -> Result<bool, String> {
+                let exact: Vec<Rat> = c.iter().map(|&v| rat(v)).collect::<Result<_, _>>()?;
+                Ok(bern_sign(&exact, &rat(lo)?, &rat(hi)?, g)? == 0)
+            };
+            if !p.1 || lo == hi || a_root()? {
+                continue;
+            }
+        }
+        out.push(g);
+    }
+    Ok((out, p.1))
+}
+
 /// scx's roots of `c` on `[lo, hi]` against the pin's: the same number of places, the same
 /// `isolated`, and every place that differs either at least as near an exact sign change of
 /// the polynomial (in doubles) as the pin's, or inside the f64 evaluator's error band around
@@ -3894,13 +3923,34 @@ pub(crate) fn roots_no_worse(
     x: &RootsOut,
     p: &RootsOut,
 ) -> Result<(), String> {
+    // the truth: each root once, in increasing order (NaN places have no order)
+    if !(hi - lo).is_finite() || lo.abs().max(hi.abs()) > f64::MAX / 4.0 {
+        // no span the halvings and the map keep finite, no roots to compare: each place is NaN, infinite or inside the interval
+        let inside = |g: f64| !g.is_finite() || (lo.min(hi)..=lo.max(hi)).contains(&g);
+        return if x.1 == p.1 && x.0.iter().copied().all(inside) {
+            Ok(())
+        } else {
+            Err(format!(
+                "a non-finite span gives places inside it; scx has {x:?}"
+            ))
+        };
+    }
+    let forward = |a: f64, b: f64| if lo <= hi { a < b } else { a > b };
+    if x.0.iter().all(|g| !g.is_nan()) && x.0.windows(2).any(|w| !forward(w[0], w[1])) {
+        return Err(format!("scx's places are not strictly increasing: {x:?}"));
+    }
+    let once = once_each(c, lo, hi, p)?;
+    let p = &once;
     if x.0.len() != p.0.len() || x.1 != p.1 {
         return Err(format!("the shape moved: the pin has {p:?}"));
     }
-    let exact: Vec<Rat> = c.iter().map(|&v| rat(v)).collect::<Result<_, _>>()?;
+    let mut exact: Vec<Rat> = Vec::new();
     for (&g, &w) in x.0.iter().zip(&p.0) {
         if g.to_bits() == w.to_bits() {
             continue;
+        }
+        if exact.is_empty() {
+            exact = c.iter().map(|&v| rat(v)).collect::<Result<_, _>>()?;
         }
         let far = |k: Option<i64>| k.unwrap_or(i64::MAX);
         let (kx, kp) = (
@@ -3943,6 +3993,36 @@ pub fn bern_roots() -> PinDefect<(List<f64>, f64, f64), FourRoots> {
             for (x, (depth, work)) in [&r.0, &r.1, &r.2, &r.3].into_iter().zip(limits) {
                 let p = crate::berns::s::roots(&c.0, *lo, *hi, depth, work);
                 roots_no_worse(&c.0, *lo, *hi, x, &p)?;
+            }
+            Ok(())
+        },
+    }
+}
+
+/// `bernstein_roots` over the known products of `(s - r)` (`t_bern::bern_roots_known`): a
+/// root that lies on a split point, which the pin reports once for each halving level that
+/// ends there and ahead of the roots of the piece it ends (research: `bernstein_roots`
+/// reports the zero ends of every piece, so the halves of a piece whose end is zero report it
+/// again). Example (`bern_roots_known` case 5): the double root at 1/2 comes back from the pin
+/// as `[0.5, 0.5, 1.0]` with the root at 1, scx `[0.5, 1.0]`. scx reports a split point once,
+/// between its halves' places, and the ends of the whole interval once. The check: scx's
+/// places are strictly increasing, and equal the pin's once each ([`once_each`]) but for places
+/// no further from an exact sign change than the pin's ([`roots_no_worse`]).
+pub fn bern_roots_known() -> PinDefect<(usize,), (RootsOut, RootsOut, RootsOut)> {
+    PinDefect {
+        reason: "the pin reports a root on a split point once per halving level, out of order",
+        applies: Applies::Disagreeing,
+        check: |(k,), r| {
+            let cs = crate::t_bern::truth::known_cases();
+            let (c, _) = &cs[k % cs.len()];
+            let calls = [
+                (0.0, 1.0, 48, 4096),
+                (0.0, 1.0, 12, 64),
+                (1.0, 3.0, 48, 4096),
+            ];
+            for (x, (lo, hi, depth, work)) in [&r.0, &r.1, &r.2].into_iter().zip(calls) {
+                let w = crate::berns::s::roots(c, lo, hi, depth, work);
+                roots_no_worse(c, lo, hi, x, &w)?;
             }
             Ok(())
         },
@@ -4638,5 +4718,280 @@ pub fn nurbs_surface_enclose_piece() -> EncDefect {
         reason: "as nurbs_surface_enclose_over",
         applies: Applies::Disagreeing,
         check: |(b,), r| enclose_inside(b, r, crate::t_nurbs_surface_enclose::s::piece::<1>(b)),
+    }
+}
+
+/// `intersect_curve_surface` (`GlobalCurveIntersect` within `0.001`) where scx and the pin
+/// disagree: scx's answer is held to testkit T2's exact roots (`curve_surface::intersect`,
+/// double-double) inside the surface's extent and the curve's.
+///
+/// The check: an overlap exactly where T2 has the curve on the surface; every crossing
+/// within `1e-9` of a T2 root; every tangent within the tolerance of the surface; and every
+/// T2 root inside the extents (off their edges by `1e-7`) found, by a crossing at it or by
+/// a tangent joined to it by a stretch of curve within the tolerance (roots the tolerance
+/// does not tell apart). What the pin gets wrong there is in 63 §4.13.
+pub fn curve_surface() -> PinDefect<(crate::t_curve_surface::Case,), crate::t_curve_surface::Answer>
+{
+    PinDefect {
+        reason: "the pin reports a coincident stretch where the curve leaves the surface by more \
+                 than its tolerance (63 §4.13)",
+        applies: Applies::Disagreeing,
+        check: |(c,), _| curve_surface_truth(c),
+    }
+}
+
+fn curve_surface_truth(c: &crate::t_curve_surface::Case) -> Result<(), String> {
+    use crate::t_curve_surface::{Kind, Shape, TOL, x};
+    use core::f64::consts::{PI, TAU};
+    use scx_surface::{Contact, CurveSurfaceHit};
+    use scx_testkit::analytic::{self, Frame as KFrame};
+    use scx_testkit::curve_surface::{self as t2, CurveKind, Meeting, SurfaceKind};
+
+    let f = c.frame();
+    let kf = |z_sign: f64| KFrame {
+        origin: f.origin().to_array(),
+        x: f.x().as_vec().to_array(),
+        y: f.y().as_vec().to_array(),
+        z: (f.z().as_vec() * z_sign).to_array(),
+    };
+    let ks = match c.kind {
+        Kind::Plane => SurfaceKind::Plane(analytic::Plane { frame: kf(1.0) }),
+        Kind::Cylinder { r } => SurfaceKind::Cylinder(analytic::Cylinder {
+            frame: kf(1.0),
+            radius: r,
+        }),
+        Kind::Cone { r, a } => SurfaceKind::Cone(analytic::Cone {
+            frame: kf(a.signum()),
+            radius: r,
+            semi_angle: a.abs(),
+        }),
+        Kind::Sphere { r } => SurfaceKind::Sphere(analytic::Sphere {
+            frame: kf(1.0),
+            radius: r,
+        }),
+        Kind::Torus { big, small } => SurfaceKind::Torus(analytic::Torus {
+            frame: kf(1.0),
+            major: big,
+            minor: small,
+        }),
+    };
+    let kc = match c.curve {
+        Shape::Segment { p, q } => CurveKind::Line(analytic::Line {
+            origin: p,
+            direction: [q[0] - p[0], q[1] - p[1], q[2] - p[2]],
+        }),
+        Shape::Conic {
+            c: o,
+            x,
+            y,
+            a,
+            b,
+            circle,
+        } => {
+            let frame = KFrame {
+                origin: o,
+                x,
+                y,
+                z: cross3(x, y),
+            };
+            if circle {
+                CurveKind::Circle(analytic::Circle { frame, radius: a })
+            } else {
+                CurveKind::Ellipse(analytic::Ellipse {
+                    frame,
+                    semi_x: a,
+                    semi_y: b,
+                })
+            }
+        }
+    };
+    let line = matches!(c.curve, Shape::Segment { .. });
+    let (curve, _) = x::curve(c);
+    let (_, se) = x::surface(c);
+    let hits = x::hits(c);
+    let meeting = t2::intersect(&kc, &ks).map_err(|e| format!("T2: {e}"))?;
+    let roots = match meeting {
+        Meeting::OnSurface => {
+            return match hits[..] {
+                [CurveSurfaceHit::Overlap { .. }] => Ok(()),
+                _ => Err(format!("T2 has the curve on the surface; scx {hits:?}")),
+            };
+        }
+        Meeting::Points(r) => r,
+    };
+    let (lo, hi) = (se.min(), se.max());
+    let margin = 1e-7;
+    let inside = |r: &t2::Hit, m: f64| {
+        let t = r.t.to_f64();
+        let on_curve = !line || (-m..=1.0 + m).contains(&t);
+        on_curve
+            && r.pin_uv.is_some_and(|(u, v)| {
+                let (u, v) = (u.to_f64(), v.to_f64());
+                u >= lo.x - m && u <= hi.x + m && v >= lo.y - m && v <= hi.y + m
+            })
+    };
+    let distance = |t: f64| t2::distance(&ks, curve.point(t).to_array()).unwrap_or(f64::INFINITY);
+    let joined = |from: f64, to: f64| {
+        let to = if line {
+            to
+        } else {
+            from + (to - from + PI).rem_euclid(TAU) - PI
+        };
+        (0..=32).all(|i| distance(from + (to - from) * f64::from(i) / 32.0) <= TOL * 1.01 + 1e-9)
+    };
+    for h in &hits {
+        match *h {
+            CurveSurfaceHit::Overlap { .. } => {
+                return Err(format!("an overlap where T2 has points: {hits:?}"));
+            }
+            CurveSurfaceHit::Point {
+                point,
+                contact: Contact::Crossing,
+                ..
+            } => {
+                let near = roots
+                    .iter()
+                    .filter(|r| inside(r, margin))
+                    .map(|r| len3(sub3(point.to_array(), r.point.map(|x| x.to_f64()))))
+                    .fold(f64::INFINITY, f64::min);
+                if near > 1e-9 {
+                    return Err(format!("a crossing {near} from every T2 root: {point:?}"));
+                }
+            }
+            CurveSurfaceHit::Point {
+                t,
+                contact: Contact::Tangent,
+                ..
+            } => {
+                if distance(t) > TOL * 1.01 + 1e-9 {
+                    return Err(format!("a tangent {} from the surface", distance(t)));
+                }
+            }
+        }
+    }
+    for r in roots.iter().filter(|r| inside(r, -margin)) {
+        let q = r.point.map(|x| x.to_f64());
+        let tq = r.t.to_f64();
+        let found = hits.iter().any(|h| match *h {
+            CurveSurfaceHit::Point {
+                point,
+                contact: Contact::Crossing,
+                ..
+            } => len3(sub3(point.to_array(), q)) <= 1e-9,
+            CurveSurfaceHit::Point {
+                t,
+                contact: Contact::Tangent,
+                ..
+            } => joined(t, tq),
+            CurveSurfaceHit::Overlap { .. } => false,
+        });
+        if !found {
+            return Err(format!("T2's root {q:?} (t {tq}) missed: {hits:?}"));
+        }
+    }
+    Ok(())
+}
+
+// ---- scx-ssi --------------------------------------------------------------------------------
+
+/// `section_by_plane` against `Surface::intersect_with_plane` (`t_ssi`): the inputs where
+/// the two answers differ past the tolerance, each judged against the exact section (testkit
+/// T5) by `t_ssi::truth::check`. They fall in these classes (the counts are of the pool):
+///
+/// - Two planes over the same place (23): the pin answers general; scx answers coincident,
+///   with every corner of each square within the snap of the other plane.
+/// - Plane and cone through the apex, steeper than the generators (11): the pin answers
+///   general; scx answers the two generator lines, which lie on both surfaces.
+/// - Plane and cone touching only at an apex outside the extent (15): the pin answers a
+///   tangent point that is off the cone's extent; scx answers empty.
+/// - Plane and cylinder or cone cutting an arc that crosses the turn's start (9 and 10):
+///   the pin cuts the arc in two at the seam; scx answers it as one piece. The truth sees
+///   one connected curve, and the pieces may not meet end to end.
+/// - Plane missing a bounded cylinder or cone (8) or a torus (15): the pin answers general;
+///   scx answers empty from the rims' hull or the torus's support, and every point of the
+///   surface's grid is off the plane by more than the snap.
+pub fn ssi_section_by_plane() -> PinDefect<(crate::t_ssi::Case,), crate::t_ssi::Print> {
+    PinDefect {
+        reason: "the pin leaves closed forms to the general intersector, splits pieces at a seam, or answers outside the extent",
+        applies: Applies::Disagreeing,
+        check: |(c,), _| crate::t_ssi::truth::check(c),
+    }
+}
+
+/// `t_pcurve`: `drop_curve_to_srf` drops at a 3-D tolerance of 10, so `DropIsoCurve` takes
+/// a gently tilted section, whose start tangent is within a degree of the cylinder's `u`
+/// direction, for the iso line at its start height and answers a constant `v`. The check
+/// holds scx's stations to the section's exact uv: `v` the height of the ellipse's point
+/// above the base and `u` testkit T4's arcs parameter of its azimuth (double-double), each
+/// within `1e-9` of size.
+pub fn oblique_pcurve() -> PinDefect<(crate::t_pcurve::Case,), Option<Vec<[f64; 2]>>> {
+    PinDefect {
+        reason: "the pin's drop, at a tolerance of 10, takes a gently tilted section for an iso \
+                 line (63 §4.14)",
+        applies: Applies::Disagreeing,
+        check: |(c,), got| oblique_pcurve_truth(c, got.as_deref()),
+    }
+}
+
+fn oblique_pcurve_truth(c: &crate::t_pcurve::Case, got: Option<&[[f64; 2]]>) -> Result<(), String> {
+    use scx_testkit::dd::{self, Dd};
+    use scx_testkit::quadric::Param;
+    let got = got.ok_or("scx gave no AngleWave2")?;
+    let [o, _, _] = c.frame;
+    let f = {
+        use scx_num::vector3d::{Point3, Vec3};
+        let [o, z, x] = c.frame;
+        scx_num::frame::Frame::new(Point3::from(o), Vec3::from(z), Vec3::from(x)).unwrap()
+    };
+    let (fx, fy, fz) = (
+        f.x().as_vec().to_array(),
+        f.y().as_vec().to_array(),
+        f.z().as_vec().to_array(),
+    );
+    let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    let turn = Param::arcs(
+        (0.0, core::f64::consts::TAU * c.r),
+        Dd::new(0.0),
+        dd::consts().pi * 2.0,
+    );
+    let size = 10.0 + c.a.max(c.b) + crate::t_pcurve::HEIGHT;
+    let [t0, t1] = c.t;
+    let n = crate::t_pcurve::STATIONS;
+    if got.len() != n + 1 {
+        return Err(format!("{} stations", got.len()));
+    }
+    for (k, uv) in got.iter().enumerate() {
+        let t = t0 + (t1 - t0) * (k as f64 / n as f64);
+        let (ct, st) = (scx_num::fmath::cos(t), scx_num::fmath::sin(t));
+        let d: [f64; 3] =
+            core::array::from_fn(|i| c.c[i] + c.a * ct * c.x[i] + c.b * st * c.y[i] - o[i]);
+        let phi = scx_num::fmath::atan2(dot(d, fy), dot(d, fx)).rem_euclid(core::f64::consts::TAU);
+        let want = [turn.to_nurb(Dd::new(phi)).to_f64(), dot(d, fz)];
+        if (0..2).any(|i| (uv[i] - want[i]).abs() > 1e-9 * size) {
+            return Err(format!("station {k}: {uv:?}, the truth {want:?}"));
+        }
+    }
+    Ok(())
+}
+
+/// The sphere and coaxial pairs of `analytic::intersect` against the pin's
+/// `intersect_with_sphere` and `intersect_with_cone` (`t_ssi_coaxial`): the inputs where the
+/// two answers differ past the tolerance, each judged against the exact section (testkit
+/// T5) by `t_ssi_coaxial::truth::check`. They fall in these classes (the counts are of the
+/// pool):
+///
+/// - Two cones on one axis, or a cylinder and a cone: the pin answers general; scx answers
+///   the circle where the meridians cross (41 and 64), empty where they do not meet within
+///   both heights (58 and 28), or coincident (6, two cones of one apex and angle).
+/// - Two cylinders of one radius over shared heights (46): the pin answers coincident or
+///   tangent arcs and lines along the overlap; scx answers coincident.
+/// - A sphere and a cylinder of its radius (27): the pin answers the equator as a crossing
+///   circle; scx answers it tangent, as the truth does (the surfaces share their normal
+///   there).
+pub fn ssi_coaxial() -> PinDefect<(crate::t_ssi_coaxial::Case,), crate::t_ssi::Print> {
+    PinDefect {
+        reason: "the pin leaves coaxial and coincident pairs to the general intersector",
+        applies: Applies::Disagreeing,
+        check: |(c,), _| crate::t_ssi_coaxial::truth::check(c),
     }
 }

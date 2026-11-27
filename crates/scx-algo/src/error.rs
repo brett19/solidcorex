@@ -77,10 +77,10 @@ pub enum SolveFailure {
     /// The integrand evaluated to a value that is not a finite number (solidcore
     /// `MassFailure::Integrand`).
     IntegrandNotFinite,
-    /// A global solve visited the most branches its options allow (not upstream: the
+    /// A global solve took its budget past its limit, one unit a branch (not upstream: the
     /// pin's fixed `MAX_SOLVE_BRANCHES` was an invalid input).
     BranchesExhausted {
-        /// The most branches allowed.
+        /// The budget's limit.
         limit: u64,
     },
     /// The caller cancelled the solve (solidcore `SolidError::Cancelled`).

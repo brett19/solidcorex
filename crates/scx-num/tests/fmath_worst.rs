@@ -5,8 +5,8 @@
 //! commit and how the subsets were taken in `tests/data/README.md`). Each result is
 //! compared, bit for bit, with the correctly rounded one from [`scx_testkit::mp`], which
 //! decides it by interval arithmetic at up to 4096 bits (double-double is not precise
-//! enough here). A result must be that one or, for the known bug counted in the table at
-//! the end, its neighbour; the count per file is pinned. Inputs the reference leaves to
+//! enough here). A result must be that one or its neighbour, and the neighbours per file
+//! are counted and pinned in the table at the end (at 0). Inputs the reference leaves to
 //! C99's special values (zeros, infinities, NaNs, `pow` of a negative base) are counted
 //! and left to `tests/fmath.rs`.
 //!
@@ -177,36 +177,30 @@ macro_rules! worst {
     };
 }
 
-// Known bug (fmath, found 11-27 by this test): `fmath` is not correctly rounded at the
-// hardest inputs, against its module docs' claim. Each function rounds once a result
-// carrying 68 to 104 bits (`exp_core`: relative error below 2^-68), which errs where the
-// true value lies that close to a halfway point between two doubles, and `powf` also
-// misrounds exact halfway points (`powf(194701.5625, 2.5)`, `powf(1781, 5)`, the
-// squares of some 29-bit doubles). Every such result is the neighbour of the correct
-// one; the most it passes the halfway point by, in ulps, at these inputs: `exp2` 2^-21,
-// `exp` 2^-28 (subnormal results and `x` near -2^-12), `ln` 2^-36, `sin` 2^-40, `acos`
-// 2^-40, the rest 2^-44 or less. Python's `decimal` at 450 digits (and exact
-// rationals for the ties) agrees with the reference at every one. The second number is
-// how many results in the subset misround (per result, so two per `sin`/`cos` input).
-// A fix (a rounding test with a more precise fallback) brings a count to 0: lower it
-// here with the fix; a rise is a regression.
+// The second number is how many results in the subset misround (per result, so two per
+// `sin`/`cos` input): 0 for every function, and a rise is a regression. Before each
+// function had its rounding test with a more precise fallback (research note 70), it
+// rounded once a result carrying 68 to 104 bits, which erred where the true value lies
+// that close to a halfway point, and `powf` also misrounded exact halfway points
+// (`powf(194701.5625, 2.5)`, `powf(1781, 5)`): 3174 results here, each the neighbour of
+// the correct one.
 worst! {
-    exp => "exp", 195;
-    exp2 => "exp2", 116;
-    ln => "log", 262;
-    log2 => "log2", 210;
-    log10 => "log10", 267;
-    sin_and_sin_cos => "sin", 458;
-    cos_and_sin_cos => "cos", 522;
-    tan => "tan", 262;
-    asin => "asin", 23;
-    acos => "acos", 78;
-    atan => "atan", 166;
-    atan2 => "atan2", 195;
-    sinh => "sinh", 18;
-    cosh => "cosh", 151;
-    tanh => "tanh", 90;
+    exp => "exp", 0;
+    exp2 => "exp2", 0;
+    ln => "log", 0;
+    log2 => "log2", 0;
+    log10 => "log10", 0;
+    sin_and_sin_cos => "sin", 0;
+    cos_and_sin_cos => "cos", 0;
+    tan => "tan", 0;
+    asin => "asin", 0;
+    acos => "acos", 0;
+    atan => "atan", 0;
+    atan2 => "atan2", 0;
+    sinh => "sinh", 0;
+    cosh => "cosh", 0;
+    tanh => "tanh", 0;
     cbrt => "cbrt", 0;
-    hypot => "hypot", 63;
-    powf => "pow", 98;
+    hypot => "hypot", 0;
+    powf => "pow", 0;
 }

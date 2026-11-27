@@ -19,8 +19,8 @@ use scx_num::vector3d::Point3;
 use scx_nurbs::KnotVector;
 use scx_nurbs_surface::{Net, NurbsSurface, NurbsSurfaceError, ParamAxis};
 
-use crate::arcs::Arcs;
 use crate::error::SurfaceError;
+use scx_curve::arcs::Arcs;
 
 /// What one direction's extent may be.
 #[derive(Clone, Copy, Debug)]

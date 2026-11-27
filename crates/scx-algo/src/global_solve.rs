@@ -9,10 +9,11 @@
 // hooks, which get the branch and the accumulator as arguments where the pin's virtuals read
 // solver fields. The traversal is an explicit stack in the order of the pin's recursion, so
 // there is no depth bound. A hook's `Result` is its own error type. The work is bounded by
-// `SolveOptions::max_branches` (the pin's fixed `MAX_SOLVE_BRANCHES`, an invalid input there,
-// is `SolveFailure::BranchesExhausted` here) and the hooks' `BranchSolver::cancelled` is asked
-// at every branch (`SolveFailure::Cancelled`); every error hands back the accumulator as it
-// stood, in `Unfinished` (research 57 M10). "No best answer yet" is `None`, which starts the maximising operations at 0 (the pin
+// the caller's `&mut Budget`, one unit a branch (the pin's fixed `MAX_SOLVE_BRANCHES`, an
+// invalid input there, is `SolveFailure::BranchesExhausted` here), and the caller's `&Stop`,
+// polled at every branch (`SolveFailure::Cancelled`; the hooks' `BranchSolver::cancelled` and
+// `SolveOptions::max_branches` are gone, 04, 11-27); every error hands back the accumulator
+// as it stood, in `Unfinished` (research 57 M10). "No best answer yet" is `None`, which starts the maximising operations at 0 (the pin
 // reset `SM_BIG_DOUBLE` for `Maximize` and `DirectedMaximize` but not `ProjectedMaximize`) and
 // the others at infinity (the pin's 1e20 culled boxes more than 1e10 apart). A solution value
 // of `SM_BIG_DOUBLE` is no longer skipped (no solver here makes the sentinel). The rayfire
@@ -41,8 +42,8 @@
 //! | [`may_contain`] | `SmGlobalSolver::BranchMayContainAnswers` |
 //! | [`split_choice`], [`Split`], [`ChildOrder`] | `FindBestSubdivisionNode`, `sm_FindLargestNonLeaf` |
 //! | [`record_nodes`] | `SmGlobalSolver::LocalSolve` |
-//! | [`DEFAULT_MAX_BRANCHES`], [`SolveOptions::max_branches`] | (not upstream: solidcore `MAX_SOLVE_BRANCHES`) |
-//! | [`BranchSolver::cancelled`] | the cancel token of `SmGlobalSolver` |
+//! | `solve`'s `&mut Budget` | (not upstream: solidcore `MAX_SOLVE_BRANCHES`) |
+//! | `solve`'s `&Stop` | the cancel token of `SmGlobalSolver` |
 //! | [`Unfinished`] | (not upstream: the solutions found before a failure) |
 
 // The box tests keep a branch when a bound is NaN, as upstream: `!(a > b)`, not `a <= b`.
@@ -58,14 +59,11 @@ use crate::solution::{
     identical,
 };
 use crate::split_tree::{Node, NodeId, SplitTree};
+use scx_num::budget::{Budget, Stop};
 use scx_num::extent3d::Extent3d;
 use scx_num::math::{EFF_ZERO, EFF_ZERO_SQRT};
 use scx_num::tol::is_zero;
 use scx_num::vector3d::{Point3, UnitVec3, Vec3, sqrt};
-
-/// The most branches a solve visits by default ([`SolveOptions::max_branches`]; not
-/// upstream: solidcore's `MAX_SOLVE_BRANCHES`).
-pub const DEFAULT_MAX_BRANCHES: u64 = 1 << 23;
 
 const OP: &str = "global_solve::solve";
 
@@ -287,14 +285,10 @@ pub struct SolveOptions {
     /// none, which is 0 for an operation that [maximises](Operation::maximizes) and
     /// infinity otherwise.
     pub incumbent_sq: Option<f64>,
-    /// The most branches the solve visits, the bound on its work; past it the solve stops
-    /// with [`SolveFailure::BranchesExhausted`].
-    pub max_branches: u64,
 }
 
 impl SolveOptions {
-    /// `operation`, keeping every solution, at `tolerance`, with no incumbent, visiting at
-    /// most [`DEFAULT_MAX_BRANCHES`] branches.
+    /// `operation`, keeping every solution, at `tolerance`, with no incumbent.
     #[must_use]
     pub const fn new(operation: Operation, tolerance: f64) -> Self {
         Self {
@@ -302,16 +296,6 @@ impl SolveOptions {
             keep: Keep::All,
             tolerance,
             incumbent_sq: None,
-            max_branches: DEFAULT_MAX_BRANCHES,
-        }
-    }
-
-    /// These options visiting at most `max_branches` branches.
-    #[must_use]
-    pub const fn with_max_branches(self, max_branches: u64) -> Self {
-        Self {
-            max_branches,
-            ..self
         }
     }
 }
@@ -771,7 +755,8 @@ pub trait BranchSolver<T, O: SolutionObject, const N: usize> {
     type Error;
 
     /// Solves a branch whose nodes are all [ready](BranchSolver::is_ready), adding what it
-    /// finds to `found` (`LocalSolve`).
+    /// finds to `found` (`LocalSolve`). Work beyond the branch itself, which [`solve`] has
+    /// charged one unit, is charged to `budget`, the solve's own.
     ///
     /// # Errors
     ///
@@ -780,6 +765,7 @@ pub trait BranchSolver<T, O: SolutionObject, const N: usize> {
         &mut self,
         branch: &Branch<'_, T, N>,
         found: &mut Accumulator<O>,
+        budget: &mut Budget,
     ) -> Result<Next, SolveError<Self::Error>>;
 
     /// Whether the branch may hold solutions (`BranchMayContainAnswers`); by default the
@@ -824,18 +810,11 @@ pub trait BranchSolver<T, O: SolutionObject, const N: usize> {
             failure: SolveFailure::NoNodeToSubdivide { trees: N },
         })
     }
-
-    /// Whether the caller has cancelled the solve, asked before every branch (the pin's
-    /// cancel token); by default never. True stops the solve with
-    /// [`SolveFailure::Cancelled`].
-    fn cancelled(&self) -> bool {
-        false
-    }
 }
 
 /// A solve that stopped with an error, and the accumulator as it stood: the solutions
 /// found and the best value so far, which bound the answer of a solve cut short by its
-/// [budget](SolveOptions::max_branches) or [cancelled](BranchSolver::cancelled).
+/// [budget](Budget) or [stop flag](Stop).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Unfinished<O, E> {
     /// Why the solve stopped.
@@ -880,11 +859,16 @@ pub fn record_nodes<T, O: SolutionObject, const N: usize>(
 /// `SmGlobalSolver::SolveIt`: searches the branches of `trees` from their roots, depth
 /// first, through `hooks`, adding to `found`.
 ///
+/// The `budget` is the work bound: each branch visited charges one unit, so a limit of `n`
+/// admits `n` branches and stops at the next, and the hooks' [`BranchSolver::local_solve`]
+/// charges its own work to the same budget. `stop` changes no result but to end the solve.
+///
 /// # Errors
 ///
 /// Each with the accumulator as it stood ([`Unfinished`]):
-/// [`SolveFailure::BranchesExhausted`] past [`SolveOptions::max_branches`] branches;
-/// [`SolveFailure::Cancelled`] when [`BranchSolver::cancelled`]; [`SolveError::InvalidInput`]
+/// [`SolveFailure::BranchesExhausted`] (with the budget's limit) when a branch takes the
+/// `budget` past its limit; [`SolveFailure::Cancelled`] when `stop` is set, asked after the
+/// budget at every branch; [`SolveError::InvalidInput`]
 /// for an empty tree or for a split the hooks choose of a leaf or of no tree; the hooks'
 /// errors.
 #[expect(
@@ -895,12 +879,14 @@ pub fn solve<T, O, S, const N: usize>(
     trees: [&SplitTree<T>; N],
     mut found: Accumulator<O>,
     hooks: &mut S,
+    budget: &mut Budget,
+    stop: &Stop,
 ) -> Result<Accumulator<O>, Unfinished<O, S::Error>>
 where
     O: SolutionObject,
     S: BranchSolver<T, O, N> + ?Sized,
 {
-    match search(trees, &mut found, hooks) {
+    match search(trees, &mut found, hooks, budget, stop) {
         Ok(()) => Ok(found),
         Err(error) => Err(Unfinished { error, found }),
     }
@@ -911,6 +897,8 @@ fn search<T, O, S, const N: usize>(
     trees: [&SplitTree<T>; N],
     found: &mut Accumulator<O>,
     hooks: &mut S,
+    budget: &mut Budget,
+    stop: &Stop,
 ) -> Result<(), SolveError<S::Error>>
 where
     O: SolutionObject,
@@ -930,7 +918,6 @@ where
         operation: OP,
         failure,
     };
-    let limit = found.options().max_branches;
     let mut root = [None; N];
     for (slot, tree) in root.iter_mut().zip(trees) {
         *slot = tree.root();
@@ -942,13 +929,13 @@ where
         return Err(invalid("a tree is empty"));
     }
     let mut stack = vec![root.map(|r| r.unwrap_or(any))];
-    let mut visited: u64 = 0;
     while let Some(ids) = stack.pop() {
-        if visited >= limit {
-            return Err(stopped(SolveFailure::BranchesExhausted { limit }));
+        if budget.charge(1).is_err() {
+            return Err(stopped(SolveFailure::BranchesExhausted {
+                limit: budget.limit(),
+            }));
         }
-        visited += 1;
-        if hooks.cancelled() {
+        if stop.is_set() {
             return Err(stopped(SolveFailure::Cancelled));
         }
         let branch = Branch::new(trees, ids).ok_or_else(|| invalid("a node is not in its tree"))?;
@@ -956,7 +943,7 @@ where
         if !hooks.may_contain(&branch, found)? {
             continue;
         }
-        if hooks.is_ready(&branch) && hooks.local_solve(&branch, found)? == Next::Done {
+        if hooks.is_ready(&branch) && hooks.local_solve(&branch, found, budget)? == Next::Done {
             continue;
         }
         let Split { tree, order } = hooks.split_choice(&branch, found)?;
@@ -1383,7 +1370,6 @@ pub fn split_choice<T, const N: usize>(op: &Operation, branch: &Branch<'_, T, N>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use core::sync::atomic::{AtomicU64, Ordering};
     use scx_num::extent1d::Extent1d;
 
     #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1430,6 +1416,7 @@ mod tests {
             &mut self,
             branch: &Branch<'_, usize, 2>,
             found: &mut Accumulator<Piece>,
+            _: &mut Budget,
         ) -> Result<Next, SolveError<()>> {
             Ok(record_nodes(branch, found))
         }
@@ -1443,6 +1430,8 @@ mod tests {
             [&a, &b],
             Accumulator::new(SolveOptions::new(Operation::Intersect, 0.0)),
             &mut Nodes,
+            &mut Budget::unlimited(),
+            &Stop::new(),
         )
         .unwrap();
         let pairs: Vec<(usize, usize)> = found
@@ -1464,6 +1453,7 @@ mod tests {
             &mut self,
             branch: &Branch<'_, usize, 2>,
             found: &mut Accumulator<Piece>,
+            _: &mut Budget,
         ) -> Result<Next, SolveError<()>> {
             let [i, j] = branch.nodes().map(|n| *n.item());
             let d = (self.0[i] - self.1[j]).abs().max(1.0) - 1.0;
@@ -1482,6 +1472,8 @@ mod tests {
             [&a, &b],
             Accumulator::new(SolveOptions::new(Operation::Minimize, 1e-9)),
             &mut Distance(&xa, &xb),
+            &mut Budget::unlimited(),
+            &Stop::new(),
         )
         .unwrap();
         assert_eq!(found.best_sq(), 16.0);
@@ -1499,6 +1491,7 @@ mod tests {
                 &mut self,
                 _: &Branch<'_, usize, 2>,
                 _: &mut Accumulator<Piece>,
+                _: &mut Budget,
             ) -> Result<Next, SolveError<()>> {
                 Ok(Next::Split)
             }
@@ -1508,6 +1501,8 @@ mod tests {
             [&a, &a],
             Accumulator::new(SolveOptions::new(Operation::Intersect, 0.0)),
             &mut Again,
+            &mut Budget::unlimited(),
+            &Stop::new(),
         );
         assert!(matches!(
             r,
@@ -1521,37 +1516,31 @@ mod tests {
         ));
     }
 
-    /// The options of `minimize_keeps_the_nearest_pair`, visiting at most `max_branches`
-    /// branches.
-    fn nearest_pair(max_branches: u64) -> SolveOptions {
-        SolveOptions::new(Operation::Minimize, 1e-9).with_max_branches(max_branches)
+    /// The options of `minimize_keeps_the_nearest_pair`.
+    fn nearest_pair() -> SolveOptions {
+        SolveOptions::new(Operation::Minimize, 1e-9)
     }
 
-    /// Counts the branches asked about, and cancels after `after` of them.
-    struct CancelAfter<'a> {
+    /// Sets the stop flag in its `after`th local solve (counting from 0).
+    struct StopAfter<'a> {
         inner: Distance<'a>,
-        asked: AtomicU64,
+        stop: &'a Stop,
+        solved: u64,
         after: u64,
     }
-    impl BranchSolver<usize, Piece, 2> for CancelAfter<'_> {
+    impl BranchSolver<usize, Piece, 2> for StopAfter<'_> {
         type Error = ();
         fn local_solve(
             &mut self,
             branch: &Branch<'_, usize, 2>,
             found: &mut Accumulator<Piece>,
+            budget: &mut Budget,
         ) -> Result<Next, SolveError<()>> {
-            self.inner.local_solve(branch, found)
-        }
-        fn cancelled(&self) -> bool {
-            self.asked.fetch_add(1, Ordering::Relaxed) >= self.after
-        }
-    }
-
-    fn cancel_after<'a>(xa: &'a [f64], xb: &'a [f64], after: u64) -> CancelAfter<'a> {
-        CancelAfter {
-            inner: Distance(xa, xb),
-            asked: AtomicU64::new(0),
-            after,
+            if self.solved == self.after {
+                self.stop.set();
+            }
+            self.solved += 1;
+            self.inner.local_solve(branch, found, budget)
         }
     }
 
@@ -1560,16 +1549,26 @@ mod tests {
         let xa = [0.0, 3.0, 9.0, 20.0];
         let xb = [14.0, 30.0];
         let (a, b) = (row(&xa), row(&xb));
-        // the whole solve, counted by a cancel check that never fires
-        let mut all = cancel_after(&xa, &xb, u64::MAX);
-        let full = solve([&a, &b], Accumulator::new(nearest_pair(u64::MAX)), &mut all).unwrap();
-        let visits = all.asked.load(Ordering::Relaxed);
+        // the whole solve, counted by the budget: one unit a branch
+        let mut all = Budget::unlimited();
+        let full = solve(
+            [&a, &b],
+            Accumulator::new(nearest_pair()),
+            &mut Distance(&xa, &xb),
+            &mut all,
+            &Stop::new(),
+        )
+        .unwrap();
+        let visits = all.used();
         assert!(visits > 2);
         // exactly enough branches finishes with the same answer
+        let mut exactly = Budget::new(visits);
         let exact = solve(
             [&a, &b],
-            Accumulator::new(nearest_pair(visits)),
+            Accumulator::new(nearest_pair()),
             &mut Distance(&xa, &xb),
+            &mut exactly,
+            &Stop::new(),
         )
         .unwrap();
         assert_eq!(exact.solutions(), full.solutions());
@@ -1577,8 +1576,10 @@ mod tests {
         // one fewer stops, with what it had found
         let cut = solve(
             [&a, &b],
-            Accumulator::new(nearest_pair(visits - 1)),
+            Accumulator::new(nearest_pair()),
             &mut Distance(&xa, &xb),
+            &mut Budget::new(visits - 1),
+            &Stop::new(),
         )
         .unwrap_err();
         assert_eq!(
@@ -1598,8 +1599,10 @@ mod tests {
         // no budget visits nothing
         let none = solve(
             [&a, &b],
-            Accumulator::new(nearest_pair(0)),
+            Accumulator::new(nearest_pair()),
             &mut Distance(&xa, &xb),
+            &mut Budget::new(0),
+            &Stop::new(),
         )
         .unwrap_err();
         assert!(none.found.solutions().is_empty());
@@ -1607,26 +1610,30 @@ mod tests {
     }
 
     #[test]
-    fn a_cancel_stops_before_the_next_branch_and_keeps_the_partial_answer() {
+    fn a_stop_ends_the_solve_before_the_next_branch_and_keeps_the_partial_answer() {
         let xa = [0.0, 3.0, 9.0, 20.0];
         let xb = [14.0, 30.0];
         let (a, b) = (row(&xa), row(&xb));
-        let mut never = cancel_after(&xa, &xb, u64::MAX);
         let full = solve(
             [&a, &b],
-            Accumulator::new(nearest_pair(u64::MAX)),
-            &mut never,
+            Accumulator::new(nearest_pair()),
+            &mut Distance(&xa, &xb),
+            &mut Budget::unlimited(),
+            &Stop::new(),
         )
         .unwrap();
-        let visits = never.asked.load(Ordering::Relaxed);
-        // cancelled before the root: nothing found
-        let mut at_once = cancel_after(&xa, &xb, 0);
-        let r = solve(
+        // set before the root: nothing found, and the budget charged for the branch asked
+        let set = Stop::new();
+        set.set();
+        let mut spent = Budget::unlimited();
+        let u = solve(
             [&a, &b],
-            Accumulator::new(nearest_pair(u64::MAX)),
-            &mut at_once,
-        );
-        let u = r.unwrap_err();
+            Accumulator::new(nearest_pair()),
+            &mut Distance(&xa, &xb),
+            &mut spent,
+            &set,
+        )
+        .unwrap_err();
         assert_eq!(
             u.error,
             SolveError::Failed {
@@ -1634,18 +1641,26 @@ mod tests {
                 failure: SolveFailure::Cancelled,
             }
         );
-        assert_eq!(at_once.asked.load(Ordering::Relaxed), 1);
+        assert_eq!(spent.used(), 1);
         assert!(u.found.solutions().is_empty());
-        // cancelled before the last branch: asked once more than the branches visited, and
-        // the answer so far bounds the full one
-        let mut late = cancel_after(&xa, &xb, visits - 1);
+        // set in the first local solve: the next branch ends the solve, with an answer
+        // that bounds the full one
+        let flag = Stop::new();
+        let mut hooks = StopAfter {
+            inner: Distance(&xa, &xb),
+            stop: &flag,
+            solved: 0,
+            after: 0,
+        };
         let u = solve(
             [&a, &b],
-            Accumulator::new(nearest_pair(u64::MAX)),
-            &mut late,
+            Accumulator::new(nearest_pair()),
+            &mut hooks,
+            &mut Budget::unlimited(),
+            &flag,
         )
         .unwrap_err();
-        assert_eq!(late.asked.load(Ordering::Relaxed), visits);
+        assert_eq!(hooks.solved, 1);
         assert_eq!(
             SolveFailure::Cancelled.kind(),
             scx_num::error::ErrorKind::Cancelled

@@ -1,0 +1,22 @@
+# Written for solidcorex.
+[package]
+name = "scx-ssi"
+description = "solidcorex layer 4: surface-surface intersection, starting with the closed forms (plane sections of the analytic kinds)"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+scx-curve = { path = "../scx-curve" }
+scx-num = { path = "../scx-num" }
+scx-surface = { path = "../scx-surface" }
+
+# The exact references the tests check against (layers.txt [testkit]).
+[dev-dependencies]
+scx-nurbs = { path = "../scx-nurbs" }
+scx-testkit = { path = "../scx-testkit" }
+
+[lints]
+workspace = true

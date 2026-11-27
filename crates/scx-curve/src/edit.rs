@@ -15,6 +15,7 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
+use scx_num::domain::ParamDomain;
 use scx_num::extent1d::Extent1d;
 use scx_num::math::Affine;
 use scx_num::vector3d::Point3;
@@ -173,6 +174,8 @@ impl Curve2 {
         match self {
             Self::Line(_) | Self::Circle(_) | Self::Ellipse(_) => Ok(self.clone()),
             Self::Nurbs(n) => restrict_nurbs(n, e).map(Self::Nurbs),
+            Self::AngleLine(a) => restrict_angle(self, a.domain(), e),
+            Self::AngleWave(a) => restrict_angle(self, a.domain(), e),
         }
     }
 
@@ -180,11 +183,24 @@ impl Curve2 {
     #[must_use]
     pub fn reversed(&self) -> Self {
         match self {
+            Self::AngleLine(a) => Self::AngleLine(a.reversed()),
+            Self::AngleWave(a) => Self::AngleWave(a.reversed()),
             Self::Line(l) => Self::Line(l.reversed()),
             Self::Circle(c) => Self::Circle(c.reversed()),
             Self::Ellipse(e) => Self::Ellipse(e.reversed()),
             Self::Nurbs(n) => Self::Nurbs(Arc::new(n.reversed())),
         }
+    }
+}
+
+/// An angle kind over `e`: itself (its form holds for every `t`), unless `e` reaches past
+/// a half turn's domain.
+fn restrict_angle(c: &Curve2, domain: ParamDomain, e: Extent1d) -> crate::Result<Curve2> {
+    match domain {
+        ParamDomain::Bounded(domain) if e.min() < domain.min() || e.max() > domain.max() => {
+            Err(CurveError::OutsideDomain { extent: e, domain })
+        }
+        _ => Ok(c.clone()),
     }
 }
 
@@ -290,7 +306,7 @@ mod tests {
 
     fn bounded(c: &Curve) -> Option<Extent1d> {
         match c.domain() {
-            scx_num::domain::ParamDomain::Bounded(e) => Some(e),
+            ParamDomain::Bounded(e) => Some(e),
             _ => None,
         }
     }
