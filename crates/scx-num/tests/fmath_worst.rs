@@ -193,9 +193,9 @@ macro_rules! worst {
 worst! {
     exp => "exp", 0;
     exp2 => "exp2", 0;
-    ln => "log", 262;
-    log2 => "log2", 210;
-    log10 => "log10", 267;
+    ln => "log", 0;
+    log2 => "log2", 0;
+    log10 => "log10", 0;
     sin_and_sin_cos => "sin", 458;
     cos_and_sin_cos => "cos", 522;
     tan => "tan", 262;

@@ -92,7 +92,7 @@ pub(super) fn exp2(x: f64) -> f64 {
     let k = dd::round_int(x);
     if k == x {
         // An exact power of two (rounded once: 2^-1075 ties to 0).
-        return big::Big::from_u64(1, 1).mul_pow2(k as i64).to_f64();
+        return Big::from_u64(1, 1).mul_pow2(k as i64).to_f64();
     }
     // x - k is exact.
     let f = x - k;
