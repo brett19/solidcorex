@@ -2650,3 +2650,213 @@ Open questions:
 ### 26.9 Proposed 04 row
 
 | 11-27 | (For the owner's review) `scx_stitch::stitch(&[&Brep], Want, &mut Cx) -> Result<Stitched, StitchError>`: sheet `i` is operand `i`, sheet 0 is edited in place, and the others are copied in with `Origin::Operand` lineage. Vertices of different sheets within coincidence are one vertex, from one grid over all sheets. Two of one sheet are `Refused(VerticesWithinCoincidence)`. A chain is anchored to the nearest vertex of its doubled sheet, else `Unsupported(Chain)`. The kept record is the member with the smallest reach, then the lowest point, so permuted input gives the same points. That vertex is raised, `Measured`, to the farthest edge or pcurve end the merge moves, where that is beyond its reach. Until ST2, edges to join or split, and a vertex inside another sheet's edge box, are `Unsupported(Edges)`; `Want::Solid` is `Unsupported(Solid)`. `Stitched { done: Done<NoItems>, report: StitchReport }`, since a stitch skips nothing. Edges: stitch → bodyq | Amends row 186's "a's record kept" for stitch, so that §4.4's permuted-bits truth holds; amends §4.3 step 4 ("never raises"), since moved curve ends need the measured gap row 186 asks for | 74 §26 |
+
+## 25. BW4 as built (11-27)
+
+Two queries across an edge, in `crates/scx-bodyq/src/{along,tangent,continuity}.rs`:
+
+```rust
+pub fn tangent_all_along(body: &Brep, edge: EdgeId, max_angle: f64,
+                         budget: &mut Budget, stop: &Stop) -> Result<Tangency, BodyqError>;
+pub enum Tangency { Tangent { bound: f64 }, NotTangent { at: f64, angle: Ivl },
+                    Undecided { at: f64, angle: Ivl } }
+
+pub fn continuity(body: &Brep, edge: EdgeId, tol: &ContinuityTolerances,
+                  budget: &mut Budget, stop: &Stop) -> Result<Continuity, BodyqError>;
+pub struct ContinuityTolerances { pub gap: Length, pub angle: f64, pub curvature: f64,
+                                  pub curvature_rate: f64, pub curvature_accel: f64 }
+pub enum Order { G0, G1, G2, G3, G4 }
+pub struct Continuity { pub proved: Option<Order>, pub limit: Option<Limit>,
+                        pub measured: [Measured; 5] }
+pub enum Limit { Refuted { order, at, drop: Ivl }, Undecided { order, at, drop: Ivl } }
+pub struct Measured { pub at: f64, pub bracket: Ivl }
+```
+
+New refusals: `BodyqRefusal::Tolerance` (a tolerance that is not finite or is negative, or an
+angle not below pi), `OneSided { edge }` (fewer than two fins) and `Collapsed { edge }`. More than
+two fins is `Unsupported(NonManifold)`. A NURBS face is `Unsupported(Nurbs { at: Face })`.
+
+### 25.1 Method
+
+- **Normals from the edge's 3-D curve. No pcurve is read.** Each analytic surface has a normal
+  field in closed form: a unit `n0(p)` and a signed distance `delta0(p)`, so the foot is
+  `p - delta0 n0` and the surface's normal there is `n0` exactly. The plane uses its axis; the
+  cylinder its radial direction; the cone its slant normal `c (e - k Z)`; the sphere the
+  direction from its centre; the torus the direction from its tube circle. The natural normal is
+  `sigma n0`, with `sigma` the surface's sense, checked against `scx-surface`'s normals. The faces
+  are oriented coherently across the edge. Face a keeps its natural normal. Face b keeps its own
+  where its use runs the other way along the edge, and has it turned where both uses run the same
+  way. So a box edge reads pi/2, an equilateral prism's wall edge reads 120 degrees, and a smooth
+  edge reads 0.
+- **The angle without trigonometry on the proof path.** The proof uses `D = |na - nb|^2` and
+  `S = |na + nb|^2`. The thresholds are `(2 sin(theta/2))^2` and `(2 cos(theta/2))^2`, held as
+  intervals. A piece holds if `D < thrD` or `S > thrS`, and a point fails on the reverse. `D` is
+  well conditioned near 0 and `S` near pi. The reported angle bracket intersects
+  `2 asin(sqrt(D)/2)` with `2 acos(sqrt(S)/2)` and is padded by 1e-14.
+- **Curvature drops G2 to G4 from the implicit equation.** At the foot `p*` with oriented normal
+  `n`, the across direction is `w = n x T`. The height `z(a)` over `p* + a w` solves
+  `F(p* + a w + z n) = 0`, with `F` the surface's implicit polynomial. The solve runs in a
+  degree-4 power series and gives `z_k = -E_k / g` for `k = 2, 3, 4`. The three values are
+  `kappa = 2 z2`, `kappa' = 6 z3` and `kappa'' = 24 z4 - 24 z2^3`. A circle section gives
+  `kappa'' = 0`, which the sphere, cylinder and torus tests check. The drop is face a's value
+  minus face b's.
+- **One code, two rings.** The formulas are written once over a private `Num` trait. With `Ivl`
+  they give a certified bracket at one parameter. With `TmN<6>` they give an enclosure over a
+  piece that keeps correlation, so a constant angle stays tight over a whole edge where intervals
+  would not.
+- **Taylor models of the curve.** On a piece `[lo, hi]`, centre `m` and half-width `delta`, the
+  coefficients are `C^(k)(m) delta^k / k!` for `k <= 5`. They come from `jet_over::<Ivl, 7>` at
+  `m`. The remainder is the jet over the whole piece times `delta^6 / 6!`. A NURBS curve's
+  interval is cut at its interior knots first.
+- **Driver (§2.5, R6).** The driver works depth first, left to right, on a stack. Each piece
+  enclosure and each midpoint bracket charges one budget unit and checks `stop`:
+  - If the piece holds, its range joins the bound hull.
+  - Otherwise the midpoint is bracketed. A failing bracket ends the proof with a witness.
+  - A straddling bracket is recorded as undecided: the worst by its upper end, ties to the left.
+    The piece is not split, because no piece holding that point can decide.
+  - A holding bracket splits the piece.
+  - A piece whose midpoint is not strictly inside is undecided.
+
+  There is no MAX_SPLITS. The floating-point floor and the one budget bound the work.
+- **Orders in sequence.** `continuity` proves G0 (`|gap|^2 < gap^2`), then G1, then G2 to G4,
+  each over the whole edge. The first order not proved is the `limit`. The drops are measured
+  apart from the proof, at 9 evenly spaced stations with both ends included, whatever was proved,
+  under the same budget. Each is a certified bracket at its station and a measure along the edge.
+- **Identity.** If both fins have one analytic surface oriented alike (a seam, or two faces of one
+  surface), the normal is a function of the point. The answer is then `Tangent { bound: 0 }`, or
+  G4 with zero drops, with no work. This covers the analytic seams, so **SU6b's `seam_bound` is
+  not needed for analytic edges**. A closed NURBS surface's two sides of a seam lie at different
+  parameters, where the normals can disagree. That is SU6b's question, and it returns
+  `Unsupported(Nurbs)` with every NURBS face.
+
+### 25.2 Cases for and against
+
+- **The normal field of the 3-D curve, not pcurves.** For:
+  - It is closed form on every analytic surface.
+  - It needs no SM1b pieces.
+  - A NURBS edge curve between analytic faces works today; the crease test proves pi/2 on a
+    quadratic with interior knots.
+  - The pin's pcurve failure modes cannot arise: a pcurve a period off, or 1e-15 off a knot line.
+
+  Against: the foot is the curve point's projection, not the pcurve's surface point. On an edge
+  within its accuracy of both faces the difference in normal is second order in the gap, about
+  1e-12 rad at 1e-6 mm. On an inexact edge the answer is about the faces near the curve.
+- **Proved or Undecided (R2).** For: a sample never proves. Against: an angle exactly at the
+  threshold, such as walls 0.3 degrees apart asked at 0.3 degrees, is Undecided. That is the
+  truth at f64 precision; the test asserts it.
+- **No margin parameter.** Callers pick `max_angle`. The pin's SMOOTH (0.5 degrees) stays in the
+  tests.
+- **R8 signature `(&mut Budget, &Stop)`, not `cx`.** Both queries are memo-free leaves. Against:
+  a caller with a `Cx` passes its parts.
+- **`Measured`, not `Drop`.** A struct named `Drop` shadows the prelude trait.
+
+### 25.3 Tests
+
+**`tests/tangent_edge.rs` (15).** `parts_by` checks NotTangent at `want - tol` and Tangent at
+`want + tol`, with the bound or bracket holding `want`. Truth is the construction's dihedral,
+never the pin's output.
+
+- box, 12 edges, pi/2 to 1e-12;
+- equilateral prism, 120 and 90 degrees;
+- thin wedge, 175 and 92.5 degrees to 1e-9;
+- cylinder caps pi/2, and the seam Tangent;
+- frustum base `acos(-0.6)` and top `acos(0.6)`;
+- shallow frustums at 1 to 80 degrees;
+- oblique cylinder wall on `z = 0`, a hand-built sheet: tilt 30 degrees, an ellipse arc through
+  t = 0 and pi. The maximum is 120 degrees to 1e-6, with the verdict table at
+  125/119/90/60/59 degrees;
+- stadium: line-arc edges Tangent with bound < 1e-9, caps pi/2. This replaces the pin's round by
+  fillet;
+- walls 0.3 degrees apart: Tangent at 0.5, NotTangent at 0.2, Undecided at 0.3 with `at` inside
+  and the bracket holding 0.3;
+- sphere, torus and cone seams;
+- refusals: Tolerance at -1, NaN, inf, pi and 4; NoEntity; OneSided on a sheet boundary;
+- a NURBS face is `Unsupported(Nurbs)`;
+- a NURBS crease;
+- budget `Exhausted` and stop `Cancelled`;
+- determinism: equal answer and equal `used`.
+
+**`tests/continuity.rs` (8).**
+
+- box: G0 proved, G1 refuted, drops 0 / pi/2 / 0 / 0 / 0;
+- stadium: G1 proved, G2 refuted, kappa drop 1/2 to 1e-9, rates 0;
+- arcs of radius 3 and 2 tangent inside one another: drop 1/6, the difference and not the sum.
+  This is the sign check;
+- cylinder caps G0 and seam G4;
+- kink at the angle tolerance: Undecided G1;
+- tolerance refusals;
+- one budget for every order: `used - 1` is Exhausted, and `used` gives the same answer;
+- with the curvature tolerance at 0.6, the stadium is proved G4 through the Taylor-model series
+  solve.
+
+**`src/along.rs` unit tests (3).** These port the pin's in-module `query/continuity.rs` curvature
+tests:
+
+- a sphere bends by -1/r both ways;
+- a cylinder bends round and not along, and the other way when turned;
+- a saddle on a torus's inner equator: -1/2 round the tube, +1/3 along the equator, rates 0.
+
+**Not ported, on purpose, with what each proved:**
+
+| pin test | what it proved | where |
+|---|---|---|
+| `a_box_corner_turns_a_right_angle` | `edge_turn` at a vertex | BW11 (vertex joints) |
+| `a_line_runs_on_into_its_tangent_arc_without_a_turn` | the joint turn of a line into its arc is 0 | BW11. The edge half is here (stadium) |
+| `an_l_section_s_inside_corner_is_concave` | `convex_at` sign | BW11 |
+| `joint_turn_is_the_angle_between_the_directions`, `a_zero_or_non_finite_joint_direction_is_refused` | `joint_turn` and its refusal | BW11 |
+| `a_round_meets_its_faces_smoothly` | a fillet's edges are tangent | replaced by the stadium, since there is no blend op yet |
+| `a_procedural_round_is_smooth` | the same on a procedural round | needs blends; NURBS faces pending |
+| `a_pcurve_a_period_off_its_face_is_refused` | the pin's pcurve-based normal refuses a mis-windowed pcurve | does not apply: no pcurve is read |
+| `a_pcurve_1e_15_off_a_knot_line_is_on_its_own_side` | the side choice at a NURBS knot line | does not apply, and a NURBS surface is pending |
+| `a_cylinder_s_circles_and_parameter_lines_bend_by_their_closed_forms` | curve and iso combs | BW10 (combs). The section curvature is covered by the unit tests |
+| `a_disc_capping_a_tube_meets_it_at_stations_on_the_circle` | `continuity_over` two separate bodies | BW10 / sheet seams |
+| `points_above_and_below_a_sheet_are_on_its_two_sides` (in-module) | a side query on a sheet | not a continuity test; `classify_point` and `sides_along` cover sides |
+
+The row's "6" cites `surface/continued.rs`, which holds 6 surface-growth tests unrelated to
+continuity. I took it as a mis-citation and ported the in-module curvature tests in its place.
+
+### 25.4 Costs (release, server build, mean of 200 runs)
+
+| edge | `tangent_all_along` | units | `continuity` | units |
+|---|---|---|---|---|
+| box edge (at 91 degrees) | 1.7 us | 1 | 226 us | 48 |
+| cylinder cap circle | 42 us | 10 | 901 us | 141 |
+| frustum base | 106 us | 22 | 1,014 us | 141 |
+| stadium line-arc | 9.7 us | 1 | 482 us | 49 |
+| oblique ellipse rim | 35 us | 7 | 583 us | 93 |
+| NURBS crease (3 spans) | 15 us | 3 | 267 us | 50 |
+
+Before: n/a. These are new functions and no existing path changes.
+
+`continuity` is dominated by its 45 station brackets (5 orders x 9) and, on a full circle, by G0.
+G0 must enclose a gap below 1e-6 mm, so it splits the circle into about 30 pieces.
+
+### 25.5 Deviations
+
+- R8 `(&mut Budget, &Stop)` instead of §2.3's `cx`.
+- No margin.
+- No MAX_SPLITS.
+- No pcurves.
+- `Measured` for `Drop`.
+- The `continued.rs` citation (above).
+- A test-only dev-dependency on `scx-planar`, for `Region` and `Segment` to extrude profiles.
+  It lies below bodyq in layers.txt. The row lists no edges, and the normal deps are unchanged.
+- SU6b is not needed for analytic seams (identity). NURBS seams and every NURBS face return
+  `Unsupported(Nurbs)` until step 5's surface pieces exist.
+
+### 25.6 Open questions
+
+1. Should a station drop stay a certified bracket at a point (as built), or should it be a sample
+   reported as such? The bracket is what a caller can rely on, but it costs 45 units per call.
+2. G0 on a full circle splits into about 30 pieces to enclose a gap below 1e-6 mm. Should G0 use
+   SU6's `gap` bracket instead of its own Taylor model?
+3. NURBS seams wait on SU6b's `seam_bound`. Should BW4b port it, or should SU6b?
+4. Sign convention: kappa is negative where the face bends away from its outward normal (a sphere
+   reads -1/r). Is that the convention BW10's combs want?
+5. No test yet has two different but coincident surface records across an edge proved G2 by the
+   series rather than by identity. One should be added once a builder can make such a pair.
+6. Should `tangent_all_along` also take a face pair, for BW10's face chains?
+
+### 25.7 Proposed 04 row
+
+| 11-27 | (For the owner's review) **BW4: `tangent_all_along` and `continuity` in scx-bodyq.** Both read each analytic face's normal field at the edge curve's point (closed form; no pcurve), oriented coherently by the fins' senses. `tangent_all_along(&Brep, EdgeId, max_angle, &mut Budget, &Stop) -> Tangency { Tangent{bound} \| NotTangent{at, angle} \| Undecided{at, angle} }` is proved over Taylor-model pieces under one budget, refuted by a certified bracket, and has no split cap. `continuity(.., &ContinuityTolerances, ..) -> Continuity { proved: Option<Order>, limit: Option<Limit>, measured: [Measured; 5] }` proves G0 to G4 in turn (gap, angle, and the jumps of the normal section's curvature, its rate and its rate's rate from the implicit equation) and reports the first order not proved as Refuted or Undecided. The drops are measured apart from the proof at 9 stations. A seam of one analytic surface is G4 by identity, so SU6b is needed only for NURBS seams. NURBS faces are `Unsupported(Nurbs)`; NURBS edge curves work, cut at their knots. New refusals: Tolerance, OneSided, Collapsed. Edges: none (scx-planar as a test-only dev-dependency) | 74 §25 |
