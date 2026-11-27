@@ -13,8 +13,12 @@
 //! Each result is exact when no intermediate overflows and, for [`two_prod`], when the
 //! error term does not underflow (`|a * b| > 2^-969` is enough).
 
-/// Knuth's two-sum: `(s, e)` with `s = fl(a + b)` and `a + b = s + e` exactly, for any
-/// finite `a` and `b` whose sum does not overflow.
+/// Knuth's two-sum: `(s, e)` with `s = fl(a + b)` and `a + b = s + e` exactly, for finite
+/// `a` and `b` whose sum does not overflow and, when `|a| < |b|`, whose `s - a` does not
+/// either. That can overflow, and `e` is then a NaN, where `|b|` is near `f64::MAX` and
+/// `a` of the other sign: `TestFloat`'s `f64_mulAdd` operands hold 316 such pairs, every
+/// one with `|b| = f64::MAX` and `|a|` in `[2^1021, 2^1022]`. With `|a| >= |b|`, `s - a`
+/// is exact and never overflows.
 #[inline]
 #[must_use]
 pub fn two_sum(a: f64, b: f64) -> (f64, f64) {
@@ -67,6 +71,21 @@ pub fn two_prod(a: f64, b: f64) -> (f64, f64) {
             two_prod_fma(a, b)
         }
     }
+}
+
+/// `a * b + c` rounded once (round to nearest, ties to even): IEEE 754's fused
+/// multiply-add, the same bits on every target (a hardware instruction or a library
+/// `fma`). Checked bit for bit against Berkeley `TestFloat`'s `f64_mulAdd` vectors
+/// (`tests/testfloat_muladd.rs`). A NaN result is a quiet NaN, its payload and sign
+/// unspecified.
+#[inline]
+#[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "eft is the one home of mul_add (01 §8.3)"
+)]
+pub fn fma(a: f64, b: f64, c: f64) -> f64 {
+    a.mul_add(b, c)
 }
 
 /// [`two_prod`] by one fused multiply-add.
