@@ -281,21 +281,27 @@ pub mod x {
         }
     }
 
-    /// scx's `math`, with the pin's three- and four-operand maxima and minima as the
-    /// nested `max2`/`min2` that replace them.
+    /// scx's `math`, with the pin's two- to four-operand maxima and minima as the
+    /// `f64::max`/`f64::min` chains that replace them.
     pub mod math {
         pub use scx_num::math::*;
+        pub fn max2(a: f64, b: f64) -> f64 {
+            a.max(b)
+        }
+        pub fn min2(a: f64, b: f64) -> f64 {
+            a.min(b)
+        }
         pub fn max3(a: f64, b: f64, c: f64) -> f64 {
-            max2(max2(a, b), c)
+            a.max(b).max(c)
         }
         pub fn min3(a: f64, b: f64, c: f64) -> f64 {
-            min2(min2(a, b), c)
+            a.min(b).min(c)
         }
         pub fn max4(a: f64, b: f64, c: f64, d: f64) -> f64 {
-            max2(max2(a, b), max2(c, d))
+            a.max(b).max(c.max(d))
         }
         pub fn min4(a: f64, b: f64, c: f64, d: f64) -> f64 {
-            min2(min2(a, b), min2(c, d))
+            a.min(b).min(c.min(d))
         }
     }
 
@@ -306,7 +312,7 @@ pub mod x {
         use scx_num::extent1d::Extent1d;
         use scx_num::extent2d::Extent2d;
         use scx_num::extent3d::Extent3d;
-        use scx_num::math::{max2, Vec3, EFF_ZERO, EFF_ZERO_PARAM, EFF_ZERO_RAD};
+        use scx_num::math::{Vec3, EFF_ZERO, EFF_ZERO_PARAM, EFF_ZERO_RAD};
         use scx_num::math::{EFF_ZERO_SQ, EFF_ZERO_SQRT};
         pub use scx_num::tol::*;
         use scx_num::vector2d::Vec2;
@@ -456,7 +462,7 @@ pub mod x {
         /// The pin's four-operand maximum pairs its operands (`smos_4Max`), so the
         /// adapter pairs the magnitudes the same way.
         pub fn scaled_zero4(a: &impl Mag, b: &impl Mag, c: &impl Mag, d: &impl Mag) -> f64 {
-            sz(&[max2(a.mag(), b.mag()), max2(c.mag(), d.mag())])
+            sz(&[a.mag().max(b.mag()), c.mag().max(d.mag())])
         }
         pub fn scaled_zero_sq4(a: &impl Mag, b: &impl Mag, c: &impl Mag, d: &impl Mag) -> f64 {
             let z = scaled_zero4(a, b, c, d);

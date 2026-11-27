@@ -108,7 +108,7 @@
 use crate::certified::gamma;
 use crate::extent1d::Extent1d;
 use crate::extent3d::Extent3d;
-use crate::math::{max2, Vec3, EFF_ZERO, EFF_ZERO_SQ};
+use crate::math::{Vec3, EFF_ZERO, EFF_ZERO_SQ};
 #[cfg(doc)]
 use crate::math::{EFF_ZERO_PARAM, EFF_ZERO_RAD, EFF_ZERO_SQRT};
 use crate::units::{coincident, Accuracy, Length, ParamTol, Resolution};
@@ -430,14 +430,14 @@ pub fn map_to_1d(tol: Length, deriv: Vec3, natural_interval: &Extent1d) -> Param
 // ---- scaled zeros ------------------------------------------------------------------
 
 /// The largest scaled zero of `magnitudes`: `SM_EFF_ZERO * (1 + max |m|)` (the
-/// nullary to quaternary `SmTol::GetScaledZero` overloads in one). The maximum is a left
-/// fold with C's comparison ([`max2`]), so a NaN magnitude carries as `max2` carries
-/// it; no magnitudes give [`EFF_ZERO`]. A value's own magnitude is its
+/// nullary to quaternary `SmTol::GetScaledZero` overloads in one). The maximum is
+/// `f64::max`'s, so a NaN magnitude is passed over whatever its place; no magnitudes give
+/// [`EFF_ZERO`]. A value's own magnitude is its
 /// [`ScaledZero`] size (`max_dimension`).
 #[must_use]
 #[inline]
 pub fn scaled_zero<I: IntoIterator<Item = f64>>(magnitudes: I) -> f64 {
-    EFF_ZERO * (1.0 + magnitudes.into_iter().fold(0.0, |m, x| max2(m, x.abs())))
+    EFF_ZERO * (1.0 + magnitudes.into_iter().fold(0.0, |m: f64, x| m.max(x.abs())))
 }
 
 /// Values with a size-relative numerical zero (the unary `SmTol::GetScaledZero`
@@ -565,9 +565,9 @@ mod tests {
         assert_eq!(scaled_zero([1.0, m2, m3, -10000.0]), EFF_ZERO * 10001.0);
         assert_eq!(scaled_zero([-7.0]), 7.0f64.scaled_zero());
         assert_eq!(scaled_zero([]), EFF_ZERO);
-        // a NaN carries as C's `>` carries it: dropped before a number, kept after one
+        // `f64::max` passes a NaN over in either place
         assert_eq!(scaled_zero([f64::NAN, 3.0]), EFF_ZERO * 4.0);
-        assert!(scaled_zero([3.0, f64::NAN]).is_nan());
+        assert_eq!(scaled_zero([3.0, f64::NAN]), EFF_ZERO * 4.0);
     }
 
     #[test]

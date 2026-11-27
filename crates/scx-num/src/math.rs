@@ -20,6 +20,9 @@
 // friends `apply*`, `inverse` answers `Option`, `is_rigid` lost its projective tolerance, and
 // `transform_points` went (its one caller mapped points one by one). A composition's linear part
 // no longer takes NaN from a translation not finite (`0 * inf` in `smgu_4x4Mult`).
+// Then `max2` and `min2` (`smos_Max`, `smos_Min`: `a > b ? a : b`) removed for `f64::max` and
+// `f64::min`. Those drop a NaN operand and answer the other, where `max2` answered its second
+// operand: `max2(NaN, 1)` was 1 but `max2(1, NaN)` NaN, so a fold's answer hung on its order.
 //! Small `f64` linear-algebra types: [`Vec3`]/[`Point3`], [`Vec2`]/[`Point2`],
 //! [`Affine`], and the numeric constants of `SmMath.h`.
 //!
@@ -38,7 +41,7 @@
 //! | [`Affine::rotation`], [`Affine::uniform_scaling`], [`Affine::reflection`] | (not upstream) |
 //! | [`EFF_ZERO`] etc.            | `SM_EFF_ZERO` etc.                             |
 //! | [`is_infinite_param`]        | `SM_IS_INFINITE`                               |
-//! | [`max2`], [`min2`]           | `smos_Max`, `smos_Min` (`smos_3Max` etc.: nested [`max2`]) |
+//! | `f64::max`, `f64::min`       | `smos_Max`, `smos_Min`, `smos_3Max` etc. (a NaN operand is dropped) |
 //! | [`rad_to_deg`]               | `SM_RAD2DEG`                                   |
 //!
 //! ## Why not `glam`/`nalgebra`
@@ -92,30 +95,6 @@ pub fn is_infinite_param(a: f64) -> bool {
         || a == -INFINITE_PARAMETER
         || a == INFINITE_PARAMETER_SQRT
         || a == -INFINITE_PARAMETER_SQRT
-}
-
-/// `smos_Max(a, b)`: `a > b ? a : b`.
-///
-/// Unlike [`f64::max`], the result for a NaN operand follows the comparison
-/// (`b` when either is NaN), as upstream's macro does. Three or four operands nest it,
-/// `max2(max2(a, b), c)`, which is `smos_3Max`'s order.
-#[must_use]
-pub fn max2(a: f64, b: f64) -> f64 {
-    if a > b {
-        a
-    } else {
-        b
-    }
-}
-
-/// `smos_Min(a, b)`: `a < b ? a : b` (NaN handling as [`max2`]).
-#[must_use]
-pub fn min2(a: f64, b: f64) -> f64 {
-    if a < b {
-        a
-    } else {
-        b
-    }
 }
 
 /// `SM_RAD2DEG(a)` = `a * (180.0 / SM_PI)`: radians to degrees.

@@ -96,8 +96,7 @@
 use crate::error::{NumError, Result};
 use crate::extent1d::Extent1d;
 use crate::math::{
-    is_infinite_param, max2, min2, Point3, Vec3, BIG_DOUBLE, EFF_ZERO, EFF_ZERO_SQ,
-    INFINITE_PARAMETER, PI,
+    is_infinite_param, Point3, Vec3, BIG_DOUBLE, EFF_ZERO, EFF_ZERO_SQ, INFINITE_PARAMETER, PI,
 };
 use crate::vector3d::{asin, sqrt, Axis, UnitVec3};
 
@@ -417,7 +416,7 @@ impl Extent3d {
     /// Largest side length (`GetMaxLength`).
     #[must_use]
     pub fn max_length(&self) -> f64 {
-        max2(max2(self.x_length(), self.y_length()), self.z_length())
+        self.x_length().max(self.y_length()).max(self.z_length())
     }
 
     /// The x interval, ends swapped if inverted (`GetUInterval`).
@@ -453,7 +452,7 @@ impl Extent3d {
     /// Largest absolute coordinate of either corner (`GetMaxDimension`).
     #[must_use]
     pub fn max_dimension(&self) -> f64 {
-        max2(self.min.max_dimension(), self.max.max_dimension())
+        self.min.max_dimension().max(self.max.max_dimension())
     }
 
     /// Grows the box to contain `p` (`AddPoint3d`).
@@ -572,14 +571,14 @@ impl Extent3d {
     pub fn union(&self, other: &Self) -> Self {
         Self {
             min: Point3::new(
-                min2(self.min.x, other.min.x),
-                min2(self.min.y, other.min.y),
-                min2(self.min.z, other.min.z),
+                self.min.x.min(other.min.x),
+                self.min.y.min(other.min.y),
+                self.min.z.min(other.min.z),
             ),
             max: Point3::new(
-                max2(self.max.x, other.max.x),
-                max2(self.max.y, other.max.y),
-                max2(self.max.z, other.max.z),
+                self.max.x.max(other.max.x),
+                self.max.y.max(other.max.y),
+                self.max.z.max(other.max.z),
             ),
         }
     }
@@ -594,14 +593,14 @@ impl Extent3d {
         }
         Ok(Self {
             min: Point3::new(
-                max2(self.min.x, other.min.x),
-                max2(self.min.y, other.min.y),
-                max2(self.min.z, other.min.z),
+                self.min.x.max(other.min.x),
+                self.min.y.max(other.min.y),
+                self.min.z.max(other.min.z),
             ),
             max: Point3::new(
-                min2(self.max.x, other.max.x),
-                min2(self.max.y, other.max.y),
-                min2(self.max.z, other.max.z),
+                self.max.x.min(other.max.x),
+                self.max.y.min(other.max.y),
+                self.max.z.min(other.max.z),
             ),
         })
     }
@@ -851,11 +850,11 @@ impl Extent3d {
         let dx = (center.x - corner.x).abs();
         let dy = (center.y - corner.y).abs();
         let dz = (center.z - corner.z).abs();
-        let d = min2(dx, dy);
+        let d = dx.min(dy);
         SphereBound {
             center,
             radius,
-            min_radius: min2(d, dz),
+            min_radius: d.min(dz),
         }
     }
 
@@ -985,8 +984,8 @@ impl Extent3d {
         let (tmin_x, tmax_x) = slab(self.min.x, self.max.x, point.x, dir.x);
         let (tmin_y, tmax_y) = slab(self.min.y, self.max.y, point.y, dir.y);
         let (tmin_z, tmax_z) = slab(self.min.z, self.max.z, point.z, dir.z);
-        let d_min = max2(max2(tmin_z, tmin_x), tmin_y);
-        let d_max = min2(min2(tmax_z, tmax_x), tmax_y);
+        let d_min = tmin_z.max(tmin_x).max(tmin_y);
+        let d_max = tmax_z.min(tmax_x).min(tmax_y);
 
         // Upstream note [B70]: in an extreme grazing case the midpoint can be far
         // from the box although the line passes within tolerance, so the ends are

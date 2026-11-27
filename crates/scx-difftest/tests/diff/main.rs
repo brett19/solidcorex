@@ -44,7 +44,7 @@ mod controls {
     fn a_different_function_is_caught() {
         run::<(f64, f64), _, _>(
             "control",
-            |(a, b)| scx_num::math::max2(a, b),
+            |(a, b)| a.max(b),
             |(a, b)| solidcore::math::min2(a, b),
         );
     }

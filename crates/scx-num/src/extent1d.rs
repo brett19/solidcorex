@@ -89,9 +89,7 @@
 
 use crate::error::{NumError, Result};
 use crate::extent3d::BoundaryType;
-use crate::math::{
-    is_infinite_param, max2, min2, BIG_DOUBLE, EFF_ZERO, EFF_ZERO_DEG, INFINITE_PARAMETER,
-};
+use crate::math::{is_infinite_param, BIG_DOUBLE, EFF_ZERO, EFF_ZERO_DEG, INFINITE_PARAMETER};
 use crate::tol::{are_same, are_same_to_tol};
 
 /// Classification of a value against an interval (`SmExtentPointType`).
@@ -273,7 +271,7 @@ impl Extent1d {
     /// The larger absolute end value (`GetMaxDimension`).
     #[must_use]
     pub fn max_dimension(&self) -> f64 {
-        max2(self.max.abs(), self.min.abs())
+        self.max.abs().max(self.min.abs())
     }
 
     /// True when `t` is in the lower half of the interval (`t <= mid`): evaluate
@@ -374,8 +372,8 @@ impl Extent1d {
     #[must_use]
     pub fn union(&self, other: &Self) -> Self {
         Self {
-            min: min2(self.min, other.min),
-            max: max2(self.max, other.max),
+            min: self.min.min(other.min),
+            max: self.max.max(other.max),
         }
     }
 
@@ -404,8 +402,8 @@ impl Extent1d {
             ));
         }
         Ok(Self {
-            min: max2(self.min, other.min),
-            max: min2(self.max, other.max),
+            min: self.min.max(other.min),
+            max: self.max.min(other.max),
         })
     }
 
@@ -757,8 +755,8 @@ impl Extent1d {
 
         if other_min < other_max - EFF_ZERO {
             if (this_min <= other_max + EFF_ZERO) && (this_max >= other_min - EFF_ZERO) {
-                let min = max2(this_min, other_min);
-                let mut max = min2(this_max, other_max);
+                let min = this_min.max(other_min);
+                let mut max = this_max.min(other_max);
                 if are_same(min, max) {
                     max = min;
                 }
@@ -780,7 +778,7 @@ impl Extent1d {
                         other_max = this_min;
                     }
                     if !(this_closed && are_same(this_min, other_max)) {
-                        out.push(Self::from_min_max(this_min, min2(this_max, other_max)));
+                        out.push(Self::from_min_max(this_min, this_max.min(other_max)));
                     }
                 }
                 if this_max >= other_min - EFF_ZERO {
@@ -788,7 +786,7 @@ impl Extent1d {
                         other_min = this_max;
                     }
                     if !(this_closed && are_same(this_max, other_min)) {
-                        out.push(Self::from_min_max(max2(this_min, other_min), this_max));
+                        out.push(Self::from_min_max(this_min.max(other_min), this_max));
                     }
                 }
             }
@@ -870,7 +868,7 @@ impl Extent1d {
         let mut dist_to_min = map - self.min;
         if kept_down {
             // it can lie up to the tolerance below the start: its distance from it, not a
-            // signed offset (assert_valid takes min2 of the two). Only this new case: other
+            // signed offset (assert_valid takes the smaller of the two). Only this new case: other
             // inputs keep the signed value upstream gives them.
             dist_to_min = dist_to_min.abs();
         }
@@ -902,7 +900,7 @@ impl Extent1d {
     pub fn is_value_on_periodic_boundary(&self, v: f64, period: f64, tol: f64) -> (bool, f64) {
         let c = self.contains_periodic_value(v, period, tol);
         let on = c.dist_to_min < tol || c.dist_to_max < tol;
-        (on, min2(c.dist_to_min, c.dist_to_max))
+        (on, c.dist_to_min.min(c.dist_to_max))
     }
 }
 

@@ -92,7 +92,7 @@
 use crate::error::{NumError, Result};
 use crate::extent1d::{Extent1d, ExtentPointType};
 use crate::extent3d::{BoundaryType, Extent3d};
-use crate::math::{is_infinite_param, max2, min2, BIG_DOUBLE, EFF_ZERO, EFF_ZERO_SQRT};
+use crate::math::{is_infinite_param, BIG_DOUBLE, EFF_ZERO, EFF_ZERO_SQRT};
 use crate::tol::{are_same, are_same_to_tol, is_zero_to_tol, scaled_zero, ScaledZero};
 use crate::vector2d::{Point2, Vec2};
 use crate::vector3d::sqrt;
@@ -459,7 +459,7 @@ impl Extent2d {
     /// Largest absolute coordinate of either corner (`GetMaxDimension`).
     #[must_use]
     pub fn max_dimension(&self) -> f64 {
-        max2(self.min.max_dimension(), self.max.max_dimension())
+        self.min.max_dimension().max(self.max.max_dimension())
     }
 
     /// The diagonal `max - min` (`GetSize`).
@@ -484,8 +484,8 @@ impl Extent2d {
     #[must_use]
     pub fn union(&self, other: &Self) -> Self {
         Self {
-            min: Point2::new(min2(self.min.x, other.min.x), min2(self.min.y, other.min.y)),
-            max: Point2::new(max2(self.max.x, other.max.x), max2(self.max.y, other.max.y)),
+            min: Point2::new(self.min.x.min(other.min.x), self.min.y.min(other.min.y)),
+            max: Point2::new(self.max.x.max(other.max.x), self.max.y.max(other.max.y)),
         }
     }
 
@@ -499,8 +499,8 @@ impl Extent2d {
             });
         }
         Ok(Self {
-            min: Point2::new(max2(self.min.x, other.min.x), max2(self.min.y, other.min.y)),
-            max: Point2::new(min2(self.max.x, other.max.x), min2(self.max.y, other.max.y)),
+            min: Point2::new(self.min.x.max(other.min.x), self.min.y.max(other.min.y)),
+            max: Point2::new(self.max.x.min(other.max.x), self.max.y.min(other.max.y)),
         })
     }
 
@@ -853,7 +853,7 @@ impl Extent2d {
             }
         }
 
-        (ivl.max() > ivl.min() - max2(tol_u, tol_v)).then_some(ivl)
+        (ivl.max() > ivl.min() - tol_u.max(tol_v)).then_some(ivl)
     }
 
     /// True when `u` is in the lower half of the u interval (`GetULeftEval`).
