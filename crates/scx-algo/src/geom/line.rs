@@ -51,8 +51,22 @@ use scx_num::vector3d::Vec3;
 /// `d · v / |v|²`: how many `v`s `d` reaches along `v`; `None` when `v` has no direction
 /// (`|v|² < SM_EFF_ZERO_SQ`, or a component not finite). A `|v|²` past `f64`'s range is
 /// taken at `v / max |v_i|`.
+#[inline]
 fn param_along(d: Vec3, v: Vec3) -> Option<f64> {
     let len_sq = v.length_squared();
+    // the common case first: a length in range and a finite answer (the
+    // same answer as the general path below, which takes everything else)
+    let t = d.dot(v) / len_sq;
+    if (EFF_ZERO_SQ..f64::INFINITY).contains(&len_sq) && t.is_finite() {
+        return Some(t);
+    }
+    param_along_general(d, v, len_sq)
+}
+
+/// [`param_along`] for every `|v|² = len_sq`.
+#[cold]
+#[inline(never)]
+fn param_along_general(d: Vec3, v: Vec3, len_sq: f64) -> Option<f64> {
     // a NaN length has no direction either
     if len_sq.is_nan() || len_sq < EFF_ZERO_SQ {
         return None;
@@ -93,6 +107,7 @@ fn in_range(v: Vec3) -> Vec3 {
 /// (`smgu_LineClosestPoint`); `None` when `line_vec` has no direction or the parameter is
 /// not finite.
 #[must_use]
+#[inline]
 pub fn line_closest_point(line_pnt: Point3, line_vec: Vec3, test_point: Point3) -> Option<f64> {
     param_along(test_point - line_pnt, line_vec)
 }
