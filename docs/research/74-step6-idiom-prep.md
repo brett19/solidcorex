@@ -1660,7 +1660,7 @@ CF6's one-defect recipes.
 
 ### 18.6 Measurement
 
-See the hand-back. (Throwaway timer, release, not committed.)
+Throwaway timer, release, mean of 50, `check` at `Scope::Import`: block 6 faces 1.5 us; block of 384 faces 93 us; torus 16 faces 2.3 us; cavity 192 faces 39 us (about 0.24 us a face). Against `contract`'s 1.4 ms for a block, the pass is about 0.1%, and it runs in `contract` only under `Contacts::Manifold`.
 
 ### 18.7 Proposed 04 row
 
