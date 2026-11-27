@@ -28,7 +28,7 @@ use scx_num::extent1d::Extent1d;
 use scx_num::extent2d::Extent2d;
 use scx_num::fmath;
 use scx_num::frame::{Frame, Sense};
-use scx_num::units::Length;
+use scx_num::units::{Length, Resolution};
 use scx_num::vector2d::{Point2, Vec2};
 use scx_num::vector3d::{Point3, Vec3};
 use scx_ssi::analytic::{Intersection, section_by_plane};
@@ -280,7 +280,7 @@ fn section(s: &Surface, plane: &Plane) -> (Curve, Extent1d) {
         Extent2d::from_intervals(u, v)
     };
     let Closed::Solved(Intersection::Pieces { curves, .. }) =
-        section_by_plane(s, &se, plane, &big, mm(1e-9))
+        section_by_plane(s, &se, plane, &big, Resolution::new(mm(1e-9)).unwrap())
     else {
         panic!("no section");
     };
@@ -554,6 +554,24 @@ fn refusals_by_cause() {
     assert_eq!(
         (got.kind(), got.name()),
         (ErrorKind::Refused, "pcurve_off_surface")
+    );
+
+    // An edge that leaves the plane is refused even when its first sample past the
+    // tolerance is within the edge's reach: the split takes the largest miss (FU1). Here
+    // the first miss past half the zone is 0.75 zone, the last 6 zones.
+    let zone = doc.resolution().zone().mm();
+    let plane = Surface::Plane(Plane::new(f));
+    let leaving = Curve::Line(Line::new(o, x + z * (6.0 * zone)).unwrap());
+    let (a, b) = (
+        vertex(&mut d, leaving.point(0.0)),
+        vertex(&mut d, leaving.point(1.0)),
+    );
+    let e = edge(&mut d, leaving, span(0.0, 1.0), [a, b]);
+    let got = err(&d, &plane, vec![(e, FWD)]);
+    assert!(
+        matches!(got, PcurveWriteError::OffSurface { edge, at, miss }
+            if edge == e && at == 1.0 && miss > 5.0 * zone),
+        "{got:?}"
     );
 
     // A meridian across the north pole: split it there.

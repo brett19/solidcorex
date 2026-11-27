@@ -31,6 +31,7 @@ mod draft;
 pub mod error;
 pub mod finish;
 pub mod id;
+pub mod op;
 pub mod pcurve;
 mod query;
 pub mod record;
@@ -75,6 +76,10 @@ const _: () = {
     ok::<PcurveWriteError>();
     ok::<TransformError>();
     ok::<Document>();
+    ok::<op::Settings>();
+    ok::<op::Scratch>();
+    ok::<op::Report<()>>();
+    ok::<op::Done<()>>();
     ok::<IdMap>();
     ok::<FaceRecord>();
     ok::<EdgeGeom>();

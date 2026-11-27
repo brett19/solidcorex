@@ -29,6 +29,12 @@
 //! - [`sample`]: seeded generators of well- and ill-conditioned inputs.
 //! - [`topology`]: body structure invariants, Euler-Poincaré and the pole and seam rules
 //!   as predicates on plain incidence data and uv samples (research 63 T7).
+//! - [`solid`]: closed-form volumes, areas and moments of the step-4 recipes: the primitives,
+//!   a cap, a torus sector, a plate with holes, a gear, line-and-arc extrusions (research 72 T9).
+//! - [`profile`]: line-and-arc 2-D loop fixtures (closed, open by a hair, touching, crossing,
+//!   nested, reversed) with the verdict a region builder must give (research 72 T11).
+//! - [`mesh`]: a triangle mesh's invariants (closed, manifold, oriented, no degenerate or folded
+//!   triangles) and its volume gap against a reference (research 72 T13).
 //! - `bodies` (feature `bodies`): seeded valid and broken B-rep bodies, the one module that
 //!   builds library types (`scx-brep`'s `Draft`), with an independent structure oracle.
 
@@ -40,13 +46,16 @@ pub mod curve_surface;
 pub mod data;
 pub mod dd;
 pub mod exact;
+pub mod mesh;
 pub mod mp;
 pub mod nurbs;
 pub mod poly;
+pub mod profile;
 pub mod project;
 pub mod quadric;
 pub mod rat;
 pub mod sample;
+pub mod solid;
 pub mod ssi;
 pub mod topology;
 
