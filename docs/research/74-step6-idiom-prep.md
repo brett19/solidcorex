@@ -20,8 +20,10 @@ can start now. For each crate the note gives:
 4. the truths and tests, and where the pin is probably wrong;
 5. the performance traps.
 
-§7 is the STEP corpus and how "imports and passes the check" is scored. §8 is the task table. §9 holds
-the open questions. §10 is the case against this plan. §11 gives the proposed 04 rows.
+§1.3 is the capability ledger: where every pin capability in these crates goes. §7 is the STEP
+corpus and how "imports and passes the check" is scored. §8 is the task table. §9 holds the open
+questions. §10 is the case against this plan. §11 gives the proposed 04 rows. §15 answers the
+adversarial review of 11-27, finding by finding; §8, §9 and §11 are the revised plan.
 
 - **Labels** (as in 57, 63 and 72):
   - READ: read from the pin's code or docs.
@@ -39,7 +41,8 @@ the open questions. §10 is the case against this plan. §11 gives the proposed 
   `AtomicU`/`AtomicUsize` counters, `set_editing_enabled`, and float literals below 1e-2 outside
   tests. A grep count is an upper bound on the real hazards. Each one cited by line was read.
 - Sizes of the crates that already exist on main (`scx-bodyq` 3,266 lines, `scx-check` 1,240,
-  `scx-p21` 12,395) are from `wc -l crates/*/src/**/*.rs`.
+  `scx-p21` 12,395) are from `wc -l crates/*/src/**/*.rs`, tests included. Without tests, bodyq is
+  2,560 and check 565 (review, 11-27).
 
 | Pin piece | Lines | Notes |
 |---|---:|---|
@@ -67,10 +70,10 @@ the open questions. §10 is the case against this plan. §11 gives the proposed 
   ones are the Tangency-authored queries (`contact.rs`, `distance_bound.rs`, `tangent_edge.rs`,
   stitch `bounds.rs`, `planar_disjoint.rs`, `tolerance_defects.rs`). The check, stitch acceptance,
   orientation and HLR visibility are sampled:
-  - edge/face gap: 20 projections (`calc_max_edge_face_gap`, edgeuse/p1.rs:962);
+  - edge/face gap: 20 projections (`calc_max_edge_face_gap`, edgeuse/p1.rs:973);
   - edge length: 5 samples;
   - radial order: one parameter, `extent.evaluate(0.456)` (edge.rs:518, 569, 982);
-  - stitch distance: 5 samples (stitch p2:1020);
+  - stitch distance: 5 samples (stitch p2:1018);
   - HLR visibility: 5 samples, then bisection (`classify_range`).
 - **Retry with a wider tolerance.** StitchIntoSolid doubles from tol/10 up to diag/200. The second
   pass of StitchAndOrient multiplies by 20. `classify_with_retries` (p9.rs:2956) retries at 100x and
@@ -80,9 +83,10 @@ the open questions. §10 is the case against this plan. §11 gives the proposed 
   - Coincidence tests T32 to T34: a checker failure counts as coincident.
   - `surface/assert_valid.rs:2194`: `Err(_) => Ok(true)`.
   - `IsSilhouetteEdge`: a failure is read as true.
-  - Orientation: zero ray hits read as inside, by a `wrapping_sub` underflow at heal p3:5325.
+  - Orientation: zero ray hits read as inside, by a `wrapping_sub` underflow at
+    topology/brep/p3.rs:5360.
 - **Rays and RNG.** The point classifier fires ±x, ±y and ±z rays (`CLASSIFY_RAYS`, query/brep.rs:528).
-  Check T8 and T12 fire rays seeded from an RNG. `is_inner_shell_of` (shell.rs:1640) uses a seeded
+  Check T8 and T12 fire rays seeded from an RNG. `is_inner_shell_of` (shell.rs:1656) uses a seeded
   RNG. Stitch orientation is decided by ray votes along a fixed `ray_vec`.
 - **String errors.** `solidcore-step` returns `Result<T, String>`, and retries are chosen by parsing
   the string (`named_face`).
@@ -94,30 +98,89 @@ the open questions. §10 is the case against this plan. §11 gives the proposed 
 
 These apply the standing rules of 01, 02 and 04 (truth over pin; valid input never refused; one
 resolution per document; five error kinds; one budget; a check never changes the body it checks;
-step-4 signatures; determinism) to the shapes above.
+step-4 signatures; determinism) to the shapes above. Revised 11-27 after the review (§15).
 
-- **R1 `&Brep` everywhere.** Every query, the check and HLR take `&Brep`. Lazy trims are built by
-  `finish` (D13 and 04 11-27: pcurves are exact or fitted before `finish`). Raised tolerances are
-  never written by a read. A read that finds a gap reports it as a finding. Stitch and STEP build a
-  `Draft` and return `Made<Brep>`.
+- **R1 `&Brep` reads.** Every query, the check and HLR take `&Brep`. Pcurves are exact or fitted by
+  the writer before `finish`, and `finish` verifies them (04 row 130); nothing is trimmed lazily.
+  A query never writes an accuracy; a query that finds a gap reports it. Results:
+  - stitch returns `Done<StitchReport>` with lineage in `Changes` (one operand per input sheet,
+    the Boolean's two-operand form generalised), not `Made`: its output faces come from inputs,
+    and the app's face references need that lineage;
+  - `scx-step::read` returns its own `Imported { bodies, products, report }`;
+  - neither imports `scx-make` (`Made<R>` lives there, at layer 8).
 - **R2 Proved or Undecided, never sampled-and-trusted.** A query that answers a yes/no question
   returns a three-way answer (`Yes`/`No`/`Undecided`) or a bracket. A sample may *refute*, never
   prove. Where the pin samples, the port either certifies the bound (interval enclosure, as stitch
   `bounds.rs` and `distance_bound.rs` already do) or returns `Undecided` with the bracket reached.
-- **R3 No retry with a wider tolerance.** Tolerance is the document's resolution and each entity's
-  accuracy. A join is accepted when the certified gap is within coincidence =
-  max(res, acc₁, acc₂). Anything further apart stays open and is reported. The pin's own stitch doc
-  already says this ("No retry with a larger tolerance"); its code contradicts it.
-- **R4 No rays for decisions that a sign can make.** Orientation is decided by shared-edge parity plus
-  the certified volume sign per shell (`scx-mass` MA4). Containment uses `classify_point`, which
-  already has no `Unknown` (BQ1). Rays stay only inside `classify_point`, which handles ties.
+- **R3 No retry with a wider tolerance**, with one exception. Tolerance is the document's resolution
+  and each entity's accuracy, and stitch accepts a join only when the certified gap is within
+  coincidence = max(res, acc₁, acc₂). The exception is the importer's recorded raise to an
+  enclosed gap (09 §6, 04 rows 41 and 42): imported data whose certified gap exceeds its stated
+  uncertainty is valid input, so `scx-step` raises that entity's accuracy to the enclosed gap,
+  checks the tube stays clear, and records a `Raise` in `Report::raised`. That is a raise, not a
+  retry: it is made once, to a proved value, and recorded.
+- **R4 No ray votes for orientation.** A closed shell is oriented by shared-edge parity, and its
+  outward sense by `scx-mass`'s certified per-shell `volume_sign` (MA4). This needs a
+  `scx-stitch` → `scx-mass` edge, proposed in §11 row 2 (legal under layers.txt, where mass is below
+  bodyq). Open sheet sets have no volume sign and are oriented by parity alone. Nesting uses
+  `classify_point`, which has no `Unknown` but returns `Unsupported` when a NURBS face or edge lies
+  near the point or ray (crates/scx-bodyq/src/classify.rs:34), so nesting of NURBS shells waits on
+  step 5's ray against NURBS.
 - **R5 Typed findings, not numbered tests.** The check returns a list of `Finding`s with an entity, a
-  kind and, where measured, a certified bound. There are no test numbers and no levels as `u8`.
+  kind and, where measured, a certified bound. There are no test numbers and no levels as `u8`. The
+  clearance finding (two vertices within coincidence, 01's scx-check row) is one of them.
 - **R6 Budgets, not caps.** `MAX_PAIRS 65536`, `MAX_SPLITS 12`, `MAX_CONTACTS 8`, the 128-point grid
   and the 10-loop split pass all become `Budget` spending. When the budget runs out the result is
-  `Exhausted` with the bracket or partial list reached, never a silent truncation.
-- **R7 Deterministic order.** Iterate in id order. Clustering is by union-find over a box tree,
-  visited in id order. Run every test twice and compare bits.
+  `Exhausted` with the bracket or partial list reached, never a silent truncation. A memo hit
+  charges the work recorded when it was filled (04 row 104), so the stop point does not move with
+  cache warmth. Loops over many edges (the check's gaps, stitch's Hausdorff bounds) give each edge a
+  share and count the edges left `Undecided`, so one long spline cannot spend the whole run.
+- **R7 Deterministic order.** Iterate in id order. Vertex identification follows the merged-points
+  rule (04 rows 108 and 186), not transitive union-find: direct pairs within coincidence, found by a
+  spatial index; two vertices of one operand within coincidence are `Refused` naming both (and the
+  check reports the same pair); a vertex of one operand and one of another within coincidence are
+  identified; vertices joined only through a chain are each anchored to the nearest operand vertex
+  (ties by id), else `Unsupported` with the chain. `scx-boolean` already implements this
+  (`BooleanRefusal::VerticesWithinCoincidence`, `BooleanUnsupported::Chain`); stitch reuses it.
+  Run every test twice and compare bits.
+- **R8 Argument convention.** Operations and queries that keep a memo take `&mut Cx<'_>`
+  (`Cx::scratch` is `&mut Scratch`, crates/scx-brep/src/op.rs:30, so a `&Cx` cannot fill a cache),
+  as `scx_boolean::boolean` does. Leaf queries that keep none take `(&mut Budget, &Stop)`, as BQ1
+  ruled for `classify_point`. The body is `&Brep` in both.
+
+### 1.3 Capability ledger (READ the pin's pub items; JUDGED homes)
+
+The app switches from the pin in one go, so every pub capability of the pin's ops modules that 01
+homes in these crates needs a row, a home, or a ruled replacement. The pin's ops crate is
+`solidcore-ops/src`; its modules are mapped by 01's module table. "Row" is a task in §8.
+
+| Pin capability (module, lines) | scx home | Row or replacement |
+|---|---|---|
+| `contact`: `meets`, `boundary_distance`, `interiors_disjoint` (231) | bodyq `contact` | BW3 |
+| `contact`: `meets_each`, `flush_contact_points` | bodyq `flush_contact` | BW3b (overlap proved by a planar Boolean of the projected loops, not a centroid) |
+| `continuity`: `continuity_report`, `edge_comb`, `iso_comb`, `sheet_seams`, `principal_curvatures` (684) | bodyq | BW4 (the G-class verdict), BW10 (combs, curvature, seams) |
+| `tangent`: `tangent_face_chain_ordered` (254) | bodyq | BW10 |
+| `pick`: ray pick (via measure `fire_ray`) | bodyq `pick` | BW5 |
+| `pick`: `edges`, `vertices`, `faces` by points, `face_at`, `faces_on_one_surface` (537) | bodyq `pick_at` | BW8 (saved designs carry pick points) |
+| `pick`: `stored_face`, `stored_edge` | bodyq `still_names` | BW8; ids are kept in scx, so this checks the stored point lies on the named entity within coincidence (it measures, so it is bodyq, not record) |
+| `query` (215): `edge_at`, `edge_points(sag)`, `edge_interval`, `edge_faces`, `outline_stretches`, `edge_distance`, `face_uv`, `face_normal`, `face_contains`, `faces_at`, `faces_against`, `ray`, `record` | bodyq, tess (sag points), hlr (`outline_stretches`) | BW9, one line per function |
+| `measure` (4,176), the non-mass half: `locate_points`, `classify_point(s)`, `levels_along`, `edge_face_gap_samples`/`largest_gap`, `points_meet`, `turn_to_parallel`, `closest_*`, `face_hit(s)_by_ray`, `face_line_*`, `rim_edges`, `bounds`, the 2-D polyline helpers, `segment_2d_intersection`, `tangent_contact_*_2d` | bodyq; the 2-D helpers to planar; the gap to surface (certified) | BW9 (a mapping table, then the missing functions); gaps by SU6 |
+| `measure`, the mass half (`area`, `mass_properties`, `inertia_tensor`, `centroid_*`) | mass | already MA rows |
+| `face_pair`, `mid_sheet`, `mid_joint`, `cylinder_wall`, `cap`, `face_surface` | bodyq | BW11 |
+| `round_face` (418: `extent_in`, `past_end`, …), `joint_turn` | bodyq | BW11 |
+| `hole_stacks`, the recognition half of `prism` | bodyq `recognize` | BW6 |
+| `curve_gap::curve_face_gap_bound`, `axial_section` (`holds_axis`), `facing_trough`, `vertex_meet` | surface (01) | SU6 (gaps), SU8 (the rest) |
+| `check`: `check`, `check_scoped(level, ValidityScope::{Body, Stitched})`, `failed_tests`, `is_valid` (209) | check `check(&Brep, Scope)` | CF1 (`Scope::Stitched`, `Scope::Import`), CF2a to CF4; `failed_tests` is replaced by typed findings |
+| `stitch`: `stitch`, `gather`, `sew`, `open_edges`, `merge_faces` (767) | stitch | ST1 to ST3 (`stitch`), ST5 (single-body `sew`, `gather`, `open_edges`, `merge_faces`) |
+| `rebase` to a new resolution (01 §4.3, crate table) | stitch | ST6 |
+| `hlr`: `prepare`, `hidden_lines(_on)`, `silhouettes`, `screen`, `scaled` (671) | hlr | HL1, HL2 |
+| `outline` (143), `project_brep_onto_plane` (kernel eval/outline.rs) | hlr `outline` | HL3 |
+| `plane_projection` / `curve_crossings` along a view direction (kernel api_projection.rs; intersect/api_intersectors.rs:229) | hlr (bodies), planar (curves) | HL5 |
+| The sweep tool's silhouette (SmHCR scene: sweep/topology_sweep/access.rs:14, store.rs:34; primitive_creation/model.rs:494) | hlr `silhouettes`, called by make | HL5 (make → hlr is 01's edge) |
+| `step_assembly` (735): `placed_bodies`, `occurrence`, `part`, `placed`, `solid`, `at`, `axis` | step product structure | SP8 |
+| STEP sheets (`OPEN_SHELL`, `SHELL_BASED_SURFACE_MODEL`) | step | SP2 (01: solids and sheets) |
+| Per-entity accuracies on export | step writer | SP3 |
+| SmHCR itself (`blend/hcr.rs`, `api_projection.rs`, `surface_silhouette.rs`) | none | not ported; each caller above has its row (Q3) |
 
 ## 2. `scx-bodyq`: contact, continuity, pick, topology
 
@@ -132,6 +195,8 @@ port is mostly mechanical.
   - it returns a witness pair;
   - it starts with O(Fa·Fb) face pairs and has no face tree;
   - lower bounds come from `distance_bound.rs` (1,740 lines; `face_distance_lower_bound`, :281).
+    01's module table sends `distance_bound`, `curve_surface_gap` and `seam_bound` to `scx-surface`,
+    not bodyq (row SU6).
 - **Continuity:**
   - `continuity.rs` (923): G0 to G4 measured by drops. Its own doc admits there is "no bound on their
     error".
@@ -144,7 +209,10 @@ port is mostly mechanical.
   - `hole_stacks` (1,013);
   - the plane and cylinder helpers `face_pair`, `mid_sheet`, `mid_joint`, `cylinder_wall`, `cap`.
 - **Pick** (`ops/pick.rs`, 537): the nearest entity within a tolerance; it returns `Ambiguous` on a
-  tie, the first miss ends the search, and the result depends on order. Ray hits come from the ops
+  tie, and in a batch the first miss ends the call (a batch convention, not an order dependence).
+  It also picks by points (`edges`, `vertices`, `faces`, `face_at`, `faces_on_one_surface`) and
+  re-identifies stored references (`stored_face`, `stored_edge`, with an allowance of a thousandth
+  of the body diagonal). Ray hits come from the ops
   `fire_ray` (measure.rs:1377).
 - **Tight boxes** (query/brep.rs:263; face/p3.rs:484 `face_directed_max`): the history is WR-588,
   #1799, #21660, #14452, #13753 and HANG-29. Each fix took `&mut` to raise a tolerance or cache a trim.
@@ -161,42 +229,63 @@ port is mostly mechanical.
   the document's resolution.
 - The old SMLib shell `brep_relationship` (api_queries.rs:612) returns int codes 0 to 4 from a Newton
   gap that is not a bound. Do not port it.
-- `face_surface.rs` is a record builder, not a query. It belongs with `scx-record` or nowhere.
+- `face_surface.rs` builds a face's surface record for callers (`of`, `exact`, `point`, `normal`,
+  `closest_point`, `domain`). 01 homes it in bodyq; on scx bodies most of it is the face's own
+  `Surface` and its evaluators, so BW11 keeps only what those lack.
 - `continuity.rs` reports measured drops as if they were exact.
 
 ### 2.3 Proposed shape (JUDGED)
 
 ```rust
-pub fn contact(a: &Brep, b: &Brep, cx: &Cx) -> Result<Contact, BodyqError>;
+// Memo-keeping queries take &mut Cx (R8); leaf queries take (&mut Budget, &Stop).
+pub fn contact(a: &Brep, b: &Brep, cx: &mut Cx<'_>) -> Result<Contact, BodyqError>;
 pub struct Contact { pub gap: Bracket<Length>, pub witness: Option<(Entity, Entity, Point3)>,
                      pub interiors: Tri /* Disjoint | Overlap | Undecided */ }
+pub fn flush_contact(a: &Brep, b: &Brep, cx: &mut Cx<'_>) -> Result<Vec<Flush>, BodyqError>;
 
-pub fn continuity(body: &Brep, edge: EdgeId, cx: &Cx) -> Result<Continuity, BodyqError>;
+pub fn continuity(body: &Brep, edge: EdgeId, cx: &mut Cx<'_>) -> Result<Continuity, BodyqError>;
 pub struct Continuity { pub proved: Order /* G0..G4 proved all along */,
                         pub measured: [Bracket<f64>; 5] /* drops with bounds */ }
 
-pub fn pick(body: &Brep, ray: Ray, aperture: Length, cx: &Cx) -> Result<Vec<Hit>, BodyqError>;
+pub fn pick(body: &Brep, ray: Ray, aperture: Length, cx: &mut Cx<'_>) -> Result<Vec<Hit>, BodyqError>;
+pub fn pick_at(body: &Brep, points: &[Point3], want: EntityKind, cx: &mut Cx<'_>)
+    -> Result<Vec<Option<Entity>>, BodyqError>;
+pub fn still_names(body: &Brep, stored: Entity, at: Point3, cx: &mut Cx<'_>) -> Result<Tri, BodyqError>;
 pub fn betti(body: &Brep, shell: ShellId) -> Betti;            // exact, topological
-pub fn thin_places(body: &Brep, below: Length, cx: &Cx) -> Result<Vec<ThinPlace>, BodyqError>;
-pub fn tight_box(body: &Brep, e: Entity, cx: &Cx) -> Result<Aabb, BodyqError>;
+pub fn thin_places(body: &Brep, below: Length, cx: &mut Cx<'_>) -> Result<Vec<ThinPlace>, BodyqError>;
+pub fn tight_box(body: &Brep, e: Entity, cx: &mut Cx<'_>) -> Result<Aabb, BodyqError>;
 ```
 
 - `contact` replaces `meets`, `boundary_distance` and `interiors_disjoint` with one call returning
   the bracket. A face box tree replaces the O(Fa·Fb) start. The heap order is (lower bound, face
-  ids) so ties break by id.
+  ids) so ties break by id. The lower bounds are `scx-surface`'s ported `distance_bound` (SU6).
+- `flush_contact` replaces `meets_each` and `flush_contact_points`. Two faces are flush when their
+  surfaces coincide within coincidence (closed form for plane and cylinder pairs) and the
+  projected loops overlap, proved by a planar Boolean of the loops, not by the tool's centroid.
+  The result is every overlap region, not the first 8.
 - `continuity` separates what is proved (from `tangent_edge`'s bounds) from what is measured (drops
   with interval bounds). The pin mixed the two.
 - `pick` returns every hit within the aperture, sorted by (depth, entity id). The caller chooses.
-  No `Ambiguous`, no first-miss stop.
+  No `Ambiguous`. On a body with NURBS faces near the ray it waits on step 5's ray against NURBS.
+- `pick_at` replaces the pin's pick by points: the entity of the wanted kind within coincidence of
+  each point, `None` where there is none, an error where two are (by clearance there cannot be on
+  a valid body).
+- `still_names` replaces `stored_face`/`stored_edge`: ids are kept, so it checks only that the
+  stored point lies on the named entity within coincidence. The pin's allowance of a thousandth of
+  the diagonal is not ported.
 - `betti` is exact: b0 from shells, b1 from Euler and orientability, b2 from closed shells. It needs
   no geometry and can start now.
 - `thin_places` is new. It is a bracketed contact between a body's own opposite faces, sharing
-  `contact`'s machinery, with face pairs that share an edge excluded near that edge. It is a separate
-  row because it has no pin truth.
-- `tight_box` is computed from finished trims, so it needs no `&mut`. A failing edge box is an
-  error, not `Default`.
+  `contact`'s machinery, with face pairs that share an edge excluded near that edge. It has no pin
+  truth, so its truths are closed forms (slabs, coaxial cylinders, a slot of known width), and it
+  is outside step 6's "done when".
+- `tight_box` is computed from finished trims, so it needs no `&mut Brep`; its cache is in
+  `Scratch`. A failing edge box is an error, not `Default`. A memo hit charges the recorded work
+  (R6).
 - Recognition (`prism`, `hole_stacks`) moves to `scx-bodyq::recognize`. It propagates errors, and
-  its constants come from `cx.doc.resolution`.
+  its constants come from `cx.doc` (the resolution), not absolute millimetres.
+- The rest of the ledger (§1.3: query and measure mapping, combs, tangent chains, the
+  `round_face` family) is rows BW9 to BW11.
 
 ### 2.4 Truths and tests
 
@@ -220,7 +309,8 @@ Where the pin is probably wrong:
 
 - `continuity`'s G2 to G4 drops are unbounded;
 - `flush_contact`'s centroid test (two offset plates pass as flush);
-- `pick`'s order dependence.
+- `stored_face`'s allowance of a thousandth of the body diagonal, which scales with the body
+  instead of the document's resolution.
 
 The port's tests should state what is correct, not what the pin returns.
 
@@ -230,7 +320,9 @@ The port's tests should state what is correct, not what the pin returns.
   on bodies far apart.
 - `tangent_all_along` splits up to 12 levels per edge. Across a whole body (the check's continuity
   findings) this must spend one budget, not 12 levels per edge each.
-- `tight_box` was the HANG-29 site. Cache it per entity in `Scratch`, never in the body.
+- `tight_box` was the HANG-29 site. Cache it per entity in `Scratch` (so the query takes
+  `&mut Cx`, R8), never in the body. A memo hit charges the work recorded when it was filled
+  (04 row 104), or the budget's stop point moves with cache warmth.
 
 ## 3. `scx-check`: the full validity check
 
@@ -245,11 +337,11 @@ The port's tests should state what is correct, not what the pin returns.
 - It does no face-face SSI. The only exception is the self-intersection of `OffsetSurface` T2
   (wrapped.rs:84-125).
 - Measured quantities:
-  - the edge/face gap is sampled at 20 points;
+  - the edge/face gap is sampled at 20 points (`calc_max_edge_face_gap`, edgeuse/p1.rs:973);
   - the edge length is sampled at 5;
   - the pcurve is never measured against its edge: `curve_max_distance_between` computes it at 51
     samples and then discards the result;
-  - radial order is checked at one parameter (0.456);
+  - radial order is checked at one parameter (0.456; assert_valid/edge.rs:518, 569, 982, 1197);
   - `tangent_sections.rs` is closed form for planes and cylinders (#18639).
 - The wide-vertex test T82 is by boxes (512/2048). Loop orientation uses a certified uv area.
 - `validate_and_update` grows a tolerance to twice a sample. The pin's own doc (§8) calls this
@@ -272,41 +364,66 @@ The port's tests should state what is correct, not what the pin returns.
 ### 3.3 Proposed shape (JUDGED)
 
 ```rust
-pub fn check(body: &Brep, cx: &Cx, scope: Scope) -> Result<Findings, CheckError>;
-#[non_exhaustive] pub enum Scope { Structure, Geometry, Full }
-pub struct Findings { pub list: Vec<Finding>, pub undecided: Vec<Undecided>, pub cost: Spent }
+pub fn check(body: &Brep, cx: &mut Cx<'_>, scope: Scope) -> Result<Findings, CheckError>;
+#[non_exhaustive] pub enum Scope {
+    Import,    // structure + gaps against the recorded raises + clearance: the default at import
+    Stitched,  // as Import, for a body a stitch produced (the pin's ValidityScope::Stitched)
+    Full,      // everything, including FacesCross
+}
+pub struct Findings { pub list: Vec<Finding>, pub undecided: Vec<Undecided>, pub spent: Spent }
 #[non_exhaustive] pub enum Finding {
     EdgeOffFace { edge: EdgeId, face: FaceId, gap: Bracket<Length>, allowed: Length },
     PcurveOffEdge { fin: FinId, gap: Bracket<Length>, allowed: Length },
     VertexOffEdge { vertex: VertexId, edge: EdgeId, gap: Bracket<Length> },
-    LoopWound { lp: LoopId, area: Bracket<f64> },
-    RadialOrder { edge: EdgeId },
-    FacesCross { a: FaceId, b: FaceId, witness: Point3 },
+    VerticesWithinCoincidence { a: VertexId, b: VertexId, distance: Bracket<Length> },
+    TubeNotClear { entity: Entity, reaches: Entity },
+    RadialOrder { edge: EdgeId, at: f64 },
+    FacesCross { a: FaceId, b: FaceId, witness: Point3, depth: Bracket<Length> },
     VertexNotManifold { vertex: VertexId },
     WideVertex { vertex: VertexId, extent: Length },
     SelfIntersectingSurface { face: FaceId, witness: Point2 },
     Degenerate { entity: Entity, what: Degeneracy },
-    /* structure: lone vertex, face not bounding, non-manifold edge, empty, … as in `contract` */
+    NotSolid { shell: ShellId },
 }
 ```
 
-- `contract` stays as it is: the kernel-edge proof that a body is closed, manifold and outward.
-  `check` is the full list. `contract` = `check(Structure)` + the volume sign, and both share the
-  structure pass. They are not two implementations.
-- Each gap is a certified upper bound (as stitch `bounds.rs` does). A finding needs a certified
-  lower bound above the allowance. An upper bound above the allowance with a lower bound below it is
-  `Undecided`, with the bracket. Nothing unknown passes, and nothing unknown fails as a defect.
-- `FacesCross` is new; the pin never tests it. On analytic pairs it uses the step-2 and step-4 SSI
-  plus BO2b's no-touch proof. On NURBS pairs it waits on step 5 (SM5 to SM8). Until then such a pair
-  is listed in `undecided` as `NeedsSsi { a, b }`, never passed.
-- Vertex manifoldness is new: walk the fins around the vertex (a disk or half-disk link). It is pure
-  topology and can start now.
-- `check` never writes. A body whose tolerances need to grow is reported. Growing them is a separate
-  edit, `scx_brep::edit::grow_accuracy(&Brep, &Findings) -> Draft`, which records each raise in
-  `Changes` and `Report`.
-- Cost: a face box tree gates every pairwise test, so only pairs whose boxes overlap within the
-  allowance are examined. One `Budget` covers the run. Coincidence uses closed-form projection on
-  analytic pairs.
+- **What a finished `Brep` already guarantees is not re-checked.** `finish`
+  (crates/scx-brep/src/draft.rs, causes in finish.rs) refuses a body whose structure is broken or
+  whose edge ends, use ends and pcurves are off by its own samples, and `contract`
+  (crates/scx-check/src/lib.rs:129) proves closed, oriented and manifold-edge. So the structure part
+  of `check` is only what neither does: vertex manifoldness (left open by CK1, 04 row 215) and the
+  sheet-or-solid question. `contract` and `check` share that pass, and `contract` calls it.
+- **Gaps are certified.** Each gap is a certified upper bound from `scx-surface`'s ported
+  `curve_surface_gap` and `distance_bound` (SU6). A finding needs a lower bound above the allowance.
+  An upper bound above the allowance with a lower bound below it is `Undecided`, with the bracket.
+  Nothing unknown passes, and nothing unknown fails as a defect. `finish`'s own sampled refusals
+  (`EdgeEndOffVertex`, `UseEndOffVertex`, `PcurveOffEdge`) only refute; the certified gap is the
+  check's job.
+- **Clearance is new.** `VerticesWithinCoincidence` is the pair the merged-points rule refuses (R7),
+  so an operation's refusal and the check name the same pair. `TubeNotClear` is 09 §6's third
+  condition: a raised tube or ball reaches an entity it does not bound.
+- **Radial order is checked along the whole edge**, not at 0.456. CK3 (04 row 237) has the same
+  one-sample limit at the edge's middle; CF2c fixes both by certifying that the fins' order cannot
+  change along the edge (their angular gaps stay above zero over interval enclosures of the edge),
+  and `contract` uses it.
+- **`FacesCross` is new; the pin never tests it.**
+  - Tangent pairs (the faces meet along an edge with a common normal, or their bounds cannot
+    separate them near a shared edge) go first to the contact classifier of CK3 and BO7, not to
+    subdivision.
+  - Other analytic pairs use the step-2 and step-4 SSI plus BO2b's no-touch proof.
+  - A crossing counts only when its depth exceeds coincidence, so a tangent blend that touches
+    within tolerance is not a finding.
+  - NURBS pairs wait on step 5's intersector with certificates (SM5 to SM8). Until then they are
+    listed in `undecided` as `NeedsSsi { a, b }`, never passed.
+  - This needs the `scx-check` → `scx-ssi` and `scx-check` → `scx-bodyq` edges that 01's crate
+    table lists; neither is in crates/scx-check/Cargo.toml yet, so CF3 adds them.
+- **`check` never writes.** The importer's raises (R3) are made by `scx-step` before `finish` and
+  recorded; any other accuracy growth is a defect of the operation that made the body. Repairs of
+  the tolerance defects the check finds are `scx-repair`'s (layer 8), not step 6's. There is no
+  `grow_accuracy` in `scx-brep` (it could not see `Findings` anyway).
+- **Cost.** A face box tree gates every pairwise test, so only pairs whose boxes overlap within the
+  allowance are examined. One `Budget` covers the run, with a share per edge (R6). Coincidence
+  uses closed-form projection on analytic pairs.
 
 ### 3.4 Truths and tests
 
@@ -340,7 +457,12 @@ pub struct Findings { pub list: Vec<Finding>, pub undecided: Vec<Undecided>, pub
 - Vertex-use solves (the 45,000 case) become one closed-form projection per fin end, cached in
   `Scratch` by (vertex, edge).
 - `FacesCross` on all face pairs is O(F²) without the box tree. With the tree it is O(F log F + k).
-- The check must stay well under the Boolean's cost on the slice's cases (see the perf row in §8).
+- The check must stay well under the Boolean's cost on the slice's cases (CO3).
+- CK1 measured the certified outward test at 2 to 400 times a volume estimate (33 ms on a torus,
+  04 row 215). `Full` on every body of an assembly multiplies that by the body count, so import
+  runs `Scope::Import` by default (Q8).
+- `FacesCross` on tangent blends is where certified separation fails most. Tangent pairs go to the
+  contact classifier first (CK3, BO7), not to repeated subdivision.
 
 ## 4. `scx-stitch`
 
@@ -356,13 +478,14 @@ pub struct Findings { pub list: Vec<Finding>, pub undecided: Vec<Undecided>, pub
   1. sets the `editing` and `doing_boolean` flags;
   2. a split pass over a box tree, up to 10 loops;
   3. a vertex pass that sweeps along (1,1,1) and clusters as a star, which is not transitive;
-  4. an edge pass, `glue_edges_at_vertex` (p2:1020): greedy, with a 5-sample distance; for a line
+  4. an edge pass, `glue_edges_at_vertex` (p2:1018): greedy, with a 5-sample distance; for a line
      against a line the gap is set to 0, so nothing is raised (p2:1144);
   5. `find_and_set_infinite_region`.
 - Glue raises tolerances at p5:1802 (the distance plus the deleted entity's tolerance) and p7:2210.
-- Orientation, `orient_trimmed_surfaces` (p3.rs:4945):
+- Orientation, `orient_trimmed_surfaces` (topology/brep/p3.rs:4945):
   - ray votes along a fixed `ray_vec`;
-  - a `wrapping_sub` underflow at p3:5325, so zero hits read as inside;
+  - a `wrapping_sub` underflow at topology/brep/p3.rs:5360 (`points.len().wrapping_sub(1)`), so zero
+    hits read as inside;
   - a tie sets `maybe_not_closed`, which is then discarded.
 - Lessons in the history: #2506 RadialGlue, WR-21540 (nested-solid voids), #18166 (covers),
   WR-18515, HANG-33.
@@ -385,28 +508,52 @@ pub struct Findings { pub list: Vec<Finding>, pub undecided: Vec<Undecided>, pub
 ### 4.3 Proposed shape (JUDGED)
 
 ```rust
-pub fn stitch(sheets: &[&Brep], cx: &Cx, want: Want) -> Result<Made<Brep>, StitchError>;
+pub fn stitch(sheets: &[&Brep], cx: &mut Cx<'_>, want: Want) -> Result<Done<StitchReport>, StitchError>;
 #[non_exhaustive] pub enum Want { Sheets, Solid }
-// Report: joined edges, open edges left (each with its certified gap), raises (entity, from, to)
+// StitchReport: joined edges, open edges left (each with its certified gap or bracket),
+// edges left Undecided at their budget share. Lineage: Changes, one operand per input sheet.
+pub fn sew(body: &Brep, cx: &mut Cx<'_>) -> Result<Done<StitchReport>, StitchError>;   // one body
+pub fn open_edges(body: &Brep) -> Vec<EdgeId>;
+pub fn merge_faces(body: &Brep, faces: &[FaceId], cx: &mut Cx<'_>) -> Result<Done<()>, StitchError>;
+pub fn rebase(body: &Brep, to: Resolution, cx: &mut Cx<'_>) -> Result<Done<RebaseReport>, StitchError>;
 ```
 
-1. **Vertices.** Cluster by union-find over a box tree. Two vertices are joined when their certified
-   distance is ≤ coincidence. Clusters are transitive; this is the fix for the star. A cluster wider
-   than 2·coincidence is reported as `WideCluster`, and left joined only when no pair inside it is
-   further apart than coincidence allows by the chain. Visit in id order.
-2. **Edges.** Candidates come from shared vertex clusters plus a box overlap. A pair is accepted when
-   `bounds.rs`'s certified Hausdorff upper bound is ≤ coincidence. Accept pairs by (bound, ids)
-   order from a heap, not greedily by vertex. An edge whose partner is ambiguous (two candidates
-   within the allowance) stays open and is reported.
+1. **Vertices** follow the merged-points rule (R7; 04 rows 108 and 186). Each input sheet is an
+   operand. Candidate pairs within coincidence come from one spatial index, built once (a grid
+   whose cell is the largest coincidence, or the box tree).
+   - Two vertices of one sheet within coincidence of each other are `Refused`, naming both. That
+     sheet breaks vertex clearance, and `check` reports the same pair.
+   - A vertex of one sheet and one of another within coincidence are identified: the lower sheet
+     index's vertex is kept, with a `Measured` spread and a `Coincident` warning.
+   - Vertices joined only through a chain are each anchored to the nearest operand vertex (ties by
+     id), else the result is `Unsupported` with the chain. There is no transitive glue.
+2. **Edges.** Candidates come from identified end vertices plus a box overlap. A pair is accepted
+   when `bounds.rs`'s certified Hausdorff upper bound is ≤ coincidence. Accept by (bound, ids) order
+   from a heap, not greedily by vertex. An edge with two candidates within the allowance stays open
+   and is reported. Each edge has a budget share, and an edge left at it is counted `Undecided`.
 3. **Splits.** An edge meeting a vertex interior to its partner is split at the certified foot point.
-   Loop until no split is made, with the budget bounding it, not 10 loops.
-4. **Raises.** A join within coincidence but above the entity's own accuracy records
-   `Raise { entity, from, to }` in the `Report`. This is the only place accuracy grows.
-5. **Orientation.** Shared-edge parity orients each shell. The certified per-shell `volume_sign`
-   (MA4) picks the outward sense. A shell whose sign is `Undecided` is reported, never guessed.
-   Nesting uses `classify_point`.
+   Loop until no split is made, bounded by the budget, not by 10 loops.
+4. **Accuracy.** Stitch identifies within coincidence, which needs no raise by definition. It never
+   raises an accuracy; an import's raises are made by `scx-step` (R3) before stitch sees the sheets.
+5. **Orientation.** Shared-edge parity orients each shell. For `Want::Solid`, the certified
+   per-shell `volume_sign` (MA4) picks the outward sense, through a `scx-stitch` → `scx-mass` edge
+   (§11 row 2). A shell whose sign is `Undecided` is reported, never guessed. Sheets are oriented by
+   parity alone. Nesting uses `classify_point`; for shells with NURBS faces it waits on step 5's
+   ray against NURBS (R4).
 6. **No retry.** `Want::Solid` with open edges left is `Refused(NotClosed { open })`. The partial
    sheets are still available through `Want::Sheets`.
+7. **Single-body operations** (ST5): `sew` stitches a body's own open edges by the same rules,
+   `gather` collects sheets into one body, `open_edges` lists the open edges, and `merge_faces`
+   joins faces on one surface across an edge they share.
+8. **`rebase`** (ST6) moves a body to a new resolution. Coarser: the coincidence grows, so vertices
+   and edges that come within it are identified by the same rules, and two vertices of the body
+   that come within it are `Refused` naming both. Finer: nothing is identified, and each entity
+   whose accuracy is now past the resolution keeps it with 09's `AccuracyPastResolution` warning
+   (a `WarningKind` ST6 adds; main has only `AccuracyRaised` and `Coincident`).
+
+Crate edges: stitch → bodyq (01), → mass (new, §11 row 2), → surface (for SU6's bounds, through
+bodyq's dependencies). No stitch → check edge: 01 and 04 row 100 put stitch beside check, and
+stitch's orientation and nesting come from mass and bodyq.
 
 ### 4.4 Truths and tests
 
@@ -428,9 +575,11 @@ pub fn stitch(sheets: &[&Brep], cx: &Cx, want: Want) -> Result<Made<Brep>, Stitc
 
 ### 4.5 Perf traps
 
-- The O(V·E) rescan. Use one box tree, built once, and update the union-find incrementally.
-- Certified Hausdorff on long spline edges. Use the box overlap first, then `bounds.rs` with the
-  budget.
+- The O(V·E) rescan. Use one spatial index (a grid with cells the size of the largest coincidence,
+  or the box tree), built once, so candidate pairs are found in O(V) on spread-out input.
+- Certified Hausdorff on long spline edges can keep halving. Use the box overlap first, then
+  `bounds.rs` with a budget per edge; an edge left at its budget is `Undecided` and counted in the
+  report.
 - Orientation by sign is one `volume_sign` per shell. That is cheaper than the pin's ray per pass.
 
 ## 5. `scx-hlr`
@@ -440,7 +589,9 @@ pub fn stitch(sheets: &[&Brep], cx: &Cx, want: Want) -> Result<Made<Brep>, Stitc
 The pin has three unrelated pieces.
 
 **(A) `hlr/`** (7,527 lines). It is SolidCraft-derived and already idiomatic: its own portable Brep,
-a typed `HlrError`, no `&mut`. The entry points are `prepare` (hlr.rs:276), `hidden_lines` (:1037),
+a typed `HlrError`, no `&mut`. It also carries its own geometry layer (hlr/surface.rs: ray,
+inverse, `analytic(tol)` quadric recognition, grid; curve.rs, spline.rs, trim.rs, with
+`&mut Vec<Hit>` out-parameters), which is a second evaluator. The entry points are `prepare` (hlr.rs:276), `hidden_lines` (:1037),
 `hidden_lines_on` (:1052), `silhouettes` (:1335), `View`, `Options` and `CurveAccuracy`. Its only
 caller is ops/hlr.rs. The pipeline:
 
@@ -467,7 +618,10 @@ are upstream ports:
 - interval classification by a single ray;
 - a failed `IsSilhouetteEdge` read as true.
 
-The app does not use it, and its only other caller is sweep. It needs B-spline SSI and tracing.
+The app does not use it. Its other callers are more than sweep: the sweep scene
+(sweep/topology_sweep/access.rs:14, store.rs:34; primitive_creation/model.rs:494),
+`plane_projection` used by `curve_crossings` (intersect/api_intersectors.rs:229), and `project_brep_onto_plane`
+(eval/outline.rs). It needs B-spline SSI and tracing.
 
 **(C) `eval/outline.rs`** (225) plus `pieces.rs` (676) are clean, with 32 samples.
 
@@ -484,26 +638,48 @@ The app does not use it, and its only other caller is sweep. It needs B-spline S
 ### 5.3 Proposed shape (JUDGED)
 
 ```rust
-pub fn prepare(bodies: &[(&Brep, Affine)], cx: &Cx) -> Result<Scene, HlrError>;
-pub fn hidden_lines(scene: &Scene, view: &View, opts: &Options, cx: &Cx) -> Result<Drawing, HlrError>;
+pub fn prepare(bodies: &[(&Brep, Affine)], cx: &mut Cx<'_>) -> Result<Scene, HlrError>;
+pub fn hidden_lines(scene: &Scene, view: &View, opts: &Options, cx: &mut Cx<'_>) -> Result<Drawing, HlrError>;
+pub fn silhouettes(body: &Brep, view: &View, cx: &mut Cx<'_>) -> Result<Vec<Silhouette>, HlrError>;
+pub fn outline(body: &Brep, plane: &Plane, cx: &mut Cx<'_>) -> Result<Vec<Curve2>, HlrError>;
 pub struct Drawing { pub visible: Vec<Curve2>, pub hidden: Vec<Curve2>, pub uncertain: Vec<Curve2>,
                      pub unsupported: Vec<FaceRef> }
 ```
 
-- Port (A) onto scx bodies: drop its portable Brep and read `&Brep` directly. Its tolerances come
-  from one `Accuracy` derived from the scene scale and the document's resolution, named in one
-  module. Cancel is `cx.stop`. Counters move to `cx.trace`. `unwrap_or` becomes typed errors.
-  Out-parameters become returns.
-- Visibility per range is proved where it can be. Each sub-range classified by a point
-  classification whose ray is decided by `classify_point` (certified, with no `Unknown`), and a
-  sub-range whose ends differ is split until the change is located to the curve accuracy. A range
-  is Uncertain only when the budget runs out, never because `trim_samples` was small.
-- Freeform silhouettes: replace the 128 grid with the step-5 marcher's normal-cone subdivision
-  (SM5). The silhouette is `n·v = 0`, a curve on one surface, the same shape as SSI's field path
-  (SM6). Until then, NURBS faces go to `unsupported` as in the pin.
-- Port (C) as it is.
-- Do not port (B). Its users either go away (sweep's use is step 5's procedural sweep) or are served
-  by (A).
+- **HLR on scx's own evaluators, not a port of (A)'s.** (A) carries a private geometry layer
+  (surface, curve, spline and trim modules with their own ray, inverse and recognition), which would
+  be a second evaluator. HL1 rebuilds (A)'s pipeline on `scx-surface`, `scx-curve`, `scx-bodyq` and
+  `scx-ssi`: scene and body frames, exact silhouettes for plane, cylinder, cone and sphere, the
+  torus silhouette, screen curves. Its tolerances come from one `Accuracy` derived from the scene
+  scale and the document's resolution, named in one module. Cancel is `cx.stop`, counters go to
+  `cx.trace`, `unwrap_or` becomes typed errors, out-parameters become returns. (A)'s algorithms and
+  its 88 tests are what is kept.
+- **Quadric recognition** (a cone of near-zero angle that is a cylinder, a cone of near-right
+  angle that is a plane, a NURBS surface that is a quadric within its accuracy) is one
+  `scx-surface` function (SU7), shared with `scx-step`. It returns the exact kind and the recorded
+  deviation, so a recognised surface is stated as such and truth over pin holds.
+- **Visibility, proved.** "Split a span when its ends classify differently" misses an occluder that
+  hides only a span's interior. The sound form:
+  1. find every image-space crossing of the curve with the projected silhouettes and edges of the
+     other faces, certified complete (scx-planar's bounded 2-D intersections, PL6);
+  2. between consecutive crossings visibility cannot change, so classify one point per span, by a
+     ray from the eye decided with `classify_point`'s machinery and the face box tree;
+  3. a span is `uncertain` only when the budget runs out, never because a sample count was small.
+  PL6 covers lines and conics (closed form, certified roots), which is every projected edge and
+  silhouette of plane, cylinder, cone and sphere bodies. Torus silhouettes and spline curves need
+  step 5's general bounded 2-D intersections, and NURBS faces need step 5's ray against NURBS;
+  until then those spans are `uncertain` and those faces `unsupported`, by name.
+- **Freeform silhouettes** (HL4): replace the 128 grid with the step-5 marcher's normal-cone
+  subdivision (SM5). The silhouette is `n·v = 0`, a curve on one surface, the same shape as SSI's
+  field path (SM6a).
+- **Port (C)** (outline and pieces) as it is, as `outline` (HL3).
+- **Do not port (B).** Each of its callers has a home (§1.3): the sweep tool's silhouette is
+  `silhouettes`, called by `scx-make` (01's make → hlr edge); `plane_projection` and
+  `curve_crossings` are HL5; `project_brep_onto_plane` is `outline`.
+- **Drawings are done** (HL6) when, on a named list of parts (the testkit primitives and their
+  Booleans, and the analytic part of the MFCAD gate sample), the visible and hidden sets are
+  produced with no `uncertain` span, and on the primitives they match the closed-form truth
+  (§5.4). That is the "drawings" of 01 §10.2's step 6.
 
 ### 5.4 Truths and tests
 
@@ -529,11 +705,13 @@ pub struct Drawing { pub visible: Vec<Curve2>, pub hidden: Vec<Curve2>, pub unce
 
 - `classify_point_counted` fires a ray against every face. Use the face box tree that bodyq already
   has.
+- One classification per span is a ray per span, so the cost grows as spans × faces. Batch the
+  spans per face with one shared box tree, and give drawings their own perf row (CO3).
 - Screen sampling at 1e-7·scale can be dense on long curves. Spend the budget, and sample
   adaptively by curvature.
 - Parallel runs must give the same bits as serial runs. Keep the pin's test.
 
-## 6. `scx-step` (and the healing in `scx-import-sc`)
+## 6. `scx-step`
 
 ### 6.1 What the pin does (READ)
 
@@ -597,36 +775,58 @@ Where the pin is probably wrong:
 ### 6.3 Proposed shape (JUDGED)
 
 ```rust
-pub fn read(file: &scx_p21::File, cx: &Cx, opts: &ReadOptions) -> Result<Import, StepError>;
-pub struct Import { pub bodies: Vec<Made<Brep>>, pub products: ProductTree,
-                    pub skipped: Vec<Skipped>, pub findings: Vec<(BodyRef, Findings)> }
-pub fn write(bodies: &[(&Brep, &ProductRef)], cx: &Cx, opts: &WriteOptions) -> Result<scx_p21::File, StepError>;
+pub fn read(file: &scx_p21::File, cx: &mut Cx<'_>, opts: &ReadOptions) -> Result<Imported, StepError>;
+pub struct Imported { pub bodies: Vec<ImportedBody>, pub products: ProductTree,
+                      pub skipped: Vec<Skipped>, pub report: Report<ImportNotes> }
+pub struct ImportedBody { pub body: Brep, pub kind: SolidOrSheet, pub findings: Findings }
+pub struct ReadOptions { pub assume_units: Option<Units>, pub close_gaps: bool, pub check: Scope }
+pub fn write(bodies: &[(&Brep, &ProductRef)], cx: &mut Cx<'_>, opts: &WriteOptions)
+    -> Result<scx_p21::File, StepError>;
 ```
 
 - **One reader**, on `scx-p21`: entities → `Draft` → `finish`. There is no record Brep in between.
+  It reads solids (`MANIFOLD_SOLID_BREP`, `BREP_WITH_VOIDS`) and sheets (`OPEN_SHELL`,
+  `SHELL_BASED_SURFACE_MODEL`).
 - **Units** come from the file's context. When they are missing, the result is `Refused(NoUnits)`
   unless `ReadOptions::assume_units` is set, and the `Report` records the assumption. Uncertainty is
   the context's `UNCERTAINTY_MEASURE_WITH_UNIT`; with none, the document's resolution. The
   accuracy-ratio warning applies (CTC-05 needs 2.05e-2).
-- **Joins.** Vertices are joined only where the file shares them. Where it does not, the joins come
-  from `scx-stitch`'s certified rule within coincidence. Read order cannot change the result: build
-  in id order.
-- **Kinds map to exact forms.** Analytic kinds map to the `scx-surface` kinds now; B-spline to
-  `Surface::Nurbs` once scx-nurbs-surface carries it. Revolution, extrusion and offset map to the
-  procedural kinds (step 5, 01 §7.3). Until then those faces are `Unsupported(Kind)` by name, and the
-  body is skipped and reported, never approximated without a record.
-- **Pcurves.** Use closed forms where they exist. Elsewhere use the step-5 fitter to the claimed
-  accuracy (04 11-27). STEP's own PCURVE entities may be used as the fitter's starting point, but
-  never accepted without a certified gap check.
-- **After `finish`:** `scx_check::check(Full)` runs on each body. Its findings are part of the
-  `Import`. A body with findings is still returned. Valid input is never refused, and the findings
-  say what is short.
-- **Healing.** `scx-step` does not heal. A healing edit (stitch, grow accuracy) is the caller's
-  choice: `scx-import-sc` calls it on load and records each change. This keeps the reader honest and
-  the healing auditable.
-- **The writer** ports write/product.rs. It writes the document's resolution and one context per
-  document, not per body. Validation properties (volume, area, centroid) are written when `scx-mass`
-  proves them. `step-export` is not ported.
+- **Raises to enclosed gaps** (R3; 09 §6; 04 rows 41 and 42). Before `finish`, the reader measures
+  each edge-to-face, vertex-to-edge and pcurve-to-edge gap with `scx-surface`'s certified bounds
+  (SU6). Where an entity's certified gap exceeds its stated accuracy, the accuracy is raised to the
+  enclosed gap, the tube is checked clear, and a `Raise { entity, before, after }` goes in
+  `Report::raised` (crates/scx-brep/src/op.rs:243 already has the field) with an
+  `AccuracyRaised` warning. Then `finish` accepts the body. Without this, `finish` refuses exactly
+  the real files whose gaps exceed their stated uncertainty, and valid input would be refused. A
+  gap whose bound is `Undecided` at its budget share skips that body with the bracket named.
+- **Joins.** Vertices are joined where the file shares them. Where it does not and
+  `ReadOptions::close_gaps` is set, the reader calls `scx-stitch` (the same rules as §4.3; no
+  wider-tolerance retry). Read order cannot change the result: build in id order.
+- **Kinds map to exact forms.**
+  - Analytic kinds map to the `scx-surface` kinds now, through SU7's recognition where the file
+    writes a quadric as another kind (a cylinder as a near-zero cone), with the deviation recorded.
+  - B-spline maps to `Surface::Nurbs`.
+  - Revolution, extrusion and offset map to the procedural kinds (step 5, 01 §7.3).
+  - Until a kind's step-5 row lands, faces of that kind are `Unsupported(Kind)` by name, and the
+    body is skipped and reported, never approximated without a record. The pending kinds are a
+    finite list in 04 (§11 row 5), so a skip cannot hide an ordinary failure.
+- **Pcurves.** Use closed forms where they exist, including `Curve2::OnChart` (SM1) for conics on
+  quadrics; seam and pole crossings need SM1b. An analytic face whose edges are B-spline or
+  intersection curves needs the step-5 fitter (04 row 130), so the analytic subset (SP2) is
+  analytic surfaces *and* analytic edge curves. STEP's own PCURVE entities may seed the fitter but
+  are never accepted without a certified gap check.
+- **After `finish`:** `check` runs with `ReadOptions::check`, `Scope::Import` by default (Q8): the
+  structure pass, gaps against the recorded raises, clearance. `Full` is on request until CO3
+  measures it. A body with findings is still returned; valid input is never refused.
+- **No healing beyond raises and gap closing.** Repairs that need Booleans (short edges, slivers,
+  tolerance defects) are `scx-repair`'s (layer 8). `scx-import-sc` stays the converter for designs
+  saved by solidcore (04 row 102) and is not on the STEP path.
+- **Product structure** (SP8): `step_assembly`'s `placed_bodies` and its occurrence, part and
+  placement walk become the `ProductTree` of placed instances (01's scx-step row).
+- **The writer** ports write/product.rs. It writes the document's resolution as the context
+  uncertainty and per-entity accuracies where they are worse (01's scx-step row), one context per
+  document, not per body. Validation properties (volume, area, centroid) are written when
+  `scx-mass` proves them. `step-export` is not ported.
 
 ### 6.4 Truths and tests
 
@@ -636,8 +836,14 @@ pub fn write(bodies: &[(&Brep, &ProductRef)], cx: &Cx, opts: &WriteOptions) -> R
   - `geom_tests` (29);
   - `write_signed_volume.rs` (15) as it is (signed volume from the written entities);
   - `panic_fuzz` (4).
-- `bench/step/references.tsv` holds volume truths keyed by SHA, made by generator formulas. Port the
-  generator, not only the numbers.
+- `bench/step/references.tsv` holds 24 volume truths keyed by SHA. Its sources are mixed (review
+  F7, checked here): the step-conformance corpus (dan335, CC0, its generated parts with formula
+  volumes) and six SolidCraft app-repo cases (`tests/kernel-cases/import/{2043, 3098, 3208, 3730,
+  4005, 4006}/expected.json`) whose licence and provenance are unverified. Port the conformance
+  generator and its truths; the six are excluded unless CO2 clears their licence, and where kept
+  they are marked pin-derived. The cases they test (opposing surface sense, a tiny knot span, an
+  extruded ellipse over a seam, a void shell, a cylinder written as a near-zero cone, a plane
+  written as a cone) are rebuilt synthetically with closed-form truths.
 - New:
   - Round trip: write then read a testkit recipe, with the same volume within the certified error,
     the same topology counts and `check` clean.
@@ -648,221 +854,304 @@ pub fn write(bodies: &[(&Brep, &ProductRef)], cx: &Cx, opts: &WriteOptions) -> R
 
 ### 7.1 Sources (licence bar: MIT/Apache/BSD/CC0/CC BY; NIST public models OK)
 
+Revised 11-27 after the review (§15, F7); the source list was checked against the pin's
+`scripts/nist-pmi-corpus.sha256`, `bench/step/references.tsv` and `bench/step/fetch.sh`.
+
 | Source | Files | Licence | Use |
 |---|---:|---|---|
-| NIST MBE PMI test cases (ctc_01-05, ftc_06-11 in AP203; ctc/ftc/stc in AP242) | 33 | US government work, public | the corpus; manifest `scripts/nist-pmi-corpus.sha256` (research 58) |
-| Pin fixtures (Apache), excluding the discord fixture | 5 | Apache-2.0 | small cases with known truths |
-| MFCAD sample | 1 (a set exists) | MIT | machining features; check the set size before adding more |
-| dan335/step-conformance | 17 | CC0, as stated; **verify the licence file before use** | conformance edge cases |
+| MFCAD, a fixed hashed sample | 1,000 (or the whole set if smaller; the count is UNVERIFIED, research 69 D2) | MIT, primary LICENSE (research 69) | **the gate for the analytic subset**: prismatic parts, analytic faces and edges |
+| NIST MBE PMI test cases | 33 files of 11 parts: AP203 (revisions rb, rc, rd and `_ap203`) and AP242 (editions e1, e2, e3) | US government work, public | the corpus for the full gate (most faces B-spline); revision pairs are a smoke signal only (§7.3) |
+| dan335/step-conformance (commit 96f30bb) | 17 | CC0 as stated; **CO2 verifies the licence file** | conformance edge cases; its generated parts carry formula volumes |
+| Pin fixtures (Apache), excluding the discord fixture | 5 | Apache-2.0 | small cases |
 | Generated from testkit recipes via `scx-step::write` | any | ours | round trip with closed-form truths |
 
 Excluded:
 
 - the STEP Tools corpus (all rights reserved);
+- the cadmpeg fixtures that the pin's `bench/step/fetch.sh` also fetches (licence unknown; may come
+  back only if CO2 clears it under the permissive bar);
+- the pin ops `tests/data/assembly_extract.stp` (provenance unknown);
+- the six SolidCraft `tests/kernel-cases/import/*` truths in `references.tsv` (licence and
+  provenance unverified; §6.4);
 - any NC, ND, SA or ToS-bound set;
 - CAx-IF practice documents, which may be cited but not used as data.
 
 Files are fetched at test time against a SHA manifest and never committed (as `SCX_P21_CORPUS`
-already does for p21, with 430,862 instances across the NIST set).
+already does for p21, with 430,862 instances across the NIST set). The manifests and the scorer
+live in `crates/scx-bench` (solidcorex has no `scripts/` directory), named in CO1 and CO4.
 
 ### 7.2 Size (READ)
 
-- About 39 external files plus generated round trips.
-- That is small. It is enough for "imports and passes the check" but not for a pass rate with a
-  confidence. §9 Q6 asks whether to widen it.
+- The MFCAD sample (up to 1,000 parts) is the analytic gate, so step 6 can be judged on real files
+  before step 5 lands.
+- NIST, the conformance set and the fixtures add about 55 files, most of them with B-spline faces;
+  they gate the full corpus once SP5 and SP6 land.
+- Generated round trips are unlimited and carry closed-form truths.
 
 ### 7.3 Scoring "imports and passes the check" (JUDGED)
 
+Each file lands in exactly one category, so the totals add up and nothing can be relabelled:
+
+| Category | Meaning |
+|---|---|
+| Imported | `read` returned every body; each finished |
+| Imported with raises | as Imported, with one or more recorded `Raise`s (counted, with the largest ratio) |
+| Skipped, pending kind | a body was skipped for a kind on 04's finite pending list (§11 row 5), and nothing else failed |
+| Skipped, undecided | a body was skipped because a gap bound stayed `Undecided` at its budget share |
+| Refused | a typed `Refused` (no units, clearance broken) naming its cause |
+| Failed | anything else: `Defect`, a panic, a kind not on the pending list, `finish` refusing after the raises |
+
+Then, per imported body:
+
 | Measure | Pass when | Truth from |
 |---|---|---|
-| Opens | `read` returns `Ok` (no `Defect`, no panic) | — |
-| Bodies imported | every body is `Made`, or `Skipped` naming an `Unsupported` kind still awaiting a step-5 row | the row list in §8 |
-| Check | `check(Full)` gives zero findings and zero `undecided`, except `NeedsSsi` while SM5-SM8 are pending | `scx-check` |
-| Contract | `contract` → `Proved` for each body the file declares a solid | `scx-check` |
-| Volume / area | within the certified error of the reference | NIST: invariants (mm vs inch file pairs, AP203 vs AP242 of the same part); pin fixtures and round trips: closed form or `references.tsv` generator |
+| Check | zero findings not covered by a recorded raise, and zero `undecided` other than `NeedsSsi` (itself a finite named list) | `scx-check` at `Scope::Import`, and `Full` on the gate sample once CO3 shows it is affordable |
+| Contract | `Proved` for each body the file declares a solid | `scx-check` |
+| Volume / area | within the certified error of the truth | closed forms (generated round trips, the conformance set's formula volumes, the rebuilt synthetic cases of §6.4); the file's own validation properties where it carries them |
 | Determinism | two reads give identical bits | run twice |
 | Round trip | read → write → read gives the same body (topology counts, volume within error, check clean) | self |
-| Time | recorded per file (not gated in step 6; one baseline row for 01 §9.4) | bench |
+| Time | recorded per file; not gated in step 6; one baseline row for 01 §9.4 | bench |
 
-"Step 6 done" means:
+The pin is a smoke signal only: a file the pin reads and we do not is looked at, but the pin's
+volume is not a truth. NIST revision pairs (AP203 rd against AP242 e1, …) are different model
+revisions, so their agreement is neither necessary nor sufficient; they are reported as a smoke
+column, not scored. There are no unit pairs in the NIST manifest.
 
-- every file opens;
-- every body is `Made` or `Skipped` for a named pending kind;
-- every `Made` body passes the check and the contract;
-- and, once the step-5 rows SM1-SM9, the fitter and the procedural kinds have landed, nothing is
-  skipped.
+"Step 6 done" is falsifiable:
 
-The scoring is a `scx-bench` corpus runner. It writes a TSV with one row per file, in the shape of
-the pin's `bench/step/run.py` (opened, refused, timeouts, closed, volume within tolerance, time), and
-adds two columns: findings and undecided.
+- on the MFCAD gate sample: every file Imported or Imported with raises; zero Skipped, Refused or
+  Failed; every body passes check and contract; drawings done (HL6);
+- on the rest of the corpus: zero Failed; every Skipped names a kind on 04's pending list; every
+  imported body passes;
+- once the step-5 rows for those kinds land (SP5, SP6, CF4), zero Skipped.
 
-NIST publishes no reference volumes, so the NIST truth is invariance: the same part read from AP203
-and from AP242 must agree, and so must the same part in two units. Where the file carries validation
-properties (AP242 files may), those are used.
+The scorer is a `scx-bench` corpus runner (CO1). It writes a TSV with one row per file in the shape
+of the pin's `bench/step/run.py` (opened, refused, timeouts, closed, volume within tolerance, time),
+plus the category, the raise count and largest ratio, findings, undecided, and the pin smoke
+column.
 
 ## 8. Task table
 
-Model: Opus where a correctness argument (certification, a proof of a bound, an order-independence
-argument) is the work; Sonnet where the work is porting tests or mechanical plumbing.
+Revised 11-27 after the review (§15). Model: Opus where a correctness argument (certification, a
+proof of a bound, completeness, an order-independence argument) is the work; Sonnet where the work
+is porting tests, mapping, or plumbing. "Edges" names each new Cargo dependency a row adds; each
+must be legal under layers.txt after LY1. Rows dropped since the first version: CF5
+(`grow_accuracy`: raises are the importer's, R3) and SP7 (healing in `scx-import-sc`: wrong
+crate, Q2).
 
-| Id | Crate | Work | Needs | Model |
-|---|---|---|---|---|
-| BW1 | bodyq | `betti` per shell (exact, topological) + tests against testkit `genus` | — | Sonnet |
-| BW2 | bodyq | `tight_box` on finished trims, no `&mut`; port issue_1799/issue_1054 tests | — | Sonnet |
-| BW3 | bodyq | `contact` (port contact.rs + distance_bound.rs) with face box tree, heap by (bound, ids), budget for MAX_PAIRS; port 12 tests | BW2 | Opus |
-| BW4 | bodyq | `continuity` and `tangent_all_along` port; proved order separated from bounded drops; port 4+18+6 tests | — (analytic); NURBS edges after SM1 | Opus |
-| BW5 | bodyq | `pick` returning every hit within the aperture, sorted by (depth, id) | BW2 | Sonnet |
-| BW6 | bodyq | `recognize`: prism + hole_stacks port with error propagation and resolution-derived constants; port prism tests (73) | — | Sonnet |
-| BW7 | bodyq | `thin_places` (new; self-contact excluding the adjacency) | BW3 | Opus |
-| CF1 | check | `check(Structure)`: findings type, structure findings shared with `contract`, vertex manifoldness | — | Sonnet |
-| CF2 | check | certified gaps on analytic geometry: edge/face, pcurve/edge, vertex/edge, loop winding, radial order along the whole edge, wide vertex, degeneracy; face box tree; one-defect recipes at δ = 10·acc, acc, acc/10 | CF1 | Opus |
-| CF3 | check | `FacesCross` on analytic pairs (step-2/4 SSI + BO2b no-touch), `NeedsSsi` otherwise | CF2 | Opus |
-| CF4 | check | gaps and crossing on NURBS faces | CF2, SM1, SM5-SM8, NURBS projection | Opus |
-| CF5 | brep | `edit::grow_accuracy(&Brep, &Findings) -> Draft` with raises recorded | CF2 | Sonnet |
-| CF6 | check | port truth tests (§3.4) + a "check never writes" bit-compare test over the testkit recipes | CF2 | Sonnet |
-| ST1 | stitch | crate, `stitch` signature, vertex clustering by union-find over box tree, id order, `WideCluster` | — | Opus |
-| ST2 | stitch | edge pairing by certified Hausdorff (port bounds.rs), heap acceptance, ambiguity left open; splits | ST1 | Opus |
-| ST3 | stitch | orientation by parity + MA4 volume sign, nesting by `classify_point`; `Want::Solid` refusal with open list | ST2, CF1 | Opus |
-| ST4 | stitch | truth tests: exploded recipes, perturbation at ±coincidence, permutation bit-identity; port pin tests | ST3 | Sonnet |
-| HL1 | hlr | port (A) onto `&Brep`: frames, quadric recognition, exact quadric/torus silhouettes, `Stop`/`Trace`, typed errors, named tolerances | — | Opus |
-| HL2 | hlr | visibility by `classify_point` with box tree, split to accuracy, Uncertain only on Exhausted | HL1 | Opus |
-| HL3 | hlr | port (C) outline/pieces; port 88 tests; new closed-form view tests | HL1 | Sonnet |
-| HL4 | hlr | freeform silhouettes by normal-cone subdivision + field path | HL2, SM5, SM6a | Opus |
-| SP1 | step | crate on scx-p21: units, uncertainty, product tree, typed `StepError`; refuse missing units | — | Sonnet |
-| SP2 | step | analytic kinds → Draft → finish; joins as shared by file; closed-form pcurves; seams; parity + volume sign; port topology/assembly/geom tests on analytic files | SP1, CF1 | Opus |
-| SP3 | step | writer (port write/product.rs, one context per document, validation properties); `write_signed_volume` tests; round trip | SP2 | Sonnet |
-| SP4 | step | joins the file leaves unshared via `scx-stitch` rules | SP2, ST2 | Sonnet |
-| SP5 | step | B-spline curves and surfaces; pcurves by the fitter | SP2, NURBS surface kind, step-5 pcurve fitter | Opus |
-| SP6 | step | revolution, extrusion, offset kinds → procedural kinds | SP2, step-5 procedural kinds | Opus |
-| SP7 | import-sc | heal on load: stitch + grow_accuracy, each recorded | ST3, CF5 | Sonnet |
-| CO1 | bench | corpus runner: manifest fetch, TSV per §7.3, determinism, invariance pairs | SP2, CF2 | Sonnet |
-| CO2 | testkit | port the references.tsv generator; dan335 licence verification + manifest | — | Sonnet |
-| CO3 | bench | perf rows: check vs Boolean on slice cases; stitch on exploded recipes; STEP read per file | CF2, ST3, SP2 | Sonnet |
+| Id | Crate | Work | Needs | Edges | Model |
+|---|---|---|---|---|---|
+| LY1 | layers | Move `scx-make` to the end of the library order in layers.txt, after `scx-boolean` and, as they are added, `scx-stitch` and `scx-hlr` (01: make is layer 8, on boolean, stitch, check, hlr); move bodyq's and check's dev-dependencies on make to testkit recipes; new step-6 crates take test bodies from testkit | — | — | Sonnet |
+| SU6 | surface | Port `distance_bound`, `curve_surface_gap`, `seam_bound` and `curve_gap::curve_face_gap_bound` (01's module table): certified edge-to-face, vertex-to-edge, pcurve-to-edge and curve-to-curve gap brackets, analytic and NURBS pieces | — | — | Opus |
+| SU7 | surface | `recognize(&Surface, accuracy) -> Option<(Surface, deviation)>`: quadrics written as other kinds or as NURBS; truths rebuilt from the 4005 and 4006 cases synthetically | — | — | Opus |
+| SU8 | surface | Port `axial_section` (`holds_axis`), `facing_trough`, `vertex_meet` | — | — | Sonnet |
+| PL6 | planar | Certified, complete bounded 2-D crossings of lines and conics (with multiplicity), for drawings; spline and higher-degree curves after step 5's planar widening | — | — | Opus |
+| BW1 | bodyq | `betti` per shell; tests against testkit `genus` (in progress) | — | — | Sonnet |
+| BW2 | bodyq | `tight_box` on finished trims, cached in `Scratch`, memo hits charge the recorded work; port issue_1799 and issue_1054 tests | — | — | Sonnet |
+| BW3 | bodyq | `contact` on SU6's bounds, face box tree, heap by (bound, ids), budget for MAX_PAIRS; port 12 tests | BW2, SU6 | — | Opus |
+| BW3b | bodyq | `flush_contact`: coincident surfaces plus loop overlap by a planar Boolean | BW3 | bodyq → planar (01) | Opus |
+| BW4 | bodyq | `continuity` and `tangent_all_along`: proved order separated from bounded drops; port 4+18+6 tests. Analytic now; NURBS edges after SM1b | — | — | Opus |
+| BW5 | bodyq | `pick` (ray): every hit within the aperture, sorted by (depth, id); NURBS faces after step 5's ray against NURBS | BW2 | — | Sonnet |
+| BW6 | bodyq | `recognize`: prism recognition and hole_stacks, errors propagated, constants from the resolution; port 73 prism tests | — | — | Sonnet |
+| BW7 | bodyq | `thin_places` (new; closed-form truths; outside "done when") | BW3 | — | Opus |
+| BW8 | bodyq | `pick_at` by points and `still_names` (stored references) | BW2 | — | Sonnet |
+| BW9 | bodyq | The query and measure map: one line per pin function of §1.3 to its scx function; port the missing ones (2-D helpers to planar) | BW2 | — | Sonnet |
+| BW10 | bodyq | Combs, principal curvatures, sheet seams, `tangent_face_chain_ordered` | BW4 | — | Sonnet |
+| BW11 | bodyq | `face_pair`, `mid_sheet`, `mid_joint`, `cylinder_wall`, `cap`, `face_surface`, `round_face`, `joint_turn` | — | — | Sonnet |
+| CF1 | check | Shared structure pass (`contract` calls it): vertex manifoldness, solid-or-sheet; `Findings`, `Finding`, `Scope` types | — | — | Sonnet |
+| CF2a | check | Certified gaps on analytic geometry (edge/face, vertex/edge, pcurve/edge), wide vertex, degeneracy; `Scope::Import` and `Stitched`; one-defect recipes at δ = 10·acc, acc, acc/10 | CF1, SU6 | — | Opus |
+| CF2b | check | Clearance: `VerticesWithinCoincidence`, `TubeNotClear` (09 §6.3) | CF1, BW2 | check → bodyq (01) | Opus |
+| CF2c | check | Radial order certified along the whole edge; `contract`'s CK3 test uses it | CF1 | — | Opus |
+| CF3 | check | `FacesCross` on analytic pairs, with depth; tangent pairs to the CK3/BO7 contact classifier first; `NeedsSsi` otherwise | CF2a | check → ssi, check → bodyq (01) | Opus |
+| CF4 | check | Gaps and `FacesCross` on NURBS pairs | CF2a, CF3, SM5-SM8 | — | Opus |
+| CF6 | check | Port the truth tests of §3.4; "check never writes" bit compare over the testkit recipes | CF2a | — | Sonnet |
+| ST1 | stitch | Crate; `stitch` signature and `Done<StitchReport>` with n-operand lineage; vertex identification by rows 108/186 over a spatial index | — | stitch → bodyq | Opus |
+| ST2 | stitch | Edge pairing by certified Hausdorff (port `bounds.rs`), heap acceptance, budget share per edge, ambiguity left open; splits | ST1, SU6 | — | Opus |
+| ST3 | stitch | Orientation: parity; outward by MA4 `volume_sign`; nesting by `classify_point` (analytic now; NURBS after step 5's ray against NURBS); `Want::Solid` refusal | ST2 | stitch → mass (§11 row 2) | Opus |
+| ST4 | stitch | Truth tests: exploded recipes, perturbation at ±coincidence, permuted input bit-identical; port pin tests | ST3 | — | Sonnet |
+| ST5 | stitch | `sew`, `gather`, `open_edges`, `merge_faces` | ST2 | — | Sonnet |
+| ST6 | stitch | `rebase` to a new resolution; the `AccuracyPastResolution` warning kind | ST2, CF2b | — | Opus |
+| HL1 | hlr | Crate; HLR on scx evaluators: frames, exact quadric and torus silhouettes (SU7), `Stop`/`Trace`, typed errors, named tolerances | SU7 | hlr → bodyq | Opus |
+| HL2 | hlr | Visibility: all crossings (PL6), one classification per span, batched per face over a box tree; `uncertain` only on Exhausted | HL1, PL6 | hlr → planar | Opus |
+| HL3 | hlr | Port (C) as `outline`; port the 88 tests; new closed-form view tests | HL1 | — | Sonnet |
+| HL4 | hlr | Freeform silhouettes by normal-cone subdivision and the field path | HL2, SM5, SM6a | hlr → ssi | Opus |
+| HL5 | hlr | Projection along a direction (`plane_projection`, `curve_crossings`) and the `silhouettes` API that make's solid sweep calls | HL1 | — | Sonnet |
+| HL6 | hlr | Drawings done: the named part list, closed-form truth on primitives, a perf row | HL2, HL3, HL5, CO4 | — | Sonnet |
+| SP1 | step | Crate on scx-p21: units (refuse missing unless assumed), uncertainty from the context, `Imported`, typed `StepError`, solids and sheets | — | step → p21 | Sonnet |
+| SP2 | step | The analytic subset (analytic surfaces *and* analytic edge curves): Draft → enclosed-gap raises recorded → finish; closed-form and OnChart pcurves (seam and pole cases after SM1b); joins as the file shares them; orientation by parity and volume sign; `Scope::Import` check; port topology, assembly and geom tests on analytic files | SP1, SU6, CF1 | step → check, mass, surface (mass: §11 row 2) | Opus |
+| SP2b | step | Quadrics written as other kinds, through SU7, with the deviation recorded | SP2, SU7 | — | Sonnet |
+| SP3 | step | Writer: resolution as the context uncertainty, per-entity accuracies, one context per document, validation properties; `write_signed_volume` tests; round trip | SP2 | — | Sonnet |
+| SP4 | step | `ReadOptions::close_gaps` through `scx-stitch` | SP2, ST2 | step → stitch | Sonnet |
+| SP5 | step | B-spline curves and surfaces; pcurves by the step-5 fitter | SP2, the NURBS surface kind, the step-5 pcurve fitter, CF4 | — | Opus |
+| SP6 | step | Revolution, extrusion and offset kinds to the procedural kinds | SP2, the step-5 procedural kinds | — | Opus |
+| SP8 | step | Product structure: placed instances (`placed_bodies`, occurrences, parts) | SP1 | — | Sonnet |
+| CO1 | bench | Corpus runner in `crates/scx-bench`: manifest fetch, the categories and TSV of §7.3, determinism, round trip, the pin smoke column | SP2, CF2a | — | Sonnet |
+| CO2 | testkit | The conformance generator and truths; licence checks for dan335, cadmpeg and the six kernel-cases truths (in progress) | — | — | Sonnet |
+| CO3 | bench | Perf rows, before and after: `check` at each scope against the Boolean on the slice's cases; `Full` against `Import` on the gate sample; stitch on exploded recipes; STEP read per file; drawing time | CF2a, ST3, SP2, HL2 | — | Sonnet |
+| CO4 | bench | The MFCAD gate: verify the model count, fix and hash a sample of up to 1,000 parts, manifest in `crates/scx-bench` | — | — | Sonnet |
 
 ### 8.1 Graph and critical path
 
 ```
-CF1 ──> CF2 ──┬─> CF3 ───────────────┐
-              ├─> CF4 (SM1, SM5-8)    │
-              ├─> CF5 ──> SP7          │
-              └─> CF6                 │
-SP1 ──> SP2 (CF1) ──┬─> SP3           ├─> CO1 ──> "done" (all files pass)
-                    ├─> SP4 (ST2)      │
-                    ├─> SP5 (fitter, NURBS kind)
-                    └─> SP6 (procedural kinds)
-ST1 ──> ST2 ──> ST3 (CF1) ──> ST4
-BW2 ──> BW3 ──> BW7;  BW2 ──> BW5;  BW1, BW4, BW6 alone
-HL1 ──> HL2 ──> HL4 (SM5, SM6a);  HL1 ──> HL3
+LY1 (first: before any new crate takes test dependencies)
+SU6 ──┬─> CF2a ──┬─> CF3 ──> CF4 (SM5-SM8)
+      │          ├─> CF6
+      │          └─> CO1, CO3
+      ├─> BW3 ──┬─> BW3b
+      │         └─> BW7
+      ├─> ST2 ──┬─> ST3 ──> ST4
+      │         ├─> ST5
+      │         └─> ST6 (with CF2b)
+      └─> SP2 (with SP1, CF1) ──┬─> SP2b (SU7), SP3, SP4 (ST2)
+                                ├─> SP5 (fitter, NURBS kind, CF4)
+                                ├─> SP6 (procedural kinds)
+                                └─> CO1 ──> gate on CO4's sample ──> full corpus
+CF1 ──> CF2a, CF2b (BW2), CF2c
+SU7 ──> HL1 ──┬─> HL2 (PL6) ──┬─> HL4 (SM5, SM6a)
+              │               └─> HL6 (HL3, HL5, CO4)
+              ├─> HL3
+              └─> HL5
+BW2 ──> BW3, BW5, BW8, BW9;  BW4 ──> BW10;  BW1, BW6, BW11 alone
+ST1 ──> ST2;  SP1 ──> SP2, SP8
 ```
 
-- **Can start now** (no step-5 input): BW1, BW2, BW4 (analytic), BW6, CF1, ST1, HL1, SP1, CO2. Then
-  BW3, BW5, CF2, CF3, CF5, CF6, ST2, ST3, HL2, HL3, SP2, SP3, SP4, CO1 as their step-6 inputs land.
-- **Waits on step 5:** CF4 (SM1, SM5-SM8), HL4 (SM5, SM6a), SP5 (the NURBS surface kind and the
-  pcurve fitter), SP6 (procedural kinds), and the NURBS half of BW4 (SM1).
-- **The critical path to "imports and passes the check"** is CF1 → CF2 → SP2 → SP5 → CO1 on the full
-  corpus. It is gated by the step-5 pcurve fitter, because most NIST faces are B-spline. Within
-  step 6 alone the path is SP1 → SP2 → CO1 on the analytic subset, so the runner and every analytic
-  file can be green before step 5 finishes. Drawings (HL1 → HL2 → HL3) are off the critical path.
-- **Layers.** Add `scx-stitch` and `scx-hlr` after `scx-check` (layer 6) and `scx-step` at layer 7
-  (on p21, stitch and check), each when its first task lands (72 §12.4 row 8).
+- **Can start now** (no input that is not on main): LY1, SU6, SU7, SU8, PL6, BW1 (in progress),
+  BW2, BW4 (analytic), BW6, BW11, CF1, ST1, SP1, SP8, CO2 (in progress), CO4. LY1 goes first or
+  alongside, since ST1, HL1 and SP1 create crates whose tests must not depend on `scx-make`.
+- **Startable once a step-6 row lands:** BW3, BW3b, BW5, BW7 to BW10, CF2a to CF3, CF6, ST2 to ST6,
+  HL1 to HL3, HL5, HL6, SP2 to SP4, CO1, CO3.
+- **Waits on step 5:**
+  - CF4 on SM5-SM8;
+  - HL4 on SM5 and SM6a;
+  - SP5 on the NURBS surface kind, the pcurve fitter and CF4;
+  - SP6 on the procedural kinds;
+  - the NURBS half of BW4 and SP2's seam and pole cases on SM1b;
+  - the NURBS half of BW5, ST3's nesting and HL2's spans on NURBS faces on step 5's ray against
+    NURBS;
+  - HL2's torus and spline spans on step 5's general bounded 2-D intersections in scx-planar.
+- **The critical path to the analytic gate** is SU6 → CF2a, with SP1 and CF1 in parallel → SP2 →
+  CO1 on CO4's MFCAD sample. **To the full corpus** it continues through SP5, which is held up by
+  step 5's pcurve fitter, and CF4. Drawings (SU7 → HL1 → HL2 → HL6) run beside it.
+- **Layers.** After LY1, layers.txt gains `scx-stitch` and `scx-hlr` after `scx-check` (layer 6),
+  `scx-step` after them (layer 7), and `scx-make` stays last; each crate is added when
+  its first task lands (04 row 102).
 
 ## 9. Open questions
 
+Revised 11-27 after the review (§15). Q2, Q5, Q6, Q7 and Q8 changed; the coordinator's provisional
+rulings are applied, with one dispute (Q7) argued in §15.
+
 **Q1. Do `contract` and `check` stay two functions?**
 
-- Recommend: yes, with one shared structure pass. `contract` is the cheap kernel-edge proof every
-  operation can afford. `check` is the full list.
-- Against: two entry points drift. A caller may think `contract` is the full check. Mitigation: the
-  doc says so, and a test asserts that `contract` is a subset of `check`.
+- Recommend: yes, with one shared structure pass that `contract` calls (CF1). `contract` is the
+  cheap kernel-edge proof every operation can afford; `check` is the full list. The shared pass
+  holds only what `finish` and `contract` lack (vertex manifoldness, solid or sheet).
+- Against: two entry points drift, and a caller may read `contract` as the full check. Mitigation:
+  the doc says so, and a test asserts that every `contract` failure is a `check` finding.
 
-**Q2. Does STEP import heal, or only report?**
+**Q2. Where does STEP healing live?**
 
-- Recommend: `scx-step` only reports. `scx-import-sc` heals on load with recorded changes (SP7).
-- Against: every caller of `scx-step` other than the app then gets bodies with findings and must
-  heal them itself. The pin's import heals (via convert) and users expect a solid. Mitigation:
-  `ReadOptions::heal` calls the same SP7 path, so the choice is the caller's in one flag.
+- Recommend (the coordinator's ruling): `scx-step` measures enclosed gaps and records the raises in
+  its `Report` (R3; 09 §6; 04 rows 41 and 42). Gap closing is `scx-stitch`'s, reached by
+  `ReadOptions::close_gaps` (SP4). Repairs that need Booleans are `scx-repair`'s. `scx-import-sc`
+  stays the converter for designs saved by solidcore (04 row 102). SP7 is dropped.
+- Against: the reader then does real geometry work (certified gaps on every edge) that a pure
+  mapper would not, and its cost lands on every import. Mitigation: the gaps are SU6's bounds,
+  which `check` also uses, and they are box-gated; CO3 measures it.
 
 **Q3. Drop SmHCR (5.1 B)?**
 
-- Recommend: drop it. (A) serves the app, (B) has no app use, and its idioms are the worst in the
-  survey.
-- Against: sweep calls it, and (B) handles freeform silhouettes now, where (A) leaves them
-  unsupported until HL4. Mitigation: sweep is rebuilt in step 5's procedural kinds anyway.
-  Freeform drawings wait for HL4, which is on the SM5/SM6 path step 5 already builds.
+- Recommend: drop it, with a row for each of its callers (§1.3: HL5 for projection along a
+  direction and the tool silhouette, HL3 for `project_brep_onto_plane`), and HLR built on scx's own
+  evaluators (HL1).
+- Against: (B) handles freeform silhouettes now, where HL1 leaves them `unsupported` until HL4.
+  Mitigation: HL4 is on the SM5/SM6a path step 5 already builds, and no app caller uses (B).
 
 **Q4. Are Betti numbers and thin places in step 6's scope?**
 
-- Recommend: Betti yes (BW1, small, exact). Thin places yes but last (BW7), since 01 lists contact
-  and pick and a thin-place finder is contact on one body.
-- Against: neither is in the pin, so neither has a difftest truth, and thin places can grow without
-  bound in scope (what counts as thin near a fillet?). Mitigation: BW7's definition is fixed here:
-  opposite faces, not sharing an edge, closer than `below`, with a certified bracket.
+- Recommend: Betti yes (BW1, small, exact). Thin places yes but last (BW7), with closed-form truths
+  only (slabs, coaxial cylinders, slots), and outside step 6's "done when".
+- Against: thin places near blends are the same hard tangent case as `FacesCross`, with no pin
+  truth.
+  Mitigation: BW7's definition is fixed (opposite faces not sharing an edge, closer than `below`,
+  a certified bracket), and it does not gate the step.
 
 **Q5. Keep the pin's feature re-read at 0.25 × the shortest edge?**
 
 - Recommend: no. Accuracy comes from the file's uncertainty and the document's resolution, with the
-  accuracy-ratio warning. A feature smaller than the resolution is a finding (`Degenerate`), not a
-  re-read.
-- Against: #18848 was a real file that imported only with the re-read. Mitigation: that file
-  becomes a test. If it fails, the finding names the edge, and `scx-import-sc` can heal.
+  accuracy-ratio warning. A gap the file does not meet is a recorded raise in `scx-step`'s report
+  (R3); a feature smaller than the resolution is a `Degenerate` finding. #18848's case becomes a
+  test only if its file passes the licence bar; otherwise it is rebuilt synthetically.
+- Against: #18848 imported only with the re-read. Mitigation: the raise covers the gap it closed,
+  and is visible in the report rather than hidden in a re-read.
 
-**Q6. The corpus is about 39 files. Widen it?**
+**Q6. Is the corpus big enough to gate step 6?**
 
-- Recommend: not as a gate for step 6. Add the generated round trips (unlimited, with closed-form
-  truths) and keep looking for permissive sets (an ABC-style set only if its licence passes the bar;
-  most do not).
-- Against: 39 files cannot show robustness. NIST's PMI parts are clean exports from a few systems,
-  and the failures that matter come from messy files. A green corpus may overstate readiness.
+- Recommend (the coordinator's ruling): add a fixed, hashed MFCAD sample (MIT; up to 1,000 parts,
+  once CO4 verifies the count) as the gate for the analytic subset. Drop the cadmpeg fixtures,
+  `assembly_extract.stp` and the six unverified kernel-cases truths unless CO2 clears them.
+- Against: MFCAD parts are synthetic prismatic models from one generator, so they test the analytic
+  reader broadly but not the messy exports where import fails. Mitigation: NIST and the
+  conformance set cover other exporters, and the generated round trips cover our own writer.
 
-**Q7. How is NIST scored without reference volumes?**
+**Q7. How is the corpus scored without reference volumes?**
 
-- Recommend: invariance across AP203/AP242 and unit pairs, plus the validation properties where the
-  file has them, plus the check and the contract.
-- Against: invariance passes when both reads are wrong the same way (a shared reader bug). Mitigation:
-  the round trip through our writer, and `write_signed_volume`'s independent volume from the written
-  entities.
+- Recommend: truth from closed forms (generated round trips, the conformance set's formula
+  volumes, the rebuilt synthetic cases), the file's validation properties where present, and the
+  check and contract. The pin is a smoke signal only. NIST revision pairs are reported, not scored
+  (§15, F7 and Q7: pre-qualifying pairs by agreement and then scoring agreement is circular).
+- Against: most NIST bodies then have no volume truth at all, only the check and the contract.
+  Mitigation: the certified volume error and the round trip at least bound what the reader built;
+  a wrong-but-consistent reading of a NIST file is the remaining blind spot (§10).
 
-**Q8. Does `check` run inside every operation?**
+**Q8. Which check runs at import, and inside operations?**
 
-- Recommend: no. `contract` runs at the kernel edge (as ruled). `check(Full)` runs at import, in
-  tests and on request.
-- Against: 02 §10 says the checker becomes load-bearing, and bugs in operations go unseen without
-  it. Mitigation: the difftests run `check(Full)` on every result. The perf row CO3 keeps its cost
-  visible, so the default can change once it is cheap.
+- Recommend (the coordinator's ruling): operations run `contract` only. Import runs
+  `Scope::Import` (structure, gaps against the recorded raises, clearance) by default, and `Full`
+  on request, until CO3 shows `Full` is affordable. Difftests run `Full` on every result.
+- Against: 02 §10 says the checker becomes load-bearing, and `FacesCross` is exactly what a sloppy
+  exporter gets wrong. Mitigation: the MFCAD gate runs `Full` in the scorer, so the default can
+  change on CO3's numbers.
 
-**Q9. Is an `Undecided` gap a pass or a fail for "passes the check"?**
+**Q9. Is an `Undecided` gap a pass or a fail?**
 
-- Recommend: neither. It is counted separately, and step 6 is done only with zero `Undecided`
-  outside `NeedsSsi`.
-- Against: a certified bound that is merely loose (a long spline edge) blocks done for a reason that
-  is not a defect. Mitigation: `Undecided` carries its bracket, and the budget for gap bounds is a
-  setting, so a loose case is fixed by refining, not by a pass.
+- Recommend: neither. It is its own category (§7.3), and done needs zero `Undecided` outside
+  `NeedsSsi`, which is a finite named list in 04 (§11 row 5). The budget share used is recorded per
+  row, so a result is reproducible (04 row 104).
+- Against: a loose but correct bound on a long spline blocks done for a reason that is not a
+  defect, and "refine the budget" can grow without bound. Mitigation: the bracket is reported, and
+  a bound that does not tighten with budget is a bug in SU6, not a reason to pass.
+
+**Q10. (New) May the analytic gate be met before the NURBS rows land?**
+
+- Recommend: yes. The MFCAD sample is analytic, so SP2, CF2a and CO1 can meet it on step-6 rows
+  alone, and "step 6 done" then waits only on the full corpus's step-5 rows.
+- Against: a green analytic gate may be read as "STEP done". Mitigation: §7.3 states the two gates
+  separately, and 05's row says which is met.
 
 ## 10. Against this plan
 
 - **The pin's check samples; ours certifies, which is slower.** Certified Hausdorff on every
   edge/face pair may cost more than the pin's 20 samples, and the pin's Level 2 is already 6.5× its
   Boolean. The plan rests on the claim that closed-form projection on analytic pairs plus the box
-  tree makes it cheaper, but that is unmeasured. CO3 must measure before CF2 goes ready, and if the
-  claim fails, CF2 needs a cheaper certified bound (a Lipschitz bound per span), not samples.
+  tree makes it cheaper, but that is unmeasured. CO3 must measure before CF2a goes ready, and if
+  the claim fails, CF2a needs a cheaper certified bound (a Lipschitz bound per span), not samples.
 - **Most of the corpus waits on step 5.** NIST parts are largely B-spline faces with fitted pcurves,
   so "the STEP corpus imports and passes the check" cannot be green until SP5, the fitter and CF4
   land. The analytic subset may be small. If it is near empty, CO1 green on it proves little, and
   the plan's "start now" mainly buys plumbing. That is still worth doing, but the progress it shows
   is smaller than the row count suggests.
-- **Not healing in the reader may lose files.** The pin heals on load, and its pass record (not
-  measured, but implied by its users) comes partly from healing. With healing only in
-  `scx-import-sc`, `scx-step`'s own score will look worse than the pin's. Q2's flag mitigates this,
-  but the comparison must say which path ran.
-- **No retries may refuse files the pin closes.** R3 leaves open what the pin's tolerance ladder
-  glued. Some of those glues were right: a sloppy exporter whose gaps exceed its own stated
-  uncertainty. The plan reports them open. The user sees a failure where the pin showed a solid.
+- **Recorded raises may not cover what the pin healed.** The pin heals on load, and its pass
+  record (not measured, but implied by its users) comes partly from healing. `scx-step` raises
+  only to enclosed gaps and closes open edges only with `close_gaps` (SP4), so its default score
+  may look worse than the pin's. The corpus TSV must say whether `close_gaps` ran.
+- **No retries may refuse files the pin closes.** R3 (outside the importer's recorded raise)
+  leaves open what the pin's tolerance ladder glued. Some of those glues were right: a sloppy
+  exporter whose gaps exceed its own stated uncertainty. The plan reports them open. The user sees a failure where the pin showed a solid.
   This is the truth-over-pin rule applied, but it should be visible in the corpus TSV as its own
   column (open within 10× coincidence), so the cost of the rule is measured.
-- **Transitive clustering can over-join.** A chain of vertices each within coincidence may span far
-  more than coincidence, and a union-find joins them all. `WideCluster` reports it, but the rule for
-  whether to keep the join is a judgement that has not been tested on real files.
-- **Invariance scoring is weak** (Q7). A shared bug passes both sides.
+- **Most NIST bodies have no volume truth** (Q7). Revision pairs are smoke only, so a
+  wrong-but-consistent reading passes the check, the contract and the round trip.
 - **`FacesCross` is new and unproven at scale.** The pin never tested face crossing, so there is no
   record of how often real files have it. If NIST files commonly have tiny crossings within
   tolerance at tangent blends, CF3 will flood findings. Its allowance must be coincidence, and a
@@ -871,38 +1160,78 @@ HL1 ──> HL2 ──> HL4 (SM5, SM6a);  HL1 ──> HL3
 - **HL2's proved visibility may be slow on dense drawings.** The pin's 5-sample classify was cheap,
   so the port may regress drawing time. A drawing is interactive, so HL2 needs its own perf row
   (add it to CO3).
-- **The task table is wide.** Thirty rows across five crates, with nine startable now, is a lot to
-  run at once. Its spine is CF1/CF2 and SP1/SP2. If builders are scarce, run those first, then ST,
-  then BW and HL.
+- **(11-27 revision) The importer now raises accuracies.** R3's exception is 09 §6 applied, but it
+  moves real geometry work into the reader, and a reader that raises can mask a writer bug in our
+  own round trips. Round-trip tests therefore assert zero raises.
+- **(11-27 revision) Per-sheet refusal can be harsh.** Under rows 108 and 186, a sheet with two of
+  its own vertices within coincidence is `Refused`. On a STEP file that skips the body, scored as
+  Refused, not the whole file; if MFCAD or NIST shows it often, the rule needs a ruling for
+  imported data, not a quiet exception in stitch.
+- **(11-27 revision) The table is wider still.** Forty-eight rows across seven crates, sixteen
+  startable now. The spine is SU6, CF1, CF2a, SP1, SP2, CO1 and CO4; if builders are scarce, run
+  those first.
 - **This note measured nothing on the corpus.** Every perf claim above is from the pin's numbers
   (Menger 3.1 s against 0.48 s) or from judgement.
 
 ## 11. Proposed 04 rows (for the coordinator's ruling and Brett's review)
 
-1. **Step 6 plan (research 74).**
-   - The full `scx-bodyq`, `scx-check`, `scx-stitch`, `scx-hlr` and `scx-step` take `&Brep` and
-     return typed answers; stitch and STEP return `Made<Brep>`.
+Revised 11-27 after the review (§15).
+
+1. **Step 6 plan (research 74, as revised).**
+   - The full `scx-bodyq`, `scx-check`, `scx-stitch`, `scx-hlr` and `scx-step` take `&Brep`.
+   - Stitch returns `Done<StitchReport>` with lineage per input sheet. `scx-step::read` returns
+     `Imported`. Neither uses `Made`.
    - Sampled decisions become certified brackets or `Undecided` (R2).
-   - No retry with a wider tolerance (R3).
+   - No retry with a wider tolerance, except the importer's recorded raise to an enclosed gap (R3).
    - Orientation by parity plus the certified volume sign, with no ray votes (R4).
-   - The check returns typed `Finding`s with no test numbers or levels (R5).
-   - Caps become budget (R6).
-   - Id-order determinism (R7).
-   - Tasks: §8.
-2. **`scx_check::check(&Brep, &Cx, Scope) -> Result<Findings, CheckError>`.** It shares its structure
-   pass with `contract`, never writes, and moves accuracy growth into a separate recorded edit
-   `grow_accuracy`. Face crossing and vertex manifoldness are new findings, and NURBS pairs are
-   `NeedsSsi` until step 5.
-3. **`scx-step` reads and reports; it does not heal.** Healing is `scx-import-sc`'s recorded edit, or
-   the reader's `heal` option. Missing units are refused unless assumed explicitly. Uncertainty
-   comes from the file's context.
-4. **SmHCR is not ported.** HLR ports the pin's `hlr/` and `eval/outline` only. Freeform silhouettes
-   come from step 5's normal-cone and field-path machinery.
-5. **"Imports and passes the check" is scored by §7.3.** It covers every file opening, every body
-   either `Made` or `Skipped` for a named pending kind, `Made` bodies with zero findings and zero
-   non-`NeedsSsi` `Undecided`, the contract `Proved` for solids, invariance across AP203/AP242 and
-   units, determinism and round trip. The corpus is the NIST PMI set plus the permissive fixtures
-   and generated round trips, fetched by manifest and never committed.
+   - Typed `Finding`s, with the clearance finding (R5).
+   - Caps become budget, and memo hits charge the recorded work (R6).
+   - Vertex identification by rows 108 and 186 (R7).
+   - Memo-keeping queries take `&mut Cx`, leaf queries `(&mut Budget, &Stop)` (R8).
+   - Every pin capability of these crates has a home (§1.3). Tasks: §8.
+2. **Crate edges.**
+   - LY1 moves `scx-make` to the end of the library order (01's layer 8).
+   - New edges:
+     - `scx-stitch` → `scx-mass`, for the volume sign;
+     - `scx-step` → `scx-mass` and `scx-surface`;
+     - `scx-check` → `scx-bodyq` and `scx-ssi`, which 01 lists;
+     - `scx-hlr` → `scx-planar` and `scx-ssi`.
+   - There is no `scx-stitch` → `scx-check` edge.
+   - Step-6 crates take test bodies from `scx-testkit`, never from `scx-make`.
+3. **The check: `scx_check::check(&Brep, &mut Cx, Scope) -> Result<Findings, CheckError>`.**
+   - The scopes are `Import`, `Stitched` and `Full`.
+   - It shares its structure pass with `contract`, and checks only what `finish` and `contract`
+     lack.
+   - It never writes. Accuracy growth is the importer's recorded raise, and repair is
+     `scx-repair`'s.
+   - New findings: face crossing (with depth), vertex manifoldness, clearance and tube-clear.
+   - Radial order is certified along the whole edge, for `contract` too.
+   - NURBS pairs are `NeedsSsi` until SM5-SM8.
+4. **STEP import.**
+   - `scx-step` records enclosed-gap raises in its report.
+   - Gap closing goes through `scx-stitch` (`close_gaps`). Boolean-level repair is `scx-repair`'s.
+   - `scx-import-sc` stays the converter for saved solidcore designs.
+   - Missing units are refused unless assumed explicitly. Uncertainty comes from the file's
+     context.
+   - Import runs `Scope::Import` by default, and `Full` on request until CO3 measures it.
+5. **"Imports and passes the check" is scored by §7.3.**
+   - Each file lands in exactly one category.
+   - The analytic gate is a fixed, hashed MFCAD sample, with zero Skipped, Refused or Failed.
+   - On the rest of the corpus, every skip names a kind on a finite pending list kept in 04. The
+     first list is: B-spline curves and surfaces with fitted pcurves (SP5); revolution, extrusion
+     and offset surfaces (SP6); conic pcurves crossing a seam or pole (SM1b); and `NeedsSsi` for
+     NURBS face pairs (CF4).
+   - Truth comes from closed forms, validation properties, the check and the contract. The pin is
+     a smoke signal only, and NIST revision pairs are not scored.
+   - Excluded sources: the cadmpeg fixtures, `assembly_extract.stp` and the unverified
+     kernel-cases truths, each unless CO2 clears it.
+6. **SmHCR is not ported.**
+   - Each of its callers has a row: HL3 for the outline; HL5 for projection along a direction and
+     the sweep tool's silhouette.
+   - HLR is built on scx's own evaluators, with quadric recognition in `scx-surface` (SU7), which
+     `scx-step` shares.
+   - Visibility is proved: all image-space crossings (PL6), then one classification per span.
+   - Drawings are done by HL6.
 
 ## 12. What this note did not do
 
@@ -911,3 +1240,138 @@ HL1 ──> HL2 ──> HL4 (SM5, SM6a);  HL1 ──> HL3
 - It did not measure the check's cost on scx bodies. It cites the pin's numbers only.
 - It did not verify the dan335/step-conformance licence file (CO2 does).
 - It read no code from other kernels for this note.
+- The 11-27 revision (§15) measured nothing new either. It re-read the pin's ops modules for the
+  ledger and checked the review's citations and corpus claims against the pin's files.
+
+## 15. Review response (11-27)
+
+An adversarial review of the first version (§0 to §12) raised ten findings (F1 to F10) and gave a
+verdict on each of the nine open questions. Each finding was checked against the code on main and
+against 04. This section is numbered 15 because §13 and §14 are appended by other tasks; nothing
+is renumbered. "Changed" names the sections that now carry the fix.
+
+### 15.1 Findings
+
+- **F1, healing in the wrong crate. Agree.** 04 row 102 makes `scx-import-sc` the converter for
+  saved solidcore designs, not a STEP stage. `finish` refuses `EdgeEndOffVertex`,
+  `UseEndOffVertex` and `PcurveOffEdge`, so a real file whose gaps exceed its stated uncertainty
+  cannot become a `Brep` unless the reader raises first. `Report::raised` already exists in
+  scx-brep. Changed: R3 gains the importer's exception (09 §6); §6.3 measures enclosed gaps
+  before `finish` and records a `Raise` per entity; `close_gaps` goes through `scx-stitch` (SP4);
+  Boolean-level repair is `scx-repair`'s; SP7 is dropped; Q2 rewritten. The "step does not heal"
+  contradiction with SP4 is gone: step records raises, and stitch closes gaps only on request.
+- **F2, layering. Agree on all six points.**
+  - stitch → check: removed. Stitch runs no structure pass; it relies on `finish`, and the
+    result's check is the caller's (§4.3).
+  - stitch → mass: ruled in as a new edge (§11 row 2). The volume sign is MA4's, and copying it
+    into bodyq would be a second integrator. Under layers.txt, mass (layer 4) sits below stitch.
+  - `grow_accuracy` in scx-brep: dropped with CF5. Raises are the importer's, from its own gap
+    measurements, so no layer has to see `Findings`.
+  - `Made<Brep>`: stitch returns `Done<StitchReport>` with lineage per input sheet, and step
+    returns `Imported`. `Made` stays scx-make's (R1).
+  - layers.txt is stale: verified (make sits before tess, bodyq, check and boolean). LY1 moves it
+    last and moves the dev-dependencies of bodyq and check on make to testkit.
+  - CF3's edges: check → ssi and check → bodyq are now listed in the table's Edges column, with
+    every other new edge.
+- **F3, merging points. Agree.** Rows 108 and 186 are the rule, and `scx_boolean::boolean`
+  already implements them (`VerticesWithinCoincidence`, `Chain`). Changed: R7 and §4.3 step 1.
+  Two vertices of one sheet within coincidence: `Refused`. A pair from different sheets:
+  identified. A chain: anchored to the nearest vertex of the operands, else `Unsupported`.
+  Candidates come from a grid or box index sized by the coincidence radius, never by visit order.
+  The clearance finding `VerticesWithinCoincidence` is in §3.3.
+- **F4, capabilities with no home. Agree.** §1.3 is the capability ledger: every pin capability
+  the review lists, and the others found while checking, has a row (BW8 to BW11, ST5, ST6, HL5,
+  SP1, SP3, SP8) or a named home. The review asked for §1.4; it is §1.3, because the first
+  version had no §1.3. One correction: the stored re-identification (`stored_face`,
+  `stored_edge`) goes in bodyq's `still_names`, which `scx-record` calls. Its matching is geometry
+  over a body, and record sits below bodyq in the layers.
+- **F5, HLR. Agree on the hole, the step-5 waits and the second evaluator.**
+  - Proof: HL2 now needs every image-space crossing (PL6), certified complete, then one
+    classification per span.
+  - PL6 is a step-6 row for lines and conics. Torus and spline spans wait on step 5's general
+    bounded 2-D intersections in scx-planar, and HL2 says so.
+  - The step-5 waits are marked in §8.1: ST3's nesting, HL2's NURBS spans, BW5's NURBS faces.
+  - One correction: orientation by parity (R4) needs no ray, so it does not wait; only nesting
+    does.
+  - HL1 is built on scx's evaluators, not a port of (A)'s geometry layer. Quadric recognition is
+    SU7 in scx-surface, shared by HL1 and SP2b.
+- **F6, task table. Agree, with one dependency changed.**
+  - SP2 is defined on analytic surfaces and analytic edge curves. It needs SM1b for seam and
+    pole cases, and SP5 waits on the step-5 fitter.
+  - CF1 shrinks to what `finish` and `contract` lack, and `contract` calls it.
+  - CF2 splits into CF2a (gaps), CF2b (clearance) and CF2c (radial order), with CF3 for analytic
+    crossings and CF4 for NURBS.
+  - HL6 is the drawing "done when".
+  - LY1, ST5, ST6 and the ledger rows are added.
+  - **Dispute:** the review gates the NURBS half on SM9. It waits on SM5 to SM8 instead. The check
+    needs certified gaps and crossing curves on NURBS pairs, which the SSI rows give. It never
+    calls the Boolean plug-in that SM9 wires.
+- **F7, corpus and scoring. Agree, except the revision-pair remedy.**
+  - Unit pairs: they do not exist, and "unit pairs" is dropped.
+  - references.tsv: its provenance is restated (§6.4), and the six kernel-cases truths are
+    excluded until CO2 clears their licence.
+  - cadmpeg and `assembly_extract.stp`: excluded.
+  - MFCAD: a fixed, hashed sample is the gate (CO4).
+  - Pending kinds: a finite list in 04 (§11 row 5).
+  - The categories of §7.3 cover refused files and failed finishes, and findings are scored when
+    no recorded raise covers them.
+  - The scorer lives in `crates/scx-bench` (CO1).
+  - **Dispute: revision pairs.** The review proposes pre-qualifying pairs whose volumes agree
+    within a tolerance and then scoring only those. That tests nothing. Pairs that disagree are
+    removed, and pairs that agree are counted as passing, by the same measure. The revisions are
+    different models, so agreement is no truth either way. Revision pairs are therefore a smoke
+    column, reported but not scored (§7.3).
+  - **Note:** the gate sample is "up to 1,000". The review's "about 15k" models is from research
+    69 and is not verified here, so CO4 verifies the count first.
+- **F8, perf traps. Agree.**
+  - `Scope::Import` is the import default, and `Full` runs on request until CO3 measures it.
+  - HL2 batches spans per face over a box tree, and CO3 has an HLR row.
+  - Each Hausdorff test in ST2 has a budget share per edge, and an `Undecided` result is
+    counted.
+  - Vertex candidates come from a spatial index.
+  - Tangent pairs go to the CK3/BO7 contact classifier first (CF3).
+  - §2.3 states that a memo hit charges the work it records (04 row 104).
+  - **Dispute, in part: the argument convention.** The review asks for `&mut Cx` everywhere. R8
+    keeps BQ1's ruled `(&mut Budget, &Stop)` for leaf queries that keep no memo, and uses
+    `&mut Cx` for queries that write `Scratch` (`tight_box`, `contact`, `pick`, the check). A
+    leaf query does not need the whole `Cx`, and widening it would undo a ruling for no gain. The
+    rule is one convention with one test: a query that writes the memo takes `&mut Cx`.
+- **F9, rulings. Agree with every objection, with one wording note.**
+  - R1: lineage-carrying returns, and the trims sentence reworded to row 130 (the writer fits,
+    `finish` verifies).
+  - R3: the importer's exception.
+  - R4: the edge and both limits. Sheets use parity only, and nesting on NURBS waits on step 5.
+  - R5: the clearance finding, with typed causes.
+  - R6: memo hits.
+  - R7: rows 108 and 186.
+  - CK3's radial order is certified along the whole edge by CF2c, and `contract` uses it. Until
+    CF2c lands, the one-sample test is a named limit that both share.
+  - The claim that the pin's pick "depends on order" is withdrawn (§2.2): the first-miss stop is
+    a batch convention.
+- **F10, citations. Agree; all fixed.**
+  - `is_inner_shell_of` is at shell.rs:1656.
+  - The underflow is at topology/brep/p3.rs:5360.
+  - `glue_edges_at_vertex` is at p2.rs:1018.
+  - The line counts without tests are noted in §0.
+
+### 15.2 Open questions
+
+- **Q1. Agree:** CF1 shrinks.
+- **Q2. Ruled otherwise; applied** (F1).
+- **Q3. Agree:** each caller of (B) has a row.
+- **Q4. Agree:** BW7 is outside "done when", with closed-form truths.
+- **Q5. Agree:** the raise belongs to scx-step. #18848 becomes a test only after a licence check,
+  and is otherwise rebuilt synthetically.
+- **Q6. Ruled otherwise; applied:** the MFCAD gate. The size is "up to 1,000" (F7).
+- **Q7. Partly disputed.** Closed forms, validation properties, the check and the contract are the
+  truth, and the pin is a smoke signal. Revision pairs are smoke too, not pre-qualified and
+  scored (F7).
+- **Q8. Agree:** `Scope::Import` is the default.
+- **Q9. Agree:** the budget is recorded per row, and `NeedsSsi` is a finite list in 04.
+
+### 15.3 Disputes for the coordinator's ruling
+
+1. CF4 waits on SM5 to SM8, not SM9 (F6).
+2. Revision pairs are a smoke column, not pre-qualified and scored (F7, Q7).
+3. Leaf queries keep `(&mut Budget, &Stop)`. Queries that keep a memo take `&mut Cx` (F8, R8).
+4. Stored re-identification goes in bodyq's `still_names`, and scx-record calls it (F4).
