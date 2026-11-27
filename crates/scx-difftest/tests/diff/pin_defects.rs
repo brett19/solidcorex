@@ -1286,3 +1286,240 @@ pub fn p21_lower_hex() -> PinDefect<(Text<LOWER_HEX>,), XRead> {
         },
     }
 }
+
+// ---- scx-algo's pseudo box against solidcore's `SmPseudoBox` (`t_pbox`) --------------------
+
+use crate::t_pbox::{BoxR, ProjR};
+type XV3 = scx_num::vector3d::Vec3;
+type XIv = scx_num::extent1d::Extent1d;
+type BoxParts = ([XV3; 3], [XIv; 3]);
+type BasisR = Option<([XV3; 3], bool)>;
+type LineR = Option<scx_num::Result<(&'static str, Vec<f64>)>>;
+type HullR = Option<(Option<BoxParts>, BoxParts)>;
+
+/// `BoxBasis::new` (the pin's `SetBasis` then `InvertAbsolute`'s determinant test) of
+/// vectors with a component not finite.
+///
+/// Such vectors span no box: a NaN component has no value, and an infinite one has no
+/// direction once unitised (`inf / inf`). The pin's `SetBasis` compares the determinant
+/// with `<`, which NaN passes, and its `InvertAbsolute` divides on, so it keeps a basis of
+/// NaN vectors. scx refuses the basis (`None`). The check: `None` for every such input.
+pub fn pb_basis() -> PinDefect<(V, V, V), BasisR> {
+    PinDefect {
+        reason: "the pin keeps a basis of vectors that are not finite",
+        applies: Applies::Inputs(|(a, b, c)| !(finite(a) && finite(b) && finite(c))),
+        check: |_, r| match r {
+            None => Ok(()),
+            Some(b) => Err(format!("vectors not finite span no box, not {b:?}")),
+        },
+    }
+}
+
+/// `PseudoBox::intersect_line` of a line through a point, or along a direction, that is not
+/// finite: no line, so no clip is defined. scx refuses it (`InvalidInput`); the pin clips
+/// its NaN parameters on and answers a miss or a hit (as [`e3_intersect_line`] for boxes
+/// on the axes). The check: refused, or no box at all.
+pub fn pb_intersect_line() -> PinDefect<(BoxR, V, V), LineR> {
+    PinDefect {
+        reason: "the pin clips an undefined line",
+        applies: Applies::Inputs(|(_, p, v)| !(finite(p) && finite(v))),
+        check: |(b, _, _), r| match r {
+            None if crate::t_pbox::xbox(b).is_none() => Ok(()),
+            _ => refused_line(r),
+        },
+    }
+}
+
+/// The corners of `r` on its unit basis vectors.
+fn pb_corners(r: &BoxR) -> Vec<V> {
+    let u = r.b.map(direction);
+    let mut out = Vec::with_capacity(8);
+    for k in 0..8 {
+        let mut c = [0.0; 3];
+        for (i, ui) in u.iter().enumerate() {
+            c = add3(c, scale3(*ui, r.i[i][(k >> i) & 1]));
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// Whether the perspective image of `r` from `p.e` onto the plane through `p.p` along `p.n`
+/// is undefined, with slack around each boundary: the eye on the view plane (every ray
+/// meets the plane at the eye or nowhere), the box reaching the plane through the eye
+/// parallel to the view plane (its image is unbounded), or a basis vector at the plane's
+/// point seen along a ray parallel to the plane (its image is at infinity).
+fn pb_perspective_undefined(r: &BoxR, p: &ProjR) -> bool {
+    const SLACK: f64 = 1e-9;
+    let n = direction(p.n);
+    let near = |d: V| far_dot3(d, n).abs() <= SLACK * (1.0 + len3(d));
+    if near(sub3(p.p, p.e)) {
+        return true;
+    }
+    let sides: Vec<f64> = pb_corners(r)
+        .into_iter()
+        .map(|c| {
+            let d = sub3(c, p.e);
+            let s = far_dot3(d, n);
+            if s.abs() <= SLACK * (1.0 + len3(d)) {
+                0.0
+            } else {
+                s.signum()
+            }
+        })
+        .collect();
+    let one_side = sides.iter().all(|&s| s > 0.0) || sides.iter().all(|&s| s < 0.0);
+    !one_side
+        || r.b
+            .iter()
+            .any(|b| near(add3(sub3(p.p, p.e), direction(*b))))
+}
+
+/// `PseudoBox::project_to_plane` in perspective where the image is undefined
+/// ([`pb_perspective_undefined`]).
+///
+/// The pin divides by the ray's distance along the normal and answers a box of NaN or of
+/// numbers past any scale (the true image is unbounded); for a box across the eye's plane it
+/// answers a bounded box, though the image of the corners behind the eye folds through
+/// infinity and no bounded box holds it. scx refuses. The check: scx refused (`Some(None)`),
+/// and the projection is perspective and undefined for this box.
+pub fn pb_project() -> PinDefect<(BoxR, ProjR), Option<Option<BoxParts>>> {
+    PinDefect {
+        reason: "the pin answers a box for an unbounded perspective image",
+        applies: Applies::Disagreeing,
+        check: |(b, p), r| {
+            if p.kind != 1 || !pb_perspective_undefined(b, p) {
+                return Err(format!("a defined projection has an image, not {r:?}"));
+            }
+            match r {
+                Some(None) => Ok(()),
+                _ => Err(format!("an unbounded image is refused, not {r:?}")),
+            }
+        },
+    }
+}
+
+/// `PseudoBox::are_project_disjoint` where either box's perspective image is undefined
+/// ([`pb_perspective_undefined`]): nothing shows the images apart, so scx answers `false`
+/// (not proven disjoint); the pin compares its boxes of NaN or of a folded image
+/// ([`pb_project`]) and finds them apart. The check: `false`, and an undefined image.
+pub fn pb_project_disjoint() -> PinDefect<(BoxR, BoxR, ProjR), Option<bool>> {
+    PinDefect {
+        reason: "the pin separates unbounded perspective images",
+        applies: Applies::Disagreeing,
+        check: |(a, b, p), r| {
+            if p.kind != 1 || !(pb_perspective_undefined(a, p) || pb_perspective_undefined(b, p)) {
+                return Err(format!("both images are defined: {r:?}"));
+            }
+            match r {
+                Some(false) => Ok(()),
+                _ => Err(format!(
+                    "undefined images are not proven disjoint, not {r:?}"
+                )),
+            }
+        },
+    }
+}
+
+/// `true` coordinates of `q` in the basis `u` (Cramer's rule through cross then dot, a
+/// different rounding from scx's six-term determinant) and the tolerance on each: a few
+/// thousand units of the last place of `|q| / |det|`.
+fn pb_true_coords(u: [V; 3], q: V) -> ([f64; 3], f64) {
+    let det = dot3(u[0], cross3(u[1], u[2]));
+    let c = [
+        far_dot3(q, cross3(u[1], u[2])) / det,
+        far_dot3(q, cross3(u[2], u[0])) / det,
+        far_dot3(q, cross3(u[0], u[1])) / det,
+    ];
+    (c, 1e-12 * (1.0 + len3(q) / det.abs()))
+}
+
+/// `PseudoBox::bounding` (the pin's `Init` then `AddPoint3d`) of points far from the origin.
+///
+/// The pin's hull starts at `±1e20` (`HULL_START`, as `e1_hull`), so a coordinate past it on
+/// one side is lost and the box is short of its points; scx starts empty. The check: the
+/// basis is the unit vectors of the input, each interval is the hull of the points' true
+/// coordinates (NaN ones, from overflow, skipped) to the tolerance of [`pb_true_coords`],
+/// and it is `None` exactly when an axis has no coordinate. A point not finite has no true
+/// coordinates (the pin's and scx's are what `inf · 0` and `inf - inf` round to): with one
+/// in the list, the intervals need only hold the finite points' hull. The unbounded box is
+/// `±SM_INFINITE_PARAMETER` on that basis.
+pub fn pb_bounding() -> PinDefect<(BoxR, crate::harness::List<V>), HullR> {
+    PinDefect {
+        reason: "the pin's hull starts at 1e20 and loses coordinates past it",
+        applies: Applies::Disagreeing,
+        check: |(b, pts), r| {
+            let Some((got, (ub, ui))) = r else {
+                return Err("a basis of independent vectors has a box".to_owned());
+            };
+            for i in 0..3 {
+                along(ub[i].to_array(), b.b[i])?;
+                if *ui.get(i).ok_or("three intervals")? != XIv::UNBOUNDED {
+                    return Err(format!("unbounded box {ui:?}"));
+                }
+            }
+            let u = ub.map(|v| v.to_array());
+            let mut hull = [[f64::INFINITY, f64::NEG_INFINITY]; 3];
+            let mut tol = [0.0_f64; 3];
+            let all_finite = pts.0.iter().all(|q| finite(q));
+            for &q in pts.0.iter().filter(|q| finite(*q)) {
+                let (c, t) = pb_true_coords(u, q);
+                for i in 0..3 {
+                    if !c[i].is_nan() {
+                        hull[i] = [hull[i][0].min(c[i]), hull[i][1].max(c[i])];
+                        tol[i] = tol[i].max(t);
+                    }
+                }
+            }
+            let want: Option<Vec<XIv>> =
+                hull.iter().map(|h| XIv::from_bounds(h[0], h[1])).collect();
+            match (got, want) {
+                (None, None) => Ok(()),
+                (Some(_), None) if !all_finite => Ok(()),
+                (Some((gb, gi)), Some(w)) => {
+                    if gb != ub {
+                        return Err(format!("basis {gb:?} is not {ub:?}"));
+                    }
+                    for i in 0..3 {
+                        let (g, w) = (gi[i], w[i]);
+                        let close = |a: f64, b: f64| a == b || (a - b).abs() <= tol[i];
+                        let holds = all_finite
+                            || (g.min() <= w.min() + tol[i] && g.max() >= w.max() - tol[i]);
+                        let equal = close(g.min(), w.min()) && close(g.max(), w.max());
+                        if !(holds && (equal || !all_finite)) {
+                            return Err(format!(
+                                "interval {i} {g:?} is not {w:?} (to {:e})",
+                                tol[i]
+                            ));
+                        }
+                    }
+                    Ok(())
+                }
+                (g, w) => Err(format!("box {g:?}, but the points' hull is {w:?}")),
+            }
+        },
+    }
+}
+
+/// `PseudoBox::expanded` (the pin's `ExpandAbsolute`) by NaN, then `union` with the
+/// expanded box: a move by no number moves nothing (`NAN_MOVE`, as `e1_expanded`). The pin
+/// moves every bound by NaN and its union of the NaN corners is NaN; scx leaves the box as
+/// it was. The check: the expanded box is the box, and the union is the box's own hull in
+/// the second basis.
+pub fn pb_expand_union() -> PinDefect<(BoxR, BoxR, f64), HullR> {
+    PinDefect {
+        reason: "the pin moves a box by NaN",
+        applies: Applies::Inputs(|(_, _, d)| d.is_nan()),
+        check: |(a, q, _), r| {
+            use crate::t_pbox::{xbasis, xbox, xparts};
+            let want = xbox(a)
+                .zip(xbasis(&q.b))
+                .map(|(a, basis)| (a.union(&a, basis).map(|b| xparts(&b)), xparts(&a)));
+            if *r == want {
+                Ok(())
+            } else {
+                Err(format!("a move by NaN leaves the box: {r:?}, not {want:?}"))
+            }
+        },
+    }
+}
