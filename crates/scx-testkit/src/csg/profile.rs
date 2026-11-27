@@ -10,50 +10,26 @@
 use super::CsgError;
 use super::ivl::Enclosure;
 use crate::dd::{self, Dd};
-
-/// One piece of a profile loop, in the profile's plane.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Seg {
-    /// The segment from `from` to `to`.
-    Line {
-        /// Its start.
-        from: [f64; 2],
-        /// Its end.
-        to: [f64; 2],
-    },
-    /// The arc `center + radius (cos t, sin t)` for `t` from `start` to `start + sweep`
-    /// (radians; `sweep` signed, positive anticlockwise, `0 < |sweep| <= 2 pi`).
-    Arc {
-        /// Its centre.
-        center: [f64; 2],
-        /// Its radius, above zero.
-        radius: f64,
-        /// The start angle.
-        start: f64,
-        /// The signed sweep.
-        sweep: f64,
-    },
-    /// A whole circle: a loop on its own.
-    Circle {
-        /// Its centre.
-        center: [f64; 2],
-        /// Its radius, above zero.
-        radius: f64,
-    },
-}
+use crate::profile::Seg;
 
 #[derive(Clone, Copy, Debug)]
 enum Kind {
     Line,
+    /// The arc about `c` of radius `r` from angle `start` through `sweep` (positive) in
+    /// the sense `s` (`+1` counter-clockwise, `-1` clockwise).
     Arc {
         c: [Dd; 2],
         r: Dd,
-        start: f64,
-        sweep: f64,
+        start: Dd,
+        sweep: Dd,
+        s: f64,
     },
+    /// The whole circle, travelled in the sense `s` from angle `start`.
     Circle {
         c: [Dd; 2],
         r: Dd,
+        start: Dd,
+        s: f64,
     },
 }
 
@@ -65,7 +41,8 @@ struct Piece {
     b: [Dd; 2],
 }
 
-/// A closed profile: loops of [`Seg`]s, each loop's pieces end to end.
+/// A closed profile: loops of [`Seg`]s, each loop's pieces end to end. A whole circle is an
+/// arc with equal ends, and a loop on its own.
 ///
 /// **Its function.** `g(q) = +-dist(q, C)`, where `C` is the union of the pieces and of the
 /// chords bridging each junction gap (at most [`Profile::gap`]), negative when the winding
@@ -119,55 +96,59 @@ fn finite(v: &[f64]) -> bool {
     v.iter().all(|x| x.is_finite())
 }
 
-fn arc_end(c: [Dd; 2], r: Dd, t: f64) -> [Dd; 2] {
-    let (s, co) = dd::sin_cos(Dd::new(t));
-    [c[0] + r * co, c[1] + r * s]
-}
-
 impl Piece {
     fn of(seg: Seg) -> Result<Piece, CsgError> {
         match seg {
-            Seg::Line { from, to } => {
-                if !finite(&[from[0], from[1], to[0], to[1]]) {
+            Seg::Line { start, end } => {
+                if !finite(&[start[0], start[1], end[0], end[1]]) {
                     return Err(CsgError::Size { what: "line end" });
                 }
                 Ok(Piece {
                     kind: Kind::Line,
-                    a: dd::lift(from),
-                    b: dd::lift(to),
+                    a: dd::lift(start),
+                    b: dd::lift(end),
                 })
             }
             Seg::Arc {
-                center,
-                radius,
+                centre,
                 start,
-                sweep,
+                end,
+                ccw,
             } => {
-                let ok = finite(&[center[0], center[1], radius, start, sweep])
-                    && radius > 0.0
-                    && sweep != 0.0
-                    && sweep.abs() <= core::f64::consts::TAU
-                    && start.abs() < 1e6;
+                let ok = finite(&[centre[0], centre[1], start[0], start[1], end[0], end[1]]);
                 if !ok {
                     return Err(CsgError::Size { what: "arc" });
                 }
-                let (c, r) = (dd::lift(center), Dd::new(radius));
-                Ok(Piece {
-                    kind: Kind::Arc { c, r, start, sweep },
-                    a: arc_end(c, r, start),
-                    b: arc_end(c, r, start + sweep),
-                })
-            }
-            Seg::Circle { center, radius } => {
-                if !(finite(&[center[0], center[1], radius]) && radius > 0.0) {
-                    return Err(CsgError::Size { what: "circle" });
+                let (c, a, b) = (dd::lift(centre), dd::lift(start), dd::lift(end));
+                let r = norm2(sub2(a, c));
+                // The ends lie on the circle: the far end within a relative `1e-9`.
+                let off = (norm2(sub2(b, c)) - r).abs().hi;
+                if !(r.hi > 0.0 && off <= 1e-9 * r.hi) {
+                    return Err(CsgError::Size { what: "arc" });
                 }
-                let (c, r) = (dd::lift(center), Dd::new(radius));
-                let a = [c[0] + r, c[1]];
+                let s = if ccw { 1.0 } else { -1.0 };
+                let da = sub2(a, c);
+                let t0 = dd::atan2(da[1], da[0]);
+                if start == end {
+                    return Ok(Piece {
+                        kind: Kind::Circle { c, r, start: t0, s },
+                        a,
+                        b: a,
+                    });
+                }
+                let db = sub2(b, c);
+                let mut sweep = (dd::atan2(db[1], db[0]) - t0) * s;
+                sweep = sweep - tau() * (sweep / tau()).to_f64().floor();
                 Ok(Piece {
-                    kind: Kind::Circle { c, r },
+                    kind: Kind::Arc {
+                        c,
+                        r,
+                        start: t0,
+                        sweep,
+                        s,
+                    },
                     a,
-                    b: a,
+                    b,
                 })
             }
         }
@@ -186,19 +167,25 @@ impl Piece {
                 let t = Dd::new(t);
                 norm2([w[0] - u[0] * t, w[1] - u[1] * t])
             }
-            Kind::Arc { c, r, start, sweep } => {
+            Kind::Arc {
+                c,
+                r,
+                start,
+                sweep,
+                s,
+            } => {
                 let d = sub2(p, c);
                 let tau = tau();
-                let mut t = (dd::atan2(d[1], d[0]) - Dd::new(start)) * sweep.signum();
+                let mut t = (dd::atan2(d[1], d[0]) - start) * s;
                 t = t - tau * (t / tau).to_f64().floor();
-                if (t - Dd::new(sweep.abs())).hi <= 0.0 {
+                if (t - sweep).hi <= 0.0 {
                     (norm2(d) - r).abs()
                 } else {
                     let (da, db) = (norm2(sub2(p, self.a)), norm2(sub2(p, self.b)));
                     if less(da, db) { da } else { db }
                 }
             }
-            Kind::Circle { c, r } => (norm2(sub2(p, c)) - r).abs(),
+            Kind::Circle { c, r, .. } => (norm2(sub2(p, c)) - r).abs(),
         }
     }
 
@@ -210,21 +197,20 @@ impl Piece {
         };
         match self.kind {
             Kind::Line => chord(self.a, self.b),
-            Kind::Arc { c, r, sweep, .. } => {
+            Kind::Arc { c, r, s, .. } => {
                 if !less(norm2(sub2(p, c)), r) {
                     // Outside the circle the arc never winds round p: the chord's angle.
                     return chord(self.a, self.b);
                 }
                 // Inside, the direction to the arc turns monotonically in its sense, by the
                 // angle from a to b measured that way, in [0, 2 pi).
-                let s = sweep.signum();
                 let mut psi = chord(self.a, self.b) * s;
                 if psi.hi < 0.0 {
                     psi = psi + tau();
                 }
                 psi * s
             }
-            Kind::Circle { c, r } => {
+            Kind::Circle { c, r, .. } => {
                 if less(norm2(sub2(p, c)), r) {
                     tau()
                 } else {
@@ -240,7 +226,7 @@ impl Piece {
                 .iter()
                 .flatten()
                 .fold(0.0, |m: f64, x| m.max(x.hi.abs())),
-            Kind::Arc { c, r, .. } | Kind::Circle { c, r } => {
+            Kind::Arc { c, r, .. } | Kind::Circle { c, r, .. } => {
                 c[0].hi.abs().max(c[1].hi.abs()) + r.hi
             }
         }
@@ -255,7 +241,7 @@ impl Piece {
                     [a[0].max(b[0]), a[1].max(b[1])],
                 )
             }
-            Kind::Arc { c, r, .. } | Kind::Circle { c, r } => {
+            Kind::Arc { c, r, .. } | Kind::Circle { c, r, .. } => {
                 let (c, r) = (dd::round(c), r.hi);
                 ([c[0] - r, c[1] - r], [c[0] + r, c[1] + r])
             }
@@ -272,17 +258,23 @@ impl Piece {
                 let l = (d[0] * d[0] + d[1] * d[1]).sqrt().max(f64::MIN_POSITIVE);
                 ([a[0] + t * d[0], a[1] + t * d[1]], [-d[1] / l, d[0] / l])
             }
-            Kind::Arc { c, r, start, sweep } => {
-                let (s, co) = dd::sin_cos(Dd::new(start + t * sweep));
-                let p = dd::round([c[0] + r * co, c[1] + r * s]);
-                let n = [-co.to_f64() * sweep.signum(), -s.to_f64() * sweep.signum()];
+            Kind::Arc {
+                c,
+                r,
+                start,
+                sweep,
+                s,
+            } => {
+                let (sn, co) = dd::sin_cos(start + sweep * (t * s));
+                let p = dd::round([c[0] + r * co, c[1] + r * sn]);
+                let n = [-co.to_f64() * s, -sn.to_f64() * s];
                 (p, n)
             }
-            Kind::Circle { c, r } => {
-                let (s, co) = dd::sin_cos(tau() * t);
+            Kind::Circle { c, r, start, s } => {
+                let (sn, co) = dd::sin_cos(start + tau() * (t * s));
                 (
-                    dd::round([c[0] + r * co, c[1] + r * s]),
-                    [-co.to_f64(), -s.to_f64()],
+                    dd::round([c[0] + r * co, c[1] + r * sn]),
+                    [-co.to_f64() * s, -sn.to_f64() * s],
                 )
             }
         }
@@ -292,7 +284,7 @@ impl Piece {
 impl Profile {
     /// A profile from its loops. Each loop is its pieces in order, each ending where the
     /// next starts (and the last where the first starts), to within `1e-9` of the profile's
-    /// magnitude; a [`Seg::Circle`] is a loop on its own. Loops may nest (odd winding is
+    /// magnitude; a whole circle (an arc with equal ends) is a loop on its own. Loops may nest (odd winding is
     /// inside); they are not checked for crossings, which only widen the band.
     ///
     /// # Errors
@@ -305,7 +297,10 @@ impl Profile {
         }
         let mut built = Vec::with_capacity(loops.len());
         for l in loops {
-            let circles = l.iter().filter(|s| matches!(s, Seg::Circle { .. })).count();
+            let circles = l
+                .iter()
+                .filter(|s| matches!(s, Seg::Arc { start, end, .. } if start == end))
+                .count();
             if l.is_empty() || (circles > 0 && l.len() > 1) {
                 return Err(CsgError::ProfileShape);
             }

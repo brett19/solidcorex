@@ -15,8 +15,9 @@ use scx_num::fmath;
 use scx_num::hash::Rng;
 use scx_testkit::analytic::{self, Frame};
 use scx_testkit::csg::{
-    Csg, CsgError, FeatureKind, Primitive, ProbeSpec, Profile, Seg, Side, box_points,
+    Csg, CsgError, FeatureKind, Primitive, ProbeSpec, Profile, Side, box_points,
 };
+use scx_testkit::profile::Seg;
 use scx_testkit::rat::Rat;
 use scx_testkit::sample;
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
@@ -60,6 +61,26 @@ fn world(f: &Frame, q: [f64; 3]) -> [f64; 3] {
 
 fn leaf(f: &Frame, p: Primitive) -> Csg {
     Csg::leaf(f, p).unwrap()
+}
+
+/// The arc about `c` of radius `r` from angle `t0` through the signed `sweep`, its ends the
+/// rounded sines and cosines; a sweep of a whole turn or more is the whole circle.
+fn arc_at(c: [f64; 2], r: f64, t0: f64, sweep: f64) -> Seg {
+    let end = |t: f64| {
+        let (s, co) = fmath::sin_cos(t);
+        [c[0] + r * co, c[1] + r * s]
+    };
+    let start = end(t0);
+    Seg::Arc {
+        centre: c,
+        start,
+        end: if sweep.abs() >= TAU {
+            start
+        } else {
+            end(t0 + sweep)
+        },
+        ccw: sweep > 0.0,
+    }
 }
 
 // ------------------------------------------------------------ independent signed distances
@@ -591,20 +612,20 @@ fn a_block_is_six_half_spaces_three_slabs_and_an_extruded_rectangle() {
             .unwrap();
         let rect = Profile::new(&[vec![
             Seg::Line {
-                from: [0.0, 0.0],
-                to: [a, 0.0],
+                start: [0.0, 0.0],
+                end: [a, 0.0],
             },
             Seg::Line {
-                from: [a, 0.0],
-                to: [a, b],
+                start: [a, 0.0],
+                end: [a, b],
             },
             Seg::Line {
-                from: [a, b],
-                to: [0.0, b],
+                start: [a, b],
+                end: [0.0, b],
             },
             Seg::Line {
-                from: [0.0, b],
-                to: [0.0, 0.0],
+                start: [0.0, b],
+                end: [0.0, 0.0],
             },
         ]])
         .unwrap();
@@ -634,34 +655,14 @@ fn a_cylinder_is_an_extruded_circle_two_half_arcs_and_a_straight_frustum() {
                 height: h,
             },
         );
-        let circle = Profile::new(&[vec![Seg::Circle {
-            center: [0.0, 0.0],
-            radius: r,
-        }]])
-        .unwrap();
+        let circle = Profile::new(&[vec![arc_at([0.0, 0.0], r, 0.0, TAU)]]).unwrap();
         let t0 = TAU * rng.next_f64();
         let halves = Profile::new(&[vec![
-            Seg::Arc {
-                center: [0.0, 0.0],
-                radius: r,
-                start: t0,
-                sweep: PI,
-            },
-            Seg::Arc {
-                center: [0.0, 0.0],
-                radius: r,
-                start: t0 + PI,
-                sweep: PI,
-            },
+            arc_at([0.0, 0.0], r, t0, PI),
+            arc_at([0.0, 0.0], r, t0 + PI, PI),
         ]])
         .unwrap();
-        let cw = Profile::new(&[vec![Seg::Arc {
-            center: [0.0, 0.0],
-            radius: r,
-            start: t0,
-            sweep: -TAU,
-        }]])
-        .unwrap();
+        let cw = Profile::new(&[vec![arc_at([0.0, 0.0], r, t0, -TAU)]]).unwrap();
         let trees = [
             cyl,
             leaf(
@@ -706,13 +707,8 @@ fn a_rounded_rectangle_is_two_blocks_and_four_cylinders() {
     let mut rng = Rng::new(41);
     for _ in 0..10 {
         let f = sample::frame(&mut rng, 3.0);
-        let seg = |a: [f64; 2], b: [f64; 2]| Seg::Line { from: a, to: b };
-        let arc = |c: [f64; 2], s: f64| Seg::Arc {
-            center: c,
-            radius: rr,
-            start: s,
-            sweep: FRAC_PI_2,
-        };
+        let seg = |a: [f64; 2], b: [f64; 2]| Seg::Line { start: a, end: b };
+        let arc = |c: [f64; 2], s: f64| arc_at(c, rr, s, FRAC_PI_2);
         // The arcs' ends are rounded sines and cosines: the lines start where they end.
         let end = |c: [f64; 2], t: f64| {
             let (s, co) = fmath::sin_cos(t);
@@ -853,8 +849,8 @@ fn winding_parity_matches_an_exact_crossing_test() {
             .map(|i| {
                 let (a, b) = (poly[i], poly[(i + 1) % n]);
                 Seg::Line {
-                    from: [a[0] as f64, a[1] as f64],
-                    to: [b[0] as f64, b[1] as f64],
+                    start: [a[0] as f64, a[1] as f64],
+                    end: [b[0] as f64, b[1] as f64],
                 }
             })
             .collect();
@@ -863,7 +859,10 @@ fn winding_parity_matches_an_exact_crossing_test() {
             .iter()
             .rev()
             .map(|s| match *s {
-                Seg::Line { from, to } => Seg::Line { from: to, to: from },
+                Seg::Line { start, end } => Seg::Line {
+                    start: end,
+                    end: start,
+                },
                 other => other,
             })
             .collect();
@@ -889,16 +888,8 @@ fn winding_parity_matches_an_exact_crossing_test() {
 #[test]
 fn nested_loops_make_a_hole() {
     let ring = Profile::new(&[
-        vec![Seg::Circle {
-            center: [0.0, 0.0],
-            radius: 2.0,
-        }],
-        vec![Seg::Arc {
-            center: [0.0, 0.0],
-            radius: 1.0,
-            start: 0.3,
-            sweep: -TAU,
-        }],
+        vec![arc_at([0.0, 0.0], 2.0, 0.0, TAU)],
+        vec![arc_at([0.0, 0.0], 1.0, 0.3, -TAU)],
     ])
     .unwrap();
     assert!(!ring.inside([0.0, 0.0]));
@@ -940,18 +931,18 @@ fn arc_distances_are_the_closed_forms() {
     let r = 2.0;
     let pie = Profile::new(&[vec![
         Seg::Line {
-            from: [0.0, 0.0],
-            to: [r, 0.0],
+            start: [0.0, 0.0],
+            end: [r, 0.0],
         },
         Seg::Arc {
-            center: [0.0, 0.0],
-            radius: r,
-            start: 0.0,
-            sweep: FRAC_PI_2,
+            centre: [0.0, 0.0],
+            start: [r, 0.0],
+            end: [0.0, r],
+            ccw: true,
         },
         Seg::Line {
-            from: [0.0, r],
-            to: [0.0, 0.0],
+            start: [0.0, r],
+            end: [0.0, 0.0],
         },
     ]])
     .unwrap();
@@ -1029,22 +1020,22 @@ fn probes_on_a_block_sit_on_its_features_with_offsets_on_the_right_sides() {
 fn every_on_point_is_in_the_band_for_each_primitive() {
     let profile = Profile::new(&[vec![
         Seg::Line {
-            from: [0.0, 0.0],
-            to: [2.0, 0.0],
+            start: [0.0, 0.0],
+            end: [2.0, 0.0],
         },
         Seg::Arc {
-            center: [2.0, 1.0],
-            radius: 1.0,
-            start: -FRAC_PI_2,
-            sweep: PI,
+            centre: [2.0, 1.0],
+            start: [2.0, 0.0],
+            end: [2.0, 2.0],
+            ccw: true,
         },
         Seg::Line {
-            from: [2.0, 2.0],
-            to: [0.0, 2.0],
+            start: [2.0, 2.0],
+            end: [0.0, 2.0],
         },
         Seg::Line {
-            from: [0.0, 2.0],
-            to: [0.0, 0.0],
+            start: [0.0, 2.0],
+            end: [0.0, 0.0],
         },
     ]])
     .unwrap();
@@ -1284,13 +1275,10 @@ fn bad_recipes_are_refused() {
     }
     assert_eq!(Profile::new(&[]).err(), Some(CsgError::ProfileShape));
     assert_eq!(Profile::new(&[vec![]]).err(), Some(CsgError::ProfileShape));
-    let circle = Seg::Circle {
-        center: [0.0, 0.0],
-        radius: 1.0,
-    };
+    let circle = arc_at([0.0, 0.0], 1.0, 0.0, TAU);
     let line = Seg::Line {
-        from: [0.0, 0.0],
-        to: [1.0, 0.0],
+        start: [0.0, 0.0],
+        end: [1.0, 0.0],
     };
     assert_eq!(
         Profile::new(&[vec![circle, line]]).err(),
@@ -1300,17 +1288,18 @@ fn bad_recipes_are_refused() {
         Profile::new(&[vec![
             line,
             Seg::Line {
-                from: [1.0, 0.0],
-                to: [0.0, 1.0]
+                start: [1.0, 0.0],
+                end: [0.0, 1.0]
             }
         ]]),
         Err(CsgError::ProfileOpen { .. })
     ));
+    // An end off the circle through the start makes no arc.
     let arc = Seg::Arc {
-        center: [0.0, 0.0],
-        radius: 1.0,
-        start: 0.0,
-        sweep: 7.0,
+        centre: [0.0, 0.0],
+        start: [1.0, 0.0],
+        end: [0.0, 2.0],
+        ccw: true,
     };
     assert!(matches!(
         Profile::new(&[vec![arc]]),
