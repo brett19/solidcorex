@@ -409,6 +409,75 @@ fn tori_meet_planes_quadrics_and_tori_across_their_axis() {
     assert_eq!(intersect(&t, &t).unwrap(), Section::Coincident);
 }
 
+/// A reversed axis (a half turn about `X`) or a quarter turn about `Z` shares the forms of
+/// revolution: the same answers as the axes given equal, a cone's slope negated with its
+/// axis.
+#[test]
+fn reversed_and_turned_axes_share_the_forms() {
+    let reversed = Frame {
+        y: [0.0, -1.0, 0.0],
+        z: [0.0, 0.0, -1.0],
+        ..axes()
+    };
+    let turned = Frame {
+        x: [0.0, 1.0, 0.0],
+        y: [-1.0, 0.0, 0.0],
+        ..axes()
+    };
+    // The cone rho = 1 + k h against its mirror rho = 1 - k h: the circle at h = 0.
+    let mirror = SurfaceKind::Cone(Cone {
+        frame: reversed,
+        radius: 1.0,
+        semi_angle: 0.5,
+    });
+    let p = pieces(&cone(1.0, 0.5), &mirror);
+    assert_eq!(kinds(&p), [("circle", X)]);
+    is_circle(&p[0], [0.0; 3], 1.0, 1e-30);
+    // Its mirror moved up by 2 / k meets it where 1 + k h = 1 - k (h - 2 / k): h = 1 / k.
+    let (sn, cn) = dd::sin_cos(Dd::new(0.5));
+    let k = (sn / cn).to_f64();
+    let up = SurfaceKind::Cone(Cone {
+        frame: Frame {
+            origin: [0.0, 0.0, 2.0 / k],
+            ..reversed
+        },
+        radius: 1.0,
+        semi_angle: 0.5,
+    });
+    let p = pieces(&cone(1.0, 0.5), &up);
+    assert_eq!(kinds(&p), [("circle", X)]);
+    is_circle(&p[0], [0.0, 0.0, 1.0 / k], 2.0, 1e-14);
+    // A cylinder and a sphere reversed or turned: the same circles.
+    for f in [reversed, turned] {
+        let s = SurfaceKind::Sphere(Sphere {
+            frame: f,
+            radius: 2.0,
+        });
+        let p = pieces(&s, &cylinder(1.0));
+        assert_eq!(kinds(&p), [("circle", X), ("circle", X)]);
+        let c = SurfaceKind::Cylinder(Cylinder {
+            frame: f,
+            radius: 1.0,
+        });
+        assert_eq!(
+            kinds(&pieces(&sphere([0.0; 3], 2.0), &c)),
+            [("circle", X), ("circle", X)]
+        );
+        assert_eq!(intersect(&c, &cylinder(1.0)).unwrap(), Section::Coincident);
+    }
+    // Two spheres turned against each other: their radical plane.
+    let s = SurfaceKind::Sphere(Sphere {
+        frame: Frame {
+            origin: [1.0, 0.0, 0.0],
+            ..turned
+        },
+        radius: 1.0,
+    });
+    let p = pieces(&sphere([0.0; 3], 1.0), &s);
+    assert_eq!(kinds(&p), [("circle", X)]);
+    is_circle(&p[0], [0.5, 0.0, 0.0], 0.75f64.sqrt(), 1e-15);
+}
+
 #[test]
 fn pairs_without_a_closed_form_and_bad_data_are_typed_causes() {
     let t = torus(0.0, 2.0, 1.0);
@@ -424,8 +493,8 @@ fn pairs_without_a_closed_form_and_bad_data_are_typed_causes() {
     );
     let skew = SurfaceKind::Sphere(Sphere {
         frame: Frame {
-            x: [0.0, 1.0, 0.0],
-            y: [-1.0, 0.0, 0.0],
+            x: [0.6, 0.8, 0.0],
+            y: [-0.8, 0.6, 0.0],
             ..axes()
         },
         radius: 1.0,

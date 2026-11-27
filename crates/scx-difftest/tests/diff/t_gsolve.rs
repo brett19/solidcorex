@@ -195,6 +195,7 @@ pub mod xs {
     };
     use scx_algo::solution::{Solution, SolutionKind, SolutionObject, SortKey};
     use scx_algo::split_tree::SplitTree;
+    use scx_num::budget::{Budget, Stop};
     use scx_num::extent1d::Extent1d;
     use scx_num::extent3d::Extent3d;
     use scx_num::vector3d::{Point3, Vec3};
@@ -252,6 +253,7 @@ pub mod xs {
             &mut self,
             branch: &Branch<'_, Option<usize>, 2>,
             found: &mut Accumulator<Piece>,
+            _: &mut Budget,
         ) -> Result<Next, SolveError<()>> {
             let [a, b] = branch.nodes().map(|n| n.item().unwrap());
             self.log.push((a, b));
@@ -324,7 +326,14 @@ pub mod xs {
             case,
             log: Vec::new(),
         };
-        let found = solve([t1, t2], Accumulator::new(options), &mut hooks).ok()?;
+        let found = solve(
+            [t1, t2],
+            Accumulator::new(options),
+            &mut hooks,
+            &mut Budget::unlimited(),
+            &Stop::new(),
+        )
+        .ok()?;
         let best = found.best_sq();
         let rows = found
             .solutions()
