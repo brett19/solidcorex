@@ -16,7 +16,6 @@ use std::collections::HashMap;
 
 use scx_brep::op::Scratch;
 use scx_brep::{Brep, Document, FaceId};
-use scx_make::{Span, block, extrude};
 use scx_mass::{RelAccuracy, face_area};
 use scx_num::budget::{Budget, Stop};
 use scx_num::frame::{Frame, Sense};
@@ -25,6 +24,7 @@ use scx_num::vector2d::Point2;
 use scx_num::vector3d::{Point3, Vec3};
 use scx_planar::{Region, Segment};
 use scx_tess::{Mesh, TessError, TessRefusal, TessSpec, tessellate, tessellate_faces};
+use scx_testkit::bodies::made::{Span, block, extrude};
 
 fn mm(v: f64) -> Length {
     Length::from_mm(v)

@@ -15,13 +15,13 @@ use scx_brep::{
     VertexId, VertexRecord,
 };
 use scx_curve::{Circle, Curve, Line};
-use scx_make::{block, cone, cylinder, sphere, torus};
 use scx_num::extent1d::Extent1d;
 use scx_num::frame::{Frame, Sense};
 use scx_num::units::Length;
 use scx_num::vector3d::{Point3, Vec3};
 use scx_surface::{Cylinder, Plane, Surface};
 use scx_testkit::analytic;
+use scx_testkit::bodies::made::{block, cone, cylinder, sphere, torus};
 use scx_testkit::csg::{Csg, Primitive};
 
 /// A one-solid body being written, every face's front the outside.

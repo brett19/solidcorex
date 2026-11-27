@@ -12,12 +12,12 @@ use std::f64::consts::PI;
 
 use scx_brep::op::{Cx, Done, NoTrace, Scratch, Settings};
 use scx_brep::{Brep, Changes, Document, EdgeId, Entity, FaceId, Origin};
-use scx_make::torus;
 use scx_mass::RelAccuracy;
 use scx_num::budget::{Budget, Stop};
 use scx_num::frame::Frame;
 use scx_num::units::Length;
 use scx_num::vector3d::Vec3;
+use scx_testkit::bodies::made::torus;
 
 use super::face_face::{X, Z, ball, cyl};
 use super::{cuboid, pt};
@@ -510,7 +510,7 @@ fn the_operands_are_read_only() {
 
 /// A 10 x 10 x 20 box turned 45 degrees about z, then about x, its edge crossing the cube's
 /// edge y = z = 10 at depth `d`.
-fn crease(d: f64, doc: Document) -> Brep {
+pub(super) fn crease(d: f64, doc: Document) -> Brep {
     let (c, s) = (0.5_f64.sqrt(), 0.5_f64.sqrt());
     // Rx(45) * Rz(45).
     let rz = |v: [f64; 3]| [c * v[0] - s * v[1], s * v[0] + c * v[1], v[2]];
@@ -528,7 +528,9 @@ fn crease(d: f64, doc: Document) -> Brep {
     )
     .unwrap();
     let size = [10.0, 10.0, 20.0].map(Length::from_mm);
-    scx_make::block(&frame, size, &doc).unwrap().body
+    scx_testkit::bodies::made::block(&frame, size, &doc)
+        .unwrap()
+        .body
 }
 
 #[test]

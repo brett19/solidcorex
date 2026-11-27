@@ -6,7 +6,7 @@
 //!
 //! Two kinds of test live here.
 //! - *Live today:* the operand generators. Every part of every case builds through
-//!   `scx-make` and its volume is the closed form's, so a later failure of a case is the
+//!   the testkit's port of `scx-make` and its volume is the closed form's, so a later failure of a case is the
 //!   Boolean's and not the operands'.
 //! - *The cases themselves,* judged against their truth. Cases whose recipe says
 //!   `Unsupported` (a touch inside a face, D5) expect that answer by name. The vertex and
@@ -76,16 +76,20 @@ fn frame(p: &Part) -> Frame {
 fn operand(p: &Part, doc: Document) -> Brep {
     let f = frame(p);
     match &p.shape {
-        Shape::Block { size } => scx_make::block(&f, size.map(mm), &doc).map(|m| m.body),
+        Shape::Block { size } => {
+            scx_testkit::bodies::made::block(&f, size.map(mm), &doc).map(|m| m.body)
+        }
         Shape::Cylinder { radius, height } => {
-            scx_make::cylinder(&f, mm(*radius), mm(*height), &doc).map(|m| m.body)
+            scx_testkit::bodies::made::cylinder(&f, mm(*radius), mm(*height), &doc).map(|m| m.body)
         }
         Shape::Cone { radii, height } => {
-            scx_make::cone(&f, radii.map(mm), mm(*height), &doc).map(|m| m.body)
+            scx_testkit::bodies::made::cone(&f, radii.map(mm), mm(*height), &doc).map(|m| m.body)
         }
-        Shape::Sphere { radius } => scx_make::sphere(&f, mm(*radius), &doc).map(|m| m.body),
+        Shape::Sphere { radius } => {
+            scx_testkit::bodies::made::sphere(&f, mm(*radius), &doc).map(|m| m.body)
+        }
         Shape::Torus { major, minor } => {
-            scx_make::torus(&f, mm(*major), mm(*minor), &doc).map(|m| m.body)
+            scx_testkit::bodies::made::torus(&f, mm(*major), mm(*minor), &doc).map(|m| m.body)
         }
         Shape::Extrusion { .. } => panic!("no Boolean case here extrudes a profile"),
     }
