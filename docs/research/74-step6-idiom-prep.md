@@ -1532,3 +1532,125 @@ is renumbered. "Changed" names the sections that now carry the fix.
 2. Revision pairs are a smoke column, not pre-qualified and scored (F7, Q7).
 3. Leaf queries keep `(&mut Budget, &Stop)`. Queries that keep a memo take `&mut Cx` (F8, R8).
 4. Stored re-identification goes in bodyq's `still_names`, and scx-record calls it (F4).
+
+## 22. BW2 as built (11-27)
+
+`scx_bodyq::tight_box(&Brep, Entity, &mut Cx) -> Result<Extent3d, BodyqError>` (R8: it writes
+`Scratch`, so it takes `&mut Cx`), `tight_box_charged(.., &mut Scratch, &mut Budget, &Stop)` for a
+caller that boxes many entities under one budget, and `tight_body_box(&Brep, &mut Cx)` (every face,
+wire edge and lone vertex; a wire body has no face). All in `crates/scx-bodyq/src/tight.rs`.
+
+### 22.1 What a tight box is
+
+A certified box of the finished entity (never of its untrimmed surface), grown as
+`Face::bounding_box` is (accuracy plus the zone, outward) and met with that box, so it is never
+looser than the loose one. Each of the six sides is found as the largest value of one coordinate
+over the entity. That maximum is on the boundary or at a critical point in the interior, so there
+are two searches, both outward-rounded interval searches (no sampling):
+
+- **Edge** (1-D): cells of the interval are dropped when their enclosure is at or below the best
+  end, or when the derivative's enclosure excludes 0 (a monotone cell peaks at its end, held by the
+  interval's end or the neighbour). A cell within the tolerance is taken whole, else halved. The
+  enclosure is the natural range met with the mean-value form about the middle (second order where
+  the slope is small), and for a NURBS curve met with the hull of the control values of the spans the
+  cell is in (positive weights make each point a convex combination): exact for a coordinate that is
+  constant, where both interval forms are only first order. Across a NURBS knot the derivative's
+  enclosure holds both sides, so a kink (issue_1054's peaks) stays a candidate until pinned.
+- **Face** (2-D): the same over the uv hull with `Surface::along` (new in scx-surface: the existing
+  mean-value `range_along` plus the enclosures of the two partials). A cell with a partial that
+  excludes 0 has no critical point; a cell `Face::side_of_cell` (new in scx-brep) proves outside the
+  face holds no point of it; the rest is halved on the partial that moves the range most. The
+  boundary term is the edges' raw boxes, so a trim that is itself the maximum (a cylinder cut at
+  z = 0.3) leaves no cell. A side where the edges already reach the loose box's side (within the
+  tolerance) skips the search.
+- **Tolerance**: a thousandth of the zone, never below 9.1e-13 of the entity's largest coordinate.
+  The result exceeds the true box by about that plus the growth.
+- **Shell and region**: the hull of their faces, wire edges and lone vertices.
+- **Not a default**: a failing edge or face box is `Defect(NoEdgeBox | NoFaceBox | NoUvBox |
+  Surface)`; an entity not in the body is `Refused(NoEntity)`; an empty body `Refused(EmptyBody)`.
+
+### 22.2 Memo (04 row 104)
+
+Edge and face answers are kept in the caller's `Scratch` as `(input, tolerance, raw box, work)`,
+work in cells enclosed. The entry holds the full input (curve and interval; surface, and for every use
+its sense, pcurve and edge input, and the growth), compared with `PartialEq`, so a hash collision only
+replaces an entry, and the key follows bits, not ids (the same face of an equal body hits). A hit
+charges the recorded work at once; a face's work includes its edges' (hit or filled), so warm and cold
+spend the same and a limit stops both at the same place (tested: `Exhausted{limit}` both ways, equal
+`used`, bit-equal boxes). Only finished answers are kept. This does not use `scx_record`'s writer
+(as `scx-mass` does): that would add a bodyq to record edge, and BW8's `still_names` may need record
+to call bodyq the other way round; `PartialEq` on the inputs is enough.
+
+### 22.3 Cases for and against
+
+- Interval B&B over sampling: certified, matches the Boolean's needs, and the pin's WR-651 bug
+  (cells over off-dyadic knots staying undecided, boxing to the surface top) cannot occur, because a
+  cell is not accepted on a bound it does not hold and a NURBS cell is cut at its knots inside
+  `along`. Against: cost grows with the surface's rational weights (see 22.5).
+- Edges first, interior second: a trim that is the maximum costs only its edges. Against: a face of
+  many edges pays the edge search per distinct edge, which the memo shares across faces.
+- `Surface::along` and `Face::side_of_cell` as small additive public functions in the lower crates
+  rather than a private copy in bodyq: the partials and the proof that a cell misses the boundary
+  tree are what the lower crates already compute. Against: two files outside bodyq change (both
+  additive; `range_along` is now `along(..).range`, bit-equal).
+
+### 22.4 Tests (`crates/scx-bodyq/tests/tight_box.rs`, 13)
+
+Truth is closed form or dense sampling, never the pin's output.
+
+- Bodies against closed forms: cylinder, cone, sphere, torus.
+- Rectangular patches (cylinder walls, sphere lunes, torus patches; 3 kinds x 3 seeds x 3 sizes)
+  against 401 x 401 samples of the surface over the pcurves' corner rectangle: holds every sample,
+  slack within the sampling error and the growth.
+- A tilted sphere cap (3 placements) against `R cos(max(0, gamma - alpha))`: 1e-5 past the truth (the
+  growth), the loose box about 4x the volume.
+- issue_1054 (8 tests ported as 4 test functions, each with its cases): wire edge on half the
+  quadratic arc stops at the 45 degree point and the whole arc is the control; degree-one peaks:
+  an interior kink kept, the knots outside dropped, knots on the interval's ends kept; the seam arc
+  stops at its pole; the arc to height 25.
+- issue_1799: the 270-degree rational cylinder trimmed to z <= 0.3 (the box is exact: -1..1, 0..0.3);
+  #13753's ridge (the line of x = 10 inside a quarter rational cylinder); the ramp trimmed across
+  its spans at 16 and 128 spans (#14460).
+- Memo: warm equals cold in bits and work; a limit stops both alike; a fresh scratch gives the same
+  work; an equal body hits and another seed fills; shells and regions are the hull; absent entities
+  and the empty body are refused.
+
+**Not ported, with what each proved:** the barrel cut by a Boolean difference (WR-588 at operation
+level: the face's maximum is inside the face while the surface peaks outside it; needs the Boolean,
+which sits above bodyq; the cap and ramp cases prove the same principle here); the bicubic sheet
+trimmed to a disk (#14452, needs the curve-on-surface projection from step 5 to make the trim edge);
+the chamfer face with a dip (#13753, its data file is the pin's; needs the sheet-on-surface builder);
+the closed spline round cases (#18809, #21660, projected trims, step 5). The pin's work counters
+(control points read) are not ported: the cost is measured below instead.
+
+### 22.5 Measurements (release, one thread, local box under load; method: throwaway timers)
+
+| Case | Cells (work) | Cold | Hit | Tight / loose volume |
+|---|---:|---:|---:|---:|
+| Cylinder, 6 faces | 144 | 0.5 ms | 17 us | 1.00 |
+| Sphere, 4 lunes | 1,504 | 27 ms | 11 us | 0.83 |
+| Torus, 16 patches | 384 | 3.1 ms | 44 us | 1.00 |
+| Cone, 5 faces | 96 | 0.6 ms | 10 us | 1.00 |
+| Tilted cap (R 2, 20 deg) | 228 | 1.8 ms | 2 us | 0.24 |
+| Trimmed rational cylinder | 950 | 14 ms | 5 us | 0.24 |
+| Ramp, 16 spans | 422 | 5.8 ms | 4 us | 0.89 |
+| Ramp, 128 spans | 2,186 | 39 ms | 7 us | 0.89 |
+
+The loose box is a filled cell (about 100 to 400 ns once read), so tight_box costs 10^3 to 10^5 times
+the loose box cold, and is memoized per face: use it where a bound is needed (check, contact, pick,
+Boolean gates), not per query. Slack over the truth (tilted cap, trimmed cylinder): 1.0e-5, the zone
+the box is grown by, i.e. the search adds under 1e-9. Without the control-hull meet the 128-span ramp
+cost 8.4e6 cells (12 s): a rational curve with a constant coordinate is first order in every interval
+form. A flat-but-not-constant rational coordinate still costs about `sqrt(tol / curvature)` cells.
+
+### 22.6 Deviations and open questions
+
+- Deviation from 74 §2.3: the return is `Extent3d` (scx-num's box), not a new `Aabb`.
+- New Cargo edge: dev-dependency scx-bodyq -> scx-nurbs-surface (tests build NURBS surfaces); no
+  normal-dependency edge. layers.txt unchanged (nurbs-surface is below bodyq).
+- New error variants `BodyqRefusal::{NoEntity, EmptyBody}` and `BodyqDefect::NoEdgeBox`.
+- Open: (1) `Face::bounding_box` returns `None` for faces whose rational patches the loose enclosure
+  cannot prove positive (a 128-span ramp curve's loose edge box is `None`); tight_box does not need
+  it and meets with it only where it exists, but the check and the Boolean's gates that read the loose
+  box meet that `None`. (2) A budget share per entity for whole-body callers (R6) is the caller's:
+  `tight_box_charged`. (3) Procedural surfaces (step 5) need their own `along`.

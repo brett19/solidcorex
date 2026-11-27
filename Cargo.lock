@@ -501,6 +501,7 @@ dependencies = [
  "scx-make",
  "scx-num",
  "scx-nurbs",
+ "scx-nurbs-surface",
  "scx-ssi",
  "scx-surface",
  "scx-testkit",

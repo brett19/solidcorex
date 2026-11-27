@@ -76,6 +76,7 @@ pub use closed::Closed;
 pub use cone::Cone;
 pub use cylinder::Cylinder;
 pub use edit::UvMap;
+pub use enclose::Along;
 pub use error::{Size, SurfaceError};
 pub use hull::{Hull, Hulls};
 pub use intersect::{Contact, CurveSurfaceHit, intersect_curve};
