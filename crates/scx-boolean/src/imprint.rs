@@ -72,13 +72,6 @@ const SAMPLES: usize = 16;
 
 /// What the imprint built: the draft, and where each operand face went.
 #[derive(Debug)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "BO4's classification reads them; the tests do now"
-    )
-)]
 pub(crate) struct Imprint {
     /// `a.edit()`, cut, with `b`'s faces copied in.
     pub(crate) draft: Draft,
@@ -87,6 +80,9 @@ pub(crate) struct Imprint {
     /// The new edges where the operands cross: the sections and the lying pieces inside a
     /// face, ascending. BO4's classification starts from them.
     pub(crate) cuts: Vec<EdgeId>,
+    /// Each stage-4 section's edge, in the sections' order: it runs along the section's
+    /// curve over its span, so a use of it in its own sense runs along the curve.
+    pub(crate) sections: Vec<EdgeId>,
 }
 
 /// `b`'s pieces that run along `a`'s, by `b`'s edge and piece index: `a`'s draft edge,
@@ -131,6 +127,7 @@ pub(crate) fn imprint(
         edges: BTreeMap::new(),
         cut: BTreeMap::new(),
         cuts: Vec::new(),
+        sections: Vec::new(),
         made: Vec::new(),
         pieces: BTreeMap::new(),
     };
@@ -153,11 +150,12 @@ pub(crate) fn imprint(
         draft: b.draft,
         pieces: b.pieces,
         cuts,
+        sections: b.sections,
     })
 }
 
 /// The draft's own failure: an id table full, or a lineage call refused.
-fn draft_defect<E>(_: E) -> BooleanError {
+pub(crate) fn draft_defect<E>(_: E) -> BooleanError {
     BooleanError::Defect(BooleanDefect::Draft)
 }
 
@@ -200,6 +198,8 @@ struct Build<'a> {
     cut: BTreeMap<(Side, FaceId), Vec<EdgeId>>,
     /// Every cut.
     cuts: Vec<EdgeId>,
+    /// Each section's edge, in order.
+    sections: Vec<EdgeId>,
     /// The draft edges made or rewritten here, whose ends `reach` checks.
     made: Vec<EdgeId>,
     pieces: BTreeMap<(Side, FaceId), Vec<FaceId>>,
@@ -501,6 +501,7 @@ impl Build<'_> {
                 .map_err(draft_defect)?;
             self.made.push(e);
             self.cuts.push(e);
+            self.sections.push(e);
             self.cut.entry((Side::A, fa)).or_default().push(e);
             self.cut.entry((Side::B, fb)).or_default().push(e);
         }
@@ -1066,7 +1067,7 @@ fn interval_of(g: &EdgeGeom) -> Option<Extent1d> {
 }
 
 /// The error the pcurve writer's refusal of kind `kind` is at `operand`'s face `face`.
-const fn loops_error(
+pub(crate) const fn loops_error(
     kind: scx_num::error::ErrorKind,
     operand: scx_brep::Operand,
     face: FaceId,
@@ -1147,7 +1148,7 @@ fn next(halves: &[Half], h: usize, cand: &[usize], n: Vec3) -> Option<usize> {
 }
 
 /// A loop's samples in uv, in its own direction.
-fn ring(lp: &LoopRecord) -> Vec<Point2> {
+pub(crate) fn ring(lp: &LoopRecord) -> Vec<Point2> {
     let mut out = Vec::with_capacity(lp.uses.len() * SAMPLES);
     for u in &lp.uses {
         match &u.geom {
@@ -1168,7 +1169,7 @@ fn ring(lp: &LoopRecord) -> Vec<Point2> {
 }
 
 /// Twice the signed area of the closed polygon `ring`.
-fn shoelace(ring: &[Point2]) -> f64 {
+pub(crate) fn shoelace(ring: &[Point2]) -> f64 {
     let n = ring.len();
     (0..n)
         .filter_map(|i| Some((ring.get(i)?, ring.get((i + 1) % n)?)))

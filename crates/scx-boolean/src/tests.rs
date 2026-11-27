@@ -22,12 +22,13 @@ use scx_num::vector3d::{Point3, Vec3};
 use crate::boolean::{Interference, interfere};
 use crate::contact::On;
 use crate::geom::{Operands, Side};
-use crate::{BooleanError, BooleanOp, BooleanRefusal, BooleanUnsupported, Stage, boolean};
+use crate::{BooleanError, BooleanOp, BooleanRefusal, BooleanUnsupported, boolean};
 
 mod apart;
 mod face_face;
 mod imprint;
 mod unsupported;
+mod whole;
 
 fn pt(p: [f64; 3]) -> Point3 {
     Point3::new(p[0], p[1], p[2])
@@ -278,15 +279,16 @@ fn call(a: &Brep, b: &Brep, doc: Document, settings: &Settings) -> BooleanError 
 }
 
 #[test]
-fn the_public_call_runs_every_built_stage_and_names_the_next() {
+fn the_public_call_runs_every_stage_within_the_settings_budget() {
     let doc = Document::default();
     let (a, b) = (unit(doc), cuboid([0.5; 3], [1.5; 3], doc));
-    let e = call(&a, &b, doc, &Settings::new());
-    assert_eq!(
-        e,
-        BooleanError::Unsupported(BooleanUnsupported::Stage(Stage::Classify))
-    );
-    assert_eq!(e.name(), "stage_classify");
+    let mut scratch = Scratch::new();
+    let stop = Stop::new();
+    let settings = Settings::new();
+    let mut cx = Cx::new(&doc, &settings, &mut scratch, &stop, &NoTrace);
+    let done = boolean(&a, &b, BooleanOp::Union, &mut cx).unwrap();
+    assert_eq!(done.body.faces().count(), 12);
+    assert!(done.report.work > 0);
     // The budget is the settings'.
     let e = call(&a, &b, doc, &Settings::new().with_budget(1));
     assert_eq!(e, BooleanError::Exhausted { limit: 1 });
