@@ -44,7 +44,7 @@ pub use changes::{
     Split, Touch, Tracked, carry,
 };
 pub use document::Document;
-pub use draft::Draft;
+pub use draft::{Draft, TransformError};
 pub use error::{Absent, TableFull};
 pub use finish::{FinishCause, GeometryCause, StructureCause, Unfinished};
 pub use id::{EdgeId, Entity, EntityKind, FaceId, IdMap, RegionId, ShellId, VertexId};
@@ -69,6 +69,7 @@ const _: () = {
     ok::<Merge<VertexId>>();
     ok::<Coincidence<FaceId>>();
     ok::<LineageError>();
+    ok::<TransformError>();
     ok::<Document>();
     ok::<IdMap>();
     ok::<FaceRecord>();

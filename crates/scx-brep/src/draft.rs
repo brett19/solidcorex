@@ -12,6 +12,8 @@
 //! incoming record's, and an adjacency or vertex write resets none. A draft has no body
 //! cells; `finish` starts the body's empty.
 
+mod transform;
+
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -31,6 +33,8 @@ use crate::record::{
 };
 use crate::tables::Tables;
 use crate::view::{At, Drafting, Edge, Face, Region, Shell, Vertex};
+
+pub use transform::TransformError;
 
 /// A body being edited.
 #[derive(Debug, Clone)]

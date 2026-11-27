@@ -59,6 +59,7 @@ mod t_ssi;
 mod t_ssi_coaxial;
 mod t_surface;
 mod t_tol;
+mod t_transform;
 mod t_vector;
 
 /// The harness itself: a different function, a nondeterministic one and a change in shape
