@@ -540,6 +540,7 @@ dependencies = [
  "scx-nurbs",
  "scx-nurbs-surface",
  "scx-p21",
+ "scx-planar",
  "scx-record",
  "scx-ssi",
  "scx-surface",
