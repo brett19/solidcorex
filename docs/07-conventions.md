@@ -358,6 +358,10 @@ Duplicated tolerance constants (determinism audit, 11-26):
      every crate.
 6. **Signed zero.** It is not normalised. Code that keys on bits (memos, hashes) uses
    `num::key_bits(x)`, which maps -0.0 to +0.0 and every NaN to one bit pattern.
+7. **Tolerance comparisons** go through the `num::tol` helpers (`within_coincidence_tol`,
+   `within_contact_tol`, `coincidence_reach_3d`), which count the rounding of coordinate copies.
+   Planned (research 60 T2): an xtask scan flags a raw comparison of a distance with a resolution
+   or accuracy (`d <= res` and the like) outside that module (01 §8.3).
 
 - **Why:** each of these is a class of silent error that solidcore has hit at least once (the
   research 31 constant multiplications; the sentinel value 1.23456e-61 in two places).
@@ -464,7 +468,9 @@ Duplicated tolerance constants (determinism audit, 11-26):
    settings, `&mut Scratch`, `&Stop`, trace; 01 §6.3), and the kernel pool becomes a pool of `Scratch`.
    The idle pool, fix switches and hook are not carried over.
 7. **Errors from workers.** When several workers fail, the error reported is the one for the
-   lowest item index, never the first in time. A shared budget is split per item in advance.
+   lowest item index, never the first in time. Changed 11-27 (research 60 D1): a budget is one
+   total, metered per item and summed in item-index order, and a memo or cell hit charges the work
+   recorded when it was filled (01 §6.3).
 8. **Scratch may memoise, but must never change a result.** A value that changes results (like
    `blend_net_tolerance`) is an explicit argument, not scratch.
 9. **Transcendental functions.** `sin`, `cos`, `atan2`, `exp` and `ln` are not correctly rounded by

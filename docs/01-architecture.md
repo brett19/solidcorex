@@ -63,7 +63,8 @@ These come from the owner's rules and from the faults in section 11. Every later
 All crates are Apache-2.0 and named `scx-*`.
 
 There are 31 core crates. The split is research 56 as changed by Re-review 2 of review-56, with the
-four edges the measured code needs (04 §1, 11-27; research 56 Appendix C). The geometry crates come
+four edges the measured code needs (04 §1, 11-27; research 56 Appendix C) and a fifth for
+interference (research 60 §6). The geometry crates come
 first and know nothing of bodies. `scx-brep` is the body data model, `scx-bodyq` the reads over it,
 and the check, exchange and operation crates sit above. Couplings measured between solidcore's
 operation areas set the order of the operation crates (C3).
@@ -88,16 +89,16 @@ column says; "—" means the crate takes no kernel code. The figures move as cra
 | 4 | `scx-teeth` | gear and spline tooth profiles, involutes | planar | 11,826 |
 | 4 | `scx-dxf` | DXF read and write of 2-D paths | planar | — |
 | 4 | `scx-ssi` | surface-surface intersection: marching and the B-spline patch intersector; the plane section of a surface | surface | 18,118 (+ the `ssi` and `solidcore-ssi` crates) |
-| 4 | `scx-brep` | the body: `Brep`, `Draft`, regions, shells, faces with two sides, edges, vertices, ids, pcurves, recorded accuracies, recorded gaps, `Document`, `Changes`, `carry`; the cells (face, uv and body boxes, point-in-face boundary trees labelled from the face's own loops) and the `FaceCell` trait; structure checks; traversal and derived adjacency; `transform`. No classification and no surface intersection | surface | 84,299 |
+| 4 | `scx-brep` | the body: `Brep`, `Draft`, regions, shells, faces with two sides, edges, vertices, ids, pcurves, recorded accuracies, recorded gaps, `Document`, `Changes`, `carry`; the cells (face, uv and body boxes, point-in-face boundary trees labelled from the face's own loops) and the `FaceCell` trait; structure checks and the cheap geometric checks of `finish` (2.3); traversal and derived adjacency; `transform` by any regular affine map (2.4). No classification and no surface intersection | surface | 84,299 |
 | 5 | `scx-tess` | faceting with chord, angle and edge-length bounds, watertight along edges, and the dense grid mesher for NURBS faces | brep | 1,158 (+ the `solidcore-tess` and `nurbs-grid-mesh` crates) |
 | 5 | `scx-record` | the exact stored form of bodies and documents: versioned, keeping ids, with its own binary and text encodings and exact procedural records. Its reader decodes and does not heal | brep | 8,155 (+ `solidcore-record`) |
-| 5 | `scx-mass` | mass properties: area, volume, centroid, moments, the signed volume, face and loop measures | brep | 4,792 |
-| 5 | `scx-bodyq` | reads on finished bodies: point, curve and ray classification, the topology solver, ray firing, `ShellRayWorld`, `VertexSector`, the tangent-contact witness, the tight face and body boxes, distance, contact, pick, continuity, tangent chains, face measures, vertex corners, projection of a curve onto a body, recognition of planar profiles | brep, planar, ssi | 73,693 |
-| 6 | `scx-check` | the full validity check: integrity, the body validation, the geometric validity checks that intersect surfaces, the clearance reports, and the outward test (the check, then a signed volume) | bodyq, ssi, mass | 8,653 |
+| 5 | `scx-mass` | mass properties: area, volume, centroid, moments, the signed volume, face and loop measures, the area of a section sheet | brep | 4,792 |
+| 5 | `scx-bodyq` | reads on finished bodies: point, curve and ray classification, the topology solver, ray firing, `ShellRayWorld`, `VertexSector`, the tangent-contact witness, the tight face and body boxes (certified, not kept), distance by certified critical points with a stated tie-break and a `unique` flag, contact, ray hits naming the most specific entity, Betti numbers, the sliver and thin-place finder, pick, continuity, tangent chains, face measures, vertex corners, projection of a curve onto a body, recognition of planar profiles | brep, planar, ssi | 73,693 |
+| 6 | `scx-check` | the full validity check: integrity, the body validation, the geometric validity checks that intersect surfaces (with no two faces crossing away from their shared edges), the clearance reports (with two vertices within coincidence), and the outward test (the check, then a signed volume); the result contract (2.3) | bodyq, ssi, mass | 8,653 |
 | 6 | `scx-stitch` | sewing sheets along coincident edges and vertices, gap closing, orientation, shell nesting, and `rebase` to a new resolution | bodyq | 12,766 |
 | 6 | `scx-hlr` | hidden lines, silhouettes, projected outlines and view projection | bodyq | 10,948 |
-| 7 | `scx-boolean` | the cellular merge, union, subtract, intersect, sections and cuts, imprint (with its vertex-sector choice), split by surface or sheet, trims of sheets by sheets, body-body and face-face intersection, the planar Boolean of two sheets | bodyq, ssi, stitch | 47,303 |
-| 7 | `scx-step` | the mapping between STEP and bodies: geometry, solids and sheets; product structure into placed instances | p21, stitch, check | — (`solidcore-step`, `step-export`) |
+| 7 | `scx-boolean` | the cellular merge, union, subtract, intersect (n-ary union and cut over the merge's regions), sections and cuts, imprint in a stated dimension order (with its vertex-sector choice), split by surface or sheet (both sides, either may be empty), trims of sheets by sheets, body-body and face-face intersection, the planar Boolean of two sheets, caller-stated incidences verified, tangent contact settled by stated facts, then closed form, then tracing, the same-body shortcut, interference (apart, touching or overlapping, with the common's volume) | bodyq, ssi, stitch, mass | 47,303 |
+| 7 | `scx-step` | the mapping between STEP and bodies: geometry, solids and sheets; product structure into placed instances; export writes the resolution as the context uncertainty, with per-entity accuracies | p21, stitch, check | — (`solidcore-step`, `step-export`) |
 | 7 | `scx-deform` | global deformation of bodies through the volume maps (bend, twist, unbend, B-spline volume) | stitch, check | — |
 | 8 | `scx-make` | primitives, extrude, revolve, sweep (the solid sweep reads the tool's silhouette), loft with its certificate, skins, Coons and network patches, sheets between sheets, planar prisms, faces from surfaces, the radial sweep | boolean, stitch, check, planar, hlr | 34,082 |
 | 8 | `scx-repair` | the repairs that need Booleans: short edges, sliver faces, tolerance defects found by the check | boolean, stitch, check | 1,240 |
@@ -105,13 +106,17 @@ column says; "—" means the crate takes no kernel code. The figures move as cra
 | 9 | `scx-mesh` | mesh to B-rep reconstruction, mesh reduction, faceted bodies and their exact volume, STL and 3MF | make, tess, mass | 5,565 |
 | 9 | `scx-sheetmetal` | flat pattern and fold of sheet metal parts | make | 7,358 |
 | 9 | `scx-taper` | taper (the draft-angle feature) | make | 773 |
-| 10 | `scx-blend` | fillet and chamfer (constant and variable), vertex blends, law-curve intersection | local, repair | 150,425 |
-| 11 | `scx-offset` | offset faces, shell, thicken, thin features, sheet offsets, local operations | blend, taper | 36,702 |
+| 10 | `scx-blend` | fillet and chamfer (constant and variable; chamfer by two distances or by distance and angle), vertex blends with setbacks, full rounds, law-curve intersection. G2 and conic fillets are deferred (research 60 §6) | local, repair | 150,425 |
+| 11 | `scx-offset` | offset faces, shell, thicken, thin features, sheet offsets, local operations; a rounded join (face slabs, edge tubes, vertex balls) as a second join mode, never a fallback | blend, taper | 36,702 |
 
 The four edges `scx-bodyq` → `scx-ssi`, `scx-check` → `scx-mass`, `scx-local` → `scx-mass` and
 `scx-mesh` → `scx-mass` are the ones added to the ruled graph (04 §1, 11-27; research 56 C.2): a
 tangent contact refines on two surfaces, the outward test is a signed volume, the material side is
 found by integrating faces, and a reconstructed mesh reads the body's exact volume.
+
+A fifth edge, `scx-boolean` → `scx-mass`, was added on 11-27 (research 60 §6, Q3): interference
+reports the volume of the common. It makes no cycle and moves no layer, since `scx-mass` is layer 5
+and `scx-boolean` layer 7.
 
 ### 1.2 Helper crates
 
@@ -219,10 +224,10 @@ because the app holds `Brep`s directly.
 | `scx-surface` | `curve_plane`, `curve_gap`, `axial_section`, `facing_trough`, `vertex_meet` |
 | `scx-planar` | `profile`, `cell_grid`, `paper_gaps`, `conic_projection`, `spline_projection`, `fit_projection`, the 2-D half of `prism` |
 | `scx-sketch` | `constraint`, `sketch_arc` |
-| `scx-brep` | `body` (copy, transform, counts, the result contract), `provenance` and `history` as `Changes` and `carry`, `point_identity`, `pcurve` |
+| `scx-brep` | `body` (copy, transform, counts), `provenance` and `history` as `Changes` and `carry`, `point_identity`, `pcurve` |
 | `scx-mass` | the mass properties of `measure` |
 | `scx-bodyq` | the rest of `measure`, `contact`, `continuity`, `pick`, `query`, `tangent`, `face_pair`, `face_surface`, `round_face`, `cap`, `mid_sheet`, `mid_joint`, `cylinder_wall`, `joint_turn`, `hole_stacks`, the recognition half of `prism` |
-| `scx-check` | `check` |
+| `scx-check` | `check`; the result contract of `body` (`finish_proved`, 2.3) |
 | `scx-record` | `file`, `blend_definition` (exact blend records), `label`, `record_check`, `order` (gone: ids are kept, so a record index is the id) |
 | `scx-stitch` | `stitch` |
 | `scx-repair` | `heal` |
@@ -450,18 +455,38 @@ impl Brep {
 impl Draft {
     pub fn finish(self, doc: &Document) -> Result<(Brep, Changes), Box<Unfinished>>;
 }
-pub struct Unfinished { pub draft: Draft, pub cause: StructureCause }
+pub struct Unfinished { pub draft: Draft, pub cause: FinishCause }
+pub enum FinishCause { Structure(StructureCause), Geometry(GeometryCause) }
 ```
 
 - A `Brep` cannot change.
-- `finish` does three things:
+- `finish` does four things:
   - checks the structure of what the draft touched: loops closed, uses consistent, sides and
     regions consistent, radial orders complete, orientation;
+  - checks the geometry that is cheap to check on what the draft touched (research 60 V1): each
+    edge curve's ends, and each p-curve's ends evaluated on its surface, lie within their vertices'
+    balls;
   - stamps the document's resolution;
   - rebuilds the body cells it must (3.1).
-- On a structural failure, `finish` returns the draft with the cause, so tools can show the broken
-  structure (review K6). The error is a `Defect` when the caller is one of our operations (5).
-- Geometric validity (self-intersection, gaps) belongs to `scx-check`, which only reads.
+- **Every writer records the gaps it measured before `finish`** (stitch, STEP import, the Boolean's
+  point merge). `finish` compares against the records; it does not heal. A writer that skips this
+  fails good imports.
+- On a failure, `finish` returns the draft with the cause, so tools can show what is broken (review
+  K6). The error is a `Defect` when the caller is one of our operations (5).
+- Geometric validity that needs surface intersection (self-intersection, faces crossing) belongs to
+  `scx-check`, which only reads.
+
+**The result contract.** Changed 11-27 (research 60 §6).
+
+- The pin proves every ops result: `finish_proved` runs the manifold and closed tests, then proves
+  outwardness (`solidcore-ops/src/body.rs`, READ).
+- The proof intersects surfaces and integrates volume, so it is defined in `scx-check`
+  (`scx_check::contract`), not in `scx-brep`.
+- It is applied where a result leaves the kernel: `scx-features` proves every feature result, and an
+  app that calls an operation crate directly calls the contract on what it keeps.
+- Operations do not call it. Internal calls are then not proved twice, and `scx-boolean` and
+  `scx-stitch`, which sit beside or below `scx-check`, need no new edge.
+- Tests prove every operation result (9.2).
 
 **C5. Whole-table copy-on-write.** This is kept as ruled on 11-26, from research 51.
 
@@ -482,8 +507,9 @@ This section is revised after review-architecture-v2 (S1).
   - (b) a rigid placement on every `Brep`;
   - (c) (a), plus placed operands where a move without rewriting pays.
 - **Chosen: (c).**
-  - `scx-brep::transform(&Brep, Rigid) -> Brep` rewrites geometry and keeps every id, so names and
-    `Changes` are trivial: every entity is `Touch::Geometry`. Cells refill lazily.
+  - `scx-brep::transform(&Brep, Affine) -> Result<Brep, BrepError>` rewrites geometry and keeps
+    every id, so names and `Changes` are trivial: every entity is `Touch::Geometry`. Cells refill
+    lazily. Its rules follow below.
   - Operations that take a second body, and `scx-bodyq` reads, accept
     `Placed<'_> { body: &Brep, frame: Frame }`. Pattern tools and assembly instances then move in
     O(1) where it pays. They are mostly Boolean tools: 82% of pattern bodies are intermediate
@@ -495,6 +521,20 @@ This section is revised after review-architecture-v2 (S1).
   crates.
 - Change if: the app's corpus shows rigid moves of bodies that are then read many times without a
   Boolean, for a measured share of regeneration over 5%.
+
+**The transform.** Changed 11-27 (research 60 §6). It ports the pin's `transform_matrix`
+(`topology/brep/mirror.rs`, READ), which already mirrors and maps by any regular affine matrix.
+
+- A singular map is `Refused`.
+- A kind closed under the map stays that kind.
+- Other analytic and NURBS images become exact rational NURBS.
+- A procedural kind the map does not keep gets an approximation, with its accuracy recorded.
+- There is no `Mapped` surface kind.
+- Recorded accuracies scale by the map's largest singular value.
+- A mirror (negative determinant) follows the pin: edge uses are reversed and shells swapped. Plane
+  and NURBS faces reverse their sense; quadrics keep their sense and reverse their loops
+  (review-60, X1).
+- `Rigid` and similarity maps are fast paths of the same function.
 
 ### 2.5 How edits share
 
@@ -537,6 +577,10 @@ pub enum Origin { Face(FaceId), Edge(EdgeId), Vertex(VertexId), Operand(Operand,
 ```
 
 - Every list is sorted by id, so `Changes` is deterministic.
+- **The pieces of a split are listed in a guaranteed order** (research 60 P1): ascending by a key
+  built from the input entities that bound each piece, then by an interior (u, v) point. The key
+  reads input ids only, so a rebuild that keeps the inputs keeps each piece's place, and `carry`
+  is the same under every executor.
 - `Origins` is a list because a face made by merging coincident faces of two operands has two
   origins.
 - **`carry`**, in the core, propagates application data held outside the body:
@@ -665,6 +709,7 @@ review-architecture-v2 (S10).
 pub struct Length(f64);            // millimetres; private field, arithmetic as needed
 pub struct Resolution(Length);     // the document's; > 0, finite
 pub struct Accuracy(Length);       // a recorded bound on an entity
+pub struct SearchRadius(Length);   // how far a search looks; never a coincidence length (09 §3.1)
 
 pub struct Cert { pub claim: Claim, pub bound: Length, pub method: Method, pub reads: Reads } // doc 09
 pub enum Basis { Measured, Certified(Cert), Unproven(Cert), Stated }
@@ -693,8 +738,23 @@ Where each record lives:
 
 ### 4.2 Rules
 
-- Coincidence of `a` and `b` is `max(res, acc_a, acc_b)`. The gap allowed at an intersection is
-  `acc_a + acc_b` (research 54).
+- Coincidence of `a` and `b` is `max(res, acc_a, acc_b)`, as at the pin (09 §3). The gap allowed at
+  an intersection is `acc_a + acc_b` (research 54). Comparisons go through `scx-num`'s `tol` helpers,
+  which add the rounding of coordinate copies.
+- **Merging points** (research 60 T1, ruled 11-27):
+  - the merge candidates are the connected components of "within coincidence", fixed before any
+    merge, and numbered in item-index order of the candidate list;
+  - an operand vertex in a component is the merged point, its record kept; otherwise a member by a
+    total key;
+  - the spread is recorded as the vertex's accuracy (`Basis::Measured`), with a warning when it
+    passes the resolution, never a `Defect`;
+  - the vertex ball covers every edge and p-curve end the merge moves;
+  - two operand vertices within coincidence of each other are input that is not valid: `Refused`
+    naming both, a condition `scx-check` also reports;
+  - two operand vertices joined only through a chain of candidates: each candidate is anchored to
+    its nearest operand vertex (ties by id); where that cannot split the component, or the merge
+    would collapse an operand edge or loop, `Unsupported` with the chain in the trace;
+  - vertex accuracies never grow at grazing meetings, as springrep's do.
 - Interior tests read only the surface's bounds. Boundary tests read the edge or vertex involved.
 - **There is no angle tolerance.** This is revised after review-architecture-v2 (S13), reading 04 row
   42.
@@ -712,6 +772,11 @@ Where each record lives:
   - The rule is order-independent (research 54).
 - **Valid input is never refused.** An operation that loses accuracy records it. An accuracy past
   the resolution gives `Warning::AccuracyPastResolution` in the report, never an error.
+  - A new entity whose accuracy does not exceed the input accuracies it lies within lost nothing:
+    it raises no warning, and its basis is `Measured`, the containment test being the measurement
+    (research 60 T4).
+  - An import whose healed accuracy passes `MAX_ACCURACY_RATIO` gets a warning, not a refusal
+    (09 §6). For results of our own operations the ratio stays a validity limit.
 
 ### 4.3 The resolution
 
@@ -772,6 +837,14 @@ pub enum BlendError {
 - **`Unsupported`** is honest about a case the method does not cover, such as a vertex blend it
   cannot patch or a degenerate SSI branch. Each such cause is also an entry on a list of methods to
   improve.
+- Causes ruled with research 60 (11-27):
+  - a stated incidence that does not hold is `Refused(FalseFact)` at the public API, and a `Defect`
+    when one of our operations stated it;
+  - two operand vertices within coincidence of each other are `Refused`, naming both (4.2);
+  - a merge chain that cannot be anchored is `Unsupported`, with the chain in the trace (4.2);
+  - a singular transform is `Refused` (2.4);
+  - a draft whose curve or p-curve ends miss their vertex balls is `Unfinished` with a
+    `Geometry` cause (2.3).
 - **`Defect`** is `Defect { at: &'static str, what: DefectKind }`. Apps report it and never handle
   it. Library code never panics; the workspace lints already deny it.
 - **`Exhausted` and `Cancelled`** come only from crates that take a budget or a `Stop`.
@@ -903,8 +976,15 @@ pub fn fillet(body: &Brep, edges: &[EdgeId], spec: &FilletSpec, cx: &mut Cx<'_>)
   (absent).
 - **Budget and `Stop`.**
   - The budget is counted in deterministic units (solver iterations, marching steps), never time.
-  - It is split per item in advance (07 rule 7). Which item runs out then never depends on
-    scheduling.
+  - Changed 11-27 (research 60 D1): **one total**, metered per item and summed in item-index order.
+    Each item records its work; the operation stops at the first item, in index order, at which
+    the running sum passes the budget. Which item runs out then never depends on scheduling, and
+    "budget N" means the same under every executor, at the cost of some wasted parallel work.
+  - **Work counts do not depend on cache warmth.** A memo or cell hit charges the work recorded
+    when it was filled, the same as computing it. Otherwise the stop point would move with the
+    scratch and the cells.
+  - Running out is `Exhausted` for the operation, never a skipped item. An item cut by the budget is
+    never memoized.
   - `Stop` is polled at the same points as the budget, inside marches and chains, not only at item
     boundaries (review K3).
 - **`Trace`** receives progress and structured diagnostics (review K8). It cannot affect results,
@@ -1024,7 +1104,7 @@ Doc 07's rules apply, with these additions (revised after review-architecture-v2
 - **Errors.** The error reported is the lowest item index's. The pin's HLR reports the first in time
   (READ, doc 07).
 - **Cells.** Fills race safely, because cells are pure (3.2).
-- **Budgets** are split per item in advance (6.3).
+- **Budgets** are one total, metered per item and summed in index order; a cache hit charges its fill's work (6.3).
 
 **C11. The executor.** This choice is revised after review-architecture-v2 (S8).
 
@@ -1067,6 +1147,9 @@ This section is revised after review-architecture-v2 (S7).
 
 - **An xtask scan** catches what clippy cannot: `static` items with interior mutability, and
   `OnceLock` outside cell fields and geometry payloads.
+- **Planned (research 60 T2):** an xtask scan that flags raw tolerance comparisons (`d <= res` and
+  the like) outside the `tol` module of `scx-num`, so every check goes through the helpers that
+  count the rounding of copies (4.2; 07 §6).
 - **Tests:**
   - Every operation test runs cold (from a fresh decode of the stored form, with an empty scratch)
     and warm (cells and memos filled), and compares the stored bytes.
@@ -1121,11 +1204,11 @@ These are the oracle (changed 11-27).
 - references: exact arithmetic (expansions, big integers or rationals) or a higher-precision
   evaluation for numerical kernels, as `fmath` and the exact circle are checked now;
 - closed forms and known roots, integrals and measures;
-- validity of every result;
+- validity of every result, with the result contract (2.3) on every operation result;
 - analytic measures on fixtures;
 - Boolean algebra;
-- metamorphic tests: a rigid move or uniform scale of the inputs gives the moved or scaled result
-  within resolution plus accuracy;
+- metamorphic tests: a rigid move, mirror or uniform scale of the inputs gives the moved, mirrored
+  or scaled result within resolution plus accuracy;
 - determinism (8.3);
 - kept-face counts (2.5);
 - `carry` against the ported provenance tests (2.6).
@@ -1136,6 +1219,9 @@ These are the oracle (changed 11-27).
   (READ).
 - Property tests run a handful of cases in tier 1 and thousands nightly, from the same generators.
 - Fixtures are built in code by `scx-testkit` and shared.
+- The readers (`scx-p21`, `scx-step`, `scx-record`, `scx-dxf`) and the checked NURBS constructors are
+  fuzzed nightly, from the same generators (research 60 D2). A reader returns an error, never a
+  panic or a body that fails `finish`.
 - A regression test is added per defect fixed.
 
 ### 9.4 Performance target and gate

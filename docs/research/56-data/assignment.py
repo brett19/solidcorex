@@ -328,6 +328,8 @@ REMOVE = [
 
 # The design graph (5.1 as changed by Re-review 2): each crate's direct dependencies.
 # The four edges ruled 11-27 after the re-measure (56 Appendix C.2) are included.
+# A fifth, boolean -> mass, was ruled 11-27 with research 60 (Q3): interference reports the
+# volume of the common. mass is layer 5 and boolean layer 7, so it makes no cycle and moves no layer.
 DEPS = {
     'num': '', 'algo': 'num', 'nurbs': 'num',
     'nurbs-surface': 'nurbs algo', 'curve': 'nurbs algo',
@@ -335,7 +337,7 @@ DEPS = {
     'sketch': 'planar', 'teeth': 'planar',
     'ssi': 'surface', 'brep': 'surface', 'bodyq': 'brep planar ssi', 'record': 'brep', 'tess': 'brep',
     'mass': 'brep',
-    'check': 'bodyq ssi mass', 'stitch': 'bodyq', 'boolean': 'bodyq ssi stitch', 'hlr': 'bodyq',
+    'check': 'bodyq ssi mass', 'stitch': 'bodyq', 'boolean': 'bodyq ssi stitch mass', 'hlr': 'bodyq',
     'make': 'boolean stitch planar check hlr', 'repair': 'boolean stitch check',
     'mesh': 'tess make mass', 'deform': 'stitch check',
     'local': 'make mass', 'taper': 'make', 'sheetmetal': 'make',
