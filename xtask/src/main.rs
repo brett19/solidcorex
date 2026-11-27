@@ -7,8 +7,11 @@
 //!   depend on any library and alone on the pinned solidcore (`solidcore` and
 //!   `solidcore-record`); tool crates depend on no
 //!   workspace crate. The test-kit crates (`[testkit]`) may depend on any library, are
-//!   depended on only as a dev-dependency (by a library or a difftest crate), and say
-//!   `publish = false` in their own manifest.
+//!   depended on only as a dev-dependency (by a library, difftest or bench crate), and say
+//!   `publish = false` in their own manifest. The benchmark crates (`[bench]`) may depend on
+//!   any library and on the pinned solidcore, on a test kit as a dev-dependency, and alone on
+//!   the external crates `[bench-external]` names (criterion, gungraun), as dev-dependencies only;
+//!   nothing depends on them, and they say `publish = false`.
 //! - `headers`: every `.rs` file under `crates/` and `xtask/` opens with a derivation
 //!   header (`Moved from solidcore ...` or `Derived from solidcore ...` `at commit <pin>`,
 //!   its `Upstream record` and its `Changes:`) or says it was written for solidcorex. For
@@ -26,8 +29,11 @@
 //! - `movecheck`: the standing steps of a move, in order: `pin`, `layers`, `headers`,
 //!   `bodydiff`, `cov`.
 //! - `fast`: `cargo fmt --check` of every member, clippy with warnings denied (the default
-//!   members, then the difftest crate), `layers`, `headers`, the tier-1 tests (`cargo test
-//!   -p <crate>` for each crate named, default every library and test kit) and xtask's own tests.
+//!   members, then the difftest and bench crates, the benchmarks included), `layers`,
+//!   `headers`, the tier-1 tests (`cargo test -p <crate>` for each crate named, default every
+//!   library and test kit), the bench crate's own tests and xtask's.
+//! - `bench`: build the benchmarks in the bench profile without running them (`cargo bench
+//!   -p scx-bench --no-run`); docs/02-testing.md says how to run them.
 //!
 //! No dependencies: the manifests are read line by line, which is enough for the plain
 //! manifests this repository writes.
@@ -39,6 +45,9 @@ use std::process::{Command, ExitCode};
 
 /// The solidcore commit every moved file derives from.
 const PIN: &str = "03e16c9ee766de5b9b1ced845e5149d62ff493b8";
+/// The tree of `solidcore/` at [`PIN`]. A checkout rebuilt from the public mirror (CI) has a
+/// different commit hash and this same tree, which is the same content.
+const PIN_TREE: &str = "c5c43059c99ed6b4d36e5ddf2c76dcb1992848ab";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -54,7 +63,8 @@ fn main() -> ExitCode {
         Some("cov") => cov(&root, args.get(1..).unwrap_or(&[])),
         Some("movecheck") => movecheck(&root, args.get(1..).unwrap_or(&[])),
         Some("fast") => fast(&root, args.get(1..).unwrap_or(&[])),
-        _ => Err("usage: cargo xtask <layers | headers | pin | bodydiff | cov [crate ...] | movecheck [crate ...] | fast [crate ...]>".to_string()),
+        Some("bench") => bench(&root),
+        _ => Err("usage: cargo xtask <layers | headers | pin | bodydiff | cov [crate ...] | movecheck [crate ...] | fast [crate ...] | bench>".to_string()),
     };
     match result {
         Ok(msg) => {
@@ -91,6 +101,8 @@ enum Role {
     Difftest,
     /// Test support: references and generators, never published, a dev-dependency only.
     Testkit,
+    /// Benchmarks against the pin: criterion and gungraun as dev-dependencies, never published.
+    Bench,
     Tool,
 }
 
@@ -118,10 +130,19 @@ struct Layers {
     /// `[external]`: crates outside the workspace a library or tool may depend on
     /// (empty today).
     external: Vec<String>,
+    /// `[bench-external]`: crates outside the workspace a bench crate alone may use, as a
+    /// dev-dependency only (the timing harness).
+    bench_external: Vec<String>,
 }
 
-/// The crates the differential crate may (alone) depend on: the pinned solidcore, and its
-/// record crate (the Part 21 reader `scx-p21` is compared with).
+/// `cargo xtask bench`: every benchmark target built in the bench profile, none run.
+fn bench(root: &Path) -> Result<String, String> {
+    cargo(root, &["bench", "-p", "scx-bench", "--no-run"])?;
+    Ok("bench: built".to_string())
+}
+
+/// The crates the differential and bench crates may (alone) depend on: the pinned
+/// solidcore, and its record crate (the Part 21 reader `scx-p21` is compared with).
 const PINNED: &[&str] = &["solidcore", "solidcore-record"];
 
 fn layer_roles(root: &Path) -> Result<Layers, String> {
@@ -132,6 +153,7 @@ fn parse_layers(text: &str) -> Result<Layers, String> {
     let mut section = String::new();
     let mut out: Vec<(String, Role)> = Vec::new();
     let mut external = Vec::new();
+    let mut bench_external = Vec::new();
     let mut libs = 0;
     for line in text.lines() {
         let line = strip_comment(line).trim();
@@ -149,14 +171,20 @@ fn parse_layers(text: &str) -> Result<Layers, String> {
             }
             "difftest" => Role::Difftest,
             "testkit" => Role::Testkit,
+            "bench" => Role::Bench,
             "tool" => Role::Tool,
-            "external" => {
+            "external" | "bench-external" => {
                 if PINNED.contains(&line) {
                     return Err(format!(
-                        "layers.txt: [external] may not name {line} (only the difftest crate uses it)"
+                        "layers.txt: [{section}] may not name {line} \
+                         (only the difftest and bench crates use it)"
                     ));
                 }
-                external.push(line.to_string());
+                if section == "external" {
+                    external.push(line.to_string());
+                } else {
+                    bench_external.push(line.to_string());
+                }
                 continue;
             }
             other => return Err(format!("layers.txt: unknown section [{other}]")),
@@ -169,6 +197,7 @@ fn parse_layers(text: &str) -> Result<Layers, String> {
     Ok(Layers {
         roles: out,
         external,
+        bench_external,
     })
 }
 
@@ -296,9 +325,11 @@ fn layers(root: &Path) -> Result<String, String> {
 
 /// Every breach of the order, one per line (empty when there is none). A library depends
 /// only on libraries above it in `layers.txt` and on crates `[external]` names; the
-/// difftest crates also on the libraries and on the pinned solidcore; a test kit on the
-/// libraries; a tool on no workspace crate and only on `[external]` crates. A test kit is
-/// a dev-dependency only (of a library or a difftest crate) and is never published.
+/// difftest crates also on the libraries and on the pinned solidcore; a bench crate on the
+/// libraries, the pinned solidcore and (as dev-dependencies) `[bench-external]` crates; a
+/// test kit on the libraries; a tool on no workspace crate and only on `[external]` crates.
+/// A test kit is a dev-dependency only (of a library, difftest or bench crate); nothing
+/// depends on a bench crate. Neither is ever published.
 fn check_layers(layers: &Layers, crates: &[Manifest]) -> String {
     let role_of = |n: &str| layers.roles.iter().find(|(m, _)| m == n).map(|(_, r)| *r);
     let names: Vec<&str> = crates.iter().filter_map(|m| m.name.as_deref()).collect();
@@ -311,32 +342,47 @@ fn check_layers(layers: &Layers, crates: &[Manifest]) -> String {
             let _ = writeln!(errors, "{name} is not listed in layers.txt");
             continue;
         };
-        if role == Role::Testkit && manifest.publish.as_deref() != Some("false") {
+        if matches!(role, Role::Testkit | Role::Bench)
+            && manifest.publish.as_deref() != Some("false")
+        {
+            let what = if role == Role::Testkit {
+                "a test kit"
+            } else {
+                "a bench crate"
+            };
             let _ = writeln!(
                 errors,
-                "{name} is a test kit: its manifest must say `publish = false`"
+                "{name} is {what}: its manifest must say `publish = false`"
             );
         }
         for (dep, kind) in &manifest.deps {
             let ok = if names.contains(&dep.as_str()) {
                 match (role, role_of(dep)) {
                     (Role::Library(me), Some(Role::Library(it))) => it < me,
-                    (Role::Difftest | Role::Testkit, Some(Role::Library(_))) => true,
-                    (Role::Library(_) | Role::Difftest, Some(Role::Testkit)) => *kind == Kind::Dev,
+                    (Role::Difftest | Role::Testkit | Role::Bench, Some(Role::Library(_))) => true,
+                    (Role::Library(_) | Role::Difftest | Role::Bench, Some(Role::Testkit)) => {
+                        *kind == Kind::Dev
+                    }
                     _ => false,
                 }
             } else if PINNED.contains(&dep.as_str()) {
-                role == Role::Difftest
+                matches!(role, Role::Difftest | Role::Bench)
+            } else if layers.external.iter().any(|e| e == dep) {
+                true
             } else {
-                layers.external.iter().any(|e| e == dep)
+                role == Role::Bench
+                    && *kind == Kind::Dev
+                    && layers.bench_external.iter().any(|e| e == dep)
             };
             if !ok {
                 let why = if role_of(dep) == Some(Role::Testkit) {
-                    " (a test kit is a dev-dependency of a library or difftest crate only)"
+                    " (a test kit is a dev-dependency of a library, difftest or bench crate only)"
                 } else if names.contains(&dep.as_str()) {
                     ""
                 } else if PINNED.contains(&dep.as_str()) {
-                    " (only the difftest crate may use the pinned solidcore)"
+                    " (only the difftest and bench crates may use the pinned solidcore)"
+                } else if layers.bench_external.iter().any(|e| e == dep) {
+                    " (a [bench-external] crate is a dev-dependency of a bench crate only)"
                 } else {
                     " (an external crate not in layers.txt [external])"
                 };
@@ -505,18 +551,29 @@ fn git_in(dir: &Path, args: &[&str]) -> Result<String, String> {
     }
 }
 
-/// The pinned checkout is at [`PIN`] and clean (the difftest's build script checks the
-/// same before it links solidcore).
+/// The revision that names the pin in the pinned checkout: [`PIN`] itself, or `HEAD` when
+/// the checkout is a rebuild from the public mirror whose `solidcore/` tree is [`PIN_TREE`].
+fn pin_rev(dir: &Path) -> Result<&'static str, String> {
+    let head = git_in(dir, &["rev-parse", "HEAD"])?;
+    if head.trim() == PIN {
+        return Ok(PIN);
+    }
+    let tree = git_in(dir, &["rev-parse", "HEAD:solidcore"])?;
+    if tree.trim() == PIN_TREE {
+        return Ok("HEAD");
+    }
+    Err(format!(
+        "pin: {} is at {}, not {PIN} (nor the same solidcore/ tree {PIN_TREE})",
+        dir.display(),
+        head.trim()
+    ))
+}
+
+/// The pinned checkout is at [`PIN`] (or has its tree) and clean (the difftest's build
+/// script checks the same before it links solidcore).
 fn pin(root: &Path) -> Result<String, String> {
     let dir = pin_dir(root);
-    let head = git_in(&dir, &["rev-parse", "HEAD"])?;
-    if head.trim() != PIN {
-        return Err(format!(
-            "pin: {} is at {}, not {PIN}",
-            dir.display(),
-            head.trim()
-        ));
-    }
+    pin_rev(&dir)?;
     let dirty = git_in(&dir, &["status", "--porcelain"])?;
     if !dirty.trim().is_empty() {
         return Err(format!("pin: {} has changes:\n{dirty}", dir.display()));
@@ -526,7 +583,9 @@ fn pin(root: &Path) -> Result<String, String> {
 
 /// `git show PIN:<path>` in the pinned checkout.
 fn pin_show(root: &Path, path: &str) -> Result<String, String> {
-    git_in(&pin_dir(root), &["show", &format!("{PIN}:{path}")])
+    let dir = pin_dir(root);
+    let rev = pin_rev(&dir).map_err(|e| format!("{path}: {e}"))?;
+    git_in(&dir, &["show", &format!("{rev}:{path}")])
         .map_err(|_| format!("{path} does not exist at the pin"))
 }
 
@@ -689,6 +748,19 @@ fn fast(root: &Path, crates: &[String]) -> Result<String, String> {
             "warnings",
         ],
     )?;
+    // The bench crate is not a default member either; `--all-targets` checks the benchmarks.
+    cargo(
+        root,
+        &[
+            "clippy",
+            "-p",
+            "scx-bench",
+            "--all-targets",
+            "--",
+            "-D",
+            "warnings",
+        ],
+    )?;
     println!("{}", layers(root)?);
     println!("{}", headers(root)?);
     let libs: Vec<String> = if crates.is_empty() {
@@ -704,6 +776,7 @@ fn fast(root: &Path, crates: &[String]) -> Result<String, String> {
     for lib in &libs {
         cargo(root, &["test", "-p", lib])?;
     }
+    cargo(root, &["test", "-p", "scx-bench", "--lib"])?;
     cargo(root, &["test", "-p", "xtask"])?;
     Ok(format!("fast: passed ({})", libs.join(", ")))
 }
@@ -752,7 +825,8 @@ mod tests {
             .collect()
     }
 
-    const LAYERS: &str = "a\nb # above a\n[difftest]\nd\n[testkit]\nk\n[tool]\nt\n[external]\n";
+    const LAYERS: &str = "a\nb # above a\n[difftest]\nd\n[testkit]\nk\n[bench]\nm\n[tool]\nt\n\
+                          [bench-external]\ncriterion\n[external]\n";
 
     #[test]
     fn the_order_holds() {
@@ -762,9 +836,49 @@ mod tests {
             ("b", &["a"]),
             ("d", &["a", "b", "solidcore", "solidcore-record", "dev:k"]),
             ("k", &["a", "b"]),
+            ("m", &["a", "b", "solidcore", "dev:k", "dev:criterion"]),
             ("t", &[]),
         ]);
         assert_eq!(check_layers(&l, &ok), "");
+    }
+
+    #[test]
+    fn a_bench_crate_alone_uses_criterion_and_nothing_uses_it() {
+        let l = parse_layers(LAYERS).unwrap();
+        // The breaking cases: criterion as a normal dependency of the bench crate, as any
+        // dependency of a library or the difftest crate; a dependency on the bench crate;
+        // a bench crate its manifest would let be published.
+        let mut bad = crates(&[
+            ("a", &["dev:criterion"]),
+            ("b", &["dev:m"]),
+            ("d", &["dev:criterion", "m"]),
+            ("k", &[]),
+            ("m", &["criterion"]),
+            ("t", &[]),
+        ]);
+        if let Some(m) = bad.iter_mut().find(|m| m.name.as_deref() == Some("m")) {
+            m.publish = None;
+        }
+        let e = check_layers(&l, &bad);
+        assert!(
+            e.contains("a may not depend on criterion (a [bench-external]"),
+            "{e}"
+        );
+        assert!(e.contains("b may not depend on m\n"), "{e}");
+        assert!(
+            e.contains("d may not depend on criterion (a [bench-external]"),
+            "{e}"
+        );
+        assert!(e.contains("d may not depend on m\n"), "{e}");
+        assert!(
+            e.contains("m may not depend on criterion (a [bench-external]"),
+            "{e}"
+        );
+        assert!(
+            e.contains("m is a bench crate: its manifest must say"),
+            "{e}"
+        );
+        assert!(parse_layers(&format!("{LAYERS}[bench-external]\nsolidcore\n")).is_err());
     }
 
     #[test]
@@ -776,6 +890,7 @@ mod tests {
             ("a", &["dev:k"]),
             ("b", &["k"]),
             ("d", &[]),
+            ("m", &[]),
             ("k", &["solidcore"]),
             ("t", &["dev:k"]),
         ]);
@@ -799,6 +914,7 @@ mod tests {
             ("a", &["solidcore", "b", "solidcore-record"]),
             ("b", &["rand"]),
             ("d", &[]),
+            ("m", &[]),
             ("k", &[]),
             ("t", &["a"]),
         ]);
@@ -824,6 +940,7 @@ mod tests {
                 ("a", &[]),
                 ("b", &["rand"]),
                 ("d", &[]),
+                ("m", &[]),
                 ("k", &[]),
                 ("t", &[]),
             ]),

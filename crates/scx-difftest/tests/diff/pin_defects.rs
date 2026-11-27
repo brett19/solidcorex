@@ -1287,6 +1287,338 @@ pub fn p21_lower_hex() -> PinDefect<(Text<LOWER_HEX>,), XRead> {
     }
 }
 
+// ---- scx-nurbs (t_nurbs) ----------------------------------------------------------------
+
+use crate::t_nurbs::{s as pin_nurbs, At, Hom};
+use scx_testkit::nurbs as tk;
+use scx_testkit::Rat;
+
+/// The two pieces of a split Bezier curve.
+type Pieces = Option<[Vec<[f64; 3]>; 2]>;
+
+fn tk_side(above: bool) -> tk::Side {
+    if above {
+        tk::Side::Above
+    } else {
+        tk::Side::Below
+    }
+}
+
+/// The largest coordinate of the control points, at least 1: the scale of every point the
+/// curve passes through.
+fn hull_scale(a: &At) -> f64 {
+    a.curve
+        .points
+        .iter()
+        .flatten()
+        .fold(1.0_f64, |m, x| m.max(x.abs()))
+}
+
+/// The larger of two differences, a NaN difference counting as infinite.
+fn worst(m: f64, d: f64) -> f64 {
+    if d.is_nan() {
+        f64::INFINITY
+    } else {
+        m.max(d)
+    }
+}
+
+/// The largest coordinate difference of two point lists of the same length.
+fn max_diff(a: &[[f64; 3]], b: &[[f64; 3]]) -> f64 {
+    a.iter()
+        .zip(b)
+        .flat_map(|(p, q)| p.iter().zip(q).map(|(x, y)| (x - y).abs()))
+        .fold(0.0, worst)
+}
+
+/// `scx` is within `tol` of `truth`, and no further from it than the pin's `pin` (when the
+/// pin answered) by more than `tol / 8`.
+fn closest(
+    what: &str,
+    scx: &[[f64; 3]],
+    pin: Option<&[[f64; 3]]>,
+    truth: &[[f64; 3]],
+    tol: f64,
+) -> Result<(), String> {
+    if scx.len() != truth.len() {
+        return Err(format!(
+            "{what}: {} values, the truth has {}",
+            scx.len(),
+            truth.len()
+        ));
+    }
+    let e = max_diff(scx, truth);
+    if e > tol {
+        return Err(format!("{what}: {e:e} from the truth (tolerance {tol:e})"));
+    }
+    if let Some(p) = pin.filter(|p| p.len() == truth.len()) {
+        let ep = max_diff(p, truth);
+        if e > ep + tol / 8.0 {
+            return Err(format!("{what}: {e:e} from the truth, the pin {ep:e}"));
+        }
+    }
+    Ok(())
+}
+
+/// `NurbsCurve::point` where scx and the pin disagree: at the ends of the domain.
+///
+/// The pin's `crv_eval` refuses `u = U[p]` and `u = U[n+1]` (`basis_eval` errs there, and the
+/// upstream caller evaluated the end control points itself); scx's span search is exact and
+/// the ends evaluate. The check: scx's point is within `4 eps` of the hull's scale of the
+/// exact point (`scx_testkit::nurbs::Curve`, rationals), and no further than the pin's.
+pub fn nurbs_point() -> PinDefect<(At, bool), Option<[f64; 3]>> {
+    PinDefect {
+        reason: "the pin's crv_eval refuses the ends of the domain",
+        applies: Applies::Disagreeing,
+        check: |(a, above), r| {
+            let truth = a.curve.exact().map_err(|e| format!("{e:?}"))?;
+            let want = truth
+                .point(a.u, tk_side(*above))
+                .map_err(|e| format!("{e:?}"))?
+                .rounded;
+            let got = r.ok_or("scx refused")?;
+            let pin = pin_nurbs::point(a, *above);
+            let tol = 4.0 * f64::EPSILON * hull_scale(a);
+            closest(
+                "point",
+                &[got],
+                pin.as_ref().map(std::slice::from_ref),
+                &[want],
+                tol,
+            )
+        },
+    }
+}
+
+/// `NurbsCurve::derivs` (orders 0 to 5) where scx and the pin disagree past `Tol::DEFAULT`:
+/// a component far smaller than the others in a high derivative of a rational curve, where
+/// both carry the cancellation of the quotient rule and land a few ulps of the largest
+/// component apart (2 inputs). The check: each order of scx's is within `1e-12 * 10^k`
+/// of the largest component of the exact derivatives, and no further than the pin's.
+pub fn nurbs_derivs() -> PinDefect<(At, bool), Option<Vec<[f64; 3]>>> {
+    PinDefect {
+        reason: "the pin and scx round a cancelling high derivative differently",
+        applies: Applies::Disagreeing,
+        check: |(a, above), r| {
+            let truth = a.curve.exact().map_err(|e| format!("{e:?}"))?;
+            let want = truth
+                .derivs(a.u, tk_side(*above), 5)
+                .map_err(|e| format!("{e:?}"))?;
+            let got = r.as_ref().ok_or("scx refused")?;
+            let pin = pin_nurbs::derivs(a, *above);
+            for (k, w) in want.iter().enumerate() {
+                let scale = w.rounded.iter().fold(hull_scale(a), |m, x| m.max(x.abs()));
+                let tol = 1e-12 * [1.0, 1e1, 1e2, 1e3, 1e4, 1e5][k] * scale;
+                let p = pin
+                    .as_ref()
+                    .and_then(|p| p.get(k))
+                    .map(std::slice::from_ref);
+                closest(&format!("order {k}"), &got[k..=k], p, &[w.rounded], tol)?;
+            }
+            Ok(())
+        },
+    }
+}
+
+/// `NurbsCurve::elevate` where scx and the pin disagree: rational curves with knots a few
+/// ulps apart (`Knots::Clustered`). A5.9 removes each inserted knot by extrapolating across
+/// the neighbouring spans, multiplying the rounding by their length ratio (about 1e16), and
+/// the elevated weights come out zero or negative. The pin returns that curve, 2 to 1e32 from
+/// the exact elevation; scx refuses with `NurbsError::Unstable` (its polynomial answers,
+/// equally inaccurate, are the pin's bit for bit; `scx-nurbs`' ignored truth test
+/// `elevation_of_near_coincident_knots` keeps the gap visible).
+///
+/// The check: where scx answers, its curve is the exact elevation (knots equal, homogeneous
+/// points within `1e-12` of the hull's scale); where it refuses, the pin's answer is more
+/// than `1e-6` of the scale from the exact one.
+pub fn nurbs_elevate() -> PinDefect<(At, usize), Option<Hom>> {
+    PinDefect {
+        reason: "the pin's A5.9 returns non-positive weights across near-coincident knots",
+        applies: Applies::Disagreeing,
+        check: |(a, times), r| {
+            let t = times % 4;
+            let want = a
+                .curve
+                .exact()
+                .and_then(|c| c.elevate(t))
+                .map_err(|e| format!("{e:?}"))?
+                .rounded();
+            let hom: Vec<[f64; 4]> = match &want.weights {
+                None => want
+                    .points
+                    .iter()
+                    .map(|p| [p[0], p[1], p[2], 1.0])
+                    .collect(),
+                Some(w) => want
+                    .points
+                    .iter()
+                    .zip(w)
+                    .map(|(p, &w)| [w * p[0], w * p[1], w * p[2], w])
+                    .collect(),
+            };
+            let scale = hull_scale(a);
+            let off = |(k, p): &Hom| {
+                if *k != want.knots || p.len() != hom.len() {
+                    return f64::INFINITY;
+                }
+                p.iter()
+                    .zip(&hom)
+                    .flat_map(|(x, y)| x.iter().zip(y).map(|(a, b)| (a - b).abs()))
+                    .fold(0.0, worst)
+            };
+            match r {
+                Some(x) if off(x) <= 1e-12 * scale => Ok(()),
+                Some(x) => Err(format!("scx is {:e} from the exact elevation", off(x))),
+                None => match pin_nurbs::elevate(a, t) {
+                    Some(p) if off(&p) > 1e-6 * scale => Ok(()),
+                    Some(p) => Err(format!(
+                        "scx refused; the pin is {:e} from the exact elevation",
+                        off(&p)
+                    )),
+                    None => Err("both refused".to_owned()),
+                },
+            }
+        },
+    }
+}
+
+/// `x^n` by repeated multiplication.
+fn ipow(x: f64, n: usize) -> f64 {
+    (0..n).fold(1.0, |a, _| a * x)
+}
+
+/// `C(n, k)` exactly, in integers.
+fn binomial_exact(n: usize, k: usize) -> u128 {
+    if k > n {
+        return 0;
+    }
+    (1..=k as u128).fold(1, |c, i| c * (n as u128 - k as u128 + i) / i)
+}
+
+/// `bezier::binomial(n, k)` for `n` from 18 (the pin's table has 18 rows) or `k > n`.
+///
+/// The pin reads an 18-row Pascal triangle and errs outside it, which limits its Bezier
+/// elevation to degree 17; scx computes the coefficient exactly in integers (`None` only
+/// above `2^53`, past every degree it supports). `C(n, k)` is `0` for `k > n`. The check:
+/// scx's value is the exact integer.
+pub fn nurbs_binomial() -> PinDefect<(usize, usize), Option<f64>> {
+    PinDefect {
+        reason: "the pin's 18-row Pascal table",
+        applies: Applies::Inputs(|(n, k)| n % 40 >= 18 || k % 40 > n % 40),
+        check: |(n, k), r| {
+            let want = binomial_exact(n % 40, k % 40);
+            match r {
+                Some(v) if *v == want as f64 => Ok(()),
+                r => Err(format!("C({}, {}) is {want}; scx {r:?}", n % 40, k % 40)),
+            }
+        },
+    }
+}
+
+/// `Rat` of a finite double.
+fn rat(x: f64) -> Result<Rat, String> {
+    Rat::from_f64(x).ok_or_else(|| format!("{x} is not finite"))
+}
+
+/// `bezier::bernstein(n, i, u)` for `i > n`, a finite `u` outside `[0, 1]`, or a NaN `u`.
+///
+/// The pin errs for the first two (`NL_IND_ERR`, `NL_PAR_ERR`); `B[i, n]` is `0` for `i > n`,
+/// and the polynomial `C(n, i) u^i (1 - u)^(n - i)` is defined for every `u` (a Bezier curve
+/// extended past its ends). For a NaN `u` the pin returns NaN as a value; scx refuses every
+/// non-finite `u` with `ParameterNotFinite`, as it does for infinities, where the pin refuses
+/// too. The check: for a non-finite `u`, that scx refused; otherwise scx's value against the exact rational
+/// value, to `4 n eps (|u| + |1 - u|)^n`, the forward error bound of A1.2's recursion.
+pub fn nurbs_bernstein() -> PinDefect<(usize, usize, f64), Option<f64>> {
+    PinDefect {
+        reason: "the pin refuses i > n and u outside [0, 1], and returns NaN for a NaN u",
+        applies: Applies::Inputs(|(n, i, u)| {
+            i % 17 > n % 17 || u.is_nan() || (u.is_finite() && !(0.0..=1.0).contains(u))
+        }),
+        check: |(n, i, u), r| {
+            let (n, i) = (n % 17, i % 17);
+            if !u.is_finite() {
+                return match r {
+                    None => Ok(()),
+                    Some(v) => Err(format!("scx answered {v} for the parameter {u}")),
+                };
+            }
+            let got = r.ok_or("scx refused")?;
+            if i > n {
+                return if got == 0.0 {
+                    Ok(())
+                } else {
+                    Err(format!("B[{i}, {n}] is 0; scx {got}"))
+                };
+            }
+            let bound = 4.0 * n as f64 * f64::EPSILON * ipow(u.abs() + (1.0 - u).abs(), n);
+            let (ur, vr) = (rat(*u)?, &Rat::one() - &rat(*u)?);
+            let mut want = Rat::from(binomial_exact(n, i) as i64);
+            for _ in 0..i {
+                want = &want * &ur;
+            }
+            for _ in i..n {
+                want = &want * &vr;
+            }
+            let w = want.to_f64();
+            if !bound.is_finite() || (got - w).abs() <= bound.max(f64::MIN_POSITIVE) {
+                Ok(())
+            } else {
+                Err(format!(
+                    "B[{i}, {n}]({u}) is {w:e}; scx {got:e}, bound {bound:e}"
+                ))
+            }
+        },
+    }
+}
+
+/// `bezier::split(points, u)` for `u` outside `[0, 1]`.
+///
+/// The pin errs (`NL_PAR_ERR`); scx's de Casteljau extends the curve, which is the
+/// subdivision of the polynomial at `u` (the left piece runs from `0` to `u`). The check: the
+/// pieces against an exact de Casteljau in rationals, to `4 n eps (|u| + |1 - u|)^n` of the
+/// points' scale.
+pub fn nurbs_bezier_split() -> PinDefect<(At,), Pieces> {
+    PinDefect {
+        reason: "the pin's Bezier split refuses u outside [0, 1]",
+        applies: Applies::Inputs(|(a,)| !(0.0..=1.0).contains(&a.u)),
+        check: |(a,), r| {
+            let [l, rt] = r.as_ref().ok_or("scx refused")?;
+            let n = a.curve.points.len() - 1;
+            let (ur, vr) = (rat(a.u)?, &Rat::one() - &rat(a.u)?);
+            let mut work: Vec<[Rat; 3]> = a
+                .curve
+                .points
+                .iter()
+                .map(|p| p.map(|x| rat(x).unwrap()))
+                .collect();
+            let mut left = vec![work[0].clone()];
+            let mut right = vec![work[n].clone()];
+            for k in 1..=n {
+                for i in 0..=n - k {
+                    let next: [Rat; 3] =
+                        std::array::from_fn(|c| &(&vr * &work[i][c]) + &(&ur * &work[i + 1][c]));
+                    work[i] = next;
+                }
+                left.push(work[0].clone());
+                right.push(work[n - k].clone());
+            }
+            right.reverse();
+            let round = |v: &[[Rat; 3]]| {
+                v.iter()
+                    .map(|p| p.clone().map(|x| x.to_f64()))
+                    .collect::<Vec<_>>()
+            };
+            let tol = 4.0
+                * n.max(1) as f64
+                * f64::EPSILON
+                * ipow(a.u.abs() + (1.0 - a.u).abs(), n)
+                * hull_scale(a);
+            closest("left", l, None, &round(&left), tol)?;
+            closest("right", rt, None, &round(&right), tol)
+        },
+    }
+}
+
 /// `global_solve::solve` of `ProjectedMaximize` started with no best answer
 /// (`t_gsolve::gsolve_projected_maximize`).
 ///

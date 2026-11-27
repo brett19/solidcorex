@@ -31,6 +31,7 @@ mod t_hash;
 mod t_interval;
 mod t_kraw;
 mod t_math;
+mod t_nurbs;
 mod t_ode;
 mod t_p21;
 mod t_pbox;

@@ -1,7 +1,7 @@
 // Written for solidcorex. Apache-2.0.
 //! Refuses to build the differential tests against anything but the pin: the solidcore
 //! checkout this crate links (`../../../sc-wt/scx-pin`, its path dependency) must be at commit
-//! 03e16c9ee766de5b9b1ced845e5149d62ff493b8 with no change to a tracked or untracked file.
+//! 03e16c9ee766de5b9b1ced845e5149d62ff493b8 (or have the same `solidcore/` tree) with no change to a tracked or untracked file.
 //! Reruns when the checkout's HEAD or index changes or a file under solidcore's crate
 //! directory does (cargo scans a directory named by `rerun-if-changed` recursively).
 //! Also writes the pin's `geom/krawczyk.rs` items, made public, for the difftest
@@ -13,6 +13,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const PIN: &str = "03e16c9ee766de5b9b1ced845e5149d62ff493b8";
+/// The tree of `solidcore/` at [`PIN`]. A checkout rebuilt from the public mirror (CI) has a
+/// different commit hash and this same tree, which is the same content.
+const PIN_TREE: &str = "c5c43059c99ed6b4d36e5ddf2c76dcb1992848ab";
 
 fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
     let out = Command::new("git")
@@ -52,11 +55,14 @@ fn check() -> Result<(), String> {
     );
     let head = git(&pin, &["rev-parse", "HEAD"])?;
     if head.trim() != PIN {
-        return Err(format!(
-            "{} is at {}, not the pin {PIN}",
-            pin.display(),
-            head.trim()
-        ));
+        let tree = git(&pin, &["rev-parse", "HEAD:solidcore"])?;
+        if tree.trim() != PIN_TREE {
+            return Err(format!(
+                "{} is at {}, not the pin {PIN} (nor the same solidcore/ tree {PIN_TREE})",
+                pin.display(),
+                head.trim()
+            ));
+        }
     }
     let dirty = git(&pin, &["status", "--porcelain"])?;
     if !dirty.trim().is_empty() {
