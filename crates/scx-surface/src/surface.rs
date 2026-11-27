@@ -26,9 +26,9 @@ use std::sync::Arc;
 
 use scx_curve::{Chart, ChartKind};
 use scx_num::budget::{Budget, Stop};
-use scx_num::frame::Sense;
 use scx_num::domain::{ParamDomain, UvDomain};
 use scx_num::extent2d::Extent2d;
+use scx_num::frame::Sense;
 use scx_num::jet::SurfaceJet;
 use scx_num::vector2d::Point2;
 use scx_num::vector3d::{Point3, UnitVec3, Vec3};
@@ -138,9 +138,7 @@ impl Surface {
             Self::Cylinder(c) => (
                 c.frame(),
                 c.sense(),
-                ChartKind::Cylinder {
-                    radius: c.radius(),
-                },
+                ChartKind::Cylinder { radius: c.radius() },
             ),
             Self::Cone(c) => (c.frame(), c.sense(), ChartKind::Cone),
             Self::Sphere(s) => (s.frame(), s.sense(), ChartKind::Sphere),

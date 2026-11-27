@@ -535,7 +535,10 @@ fn refusals_by_cause() {
         assert!(matches!(pc, Ok(Curve2::OnChart(_))), "{pc:?}");
         let v = vertex(&mut d, c.point(iv.min()));
         let e = edge(&mut d, c, iv, [v, v]);
-        assert_eq!(err(&d, s, vec![(e, FWD)]), PcurveWriteError::Winds { lp: 0 });
+        assert_eq!(
+            err(&d, s, vec![(e, FWD)]),
+            PcurveWriteError::Winds { lp: 0 }
+        );
     }
 
     // A NURBS surface has no chart: a circle on a plane given as NURBS needs a fit.

@@ -541,10 +541,12 @@ fn on_chart(
     for (k, p) in periods.iter().enumerate() {
         let Some(p) = *p else { continue };
         let (a, b) = (coord(start, k), coord(end, k));
-        let (low, high) = walk.iter().fold((0.0_f64, 0.0_f64), |(low, high), &(t, at)| {
-            let d = coord(at, k) - (a + (b - a) * ((t - lo) / (hi - lo)));
-            (low.min(d), high.max(d))
-        });
+        let (low, high) = walk
+            .iter()
+            .fold((0.0_f64, 0.0_f64), |(low, high), &(t, at)| {
+                let d = coord(at, k) - (a + (b - a) * ((t - lo) / (hi - lo)));
+                (low.min(d), high.max(d))
+            });
         if high - low >= 0.5 * p {
             return Ok(None);
         }
@@ -589,7 +591,15 @@ fn step(
     }
     let mid = 0.5 * (t0 + t1);
     if fast && depth < MAX_HALVINGS && t0 < mid && mid < t1 {
-        step(chart, curve, periods, (t0, at0), (mid, curve.point(mid)), depth + 1, walk);
+        step(
+            chart,
+            curve,
+            periods,
+            (t0, at0),
+            (mid, curve.point(mid)),
+            depth + 1,
+            walk,
+        );
         let m = walk.last().copied().unwrap_or((t0, at0));
         step(chart, curve, periods, m, (t1, p1), depth + 1, walk);
         return;
@@ -613,9 +623,13 @@ fn axis_crossing(
     });
     for i in 1..DENSE - 1 {
         let (Some(&[r0, r1, r2]), Some(&[t0, _, t2]), Some(&[p0, _, p2])) = (
-            rho.get(i - 1..=i + 1).and_then(|s| <&[f64; 3]>::try_from(s).ok()),
-            ts.get(i - 1..=i + 1).and_then(|s| <&[f64; 3]>::try_from(s).ok()),
-            points.get(i - 1..=i + 1).and_then(|s| <&[Point3; 3]>::try_from(s).ok()),
+            rho.get(i - 1..=i + 1)
+                .and_then(|s| <&[f64; 3]>::try_from(s).ok()),
+            ts.get(i - 1..=i + 1)
+                .and_then(|s| <&[f64; 3]>::try_from(s).ok()),
+            points
+                .get(i - 1..=i + 1)
+                .and_then(|s| <&[Point3; 3]>::try_from(s).ok()),
         ) else {
             continue;
         };
@@ -977,8 +991,8 @@ mod tests {
     use scx_num::hash::Rng;
     use scx_num::math::PI;
     use scx_num::units::Length;
-    use scx_nurbs::KnotVector;
     use scx_nurbs::Approach;
+    use scx_nurbs::KnotVector;
     use scx_testkit::sample;
 
     fn frame(rng: &mut Rng, scale: f64) -> Frame {
@@ -1497,7 +1511,9 @@ mod tests {
             // keeps it clear of both poles (the pole is `tilt` from the axis, the circle's
             // angular radius is acos(h)).
             let tilt = 0.3 + 0.9 * rng.next_f64();
-            let n = (z * fmath::cos(tilt) + x * fmath::sin(tilt)).normalized().unwrap();
+            let n = (z * fmath::cos(tilt) + x * fmath::sin(tilt))
+                .normalized()
+                .unwrap();
             let n = Vec3::from(n);
             let h = fmath::cos(tilt + 0.2 + 0.3 * rng.next_f64());
             let frame = Frame::new(o + n * (r * h), n, y).unwrap();
@@ -1523,7 +1539,10 @@ mod tests {
                 let [d] = j.d;
                 let chain = sj.get(1, 0).unwrap() * d.x + sj.get(0, 1).unwrap() * d.y;
                 let [want] = c.jet::<1>(t, Approach::Above).d;
-                assert!((chain - want).length() <= 1e-11 * r, "{t}: {chain:?} {want:?}");
+                assert!(
+                    (chain - want).length() <= 1e-11 * r,
+                    "{t}: {chain:?} {want:?}"
+                );
             }
         }
     }
@@ -1538,8 +1557,16 @@ mod tests {
         // Axis `alpha` off z, angular radius `alpha`: the circle meets the north pole at
         // `t = 0`, where its radial direction `w` points at the pole.
         let alpha: f64 = 0.7;
-        let n = Vec3::from((z * fmath::cos(alpha) + x * fmath::sin(alpha)).normalized().unwrap());
-        let w = Vec3::from((z * fmath::sin(alpha) - x * fmath::cos(alpha)).normalized().unwrap());
+        let n = Vec3::from(
+            (z * fmath::cos(alpha) + x * fmath::sin(alpha))
+                .normalized()
+                .unwrap(),
+        );
+        let w = Vec3::from(
+            (z * fmath::sin(alpha) - x * fmath::cos(alpha))
+                .normalized()
+                .unwrap(),
+        );
         let frame = Frame::new(o + n * fmath::cos(alpha), n, w).unwrap();
         let c = Curve::Circle(Circle::new(frame, mm(fmath::sin(alpha)), Sense::Forward).unwrap());
         assert!((c.point(0.0) - (o + z)).length() < 1e-15);

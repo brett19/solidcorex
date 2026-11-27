@@ -380,7 +380,9 @@ fn curves2(seed: u64, n: usize) -> Vec<Curve2> {
                 let over = Extent1d::new(start, start + 0.1 + rng.next_f64()).unwrap();
                 let mut end = || Point2::new(signed(&mut rng, 4.0), signed(&mut rng, 4.0));
                 let ends = [end(), end()];
-                Curve2::from(OnChart::new(Curve::Circle(circle.unwrap()), chart, over, ends).unwrap())
+                Curve2::from(
+                    OnChart::new(Curve::Circle(circle.unwrap()), chart, over, ends).unwrap(),
+                )
             }
             _ => Curve2::AngleWave(
                 AngleWave2::new(

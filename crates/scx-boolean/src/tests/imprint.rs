@@ -16,10 +16,10 @@ use scx_surface::Surface;
 
 use super::face_face::{X, Z, ball, cyl};
 use super::{cuboid, run, unit};
+use crate::BooleanError;
 use crate::faceface::face_face;
 use crate::geom::{Operands, Side};
 use crate::imprint::{Imprint, imprint};
-use crate::BooleanError;
 
 fn imp(a: &Brep, b: &Brep) -> Result<(Imprint, u64), BooleanError> {
     let doc = Document::default();

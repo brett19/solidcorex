@@ -4,8 +4,8 @@
 //! line. The integrals are split there, as the pin splits them, so no Kronrod piece spans a
 //! kink; a missed split costs only bisections, never accuracy.
 
-use scx_curve::{Curve, Curve2};
 use scx_curve::arcs::Arcs;
+use scx_curve::{Curve, Curve2};
 use scx_nurbs_surface::ParamAxis;
 use scx_surface::Surface;
 
