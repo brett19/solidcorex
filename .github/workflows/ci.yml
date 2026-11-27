@@ -94,6 +94,10 @@ jobs:
       - run: cargo test -p scx-difftest
       - run: cargo test -p scx-testkit --test nurbs -- --ignored # the full sweeps `tests` skips
       - run: cargo test -p scx-testkit --test ssi_truth -- --ignored # the SSI truths' full sweeps
+      - name: SSI corpus score # the corpus ships with the pin (MIT OR Apache-2.0); prints the table
+        env:
+          SCX_SSI_CORPUS: ${{ github.workspace }}/../sc-wt/scx-pin/tests/ssi-corpus
+        run: cargo test -p scx-ssi --test corpus -- --ignored --nocapture
 
   bench-compile:
     runs-on: ubuntu-24.04
