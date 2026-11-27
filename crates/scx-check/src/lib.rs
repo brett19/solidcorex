@@ -58,14 +58,22 @@
 //! **Closed** follows from 2 and 3 with finish: two fins per edge, both faces bounding the
 //! same solid and void (finish's radial check), leave no edge of a shell open.
 //!
-//! **Not tested** (open in 72 §14.22): vertex manifoldness (two solids touching at one
-//! vertex pass), and the self-intersection and coincidence of faces, which the full check
-//! of 72 step 6 owns.
+//! **Vertices** (CF1, research 74 §18). A body may touch itself at a vertex with no shared
+//! edge (two blocks at a corner): the Boolean builds such a union on purpose (BO7), so the
+//! default [`Contacts::Refused`] and [`Contacts::Radial`] admit it. [`Contacts::Manifold`]
+//! refuses it: after the edges, every vertex's faces must be in one piece
+//! ([`Breach::VertexNotManifold`]). It is the pass [`check`] runs (`structure`'s
+//! `pinched`), reported there as a finding.
+//!
+//! **Not tested** here: the self-intersection and coincidence of faces, which [`check`]
+//! owns.
 //!
 //! **Reads only.** The body is `&Brep`; the [`Proved`] holds a clone, which shares every
 //! table and cell. The work goes to a fresh budget of `cx`'s settings and polls `cx.stop`.
 
 mod error;
+mod findings;
+mod structure;
 
 use std::collections::BTreeMap;
 
@@ -78,7 +86,9 @@ use scx_num::frame::Sense;
 use scx_num::vector3d::Vec3;
 use scx_nurbs::Approach;
 
-pub use error::{Breach, ContractError};
+pub use error::{Breach, CheckError, ContractError};
+pub use findings::{Finding, Findings, Scope, Spent, Undecided, check};
+pub use structure::{Class, Pinch};
 
 /// What [`contract`] does with an edge of more than two fins (a body meeting itself along
 /// a line, D5).
@@ -91,6 +101,9 @@ pub enum Contacts {
     /// Admit an edge whose fins are in strict radial order with solid and void sectors by
     /// turns (see the crate doc); refuse any other.
     Radial,
+    /// As [`Contacts::Refused`], and refuse a vertex whose faces are in more than one piece
+    /// (two solids touching at a corner): the body is a manifold at every vertex too.
+    Manifold,
 }
 
 /// A body that [`contract`] proved: manifold, closed and outward. Only `contract` builds it.
@@ -251,7 +264,7 @@ const fn negated(s: Sign) -> Sign {
     }
 }
 
-/// Tests 1 to 3: the records alone.
+/// Tests 1 to 3 and the vertex test: the records alone.
 fn structure(body: &Brep, contacts: Contacts) -> Result<(), Breach> {
     if body.faces().len() == 0 {
         return Err(Breach::Empty);
@@ -279,6 +292,14 @@ fn structure(body: &Brep, contacts: Contacts) -> Result<(), Breach> {
         if let Some(v) = s.lone_vertices().next() {
             return Err(Breach::LoneVertex { vertex: v.id() });
         }
+    }
+    if contacts == Contacts::Manifold
+        && let Some(p) = structure::pinched(body).first()
+    {
+        return Err(Breach::VertexNotManifold {
+            vertex: p.vertex,
+            pieces: p.pieces,
+        });
     }
     Ok(())
 }

@@ -256,6 +256,18 @@ pub fn generate(kind: Kind, seed: u64, size: usize) -> Result<Generated> {
     })
 }
 
+/// Two blocks that meet at one corner vertex and nothing else, so that vertex's link is two
+/// circles: each block its own solid region and shell, or, when `one`, one solid region of
+/// one shell. Valid for `finish` (every edge has two fins); a body with a pinched vertex
+/// (research 74 §18). Seed 0 is the canonical body: unit blocks in the world frame.
+///
+/// # Errors
+///
+/// [`GenError`] only on a bug.
+pub fn corner_touch(seed: u64, one: bool) -> Result<Draft> {
+    planar::corner_touch(&mut Dice::new(seed), one)
+}
+
 /// The closed-form counts of `kind` at `n >= 1`.
 fn counts(kind: Kind, n: usize) -> Counts {
     // (regions, shells, faces, loops, edges, collapsed, vertices); uses follow.

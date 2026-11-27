@@ -53,6 +53,7 @@
 //! knots) are not kinds here; reading them is the reader's map, as STEP's is.
 
 mod any_curve;
+mod chart_check;
 mod closed;
 mod common;
 mod cone;
@@ -80,7 +81,7 @@ pub use error::{Size, SurfaceError};
 pub use hull::{Hull, Hulls};
 pub use intersect::{Contact, CurveSurfaceHit, intersect_curve};
 pub use invert::{Closest, Foot, Inversion};
-pub use pcurve::{CurveKind, PcurveError, SurfaceKind, pcurve_of};
+pub use pcurve::{Check, CurveKind, PcurveError, SurfaceKind, pcurve_of};
 pub use plane::Plane;
 pub use sphere::Sphere;
 pub use surface::Surface;
