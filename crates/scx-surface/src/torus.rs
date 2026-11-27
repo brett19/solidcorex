@@ -15,10 +15,10 @@ use scx_num::vector3d::{Point3, UnitVec3, Vec3};
 use scx_nurbs::Approach;
 use scx_nurbs_surface::{NurbsSurface, ParamAxis};
 
-use crate::arcs::Arcs;
 use crate::common::{Axes, check_lengths, unit};
 use crate::error::{Size, SurfaceError, positive};
 use crate::to_nurbs::{Dir, Reach, build};
+use scx_curve::arcs::Arcs;
 use scx_num::jet::SurfaceJet;
 
 /// Both directions: a turn over `[0, 1]`.
