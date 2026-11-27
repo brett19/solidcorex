@@ -3567,3 +3567,85 @@ No test was removed.
 **Open questions.** (1) The exact-break-end change in `scx-mass` (above), for MA after MA6. Of the two it is the larger lever on curved bodies. (2) Whether `scx_mass` should offer the paired rule itself (`outward` certifying once per pair), so that the rule lives in one place. That is a one-function change for whoever next owns `enclose.rs`.
 
 **Proposed 04 row.** "CK2 (72 §14.34): `scx_check::contract` certifies each mirror shell pair once. Once the structure tests pass, every face lies between a solid and a void, so shells pair with exactly negated face weights. Their certified volumes are exact negatives, so one `volume_sign` gives both signs. Pairs are read from the weights on each call, and a shell without one is certified alone. The rule, order and naming of `scx_mass::outward` are kept in `scx-check`, with no API change. Work is exactly halved on every body, about 18 ms on the torus under load (CK1 37 ms in the same run). Most of what is left is `scx-mass` range cells at quarter-arc break lines that outward rounding places inside a cell. An exact end hull with geometric sliver splitting halves that again (prototype), proposed for MA after MA6. Against: the rule is repeated outside `scx-mass`. Change if `scx_mass::outward` takes the pairing itself, or its rule changes."
+
+### 14.35 BO6 as built (11-27)
+
+**What was asked.** The plate and gear recipes as tests judged by outcome (T9 volume, T10 points, genus), and BO4's open questions 2 (a cross-check of each seed by one point) and 3 (merging coincident faces whose natural normals are opposite). It stays in `scx-boolean`'s classify, build and tests, and leaves `error.rs` alone: `BooleanDefect::Seeds` already exists.
+
+**Public API.** No change. Inside the crate, `classify::check_seed` is new (`pub(crate)`, for the unit test), and the old `by_point` is split into `by_middles` (the edge middles) and `point_class` (the middles, then a point inside the face).
+
+**Tests.**
+- `tests/recipes.rs`, in the shared `check`, so every built recipe it runs gets the new checks (`plate_12_has_144_holes`, `gear_60_has_sixty_slots`, `smaller_hole_cases`, the coincident-face cases). No test was added that repeats one there, and none was removed.
+  - *Genus*, from Euler-Poincare over the result's own cells: `V - E + sum (2 - 2 g_f - L_f) = 2 (S - G)`. `g_f` is one only for a torus face with no loop. It is checked against the recipe's hand-stated genus (144 for `plate-12`, 0 for `gear-60`).
+  - *T10 points*, for every recipe with no slack: 300 seeded points in the truth's box (`box_points`) and 300 of the truth's probes (`Csg::probes`, 2 per face, at offsets up to 5 coincidences). Each point is classified against the result by `classify_point`. A point on the result must be in the truth's band (`side(p, 1.5 c)`). A point in a solid region must be in the truth, or in the band and not out of the truth at `1e-9`, and a point in a void the mirror of that. A probe at offset 0 must be on the result. Each case needs more than 20 points on, in and out.
+  - Sabotage: adding one to the genus fails every built case, and swapping solid for void fails the points.
+- `src/tests/stage6.rs` (new):
+  - `a_wrong_seed_is_a_seeds_defect`: the plate less a cylinder. Every piece that is not `On` passes `check_seed` with its own class and gives `Defect(Seeds)` with the other. The exceptions are the two disks in the hole, which are bounded by the cut alone and are not checked.
+  - `a_turned_piece_flush_with_a_face_merges_with_it`: an L (`[0, 2] x [0, 1] x [0, 1]` with `[0, 1] x [0, 1] x [1, 2]` on it) less its upper arm, built two ways. Built by a union, the step's top has its natural normal up and b's turned bottom has its natural normal down. Built by a subtract, both point down. Each result is the 2 x 1 x 1 block: 6 faces, volume 2, the contract passes, and exactly one face (the top) comes from both operands. On main the union-built L gives 7 faces.
+- `src/tests/whole.rs`: `checked`, `volume`, `area`, `near` and `face_from` become `pub(super)` for `stage6.rs`.
+
+**Decision: check each seeded component at one edge middle, and never at a point inside the face.** BO4 asked for one `classify_point` per seeded component, compared with its seed, with `Defect(Seeds)` when they disagree. The first build used the fallback's own point, which is the first free curve edge's middle, or else the scanline point inside the face. On curved cases that cost 40% to 190% of stage 6. The inside point was most of it: 10 to 22 us for its scanline and query, against under 1 us for an edge middle on a small body. Checking only components seeded by one section (as distinct from those `put` already cross-checks) saved almost nothing, because the expensive components are exactly the one-section ones: the plate's disks inside a hole, and the box's floor inside the sphere. So the check uses edge middles only. A component with no free curve edge, or whose middles all fall on the other operand, goes unchecked. So does one whose point the query cannot place (`Defect(Classify)`), as it was before the check.
+  - For: under 10% of stage 6 in every measured case (table below). A throwaway probe flipped each piece's class in the cylinder-plate, sphere-box and cubes cases under all three ops. Every flip failed in the build, with `Defect(Build)`, or `Unsupported(NonManifold)` for a disk. A single wrong component leaves a section edge with one or three kept fins. The failure a seed alone cannot show is a section whose `sides_along` swapped left and right. That flips both of one operand's pieces there and keeps two kept fins. One of those two pieces belongs to the rest of the operand, which has free edges (the disk's partner is the plate), so the middle check catches it. A component seeded by two or more sections is still also cross-checked by `put`.
+  - Against: a component that only sections bound is not checked by a point. The argument above covers it only when its partner has a free edge, so two edge-free partners at one swapped section would go unseen. No operand in step 4 has a face without edges: spheres, cylinders and tori all carry seams. The decision also departs from BO4's wording ("one `classify_point` per component"): only edge middles count.
+  - Rejected: the full check (40% to 190% of stage 6 on small curved cases), one-section components only (the same cost, since those are the expensive ones), and dropping the check (it then catches nothing at run time, and a swapped section builds a closed, wrong body).
+- *Open question:* a wrong disk shows up as `Unsupported(NonManifold)`, a refusal, when it is a defect. That name is BO7's (D5).
+
+**Decision: merge coincident faces whose natural normals are opposite (BO4's question 3, yes).** In `merge`, a two-fin edge between faces is taken when the faces are *turned against each other* (their `Kept.back` differ, so one has its material behind its natural normal and the other in front), their fins share a sense, and their surfaces are distinct, coincide, and have opposite normals at the edge. Faces turned alike keep BO4's rule: opposite senses and agreeing normals. One surface with turned faces would have material on both sides, so it is skipped. In `splice`, each turned face's loops are walked backwards, and each use enters `exact_loops` against its own sense, so the merged loops run about the survivor's normal.
+  - For: the case is real and plain. An L built by a union keeps its step's top with its natural normal up. Less a block whose bottom is flush with that step, b's turned bottom lies beside it with the material below both. Main keeps two coplanar faces (7 faces where the truth has 6), and the union-built L is how any part built up from blocks looks. With one rule for both orientations, the result no longer depends on how an operand was built (the subtract-built L already merged).
+  - Against: the backwards walk in `splice` runs only for turned merges, and only the L tests it. Without more, turned pairs that meet at a section (perpendicular planes, in every subtract of blocks) would reach the cached `coincide` test, which main skipped on the shared sense: the cubes' subtract went from 15 to 21 work units and 24.4 to 26.3 us of build.
+- *Normals before `coincide`.* The merge now compares the two faces' normals at the edge before it asks whether the surfaces coincide, and skips a pair whose normals are further than 60 degrees from parallel (`PARALLEL`, `|dot| < 0.5`) or point the wrong way for the pair. For: coincident surfaces have parallel normals at every shared point, so no true pair is lost, and the normals are two evaluations where `coincide` samples the faces. Every perpendicular pair, turned or not, is now refused before `coincide`, which also speeds main's own path. Against: a new threshold, though any value well short of parallel gives the same answers. Change if a merge is missed between nearly tangent surfaces (it cannot be, since such surfaces do not coincide).
+
+**Measurements.** Release build on an idle machine (load about 0.3). Stage 6 is `classify` plus `build`, best of 5 x 20 calls. The check is on and off in alternate rounds, toggled by a throwaway switch (since removed). For the recipes, the last step is timed (the plate with `k^2 - 1` holes less the last cylinder, the gear less its last slot). "Checks" is the components that reach `check_seed`, and "work" is their budget units.
+
+| Case | Op | Faces | Checks | Work | Classify, no check | Classify, check | Build | Stage 6 added: full check (first build) | Stage 6 added: as built |
+|---|---|---|---|---|---|---|---|---|---|
+| cubes of 10 offset by 5 | union | 12 | 4 | 4 | 5.2 us | 6.9 us | 34.5 us | 6.4% | 3.2% |
+| | subtract | 9 | 4 | 4 | 5.2 us | 6.9 us | 26.1 us | 5.5% | 5.3% |
+| | intersect | 6 | 4 | 4 | 5.0 us | 6.7 us | 20.4 us | 7.7% | 7.5% |
+| blocks sharing a face | all | 0 to 6 | 0 | 0 | 4.0 to 4.5 us | same | 5 to 39 us | 0% | 0% |
+| cylinder through a plate | union | 10 | 6 | 2 | 3.0 us | 4.0 us | 19.2 us | 69% | 4.1% |
+| | subtract | 7 | 6 | 2 | 2.9 us | 3.9 us | 14.5 us | 92% | 6.9% |
+| | intersect | 3 | 6 | 2 | 2.8 us | 3.8 us | 9.9 us | 127% | 7.8% |
+| sphere less the box over its cap | union | 7 | 4 | 2 | 1.8 us | 3.0 us | 20.0 us | 107% | 4.4% |
+| | subtract | 2 | 4 | 2 | 1.8 us | 2.9 us | 10.5 us | 190% | 9.3% |
+| | intersect | 2 | 4 | 2 | 1.8 us | 2.9 us | 10.8 us | 184% | 9.0% |
+| torus and the box over its half | union | 7 | 5 | 2 | 2.7 us | 3.7 us | 20.6 us | 45% | 4.8% |
+| | subtract | 3 | 5 | 2 | 2.6 us | 3.7 us | 10.3 us | 82% | 7.8% |
+| | intersect | 3 | 5 | 2 | 2.7 us | 3.7 us | 24.8 us | 40% | 3.9% |
+| box-cyl-hole | subtract | 7 | 6 | 2 | 2.7 us | 3.8 us | 14.7 us | 97% | 7.0% |
+| plate-4, last step | subtract | 22 | 6 | 2 | 5.3 us | 7.8 us | 42.2 us | 44% | 5.5% |
+| plate_holes_8, last step | subtract | 70 | 6 | 2 | 28.0 us | 32.4 us | 158 us | 15% | 2.1% |
+| plate-12, last step | subtract | 150 | 6 | 2 | 77.4 us | 88.1 us | 367 us | 8.0% | 2.6% |
+| plate_holes_16, last step | subtract | 262 | 6 | 2 | 135 us | 151 us | 643 us | 5.4% | 2.2% |
+| gear-60, last step | subtract | 242 | 4 | 4 | 164 us | 180 us | 907 us | 1.5% | 1.7% |
+
+- The check's cost is a constant number of edge-middle queries per call (4 to 6 components here), each linear in the other operand's faces. Its share of stage 6 falls as the body grows. The worst share is 9.3%, on the smallest curved result.
+- Build, as built against main's `build.rs` (same session, best of 5 x 20; the first column of each pair is work units in `merge`):
+
+| Case | Op | Faces | Main work | Main build | Branch work | Branch build |
+|---|---|---|---|---|---|---|
+| cubes of 10 offset by 5 | union | 12 | 30 | 35.5 us | 0 | 26.8 us |
+| | subtract | 9 | 15 | 24.5 us | 0 | 20.9 us |
+| | intersect | 6 | 12 | 20.2 us | 0 | 17.6 us |
+| blocks sharing a face | union | 6 | 20 | 39.1 us | 4 | 36.0 us |
+| | subtract | 6 | 12 | 8.7 us | 0 | 5.4 us |
+| | intersect | 0 | 0 | 5.1 us | 0 | 5.1 us |
+| cylinder through a plate | union | 10 | 12 | 19.5 us | 0 | 16.3 us |
+| | subtract | 7 | 12 | 14.6 us | 0 | 11.2 us |
+| | intersect | 3 | 0 | 9.9 us | 0 | 9.8 us |
+| sphere and the box over its cap | union | 7 | 12 | 20.2 us | 0 | 17.2 us |
+| | subtract / intersect | 2 | 0 | 10.6 / 11.0 us | 0 | 10.6 / 11.0 us |
+| torus and the box over its half | union | 7 | 12 | 20.5 us | 0 | 17.3 us |
+| | subtract | 3 | 0 | 10.5 us | 0 | 10.7 us |
+| | intersect | 3 | 0 | 25.0 us | 0 | 25.6 us |
+| L (union) less its arm | union | 12 | 28 | 45.3 us | 2 | 40.0 us |
+| | subtract | 7 main, 6 branch | 11 | 21.0 us | 1 | 29.2 us |
+| | intersect | 6 | 12 | 22.5 us | 0 | 19.0 us |
+
+  Build is faster or equal within noise everywhere except the L's subtract, where the extra 8 us is the turned merge itself (6 faces, the truth; main leaves 7). The "Build" column of the stage-6 table above is main's build.
+
+**Deviations from 72.** The seed check uses edge middles only, not any `classify_point` (above). BO4's note in §14.29 that "a coplanar pair of one sense has opposite natural normals, which the normal test refuses anyway" no longer holds for turned faces: such pairs now merge. The merge's normal test now runs before `coincide` with a 60 degree prefilter, for every pair, not only turned ones; the answers are main's on every non-turned case, and build is faster (above).
+
+**Open questions.** (1) A wrong disk gives `Unsupported(NonManifold)` rather than a defect (for BO7, with D5). (2) A face with no edges at all (a torus or sphere face without seams) would leave a swapped section unseen. No step-4 constructor makes one. If one ever does, the inside point is the fallback, at its measured cost. (3) BO4's question 4 (profiling build) is still open. Build is 3 to 5 times classify on every case here.
+
+**Proposed 04 row.** "BO6 (72 §14.35): `scx-boolean`'s recipe tests check genus (Euler-Poincare over the result's cells) and T10 points (box points and face probes against the truth's band) on every built recipe without slack, including plate-12 and gear-60. Each seeded component is checked by `classify_point` at one free edge middle, with `Defect(Seeds)` on disagreement. It is never checked at a point inside a face, since that cost 40% to 190% of stage 6 on curved cases, while the middle costs under 10% everywhere measured. Build merges coincident faces turned against each other (opposite natural normals, material on one side), walking the turned face's loops backwards. It compares the faces' normals at the edge before `coincide` and skips pairs more than 60 degrees from parallel, so build is faster than before on every bench case but the one that now merges (L less its arm, 21 to 29 us, 7 faces to the true 6). Against: a new threshold, and edge middles only. Change if: an operand face without edges appears (check its components by the inside point), or a merge between coincident faces is missed."
