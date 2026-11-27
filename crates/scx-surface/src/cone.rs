@@ -20,10 +20,10 @@ use scx_nurbs::Approach;
 use scx_nurbs_surface::{NurbsSurface, ParamAxis};
 
 use crate::Pole;
-use crate::arcs::Arcs;
 use crate::common::{Axes, check_lengths, linear, unit};
 use crate::error::{Size, SurfaceError, at_least_zero};
 use crate::to_nurbs::{Dir, Reach, build};
+use scx_curve::arcs::Arcs;
 use scx_num::jet::SurfaceJet;
 
 /// The `u` direction: a turn over `[0, 1]`.
@@ -131,6 +131,11 @@ impl Cone {
 
     fn axes(&self) -> Axes {
         Axes::new(&self.frame, self.sense)
+    }
+
+    /// `k = tan(half-angle)`, as stored (the radius grows by `k` per unit of `v`).
+    pub(crate) const fn slope(&self) -> f64 {
+        self.slope
     }
 
     /// The height of the apex, `-r / k`.

@@ -24,6 +24,7 @@ use core::f64::consts::{FRAC_1_SQRT_2, FRAC_PI_2, FRAC_PI_4};
 
 use scx_num::fmath;
 use scx_num::ring::Ring;
+use scx_num::trig::Trig;
 use scx_nurbs::Approach;
 
 /// `tan(pi/8) = sqrt(2) - 1`, correctly rounded.
@@ -45,7 +46,7 @@ const HALF_MIDS: [(f64, f64); 2] = [
 
 /// Which arcs a direction has.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Sweep {
+pub enum Sweep {
     /// Four arcs from angle 0, repeating every turn.
     Turn,
     /// Two arcs from `-pi/2` to `pi/2`; past the ends, the end arc's formula continues.
@@ -54,7 +55,7 @@ pub(crate) enum Sweep {
 
 /// An angle direction: quarter arcs each `span` long in the parameter.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct Arcs {
+pub struct Arcs {
     span: f64,
     sweep: Sweep,
 }
@@ -62,23 +63,23 @@ pub(crate) struct Arcs {
 /// The arc a parameter is evaluated on: its span index `k` (not reduced by the period, so
 /// `k L` is the span's start) and its place `q` among the arcs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Piece {
+pub struct Piece {
     k: i64,
     q: usize,
 }
 
 /// The cosine and sine of an angle and their first `D` derivatives in the parameter.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct Trig<const D: usize> {
+pub struct ArcTrig<const D: usize> {
     /// `(cos phi, sin phi)`.
-    pub(crate) value: (f64, f64),
+    pub value: (f64, f64),
     /// `(d^n cos phi / dt^n, d^n sin phi / dt^n)` for `n = 1..=D`.
-    pub(crate) derivs: [(f64, f64); D],
+    pub derivs: [(f64, f64); D],
 }
 
-impl<const D: usize> Trig<D> {
+impl<const D: usize> ArcTrig<D> {
     /// The `n`-th derivative pair, the value at `n = 0`.
-    pub(crate) fn nth(&self, n: usize) -> (f64, f64) {
+    pub fn nth(&self, n: usize) -> (f64, f64) {
         match n.checked_sub(1) {
             None => self.value,
             Some(i) => self.derivs.get(i).copied().unwrap_or((0.0, 0.0)),
@@ -88,7 +89,7 @@ impl<const D: usize> Trig<D> {
 
 impl Arcs {
     /// A full turn over `[0, period]` (`period` finite and above zero, checked by the kind).
-    pub(crate) const fn turn(period: f64) -> Self {
+    pub const fn turn(period: f64) -> Self {
         Self {
             span: period / 4.0,
             sweep: Sweep::Turn,
@@ -96,7 +97,7 @@ impl Arcs {
     }
 
     /// The latitude, `[-pi/2, pi/2]` over `[0, 1]`.
-    pub(crate) const fn half() -> Self {
+    pub const fn half() -> Self {
         Self {
             span: 0.5,
             sweep: Sweep::Half,
@@ -120,12 +121,12 @@ impl Arcs {
     }
 
     /// The arc that `t` is on, from `side` at a break (research 63 X5).
-    pub(crate) fn piece(self, t: f64, side: Approach) -> Piece {
+    pub fn piece(self, t: f64, side: Approach) -> Piece {
         let x = (t / self.span).floor();
         // `t / L` rounds; step the index so that `k L <= t < (k + 1) L` holds as computed.
         let mut k = if x.is_finite() { x as i64 } else { 0 };
         if t < self.start_of(k) {
-            k -= 1;
+            k = k.saturating_sub(1);
         } else if t >= self.start_of(k + 1) {
             k += 1;
         }
@@ -174,7 +175,7 @@ impl Arcs {
     }
 
     /// `(cos phi, sin phi)` at `t` with the formula of `piece`, in any ring.
-    pub(crate) fn cos_sin<T: Ring>(self, t: T, piece: Piece) -> (T, T) {
+    pub fn cos_sin<T: Ring>(self, t: T, piece: Piece) -> (T, T) {
         let tau = self.tau(t, piece);
         let one = T::lift(1.0);
         let tt = tau * tau;
@@ -187,7 +188,7 @@ impl Arcs {
     }
 
     /// `(cos phi, sin phi)` and `D` derivatives at `t`, on the arc `side` picks at a break.
-    pub(crate) fn trig<const D: usize>(self, t: f64, side: Approach) -> Trig<D> {
+    pub fn trig<const D: usize>(self, t: f64, side: Approach) -> ArcTrig<D> {
         let piece = self.piece(t, side);
         let tau = self.tau(t, piece);
         let a = self.rate();
@@ -207,11 +208,11 @@ impl Arcs {
             c = (ic.0 * q.0 - ic.1 * q.1, ic.0 * q.1 + ic.1 * q.0);
             *out = rot(c);
         }
-        Trig { value, derivs }
+        ArcTrig { value, derivs }
     }
 
     /// The angle (radians) at parameter `t`, continuous across breaks and turns.
-    pub(crate) fn angle(self, t: f64) -> f64 {
+    pub fn angle(self, t: f64) -> f64 {
         let piece = self.piece(t, Approach::Above);
         let tau = self.tau(t, piece);
         self.start() + piece.k as f64 * FRAC_PI_2 + FRAC_PI_4 + 2.0 * fmath::atan(tau)
@@ -220,7 +221,7 @@ impl Arcs {
     /// The parameter at angle `phi` (radians): on the turn the one in the turn's copy of
     /// the parameter line that holds `phi`, on the half turn the end arcs' formulas past the
     /// ends (finite while `phi` is within `3 pi/4` past them).
-    pub(crate) fn parameter(self, phi: f64) -> f64 {
+    pub fn parameter(self, phi: f64) -> f64 {
         let rel = phi - self.start();
         let x = (rel / FRAC_PI_2).floor();
         let mut k = if x.is_finite() { x as i64 } else { 0 };
@@ -232,14 +233,121 @@ impl Arcs {
         (k as f64 + 0.5) * self.span + tau / self.rate()
     }
 
+    /// The span index of the arc that angle `phi` is on, as [`Self::parameter`] picks it,
+    /// from `side` at a break.
+    fn arc_of_angle(self, phi: f64, side: Approach) -> i64 {
+        let rel = phi - self.start();
+        let x = (rel / FRAC_PI_2).floor();
+        let mut k = if x.is_finite() { x as i64 } else { 0 };
+        if side == Approach::Below && rel == k as f64 * FRAC_PI_2 {
+            k -= 1;
+        }
+        if self.sweep == Sweep::Half {
+            k = k.clamp(0, 1);
+        }
+        k
+    }
+
+    /// The parameter at angle `phi` and its first `D` derivatives in the angle, in any
+    /// scalar with sine and cosine (in [`Ivl`](scx_num::interval::Ivl) an enclosure over
+    /// every arc `phi` meets), on the arc `side` picks at a break: [`Self::parameter`] in
+    /// closed form for the 2-D kind whose coordinate is an angle's parameter (research 63
+    /// §4.11).
+    ///
+    /// On arc `k`, with `psi` the angle from its middle, the parameter is
+    /// `(k + 1/2) L + tau / a` with `tau = tan(psi / 2) = sin psi / (1 + cos psi)` (the
+    /// denominator at least `1 + cos(pi/4)`). Then `tau' = (1 + tau^2) / 2` and, for
+    /// `n >= 1`, `tau^(n+1) = (1/2) sum_j C(n, j) tau^(j) tau^(n-j)`: no allocation, `D^2`
+    /// products. The map is `C^1` at a break and not `C^2` (`tau''` changes sign there).
+    #[must_use]
+    pub fn parameter_jet<T: Trig, const D: usize>(self, phi: T, side: Approach) -> (T, [T; D]) {
+        /// Past this many arcs an interval's enclosure is the whole line.
+        const MAX_ARCS: i64 = 8;
+        let (lo, hi) = phi.ends();
+        let (first, last) = if lo == hi {
+            let k = self.arc_of_angle(lo, side);
+            (k, k)
+        } else {
+            let first = self.arc_of_angle(lo, Approach::Above);
+            (first, self.arc_of_angle(hi, Approach::Below).max(first))
+        };
+        if last.saturating_sub(first) > MAX_ARCS {
+            return (T::undefined(), [T::undefined(); D]);
+        }
+        let mut out: Option<(T, [T; D])> = None;
+        for k in first..=last {
+            let one = self.on_arc::<T, D>(phi, k, first == last);
+            out = Some(match out {
+                None => one,
+                Some((v, d)) => {
+                    let mut joined = d;
+                    for (j, x) in joined.iter_mut().zip(one.1) {
+                        *j = j.join(x);
+                    }
+                    (v.join(one.0), joined)
+                }
+            });
+        }
+        out.unwrap_or_else(|| (T::undefined(), [T::undefined(); D]))
+    }
+
+    /// [`Self::parameter_jet`] with arc `k`'s formula, `phi` clipped to the arc unless it is
+    /// the only one.
+    fn on_arc<T: Trig, const D: usize>(self, phi: T, k: i64, only: bool) -> (T, [T; D]) {
+        let l = T::lift;
+        let phi = if only {
+            phi
+        } else {
+            let low = self.start() + k as f64 * FRAC_PI_2;
+            // The half turn's end arcs continue past its ends.
+            let half_end = |end: i64| self.sweep == Sweep::Half && k == end;
+            let lo = if half_end(0) { f64::NEG_INFINITY } else { low };
+            let hi = if half_end(1) {
+                f64::INFINITY
+            } else {
+                low + FRAC_PI_2
+            };
+            phi.clip(lo, hi)
+        };
+        let psi = (phi - l(self.start())) - l(k as f64 * FRAC_PI_2 + FRAC_PI_4);
+        let (s, c) = psi.sin_cos();
+        let one = l(1.0);
+        let tau = s / (one + c);
+        let rate = l(self.rate());
+        let value = l((k as f64 + 0.5) * self.span) + tau / rate;
+        // tau^(n) for n = 1..=D, in d[n - 1].
+        let mut d = [l(0.0); D];
+        for n in 0..D {
+            let next = if n == 0 {
+                (one + tau * tau) * l(0.5)
+            } else {
+                let nth = |j: usize| match j.checked_sub(1) {
+                    None => tau,
+                    Some(i) => d.get(i).copied().unwrap_or_else(|| l(0.0)),
+                };
+                let mut sum = l(0.0);
+                let mut binom = 1.0;
+                for j in 0..=n {
+                    sum = sum + l(binom) * nth(j) * nth(n - j);
+                    binom = binom * (n - j) as f64 / (j + 1) as f64;
+                }
+                sum * l(0.5)
+            };
+            if let Some(slot) = d.get_mut(n) {
+                *slot = next;
+            }
+        }
+        (value, d.map(|x| x / rate))
+    }
+
     /// Whether this is a periodic turn (else the half turn).
-    pub(crate) fn is_turn(self) -> bool {
+    pub fn is_turn(self) -> bool {
         self.sweep == Sweep::Turn
     }
 
     /// The length of the parameter this direction is defined over: a turn's period, or
     /// the half turn's `[0, 1]`.
-    pub(crate) fn length(self) -> f64 {
+    pub fn length(self) -> f64 {
         self.count() as f64 * self.span
     }
 
@@ -273,7 +381,7 @@ impl Arcs {
     ///
     /// `lo < hi`, both finite and inside one copy of the direction's domain (checked by the
     /// caller): at most five spans.
-    pub(crate) fn bezier(self, lo: f64, hi: f64) -> (Vec<f64>, Vec<(f64, f64, f64)>) {
+    pub fn bezier(self, lo: f64, hi: f64) -> (Vec<f64>, Vec<(f64, f64, f64)>) {
         let first = self.piece(lo, Approach::Above).k;
         let last = self.piece(hi, Approach::Below).k.max(first);
         let spans = usize::try_from(last - first + 1).unwrap_or(1);
@@ -333,7 +441,7 @@ impl Arcs {
 
     /// The parameter of each break in `[lo, hi]`, for tests and poles.
     #[cfg(test)]
-    pub(crate) fn span(self) -> f64 {
+    pub fn span(self) -> f64 {
         self.span
     }
 }
@@ -385,11 +493,11 @@ mod tests {
     fn derivatives_match_differences() {
         let a = Arcs::turn(1.0);
         let t = 0.37;
-        let j: Trig<3> = a.trig(t, Approach::Above);
+        let j: ArcTrig<3> = a.trig(t, Approach::Above);
         let h = 1e-5;
         for n in 1..=3 {
-            let lo: Trig<3> = a.trig(t - h, Approach::Above);
-            let hi: Trig<3> = a.trig(t + h, Approach::Above);
+            let lo: ArcTrig<3> = a.trig(t - h, Approach::Above);
+            let hi: ArcTrig<3> = a.trig(t + h, Approach::Above);
             let fd = (
                 (hi.nth(n - 1).0 - lo.nth(n - 1).0) / (2.0 * h),
                 (hi.nth(n - 1).1 - lo.nth(n - 1).1) / (2.0 * h),

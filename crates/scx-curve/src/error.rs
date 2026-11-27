@@ -21,6 +21,7 @@
 //! | new (CU5): a restriction to one parameter | [`Degenerate::Extent`] |
 //! | new (CU5): a map that takes a conic's plane to a line or a point | [`Degenerate::Plane`], or a degenerate semi-axis |
 //! | none: a NURBS curve's inversion runs the general solver | [`Unsupported::NurbsInversion`] |
+//! | new (63 §4.11): an angle line's 2-D inversion | [`Unsupported::AngleLineInversion`] |
 //!
 //! `TooLarge` and `Solve` (63 §3.2) join with the first operation that can produce them.
 //! Analytic inversion (CU4) cannot: an outside foot is
@@ -61,6 +62,9 @@ pub enum Unsupported {
     /// A NURBS curve's closest point or inversion: it needs the iterative solve under a
     /// budget (63 X13), which is not built.
     NurbsInversion,
+    /// An angle line's closest point or inversion (a 2-D query on a pcurve; the 3-D
+    /// edge's inversion answers the same question exactly), not built.
+    AngleLineInversion,
 }
 
 /// A size or direction too small to give a curve. A length's threshold is the pin's
@@ -146,6 +150,9 @@ impl CurveError {
             Self::OutsideDomain { .. } => "outside_domain",
             Self::Nurbs(e) => e.name(),
             Self::Unsupported(Unsupported::NurbsInversion) => "unsupported_nurbs_inversion",
+            Self::Unsupported(Unsupported::AngleLineInversion) => {
+                "unsupported_angle_line_inversion"
+            }
         }
     }
 }
@@ -204,6 +211,9 @@ impl fmt::Display for CurveError {
             Self::Nurbs(e) => e.fmt(f),
             Self::Unsupported(Unsupported::NurbsInversion) => {
                 f.write_str("a NURBS curve's inversion is not built")
+            }
+            Self::Unsupported(Unsupported::AngleLineInversion) => {
+                f.write_str("an angle line's inversion is not built")
             }
         }
     }

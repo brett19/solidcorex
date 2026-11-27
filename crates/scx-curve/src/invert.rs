@@ -52,6 +52,9 @@ use crate::line::{Line, Line2};
 /// bracket to below an ulp of the angle in under 60.
 pub const POLISH_STEPS: u32 = 64;
 
+/// The steps the cheap seed's polish may take before the quartic seeds it instead.
+const FAST_STEPS: u32 = 6;
+
 /// Every nearest point of a curve to a query.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Closest<A = f64, Q = Point3> {
@@ -255,6 +258,7 @@ impl Curve2 {
             Self::Circle(c) => Ok(c.closest(p)),
             Self::Ellipse(c) => Ok(c.closest(p)),
             Self::Nurbs(_) => Err(CurveError::Unsupported(Unsupported::NurbsInversion)),
+            Self::AngleLine(_) => Err(CurveError::Unsupported(Unsupported::AngleLineInversion)),
         }
     }
 
@@ -262,7 +266,8 @@ impl Curve2 {
     ///
     /// # Errors
     ///
-    /// [`Unsupported::NurbsInversion`] for a NURBS curve.
+    /// [`Unsupported::NurbsInversion`] for a NURBS curve,
+    /// [`Unsupported::AngleLineInversion`] for an angle line.
     #[inline]
     pub fn invert(
         &self,
@@ -274,6 +279,7 @@ impl Curve2 {
             Self::Circle(c) => Ok(c.invert(p, domain)),
             Self::Ellipse(c) => Ok(c.invert(p, domain)),
             Self::Nurbs(_) => Err(CurveError::Unsupported(Unsupported::NurbsInversion)),
+            Self::AngleLine(_) => Err(CurveError::Unsupported(Unsupported::AngleLineInversion)),
         }
     }
 }
@@ -431,12 +437,26 @@ fn pow2_floor(x: f64) -> f64 {
 fn quadrant_root(a: f64, b: f64, u: f64, v: f64) -> f64 {
     let k = (b - a) * (b + a);
     let (au, bv) = (a * u, b * v);
-    let g = |s: f64| -> (f64, f64) {
+    let g = |s: f64| -> (f64, f64, f64) {
         let (sn, cs) = sin_cos(s);
         let val = k * sn * cs + au * sn - bv * cs;
         let der = k * (cs - sn) * (cs + sn) + au * cs + bv * sn;
-        (val, der)
+        let noise = (k * sn * cs).abs() + au * sn + bv * cs;
+        (val, der, noise)
     };
+    // The cheap seed is the foot of a point on the curve, atan2(a v, b u). Near the curve the
+    // polish closes in a few steps; one that does not converge within `FAST_STEPS` is redone
+    // from the quartic's seed. The root is unique in the quadrant and the bracket keeps every
+    // step inside it, so either seed ends at the root. The fast polish also stops where `g`
+    // is within rounding of zero (4 eps of its terms' size) and the Newton step is within 4
+    // eps of `s`; the quartic's polish keeps the exact stop.
+    let cheap = atan2(a * v, b * u);
+    if cheap > 0.0 && cheap < HALF_PI {
+        let (s, done) = polish(&g, cheap, FAST_STEPS, true);
+        if done {
+            return s;
+        }
+    }
     // The seed: with w = tan(s/2), g (1 + w^2)^2 is the quartic
     // b v w^4 + 2 (a u - k) w^3 + 2 (a u + k) w - b v.
     let c = [-bv, 2.0 * (au + k), 0.0, 2.0 * (au - k), bv];
@@ -452,11 +472,18 @@ fn quadrant_root(a: f64, b: f64, u: f64, v: f64) -> f64 {
             }
         }
     }
-    let (mut lo, mut hi, mut s) = (0.0, HALF_PI, best.1);
-    for _ in 0..POLISH_STEPS {
-        let (val, der) = g(s);
+    polish(&g, best.1, POLISH_STEPS, false).0
+}
+
+/// Newton steps on `g` (its value, slope and the size of its terms) from `s0`, safeguarded by
+/// bisection inside `(0, pi/2)`; and whether it converged within `steps`. `fast` adds the
+/// rounding-level stop.
+fn polish(g: &impl Fn(f64) -> (f64, f64, f64), s0: f64, steps: u32, fast: bool) -> (f64, bool) {
+    let (mut lo, mut hi, mut s) = (0.0, HALF_PI, s0);
+    for _ in 0..steps {
+        let (val, der, noise) = g(s);
         if val == 0.0 {
-            break;
+            return (s, true);
         }
         if val < 0.0 {
             lo = s;
@@ -464,18 +491,23 @@ fn quadrant_root(a: f64, b: f64, u: f64, v: f64) -> f64 {
             hi = s;
         }
         let newton = s - val / der;
+        if fast
+            && val.abs() <= 4.0 * f64::EPSILON * noise
+            && (newton - s).abs() <= 4.0 * f64::EPSILON * s
+        {
+            return (s, true);
+        }
         let next = if newton > lo && newton < hi {
             newton
         } else {
             0.5 * (lo + hi)
         };
         if next == s || (next - s).abs() <= f64::EPSILON * s {
-            s = next;
-            break;
+            return (next, true);
         }
         s = next;
     }
-    s
+    (s, false)
 }
 
 /// Picks one of `closest`'s feet and places it against a periodic `domain` (`at` wrapped by

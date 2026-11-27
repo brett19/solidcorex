@@ -15,6 +15,8 @@
 //! - Edits by value: `reversed` and `transformed` on each kind and on [`Surface`], with the
 //!   [`UvMap`] from the original's parameters to the edit's, and [`Surface::restrict`]
 //!   (63 SU7).
+//! - [`pcurve_of`]: the exact pcurve of a curve lying on a surface, checked by lifting, or a
+//!   typed [`PcurveError`] (63 D10, §4.11).
 //! - [`AnyCurve`]: a free [`Curve`](scx_curve::Curve), or a [`CurveOnSurface`] (a uv curve on
 //!   a shared [`Surface`]) with its point and its jet by the chain rule (63 §4.10).
 //!
@@ -42,12 +44,12 @@
 //! knots) are not kinds here; reading them is the reader's map, as STEP's is.
 
 mod any_curve;
-mod arcs;
 mod common;
 mod cone;
 mod cylinder;
 mod edit;
 mod error;
+mod pcurve;
 mod plane;
 mod sphere;
 mod surface;
@@ -59,6 +61,7 @@ pub use cone::Cone;
 pub use cylinder::Cylinder;
 pub use edit::UvMap;
 pub use error::{Size, SurfaceError};
+pub use pcurve::{CurveKind, PcurveError, SurfaceKind, pcurve_of};
 pub use plane::Plane;
 pub use sphere::Sphere;
 pub use surface::Surface;
@@ -82,6 +85,7 @@ pub struct Pole {
 const _: () = {
     const fn ok<T: Send + Sync>() {}
     ok::<Plane>();
+    ok::<PcurveError>();
     ok::<Cylinder>();
     ok::<Cone>();
     ok::<Sphere>();
