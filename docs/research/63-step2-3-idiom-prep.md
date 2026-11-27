@@ -4126,6 +4126,151 @@ in for BR8's largest generated body, which does not exist yet.
 - At 10,000 faces (about 1.4 MB of face records) the walk falls out of L2.
 - Research 51's 4.9 ns per face is met up to 1,024 faces.
 
+### 6.7 BR2 as built (11-27)
+
+Decided by analysis and an adversarial pass. Proposed for review; not yet ruled.
+
+`Draft::finish` now runs, in order, and stops at the first failure:
+
+1. every curve attached (`MissingCurve`, `Defect`);
+2. `check::references` (BR1's, unchanged);
+3. `check::structure`: the body invariants (`StructureCause`, `Refused`);
+4. `check::geometry`: the cheap geometry check (`GeometryCause`, `Refused`).
+
+Each pass walks records in kind order (regions, shells, faces, edges, vertices), then id order, so
+with several faults the cause is the lowest and the same on every run. Both cause enums are
+`Copy`, `#[non_exhaustive]`, with a stable `name()` and a `Display` that names the ids; the
+geometry causes carry the gap and the allowance as `Length` where there is one.
+
+**Structure** (the pin's `topology/brep/validation/assert_valid` rules, ported as one pass of
+sorted arrays and a disjoint-set forest, no maps):
+
+| Cause | Rule |
+|---|---|
+| `wire_with_fins` | a shell's wire edge has no fin |
+| `face_without_loop`, `empty_loop` | a face has a loop, a loop has a use |
+| `loop_not_connected` | each use starts where the one before it ends |
+| `point_use_of_curve`, `pcurve_interval` | a curve edge's use is a pcurve over the edge's own interval |
+| `repeated_use` | a face uses an edge at most once in each sense |
+| `use_without_fin`, `repeated_fin` (and BR1's `fin_without_use`) | radial completeness: the fins are the uses, each once |
+| `vertex_on_two_loops` | no vertex on two loops of one face (the pin's Face 39) |
+| `collapsed_edge_ends` | a collapsed edge starts and ends at one vertex |
+| `loose_edge`, `loose_vertex` | every edge has a fin or a shell, every vertex an edge or a shell |
+| `sides_disagree` | the sector rule: for radially consecutive fins `a`, `b`, the shell after `a` (front for a forward fin) is the shell before `b` |
+| `empty_shell`, `shell_not_connected` | a shell holds something and is one piece (face sides joined across edges by the sector rule and at shared vertices) |
+| `region_without_shell` | every region but the outside has a shell; the outside has one if any region does |
+
+**Geometry** (research 60 V1 at fixed samples, 63 D10; 8 segments per edge and per use, the ends
+exact):
+
+| Cause | Rule |
+|---|---|
+| `edge_end_off_vertex` | a curve's ends within its vertices' balls (the pin's Edge 16, 17) |
+| `edge_too_short` | the curve longer than its own reach (Edge 7) |
+| `use_end_off_vertex` | a use's lifted ends within its vertices' balls |
+| `outside_domain` | every sample in the surface's domain |
+| `pcurve_off_edge` | every sample lifts onto the edge's curve at the same parameter (onto the vertex, for a collapsed edge) |
+| `period_jump` | no two consecutive samples 0.9 of a period apart (Edgeuse 7, the pin's threshold) |
+| `dog_leg` | at a pole, a pcurve only arrives or leaves: samples at the pole near an end keep the end's `u` (Edgeuse 20); 10 probes at `2^-j` of the interval toward each pole end catch a leg shorter than a segment |
+| `pole_not_vertex` | no interior sample at a pole when neither end is there (Face 24) |
+| `loop_open_in_uv` | each use ends where the next starts in uv, within the two ends' budgets over the surface's larger speed there |
+| `loop_orientation` | loop 0 counter-clockwise from the front, the others clockwise (shoelace on the samples) |
+| `face_wraps` | the loops span at most a period in each closed direction |
+
+Poles are the sphere's two and the cone's apex. A NURBS surface's collapsed rows are not found yet.
+
+**T7** is `scx_testkit::topology`: a body as plain incidence data (indices, senses, sides), with
+`violations` (every failed invariant, sorted), `euler` and `genus` per shell, and the pole and
+seam predicates `jumps`, `dog_leg` and `passes_pole` on dense uv samples. It is written with maps
+and a breadth-first search where the library uses sorted arrays and disjoint sets. The tests
+adapt each draft to it and require agreement on every body: the structure is refused exactly when
+the oracle finds a violation, and the cause is among them. T6 is not needed yet: every pcurve in
+the tests is exact, and the lift check compares at the edge's own parameter.
+
+Decisions, each with the case for and against:
+
+- **The whole body is checked, not the touched part** (01 §2.3 says touched).
+  - *For:* touched needs the draft's events, which are BR3's; until then the whole body is the same
+    answer, and the cost is linear (measured below).
+  - *Against:* an edit of one face in a large body pays for every face.
+  - *Change if:* BR3's events land. Then the structure pass keeps its global parts (shells,
+    regions) and the record parts run on the touched records.
+- **Distances add**: an end is within `reach(edge) + reach(vertex)` of the vertex, a lifted sample
+  within `reach(use)` of the curve, and a use's end within `reach(use) + reach(edge) +
+  reach(vertex)`. A reach is the recorded accuracy, or the zone where none is recorded.
+  - *For:* truth. The curve's end is within its reach of the true end and the vertex within its
+    own, so the two are within the sum. The pin's `tau_e + tau_v` says the same.
+  - *Against:* research 60 V1 wrote the maximum. The sum admits up to twice as much.
+  - *Change if:* the accuracies are redefined as distances to each other rather than to truth.
+- **A collapsed edge has no radial order**: its fins are not paired by the sector rule, in the
+  check or in joining a shell's pieces.
+  - *For:* a pole's single fin has its face on both sides; the rule would read that as front equal
+    to back and refuse every closed sphere and cone.
+  - *Against:* a collapsed edge with two fins from different faces is then not checked for sides.
+  - *Change if:* bodies with shared collapsed edges appear (a double cone's apex); then pair them.
+- **uv closure is strict**: the joint gap is allowed only the two ends' 3-D budgets over the
+  surface's larger speed. So a seam must be an edge used on both sides, and a pole's line must be
+  a collapsed edge's pcurve (63 §6, D8).
+  - *For:* the loop's uv polygon is then the face's trim, so orientation and wrap are well defined.
+  - *Against:* the pin accepts a loop that jumps a seam at a vertex, where the 3-D gap is zero. That
+    body is refused here.
+  - *Change if:* a writer needs it; the jump would be recorded as a uv shift on the use.
+- **Face 24 by the pole check plus closure**: a pole inside a face's interior (no edge through it)
+  is the case the shoelace and the domain catch together, since a loop round a pole on a sphere
+  must cross the pole's line, which closure allows only along a collapsed edge's pcurve.
+- **Loop 0 may turn clockwise only on a surface with an open direction** (a plane, a cylinder,
+  the cone's `v`): the face is then the surface minus holes, unbounded.
+  - *For:* BR1's sheet test and a half-space face are valid bodies.
+  - *Against:* on a plane, a closed solid's face with its loop reversed is read as an unbounded face,
+    not refused; the sides check catches the reversal only when the sides were not also swapped.
+  - *Change if:* 01 rules every face bounded; then loop 0 is always counter-clockwise.
+- **Point loops have no orientation** (a lone vertex, or a loop of collapsed edges): there is no
+  area to sign.
+- **Euler is a T7 check, not a `finish` one**: for a body that passes the record and shell checks
+  the characteristic is whatever the topology is; there is no genus to compare it with. The tests
+  assert genus 0 on the valid bodies.
+- **`finish` does not compare region kinds across a face.** Both sides solid is a non-manifold
+  interface, which 01 allows.
+
+Deferred, with where they belong:
+
+- the radial order's geometry (the pin's Edge 9, 10: fins counter-clockwise by the faces' normals);
+- inner loops inside the outer and loops not crossing (Face 37, 38): BR4's cells hold the trim;
+- a NURBS surface's poles;
+- region connectivity (Brep 18, 19);
+- the sample count: 8 segments catch a fault wider than an eighth of a use. A tighter check is
+  T6's job in the tests, and the writer's at fit time (D10).
+
+**Difftest against the pin's checker: not feasible yet.** The pin's `check_brep` reads its own
+arena, and there is no converter from an scx body to it (RE3's record path is the first). The pin's
+sphere and cone uv are in radians where ours are D13's arc parameters, so even a converter must
+remap every pcurve. Recorded for RE3: once a body can be decoded on both sides, the same bodies go
+to both checkers, with each disagreement judged against T7.
+
+**Tests.** 3 new unit tests (the pole rules on hand-made pcurves, each also judged by T7's
+dense-sample predicates) and 4 integration tests in `tests/finish.rs`: a block, a cylinder, a
+sphere and a cone finish, with genus 0 by T7; 20 structure faults each give their cause, and 10 broken bodies give 9 of the
+11 geometry causes (`dog_leg` and `pole_not_vertex` come from the unit tests); a structure fault outranks a geometry one, the lower of two ids is named, and a rerun
+gives the same cause. 4 unit tests for T7 in `scx-testkit`. BR1's tests changed in two places: a
+pending line ran between one vertex and itself (now two vertices), and a face turned over with its
+sides left alone is now refused as `sides_disagree` (the test makes a valid rewrite instead).
+
+**Cost.** Release build, best of 5 runs of 200 finishes of a cloned draft, before (BR1, references
+only) and after:
+
+| Body | BR1 | BR2 | of which structure |
+|---|---|---|---|
+| 100 blocks, 600 planar faces | 17.8 µs (0.03 µs per face) | 698 µs (1.16 µs per face) | 195 µs (0.32 µs per face) |
+| block, 6 faces | 0.20 µs | 6.9 µs | 1.7 µs |
+| cylinder, 3 faces | 0.07 µs | 4.0 µs | 0.5 µs |
+| sphere, 1 face | 0.05 µs | 6.0 µs | 0.3 µs |
+| cone, 2 faces | 0.06 µs | 3.4 µs | 0.4 µs |
+
+The added work is about 1.1 µs per face, three quarters of it geometry: 8 samples per use, the
+endpoint evaluations, and on a sphere the pole probes and trigonometry. It is linear in the body, so
+a large body pays it in full on every finish until finish checks only what the draft touched
+(BR3).
+
 ## 7. `scx-record`
 
 The pin's sources are `topology/api_files`, `topology/part_file`, `topology/database_io` and
