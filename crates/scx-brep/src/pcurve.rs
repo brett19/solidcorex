@@ -69,8 +69,8 @@ pub enum PcurveWriteError {
         /// The edge.
         edge: EdgeId,
     },
-    /// The edge's curve leaves the surface: at its parameter `at` it is `miss` (mm) from
-    /// it, beyond the edge's reach.
+    /// The edge's curve leaves the surface: at its parameter `at`, the farthest sample, it is
+    /// `miss` (mm) from it, beyond the edge's reach.
     OffSurface {
         /// The edge.
         edge: EdgeId,

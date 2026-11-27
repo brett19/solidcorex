@@ -556,6 +556,24 @@ fn refusals_by_cause() {
         (ErrorKind::Refused, "pcurve_off_surface")
     );
 
+    // An edge that leaves the plane is refused even when its first sample past the
+    // tolerance is within the edge's reach: the split takes the largest miss (FU1). Here
+    // the first miss past half the zone is 0.75 zone, the last 6 zones.
+    let zone = doc.resolution().zone().mm();
+    let plane = Surface::Plane(Plane::new(f));
+    let leaving = Curve::Line(Line::new(o, x + z * (6.0 * zone)).unwrap());
+    let (a, b) = (
+        vertex(&mut d, leaving.point(0.0)),
+        vertex(&mut d, leaving.point(1.0)),
+    );
+    let e = edge(&mut d, leaving, span(0.0, 1.0), [a, b]);
+    let got = err(&d, &plane, vec![(e, FWD)]);
+    assert!(
+        matches!(got, PcurveWriteError::OffSurface { edge, at, miss }
+            if edge == e && at == 1.0 && miss > 5.0 * zone),
+        "{got:?}"
+    );
+
     // A meridian across the north pole: split it there.
     let mer = Curve::Circle(Circle::new(Frame::new(o, -y, x).unwrap(), mm(1.0), FWD).unwrap());
     let (a, b) = (

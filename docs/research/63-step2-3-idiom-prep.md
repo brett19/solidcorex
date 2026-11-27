@@ -3233,6 +3233,25 @@ committed). `main` and the branch were run back to back under the same load:
   `acos`. Then one curve point and one `uv_in` per sub-interval (at most 9 here).
 - A plain hit gains one comparison for `tol`.
 
+**FU1 (11-27): the largest miss.**
+
+*3. `NotOnSurface` reports the largest miss.* `pcurve_of` stopped at the first sample past
+`tol` and reported that one. BR5's writer splits on the miss: within the edge's reach it is
+`NeedsFit`, past it `OffSurface`. So an edge whose first sample past `tol` was within reach,
+but which left the surface farther on, came back `NeedsFit` (Unsupported) instead of
+`OffSurface` (Refused).
+
+- Now, once one sample fails, the rest are measured too and the largest miss is reported, with
+  its parameter. A NaN counts as the largest.
+- The success path does the same work as before: one `distance` per sample and nothing more.
+  The extra samples are measured only after a failure.
+- *Tests.*
+  - `not_on_surface_reports_the_largest_miss` (scx-surface): a line leaving a plane is
+    reported at its end, and a tilted circle at its middle.
+  - In `refusals_by_cause` (scx-brep `tests/pcurve.rs`): a line whose first miss past half
+    the zone is 0.75 zone and whose last is 6 zones is `OffSurface` at `t = 1`. It came back
+    `NeedsFit` before the fix.
+
 ## 5. `scx-ssi`, the analytic part
 
 The pin's sources are `intersect/surface_intersector` (`p1`-`p5`) and `adv_surface_intersector`.
