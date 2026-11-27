@@ -25,6 +25,7 @@ use crate::geom::{Operands, Side};
 use crate::{BooleanError, BooleanOp, BooleanRefusal, BooleanUnsupported, Stage, boolean};
 
 mod face_face;
+mod unsupported;
 
 fn pt(p: [f64; 3]) -> Point3 {
     Point3::new(p[0], p[1], p[2])
