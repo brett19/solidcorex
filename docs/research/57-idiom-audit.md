@@ -483,6 +483,86 @@ same files.
 - **Blast radius:** one impl. Every later crate copies it.
 - **Difftest:** unaffected. Errors are compared by variant and text.
 
+### M10. The global solver: a mutable solver object with virtual hooks
+
+Decided 11-27 while porting `geom/global_solver.rs` and `geom/solution_array.rs` (the
+pin's `SmGlobalSolver`, `SmSolution`, `SmSolutionArray`) to `scx-algo`'s `global_solve`,
+`solution` and `split_tree`. Each decision below was argued for and then against; the
+difftest is `scx-difftest/tests/diff/t_gsolve.rs`.
+
+- **The C++ shapes found:**
+  - `GlobalSolver` is a long-lived mutable object: `SolveIt` copies its arguments into
+    fields (operation, category, tolerance, `opt_vectors`, best so far), swaps the caller's
+    `SolutionArray` in and out, and keeps a recursion depth, a branch count and a cancel
+    token. The hooks (`GlobalSolve`'s virtuals) read those fields.
+  - The operation's vectors are `opt_vectors[i]`, indexed by convention per operation.
+    `OperationCategory` is a second enum derived from the first.
+  - "No best answer yet" is the sentinel `SM_BIG_DOUBLE` (1e20), reset to 0 for two of the
+    three maximising operations.
+  - `SolutionRequested` is a mode flag read deep inside `AddSortedSolution`.
+  - `Solution` is all public fields with counts beside fixed arrays
+    (`num_variables`/`parameters`, `num_objects`/`objects`).
+  - `LocalSolve` returns a bool, "needs more subdivision".
+- **Replacement:**
+  - `solve(trees, accumulator, hooks) -> Result<Accumulator, SolveError<E>>`, a pure call.
+    `SolveOptions { operation, keep, tolerance, incumbent_sq }` is the options value.
+    `Accumulator` holds the options, the best so far and the sorted solutions, and is
+    the only state a hook can change (`add_sorted`, `push`). The hooks are the trait
+    `BranchSolver<T, O, N>`: `local_solve` is required; `may_contain`, `is_ready` and
+    `split_choice` default to the module's generic tests (`may_contain`, `split_choice`,
+    free functions a hook can call). Against: a hook that needs per-solve state must carry
+    it itself. That is the point: the pin's hooks read solver fields that only `SolveIt`
+    set.
+  - `Operation` carries the vectors its generic tests read (`Rayfire { direction }`,
+    `Directed* { normal, direction }`, `PerspectiveIntersect { plane_point, normal, eye }`
+    and so on). Operations whose vectors only a hook reads carry none: the hook holds them.
+    `Goal` replaces `OperationCategory`, as a method.
+  - "No best yet" is `incumbent_sq: None`. It starts the maximising operations at 0 and
+    the others at infinity. The pin started `ProjectedMaximize` at 1e20, so it returned
+    no solution (pin defect `gsolve_projected_maximize`). Infinity also stops 1e20 from
+    culling boxes more than 1e10 apart. The skip of a solution valued `SM_BIG_DOUBLE` is
+    dropped, since no solver here makes the sentinel.
+  - `Keep { All, Best, Nodes }` replaces `SolutionRequested`. `FindAmbiguities` is unused
+    upstream and is left out.
+  - `Next { Done, Split }` replaces the bool. A split is
+    `Split { tree, order: ChildOrder }`, not `(usize, bool)`.
+  - `Solution<O>` has private counts. It is built by `point`, `range` and `nodes` with
+    const-generic arrays, then `with_objects`/`with_nodes`. `SolutionKind`, `EndClass`,
+    `Pairing`/`Prefer` and `SortKey` are enums. The object is a trait
+    (`parameter_count`, `parameter_interval`, `tolerance`) where the pin had `kind()` plus
+    a dozen defaulted geometry lookups. The geometry queries of `Solution` (`point`,
+    `point_of`) and the `SideRecord` stay with the crates that own the geometry.
+  - The traversal is an explicit stack in the order of the pin's recursion: first half
+    first, all of it. So there is no depth bound. `MAX_BRANCHES` (2^23) bounds the work, as
+    solidcore's `MAX_SOLVE_BRANCHES` did.
+  - There is no cancel token. A hook that is cancelled returns its own error, which ends
+    the solve.
+- **Corrections (results change; each is checked against brute force):**
+  - The rayfire child order reads the children of the tree being split. The pin read the
+    second tree's and failed when that was a leaf (pin defect `gsolve_rayfire`).
+  - A two-tree ordering asked of a third tree leaves its children in order. The pin
+    failed.
+  - `object_for_parameter` reads each object's own parameter count. The pin read object
+    0's kind on every pass and fell out of the loop answering object 0 (pin defect
+    `object_for_parameter`).
+- **Split from the pin's `tree.rs`:** `SplitTree<T>` is the global solver's tree: built
+  bottom up, immutable, with an item `T` per node. The spatial object tree
+  (`AddObject`/`GetObjectsInBox`) is `box_tree`. The surface neighbour searches belong to
+  the surface crate, and the span data (`BezierSpan`) to the curve crate, as their `T`.
+- **Not ported:** the `SurfaceProjectedIntersect` curve-on-surface test (it reads curves:
+  the curve crate's hook) and `PolySingleValue` (the poly solver's type).
+- **Difftest:** `t_gsolve`, 144 seeded scenarios per operation (Intersect as ranges,
+  Intersect keeping nodes, Minimize, Minimize keeping the best, Maximize,
+  ProjectedMinimize, ProjectedMaximize, Rayfire). It compares the solutions, the best
+  value and the order the leaf pairs were solved in. `gsolve_truths` checks 2,100
+  scenarios against brute force.
+- **Speed (MEASURED, 11-27):** the same hooks on both sides over 1,024 seeded scenarios,
+  trees built outside the loop, inputs through `black_box`, every field of every result
+  folded into a checksum, the two sides interleaved, 11 runs on one core, the median.
+  scx takes 0.49 to 0.51 of the pin's time on trees of up to 9 and 12 pieces (0.8 to 3.6
+  us a solve), and 0.56 to 0.63 on trees of up to 64 and 96 (37 to 126 us), but 0.91 for
+  Intersect there, whose time is in joining the ranges.
+
 ## 3. Fix when touched
 
 Each item gives where it is, the pattern, and the replacement. The blast radius is MEASURED as
