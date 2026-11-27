@@ -53,6 +53,7 @@ jobs:
       - uses: ./.github/actions/pin
       - uses: Swatinem/rust-cache@v2
       - run: cargo test -p scx-difftest
+      - run: cargo test -p scx-testkit --test nurbs -- --ignored # the full sweeps `fast` skips
 
   bench-compile:
     runs-on: ubuntu-24.04
