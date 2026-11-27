@@ -152,8 +152,8 @@ diff!(end_clamp_vector, |a: I,
 // --- Extent2d
 diff!(e2_constructors, |a: P, b: P| (
     m::extent2d::Extent2d::new(),
-    m::extent2d::Extent2d::from_point(m::v2(a)),
-    m::extent2d::Extent2d::from_points(m::v2(a), m::v2(b)),
+    m::extent2d::Extent2d::from_point(m::p2(a)),
+    m::extent2d::Extent2d::from_points(m::p2(a), m::p2(b)),
     <m::extent2d::Extent2d as Default>::default()
 ));
 diff!(e2_from_extent3d, |b: B| {
@@ -169,10 +169,13 @@ diff!(e2_init_transpose, |a: R| {
     q.transpose();
     (p, q)
 });
+diff!(e2_mid, pin_defect = crate::pin_defects::e2_mid, |a: R| {
+    m::e2(a).mid()
+});
 diff!(e2_queries, |a: R| {
     let e = m::e2(a);
     (
-        (e.mid(), e.u_min(), e.u_max(), e.v_min(), e.v_max()),
+        (e.u_min(), e.u_max(), e.v_min(), e.v_max()),
         (e.u_interval(), e.v_interval(), e.max_dimension(), e.size()),
         (
             e.x_length(),
@@ -185,13 +188,13 @@ diff!(e2_queries, |a: R| {
 });
 diff!(e2_add_point, |a: R, p: P| {
     let mut e = m::e2(a);
-    e.add_point(m::v2(p));
+    e.add_point(m::p2(p));
     e
 });
 diff!(e2_set_min_max, |a: R, p: P, q: P| {
     let (mut e, mut f) = (m::e2(a), m::e2(a));
     (
-        (e.set_min_max(m::v2(p), m::v2(q)), e),
+        (e.set_min_max(m::p2(p), m::p2(q)), e),
         (f.set_min_max_coords(p[0], p[1], q[0], q[1]), f),
     )
 });
@@ -241,7 +244,7 @@ diff!(e2_pair_tol, |a: R, b: R, t: f64| {
     )
 });
 diff!(e2_point_tol, |a: R, p: P, t: f64| {
-    let (e, p) = (m::e2(a), m::v2(p));
+    let (e, p) = (m::e2(a), m::p2(p));
     (
         (
             e.contains_point(p, t),
@@ -252,23 +255,23 @@ diff!(e2_point_tol, |a: R, p: P, t: f64| {
     )
 });
 diff!(e2_classify_point, |a: R, p: P, t: f64, w: Option<f64>| {
-    m::e2(a).classify_point(m::v2(p), t, w)
+    m::e2(a).classify_point(m::p2(p), t, w)
 });
 diff!(
     e2_contains_periodic_point,
-    |a: R, p: P, u: f64, v: f64, t: f64| m::e2(a).contains_periodic_point(m::v2(p), u, v, t)
+    |a: R, p: P, u: f64, v: f64, t: f64| m::e2(a).contains_periodic_point(m::p2(p), u, v, t)
 );
 diff!(e2_evaluate, |a: R, x: f64, y: f64| m::e2(a).evaluate(x, y));
-diff!(e2_clamp_point, |a: R, p: P| m::e2(a).clamp_point(m::v2(p)));
+diff!(e2_clamp_point, |a: R, p: P| m::e2(a).clamp_point(m::p2(p)));
 diff!(e2_clip_line, |a: R, p: P, v: P, t: f64| m::e2(a).clip_line(
-    m::v2(p),
+    m::p2(p),
     m::v2(v),
     t
 ));
 diff!(
     e2_intersect_with_infinite_line,
     |a: R, p: P, v: P, tu: Option<f64>, tv: Option<f64>| {
-        m::e2(a).intersect_with_infinite_line(m::v2(p), m::v2(v), tu, tv)
+        m::e2(a).intersect_with_infinite_line(m::p2(p), m::v2(v), tu, tv)
     }
 );
 diff!(e2_left_eval, |a: R, x: f64| (
@@ -278,7 +281,7 @@ diff!(e2_left_eval, |a: R, x: f64| (
 diff!(e2_point_map_to_domain, |a: R, p: P, b: R, sw: bool| m::e2(
     a
 )
-.point_map_to_domain(m::v2(p), &m::e2(b), sw));
+.point_map_to_domain(m::p2(p), &m::e2(b), sw));
 diff!(e2_consts, || [
     m::extent2d::SS_NONE,
     m::extent2d::SS_UMIN,
@@ -290,8 +293,8 @@ diff!(e2_consts, || [
 // --- Extent3d
 diff!(e3_constructors, |a: V, b: V| (
     m::extent3d::Extent3d::new(),
-    m::extent3d::Extent3d::from_points(m::v3(a), m::v3(b)),
-    m::extent3d::Extent3d::from_point(m::v3(a)),
+    m::extent3d::Extent3d::from_points(m::p3(a), m::p3(b)),
+    m::extent3d::Extent3d::from_point(m::p3(a)),
     <m::extent3d::Extent3d as Default>::default()
 ));
 diff!(e3_init_unbounded, |a: B| {
@@ -339,13 +342,13 @@ diff!(e3_set_intervals, |a: B, i: I| {
 });
 diff!(e3_add_point, |a: B, p: V| {
     let mut e = m::e3(a);
-    e.add_point(m::v3(p));
+    e.add_point(m::p3(p));
     e
 });
 diff!(e3_set_min_max, |a: B, p: V, q: V| {
     let (mut e, mut f) = (m::e3(a), m::e3(a));
     (
-        (e.set_min_max(m::v3(p), m::v3(q)), e),
+        (e.set_min_max(m::p3(p), m::p3(q)), e),
         (f.set_min_max_coords(p[0], p[1], p[2], q[0], q[1], q[2]), f),
     )
 });
@@ -381,12 +384,12 @@ diff!(e3_pair_tol, |a: B, b: B, t: f64| {
     )
 });
 diff!(e3_point, |a: B, p: V| m::e3(a)
-    .max_distance_to_point(m::v3(p)));
+    .max_distance_to_point(m::p3(p)));
 diff!(e3_point_tol, |a: B, p: V, t: f64| {
     let e = m::e3(a);
     (
-        e.contains_point(m::v3(p), t),
-        e.is_point_on_boundary(m::v3(p), t),
+        e.contains_point(m::p3(p), t),
+        e.is_point_on_boundary(m::p3(p), t),
     )
 });
 /// A box the pin's `is_defined` refuses: a minimum at `SM_UNDEF_DOUBLE` or a maximum at its
@@ -398,20 +401,20 @@ fn pin_undefined(a: B) -> bool {
 diff!(e3_line, |a: B, p: V, d: V| {
     let e = m::e3(a);
     (
-        e.span_along(m::v3(p), m::v3(d)),
-        e.distance_to_plane(m::v3(p), m::v3(d)),
-        (!pin_undefined(a)).then(|| e.intersect_line(m::v3(p), m::v3(d))),
+        e.span_along(m::p3(p), m::v3(d)),
+        e.distance_to_plane(m::p3(p), m::v3(d)),
+        (!pin_undefined(a)).then(|| e.intersect_line(m::p3(p), m::v3(d))),
     )
 });
 diff!(e3_line_hit_count, |a: B, p: V, d: V| (!pin_undefined(a))
     .then(|| m::e3(a)
-        .intersect_line(m::v3(p), m::v3(d))
+        .intersect_line(m::p3(p), m::v3(d))
         .map(m::extent3d::LineHit::count)));
 diff!(e3_line_tol, |a: B, p: V, d: V, t: f64| {
     let e = m::e3(a);
     (
-        e.contains_line_seg(m::v3(p), m::v3(d), t),
-        e.meets_ray(m::v3(p), m::v3(d), t),
+        e.contains_line_seg(m::p3(p), m::p3(d), t),
+        e.meets_ray(m::p3(p), m::v3(d), t),
     )
 });
 diff!(e3_expand, |a: B, d: f64| {
@@ -423,8 +426,8 @@ diff!(e3_expand, |a: B, d: f64| {
 diff!(e3_approximate_unbounded, |a: B, c: Option<V>, h: f64| {
     let e = m::e3(a);
     (
-        e.approximate_unbounded(c.map(m::v3), h),
-        e.approximate_unbounded_expanded(c.map(m::v3), h),
+        e.approximate_unbounded(c.map(m::p3), h),
+        e.approximate_unbounded_expanded(c.map(m::p3), h),
     )
 });
 

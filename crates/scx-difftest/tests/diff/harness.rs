@@ -731,9 +731,19 @@ static QUIET: Once = Once::new();
 /// test, so a stale one cannot stay.
 pub struct PinDefect<A, R> {
     pub reason: &'static str,
-    pub applies: fn(&A) -> bool,
+    pub applies: Applies<A>,
     /// `Err` with what is wrong when scx's result is not the true value.
     pub check: fn(&A, &R) -> Result<(), String>,
+}
+
+/// Which inputs a [`PinDefect`] covers.
+pub enum Applies<A> {
+    /// The inputs this predicate picks.
+    Inputs(fn(&A) -> bool),
+    /// The inputs on which scx and the pin disagree past the tolerance: where scx moved to a
+    /// different correct answer (`04-decisions`: results are validated against the truth,
+    /// not the pin), and the check holds it to that truth.
+    Disagreeing,
 }
 
 /// Run `xf` and `sf` on every case, at the default tolerance.
@@ -782,7 +792,11 @@ fn run_with<A: Args, RX: Bits, RS: Bits>(
         if ox != ox2 {
             unstable.push(format!("{c:?}\n    run 1: {ox:?}\n    run 2: {ox2:?}"));
         }
-        if let Some(d) = defect.filter(|d| (d.applies)(c)) {
+        let covered = |d: &&PinDefect<A, RX>| match d.applies {
+            Applies::Inputs(f) => f(c),
+            Applies::Disagreeing => ox != os && !tol.agree(&ox, &os),
+        };
+        if let Some(d) = defect.filter(covered) {
             applied += 1;
             let checked = catch_unwind(AssertUnwindSafe(|| (d.check)(c, &xf(c.clone()))))
                 .unwrap_or_else(|_| Err("scx panicked".to_owned()));
@@ -834,6 +848,10 @@ fn run_with<A: Args, RX: Bits, RS: Bits>(
             d.reason
         );
     }
+    // The quiet panic hook swallows the assertion's text: print the first ones first.
+    for b in bad.iter().take(3) {
+        println!("difftest {name}: differs:\n{b}");
+    }
     assert!(
         bad.is_empty(),
         "{name}: {} of {} inputs differ; first:\n{}",
@@ -846,7 +864,8 @@ fn run_with<A: Args, RX: Bits, RS: Bits>(
 /// `diff!(name, |a: T, ...| body)` runs `body` with `m` naming scx-num's modules and again
 /// with `m` naming solidcore's, on the same inputs; `diff!(name, |...| xbody, sbody)`
 /// takes the two bodies separately (for the signatures that changed);
-/// `diff!(name, pin_defect = f, |...| body)` excuses the inputs of the [`PinDefect`] `f()`.
+/// `diff!(name, pin_defect = f, |...| body)` (or `xbody, sbody`) excuses the inputs of the
+/// [`PinDefect`] `f()`.
 #[macro_export]
 macro_rules! diff {
     ($name:ident, || $body:expr) => {
@@ -859,6 +878,9 @@ macro_rules! diff {
         $crate::diff!($name, |$($a: $t),*| $body, $body);
     };
     ($name:ident, pin_defect = $d:path, |$($a:ident : $t:ty),*| $body:expr) => {
+        $crate::diff!($name, pin_defect = $d, |$($a: $t),*| $body, $body);
+    };
+    ($name:ident, pin_defect = $d:path, |$($a:ident : $t:ty),*| $xb:expr, $sb:expr) => {
         #[test]
         #[allow(unused_variables, unused_mut, clippy::redundant_closure_call)]
         fn $name() {
@@ -868,12 +890,12 @@ macro_rules! diff {
                 |($($a,)*): ($($t,)*)| {
                     #[allow(unused_imports)]
                     use $crate::facade::x as m;
-                    $body
+                    $xb
                 },
                 |($($a,)*): ($($t,)*)| {
                     #[allow(unused_imports)]
                     use $crate::facade::s as m;
-                    $body
+                    $sb
                 },
             );
         }

@@ -29,10 +29,10 @@
 )]
 
 use scx_num::interval::Ivl;
-use scx_num::interval_vector;
 use scx_num::ring::TayScalar;
 use scx_num::series::{Ser, Trunc};
 use scx_num::taylor_model::TmN;
+use scx_num::vector3d::Vec3;
 
 const CASES: usize = 20_000;
 
@@ -404,8 +404,8 @@ fn interval_vectors_enclose_exact_dot_cross_and_norm() {
     for _ in 0..CASES / 4 {
         let a: [f64; 3] = core::array::from_fn(|_| rng.operand(-60, 60));
         let b: [f64; 3] = core::array::from_fn(|_| rng.operand(-60, 60));
-        let (ia, ib) = (a.map(Ivl::from), b.map(Ivl::from));
-        let d = interval_vector::dot(ia, ib);
+        let (ia, ib) = (Vec3::from(a.map(Ivl::from)), Vec3::from(b.map(Ivl::from)));
+        let d = ia.dot(ib);
         let mut e = Exact::default();
         for i in 0..3 {
             e.add_prod(a[i], b[i]);
@@ -413,14 +413,14 @@ fn interval_vectors_enclose_exact_dot_cross_and_norm() {
         t.ok(e.ge(d.lo) && e.le(d.hi), || {
             format!("dot({a:?}, {b:?}) = {d:?}")
         });
-        let c = interval_vector::cross(ia, ib);
+        let c = ia.cross(ib).to_array();
         for (i, (p, q)) in [(1, 2), (2, 0), (0, 1)].into_iter().enumerate() {
             let v = prod(a[p], b[q]).minus(&prod(a[q], b[p]));
             t.ok(v.ge(c[i].lo) && v.le(c[i].hi), || {
                 format!("cross({a:?}, {b:?})[{i}] = {:?}", c[i])
             });
         }
-        let n = interval_vector::norm(ia);
+        let n = ia.norm();
         let mut sq = Exact::default();
         for x in a {
             sq.add_prod(x, x);

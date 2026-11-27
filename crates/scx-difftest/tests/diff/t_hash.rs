@@ -94,7 +94,7 @@ diff!(ht_voxels, |seed: usize, cnt: [f64; 3], scale: f64| {
         let rec: Rec = match op {
             0..=4 => {
                 let id = (next(&mut r) % 40) as u32;
-                let p = m::v3([q(&mut r), q(&mut r), q(&mut r)]);
+                let p = m::p3([q(&mut r), q(&mut r), q(&mut r)]);
                 let zt = [0.0, 1e-6, 1e-3, 0.1][(next(&mut r) % 4) as usize];
                 let mut upd = Vec::new();
                 let res = if next(&mut r) % 2 == 0 {
@@ -138,7 +138,7 @@ diff!(ht_voxels, |seed: usize, cnt: [f64; 3], scale: f64| {
                 }
             }
             9 => {
-                let p = m::v3([q(&mut r) * 1.3 - 0.1, q(&mut r), q(&mut r) * 0.9]);
+                let p = m::p3([q(&mut r) * 1.3 - 0.1, q(&mut r), q(&mut r) * 0.9]);
                 let i = (next(&mut r) % 70) as usize;
                 let (ix, iy, iz) = (
                     (next(&mut r) % 5) as usize,

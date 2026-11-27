@@ -344,12 +344,12 @@ impl<B: Bounds> BoxTree<B> {
 mod tests {
     use super::*;
     use scx_num::hash::Rng;
-    use scx_num::vector3d::Vec3;
+    use scx_num::vector3d::{Point3, Vec3};
 
     fn random_boxes(rng: &mut Rng, n: usize) -> Vec<Extent3d> {
         (0..n)
             .map(|_| {
-                let c = Vec3::new(
+                let c = Point3::new(
                     10.0 * rng.next_signed_unit(),
                     10.0 * rng.next_signed_unit(),
                     rng.next_signed_unit(),

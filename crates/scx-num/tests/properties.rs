@@ -23,8 +23,8 @@ use scx_num::small_matrix::{
     determinate_3x3, determinate_4x4, inverse_3x3, inverse_4x4, mult_4x4, vec_triple_product,
 };
 use scx_num::tol::zone_for_size;
-use scx_num::vector2d::Vec2;
-use scx_num::vector3d::Vec3;
+use scx_num::vector2d::Point2;
+use scx_num::vector3d::{Point3, Vec3};
 
 const CASES: usize = 2000;
 
@@ -242,7 +242,7 @@ fn translation_round_trip_is_exact() {
     let mut r = Rng::new(5);
     for _ in 0..CASES {
         let d = fvec(ivec(&mut r, 1 << 20));
-        let p = fvec(ivec(&mut r, 1 << 20));
+        let p = fvec(ivec(&mut r, 1 << 20)).to_point();
         let t = Transform::translation(d);
         let q = t.transform_point(p);
         assert_eq!(q.to_array(), (p + d).to_array());
@@ -296,9 +296,9 @@ fn boxes_bound_their_points() {
     let mut r = Rng::new(7);
     for _ in 0..CASES / 4 {
         let n = 1 + (r.next_u64() % 8) as usize;
-        let pts: Vec<Vec3> = (0..n)
+        let pts: Vec<Point3> = (0..n)
             .map(|_| {
-                Vec3::new(
+                Point3::new(
                     r.uniform(-1e3, 1e3),
                     r.uniform(-1e3, 1e3),
                     r.uniform(-1e3, 1e3),
@@ -320,8 +320,8 @@ fn boxes_bound_their_points() {
 
         let (u0, u1) = (r.uniform(-10.0, 10.0), r.uniform(-10.0, 10.0));
         let (v0, v1) = (r.uniform(-10.0, 10.0), r.uniform(-10.0, 10.0));
-        let b = Extent2d::from_points(Vec2::new(u0, v0), Vec2::new(u1, v1));
-        let p = Vec2::new(r.uniform(-12.0, 12.0), r.uniform(-12.0, 12.0));
+        let b = Extent2d::from_points(Point2::new(u0, v0), Point2::new(u1, v1));
+        let p = Point2::new(r.uniform(-12.0, 12.0), r.uniform(-12.0, 12.0));
         let away = [u0, u1].iter().all(|s| (p.x - s).abs() > 1e-6)
             && [v0, v1].iter().all(|s| (p.y - s).abs() > 1e-6);
         if away {
@@ -371,7 +371,7 @@ fn unitize_gives_a_parallel_unit_vector() {
             r.uniform(-1.0, 1.0),
             r.uniform(-1.0, 1.0),
         ) * scale;
-        let Ok(u) = v.unitize() else {
+        let Some(u) = v.normalized() else {
             continue;
         };
         let len = (u.x * u.x + u.y * u.y + u.z * u.z).sqrt();

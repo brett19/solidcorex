@@ -170,8 +170,8 @@ impl Extent2d {
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            min: Vec2::new(BIG_DOUBLE, BIG_DOUBLE),
-            max: Vec2::new(-BIG_DOUBLE, -BIG_DOUBLE),
+            min: Point2::new(BIG_DOUBLE, BIG_DOUBLE),
+            max: Point2::new(-BIG_DOUBLE, -BIG_DOUBLE),
         }
     }
 
@@ -200,8 +200,8 @@ impl Extent2d {
     #[must_use]
     pub const fn from_bounds(u_min: f64, v_min: f64, u_max: f64, v_max: f64) -> Self {
         Self {
-            min: Vec2::new(u_min, v_min),
-            max: Vec2::new(u_max, v_max),
+            min: Point2::new(u_min, v_min),
+            max: Point2::new(u_max, v_max),
         }
     }
 
@@ -210,8 +210,8 @@ impl Extent2d {
     pub fn from_extent3d(e: &Extent3d) -> Self {
         let (a, b) = (e.min(), e.max());
         Self {
-            min: Vec2::new(a.x, a.y),
-            max: Vec2::new(b.x, b.y),
+            min: Point2::new(a.x, a.y),
+            max: Point2::new(b.x, b.y),
         }
     }
 
@@ -274,8 +274,8 @@ impl Extent2d {
                 reason: "min > max",
             });
         }
-        self.min = Vec2::new(min_x, min_y);
-        self.max = Vec2::new(max_x, max_y);
+        self.min = Point2::new(min_x, min_y);
+        self.max = Point2::new(max_x, max_y);
         Ok(())
     }
 
@@ -407,10 +407,11 @@ impl Extent2d {
         self.min
     }
 
-    /// Centre, `(min + max) / 2` (`GetMid`).
+    /// Centre, `(min + max) / 2` (`GetMid`; whose guarded `Vec2` division returns the
+    /// plain sum past 2e13).
     #[must_use]
     pub fn mid(&self) -> Point2 {
-        (self.min + self.max) / 2.0
+        self.min.midpoint(self.max)
     }
 
     /// Maximum corner (`GetMax`).
@@ -483,8 +484,8 @@ impl Extent2d {
     #[must_use]
     pub fn union(&self, other: &Self) -> Self {
         Self {
-            min: Vec2::new(min2(self.min.x, other.min.x), min2(self.min.y, other.min.y)),
-            max: Vec2::new(max2(self.max.x, other.max.x), max2(self.max.y, other.max.y)),
+            min: Point2::new(min2(self.min.x, other.min.x), min2(self.min.y, other.min.y)),
+            max: Point2::new(max2(self.max.x, other.max.x), max2(self.max.y, other.max.y)),
         }
     }
 
@@ -498,8 +499,8 @@ impl Extent2d {
             });
         }
         Ok(Self {
-            min: Vec2::new(max2(self.min.x, other.min.x), max2(self.min.y, other.min.y)),
-            max: Vec2::new(min2(self.max.x, other.max.x), min2(self.max.y, other.max.y)),
+            min: Point2::new(max2(self.min.x, other.min.x), max2(self.min.y, other.min.y)),
+            max: Point2::new(min2(self.max.x, other.max.x), min2(self.max.y, other.max.y)),
         })
     }
 
@@ -702,7 +703,7 @@ impl Extent2d {
             .contains_periodic_value(p.y, v_period, tol);
         (
             u.contained && v.contained,
-            Vec2::new(u.periodic_value, v.periodic_value),
+            Point2::new(u.periodic_value, v.periodic_value),
         )
     }
 
@@ -710,7 +711,7 @@ impl Extent2d {
     /// max), clamped to the extent (`Evaluate`).
     #[must_use]
     pub fn evaluate(&self, nx: f64, ny: f64) -> Point2 {
-        self.clamp_point(Vec2::new(
+        self.clamp_point(Point2::new(
             Extent1d::from_raw(self.min.x, self.max.x).evaluate(nx),
             Extent1d::from_raw(self.min.y, self.max.y).evaluate(ny),
         ))
@@ -734,7 +735,7 @@ impl Extent2d {
         if !self.contains_point(pnt, tol) {
             return Err(err());
         }
-        let n = Vec2::new(
+        let n = Point2::new(
             normalise(pnt.x - self.min.x, self.max.x - self.min.x),
             normalise(pnt.y - self.min.y, self.max.y - self.min.y),
         );
@@ -900,7 +901,7 @@ mod tests {
     use crate::math::INFINITE_PARAMETER;
 
     fn p(x: f64, y: f64) -> Point2 {
-        Vec2::new(x, y)
+        Point2::new(x, y)
     }
 
     /// `Scale` (#1765): bounded ends scale, by the V factor in y when given; an unbounded
@@ -966,7 +967,7 @@ mod tests {
         assert_eq!(e2.min(), p(2.0, 1.0));
         e2.expand_relative(1.0);
         assert_eq!((e2.min(), e2.max()), (p(-3.0, -4.0), p(12.0, 11.0)));
-        assert_eq!(e2.size(), p(15.0, 15.0));
+        assert_eq!(e2.size(), Vec2::new(15.0, 15.0));
         assert_eq!(e2.u_interval(), Extent1d::from_min_max(-3.0, 12.0));
         assert_eq!(e2.v_interval(), Extent1d::from_min_max(-4.0, 11.0));
         assert_eq!((e2.x_length(), e2.y_length()), (15.0, 15.0));
@@ -1005,7 +1006,7 @@ mod tests {
 
         assert_eq!(
             e1.is_point_on_boundary(p(1.1, 2.1), 0.2),
-            (true, p(1.0, 1.0))
+            (true, Vec2::new(1.0, 1.0))
         );
         assert!(!e1.is_point_on_boundary(p(1.1, 2.1), EFF_ZERO).0);
 
@@ -1021,15 +1022,15 @@ mod tests {
         assert_eq!(e1.inversion(p(2.0, 3.0), 0.1).unwrap(), p(0.5, 0.5));
         assert_eq!(e1.inversion(p(2.0, 3.0), EFF_ZERO).unwrap(), p(0.5, 0.5));
         assert_eq!(e1.clamp_point(p(0.0, 0.0)), p(1.0, 2.0));
-        assert_eq!(e1.clip_line(p(2.0, 3.0), p(0.0, 1.0), 4.0), 1.0);
+        assert_eq!(e1.clip_line(p(2.0, 3.0), Vec2::new(0.0, 1.0), 4.0), 1.0);
 
         let ivl = e1
-            .intersect_with_infinite_line(p(0.0, 3.1), p(1.0, 1.0), Some(0.2), None)
+            .intersect_with_infinite_line(p(0.0, 3.1), Vec2::new(1.0, 1.0), Some(0.2), None)
             .unwrap();
         assert!((ivl.min() - 0.9).abs() <= EFF_ZERO);
         assert_eq!(ivl.max(), 1.0);
         assert!(e1
-            .intersect_with_infinite_line(p(0.0, 3.1), p(1.0, 1.0), None, None)
+            .intersect_with_infinite_line(p(0.0, 3.1), Vec2::new(1.0, 1.0), None, None)
             .is_none());
 
         assert!(!e1.u_left_eval(2.5));

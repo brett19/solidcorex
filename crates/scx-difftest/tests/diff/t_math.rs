@@ -27,7 +27,7 @@ diff!(tr_translation, |d: V| m::math::Transform::translation(
 ));
 diff!(tr_default, || <m::math::Transform as Default>::default());
 diff!(tr_from_axes, |a: V, b: V, c: V, d: V| {
-    m::math::Transform::from_axes(m::v3(a), m::v3(b), m::v3(c), m::v3(d))
+    m::math::Transform::from_axes(m::v3(a), m::v3(b), m::v3(c), m::p3(d))
 });
 diff!(tr_axes, |t: M| {
     let t = m::mt(t);
@@ -35,14 +35,14 @@ diff!(tr_axes, |t: M| {
 });
 diff!(tr_concat, |a: M, b: M| m::mt(a).concat(&m::mt(b)));
 diff!(tr_transform_point, |t: M, p: V| m::mt(t)
-    .transform_point(m::v3(p)));
+    .transform_point(m::p3(p)));
 diff!(tr_transform_points, |t: M, p: V, q: V| {
     let mut pts = [p, q];
     m::mt(t).transform_points(&mut pts);
     pts
 });
 diff!(tr_transformed_box, |t: M, a: V, b: V| m::mt(t)
-    .transformed_box(m::v3(a), m::v3(b)));
+    .transformed_box(m::p3(a), m::p3(b)));
 diff!(tr_row_lengths, |t: M| m::mt(t).row_lengths());
 diff!(
     tr_is_regular,
@@ -56,38 +56,47 @@ diff!(tr_plane_motion, |t: M,
                         y: V,
                         tol: f64,
                         id: f64| m::mt(t)
-    .plane_motion(m::v3(o), m::v3(x), m::v3(y), tol, id));
-diff!(tr_orthonormal_frame, |a: V, b: V| {
-    m::math::Transform::orthonormal_frame(m::v3(a), m::v3(b))
-});
-diff!(tr_axis_squared_frame, |a: V, b: V, n: f64| {
-    m::math::Transform::axis_squared_frame(m::v3(a), m::v3(b), n)
-});
+    .plane_motion(m::p3(o), m::v3(x), m::v3(y), tol, id));
+diff!(
+    tr_orthonormal_frame,
+    pin_defect = crate::pin_defects::tr_orthonormal_frame,
+    |a: V, b: V| m::math::Transform::orthonormal_frame(m::v3(a), m::v3(b))
+);
+diff!(
+    tr_axis_squared_frame,
+    pin_defect = crate::pin_defects::tr_axis_squared_frame,
+    |a: V, b: V, n: f64| m::math::Transform::axis_squared_frame(m::v3(a), m::v3(b), n)
+);
 diff!(tr_rigid_plane_axes, |t: M, a: V, b: V| m::mt(t)
     .rigid_plane_axes(m::v3(a), m::v3(b)));
 diff!(tr_rigid_plane_through, |t: M, a: V, b: V, c: V| m::mt(t)
-    .rigid_plane_through(m::v3(a), m::v3(b), m::v3(c)));
+    .rigid_plane_through(m::p3(a), m::p3(b), m::p3(c)));
 diff!(tr_transform_vector, |t: M, v: V| m::mt(t)
     .transform_vector(m::v3(v)));
 diff!(tr_transform_line, |t: M, p: V, v: V| m::mt(t)
-    .transform_line(m::v3(p), m::v3(v)));
+    .transform_line(m::p3(p), m::v3(v)));
 diff!(tr_transform_canonical_axis, |t: M, p: V, v: V| m::mt(t)
-    .transform_canonical_axis(m::v3(p), m::v3(v)));
+    .transform_canonical_axis(m::p3(p), m::v3(v)));
 diff!(tr_pivot_displacement, |t: M, p: V| m::mt(t)
     .pivot_displacement(m::v3(p)));
-diff!(tr_rotation, |p: V, a: V, ang: f64| {
-    m::math::Transform::rotation(m::v3(p), m::v3(a), ang)
-});
+diff!(
+    tr_rotation,
+    pin_defect = crate::pin_defects::tr_rotation,
+    |p: V, a: V, ang: f64| m::math::Transform::rotation(m::p3(p), m::v3(a), ang)
+);
 diff!(tr_uniform_scaling, |p: V, f: f64| {
-    m::math::Transform::uniform_scaling(m::v3(p), f)
+    m::math::Transform::uniform_scaling(m::p3(p), f)
 });
-diff!(tr_reflection, |p: V, n: V| m::math::Transform::reflection(
-    m::v3(p),
-    m::v3(n)
-));
-diff!(tr_into_plane_frame, |p: V, x: V, y: V| {
-    m::math::Transform::into_plane_frame(m::v3(p), m::v3(x), m::v3(y))
-});
+diff!(
+    tr_reflection,
+    pin_defect = crate::pin_defects::tr_reflection,
+    |p: V, n: V| m::math::Transform::reflection(m::p3(p), m::v3(n))
+);
+diff!(
+    tr_into_plane_frame,
+    pin_defect = crate::pin_defects::tr_into_plane_frame,
+    |p: V, x: V, y: V| m::math::Transform::into_plane_frame(m::p3(p), m::v3(x), m::v3(y))
+);
 diff!(tr_inverse, |t: M| m::mt(t).inverse());
 diff!(tr_eq, |t: M, u: M| {
     let (a, b) = (m::mt(t), m::mt(u));
@@ -99,29 +108,43 @@ diff!(rect_of_aspect, |a: V,
                        c: Option<V>,
                        n: V,
                        asp: f64| {
-    m::math::rect_of_aspect(m::v3(a), m::v3(b), c.map(m::v3), m::v3(n), asp)
+    m::math::rect_of_aspect(m::p3(a), m::p3(b), c.map(m::p3), m::v3(n), asp)
 });
 diff!(
     fit_aspect,
-    |a: V, b: V, c: V, asp: f64| m::math::fit_aspect(m::v3(a), m::v3(b), m::v3(c), asp)
+    |a: V, b: V, c: V, asp: f64| m::math::fit_aspect(m::p3(a), m::p3(b), m::p3(c), asp)
 );
-diff!(offset_quad, |a: V, b: V, c: V, d: V, l: f64| {
-    m::math::offset_quad([m::v3(a), m::v3(b), m::v3(c), m::v3(d)], l)
-});
+diff!(
+    offset_quad,
+    pin_defect = crate::pin_defects::offset_quad,
+    |a: V, b: V, c: V, d: V, l: f64| {
+        m::math::offset_quad([m::p3(a), m::p3(b), m::p3(c), m::p3(d)], l)
+    }
+);
 diff!(parallelogram_point, |c: V, u: V, v: V, s: f64, t: f64| {
-    m::math::parallelogram_point(m::v3(c), m::v3(u), m::v3(v), s, t)
+    m::math::parallelogram_point(m::p3(c), m::v3(u), m::v3(v), s, t)
 });
-diff!(box_extent_along, |a: V, b: V, t: M, ax: V| {
-    m::math::box_extent_along(m::v3(a), m::v3(b), &m::mt(t), m::v3(ax))
-});
-diff!(axis_along_own_axes, |t: M, ax: V| {
-    m::math::axis_along_own_axes(&m::mt(t), m::v3(ax))
-});
-diff!(plane_offset_square_to, |t: M, o: V, n: V, ax: V| {
-    m::math::plane_offset_square_to(&m::mt(t), m::v3(o), m::v3(n), m::v3(ax))
-});
+diff!(
+    box_extent_along,
+    pin_defect = crate::pin_defects::box_extent_along,
+    |a: V, b: V, t: M, ax: V| {
+        m::math::box_extent_along(m::p3(a), m::p3(b), &m::mt(t), m::v3(ax))
+    }
+);
+diff!(
+    axis_along_own_axes,
+    pin_defect = crate::pin_defects::axis_along_own_axes,
+    |t: M, ax: V| m::math::axis_along_own_axes(&m::mt(t), m::v3(ax))
+);
+diff!(
+    plane_offset_square_to,
+    pin_defect = crate::pin_defects::plane_offset_square_to,
+    |t: M, o: V, n: V, ax: V| {
+        m::math::plane_offset_square_to(&m::mt(t), m::p3(o), m::v3(n), m::v3(ax))
+    }
+);
 diff!(centroid_and_mean_radius, |l: List<P>| {
-    let pts: Vec<_> = l.0.iter().map(|&p| m::v2(p)).collect();
+    let pts: Vec<_> = l.0.iter().map(|&p| m::p2(p)).collect();
     m::math::centroid_and_mean_radius(&pts)
 });
 /// Point sets whose distance sums overflow (the random pools do not draw them).
@@ -132,7 +155,7 @@ const CENTROID_EDGES: &[&[P]] = &[
 ];
 diff!(centroid_and_mean_radius_overflow, |i: usize| {
     CENTROID_EDGES.get(i).map(|l| {
-        let pts: Vec<_> = l.iter().map(|&p| m::v2(p)).collect();
+        let pts: Vec<_> = l.iter().map(|&p| m::p2(p)).collect();
         m::math::centroid_and_mean_radius(&pts)
     })
 });

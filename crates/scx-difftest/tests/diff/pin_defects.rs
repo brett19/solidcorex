@@ -4,7 +4,7 @@
 //! the true value instead. Each entry gives its evidence: the true value, scx's error and the
 //! pin's.
 
-use crate::harness::PinDefect;
+use crate::harness::{Applies, PinDefect};
 use scx_num::certified::Verdict;
 
 type M = [[f64; 4]; 4];
@@ -32,7 +32,7 @@ type M = [[f64; 4]; 4];
 pub fn tr_is_regular() -> PinDefect<(M, f64), Verdict> {
     PinDefect {
         reason: "the pin's scale powi(2, -1024) is 0",
-        applies: |(t, ratio)| {
+        applies: Applies::Inputs(|(t, ratio)| {
             let finite = t.iter().flatten().all(|x| x.is_finite());
             let affine = t[0][3] == 0.0 && t[1][3] == 0.0 && t[2][3] == 0.0 && t[3][3] == 1.0;
             let big = linear(t).fold(0.0_f64, |b, v| b.max(v.abs()));
@@ -41,7 +41,7 @@ pub fn tr_is_regular() -> PinDefect<(M, f64), Verdict> {
                 && ratio.is_finite()
                 && *ratio > 0.0
                 && scx_num::fmath::log2(big) == 1024.0
-        },
+        }),
         check: |(t, ratio), v| {
             // the identity but one off-diagonal entry: the only shape with a true value here
             let off: Vec<(usize, usize)> = (0..3)
@@ -99,7 +99,7 @@ type Circle = Option<([f64; 2], f64, f64)>;
 pub fn three_point_circle_2d() -> PinDefect<(P, P, P), Circle> {
     PinDefect {
         reason: "the pin's f64 circumcentre and asin sweep are ill-conditioned here",
-        applies: |&(s, e, t)| pin_ill_conditioned(s, e, t),
+        applies: Applies::Inputs(|&(s, e, t)| pin_ill_conditioned(s, e, t)),
         check: |&(s, e, t), got| {
             let want = true_circle(s, e, t);
             let tol = crate::harness::Tol::DEFAULT;
@@ -344,6 +344,642 @@ fn true_circle(s: P, e: P, t: P) -> Circle {
         minor
     };
     Some((centre, r, sweep))
+}
+
+type V = [f64; 3];
+
+/// `x² + y² + z²` as the pin sums it.
+fn square3(a: &V) -> f64 {
+    a[0] * a[0] + a[1] * a[1] + a[2] * a[2]
+}
+
+/// The direction of `a` (finite, not zero), computed with no overflow: `a` over its largest
+/// component's size, then over that one's length. Within a few units of the last place of the
+/// true unit vector.
+fn direction<const N: usize>(a: [f64; N]) -> [f64; N] {
+    let s = a.iter().fold(0.0_f64, |m, c| m.max(c.abs()));
+    let w = a.map(|c| c / s);
+    let n = w.iter().map(|c| c * c).sum::<f64>().sqrt();
+    w.map(|c| c / n)
+}
+
+/// Whether `u` is the direction of `a` to a few units of the last place.
+fn along<const N: usize>(u: [f64; N], a: [f64; N]) -> Result<(), String> {
+    let want = direction(a);
+    if u.iter()
+        .zip(want)
+        .all(|(x, w)| (x - w).abs() <= 8.0 * f64::EPSILON)
+    {
+        Ok(())
+    } else {
+        Err(format!("{u:?} is not the direction {want:?}"))
+    }
+}
+
+/// `Vec3::normalized` (the pin's `unitize`) of a vector whose squared length is not finite.
+///
+/// The pin divides by the root of the squared length: for a component not finite that is NaN
+/// and it answers `Ok` of a NaN vector; for finite components whose square overflows it divides
+/// by infinity and answers `Ok` of a zero vector (or NaN), neither a unit vector. scx answers
+/// `None` for a component not finite (no direction), and scales an overflowing vector by its
+/// largest component first, so a finite vector has its direction. The check: `None` exactly
+/// for the vectors with a component not finite, otherwise the true direction.
+pub fn v3_normalized() -> PinDefect<(V,), Option<scx_num::vector3d::UnitVec3>> {
+    PinDefect {
+        reason: "the pin's unit of an overflowing or non-finite vector is not a unit vector",
+        applies: Applies::Inputs(|(a,)| !square3(a).is_finite()),
+        check: |(a,), r| match r {
+            None if a.iter().any(|c| !c.is_finite()) => Ok(()),
+            None => Err("a finite vector has a direction".to_owned()),
+            Some(u) if a.iter().all(|c| c.is_finite()) => along(u.to_array(), *a),
+            Some(u) => Err(format!("a vector not finite has no direction, not {u:?}")),
+        },
+    }
+}
+
+/// `Vec2::normalized` (the pin's `unitize`): as [`v3_normalized`], in the plane.
+pub fn v2_normalized() -> PinDefect<([f64; 2],), Option<scx_num::vector2d::UnitVec2>> {
+    PinDefect {
+        reason: "the pin's unit of an overflowing or non-finite vector is not a unit vector",
+        applies: Applies::Inputs(|(a,)| !(a[0] * a[0] + a[1] * a[1]).is_finite()),
+        check: |(a,), r| match r {
+            None if a.iter().any(|c| !c.is_finite()) => Ok(()),
+            None => Err("a finite vector has a direction".to_owned()),
+            Some(u) if a.iter().all(|c| c.is_finite()) => along(u.to_array(), *a),
+            Some(u) => Err(format!("a vector not finite has no direction, not {u:?}")),
+        },
+    }
+}
+
+/// `make_unit_ortho_vectors(a, y_ref)`.
+///
+/// The pin unitizes as [`v3_normalized`] describes: an overflowing `a` becomes a zero vector,
+/// so no axis crosses it and the pin fails (`NoPerpendicular`); a NaN `a` gives a NaN frame;
+/// it crosses `a` with `y_ref` as given, so a `y_ref` too long overflows to a `z` whose unit
+/// is zero or NaN, which the pin answers, and one too short passes for parallel. scx: an
+/// error exactly when `a` has no direction; otherwise `x` the direction of `a`, `y` in the
+/// plane of `a` and `y_ref` on its side when `y_ref` has a direction off `a`'s line, unit
+/// and square axes and `z = x × y`.
+pub fn v3_make_unit_ortho_vectors(
+) -> PinDefect<(V, Option<V>), scx_num::Result<[scx_num::vector3d::UnitVec3; 3]>> {
+    PinDefect {
+        reason: "the pin's unit of an overflowing or non-finite vector is not a unit vector",
+        applies: Applies::Disagreeing,
+        check: |(a, b), r| {
+            if dir3(*a).is_none() {
+                return refused(r, "a vector with no direction");
+            }
+            let [x, y, z] = answer(r)?.map(|u| u.to_array());
+            frame_is(*a, *b, x, y)?;
+            near3("z", z, cross3(x, y), 8.0 * f64::EPSILON)
+        },
+    }
+}
+
+/// Within one unit of the last place of `w` (or both NaN).
+fn ulp_close(v: f64, w: f64) -> bool {
+    v == w || (v.is_nan() && w.is_nan()) || (v - w).abs() <= f64::EPSILON * w.abs()
+}
+
+/// `Extent2d::mid` of a box whose corner sum overflows the pin's guarded divide.
+///
+/// The pin forms `(min + max) / 2` with a divide that returns the plain sum when it would
+/// overflow, so the mid of `[1e20, 1e20]` is `2e20`, outside the box. scx takes the midpoint
+/// of each interval. The check: each coordinate is `min/2 + max/2` to an ulp.
+pub fn e2_mid() -> PinDefect<([f64; 4],), scx_num::vector2d::Point2> {
+    PinDefect {
+        reason: "the pin's guarded divide answers the corner sum, not the mid, for large boxes",
+        applies: Applies::Disagreeing,
+        check: |(a,), p| {
+            let (x, y) = (a[0] * 0.5 + a[2] * 0.5, a[1] * 0.5 + a[3] * 0.5);
+            if ulp_close(p.x, x) && ulp_close(p.y, y) {
+                Ok(())
+            } else {
+                Err(format!("mid {p:?} is not ({x}, {y})"))
+            }
+        },
+    }
+}
+
+// The truths below cover inputs on which scx and the pin disagree past the tolerance
+// (`Applies::Disagreeing`): nearly all are vectors of `1e300` or `f64::MAX` scale, whose
+// squares or cross products overflow. The pin unitizes them to zero or NaN vectors (see
+// [`v3_normalized`]) and answers a frame, map or flag built on those; scx scales first and
+// answers for the true direction. Each check recomputes the answer from its definition with
+// the overflow-free [`direction`], and holds scx to a few units of the last place of it,
+// tighter than the harness's agreement tolerance, so on these inputs scx is also nearer the
+// truth than the pin.
+
+type Map = scx_num::math::Transform;
+const BASIS: [V; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+/// The length below which a vector has no direction (`EFF_ZERO`), and around it the band
+/// where scx's rounded test and this one may fall either way.
+const NO_LENGTH: f64 = 1e-12;
+
+fn finite(a: &[f64]) -> bool {
+    a.iter().all(|c| c.is_finite())
+}
+fn biggest(a: &[f64]) -> f64 {
+    a.iter().fold(0.0_f64, |m, c| m.max(c.abs()))
+}
+/// The length of `a`, with no overflow.
+fn len3(a: V) -> f64 {
+    let s = biggest(&a);
+    if s == 0.0 {
+        0.0
+    } else {
+        s * a.map(|c| c / s).iter().map(|c| c * c).sum::<f64>().sqrt()
+    }
+}
+/// The direction of `a`, if it has one: finite and at least [`NO_LENGTH`] long.
+fn dir3(a: V) -> Option<V> {
+    (finite(&a) && len3(a) >= NO_LENGTH).then(|| direction(a))
+}
+fn dot3(a: V, b: V) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+/// `p · u` for a unit `u`, at an eighth of `p` when a partial sum overflows.
+fn far_dot3(p: V, u: V) -> f64 {
+    let d = dot3(p, u);
+    if d.is_finite() {
+        d
+    } else {
+        dot3(p.map(|c| c * 0.125), u) * 8.0
+    }
+}
+fn cross3(a: V, b: V) -> V {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+fn add3(a: V, b: V) -> V {
+    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+}
+fn sub3(a: V, b: V) -> V {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+fn scale3(a: V, s: f64) -> V {
+    a.map(|c| c * s)
+}
+fn vec(a: V) -> scx_num::vector3d::Vec3 {
+    scx_num::vector3d::Vec3::from_array(a)
+}
+/// `Err` unless `u` is `w` to `tol` in every component.
+fn near3(what: &str, u: V, w: V, tol: f64) -> Result<(), String> {
+    if (0..3).all(|i| (u[i] - w[i]).abs() <= tol) {
+        Ok(())
+    } else {
+        Err(format!("{what} {u:?} is not {w:?} (to {tol:e})"))
+    }
+}
+/// `Ok` when scx refused.
+fn refused<R: std::fmt::Debug, E>(r: &Result<R, E>, why: &str) -> Result<(), String> {
+    match r {
+        Err(_) => Ok(()),
+        Ok(v) => Err(format!("{why}: no answer, not {v:?}")),
+    }
+}
+fn answer<R, E: std::fmt::Debug>(r: &Result<R, E>) -> Result<&R, String> {
+    r.as_ref()
+        .map_err(|e| format!("a true answer exists, not {e:?}"))
+}
+/// The map's linear part on the unit axes and its translation, against `lin` and `shift`.
+fn map_is(t: &Map, lin: impl Fn(V) -> V, lin_tol: f64, shift: V, tol: f64) -> Result<(), String> {
+    for e in BASIS {
+        near3(
+            "the map of an axis",
+            t.transform_vector(vec(e)).to_array(),
+            lin(e),
+            lin_tol,
+        )?;
+    }
+    let o = scx_num::vector3d::Point3::ORIGIN;
+    near3(
+        "the translation",
+        t.transform_point(o).to_array(),
+        shift,
+        tol,
+    )
+}
+
+/// `Transform::reflection(origin, normal)`: `p' = p - 2 ((p - origin)·n) n`.
+pub fn tr_reflection() -> PinDefect<(V, V), scx_num::Result<Map>> {
+    PinDefect {
+        reason: "the pin's unit of an overflowing normal is zero, so its mirror is the identity",
+        applies: Applies::Disagreeing,
+        check: |(p, n), r| {
+            let Some(d) = dir3(*n).filter(|_| finite(p)) else {
+                return refused(r, "a mirror with no normal");
+            };
+            let shift = scale3(scale3(d, far_dot3(*p, d)), 2.0);
+            if !finite(&shift) {
+                return refused(r, "a mirror too far out to represent");
+            }
+            // Within rounding of `f64::MAX` scx's unit may overflow where this one does not.
+            if r.is_err() && biggest(&shift) > (1.0 - 1e-14) * f64::MAX {
+                return Ok(());
+            }
+            let lin = |e: V| sub3(e, scale3(d, 2.0 * dot3(e, d)));
+            map_is(
+                answer(r)?,
+                lin,
+                8.0 * f64::EPSILON,
+                shift,
+                1e-14 * biggest(p),
+            )
+        },
+    }
+}
+
+/// `Transform::rotation(point, axis, angle)`: Rodrigues' formula in vector form,
+/// `R v = c v + s (k × v) + (1 - c)(k·v) k`, with `std`'s sine and cosine, about `point`.
+pub fn tr_rotation() -> PinDefect<(V, V, f64), scx_num::Result<Map>> {
+    PinDefect {
+        reason: "the pin's unit of an overflowing axis is zero, so its turn is a scaling",
+        applies: Applies::Disagreeing,
+        check: |(p, a, ang), r| {
+            let Some(k) = dir3(*a).filter(|_| finite(p) && ang.is_finite()) else {
+                return refused(r, "a turn with no axis");
+            };
+            let (s, c) = scx_num::fmath::sin_cos(*ang);
+            let rot = |v: V| {
+                let along = scale3(k, (1.0 - c) * dot3(k, v));
+                add3(add3(scale3(v, c), scale3(cross3(k, v), s)), along)
+            };
+            let near = sub3(*p, rot(*p));
+            let shift = if finite(&near) {
+                near
+            } else {
+                let q = scale3(*p, 0.125);
+                scale3(sub3(q, rot(q)), 8.0)
+            };
+            if !finite(&shift) {
+                return refused(r, "a turn too far out to represent");
+            }
+            map_is(
+                answer(r)?,
+                rot,
+                16.0 * f64::EPSILON,
+                shift,
+                1e-14 * biggest(p),
+            )
+        },
+    }
+}
+
+/// `Transform::into_plane_frame(origin, x, y)`: the unit axes `x̂`, `n = unit(x̂ × ŷ)` and
+/// `n × x̂` go to X, Z and Y, and `origin` to the origin.
+pub fn tr_into_plane_frame() -> PinDefect<(V, V, V), scx_num::Result<Map>> {
+    PinDefect {
+        reason: "the pin's unit of an overflowing axis is zero, so it finds no plane",
+        applies: Applies::Disagreeing,
+        check: |(p, x, y), r| {
+            let (Some(xh), Some(yh)) = (dir3(*x), dir3(*y)) else {
+                return refused(r, "an axis with no direction");
+            };
+            if !finite(p) {
+                return refused(r, "an origin not finite");
+            }
+            let c = cross3(xh, yh);
+            let lc = len3(c);
+            if lc < 0.5 * NO_LENGTH {
+                return refused(r, "axes along one line");
+            } else if lc < 2.0 * NO_LENGTH {
+                return Ok(());
+            }
+            let n = direction(c);
+            let yv = cross3(n, xh);
+            let shift = [-far_dot3(*p, xh), -far_dot3(*p, yv), -far_dot3(*p, n)];
+            if !finite(&shift) {
+                return refused(r, "a plane too far out to represent");
+            }
+            let tol = 16.0 * f64::EPSILON / lc;
+            let t = answer(r)?;
+            for (u, e) in [(xh, BASIS[0]), (yv, BASIS[1]), (n, BASIS[2])] {
+                near3(
+                    "the map of a frame axis",
+                    t.transform_vector(vec(u)).to_array(),
+                    e,
+                    tol,
+                )?;
+            }
+            let o = scx_num::vector3d::Point3::ORIGIN;
+            let tt = (tol + 1e-14) * biggest(p);
+            near3(
+                "the translation",
+                t.transform_point(o).to_array(),
+                shift,
+                tt,
+            )
+        },
+    }
+}
+
+/// A frame `x`, `y` for `a` and its `y` reference `b`: `x` the direction of `a`, `y` unit and
+/// square to it, and in the plane of `a` and `b` on `b`'s side when `b` has a direction not
+/// along `a`.
+fn frame_is(a: V, b: Option<V>, x: V, y: V) -> Result<(), String> {
+    along(x, a)?;
+    let tight = 8.0 * f64::EPSILON;
+    if (len3(y) - 1.0).abs() > tight || dot3(x, y).abs() > tight {
+        return Err(format!("{x:?} {y:?} are not unit and square"));
+    }
+    let Some(b) = b.and_then(dir3) else {
+        return Ok(());
+    };
+    let xt = direction(a);
+    let lc = len3(cross3(xt, b));
+    if lc < 2.0 * NO_LENGTH {
+        return Ok(());
+    }
+    let want = direction(sub3(b, scale3(xt, dot3(b, xt))));
+    near3("y", y, want, 16.0 * f64::EPSILON / lc)
+}
+
+/// `Transform::orthonormal_frame(x, y)`, `make_unit_ortho_vectors`'s first two axes.
+pub fn tr_orthonormal_frame() -> PinDefect<(V, V), scx_num::Result<[scx_num::vector3d::Vec3; 2]>> {
+    PinDefect {
+        reason: "the pin's unit of an overflowing vector is zero, so it finds no perpendicular",
+        applies: Applies::Disagreeing,
+        check: |(a, b), r| {
+            if dir3(*a).is_none() {
+                return refused(r, "a vector with no direction");
+            }
+            let [x, y] = answer(r)?.map(|v| v.to_array());
+            frame_is(*a, Some(*b), x, y)
+        },
+    }
+}
+
+/// `Transform::axis_squared_frame(x, y, noise)`: each axis with its coordinates below `noise`
+/// dropped, made unit; none when an axis has no direction once cleaned or the two are along
+/// one line.
+pub fn tr_axis_squared_frame() -> PinDefect<(V, V, f64), Option<[scx_num::vector3d::Vec3; 2]>> {
+    PinDefect {
+        reason: "the pin's unit of an overflowing axis is zero, so it finds no frame",
+        applies: Applies::Disagreeing,
+        check: |(x, y, noise), r| {
+            let clean = |v: V| v.map(|c| if c.abs() < *noise { 0.0 } else { c });
+            let ok = finite(x) && finite(y) && noise.is_finite() && *noise >= 0.0;
+            let (Some(xc), Some(yc)) = (dir3(clean(*x)), dir3(clean(*y))) else {
+                return r.map_or(Ok(()), |f| {
+                    Err(format!("an axis has no direction, not {f:?}"))
+                });
+            };
+            let lc = len3(cross3(xc, yc));
+            if !ok || lc < 0.5 * NO_LENGTH {
+                return r.map_or(Ok(()), |f| Err(format!("no frame, not {f:?}")));
+            } else if lc < 2.0 * NO_LENGTH {
+                return Ok(());
+            }
+            let Some([u, v]) = r else {
+                return Err("a frame exists".to_owned());
+            };
+            near3("x", u.to_array(), xc, 8.0 * f64::EPSILON)?;
+            near3("y", v.to_array(), yc, 8.0 * f64::EPSILON)
+        },
+    }
+}
+
+/// `axis` as a placed body's own frame sees it, by its definition: the unit axis through the
+/// inverse map (`Transform::inverse`, held to the pin by `tr_inverse`), unit. `Ok(None)` when
+/// that image's length is in the band about [`NO_LENGTH`] where either answer is right.
+fn own_axis(t: &M, axis: V) -> Result<Option<V>, scx_num::math::AxisRefusal> {
+    use scx_num::math::AxisRefusal as Ax;
+    if !(t.iter().all(|r| finite(r)) && finite(&axis)) {
+        return Err(Ax::NotFinite);
+    }
+    let map = Map { m: *t };
+    let inverse = map.inverse().map_err(|_| Ax::FlatMap)?;
+    let a = dir3(axis).ok_or(Ax::ZeroAxis)?;
+    let own = inverse.transform_vector(vec(a)).to_array();
+    if !finite(&own) {
+        return Err(Ax::NotFinite);
+    }
+    let l = len3(own);
+    if (0.5 * NO_LENGTH..2.0 * NO_LENGTH).contains(&l) {
+        return Ok(None);
+    }
+    dir3(own).map(Some).ok_or(Ax::ZeroAxis)
+}
+
+/// `axis_along_own_axes(t, axis)`: the own axis has a component of size `1 - 1e-9` or more.
+pub fn axis_along_own_axes() -> PinDefect<(M, V), Result<bool, scx_num::math::AxisRefusal>> {
+    PinDefect {
+        reason: "the pin's unit of an overflowing axis is zero, so it is along no own axis",
+        applies: Applies::Disagreeing,
+        check: |(t, axis), r| match (own_axis(t, *axis), r) {
+            (Err(e), Err(f)) if e == *f => Ok(()),
+            (Ok(None), _) => Ok(()),
+            (Ok(Some(own)), Ok(b)) => {
+                let top = biggest(&own);
+                if (top - (1.0 - 1e-9)).abs() < 1e-12 || *b == (top >= 1.0 - 1e-9) {
+                    Ok(())
+                } else {
+                    Err(format!("own axis {own:?}: along an own axis is {}", !b))
+                }
+            }
+            (want, got) => Err(format!("{got:?}, not {want:?}")),
+        },
+    }
+}
+
+/// `box_extent_along(min, max, t, axis)`: `Σ |dᵢ| |maxᵢ - minᵢ|` for the own axis `d`.
+pub fn box_extent_along() -> PinDefect<(V, V, M, V), Result<f64, scx_num::math::AxisRefusal>> {
+    PinDefect {
+        reason: "the pin's unit of an overflowing axis is zero, and its box ends overflow",
+        applies: Applies::Disagreeing,
+        check: |(min, max, t, axis), r| {
+            use scx_num::math::AxisRefusal as Ax;
+            let want = own_axis(t, *axis).and_then(|d| {
+                let Some(d) = d else { return Ok(None) };
+                let size = sub3(*max, *min);
+                let e: f64 = (0..3).map(|i| (size[i] * d[i]).abs()).sum();
+                if finite(min) && finite(max) && e.is_finite() {
+                    Ok(Some(e))
+                } else {
+                    Err(Ax::NotFinite)
+                }
+            });
+            match (want, r) {
+                (Err(e), Err(f)) if e == *f => Ok(()),
+                (Ok(None), _) => Ok(()),
+                (Ok(Some(e)), Ok(g)) if (e - g).abs() <= 1e-14 * e + f64::MIN_POSITIVE => Ok(()),
+                (want, got) => Err(format!("{got:?}, not {want:?}")),
+            }
+        },
+    }
+}
+
+/// An answer of the own-axis queries.
+type AxisAnswer = Result<Option<f64>, scx_num::math::AxisRefusal>;
+
+/// `plane_offset_square_to(t, origin, normal, axis)`: the placed unit normal against the
+/// unit axis, and the placed origin's offset along it.
+pub fn plane_offset_square_to() -> PinDefect<(M, V, V, V), AxisAnswer> {
+    PinDefect {
+        reason: "the pin's unit of an overflowing normal is zero, so it is square to any axis",
+        applies: Applies::Disagreeing,
+        check: |(t, o, n, axis), r| {
+            use scx_num::math::AxisRefusal as Ax;
+            let want = if !(t.iter().all(|r| finite(r)) && finite(axis)) {
+                Err(Ax::NotFinite)
+            } else if let Some(a) = dir3(*axis) {
+                let map = Map { m: *t };
+                let image = dir3(*n)
+                    .filter(|_| finite(o))
+                    .map(|n| map.transform_vector(vec(n)).to_array());
+                if image.is_some_and(|i| (0.5 * NO_LENGTH..2.0 * NO_LENGTH).contains(&len3(i))) {
+                    return Ok(());
+                }
+                match image.and_then(dir3).map(|p| len3(cross3(p, a))) {
+                    None => Ok(None),
+                    Some(c) if (c - 1e-9).abs() < 1e-15 => return Ok(()),
+                    Some(c) if c > 1e-9 => Ok(None),
+                    Some(_) => {
+                        let at = scx_num::vector3d::Point3::from_array(*o);
+                        Ok(Some((map.transform_point(at).to_array(), a)))
+                    }
+                }
+            } else {
+                Err(Ax::ZeroAxis)
+            };
+            match (want, r) {
+                (Err(e), Err(f)) if e == *f => Ok(()),
+                (Ok(None), Ok(None)) => Ok(()),
+                (Ok(Some((q, a))), Ok(Some(g))) => {
+                    let e = far_dot3(q, a);
+                    let tol = 1e-14 * biggest(&q);
+                    if (e - g).abs() <= tol || (!e.is_finite() && !g.is_finite()) {
+                        Ok(())
+                    } else {
+                        Err(format!("offset {g}, not {e}"))
+                    }
+                }
+                (want, got) => Err(format!("{got:?}, not {want:?}")),
+            }
+        },
+    }
+}
+
+type Quad = (
+    scx_num::vector3d::Vec3,
+    [scx_num::vector3d::Point3; 4],
+    [scx_num::vector3d::Point3; 4],
+);
+
+/// `offset_quad(corners, lift)`: the unit normal of the edges' units, the corners moved
+/// `lift` along and against it.
+pub fn offset_quad() -> PinDefect<(V, V, V, V, f64), Option<Quad>> {
+    PinDefect {
+        reason: "the pin's unit of an overflowing cross product is NaN, so its normal is too",
+        applies: Applies::Disagreeing,
+        check: |(a, b, c, d, lift), r| {
+            let corners = [*a, *b, *c, *d];
+            let none = |why: &str| {
+                r.as_ref()
+                    .map_or(Ok(()), |q| Err(format!("{why}, not {q:?}")))
+            };
+            if !(corners.iter().all(|p| finite(p)) && lift.is_finite()) {
+                return none("numbers not finite");
+            }
+            let (Some(du), Some(dv)) = (dir3(sub3(*b, *a)), dir3(sub3(*d, *a))) else {
+                return none("an edge with no direction");
+            };
+            let cr = cross3(du, dv);
+            let lc = len3(cr);
+            if lc < 0.5 * NO_LENGTH {
+                return none("edges along one line");
+            } else if lc < 2.0 * NO_LENGTH {
+                return Ok(());
+            }
+            let n = direction(cr);
+            let tol = 16.0 * f64::EPSILON / lc;
+            let Some((normal, up, down)) = r else {
+                return Err("a normal exists".to_owned());
+            };
+            near3("the normal", normal.to_array(), n, tol)?;
+            for (k, p) in corners.iter().enumerate() {
+                let off = scale3(n, *lift);
+                let tt = tol * lift.abs() + 2.0 * f64::EPSILON * biggest(p);
+                near3("a corner moved up", up[k].to_array(), add3(*p, off), tt)?;
+                near3("a corner moved down", down[k].to_array(), sub3(*p, off), tt)?;
+            }
+            Ok(())
+        },
+    }
+}
+
+/// `certified::unit(a)`: `None` when the square of `a` is not finite (its error bound is for
+/// the plain quotient) or `a` has no direction, else the direction.
+pub fn c_unit() -> PinDefect<(V,), Option<scx_num::vector3d::Vec3>> {
+    PinDefect {
+        reason: "the pin's unit of an overflowing vector is zero, not a unit vector",
+        applies: Applies::Disagreeing,
+        check: |(a,), r| match r {
+            None if !square3(a).is_finite() || dir3(*a).is_none() => Ok(()),
+            None => Err("a vector of finite square has its unit".to_owned()),
+            Some(u) if square3(a).is_finite() => along(u.to_array(), *a),
+            Some(u) => Err(format!(
+                "no certified unit for a square not finite, not {u:?}"
+            )),
+        },
+    }
+}
+
+/// `transform::Transform::mirror_simple(point, normal)`: the transform followed by the
+/// mirror in the plane (`x - 2 ((x - point)·n) n`), refused (unchanged) when the plane has
+/// no normal or the mirrored transform is too large to represent.
+pub fn tf_mirror_simple(
+) -> PinDefect<(crate::facade::TfR, V, V), (scx_num::Result<()>, scx_num::transform::Transform)> {
+    PinDefect {
+        reason: "the pin's unit of an overflowing normal fails, so it leaves the transform as is",
+        applies: Applies::Disagreeing,
+        check: |(tf, p, n), (r, after)| {
+            use scx_num::vector3d::{Point3, Vec3};
+            let before = scx_num::transform::Transform::new(
+                Point3::from_array(tf.0),
+                Vec3::from_array(tf.1),
+                Vec3::from_array(tf.2),
+                tf.3.map(Vec3::from_array),
+            );
+            let m = *before.matrix();
+            let rows: [V; 4] = std::array::from_fn(|i| [m[i][0], m[i][1], m[i][2]]);
+            let want = dir3(*n).filter(|_| finite(p)).and_then(|d| {
+                // `2 (v·d) d` as `((v·d) d) 2`: a row near `f64::MAX` overflows on `2 (v·d)`.
+                let lin = |v: V| sub3(v, scale3(scale3(d, far_dot3(v, d)), 2.0));
+                let x = rows[3];
+                let point = sub3(x, scale3(scale3(d, far_dot3(sub3(x, *p), d)), 2.0));
+                let out = [lin(rows[0]), lin(rows[1]), lin(rows[2]), point];
+                out.iter().all(|r| finite(r)).then_some(out)
+            });
+            let Some(out) = want else {
+                return match r {
+                    Err(_)
+                        if after.matrix().map(|r| r.map(f64::to_bits))
+                            == m.map(|r| r.map(f64::to_bits)) =>
+                    {
+                        Ok(())
+                    }
+                    Err(_) => Err("a refused mirror changed the transform".to_owned()),
+                    Ok(()) => Err(format!("no mirror to represent, not {after:?}")),
+                };
+            };
+            answer(r)?;
+            let got = *after.matrix();
+            for (i, w) in out.iter().enumerate() {
+                let tol = if i == 3 {
+                    1e-14 * (biggest(&rows[3]) + biggest(p))
+                } else {
+                    16.0 * f64::EPSILON * biggest(&rows[i])
+                };
+                near3("a mirrored row", [got[i][0], got[i][1], got[i][2]], *w, tol)?;
+            }
+            Ok(())
+        },
+    }
 }
 
 // ---- scx-p21 against solidcore-record's Part 21 reader (`t_p21`) ---------------------------

@@ -105,6 +105,13 @@ macro_rules! helpers {
         pub fn v2(a: [f64; 2]) -> vector2d::Vec2 {
             vector2d::Vec2::new(a[0], a[1])
         }
+        /// A point (the pin: the same class as a vector).
+        pub fn p3(a: [f64; 3]) -> vector3d::Point3 {
+            vector3d::Point3::new(a[0], a[1], a[2])
+        }
+        pub fn p2(a: [f64; 2]) -> vector2d::Point2 {
+            vector2d::Point2::new(a[0], a[1])
+        }
         pub fn e1(a: [f64; 2]) -> extent1d::Extent1d {
             extent1d::Extent1d::from_raw(a[0], a[1])
         }
@@ -121,7 +128,7 @@ macro_rules! helpers {
             math::Transform { m }
         }
         pub fn tf(r: &TfR) -> transform::Transform {
-            transform::Transform::new(v3(r.0), v3(r.1), v3(r.2), r.3.map(v3))
+            transform::Transform::new(p3(r.0), v3(r.1), v3(r.2), r.3.map(v3))
         }
         pub fn mat(r: &MatR) -> matrix::Matrix {
             matrix::Matrix::from_row_major(r.0, r.1, r.2.clone()).unwrap()
@@ -155,12 +162,8 @@ macro_rules! helpers {
             }
             r
         }
-        pub fn v3i(a: [[f64; 2]; 3]) -> series::V3<interval::Ivl> {
-            series::V3 {
-                x: iv(a[0]),
-                y: iv(a[1]),
-                z: iv(a[2]),
-            }
+        pub fn v3i(a: [[f64; 2]; 3]) -> SerV3<interval::Ivl> {
+            sv3(iv(a[0]), iv(a[1]), iv(a[2]))
         }
     };
 }
@@ -195,10 +198,32 @@ pub mod x {
     }
     pub use scx_algo::polynomial;
     pub use scx_num::{
-        certified, extent1d, extent2d, extent3d, interval, interval_vector, limits, matrix,
-        periodic_extent1d, ring, series, small_matrix, taylor_model, transform, vector2d, vector3d,
+        certified, extent1d, extent2d, extent3d, interval, limits, matrix, periodic_extent1d, ring,
+        series, small_matrix, taylor_model, transform, vector2d, vector3d,
     };
     helpers!();
+    /// The series' vector of scalars (the pin's `series::V3`): `Vec3<T>`.
+    pub type SerV3<T> = vector3d::Vec3<T>;
+    pub fn sv3<T>(x: T, y: T, z: T) -> SerV3<T> {
+        vector3d::Vec3::new(x, y, z)
+    }
+    /// The pin's `geom::interval_vector` functions, over arrays: `Vec3<Ivl>`'s methods.
+    pub mod interval_vector {
+        use scx_num::interval::Ivl;
+        use scx_num::vector3d::Vec3;
+        pub fn cross(a: [Ivl; 3], b: [Ivl; 3]) -> [Ivl; 3] {
+            Vec3::from(a).cross(Vec3::from(b)).to_array()
+        }
+        pub fn dot(a: [Ivl; 3], b: [Ivl; 3]) -> Ivl {
+            Vec3::from(a).dot(Vec3::from(b))
+        }
+        pub fn norm(a: [Ivl; 3]) -> Ivl {
+            Vec3::from(a).norm()
+        }
+        pub fn unit(a: [Ivl; 3]) -> Option<[Ivl; 3]> {
+            Vec3::from(a).unit().map(Vec3::to_array)
+        }
+    }
 
     /// scx's `math`, with the pin's three- and four-operand maxima and minima as the
     /// nested `max2`/`min2` that replace them.
@@ -537,6 +562,10 @@ pub mod s {
         pub use solidcore::geom::geom_utility::p2::{inverse_4x4, mult_4x4};
     }
     helpers!();
+    pub type SerV3<T> = series::V3<T>;
+    pub fn sv3<T>(x: T, y: T, z: T) -> SerV3<T> {
+        series::V3 { x, y, z }
+    }
     use crate::facade::TolR;
     /// The pin's tolerance set of recipe `r` (scx has none: `Tolerances` is retired).
     pub fn tol_set(r: &TolR) -> Tolerances {
@@ -621,20 +650,61 @@ macro_rules! series_bits {
                 }
             }
         }
-        impl<T: Bits> Bits for $m::series::V3<T> {
+    };
+}
+series_bits!(x);
+series_bits!(s);
+
+/// A point, a vector and a unit vector are one class at the pin: each by its coordinates.
+macro_rules! xyz_bits {
+    ($($t:ty),*) => {$(
+        impl Bits for $t {
             fn bits(&self, o: &mut Out) {
                 self.x.bits(o);
                 self.y.bits(o);
                 self.z.bits(o);
             }
         }
-    };
+    )*};
 }
-series_bits!(x);
-series_bits!(s);
-
-both!(vector3d::Vec3 => |e, o| { e.x.bits(o); e.y.bits(o); e.z.bits(o); });
-both!(vector2d::Vec2 => |e, o| { e.x.bits(o); e.y.bits(o); });
+macro_rules! xy_bits {
+    ($($t:ty),*) => {$(
+        impl Bits for $t {
+            fn bits(&self, o: &mut Out) {
+                self.x.bits(o);
+                self.y.bits(o);
+            }
+        }
+    )*};
+}
+impl<T: Bits> Bits for x::vector3d::Vec3<T> {
+    fn bits(&self, o: &mut Out) {
+        self.x.bits(o);
+        self.y.bits(o);
+        self.z.bits(o);
+    }
+}
+impl<T: Bits> Bits for x::vector3d::Point3<T> {
+    fn bits(&self, o: &mut Out) {
+        self.x.bits(o);
+        self.y.bits(o);
+        self.z.bits(o);
+    }
+}
+impl<T: Bits> Bits for s::series::V3<T> {
+    fn bits(&self, o: &mut Out) {
+        self.x.bits(o);
+        self.y.bits(o);
+        self.z.bits(o);
+    }
+}
+xyz_bits!(x::vector3d::UnitVec3, s::vector3d::Vec3);
+xy_bits!(
+    x::vector2d::Vec2,
+    x::vector2d::Point2,
+    x::vector2d::UnitVec2,
+    s::vector2d::Vec2
+);
 both!(extent1d::Extent1d => |e, o| { e.min().bits(o); e.max().bits(o); });
 both!(extent2d::Extent2d => |e, o| { e.min().bits(o); e.max().bits(o); });
 both!(extent3d::Extent3d => |e, o| { e.min().bits(o); e.max().bits(o); });
@@ -770,25 +840,26 @@ macro_rules! failure_bits {
 }
 
 /// An error: its class, operation, `InvalidInput` reason or typed failure (fields by bits),
-/// its `Display` text, then its cause's.
+/// its `Display` text, then its cause's. An `InvalidInput` refusal is compared by its class
+/// alone: which operation names the refusal and the words of its reason are text, free to
+/// change (a refused input is the decision compared; scx names its own operation where the
+/// pin names the helper that refused).
 impl Bits for scx_num::NumError {
     fn bits(&self, o: &mut Out) {
         use scx_num::error::NumFailure;
         o.tag(&format!("{:?}", self.kind()));
+        let scx_num::NumError::Failed { failure, .. } = self else {
+            o.tag("InvalidInput");
+            return;
+        };
         o.tag(self.operation());
-        match self {
-            scx_num::NumError::InvalidInput { reason, .. } => {
-                o.tag("InvalidInput");
-                o.tag(reason);
+        match failure {
+            NumFailure::VectorVanishes => o.tag("VectorVanishes"),
+            NumFailure::Defect { why } => {
+                o.tag("Defect");
+                o.tag(why);
             }
-            scx_num::NumError::Failed { failure, .. } => match failure {
-                NumFailure::VectorVanishes => o.tag("VectorVanishes"),
-                NumFailure::Defect { why } => {
-                    o.tag("Defect");
-                    o.tag(why);
-                }
-                f => failure_bits!(f, o, scx_num::error::NumFailure),
-            },
+            f => failure_bits!(f, o, scx_num::error::NumFailure),
         }
         o.tag(&self.to_string());
         if let Some(c) = self.cause() {
@@ -801,11 +872,12 @@ impl Bits for solidcore::SolidError {
         // The series' blend failures, by the names scx-num gives them (`NumFailure`).
         use solidcore::error::blend::{BlendFailure, SectionDegeneracy};
         o.tag(&format!("{:?}", self.kind()));
-        o.tag(self.operation());
-        if let solidcore::SolidError::InvalidInput { reason, .. } = self {
+        if let solidcore::SolidError::InvalidInput { .. } = self {
             o.tag("InvalidInput");
-            o.tag(reason);
-        } else {
+            return;
+        }
+        o.tag(self.operation());
+        {
             match (self.blend_failure(), self.geom_failure()) {
                 (Some(BlendFailure::SectionDegenerate(SectionDegeneracy::VectorVanishes)), _) => {
                     o.tag("VectorVanishes");

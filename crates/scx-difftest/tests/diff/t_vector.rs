@@ -28,10 +28,11 @@ diff!(v3_unit_axis_direction, |a: V, t: f64| m::v3(a)
 diff!(v3_from_array, |a: V| m::vector3d::Vec3::from_array(a)
     .to_array());
 diff!(v3_from_nl, |a: [f64; 4]| m::vector3d::Vec3::from_nl(a));
-diff!(v3_between, |a: V, b: V| m::vector3d::Vec3::between(
-    m::v3(a),
-    m::v3(b)
-));
+diff!(
+    v3_between,
+    |a: V, b: V| m::p3(b) - m::p3(a),
+    m::vector3d::Vec3::between(m::v3(a), m::v3(b))
+);
 /// A vector holding the pin's `SM_UNDEF_DOUBLE` sentinel, which its `IsUndef` and
 /// `operator==` test for (scx: no sentinel). Those two are compared on other vectors only.
 fn pin_unset(a: &[f64]) -> bool {
@@ -59,11 +60,15 @@ diff!(v3_lengths, |a: V| {
     )
 });
 diff!(v3_dot, |a: V, b: V| m::v3(a).dot(m::v3(b)));
-diff!(v3_distance_along, |a: V, b: V, c: V| m::v3(a)
-    .distance_along(m::v3(b), m::v3(c)));
+diff!(v3_distance_along, |a: V, b: V, c: V| m::p3(a)
+    .distance_along(m::p3(b), m::v3(c)));
 diff!(v3_cross, |a: V, b: V| m::v3(a).cross(m::v3(b)));
-diff!(v3_unitize, |a: V| m::v3(a).unitize());
-diff!(v3_unitize_or_z, |a: V| m::v3(a).unitize_or_z());
+diff!(
+    v3_unitize,
+    pin_defect = crate::pin_defects::v3_normalized,
+    |a: V| m::v3(a).normalized(),
+    m::v3(a).unitize().ok()
+);
 diff!(v3_length_and_unit, |a: V| m::v3(a).length_and_unit());
 diff!(v3_triple_product, |a: V, b: V, c: V| m::v3(a)
     .triple_product(m::v3(b), m::v3(c)));
@@ -79,37 +84,37 @@ diff!(v3_is_perpendicular_to, |a: V, b: V, t: f64| m::v3(a)
     .is_perpendicular_to(m::v3(b), t));
 diff!(v3_project_to_plane, |a: V, b: V| m::v3(a)
     .project_to_plane(m::v3(b)));
-diff!(v3_project_point_to_plane, |a: V, b: V, c: V| m::v3(a)
-    .project_point_to_plane(m::v3(b), m::v3(c)));
+diff!(v3_project_point_to_plane, |a: V, b: V, c: V| m::p3(a)
+    .project_point_to_plane(m::p3(b), m::v3(c)));
 diff!(v3_rotate_project_to_plane, |a: V, b: V, c: V| m::v3(a)
     .rotate_project_to_plane(m::v3(b), m::v3(c)));
 diff!(
     v3_rotate_project_point_to_plane,
-    |a: V, b: V, c: V, d: V| m::v3(a).rotate_project_point_to_plane(m::v3(b), m::v3(c), m::v3(d))
+    |a: V, b: V, c: V, d: V| m::p3(a).rotate_project_point_to_plane(m::p3(b), m::v3(c), m::v3(d))
 );
 diff!(
     v3_perspective_project_to_plane,
     |a: V, b: V, c: V, d: V, e: V| m::v3(a).perspective_project_to_plane(
-        m::v3(b),
-        m::v3(c),
+        m::p3(b),
+        m::p3(c),
         m::v3(d),
-        m::v3(e)
+        m::p3(e)
     )
 );
 diff!(
     v3_perspective_project_point_to_plane,
-    |a: V, b: V, c: V, d: V| m::v3(a).perspective_project_point_to_plane(
-        m::v3(b),
+    |a: V, b: V, c: V, d: V| m::p3(a).perspective_project_point_to_plane(
+        m::p3(b),
         m::v3(c),
-        m::v3(d)
+        m::p3(d)
     )
 );
 diff!(v3_distance, |a: V, b: V| (
-    m::v3(a).distance(m::v3(b)),
-    m::v3(a).distance_squared(m::v3(b))
+    m::p3(a).distance(m::p3(b)),
+    m::p3(a).distance_squared(m::p3(b))
 ));
-diff!(v3_closer_than, |a: V, t: f64, b: V| m::v3(a)
-    .closer_than(t, m::v3(b)));
+diff!(v3_closer_than, |a: V, t: f64, b: V| m::p3(a)
+    .closer_than(t, m::p3(b)));
 diff!(v3_multiply, |a: V, b: V| m::v3(a).multiply(m::v3(b)));
 diff!(v3_derivative_of_cross_product, |a: V, b: V, c: V, d: V| {
     m::v3(a).derivative_of_cross_product(m::v3(b), m::v3(c), m::v3(d))
@@ -127,10 +132,11 @@ diff!(v3_approx_eq, |a: V, b: V| (!pin_unset(&a)
 .then(|| m::v3(a).approx_eq(m::v3(b))));
 diff!(v3_is_inside_sector, |a: V, b: V, c: V, d: V| m::v3(a)
     .is_inside_sector(m::v3(b), m::v3(c), m::v3(d)));
-diff!(v3_make_unit_ortho_vectors, |a: V, b: Option<V>| m::v3(a)
-    .make_unit_ortho_vectors(b.map(m::v3)));
-diff!(v3_unit_ortho_vectors_on_failure, |a: V| m::v3(a)
-    .unit_ortho_vectors_on_failure());
+diff!(
+    v3_make_unit_ortho_vectors,
+    pin_defect = crate::pin_defects::v3_make_unit_ortho_vectors,
+    |a: V, b: Option<V>| m::v3(a).make_unit_ortho_vectors(b.map(m::v3))
+);
 diff!(v3_rotate_vec_about_axis, |a: V, b: V, t: f64| m::v3(a)
     .rotate_vec_about_axis(m::v3(b), t));
 diff!(v3_unitized_derivative, |a: V, b: V| m::v3(a)
@@ -171,7 +177,7 @@ diff!(v3_ccw_angle_between, |a: V, b: V, c: V| m::v3(a)
 diff!(v3_square_turn, |a: V, b: V, c: V| m::v3(a)
     .square_turn(m::v3(b), m::v3(c)));
 diff!(v3_is_colinear_with, |a: V, b: V, c: V, d: V| m::v3(a)
-    .is_colinear_with(m::v3(b), m::v3(c), m::v3(d)));
+    .is_colinear_with(m::v3(b), m::p3(c), m::p3(d)));
 diff!(v3_from_conversions, |a: V, b: P| (
     m::vector3d::Vec3::from(a),
     m::vector3d::Vec3::from(m::v2(b))
@@ -205,13 +211,18 @@ diff!(v2_lengths, |a: P| {
     )
 });
 diff!(v2_dot, |a: P, b: P| m::v2(a).dot(m::v2(b)));
-diff!(v2_unitize, |a: P| m::v2(a).unitize());
+diff!(
+    v2_unitize,
+    pin_defect = crate::pin_defects::v2_normalized,
+    |a: P| m::v2(a).normalized(),
+    m::v2(a).unitize().ok()
+);
 diff!(v2_distance, |a: P, b: P| (
-    m::v2(a).distance(m::v2(b)),
-    m::v2(a).distance_squared(m::v2(b))
+    m::p2(a).distance(m::p2(b)),
+    m::p2(a).distance_squared(m::p2(b))
 ));
-diff!(v2_closer_than, |a: P, t: f64, b: P| m::v2(a)
-    .closer_than(t, m::v2(b)));
+diff!(v2_closer_than, |a: P, t: f64, b: P| m::p2(a)
+    .closer_than(t, m::p2(b)));
 diff!(v2_rotate, |a: P, t: f64| m::v2(a).rotate(t));
 diff!(v2_approx, |a: P, b: P| (
     m::v2(a).approx_eq(m::v2(b)),

@@ -27,7 +27,7 @@ use core::ops::{Add, Div, Mul, Sub};
 
 use crate::error::{NumError, NumFailure, Result};
 use crate::interval::Ivl;
-use crate::math::Vec3;
+use crate::vector3d::Vec3;
 
 /// `SM_GN_MAXS`: the highest power of sigma a series holds.
 pub const MAX_S: usize = 7;
@@ -551,80 +551,6 @@ impl<T: GnScalar> InvSqrtSeries<T> {
     }
 }
 
-/// `sm_V3`: a vector of `T`s.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct V3<T> {
-    /// x.
-    pub x: T,
-    /// y.
-    pub y: T,
-    /// z.
-    pub z: T,
-}
-
-impl<T: GnScalar> V3<T> {
-    /// `sm_V3From`: `T(v.x), T(v.y), T(v.z)`.
-    #[must_use]
-    pub fn from_vec3(v: Vec3) -> Self {
-        Self {
-            x: T::of(v.x),
-            y: T::of(v.y),
-            z: T::of(v.z),
-        }
-    }
-}
-
-/// The zero interval vector `(0, 0, 0)`.
-pub const VZ: V3<Ivl> = V3 {
-    x: Ivl::new(0.0, 0.0),
-    y: Ivl::new(0.0, 0.0),
-    z: Ivl::new(0.0, 0.0),
-};
-
-/// `a + b`, componentwise in rounded intervals.
-#[inline]
-#[must_use]
-pub fn v_add(a: V3<Ivl>, b: V3<Ivl>) -> V3<Ivl> {
-    V3 {
-        x: a.x + b.x,
-        y: a.y + b.y,
-        z: a.z + b.z,
-    }
-}
-
-/// `a - b`, componentwise in rounded intervals.
-#[inline]
-#[must_use]
-pub fn v_sub(a: V3<Ivl>, b: V3<Ivl>) -> V3<Ivl> {
-    V3 {
-        x: a.x - b.x,
-        y: a.y - b.y,
-        z: a.z - b.z,
-    }
-}
-
-/// `a s`, componentwise in rounded intervals.
-#[inline]
-#[must_use]
-pub fn v_scale(a: V3<Ivl>, s: Ivl) -> V3<Ivl> {
-    V3 {
-        x: a.x * s,
-        y: a.y * s,
-        z: a.z * s,
-    }
-}
-
-/// Componentwise interval hull of `a` and `b`.
-#[inline]
-#[must_use]
-pub fn v_hull(a: V3<Ivl>, b: V3<Ivl>) -> V3<Ivl> {
-    V3 {
-        x: a.x.hull(b.x),
-        y: a.y.hull(b.y),
-        z: a.z.hull(b.z),
-    }
-}
-
 /// `sm_VSer`: a vector of series.
 #[derive(Clone, Debug, PartialEq)]
 pub struct VSer<T: GnScalar> {
@@ -635,9 +561,9 @@ pub struct VSer<T: GnScalar> {
 impl<T: GnScalar> Copy for VSer<T> where T::Storage: Copy {}
 
 impl<T: GnScalar> VSer<T> {
-    /// `sm_VSerConst`.
+    /// `sm_VSerConst`. (`sm_V3` is [`Vec3<T>`]; `sm_V3From` is `v.map(T::of)`.)
     #[must_use]
-    pub fn constant(v: V3<T>) -> Self {
+    pub fn constant(v: Vec3<T>) -> Self {
         Self {
             a: [Ser::constant(v.x), Ser::constant(v.y), Ser::constant(v.z)],
         }
@@ -875,8 +801,8 @@ mod tests {
     #[test]
     fn vector_series_dot_and_cross() {
         let tr = Trunc::new(1, 1).unwrap();
-        let e1 = VSer::<f64>::constant(V3::from_vec3(Vec3::new(1.0, 0.0, 0.0)));
-        let e2 = VSer::constant(V3::from_vec3(Vec3::new(0.0, 1.0, 0.0)));
+        let e1 = VSer::<f64>::constant(Vec3::new(1.0, 0.0, 0.0));
+        let e2 = VSer::constant(Vec3::new(0.0, 1.0, 0.0));
         let e3 = e1.cross(&e2, tr);
         assert_eq!(e3.a[2].c[0][0], 1.0);
         assert_eq!(e1.dot(&e2, tr).c[0][0], 0.0);

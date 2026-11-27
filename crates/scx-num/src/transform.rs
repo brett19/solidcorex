@@ -161,7 +161,7 @@ impl Transform {
     /// The image of the parameter origin, row 3 (`GetToOrigin`).
     #[must_use]
     pub fn to_origin(&self) -> Point3 {
-        self.get_row(3)
+        self.get_row(3).to_point()
     }
 
     /// The image of the `u` unit vector, row 0 (`GetToXAxis`).
@@ -182,10 +182,11 @@ impl Transform {
         self.get_row(2)
     }
 
-    /// The displacement, same as [`Transform::to_origin`] (`GetToDisp`).
+    /// The displacement, row 3 as a vector: [`Transform::to_origin`] less the origin
+    /// (`GetToDisp`).
     #[must_use]
-    pub fn to_disp(&self) -> Point3 {
-        self.to_origin()
+    pub fn to_disp(&self) -> Vec3 {
+        self.get_row(3)
     }
 
     /// Sets the projective column to `(0, 0, 0, 1)` (`InitExt`).
@@ -197,8 +198,8 @@ impl Transform {
     }
 
     /// Sets row 3 (`SetToOrigin`).
-    pub fn set_to_origin(&mut self, v: Vec3) {
-        self.set_row(3, v);
+    pub fn set_to_origin(&mut self, origin: Point3) {
+        self.set_row(3, origin.to_vec());
     }
 
     /// Sets row 0 (`SetToXAxis`).
@@ -218,7 +219,7 @@ impl Transform {
 
     /// Sets the displacement, row 3 (`SetToDisp`).
     pub fn set_to_disp(&mut self, v: Vec3) {
-        self.set_to_origin(v);
+        self.set_row(3, v);
     }
 
     /// Resets to the identity transform (`Init`).
@@ -240,7 +241,7 @@ impl Transform {
         z_axis: Option<Vec3>,
     ) {
         let z = z_axis.unwrap_or_else(|| x_axis.cross(y_axis));
-        self.set_to_disp(origin);
+        self.set_to_origin(origin);
         self.set_to_x_axis(x_axis);
         self.set_to_y_axis(y_axis);
         self.set_to_z_axis(z);
@@ -267,10 +268,12 @@ impl Transform {
     ///
     /// `SM_ERR` when the axes sub-matrix is singular.
     pub fn inv_transform_point(&self, p: Point3) -> Result<Point3> {
-        let mid = p - self.to_disp();
-        self.inv_transform_vector(mid).map_err(NumError::call(
-            "geom::transform::Transform::inv_transform_point",
-        ))
+        let mid = p - self.to_origin();
+        self.inv_transform_vector(mid)
+            .map(Vec3::to_point)
+            .map_err(NumError::call(
+                "geom::transform::Transform::inv_transform_point",
+            ))
     }
 
     /// Maps a projection-space vector back to parameter space through the inverse
@@ -289,7 +292,7 @@ impl Transform {
             "geom::transform::Transform::inv_transform_vector",
         ))?;
         let [i0, i1, i2] = inv.map(Vec3::from_array);
-        let t_inv = Self::new(Vec3::ZERO, i0, i1, Some(i2));
+        let t_inv = Self::new(Point3::ORIGIN, i0, i1, Some(i2));
         Ok(t_inv.transform_vector(v))
     }
 
@@ -336,17 +339,28 @@ impl Transform {
     ///
     /// # Errors
     ///
-    /// The error of [`Vec3::unitize`] for a zero normal (upstream's `SER` on
-    /// `Unitize`); the transform is then unchanged.
+    /// `InvalidInput` for a normal with no direction ([`Vec3::normalized`] is `None`:
+    /// upstream's `SER` on `Unitize`, and here also a normal not finite), or a mirrored
+    /// transform with an entry not finite (a plane far enough out that the displacement
+    /// overflows; upstream answers it); the transform is then unchanged.
     pub fn mirror_simple(&mut self, plane_pt: Point3, plane_normal: Vec3) -> Result<()> {
         // unitize Plane Normal
-        let n = plane_normal.unitize()?;
+        let n = plane_normal.normalized().ok_or(NumError::InvalidInput {
+            operation: "geom::transform::Transform::mirror_simple",
+            reason: "zero-length or non-finite normal",
+        })?;
 
         // Build mirror transform            = [1-2NxNx  -2NxNy  -2NxNz  0]
         //                                     [ -2NyNy 1-2NyNy  -2NyNz  0]
         //  with D = crPlanePt.Dot(pNormal) ;  [ -2NzNx  -2NzNy 1-2NzNz  0]
         //                                     [  2D*Nx   2D*Ny   2D*Nz  1]
-        let d = plane_pt.dot(n);
+        // The plane's offset; a partial sum past `f64::MAX` is taken at an eighth (exact).
+        let d = plane_pt.to_vec().dot(*n);
+        let d = if d.is_finite() {
+            d
+        } else {
+            (plane_pt.to_vec() * 0.125).dot(*n) * 8.0
+        };
         let mut mirror = Self::IDENTITY;
         mirror.set_to_x_axis(Vec3::new(
             1.0 - 2.0 * n.x * n.x,
@@ -363,10 +377,20 @@ impl Transform {
             -2.0 * n.z * n.y,
             1.0 - 2.0 * n.z * n.z,
         ));
-        mirror.set_to_disp(Vec3::new(2.0 * d * n.x, 2.0 * d * n.y, 2.0 * d * n.z));
+        // `(d n) 2`, not `(2 d) n`: a plane near `f64::MAX` would overflow on `2 d`.
+        mirror.set_to_disp(*n * d * 2.0);
 
-        // Mirror current transform
-        self.concat_transform(&mirror);
+        // Mirror current transform; a mirror whose numbers overflow (a plane far enough out
+        // that its displacement is too large to represent) is refused, the transform unchanged.
+        let mut mirrored = *self;
+        mirrored.concat_transform(&mirror);
+        if !mirrored.m.iter().flatten().all(|v| v.is_finite()) {
+            return Err(NumError::InvalidInput {
+                operation: "geom::transform::Transform::mirror_simple",
+                reason: "a mirror too large to represent",
+            });
+        }
+        *self = mirrored;
         Ok(())
     }
 
@@ -455,12 +479,15 @@ mod tests {
     fn v(x: f64, y: f64, z: f64) -> Vec3 {
         Vec3::new(x, y, z)
     }
+    fn p(x: f64, y: f64, z: f64) -> Point3 {
+        Point3::new(x, y, z)
+    }
 
     #[test]
     fn identity_and_canonical() {
         let t = Transform::default();
         assert_eq!(t, Transform::IDENTITY);
-        let c = Transform::new(v(1.0, 2.0, 3.0), v(1.0, 0.0, 0.0), v(0.0, 1.0, 0.0), None);
+        let c = Transform::new(p(1.0, 2.0, 3.0), v(1.0, 0.0, 0.0), v(0.0, 1.0, 0.0), None);
         assert_eq!(c.to_z_axis(), v(0.0, 0.0, 1.0));
         assert_eq!(c.to_disp(), v(1.0, 2.0, 3.0));
         assert_eq!(c.matrix()[3], [1.0, 2.0, 3.0, 1.0]);
@@ -471,34 +498,36 @@ mod tests {
 
     #[test]
     fn evaluate_and_inverse_round_trip() {
-        let t = Transform::new(v(1.0, -2.0, 0.5), v(2.0, 0.0, 0.0), v(0.0, 3.0, 1.0), None);
-        let d = t.evaluate_simple(v(0.25, -1.0, 4.0), 1).unwrap();
+        let t = Transform::new(p(1.0, -2.0, 0.5), v(2.0, 0.0, 0.0), v(0.0, 3.0, 1.0), None);
+        let d = t.evaluate_simple(p(0.25, -1.0, 4.0), 1).unwrap();
         assert_eq!(d.len(), 8);
         assert_eq!(d[4], t.to_x_axis());
         assert_eq!(d[2], t.to_y_axis());
         assert_eq!(d[1], t.to_z_axis());
-        let back = t.inv_transform_point(d[0]).unwrap();
-        assert!((back - v(0.25, -1.0, 4.0)).length() < 1e-12);
-        assert!(t.evaluate_simple(Vec3::ZERO, MAX_DERIV + 1).is_err());
+        let back = t.inv_transform_point(d[0].to_point()).unwrap();
+        assert!((back - p(0.25, -1.0, 4.0)).length() < 1e-12);
+        assert!(t.evaluate_simple(Point3::ORIGIN, MAX_DERIV + 1).is_err());
     }
 
     #[test]
     fn singular_axes_do_not_invert() {
-        let flat = Transform::new(Vec3::ZERO, v(1.0, 0.0, 0.0), v(2.0, 0.0, 0.0), None);
+        let flat = Transform::new(Point3::ORIGIN, v(1.0, 0.0, 0.0), v(2.0, 0.0, 0.0), None);
         assert!(flat.inv_transform_vector(v(1.0, 1.0, 1.0)).is_err());
-        assert!(flat.inv_evaluate_guess_point_simple(Vec3::ZERO).is_err());
+        assert!(flat
+            .inv_evaluate_guess_point_simple(Point3::ORIGIN)
+            .is_err());
     }
 
     #[test]
     fn concat_invert_scale() {
-        let mut a = Transform::new(v(1.0, 2.0, 3.0), v(0.0, 1.0, 0.0), v(0.0, 0.0, 1.0), None);
+        let mut a = Transform::new(p(1.0, 2.0, 3.0), v(0.0, 1.0, 0.0), v(0.0, 0.0, 1.0), None);
         let b = a;
         a.invert_simple().unwrap();
         a.concat_transform(&b);
         assert!(a.approx_eq(&Transform::IDENTITY));
 
         let mut s = Transform::IDENTITY;
-        s.scale_simple(v(2.0, 3.0, 4.0), Some(v(1.0, 1.0, 1.0)));
+        s.scale_simple(v(2.0, 3.0, 4.0), Some(p(1.0, 1.0, 1.0)));
         assert_eq!(s.to_disp(), v(-2.0, -3.0, -4.0));
         let mut z = Transform::IDENTITY;
         z.scale_simple(Vec3::ZERO, None);

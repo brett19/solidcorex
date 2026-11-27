@@ -99,7 +99,7 @@ use crate::math::{
     is_infinite_param, max2, min2, Point3, Vec3, BIG_DOUBLE, EFF_ZERO, EFF_ZERO_SQ,
     INFINITE_PARAMETER, PI,
 };
-use crate::vector3d::{asin, sqrt};
+use crate::vector3d::{asin, sqrt, UnitVec3};
 
 /// Classification of one interval of an extent (`SmBoundaryType`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -288,8 +288,8 @@ impl Extent3d {
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            min: Vec3::new(BIG_DOUBLE, BIG_DOUBLE, BIG_DOUBLE),
-            max: Vec3::new(-BIG_DOUBLE, -BIG_DOUBLE, -BIG_DOUBLE),
+            min: Point3::new(BIG_DOUBLE, BIG_DOUBLE, BIG_DOUBLE),
+            max: Point3::new(-BIG_DOUBLE, -BIG_DOUBLE, -BIG_DOUBLE),
         }
     }
 
@@ -328,8 +328,8 @@ impl Extent3d {
         w_max: f64,
     ) -> Self {
         Self {
-            min: Vec3::new(u_min, v_min, w_min),
-            max: Vec3::new(u_max, v_max, w_max),
+            min: Point3::new(u_min, v_min, w_min),
+            max: Point3::new(u_max, v_max, w_max),
         }
     }
 
@@ -340,12 +340,12 @@ impl Extent3d {
 
     /// Makes every interval `[-INFINITE_PARAMETER, INFINITE_PARAMETER]` (`SetUnbounded`).
     pub fn set_unbounded(&mut self) {
-        self.min = Vec3::new(
+        self.min = Point3::new(
             -INFINITE_PARAMETER,
             -INFINITE_PARAMETER,
             -INFINITE_PARAMETER,
         );
-        self.max = Vec3::new(INFINITE_PARAMETER, INFINITE_PARAMETER, INFINITE_PARAMETER);
+        self.max = Point3::new(INFINITE_PARAMETER, INFINITE_PARAMETER, INFINITE_PARAMETER);
     }
 
     /// Minimum corner (`GetMin()`).
@@ -363,8 +363,7 @@ impl Extent3d {
     /// Centre, `(max + min) / 2` (`GetMid()`).
     #[must_use]
     pub fn mid(&self) -> Point3 {
-        let s = self.max + self.min;
-        Vec3::new(s.x / 2.0, s.y / 2.0, s.z / 2.0)
+        self.max.midpoint(self.min)
     }
 
     /// Minimum x (`GetUMin`).
@@ -407,13 +406,13 @@ impl Extent3d {
     /// upstream's `SmVector3d::operator[]` (`GetMin(ULONG)`).
     #[must_use]
     pub fn min_at(&self, i: usize) -> f64 {
-        self.min.component(i)
+        self.min.to_vec().component(i)
     }
 
     /// Maximum along axis `i`; `0.0` for `i > 2` (`GetMax(ULONG)`).
     #[must_use]
     pub fn max_at(&self, i: usize) -> f64 {
-        self.max.component(i)
+        self.max.to_vec().component(i)
     }
 
     /// Largest side length (`GetMaxLength`).
@@ -510,8 +509,8 @@ impl Extent3d {
                 reason: "min > max",
             });
         }
-        self.min = Vec3::new(min_x, min_y, min_z);
-        self.max = Vec3::new(max_x, max_y, max_z);
+        self.min = Point3::new(min_x, min_y, min_z);
+        self.max = Point3::new(max_x, max_y, max_z);
         Ok(())
     }
 
@@ -562,7 +561,7 @@ impl Extent3d {
     /// the maximum (exactly), values outside `[0, 1]` extrapolate (`Evaluate`).
     #[must_use]
     pub fn evaluate(&self, nx: f64, ny: f64, nz: f64) -> Point3 {
-        Vec3::new(
+        Point3::new(
             Extent1d::from_raw(self.min.x, self.max.x).evaluate(nx),
             Extent1d::from_raw(self.min.y, self.max.y).evaluate(ny),
             Extent1d::from_raw(self.min.z, self.max.z).evaluate(nz),
@@ -573,12 +572,12 @@ impl Extent3d {
     #[must_use]
     pub fn union(&self, other: &Self) -> Self {
         Self {
-            min: Vec3::new(
+            min: Point3::new(
                 min2(self.min.x, other.min.x),
                 min2(self.min.y, other.min.y),
                 min2(self.min.z, other.min.z),
             ),
-            max: Vec3::new(
+            max: Point3::new(
                 max2(self.max.x, other.max.x),
                 max2(self.max.y, other.max.y),
                 max2(self.max.z, other.max.z),
@@ -595,12 +594,12 @@ impl Extent3d {
             });
         }
         Ok(Self {
-            min: Vec3::new(
+            min: Point3::new(
                 max2(self.min.x, other.min.x),
                 max2(self.min.y, other.min.y),
                 max2(self.min.z, other.min.z),
             ),
-            max: Vec3::new(
+            max: Point3::new(
                 min2(self.max.x, other.max.x),
                 min2(self.max.y, other.max.y),
                 min2(self.max.z, other.max.z),
@@ -677,8 +676,8 @@ impl Extent3d {
         for i in 0..3 {
             let d = direction.component(i);
             let ends = [
-                (self.min_at(i) - origin.component(i)) * d,
-                (self.max_at(i) - origin.component(i)) * d,
+                (self.min_at(i) - origin.to_vec().component(i)) * d,
+                (self.max_at(i) - origin.to_vec().component(i)) * d,
             ];
             low += ends[0].min(ends[1]);
             high += ends[0].max(ends[1]);
@@ -887,7 +886,7 @@ impl Extent3d {
                 // (`scale >= 1`, so the squared length exceeds SM_EFF_ZERO; a NaN fails the
                 // test): upstream's SM_ERR exit is unreachable and not ported, and the
                 // non-failing unitize gives the same vector here.
-                vec.unitize_or_z()
+                vec.normalized().map_or(Vec3::Z, UnitVec3::as_vec)
             } else {
                 Vec3::new(0.0, 0.0, 1.0)
             };
@@ -1032,8 +1031,8 @@ impl Extent3d {
         if self.has_negative_volume() {
             return false;
         }
-        let finite = |v: Vec3| v.x.is_finite() && v.y.is_finite() && v.z.is_finite();
-        if !finite(self.min) || !finite(self.max) || !finite(origin) || !finite(dir) {
+        if !self.min.is_finite() || !self.max.is_finite() || !origin.is_finite() || !dir.is_finite()
+        {
             return true;
         }
         let tol_pad = if tolerance.is_finite() && tolerance > 0.0 {
@@ -1047,7 +1046,7 @@ impl Extent3d {
         }
         let lo = Vec3::new(self.min.x - pad, self.min.y - pad, self.min.z - pad);
         let hi = Vec3::new(self.max.x + pad, self.max.y + pad, self.max.z + pad);
-        if !finite(lo) || !finite(hi) {
+        if !lo.is_finite() || !hi.is_finite() {
             return true;
         }
         let (mut t_lo, mut t_hi) = (0.0_f64, f64::INFINITY);
@@ -1137,7 +1136,7 @@ impl Extent3d {
         center: Option<Point3>,
         half_size: f64,
     ) -> (Self, Option<Self>) {
-        let c = center.unwrap_or(Vec3::ZERO);
+        let c = center.unwrap_or(Point3::ORIGIN);
         let types = self.boundary_types();
         let bounded = types == [BoundaryType::Bounded; 3];
         let (mut lo, mut hi) = (self.min, self.max);
@@ -1189,6 +1188,10 @@ mod tests {
     use crate::math::BOUNDED_INFINITE_PARAM;
 
     fn p(x: f64, y: f64, z: f64) -> Point3 {
+        Point3::new(x, y, z)
+    }
+
+    fn v(x: f64, y: f64, z: f64) -> Vec3 {
         Vec3::new(x, y, z)
     }
 
@@ -1220,10 +1223,10 @@ mod tests {
     fn the_span_along_a_direction_runs_from_the_lowest_corner_to_the_highest() {
         let e = Extent3d::from_points(p(-1.0, 0.0, 2.0), p(3.0, 5.0, 4.0));
         for (origin, direction, want) in [
-            (p(0.0, 0.0, 0.0), p(0.0, 0.0, 1.0), [2.0, 4.0]),
-            (p(0.0, 0.0, 0.0), p(0.6, 0.0, -0.8), [-3.8, 0.2]),
-            (p(1.0, 1.0, 1.0), p(-1.0, 0.0, 0.0), [-2.0, 2.0]),
-            (p(1.0, 1.0, 1.0), p(1.0, 2.0, 2.0), [-2.0, 16.0]),
+            (p(0.0, 0.0, 0.0), v(0.0, 0.0, 1.0), [2.0, 4.0]),
+            (p(0.0, 0.0, 0.0), v(0.6, 0.0, -0.8), [-3.8, 0.2]),
+            (p(1.0, 1.0, 1.0), v(-1.0, 0.0, 0.0), [-2.0, 2.0]),
+            (p(1.0, 1.0, 1.0), v(1.0, 2.0, 2.0), [-2.0, 16.0]),
         ] {
             let got = e.span_along(origin, direction);
             let corners = e.corners().map(|c| c.distance_along(origin, direction));
@@ -1256,10 +1259,10 @@ mod tests {
         assert_eq!((e4.min(), e4.max()), (v4, v5));
         let mut e5 = Extent3d::new();
         e5.set_min_max(v4, v5).unwrap();
-        let e6 = Extent3d::from_points(-v5, -v4);
+        let e6 = Extent3d::from_points(p(-7.0, -7.0, -7.0), p(-5.0, -5.0, -5.0));
         assert!(e5.are_disjoint(&e6, 0.0));
         let u = e5.union(&e6);
-        assert_eq!((u.min(), u.max()), (-v5, v5));
+        assert_eq!((u.min(), u.max()), (p(-7.0, -7.0, -7.0), v5));
         let e7 = Extent3d::from_points(v4, v5);
         assert_eq!(e4.intersect(&e7).unwrap(), e7);
         assert!(e5.intersect(&e6).is_err());
@@ -1291,7 +1294,7 @@ mod tests {
         let edges = e.edges();
         assert_eq!(edges[23], p(0.7, 1.9, 0.3));
         let (pts, nrm) = e.planes();
-        assert_eq!((pts[4], nrm[4]), (e.max(), p(0.0, -1.0, 0.0)));
+        assert_eq!((pts[4], nrm[4]), (e.max(), v(0.0, -1.0, 0.0)));
     }
 
     #[test]
@@ -1308,7 +1311,7 @@ mod tests {
     fn line_intersections() {
         let e = Extent3d::from_points(p(0.0, 0.0, 0.0), p(1.0, 1.0, 1.0));
         let hit = e
-            .intersect_line(p(-1.0, 0.5, 0.5), p(1.0, 0.0, 0.0))
+            .intersect_line(p(-1.0, 0.5, 0.5), v(1.0, 0.0, 0.0))
             .unwrap();
         assert_eq!(
             hit,
@@ -1318,12 +1321,12 @@ mod tests {
             }
         );
         assert_eq!(
-            e.intersect_line(p(-1.0, 2.0, 0.5), p(1.0, 0.0, 0.0))
+            e.intersect_line(p(-1.0, 2.0, 0.5), v(1.0, 0.0, 0.0))
                 .unwrap(),
             LineHit::Miss
         );
         let graze = e
-            .intersect_line(p(0.0, 0.0, 0.0), p(1.0, -1.0, 0.0))
+            .intersect_line(p(0.0, 0.0, 0.0), v(1.0, -1.0, 0.0))
             .unwrap();
         assert_eq!(graze.count(), 1);
         assert!(e.intersect_line(p(0.0, 0.0, 0.0), Vec3::ZERO).is_err());
@@ -1365,7 +1368,7 @@ mod tests {
         assert_eq!((axis, ang), (Vec3::Z, PI));
         let far = Extent3d::from_points(p(100.0, 0.0, 0.0), p(102.0, 2.0, 2.0));
         let (axis, ang) = a.cone_bound_to(&far).unwrap();
-        assert_eq!(axis, p(100.0, 0.0, 0.0));
+        assert_eq!(axis, v(100.0, 0.0, 0.0));
         assert!(ang > 0.0 && ang < 0.1);
     }
 
@@ -1378,7 +1381,7 @@ mod tests {
         assert!(e.contains_line_seg(p(0.5, 0.5, 0.5), p(9.0, 9.0, 9.0), 0.0));
         let (on, bn) = e.is_point_on_boundary(p(0.0, 1.0, 0.5), EFF_ZERO);
         assert!(on);
-        assert_eq!(bn, p(1.0, -1.0, 0.0));
+        assert_eq!(bn, v(1.0, -1.0, 0.0));
         assert!(Extent3d::from_point(p(1.0, 1.0, 1.0)).is_point_sized(EFF_ZERO));
         assert!(e.is_contained_by(&e, 0.0));
         let mut g = e;
@@ -1643,18 +1646,18 @@ mod tests {
     #[test]
     fn meets_ray_handles_hits_misses_interior_and_degenerate_boxes() {
         let b = Extent3d::from_bounds(0.0, 0.0, 0.0, 10.0, 10.0, 10.0);
-        assert!(b.meets_ray(p(5.0, 5.0, 50.0), p(0.0, 0.0, -1.0), 1e-6));
-        assert!(b.meets_ray(p(5.0, 5.0, 50.0), p(0.0, 0.0, -7.0), 1e-6));
-        assert!(b.meets_ray(p(5.0, 5.0, 5.0), p(1.0, 0.0, 0.0), 1e-6));
-        assert!(b.meets_ray(p(-10.0, -10.0, 5.0), p(1.0, 1.0, 0.0), 1e-6));
+        assert!(b.meets_ray(p(5.0, 5.0, 50.0), v(0.0, 0.0, -1.0), 1e-6));
+        assert!(b.meets_ray(p(5.0, 5.0, 50.0), v(0.0, 0.0, -7.0), 1e-6));
+        assert!(b.meets_ray(p(5.0, 5.0, 5.0), v(1.0, 0.0, 0.0), 1e-6));
+        assert!(b.meets_ray(p(-10.0, -10.0, 5.0), v(1.0, 1.0, 0.0), 1e-6));
         // Grazing just outside the exact face is still kept within the conservative tolerance pad.
-        assert!(b.meets_ray(p(10.05, 5.0, 50.0), p(0.0, 0.0, -1.0), 0.01));
-        assert!(!b.meets_ray(p(5.0, 5.0, 50.0), p(0.0, 0.0, 1.0), 1e-6));
-        assert!(!b.meets_ray(p(25.0, 5.0, 50.0), p(0.0, 0.0, -1.0), 1e-6));
-        assert!(!Extent3d::new().meets_ray(p(5.0, 5.0, 50.0), p(0.0, 0.0, -1.0), 1e-6));
+        assert!(b.meets_ray(p(10.05, 5.0, 50.0), v(0.0, 0.0, -1.0), 0.01));
+        assert!(!b.meets_ray(p(5.0, 5.0, 50.0), v(0.0, 0.0, 1.0), 1e-6));
+        assert!(!b.meets_ray(p(25.0, 5.0, 50.0), v(0.0, 0.0, -1.0), 1e-6));
+        assert!(!Extent3d::new().meets_ray(p(5.0, 5.0, 50.0), v(0.0, 0.0, -1.0), 1e-6));
         // Non-finite inputs return true conservatively.
         let nan_box = Extent3d::from_bounds(f64::NAN, 0.0, 0.0, 10.0, 10.0, 10.0);
-        assert!(nan_box.meets_ray(p(5.0, 5.0, 50.0), p(0.0, 0.0, -1.0), 1e-6));
-        assert!(b.meets_ray(p(f64::NAN, 5.0, 50.0), p(0.0, 0.0, -1.0), 1e-6));
+        assert!(nan_box.meets_ray(p(5.0, 5.0, 50.0), v(0.0, 0.0, -1.0), 1e-6));
+        assert!(b.meets_ray(p(f64::NAN, 5.0, 50.0), v(0.0, 0.0, -1.0), 1e-6));
     }
 }
