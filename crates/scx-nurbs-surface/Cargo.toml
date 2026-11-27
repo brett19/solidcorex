@@ -1,0 +1,21 @@
+# Written for solidcorex.
+[package]
+name = "scx-nurbs-surface"
+description = "solidcorex layer 2: NURBS surfaces as plain data (a flat control net on two scx-nurbs knot vectors, validated construction)"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# scx-algo (01's crate row) joins when a step uses it (evaluation batches, enclosures).
+[dependencies]
+scx-num = { path = "../scx-num" }
+scx-nurbs = { path = "../scx-nurbs" }
+
+# The exact references the unit tests check against (layers.txt [testkit]).
+[dev-dependencies]
+scx-testkit = { path = "../scx-testkit" }
+
+[lints]
+workspace = true

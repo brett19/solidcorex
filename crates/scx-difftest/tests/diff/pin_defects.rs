@@ -1402,7 +1402,9 @@ pub fn nurbs_insert_knot() -> PinDefect<(At, usize), Option<Hom>> {
     PinDefect {
         reason: "the pin builds a curve across a knot of multiplicity p + 1",
         applies: Applies::Disagreeing,
-        check: |(a, _), r| break_refused(a, r.is_some()).unwrap_or(Err("no break".to_owned())),
+        check: |(a, _), r| {
+            break_refused(a, r.is_some()).unwrap_or_else(|| Err("no break".to_owned()))
+        },
     }
 }
 
@@ -1412,7 +1414,9 @@ pub fn nurbs_split() -> PinDefect<(At,), Option<[Hom; 2]>> {
     PinDefect {
         reason: "the pin builds a curve across a knot of multiplicity p + 1",
         applies: Applies::Disagreeing,
-        check: |(a,), r| break_refused(a, r.is_some()).unwrap_or(Err("no break".to_owned())),
+        check: |(a,), r| {
+            break_refused(a, r.is_some()).unwrap_or_else(|| Err("no break".to_owned()))
+        },
     }
 }
 
@@ -1684,5 +1688,136 @@ pub fn nurbs_bezier_split() -> PinDefect<(At,), Pieces> {
             closest("left", l, None, &round(&left), tol)?;
             closest("right", rt, None, &round(&right), tol)
         },
+    }
+}
+
+// ---- scx-nurbs-surface ----------------------------------------------------------------------
+
+use crate::t_nurbs_surface::{Homog, Raw, Read};
+
+/// Why `r` is not a NURBS surface, or `None` when it is one: the definition, as scx's rulings
+/// read it.
+///
+/// A surface is a tensor product of two bases, each of a degree from 1 to 31 (the cap ruled for
+/// scx-nurbs; the pin's is 17) on finite non-decreasing knots, `n + p + 1` of them for `n`
+/// points along it, with a non-empty domain `[U[p], U[n]]`. Ends need not be clamped (the
+/// basis is defined on the domain all the same) and a knot may repeat up to `p + 1` times
+/// at the ends, `p` times inside the domain (a break, `p + 1` inside, splits it into two
+/// surfaces whose limits differ: 04, 11-27). Every control point and its `w P` are finite;
+/// every weight is finite and positive (scaling all weights leaves the surface unchanged, so
+/// there is no range beyond that).
+fn not_a_surface(r: &Raw) -> Option<String> {
+    let (p, q) = r.degrees;
+    let n = r.points.len();
+    if r.cols == 0 || n % r.cols != 0 {
+        return Some(format!("{n} points do not fill rows of {}", r.cols));
+    }
+    let rows = n / r.cols;
+    for (axis, d, k, count) in [("u", p, &r.knots_u, rows), ("v", q, &r.knots_v, r.cols)] {
+        if !(1..=31).contains(&d) {
+            return Some(format!("{axis} degree {d}"));
+        }
+        if k.len() != count + d + 1 {
+            return Some(format!(
+                "{} {axis} knots for {count} points of degree {d}",
+                k.len()
+            ));
+        }
+        if k.iter().any(|x| !x.is_finite()) || k.windows(2).any(|w| w[1] < w[0]) {
+            return Some(format!("{axis} knots not finite and non-decreasing"));
+        }
+        if count <= d {
+            return Some(format!("{count} {axis} points for degree {d}"));
+        }
+        let (low, high) = (k[d], k[count]);
+        if low == high {
+            return Some(format!("empty {axis} domain"));
+        }
+        let run = |x: f64| k.iter().filter(|&&y| y == x).count();
+        if k.iter().any(|&x| run(x) > d + 1) {
+            return Some(format!("an {axis} knot repeats more than {} times", d + 1));
+        }
+        if k.iter().any(|&x| low < x && x < high && run(x) > d) {
+            return Some(format!("a break in the {axis} domain"));
+        }
+    }
+    if r.points.iter().flatten().any(|x| !x.is_finite()) {
+        return Some("a control point is not finite".to_owned());
+    }
+    if let Some(w) = &r.weights {
+        if w.len() != n {
+            return Some(format!("{} weights for {n} points", w.len()));
+        }
+        if w.iter().any(|w| !(w.is_finite() && *w > 0.0)) {
+            return Some("a weight is not finite and positive".to_owned());
+        }
+        if r.hom().iter().flatten().any(|x| !x.is_finite()) {
+            return Some("a weighted point w P is not finite".to_owned());
+        }
+    }
+    None
+}
+
+/// Checks scx's answer on `r` against [`not_a_surface`]: refused exactly when `r` is not a
+/// surface, and built unchanged (the exact doubles given, `w P` as given) when it is. A built
+/// surface must also be one the testkit's exact model takes.
+fn surface_answer(r: &Raw, built: &Option<Read>) -> Result<(), String> {
+    match (not_a_surface(r), built) {
+        (Some(_), None) => Ok(()),
+        (Some(why), Some(_)) => Err(format!("scx built a surface from {}: {why}", r.edit)),
+        (None, None) => Err(format!("scx refused a surface ({})", r.edit)),
+        (None, Some(b)) => {
+            r.data()
+                .exact()
+                .map_err(|e| format!("the exact model refuses it: {e:?}"))?;
+            let want: Read = (
+                r.degrees.0,
+                r.degrees.1,
+                r.knots_u.clone(),
+                r.knots_v.clone(),
+                r.hom(),
+            );
+            let same = |a: &[f64], b: &[f64]| {
+                a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.to_bits() == y.to_bits())
+            };
+            let pts = |v: &[[f64; 4]]| v.iter().flatten().copied().collect::<Vec<_>>();
+            if b.0 == want.0
+                && b.1 == want.1
+                && same(&b.2, &want.2)
+                && same(&b.3, &want.3)
+                && same(&pts(&b.4), &pts(&want.4))
+            {
+                Ok(())
+            } else {
+                Err("scx's surface is not the data given".to_owned())
+            }
+        }
+    }
+}
+
+/// `NurbsSurface::new` where scx and the pin disagree on acceptance. The pin's `Surface::new`
+/// then `is_valid` refuses what is a surface: unclamped ends (`validate` wants end multiplicity
+/// exactly `p + 1`), degrees 18 to 31 (its cap is 17), and weights outside `[1e-3, 100]`
+/// (`weights_are_valid`; the surface does not change when every weight is scaled, so no
+/// range is a property of it). It builds what is not one: NaN weights (`w < 1e-3` and
+/// `w > 100` are both false), NaN interior knots (`validate` compares with `<`), infinite or
+/// NaN control points, and `w P` that overflows (nothing checks a coordinate). Truth: the
+/// definition ([`not_a_surface`]); scx must answer by it, exactly ([`surface_answer`]).
+pub fn nurbs_surface_new() -> PinDefect<(Raw,), Option<Read>> {
+    PinDefect {
+        reason: "the pin's is_valid refuses unclamped, high-degree and wide-weight surfaces, \
+                 and passes NaN weights and knots and non-finite points",
+        applies: Applies::Disagreeing,
+        check: |(r,), b| surface_answer(r, b),
+    }
+}
+
+/// `NurbsSurface::from_homogeneous`, as [`nurbs_surface_new`]: the same inputs, given as
+/// `(w P, w)`.
+pub fn nurbs_surface_from_homogeneous() -> PinDefect<(Homog,), Option<Read>> {
+    PinDefect {
+        reason: "as nurbs_surface_new",
+        applies: Applies::Disagreeing,
+        check: |(h,), b| surface_answer(&h.0, b),
     }
 }
