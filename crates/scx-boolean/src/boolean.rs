@@ -1,12 +1,14 @@
 // Written for solidcorex. Apache-2.0.
 //! [`boolean`]: the operation's signature, and the stages built so far.
 
-use scx_brep::op::{Cx, Done};
+use scx_brep::op::{Cx, Done, Report};
 use scx_brep::{Brep, FaceId};
 use scx_num::budget::{Budget, Stop};
 
+use crate::build::build;
+use crate::classify::classify;
 use crate::contact::{Span, Touched, interferences};
-use crate::error::{BooleanError, BooleanRefusal, BooleanUnsupported, Stage};
+use crate::error::{BooleanError, BooleanRefusal};
 use crate::faceface::face_face;
 use crate::geom::{Operands, Side};
 use crate::imprint::imprint;
@@ -48,8 +50,10 @@ pub enum NoItems {}
 ///   no closed form here.
 /// - [`BooleanUnsupported::Pcurve`] where a face's new loops need a pcurve with no exact
 ///   form (a fitted one).
-/// - [`BooleanUnsupported::Stage`] for operands that pass every stage built so far: the
-///   classification stage is BO4's.
+/// - [`BooleanUnsupported::NonManifold`] where the result, or an operand at a place a
+///   query reads, has an edge more than two faces bound.
+/// - [`BooleanUnsupported::Nesting`] where the result's connected sets of faces nest in a
+///   way other than cavities of one set.
 /// - [`BooleanError::Exhausted`] when `cx`'s budget runs out, [`BooleanError::Cancelled`]
 ///   when `cx.stop` is set, and [`BooleanError::Defect`] for the method's own failure.
 pub fn boolean(
@@ -58,8 +62,6 @@ pub fn boolean(
     op: BooleanOp,
     cx: &mut Cx<'_>,
 ) -> Result<Done<NoItems>, BooleanError> {
-    // Read by BO4's selection.
-    let _ = op;
     let res = cx.doc.resolution();
     for (side, body) in Side::BOTH.into_iter().zip([a, b]) {
         if body.resolution() != res {
@@ -72,10 +74,10 @@ pub fn boolean(
     let ops = Operands { a, b };
     let found = interfere(ops, &mut budget, cx.stop)?;
     let ff = face_face(ops, &found, &mut budget, cx.stop)?;
-    let _imprinted = imprint(ops, &found, &ff, *cx.doc, &mut budget, cx.stop)?;
-    Err(BooleanError::Unsupported(BooleanUnsupported::Stage(
-        Stage::Classify,
-    )))
+    let imprinted = imprint(ops, &found, &ff, *cx.doc, &mut budget, cx.stop)?;
+    let classes = classify(ops, &ff, &imprinted, &mut budget, cx.stop)?;
+    let (body, changes) = build(ops, imprinted, &classes, op, *cx.doc, &mut budget, cx.stop)?;
+    Ok(Done::new(body, changes, Report::empty(budget.used())))
 }
 
 /// Where the operands meet: stages 1 to 3, with what they read of the faces.
