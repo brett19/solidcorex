@@ -1413,17 +1413,81 @@ fn closest(
     Ok(())
 }
 
+/// The first interior knot of `a`'s curve repeated `p + 1` times: a break, where the curve
+/// is two curves (`Knots::Multiple` makes some).
+fn break_knot(a: &At) -> Option<f64> {
+    let k = &a.curve.knots;
+    k.iter()
+        .copied()
+        .filter(|&u| u > 0.0 && u < 1.0)
+        .find(|&u| k.iter().filter(|&&x| x == u).count() > a.curve.degree)
+}
+
+/// Where `a`'s curve has a break: `Some` of whether scx's refusal is right. scx refuses to
+/// build a curve with an interior knot of multiplicity `p + 1` (04, 11-27 scx-nurbs ruling
+/// 2: every curve is C0, a break is a split); the pin's `Curve::new` checks only for empty
+/// inputs and builds it, though its own `KnotVector::validate` refuses those knots. The
+/// truth: the exact curve's limits from either side of the knot differ, so the data is not
+/// one continuous curve, and scx answered `None`.
+fn break_refused(a: &At, scx_answered: bool) -> Option<Result<(), String>> {
+    let u = break_knot(a)?;
+    Some((|| {
+        if scx_answered {
+            return Err(format!("scx built a curve with a break at {u}"));
+        }
+        let truth = a.curve.exact().map_err(|e| format!("{e:?}"))?;
+        let below = truth
+            .point(u, tk::Side::Below)
+            .map_err(|e| format!("{e:?}"))?;
+        let above = truth
+            .point(u, tk::Side::Above)
+            .map_err(|e| format!("{e:?}"))?;
+        if below.rounded == above.rounded {
+            return Err(format!("the exact curve is continuous at the break {u}"));
+        }
+        Ok(())
+    })())
+}
+
+/// `NurbsCurve::insert_knot` where scx and the pin disagree: curves with a break, which scx
+/// does not build ([`break_refused`]).
+pub fn nurbs_insert_knot() -> PinDefect<(At, usize), Option<Hom>> {
+    PinDefect {
+        reason: "the pin builds a curve across a knot of multiplicity p + 1",
+        applies: Applies::Disagreeing,
+        check: |(a, _), r| {
+            break_refused(a, r.is_some()).unwrap_or_else(|| Err("no break".to_owned()))
+        },
+    }
+}
+
+/// `NurbsCurve::split` where scx and the pin disagree: curves with a break, as
+/// [`nurbs_insert_knot`].
+pub fn nurbs_split() -> PinDefect<(At,), Option<[Hom; 2]>> {
+    PinDefect {
+        reason: "the pin builds a curve across a knot of multiplicity p + 1",
+        applies: Applies::Disagreeing,
+        check: |(a,), r| {
+            break_refused(a, r.is_some()).unwrap_or_else(|| Err("no break".to_owned()))
+        },
+    }
+}
+
 /// `NurbsCurve::point` where scx and the pin disagree: at the ends of the domain.
 ///
 /// The pin's `crv_eval` refuses `u = U[p]` and `u = U[n+1]` (`basis_eval` errs there, and the
 /// upstream caller evaluated the end control points itself); scx's span search is exact and
 /// the ends evaluate. The check: scx's point is within `4 eps` of the hull's scale of the
 /// exact point (`scx_testkit::nurbs::Curve`, rationals), and no further than the pin's.
+/// Also curves with a break, which scx does not build ([`break_refused`]).
 pub fn nurbs_point() -> PinDefect<(At, bool), Option<[f64; 3]>> {
     PinDefect {
         reason: "the pin's crv_eval refuses the ends of the domain",
         applies: Applies::Disagreeing,
         check: |(a, above), r| {
+            if let Some(refused) = break_refused(a, r.is_some()) {
+                return refused;
+            }
             let truth = a.curve.exact().map_err(|e| format!("{e:?}"))?;
             let want = truth
                 .point(a.u, tk_side(*above))
@@ -1448,11 +1512,15 @@ pub fn nurbs_point() -> PinDefect<(At, bool), Option<[f64; 3]>> {
 /// both carry the cancellation of the quotient rule and land a few ulps of the largest
 /// component apart (2 inputs). The check: each order of scx's is within `1e-12 * 10^k`
 /// of the largest component of the exact derivatives, and no further than the pin's.
+/// Also curves with a break, which scx does not build ([`break_refused`]).
 pub fn nurbs_derivs() -> PinDefect<(At, bool), Option<Vec<[f64; 3]>>> {
     PinDefect {
         reason: "the pin and scx round a cancelling high derivative differently",
         applies: Applies::Disagreeing,
         check: |(a, above), r| {
+            if let Some(refused) = break_refused(a, r.is_some()) {
+                return refused;
+            }
             let truth = a.curve.exact().map_err(|e| format!("{e:?}"))?;
             let want = truth
                 .derivs(a.u, tk_side(*above), 5)
@@ -1483,12 +1551,16 @@ pub fn nurbs_derivs() -> PinDefect<(At, bool), Option<Vec<[f64; 3]>>> {
 ///
 /// The check: where scx answers, its curve is the exact elevation (knots equal, homogeneous
 /// points within `1e-12` of the hull's scale); where it refuses, the pin's answer is more
-/// than `1e-6` of the scale from the exact one.
+/// than `1e-6` of the scale from the exact one. Also curves with a break, which scx does not
+/// build ([`break_refused`]).
 pub fn nurbs_elevate() -> PinDefect<(At, usize), Option<Hom>> {
     PinDefect {
         reason: "the pin's A5.9 returns non-positive weights across near-coincident knots",
         applies: Applies::Disagreeing,
         check: |(a, times), r| {
+            if let Some(refused) = break_refused(a, r.is_some()) {
+                return refused;
+            }
             let t = times % 4;
             let want = a
                 .curve
@@ -1669,5 +1741,136 @@ pub fn nurbs_bezier_split() -> PinDefect<(At,), Pieces> {
             closest("left", l, None, &round(&left), tol)?;
             closest("right", rt, None, &round(&right), tol)
         },
+    }
+}
+
+// ---- scx-nurbs-surface ----------------------------------------------------------------------
+
+use crate::t_nurbs_surface::{Homog, Raw, Read};
+
+/// Why `r` is not a NURBS surface, or `None` when it is one: the definition, as scx's rulings
+/// read it.
+///
+/// A surface is a tensor product of two bases, each of a degree from 1 to 31 (the cap ruled for
+/// scx-nurbs; the pin's is 17) on finite non-decreasing knots, `n + p + 1` of them for `n`
+/// points along it, with a non-empty domain `[U[p], U[n]]`. Ends need not be clamped (the
+/// basis is defined on the domain all the same) and a knot may repeat up to `p + 1` times
+/// at the ends, `p` times inside the domain (a break, `p + 1` inside, splits it into two
+/// surfaces whose limits differ: 04, 11-27). Every control point and its `w P` are finite;
+/// every weight is finite and positive (scaling all weights leaves the surface unchanged, so
+/// there is no range beyond that).
+fn not_a_surface(r: &Raw) -> Option<String> {
+    let (p, q) = r.degrees;
+    let n = r.points.len();
+    if r.cols == 0 || n % r.cols != 0 {
+        return Some(format!("{n} points do not fill rows of {}", r.cols));
+    }
+    let rows = n / r.cols;
+    for (axis, d, k, count) in [("u", p, &r.knots_u, rows), ("v", q, &r.knots_v, r.cols)] {
+        if !(1..=31).contains(&d) {
+            return Some(format!("{axis} degree {d}"));
+        }
+        if k.len() != count + d + 1 {
+            return Some(format!(
+                "{} {axis} knots for {count} points of degree {d}",
+                k.len()
+            ));
+        }
+        if k.iter().any(|x| !x.is_finite()) || k.windows(2).any(|w| w[1] < w[0]) {
+            return Some(format!("{axis} knots not finite and non-decreasing"));
+        }
+        if count <= d {
+            return Some(format!("{count} {axis} points for degree {d}"));
+        }
+        let (low, high) = (k[d], k[count]);
+        if low == high {
+            return Some(format!("empty {axis} domain"));
+        }
+        let run = |x: f64| k.iter().filter(|&&y| y == x).count();
+        if k.iter().any(|&x| run(x) > d + 1) {
+            return Some(format!("an {axis} knot repeats more than {} times", d + 1));
+        }
+        if k.iter().any(|&x| low < x && x < high && run(x) > d) {
+            return Some(format!("a break in the {axis} domain"));
+        }
+    }
+    if r.points.iter().flatten().any(|x| !x.is_finite()) {
+        return Some("a control point is not finite".to_owned());
+    }
+    if let Some(w) = &r.weights {
+        if w.len() != n {
+            return Some(format!("{} weights for {n} points", w.len()));
+        }
+        if w.iter().any(|w| !(w.is_finite() && *w > 0.0)) {
+            return Some("a weight is not finite and positive".to_owned());
+        }
+        if r.hom().iter().flatten().any(|x| !x.is_finite()) {
+            return Some("a weighted point w P is not finite".to_owned());
+        }
+    }
+    None
+}
+
+/// Checks scx's answer on `r` against [`not_a_surface`]: refused exactly when `r` is not a
+/// surface, and built unchanged (the exact doubles given, `w P` as given) when it is. A built
+/// surface must also be one the testkit's exact model takes.
+fn surface_answer(r: &Raw, built: &Option<Read>) -> Result<(), String> {
+    match (not_a_surface(r), built) {
+        (Some(_), None) => Ok(()),
+        (Some(why), Some(_)) => Err(format!("scx built a surface from {}: {why}", r.edit)),
+        (None, None) => Err(format!("scx refused a surface ({})", r.edit)),
+        (None, Some(b)) => {
+            r.data()
+                .exact()
+                .map_err(|e| format!("the exact model refuses it: {e:?}"))?;
+            let want: Read = (
+                r.degrees.0,
+                r.degrees.1,
+                r.knots_u.clone(),
+                r.knots_v.clone(),
+                r.hom(),
+            );
+            let same = |a: &[f64], b: &[f64]| {
+                a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.to_bits() == y.to_bits())
+            };
+            let pts = |v: &[[f64; 4]]| v.iter().flatten().copied().collect::<Vec<_>>();
+            if b.0 == want.0
+                && b.1 == want.1
+                && same(&b.2, &want.2)
+                && same(&b.3, &want.3)
+                && same(&pts(&b.4), &pts(&want.4))
+            {
+                Ok(())
+            } else {
+                Err("scx's surface is not the data given".to_owned())
+            }
+        }
+    }
+}
+
+/// `NurbsSurface::new` where scx and the pin disagree on acceptance. The pin's `Surface::new`
+/// then `is_valid` refuses what is a surface: unclamped ends (`validate` wants end multiplicity
+/// exactly `p + 1`), degrees 18 to 31 (its cap is 17), and weights outside `[1e-3, 100]`
+/// (`weights_are_valid`; the surface does not change when every weight is scaled, so no
+/// range is a property of it). It builds what is not one: NaN weights (`w < 1e-3` and
+/// `w > 100` are both false), NaN interior knots (`validate` compares with `<`), infinite or
+/// NaN control points, and `w P` that overflows (nothing checks a coordinate). Truth: the
+/// definition ([`not_a_surface`]); scx must answer by it, exactly ([`surface_answer`]).
+pub fn nurbs_surface_new() -> PinDefect<(Raw,), Option<Read>> {
+    PinDefect {
+        reason: "the pin's is_valid refuses unclamped, high-degree and wide-weight surfaces, \
+                 and passes NaN weights and knots and non-finite points",
+        applies: Applies::Disagreeing,
+        check: |(r,), b| surface_answer(r, b),
+    }
+}
+
+/// `NurbsSurface::from_homogeneous`, as [`nurbs_surface_new`]: the same inputs, given as
+/// `(w P, w)`.
+pub fn nurbs_surface_from_homogeneous() -> PinDefect<(Homog,), Option<Read>> {
+    PinDefect {
+        reason: "as nurbs_surface_new",
+        applies: Applies::Disagreeing,
+        check: |(h,), b| surface_answer(&h.0, b),
     }
 }

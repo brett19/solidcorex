@@ -279,10 +279,16 @@ diff!(
 );
 diff!(
     nurbs_insert_knot,
+    pin_defect = pin_defects::nurbs_insert_knot,
     |a: At, times: usize| x::insert(&a, times % 4),
     s::insert(&a, times % 4)
 );
-diff!(nurbs_split, |a: At| x::split(&a), s::split(&a));
+diff!(
+    nurbs_split,
+    pin_defect = pin_defects::nurbs_split,
+    |a: At| x::split(&a),
+    s::split(&a)
+);
 diff!(
     nurbs_elevate,
     pin_defect = pin_defects::nurbs_elevate,

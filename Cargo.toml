@@ -6,6 +6,7 @@ members = [
     "crates/scx-nurbs",
     "crates/scx-algo",
     "crates/scx-p21",
+    "crates/scx-nurbs-surface",
     "crates/scx-testkit",
     "crates/scx-difftest",
     "crates/scx-bench",
@@ -18,6 +19,7 @@ default-members = [
     "crates/scx-nurbs",
     "crates/scx-algo",
     "crates/scx-p21",
+    "crates/scx-nurbs-surface",
     "crates/scx-testkit",
     "xtask",
 ]

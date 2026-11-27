@@ -4,6 +4,7 @@ scx-num
 scx-nurbs
 scx-p21
 scx-algo
+scx-nurbs-surface
 
 # Crates outside the order. `difftest` may depend on any library (and on the pinned
 # solidcore's `solidcore` and `solidcore-record`); `tool` crates depend on no workspace

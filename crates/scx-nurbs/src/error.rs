@@ -56,7 +56,8 @@ pub enum NurbsError {
         /// The index of the smaller knot.
         index: usize,
     },
-    /// A knot value is repeated more than `degree + 1` times.
+    /// A knot value is repeated more than `max` times: `degree + 1` in a knot vector,
+    /// `degree` strictly inside a curve's domain.
     Multiplicity {
         /// The repeated value.
         knot: f64,
