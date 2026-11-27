@@ -729,9 +729,9 @@ mod tests {
         }
         fn parameter_interval(&self, axis: usize) -> Option<Extent1d> {
             match (self, axis) {
-                (Self::Curve(l), 0) => Some(Extent1d::spanning(0.0, *l)),
-                (Self::Surface, 0) => Some(Extent1d::spanning(0.0, 1.0)),
-                (Self::Surface, 1) => Some(Extent1d::spanning(0.0, 100.0)),
+                (Self::Curve(l), 0) => Extent1d::spanning(0.0, *l),
+                (Self::Surface, 0) => Extent1d::spanning(0.0, 1.0),
+                (Self::Surface, 1) => Extent1d::spanning(0.0, 100.0),
                 _ => None,
             }
         }

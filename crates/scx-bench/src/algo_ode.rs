@@ -8,10 +8,10 @@
 //! in Bernstein form (`bernstein_roots`). The four seeded sets are drawn in that order
 //! from one stream, so they are the inputs scx-algo's development timings read.
 
-use crate::case::{same, Case};
-use crate::{edges, pin_bern, NoError, Rng, BATCH};
+use crate::case::{Case, same};
+use crate::{BATCH, NoError, Rng, edges, pin_bern};
 
-use scx_algo::bernstein::{bernstein_roots, RootLimits};
+use scx_algo::bernstein::{RootLimits, bernstein_roots};
 use scx_algo::ode as xode;
 use solidcore::mass::integrator as pode;
 

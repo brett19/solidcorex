@@ -938,7 +938,10 @@ pub fn may_contain(op: &Operation, boxes: &[Extent3d], tolerance: f64, best_sq: 
     match *op {
         Operation::Intersect | Operation::IntersectionTest => {
             for (i, bi) in boxes.iter().enumerate() {
-                let grown = bi.expanded(tol);
+                // a box grown past the finite range is disjoint from none
+                let Some(grown) = bi.expanded(tol) else {
+                    continue;
+                };
                 if boxes
                     .iter()
                     .skip(i + 1)
@@ -1189,9 +1192,10 @@ fn rayfire(direction: Vec3, b0: &Extent3d, b1: &Extent3d, tol: f64, best_sq: f64
     }
     // the ray's box misses the second box
     let length = 2.0 * (t.abs() + s.radius);
-    let ray_box =
-        Extent3d::spanning(start - length * direction, start + length * direction).expanded(tol);
-    !ray_box.are_disjoint(b1, 0.0)
+    // a ray box past the finite range misses nothing
+    Extent3d::spanning(start - length * direction, start + length * direction)
+        .and_then(|b| b.expanded(tol))
+        .is_none_or(|ray_box| !ray_box.are_disjoint(b1, 0.0))
 }
 
 /// `FindBestSubdivisionNode`: the node of the branch with the largest box diagonal that
@@ -1289,6 +1293,7 @@ mod tests {
         fn build(t: &mut SplitTree<usize>, xs: &[(usize, f64)]) -> NodeId {
             let b = |x: f64| {
                 Extent3d::spanning(Point3::new(x, 0.0, 0.0), Point3::new(x + 1.0, 1.0, 1.0))
+                    .unwrap()
             };
             if let [(i, x)] = xs {
                 return t.leaf(b(*x), *i).unwrap();

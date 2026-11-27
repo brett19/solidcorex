@@ -23,7 +23,6 @@
 //! | [`PseudoBox::new`] | `SmPseudoBox(xDir, yDir, zDir, xIvl, yIvl, zIvl)` |
 //! | [`PseudoBox::from_extent3d`] | `SmPseudoBox(const SmExtent3d&)`, `operator=(const SmExtent3d&)` |
 //! | [`PseudoBox::bounding`] | `SetBasis`, `Init`, then `AddPoint3d` for each point |
-//! | [`PseudoBox::unbounded`] | `SetUnbounded` |
 //! | [`PseudoBox::with_interval`] | `SetInterval` |
 //! | [`PseudoBox::expanded`] | `ExpandAbsolute` |
 //! | [`PseudoBox::union`] | `Union` |
@@ -39,7 +38,6 @@
 //! | [`PseudoBox::are_project_disjoint`] | `AreProjectDisjoint`, `AreDisjoint` (with a projection normal) |
 //! | [`PseudoBox::is_contained_by`] | `IsContainedBy` |
 //! | [`PseudoBox::planes`] | `CalcPlanes` |
-//! | [`PseudoBox::is_bounded`], [`PseudoBox::boundary_types`] | `IsBounded` |
 //! | [`PseudoBox::axis_map`], [`PseudoBox::alignment_with`], [`SignedAxis`] | `IsAxisAligned`, `AreAligned` and their `alAxisMap` |
 //! | [`PseudoBox::corners`], [`PseudoBox::edges`] | `CalcCorners`/`GetCorners`, `GetEdges` |
 //! | [`PseudoBox::project_to_plane`], [`Projection`] | `ProjectToPlane`, `SmProjectionType` |
@@ -84,7 +82,7 @@
 
 use scx_num::error::{Invalid, NumError, Result};
 use scx_num::extent1d::{Extent1d, ExtentPointType, Hull1d};
-use scx_num::extent3d::{BoundaryType, Extent3d, LineHit};
+use scx_num::extent3d::{Extent3d, LineHit};
 use scx_num::math::{BIG_DOUBLE, EFF_ZERO, EFF_ZERO_SQ, Point3};
 use scx_num::tol::{ScaledZero, are_same, is_zero, is_zero_to_tol};
 use scx_num::vector3d::{Axis, UnitVec3, Vec3};
@@ -383,16 +381,6 @@ impl PseudoBox {
         sizer.finish()
     }
 
-    /// The box of `basis` unbounded along every vector (`SetUnbounded`: each interval
-    /// `±SM_INFINITE_PARAMETER`).
-    #[must_use]
-    pub const fn unbounded(basis: BoxBasis) -> Self {
-        Self {
-            basis,
-            intervals: [Extent1d::UNBOUNDED; 3],
-        }
-    }
-
     /// This box with interval `axis` (0, 1, 2 for x, y, z) replaced (`SetInterval`).
     #[must_use]
     pub fn with_interval(self, axis: Axis, ivl: Extent1d) -> Self {
@@ -405,13 +393,15 @@ impl PseudoBox {
         Self { intervals, ..self }
     }
 
-    /// Every interval grown by `d` at both ends (`ExpandAbsolute`; [`Extent1d::expanded`]).
+    /// Every interval grown by `d` at both ends (`ExpandAbsolute`; [`Extent1d::expanded`]),
+    /// or `None` where an end leaves the finite range.
     #[must_use]
-    pub fn expanded(self, d: f64) -> Self {
-        Self {
-            intervals: self.intervals.map(|i| i.expanded(d)),
+    pub fn expanded(self, d: f64) -> Option<Self> {
+        let [i0, i1, i2] = self.intervals;
+        Some(Self {
+            intervals: [i0.expanded(d)?, i1.expanded(d)?, i2.expanded(d)?],
             ..self
-        }
+        })
     }
 
     /// The box of `basis` holding both boxes' corners (`Union`); `None` only when no corner
@@ -710,18 +700,6 @@ impl PseudoBox {
         [p0, p1, p2, p3, p4, p5]
     }
 
-    /// Whether every interval is bounded (`IsBounded`).
-    #[must_use]
-    pub fn is_bounded(&self) -> bool {
-        self.intervals.iter().all(Extent1d::is_bounded)
-    }
-
-    /// Each interval's boundedness (`IsBounded`'s out-params).
-    #[must_use]
-    pub fn boundary_types(&self) -> [BoundaryType; 3] {
-        self.intervals.map(|i| i.boundary_type())
-    }
-
     fn signed_axes(&self, refs: [Vec3; 3]) -> Option<[SignedAxis; 3]> {
         let mut map = [SignedAxis {
             axis: Axis::X,
@@ -967,36 +945,23 @@ impl PseudoBox {
     }
 
     /// The axis-aligned box holding this one (`SmExtent3d::Circumscribe`): copied interval
-    /// by interval for an axis-aligned box (so partly unbounded ones stay partly
-    /// unbounded), fully unbounded for an unaligned unbounded one, else the bounding box of
-    /// the corners.
+    /// by interval for an axis-aligned box, else the bounding box of the corners, `None`
+    /// where a corner leaves the finite range.
     #[must_use]
-    pub fn circumscribing_extent(&self) -> Extent3d {
+    pub fn circumscribing_extent(&self) -> Option<Extent3d> {
         if let Some(map) = self.axis_map() {
             // basis `ii` runs along axis `m.axis`: its interval belongs there, negated when
             // reversed
-            let mut ivls = [Extent1d::point(0.0); 3];
+            let mut ivls = self.intervals;
             for (ivl, m) in self.intervals.iter().zip(map) {
                 if let Some(slot) = ivls.get_mut(axis_index(m.axis)) {
                     *slot = if m.reversed { ivl.negated() } else { *ivl };
                 }
             }
             let [x, y, z] = ivls;
-            return Extent3d::from_intervals(x, y, z);
+            return Some(Extent3d::from_intervals(x, y, z));
         }
-        if self.is_bounded() {
-            // the corners' bounding box; corners of a bounded box are finite
-            return Extent3d::hull(self.corners()).unwrap_or(Extent3d::from_intervals(
-                Extent1d::UNBOUNDED,
-                Extent1d::UNBOUNDED,
-                Extent1d::UNBOUNDED,
-            ));
-        }
-        Extent3d::from_intervals(
-            Extent1d::UNBOUNDED,
-            Extent1d::UNBOUNDED,
-            Extent1d::UNBOUNDED,
-        )
+        Extent3d::hull(self.corners())
     }
 }
 
@@ -1124,7 +1089,7 @@ mod tests {
     use super::*;
 
     fn unit_box() -> PseudoBox {
-        PseudoBox::new(BoxBasis::AXES, [Extent1d::spanning(0.0, 1.0); 3])
+        PseudoBox::new(BoxBasis::AXES, [Extent1d::spanning(0.0, 1.0).unwrap(); 3])
     }
 
     #[test]
@@ -1175,10 +1140,10 @@ mod tests {
     #[test]
     fn separated_boxes_are_disjoint() {
         let a = unit_box();
-        let b = PseudoBox::new(BoxBasis::AXES, [Extent1d::spanning(2.0, 3.0); 3]);
+        let b = PseudoBox::new(BoxBasis::AXES, [Extent1d::spanning(2.0, 3.0).unwrap(); 3]);
         assert!(a.are_disjoint(&b) && b.are_disjoint(&a));
         assert!(!a.are_disjoint(&a));
-        assert!(a.is_contained_by(&a.expanded(0.5), 0.0));
+        assert!(a.is_contained_by(&a.expanded(0.5).unwrap(), 0.0));
     }
 
     #[test]
@@ -1187,12 +1152,12 @@ mod tests {
         let b = PseudoBox::new(
             basis,
             [
-                Extent1d::spanning(1.0, 2.0),
-                Extent1d::spanning(3.0, 4.0),
-                Extent1d::spanning(5.0, 6.0),
+                Extent1d::spanning(1.0, 2.0).unwrap(),
+                Extent1d::spanning(3.0, 4.0).unwrap(),
+                Extent1d::spanning(5.0, 6.0).unwrap(),
             ],
         );
-        let e = b.circumscribing_extent();
+        let e = b.circumscribing_extent().unwrap();
         assert_eq!((e.x_min(), e.x_max()), (3.0, 4.0));
         assert_eq!((e.y_min(), e.y_max()), (-2.0, -1.0));
         assert_eq!((e.z_min(), e.z_max()), (5.0, 6.0));

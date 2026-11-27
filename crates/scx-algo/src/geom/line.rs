@@ -45,7 +45,6 @@
 //! - `smgu_SegmentPointAngleDegToPerp` returns degrees; [`segment_point_angle_to_perp`]
 //!   returns radians (`|angle - π/2|`, from the same `AngleBetween`).
 
-use scx_num::extent1d::Extent1d;
 use scx_num::math::{EFF_ZERO, EFF_ZERO_SQ, HALF_PI, Point3};
 use scx_num::vector3d::Vec3;
 
@@ -241,11 +240,10 @@ pub fn segment_point_angle_to_perp(
 ) -> (f64, f64) {
     let line_vec = line_end - line_start;
     let param = line_param(line_start, line_vec, test_point);
-    let clip_ext = Extent1d::spanning(0.0, 1.0);
-    if clip_ext.contains_value(param, 0.0) {
+    if (0.0..=1.0).contains(&param) {
         return (0.0, param);
     }
-    let param = clip_ext.clamp_value(param);
+    let param = param.clamp(0.0, 1.0);
     let seg_cl_pnt = line_start + line_vec * param;
     let vec_to_pnt = test_point - seg_cl_pnt;
     // targetPoint on the segment

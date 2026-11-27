@@ -14,8 +14,8 @@
 //! results consumed are every solution's kind, values and parameters, the best value and
 //! the leaf pairs solved, in order.
 
-use crate::case::{both, Case};
-use crate::{seeded, Rng};
+use crate::case::{Case, both};
+use crate::{Rng, seeded};
 
 use scx_num::vector3d::sqrt;
 
@@ -152,10 +152,10 @@ const fn at(i: usize) -> f64 {
 }
 
 mod xs {
-    use super::{at, value, Found, Op, Row, Scenario};
+    use super::{Found, Op, Row, Scenario, at, value};
     use scx_algo::error::SolveError;
     use scx_algo::global_solve::{
-        solve, Accumulator, Branch, BranchSolver, Join, Keep, Next, Operation, SolveOptions,
+        Accumulator, Branch, BranchSolver, Join, Keep, Next, Operation, SolveOptions, solve,
     };
     use scx_algo::solution::{Solution, SolutionKind, SolutionObject, SortKey};
     use scx_algo::split_tree::SplitTree;
@@ -175,7 +175,11 @@ mod xs {
         }
         #[allow(clippy::cast_precision_loss)] // piece counts are small
         fn parameter_interval(&self, axis: usize) -> Option<Extent1d> {
-            (axis == 0).then(|| Extent1d::spanning(0.0, self.n as f64))
+            if axis == 0 {
+                Extent1d::spanning(0.0, self.n as f64)
+            } else {
+                None
+            }
         }
         fn tolerance(&self) -> f64 {
             0.0
@@ -192,7 +196,7 @@ mod xs {
             let b = Extent3d::spanning(
                 Point3::new(n.lo[0], n.lo[1], n.lo[2]),
                 Point3::new(n.hi[0], n.hi[1], n.hi[2]),
-            );
+            )?;
             let id = match n.kids {
                 None => t.leaf(b, n.piece),
                 Some((a, c)) => t.split(b, None, [*ids.get(a)?, *ids.get(c)?]),
@@ -282,7 +286,8 @@ mod xs {
 }
 
 mod ss {
-    use super::{at, value, Found, Op, Row, Scenario};
+    use super::{Found, Op, Row, Scenario, at, value};
+    use solidcore::Result;
     use solidcore::geom::extent1d::Extent1d;
     use solidcore::geom::extent3d::Extent3d;
     use solidcore::geom::global_solver::{
@@ -292,8 +297,7 @@ mod ss {
         ObjectKind, Solution, SolutionArray, SolutionObject, SolutionType, SortKey,
     };
     use solidcore::geom::tree::{NodeId, Tree as PTree, TreeNode};
-    use solidcore::math::{Vec3, BIG_DOUBLE};
-    use solidcore::Result;
+    use solidcore::math::{BIG_DOUBLE, Vec3};
 
     /// A tree's curve of `n` pieces.
     #[derive(Clone, Copy, Debug, PartialEq)]

@@ -94,6 +94,17 @@ impl Gen for TolR {
     }
 }
 
+/// Whether every value is a plain end: finite, and not the pin's `±SM_INFINITE_PARAMETER`
+/// or `±SM_INFINITE_PARAMETER_SQRT` marker. scx's extents hold finite ends only, and the pin
+/// skips a marked end in its transforms, so an input extent with any other end is `None` on
+/// both sides.
+pub fn plain_ends(v: &[f64]) -> bool {
+    use solidcore::math::{INFINITE_PARAMETER, INFINITE_PARAMETER_SQRT};
+    v.iter().all(|x| {
+        x.is_finite() && x.abs() != INFINITE_PARAMETER && x.abs() != INFINITE_PARAMETER_SQRT
+    })
+}
+
 macro_rules! helpers {
     () => {
         #[allow(unused_imports)]
@@ -114,17 +125,28 @@ macro_rules! helpers {
         pub fn p2(a: [f64; 2]) -> vector2d::Point2 {
             vector2d::Point2::new(a[0], a[1])
         }
-        /// The interval `[a[0], a[1]]`, `None` when inverted.
+        /// The interval `[a[0], a[1]]`, `None` when inverted or an end is not a plain
+        /// finite value ([`crate::facade::plain_ends`]).
         pub fn e1(a: [f64; 2]) -> Option<extent1d::Extent1d> {
-            extent1d::Extent1d::from_bounds(a[0], a[1])
+            crate::facade::plain_ends(&a)
+                .then(|| ext::interval(a[0], a[1]))
+                .flatten()
         }
-        /// The box with corners `(a[0], a[1])` and `(a[2], a[3])`, `None` when inverted.
+        /// The box with corners `(a[0], a[1])` and `(a[2], a[3])`, `None` when inverted or
+        /// an end is not plain.
         pub fn e2(a: [f64; 4]) -> Option<extent2d::Extent2d> {
-            extent2d::Extent2d::from_corners(p2([a[0], a[1]]), p2([a[2], a[3]]))
+            crate::facade::plain_ends(&a)
+                .then(|| extent2d::Extent2d::from_corners(p2([a[0], a[1]]), p2([a[2], a[3]])))
+                .flatten()
         }
-        /// The box with corners `a[..3]` and `a[3..]`, `None` when inverted.
+        /// The box with corners `a[..3]` and `a[3..]`, `None` when inverted or an end is not
+        /// plain.
         pub fn e3(a: [f64; 6]) -> Option<extent3d::Extent3d> {
-            extent3d::Extent3d::from_corners(p3([a[0], a[1], a[2]]), p3([a[3], a[4], a[5]]))
+            crate::facade::plain_ends(&a)
+                .then(|| {
+                    extent3d::Extent3d::from_corners(p3([a[0], a[1], a[2]]), p3([a[3], a[4], a[5]]))
+                })
+                .flatten()
         }
         pub fn pe(a: [f64; 3], full: bool) -> periodic_extent1d::PeriodicExtent1d {
             periodic_extent1d::PeriodicExtent1d::from_parts(a[0], a[1], a[2], full)
@@ -242,7 +264,12 @@ pub mod x {
     };
     helpers!();
     /// scx's extents take no adapter: [`crate::pin_extent`] gives the pin scx's API.
-    pub mod ext {}
+    pub mod ext {
+        /// `Extent1d::new` (the pin's `new` takes no ends, so the diffs call it by this name).
+        pub fn interval(min: f64, max: f64) -> Option<scx_num::extent1d::Extent1d> {
+            scx_num::extent1d::Extent1d::new(min, max)
+        }
+    }
     pub fn end(v: Vec<extent1d::Extent1d>) -> extent1d::ExtentNd {
         extent1d::ExtentNd::new(v)
     }
@@ -626,7 +653,7 @@ pub mod s {
     pub use solidcore::blend::fillet_section::{interval, series, taylor_model};
     /// The pin's extents under scx's names, imported by every diff body.
     pub mod ext {
-        pub use crate::pin_extent::{E1, E2, E3};
+        pub use crate::pin_extent::{E1, E2, E3, interval};
     }
     pub use solidcore::geom::{
         certified, matrix, periodic_extent1d, polynomial, tol, transform, vector2d, vector3d,
@@ -765,7 +792,6 @@ macro_rules! by_debug {
 
 by_debug!(
     extent1d::ExtentPointType,
-    extent3d::BoundaryType,
     certified::Verdict,
     tol::SmallTopoType,
     math::AxisRefusal,

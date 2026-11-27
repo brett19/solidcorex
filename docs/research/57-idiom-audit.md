@@ -860,6 +860,18 @@ section records the choices that the owner should rule on or that a later port s
   out-parameter. `PointSet::with_normal` takes a `UnitVec3`, so the type carries the
   contract, and the caller keeps what it passed. The pin's `unitize_or_z` loses huge and
   tiny vectors (it gives z). This is in `ps_with_normal`'s pin defect.
+- **Pseudo boxes hold finite intervals (63 §8 P0, carried into `pseudo_box`).** Main's P0
+  made an extent's ends finite by construction, so a pseudo box built from them is finite
+  too. `PseudoBox::unbounded` (`SetUnbounded`), `is_bounded` and `boundary_types`
+  (`IsBounded`) are removed, because they described ends that can no longer exist.
+  `expanded` and `circumscribing_extent` return `Option`, and are `None` where an end or a
+  corner leaves the finite range. In the global solver, a box grown past the range prunes
+  nothing (`continue`), and so does a ray box with no finite span (`is_none_or`), which is
+  what the pin's infinite box did. `segment_point_angle_to_perp` clamps to `0..=1` directly
+  instead of building the unit extent. In the difftest, the pin's `±SM_INFINITE_PARAMETER`
+  boxes are `None` on both sides (`plain_ends`). `pb_bounding` no longer compares the
+  unbounded box, and its check takes the basis from the input's unit directions.
+  `pb_frame` compares the axis map and the circumscribing extent only.
 - **The pin's `SpatialIndex` is `BoxTree`; not ported.** The pin's call-local
   `SpatialIndex` (`topology/brep/validation/spatial.rs`) is a median-split tree over
   `Option<Extent3d>`. Callers use it in `IntersectTopology`'s face-pair and vertex/edge

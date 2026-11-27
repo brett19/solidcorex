@@ -52,10 +52,8 @@ impl fmt::Display for Approach {
 pub struct KnotVector {
     degree: usize,
     knots: Vec<f64>,
-    /// `U[p]`.
-    low: f64,
-    /// `U[m-p]`.
-    high: f64,
+    /// `[U[p], U[m-p]]`.
+    domain: Extent1d,
 }
 
 impl KnotVector {
@@ -95,11 +93,14 @@ impl KnotVector {
         if low == high {
             return Err(NurbsError::EmptyDomain { at: low });
         }
+        let Some(domain) = Extent1d::new(low, high) else {
+            // Unreachable: the knots are finite and non-decreasing.
+            return Err(NurbsError::EmptyDomain { at: low });
+        };
         Ok(Self {
             degree,
             knots,
-            low,
-            high,
+            domain,
         })
     }
 
@@ -130,14 +131,14 @@ impl KnotVector {
 
     /// The domain `[U[p], U[m-p]]`.
     #[must_use]
-    pub fn domain(&self) -> Extent1d {
-        Extent1d::spanning(self.low, self.high)
+    pub const fn domain(&self) -> Extent1d {
+        self.domain
     }
 
     /// The domain's ends, `(U[p], U[m-p])`.
     #[must_use]
     pub const fn ends(&self) -> (f64, f64) {
-        (self.low, self.high)
+        (self.domain.min(), self.domain.max())
     }
 
     /// Whether the first and the last `p + 1` knots are equal, so a curve on these knots
@@ -145,8 +146,13 @@ impl KnotVector {
     #[must_use]
     pub fn is_clamped(&self) -> bool {
         let p1 = self.degree + 1;
-        self.knots.iter().take(p1).all(|&k| k == self.low)
-            && self.knots.iter().rev().take(p1).all(|&k| k == self.high)
+        self.knots.iter().take(p1).all(|&k| k == self.domain.min())
+            && self
+                .knots
+                .iter()
+                .rev()
+                .take(p1)
+                .all(|&k| k == self.domain.max())
     }
 
     /// How many knots equal `u` exactly.
@@ -173,7 +179,7 @@ impl KnotVector {
     /// The distinct knot values in `[U[p], U[m-p]]` with their multiplicities in the whole
     /// vector, in increasing order: the breakpoints of a curve.
     pub fn breakpoints(&self) -> impl Iterator<Item = (f64, usize)> + '_ {
-        let (low, high) = (self.low, self.high);
+        let (low, high) = (self.domain.min(), self.domain.max());
         let mut rest = self.knots.as_slice();
         core::iter::from_fn(move || {
             let (&first, _) = rest.split_first()?;
@@ -192,7 +198,7 @@ impl KnotVector {
     ///
     /// Errs with [`NurbsError::Multiplicity`] (`max` the degree) at the first such knot.
     pub fn check_continuous(&self) -> Result<()> {
-        let (low, high) = (self.low, self.high);
+        let (low, high) = (self.domain.min(), self.domain.max());
         match self
             .breakpoints()
             .find(|&(k, mult)| low < k && k < high && mult > self.degree)
@@ -220,7 +226,7 @@ impl KnotVector {
 
     /// [`KnotVector::span`] for a finite `u`.
     pub(crate) fn span_of(&self, u: f64, side: Approach) -> usize {
-        let (low, high) = (self.low, self.high);
+        let (low, high) = (self.domain.min(), self.domain.max());
         // Each count below is at least p + 1 (U[p] = low <= the bound) and at most m - p
         // (U[m-p] = high > the bound), so the span is in p..m-p.
         let count = if u <= low && (side == Approach::Below || u < low) {
@@ -264,8 +270,7 @@ impl KnotVector {
         Ok(Self {
             degree: self.degree,
             knots,
-            low: self.low,
-            high: self.high,
+            domain: self.domain,
         })
     }
 
@@ -289,10 +294,10 @@ impl KnotVector {
         if !u.is_finite() {
             return Err(NurbsError::ParameterNotFinite { parameter: u });
         }
-        if u <= self.low || u >= self.high {
+        if u <= self.domain.min() || u >= self.domain.max() {
             return Err(NurbsError::ParameterOutside {
                 parameter: u,
-                domain: [self.low, self.high],
+                domain: [self.domain.min(), self.domain.max()],
             });
         }
         Ok(())

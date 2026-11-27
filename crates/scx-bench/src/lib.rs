@@ -24,11 +24,11 @@ pub mod case;
 #[allow(clippy::indexing_slicing)]
 pub mod algo;
 #[allow(clippy::indexing_slicing)]
+pub mod algo_geom;
+#[allow(clippy::indexing_slicing)]
 pub mod algo_gsolve;
 #[allow(clippy::indexing_slicing)]
 mod algo_ode;
-#[allow(clippy::indexing_slicing)]
-pub mod algo_geom;
 #[allow(clippy::indexing_slicing)]
 pub mod num;
 

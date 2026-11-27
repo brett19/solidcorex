@@ -14,7 +14,6 @@
 use crate::diff;
 use crate::facade::{s as sf, x as xf};
 use crate::harness::{Gen, List, SplitMix64};
-use crate::pin_extent::E1;
 
 use scx_algo::pseudo_box as xp;
 use scx_num::vector3d::{Axis, UnitVec3};
@@ -32,7 +31,9 @@ pub struct BoxR {
     pub i: [[f64; 2]; 3],
 }
 
-const BIG: f64 = scx_num::math::INFINITE_PARAMETER;
+/// The pin's unbounded end, `SM_INFINITE_PARAMETER`: no extent on either side (an extent's ends
+/// are finite, [`crate::facade::plain_ends`]), so a box with one is `None` on both.
+const BIG: f64 = solidcore::math::INFINITE_PARAMETER;
 
 fn sorted(a: f64, b: f64) -> [f64; 2] {
     if a <= b { [a, b] } else { [b, a] }
@@ -96,7 +97,7 @@ impl Gen for BoxR {
                 b: ax,
                 i: [[0.0, 0.0], [1.0, 3.0], [2.0, 4.0]],
             },
-            // unbounded, partly unbounded
+            // the pin's unbounded and partly unbounded boxes: no box on either side
             BoxR {
                 b: ax,
                 i: [[-BIG, BIG]; 3],
@@ -314,8 +315,7 @@ pub(crate) fn xbox(r: &BoxR) -> Option<xp::PseudoBox> {
 
 fn sbox(r: &BoxR) -> Option<sp::PseudoBox> {
     let mut pb = sbasis(&r.b)?;
-    let [a, b, c] =
-        r.i.map(|i| <sf::extent1d::Extent1d as E1>::from_bounds(i[0], i[1]));
+    let [a, b, c] = r.i.map(sf::e1);
     pb.set_intervals(a?, b?, c?);
     Some(pb)
 }
@@ -470,26 +470,18 @@ diff!(
 );
 diff!(
     pb_frame,
-    |r: BoxR| xbox(&r).map(|b| (
-        xmap(b.axis_map()),
-        b.is_bounded(),
-        b.boundary_types(),
-        b.circumscribing_extent(),
-    )),
+    |r: BoxR| xbox(&r).map(|b| (xmap(b.axis_map()), b.circumscribing_extent(),)),
     sbox(&r).map(|b| {
         let mut e = solidcore::geom::extent3d::Extent3d::new();
         e.circumscribe(&b);
-        (b.is_axis_aligned(), b.is_bounded(), b.boundary_types(), e)
+        (b.is_axis_aligned(), crate::pin_extent::finite3(e))
     })
 );
 diff!(
     pb_bounding,
     pin_defect = crate::pin_defects::pb_bounding,
     |r: BoxR, pts: List<V>| xbasis(&r.b).map(|basis| {
-        (
-            xp::PseudoBox::bounding(basis, pts.0.iter().map(|&p| xpt(p))).map(|b| xparts(&b)),
-            xparts(&xp::PseudoBox::unbounded(basis)),
-        )
+        xp::PseudoBox::bounding(basis, pts.0.iter().map(|&p| xpt(p))).map(|b| xparts(&b))
     }),
     sbasis(&r.b).map(|basis| {
         let mut b = basis;
@@ -497,25 +489,38 @@ diff!(
         for &p in &pts.0 {
             b.add_point(sv(p));
         }
-        let mut u = basis;
-        u.set_unbounded();
-        ((!b.has_negative_volume()).then(|| sparts(&b)), sparts(&u))
+        (!b.has_negative_volume()).then(|| sparts(&b))
     })
 );
 diff!(
     pb_expand_union,
     pin_defect = crate::pin_defects::pb_expand_union,
     |r: BoxR, q: BoxR, d: f64| xbox(&r).zip(xbasis(&q.b)).map(|(a, basis)| {
-        let ex = a.expanded(d.abs());
-        (a.union(&ex, basis).map(|b| xparts(&b)), xparts(&ex))
+        a.expanded(d.abs())
+            .map(|ex| (a.union(&ex, basis).map(|b| xparts(&b)), xparts(&ex)))
     }),
     sbox(&r).zip(sbasis(&q.b)).map(|(a, basis)| {
         let mut ex = a;
         ex.expand_absolute(d.abs());
+        // a box grown past the finite range is no box
+        if ex
+            .intervals()
+            .iter()
+            .any(|i| crate::pin_extent::finite1(*i).is_none())
+        {
+            return None;
+        }
         let mut u = basis;
         u.init();
         a.union_into(&ex, basis.basis(), &mut u);
-        ((!u.has_negative_volume()).then(|| sparts(&u)), sparts(&ex))
+        let finite = u
+            .intervals()
+            .iter()
+            .all(|i| crate::pin_extent::finite1(*i).is_some());
+        Some((
+            (!u.has_negative_volume() && finite).then(|| sparts(&u)),
+            sparts(&ex),
+        ))
     })
 );
 diff!(
@@ -526,13 +531,11 @@ diff!(
             .zip(xf::e1(i))
             .map(|(a, i)| xparts(&a.with_interval(axis, i)))
     },
-    sbox(&r)
-        .zip(<sf::extent1d::Extent1d as E1>::from_bounds(i[0], i[1]))
-        .map(|(a, i)| {
-            let mut w = a;
-            let _ = w.set_interval(k % 3, i);
-            sparts(&w)
-        })
+    sbox(&r).zip(sf::e1(i)).map(|(a, i)| {
+        let mut w = a;
+        let _ = w.set_interval(k % 3, i);
+        sparts(&w)
+    })
 );
 diff!(
     pb_from_extent3d,

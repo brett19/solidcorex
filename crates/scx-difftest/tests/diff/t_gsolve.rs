@@ -211,7 +211,11 @@ pub mod xs {
             Some(1)
         }
         fn parameter_interval(&self, axis: usize) -> Option<Extent1d> {
-            (axis == 0).then(|| Extent1d::spanning(0.0, self.n as f64))
+            if axis == 0 {
+                Extent1d::spanning(0.0, self.n as f64)
+            } else {
+                None
+            }
         }
         fn tolerance(&self) -> f64 {
             0.0
@@ -225,7 +229,8 @@ pub mod xs {
             let b = Extent3d::spanning(
                 Point3::new(n.lo[0], n.lo[1], n.lo[2]),
                 Point3::new(n.hi[0], n.hi[1], n.hi[2]),
-            );
+            )
+            .unwrap();
             let id = match n.kids {
                 None => t.leaf(b, n.piece),
                 Some((a, c)) => t.split(b, None, [ids[a], ids[c]]),

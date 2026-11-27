@@ -174,7 +174,7 @@ mod tests {
     use scx_num::vector3d::Point3;
 
     fn cube(x: f64) -> Extent3d {
-        Extent3d::spanning(Point3::new(x, 0.0, 0.0), Point3::new(x + 1.0, 1.0, 1.0))
+        Extent3d::spanning(Point3::new(x, 0.0, 0.0), Point3::new(x + 1.0, 1.0, 1.0)).unwrap()
     }
 
     #[test]

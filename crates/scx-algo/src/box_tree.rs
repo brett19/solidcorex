@@ -363,7 +363,7 @@ mod tests {
                     rng.next_signed_unit(),
                 );
                 let h = Vec3::new(rng.next_f64(), rng.next_f64(), 0.1 * rng.next_f64());
-                Extent3d::spanning(c - h, c + h)
+                Extent3d::spanning(c - h, c + h).unwrap()
             })
             .collect()
     }
@@ -392,11 +392,11 @@ mod tests {
         for n in [0, 1, 3, 4, 5, 17, 200] {
             let mut boxes = random_boxes(&mut rng, n);
             if n > 3 {
-                boxes[1] = Extent3d::from_point(Point3::new(0.0, 0.0, 0.0));
-                boxes[2] = Extent3d::from_bounds(f64::NAN, 0.0, 0.0, 1.0, 1.0, 1.0).unwrap();
-                boxes[3] =
-                    Extent3d::from_bounds(f64::NEG_INFINITY, -1.0, -1.0, f64::INFINITY, 1.0, 1.0)
-                        .unwrap();
+                // A point, and boxes at the far ends of the finite range (a box cannot hold
+                // NaN or an infinite end).
+                boxes[1] = Extent3d::from_point(Point3::new(0.0, 0.0, 0.0)).unwrap();
+                boxes[2] = Extent3d::from_bounds(f64::MAX, 0.0, 0.0, f64::MAX, 1.0, 1.0).unwrap();
+                boxes[3] = Extent3d::from_bounds(f64::MIN, -1.0, -1.0, f64::MAX, 1.0, 1.0).unwrap();
             }
             let tree = BoxTree::new(&boxes);
             assert_eq!(tree.len(), n);
@@ -425,23 +425,23 @@ mod tests {
     #[test]
     fn other_dimensions() {
         let ivls: Vec<Extent1d> = (0..20)
-            .map(|i| Extent1d::spanning(f64::from(i), f64::from(i) + 1.5))
+            .map(|i| Extent1d::spanning(f64::from(i), f64::from(i) + 1.5).unwrap())
             .collect();
         let t = BoxTree::new(&ivls);
         assert_eq!(
-            t.overlapping(&Extent1d::spanning(4.2, 4.3), 0.0),
+            t.overlapping(&Extent1d::spanning(4.2, 4.3).unwrap(), 0.0),
             vec![3, 4]
         );
         let rects: Vec<Extent2d> = (0..20)
             .map(|i| {
                 let x = f64::from(i);
-                Extent2d::spanning(Point2::new(x, -x), Point2::new(x + 1.0, -x + 1.0))
+                Extent2d::spanning(Point2::new(x, -x), Point2::new(x + 1.0, -x + 1.0)).unwrap()
             })
             .collect();
         let t = BoxTree::new(&rects);
         assert_eq!(
             t.overlapping(
-                &Extent2d::spanning(Point2::new(5.5, -4.5), Point2::new(5.6, -4.4)),
+                &Extent2d::spanning(Point2::new(5.5, -4.5), Point2::new(5.6, -4.4)).unwrap(),
                 0.0
             ),
             vec![5]

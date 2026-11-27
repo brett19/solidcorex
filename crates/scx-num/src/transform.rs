@@ -6,7 +6,7 @@
 // database and type-code members stay in solidcore); adds `from_matrix`; the 3x3/4x4
 // helpers come from `crate::small_matrix`. Tests: `concat_invert_scale` drops its
 // `transform_simple` line (needs a placement); added `singular_axes_do_not_invert` and
-// `predicates_and_domain`.
+// `predicates_and_domain` (its domain is one `ParamDomain::Unbounded` per direction).
 //! General linear (4x4 matrix) transforms from a `uvw` parameter space to an `xyz`
 //! projection space, the simplest volume map.
 //!
@@ -25,7 +25,7 @@
 //! | `Drop` (implicit)                                 | `~SmTransform`                                        |
 //! | [`Transform::approx_eq`]                          | `operator==` (the transform's own members)            |
 //! | [`Transform::matrix`]                             | `m_adT` (field access)                                |
-//! | [`Transform::natural_param_domain`]               | `GetNaturalParamDomain`                               |
+//! | [`Transform::natural_param_domain`]               | `GetNaturalParamDomain` (an extent with marked ends)  |
 //! | [`Transform::to_origin`], [`Transform::to_disp`]  | `GetToOrigin`, `GetToDisp`                            |
 //! | [`Transform::to_x_axis`], [`Transform::to_y_axis`], [`Transform::to_z_axis`] | `GetToXAxis`, `GetToYAxis`, `GetToZAxis` |
 //! | [`Transform::set_to_origin`], [`Transform::set_to_disp`] | `SetToOrigin`, `SetToDisp` (vector and three-double forms) |
@@ -62,14 +62,16 @@
 //!   for a singular axes sub-matrix, where upstream leaves the output unset.
 //!   `EvaluateSimple` returns the `(n+1)^3` derivative array.
 //! - `IsCurveInParamDomainSimple` ignores its curve upstream and takes none here.
+//! - `GetNaturalParamDomain` (an unbounded box, `±SM_INFINITE_PARAMETER` ends) has no
+//!   counterpart: an extent's ends are finite.
 //! - `GetToXAxis` and friends return copies; writes go through the setters.
 //! - `GetMemoryUsed`, `Dump`, `DrawAxis`, `AssertValid`, `WriteToDB` and the members
 //!   upstream never reaches from the kernel (`TransformPoint`, `MirrorSimple`,
 //!   `RotateAboutAxis*`, `DecomposeToAngles`, ... listed in
 //!   `harness/callgraph/unused_functions.txt`) are not part of this unit.
 
+use crate::domain::ParamDomain;
 use crate::error::{Invalid, Limit, NumError, Result};
-use crate::extent3d::Extent3d;
 use crate::small_matrix::{inverse_3x3, inverse_4x4, mult_4x4};
 use crate::tol::is_zero;
 use crate::vector3d::{Point3, Vec3};
@@ -148,10 +150,11 @@ impl Transform {
             .all(|(a, b)| is_zero(a - b))
     }
 
-    /// The parameter domain, unbounded in every direction (`GetNaturalParamDomain`).
+    /// The parameter domain: no end in any direction (`GetNaturalParamDomain`, whose
+    /// extent marks every end with `SM_INFINITE_PARAMETER`).
     #[must_use]
-    pub const fn natural_param_domain(&self) -> Extent3d {
-        Extent3d::UNBOUNDED
+    pub const fn natural_param_domain(&self) -> [ParamDomain; 3] {
+        [ParamDomain::Unbounded; 3]
     }
 
     /// The image of the parameter origin, row 3 (`GetToOrigin`).
@@ -476,7 +479,6 @@ impl Transform {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::math::INFINITE_PARAMETER;
     fn v(x: f64, y: f64, z: f64) -> Vec3 {
         Vec3::new(x, y, z)
     }
@@ -550,8 +552,7 @@ mod tests {
         let t = Transform::IDENTITY;
         assert!(!t.is_bounded_simple());
         assert!(t.is_curve_in_param_domain_simple());
-        let d = t.natural_param_domain();
-        assert_eq!(d.x_min(), -INFINITE_PARAMETER);
+        assert_eq!(t.natural_param_domain(), [ParamDomain::Unbounded; 3]);
         assert_eq!(Transform::from_matrix(*t.matrix()), t);
     }
 }
