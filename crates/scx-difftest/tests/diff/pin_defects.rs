@@ -4844,3 +4844,29 @@ fn curve_surface_truth(c: &crate::t_curve_surface::Case) -> Result<(), String> {
     }
     Ok(())
 }
+
+// ---- scx-ssi --------------------------------------------------------------------------------
+
+/// `section_by_plane` against `Surface::intersect_with_plane` (`t_ssi`): the inputs where
+/// the two answers differ past the tolerance, each judged against the exact section (testkit
+/// T5) by `t_ssi::truth::check`. They fall in these classes (the counts are of the pool):
+///
+/// - Two planes over the same place (23): the pin answers general; scx answers coincident,
+///   with every corner of each square within the snap of the other plane.
+/// - Plane and cone through the apex, steeper than the generators (11): the pin answers
+///   general; scx answers the two generator lines, which lie on both surfaces.
+/// - Plane and cone touching only at an apex outside the extent (15): the pin answers a
+///   tangent point that is off the cone's extent; scx answers empty.
+/// - Plane and cylinder or cone cutting an arc that crosses the turn's start (9 and 10):
+///   the pin cuts the arc in two at the seam; scx answers it as one piece. The truth sees
+///   one connected curve, and the pieces may not meet end to end.
+/// - Plane missing a bounded cylinder or cone (8) or a torus (15): the pin answers general;
+///   scx answers empty from the rims' hull or the torus's support, and every point of the
+///   surface's grid is off the plane by more than the snap.
+pub fn ssi_section_by_plane() -> PinDefect<(crate::t_ssi::Case,), crate::t_ssi::Print> {
+    PinDefect {
+        reason: "the pin leaves closed forms to the general intersector, splits pieces at a seam, or answers outside the extent",
+        applies: Applies::Disagreeing,
+        check: |(c,), _| crate::t_ssi::truth::check(c),
+    }
+}
