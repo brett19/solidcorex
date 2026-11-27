@@ -463,6 +463,9 @@ Duplicated tolerance constants (determinism audit, 11-26):
 5. **Sums.** Every reduction over a variable-length set runs in id order, left to right. A parallel
    reduction collects per-item values and sums them in that order afterwards. There are no
    cross-lane horizontal sums.
+   Changed 11-27 (04 §1, research 67 Q6): a fixed number of accumulators, each filled in id order and
+   combined in a fixed order, is allowed, because it stays bit-identical on every IEEE target. Each
+   result it moves is checked against the truth once.
 6. **No `thread_local!` and no `static` mutable state** in any crate. The kernel already has none.
    The ops thread-locals (call context, cancel, fuel, fixes) become the explicit `Cx` (document,
    settings, `&mut Scratch`, `&Stop`, trace; 01 §6.3), and the kernel pool becomes a pool of `Scratch`.
