@@ -3,7 +3,7 @@
 //! closed meshes, each directed side once and its reverse once, wound outward; each cap of
 //! an extrusion with circular holes covers its boundary polylines exactly; each face's
 //! triangles count `V - 2 + 2h` with no point added and sum to the face's area from
-//! `scx_mass::face_area`; non-planar faces, unknown ids, budget and stop are refused.
+//! `scx_mass::face_area`; unknown ids, budget and stop are refused (curved faces: `curved.rs`).
 
 #![allow(
     clippy::unwrap_used,
@@ -16,7 +16,7 @@ use std::collections::HashMap;
 
 use scx_brep::op::Scratch;
 use scx_brep::{Brep, Document, FaceId};
-use scx_make::{Span, block, cylinder, extrude};
+use scx_make::{Span, block, extrude};
 use scx_mass::{RelAccuracy, face_area};
 use scx_num::budget::{Budget, Stop};
 use scx_num::frame::{Frame, Sense};
@@ -24,10 +24,7 @@ use scx_num::units::{Length, Resolution};
 use scx_num::vector2d::Point2;
 use scx_num::vector3d::{Point3, Vec3};
 use scx_planar::{Region, Segment};
-use scx_surface::SurfaceKind;
-use scx_tess::{
-    Mesh, TessError, TessRefusal, TessSpec, TessUnsupported, tessellate, tessellate_faces,
-};
+use scx_tess::{Mesh, TessError, TessRefusal, TessSpec, tessellate, tessellate_faces};
 
 fn mm(v: f64) -> Length {
     Length::from_mm(v)
@@ -273,18 +270,8 @@ fn round_holes(frame: &Frame) -> (Brep, [FaceId; 2]) {
 fn caps_with_circular_holes_cover_their_boundary_exactly() {
     for (name, f) in [("at", at()), ("tilted", tilted())] {
         let (body, caps) = round_holes(&f);
-        // The walls of the circles and arcs are cylinders: not before TS3.
-        let e = tessellate(&body, &spec(0.01), &mut Budget::unlimited(), &Stop::new());
-        assert!(
-            matches!(
-                e,
-                Err(TessError::Unsupported(TessUnsupported::FaceKind {
-                    kind: SurfaceKind::Cylinder,
-                    ..
-                }))
-            ),
-            "{name}: {e:?}"
-        );
+        // The walls of the circles and arcs are cylinders (TS3): the whole body is closed.
+        assert_closed(&mesh_of(&body, &spec(0.01)), name);
         for chord in [0.1, 0.01, 0.001] {
             let s = spec(chord);
             let mesh =
@@ -332,18 +319,8 @@ fn caps_with_circular_holes_cover_their_boundary_exactly() {
 }
 
 #[test]
-fn faces_that_are_not_planes_are_unsupported_and_unknown_ids_refused() {
+fn unknown_face_ids_are_refused() {
     let d = Document::default();
-    let body = cylinder(&at(), mm(5.0), mm(10.0), &d).unwrap().body;
-    let e = tessellate(&body, &spec(0.01), &mut Budget::unlimited(), &Stop::new()).unwrap_err();
-    assert!(matches!(
-        e,
-        TessError::Unsupported(TessUnsupported::FaceKind {
-            kind: SurfaceKind::Cylinder,
-            ..
-        })
-    ));
-    assert_eq!(e.name(), "face_kind");
     // A face id the block does not have: the holed extrusion's last.
     let block = block(&at(), [mm(1.0); 3], &d).unwrap().body;
     let far = holed(&at()).faces().last().unwrap().id();

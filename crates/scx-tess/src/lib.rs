@@ -5,9 +5,11 @@
 //!
 //! Step 4 builds it in parts: the spec, the mesh, the errors and the edge sampling
 //! ([`sample_edge`], [`wireframe`]) (TS1); planar faces by a constrained Delaunay
-//! triangulation ([`tessellate`], [`tessellate_faces`]) (TS2); curved faces follow.
+//! triangulation ([`tessellate`], [`tessellate_faces`]) (TS2); cylinder, cone, sphere and
+//! torus faces triangulated in their own `uv` and refined to the chord (TS3).
 
 mod cdt;
+mod curved;
 mod edge;
 mod error;
 mod face;

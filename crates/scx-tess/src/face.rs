@@ -1,10 +1,13 @@
 // Written for solidcorex. Apache-2.0.
-//! [`tessellate`]: a body's faces triangulated on its [`wireframe`] (research 72 TS2).
+//! [`tessellate`]: a body's faces triangulated on its [`wireframe`](crate::wireframe)
+//! (research 72 TS2, TS3).
 //!
 //! A planar face is a constrained Delaunay triangulation ([`crate::cdt`]) of its loops'
-//! edge polylines in the plane's `uv`, with no point added: every triangle side on the
+//! edge polylines in the plane's `uv`, with no point added. A cylinder, cone, sphere or
+//! torus face is triangulated in its own `uv` with interior points, refined until every
+//! triangle is within the chord ([`crate::curved`]). Either way every triangle side on the
 //! boundary is a polyline segment, so two faces meeting at an edge use the same indices
-//! and a closed body gives a closed mesh by construction. Other faces wait for TS3.
+//! and a closed body gives a closed mesh by construction. NURBS faces are unsupported.
 
 use scx_brep::{Brep, Face, FaceId, FaceSide};
 use scx_num::budget::{Budget, Stop};
@@ -15,18 +18,18 @@ use scx_num::vector3d::Vec3;
 use scx_surface::{Plane, Surface, SurfaceKind};
 
 use crate::cdt::{Fault, triangulate};
+use crate::curved::{Lines, Points, Rules, curved_face};
 use crate::error::{TessDefect, TessError, TessRefusal, TessUnsupported};
 use crate::mesh::Mesh;
 use crate::spec::TessSpec;
-use crate::wire::wireframe;
+use crate::wire::wire;
 
-/// The mesh of every face of `body` under `spec`: [`wireframe`]'s points and polylines,
-/// then each face's triangles in face id order.
+/// The mesh of every face of `body` under `spec`: [`wireframe`](crate::wireframe)'s points
+/// and polylines, then each face's triangles in face id order.
 ///
 /// # Errors
 ///
-/// [`TessUnsupported::FaceKind`] for the first face, in id order, that is not a plane
-/// (until TS3); otherwise as [`tessellate_faces`].
+/// As [`tessellate_faces`] over every face.
 pub fn tessellate(
     body: &Brep,
     spec: &TessSpec,
@@ -37,20 +40,24 @@ pub fn tessellate(
     tessellate_faces(body, spec, &faces, budget, stop)
 }
 
-/// The mesh of the listed faces of `body`: the whole [`wireframe`], then the triangles of
-/// each listed face in face id order, whatever the list's order or repeats.
+/// The mesh of the listed faces of `body`: the whole [`wireframe`](crate::wireframe), then
+/// the triangles of each listed face in face id order, whatever the list's order or repeats.
 ///
 /// Each triangle is counter-clockwise seen from outside the solid (from the face's front
-/// when neither or both sides are solid), its normals the plane's normal on that side. One
-/// unit of `budget` per point inserted and per flip, on top of the wireframe's.
+/// when neither or both sides are solid). A plane's normals are the plane's on that side; a
+/// curved face's are the surface's at each corner (at the triangle's middle for a corner on
+/// a pole or apex). One unit of `budget` per point inserted and per flip, on top of the
+/// wireframe's; a curved face pays again for each refinement round's triangulation.
 ///
 /// # Errors
 ///
 /// [`TessRefusal::NoFace`] for an id that is not a live face; [`TessUnsupported::FaceKind`]
-/// for a listed face that is not a plane; [`TessDefect::Crossing`] when two of a face's
-/// polyline segments cross (two edges closer than their chords allow);
-/// [`TessDefect::Duplicate`] when two of a face's points coincide in `uv`; otherwise as
-/// [`wireframe`].
+/// for a listed NURBS face; [`TessRefusal::FaceTooFine`] when a curved face would need more
+/// points than a mesh indexes; [`TessDefect::Crossing`] when two of a face's polyline
+/// segments cross (two edges closer than their chords allow); [`TessDefect::Duplicate`]
+/// when two of a face's points coincide in `uv`; [`TessDefect::Refinement`] when a curved
+/// face still has a triangle outside its bound after the most rounds; otherwise as
+/// [`wireframe`](crate::wireframe).
 pub fn tessellate_faces(
     body: &Brep,
     spec: &TessSpec,
@@ -61,22 +68,24 @@ pub fn tessellate_faces(
     let mut ids = faces.to_vec();
     ids.sort_unstable();
     ids.dedup();
-    let mut planes = Vec::with_capacity(ids.len());
+    let mut jobs = Vec::with_capacity(ids.len());
     for &id in &ids {
         let face = body
             .face(id)
             .ok_or(TessError::Refused(TessRefusal::NoFace { face: id }))?;
-        match face.surface() {
-            Surface::Plane(plane) => planes.push((face, plane)),
-            other => {
-                return Err(TessError::Unsupported(TessUnsupported::FaceKind {
-                    face: id,
-                    kind: SurfaceKind::of(other),
-                }));
-            }
+        let surface = face.surface();
+        if let Surface::Plane(plane) = surface {
+            jobs.push((face, Work::Plane(plane)));
+        } else if let Some(rules) = Rules::of(surface, spec) {
+            jobs.push((face, Work::Curved(rules)));
+        } else {
+            return Err(TessError::Unsupported(TessUnsupported::FaceKind {
+                face: id,
+                kind: SurfaceKind::of(surface),
+            }));
         }
     }
-    let mut mesh = wireframe(body, spec, budget, stop)?;
+    let (mut mesh, params) = wire(body, spec, budget, stop)?;
     let mut line_of = vec![usize::MAX; body.edge_slots()];
     for (i, line) in mesh.edges.iter().enumerate() {
         if let Some(slot) = line_of.get_mut(line.edge.index()) {
@@ -84,11 +93,29 @@ pub fn tessellate_faces(
         }
     }
     let mut scratch = FaceScratch::default();
-    for (face, plane) in planes {
+    let mut points = Points::default();
+    for (face, work) in jobs {
         stop.check()?;
-        plane_face(&mut mesh, &line_of, face, plane, &mut scratch, budget)?;
+        match work {
+            Work::Plane(plane) => {
+                plane_face(&mut mesh, &line_of, face, plane, &mut scratch, budget)?;
+            }
+            Work::Curved(rules) => {
+                let lines = Lines {
+                    line_of: &line_of,
+                    params: &params,
+                };
+                curved_face(&mut mesh, &lines, face, &rules, &mut points, budget, stop)?;
+            }
+        }
     }
     Ok(mesh)
+}
+
+/// How one face is triangulated.
+enum Work<'b> {
+    Plane(&'b Plane),
+    Curved(Rules),
 }
 
 /// Buffers reused from face to face.

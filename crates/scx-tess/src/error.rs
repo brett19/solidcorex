@@ -61,6 +61,13 @@ pub enum TessRefusal {
         /// The segments it would need.
         needed: f64,
     },
+    /// A face would need more points than a mesh can index.
+    FaceTooFine {
+        /// The face.
+        face: FaceId,
+        /// The points it would need.
+        needed: f64,
+    },
     /// A face id that is not a live face of the body.
     NoFace {
         /// The id.
@@ -125,6 +132,12 @@ pub enum TessDefect {
         /// The face.
         face: FaceId,
     },
+    /// A curved face still has a triangle past its chord, angle or edge-length bound, or
+    /// folded over, after the most rounds of added points.
+    Refinement {
+        /// The face.
+        face: FaceId,
+    },
 }
 
 impl TessError {
@@ -149,6 +162,7 @@ impl TessError {
             Self::Refused(TessRefusal::EdgeLength { .. }) => "edge_length",
             Self::Refused(TessRefusal::Resolution { .. }) => "resolution",
             Self::Refused(TessRefusal::TooFine { .. }) => "too_fine",
+            Self::Refused(TessRefusal::FaceTooFine { .. }) => "face_too_fine",
             Self::Refused(TessRefusal::NoFace { .. }) => "no_face",
             Self::Unsupported(TessUnsupported::EdgeKind { .. }) => "edge_kind",
             Self::Unsupported(TessUnsupported::FaceKind { .. }) => "face_kind",
@@ -160,6 +174,7 @@ impl TessError {
             Self::Defect(TessDefect::Crossing { .. }) => "crossing",
             Self::Defect(TessDefect::Duplicate { .. }) => "duplicate",
             Self::Defect(TessDefect::Triangulation { .. }) => "triangulation",
+            Self::Defect(TessDefect::Refinement { .. }) => "refinement",
         }
     }
 }
@@ -188,6 +203,9 @@ impl fmt::Display for TessError {
             Self::Refused(TessRefusal::TooFine { edge, needed }) => {
                 write!(f, "{edge}: {needed} segments are more than a mesh indexes")
             }
+            Self::Refused(TessRefusal::FaceTooFine { face, needed }) => {
+                write!(f, "{face}: {needed} points are more than a mesh indexes")
+            }
             Self::Refused(TessRefusal::NoFace { face }) => write!(f, "{face} is not a live face"),
             Self::Unsupported(TessUnsupported::EdgeKind { edge, kind }) => {
                 write!(f, "{edge}: no sampling rule for a {kind} edge")
@@ -214,6 +232,12 @@ impl fmt::Display for TessError {
             }
             Self::Defect(TessDefect::Triangulation { face }) => {
                 write!(f, "{face}: the triangulation failed")
+            }
+            Self::Defect(TessDefect::Refinement { face }) => {
+                write!(
+                    f,
+                    "{face}: a triangle still misses its bound after the most rounds"
+                )
             }
         }
     }
