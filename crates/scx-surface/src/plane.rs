@@ -12,7 +12,7 @@ use scx_num::vector2d::Point2;
 use scx_num::vector3d::{Point3, UnitVec3, Vec3};
 use scx_nurbs::Approach;
 
-use crate::jet::SurfaceJet;
+use scx_num::jet::SurfaceJet;
 
 /// A plane: the frame's origin and its x and y axes. The normal is the frame's z.
 #[derive(Clone, Copy, Debug, PartialEq)]
