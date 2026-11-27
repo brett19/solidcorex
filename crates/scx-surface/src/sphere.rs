@@ -69,6 +69,16 @@ impl Sphere {
         self.sense
     }
 
+    /// The same sizes on `frame` in `sense`: the edits' rebuild of a validated kind (the
+    /// sizes are unchanged, so nothing is checked again).
+    pub(crate) const fn placed(&self, frame: Frame, sense: Sense) -> Self {
+        Self {
+            frame,
+            sense,
+            ..*self
+        }
+    }
+
     fn axes(&self) -> Axes {
         Axes::new(&self.frame, self.sense)
     }

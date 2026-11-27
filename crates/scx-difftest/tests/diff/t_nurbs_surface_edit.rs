@@ -274,7 +274,7 @@ pub mod x {
     }
 
     pub fn reverse(e: &Edit) -> Option<Read> {
-        Some(read(&build(&e.r).reversed(e.axis).ok()?))
+        Some(read(&build(&e.r).reversed(e.axis)))
     }
 
     pub fn swap(r: &Raw) -> Option<Read> {

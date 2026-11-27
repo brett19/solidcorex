@@ -7,7 +7,7 @@
 //! data, kind `Refused` (63 X13); [`NurbsSurfaceError::BadKnots`], [`NurbsSurfaceError::Basis`]
 //! and [`NurbsSurfaceError::Edit`] are context frames over the `scx-nurbs` error and inherit
 //! its kind (62 D11). An edit whose exact answer has no double form is `Unsupported`
-//! ([`NurbsSurfaceError::Reversal`], [`NurbsSurfaceError::Overflow`]). The pin's
+//! ([`NurbsSurfaceError::Overflow`]). The pin's
 //! `InvalidInput` is [`ErrorKind`]'s `Refused`.
 //!
 //! | solidcore at the pin | here |
@@ -76,16 +76,6 @@ pub enum NurbsSurfaceError {
     Degenerate {
         /// The parameters `[u, v]`.
         uv: [f64; 2],
-    },
-    /// The reflected knots of `axis` are not a valid knot vector in doubles: rounding
-    /// `a + b - t` merged a knot with a neighbour past the allowed multiplicity, or
-    /// overflowed. The exact reversal exists; it has no double form. The cause is the
-    /// `scx-nurbs` error the reflected knots got.
-    Reversal {
-        /// The direction reversed.
-        axis: ParamAxis,
-        /// Why the reflected knots were refused.
-        cause: NurbsError,
     },
     /// The transform's matrix has a coefficient that is infinite or NaN.
     AffineNotFinite,
@@ -180,7 +170,7 @@ impl NurbsSurfaceError {
             | Self::BadWeights(_)
             | Self::Degenerate { .. }
             | Self::AffineNotFinite => ErrorKind::Refused,
-            Self::Reversal { .. } | Self::Overflow(_) => ErrorKind::Unsupported,
+            Self::Overflow(_) => ErrorKind::Unsupported,
             Self::Defect { .. } => ErrorKind::Defect,
         }
     }
@@ -195,7 +185,6 @@ impl NurbsSurfaceError {
             Self::Basis { .. } => "basis_unevaluable",
             Self::Degenerate { .. } => "evaluation_not_finite",
             Self::Edit { .. } => "line_edit_failed",
-            Self::Reversal { .. } => "knots_not_reversible",
             Self::AffineNotFinite => "affine_not_finite",
             Self::Overflow(_) => "transform_overflow",
             Self::Defect { .. } => "defect",
@@ -238,9 +227,6 @@ impl fmt::Display for NurbsSurfaceError {
                 write!(f, "the surface is not finite at ({u}, {v})")
             }
             Self::Edit { axis, .. } => write!(f, "the edit along {axis} failed"),
-            Self::Reversal { axis, .. } => {
-                write!(f, "the reversed {axis} knots have no form in doubles")
-            }
             Self::AffineNotFinite => f.write_str("the transform is not finite"),
             Self::Overflow(c) => write!(f, "the transform overflows: {c}"),
             Self::Defect { why } => write!(f, "internal defect: {why}"),
@@ -300,10 +286,9 @@ impl fmt::Display for WeightCause {
 impl std::error::Error for NurbsSurfaceError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::BadKnots { cause, .. }
-            | Self::Basis { cause, .. }
-            | Self::Edit { cause, .. }
-            | Self::Reversal { cause, .. } => Some(cause),
+            Self::BadKnots { cause, .. } | Self::Basis { cause, .. } | Self::Edit { cause, .. } => {
+                Some(cause)
+            }
             Self::BadNet(_)
             | Self::BadWeights(_)
             | Self::Degenerate { .. }
@@ -374,14 +359,6 @@ mod tests {
                     domain: [0.0, 1.0],
                 },
             },
-            NurbsSurfaceError::Reversal {
-                axis: ParamAxis::V,
-                cause: NurbsError::Multiplicity {
-                    knot: 1.0,
-                    multiplicity: 4,
-                    max: 3,
-                },
-            },
             NurbsSurfaceError::AffineNotFinite,
             NurbsSurfaceError::Overflow(NetCause::NotFinite {
                 row: at.0,
@@ -414,17 +391,14 @@ mod tests {
                 NurbsSurfaceError::BadKnots { .. } | NurbsSurfaceError::Edit { .. } => {
                     ErrorKind::Refused
                 }
-                NurbsSurfaceError::Reversal { .. } | NurbsSurfaceError::Overflow(_) => {
-                    ErrorKind::Unsupported
-                }
+                NurbsSurfaceError::Overflow(_) => ErrorKind::Unsupported,
                 NurbsSurfaceError::Defect { .. } => ErrorKind::Defect,
                 _ => ErrorKind::Refused,
             };
             assert_eq!(e.kind(), expected, "{e:?}");
             match e {
                 NurbsSurfaceError::BadKnots { cause, .. }
-                | NurbsSurfaceError::Edit { cause, .. }
-                | NurbsSurfaceError::Reversal { cause, .. } => {
+                | NurbsSurfaceError::Edit { cause, .. } => {
                     assert!(!text.contains(&cause.to_string()));
                     assert_eq!(e.source().map(ToString::to_string), Some(cause.to_string()));
                 }
