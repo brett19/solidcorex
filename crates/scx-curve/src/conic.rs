@@ -130,6 +130,13 @@ impl Circle {
         point3(&self.frame, r, r * self.sense.sign(), t)
     }
 
+    /// [`Self::point`] at each of `ts`, into `out`, zipped (`Curve::eval_many` checks the
+    /// lengths); each point has `point`'s bits.
+    pub(crate) fn fill(&self, ts: &[f64], out: &mut [Point3]) {
+        let r = self.radius.mm();
+        points3(&self.frame, r, r * self.sense.sign(), ts, out);
+    }
+
     /// The point and the first `D` derivatives at angle `t` in the scalar `T`.
     #[must_use]
     pub fn jet_over<T: Trig, const D: usize>(&self, t: T) -> CurveJet<D, T> {
@@ -211,6 +218,18 @@ impl Ellipse {
         )
     }
 
+    /// [`Self::point`] at each of `ts`, into `out`, zipped (`Curve::eval_many` checks the
+    /// lengths); each point has `point`'s bits.
+    pub(crate) fn fill(&self, ts: &[f64], out: &mut [Point3]) {
+        points3(
+            &self.frame,
+            self.semi_x.mm(),
+            self.semi_y.mm() * self.sense.sign(),
+            ts,
+            out,
+        );
+    }
+
     /// The point and the first `D` derivatives at angle `t` in the scalar `T`.
     #[must_use]
     pub fn jet_over<T: Trig, const D: usize>(&self, t: T) -> CurveJet<D, T> {
@@ -280,6 +299,13 @@ impl Circle2 {
     pub fn point_over<T: Trig>(&self, t: T) -> Point2<T> {
         let r = self.radius.mm();
         point2(&self.frame, r, r * self.sense.sign(), t)
+    }
+
+    /// [`Self::point`] at each of `ts`, into `out`, zipped (`Curve::eval_many` checks the
+    /// lengths); each point has `point`'s bits.
+    pub(crate) fn fill(&self, ts: &[f64], out: &mut [Point2]) {
+        let r = self.radius.mm();
+        points2(&self.frame, r, r * self.sense.sign(), ts, out);
     }
 
     /// The point and the first `D` derivatives at angle `t` in the scalar `T`.
@@ -362,6 +388,18 @@ impl Ellipse2 {
         )
     }
 
+    /// [`Self::point`] at each of `ts`, into `out`, zipped (`Curve::eval_many` checks the
+    /// lengths); each point has `point`'s bits.
+    pub(crate) fn fill(&self, ts: &[f64], out: &mut [Point2]) {
+        points2(
+            &self.frame,
+            self.semi_x.mm(),
+            self.semi_y.mm() * self.sense.sign(),
+            ts,
+            out,
+        );
+    }
+
     /// The point and the first `D` derivatives at angle `t` in the scalar `T`.
     #[must_use]
     pub fn jet_over<T: Trig, const D: usize>(&self, t: T) -> CurveJet2<D, T> {
@@ -427,6 +465,26 @@ fn jet2<T: Trig, const D: usize>(f: &Frame2, a: f64, b: f64, t: T) -> CurveJet2<
             let (cx, cy) = coeffs(k + 1, a, b, s, c);
             x * cx + y * cy
         }),
+    }
+}
+
+/// [`point3`] in `f64` at each of `ts`, into `out` (zipped: the caller checks the lengths),
+/// with the frame's axes read once: the same operations in the same order, so each point has
+/// [`point3`]'s bits. Reading `y` (a cross product, D12) once per batch is the saving.
+fn points3(f: &Frame, a: f64, b: f64, ts: &[f64], out: &mut [Point3]) {
+    let (o, x, y) = (f.origin(), f.x().as_vec(), f.y().as_vec());
+    for (p, &t) in out.iter_mut().zip(ts) {
+        let (s, c) = Trig::sin_cos(t);
+        *p = o + x * (a * c) + y * (b * s);
+    }
+}
+
+/// [`point2`] in `f64` at each of `ts`, into `out`, as [`points3`].
+fn points2(f: &Frame2, a: f64, b: f64, ts: &[f64], out: &mut [Point2]) {
+    let (o, x, y) = (f.origin(), f.x().as_vec(), f.y().as_vec());
+    for (p, &t) in out.iter_mut().zip(ts) {
+        let (s, c) = Trig::sin_cos(t);
+        *p = o + x * (a * c) + y * (b * s);
     }
 }
 
