@@ -77,6 +77,14 @@ pub enum SolveFailure {
     /// The integrand evaluated to a value that is not a finite number (solidcore
     /// `MassFailure::Integrand`).
     IntegrandNotFinite,
+    /// A global solve visited the most branches its options allow (not upstream: the
+    /// pin's fixed `MAX_SOLVE_BRANCHES` was an invalid input).
+    BranchesExhausted {
+        /// The most branches allowed.
+        limit: u64,
+    },
+    /// The caller cancelled the solve (solidcore `SolidError::Cancelled`).
+    Cancelled,
 }
 
 /// Why the ODE integrator's step control gave up (`crate::ode`): solidcore reports every
@@ -130,6 +138,8 @@ impl SolveFailure {
             | Self::NoNodeToSubdivide { .. }
             | Self::StepControl(_) => ErrorKind::Unsupported,
             Self::IntegrandNotFinite => ErrorKind::Refused,
+            Self::BranchesExhausted { .. } => ErrorKind::Exhausted,
+            Self::Cancelled => ErrorKind::Cancelled,
         }
     }
 }
@@ -160,6 +170,10 @@ impl fmt::Display for SolveFailure {
                 why.reason()
             ),
             Self::IntegrandNotFinite => f.write_str("the integrand is not a finite number"),
+            Self::BranchesExhausted { limit } => {
+                write!(f, "the solve visited the most branches allowed, {limit}")
+            }
+            Self::Cancelled => f.write_str("the solve was cancelled"),
         }
     }
 }
@@ -218,6 +232,9 @@ impl<E: EvalError> SolveError<E> {
     pub fn is_ignorable(&self) -> bool {
         match self {
             Self::Eval(e) => !e.never_ignored(),
+            Self::Failed { failure, .. } => {
+                !matches!(failure.kind(), ErrorKind::Exhausted | ErrorKind::Cancelled)
+            }
             _ => true,
         }
     }
@@ -259,5 +276,41 @@ pub(crate) fn ignored<T, E: EvalError>(
         Ok(v) => Ok(Some(v)),
         Err(e) if !e.is_ignorable() => Err(e),
         Err(_) => Ok(None),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Debug)]
+    struct Skippable;
+    impl fmt::Display for Skippable {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("skippable")
+        }
+    }
+    impl EvalError for Skippable {
+        fn ends_solve(&self) -> bool {
+            false
+        }
+        fn passes_through(&self) -> bool {
+            false
+        }
+        fn never_ignored(&self) -> bool {
+            false
+        }
+    }
+
+    #[test]
+    fn a_budget_or_a_cancel_is_never_skipped() {
+        let failed = |failure| SolveError::<Skippable>::Failed {
+            operation: "op",
+            failure,
+        };
+        assert!(!failed(SolveFailure::BranchesExhausted { limit: 3 }).is_ignorable());
+        assert!(!failed(SolveFailure::Cancelled).is_ignorable());
+        assert!(failed(SolveFailure::NoNodeToSubdivide { trees: 2 }).is_ignorable());
+        assert!(SolveError::Eval(Skippable).is_ignorable());
     }
 }
