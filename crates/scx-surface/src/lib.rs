@@ -44,6 +44,7 @@ mod error;
 mod plane;
 mod sphere;
 mod surface;
+mod to_nurbs;
 mod torus;
 
 pub use cone::Cone;

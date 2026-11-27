@@ -11,7 +11,10 @@
 //!   domain: the nearest points as values ([`Foot`], [`Closest`], [`Inversion`]);
 //! - [`Curve::tangent_dir`] and [`Curve2::tangent_dir`]: the direction of travel, defined
 //!   where the first derivative vanishes;
-//! - [`CurveError`]: why one cannot be built, or a query not answered.
+//! - edits by value: [`Curve::restrict`], [`Curve::reversed`] and [`Curve::transformed`]
+//!   (with the angle's [`ParamShift`]), and `restrict` and `reversed` on [`Curve2`];
+//! - [`CurveError`]: why one cannot be built, restricted or transformed, or a query not
+//!   answered.
 //!
 //! Every kind is validated once, when built, and is then plain data (`Clone`, `Send`,
 //! `Sync`, `PartialEq`; 63 X3) with no cache (X4). Each has one evaluator (X12), generic
@@ -22,11 +25,10 @@
 //! curve kind shares; an analytic kind is smooth, so the side changes nothing. Parameters
 //! are the pin's (63 D13), angles in radians (X11). A conic's orientation is a
 //! [`Sense`](scx_num::frame::Sense): reversed runs it clockwise about its frame's z (D14).
-//!
-//! Restriction, reversal and transformation build on these types (63 §3.5, CU5).
 
 mod conic;
 mod curve;
+mod edit;
 mod error;
 mod invert;
 mod line;
@@ -34,6 +36,7 @@ mod tangent;
 
 pub use conic::{Circle, Circle2, Ellipse, Ellipse2};
 pub use curve::{Curve, Curve2};
+pub use edit::ParamShift;
 pub use error::{CurveError, Degenerate, Part, SemiAxis, Unsupported};
 pub use invert::{Closest, Foot, Inversion, POLISH_STEPS};
 pub use line::{Line, Line2};
@@ -56,6 +59,7 @@ const _: () = {
     ok::<Foot>();
     ok::<Inversion>();
     ok::<Closest>();
+    ok::<ParamShift>();
 };
 
 #[cfg(test)]

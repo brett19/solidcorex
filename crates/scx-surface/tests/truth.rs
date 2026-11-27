@@ -19,6 +19,7 @@ use core::f64::consts::{FRAC_PI_2, PI};
 
 use scx_num::domain::ParamDomain;
 use scx_num::error::ErrorKind;
+use scx_num::extent2d::Extent2d;
 use scx_num::fmath;
 use scx_num::frame::{Frame, Sense};
 use scx_num::hash::Rng;
@@ -27,7 +28,8 @@ use scx_num::units::Length;
 use scx_num::vector2d::Point2;
 use scx_num::vector3d::{Point3, Vec3};
 use scx_nurbs::Approach;
-use scx_surface::{Cone, Cylinder, Plane, Sphere, SurfaceError, Torus};
+use scx_nurbs_surface::{NurbsSurface, ParamAxis};
+use scx_surface::{Cone, Cylinder, Plane, Sphere, Surface as AnySurface, SurfaceError, Torus};
 use scx_testkit::analytic;
 use scx_testkit::dd::{self, Dd};
 use scx_testkit::nurbs::{Side, Surface};
@@ -195,6 +197,24 @@ impl Kind {
             Kind::Cone(s) => s.to_step(uv),
             Kind::Sphere(s) => s.to_step(uv),
             Kind::Torus(s) => s.to_step(uv),
+        }
+    }
+    fn to_nurbs(&self, over: &Extent2d) -> Result<NurbsSurface<3>, SurfaceError> {
+        match self {
+            Kind::Plane(s) => s.to_nurbs(over),
+            Kind::Cylinder(s) => s.to_nurbs(over),
+            Kind::Cone(s) => s.to_nurbs(over),
+            Kind::Sphere(s) => s.to_nurbs(over),
+            Kind::Torus(s) => s.to_nurbs(over),
+        }
+    }
+    fn any(&self) -> AnySurface {
+        match self {
+            Kind::Plane(s) => AnySurface::Plane(*s),
+            Kind::Cylinder(s) => AnySurface::Cylinder(*s),
+            Kind::Cone(s) => AnySurface::Cone(*s),
+            Kind::Sphere(s) => AnySurface::Sphere(*s),
+            Kind::Torus(s) => AnySurface::Torus(*s),
         }
     }
     fn uv_of_step(&self, st: Point2) -> Point2 {
@@ -719,4 +739,289 @@ fn eval_many_is_point() {
     let mut out = vec![Point3::default(); uv.len()];
     s.eval_many(&uv, &mut out);
     assert_eq!(out, uv.iter().map(|&p| s.point(p)).collect::<Vec<_>>());
+}
+
+// ---------------------------------------------------------------- to_nurbs (SU3)
+
+fn ext(u: (f64, f64), v: (f64, f64)) -> Extent2d {
+    Extent2d::from_bounds(u.0, v.0, u.1, v.1).unwrap_or_else(|| panic!("{u:?} {v:?}"))
+}
+
+/// The stored surface itself, each double taken exactly: `w P` and `w` where rational.
+fn exact(n: &NurbsSurface<3>) -> Surface<3> {
+    let deg = (n.degree(ParamAxis::U), n.degree(ParamAxis::V));
+    let (ku, kv) = (n.knots(ParamAxis::U), n.knots(ParamAxis::V));
+    match (n.weighted_points(), n.weights()) {
+        (Some(wp), Some(w)) => Surface::from_homogeneous(deg, ku, kv, wp.points(), w.points()),
+        _ => Surface::new(deg, ku, kv, n.points().points(), None),
+    }
+    .unwrap_or_else(|e| panic!("{e}"))
+}
+
+fn at(n: &NurbsSurface<3>, uv: Point2) -> Point3 {
+    let p = n
+        .point([uv.x, uv.y], [Approach::Above; 2])
+        .unwrap_or_else(|e| panic!("{e}"));
+    Point3::new(p[0], p[1], p[2])
+}
+
+/// The extents each case converts: its whole range, a random piece, one crossing the seam
+/// of each turn, and one from break to break.
+fn extents(rng: &mut Rng, c: &Case) -> Vec<Extent2d> {
+    let (u, v) = ((c.u.0, c.u.1), (c.v.0, c.v.1));
+    let piece = |rng: &mut Rng, (lo, hi): (f64, f64)| {
+        let a = lo + (hi - lo) * 0.45 * rng.next_f64();
+        (a, hi - (hi - lo) * 0.45 * rng.next_f64())
+    };
+    let seam = |(lo, hi): (f64, f64)| (lo + 0.6 * (hi - lo), lo + 1.4 * (hi - lo));
+    let brk = |(lo, hi, s): (f64, f64, f64)| {
+        if hi - lo > 2.0 * s {
+            (lo + s, hi - s)
+        } else {
+            (lo, hi)
+        }
+    };
+    let mut out = vec![
+        ext(u, v),
+        ext(piece(rng, u), piece(rng, v)),
+        ext(brk(c.u), brk(c.v)),
+    ];
+    match c.kind {
+        Kind::Cylinder(_) | Kind::Cone(_) | Kind::Sphere(_) => out.push(ext(seam(u), v)),
+        Kind::Torus(_) => out.push(ext(seam(u), seam(v))),
+        Kind::Plane(_) => {}
+    }
+    out
+}
+
+/// A parameter in the extent, its ends and breaks one time in four.
+fn inside(rng: &mut Rng, lo: f64, hi: f64, span: f64) -> f64 {
+    let r = rng.next_f64();
+    if r < 0.1 {
+        lo
+    } else if r < 0.2 {
+        hi
+    } else if r < 0.3 {
+        let k = (lo / span).ceil() + f64::floor(rng.next_f64() * ((hi - lo) / span));
+        (k * span).clamp(lo, hi)
+    } else {
+        lo + (hi - lo) * rng.next_f64()
+    }
+}
+
+fn wrap(t: f64, (lo, hi): (f64, f64), periodic: bool) -> f64 {
+    if periodic {
+        lo + (t - lo).rem_euclid(hi - lo)
+    } else {
+        t
+    }
+}
+
+#[test]
+fn to_nurbs_is_on_the_quadric_and_keeps_uv() {
+    let mut rng = Rng::new(23);
+    let (mut worst_on, mut worst_uv) = (0.0f64, 0.0f64);
+    // The exact check is slow in a debug build: the first two of each kind take it.
+    for (i, c) in cases(3).into_iter().enumerate() {
+        let (pu, pv) = match c.kind {
+            Kind::Plane(_) => (false, false),
+            Kind::Torus(_) => (true, true),
+            Kind::Sphere(_) => (true, false),
+            _ => (true, false),
+        };
+        for e in extents(&mut rng, &c) {
+            let n = c
+                .kind
+                .to_nurbs(&e)
+                .unwrap_or_else(|err| panic!("{e:?}: {err}"));
+            assert_eq!(n.domain(), e, "the domain is the extent");
+            let verdict = (i < 10).then(|| {
+                c.implicit
+                    .check(&exact(&n))
+                    .unwrap_or_else(|err| panic!("{err}"))
+            });
+            if let Some(off) = verdict.and_then(|v| v.worst) {
+                let d = off.distance / c.scale;
+                worst_on = worst_on.max(d);
+                assert!(d < 4e-16, "{e:?}: off at {:?} by {d:e}", off.at);
+            }
+            let (u, v) = (e.x_interval(), e.y_interval());
+            for _ in 0..20 {
+                let uv = Point2::new(
+                    inside(&mut rng, u.min(), u.max(), c.u.2),
+                    inside(&mut rng, v.min(), v.max(), c.v.2),
+                );
+                let p = at(&n, uv);
+                let d = dist(p, c.kind.point(uv).to_array().map(Dd::new)) / c.scale;
+                let w = Point2::new(
+                    wrap(uv.x, (c.u.0, c.u.1), pu),
+                    wrap(uv.y, (c.v.0, c.v.1), pv),
+                );
+                let t = dist(p, c.implicit.point_at(&c.layout, (w.x, w.y))) / c.scale;
+                worst_uv = worst_uv.max(d).max(t);
+                assert!(d < 8e-16 && t < 8e-16, "{e:?} {uv:?}: {d:e} {t:e}");
+            }
+        }
+    }
+    eprintln!("to_nurbs: worst off {worst_on:e}, worst uv {worst_uv:e}");
+}
+
+#[test]
+fn to_nurbs_structure() {
+    let f = Frame::WORLD;
+    let t = Torus::new(
+        f,
+        Length::from_mm(3.0),
+        Length::from_mm(1.0),
+        Sense::Forward,
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let n = t
+        .to_nurbs(&ext((0.0, 1.0), (0.0, 1.0)))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let full = [
+        0.0, 0.0, 0.0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0, 1.0,
+    ];
+    assert_eq!(n.knots(ParamAxis::U), full);
+    assert_eq!(n.knots(ParamAxis::V), full);
+    assert_eq!((n.degree(ParamAxis::U), n.degree(ParamAxis::V)), (2, 2));
+    let w = n.weights().unwrap_or_else(|| panic!("rational"));
+    assert!(w.points().iter().all(|&x| x > 0.0));
+    // A quarter arc's middle weight is cos(pi/4) of its ends'.
+    let r = w.get(1, 0).copied().unwrap_or(0.0) / w.get(0, 0).copied().unwrap_or(1.0);
+    assert!((r - core::f64::consts::FRAC_1_SQRT_2).abs() < 1e-15, "{r}");
+    // Off the breaks, one span per crossed arc: [0.1, 0.6] crosses 0.25 and 0.5.
+    let n = t
+        .to_nurbs(&ext((0.1, 0.6), (0.3, 0.4)))
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(
+        n.knots(ParamAxis::U),
+        [0.1, 0.1, 0.1, 0.25, 0.25, 0.5, 0.5, 0.6, 0.6, 0.6]
+    );
+    assert_eq!(n.knots(ParamAxis::V), [0.3, 0.3, 0.3, 0.4, 0.4, 0.4]);
+    // The sphere's poles are its control rows' ends, exactly.
+    let s = Sphere::new(f, Length::from_mm(2.0), Sense::Forward).unwrap_or_else(|e| panic!("{e}"));
+    let n = s
+        .to_nurbs(&ext((0.0, 1.0), (0.0, 1.0)))
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(
+        n.knots(ParamAxis::V),
+        [0.0, 0.0, 0.0, 0.5, 0.5, 1.0, 1.0, 1.0]
+    );
+    let net = n.points();
+    for i in 0..net.nrows() {
+        assert_eq!(net.get(i, 0).copied(), Some([0.0, 0.0, -2.0]));
+        assert_eq!(net.get(i, net.ncols() - 1).copied(), Some([0.0, 0.0, 2.0]));
+    }
+    // A plane in an integer frame over integers is exactly on, and polynomial.
+    let p = Plane::new(
+        Frame::new(
+            Point3::new(1.0, -2.0, 3.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap_or(Frame::WORLD),
+    );
+    let n = p
+        .to_nurbs(&ext((-3.0, 5.0), (2.0, 7.0)))
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert!(!n.is_rational());
+    let implicit = Implicit::Plane {
+        frame: tk(p.frame(), Sense::Forward),
+    };
+    assert!(
+        implicit
+            .check(&exact(&n))
+            .unwrap_or_else(|e| panic!("{e}"))
+            .on()
+    );
+}
+
+#[test]
+fn to_nurbs_is_refused_with_kinds() {
+    let f = Frame::WORLD;
+    let len = Length::from_mm;
+    let kind = |e: SurfaceError| (e.kind(), e.name());
+    let empty = Some((ErrorKind::Refused, "extent_empty"));
+    let outside = Some((ErrorKind::Refused, "extent_outside_domain"));
+    let cyl = Cylinder::new(f, len(1.0), Sense::Forward).unwrap_or_else(|e| panic!("{e}"));
+    let period = 2.0 * PI;
+    let go = |s: &dyn Fn(&Extent2d) -> Result<NurbsSurface<3>, SurfaceError>, e| {
+        s(&e).map(|_| ()).map_err(kind).err()
+    };
+    let c = |e: &Extent2d| cyl.to_nurbs(e);
+    assert_eq!(go(&c, ext((0.0, 0.0), (0.0, 1.0))), empty);
+    assert_eq!(go(&c, ext((0.0, 1.0), (2.0, 2.0))), empty);
+    assert_eq!(go(&c, ext((0.0, period * 1.01), (0.0, 1.0))), outside);
+    assert_eq!(
+        go(&c, ext((-0.3 * period, 0.7 * period), (0.0, 1.0))),
+        None,
+        "one turn anywhere"
+    );
+    let sph = Sphere::new(f, len(1.0), Sense::Forward).unwrap_or_else(|e| panic!("{e}"));
+    let s = |e: &Extent2d| sph.to_nurbs(e);
+    assert_eq!(go(&s, ext((0.0, 1.0), (-0.1, 0.5))), outside);
+    assert_eq!(go(&s, ext((0.0, 1.0), (0.5, 1.1))), outside);
+    for a in [0.4, -0.4] {
+        let cone = Cone::new(f, len(1.0), a, Sense::Forward).unwrap_or_else(|e| panic!("{e}"));
+        let apex = -1.0 / fmath::tan(a);
+        let k = |e: &Extent2d| cone.to_nurbs(e);
+        let (near, far) = if a > 0.0 {
+            (apex, apex + 3.0)
+        } else {
+            (apex - 3.0, apex)
+        };
+        assert_eq!(
+            go(&k, ext((0.0, 1.0), (near, far))),
+            None,
+            "{a}: to the apex"
+        );
+        assert_eq!(
+            go(&k, ext((0.0, 1.0), (near - 0.5, far + 0.5))),
+            outside,
+            "{a}"
+        );
+    }
+    let tor = Torus::new(f, len(3.0), len(1.0), Sense::Forward).unwrap_or_else(|e| panic!("{e}"));
+    let t = |e: &Extent2d| tor.to_nurbs(e);
+    assert_eq!(go(&t, ext((0.0, 1.0), (0.2, 1.3))), outside);
+    let nurbs = AnySurface::Torus(tor)
+        .to_nurbs(&ext((0.0, 1.0), (0.0, 1.0)))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let any = AnySurface::Nurbs(std::sync::Arc::new(nurbs));
+    let a = |e: &Extent2d| any.to_nurbs(e);
+    assert_eq!(go(&a, ext((0.2, 0.2), (0.0, 1.0))), empty);
+    assert_eq!(go(&a, ext((-0.1, 0.5), (0.0, 1.0))), outside);
+    assert_eq!(go(&a, ext((0.0, 1.0), (0.5, 1.5))), outside);
+}
+
+#[test]
+fn surface_to_nurbs_is_the_kinds_and_restricts_nurbs() {
+    let mut rng = Rng::new(29);
+    for c in cases(5) {
+        let e = ext((c.u.0, c.u.1), (c.v.0, c.v.1));
+        let n = c.kind.to_nurbs(&e).unwrap_or_else(|err| panic!("{err}"));
+        assert_eq!(c.kind.any().to_nurbs(&e).ok().as_ref(), Some(&n));
+        let any = AnySurface::Nurbs(std::sync::Arc::new(n.clone()));
+        assert_eq!(
+            any.to_nurbs(&e).ok().as_ref(),
+            Some(&n),
+            "the whole domain is itself"
+        );
+        for sub in extents(&mut rng, &c).into_iter().skip(1).take(2) {
+            let r = any
+                .to_nurbs(&sub)
+                .unwrap_or_else(|err| panic!("{sub:?}: {err}"));
+            assert_eq!(r.domain(), sub);
+            let (u, v) = (sub.x_interval(), sub.y_interval());
+            for _ in 0..10 {
+                let uv = Point2::new(
+                    inside(&mut rng, u.min(), u.max(), c.u.2),
+                    inside(&mut rng, v.min(), v.max(), c.v.2),
+                );
+                let d = (at(&r, uv) - at(&n, uv)).length() / c.scale;
+                assert!(d < 1e-15, "{sub:?} {uv:?}: {d:e}");
+            }
+        }
+    }
 }

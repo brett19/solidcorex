@@ -6,16 +6,19 @@
 //! each four quarter arcs over `[0, 1]`, `u` from `X` and `v` from the tube's outer equator.
 
 use scx_num::domain::{ParamDomain, UvDomain};
+use scx_num::extent2d::Extent2d;
 use scx_num::frame::{Frame, Sense};
 use scx_num::ring::Ring;
 use scx_num::units::Length;
 use scx_num::vector2d::Point2;
 use scx_num::vector3d::{Point3, UnitVec3, Vec3};
 use scx_nurbs::Approach;
+use scx_nurbs_surface::{NurbsSurface, ParamAxis};
 
 use crate::arcs::Arcs;
 use crate::common::{Axes, check_lengths, unit};
 use crate::error::{Size, SurfaceError, positive};
+use crate::to_nurbs::{Dir, Reach, build};
 use scx_num::jet::SurfaceJet;
 
 /// Both directions: a turn over `[0, 1]`.
@@ -146,6 +149,23 @@ impl Torus {
     pub fn domain(&self) -> UvDomain {
         let turn = ParamDomain::periodic(1.0, 0.0).unwrap_or(ParamDomain::Unbounded);
         UvDomain::new(turn, turn)
+    }
+
+    /// The exact rational image over `over`, in the same uv (63 §4.2, §4.8; D4, D13): the
+    /// NURBS surface at `uv` is `point(uv)` within the rounding of its control data. Degree 2 in both directions, one span per quarter arc or its part.
+    ///
+    /// # Errors
+    ///
+    /// `Refused`: [`SurfaceError::EmptyExtent`] for an extent that is a single value along a
+    /// direction, and [`SurfaceError::OutsideDomain`] for one that leaves the domain (either direction longer than a turn).
+    /// [`SurfaceError::Conversion`] only on overflow, for sizes near the largest double.
+    pub fn to_nurbs(&self, over: &Extent2d) -> Result<NurbsSurface<3>, SurfaceError> {
+        let u = Dir::new(ParamAxis::U, over.x_interval(), Reach::Arcs(TURN))?;
+        let v = Dir::new(ParamAxis::V, over.y_interval(), Reach::Arcs(TURN))?;
+        let axes = self.axes();
+        build(u, v, true, |cs, (cw, sw)| {
+            axes.at(cs, self.major + self.minor * cw, self.minor * sw)
+        })
     }
 
     /// STEP's `(u, v)` at `uv`: both angles in radians.

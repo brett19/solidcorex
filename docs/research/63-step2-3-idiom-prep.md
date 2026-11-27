@@ -1139,7 +1139,7 @@ impl From<Line> for Curve { .. }  // and every other kind into its arm
   caller); with it 3.4 ns.
 - **`From` each kind into its arm.** A caller builds a kind and writes `.into()`.
 - **No `tangent_dir`** (§3.3's sketch) yet: CU6's facade is its first user, and it needs
-  the `Nurbs` arm's degenerate case to be defined. CU6 added it (§3.10).
+  the `Nurbs` arm's degenerate case to be defined. CU6 added it (§3.11).
 - **No difftest through the enum.** CU6 adds the facade adapters (§3.5); the unit tests
   prove the enum gives the kind's bits, so the pin comparison would add nothing until then.
 - **"Bit for bit" treats every NaN as one value.** Rust leaves a NaN's sign and payload
@@ -1319,8 +1319,145 @@ polynomial (P) and rational (R).
     knot arrays from the `f64` instance.
 - **An interval point costs 11 to 24 times an `f64` point.** That is the outward-rounded
   products.
+- **Follow-up landed (11-27).** The `f64` instances of `jet` and `point_over` now take the
+  `f64` basis directly and keep no knot arrays. The kernel is still the same one, with the same
+  bits; `derivs_into` and `curve.rs` are untouched. Same machine and method as above,
+  degree 9, ns per call: `jet::<2>` went from 376-424 to 279-340 (`derivs::<3>` 312-375 in
+  the same runs), and `point_over::<f64>` from 184-193 to 125-133. In callgrind, `point_over`
+  at p9 polynomial dropped from 3,409 instructions to 3,017. The jet went from 5,466 to 12,834,
+  which is mostly zeroing the scratch rows: it is faster even so. The `Ivl` forms changed
+  by under 0.5% (point 38,191 to 38,308, jet 107,907 to 108,289).
 
-### 3.9 CU4 as built (11-27)
+### 3.9 CU5 as built (11-27)
+
+Proposed for review, not yet ruled.
+
+```rust
+// scx-curve, src/edit.rs (new)
+impl Curve {
+    pub fn restrict(&self, e: Extent1d) -> Result<Self>;
+    pub fn reversed(&self) -> Self;                                    // C'(t) = C(-t)
+    pub fn transformed(&self, a: &Affine) -> Result<(Self, ParamShift)>;
+}
+impl Curve2 { pub fn restrict(..) -> Result<Self>; pub fn reversed(&self) -> Self; }
+pub struct ParamShift { .. }   // NONE, by(), apply(t) = t + by, extent(e)
+
+impl Line    { pub fn reversed(&self) -> Self; pub fn transformed(&self, a: &Affine) -> Result<Self>; }
+impl Circle  { pub fn reversed(&self) -> Self;
+               pub fn transformed(&self, a: &Affine) -> Result<(Curve, ParamShift)>; }
+impl Ellipse { pub fn reversed(&self) -> Self;
+               pub fn transformed(&self, a: &Affine) -> Result<(Self, ParamShift)>; }
+// Line2, Circle2, Ellipse2: reversed only
+
+// scx-nurbs
+impl<const D: usize> NurbsCurve<D> { pub fn reversed(&self) -> Self; }   // src/reverse.rs (new)
+impl KnotVector { pub fn negated(&self) -> Self; }                        // knots.rs, one hunk
+
+// CurveError gains OutsideDomain { extent, domain } and Nurbs(NurbsError) (transparent
+// kind and name); Degenerate gains Extent { at } and Plane; Part gains Map.
+```
+
+- **The edits are by value** (04, `&self -> Result<Self>`), as the brief says. An infallible
+  edit returns `Self`. `reversed` is total for every kind, so it takes no `Result`.
+- **Reversal is `C'(t) = C(-t)` for every kind, not the pin's `a + b - t`.**
+  - A line negates its direction. A conic flips its sense (`Sense::reversed`). Both are
+    bit for bit, because `fmath`'s sine is odd and its cosine even, and a test checks it
+    over every analytic curve of the CU2 fixtures.
+  - A NURBS curve negates its knots in reverse order (`KnotVector::negated`, exact) and
+    reverses its points and weights. The domain `[a, b]` becomes `[-b, -a]`, and an
+    edge's interval negates exactly with it. A second reversal is the curve bit for bit.
+    The values agree to rounding only (the basis sums run the other way).
+  - Against: the pin keeps the domain, `[a, b]` to `[a, b]`, and that is what scx-nurbs-surface's
+    `reversed` does for a surface direction. A caller that pairs a curve with a surface
+    direction must negate the interval, not keep it.
+  - For: `a + b - t` rounds each knot. Two close knots can merge, or a knot can cross
+    its neighbour, so the pin's reversal can fail or change the curve. Negation cannot.
+    The surface's form is left alone here (outside CU5's files) and noted for SU7.
+- **`restrict` keeps the parameter.** A line and a conic carry no extent, because an
+  edge holds its interval (§3.2), so they return a clone for any `e`.
+  - A NURBS curve is `split` at each end of `e` that lies strictly inside its domain.
+    An `e` equal to the domain returns the same `Arc`, so nothing is copied.
+  - It refuses `OutsideDomain` for an `e` past the domain, `Degenerate::Extent` for an
+    `e` of zero length, and the split's own cause otherwise.
+  - Against a no-op `restrict` on each analytic kind: the enum arm already clones, so
+    the kinds would only gain a method that does nothing.
+  - Against clamping `e` to the domain: a request past the domain is the caller's bug,
+    and the cause says so.
+- **`transformed` returns a `ParamShift` with the image.** It holds
+  `image.point(shift.apply(t)) ≈ a(self.point(t))`.
+  - A line maps its origin and its direction (unnormalised, so `t` keeps its meaning,
+    and no rescale is needed). A NURBS curve maps its control points and keeps its knots
+    and weights, then is rebuilt through `NurbsCurve::new`, which re-checks them. Both
+    have a zero shift.
+  - A conic's image comes from `p = |Ax|²`, `q = |Ay|²` and `m = Ax·Ay`, with `x` and `y`
+    the frame's axes scaled by the radii.
+    - Where the map is a similarity on the plane (`|p - q|` and `|m|` within 16
+      roundings of `p + q`), the frame takes `Ax` and the shift is zero. A circle stays a
+      `Circle`, with radius `½(|Ax| + |Ay|)`.
+    - Otherwise the image is put on its principal axes:
+      `t0 = ½ atan2(2m s, (p - q) s)` with `s = sign(p - q)`, so `t0` is in `[-π/4, π/4]`
+      and the nearest axis is chosen. Then `U' = U cos t0 + V sin t0`,
+      `V' = V cos t0 - U sin t0`, and the shift is `-t0`. A circle under a map that is
+      not a similarity becomes an `Ellipse`. This is an exact image, so no kind becomes NURBS (§3.2).
+  - Against `Option<ParamShift>` or a shift folded into the curve: the curve has no
+    parameter offset field, and an edge's interval must move with the image anyway
+    (`ParamShift::extent`).
+  - Against a NURBS image for a non-similarity map (the pin's `Transform` refuses
+    anything but a uniform scale on a conic): an affine image of a conic is a conic, and
+    the closed form is exact.
+- **The 16-rounding similarity threshold.** Measured: the worst misfit over 200,000 random
+  computed rotations times uniform scales was 5.25 roundings. A turned circle therefore
+  stays a circle, with a margin of three. Snapping costs at most twice the misfit
+  relative to the size, 32 roundings. Just past the threshold the principal axes are
+  ill-conditioned (the angle is `atan2` of two tiny numbers), but the image is not: every
+  point still maps to a few roundings, and a test checks both sides of the threshold.
+  Against 64 roundings, the first draft: a near-similar map at 1e-14 snapped and
+  cost `2e-15` at size 1, which is a needless error.
+- **A mirror keeps the sense.** The image frame's z is the normal of `Ax × Ay`, and the
+  sense is read from the image `y` against the frame's y.
+  - Under a mirror, the image runs the same way about that normal as the original
+    does about its own z. That agrees with the pin's points and with the geometry.
+  - D14 says "keeps the frame right-handed and reverses the kind's sense". That is the
+    same curve described from the other side, with z taken as `A z`.
+  - Against `Frame::transformed`: it maps z by `A`, so it would refuse a projection
+    along the plane's normal. Under such a map the image of z is not used, and the circle
+    still maps to a circle or an ellipse in its own plane.
+  - A map that flattens the plane itself (`Ax × Ay` too short) is `Degenerate::Plane`. A
+    flattened axis is the size's own `Degenerate::SemiAxis` or `Radius`.
+- **`Curve2` has no `transformed`.** scx-num has no 2-D affine map, and a body's transform
+  keeps its pcurves (D14). It is added when a caller needs one.
+- **`NurbsCurve::reversed` is in a new file, `scx-nurbs/src/reverse.rs`.** This keeps it out of
+  `curve.rs`, where elevation work is under way. Its only other hunk is
+  `KnotVector::negated` in `knots.rs`. The NURBS transform needs no new scx-nurbs op.
+- **`CurveError` carries `NurbsError` (`Nurbs(..)`), with its kind and name passed through.**
+  Against: `CurveError` grows from 16 to 40 bytes. `Result<Line>` stays at 56, and
+  `Result<(Curve, ParamShift)>` is 104, the same as `Curve`'s bound. For: a NURBS edit's
+  cause reaches the caller typed (typed errors goal), not flattened to `Refused`.
+
+Tests (scx-curve `edit.rs`, 6 tests; scx-nurbs `reverse.rs`, 1; `error.rs` extended):
+- **Reversal of analytic kinds, 3-D and 2-D.** Point and jet at `-t` against `t`, bit for
+  bit (odd derivatives negated), and a double reversal.
+- **Reversal of NURBS, 3-D and 2-D.** Domain negated exactly. Point and first derivative
+  on swapped sides within rounding, and a double reversal bit for bit. In scx-nurbs,
+  `derivs::<3>` on both sides at 65 parameters, polynomial and rational.
+- **Restriction.** Analytic kinds unchanged. NURBS over interior, end-touching and `1e-9`-wide
+  extents against the original's points, and the same `Arc` for the full domain.
+  `OutsideDomain` and `Degenerate::Extent` are checked too.
+- **Transform: every kind under random affine maps** (sizes 1e-3 to 1e3, with translations and
+  mirrors). Point and tangent within a bound from the map's largest column times the
+  curve's reach. A line has no shift, and a circle under a non-similarity becomes an ellipse.
+- **Transform: closed forms.** Rotation, uniform scale, a mirror (`x → -X`, z flipped, sense
+  kept), axis scales, a shear with the golden-ratio axes, a projection along z (circle
+  kept), a projection along y (`SemiAxis` Y zero), and a NaN map (`NotFinite(Map)`).
+- **Transform: near similarities and degenerate images.** Maps 1e-15 to 1e-10 from a
+  rotation, on both sides of the threshold. A line taken to a point, and NURBS points
+  overflowing to the curve's own cause.
+
+Work added to existing paths: none. These are new functions. The only change to shared code
+is `curve.rs`'s test helpers becoming `pub(crate)` and the error enum's larger size, which
+the constructors' `Result`s mostly absorb.
+
+### 3.10 CU4 as built (11-27)
 
 Proposed for review, not yet ruled.
 
@@ -1422,7 +1559,7 @@ seeded queries, from a throwaway bench since deleted.
   bench passed a degree interval and a degree guess to a solve that runs on the carried
   NURB's parameter, so the figure is not a fair comparison and is not claimed.
 
-### 3.10 CU6 as built (11-27)
+### 3.11 CU6 as built (11-27)
 
 Proposed for review, not yet ruled.
 
@@ -1884,6 +2021,104 @@ The same NURBS surface over the 32 by 32 grid after the merge of NS2's faster po
 The enum's batches cost 5% (`eval_many`: the chunk copies) and 14% (`eval_grid`: the
 buffer and its copy) over the direct calls; both are recorded in 05 as open, to go when
 `Point3` gets a layout that lets the surface write into `out` directly.
+
+### 4.8 SU3 as built (11-27)
+
+Decided by analysis and an adversarial pass; proposed for review, not yet ruled.
+
+```rust
+impl Plane /* and Cylinder, Cone, Sphere, Torus */ {
+    pub fn to_nurbs(&self, over: &Extent2d) -> Result<NurbsSurface<3>, SurfaceError>;
+}
+impl Surface {
+    pub fn to_nurbs(&self, over: &Extent2d) -> Result<NurbsSurface<3>, SurfaceError>;
+}
+// new SurfaceError arms: EmptyExtent { axis, at }, OutsideDomain { axis, min, max },
+// Conversion(NurbsSurfaceError)
+```
+
+The image is a tensor product of the kind's two directions. A length (the plane's u and v, the
+height of a cylinder or cone) is degree 1, the parameter itself. An angle is the rational
+quadratic arcs of SU1's `Arcs` (`Arcs::bezier`): one span per quarter arc crossed, each a
+sub-arc of the pin's quarter arc written through the homogeneous blossom
+`H(x, y) = (1 - xy, x + y, 1 + xy)` of SU1's half-angle form, so the span's control values are
+`H(ta, ta)`, `H(ta, tb)`, `H(tb, tb)` turned by the arc's middle. The control point at `(i, j)`
+is the kind's own formula `O + f D + g Z` at the directions' control values (affine in each
+direction's homogeneous point, so this is exact), and the weight is `wu wv`. Plane, cylinder
+and cone are degree (1, 1), (2, 1), (2, 1); sphere and torus (2, 2).
+
+- **Keeps the pin's uv (D13), so the image is off the surface by rounding; the alternative was
+  rational weights exactly on it.** In the pin's parameter a quarter arc's middle weight is
+  `cos(pi/4)` of its ends' (the arc is symmetric in its parameter, so its end weights are equal,
+  and that fixes the middle). No double holds `cos(pi/4)`, so the control data is rounded and
+  T4's `Implicit::check` reports the image off, by a first-order distance at most 1.0e-16 of
+  the case's scale (38 extents over 10 surfaces, two of each kind; the pin's difftest tolerance `ON_TOL` is 1e-14
+  relative). Alternative: weights `(1, 1, 2)` with `w1^2 = w0 w2 / 2` (the testkit's exact
+  `circle()`), exactly on the quadric in doubles. Against: that is a different parameter of the
+  same arc, so the image and the kind would disagree at the same uv, which is what D13 and 4.2
+  rule out (a pcurve would need a map across every conversion). Kept: uv. The plane, being
+  polynomial, is exactly on in an integer frame over an integer extent (tested). 4.4's "lies
+  exactly on" holds in the reals, and is checked to rounding.
+- **`Result`, not 4.3's infallible sketch.** 4.2 argued totality from `Extent2d` being finite.
+  It is finite, but not every finite extent is a domain of the kind: a zero-width side
+  (`EmptyExtent`), more than one turn of a periodic direction, a sphere's v outside `[0, 1]`
+  (past a pole), a cone's v past its apex onto the other nappe (`OutsideDomain`). Alternative:
+  clamp or wrap the extent silently. Against: a caller asking for two turns gets one, or a
+  sphere that folds back over its pole, and finds out from a wrong intersection. The NURBS
+  constructors' own errors (none expected, kept so no `unwrap` sits in the crate) come back as
+  `Conversion(NurbsSurfaceError)`, its kind passed through and its source exposed.
+- **One period, anywhere.** A turn may start at any u (the seam crossing is one more span, not a
+  rewrap), and `hi - lo <= period` exactly, so at most 5 spans. Alternative: accept several turns
+  as repeated arcs. Against: the image would cover the surface twice, which no B-rep face does;
+  refused instead.
+- **A break is placed exactly.** At a quarter break the control point is the axis itself
+  (`(1, 0)`, `(0, 1)`, ...), not the formula's rounding of it, so a full turn's knots are
+  `[0,0,0, L,L, 2L,2L, 3L,3L, P,P,P]` and a sphere's pole rows are its pole exactly (tested).
+  Interior breaks are double knots, the arcs' own `C1` joints; a single knot vector across the
+  turn (`C1` rational B-spline) was the alternative, but it gives a different parameter.
+- **Every weight is positive.** Splitting at each break keeps `|tau| <= tan(pi/8)`, so
+  `1 + xy > 0`; T4's check needs positive weights and NS's evaluator does not divide by zero.
+- **`Surface::to_nurbs` restricts the `Nurbs` arm** (`NurbsSurface::split` at each end strictly
+  inside the domain, the surface itself on its whole domain), with the same refusals.
+  Alternative: no `to_nurbs` on the enum. Against: step 5's B-spline-against-analytic pairs and
+  SU7 want one call for "the NURB of this face over this extent" whatever the arm.
+
+Truth (`tests/truth.rs`, 4 new tests, about 22 s in a debug build for the exact check): per
+case the whole range, a random piece, a piece from break to break, and one crossing each
+seam, over 40 surfaces. The kind's `point` and the testkit's `point_at` (u wrapped into the period) agree with
+the image at random uv, the extent's ends and its breaks, to 3.2e-16 of scale (bound 8e-16).
+The structure, the exact plane, the refusals by kind and name, and the enum's agreement with
+each kind (`==`) and its restriction of a `Nurbs` arm (at the same uv) are checked.
+
+Cost (A3; release build, ns per call, one quiet run; `point` and NURBS `point` for scale, the
+image's `point` with `Approach::Above`):
+
+| | `point` | `to_nurbs`, whole | `to_nurbs`, one span | image `point` |
+|---|---:|---:|---:|---:|
+| plane | 6.5 | 125 | 122 | 63 |
+| cylinder | 10.3 | 360 | 186 | 78 |
+| cone | 13.3 | 378 | 196 | 78 |
+| sphere | 19.8 | 586 | 232 | 84 |
+| torus | 21.0 | 899 | 244 | 83 |
+
+"Whole" is one turn each way (the plane `[0, 1]^2`); "one span" an extent inside one quarter
+arc each way. So a whole torus costs about 11 image evaluations, a trimmed patch about 3; mostly the four
+`Vec`s (knots, points, weights) the NURBS takes. 9 A3's comparison against one inversion is
+deferred to SU4, which builds the inversion; A3's verdict (one conversion per intersection
+call, not per evaluation) stands on these numbers.
+
+From research 66: no technique there changes this conversion. Its implicitisation (§8.4) is
+an approximate implicit form to seed SSI; our kinds have exact implicit forms already, which
+T4's check uses. Its exact predicates (§16) are runtime float filters for orientation tests;
+T4's check is exact rationals in the testkit, test-only, so there is nothing to adopt here.
+Its "keep derived data, do not rebuild" (§1 point 3) and OCCT's per-boolean intersection
+context (§14) match A3: if the conversion ever shows in a profile, memoise it in the caller's
+`Scratch`, keyed by the kind's bits and the extent, never on the kind. Its allocation-free
+inner loops (§1 point 4) would ask for a caller-provided buffer; not taken, as the conversion
+runs once per intersection call and `NurbsSurface` owns its storage.
+
+Open from SU3: the inversion cost comparison (SU4); a `to_nurbs` into a caller's buffer if a
+profile ever asks.
 
 ## 5. `scx-ssi`, the analytic part
 
