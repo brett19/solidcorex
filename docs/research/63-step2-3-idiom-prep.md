@@ -634,6 +634,34 @@ A follow-up can recover this without changing the API. It would add a crate-priv
 line constructor in `scx-nurbs`, or a strided curve edit, so that u is edited in place. That
 would fold the swaps and the per-line checks into one pass.
 
+**NS3b (11-27): the follow-up, done.** The strided edit is the cleaner of the two. An unchecked
+constructor would have to be public in `scx-nurbs`, and then a `NurbsCurve` would no longer be
+valid by construction. Instead, `scx-nurbs` has a new public type, `CompatibleCurves<D>`. It holds
+curves of one knot vector, one polygon after another (Piegl and Tiller's compatible curves: a
+net's lines, and later the sections that skinning takes). It is checked as `NurbsCurve` is, and
+an error names the index within its curve.
+
+Its `insert_knot`, `split` and `elevate` do the knot work once: the checks, the new knot vector,
+the insertion plan and the elevation matrix. Each polygon then goes through the same private
+A5.1 and A5.9 code as `NurbsCurve`, so curve `i` of the result is the edit of curve `i`, bit for
+bit. A unit test checks this, results and errors, over every knot and weight kind.
+
+The surface edits now copy the lines once, transposed along u, into one `CompatibleCurves`, and
+assemble the result from its parts; there are no swaps and no per-line checks. Every surface
+edit result is unchanged: a dump of 32,708 results, errors included, is byte-identical before and
+after.
+
+Ratios against the pin, measured in one session on a loaded machine (best of 5):
+
+| Edit | before | after |
+|---|---|---|
+| insert | 2.70 | 1.32 |
+| split | 3.49 | 1.44 |
+| elevate | 1.53 | 0.90 |
+
+What is left is one copy of the lines, and the `w P / w` and check passes on the way in and out.
+Reverse (2.1) and swap (4.1) are copies of three nets and are unchanged.
+
 ## 3. `scx-curve`
 
 The step-2 slice covers line, circle, ellipse and B-spline, in 3-D and 2-D, with `Curve` and its
