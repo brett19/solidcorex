@@ -8,19 +8,21 @@
 
 use scx_num::domain::{ParamDomain, UvDomain};
 use scx_num::extent1d::Extent1d;
+use scx_num::extent2d::Extent2d;
 use scx_num::frame::{Frame, Sense};
 use scx_num::ring::Ring;
 use scx_num::units::Length;
 use scx_num::vector2d::Point2;
 use scx_num::vector3d::{Point3, UnitVec3, Vec3};
 use scx_nurbs::Approach;
+use scx_nurbs_surface::{NurbsSurface, ParamAxis};
 
 use crate::Pole;
 use crate::arcs::Arcs;
 use crate::common::{Axes, check_lengths, unit};
 use crate::error::{Size, SurfaceError, positive};
 use crate::invert::{self, Closest, Inversion, Periods};
-use scx_num::extent2d::Extent2d;
+use crate::to_nurbs::{Dir, Reach, build};
 use scx_num::jet::SurfaceJet;
 
 /// The `u` direction: a turn over `[0, 1]`.
@@ -69,6 +71,16 @@ impl Sphere {
     #[must_use]
     pub const fn sense(&self) -> Sense {
         self.sense
+    }
+
+    /// The same sizes on `frame` in `sense`: the edits' rebuild of a validated kind (the
+    /// sizes are unchanged, so nothing is checked again).
+    pub(crate) const fn placed(&self, frame: Frame, sense: Sense) -> Self {
+        Self {
+            frame,
+            sense,
+            ..*self
+        }
     }
 
     fn axes(&self) -> Axes {
@@ -156,6 +168,23 @@ impl Sphere {
         let u = ParamDomain::periodic(1.0, 0.0).unwrap_or(ParamDomain::Unbounded);
         let v = Extent1d::new(0.0, 1.0).map_or(ParamDomain::Unbounded, ParamDomain::Bounded);
         UvDomain::new(u, v)
+    }
+
+    /// The exact rational image over `over`, in the same uv (63 §4.2, §4.8; D4, D13): the
+    /// NURBS surface at `uv` is `point(uv)` within the rounding of its control data. Degree 2 in both directions, one span per quarter arc or its part.
+    ///
+    /// # Errors
+    ///
+    /// `Refused`: [`SurfaceError::EmptyExtent`] for an extent that is a single value along a
+    /// direction, and [`SurfaceError::OutsideDomain`] for one that leaves the domain (`u` longer than a turn, or `v` outside `[0, 1]`, past a pole).
+    /// [`SurfaceError::Nurbs`] only on overflow, for sizes near the largest double.
+    pub fn to_nurbs(&self, over: &Extent2d) -> Result<NurbsSurface<3>, SurfaceError> {
+        let u = Dir::new(ParamAxis::U, over.x_interval(), Reach::Arcs(U))?;
+        let v = Dir::new(ParamAxis::V, over.y_interval(), Reach::Arcs(V))?;
+        let axes = self.axes();
+        build(u, v, true, |cs, (cl, sl)| {
+            axes.at(cs, self.radius * cl, self.radius * sl)
+        })
     }
 
     /// STEP's `(u, v)` at `uv`: longitude and latitude in radians.

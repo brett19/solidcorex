@@ -9,6 +9,7 @@
 //! apex along the nappe that holds the circle of radius `r`.
 
 use scx_num::domain::{ParamDomain, UvDomain};
+use scx_num::extent2d::Extent2d;
 use scx_num::fmath;
 use scx_num::frame::{Frame, Sense};
 use scx_num::ring::Ring;
@@ -16,13 +17,14 @@ use scx_num::units::Length;
 use scx_num::vector2d::Point2;
 use scx_num::vector3d::{Point3, UnitVec3, Vec3};
 use scx_nurbs::Approach;
+use scx_nurbs_surface::{NurbsSurface, ParamAxis};
 
 use crate::Pole;
 use crate::arcs::Arcs;
 use crate::common::{Axes, check_lengths, linear, unit};
 use crate::error::{Size, SurfaceError, at_least_zero};
 use crate::invert::{self, Closest, Inversion, Periods};
-use scx_num::extent2d::Extent2d;
+use crate::to_nurbs::{Dir, Reach, build};
 use scx_num::jet::SurfaceJet;
 
 /// The `u` direction: a turn over `[0, 1]`.
@@ -105,6 +107,27 @@ impl Cone {
     #[must_use]
     pub const fn sense(&self) -> Sense {
         self.sense
+    }
+
+    /// The same sizes on `frame` in `sense`: the edits' rebuild of a validated kind (the
+    /// sizes are unchanged, so nothing is checked again).
+    pub(crate) const fn placed(&self, frame: Frame, sense: Sense) -> Self {
+        Self {
+            frame,
+            sense,
+            ..*self
+        }
+    }
+
+    /// The cone with its axis and half-angle negated: `v` runs the other way and the radius
+    /// at `-v` is the radius at `v`, to the bit (the slope is negated, not recomputed).
+    pub(crate) const fn axis_reversed(&self) -> Self {
+        Self {
+            half_angle: -self.half_angle,
+            slope: -self.slope,
+            sense: self.sense.reversed(),
+            ..*self
+        }
     }
 
     fn axes(&self) -> Axes {
@@ -201,6 +224,29 @@ impl Cone {
             ParamDomain::at_most(apex)
         };
         UvDomain::new(u, v.unwrap_or(ParamDomain::Unbounded))
+    }
+
+    /// The exact rational image over `over`, in the same uv (63 §4.2, §4.8; D4, D13): the
+    /// NURBS surface at `uv` is `point(uv)` within the rounding of its control data. Degree 2 in `u` (one span per quarter arc or its part), 1 in `v`.
+    ///
+    /// # Errors
+    ///
+    /// `Refused`: [`SurfaceError::EmptyExtent`] for an extent that is a single value along a
+    /// direction, and [`SurfaceError::OutsideDomain`] for one that leaves the domain (`u` longer than a turn, or `v` past the apex).
+    /// [`SurfaceError::Nurbs`] only on overflow, for sizes near the largest double.
+    pub fn to_nurbs(&self, over: &Extent2d) -> Result<NurbsSurface<3>, SurfaceError> {
+        let u = Dir::new(ParamAxis::U, over.x_interval(), Reach::Arcs(U))?;
+        let apex = self.apex_v();
+        let reach = if self.slope > 0.0 {
+            Reach::AtLeast(apex)
+        } else {
+            Reach::AtMost(apex)
+        };
+        let v = Dir::new(ParamAxis::V, over.y_interval(), reach)?;
+        let axes = self.axes();
+        build(u, v, true, |cs, (h, _)| {
+            axes.at(cs, self.radius + self.slope * h, h)
+        })
     }
 
     /// STEP's `(u, v)` at `uv`: the angle in radians (continuous, not reduced to a turn) and

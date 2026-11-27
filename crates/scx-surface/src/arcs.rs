@@ -286,6 +286,105 @@ impl Arcs {
         }
     }
 
+    /// Whether this is a periodic turn (else the half turn).
+    pub(crate) fn is_turn(self) -> bool {
+        self.sweep == Sweep::Turn
+    }
+
+    /// The length of the parameter this direction is defined over: a turn's period, or
+    /// the half turn's `[0, 1]`.
+    pub(crate) fn length(self) -> f64 {
+        self.count() as f64 * self.span
+    }
+
+    /// `(cos, sin)` at the break where span `k` starts, exactly: a quarter turn from the
+    /// start angle times `k`.
+    fn at_break(self, k: i64) -> (f64, f64) {
+        let quarter = match self.sweep {
+            Sweep::Turn => k,
+            Sweep::Half => k - 1,
+        };
+        match quarter.rem_euclid(4) {
+            0 => (1.0, 0.0),
+            1 => (0.0, 1.0),
+            2 => (-1.0, 0.0),
+            _ => (0.0, -1.0),
+        }
+    }
+
+    /// The arcs over `[lo, hi]` as a clamped rational quadratic (`to_nurbs`, 63 §4.8):
+    /// the knots, `lo` and `hi` three times and every break strictly between them twice,
+    /// and per control point the unit circle's point `(c, s)` and its weight.
+    ///
+    /// Each knot span is one arc, or the part of it inside `[lo, hi]`, with the arc's own
+    /// formula, so the image at `t` is `cos_sin(t)` of the arc that holds `t`: the same
+    /// parameter, no reparameterisation. In `tau` (the module docs) the arc's homogeneous
+    /// form `(1 - tau^2, 2 tau, 1 + tau^2)` is a quadratic polynomial, and `tau` is affine in
+    /// `t`, so the part over `[tau_a, tau_b]` has the control points of its blossom
+    /// `(1 - x y, x + y, 1 + x y)` at `(tau_a, tau_a)`, `(tau_a, tau_b)` and `(tau_b, tau_b)`,
+    /// turned to the arc's middle. The weights `1 + x y` are positive (`|tau| <= tan(pi/8)`),
+    /// and at a break the point is the axis exactly.
+    ///
+    /// `lo < hi`, both finite and inside one copy of the direction's domain (checked by the
+    /// caller): at most five spans.
+    pub(crate) fn bezier(self, lo: f64, hi: f64) -> (Vec<f64>, Vec<(f64, f64, f64)>) {
+        let first = self.piece(lo, Approach::Above).k;
+        let last = self.piece(hi, Approach::Below).k.max(first);
+        let spans = usize::try_from(last - first + 1).unwrap_or(1);
+        let mut knots = Vec::with_capacity(2 * spans + 4);
+        let mut ctrl = Vec::with_capacity(2 * spans + 1);
+        knots.extend([lo; 3]);
+        let one = |x: f64, y: f64, rot: (f64, f64)| {
+            let w = 1.0 + x * y;
+            let (a, b) = ((1.0 - x * y) / w, (x + y) / w);
+            (rot.0 * a - rot.1 * b, rot.1 * a + rot.0 * b, w)
+        };
+        let w_break = 1.0 + TAN_PI_8 * TAN_PI_8;
+        for k in first..=last {
+            let piece = Piece {
+                k,
+                q: match self.sweep {
+                    Sweep::Turn => usize::try_from(k.rem_euclid(4)).unwrap_or(0),
+                    Sweep::Half => usize::try_from(k.clamp(0, 1)).unwrap_or(0),
+                },
+            };
+            let (a, b) = (self.start_of(k), self.start_of(k + 1));
+            let ta = if k == first { lo } else { a };
+            let tb = if k == last { hi } else { b };
+            let xa = if ta == a {
+                -TAN_PI_8
+            } else {
+                self.tau(ta, piece)
+            };
+            let xb = if tb == b {
+                TAN_PI_8
+            } else {
+                self.tau(tb, piece)
+            };
+            let rot = self.mid(piece.q);
+            if k == first {
+                ctrl.push(if ta == a {
+                    let (c, s) = self.at_break(k);
+                    (c, s, w_break)
+                } else {
+                    one(xa, xa, rot)
+                });
+            }
+            ctrl.push(one(xa, xb, rot));
+            ctrl.push(if tb == b {
+                let (c, s) = self.at_break(k + 1);
+                (c, s, w_break)
+            } else {
+                one(xb, xb, rot)
+            });
+            if k != last {
+                knots.extend([b; 2]);
+            }
+        }
+        knots.extend([hi; 3]);
+        (knots, ctrl)
+    }
+
     /// The parameter of each break in `[lo, hi]`, for tests and poles.
     #[cfg(test)]
     pub(crate) fn span(self) -> f64 {

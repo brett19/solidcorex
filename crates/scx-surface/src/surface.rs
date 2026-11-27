@@ -37,6 +37,7 @@ use crate::common::check_lengths;
 use crate::error::SurfaceError;
 use crate::invert::Inversion;
 use crate::nurbs_invert;
+use crate::to_nurbs::restrict;
 use crate::{Cone, Cylinder, Plane, Sphere, Torus};
 
 /// A surface in space: one of the kinds.
@@ -138,6 +139,19 @@ impl Surface {
                 ParamDomain::Bounded(e.y_interval()),
             )
         })
+    }
+
+    /// The exact NURBS image over `over`, in the same uv (63 §4.8): the analytic kind's
+    /// `to_nurbs`, and for a NURBS surface its restriction to `over` (split at each end of
+    /// `over` inside its domain; the surface itself, cloned, where `over` is its domain).
+    ///
+    /// # Errors
+    ///
+    /// The kind's (`EmptyExtent`, `OutsideDomain`, `Nurbs` on overflow); for a NURBS
+    /// surface, `EmptyExtent`, `OutsideDomain` past its knots' domain, and `Nurbs` with
+    /// the split's error.
+    pub fn to_nurbs(&self, over: &Extent2d) -> Result<NurbsSurface<3>, SurfaceError> {
+        dispatch!(self, k => k.to_nurbs(over), n => restrict(n, over))
     }
 
     /// `S(u, v)` (on the pieces above `uv` for a NURBS surface, which is continuous).
@@ -330,7 +344,7 @@ impl From<NurbsSurface<3>> for Surface {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use scx_num::frame::{Frame, Sense};
     use scx_num::hash::Rng;
@@ -359,7 +373,7 @@ mod tests {
     }
 
     /// 60 seeded placements at three scales and both senses, each as every analytic kind.
-    fn analytic(rng: &mut Rng) -> Vec<Surface> {
+    pub(crate) fn analytic(rng: &mut Rng) -> Vec<Surface> {
         let mut out = Vec::new();
         for (i, scale) in [1.0, 1e-3, 1e4].into_iter().cycle().take(60).enumerate() {
             let p = Point3::from(core::array::from_fn(|_| signed(rng, scale)));
@@ -385,7 +399,7 @@ mod tests {
 
     /// NURBS surfaces of every knot and weight kind, degrees 1..=4 and 9, without the picks
     /// whose interior knot repeats past the degree, which are not surfaces.
-    fn nurbs(rng: &mut Rng) -> Vec<Surface> {
+    pub(crate) fn nurbs(rng: &mut Rng) -> Vec<Surface> {
         let mut out = Vec::new();
         for (pu, pv) in [(1, 1), (1, 3), (2, 2), (3, 4), (9, 2)] {
             for knots in [Knots::Uniform, Knots::Clustered, Knots::Multiple] {

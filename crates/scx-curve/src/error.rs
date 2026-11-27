@@ -1,10 +1,13 @@
 // Written for solidcorex. Apache-2.0.
-//! Why an analytic curve cannot be built.
+//! Why a curve cannot be built, restricted or transformed, or a query on it cannot be
+//! answered.
 //!
 //! Errors follow research 62 §10: every cause has a kind ([`CurveError::kind`]), a stable
-//! name ([`CurveError::name`]) and a Display of one frame. Every cause here is the caller's
-//! data, kind `Refused` (63 X13). Evaluation of these kinds never fails: a point and a jet
-//! are closed forms, total over `f64` (a NaN parameter gives NaN coordinates).
+//! name ([`CurveError::name`]) and a Display of one frame. Every construction cause of this
+//! crate's own is the caller's data, kind `Refused` (63 X13); a query no arm answers yet is
+//! `Unsupported`; a NURBS cause ([`CurveError::Nurbs`]) is passed through with its own kind
+//! and name. Evaluation of the analytic kinds never fails: a point and a jet are closed
+//! forms, total over `f64` (a NaN parameter gives NaN coordinates).
 //!
 //! | solidcore at the pin | here |
 //! |---|---|
@@ -14,15 +17,22 @@
 //! | none: an infinite radius builds | [`CurveError::NotFinite`] |
 //! | none: `Ellipse::new` builds any radii | [`Degenerate::SemiAxis`], [`CurveError::NotFinite`] |
 //! | none: non-finite points and vectors build | [`CurveError::NotFinite`] (a [`Frame`](scx_num::frame::Frame) refuses them itself) |
+//! | new (CU5): a restriction past a NURBS curve's domain | [`CurveError::OutsideDomain`] |
+//! | new (CU5): a restriction to one parameter | [`Degenerate::Extent`] |
+//! | new (CU5): a map that takes a conic's plane to a line or a point | [`Degenerate::Plane`], or a degenerate semi-axis |
+//! | none: a NURBS curve's inversion runs the general solver | [`Unsupported::NurbsInversion`] |
 //!
-//! `OutsideDomain`, `TooLarge` and `Solve` (63 §3.2) join with the first operation that can
-//! produce them (inversion, CU4); nothing here can.
+//! `TooLarge` and `Solve` (63 §3.2) join with the first operation that can produce them.
+//! Analytic inversion (CU4) cannot: an outside foot is
+//! [`Inversion::Outside`](crate::Inversion), not an error, and every arm is bounded.
 
 use core::fmt;
 
 use scx_num::error::ErrorKind;
+use scx_num::extent1d::Extent1d;
+use scx_nurbs::NurbsError;
 
-/// Why an analytic curve cannot be built.
+/// Why a curve cannot be built, restricted or transformed.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub enum CurveError {
@@ -30,9 +40,30 @@ pub enum CurveError {
     Degenerate(Degenerate),
     /// A coordinate or size is infinite or NaN.
     NotFinite(Part),
+    /// A restriction reaches past a bounded curve's domain.
+    OutsideDomain {
+        /// The extent asked for.
+        extent: Extent1d,
+        /// The curve's domain.
+        domain: Extent1d,
+    },
+    /// A NURBS curve's own cause (its split, or its build from mapped points), with its
+    /// kind and name.
+    Nurbs(NurbsError),
+    /// A query this kind does not answer yet.
+    Unsupported(Unsupported),
 }
 
-/// A size or direction too small to give a curve. The threshold is the pin's
+/// A query no arm answers yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Unsupported {
+    /// A NURBS curve's closest point or inversion: it needs the iterative solve under a
+    /// budget (63 X13), which is not built.
+    NurbsInversion,
+}
+
+/// A size or direction too small to give a curve. A length's threshold is the pin's
 /// [`EFF_ZERO`](scx_num::math::EFF_ZERO) (`1e-12` mm), as there.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
@@ -54,6 +85,13 @@ pub enum Degenerate {
         /// Its length.
         length: f64,
     },
+    /// A restriction to the single parameter `at`: an extent of no length.
+    Extent {
+        /// The parameter.
+        at: f64,
+    },
+    /// A map that takes a conic's plane to a line or a point: the image has no plane.
+    Plane,
 }
 
 /// An ellipse's semi-axis: along its frame's x or y.
@@ -69,7 +107,7 @@ pub enum SemiAxis {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Part {
-    /// A line's origin.
+    /// A line's origin, or a conic's centre.
     Origin,
     /// A line's direction.
     Direction,
@@ -77,14 +115,21 @@ pub enum Part {
     Radius,
     /// An ellipse's semi-axis.
     SemiAxis(SemiAxis),
+    /// The affine map a curve is transformed by.
+    Map,
 }
 
 impl CurveError {
-    /// The error's kind: always [`ErrorKind::Refused`] (the data is the caller's).
+    /// The error's kind: [`ErrorKind::Refused`] (the data is the caller's), a NURBS
+    /// cause's own, or [`ErrorKind::Unsupported`] for a query not built.
     #[must_use]
     pub const fn kind(&self) -> ErrorKind {
         match self {
-            Self::Degenerate(_) | Self::NotFinite(_) => ErrorKind::Refused,
+            Self::Degenerate(_) | Self::NotFinite(_) | Self::OutsideDomain { .. } => {
+                ErrorKind::Refused
+            }
+            Self::Nurbs(e) => e.kind(),
+            Self::Unsupported(_) => ErrorKind::Unsupported,
         }
     }
 
@@ -95,7 +140,12 @@ impl CurveError {
             Self::Degenerate(Degenerate::Direction { .. }) => "degenerate_direction",
             Self::Degenerate(Degenerate::Radius { .. }) => "degenerate_radius",
             Self::Degenerate(Degenerate::SemiAxis { .. }) => "degenerate_semi_axis",
+            Self::Degenerate(Degenerate::Extent { .. }) => "degenerate_extent",
+            Self::Degenerate(Degenerate::Plane) => "degenerate_plane",
             Self::NotFinite(_) => "not_finite",
+            Self::OutsideDomain { .. } => "outside_domain",
+            Self::Nurbs(e) => e.name(),
+            Self::Unsupported(Unsupported::NurbsInversion) => "unsupported_nurbs_inversion",
         }
     }
 }
@@ -116,6 +166,7 @@ impl fmt::Display for Part {
             Self::Direction => f.write_str("the direction"),
             Self::Radius => f.write_str("the radius"),
             Self::SemiAxis(a) => write!(f, "the {a} semi-axis"),
+            Self::Map => f.write_str("the map"),
         }
     }
 }
@@ -132,12 +183,39 @@ impl fmt::Display for CurveError {
             Self::Degenerate(Degenerate::SemiAxis { axis, length }) => {
                 write!(f, "an ellipse {axis} semi-axis of {length} is not positive")
             }
+            Self::Degenerate(Degenerate::Extent { at }) => {
+                write!(
+                    f,
+                    "a restriction to the single parameter {at} gives no curve"
+                )
+            }
+            Self::Degenerate(Degenerate::Plane) => {
+                f.write_str("the map takes the conic's plane to a line or a point")
+            }
             Self::NotFinite(part) => write!(f, "{part} is not finite"),
+            Self::OutsideDomain { extent, domain } => write!(
+                f,
+                "the extent [{}, {}] reaches past the domain [{}, {}]",
+                extent.min(),
+                extent.max(),
+                domain.min(),
+                domain.max()
+            ),
+            Self::Nurbs(e) => e.fmt(f),
+            Self::Unsupported(Unsupported::NurbsInversion) => {
+                f.write_str("a NURBS curve's inversion is not built")
+            }
         }
     }
 }
 
 impl std::error::Error for CurveError {}
+
+impl From<NurbsError> for CurveError {
+    fn from(e: NurbsError) -> Self {
+        Self::Nurbs(e)
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -145,7 +223,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     #[test]
-    fn every_cause_is_refused_named_and_displayed() {
+    fn every_cause_is_kinded_named_and_displayed() {
         let all = [
             CurveError::Degenerate(Degenerate::Direction { length: 0.0 }),
             CurveError::Degenerate(Degenerate::Radius { radius: -1.0 }),
@@ -153,11 +231,22 @@ mod tests {
                 axis: SemiAxis::Y,
                 length: 0.0,
             }),
+            CurveError::Degenerate(Degenerate::Extent { at: 1.0 }),
+            CurveError::Degenerate(Degenerate::Plane),
             CurveError::NotFinite(Part::Origin),
             CurveError::NotFinite(Part::SemiAxis(SemiAxis::X)),
+            CurveError::NotFinite(Part::Map),
+            CurveError::OutsideDomain {
+                extent: Extent1d::new(0.0, 2.0).unwrap(),
+                domain: Extent1d::new(0.0, 1.0).unwrap(),
+            },
         ];
         let names: BTreeSet<_> = all.iter().map(CurveError::name).collect();
-        assert_eq!(names.len(), 4);
+        assert_eq!(names.len(), 7);
+        let unsupported = CurveError::Unsupported(Unsupported::NurbsInversion);
+        assert_eq!(unsupported.kind(), ErrorKind::Unsupported);
+        assert!(!names.contains(unsupported.name()));
+        assert!(!unsupported.to_string().is_empty());
         for e in all {
             assert_eq!(e.kind(), ErrorKind::Refused);
             assert!(!e.to_string().is_empty());
@@ -166,5 +255,9 @@ mod tests {
             CurveError::NotFinite(Part::SemiAxis(SemiAxis::X)).to_string(),
             "the x semi-axis is not finite"
         );
+        let nurbs = NurbsError::EmptyDomain { at: 1.0 };
+        let e = CurveError::from(nurbs);
+        assert_eq!((e.kind(), e.name()), (nurbs.kind(), nurbs.name()));
+        assert_eq!(e.to_string(), nurbs.to_string());
     }
 }

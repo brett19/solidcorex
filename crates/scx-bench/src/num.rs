@@ -7,7 +7,8 @@
 //! of intervals and boxes (`extent1_union`, `extent3_union`), per element: `normalize`,
 //! `transformed_box`, `compose`, `inverse`, `point` and `vector` (a transform applied),
 //! `distance`, `vec_mix` (cross, dot, scale, add and subtract in one expression) and
-//! `contains` (a point in a box, with tolerance).
+//! `contains` (a point in a box, with tolerance), and the fmath functions the cubic and
+//! quartic solvers call (`cos`, `acos`, `cbrt`) against the platform's libm.
 
 use crate::case::{Case, both, same};
 use crate::{Rng, edges, seeded};
@@ -376,6 +377,43 @@ fn transforms(out: &mut Vec<Case>) {
     }
 }
 
+/// The fmath functions the cubic and quartic solvers call, against the platform's libm,
+/// which the pin calls: `cos` on the solvers' angles, `acos` across its domain, `cbrt`
+/// over the solvers' scales with either sign.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the pin's side is the platform's libm, which is what it calls"
+)]
+fn scalars(out: &mut Vec<Case>) {
+    type F = fn(f64) -> f64;
+    type Draw = fn(&mut Rng) -> f64;
+    let fns: [(&str, F, F, Draw); 3] = [
+        ("cos", scx_num::fmath::cos, f64::cos, |r| r.range(-4.0, 4.0)),
+        ("acos", scx_num::fmath::acos, f64::acos, |r| {
+            r.range(-1.0, 1.0)
+        }),
+        ("cbrt", scx_num::fmath::cbrt, f64::cbrt, |r| {
+            let v = scx_num::fmath::exp2(r.range(-60.0, 60.0));
+            if r.next_u64() & 1 == 0 { v } else { -v }
+        }),
+    ];
+    let e = edges(
+        30,
+        &[NAN, INF, -INF, -0.0, 0.0, 5e-324, 1e300, 1.0, -1.0, 0.5],
+    );
+    for (i, (f, scx, pin, draw)) in (31..).zip(fns) {
+        let v = seeded(i, draw);
+        for (name, v) in [(format!("num/{f}"), &v), (format!("num/{f}/edge"), &e)] {
+            out.push(Case::map(
+                &name,
+                same(v),
+                move |&x| scx(x),
+                move |&x| pin(x),
+            ));
+        }
+    }
+}
+
 /// Every case, in order.
 #[must_use]
 pub fn cases() -> Vec<Case> {
@@ -383,5 +421,6 @@ pub fn cases() -> Vec<Case> {
     folds(&mut out);
     vectors(&mut out);
     transforms(&mut out);
+    scalars(&mut out);
     out
 }

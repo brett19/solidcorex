@@ -285,7 +285,7 @@ from_nurbs!(Curve, 3);
 from_nurbs!(Curve2, 2);
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use scx_num::frame::{Frame, Frame2, Sense};
     use scx_num::hash::Rng;
@@ -331,7 +331,7 @@ mod tests {
         out
     }
 
-    fn curves(seed: u64) -> Vec<Curve> {
+    pub(crate) fn curves(seed: u64) -> Vec<Curve> {
         let mut rng = Rng::new(seed);
         let mut out: Vec<Curve> = nurbs::<3>(&mut rng).into_iter().map(Curve::from).collect();
         for (i, scale) in [1.0, 1e-3, 1e4].into_iter().cycle().take(60).enumerate() {
@@ -353,7 +353,7 @@ mod tests {
         out
     }
 
-    fn curves2(seed: u64) -> Vec<Curve2> {
+    pub(crate) fn curves2(seed: u64) -> Vec<Curve2> {
         let mut rng = Rng::new(seed);
         let mut out: Vec<Curve2> = nurbs::<2>(&mut rng).into_iter().map(Curve2::from).collect();
         for (i, scale) in [1.0, 1e-3, 1e4].into_iter().cycle().take(60).enumerate() {
@@ -376,7 +376,7 @@ mod tests {
 
     /// Ordinary parameters, large angles, signed zero, infinities and NaN, and parameters
     /// inside a NURBS curve's domain, `[0, 1]`.
-    fn params(rng: &mut Rng) -> Vec<f64> {
+    pub(crate) fn params(rng: &mut Rng) -> Vec<f64> {
         let mut t = vec![
             0.0,
             -0.0,
@@ -396,7 +396,7 @@ mod tests {
     /// The bits, with every NaN one pattern: Rust leaves a NaN's sign and payload
     /// unspecified (an optimised loop and a single call may differ), so no caller can key on
     /// them. Signed zeros stay apart.
-    fn bits(x: f64) -> u64 {
+    pub(crate) fn bits(x: f64) -> u64 {
         if x.is_nan() {
             f64::NAN.to_bits()
         } else {
@@ -404,11 +404,11 @@ mod tests {
         }
     }
 
-    fn bits3(p: Point3) -> [u64; 3] {
+    pub(crate) fn bits3(p: Point3) -> [u64; 3] {
         p.to_array().map(bits)
     }
 
-    fn bits2(p: Point2) -> [u64; 2] {
+    pub(crate) fn bits2(p: Point2) -> [u64; 2] {
         p.to_array().map(bits)
     }
 

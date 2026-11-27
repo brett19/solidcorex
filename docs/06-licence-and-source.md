@@ -45,6 +45,18 @@ Rules that follow, until Brett says otherwise:
 - Nothing is published until the notices are in place.
 - `prototypes/body-structure/` was written from scratch with nothing copied.
 
+### Other kernels read for technique (research 60, 66)
+
+Other kernels are read for ideas, never copied. Only permissively licensed code is read; copyleft kernels
+(OCCT, CGAL, SISL) are studied through their documents and papers only.
+
+- **OpenNURBS** (checked 2026-11-27, research 66 L1): the repository's `LICENSE` at 2bd2e66 has no grant
+  ("All Rights Reserved", a warranty disclaimer and zlib's text; GitHub reports NOASSERTION). Each source
+  header points to opennurbs.org, whose "Legal Stuff" section grants "to any person ... to deal in the
+  Software without restriction", MIT-style without a notice condition. The grant lives on a web page
+  that can change, so it is quoted with its date in research 66 and checked again before any reliance.
+  Treated as readable for technique.
+
 ## The pinned source (decided by Brett, 2026-11-26)
 
 "We should also pin the solid core right now, we can iteratively increase that pin later."

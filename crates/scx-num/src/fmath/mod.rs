@@ -10,13 +10,19 @@
 //! `-`, `*`, `/`, `sqrt` and the error-free transformations are used, all of them
 //! correctly rounded by IEEE 754, so the bits do not depend on the platform.
 //!
+//! `cos`, `acos` and `cbrt` first try a fast path (Ziv's strategy): the same value in
+//! plain doubles, with exact products only where the result needs them, kept when a
+//! rounding test proves the double-double path rounds to the same double, and that path
+//! otherwise (under 2% of inputs). The bits are the double-double path's either way;
+//! `dd::rounds_to_hi` holds the test and its proof, and each fast path its error bound.
+//!
 //! Depends on nothing in the crate but [`crate::eft`], so the two can move to a crate of
 //! their own.
 //!
 //! # Accuracy
 //!
-//! Every function is correctly rounded (round to nearest, ties to even) on every input
-//! tried: 5,000 per function (4,997 for `sin` and 4,999 for `tan`, whose other inputs
+//! Every function was correctly rounded (round to nearest, ties to even) on every random
+//! input tried: 5,000 per function (4,997 for `sin` and 4,999 for `tan`, whose other inputs
 //! were infinite), log-uniform over the whole domain and dense near the hard places
 //! (arguments near multiples of `pi/2`, near 1 for the logarithms, near `±1` for `asin`,
 //! subnormals), against Python's `decimal` at 90 digits. MEASURED 2026-11-27, off the
@@ -31,6 +37,16 @@
 //! | `sinh` | 0.5000 | | `cosh` | 0.4999 | | `tanh` | 0.5000 |
 //! | `cbrt` | 0.4997 | | `hypot` | 0.4999 | | `powf` | 0.4999 |
 //! | `powi` | 0.4999 | |  |  | |  |  |
+//!
+//! It is not correctly rounded everywhere. Each function rounds once a result carrying 68
+//! to 104 bits, so where the true value lies closer than that to a halfway point between
+//! two doubles the result can be the neighbour of the correct one: at CORE-MATH's worst
+//! cases (`tests/fmath_worst.rs`, 1,000 per function) 2 to 27% of the results misround,
+//! by at most 2^-21 ulp past the halfway point (`exp2`; `exp` 2^-28, `ln` 2^-36, the rest
+//! 2^-40 or less).
+//! `powf` also misrounds exact halfway points (`powf(1781, 5)`). Only `cbrt` was
+//! correctly rounded at all of them. Every result checked is within one ulp, and none is
+//! further than the neighbour.
 //!
 //! `tests/fmath.rs` holds the test that keeps this: random inputs and a table of hard
 //! cases against references computed in double-double in the test itself, each within
@@ -57,8 +73,15 @@
 //! | `cbrt` | 24.2 | 12.8 | 1.90 | | `hypot` | 13.0 | 12.1 | 1.07 |
 //! | `powf` | 40.1 | 12.5 | 3.22 | | `powi` | 57.3 | 26.8 | 2.14 |
 //!
+//! The `cos`, `acos` and `cbrt` rows predate their fast paths. MEASURED 2026-11-27, off
+//! the repository, back to back on one pinned core against the build before them (as
+//! ratios to the platform's libm in the same run): `cos` about 9% faster, `acos` about
+//! 30%, `cbrt` about 12%.
+//!
 //! The default x86-64 target has no fused multiply-add instruction, so every
-//! [`crate::eft::two_prod`] is a call to the C library's `fma`. Built with
+//! [`crate::eft::two_prod`] is a call to a library `fma`: on `x86_64-unknown-linux-gnu`,
+//! `compiler_builtins`' own, which picks a hardware or software path at run time (each
+//! correctly rounded, so the bits agree). Built with
 //! `-C target-cpu=native` (which the workspace does not do) on a machine with one, fmath
 //! is 30 to 40% faster (`sin` 21.8 ns, `ln` 11.3 ns, `powi` 35.2 ns) with the same bits.
 //! Correct rounding is the reason for the cost; the speed that matters is the corpus's,
@@ -70,6 +93,8 @@
 
 pub(crate) mod dd;
 mod exp;
+#[cfg(test)]
+mod fast_check;
 mod hyper;
 mod inverse;
 mod log;

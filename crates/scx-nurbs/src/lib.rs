@@ -7,7 +7,7 @@
 //!   their derivatives;
 //! - [`bezier`]: binomials, Bernstein polynomials, Bezier degree elevation and subdivision;
 //! - [`NurbsCurve`]: a validated curve in `D` dimensions, polynomial or rational, with
-//!   evaluation, derivatives, knot insertion, splitting and degree elevation;
+//!   evaluation, derivatives, knot insertion, splitting, reversal and degree elevation;
 //! - [`CompatibleCurves`]: curves of one knot vector (a surface's net lines, skinning
 //!   sections), with the curve edits applied to all of them at once, bit for bit.
 //!
@@ -31,6 +31,7 @@ mod error;
 mod eval_over;
 mod knots;
 mod point;
+mod reverse;
 
 pub use basis::{Basis, BasisDerivs, BasisJet};
 pub use curve::NurbsCurve;
