@@ -18,9 +18,13 @@
 //!    point. An operand vertex among them is the point; two vertices of one operand among
 //!    them are refused when within coincidence of each other and unsupported when only a
 //!    chain joins them (the 11-27 merged-points row).
-//! 4. **Face-face** (BO2), **split and classify** (BO3), **select and build** (BO4): not
-//!    built yet. [`boolean`] runs stages 1 to 3 and then answers
-//!    [`BooleanUnsupported::Stage`].
+//! 4. **Face-face** (BO2). Each pair's surfaces intersected in closed form
+//!    (`scx_ssi::analytic`), the curves cut at the merged points through both faces and
+//!    kept where inside both; the stage-2 spans cut the same way and kept where inside the
+//!    face; coincident pairs with their overlap and sense; isolated touch points. A pair
+//!    with no closed form is [`BooleanUnsupported::SsiPair`].
+//! 5. **Imprint** (BO3), **classify** and **select and build** (BO4): not built yet.
+//!    [`boolean`] runs stages 1 to 4 and then answers [`BooleanUnsupported::Stage`].
 //!
 //! **Reads only.** Both operands are `&Brep`; their box trees and boundary trees are filled
 //! on first read by `scx-brep`, and the work charged does not depend on whether they were
@@ -32,6 +36,7 @@
 mod boolean;
 mod contact;
 mod error;
+mod faceface;
 mod geom;
 mod pairs;
 mod points;

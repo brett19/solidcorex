@@ -144,7 +144,7 @@ enum Candidate {
 
 /// What the tests read of a face, read once: its vertices and edges, each once in id
 /// order, its accuracy and its box (each derived in time linear in the face's uses).
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct Parts {
     pub(crate) vertices: Vec<VertexId>,
     pub(crate) edges: Vec<EdgeId>,
@@ -171,7 +171,7 @@ impl Parts {
 
 /// The faces the pairs name on each side, with their parts: built once, read by every
 /// test and by the merge.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct Touched([BTreeMap<FaceId, Parts>; 2]);
 
 impl Touched {
@@ -190,8 +190,8 @@ impl Touched {
         t
     }
 
-    /// The faces of `side`.
-    const fn side(&self, side: Side) -> &BTreeMap<FaceId, Parts> {
+    /// The faces of `side`, in id order.
+    pub(crate) const fn faces(&self, side: Side) -> &BTreeMap<FaceId, Parts> {
         let [pa, pb] = &self.0;
         match side {
             Side::A => pa,
@@ -201,7 +201,7 @@ impl Touched {
 
     /// The parts of `face` of `side`; a face not touched has none.
     pub(crate) fn parts(&self, side: Side, face: FaceId) -> Option<&Parts> {
-        self.side(side).get(&face)
+        self.faces(side).get(&face)
     }
 }
 
@@ -238,7 +238,7 @@ fn boxed(ops: Operands<'_>, touched: &Touched) -> Vec<Boxed> {
     let mut out = Vec::new();
     for side in Side::BOTH {
         let body = ops.of(side);
-        let faces = touched.side(side);
+        let faces = touched.faces(side);
         let mut vertices: Vec<VertexId> = faces.values().flat_map(|p| p.vertices.clone()).collect();
         let mut edges: Vec<EdgeId> = faces.values().flat_map(|p| p.edges.clone()).collect();
         vertices.sort_unstable();

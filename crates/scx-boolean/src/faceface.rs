@@ -1,0 +1,826 @@
+// Written for solidcorex. Apache-2.0.
+//! Stage 4: face against face (72 §5.4 stage 3; BO2, 72 §14.24).
+//!
+//! For each face pair of stage 1, [`analytic::intersect`] gives where the two surfaces meet
+//! over the faces' uv boxes: curve pieces and isolated points, a coincident overlap, or
+//! nothing. Nothing here searches: an answer without a closed form is
+//! [`BooleanUnsupported::SsiPair`], never a grid or a marcher.
+//!
+//! - **Curves.** Each piece is cut at the merged points of stage 3 that pass through both
+//!   faces (an edge or vertex of the face, or the face itself) and lie on the curve, found
+//!   by the curve's inversion. Between two cuts the curve crosses neither face's boundary
+//!   where it is inside the other face, so one place decides each sub-span: it is kept as a
+//!   [`Section`] when its sample lies inside both faces, dropped when outside either, and
+//!   dropped as well when it runs along a boundary edge of either face: that stretch is an
+//!   operand edge lying on the other face, a [`Lying`] piece. A sample near a boundary that
+//!   decides nothing is refined by halving, at most [`REFINE`] levels, then it is
+//!   [`BooleanDefect::UndecidedSpan`].
+//! - **Edges on faces.** The spans of stage 2 (an edge within coincidence of the other
+//!   operand's surface over the surface's uv box) are cut the same way, at the merged points
+//!   on the edge, and each sub-span is kept as a [`Lying`] piece when inside the face or
+//!   along one of its boundary edges (`along`), dropped when outside it.
+//! - **Coincident faces** (SS4). The overlap's pieces as `analytic::intersect` gives them,
+//!   without the pieces of no width (patches that only touch along a line), and whether the
+//!   two faces' normals agree: the same-or-opposite rule BO4 classifies by. The region the
+//!   faces share is bounded by their [`Lying`] pieces; the overlap is of their uv boxes.
+//! - **Touch points.** An isolated point of the answer on both faces and inside at least
+//!   one is a [`Touch`], the merged point there named when there is one (BO7's). A point
+//!   on both boundaries is where their edges meet: stage 3 has it.
+//!
+//! Every kept piece ends at merged points, by index into the stage-3 list, except a closed
+//! curve no merged point lies on, which is kept whole. A kept piece with an end at no merged
+//! point is a defect: a face's region reaches its uv box only along its boundary, and every
+//! place the boundary crosses the other face is a stage-2 contact.
+
+use core::f64::consts::TAU;
+use std::collections::BTreeMap;
+
+use scx_algo::box_tree::BoxTree;
+use scx_brep::{EdgeId, Face, FaceId, UvSide, VertexId};
+use scx_curve::Curve;
+use scx_num::budget::{Budget, Stop};
+use scx_num::extent1d::Extent1d;
+use scx_num::extent3d::Extent3d;
+use scx_num::units::Accuracy;
+use scx_num::vector2d::Point2;
+use scx_num::vector3d::{Point3, Vec3};
+use scx_ssi::analytic::{self, Contact, Intersection, IntersectionCurve, Overlap};
+use scx_surface::{Closed, Surface, SurfaceKind};
+
+use crate::boolean::Interference;
+use crate::contact::{On, Span, Touched};
+use crate::error::{BooleanDefect, BooleanError, BooleanUnsupported};
+use crate::geom::{Operands, Side, edge_foot, face_foot, recorded};
+use crate::points::Point;
+
+/// The most halvings a sub-span's sample is refined by: `2^REFINE - 1` samples at most.
+pub(crate) const REFINE: u32 = 3;
+
+/// A closed conic's span is a whole turn when this long: the closed forms give `[0, 2 pi]`.
+const FULL_TURN: f64 = TAU - 1e-9;
+
+/// A kept piece of an intersection curve: inside both faces, a new edge for BO3.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Section {
+    /// `a`'s face, then `b`'s.
+    pub(crate) faces: [FaceId; 2],
+    /// The curve, an exact kind; it runs along `n_a x n_b`.
+    pub(crate) curve: Curve,
+    /// The curve's parameters over the piece (a closed conic's may pass `2 pi`).
+    pub(crate) t: Extent1d,
+    /// How the surfaces meet along it.
+    pub(crate) contact: Contact,
+    /// The merged points at the start and the end, by index into the stage-3 list; `None`
+    /// for a closed curve no merged point lies on, kept whole.
+    pub(crate) ends: Option<[usize; 2]>,
+}
+
+/// An operand edge lying on a face of the other operand over a piece inside that face.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Lying {
+    /// The edge's side.
+    pub(crate) side: Side,
+    /// The edge.
+    pub(crate) edge: EdgeId,
+    /// The face, of the other side.
+    pub(crate) face: FaceId,
+    /// The edge's parameters over the piece.
+    pub(crate) t: Extent1d,
+    /// The face's boundary edge it runs along, when it does (collinear edges); `None`
+    /// inside the face.
+    pub(crate) along: Option<EdgeId>,
+    /// The merged points at the piece's start and end.
+    pub(crate) ends: [usize; 2],
+}
+
+/// Two faces on one surface, within coincidence, over pieces of their uv boxes' overlap.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Coincidence {
+    /// `a`'s face, then `b`'s.
+    pub(crate) faces: [FaceId; 2],
+    /// Whether the faces' normals agree there (else they are opposite).
+    pub(crate) same: bool,
+    /// The overlap's pieces of some width, as SS4 gives them (in each surface's uv).
+    pub(crate) overlaps: Vec<Overlap>,
+}
+
+/// An isolated point where the surfaces touch, on both faces and inside one.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Touch {
+    /// `a`'s face, then `b`'s.
+    pub(crate) faces: [FaceId; 2],
+    /// The point.
+    pub(crate) at: Point3,
+    /// The merged point there, if any.
+    pub(crate) point: Option<usize>,
+}
+
+/// What stage 4 found, each list in pair order (then the order of construction).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct FaceFace {
+    /// The kept curve pieces.
+    pub(crate) sections: Vec<Section>,
+    /// The operand edges lying on faces of the other, by side, edge, face, start.
+    pub(crate) lying: Vec<Lying>,
+    /// The coincident pairs.
+    pub(crate) coincident: Vec<Coincidence>,
+    /// The touch points.
+    pub(crate) touches: Vec<Touch>,
+}
+
+/// Which merged points pass through which faces and edges, per side: read once.
+struct Index {
+    /// The points through each face (its interior, an edge or a vertex of it), ascending.
+    faces: [BTreeMap<FaceId, Vec<usize>>; 2],
+    /// The points on each edge inside it, with the edge's parameter there.
+    edges: [BTreeMap<EdgeId, Vec<(f64, usize)>>; 2],
+    /// The point at each vertex.
+    vertices: [BTreeMap<VertexId, usize>; 2],
+    /// Each touched face's boundary edges with their boxes, in a tree.
+    rims: [BTreeMap<FaceId, Rim>; 2],
+}
+
+/// A face's boundary edges with their boxes and accuracies (each derived once per edge),
+/// in a box tree: a sample's boundary test reads only the edges whose box it is in.
+struct Rim {
+    edges: Vec<(EdgeId, Option<Accuracy>)>,
+    tree: BoxTree<Extent3d>,
+    /// The least accurate edge's accuracy: the tree query's reach.
+    worst: Option<Accuracy>,
+}
+
+impl Rim {
+    /// The boundary edges whose box holds `p` within coincidence of `acc`, ascending.
+    fn near(&self, ops: Operands<'_>, p: Point3, acc: Option<Accuracy>) -> Vec<(EdgeId, f64)> {
+        let Some(q) = Extent3d::from_point(p) else {
+            return Vec::new();
+        };
+        self.tree
+            .overlapping(&q, ops.coincidence(self.worst, acc))
+            .into_iter()
+            .filter_map(|i| {
+                let &(e, ea) = self.edges.get(i)?;
+                Some((e, ops.coincidence(ea, acc)))
+            })
+            .collect()
+    }
+}
+
+/// The rims of the touched faces of `side`, each edge's box derived once.
+fn rims(ops: Operands<'_>, touched: &Touched, side: Side) -> BTreeMap<FaceId, Rim> {
+    let body = ops.of(side);
+    let mut boxes: BTreeMap<EdgeId, Option<(Extent3d, Option<Accuracy>)>> = BTreeMap::new();
+    let mut out = BTreeMap::new();
+    for (&f, parts) in touched.faces(side) {
+        let mut edges = Vec::new();
+        let mut at = Vec::new();
+        for &e in &parts.edges {
+            let b = *boxes.entry(e).or_insert_with(|| {
+                let ed = body.edge(e)?;
+                Some((ed.bounding_box()?, recorded(ed.accuracy())))
+            });
+            if let Some((bx, acc)) = b {
+                edges.push((e, acc));
+                at.push(bx);
+            }
+        }
+        let worst = edges
+            .iter()
+            .map(|&(_, a)| a)
+            .fold(None, |w, a| if a > w { a } else { w });
+        out.insert(
+            f,
+            Rim {
+                tree: BoxTree::new(&at),
+                edges,
+                worst,
+            },
+        );
+    }
+    out
+}
+
+impl Index {
+    fn of(ops: Operands<'_>, touched: &Touched, points: &[Point]) -> Self {
+        let mut ix = Self {
+            faces: [BTreeMap::new(), BTreeMap::new()],
+            edges: [BTreeMap::new(), BTreeMap::new()],
+            vertices: [BTreeMap::new(), BTreeMap::new()],
+            rims: Side::BOTH.map(|side| rims(ops, touched, side)),
+        };
+        for (k, side) in Side::BOTH.into_iter().enumerate() {
+            // The faces each vertex and edge bounds, among the touched.
+            let mut of_vertex: BTreeMap<VertexId, Vec<FaceId>> = BTreeMap::new();
+            let mut of_edge: BTreeMap<EdgeId, Vec<FaceId>> = BTreeMap::new();
+            for (&f, parts) in touched.faces(side) {
+                for &v in &parts.vertices {
+                    of_vertex.entry(v).or_default().push(f);
+                }
+                for &e in &parts.edges {
+                    of_edge.entry(e).or_default().push(f);
+                }
+            }
+            let (Some(faces), Some(edges), Some(vertices)) = (
+                ix.faces.get_mut(k),
+                ix.edges.get_mut(k),
+                ix.vertices.get_mut(k),
+            ) else {
+                continue;
+            };
+            for (i, p) in points.iter().enumerate() {
+                let Some(on) = p.on.get(k) else {
+                    continue;
+                };
+                let mut through: Vec<FaceId> = Vec::new();
+                for o in on {
+                    match *o {
+                        On::Vertex(v) => {
+                            vertices.insert(v, i);
+                            through.extend(of_vertex.get(&v).into_iter().flatten());
+                        }
+                        On::Edge { edge, t } => {
+                            edges.entry(edge).or_default().push((t, i));
+                            through.extend(of_edge.get(&edge).into_iter().flatten());
+                        }
+                        On::Face { face, .. } => through.push(face),
+                    }
+                }
+                through.sort_unstable();
+                through.dedup();
+                for f in through {
+                    faces.entry(f).or_default().push(i);
+                }
+            }
+        }
+        ix
+    }
+
+    /// The points through both `fa` and `fb`, ascending.
+    fn through(&self, fa: FaceId, fb: FaceId) -> Vec<usize> {
+        let [ma, mb] = &self.faces;
+        let (Some(pa), Some(pb)) = (ma.get(&fa), mb.get(&fb)) else {
+            return Vec::new();
+        };
+        // The shorter list looked up in the longer: a cap face of an N-gon prism is in N
+        // pairs with N points, each wall in one with a few.
+        let (short, long) = if pa.len() <= pb.len() {
+            (pa, pb)
+        } else {
+            (pb, pa)
+        };
+        short
+            .iter()
+            .copied()
+            .filter(|i| long.binary_search(i).is_ok())
+            .collect()
+    }
+}
+
+/// Where a sample lies against a face.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Place {
+    /// Inside, away from the boundary.
+    Inside,
+    /// Outside.
+    Outside,
+    /// Within coincidence of this boundary edge, inside it.
+    Boundary(EdgeId),
+    /// Near the boundary to the boundary test, with no edge within coincidence.
+    Near,
+}
+
+/// A face of one side, with what the tests read of it.
+#[derive(Clone, Copy)]
+struct Of<'a> {
+    side: Side,
+    face: Face<'a>,
+}
+
+/// Where `p` (on an entity of accuracy `acc` of the other side) lies against `of`.
+fn place(
+    ops: Operands<'_>,
+    ix: &Index,
+    of: Of<'_>,
+    p: Point3,
+    acc: Option<Accuracy>,
+    budget: &mut Budget,
+    stop: &Stop,
+) -> Result<Place, BooleanError> {
+    let id = of.face.id();
+    // Along the boundary first: a curve within coincidence of an edge runs on it, whatever
+    // the rounding of the uv test says.
+    let k = usize::from(of.side == Side::B);
+    if let Some(rim) = ix.rims.get(k).and_then(|m| m.get(&id)) {
+        let body = ops.of(of.side);
+        for (e, reach) in rim.near(ops, p, acc) {
+            let Some(ed) = body.edge(e) else {
+                continue;
+            };
+            if let Some((_, _, d)) = edge_foot(ed, of.side, p, budget)?
+                && d <= reach
+            {
+                return Ok(Place::Boundary(e));
+            }
+        }
+    }
+    let foot = face_foot(of.face, of.side, p, budget, stop)?;
+    match foot.side {
+        Some(UvSide::Inside) => Ok(Place::Inside),
+        Some(UvSide::Outside) => Ok(Place::Outside),
+        Some(UvSide::Near) => Ok(Place::Near),
+        None => Err(BooleanError::Defect(BooleanDefect::UvUndecided {
+            operand: of.side.operand(),
+            face: id,
+        })),
+    }
+}
+
+/// What a sub-span is, from its samples.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Verdict {
+    /// Inside every face.
+    Keep,
+    /// Outside one.
+    Drop,
+    /// Along this boundary edge of a face of this side, inside or along the others.
+    Along(Side, EdgeId),
+}
+
+/// The fractions of a sub-span sampled, in order: the middle, then each halving.
+fn fractions() -> impl Iterator<Item = f64> {
+    (1..=REFINE).flat_map(|level| {
+        let n = 1_u32 << level;
+        (1..n).step_by(2).map(move |k| f64::from(k) / f64::from(n))
+    })
+}
+
+/// The verdict on the piece of `curve` over `t` against `faces`.
+#[expect(clippy::too_many_arguments, reason = "the stage's read-only context")]
+fn judge(
+    ops: Operands<'_>,
+    ix: &Index,
+    faces: &[Of<'_>],
+    curve: &Curve,
+    t: Extent1d,
+    acc: Option<Accuracy>,
+    budget: &mut Budget,
+    stop: &Stop,
+) -> Result<Verdict, BooleanError> {
+    let mut along = None;
+    let mut near = None;
+    for f in fractions() {
+        stop.check()?;
+        let p = curve.point(t.min() + f * t.length());
+        let mut verdict = Some(Verdict::Keep);
+        let mut sample_along = None;
+        for of in faces {
+            match place(ops, ix, *of, p, acc, budget, stop)? {
+                Place::Inside => {}
+                Place::Outside => return Ok(Verdict::Drop),
+                Place::Boundary(e) => {
+                    sample_along.get_or_insert((of.side, e));
+                    verdict = None;
+                }
+                Place::Near => {
+                    near.get_or_insert(*of);
+                    verdict = None;
+                }
+            }
+        }
+        if let Some(v) = verdict {
+            return Ok(v);
+        }
+        if along.is_none() {
+            along = sample_along;
+        }
+    }
+    // Every sample on a boundary or near it: along an edge if one was found everywhere
+    // nothing was only near.
+    match (near, along) {
+        (None, Some((side, e))) => Ok(Verdict::Along(side, e)),
+        (Some(of), _) => Err(undecided(of)),
+        (None, None) => faces
+            .first()
+            .map_or(Ok(Verdict::Drop), |of| Err(undecided(*of))),
+    }
+}
+
+/// The defect of a sub-span no sample decides against `of`.
+fn undecided(of: Of<'_>) -> BooleanError {
+    BooleanError::Defect(BooleanDefect::UndecidedSpan {
+        operand: of.side.operand(),
+        face: of.face.id(),
+    })
+}
+
+/// The pieces of the curve over `span` between the cuts (parameter, point index), each
+/// with its end points; `closed` for a whole turn of a conic. A stub at an open end that is
+/// within `reach` of the next cut is dropped (the cut is the end).
+fn pieces(
+    curve: &Curve,
+    span: Extent1d,
+    closed: bool,
+    cuts: &[(f64, usize)],
+    reach: f64,
+) -> Vec<(Extent1d, [Option<usize>; 2])> {
+    let mut out = Vec::new();
+    let piece = |a: f64, b: f64| Extent1d::new(a, b);
+    if closed {
+        match (cuts.first(), cuts.last()) {
+            (Some(&(t0, i0)), Some(&(tn, i_n))) => {
+                for w in cuts.windows(2) {
+                    if let [(a, i), (b, j)] = *w
+                        && let Some(e) = piece(a, b)
+                    {
+                        out.push((e, [Some(i), Some(j)]));
+                    }
+                }
+                if let Some(e) = piece(tn, t0 + TAU) {
+                    out.push((e, [Some(i_n), Some(i0)]));
+                }
+            }
+            _ => out.push((span, [None, None])),
+        }
+        return out;
+    }
+    let mut at = (span.min(), None);
+    for &(t, i) in cuts {
+        let stub = at.1.is_none() && curve.point(at.0).distance(curve.point(t)) <= reach;
+        if !stub && let Some(e) = piece(at.0, t) {
+            out.push((e, [at.1, Some(i)]));
+        }
+        at = (t, Some(i));
+    }
+    let end = span.max();
+    let stub = at.1.is_some() && curve.point(at.0).distance(curve.point(end)) <= reach;
+    if !stub && let Some(e) = piece(at.0, end) {
+        out.push((e, [at.1, None]));
+    }
+    out
+}
+
+/// The parameter on `c` over `span` of a point within `reach` of it, or `None`: the
+/// inversion's foot inside the span, or an end of the span the point is at.
+fn cut_at(c: &Curve, span: &Extent1d, p: Point3, reach: f64) -> Option<f64> {
+    let inv = c.invert(p, Some(span)).ok()?;
+    let f = inv.foot();
+    if inv.is_inside() {
+        return (f.distance <= reach).then_some(f.at);
+    }
+    [span.min(), span.max()]
+        .into_iter()
+        .find(|&t| c.point(t).distance(p) <= reach)
+}
+
+/// The oriented normal of `s` at `uv`; `None` at a cone's apex and on a NURBS surface.
+fn normal(s: &Surface, uv: Point2) -> Option<Vec3> {
+    Some(
+        match s {
+            Surface::Plane(k) => k.normal(uv),
+            Surface::Cylinder(k) => k.normal(uv),
+            Surface::Cone(k) => k.normal(uv)?,
+            Surface::Sphere(k) => k.normal(uv),
+            Surface::Torus(k) => k.normal(uv),
+            _ => return None,
+        }
+        .as_vec(),
+    )
+}
+
+/// The centroid of a polygon's vertices.
+fn centroid(poly: &[Point2]) -> Option<Point2> {
+    let n = poly.len();
+    if n == 0 {
+        return None;
+    }
+    let (su, sv) = poly
+        .iter()
+        .fold((0.0, 0.0), |(su, sv), p| (su + p.x, sv + p.y));
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a polygon has at most eight vertices"
+    )]
+    let n = n as f64;
+    Some(Point2::new(su / n, sv / n))
+}
+
+/// Whether an overlap piece has width on `s` beyond `reach`: its centroid's point is
+/// farther than `reach` from the point at every side's middle. A piece the clip made
+/// within the tolerance of a line (patches that only touch) has none.
+fn has_width(s: &Surface, poly: &[Point2], reach: f64) -> bool {
+    let Some(c) = centroid(poly) else {
+        return false;
+    };
+    let pc = s.point(c);
+    let n = poly.len();
+    (0..n).all(|i| {
+        let (Some(&p), Some(&q)) = (poly.get(i), poly.get((i + 1) % n)) else {
+            return false;
+        };
+        let m = Point2::new((p.x + q.x) * 0.5, (p.y + q.y) * 0.5);
+        s.point(m).distance(pc) > reach
+    })
+}
+
+/// Whether the faces' normals agree over `o`: at the first of its centroid and vertices
+/// where both have one (the polygons are matched vertex for vertex, so their centroids are
+/// one point too).
+fn same_sense(sa: &Surface, sb: &Surface, o: &Overlap) -> bool {
+    let at = centroid(&o.on_a)
+        .into_iter()
+        .zip(centroid(&o.on_b))
+        .chain(o.on_a.iter().copied().zip(o.on_b.iter().copied()));
+    for (ua, ub) in at {
+        if let (Some(na), Some(nb)) = (normal(sa, ua), normal(sb, ub)) {
+            return na.dot(nb) > 0.0;
+        }
+    }
+    true
+}
+
+/// Stage 4 over the stages before it.
+///
+/// # Errors
+///
+/// [`BooleanUnsupported::SsiPair`] for a pair of analytic faces whose intersection has no
+/// closed form here (72 §5.2); [`BooleanUnsupported::Nurbs`] for a NURBS face in a pair;
+/// [`BooleanDefect::UndecidedSpan`], [`BooleanDefect::LooseSection`] and
+/// [`BooleanDefect::LooseSpan`] for the method's own failures; [`BooleanError::Exhausted`]
+/// and [`BooleanError::Cancelled`].
+pub(crate) fn face_face(
+    ops: Operands<'_>,
+    found: &Interference,
+    budget: &mut Budget,
+    stop: &Stop,
+) -> Result<FaceFace, BooleanError> {
+    let touched = &found.touched;
+    let ix = Index::of(ops, touched, &found.points);
+    let res = ops.a.resolution();
+    let mut out = FaceFace::default();
+    for &(fa, fb) in &found.pairs {
+        stop.check()?;
+        let (Some(face_a), Some(face_b), Some(pa), Some(pb)) = (
+            ops.a.face(fa),
+            ops.b.face(fb),
+            touched.parts(Side::A, fa),
+            touched.parts(Side::B, fb),
+        ) else {
+            continue;
+        };
+        let of = [
+            Of {
+                side: Side::A,
+                face: face_a,
+            },
+            Of {
+                side: Side::B,
+                face: face_b,
+            },
+        ];
+        for o in &of {
+            if matches!(o.face.surface(), Surface::Nurbs(_)) {
+                return Err(BooleanError::Unsupported(BooleanUnsupported::Nurbs {
+                    operand: o.side.operand(),
+                    at: scx_brep::Entity::Face(o.face.id()),
+                }));
+            }
+        }
+        let uv = |o: &Of<'_>| {
+            o.face.uv_box().ok_or_else(|| {
+                BooleanError::Defect(BooleanDefect::NoUvBox {
+                    operand: o.side.operand(),
+                    face: o.face.id(),
+                })
+            })
+        };
+        let [oa, ob] = of;
+        let (ua, ub) = (uv(&oa)?, uv(&ob)?);
+        let (sa, sb) = (face_a.surface(), face_b.surface());
+        budget.charge(1)?;
+        let acc = [
+            pa.accuracy.unwrap_or(Accuracy::ZERO),
+            pb.accuracy.unwrap_or(Accuracy::ZERO),
+        ];
+        let reach = ops.coincidence(pa.accuracy, pb.accuracy);
+        let no_form = BooleanError::Unsupported(BooleanUnsupported::SsiPair {
+            a: fa,
+            b: fb,
+            kinds: [SurfaceKind::of(sa), SurfaceKind::of(sb)],
+        });
+        // `General`, and any partial answer a later step adds: no closed form here.
+        let Closed::Solved(answer) = analytic::intersect(sa, &ua, sb, &ub, acc, res) else {
+            return Err(no_form);
+        };
+        let worst = if pa.accuracy >= pb.accuracy {
+            pa.accuracy
+        } else {
+            pb.accuracy
+        };
+        match answer {
+            Intersection::Empty => {}
+            Intersection::Coincident(pieces) => {
+                let overlaps: Vec<Overlap> = pieces
+                    .into_iter()
+                    .filter(|o| has_width(sa, &o.on_a, reach))
+                    .collect();
+                if let Some(first) = overlaps.first() {
+                    out.coincident.push(Coincidence {
+                        faces: [fa, fb],
+                        same: same_sense(sa, sb, first),
+                        overlaps,
+                    });
+                }
+            }
+            Intersection::Pieces { curves, points } => {
+                let near = ix.through(fa, fb);
+                for c in &curves {
+                    sections(
+                        ops,
+                        &ix,
+                        &found.points,
+                        &near,
+                        &of,
+                        c,
+                        reach,
+                        worst,
+                        budget,
+                        stop,
+                        &mut out.sections,
+                    )?;
+                }
+                for p in points {
+                    // Kept when on both faces and inside one: a point on both
+                    // boundaries is where their edges meet, a stage-3 point already.
+                    let (mut outside, mut boundary) = (false, 0);
+                    for o in &of {
+                        match place(ops, &ix, *o, p.point, worst, budget, stop)? {
+                            Place::Outside => outside = true,
+                            Place::Boundary(_) => boundary += 1,
+                            Place::Inside | Place::Near => {}
+                        }
+                    }
+                    if !outside && boundary < of.len() {
+                        let point = near.iter().copied().find(|&i| {
+                            found
+                                .points
+                                .get(i)
+                                .is_some_and(|q| q.at.distance(p.point) <= reach + q.gap)
+                        });
+                        out.touches.push(Touch {
+                            faces: [fa, fb],
+                            at: p.point,
+                            point,
+                        });
+                    }
+                }
+            }
+            // A kind of answer this stage does not read yet.
+            _ => return Err(no_form),
+        }
+    }
+    for span in &found.spans {
+        lying(ops, touched, &ix, span, budget, stop, &mut out.lying)?;
+    }
+    out.lying.sort_by(|p, q| {
+        (p.side, p.edge, p.face)
+            .cmp(&(q.side, q.edge, q.face))
+            .then(p.t.min().total_cmp(&q.t.min()))
+    });
+    out.lying.dedup();
+    Ok(out)
+}
+
+/// The kept pieces of one curve of a pair, into `out`.
+#[expect(clippy::too_many_arguments, reason = "the stage's read-only context")]
+fn sections(
+    ops: Operands<'_>,
+    ix: &Index,
+    points: &[Point],
+    near: &[usize],
+    of: &[Of<'_>; 2],
+    c: &IntersectionCurve,
+    reach: f64,
+    acc: Option<Accuracy>,
+    budget: &mut Budget,
+    stop: &Stop,
+    out: &mut Vec<Section>,
+) -> Result<(), BooleanError> {
+    let [oa, ob] = *of;
+    let faces = [oa.face.id(), ob.face.id()];
+    let closed =
+        matches!(c.curve, Curve::Circle(_) | Curve::Ellipse(_)) && c.span.length() >= FULL_TURN;
+    let mut cuts: Vec<(f64, usize)> = Vec::new();
+    for &i in near {
+        let Some(p) = points.get(i) else {
+            continue;
+        };
+        budget.charge(1)?;
+        if let Some(t) = cut_at(&c.curve, &c.span, p.at, reach + p.gap) {
+            cuts.push((t, i));
+        }
+    }
+    cuts.sort_by(|p, q| p.0.total_cmp(&q.0).then(p.1.cmp(&q.1)));
+    cuts.dedup_by_key(|c| c.1);
+    for (t, ends) in pieces(&c.curve, c.span, closed, &cuts, reach) {
+        match judge(ops, ix, of, &c.curve, t, acc, budget, stop)? {
+            Verdict::Drop | Verdict::Along(..) => {}
+            Verdict::Keep => {
+                let ends = match ends {
+                    [Some(i), Some(j)] => Some([i, j]),
+                    [None, None] if closed => None,
+                    _ => {
+                        return Err(BooleanError::Defect(BooleanDefect::LooseSection { faces }));
+                    }
+                };
+                out.push(Section {
+                    faces,
+                    curve: c.curve.clone(),
+                    t,
+                    contact: c.contact,
+                    ends,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The kept pieces of one stage-2 span, into `out`.
+fn lying(
+    ops: Operands<'_>,
+    touched: &Touched,
+    ix: &Index,
+    span: &Span,
+    budget: &mut Budget,
+    stop: &Stop,
+    out: &mut Vec<Lying>,
+) -> Result<(), BooleanError> {
+    let side = span.side;
+    let fside = side.other();
+    let k = usize::from(side == Side::B);
+    let (Some(ed), Some(face), Some(parts)) = (
+        ops.of(side).edge(span.edge),
+        ops.of(fside).face(span.face),
+        touched.parts(fside, span.face),
+    ) else {
+        return Ok(());
+    };
+    let scx_brep::EdgeShape::Curve { curve, interval } = ed.shape() else {
+        return Ok(());
+    };
+    let acc = recorded(ed.accuracy());
+    let reach = ops.coincidence(acc, parts.accuracy);
+    let lo = span.t.min();
+    let hi = span.t.max();
+    // The points on the edge: inside it by parameter, and at its ends.
+    let mut cuts: Vec<(f64, usize)> = ix
+        .edges
+        .get(k)
+        .and_then(|m| m.get(&span.edge))
+        .into_iter()
+        .flatten()
+        .copied()
+        .collect();
+    let ends = ed.ends();
+    for (v, t) in ends.into_iter().zip([interval.min(), interval.max()]) {
+        if let Some(&i) = ix.vertices.get(k).and_then(|m| m.get(&v)) {
+            cuts.push((t, i));
+        }
+    }
+    let slack = |t: f64| curve.point(t);
+    cuts.retain(|&(t, _)| {
+        (lo..=hi).contains(&t)
+            || slack(t).distance(slack(lo)) <= reach
+            || slack(t).distance(slack(hi)) <= reach
+    });
+    cuts.sort_by(|p, q| p.0.total_cmp(&q.0).then(p.1.cmp(&q.1)));
+    cuts.dedup_by_key(|c| c.1);
+    let of = [Of { side: fside, face }];
+    let worst = if acc >= parts.accuracy {
+        acc
+    } else {
+        parts.accuracy
+    };
+    for (t, ends) in pieces(curve, span.t, false, &cuts, reach) {
+        let along = match judge(ops, ix, &of, curve, t, worst, budget, stop)? {
+            Verdict::Drop => continue,
+            Verdict::Keep => None,
+            Verdict::Along(_, e) => Some(e),
+        };
+        let [Some(i), Some(j)] = ends else {
+            return Err(BooleanError::Defect(BooleanDefect::LooseSpan {
+                operand: side.operand(),
+                edge: span.edge,
+            }));
+        };
+        out.push(Lying {
+            side,
+            edge: span.edge,
+            face: span.face,
+            t,
+            along,
+            ends: [i, j],
+        });
+    }
+    Ok(())
+}
