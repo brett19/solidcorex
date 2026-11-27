@@ -457,14 +457,14 @@ impl ScaledZero for f64 {
 impl ScaledZero for Vec2 {
     /// `SmTol::GetScaledZero(const SmVector2d&)`: `SM_EFF_ZERO * (1 + max |coord|)`.
     fn scaled_zero(&self) -> f64 {
-        scaled_zero([self.max_dimension()])
+        scaled_zero([self.x, self.y])
     }
 }
 
 impl ScaledZero for Vec3 {
     /// `SmTol::GetScaledZero(const SmVector3d&)`: `SM_EFF_ZERO * (1 + max |coord|)`.
     fn scaled_zero(&self) -> f64 {
-        scaled_zero([self.max_dimension()])
+        scaled_zero([self.x, self.y, self.z])
     }
 }
 
@@ -479,7 +479,7 @@ impl ScaledZero for Extent3d {
     /// `SmTol::GetScaledZero(const SmExtent3d&)`: `SM_EFF_ZERO * (1 + max |coord|)`
     /// over both corners.
     fn scaled_zero(&self) -> f64 {
-        scaled_zero([self.min().max_dimension(), self.max().max_dimension()])
+        scaled_zero([self.max_dimension()])
     }
 }
 
@@ -487,6 +487,7 @@ impl ScaledZero for Extent3d {
 mod tests {
     use super::*;
     use crate::consts::{PARALLEL_ANGLE_RAD, ZONE_DEFAULT};
+    use crate::math::Point3;
 
     fn res(mm: f64) -> Resolution {
         Resolution::new(Length::from_mm(mm)).unwrap_or(Resolution::DEFAULT)
@@ -555,7 +556,10 @@ mod tests {
         // SmTol.cpp sm_TemplateTrial values.
         let v2 = Vec2::new(1.0, -80.0);
         let v3 = Vec3::new(16.0, 100.0, 1000.0);
-        let e3 = Extent3d::from_bounds(0.0, -30.0, -600.0, 2000.0, 100.0, 10000.0);
+        let e3 = Extent3d::spanning(
+            Point3::new(0.0, -30.0, -600.0),
+            Point3::new(2000.0, 100.0, 10000.0),
+        );
         assert_eq!(v2.scaled_zero(), EFF_ZERO * 81.0);
         assert_eq!(v3.scaled_zero(), EFF_ZERO * 1001.0);
         assert_eq!(e3.scaled_zero(), EFF_ZERO * 10001.0);

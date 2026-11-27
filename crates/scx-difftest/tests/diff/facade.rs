@@ -96,6 +96,8 @@ impl Gen for TolR {
 
 macro_rules! helpers {
     () => {
+        #[allow(unused_imports)]
+        use self::ext::*;
         use crate::facade::TfR;
         use crate::harness::{List, MatR};
 
@@ -112,14 +114,17 @@ macro_rules! helpers {
         pub fn p2(a: [f64; 2]) -> vector2d::Point2 {
             vector2d::Point2::new(a[0], a[1])
         }
-        pub fn e1(a: [f64; 2]) -> extent1d::Extent1d {
-            extent1d::Extent1d::from_raw(a[0], a[1])
+        /// The interval `[a[0], a[1]]`, `None` when inverted.
+        pub fn e1(a: [f64; 2]) -> Option<extent1d::Extent1d> {
+            extent1d::Extent1d::from_bounds(a[0], a[1])
         }
-        pub fn e2(a: [f64; 4]) -> extent2d::Extent2d {
-            extent2d::Extent2d::from_bounds(a[0], a[1], a[2], a[3])
+        /// The box with corners `(a[0], a[1])` and `(a[2], a[3])`, `None` when inverted.
+        pub fn e2(a: [f64; 4]) -> Option<extent2d::Extent2d> {
+            extent2d::Extent2d::from_corners(p2([a[0], a[1]]), p2([a[2], a[3]]))
         }
-        pub fn e3(a: [f64; 6]) -> extent3d::Extent3d {
-            extent3d::Extent3d::from_bounds(a[0], a[1], a[2], a[3], a[4], a[5])
+        /// The box with corners `a[..3]` and `a[3..]`, `None` when inverted.
+        pub fn e3(a: [f64; 6]) -> Option<extent3d::Extent3d> {
+            extent3d::Extent3d::from_corners(p3([a[0], a[1], a[2]]), p3([a[3], a[4], a[5]]))
         }
         pub fn pe(a: [f64; 3], full: bool) -> periodic_extent1d::PeriodicExtent1d {
             periodic_extent1d::PeriodicExtent1d::from_parts(a[0], a[1], a[2], full)
@@ -197,6 +202,17 @@ pub mod x {
         p.placed
             .map(|q| [q.point.x, q.point.y, q.point.z, q.zone_tol])
     }
+    /// The model's box, `None` when it has none.
+    pub fn ht_bbox(v: &hash_table::ObjsInVoxels<u32>) -> Option<extent3d::Extent3d> {
+        v.bbox()
+    }
+    /// Voxel `i`'s box, `None` when there is none.
+    pub fn ht_voxel_bbox(
+        v: &hash_table::ObjsInVoxels<u32>,
+        i: usize,
+    ) -> Option<extent3d::Extent3d> {
+        v.map_voxel_index_to_bbox(i)
+    }
     pub use scx_algo::krawczyk;
     /// A Krawczyk-module error as (class, operation, failure): `solve4`'s singular system.
     pub fn kz_err(e: &scx_num::NumError) -> (String, &'static str, String) {
@@ -215,6 +231,11 @@ pub mod x {
         series, small_matrix, taylor_model, transform, vector2d, vector3d,
     };
     helpers!();
+    /// scx's extents take no adapter: [`crate::pin_extent`] gives the pin scx's API.
+    pub mod ext {}
+    pub fn end(v: Vec<extent1d::Extent1d>) -> extent1d::ExtentNd {
+        extent1d::ExtentNd::new(v)
+    }
     /// The affine map type: scx's column-vector `Affine`, the pin's row-vector `Transform`.
     pub type Map = math::Affine;
     pub fn mt(m: [[f64; 4]; 4]) -> math::Affine {
@@ -412,12 +433,12 @@ pub mod x {
         }
         impl Mag for Vec2 {
             fn mag(&self) -> f64 {
-                self.max_dimension()
+                self.x.abs().max(self.y.abs())
             }
         }
         impl Mag for Vec3 {
             fn mag(&self) -> f64 {
-                self.max_dimension()
+                self.x.abs().max(self.y.abs()).max(self.z.abs())
             }
         }
         impl Mag for Extent1d {
@@ -491,6 +512,17 @@ pub mod s {
         let u = math::UNDEF_DOUBLE;
         let n = [p.point.x, p.point.y, p.point.z, p.zone_tol];
         (n != [u; 4]).then_some(n)
+    }
+    /// The model's box, `None` for the pin's inside-out `Extent3d::new` (no box).
+    pub fn ht_bbox(v: &hash_table::ObjsInVoxels<u32>) -> Option<extent3d::Extent3d> {
+        Some(*v.bbox()).filter(|b| !b.is_init())
+    }
+    /// Voxel `i`'s box, `None` for the pin's inside-out `Extent3d::new` (no box).
+    pub fn ht_voxel_bbox(
+        v: &hash_table::ObjsInVoxels<u32>,
+        i: usize,
+    ) -> Option<extent3d::Extent3d> {
+        Some(v.map_voxel_index_to_bbox(i)).filter(|b| !b.is_init())
     }
     /// `geom::krawczyk`'s items are `pub(crate)` at the pin: the pin's file, made public by
     /// the build script (`build.rs`, `pin_krawczyk`), over the pin's own types.
@@ -577,11 +609,15 @@ pub mod s {
         };
         (format!("{:?}", e.kind()), e.operation(), f)
     }
+    pub use crate::pin_extent::{end, extent1d, extent2d, extent3d};
     pub use solidcore::blend::fillet_section::tay as ring;
     pub use solidcore::blend::fillet_section::{interval, series, taylor_model};
+    /// The pin's extents under scx's names, imported by every diff body.
+    pub mod ext {
+        pub use crate::pin_extent::{E1, E2, E3};
+    }
     pub use solidcore::geom::{
-        certified, extent1d, extent2d, extent3d, matrix, periodic_extent1d, polynomial, tol,
-        transform, vector2d, vector3d,
+        certified, matrix, periodic_extent1d, polynomial, tol, transform, vector2d, vector3d,
     };
     pub use solidcore::kernel::Tolerances;
     pub use solidcore::{limits, math};

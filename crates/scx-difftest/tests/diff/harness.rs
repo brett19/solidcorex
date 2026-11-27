@@ -736,7 +736,24 @@ pub struct PinDefect<A, R> {
     pub check: fn(&A, &R) -> Result<(), String>,
 }
 
-/// Which inputs a [`PinDefect`] covers.
+/// A known defect of the pin judged by an oracle: on the inputs `applies` picks, the pin is
+/// not compared, and scx's result must agree (at the test's tolerance) with `truth`, the
+/// true result fingerprinted as the test's body fingerprints its own (see [`want`]). For a
+/// result whose truth is easier to compute than to test piecewise.
+pub struct TruthDefect<A> {
+    pub reason: &'static str,
+    pub applies: Applies<A>,
+    pub truth: fn(&A) -> Out,
+}
+
+/// The fingerprint of a true value, for [`TruthDefect::truth`].
+pub fn want<R: Bits>(r: R) -> Out {
+    let mut o = Out::default();
+    r.bits(&mut o);
+    o
+}
+
+/// Which inputs a [`PinDefect`] or [`TruthDefect`] covers.
 pub enum Applies<A> {
     /// The inputs this predicate picks.
     Inputs(fn(&A) -> bool),
@@ -758,7 +775,38 @@ pub fn run_defect<A: Args, RX: Bits, RS: Bits>(
     xf: impl Fn(A) -> RX,
     sf: impl Fn(A) -> RS,
 ) {
-    run_with(name, Tol::DEFAULT, Some(defect), xf, sf);
+    let check = |c: &A, r: &RX, _: &Out| (defect.check)(c, r);
+    run_with(
+        name,
+        Tol::DEFAULT,
+        Some((defect.reason, &defect.applies, &check)),
+        xf,
+        sf,
+    );
+}
+
+/// [`run`], with a known defect of the pin judged by an oracle.
+pub fn run_truth<A: Args, RX: Bits, RS: Bits>(
+    name: &str,
+    defect: &TruthDefect<A>,
+    xf: impl Fn(A) -> RX,
+    sf: impl Fn(A) -> RS,
+) {
+    let check = |c: &A, _: &RX, ox: &Out| {
+        let w = (defect.truth)(c);
+        if Tol::DEFAULT.agree(ox, &w) {
+            Ok(())
+        } else {
+            Err(format!("the truth is {w:?}"))
+        }
+    };
+    run_with(
+        name,
+        Tol::DEFAULT,
+        Some((defect.reason, &defect.applies, &check)),
+        xf,
+        sf,
+    );
 }
 
 /// Run `xf` twice and `sf` once on every case; fail if `xf` is not deterministic or does
@@ -772,10 +820,17 @@ pub fn run_tol<A: Args, RX: Bits, RS: Bits>(
     run_with(name, tol, None, xf, sf);
 }
 
+/// A defect's reason, the inputs it covers, and its check of scx's result and fingerprint.
+type Defect<'a, A, RX> = (
+    &'static str,
+    &'a Applies<A>,
+    &'a dyn Fn(&A, &RX, &Out) -> Result<(), String>,
+);
+
 fn run_with<A: Args, RX: Bits, RS: Bits>(
     name: &str,
     tol: Tol,
-    defect: Option<&PinDefect<A, RX>>,
+    defect: Option<Defect<'_, A, RX>>,
     xf: impl Fn(A) -> RX,
     sf: impl Fn(A) -> RS,
 ) {
@@ -792,19 +847,18 @@ fn run_with<A: Args, RX: Bits, RS: Bits>(
         if ox != ox2 {
             unstable.push(format!("{c:?}\n    run 1: {ox:?}\n    run 2: {ox2:?}"));
         }
-        let covered = |d: &&PinDefect<A, RX>| match d.applies {
+        let covered = |d: &Defect<'_, A, RX>| match d.1 {
             Applies::Inputs(f) => f(c),
             Applies::Disagreeing => ox != os && !tol.agree(&ox, &os),
         };
-        if let Some(d) = defect.filter(covered) {
+        if let Some((reason, _, check)) = defect.filter(covered) {
             applied += 1;
-            let checked = catch_unwind(AssertUnwindSafe(|| (d.check)(c, &xf(c.clone()))))
+            let checked = catch_unwind(AssertUnwindSafe(|| check(c, &xf(c.clone()), &ox)))
                 .unwrap_or_else(|_| Err("scx panicked".to_owned()));
             match checked {
                 Ok(()) => defects += 1,
                 Err(why) => bad.push(format!(
-                    "{c:?}\n    pin defect ({}), check failed: {why}\n    scx: {ox:?}",
-                    d.reason
+                    "{c:?}\n    pin defect ({reason}), check failed: {why}\n    scx: {ox:?}"
                 )),
             }
         } else if ox == os {
@@ -841,11 +895,10 @@ fn run_with<A: Args, RX: Bits, RS: Bits>(
             .collect::<Vec<_>>()
             .join("\n")
     );
-    if let Some(d) = defect {
+    if let Some((reason, ..)) = defect {
         assert!(
             applied > 0,
-            "{name}: the pin defect ({}) applies to no input; remove it",
-            d.reason
+            "{name}: the pin defect ({reason}) applies to no input; remove it"
         );
     }
     // The quiet panic hook swallows the assertion's text: print the first ones first.
@@ -865,9 +918,36 @@ fn run_with<A: Args, RX: Bits, RS: Bits>(
 /// with `m` naming solidcore's, on the same inputs; `diff!(name, |...| xbody, sbody)`
 /// takes the two bodies separately (for the signatures that changed);
 /// `diff!(name, pin_defect = f, |...| body)` (or `xbody, sbody`) excuses the inputs of the
-/// [`PinDefect`] `f()`.
+/// [`PinDefect`] `f()`; `truth_defect = f` likewise for a [`TruthDefect`].
 #[macro_export]
 macro_rules! diff {
+    ($name:ident, truth_defect = $d:path, |$($a:ident : $t:ty),*| $body:expr) => {
+        $crate::diff!($name, truth_defect = $d, |$($a: $t),*| $body, $body);
+    };
+    ($name:ident, truth_defect = $d:path, |$($a:ident : $t:ty),*| $xb:expr, $sb:expr) => {
+        #[test]
+        #[allow(unused_variables, unused_mut, clippy::redundant_closure_call)]
+        fn $name() {
+            $crate::harness::run_truth::<($($t,)*), _, _>(
+                concat!(module_path!(), "::", stringify!($name)),
+                &$d(),
+                |($($a,)*): ($($t,)*)| {
+                    #[allow(unused_imports)]
+                    use $crate::facade::x as m;
+                    #[allow(unused_imports)]
+                    use m::ext::*;
+                    $xb
+                },
+                |($($a,)*): ($($t,)*)| {
+                    #[allow(unused_imports)]
+                    use $crate::facade::s as m;
+                    #[allow(unused_imports)]
+                    use m::ext::*;
+                    $sb
+                },
+            );
+        }
+    };
     ($name:ident, || $body:expr) => {
         $crate::diff!($name, | | $body, $body);
     };
@@ -890,11 +970,15 @@ macro_rules! diff {
                 |($($a,)*): ($($t,)*)| {
                     #[allow(unused_imports)]
                     use $crate::facade::x as m;
+                    #[allow(unused_imports)]
+                    use m::ext::*;
                     $xb
                 },
                 |($($a,)*): ($($t,)*)| {
                     #[allow(unused_imports)]
                     use $crate::facade::s as m;
+                    #[allow(unused_imports)]
+                    use m::ext::*;
                     $sb
                 },
             );
@@ -909,11 +993,15 @@ macro_rules! diff {
                 |($($a,)*): ($($t,)*)| {
                     #[allow(unused_imports)]
                     use $crate::facade::x as m;
+                    #[allow(unused_imports)]
+                    use m::ext::*;
                     $xb
                 },
                 |($($a,)*): ($($t,)*)| {
                     #[allow(unused_imports)]
                     use $crate::facade::s as m;
+                    #[allow(unused_imports)]
+                    use m::ext::*;
                     $sb
                 },
             );

@@ -23,6 +23,8 @@
 // Then `max2` and `min2` (`smos_Max`, `smos_Min`: `a > b ? a : b`) removed for `f64::max` and
 // `f64::min`. Those drop a NaN operand and answer the other, where `max2` answered its second
 // operand: `max2(NaN, 1)` was 1 but `max2(1, NaN)` NaN, so a fold's answer hung on its order.
+// Then `Affine::transformed_box` takes an `Extent3d` and answers `Option<Extent3d>` (`None` for
+// a NaN map) where it took and answered corner pairs and passed an inverted pair back.
 //! Small `f64` linear-algebra types: [`Vec3`]/[`Point3`], [`Vec2`]/[`Point2`],
 //! [`Affine`], and the numeric constants of `SmMath.h`.
 //!
@@ -53,6 +55,7 @@
 //! in upstream order, so results are bit-identical to the C++ (built with
 //! `-ffp-contract=off`).
 
+use crate::extent3d::{Extent3d, Hull3d};
 pub use crate::vector2d::{Point2, Vec2};
 pub use crate::vector3d::{Point3, UnitVec3, Vec3};
 
@@ -594,25 +597,22 @@ impl Affine {
         Ok((point, (direction / length).canonical_axis_direction()))
     }
 
-    /// Not upstream: the axis-aligned box around the eight corners of the box `lo`..`hi`
-    /// mapped by [`Self::apply`]: it holds the exact image of every point of the box, and for
-    /// a map that turns it is larger than the image itself. An empty box (`lo` above `hi` on
-    /// any axis) maps to itself.
+    /// Not upstream: the axis-aligned box around the eight corners of `b` mapped by
+    /// [`Self::apply`]: it holds the exact image of every point of the box, and for a map that
+    /// turns it is larger than the image itself. `None` when the image of every corner is NaN
+    /// on some axis (a map with a NaN entry).
     ///
     /// Rounding: each mapped coordinate `t + x a + y b + z c` is four terms summed in order,
     /// within `gamma_4` of the sum of their sizes; the sizes' sum is itself rounded, so each
     /// side moves out by `gamma_5` of it, plus the smallest normal number for products that
     /// underflow, and then by one more double for the subtraction or addition.
     #[must_use]
-    pub fn transformed_box(&self, lo: Point3, hi: Point3) -> (Point3, Point3) {
+    pub fn transformed_box(&self, b: Extent3d) -> Option<Extent3d> {
         use crate::certified::{gamma, next_down, next_up};
-        if lo.x > hi.x || lo.y > hi.y || lo.z > hi.z {
-            return (lo, hi);
-        }
+        let (lo, hi) = (b.min(), b.max());
         let ([tx, ty, tz], td) = (self.axes, self.shift);
         let g = gamma(5);
-        let mut min = Point3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
-        let mut max = Point3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+        let mut hull = Hull3d::EMPTY;
         for i in 0..8 {
             let corner = Point3::new(
                 if i & 1 == 0 { lo.x } else { hi.x },
@@ -629,18 +629,18 @@ impl Affine {
                 size(td.y, tx.y, ty.y, tz.y),
                 size(td.z, tx.z, ty.z, tz.z),
             );
-            min = Point3::new(
-                min.x.min(next_down(p.x - e.x)),
-                min.y.min(next_down(p.y - e.y)),
-                min.z.min(next_down(p.z - e.z)),
-            );
-            max = Point3::new(
-                max.x.max(next_up(p.x + e.x)),
-                max.y.max(next_up(p.y + e.y)),
-                max.z.max(next_up(p.z + e.z)),
-            );
+            hull.add(Point3::new(
+                next_down(p.x - e.x),
+                next_down(p.y - e.y),
+                next_down(p.z - e.z),
+            ));
+            hull.add(Point3::new(
+                next_up(p.x + e.x),
+                next_up(p.y + e.y),
+                next_up(p.z + e.z),
+            ));
         }
-        (min, max)
+        hull.finish()
     }
 
     /// The map that undoes this one, when [`Self::is_regular`] proves it regular at ratio 0:
@@ -1488,10 +1488,12 @@ mod tests {
     }
 
     #[test]
-    fn transformed_box_holds_its_moved_corners_and_an_empty_box_stays_empty() {
+    fn transformed_box_holds_its_moved_corners() {
         // A quarter turn about z, then a move by (10, 20, 30): x goes to y, y to -x.
         let map = Affine::from_axes(Vec3::Y, -Vec3::X, Vec3::Z, Point3::new(10.0, 20.0, 30.0));
-        let (lo, hi) = map.transformed_box(Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 2.0, 3.0));
+        let b = Extent3d::spanning(Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 2.0, 3.0));
+        let image = map.transformed_box(b).unwrap();
+        let (lo, hi) = (image.min(), image.max());
         let (want_lo, want_hi) = (Point3::new(8.0, 20.0, 30.0), Point3::new(10.0, 21.0, 33.0));
         for (got, want, out) in [
             (lo.x, want_lo.x, -1.0),
@@ -1504,13 +1506,12 @@ mod tests {
             // outside the exact image, by no more than its rounding
             assert!((got - want) * out > 0.0 && (got - want).abs() < 1e-13);
         }
-        let empty = (Point3::new(1.0, 0.0, 0.0), Point3::new(0.0, 1.0, 1.0));
-        assert_eq!(map.transformed_box(empty.0, empty.1), empty);
         // 1 + 2^-53 rounds to 1: the box still holds it.
         let tiny = crate::fmath::powi(2.0, -53);
         let shift = Affine::translation(Vec3::new(1.0, 0.0, 0.0));
         let p = Point3::new(tiny, 0.0, 0.0);
-        let (lo, hi) = shift.transformed_box(p, p);
+        let image = shift.transformed_box(Extent3d::from_point(p)).unwrap();
+        let (lo, hi) = (image.min(), image.max());
         assert!(lo.x < 1.0 && hi.x > 1.0 && hi.x - lo.x < 1e-14);
     }
 

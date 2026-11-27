@@ -323,58 +323,72 @@ diff!(
         m::tol::are_perpendicular(m::v3(a), m::v3(b), o)
     )
 );
-diff!(map_to_1d, |t: f64, d: V, i: I| m::tol::map_to_1d(
-    t,
-    m::v3(d),
-    &m::e1(i)
-));
-diff!(scaled_zero_of_each, |a: f64, b: P, c: V, d: I| {
-    use m::tol::ScaledZero;
-    let (b, c, d) = (m::v2(b), m::v3(c), m::e1(d));
-    (
-        [
-            a.scaled_zero(),
-            b.scaled_zero(),
-            c.scaled_zero(),
-            d.scaled_zero(),
-        ],
-        [
-            m::tol::scaled_zero_sq_of(&a),
-            m::tol::scaled_zero_sqrt_of(&c),
-        ],
-        [
-            m::tol::scaled_zero_sq_of(&b),
-            m::tol::scaled_zero_sqrt_of(&d),
-        ],
-    )
-});
-diff!(scaled_zero_of_boxes, |e: B, f: R| {
-    use m::tol::ScaledZero;
-    let (e, f) = (m::e3(e), m::e2(f));
-    [
-        e.scaled_zero(),
-        f.scaled_zero(),
-        m::tol::scaled_zero_sq_of(&e),
-        m::tol::scaled_zero_sqrt_of(&f),
-    ]
-});
-diff!(scaled_zero_n, |a: f64, b: V, c: I, d: B| {
-    let (b, c, d) = (m::v3(b), m::e1(c), m::e3(d));
-    (
-        [
-            m::tol::scaled_zero2(&a, &b),
-            m::tol::scaled_zero_sq2(&b, &c),
-            m::tol::scaled_zero_sqrt2(&c, &d),
-        ],
-        [
-            m::tol::scaled_zero3(&a, &b, &c),
-            m::tol::scaled_zero_sq3(&b, &c, &d),
-            m::tol::scaled_zero_sqrt3(&a, &c, &d),
-        ],
-        [
-            m::tol::scaled_zero4(&a, &b, &c, &d),
-            m::tol::scaled_zero_sq4(&a, &b, &c, &d),
-            m::tol::scaled_zero_sqrt4(&a, &b, &c, &d),
-        ],
-    )
-});
+diff!(map_to_1d, |t: f64, d: V, i: I| m::e1(i)
+    .map(|e| m::tol::map_to_1d(t, m::v3(d), &e)));
+diff!(
+    scaled_zero_of_each,
+    truth_defect = crate::pin_truths::scaled_zero_of_each,
+    |a: f64, b: P, c: V, d: I| {
+        use m::tol::ScaledZero;
+        let (b, c) = (m::v2(b), m::v3(c));
+        m::e1(d).map(|d| {
+            (
+                [
+                    a.scaled_zero(),
+                    b.scaled_zero(),
+                    c.scaled_zero(),
+                    d.scaled_zero(),
+                ],
+                [
+                    m::tol::scaled_zero_sq_of(&a),
+                    m::tol::scaled_zero_sqrt_of(&c),
+                ],
+                [
+                    m::tol::scaled_zero_sq_of(&b),
+                    m::tol::scaled_zero_sqrt_of(&d),
+                ],
+            )
+        })
+    }
+);
+diff!(
+    scaled_zero_of_boxes,
+    truth_defect = crate::pin_truths::scaled_zero_of_boxes,
+    |e: B, f: R| {
+        use m::tol::ScaledZero;
+        m::e3(e).zip(m::e2(f)).map(|(e, f)| {
+            [
+                e.scaled_zero(),
+                f.scaled_zero(),
+                m::tol::scaled_zero_sq_of(&e),
+                m::tol::scaled_zero_sqrt_of(&f),
+            ]
+        })
+    }
+);
+diff!(
+    scaled_zero_n,
+    truth_defect = crate::pin_truths::scaled_zero_n,
+    |a: f64, b: V, c: I, d: B| {
+        let b = m::v3(b);
+        m::e1(c).zip(m::e3(d)).map(|(c, d)| {
+            (
+                [
+                    m::tol::scaled_zero2(&a, &b),
+                    m::tol::scaled_zero_sq2(&b, &c),
+                    m::tol::scaled_zero_sqrt2(&c, &d),
+                ],
+                [
+                    m::tol::scaled_zero3(&a, &b, &c),
+                    m::tol::scaled_zero_sq3(&b, &c, &d),
+                    m::tol::scaled_zero_sqrt3(&a, &c, &d),
+                ],
+                [
+                    m::tol::scaled_zero4(&a, &b, &c, &d),
+                    m::tol::scaled_zero_sq4(&a, &b, &c, &d),
+                    m::tol::scaled_zero_sqrt4(&a, &b, &c, &d),
+                ],
+            )
+        })
+    }
+);

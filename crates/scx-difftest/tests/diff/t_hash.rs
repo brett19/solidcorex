@@ -70,8 +70,10 @@ macro_rules! state {
                 None => ints.push(0),
             }
         }
-        let (lo, hi) = (v.bbox().min(), v.bbox().max());
-        nums.extend([lo.x, lo.y, lo.z, hi.x, hi.y, hi.z]);
+        if let Some(b) = m::ht_bbox(&v) {
+            let (lo, hi) = (b.min(), b.max());
+            nums.extend([lo.x, lo.y, lo.z, hi.x, hi.y, hi.z]);
+        }
         (255usize, ints, nums, None::<String>)
     }};
 }
@@ -81,7 +83,7 @@ diff!(ht_voxels, |seed: usize, cnt: [f64; 3], scale: f64| {
     let mut r = seed as u64 * 0x1234_5678 + cnt[0].to_bits();
     let dims = cnt.map(|c| (c.abs() as usize) % 5);
     let unit = m::e3([0.0, 0.0, 0.0, scale, scale, scale]);
-    let bbox = (seed % 4 != 0).then_some(&unit);
+    let bbox = unit.as_ref().filter(|_| seed % 4 != 0);
     let mut out: Vec<Rec> = Vec::new();
     let mut v = match ObjsInVoxels::<u32>::new(dims[0], dims[1], dims[2], bbox, seed % 70) {
         Ok(v) => v,
@@ -146,10 +148,12 @@ diff!(ht_voxels, |seed: usize, cnt: [f64; 3], scale: f64| {
                     (next(&mut r) % 5) as usize,
                 );
                 let hit = v.map_point_to_voxel(p);
-                let b = v.map_voxel_index_to_bbox(i);
-                let (lo, hi) = (b.min(), b.max());
                 let mut ints = vec![v.map_indices_to_voxel_index(ix, iy, iz)];
-                let mut nums = vec![lo.x, lo.y, lo.z, hi.x, hi.y, hi.z];
+                let mut nums = Vec::new();
+                if let Some(b) = m::ht_voxel_bbox(&v, i) {
+                    let (lo, hi) = (b.min(), b.max());
+                    nums.extend([lo.x, lo.y, lo.z, hi.x, hi.y, hi.z]);
+                }
                 if let Some(h) = hit {
                     ints.extend([h.index, h.ix, h.iy, h.iz]);
                     let (lo, hi) = (h.extent.min(), h.extent.max());

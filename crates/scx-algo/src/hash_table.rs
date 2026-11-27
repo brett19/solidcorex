@@ -19,6 +19,8 @@
 // Then the transcendental functions became `fmath`'s (correctly rounded, the same bits on every
 // platform) in place of the C library's, so results may differ from the pin's in the last bit.
 // Then `tol3d` went (`f64::abs` in its place): the pair tolerance is the sum's `abs()`.
+// Then the inside-out empty box went: an unsized model's box is `None` (`bbox()` answers
+// `Option<Extent3d>`), and `map_voxel_index_to_bbox` answers `None` where it answered `Init()`.
 //! Voxel bucket hash of point-located items for fast coincident-pair searches
 //!
 //! Iteration order is deterministic and documented: [`ObjsInVoxels::find_coincident_pairs`]
@@ -488,7 +490,7 @@ pub struct ObjsInVoxels<T> {
     /// Voxels along z (`m_lZCnt`).
     z_cnt: usize,
     /// Box of all voxels (`m_sBBox`).
-    bbox: Extent3d,
+    bbox: Option<Extent3d>,
     /// Removed point items (`m_lRemovedPointItemCount`; never reset, as upstream).
     removed_point_item_count: usize,
     /// One entry per (item, voxel) placement (`m_sPointItems`).
@@ -505,7 +507,7 @@ impl<T> Default for ObjsInVoxels<T> {
             x_cnt: 0,
             y_cnt: 0,
             z_cnt: 0,
-            bbox: Extent3d::new(),
+            bbox: None,
             removed_point_item_count: 0,
             point_items: Vec::new(),
             point_capacity: 0,
@@ -532,7 +534,7 @@ impl<T: Copy + PartialEq> ObjsInVoxels<T> {
             x_cnt: 0,
             y_cnt: 0,
             z_cnt: 0,
-            bbox: Extent3d::new(),
+            bbox: None,
             removed_point_item_count: 0,
             point_items: Vec::new(),
             point_capacity: 0,
@@ -577,7 +579,7 @@ impl<T: Copy + PartialEq> ObjsInVoxels<T> {
         self.x_cnt = x_cnt;
         self.y_cnt = y_cnt;
         self.z_cnt = z_cnt;
-        self.bbox = bbox.copied().unwrap_or_default();
+        self.bbox = bbox.copied();
         self.hash.init_size(item_estimate, voxel_count)?;
         self.point_items.clear();
         self.point_capacity = 0;
@@ -624,10 +626,10 @@ impl<T: Copy + PartialEq> ObjsInVoxels<T> {
         (self.x_cnt, self.y_cnt, self.z_cnt)
     }
 
-    /// Box of all voxels.
+    /// Box of all voxels, `None` when the model is not sized.
     #[must_use]
-    pub fn bbox(&self) -> &Extent3d {
-        &self.bbox
+    pub const fn bbox(&self) -> Option<Extent3d> {
+        self.bbox
     }
 
     /// Removed point items (`m_lRemovedPointItemCount`).
@@ -676,15 +678,16 @@ impl<T: Copy + PartialEq> ObjsInVoxels<T> {
     /// to a boundary voxel. `None` when the model has no box or no voxels.
     #[must_use]
     pub fn map_point_to_voxel(&self, p: Point3) -> Option<VoxelHit> {
-        if self.bbox.is_init() || self.voxel_count() == 0 {
+        let bbox = self.bbox?;
+        if self.voxel_count() == 0 {
             return None;
         }
-        let dx = self.bbox.x_length() / self.x_cnt as f64;
-        let dy = self.bbox.y_length() / self.y_cnt as f64;
-        let dz = self.bbox.z_length() / self.z_cnt as f64;
-        let mut ix = ulong_from_f64((p.x - self.bbox.min().x) / dx);
-        let mut iy = ulong_from_f64((p.y - self.bbox.min().y) / dy);
-        let mut iz = ulong_from_f64((p.z - self.bbox.min().z) / dz);
+        let dx = bbox.x_length() / self.x_cnt as f64;
+        let dy = bbox.y_length() / self.y_cnt as f64;
+        let dz = bbox.z_length() / self.z_cnt as f64;
+        let mut ix = ulong_from_f64((p.x - bbox.min().x) / dx);
+        let mut iy = ulong_from_f64((p.y - bbox.min().y) / dy);
+        let mut iz = ulong_from_f64((p.z - bbox.min().z) / dz);
         if ix >= self.x_cnt as u64 {
             ix = self.x_cnt as u64 - 1;
         }
@@ -698,40 +701,36 @@ impl<T: Copy + PartialEq> ObjsInVoxels<T> {
         let index = self.map_indices_to_voxel_index(ix, iy, iz);
         Some(VoxelHit {
             index,
-            extent: self.map_voxel_index_to_bbox(index),
+            extent: self.map_voxel_index_to_bbox(index)?,
             ix,
             iy,
             iz,
         })
     }
 
-    /// Box of voxel `index` (`MapVoxelIndexToBBox`); the unsized
-    /// [`Extent3d::new`] when the model has no box or no voxels, or when the
-    /// computed corners are out of order (upstream ignores the `SetMinMax`
-    /// failure).
+    /// Box of voxel `index` (`MapVoxelIndexToBBox`); `None` when the model has no box
+    /// or no voxels, the index is out of range, or the computed corners are out of order
+    /// (where upstream ignores the `SetMinMax` failure and answers the `Init()` box).
     #[must_use]
-    pub fn map_voxel_index_to_bbox(&self, index: usize) -> Extent3d {
-        let mut e = Extent3d::new();
-        if self.bbox.is_init() || self.voxel_count() == 0 {
-            return e;
+    pub fn map_voxel_index_to_bbox(&self, index: usize) -> Option<Extent3d> {
+        let bbox = self.bbox?;
+        if self.voxel_count() == 0 {
+            return None;
         }
-        let dx = self.bbox.x_length() / self.x_cnt as f64;
-        let dy = self.bbox.y_length() / self.y_cnt as f64;
-        let dz = self.bbox.z_length() / self.z_cnt as f64;
-        let Ok((ix, iy, iz)) = self.map_voxel_index_to_indices(index) else {
-            return e;
-        };
+        let dx = bbox.x_length() / self.x_cnt as f64;
+        let dy = bbox.y_length() / self.y_cnt as f64;
+        let dz = bbox.z_length() / self.z_cnt as f64;
+        let (ix, iy, iz) = self.map_voxel_index_to_indices(index).ok()?;
         let (ix, iy, iz) = (ix as f64, iy as f64, iz as f64);
-        let m = self.bbox.min();
-        let _ = e.set_min_max_coords(
+        let m = bbox.min();
+        Extent3d::from_bounds(
             m.x + ix * dx,
             m.y + iy * dy,
             m.z + iz * dz,
             m.x + (ix + 1.0) * dx,
             m.y + (iy + 1.0) * dy,
             m.z + (iz + 1.0) * dz,
-        );
-        e
+        )
     }
 
     /// Indices of every point item (removed ones included) holding `item`
@@ -760,7 +759,7 @@ impl<T: Copy + PartialEq> ObjsInVoxels<T> {
         zone_tol: f64,
         mut updated: Option<&mut Vec<usize>>,
     ) -> Result<Option<usize>> {
-        if self.bbox.is_init() {
+        if self.bbox.is_none() {
             return Ok(None);
         }
         let Some(hit) = self.map_point_to_voxel(point) else {
@@ -956,7 +955,7 @@ mod tests {
     use scx_num::math::Point3;
 
     fn unit_box() -> Extent3d {
-        Extent3d::from_bounds(0.0, 0.0, 0.0, 1.0, 1.0, 1.0)
+        Extent3d::spanning(Point3::ORIGIN, Point3::new(1.0, 1.0, 1.0))
     }
 
     fn sorted_item_pairs(v: &ObjsInVoxels<u32>, p: &CoincidentPairs) -> Vec<(u32, u32)> {
@@ -1087,7 +1086,7 @@ mod tests {
         let h = v.map_point_to_voxel(Point3::new(0.6, 0.7, 0.5)).unwrap();
         assert_eq!((h.ix, h.iy, h.iz, h.index), (2, 1, 0, 6));
         assert_eq!(
-            h.extent,
+            Some(h.extent),
             Extent3d::from_bounds(0.5, 0.5, 0.0, 0.75, 1.0, 1.0)
         );
         // below the box: the unsigned conversion wraps, then clamps high
@@ -1096,7 +1095,7 @@ mod tests {
         assert_eq!(v.map_voxel_index_to_indices(6).unwrap(), (2, 1, 0));
         let u: ObjsInVoxels<u32> = ObjsInVoxels::new(2, 2, 2, None, 0).unwrap();
         assert!(u.map_point_to_voxel(Point3::ORIGIN).is_none());
-        assert!(u.map_voxel_index_to_bbox(0).is_init());
+        assert_eq!(u.map_voxel_index_to_bbox(0), None);
     }
 
     #[test]

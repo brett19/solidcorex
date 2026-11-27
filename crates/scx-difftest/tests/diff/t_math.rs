@@ -10,16 +10,36 @@ type P = [f64; 2];
 type M = [[f64; 4]; 4];
 
 diff!(is_infinite_param, |a: f64| m::math::is_infinite_param(a));
-diff!(max2, |a: f64, b: f64| m::math::max2(a, b));
-diff!(min2, |a: f64, b: f64| m::math::min2(a, b));
-diff!(max3, |a: f64, b: f64, c: f64| m::math::max3(a, b, c));
-diff!(min3, |a: f64, b: f64, c: f64| m::math::min3(a, b, c));
-diff!(max4, |a: f64, b: f64, c: f64, d: f64| m::math::max4(
-    a, b, c, d
-));
-diff!(min4, |a: f64, b: f64, c: f64, d: f64| m::math::min4(
-    a, b, c, d
-));
+diff!(
+    max2,
+    truth_defect = crate::pin_truths::max2,
+    |a: f64, b: f64| m::math::max2(a, b)
+);
+diff!(
+    min2,
+    truth_defect = crate::pin_truths::min2,
+    |a: f64, b: f64| m::math::min2(a, b)
+);
+diff!(
+    max3,
+    truth_defect = crate::pin_truths::max3,
+    |a: f64, b: f64, c: f64| m::math::max3(a, b, c)
+);
+diff!(
+    min3,
+    truth_defect = crate::pin_truths::min3,
+    |a: f64, b: f64, c: f64| m::math::min3(a, b, c)
+);
+diff!(
+    max4,
+    truth_defect = crate::pin_truths::max4,
+    |a: f64, b: f64, c: f64, d: f64| m::math::max4(a, b, c, d)
+);
+diff!(
+    min4,
+    truth_defect = crate::pin_truths::min4,
+    |a: f64, b: f64, c: f64, d: f64| m::math::min4(a, b, c, d)
+);
 diff!(rad_to_deg, |a: f64| m::math::rad_to_deg(a));
 // `det3` is `pub(crate)` at the pin: no solidcore counterpart to call (see 52-num-move.md).
 
@@ -59,8 +79,15 @@ diff!(
         pts
     }
 );
-diff!(tr_transformed_box, |t: M, a: V, b: V| m::mt(t)
-    .transformed_box(m::p3(a), m::p3(b)));
+// The box spanned by `a` and `b`; the pin takes its two corners, scx the box.
+diff!(
+    tr_transformed_box,
+    |t: M, a: V, b: V| m::e3([a[0], a[1], a[2], b[0], b[1], b[2]])
+        .and_then(|e| m::mt(t).transformed_box(e)),
+    m::e3([a[0], a[1], a[2], b[0], b[1], b[2]])
+        .map(|e| m::mt(t).transformed_box(e.min(), e.max()))
+        .and_then(|(lo, hi)| m::extent3d::Extent3d::from_corners(lo, hi))
+);
 diff!(
     tr_row_lengths,
     |t: M| m::mt(t).axis_lengths(),

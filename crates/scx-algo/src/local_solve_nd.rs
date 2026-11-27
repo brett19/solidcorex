@@ -862,7 +862,7 @@ mod tests {
     };
 
     fn bounds<const N: usize>(extents: [(f64, f64); N]) -> [Domain1d; N] {
-        extents.map(|(lo, hi)| Domain1d::Bounded(Extent1d::from_min_max(lo, hi)))
+        extents.map(|(lo, hi)| Domain1d::Bounded(Extent1d::spanning(lo, hi)))
     }
 
     fn bounded<const N: usize>(extents: [(f64, f64); N]) -> LocalSolveNd<N> {
@@ -1088,9 +1088,8 @@ mod tests {
     /// hit), the line and unbounded intervals leave the parameter as given.
     #[test]
     fn clamp_follows_the_domain() {
-        let unit = Extent1d::from_min_max(0.0, 1.0);
-        let mut free = Extent1d::new();
-        free.set_unbounded();
+        let unit = Extent1d::spanning(0.0, 1.0);
+        let free = Extent1d::UNBOUNDED;
         let s = LocalSolveNd {
             domain: [
                 Domain1d::Line,
@@ -1125,8 +1124,8 @@ mod tests {
     #[test]
     fn jacobian_on_degenerate_interval_fails() {
         let domain = [
-            Domain1d::Bounded(Extent1d::from_value(0.5)),
-            Domain1d::Bounded(Extent1d::from_min_max(-2.0, 2.0)),
+            Domain1d::Bounded(Extent1d::point(0.5)),
+            Domain1d::Bounded(Extent1d::spanning(-2.0, 2.0)),
         ];
         let r = jacobian(
             &mut |x: &[f64; 2]| Ok::<_, TestErr>(CUBIC.values(x)),

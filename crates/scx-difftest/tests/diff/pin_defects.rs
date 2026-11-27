@@ -478,11 +478,14 @@ fn ulp_close(v: f64, w: f64) -> bool {
 /// The pin forms `(min + max) / 2` with a divide that returns the plain sum when it would
 /// overflow, so the mid of `[1e20, 1e20]` is `2e20`, outside the box. scx takes the midpoint
 /// of each interval. The check: each coordinate is `min/2 + max/2` to an ulp.
-pub fn e2_mid() -> PinDefect<([f64; 4],), scx_num::vector2d::Point2> {
+pub fn e2_mid() -> PinDefect<([f64; 4],), Option<scx_num::vector2d::Point2>> {
     PinDefect {
         reason: "the pin's guarded divide answers the corner sum, not the mid, for large boxes",
         applies: Applies::Disagreeing,
         check: |(a,), p| {
+            let Some(p) = p else {
+                return Err(format!("no mid for the box {a:?}"));
+            };
             let (x, y) = (a[0] * 0.5 + a[2] * 0.5, a[1] * 0.5 + a[3] * 0.5);
             if ulp_close(p.x, x) && ulp_close(p.y, y) {
                 Ok(())
@@ -1006,6 +1009,86 @@ pub fn tf_mirror_simple(
     }
 }
 
+/// Apart: one ends before the other starts (a NaN bound compares as not apart).
+fn apart(a: &[f64; 2], b: &[f64; 2]) -> bool {
+    a[1] < b[0] || b[1] < a[0]
+}
+/// Not inverted: `lo > hi` does not hold (a NaN bound compares as not inverted).
+fn not_inverted(lo: f64, hi: f64) -> bool {
+    lo.partial_cmp(&hi) != Some(std::cmp::Ordering::Greater)
+}
+type Periodic = Option<scx_num::Result<Vec<scx_num::extent1d::Extent1d>>>;
+/// `Extent1d::intersect_periodic` at period 0 of intervals that are apart (`b` wholly above
+/// or below `a`): the plain intersection, which has none. The pin's error names its inner
+/// `intersect` as the failing routine; scx names the routine called. The check holds scx to
+/// a `Disjoint` failure of `intersect_periodic` that carries the two intervals. With a NaN
+/// bound, the pin's overlap is NaN or not by operand order; scx's is the overlap of the
+/// bounds that are not NaN (as `e1_union_intersect` checks), which the check recomputes.
+pub fn e1_intersect_periodic() -> PinDefect<([f64; 2], [f64; 2], f64, bool), Periodic> {
+    PinDefect {
+        reason: "the pin names its inner intersect as the failing routine, and takes the \
+                 overlap with a NaN bound by operand order (scx skips the NaN)",
+        applies: Applies::Inputs(|(a, b, p, _)| {
+            let ordered = |e: &[f64; 2]| not_inverted(e[0], e[1]);
+            let nan = a.iter().chain(b).any(|x| x.is_nan());
+            *p == 0.0 && ordered(a) && ordered(b) && (nan || apart(a, b))
+        }),
+        check: |(a, b, ..), r| match r {
+            Some(Err(scx_num::NumError::Failed {
+                operation: "geom::extent1d::Extent1d::intersect_periodic",
+                failure: scx_num::error::NumFailure::Disjoint { a: x, b: y },
+                ..
+            })) if apart(a, b)
+                && x.map(f64::to_bits) == a.map(f64::to_bits)
+                && y.map(f64::to_bits) == b.map(f64::to_bits) =>
+            {
+                Ok(())
+            }
+            // With a NaN bound: the overlap of the bounds that are not NaN, one interval.
+            Some(Ok(v)) if !apart(a, b) && v.len() == 1 => {
+                let w = [a[0].max(b[0]), a[1].min(b[1])];
+                let got = [v[0].min(), v[0].max()];
+                if got.map(f64::to_bits) == w.map(f64::to_bits) {
+                    Ok(())
+                } else {
+                    Err(format!("the overlap is {w:?}, not {got:?}"))
+                }
+            }
+            _ => Err(format!("{a:?} and {b:?}: not {r:?}")),
+        },
+    }
+}
+
+/// A box with a NaN bound has no defined extent along that axis, and a line through a point
+/// or along a direction that is not finite is no line, so no clip is defined: scx refuses
+/// them (`InvalidInput`). The pin clips on, its slab extremes NaN or not by operand order
+/// and its parameters `inf - inf`, and answers a miss, a touch or a crossing.
+fn nan_line(a: &[f64; 6], p: &V, d: &V) -> bool {
+    let undefined = a.iter().any(|x| x.is_nan()) || !p.iter().chain(d).all(|x| x.is_finite());
+    undefined && (0..3).all(|i| not_inverted(a[i], a[i + 3]))
+}
+fn refused_line<T: std::fmt::Debug>(r: &Option<scx_num::Result<T>>) -> Result<(), String> {
+    match r {
+        Some(Err(scx_num::NumError::InvalidInput { .. })) => Ok(()),
+        _ => Err(format!("an undefined box or line is refused, not {r:?}")),
+    }
+}
+pub fn e3_intersect_line(
+) -> PinDefect<([f64; 6], V, V), Option<scx_num::Result<scx_num::extent3d::LineHit>>> {
+    PinDefect {
+        reason: "the pin clips an undefined line or box",
+        applies: Applies::Inputs(|(a, p, d)| nan_line(a, p, d)),
+        check: |_, r| refused_line(r),
+    }
+}
+pub fn e3_line_hit_count() -> PinDefect<([f64; 6], V, V), Option<scx_num::Result<u32>>> {
+    PinDefect {
+        reason: "the pin clips an undefined line or box",
+        applies: Applies::Inputs(|(a, p, d)| nan_line(a, p, d)),
+        check: |_, r| refused_line(r),
+    }
+}
+
 // ---- scx-p21 against solidcore-record's Part 21 reader (`t_p21`) ---------------------------
 //
 // Each predicate reads the DATA section's text (the pools have no strings or comments that
@@ -1077,7 +1160,7 @@ fn typed_arities(body: &str) -> Vec<usize> {
 pub fn p21_empty_complex() -> PinDefect<(Text<EMPTY_COMPLEX>,), XRead> {
     PinDefect {
         reason: "the pin reads an empty complex instance",
-        applies: |(t,)| t.0.replace(' ', "").contains("=();"),
+        applies: Applies::Inputs(|(t,)| t.0.replace(' ', "").contains("=();")),
         check: |_, r| match syntax_cause(r) {
             Some(Syntax::ExpectedKeyword) => Ok(()),
             _ => Err(format!("§5.5 needs a record; scx: {:?}", r.0)),
@@ -1093,7 +1176,7 @@ pub fn p21_empty_complex() -> PinDefect<(Text<EMPTY_COMPLEX>,), XRead> {
 pub fn p21_typed_many() -> PinDefect<(Text<TYPED_MANY>,), XRead> {
     PinDefect {
         reason: "the pin reads a typed parameter of several values",
-        applies: |(t,)| typed_arities(t.0).iter().any(|&n| n > 1),
+        applies: Applies::Inputs(|(t,)| typed_arities(t.0).iter().any(|&n| n > 1)),
         check: |_, r| match syntax_cause(r) {
             Some(Syntax::TypedArity(_)) => Ok(()),
             _ => Err(format!("§5.5 allows one value; scx: {:?}", r.0)),
@@ -1108,7 +1191,7 @@ pub fn p21_typed_many() -> PinDefect<(Text<TYPED_MANY>,), XRead> {
 pub fn p21_typed_none() -> PinDefect<(Text<TYPED_NONE>,), XRead> {
     PinDefect {
         reason: "the pin reads a typed parameter of no value",
-        applies: |(t,)| typed_arities(t.0).contains(&0),
+        applies: Applies::Inputs(|(t,)| typed_arities(t.0).contains(&0)),
         check: |_, r| match syntax_cause(r) {
             Some(Syntax::TypedArity(_)) => Ok(()),
             _ => Err(format!("§5.5 needs one value; scx: {:?}", r.0)),
@@ -1124,14 +1207,14 @@ pub fn p21_typed_none() -> PinDefect<(Text<TYPED_NONE>,), XRead> {
 pub fn p21_enum_dash() -> PinDefect<(Text<ENUM_DASH>,), XRead> {
     PinDefect {
         reason: "the pin reads an enumeration with a dash",
-        applies: |(t,)| {
+        applies: Applies::Inputs(|(t,)| {
             t.0.split('.').skip(1).step_by(2).any(|tok| {
                 tok.contains('-')
                     && tok.bytes().all(|c| {
                         c.is_ascii_uppercase() || c.is_ascii_digit() || c == b'_' || c == b'-'
                     })
             })
-        },
+        }),
         check: |_, r| match syntax_cause(r) {
             Some(Syntax::BadEnumeration) => Ok(()),
             _ => Err(format!("§6.4.5 has no '-'; scx: {:?}", r.0)),
@@ -1150,7 +1233,7 @@ pub fn p21_enum_dash() -> PinDefect<(Text<ENUM_DASH>,), XRead> {
 pub fn p21_page_latin() -> PinDefect<(Text<PAGE_LATIN>,), XRead> {
     PinDefect {
         reason: "the pin keeps a \\PA\\ string raw",
-        applies: |(t,)| t.0.contains(r"\PA\"),
+        applies: Applies::Inputs(|(t,)| t.0.contains(r"\PA\")),
         check: |(t,), r| {
             let raw = t.0.split('\'').nth(1).ok_or("no string in the input")?;
             let mut truth = String::new();
@@ -1186,11 +1269,11 @@ pub fn p21_page_latin() -> PinDefect<(Text<PAGE_LATIN>,), XRead> {
 pub fn p21_lower_hex() -> PinDefect<(Text<LOWER_HEX>,), XRead> {
     PinDefect {
         reason: "the pin keeps lower-case hex in a binary",
-        applies: |(t,)| {
+        applies: Applies::Inputs(|(t,)| {
             t.0.split('"')
                 .nth(1)
                 .is_some_and(|h| h.bytes().any(|c| c.is_ascii_lowercase()))
-        },
+        }),
         check: |(t,), r| {
             let hex = t.0.split('"').nth(1).ok_or("no binary in the input")?;
             match first_param(r)? {

@@ -70,7 +70,6 @@
 
 use crate::error::{NumError, Result};
 use crate::extent3d::Extent3d;
-use crate::math::INFINITE_PARAMETER;
 use crate::small_matrix::{inverse_3x3, inverse_4x4, mult_4x4};
 use crate::tol::is_zero;
 use crate::vector3d::{Point3, Vec3};
@@ -152,14 +151,7 @@ impl Transform {
     /// The parameter domain, unbounded in every direction (`GetNaturalParamDomain`).
     #[must_use]
     pub const fn natural_param_domain(&self) -> Extent3d {
-        Extent3d::from_bounds(
-            -INFINITE_PARAMETER,
-            -INFINITE_PARAMETER,
-            -INFINITE_PARAMETER,
-            INFINITE_PARAMETER,
-            INFINITE_PARAMETER,
-            INFINITE_PARAMETER,
-        )
+        Extent3d::UNBOUNDED
     }
 
     /// The image of the parameter origin, row 3 (`GetToOrigin`).
@@ -480,6 +472,7 @@ impl Transform {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::math::INFINITE_PARAMETER;
     fn v(x: f64, y: f64, z: f64) -> Vec3 {
         Vec3::new(x, y, z)
     }
@@ -544,7 +537,7 @@ mod tests {
         assert!(!t.is_bounded_simple());
         assert!(t.is_curve_in_param_domain_simple());
         let d = t.natural_param_domain();
-        assert_eq!(d.u_min(), -INFINITE_PARAMETER);
+        assert_eq!(d.x_min(), -INFINITE_PARAMETER);
         assert_eq!(Transform::from_matrix(*t.matrix()), t);
     }
 }

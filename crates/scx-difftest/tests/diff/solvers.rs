@@ -431,8 +431,8 @@ pub mod x {
     pub fn domain1d(ivl: Option<(f64, f64, bool)>) -> Domain1d {
         match ivl {
             None => Domain1d::Line,
-            Some((a, b, true)) => Domain1d::Periodic(Extent1d::from_min_max(a, b)),
-            Some((a, b, false)) => Domain1d::Bounded(Extent1d::from_min_max(a, b)),
+            Some((a, b, true)) => Domain1d::Periodic(Extent1d::spanning(a, b)),
+            Some((a, b, false)) => Domain1d::Bounded(Extent1d::spanning(a, b)),
         }
     }
 
@@ -528,7 +528,7 @@ pub mod x {
         ivl: Option<[[f64; 2]; 2]>,
     ) -> Result<[[f64; 2]; 2], SolveError<XErr>> {
         let domain = ivl.map_or([Domain1d::Line; 2], |a| {
-            a.map(|[lo, hi]| Domain1d::Bounded(Extent1d::from_min_max(lo, hi)))
+            a.map(|[lo, hi]| Domain1d::Bounded(Extent1d::spanning(lo, hi)))
         });
         let mut values = |p: &[f64; 2]| rec.call(*p, false).map(|(v, _)| v).map_err(err);
         jacobian(&mut values, x, &domain)
@@ -571,7 +571,7 @@ pub mod x {
         let domain = ivl.map_or([Domain1d::Line; 2], |a| {
             let mut d = [Domain1d::Line; 2];
             for (i, (di, [lo, hi])) in d.iter_mut().zip(a).enumerate() {
-                let e = Extent1d::from_min_max(lo, hi);
+                let e = Extent1d::spanning(lo, hi);
                 *di = if periodic && i == 0 {
                     Domain1d::Periodic(e)
                 } else {
@@ -611,7 +611,7 @@ pub mod x {
 
     fn diag<const N: usize>(d: &mut Diag) -> Result<RepD, PinErr> {
         let s = LocalSolveNd::<N> {
-            domain: [Domain1d::Bounded(Extent1d::from_min_max(-2.0, 2.0)); N],
+            domain: [Domain1d::Bounded(Extent1d::spanning(-2.0, 2.0)); N],
             acceptable_accuracy: 1e-9,
             ..LocalSolveNd::new()
         };
@@ -682,12 +682,13 @@ pub mod x {
         let brent = algorithm(code).map(|a| a.goal().is_some());
         let d = LocalSolve1d::default();
         let s = LocalSolve1d {
-            domain: Domain1d::Bounded(Extent1d::from_min_max(lo, hi)),
+            domain: Domain1d::Bounded(Extent1d::spanning(lo, hi)),
             desired_accuracy: acc.abs(),
             acceptable_accuracy: 1e-3,
             ..LocalSolve1d::new()
         };
-        let ivl = s.domain.interval().unwrap_or_default();
+        // Bounded just above.
+        let ivl = s.domain.interval().unwrap();
         let mut rec = Rec1::new(0, usize::MAX, false, Class::SmErr);
         let r = s
             .solve(|t| rec.call(t).map(|(v, d, _)| (v, d)).map_err(err), 1.0)

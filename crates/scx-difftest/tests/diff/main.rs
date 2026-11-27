@@ -18,6 +18,8 @@
 mod facade;
 mod harness;
 mod pin_defects;
+mod pin_extent;
+mod pin_truths;
 mod solvers;
 mod t_algo;
 mod t_extent;
