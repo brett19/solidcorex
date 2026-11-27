@@ -1,13 +1,15 @@
 // Written for solidcorex. Apache-2.0.
 //! `cbrt` and `hypot`.
 
-use super::dd::{self, round_scaled};
+use super::accurate;
+use super::dd;
 use super::tables::{CBRT2, CBRT4};
 use crate::eft::{fast_two_sum, two_prod};
 
 /// `cbrt(x)`: `x = 2^(3q + r) m` with `m` in `[1, 2)`, and `cbrt(m 2^r)` from
-/// [`fast_cbrt`] when its rounding test passes, else from [`cbrt_dd`]; the bits are
-/// [`cbrt_dd`]'s either way.
+/// [`fast_cbrt`] when its rounding test passes, else from [`cbrt_dd`] when its test
+/// ([`DD_ERR`]) passes, else the exact search. The result, at least `2^-358`, is normal,
+/// and the scaling exact.
 pub(super) fn cbrt(x: f64) -> f64 {
     if x.is_nan() {
         return f64::NAN;
@@ -26,13 +28,28 @@ pub(super) fn cbrt(x: f64) -> f64 {
     let m = f64::from_bits((a.to_bits() & 0x000f_ffff_ffff_ffff) | 0x3ff0_0000_0000_0000);
     let (q, r) = (e.div_euclid(3), e.rem_euclid(3));
     let (hi, lo) = fast_cbrt(m, r);
+    let p = dd::pow2(q + bias);
     let root = if dd::rounds_to_hi(hi, lo, FAST_TEST) {
         hi
     } else {
-        cbrt_dd(m, r).0
+        cbrt_slow(x.abs(), m, r, p)
     };
-    (root * dd::pow2(q + bias)).copysign(x)
+    (root * p).copysign(x)
 }
+
+/// [`cbrt_dd`]'s root of `m 2^r`, rounded when its test passes, else the double nearest
+/// `cbrt(a) / p` by the exact search (`a = m 2^r p^3`).
+#[inline(never)]
+fn cbrt_slow(a: f64, m: f64, r: i32, p: f64) -> f64 {
+    let (h, l) = cbrt_dd(m, r);
+    dd::round_or(h, l, DD_ERR, || accurate::cbrt_exact(a, h * p) / p)
+}
+
+/// The relative error of [`cbrt_dd`], twice its bound of `2^-96`: Halley's steps leave
+/// `y` within `2^-51` (rounding), so Newton's step leaves `2^-102`; the residual's
+/// double-double product and sum are within a few `2^-104` of `m` and enter divided by
+/// `3 y^2`, and the correction's division and the table's product add `2^-104` each.
+const DD_ERR: f64 = 2.524_354_896_707_238e-29; // 2^-95
 
 /// `cbrt(m 2^r)` as a double-double whose high part is the rounded result, for `m` in
 /// `[1, 2)` and `r` in `0..3`: `cbrt(m)` from a quadratic start and two Halley steps in
@@ -59,10 +76,8 @@ fn cbrt_dd(m: f64, r: i32) -> (f64, f64) {
 
 /// The rounding-test constant for [`fast_cbrt`]: `1 + 2^-9`, good for
 /// `eps < 2^-54 (1 - (1 + 2^-53)/(1 + 2^-9)) = 2^-63.01` ([`dd::rounds_to_hi`]). The
-/// fast path's error is at most `2^-65` and the double-double path's below `2^-95`
-/// (Newton's step from a double good to `2^-52` leaves `2^-103`, and its double-double
-/// residual and product a few `2^-104`), so `eps <= 2^-64.99`: a margin of 4 (and of
-/// about 10 over the fast path's budget). The test fails for about 0.2% of arguments.
+/// fast path's error against the true root is at most `2^-65`: a margin of 4. The test
+/// fails for about 0.2% of arguments.
 const FAST_TEST: f64 = 1.001_953_125;
 
 /// `cbrt(m 2^r)` for `m` in `[1, 2)` and `r` in `0..3`, as an unevaluated `hi + lo` with
@@ -98,7 +113,9 @@ fn fast_cbrt(m: f64, r: i32) -> (f64, f64) {
     fast_two_sum(y0, y0 * (t * p))
 }
 
-/// `sqrt(x^2 + y^2)` without overflow or underflow on the way, rounded once.
+/// `sqrt(x^2 + y^2)` without overflow or underflow on the way, correctly rounded: the
+/// double-double root when its test ([`HYPOT_ERR`]) passes, else the exact search (also
+/// for exact midpoints).
 pub(super) fn hypot(x: f64, y: f64) -> f64 {
     let (a, b) = (x.abs(), y.abs());
     if a == f64::INFINITY || b == f64::INFINITY {
@@ -108,18 +125,42 @@ pub(super) fn hypot(x: f64, y: f64) -> f64 {
         return f64::NAN;
     }
     let (mn, mx) = if a > b { (b, a) } else { (a, b) };
-    // Below 2^-60 of the larger, the smaller changes nothing (and covers mn == 0).
+    // Below 2^-60 of the larger, the smaller changes nothing (and covers mn == 0): the
+    // root is mx (1 + t^2/2) with t^2/2 below 2^-120, short of the half-gap above mx
+    // (2^-54 mx, or 2^-1075 for an mx below 2^-962, where the product may round).
     if mn <= mx * dd::pow2(-60) {
         return mx;
     }
     // Keep the squares and their error terms inside the normal range.
     let k = dd::exponent(mx);
     let s = if (-450..=450).contains(&k) { 0 } else { -k };
-    let (mx, mn) = (dd::scale(mx, s), dd::scale(mn, s));
-    let sum = dd::add(two_prod(mx, mx), two_prod(mn, mn));
+    let (sx, sn) = (dd::scale(mx, s), dd::scale(mn, s));
+    let sum = dd::add(two_prod(sx, sx), two_prod(sn, sn));
     let (h, l) = dd::sqrt(sum);
-    round_scaled(h, l, -s)
+    // Unscaled, the root lies in [2^-450, 2^452): h is the result when the test passes.
+    if s == 0 && dd::rounds_to_hi(h, l, HYPOT_TEST) {
+        return h;
+    }
+    hypot_slow(x, y, s, h, l)
 }
+
+/// [`hypot`]'s scaled roots, and the exact search when the test fails.
+#[inline(never)]
+fn hypot_slow(x: f64, y: f64, s: i32, h: f64, l: f64) -> f64 {
+    dd::round_scaled_or(h, l, HYPOT_ERR, -s, || {
+        accurate::hypot_exact(x.abs(), y.abs(), dd::round_scaled(h, l, -s))
+    })
+}
+
+/// The relative error of [`hypot`]'s double-double root, twice its bound of `2^-99`:
+/// the squares are exact, their sum (both positive) within `2^-104`, and the root's
+/// Newton step from a correctly rounded `sqrt` within `2^-104` more (its residual is
+/// exact to `2^-106` of the sum, the correction's division and the step's truncation,
+/// below `2^-108`, add little), all well inside `2^-99`.
+const HYPOT_ERR: f64 = 3.155_443_620_884_047_2e-30; // 2^-98
+
+/// [`HYPOT_ERR`] as [`dd::round_or`] takes it.
+const HYPOT_TEST: f64 = 1.0 + HYPOT_ERR * 18_014_398_509_481_984.0;
 
 #[cfg(test)]
 mod tests {
@@ -148,7 +189,8 @@ mod tests {
         let m = f64::from_bits((a.to_bits() & 0x000f_ffff_ffff_ffff) | 0x3ff0_0000_0000_0000);
         let (q, r) = (e.div_euclid(3), e.rem_euclid(3));
         let slow = cbrt_dd(m, r);
-        let want = (slow.0 * dd::pow2(q + bias)).copysign(x);
+        let p = dd::pow2(q + bias);
+        let want = (cbrt_slow(x.abs(), m, r, p) * p).copysign(x);
         assert_eq!(got.to_bits(), want.to_bits(), "cbrt({x:e})");
         let (hi, lo) = fast_cbrt(m, r);
         st.add((hi, lo), dd::rounds_to_hi(hi, lo, FAST_TEST), slow);
@@ -191,6 +233,38 @@ mod tests {
     #[test]
     fn fast_path_changes_no_bit() {
         run(count(20_000));
+    }
+
+    /// `hypot` against the reference, bit for bit: random pairs over the exponent range
+    /// (subnormals and the scaled paths included), Pythagorean pairs whose root is a
+    /// double, and pairs `(3k, 4k)` whose root `5k` is a midpoint (a tie to even).
+    #[test]
+    fn hypot_rounds_correctly() {
+        let mut r = Rng::new(0x2195_4790);
+        let check = |a: f64, b: f64| {
+            // (the reference leaves zeros and infinities to C99)
+            let Some(want) = scx_testkit::mp::hypot(a, b) else {
+                return;
+            };
+            assert_eq!(hypot(a, b).to_bits(), want.to_bits(), "hypot({a:e}, {b:e})");
+        };
+        for i in 0..count(20_000) {
+            let a = log_uniform(&mut r, -1074.0, 1023.0);
+            let b = match i % 3 {
+                0 => log_uniform(&mut r, -1074.0, 1023.0),
+                1 => ulps(a.abs(), (r.next_u64() % 1_000_000) as i64),
+                _ => a * log_uniform(&mut r, -62.0, 0.0),
+            };
+            check(a, b);
+        }
+        for _ in 0..count(2_000) {
+            // k odd with 5k in [2^53, 2^54): 3k and 4k are doubles, 5k a midpoint.
+            let k = ((r.next_u64() % (1 << 50)) | 1) as f64 + 1_801_439_850_948_198.0;
+            let e = (r.next_u64() % 1800) as i32 - 900;
+            let (a, b) = (dd::scale(3.0 * k, e), dd::scale(4.0 * k, e));
+            check(a, b);
+            check(dd::scale(3.0, e), dd::scale(4.0, e));
+        }
     }
 
     /// The long run (release): `FMATH_FAST_N` inputs and the hard cases.

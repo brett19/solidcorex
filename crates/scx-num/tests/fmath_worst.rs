@@ -207,6 +207,6 @@ worst! {
     cosh => "cosh", 0;
     tanh => "tanh", 0;
     cbrt => "cbrt", 0;
-    hypot => "hypot", 63;
+    hypot => "hypot", 0;
     powf => "pow", 98;
 }
