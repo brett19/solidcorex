@@ -5196,7 +5196,8 @@ segment over `[0, 1]`, one collapsed edge per pole per face, as the generator ma
 
 1. `finish`'s closure check measures the joint between uses `a` and `b` with `b`'s *end*
    budget (BR2, `check/geometry.rs`). The writer uses `b`'s start budget. These agree
-   unless a vertex's reach differs at the two ends of one edge. Is BR2's choice intended?
+   unless a vertex's reach differs at the two ends of one edge. Is BR2's choice intended? (Answered in §6.14: no;
+   both now use `b`'s start budget.)
 2. `pcurve_of`'s `NotOnSurface` could report the largest sampled miss rather than the first
    one, so the writer could split `NeedsFit` from `OffSurface` exactly.
 3. Should a degenerate face at a pole (decision 4) ever be built? If so, it needs a
@@ -5617,6 +5618,239 @@ Edits with no merges or splits do no new work.
   quantity-like rule exact in one edit.
 - Face pieces that tie on bound and place still fall to the id (decision 2).
 - Touches through moved vertices (BR3 decision 1), unchanged.
+
+### 6.14 BR2b as built (11-27)
+
+Decided by analysis and an adversarial pass. Proposed for review; not yet ruled.
+
+`Draft::finish` on a draft made by `Brep::edit` or `Brep::into_draft`, finished under the
+base body's resolution, checks only the records the draft wrote or made and the records
+whose rules read them. It refuses exactly when the whole check would, with the same cause
+naming the same record. A draft from `Draft::new` checks everything, as before. The body
+cells (BR4) are carried too: the box tree is seeded from the base's boxes, so a finish
+followed by a box read no longer rebuilds every face box.
+
+**The public surface.** One addition, hidden from the docs:
+
+```rust
+impl Draft {
+    pub fn finish(self, doc: &Document) -> Result<(Brep, Changes), Box<Unfinished>>;             // now touched-only from a body
+    #[doc(hidden)]
+    pub fn finish_checking_all(self, doc: &Document) -> Result<(Brep, Changes), Box<Unfinished>>; // the oracle
+}
+```
+
+The new module `touched.rs` (crate-private) holds `Touched(Option<Box<Base>>)`: the base's
+slot counts, resolution and cells, a first-write bit per base slot, and the instances to
+check. The draft calls its hooks from `add_face`, `face_mut`, `edit_face`, `shell_mut`,
+`edge_mut`, `adjacency_mut`, `vertex_mut`, `merge_vertex`, the `remove_*` and the drops.
+
+**Identity with the full check.** The full check runs its rules in a fixed order, and
+within each rule over records in id order. It returns the first failure.
+
+- The base passed every rule. Each rule instance (one record) reads that record and a few
+  others. An instance none of whose inputs changed reads the same values and passes again.
+- So the full check's first failure is at an instance with a changed input. The touched
+  check runs the same rules in the same order, over a superset of those instances, still in
+  id order, so it meets the same instance first. Both report the same cause.
+- Marks are made at the *first* write to a base record, through what the record points at
+  *then*: a face's uses name edges, and their fins name the face back; an edge's fins name
+  the faces that use it. In a valid base fins and uses are a bijection, so the marks reach
+  every reader of the record as the base had it. Readers added later are themselves written
+  (a fin must be written onto an edge, a use onto a face), so they are marked by their own
+  write.
+- Records made by the draft sit at slot ≥ the base's count and are always checked.
+
+*The lowest record outside the touched set.* The question was whether some record never
+written, never read by a written one, could become the lowest failure. It cannot, because
+of the argument above: such a record's instances all pass. The one rule with no pointer
+back is `LooseVertex` (nothing names a vertex's edges). Its candidates are exact:
+
+- a vertex becomes loose only when an edge that ended on it moves or goes (the base ends of
+  every geometry-written or removed edge), when a shell drops it as a lone vertex (the base
+  lone vertices of each written shell), or when it is new (created vertices);
+- each candidate is cleared if it is an end of a plan edge, an end of an edge a plan face
+  uses, or a lone vertex of any shell, else by its star (BR4's base rows plus written and
+  created edges when the rows were built, else one pass over the edges' ends);
+- the lowest uncleared candidate is the one the full check would name, since every
+  non-candidate kept an edge or lone-vertex role the base gave it.
+
+**The closure, rule by rule.** "Written" means the first write to a base record; "created"
+is always in.
+
+| Rule (check fn) | Causes | Reads | Instances checked |
+|---|---|---|---|
+| `outside` | `Outside` | region 0 | always (one record) |
+| `shell_refs`, `shell_wires` | `Dangling`, `WireWithFins` | the shell, its region, wires, lone vertices; wires' fins | written ∪ created shells; all shells after a base region, base vertex or base edge is removed, or a wire edge's fins or geometry is written |
+| `face_refs` | `Dangling` | the face, its shell, loops' edges | faces: written ∪ created ∪ marks (faces named by the fins of a written edge, as the base had them) |
+| `edge_refs`, `fin_refs` | `Dangling`, `FinWithoutUse` | the edge, its ends, fins; the uses of each fin's face | edges: written (geometry or fins) ∪ created ∪ marks (edges a written face used) ∪ the star of each removed base vertex |
+| `faces` | `FaceWithoutLoop`, `EmptyLoop`, `LoopNotConnected`, `RepeatedUse`, `UseWithoutFin`, `RepeatedFin`, `PointUseOfCurve`, `PcurveInterval`, `VertexOnTwoLoops` | the face's loops and uses; the used edges' ends and fins | the plan faces above |
+| `edge_structure` | `CollapsedEnds`, `LooseEdge`, `SidesDisagree` | the edge, its fins' faces' sides, wire membership | the plan edges above (a shell write marks the shell's base wires) |
+| loose vertices | `LooseVertex` | ends of all edges, lone vertices of all shells | the candidates above |
+| `shells` | `EmptyShell`, `ShellNotConnected` | faces' shells and the vertex joins between them | the fast path below, else every shell |
+| `regions` | `RegionWithoutShell` | every shell's region | always (one pass over shells; cheap) |
+| `edge_check` | `EdgeEndOffVertex`, `EdgeTooShort` | the edge's curve and accuracy, its ends' points and accuracy | EG = written ∪ created edges ∪ the star of each written vertex, live only |
+| `use_check`, `closure`, `pole_check`, `face_check` | `OutsideDomain`, `PcurveOffEdge`, `UseEndOffVertex`, `PeriodJump`, `LoopOpenInUv`, `DogLeg`, `PoleNotVertex`, `LoopOrientation`, `FaceWraps` | the face, its uses' edges and their ends | FG = written ∪ created faces ∪ the faces of EG's final fins, live only |
+
+The plan's selected instances are walked in id order inside each rule (`Sel::Only` takes a
+sorted list), and the rules run in the full check's order, so the order argument holds
+per rule.
+
+*The `shells` fast path.* Connectivity is the one rule over the whole body. Its hubs are
+shells and vertices: a face joins its shell and its loops' vertices; radial joins along an
+edge are implied by the edge's two ends once structure has passed. The base components are
+known (each base shell is one piece). Call *changed* the pieces (face sides, lone
+vertices) whose hubs may have changed: written faces whose pieces differ, created faces, and
+the faces on an edge whose ends moved. Every unchanged part of a base shell met, in the
+base, a changed piece at a hub that also holds an unchanged piece. So if every hub of the
+changed pieces as they were is a hub of some changed piece as it is now, and the changed
+pieces as they are now are joined among themselves, the shell is still one piece. The
+path answers "unchanged" only when that shows and no wire was touched; otherwise (and for
+a shell left with no pieces) the full `shells()` runs. This is conservative: it can only
+send more work to the full rule, never less.
+
+**The boxes.** BR4's `BodyCells` are rebuilt at every finish. Three changes keep that small
+and deterministic:
+
+- *Seed.* `finish` hands the new cells a `Seed { boxes: Arc<Boxes>, dirty: Vec<FaceId> }`
+  when the base's boxes were built. `dirty` is FG, which is exactly the faces whose box
+  inputs changed (a face box reads its record, its edges' accuracy and their ends' vertex
+  accuracy). Clean faces' boxes are copied; dirty faces are recomputed. The seed is used at
+  the first box read.
+- *Same tree.* When every face box comes out equal to the base's and no face came or went,
+  the tree is shared (`Arc<Tree>`); only the body union is recomputed.
+- *Split.* The tree split uses `select_nth_unstable_by` on the same total key
+  `(centre along the axis, face id)` and sorts only halves of size ≤ `LEAF`. A key total on
+  distinct ids gives the same partition as the full sort, so the tree is identical. The unit
+  test `selecting_halves_builds_the_sorted_tree` compares the trees against the sorting
+  split.
+
+Determinism: the seeded or shared boxes are equal to a fresh build of the same tables
+(tested against `Brep::shed_cells`), so the result does not depend on the history.
+
+**Tests.** `tests/touched.rs` runs BR8's 11 kinds × 32 seeds × up to 4 rounds. Each round
+fills a random subset of the base cells, then makes an `edit` or `into_draft` and applies
+1–3 of 37 random edits. Thirteen are valid (nudge a vertex, loosen a vertex's or an edge's
+accuracy, replace a face, add or remove a wire, touch an edge, face or shell unchanged, and
+merge a base vertex or face into a new copy of it, the BR7 case of a kept entity gone into a
+new one, and BR6's rigid move and mirror).
+The others each break one rule (move a wire to another shell, leave a curve pending, drop a
+fin, remove a vertex in use, and so on). The test compares `finish` with
+`finish_checking_all`, cause for cause. When both are `Ok`, it compares the two bodies'
+boxes with each other and with a fresh body's. It asserts every edit ran and at least 12
+outcome kinds came up. A default run has 396 finished bodies. A 400-seed release run had 4,991
+finished, 0 mismatches.
+
+The test was checked by sabotage. Each of these, made in turn, failed it:
+
+- `shells_unchanged` always true;
+- no star for a removed vertex;
+- no loose check;
+- no vertex star in the geometry set;
+- an empty seed dirty set;
+- no marks from the geometry hook, the fins hook or the face hook;
+- `wire_touched` never set;
+- the tree always shared;
+- no removed-vertex hook in `merge_vertex`.
+
+**Measurements** (MEASURED, median of runs back to back on one machine, block bodies from
+`bodies::generate(Kind::Block)`, a throwaway timer not committed).
+
+| Case | main, 10k faces | br2b, 10k | main, 100k faces | br2b, 100k |
+|---|---|---|---|---|
+| full build: `finish` | 15.6 ms | 16.8 ms | 163 ms | 189 ms |
+| full build: `finish` + boxes | 20.2 ms | 19.7 ms | 229 ms | 215 ms |
+| edit, untouched: `finish` | 13.8 ms | 0.000 ms | 167 ms | 0.000 ms |
+| edit, vertex nudge: `finish` | 13.2 ms | 0.063 ms | 166 ms | 1.28 ms |
+| edit, face replace: `finish` | 13.7 ms | 0.004 ms | 183 ms | 0.014 ms |
+| edit, `face_mut`: `finish` | 14.0 ms | 0.002 ms | 173 ms | 0.006 ms |
+| edit, untouched: `finish` + boxes | 18.8 ms | 0.61 ms | 249 ms | 6.4 ms |
+| edit, vertex nudge: `finish` + boxes | 19.4 ms | 0.66 ms | 259 ms | 7.9 ms |
+| edit, face replace: `finish` + boxes | 19.1 ms | 2.5 ms | 255 ms | 29.5 ms |
+| edit, `face_mut`: `finish` + boxes | 19.0 ms | 0.68 ms | 250 ms | 7.6 ms |
+| `into_draft`, vertex nudge: write + `finish` | 14.2 ms | 0.051 ms | 180 ms | 0.84 ms |
+
+- `finish_checking_all` on br2b matches main's `finish` (15.8–16.9 ms and 179–187 ms). The
+  full-build row differs between runs by about the machine's noise (load about 6); the code
+  path is unchanged.
+- The vertex nudge's cost is its star: 0.004 ms with BR4's rows built, 0.06 ms (10k) and
+  1.1 ms (100k) by a scan of edge ends when they are not.
+- The remaining box cost is the body union, a full pass over faces, edges and vertices
+  (about 0.5 ms at 10k, 5 ms at 100k). A face replace changes a box and rebuilds the tree
+  (split 1.5 and 17.5 ms).
+- The added work on a draft write is one bit test, plus on a first write a walk of the
+  record's pointers (a face's uses or an edge's fins).
+
+**Decisions.**
+
+1. *`finish_checking_all` public but `#[doc(hidden)]`.*
+   - For: the property test is an integration test and needs the oracle. The full check
+     runs through the same `finish` code with the touched set forced whole, so it is not a
+     second checker to keep in step.
+   - Against: a hidden public item is surface. A `cfg(test)` would hide it from
+     integration tests; a feature would add a build shape.
+   - Kept hidden-public; it is cheap and honest. Removable if a test feature lands.
+2. *Stars from rows, else a scan.*
+   - For: rows are free when built.
+   - Against: a draft could keep a star per written vertex.
+   - The scan is O(edges) only when the rows were never built and a base vertex lost an edge.
+3. *`all_shells` conservatism.* Removing a base region, vertex or edge, or writing a wire,
+   checks every shell's references. Shells are few (one per piece), so this costs little
+   and avoids a reverse index.
+4. *Merges into a new entity (BR7).* `Changes` now lists a kept entity merged into a new one
+   as removed. The closure reads tables, not `Changes`. `merge_face` and `merge_edge` remove
+   through `drop_face`/`drop_edge`, and `merge_vertex` calls the removed-vertex hook, so the
+   absorbed base record is covered as any removal is: its readers are marked, a removed
+   vertex's star joins the plan edges, and the new survivor is created and always checked.
+5. *BR6's transform writes through the hooks.* `Draft::transform` writes vertices and edges
+   through `vertex_mut`/`edge_mut`. Its two direct writes, a mirror's reversed fins and
+   `put_face`, now call the fins and face hooks. The property test cannot tell these two
+   hooks apart from their absence: a transform writes every vertex and edge, whose hooks
+   already mark every face. They are kept so that every write path keeps the contract.
+6. *The uv joint budget (BR5's question).* `finish` measured the joint between uses `a` and
+   `b` with `a`'s end budget plus `b`'s *end* budget; BR5's writer used `b`'s *start*.
+   - For the start (chosen): `a`'s end and `b`'s start stand at the vertex `V` they share.
+     Each lifts within its own budget of `V` (`UseEndOffVertex` checks exactly that: bound
+     reach plus edge reach plus `V`'s reach). By the triangle inequality the two lifts are
+     within the sum, which is the 3-D gap the joint may have. `b`'s end stands at another
+     vertex `W`, whose reach says nothing about `V`.
+   - Against: the end budget was BR2's choice and every existing body passed it. The two
+     differ only when `V` and `W` have different reaches, which no test body had, so no
+     result depended on it. With `W` loose and `V` tight the old rule let a joint open by
+     `W`'s reach; with `V` loose it refused a joint the vertex allows.
+   - Done: `Joint` holds `start_budget` and `end_budget`, and `closure` uses
+     `a.end_budget + b.start_budget`. The writer already did, except after a collapsed or
+     point use, where it carried the previous curve use's end budget forward. It now takes
+     that use's own end budget, as `finish` does. A unit test
+     (`a_joint_is_measured_by_the_ends_that_meet`) fails under the old rule.
+   - The touched closure is unchanged: the joint reads the shared vertex, already among a
+     face's used edges' ends.
+7. *Whole fallbacks.*
+   - A `Draft::new` has no base.
+   - Another resolution changes every geometry verdict.
+   - A removed base shell: faces name their shell and nothing names a shell's faces.
+8. *`wire_touched` sends `shells` to the full rule.* A wire joins vertices without a face,
+   and the fast path's hubs are faces' hubs.
+9. *The final wires of touched shells are not added to the plan.* Each such wire is a base
+   wire (marked by the shell hook), a created edge, or an edge whose fins were written. One
+   with fins is refused first by `WireWithFins`. The extension was redundant, and the
+   sabotage confirmed it changed nothing.
+10. *The seed keeps the base's boxes alive until the first box read.* That is one `Arc`. A
+   body never read for boxes holds them until dropped.
+11. *Adjacency rows are not incremental.* They are rebuilt on first read, as before.
+12. *The body union stays a full pass.* It reads vertex and edge boxes too; making it
+   incremental needs the union of what was removed.
+
+**Deviations from §6.2–§6.5.** None in surface. The touched sets are BR3's first-write
+snapshot hooks, extended with marks.
+
+**Open questions.**
+
+1. Incremental adjacency rows (stars, shell faces, region shells) from the base's rows plus
+   the touched sets.
+2. An incremental body union, and refitting the tree in place when a few face boxes change
+   instead of rebuilding it (the face replace row).
+3. The 8-samples question and research 66 were not taken up.
 
 ## 7. `scx-record`
 
