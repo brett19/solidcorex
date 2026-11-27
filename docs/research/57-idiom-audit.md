@@ -561,7 +561,11 @@ difftest is `scx-difftest/tests/diff/t_gsolve.rs`.
   folded into a checksum, the two sides interleaved, 11 runs on one core, the median.
   scx takes 0.49 to 0.51 of the pin's time on trees of up to 9 and 12 pieces (0.8 to 3.6
   us a solve), and 0.56 to 0.63 on trees of up to 64 and 96 (37 to 126 us), but 0.91 for
-  Intersect there, whose time is in joining the ranges.
+  Intersect there, whose time is in joining the ranges. In `scx-bench` (`algo/gsolve_*`,
+  criterion, one core, the batch of 1,024): Intersect 0.613 against 1.249 ms, Minimize
+  1.458 / 2.973, keeping the best 1.552 / 2.991, Maximize 1.517 / 3.114, ProjectedMinimize
+  3.503 / 6.728, and Minimize on the large trees 40.06 / 72.21 ms (0.49 to 0.55). The
+  private line and plane helpers are now `geom`'s; the times did not move.
 
 ## 3. Fix when touched
 
