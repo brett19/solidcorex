@@ -1263,6 +1263,27 @@ pub struct ReadError { pub at: usize, pub cause: ReadCause }
     reversed `sense` on the kind, so no left-handed frame is ever stored (D14). [Ruled 11-27, D12.
     The first proposal stored x and y.]
   - This is a small `scx-num` task and blocks CU1 and SU1.
+  - **Built 11-27 (builder K).** Decisions taken in the build, for review:
+    - `scx_num::frame::Frame { origin, x, z }` (private), `Frame::WORLD`, accessors `origin`,
+      `x`, `y`, `z`, and `to_affine()` (`Affine::from_axes(x, y, z, origin)`).
+    - `Frame::new(origin, z, x_hint) -> Option<Frame>`: `None` when the origin is not finite,
+      when `z` or the hint has no direction (`Vec3::normalized`), or when the hint lies along
+      `z`. x is the hint's part square to `z`. It is the pin's `SetSTEPCanonical` (through
+      `MakeUnitOrthoVectors`) without its arbitrary x for a parallel or zero hint and without
+      keeping a non-finite origin: pin defect `frame_new`.
+    - `y()` is `z × x` of the two stored unit vectors, not renormalised (square within
+      rounding; the property test holds lengths and dots to 8 ε). *For ruling:* whether to renormalise or
+      store y if CU1/SU1 measure it.
+    - `Frame::transformed(&Affine) -> Option<(Frame, Sense)>`: the image origin, x along the
+      image of x, z the right-handed normal of the image xy plane, and `Sense::Reversed` when
+      the image of z points against it (a mirror; D14). `None` when the map flattens the
+      frame or the image is not finite. `scx_num::frame::Sense { Forward, Reversed }` with
+      `reversed()` and `sign()`. *For ruling:* the name `Sense` and its home in `scx-num`
+      (the kinds in `scx-curve`/`scx-surface` carry it).
+    - **No `Rigid` exists** in `scx-num` (only `Affine`), so there is no `From<Frame> for
+      Rigid`; 57 §5.2's conversion waits for a `Rigid` type.
+    - `Vec3::make_unit_ortho_vectors` now shares its non-arbitrary path with the crate-private
+      `unit_ortho_toward`; its results are unchanged.
 - **P2. `ParamDomain`.** A shared type for a parameter's domain: `Periodic { period, base }`,
   `Bounded(Extent1d)`, `AtLeast(f64)`, `AtMost(f64)` or `Unbounded`. It is placed in `scx-num`
   beside `PeriodicExtent1d` so curves and surfaces share it; a `UvDomain` is one per direction.

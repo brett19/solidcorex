@@ -499,6 +499,11 @@ impl<T> core::ops::IndexMut<Axis> for Point3<T> {
 }
 
 impl UnitVec3 {
+    /// `self × other` for two square unit vectors, which is unit within rounding.
+    pub(crate) fn cross_square(self, other: Self) -> Self {
+        Self(self.0.cross(other.0))
+    }
+
     /// Unit X.
     pub const X: Self = Self(Vec3::X);
     /// Unit Y.
@@ -1000,6 +1005,17 @@ impl Vec3 {
             z_axis = x_axis.cross(Self::Z);
         }
         Ok(frame(UnitVec3(z_axis.unit_or_z())))
+    }
+
+    /// [`Vec3::make_unit_ortho_vectors`] without its arbitrary choice: `None` when `self`
+    /// or `y_reference` has no direction or the two are parallel.
+    pub(crate) fn unit_ortho_toward(self, y_reference: Self) -> Option<[UnitVec3; 3]> {
+        let x_axis = self.normalized()?;
+        let z_axis = Some(x_axis.cross(*y_reference.normalized()?))
+            .filter(|z_axis| z_axis.length_squared() > EFF_ZERO_SQ)
+            .and_then(Self::normalized)?;
+        let y_axis = UnitVec3(z_axis.cross(*x_axis).unit_or_z());
+        Some([x_axis, y_axis, z_axis])
     }
 
     /// The vector rotated by `ang_rad` about `axis` (right-handed; `axis` need not be

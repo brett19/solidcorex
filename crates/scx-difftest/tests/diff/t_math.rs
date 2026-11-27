@@ -65,6 +65,29 @@ diff!(
         })
     }
 );
+// A frame from an origin, an axis and a reference direction against the pin's
+// `SetSTEPCanonical`: the axes, and a point mapped from frame coordinates (`TransformPoint`).
+diff!(
+    frame_new,
+    pin_defect = crate::pin_defects::frame_new,
+    |o: V, z: V, h: V, q: V| {
+        let a = |v: scx_num::vector3d::Vec3| [v.x, v.y, v.z];
+        scx_num::frame::Frame::new(m::p3(o), m::v3(z), m::v3(h)).map(|f| {
+            let p = f.to_affine().apply(m::p3(q));
+            ([a(*f.x()), a(*f.y()), a(*f.z())], [p.x, p.y, p.z])
+        })
+    },
+    {
+        let a = |v: solidcore::geom::vector3d::Vec3| [v.x, v.y, v.z];
+        let mut f = solidcore::geom::axis2_placement::Axis2Placement::IDENTITY;
+        f.set_step_canonical(m::p3(o), m::v3(z), m::v3(h))
+            .ok()
+            .map(|()| {
+                let p = f.transform_point(m::p3(q));
+                ([a(f.x_axis()), a(f.y_axis()), a(f.z_axis())], a(p))
+            })
+    }
+);
 diff!(
     max2,
     truth_defect = crate::pin_truths::max2,

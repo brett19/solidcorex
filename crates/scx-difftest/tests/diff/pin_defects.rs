@@ -1635,10 +1635,12 @@ pub fn nurbs_bezier_split() -> PinDefect<(At,), Pieces> {
     }
 }
 
-// ---- Parameter domains (`t_math`) -----------------------------------------------------------
+// ---- Parameter domains and frames (`t_math`) ------------------------------------------------
 
 /// A domain kind, its ends, the reach and whether the rule is `Clamp::Sample`.
 type DomainIn = (usize, f64, f64, f64, bool);
+/// A frame's axes and a mapped point.
+type FrameOut = Option<([V; 3], V)>;
 
 /// `ParamDomain::working`: where the pin's marked extent cannot hold the domain (a one-sided
 /// end past the marker `±1234567` swaps with it) or its window end overflows (`a + 2h` past
@@ -1662,6 +1664,60 @@ pub fn domain_working() -> PinDefect<DomainIn, Option<(f64, f64)>> {
                 Some(got) if *got == want => Ok(()),
                 _ => Err(format!("want {want:?}, not {r:?}")),
             }
+        },
+    }
+}
+
+/// `Frame::new(origin, z, x_hint)` against `SetSTEPCanonical`: the pin keeps an origin that
+/// is not finite, and picks an arbitrary x where the hint has no direction off z (scx
+/// refuses: there is no x to take), and crosses the hint as given, so one too short passes
+/// for parallel and one too long overflows; it refuses an axis whose squared length
+/// overflows, and keeps NaN axes for one that is not finite. The check: no frame where the origin is not finite, z or the hint has no
+/// direction, or the hint lies along z; otherwise unit square axes with x the hint's part
+/// square to z, `y = z × x`, and the point mapped by those axes.
+pub fn frame_new() -> PinDefect<(V, V, V, V), FrameOut> {
+    PinDefect {
+        reason: "the pin frames no direction, overflows on long axes and keeps a non-finite origin",
+        applies: Applies::Disagreeing,
+        check: |&(o, z, h, q), r| {
+            let (Some(zd), Some(hd)) = (dir3(z), dir3(h)) else {
+                return match r {
+                    None => Ok(()),
+                    Some(_) => Err("no direction: no frame".into()),
+                };
+            };
+            let lc = len3(cross3(zd, hd));
+            if !finite(&o) || lc < NO_LENGTH / 2.0 {
+                return match r {
+                    None => Ok(()),
+                    Some(_) => Err("no x direction or origin: no frame".into()),
+                };
+            }
+            let Some(([x, y, zz], p)) = r else {
+                return if lc < 2.0 * NO_LENGTH {
+                    Ok(())
+                } else {
+                    Err("a frame exists".into())
+                };
+            };
+            near3("z", *zz, zd, 8.0 * f64::EPSILON)?;
+            let want_x = direction(sub3(hd, scale3(zd, dot3(hd, zd))));
+            near3("x", *x, want_x, 16.0 * f64::EPSILON / lc)?;
+            near3("y", *y, cross3(zd, want_x), 32.0 * f64::EPSILON / lc)?;
+            let want_p = add3(
+                o,
+                add3(scale3(*x, q[0]), add3(scale3(*y, q[1]), scale3(*zz, q[2]))),
+            );
+            if !finite(&q) || !finite(&want_p) {
+                return Ok(());
+            }
+            let size = biggest(&o) + biggest(&q);
+            near3(
+                "the point",
+                *p,
+                want_p,
+                16.0 * f64::EPSILON * size.max(f64::MIN_POSITIVE),
+            )
         },
     }
 }
