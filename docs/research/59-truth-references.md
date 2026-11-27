@@ -226,6 +226,8 @@ Use:
   by inserting again with the references.
 - Surface derivatives of order 3 and up work, but are tested only to order 2.
 
+- Intersection truths (63's T2 and T5) are in `curve_surface` and `ssi`: research 64.
+
 ## 8. Decisions taken here (for review)
 
 1. `scx-testkit` is a dev-dependency only, unpublished, checked by `xtask layers` (section 1).
