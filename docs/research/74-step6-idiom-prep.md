@@ -1292,6 +1292,114 @@ counted once per shell; typed refusal for a missing shell.
 - The 11-27 revision (§15) measured nothing new either. It re-read the pin's ops modules for the
   ledger and checked the review's citations and corpus claims against the pin's files.
 
+## 14. CO2 as built (11-27)
+
+Trust: licence evidence READ at each source's own page or licence file on 11-27 (quoted below);
+hashes, sizes and the volumes MEASURED by running the code. Proposed for review.
+
+### 14.1 Licence verification
+
+The bar is 04 and the corpus rule: usable and shareable by anyone; MIT, Apache, BSD, CC0, CC BY, US
+government public domain; nothing NC, ND, SA or bound by terms of service. Each source was read
+at the source, not from a secondary claim.
+
+| Source | Files kept | Licence | Evidence | Verdict |
+|---|---:|---|---|---|
+| NIST MBE PMI models (`nist.gov/document/nist-pmi-step-files`, archive SHA-256 `8fa78429...1911`, the same archive the pin pins) | 33 of 45 members (the 12 PDFs are left out) | US government work, public domain | The group's page (`.../mbe-pmi-0`, "Created August 29, 2016, Updated December 30, 2025") has a "NIST Disclaimer": "The test cases, CAD models, and STEP files can be used without any restrictions." It asks for acknowledgement and forbids the NIST logo in promotion, which a test corpus does not touch. `nist.gov/oism/copyrights`: material not marked copyrighted "may be distributed or copied". | pass |
+| dan335/step-conformance, rev `3f6d18b` (its head on 11-27) | 19 generated parts with their 19 truth files, and `freeform_panel.step` | CC0 1.0 | `corpus/LICENSE` is the CC0 1.0 Universal legal code; the README says "The parts in `corpus/` are CC0" and "A part has to be yours to give away under CC0". The code is MIT or Apache-2.0 (not used). | pass |
+| step-conformance shop parts (`hinge_jig`, `lego_*`, `door_handle_guide`, `rail_guide`, `sled_base`, `bowl_01`) | 0 | CC0 as claimed | The README says they are Fusion exports from `github.com/dan335/camcraft`, which answers "Repository not found" (private or removed). Origin unverifiable, so the claim rests on the author's word alone. | dropped |
+| MFCAD, `github.com/hducg/MFCAD` rev `ef6d58a` | 7 of 15,488 `.step` files, plus the licence text | MIT | `LICENSE`: "MIT License, Copyright (c) 2020 hducg". The files are written by Open CASCADE 6.9 (header) from the authors' generator. Its `.face_truth` files are Python pickles: never fetched, never unpickled. | pass |
+| Pin fixtures, from the public mirror `tangency-labs/solidcore` at the commit that last changed each (bytes equal the pin's) | `closed-spline-cylinder`, `rod_doubled_edge`, `stepped_tapered_hole` | MIT OR Apache-2.0 | SolidCraft's `ATTRIBUTION.md` has a row for each ("original synthetic", "written by SolidCraft", "invented block"; no third-party geometry). | pass |
+| | `tetra_disk.stp` | Apache-2.0 by the repository's licence | Header: "hand-written test", a unit tetrahedron; no attribution row of its own. The weakest evidence kept; one line to drop if review wants a row. | pass, flagged |
+| | `assembly_extract.stp` | unknown | `step_assembly_real.rs`: "an extract of an assembly exported by HOOPS Exchange, with its product names made neutral"; a third party's assembly, no attribution row. | dropped (as the coordinator asked) |
+| | `discord-2026-10-30-fillet.step` | unknown | A user's report from a Discord channel; 74 §7 already left it out. | dropped |
+| cadmpeg fixtures (in the pin's `bench/step/fetch.sh`) | 0 | unknown | No licence checked or cited; not in 74 §7. | dropped (as the coordinator asked) |
+| STEP Tools samples | 0 | all rights reserved | 74 §7 | dropped |
+
+The corpus is 4 sources, 86 manifest rows (the NIST archive, 33 of its members, 40 step-conformance
+rows including its licence, 4 pin fixtures, 7 MFCAD files and its licence), 72,129,304 bytes in all.
+74 §7 counted 17 step-conformance files; the repository's head has 19 generated parts. The 17
+the pin used have the same SHA-256 at the head, so nothing the pin measured moved.
+
+### 14.2 What was built
+
+- `corpus/manifest.tsv`: `name`, `url`, `sha256`, `size`, `licence`, `part` (`file`, `archive`, or
+  `member:<archive row>`). Every URL is pinned to a commit or to the NIST archive, whose hash is in
+  the row. Nothing downloaded is committed.
+- `cargo xtask corpus fetch | verify [prefix ...]`: needs `SCX_CORPUS_CACHE`. Each file is written
+  to `<name>.part`, checked for SHA-256 and size, then renamed; an existing file with another
+  content is an error, never overwritten. Downloads are only written and hashed; the archive's one
+  member is read by `python3 -I` `zipfile` (exact member name, at most `size + 1` bytes). SHA-256
+  is in `xtask` itself (FIPS vectors in its tests), so only `curl` and `python3` are needed.
+  Against: shelling out to two tools; for: xtask stays dependency-free (`layers.txt`), and an
+  archive reader of our own would be more code to trust. The manifest parse exists twice (xtask,
+  `scx-testkit::corpus`) because a tool crate may depend on no workspace crate.
+- `scx_testkit::corpus`: `parse_manifest`, `truth_volume`, `references_tsv`, and the example
+  `corpus_references` (`cargo run -p scx-testkit --example corpus_references -- corpus/manifest.tsv
+  "$SCX_CORPUS_CACHE" > corpus/references.tsv`).
+
+### 14.3 The `references.tsv` generator
+
+The pin's `bench/step/references.tsv` is a hand table, 24 rows, keyed by SHA-256. 17 rows are
+step-conformance parts whose volume comes from the generator's profiles; 6 are SolidCraft
+`kernel-cases` `expected.json` volumes and 1 is `torus_ring_nurbs` by name. The port computes the
+17 from the truth files, and adds `plate_900_holes` and `torus_ring`: **19 rows**. The 6
+`kernel-cases` rows are not carried over: their files and expected values are SolidCraft's own and
+neither is verified (as the coordinator ruled), so only truths we can derive stay.
+
+Closed forms (units: mm, mm^3). A solid of revolution has a closed profile in (axis, radius)
+coordinates, and its volume is `pi |∮ r² da|`: per segment `(a1-a0)(r0²+r0 r1+r1²)/3`, per arc the
+antiderivative of `-R (cr + R sin t)² sin t`. A prism's is height times the area of its largest loop
+less the others' (holes); the area of an arc is `½(R² sweep + R(cx Δsin - cy Δcos))`. A profile
+that does not close to 1e-9 of its extent is `CorpusError::Open`, not a guess; the JSON reader
+refuses escapes and nests no deeper than 32.
+
+Tests (`crates/scx-testkit/tests/corpus.rs`): cylinder, hemisphere and half torus against `pi r² h`,
+`2/3 pi r³`, `pi² R r²` (within 1e-13); a plate with a hole listed first; two solids; each refusal
+by type; the committed manifest well formed, no name or step file twice, every licence permissive;
+all 17 pin volumes within 1e-6 (the pin keeps 3 decimals); and, with the cache present, the committed
+`references.tsv` equals what the generator writes. The values are full `f64` text; the pin's are
+rounded to 3 decimals.
+
+Choices: volumes in `f64` (not double-double): the sums are a few dozen terms, good to about 1e-13,
+which is below any tolerance step 6 scores against; revisit if CO1 certifies volumes tighter.
+"Largest loop is the outer" is enough for the plates; a prism with nested islands would need a nesting
+test, and the generator refuses nothing there, so a new part kind should come with its own test.
+
+### 14.4 MFCAD sample (the fast gate)
+
+Seven files, 606,239 bytes, taken as every 2,500th name of the sorted list of 15,488 (so fixed, with no
+choice of mine in it): 11 to 43 faces each. All seven have only planes (no B-spline, revolution or
+cylinder entity), so they need no SM kernel kind and exercise `scx-step` analytic reading, the
+check and the contract. Why seven: the set is a plain prismatic one, so more files add
+little geometry kind but cost time; 0.6 MB reads in well under a second, which suits a gate that
+runs on every push. The set is 1.2 GB; a wider sample is one more manifest row per file. MFCAD has no
+volumes, so these files score on check, contract, determinism and round trip, not on volume.
+
+### 14.5 NIST pairs: revisions, not unit pairs
+
+The 33 files are 16 parts. By part: ctc 01-05 have an AP203 geometry file, an AP203 file with PMI and
+an AP242 file; ftc 06-11 have an AP203 geometry file and an AP242 file (ftc 08 has two AP242
+editions); stc 06-10 have one AP242 file each. So the pairs are **revision pairs**
+(AP203 against AP242 editions of one part, plus AP203 geometry against AP203 with PMI), and the
+invariance check of §7.3 is "the same part across revisions" only. 74 §7.3 also says "the same part in
+two units"; that is not established. A scan for an INCH conversion unit anywhere in each file found
+inch in some files of a part and not in others (ctc03, ctc05, ftc06, ftc08, ftc09), but it cannot say
+which files declare the geometry's length unit, and the file that differs in unit also differs in
+revision, so these are revision-and-unit pairs at best. No pair is known to differ in unit only.
+CO1 must read the unit with `scx-p21`'s units (SP1), list the pairs from that, and claim a unit
+pair only where the revision is the same; until then no unit pair is claimed.
+
+### 14.6 Checked
+
+`cargo xtask fast`, clippy and fmt: see the hand-back. A second `fetch` fetches nothing; `verify`
+matched all 86 files. Fetch of the whole corpus takes a few minutes, dominated by the 14 MB NIST
+archive.
+
+### 14.7 Proposed 04 row
+
+| 11-27 | (For the owner's review) The STEP corpus is fetched by `corpus/manifest.tsv` (`cargo xtask corpus fetch`, SHA-256 and size checked, `SCX_CORPUS_CACHE`) from four sources whose licences were read at their own pages: NIST MBE PMI (public domain, "used without any restrictions"), step-conformance's generated parts (CC0), 7 fixed MFCAD files (MIT) and 4 pin fixtures (MIT OR Apache-2.0). Dropped: the shop parts (origin repository gone), `assembly_extract` and the Discord fixture (provenance), cadmpeg and STEP Tools (no licence, all rights reserved). `corpus/references.tsv` holds only volumes derived by closed form from the truth files (19), not the pin's SolidCraft `expected.json` values. NIST pairs are revision pairs; no unit-only pair is claimed | 74 §7 listed the sources by claim; reading them cut two and added one flag (`tetra_disk`) | research 74 §14 |
+
 ## 15. Review response (11-27)
 
 An adversarial review of the first version (§0 to §12) raised ten findings (F1 to F10) and gave a
