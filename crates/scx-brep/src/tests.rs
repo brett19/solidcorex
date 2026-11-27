@@ -123,10 +123,18 @@ fn an_edit_shares_until_written_and_writes_one_face() {
 fn into_draft_writes_in_place_when_unshared() {
     let s = sheet();
     let (body, _) = s.draft.finish(&Document::default()).unwrap();
-    let before: *const FaceRecord = &raw const **body.tables().faces.get(s.face).unwrap();
+    let before: *const EdgeGeom = body.tables().edges.get(s.edge).unwrap();
     let mut d = body.into_draft();
-    let after: *const FaceRecord = &raw const *d.face_mut(s.face).unwrap();
+    let after: *const EdgeGeom = d.edge_mut(s.edge).unwrap();
     assert_eq!(before, after);
+    // A face the draft started with is copied once on its first write, since `Changes`
+    // keeps it as it was (BR3); a face the draft made is written in place.
+    let f = d
+        .add_face(d.face(s.face).unwrap().record().clone())
+        .unwrap();
+    let made: *const FaceRecord = &raw const **d.tables().faces.get(f).unwrap();
+    let written: *const FaceRecord = &raw const *d.face_mut(f).unwrap();
+    assert_eq!(made, written);
 }
 
 #[test]
