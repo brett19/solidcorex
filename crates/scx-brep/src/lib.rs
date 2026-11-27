@@ -36,7 +36,7 @@ pub use changes::Changes;
 pub use document::Document;
 pub use draft::Draft;
 pub use error::{Absent, TableFull};
-pub use finish::{FinishCause, StructureCause, Unfinished};
+pub use finish::{FinishCause, GeometryCause, StructureCause, Unfinished};
 pub use id::{EdgeId, Entity, EntityKind, FaceId, IdMap, RegionId, ShellId, VertexId};
 pub use record::{
     EdgeAdj, EdgeGeom, EdgeShape, EdgeUse, FaceRecord, FaceSide, Fin, LoopRecord, RegionRecord,
@@ -51,6 +51,7 @@ const _: () = {
     ok::<Draft>();
     ok::<Unfinished>();
     ok::<FinishCause>();
+    ok::<GeometryCause>();
     ok::<Changes>();
     ok::<Document>();
     ok::<IdMap>();

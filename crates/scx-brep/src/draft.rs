@@ -68,7 +68,7 @@ impl Draft {
     ///
     /// [`Unfinished`], holding the draft unchanged and the [`FinishCause`](crate::FinishCause).
     pub fn finish(self, doc: &Document) -> Result<(Brep, Changes), Box<Unfinished>> {
-        match check::run(&self.t, &self.pending) {
+        match check::run(&self.t, &self.pending, doc.resolution()) {
             Ok(()) => Ok((
                 Brep::from_tables(self.t, doc.resolution()),
                 Changes::default(),
