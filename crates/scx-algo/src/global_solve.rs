@@ -1233,15 +1233,13 @@ pub fn split_choice<T, const N: usize>(op: &Operation, branch: &Branch<'_, T, N>
         (Operation::Rayfire { direction }, Some((h1, h2))) => {
             let start = boxes.first().map(Extent3d::min);
             start.is_some_and(|p| {
-                closest_t(p, direction, mid(&h2))
-                    < closest_t(p, direction, mid(&h1))
+                closest_t(p, direction, mid(&h2)) < closest_t(p, direction, mid(&h1))
             })
         }
         (Operation::Signed3dDirectedMinimize { direction }, Some((h1, h2))) => {
             other.is_some_and(|o| {
                 let p = mid(o);
-                closest_t(p, direction, mid(&h2))
-                    < closest_t(p, direction, mid(&h1))
+                closest_t(p, direction, mid(&h2)) < closest_t(p, direction, mid(&h1))
             })
         }
         (
