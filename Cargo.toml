@@ -48,6 +48,9 @@ todo = "deny"
 unimplemented = "deny"
 dbg_macro = "deny"
 or_fun_call = "warn"
+# Research 62 D14: an error stays off the success path's size. Clippy's default threshold
+# (128 bytes); a cause field holding a lower error boxes it.
+result_large_err = "warn"
 float_cmp = "allow"
 many_single_char_names = "allow"
 similar_names = "allow"
