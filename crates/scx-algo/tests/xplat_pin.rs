@@ -16,8 +16,9 @@ use core::fmt;
 
 use scx_algo::error::EvalError;
 use scx_algo::local_solve_nd::{LocalSolveNd, Outcome as OutcomeNd, jacobian};
-use scx_algo::local_solve1d::{Bracket3, Domain1d, Goal, LocalSolve1d, Sample};
+use scx_algo::local_solve1d::{Bracket3, Goal, LocalSolve1d, Sample};
 use scx_algo::polynomial::{solve_cubic, solve_quadratic, solve_quartic};
+use scx_num::domain::ParamDomain;
 use scx_num::extent1d::Extent1d;
 use scx_num::extent3d::Extent3d;
 use scx_num::fmath;
@@ -344,7 +345,7 @@ fn solve_nd() -> u64 {
             Err(_) => s.word(2),
         };
         put(&mut s, LocalSolveNd::<2>::new().solve(exact, guess));
-        let dom = [Domain1d::Line; 2];
+        let dom = [ParamDomain::Unbounded; 2];
         let diff = |x: &[f64; 2]| -> Result<([f64; 2], [[f64; 2]; 2]), Never> {
             let j = jacobian(&mut |y: &[f64; 2]| Ok::<_, Never>(eqs(y)), *x, &dom)
                 .unwrap_or([[0.0; 2]; 2]);

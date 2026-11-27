@@ -1673,6 +1673,8 @@ seeded queries, from a throwaway bench since deleted.
   bench passed a degree interval and a degree guess to a solve that runs on the carried
   NURB's parameter, so the figure is not a fair comparison and is not claimed.
 
+**Perf follow-up (11-27).** The ellipse foot took 1.11 us a query because every query solved the quartic for a seed. `quadrant_root` now seeds with the foot of a point on the curve, `atan2(a v, b u)`, and polishes with the same safeguarded Newton (6 steps at most); a query that does not converge in them is redone from the quartic as before. No certificate is needed: the first-quadrant root of `g` is unique and the bracket `(0, pi/2)` holds every step, so either seed ends at the global nearest foot. The fast polish also stops where `g` is within rounding of zero (`|g| <= 4 eps (|k sin cos| + a u sin + b v cos)`) and the Newton step is within `4 eps s`; the quartic path keeps its old stop. Added work per query: one `atan2`, and a `sin_cos` per step, 1.0 to 3.6 steps on or within 1e-3 of the curve (the quartic ran every query before; it now runs for 0 to 6% of those, 2 to 39% of far points). Per query, best of 3 runs of 100 passes over 2,000 points, four ellipses (5/3, 10/1, 2/1.9, 1/8): on the curve 783/980/558/439 ns before, 136/175/127/104 after; 1e-9 off 786/1001/576/450 before, 180/227/169/148 after; 1e-3 off 802/1021/558/452 before, 206/317/204/212 after; far 842/857/756/807 before, 312/421/246/503 after. Some output bits change (7,147 of 22,400 test queries, on the angle in the last ulps); against the testkit's certified nearest the new distances are equally or more correct (the mean distance error is at or below the old on each of 7 ellipses, 1.9e-16 against 2.8e-16 and 2.6e-15 against 3.4e-15 at most; worst 8.9e-14 against 9.0e-14, the same ill-conditioned 100/0.01 ellipse), and the angles are as close (worst 1.9e-13 both). The pin's 33.5 ns answers only points on the curve.
+
 ### 3.11 CU6 as built (11-27)
 
 Proposed for review, not yet ruled.
@@ -2218,9 +2220,25 @@ image's `point` with `Approach::Above`):
 
 "Whole" is one turn each way (the plane `[0, 1]^2`); "one span" an extent inside one quarter
 arc each way. So a whole torus costs about 11 image evaluations, a trimmed patch about 3; mostly the four
-`Vec`s (knots, points, weights) the NURBS takes. 9 A3's comparison against one inversion is
-deferred to SU4, which builds the inversion; A3's verdict (one conversion per intersection
-call, not per evaluation) stands on these numbers.
+`Vec`s (knots, points, weights) the NURBS takes. A3's comparison against one analytic
+inversion, measured 11-27 after SU4 (release build, ns per call, best of 9 timed batches in the
+best of three runs, pinned to one core; the inversion is `invert(p, None)` over 64 queries
+around the surface, global, closed form):
+
+| | `to_nurbs`, whole | `to_nurbs`, one span | `invert` | whole / `invert` | span / `invert` |
+|---|---:|---:|---:|---:|---:|
+| plane | 94.5 | 94.9 | 8.1 | 11.7 | 11.7 |
+| cylinder | 285.1 | 145.5 | 51.2 | 5.6 | 2.8 |
+| cone | 297.2 | 150.8 | 50.6 | 5.9 | 3.0 |
+| sphere | 464.8 | 186.7 | 60.7 | 7.7 | 3.1 |
+| torus | 680.2 | 176.5 | 59.2 | 11.5 | 3.0 |
+
+("Whole" is the kind's whole uv extent, so the sphere and torus are one turn each way and the
+cone is `v` over `[0.5, 2]`; the three runs agreed within 2%, and the conversion is a little
+faster than the table above, whose figures are one earlier run.) A conversion costs 3 to 12
+inversions, so the verdict stands and sharpens: convert once per intersection call, never per
+query; inverting a point against the analytic kind is cheaper than the NURBS image's own
+`point` (63-78 ns), so nothing should convert in order to invert.
 
 From research 66: no technique there changes this conversion. Its implicitisation (§8.4) is
 an approximate implicit form to seed SSI; our kinds have exact implicit forms already, which
@@ -2232,8 +2250,8 @@ context (§14) match A3: if the conversion ever shows in a profile, memoise it i
 inner loops (§1 point 4) would ask for a caller-provided buffer; not taken, as the conversion
 runs once per intersection call and `NurbsSurface` owns its storage.
 
-Open from SU3: the inversion cost comparison (SU4); a `to_nurbs` into a caller's buffer if a
-profile ever asks.
+Open from SU3: a `to_nurbs` into a caller's buffer if a profile ever asks (the inversion cost
+comparison is closed above).
 
 ### 4.9 SU7 as built (11-27)
 
@@ -2463,6 +2481,418 @@ Open from SU8:
 - normals along the curve (the pin's `evaluate_surface_normal`) are left to callers, which use
   `Surface::normal` at `uv().point(t)` with the sides from the same rule. The rule would be
   exposed if a second caller needs it.
+### 4.11 pcurve as built (11-27)
+
+Ruled by the coordinator 11-27 for Brett's review (option 3 of four), built in two
+commits: the unambiguous pairs with typed refusals, then the angle line.
+
+```rust
+// scx-surface
+pub fn pcurve_of(curve: &Curve, surface: &Surface, over: Extent1d, tol: Length)
+    -> Result<Curve2, PcurveError>;
+pub enum PcurveError {            // #[non_exhaustive]; kind() and name()
+    EmptyInterval { .. }, BadTolerance { .. }, NotOnSurface { .. },   // Refused
+    CrossesPole { at: f64 },                                          // Refused
+    NoClosedForm { curve: CurveKind, surface: SurfaceKind },          // Unsupported
+    Inexact { .. },                                                   // Failed
+}
+// scx-curve
+pub enum AngleAxis { U, V }
+pub struct AngleLine2 { arcs: Arcs, axis: AngleAxis, start: f64, sense: Sense, other: f64, rate: f64 }
+pub enum Curve2 { .., AngleLine(AngleLine2) }
+pub mod arcs;                     // Arcs, ArcTrig, parameter_jet (moved from scx-surface)
+```
+
+| Pair | Pcurve |
+| --- | --- |
+| line, circle, ellipse, NURBS curve on a plane | the kind kept, through the plane's affine uv |
+| line along a cylinder's or cone's ruling | `Line2`: `u` fixed, `v` affine |
+| circle about the axis of a cylinder, cone, sphere or torus (a parallel) | `AngleLine2` in `u`, `v` fixed |
+| sphere's great circle through the poles, on one side of them | `AngleLine2` in `v` (the half `Arcs`), `u` fixed |
+| torus's tube circle | `AngleLine2` in `v`, `u` fixed |
+| meridian over an interval across a pole | `CrossesPole { at }`: the caller splits there |
+| anything else, any curve on a NURBS surface | `NoClosedForm` |
+
+**The decision (option 3: an exact `Curve2` kind for an angle-direction line).** The
+angle line's angle coordinate is `arcs.parameter(start ± t)`, the arc parameter of the
+D13 quarter-arc map; the other coordinate is `other + rate t` (`rate` is 0 for every
+case built here; it is kept for a helix-like line on a cylinder later).
+
+- The case for:
+  - It keeps the edge a `Circle` and the pcurve exact; nothing is fitted (D10).
+  - The pcurve runs at the edge's own parameter (same-parameter), as STEP's
+    `pcurve` and OCCT's `BRep_CurveOnSurface` expect; BR5 needs no reparametrisation.
+  - `scx-step` needs the inverse map anyway, to write the surfaces' radians uv.
+  - The cost is one `Curve2` arm and a small closed form: no effect on any other path.
+- The case against:
+  - A new kind every `Curve2` consumer must handle; inversion of it is
+    `Unsupported::AngleLineInversion` for now (a closed form exists: the angle's
+    `Arcs::angle`; not needed until SS or BR asks).
+  - Its second derivative jumps at an arc break (the map is C^1), so jets take a side,
+    as a NURBS curve's do.
+  - A rational quadratic `Curve2::Nurbs` (option 1) would have been an existing kind,
+    but it lifts at a different parameter from the edge (not same-parameter), and needs
+    `scx-nurbs` in every pcurve; rejected, with options 2 (a radians uv, which breaks D13)
+    and 4 (fit, which D10 forbids where a closed form exists).
+
+**Arcs placement.** `Arcs` moved from `scx-surface` to `scx-curve` as `pub mod arcs`, so
+both `Curve2` and the surfaces reach it without a cycle (`scx-surface` depends on
+`scx-curve`). Its parameter function is pure arithmetic, so `scx-num` was possible too;
+`scx-curve` keeps it beside its one 2-D user and out of the numeric layer. The struct
+`Trig` became `ArcTrig` (it clashed with `scx_num::trig::Trig` once imported). The move
+is code-identical; new is `parameter_jet::<T, D>(phi, side)`, the arc parameter with `D`
+derivatives over a generic scalar (interval enclosures included), at most 8 arcs per call.
+
+**The signature.** `pcurve_of` takes `tol: Length` beside the ruled
+`(&Curve, &Surface, interval)`: the lifting check needs a bound, and the caller (BR5)
+holds the edge and face accuracies. A deviation, recorded for review.
+
+**How a pair is chosen.** A circle is tried as a parallel or a meridian when its axis and
+centre are within `NEAR = 1e-6` (relative: radians for the axis, over the radius for the
+centre) of that configuration. That only picks the candidate: every answer is checked by
+lifting at 9 samples (ends included) against `tol`, so a circle near one but not in it
+is `Inexact` and one far from both is `NoClosedForm`.
+
+**The period window (07 §3 rule 5).** Where a direction is periodic, the pcurve's
+coordinate at the interval's start lies in the surface's base window. `start` is moved
+by whole turns, then the nearest of `start` and `start ± 2 pi` whose start coordinate is
+in the window is kept, so a start one rounding off the seam neither ping-pongs nor lands
+a period out (tests allow 1e-15 of the period at the seam).
+
+**Poles.** A sphere's meridian runs on one half-plane, with latitude in `[-pi/2, pi/2]`
+(slack 1e-14 for the rounded ends); pole to pole fits. Past a pole the azimuth jumps by
+half a turn, so no single angle line exists: `CrossesPole { at }` gives the curve
+parameter of the pole, and the caller splits the edge there. The pin instead lets the
+latitude run past `pi/2` with `u` fixed, which lifts onto the right points in its radians
+uv but leaves the surface's domain.
+
+**How the pin differs** (`eval/pcurve.rs`, `exact` and `meridian`). The pin's pcurves are
+degree-1 splines between the interval's ends in a uv whose angle directions are radians:
+a parallel is `[u0 ± t, v]`, a meridian `[u0, alpha ± t]`, exact in that uv and at the
+edge's parameter. Ours are in the NURBS uv (D13), where the same curves are angle lines;
+a straight segment there would not be. The plane cases and rulings agree with the pin's
+up to the kinds kept (a circle on a plane stays a `Circle2`, not a spline). The pin also
+does not refuse a meridian across a pole (above).
+
+**The SS5 perpendicular-section gap.** §5's SS5 text says plane sections' pcurves on
+cylinders, cones, spheres and tori are rational `Curve2::Nurbs` in the kind's uv (WR-680).
+That holds for an oblique section (a cylinder's ellipse), which `pcurve_of` refuses as
+`NoClosedForm`. A section perpendicular to the axis is a parallel, whose exact pcurve at
+the edge's parameter is an `AngleLine2`, not a NURBS; SS5 should return that (or call
+`pcurve_of`) and keep `Curve2::Nurbs` for the oblique ones.
+
+**Truth check.** Every case is lifted (pcurve, then surface, then compared with the
+curve's point) at 101 samples to 1e-12 of size, over scales 1e-3, 1 and 1e3, both senses
+of circle and surface, circle axes with and against the surface's, phases across the
+seam and intervals past a turn, negative and short. `AngleLine2` is checked against the
+arc-parameter identity, finite differences off the breaks, C^1 not C^2 at a break with
+the side honoured, reversal, and interval enclosure.
+
+**Added work.** Per `pcurve_of` call: 9 curve evaluations and 9 distances (the
+on-surface check), the closed form (a few dot products and one or two `atan2`), then 9
+pcurve and 9 surface evaluations (the lifting check). `AngleLine2::point` is one
+`Arcs::parameter` (one `sin`, one `cos` and a division) per call. Existing paths gain no
+work: `Curve2` gains one match arm, the `Arcs` move changes no code, and nothing yet
+calls `pcurve_of` (BR5 will).
+
+### 4.12 SU4 as built (11-27)
+
+Inversion of a surface (63 §4.2, X8, D7; research 66), in the form CU4 uses for the
+curves, in two parameters. Decided by analysis and an adversarial pass; proposed for
+review, not yet ruled.
+
+```rust
+// scx-surface::invert
+pub use scx_num::invert::{Foot, Inversion};  // unchanged
+pub enum Closest {
+    One(Foot<Point2>),
+    AlongU { v: f64, distance: f64 },  // an axis query: a circle of feet, or a pole
+    AlongV { u: f64, distance: f64 },  // a query on a torus's tube centre circle
+    Every { distance: f64 },           // a sphere's centre
+}
+impl Closest { pub const fn distance(&self) -> f64; }
+impl Plane {  // and Cylinder, Cone, Sphere, Torus
+    pub fn closest(&self, p: Point3) -> Closest;
+    pub fn invert(&self, p: Point3, domain: Option<&Extent2d>) -> Inversion<Point2>;
+}
+impl Surface {
+    pub fn invert(&self, p: Point3, near: Option<Point2>, domain: Option<&Extent2d>,
+                  budget: &mut Budget, stop: &Stop) -> Result<Inversion<Point2>, SurfaceError>;
+}
+pub enum SurfaceError { .., Exhausted(Exhausted), Stopped, Defect { reason: &'static str } }
+```
+
+- **Each analytic kind is a closed form, global, infallible.** Every kind is a plane or a
+  surface of revolution, so the nearest points lie in the query's meridian plane: the
+  projection, the radial foot, the foot on the generator of the query's half-plane or the
+  apex (cone), the foot on the near meridian circle (torus). The `uv` is read by `Arcs`'
+  inverse with no transcendental, so the foot's `point` is the kind's `point(at)` exactly.
+  Alternative: one Newton for every kind. Against: a local answer, a budget and an error
+  where none can happen.
+- **`Closest` names the sets of feet; `invert` picks one.** Alternative: always one foot.
+  Against: a caller building an SSI start or a degenerate-case test needs to know the answer
+  is a circle, not a point that happened to be chosen. For picking in `invert`: the domain
+  decides it (the foot at the domain's start in the free parameter), and periodic
+  parameters wrap by whole periods to start at the domain's min, so an outside foot is
+  reported `Outside`, never moved in.
+- **`Surface::invert` takes `&mut Budget` and `&Stop`, which only the NURBS arm uses.**
+  Alternative: a separate `Surface::closest` for the analytic arms and a NURBS-only call.
+  Against: every caller of the enum would dispatch again. For: one signature; the analytic
+  arms ignore both and `near`, and return `Ok`.
+- **NURBS: a certified branch and bound over Bezier patches through `global_solve`**, per
+  research 66: no presearch grid. Each knot span pair is one patch, its homogeneous points
+  read off by blossoming (unclamped knots need nothing more). The search walks a balanced
+  tree of the patches, nearer half first, pruning a node whose bound is not below the
+  incumbent less `eps`; a leaf it reaches is refined best first, keyed by (bound, sequence
+  index), a total order, so the bits never depend on a tie. `eps` is `GAP_REL` (1e-12) of the
+  control net's diagonal plus the first incumbent's distance. The incumbent starts at the
+  best patch corner, polished by Newton from it and from `near`; a corner that beats it by
+  more than `eps` starts another run. Newton is on `|S - q|^2 / 2` with an active set at the
+  domain's edges, Gauss-Newton where the Hessian is not positive, a gradient step where that
+  is singular, and a step kept only when it lowers the distance. Alternative: Newton from a
+  grid of starts (solidcore's shape). Against: research 66, and no certificate: a narrow
+  valley between grid points is missed.
+- **Two lower bounds per piece, the larger taken.** `N / W` with `N = D . D`, `W = w^2`,
+  `D = w (S - q)` in Bernstein form (`scx_algo::bernstein`), bounded below by the least
+  coefficient ratio; exact where the distance is constant (a query at a sphere's centre is
+  certified in 3 units). And a hull bound: `(S - q) . n` is a positive-weighted mean of the
+  `(D_k . n) / w_k`, so no less than their least, for `n` the unit direction toward the
+  corners. Against `N / W` alone: next to a tiny weight, `N`'s coefficients are tiny against
+  its largest and the bound stays near zero however small the piece; the hull bound takes no
+  product and stays sharp there.
+- **Every coefficient carries its own error bound.** Alternative: `Bounded`'s one bound for
+  every coefficient. Against: it is absolute and inherited by subdivision, so beside a
+  weight near `2^-40` it swamps that weight's coefficients and the bound stays useless
+  however small the piece; the search did not finish on such surfaces. For per-coefficient
+  errors: each step of the blossom is taken from its nearer end (`a + s (b - a)` or
+  `b + r (a - b)`, `r` from the knots, so no cancellation beside clustered knots), a step
+  at a knot is exact, and the error of a mix is the mix of the errors. scx-algo is unchanged: the forms are seeded with the largest error.
+- **Anisotropic halving; one-ulp spans become edges.** A piece is halved by de Casteljau at
+  1/2 along the parameter whose control polygon is more than twice as long, else in both.
+  Against quartering only: a tiny weight crowds the surface into a thin strip that quartering
+  covers with about `1 / width` pieces. A parameter whose interval holds no float strictly
+  inside (a knot span of one ulp, whose patch can still be long) is not halved: the piece
+  becomes its two edges, the only `uv`s that exist there. So the result is the global
+  nearest over the floating point `uv`s, to `eps`.
+- **The budget is the one bound.** One unit per tree node tested, piece refined and Newton
+  evaluation; the stop flag is polled at the same points and by the solve before each
+  branch. Both end in an error, never a partial foot, and a search that finishes gives the
+  same bits whatever the limit. The solve's own branch limit is set to `u64::MAX`.
+  **Recommended for later (not done here):** `global_solve::solve` should take
+  `&mut Budget` and `&Stop` itself, as every other iterating call does; today the solver
+  carries them inside its `BranchSolver` and maps them out through `Unfinished`, and its
+  `max_branches` is a second, weaker bound to lift.
+- **Errors.** `SurfaceError` gains `Exhausted(Exhausted)` (kind `Exhausted`, the budget's
+  own name), `Stopped` (kind `Cancelled`) and `Defect { reason }` (kind `Defect`,
+  `inversion_defect`: a patch's Bernstein form could not be built, a bug).
+- **Placement.** `Closest` lives in scx-surface, not scx-num: it names the kinds' parameters
+  (`AlongU`, a pole). Commit 99b897b carries only the scx-num half of c6b24fa (`Foot`,
+  `Inversion`, unchanged), with `Budget` and `Stop` from c57177f.
+
+Tests (`tests/invert.rs`, 6; `tests/nurbs_invert.rs`, 8), against truth, not the pin: plane
+feet are projections; cylinder and sphere feet match double-double references; cone and
+torus feet are no farther than a 121 by 121 sample of the uv domain; every set of feet
+(axis, pole, apex, tube circle, centre); placement against domains, wrapped and not. NURBS:
+random B-splines and NURBS (unit, moderate and near-zero weights, down to `2^-40`)
+and an unclamped B-spline, each foot the
+surface's own point, no farther than a 61 by 61 sample, and stationary where it is interior
+and off a knot; exact NURBS spheres, cylinders and tori give the analytic distance; the
+budget and the stop flag end the search, and a clear flag or a warm start change only the
+work.
+
+Work, in budget units, over the 330 random queries: median 78, p90 368, max 53045. A
+sphere's centre: 3. Cold against warm (started at the cold foot) on one wavy surface, ten
+queries: 78/74, 85/104, 175/202, 68/82, 111/70, 149/195, 44/50, 53/54, 71/63, 52/63; the
+distance agrees to `eps` every time. A warm start buys little and sometimes costs: the
+certificate, not finding the foot, is most of the work (likely too: an incumbent that
+differs by rounding prunes differently; not measured). So `near` is kept as a hint, not
+relied on for speed.
+
+### 4.13 SU6 as built (11-27)
+
+Built on SU4's `Budget` and `Stop` (§4.12), for review.
+
+```rust
+// scx-surface
+pub enum Contact { Crossing, Tangent }
+pub enum CurveSurfaceHit {
+    Point { t: f64, uv: Point2, point: Point3, contact: Contact },
+    Overlap { t: Extent1d },
+}
+pub fn intersect_curve(c: &Curve, ce: &Extent1d, s: &Surface, se: &Extent2d, tol: Length,
+                       budget: &mut Budget, stop: &Stop) -> Result<Vec<CurveSurfaceHit>, SurfaceError>;
+pub enum SurfaceError { .., NurbsIntersection /* Unsupported */, Exhausted(Exhausted), Stopped }
+// scx-curve: Arcs::of_direction(x, y) is pub (the D13 parameter of a direction, no atan2)
+```
+
+| Curve | Plane | Cylinder | Cone | Sphere | Torus |
+| --- | --- | --- | --- | --- | --- |
+| line (one Bernstein piece) | 1 | 2 | 2 | 2 | 4 |
+| circle, ellipse (two rational half turns) | 2 | 4 | 4 | 4 | 8 |
+
+The table is the degree of `g(u)`, the surface's implicit equation on the curve's piece.
+`intersect_curve` takes the curve into the surface's axes (frame z times sense), writes
+each piece in homogeneous Bernstein form on `u` in `[0, 1]`, and isolates two sets of
+roots with `scx-algo`'s `bernstein_roots`:
+
+- the roots of `g`;
+- the turning points of `g / H^d`, which are `g'` for a line and `H g' - d H' g` for a
+  conic (degree at most 9).
+
+Those roots and the ends of the extent are events in `t`. Each root is refined on the
+surface's own equation. Each event is judged near or far by the distance at the tolerance.
+A run of near events then gives one answer:
+
+- an overlap, when every event is near;
+- a `Tangent` at the nearest turning point;
+- a `Crossing` at the root, or at the end when the run has only an end.
+
+Every point gets the D13 uv of its foot, with periods wrapped into `se`, and a point
+outside `se` is dropped. The results are sorted by `t`, then `u`, then `v`.
+
+**Bernstein isolation for every degree, not the closed forms.** §4.2 said the pairs
+reduce to "polynomials of degree up to 4" in `scx-algo`'s solvers. In fact a conic against
+a torus has degree 8, and the turning points reach degree 9.
+
+- The case for:
+  - There is one certified path for every pair, and its answer is final. A root exists
+    exactly where the Bernstein coefficients certify a sign change, so an empty answer
+    needs no grid fallback (04).
+  - `solve_quadratic` has an absolute `zero_tol` and cancels on a near-double root. Those
+    are exactly the near tangents this query has to classify.
+  - The Bernstein form of the half turns needs no `tan` substitution at the seam. The
+    halves share their end control point bit for bit, so a sign change at the seam is
+    seen once.
+- The case against:
+  - Quadratics cost more than the formula would. Measured, the plane (degree 1 and 2) is
+    1.1 µs a call, 20 times faster than the pin, so no degree-2 fast path was added. It
+    can be added later without changing any answer.
+
+**The polish.** A root of the Bernstein `g` carries the rounding of its coefficients. That
+rounding is large for the torus's degree 8, where a crossing came out 9.3e-10 off the
+surface. The fix is up to 3 Newton steps on the surface's affine implicit, evaluated at the
+curve's point. A step is kept only while it lowers `|f|` and moves `t` by less than 1e-6 of
+the curve's scale, so a root cannot move to another one. With the polish the worst crossing
+is 1.95e-13 from T2's root, at size 20.
+
+- The case for:
+  - The steps are deterministic, bounded and cheap (at most 3 evaluations per root).
+- The case against:
+  - A second equation beside `g`. The two must agree, and they are tested to.
+
+**Tangency at the tolerance.** Between two events `g` is monotone and keeps one sign. That
+is exact for the plane, cylinder and sphere, where `g` is a function of the distance. For
+the cone and torus it holds at the tolerance: their `g` has a turning point near, but not
+at, the distance minimum.
+
+The rules:
+
+- A Tangent is placed at the nearest turning point of the run, within `tol`.
+- Crossings closer than `tol` can tell apart merge into that one Tangent. A segment that
+  enters and leaves a sphere within one tolerance of depth is one touch, not two
+  crossings.
+
+- The case for:
+  - The answer is exact: every point is on the curve and within `tol` of the surface.
+  - Every T2 root is either a crossing within rounding or joined to a tangent by a stretch
+    that stays within `tol`. The tests check exactly that.
+- The case against:
+  - A Tangent's point is where the turning point is, not the true distance minimum. For
+    the cone and torus they differ by up to the tolerance.
+  - A segment shorter than its distance to the surface, lying wholly within `tol`, is
+    reported as an Overlap. This is the same rule as a curve lying on the surface, applied
+    at the tolerance.
+
+**Open for review.**
+
+- **The overlap is not clipped by `se`.** An `Overlap` covers the whole `ce`. Clipping a
+  curve's stretch to a uv box needs the curve's pcurve, which `pcurve_of` (§4.11) now
+  gives. Until then the caller clips.
+- **A NaN `tol` gives no tangents.** It is not refused. `pcurve_of` refuses a bad
+  tolerance (`BadTolerance`), so a typed refusal may be the consistent rule here too.
+- **A closed `ce`** (a turn or more) is the one turn from `ce.min()`.
+
+**Errors.**
+
+- A NURBS curve or surface is `NurbsIntersection` (Unsupported, `nurbs_intersection_unbuilt`),
+  never an empty answer.
+- `Exhausted` and `Stopped` are SU4's variants, with the same names, kinds and Display.
+  SU4's `Defect` is not used: the closed forms have no inside failure to
+  report.
+- The budget is charged 2 units per piece (one for each isolation), and `stop` is checked
+  before each piece. Neither returns a partial answer.
+
+**A14: the pin's callers that take the first hit.** The pin's curve-surface solve returns
+its hits by curve parameter, ascending (`add_sorted_solution`, by all parameters). It
+re-sorts by `t` when there are coincident ranges or several gaps. So "first" means
+smallest `t`, and the `t, u, v` sort serves it with no change.
+
+Four production sites take the first hit:
+
+- `blend/fillet_solver/p2.rs:2902`, the corner trim;
+- `blend/fillet_solver/p1/rails.rs:613`, the support edge's end;
+- `blend/fillet_geom/p1.rs:2009`, the cliff vertex;
+- `intersect/curve_class/p2.rs:1703` and `:1875`, the seed for the refined `(t, uv)`.
+
+Three more depend on order but do not take the first hit:
+
+- `offset_geometry_creation.rs:1317`, which reads every hit as having one parameter;
+- its other caller at `:5281`;
+- the boolean's `topology_intersector/p1.rs:1002`, which processes edges in `t` order.
+
+Every other caller uses all the hits and re-sorts or picks the nearest. That includes the
+ray pick in `query/brep.rs`, which sorts by distance along the ray. Where a caller of ours
+wants the hit nearest a guess, the rule stands: that is a filter at the caller.
+
+**How the pin differs.** `SmApiIntersectCurveSurface` (`GlobalCurveIntersect`, within
+0.001) agrees on every pair in the difftest but one. In that pair a segment cuts a sphere
+of radius 1.65 along a chord of about 0.25, dipping 4.6e-3 inside, which is 4.6 times the
+tolerance. The pin reports a coincident stretch and one point. scx reports two crossings,
+which T2's roots confirm. This is the pin's defect, checked against T2 in
+`pin_defects::curve_surface`.
+
+**Truth check.**
+
+- Unit tests (`tests/intersect.rs`, 39 s) check against testkit T2 and against exact
+  checks:
+  - every point is on the curve at its `t`, inside `se`, and its foot is within the
+    distance;
+  - every crossing is within `1e-11` of size of a T2 root;
+  - every tangent is within `tol`;
+  - every T2 root is found.
+- The random pairs: 2,800 pairs at `tol` of 1e-6 and 1e-3, with 3,106 roots and 3,104
+  crossings. The worst crossing is 1.95e-13.
+- The near tangents: the curve is set at a distance `delta` from a surface point along
+  the tangent plane, with `delta` in 0, ±1e-9, ±tol/2 and ±2 tol, for lines, circles and
+  ellipses curving both ways.
+  - A run of 30 seeds: 10,080 pairs, 7,200 touches classified Tangent, 1,624 misses with
+    no hit. The worst crossing is 4.3e-11, on a cylinder at the 1e-3 tolerance.
+  - The committed test runs 4 seeds.
+- Further tests: curves lying on the surface (Overlap), the cone's far nappe (no hit),
+  `se` dropping and wrapping, the sort, and the NURBS, budget and stop errors.
+- The difftest `t_curve_surface`: 716 inputs, 279 exact, 436 within tolerance, 1 pin
+  defect and 0 mismatches.
+
+**Speed.** Measured with both sides prebuilt and the intersect call alone. scx ran at
+opt-level 2 (the pin's dev profile) over the 737 pool cases, taking the best of 7 runs:
+
+| Surface | scx | pin | ratio |
+| --- | --- | --- | --- |
+| plane | 1.14 µs | 22.4 µs | 20x |
+| cylinder | 2.41 µs | 443 µs | 184x |
+| cone | 2.51 µs | 813 µs | 323x |
+| sphere | 2.27 µs | 2.56 ms | 1,129x |
+| torus | 4.37 µs | 4.06 ms | 930x |
+| all | 2.55 µs | 1.59 ms | 622x |
+
+The pin solves its NURBS images with a general subdivision solver. Research 66 §5 has
+nothing for this beyond 65's rows. Its candidates either do not certify isolation (Newton
+from samples) or are the pin's own subdivision. The certified Bernstein isolation used
+here is 65 row 1.
+
+**Added work.** All the code is new. No existing path gains work. `Arcs::of_direction`
+became `pub` because `Arcs` moved to `scx-curve`. `Axes::local` is the same as SU4's, and
+`Cone::slope` is main's.
 
 ## 5. `scx-ssi`, the analytic part
 
@@ -2504,6 +2934,9 @@ Step 2 needs only the analytic pairs. The marching and the B-spline patch inters
   - Under D13 the pcurves of plane sections on cylinders, and where the pin has them on cones,
     spheres and tori, are exact rational `Curve2::Nurbs` in the kind's uv (WR-680). So SS5 needs
     `scx-nurbs` (CU3).
+    [11-27, §4.11: true of the oblique sections only. A section perpendicular to the axis is
+    a parallel, whose exact pcurve at the edge's parameter is a `Curve2::AngleLine`
+    (`pcurve_of`).]
   - The plane's face accuracy, which the pin took from `PlaneOwner`, is a `Length` argument.
   - The unused `use_surface_edges` and `ang_tol_rad` are dropped.
   - It is a closed form, so it is bounded and infallible (X13).
@@ -2566,6 +2999,156 @@ None of these are in the testkit (59). All are closed forms, so they are cheap.
 | SS2 | plane-plane, plane-quadric (on SS5) | SS1, SS5; T5 |
 | SS3 | sphere-sphere, coaxial pairs | SS1, SU1; T5 |
 | SS4 | coincidence and tangency classification at the tolerance | SS2, SS3 |
+
+### 5.6 SS1/SS5 as built (11-27)
+
+Decided by analysis and an adversarial pass. Proposed for review; not yet ruled.
+
+```rust
+// scx-ssi::analytic
+#[non_exhaustive] pub enum Intersection {
+    Pieces { curves: Vec<IntersectionCurve>, points: Vec<IntersectionPoint> },  // at least one
+    Coincident { on_a: Extent2d, on_b: Extent2d },
+    Empty,                                                                       // final
+}
+pub struct IntersectionCurve { pub curve: Curve, pub span: Extent1d, pub contact: Contact }
+pub struct IntersectionPoint { pub point: Point3, pub contact: Contact }
+pub enum Contact { Transversal, Tangent }
+pub fn intersect(a: &Surface, ae: &Extent2d, b: &Surface, be: &Extent2d,
+                 acc: [Accuracy; 2], res: Resolution) -> Closed<Intersection>;
+pub fn section_by_plane(s: &Surface, se: &Extent2d, plane: &Plane, pe: &Extent2d,
+                        tol: Length) -> Closed<Intersection>;
+// scx-surface: Closed<T> { Solved(T), General } moved here from its first user, shared
+```
+
+| Surface | Solved | `General` |
+|---|---|---|
+| plane | a line, coincident, or empty | never |
+| cylinder | an ellipse, a circle, two lines or a tangent line, or empty | an ellipse so long that `2^-50` of its semi-axis passes the tolerance |
+| cone | an ellipse, a circle, two generators or a tangent generator, the apex, or empty | a parabola or hyperbola; an ellipse that long |
+| sphere | a circle, a touch point, or empty | never |
+| torus | one or two circles across the axis, two meridian circles along it, or empty | every other plane (a spiric section) |
+
+**Deviations from §5.2 and §5.3, with the case against and the case for each.**
+
+- **One answer type, `Closed<Intersection>`, for both entry points.** §5.3 has a separate
+  `Section` with warnings.
+  - Against: a plane section has the plane's side to name, and 5.3 kept them apart.
+  - For: a section *is* an intersection with a plane. One type means `intersect` hands
+    `section_by_plane`'s answer through unchanged, and the caller matches one enum. The pin's
+    warnings say that the answer is partial or near a limit. Here those cases are
+    `General`, so no warning is left to carry.
+- **No pcurve fields.** §5.3 has `on_a`/`on_b: Option<Curve2>`.
+  - Against: callers building edges need them, and 5.2 said SS5 needs `scx-nurbs`.
+  - For: D10 and §4.11 (ruled 11-27) put exact pcurves in `scx_surface::pcurve_of`, at the
+    curve's own parameter. A piece carries `curve` and `span`, which is exactly what
+    `pcurve_of(&piece.curve, surface, piece.span, tol)` takes. A unit test calls it on both sides of
+    a square cylinder cut. Storing `Option<Curve2>` here would duplicate that function and
+    compute pcurves for callers that never read them. An oblique cylinder section's pcurve is
+    `NoClosedForm` in `pcurve_of` today (WR-680's rational form is not built), and that gap
+    belongs to `pcurve_of`, not to this crate.
+- **`Pieces { curves, points }`, not `Curves` and `Touch`.**
+  - Against: 5.3 kept touch points as their own variant.
+  - For: one section can have both. A cylinder cut can give a line and a separate point where
+    the other line leaves the extent within the tolerance. Two variants would force one of
+    them to be lost or a third variant. `Empty` stays its own variant, never an empty `Pieces`.
+- **Curves in construction order, not sorted.**
+  - Against: a sort makes `(a, b)` and `(b, a)` compare equal piece for piece.
+  - For: the construction is deterministic (the same input gives the same bits), and
+    reversing the order reverses the direction (`n_a x n_b`), so the pieces would not match
+    one-to-one anyway. A sort key over floating point needs a tie rule, and no caller needs one.
+    It can be added when a caller needs it.
+- **`acc: [Accuracy; 2]` and `res: Resolution` on `intersect`; `section_by_plane` takes one
+  `Length`.** This follows §5.2's coincidence row (`max(res, acc1, acc2)`, via
+  `scx_num::units::coincident`). `section_by_plane` keeps the single plane-accuracy length that
+  5.2 names.
+- **`use_surface_edges` and `ang_tol` dropped** (§5.2 said so). Neither changes any pin answer
+  on these kinds.
+- **The cone is worked from its apex.** The cone is `rho = k z'` and the plane is
+  `n . p' = delta`, so every size is `delta` times a factor of the plane's lean.
+  - Against: the pin works from the frame origin.
+  - For: there is no cancellation. A plane through the apex gives the apex or the generators,
+    not a rounding-sized ellipse.
+- **Empty from exact bounds, never from a search (04, research 68).** Two bounds come in
+  beyond the pin's. Each is a support function, so it is exact and final:
+  - **The cylinder or cone between its two rims.** Each generator is a segment between the rims,
+    so the part lies in their convex hull. A rim at height `v` and radius `rho` spans
+    `nz v - d +- |rho| s` from the plane. Both rims off one side by more than `tol` means
+    `Empty`.
+  - **The torus.** If the plane is farther from the centre than `s * major + minor` (the core
+    circle's support plus the tube's ball), the answer is `Empty`.
+  - Against: the pin answers `General` there, and a bound that is too tight would lose a curve.
+  - For: both are exact supports. The difftest checks every such case on a 65x65 grid of the
+    surface (all points off the plane by more than the snap), and `plane_sections` checks them
+    against the truth's points. Without them, a hyperbola or spiric case that misses the extent
+    would go to the marcher for nothing.
+- **No seam splitting.** A conic arc that crosses the turn's start (`u = 0`) is one piece
+  whose span passes `2 pi`.
+  - Against: the pin cuts it in two, and a face loop built from the pieces may want the seam
+    as a vertex.
+  - For: the intersection is one connected curve. A seam is a property of a face's uv, and
+    whoever builds edges splits there if the face needs it, via `pcurve_of`'s period window
+    (07 §3 rule 5). The difftest's truth check rejects two pieces that meet end to end.
+- **Primitives keep their known topology (04).** A near-square cylinder cut is a circle when
+  the true ellipse lies within the tolerance of it along the surface. A near-axial plane gives
+  lines when they are within the tolerance over the extent's height. Two lines or circles
+  within the tolerance of each other are one tangent curve.
+- **The difftest compares on forward sense only.** Sense changes only the direction
+  (`plane_sections` covers both senses against the truth). The pin's reversed-sense frames
+  would add a mapping to the harness and no new geometry.
+
+**Validation.** `plane_sections` (6 tests) checks every answer against the exact sections
+(testkit T5). Pieces must lie on both surfaces and inside both extents, with the truth's
+kinds, and every truth point inside the extents must be covered. Crossing curves must run
+along `n_s x n_plane`. It covers both senses: fixed cases per kind plus 400 random sections.
+There are 5 unit tests: order and direction, coincident extents, other pairs `General`,
+the span merge across the turn's start, and the `pcurve_of` seam.
+
+The difftest `t_ssi::ssi_section_by_plane` compares against the pin's `intersect_with_plane`.
+It uses 1,000 inputs aimed at the cases above. Results: 378 exact, 532 within tolerance,
+90 pin defects, 0 mismatches, 0 nondeterministic.
+
+Each pin defect is judged against T5 by `t_ssi::truth::check`, in these classes (pool counts):
+
+| Class | Count | Pin answer | scx answer |
+|---|---:|---|---|
+| Coincident planes | 23 | general | coincident |
+| Cone cut through the apex, steeper than the generators | 11 | general | the two generator lines |
+| Cone apex outside the extent | 15 | a tangent point off the extent | empty |
+| Cylinder seam | 9 | splits the arc at `u = 0` | one piece |
+| Cone seam | 10 | splits the arc at `u = 0` | one piece |
+| Bounded cylinder or cone missed | 8 | general | empty |
+| Torus missed | 15 | general | empty |
+
+**Timings.** These were measured side-channel with a throwaway timer, not committed. The
+timer ran over the difftest pool on prebuilt surfaces, 200 repetitions, per call. Each
+figure is scx against the pin:
+
+| Kind | scx | pin |
+|---|---:|---:|
+| plane | 0.55 us | 1.71 us |
+| cylinder | 1.81 us | 7.72 us |
+| cone | 0.68 us | 2.57 us |
+| sphere | 0.63 us | 5.47 us |
+| torus | 0.69 us | 32.6 us |
+
+The torus gap is mostly the pin's general fallback on the spiric cases. scx gives up on
+those cases at once and the caller pays later; the comparison is on what each call does.
+
+**Other kernels (research 66).** §8.2 records that OCCT's IntAna does analytic quadric pairs.
+Its docs only were read, and no code. The techniques adopted here are ours:
+
+- exact support and hull rejects before any conic is built;
+- one linear side per extent edge, so clipping is the roots of `a cos t + b sin t + c`.
+
+Both are exact and deterministic. Nothing was taken that depends on a search or a cache.
+
+**Open.**
+
+- WR-680's rational pcurve of an oblique cylinder section, in `pcurve_of`.
+- Parabola and hyperbola kinds in `scx-curve`. SS5 answers `General` for them until those
+  kinds exist.
+- SS2 to SS4.
 
 ## 6. `scx-brep`
 

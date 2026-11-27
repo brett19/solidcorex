@@ -66,11 +66,16 @@
 //! means one simple root (refined by safeguarded Newton, certified by a sign change a few
 //! units in the last place either side and bisected between those to rounding), otherwise
 //! the halves are
-//! searched, to the depth and number of subdivisions [`RootLimits`] allows.
+//! searched, to the depth and number of subdivisions [`RootLimits`] allows. Each root is
+//! reported once, in increasing order along the interval: a zero coefficient at an end of a
+//! piece is a root at that end, which the piece's parent (or the call, for the ends of the
+//! whole interval) reports, so a root on a split point is not reported again by each half
+//! and each level below it.
 //!
 //! Deviations: none (new code). Degrees are bounded by [`MAX_DEGREE`]. From the pin's
 //! `bernstein_roots`: a simple root is refined by Newton's method before it is bisected,
-//! which moves it only where it is more exact (the header above).
+//! which moves it only where it is more exact (the header above). A root on a split point is
+//! reported once, in order, where the pin repeated it once per halving level.
 
 use scx_num::certified::gamma;
 use scx_num::error::Invalid;
@@ -852,9 +857,8 @@ impl Default for RootLimits {
 /// The roots [`bernstein_roots`] found.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Roots {
-    /// The roots, in the order found: a piece's left end before its right, a piece before
-    /// the one after it. Where `isolated` is false, the ends of each piece left undecided
-    /// stand for the roots it holds.
+    /// The roots, each once, in increasing order from `lo` toward `hi`. Where `isolated` is
+    /// false, the ends of each piece left undecided stand for the roots it holds.
     pub places: Vec<f64>,
     /// Whether every root was isolated: false when the limits ran out on a piece whose
     /// coefficients change sign more than once (a root of even multiplicity, or roots
@@ -866,25 +870,55 @@ pub struct Roots {
 /// where the coefficients keep one sign, exactly one where they change sign once (refined
 /// by safeguarded Newton, certified by a sign change and bisected to rounding), the end
 /// where an end coefficient is zero, otherwise those of each half, within `limits`.
+///
+/// A root is reported once, in increasing order. The pin's recursion reports each piece's zero
+/// ends, so a root on a split point (0.5 of a polynomial with a root there, whose rounded
+/// coefficients keep it exact) was reported by both halves and again by each level of halving
+/// that ends there, ahead of the roots of the piece it ends: Wilkinson 5 gave 5 places for
+/// its 5 roots and Chebyshev 5 gave 8 for 5 (the pin's `DUPLICATES` of research T6). Here the
+/// ends of the whole interval are reported by this call and a split point by the piece split,
+/// between its halves' roots, so no place repeats, and the cause is fixed where it arose, not
+/// removed afterwards. This changes results against the pin on those inputs (a difftest pin
+/// defect, checked against the polynomial's exact zeros); the work is the same halvings with
+/// fewer comparisons. Where the limits run out, a piece's undecided ends stand for its roots
+/// and a place shared by two such pieces is reported once.
 #[must_use]
 pub fn bernstein_roots(c: &[f64], lo: f64, hi: f64, limits: RootLimits) -> Roots {
     let mut places = Vec::new();
     let mut work = limits.subdivisions;
-    let isolated = roots_in(c, lo, hi, limits.depth, &mut work, &mut places);
+    if c.first() == Some(&0.0) {
+        push_new(&mut places, lo);
+    }
+    let isolated = roots_in(c, [lo, hi], limits.depth, &mut work, &mut places);
+    if c.last() == Some(&0.0) {
+        push_new(&mut places, hi);
+    }
     Roots { places, isolated }
 }
 
-/// [`bernstein_roots`] on one piece, `work` the halvings left, the roots appended to `out`.
-fn roots_in(c: &[f64], lo: f64, hi: f64, depth: u32, work: &mut usize, out: &mut Vec<f64>) -> bool {
+/// Appends `x` unless it is the place just appended: the places are in increasing order, so a
+/// repeat is always the last one, and a place is reported once (two undecided pieces share
+/// the end between them).
+fn push_new(out: &mut Vec<f64>, x: f64) {
+    if out.last() != Some(&x) {
+        out.push(x);
+    }
+}
+
+/// [`bernstein_roots`] on one piece `[lo, hi]`, `work` the halvings left, the roots appended
+/// to `out`. A root at an end of the piece is not reported here: an end of the whole
+/// interval is the caller's, and a split point is reported once, by the piece that was
+/// split, between its halves' roots.
+fn roots_in(
+    c: &[f64],
+    [lo, hi]: [f64; 2],
+    depth: u32,
+    work: &mut usize,
+    out: &mut Vec<f64>,
+) -> bool {
     let (Some(&first), Some(&last)) = (c.first(), c.last()) else {
         return true;
     };
-    if first == 0.0 {
-        out.push(lo);
-    }
-    if last == 0.0 {
-        out.push(hi);
-    }
     let signs: Vec<bool> = c.iter().filter(|x| **x != 0.0).map(|x| *x > 0.0).collect();
     let changes = signs
         .windows(2)
@@ -894,18 +928,22 @@ fn roots_in(c: &[f64], lo: f64, hi: f64, depth: u32, work: &mut usize, out: &mut
         return true;
     }
     if changes == 1 && first != 0.0 && last != 0.0 {
-        out.push(lo + (hi - lo) * simple_root(c, first));
+        push_new(out, lo + (hi - lo) * simple_root(c, first));
         return true;
     }
     if depth == 0 || *work == 0 {
-        out.extend([lo, hi]);
+        push_new(out, lo);
+        push_new(out, hi);
         return false;
     }
     *work -= 1;
     let mid = 0.5 * (lo + hi);
     let (l, r) = bernstein_halves(c);
-    let left = roots_in(&l, lo, mid, depth - 1, work, out);
-    let right = roots_in(&r, mid, hi, depth - 1, work, out);
+    let left = roots_in(&l, [lo, mid], depth - 1, work, out);
+    if l.last() == Some(&0.0) {
+        push_new(out, mid);
+    }
+    let right = roots_in(&r, [mid, hi], depth - 1, work, out);
     left && right
 }
 

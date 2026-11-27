@@ -9,6 +9,7 @@ members = [
     "crates/scx-nurbs-surface",
     "crates/scx-curve",
     "crates/scx-surface",
+    "crates/scx-ssi",
     "crates/scx-testkit",
     "crates/scx-difftest",
     "crates/scx-bench",
@@ -24,6 +25,7 @@ default-members = [
     "crates/scx-nurbs-surface",
     "crates/scx-curve",
     "crates/scx-surface",
+    "crates/scx-ssi",
     "crates/scx-testkit",
     "xtask",
 ]

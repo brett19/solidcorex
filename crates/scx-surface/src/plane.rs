@@ -17,6 +17,7 @@ use scx_num::vector3d::{Point3, UnitVec3, Vec3};
 use scx_nurbs::Approach;
 use scx_nurbs_surface::{NurbsSurface, ParamAxis};
 
+use crate::invert::{self, Closest, Inversion, Periods};
 use scx_num::jet::SurfaceJet;
 
 /// A plane: the frame's origin and its x and y axes. The normal is the frame's z.
@@ -120,5 +121,23 @@ impl Plane {
     #[must_use]
     pub const fn from_step(&self, step: Point2) -> Point2 {
         step
+    }
+}
+
+impl Plane {
+    /// The nearest point to `p`: its projection, `uv = ((p - O).x, (p - O).y)`.
+    #[must_use]
+    pub fn closest(&self, p: Point3) -> Closest {
+        let d = p - self.frame.origin();
+        let uv = Point2::new(d.dot(*self.frame.x()), d.dot(*self.frame.y()));
+        Closest::One(invert::foot(p, uv, self.point(uv)))
+    }
+
+    /// The nearest point to `p`, inside `domain` or not (`None`: every `uv`).
+    #[must_use]
+    pub fn invert(&self, p: Point3, domain: Option<&Extent2d>) -> Inversion<Point2> {
+        invert::invert(self.closest(p), Periods::NONE, domain, |uv| {
+            invert::foot(p, uv, self.point(uv))
+        })
     }
 }
