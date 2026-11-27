@@ -341,7 +341,7 @@ pub mod x {
         use scx_num::extent1d::Extent1d;
         use scx_num::extent2d::Extent2d;
         use scx_num::extent3d::Extent3d;
-        use scx_num::math::{Vec3, EFF_ZERO, EFF_ZERO_PARAM, EFF_ZERO_RAD};
+        use scx_num::math::{EFF_ZERO, EFF_ZERO_PARAM, EFF_ZERO_RAD, Vec3};
         use scx_num::math::{EFF_ZERO_SQ, EFF_ZERO_SQRT};
         pub use scx_num::tol::*;
         use scx_num::vector2d::Vec2;
@@ -542,14 +542,10 @@ pub mod s {
         #[allow(clippy::all, clippy::pedantic, dead_code, unused_imports)]
         mod pin {
             pub use solidcore::blend::fillet_section::certificate::inverse4;
-            use solidcore::blend::fillet_section::interval::{round_up, Ivl};
+            use solidcore::blend::fillet_section::interval::{Ivl, round_up};
             /// The pin's `interval::cmax` (`pub(crate)` there), as its file writes it.
             fn cmax(a: f64, b: f64) -> f64 {
-                if a < b {
-                    b
-                } else {
-                    a
-                }
+                if a < b { b } else { a }
             }
             pub use solidcore::blend::fillet_section::station::solve4;
             use solidcore::blend::fillet_section::tay::Ring;
@@ -710,8 +706,15 @@ pub mod s {
     use crate::facade::TolR;
     /// The pin's tolerance set of recipe `r` (scx has none: `Tolerances` is retired).
     pub fn tol_set(r: &TolR) -> Tolerances {
-        let [zone_tol_3d, xsect_tol_3d, approx_tol_3d, ang_tol_deg, tol_gap_gain, model_size_estimate, large_small_size_ratio] =
-            r.0;
+        let [
+            zone_tol_3d,
+            xsect_tol_3d,
+            approx_tol_3d,
+            ang_tol_deg,
+            tol_gap_gain,
+            model_size_estimate,
+            large_small_size_ratio,
+        ] = r.0;
         Tolerances {
             zone_tol_3d,
             xsect_tol_3d,
@@ -996,12 +999,12 @@ macro_rules! failure_bits {
 /// [`scx_num::NumError::Call`] frame to `GeomFailure::CallFailed` with the cause's class,
 /// as the pin's `geom_call` builds it). A cause not mapped here mismatches.
 pub fn num_as_pin(e: &scx_num::NumError) -> solidcore::SolidError {
-    use scx_num::error::NumFailure as N;
     use scx_num::NumError;
+    use scx_num::error::NumFailure as N;
+    use solidcore::SolidError;
+    use solidcore::error::Failure;
     use solidcore::error::blend::{BlendFailure, SectionDegeneracy};
     use solidcore::error::geom::GeomFailure as G;
-    use solidcore::error::Failure;
-    use solidcore::SolidError;
     match e {
         // scx's reason is typed (`scx_num::error::Invalid`); the pin's is text. An
         // invalid input compares by class only (research 62 T4), so every reason maps
@@ -1050,14 +1053,14 @@ pub fn num_as_pin(e: &scx_num::NumError) -> solidcore::SolidError {
                 }
                 N::TooFewRows { rows, cols } => G::TooFewRows { rows, cols },
                 N::Defect { why } => {
-                    return Failure::new(operation, BlendFailure::Defect { why }).into_error()
+                    return Failure::new(operation, BlendFailure::Defect { why }).into_error();
                 }
                 N::VectorVanishes => {
                     return Failure::new(
                         operation,
                         BlendFailure::SectionDegenerate(SectionDegeneracy::VectorVanishes),
                     )
-                    .into_error()
+                    .into_error();
                 }
                 // `NumFailure` is `#[non_exhaustive]`: a new cause mismatches until mapped
                 _ => G::Defect {

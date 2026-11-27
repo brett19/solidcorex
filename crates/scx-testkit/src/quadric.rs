@@ -41,7 +41,7 @@
 use core::fmt;
 
 use crate::analytic::{self, Frame, V3};
-use crate::dd::{self, lift, Dd};
+use crate::dd::{self, Dd, lift};
 use crate::nurbs::{self, Side, Surface};
 use crate::rat::Rat;
 

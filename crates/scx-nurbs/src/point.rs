@@ -28,11 +28,7 @@ pub(crate) trait Control: Copy {
 /// `alpha a + (1 - alpha) b` for one coordinate, `a` where `a == b`.
 fn affine1(alpha: f64, beta: f64, a: f64, b: f64) -> f64 {
     let r = alpha * a + beta * b;
-    if a == b && alpha.is_finite() {
-        a
-    } else {
-        r
-    }
+    if a == b && alpha.is_finite() { a } else { r }
 }
 
 impl<const D: usize> Control for [f64; D] {

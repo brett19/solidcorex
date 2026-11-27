@@ -3,7 +3,7 @@
 // Upstream record (verbatim from that file): Not upstream. Deviations: none (no upstream
 // counterpart). No recursion.
 // Changes: `UNIT` and `gamma` moved down from `nurbs/math.rs` with their test; `next_up` and
-// `next_down` made public (callers above use them); paths; adds the test
+// `next_down` replaced by std's (Rust 1.86), with their edge tests kept; paths; adds the test
 // `rounding_bounds_keep_the_previous_bits`.
 //! Certified comparisons: a computed quantity with a bound on the rounding of computing
 //! it, and the three-way answer of comparing it with a tolerance. A query that decides
@@ -41,34 +41,6 @@ pub fn gamma(n: usize) -> f64 {
 #[must_use]
 pub fn above(a: f64, b: f64) -> bool {
     a > b
-}
-
-/// The next double above `x` (`f64::next_up` needs Rust 1.86; the MSRV is 1.85). The
-/// sign branches prevent integer wrap: positive finite bits are below +infinity's, and
-/// negative nonzero bits are above the sign bit. NaN and +infinity are returned as is.
-#[must_use]
-pub fn next_up(x: f64) -> f64 {
-    if x.is_nan() || x == f64::INFINITY {
-        x
-    } else if x == 0.0 {
-        f64::from_bits(1)
-    } else if x > 0.0 {
-        f64::from_bits(x.to_bits() + 1)
-    } else {
-        f64::from_bits(x.to_bits() - 1)
-    }
-}
-
-/// The next double below `x`, using the same MSRV-compatible primitive as
-/// [`next_up`]. Both signed zeros step to the negative minimum subnormal;
-/// negative infinity and NaN (including its sign and payload) are unchanged.
-#[must_use]
-pub fn next_down(x: f64) -> f64 {
-    if x.is_nan() {
-        x
-    } else {
-        -next_up(-x)
-    }
 }
 
 /// The answer of comparing a certified quantity with a tolerance.
@@ -281,7 +253,7 @@ mod tests {
     }
 
     #[test]
-    fn next_up_keeps_signed_zero_subnormals_and_extreme_values() {
+    fn std_next_up_keeps_signed_zero_subnormals_and_extreme_values() {
         let tiny = f64::from_bits(1);
         for (value, expected) in [
             (0.0, tiny),
@@ -294,13 +266,13 @@ mod tests {
             (f64::NEG_INFINITY, -f64::MAX),
             (f64::INFINITY, f64::INFINITY),
         ] {
-            assert_eq!(next_up(value).to_bits(), expected.to_bits());
+            assert_eq!(value.next_up().to_bits(), expected.to_bits());
         }
-        assert!(next_up(f64::NAN).is_nan());
+        assert!(f64::NAN.next_up().is_nan());
     }
 
     #[test]
-    fn next_down_keeps_signed_zero_subnormals_and_extreme_values() {
+    fn std_next_down_keeps_signed_zero_subnormals_and_extreme_values() {
         let tiny = f64::from_bits(1);
         for (value, expected) in [
             (0.0, -tiny),
@@ -317,11 +289,11 @@ mod tests {
             (f64::INFINITY, f64::MAX),
             (f64::NEG_INFINITY, f64::NEG_INFINITY),
         ] {
-            assert_eq!(next_down(value).to_bits(), expected.to_bits());
+            assert_eq!(value.next_down().to_bits(), expected.to_bits());
         }
         // Explicit payloads prove that neither sign nor payload is canonicalized.
         for bits in [0x7ff8_0000_0000_0042, 0xfff8_0000_0000_0042] {
-            assert_eq!(next_down(f64::from_bits(bits)).to_bits(), bits);
+            assert_eq!(f64::from_bits(bits).next_down().to_bits(), bits);
         }
     }
 

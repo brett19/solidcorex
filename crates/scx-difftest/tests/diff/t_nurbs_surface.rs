@@ -19,7 +19,7 @@ use crate::pin_defects;
 
 use scx_num::hash::Rng;
 use scx_testkit::data::SurfaceData;
-use scx_testkit::gen::{self, Knots, Spec, Weights};
+use scx_testkit::sample::{self, Knots, Spec, Weights};
 
 /// A surface read back: degrees, the u and v knots, and the homogeneous points `[w x, w y,
 /// w z, w]` row-major (`w = 1` for a polynomial surface).
@@ -108,7 +108,7 @@ fn surfaces(rng: &mut SplitMix64) -> Vec<Raw> {
                     count: degree + extra,
                     knots,
                 };
-                out.push(base(gen::surface(
+                out.push(base(sample::surface(
                     &mut r,
                     (spec(pu, 3), spec(pv, 1)),
                     weights,
@@ -123,7 +123,7 @@ fn surfaces(rng: &mut SplitMix64) -> Vec<Raw> {
                 count: degree + 2,
                 knots: Knots::Random,
             };
-            out.push(base(gen::surface(&mut r, (spec(pu), spec(pv)), weights)));
+            out.push(base(sample::surface(&mut r, (spec(pu), spec(pv)), weights)));
         }
     }
     out

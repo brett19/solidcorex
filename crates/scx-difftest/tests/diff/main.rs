@@ -42,7 +42,7 @@ mod t_vector;
 /// must each fail; a rounding error of drift must pass; the fingerprint stays bit-exact; a
 /// pin defect excuses only inputs whose check passes, and one that applies to none fails.
 mod controls {
-    use crate::harness::{run, run_defect, shot, Applies, PinDefect, Tol};
+    use crate::harness::{Applies, PinDefect, Tol, run, run_defect, shot};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     #[test]

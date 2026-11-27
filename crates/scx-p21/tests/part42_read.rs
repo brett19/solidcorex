@@ -41,9 +41,9 @@ use scx_p21::part42::geom::{
     Associated, Axis1, Curve, CurveForm, KnotSpec, Logical, Placement, PreferredRep, Surface,
     SurfaceCurveKind, SurfaceForm, Trim, TrimPreference, Vector,
 };
-use scx_p21::part42::read::{Reader, MAX_GEOM_DEPTH};
+use scx_p21::part42::read::{MAX_GEOM_DEPTH, Reader};
 use scx_p21::units::Units;
-use scx_p21::{parse, Exchange, P21Error};
+use scx_p21::{Exchange, P21Error, parse};
 
 /// `leaf`, met through the instances of `path`, the instance read first.
 fn within(path: &[u64], leaf: P21Error) -> P21Error {
@@ -654,86 +654,163 @@ fn nesting_is_bounded() {
 fn refusals_say_why() {
     for (data, id, why) in [
         // A missing reference, and a reference to the wrong kind.
-        ("#10=CIRCLE('',#99,1.);", 10, Err(within(&[10], P21Error::entity(99, EntityCause::Missing)))),
+        (
+            "#10=CIRCLE('',#99,1.);",
+            10,
+            Err(within(&[10], P21Error::entity(99, EntityCause::Missing))),
+        ),
         (
             "#10=LINE('',#1,#1);",
             10,
-            Err(within(&[10], P21Error::entity(1, EntityCause::WrongType { expected: "VECTOR", found: "CARTESIAN_POINT".into() }))),
+            Err(within(
+                &[10],
+                P21Error::entity(
+                    1,
+                    EntityCause::WrongType {
+                        expected: "VECTOR",
+                        found: "CARTESIAN_POINT".into(),
+                    },
+                ),
+            )),
         ),
         (
             "#10=LINE('',#1,$);",
             10,
-            Err(P21Error::entity(10, EntityCause::BadParam { index: 2, expected: "an entity reference" })),
+            Err(P21Error::entity(
+                10,
+                EntityCause::BadParam {
+                    index: 2,
+                    expected: "an entity reference",
+                },
+            )),
         ),
         // Signs and sizes.
         (
             "#10=CIRCLE('',#4,-1.);",
             10,
-            Err(P21Error::entity(10, EntityCause::Invalid(InvalidValue::CircleRadius))),
+            Err(P21Error::entity(
+                10,
+                EntityCause::Invalid(InvalidValue::CircleRadius),
+            )),
         ),
         (
             "#10=ELLIPSE('',#4,2.,0.);",
             10,
-            Err(P21Error::entity(10, EntityCause::Invalid(InvalidValue::EllipseSemiAxis))),
+            Err(P21Error::entity(
+                10,
+                EntityCause::Invalid(InvalidValue::EllipseSemiAxis),
+            )),
         ),
         (
             "#10=CIRCLE('',#4,1.E10);",
             10,
-            Err(P21Error::entity(10, EntityCause::BadParam { index: 2, expected: "a finite number smaller than 1e9 in size" })),
+            Err(P21Error::entity(
+                10,
+                EntityCause::BadParam {
+                    index: 2,
+                    expected: "a finite number smaller than 1e9 in size",
+                },
+            )),
         ),
         (
             "#10=VECTOR('',#3,-1.);#11=LINE('',#1,#10);",
             11,
-            Err(within(&[11], P21Error::entity(10, EntityCause::Invalid(InvalidValue::NegativeMagnitude)))),
+            Err(within(
+                &[11],
+                P21Error::entity(10, EntityCause::Invalid(InvalidValue::NegativeMagnitude)),
+            )),
         ),
         (
             "#10=VECTOR('',#3,0.);#11=LINE('',#1,#10);",
             11,
-            Err(within(&[11], P21Error::entity(10, EntityCause::Invalid(InvalidValue::ZeroMagnitude)))),
+            Err(within(
+                &[11],
+                P21Error::entity(10, EntityCause::Invalid(InvalidValue::ZeroMagnitude)),
+            )),
         ),
         (
             "#10=DIRECTION('',(0.,0.,0.));#11=VECTOR('',#10,1.);#12=LINE('',#1,#11);",
             12,
-            Err(within(&[12, 11], P21Error::entity(10, EntityCause::Invalid(InvalidValue::ZeroDirection)))),
+            Err(within(
+                &[12, 11],
+                P21Error::entity(10, EntityCause::Invalid(InvalidValue::ZeroDirection)),
+            )),
         ),
         // Knots.
         (
             "#10=B_SPLINE_CURVE_WITH_KNOTS('',1,(#1,#1,#1),.UNSPECIFIED.,.F.,.F.,(2,2),(0.,1.),.UNSPECIFIED.);",
             10,
-            Err(P21Error::entity(10, EntityCause::Invalid(InvalidValue::KnotCount))),
+            Err(P21Error::entity(
+                10,
+                EntityCause::Invalid(InvalidValue::KnotCount),
+            )),
         ),
         (
             "#10=B_SPLINE_CURVE_WITH_KNOTS('',2,(#1,#1),.UNSPECIFIED.,.F.,.F.,(3,3),(0.,1.),.UNSPECIFIED.);",
             10,
-            Err(P21Error::entity(10, EntityCause::Invalid(InvalidValue::KnotCount))),
+            Err(P21Error::entity(
+                10,
+                EntityCause::Invalid(InvalidValue::KnotCount),
+            )),
         ),
         (
             "#10=B_SPLINE_CURVE_WITH_KNOTS('',99,(#1,#1),.UNSPECIFIED.,.F.,.F.,(1,1),(0.,1.),.UNSPECIFIED.);",
             10,
-            Err(P21Error::entity(10, EntityCause::BadParam { index: 1, expected: "a degree from 1 to 32" })),
+            Err(P21Error::entity(
+                10,
+                EntityCause::BadParam {
+                    index: 1,
+                    expected: "a degree from 1 to 32",
+                },
+            )),
         ),
         (
             "#10=B_SPLINE_CURVE_WITH_KNOTS('',1,(#1,#1),.UNSPECIFIED.,.F.,.F.,(4000000000000,1),(0.,1.),.UNSPECIFIED.);",
             10,
-            Err(P21Error::entity(10, EntityCause::BadParam { index: 6, expected: "knot multiplicities from 1 to the degree + 1" })),
+            Err(P21Error::entity(
+                10,
+                EntityCause::BadParam {
+                    index: 6,
+                    expected: "knot multiplicities from 1 to the degree + 1",
+                },
+            )),
         ),
         (
             "#10=B_SPLINE_CURVE_WITH_KNOTS('',1,(#1,#1),.UNSPECIFIED.,.F.,.F.,(2,2),(1.,0.),.UNSPECIFIED.);",
             10,
-            Err(P21Error::entity(10, EntityCause::Invalid(InvalidValue::KnotsDecrease))),
+            Err(P21Error::entity(
+                10,
+                EntityCause::Invalid(InvalidValue::KnotsDecrease),
+            )),
         ),
         (
             "#10=(B_SPLINE_CURVE(1,(#1,#1),.UNSPECIFIED.,.F.,.F.)B_SPLINE_CURVE_WITH_KNOTS((2,2),(0.,1.),.UNSPECIFIED.)RATIONAL_B_SPLINE_CURVE((1.,-1.)));",
             10,
-            Err(P21Error::entity(10, EntityCause::Invalid(InvalidValue::WeightNotPositive))),
+            Err(P21Error::entity(
+                10,
+                EntityCause::Invalid(InvalidValue::WeightNotPositive),
+            )),
         ),
         (
             "#10=(B_SPLINE_CURVE(1,(#1,#1),.UNSPECIFIED.,.F.,.F.)B_SPLINE_CURVE_WITH_KNOTS((2,2),(0.,1.),.UNSPECIFIED.)RATIONAL_B_SPLINE_CURVE((1.)));",
             10,
-            Err(P21Error::entity(10, EntityCause::Invalid(InvalidValue::WeightCount))),
+            Err(P21Error::entity(
+                10,
+                EntityCause::Invalid(InvalidValue::WeightCount),
+            )),
         ),
         // Shapes.
-        ("#10=POLYLINE('',(#1));", 10, Err(P21Error::entity(10, EntityCause::BadParam { index: 1, expected: "a list of 2 to 1 000 000 points" }))),
+        (
+            "#10=POLYLINE('',(#1));",
+            10,
+            Err(P21Error::entity(
+                10,
+                EntityCause::BadParam {
+                    index: 1,
+                    expected: "a list of 2 to 1 000 000 points",
+                },
+            )),
+        ),
         (
             "#10=TRIMMED_CURVE('',#4,(),(PARAMETER_VALUE(1.)),.T.,.PARAMETER.);",
             10,
@@ -742,7 +819,13 @@ fn refusals_say_why() {
         (
             "#10=CIRCLE('',#4,1.);#11=TRIMMED_CURVE('',#10,(),(PARAMETER_VALUE(1.)),.T.,.PARAMETER.);",
             11,
-            Err(P21Error::entity(11, EntityCause::BadParam { index: 2, expected: "a list of one or two trims" })),
+            Err(P21Error::entity(
+                11,
+                EntityCause::BadParam {
+                    index: 2,
+                    expected: "a list of one or two trims",
+                },
+            )),
         ),
         (
             "#10=UNKNOWN_CURVE('');",
@@ -1211,39 +1294,66 @@ fn surface_refusals_say_why() {
     for (data, why) in [
         (
             "#10=CYLINDRICAL_SURFACE('',#4,0.);",
-            Err(P21Error::entity(10, EntityCause::Invalid(InvalidValue::CylinderRadius))),
+            Err(P21Error::entity(
+                10,
+                EntityCause::Invalid(InvalidValue::CylinderRadius),
+            )),
         ),
         (
             "#10=SPHERICAL_SURFACE('',#4,-3.);",
-            Err(P21Error::entity(10, EntityCause::Invalid(InvalidValue::SphereRadius))),
+            Err(P21Error::entity(
+                10,
+                EntityCause::Invalid(InvalidValue::SphereRadius),
+            )),
         ),
         (
             "#10=CONICAL_SURFACE('',#4,1.,2.);",
-            Err(P21Error::entity(10, EntityCause::Invalid(InvalidValue::ConeShape))),
+            Err(P21Error::entity(
+                10,
+                EntityCause::Invalid(InvalidValue::ConeShape),
+            )),
         ),
         (
             "#10=CONICAL_SURFACE('',#4,-1.,0.5);",
-            Err(P21Error::entity(10, EntityCause::Invalid(InvalidValue::ConeShape))),
+            Err(P21Error::entity(
+                10,
+                EntityCause::Invalid(InvalidValue::ConeShape),
+            )),
         ),
         (
             "#10=CONICAL_SURFACE('',#4,1.,0.);",
-            Err(P21Error::entity(10, EntityCause::Invalid(InvalidValue::ConeShape))),
+            Err(P21Error::entity(
+                10,
+                EntityCause::Invalid(InvalidValue::ConeShape),
+            )),
         ),
         (
             "#10=TOROIDAL_SURFACE('',#4,1.,-2.);",
-            Err(P21Error::entity(10, EntityCause::Invalid(InvalidValue::TorusMinorRadius))),
+            Err(P21Error::entity(
+                10,
+                EntityCause::Invalid(InvalidValue::TorusMinorRadius),
+            )),
         ),
         (
             "#10=B_SPLINE_SURFACE_WITH_KNOTS('',1,1,((#1,#1),(#1)),.UNSPECIFIED.,.F.,.F.,.F.,(2,2),(2,2),(0.,1.),(0.,1.),.UNSPECIFIED.);",
-            Err(P21Error::entity(10, EntityCause::Invalid(InvalidValue::ControlNet))),
+            Err(P21Error::entity(
+                10,
+                EntityCause::Invalid(InvalidValue::ControlNet),
+            )),
         ),
         (
             "#10=B_SPLINE_SURFACE_WITH_KNOTS('',1,1,((#1,#1),(#1,#1)),.UNSPECIFIED.,.F.,.F.,.F.,(2,2),(2,1),(0.,1.),(0.,1.),.UNSPECIFIED.);",
-            Err(P21Error::entity(10, EntityCause::Invalid(InvalidValue::KnotCount))),
+            Err(P21Error::entity(
+                10,
+                EntityCause::Invalid(InvalidValue::KnotCount),
+            )),
         ),
         (
             "#10=(B_SPLINE_SURFACE(1,1,((#1,#1),(#1,#1)),.UNSPECIFIED.,.F.,.F.,.F.)B_SPLINE_SURFACE_WITH_KNOTS((2,2),(2,2),(0.,1.),(0.,1.),.UNSPECIFIED.)RATIONAL_B_SPLINE_SURFACE(((1.,1.))));",
-            Err(P21Error::entity(10, EntityCause::Invalid(InvalidValue::NetWeightCount))),
+            Err(P21Error::entity(
+                10,
+                EntityCause::Invalid(InvalidValue::NetWeightCount),
+            )),
         ),
         (
             "#10=SURFACE_OF_REVOLUTION('',#10,#4);",
@@ -1251,19 +1361,27 @@ fn surface_refusals_say_why() {
         ),
         (
             "#10=PLANE('',#3);",
-            Err(within(&[10], P21Error::entity(3, EntityCause::WrongType { expected: "AXIS2_PLACEMENT_3D", found: "DIRECTION".into() }))),
+            Err(within(
+                &[10],
+                P21Error::entity(
+                    3,
+                    EntityCause::WrongType {
+                        expected: "AXIS2_PLACEMENT_3D",
+                        found: "DIRECTION".into(),
+                    },
+                ),
+            )),
         ),
-        ("#10=PLANE('',#99);", Err(within(&[10], P21Error::entity(99, EntityCause::Missing)))),
+        (
+            "#10=PLANE('',#99);",
+            Err(within(&[10], P21Error::entity(99, EntityCause::Missing))),
+        ),
         (
             "#10=CURVE_BOUNDED_SURFACE('',#4,(),.F.);",
             Err(unsupported(10, "CURVE_BOUNDED_SURFACE")),
         ),
     ] {
-        assert_eq!(
-            surface_err(data, 10, MM).map(|_| ()),
-            why,
-            "{data}"
-        );
+        assert_eq!(surface_err(data, 10, MM).map(|_| ()), why, "{data}");
     }
     // A revolution whose axis is the wrong kind of placement.
     assert_eq!(

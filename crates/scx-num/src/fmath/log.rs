@@ -9,7 +9,7 @@
 
 use super::dd::{self, at};
 use super::tables::{
-    INV_LN10, INV_LN2, LN2_HI42, LN2_LO42, LN_FOLD, LN_TAB, LOG10_2_HI42, LOG10_2_LO42,
+    INV_LN2, INV_LN10, LN_FOLD, LN_TAB, LN2_HI42, LN2_LO42, LOG10_2_HI42, LOG10_2_LO42,
 };
 use crate::eft::{fast_two_sum, two_prod, two_sum};
 

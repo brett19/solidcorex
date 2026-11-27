@@ -59,12 +59,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::P21Error;
 use crate::error::{EntityCause, Limit};
 use crate::exchange::{Exchange, Instance, Param};
-use crate::part42::geom::{Placement, P3};
-use crate::part42::read::{Reader, MAX_COORD};
+use crate::part42::geom::{P3, Placement};
+use crate::part42::read::{MAX_COORD, Reader};
 use crate::units::{self, Context, Units};
-use crate::P21Error;
 
 type Result<T> = core::result::Result<T, P21Error>;
 
@@ -740,10 +740,10 @@ fn add_style(ex: &Exchange, id: u64, e: &Instance, out: &mut StyledItem) -> Resu
     match e.name() {
         "SURFACE_STYLE_USAGE" => out.surface.push(surface_style(ex, id, e)?),
         "CURVE_STYLE" => {
-            if let Some(c) = e.params().get(3).and_then(Param::as_ref_id) {
-                if let Some(c) = colour(ex, c)? {
-                    out.curve.push(c);
-                }
+            if let Some(c) = e.params().get(3).and_then(Param::as_ref_id)
+                && let Some(c) = colour(ex, c)?
+            {
+                out.curve.push(c);
             }
         }
         _ => {}
@@ -978,14 +978,13 @@ pub fn read(ex: &Exchange) -> Result<ProductStructure> {
         if let Some(items) = representation_params(e)
             .and_then(|rp| rp.get(1))
             .and_then(Param::as_list)
-        {
-            if items.iter().any(|i| {
+            && items.iter().any(|i| {
                 i.as_ref_id()
                     .and_then(|i| ex.get(i))
                     .is_some_and(|i| body_kind(i.name()).is_some())
-            }) {
-                pending.push(id);
-            }
+            })
+        {
+            pending.push(id);
         }
     }
     // Definitions and their products.
@@ -1185,10 +1184,10 @@ pub fn read(ex: &Exchange) -> Result<ProductStructure> {
     let mut mapped = vec![Vec::new(); out.representations.len()];
     for (r, rep) in out.representations.iter().enumerate() {
         for item in &rep.items {
-            if let ItemKind::Mapped { map, .. } = item.kind {
-                if let (Some(m), Some(b)) = (out.maps.get(map), mapped.get_mut(r)) {
-                    b.push(m.representation);
-                }
+            if let ItemKind::Mapped { map, .. } = item.kind
+                && let (Some(m), Some(b)) = (out.maps.get(map), mapped.get_mut(r))
+            {
+                b.push(m.representation);
             }
         }
     }

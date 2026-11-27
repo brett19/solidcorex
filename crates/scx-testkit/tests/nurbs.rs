@@ -16,10 +16,10 @@
 )]
 
 use scx_num::hash::Rng;
-use scx_testkit::data::CurveData;
-use scx_testkit::gen::{self, Knots, Spec, Weights};
-use scx_testkit::nurbs::{Curve, Error, Exact, Side, Surface};
 use scx_testkit::Rat;
+use scx_testkit::data::CurveData;
+use scx_testkit::nurbs::{Curve, Error, Exact, Side, Surface};
+use scx_testkit::sample::{self, Knots, Spec, Weights};
 
 fn r(x: f64) -> Rat {
     Rat::from_f64(x).unwrap()
@@ -60,7 +60,7 @@ fn curves(seed: u64, per_kind: usize) -> Vec<CurveData<3>> {
                     count,
                     knots,
                 };
-                out.push(gen::curve(&mut rng, spec, weights));
+                out.push(sample::curve(&mut rng, spec, weights));
             }
         }
     }
@@ -76,7 +76,7 @@ fn samples(rng: &mut Rng, knots: &[f64], domain: (f64, f64), extra: usize) -> Ve
         .collect();
     out.dedup();
     for _ in 0..extra {
-        out.push(gen::parameter(rng, knots, domain));
+        out.push(sample::parameter(rng, knots, domain));
     }
     out
 }
@@ -91,8 +91,8 @@ fn a_bezier_curve_is_its_bernstein_sum_inside_and_past_its_ends() {
             .chain([1.0; 6].iter().take(p + 1))
             .copied()
             .collect();
-        let pts = gen::points::<2>(&mut rng, p + 1, 4.0);
-        let w = gen::weights(&mut rng, p + 1, Weights::Moderate).unwrap();
+        let pts = sample::points::<2>(&mut rng, p + 1, 4.0);
+        let w = sample::weights(&mut rng, p + 1, Weights::Moderate).unwrap();
         let c = Curve::new(p, &knots, &pts, Some(&w)).unwrap();
         for _ in 0..12 {
             let u = 3.0 * rng.next_f64() - 1.0;
@@ -197,7 +197,7 @@ fn a_knot_of_multiplicity_m_joins_its_pieces_with_p_minus_m_derivatives() {
             joins += 1;
         }
         // Away from the knots both sides are one piece.
-        let u = gen::parameter(&mut rng, &[], (a, b));
+        let u = sample::parameter(&mut rng, &[], (a, b));
         if !data.knots.contains(&u) {
             assert_eq!(c.derivs(u, Side::Below, 2), c.derivs(u, Side::Above, 2));
         }
@@ -257,7 +257,7 @@ fn knot_insertion_leaves_the_shape_exactly_unchanged() {
         let c = data.exact().unwrap();
         let p = c.degree();
         for _ in 0..3 {
-            let u = gen::parameter(&mut rng, &data.knots, c.domain());
+            let u = sample::parameter(&mut rng, &data.knots, c.domain());
             let room = p + 1 - data.knots.iter().filter(|&&k| k == u).count().min(p + 1);
             let times = 1 + gen_below(&mut rng, 3);
             let inserted = c.insert_knot(u, times);
@@ -289,8 +289,8 @@ fn a_bezier_curve_elevates_by_the_bernstein_formula() {
         let knots: Vec<f64> = core::iter::repeat_n(0.0, p + 1)
             .chain(core::iter::repeat_n(1.0, p + 1))
             .collect();
-        let pts = gen::points::<3>(&mut rng, p + 1, 2.0);
-        let w = gen::weights(&mut rng, p + 1, Weights::Moderate).unwrap();
+        let pts = sample::points::<3>(&mut rng, p + 1, 2.0);
+        let w = sample::weights(&mut rng, p + 1, Weights::Moderate).unwrap();
         let c = Curve::new(p, &knots, &pts, Some(&w)).unwrap();
         let e = c.elevate(1).unwrap();
         // Homogeneous Q_i = i/(p+1) P_{i-1} + (1 - i/(p+1)) P_i.
@@ -394,7 +394,7 @@ fn rounding_gives_back_the_data_when_nothing_was_done() {
         assert_eq!(data.exact().unwrap().rounded(), data);
     }
     let mut rng = Rng::new(8);
-    let s = gen::surface::<3>(
+    let s = sample::surface::<3>(
         &mut rng,
         (
             Spec {
@@ -433,7 +433,7 @@ fn surfaces(seed: u64, per_kind: usize) -> Vec<scx_testkit::data::SurfaceData<3>
                     count: dv + 1 + (i + 1) % 3,
                     knots: KNOTS[(ki + i) % 4],
                 };
-                out.push(gen::surface(&mut rng, (su, sv), weights));
+                out.push(sample::surface(&mut rng, (su, sv), weights));
             }
         }
     }
@@ -542,8 +542,8 @@ fn surface_insertion_and_elevation_leave_the_shape_exactly_unchanged() {
     for data in surfaces(110, 1) {
         let s = data.exact().unwrap();
         let (du, dv) = s.domain();
-        let u = gen::parameter(&mut rng, &data.knots_u, du);
-        let v = gen::parameter(&mut rng, &data.knots_v, dv);
+        let u = sample::parameter(&mut rng, &data.knots_u, du);
+        let v = sample::parameter(&mut rng, &data.knots_v, dv);
         if let Ok(t) = s.insert_knot_u(u, 1) {
             same_surface(&s, &t, &mut rng, &format!("{data:?} insert u {u}"));
         }
@@ -569,7 +569,7 @@ fn high_surfaces(seed: u64, count: usize) -> Vec<scx_testkit::data::SurfaceData<
                 count: degree + 1 + k % 3,
                 knots: KNOTS[k % 4],
             };
-            gen::surface(&mut rng, (spec(du, i), spec(dv, i + 1)), WEIGHTS[i % 3])
+            sample::surface(&mut rng, (spec(du, i), spec(dv, i + 1)), WEIGHTS[i % 3])
         })
         .collect()
 }
@@ -712,11 +712,11 @@ fn high_order_partials_are_the_power_basis_truth_before_and_after_insertion() {
             k.extend(vec![d.1; p + 1]);
             k
         };
-        let pts = gen::points::<3>(&mut rng, (p + 1) * (q + 1), 2.0);
+        let pts = sample::points::<3>(&mut rng, (p + 1) * (q + 1), 2.0);
         let w = if n % 2 == 0 {
             vec![1.0; pts.len()]
         } else {
-            gen::weights(&mut rng, pts.len(), Weights::Moderate).unwrap()
+            sample::weights(&mut rng, pts.len(), Weights::Moderate).unwrap()
         };
         let s = Surface::new((p, q), &ends(du, p), &ends(dv, q), &pts, Some(&w)).unwrap();
         let h: Vec<Vec<[Rat; 4]>> = (0..=p)
@@ -818,8 +818,8 @@ fn tensor_product_insertion_elevation_and_split_are_the_curve_operations_per_lin
     for data in high_surfaces(140, 8) {
         let s = data.exact().unwrap();
         let (du, dv) = s.domain();
-        let u = gen::parameter(&mut rng, &data.knots_u, du);
-        let v = gen::parameter(&mut rng, &data.knots_v, dv);
+        let u = sample::parameter(&mut rng, &data.knots_u, du);
+        let v = sample::parameter(&mut rng, &data.knots_v, dv);
         for along_u in [true, false] {
             let (t, k) = if along_u {
                 (u, &data.knots_u)
@@ -852,12 +852,8 @@ fn tensor_product_insertion_elevation_and_split_are_the_curve_operations_per_lin
             same_lines(&el, &each, along_u, &what);
             let mid = {
                 let (a, b) = if along_u { du } else { dv };
-                let x = gen::parameter(&mut rng, k, (a, b));
-                if a < x && x < b {
-                    x
-                } else {
-                    a + (b - a) * 0.5
-                }
+                let x = sample::parameter(&mut rng, k, (a, b));
+                if a < x && x < b { x } else { a + (b - a) * 0.5 }
             };
             let (lo, hi) = if along_u {
                 s.split_u(mid)
@@ -879,8 +875,8 @@ fn tensor_product_operations_commute_across_directions() {
     for data in high_surfaces(150, 8) {
         let s = data.exact().unwrap();
         let (du, dv) = s.domain();
-        let u = gen::parameter(&mut rng, &data.knots_u, du);
-        let v = gen::parameter(&mut rng, &data.knots_v, dv);
+        let u = sample::parameter(&mut rng, &data.knots_u, du);
+        let v = sample::parameter(&mut rng, &data.knots_v, dv);
         if let (Ok(a), Ok(b)) = (
             s.insert_knot_u(u, 1).and_then(|t| t.insert_knot_v(v, 2)),
             s.insert_knot_v(v, 2).and_then(|t| t.insert_knot_u(u, 1)),

@@ -65,11 +65,7 @@ pub(super) fn powi(x: f64, n: i32) -> f64 {
         acc_e = -acc_e;
     }
     let r = round_scaled(acc.0, acc.1, acc_e.clamp(-4000, 4000) as i32);
-    if neg {
-        -r
-    } else {
-        r
-    }
+    if neg { -r } else { r }
 }
 
 /// Whether a finite `y` is an integer, and whether it is odd.

@@ -51,13 +51,10 @@ impl Hasher for FixedHasher {
     }
 
     fn write(&mut self, bytes: &[u8]) {
-        let mut chunks = bytes.chunks_exact(8);
-        for c in &mut chunks {
-            let mut w = [0u8; 8];
-            w.copy_from_slice(c);
-            self.write_u64(u64::from_le_bytes(w));
+        let (chunks, rest) = bytes.as_chunks::<8>();
+        for c in chunks {
+            self.write_u64(u64::from_le_bytes(*c));
         }
-        let rest = chunks.remainder();
         if !rest.is_empty() {
             let mut w = [0u8; 8];
             for (d, s) in w.iter_mut().zip(rest) {

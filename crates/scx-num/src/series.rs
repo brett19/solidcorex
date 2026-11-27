@@ -687,15 +687,11 @@ mod tests {
         let y = x.inv_sqrt(tr).unwrap();
         // y^2 x = 1 to every kept order
         let one = y.mul(&y, tr).mul(&x, tr);
-        for i in 0..=MAX_S {
-            for k in 0..=MAX_E {
+        for (i, row) in one.c.iter().enumerate() {
+            for (k, &got) in row.iter().enumerate() {
                 let want = if i == 0 && k == 0 { 1.0 } else { 0.0 };
                 // the binomial sum stops at tr.s + tr.e terms, which covers every kept order
-                assert!(
-                    (one.c[i][k] - want).abs() < 1e-12,
-                    "{i} {k} {}",
-                    one.c[i][k]
-                );
+                assert!((got - want).abs() < 1e-12, "{i} {k} {got}");
             }
         }
         assert_eq!(y.c[0][0], 0.5);
@@ -782,9 +778,9 @@ mod tests {
         let tr = Trunc::new(6, 2).unwrap();
         let d = no_constant();
         let mut di = Ser::constant(Ivl::from(0.0));
-        for i in 0..=MAX_S {
-            for k in 0..=MAX_E {
-                di.set(i, k, Ivl::from(d.c[i][k]));
+        for (i, row) in d.c.iter().enumerate() {
+            for (k, &v) in row.iter().enumerate() {
+                di.set(i, k, Ivl::from(v));
             }
         }
         let (mut p, mut q, mut pd) = (

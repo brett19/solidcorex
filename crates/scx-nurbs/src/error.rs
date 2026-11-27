@@ -276,9 +276,7 @@ impl fmt::Display for NurbsError {
             Self::DerivativeOrder { order, max } => {
                 write!(f, "derivative order {order} is above {max}")
             }
-            Self::Unclamped => {
-                f.write_str("the end knots are not of multiplicity degree + 1")
-            }
+            Self::Unclamped => f.write_str("the end knots are not of multiplicity degree + 1"),
             Self::Degenerate { parameter } => write!(
                 f,
                 "a knot difference rounded to zero or the result overflowed evaluating at {parameter}"

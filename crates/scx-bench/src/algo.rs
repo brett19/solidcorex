@@ -9,18 +9,18 @@
 //! Newton's root (`newton2`) and Krawczyk's test (`krawczyk2`), with Krawczyk's test of
 //! `x^2 - a` (`krawczyk1`) besides.
 
-use crate::case::{same, Case};
-use crate::{edges, pin, seeded, NoError, Rng};
+use crate::case::{Case, same};
+use crate::{NoError, Rng, edges, pin, seeded};
 
 use scx_algo::krawczyk;
-use scx_algo::local_solve1d::LocalSolve1d as XSolve1d;
 use scx_algo::local_solve_nd::LocalSolveNd as XSolveNd;
+use scx_algo::local_solve1d::LocalSolve1d as XSolve1d;
 use scx_algo::polynomial as xpoly;
 use scx_num::interval::Ivl as XIvl;
 use solidcore::blend::fillet_section::interval::Ivl as PIvl;
 use solidcore::error::Result as PResult;
-use solidcore::geom::local_solve1d::{EvalFunction, FunctionValue, LocalSolve1d as PSolve1d};
 use solidcore::geom::local_solve_nd::{EvalNFunctions, LocalSolveNd as PSolveNd};
+use solidcore::geom::local_solve1d::{EvalFunction, FunctionValue, LocalSolve1d as PSolve1d};
 use solidcore::geom::matrix::Matrix;
 use solidcore::geom::polynomial as ppoly;
 

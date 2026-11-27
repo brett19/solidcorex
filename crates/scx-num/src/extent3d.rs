@@ -99,9 +99,9 @@
 use crate::error::{Invalid, NumError, Result};
 use crate::extent1d::{Extent1d, Hull1d};
 use crate::math::{
-    is_infinite_param, Point3, Vec3, BIG_DOUBLE, EFF_ZERO, EFF_ZERO_SQ, INFINITE_PARAMETER, PI,
+    BIG_DOUBLE, EFF_ZERO, EFF_ZERO_SQ, INFINITE_PARAMETER, PI, Point3, Vec3, is_infinite_param,
 };
-use crate::vector3d::{asin, sqrt, Axis, UnitVec3};
+use crate::vector3d::{Axis, UnitVec3, asin, sqrt};
 
 /// Classification of one interval of an extent (`SmBoundaryType`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

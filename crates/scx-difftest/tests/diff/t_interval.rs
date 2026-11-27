@@ -287,7 +287,7 @@ diff!(
         )
     },
     {
-        use m::series::{v_add, v_hull, v_scale, v_sub, V3};
+        use m::series::{V3, v_add, v_hull, v_scale, v_sub};
         let (p, q) = (m::v3i(six(p)), m::v3i(six(q)));
         (
             V3::<f64>::from_vec3(m::v3(a)),

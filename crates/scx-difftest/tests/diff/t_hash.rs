@@ -79,7 +79,7 @@ macro_rules! state {
 }
 
 diff!(ht_voxels, |seed: usize, cnt: [f64; 3], scale: f64| {
-    use m::hash_table::{FindPairsOptions, ObjsInVoxels, GAP_HISTOGRAM_BUCKETS};
+    use m::hash_table::{FindPairsOptions, GAP_HISTOGRAM_BUCKETS, ObjsInVoxels};
     let mut r = seed as u64 * 0x1234_5678 + cnt[0].to_bits();
     let dims = cnt.map(|c| (c.abs() as usize) % 5);
     let unit = m::e3([0.0, 0.0, 0.0, scale, scale, scale]);
@@ -99,7 +99,7 @@ diff!(ht_voxels, |seed: usize, cnt: [f64; 3], scale: f64| {
                 let p = m::p3([q(&mut r), q(&mut r), q(&mut r)]);
                 let zt = [0.0, 1e-6, 1e-3, 0.1][(next(&mut r) % 4) as usize];
                 let mut upd = Vec::new();
-                let res = if next(&mut r) % 2 == 0 {
+                let res = if next(&mut r).is_multiple_of(2) {
                     v.add(id, p, zt, Some(&mut upd))
                 } else {
                     v.add(id, p, zt, None)
@@ -125,9 +125,9 @@ diff!(ht_voxels, |seed: usize, cnt: [f64; 3], scale: f64| {
                     .collect();
                 let mode = next(&mut r);
                 let opts = FindPairsOptions {
-                    limit_index: (mode % 3 == 0).then(|| (next(&mut r) % 30) as usize),
-                    buckets: (mode % 5 == 0).then_some(&bl[..]),
-                    histogram: (mode % 2 == 0).then_some(&mut hist),
+                    limit_index: mode.is_multiple_of(3).then(|| (next(&mut r) % 30) as usize),
+                    buckets: mode.is_multiple_of(5).then_some(&bl[..]),
+                    histogram: mode.is_multiple_of(2).then_some(&mut hist),
                 };
                 match m::ht_find_pairs(&mut v, opts) {
                     Ok(p) => (

@@ -7,7 +7,7 @@
 use core::cmp::Ordering;
 use core::ops::{Add, Mul, Neg, Sub};
 
-use crate::exact::{split, Int};
+use crate::exact::{Int, split};
 
 /// An exact rational `num / den * 2^exp`. Reduced: zero is `0 / 1 * 2^0`; otherwise `num`
 /// is odd, `den` odd and positive, and they share no factor. Equal values are equal
@@ -247,11 +247,7 @@ impl Rat {
                 }
             }
         };
-        if neg {
-            -magnitude
-        } else {
-            magnitude
-        }
+        if neg { -magnitude } else { magnitude }
     }
 }
 
@@ -266,11 +262,7 @@ impl Ord for Rat {
             .num
             .mul(&o.den)
             .cmp_scaled(self.exp, &o.num.mul(&self.den), o.exp);
-        if a > 0 {
-            by
-        } else {
-            by.reverse()
-        }
+        if a > 0 { by } else { by.reverse() }
     }
 }
 

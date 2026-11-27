@@ -25,7 +25,7 @@
 //! enclosures until the nearest and every kind are decided, up to a limit.
 
 use crate::analytic::{Cone, Ellipse, Torus, V3};
-use crate::bound::{self, rat_to_dd, up, Bound};
+use crate::bound::{self, Bound, rat_to_dd, up};
 use crate::dd::{self, Dd};
 use crate::poly::Poly;
 use crate::rat::Rat;

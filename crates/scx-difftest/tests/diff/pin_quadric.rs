@@ -164,11 +164,7 @@ fn fit_layout(c: &Case, rng: &mut Rng) -> (Layout, f64, String) {
                     let got = c.nurb.point(t, (Side::Above, Side::Above)).unwrap().rounded;
                     let e = dist(&c.kind.point_at(&layout, t), got) / c.size;
                     // a layout that cannot be evaluated (one arc of a full turn) fits nothing
-                    if e.is_nan() {
-                        f64::INFINITY
-                    } else {
-                        e
-                    }
+                    if e.is_nan() { f64::INFINITY } else { e }
                 })
                 .fold(0.0, f64::max);
             if best.as_ref().is_none_or(|b| err < b.1) {
@@ -318,7 +314,7 @@ fn report(name: &str, t: &Tally) {
 }
 
 fn frame(rng: &mut Rng) -> Frame {
-    scx_testkit::gen::frame(rng, 10.0)
+    scx_testkit::sample::frame(rng, 10.0)
 }
 
 /// Full and partial domains, degrees: `(u0, u1, v0, v1)`.

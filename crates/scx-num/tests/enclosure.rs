@@ -59,11 +59,7 @@ impl Rng {
     /// A double with a random 53-bit significand, sign and binary exponent in `[lo, hi]`.
     fn normal(&mut self, lo: i32, hi: i32) -> f64 {
         let m = (1.0 + self.unit()) * pow2(lo + self.below((hi - lo + 1) as u64) as i32);
-        if self.next_u64() & 1 == 0 {
-            m
-        } else {
-            -m
-        }
+        if self.next_u64() & 1 == 0 { m } else { -m }
     }
     /// An operand: mostly normal doubles of moderate size, sometimes 0, -0, 1, an integer,
     /// or a short-significand dyadic (so sums and products are often exact).
@@ -292,19 +288,11 @@ fn check_quotient(t: &mut Tally, name: &str, a: Ivl, b: Ivl, r: Ivl, k: i32) {
         let xs = x * pow2(k);
         let below = r.lo == f64::NEG_INFINITY || {
             let ly = prod(r.lo, y);
-            if y > 0.0 {
-                ly.le(xs)
-            } else {
-                ly.ge(xs)
-            }
+            if y > 0.0 { ly.le(xs) } else { ly.ge(xs) }
         };
         let above = r.hi == f64::INFINITY || {
             let hy = prod(r.hi, y);
-            if y > 0.0 {
-                hy.ge(xs)
-            } else {
-                hy.le(xs)
-            }
+            if y > 0.0 { hy.ge(xs) } else { hy.le(xs) }
         };
         t.ok(below && above, || {
             format!("{name}({a:?}, {b:?}) = {r:?} misses the corner ({x:e}, {y:e})")
@@ -883,7 +871,7 @@ fn inverse_square_root_series_enclose_the_binomial_series() {
             for k in 0..=e {
                 let n = (i + k) as u32;
                 let r = y.at(i, k);
-                let mut a = Exact::of(if n % 2 == 0 { 1.0 } else { -1.0 });
+                let mut a = Exact::of(if n.is_multiple_of(2) { 1.0 } else { -1.0 });
                 a = a.scale(binom(2 * n, n)).scale(binom(n, i as u32));
                 for _ in 0..i {
                     a = a.scale(c1);

@@ -94,7 +94,7 @@
 
 use crate::error::{Invalid, NumError, Result};
 use crate::extent3d::BoundaryType;
-use crate::math::{is_infinite_param, EFF_ZERO, EFF_ZERO_DEG, INFINITE_PARAMETER};
+use crate::math::{EFF_ZERO, EFF_ZERO_DEG, INFINITE_PARAMETER, is_infinite_param};
 use crate::tol::{are_same, are_same_to_tol};
 
 /// Classification of a value against an interval (`SmExtentPointType`).
@@ -1188,9 +1188,10 @@ mod tests {
         assert!(full.is_closed(360.0));
         assert!(q.is_value_on_periodic_boundary(360.0, 360.0, EFF_ZERO).0);
         assert!(q.are_disjoint_periodic(&Extent1d::spanning(100.0, 200.0), 360.0, -1.0));
-        assert!(q
-            .intersect_periodic(&Extent1d::spanning(100.0, 200.0), 0.0, AtSeam::Join)
-            .is_err());
+        assert!(
+            q.intersect_periodic(&Extent1d::spanning(100.0, 200.0), 0.0, AtSeam::Join)
+                .is_err()
+        );
     }
 
     #[test]

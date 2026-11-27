@@ -14,9 +14,9 @@
 use crate::harness::{Bits, Out};
 use scx_algo::error::{EvalError, SolveError, SolveFailure};
 use scx_num::NumError;
-use solidcore::error::geom::GeomFailure;
-use solidcore::error::Failure;
 use solidcore::SolidError;
+use solidcore::error::Failure;
+use solidcore::error::geom::GeomFailure;
 
 impl Bits for String {
     fn bits(&self, o: &mut Out) {
@@ -350,15 +350,15 @@ pub type RepD = ((bool, Vec<f64>), (i32, u64, bool));
 
 /// The scx side.
 pub mod x {
-    use super::{f1, fd, found_n, solve_pin, Class, Diag, PinErr, Rec1, RecN, RepD, St1, XErr};
+    use super::{Class, Diag, PinErr, Rec1, RecN, RepD, St1, XErr, f1, fd, found_n, solve_pin};
     use core::num::NonZeroUsize;
     use scx_algo::error::SolveError;
+    use scx_algo::local_solve_nd::{
+        BoundaryHandler, LocalSolveNd, NdReport, Outcome, TerminationReason, jacobian,
+    };
     use scx_algo::local_solve1d::{
         Bracket3, Domain1d, Goal, IterQueue1d, IterationValue, LocalSolve1d, Sample,
         SolverAlgorithm,
-    };
-    use scx_algo::local_solve_nd::{
-        jacobian, BoundaryHandler, LocalSolveNd, NdReport, Outcome, TerminationReason,
     };
     use scx_num::extent1d::Extent1d;
 
@@ -676,17 +676,17 @@ pub mod x {
 
 /// The pin's side.
 pub mod s {
-    use super::{pin_error, Class, Diag, PinErr, Rec1, RecN, RepD, St1};
+    use super::{Class, Diag, PinErr, Rec1, RecN, RepD, St1, pin_error};
     use core::num::NonZeroUsize;
+    use solidcore::SolidError;
     use solidcore::geom::extent1d::{Extent1d, ExtentNd};
+    use solidcore::geom::local_solve_nd::{
+        BoundaryHandler, EvalNFunctions, LocalSolveNd, compute_jacobian,
+    };
     use solidcore::geom::local_solve1d::{
         EvalFunction, FunctionValue, IterQueue1d, IterationValue, LocalSolve1d, SolverAlgorithm,
     };
-    use solidcore::geom::local_solve_nd::{
-        compute_jacobian, BoundaryHandler, EvalNFunctions, LocalSolveNd,
-    };
     use solidcore::geom::matrix::Matrix;
-    use solidcore::SolidError;
 
     /// A solver error as `(Display, the error)`.
     pub fn pin(e: SolidError) -> PinErr {

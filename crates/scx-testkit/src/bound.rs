@@ -265,20 +265,11 @@ pub fn rat_to_dd(x: &Rat) -> Dd {
     Dd::of((hi, lo))
 }
 
-/// The next double up from a finite `x`.
-fn next_up(x: f64) -> f64 {
-    if x == 0.0 {
-        return f64::from_bits(1);
-    }
-    let b = x.to_bits();
-    f64::from_bits(if x > 0.0 { b + 1 } else { b - 1 })
-}
-
 /// A double at least `x`.
 pub fn up(x: &Rat) -> f64 {
     let f = x.to_f64();
     match Rat::from_f64(f) {
-        Some(r) if &r < x => next_up(f),
+        Some(r) if &r < x => f.next_up(),
         _ => f,
     }
 }

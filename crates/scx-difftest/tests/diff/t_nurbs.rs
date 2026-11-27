@@ -3,7 +3,7 @@
 //! (`basis_derivs`, `crv_eval`, `crv_derivs`, `crv_split`), `nurbs::crv_tool::p1`
 //! (`Curve::insert_knot`, `Curve::elevate_degree`) and `nurbs::bezier` (`binomial`,
 //! `eval_one_basis`, `split`), on seeded curves of every knot and weight kind from
-//! `scx_testkit::gen` (3D; the pin's 2D marker is gone from scx).
+//! `scx_testkit::sample` (3D; the pin's 2D marker is gone from scx).
 //!
 //! The results are compared as `Option`s (`None` for any error): the error types differ by
 //! design (`NurbsError` against `SolidError`). The pin defects are in `pin_defects.rs`.
@@ -12,10 +12,9 @@ use crate::diff;
 use crate::harness::{Gen, SplitMix64};
 use crate::pin_defects;
 
-use scx_num::certified::{next_down, next_up};
 use scx_num::hash::Rng;
 use scx_testkit::data::CurveData;
-use scx_testkit::gen::{self, Knots, Spec, Weights};
+use scx_testkit::sample::{self, Knots, Spec, Weights};
 
 /// A curve as data: its knots and its homogeneous points `[w x, w y, w z, w]`.
 pub type Hom = (Vec<f64>, Vec<[f64; 4]>);
@@ -41,7 +40,7 @@ pub fn curves(rng: &mut SplitMix64) -> Vec<CurveData<3>> {
         ] {
             for weights in [Weights::Unit, Weights::Moderate, Weights::NearZero] {
                 for count in [degree + 1, degree + 5] {
-                    out.push(gen::curve(
+                    out.push(sample::curve(
                         &mut r,
                         Spec {
                             degree,
@@ -64,9 +63,9 @@ impl Gen for At {
             let mut us = vec![0.0, 1.0, -0.25, 1.25, -1e-300, 1.0 + f64::EPSILON];
             let interior = curve.knots.iter().copied().filter(|&k| k > 0.0 && k < 1.0);
             for k in interior.take(3) {
-                us.extend([k, next_down(k), next_up(k)]);
+                us.extend([k, k.next_down(), k.next_up()]);
             }
-            us.extend([next_up(0.0), next_down(1.0)]);
+            us.extend([0.0_f64.next_up(), 1.0_f64.next_down()]);
             for _ in 0..3 {
                 us.push(rng.uniform(0.0, 1.0));
             }
@@ -163,11 +162,7 @@ pub mod s {
 
     /// The pin's `Left` is the span starting at `u` (scx `Above`).
     pub fn side(above: bool) -> Side {
-        if above {
-            Side::Left
-        } else {
-            Side::Right
-        }
+        if above { Side::Left } else { Side::Right }
     }
 
     fn v3(v: Vec3) -> [f64; 3] {

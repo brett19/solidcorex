@@ -19,19 +19,19 @@
 //! - [`poly`]: rational polynomials with their real roots isolated with certainty.
 //! - [`project`]: every stationary point of the distance to an ellipse, a torus and a cone,
 //!   certified, with the certified nearest.
-//! - [`gen`]: seeded generators of well- and ill-conditioned inputs.
+//! - [`sample`]: seeded generators of well- and ill-conditioned inputs.
 
 pub mod analytic;
 pub mod bound;
 pub mod data;
 pub mod dd;
 pub mod exact;
-pub mod gen;
 pub mod nurbs;
 pub mod poly;
 pub mod project;
 pub mod quadric;
 pub mod rat;
+pub mod sample;
 
 pub use rat::Rat;
 

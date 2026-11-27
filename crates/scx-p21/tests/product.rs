@@ -32,12 +32,12 @@ use std::fmt::Write as _;
 use scx_p21::error::{EntityCause, Limit, Warning};
 use scx_p21::part42::geom::Placement;
 use scx_p21::product::{
-    pre_defined_rgb, read, BodyKind, Colour, Definition, Frame, Item, ItemKind, Link, Node,
-    Operator, Product, ProductStructure, Representation, RepresentationMap, Side, StyledItem,
-    SurfaceStyle, Transformation, MAX_ASSEMBLY_DEPTH, MAX_VISITS,
+    BodyKind, Colour, Definition, Frame, Item, ItemKind, Link, MAX_ASSEMBLY_DEPTH, MAX_VISITS,
+    Node, Operator, Product, ProductStructure, Representation, RepresentationMap, Side, StyledItem,
+    SurfaceStyle, Transformation, pre_defined_rgb, read,
 };
 use scx_p21::units::{Context, Units};
-use scx_p21::{parse, Exchange, P21Error};
+use scx_p21::{Exchange, P21Error, parse};
 
 /// The refusal of `#id` for `cause`.
 fn at(id: u64, cause: EntityCause) -> P21Error {

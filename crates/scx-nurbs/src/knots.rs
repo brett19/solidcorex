@@ -11,7 +11,7 @@ use core::fmt;
 
 use scx_num::extent1d::Extent1d;
 
-use crate::{NurbsError, Result, MAX_DEGREE};
+use crate::{MAX_DEGREE, NurbsError, Result};
 
 /// Which of the two pieces meeting at a knot a parameter on it belongs to.
 ///

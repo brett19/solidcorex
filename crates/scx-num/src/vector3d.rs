@@ -120,11 +120,7 @@ use crate::vector2d::{Point2, Vec2};
 /// (upstream also flags an error below `-SM_EFF_ZERO_SQ`).
 #[must_use]
 pub fn sqrt(x: f64) -> f64 {
-    if x <= 0.0 {
-        0.0
-    } else {
-        x.sqrt()
-    }
+    if x <= 0.0 { 0.0 } else { x.sqrt() }
 }
 
 /// `sm_cbrt` (`smos_CubeRoot`): cube root.
@@ -1216,11 +1212,7 @@ impl Vec3 {
         // (or tiny) finite vector can't overflow (or underflow) on the way.
         let scaled = |v: Self| {
             let m = v.x.abs().max(v.y.abs()).max(v.z.abs());
-            if m > 0.0 {
-                v / m
-            } else {
-                v
-            }
+            if m > 0.0 { v / m } else { v }
         };
         let (normal, line) = (scaled(normal), scaled(line));
         let target = self.cross(line);
@@ -1544,9 +1536,11 @@ mod tests {
             assert!(a.dot(*b).abs() < 1e-15);
         }
         assert!(Vec3::ZERO.make_unit_ortho_vectors(None).is_err());
-        assert!(Vec3::new(f64::NAN, 0.0, 1.0)
-            .make_unit_ortho_vectors(None)
-            .is_err());
+        assert!(
+            Vec3::new(f64::NAN, 0.0, 1.0)
+                .make_unit_ortho_vectors(None)
+                .is_err()
+        );
     }
     use crate::math::EFF_ZERO_RAD;
 
@@ -1799,9 +1793,11 @@ mod tests {
             .make_unit_ortho_vectors(None)
             .unwrap();
         assert_eq!((*x, *y, *z), (Vec3::Y, Vec3::Z, Vec3::X));
-        assert!(Vec3::new(1.0, 2.0, 3.0)
-            .solve_two_linear_equations(Vec3::new(2.0, 4.0, 6.0))
-            .is_err());
+        assert!(
+            Vec3::new(1.0, 2.0, 3.0)
+                .solve_two_linear_equations(Vec3::new(2.0, 4.0, 6.0))
+                .is_err()
+        );
         // Rotation about the vector itself is the identity.
         assert_eq!(Vec3::Z.rotate_vec_about_axis(Vec3::Z, 1.0), Vec3::Z);
         assert!(Vec3::X.is_colinear_with(
