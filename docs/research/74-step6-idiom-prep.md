@@ -2208,3 +2208,445 @@ bounds the sampled distance from above) and for the normal's side. No tests remo
    everywhere would compare normals on the certificate's pieces.
 3. A minimax refinement, if non-rational fits near the accuracy matter on the corpus (measure on
    the corpus once SP2b lands).
+
+## 27. SP8 as built (11-27)
+
+`scx-step` gains the product structure: `Imported::products` is now a `ProductTree` (parts, the
+assembly expanded into instances, every body with its placement), replacing the raw p21
+`ProductStructure` SP1 passed through. No Cargo edge was added (`scx-num` was SP1's; `Affine`
+and `Frame` come from it). 17 new tests in `crates/scx-step/tests/products.rs`, on synthetic
+files; the 17 SP1 tests are unchanged.
+
+### 27.1 Public API
+
+```rust
+pub struct ProductTree { pub parts: Vec<Part>, pub instances: Vec<Instance>,
+                         pub placed: Vec<PlacedBody> }       // bodies_of(i), placements_of(body)
+pub struct Part { definition: u64, id, name, description }
+pub struct Instance { part: usize, by: Option<Use>, parent: Option<usize>, world: World }
+pub struct Use { entity: u64, id, name, reference_designator }
+pub struct PlacedBody { body: u64, kind: BodyKind, representation: u64, instance: usize,
+                        mapped_by: Vec<u64>, world: World }
+pub enum World { Placed(Affine), Unplaced(Unplaced) }
+pub enum Unplaced { NoRelationship{occurrence}, NoTransformation{link}, NotAboutChild{link},
+                    Several{occurrence}, Degenerate{entity}, Units{representation, fault} }
+```
+
+`Affine` is `scx_num::math::Affine` (column vectors, `parent * local`; millimetres). The tree is
+built inside `read` (crate-private `products::tree`), so the units a body was read in are known.
+
+### 27.2 What the pin did, and what replaced it
+
+| Pin (`step_assembly.rs`) | Here |
+|---|---|
+| An occurrence with no relationship: identity | `Unplaced::NoRelationship`; the bodies below are listed with the same cause |
+| A relationship without a transformation: identity | `Unplaced::NoTransformation` |
+| Which side of a relationship is the child: "rep_1 unless only rep_2 is in the child's closure", so neither or both fall to rep_1 | exactly one side must be in the child's representations, else `NotAboutChild` |
+| Several relationships on one occurrence: the first | equal maps are one placement, different ones `Several` |
+| Degenerate or singular frame: a `String` error refuses the whole file | `Unplaced::Degenerate{entity}`, the file is read; `inverse` is `Affine::inverse` (regular proved, not a `det == 0.0` test) |
+| Absent reference direction: x chosen as global X unless `|z.x| >= 0.9`, then Y | ISO 10303-42's rule: +Z made square to the axis, +X where the axis is along Z |
+| Operator axes: unit-length as written, not made square | ISO `base_axis`: Z from axis3, X and Y made square to it, so a skew operator is not read as a shear (a mirrored one stays a mirror) |
+| A body shared by representations with different length units: not said (SP1 left it to SP8) | scaled by the ratio of the lengths, relative to the representation it was read in; a representation with no usable length unit is `Unplaced::Units`, never mm |
+| Plain relationships followed one hop from a mapped item, full closure from a definition | full closure in both; a relationship that is an occurrence's own placement is not a "same shape" link (the pin's closure took it for one) |
+| A body reached through two related representations: listed twice | once per `(body, mapped_by)` in an instance |
+| Errors: `String` | cycles, depth and instance count are p21's typed `P21Error` (`StepError::Structure`); nothing else refuses |
+
+A root is the world frame by definition (identity). That is the one placement that is stated
+rather than read.
+
+### 27.3 Choices, with cases for and against
+
+- **Unplaced is a value, not an error.** For: valid input is never refused (one bad frame in a
+  large assembly must not lose the file), the caller sees every body and decides, and a failing
+  default (identity) cannot hide in a result. Against: a caller who ignores `World` gets no
+  warning; `Placed` must be matched. `World::placed()` returns an `Option` so that the match is
+  one line.
+- **Descendants of an unplaced instance carry the same cause** rather than a `Below` variant:
+  the cause names the occurrence at fault, which is what a user needs. Against: the tree does not
+  say which ancestor, but `parent` does.
+- **ISO's default for an absent reference direction, not the pin's.** The pin chooses by a
+  threshold; the standard gives a formula (as recalled: `first_proj_axis`, +Z unless the axis is
+  +Z, then +X; the standard's text is not in the repo, and the case of an axis along -Z, where
+  +Z is parallel to it and the standard's text has no x, takes +X as the same rule). The two
+  agree for an axis along Z and differ for others (axis +X: ISO gives x = +Z, the pin +Y).
+  Files that omit the direction on a tilted axis are written by tools that mean the standard's.
+  Reversible: one function (`default_ref`). Needs a corpus file with an omitted direction on a
+  tilted axis to confirm.
+- **Scale ratio when the length unit differs.** For: the numbers of a body are in the unit of
+  the representation that lists it, and a file that lists one body in two does mean it at both
+  sizes. Against: a shared body read at the first representation's unit gets an instance at
+  1/25.4 scale, which a rigid-only consumer must refuse; `Affine::axis_lengths` and `is_rigid`
+  say so.
+- **Dedupe within an instance by (body, mapped_by).** Two mapped items that place the same body
+  in one part stay two (they differ in `mapped_by`); the same shape in two related
+  representations is one.
+- **Not checked: that the relationship's other side is in the parent.** The pin does not either;
+  exporters link the child to the parent's root representation or to a sub-representation, and
+  a check would refuse real files. A wrong side shows as `Several` or a placement the caller
+  can compare with `parent`.
+
+### 27.4 Tests
+
+Ported from the pin's `step_assembly` tests (rebuilt as synthetic p21 text through `read`, with
+units): the three writings of the transformation (conformant; `rep_1` the child with `item_1` in
+the parent; `item_1` in the child) all put the child at +754 X; nested composition (a quarter
+turn about Z then +10 X lands at (0,10,0), the other order would give (10,0,0)); a mapped item
+(origin onto target, closed form (5,-1,0)); a cycle (now a `Structure` error from p21's read).
+Not ported: the real HOOPS extract (`assembly_extract.stp`): its licence is unverified (74 §7).
+New: instances, parts and occurrences (names, reference designator); a shared part placed once
+per use; an occurrence with no placement and its grandchild (unplaced, bodies listed);
+`NotAboutChild`; `NoTransformation`; `Several` and its agreeing twin; a degenerate frame; the
+standard's default reference direction (axis +X and -Z); an operator scale of 2; a body in an
+inch and a millimetre representation (1/25.4); a representation with no length unit
+(`Unplaced::Units`, and with an assumed unit scaled by it); one shape in two related
+representations; reading twice is equal. No test was removed.
+
+### 27.5 Cost
+
+The walk is linear in instances times the representations of a definition's closure, plus the
+bodies listed; the dedupe is `n log n` in one instance's bodies. Measured with a throwaway
+timer (release, an assembly of one root and n uses of one part with a body): the whole
+`scx_step::read` (p21's product read, the skeleton and the tree) takes 0.27 ms for n = 100, 3.1 ms
+for n = 1,000 and 13.9 ms for n = 5,000; p21's `product::read` alone takes 0.18, 1.8 and 6.6 ms.
+So the tree and the skeleton together add about the cost of the p21 read again, and the
+growth is linear. Before this row the tree was not built, so that is the added work; the added
+work per instance is one `Affine` product and, per body, a clone of the (empty) `mapped_by`.
+
+### 27.6 Not done
+
+
+`Imported` still lists the bodies once (read from the first representation); SP2 builds each
+`Brep` once and the caller instances it with `placed`. Colours and styles (`ProductStructure::
+styles`) are no longer on `Imported`: nothing consumed them; they are one line to carry through
+when a row needs them (SP3 writes them). Units of an instance's own occurrence frames are p21's.
+
+### 27.7 Proposed 04 row
+
+| 11-27 | (For the owner's review) `scx_step::Imported::products` is a `ProductTree`: the file's parts, its assembly expanded into instances, and every body with the map that places it in the world frame (`World::Placed(Affine)`, millimetres, `parent * local`). A placement the file does not give or gives unusably (no relationship, no transformation, a relationship not about the child, two different placements, a degenerate frame, a length unit missing) is `World::Unplaced(cause)`, never the identity, and the file is still read. Frames follow ISO 10303-42 (absent reference direction, operator axes made square); a body listed in a representation of another length unit is scaled by the ratio. Edges: none added | The pin's identity fallbacks, first-of-several, rep_1 guess and `String` refusals are failing defaults; a typed value keeps the assembly readable | 74 §27 |
+
+## 17. SU6 as built (11-27)
+
+`scx_surface::gap` (re-exported at the crate root), branch `su6`. No new Cargo edge; four kinds'
+`axes()` became `pub(crate)`.
+
+```rust
+pub struct Bracket { lower, upper }            // lower() upper() width() exceeds(allowance) -> Option<bool>
+pub enum Aim { Width(f64), Against(f64) }      // a bracket this narrow, or one that leaves the allowance
+pub enum Short { Exhausted(Exhausted), Stopped, Precision }
+pub enum Pending { NurbsSurface }
+pub enum GapError { Undecided { reached: Bracket, why: Short }, Pending(Pending), NotFinite, BadAim { value } }
+
+pub fn curve_surface_gap(curve: &Curve, over: &Extent1d, surface: &Surface, aim: Aim,
+                         budget: &mut Budget, stop: &Stop) -> Result<Bracket, GapError>;
+pub fn pcurve_edge_gap(surface: &Surface, pcurve: &Curve2, curve: &Curve, over: &Extent1d,
+                       aim: Aim, budget: &mut Budget, stop: &Stop) -> Result<Bracket, GapError>;
+pub fn vertex_curve_gap(point: Point3, curve: &Curve, t: f64) -> Result<Bracket, GapError>;
+pub fn point_curve_gap(point: Point3, curve: &Curve, over: &Extent1d, aim: Aim,
+                       budget: &mut Budget, stop: &Stop) -> Result<Bracket, GapError>;
+pub fn curve_curve_gap(a: &Curve, a_over: &Extent1d, b: &Curve, b_over: &Extent1d, aim: Aim,
+                       budget: &mut Budget, stop: &Stop) -> Result<Bracket, GapError>;
+```
+
+The module's doc holds the table from the pin's functions to these.
+
+**One search for every gap.** Each gap is `sup_t d(t)` over a range. One branch and bound finds it.
+Pieces sit on a max-heap keyed by an upper bound over the piece, ties to the earlier `t`, so the
+result is deterministic. The lower bound is the largest certified `d` at a piece end. The range is
+first cut at the curve's knots (and the kind's arc breaks, below), then into four pieces each.
+
+A piece's upper bound is the smallest of:
+
+- the chord bound on the vector `D(t)` whose length is the gap:
+  `|D| <= max(|D(a)|, |D(b)|) + h^2/8 sup|D''|`;
+- the same bound on `q = |D|^2`, square-rooted, whose `q'' = 2(|D'|^2 + D . D'')` stays small
+  where `D` turns at a near-constant length;
+- the direct interval enclosure.
+
+Second derivatives come from a forward-differentiation ring over intervals (`Jet2`), evaluated
+through the kinds' own `eval<T: Ring>`. The aim is met when the bracket is narrow enough, or when it
+leaves the allowance. Otherwise the answer is `Undecided` with the bracket reached: the budget ran
+out (R6), the caller stopped it, or the pieces can no longer be cut in floating point (`Precision`).
+The budget unit is one point evaluated, the pin's `MAX_PIECES` and `MAX_PATCHES` made the caller's.
+The nearest point of a curve to a point is the same engine run on `-d`.
+
+**Choices, with cases for and against.**
+
+- **The gap is to the kind's whole surface, not the face.**
+  - For: scx-surface sits below the Brep and has no trim. The whole surface's distance is a closed
+    form in the kind's frame (`z`, `|p| - r`, `rho - r`, the torus tube, the cone's generator
+    `|perp|` or apex, the larger where the foot crosses the apex), so it is smooth and the brackets
+    close.
+  - For: the pin's `curve_face_gap_bound` also bounds against the surface's parameter box, not the
+    trimmed face.
+  - Against: an edge near the surface but off its face's trim reads as close. A caller needing the
+    face's gap uses `pcurve_edge_gap`, an upper bound on it because the pcurve lies in the face.
+    CF2a's finding needs a lower bound above the allowance, and the whole surface's lower bound is
+    conservative for that.
+- **Lines, circles and ellipses as interval series.**
+  - For: the squares the closed forms need are taken on the series' coefficients, so a circle
+    coaxial with a cylinder, or lying in its plane, is a constant to rounding. It closes in under 64
+    units, where a jet bound would cut it to the width.
+  - Against: this is a second path beside the jets. NURBS curves take the jet path (tested on a
+    quadratic and a rational two-piece cubic).
+- **The pcurve gap at the same parameter.**
+  - For: a pcurve shares its edge's parameter, so `sup_t |S(p(t)) - C(t)|` is what same-parameter
+    means, and it needs no nearest-point search.
+  - Against: an edge whose pcurve is parametrised off its curve's parameter reads as a large gap.
+    That is a defect the checker should report, so this is the intended reading.
+  - The kinds' `u` is a rational arc parameter, exact only within one arc. A piece whose uv box
+    straddles an arc break falls back to the direct `Surface::box_over` bound.
+- **Curve to curve is one-sided Hausdorff**, `sup_t min_s |a(t) - b(s)|`. The symmetric distance is
+  the larger of both calls; the stitcher's pairing (BW, ST2) wants the one-sided distance.
+  - A piece's bound uses three correspondences and takes the smallest: `s` linear between the
+    ends' nearest parameters (only where `b` has no knot between them), or `s` held at either end's.
+  - The held correspondences are first order, but they survive feet that tie across a seam
+    (`0` against `2 pi` on a full circle).
+- **Vertex to edge has no budget.** It is one interval evaluation at the vertex's parameter.
+
+**Not here (deviations from the row).**
+
+- `seam_bound` is not ported. At the pin it encloses the largest normal angle along a seam
+  (`seam_angle_*`, 1,412 lines), which is a continuity question, not a gap. No step 6 row consumes
+  it through SU6; BW4's `tangent_all_along` is its likely user. A follow-up row SU6b is proposed.
+- NURBS surfaces return `Pending(NurbsSurface)` from `curve_surface_gap` and `pcurve_edge_gap`. A
+  point's distance to one is `Surface::invert`'s, but the bound over a piece (the chain rule
+  through `partials_over_piece`, step 5's SM chain) is not built.
+
+**Tests** (`crates/scx-surface/src/gap/tests.rs`, 21, all on a tilted frame away from the origin,
+truths closed form, brackets at most 1e-9 wide unless stated):
+
+- line above a plane;
+- circle in its plane (0), and tilted (`R sin a`);
+- circle coaxial with a cylinder (exact, under 64 units), and off its axis by 1e-3 and by 1e-7;
+- a line tangent to a cylinder;
+- sphere cases; a cone by its generator and by its apex; a torus; an ellipse against a plane;
+- NURBS curves over a plane;
+- a NURBS surface is pending;
+- budget run out and stop are `Undecided` with brackets holding the truth;
+- allowances, decided or undecided at the allowance itself;
+- determinism;
+- pcurves on a plane, on a cylinder across its arc breaks, and a latitude on a sphere (the fitted
+  pcurve);
+- vertex at an edge end; point against a curve;
+- curves against curves: concentric circles (to 1e-6, below), coincident circles (0), parallel
+  segments with and without overhang, an arc against its chord (the sagitta).
+
+Nothing removed.
+
+**Cost.** Side-channel timers, release build, a 24-core build host, 200 calls each, compared on
+the pin's own test case: a line, and a quadratic bow, `6.8e-5` above a box's top face.
+
+| call | per call | answer |
+|---|---|---|
+| pin `curve_face_gap_bound`, line, floor 1e-7 | 1,925 us | upper `6.80000008e-5` |
+| pin `curve_face_gap_bound`, bow, floor 1e-7 | 2,041 us | upper `6.80000008e-5` |
+| pin `curve_face_gap_bound_within`, bow, floor 1e-7 | 89,362 us | upper `6.8098e-5` |
+| pin `curve_face_gap_bound_within`, bow, floor 1e-9 | 161,274 us | upper `6.8024e-5` |
+| `curve_surface_gap`, line, any aim (5 units) | 4.5 us | `[6.79999999993e-5, 6.80000000028e-5]` |
+| `curve_surface_gap`, NURBS bow, any aim (5 units) | 26.7 us | `[6.79999999992e-5, 6.80000000122e-5]` |
+
+The scx calls are 70 to 6,000 times cheaper. They also return a lower bound, which the pin does not.
+The two do not do the same work. The pin converts the face to a NURBS net and fits a correspondence
+on every call; here the plane is a closed form. That makes this the cheap end, not a like-for-like
+comparison on hard surfaces.
+
+On curved kinds, at 1e-9 unless stated:
+
+- coaxial and off-axis circles on a cylinder, sphere, cone and torus cases: 5 to 32 units each;
+- pcurves: 5 units on a plane, about 8,350 on a cylinder across its breaks, 6,471 on a sphere
+  latitude. The fitted pcurve's real deviation is about the width, so the search cuts finely there.
+  That sphere case costs 293 units at 1e-5 and 2,917 at 1e-8;
+- curve to curve: 94 to 1,011 units;
+- concentric circles: 12,089 units (86 ms) at 1e-5 and 319,969 (1.3 s) at 1e-9, which is
+  `width^(-1/3)` (Open 1). One unit is about 4 us in release (an inner nearest-point search of
+  about 38 evaluations per outer point for curve to curve).
+
+Nothing calls these on an existing path yet, so no existing path got slower.
+
+**Open.**
+
+1. Plateaus are the expensive case. Where the gap is the same all along (concentric circles, 0.5
+   apart), every piece must be bounded below the largest point's lower bound, and the cost grows as
+   `width^(-1/3)` (the piece bound's error is third order in `h`). Callers that ask `Against`
+   an allowance pay far less than callers asking a width. The coincident case (gap 0) is cheap.
+2. The face trim. Should scx-bodyq offer the face's own gap (the surface gap restricted to the
+   trimmed region) on top of these, or do CF2a and BW3 manage with the whole surface's lower bound
+   and the pcurve's upper bound?
+3. Should SU6b (the seam angle) come before BW4, or should BW4 build on `tangent_edge`'s bounds as
+   §2 says?
+
+**Proposed 04 row.** Certified gaps live in `scx_surface::gap`: every gap is `sup_t d(t)` by one
+deterministic branch and bound returning a `Bracket` or a typed `GapError`
+(`Undecided { reached, why }` per R2/R6, `Pending`, `NotFinite`, `BadAim`); the leaf calls take
+`(Aim, &mut Budget, &Stop)` with one budget unit per point evaluated; edge-to-surface is to the
+kind's whole surface, the face's gap is bounded above by the pcurve at the same parameter;
+curve-to-curve is one-sided; NURBS surfaces are pending until step 5's piece bounds.
+
+## 26. ST1 as built (11-27)
+
+New crate `scx-stitch` (layers.txt after `scx-boolean`; one Cargo edge, stitch → bodyq, plus
+stitch → brep and → num, which bodyq already sits on). The first stage of §4.3: the sheets are
+gathered into one body, and vertices of different sheets within coincidence are identified as
+04 rows 108 and 186 rule. The edge stage (ST2) and orientation (ST3) are not built. A stitch that
+needs either one returns a typed pending error, so no result leaves a join undone. Test bodies
+come from `scx_testkit::bodies` (no `scx-make`). 16 tests: 11 in `crates/scx-stitch/tests/stitch.rs`
+and 5 unit tests of the identification in `src/points.rs`.
+
+### 26.1 Public API
+
+```rust
+pub fn stitch(sheets: &[&Brep], want: Want, cx: &mut Cx<'_>) -> Result<Stitched, StitchError>;
+#[non_exhaustive] pub enum Want { Sheets, Solid }
+pub enum NoItems {}                                   // a stitch skips nothing
+pub struct Stitched { pub done: Done<NoItems>, pub report: StitchReport }
+#[non_exhaustive] pub struct StitchReport { pub identified: Vec<Identified> }
+#[non_exhaustive] pub struct Identified { vertex: VertexId, members: Vec<(Operand, VertexId)>,
+                                          kept: (Operand, VertexId), spread: Length }
+pub enum StitchError { Refused(StitchRefusal), Unsupported(StitchUnsupported),
+                       Exhausted { limit }, Cancelled, Defect(StitchDefect) }   // kind(), name()
+pub enum StitchRefusal { VerticesWithinCoincidence { operand, vertices: [VertexId; 2] },
+                         OtherDocument { operand } }
+pub enum StitchUnsupported { Chain { operand, vertices }, Edges { operand, edge }, Solid,
+                             TooLarge, Query { operand, at: Entity, cause: BodyqUnsupported } }
+pub enum StitchDefect { Draft, Query { operand, at }, Finish(Box<FinishCause>) }
+```
+
+Sheet `i` is operand `i` of `Changes`. Sheet 0 is `sheets[0].edit()`, so its entities keep their
+ids. Every other sheet's regions, vertices, edges, shells and faces are copied in, in that order.
+Each copied vertex, edge and face is `derive`d from its operand entity. An edge of three or more
+fins gets its sheet's radial order back through `adjacency_mut`. Any finished body is taken,
+solids included.
+
+### 26.2 Identification (`points.rs`)
+
+1. **Pairs.** One grid holds every sheet's vertices. Its cell is twice the largest reach (reach =
+   the vertex's accuracy, at least the zone), and each vertex is tested against the 27 cells
+   around it. A pair is within coincidence when its distance is at most the larger reach, which
+   is `units::coincident`. This is O(V) on spread-out input, and the pairs are a sorted set.
+2. **Clearance.** Two vertices of one sheet within coincidence give `Refused(VerticesWithinCoincidence)`.
+   The error names the lowest such pair, the one row 186 rules per operand.
+3. **Components** of "within coincidence" are formed by union-find over the pairs, rooted at the
+   lowest index (sheet, then id), before any merge.
+4. **One vertex per sheet.** In such a component, the kept record is the vertex with the smallest
+   reach, then the lowest (x, y, z). It is an operand vertex's own record.
+5. **Chains** (R7). Here one sheet has two or more vertices in the component. Each other vertex is
+   anchored to its nearest vertex of that sheet (ties by id), and each anchor keeps its own point.
+   The result is `Unsupported(Chain)` in three cases: a second sheet also has two vertices; a
+   vertex lies beyond coincidence of its nearest anchor; or two vertices of one sheet land on
+   one anchor.
+
+### 26.3 Accuracy
+
+Each identified vertex gets a `Coincident` warning. For each other member there is a
+`coincident` lineage record onto sheet 0's vertex, or an `Origin::Operand` derive into a new
+vertex. Row 186 says "every new vertex and edge end records its measured gap as `Measured`", so
+the merged vertex's accuracy covers how far the merge moves things. It is set to the largest of
+three distances from the kept point:
+
+- the spread;
+- each member's edge-curve ends at it (the interval min at `ends[0]`, max at `ends[1]`);
+- each use's surface point there (pcurve ends, or `UseGeom::Point`).
+
+When that is beyond the kept vertex's reach, its accuracy is raised to it as `Measured`, with a
+`Raise` and an `AccuracyRaised` warning. Without this, `finish` refuses: `EdgeEndOffVertex`
+allows only `re + rv`, and a curve end from another sheet can sit nearly `max(reach)` away.
+
+### 26.4 The edge stage, pending
+
+Until ST2, `stitch` returns `Unsupported(Edges { operand, edge })` before building in two cases:
+
+- (a) Edges of two sheets have both ends in the same two identified vertices. These are edges to
+  join.
+- (b) A vertex of another sheet, not identified with one of the edge's ends, lies in the edge's
+  box. This is an edge to split, or one passing within coincidence.
+
+For (b), the loose `Edge::bounding_box` (grown by the edge's accuracy and the zone) is tested
+first, then the certified `tight_box_charged`. This is the reason for the bodyq edge. Either box
+is grown further by the vertex's reach beyond the zone. The candidates come from three
+axis-sorted arrays, using the slab of the axis that holds the fewest. The check is conservative:
+an edge that only passes near a vertex, inside its box, is refused too, until ST2 measures the
+gap. Sheets that meet only at vertices, or not at all, stitch whole.
+
+### 26.5 Choices, with cases for and against
+
+| Choice | For | Against |
+|---|---|---|
+| `Result<Stitched, StitchError>` with `Stitched { done: Done<NoItems>, report }`, not the literal `Done<StitchReport>` | `Done<C>`'s parameter is the skip-cause type (`Skipped<C>` is for skip-mode ops). A stitch skips nothing, so `C` is uninhabited and the stitch's own report sits beside it | One more wrapper to unpack; ST2 may want `Done<C>` to carry a skipped edge, and that would change `NoItems` |
+| `cx` last: `stitch(sheets, want, cx)` | Matches `boolean` and `tight_box_charged` | §4.3 wrote `cx` before `want` |
+| Kept record by geometry (smallest reach, then lowest point), not "the lower sheet index's" (§4.3, row 186's "a's record kept") | §4.4 and ST4 want permuted input to give identical bits. Choosing by sheet index cannot give that; choosing by geometry does, and it is no less true (each is an operand vertex within coincidence of all members). The smallest reach is the best-known point | Departs from the words of row 186 and §4.3. With equal reach the lowest point is arbitrary, though deterministic. Ids still follow sheet 0, so "identical bits" holds for the geometry, not the ids |
+| Raise to the measured gap (row 186), not "never raises" (§4.3 step 4) | The finished body must pass `finish`'s end checks, and an edge end from another sheet can lie nearly `max(reach)` off the kept point, beyond `re + rv`. Row 186 asks for `Measured` gaps on every new vertex and edge end | Step 4's claim that identification needs no raise holds only for the vertex itself, not for the curve ends that move with it. The raise grows boxes and tolerances downstream |
+| Chains anchored (R7, rows 108/186), unlike BO1 (row 214, no anchoring) | Stitch points are all operand vertices, and anchors keep their own points, so anchoring is well defined | In practice a chain's middle vertex is also within coincidence of the anchors' edges, so stitch returns `Edges` before anchoring matters until ST2. Anchoring is tested at the unit level |
+| Same-sheet pairs refused whenever found, before anything else | Row 186: the refusal is per operand, and `check` reports the same pair | A pair inside a sheet that no other sheet comes near is refused too. That matches the row, but it is stricter than the pin, which only looks at merge candidates |
+| Edge stage pending as a typed error, checked before building | No result silently leaves a joinable edge pair or a vertex on an edge unjoined (analytic first) | The box check is conservative: it can refuse sheets whose edges only pass within the box |
+| Sheet 0 edited in place | Its ids survive, which is what a caller stitching onto a body expects; lineage records only the others | The result's ids depend on which sheet is first |
+
+### 26.6 Tests
+
+`tests/stitch.rs` (11):
+
+- corner touch gives one vertex: 7 vertices, 8 edges, 2 faces; sheet 0's id kept; coincident
+  lineage from operand 1; 3 created vertices, 4 edges and 1 face, each derived from operand 1;
+  a `Coincident` warning; no raise;
+- 0.5 zone apart joins and 2 zone apart stays apart;
+- a 0.005 mm merge with a 0.01 accuracy vertex raises the kept vertex to 0.005, `Measured`;
+- a shared edge gives `Edges`;
+- a vertex on another sheet's edge gives `Edges`;
+- one sheet's vertices within coincidence are `Refused`, operand 1, lower id first;
+- another resolution gives `OtherDocument`;
+- `Want::Solid` gives `Solid`;
+- no sheets give an empty body; one sheet gives itself with empty `Changes` and a clean report;
+- run twice gives equal reports, changes and points, and three permutations give the same points;
+- a set stop gives `Cancelled`.
+
+`points.rs` (5):
+
+- a chain anchors to the nearest vertex;
+- two sheets doubled is `Chain`;
+- two of one sheet on one anchor is `Chain`;
+- a same-sheet pair is refused, lowest first;
+- the kept vertex is chosen by geometry, whatever the order.
+
+No tests were removed.
+
+### 26.7 Measurements
+
+Release build, one thread, best of 5, on the second build machine under load (load average
+about 12). Measured with a throwaway timer test, not committed. Unit quad sheets from
+`bodies::generate(QuadSheet, 0, n)`.
+
+| Case | Sheets | V | E | Identified | Work | Time | Per vertex |
+|---|---|---|---|---|---|---|---|
+| two 1x1, corner | 2 | 8 | 8 | 1 | 50 | 0.006 ms | 0.76 us |
+| two 10x10, corner | 2 | 242 | 440 | 1 | 6,287 | 0.38 ms | 1.57 us |
+| two 30x30, corner | 2 | 1,922 | 3,720 | 1 | 127,447 | 3.7 ms | 1.91 us |
+| two 60x60, corner | 2 | 7,442 | 14,640 | 1 | 940,687 | 15.9 ms | 2.14 us |
+| checker 4x4 of 4x4 sheets | 8 | 200 | 320 | 9 | 5,117 | 0.39 ms | 1.93 us |
+| checker 10x10 | 50 | 1,250 | 2,000 | 81 | 74,399 | 2.8 ms | 2.22 us |
+| checker 20x20 | 200 | 5,000 | 8,000 | 361 | 577,949 | 12.3 ms | 2.46 us |
+
+Time is close to linear in V. Work, which charges one unit per slab candidate, grows like
+V^1.5 on these flat grids. The edge gate's thinnest-axis slab holds a whole row of vertices,
+because every vertex lies in z = 0 and an axis-aligned edge has a near-zero span on one axis
+only. The pin has no equivalent gate. ST2 replaces the gate with real edge candidates (box
+tree), and a box tree over vertices would make the gate O(V log V) if the gate stays. This is
+not a regression of existing work: the crate is new.
+
+### 26.8 Deviations and open questions
+
+Deviations from §4.3 and the ST1 row: the return type (§26.5), argument order, kept record by
+geometry, and the raise. ST1 does not build the edge stage, splits, orientation or `Want::Solid`.
+These are ST2 and ST3, and each returns a typed `Unsupported` now.
+
+Open questions:
+
+1. Should ST2 keep `Stitched` or move the report into `Done<C>`? If ST2 skips undecided edge
+   pairs, `C` becomes their cause and `NoItems` goes.
+2. Row 186 says "a's record kept". Should the 04 wording change to "the smallest reach, then the
+   lowest point" so that ST4's permuted-bits truth holds?
+3. A chain end to end only reaches anchoring once ST2 can tell that the middle vertex's
+   nearness to an anchor's edges is explained by the identification. Until then, chains surface
+   as `Edges`.
+
+### 26.9 Proposed 04 row
+
+| 11-27 | (For the owner's review) `scx_stitch::stitch(&[&Brep], Want, &mut Cx) -> Result<Stitched, StitchError>`: sheet `i` is operand `i`, sheet 0 is edited in place, and the others are copied in with `Origin::Operand` lineage. Vertices of different sheets within coincidence are one vertex, from one grid over all sheets. Two of one sheet are `Refused(VerticesWithinCoincidence)`. A chain is anchored to the nearest vertex of its doubled sheet, else `Unsupported(Chain)`. The kept record is the member with the smallest reach, then the lowest point, so permuted input gives the same points. That vertex is raised, `Measured`, to the farthest edge or pcurve end the merge moves, where that is beyond its reach. Until ST2, edges to join or split, and a vertex inside another sheet's edge box, are `Unsupported(Edges)`; `Want::Solid` is `Unsupported(Solid)`. `Stitched { done: Done<NoItems>, report: StitchReport }`, since a stitch skips nothing. Edges: stitch → bodyq | Amends row 186's "a's record kept" for stitch, so that §4.4's permuted-bits truth holds; amends §4.3 step 4 ("never raises"), since moved curve ends need the measured gap row 186 asks for | 74 §26 |

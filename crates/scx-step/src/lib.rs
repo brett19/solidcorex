@@ -18,17 +18,24 @@
 //!   and their faces as entity ids, with the surface kind the file names. SP2 to SP4 fill it
 //!   with geometry and topology.
 //!
+//! - **The product tree** ([`ProductTree`]) is the file's assembly expanded into placed
+//!   instances: every use of a part ([`Instance`]) and every body with the map that places it in
+//!   the world frame ([`PlacedBody`], [`World`]). A placement the file does not give, or gives
+//!   unusably, is [`World::Unplaced`] with its cause; nothing is placed by guess.
+//!
 //! `scx-step` never heals. The report has a field for the raises SP2 makes to enclosed gaps
 //! ([`ImportReport::raised`]); gap closing is `scx-stitch`'s and is requested with
 //! [`ReadOptions::closing_gaps`], which is [`StepError::Pending`] until SP4.
 
 mod error;
+mod products;
 mod read;
 mod report;
 mod skeleton;
 pub mod units;
 
 pub use error::{Pending, StepError};
+pub use products::{Instance, Part, PlacedBody, ProductTree, Unplaced, Use, World};
 pub use read::{Imported, ImportedBody, ReadOptions, SolidOrSheet, read};
 pub use report::{AssumedUnits, GapKind, ImportReport, ImportWarning, Raise, SkipReason, Skipped};
 pub use skeleton::{FacePlan, ShellPlan, ShellRole};
