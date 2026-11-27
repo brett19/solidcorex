@@ -6,10 +6,11 @@
 //! run-twice determinism.
 //!
 //! **scx.** Most of the operations are not written yet. Each check scx cannot run answers a
-//! typed [`NotYet`] naming the missing piece and its task (MK2, BO, MA1, ...), so DT2 and
-//! DT3 replace one arm at a time: today only [`scx_make::block`] runs, for the block
-//! constructors (outcome, topology, determinism by the `scx-record` encoding). Every check
-//! scx runs must pass.
+//! typed [`NotYet`] naming the missing piece and its task (BO, BQ, CK1, ...), so DT2 and
+//! DT3 replace one arm at a time: today the constructors run (`scx_make`'s block,
+//! cylinder, cone, sphere, torus and extrusion), judged on outcome, volume and area
+//! (`scx_mass` at 1e-9), topology, determinism by the `scx-record` encoding and dangling
+//! vertices. Every check scx runs must pass.
 //!
 //! **The pin.** It runs every recipe and is judged against truth, never the other way. A
 //! check where it contradicts truth is a finding; each finding must be covered by a
@@ -42,6 +43,7 @@ use scx_testkit::csg::{Csg, ProbeSpec, Side, box_points};
 use scx_testkit::profile::Seg;
 use scx_testkit::recipe::{
     self, BoxFace, Dimension, Invariant, Kind, Op, Outcome, Part, Recipe, Refusal, Shape, Topology,
+    Unsupported as RecipeUnsupported,
 };
 
 use solidcore::boolean::api_brep::{boolean_difference, boolean_intersection, boolean_union};
@@ -146,31 +148,12 @@ impl Check {
     }
 }
 
-/// A constructor scx does not have yet.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Primitive {
-    /// `scx_make::cylinder` (MK2).
-    Cylinder,
-    /// `scx_make::cone` (MK2).
-    Cone,
-    /// `scx_make::sphere` (MK2).
-    Sphere,
-    /// `scx_make::torus` (MK2).
-    Torus,
-    /// `scx_make::extrusion` (MK3).
-    Extrusion,
-}
-
 /// Why scx cannot run a check yet: the missing piece, by the task that adds it. DT2 and DT3
 /// replace an arm with the real call when its task lands; [`NotYet::task`] names it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum NotYet {
-    /// A constructor (MK2, MK3).
-    Make(Primitive),
     /// The Boolean (BO).
     Boolean,
-    /// `scx_mass::mass` (MA1).
-    Mass,
     /// Point classification against a body (BQ).
     Classify,
     /// The tessellator (TS).
@@ -187,10 +170,7 @@ impl NotYet {
     /// The 72 task that lifts it.
     pub fn task(self) -> &'static str {
         match self {
-            NotYet::Make(Primitive::Extrusion) => "MK3",
-            NotYet::Make(_) => "MK2",
             NotYet::Boolean | NotYet::Lineage => "BO",
-            NotYet::Mass => "MA1",
             NotYet::Classify => "BQ",
             NotYet::Mesh => "TS",
             NotYet::Contract => "CK1",
@@ -991,8 +971,13 @@ pub struct Finding {
 
 /// The pin's volume (or area) allowance: its requested accuracy, the recipe's slack and
 /// one rounding of the closed form.
-fn allowance(truth: f64, slack: f64) -> f64 {
-    PIN_ACCURACY * truth.abs() + slack + 1e-13 * truth.abs()
+/// The length that turns the recipe's volume slack into an area slack.
+fn area_scale(volume: f64) -> f64 {
+    scx_num::fmath::cbrt(volume.abs()).max(f64::MIN_POSITIVE)
+}
+
+fn allowance(accuracy: f64, truth: f64, slack: f64) -> f64 {
+    accuracy * truth.abs() + slack + 1e-13 * truth.abs()
 }
 
 /// The rungs, in units of `c`, at which [`reach`] measures a point's distance.
@@ -1060,7 +1045,7 @@ fn judge_body(
     if let Some(t) = r.truth {
         if checks.contains(&Check::Volume) {
             match &f.volume {
-                Ok(v) if (v - t.volume).abs() <= allowance(t.volume, t.slack) => {}
+                Ok(v) if (v - t.volume).abs() <= allowance(PIN_ACCURACY, t.volume, t.slack) => {}
                 Ok(v) => find(
                     Check::Volume,
                     format!(
@@ -1073,9 +1058,9 @@ fn judge_body(
             }
         }
         if let (true, Some(a)) = (checks.contains(&Check::Area), t.area) {
-            let scale = scx_num::fmath::cbrt(t.volume.abs()).max(f64::MIN_POSITIVE);
+            let scale = area_scale(t.volume);
             match &f.area {
-                Ok(v) if (v - a).abs() <= allowance(a, t.slack / scale) => {}
+                Ok(v) if (v - a).abs() <= allowance(PIN_ACCURACY, a, t.slack / scale) => {}
                 Ok(v) => find(
                     Check::Area,
                     format!("truth {a}, pin {v} (relative {:.1e})", (v - a) / a),
@@ -1285,25 +1270,69 @@ fn scx_frame(f: &TFrame) -> Option<scx_num::frame::Frame> {
 
 /// The first piece scx lacks to build the recipe's body.
 fn scx_gap(r: &Recipe) -> Option<NotYet> {
-    let missing = |p: &Part| match p.shape {
-        Shape::Block { .. } => None,
-        Shape::Cylinder { .. } => Some(NotYet::Make(Primitive::Cylinder)),
-        Shape::Cone { .. } => Some(NotYet::Make(Primitive::Cone)),
-        Shape::Sphere { .. } => Some(NotYet::Make(Primitive::Sphere)),
-        Shape::Torus { .. } => Some(NotYet::Make(Primitive::Torus)),
-        Shape::Extrusion { .. } => Some(NotYet::Make(Primitive::Extrusion)),
-    };
-    r.parts()
-        .find_map(missing)
-        .or_else(|| (!r.is_constructor()).then_some(NotYet::Boolean))
+    (!r.is_constructor()).then_some(NotYet::Boolean)
 }
 
-fn scx_dimension(d: scx_make::Dimension) -> Dimension {
+/// Truth's name for the size scx refuses; a cone's two radii are truth's `Radius`, and a
+/// torus's major radius has no name in truth (no recipe refuses it).
+fn scx_dimension(d: scx_make::Dimension) -> Option<Dimension> {
+    use scx_make::Dimension as D;
     match d {
-        scx_make::Dimension::X => Dimension::X,
-        scx_make::Dimension::Y => Dimension::Y,
-        scx_make::Dimension::Z => Dimension::Z,
-        _ => Dimension::Height,
+        D::X => Some(Dimension::X),
+        D::Y => Some(Dimension::Y),
+        D::Z => Some(Dimension::Z),
+        D::Radius | D::BaseRadius | D::TopRadius => Some(Dimension::Radius),
+        D::Height => Some(Dimension::Height),
+        D::Minor => Some(Dimension::Minor),
+        _ => None,
+    }
+}
+
+/// Whether scx's error is the outcome truth states for a constructor.
+fn scx_outcome_matches(e: &scx_make::MakeError, want: &Outcome) -> bool {
+    use scx_make::{MakeError as E, Refusal as R, Unsupported as U};
+    match (e, want) {
+        (E::Refused(R::Size { dimension, .. }), Outcome::Refused(Refusal::Size(d))) => {
+            scx_dimension(*dimension) == Some(*d)
+        }
+        (E::Refused(R::ZeroRadii), Outcome::Refused(Refusal::NoBody))
+        | (E::Refused(R::SelfIntersecting { .. }), Outcome::Refused(Refusal::SelfIntersecting))
+        | (E::Refused(R::Span { .. }), Outcome::Refused(Refusal::Span))
+        | (
+            E::Unsupported(U::HornTorus { .. }),
+            Outcome::Unsupported(RecipeUnsupported::HornTorus),
+        ) => true,
+        _ => false,
+    }
+}
+
+/// The one adapter from the testkit's segments to the planar layer's; equal arc ends are
+/// the whole circle.
+fn scx_segment(s: &Seg) -> scx_planar::Segment {
+    use scx_num::frame::Sense;
+    use scx_num::vector2d::Point2;
+    use scx_planar::Segment;
+    match *s {
+        Seg::Line { start, end } => Segment::line(Point2::from(start), Point2::from(end)),
+        Seg::Arc {
+            centre,
+            start,
+            end,
+            ccw,
+        } => {
+            let sense = if ccw { Sense::Forward } else { Sense::Reversed };
+            if start == end {
+                let r = hypot(start[0] - centre[0], start[1] - centre[1]);
+                Segment::circle(Point2::from(centre), r, sense)
+            } else {
+                Segment::arc(
+                    Point2::from(centre),
+                    Point2::from(start),
+                    Point2::from(end),
+                    sense,
+                )
+            }
+        }
     }
 }
 
@@ -1311,10 +1340,37 @@ fn scx_build(
     frame: &scx_num::frame::Frame,
     p: &Part,
 ) -> Result<scx_brep::Brep, scx_make::MakeError> {
-    let Shape::Block { size } = p.shape else {
-        unreachable!("scx_gap admits blocks only");
-    };
-    scx_make::block(frame, size.map(mm), &scx_brep::Document::default()).map(|m| m.body)
+    let doc = scx_brep::Document::default();
+    match &p.shape {
+        Shape::Block { size } => scx_make::block(frame, size.map(mm), &doc).map(|m| m.body),
+        Shape::Cylinder { radius, height } => {
+            scx_make::cylinder(frame, mm(*radius), mm(*height), &doc).map(|m| m.body)
+        }
+        Shape::Cone { radii, height } => {
+            scx_make::cone(frame, radii.map(mm), mm(*height), &doc).map(|m| m.body)
+        }
+        Shape::Sphere { radius } => scx_make::sphere(frame, mm(*radius), &doc).map(|m| m.body),
+        Shape::Torus { major, minor } => {
+            scx_make::torus(frame, mm(*major), mm(*minor), &doc).map(|m| m.body)
+        }
+        Shape::Extrusion {
+            outer,
+            holes,
+            height,
+        } => {
+            let region = scx_planar::Region::new(
+                outer.iter().map(scx_segment).collect(),
+                holes
+                    .iter()
+                    .map(|h| h.iter().map(scx_segment).collect())
+                    .collect(),
+                doc.resolution(),
+            )
+            .map_err(|e| scx_make::MakeError::Refused(scx_make::Refusal::Profile(e)))?;
+            let span = scx_make::Span::new(mm(0.0), mm(*height));
+            scx_make::extrude(&region, frame, span, &doc).map(|m| m.body)
+        }
+    }
 }
 
 /// scx's topology, as truth counts it: solid regions, their shells, the genus from the
@@ -1326,22 +1382,57 @@ fn scx_topology(b: &scx_brep::Brep, t: &Topology) -> Verdict {
     let shells = solid.iter().map(|r| r.shells().count()).sum::<usize>() as u32;
     let faces: Vec<_> = b.faces().collect();
     let index: HashMap<_, _> = faces.iter().enumerate().map(|(i, f)| (f.id(), i)).collect();
+    // Truth's complex has no seams and no poles (T12): drop the edges a face meets
+    // twice and the collapsed ones, and count what is left.
     let mut patch = Uf::new(faces.len());
+    let mut kept: Vec<Vec<[scx_brep::VertexId; 2]>> = vec![Vec::new(); faces.len()];
+    let mut ends = BTreeSet::new();
+    let mut edges = 0i64;
     for e in b.edges() {
-        let fins: Vec<_> = e.fins().collect();
-        if let [a, c] = fins.as_slice() {
-            let (a, c) = (index[&a.face], index[&c.face]);
-            if faces[a].surface() == faces[c].surface() {
-                patch.join(a, c);
-            }
+        let fins: Vec<_> = e.fins().map(|f| index[&f.face]).collect();
+        let seam = matches!(fins.as_slice(), [a, c] if a == c);
+        if seam || matches!(e.shape(), scx_brep::EdgeShape::Collapsed) {
+            continue;
+        }
+        edges += 1;
+        ends.extend(e.ends());
+        for &f in &fins {
+            kept[f].push(e.ends());
+        }
+        if let [a, c] = fins.as_slice()
+            && faces[*a].surface() == faces[*c].surface()
+        {
+            patch.join(*a, *c);
         }
     }
-    let loops = |f: &scx_brep::Face<'_>| f.loops().len() as i64;
-    let genus_f = |f: &scx_brep::Face<'_>| {
-        i64::from(f.loops().len() == 0 && matches!(f.surface(), Surface::Torus(_)))
-    };
-    let fsum: i64 = faces.iter().map(|f| 2 - 2 * genus_f(f) - loops(f)).sum();
-    let chi = b.vertices().len() as i64 - b.edges().len() as i64 + fsum;
+    // a face's boundaries: the connected pieces of its kept edges
+    let bounds: Vec<i64> = kept
+        .iter()
+        .map(|es| {
+            let at: BTreeMap<_, _> = es
+                .iter()
+                .flatten()
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .enumerate()
+                .map(|(i, v)| (*v, i))
+                .collect();
+            let mut uf = Uf::new(at.len());
+            for [p, q] in es {
+                uf.join(at[p], at[q]);
+            }
+            (0..at.len())
+                .map(|i| uf.find(i))
+                .collect::<BTreeSet<_>>()
+                .len() as i64
+        })
+        .collect();
+    let genus_f =
+        |i: usize| i64::from(bounds[i] == 0 && matches!(faces[i].surface(), Surface::Torus(_)));
+    let fsum: i64 = (0..faces.len())
+        .map(|i| 2 - 2 * genus_f(i) - bounds[i])
+        .sum();
+    let chi = ends.len() as i64 - edges + fsum;
     let genus = i64::from(shells) - chi / 2;
     let mut bad = Vec::new();
     if solid.len() as u32 != t.solid_regions {
@@ -1370,15 +1461,15 @@ fn scx_topology(b: &scx_brep::Brep, t: &Topology) -> Verdict {
                 _ => None,
             };
             let mut got: BTreeMap<(Option<Kind>, u32, u32), u32> = BTreeMap::new();
-            for f in &faces {
-                let key = (kind(f.surface()), loops(f) as u32, genus_f(f) as u32);
+            for (i, f) in faces.iter().enumerate() {
+                let key = (kind(f.surface()), bounds[i] as u32, genus_f(i) as u32);
                 *got.entry(key).or_insert(0) += 1;
             }
             let mut want: BTreeMap<(Option<Kind>, u32, u32), u32> = BTreeMap::new();
             for p in &c.patches {
                 *want.entry((Some(p.kind), p.loops, p.genus)).or_insert(0) += p.count;
             }
-            let ve = [b.vertices().len() as u32, b.edges().len() as u32];
+            let ve = [ends.len() as u32, edges as u32];
             if got != want || ve != [c.vertices, c.edges] {
                 bad.push(format!(
                     "cells {ve:?} {got:?} (truth {:?} {want:?})",
@@ -1393,6 +1484,69 @@ fn scx_topology(b: &scx_brep::Brep, t: &Topology) -> Verdict {
         Verdict::Pass
     } else {
         Verdict::Fail(bad.join("; "))
+    }
+}
+
+/// The accuracy scx's mass properties are asked for and judged at (72 §8.1).
+const SCX_ACCURACY: f64 = 1e-9;
+
+fn scx_measure(
+    b: &scx_brep::Brep,
+    f: fn(
+        &scx_brep::Brep,
+        scx_mass::RelAccuracy,
+        &mut scx_brep::op::Scratch,
+        &mut scx_num::budget::Budget,
+        &scx_num::budget::Stop,
+    ) -> Result<scx_mass::Estimate, scx_mass::MassError>,
+) -> Result<f64, String> {
+    let accuracy = scx_mass::RelAccuracy::new(SCX_ACCURACY).map_err(|e| e.to_string())?;
+    f(
+        b,
+        accuracy,
+        &mut scx_brep::op::Scratch::new(),
+        &mut scx_num::budget::Budget::unlimited(),
+        &scx_num::budget::Stop::new(),
+    )
+    .map(|e| e.value)
+    .map_err(|e| e.to_string())
+}
+
+fn scx_judge(what: &str, got: Result<f64, String>, truth: f64, slack: f64) -> Verdict {
+    match got {
+        Ok(v) if (v - truth).abs() <= allowance(SCX_ACCURACY, truth, slack) => Verdict::Pass,
+        Ok(v) => Verdict::Fail(format!(
+            "{what}: truth {truth}, scx {v} (relative {:.1e})",
+            (v - truth) / truth
+        )),
+        Err(e) => Verdict::Fail(format!("{what}: scx fails: {e}")),
+    }
+}
+
+fn scx_volume(b: &scx_brep::Brep, r: &Recipe) -> Verdict {
+    match r.truth {
+        Some(t) => scx_judge(
+            "volume",
+            scx_measure(b, scx_mass::volume),
+            t.volume,
+            t.slack,
+        ),
+        None => Verdict::Fail("volume asked with no truth".into()),
+    }
+}
+
+fn scx_area(b: &scx_brep::Brep, r: &Recipe) -> Verdict {
+    match r.truth {
+        Some(t) => match t.area {
+            Some(a) => scx_judge(
+                "area",
+                scx_measure(b, scx_mass::area),
+                a,
+                t.slack / area_scale(t.volume),
+            ),
+            None => Verdict::Fail("area asked with no stated area".into()),
+        },
+        None => Verdict::Fail("area asked with no truth".into()),
     }
 }
 
@@ -1416,11 +1570,7 @@ pub fn scx_checks(r: &Recipe) -> BTreeMap<Check, Verdict> {
     for c in checks {
         let v = match (c, &first, &r.outcome) {
             (Check::Outcome, Ok(_), Outcome::Built(_)) => Verdict::Pass,
-            (
-                Check::Outcome,
-                Err(scx_make::MakeError::Refused(scx_make::Refusal::Size { dimension, .. })),
-                Outcome::Refused(Refusal::Size(d)),
-            ) if scx_dimension(*dimension) == *d => Verdict::Pass,
+            (Check::Outcome, Err(e), want) if scx_outcome_matches(e, want) => Verdict::Pass,
             (Check::Outcome, got, want) => Verdict::Fail(format!(
                 "truth {want:?}; scx {}",
                 match got {
@@ -1450,7 +1600,8 @@ pub fn scx_checks(r: &Recipe) -> BTreeMap<Check, Verdict> {
                     Verdict::Fail(format!("{dangling} edges name a missing vertex"))
                 }
             }
-            (Check::Volume | Check::Area, _, _) => Verdict::NotYet(NotYet::Mass),
+            (Check::Volume, Ok(b), _) => scx_volume(b, r),
+            (Check::Area, Ok(b), _) => scx_area(b, r),
             (Check::Classification, _, _) => Verdict::NotYet(NotYet::Classify),
             (Check::Valid | Check::Manifold, _, _) => Verdict::NotYet(NotYet::Contract),
             (Check::Mesh, _, _) => Verdict::NotYet(NotYet::Mesh),
