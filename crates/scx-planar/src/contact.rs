@@ -10,7 +10,10 @@
 //! far, or (for a shared joint) proved within the joint's neighbourhood. A meeting point
 //! proved inside both segments where the two proved cross transversally is a crossing.
 //!
-//! Lines decide by the exact orientation sign; arcs by intervals rounded outward. An arc's
+//! Lines decide by the exact orientation sign; arcs by intervals rounded outward. A whole
+//! circle is an arc whose angular range holds every direction; its seam point stands for
+//! both its ends, which is sound: the seam lies on the circle, so a test of it against the
+//! other segment is a test of a point of the circle. An arc's
 //! radius is the band between its two end distances, so a decision holds for every circle
 //! the arc may stand for.
 
@@ -49,6 +52,8 @@ pub(crate) struct ArcG {
     uw: Iv,
     /// The radius band: every radius between the two end distances.
     pub(crate) r: Iv,
+    /// A whole circle: every direction is inside it, and `s` and `e` are its seam.
+    full: bool,
 }
 
 impl Shape {
@@ -92,6 +97,25 @@ impl Shape {
                     w,
                     uw: u.cross(w),
                     r: u.norm2().sqrt().hull(w.norm2().sqrt()),
+                    full: false,
+                })
+            }
+            Segment::Circle { centre, radius, .. } => {
+                // The seam is the circle's one point given as data; the band holds both the
+                // radius and the seam's distance, which differ by its rounding.
+                let s = seg.start();
+                let ic = IP::exact(centre);
+                let u = IP::exact(s).sub(ic);
+                Self::Arc(ArcG {
+                    c: centre,
+                    s,
+                    e: s,
+                    ic,
+                    u,
+                    w: u,
+                    uw: u.cross(u),
+                    r: Iv::exact(radius).hull(u.norm2().sqrt()),
+                    full: true,
                 })
             }
         }
@@ -149,6 +173,9 @@ impl Shape {
 impl ArcG {
     /// The direction `q` from the centre lies strictly inside the arc's angular range.
     pub(crate) fn contains_dir(&self, q: IP) -> Verdict {
+        if self.full {
+            return Verdict::Yes;
+        }
         let a = self.u.cross(q).pos();
         let b = q.cross(self.w).pos();
         let minor = a.and(b);
@@ -164,6 +191,9 @@ impl ArcG {
 
     /// A direction from the centre strictly inside the arc.
     fn mid_dir(&self) -> IP {
+        if self.full {
+            return self.u.perp();
+        }
         let uh = self.u.scale(Iv::exact(1.0).div(self.u.norm2().sqrt()));
         let wh = self.w.scale(Iv::exact(1.0).div(self.w.norm2().sqrt()));
         if self.uw.pos() == Verdict::Yes {

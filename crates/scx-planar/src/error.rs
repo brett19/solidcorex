@@ -13,6 +13,7 @@
 //! | solidcore at the pin | here |
 //! |---|---|
 //! | `check_regions`: a NaN or a coordinate past `1e9` is `ProfileRefusal::FreeForm` | [`PlanarError::NotFinite`], [`PlanarError::OutOfRange`] |
+//! | none: a whole circle is a curve of its own | [`PlanarError::CircleWithOthers`] for a circle in a loop with other segments |
 //! | `check_regions`: a loop whose ends miss by more than the zone is refused | [`PlanarError::Open`] |
 //! | `check_regions`: an arc of radius within the zone is refused | [`Degenerate::Radius`] |
 //! | none: a segment shorter than the zone builds | [`Degenerate::Short`] |
@@ -93,6 +94,11 @@ pub enum PlanarError {
         /// Why.
         why: Degenerate,
     },
+    /// A whole circle shares its loop with other segments: a circle is a loop on its own.
+    CircleWithOthers {
+        /// The first circle in the loop.
+        at: SegmentRef,
+    },
     /// Two segments are proved to cross at a point interior to both.
     Crossing {
         /// The lesser segment.
@@ -136,6 +142,7 @@ impl PlanarError {
             Self::NotFinite { .. }
             | Self::OutOfRange { .. }
             | Self::Empty { .. }
+            | Self::CircleWithOthers { .. }
             | Self::Open { .. }
             | Self::Degenerate { .. }
             | Self::Crossing { .. }
@@ -152,6 +159,7 @@ impl PlanarError {
             Self::NotFinite { .. } => "NotFinite",
             Self::OutOfRange { .. } => "OutOfRange",
             Self::Empty { .. } => "Empty",
+            Self::CircleWithOthers { .. } => "CircleWithOthers",
             Self::Open { .. } => "Open",
             Self::Degenerate { why, .. } => match why {
                 Degenerate::Short => "Degenerate.Short",
@@ -188,6 +196,9 @@ impl fmt::Display for PlanarError {
             Self::NotFinite { at } => write!(f, "{at} has a non-finite coordinate"),
             Self::OutOfRange { at } => write!(f, "{at} has a coordinate out of range"),
             Self::Empty { in_loop } => write!(f, "{in_loop} has no segments"),
+            Self::CircleWithOthers { at } => {
+                write!(f, "{at} is a whole circle in a loop with other segments")
+            }
             Self::Open {
                 in_loop,
                 joint,
