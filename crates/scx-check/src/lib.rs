@@ -352,7 +352,7 @@ mod tests {
     const T: Vec3 = Vec3::new(0.0, 0.0, 1.0);
 
     fn dir(angle: f64) -> Vec3 {
-        Vec3::new(angle.cos(), angle.sin(), 0.0)
+        Vec3::new(fmath::cos(angle), fmath::sin(angle), 0.0)
     }
 
     fn fins(angles: &[f64]) -> Vec<(Vec3, bool)> {
