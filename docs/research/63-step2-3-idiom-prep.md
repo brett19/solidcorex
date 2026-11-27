@@ -1673,6 +1673,8 @@ seeded queries, from a throwaway bench since deleted.
   bench passed a degree interval and a degree guess to a solve that runs on the carried
   NURB's parameter, so the figure is not a fair comparison and is not claimed.
 
+**Perf follow-up (11-27).** The ellipse foot took 1.11 us a query because every query solved the quartic for a seed. `quadrant_root` now seeds with the foot of a point on the curve, `atan2(a v, b u)`, and polishes with the same safeguarded Newton (6 steps at most); a query that does not converge in them is redone from the quartic as before. No certificate is needed: the first-quadrant root of `g` is unique and the bracket `(0, pi/2)` holds every step, so either seed ends at the global nearest foot. The fast polish also stops where `g` is within rounding of zero (`|g| <= 4 eps (|k sin cos| + a u sin + b v cos)`) and the Newton step is within `4 eps s`; the quartic path keeps its old stop. Added work per query: one `atan2`, and a `sin_cos` per step, 1.0 to 3.6 steps on or within 1e-3 of the curve (the quartic ran every query before; it now runs for 0 to 6% of those, 2 to 39% of far points). Per query, best of 3 runs of 100 passes over 2,000 points, four ellipses (5/3, 10/1, 2/1.9, 1/8): on the curve 783/980/558/439 ns before, 136/175/127/104 after; 1e-9 off 786/1001/576/450 before, 180/227/169/148 after; 1e-3 off 802/1021/558/452 before, 206/317/204/212 after; far 842/857/756/807 before, 312/421/246/503 after. Some output bits change (7,147 of 22,400 test queries, on the angle in the last ulps); against the testkit's certified nearest the new distances are equally or more correct (the mean distance error is at or below the old on each of 7 ellipses, 1.9e-16 against 2.8e-16 and 2.6e-15 against 3.4e-15 at most; worst 8.9e-14 against 9.0e-14, the same ill-conditioned 100/0.01 ellipse), and the angles are as close (worst 1.9e-13 both). The pin's 33.5 ns answers only points on the curve.
+
 ### 3.11 CU6 as built (11-27)
 
 Proposed for review, not yet ruled.
@@ -2463,7 +2465,121 @@ Open from SU8:
 - normals along the curve (the pin's `evaluate_surface_normal`) are left to callers, which use
   `Surface::normal` at `uv().point(t)` with the sides from the same rule. The rule would be
   exposed if a second caller needs it.
-### 4.11 SU4 as built (11-27)
+### 4.11 pcurve as built (11-27)
+
+Ruled by the coordinator 11-27 for Brett's review (option 3 of four), built in two
+commits: the unambiguous pairs with typed refusals, then the angle line.
+
+```rust
+// scx-surface
+pub fn pcurve_of(curve: &Curve, surface: &Surface, over: Extent1d, tol: Length)
+    -> Result<Curve2, PcurveError>;
+pub enum PcurveError {            // #[non_exhaustive]; kind() and name()
+    EmptyInterval { .. }, BadTolerance { .. }, NotOnSurface { .. },   // Refused
+    CrossesPole { at: f64 },                                          // Refused
+    NoClosedForm { curve: CurveKind, surface: SurfaceKind },          // Unsupported
+    Inexact { .. },                                                   // Failed
+}
+// scx-curve
+pub enum AngleAxis { U, V }
+pub struct AngleLine2 { arcs: Arcs, axis: AngleAxis, start: f64, sense: Sense, other: f64, rate: f64 }
+pub enum Curve2 { .., AngleLine(AngleLine2) }
+pub mod arcs;                     // Arcs, ArcTrig, parameter_jet (moved from scx-surface)
+```
+
+| Pair | Pcurve |
+| --- | --- |
+| line, circle, ellipse, NURBS curve on a plane | the kind kept, through the plane's affine uv |
+| line along a cylinder's or cone's ruling | `Line2`: `u` fixed, `v` affine |
+| circle about the axis of a cylinder, cone, sphere or torus (a parallel) | `AngleLine2` in `u`, `v` fixed |
+| sphere's great circle through the poles, on one side of them | `AngleLine2` in `v` (the half `Arcs`), `u` fixed |
+| torus's tube circle | `AngleLine2` in `v`, `u` fixed |
+| meridian over an interval across a pole | `CrossesPole { at }`: the caller splits there |
+| anything else, any curve on a NURBS surface | `NoClosedForm` |
+
+**The decision (option 3: an exact `Curve2` kind for an angle-direction line).** The
+angle line's angle coordinate is `arcs.parameter(start ± t)`, the arc parameter of the
+D13 quarter-arc map; the other coordinate is `other + rate t` (`rate` is 0 for every
+case built here; it is kept for a helix-like line on a cylinder later).
+
+- The case for:
+  - It keeps the edge a `Circle` and the pcurve exact; nothing is fitted (D10).
+  - The pcurve runs at the edge's own parameter (same-parameter), as STEP's
+    `pcurve` and OCCT's `BRep_CurveOnSurface` expect; BR5 needs no reparametrisation.
+  - `scx-step` needs the inverse map anyway, to write the surfaces' radians uv.
+  - The cost is one `Curve2` arm and a small closed form: no effect on any other path.
+- The case against:
+  - A new kind every `Curve2` consumer must handle; inversion of it is
+    `Unsupported::AngleLineInversion` for now (a closed form exists: the angle's
+    `Arcs::angle`; not needed until SS or BR asks).
+  - Its second derivative jumps at an arc break (the map is C^1), so jets take a side,
+    as a NURBS curve's do.
+  - A rational quadratic `Curve2::Nurbs` (option 1) would have been an existing kind,
+    but it lifts at a different parameter from the edge (not same-parameter), and needs
+    `scx-nurbs` in every pcurve; rejected, with options 2 (a radians uv, which breaks D13)
+    and 4 (fit, which D10 forbids where a closed form exists).
+
+**Arcs placement.** `Arcs` moved from `scx-surface` to `scx-curve` as `pub mod arcs`, so
+both `Curve2` and the surfaces reach it without a cycle (`scx-surface` depends on
+`scx-curve`). Its parameter function is pure arithmetic, so `scx-num` was possible too;
+`scx-curve` keeps it beside its one 2-D user and out of the numeric layer. The struct
+`Trig` became `ArcTrig` (it clashed with `scx_num::trig::Trig` once imported). The move
+is code-identical; new is `parameter_jet::<T, D>(phi, side)`, the arc parameter with `D`
+derivatives over a generic scalar (interval enclosures included), at most 8 arcs per call.
+
+**The signature.** `pcurve_of` takes `tol: Length` beside the ruled
+`(&Curve, &Surface, interval)`: the lifting check needs a bound, and the caller (BR5)
+holds the edge and face accuracies. A deviation, recorded for review.
+
+**How a pair is chosen.** A circle is tried as a parallel or a meridian when its axis and
+centre are within `NEAR = 1e-6` (relative: radians for the axis, over the radius for the
+centre) of that configuration. That only picks the candidate: every answer is checked by
+lifting at 9 samples (ends included) against `tol`, so a circle near one but not in it
+is `Inexact` and one far from both is `NoClosedForm`.
+
+**The period window (07 §3 rule 5).** Where a direction is periodic, the pcurve's
+coordinate at the interval's start lies in the surface's base window. `start` is moved
+by whole turns, then the nearest of `start` and `start ± 2 pi` whose start coordinate is
+in the window is kept, so a start one rounding off the seam neither ping-pongs nor lands
+a period out (tests allow 1e-15 of the period at the seam).
+
+**Poles.** A sphere's meridian runs on one half-plane, with latitude in `[-pi/2, pi/2]`
+(slack 1e-14 for the rounded ends); pole to pole fits. Past a pole the azimuth jumps by
+half a turn, so no single angle line exists: `CrossesPole { at }` gives the curve
+parameter of the pole, and the caller splits the edge there. The pin instead lets the
+latitude run past `pi/2` with `u` fixed, which lifts onto the right points in its radians
+uv but leaves the surface's domain.
+
+**How the pin differs** (`eval/pcurve.rs`, `exact` and `meridian`). The pin's pcurves are
+degree-1 splines between the interval's ends in a uv whose angle directions are radians:
+a parallel is `[u0 ± t, v]`, a meridian `[u0, alpha ± t]`, exact in that uv and at the
+edge's parameter. Ours are in the NURBS uv (D13), where the same curves are angle lines;
+a straight segment there would not be. The plane cases and rulings agree with the pin's
+up to the kinds kept (a circle on a plane stays a `Circle2`, not a spline). The pin also
+does not refuse a meridian across a pole (above).
+
+**The SS5 perpendicular-section gap.** §5's SS5 text says plane sections' pcurves on
+cylinders, cones, spheres and tori are rational `Curve2::Nurbs` in the kind's uv (WR-680).
+That holds for an oblique section (a cylinder's ellipse), which `pcurve_of` refuses as
+`NoClosedForm`. A section perpendicular to the axis is a parallel, whose exact pcurve at
+the edge's parameter is an `AngleLine2`, not a NURBS; SS5 should return that (or call
+`pcurve_of`) and keep `Curve2::Nurbs` for the oblique ones.
+
+**Truth check.** Every case is lifted (pcurve, then surface, then compared with the
+curve's point) at 101 samples to 1e-12 of size, over scales 1e-3, 1 and 1e3, both senses
+of circle and surface, circle axes with and against the surface's, phases across the
+seam and intervals past a turn, negative and short. `AngleLine2` is checked against the
+arc-parameter identity, finite differences off the breaks, C^1 not C^2 at a break with
+the side honoured, reversal, and interval enclosure.
+
+**Added work.** Per `pcurve_of` call: 9 curve evaluations and 9 distances (the
+on-surface check), the closed form (a few dot products and one or two `atan2`), then 9
+pcurve and 9 surface evaluations (the lifting check). `AngleLine2::point` is one
+`Arcs::parameter` (one `sin`, one `cos` and a division) per call. Existing paths gain no
+work: `Curve2` gains one match arm, the `Arcs` move changes no code, and nothing yet
+calls `pcurve_of` (BR5 will).
+
+### 4.12 SU4 as built (11-27)
 
 Inversion of a surface (63 §4.2, X8, D7; research 66), in the form CU4 uses for the
 curves, in two parameters. Decided by analysis and an adversarial pass; proposed for
@@ -2616,6 +2732,9 @@ Step 2 needs only the analytic pairs. The marching and the B-spline patch inters
   - Under D13 the pcurves of plane sections on cylinders, and where the pin has them on cones,
     spheres and tori, are exact rational `Curve2::Nurbs` in the kind's uv (WR-680). So SS5 needs
     `scx-nurbs` (CU3).
+    [11-27, §4.11: true of the oblique sections only. A section perpendicular to the axis is
+    a parallel, whose exact pcurve at the edge's parameter is a `Curve2::AngleLine`
+    (`pcurve_of`).]
   - The plane's face accuracy, which the pin took from `PlaneOwner`, is a `Length` argument.
   - The unused `use_surface_edges` and `ang_tol_rad` are dropped.
   - It is a closed form, so it is bounded and infallible (X13).

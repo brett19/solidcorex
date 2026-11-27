@@ -17,7 +17,8 @@
 // `SolverAlgorithm::code`, `SolverAlgorithm::from_code` and `SolverAlgorithm::is_brent`
 // are removed; `LocalSolve1d::solve_it` is `LocalSolve1d::solve` (the acceptable accuracy
 // is the option `LocalSolve1d::acceptable_accuracy`); `LocalSolve1d` holds only the options
-// (`Domain1d` replaces `use_interval`, `interval` and `is_periodic`; the convergence test
+// (the domain, a `scx_num::domain::ParamDomain`, replaces `use_interval`, `interval` and
+// `is_periodic`; the convergence test
 // `Converged1d` replaces the evaluator's found flag); the solver's members after a solve are
 // `Solve1dState` (brackets as `Option<Sample>`, the iterates as `Option<IterationValue>`,
 // `found_accuracy` an `Option`), returned by the test-and-`trace`-feature
@@ -34,7 +35,10 @@
 // allow them); `tests::convergence_test_decides_found` is new; every test that read the
 // state reads `solve_traced`'s or a test `Run::at`'s. Results and every error's class, text
 // and cause unchanged, but for `solve_by_brent`'s returned `F` when maximising and the
-// lower bracket at `F <= -SM_BIG_DOUBLE` (see the deviations).
+// lower bracket at `F <= -SM_BIG_DOUBLE` (see the deviations). The domain was
+// `Domain1d { Line, Bounded, Periodic }` (an `Extent1d` for the period) until it moved to
+// `ParamDomain` (04, 11-27: one type is the end state); a periodic domain is
+// `[base, base + period]`, the same interval for every period the pin's callers give.
 //! One-dimensional local root finding (damped Newton iteration with oscillation
 //! detection, regula-falsi bisection fallback) and Brent-like minimisation /
 //! maximisation, over a caller-supplied function.
@@ -51,7 +55,7 @@
 //! | [`IterQueue1d`], [`IterQueue1d::new`], [`IterQueue1d::try_new`] | `SmIterQueue1d`, `SmIterQueue1d(ULONG)` |
 //! | [`IterQueue1d::add`]                         | `SmIterQueue1d::Add`                           |
 //! | [`IterQueue1d::is_oscillating`]              | `SmIterQueue1d::IsOscillating`                 |
-//! | [`LocalSolve1d`] (the options), [`Domain1d`], [`LocalSolve1d::new`] | `SmLocalSolve1d`'s settings, constructors and setters |
+//! | [`LocalSolve1d`] (the options, its domain a [`ParamDomain`]), [`LocalSolve1d::new`] | `SmLocalSolve1d`'s settings, constructors and setters |
 //! | [`Solve1dState`]                             | `SmLocalSolve1d`'s members after a solve, `GetFoundAccuracy`, `GetTerminationReason`, `GetLowerBoundHits`, `GetUpperBoundHits` |
 //! | [`LocalSolve1d::solve`], [`Outcome`]         | `SolveIt`                                      |
 //! | [`LocalSolve1d::solve_by_bisection`], [`Sample`] | `SolveByBisection`                         |
@@ -67,7 +71,7 @@
 //!   Upstream carries the members from one `SolveIt` to the next, but `SolveIt` resets
 //!   every one it reads before reading it, but for the lower bracket below.
 //!   `SetSolutionInterval` on a solver built without one changes nothing upstream;
-//!   [`Domain1d::Line`] has no interval to change. `SM_SA_BISECTION` is not kept: upstream
+//!   [`ParamDomain::Unbounded`] has no interval to change. `SM_SA_BISECTION` is not kept: upstream
 //!   reads the algorithm only to tell the Brent modes from the rest, so it solves as
 //!   `SM_SA_NEWTON`.
 //! - Out-params become return values: [`Outcome`] for `SolveIt` ([`Outcome::Best`]
@@ -101,11 +105,16 @@
 //! - Without an interval, `SolveIt` takes unclamped Newton steps (WR-19): upstream
 //!   clamps each step against the default inside-out `[1e20, -1e20]` interval, replacing
 //!   every step with `+-1.584e19` against the Newton direction.
+//! - A domain with one end ([`ParamDomain::AtLeast`], [`ParamDomain::AtMost`]; upstream has
+//!   none) is the whole line on its open side: the guess and each step are clamped at the
+//!   end it has, with the bound hits counted there, and the steps are not limited (there
+//!   is no length to take 8% of), as without an interval.
 
 use crate::error::{EvalError, SolveError, SolveFailure, ignored};
 pub use crate::local_solve_nd::{Outcome, Residual, TerminationReason};
 use core::num::NonZeroUsize;
 use scx_num::NumError;
+use scx_num::domain::{Clamp, ParamDomain};
 use scx_num::error::Limit;
 use scx_num::extent1d::Extent1d;
 use scx_num::limits::try_filled;
@@ -119,8 +128,8 @@ const ZEPS: f64 = 1.0e-12;
 /// half), keeping its sign.
 ///
 /// Not inlined, on purpose: inlined, the compiler hoists this arithmetic out of the
-/// `Domain1d::interval` test in the Newton loop and runs it on every solve, including a
-/// [`Domain1d::Line`] solve, on whatever stale bytes the variant leaves where an
+/// interval test in the Newton loop and runs it on every solve, including a
+/// [`ParamDomain::Unbounded`] solve, on whatever stale bytes the variant leaves where an
 /// interval would be. An address or a small integer read as an `f64` is subnormal, and
 /// subnormal arithmetic takes microcode assists: measured about 250 ns per solve on an
 /// E-core and 30 ns on a P-core (i9-13900), when the whole solve takes 30 to 100 ns.
@@ -322,27 +331,53 @@ impl IterQueue1d {
     }
 }
 
-/// Where a solve looks for `t`.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub enum Domain1d {
-    /// The whole real line: Newton steps are not limited or clamped (WR-19).
-    #[default]
-    Line,
-    /// `interval`: the guess is clamped into it, each Newton step is limited to 8% of its
-    /// length, and a step that leaves it is clamped at the end it crosses.
-    Bounded(Extent1d),
-    /// `interval` as one period: as [`Domain1d::Bounded`], but a step that leaves it
-    /// wraps.
-    Periodic(Extent1d),
+/// A domain's walls as a solve meets them, read once per solve: a periodic domain is
+/// `[base, base + period]`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Walls {
+    /// No end: the whole line.
+    Free,
+    /// One period: a step that leaves it wraps.
+    Wrap(Extent1d),
+    /// Both ends: a step that leaves it is clamped at the end it crosses.
+    Clamp(Extent1d),
+    /// Only a lower end.
+    Below(f64),
+    /// Only an upper end.
+    Above(f64),
 }
 
-impl Domain1d {
-    /// The interval, if the domain has one.
-    #[must_use]
-    pub const fn interval(self) -> Option<Extent1d> {
+impl Walls {
+    /// The walls of `domain`.
+    #[inline]
+    pub(crate) fn of(domain: ParamDomain) -> Self {
+        match domain {
+            ParamDomain::Bounded(e) => Self::Clamp(e),
+            ParamDomain::Periodic { .. } => Self::Wrap(domain.working(Clamp::Sample)),
+            ParamDomain::AtLeast { from, .. } => Self::Below(from),
+            ParamDomain::AtMost { to, .. } => Self::Above(to),
+            ParamDomain::Unbounded => Self::Free,
+        }
+    }
+
+    /// The finite interval, for a domain with both ends.
+    #[inline]
+    pub(crate) const fn interval(self) -> Option<Extent1d> {
         match self {
-            Self::Line => None,
-            Self::Bounded(e) | Self::Periodic(e) => Some(e),
+            Self::Wrap(e) | Self::Clamp(e) => Some(e),
+            _ => None,
+        }
+    }
+
+    /// `v` clamped into the walls (into the period, for a periodic domain); unchanged on
+    /// the whole line.
+    #[inline]
+    pub(crate) fn bound(self, v: f64) -> f64 {
+        match self {
+            Self::Wrap(e) | Self::Clamp(e) => e.clamp_value(v),
+            Self::Below(a) if v < a => a,
+            Self::Above(b) if v > b => b,
+            _ => v,
         }
     }
 }
@@ -361,8 +396,11 @@ const QUEUE_SLOTS: NonZeroUsize = NonZeroUsize::MIN.saturating_add(7);
 /// serve any number of solves, in any order.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LocalSolve1d<C = Residual> {
-    /// Where `t` is looked for (default: the whole line).
-    pub domain: Domain1d,
+    /// Where `t` is looked for (default: the whole line). A bounded domain clamps the
+    /// guess into it, limits each Newton step to 8% of its length, and clamps a step
+    /// that leaves it at the end it crosses; a periodic one does the same over one period
+    /// but wraps a step that leaves it; a domain with one end clamps at that end alone.
+    pub domain: ParamDomain,
     /// The algorithm (default: Newton).
     pub algorithm: SolverAlgorithm,
     /// `|F|` below which iteration stops as converged (default `SM_EFF_ZERO`).
@@ -434,7 +472,7 @@ impl LocalSolve1d {
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            domain: Domain1d::Line,
+            domain: ParamDomain::Unbounded,
             algorithm: SolverAlgorithm::Newton,
             desired_accuracy: EFF_ZERO,
             acceptable_accuracy: EFF_ZERO,
@@ -744,7 +782,7 @@ impl<C: Converged1d> LocalSolve1d<C> {
     /// (where the iteration gives up) below the acceptable one; [`Outcome::Best`]
     /// otherwise.
     ///
-    /// Without an interval ([`Domain1d::Line`]) the Newton steps are not clamped;
+    /// Without an interval ([`ParamDomain::Unbounded`]) the Newton steps are not clamped;
     /// upstream still clamps each against the default inside-out `[1e20, -1e20]`
     /// interval (WR-19), replacing every step with `±1.584e19` opposite to Newton.
     ///
@@ -793,11 +831,15 @@ impl<C: Converged1d> LocalSolve1d<C> {
 
         // The initial guess must be within the problem interval (clamped if not).
         let mut guess_t = guess;
-        if let Some(ivl) = self.domain.interval()
-            && !ivl.contains_value(guess_t, 0.0)
-        {
-            // (upstream only logs SM_ERR_INVALID_INPUT beyond EFF_ZERO_SQRT and goes on)
-            guess_t = ivl.clamp_value(guess_t);
+        let walls = Walls::of(self.domain);
+        match walls {
+            Walls::Wrap(ivl) | Walls::Clamp(ivl) if !ivl.contains_value(guess_t, 0.0) => {
+                // (upstream only logs SM_ERR_INVALID_INPUT beyond EFF_ZERO_SQRT and goes on)
+                guess_t = ivl.clamp_value(guess_t);
+            }
+            Walls::Below(a) if guess_t < a => guess_t = a,
+            Walls::Above(b) if guess_t > b => guess_t = b,
+            _ => {}
         }
 
         // Evaluate at the guess.
@@ -806,7 +848,7 @@ impl<C: Converged1d> LocalSolve1d<C> {
             Err(e) if e.ends_solve() => return Err(SolveError::Eval(e)),
             Err(e) => {
                 // Bad start point: within an interval, tweak it by 1/1000 of the interval.
-                let Some(ivl) = self.domain.interval() else {
+                let Some(ivl) = walls.interval() else {
                     // No other start point: the failed evaluation left no function value
                     // to iterate from, so its error is returned. Upstream iterates from
                     // it (WR-253; the fork's tangency-labs/smlib@d2757e1).
@@ -823,6 +865,7 @@ impl<C: Converged1d> LocalSolve1d<C> {
 
         let mut run = Run {
             o: self,
+            walls,
             st: Solve1dState::at(IterationValue {
                 t,
                 f: v,
@@ -838,6 +881,8 @@ impl<C: Converged1d> LocalSolve1d<C> {
 /// One solve in progress: the options and the state.
 struct Run<'o, C> {
     o: &'o LocalSolve1d<C>,
+    /// `o.domain`'s walls.
+    walls: Walls,
     st: Solve1dState,
 }
 
@@ -1032,7 +1077,7 @@ impl<C: Converged1d> Run<'_, C> {
 
             // Newton step, never huge (even 0.10 can be too big).
             let mut delta_t = -self.st.curr.f / self.st.curr.f_prime;
-            if let Some(ivl) = self.o.domain.interval() {
+            if let Some(ivl) = self.walls.interval() {
                 delta_t = limit_step(delta_t, ivl);
             }
 
@@ -1047,37 +1092,53 @@ impl<C: Converged1d> Run<'_, C> {
             delta_t *= cut_factor;
             let mut new_t = self.st.curr.t + delta_t;
 
-            // The next guess leaves the problem domain.
-            let left = self
-                .o
-                .domain
-                .interval()
-                .filter(|ivl| !ivl.contains_value(new_t, 0.0));
-            if let Some(ivl) = left {
-                if matches!(self.o.domain, Domain1d::Periodic(_)) {
+            // The next guess leaves the problem domain: wrap it, or clamp it at the end it
+            // crosses and count the hit there, resetting the other side's count.
+            let hit = match self.walls {
+                Walls::Wrap(ivl) if !ivl.contains_value(new_t, 0.0) => {
                     new_t = ivl.periodic_wrap(new_t);
-                } else {
-                    // Clamp and count boundary hits; reset the other side's count.
+                    None
+                }
+                Walls::Clamp(ivl) if !ivl.contains_value(new_t, 0.0) => {
                     if new_t < ivl.min() {
                         new_t = ivl.min();
-                        self.st.lower_bound_hits += 1;
-                        self.st.upper_bound_hits = 0;
+                        Some(true)
                     } else if new_t > ivl.max() {
                         new_t = ivl.max();
-                        self.st.upper_bound_hits += 1;
-                        self.st.lower_bound_hits = 0;
-                    }
-                    if self.st.lower_bound_hits > MAX_BOUNDARY_HITS
-                        || self.st.upper_bound_hits > MAX_BOUNDARY_HITS
-                    {
-                        // (upstream also sets rdFoundT = new_t, overwritten below)
-                        self.st.termination_reason = TerminationReason::OutOfBounds;
-                        break;
+                        Some(false)
+                    } else {
+                        None
                     }
                 }
-            } else {
-                self.st.lower_bound_hits = 0;
-                self.st.upper_bound_hits = 0;
+                Walls::Below(a) if new_t < a => {
+                    new_t = a;
+                    Some(true)
+                }
+                Walls::Above(b) if new_t > b => {
+                    new_t = b;
+                    Some(false)
+                }
+                _ => {
+                    self.st.lower_bound_hits = 0;
+                    self.st.upper_bound_hits = 0;
+                    None
+                }
+            };
+            if let Some(lower) = hit {
+                if lower {
+                    self.st.lower_bound_hits += 1;
+                    self.st.upper_bound_hits = 0;
+                } else {
+                    self.st.upper_bound_hits += 1;
+                    self.st.lower_bound_hits = 0;
+                }
+                if self.st.lower_bound_hits > MAX_BOUNDARY_HITS
+                    || self.st.upper_bound_hits > MAX_BOUNDARY_HITS
+                {
+                    // (upstream also sets rdFoundT = new_t, overwritten below)
+                    self.st.termination_reason = TerminationReason::OutOfBounds;
+                    break;
+                }
             }
 
             // Save the last two iterations.
@@ -1225,7 +1286,11 @@ mod tests {
             };
             let mut st = Solve1dState::at(value(curr));
             st.prev1 = Some(value(prev1));
-            Self { o, st }
+            Self {
+                o,
+                walls: Walls::of(o.domain),
+                st,
+            }
         }
     }
 
@@ -1308,7 +1373,7 @@ mod tests {
     /// Newton on `[lo, hi]`, accepting `|F| < 1e-9`.
     fn bounded(lo: f64, hi: f64) -> LocalSolve1d {
         LocalSolve1d {
-            domain: Domain1d::Bounded(Extent1d::spanning(lo, hi).unwrap()),
+            domain: ParamDomain::Bounded(Extent1d::spanning(lo, hi).unwrap()),
             ..line()
         }
     }
@@ -1346,6 +1411,36 @@ mod tests {
             TerminationReason::FoundAnswerConverged
         );
         assert_eq!(st.found_accuracy, Some(st.curr.f));
+    }
+
+    /// A domain with one end clamps the guess and the steps there, counting the hits, and
+    /// is the whole line on its open side.
+    #[test]
+    fn one_end_clamps_there_alone() {
+        let at = |d| LocalSolve1d {
+            domain: d,
+            ..line()
+        };
+        let free = line().solve(sq, 1.0).unwrap();
+        let r = at(ParamDomain::at_least(0.0).unwrap())
+            .solve(sq, 1.0)
+            .unwrap();
+        assert_eq!(r.value().to_bits(), free.value().to_bits());
+
+        for guess in [3.0, 0.0] {
+            let (r, st) = at(ParamDomain::at_least(2.0).unwrap())
+                .solve_traced(sq, guess)
+                .unwrap();
+            assert_eq!(st.termination_reason, TerminationReason::OutOfBounds);
+            assert_eq!(st.lower_bound_hits, MAX_BOUNDARY_HITS + 1);
+            assert!(*r.value() >= 2.0, "{r:?}");
+        }
+        let (r, st) = at(ParamDomain::at_most(1.0).unwrap())
+            .solve_traced(sq, 0.5)
+            .unwrap();
+        assert_eq!(st.termination_reason, TerminationReason::OutOfBounds);
+        assert_eq!(st.upper_bound_hits, MAX_BOUNDARY_HITS + 1);
+        assert!(*r.value() <= 1.0, "{r:?}");
     }
 
     #[test]
@@ -1475,7 +1570,9 @@ mod tests {
                 ..
             })
         ));
-        assert!(IterQueue1d::try_new(NonZeroUsize::new(1 << 60).unwrap()).is_err());
+        // one slot past the allocation cap, so the size is valid on 32-bit targets too
+        let over_cap = scx_num::limits::MAX_ALLOC_BYTES / size_of::<f64>() + 1;
+        assert!(IterQueue1d::try_new(NonZeroUsize::new(over_cap).unwrap()).is_err());
     }
 
     #[test]

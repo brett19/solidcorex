@@ -18,11 +18,11 @@ use scx_num::vector3d::{Point3, UnitVec3, Vec3};
 use scx_nurbs::Approach;
 use scx_nurbs_surface::{NurbsSurface, ParamAxis};
 
-use crate::arcs::Arcs;
 use crate::common::{Axes, check_lengths, linear, unit};
 use crate::error::{Size, SurfaceError, positive};
 use crate::invert::{self, Closest, Inversion, Periods};
 use crate::to_nurbs::{Dir, Reach, build};
+use scx_curve::arcs::Arcs;
 use scx_num::jet::SurfaceJet;
 
 /// A circular cylinder about the frame's z axis.

@@ -18,7 +18,7 @@
 //!   flag for the NURBS arm's search ([`crate::nurbs_invert`]).
 //!
 //! The uv is the kind's own (63 D13), read from the query's direction by
-//! [`Arcs`](crate::arcs::Arcs)' inverse with no transcendental function, so a foot's `at`
+//! [`Arcs`](scx_curve::arcs::Arcs)' inverse with no transcendental function, so a foot's `at`
 //! and its `point` agree: `point` is the kind's `point(at)`. An analytic arm is a closed form:
 //! it takes no budget and cannot fail. A non-finite query gives a foot with NaN parts, which
 //! is never inside.

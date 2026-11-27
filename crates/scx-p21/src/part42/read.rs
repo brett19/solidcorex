@@ -5,8 +5,12 @@
 // data of [`super::geom`], from a parsed [`Exchange`] (ISO 10303-21) in one representation
 // context's [`Units`].
 // Changes: every refusal is a typed `P21Error` (was a `String`): `EntityCause::Missing`,
-// `WrongType`, `BadParam` (with the parameter's position in its record) and `Invalid` (a typed `InvalidValue`), the
-// limit `Limit::TooDeep`, or `Unsupported::Entity` for valid input not read here; so `entity`,
+// `WrongType`, `BadParam` (with the parameter's position in its record) and `Invalid` (a typed
+// `InvalidValue`), or `Unsupported::Entity` for valid input not read here; past a cap the input
+// is beyond a limit, not refused (kind `Exhausted`): `Limit::TooDeep` for nesting, and
+// `Limit::TooManyItems` (with the count and the cap) and `Limit::DegreeTooHigh` for more than
+// `MAX_CTRL` control points or a degree above `MAX_DEGREE`, which the pin refused as bad data
+// (`too_many` is new, and `degree` refuses only a degree below 1); so `entity`,
 // `reference`, `num`, `logical`, `boolean`, `positive`, `knots`, `implied_knots`, `weights`,
 // `degree`, `bspline_params`, `Reader::length`, `Reader::angle`, `Reader::point_in`,
 // `Reader::point`, `Reader::ratios`, `Reader::direction`, `Reader::placement_in`,
@@ -34,10 +38,12 @@
 //! [`Exchange`] in one representation context's [`Units`].
 //!
 //! Input is hostile: every count, number and reference is checked, nesting is capped
-//! ([`MAX_GEOM_DEPTH`]), counts are capped ([`MAX_CTRL`], [`MAX_DEGREE`]) and checked before
-//! anything is expanded, numbers must be finite and below [`MAX_COORD`] in size, nothing is
-//! allocated ahead from a count in the file, shared entities are read once, and every refusal
-//! is a typed [`P21Error`], never a panic.
+//! ([`MAX_GEOM_DEPTH`]), counts and degrees are capped ([`MAX_CTRL`], [`MAX_DEGREE`]) and
+//! checked before anything is expanded, numbers must be finite and below [`MAX_COORD`] in size,
+//! nothing is allocated ahead from a count in the file, shared entities are read once, and
+//! every error is a typed [`P21Error`], never a panic. Data that is wrong is refused; input
+//! past a cap is well formed but beyond a limit ([`P21Error::Exhausted`]: [`Limit::TooDeep`],
+//! [`Limit::TooManyItems`], [`Limit::DegreeTooHigh`]).
 //!
 //! The only arithmetic is unit conversion: a length read times the length unit, an angle times
 //! the plane angle unit, a coordinate in a parameter space times that parameter's unit, and the
