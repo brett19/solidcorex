@@ -661,6 +661,87 @@ nothing beyond noise, so it is not in.
 `eval_many` costs about what `point` does at scattered parameters (no basis is reused there).
 On a grid it evaluates one basis per new parameter value.
 
+#### NS2c: the point's fixed cost and grid evaluation (11-27)
+
+Branch `nsurf-2c`. Two items from the NS2 follow-ups: the point's fixed cost (1.4 to 1.8x the
+pin at low degree after nsurf-2b) and 65 #2, grid evaluation with basis reuse. Every result is
+the same bits as before; the counts are local (callgrind on a timing loop, not committed).
+
+**Profile first.** Instructions per `point` on the 12 × 13 bicubic net, at 1,024 scattered
+parameters (the pin's `Surface::eval` 1,575 polynomial and 1,584 rational):
+
+| Step | Polynomial | Rational |
+|---|---|---|
+| main after nsurf-2b | 2,014 | 2,243 |
+| finiteness check over the `p + 1` live values, not all 32 | 1,898 | 2,127 |
+| A2.2 leaves `n[p+1..]` as it is (it is never read; `Basis` already starts at zero) | 1,864 | 2,093 |
+| `#[inline]` on `KnotVector::basis` and `Basis::at` (non-generic, so no cross-crate inlining without it) | 1,836 | 2,065 |
+| A2.2's inner loop indexed, not zipped (`right.zip(left.take(j).rev())` over `n.take(j + 1)`) | 1,510 | 1,739 |
+| the `Basis` built in place, not from a `values` array moved in | 1,443 | 1,672 |
+| the rational point's two tensor sums (`w P` and `w`) in one pass over the net | 1,443 | 1,548 |
+| `#[inline]` on `Basis::first` and `Basis::values` | **1,412** | **1,514** |
+
+So the fixed cost was the basis, not the span search (about 60 instructions a direction,
+as the pin's `find_span`) and only partly the moves: the iterator adapters around A2.2's
+inner loop cost more than its arithmetic at degree 3 (326 instructions a point), then the
+32-wide finiteness check (116) and the copies of the 264-byte `Basis` (about 130, of which one
+copy a direction is left: `Ok(basis)` still copies it out). The point now runs fewer
+instructions than the pin's. The arithmetic and its order are unchanged in every step: the same
+products, quotients and sums in the same order, so the bits are the same (the SMALL-against-FULL
+test, the scx-nurbs and scx-nurbs-surface unit tests and the `t_nurbs` difftests pass as
+before). The curve's `point` shares `values_into`, so it gains too; `curve.rs` is untouched.
+Earlier (nsurf-2b) the clipped finiteness check showed nothing in wall time at a machine load of
+about 10; the instruction count shows it, so it is in.
+
+**Grid evaluation: a separate entry point.** `eval_grid(us: &[f64], vs: &[f64], side, out:
+&mut [[f64; D]]) -> Result<()>` writes `out[i * vs.len() + j] = point([us[i], vs[j]], side)`,
+`u` outer, computing each `v` basis once (kept in a `Vec<Option<Basis>>`, one allocation a
+call) and each `u` basis once per row: `us.len() + vs.len()` bases for `us.len() · vs.len()`
+points. The alternative was to have `eval_many` detect a grid in its `uv` list.
+
+- *For a separate entry point.* The grid's structure is in the arguments, so nothing has to be
+  detected, and a caller with a grid (tessellation, sampling, the projection's start grids)
+  passes `nu + nv` numbers, not `nu · nv` pairs. `eval_many`'s contract stays simple.
+- *Against.* A second function to learn, and a caller holding an arbitrary list that happens to
+  be a grid gets only `eval_many`'s reuse.
+- *Adversarial on detection.* Recognising a grid in a list costs a pass and a hash or sort of
+  the distinct values, and still needs a store of `nv` bases. It is wrong for lists that are
+  almost grids. It would also make `eval_many`'s cost depend on its input's shape in a way its
+  signature does not show. Rejected.
+- *Error order.* `eval_grid` errors with the first failing point in row order, as `point` at
+  each would. A `v` basis that fails is kept as `None` and rebuilt when its first point is
+  reached, so a degenerate point earlier in row 0 still wins. A unit test checks both a failing
+  `u` (row 1) and a failing `v` (column 1).
+
+`eval_many` keeps its previous-point reuse (it is free and covers a row or column walked in
+order), now updating the two bases in place rather than moving them through an `Option` each
+step.
+
+**The 04 output shape.** Both write into a caller's `&mut [[f64; D]]` and panic on a length
+mismatch (`uv.len()` for `eval_many`, `us.len() * vs.len()` for `eval_grid`, with an overflowing
+product treated as a mismatch), as CU2's `Curve::eval_many` and the 04 11-27 ruling. They return
+`Result<()>`: on an error `out` holds the points before the failing one and the rest is left as
+it was. This changes `eval_many` from `-> Result<Vec<_>>`; its callers were the unit test and
+the difftest.
+
+**Wall time** (same loop, ns a point; the machine load was 10 before and 13 after, so the
+after numbers are if anything high):
+
+| Case | `point` scx/pin | `eval_many` scattered | `eval_many` 32 × 32 grid | `eval_grid` 32 × 32 | pin `eval` on the grid |
+|---|---|---|---|---|---|
+| bicubic, polynomial | 1.41 / 1.27 | 132 / 92 | 98 / 61 | 22 | 76 / 72 |
+| bicubic, rational | 1.53 / 1.31 | 132 / 98 | 98 / 66 | 28 | 72 / 72 |
+| biquintic, rational | 1.30 / 1.15 | 186 / 152 | 135 / 100 | 43 | 124 / 124 |
+| degree 9, rational | 1.02 / 0.91 | 392 / 331 | 270 / 213 | 92 | 350 / 347 |
+
+`eval_grid` is 0.27 to 0.39 times the pin's point-by-point grid, and 3.5 to 4.2 times faster than
+scx's own point per point, above 65 #2's "about 2x" estimate: the bases dominate a point at
+these degrees. The point's wall-time ratio fell less than its instruction ratio (now 0.90 and
+0.96 of the pin's instructions), so what is left is likely latency rather than work (a
+hypothesis, not measured): the A2.2 divisions are a dependent chain, and scx still clears and
+copies a 256-byte `Basis` a direction. Shrinking `Basis` below `FULL` would need a degree-split
+type; at this ratio it is not pursued.
+
 #### NS3 as built (11-27)
 
 Proposed for review, not yet ruled. The code is in
@@ -1484,6 +1565,149 @@ Built 11-27, proposed for review: decided by analysis and an adversarial pass, n
 - **The jet is `scx_num::jet::SurfaceJet`** (NS2). SU1 first built on a crate-private stand-in
   with the same `from_fn`, `point` and `get`; it was swapped for the real type 11-27, with the
   truth tests and the `t_surface` difftest unchanged.
+
+### 4.7 SU2 as built (11-27)
+
+Decided by analysis and an adversarial pass; proposed for review, not yet ruled. The model
+is CU2 (§3.7, ruled in 04).
+
+```rust
+#[non_exhaustive] #[derive(Clone, Debug, PartialEq)]
+pub enum Surface {
+    Plane(Plane), Cylinder(Cylinder), Cone(Cone), Sphere(Sphere), Torus(Torus),
+    Nurbs(Arc<NurbsSurface<3>>),
+}
+impl Surface {
+    pub fn domain(&self) -> UvDomain;
+    pub fn point(&self, uv: Point2) -> Point3;
+    pub fn jet<const D: usize>(&self, uv: Point2, side: [Approach; 2]) -> SurfaceJet<Vec3, D>;
+    pub fn normal(&self, uv: Point2, side: [Approach; 2]) -> Option<UnitVec3>;
+    pub fn eval_many(&self, uv: &[Point2], out: &mut [Point3]);  // panics if the lengths differ
+    pub fn eval_grid(&self, us: &[f64], vs: &[f64], out: &mut [Point3]);  // row by row
+}
+impl From<Plane> for Surface { .. }  // every kind, NurbsSurface<3> and Arc<NurbsSurface<3>>
+```
+
+- **`#[non_exhaustive]`, not `Copy`, `From` each kind**: as CU2, for its reasons. The
+  `Nurbs` arm holds an `Arc`, so `Copy` was never available.
+- **Size asserted at 128 bytes** (§4.3): the largest analytic kind (120, asserted in SU1)
+  plus the tag. `Nurbs` is behind an `Arc` (A7).
+- **The `Nurbs` arm cannot fail; where the surface's call errs, every coordinate is NaN.**
+  Alternative: `Result` on `point` and `jet`. Against NaN: the error's cause is lost through
+  the enum. For: CU3's `Curve::Nurbs` arm does the same, so both enums keep one infallible
+  signature; an analytic kind's point at an infinite or NaN parameter is already NaN, so a
+  caller that checks finiteness handles both; and a `Result` on the enum would make every
+  analytic caller unwrap an error that cannot happen. A caller that needs the cause calls
+  the `NurbsSurface` itself. The errs are a parameter that is not finite, an overflowing
+  value (`Degenerate`) and a jet past `scx_nurbs::MAX_ORDER`.
+- **`point` and `eval_many` take the pieces above `uv`** in both directions: the surface is
+  continuous, so side changes only roundings, and `point` takes no side (CU1, CU2).
+- **`normal` takes `side`; 63 §4.3's sketch did not.** Against: an argument every analytic
+  kind ignores. For: a C0 NURBS surface's normal differs across a knot line (tested: a
+  right-angle crease gives `+z` below and `-x` above), and adding the argument later would
+  change the signature under every caller; this is CU2's reasoning for `jet_over`'s side.
+- **The NURBS normal is `unit(S_u x S_v)` from `jet::<1>`, `None` where the jet errs or the
+  cross product is below `normalized`'s threshold** (a collapsed edge, a cusp). Alternative:
+  the limit from higher partials, as SU1's sphere gives at its poles. Against `None`: a
+  NURBS sphere's pole has no normal through the enum while the analytic sphere's does.
+  For: the limit needs a rule per degeneracy (which partials, which sign), which is
+  inversion and SSI work (SU4, SS); the arm stays thin until a caller defines it. Recorded
+  in 05 as open.
+- **No scalar-generic evaluation on the enum yet.** The kinds have `eval<T: Ring>(u, v,
+  near)`; `NurbsSurface` has no generic or interval form. Two shapes were weighed:
+  - *Leave it off* until NS adds an interval NURBS surface evaluation, then add
+    `point_over` (CU2's name) for every arm. Against: a certifying caller of an analytic
+    kind matches the kinds itself until then.
+  - *Restrict it*: `point_over<T: Ring>(..) -> Option<Point3<T>>`, `None` for `Nurbs`.
+    Against: the `Option` goes away when NURBS gets the form, which is a breaking change
+    for every caller, and meanwhile every caller needs a fallback for `None` that it could
+    not write without matching anyway.
+  
+  Chosen: leave it off. No caller exists yet (SSI certification is SS work), adding the
+  method later is not breaking, and the restricted form would ship a signature known to
+  change. This is an NS dependency, recorded in 05.
+- **`eval_many` writes into `&mut [Point3]` and panics on a length mismatch**, per the CU2
+  ruling, and the five kinds moved from `&mut Vec<Point3>` (cleared first) to the same
+  shape, with the same panic. Each kind keeps its own `eval_many` (the cylinder and cone
+  read their axes once); the enum matches once and calls it.
+- **The `Nurbs` arm of `eval_many` wraps NS2's slice-shaped `NurbsSurface::eval_many`**
+  (nsurf-2c: `&[[f64; 2]]` in, `&mut [[f64; D]]` out, a length panic), 64 points at a time
+  through two buffers on the stack. Alternative: one heap buffer of the batch's size.
+  Against chunks: a basis is recomputed at each chunk's first point. For: no allocation,
+  and the cost is one basis in 64. The buffers exist because `Point2` and `Point3` have no
+  layout promise and `unsafe` is forbidden. A chunk errs at its first bad point, so then
+  each of its points is taken alone, NaN only where its own call errs: `out[i]` is
+  `point(uv[i])` bit for bit either way (tested through both paths).
+- **The enum has `eval_grid(us, vs, out)`**, row by row (`out[i * vs.len() + j]`), panicking
+  unless `out.len()` is `us.len() * vs.len()`, as `NurbsSurface::eval_grid`. Alternative:
+  leave it off, since no analytic kind has one. Against: one more method, and the analytic
+  arms gain nothing (they evaluate each point). For: a caller sampling a face's grid
+  (tessellation, bounds, seeding SSI) should not have to match the `Nurbs` arm to get the
+  basis computed once per row and column, which is 2.2 times faster than `eval_many` over
+  the same grid (table); and an analytic kind can gain a closed-form grid later without a
+  signature change. The `Nurbs` arm takes one heap buffer of the grid's size (a grid cannot
+  be split into chunks without recomputing the bases of one direction); on an error, each
+  point is taken alone.
+- **The `Nurbs` helpers are `#[inline(never)]`; the dispatch methods `#[inline]`.** With
+  the NURBS evaluation inlined beside the analytic arms, a plane's `point` took 13 ns
+  through the enum against 5 ns direct (a hand-written match without the `Nurbs` arm took
+  5); out of line, 5.0 against 4.0. A NURBS evaluation is over 100 ns, so its extra call
+  is noise. `#[inline(always)]` on `point` changed nothing.
+- **A `jet::<2>` through the enum still costs more than direct** for the plane and torus
+  (table). The overhead is the five analytic jets inlined into one match: a match over the
+  plane alone is as fast as direct, and over the five analytic kinds is not. Marking each
+  kind's `jet` `#[inline(never)]` narrowed it on the plane and not reliably elsewhere, on
+  a loaded machine, and would cost direct callers their dead-code elimination, so SU1's
+  kinds are unchanged. Recorded in 05 as open: worth a look when a hot caller (SSI
+  marching) dispatches jets.
+- **No difftest through the enum**: as CU2, the unit tests prove the enum gives each kind's
+  bits, and `t_surface` and `t_nurbs_surface_eval` already compare the kinds with the pin.
+- **"Bit for bit" treats every NaN as one value**, signed zeros apart, as CU2.
+
+Tests (unit, `surface.rs`): `domain`, `point`, `jet::<0>`, `jet::<1>`, `jet::<4>` and
+`normal` against each kind's own call, bit for bit, over 60 seeded placements at three
+scales and both senses as each analytic kind (300 surfaces) and 40 NURBS surfaces (degrees
+1 to 4 and 9, every knot and weight kind), at 33 or more parameters each paired into uv
+(signed zero, `1e-300`, `±1e6`, the arc breaks, the NURBS knots, an infinity, a NaN), at
+all four side pairs: 89,760 checks, 10,560 on NURBS, 1,286 with no normal. `eval_many`
+against `point` per element, through both the batch path and the per-point fallback;
+`eval_grid` the same, over grids of 20 by 13 parameters (with and without non-finite ones)
+and empty grids; the three length panics (enum `eval_many` and `eval_grid`, a kind); the
+conversions, with `Arc` sharing; the crease normal.
+Send and Sync are checked in `lib.rs`.
+
+Timings (release, best of 3 runs of 5 passes of 4,000,000 calls, a loaded build machine,
+load about 15 on 32 cores; outputs black-boxed; NURBS bicubic rational, 5 by 5 points, one
+interior knot each way; a throwaway example, deleted):
+
+| ns per call | direct | via `Surface` |
+|---|---:|---:|
+| plane `point` | 4.0 | 5.0 |
+| plane `jet::<2>` | 17.1 | 32.8 |
+| cylinder `point` | 10.4 | 9.4 |
+| cylinder `jet::<2>` | 35.2 | 40.3 |
+| cylinder `normal` | 16.0 | 17.5 |
+| torus `point` | 19.9 | 20.2 |
+| torus `jet::<2>` | 48.2 | 69.1 |
+| torus `normal` | 25.2 | 26.4 |
+| NURBS `point` | 104.8 | 99.9 |
+| NURBS `jet::<2>` | 318.1 | 310.8 |
+| NURBS `normal` | | 195.7 |
+
+`eval_many` over a 32 by 32 grid, per point: plane 2.5, cylinder 9.3, torus 13.3.
+
+The same NURBS surface over the 32 by 32 grid after the merge of NS2's faster point and
+`eval_grid` (a quieter machine, load about 5; best of 7 runs of 2,000 grids), ns per point:
+
+| | direct | via `Surface` |
+|---|---:|---:|
+| a `point` loop | | 85.5 |
+| `eval_many` | 51.7 | 54.4 |
+| `eval_grid` | 21.3 | 24.2 |
+
+The enum's batches cost 5% (`eval_many`: the chunk copies) and 14% (`eval_grid`: the
+buffer and its copy) over the direct calls; both are recorded in 05 as open, to go when
+`Point3` gets a layout that lets the surface write into `out` directly.
 
 ## 5. `scx-ssi`, the analytic part
 
