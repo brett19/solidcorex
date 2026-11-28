@@ -5,7 +5,7 @@ use scx_brep::{Brep, Entity, RegionId};
 use scx_num::budget::{Budget, Stop};
 use scx_num::vector3d::{Point3, Vec3};
 
-use crate::error::{BodyqError, BodyqRefusal};
+use crate::error::{BodyqDefect, BodyqError, BodyqRefusal};
 use crate::near::nearest_region;
 use crate::on::on_entity;
 use crate::rays::{Cast, RAYS, cast};
@@ -36,7 +36,8 @@ pub enum PointClass {
 ///   point is one where more than two regions meet.
 /// - [`BodyqError::Exhausted`] when `budget` runs out and [`BodyqError::Cancelled`] when
 ///   `stop` is set; neither leaves anything behind.
-/// - [`BodyqError::Defect`] on a body whose geometry the method should take and cannot.
+/// - [`BodyqError::Defect`] on a body whose geometry the method should take and cannot,
+///   among them [`BodyqDefect::NoFaceBox`] for a body with a face that cannot be enclosed.
 pub fn classify_point(
     body: &Brep,
     p: Point3,
@@ -59,9 +60,13 @@ pub(crate) fn classify_with(
     }
     stop.check()?;
     let outside = PointClass::In(body.outside().id());
-    // A body with no box is empty (a finished body's faces are bounded): all outside.
+    // A body with no box is empty, all outside, unless a face has no box: then no
+    // answer can be proved (a face that cannot be enclosed is no evidence of absence).
     let Some(body_box) = body.bounding_box() else {
-        return Ok(outside);
+        return match body.faces().find(|f| f.bounding_box().is_none()) {
+            Some(f) => Err(BodyqError::Defect(BodyqDefect::NoFaceBox { face: f.id() })),
+            None => Ok(outside),
+        };
     };
     // Every box is grown by its entity's accuracy and the resolution, so a point outside
     // the body's box is on nothing and in the outside region.

@@ -3708,3 +3708,69 @@ Tests (`blend/tests.rs`, 6; truth is a closed form):
 - G1 leaves along `leave` at `chord / 3 * (1 + crown)` (two sections) and `* 2` (three sections), and arrives against its `leave`.
 - The refusals by type (each crown bound accepted at its limit, NaN crown, infinite station, meeting sections, no direction at G1, a G0 end ignoring its frame), and the names unique.
 - `rail_bound` of every one of four sections of a free G0 blend is below `1e-9` (`Bounded`), and `None` past the last section.
+
+### 13.40 BO10b as built (11-28)
+
+Fixes three of BO10's causes at the root (§13.6): wrong-points, seeds, and the contract and
+far-contract NoBox / Undecided cases; most classify and build cases went with them.
+
+**Root cause 1: a pcurve that encloses only in pieces.** A conic seen through a cone or
+cylinder chart (`Curve2::OnChart`) is inverted by `of_direction`. Its interval enclosure over
+a part whose 3-D box reaches the chart's axis is not finite. The face's boundary tree then had
+no uv box, so the face, and the body, had no box. scx-bodyq answered a box-less body as all
+outside: the rotated block with the cone (9 cases) came back with wrong points and no error.
+scx-mass's strips met the same enclosure over a whole strip (NoBox), and so did the contract
+(Undecided). Fixes:
+- scx-brep `boundary`: a part with no finite box is halved, at most `SPLITS = 6` times
+  (64 pieces), and its pieces are kept.
+- scx-mass `enclose`: a strip's box is the union of its halves' boxes when the whole is not
+  finite, with the same depth.
+- scx-bodyq `classify_with`: a body with an unboxed face is `BodyqDefect::NoFaceBox`, not
+  outside.
+- scx-boolean `build`: a result with faces and no box is `Defect(Build)`, never returned.
+
+turned with cone: union 401.4178, intersection 139.5025, differences 203.4975 and 58.4178,
+which agree with inclusion-exclusion (343 + 63 pi - I). The contract proves all four.
+
+**Root cause 2: a sphere's pole.** The cut through `sphereOnFace` passes through both poles.
+Poles are collapsed edges whose uses are segments of the pole line in uv, so the pieces round
+a pole meet only at that point.
+- classify joined components across the pole edge and got pieces of both classes: Seeds.
+  Collapsed edges are now not joins.
+- splice then twinned the pole's two uses and dropped both, so `exact_loops` refused
+  (`PoleNeedsEdge`). A collapsed edge inside a merge now has its use kept once where the walk
+  crosses it.
+
+**Tests.** `KNOWN` went from 135 cases to 37: build 1 (torus with boxB), loops 20, loosespan 9,
+piece 1, uvundecided 6. Seven ignored per-cause tests are removed on purpose, because their
+cases now run in the live sweeps: `known_wrong_points`, `known_seeds`, `known_classify`,
+`known_contract_nobox`, `known_contract_undecided`, `known_far_contract_nobox` and
+`known_far_contract_undecided`. Each asserted that its cause's cases pass. A new unit test,
+`a_pcurve_that_encloses_only_in_pieces_is_boxed` (scx-brep), builds a cylinder band between two
+`OnChart` rings. It asserts first that a quarter ring does not enclose, then that the band is
+boxed and its sides are decided.
+
+**Choices, for and against.**
+- Halve only the parts that do not enclose, rather than raise the part count for every curve.
+  For: a face whose parts all enclose does exactly the work it did before. Against: the depth
+  cap (6) is a choice, and a pcurve that still does not enclose leaves the face unboxed. That is
+  reported now, not silent.
+- Guard in both bodyq and the Boolean. For: bodyq must never call an undecided body outside,
+  and the Boolean must not return a body its own queries cannot answer for. Against: two
+  places say the same thing; the bodyq one is the contract and the Boolean one is a refusal.
+- Skip collapsed edges in classify's joins, rather than join through the pole's neighbours.
+  For: a point is not a side. Against: a component bounded only through a pole now gets its
+  class from its own seed. That is the meaning, but it is one more seed.
+- Keep a pole's use once in splice, rather than drop both. For: `exact_loops` needs the edge
+  where the walk crosses the pole. Against: it is a second special case in the twin walk.
+
+**Added work.** Counted with throwaway atomic counters, not committed, over the algebra suite (one process, 15 live tests). Boundary parts: 229,038 enclosed. 269 (0.12%) did not enclose whole and were halved, adding 280 pieces; most were halved once. Before the fix each of these left its face unboxed, so the cost was a wrong or refused answer rather than time. Mass strips: 53,266 enclosed, 264 (0.5%) needed halving; before, each of those was `NoBox`. A part or strip that encloses whole does the same single enclosure as before. The classify skip is one match per edge. The build guard reads the body's cached box. The algebra suite runs in 20.7 s with one test thread in a debug build.
+
+**Not chased (left in `KNOWN`).**
+- loops (20): imprint's `Defect(Loops)` on X op (X op Y), where both operands share a
+  cylinder, cone, sphere or torus surface: coincident faces, a separate cause.
+- loosespan (9) and uvundecided (6).
+- piece (1).
+- build (1): torus against a box's union with it.
+
+The causes and counts in §13.6 and the BO10 row are BO10's, and this section supersedes them.
