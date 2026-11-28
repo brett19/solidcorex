@@ -29,6 +29,10 @@ pub enum Dimension {
     BaseRadius,
     /// A cone's radius on `z = height`.
     TopRadius,
+    /// A hollow cone's inner radius on `z = 0`.
+    InnerBaseRadius,
+    /// A hollow cone's inner radius on `z = height`.
+    InnerTopRadius,
     /// A torus's major radius: the frame's origin to the tube's centre.
     Major,
     /// A torus's minor radius: the tube's.
@@ -47,6 +51,8 @@ impl Dimension {
             Self::Height => "height",
             Self::BaseRadius => "base_radius",
             Self::TopRadius => "top_radius",
+            Self::InnerBaseRadius => "inner_base_radius",
+            Self::InnerTopRadius => "inner_top_radius",
             Self::Major => "major",
             Self::Minor => "minor",
         }
@@ -87,8 +93,27 @@ pub enum Refusal {
         /// The document's.
         document: Resolution,
     },
+    /// A hollow cone whose inner cone is not inside its outer one with a wall between: at
+    /// some end the inner radius is above the outer, or is below it by no more than the
+    /// resolution without being equal, or both ends are hinges (no volume).
+    Annulus {
+        /// The outer radii at the base and the top (mm).
+        outer: [f64; 2],
+        /// The inner radii (mm).
+        inner: [f64; 2],
+    },
     /// A cone whose radii are both zero: a segment, not a solid.
     ZeroRadii,
+    /// A prism or sheet of no regions.
+    NoRegions,
+    /// A face's uv box that is empty, not finite, longer than a period of the surface, or
+    /// past its domain (a sphere's `v` outside `[0, 1]`, a cone's beyond its apex).
+    UvBox {
+        /// The box's `u` ends.
+        u: [f64; 2],
+        /// The box's `v` ends.
+        v: [f64; 2],
+    },
     /// A spindle torus: the minor radius exceeds the major one by more than the resolution,
     /// so the tube crosses its own axis.
     SelfIntersecting {
@@ -96,6 +121,21 @@ pub enum Refusal {
         major: f64,
         /// The minor radius (mm).
         minor: f64,
+    },
+    /// A revolve's profile reaches more than the resolution across the axis, so the body
+    /// would pass through itself: `at` is the first segment that does.
+    CrossesAxis {
+        /// The segment.
+        at: SegmentRef,
+    },
+    /// A partial turn's angles (radians) are not finite, not increasing, a whole turn or
+    /// more apart, or do not take the profile's farthest point more than the resolution
+    /// from the other cap either way round.
+    Turn {
+        /// The start angle.
+        from: f64,
+        /// The end angle.
+        to: f64,
     },
 }
 
@@ -107,6 +147,16 @@ pub enum Unsupported {
     Profile(PlanarError),
     /// A profile segment of a kind this constructor does not sweep yet.
     Segment(SegmentRef),
+    /// Two regions of a prism or sheet overlap, touch or cross: they would merge in the
+    /// plane first, which this build does not do.
+    RegionsMeet {
+        /// The index of the first region.
+        first: usize,
+        /// The index of the second.
+        second: usize,
+    },
+    /// A face on a NURBS surface: its iso-curves are not extracted exactly yet.
+    NurbsFace,
     /// A horn torus: the radii are equal within the resolution, so the tube meets the axis
     /// at one point, a singular point that the pole rules do not cover (72 D3).
     HornTorus {
@@ -114,6 +164,12 @@ pub enum Unsupported {
         major: f64,
         /// The minor radius (mm).
         minor: f64,
+    },
+    /// A revolve's arc whose circle crosses the axis outside the arc: its surface is a
+    /// spindle torus, not made yet.
+    SpindleTorus {
+        /// The segment.
+        at: SegmentRef,
     },
 }
 
@@ -133,6 +189,8 @@ pub enum Defect {
     Surface(SurfaceError),
     /// The writer gave a face no exact pcurves.
     Pcurve(PcurveWriteError),
+    /// A solid face was written to a draft that has no solid region (a sheet's).
+    NoSolid,
     /// `Draft::finish` refused the draft the constructor built.
     Finish(FinishCause),
 }
@@ -175,9 +233,17 @@ impl MakeError {
             Self::Refused(Refusal::Resolution { .. }) => "resolution",
             Self::Unsupported(Unsupported::Profile(_)) => "profile_undecided",
             Self::Unsupported(Unsupported::Segment(_)) => "segment_kind",
+            Self::Refused(Refusal::Annulus { .. }) => "annulus",
             Self::Refused(Refusal::ZeroRadii) => "zero_radii",
+            Self::Refused(Refusal::NoRegions) => "no_regions",
+            Self::Unsupported(Unsupported::RegionsMeet { .. }) => "regions_meet",
             Self::Refused(Refusal::SelfIntersecting { .. }) => "self_intersecting",
+            Self::Refused(Refusal::UvBox { .. }) => "uv_box",
+            Self::Unsupported(Unsupported::NurbsFace) => "nurbs_face",
             Self::Unsupported(Unsupported::HornTorus { .. }) => "horn_torus",
+            Self::Refused(Refusal::CrossesAxis { .. }) => "crosses_axis",
+            Self::Refused(Refusal::Turn { .. }) => "turn",
+            Self::Unsupported(Unsupported::SpindleTorus { .. }) => "spindle_torus",
             Self::Defect(Defect::Surface(_)) => "surface",
             Self::Defect(Defect::Curve(_)) => "curve",
             Self::Defect(Defect::Absent(_)) => "absent",
@@ -185,6 +251,7 @@ impl MakeError {
             Self::Defect(Defect::PlaneFrame) => "plane_frame",
             Self::Defect(Defect::Pcurve(_)) => "pcurve",
             Self::Defect(Defect::Finish(_)) => "finish",
+            Self::Defect(Defect::NoSolid) => "no_solid",
             Self::Full(_) => "table_full",
         }
     }
@@ -221,15 +288,41 @@ impl fmt::Display for MakeError {
             Self::Unsupported(Unsupported::Segment(at)) => {
                 write!(f, "{at} is of a kind not swept yet")
             }
+            Self::Refused(Refusal::Annulus { outer, inner }) => write!(
+                f,
+                "the inner radii {inner:?} mm are not inside the outer radii {outer:?} mm with a wall between"
+            ),
             Self::Refused(Refusal::ZeroRadii) => write!(f, "both radii of the cone are zero"),
+            Self::Refused(Refusal::NoRegions) => write!(f, "no regions were given"),
+            Self::Unsupported(Unsupported::RegionsMeet { first, second }) => write!(
+                f,
+                "regions {first} and {second} overlap, touch or cross: merging them is not done yet"
+            ),
             Self::Refused(Refusal::SelfIntersecting { major, minor }) => write!(
                 f,
                 "the torus's minor radius {minor} mm exceeds its major radius {major} mm: the tube crosses its axis"
             ),
+            Self::Refused(Refusal::UvBox { u, v }) => write!(
+                f,
+                "the uv box u {u:?}, v {v:?} is empty, longer than a period or past the surface's domain"
+            ),
+            Self::Unsupported(Unsupported::NurbsFace) => {
+                write!(f, "a face on a NURBS surface is not made yet")
+            }
             Self::Unsupported(Unsupported::HornTorus { major, minor }) => write!(
                 f,
                 "the horn torus (major {major} mm, minor {minor} mm) is not made yet: its tube meets the axis"
             ),
+            Self::Refused(Refusal::CrossesAxis { at }) => {
+                write!(f, "{at} crosses the axis of the revolve")
+            }
+            Self::Refused(Refusal::Turn { from, to }) => write!(
+                f,
+                "the turn from {from} to {to} radians is not increasing, finite, less than a whole turn and more than the resolution from either cap to the other"
+            ),
+            Self::Unsupported(Unsupported::SpindleTorus { at }) => {
+                write!(f, "{at} revolves to a spindle torus, which is not made yet")
+            }
             Self::Defect(Defect::Surface(e)) => write!(f, "a surface of the body: {e}"),
             Self::Defect(Defect::Curve(e)) => write!(f, "a curve of the body: {e}"),
             Self::Defect(Defect::Absent(e)) => e.fmt(f),
@@ -237,6 +330,7 @@ impl fmt::Display for MakeError {
             Self::Defect(Defect::PlaneFrame) => write!(f, "a face's plane has no frame"),
             Self::Defect(Defect::Pcurve(e)) => write!(f, "no exact pcurves: {e}"),
             Self::Defect(Defect::Finish(c)) => write!(f, "the draft is not a body: {c}"),
+            Self::Defect(Defect::NoSolid) => write!(f, "a solid face was written to a sheet"),
             Self::Full(e) => e.fmt(f),
         }
     }
@@ -256,7 +350,7 @@ impl core::error::Error for MakeError {
             Self::Full(e) => Some(e),
             Self::Refused(_)
             | Self::Unsupported(_)
-            | Self::Defect(Defect::PlaneFrame | Defect::Interval) => None,
+            | Self::Defect(Defect::PlaneFrame | Defect::Interval | Defect::NoSolid) => None,
         }
     }
 }

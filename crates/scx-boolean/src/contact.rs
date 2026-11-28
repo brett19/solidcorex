@@ -17,18 +17,20 @@
 
 use std::collections::BTreeMap;
 
-use scx_brep::{EdgeId, EdgeShape, Entity, Face, FaceId, UvSide, VertexId};
-use scx_curve::Curve;
+use scx_brep::{EdgeId, EdgeShape, Face, FaceId, UvSide, VertexId};
 use scx_num::budget::{Budget, Stop};
 use scx_num::extent1d::Extent1d;
 use scx_num::extent3d::Extent3d;
 use scx_num::units::{Accuracy, Length, Resolution};
 use scx_num::vector2d::Point2;
 use scx_num::vector3d::Point3;
-use scx_surface::{Contact as HitContact, CurveSurfaceHit, SurfaceError, intersect_curve};
+use scx_surface::{
+    Contact as HitContact, CurveSurfaceHit, OnSurface, curve_on_surface, intersect_curve,
+};
 
-use crate::error::{BooleanDefect, BooleanError, BooleanUnsupported};
+use crate::error::{BooleanDefect, BooleanError};
 use crate::geom::{Operands, Side, edge_foot, face_foot, recorded};
+use crate::given::{Given, Lies, false_fact, of_edge_face};
 
 /// Where on its operand a member of a contact lies.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -337,6 +339,7 @@ fn candidates(ops: Operands<'_>, touched: &Touched) -> Vec<Candidate> {
 pub(crate) fn interferences(
     ops: Operands<'_>,
     pairs: &[(FaceId, FaceId)],
+    given: &Given,
     budget: &mut Budget,
     stop: &Stop,
 ) -> Result<Found, BooleanError> {
@@ -353,7 +356,7 @@ pub(crate) fn interferences(
                     .extend(vf(ops, &touched, s, v, f, budget, stop)?);
             }
             Candidate::Ef(s, e, f) => {
-                let (contacts, spans) = ef(ops, &touched, s, e, f, budget, stop)?;
+                let (contacts, spans) = ef(ops, &touched, given, s, e, f, budget, stop)?;
                 found.contacts.extend(contacts);
                 found.spans.extend(spans);
             }
@@ -482,10 +485,14 @@ fn vf(
     }
 }
 
-/// The contacts and spans of an edge of `side` against a face of the other.
+/// The contacts and spans of an edge of `side` against a face of the other: where a fact
+/// covers the pair, read through [`curve_on_surface`] (the same hits; a stated fact the
+/// edge leaves is refused).
+#[expect(clippy::too_many_arguments, reason = "the stage's read-only context")]
 fn ef(
     ops: Operands<'_>,
     touched: &Touched,
+    given: &Given,
     side: Side,
     e: EdgeId,
     f: FaceId,
@@ -521,20 +528,25 @@ fn ef(
             face: f,
         }))?;
     let res = Resolution::new(Length::from_mm(reach)).unwrap_or_else(|| ops.a.resolution());
-    let hits = intersect_curve(curve, interval, fc.surface(), &uv_box, res, budget, stop).map_err(
-        |x| {
-            match (x, curve) {
-                // The NURBS one named: the edge when its curve is, else the face.
-                (SurfaceError::NurbsIntersection, Curve::Nurbs(_)) => {
-                    BooleanError::Unsupported(BooleanUnsupported::Nurbs {
-                        operand: side.operand(),
-                        at: Entity::Edge(e),
-                    })
-                }
-                (x, _) => BooleanError::of_surface(x, operand, f),
+    let on_surface = |x| of_edge_face(x, side, e, curve, f);
+    let hits = match given.edge(side, e, f) {
+        None => intersect_curve(curve, interval, fc.surface(), &uv_box, res, budget, stop)
+            .map_err(on_surface)?,
+        Some(lies) => {
+            match curve_on_surface(curve, interval, fc.surface(), &uv_box, res, budget, stop)
+                .map_err(on_surface)?
+            {
+                OnSurface::Proved(t) | OnSurface::Isolated(t) => t
+                    .into_iter()
+                    .map(|t| CurveSurfaceHit::Overlap { t })
+                    .collect(),
+                OnSurface::Leaves(hits) => match lies {
+                    Lies::Stated(fact) => return Err(false_fact(fact)),
+                    Lies::Implied => hits,
+                },
             }
-        },
-    )?;
+        }
+    };
     for h in hits {
         match h {
             CurveSurfaceHit::Point {
