@@ -139,9 +139,9 @@ fn alike(want: Result<Done<NoItems>, BooleanError>, got: Result<Done<NoItems>, B
     }
 }
 
-fn refused(r: Result<Done<NoItems>, BooleanError>) -> Fact {
+fn refused(r: &Result<Done<NoItems>, BooleanError>) -> Fact {
     match r {
-        Err(BooleanError::Refused(BooleanRefusal::FalseFact { fact })) => fact,
+        Err(BooleanError::Refused(BooleanRefusal::FalseFact { fact })) => *fact,
         Err(e) => panic!("refused otherwise: {e}"),
         Ok(_) => panic!("a false fact was taken"),
     }
@@ -178,23 +178,14 @@ fn stated_edges_give_the_same_union_subtraction_and_intersection() {
         .map(|e| on(B, e, fa.top))
         .chain(edges(&a, fa.top).into_iter().map(|e| on(A, e, fb.bottom)))
         .collect();
-    for (op, truth) in [
-        (BooleanOp::Union, 1240.0),
-        (BooleanOp::Subtract, 1000.0),
-        (BooleanOp::Intersect, 0.0),
-    ] {
-        match op {
-            // Faces that only touch meet in no volume: both refuse it alike or both
-            // build the same nothing.
-            BooleanOp::Intersect => {
-                alike(plain(&a, &b, op), given(&a, &b, op, &facts));
-            }
-            _ => {
-                let (w0, w1) = same(&a, &b, op, &facts, truth);
-                assert!(w1 < w0, "{op:?}: work {w1} with the edges, {w0} without");
-            }
-        }
+    for (op, truth) in [(BooleanOp::Union, 1240.0), (BooleanOp::Subtract, 1000.0)] {
+        let (w0, w1) = same(&a, &b, op, &facts, truth);
+        assert!(w1 < w0, "{op:?}: work {w1} with the edges, {w0} without");
     }
+    // Faces that only touch meet in no volume: both refuse it alike or both build the same
+    // nothing.
+    let op = BooleanOp::Intersect;
+    alike(plain(&a, &b, op), given(&a, &b, op, &facts));
 }
 
 #[test]
@@ -265,7 +256,7 @@ fn a_false_edge_fact_is_refused() {
     let top = edges(&b, fb.top)[0];
     let lie = on(B, top, fa.top);
     let facts: Incidences = [lie].into_iter().collect();
-    assert_eq!(refused(given(&a, &b, BooleanOp::Union, &facts)), lie);
+    assert_eq!(refused(&given(&a, &b, BooleanOp::Union, &facts)), lie);
     // A side edge of the upper block crosses the cube's top plane at one end: tested in
     // stage 2, where the roots find it leaving.
     let side = edges(&b, fb.sides[0])
@@ -274,14 +265,14 @@ fn a_false_edge_fact_is_refused() {
         .unwrap();
     let lie = on(B, side, fa.top);
     let facts: Incidences = [lie].into_iter().collect();
-    assert_eq!(refused(given(&a, &b, BooleanOp::Union, &facts)), lie);
+    assert_eq!(refused(&given(&a, &b, BooleanOp::Union, &facts)), lie);
     // True facts beside it do not hide it.
     let facts: Incidences = edges(&b, fb.bottom)
         .into_iter()
         .map(|e| on(B, e, fa.top))
         .chain([lie])
         .collect();
-    assert_eq!(refused(given(&a, &b, BooleanOp::Union, &facts)), lie);
+    assert_eq!(refused(&given(&a, &b, BooleanOp::Union, &facts)), lie);
 }
 
 #[test]
@@ -300,7 +291,7 @@ fn a_false_face_fact_is_refused() {
         },
     ] {
         let facts: Incidences = [lie].into_iter().collect();
-        assert_eq!(refused(given(&a, &b, BooleanOp::Union, &facts)), lie);
+        assert_eq!(refused(&given(&a, &b, BooleanOp::Union, &facts)), lie);
     }
 }
 
@@ -318,7 +309,7 @@ fn a_fact_naming_what_is_not_there_is_refused() {
         },
     ] {
         let facts: Incidences = [lie].into_iter().collect();
-        assert_eq!(refused(given(&a, &b, BooleanOp::Union, &facts)), lie);
+        assert_eq!(refused(&given(&a, &b, BooleanOp::Union, &facts)), lie);
     }
 }
 
@@ -339,7 +330,7 @@ fn near_the_coincidence_a_fact_is_judged_as_the_test_judges_it() {
         if holds {
             alike(plain(&a, &b, BooleanOp::Union), r);
         } else {
-            let fact = refused(r);
+            let fact = refused(&r);
             assert!(facts.facts().contains(&fact));
         }
     }
