@@ -44,6 +44,7 @@ pub use cone::{ConeFaces, cone};
 pub use cylinder::{CylinderFaces, cylinder};
 pub use error::{Defect, Dimension, MakeError, Refusal, Unsupported};
 pub use extrude::{ExtrudeFaces, Span, extrude};
+pub use scx_planar::{Region, Segment};
 pub use sphere::{SphereFaces, sphere};
 pub use torus::{TorusFaces, torus};
 

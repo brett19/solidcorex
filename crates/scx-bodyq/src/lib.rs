@@ -75,6 +75,7 @@ mod near;
 mod on;
 mod rays;
 mod reach;
+mod recognize;
 mod round_face;
 mod side;
 mod tangent;
@@ -100,6 +101,11 @@ pub use mid_joint::{Line3, Meeting, Moved, move_edge_onto_line, planes_meeting};
 pub use mid_sheet::{Holds, Wall, from_frame, in_frame, onto_plane, polygon_area, wall_holds};
 pub use rays::RAYS;
 pub use reach::Near;
+pub use recognize::{
+    Bore, Equivalence, Layer, Lone, NotPrism, Options as StackOptions, Piece, PrismSection,
+    Recognition, Slot, Stack, Stacks, Why, bores, hole_stacks, prism_equivalent, prism_section,
+    prism_section_charged, stack_bores,
+};
 pub use round_face::{
     BESIDE, Band, End, Extent, GrowBlock, Inward, Met, Probe, RIDGE, SAME_SIZE, SLOPE_TIE,
     SeatFrame, beside_clear, extent, extent_in, far_end, grow_block, into_seat, past_end,

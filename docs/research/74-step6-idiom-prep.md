@@ -2936,6 +2936,189 @@ Open questions:
 
 | 11-27 | (For the owner's review) `scx_stitch::stitch(&[&Brep], Want, &mut Cx) -> Result<Stitched, StitchError>`: sheet `i` is operand `i`, sheet 0 is edited in place, and the others are copied in with `Origin::Operand` lineage. Vertices of different sheets within coincidence are one vertex, from one grid over all sheets. Two of one sheet are `Refused(VerticesWithinCoincidence)`. A chain is anchored to the nearest vertex of its doubled sheet, else `Unsupported(Chain)`. The kept record is the member with the smallest reach, then the lowest point, so permuted input gives the same points. That vertex is raised, `Measured`, to the farthest edge or pcurve end the merge moves, where that is beyond its reach. Until ST2, edges to join or split, and a vertex inside another sheet's edge box, are `Unsupported(Edges)`; `Want::Solid` is `Unsupported(Solid)`. `Stitched { done: Done<NoItems>, report: StitchReport }`, since a stitch skips nothing. Edges: stitch → bodyq | Amends row 186's "a's record kept" for stitch, so that §4.4's permuted-bits truth holds; amends §4.3 step 4 ("never raises"), since moved curve ends need the measured gap row 186 asks for | 74 §26 |
 
+## 33. BW6 as built (11-28)
+
+`scx_bodyq::{prism_section, prism_section_charged, prism_equivalent, bores, stack_bores,
+hole_stacks}` and their types, in `crates/scx-bodyq/src/recognize/` (`prism.rs`, `piece.rs`,
+`bores.rs`, `stacks.rs`), branch `bw6`. No new Cargo edge. One additive re-export in
+`scx-testkit` (`bodies::made::{Region, Segment}`, the types `extrude` takes) so the tests can
+build bodies without a `scx-planar` edge on bodyq. New error variants: `BodyqRefusal::{FrameTooFar,
+BadOption}` and `BodyqDefect::Tolerance`.
+
+### 33.1 Shape
+
+```rust
+pub fn prism_section(&Brep, &Frame, &mut Cx) -> Result<Recognition, BodyqError>;
+pub fn prism_section_charged(&Brep, &Frame, reach: f64, &mut Scratch, &mut Budget, &Stop)
+    -> Result<Recognition, BodyqError>;
+pub enum Recognition { Prism(PrismSection), NotPrism(NotPrism) }
+pub struct PrismSection { lo, hi: f64, outer: Vec<Piece>, holes: Vec<Vec<Piece>>,
+    tolerance: Length, area: Ivl, volume: Ivl }
+pub enum Piece { Line { a, b: Point2 }, Arc { center: Point2, radius, start, sweep: f64 } }
+pub struct NotPrism { at: Entity, why: Why }   // Why: Sides, Slanted, Kind, Caps, Vertex, Edge, Wire, CapsDiffer
+pub fn prism_equivalent(&Brep, &Brep, &mut Cx) -> Result<Equivalence, BodyqError>;
+pub enum Equivalence { Same, Different, NoPrism }
+
+pub fn bores(&Brep, &mut Budget, &Stop) -> Result<Vec<Bore>, BodyqError>;
+pub struct Bore { point: Point3, axis: UnitVec3, d: f64, t: [f64; 2], slot: Option<Slot> }
+pub fn stack_bores(&[&[Bore]], &StackOptions, &mut Budget, &Stop) -> Result<Stacks, BodyqError>;
+pub fn hole_stacks(&[&Brep], &StackOptions, &mut Budget, &Stop) -> Result<Stacks, BodyqError>;
+pub struct StackOptions;   // new(touching, axis_tolerance) checked; with_slots, with_diameters
+```
+
+The pin's `prism::measure::{section, equivalent}` and `eval::hole_stacks::{bores, stacks}` (with
+the ops filter by slots and diameter ranges) are the sources. The prism and the bores take the
+body as `&Brep`; the prism takes `&mut Cx` because its face sizes are `tight_box`es (BW2), kept in
+`Scratch` with their work; bores and stacks keep nothing, so they take `(&mut Budget, &Stop)` (R8).
+
+### 33.2 What was removed, and what replaces it
+
+| In the pin | Here |
+|---|---|
+| 24 `.ok()?` in the prism code; `None` for "not a prism", a failed read, and a spent budget alike | `Recognition::NotPrism { at, why }` is a proof by one entity; a NURBS face that is no quadric is `Unsupported(Nurbs)`, budget and stop are `Exhausted`/`Cancelled`; a face box or uv box that cannot be had is a `Defect` |
+| `tol = size * 1e-10`, `identity_tol = size * 1e-7`, `1e-12` on a normal's length, a `1e-5` volume check | one length, the body's coincidence (`coincident(res, largest accuracy of any face, edge or vertex)`), plus the rounding of the frame's coordinates and any recognised face's deviation; an angle is a length (the angle times the face's tight-box diagonal) |
+| `COAXIAL 1e-3`, `NEAR 1e-6`, `SLOT_END 0.6`, `PARALLEL 1 - 1e-5`, opening dot `0.9`, rim `2e-3 r` | the coincidence; a slot end's sides stand a diameter apart within it at the radius; two axes are parallel within the options' `axis_tolerance` over the bores' extent; openings face along the line between axes within it at the radius |
+| `MAX_FACES 20000`, `MAX_CROSSES 4,000,000`, `MAX_HOLES`: refuse | the caller's `Budget`: a unit per face and per comparison, `Exhausted` when it runs out (R6) |
+| `1 - 1e-4` on slot directions | `parallel(.., axis_tolerance)` as for axes |
+| a section only for a convex straight outline or a circle with separated round holes (the separation proof) | any loop of lines and arcs: the volume is the area with the coincidence's corridor, `2 c P + pi c^2` on the area, `2 c` on the height |
+| origin refusal by an `error <= tol` inside the section | `Refused(FrameTooFar)` before reading: the rounding of the frame's coordinates must be within a quarter of the coincidence |
+| the pin's frame for `equivalent` from the first planar face only | every distinct planar-face direction of `a`, in face id order; `Same` along one, `Different` when `a` is a prism along some and no such direction gives equal levels and loops, `NoPrism` when `a` is none |
+| bores `None`/skip when an edge's curve could not be read | a collapsed edge on a cylinder wall is no bore wall (an answer); everything else is an error |
+
+### 33.3 The recognition (what is proved)
+
+A body is a prism along the frame's z when, in this order (each entity read charged one unit):
+
+1. every face has the one solid region on one side and the outside on the other, the solid sides
+   all one shell (so no cavity, no touching second solid, no sheet);
+2. every face is a cap (a plane square to z) or a wall (a plane along z, a cylinder with its axis
+   along z), by the stray over the face's tight box: `|n x z| * diagonal <= c` (cap), `|n . z| *
+   diagonal <= c` (plane wall), `|axis x z| * diagonal <= c` (cylinder). A cone or NURBS face first goes
+   through SU7's `recognize` over its uv box (cut to the surface's domain, since the certified box
+   is rounded outward past a cone's apex): a plane or cylinder within `c` is read as one and its
+   deviation is added to the tolerance; a cone that stays a cone is `Kind`; a NURBS surface no
+   quadric within `c` is `Unsupported`;
+3. exactly one cap faces `+z` and one `-z`, the upper more than `c` above the lower;
+4. every vertex is on one of the two levels; every cap edge is a line or a circle about an axis
+   along z with both ends at its cap's level; every other edge is a line from one level to the
+   other, straight along z (its two ends within `c` in the plane); no edge is collapsed or a wire;
+5. the two caps' loops are the same curves within `c`, from any start and cut into any pieces
+   (adjacent pieces on one line or one circle merge first, a turn within `c` of whole is the whole
+   circle).
+
+Then the body is the region between the levels over the lower cap's section (the walls stand on the
+cap loops by 4 and 2; the boundary projects to the section). The section is the lower cap's own
+loops as pieces, the outer counter-clockwise and holes clockwise in the frame. Item 5 cannot fail
+on a valid body by the argument just made; it is kept as a proof, not trusted (`CapsDiffer`).
+
+### 33.4 Cases for and against
+
+- *One coincidence for the whole body, not one per entity.* For: a bound has to cover every entity it
+  reads; one number is deterministic and cheap. Against: one loose edge anywhere widens every test
+  (a 1e-3 accuracy on a far fillet widens the tilt allowance on the whole plate). Per-entity
+  coincidences would need the tolerance threaded through every comparison; left as a refinement.
+- *The tight-box diagonal as the stray's length (the pin's `face_straying`).* For: certified (BW2), and
+  a long thin face is allowed a smaller angle than a short fat one. Against: cold cost (below); a
+  whole-body diagonal would be one box, but would refuse a long body whose small face is nearly square.
+- *`Why` as a closed set of reasons, no free text.* For: callers branch on it (the app shows which
+  face). Against: a new reason is an API change (`#[non_exhaustive]`).
+- *Not a prism is `Ok(NotPrism)`, not an error.* For: it is the answer to "is it a prism"; errors are
+  for "could not tell". Against: a caller has to match twice.
+- *`hole_stacks` filters inside.* The pin's ops layer filtered slots and diameter ranges after the
+  kernel; here `StackOptions` holds them, since `bores` is public for a caller that wants its own.
+- *Lone bores carry their index* (`Lone::bore`), which the pin's did not; the caller can name the
+  bore (and so the face) without matching on a float.
+
+### 33.5 Tests (`crates/scx-bodyq/tests/recognize.rs`, 29)
+
+Truth is the closed form (area, volume, level, radius, extent), never the pin's output.
+
+Ported from the pin (the two kernel and three ops cases that concern recognising a body; see
+33.7 for the other 71 of `prism/tests.rs`):
+
+- `a_drilled_prism_has_its_section_and_its_volume_enclosed`: `4000 - 360 pi` in the volume,
+  `400 - 36 pi` in the area, the corridor no wider than `2 c P + pi c^2`, the pieces' own Green
+  areas `400` and `-36 pi`, not a prism along x, `Same` for a twin, `Different` for a hole wider by
+  `1e-4` and a hole moved `1e-4`;
+- `a_box_is_a_prism_along_each_of_its_axes`: along z, x, y and reversed z, levels, area, volume;
+- `a_prism_section_does_not_depend_on_the_query_frame_origin`: offsets 0, 300, 1e3, +-1e4 give the
+  same section to 1e-8, `1e20` and `f64::MAX / 4` are `Refused(FrameTooFar)`, a body far from the
+  origin read at a frame beside it;
+- `a_drilled_box_moved_is_the_prism_it_was`: built in a turned and moved frame, a prism along its z,
+  not along the world's, `Same` as its twin and `Different` from a wider one and from one lifted by a
+  millimetre.
+
+New: a curved section (a D) as lines and arcs; cone, frustum, sphere, cavity, stack, sheet, a pyramid
+frustum and a stepped plate are `NotPrism` with their `Why`; a cone whose taper is `1e-9` is a prism
+(SU7 recognises it) and one of `1e-3` is not; the tolerance is the document's (a tilt of `1e-4` is a
+prism in a document of resolution 0.01 and not at the default); determinism, warm against cold
+scratch, `Exhausted` and `Cancelled`; and for bores: a round hole, two halves of one cylinder, a
+boss and a block (none), an obround slot (centre, length, direction), a half-circle notch and a
+106 degree bite (not bores), a countersink and a drill point (built face by face; both checked with
+`classify_point` so the fronts are known to face the air), budget and stop; for stacks: the pin's ten
+cases (`three_coaxial_holes_are_one_stack`, `a_hole_two_tenths_off_is_no_stack`, the counterbore, the
+millimetre gap, two stacks, a round hole over a slot, slots on one centre line, the chain of four
+slots, a far bore, and `too_many_nearly_coaxial_holes`, now `Exhausted`), option checks, and three
+plates with coaxial holes through `hole_stacks` (twice, a hole off by a millimetre, the diameter
+filter).
+
+### 33.6 Measurements (release, one thread, loaded build host, side-channel timer, not committed)
+
+| Case (drilled 20 x 20 x 10 plate, hole radius 6) | Pin | Here |
+|---|---:|---:|
+| prism section, cold scratch | 1,967 us | 135 us |
+| prism section, warm scratch (tight boxes memoized) | 1,967 us | 13.7 us |
+| `equivalent` of two twins | 46 us | 159 us (cold scratch, both bodies' tight boxes and two sections) |
+| `bores` of the plate (one round hole) | not timed (the pin needs a `Record`) | 0.4 us |
+| stacks, 2,000 x 2,000 bores one tenth off axis, all in neighbouring cells | refuses at 4,000,000 comparisons after 81 ms | completes: 8,002,000 comparisons, 162 ms (20 ns each, as the pin's) |
+| stacks, 4,000 bores per body spread 3 mm apart, the second set 0.1 above | 7.1 ms | 6.4 ms, 12,000 comparisons |
+
+Median of 200 runs for the prism rows. The section is 15 times faster than the pin's cold (the
+pin's cost was not profiled; here a face is a closed form and a box). The one row where this is
+slower is `equivalent` (3.4 times, cold): it reads both bodies' faces through `tight_box` (the
+cold cost; a section is 13.7 us once the boxes are kept) and runs a section for each. Two warm
+sections would be about 27 us (2 x 13.7, not measured as such), under the pin's 46 us. The pin's stacks refuse past 4,000,000
+comparisons, a cap the budget replaces; the per-comparison cost is the same. Counts of work added
+over the pin's: none on an existing path (these are new functions in a crate whose callers are
+rows still to be built).
+
+### 33.7 Not ported, deviations, open questions
+
+- **"Research 73's prism tests".** Research 73 is the SSI marcher note and has none. The 73 is 74
+  §2.4's count of the pin's `prism/tests.rs`. Of those, the two measure cases are ported, and of
+  `solidcore-ops/tests/prism.rs`'s 35 the three section/equivalence cases. The other 71 test
+  profiles, arc conversion, ellipse recognition, regions, sheets, extrusion, members and gussets:
+  the planar and make rows' code (PL6, make), not recognition. They are not ported here.
+- **Not ported:** `a_prism_section_refuses_a_wall_displaced_from_its_caps` (a wall shifted along its
+  own axis while the caps stay; `finish` refuses such a body, so the case cannot be built; the
+  nearest cases are the tilt tests); ruled spline net walls and extruded surfaces as walls (a NURBS
+  face goes through SU7's `recognize` and is a prism wall only if it is a plane or cylinder; the
+  degree-one ruled net the pin proves has no scx kind yet, so it is `Unsupported(Nurbs)`). A NURBS
+  wall that SU7 recognises is untested here (no cheap way to build a finished body with a NURBS face
+  and exact pcurves; the cone case exercises the same path).
+- **Deviations from the §8 row:** `prism_equivalent` is `Equivalence` (three-way), not `Option<bool>`;
+  `bores` takes a budget and a stop; `hole_stacks` returns `Lone::bore`; `StackOptions` is built by a
+  checked constructor, not a literal.
+- **Open:**
+  1. One coincidence per body (33.4). Per-entity would sharpen a body with one loose edge.
+  2. `Why::Sides` lumps three causes (a face with no solid side, a face with solid on both sides, a
+     second shell); split it if the app needs to say which.
+  3. `prism_equivalent` is "same in a frame at `a`'s first vertex", so two bodies that are the same
+     prism placed differently are `Different`, as in the pin. A "congruent prisms" query would need a
+     rigid fit of the sections; not asked for.
+  4. Slots whose ends are not half circles (a stadium whose ends are arcs of other angles) are not
+     recognised, as in the pin.
+
+### 33.8 Proposed 04 row
+
+BW6: `scx_bodyq::prism_section(&Brep, &Frame, &mut Cx) -> Result<Recognition, BodyqError>` answers
+`Prism(section, levels, tolerance, area and volume enclosures)` or `NotPrism { entity, why }`, never
+`None` for a failure; its tolerance is the body's coincidence plus the frame's rounding, and a frame
+too far for that is `Refused(FrameTooFar)`. `prism_equivalent` is `Same`/`Different`/`NoPrism`.
+`bores(&Brep, &mut Budget, &Stop)` and `hole_stacks(&[&Brep], &StackOptions, &mut Budget, &Stop)`
+take every length from the coincidence or the caller's options, and the pin's face and comparison
+caps are the budget. Edges: none. | Amends the §2.3 "constants from `cx.doc`": the bodies carry their
+resolution, so the constants come from the body | 74 §33
 ## 25. BW4 as built (11-27)
 
 Two queries across an edge, in `crates/scx-bodyq/src/{along,tangent,continuity}.rs`:
