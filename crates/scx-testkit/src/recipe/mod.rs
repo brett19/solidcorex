@@ -29,8 +29,7 @@
 //! **Dependencies on 72's proposals.** The outcomes follow 72 §12.4 as ruled: the analytic
 //! SSI answers plane against all kinds, two spheres and coaxial pairs (`SsiPair` otherwise);
 //! a touch at a vertex or along an edge is built (BO7, BR10), and a touch inside a face
-//! too (BO25; D5 had it `Unsupported(NonManifold)`); a horn torus is
-//! `Unsupported(HornTorus)` (D3).
+//! too (BO25; D5 had it `Unsupported(NonManifold)`); a horn torus is built (`MK4b`).
 
 // Fixed 3-arrays and loop counters only.
 #![allow(clippy::indexing_slicing)]
@@ -270,8 +269,6 @@ pub enum Refusal {
 /// Why an operation says `Unsupported` (72 §5.2, §12.4).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Unsupported {
-    /// A horn torus (`minor == major`): its apex is a singular point (D3).
-    HornTorus,
     /// A face pair whose intersection the analytic SSI has no closed form for (SS2 and the
     /// spiric sections). The two kinds are the pair of surfaces, in `Kind` order: the
     /// library names them in its own order, so compare as a set.

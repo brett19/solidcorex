@@ -313,10 +313,10 @@ fn boxes_hold_sampled_images() {
 
 #[test]
 fn interval_angle_is_tight_off_the_cut() {
-    let a = <Ivl as Polar>::atan2(Ivl::new(1.0, 2.0), Ivl::new(1.0, 2.0));
+    let a = <Ivl as Trig>::atan2(Ivl::new(1.0, 2.0), Ivl::new(1.0, 2.0));
     assert!(a.lo <= fmath::atan2(1.0, 2.0) && a.hi >= fmath::atan2(2.0, 1.0));
     assert!(a.hi - a.lo < 0.65, "{a:?}");
-    let cut = <Ivl as Polar>::atan2(Ivl::new(-0.1, 0.1), Ivl::new(-2.0, -1.0));
+    let cut = <Ivl as Trig>::atan2(Ivl::new(-0.1, 0.1), Ivl::new(-2.0, -1.0));
     assert!(cut.lo <= -PI && cut.hi >= PI);
 }
 

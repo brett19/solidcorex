@@ -83,12 +83,16 @@ enum Kind {
     /// of `v`.
     Ruled { r0: f64, slope: f64, slant: f64 },
     /// A sphere (`centre` 0) or torus: circumference radius `centre + tube cos(psi)` at the
-    /// `v` angle `psi`, `rho` the least radius of curvature, `v` the arcs of `v`.
+    /// `v` angle `psi`, `rho` the least radius of curvature, `v` the arcs of `v`. A horn
+    /// torus (`pinch`) has no least radius: its parallels' radius of curvature, `(centre +
+    /// tube cos psi) / -cos psi` inside the tube, falls to 0 at the pole, so `rho` is the
+    /// tube's and a triangle's own bound reads its corners' `psi` (see `Rules::bound`).
     Round {
         rho: f64,
         centre: f64,
         tube: f64,
         v: Arcs,
+        pinch: bool,
     },
 }
 
@@ -136,6 +140,7 @@ impl Rules {
                         centre: 0.0,
                         tube: r,
                         v: Arcs::half(),
+                        pinch: false,
                     },
                     Arcs::turn(1.0),
                 )
@@ -144,10 +149,15 @@ impl Rules {
                 let (big, r) = (t.major().mm(), t.minor().mm());
                 (
                     Kind::Round {
-                        rho: r.min(big - r),
+                        rho: if t.pole().is_some() {
+                            r
+                        } else {
+                            r.min(big - r)
+                        },
                         centre: big,
                         tube: r,
                         v: Arcs::turn(1.0),
+                        pinch: t.pole().is_some(),
                     },
                     Arcs::turn(1.0),
                 )
@@ -259,11 +269,23 @@ impl Rules {
                     })
                     .fold(0.0, f64::max)
             }
-            Kind::Round { rho, .. } => {
+            Kind::Round {
+                rho,
+                centre,
+                tube,
+                v,
+                pinch,
+            } => {
                 if let Some(a) = self.angle
                     && longest > (a * rho) * (a * rho) * (1.0 + SLACK)
                 {
                     return None;
+                }
+                if pinch {
+                    // A horn torus: no one radius of curvature bounds it.
+                    let r2 = enclosing_squared(sides, n.length_squared());
+                    let sag = pinched_sag(self, t, [centre, tube, rho], v, r2)?;
+                    return (sag <= self.chord * (1.0 + SLACK)).then_some(sag);
                 }
                 let r2 = enclosing_squared(sides, n.length_squared());
                 if r2.is_nan() || r2 >= rho * rho {
@@ -274,6 +296,42 @@ impl Rules {
         };
         (sag <= self.chord * (1.0 + SLACK)).then_some(sag)
     }
+}
+
+/// A horn torus triangle's bound on its distance from the surface, or `None` when it has none.
+///
+/// A horn torus has no least radius of curvature: its parallels' radius, `(centre + tube cos
+/// psi) / -cos psi` inside the tube, falls to 0 at the pole, and a triangle along the
+/// meridian near it is no less flat for that. The two directions are bounded apart and
+/// added: the sphere bound at the tube's own radius over the triangle's enclosing circle
+/// (the meridian's bend), and across the angle the corners span the radial deficit of a
+/// chord inside the largest circumference radius `d` among them, `2 d sin²(span / 4)` (the
+/// cone's bound, by the same argument). A corner on the pole has circumference radius 0
+/// and no angle.
+fn pinched_sag(
+    rules: &Rules,
+    t: &Corners,
+    [centre, tube, rho]: [f64; 3],
+    v: Arcs,
+    r2: f64,
+) -> Option<f64> {
+    let mut ring = 0.0_f64;
+    let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+    for (uv, on) in t.uv.iter().zip(t.pole) {
+        if on {
+            continue;
+        }
+        ring = ring.max((centre + tube * cos(v.angle(uv.y))).abs());
+        let phi = rules.u.angle(uv.x);
+        lo = lo.min(phi);
+        hi = hi.max(phi);
+    }
+    let span = if lo <= hi { hi - lo } else { 0.0 };
+    if span.is_nan() || span >= PI || r2.is_nan() || r2 >= rho * rho {
+        return None;
+    }
+    let s = sin(0.25 * span);
+    Some(r2 / (rho + sqrt(rho * rho - r2)) + 2.0 * ring * s * s)
 }
 
 /// The squared radius of the smallest circle enclosing a triangle of squared sides `sides`
@@ -748,6 +806,7 @@ fn lattice(
             centre,
             tube,
             v,
+            ..
         } => {
             let side = rules.round_side(rho);
             let (psi0, psi1) = (v.angle(lo.y), v.angle(hi.y));

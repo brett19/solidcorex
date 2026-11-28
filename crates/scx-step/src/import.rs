@@ -50,8 +50,6 @@ pub enum Waits {
     PcurveFit,
     /// An edge used by more than two faces.
     NonManifold,
-    /// A gap whose bound is not built (a NURBS surface).
-    NurbsGap,
 }
 
 impl Waits {
@@ -74,7 +72,6 @@ impl Waits {
             Self::VertexLoop => "step_waits_vertex_loop",
             Self::PcurveFit => "step_waits_pcurve_fit",
             Self::NonManifold => "step_waits_non_manifold",
-            Self::NurbsGap => "step_waits_nurbs_gap",
         }
     }
 }
@@ -127,7 +124,7 @@ pub enum BuildError {
         /// The bracket reached.
         reached: Bracket,
     },
-    /// A gap that cannot be measured (its range is not finite).
+    /// A gap that cannot be measured (its range is not finite, or its surface is procedural).
     Gap {
         /// The edge or vertex.
         entity: u64,

@@ -1860,7 +1860,7 @@ Decisions, with cases for and against:
   the torus's periodic v range (at `v = 1/2`, or `3/2` a period on), so only the pole use's own
   start v says which side of it the loop is on; for the sphere and cone, whose poles are at the
   ends of the v interval, the two rules agree. `scx_make::torus` still refuses a horn torus
-  (`Unsupported::HornTorus`); with the pole now supported that refusal could be lifted (open).
+  (`Unsupported::HornTorus`); the refusal is lifted by MK4b (13.33).
 - **The plane snap rule at the mean height, not the start's.** A line whose ends are within the zone
   in height is a plane at their mean height; within the zone in radius, a cylinder at their mean
   radius. For the mean: each end is off by at most half the difference, not all of it, and the rule
@@ -2813,7 +2813,7 @@ with a throwaway timer that was not committed.
 API (all `Result<_, SurfaceFitError>`):
 - `interpolate(&Net<[f64; D]>, u, v, (p, q))` and `interpolate_on(grid, &ku, &kv, u, v)`: the surface through a grid at given parameters (row `i` of the net at `u[i]`, column `j` at `v[j]`), knots by averaging or given. Rows (along u) are fitted by FT2 into `CompatibleCurves`, then their control columns along v.
 - `interpolate_rows(&CompatibleCurves<D>, v, degree, &Edge, &Edge)` and `interpolate_rows_on(.., &kv, ..)`: skinning with given parameters, the curves being CN1's. Rational rows are fitted in homogeneous space (`w P` and `w`, two solves per column); the surface passes through the rows and is rational.
-- `Edge<D>` is `Point` or `Held(Vec<End<D>>)`: one FT2 `End` per control point of a row, a derivative of that control column in v, all of one order (G1/G2/G3 boundary). Refused for rational rows.
+- `Edge<D>` is `Point` or `Held(Vec<End<D>>)`: one FT2 `End` per control point of a row, a derivative of that control column in v, all of one order (G1/G2/G3 boundary). Refused for rational rows (lifted by CN4, §13.28, which adds `Edge::Homogeneous` and drops `RationalEnds`).
 - `least_squares(grid, u, v, (p, q), (nu, nv))`, `least_squares_on`, `least_squares_rows`, `least_squares_rows_on`: knots by `approximation`, corners held (the end points of every line are fixed).
 - `grid_parameters(grid, Param) -> (u, v)`: FT2's `parameters` per line, averaged over the lines (lines with all points equal left out).
 - `Edge`, `SurfaceFitError::{Fit { axis, cause }, Curves, Surface, EdgeCount, EdgeOrders, RationalEnds, Defect}` with `kind()` and `name()`; the frames inherit their cause's kind. Nothing is snapped, clamped or retried.
@@ -2822,7 +2822,7 @@ API (all `Result<_, SurfaceFitError>`):
 Decisions.
 - **Separable two-pass fit, not a tensor system.** For: linear in the grid, one code path with FT2, the same numbers as fitting each curve. Against: the least-squares result is the separable one with the four boundary curves fitted to the boundary data (the pin's), not the global minimum with corners only held; for exact data on the knot space they agree.
 - **Ends only on the row fit (`Edge`), not on a grid.** The pin's first-derivatives-at-every-point surface and the twist they need are CN4's with the boundary conditions. For: no guessed twist. Against: a grid with prescribed boundary slopes needs the caller to fit the derivative curve itself.
-- **Derivative ends on rational rows are refused** (`RationalEnds`) rather than interpreted in homogeneous space. For: no meaning invented. Against: rational skins with tangent ends wait for CN4.
+- **Derivative ends on rational rows are refused** (`RationalEnds`) rather than interpreted in homogeneous space. For: no meaning invented. Against: rational skins with tangent ends wait for CN4. (Lifted by CN4, §13.28.)
 - **A fitted weight that is not positive is `Surface(BadWeights)`**, not clamped (the pin clamps weights to `[1e-3, 100]`). Test: weights 1, .01, 1, .01, 1 at five rows.
 - **Bernstein through `restrict`.** For: exact, one code path, rational for free. Against: `restrict` copies the whole surface per call, so all spans of a large surface cost `O(spans * net)`; a Bezier decomposition in one pass is the follow-up if MK10 loops over every span (scx-surface's own patch builder already does one).
 - **Not ported:** `func_interp`'s own type (a `D = 1` grid does it), weighted surface fits, closed surfaces, per-point first derivatives, the pin's `i64` count arithmetic and its three overflow tests (they assert typed refusals of impossible counts; counts here are `usize` lengths of the data and cannot overflow a signed index).
@@ -3282,7 +3282,276 @@ Open questions.
 - The search is `O(n^2)` in the spans: each round refits and recertifies every span, one knot a round. The helix at 1e-8 takes 3.8 s for 256 spans. A local update, or several knots a round, would cut it, but the second changes the pin's search and the nesting argument; left for a measured need.
 - Pieces that end on a fit knot include the neighbour's jets (`point_over` joins both sides at a knot): sound, slightly loose.
 
-### 13.35 BO10b as built (11-28)
+### 13.35 MK4b as built (11-28)
+
+`scx_make::torus` builds a horn torus (radii within the resolution) instead of refusing it;
+`Unsupported::HornTorus` is gone from `scx-make`, the testkit mirrors and the recipe tables;
+`SpindleTorus` and `Refusal::SelfIntersecting` (minor above major by more than the resolution)
+stay. The step-7 audit of what assumed minor < major follows.
+
+- **The build.** As revolve's whole circle that touches the axis: one vertex (the pole at the
+  frame's origin), the meridian circle through it (closed there, from tube angle pi once round,
+  so `v` runs over `[1/2, 3/2]`), and a collapsed edge of the face's own at each end of that
+  `v` range (the inner equator is both `v = 1/2` and `3/2`): 1 vertex, 3 edges, 1 face, exact
+  pcurves. The radius is the mean of the two within the resolution, as revolve's. For: it is the
+  shape revolve already builds and the check, the pcurve writer and the oracle already read.
+  Against: one collapsed edge used in both senses would be a seam, but the check wants one fin
+  per collapsed edge.
+- **What the check says.** The contract passes (`Contacts::Refused` and `Radial`); the structure
+  pass reports exactly one `VertexNotManifold { pieces: 2 }` at the pole and refuses it only
+  under `Contacts::Manifold`. The body's genus is 1 (scx and the pin agree; the recipe states it and is `pinched`, so the manifold and mesh invariants are off). That is the truth: two lobes of the solid meet at the pole, a
+  pinch. Not changed.
+- **Mass.** Needed no change: the breaks put `v = 1/2` on a patch edge, and the volume and area
+  match `2 pi^2 R^3` and `4 pi^2 R^2` to `1e-12` (tilted frames too). The testkit truth
+  `solid::torus` now takes `minor == major` (it refused it).
+- **SSI.** Read for `big - small`, `/ big`, `/ small`: the divisions are by `big` and `small`
+  only; the Villarceau case's `cv = sqrt((big - small)(big + small)) / big` is 0 for a horn
+  torus, which is the right limit (the two circles become the meridians). No change.
+- **Tessellation (broke).** `face_need` refused a horn torus (`major <= minor`) and
+  `Rules::of` took `rho = min(r, R - r) = 0`. Edge segments now bound by the tube's curvature
+  alone; faces get `Kind::Round { pinch }` and `pinched_sag`: no one radius of curvature bounds
+  a horn torus (the parallels' falls to 0 at the pole), so the meridian's bend (the sphere bound
+  at the tube radius over the triangle's enclosing circle) and the parallels' radial deficit
+  (`2 d sin^2(span / 4)`, `d` the largest circumference radius among the corners) are added.
+  A first attempt, the least parallel radius over the corners, never passed the slivers along
+  the meridian near the pole and refined to a duplicate point; the split bound fixes it. The
+  ring torus path is unchanged (one `bool` test per triangle). The mesh oracle reports exactly
+  one `NonManifoldVertex`, the pole, which the test expects for the horn case, and its fold limit
+  is off for the horn: the fan round the pole is the tip of two needles (`rho = z^2 / 2R`) and
+  turns by under a degree at a chord of 0.001, a property of the surface, not a fold.
+- **Boolean (broke, refused).** A cut across a horn torus's face is `Defect(Build)` today: the
+  imprint trace keeps one collapsed edge per pole vertex, and a horn pole has two (both lobes).
+  It is now `Unsupported(HornPole { operand, face })` (name `horn_pole`) from the trace. A plane
+  through the pole is the same refusal (it was `Defect(Seeds)`'s cousin). Follow-up: the trace
+  needs the pole vertex's star in two uv sheets (key the poles by the arriving half-edge's `v`
+  and order the star per sheet); not built. A horn torus wholly inside or clear of a block or
+  cylinder works (union, intersection, difference volumes checked); a ring-torus control of
+  the same shape passes.
+- **Tests added.** `scx-make` round: `spindle_tori_are_refused_and_horn_tori_built` (replaces
+  `..._horn_tori_unsupported`: the old test's three horn radii are now built) and
+  `a_horn_torus_has_analytic_properties`; `scx-check` `a_horn_torus_is_a_checked_solid`;
+  `scx-tess` curved gains a horn torus in `primitives` (closed, chord, crack and volume checks
+  at three chords, two frames); `scx-boolean` horn.rs (four tests). The recipe `torus-horn`
+  is `Built` with its closed-form truth; the difftest adapter drops its `HornTorus` arm.
+
+### 13.28 CN4 as built (11-28)
+
+`scx_nurbs_surface::skin` (77 §4.3, row CN4; CN3's `fit::interpolate_rows`, FT2's `interpolate_on` and `averaging`, FT1's `deviation::{distance, interpolation_bound}` reused).
+
+API:
+- `skin(&CompatibleCurves<D>, params, degree, &Skin<D>) -> Result<Skinned<D>, SkinError>`; `Skinned { surface, through }`, the sections being the surface's `u` rows at `params` along `v`.
+- `Skin::Open { start: Edge<D>, end: Edge<D> }` (CN3's ends) and `Skin::Closed { coincidence: f64 }`; `MAX_CLOSED_DEGREE` = 7.
+- `SkinError::{Fit(SurfaceFitError), NotClosed { gap, coincidence }, Coincidence { value }, TooFewSections { count, needed }, ClosedDegree { degree, most }, Seam, Gap(DeviationError), Through(DeviationError), WeightsLost, Defect { why }}` with `kind()` and `name()`; the frames inherit their cause's kind.
+- `fit::Edge` gains `Homogeneous { points: Vec<End<D>>, weights: Vec<End<1>> }`; `SurfaceFitError::RationalEnds` is gone.
+
+Decisions.
+- **`through` is certified per control column.** `S(u, v_k) - C_k(u) = sum_i N_i(u) (X_i(v_k) - P_ki)` with `X_i` the curve of control column `i`; the basis is a partition of unity, so the largest FT1 `interpolation_bound` over the columns bounds the miss for every `u`. Rational skins bound the homogeneous columns (`dA`) and the weight columns (`dW`) and divide: `(dA + R dW) / (W_min - dW)`, with `R` the sections' reach and `W_min` their least weight, `WeightsLost` if the denominator is not positive. For: exact reasoning, FT1's rounding model, and no sampling. Against: it bounds the control columns, not the surface, so it can be larger than the true miss (rounding is all it measures for exact interpolation, 1e-14 to 1e-12 in the tests). Its cost is below.
+- **Rational derivative ends lifted (CN3's `RationalEnds` refusal dropped).** On rational rows `Edge::Held(D_i)` means the boundary derivative is the rational curve of control points `D_i` on the row's own weights: the numerator's end is held at `w_i D_i` and the weights' ends at zero, so `S_v = sum N_i w_i D_i / sum N_i w_i` exactly (and the same for the second and third orders, since `W_v = W_vv = 0`). `Edge::Homogeneous` holds the homogeneous derivatives themselves (the pin's `create_skin_srf_boundary_derivs` meaning): it is what a rational neighbour's net gives across an edge. Polynomial rows under `Homogeneous` get unit weights, so the result is rational. For: both meanings are exact and documented. Held keeps CN3's polynomial meaning unchanged, and only the rational meaning is new. Against: Held cannot express a moving weight. Adversarial check: a caller who passes affine tangents on rational rows and expects the pin's homogeneous meaning gets a different surface, so the two are separate variants with different names, not one variant read two ways.
+- **Per-point first derivatives and twist not lifted.** No 77 row needs them (MK12's ends are `Edge`s), and a guessed twist is the failing default 75 §1 forbids. Against: a grid with prescribed slopes still needs the caller to fit the derivative curves.
+- **`Skin::Closed { coincidence }` carries the coincidence.** This deviates from 77's bare `Closed`. Layer 2 has no document tolerance to read, and R5 says the caller decides. The gap is FT1's certified `distance` of the first and last section. Bitwise-equal sections are 0 apart without it, since the certified bound carries about 3e-14 of rounding on unit data. A gap above the coincidence is `NotClosed { gap, coincidence }`, never a silent open skin. Within it, the last section is replaced by the first bit for bit, and `through` adds the gap. `f64`, not `Length`: the nurbs crates are unitless.
+- **Closed is `C^(q-1)` across the seam, not the pin's C1.** For `r = q - 1`, `a = ceil(r/2)` derivatives are held at the start and `b = floor(r/2)` at the end on averaging knots. Both are the unknown seam derivatives `d_1..d_a`, and they are fixed by the `a` exact conditions `X^(k)(v_m) = X^(k)(v_0)` for `k = b+1..=r`. Superposition gives the solution: one base solve per column, plus `a` one-dimensional unit responses computed once, whose `a x a` residual matrix is inverted once with partial pivoting (`Seam` if it is singular). The last control value is then set to the first, so the seam's rows are equal bit for bit. For: the same smoothness as at every simple knot, no estimated derivatives (the pin's comes from a shifted interpolation), and the cost of an open skin. Against: the knots are the open averaging knots, not periodic ones, so the seam span is clamped (multiplicity `q + 1` at both ends), which is a seam in the knot vector though not in the shape. A periodic knot vector would need a cyclic banded solver that FT2 lacks.
+- **Not ported:** the pin's `knot_tol` snapping (CN1's curves are compatible exactly), its weight clamp to `[1e-3, 100]` (a weight that is not positive is refused), its in-place mutation of the input curves, and its `dir` flag (`NurbsSurface::swapped` turns a skin).
+
+Work (release, throwaway timer; `n` control points per section, `m` sections):
+
+| sections | `interpolate_rows` | open skin | closed skin |
+|---|---|---|---|
+| poly n 8 m 16 q 3 | 13.2 us | 38.8 us (+193%) | 43.9 us |
+| poly n 32 m 64 q 3 | 181 us | 592 us (+227%) | 611 us |
+| poly n 128 m 64 q 5 | 1.17 ms | 3.93 ms (+235%) | 4.04 ms |
+| rational circles m 128 q 3 | 199 us | 665 us (+235%) | - |
+
+- The added work is the certificate: one `interpolation_bound` per control column (two for rational). It costs 1.8 to 2.4 times the fit, because each of those calls builds a curve and FT1's net and evaluates every parameter by de Boor.
+- The closed seam adds 1 to 20% over the open skin. That is the gap's `distance`, `a` one-dimensional solves and an `a x a` back substitution per column.
+- A shared-basis bound over many columns on one knot vector (one basis evaluation per parameter, the rounding model unchanged) would take most of the certificate's cost away. It is the follow-up if MK10's lofts make skins hot.
+- Knots added against the pin: none. The `v` knots are averaging knots on the given parameters (the pin's), and `u` is CN1's exact union.
+
+Tests (`skin_tests`, 13; truth is a closed form):
+- Equal circles at 2, 4 and 7 heights on degree 1 give the cylinder.
+- A radius linear in height gives the cone at degrees 1 to 3.
+- Radii `1 + z/2 - z^2/5` at `z = 0, 1, 3` on degree 2 give the surface of revolution of that law. So do five sections at degrees 2 and 3.
+- These tests hold to `1e-12` at 400 random points, with `through` at least the sampled miss and at most `1e-11`.
+- A polynomial ring of 9 sections at degrees 1 to 5 and a torus of 13 rational sections at degrees 1 to 7 are closed: the seam rows are bitwise equal, and every column's derivatives up to `q - 1` agree across the seam to `1e-9` relative.
+- A ring whose last section is lifted by `1e-10` is accepted within `1e-9`, and `through` covers the miss.
+- Lifted by `1e-6` or `0.5` against a coincidence of `1e-7`, it is refused `NotClosed` with a gap in `[h, h + 1e-13]`.
+- Rational `Held` tangents `(c x_i, c y_i, h)` on two circles at degree 3 give the cone, and `c = 0` gives the cylinder.
+- A `Homogeneous` quarter-circle derivative on two polynomial segments gives the rational quarter cylinder (`|xy| = 1` to `1e-14`).
+- `Homogeneous` with zero weight derivatives equals `Held` on polynomial rows.
+- Ports of the pin's `srf_adv` cases, judged against the closed form: `skins` (the lines give the bilinear patch, and `S(1, 1) = (1, 0.3, 3)`), `interpolates_cross_sections`, `derivative_strips_add_rows` (6 columns, with the tangent held), and `rejects_bad_input` (degree 5 on 4 sections, and a wrong parameter count).
+- One test checks the typed refusals and that the names are unique.
+
+Removed, on purpose: the `RationalEnds` assertion in `fit_tests::refusals_are_typed_and_leave_the_inputs`. It proved that derivative ends on rational rows were refused. It is now a success assertion (the result is a rational surface), and `skin_tests` checks the meaning.
+
+### 13.36 FT4 as built (11-28)
+
+**Built.** `crates/scx-surface/src/gap/nurbs.rs` is the NURBS arm of `curve_surface_gap` and
+`pcurve_edge_gap` (77 FT4). It runs through the same branch and bound (`search`) as the analytic
+kinds, with two `Field`s: `PcurveOnNurbs` and `CurveToNurbs`.
+
+- The surface over a uv box is cut at the knot lines inside the box. Each part is enclosed on its
+  own polynomial piece by `NurbsSurface::partials_over_piece` (NS4) about the piece's middle, and
+  the parts' enclosures are hulled.
+- A pcurve's derivatives come from the chain rule over the box. The piece is then bounded as the
+  analytic pcurves are (`vector_bound`).
+- A curve against the surface takes each point's distance from `nurbs_invert::invert`'s certified
+  nearest point. A piece is bounded through a uv correspondence: the two feet joined linearly, or
+  either foot held. The smallest of the three bounds is kept.
+
+API changes:
+- `GapError::Pending` and `scx_surface::Pending` are removed workspace-wide. With them go
+  `scx_check::Undecided::Pending` (and the `Pending` re-export) and `scx_step::Waits::NurbsGap`.
+- `Short::Defect(&'static str)` is added: the nearest-point search inside the gap failed, which
+  is the kernel's own fault (kind `Defect`, name `gap_defect`).
+- `scx_bodyq::curve_lies_on_face` takes NURBS target faces. Where it had answered
+  `Unsupported(Nurbs)`, it now gives the certified gap, and a gap defect maps to
+  `Defect(Surface { face })`. Inside the trim it is `Undecided` until a NURBS surface has
+  pcurves.
+- `GapError::Procedural` is added (kind `Unsupported`, name `gap_procedural`), with
+  `scx_check::Undecided::Procedural { edge, face }`. Main's PK1 had sent `Surface::Procedural`
+  through `Pending` too. Its gap would be its exact net's, widened by `Procedural::bound`, but
+  that needs the aim adjusted for the widening and the net's box checked against the face's
+  domain, so for now it is refused by name. `curve_lies_on_face` keeps PK1's
+  `Unsupported(Nurbs)` for a procedural face, now through the gap's error.
+
+**Choices, with the case for and against.**
+
+1. **Hull per knot piece, not one enclosure of the whole box.**
+   - For: `partials_over_piece` is exact per polynomial piece, and a box crossing a knot line
+     would otherwise need the rational form's global enclosure, which is far wider. Continuing an
+     end piece past the domain covers pcurves enclosed a few ulps outside it, where
+     `partials_over` refuses (the cylinder's boundary ruling test).
+   - Against: a box crossing `k` lines in each direction costs `(k+1)^2` piece enclosures. After
+     the first cuts, pieces cross at most one line, so the measured cost is small (below).
+2. **Lipschitz bound across C0 knot lines.** `to_nurbs` circles have double knots in degree 2,
+   which are C0 by knot structure. The chord bound needs `D''`, so a piece crossing such a line
+   takes `min((|D(a)| + |D(b)| + h sup|D'|)/2, min(|D(a)|, |D(b)|) + h sup|D'|)` and the direct
+   enclosure.
+   - For: it is certified without any assumption of geometric smoothness.
+   - Against: it converges linearly. Measured, it costs 16 to 124 pieces per call out of
+     thousands, so it is accepted for now (coordinator, 11-28). An exact crossing cut for line
+     pcurves is a possible follow-up.
+3. **The point lower bound is padded by the search's gap.** `invert`'s foot is within
+   `GAP_REL (diagonal + first incumbent)` of the true nearest point. The incumbent is bounded by
+   `|q - centre| + diagonal/2` of the net box, so the pad is
+   `2 (|C(t) - q| + eps) + |S(foot) - foot.point| + 8 EPS distance`.
+   - For: it is the certificate `invert` gives, with no sampled acceptance.
+   - Against: an aim tighter than about `1e-12` of the model's size ends in `Precision` (open
+     question, kept by the coordinator).
+4. **Three correspondences, the smallest bound kept.**
+   - For: the linear one converges quadratically on smooth spans. The held ones keep a piece
+     bounded where the feet jump: across a sphere's seam, or at a pole.
+   - Against: there are three enclosures per piece. The linear correspondence still leaves a
+     quadratic error against the true foot path, so the points needed grow as `w^-1/2` (below).
+5. **`Pending` removed rather than left empty** (coordinator, 11-28): it has no dead variants.
+   `scx-check`'s NURBS gaps are now proved or undecided like any others, and `scx-step` builds
+   NURBS edges' gaps.
+
+**Tests** (`gap/tests.rs`, against closed forms).
+- A bilinear plane patch against a line at heights 2.5, 1e-6 and 0, and a slant line reaching 0.3.
+- The rational sphere against a circle on it gives 0. Moved out radially by 1e-3 and 0.25, it
+  gives `h`. This is tested on a short arc at `1e-9` and on the whole circle at `1e-6`.
+- The NURBS cylinder's pcurve gap equals the analytic cylinder's within `1e-9`, for 0, 0.001 and
+  1e-4. A boundary ruling gives 0 and 1e-5.
+- Determinism: bracket and units are the same each call.
+- `a_procedural_surface_is_refused_by_name`: both gaps give `GapError::Procedural` on a
+  revolution, with nothing spent.
+- Removed: `a_nurbs_surface_is_pending`, which proved a NURBS surface was `Pending`. This is on
+  purpose, since FT4 lifts it.
+- `scx-bodyq` `refusals_and_a_nurbs_target_face`: the NURBS target that was `Unsupported(Nurbs)`
+  is now `OffSurface { by }`, with `1e-6 < by <= sqrt(57)`, the closed-form largest distance of
+  the segment from the patch. A segment in the patch is `Undecided`, never refuted.
+
+**Measured** (release, throwaway counters, aim width `1e-9`; "quarters" is how many of the
+`to_nurbs` rational quarter arcs the range spans, so knot lines crossed are 0, 1 and 3).
+
+| case | quarters | points | piece bounds | crossing C0 | units | time |
+|---|---|---|---|---|---|---|
+| plane patch, line at 2.5 / 0 | - | 5 / 5 | 4 / 4 | 0 | 246 / 80 | 0.59 / 0.03 ms |
+| sphere, circle on it | 1 / 2 / 4 | 11,344 / 24,688 / 54,107 | 22,682 / 49,370 / 108,208 | 0 / 16 / 33 | 0.22M / 0.45M / 1.20M | 0.39 / 0.84 / 2.2 s |
+| sphere, circle out 1e-3 | 1 / 2 / 4 | 7,196 / 14,905 / 34,870 | 14,386 / 29,804 / 69,734 | 0 / 20 / 43 | 0.54M / 1.12M / 2.76M | 1.6 / 3.3 / 7.9 s |
+| cylinder pcurve, on | 1 / 2 / 4 | 1,655 / 4,093 / 8,231 | 3,304 / 8,180 / 16,456 | 0 / 16 / 100 | = points | 15 / 38 / 77 ms |
+| cylinder pcurve, r 2.001 | 1 / 2 / 4 | 2,031 / 4,106 / 8,253 | 4,056 / 8,206 / 16,500 | 0 / 20 / 124 | = points | 19 / 38 / 78 ms |
+| analytic cylinder, same pcurve | 1 / 2 / 4 | - | - | - | 5 (on), 127 / 248 / 513 (off) | 0.01 / 0.3-1.4 ms |
+
+The linear correspondence gives the smallest bound on all but 25 to 36 of the sphere's pieces. The
+cylinder's NURBS pcurve costs 15 to 330 times the analytic one, which has an exact chart shortcut.
+
+- Cost is set by arc length and aim, not by knot count. Pieces that cross a C0 line (c0) are
+  under 1% of the pieces.
+- At width `w` the curve-to-surface points grow as `w^-1/2`; a whole circle at `1e-6` takes
+  about 1/30 of the `1e-9` count.
+- Tightness: at the end, the lower bound is within `3.3e-11` of the truth, from the search's
+  pad. The upper bound is within the aim.
+- Analytic arms: units are identical before and after on every path measured (sphere latitude
+  5, off it 5, cylinder pcurve 513). Time, interleaved runs on a shared machine: sphere 11.3-19.3 us before, 17.1-17.7 us after; cylinder pcurve 1.73-2.29 ms before, 1.91-2.00 ms after. These are equal within the noise, and the arms are untouched apart from one `Option` match on the kind.
+
+**Open.**
+1. The `GAP_REL` pad limits how tight an aim can be (choice 3).
+2. Linear convergence across C0 lines (choice 2).
+3. The curve-to-surface arm costs one nearest-point search per point, 20 to 80 units, with
+   `w^-1/2` points. A quadratic correspondence (a Newton step on the feet) would cut the count.
+4. `curve_lies_on_face` on a NURBS face cannot prove the trim until a NURBS surface has pcurves.
+5. The procedural arm: the net's gap widened by its bound, the aim tightened by the bound so
+   the widened bracket still meets it (or undecided when it cannot).
+### 13.37 VM2 as built (11-28)
+
+Curve images under a `VolumeMap`, in `scx_surface::volume_map::curve` (a child of `volume_map`, re-exported): 77 §5.2's `image` for curves, after VM1 (13.31) and on FT3's `fit_within` (13.34).
+
+Public API:
+- `VolumeMap::image_curve(&Curve, over: Extent1d, aim: f64, &mut Budget, &Stop) -> Result<CurveImage, CurveNot>`.
+- `CurveImage::{Exact { curve, over, param: CurveParam }, Fitted(Fit)}`; `CurveParam::{Same, Affine { scale, shift }}` (the image at `s = scale t + shift` is the map of the source at `t`); `Fit { curve, over, bound, spans: Vec<SpanBound>, fits }` (the cubic B-spline on the source's span, so the same parameter; `bound` is the largest certified span bound and is within the aim).
+- `CurveNot::{BadSpan, MeetsAxis, OnCut, OutsideDomain, Unproven { bound, ended }, Fit(FitError)}` (non-exhaustive).
+- In scx-num: `Trig::atan2(y, x)` (new method; `f64`, `Ivl` and `Jet2`). `Polar` in scx-surface is now `pub trait Polar: Trig {}` with a blanket impl, so VM1's `map<T: Polar>` and every caller keep working; the `Ivl` angle moved to scx-num unchanged.
+
+Rules (a test on kind and frame within `ALIGNED`, never a sample), in the map's frame:
+- Bend: a line along the axis, or along `u` at `v0` (`|v0| <= pi d`), is a line, same parameter. A line along `v` at `u0 > 0` is the circle of radius `u0` about the axis, `Affine { scale: speed / d, shift: v0 / d }` (the circle's parameter is the angle). A circle in a plane `v = v0` (normal along `y`) is the circle in the plane through the axis at `v0 / d`, same parameter (the map is an isometry of that plane).
+- Twist: a line on the axis is itself. A line, or a circle, in a plane square to the axis is turned by `2 pi w / p`, same parameter. A line parallel to the axis and off it is not on a rule: it is a helix, fitted.
+- Unbend: a line along the axis is the line along the axis at `(r, d theta)`. A line square to the axis and through it, over one side of it, is the line along `u` at `d theta`, `Affine { scale: +-|dir|, .. }` (the radius is the parameter, so the far side runs backwards); a span that meets the axis is `MeetsAxis`. A circle about the axis in a plane square to it is the line along `v` at `u = r`, same parameter, `OnCut` when the span reaches `pi` (a span of a turn always does).
+- A chain is exact only when every step is, the span and parameter carried through; otherwise the whole chain is fitted in one (a helix then bent is one fit of the composite, not a fit of a fit).
+- Everything else, NURBS included, is the fit: source `t -> map(curve(t))` as a `CurveFn<3>` over `f64`, `Ivl` and `Jet2`, with the NURBS curve's knots in the span as breaks. Ends are free (not held along the pushed tangent).
+
+Decisions.
+- **`over` replaces `near`.** A line and a circle have no end of their own and the fit needs a domain, so the span is an argument; the unbend picks its nappe from the span's middle, as `near` did for surfaces.
+  - For: one argument does both jobs, and DF1's edge has its span.
+  - Against: 77 wrote `image_curve(&Curve, near)`; every caller passes a span (an edge has one).
+- **`atan2` joins `Trig` so the unbend can be fitted** (VM1 left a jet ring without `atan2`; the fit evaluates over `Jet2`).
+  - For: an unbend of any curve is then fitted like a bend of one; the other route, refusing the unbend's fit, leaves DF2's unbend of a bent body with no way to carry a curved edge.
+  - Against: a method added to `Trig` (three implementors), so scx-num is touched (wasm test run); `Polar` is now only a name. The `Jet2` angle is the chain rule on `Ivl`s: sound, loose near the origin, whole at it (so a fit near the axis or across the cut never proves).
+- **A curve across the unbend's cut or axis is `Unproven`/`Fit(Exhausted)`, not detected by rule.** Its image jumps, so no span proves; the budget and the cap end the search. For: no sampling to decide a kind. Against: it costs the budget before refusing. A line through the axis and a circle about it are caught by rule (`MeetsAxis`, `OnCut`).
+- **The bend's domain** is refused only by the rules (`OutsideDomain` for a constant `v` beyond `pi d`); a fitted curve is the bend's formula wherever it goes.
+- **Ellipses, parabolas and hyperbolas have no rule**: the fit handles them within the aim. Added only if a caller's count says so (75 §13.31's "new rules only when needed").
+
+Tests (`volume_map/curve/tests.rs`, 10; closed forms, the map applied pointwise, the bound at dense samples):
+- a line under a twist is a helix: the fit against `(u cos a - v sin a, u sin a + v cos a, w)` at 601 samples, within the bound, at 1e-3 and 1e-6;
+- exact lines and circles on the axis and square to it under a twist, skew frame, pointwise to `1e-12` relative;
+- the bend's three line rules (the circle's radius and affine parameter checked) and its circle in a constant-`v` plane (and `OutsideDomain`);
+- an arc off the rules under a bend, fitted, 801 samples within the bound;
+- every unbend rule, both senses and both orientations, `MeetsAxis` and `OnCut`;
+- a general line under an unbend, fitted (the `Jet2` angle);
+- a fit across the cut is refused, never proved;
+- chains: exact bend then twist (a line and a circle, `Same` and `Affine`), a twist then a bend fitted whole, a bend then its unbend of a general line equal to the line within `2e-8`;
+- a NURBS curve under a twist, fitted over its knots.
+
+Counts (release, throwaway timer; spans of the cubic, evaluations charged to the budget, one a point or a piece):
+
+| source, map | aim 1e-3 | aim 1e-6 |
+|---|---|---|
+| line along the axis at (1.5, 0.5), twist of pitch 4, `t` in `[0, 6]` (a helix of radius 1.58) | 16 spans, 4,288 evaluations | 126 spans, 367,779 evaluations |
+| circle of radius 1 at `u = 3`, `w = 1`, bend `d = 4`, a full turn | 13 spans | 64 spans |
+| line `(1, 0.5, 0) + t (1, 1, 0.5)`, unbend `d = 2` | 6 spans at 1e-4 | 64 spans at 1e-8 |
+| cubic NURBS of 6 points under a twist | | 68 spans |
+| a twist then a bend of a line along the axis | | 32 spans |
+
+The helix agrees with 13.34's note: the search is `O(n^2)` in the spans (each round refits and recertifies every span), and a tight aim on a long, curved image is the cost. A fitted edge at DF1's tolerance (1e-3 to 1e-4 of the part) is tens of spans and thousands of evaluations; the rules cost nothing but the frame's arithmetic. The tests run in debug in 13 s.
+
+Deviations from 77: `over` for `near`; `Trig::atan2`; `CurveImage` is `Exact`/`Fitted` (no `Procedural`: PK4's in-volume curve is PK4's step, as for surfaces); ends of a fit are free (held ends along `push` of the tangent left for a caller that needs G1 at a vertex).
+
+Open questions.
+- A fit near the unbend's axis is conditioned by `d / u` and the `Jet2` angle is loose there: the budget decides, not a rule.
+- The `O(n^2)` search (13.34's open question) is what a tight aim on a long curved edge pays.
+- Held ends: DF1's edges meeting at a vertex of a fitted face may want G1 at the ends.
+
+### 13.38 BO10b as built (11-28)
 
 Fixes three of BO10's causes at the root (§13.6): wrong-points, seeds, and the contract and
 far-contract NoBox / Undecided cases; most classify and build cases went with them.
