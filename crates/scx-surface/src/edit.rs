@@ -60,7 +60,7 @@ impl UvMap {
     }
 
     /// The parameter of `axis` negated.
-    const fn negating(axis: ParamAxis) -> Self {
+    pub(crate) const fn negating(axis: ParamAxis) -> Self {
         match axis {
             ParamAxis::U => Self::scaling(-1.0, 1.0),
             ParamAxis::V => Self::scaling(1.0, -1.0),
@@ -109,7 +109,7 @@ impl UvMap {
 const SIMILAR: f64 = 16.0 * f64::EPSILON;
 
 /// Whether the vectors are pairwise square and of one length, to [`SIMILAR`].
-fn similar(vs: &[Vec3]) -> bool {
+pub(crate) fn similar(vs: &[Vec3]) -> bool {
     vs.iter().enumerate().all(|(i, a)| {
         vs.iter().skip(i + 1).all(|b| {
             let (p, q, r) = (a.dot(*a), b.dot(*b), a.dot(*b));
@@ -451,6 +451,7 @@ impl Surface {
                 Self::Nurbs(Arc::new(n.reversed(axis))),
                 UvMap::negating(axis),
             ),
+            Self::Procedural(p) => wrap(p.reversed(axis)),
         }
     }
 
@@ -461,7 +462,9 @@ impl Surface {
     /// A plane maps to a plane under any affine map ([`Plane::transformed`]); a cylinder,
     /// cone, sphere or torus to the same kind under a similarity; a NURBS surface to a NURBS
     /// surface, its control points mapped ([`NurbsSurface::transformed`]), with the
-    /// identity map. These are exact images.
+    /// identity map; a procedural extrusion under any affine map and a revolution under a
+    /// similarity, its definition mapped and its net built again
+    /// ([`Procedural::transformed`](crate::Procedural::transformed)). These are exact images.
     ///
     /// # Errors
     ///
@@ -479,6 +482,7 @@ impl Surface {
             Self::Sphere(k) => k.transformed(a).map(wrap),
             Self::Torus(k) => k.transformed(a).map(wrap),
             Self::Nurbs(n) => Ok((n.transformed(a)?.into(), UvMap::IDENTITY)),
+            Self::Procedural(p) => p.transformed(a).map(wrap),
         }
     }
 }

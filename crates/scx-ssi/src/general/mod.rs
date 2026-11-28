@@ -80,7 +80,8 @@ use crate::error::{SingularKind, SsiError};
 ///
 /// [`SsiError::Unresolved`], [`SsiError::Stalled`], [`SsiError::Singular`],
 /// [`SsiError::Uncertified`] or [`SsiError::Untraced`] where the method cannot finish the
-/// pair, each naming the place; [`SsiError::Budget`] when `budget` runs out;
+/// pair, each naming the place; [`SsiError::Procedural`] at once for a procedural operand
+/// (in the caller's order); [`SsiError::Budget`] when `budget` runs out;
 /// [`SsiError::Stopped`] when `stop` is set. A valley in a candidate pair
 /// ([`Survey::valleys`]) refuses the pair before any plan: `Singular` at the least flat one,
 /// else `Untraced` at the least one. A singular contact is `Singular` at the least such
@@ -95,6 +96,14 @@ pub fn intersect(
     budget: &mut Budget,
     stop: &Stop,
 ) -> Result<Traced, SsiError> {
+    // No patch enclosure reads a procedural surface's net yet (75 §13.27): refuse before any
+    // work rather than subdivide to the budget.
+    if let Some(operand) = [a, b]
+        .iter()
+        .position(|s| matches!(s, Surface::Procedural(_)))
+    {
+        return Err(SsiError::Procedural { operand });
+    }
     // NURBS against NURBS is marched in one order of the operands, so that either order
     // gives the same bits; the field path is symmetric by its own choice of side.
     let swap = field::field_side([a, b], [ae, be]).is_none() && key(b, be) < key(a, ae);
