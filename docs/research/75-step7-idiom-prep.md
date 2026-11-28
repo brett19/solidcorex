@@ -3843,3 +3843,79 @@ Tests (`crates/scx-make/src/sheet_blend/tests.rs`, 15, all closed forms; none re
 - Too few stations and an edge with no face are refused.
 - The definition rebuilds bit for bit, recertifies in a turned orientation, and follows a motion.
 - Even `point_frames`, `open_section_turns` end to nearer end, and `section_frames_outward` square to the edge.
+
+### 13.41 RY1 as built (11-28)
+
+`intersect_curve` (and `curve_on_surface`) now answer a NURBS curve against a plane, cylinder,
+cone, sphere or torus (77 §6.3 RY1). A NURBS curve against a NURBS surface stays
+`SurfaceError::NurbsIntersection`. The new module is `scx-surface/src/intersect/nurbs_curve.rs`,
+and the parent's `Path::of` dispatch gains one arm.
+
+- **Per span.** Each Bézier span, in homogeneous form and in the kind's own frame, is substituted
+  into the implicit form as a `Bounded` Bernstein polynomial with a rounding bound. The degrees are
+  `p` for a plane's height, `2p` for a cylinder, cone or sphere, and `4p` for a torus. The roots
+  are isolated with `bernstein_roots`, and each one is polished by three Newton steps. The turns
+  are the roots of the derivative (`h g' - d h' g` for a rational span). These two isolations make
+  up the two budget units a span charges.
+- **Contacts.** The span's events (Root, Turn, End, and a Probe at each interior knot) go through
+  the parent's `classify`. A hit is therefore typed exactly as an analytic one is, by the same
+  `Tangent` and `Crossing` rules.
+- **Knots.** A knot is one event, never two: neighbouring spans share the knot's point bit for bit.
+  A sign change in the slope across a knot (a kink) is a Turn, so a polyline's V touching a plane
+  is one tangent. A crossing at a knot is one crossing.
+- **Overlaps.** A span whose polynomial is zero within its bound has its overlap proved by the gap
+  certificate (`curve_surface_gap`). A run of such spans is one `Overlap`, clipped by the
+  surface's uv box. A closed curve merges its end hits.
+- **Undecided.** An uncertified root far from the surface, a flat span the gap cannot prove, or a
+  depth-4 sign check that fails returns `SurfaceError::Undecided { t }`, never an empty answer.
+  The variant is RY2's (13.32); RY1 widens its doc to NURBS-curve roots.
+- **`curve_on_surface` against a plane.** It first takes the control net's height bound,
+  `max (|z| + ez)/(h - eh)`, which costs one budget unit. A curve that bound proves in the plane is
+  `Proved` without isolation.
+
+Choices:
+
+1. **Undecided rather than empty.** I chose `Undecided` for an uncertified root. For: an empty
+   answer is a wrong miss. Against: a caller now has one more error arm, which bodyq, boolean and
+   hlr map with `NurbsIntersection`.
+2. **Kinks are read from the slopes' end coefficients.** For: this costs nothing extra and matches
+   the truth of a polyline V. Against: a span with a zero end slope relies on the turn isolation
+   instead. That case is tested with the cubic spline at its knot.
+3. **The surface's own uv box clips an overlap run.** This matches the analytic `Overlap` contract.
+
+The hlr fix: `silhouette.rs` `trim`'s face test now reads a foot farther than the face's `near`
+as off the face. RY1 made this code reachable. Before RY1, a NURBS rim made the trim `Undecided`.
+Now the rim splits the generators, and the NURBS patch's inversion clamps a foot to the patch
+edge, which read every point past the edge as `Near`. The test is renamed
+`a_rational_cylinder_is_recognised_and_trimmed_by_its_nurbs_rims` and now checks the truth: of
+the two generators, the one at about 106.7 degrees runs on the face from `z = 0` to `0.5`, and
+the one at about 286.7 degrees lies in the arc's 90 degree gap and is dropped. The old test
+asserted that both were `Undecided::NurbsEdge`, which was a stand-in for not knowing.
+HL3's outline test `nurbs_rims_and_freeform_faces_are_named_not_sampled` is renamed
+`nurbs_rims_are_cut_exactly_and_freeform_faces_named`. The rational sheet's two NURBS rims
+are now cut by the silhouette planes, not named `NurbsEdge`. The sheet faces the viewer from
+either side, so the cut at about 106.7 degrees merges back. All four edges are whole
+stretches, which is the truth. `plane_hits` maps `Undecided` to `NurbsEdge` as it maps
+`NurbsIntersection`.
+`rays.rs` is untouched; RY3 owns it.
+
+Measured with throwaway counters, counting isolations per call, where an analytic piece counts
+2:
+
+| Case | Spans | Isolations | Analytic path |
+|---|---|---|---|
+| NURBS circle against each of the 5 kinds | 4 | 8 | 4 for the analytic circle, before and after |
+| NURBS line | 1 | 2 | 2 for the analytic line, before and after |
+| 7-span cubic spline | 7 | 14 | — |
+| Quadratic line against a torus (degree 8) | 2 | 4 | — |
+| Cubic grazing a cylinder | 1 | 2 | — |
+
+The work is linear in the spans, and the budget charged equals the isolations. The analytic path
+is unchanged: the same counts on main and on the branch, for the line and circle against all
+five kinds.
+
+Open questions:
+
+- **A NURBS curve against a NURBS surface.** This is deferred, as 77 §6.3 says.
+- **Degree-4p spans of high-degree curves.** These have not been measured for root-isolation
+  depth. `RootLimits::DEFAULT` is used.
