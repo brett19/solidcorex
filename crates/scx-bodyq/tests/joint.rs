@@ -16,14 +16,17 @@ mod along_common;
 
 use std::f64::consts::{FRAC_PI_2, PI};
 
-use along_common::{between, doc, extrude_polygon, nurbs_crease, stadium};
+use along_common::{between, doc, extrude_polygon, extruded, nurbs_crease, stadium};
 use scx_bodyq::{
     BodyqError, BodyqRefusal, Convexity, Leaving, Missing, Turn, convex_at, joint_turn, leaving,
     turn_at,
 };
 use scx_brep::{Brep, EdgeId, VertexId};
 use scx_num::frame::Frame;
+use scx_num::frame::Sense;
 use scx_num::units::Length;
+use scx_num::vector2d::Point2;
+use scx_planar::Segment;
 use scx_testkit::bodies::made::{block, cylinder};
 
 /// Half a degree: the smooth angle of the pin's tests.
@@ -270,4 +273,39 @@ fn a_zero_or_non_finite_joint_direction_is_refused() {
         joint_turn([1.0, 0.0], [f64::INFINITY, 0.0]),
         Err(BodyqError::Refused(BodyqRefusal::NotFinite))
     );
+}
+
+#[test]
+fn a_notch_s_rim_is_convex_and_a_bulge_s_concave_where_the_arc_meets_the_line_square() {
+    // A 10 x 10 square with a semicircle of radius 3 about (5, 10) cut out of its top (a
+    // bore wall): the arc leaves the line y = 10 at 90 degrees at (8, 10) and (2, 10), where
+    // the material's wedge is a right angle. With the semicircle added on top instead (a boss
+    // wall) the wedge there is 270 degrees.
+    let p = |x: f64, y: f64| Point2::new(x, y);
+    for (sense, convex) in [(Sense::Reversed, true), (Sense::Forward, false)] {
+        let segs = vec![
+            Segment::line(p(0.0, 0.0), p(10.0, 0.0)),
+            Segment::line(p(10.0, 0.0), p(10.0, 10.0)),
+            Segment::line(p(10.0, 10.0), p(8.0, 10.0)),
+            Segment::arc(p(5.0, 10.0), p(8.0, 10.0), p(2.0, 10.0), sense),
+            Segment::line(p(2.0, 10.0), p(0.0, 10.0)),
+            Segment::line(p(0.0, 10.0), p(0.0, 0.0)),
+        ];
+        let (body, f) = extruded(segs, 4.0);
+        let arc_wall = f.walls[0][3];
+        for side_wall in [f.walls[0][2], f.walls[0][4]] {
+            let e = between(&body, arc_wall, side_wall)[0];
+            for v in body.edge(e).unwrap().ends() {
+                assert_eq!(
+                    convex_at(&body, e, v, SMOOTH).unwrap(),
+                    if convex {
+                        Convexity::Convex
+                    } else {
+                        Convexity::Concave
+                    },
+                    "convex {convex}"
+                );
+            }
+        }
+    }
 }

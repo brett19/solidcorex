@@ -74,20 +74,14 @@ pub fn wall_holds(wall: &Wall, points: &[Point3], slack: Length) -> Result<Holds
     for p in points {
         finite_point(*p)?;
     }
-    let first_out = |inside: &dyn Fn(Point3) -> bool| {
-        points
-            .iter()
-            .position(|p| !inside(*p))
-            .map_or(Holds::Yes, |point| Holds::No { point })
-    };
     match *wall {
         Wall::Flat { face, thickness } => {
             finite_point(face.point)?;
             let thickness = positive(thickness)?;
             let n = unit3(face.outward)?;
             // How deep behind the first face: 0 on it, the thickness on the other face.
-            Ok(first_out(&|p| {
-                let depth = face.point.distance_along(p, n);
+            Ok(first_out(points, |p| {
+                let depth = (face.point - p).dot(n);
                 depth >= -slack && depth <= thickness + slack
             }))
         }
@@ -103,13 +97,21 @@ pub fn wall_holds(wall: &Wall, points: &[Point3], slack: Length) -> Result<Holds
                 return Err(BodyqError::Refused(BodyqRefusal::NotPositive));
             }
             let u = unit3(axis)?;
-            Ok(first_out(&|p| {
+            Ok(first_out(points, |p| {
                 let from = p - axis_point;
                 let radial = (from - u * from.dot(u)).length();
                 radial >= inner - slack && radial <= outer + slack
             }))
         }
     }
+}
+
+/// The first of `points` that is not `inside`.
+fn first_out(points: &[Point3], inside: impl Fn(Point3) -> bool) -> Holds {
+    points
+        .iter()
+        .position(|p| !inside(*p))
+        .map_or(Holds::Yes, |point| Holds::No { point })
 }
 
 /// The area of the planar polygon through `corners` in order, in mm squared: the length of
