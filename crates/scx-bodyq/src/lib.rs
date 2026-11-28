@@ -81,6 +81,7 @@ mod on;
 mod pick_at;
 mod rays;
 mod reach;
+mod reads;
 mod recognize;
 mod round_face;
 mod side;
@@ -109,6 +110,11 @@ pub use mid_sheet::{Holds, Wall, from_frame, in_frame, onto_plane, polygon_area,
 pub use pick_at::{Picked, pick_at};
 pub use rays::RAYS;
 pub use reach::Near;
+pub use reads::{
+    EdgeClosest, EdgePoint, FaceUv, LineHit, Nearest, ParallelTurnError, closest_to_point, edge_at,
+    edge_closest_point, edge_distance, face_contains, face_line_hits, face_line_nearest, face_uv,
+    faces_against, faces_at, outward_normal, rim_edges, turn_to_parallel,
+};
 pub use recognize::{
     Bore, Equivalence, Layer, Lone, NotPrism, Options as StackOptions, Piece, PrismSection,
     Recognition, Slot, Stack, Stacks, Why, bores, hole_stacks, prism_equivalent, prism_section,

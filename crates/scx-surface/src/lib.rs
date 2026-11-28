@@ -12,9 +12,11 @@
 //!   cone has a normal everywhere and returns it directly; the cone's is `None` at its apex.
 //! - [`Surface`]: every kind as one value (the five, and a NURBS surface and a
 //!   [`Procedural`] behind an `Arc`), dispatched by `match` with the kind's bits (63 §4.7).
-//! - [`Procedural`]: a generator revolved ([`Revolution`]) or extruded ([`Extrusion`]), its
-//!   [`Definition`] evaluated in closed form and its exact rational net built once, within a
-//!   stated rounding bound (research 75 §13.27).
+//! - [`Procedural`]: a generator revolved ([`Revolution`]), extruded ([`Extrusion`]) or
+//!   swept by a screw ([`Sweep`], [`Motion::Screw`], [`Screw`], [`RadialLaw`]), its
+//!   [`Definition`] evaluated in closed form and its rational net built once, within a
+//!   stated bound: the rounding, and for a sweep the certified gap of its net (research 75
+//!   §13.27, §13.29).
 //! - Inversion: each analytic kind's `closest` (a [`Closest`]: one foot or a set) and
 //!   `invert` against a uv domain ([`Inversion`] of a [`Foot`]) are closed forms and the
 //!   global nearest; [`Surface::invert`] adds a NURBS surface's, a certified search over its
@@ -111,7 +113,9 @@ pub use invert::{Closest, Foot, Inversion};
 pub use meet::{Meet, MeetError, points_meet};
 pub use pcurve::{Check, CurveKind, PcurveError, SurfaceKind, pcurve_of};
 pub use plane::Plane;
-pub use procedural::{Definition, Extrusion, Procedural, ProceduralError, Revolution};
+pub use procedural::{
+    Definition, Extrusion, Motion, Procedural, ProceduralError, RadialLaw, Revolution, Screw, Sweep,
+};
 pub use project::{ProjectError, Projected, drop_curve, project_curve};
 pub use recognize::{Recognized, Written, recognize, recognize_written};
 pub use sphere::Sphere;
@@ -148,6 +152,7 @@ const _: () = {
     ok::<Torus>();
     ok::<Procedural>();
     ok::<ProceduralError>();
+    ok::<Sweep>();
     ok::<Surface>();
     ok::<Recognized>();
     ok::<Written>();
