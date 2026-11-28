@@ -51,6 +51,35 @@
 //! no smaller pair isolates it) is refused where the solve stopped, unless halving it to the
 //! resolution proves every part apart; the first part that is not ends it.
 //!
+//! # Valleys
+//!
+//! Along a curve where the surfaces touch (a cylinder lying on a plane, two curves of
+//! intersection meeting tangentially) the critical system's roots are not isolated, and
+//! near a contact of order above 2 (`h ~ w^4`) its equations stay within rounding of 0 over
+//! a region much wider than the resolution: the solve sweeps either box by box to the
+//! resolution, and is refused there after spending most of the budget. Before the solve,
+//! [`Survey`] looks for such a contact (research 73, §22):
+//!
+//! 1. **A search**, unless an equation excludes 0 over the whole pair: Gauss-Newton on the
+//!    critical system from the middle of the pieces, with a Levenberg term (the Jacobian is
+//!    singular along a valley), until the point stays put, the residual fails to halve on a
+//!    few steps in a row, or a fixed number of steps. It proves nothing; a search that finds
+//!    nothing leaves the solve to run.
+//! 2. **A contact**: the gap at the point found, by interval arithmetic, is within the
+//!    coincidence.
+//! 3. **No isolating box**: over the box at the resolution around it (each side the floor over
+//!    the partial's length), no equation excludes 0, so the solve cannot drop the box, and
+//!    the relative form's determinant does not either, so Krawczyk cannot prove a unique root
+//!    in it. A touch or a node, whose form is regular, is left to the solve.
+//!
+//! Such a point is a [`CriticalKind::Valley`]: `flat` when no entry of the form excludes 0
+//! there (a contact of order above 2), refused as [`SingularKind::DegenerateForm`];
+//! otherwise of order 2, refused as untraced (row SM7 marches a curve of contacts). The
+//! pieces take their roles by their boxes ([`before`]), not by the operands', so the point is
+//! the same bits under a swap. [`Survey::valleys`] runs the test on every candidate pair
+//! first: a valley refuses the intersection, so its caller need not solve the pairs around
+//! it.
+//!
 //! # Seeds
 //!
 //! Each piece's four edges (u low, u high, v low, v high: [`Side`]) are intersected with the
@@ -61,9 +90,10 @@
 //! earlier one's, is that seed (a corner, an edge two pairs share, or one point at both
 //! ends of a seam), kept once, by the lower pair.
 
-use scx_algo::krawczyk::ProvedRoot;
+use scx_algo::krawczyk::{Invert, ProvedRoot};
 use scx_num::budget::{Budget, Stop};
 use scx_num::extent2d::Extent2d;
+use scx_num::extent3d::Extent3d;
 use scx_num::interval::{Ivl, round_up};
 use scx_num::units::{Accuracy, Length, Resolution};
 use scx_num::vector2d::Point2;
@@ -170,6 +200,17 @@ pub enum CriticalKind {
     },
     /// No contact, a form singular within its bound: treated as a point a loop can surround.
     Degenerate,
+    /// A contact the critical solve cannot isolate (module docs, "Valleys"): a point of the
+    /// pair within the coincidence of the other piece, with a box around it at the
+    /// resolution that no equation of the solve excludes and over which the relative form is
+    /// singular within its bound. A tangent curve runs through it, or a contact of higher
+    /// order sits there; neither is answered. Found before the solve, which would sweep along
+    /// such a curve box by box to the resolution.
+    Valley {
+        /// Whether the relative form is zero within its bound there (no entry excludes 0):
+        /// a contact of order above 2. Otherwise of order 2 (one direction curved apart).
+        flat: bool,
+    },
 }
 
 /// A proved point of the intersection on an edge of a piece (or on a ray).
@@ -284,6 +325,45 @@ impl<'s> Survey<'s> {
         Ok(out)
     }
 
+    /// The valleys of the candidate pairs (module docs, "Valleys"), whose cones are not apart,
+    /// in the pairs' order. A pair whose patch or normal cone is not bounded is passed over:
+    /// [`Survey::plans`] halves it and seeks the valley in its halves.
+    ///
+    /// A valley refuses the intersection whatever the other pairs hold, so a caller that
+    /// refuses on one need not survey the rest (whose critical solves sweep the near-zero
+    /// region around the valley box by box): the refusal is then the least of these points,
+    /// which is the same under a swap of the operands.
+    ///
+    /// # Errors
+    ///
+    /// [`SsiError::Budget`] and [`SsiError::Stopped`]: one unit per pair for the box test and
+    /// one per step of the search.
+    pub fn valleys(&self, budget: &mut Budget, stop: &Stop) -> Result<Vec<Critical>, SsiError> {
+        let [sa, sb] = self.surfaces;
+        let mut out = Vec::new();
+        for p in self.found.pairs() {
+            let (Some(pa), Some(pb)) = (Patch::new(sa, &p.a.uv), Patch::new(sb, &p.b.uv)) else {
+                continue;
+            };
+            let (Some(ja), Some(jb)) = (
+                pa.jet(ivl_u(&p.a.uv), ivl_v(&p.a.uv)),
+                pb.jet(ivl_u(&p.b.uv), ivl_v(&p.b.uv)),
+            ) else {
+                continue;
+            };
+            let (Some(ca), Some(cb)) = (Cone::of(ja.normal()), Cone::of(jb.normal())) else {
+                continue;
+            };
+            if ca.apart_from(&cb) {
+                continue;
+            }
+            if let Some(c) = self.valley(p, &pa, &pb, [&ca, &cb], budget, stop)? {
+                out.push(c);
+            }
+        }
+        Ok(out)
+    }
+
     /// The plans of `pair`: one, or one per descendant where the pair must be halved (a
     /// normal box too wide for a proof), depth first, lower half first.
     ///
@@ -345,6 +425,19 @@ impl<'s> Survey<'s> {
             Err(which) => return Ok(Err(which)),
         };
         if let Loops::Critical { points, .. } = &mut loops {
+            // A valley's pair is refused whatever its edges hold, and an edge the valley
+            // crosses is tangent to the other piece there (a double root its solve sweeps
+            // along): no seeds are sought.
+            if points
+                .iter()
+                .any(|c| matches!(c.kind, CriticalKind::Valley { .. }))
+            {
+                return Ok(Ok(Plan {
+                    pair: *p,
+                    loops,
+                    seeds: Vec::new(),
+                }));
+            }
             for c in points.iter_mut() {
                 if c.may_surround() {
                     c.ray = self.ray(p, &pa, &pb, c, budget, stop)?;
@@ -481,6 +574,12 @@ impl<'s> Survey<'s> {
         if ca.apart_from(&cb) {
             return Ok(Ok(Loops::NoCritical { across }));
         }
+        if let Some(c) = self.valley(p, pa, pb, [&ca, &cb], budget, stop)? {
+            return Ok(Ok(Loops::Critical {
+                across,
+                points: vec![c],
+            }));
+        }
         let sys = Crit {
             a: *pa,
             b: *pb,
@@ -506,6 +605,116 @@ impl<'s> Survey<'s> {
             points.push(c);
         }
         Ok(Ok(Loops::Critical { across, points }))
+    }
+
+    /// The valley of a pair (module docs, "Valleys"), or `None` when none is proved: the
+    /// critical solve then runs.
+    fn valley(
+        &self,
+        p: &PiecePair,
+        pa: &Patch<'_>,
+        pb: &Patch<'_>,
+        cones: [&Cone; 2],
+        budget: &mut Budget,
+        stop: &Stop,
+    ) -> Result<Option<Critical>, SsiError> {
+        // The pieces in an order fixed by their boxes, not by the operands': the search, the
+        // proof and the point are then the same bits under a swap.
+        let swap = before(&p.b.bbox, &p.a.bbox);
+        let [ca, cb] = cones;
+        let (pf, ps, uf, us, cf, cs) = if swap {
+            (pb, pa, &p.b.uv, &p.a.uv, cb, ca)
+        } else {
+            (pa, pb, &p.a.uv, &p.b.uv, ca, cb)
+        };
+        let sign = if cf.axis.dot(cs.axis) >= 0.0 {
+            1.0
+        } else {
+            -1.0
+        };
+        let Some(e) = (cf.axis + cs.axis * sign).normalized() else {
+            return Ok(None);
+        };
+        let (e1, e2) = across(e.as_vec());
+        let sys = Crit {
+            a: *pf,
+            b: *ps,
+            e1,
+            e2,
+        };
+        let start = [ivl_u(uf), ivl_v(uf), ivl_u(us), ivl_v(us)];
+        // No valley where an equation excludes 0 over the whole pair: the solve drops it in
+        // its first box. One unit, as the solve's box.
+        budget.charge(1)?;
+        if sys
+            .over(&start)
+            .is_none_or(|en| en.f.iter().any(|f| excludes_zero(*f)))
+        {
+            return Ok(None);
+        }
+        let Some(x) = descend(&sys, &start, budget, stop)? else {
+            return Ok(None);
+        };
+        // A contact: the two points within the coincidence.
+        let Some((a, b)) = sys.jets(&x.map(Ivl::from)) else {
+            return Ok(None);
+        };
+        let gap = (a.p - b.p).norm();
+        if gap.hi.partial_cmp(&self.found.tolerance()) == Some(core::cmp::Ordering::Greater)
+            || !gap.hi.is_finite()
+        {
+            return Ok(None);
+        }
+        // The box around it at the resolution: each side the floor over its partial's length.
+        let floor = self.found.floor();
+        let reach = |len: Ivl| 0.5 * floor / len.hi;
+        let [x0, x1, x2, x3] = x;
+        let [s0, s1, s2, s3] = start;
+        let side = |m: f64, r: f64, within: Ivl| -> Option<Ivl> {
+            (r.is_finite() && r > 0.0)
+                .then(|| Ivl::new((m - r).max(within.lo), (m + r).min(within.hi)))
+        };
+        let (Some(b0), Some(b1), Some(b2), Some(b3)) = (
+            side(x0, reach(a.su.norm()), s0),
+            side(x1, reach(a.sv.norm()), s1),
+            side(x2, reach(b.su.norm()), s2),
+            side(x3, reach(b.sv.norm()), s3),
+        ) else {
+            return Ok(None);
+        };
+        let around = [b0, b1, b2, b3];
+        // The solve could neither drop that box nor prove a root in it: no equation excludes
+        // 0, and the relative form (whose determinant is the Jacobian's, up to factors that
+        // the graph test keeps from 0) is singular within its bound.
+        let Some(en) = sys.over(&around) else {
+            return Ok(None);
+        };
+        if en.f.iter().any(|f| excludes_zero(*f)) {
+            return Ok(None);
+        }
+        let Some((ja, jb)) = sys.jets(&around) else {
+            return Ok(None);
+        };
+        let [q11, q12, q22] = relative_form(&ja, &jb, lift(e1), lift(e2));
+        if excludes_zero(q11 * q22 - q12 * q12) {
+            return Ok(None);
+        }
+        let flat = ![q11, q12, q22].into_iter().any(excludes_zero);
+        let (pf_at, ps_at) = (a.mid(), b.mid());
+        let (uv_f, uv_s) = (Point2::new(x0, x1), Point2::new(x2, x3));
+        let (uv, enclosure) = if swap {
+            ([uv_s, uv_f], [b2, b3, b0, b1])
+        } else {
+            ([uv_f, uv_s], around)
+        };
+        Ok(Some(Critical {
+            point: pf_at + (ps_at - pf_at) * 0.5,
+            uv,
+            gap: Length::from_mm(round_up(gap.hi)),
+            kind: CriticalKind::Valley { flat },
+            ray: Vec::new(),
+            enclosure,
+        }))
     }
 
     /// The seeds on the pieces' edges, in order (module docs).
@@ -687,6 +896,101 @@ fn graph(j: &Jet, e1: Vec3, e2: Vec3) -> bool {
     excludes_zero(det)
 }
 
+/// The most steps of the valley search ([`descend`]). A bound on a search, not on a proof:
+/// a search that stops short proves nothing and the critical solve runs as before.
+const DESCENT: usize = 64;
+
+/// Steps in a row that may fail to halve the residual before [`descend`] stops.
+const PATIENCE: usize = 3;
+
+/// Gauss-Newton on the critical system from the middle of `start`, with a Levenberg term
+/// of `1e-12` of the normal matrix's largest diagonal entry (the Jacobian is singular along a
+/// valley), each step clamped into `start`, until a step leaves the point where it is (to
+/// a few ulps), after [`PATIENCE`] steps in a row that fail to halve the residual, or after
+/// [`DESCENT`] steps. One unit of the budget per step.
+fn descend(
+    sys: &Crit<'_>,
+    start: &[Ivl; 4],
+    budget: &mut Budget,
+    stop: &Stop,
+) -> Result<Option<[f64; 4]>, SsiError> {
+    let dot4 = |a: [f64; 4], b: [f64; 4]| a.iter().zip(b).map(|(x, y)| x * y).sum::<f64>();
+    let mut x = start.map(Ivl::mid);
+    let mut last = f64::INFINITY;
+    let mut slow = 0_usize;
+    for _ in 0..DESCENT {
+        budget.charge(1)?;
+        stop.check()?;
+        let Some(e) = sys.over(&x.map(Ivl::from)) else {
+            return Ok(None);
+        };
+        let f = e.f.map(Ivl::mid);
+        // Near a zero of the system the residual falls by at least half a step (a root of
+        // any order up to 4). The first steps from the mid may not, so the search ends only
+        // after `PATIENCE` steps in a row that fail to halve it: then it has met the box or a
+        // minimum that is not a zero, and the proof judges the point it has.
+        let residual = dot4(f, f);
+        if residual > 0.5 * last {
+            slow += 1;
+            if slow >= PATIENCE {
+                break;
+            }
+        } else {
+            slow = 0;
+        }
+        last = last.min(residual);
+        let columns = e.columns.map(|c| c.map(Ivl::mid));
+        let mut m = columns.map(|ci| columns.map(|cj| dot4(ci, cj)));
+        let g = columns.map(|ci| dot4(ci, f));
+        let scale = m
+            .iter()
+            .enumerate()
+            .filter_map(|(k, row)| row.get(k).copied())
+            .fold(0.0_f64, f64::max);
+        if !(scale.is_finite() && scale > 0.0) {
+            return Ok(None);
+        }
+        for (k, row) in m.iter_mut().enumerate() {
+            if let Some(d) = row.get_mut(k) {
+                *d += 1e-12 * scale;
+            }
+        }
+        let Some(inv) = m.inverse_of_columns() else {
+            return Ok(None);
+        };
+        let mut next = x;
+        let mut moved = false;
+        for ((n, row), s) in next.iter_mut().zip(inv).zip(start) {
+            let old = *n;
+            *n = (old - dot4(row, g)).clamp(s.lo, s.hi);
+            if !n.is_finite() {
+                return Ok(None);
+            }
+            moved |= (*n - old).abs() > 4.0 * f64::EPSILON * old.abs().max(1.0);
+        }
+        x = next;
+        if !moved {
+            break;
+        }
+    }
+    Ok(Some(x))
+}
+
+/// Whether box `a` is before box `b`: by their least corners (x, then y, then z), then their
+/// greatest.
+fn before(a: &Extent3d, b: &Extent3d) -> bool {
+    let key = |e: &Extent3d| {
+        let (lo, hi) = (e.min(), e.max());
+        [lo.x, lo.y, lo.z, hi.x, hi.y, hi.z]
+    };
+    key(a)
+        .iter()
+        .zip(key(b))
+        .map(|(x, y)| x.total_cmp(&y))
+        .find(|o| o.is_ne())
+        .is_some_and(core::cmp::Ordering::is_lt)
+}
+
 /// Whether two points are within `tol` of each other (the distance rounded up).
 fn within_tol(a: Point3, b: Point3, tol: f64) -> bool {
     let d = lift(a - b);
@@ -754,19 +1058,11 @@ impl System<4> for Crit<'_> {
     }
 }
 
-/// The kind of a proved root of the critical system, from the jets over its tight box;
-/// `None` when they cannot be enclosed there.
-fn classify(sys: &Crit<'_>, r: &ProvedRoot<4>, tol: f64) -> Option<Critical> {
-    let (a, b) = sys.jets(&r.root)?;
-    let (e1, e2) = (lift(sys.e1), lift(sys.e2));
+/// The relative form `Q = L_A - C^T L_B C` (`[q11, q12, q22]`) over the jets' boxes, in the
+/// first surface's uv: both second forms along `N_A`, with `C = (π J_B)^-1 (π J_A)` the map
+/// from the first surface's uv to the second's through the projection along `e1 x e2`.
+fn relative_form(a: &Jet, b: &Jet, e1: Vec3<Ivl>, e2: Vec3<Ivl>) -> [Ivl; 3] {
     let n = a.normal();
-    let k = e1.cross(e2);
-    let kn = dot(k, n);
-    let d = a.p - b.p;
-    let gap = d.norm();
-    let height = dot(k, d);
-    // The relative form in the first surface's uv: Q = L_A - C^T L_B C, both along N_A, with
-    // C = (π J_B)^-1 (π J_A).
     let la = [dot(n, a.suu), dot(n, a.suv), dot(n, a.svv)];
     let lb = [dot(n, b.suu), dot(n, b.suv), dot(n, b.svv)];
     let pa = [
@@ -790,9 +1086,26 @@ fn classify(sys: &Crit<'_>, r: &ProvedRoot<4>, tol: f64) -> Option<Critical> {
     let [l0, l1, l2] = lb;
     let [lc00, lc01] = [l0 * c00 + l1 * c10, l0 * c01 + l1 * c11];
     let [lc10, lc11] = [l1 * c00 + l2 * c10, l1 * c01 + l2 * c11];
-    let q11 = la[0] - (c00 * lc00 + c10 * lc10);
-    let q12 = la[1] - (c00 * lc01 + c10 * lc11);
-    let q22 = la[2] - (c01 * lc01 + c11 * lc11);
+    let [la0, la1, la2] = la;
+    [
+        la0 - (c00 * lc00 + c10 * lc10),
+        la1 - (c00 * lc01 + c10 * lc11),
+        la2 - (c01 * lc01 + c11 * lc11),
+    ]
+}
+
+/// The kind of a proved root of the critical system, from the jets over its tight box;
+/// `None` when they cannot be enclosed there.
+fn classify(sys: &Crit<'_>, r: &ProvedRoot<4>, tol: f64) -> Option<Critical> {
+    let (a, b) = sys.jets(&r.root)?;
+    let (e1, e2) = (lift(sys.e1), lift(sys.e2));
+    let n = a.normal();
+    let k = e1.cross(e2);
+    let kn = dot(k, n);
+    let d = a.p - b.p;
+    let gap = d.norm();
+    let height = dot(k, d);
+    let [q11, q12, q22] = relative_form(&a, &b, e1, e2);
     let det = q11 * q22 - q12 * q12;
     // The height's Hessian is Q / (k . N_A): its first entry's sign is q11's times kn's.
     let h11 = q11 * kn;
