@@ -18,12 +18,13 @@ use std::sync::Arc;
 use scx_curve::Curve2;
 use scx_num::budget::{Budget, Stop};
 use scx_num::extent2d::Extent2d;
+use scx_num::fmath::hypot;
 use scx_num::frame::{Frame, Sense};
 use scx_num::units::{Accuracy, Length, Resolution};
 use scx_num::vector3d::{Point3, Vec3};
 use scx_ssi::SsiError;
 use scx_ssi::general::{End, Ends, NodeKind, OnSurface, Traced, intersect};
-use scx_surface::{Cylinder, Plane, Sphere, Surface};
+use scx_surface::{Cylinder, Plane, Sphere, Surface, Torus};
 use scx_testkit::ssi_truth::{self as truth, Truth};
 
 /// How far a branch may lie from the truth, and the truth from a branch's chords: the
@@ -44,10 +45,15 @@ fn mm(x: f64) -> Length {
     Length::from_mm(x)
 }
 
-fn acc() -> [Accuracy; 2] {
-    let a = Accuracy::new(mm(1e-9)).unwrap();
+fn acc(tol: f64) -> [Accuracy; 2] {
+    let a = Accuracy::new(mm(tol)).unwrap();
     [a, a]
 }
+
+/// The coincidence of the accuracy test. The others need no more than [`COARSE`]: the
+/// march's vertex count goes as `1/sqrt(tol)`, and they run it many times.
+const FINE: f64 = 1e-9;
+const COARSE: f64 = 1e-6;
 
 fn res() -> Resolution {
     Resolution::new(mm(1e-9)).unwrap()
@@ -129,11 +135,12 @@ fn as_nurbs(c: &Case) -> [(Surface, Extent2d); 2] {
 
 fn run(
     pair: &[(Surface, Extent2d); 2],
+    tol: f64,
     budget: &mut Budget,
     stop: &Stop,
 ) -> Result<Traced, SsiError> {
     let [(a, ae), (b, be)] = pair;
-    intersect(a, ae, b, be, acc(), res(), budget, stop)
+    intersect(a, ae, b, be, acc(tol), res(), budget, stop)
 }
 
 fn polylines(t: &Traced) -> Vec<Vec<[f64; 3]>> {
@@ -185,7 +192,7 @@ fn bits(t: &Traced) -> Vec<u64> {
 #[test]
 fn every_branch_is_on_the_truth_and_covers_it() {
     for c in cases() {
-        let t = run(&as_nurbs(&c), &mut Budget::unlimited(), &Stop::new())
+        let t = run(&as_nurbs(&c), FINE, &mut Budget::unlimited(), &Stop::new())
             .unwrap_or_else(|e| panic!("{}: {e:?}", c.name));
         assert!(!t.branches.is_empty(), "{}", c.name);
         let h = c.truth.hausdorff(&polylines(&t), 720);
@@ -208,7 +215,8 @@ fn every_branch_is_on_the_truth_and_covers_it() {
                     );
                 }
             }
-            assert!(b.certificate.to_intersection.mm() <= ON, "{}", c.name);
+            let claim = b.certificate.to_intersection.mm();
+            assert!(claim <= ON, "{}: {claim}", c.name);
         }
     }
 }
@@ -224,7 +232,13 @@ fn each_closed_curve_is_one_branch() {
         cylinders(1.0, 2.0, 0.3),
         spheres(),
     ] {
-        let t = run(&as_nurbs(&c), &mut Budget::unlimited(), &Stop::new()).unwrap();
+        let t = run(
+            &as_nurbs(&c),
+            COARSE,
+            &mut Budget::unlimited(),
+            &Stop::new(),
+        )
+        .unwrap();
         assert_eq!(t.branches.len(), c.truth.loops(), "{}: {t:?}", c.name);
         for b in &t.branches {
             match b.ends {
@@ -242,10 +256,70 @@ fn each_closed_curve_is_one_branch() {
 }
 
 #[test]
+fn seeds_where_a_coordinate_turns_are_met() {
+    // A torus (radii 3 and 1, axis z) and the plane at height `z`: two circles about the
+    // axis, of radii `3 +/- sqrt(1 - z^2)`, each the image of a `v` line. The survey's seeds
+    // on the torus's piece edges include those where the plane's `x` along a circle turns
+    // (the circles' least and greatest `x`); there the chord's two ends lie on one side of
+    // the seed's coordinate by the chord's sag, which at these coincidences passes the uv
+    // box's own margin. Each such seed must be met by the march that passes it, so each
+    // circle is traced once (a seed missed there is marched again, met as used: `Stalled`).
+    for z in [0.5, 0.7, -0.4] {
+        let t = Torus::new(
+            frame([0.0; 3], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]),
+            mm(3.0),
+            mm(1.0),
+            Sense::Forward,
+        )
+        .unwrap();
+        let p = Plane::new(frame([0.0, 0.0, z], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]));
+        let pair = [
+            (Surface::Torus(t), ex(0.0, 0.0, 1.0, 1.0)),
+            (Surface::Plane(p), ex(-5.0, -5.0, 5.0, 5.0)),
+        ]
+        .map(|(s, e)| (Surface::Nurbs(Arc::new(s.to_nurbs(&e).unwrap())), e));
+        let [(a, ae), (b, be)] = &pair;
+        let off = (1.0 - z * z).sqrt();
+        for tol in [1e-5, 1e-6, 1e-7] {
+            let acc = Accuracy::new(mm(tol)).unwrap();
+            let t = intersect(
+                a,
+                ae,
+                b,
+                be,
+                [acc, acc],
+                res(),
+                &mut Budget::unlimited(),
+                &Stop::new(),
+            )
+            .unwrap_or_else(|e| panic!("{z} {tol}: {e:?}"));
+            let mut radii = Vec::new();
+            for br in &t.branches {
+                let closed = match br.ends {
+                    Ends::Closed => true,
+                    Ends::Open { start, end } => start == end,
+                };
+                assert!(closed, "{z} {tol}: {:?}", br.ends);
+                let q = br.curve.points();
+                let r0 = hypot(q[0][0], q[0][1]);
+                let big = if r0 > 3.0 { 3.0 + off } else { 3.0 - off };
+                for q in q {
+                    let d = hypot(hypot(q[0], q[1]) - big, q[2] - z);
+                    assert!(d <= tol, "{z} {tol}: {d}");
+                }
+                radii.push(big);
+            }
+            radii.sort_by(f64::total_cmp);
+            assert_eq!(radii, [3.0 - off, 3.0 + off], "{z} {tol}");
+        }
+    }
+}
+
+#[test]
 fn crossing_branches_meet_at_their_nodes() {
     // Steinmetz: two ellipses crossing at (0, +/- 1.5, 0): four arcs, each from node to node.
     let c = cylinders(1.5, 1.5, 0.0);
-    let t = run(&as_nurbs(&c), &mut Budget::unlimited(), &Stop::new()).unwrap();
+    let t = run(&as_nurbs(&c), FINE, &mut Budget::unlimited(), &Stop::new()).unwrap();
     let crossings: Vec<_> = t
         .nodes
         .iter()
@@ -284,26 +358,26 @@ fn crossing_branches_meet_at_their_nodes() {
 fn the_answer_is_the_same_bits_every_run_under_any_budget_and_either_way_round() {
     for c in cases() {
         let pair = as_nurbs(&c);
-        let first = run(&pair, &mut Budget::unlimited(), &Stop::new()).unwrap();
+        let first = run(&pair, COARSE, &mut Budget::unlimited(), &Stop::new()).unwrap();
         let mut used = Budget::unlimited();
         assert_eq!(
-            bits(&run(&pair, &mut used, &Stop::new()).unwrap()),
+            bits(&run(&pair, COARSE, &mut used, &Stop::new()).unwrap()),
             bits(&first)
         );
         let enough = used.used();
         assert_eq!(
-            bits(&run(&pair, &mut Budget::new(enough), &Stop::new()).unwrap()),
+            bits(&run(&pair, COARSE, &mut Budget::new(enough), &Stop::new()).unwrap()),
             bits(&first),
             "{}",
             c.name
         );
         // One unit short: the budget, never a shorter answer.
         assert!(matches!(
-            run(&pair, &mut Budget::new(enough - 1), &Stop::new()),
+            run(&pair, COARSE, &mut Budget::new(enough - 1), &Stop::new()),
             Err(SsiError::Budget(_))
         ));
         let [p, q] = pair;
-        let rev = run(&[q, p], &mut Budget::unlimited(), &Stop::new()).unwrap();
+        let rev = run(&[q, p], COARSE, &mut Budget::unlimited(), &Stop::new()).unwrap();
         assert_eq!(rev.branches.len(), first.branches.len(), "{}", c.name);
         for (x, y) in first.branches.iter().zip(&rev.branches) {
             // The same points, the curve reversed; the pcurves and rims swapped.
@@ -348,17 +422,17 @@ fn the_answer_is_the_same_bits_every_run_under_any_budget_and_either_way_round()
 fn the_budget_and_the_stop_end_the_march() {
     let pair = as_nurbs(&spheres());
     let mut survey = Budget::unlimited();
-    run(&pair, &mut survey, &Stop::new()).unwrap();
+    run(&pair, COARSE, &mut survey, &Stop::new()).unwrap();
     // Most of the work is the march's steps; half the budget ends inside it.
     let mut half = Budget::new(survey.used() / 2);
     assert!(matches!(
-        run(&pair, &mut half, &Stop::new()),
+        run(&pair, COARSE, &mut half, &Stop::new()),
         Err(SsiError::Budget(_))
     ));
     let stop = Stop::new();
     stop.set();
     assert_eq!(
-        run(&pair, &mut Budget::unlimited(), &stop).unwrap_err(),
+        run(&pair, COARSE, &mut Budget::unlimited(), &stop).unwrap_err(),
         SsiError::Stopped
     );
 }

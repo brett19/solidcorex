@@ -405,6 +405,8 @@ struct NodeRec {
     point: Point3,
     uv: [Point2; 2],
     slots: [(Vec3, bool); 4],
+    /// The node's distance to the intersection (`Node::err`).
+    err: f64,
 }
 
 /// The marcher's state across arcs.
@@ -478,11 +480,23 @@ pub(crate) fn march(
     m.by_x = by_x;
     for c in nodes {
         let st = m.state(c.uv).ok_or_else(|| stalled(c.point, 0.0))?;
-        let dirs = null_directions(&st).ok_or_else(|| stalled(c.point, 0.0))?;
+        let (dirs, least) = null_directions(&st).ok_or_else(|| stalled(c.point, 0.0))?;
+        // The surfaces part as `gap + D(x) |x|^2 / 2` about the node, so the curve passes
+        // within `sqrt(2 gap / |lambda|)` of it, `lambda` the form's eigenvalue of the
+        // other sign: at most the least in size. A gap within the rounding of the points
+        // is no gap: an exact crossing, through the node.
+        let reach = st.j[0].p.max_dimension().max(st.j[1].p.max_dimension());
+        let gap = (st.gap - 64.0 * 16.0 * f64::EPSILON * reach).max(0.0);
+        let off = (2.0 * gap / least).sqrt();
         m.nodes.push(NodeRec {
             point: c.point,
             uv: c.uv,
             slots: dirs.map(|d| (d, false)),
+            err: if off.is_finite() {
+                m.tol.max(up(1.01 * off))
+            } else {
+                f64::INFINITY
+            },
         });
     }
     let mut runs = Vec::new();
@@ -591,7 +605,7 @@ fn longest(sides: &[Side<'_>; 2]) -> f64 {
 /// The four directions two branches leave a node along: the null directions of the
 /// difference of the surfaces' second fundamental forms (both along `n_A`) in the common
 /// tangent plane, each both ways.
-fn null_directions(st: &State) -> Option<[Vec3; 4]> {
+fn null_directions(st: &State) -> Option<([Vec3; 4], f64)> {
     let [ja, jb] = st.j;
     let n = ja.normal()?;
     let e1 = ja.su.normalized().map(Vec3::from)?;
@@ -609,6 +623,8 @@ fn null_directions(st: &State) -> Option<[Vec3; 4]> {
         return None;
     }
     let r = disc.sqrt();
+    // The eigenvalues' product is `-disc`: the least in size is `disc` over the greatest.
+    let least = disc / (0.5 * (a + c).abs() + (0.25 * (a - c) * (a - c) + b * b).sqrt());
     let dir = |x: f64, y: f64| (e1 * x + e2 * y).normalized().map(Vec3::from);
     let (d1, d2) = if a.abs() >= c.abs() {
         // a x^2 + 2 b x + c = 0 with y = 1, by the stable pair of roots.
@@ -618,7 +634,7 @@ fn null_directions(st: &State) -> Option<[Vec3; 4]> {
         let q = -(b + b.signum() * r);
         (dir(1.0, q / c)?, dir(1.0, a / q)?)
     };
-    Some([d1, -d1, d2, -d2])
+    Some(([d1, -d1, d2, -d2], least))
 }
 
 /// The runs of a closed march (its last run ends at its start): one closed run, or the last
@@ -912,15 +928,20 @@ impl March<'_, '_> {
     }
 
     /// Whether `uv` is within the chord's uv box from `a` to `b` on both surfaces (on a seam
-    /// axis, also when shifted by the period).
+    /// axis, also when shifted by the period), widened on each axis by the box's size and by
+    /// half the chord's length in uv: where a coordinate turns along the curve, both ends lie
+    /// on one side of the point between them.
     fn uv_between(&self, uv: [Point2; 2], a: [Point2; 2], b: [Point2; 2], shift: bool) -> bool {
         let ok = |k: usize| {
             let sd = self.side(k);
+            let luv = (0..2)
+                .map(|axis| (coord(&b, k, axis) - coord(&a, k, axis)).abs())
+                .fold(0.0_f64, f64::max);
             (0..2).all(|axis| {
                 let (x0, x1) = (coord(&a, k, axis), coord(&b, k, axis));
                 let x = coord(&uv, k, axis);
                 let w = sd.hi(axis) - sd.lo(axis);
-                let m = (x1 - x0).abs().max(1e-9 * w);
+                let m = (x1 - x0).abs().max(0.5 * luv).max(1e-9 * w);
                 let inside = |x: f64| x >= x0.min(x1) - m && x <= x0.max(x1) + m;
                 inside(x)
                     || (shift
@@ -1024,7 +1045,7 @@ impl March<'_, '_> {
         let start = Vert {
             p: np,
             uv: nuv,
-            err: self.tol,
+            err: self.nodes.get(n).map_or(self.tol, |r| r.err),
             t: d,
         };
         self.walk(q, sign, Cut::Node(n), None, Some((start, h)))
@@ -1090,11 +1111,13 @@ impl March<'_, '_> {
                 }
                 self.use_slot(n, slot);
                 if let Some(node) = self.nodes.get(n) {
+                    // The slot points out of the node: the arc arrives along its reverse.
+                    let t = node.slots.get(slot).map_or(dir, |s| -s.0);
                     verts.push(Vert {
                         p: node.point,
                         uv: node.uv,
-                        err: self.tol,
-                        t: dir,
+                        err: node.err,
+                        t,
                     });
                 }
                 runs.push(Run {
@@ -1483,8 +1506,11 @@ impl March<'_, '_> {
         }
         let err = vs.iter().fold(0.0_f64, |e, v| e.max(v.err));
         let sag = vs.windows(2).fold(0.0_f64, |s, w| match w {
-            // The arc's sag over its chord, from the turn between the end tangents.
-            [a, b] => s.max(0.125 * (b.p - a.p).length() * 1.01 * (b.t - a.t).length()),
+            // The arc's sag over its chord, from the turn between the end tangents: a convex
+            // arc lies in the triangle of its chord and end tangents, of height at most a
+            // quarter of the chord times the turn (an eighth only for a circle; beside a
+            // tangential crossing the curvature changes along the span).
+            [a, b] => s.max(0.25 * (b.p - a.p).length() * 1.01 * (b.t - a.t).length()),
             _ => s,
         });
         let [oa, ob] = on;
