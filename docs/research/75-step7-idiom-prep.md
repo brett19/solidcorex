@@ -2317,3 +2317,75 @@ on a quieter run before), loops rebuilt 8,188 to 12, uses copied 7,375,455 to 13
 **Open.** The cylinder wall's face merge stays pairwise across the seam (not a natural part of
 the chain; a seam group needs the uv-window shift of 13.14 (b)). A ring of edges (a circle in
 pieces) still joins pair by pair, quadratic in its pieces.
+
+### 13.19 FT1 as built (11-28)
+
+`scx_nurbs::deviation` (77 §2.3, row FT1): `distance` and `distance_by_span` (`SpanDistance`) for the
+same-parameter distance of two curves, `distance_floor`, and `interpolation_bound`; typed
+`DeviationError` (cause per variant, `kind()`, `name()`), generic over the dimension `D`. Not
+ported: `certified_hausdorff` (no row names it). The pin's 20 tests: 12 port as they stand (the
+numbers-not-finite, overflow and underflow ones change their cause types), the 4 `certified_hausdorff`
+tests and the clamped/degree-cap refusals go (a built `NurbsCurve` is finite, degree-checked, and
+needs no clamped knots here; the rational-refusal test is replaced by rational tests below).
+
+- **Bezier pieces by the blossom, not by inserting knots.** Each common span's piece of each curve
+  is read from that span's `p + 1` local control points by de Boor's recurrence with the arguments
+  `s`, `e` (every control point `p` convex combinations deep). The pin refines a copy of the curve
+  at the other's breakpoints and extracts the pieces, charging every span for all the insertions
+  (`gamma_(12 (I+1))`, `I` the whole curve's inserted knots). Here a point depends on its own span
+  only, `gamma_(12 p)` of `2 M`: a span's bound does not grow with the knot count. A refinement of a
+  curve against itself has bound at most `2 x floor` (test), and no clamped end is needed.
+- **Rational curves** (new; the pin refuses them), through homogeneous points `(w P, w)`, the other
+  curve with unit weights if it is polynomial. With numerators `A`, `B` and weights `Wa`, `Wb` of a
+  span's two pieces, `a - b = (A Wb - B Wa) / (Wa Wb)`; the numerator is a Bezier piece of degree
+  `pa + pb` with control points `n_k = sum_{i+j=k} C(pa,i) C(pb,j) / C(pa+pb,k) (A_i wb_j - B_j wa_i)`,
+  so `|a - b| <= max |n_k| / (min wa * min wb)` (a Bezier weight function is a convex combination of its
+  weights). No elevation. Rounding: each homogeneous coordinate carries `e` (blossom plus frame), the
+  exact numerators differ from the computed by `4 s e + 2 s^2 gamma_(terms+10)`, `s` the net size plus
+  `e`; the least weights are lowered by `e`, and a weight within `e` of zero is
+  `WeightsLost`. Against: not the polynomial bound's tightness (below); a rational pair with
+  identical weights could use the cheaper convex-combination bound `max |P_i - Q_i|`, not done since
+  after a refinement or elevation weights agree only to rounding.
+- **Floor** is polynomial only (`RationalFloor` otherwise): a rational bound divides by the second
+  curve's weights, so no number is below every bound. The floor forms `a`'s errors at its own degree
+  and the other's at degree 1 (the least), by the operations the bound uses, so no span's bound is
+  below it to the bit; self-comparison is then above the floor by the degree term, not equal to it
+  (the pin's equality held because its error did not depend on `p`).
+- **Pin bound not certified, fixed or noted.** (1) The pin's `interpolation_bound` added a count
+  `gamma_(12 p + 4)` that belonged to its own evaluation routine; here evaluation is the blossom the
+  bound's own count describes, so count and code agree. (2) The pin's `size` for the evaluation is the
+  largest coordinate in absolute position; kept (no frame move, the data points are in it). (3)
+  the pin's norm factor `2` stands for `sqrt(3)`; here `ceil(sqrt(D))`, so any `D` holds. No case
+  where the pin's polynomial bound was below the truth was found (a sampled search over 6 pairs and
+  hundreds of spans); the changes are in how the rounding is counted.
+- **Tests** (21): self, refinement, elevation (bound at least the floor, at most twice it, below
+  1e-12); a moved control point bounded by the move and above the 2 000-point sampled distance; other
+  degrees and knots on common pieces; a periodic (unclamped) curve's ends by the general basis;
+  interpolation misses (0.5 exactly to 1e-12); non-finite parameters and points; overflow by name;
+  the 1e-200 underflow case, both calls; size not place (1e9); other domains refused; the largest span
+  is the distance bit for bit; spans are the breakpoint union in order; each span holds its sampled
+  gaps (6 pairs); no bound below the floor, and the floor follows size; spans outside a moved point's
+  support at rounding level; the circle (below); a rational curve against its refinement and
+  elevations (< 1e-12); a moved rational point; weights near zero refused; spans count linear; error
+  names and kinds.
+- **Circle** (closed form): quarter circle as quadratic rational against the cubic through it at four
+  parameters. Radial error `max ||C(t)| - 1| = 8.91e-3`; the sampled same-parameter distance is
+  `9.31e-3`; the bound is `4.58e-2`, 5.1 times the radial error and 4.9 times the true distance, and
+  at least both (asserted at most 8 times). The looseness is the degree-5 control polygon and the
+  weights (least 0.707); subdividing the span would tighten it (not done: one call, one bound).
+
+**Work per call** (release build, throwaway timer, cubic against a cubic with one moved point,
+`n + 3` points): 100 / 1 000 / 10 000 / 100 000 spans take 0.13 / 1.24 / 12.7 / 121 ms, 1.2-1.3 us
+per span at every size: linear in the spans. The polynomial per-span work is `(p + 1)` blossoms of
+`p (p + 1) / 2` combinations (`O(p^3)`), plus one elevation per piece when the degrees differ. The pin
+extracts after a refinement of a copy of the curve (`O(spans x points)` for the insertions).
+
+**Tightness** (bound against the 20 000-point sampled distance, polynomial): moved control point
+1.12, quadratic against cubic 1.11, a quartic pair 1.0000, a cubic against its elevation 1.08
+(a moved point). Against itself or a refinement the bound is the rounding floor: 1.6e-13 on a net of
+size 5 (sampled distance 1e-15).
+
+Open: whether the rational bound should subdivide a span while the bound exceeds a caller's aim
+(adaptive, so FT3 gets the tightness it needs on rational sources, at the cost of a variable work per
+call); whether `certified_hausdorff` is wanted (CN4's `through`, PK1's net rounding use the same-parameter
+distance only).
