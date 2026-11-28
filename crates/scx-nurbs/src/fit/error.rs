@@ -12,12 +12,16 @@
 //! | a decomposition failing on a pivot below `LU_TOL` | [`FitError::Singular`] |
 //! | parameters or knots out of order, caught (or not) by the decomposition | [`FitError::ParametersNotIncreasing`], [`FitError::EndsNotOnDomain`] |
 //! | `fill_end_derivs` estimating a missing end derivative from the data | none: every end condition is stated by the caller |
+//! | `refit_within`'s `InvalidInput` texts (a tolerance, a degree, a direction, a domain) | [`FitError::Aim`], [`FitError::Degree`], [`FitError::Directions`], [`FitError::Direction`], [`FitError::StartAgainst`], [`FitError::EndAgainst`], [`FitError::Domain`] |
+//! | `approx_end_directions`' `NurbsFailure::Input` for a singular reach system | [`FitError::Reaches`] |
 
 use core::fmt;
 
+use scx_num::budget::{Exhausted, Stopped};
 use scx_num::error::ErrorKind;
 
 use crate::NurbsError;
+use crate::deviation::DeviationError;
 
 /// Why a fit cannot be made.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -99,6 +103,52 @@ pub enum FitError {
     },
     /// A knot vector, basis or curve step failed.
     Nurbs(NurbsError),
+    /// The distance a fit is within ([`FitAim::within`](super::FitAim::within)) is not finite
+    /// and positive.
+    Aim {
+        /// The distance given.
+        within: f64,
+    },
+    /// A degree of 0 or above [`MAX_DEGREE`](crate::MAX_DEGREE).
+    Degree {
+        /// The degree asked for.
+        degree: usize,
+    },
+    /// An end direction on a degree below 2: a curve of degree 1 has no leg to hold apart from
+    /// its end points.
+    Directions {
+        /// The degree asked for.
+        degree: usize,
+    },
+    /// An end direction that is not finite or has no length.
+    Direction,
+    /// The start direction is against the source's own tangent there: the fit could leave the
+    /// start along it only by turning back.
+    StartAgainst,
+    /// The end direction is against the source's own tangent there.
+    EndAgainst,
+    /// The source's domain is not finite, has no length, or is too short in floating point to
+    /// sample.
+    Domain {
+        /// Its low end.
+        lo: f64,
+        /// Its high end.
+        hi: f64,
+    },
+    /// The source is not finite at a parameter of its domain.
+    SourceNotFinite {
+        /// The parameter.
+        t: f64,
+    },
+    /// The two reaches of the end directions have no unique least-squares value (the fit's two
+    /// end legs are not independent of the other control points).
+    Reaches,
+    /// The certificate of a fit to a B-spline source failed.
+    Deviation(DeviationError),
+    /// The budget ran out.
+    Exhausted(Exhausted),
+    /// The caller stopped the fit.
+    Stopped(Stopped),
     /// A step failed through the module's own fault: an index its invariants rule out was
     /// missing. A bug.
     Defect {
@@ -113,6 +163,9 @@ impl FitError {
     pub const fn kind(&self) -> ErrorKind {
         match self {
             Self::Nurbs(e) => e.kind(),
+            Self::Deviation(e) => e.kind(),
+            Self::Exhausted(e) => e.kind(),
+            Self::Stopped(e) => e.kind(),
             Self::Defect { .. } => ErrorKind::Defect,
             Self::TooFewPoints { .. }
             | Self::NotFinite { .. }
@@ -126,7 +179,16 @@ impl FitError {
             | Self::DegreeTooLow { .. }
             | Self::KnotCount { .. }
             | Self::TooFewControlPoints { .. }
-            | Self::Singular { .. } => ErrorKind::Refused,
+            | Self::Singular { .. }
+            | Self::Aim { .. }
+            | Self::Degree { .. }
+            | Self::Directions { .. }
+            | Self::Direction
+            | Self::StartAgainst
+            | Self::EndAgainst
+            | Self::Domain { .. }
+            | Self::SourceNotFinite { .. }
+            | Self::Reaches => ErrorKind::Refused,
         }
     }
 
@@ -148,6 +210,18 @@ impl FitError {
             Self::TooFewControlPoints { .. } => "too_few_control_points",
             Self::Singular { .. } => "singular",
             Self::Nurbs(_) => "nurbs",
+            Self::Aim { .. } => "aim",
+            Self::Degree { .. } => "degree",
+            Self::Directions { .. } => "directions",
+            Self::Direction => "direction",
+            Self::StartAgainst => "start_against",
+            Self::EndAgainst => "end_against",
+            Self::Domain { .. } => "domain",
+            Self::SourceNotFinite { .. } => "source_not_finite",
+            Self::Reaches => "reaches",
+            Self::Deviation(_) => "deviation",
+            Self::Exhausted(_) => "exhausted",
+            Self::Stopped(_) => "stopped",
             Self::Defect { .. } => "defect",
         }
     }
@@ -156,6 +230,24 @@ impl FitError {
 impl From<NurbsError> for FitError {
     fn from(e: NurbsError) -> Self {
         Self::Nurbs(e)
+    }
+}
+
+impl From<DeviationError> for FitError {
+    fn from(e: DeviationError) -> Self {
+        Self::Deviation(e)
+    }
+}
+
+impl From<Exhausted> for FitError {
+    fn from(e: Exhausted) -> Self {
+        Self::Exhausted(e)
+    }
+}
+
+impl From<Stopped> for FitError {
+    fn from(e: Stopped) -> Self {
+        Self::Stopped(e)
     }
 }
 
@@ -206,6 +298,29 @@ impl fmt::Display for FitError {
                 )
             }
             Self::Nurbs(e) => write!(f, "{e}"),
+            Self::Aim { within } => write!(f, "the aim {within} is not finite and positive"),
+            Self::Degree { degree } => write!(f, "degree {degree} is 0 or above the most"),
+            Self::Directions { degree } => {
+                write!(f, "an end direction on degree {degree}, below 2")
+            }
+            Self::Direction => f.write_str("an end direction is not finite or has no length"),
+            Self::StartAgainst => {
+                f.write_str("the start direction is against the source's own tangent")
+            }
+            Self::EndAgainst => {
+                f.write_str("the end direction is against the source's own tangent")
+            }
+            Self::Domain { lo, hi } => {
+                write!(
+                    f,
+                    "the domain [{lo}, {hi}] is not finite or too short to sample"
+                )
+            }
+            Self::SourceNotFinite { t } => write!(f, "the source is not finite at {t}"),
+            Self::Reaches => f.write_str("the end directions' reaches have no unique fit"),
+            Self::Deviation(e) => write!(f, "{e}"),
+            Self::Exhausted(e) => write!(f, "{e}"),
+            Self::Stopped(e) => write!(f, "{e}"),
             Self::Defect { why } => f.write_str(why),
         }
     }

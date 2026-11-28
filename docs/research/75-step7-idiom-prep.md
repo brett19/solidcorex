@@ -3223,3 +3223,61 @@ Decisions (analysis and adversarial pass):
    cylinder or sphere needs the far faces' clearance argued per kind; NURBS waits on SM9 anyway.
 5. *A wire body's section (points) is `Unsupported(Wire)`.* Stage 1 pairs faces; curve against
    surface is `scx-ssi`'s and has no Boolean-family entry yet.
+
+### 13.34 FT3 as built (11-28)
+
+`crates/scx-nurbs/src/fit` (77 §2, row FT3; the pin's `refit_within` and `approx_end_directions`), with the one-variable jet moved down to `scx-num`:
+
+- `fit_within(&impl CurveFn<D>, &FitAim<D>, &mut Budget, &Stop) -> Result<Fitted<D>, FitError>` (`within.rs`): the clamped spline of `aim.degree` through the source's end points, leaving each given end along its direction, with the fewest spans the pin's halving search finds whose certified same-parameter distance `sup |F(t) - C(t)|` is within `aim.within`. `FitAim { within, degree, start, end }`; `Fitted { curve, spans: Vec<SpanBound>, bound, fits, start: Option<Held>, end: Option<Held>, ended: Ended }`; `SpanBound { span, bound, method: Method }`; `Held { reach, turn }`; `Ended::{Within, Cap, Floor, NoRoom}`.
+- `CurveFn<const D>`: `domain`, `breaks` (where the source is less smooth; pieces are cut there), `eval<T: Trig>(t: T) -> [T; D]` (one code path for `f64`, `Ivl` and `Jet2`), `as_nurbs` (default `None`). `NurbsCurve<D>` implements it through `point_over` and its knots.
+- `least_squares_along(knots, data, t, start, end) -> Result<Directed<N>, FitError>` (`along.rs`, the pin's `approx_end_directions`): least squares through the end data, each held end's leg along its unit direction, its length (the *reach*) free; `Directed { spline, start_reach, end_reach }`.
+- `scx_num::jet::{Jet2, chord, norm, square, vector_bound}` (`jet/interval.rs`): SU6's interval jet `(f, f', f'')` with `Ring`, `Ranged` and `Trig`, and its chord bound, moved out of `scx-surface/src/gap.rs` (77 line 50). `gap.rs` now imports them; SU6's arithmetic is unchanged (the same fold order), so its bounds are the same bits.
+- Named constants: `MAX_CONTROL_POINTS = 4096` (the cap; the pin's `most`, which its one caller passes as 4096), `MAX_PIECES = 256` (per span in the branch and bound), `CLOSE = 0.125`, `FLOOR_UNITS = 4.0`. No `1e-4` or other tolerance literal.
+- Typed causes (new `FitError` variants, all `Refused` unless noted): `Aim`, `Degree`, `Directions`, `Direction`, `StartAgainst`, `EndAgainst`, `Domain`, `SourceNotFinite`, `Reaches`, and `Deviation`, `Exhausted`, `Stopped` carrying FT1's and the budget's causes with their kinds.
+
+Decisions.
+- **The pin's search, every bound certified.** One knot a round at the middle of the span with the largest bound (the first or last span while a held end's reach is not positive); samples only seed the least-squares fit, never accept it (04 fit rules, R10). The certificate per span: FT1's Bezier-hull `distance_by_span` for a polynomial B-spline source; for a rational one FT1's bound and, where that is past the aim, SU6's branch and bound too (the smaller kept); for any other source the branch and bound (chord bound on `g = F - C` and `|g|^2`, and the direct enclosure, the smallest, from `Jet2`s over each piece; the worst piece halved, a child never above its parent).
+- **Knots nest across aims, by construction.** A span past the aim carries a bound that does not depend on the aim (FT1 and the branch and bound are deterministic, the heap's top is monotone, and the branch and bound stops early only on reaching the aim); a span within it carries one at most the aim. So the span halved is the same for every aim, and a looser aim's fit is one the tighter search passes through. Tested to the bit.
+- **Rational sources: tighten, not subdivide; ranked by FT1.** FT1's rational bound is about 5 times loose on a circle's coarse spans and about 2 times on fine ones, where the weights hardly vary. For tightening: the branch and bound is already here for general sources and comes within `CLOSE` of the true distance. Against subdividing FT1 (splitting the source's spans so the weights vary less): no new code and cheaper per span, but its looseness falls only as the square of the split and never reaches the distance on a span of large weight ratio. The search halves by FT1's bound alone. The branch and bound only tries to end it sooner: it takes the spans FT1 leaves past the aim, closest first, and stops at the first it cannot bring within. It gives up on a span at once when `|g|` at a point is past the aim, or FT1's bound is within `CLOSE` of that `|g|`. So the fits are FT1's own sequence cut short, and the knots still nest. Running the branch and bound on every span past the aim every round (the first build) gave the same spans at 1e-6 and 1e-8 for 4 to 5 times the evaluations. Halving cuts a span's distance about 16 times, so a 2 times tighter bound rarely saves a span. Counts below.
+- **The jets of a B-spline over a piece are in Taylor form**, about the piece's middle (`fit_over`: `C(m + s) = sum C^(k)(m) s^k / k!`, each derivative enclosed at the point, Horner in `Jet2`), not `point_over`'s basis form.
+  - The basis form sums the absolute control points times the basis jets. Over a piece of width `w` in a span of width `h`, its second derivative is about `|P| w / h^3` too wide, so the chord bound's excess is about `|P| (w / h)^3`.
+  - With at most `MAX_PIECES` pieces a span, that left a floor near 1.4e-7 on a circle of radius 10 that halving the spans did not lower. A tight aim ran to the cap, while the fit's true distance was 2e-15.
+  - In Taylor form the excess is about `w^3 |C'''|`, the curve's own. One span of a cubic proves 6.8e-7 at width 3, 8.5e-8 at 1.5, 1.1e-8 at 0.75 and 1.3e-9 at 0.375 (true distance 2e-15).
+  - A rational source is taken as `N / w`, each in Taylor form, divided in `Jet2` (`Homogeneous`). The fit's degree up to `TAYLOR_DEGREE = 18`; above it, the basis form.
+- **A rounding floor for general sources.** No fit's branch and bound comes under half the width of the source's own enclosure at an end of the domain: the ends are breaks of every fit, and `g` is at least as wide as `F`. An aim under that stops after one fit (`Ended::Floor`), as the pin's floor does for a polynomial source; between it and the span-level `FLOOR_UNITS` rule, a tight aim runs on.
+- **Variable projection for the reaches**, not the pin's dense normal equations of the whole system: the free points come from FT2's banded rotation solve, the two reaches from a 2 x 2 system on the residuals, so the condition stays the problem's.
+- **`ends_held` and `EFF_ZERO_RAD` dropped.** Each held end reports its reach and the turn of its stored leg (`Held`); the caller who knows its angle judges them.
+- **`within` is an `f64`**, not a `Length`: `D` is generic (2D pcurves are parameter-space).
+- **`SpanBound` carries `method: Method`, not 77's `basis: Basis`.** The fitter does not know the caller's claim, and every bound it gives is proved; 77's "unproven" becomes a bound past the aim plus `Ended`.
+- **`CurveFn::eval` bounds by `Trig`**, not 77's `Ranged`, so analytic sources use `sin`/`cos`.
+
+Tests (`fit/within_tests.rs`, 12; the pin's within.rs tests ported and judged by closed-form truth, `|F - C|` at 65 points a span against each span's bound):
+- 77's row:
+  - `a_source_of_one_cubic_span_is_given_back_in_one_fit` (pin :554): one fit and one span, free, held at either end or both; also as a closed form proved by the branch and bound.
+  - `closed_forms_are_refitted_within_a_ladder_of_aims`: circle, ellipse, helix, involute and parabola, free and held. Each bound holds and is within its aim, and the looser aim's knots are among the tighter's.
+  - `two_halves_of_an_arc_refitted_with_the_shared_tangent_meet_g1`.
+- The pin's: `pin_sources_are_refitted_within_a_ladder_of_aims` (:595), `the_cap_gives_the_last_fit_past_the_aim` (:674), `a_quadratic_with_both_directions_starts_on_two_spans` (:689), `a_direction_of_any_finite_length_is_read_as_its_unit` (:711) and `an_aim_below_the_floor_stops_after_one_fit` (:639; also a closed form under its rounding floor).
+- New: `a_rational_circle_is_refitted_within_its_aims`, `jets_of_a_bspline_over_an_interval_enclose_its_derivatives`, `least_squares_along_gives_a_cubic_back` and `hostile_input_is_refused_never_a_panic` (every typed cause, the budget and the stop flag).
+- No test removed; SU6's gap tests pass unchanged on the moved `Jet2`.
+
+Counts (release, cubic, aims 1e-2 / 1e-4 / 1e-6 / 1e-8; spans; evaluations per fit, a point or a piece each; free ends; held ends within 1% of these):
+
+| source | spans | evaluations per fit | ms at 1e-8 |
+|---|---|---|---|
+| circle r 10, `[0, 2]` | 4 / 8 / 32 / 128 | 73 / 175 / 766 / 4208 | 981 |
+| ellipse 10 x 4, `[-1, 2.5]` | 5 / 16 / 64 / 128 | 99 / 328 / 1534 / 4585 | 1098 |
+| helix r 5 pitch 2, `[0, 6]` | 8 / 32 / 64 / 256 | 130 / 543 / 1773 / 8627 | 3759 |
+| the circle as a 30-point cubic B-spline (FT1) | 4 / 8 / 32 / 151 | 23 / 41 / 149 / 685 | 116 |
+| rational half circle r 10 (FT1, ranked) | 10 / 22 / 72 / 263 | 55 / 134 / 352 / 1196 | 1139 |
+| same, FT1 alone | 10 / 37 / 72 / 263 | 50 / 172 / 329 / 1189 | 1374 |
+| same, branch and bound on every span past the aim | 10 / 22 / 70 / 263 | 120 / 375 / 1209 / 5787 | 4511 |
+
+One fit per span added (the pin's search); every bound `Within` its aim.
+
+Open questions.
+- `scx-nurbs` `eval_over.rs` `derivs_over` builds the factor `p! / (p - k)!` in a `usize` and lifts it with `as f64`. It overflows from degree 21, and from 19 the factor is no longer an exact `f64` though it is lifted as a point. `MAX_DEGREE` is 31. FT3 keeps its Taylor form to degree 18; the fix belongs to that file (an `Ivl` factor or a checked product).
+- The rational branch and bound's stop (`Enough`) is the only aim-dependent stop. It is sound because a rational search is ranked by FT1's bound, which does not depend on the aim; a pluggable certificate (FT5) has to keep that split.
+- SU6 passes `h = b - a` unrounded to the chord bound (a possible half-ulp unsoundness); FT3's own calls round `h` up. Left in SU6 so its bits do not move.
+- FT5 needs the certificate pluggable (a surface gap in place of `|F - C|`).
+- The search is `O(n^2)` in the spans: each round refits and recertifies every span, one knot a round. The helix at 1e-8 takes 3.8 s for 256 spans. A local update, or several knots a round, would cut it, but the second changes the pin's search and the nesting argument; left for a measured need.
+- Pieces that end on a fit knot include the neighbour's jets (`point_over` joins both sides at a knot): sound, slightly loose.
