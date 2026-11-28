@@ -68,7 +68,7 @@ use scx_nurbs::NurbsCurve;
 use crate::chart_check::{Verdict, certify};
 use crate::common::Axes;
 use crate::invert::Closest;
-use crate::{Cone, Plane, Surface};
+use crate::{Cone, Plane, Pole, Surface};
 
 /// The parameters the lifting check samples, ends included.
 const SAMPLES: usize = 9;
@@ -459,13 +459,17 @@ fn nearest(surface: &Surface, p: Point3) -> Option<Point3> {
     };
     match closest {
         Closest::One(f) => Some(f.point),
-        // A pole (a sphere's, a cone's apex) is one point at every `u`; a circle of feet
-        // (a cylinder's or a torus's axis) is not.
+        // A pole (a sphere's, a cone's apex, a horn torus's touch) is one point at every
+        // `u`; a circle of feet (a cylinder's or a torus's axis) is not.
         Closest::AlongU { v, .. } => {
-            let a = surface.point(Point2::new(0.0, v));
-            let b = surface.point(Point2::new(PI, v));
-            let scale = 1.0 + a.x.abs().max(a.y.abs()).max(a.z.abs());
-            ((a - b).length() <= 16.0 * f64::EPSILON * scale).then_some(a)
+            let poles = match surface {
+                Surface::Sphere(s) => s.poles().map(Some),
+                Surface::Cone(c) => [Some(c.pole()), None],
+                Surface::Torus(t) => [t.pole(), None],
+                _ => [None, None],
+            };
+            let at = |p: &Pole| (p.v - v).abs() <= 4.0 * f64::EPSILON * (1.0 + v.abs());
+            poles.into_iter().flatten().find(at).map(|p| p.point)
         }
         Closest::AlongV { .. } | Closest::Every { .. } => None,
     }

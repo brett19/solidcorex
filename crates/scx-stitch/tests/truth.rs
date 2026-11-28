@@ -413,30 +413,33 @@ fn permuted_sheets_give_the_same_bits_for_every_recipe() {
 }
 
 /// With every sheet within coincidence of its neighbours (just-inside perturbation of every
-/// other face), the order still does not change the geometry.
+/// other face), the order still does not change the geometry; nor with one face moved past
+/// the exact pcurve tolerance (`INSIDE`), whose joins write projected pcurves.
 #[test]
 fn permuted_perturbed_sheets_give_the_same_bits() {
     let body = solid(Kind::Block, 0, 2);
     let doc = Document::default();
-    let mut sheets = explode(&body, |_| false);
-    for (i, s) in sheets.iter_mut().enumerate() {
-        if i % 2 == 0 {
-            let by = normal(&body, i) * (0.4 * ZONE);
-            let mut d = s.edit();
-            d.transform(&Affine::translation(by), &doc).unwrap();
-            *s = finish(d);
+    for (by_much, every) in [(0.4 * ZONE, 2), (INSIDE, usize::MAX)] {
+        let mut sheets = explode(&body, |_| false);
+        for (i, s) in sheets.iter_mut().enumerate() {
+            if i % every == 0 {
+                let by = normal(&body, i) * by_much;
+                let mut d = s.edit();
+                d.transform(&Affine::translation(by), &doc).unwrap();
+                *s = finish(d);
+            }
         }
-    }
-    let first = run(&refs(&sheets)).unwrap();
-    let want = geometry(&first.done.body);
-    assert_eq!(first.done.body.faces().count(), 24);
-    for seed in 1..6 {
-        let ordered: Vec<&Brep> = shuffled(sheets.len(), seed)
-            .into_iter()
-            .map(|i| &sheets[i])
-            .collect();
-        let out = run(&ordered).unwrap();
-        assert_eq!(geometry(&out.done.body), want, "seed {seed}");
+        let first = run(&refs(&sheets)).unwrap();
+        let want = geometry(&first.done.body);
+        assert_eq!(first.done.body.faces().count(), 24);
+        for seed in 1..6 {
+            let ordered: Vec<&Brep> = shuffled(sheets.len(), seed)
+                .into_iter()
+                .map(|i| &sheets[i])
+                .collect();
+            let out = run(&ordered).unwrap();
+            assert_eq!(geometry(&out.done.body), want, "{by_much} seed {seed}");
+        }
     }
 }
 
@@ -523,7 +526,7 @@ fn use_bounds(b: &Brep) -> Vec<f64> {
 /// curve stands between `approx` and the zone from the absorbed face) stitches: the
 /// absorbed face keeps its plane and its use of the kept edge gets the curve's projection,
 /// its bound the certified gap, which is the perturbation to the search's width (a 64th of
-/// the zone) and within the zone, so no edge is raised. Before ST4a it was
+/// the zone) and within the zone, so no edge is raised. Before 74 §40 it was
 /// `Unsupported(Edges { why: Fit })`.
 #[test]
 fn a_join_past_the_pcurve_tolerance_records_its_certified_gap() {
@@ -646,8 +649,7 @@ fn curved_sheets_at_nine_tenths_of_the_coincidence_stitch() {
     // Radius 1, four wall faces (lunes), each meeting the others at the poles.
     let sphere = solid(Kind::Sphere, 0, 4);
     let mut sheets = explode(&sphere, |_| false);
-    let grown =
-        scx_num::math::Affine::uniform_scaling(scx_num::vector3d::Point3::ORIGIN, 1.0 + d).unwrap();
+    let grown = Affine::uniform_scaling(scx_num::vector3d::Point3::ORIGIN, 1.0 + d).unwrap();
     let mut e = sheets[0].edit();
     e.transform(&grown, &doc).unwrap();
     sheets[0] = finish(e);

@@ -359,7 +359,7 @@ impl Draft {
             .collect();
         // A use written again to the same bits, of an edge whose curve is the same bits,
         // keeps its certified bound: the gap is of the same curves.
-        let before: Vec<Vec<Option<(EdgeId, scx_curve::Curve, UseGeom, Arc<Recorded>)>>> = view
+        let before: Vec<Vec<Option<Bounded>>> = view
             .record()
             .loops
             .iter()
@@ -369,7 +369,7 @@ impl Draft {
                     .map(|u| {
                         let b = u.bound.clone()?;
                         let Some(EdgeShape::Curve { curve, .. }) =
-                            self.edge(u.edge).and_then(|e| e.shape())
+                            self.edge(u.edge).and_then(super::view::Edge::shape)
                         else {
                             return None;
                         };
@@ -405,9 +405,10 @@ impl Draft {
                     continue;
                 };
                 let edge = u.edge;
-                let curve = match self.edge(edge).and_then(|e| e.shape()) {
-                    Some(EdgeShape::Curve { curve, .. }) => curve,
-                    _ => return Err(PcurveWriteError::Pending { edge }),
+                let Some(EdgeShape::Curve { curve, .. }) =
+                    self.edge(edge).and_then(super::view::Edge::shape)
+                else {
+                    return Err(PcurveWriteError::Pending { edge });
                 };
                 if let Some(Some((e, c, g, b))) = was.get(i)
                     && *e == edge
@@ -588,8 +589,7 @@ impl Draft {
         project: Option<f64>,
     ) -> Result<Item, PcurveWriteError> {
         let zone = res.zone().mm();
-        let reach =
-            |r: Option<&scx_num::cert::Recorded>| r.map_or(zone, |r| r.acc.length().mm().max(zone));
+        let reach = |r: Option<&Recorded>| r.map_or(zone, |r| r.acc.length().mm().max(zone));
         let view = self.edge(edge).ok_or_else(|| Absent {
             entity: edge.into(),
         })?;
@@ -709,6 +709,10 @@ fn certified_gap(
         r => r,
     }
 }
+
+/// A use's edge, the edge's curve, the use's geometry and its certified bound, as a face
+/// was last written: a rewrite to the same bits keeps the bound.
+type Bounded = (EdgeId, scx_curve::Curve, UseGeom, Arc<Recorded>);
 
 /// A use [`Draft::write_pcurves_projecting`] gave its curve's projection, with the
 /// certified gap its pcurve's image leaves from the curve (mm); its upper end is the use's
