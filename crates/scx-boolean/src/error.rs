@@ -12,6 +12,8 @@ use scx_num::error::ErrorKind;
 use scx_ssi::SsiError;
 use scx_surface::{SurfaceError, SurfaceKind};
 
+use crate::given::Fact;
+
 /// Why a Boolean did not finish.
 ///
 /// `PartialEq` only: an [`SsiPair`](BooleanUnsupported::SsiPair) cause names a point.
@@ -67,6 +69,12 @@ pub enum BooleanRefusal {
         operand: Operand,
         /// The face.
         face: FaceId,
+    },
+    /// A fact stated to [`boolean_given`](crate::boolean_given) is not so: the Boolean's
+    /// own test of it disagrees, or it names an entity its operand does not have.
+    FalseFact {
+        /// The fact.
+        fact: Fact,
     },
 }
 
@@ -281,6 +289,7 @@ impl BooleanError {
             Self::Refused(BooleanRefusal::BadProfile { .. }) => "bad_profile",
             Self::Unsupported(BooleanUnsupported::PlanarEdge { .. }) => "planar_edge",
             Self::Unsupported(BooleanUnsupported::PlanarUndecided) => "planar_undecided",
+            Self::Refused(BooleanRefusal::FalseFact { .. }) => "false_fact",
             Self::Unsupported(BooleanUnsupported::Nurbs { .. }) => "nurbs",
             Self::Unsupported(BooleanUnsupported::Chain { .. }) => "chain",
             Self::Unsupported(BooleanUnsupported::SsiPair { .. }) => "ssi_pair",
@@ -376,6 +385,9 @@ impl fmt::Display for BooleanError {
             }
             Self::Unsupported(BooleanUnsupported::PlanarUndecided) => {
                 f.write_str("the planar Boolean's crossings or result cannot be settled")
+            }
+            Self::Refused(BooleanRefusal::FalseFact { fact }) => {
+                write!(f, "the stated {fact} is not so")
             }
             Self::Unsupported(BooleanUnsupported::Nurbs { operand, at }) => {
                 write!(f, "{operand}: {at}: NURBS geometry is not intersected yet")

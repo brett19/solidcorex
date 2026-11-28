@@ -1697,3 +1697,100 @@ a plate, subtracted) is not a `Region` and is `PlanarUndecided`; the answer need
 pinched loop, which `scx-planar` does not take. Two rectangles touching at a corner are fine; two discs tangent from outside are `PlanarUndecided` (open: not yet separated into the certified crossings of two tangent quarter arcs or the midpoint test).
 Cost: all pairs of atoms with meeting boxes are crossed (quadratic in the worst case; the
 perforated plate of 16 discs, about 80 atoms a side, runs in 0.3 s in debug).
+### 13.10 BO21 as built (11-28)
+
+`scx_boolean::boolean_given(a, b, op, &Incidences, cx) -> Result<Done<NoItems>, BooleanError>`
+(`crates/scx-boolean/src/given.rs`); `boolean` is `boolean_given` with `Incidences::NONE`, one
+pipeline (R1). `Fact` is `FaceOnFace { a, b }` (operand 0's face, operand 1's face) or
+`EdgeOnFace { operand, edge, face }` (the face on the other operand); `Incidences` collects them
+sorted and each once. A false fact is `Refused(BooleanRefusal::FalseFact { fact })`.
+`scx_surface` gained `curve_on_surface(c, ce, s, se, res, budget, stop) -> Result<OnSurface, _>`,
+`OnSurface::{Proved, Isolated, Leaves}`: `intersect_curve`'s answer, labelled by how it was had.
+
+How a fact is used and checked:
+
+- An edge fact (stated, or implied by a face fact: every edge of either face on the other's
+  surface) sends stage 2's edge-face test through `curve_on_surface` in place of
+  `intersect_curve`. On a plane the curve's height is bounded in closed form (a line's two ends;
+  `|gamma| + hypot(alpha, beta)` on a conic; a few products on the open conics); within
+  `tol - rounding` the answer is the overlap's clip with no root isolated, one budget unit against
+  two a piece. Otherwise it is `intersect_curve`'s own isolation (`isolate`, the old body moved
+  out unchanged).
+- A stated edge fact is false when the roots show the edge leaving (`Leaves`), or when stage 2
+  never pairs that edge and face and the same test, run on its own, says so; a fact on a missing
+  edge or face, an edge with no curve, or a third operand is false too. An implied fact never
+  refuses: one the bound does not prove is answered by the roots as without it.
+- A face fact is false when stage 4 finds no coincidence of exactly those two faces. Stage 4
+  still runs for that pair.
+
+**Same result, the argument.** The only change a fact makes is `intersect_curve` replaced by
+`curve_on_surface` for one edge and face. `intersect_curve` answers `Overlap` pieces
+(`path.clip`) exactly when every event (roots, turns, the ends or the closed curve's probes) is
+within `tol`, `Event::new` computing each distance in floats. A proof bounds the true height by
+the computed bound plus its rounding, and each event's computed distance by the true height
+plus its rounding; both roundings are a few steps on numbers no larger than the coordinates'
+size `m` (curve, axes origin, surface size), and `rounding = 64 eps m` covers both with room. So
+proved implies every event near, and the answer is the same `path.clip(c, target, se)` call,
+the same bits. Not proved, it is the same function. Tested to the bit: `scx-surface`'s
+`a_stated_curve_is_answered_as_intersect_curve_answers_it` (300 on-surface cases of every kind
+at two tolerances, plane cases all proved, curved ones all isolated at equal work, and the
+random pairs of 10 seeds) and `scx-boolean/tests/given.rs` (bodies compared by
+`scx_record::encode`, changes compared, volumes against closed forms).
+
+**A false fact cannot change a result silently.** A stated fact is judged by the very test that
+answers without it, so a false one meets a disagreement and is refused, and no answer is built
+from it. A proved fact is true by the bound. An implied fact is never trusted: unproved, it is
+the plain test. So the result with facts is `boolean`'s result or a refusal.
+
+Decisions (analysis and adversarial pass):
+
+1. *A closed-form bound on planes only, not SU6's certified gap.* The first build used
+   `curve_surface_gap` (any analytic kind). Measured, it took 5 points for a line on a plane
+   against isolation's 2 units: the facts cost more work (387 against 366 on the stacked
+   cubes). For: analytic isolation is itself a closed form (two Bernstein solves a piece), so no
+   bound saves much and only a closed form undercuts it; the plane is where stated facts arise
+   (mates, bosses, pockets). Against: curved coincidences (coaxial walls, BO22's tangent
+   contacts) get no saving and no proof independent of the roots; BO22 can add the gap where
+   isolation is ill-conditioned (a double root), where it is worth more points.
+2. *Face facts are checked by running stage 4, not skipped.* For: the analytic pair is O(1) and
+   decides the coincidence the build needs; trusting the fact would need the overlap's regions
+   anyway. Against: a NURBS face pair would gain from skipping; that waits on BO23.
+3. *Implied edge facts never refuse.* For: the caller stated the faces, not each edge; an edge
+   of a coincident face that the bound misses (rounding near `tol`) is still on it as the roots
+   say. Against: a face fact whose faces' edges leave each other's surface is only caught by
+   stage 4, which does catch it.
+4. *Unpaired stated edge facts are checked alone* (`judge_edges`, with stage 2's reach and
+   resolution). For: else a fact on an edge far from the face is silently ignored. Against: one
+   extra test per such fact (cheap; the NURBS case is `Unsupported` as stage 2 would be).
+5. *Work may be less, never more*, so a budget that exhausts `boolean` may suffice for
+   `boolean_given`; the result when both finish is the same.
+6. *The rounding constant is an error-model argument* (`64 eps m`), not machine-checked; the
+   test at 0.99 `tol` (proved) and 1.5 `tol` (leaves, as `intersect_curve`) brackets it.
+
+Measured (throwaway prints and timers, removed; debug counts, release times):
+
+| case | facts | edge-face isolations | work | time (release, us) |
+|---|---|---|---|---|
+| stacked cubes, union | one face pair | 41 -> 34 (7 proved) | 366 -> 359 | 229 -> 227 |
+| stacked cubes, union | 8 edges | 41 -> 34 (7 proved in stage 2, 1 unpaired fact proved alone) | 366 -> 360 | 232 -> 236 |
+| stacked cubes, subtract | 8 edges | 41 -> 34 (7 proved in stage 2, 1 unpaired fact proved alone) | 363 -> 357 | 175 -> 170 |
+| boss on a plate | rim circle | 2 -> 1 (1 proved) | 38 -> 35 | 57 -> 56 |
+| boss on a plate | disc face pair | 2 -> 1 (1 proved) | 38 -> 35 | 63 -> 63 |
+| hole through the plate | 2 rims | 5 -> 3 (2 proved) | 75 -> 69 | 108 -> 108 |
+| coaxial cylinders | wall pair, 2 rims | 12 -> 12 (curved: none) | 102 -> 102 | 156 -> 168 |
+
+  Per call (release, 200,000 calls, line and circle on a tilted plane): `intersect_curve` 205-223 ns
+  and 842-851 ns, `curve_on_surface` 65 ns and 100 ns. The Boolean's times move within the main
+  box's noise (two runs differed by up to 25 % on one case): stage 2's isolations are a few
+  microseconds of 60-240. So on analytic planes the facts save the roots, not the Boolean's time;
+  they matter where the test is dear (BO22's tangent pairs, NURBS once BO23 lands).
+
+Tests: `crates/scx-boolean/tests/given.rs` (10): a stated face pair, stated edges (union,
+subtract, intersect), a boss on a plate (rim, disc, through hole), coaxial walls, false edge facts
+(unpaired, crossing, beside true ones), false face facts (parallel, perpendicular), facts naming
+what is not there, near the coincidence (0.25 and 0.9 zone judged as the test judges, 50 zones
+refused), no facts is `boolean`, `Incidences` order. `crates/scx-surface/tests/intersect.rs` (+2):
+the bit-for-bit comparison above and the line just off a plane. None removed.
+
+Open: curved bounds (a cylinder's ruling and parallel have closed forms too) if a caller's
+curved facts show up in profiles; BO22 reuses `OnSurface` and `Fact` for tangent pairs.

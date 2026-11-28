@@ -50,6 +50,7 @@ mod contact;
 mod error;
 mod faceface;
 mod geom;
+mod given;
 mod imprint;
 mod imprint_op;
 mod intersect;
@@ -60,6 +61,7 @@ mod points;
 
 pub use boolean::{BooleanOp, NoItems, boolean};
 pub use error::{BooleanDefect, BooleanError, BooleanRefusal, BooleanUnsupported};
+pub use given::{Fact, Incidences, boolean_given};
 pub use imprint_op::{Imprint, imprint};
 pub use intersect::intersect;
 pub use planar::planar;
