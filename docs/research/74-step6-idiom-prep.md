@@ -3303,7 +3303,10 @@ the odd-coordinate rectangle lost 5-6%, beyond noise. Results were the same bits
 main. The one change left on those paths is `orient`'s fast filter, now shared with
 `dot_sign`: against main's `orient`, three interleaved runs on a quieter machine gave the same
 times within 1-2% both ways on all six (rect-odd `new` 2,042-2,076 against 2,065-2,071 ns, gear
-`classify` 2,983-3,006 against 2,983-3,079 ns) and the same bits.
+`classify` 2,983-3,006 against 2,983-3,079 ns) and the same bits. The slice's `tess` cases (criterion,
+second of two interleaved rounds; the first was under load) gave main against this branch:
+box-cyl-hole 49.0 against 49.7 us, plate-4 274.0 against 275.0 us, plate-12 2.782 against 2.777 ms,
+gear-60 1.658 against 1.649 ms.
 
 ### 31.7 Limits and open questions
 
