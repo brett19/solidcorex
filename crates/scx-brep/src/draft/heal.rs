@@ -40,7 +40,7 @@
 //! id order, and are deterministic.
 
 use core::fmt;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 
 use scx_curve::{Curve, Curve2};
@@ -288,6 +288,36 @@ struct JoinPlan {
     interval: Extent1d,
     ends: [VertexId; 2],
     gone_ends: [VertexId; 2],
+    accuracy: Option<Arc<Recorded>>,
+    faces: Vec<(FaceId, Vec<LoopRecord>)>,
+}
+
+/// What two edges meeting at a free vertex need to be one.
+struct Link<'a> {
+    first: EdgeId,
+    second: EdgeId,
+    curve: &'a Curve,
+    interval: Extent1d,
+    ends: [VertexId; 2],
+    accuracy: Option<Arc<Recorded>>,
+    faces: Vec<FaceId>,
+}
+
+/// A maximal run of edges on one curve through free vertices: `verts[j]` is between
+/// `edges[j]` and `edges[j + 1]`.
+struct Chain {
+    edges: Vec<EdgeId>,
+    verts: Vec<VertexId>,
+}
+
+/// A planned join of a whole chain into its lowest edge.
+struct ChainPlan {
+    keep: EdgeId,
+    gone: Vec<(EdgeId, [VertexId; 2])>,
+    verts: Vec<VertexId>,
+    curve: Curve,
+    interval: Extent1d,
+    ends: [VertexId; 2],
     accuracy: Option<Arc<Recorded>>,
     faces: Vec<(FaceId, Vec<LoopRecord>)>,
 }
@@ -790,17 +820,46 @@ impl Draft {
     fn join_edges_with(&mut self, protected: &BTreeSet<EdgeId>, stars: &mut Stars) -> Healed {
         let mut out = Healed::default();
         let ids: Vec<VertexId> = self.t.vertices.iter().map(|(id, _)| id).collect();
+        let mut done: BTreeSet<VertexId> = BTreeSet::new();
         for v in ids {
-            if self.t.vertices.get(v).is_none() {
+            if self.t.vertices.get(v).is_none() || done.contains(&v) {
                 continue;
             }
-            match self.plan_join(v, protected, stars) {
-                Ok(plan) => out.edges.push(self.apply_join(plan, stars)),
-                Err(Skip::Left(why)) => out.left.push(Left { at: v.into(), why }),
-                Err(Skip::Silent) => {}
+            // A chain is joined at once; one that is left for a reason, or a ring, goes pair
+            // by pair, in the order of the vertices, which says why.
+            let Some(chain) = self.chain_at(v, protected, stars) else {
+                self.join_one(v, protected, stars, &mut out);
+                continue;
+            };
+            done.extend(chain.verts.iter().copied());
+            if let Some(plan) = self.plan_chain(&chain) {
+                let joins = self.apply_chain(plan, &chain, stars);
+                out.edges.extend(joins);
+            } else {
+                let mut verts = chain.verts.clone();
+                verts.sort_unstable();
+                for w in verts {
+                    if self.t.vertices.get(w).is_some() {
+                        self.join_one(w, protected, stars, &mut out);
+                    }
+                }
             }
         }
         out
+    }
+
+    fn join_one(
+        &mut self,
+        v: VertexId,
+        protected: &BTreeSet<EdgeId>,
+        stars: &mut Stars,
+        out: &mut Healed,
+    ) {
+        match self.plan_join(v, protected, stars) {
+            Ok(plan) => out.edges.push(self.apply_join(plan, stars)),
+            Err(Skip::Left(why)) => out.left.push(Left { at: v.into(), why }),
+            Err(Skip::Silent) => {}
+        }
     }
 
     /// Merges faces and joins edges, again and again until neither finds more: a face
@@ -1103,12 +1162,14 @@ impl Draft {
 
     // Edges.
 
-    fn plan_join(
+    /// What joining the two edges at `v` needs of the edges alone: the pair on one curve,
+    /// running on, with the same faces on its sides.
+    fn link(
         &self,
         v: VertexId,
         protected: &BTreeSet<EdgeId>,
         stars: &Stars,
-    ) -> Result<JoinPlan, Skip> {
+    ) -> Result<Link<'_>, Skip> {
         let t = &self.t;
         let &[e0, e1] = stars.star(v) else {
             return Err(Skip::Silent);
@@ -1165,18 +1226,38 @@ impl Draft {
             return Err(Skip::Left(Why::Fins));
         }
         let interval = run_on(c0, *i0, *i1).ok_or(Skip::Left(Why::Interval))?;
+        Ok(Link {
+            first,
+            second,
+            curve: c0,
+            interval,
+            ends: [g_first.ends[0], g_second.ends[1]],
+            accuracy: larger(g_first.accuracy.as_ref(), g_second.accuracy.as_ref()),
+            faces: a0.fins.iter().map(|f| f.face).collect(),
+        })
+    }
+
+    fn plan_join(
+        &self,
+        v: VertexId,
+        protected: &BTreeSet<EdgeId>,
+        stars: &Stars,
+    ) -> Result<JoinPlan, Skip> {
+        let t = &self.t;
+        let link = self.link(v, protected, stars)?;
+        let (first, second) = (link.first, link.second);
         let keep = first.min(second);
         let gone = first.max(second);
         let mut faces: Vec<(FaceId, Vec<LoopRecord>)> = Vec::new();
         let mut done: BTreeSet<FaceId> = BTreeSet::new();
-        for f in a0.fins.iter().map(|f| f.face) {
+        for &f in &link.faces {
             if !done.insert(f) {
                 continue;
             }
             let rec = t.faces.get(f).ok_or(Skip::Left(Why::Uses))?;
             let mut loops = Vec::with_capacity(rec.loops.len());
             for lp in &rec.loops {
-                let uses = join_uses(&lp.uses, first, second, keep, interval)
+                let uses = join_uses(&lp.uses, first, second, keep, link.interval)
                     .ok_or(Skip::Left(Why::Uses))?;
                 loops.push(LoopRecord::new(uses));
             }
@@ -1187,13 +1268,171 @@ impl Draft {
             keep,
             gone,
             vertex: v,
-            curve: c0.clone(),
-            interval,
-            ends: [g_first.ends[0], g_second.ends[1]],
+            curve: link.curve.clone(),
+            interval: link.interval,
+            ends: link.ends,
             gone_ends,
-            accuracy: larger(g_first.accuracy.as_ref(), g_second.accuracy.as_ref()),
+            accuracy: link.accuracy,
             faces,
         })
+    }
+
+    /// The maximal chain of joinable pairs through `v`, `None` when `v` is not between
+    /// joinable edges, the chain is a closed ring or it is one join (the single join does
+    /// that).
+    fn chain_at(&self, v: VertexId, protected: &BTreeSet<EdgeId>, stars: &Stars) -> Option<Chain> {
+        let start = self.link(v, protected, stars).ok()?;
+        let mut edges: VecDeque<EdgeId> = VecDeque::from([start.first, start.second]);
+        let mut verts: VecDeque<VertexId> = VecDeque::from([v]);
+        let mut seen: BTreeSet<VertexId> = BTreeSet::from([v]);
+        let mut at = start.ends[1];
+        let mut last = start.second;
+        while let Ok(l) = self.link(at, protected, stars)
+            && l.first == last
+        {
+            if !seen.insert(at) {
+                return None;
+            }
+            verts.push_back(at);
+            edges.push_back(l.second);
+            at = l.ends[1];
+            last = l.second;
+        }
+        let mut at = start.ends[0];
+        let mut head = start.first;
+        while let Ok(l) = self.link(at, protected, stars)
+            && l.second == head
+        {
+            if !seen.insert(at) {
+                return None;
+            }
+            verts.push_front(at);
+            edges.push_front(l.first);
+            at = l.ends[0];
+            head = l.first;
+        }
+        (verts.len() >= 2).then(|| Chain {
+            edges: edges.into(),
+            verts: verts.into(),
+        })
+    }
+
+    /// Plans the join of a whole chain at once: every loop of every face on it is rebuilt
+    /// once. `None` when anything is left for a [`Why`]; the pairs are then joined one by
+    /// one, which reports it.
+    fn plan_chain(&self, chain: &Chain) -> Option<ChainPlan> {
+        let t = &self.t;
+        let first_g = t.edges.get(*chain.edges.first()?)?;
+        let EdgeShape::Curve {
+            curve,
+            interval: first_interval,
+        } = &first_g.shape
+        else {
+            return None;
+        };
+        // The interval and accuracy after each edge.
+        let mut prefix: Vec<Extent1d> = vec![*first_interval];
+        let mut accuracy = first_g.accuracy.clone();
+        let mut end = first_g.ends[1];
+        for &e in chain.edges.iter().skip(1) {
+            let g = t.edges.get(e)?;
+            let EdgeShape::Curve { interval, .. } = &g.shape else {
+                return None;
+            };
+            prefix.push(run_on(curve, *prefix.last()?, *interval)?);
+            accuracy = larger(accuracy.as_ref(), g.accuracy.as_ref());
+            end = g.ends[1];
+        }
+        let interval = *prefix.last()?;
+        let keep = *chain.edges.iter().min()?;
+        let pos: BTreeMap<EdgeId, usize> = chain
+            .edges
+            .iter()
+            .enumerate()
+            .map(|(i, &e)| (e, i))
+            .collect();
+        let a = t.adjacency.get(*chain.edges.first()?)?;
+        let mut faces: Vec<(FaceId, Vec<LoopRecord>)> = Vec::new();
+        let mut done: BTreeSet<FaceId> = BTreeSet::new();
+        for f in a.fins.iter().map(|f| f.face) {
+            if !done.insert(f) {
+                continue;
+            }
+            let rec = t.faces.get(f)?;
+            let mut loops = Vec::with_capacity(rec.loops.len());
+            for lp in &rec.loops {
+                let uses = join_chain_uses(&lp.uses, &pos, chain, &prefix, keep)?;
+                loops.push(LoopRecord::new(uses));
+            }
+            faces.push((f, loops));
+        }
+        let gone: Vec<(EdgeId, [VertexId; 2])> = chain
+            .edges
+            .iter()
+            .filter(|&&e| e != keep)
+            .map(|&e| t.edges.get(e).map(|g| (e, g.ends)))
+            .collect::<Option<_>>()?;
+        Some(ChainPlan {
+            keep,
+            gone,
+            verts: chain.verts.clone(),
+            curve: curve.clone(),
+            interval,
+            ends: [first_g.ends[0], end],
+            accuracy,
+            faces,
+        })
+    }
+
+    fn apply_chain(&mut self, plan: ChainPlan, chain: &Chain, stars: &mut Stars) -> Vec<EdgeJoin> {
+        let ChainPlan {
+            keep,
+            gone,
+            verts,
+            curve,
+            interval,
+            ends,
+            accuracy,
+            faces,
+        } = plan;
+        for &(g, _) in &gone {
+            self.merge_edge(g, keep);
+        }
+        if let Some(g) = self.edge_mut(keep) {
+            g.shape = EdgeShape::Curve { curve, interval };
+            g.ends = ends;
+            g.accuracy = accuracy;
+        }
+        for (f, loops) in faces {
+            self.edit_face(f, |r| r.loops = loops);
+        }
+        for &v in &verts {
+            self.remove_vertex(v);
+        }
+        for &(g, g_ends) in &gone {
+            stars.rename(g, keep, g_ends);
+            stars.rename(g, keep, ends);
+        }
+        for &v in &verts {
+            if let Some(star) = stars.at.get_mut(v.index()) {
+                star.clear();
+            }
+        }
+        // Pair `j` of the chain is at `verts[j]`: the edge on the far side of it from the
+        // survivor is the one that went.
+        let at = chain.edges.iter().position(|&e| e == keep).unwrap_or(0);
+        verts
+            .iter()
+            .enumerate()
+            .filter_map(|(j, &vertex)| {
+                let absorbed = *chain.edges.get(if j < at { j } else { j + 1 })?;
+                Some(EdgeJoin {
+                    absorbed,
+                    survivor: keep,
+                    vertex,
+                })
+            })
+            .collect()
     }
 
     fn apply_join(&mut self, plan: JoinPlan, stars: &mut Stars) -> EdgeJoin {
@@ -1274,6 +1513,95 @@ fn join_uses(
         match replace.get_mut(i).and_then(Option::take) {
             Some(m) => out.push(m),
             None if u.edge == first || u.edge == second => return None,
+            None => out.push(u.clone()),
+        }
+    }
+    Some(out)
+}
+
+/// A loop's uses with each run of the whole chain (forward, in order, or reversed, in the
+/// other) made one use of `keep` over the chain's joined interval. `None` when a use of a
+/// chain edge is in no whole run, or a pair's pcurves are not equal and running on.
+fn join_chain_uses(
+    uses: &[EdgeUse],
+    pos: &BTreeMap<EdgeId, usize>,
+    chain: &Chain,
+    prefix: &[Extent1d],
+    keep: EdgeId,
+) -> Option<Vec<EdgeUse>> {
+    let n = uses.len();
+    let k = chain.edges.len();
+    let at = |i: usize| -> Option<(usize, &EdgeUse)> {
+        let u = uses.get(i % n)?;
+        Some((*pos.get(&u.edge)?, u))
+    };
+    // The use after `(j, u)` in the run, if the next one continues it.
+    let continues = |i: usize| -> Option<bool> {
+        let (j, u) = at(i)?;
+        let (p, w) = at(i + n - 1)?;
+        Some(
+            u.sense == w.sense
+                && match u.sense {
+                    Sense::Forward => j == p + 1,
+                    Sense::Reversed => j + 1 == p,
+                },
+        )
+    };
+    let mut consumed = vec![false; n];
+    let mut replace: Vec<Option<EdgeUse>> = vec![None; n];
+    let mut members = 0;
+    for i in 0..n {
+        if !pos.contains_key(&uses.get(i)?.edge) || continues(i) == Some(true) && n > 1 {
+            continue;
+        }
+        // A run starts here: at the chain's first edge forward, its last reversed.
+        let (j, u) = at(i)?;
+        let sense = u.sense;
+        if j != if sense == Sense::Forward { 0 } else { k - 1 } || k > n {
+            return None;
+        }
+        let mut run: Vec<&EdgeUse> = Vec::with_capacity(k);
+        for m in 0..k {
+            let (jm, um) = at(i + m)?;
+            let want = if sense == Sense::Forward {
+                m
+            } else {
+                k - 1 - m
+            };
+            if jm != want || um.sense != sense {
+                return None;
+            }
+            run.push(um);
+            if m > 0 {
+                *consumed.get_mut((i + m) % n)? = true;
+            }
+        }
+        members += k;
+        if sense == Sense::Reversed {
+            run.reverse();
+        }
+        let mut geom = run.first()?.geom.clone();
+        let mut bound = run.first()?.bound.clone();
+        for (m, w) in run.iter().enumerate().skip(1) {
+            geom = joined_geom(&geom, &w.geom, *prefix.get(m)?)?;
+            bound = larger(bound.as_ref(), w.bound.as_ref());
+        }
+        let mut merged = EdgeUse::new(keep, sense, geom);
+        merged.bound = bound;
+        *replace.get_mut(i)? = Some(merged);
+    }
+    let total = uses.iter().filter(|u| pos.contains_key(&u.edge)).count();
+    if members != total {
+        return None;
+    }
+    let mut out = Vec::with_capacity(n);
+    for (i, u) in uses.iter().enumerate() {
+        if consumed.get(i) == Some(&true) {
+            continue;
+        }
+        match replace.get_mut(i).and_then(Option::take) {
+            Some(m) => out.push(m),
+            None if pos.contains_key(&u.edge) => return None,
             None => out.push(u.clone()),
         }
     }

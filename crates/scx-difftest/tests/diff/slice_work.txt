@@ -8,6 +8,12 @@ box-box-union-flush 288
 sphere-and-box 29
 coplanar-union 368
 torus-minus-box 41
+tangent-sphere-box 9
+seam-sphere-box 27
+seam-box-sphere 21
+off-seam-sphere-box 33
+seam-sphere-sphere 9
+seam-box-minus-sphere 78
 coplanar-offset-0 622
 coplanar-offset-0.1c 586
 coplanar-offset-0.5c 586

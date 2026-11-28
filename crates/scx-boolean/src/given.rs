@@ -49,6 +49,7 @@ use scx_num::units::{Length, Resolution};
 use scx_surface::{OnSurface, SurfaceError, curve_on_surface};
 
 use crate::boolean::{BooleanOp, Interference, NoItems, run};
+use crate::cells::Rule;
 use crate::error::{BooleanError, BooleanRefusal, BooleanUnsupported};
 use crate::faceface::FaceFace;
 use crate::geom::{Operands, Side, recorded};
@@ -136,7 +137,7 @@ pub fn boolean_given(
     facts: &Incidences,
     cx: &mut Cx<'_>,
 ) -> Result<Done<NoItems>, BooleanError> {
-    run(a, b, op, facts, cx)
+    run(a, b, &Rule::of(op), facts, cx)
 }
 
 /// How a stage-2 edge-face test is to be read.
