@@ -5,7 +5,7 @@
 
 use core::fmt;
 
-use scx_brep::{EdgeId, Entity, FaceId, ShellId, VertexId};
+use scx_brep::{EdgeId, Entity, EntityKind, FaceId, ShellId, VertexId};
 use scx_num::budget::{Exhausted, Stopped};
 use scx_num::error::ErrorKind;
 use scx_surface::SurfaceError;
@@ -93,6 +93,12 @@ pub enum BodyqRefusal {
         /// The face.
         face: FaceId,
     },
+    /// A kind of entity that cannot be picked by position: a region or a shell has no place
+    /// of its own (BW8).
+    NotPickable {
+        /// The kind asked for.
+        kind: EntityKind,
+    },
     /// A face that does not separate material from air: both its sides are solid, or
     /// neither is, so it has no outward side (BW11).
     NoMaterialSide {
@@ -139,6 +145,11 @@ pub enum BodyqUnsupported {
 pub enum BodyqDefect {
     /// A face of a finished body with no box: it reaches infinity, or cannot be enclosed.
     NoFaceBox {
+        /// The face.
+        face: FaceId,
+    },
+    /// A face whose boundary cannot say which side of it a uv lies on (BW8).
+    NoUvSide {
         /// The face.
         face: FaceId,
     },
@@ -217,6 +228,7 @@ impl BodyqError {
             Self::Refused(BodyqRefusal::Seat) => "seat",
             Self::Refused(BodyqRefusal::WrongSurface { .. }) => "wrong_surface",
             Self::Refused(BodyqRefusal::NoMaterialSide { .. }) => "no_material_side",
+            Self::Refused(BodyqRefusal::NotPickable { .. }) => "not_pickable",
             Self::Unsupported(BodyqUnsupported::Nurbs { .. }) => "nurbs",
             Self::Unsupported(BodyqUnsupported::NonManifold { .. }) => "non_manifold",
             Self::Unsupported(BodyqUnsupported::NoClearSide { .. }) => "no_clear_side",
@@ -226,6 +238,7 @@ impl BodyqError {
             Self::Cancelled => "cancelled",
             Self::Defect(BodyqDefect::NoFaceBox { .. }) => "no_face_box",
             Self::Defect(BodyqDefect::NoUvBox { .. }) => "no_uv_box",
+            Self::Defect(BodyqDefect::NoUvSide { .. }) => "no_uv_side",
             Self::Defect(BodyqDefect::Surface { .. }) => "surface",
             Self::Defect(BodyqDefect::NoNormal { .. }) => "no_normal",
             Self::Defect(BodyqDefect::Ray) => "ray",
@@ -318,6 +331,9 @@ impl fmt::Display for BodyqError {
                     "{face}: has no outward side, material is on both or neither"
                 )
             }
+            Self::Refused(BodyqRefusal::NotPickable { kind }) => {
+                write!(f, "a {} has no place to pick by", kind.name())
+            }
             Self::Unsupported(BodyqUnsupported::Probe) => {
                 f.write_str("what a probe met of the body was not read")
             }
@@ -337,6 +353,9 @@ impl fmt::Display for BodyqError {
             Self::Cancelled => f.write_str("stopped"),
             Self::Defect(BodyqDefect::NoFaceBox { face }) => write!(f, "{face}: no box"),
             Self::Defect(BodyqDefect::NoUvBox { face }) => write!(f, "{face}: no uv box"),
+            Self::Defect(BodyqDefect::NoUvSide { face }) => {
+                write!(f, "{face}: the boundary cannot say which side a uv is on")
+            }
             Self::Defect(BodyqDefect::Surface { face }) => {
                 write!(f, "{face}: the surface refused a query")
             }
