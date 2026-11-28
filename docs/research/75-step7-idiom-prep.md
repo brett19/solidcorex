@@ -3822,3 +3822,148 @@ refusal by place. Every result also passes `scx_check::contract`.
 **Added work.** None on existing paths: `boolean` is untouched. A fold of n operands runs n - 1
 `boolean` steps; the intermediates' faces are what the later steps read (the cost BB1 will
 measure against BO12's merge). Four blocks: three steps, summed work equal to the hand sum.
+
+### 13.45 MK12b as built (11-28)
+
+`scx_make::{blend_edges, fillet_sheets, fillet_crossing, Fillet, SectionBlendDefinition, point_frames, open_section_turns, section_frames, section_frames_outward}` and their types live in `crates/scx-make/src/sheet_blend/` (one module tree; `blend.rs` from MK12 is unchanged). scx-make gains the `scx-boolean` dependency, which layers.txt allows. It reuses MK12's `section_blend`, MK10c's `span_bound`, BO13b's `imprint_curves` and MK15's `face`. Nothing on an existing path changed.
+
+API:
+- `SectionBlendDefinition::new(sections, [EndOrder; 2], crown) -> Result<(SectionBlendDefinition, Blended), SheetBlendError>` (this also covers the pin's `section_blend_surface`), with `sections()`, `orders()`, `crown()`, `motions()`, `transformed(Affine)`, `rebuild()` and `recertify(&NurbsSurface<3>) -> Result<bool, _>`.
+- `point_frames(&[Point3], leave, stations)`, `open_section_turns(&[[Point3; 2]], &Document) -> Result<Vec<bool>, _>`, `section_frames(body, chain, leave, min_in_plane, stations)` and `section_frames_outward(body, chain, toward, stations)` give `Vec<SectionFrame>` for `section_blend`.
+- `blend_edges(BlendSide, BlendSide, stations, crown, &Document, &mut Budget, &Stop) -> Result<EdgeBlend, _>`. `BlendSide { body, edge, order }`. `EdgeBlend { made: Made<FaceId>, definition, through, seams: [Seam; 2] }`. `Seam { edge, gap: SeamGap::{Proved(Length), Unproved}, angle_at_stations }`.
+- `Fillet::between(a, b, FilletSection::{Radius, Chord, Curvature}(Length), &Document) -> Result<Fillet, _>`. `Fillet { made, round: Round::{Cylinder, Torus, Sphere}, radius, setback, contacts: [Contact { curve, interval }; 2] }`.
+- `fillet_sheets(a, b, section, &mut Cx) -> Result<FilletSheets { fillet, sheets: [Brep; 2] }, _>`.
+- `fillet_crossing(a, b, [SheetSide::{Front, Back}; 2], section, &mut Cx) -> Result<FilletCrossing { parts: [Brep; 2], fillet: FilletSheets }, _>`.
+- Errors: `SheetBlendError::{Refused(SheetBlendRefusal), Unsupported(SheetBlendUnsupported), Blend, Make, Boolean, Surface, Motion, Defect}`, with `kind()` and `name()`.
+  - `SheetBlendRefusal` has 16 cases, among them `NoSharedEdge`, `SharedEdges`, `Angle`, `NoCrossing`, `Setback` and `OtherDocument`.
+  - `SheetBlendUnsupported` names what is missing: `NurbsSheet` (SM9), `RollingBall`, `Curvature`, `SpindleTorus`, `CurvedImprint` and `ClosedSection`.
+
+Decisions.
+- **The definition keeps motions as affine maps on the rebuilt surface.** Motions are not pushed into the frames.
+  - For: a non-uniform scale does not map a curvature vector to the mapped curve's, so frames could not carry it exactly. The map of the control points is exact.
+  - Against: a long motion history is replayed at each rebuild. The pin folded motions into its stored frames, so a rigid motion cost nothing at rebuild.
+  - `recertify` is bit equality with the rebuild in any of the 8 orientations of the parameter square, because a face may hold its surface turned and the turns are exact. It does not accept a surface that differs by rounding: a rebuild that is not bit-identical is a different surface.
+- **`section_blend_surface` is folded into `SectionBlendDefinition::new`.** It returns the surface and its record together, so no surface is made without the record that rebuilds it. Against: a caller who wants only the surface uses `section_blend` (MK12) directly, which is still there.
+- **Frames come from the pcurve's uv on the support face.** There is no station cap. `open_section_turns` judges a closed section by the document's resolution (R3) and refuses it as `ClosedSection` instead of guessing a seam.
+- **`blend_edges` is a one-face sheet on the whole blend surface.** Its four edges are the surface's exact iso curves, with line pcurves written by hand, because `Draft::exact_loops` has no NURBS pcurve.
+  - Each seam's gap is *proved*: `span_bound` of the surface's `u = 0` or `u = 1` side against the edge's exact NURBS form (a line's degree-1 form, a circle's rational quadratic arcs, or the restricted NURBS).
+  - Ellipses and the other conics have no exact form here and are `SeamGap::Unproved`. That is a typed answer, not a sampled distance.
+  - The tangent-plane angle across a seam is only *measured at the stations* (`angle_at_stations`), not proved. A bound needs the Bernstein form of the cross derivative, which MK12 also did not certify (13.38).
+  - For: an honest certificate for the position and an honest label on the tangent. Against: a G1 caller gets no proved angle.
+- **Fillets are exact rounds and never a sampled rolling ball.**
+  - Two planes along a line give a cylinder.
+  - Two surfaces of revolution about a circle edge's axis give a torus, or a sphere when the centre is on the axis. Each face along the edge may be a plane square to the axis, or a cylinder, cone, torus or sphere about it, all within the resolution.
+  - Everything else is `Unsupported(RollingBall)`, which names scx-blend's ball as the missing piece. A spindle torus (centre across the axis) is `Unsupported(SpindleTorus)`, and the curvature section is `Unsupported(Curvature)`, which waits on a G2 section generator.
+  - A NURBS sheet is `Unsupported(NurbsSheet)`, naming SM9, with no fallback.
+  - For: every round has a closed-form area, contact and normal, and the tests hold them to 1e-8 to 1e-12. Against: a large part of the pin's reach (two NURBS sheets) is refused until SM9 and the ball exist.
+- **The round is its own body, not stitched to the cut sheets.** `Fillet::between` gives the round without trimming. A torus round between a cylinder and a plane is therefore usable even though trimming the cylinder is `Unsupported(CurvedImprint)`: BO13b imprints on planes only.
+  - For: the parts are exact and checkable separately, and stitching is a step-6 sewing job (shared vertices within resolution). Against: the caller must sew the parts to get one sheet.
+- **Trimming is an imprint followed by face removal, not BO14's section.** `fillet_sheets` imprints each contact (a whole line, or a circle whole or over its interval) and removes the regions that lie between the edge and the contact. A contact that leaves no strip, or nothing to keep, is `Refused(Setback)`.
+  - For: it is exact on lines and circles and needs no half-space solid. Against: it only works on planes, while a section by the round's surface would generalise once BO14 handles curved surfaces.
+- **The shared edge must coincide end to end** (ends and middle within the resolution, both lines or both circles). Partial overlap is `NoSharedEdge` and more than one coincident pair is `SharedEdges`. Neither case is guessed.
+  - Against: two sheets whose edges overlap over part of their length must be split first.
+  - In `fillet_crossing` the two sheets are cut along the planes' line and must cross over the same span. Otherwise the cut edges differ, and the result is `NoSharedEdge`.
+- **The `Angle` refusal tests the angle at the round's size.** The sheets are folded onto each other or continuing flat when `r * theta` or `r * (pi - theta)` is within the resolution: the round would be thinner than the document can tell apart (R3).
+- **`fillet_crossing` takes one-face plane sheets.** A curved one is `CurvedImprint` and a NURBS one is `NurbsSheet`. Each sheet is cut by the other's plane on its kept side, and `fillet_sheets` then runs on the two quarters.
+- **Deviation from §7's table.** The row says `scx_make::blend` on SSI. The fillets use closed forms instead of an SSI trace, because every supported pair has a closed-form contact. The module is `sheet_blend`, so MK10 and MK6 can work in `blend.rs`'s neighbours without conflicts. BO14 is not used (see the trimming decision).
+
+Work (release, a throwaway timer in the test module, since removed; mean of 50):
+
+| call | time |
+|---|---|
+| `blend_edges`, 5 stations, G0 / G2 | 88 us / 80 us |
+| `blend_edges`, 33 stations, G0 / G2 | 537 us / 700 us |
+| `Fillet::between` (right corner, cylinder) | 7.5 us |
+| `fillet_sheets` (the same, two imprints and trims) | 69 us |
+| `fillet_crossing` (two cuts and the fillet) | 128 us |
+| for scale: `scx_mass::area` of one plane sheet | 3.5 us |
+
+Existing paths are unchanged (new modules only), so no work is added to them.
+
+Tests (`crates/scx-make/src/sheet_blend/tests.rs`, 15, all closed forms; none removed):
+- A right corner gives the quarter cylinder (area `25 pi` at r 5 over 10, the contacts on each plane, normals square to the sheets). A chord of `5 root 2` gives r 5. An open corner of 120 degrees spans `pi - theta`, with every round corner on a contact line.
+- `fillet_sheets` cuts both sheets back to the contacts (150 each).
+- A ring on a tube gives the torus quarter (area `2 pi * 5 * (15 pi / 2 - 5)`, with the contact circles), and trimming the cylinder is `CurvedImprint`.
+- Crossing planes give the quadrant chosen: parts of 200, sheets of 140, round `(pi/2) * 3 * 20`, and `Back` turning the round to the other side.
+- The refusals by type and their names.
+- The G0 step blend is the flat strip: area `50 root 2`, in the plane `x - z = 10`, both seams `Proved` within the resolution, angle `pi/4` at the stations, 1 face and 4 edges.
+- G1 leaves each sheet flat, plain and with the second sheet's edge turned. G2 holds them too.
+- Too few stations and an edge with no face are refused.
+- The definition rebuilds bit for bit, recertifies in a turned orientation, and follows a motion.
+- Even `point_frames`, `open_section_turns` end to nearer end, and `section_frames_outward` square to the edge.
+
+### 13.41 RY1 as built (11-28)
+
+`intersect_curve` (and `curve_on_surface`) now answer a NURBS curve against a plane, cylinder,
+cone, sphere or torus (77 §6.3 RY1). A NURBS curve against a NURBS surface stays
+`SurfaceError::NurbsIntersection`. The new module is `scx-surface/src/intersect/nurbs_curve.rs`,
+and the parent's `Path::of` dispatch gains one arm.
+
+- **Per span.** Each Bézier span, in homogeneous form and in the kind's own frame, is substituted
+  into the implicit form as a `Bounded` Bernstein polynomial with a rounding bound. The degrees are
+  `p` for a plane's height, `2p` for a cylinder, cone or sphere, and `4p` for a torus. The roots
+  are isolated with `bernstein_roots`, and each one is polished by three Newton steps. The turns
+  are the roots of the derivative (`h g' - d h' g` for a rational span). These two isolations make
+  up the two budget units a span charges.
+- **Contacts.** The span's events (Root, Turn, End, and a Probe at each interior knot) go through
+  the parent's `classify`. A hit is therefore typed exactly as an analytic one is, by the same
+  `Tangent` and `Crossing` rules.
+- **Knots.** A knot is one event, never two: neighbouring spans share the knot's point bit for bit.
+  A sign change in the slope across a knot (a kink) is a Turn, so a polyline's V touching a plane
+  is one tangent. A crossing at a knot is one crossing.
+- **Overlaps.** A span whose polynomial is zero within its bound has its overlap proved by the gap
+  certificate (`curve_surface_gap`). A run of such spans is one `Overlap`, clipped by the
+  surface's uv box. A closed curve merges its end hits.
+- **Undecided.** An uncertified root far from the surface, a flat span the gap cannot prove, or a
+  depth-4 sign check that fails returns `SurfaceError::Undecided { t }`, never an empty answer.
+  The variant is RY2's (13.32); RY1 widens its doc to NURBS-curve roots.
+- **`curve_on_surface` against a plane.** It first takes the control net's height bound,
+  `max (|z| + ez)/(h - eh)`, which costs one budget unit. A curve that bound proves in the plane is
+  `Proved` without isolation.
+
+Choices:
+
+1. **Undecided rather than empty.** I chose `Undecided` for an uncertified root. For: an empty
+   answer is a wrong miss. Against: a caller now has one more error arm, which bodyq, boolean and
+   hlr map with `NurbsIntersection`.
+2. **Kinks are read from the slopes' end coefficients.** For: this costs nothing extra and matches
+   the truth of a polyline V. Against: a span with a zero end slope relies on the turn isolation
+   instead. That case is tested with the cubic spline at its knot.
+3. **The surface's own uv box clips an overlap run.** This matches the analytic `Overlap` contract.
+
+The hlr fix: `silhouette.rs` `trim`'s face test now reads a foot farther than the face's `near`
+as off the face. RY1 made this code reachable. Before RY1, a NURBS rim made the trim `Undecided`.
+Now the rim splits the generators, and the NURBS patch's inversion clamps a foot to the patch
+edge, which read every point past the edge as `Near`. The test is renamed
+`a_rational_cylinder_is_recognised_and_trimmed_by_its_nurbs_rims` and now checks the truth: of
+the two generators, the one at about 106.7 degrees runs on the face from `z = 0` to `0.5`, and
+the one at about 286.7 degrees lies in the arc's 90 degree gap and is dropped. The old test
+asserted that both were `Undecided::NurbsEdge`, which was a stand-in for not knowing.
+HL3's outline test `nurbs_rims_and_freeform_faces_are_named_not_sampled` is renamed
+`nurbs_rims_are_cut_exactly_and_freeform_faces_named`. The rational sheet's two NURBS rims
+are now cut by the silhouette planes, not named `NurbsEdge`. The sheet faces the viewer from
+either side, so the cut at about 106.7 degrees merges back. All four edges are whole
+stretches, which is the truth. `plane_hits` maps `Undecided` to `NurbsEdge` as it maps
+`NurbsIntersection`.
+`rays.rs` is untouched; RY3 owns it.
+
+Measured with throwaway counters, counting isolations per call, where an analytic piece counts
+2:
+
+| Case | Spans | Isolations | Analytic path |
+|---|---|---|---|
+| NURBS circle against each of the 5 kinds | 4 | 8 | 4 for the analytic circle, before and after |
+| NURBS line | 1 | 2 | 2 for the analytic line, before and after |
+| 7-span cubic spline | 7 | 14 | — |
+| Quadratic line against a torus (degree 8) | 2 | 4 | — |
+| Cubic grazing a cylinder | 1 | 2 | — |
+
+The work is linear in the spans, and the budget charged equals the isolations. The analytic path
+is unchanged: the same counts on main and on the branch, for the line and circle against all
+five kinds.
+
+Open questions:
+
+- **A NURBS curve against a NURBS surface.** This is deferred, as 77 §6.3 says.
+- **Degree-4p spans of high-degree curves.** These have not been measured for root-isolation
+  depth. `RootLimits::DEFAULT` is used.
