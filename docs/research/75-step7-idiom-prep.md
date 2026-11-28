@@ -3493,8 +3493,66 @@ cylinder's NURBS pcurve costs 15 to 330 times the analytic one, which has an exa
 4. `curve_lies_on_face` on a NURBS face cannot prove the trim until a NURBS surface has pcurves.
 5. The procedural arm: the net's gap widened by its bound, the aim tightened by the bound so
    the widened bracket still meets it (or undecided when it cannot).
+### 13.37 VM2 as built (11-28)
 
-### 13.37 RY1 as built (11-28)
+Curve images under a `VolumeMap`, in `scx_surface::volume_map::curve` (a child of `volume_map`, re-exported): 77 §5.2's `image` for curves, after VM1 (13.31) and on FT3's `fit_within` (13.34).
+
+Public API:
+- `VolumeMap::image_curve(&Curve, over: Extent1d, aim: f64, &mut Budget, &Stop) -> Result<CurveImage, CurveNot>`.
+- `CurveImage::{Exact { curve, over, param: CurveParam }, Fitted(Fit)}`; `CurveParam::{Same, Affine { scale, shift }}` (the image at `s = scale t + shift` is the map of the source at `t`); `Fit { curve, over, bound, spans: Vec<SpanBound>, fits }` (the cubic B-spline on the source's span, so the same parameter; `bound` is the largest certified span bound and is within the aim).
+- `CurveNot::{BadSpan, MeetsAxis, OnCut, OutsideDomain, Unproven { bound, ended }, Fit(FitError)}` (non-exhaustive).
+- In scx-num: `Trig::atan2(y, x)` (new method; `f64`, `Ivl` and `Jet2`). `Polar` in scx-surface is now `pub trait Polar: Trig {}` with a blanket impl, so VM1's `map<T: Polar>` and every caller keep working; the `Ivl` angle moved to scx-num unchanged.
+
+Rules (a test on kind and frame within `ALIGNED`, never a sample), in the map's frame:
+- Bend: a line along the axis, or along `u` at `v0` (`|v0| <= pi d`), is a line, same parameter. A line along `v` at `u0 > 0` is the circle of radius `u0` about the axis, `Affine { scale: speed / d, shift: v0 / d }` (the circle's parameter is the angle). A circle in a plane `v = v0` (normal along `y`) is the circle in the plane through the axis at `v0 / d`, same parameter (the map is an isometry of that plane).
+- Twist: a line on the axis is itself. A line, or a circle, in a plane square to the axis is turned by `2 pi w / p`, same parameter. A line parallel to the axis and off it is not on a rule: it is a helix, fitted.
+- Unbend: a line along the axis is the line along the axis at `(r, d theta)`. A line square to the axis and through it, over one side of it, is the line along `u` at `d theta`, `Affine { scale: +-|dir|, .. }` (the radius is the parameter, so the far side runs backwards); a span that meets the axis is `MeetsAxis`. A circle about the axis in a plane square to it is the line along `v` at `u = r`, same parameter, `OnCut` when the span reaches `pi` (a span of a turn always does).
+- A chain is exact only when every step is, the span and parameter carried through; otherwise the whole chain is fitted in one (a helix then bent is one fit of the composite, not a fit of a fit).
+- Everything else, NURBS included, is the fit: source `t -> map(curve(t))` as a `CurveFn<3>` over `f64`, `Ivl` and `Jet2`, with the NURBS curve's knots in the span as breaks. Ends are free (not held along the pushed tangent).
+
+Decisions.
+- **`over` replaces `near`.** A line and a circle have no end of their own and the fit needs a domain, so the span is an argument; the unbend picks its nappe from the span's middle, as `near` did for surfaces.
+  - For: one argument does both jobs, and DF1's edge has its span.
+  - Against: 77 wrote `image_curve(&Curve, near)`; every caller passes a span (an edge has one).
+- **`atan2` joins `Trig` so the unbend can be fitted** (VM1 left a jet ring without `atan2`; the fit evaluates over `Jet2`).
+  - For: an unbend of any curve is then fitted like a bend of one; the other route, refusing the unbend's fit, leaves DF2's unbend of a bent body with no way to carry a curved edge.
+  - Against: a method added to `Trig` (three implementors), so scx-num is touched (wasm test run); `Polar` is now only a name. The `Jet2` angle is the chain rule on `Ivl`s: sound, loose near the origin, whole at it (so a fit near the axis or across the cut never proves).
+- **A curve across the unbend's cut or axis is `Unproven`/`Fit(Exhausted)`, not detected by rule.** Its image jumps, so no span proves; the budget and the cap end the search. For: no sampling to decide a kind. Against: it costs the budget before refusing. A line through the axis and a circle about it are caught by rule (`MeetsAxis`, `OnCut`).
+- **The bend's domain** is refused only by the rules (`OutsideDomain` for a constant `v` beyond `pi d`); a fitted curve is the bend's formula wherever it goes.
+- **Ellipses, parabolas and hyperbolas have no rule**: the fit handles them within the aim. Added only if a caller's count says so (75 §13.31's "new rules only when needed").
+
+Tests (`volume_map/curve/tests.rs`, 10; closed forms, the map applied pointwise, the bound at dense samples):
+- a line under a twist is a helix: the fit against `(u cos a - v sin a, u sin a + v cos a, w)` at 601 samples, within the bound, at 1e-3 and 1e-6;
+- exact lines and circles on the axis and square to it under a twist, skew frame, pointwise to `1e-12` relative;
+- the bend's three line rules (the circle's radius and affine parameter checked) and its circle in a constant-`v` plane (and `OutsideDomain`);
+- an arc off the rules under a bend, fitted, 801 samples within the bound;
+- every unbend rule, both senses and both orientations, `MeetsAxis` and `OnCut`;
+- a general line under an unbend, fitted (the `Jet2` angle);
+- a fit across the cut is refused, never proved;
+- chains: exact bend then twist (a line and a circle, `Same` and `Affine`), a twist then a bend fitted whole, a bend then its unbend of a general line equal to the line within `2e-8`;
+- a NURBS curve under a twist, fitted over its knots.
+
+Counts (release, throwaway timer; spans of the cubic, evaluations charged to the budget, one a point or a piece):
+
+| source, map | aim 1e-3 | aim 1e-6 |
+|---|---|---|
+| line along the axis at (1.5, 0.5), twist of pitch 4, `t` in `[0, 6]` (a helix of radius 1.58) | 16 spans, 4,288 evaluations | 126 spans, 367,779 evaluations |
+| circle of radius 1 at `u = 3`, `w = 1`, bend `d = 4`, a full turn | 13 spans | 64 spans |
+| line `(1, 0.5, 0) + t (1, 1, 0.5)`, unbend `d = 2` | 6 spans at 1e-4 | 64 spans at 1e-8 |
+| cubic NURBS of 6 points under a twist | | 68 spans |
+| a twist then a bend of a line along the axis | | 32 spans |
+
+The helix agrees with 13.34's note: the search is `O(n^2)` in the spans (each round refits and recertifies every span), and a tight aim on a long, curved image is the cost. A fitted edge at DF1's tolerance (1e-3 to 1e-4 of the part) is tens of spans and thousands of evaluations; the rules cost nothing but the frame's arithmetic. The tests run in debug in 13 s.
+
+Deviations from 77: `over` for `near`; `Trig::atan2`; `CurveImage` is `Exact`/`Fitted` (no `Procedural`: PK4's in-volume curve is PK4's step, as for surfaces); ends of a fit are free (held ends along `push` of the tangent left for a caller that needs G1 at a vertex).
+
+Open questions.
+- A fit near the unbend's axis is conditioned by `d / u` and the `Jet2` angle is loose there: the budget decides, not a rule.
+- The `O(n^2)` search (13.34's open question) is what a tight aim on a long curved edge pays.
+- Held ends: DF1's edges meeting at a vertex of a fitted face may want G1 at the ends.
+
+
+### 13.38 RY1 as built (11-28)
 
 `intersect_curve` (and `curve_on_surface`) now answer a NURBS curve against a plane, cylinder,
 cone, sphere or torus (77 §6.3 RY1). A NURBS curve against a NURBS surface stays
