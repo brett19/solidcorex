@@ -325,7 +325,9 @@ impl Draft {
     /// pcurve's image leaves from the curve, `|S(p(t)) - C(t)|` (the claim
     /// [`Claim::PcurveOnSurface`], by interval search, to a width of `1/64` of the zone).
     /// The face's geometry is not moved. Each such use is returned with its gap, in loop
-    /// order; every other use is exact, its bound `None`. A caller that proved the curve
+    /// order; every other use is exact, its bound `None`, except one written again to the
+    /// same bits, of an edge whose curve is the same bits, which keeps its certified bound
+    /// and is not searched or returned again. A caller that proved the curve
     /// within `within` of the face (a stitch's coincidence) names that distance; whether a
     /// gap past the edge's reach is a raise is the caller's to say. All or nothing.
     ///

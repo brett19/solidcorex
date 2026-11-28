@@ -501,14 +501,15 @@ fn a_cap_on_an_open_box_closes_it() {
     outward(&closed, &mut Budget::unlimited(), &Stop::new()).unwrap();
 }
 
-/// Every use with a recorded bound: its claim and bound, which the bound's accuracy is.
+/// Every use with a certified bound: its claim and bound, which the bound's accuracy is.
+/// A measured bound is the input's own (a lune's use at a pole) and is skipped.
 fn use_bounds(b: &Brep) -> Vec<f64> {
     let mut out = Vec::new();
     for f in b.faces() {
         for u in f.uses() {
             let Some(r) = u.bound() else { continue };
             let scx_num::cert::Basis::Certified(c) = r.basis else {
-                panic!("{r:?}")
+                continue;
             };
             assert_eq!(c.claim, scx_num::cert::Claim::PcurveOnSurface);
             assert_eq!(c.bound, r.acc.length());
