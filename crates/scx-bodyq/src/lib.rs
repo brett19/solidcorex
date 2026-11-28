@@ -104,8 +104,8 @@ pub use rays::RAYS;
 pub use reach::Near;
 pub use reads::{
     EdgeClosest, EdgePoint, FaceUv, LineHit, Nearest, ParallelTurnError, closest_to_point, edge_at,
-    edge_closest_point, edge_distance, face_contains, face_line_hits, face_line_nearest, face_uv, faces_against,
-    faces_at, outward_normal, rim_edges, turn_to_parallel,
+    edge_closest_point, edge_distance, face_contains, face_line_hits, face_line_nearest, face_uv,
+    faces_against, faces_at, outward_normal, rim_edges, turn_to_parallel,
 };
 pub use recognize::{
     Bore, Equivalence, Layer, Lone, NotPrism, Options as StackOptions, Piece, PrismSection,

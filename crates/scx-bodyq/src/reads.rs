@@ -115,7 +115,11 @@ fn closest_on(
         }
     };
     // The start vertex is at the interval's start, the end vertex at its end.
-    keep(e.start().point(), interval.min(), e.start().point().distance(p));
+    keep(
+        e.start().point(),
+        interval.min(),
+        e.start().point().distance(p),
+    );
     keep(e.end().point(), interval.max(), e.end().point().distance(p));
     if let Some((t, q, d)) = edge_foot(e, p, budget)? {
         keep(q, t, d);
@@ -234,9 +238,7 @@ pub fn outward_normal(body: &Brep, face: FaceId, uv: Point2) -> Result<Option<Ve
         return Err(BodyqError::Refused(BodyqRefusal::NoMaterialSide { face }));
     }
     let sign = if front { -1.0 } else { 1.0 };
-    Ok(f.surface()
-        .normal(uv, ABOVE)
-        .map(|n| n.as_vec() * sign))
+    Ok(f.surface().normal(uv, ABOVE).map(|n| n.as_vec() * sign))
 }
 
 /// Whether `p` is on face `face`: within coincidence of its surface and inside its loops, or
@@ -396,8 +398,10 @@ pub fn closest_to_point(
     stop: &Stop,
 ) -> Result<Option<Nearest>, BodyqError> {
     finite_point(p)?;
-    let (faces, edges): (BTreeSet<_>, BTreeSet<_>) =
-        (faces.iter().copied().collect(), edges.iter().copied().collect());
+    let (faces, edges): (BTreeSet<_>, BTreeSet<_>) = (
+        faces.iter().copied().collect(),
+        edges.iter().copied().collect(),
+    );
     let mut best: Option<Nearest> = None;
     let mut keep = |c: Nearest| {
         if best.is_none_or(|b| c.distance.mm() < b.distance.mm()) {
@@ -494,8 +498,16 @@ pub fn face_line_hits(
     let se = f
         .uv_box()
         .ok_or(BodyqError::Defect(BodyqDefect::NoUvBox { face }))?;
-    let found = intersect_curve(&curve, &ce, f.surface(), &se, body.resolution(), budget, stop)
-        .map_err(|e| BodyqError::of_surface(e, face))?;
+    let found = intersect_curve(
+        &curve,
+        &ce,
+        f.surface(),
+        &se,
+        body.resolution(),
+        budget,
+        stop,
+    )
+    .map_err(|e| BodyqError::of_surface(e, face))?;
     let mut out = Vec::new();
     for h in found {
         if let CurveSurfaceHit::Point {

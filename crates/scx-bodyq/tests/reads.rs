@@ -15,9 +15,8 @@ use core::f64::consts::{FRAC_PI_2, FRAC_PI_4};
 use along_common::doc;
 use scx_bodyq::{
     BodyqError, BodyqRefusal, Near, ParallelTurnError, closest_to_point, edge_at,
-    edge_closest_point, edge_distance,
-    face_contains, face_line_hits, face_line_nearest, face_uv, faces_against, faces_at,
-    outward_normal, rim_edges, turn_to_parallel,
+    edge_closest_point, edge_distance, face_contains, face_line_hits, face_line_nearest, face_uv,
+    faces_against, faces_at, outward_normal, rim_edges, turn_to_parallel,
 };
 use scx_brep::{Brep, EdgeId, EdgeShape, Entity, FaceId, UvSide};
 use scx_num::budget::{Budget, Stop};
@@ -211,9 +210,11 @@ fn the_closest_member_is_a_foot_inside_or_the_nearest_boundary_point() {
     assert_eq!(n.member, Entity::Edge(e));
     assert!(near(n.distance.mm(), 1.0));
     // Nothing asked: nothing.
-    assert!(closest_to_point(&body, &[], &[], pt(0.0, 0.0, 0.0), &mut b(), &stop)
-        .unwrap()
-        .is_none());
+    assert!(
+        closest_to_point(&body, &[], &[], pt(0.0, 0.0, 0.0), &mut b(), &stop)
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
@@ -231,7 +232,10 @@ fn a_cylinder_wall_beyond_its_height_is_bounded_not_proved() {
     let n = closest_to_point(&m.body, &wall, &[], pt(0.0, 20.0, 10.0), &mut b(), &stop)
         .unwrap()
         .unwrap();
-    assert!(near(n.distance.mm(), (17.0_f64.powi(2) + 9.0).sqrt()), "{n:?}");
+    assert!(
+        near(n.distance.mm(), (17.0_f64.powi(2) + 9.0).sqrt()),
+        "{n:?}"
+    );
     assert!(!n.exact);
 }
 
@@ -240,19 +244,51 @@ fn a_line_meets_a_face_where_the_geometry_says() {
     let (body, faces) = the_block();
     let stop = Stop::new();
     // Up through the top at (3, 2): one place, 4 along from z = 0, inside.
-    let h = face_line_hits(&body, faces.top, pt(3.0, 2.0, 0.0), v(0.0, 0.0, 2.0), &mut b(), &stop)
-        .unwrap();
+    let h = face_line_hits(
+        &body,
+        faces.top,
+        pt(3.0, 2.0, 0.0),
+        v(0.0, 0.0, 2.0),
+        &mut b(),
+        &stop,
+    )
+    .unwrap();
     assert_eq!(h.len(), 1, "{h:?}");
     assert!(near(h[0].t, 4.0) && (h[0].point - pt(3.0, 2.0, 4.0)).length() < 1e-12);
     // Through the plane of the top but off the face: none; along the face: none.
-    assert!(face_line_hits(&body, faces.top, pt(15.0, 2.0, 0.0), v(0.0, 0.0, 1.0), &mut b(), &stop)
+    assert!(
+        face_line_hits(
+            &body,
+            faces.top,
+            pt(15.0, 2.0, 0.0),
+            v(0.0, 0.0, 1.0),
+            &mut b(),
+            &stop
+        )
         .unwrap()
-        .is_empty());
-    assert!(face_line_hits(&body, faces.top, pt(3.0, 2.0, 4.0), v(1.0, 0.0, 0.0), &mut b(), &stop)
+        .is_empty()
+    );
+    assert!(
+        face_line_hits(
+            &body,
+            faces.top,
+            pt(3.0, 2.0, 4.0),
+            v(1.0, 0.0, 0.0),
+            &mut b(),
+            &stop
+        )
         .unwrap()
-        .is_empty());
+        .is_empty()
+    );
     assert_eq!(
-        face_line_hits(&body, faces.top, pt(0.0, 0.0, 0.0), v(0.0, 0.0, 0.0), &mut b(), &stop),
+        face_line_hits(
+            &body,
+            faces.top,
+            pt(0.0, 0.0, 0.0),
+            v(0.0, 0.0, 0.0),
+            &mut b(),
+            &stop
+        ),
         Err(BodyqError::Refused(BodyqRefusal::NoDirection))
     );
 }
@@ -262,7 +298,15 @@ fn a_line_through_a_cylinders_axis_meets_the_wall_both_ways_and_ties_go_ahead() 
     let m = cylinder(&Frame::WORLD, mm(3.0), mm(7.0), &doc()).unwrap();
     let stop = Stop::new();
     let from = pt(0.0, 0.0, 3.5);
-    let h = face_line_hits(&m.body, m.faces.wall, from, v(0.0, 1.0, 0.0), &mut b(), &stop).unwrap();
+    let h = face_line_hits(
+        &m.body,
+        m.faces.wall,
+        from,
+        v(0.0, 1.0, 0.0),
+        &mut b(),
+        &stop,
+    )
+    .unwrap();
     assert_eq!(h.len(), 2, "{h:?}");
     assert!(near(h[0].t, -3.0) && near(h[1].t, 3.0), "{h:?}");
     assert!((h[0].point - pt(0.0, -3.0, 3.5)).length() < 1e-12);
@@ -293,17 +337,19 @@ fn a_line_through_a_cylinders_axis_meets_the_wall_both_ways_and_ties_go_ahead() 
     .unwrap();
     assert!((p - pt(0.0, 3.0, 3.5)).length() < 1e-12, "{p:?}");
     // A line outside the wall's height misses it.
-    assert!(face_line_nearest(
-        &m.body,
-        m.faces.wall,
-        pt(0.0, 0.0, 9.0),
-        v(0.0, 1.0, 0.0),
-        mm(1e-9),
-        &mut b(),
-        &stop
-    )
-    .unwrap()
-    .is_none());
+    assert!(
+        face_line_nearest(
+            &m.body,
+            m.faces.wall,
+            pt(0.0, 0.0, 9.0),
+            v(0.0, 1.0, 0.0),
+            mm(1e-9),
+            &mut b(),
+            &stop
+        )
+        .unwrap()
+        .is_none()
+    );
 }
 
 #[test]
@@ -322,9 +368,11 @@ fn the_rim_of_a_set_of_faces_is_the_edges_between_it_and_the_rest() {
     // A cylinder's wall has its two rims; its seam is used by the wall alone, twice.
     let m = cylinder(&Frame::WORLD, mm(3.0), mm(7.0), &doc()).unwrap();
     assert_eq!(rim_edges(&m.body, &[m.faces.wall]).unwrap().len(), 2);
-    assert!(rim_edges(&m.body, &[m.faces.wall, m.faces.top, m.faces.bottom])
-        .unwrap()
-        .is_empty());
+    assert!(
+        rim_edges(&m.body, &[m.faces.wall, m.faces.top, m.faces.bottom])
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -349,7 +397,10 @@ fn the_turn_that_makes_a_square_direction_parallel_is_the_angle_between_them() {
     // The line's height off the plane does not matter, only its direction square to the axis.
     at(turn(v(2.0, 2.0, 5.0)), -FRAC_PI_4);
     // Vectors need not be unit.
-    at(turn_to_parallel(v(0.0, 0.0, 7.0), v(3.0, 0.0, 0.0), v(4.0, 4.0, 0.0), &n), -FRAC_PI_4);
+    at(
+        turn_to_parallel(v(0.0, 0.0, 7.0), v(3.0, 0.0, 0.0), v(4.0, 4.0, 0.0), &n),
+        -FRAC_PI_4,
+    );
     // Each refusal by name.
     assert_eq!(turn(v(0.0, 0.0, 3.0)), Err(ParallelTurnError::AlongAxis));
     assert_eq!(

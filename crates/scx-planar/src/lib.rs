@@ -29,11 +29,11 @@ mod segment;
 mod winding;
 
 pub use cross::{CrossError, Crossings, Curve2, Meet, Overlap, Pending, Which, crossings};
+pub use error::{Degenerate, LoopId, PlanarError, SegmentRef};
 pub use polyline::{
     PolylineClosest, PolylineCrossings, PolylineError, PolylineMeet, PolylineOverlap,
     polyline_closest, polyline_crossings, tangent_circles, tangent_segment_circle,
 };
-pub use error::{Degenerate, LoopId, PlanarError, SegmentRef};
 pub use region::{Loop, Place, Region};
 pub use scx_num::frame::Sense;
 pub use segment::Segment;
