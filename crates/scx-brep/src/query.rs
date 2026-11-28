@@ -17,6 +17,20 @@ use crate::record::{EdgeGeom, EdgeShape, FaceRecord, VertexRecord};
 use crate::tables::Tables;
 use crate::view::{Edge, Face, Finished, Stage};
 
+impl FaceRecord {
+    /// Whether the loops bound the region from outside, proved: `Some(true)` when their
+    /// signed area in uv is positive (the outer loop runs counter-clockwise about the
+    /// natural normal, the region is the inside), `Some(false)` when it is negative or there
+    /// are no loops (the region is holes in the whole domain), and `None` when the sign does
+    /// not show. An importer reads it to tell a face whose `same_sense` disagrees with its
+    /// loops, and, one loop at a time, which loop is the outer one. Filled on first read.
+    #[must_use]
+    pub fn is_bounded_region(&self) -> Option<bool> {
+        let b = Boundary::of(self);
+        b.is_decided().then(|| b.is_bounded_region())
+    }
+}
+
 impl<S: Stage> Face<'_, S> {
     /// A box holding the face's region in uv: the hull of its loops when it has an outer
     /// loop, one window of its surface's domain when it is holes in the whole domain, and

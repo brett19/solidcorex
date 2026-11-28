@@ -4,7 +4,6 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use scx_bodyq::tight_box_charged;
 use scx_brep::op::{Cx, Done, Raise, Report, Warning, WarningKind};
 use scx_brep::{
     Brep, Draft, EdgeId, EdgeShape, Entity, FaceId, Operand, Origin, RegionId, ShellId, UseGeom,
@@ -12,7 +11,6 @@ use scx_brep::{
 };
 use scx_num::budget::{Budget, Stop};
 use scx_num::cert::{Basis, Recorded};
-use scx_num::extent3d::Extent3d;
 use scx_num::units::{Accuracy, Length};
 use scx_num::vector3d::Point3;
 
@@ -37,10 +35,15 @@ const UNIT: u64 = 1;
 /// end the merge moves (and the spread), where that is beyond its reach; each raise is a
 /// [`Raise`] with an [`AccuracyRaised`](WarningKind::AccuracyRaised) warning.
 ///
-/// **Edges** are not joined yet: where an edge of one sheet and an edge or vertex of
-/// another come within coincidence anywhere but at identified ends, the answer is
-/// [`StitchUnsupported::Edges`], so no result leaves a join undone silently. Sheets that
-/// meet only at vertices, or not at all, stitch whole.
+/// **Edges** are then cut and joined (74 §32). A vertex within coincidence of another
+/// sheet's edge, strictly inside it, cuts that edge there; the vertex's accuracy is raised
+/// to the farthest the cut moves the edge and its pcurves, as above. Two edges of different
+/// sheets with the same ends whose certified symmetric Hausdorff distance is within
+/// coincidence are then one edge, recorded as a [`Coincident`](WarningKind::Coincident)
+/// warning and in [`StitchReport::joined`] with the certified bound. An
+/// edge with two or more such partners, or one the budget share leaves undecided, is not
+/// joined and is named in [`StitchReport::left`]: nothing is guessed. Sheets that are
+/// joined become one shell.
 ///
 /// # Errors
 ///
@@ -49,7 +52,8 @@ const UNIT: u64 = 1;
 /// - [`StitchRefusal::VerticesWithinCoincidence`](crate::StitchRefusal::VerticesWithinCoincidence)
 ///   for two vertices of one sheet within coincidence of each other.
 /// - [`StitchUnsupported::Chain`] for a chain anchoring does not settle;
-///   [`StitchUnsupported::Edges`] as above; [`StitchUnsupported::Solid`] for
+///   [`StitchUnsupported::Edges`] for a cut or join this method cannot make yet (its
+///   [`EdgePending`](crate::EdgePending) says which); [`StitchUnsupported::Solid`] for
 ///   [`Want::Solid`]; [`StitchUnsupported::TooLarge`] past the ids.
 /// - [`StitchError::Exhausted`] when `cx`'s budget runs out, [`StitchError::Cancelled`]
 ///   when `cx.stop` is set, and [`StitchError::Defect`] for the method's own failure.
@@ -76,6 +80,9 @@ pub fn stitch(sheets: &[&Brep], want: Want, cx: &mut Cx<'_>) -> Result<Stitched,
             done: Done::new(body, changes, Report::empty(budget.used())),
             report: StitchReport {
                 identified: Vec::new(),
+                split: Vec::new(),
+                joined: Vec::new(),
+                left: Vec::new(),
             },
         });
     };
@@ -99,7 +106,6 @@ pub fn stitch(sheets: &[&Brep], want: Want, cx: &mut Cx<'_>) -> Result<Stitched,
         start: &start,
         group_of: group_of(items.len(), &groups),
     };
-    edges_pending(sheets, &ix, cx, &mut budget)?;
     let mut b = Build {
         sheets,
         ix: &ix,
@@ -107,10 +113,19 @@ pub fn stitch(sheets: &[&Brep], want: Want, cx: &mut Cx<'_>) -> Result<Stitched,
         draft: first.edit(),
         at: vec![None; items.len()],
         group_at: vec![None; groups.len()],
+        edge_at: vec![BTreeMap::new(); sheets.len()],
     };
     b.vertices()?;
-    let (warnings, raised, identified) = b.accuracy(zone, &mut budget, cx.stop)?;
+    let (mut warnings, mut raised, identified) = b.accuracy(zone, &mut budget, cx.stop)?;
     b.copy(&mut budget, cx.stop)?;
+    let edges = b.edges(
+        zone,
+        *cx.doc,
+        &mut budget,
+        cx.stop,
+        &mut warnings,
+        &mut raised,
+    )?;
     let (body, changes) = b
         .draft
         .finish(cx.doc)
@@ -121,13 +136,18 @@ pub fn stitch(sheets: &[&Brep], want: Want, cx: &mut Cx<'_>) -> Result<Stitched,
             changes,
             Report::new(warnings, Vec::new(), raised, budget.used()),
         ),
-        report: StitchReport { identified },
+        report: StitchReport {
+            identified,
+            split: edges.split,
+            joined: edges.joined,
+            left: edges.left,
+        },
     })
 }
 
 /// The items, where each sheet's start, and each item's group.
-struct Index<'a> {
-    items: &'a [Item],
+pub(crate) struct Index<'a> {
+    pub(crate) items: &'a [Item],
     /// Sheet `i`'s items are `start[i]..start[i + 1]`, in id order.
     start: &'a [usize],
     group_of: Vec<Option<usize>>,
@@ -143,12 +163,6 @@ impl Index<'_> {
             .ok()
             .map(|k| lo + k)
     }
-
-    /// The group of sheet `i`'s vertex `v`, if it has one.
-    fn group(&self, i: usize, v: VertexId) -> Option<usize> {
-        self.item(i, v)
-            .and_then(|k| self.group_of.get(k).copied().flatten())
-    }
 }
 
 fn group_of(n: usize, groups: &[Group]) -> Vec<Option<usize>> {
@@ -163,151 +177,25 @@ fn group_of(n: usize, groups: &[Group]) -> Vec<Option<usize>> {
     out
 }
 
-/// Refuses, as [`StitchUnsupported::Edges`], sheets whose edges the edge stage would join or
-/// split: an edge of one sheet with both ends identified with an edge of another's, or a
-/// vertex of another sheet inside the edge's certified box (grown by the vertex's reach
-/// beyond the edge's) that is not identified with one of its ends. A box is conservative:
-/// an edge that only passes near a vertex is refused too, until the edge stage measures the
-/// gap.
-fn edges_pending(
-    sheets: &[&Brep],
-    ix: &Index<'_>,
-    cx: &mut Cx<'_>,
-    budget: &mut Budget,
-) -> Result<(), StitchError> {
-    let pending = |operand: Operand, edge: EdgeId| {
-        Err(StitchError::Unsupported(StitchUnsupported::Edges {
-            operand,
-            edge,
-        }))
-    };
-    let mut ends: BTreeMap<[usize; 2], (Operand, EdgeId)> = BTreeMap::new();
-    for (i, s) in sheets.iter().enumerate() {
-        let operand = Operand::from_raw(i as u32);
-        for e in s.edges() {
-            budget.charge(UNIT)?;
-            let [a, b] = e.ends().map(|v| ix.group(i, v));
-            if let (Some(a), Some(b)) = (a, b) {
-                let key = [a.min(b), a.max(b)];
-                match ends.get(&key) {
-                    Some(&(o, first)) if o != operand => return pending(o, first),
-                    Some(_) => {}
-                    None => {
-                        ends.insert(key, (operand, e.id()));
-                    }
-                }
-            }
-        }
-    }
-    let axes = Axes::new(ix.items);
-    let zone = cx.doc.resolution().zone().mm();
-    for (i, s) in sheets.iter().enumerate() {
-        let operand = Operand::from_raw(i as u32);
-        cx.stop.check()?;
-        for e in s.edges() {
-            let own = e.ends().map(|v| ix.group(i, v));
-            let near = |bx: &Extent3d, budget: &mut Budget| -> Result<bool, StitchError> {
-                for k in axes.slab(bx) {
-                    budget.charge(UNIT)?;
-                    let Some(it) = ix.items.get(k) else {
-                        continue;
-                    };
-                    if it.operand == operand {
-                        continue;
-                    }
-                    let g = ix.group_of.get(k).copied().flatten();
-                    if g.is_some() && own.contains(&g) {
-                        continue;
-                    }
-                    // The box is grown by the edge's accuracy and the zone, so it holds every
-                    // point within the edge's reach; a vertex reaching farther grows it by
-                    // the rest.
-                    if bx.contains_point(it.point, (it.reach - zone).max(0.0)) {
-                        return Ok(true);
-                    }
-                }
-                Ok(false)
-            };
-            let at = Entity::Edge(e.id());
-            let loose = e
-                .bounding_box()
-                .ok_or(StitchError::Defect(StitchDefect::Query { operand, at }))?;
-            if !near(&loose, budget)? {
-                continue;
-            }
-            let tight = tight_box_charged(s, at, cx.scratch, budget, cx.stop)
-                .map_err(|err| StitchError::of_query(err, operand, at))?;
-            if near(&tight, budget)? {
-                return pending(operand, e.id());
-            }
-        }
-    }
-    Ok(())
-}
-
-/// The items sorted along each axis, for box queries: a box reads the slab of the axis
-/// that holds the fewest items.
-struct Axes {
-    /// Per axis, `(coordinate, item)` in coordinate then item order.
-    sorted: [Vec<(f64, usize)>; 3],
-    /// The largest reach: a slab is grown by it.
-    grow: f64,
-}
-
-impl Axes {
-    fn new(items: &[Item]) -> Self {
-        let along = |c: fn(Point3) -> f64| {
-            let mut v: Vec<(f64, usize)> = items
-                .iter()
-                .enumerate()
-                .map(|(k, it)| (c(it.point), k))
-                .collect();
-            v.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
-            v
-        };
-        Self {
-            sorted: [along(|p| p.x), along(|p| p.y), along(|p| p.z)],
-            grow: items.iter().map(|it| it.reach).fold(0.0, f64::max),
-        }
-    }
-
-    /// The items whose coordinate on the thinnest axis lies in the box's span there, grown
-    /// by the largest reach.
-    fn slab(&self, bx: &Extent3d) -> impl Iterator<Item = usize> + '_ {
-        let spans = [
-            (bx.x_min(), bx.x_max()),
-            (bx.y_min(), bx.y_max()),
-            (bx.z_min(), bx.z_max()),
-        ];
-        let ranges = self.sorted.iter().zip(spans).map(|(v, (lo, hi))| {
-            let (lo, hi) = (lo - self.grow, hi + self.grow);
-            let a = v.partition_point(|&(c, _)| c < lo);
-            let b = v.partition_point(|&(c, _)| c <= hi);
-            (v, a, b.max(a))
-        });
-        let best = ranges.min_by_key(|&(_, a, b)| b - a);
-        best.into_iter()
-            .flat_map(|(v, a, b)| v.get(a..b).unwrap_or_default().iter().map(|&(_, k)| k))
-    }
-}
-
 /// The stitched draft as it is built.
-struct Build<'a> {
-    sheets: &'a [&'a Brep],
-    ix: &'a Index<'a>,
+pub(crate) struct Build<'a> {
+    pub(crate) sheets: &'a [&'a Brep],
+    pub(crate) ix: &'a Index<'a>,
     groups: &'a [Group],
-    draft: Draft,
+    pub(crate) draft: Draft,
     /// Each item's draft vertex, once made.
-    at: Vec<Option<VertexId>>,
+    pub(crate) at: Vec<Option<VertexId>>,
     /// Each group's draft vertex, once made.
     group_at: Vec<Option<VertexId>>,
+    /// Each sheet's edges' draft edges, once copied (sheet 0's keep their ids).
+    edge_at: Vec<BTreeMap<EdgeId, EdgeId>>,
 }
 
 /// What [`Build::accuracy`] gives: the warnings, the raises and the report's entries.
 type Accounts = (Vec<Warning>, Vec<Raise>, Vec<Identified>);
 
 /// A `Measured` record of `mm`.
-fn measured(mm: f64) -> Option<Arc<Recorded>> {
+pub(crate) fn measured(mm: f64) -> Option<Arc<Recorded>> {
     Accuracy::new(Length::from_mm(mm)).map(|acc| {
         Arc::new(Recorded {
             acc,
@@ -324,7 +212,27 @@ impl Build<'_> {
             .ok_or(StitchError::Defect(StitchDefect::Draft))
     }
 
-    fn sheet(&self, i: usize) -> Result<&Brep, StitchError> {
+    /// Sheet `i`'s vertex `v` in the draft.
+    pub(crate) fn vertex_of(&self, i: usize, v: VertexId) -> Result<VertexId, StitchError> {
+        self.ix
+            .item(i, v)
+            .and_then(|k| self.at.get(k).copied().flatten())
+            .ok_or(StitchError::Defect(StitchDefect::Draft))
+    }
+
+    /// Sheet `i`'s edge `e` in the draft.
+    pub(crate) fn edge_of(&self, i: usize, e: EdgeId) -> Result<EdgeId, StitchError> {
+        if i == 0 {
+            return Ok(e);
+        }
+        self.edge_at
+            .get(i)
+            .and_then(|m| m.get(&e))
+            .copied()
+            .ok_or(StitchError::Defect(StitchDefect::Draft))
+    }
+
+    pub(crate) fn sheet(&self, i: usize) -> Result<&Brep, StitchError> {
         self.sheets
             .get(i)
             .copied()
@@ -581,6 +489,9 @@ impl Build<'_> {
                     .derive(x, Origin::Operand(operand, Entity::Edge(e.id())))
                     .map_err(draft_defect)?;
                 edges.insert(e.id(), x);
+            }
+            if let Some(slot) = self.edge_at.get_mut(i) {
+                slot.clone_from(&edges);
             }
             let edge = |e: EdgeId| {
                 edges

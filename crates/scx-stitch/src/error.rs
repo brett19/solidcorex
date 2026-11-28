@@ -6,8 +6,9 @@
 
 use core::fmt;
 
-use scx_bodyq::{BodyqError, BodyqUnsupported};
-use scx_brep::{EdgeId, Entity, FinishCause, Operand, TableFull, VertexId};
+use scx_brep::{
+    EdgeId, Entity, FaceId, FinishCause, Operand, PcurveWriteError, TableFull, VertexId,
+};
 use scx_num::budget::{Exhausted, Stopped};
 use scx_num::error::ErrorKind;
 
@@ -67,29 +68,68 @@ pub enum StitchUnsupported {
         /// The two vertices.
         vertices: [VertexId; 2],
     },
-    /// An edge that another sheet's edge or vertex comes within coincidence of, other than
-    /// at their identified ends: joining it along, or splitting it at the vertex, is the
-    /// edge stage, not built yet. The lowest such edge.
+    /// A join or split the edge stage proved but cannot make yet; the cause says which part
+    /// waits. The sheet edge named is the one cut or kept (for a piece, the edge it came
+    /// from).
     Edges {
         /// The sheet.
         operand: Operand,
         /// The edge.
         edge: EdgeId,
+        /// What waits.
+        why: EdgePending,
     },
-    /// A closed result ([`Want::Solid`](crate::Want::Solid)): it needs the edge stage and
-    /// orientation, not built yet.
+    /// A closed result ([`Want::Solid`](crate::Want::Solid)): it needs orientation, not
+    /// built yet.
     Solid,
     /// More sheets than an [`Operand`] numbers, or more entities than a body's ids hold.
     TooLarge,
-    /// A query of a sheet the stitch reads did not answer it yet (a NURBS edge's box).
-    Query {
-        /// The sheet.
-        operand: Operand,
-        /// The entity.
-        at: Entity,
-        /// The query's cause.
-        cause: BodyqUnsupported,
-    },
+}
+
+/// The part of the edge stage a proved join or split waits on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum EdgePending {
+    /// The cut point on a NURBS edge: its inversion waits on step 5's solve.
+    NurbsFoot,
+    /// Two vertices of other sheets meet the edge at one parameter: the piece between
+    /// them would have no length.
+    SameFoot,
+    /// The join would leave the edge with more than two fins, whose radial order the
+    /// stitch does not build yet.
+    Radial,
+    /// A face of the absorbed edge has no exact pcurve of the kept edge's curve (it needs
+    /// the fitter, BR9), or the curve lies beyond the edge's reach of the face.
+    Fit,
+    /// Two closed edges at one vertex whose start directions do not decide whether they
+    /// run the same way.
+    Direction,
+    /// A wire edge (no face uses it) to join or cut: the stitch joins faces' edges.
+    Wire,
+    /// A vertex within coincidence of the edge whose nearest point is at or past an end
+    /// it is not identified with: the edges' ends meet within coincidence where the
+    /// vertices are farther apart, which needs the vertex merge reopened.
+    NearEnd,
+    /// The edges' faces bound different regions: joining them needs the orientation
+    /// step (ST3).
+    Region,
+}
+
+impl EdgePending {
+    /// A stable name.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::NurbsFoot => "nurbs_foot",
+            Self::SameFoot => "same_foot",
+            Self::Radial => "radial",
+            Self::Fit => "fit",
+            Self::Direction => "direction",
+            Self::Wire => "wire",
+            Self::NearEnd => "near_end",
+            Self::Region => "region",
+        }
+    }
 }
 
 /// The method's own failure on valid sheets.
@@ -99,14 +139,24 @@ pub enum StitchDefect {
     /// The draft refused an entity or a lineage record the stitch wrote, or lost one it
     /// read.
     Draft,
-    /// A finished sheet's entity could not be boxed, or a query refused it.
+    /// A finished sheet's entity could not be boxed, or a query refused it (a gap of a
+    /// finite edge that could not be enclosed among them).
     Query {
         /// The sheet.
         operand: Operand,
         /// The entity.
         at: Entity,
     },
-    /// The stitched draft did not finish: the identification left an end off its vertex.
+    /// The pcurve writer refused a face the stitch rerouted onto a kept edge, for a cause
+    /// other than [`EdgePending::Fit`]: a loop it could not place in uv.
+    Pcurve {
+        /// The result's face.
+        face: FaceId,
+        /// The writer's cause.
+        cause: PcurveWriteError,
+    },
+    /// The stitched draft did not finish: the identification left an end off its vertex,
+    /// or a rewritten loop did not close.
     Finish(Box<FinishCause>),
 }
 
@@ -135,24 +185,12 @@ impl StitchError {
             Self::Unsupported(StitchUnsupported::Edges { .. }) => "edges_pending",
             Self::Unsupported(StitchUnsupported::Solid) => "solid_pending",
             Self::Unsupported(StitchUnsupported::TooLarge) => "too_large",
-            Self::Unsupported(StitchUnsupported::Query { .. }) => "query_unsupported",
             Self::Exhausted { .. } => "exhausted",
             Self::Cancelled => "cancelled",
             Self::Defect(StitchDefect::Draft) => "draft",
             Self::Defect(StitchDefect::Query { .. }) => "query",
+            Self::Defect(StitchDefect::Pcurve { .. }) => "pcurve",
             Self::Defect(StitchDefect::Finish(_)) => "finish",
-        }
-    }
-
-    /// The error a query of `operand`'s `at` gave: its budget and stop as the stitch's own.
-    pub(crate) fn of_query(e: BodyqError, operand: Operand, at: Entity) -> Self {
-        match e {
-            BodyqError::Exhausted { limit } => Self::Exhausted { limit },
-            BodyqError::Cancelled => Self::Cancelled,
-            BodyqError::Unsupported(cause) => {
-                Self::Unsupported(StitchUnsupported::Query { operand, at, cause })
-            }
-            _ => Self::Defect(StitchDefect::Query { operand, at }),
         }
     }
 }
@@ -196,26 +234,27 @@ impl fmt::Display for StitchError {
                 f,
                 "{operand}: {v} and {w} are joined by a chain of vertices"
             ),
-            Self::Unsupported(StitchUnsupported::Edges { operand, edge }) => {
+            Self::Unsupported(StitchUnsupported::Edges { operand, edge, why }) => {
                 write!(
                     f,
-                    "{operand}: {edge}: edges to join or split are not built yet"
+                    "{operand}: {edge}: a proved join or split waits on {}",
+                    why.name()
                 )
             }
             Self::Unsupported(StitchUnsupported::Solid) => {
-                f.write_str("a closed result needs edge joining and orientation, not built yet")
+                f.write_str("a closed result needs orientation, not built yet")
             }
             Self::Unsupported(StitchUnsupported::TooLarge) => {
                 f.write_str("more sheets or entities than ids hold")
-            }
-            Self::Unsupported(StitchUnsupported::Query { operand, at, .. }) => {
-                write!(f, "{operand}: {at}: a query of it is not answered yet")
             }
             Self::Exhausted { limit } => write!(f, "the budget of {limit} ran out"),
             Self::Cancelled => f.write_str("stopped"),
             Self::Defect(StitchDefect::Draft) => f.write_str("the draft refused a record"),
             Self::Defect(StitchDefect::Query { operand, at }) => {
                 write!(f, "{operand}: {at}: a query failed on a finished sheet")
+            }
+            Self::Defect(StitchDefect::Pcurve { face, .. }) => {
+                write!(f, "{face}: the pcurve writer refused the rerouted face")
             }
             Self::Defect(StitchDefect::Finish(cause)) => {
                 write!(f, "the stitched body did not finish: {cause}")

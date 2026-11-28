@@ -1,7 +1,8 @@
-// Written for solidcorex (docs/research/74-step6-idiom-prep.md §6, §19).
+// Written for solidcorex (docs/research/74-step6-idiom-prep.md §6, §19, §29).
 //! STEP import and export of solids and sheets, on [`scx_p21`].
 //!
-//! This is the skeleton (task SP1): everything a read decides before it builds geometry.
+//! The read (task SP1) decides everything before geometry; the analytic build (task SP2,
+//! [`build`] and [`import`]) makes each body from its plan.
 //!
 //! - **Units** ([`units`]) are the file's. A representation context that names no length unit
 //!   or no plane angle unit is refused ([`StepError::NoUnits`]) unless the caller assumes them
@@ -23,18 +24,29 @@
 //!   the world frame ([`PlacedBody`], [`World`]). A placement the file does not give, or gives
 //!   unusably, is [`World::Unplaced`] with its cause; nothing is placed by guess.
 //!
-//! `scx-step` never heals. The report has a field for the raises SP2 makes to enclosed gaps
+//! - **The build** ([`build`], [`import`]) makes a [`Built`] body of planes, quadrics and tori
+//!   bounded by lines and conics: draft, then each enclosed gap past the file's uncertainty
+//!   raised and recorded ([`Raise`]), exact pcurves, parity and the certified volume sign,
+//!   and the import check. Every other kind is a typed [`BuildError::Pending`] ([`Waits`]).
+//!   Each body is built once; the product tree places it.
+//!
+//! `scx-step` never heals. The raises the build makes to enclosed gaps are recorded
 //! ([`ImportReport::raised`]); gap closing is `scx-stitch`'s and is requested with
 //! [`ReadOptions::closing_gaps`], which is [`StepError::Pending`] until SP4.
 
+mod build;
 mod error;
+mod geom;
+mod import;
 mod products;
 mod read;
 mod report;
 mod skeleton;
 pub mod units;
 
+pub use build::{build, import};
 pub use error::{Pending, StepError};
+pub use import::{BuildError, Built, GeomCause, Import, Note, Unbuilt, Waits};
 pub use products::{Instance, Part, PlacedBody, ProductTree, Unplaced, Use, World};
 pub use read::{Imported, ImportedBody, ReadOptions, SolidOrSheet, read};
 pub use report::{AssumedUnits, GapKind, ImportReport, ImportWarning, Raise, SkipReason, Skipped};

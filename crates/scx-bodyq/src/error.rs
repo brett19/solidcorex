@@ -5,7 +5,7 @@
 
 use core::fmt;
 
-use scx_brep::{EdgeId, Entity, FaceId, ShellId};
+use scx_brep::{EdgeId, Entity, FaceId, ShellId, VertexId};
 use scx_num::budget::{Exhausted, Stopped};
 use scx_num::error::ErrorKind;
 use scx_surface::SurfaceError;
@@ -59,6 +59,37 @@ pub enum BodyqRefusal {
         /// The edge asked about.
         edge: EdgeId,
     },
+    /// A normal, axis or direction of no length (BW11).
+    NoDirection,
+    /// A radius, thickness or length that is not above zero (BW11).
+    NotPositive,
+    /// A point on the axis, where no direction leads away from it (BW11).
+    OnAxis,
+    /// A line that does not lie in the polygon's plane (BW11).
+    OffPlane,
+    /// An index past the corners, or a polygon with fewer than three (BW11).
+    Corners,
+    /// A vertex that is not an end of the edge asked about (BW11).
+    NotAnEnd {
+        /// The edge.
+        edge: EdgeId,
+        /// The vertex.
+        vertex: VertexId,
+    },
+    /// A seat whose plane's axes span no plane (BW11).
+    Seat,
+    /// A face of a surface kind the question does not take (BW11): a plane or a cylinder
+    /// was asked for.
+    WrongSurface {
+        /// The face.
+        face: FaceId,
+    },
+    /// A face that does not separate material from air: both its sides are solid, or
+    /// neither is, so it has no outward side (BW11).
+    NoMaterialSide {
+        /// The face.
+        face: FaceId,
+    },
 }
 
 /// What this method does not answer yet.
@@ -78,6 +109,9 @@ pub enum BodyqUnsupported {
         /// The edge or vertex.
         at: Entity,
     },
+    /// A probe's answer ([`Met::Unread`](crate::Met::Unread)) could not be read by the caller
+    /// that made it (BW11).
+    Probe,
     /// No side of `face` could be read where `other` meets it (BQ2): the crossing is too
     /// shallow at every sample, the surfaces agree to second order across the curve or
     /// round the touch point, or neither has a normal there. The caller falls back to
@@ -126,6 +160,9 @@ pub enum BodyqDefect {
         /// The edge.
         edge: EdgeId,
     },
+    /// The body could not be moved into a seat's frame (BW11): the move is a rigid map, so
+    /// this is a bug.
+    Moved,
     /// A shell whose cells give a negative first Betti number (`betti`).
     Betti {
         /// The shell.
@@ -157,9 +194,20 @@ impl BodyqError {
             Self::Refused(BodyqRefusal::Tolerance) => "tolerance",
             Self::Refused(BodyqRefusal::OneSided { .. }) => "one_sided",
             Self::Refused(BodyqRefusal::Collapsed { .. }) => "collapsed",
+            Self::Refused(BodyqRefusal::NoDirection) => "no_direction",
+            Self::Refused(BodyqRefusal::NotPositive) => "not_positive",
+            Self::Refused(BodyqRefusal::OnAxis) => "on_axis",
+            Self::Refused(BodyqRefusal::OffPlane) => "off_plane",
+            Self::Refused(BodyqRefusal::Corners) => "corners",
+            Self::Refused(BodyqRefusal::NotAnEnd { .. }) => "not_an_end",
+            Self::Refused(BodyqRefusal::Seat) => "seat",
+            Self::Refused(BodyqRefusal::WrongSurface { .. }) => "wrong_surface",
+            Self::Refused(BodyqRefusal::NoMaterialSide { .. }) => "no_material_side",
             Self::Unsupported(BodyqUnsupported::Nurbs { .. }) => "nurbs",
             Self::Unsupported(BodyqUnsupported::NonManifold { .. }) => "non_manifold",
             Self::Unsupported(BodyqUnsupported::NoClearSide { .. }) => "no_clear_side",
+            Self::Unsupported(BodyqUnsupported::Probe) => "probe",
+            Self::Defect(BodyqDefect::Moved) => "moved",
             Self::Exhausted { .. } => "exhausted",
             Self::Cancelled => "cancelled",
             Self::Defect(BodyqDefect::NoFaceBox { .. }) => "no_face_box",
@@ -220,6 +268,38 @@ impl fmt::Display for BodyqError {
             }
             Self::Refused(BodyqRefusal::Collapsed { edge }) => {
                 write!(f, "{edge}: collapsed to a point")
+            }
+            Self::Refused(BodyqRefusal::NoDirection) => {
+                f.write_str("a normal, axis or direction has no length")
+            }
+            Self::Refused(BodyqRefusal::NotPositive) => {
+                f.write_str("a radius, thickness or length is not above zero")
+            }
+            Self::Refused(BodyqRefusal::OnAxis) => f.write_str("the point lies on the axis"),
+            Self::Refused(BodyqRefusal::OffPlane) => {
+                f.write_str("the line is not in the polygon's plane")
+            }
+            Self::Refused(BodyqRefusal::Corners) => {
+                f.write_str("an index past the corners, or fewer than three corners")
+            }
+            Self::Refused(BodyqRefusal::NotAnEnd { edge, vertex }) => {
+                write!(f, "{vertex} is not an end of {edge}")
+            }
+            Self::Refused(BodyqRefusal::Seat) => f.write_str("the seat's plane axes span no plane"),
+            Self::Refused(BodyqRefusal::WrongSurface { face }) => {
+                write!(f, "{face}: not a surface of the kind asked for")
+            }
+            Self::Refused(BodyqRefusal::NoMaterialSide { face }) => {
+                write!(
+                    f,
+                    "{face}: has no outward side, material is on both or neither"
+                )
+            }
+            Self::Unsupported(BodyqUnsupported::Probe) => {
+                f.write_str("what a probe met of the body was not read")
+            }
+            Self::Defect(BodyqDefect::Moved) => {
+                f.write_str("the body could not be moved into the seat's frame")
             }
             Self::Unsupported(BodyqUnsupported::Nurbs { at }) => {
                 write!(f, "{at}: NURBS geometry is not queried yet")
