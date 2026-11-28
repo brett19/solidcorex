@@ -44,7 +44,7 @@ use scx_num::interval::Ivl;
 use scx_num::units::{Length, Resolution};
 use scx_num::vector2d::Point2;
 use scx_num::vector3d::Point3;
-use scx_surface::{Aim, Bracket, GapError, Pending, Short, Surface};
+use scx_surface::{Aim, Bracket, GapError, Short, Surface};
 
 use crate::error::CheckError;
 use crate::findings::{Finding, Scope, Undecided, Why};
@@ -131,7 +131,7 @@ enum Verdict {
     Clean(Bracket),
     Over(Bracket),
     Open(Bracket, Why),
-    Pending(Pending),
+    Procedural,
     NotFinite,
 }
 
@@ -140,7 +140,7 @@ impl Verdict {
     fn upper(self) -> Option<f64> {
         match self {
             Self::Clean(b) | Self::Over(b) | Self::Open(b, _) => Some(b.upper()),
-            Self::Pending(_) | Self::NotFinite => None,
+            Self::Procedural | Self::NotFinite => None,
         }
     }
 }
@@ -170,7 +170,7 @@ fn verdict(r: Result<Bracket, GapError>, allowed: f64) -> Result<Verdict, CheckE
                 _ => Why::Precision,
             },
         )),
-        Err(GapError::Pending(p)) => Ok(Verdict::Pending(p)),
+        Err(GapError::Procedural) => Ok(Verdict::Procedural),
         Err(_) => Ok(Verdict::NotFinite),
     }
 }
@@ -306,11 +306,7 @@ fn edge_gaps(
                 allowed,
                 why,
             }),
-            Verdict::Pending(what) => out.undecided.push(Undecided::Pending {
-                edge: id,
-                face,
-                what,
-            }),
+            Verdict::Procedural => out.undecided.push(Undecided::Procedural { edge: id, face }),
             Verdict::NotFinite => out.undecided.push(Undecided::NotFinite {
                 edge: id,
                 face: Some(face),
@@ -383,10 +379,9 @@ fn use_verdict(edge: scx_brep::EdgeId, fin: Fin, allowed: f64, v: Verdict, out: 
             allowed,
             why,
         }),
-        Verdict::Pending(what) => out.undecided.push(Undecided::Pending {
+        Verdict::Procedural => out.undecided.push(Undecided::Procedural {
             edge,
             face: fin.face,
-            what,
         }),
         Verdict::NotFinite => out.undecided.push(Undecided::NotFinite {
             edge,
@@ -681,7 +676,7 @@ pub(crate) fn undecided_key(u: &Undecided) -> (u8, Entity, Option<Entity>, u8, u
             at.to_bits(),
         ),
         Undecided::DegenerateEdge { edge, .. } => (5, Entity::Edge(*edge), None, 0, 0),
-        Undecided::Pending { edge, face, .. } => {
+        Undecided::Procedural { edge, face } => {
             (8, Entity::Edge(*edge), Some(Entity::Face(*face)), 0, 0)
         }
         Undecided::NotFinite { edge, face } => {

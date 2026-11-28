@@ -24,9 +24,7 @@ use std::f64::consts::PI;
 
 use scx_brep::op::Scratch;
 use scx_brep::{Brep, Document, EdgeShape, FaceSide, UvSide};
-use scx_make::{
-    ConeFaces, Dimension, MakeError, Refusal, Unsupported, block, cone, cylinder, sphere, torus,
-};
+use scx_make::{ConeFaces, Dimension, MakeError, Refusal, block, cone, cylinder, sphere, torus};
 use scx_mass::{Mass, MassSpec, RelAccuracy, mass};
 use scx_num::budget::{Budget, Stop};
 use scx_num::error::ErrorKind;
@@ -598,9 +596,9 @@ fn a_cone_with_both_radii_zero_is_refused() {
 }
 
 /// `a_torus_whose_tube_crosses_its_axis_is_refused_naming_the_radii`: a spindle torus is
-/// refused; the horn torus, which the pin built, is `Unsupported` (72 D3), on purpose.
+/// refused; a tube within the resolution of the axis is a horn torus and is built (`MK4b`).
 #[test]
-fn spindle_tori_are_refused_and_horn_tori_unsupported() {
+fn spindle_tori_are_refused_and_horn_tori_built() {
     let f = at([0.0; 3]);
     let zone = Resolution::DEFAULT.zone().mm();
     for (major, minor) in [(1.0, 2.0), (1.0, 1e9), (2.0, 2.0 + 4.0 * zone)] {
@@ -615,18 +613,52 @@ fn spindle_tori_are_refused_and_horn_tori_unsupported() {
         );
     }
     for (major, minor) in [(2.0, 2.0), (2.0, 2.0 + 0.5 * zone), (2.0, 2.0 - 0.5 * zone)] {
-        let e = torus(&f, mm(major), mm(minor), &doc()).unwrap_err();
-        assert_eq!(
-            e,
-            MakeError::Unsupported(Unsupported::HornTorus { major, minor }),
-            "{major} {minor}"
-        );
-        assert_eq!((e.kind(), e.name()), (ErrorKind::Unsupported, "horn_torus"));
+        let m = torus(&f, mm(major), mm(minor), &doc()).unwrap();
+        // One vertex (the pole), the meridian and the face's two collapsed edges, one face.
+        assert_eq!(counts(&m.body), (1, 3, 1), "{major} {minor}");
+        assert_eq!(collapsed(&m.body), 2);
+        let Surface::Torus(t) = m.body.faces().next().unwrap().surface() else {
+            panic!("{major} {minor}: not a torus");
+        };
+        assert!(t.pole().is_some(), "{major} {minor}");
     }
     // A tube just clear of the axis is a ring torus.
-    assert!(torus(&f, mm(2.0), mm(2.0 - 2.0 * zone), &doc()).is_ok());
+    let m = torus(&f, mm(2.0), mm(2.0 - 2.0 * zone), &doc()).unwrap();
+    assert_eq!(counts(&m.body), (1, 2, 1));
+    assert_eq!(collapsed(&m.body), 0);
     // A major radius at the resolution is a size refusal before the torus kinds.
     refused_size(torus(&f, mm(2e-12), mm(0.5), &doc()), Dimension::Major);
+}
+
+/// The horn torus (R = r): `V = 2 pi^2 R^3`, `A = 4 pi^2 R^2`, centroid at the centre, read
+/// off the body as built, and every face point against the CSG oracle's torus.
+#[test]
+fn a_horn_torus_has_analytic_properties() {
+    for frame in [at([0.0, 1.0, -1.0]), tilted([0.0, 1.0, -1.0])] {
+        for radius in [1.0, 3.5] {
+            let m = torus(&frame, mm(radius), mm(radius), &doc()).unwrap();
+            assert_eq!(counts(&m.body), (1, 3, 1));
+            let truth = solid::torus(radius, radius).unwrap();
+            assert_close(truth.volume(), 2.0 * PI * PI * radius * radius * radius);
+            assert_mass(&m.body, &frame, &truth, 2.0 * radius, 1e-12, "horn torus");
+            assert_membership(
+                &m.body,
+                &leaf(
+                    &frame,
+                    Primitive::Torus {
+                        major: radius,
+                        minor: radius,
+                    },
+                ),
+                0.02,
+                "horn torus",
+            );
+        }
+    }
+}
+
+fn assert_close(a: f64, b: f64) {
+    assert!((a - b).abs() <= 1e-12 * b.abs(), "{a} against {b}");
 }
 
 /// The same inputs make the same body, bit for bit.

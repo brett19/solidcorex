@@ -21,6 +21,8 @@
 //!   over a box of parameters;
 //! - [`CompatibleSurfaces`]: surfaces sharing one knot vector and degree along an axis;
 //! - [`fit`]: tensor interpolation and least squares at given parameters (CN3);
+//! - [`skin`]: the surface through compatible section curves, open or closed, with a
+//!   certified bound of how far it misses them (CN4);
 //! - [`NurbsSurface::bernstein_over`]: the Bernstein form of one polynomial piece, for the
 //!   certificates.
 //!
@@ -41,6 +43,9 @@ mod fit_tests;
 pub mod iges;
 mod iso;
 mod net;
+pub mod skin;
+#[cfg(test)]
+mod skin_tests;
 mod surface;
 
 pub use bernstein::BernsteinForm;
@@ -69,4 +74,7 @@ const _: () = {
     ok::<BernsteinForm<3>>();
     ok::<fit::SurfaceFitError>();
     ok::<fit::Edge<3>>();
+    ok::<skin::Skin<3>>();
+    ok::<skin::Skinned<3>>();
+    ok::<skin::SkinError>();
 };

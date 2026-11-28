@@ -1287,18 +1287,14 @@ fn scx_dimension(d: scx_make::Dimension) -> Option<Dimension> {
 
 /// Whether scx's error is the outcome truth states for a constructor.
 fn scx_outcome_matches(e: &scx_make::MakeError, want: &Outcome) -> bool {
-    use scx_make::{MakeError as E, Refusal as R, Unsupported as U};
+    use scx_make::{MakeError as E, Refusal as R};
     match (e, want) {
         (E::Refused(R::Size { dimension, .. }), Outcome::Refused(Refusal::Size(d))) => {
             scx_dimension(*dimension) == Some(*d)
         }
         (E::Refused(R::ZeroRadii), Outcome::Refused(Refusal::NoBody))
         | (E::Refused(R::SelfIntersecting { .. }), Outcome::Refused(Refusal::SelfIntersecting))
-        | (E::Refused(R::Span { .. }), Outcome::Refused(Refusal::Span))
-        | (
-            E::Unsupported(U::HornTorus { .. }),
-            Outcome::Unsupported(RecipeUnsupported::HornTorus),
-        ) => true,
+        | (E::Refused(R::Span { .. }), Outcome::Refused(Refusal::Span)) => true,
         _ => false,
     }
 }
