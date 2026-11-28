@@ -29,7 +29,6 @@ use scx_hlr::{
 use scx_num::budget::{Budget, Stop};
 use scx_num::error::ErrorKind;
 use scx_num::extent1d::Extent1d;
-use scx_num::extent1d::Extent1d;
 use scx_num::frame::Frame;
 use scx_num::frame::Sense;
 use scx_num::units::Length;
