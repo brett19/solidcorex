@@ -2494,3 +2494,194 @@ budget units (survey: one per box or solve; march: one per step tried):
   3.7 minutes in debug, the workspace's slowest, from the vertex count above and the survey
   run five times per case. They are well within `cargo xtask fast`, and SM8's coarser steps
   cut both.
+
+## 24. SM8 as built (11-28)
+
+SM8 proves the march's answer (row SM8, §4.7, §4.8). A branch is now one C1 cubic B-spline
+with its two pcurves on the same knot vector, and each span's residual on each surface and
+its distance to the intersection are enclosed, not estimated. A span neither proof bounds
+below the resolution is `SsiError::Uncertified` there. The march steps by the span bound
+(`h ~ (384 tol / kappa^3)^(1/4)`), the follow-up named in 23.4: 90 to 170 times fewer
+vertices, and every case of SM7's table 2 to 4 times faster but the spheres, whose time is
+the survey's.
+
+### 24.1 What exists
+
+- **`general/march.rs`** (module docs hold the method).
+  - **The step.** `h` is the least of the turn bound, the Hermite span's deviation
+    `kappa^3 h^4 / 384 <= FIT tol` with `FIT = 1/8`, a tenth of the extents and twice the
+    last step. The chord-deviation bound `kappa h^2 / 8 <= tol` is gone.
+  - **The answer.** Per span the cubic Hermite of its ends' points with their unit
+    tangents, on a parameter of the span's length estimated from chord and turn
+    (`span_length`). The pcurves take the uv velocities of the same tangents on the same
+    parameter. Every inner knot is doubled: `[0 x4, t_1 x2, ..., T x4]`, C1. The 3D curve
+    and both pcurves share the knots; vertices within the resolution are merged as before.
+  - **Fritsch-Carlson** (`certify.rs`, `limit`). Where a pcurve span's Bézier points leave
+    the range it may cover (the extent, cut at the nearest knot line on each side where the
+    surface is less than three times differentiable: `cell`), both ends' velocity
+    components on that axis are cut by Fritsch-Carlson's rule, so the span is monotone
+    between them. A vertex keeps the least cut of its two spans. The limit runs again
+    after every round of splits, and a span whose ends changed is tested again.
+  - **Closed branches on a seam** (`closing`). A closed branch ends at its first vertex.
+    Where that vertex lies on a periodic seam, it ends on the seam's side nearer the last
+    vertex, so no pcurve span crosses the whole period.
+  - **Seeds at the new step length** (decision 7). Three changes keep every seed met
+    where SM7's short steps met it by accident:
+    - The span into a node: an arc that reaches a node within two steps ends with one span
+      from its last vertex to the node. The seeds on that span are now used, as a step's
+      are (a piece-edge seed lay on it, and was marched again from the node's far side:
+      `Stalled` on Steinmetz at `1e-6`). If the node is farther than one step, the march
+      steps halfway first, so that span is within a step's bound (it was 1.7 steps on
+      `y23_t2_ex3`, 7.7e-6 off a seed at a coincidence of `1e-6`).
+    - The first step from a node is at most half the distance to the nearest other node,
+      so the next node is met, never stepped past (`y23_t2_ex3`, two nodes 0.04 apart).
+    - A step is rejected and halved when a seed lies beside its span, nearer than a 64th
+      of the chord but farther than four coincidences: the span is off the curve by more
+      than its bound allowed (curvature rising across the step), and the seed would be
+      passed and found used later (`y23_t2_ex3`, 7.3e-6 at `1e-6`).
+- **`general/march/certify.rs`** (new): `certify(vertices, closed) -> Result<(vertices,
+  Certificate), SsiError>`, per branch, `pub(super)`.
+  - **Residual** (`residual`), on each surface, of `e(t) = S(p(t)) - c(t)`: the Hermite
+    interpolant of the ends' `e` and `e'`, at most `max |e_i| + 4 delta (|e_0'| + |e_1'|) /
+    27`, plus `delta^4 / 384 sup |e''''|`. `e''''` is enclosed by the chain rule from the
+    surface's partials to order four over the span's uv box (`partials_over`, with knot lines
+    crossed at least three times differentiable) and the pcurve's Bézier derivatives. Where
+    a knot line inside the box leaves the surface less smooth, the order-two form
+    `delta^2 / 8 (sup |e''| + sup |H''|)` is used. A knot line the ends straddle is first
+    cut by a vertex solved on it (`straddle`, `knot_vert`).
+  - **Distance** (`krawczyk`): a parametric Krawczyk test on the four offsets of the pcurves'
+    points, for `S_A - S_B = 0` and `n . ((S_A + S_B) / 2 - c(t)) = 0`, with `n` the chord's
+    direction (the ends' tangents' sum where the chord is under about `1e-12`). The
+    residuals and the Jacobian are enclosed over the uv boxes widened by the test's radius.
+    When it closes, every `c(t)` has a unique intersection point on its plane within the
+    residual plus the Jacobian times the radius.
+  - **Splitting.** A span is proved when both residuals are within the coincidence and the
+    distance within four. Otherwise it is split at a vertex solved on the plane across its
+    middle, and tested again.
+  - **Beside a crossing node.** The normals agree at the node, so the test cannot close on a
+    span that ends there, and closes only loosely beside it. Such a span is bounded by the
+    node's own bound plus its farthest Bézier point's distance from the node. From six
+    splits on, a span keeps the looser bound it has: the test's, or the node's once that
+    is within a quarter of a thousand coincidences (or `2 sqrt(gamma_64)` times the points'
+    size). It also keeps the node's when the span is no nearer the node than its own length,
+    so no split halves it, within `sqrt(tol reach)` (`reach` the points' size). Below the
+    resolution, or at 60 splits, a span with no bound at all is `Uncertified`.
+  - **The certificate** is the greatest of the spans' bounds plus the rounding of the
+    points' size, per claim.
+  - **Budget.** One unit per span tested and per vertex solved.
+- **`SsiError::Uncertified`** (SM3's variant) is now returned, at the span's middle.
+  `Basis::Certified` is unchanged: the body layer stores these certificates under it
+  (`traced.rs`).
+
+### 24.2 Decisions, for and against
+
+1. **C1 cubic Hermite on doubled knots, not a C2 fit.**
+   - For: each span is fixed by its two vertices alone, so a span is proved, split and
+     proved again without touching its neighbours. The march's points and tangents are
+     already on the curve to the corrector's tolerance.
+   - Against: two knots per vertex, so the control net is twice the vertex count, and the
+     curve is C1, not C2.
+   - Change if: a consumer needs C2 (a later knot removal can merge spans whose joins are
+     C2 within the coincidence).
+2. **`FIT = 1/8` of the coincidence for the step's span bound.** Measured at a half, an
+   eighth and a sixteenth: SM7's five quick cases total 23,549, 22,917 and 23,804 units.
+   - For: the residual enclosure overestimates the true deviation (the `sup |e''''|` over
+     a box, and the ends' term), so a coarser step splits more spans, each split a solved
+     vertex and two more tests. An eighth is the least total, and the best on Steinmetz.
+   - Against: the optimum is flat, within 4%, and may differ on other curves.
+3. **Fritsch-Carlson only where a span would leave its cell.** Inside the cell the Hermite
+   is left alone: its uv overshoot is within the surface's domain and the residual bounds
+   it. At the extent or at a low-continuity knot line an overshoot would evaluate the
+   surface where the enclosure is not valid.
+4. **The Krawczyk plane's normal falls back to the tangents' sum.** A knot vertex at `pi` on
+   the T-pipe left a span of 6.6e-13, whose chord has no direction to `1e-12`. The test
+   failed there and the span was `Uncertified`, in four unit tests of the general path.
+5. **Beside a crossing node the bound is the node's plus the reach, capped.**
+   - For: no proof of distance closes at a point where the normals agree, and halving the
+     span does not halve that bound. Without a stopping rule, splitting ran to the
+     resolution.
+   - Against: Steinmetz claims `9.0e-7` at a coincidence of `1e-9`, where SM7's estimate
+     claimed `8.8e-9`. The points are as close as before: the claim is looser, not the
+     curve.
+   - Change if: a node-aware enclosure is built (the relative form's quadratic about the
+     node bounds the distance by `|x|^2`, not `|x|`).
+6. **The closing vertex takes the seam's side nearer the last vertex.** The torus test
+   took 294 s in debug: a loop started on the torus's `u = 0` seam closed at `u = 0` after
+   a last vertex at `u = 0.993`, so its last pcurve span crossed the whole period. The
+   knot cuts then filled it with far-side vertices.
+7. **Seeds are met by the span, with the step shortened where they would be missed.**
+   - For: linking stays by identity (SM7's decision): each seed is used once, by the span
+     that passes it. The span bound is an estimate from the curvature at the step's start,
+     so a span can be off the curve by more than `NEAR` coincidences where the curvature
+     rises; the guard catches the case that matters, a seed beside the span.
+   - Against: a seed scan over a wider box per step tried (no units), and one step more per
+     node approach. A seed of another branch within a 64th of the chord also shortens the
+     step, until the chord is 64 times its distance.
+   - Change if: the bound takes the curvature's derivative, so the span is within it by
+     construction.
+
+### 24.3 Tests
+
+No test was removed. Changed:
+
+- `tests/march.rs`:
+  - The branches are sampled per span of the B-spline (128 per span for the accuracy
+    test, 8 for the torus), not at their control points.
+  - `every_branch_is_on_the_truth_and_covers_it`: the pcurves share the curve's knots,
+    the pcurve claim is at most `1e-8` (was `1e-6`), pcurve points at 16 per span are within
+    it, and `to_intersection` is at most `1e-8`, or `1e-6` for a branch ending at a crossing
+    node (decision 5).
+  - Debug builds run fewer cases. The accuracy test runs a tiny loop (`delta` 1e-3) and
+    cylinders (1, 2, 0.3) at `1e-9`; the bits test the two tiny loops and those cylinders;
+    the budget test the cylinders in place of the spheres; the closed-curve test without
+    the spheres; the torus test two heights of three. The spheres' survey alone takes about
+    a minute unoptimised. Release builds run every case.
+- `general/tests.rs`: `points` samples eight per span and the ends.
+- `general/tests/apart.rs`: `touching_and_crossing_pairs_are_never_dropped` takes
+  `Uncertified` as a refusal where it lies, as `Unresolved` is: surfaces within the
+  coincidence of tangent along a curve.
+
+Debug times (`cargo nextest`, loaded machine): the accuracy test 19.5 s (was 2.5 minutes),
+bits 9.5 s (was 3.7 minutes), torus 11.4 s, the rest under 5 s.
+
+### 24.4 Measured (release, throwaway timer, not committed)
+
+The SM10 corpus (113 cases, release, run back to back with main at the branch's base): no
+verdict changes, pass 63, refused 44 (singular 5, unresolved 38, untraced 1), failed 6
+(incomplete 1, wrong topology 5), and no certificate fails. Times are noisy on a loaded
+machine: the 76 timed cases but `y23_t2_ex3` take 3.9 s before against 4.1 s; `y23_t2_ex3`
+takes 7.2 s against 10.0 s, all of it in `certify` beside its four crossing nodes (about a
+thousand failed Krawczyk tests per arc, decision 5), while its claim falls from `3.7e-6` to
+`3.6e-7`.
+
+Per pair, as 23.4 (`intersect` end to end at `1e-9`):
+
+| case | pin, `strip` off / on | before (main) | `sm8` | units, before / `sm8` (survey + march) | vertices, before / `sm8` | claim, `sm8` |
+| --- | --- | --- | --- | --- | --- | --- |
+| sphere and sphere | 0.71 / 1.05 ms | 2.78 s | 2.66 s | 212,056 / 128,345 (126,222 + 2,123) | 85,887 / 865 | 4.0e-9 |
+| tiny loop, `delta` 0.5 | 0.21 / 0.63 ms | 166 ms | 56 ms | 91,765 / 3,055 (1,301 + 1,754) | 90,489 / 746 | 3.7e-9 |
+| tiny loop, `delta` 1e-3 | 0.12 / 0.46 ms | 47 ms | 23 ms | 20,602 / 1,499 (1,051 + 448) | 19,552 / 225 | 1.9e-9 |
+| cylinders 1, 2, offset 0.3 | 0.41 / 0.50 ms | 288 ms | 69 ms | 148,236 / 4,231 (2,432 + 1,799) | 145,828 / 898 | 1.5e-9 |
+| cylinders 1, 2, offset 1.6 | | 243 ms | 61 ms | 122,492 / 3,833 (2,441 + 1,392) | 120,076 / 694 | 2.4e-9 |
+| Steinmetz 1.5, 1.5 | | 420 ms | 166 ms | 193,992 / 10,325 (7,360 + 2,965) | 186,642 / 1,317 | 9.0e-7 |
+
+Before is local main at the branch's base, the same harness, run back to back. Vertices
+for `sm8` are the spans' ends (half the control points); the claim is the greatest
+`to_intersection`.
+
+- **The march is now the smaller part.** Its units fall 40 to 90 times (1,754 against
+  90,464 on the large tiny loop) and the vertices 90 to 170 times; the survey's units,
+  unchanged, are now most of every case. Time falls 2 to 4 times but on the spheres.
+- **The spheres are the survey's.** Their survey takes 126k units and about 2.8 s in
+  `plans` (SM5's), unchanged by this branch; the march is 2.1k units.
+- **The claims.** Every case but Steinmetz claims within `4e-9`. Steinmetz claims `9.0e-7`
+  (decision 5).
+
+### 24.5 Open
+
+- **The spheres' survey** (24.4): 2.8 s of `plans` against the pin's 1 ms, SM5's or
+  SM11's.
+- **The claim beside a crossing node** (decision 5), up to `sqrt(tol reach)`.
+- **`certify` beside crossing nodes** (24.4): `y23_t2_ex3` spends about 2.8 s more in
+  failed Krawczyk tests at the node concessions; a cheaper test before splitting there.
+- **Two knots per vertex** (decision 1), if a consumer wants fewer.

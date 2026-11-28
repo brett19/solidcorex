@@ -12,6 +12,9 @@ tangent-sphere-box 9
 seam-sphere-box 27
 seam-box-sphere 21
 off-seam-sphere-box 33
+seam-cylinder-sphere 7
+off-seam-cylinder-sphere 4
+seam-torus-sphere 9
 seam-sphere-sphere 9
 seam-box-minus-sphere 78
 coplanar-offset-0 622

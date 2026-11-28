@@ -596,6 +596,17 @@ pub(super) fn recipes(res: f64) -> Vec<Recipe> {
         ssi(Kind::Cylinder, Kind::Cylinder),
         tpipe_truth,
     ));
+    // A sphere touching a cylinder or ring torus off its spine: BO22's closed form gives the
+    // one point, so the union is two lumps touching there (BO25's point loops), pinched. The
+    // cells are not stated (the touch lies on a seam).
+    let touching = |genus: u32| {
+        Outcome::Built(super::Topology {
+            solid_regions: 2,
+            shells: 2,
+            genus,
+            cells: None,
+        })
+    };
     let post = cylinder_at([0.0; 3], 2.0, 10.0);
     for (name, centre) in [
         ("seam-cylinder-sphere", [5.0, 0.0, 5.0]),
@@ -603,27 +614,33 @@ pub(super) fn recipes(res: f64) -> Vec<Recipe> {
     ] {
         let ball = sphere_at(centre, 3.0);
         let t = sum_truth(&post, &ball);
-        v.push(recipe(
-            name,
-            "boolean_api::point_contacts",
-            post.clone(),
-            vec![step(Op::Union, ball)],
-            ssi(Kind::Cylinder, Kind::Sphere),
-            t,
-        ));
+        v.push(
+            recipe(
+                name,
+                "boolean_api::point_contacts",
+                post.clone(),
+                vec![step(Op::Union, ball)],
+                touching(0),
+                t,
+            )
+            .pinched(),
+        );
     }
     let (s45, c45) = fmath::sin_cos(0.25 * PI);
     let ring = torus_at([0.0; 3], 5.0, 1.5);
     let ball = sphere_at([5.0 + 3.5 * c45, 0.0, 3.5 * s45], 2.0);
     let t = sum_truth(&ring, &ball);
-    v.push(recipe(
-        "seam-torus-sphere",
-        "boolean_api::point_contacts",
-        ring.clone(),
-        vec![step(Op::Union, ball)],
-        ssi(Kind::Sphere, Kind::Torus),
-        t,
-    ));
+    v.push(
+        recipe(
+            "seam-torus-sphere",
+            "boolean_api::point_contacts",
+            ring.clone(),
+            vec![step(Op::Union, ball)],
+            touching(1),
+            t,
+        )
+        .pinched(),
+    );
     for (name, origin, size) in [
         ("seam-torus-box", [-3.0, 6.5, -3.0], [6.0, 4.0, 6.0]),
         ("seam-vertex-torus-box", [6.5, -3.0, -3.0], [4.0, 6.0, 6.0]),

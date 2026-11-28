@@ -6520,3 +6520,182 @@ be one, left open.
 ### 51.5 Proposed 04 row
 
 | 11-28 | (For the owner's review) BW5: `scx_bodyq::pick(&Brep, origin, direction, EntityKind, aperture, budget, stop) -> Vec<RayPicked>` returns every face, edge or vertex within the aperture of a ray, with its depth, sorted by (depth, id): a face at each crossing, else at each dip toward its surface or its nearest boundary approach; an edge at each stretch within the aperture; the pin's three nearest-or-list ray functions and their tolerances are dropped. A NURBS face passed near without a crossing is `Unsupported(Nurbs)` naming it, never sampled. | For: a ray through a cylinder or torus has every place it meets it (two, four), ordered the way a caller steps; one aperture is the only looseness; exact on analytic geometry. Against: the dip is a fixed 60-step search (70 units a dip); a ray parallel to a face at a standoff is picked at where it leaves it; a NURBS face near the ray is refused though far from it. | 74 §51 |
+
+## 52. BW10 as built (11-28)
+
+Five new public functions in `crates/scx-bodyq/src/{comb,curvature,face_chain,sheet_seam}.rs`, on
+BW4's proof:
+
+```rust
+pub fn edge_comb(body: &Brep, edge: EdgeId, teeth: usize, budget: &mut Budget, stop: &Stop)
+    -> Result<Vec<Tooth>, BodyqError>;
+pub fn iso_comb(body: &Brep, face: FaceId, running: Running, fixed: f64, span: [f64; 2],
+                teeth: usize, budget: &mut Budget, stop: &Stop) -> Result<Vec<Tooth>, BodyqError>;
+pub struct Tooth { pub at: f64, pub point: Point3, pub curvature: Vec3 }
+pub enum Running { U, V }
+
+pub fn principal_curvatures(body: &Brep, face: FaceId, p: Point3, budget: &mut Budget,
+                            stop: &Stop) -> Result<Principal, BodyqError>;
+pub struct Principal { point, uv, normal, k1, k2, gaussian, mean, d1, d2 }
+
+pub fn tangent_face_chain_ordered(body: &Brep, faces: &[FaceId], angle: f64,
+                                  budget: &mut Budget, stop: &Stop) -> Result<FaceChain, BodyqError>;
+pub struct FaceChain { pub faces: Vec<FaceId>, pub undecided: Vec<Undecided> }
+pub struct Undecided { pub edge: EdgeId, pub why: Doubt }
+pub enum Doubt { Straddles { at: f64, angle: Ivl }, Unsupported(BodyqUnsupported) }
+
+pub fn sheet_seams(sheets: &[&Brep], zone: Length, tol: &ContinuityTolerances,
+                   budget: &mut Budget, stop: &Stop) -> Result<SheetSeams, BodyqError>;
+pub struct SheetSeams { pub seams: Vec<SheetSeam>, pub unproved: Vec<SheetMeet> }
+pub struct SheetSeam { pub meet: SheetMeet, pub along: [[f64; 2]; 2], pub same_sense: bool,
+                       pub continuity: Continuity }
+pub struct SheetMeet { pub sheets: [usize; 2], pub edges: [EdgeId; 2] }
+```
+
+New refusals: `BodyqRefusal::Count` (fewer than two teeth), `Singular { face }` (no normal or
+curvature at the foot); new defect `BodyqDefect::Gap { edge }`. BW4's `continuity` is split into
+`claims_of` and `along` so a seam between two bodies runs the same proof; `Faces::between` and
+`Edge::across` in `along.rs` build the faces of any two surfaces. Nothing BW4 returns changes.
+
+### 52.1 Method
+
+- **Combs.** A tooth is a point and a curvature vector. Along an edge it is `kappa N`,
+  `(C' x C'') x C' / |C'|^4`, from the curve's jet. Along a parameter line it is the normal curvature
+  times the unit normal, `(n . S_tt / |S_t|^2) n`, from the surface's jet to the second order; the
+  vector does not depend on the sign of `n`. Stations are even steps of the parameter, the ends
+  included; a closed edge's end is its start, so it takes `teeth` steps. A station with no tangent
+  is left out, and every tooth names its parameter, so a gap in the comb is visible. One unit a
+  station. **A pole is found relatively.** Along a sphere's parallel at the pole `|S_u|` is
+  `6e-17 r`, not 0 (`cos(pi / 2)`): an exact-zero test would give a tooth of length `1e16`. The
+  partials are taken not to span a plane when the shorter is under `1e-12` of the longer, or they
+  are parallel to that relative bound.
+- **Principal curvatures.** The foot (`face_uv`: closed form on the analytic kinds, one unit), the
+  jet there, and the second form in the orthonormal tangent frame `e1 = S_u / |S_u|`,
+  `e2 = n x e1`, as the symmetric matrix `-II(e_i, e_j)`. Its eigenvalues are `k1 >= k2` and its
+  eigenvectors the directions, `theta = atan2(2b, a - d) / 2`. At an umbilic the directions are the
+  frame's. **Sign: convex positive against the outward normal**, the natural normal where neither
+  side is solid (a sheet). A sphere reads `+1/r`, a cylinder `1/r` and `0`, a torus's inner
+  equator `+1/r` round the tube and `-1/(R - r)` along it. Both faces solid is
+  `NoMaterialSide`. This answers BW4's open question 4 the other way: BW4's drop is a
+  normal-section bend against the normal (a sphere is `-1/r`) because it is a *difference across an
+  edge*; a comb or a reading of one face wants the convex sign. The two never meet in one type.
+- **The pin chose the nearest face** among all faces of a sheet. Here the caller names the face
+  (`closest_to_point` already finds it): one function that scans every face would be a second
+  place that picks, and hides which face answered.
+- **Face chain.** Seeds first (each once, in order); then from each reached face its edges in id
+  order, each decided once (cache) by `tangent_all_along` at the caller's angle under the one
+  budget; a smooth (proved `Tangent`) edge adds each face of its fins. `NotTangent` and an edge
+  with fewer than two fins or collapsed join nothing and are not listed. **An edge the proof cannot
+  settle is named, not an error.** `Undecided` (`Doubt::Straddles`) and `Unsupported` (`Doubt::
+  Unsupported`: a NURBS face, three faces at an edge) are listed once in `undecided`; the pin lost
+  the whole chain on a refusal of a NURBS face.
+- **Sheet seams.** A seam is a run along which two sheets' boundary edges (curve edges with one
+  fin) lie together within `zone`. Each curve's two ends are dropped on the other
+  (`Curve::invert` on the interval; a foot off the interval is replaced by the nearer end); an end
+  within the zone *lands*, and each curve's run is the span of its landing ends and of the other's
+  landing ends' feet. Fewer than two distinct landing ends, or a run under `1e-9` of the interval,
+  is no seam (a corner touch). The run is *proved* when each curve over its run stays within the
+  zone of the other, certified by `curve_curve_gap(.., Aim::Against(zone))` both ways under the
+  budget; otherwise the pair is in `unproved`. A proved run is measured by BW4's proof over the
+  first sheet's curve across the run, between the two faces, the second face read on the side that
+  agrees across the seam (the fins running opposite ways along the run). The sense of the second
+  curve against the first is read from the two tangents at the middle of the run, so a whole
+  circle needs no guess at which end its seam foot falls on.
+  - **A proof, not stations.** The pin measured stations by the nearest point of each surface to a
+    guess, reporting five measures at each. BW4 replaced that by proved orders and measured drops
+    (74 §25), and a seam is the same `Continuity`. So `continuity_report`, whose station list this
+    replaces, is not ported: `continuity` per edge and `sheet_seams` are its two halves.
+  - **No `unmeasured`.** The pin listed seams whose faces had no orientation or no station. A fin's
+    sense is always known here, and the proof has no stations to lose.
+  - **The pin's loop rule is not ported.** A run that would wrap past a closed curve's seam does
+    not fit one interval; it is `unproved`, never `Apart`. Two closed curves that touch at their
+    seam points only have all four ends landing, a run of the whole of each, and the gap proof
+    fails: `unproved`, not a seam and not silence.
+
+### 52.2 Cases for and against
+
+- **Teeth are `usize`, with `Count` below 2; the pin's 2000 cap is dropped.** For: the budget is
+  the bound. Against: a caller can ask for a million teeth and get them (and pay).
+- **`Tooth` has `at`.** For: an omitted station is visible. Against: a tooth of an edge comb
+  and of an iso comb mean different parameters.
+- **Convex-positive principal curvatures against BW4's section drop sign.** See above. For: each
+  matches its use and the pin. Against: two signs in one crate; both are documented and each
+  test pins its own.
+- **`FaceChain::undecided` holds `Doubt`, not a bare edge.** For: a caller can tell a straddle
+  (loosen the angle) from an unsupported face (nothing to loosen). Against: one more type.
+- **Seams: `unproved` covers refuted and open runs alike.** For: from the ends, the curves may
+  part between them, whether the proof or the refutation said so. Against: a caller cannot tell a
+  certain non-seam from an undecided one; the refuted case is a different edge that happens to
+  share two end points.
+- **Seams are proved against `zone`, measured from the first sheet's curve.** The faces' own
+  gap is surface to surface at that curve's point, so a second edge that bulges inside the zone is
+  not measured on its own curve. For: one curve, one parameter, as BW4. Against: G0 does not see
+  an edge that is `zone` off the other.
+
+### 52.3 Tests
+
+**`tests/curvature.rs` (9).** The circle comb is `1/R` towards the axis at 12 distinct stations
+(the start once); a straight edge combs to zeros with both ends; the cylinder's parameter lines
+bend `1/R` round and `0` along; a sphere's poles have no tooth on a meridian or a parallel and
+the rest read `1/r`; refusals (`Count`, `NotFinite`, `Collapsed`), one unit a station,
+`Exhausted`, `Cancelled`; principal curvatures of a cylinder (`1/R`, `0`, directions round and
+along, the foot), a sphere (`+1/r` twice), a pole (`Singular`) and a torus inner and outer
+equator (`+1/r`, `-1/(R - r)`, Gaussian `-1/(r (R - r))`).
+
+**`tests/face_chain.rs` (6).** A stadium's four walls chain from one and its caps do not; a box and
+a can chain nowhere (the can's seam is smooth and joins its wall to itself); picks come first, once
+each; two walls 0.3 degrees apart chain at 0.5, not at 0.2, and at 0.3 the edge is named
+`Straddles`; a NURBS face is named `Unsupported(Nurbs)` and the chain stops short of it; angle
+refusals, `NoEntity`, equal work for equal runs, `Exhausted`, `Cancelled`.
+
+**`tests/sheet_seams.rs` (8).** Two coplanar rectangles on one plane are G4 by identity; on two
+frames the same plane is proved G4 by the series; a rectangle shifted by half meets over `[0.5, 1]`
+of each edge; a corner touch, a gap and a single sheet have no seam; a bulged edge is `unproved` at
+a zone of 0.1 and a G4 seam at 0.5; **a plane tangent to a quarter pipe is G1 and its jump is 1/r
+for either plane normal and either order** (this fails if the second face is read on the wrong
+side: the angle would be pi); a disc capping a tube meets it on the whole circle, G0 proved, G1
+refuted at pi/2; tolerance refusals, equal work, `Exhausted`, `Cancelled`.
+
+**Not ported, with what each proved:**
+
+| pin test | what it proved | where |
+|---|---|---|
+| `continuity_report` tests (`edge_continuity_*`) | the station list over a body's edges | BW4: `continuity` proves an edge, with the same box, stadium and cylinder cases |
+| `a_disc_capping_a_tube_meets_it_at_stations_on_the_circle` | stations on the circle | here, as the proof along the circle |
+| the kernel's `principal_curvatures_*` on NURBS | the second form of a spline | NURBS faces: step 5 |
+| `iso_comb` on a NURBS surface | the same | the jet takes a NURBS surface; no test until a made one exists |
+
+### 52.4 Costs (release, local box, mean of 50 runs)
+
+| case | units | time |
+|---|---|---|
+| `sheet_seams` tube and disc, zone 1e-6 (whole circle) | 11,401 | 32.5 ms |
+| plane tangent to a quarter pipe, zone 1e-6 | 115 | 0.56 ms |
+| two coplanar rectangles, zone 1e-3 | 66 | 0.059 ms |
+| `edge_comb`, `iso_comb`, `principal_curvatures` | 1 a station / 1 | not measured (a jet each) |
+
+The tube is dominated by the gap proof on a full circle at a zone of 1e-6 (and G0 at 1e-6 mm, as in
+74 §25.4). No existing path changed: `continuity` is the same code split in two, and `Edge::of`
+builds its faces through `Faces::between`; the BW4 tests pass unchanged. Before: n/a for the new
+functions.
+
+### 52.5 Deviations
+
+- Not ported: `continuity_report` (replaced by BW4's proof, §52.1), the pin's `unmeasured` and the
+  nearest-face scan of `principal_curvatures` (the caller names the face).
+- `(&mut Budget, &Stop)` on all five, as BW4 (R8).
+- `Tooth` carries its parameter; the pin's combs had only point and vector.
+- Pole handling by a relative bound, not an exact zero (§52.1).
+
+### 52.6 Open questions
+
+1. Should `sheet_seams` take a sheet's *face* boundary as well as one-fin edges, for a sheet that
+   is part of a closed body (an open shell cut from one)? Today only one-fin curve edges are tried.
+2. NURBS edge curves and faces: `Curve::invert` and the field wait on step 5 and SU6b; a seam over a
+   NURBS curve is `Unsupported(Nurbs)`.
+3. Should the run proof use a zone looser than the G0 tolerance? Today both are the caller's.
+4. A run that wraps past a closed curve's seam is `unproved`: should the run be two intervals?
+
+### 52.7 Proposed 04 row
+
+| 11-28 | (For the owner's review) **BW10: combs, principal curvatures, sheet seams and the tangent face chain in scx-bodyq.** `edge_comb`, `iso_comb` give a `Tooth { at, point, curvature }` per station (a station with no tangent or at a pole is left out, found relatively); `principal_curvatures(body, face, p, ..) -> Principal` signs convex positive against the outward normal (BW4's drops keep their section sign); `tangent_face_chain_ordered(body, faces, angle, ..) -> FaceChain { faces, undecided }` joins faces across edges proved tangent and names the edges it cannot settle instead of failing; `sheet_seams(&[&Brep], zone, tol, ..) -> SheetSeams { seams, unproved }` finds the runs where separate sheets' boundary edges lie together (certified both ways by `curve_curve_gap`) and measures each with BW4's proof, the second face read on the agreeing side. `continuity_report` is replaced by BW4's `continuity`. New refusals `Count`, `Singular`; defect `Gap`. Edges: none | A seam is a proved run and a measured order of contact, not nine stations; no failing default for a pole or a NURBS face. Against: the run's wrap past a closed seam is `unproved`; the tube seam costs 11,401 units at a zone of 1e-6 | 74 §52 |

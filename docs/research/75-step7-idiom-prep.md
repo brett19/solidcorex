@@ -984,7 +984,7 @@ names each new Cargo dependency; each must be legal under layers.txt after LY2.
 | MK13 | make | `radial`: the hollow cone built directly (outer, inner, annular caps) with no stitch or subtract | — | — | Sonnet |
 | MK14 | make | `prism` and `sheet` over several planar regions; port `O/prism.rs` and `prism/tests.rs` truths | — | — | Sonnet |
 | MK15 | make | `face` on an analytic surface by a uv box or a planar region in uv; iso-line edges exact (lines and circles) | — | — | Sonnet |
-| MK15b | make, nurbs-surface | `face` on a NURBS surface: iso-curve extraction in `scx-nurbs-surface` (exact, by knot insertion to full multiplicity; not built yet); bounds other than iso lines wait on step 5's curve-on-surface kind | MK15; knot insertion | — | Sonnet |
+| MK15b | make, nurbs-surface | `face` on a NURBS surface: iso-curve extraction in `scx-nurbs-surface` (exact, by knot insertion to full multiplicity; `NurbsSurface::iso`, already built); bounds other than iso lines wait on step 5's curve-on-surface kind | MK15; knot insertion | — | Sonnet |
 | MK16 | make (tests) | The closed-form make table: the ops 26-case table, Pappus, cornered and stations truths, against T9 | MK4, MK5 | — | Sonnet |
 | MK17 | make | `ruled` between two curves (lines and coplanar arcs exact by kind; others a degree-1 NURBS after compatibility) and `reverse` of a sheet as a Draft method (`O/surface.rs:340, :366`) | knot insertion and degree elevation (for NURBS curves) | — | Sonnet |
 | DF1 | deform | Crate; `deform` with the exact image rules of §5.5 on analytic faces; `Refused(MeetsAxis)` | step 5 volume maps (bend, twist and unbend only) | deform → surface, brep | Opus |
@@ -3967,7 +3967,307 @@ Open questions:
 - **A NURBS curve against a NURBS surface.** This is deferred, as 77 §6.3 says.
 - **Degree-4p spans of high-degree curves.** These have not been measured for root-isolation
   depth. `RootLimits::DEFAULT` is used.
-### 13.46 RP5 as built (11-28)
+
+### 13.46 MK17 as built (11-28)
+
+`scx_make::{ruled, RuledSide, Join, Which, RuledError, RuledRefusal, RuledUnsupported}` in `crates/scx-make/src/ruled/` (`mod.rs`, `planar.rs`, `nurbs.rs`, `tests.rs`), and `Draft::reverse_sheet(&Document) -> Result<(), ReverseError>` in `crates/scx-brep/src/draft/reverse.rs` (the pin's `reverse_sheet`). scx-brep gains the dependency `scx-nurbs-surface` (for `ParamAxis`; layers.txt allows it) and `transform.rs` makes `use_image` and `EdgeImage` `pub(super)` so the two edits share one pcurve mapping.
+
+API:
+- `ruled(a: &RuledSide, b: &RuledSide, join: Join, doc) -> Result<Made<FaceId>, RuledError>`. A `RuledSide` is a `Curve` and an `Extent1d`. `Join::{Same, Reversed}` replaces the pin's `reversed: bool`; reversed is the pin's meaning (b's end is joined to a's start).
+- Errors: `Refused(Interval | Closed | NoArea)`, `Unsupported(Form | MeetingSides)`, `Compatible(NurbsError)`, `Surface`, `Make`, `Defect`. Each has `kind()` and `name()`.
+- `Draft::reverse_sheet`: errors `NotSheet { face }`, `NonManifold { edge }` and `Pcurve(TransformError)`.
+
+Decisions.
+- **Exact by kind is a predicate made before building.** Both sides lines or circle arcs, every sampled point and each arc's plane within the resolution of one plane (Newell normal of the sampled ring): the face is on that `Plane`, bounded by the region of the two sides and two rulings (`Region::new` and `sheet`). Anything else is the NURBS surface.
+  - For: parallel lines are a plane (closed-form area), coplanar arcs are an annular sector or a quarter disc, with analytic edges and no net. Against: the plane's uv is its own, not the ruled map's `(s, t)`; a caller who evaluates by `(s, t)` must use the NURBS case. The plane face is the same point set only when the four sides bound a simple region.
+  - If `Region::new` refuses (crossing rulings, a bow tie, overlapping sides) the case falls through to the NURBS surface instead of refusing, because the ruled surface exists there.
+- **The NURBS case reuses MK12b's exact forms** (a line's degree 1, a circle's rational quadratic pieces of at most a quarter turn, a NURBS curve restricted). The function is copied, not shared, to keep to my own module. Ellipses, parabolas and hyperbolas are `Unsupported(Form)` (their forms are not written here).
+  - The two forms are made compatible by `CompatibleCurves::from_curves` (degree elevation, then the knot union, exact, no knot moved). The net is the two sections as two columns, degree 1 in `t`; the four edges are the surface's own iso curves with the parameter square's line pcurves (the writer `exact_loops` has none on a NURBS surface), as in `sheet_blend`.
+  - The pairing is by the compatible forms' parameter. For lines it is the fraction of each range (the pin's `s`). For a circle against another curve it agrees with the angle only at the quarter-turn knots.
+  - Where the two sides' weights differ, the homogeneous lerp moves points along their rulings: rulings and both sides are exact, `t` is not linear along them. The test checks the middle lies on the ruling, not at the lerp.
+- **Closed sides and meeting sides are refused, not guessed.** A side whose ends are within the resolution is `Closed` (a cylinder or cone has its own constructor). On the NURBS case, sides meeting at an end make a collapsed edge on a NURBS face, which is not written (`MeetingSides`). Lines and arcs in one plane skip a degenerate ruling and so do not hit it.
+- **`reverse_sheet` flips the normal and runs the loops the other way.** Each surface is `Surface::reversed(V)` (`S'(u, -v) = S(u, v)`, exact for every kind), the pcurves follow its `UvMap` through the transform's mapping, and each loop's uses are taken in reverse order with senses flipped, so the outer loop stays counter-clockwise about the new front. Edges, vertices, shells and sides are untouched. The pin swaps u and v; `reversed(V)` is exact and exists for the analytic kinds too, but it moves a NURBS face's `v` domain to `[-1, 0]`.
+  - A face of a solid (sides in two shells, or a solid region) is `NotSheet`: with its sides kept the solid would be inside out. An edge of more than two fins is `NonManifold`: its radial order depends on the geometry, which this edit does not rewrite.
+  - Against: a non-manifold sheet cannot be turned over whole yet (open: rewrite the order, or reverse per component).
+  - The pin's second return value, the map of edge indices, is not needed: edges keep their ids.
+
+Tests (13 in `scx-make`, all passing): `two_parallel_lines_are_a_plane_strip` (area `l w`, both joins), `a_trapezoid_between_unequal_parallel_lines` (area `(10 + 6) 5 / 2`), `coplanar_arcs_are_an_annular_sector` (`theta (R^2 - r^2) / 2`, sweeps 1.2 and 4), `a_line_and_an_arc_in_one_plane_are_a_planar_face` (a quarter disc, `pi r^2 / 4`), `a_ruled_surface_has_its_two_curves_as_sides` (the pin's test: a at `t = 0`, b at `t = 1`, straight between, both joins, to 1e-9), `two_skew_lines_are_a_bilinear_patch` (`S = (s, t, s t)` to 1e-12), `an_arc_and_a_line_out_of_its_plane`, `crossing_rulings_are_a_nurbs_patch`, `refusals_name_the_input`, `an_ellipse_side_is_unsupported`, `a_reversed_sheet_has_the_other_normal_and_reversing_twice_gives_it_back` (plane strip and NURBS: same points, normal dot -1, same edges with reversed order and senses, twice is the original surface and loops), `a_cylinder_face_reverses_and_comes_back`, `a_solid_is_not_a_sheet`. The pin's `ruled` test that asserted outcome is ported; its `Error::Argument` for a circle against a line is not (a circle is now a side; a full circle is `Closed`). The pin's `sheet_reverse.rs` tests on the record (edge map, record round trip, used-backward faces) are of the record layer, not ported.
+
+Open: ruled on sides that meet off a plane (collapsed edge on a NURBS face); a ruled surface by `(s, t)` on the planar case; ellipse sides (an exact rational form).
+
+### 13.39 BO22 as built (11-28)
+
+Tangent contact through the Boolean (75 §7 row BO22): the stated-fact tier and the closed-form
+tier, with the tracing tier (SM6b) left as a typed `Unsupported` at one hook. This lifts the BO7
+limits on tangent pairs. A tangent line or circle that runs from edge to edge on both faces is
+now built as an edge of four fins. Every other tangent contact is either built, because the
+operation keeps one side or BO25 builds it as a point loop, or refused as `NonManifold`. Before
+this, some of them came back with no error and the wrong body.
+
+- **Bend order for tangent fins** (`pinch.rs`, `scx-check` `radial`). Two fins whose directions
+  `d` lie within `TIED = 1e-9` rad leave the edge in one direction. They are ordered by bend
+  `σ k_n(d)`: the face's normal curvature along `d`, signed by the sense of the use. The fin
+  bending further counter-clockwise comes after. Two bends must differ by more than the sum of
+  their slacks, each `4 k_max² ρ + 1e-9 max(k_max, |k_n|)`, where `ρ` is the edge's accuracy (or
+  the body's resolution where it has none). The first term is the shift a lift within `ρ` of the
+  edge makes, doubled for the change of curvature the jet does not bound. Bends that tie agree
+  to second order, and those fins are refused as before. Only the wrap-round pair adds `TAU`.
+  The check accepts any order whose gaps add up to one turn, so a tie across the wrap passes.
+  `scx-check`'s radial test reads the same rule, so a pinched result passes the contract.
+- **`Surface::normal_curvature(uv, approach, d) -> Option<NormalBend { along, largest }>`**
+  (scx-surface, new; `NormalBend` exported, named apart from VM1's `VolumeMap` `Bend`). It
+  works from the shape operator `S = I⁻¹ II`, with the largest principal curvature
+  `|tr S / 2| + sqrt(((a − d)/2)² + b c)`, which is stable at umbilics. The textbook `sqrt(H² − K)` lost half its digits on the sphere. Test:
+  `normal_curvature_is_the_closed_forms` (a cylinder of r 2, a sphere of r 3 and a torus (5, 1.5)
+  at its outer equator, in both senses, to 1e-12).
+- **Seam-keeping merge** (`build.rs`). When a merged periodic face's loops would wind round it
+  (`exact_loops` gives `Winds`), the merge is retried with its seams kept, so a wall cut along a
+  tangent ruling and joined again closes.
+- **Closed-form touch** (`scx_ssi::analytic::touch`, dispatched from `quadric.rs`). A sphere of
+  radius `rs` with centre `c`, against a cylinder or ring torus whose spine misses `c`: `q` is
+  the spine's nearest point to `c` and `d = |c − q|`. The gap is `e = d − (rs + r)` outside and
+  `e = r − rs − d` inside. Within the tolerance plus rounding the contact is one point,
+  `q + (c − q) r / d`, given as a `Touch`; past it the faces are apart, which is an empty
+  answer; anything else stays `General`. The pin calls these pairs `SsiPair`.
+- **A tangent contact that ends inside a face** (`build.rs`, new rule). There are two shapes:
+  - a `Contact::Tangent` section where the operation keeps both faces and one face's pieces do
+    not use the section's edge;
+  - a stage-4 lying piece inside the other face (`along` none) whose own edge is kept, with the
+    other face kept too, where that face's pieces do not use it. Imprint now records these as
+    `Imprint::lying`.
+
+  In both, imprint dropped the edge as a dangling cut, and the result is
+  `NonManifold { at: Face(of) }`. Before, this was a **silent lost contact**. A cylinder lying
+  on a box's top along a ruling inside the face came back as two lumps that share no edge. So
+  did two parallel cylinders offset along their axes, whose ruling is one wall's seam and so
+  reaches the other wall as a lying edge, not as a section. The rule sits beside the touch
+  handling, and `build` takes `&FaceFace`.
+- **Merged pieces stay whole** (`build.rs` `merge`, `whole_shell`). `merge` returns each face
+  it absorbed, with the survivor and the operand face it was a piece of. `whole_shell` counts a
+  piece by its survivor, so an operand shell cut along a contact and merged back gets its sign
+  without measuring. It refuses where a survivor took a face of another operand face.
+- **The SM6b hook.** In `faceface.rs`, at `undecided`, a tangent pair with no stated fact and no
+  closed form stays `Unsupported(SsiPair)`. The comment there names SM6b (tracing a tangent
+  curve) as the tier that answers it.
+- **Stated facts: no new `Fact` kind, and no SU6 gap.** I decided this by analysis and then
+  tried to break it. BO21's facts state an edge on a face, and isolation judges them through
+  `curve_on_surface` (`OnSurface`). A tangent edge stated on a tangent wall is just such a fact,
+  and needs no tangency flag: isolation reads where the edge lies, not how the faces meet.
+  `given.rs` `an_edge_on_a_tangent_wall_gives_the_same_answer` states l's seam edge on r's wall
+  and gets the same union, of volume 80π. With r at 4.001, the same fact is `FalseFact`.
+  - Against adopting SU6's gap bound (13.22's note, decision 1: "BO22 can add the gap where
+    isolation is ill-conditioned (a double root)"): `curve_on_surface` isolates the roots and
+    turns of the surface's implicit equation along the curve in closed form (Bernstein), and
+    does not sample it. A curve lying on the surface makes that equation vanish identically, so
+    every event is near and the fact is accepted without isolating any root. A double root is a
+    curve touching a surface at one point, which a true lies-on fact never is. A false fact
+    near a double root is refused, because isolation finds the turn's value above the
+    tolerance. A second gate would judge the same fact twice.
+  - The adversarial pass looked for a tangent fact that isolation would wrongly accept, one
+    within tolerance at some points but not along the edge. It found none.
+
+Tests. All volumes are closed forms, checked to 1e-9 relative. `src/tests/tangent.rs` (new)
+runs each case in ∪, −, ∩ and the swapped −:
+
+- a cylinder lying on a box's top: NonManifold, 1000, empty, 24π;
+- the same cylinder under the top: 1000, NonManifold, 24π, empty;
+- a sphere in a cylinder of its radius: 40π, 40π − 32π/3 with one pinched edge, 32π/3, empty;
+- level parallel cylinders: 80π with one pinched edge, 40π, empty, 40π;
+- parallel cylinders offset along the axis: NonManifold, 40π, empty, 40π;
+- a cylinder of r 2 inside one of r 3: 90π, 66π with one pinched edge, 24π, empty;
+- a ball inside a box touching its top: 1000, 1000 − 36π (a cavity meeting the top at a point,
+  BO25's point loop), 36π, empty.
+
+Other tests:
+
+- `quadrics.rs` `a_sphere_touches_a_cylinder_or_torus_off_its_axis` checks the touch point and
+  the gaps either side.
+- `scx-check` `tangent_fins_bending_apart_pass_in_bend_order` covers bends apart, a swap, a tie
+  within slack and a tie across the wrap.
+- `tests/sliver.rs` ports the pin's `curved_sliver_coincidence` (two pie slices whose arc
+  cylinders' axes lie 8.4e-5 apart and coincide over the sliver between the corners). Both
+  tests are `#[ignore]`d: this is near-coincidence over a band, which neither tier answers. The
+  first case's ∩ gives `Unsupported(Pcurve)`, the second's `Defect(Piece)`. Open below.
+
+Tests removed or changed, on purpose:
+
+- **Removed** from `unsupported.rs`: `cylinder_sphere_off_axis_meets_in_a_quartic_on_the_seam_and_off_it`
+  and `torus_sphere_off_axis_meets_in_a_curve_with_no_closed_form`. They proved that the pin's
+  pairs were refused as `SsiPair`. The closed form now answers those pairs, and `contacts.rs`'s
+  point contacts judge them against the truth.
+- **Changed** in `apart.rs`: the two sphere–cylinder tests now state the closed form's answer.
+  Gaps of 0.8, 0.3, 1e-3 and 2e-5 give an empty `FaceFace`; gaps of 0 and ±5e-6 give one touch
+  at (√2, √2, 5).
+- **Changed** in `contacts.rs`: the three sphere point contacts are judged against the truth
+  (`ssi: false`).
+- **Changed** in `algebra.rs` `KNOWN`: four `loops` cases now pass and are swept:
+  absorption-intersection cyl/boxB, cyl/flush and torus/flush, and absorption-union cyl/flush.
+  All four failed at the merge base.
+- **Changed** in `scx-testkit` `recipe/boolean.rs`: the truth of `seam-cylinder-sphere`,
+  `off-seam-cylinder-sphere` and `seam-torus-sphere` goes from `Unsupported(SsiPair)` to built
+  and pinched: two lumps touching at one point, 2 regions and 2 shells (genus 1 with the torus).
+  The cells are not stated, because the touch lies on a seam. Their volumes stay the closed-form
+  sums.
+- **Changed** in `scx-testkit` `tests/recipe.rs`: the `boolean_api` count goes from 11 built and
+  6 `SsiPair` to 14 and 3, and the three touches move to the built list.
+- **Changed** in `t_slice`'s `scx_topology`: a torus face is genus 1 unless a kept edge cuts it.
+  It used to need no bounds at all, so the touch's point loop made it genus 0 (chi 4, truth 1).
+  A point loop does not cut a torus. `slice_work.txt` gains the three touches' baselines (7, 4
+  and 9), written by hand; no other baseline moved.
+
+Measurements (release, throwaway timers, not committed, main box under load):
+
+- `analytic::intersect` for a cylinder of r 2 against a sphere of r 3, over 200k calls. Without
+  the touch dispatch every case is `General`: touch 430 ns, crossing 379 ns, apart 369 ns. With
+  it: touch 491 ns, now a `Touch`; crossing 410 ns, still `General`; apart 418 ns, now empty.
+  That is 30-60 ns more per sphere pair, and it settles the touch and apart pairs that went on
+  to `Unsupported(SsiPair)` before.
+- Boolean, two parallel cylinders of r 2 and length 10, level and tangent, over 300 runs: ∪
+  249 µs, − 153 µs, ∩ 146 µs (the same pair 9 apart: 40, 5, 6 µs). Before BO22 the ∪ was
+  `NonManifold` and the others were refused or wrong, so there is no like-for-like before.
+  - Merge plus fin ordering take under 1 µs: four `normal_curvature` calls per pinched edge,
+    and the ordering runs only on tied directions.
+  - The ∪ first took 2.45 ms, 2.3 ms of it in `shells`. The pinched edge leaves two face sets,
+    and `whole_shell` could not see that a wall cut along the ruling and merged back was still
+    a whole operand shell (the merged pieces were gone), so `pinch::nest` measured both signed
+    volumes. `merge` now returns what it absorbed, and `whole_shell` counts a merged piece by
+    its survivor, provided that survivor took nothing from another operand face. The sign is
+    then the operand's, and the ∪ is 0.25 ms.
+
+Open:
+
+- A tangent line or circle that ends inside a face, with both sides kept, is refused rather than
+  built (it would be a dangling edge, a wire, which closure does not keep yet).
+- The curved sliver (`tests/sliver.rs`): near-coincident walls over a band need a coincidence
+  test bounded over the band, not over the whole circles.
+- Tracing (SM6b) for tangent pairs with no closed form, at the `faceface.rs` hook.
+
+### 13.50 MK15b as built (11-28)
+
+`scx_make::face` takes a NURBS surface. Code in `scx-make/src/face_nurbs.rs` (called from
+`face`); tests in `tests/face_nurbs.rs` (7) and one in `scx-nurbs-surface`'s `construct_tests`.
+
+- **Iso-curve extraction already existed.** `NurbsSurface::iso(ParamAxis, t)` (knot insertion
+  to full multiplicity through `CompatibleCurves`, nothing moved, domain-end rows copied) was
+  built with `restrict`; MK15b adds nothing to `scx-nurbs-surface` but a bit-exactness test
+  of the domain-end curves. The 75 §7 row ("not built yet") was stale.
+- **Bounds.** `Bound::Box` and `Bound::Region` (in uv), as for the analytic kinds. Every
+  segment of the boundary must be a line along `u` or `v` (a rectilinear loop: boxes, an L,
+  a frame with holes); anything else is `Unsupported::Segment`, to wait on step 5's
+  curve-on-surface kind. A box or region past the domain is `Refusal::UvBox`; a coordinate
+  within 1e-12 (relative) of a domain end is moved onto it.
+- **Edges and pcurves.** Each segment is one edge: `iso(axis, t)` as `Curve::Nurbs` over the
+  segment's span of the iso-curve's own parameter (which is `u` or `v`: nothing is
+  reparametrised), and its pcurve `Line2` through `(0, v)` or `(u, 0)` over the same interval.
+  They agree by construction. The edge and pcurve are written directly (the `ruled` pattern),
+  because `Draft::exact_loops` has no closed form on a NURBS surface (`NeedsFit`).
+- **Meeting boundaries.** Two vertices within the document's zone (a closed surface's seam
+  taken whole, a side collapsed to a point) are `Unsupported::NurbsFace`: they would need
+  merged or collapsed edges. A turn less a sliver of a closed NURBS cylinder is made.
+  `Unsupported::NurbsFace`'s meaning narrowed to this; unclamped domain ends (no insertion
+  reaches them) and procedural surfaces give it too.
+- **Measured against truth.** Planar bilinear patch boxes: the quadrilateral of the box's four
+  corners (half the diagonals' cross product) to 1e-10; edge ends are the corners and the
+  vertices bit for bit. NURBS cylinder (nine-point ring): quarter, half and three-quarter
+  at the knots are `pi r h` times the fraction; a half with a rectangular hole (u not on
+  a knot, the angle from the surface's own points) and an L to 1e-10; edge points at radius `r`
+  within 1e-12. Every face passes `scx_check::check` as class `Sheet`. A `to_nurbs` plane over
+  a box is the rectangle.
+- **Work before and after.** The analytic paths are untouched (an early return on the
+  `Nurbs` arm; the 8 analytic tests pass as before). A NURBS face costs one `iso` per edge: a
+  box four knot-insertion passes of the net's lines (two per direction); no counters added.
+- **Removed on purpose.** `a_nurbs_surface_is_unsupported_for_now` (`tests/face.rs`): it
+  proved a NURBS box was refused with `NurbsFace` until MK15b; the surface now makes a face
+  and the refusal is tested on the seam instead.
+- Open: a seam or pole on a NURBS face (merged and collapsed edges); iso-curves cached per
+  `(axis, t)` when a region shares one.
+
+
+### 13.47 RP2 as built (11-28)
+
+RP2 lives in `crates/scx-repair/src/heal/ends.rs`, a submodule of RP1's `heal`, with small hooks in `heal.rs`. It extends RP1's heal to NURBS edges in two ways: re-ending a NURBS edge at a cluster's target, and cutting a NURBS edge's empty interior pieces. scx-repair gains the `scx-nurbs` dependency, which layers.txt allows. Lines take the same path as in RP1.
+
+API:
+- `Item::Pieces(EmptyPieces)` is new. `EmptyPieces { edge, pieces: Vec<Extent1d> }` is `#[non_exhaustive]` and exported from the crate root.
+  - `items()` lists each edge's empty pieces first, then the clusters, in the pin's order: cutting pieces cannot merge vertices, but squeezing can remove the edge.
+  - `heal()` takes both kinds. Each item is certified and accepted in turn, as before.
+- `HealCause` has two new cases:
+  - `PiecesSpread { edge, bound, allowed }` is Refused: the pieces' spreads, added up, exceed the edge's reach.
+  - `Cut { edge }` is Unsupported: the cut knots do not make a curve.
+- `NeighbourKind` now means "neither a line nor a clamped NURBS curve". `FaceKind` also covers a NURBS edge on a face that is not a plane.
+
+How it works.
+- **Interval enclosures.** These come from scx-nurbs's control points and from SU6. RP2 adds no new enclosure.
+  - Squeezing a NURBS edge is decided with the convex-hull bound: every point of the curve is within the farthest control point's distance of the target. RP1 already took the smaller of this and the interval de Boor box (`eval_over`).
+  - The diameter has an upper bound from the control-point box and a lower bound from the check's 9 samples. The upper bound is what lets the bound be a `Bracket`.
+- **Control-point moves.**
+  - A NURBS edge at a cluster is first trimmed to its interval (`split`), so that each end is an end control point.
+  - The control point at the cluster moves to the target, and its weight is kept. Moving one point by `d` moves the curve by at most `d`, because the rational basis is a partition of unity.
+  - The other end comes from the state, so a vertex merged by an earlier item is already in place.
+- **Empty pieces.**
+  - An empty piece is an interior Bezier piece between two C0 joints (knots of multiplicity `p`) whose control points all lie within the edge's reach of the piece's first point.
+  - The cut keeps that first point. It drops the piece's other `p` points, which include the joint after it, removes the `p` copies of the end knot, and moves the later knots down by the piece's length.
+  - On a rational curve, every weight after the piece is scaled by `w[first] / w[joint]`. A rational piece whose weights all scale alike keeps its shape, so curves with unequal weights can be cut too. The pin required equal weights.
+  - Each cut moves the rest of the curve by at most the piece's spread. The spreads, added up, must stay within the edge's reach.
+- **Certified on SU6's gaps, with no GAP_SHARE.** A reshaped edge is accepted only when all of the following hold for the curve as it will be stored:
+  - each end is within `re + rv` of its vertex (`vertex_curve_gap`);
+  - the diameter's lower bound is above `re`;
+  - each use is on a plane;
+  - each new pcurve lifts within `min(re, rb)` of the curve (`pcurve_edge_gap`, `Aim::Decide`).
+
+  The new pcurve is the exact projection of the curve: the control points are projected, and the knots and weights are kept. An undecided gap that ran out of budget or was stopped gives `Exhausted` or `Stopped`. Any other undecided gap is `OffFace` with the bound reached.
+
+Decisions.
+- **No GAP_SHARE, as in RP1 (§13.15, decision 3).**
+  - For: the check gives each gap its own allowance, so a certificate against the check's own question needs no share, and a healed body passes the check by construction.
+  - Against: RP2 refuses some edges that the pin heals, namely those with `rb < re / 2`. That is the correct answer by the check.
+- **An empty piece is judged by the edge's reach, not the pin's `zone / 10`.**
+  - For: the check already treats points within the reach as one point (RP1's coincidence). A tenth of the zone is an arbitrary share, and the summed-spread rule keeps the cut within what the check allows.
+  - Against: the pin cuts fewer pieces on edges with a large accuracy. A piece the size of the accuracy that a user drew on purpose is now cut. However, it is a point at that accuracy, so the check cannot tell it from one.
+- **Unequal weights are cut by scaling the weights of the tail.**
+  - For: the cut is exact: the later pieces keep their shape, which the unit tests check bit for bit before the cut and within the spread after it.
+  - Against: the weights after the cut are no longer normalised to the pin's form, so a byte-for-byte comparison with the pin differs for rational curves (truth over pin).
+- **The pieces come before the clusters, and an edge already reshaped is not reshaped again.** A cluster on an edge whose pieces were cut re-ends the reshaped curve, so one edge can take both kinds of item (`an_empty_piece_and_a_cluster_on_one_hip`).
+- **End pieces are not cut.** Cutting an end piece would move a vertex, which is a cluster's job. Such a piece shrinks the edge's diameter, and if its vertices are within coincidence, RP1's cluster takes it.
+- **Deviation: NURBS edges are re-ended on plane faces only.** A NURBS edge on a curved face is `Unsupported(FaceKind)`. The exact pcurve on a cylinder or a NURBS surface needs a uv step that RP2 does not build. The 75 table row leaves this open, and the §13.15 note that "curved neighbours need SU6's gaps (RP2)" is only half done: the gaps are used, but only on planes.
+
+Open questions.
+- A use bound that holds a certificate (`PcurveOnSurface`) goes stale when a pcurve is rewritten. This is true of RP1's lines as well. The bound is kept, as in RP1, because the new pcurve is certified within it, but its basis record still names the old curve.
+- **scx-mass cannot measure these bodies.** A planar face bounded by NURBS pcurves has no box. The interval jet of a NURBS pcurve is too wide for the boundary's area sign to show: in the cubic case, at 64 parts per use, the derivative is still about 18 wide. So `Face::bounding_box` is `None`, and scx-mass refuses with `NoBox`. The tests therefore measure volume and area on dense polylines of the edge curves, which is exact for the input's straight segments and within `bound / 256^2` once healed. This is a gap in scx-nurbs's `jet_over`, or in scx-brep's area sign, and needs an owner: any body with NURBS edges on planes is affected, not only healed ones.
+- When RP3 lands, the NURBS dispatch in `re_end` needs RP3's `collapsed_edge` check, the same as the line dispatch. I expect merge conflicts in `heal()` and `step()`; RP2 mirrors RP3's `step` shape so that the conflicts stay mechanical.
+
+Work (release, a throwaway timer in the test module, since removed; mean of 200, hip roof with ridge `1e-4`):
+
+| body | `items` | `heal` | `check`, for scale |
+|---|---|---|---|
+| lines (RP1's path) | 4.3 us | 18 us | 125 us |
+| cubic hips | 0.8 us | 8.8 ms | 8.5 ms |
+| rational hips | 0.8 us | 25.8 ms | 25.7 ms |
+| one empty piece, no cluster | 0.8 us | 98 us | 223 us |
+| empty piece and cluster on one hip | 0.9 us | 7.1 ms | 6.8 ms |
+
+- For a NURBS hip, heal's time is SU6's `pcurve_edge_gap` on each reshaped use. That is the same lift gap the check itself runs on those uses, so a heal costs about one check.
+- On a line body, the added work is one walk over the edges in `items()`, which matches each shape and allocates nothing for a line, plus empty maps in `apply`. The lines row's `items` time is the first row run and includes the warm-up.
+
+Tests (none removed):
+- **3 unit tests in `heal/ends.rs`.** An empty piece is cut, with equal and with unequal weights: the domain shortens by the piece's length, the first piece is bit-equal, and the tail is within the spread. A piece past the reach is kept.
+- **7 tests in `tests/ends.rs`.** These are hip roofs whose hips are NURBS segments: cubic on uneven knots, and rational with uneven weights.
+  - Cubic and rational hips heal to the pyramid in every mode. Each heal is checked for:
+    - the check passing;
+    - no accuracy growing;
+    - counts of 5, 8 and 5;
+    - each hip ending at the apex within 1e-12;
+    - the volume within area times bound;
+    - no items remaining;
+    - the same result twice.
+  - A NURBS ridge is squeezed by the hull bound.
+  - A hip that needs more accuracy is refused as `OffFace` (Refused), and Skip mode skips it.
+  - An empty piece is cut: the domain becomes `.8`, 5 points remain, and the check and the volume are unchanged.
+  - An empty piece and a cluster on one hip both heal.
+  - An empty piece with one unit less than the budget it needs is `Exhausted { item: 0 }`.
+- **RP1's 8 tests in `tests/heal.rs` are unchanged and pass.**
+
+### 13.51 RP5 as built (11-28)
 
 The sew within a gap, `scx_repair::sew`, over a widened `scx_stitch` (ST5's `sew`).
 

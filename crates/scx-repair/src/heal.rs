@@ -32,6 +32,11 @@
 //! below it that did not, and one pass is the fixpoint of 01 §5.2's `Skip` mode: every
 //! skipped item is round 1.
 //!
+//! **B-spline ends** (RP2, [`ends`]). A NURBS edge at a cluster is re-ended by moving its
+//! end control point to the target, and an edge's empty interior pieces ([`EmptyPieces`])
+//! are cut, each certified on the check's own gaps; the pieces come first, as the pin cuts
+//! them before it squeezes. A squeezed NURBS edge is also bounded by its control points.
+//!
 //! [`Spread`]: HealCause::Spread
 //! [`TooLong`]: HealCause::TooLong
 //! [`NeighbourShort`]: HealCause::NeighbourShort
@@ -39,12 +44,14 @@
 //! [`OffFace`]: HealCause::OffFace
 //! [`NotClear`]: HealCause::NotClear
 
+mod ends;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use scx_brep::op::{Cx, Done, Report, Skipped};
 use scx_brep::{Brep, Changes, EdgeId, EdgeShape, FaceId, UseGeom, VertexId};
 use scx_curve::{Curve, Curve2, Line, Line2};
-use scx_num::budget::Budget;
+use scx_num::budget::{Budget, Stop};
 use scx_num::cert::Recorded;
 use scx_num::extent1d::Extent1d;
 use scx_num::interval::Ivl;
@@ -53,6 +60,8 @@ use scx_num::vector2d::Point2;
 use scx_num::vector3d::{Point3, Vec3};
 use scx_surface::{Bracket, Plane, Surface};
 
+pub use self::ends::EmptyPieces;
+use self::ends::Reshaped;
 use crate::error::{HealCause, RepairCause, RepairDefect, RepairError};
 
 /// What a heal does with an item that fails (01 §5.2).
@@ -75,6 +84,8 @@ pub enum OnItemFailure {
 pub enum Item {
     /// Vertices within coincidence joined by edges.
     Cluster(Cluster),
+    /// A NURBS edge's empty interior pieces (RP2).
+    Pieces(EmptyPieces),
 }
 
 /// Vertices joined by edges and within coincidence of each other, to be one vertex.
@@ -93,10 +104,15 @@ pub struct Cluster {
     pub target: Point3,
 }
 
-/// The heal's items for `body`, in order: each cluster by its lowest vertex id.
+/// The heal's items for `body`, in order: each edge's empty pieces by edge id, then each
+/// cluster by its lowest vertex id.
 #[must_use]
 pub fn items(body: &Brep) -> Vec<Item> {
-    clusters(body).into_iter().map(Item::Cluster).collect()
+    ends::empty_pieces(body)
+        .into_iter()
+        .map(Item::Pieces)
+        .chain(clusters(body).into_iter().map(Item::Cluster))
+        .collect()
 }
 
 /// Heals `body`: each [`Item`] done when every edit it makes is certified, in item order.
@@ -124,15 +140,16 @@ pub fn heal(
     budget
         .charge(found as u64)
         .map_err(|_| RepairError::Exhausted { item: 0, work: 0 })?;
-    let clusters = clusters(body);
-    let mut state = State::new(body);
+    let items = items(body);
+    let mut state = State::new(body, cx.stop);
     let mut failed: Vec<Skipped<HealCause>> = Vec::new();
-    for (item, cluster) in clusters.iter().enumerate() {
+    for (item, it) in items.iter().enumerate() {
         cx.stop.check().map_err(|_| RepairError::Cancelled)?;
         let before = budget.used();
-        match state.certify(cluster, &mut budget) {
-            Ok(Some(done)) => state.accept(cluster, done),
+        match state.step(it, &mut budget) {
+            Ok(Some(())) => {}
             Ok(None) => {
+                cx.stop.check().map_err(|_| RepairError::Cancelled)?;
                 return Err(RepairError::Exhausted { item, work: before });
             }
             Err(cause) => {
@@ -160,7 +177,7 @@ pub fn heal(
         ));
     }
     let work = budget.used();
-    if state.targets.is_empty() {
+    if state.targets.is_empty() && state.reshaped.is_empty() {
         let report = Report::new(Vec::new(), failed, Vec::new(), work);
         return Ok(Done::new(body.clone(), Changes::default(), report));
     }
@@ -436,10 +453,20 @@ struct Rebuilt {
     pcurves: BTreeMap<FaceId, Line2>,
 }
 
+/// What re-ending a cluster's edges found: the lines rebuilt, the NURBS edges re-ended,
+/// and the loops they are used in.
+struct ReEnded {
+    rebuilt: BTreeMap<EdgeId, Rebuilt>,
+    reshaped: BTreeMap<EdgeId, Reshaped>,
+    faces: BTreeSet<(FaceId, usize)>,
+}
+
 /// What an item's certification found to do.
 #[derive(Debug)]
 struct Plan {
     rebuilt: BTreeMap<EdgeId, Rebuilt>,
+    /// The NURBS edges it re-ends.
+    reshaped: BTreeMap<EdgeId, Reshaped>,
     /// The item's squeezed uses, by face and loop index.
     squeezed_uses: BTreeMap<(FaceId, usize), usize>,
 }
@@ -464,6 +491,9 @@ struct State<'a> {
     /// Every vertex as `(id, point, reach)`, binned for the clearance test.
     points: Vec<(VertexId, Point3, f64)>,
     grid: Grid,
+    stop: &'a Stop,
+    /// The NURBS edges re-ended or cut, as they now stand.
+    reshaped: BTreeMap<EdgeId, Reshaped>,
 }
 
 /// Charges `n` units, or returns `Ok(None)` from the enclosing certification.
@@ -479,7 +509,7 @@ macro_rules! charge {
 }
 
 impl<'a> State<'a> {
-    fn new(body: &'a Brep) -> Self {
+    fn new(body: &'a Brep, stop: &'a Stop) -> Self {
         let res = body.resolution();
         let points: Vec<(VertexId, Point3, f64)> = body
             .vertices()
@@ -497,7 +527,29 @@ impl<'a> State<'a> {
             rebuilt: BTreeMap::new(),
             points,
             grid,
+            stop,
+            reshaped: BTreeMap::new(),
         }
+    }
+
+    /// Certifies `item` against the items done and, when it is, does it; `Ok(None)` when
+    /// the budget runs out or the caller stops.
+    fn step(&mut self, item: &Item, budget: &mut Budget) -> Result<Option<()>, HealCause> {
+        match item {
+            Item::Cluster(c) => {
+                let Some(plan) = self.certify(c, budget)? else {
+                    return Ok(None);
+                };
+                self.accept(c, plan);
+            }
+            Item::Pieces(p) => {
+                let Some(r) = self.cut_pieces(p, budget)? else {
+                    return Ok(None);
+                };
+                self.reshaped.insert(p.edge, r);
+            }
+        }
+        Ok(Some(()))
     }
 
     /// The vertex `v` is now (its survivor, once merged) and where it is.
@@ -538,10 +590,14 @@ impl<'a> State<'a> {
         let Some(squeezed_uses) = self.squeezed(c, budget)? else {
             return Ok(None);
         };
-        let Some((rebuilt, faces)) = self.re_end(c, &members, budget)? else {
+        let Some(ReEnded {
+            rebuilt,
+            reshaped,
+            mut faces,
+        }) = self.re_end(c, &members, budget)?
+        else {
             return Ok(None);
         };
-        let mut faces = faces;
         faces.extend(squeezed_uses.keys().copied());
         if self
             .loops(c, &members, &faces, &squeezed_uses, budget)?
@@ -554,6 +610,7 @@ impl<'a> State<'a> {
         }
         Ok(Some(Plan {
             rebuilt,
+            reshaped,
             squeezed_uses,
         }))
     }
@@ -567,9 +624,17 @@ impl<'a> State<'a> {
             let Some(edge) = self.body.edge(e) else {
                 continue;
             };
-            if let EdgeShape::Curve { curve, interval } = edge.shape() {
-                let bound = enclosed_distance(curve, *interval, c.target)
-                    .ok_or_else(|| HealCause::NotFinite { at: e.into() })?;
+            if let Some((curve, interval)) = self.shape_now(edge) {
+                let not_finite = || HealCause::NotFinite { at: e.into() };
+                let mut bound =
+                    enclosed_distance(&curve, interval, c.target).ok_or_else(not_finite)?;
+                // A NURBS curve lies in its control points' hull: often the tighter bound.
+                if let Curve::Nurbs(n) = &curve
+                    && let Some(hull) = ends::hull_bound(n, c.target)
+                    && hull < bound.upper()
+                {
+                    bound = Bracket::new(bound.lower().min(hull), hull).ok_or_else(not_finite)?;
+                }
                 if bound.upper() > c.reach.mm() {
                     return Err(HealCause::TooLong {
                         edge: e,
@@ -585,20 +650,17 @@ impl<'a> State<'a> {
         Ok(Some(uses))
     }
 
-    /// Each edge at the cluster and not squeezed, rebuilt between its new ends and
-    /// certified; with the loops it is used in.
-    #[expect(
-        clippy::type_complexity,
-        reason = "a private step's result: the rebuilt edges and their loops"
-    )]
+    /// Each edge at the cluster and not squeezed, rebuilt between its new ends (a NURBS
+    /// edge re-ended by its control points) and certified; with the loops it is used in.
     fn re_end(
         &self,
         c: &Cluster,
         members: &BTreeSet<VertexId>,
         budget: &mut Budget,
-    ) -> Result<Option<(BTreeMap<EdgeId, Rebuilt>, BTreeSet<(FaceId, usize)>)>, HealCause> {
+    ) -> Result<Option<ReEnded>, HealCause> {
         let squeezed: BTreeSet<EdgeId> = c.edges.iter().copied().collect();
         let mut rebuilt = BTreeMap::new();
+        let mut reshaped = BTreeMap::new();
         let mut faces = BTreeSet::new();
         for &v in &c.vertices {
             let Some(x) = self.body.vertex(v) else {
@@ -606,10 +668,23 @@ impl<'a> State<'a> {
             };
             for e in x.edges() {
                 let id = e.id();
-                if squeezed.contains(&id) || rebuilt.contains_key(&id) {
+                if squeezed.contains(&id) || rebuilt.contains_key(&id) || reshaped.contains_key(&id)
+                {
                     continue;
                 }
                 charge!(budget, 1 + e.uses().count());
+                if let EdgeShape::Curve {
+                    curve: Curve::Nurbs(_),
+                    ..
+                } = e.shape()
+                {
+                    let Some(r) = self.re_end_nurbs(c, members, e, budget)? else {
+                        return Ok(None);
+                    };
+                    faces.extend(e.uses().map(|u| (u.face().id(), u.lp().index())));
+                    reshaped.insert(id, r);
+                    continue;
+                }
                 let EdgeShape::Curve {
                     curve: Curve::Line(_),
                     ..
@@ -687,7 +762,11 @@ impl<'a> State<'a> {
                 );
             }
         }
-        Ok(Some((rebuilt, faces)))
+        Ok(Some(ReEnded {
+            rebuilt,
+            reshaped,
+            faces,
+        }))
     }
 
     /// Each loop at the cluster keeps a use, three or more if they are all lines, and
@@ -778,6 +857,7 @@ impl<'a> State<'a> {
             *self.squeezed_uses.entry(k).or_default() += n;
         }
         self.rebuilt.extend(plan.rebuilt);
+        self.reshaped.extend(plan.reshaped);
     }
 
     /// The body with the done items' edits, finished.
@@ -789,12 +869,17 @@ impl<'a> State<'a> {
             d.vertex_mut(v).ok_or_else(defect)?.point = p;
         }
         let mut faces = BTreeSet::new();
-        for &e in self.squeezed.iter().chain(self.rebuilt.keys()) {
+        for &e in self
+            .squeezed
+            .iter()
+            .chain(self.rebuilt.keys())
+            .chain(self.reshaped.keys())
+        {
             let edge = self.body.edge(e).ok_or_else(defect)?;
             faces.extend(edge.uses().map(|u| u.face().id()));
         }
         for &f in &faces {
-            let (squeezed, rebuilt) = (&self.squeezed, &self.rebuilt);
+            let (squeezed, rebuilt, reshaped) = (&self.squeezed, &self.rebuilt, &self.reshaped);
             d.edit_face(f, |rec| {
                 for lp in &mut rec.loops {
                     lp.uses.retain(|u| !squeezed.contains(&u.edge));
@@ -803,6 +888,14 @@ impl<'a> State<'a> {
                             u.geom = UseGeom::Pcurve {
                                 curve: Curve2::Line(*pc),
                                 interval,
+                            };
+                        }
+                        if let Some(r) = reshaped.get(&u.edge)
+                            && let Some(pc) = r.pcurve(f, u.sense)
+                        {
+                            u.geom = UseGeom::Pcurve {
+                                curve: pc.clone(),
+                                interval: r.interval(),
                             };
                         }
                     }
@@ -815,6 +908,17 @@ impl<'a> State<'a> {
             g.shape = EdgeShape::Curve {
                 curve: Curve::Line(r.line),
                 interval,
+            };
+            g.ends = r.ends;
+        }
+        for (&e, r) in &self.reshaped {
+            if self.squeezed.contains(&e) {
+                continue;
+            }
+            let g = d.edge_mut(e).ok_or_else(defect)?;
+            g.shape = EdgeShape::Curve {
+                curve: Curve::Nurbs(std::sync::Arc::clone(&r.curve)),
+                interval: r.interval(),
             };
             g.ends = r.ends;
         }

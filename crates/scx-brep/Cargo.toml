@@ -11,6 +11,7 @@ publish.workspace = true
 [dependencies]
 scx-curve = { path = "../scx-curve" }
 scx-nurbs = { path = "../scx-nurbs" }
+scx-nurbs-surface = { path = "../scx-nurbs-surface" }
 scx-num = { path = "../scx-num" }
 scx-surface = { path = "../scx-surface" }
 

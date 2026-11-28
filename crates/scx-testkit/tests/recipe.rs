@@ -91,7 +91,8 @@ fn the_list_is_unique_stable_and_complete() {
             )
         })
         .count();
-    assert_eq!((built, manifold, ssi), (11, 0, 6));
+    // BO22 builds the three sphere touches (75 §13.39).
+    assert_eq!((built, manifold, ssi), (14, 0, 3));
     // BO4's five and BO5's six are the ones the plan names.
     for n in [
         "box-cyl-hole",
@@ -99,17 +100,13 @@ fn the_list_is_unique_stable_and_complete() {
         "sphere-and-box",
         "coplanar-union",
         "torus-minus-box",
-    ] {
-        assert!(matches!(by_name(&rs, n).outcome, Outcome::Built(_)), "{n}");
-    }
-    for n in [
-        "tpipe",
         "seam-cylinder-sphere",
         "off-seam-cylinder-sphere",
         "seam-torus-sphere",
-        "seam-torus-box",
-        "seam-vertex-torus-box",
     ] {
+        assert!(matches!(by_name(&rs, n).outcome, Outcome::Built(_)), "{n}");
+    }
+    for n in ["tpipe", "seam-torus-box", "seam-vertex-torus-box"] {
         assert!(
             matches!(
                 by_name(&rs, n).outcome,

@@ -8,7 +8,7 @@
 //!
 //! Removed on purpose, from the pin's tests: those that read a face back through the
 //! pin's surface-kind recogniser or its topological queries (`scx-bodyq`'s, step 6), and
-//! those on NURBS faces (`MK15b`: iso-curve extraction is not built).
+//! those on NURBS faces (`MK15b`: see `tests/face_nurbs.rs`).
 
 #![allow(
     clippy::unwrap_used,
@@ -18,7 +18,6 @@
 )]
 
 use core::f64::consts::{PI, TAU};
-use std::sync::Arc;
 
 use scx_brep::op::Scratch;
 use scx_brep::{Brep, Document, EdgeShape, FaceSide, UseGeom};
@@ -502,18 +501,4 @@ fn boxes_and_regions_off_the_surface_are_refused() {
         refused(face(&cyl, &Bound::Region(other), &d)),
         MakeError::Refused(Refusal::Resolution { .. })
     ));
-}
-
-/// A NURBS surface waits for iso-curve extraction (`MK15b`).
-#[test]
-fn a_nurbs_surface_is_unsupported_for_now() {
-    let over = Extent2d::from_bounds(0.0, 0.0, 1.0, 1.0).unwrap();
-    let n = Surface::Plane(Plane::new(plain())).to_nurbs(&over).unwrap();
-    let e = refused(face(
-        &Surface::Nurbs(Arc::new(n)),
-        &bx(0.0, 1.0, 0.0, 1.0),
-        &doc(),
-    ));
-    assert_eq!(e, MakeError::Unsupported(Unsupported::NurbsFace));
-    assert_eq!(e.name(), "nurbs_face");
 }

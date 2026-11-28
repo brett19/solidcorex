@@ -5,7 +5,8 @@
 //! - [`heal`] does each [`Item`] only when every edit it makes is certified within the
 //!   accuracies the body records, so the result is valid by construction and no accuracy
 //!   grows. RP1 builds the short-edge [`Cluster`]: vertices within coincidence joined by
-//!   edges, merged at one point, on lines and planes exactly.
+//!   edges, merged at one point, on lines and planes exactly. RP2 re-ends NURBS edges by
+//!   their end control points and cuts their [`EmptyPieces`], certified on the check's gaps.
 //! - [`sew`] makes one of each pair of open edges within a gap, over `scx-stitch` (RP5): the
 //!   kept edge's accuracy is the certified gap, recorded; a pair past it is
 //!   [`SewCause::TooFar`].
@@ -17,5 +18,5 @@ mod heal;
 mod sew;
 
 pub use error::{HealCause, RepairCause, RepairDefect, RepairError, SewCause};
-pub use heal::{Cluster, Item, OnItemFailure, heal, items};
+pub use heal::{Cluster, EmptyPieces, Item, OnItemFailure, heal, items};
 pub use sew::sew;

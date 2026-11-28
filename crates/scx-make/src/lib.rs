@@ -34,11 +34,13 @@ mod cylinder;
 mod error;
 mod extrude;
 mod face;
+mod face_nurbs;
 mod frames;
 pub mod loft;
 mod prism;
 mod radial;
 mod revolve;
+mod ruled;
 mod sheet;
 mod sheet_blend;
 mod sphere;
@@ -59,6 +61,7 @@ pub use frames::{
 pub use prism::{PrismFaces, prism};
 pub use radial::{RadialCone, RadialFaces, radial};
 pub use revolve::{RevolveFaces, RevolveSheetFaces, Turn, Wall, revolve, revolve_sheet};
+pub use ruled::{Join, RuledError, RuledRefusal, RuledSide, RuledUnsupported, Which, ruled};
 pub use sheet::{SheetFaces, sheet};
 pub use sheet_blend::{
     BlendSide, Contact, EdgeBlend, Fillet, FilletCrossing, FilletSection, FilletSheets, Round,

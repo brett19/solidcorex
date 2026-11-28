@@ -15,13 +15,12 @@
 
 use scx_brep::op::Settings;
 use scx_brep::{Brep, Document, FaceId};
-use scx_num::fmath;
 use scx_num::frame::Frame;
 use scx_num::units::Length;
 use scx_num::vector3d::Vec3;
 use scx_ssi::SsiError;
 use scx_surface::SurfaceKind;
-use scx_testkit::bodies::made::{block, cylinder, sphere, torus};
+use scx_testkit::bodies::made::{block, cylinder, torus};
 
 use super::{call, pt};
 use crate::{BooleanError, BooleanUnsupported};
@@ -89,47 +88,6 @@ fn tpipe_walls_of_unlike_radii_meet_in_a_quartic() {
         &b.body,
         [a.faces.wall, b.faces.wall],
         [SurfaceKind::Cylinder, SurfaceKind::Cylinder],
-    );
-}
-
-/// The pin's `seam-cylinder-sphere` and `off-seam-cylinder-sphere`: an r=2 h=10 cylinder
-/// about z and an r=3 sphere touching its wall at one point (a tangent contact), at
-/// (5, 0, 5) so on the cylinder's seam ruling (x axis side), and at (0, 5, 5) a quarter
-/// turn from it. The sphere's centre is 5 from the axis, not on it, so wall and sphere meet
-/// in a quartic (a closed form only coaxial). The seam only decides where the contact falls
-/// on the wall's uv, not the kind of pair: both cases name the same pair. The cylinder's
-/// caps are at z = 0 and 10, the sphere spans z in [2, 8]: no box meets.
-#[test]
-fn cylinder_sphere_off_axis_meets_in_a_quartic_on_the_seam_and_off_it() {
-    let doc = Document::default();
-    let c = cylinder(&frame([0.0; 3], Z, X), mm(2.0), mm(10.0), &doc).unwrap();
-    for centre in [[5.0, 0.0, 5.0], [0.0, 5.0, 5.0]] {
-        let s = sphere(&frame(centre, Z, X), mm(3.0), &doc).unwrap();
-        expect_ssi_pair(
-            &c.body,
-            &s.body,
-            [c.faces.wall, s.faces.face],
-            [SurfaceKind::Cylinder, SurfaceKind::Sphere],
-        );
-    }
-}
-
-/// The pin's `seam-torus-sphere`: an R=5 r=1.5 torus about z and an r=2 sphere centred
-/// 3.5 from the tube's centre circle at 45 degrees round its seam meridian, touching the
-/// tube at one point. A sphere not centred on the torus's axis meets it in a curve
-/// with no closed form here (no coaxial or plane-through-axis special case applies).
-#[test]
-fn torus_sphere_off_axis_meets_in_a_curve_with_no_closed_form() {
-    let doc = Document::default();
-    let t = torus(&frame([0.0; 3], Z, X), mm(5.0), mm(1.5), &doc).unwrap();
-    let a = core::f64::consts::FRAC_PI_4;
-    let centre = [5.0 + 3.5 * fmath::cos(a), 0.0, 3.5 * fmath::sin(a)];
-    let s = sphere(&frame(centre, Z, X), mm(2.0), &doc).unwrap();
-    expect_ssi_pair(
-        &t.body,
-        &s.body,
-        [t.faces.face, s.faces.face],
-        [SurfaceKind::Torus, SurfaceKind::Sphere],
     );
 }
 
