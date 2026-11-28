@@ -76,8 +76,13 @@ fn a_subdivided_block_grows_to_its_six_walls() {
                 }
                 assert!((gd - d).abs() < 1e-9);
             }
-            // Every edge of the wall is read once and proved once: 2 n (n + 1) edges.
-            assert_eq!(used, (4 * n * (n + 1)) as u64, "seed {seed} steps {n}");
+            // Every edge of the wall is read once and proved once (2 n (n + 1) edges), and
+            // each face reached is proved once against the seed's surface (BW8c): n^2 - 1.
+            assert_eq!(
+                used,
+                (4 * n * (n + 1) + n * n - 1) as u64,
+                "seed {seed} steps {n}"
+            );
             // The 4 n edges round the wall go to the faces of the next walls, at a crease.
             assert_eq!(r.stopped.len(), 4 * n);
             assert!(
@@ -302,4 +307,108 @@ fn a_small_budget_is_exhausted_and_leaves_nothing() {
     let f = ids(&b)[0];
     let err = faces_on_one_surface(&b, &[f], &[], &mut Budget::new(5), &Stop::new()).unwrap_err();
     assert!(matches!(err, BodyqError::Exhausted { .. }));
+}
+
+/// A chain of planes, each tilted a small fraction of `approx` from the last (about a line
+/// along the wall's edge, the wall's column `i` at `i d`), is not grown through: every pair
+/// of neighbours is within `approx`, and the growth stops at the first column whose plane is
+/// off the seed's plane (column 0) by more than `approx` over the face's box. The stop is
+/// the closed form `i d (|x| + r)` (the centre `x` from the pivot, `r` the half diagonal of
+/// the face), and every face stopped is `Drift` from the seed with that bound.
+#[test]
+fn a_drifting_chain_stops_where_the_cumulative_bound_is_crossed() {
+    let n = 10;
+    let b = solid(Kind::Block, 0, n);
+    let approx = b.resolution().approx().mm();
+    let f0 = ids(&b)[0];
+    let wall = grow(&b, &[f0], &[]).0.faces;
+    assert_eq!(wall.len(), n * n);
+    let Surface::Plane(p0) = b.face(f0).unwrap().surface().clone() else {
+        panic!()
+    };
+    let fr = p0.frame();
+    let (ox, oz) = (Vec3::from(fr.x()), Vec3::from(fr.z()));
+    let oy = oz.cross(ox);
+    let boxes: Vec<_> = wall
+        .iter()
+        .map(|&f| b.face(f).unwrap().bounding_box().unwrap())
+        .collect();
+    let along = |p: scx_num::vector3d::Point3| (p - fr.origin()).dot(ox);
+    let lo = boxes
+        .iter()
+        .map(|x| along(x.mid()) - 0.5 * x.size().dot(ox).abs())
+        .fold(f64::INFINITY, f64::min);
+    let cell = 1.0 / n as f64;
+    let col = |k: usize| ((along(boxes[k].mid()) - lo) / cell - 0.5).round() as usize;
+    // Pair bound a column apart is about `d (x + r)`, `x` up to 1 and `r` 0.07: put the
+    // cumulative bound past `approx` at about the sixth column.
+    let d = 0.17 * approx;
+    let angle = |c: usize| c as f64 * d;
+    let mut dr = b.edit();
+    for (k, &f) in wall.iter().enumerate() {
+        let t = angle(col(k));
+        let z2 = oz * scx_num::fmath::cos(t) + ox * scx_num::fmath::sin(t);
+        // The tilted plane through the pivot line, written on the point above the face's own
+        // origin so its (u, v) stay where they were.
+        let Surface::Plane(pf) = b.face(f).unwrap().surface().clone() else {
+            panic!()
+        };
+        let own = pf.frame();
+        let (ux, uz) = (Vec3::from(own.x()), Vec3::from(own.z()));
+        assert!((ux - ox).length() < 1e-12 && (uz - oz).length() < 1e-12);
+        let h = (own.origin() - fr.origin()).dot(ox) - lo;
+        let o2 = own.origin() + uz * (h * scx_num::fmath::tan(t));
+        let tilted = Frame::new(o2, z2, oy.cross(z2)).unwrap();
+        dr.edit_face(f, |rec| rec.surface = Surface::Plane(Plane::new(tilted)));
+    }
+    // The writer places a pcurve within `approx` of its surface and refuses beyond; the
+    // far columns keep the pcurves they had (the body is then off its recorded surface by
+    // under the zone `finish` accepts, as in the near-miss test).
+    for &f in &wall {
+        let _ = dr.write_pcurves(f, &Document::default());
+    }
+    let drift = dr
+        .finish(&Document::default())
+        .map_err(|u| u.cause)
+        .unwrap()
+        .0;
+    let seed = wall[(0..wall.len()).find(|&k| col(k) == 0).unwrap()];
+    // Closed form: column `c` is off the seed's plane by `c d (x_c + r)`, the face's
+    // centre `x_c` from the pivot plus the half diagonal of its box.
+    let r = 0.5 * boxes[0].size().length();
+    let bound = |c: usize| angle(c) * (cell * (c as f64 + 0.5) + r);
+    let first = (0..n).find(|&c| bound(c) > approx).unwrap();
+    assert!((2..n - 1).contains(&first), "{first}");
+    // Every neighbouring pair is within approx, so growth by neighbours alone would pass.
+    assert!(bound(n - 1) - bound(n - 2) < 0.7 * approx);
+    let (r0, used) = grow(&drift, &[seed], &[]);
+    let cols: Vec<usize> = r0
+        .faces
+        .iter()
+        .map(|f| col(wall.iter().position(|g| g == f).unwrap()))
+        .collect();
+    assert!(
+        !cols.is_empty() && cols.iter().all(|&c| c < first),
+        "{cols:?} {first}"
+    );
+    assert_eq!(r0.faces.len(), first * n, "{first}");
+    let drifts: Vec<_> = r0
+        .stopped
+        .iter()
+        .filter_map(|s| match s.why {
+            NotCrossed::Drift { seed: sd, why } => Some((sd, why)),
+            _ => None,
+        })
+        .collect();
+    assert!(!drifts.is_empty());
+    for (sd, why) in drifts {
+        assert_eq!(sd, seed);
+        let NotOneSurface::Apart(l) = why else {
+            panic!("{why:?}")
+        };
+        assert!(l.mm() > approx && l.mm() < 1.3 * bound(first), "{}", l.mm());
+    }
+    // Work: the edges of the columns reached plus their rim, read and proved, and one proof
+    // against the seed for each face reached or refused once.
+    assert!(used > 0);
 }
