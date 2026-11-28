@@ -29,6 +29,7 @@ use scx_hlr::{
 use scx_num::budget::{Budget, Stop};
 use scx_num::error::ErrorKind;
 use scx_num::extent1d::Extent1d;
+use scx_num::fmath;
 use scx_num::frame::Frame;
 use scx_num::frame::Sense;
 use scx_num::units::Length;
@@ -393,9 +394,13 @@ fn a_face_that_faces_for_a_sliver_of_its_rim_is_found_where_32_samples_miss_it()
     // from the nearest, so none lands on it. The top cap faces away (`cos b < 0`), so the
     // rim's outline is exactly that arc.
     let delta = 1e-3;
-    let b = f64::atan2(1.0, -2.0 * (1.0 - delta));
+    let b = fmath::atan2(1.0, -2.0 * (1.0 - delta));
     let f = TAU / 64.0;
-    let toward = v(b.sin() * f.cos(), b.sin() * f.sin(), b.cos());
+    let toward = v(
+        fmath::sin(b) * fmath::cos(f),
+        fmath::sin(b) * fmath::sin(f),
+        fmath::cos(b),
+    );
     let cn = cone(
         &Frame::WORLD,
         [mm(2.0), mm(1.0)],
@@ -405,7 +410,7 @@ fn a_face_that_faces_for_a_sliver_of_its_rim_is_found_where_32_samples_miss_it()
     .unwrap()
     .body;
     let o = run(&cn, &view(-toward));
-    let theta0 = (1.0 - delta).acos();
+    let theta0 = fmath::acos(1.0 - delta);
     let top: Vec<_> = o
         .stretches
         .iter()
@@ -420,7 +425,7 @@ fn a_face_that_faces_for_a_sliver_of_its_rim_is_found_where_32_samples_miss_it()
         2.0 * theta0
     );
     for q in s.ends {
-        let a = q.y.atan2(q.x);
+        let a = fmath::atan2(q.y, q.x);
         assert!(((a - f).abs() - theta0).abs() < 1e-9, "{a}");
     }
     // The bottom rim (radius 2): the bottom cap faces (`-cos b > 0`) and the wall only on
@@ -588,7 +593,7 @@ fn coaxial_cylinders_seen_along_their_axis_draw_one_circle() {
         let Image2::Conic { start, weight, .. } = c else {
             panic!("{c:?}")
         };
-        assert!((start.x.hypot(start.y) - 2.0).abs() < 1e-12);
+        assert!((fmath::hypot(start.x, start.y) - 2.0).abs() < 1e-12);
         assert!((weight - FRAC_1_SQRT_2).abs() < 1e-12);
     }
     let once = drop_coincident(curves.clone(), 1e-9);
@@ -798,12 +803,15 @@ fn nurbs_rims_and_freeform_faces_are_named_not_sampled() {
     // where the wall's facing changes along them is not found in closed form yet.
     let (body, bottom) = trimmed(0.5, true);
     let o = run(&body, &view(v(1.0, 0.3, 0.2)));
-    assert!(o.stretches.is_empty(), "{o:?}");
-    assert!(
-        o.undecided.iter().any(|u| u.edge == bottom
-            && u.why == OutlineUndecided::Cuts(scx_hlr::Undecided::NurbsEdge { edge: bottom })),
-        "{o:?}"
-    );
+    // Only its two straight edges are decided; the NURBS rims are named.
+    let undecided: Vec<_> = o.undecided.iter().map(|u| u.why).collect();
+    assert_eq!(o.undecided.len(), 2, "{o:?}");
+    assert!(undecided.iter().all(|w| matches!(
+        w,
+        OutlineUndecided::Cuts(scx_hlr::Undecided::NurbsEdge { .. })
+    )));
+    assert!(o.undecided.iter().any(|u| u.edge == bottom));
+    assert!(o.stretches.iter().all(|s| s.edge != bottom));
     // The same net without weights is no quadric: every edge names the face.
     let (body, _) = trimmed(0.5, false);
     let o = run(&body, &view(v(1.0, 0.3, 0.2)));
