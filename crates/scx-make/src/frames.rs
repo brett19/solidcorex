@@ -370,6 +370,19 @@ impl Path {
         ends.is_some_and(|(a, b)| a.distance(b) <= doc.resolution().zone().mm())
     }
 
+    /// The angle the unit tangent turns through along the pieces, corners not included
+    /// (radians): an arc's angle, a helix's `angle a / sqrt(a^2 + b^2)`, a line's 0.
+    pub(crate) fn tangent_turn(&self) -> f64 {
+        self.pieces
+            .iter()
+            .filter_map(|m| m.piece.screw())
+            .map(|s| {
+                let a = s.radial.length();
+                s.angle * a / fmath::hypot(a, s.rise)
+            })
+            .sum()
+    }
+
     fn fraction_of_start(&self, i: usize) -> Option<f64> {
         self.pieces.get(i).map(|m| m.start / self.total)
     }
