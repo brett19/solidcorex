@@ -213,6 +213,7 @@ fn pole_vs(s: &Surface) -> Vec<f64> {
     match s {
         Surface::Sphere(s) => s.poles().iter().map(|p| p.v).collect(),
         Surface::Cone(c) => vec![c.pole().v],
+        Surface::Torus(t) => t.pole().map(|p| p.v).into_iter().collect(),
         _ => Vec::new(),
     }
 }
@@ -275,7 +276,12 @@ fn loops(d: &Draft, tol: Tolerance) -> BTreeSet<Invariant> {
                     if whole {
                         out.insert(Invariant::PeriodJump);
                     }
-                } else if gap[1].abs() <= tol.uv && poles.iter().any(|&v| (a.y - v).abs() <= tol.uv)
+                } else if gap[1].abs() <= tol.uv
+                    && poles.iter().any(|&v| {
+                        // A pole a period away in a periodic `v` (a horn torus's) is the pole.
+                        let d = a.y - v;
+                        periods[1].map_or(d, |p| d - p * (d / p).round()).abs() <= tol.uv
+                    })
                 {
                     out.insert(Invariant::PoleGap);
                 } else {
