@@ -1794,3 +1794,26 @@ the bit-for-bit comparison above and the line just off a plane. None removed.
 
 Open: curved bounds (a cylinder's ruling and parallel have closed forms too) if a caller's
 curved facts show up in profiles; BO22 reuses `OnSurface` and `Fact` for tangent pairs.
+
+### 13.11 MK15 as built (11-28)
+
+`scx_make::face(&Surface, &Bound, &Document) -> Result<Made<FaceId>, MakeError>` makes a
+sheet of one face on a plane, cylinder, cone, sphere or torus; `Bound` is `Box(Extent2d)` or
+`Region(Region)` (in uv). Code in `scx-make/src/face.rs`; tests in `tests/face.rs` (8).
+
+- **The uv is the pin's, not the angle.** Every turned kind's `u` (and a sphere's or torus's
+  `v`) is a rational quadratic parameter, one arc per quarter turn, so an iso circle's
+  sweep is `Arcs::angle(u1) - Arcs::angle(u0)`, not `2 pi du`. The first build assumed
+  proportional and the writer refused the loop (`LoopOpen`); the closed forms in the tests
+  take their angles from the surface's own points (`atan2`, heights), not from `Arcs`.
+- **Box.** Handles a whole period (the seam is one edge used twice), a pole (sphere
+  `v = 0` or `1`, cone apex: a collapsed edge; snapped within 1e-12) and a torus's both
+  ways, so the constructors' whole faces are boxes (`[0,1]x[0,1]` torus: 1 vertex, 2 edges).
+- **Region.** On a plane it is `sheet` of the region (arcs exact). Elsewhere only lines
+  along `u` or `v` are iso-lines, so any other segment, and any on a pole, is
+  `Unsupported::Segment`; extent past a period or the domain is `Refusal::UvBox`.
+  Case for also taking arcs in uv on a cylinder (helices, ellipses): not exact, so not
+  built; they would need the fitted writer.
+- **NURBS** is `Unsupported::NurbsFace` until MK15b.
+- Errors added: `Refusal::UvBox`, `Unsupported::NurbsFace`.
+- Not ported: the pin's face-reading tests (step 6) and NURBS faces (MK15b).
