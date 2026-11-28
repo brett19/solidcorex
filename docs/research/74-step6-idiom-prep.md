@@ -2441,7 +2441,7 @@ built inside `read` (crate-private `products::tree`), so the units a body was re
 | Which side of a relationship is the child: "rep_1 unless only rep_2 is in the child's closure", so neither or both fall to rep_1 | exactly one side must be in the child's representations, else `NotAboutChild` |
 | Several relationships on one occurrence: the first | equal maps are one placement, different ones `Several` |
 | Degenerate or singular frame: a `String` error refuses the whole file | `Unplaced::Degenerate{entity}`, the file is read; `inverse` is `Affine::inverse` (regular proved, not a `det == 0.0` test) |
-| Absent reference direction: x chosen as global X unless `|z.x| >= 0.9`, then Y | ISO 10303-42's rule: +Z made square to the axis, +X where the axis is along Z |
+| Absent reference direction: x chosen as global X unless `|z.x| >= 0.9`, then Y | ISO 10303-42's `first_proj_axis`: +X made square to the axis, +Y where the axis is along X (corrected by SP2, §29.4: SP8 first wrote +Z, then +X, from memory) |
 | Operator axes: unit-length as written, not made square | ISO `base_axis`: Z from axis3, X and Y made square to it, so a skew operator is not read as a shear (a mirrored one stays a mirror) |
 | A body shared by representations with different length units: not said (SP1 left it to SP8) | scaled by the ratio of the lengths, relative to the representation it was read in; a representation with no usable length unit is `Unplaced::Units`, never mm |
 | Plain relationships followed one hop from a mapped item, full closure from a definition | full closure in both; a relationship that is an occurrence's own placement is not a "same shape" link (the pin's closure took it for one) |
@@ -2466,6 +2466,9 @@ rather than read.
   +Z, then +X; the standard's text is not in the repo, and the case of an axis along -Z, where
   +Z is parallel to it and the standard's text has no x, takes +X as the same rule). The two
   agree for an axis along Z and differ for others (axis +X: ISO gives x = +Z, the pin +Y).
+  **Corrected by SP2 (§29.4):** the standard's `first_proj_axis` takes `[1, 0, 0]`, and
+  `[0, 1, 0]` when the axis's ratios are `[1, 0, 0]` or `[-1, 0, 0]`. That is the pin's rule
+  without its 0.9 threshold. `products.rs` now uses the same `default_ref` as the geometry.
   Files that omit the direction on a tilted axis are written by tools that mean the standard's.
   Reversible: one function (`default_ref`). Needs a corpus file with an omitted direction on a
   tilted axis to confirm.
@@ -3142,6 +3145,167 @@ G0 must enclose a gap below 1e-6 mm, so it splits the circle into about 30 piece
 ### 25.7 Proposed 04 row
 
 | 11-27 | (For the owner's review) **BW4: `tangent_all_along` and `continuity` in scx-bodyq.** Both read each analytic face's normal field at the edge curve's point (closed form; no pcurve), oriented coherently by the fins' senses. `tangent_all_along(&Brep, EdgeId, max_angle, &mut Budget, &Stop) -> Tangency { Tangent{bound} \| NotTangent{at, angle} \| Undecided{at, angle} }` is proved over Taylor-model pieces under one budget, refuted by a certified bracket, and has no split cap. `continuity(.., &ContinuityTolerances, ..) -> Continuity { proved: Option<Order>, limit: Option<Limit>, measured: [Measured; 5] }` proves G0 to G4 in turn (gap, angle, and the jumps of the normal section's curvature, its rate and its rate's rate from the implicit equation) and reports the first order not proved as Refuted or Undecided. The drops are measured apart from the proof at 9 stations. A seam of one analytic surface is G4 by identity, so SU6b is needed only for NURBS seams. NURBS faces are `Unsupported(Nurbs)`; NURBS edge curves work, cut at their knots. New refusals: Tolerance, OneSided, Collapsed. Edges: none (scx-planar as a test-only dev-dependency) | 74 §25 |
+
+## 29. SP2 as built (11-27)
+
+`scx-step` builds the analytic subset: a body of planes, cylinders, cones, spheres and tori
+bounded by lines, circles, ellipses, parabolas and hyperbolas is made from the read's plan
+(`crates/scx-step/src/build.rs`, `geom.rs`, `import.rs`). Every other kind is a typed pending
+error. Cargo edges added: `scx-brep`, `scx-check`, `scx-curve`, `scx-mass`, `scx-surface`
+(the row named check, mass and surface; brep and curve are added because the build fills a
+`Draft` and makes the edge curves). `scx-brep` gains one query, `FaceRecord::is_bounded_region`.
+21 new tests in `crates/scx-step/tests/analytic.rs` and 3 unit tests in `geom.rs`, all on
+synthetic files checked against closed forms; the 34 SP1 and SP8 tests stay, one with a
+corrected expectation (§29.4).
+
+### 29.1 Public API
+
+```rust
+pub fn build(ex: &Exchange, body: &ImportedBody, cx: &mut Cx<'_>) -> Result<Built, BuildError>;
+pub fn import(ex: &Exchange, opts: &ReadOptions, cx: &mut Cx<'_>) -> Result<Import, StepError>;
+pub struct Built { entity, name, kind, body: Brep, raised: Vec<Raise>, notes: Vec<Note>,
+                   findings: Findings, faces: Vec<(u64, FaceId)>, edges, vertices }
+pub struct Unbuilt { entity: u64, why: BuildError }
+pub struct Import { read: Imported, built: Vec<Built>, unbuilt: Vec<Unbuilt> }
+pub enum Note { TurnedFace{face}, TurnedEdge{edge}, TurnedShell{shell}, PastRatio{entity, ratio} }
+pub enum Waits { BSplineCurve, BSplineSurface, Polyline, OffsetCurve, OtherCurve, Revolution,
+                 Extrusion, OffsetSurface, DegenerateTorus, TrimmedSurface, OtherSurface,
+                 Seamless, VertexLoop, PcurveFit, NonManifold, NurbsGap }
+pub enum GeomCause { Placement, Curve(CurveError), Surface(SurfaceError) }
+pub enum BuildError { Pending{entity, waits}, Malformed, Geometry{entity, cause},
+                      Degenerate{edge}, Undecided{entity, gap, reached}, Gap{entity, cause},
+                      Pcurve{face, cause}, NotOrientable{shell}, Flat{shell},
+                      Unfinished(FinishCause), Mass{shell, cause}, Check, TableFull }
+// scx-brep
+impl FaceRecord { pub fn is_bounded_region(&self) -> Option<bool> }
+```
+
+Each `BuildError` has `kind()` (01 §5: `Pending` is `Unsupported`, `Undecided` `Exhausted`,
+the file's faults `Refused`) and a stable `name()`; each `Waits` names its task. `import`
+builds each body the read lists once, gives the ones that fail as `Unbuilt` with their cause,
+and adds every built body's raises to `ImportReport::raised` in entity order. The caller
+places them with `ProductTree::placed`.
+
+### 29.2 The build, against the pin
+
+| Pin (`solidcore-step` topology read and build) | Here |
+|---|---|
+| Vertices within a tolerance joined into one | none joined: the file's sharing is the topology. Two vertices at one point stay two, and the edges and faces that use them say whether the body closes |
+| An edge's accuracy from the file's uncertainty or a sampled distance | the certified enclosure of curve-to-surface for each face that uses the edge, and vertex-to-curve for each end. Within the zone: no accuracy. Past it: the bound is recorded, a `Raise` where it is past the stated uncertainty (R3), a `Note::PastRatio` past `MAX_ACCURACY_RATIO`. A straddle is `Undecided` (R2) |
+| Face sense from `same_sense` | from `same_sense`, checked against the proved region sign of its loops on faces with a marked outer bound or on a plane; a disagreement keeps the loops and turns the face (`Note::TurnedFace`) |
+| The outer loop: the `FACE_OUTER_BOUND`, else the first | the marked one, else the one loop whose region alone is bounded |
+| Pcurves from the file's `PCURVE`s where given | not read: the exact writer gives each use its closed-form pcurve, with a collapsed edge at each joint at a pole; an edge with no closed form waits (`PcurveFit`) |
+| Orientation from the file as written | parity within each shell (an odd cycle refused), then the certified volume sign of each solid shell; a negative one turns the shell (`Note::TurnedShell`), a zero one is `Flat` |
+| Unknown kinds: skipped or `String` errors | typed `Pending{entity, waits}`; nothing of the body is kept |
+
+### 29.3 Choices, with cases for and against
+
+- **No vertex joining.** For: joining by distance is a heal (the read never heals, §6), and
+  a file that writes two vertices at one point says they are two; a later `scx-stitch` (SP4)
+  closes gaps on request. Against: files from careless writers that duplicate vertices fail to
+  close (`Unfinished`) where the pin's join would have built them. That is the right result
+  under the rulings, and SP4's `closing_gaps` is the remedy.
+- **`VERTEX_LOOP` waits.** A cone or sphere whose bound reaches the apex by a vertex loop has
+  no edge for the writer's pole joint; building it needs a collapsed edge the file did not
+  give and a loop the writer does not take today. For: honest, rare in exporter output (they
+  write the seam to the apex). Against: one more pending kind; the fix belongs to the writer.
+- **A collapsed edge at every joint at a pole, added before writing.** First tried as a retry
+  after the writer said `Winds`; a seam-only sphere then put both seam uses at one u (zero
+  area) and the check refused it. Adding it at each pole joint up front gives the writer the
+  turn it needs and costs one edge per pole. For: the body is the standard's (a pole is a
+  collapsed edge in the kernel's model). Against: the edge count is not the file's;
+  `Built::edges` lists the file's edges only, so a caller mapping entities is not misled.
+- **Outer loop by region sign when none is marked.** For: `FACE_BOUND` alone is valid
+  (ISO allows it) and the first-loop rule is a failing default. Against: costs one sign per
+  loop on such faces; a face where no single loop bounds a region (a cylinder band) keeps the
+  file's order, which is what the writer needs there.
+- **Turned faces, edges and shells are notes, not errors.** For: the topology and the vertices
+  are the stronger data; a flag that disagrees with them is the writer's slip, and the note
+  says what was changed. Against: a caller that wants a strict read must look at `notes`.
+- **Trims are not read; edges are bounded by their vertices.** For: Part 42 says the edge's
+  extent is its vertices; trims of a `TRIMMED_CURVE` basis repeat them, sometimes wrongly.
+  Against: a file whose vertices are worse than its trims gets a larger raise. The raise is
+  recorded.
+- **Gap claim `Claim::CurveToIntersection`.** The gap of an edge curve to one face's surface is
+  recorded under the existing intersection claim. A `Claim::CurveToSurface` would say it
+  exactly; proposed for the owner (it is a `scx-num` change outside this row).
+- **Each body built once.** The product tree's placements are maps; building per instance
+  would repeat the work and make equal bodies differ by rounding.
+
+### 29.4 Correction to SP8: the default reference direction
+
+SP8 wrote `first_proj_axis` from memory (+Z, then +X). The standard's EXPRESS text gives
+`dummy_gri || direction([1.0, 0.0, 0.0])`, and `[0.0, 1.0, 0.0]` when the axis's ratios are
+`[1, 0, 0]` or `[-1, 0, 0]`. `geom::default_ref` is that rule, and `products.rs` uses it for
+part placements and operator axes. The SP8 test for an axis along +X now expects x = +Y
+(it expected +Z); the -Z case is unchanged. This matches the pin's rule without its 0.9
+threshold.
+
+### 29.5 Against CF2a
+
+CF2a (§28) merged while this row was built; the build is now checked by its certified gaps under
+`Scope::Import`. Every edge and vertex accuracy on an imported body is a certified enclosed gap
+or none, so its allowances (the ball and the tube, `max(acc, zone)`) hold by construction. All
+21 analytic bodies give no findings and no undecided items. That includes the two raised
+cubes: a vertex 1e-3 mm off and one 0.05 mm off, past the ratio at 5,000 zones, where a wide
+accuracy is a recorded fact under `Import`, not a finding. A finding on an imported analytic
+body is a bug in the gap, the record or the check.
+The figures in §29.7 include CF2a's check.
+
+### 29.6 Tests
+
+`analytic.rs` (21): a cube in each style (six faces, twelve edges, eight vertices, volume);
+faces and edges written against their sense are read by their loops and vertices (notes); two
+vertices at one point are not joined; a vertex off its edges is raised to its gap; a raise past
+the accuracy ratio is made and noted; a cylinder's seam is used twice; a ball bounded by its
+seam alone; a cone with its seam to the apex is a third of its cylinder; a cone reaching its
+apex through a vertex loop waits; a plate with a through hole (marked and unmarked outer); a
+solid with a void; a void written inside out is turned by its volume sign; a surface model of
+open shells is a sheet; parabola and hyperbola edges bound faces; an inch file is built in
+millimetres; a torus is one face bounded by its two seams (volume 2 pi^2 R r^2); building twice
+gives the same body; a spline edge waits; `import` builds each body once and lists the rest;
+an edge of three faces waits; an edge of no length is refused. `geom.rs` (3): the standard's
+default reference direction, a negative focal distance keeps the points, swept kinds wait by
+name. No test was removed. The pin's STEP topology tests read real exporter files whose
+licences are unverified (§7); their cases are rebuilt as the synthetic files above.
+
+### 29.7 Measurements
+
+A throwaway timer (never committed; release, a loaded machine, best of 5, 3 for the largest) on
+generated plates with n x n through holes, `scx_step::import` against the pin's `read_solids`.
+The pin's read only reads the records; `import` also encloses every gap, writes the pcurves,
+orients, finishes and runs the import check, so it does more work on the same file. The two
+`import` columns are before and after main's CF2a (§28) was merged, which replaced the check's
+gap questions with certified ones.
+
+| File | Faces | `import`, SU6-era check | `import`, CF2a check | pin `read_solids` | ratio after |
+|---|---|---|---|---|---|
+| 1 hole | 7 | 2.77 ms | 18.0 ms | 2.29 ms | 7.8 |
+| 4 holes | 22 | 13.8 ms | 331 ms | 16.2 ms | 20.5 |
+| 25 holes | 106 | 80.4 ms | 1,449 ms | 86.6 ms | 16.7 |
+| 100 holes | 406 | 273 ms | 6,307 ms | 386 ms | 16.3 |
+
+Both are linear in the holes. A split with a second throwaway timer on the 4-hole plate:
+the check takes 221 ms of the 250 ms import, and the build's own certified gaps take 4 ms. So
+the added work is the check's, which proves again every gap the build has just enclosed
+(about 15 ms a hole: four circles on their cylinders and planes). A profile was not taken (the
+machine does not allow `perf` events).
+
+### 29.8 Open questions
+
+- `Claim::CurveToSurface` for the edge gap (above).
+- `VERTEX_LOOP` at an apex: the writer would need to take a loop of one collapsed edge.
+- Seamless faces (a loop that winds without a seam): adding a seam changes the file's
+  topology; is that SP4's, or the writer's?
+- **The import check costs 16-20 times the pin's read** (§29.7), and almost all of it is CF2a's
+  gaps proving again what the build has just certified. Options for the owner: the check could
+  take a gap the build recorded with its `Cert` as decided; `import` could offer the check as a
+  separate call; or CF2a's curved-edge cost (its §28.9, open) could come down. Until one of these
+  is decided, `import` runs the full check as the row asks.
+
+### 29.9 Proposed 04 row
+
+| 11-27 | (For the owner's review) `scx_step::{build, import}` build the analytic subset (planes, cylinders, cones, spheres, tori; lines and conics) from the read's plan: the file's sharing is the topology (no vertex joining), each edge and vertex gap enclosed and, past the file's uncertainty, raised and recorded (R3; `Note::PastRatio` past the ratio), exact pcurves with a collapsed edge at each pole joint, parity then the certified volume sign (R4), and the import check. Disagreeing `same_sense` flags are turned and noted, not refused. NURBS, swept, offset, vertex-loop, seamless and non-manifold cases are typed `BuildError::Pending(Waits)`. Edges: brep, check, curve, mass, surface | Joining by distance and trusting flags over topology are heals and failing defaults; certified gaps make every accuracy a proof | 74 §29 |
 
 ## 28. CF2a as built (11-27)
 

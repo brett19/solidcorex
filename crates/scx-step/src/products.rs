@@ -519,17 +519,6 @@ fn vec(v: [f64; 3]) -> Vec3 {
     Vec3::new(v[0], v[1], v[2])
 }
 
-/// ISO 10303-42's `first_proj_axis` default: where a direction is absent, +Z, and +X where the
-/// axis is itself along Z (the standard's text names only +Z; the choice for -Z is the same
-/// reading, since +Z would be parallel to it).
-fn default_ref(z: Vec3) -> Vec3 {
-    if Vec3::Z.cross(z).normalized().is_some() {
-        Vec3::Z
-    } else {
-        Vec3::X
-    }
-}
-
 /// `AXIS2_PLACEMENT_3D`: Z from `axis` (+Z when absent), X the reference direction made square
 /// to it (ISO 10303-42's default when absent). `None` for a direction with no length or a
 /// reference along the axis.
@@ -538,7 +527,9 @@ fn placement(p: &Placement) -> Option<Affine> {
     let z = p
         .axis
         .map_or(Some(Vec3::Z), |a| Some(*vec(a).normalized()?))?;
-    let hint = p.ref_direction.map_or_else(|| default_ref(z), vec);
+    let hint = p
+        .ref_direction
+        .map_or_else(|| crate::geom::default_ref(z), vec);
     Some(scx_num::frame::Frame::new(origin, z, hint)?.to_affine())
 }
 
@@ -555,7 +546,10 @@ fn operator(o: &Operator) -> Option<Affine> {
         let v = to.iter().fold(v, |v, &t| v - t * v.dot(t));
         v.normalized().map(|u| *u)
     };
-    let x = square(o.axis1.map_or_else(|| default_ref(z), vec), &[z])?;
+    let x = square(
+        o.axis1.map_or_else(|| crate::geom::default_ref(z), vec),
+        &[z],
+    )?;
     let y = square(o.axis2.map_or(Vec3::new(0.0, 1.0, 0.0), vec), &[z, x])?;
     let s = o.scale.unwrap_or(1.0);
     let (sx, sy, sz) = (s, o.scale2.unwrap_or(s), o.scale3.unwrap_or(s));
