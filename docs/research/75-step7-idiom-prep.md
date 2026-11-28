@@ -1657,3 +1657,43 @@ Tests:
 - In-module: 3 tests (brute force over the module's costs, the half disc's closed-form area and
   centroid, and the band counterexample).
 - None removed.
+### 13.9 BO17 `planar` as built (11-28)
+
+`scx_boolean::planar(a, b, op, cx)` (module `planar.rs`, tests in `planar/tests.rs`). It reads
+each face of each operand as a `scx_planar::Region` in the plane of `a`'s first face, builds the
+arrangement of the two boundaries and builds the result as a sheet of planar faces in a new
+draft, loops given exact pcurves by `Draft::exact_loops`. No stitch (Q2), no 3-D stage.
+
+Decisions where 75 left a choice:
+
+- **Selection by sides, not by cells.** Every piece between cuts is grouped with the pieces on
+  the same curve; each group knows the faces of each operand on its left and right (from the
+  operands' own uses, whose loops keep material on the left, else by `Region::classify` of its
+  midpoint). The result's boundary is the groups whose left and right differ in the operation's
+  answer. For: no angular ordering is needed to decide anything but loop tracing; coincident
+  and shared edges fall out; an operand of several faces sharing edges is its union. Against:
+  a midpoint on an operand's boundary the other's pieces do not name is `PlanarUndecided`.
+- **Arcs in pieces of a quarter turn or less** (a circle is four), each with its exact rational
+  quadratic for `crossings` (which takes no arc past a half turn). The cut points of a meet are
+  moved onto both curves by the closed form (line-line, line-circle, circle-circle, nearest
+  root to the certified point): the certified `at` was 1e-6 off, which showed as 4e-8 relative
+  area error. Joined back by chain at degree-2 vertices on one line or circle, so a union of two
+  rectangles has 4 edges, a lens 2, a whole circle 1.
+- **Tracing**: at a vertex with several kept pieces leaving, the first met turning clockwise
+  from the way back, ties (within 1e-9 rad) by larger signed curvature. This is the one angle
+  tolerance; it only orders pieces already known to leave one vertex.
+- **One shell per result face** (a sheet shell must be connected; `finish` refuses a shell of
+  faces apart or empty). An empty answer is a body with no faces.
+- **Fresh draft, not `a.edit()`**: the result is mostly new faces and edges; lineage is
+  `Origin::Operand(0|1, face)` for every face on the left of a result face's boundary.
+  Edge and vertex lineage are Free.
+- **Result plane** is `a`'s first face's frame (`b`'s when `a` has none); faces of `b` in the
+  opposite frame are the same set.
+- New errors: `Refused(NotCoplanarSheet)`, `Refused(BadProfile)`, `Unsupported(PlanarEdge)`,
+  `Unsupported(PlanarUndecided)`.
+
+Known limit: a result face whose hole touches its outer loop at a point (a disc tangent inside
+a plate, subtracted) is not a `Region` and is `PlanarUndecided`; the answer needs a face with a
+pinched loop, which `scx-planar` does not take. Two rectangles touching at a corner are fine; two discs tangent from outside are `PlanarUndecided` (open: not yet separated into the certified crossings of two tangent quarter arcs or the midpoint test).
+Cost: all pairs of atoms with meeting boxes are crossed (quadratic in the worst case; the
+perforated plate of 16 discs, about 80 atoms a side, runs in 0.3 s in debug).

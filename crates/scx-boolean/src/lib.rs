@@ -55,12 +55,14 @@ mod imprint_op;
 mod intersect;
 mod pairs;
 mod pinch;
+mod planar;
 mod points;
 
 pub use boolean::{BooleanOp, NoItems, boolean};
 pub use error::{BooleanDefect, BooleanError, BooleanRefusal, BooleanUnsupported};
 pub use imprint_op::{Imprint, imprint};
 pub use intersect::intersect;
+pub use planar::planar;
 
 #[cfg(test)]
 mod tests;
