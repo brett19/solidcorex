@@ -5183,6 +5183,142 @@ The sphere is the exception of 39.3.2.
 
 | 11-28 | (For the owner's review) ST4: truth tests for the stitch. Every testkit recipe (block, prism, cylinder, cone, sphere, torus, holed, cavity) and cube Booleans exploded to faces and stitched back is the same solid: counts, closed-form volume and area, `contract`; a sheet moved 0.45 of the coincidence stitches and 1.1 leaves the typed `NotSolid { Open }`; permuted input gives identical geometry. Found: a join 0.5 to 1.0 of the coincidence off the face is `Unsupported(Fit)` (rows ST4a, ST4b follow) | stitch → boolean, → check (dev only) | 74 §39 |
 
+## 40. ST4a as built (11-28)
+
+A join the stitch proved within the coincidence (the zone, `Resolution::coincidence`) but
+past the exact pcurve writer's tolerance (`Resolution::approx`, half the zone) is no longer
+refused `Unsupported(Edges { why: Fit })`: the absorbed face keeps its geometry and its use of
+the kept edge gets the pcurve of the kept curve's closest-point projection onto the face, the
+use's bound recording the certified gap that pcurve's image leaves from the curve. Changed:
+`scx-surface` (`pcurve_of_projection`), `scx-brep` (`Draft::write_pcurves_projecting`,
+`Projected`, `PcurveWriteError::Gap`), `scx-stitch` (`glue` writes through it; `raise_edge`),
+`scx-mass` (the enclosure's trim boxes, a bug on main) and `scx-stitch/tests/truth.rs`.
+
+### 40.1 The ruling (ruled 11-28 by the coordinator, for review)
+
+Do not move the face's geometry; write the absorbed face's pcurve as the kept curve's
+closest-point projection; record the measured, certified gap, bounded by the zone. Upheld as
+built. For: the face is the input's, and its surface stays exact (no edit of a face to fit an
+edge it was only proved near); the gap is a number the reader of the body can check, carried
+on the use where the disagreement is (one face's surface against one edge's curve); a join
+within the writer's tolerance writes what it wrote before (no projection is tried). Against:
+the edge-face consistency of the result is the zone's, not `approx`'s, so a later consumer
+that assumes `approx` for every use must read the use's bound (the brep check and
+`scx-check`'s gaps already do); moving the face (ST4's open question 1, first branch) would
+keep the writer's tolerance but changes geometry by up to the zone and is a face edit with its
+own raise. No evidence was found that the second is more correct.
+
+### 40.2 Decisions
+
+1. **The bound is on the use, not the edge** (`EdgeUse::bound`, `Certified` with
+   `Claim::PcurveOnSurface`, `Method::Interval`). For: the gap is between one use's pcurve image
+   and the edge's curve; the edge's other uses stay exact. Against: a reader asking "how far is
+   this edge from its faces" must also read the uses; `raise_edge` covers the case where that
+   matters (below).
+2. **The gap is recorded even where it is below the zone.** For: the claim is what was
+   proved, not a flag; the truth tests read it. Against: a record per projected use (one `Arc`).
+3. **Search width zone/64** (`Aim::Width`). For: the bound is the perturbation plus at most a
+   64th of the zone (the planar test checks `0.9 Z ..= 0.9 Z + Z/64`); a narrower aim costs work
+   for no decision. Against: a gap within Z/64 of the zone could be reported above it and raise.
+4. **The projection's reach is the allowance plus the absorbed edge's reach** (`near` in
+   `glue`). It can exceed the zone (an input edge already measured); a gap past the kept edge's
+   reach then raises the kept edge, `Measured`, to the gap, reported in `raised` with an
+   `AccuracyRaised` warning. For: nothing is refused that the join proved; the report says
+   where accuracy grew. Against: the raise is not exercised by a test (no corpus case has a
+   measured input edge joined past the zone).
+5. **Exact pcurves are tried first.** `write_pcurves_projecting` writes each use as
+   `write_pcurves` does and projects only where that would refuse `NeedsFit` or `OffSurface`.
+   For: every join within tolerance is unchanged, zero added projection or gap calls (measured,
+   40.4). Against: none found.
+6. **A use written again unchanged keeps its bound.** A face is rewritten once per join that
+   touches it; a use whose edge id, curve bits and pcurve bits equal the previous record's keeps
+   its `Arc` bound and is not searched again. For: the gap calls per face fall from 1+2+…+k to k.
+   Against: the comparison is by bits, so a rewrite that changes a pcurve by rounding certifies
+   again (correct, only slower).
+7. **The mass enclosure boxes a trim in parts** (`scx-mass` `trim_box`, 8 parts where the whole
+   trim's box is not finite). A chart pcurve over a wide trim encloses the cylinder's axis, where
+   the chart angle is undefined; the whole-trim box was `None` and the enclosure refused
+   `Sign { NoBox }`. This is a bug on main: the cylinder wall moved 0.45 of the zone (in
+   tolerance, no projection) is refused there. For: a box of parts holds the trim's image, and
+   is only taken where the whole box fails, so every body that worked is unchanged. Against: a
+   trim whose parts still fail is still refused (none found).
+8. **A pole is one nearest point.** `Closest::AlongU` is both a pole (one point at every `u`) and
+   an axis circle (a set); `nearest` takes it as the surface's pole (`Sphere::poles`,
+   `Cone::pole`, `Torus::pole`) whose `v` it is, and refuses a circle `NoClosedForm`. A sphere's
+   meridian projected pole to pole needed it. (A first try compared the points at `u = 0` and
+   `u = π`, which a cylinder's arc-length `u` of radius `1/(2k)` wraps onto the same point.)
+
+### 40.3 Tests
+
+- `scx-stitch/tests/truth.rs`: `a_sheet_at_nine_tenths_of_the_coincidence_stitches` un-ignored
+  (each block face, out and in, 0.9 Z: counts, volume and area to the move, `contract`);
+  `a_join_past_the_pcurve_tolerance_is_typed` **replaced on purpose** by
+  `a_join_past_the_pcurve_tolerance_records_its_certified_gap`: it proved a top face moved 0.9 Z
+  was `Unsupported(Fit)`, which is the behaviour this step removes; the new test proves the same
+  move stitches with four certified use bounds in `0.9 Z ..= 0.9 Z + Z/64`, no edge accuracy and
+  no edge raise, and `contract` holds. `curved_sheets_at_nine_tenths_of_the_coincidence_stitch`
+  (new): a cylinder wall quarter moved 0.9 Z off the axis and a sphere lune grown by 0.9 Z about
+  the centre stitch to the solid, closed-form volume and area to the move, every certified bound
+  within the zone. The perturbation tests run at 0.9 Z (`INSIDE`); `permuted_perturbed_sheets_give_the_same_bits`
+  also runs with one face moved `INSIDE` (every other face at 0.4 Z cannot go to 0.9 Z: two
+  adjacent faces each moved 0.9 Z leave their shared edge `0.9 √2 Z` apart, past the zone).
+- `scx-surface` `pcurve::tests`: `a_curve_off_the_surface_is_given_its_projection` (plane,
+  cylinder, sphere incl. a pole-to-pole meridian, torus; the pcurve image on each sample's
+  nearest point) and `a_projection_it_cannot_give_is_typed` (beyond reach `NotOnSurface`; a
+  cone's ruling off by 9e-6 `Inexact`; a cylinder's axis `NoClosedForm`).
+- No test removed besides the replaced one.
+
+### 40.4 Measurements
+
+Throwaway counters (not committed) in `pcurve_of_projection` (proj), the certified gap search
+(gap calls; gapwork is the budget it spent) and `write_pcurves_projecting` (writes); release
+build, the branch against the merge base, run alternately three times on one host, median ms
+of 30 stitches (stitch) and of the enclosure's volume (mass). Counts were the same in every run.
+The cases: a block's top face moved; block 5 (300 joins) with face 0 moved; a sphere of four
+lunes with one grown about the centre; a cylinder of four walls with one moved off the axis;
+each by 0, 0.45 and 0.9 of the zone.
+
+| case | joins | proj | gap | gapwork | stitch ms (branch / base) | mass ms (branch / base) |
+|---|---|---|---|---|---|---|
+| block1 top 0.45 | 12 | 0 | 0 | 0 | 0.48 / 0.48 | 0.04 / 0.04 |
+| block1 top 0.9 | 12 | 10 | 4 | 20 | 0.49 / refused `Fit` | 0.04 / — |
+| block5 face0 0 | 300 | 0 | 0 | 0 | 10.95 / 10.96 | 1.02 / 1.01 |
+| block5 face0 0.45 | 300 | 0 | 0 | 0 | 10.96 / 10.93 | 1.02 / 1.02 |
+| block5 face0 0.9 | 300 | 2 | 2 | 10 | 10.97 / refused `Fit` | 1.01 / — |
+| sphere4 lune 0 | 4 | 0 | 0 | 0 | 29.2 / 57.6 | 31.5 / 31.4 |
+| sphere4 lune 0.45 | 4 | 0 | 0 | 0 | 72.9 / 100.6 | 31.5 / 31.4 |
+| sphere4 lune 0.9 | 4 | 3 | 1 | 9 | 122.6 / refused `Fit` | 31.5 / — |
+| cyl4 wall 0 | 12 | 0 | 0 | 0 | 25.1 / 25.0 | 3.33 / 3.33 |
+| cyl4 wall 0.45 | 12 | 0 | 0 | 0 | 50.2 / refused `NoBox` | 3.41 / — |
+| cyl4 wall 0.9 | 12 | 10 | 6 | 606 | 71.1 / refused `Fit` | 3.43 / — |
+
+Read: in tolerance (0 and 0.45) the branch makes no projection and no gap search, and its
+times are the base's; the sphere's faster times come from main merged since the base (ST4b's
+candidates), not from this step. Past the tolerance the added work is a projection per use the
+exact writer refuses and a gap search per projected use that changed: before decision 6 the
+same cases searched 10 (block1, gapwork 50) and 10 (cyl4, gapwork 914) times; after, 4 and 6.
+The cylinder's 0.9 case costs 21 ms over its 0.45 case (the gap search on its arcs and the
+chart's projection), the sphere's 50 ms. The counts were taken on the branch before the last
+commit (`nearest`'s pole test now reads the surface's poles; same counts expected, the sphere
+case passes on the final commit).
+
+### 40.5 Open questions
+
+1. A cone's ruling (and chart) keeps the height, so off the cone it misses the nearest point by
+   `d tan` of the half-angle: a cone join past `approx` stays `Unsupported(Fit)`. A projected
+   form for the cone (the ruling through the foot) would close it.
+2. Which edge is kept is the join's (lead piece) choice; keeping the one whose projection
+   leaves the smaller gap would shrink the recorded bounds. Not measured.
+3. The testkit sphere's lunes carry `Measured` pole-use bounds of the zone, which a scaling
+   transform scales (to 1.000009e-5 at 0.9 Z growth); a transform scaling an input's bound is
+   right for a measured distance, but the stitch then sees it as past the zone. Harmless here;
+   worth a look when transforms are reviewed.
+4. `raise_edge` has no test (decision 4).
+
+### 40.6 Proposed 04 row
+
+| 11-28 | (For the owner's review) ST4a: a stitch join proved within the coincidence but past the exact pcurve tolerance is written, not refused: the absorbed face keeps its geometry, its use of the kept edge gets the kept curve's closest-point projection (`scx_surface::pcurve_of_projection`, `Draft::write_pcurves_projecting`), and the use's bound records the certified gap (`PcurveOnSurface`, interval search to a 64th of the zone); a gap past the kept edge's reach raises it, reported. Exact pcurves are tried first (joins in tolerance unchanged, zero added calls); unchanged uses keep their bound; the mass enclosure boxes a chart trim in parts (fixes `Sign{NoBox}` on a cylinder wall moved 0.45 of the zone, a bug on main). Cones stay `Unsupported(Fit)` past `approx` | stitch → boolean, → check, → mass | 74 §40 |
+
 ## 41. ST4b as built (11-28)
 
 The join stage of `scx-stitch` finds its candidate pairs near-linearly. Only `crates/scx-stitch`
