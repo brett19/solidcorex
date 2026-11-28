@@ -60,6 +60,7 @@ mod pairs;
 mod pinch;
 mod planar;
 mod points;
+mod section;
 
 pub use boolean::{BooleanOp, NoItems, boolean, combine};
 pub use cells::{Faces, Membership, Rule};
@@ -69,6 +70,7 @@ pub use imprint_curves::{Cut, CutRefusal, CutRegion, CutUnsupported, Imprinted, 
 pub use imprint_op::{Imprint, imprint};
 pub use intersect::intersect;
 pub use planar::planar;
+pub use section::{SectionRefusal, SectionUnsupported, face_section, section};
 
 #[cfg(test)]
 mod tests;

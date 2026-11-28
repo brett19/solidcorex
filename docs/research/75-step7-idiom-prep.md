@@ -3153,3 +3153,73 @@ Added work per ray (release, tol 1e-6, throwaway counters, not committed; before
 Hull tests grow with the patches the line passes near (about the square root of the count), and boxes fall as the patches flatten, so hull tests plus boxes per ray stay between 159 and 266; the hull tree is enough, and no further box tree is built. Grazing cases: the cylinder tangent takes 5 to 7 hull tests, 94 to 114 boxes, 68 to 101 pieces and 498 to 630 foot Krawczyk calls; the ruling 145 boxes, 1407 pieces and 4485 foot calls (47.6k pieces before the per-piece foot box, 897k before the tightening); the pole ends Undecided after 52 boxes.
 
 Truths (`crates/scx-surface/tests/nurbs_hits.rs`, 7 tests): 24 lines through the NURBS sphere meet it at `|p| = r` (48 hits); a line through the seam and the knot lines meets each place once; a line tangent to the NURBS cylinder (on the seam, on a knot line, skew) touches it once as a Tangent; a line along a ruling of the bilinear saddle `z = uv`, clipped, is one Overlap and a crossing elsewhere is a Crossing at `u = 5/6`; a circle crosses the sphere twice; a NURBS curve is `NurbsIntersection`, and the budget and stop end the search typed; a line through a pole is Undecided or right. Changed: `nurbs_budget_and_stop_are_typed` in `tests/intersect.rs` (a circle on the NURBS sphere is now answered, empty; a NURBS line keeps the error). Nothing removed.
+
+### 13.33 BO14 as built (11-28)
+
+`scx_boolean::section(body, by: &Surface, cx) -> Result<Done<NoItems>, BooleanError>` and
+`face_section(body, face, by, cx)` (`crates/scx-boolean/src/section.rs`), with
+`SectionUnsupported::{Surface(SurfaceKind), Wire, Mixed, InPlane(FaceId), TouchBesideSheet}` and
+`SectionRefusal::NoFace(FaceId)` under `BooleanUnsupported::Section` and
+`BooleanRefusal::Section`.
+
+- *The plane is a solid operand.* The half-space behind it, cut to a block: its face on the plane
+  reaches twice the body box's half-diagonal past the box's centre, and its other five faces lie
+  at least that far from the box, so stage 1 pairs only the plane's face with the body's faces. A
+  plane farther than half-diagonal plus zone from the box's centre misses: a body of nothing.
+- *A solid* goes through `combine` with no cell solid and `Faces::Where` keeping a piece whose two
+  sides together lie in both operands and neither side is inside the block alone or with the
+  body on its other side: the plane's pieces inside the body and the body's faces lying in the
+  plane (either sense), never the body's faces behind the plane. The result is a sheet (void on
+  both sides, free edges; scx-check's class `Sheet`). Where it keeps no face (the plane only touches
+  along an edge, a tangent line, or at a vertex or tangent point), the result is the wire of
+  stages 1 to 4 (BO18's writer, `intersect::wire`), so the closure's wires and points that 13.22's
+  decision 3 left out are here. `run` is split into `staged`, which also returns stages 1 to 4,
+  so this costs no second pass.
+- *A sheet*, and *one face* of any body, give that wire directly: `interfere_only` keeps the
+  stage-1 pairs of one face, then stage 4 and the writer.
+- *Lineage.* The body is operand 0; the block is operand 1, and only its face on the plane can be
+  an origin.
+
+Tests (`crates/scx-boolean/tests/section.rs`, 15, every truth a closed form): a 10 mm box by x = 5,
+area 100 and four edges of 10 on both the plane and the box (the pin's
+`box_section_is_four_lines_ten_long`); the cube's diagonal hexagon, area (3 sqrt 3 / 2) s^2 with
+s = 5 sqrt 2; a sphere at three heights, pi (r^2 - d^2) and boundary 2 pi sqrt(r^2 - d^2) on the
+sphere; a cylinder across (pi r^2), through its axis (2rh) and at a slant (pi r^2 / cos theta); a
+frustum across its axis; a torus at d = 0 and 0.5 (4 pi R sqrt(r^2 - d^2)) and through its axis
+(two discs, 2 pi r^2); a miss; a plane on a face (that face, both senses); touches (a sphere's
+pole as one vertex, a box edge as one line of 10, a box corner as one vertex, a cylinder's wall
+line of h); a sheet's section as a wire (a line of 10, a chord of 2 sqrt 3); one face of a box at
+z = 5 (four sides one line of 10, top and bottom empty: the pin's
+`a_box_s_record_faces_section_at_their_index`, whose zero-normal case is the frame's own refusal
+here); a sphere's face, its great circle; refusals (a sphere surface, a missing face, a sheet in
+the plane); the touch beside a sheet; determinism. The pin's wound-NURBS test waits on SM9.
+
+Work on the regular path: `run` returns what `staged` built and `interfere_given` delegates to
+`interfere_pairs` over the same pairs, so no stage does more. A throwaway probe over 15 Booleans
+and 5 intersections (box, cylinder, sphere, torus pairs) gave the same `Report::work` and the same
+answers on main and the branch: box-box 121 per Boolean and 42 for `intersect`, box-cylinder 41
+and 12, box-sphere 41 for `intersect`, total 486 over the Booleans that build. Its box against a
+sphere centred on the box's corner is `Defect(Seeds)` on main and the branch alike (open).
+
+Decisions (analysis and adversarial pass):
+
+1. *The tool is a block, not a new half-space operand kind.* For: R1, the cut is the tested
+   pipeline with nothing of its own; stage 1's boxes drop the five far faces; the BO25 test
+   `sections_by_a_plane` already built a plane's section this way. Against: six faces and twelve
+   edges built per call (microseconds), and a size read from the box: a body whose box
+   understates it would be cut by a face too small. The box holds every face's box, so it does not.
+2. *A touch beside a sheet is `Unsupported(TouchBesideSheet)`.* Where the plane crosses one solid
+   and touches another part of the body (a box's top face and a ball's pole on one plane) the
+   closure is a sheet with a point or wire apart from it. scx-brep holds lone vertices and wires
+   only in shells of their own, and the sheet and the wire would need one builder. For: the answer
+   is never a quiet drop. Against: such bodies (several lumps, a face flush with a tangent
+   feature) are real; the check samples each tangent curve, lying edge and touch at one point
+   and asks whether a sheet vertex or edge holds it, so a tangent curve that meets the sheet only
+   at its middle would pass. Open: build sheet plus wire in one draft when a caller needs it.
+3. *A sheet in the plane is `Unsupported(InPlane)`, not the sheet itself.* For: a sheet's section
+   is a wire by contract; a face lying in the plane is two-dimensional. Against: the closure
+   there is that face; a caller can test coplanarity first.
+4. *Curved cutting surfaces wait.* `SectionUnsupported::Surface(kind)`: a tool body bounded by a
+   cylinder or sphere needs the far faces' clearance argued per kind; NURBS waits on SM9 anyway.
+5. *A wire body's section (points) is `Unsupported(Wire)`.* Stage 1 pairs faces; curve against
+   surface is `scx-ssi`'s and has no Boolean-family entry yet.
