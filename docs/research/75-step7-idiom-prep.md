@@ -1176,6 +1176,8 @@ maps or the ray against NURBS. Who writes them?**
   and about 20 more wait only on other step-6 or step-7 rows.
 - Against: a planning note for five large pieces delays them by a review cycle. Mitigation: the
   analytic step-7 rows (§7.1, "can start now") keep builders busy for that cycle.
+- Answered by 77 (11-28): `research/77-step5-widening.md` gives the five pieces their rows (§7)
+  and the step-7 rows each one unblocks.
 
 **Q2. Does `scx-boolean` depend on `scx-stitch`?**
 
@@ -1795,7 +1797,203 @@ the bit-for-bit comparison above and the line just off a plane. None removed.
 Open: curved bounds (a cylinder's ruling and parallel have closed forms too) if a caller's
 curved facts show up in profiles; BO22 reuses `OnSurface` and `Fact` for tangent pairs.
 
-### 13.11 BO25 as built (11-28)
+### 13.11 MK15 as built (11-28)
+
+`scx_make::face(&Surface, &Bound, &Document) -> Result<Made<FaceId>, MakeError>` makes a
+sheet of one face on a plane, cylinder, cone, sphere or torus; `Bound` is `Box(Extent2d)` or
+`Region(Region)` (in uv). Code in `scx-make/src/face.rs`; tests in `tests/face.rs` (8).
+
+- **The uv is the pin's, not the angle.** Every turned kind's `u` (and a sphere's or torus's
+  `v`) is a rational quadratic parameter, one arc per quarter turn, so an iso circle's
+  sweep is `Arcs::angle(u1) - Arcs::angle(u0)`, not `2 pi du`. The first build assumed
+  proportional and the writer refused the loop (`LoopOpen`); the closed forms in the tests
+  take their angles from the surface's own points (`atan2`, heights), not from `Arcs`.
+- **Box.** Handles a whole period (the seam is one edge used twice), a pole (sphere
+  `v = 0` or `1`, cone apex: a collapsed edge; snapped within 1e-12) and a torus's both
+  ways, so the constructors' whole faces are boxes (`[0,1]x[0,1]` torus: 1 vertex, 2 edges).
+- **Region.** On a plane it is `sheet` of the region (arcs exact). Elsewhere only lines
+  along `u` or `v` are iso-lines, so any other segment, and any on a pole, is
+  `Unsupported::Segment`; extent past a period or the domain is `Refusal::UvBox`.
+  Case for also taking arcs in uv on a cylinder (helices, ellipses): not exact, so not
+  built; they would need the fitted writer.
+- **NURBS** is `Unsupported::NurbsFace` until MK15b.
+- Errors added: `Refusal::UvBox`, `Unsupported::NurbsFace`.
+- Not ported: the pin's face-reading tests (step 6) and NURBS faces (MK15b).
+
+### 13.12 MK4 as built (11-28)
+
+`scx_make::revolve(&Region, &Frame, Turn, &Document) -> Result<Made<RevolveFaces>, MakeError>` and
+`scx_make::revolve_sheet(..) -> Result<Made<RevolveSheetFaces>, MakeError>` turn a line-and-arc
+region in the frame's `x, y` plane about the frame's y axis. `Turn::{Full, Partial { from, to }}`
+(radians, right-handed about y, zero at the region's plane). `RevolveFaces { start: Option<FaceId>,
+end: Option<FaceId>, walls: Vec<Vec<Wall>> }`, walls `[loop][segment]` in the order given to
+`Region::new`; `Wall::{OnAxis, Face(FaceId), Split { before, after }}`. Every wall is built
+directly with exact pcurves: a line is a plane, a cylinder or a cone; an arc is a sphere (centre on
+the axis), a ring torus, or a horn torus (its circle touches the axis); every surface's frame is
+`(axis point at the piece's height, z = axis, x = the start radial)`, so the parallels are the
+surface's u lines and each meridian its v line at `u = 0` or `u = sweep`.
+
+Decisions, with cases for and against:
+
+- **Touches by the zone, crossings refused.** A profile point within the resolution's zone of the
+  axis is put on it; a segment whose both ends are on it is `Wall::OnAxis` and sweeps nothing; a
+  vertex on it is a pole (a collapsed edge per cone, sphere or horn-torus face; a plane passes
+  through it). A segment reaching more than the zone across the axis (its side-mapped radius
+  minimum, an arc's interior included) is `Refused(CrossesAxis { at })`. For: the pin's meaning
+  (it splits a touch and refuses a crossing) with no new predicate; the zone is what makes two
+  points one in the finished body. Against (the adversarial row in 04 11-28): a touch within the
+  zone of a crossing is decided by the zone, not by certified bounds or `Unproven`. The profile is
+  exact data in a `Region` (lines and circles from `f64`s), so the only uncertainty is the rounding
+  of a radius computation, many orders below the zone; `Unproven` would never fire. Recorded as a
+  deviation.
+- **Interior axis touch: split, or re-seam a whole circle.** An arc whose circle touches the axis
+  at `T = (0, c.h)` with `T` inside the arc is split there into two pieces (`Wall::Split`, both
+  horn-torus faces); a whole circle touching the axis is re-seamed to start at `T`, so it is one
+  horn-torus face whose loop runs from the pole (WR-590's three-face partial turns and one-face
+  full turn). An arc whose circle crosses the axis outside the arc (`|c.r - r| > zone` with
+  `c.r < r`) is `Unsupported::SpindleTorus`: its surface is a spindle torus, which `scx-surface`
+  does not have; the pin keeps a revolution surface there (not ported).
+- **Horn torus support across crates.** `Torus::horn(frame, radius, sense)` (major = minor) and
+  `Torus::pole() -> Option<Pole>` (`v = 1/2`, the centre). The pcurve writer, `check/geometry.rs`
+  and the testkit oracle read the torus pole as they read the sphere's and cone's. The writer's
+  pole-side rule changed from `side_v < pole.v` to `side_v < start.v`: the horn pole sits inside
+  the torus's periodic v range (at `v = 1/2`, or `3/2` a period on), so only the pole use's own
+  start v says which side of it the loop is on; for the sphere and cone, whose poles are at the
+  ends of the v interval, the two rules agree. `scx_make::torus` still refuses a horn torus
+  (`Unsupported::HornTorus`); with the pole now supported that refusal could be lifted (open).
+- **The plane snap rule at the mean height, not the start's.** A line whose ends are within the zone
+  in height is a plane at their mean height; within the zone in radius, a cylinder at their mean
+  radius. For the mean: each end is off by at most half the difference, not all of it, and the rule
+  is symmetric in the segment's direction (a clockwise loop gives the same body). Against: 75 §3.6
+  places it at the start vertex with the end's distance recorded as its accuracy; that distance is
+  within the resolution, so `VertexRecord::accuracy` would be `None` either way. Deviation.
+- **Orientation from the profile's side.** The side is `+1` when the region's far reach is on the
+  frame's `+x`, else `-1`; each loop's walls are written for the solid on the left of the stored
+  traversal and reversed (list and senses) for side `-1`. Each surface's sense follows from the
+  piece's direction (`Forward` iff `o * dh > 0` for a cylinder or cone, iff the arc's turn agrees
+  with `o` for a sphere or torus, the plane's normal against `o * sign(dr)`), so no orientation
+  pass is needed.
+- **A hole of a full turn is a void.** Its walls close on themselves apart from the outer loop's,
+  so they get a void region's shell in front and a new shell of the solid behind
+  (`Assembly::hollow`); a partial turn's caps join every loop into one shell. `revolve_sheet` puts
+  each loop's walls in an outside shell of their own (`Assembly::sheet_shell`), since without caps
+  the loops are pieces apart. `Assembly` also gained `sides` and `face_between`.
+- **Caps** (partial turns) are planes through the axis, `z = D_from x Y` at the start and
+  `Y x D_to` at the end, holding the region's loops at that angle.
+- **Refused turns.** `Refusal::Turn { from, to }` for angles not finite, `to <= from`, a whole turn
+  or more apart, or with the farthest point less than the zone from the other cap either way round.
+
+Deviations from 75 §3.6 and its 04 row: the axis is the `Frame`'s y axis (no separate `Axis` type);
+angles are `f64` radians (no `Angle` type in `scx-num`); caps are `Option<FaceId>` and walls a
+`Wall` enum rather than `Vec<Vec<FaceId>>`, since an on-axis segment has no face and a split one
+two; `revolve_sheet` takes a `Region` (closed loops), not an open path; touches by the zone, not
+certified bounds; the plane snap at the mean height.
+
+Measured (release, throwaway timers, best of 20 runs of 50, tilted frame): a 3 x 4 rectangle
+revolved whole 21 us and a quarter turn 27 us (extruded: 13 us); a circle to a ring torus 9.7 us
+against `scx_make::torus`'s 9.3 us; a half disc to a sphere 8.5 us against `sphere`'s 8.1 us;
+WR-590's quarter turn 12 us. So a revolve costs what the matching primitive does, within 5%. The
+cost added to existing paths is one comparison per pole lookup (`Torus::pole` in the writer and the
+check) and the changed pole-side comparison; not measurable.
+
+Tests (`crates/scx-make/tests/revolve.rs`, 16): a tube from a rectangle (plain and tilted frame,
+full, quarter, 3.5 rad and almost-whole turns), the mirrored side, a solid cylinder (axis segment),
+a cone to an apex and a frustum, a sphere from a half disc, a ring torus, a region with a round and
+a square hole (voids for the full turn, genus 2 for partial), the plane and cylinder snaps, WR-590
+(circle centre (5, 0) radius 5, quarter, half and three-quarter turns from 0, pi/2 and pi, and the
+full turn), an arc split at its interior touch, the sheet, and the refusals (crossing by a line and
+by an arc's bulge, spindle arc, eight bad turns); determinism; the given-order walls of a clockwise
+loop. Each solid: Pappus's volume and area to 1e-9 with `scx_mass`'s estimate within it, face kinds
+per segment, the closed-solid structure (fins, sides, exact pcurves, Euler-Poincare) and the BR8
+oracle (the pinched WR-590 and split bodies: the oracle and exact pcurves, without the Euler count).
+No pin test was removed. The pin's `issue_2905_revolved_vase` is a chamfer test on a captured
+body, not a revolve test; its meridian (a circle of centre `(-16, 33)`, radius `sqrt 1690`, between
+`z = 30` and `60`) is the far arc of a circle crossing the axis, an apple (spindle) torus, which this
+revolve refuses as `Unsupported::SpindleTorus`. A real report needs it: the spindle surface is the
+first open question.
+
+### 13.13 SF1 as built (11-28)
+
+`scx_surface::project_curve(&Curve, Extent1d, &Surface, along: UnitVec3, Resolution)` and `scx_surface::drop_curve(&Curve, Extent1d, &Surface, Resolution)` return `Result<Vec<Projected>, ProjectError>`. A `Projected { curve, extent, from, kept: Option<ParamShift> }` is one piece: the image curve over `extent`, the image of the source over `from`, run the same way, with `kept` the source-to-image parameter map where the image is an affine copy (`None` for the cylinder's arc, where only the ends and the order hold). `ProjectError` is `NeedsFitter { curve: CurveKind, surface: SurfaceKind }` (Unsupported, `projection_needs_fitter`: the one variant the step-5 fitter replaces), and the Refused `Along`, `Flattened`, `OnAxis`, plus `Image(CurveError)`. The module is `crates/scx-surface/src/project.rs`, with the closed-form table and the pin-vs-here table in its header.
+
+Closed forms: onto a plane, every curve kind, through the projection affine and `Curve::transformed` (a circle to its exact ellipse on principal axes, a NURBS curve by its control points); onto a cylinder, a line parallel to the axis projected (0, 1 or 2 rulings) and a line dropped in a plane through the axis (a ruling per side) or square to the axis (an arc at its height); onto a cone, a line in a plane through the axis, projected along the axis or dropped (a generator per side). Every other pair is `NeedsFitter`.
+
+Decisions.
+- **The whole projection line, both signs.** For: one answer for a plane (the pin's SMLib projection is also unsigned), no split where the curve passes through the surface, and a caller wanting one side filters by the image's side. Against: a caller casting "down" onto a cylinder gets both rulings; the pieces are ordered by `s`, so the first is the near side.
+- **A miss is `Ok(vec![])`, not an error.** For: a projection line that misses the surface is a final answer, not a failure (no failing default either way: the vector says what happened). Against: the pin's `Error::Empty` lets a caller `?` it; the face caller in `scx-bodyq` decides that, after its trim, where empty can also come from the trim.
+- **No surface extent or uv box.** For: the analytic kinds are unbounded (but the cone's nappe, handled), and the face's trim belongs to `scx-bodyq` (75 SF1 row). Against: the pin's drop clipped to the face's uv box first; that is now the body's step.
+- **A cone's apex part is left out of the drop**, not returned as a point: the feet there are the apex alone, not a curve. A piece whose image has no length is left out; when none is left the answer is `Flattened` (a line dropped square through a cylinder's axis, a circle seen edge-on).
+- **Predicates within the zone over the extent** (parallel, meridian, square): R5, chosen before building, no fallback. Against: a line a hair outside the zone gets `NeedsFitter` though its image is nearly a line; the fitter answers it, which is what it is for.
+- **`kept`.** An affine image keeps the parameter through a `ParamShift` (the plane's, rulings and generators: `NONE`), so a caller can map vertices; an arc's angle is not an affine function of the line's `t`, so it says `None` rather than a wrong map.
+
+Truths (`crates/scx-surface/tests/project.rs`, 14 tests, plus 2 unit tests): a circle projected along z onto a plane tilted by beta is the ellipse with semi-axes r and r / cos(beta) about the centre's image; a tilted circle projected onto a level plane has semi-axes r and r cos(gamma); for 64 random circles, planes and directions the image keeps the conjugate-diameter invariants a^2 + b^2 = |u|^2 + |v|^2 and ab = |u x v|; a line dropped onto a cylinder in a plane through its axis is the ruling at the radius (and splits at the axis); a chord dropped onto a cylinder is the arc at its height with the closed-form ends. Every piece is sampled: each point on the surface and on the projection line through its source point, or equal to the kind's `closest` foot. Ported from the pin: `a_line_above_a_box_drops_to_its_foot_on_the_top`, `a_line_beside_a_cylinder_drops_onto_its_wall_at_the_radius`, the #20836 seam chord (its geometry; the seam split and the area are the body's), and `a_segment_projects_onto_a_box_s_record_face_at_its_index` (both levels). Not ported: `a_curve_over_nothing_of_the_face_is_refused` (a face concern; the analogue here is a miss being empty) and `rational_quarter_circle` (a record form, not geometry).
+### 13.14 BR11 as built (11-28)
+
+**What was built.** `scx-brep` `draft/heal.rs`: `Draft::merge_faces_across(edge, &protected, &doc)`
+and `merge_faces`, `join_edges_at(vertex, &protected)` and `join_edges`, and `heal`
+(faces, then edges, to a fixpoint). A protected set is a `&BTreeSet<EdgeId>`; an id that is not a
+live edge is `Absent` before any write (the pin's out-of-range `Argument`). Reports are typed:
+`FaceMerge { absorbed, survivor, removed }`, `EdgeJoin { absorbed, survivor, vertex }`, and
+`Left { at, why }` for a candidate (equal surfaces or curves) that was left, `Why` one of
+`Protected, Sides, Orientation, Loops, Pcurves(e), Fins, Interval, Uses`. Each merge is planned
+read-only and then written, so a refusal writes nothing.
+
+**Decisions, each with a case against.**
+
+1. *Equal means `==`* on `Surface` and `Curve` (the test cells and `Changes` already use), not a
+   geometric coincidence test. For: exact, no tolerance, and the pcurves carry over unchanged;
+   pieces of one cut face or edge are equal. Against: two coplanar faces of different operands
+   (different frames) are not merged; the Boolean's own merge, which asks the surface
+   intersection, keeps doing that. A kernel-wide "same surface up to frame" test is open.
+2. *A pair is merged by its twins* (every edge only the two faces bound), walking loops across
+   them (the Boolean's splice). A connected group of mergeable faces (union-find over the
+   removable twins) is merged at once, one loop walk a group, so a long strip is linear. A group
+   goes pair by pair instead when a twin's two uses lie in different uv windows (a seam) or a
+   protected, other-shell or one-sense edge lies inside it; the pair walk keeps seams and
+   refuses what a group cannot. For: handles a disc in a plate (both loops vanish), collinear
+   shared pieces and seams. Against: two code paths, and a dirty group is still quadratic.
+   A first version merged pair by pair only: 17 s on the 4,102-face bar.
+3. *Seams.* Twins are grouped by the uv offset between their two uses; the group in step with
+   the first one in one window goes, the others stay as seams. A pair meeting across a seam only
+   is written with `exact_loop`/`placed`. Against: windows are compared with 1e-7 in uv.
+4. *Protected.* A protected edge is never removed and two faces sharing one never merge; two
+   edges join only when both or neither are protected (the survivor is the lower id, the
+   report names the absorbed one). Against: refusing every protected join would keep the
+   `Id`s stable, but leaves a split line in many pieces and gives 16 edges where the pin gives
+   15 (the pin's #21864 joins them too).
+5. *Edge joins write no pcurve at a guess.* The two uses' pcurves must be equal Curve2 values
+   running on (a turn on for circles and ellipses in uv); otherwise `Why::Uses`. Against: the
+   wall of a cylinder whose seam lune has its window a turn off (`start` -2 pi) leaves its two
+   circle arcs at the seam unjoined; closing that needs a uv shift of the rest of the loop
+   (open, below). Rewriting with `write_pcurves` was rejected: it can fail after the edge is
+   written.
+6. *Joined accuracy* is the larger of the two, downgraded `Certified` to `Unproven` (a proof of
+   each piece is not one of the whole); equal ones are kept.
+7. *Survivor is the lower id*, so the result does not depend on which edge the walk met first.
+
+**Tests (all in `tests/heal.rs`, 14).** Ported from the pin's `merge_tests.rs`: a split cube and
+two unioned boxes (a lattice, 6 faces, 12 edges, 8 vertices, area `2(ab+bc+ca)`, volume `abc`,
+the check passing), a box changes nothing and every planar generated kind changes nothing,
+a picked edge keeps the faces apart (7, 15, 10), an unknown kept edge is refused before any
+write, more than 4,096 kept edges (1,728 and 6,912 edges all protected), the 4,100-edge bar with
+one kept cut. Not ported: `picks_near_nothing` and the point-list `MAX_POINTS` cap (ids are
+typed, so neither failure exists); the stitch tests (`scx-stitch`). New: a disc in a plate, a
+cylinder's wall, sides refused, one merge and one join by name, parts equal the whole.
+
+**Measured** (a 24-core build box, unoptimised, whole test including the build and the check):
+the 4,102-face bar, pair by pair 17.1 s, by group 4.2 s; the 20 x 20 x 20 lattice (2,400
+faces, heal and parts) 0.25 s before, 0.21 s after. What is left of the bar's 4.2 s is the
+edge joins: the bar has four 1,025-piece cube edges, and each of its ~4,100 joins rebuilds the
+loops of its faces (clone and fin diff of a loop of about 1,000 uses). Joining a whole chain
+at once would remove it.
+
+**Open.** (a) join a chain of edges at once, linear in the chain; (b) the seam-window join
+above (a generated cylinder's circles stay split at the seam lune, `Why::Uses`; for BO12 to
+close with a uv shift of the rest of the loop); (c) merging coplanar faces of different frames (needs the intersection test of
+`scx-ssi`, above this crate); (d) the Boolean's `build.rs` still has its own merge and join,
+to be replaced by these calls (BO12).
+
+### 13.15 BO25 as built (11-28)
 
 `scx_boolean::combine(a, b, &Rule, cx) -> Result<Done<NoItems>, BooleanError>`
 (`crates/scx-boolean/src/boolean.rs`, `cells.rs`); `boolean` is `combine` with `Rule::of(op)`,

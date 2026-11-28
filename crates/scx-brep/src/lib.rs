@@ -47,7 +47,7 @@ pub use changes::{
     Split, Touch, Tracked, carry,
 };
 pub use document::Document;
-pub use draft::{Draft, TransformError};
+pub use draft::{Draft, EdgeJoin, FaceMerge, Healed, Left, Refusal, TransformError, Why};
 pub use error::{Absent, TableFull};
 pub use finish::{FinishCause, GeometryCause, StructureCause, Unfinished};
 pub use id::{EdgeId, Entity, EntityKind, FaceId, IdMap, RegionId, ShellId, VertexId};
@@ -75,6 +75,8 @@ const _: () = {
     ok::<LineageError>();
     ok::<PcurveWriteError>();
     ok::<TransformError>();
+    ok::<Healed>();
+    ok::<Refusal>();
     ok::<Document>();
     ok::<op::Settings>();
     ok::<op::Scratch>();

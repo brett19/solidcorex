@@ -21,9 +21,9 @@
 //!   and [`PcurveWriteError::LoopOpen`] elsewhere. A loop that comes back a whole period
 //!   away winds round the surface and needs a seam edge, [`PcurveWriteError::Winds`].
 //! - **Poles.** A collapsed edge whose vertex is a pole of the surface (a sphere's two, a
-//!   cone's apex) gets the segment along `u` at the pole's `v` from where the loop
+//!   cone's apex, a horn torus's touch on its axis) gets the segment along `u` at the pole's `v` from where the loop
 //!   arrives to where it leaves, over `[0, 1]`, in the direction that keeps the face on
-//!   the left: toward `-u` when the face lies below the pole's `v`, `+u` above. Its length
+//!   the left: toward `-u` when the face lies below the `v` the loop arrives at, `+u` above. Its length
 //!   is moved by whole periods into `(0, period]`, a zero gap being a whole turn. A pcurve
 //!   never runs along a pole's line itself (no dog-leg) and never passes a pole inside a
 //!   use (`pcurve_of` refuses a meridian across one, [`PcurveWriteError::CrossesPole`]).
@@ -362,8 +362,11 @@ impl Draft {
                     };
                     // The loop then stands at this use's end, with its budget, as `finish`
                     // measures the next joint.
-                    if let (Some(p), Some(period)) = (pole, periods[0]) {
-                        let sign = if side_v < p.v { -1.0 } else { 1.0 };
+                    if let (Some(_), Some(period)) = (pole, periods[0]) {
+                        // Which side of the pole's line the face is on, against the `v` the
+                        // loop arrives at: the pole's own, or a period from it where `v` is
+                        // periodic (a horn torus's).
+                        let sign = if side_v < start.y { -1.0 } else { 1.0 };
                         let du = toward(target.x - start.x, period, sign);
                         let end = start + Vec2::new(du, 0.0);
                         at = Some((end, item.end_budget));
@@ -493,11 +496,12 @@ enum Kind {
     Collapsed { pole: Option<Pole> },
 }
 
-/// The surface's poles: a sphere's two, a cone's apex.
+/// The surface's poles: a sphere's two, a cone's apex, a horn torus's touch on its axis.
 fn poles(surface: &Surface) -> [Option<Pole>; 2] {
     match surface {
         Surface::Sphere(s) => s.poles().map(Some),
         Surface::Cone(c) => [Some(c.pole()), None],
+        Surface::Torus(t) => [t.pole(), None],
         _ => [None, None],
     }
 }
