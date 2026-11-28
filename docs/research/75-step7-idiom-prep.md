@@ -1365,6 +1365,12 @@ should be run once through `SCX_HEAL_STEP_DIR` before the row is closed, and a Q
 needs a class of failing records with a count. Against porting, in numbers: 15 regressions,
 0 fixes.
 
+NIST run (coordinator, 11-28): the 33 NIST MBE PMI STEP files (public domain; fetched by the pin's
+pinned-hash script) through the same harness (`SCX_HEAL_STEP_DIR`). 33 records: none refused; 2 fail
+the check before the healer (Bad Knot Count, Bad Repeated CPts) and both still fail after it; the
+healer alters 32 (31 tolerances only, 1 geometry or trims) and turns no valid record invalid. Over
+all three sets the healer fixes 0 of 3 failing records, so Q7 is ruled: not ported.
+
 ### 13.2 BO18 as built (11-28)
 
 `scx_boolean::intersect(a, b, cx) -> Result<Done<NoItems>, BooleanError>` runs stages 1-4 of `boolean` (`interfere`, `face_face`) and stops; `crates/scx-boolean/src/intersect.rs`. The result is a `Draft::new()` body of no faces:
