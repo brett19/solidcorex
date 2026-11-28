@@ -3550,3 +3550,42 @@ Open questions.
 - A fit near the unbend's axis is conditioned by `d / u` and the `Jet2` angle is loose there: the budget decides, not a rule.
 - The `O(n^2)` search (13.34's open question) is what a tight aim on a long curved edge pays.
 - Held ends: DF1's edges meeting at a vertex of a fitted face may want G1 at the ends.
+
+### 13.38 MK12 as built (11-28)
+
+`scx_make::{section_blend, Blended, SectionFrame, EndOrder, BlendError, BlendRefusal}` (`crates/scx-make/src/blend.rs`; scx-make gains the `scx-nurbs-surface` dependency, which layers.txt allows). CN4's `skin` with `Edge::Held` ends (13.28), CN3's tensor interpolation under it (13.26) and MK10c's `span_bound` (13.18) are reused; nothing in step 5 changed.
+
+API:
+- `section_blend(&[Vec<SectionFrame>], [EndOrder; 2], crown: [f64; 2]) -> Result<Blended, BlendError>`; `SectionFrame { p, leave, bend, bend_change }` (`SectionFrame::at(p)` for stations that hold nothing), `EndOrder::{G0, G1, G2, G3}`.
+- `Blended { surface: NurbsSurface<3>, through }` with `section(i)` (the curve through section `i`'s stations), `count()` and `rail_bound(i, tol, &mut Budget, &Stop)`, which is `span_bound` of the surface against that section on the correspondence `u = i/(n-1), v = t`.
+- `BlendError::{Refused(BlendRefusal), Station(FitError), Curves(NurbsError), Skin(SkinError), Defect}` with `kind()` and `name()`; `BlendRefusal::{Sections, Stations, Uneven, Crown, NotFinite, NoDirection, Meet, Derivative}`.
+
+Construction. Each section is the curve through its stations (degree `min(3, stations - 1)`, parameters `s/(stations - 1)`, averaged knots), so all share one knot vector. The ends are derivatives at the stations (the pin's `leave * speed`, `bend * speed^2`, and `third_derivative` for the part of the third square to the tangent; the last section reads back, its odd derivatives negated). Interpolation is linear, so the control polygon of a derivative column is the same fit through the derivative vectors on the same knots: that is the `End` `Edge::Held` takes for each control point of a row. The skin runs along `u` at `i/(n-1)` and the result is `swapped()` so the sections are `u` rows as the pin has them.
+
+Decisions.
+- **The `u` degree is global: `min(max(c + c' - 1, 3), n + c + c' - 3)`** (`c`, `c'` the end conditions, G0 = 1). For: two G0 sections are degree 1 and give the ruled surface; two sections at G3 are degree 7, the pin's; the rows and conditions always give a determined system (`n + (c - 1) + (c' - 1)` control rows), and the end orders are below the degree. Against: the pin's `u` degree was the span maximum over a piecewise-Bezier net, so a long G0 run was piecewise (a Bezier span per section pair, a `degree`-fold knot at each section) there and is one global cubic here.
+- **Interior sections are interpolated, with no finite-difference conditions.** The pin held a central first, second and third difference at every interior section and joined Bezier spans (C3 with four sections). That was SolidCraft's definition of the surface, not a surface with a truth of its own, and the skin is `C^(q-1)` at its simple knots anyway; for a family that is a polynomial of degree at most `q` in `u` it is exact where the finite differences needed the family to be that low-degree and the stations uniform. For: one constructor, certified `through`, no estimated derivatives. Against: shapes differ from the pin between sections, and a caller who relied on the finite-difference joints gets a global fit; the pin's interior tests (`interior_sections_hold_a_cubic_s_third_derivative`, `interior_joints_are_c3_from_four_sections_and_c2_at_three`) are not ported because they pin the definition. The sections are still passed through exactly.
+- **G3 holds only the third derivative's part square to the tangent** (the pin's `third_derivative`; the rest is a reparametrisation and is zero). So a polynomial family is exact at G3 only when its own third derivative has no tangent part; the helix and circle truths below are stated on the square part. A first version of a cubic-family test assumed exactness and failed at 1e-5: the test was wrong, not the surface, and was removed.
+- **No section or station cap** (the pin's 50 and 257). Work is linear in both, nothing is allocated in proportion to a cap, and a cap is a failing default to a caller one station over. The crown range `-0.9 ..= 3` is kept: it bounds the speed away from zero and from the chord's absurd multiples, and a value outside is `Refused(Crown)`.
+- **Exact floors, as the pin's rewrite already had them:** a `leave` of no length at an end of order G1 or above is `NoDirection`, two neighbouring sections meeting at a station is `Meet`; neither is nudged.
+- **The certificate is `through` plus `rail_bound`.** `through` is CN4's per-control-column bound of the miss at every `u`. `rail_bound` is MK10c's `span_bound` of the surface against a section curve, an independent proof from the surface's own patches (so it still holds after an edit), and the one MK12b will use for a rail on a blend. Not done: a certificate of the end derivatives (the tests check them against closed forms; a bound would need the Bernstein form of `S_u` against the held polygon, and nothing asks for it).
+- **Not ported (MK12b's or later):** `SectionBlendDefinition`/`section_blend_surface` (the kept definition and re-certification under motions), `section_frames`, `section_frames_outward`, `point_frames` and `open_section_turns` (frames from faces and edges, which MK12b needs).
+
+Work (release, throwaway timer in the test module, removed; helix sections of `stations` stations, mean of 50):
+
+| sections x stations | G0 blend | G3 blend | bare `interpolate_rows` (CN3) |
+|---|---|---|---|
+| 4 x 9 | 31 us | 42 us | 4-6 us |
+| 8 x 33 | 118 us | 256 us | 27 us |
+| 16 x 129 | 916 us | 1,625 us | 184-189 us |
+
+- The blend costs 4 to 5 times the bare row fit at G0 and 9 times at G3. The G0 part above the fit is the `n` section fits and `CompatibleCurves`, then CN4's certificate (1.8 to 2.4 times the fit, 13.28). The G3 part above G0 (+138 us at 8 x 33) is the six derivative columns fitted at the stations (three orders at two ends) and the Hermite solve's wider system. Nothing here is on a hot path yet; the shared-basis certificate CN4 names as its follow-up would take the dominant term away from every skin, this one included.
+- Knots added against the pin: along `v` none (the same averaged knots on `s/(stations - 1)`); along `u` none beyond the averaging knots plus end multiplicities of the ends' orders, against the pin's `degree`-fold knot at every interior section (so a long run has far fewer control rows here).
+
+Tests (`blend/tests.rs`, 6; truth is a closed form):
+- Two G0 sections are the ruled surface `(1 - u) A(v) + u B(v)` to `1e-12` at 36 points; the surface is degree 1 in `u` and `through` is below `1e-11` (the pin's `section_blend.rs:47`).
+- Five sections of five stations of the parabolic cylinder `(2v, t, t^2)` with its own G2 end frames (the crown chosen so the speed is the parameter's) give the cylinder to `1e-12` at 81 points, between stations as well as on them, and the end first and second derivatives are the cylinder's (the pin's `:132`).
+- G3 ends on circles and on helices (whose curvature vector turns, so `bend_change` has a part square to the tangent), five stations on growing radii: at both ends the first and second derivatives and the square part of the third equal the helix's at the definition's speed, to `1e-9`.
+- G1 leaves along `leave` at `chord / 3 * (1 + crown)` (two sections) and `* 2` (three sections), and arrives against its `leave`.
+- The refusals by type (each crown bound accepted at its limit, NaN crown, infinite station, meeting sections, no direction at G1, a G0 end ignoring its frame), and the names unique.
+- `rail_bound` of every one of four sections of a free G0 blend is below `1e-9` (`Bounded`), and `None` past the last section.
