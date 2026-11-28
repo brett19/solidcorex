@@ -1,5 +1,5 @@
 // Written for solidcorex. Apache-2.0.
-//! A horn torus (MK4b: major = minor = R, the tube meets the axis at a pole) against a
+//! A horn torus (`MK4b`: major = minor = R, the tube meets the axis at a pole) against a
 //! block and against a cylinder, judged by closed-form volumes.
 //!
 //! Below the plane `z = h` the horn solid (the points with `(rho - R)^2 + z^2 <= R^2`) is the
@@ -21,6 +21,7 @@ use scx_boolean::{BooleanError, BooleanOp, BooleanUnsupported, boolean};
 use scx_brep::op::{Cx, NoTrace, Scratch, Settings};
 use scx_brep::{Brep, Document};
 use scx_num::budget::{Budget, Stop};
+use scx_num::fmath;
 use scx_num::frame::Frame;
 use scx_num::units::Length;
 use scx_num::vector3d::{Point3, Vec3};
@@ -71,7 +72,7 @@ fn op(a: &Brep, b: &Brep, op: BooleanOp) -> Result<Brep, BooleanError> {
 /// `4 pi big sqrt(small^2 - z^2)`.
 fn below(big: f64, small: f64, h: f64) -> f64 {
     let s = (small * small - h * h).sqrt();
-    2.0 * PI * big * (h * s + small * small * (h / small).asin() + PI * small * small / 2.0)
+    2.0 * PI * big * (h * s + small * small * fmath::asin(h / small) + PI * small * small / 2.0)
 }
 
 fn whole(big: f64, small: f64) -> f64 {
@@ -133,7 +134,7 @@ fn cut_by_cylinder(big: f64, small: f64) -> Result<(), BooleanError> {
     )
     .unwrap()
     .body;
-    let inside = PI * (PI * big * small * small - 4.0 * small.powi(3) / 3.0);
+    let inside = PI * (PI * big * small * small - 4.0 * small * small * small / 3.0);
     near(
         volume(&op(&t, &c, BooleanOp::Intersect)?),
         inside,

@@ -639,7 +639,7 @@ fn a_horn_torus_has_analytic_properties() {
             let m = torus(&frame, mm(radius), mm(radius), &doc()).unwrap();
             assert_eq!(counts(&m.body), (1, 3, 1));
             let truth = solid::torus(radius, radius).unwrap();
-            assert_close(truth.volume(), 2.0 * PI * PI * radius.powi(3));
+            assert_close(truth.volume(), 2.0 * PI * PI * radius * radius * radius);
             assert_mass(&m.body, &frame, &truth, 2.0 * radius, 1e-12, "horn torus");
             assert_membership(
                 &m.body,
