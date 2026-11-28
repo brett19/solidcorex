@@ -86,6 +86,7 @@ mod surface;
 mod to_nurbs;
 mod torus;
 mod trough;
+mod volume_map;
 
 pub use any_curve::{AnyCurve, CurveOnSurface};
 pub use axial::{AxialError, AxialPiece, Holds, axial_section, holds_axis};
@@ -111,6 +112,7 @@ pub use sphere::Sphere;
 pub use surface::Surface;
 pub use torus::Torus;
 pub use trough::{Half, MARGIN, Trough, TroughError, facing_trough};
+pub use volume_map::{Bend, Image, MapError, NotExact, Polar, Twist, Uv, VolumeMap};
 
 use scx_num::vector3d::Point3;
 
