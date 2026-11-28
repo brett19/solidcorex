@@ -36,9 +36,9 @@ use core::f64::consts::{FRAC_PI_2, PI, TAU};
 
 use scx_brep::op::Scratch;
 use scx_brep::{Brep, Document, EdgeShape, FaceId, FaceSide};
-use scx_make::Span;
 use scx_make::{
-    ExtrudeFaces, Made, Path, Piece, RevolveFaces, SweepFaces, Turn, extrude, revolve, sheet, sweep,
+    ExtrudeFaces, Made, Path, PathFrame, Piece, RevolveFaces, Shape, Span, SweepFaces, Turn,
+    extrude, revolve, sheet, sweep,
 };
 use scx_mass::{Mass, MassSpec, RelAccuracy, mass};
 use scx_num::budget::{Budget, Stop};
@@ -185,7 +185,14 @@ fn revolved(loops: &[Vec<Seg>], at: &Frame, turn: Turn) -> Made<RevolveFaces> {
 /// The one place `sweep` is called (`MK7b` changes its signature).
 fn sweep_along(loops: &[Vec<Seg>], at: &Frame, pieces: &[Piece]) -> Made<SweepFaces> {
     let path = Path::new(pieces, &doc()).unwrap();
-    sweep(&region(loops), at, &path, &doc()).unwrap()
+    sweep(
+        &region(loops),
+        at,
+        &path,
+        &PathFrame::Shaped(Shape::PLAIN),
+        &doc(),
+    )
+    .unwrap()
 }
 
 fn line(a: Point3, b: Point3) -> Piece {

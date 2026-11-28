@@ -12,6 +12,7 @@ use scx_planar::{PlanarError, SegmentRef};
 use scx_surface::SurfaceError;
 
 use crate::frames::FrameError;
+use crate::sweep::{LawFault, Needed};
 
 /// Which size of a constructor is meant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,6 +125,8 @@ pub enum Refusal {
         /// The minor radius (mm).
         minor: f64,
     },
+    /// A sweep's laws or rails are out of range, or do not place the profile.
+    Law(LawFault),
     /// A revolve's profile reaches more than the resolution across the axis, so the body
     /// would pass through itself: `at` is the first segment that does.
     CrossesAxis {
@@ -211,6 +214,14 @@ pub enum Unsupported {
         /// The minor radius (mm).
         minor: f64,
     },
+    /// The construction needs a surface kind this build does not have yet (step 5's).
+    NeedsKind {
+        /// The kind.
+        kind: Needed,
+    },
+    /// Guide rails along a path with a corner: the stations' planes at a mitre are not
+    /// square to the path, so the rails' crossings there are not defined yet.
+    RailsAtCorner,
     /// A revolve's arc whose circle crosses the axis outside the arc: its surface is a
     /// spindle torus, not made yet.
     SpindleTorus {
@@ -303,6 +314,9 @@ impl MakeError {
             Self::Refused(Refusal::UvBox { .. }) => "uv_box",
             Self::Unsupported(Unsupported::NurbsFace) => "nurbs_face",
             Self::Unsupported(Unsupported::HornTorus { .. }) => "horn_torus",
+            Self::Refused(Refusal::Law(_)) => "sweep_law",
+            Self::Unsupported(Unsupported::NeedsKind { .. }) => "needs_kind",
+            Self::Unsupported(Unsupported::RailsAtCorner) => "rails_at_corner",
             Self::Refused(Refusal::CrossesAxis { .. }) => "crosses_axis",
             Self::Refused(Refusal::Turn { .. }) => "turn",
             Self::Unsupported(Unsupported::SpindleTorus { .. }) => "spindle_torus",
@@ -384,6 +398,20 @@ impl fmt::Display for MakeError {
                 f,
                 "the horn torus (major {major} mm, minor {minor} mm) is not made yet: its tube meets the axis"
             ),
+            Self::Refused(Refusal::Law(e)) => write!(f, "the sweep's laws: {e}"),
+            Self::Unsupported(Unsupported::NeedsKind { kind }) => {
+                write!(
+                    f,
+                    "this needs the {} surface kind, not built yet",
+                    kind.name()
+                )
+            }
+            Self::Unsupported(Unsupported::RailsAtCorner) => {
+                write!(
+                    f,
+                    "guide rails along a path with a corner are not followed yet"
+                )
+            }
             Self::Refused(Refusal::CrossesAxis { at }) => {
                 write!(f, "{at} crosses the axis of the revolve")
             }

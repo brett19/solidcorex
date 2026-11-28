@@ -2669,9 +2669,170 @@ the pin's stitch).
 Open: the profile-symmetry closing above; the pole case; self-meeting across pieces; corners next
 to arcs (procedural kinds or fitted mitre curves).
 
-### 13.25 MK16 as built (11-28)
+### 13.25 MK7b laws (11-28)
 
-Tests only: `crates/scx-make/tests/closed_form.rs` (8 tests), the closed-form make table over
+The first part of MK7b: the sweep's laws over MK7a's frames, everything that places the
+profile at a station, and one public `sweep` shared with MK5 (§13.24). The walls of a sweep
+with laws wait on step 5's procedural sweep kind (`Surface` has none). Code in
+`scx-make/src/sweep/mod.rs` (laws, entry) and `sweep/rail.rs`, beside MK5's
+`sweep/walls.rs`; tests in `tests/sweep_laws.rs` (19), MK5's 21 in `tests/sweep.rs`.
+
+- `placements(&Path, normal: UnitVec3, &PathFrame, &[Stop], &Document) -> Result<Vec<Placement>,
+  MakeError>`: a `Placement { from, at, m }` takes the profile's point `q`, drawn at the path's
+  start, to `at + m (q - from)`. The shape laws are the pin's `shape(v) = k Rot(n, twist u) v`,
+  `k = 1 + (end_scale - 1) u`, with `n` the profile's normal turned to point along `t0`. The
+  orientation follows them: `Perpendicular` uses the frame's turn, `Parallel` uses none, and
+  `Direction` uses `[t, r, t x r] [t0, r0, t0 x r0]^T`. At a `Stop::Corner` the columns are
+  stretched by `Corner::stretch` along `to - from`, except for a parallel profile. With rails
+  the map is the pin's `rail_map`. One rail gives `d` from the path to the rail, square to `t`.
+  Two rails give `d` from the first rail to the second. The profile turns `d0` into `d`, sized
+  by `|d| / |d0|`, evenly (`RailFit::Scale`) or only across (`Stretch`), and `at` puts the
+  profile's point on the (first) rail onto it.
+- `fractions(&Path, &PathFrame, &Document)`: SolidCraft's skin rule. It takes one station per
+  degree of `|twist|` plus the tangent's turn (`Path::tangent_turn`, `a phi / sqrt(a^2 + b^2)`
+  per helix) plus the corners' angles, at least a rail's control points less one, and clamps
+  the count to `[MIN_SKIN_STATIONS, MAX_SKIN_STATIONS]` = `[16, 2048]`. The fractions are even
+  in arc length with every joint included exactly. The rule is carried over, not derived; the
+  kind's own bound replaces it.
+- `sweep(&Region, &Frame, &Path, &PathFrame, &Document) -> Result<Made<SweepFaces>, MakeError>`
+  is the one public sweep. `PathFrame::Shaped(Shape::PLAIN)` runs MK5's walls by kind
+  (`walls::build`, its refusals and `Unsupported::HelixPiece` unchanged). Any other frame
+  (twist, end scale, another orientation, rails) is checked with every station the skin would
+  use, then answered `Unsupported::NeedsKind { kind: Needed::ProceduralSweep }`. The kind
+  plugs in at the comment at the end of `sweep`, taking the profile's segments and the
+  placements, and fills MK5's `SweepFaces` (`[piece][loop][segment]`, caps `Option`).
+- A rail crosses a station's plane where the Bernstein coefficients of `(X - p W) . t` have a
+  root. Each span is rational Bezier: one for a line, a quadratic per quarter for an arc, and
+  the knots inserted to the degree for a clamped NURBS curve. The roots come from
+  `scx_algo::bernstein_roots`, and the coefficients are zeroed within
+  `gamma_5 (1 + gamma_6) size`. A rail's own end within the resolution reaches the plane. A
+  root at a knot is one root, and the crossing must change sign over the rail. Anything else
+  is `RailFault::{Short, Touches, Twice, InPlane, TooNear}`.
+- Errors added: `Refusal::Law(LawFault)`, `Unsupported::NeedsKind { kind: Needed }` and
+  `Unsupported::RailsAtCorner`. `Refusal::Path(FrameError)` and `From<FrameError>` are MK5's,
+  shared. `frames.rs` gains one crate-private reader, `tangent_turn`; the skin's joints come
+  from MK5's `Path::joints`.
+
+Decisions and cases:
+- **`PathFrame` is an enum, `Shaped(Shape) | Railed { rails: Rails, fit }`, and `Rails` is
+  `One | Two`.** 75 wrote a struct with `rails: Vec<Rail>` beside twist and scale. For: the
+  pin's refusals "rails set the twist and scale" and "more than two rails" cannot be written.
+  Against: a caller with a twist and rails must choose, where the pin's error told them why.
+  The pin refused that pair anyway, so nothing is lost.
+- **The least angle lives in its orientation.** `Parallel { least_crossing }` and
+  `Direction { along, least_sine }` replace the pin's always-present fields that only one mode
+  read (a field ignored unless a mode is set). For: no dead fields. Against: the caller writes
+  SolidCraft's 5 degrees and `1e-3` themselves; the docs name them.
+- **The caller's twist and scale limits are not ours.** The pin refused past
+  `max_twist_turns` and `end_scale_within`, which are SolidCraft's UI policy. Only the geometric
+  limits are refused here: twist finite and at most `MAX_TURNS` turns, scale finite and
+  positive. For: one rule, no policy setter. Against: a caller that forgets its own limit gets
+  a 1000-turn sweep. That is legal geometry, and the skin clamps at 2048 stations.
+- **`Rail` is closed-form `Line | Arc | Nurbs(Arc<NurbsCurve<3>>)`, not any curve.** The pin
+  took any `&Curve` and converted it to NURBS, refusing one with no NURBS form at run time.
+  For: each variant splits exactly into rational Bezier spans, so the crossing is the roots
+  of a polynomial, not a march, and a rail with no exact form cannot be passed. Against: an
+  ellipse or other kind must come as NURBS. A helix has no exact NURBS form, so a helical rail
+  is not possible yet (the pin refused it too). That is an open question.
+- **The resolution replaces the pin's `1e-9 (1 + |P|)`** where a rail's end reaches a plane,
+  as in MK7a for pieces meeting.
+- **A placement is a self-contained affine map** (`from`, `at`, `m`), not the pin's
+  `Station::translation(first)` that needed the path's first point beside it. For: the kind
+  and the tests read one value. Against: `from` repeats in every placement (24 bytes).
+- **Rails along a path with a corner are `Unsupported::RailsAtCorner`.** The pin did the same.
+  A mitre's plane across a rail has no single crossing rule yet.
+- **`sweep` validates before it answers Unsupported.** For: a caller gets its real refusal
+  (a rail stopping short) now, not after step 5, and the station work is exercised. Against:
+  it does work whose result it drops. That costs about 1 ms for 2049 stations (below).
+- **`fractions` stays SolidCraft's uncertified count.** For: the skin is the kind's to bound.
+  Deriving a count now would be a bound for a surface that does not exist. Against: nothing
+  proves 1 degree is close enough. The rule is recorded as residue.
+
+Idiom hunt: there are no setters, out-params or failing defaults. `Shape::PLAIN` is a value,
+not a fallible default. The pin's `Laws` (a `Default` of nine fields, `rail_fit` ignored
+without rails, `min_crossing` and `min_across` ignored outside their modes, `rails:
+Vec<&Curve>` checked for length at run time) is gone.
+
+Truths (`tests/sweep_laws.rs`, 19 tests, closed forms, 1e-12 unless stated):
+- On a straight path, twist and scale act linearly. `X` goes to `k_u (cos Tu, sin Tu, 0)`,
+  `Z` is kept, a square's corner is turned and scaled, and a circle's radius is `10 k`
+  (pin :138).
+- A twist alone keeps the map orthonormal and the corner's angle at `pi/2 u`. This is the
+  app's twisted prism's section; its volume waits for the walls.
+- A diverging line rail scales by `(d0 + s x) / d0`, evenly or across (pin :238). An arc rail
+  scales by `sqrt(R^2 - x^2) / R` (pin :268).
+- **A rail is followed exactly** (new). Along a quarter arc, concentric arc rails of radii 13
+  and 8 are crossed at `r (cos phi, sin phi)`, one or both. A line rail that rises out of the
+  path's plane is crossed at its point on the station's plane, for both fits.
+- Rails that stop short, touch, cross twice or lie in the plane are refused, and so are rails
+  that meet the path. A polyline's vertex on a plane is one crossing, at a scale of 5/3. A
+  cubic `x - 4 = -4 (1 - 2s)^2 (1 - s/2)` touches the plane `x = 4` and crosses `x = 3` twice
+  (pin :291, :364, :387, :407).
+- Two rails span the profile with `k = (4 + s x) / 4`, and the origin goes to `(x, 2 - 2k, 0)`
+  (pin :420). Rails at a corner are `Unsupported` (pin :455).
+- The parallel orientation is the identity map. The crossing is refused at 90 degrees, and at
+  84 degrees it passes with 5 and fails with 7 (pin :627). The direction orientation along a
+  helix takes `t0` to `t` and keeps the direction across, and a path along the direction is
+  refused (pin :665).
+- A profile normal against the path gives equal placements (pin :692).
+- A right-angle corner's mitre is turned to the bisector and stretched by `sqrt 2` along
+  `b`, with the scale at the corner's fraction. This is the stretch half MK7a left.
+- The refusals (pin :706) are twist (infinite, NaN, 1001 turns), end scale (0, -1, NaN,
+  infinite), least crossing and least sine out of range, a bad rail shape, and the frames'
+  refusals coming through as `path`.
+- `fractions` (pin :309): a quarter arc twisted a quarter turn gives 181 values; a line gives
+  17; a helix with `a = 3, b = 4` gives 217 (216 degrees); a joint is included exactly; a rail
+  of 40 points asks for 39 steps.
+- `sweep` with laws refuses first and otherwise answers `NeedsKind`; with the plain frame it
+  builds.
+
+Removed on purpose, as listed in the test file's header:
+- From `out_of_range_paths_laws_and_fractions_are_refused`, the "more than two rails" and
+  "rails with a twist" cases. They proved the refusal, and the type now forbids both.
+- `the_caller_s_twist_and_scale_limits_refuse_past_them`. It proved SolidCraft's policy
+  limits, which are now the caller's.
+
+Remaining for the later MK7b part, once step 5 adds the kind:
+- the walls and caps of a sweep with laws on the procedural sweep kind, in MK5's
+  `SweepFaces`;
+- the volume truths: a twisted square prism keeps `area x length`, and an end scale gives the
+  frustum's `h pi r^2 (1 + k + k^2) / 3`;
+- the certified station count from the kind's bound, replacing `fractions`;
+- a mitre's rail crossing (corners with rails);
+- helical rails.
+
+Cost: new code only, and no existing path changes. In a release build, 2049 placements along
+a 20-turn helix with twist and scale take 0.39 ms (about 190 ns a station). Two line rails
+take 0.82 ms (about 400 ns: two crossings and a frame). `fractions` takes 3 us. Measured
+with a throwaway timer that was not committed.
+
+### 13.26 CN3 as built (11-28)
+
+`scx_nurbs_surface::fit` (77 §4.3, row CN3; FT2's `scx_nurbs::fit` and CN1's `CompatibleCurves` reused) and `NurbsSurface::bernstein_over` (`bernstein.rs`). Both passes of every fit are FT2's banded rotation solves; the tensor system is separable, so no matrix larger than one line's is formed.
+
+API (all `Result<_, SurfaceFitError>`):
+- `interpolate(&Net<[f64; D]>, u, v, (p, q))` and `interpolate_on(grid, &ku, &kv, u, v)`: the surface through a grid at given parameters (row `i` of the net at `u[i]`, column `j` at `v[j]`), knots by averaging or given. Rows (along u) are fitted by FT2 into `CompatibleCurves`, then their control columns along v.
+- `interpolate_rows(&CompatibleCurves<D>, v, degree, &Edge, &Edge)` and `interpolate_rows_on(.., &kv, ..)`: skinning with given parameters, the curves being CN1's. Rational rows are fitted in homogeneous space (`w P` and `w`, two solves per column); the surface passes through the rows and is rational.
+- `Edge<D>` is `Point` or `Held(Vec<End<D>>)`: one FT2 `End` per control point of a row, a derivative of that control column in v, all of one order (G1/G2/G3 boundary). Refused for rational rows.
+- `least_squares(grid, u, v, (p, q), (nu, nv))`, `least_squares_on`, `least_squares_rows`, `least_squares_rows_on`: knots by `approximation`, corners held (the end points of every line are fixed).
+- `grid_parameters(grid, Param) -> (u, v)`: FT2's `parameters` per line, averaged over the lines (lines with all points equal left out).
+- `Edge`, `SurfaceFitError::{Fit { axis, cause }, Curves, Surface, EdgeCount, EdgeOrders, RationalEnds, Defect}` with `kind()` and `name()`; the frames inherit their cause's kind. Nothing is snapped, clamped or retried.
+- `NurbsSurface::bernstein_over(&Extent2d) -> BernsteinForm<D>`: for a box inside one span (no knot strictly inside it) the Bernstein forms (`scx_algo::bernstein::Bernstein2`) of `w P` (or `P`) and `w` over the box mapped to the unit square, taken from `restrict` (CN2), whose Bezier control points are the coefficients. `BernsteinForm::{coordinates, weight, degrees, point, restrict}`; products, sums and derivatives are `Bernstein2`'s (and `Poly3`'s dot and cross). New cause `RestrictCause::Interior { axis, knot }`; the box checks of `restrict` are now `check_box`, shared. `scx-nurbs-surface` gains the `scx-algo` dependency (layers.txt already allows it).
+
+Decisions.
+- **Separable two-pass fit, not a tensor system.** For: linear in the grid, one code path with FT2, the same numbers as fitting each curve. Against: the least-squares result is the separable one with the four boundary curves fitted to the boundary data (the pin's), not the global minimum with corners only held; for exact data on the knot space they agree.
+- **Ends only on the row fit (`Edge`), not on a grid.** The pin's first-derivatives-at-every-point surface and the twist they need are CN4's with the boundary conditions. For: no guessed twist. Against: a grid with prescribed boundary slopes needs the caller to fit the derivative curve itself.
+- **Derivative ends on rational rows are refused** (`RationalEnds`) rather than interpreted in homogeneous space. For: no meaning invented. Against: rational skins with tangent ends wait for CN4.
+- **A fitted weight that is not positive is `Surface(BadWeights)`**, not clamped (the pin clamps weights to `[1e-3, 100]`). Test: weights 1, .01, 1, .01, 1 at five rows.
+- **Bernstein through `restrict`.** For: exact, one code path, rational for free. Against: `restrict` copies the whole surface per call, so all spans of a large surface cost `O(spans * net)`; a Bezier decomposition in one pass is the follow-up if MK10 loops over every span (scx-surface's own patch builder already does one).
+- **Not ported:** `func_interp`'s own type (a `D = 1` grid does it), weighted surface fits, closed surfaces, per-point first derivatives, the pin's `i64` count arithmetic and its three overflow tests (they assert typed refusals of impossible counts; counts here are `usize` lengths of the data and cannot overflow a signed index).
+
+Work (release, throwaway timer; degree (3, 3), square grids): interpolation of an `n x n` grid is `2n` banded solves of size `n` (`n` along u, `n` along v; `4n` rational), `n` = 20/40/80/160/320/640: 374/361/350/203/193/183 ns per grid point (150 us to 75 ms total), so linear in the grid. Least squares to a net of `n/4`: `n` solves of `n` rows by `n/4` unknowns then `n/4` of `n` by `n/4`; 332/365/408/347/445/706 ns per point; the rise at 640 is the column gather over a 10 MB grid, not the solves (per-row work is `O(p^2)`).
+
+Tests (`fit_tests`, 12; truth is a closed form or the data): a bilinear patch from 4 corners, degrees (1,1), and from 5x4 and 7x9 uneven grids at degrees 1-4 x 1-3, at the data to `1e-12` and at 100 random parameters between to `1e-11`; random polynomial surfaces of degree `(p, q)`, p, q in 1-4, interpolated and least-squared (net sizes with and without interior knots, 3x oversampled) match at 200 parameters to `1e-9` / `1e-8`; circles (the 9-point rational quadratic) at 2, 4 and 7 uneven heights, v-degree 1-3, interpolated and least-squared, equal the closed-form cylinder at 300 parameters to `1e-12`, radius `r` to `1e-12 r`, rows equal the source circles; Held ends of order 1 and 2 on a bicubic reproduce it and its end derivative; the pin's `interpolation_hits_points` (5x4 chord grid, degrees (3,2)), `approximation_of_plane_is_exact` (9x7, net 5x4), `function_interpolation` (scalar grid) and `params_uniform_and_chord`, with its refusals (wrong knot count, net larger than the data); random spline samples interpolate back; typed refusals with unchanged inputs; the non-positive weight; Bernstein forms equal the surface on every span and an inner box of a polynomial and a rational surface (1e-11), the form of a cross product equals the cross of finite-difference partials, a form's `restrict` equals the form over the smaller box, and the interior, outside and empty refusals. Removed: none. The pin's three `huge_*` and `oversized_degrees` tests are not ported (above).
+### 13.27 MK16 as built (11-28)
+
+Tests only: `crates/scx-make/tests/closed_form.rs` (7 tests), the closed-form make table over
 `extrude`, `revolve`, `sweep` and `sheet`. Every case asserts volume and area (relative 1e-9, the
 estimate's error within it), the first moment where the truth has one, face, curve-edge and vertex
 counts, the Euler-Poincare count, regions and shells, the fin structure and the check contract
@@ -2716,5 +2877,5 @@ Result: every case holds; no finding, nothing `#[ignore]`d. The two mistakes mad
 the test's own (a hole drawn counter-clockwise gives T9 a positive area; a full turn's seam count
 excludes the level lines, whose plane annulus has none) and are in the rules above.
 
-Runtime (debug, nextest, loaded machine): the four heaviest tests 1 to 5 s each, all 8 in about
+Runtime (debug, nextest, loaded machine): the four heaviest tests 1 to 5 s each, all 7 in about
 5 s wall; the Pappus tables are 144 bodies, the cornered table 75.
