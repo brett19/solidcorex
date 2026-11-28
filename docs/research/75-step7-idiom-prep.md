@@ -2192,3 +2192,83 @@ For: one solver, no squared conditioning, linear time, every end condition linea
 Against: the knot rule for `a >= p` is refused (a G3 end needs `p >= 4` by averaging; explicit knots
 via `interpolate_on` accept `order <= p`); rotations cost about twice the flops of a Cholesky on
 the normal equations at equal `n` (not measured against the pin; the factor is in `p`, not `n`).
+
+
+### 13.18 MK10c as built (11-28)
+
+MK10's certificate module on its own, without the loft: `scx_surface::certificate`. The public API:
+- `Proof<P>`, one of:
+  - `Proved { bound }`;
+  - `Refuted { at, by }`, where `by` is a proved lower bound of the witness's distance and lies above the tolerance;
+  - `Undecided { bound: Option<Length> }`, the bound reached.
+- `on_analytic(&NurbsSurface<3>, &Analytic, Accuracy, &mut Budget, &Stop) -> Result<Proof<Point2>, SurfaceError>`, with `Analytic::{Plane, Cylinder, Cone, Sphere, Torus}` built by `Analytic::of(&Surface)`.
+- `on_circle(&NurbsCurve<3>, &Circle, Accuracy, &mut Budget, &Stop) -> Result<Proof<f64>, _>`.
+- `turn_about_axis(&NurbsCurve<3>, Point3, UnitVec3, Extent1d) -> Result<Turn, _>`, where `Turn` is `Positive`, `Negative` or `Undecided`.
+- `span_bound(&NurbsSurface<3>, &NurbsCurve<3>, Node, Node, Accuracy, &mut Budget, &Stop) -> Result<SpanBound, _>`. `Node { t, uv }`; `SpanBound` is `Bounded(Length)` or `Unbounded`.
+
+SU7's recognition certificate moved here from `recognize.rs`, which now calls the shared `prove`. RP7 gets a typed verdict for every kind, with no failing default.
+
+Decisions.
+- **Home crate: `scx-surface`, not `scx-make` as 01 had it.**
+  - For:
+    - The surface certificate is SU7's, already in `scx-surface`. It needs the analytic kinds, their axes and NURBS inversion, all of which live there. Putting it in `scx-make` would either duplicate it or make `scx-surface` call upward.
+    - RP7 (`scx-repair`) and MK11's patch certification both use it. `scx-repair` sits above `scx-make` in the layers anyway, but nothing that only needs the certificate should have to pull in the constructors.
+  - Against:
+    - 01 named `scx-make`.
+    - `scx-surface` gains about 1,900 lines (about 1,500 moved or new beside its tests) and so builds slower.
+    - `span_bound`'s one caller, the loft (MK10), stays in `scx-make`.
+  - The layers decide it: `span_bound` reads only a NURBS surface and curve, inversion and Bernstein forms. 01's `nurbs` row is amended.
+- **R6 limits:**
+  - `on_analytic` stops at 2^16 pieces in all;
+  - `on_circle` at 2^12 pieces and 40 halvings of a span;
+  - `span_bound` at 2^16 segments and 12 halvings.
+
+  Past a limit the result is `Undecided` (or, for `span_bound`, the bound reached), never a refusal. Each piece charges one unit of the budget and polls the stop.
+- **Refutation is rigorous.**
+  - On a surface, a corner whose bound is past the tolerance becomes a witness only when its proved floor distance, less the corner's coordinate slack, is above the tolerance. The cone's floor uses both nappes: `|rho - |s|| cos`.
+  - On a curve, a witness is a point read at a span's ends or middle, its distance less the evaluation's rounding.
+  - The truth tests check that `by` is at most the closed-form distance at `at`.
+- **No early exit for recognition.** `recognize`'s certificate no longer exits early on an unprovable piece. It now halves until each piece is proved, refuted or at a limit. A piece whose sampled distance is already within 1/64 of the tolerance is not halved (the pin's `NEAR`).
+
+Deviations from the pin.
+- `span_bound` returns the finite bound reached past its segment limit; the pin returned infinity. `Unbounded` is kept only for a piece with no bound at all: a weight not proved positive, or a diagonal of degree above 52.
+- The pin's "sliver" term is replaced by a plain norm bound: `sqrt` of the sum of each coordinate's `max |N/D|`.
+- `on_circle` bounds the distance from the circle itself, `hypot(|F/W^2| / (r + foot), |Z/W|)`. The pin ran two separate tests, one for the radius and one for the plane.
+- `turn_about_axis` takes a `UnitVec3` and an `Extent1d`, where the pin refused a reversed interval at run time. It has no budget, since it makes one pass with no halving.
+- New error `SurfaceError::OffRail { at }` (Refused) for a node outside the rail's domain.
+- Not ported: `meridian_collapse` and `axis_foot`, which belong to step 8's blends.
+
+Truths. There are 10 tests in `certificate/tests.rs`, judged against closed forms.
+
+`on_circle`:
+- The pin's `certificate.rs:1658` (an exact arc is proved, and is undecided at tolerance zero).
+- `:1678`:
+  - A 1e-4 bulge is refuted at 1e-7 with `1e-7 < by <=` its true distance.
+  - It is proved at 1e-3 with a bound at least the largest of 1,001 samples.
+  - Another radius, centre or plane is refuted.
+- `:1709` (an arc 1e4 from the origin is proved at 1e-9).
+- The budget is charged and the stop polled.
+
+`turn_about_axis`:
+- `:1575`: a quarter circle turns one way; it turns the other way about the opposite axis or reversed.
+- `:1601`: a curve that turns back, or a radial line, is undecided; the part before the turn is proved.
+
+`on_analytic`:
+- The exact image of every kind is proved within 1e-9. This covers the plane, both senses of the cylinder and cone, the sphere and the torus, all in a tilted frame.
+- A cylinder 0.01 wider is refuted with `by <= 0.01`.
+- A cylinder with an interior control point moved out 1e-3:
+  - At 1e-6 it is refuted, with `by` at most the closed-form distance at the witness.
+  - At 1e-2 it is proved, with a bound at least the largest of 41 x 41 samples.
+
+`span_bound`, on a cylinder of radius 10:
+- A rail circle of radius 10.5 gives a bound in [0.5, 0.5005].
+- A rail on the cylinder gives 2.2e-13.
+- A free cubic rail's bound is at least its largest sampled distance.
+- Nodes off either domain are refused with a typed error.
+
+Costs, release build on the build server, timed with throwaway timers:
+- **`span_bound`:**
+  - The on-surface rail takes 1 segment in 6.7 us.
+  - The free cubic rail takes 7 segments in 0.48 ms, about 70 us a segment.
+  - The off-surface rail at a tolerance 5e-4 above the exact distance 0.5 takes 1,403 segments in 48 ms, about 34 us a segment. Each segment is one inversion of the rail's middle plus a diagonal of degree `du + dv` and its `max_ratio`. The segment count grows as the tolerance nears the true distance. MK10's caller should pass its loft tolerance, not the distance it expects.
+- **`recognize`:** the suite takes 10 to 12 ms on base 7c1b668 and 10 ms on the branch. No change is measurable on its tests: the halving that replaced the early exit is bounded by `NEAR` and the piece limit.
