@@ -1818,7 +1818,115 @@ sheet of one face on a plane, cylinder, cone, sphere or torus; `Bound` is `Box(E
 - Errors added: `Refusal::UvBox`, `Unsupported::NurbsFace`.
 - Not ported: the pin's face-reading tests (step 6) and NURBS faces (MK15b).
 
-### 13.12 MK7b laws as built (11-28)
+### 13.12 MK4 as built (11-28)
+
+`scx_make::revolve(&Region, &Frame, Turn, &Document) -> Result<Made<RevolveFaces>, MakeError>` and
+`scx_make::revolve_sheet(..) -> Result<Made<RevolveSheetFaces>, MakeError>` turn a line-and-arc
+region in the frame's `x, y` plane about the frame's y axis. `Turn::{Full, Partial { from, to }}`
+(radians, right-handed about y, zero at the region's plane). `RevolveFaces { start: Option<FaceId>,
+end: Option<FaceId>, walls: Vec<Vec<Wall>> }`, walls `[loop][segment]` in the order given to
+`Region::new`; `Wall::{OnAxis, Face(FaceId), Split { before, after }}`. Every wall is built
+directly with exact pcurves: a line is a plane, a cylinder or a cone; an arc is a sphere (centre on
+the axis), a ring torus, or a horn torus (its circle touches the axis); every surface's frame is
+`(axis point at the piece's height, z = axis, x = the start radial)`, so the parallels are the
+surface's u lines and each meridian its v line at `u = 0` or `u = sweep`.
+
+Decisions, with cases for and against:
+
+- **Touches by the zone, crossings refused.** A profile point within the resolution's zone of the
+  axis is put on it; a segment whose both ends are on it is `Wall::OnAxis` and sweeps nothing; a
+  vertex on it is a pole (a collapsed edge per cone, sphere or horn-torus face; a plane passes
+  through it). A segment reaching more than the zone across the axis (its side-mapped radius
+  minimum, an arc's interior included) is `Refused(CrossesAxis { at })`. For: the pin's meaning
+  (it splits a touch and refuses a crossing) with no new predicate; the zone is what makes two
+  points one in the finished body. Against (the adversarial row in 04 11-28): a touch within the
+  zone of a crossing is decided by the zone, not by certified bounds or `Unproven`. The profile is
+  exact data in a `Region` (lines and circles from `f64`s), so the only uncertainty is the rounding
+  of a radius computation, many orders below the zone; `Unproven` would never fire. Recorded as a
+  deviation.
+- **Interior axis touch: split, or re-seam a whole circle.** An arc whose circle touches the axis
+  at `T = (0, c.h)` with `T` inside the arc is split there into two pieces (`Wall::Split`, both
+  horn-torus faces); a whole circle touching the axis is re-seamed to start at `T`, so it is one
+  horn-torus face whose loop runs from the pole (WR-590's three-face partial turns and one-face
+  full turn). An arc whose circle crosses the axis outside the arc (`|c.r - r| > zone` with
+  `c.r < r`) is `Unsupported::SpindleTorus`: its surface is a spindle torus, which `scx-surface`
+  does not have; the pin keeps a revolution surface there (not ported).
+- **Horn torus support across crates.** `Torus::horn(frame, radius, sense)` (major = minor) and
+  `Torus::pole() -> Option<Pole>` (`v = 1/2`, the centre). The pcurve writer, `check/geometry.rs`
+  and the testkit oracle read the torus pole as they read the sphere's and cone's. The writer's
+  pole-side rule changed from `side_v < pole.v` to `side_v < start.v`: the horn pole sits inside
+  the torus's periodic v range (at `v = 1/2`, or `3/2` a period on), so only the pole use's own
+  start v says which side of it the loop is on; for the sphere and cone, whose poles are at the
+  ends of the v interval, the two rules agree. `scx_make::torus` still refuses a horn torus
+  (`Unsupported::HornTorus`); with the pole now supported that refusal could be lifted (open).
+- **The plane snap rule at the mean height, not the start's.** A line whose ends are within the zone
+  in height is a plane at their mean height; within the zone in radius, a cylinder at their mean
+  radius. For the mean: each end is off by at most half the difference, not all of it, and the rule
+  is symmetric in the segment's direction (a clockwise loop gives the same body). Against: 75 §3.6
+  places it at the start vertex with the end's distance recorded as its accuracy; that distance is
+  within the resolution, so `VertexRecord::accuracy` would be `None` either way. Deviation.
+- **Orientation from the profile's side.** The side is `+1` when the region's far reach is on the
+  frame's `+x`, else `-1`; each loop's walls are written for the solid on the left of the stored
+  traversal and reversed (list and senses) for side `-1`. Each surface's sense follows from the
+  piece's direction (`Forward` iff `o * dh > 0` for a cylinder or cone, iff the arc's turn agrees
+  with `o` for a sphere or torus, the plane's normal against `o * sign(dr)`), so no orientation
+  pass is needed.
+- **A hole of a full turn is a void.** Its walls close on themselves apart from the outer loop's,
+  so they get a void region's shell in front and a new shell of the solid behind
+  (`Assembly::hollow`); a partial turn's caps join every loop into one shell. `revolve_sheet` puts
+  each loop's walls in an outside shell of their own (`Assembly::sheet_shell`), since without caps
+  the loops are pieces apart. `Assembly` also gained `sides` and `face_between`.
+- **Caps** (partial turns) are planes through the axis, `z = D_from x Y` at the start and
+  `Y x D_to` at the end, holding the region's loops at that angle.
+- **Refused turns.** `Refusal::Turn { from, to }` for angles not finite, `to <= from`, a whole turn
+  or more apart, or with the farthest point less than the zone from the other cap either way round.
+
+Deviations from 75 §3.6 and its 04 row: the axis is the `Frame`'s y axis (no separate `Axis` type);
+angles are `f64` radians (no `Angle` type in `scx-num`); caps are `Option<FaceId>` and walls a
+`Wall` enum rather than `Vec<Vec<FaceId>>`, since an on-axis segment has no face and a split one
+two; `revolve_sheet` takes a `Region` (closed loops), not an open path; touches by the zone, not
+certified bounds; the plane snap at the mean height.
+
+Measured (release, throwaway timers, best of 20 runs of 50, tilted frame): a 3 x 4 rectangle
+revolved whole 21 us and a quarter turn 27 us (extruded: 13 us); a circle to a ring torus 9.7 us
+against `scx_make::torus`'s 9.3 us; a half disc to a sphere 8.5 us against `sphere`'s 8.1 us;
+WR-590's quarter turn 12 us. So a revolve costs what the matching primitive does, within 5%. The
+cost added to existing paths is one comparison per pole lookup (`Torus::pole` in the writer and the
+check) and the changed pole-side comparison; not measurable.
+
+Tests (`crates/scx-make/tests/revolve.rs`, 16): a tube from a rectangle (plain and tilted frame,
+full, quarter, 3.5 rad and almost-whole turns), the mirrored side, a solid cylinder (axis segment),
+a cone to an apex and a frustum, a sphere from a half disc, a ring torus, a region with a round and
+a square hole (voids for the full turn, genus 2 for partial), the plane and cylinder snaps, WR-590
+(circle centre (5, 0) radius 5, quarter, half and three-quarter turns from 0, pi/2 and pi, and the
+full turn), an arc split at its interior touch, the sheet, and the refusals (crossing by a line and
+by an arc's bulge, spindle arc, eight bad turns); determinism; the given-order walls of a clockwise
+loop. Each solid: Pappus's volume and area to 1e-9 with `scx_mass`'s estimate within it, face kinds
+per segment, the closed-solid structure (fins, sides, exact pcurves, Euler-Poincare) and the BR8
+oracle (the pinched WR-590 and split bodies: the oracle and exact pcurves, without the Euler count).
+No pin test was removed. The pin's `issue_2905_revolved_vase` is a chamfer test on a captured
+body, not a revolve test; its meridian (a circle of centre `(-16, 33)`, radius `sqrt 1690`, between
+`z = 30` and `60`) is the far arc of a circle crossing the axis, an apple (spindle) torus, which this
+revolve refuses as `Unsupported::SpindleTorus`. A real report needs it: the spindle surface is the
+first open question.
+
+### 13.13 SF1 as built (11-28)
+
+`scx_surface::project_curve(&Curve, Extent1d, &Surface, along: UnitVec3, Resolution)` and `scx_surface::drop_curve(&Curve, Extent1d, &Surface, Resolution)` return `Result<Vec<Projected>, ProjectError>`. A `Projected { curve, extent, from, kept: Option<ParamShift> }` is one piece: the image curve over `extent`, the image of the source over `from`, run the same way, with `kept` the source-to-image parameter map where the image is an affine copy (`None` for the cylinder's arc, where only the ends and the order hold). `ProjectError` is `NeedsFitter { curve: CurveKind, surface: SurfaceKind }` (Unsupported, `projection_needs_fitter`: the one variant the step-5 fitter replaces), and the Refused `Along`, `Flattened`, `OnAxis`, plus `Image(CurveError)`. The module is `crates/scx-surface/src/project.rs`, with the closed-form table and the pin-vs-here table in its header.
+
+Closed forms: onto a plane, every curve kind, through the projection affine and `Curve::transformed` (a circle to its exact ellipse on principal axes, a NURBS curve by its control points); onto a cylinder, a line parallel to the axis projected (0, 1 or 2 rulings) and a line dropped in a plane through the axis (a ruling per side) or square to the axis (an arc at its height); onto a cone, a line in a plane through the axis, projected along the axis or dropped (a generator per side). Every other pair is `NeedsFitter`.
+
+Decisions.
+- **The whole projection line, both signs.** For: one answer for a plane (the pin's SMLib projection is also unsigned), no split where the curve passes through the surface, and a caller wanting one side filters by the image's side. Against: a caller casting "down" onto a cylinder gets both rulings; the pieces are ordered by `s`, so the first is the near side.
+- **A miss is `Ok(vec![])`, not an error.** For: a projection line that misses the surface is a final answer, not a failure (no failing default either way: the vector says what happened). Against: the pin's `Error::Empty` lets a caller `?` it; the face caller in `scx-bodyq` decides that, after its trim, where empty can also come from the trim.
+- **No surface extent or uv box.** For: the analytic kinds are unbounded (but the cone's nappe, handled), and the face's trim belongs to `scx-bodyq` (75 SF1 row). Against: the pin's drop clipped to the face's uv box first; that is now the body's step.
+- **A cone's apex part is left out of the drop**, not returned as a point: the feet there are the apex alone, not a curve. A piece whose image has no length is left out; when none is left the answer is `Flattened` (a line dropped square through a cylinder's axis, a circle seen edge-on).
+- **Predicates within the zone over the extent** (parallel, meridian, square): R5, chosen before building, no fallback. Against: a line a hair outside the zone gets `NeedsFitter` though its image is nearly a line; the fitter answers it, which is what it is for.
+- **`kept`.** An affine image keeps the parameter through a `ParamShift` (the plane's, rulings and generators: `NONE`), so a caller can map vertices; an arc's angle is not an affine function of the line's `t`, so it says `None` rather than a wrong map.
+
+Truths (`crates/scx-surface/tests/project.rs`, 14 tests, plus 2 unit tests): a circle projected along z onto a plane tilted by beta is the ellipse with semi-axes r and r / cos(beta) about the centre's image; a tilted circle projected onto a level plane has semi-axes r and r cos(gamma); for 64 random circles, planes and directions the image keeps the conjugate-diameter invariants a^2 + b^2 = |u|^2 + |v|^2 and ab = |u x v|; a line dropped onto a cylinder in a plane through its axis is the ruling at the radius (and splits at the axis); a chord dropped onto a cylinder is the arc at its height with the closed-form ends. Every piece is sampled: each point on the surface and on the projection line through its source point, or equal to the kind's `closest` foot. Ported from the pin: `a_line_above_a_box_drops_to_its_foot_on_the_top`, `a_line_beside_a_cylinder_drops_onto_its_wall_at_the_radius`, the #20836 seam chord (its geometry; the seam split and the area are the body's), and `a_segment_projects_onto_a_box_s_record_face_at_its_index` (both levels). Not ported: `a_curve_over_nothing_of_the_face_is_refused` (a face concern; the analogue here is a miss being empty) and `rational_quarter_circle` (a record form, not geometry).
+
+### 13.14 MK7b laws as built (11-28)
 
 The first part of MK7b: the sweep's laws over MK7a's frames, everything that places the
 profile at a station, and a typed entry for the walls. The walls wait on step 5's procedural
