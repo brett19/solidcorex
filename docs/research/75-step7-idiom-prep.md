@@ -2133,3 +2133,62 @@ Work counts (the test family: 3 curves, degrees 1-5, mixed knot kinds and domain
 
 Tests (`compatible::tests`, 4): 1,000 parameters per curve of every sampled family evaluate as the source at the relabelled parameter to `1e-9 (1 + |x|)`, with knot vectors and degrees equal; unchanged inputs come back bit for bit; near knots stay two and polynomial curves get unit weights; the empty and unclamped refusals.
 
+### 13.17 FT2 as built (11-28)
+
+`scx_nurbs::fit` (77 §2, row FT2): `Param` and `parameters`; `averaging` and `approximation` knot
+vectors; `interpolate` / `interpolate_on` at given parameters with `End` conditions; `least_squares`
+and `weighted_least_squares`; one banded solver. Typed `FitError` (cause per variant, `kind()`,
+`name()`); no flags, setters, out-params or failing defaults.
+
+- **`End<N>`** is `Point` (G0), `Tangent{d1}` (G1), `Curvature{d1,d2}` (G2), `Hermite{d1,d2,d3}`
+  (G3): parametric derivatives at the end, which the caller derives from a unit direction, a speed
+  and a curvature. Every condition is stated; the pin's estimate of a missing end derivative from
+  the data is not ported. Points are `[f64; N]` for any `N`, so a homogeneous fit is `N = D + 1`
+  and `Spline::into_curve` / `NurbsCurve::from_homogeneous` finish it (replaces `FitPoint`).
+- **Knots by averaging** use one rule for every pair of end orders `(a, b)`: the interior knots are
+  the means of `p` consecutive entries of the parameters with the first repeated `a` more times and
+  the last `b` more. It reproduces eq. 9.8 for `(0,0)` and the book's end-derivative knots for
+  `(1,1)` (tested against hand values); the pin has five routines for these cases. Needs `a, b < p`.
+- **Banded solve**: Givens rotations row by row (`band.rs`, private), `p + 1` entries per row of
+  `R`, any number of right-hand sides at once. A square system (interpolation) and a rectangular one
+  (least squares) use the same code; no pivoting, and no normal equations, so a fit's condition
+  number is not squared (the pin forms `N^T N` and a dense LU). A pivot below
+  `columns * EPSILON * max entry` is `Singular { column }` (a span without data, fewer data than
+  unknowns): the named tolerance replaces the pin's `LU_TOL`.
+- **Least squares** holds the end point and `order` derivatives by pinning the first and last
+  `order + 1` control points (the `k`-th derivative at an end depends on `P[0..=k]` with a nonzero
+  last coefficient), then solves for the rest.
+- **Not ported** (decided): first derivatives at every point and the closed-curve conditions (CN3
+  and MK12's), LU reuse between solves (`cpts_with_matrix`; a surface fit pushes its rows again),
+  `square_to_plane`, and `approx_end_directions` (direction held, reach free). The last is FT3's:
+  it needs the unknown reaches as two extra shared columns of the solve and is only meaningful with
+  the certificate; the band solver takes them as a Schur step.
+
+Tests (truth is the closed form, not the pin): samples of a polynomial of degree `d <= p` (p 1-6)
+interpolate back to 2e-11 (relative to 1 + |value|) at 200 parameters, with and without its own end
+derivatives; random data with every end combination up to G3 meets `C'`, `C''`, `C'''` to 1e-8
+and passes through every point to 1e-10; least squares of exact data from a random spline on its
+own knots gives the control points to 1e-10 (weighted, any positive weights: 1e-9), also with
+Hermite ends held, and with perturbed data the held ends are still exact; the fit is a minimum
+(200 random perturbations never lower the residual); a polynomial lies in the approximation-knot
+space and is recovered; a homogeneous quarter circle; typed refusals; and a 20 000-point
+interpolation (a dense matrix would be 3.2 GB).
+
+**Cost** (throwaway counter and timer, release build, interpolation of `n + 1` points in 3D,
+rotation-entry operations counted as `width + N` per rotation; nothing committed):
+
+| p | n | rotations x (p+1+3) | per point | time |
+|---|---|---|---|---|
+| 3 | 100 / 1 600 / 25 600 | 791 / 13 454 / 212 065 | 7.9 / 8.4 / 8.3 | 32 us / 0.41 ms / 4.0 ms |
+| 5 | 100 / 1 600 / 25 600 | 1 971 / 30 726 / 495 558 | 19.7 / 19.2 / 19.4 | 18 us / 0.27 ms / 5.4 ms |
+
+Linear in the number of points (per-point work constant to 5% over a 256x range, and about
+`p + 1` times its row width); a dense LU of the same system is `n^3/3 = 5.6e12` operations at
+`n = 25 600` and `n^2` storage. Least squares adds the same per data row, plus the `O(p)` pinned
+points. The pin's interpolation is dense (`RealMatrix`); its least squares is banded but through
+normal equations.
+
+For: one solver, no squared conditioning, linear time, every end condition linear and exact.
+Against: the knot rule for `a >= p` is refused (a G3 end needs `p >= 4` by averaging; explicit knots
+via `interpolate_on` accept `order <= p`); rotations cost about twice the flops of a Cholesky on
+the normal equations at equal `n` (not measured against the pin; the factor is in `p`, not `n`).
