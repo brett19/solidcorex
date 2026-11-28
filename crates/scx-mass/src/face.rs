@@ -305,6 +305,32 @@ struct Inner<'a> {
     density: [f64; MAX_COMPONENTS],
     /// The surface's `v` breaks inside the face's `v` range.
     v_breaks: Vec<f64>,
+    /// A plane's origin and axes, read once: its sample is then `O + X u + Y v` with the
+    /// axes themselves as derivatives, the arithmetic of `Plane::point` and `Plane::jet`
+    /// without recomputing `Y = Z x X` at each sample.
+    plane: Option<PlaneAxes>,
+}
+
+/// A plane's origin and its `x` and `y` axes.
+#[derive(Clone, Copy)]
+struct PlaneAxes {
+    origin: Point3,
+    x: Vec3,
+    y: Vec3,
+}
+
+impl PlaneAxes {
+    fn of(surface: &Surface) -> Option<Self> {
+        let Surface::Plane(k) = surface else {
+            return None;
+        };
+        let frame = k.frame();
+        Some(Self {
+            origin: frame.origin(),
+            x: *frame.x(),
+            y: *frame.y(),
+        })
+    }
 }
 
 /// The largest of an inner integrand and of its change along `u`, per component, over the
@@ -540,13 +566,18 @@ impl Inner<'_> {
                 ge.get_mut(..n).unwrap_or_default(),
                 meter,
                 |s, out, _| {
-                    let j = self
-                        .surface
-                        .jet::<1>(Point2::new(u, s), [Approach::Above; 2]);
-                    let (Some(su), Some(sv)) = (j.get(1, 0), j.get(0, 1)) else {
-                        return Err(Fail::NotFinite);
+                    let (point, su, sv) = if let Some(a) = &self.plane {
+                        ((a.origin + a.x * u + a.y * s).to_vec(), a.x, a.y)
+                    } else {
+                        let j = self
+                            .surface
+                            .jet::<1>(Point2::new(u, s), [Approach::Above; 2]);
+                        let (Some(su), Some(sv)) = (j.get(1, 0), j.get(0, 1)) else {
+                            return Err(Fail::NotFinite);
+                        };
+                        (j.point(), su, sv)
                     };
-                    let p = j.point() - self.reference;
+                    let p = point - self.reference;
                     let nrm = su.cross(sv);
                     self.set.eval(p, nrm, out.value);
                     for (f, v) in peak.f.iter_mut().zip(out.value.iter()) {
@@ -555,7 +586,7 @@ impl Inner<'_> {
                     if out.rounds {
                         let mut along = [0.0; MAX_COMPONENTS];
                         let along = along.get_mut(..out.rounding.len()).unwrap_or_default();
-                        let at = (j.point(), p);
+                        let at = (point, p);
                         self.sample_rounding(at, (su, sv), nrm, out.rounding, along);
                         for (d, a) in peak.du.iter_mut().zip(along.iter()) {
                             *d = larger(*a, *d);
@@ -690,6 +721,7 @@ fn attempt(
         set,
         reference: reference - Point3::new(0.0, 0.0, 0.0),
         terms: Terms::of(surface),
+        plane: PlaneAxes::of(surface),
         base,
         accuracy: held,
         density,

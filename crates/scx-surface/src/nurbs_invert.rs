@@ -229,7 +229,7 @@ pub(crate) struct Patch {
 pub(crate) type Hb = (H, H);
 
 /// `x (1 + 4 eps)` and a little more: an error bound rounded up, underflow included.
-fn up(x: f64) -> f64 {
+pub(crate) fn up(x: f64) -> f64 {
     x * (1.0 + 4.0 * f64::EPSILON) + 4.0 * f64::MIN_POSITIVE
 }
 
@@ -682,7 +682,7 @@ impl Piece {
 }
 
 /// A net of degrees `(du, dv)` halved in `u` (`along_u`) or in `v`.
-fn halved(net: &[Hb], (du, dv): (usize, usize), along_u: bool) -> (Vec<Hb>, Vec<Hb>) {
+pub(crate) fn halved(net: &[Hb], (du, dv): (usize, usize), along_u: bool) -> (Vec<Hb>, Vec<Hb>) {
     let (mut lower, mut upper) = (net.to_vec(), net.to_vec());
     let (lines, len) = if along_u {
         (dv + 1, du + 1)

@@ -3,11 +3,12 @@
 
 use std::collections::BTreeSet;
 
-use scx_p21::product::{self, BodyKind, ItemKind, ProductStructure};
+use scx_p21::product::{self, BodyKind, ItemKind};
 use scx_p21::units::Units;
 use scx_p21::{Exchange, protocol};
 
 use crate::error::{Pending, StepError};
+use crate::products::{self, Lengths, ProductTree};
 use crate::report::{AssumedUnits, ImportReport, ImportWarning, SkipReason, Skipped};
 use crate::skeleton::{self, ShellPlan};
 use crate::units::{self, Resolved, UnitsFault};
@@ -75,8 +76,9 @@ pub struct ImportedBody {
 pub struct Imported {
     /// The bodies, in representation then item order.
     pub bodies: Vec<ImportedBody>,
-    /// The file's product structure (SP8 turns it into the tree of placed instances).
-    pub products: ProductStructure,
+    /// The file's parts, the assembly expanded into instances, and every body with its
+    /// placement in the world frame (SP8).
+    pub products: ProductTree,
     /// The bodies not in `bodies`, each with its reason.
     pub skipped: Vec<Skipped>,
     /// What else the read has to say.
@@ -166,6 +168,16 @@ pub fn read(ex: &Exchange, opts: &ReadOptions) -> Result<Imported, StepError> {
             }
         }
     }
+    let lengths: Lengths = products
+        .representations
+        .iter()
+        .filter(|r| r.items.iter().any(|i| matches!(i.kind, ItemKind::Body(_))))
+        .map(|r| {
+            let len = units::resolve(ex, r.context, opts.assume_units).map(|c| c.units.len);
+            (r.entity, len)
+        })
+        .collect();
+    let products = products::tree(&products, &lengths)?;
     if bodies.is_empty() && skipped.is_empty() {
         warnings.push(ImportWarning::NoBodies);
     }

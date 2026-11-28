@@ -4256,3 +4256,23 @@ None rises. plate-12 and plate-4 gain the most: their top and bottom faces carry
 **Open questions.** (1) PF3, above. (2) Whether `edit_face` should avoid the record copy it forces on a face the draft owns (it needs the old loops to match against). (3) `sin_cos` re-profile (§14.39 ruling) now waits on PF3 too, since the remaining trigonometry feeds from trace.
 
 **Proposed 04 row.** "PF2 (72 §14.44): a face's cells follow it through an edit. `Draft::edit_face` leaves the edited record a seed: a copy of each kept loop's pieces, area parts and surface-box parts (kept loop: one equal to a loop of the face before; surface-box parts only on an equal surface). The first read fills the cells from the seed and encloses only the new loops, with the same bits as a read from nothing. No seed when the old face was never read or no loop is kept; nothing evaluated at edit time. `write_pcurves` goes through `edit_face`. Trace writes each cycle once (`Draft::exact_loop`, `pcurve::placed`, opaque `ExactLoop`). Results bit-identical. `slice_ic` build: plate-12 −44%, plate-4 −27%, box-cyl-hole −1.6%, gear-60 −0.2%. PF3 (reuse old hole loops in trace) not built: not provably the same bits. Against: 8 bytes per face record, area sums regrouped per loop (enclosure bits can differ from older builds), a forced record copy per edit of a read face. Change if a caller needs edits to cost nothing when no read follows, or if PF3 gets a proof."
+
+### 14.45 PF4 as built (11-27)
+
+**Built.** `face::Inner` (`scx-mass`) carries `plane: Option<PlaneAxes>`, the plane's origin and its `x` and `y` axes read once when the face's integrator is made. At each sample a plane takes `(O + X u + Y v)` and the axes as its derivatives, with no `Surface::jet` call (so no `Frame::y`, a cross product, and no `Plane::point` per sample). Every other surface goes through `jet::<1>` as before. No API change outside the private struct.
+
+**Bits.** Unchanged by construction: the expression is `Plane::point`'s (`origin + x * u + y * v`, same order, then `to_vec`), the derivatives are the stored axes `Plane::jet` returns, and `Frame::y` is a pure function of the frame, so reading it once gives the value it gave each time. The `NotFinite` return for a missing derivative cannot occur for a plane (its jet always carries both). The scx-mass tests and the mass difftests are the check (results below).
+
+**Measured** (`slice_ic`, scx side, instructions, same machine, before then after):
+
+| case | before | after | change |
+|---|---|---|---|
+| `mass/plate-12` | 757,603,054 | 635,080,594 | -16.2% |
+| `mass/gear-60` | 161,326,232 | 142,988,232 | -11.4% |
+| `mass_full/plate-12` | 2,080,971,847 | 2,014,996,537 | -3.2% |
+
+Nothing rose. The saving is more than the 14% PF1 named because the generic `jet::<1>` also built a `SurfaceJet` and matched on the surface kind per sample.
+
+**For and against.** For: the arithmetic is the same, the change is local to one struct, and it touches no other crate. Against: a second place that knows a plane's point formula (a change to `Plane::point` must be mirrored; the mass difftests and a bit-comparison against the pin would catch a drift). The alternative, a `Surface::axes`-style accessor or caching `y` in `Frame`, would help every caller but changes `scx-num`'s `Frame` layout; not taken here, left to whoever finds another plane-heavy loop. Curved analytic surfaces keep `jet`, where the trigonometry dominates and nothing is recomputed that could be hoisted.
+
+**Proposed 04 row.** "PF4 (72 §14.45): `scx-mass`'s inner integral reads a plane's origin and axes once per face and evaluates samples from them (the arithmetic of `Plane::point` and `Plane::jet`, same bits), instead of a `jet` call, a cross product for `Frame::y` and a point per sample. `slice_ic` instructions: `mass/plate-12` -16.2% (757.6 M to 635.1 M), `mass/gear-60` -11.4%, `mass_full/plate-12` -3.2%; nothing rose. Against: the plane's point formula is now written twice. Change if: `Frame` caches `y`, making the local copy unnecessary."

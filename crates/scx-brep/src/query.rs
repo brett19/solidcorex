@@ -17,6 +17,20 @@ use crate::record::{EdgeGeom, EdgeShape, FaceRecord, VertexRecord};
 use crate::tables::Tables;
 use crate::view::{Edge, Face, Finished, Stage};
 
+impl FaceRecord {
+    /// Whether the loops bound the region from outside, proved: `Some(true)` when their
+    /// signed area in uv is positive (the outer loop runs counter-clockwise about the
+    /// natural normal, the region is the inside), `Some(false)` when it is negative or there
+    /// are no loops (the region is holes in the whole domain), and `None` when the sign does
+    /// not show. An importer reads it to tell a face whose `same_sense` disagrees with its
+    /// loops, and, one loop at a time, which loop is the outer one. Filled on first read.
+    #[must_use]
+    pub fn is_bounded_region(&self) -> Option<bool> {
+        let b = Boundary::of(self);
+        b.is_decided().then(|| b.is_bounded_region())
+    }
+}
+
 impl<S: Stage> Face<'_, S> {
     /// A box holding the face's region in uv: the hull of its loops when it has an outer
     /// loop, one window of its surface's domain when it is holes in the whole domain, and
@@ -42,6 +56,18 @@ impl<S: Stage> Face<'_, S> {
     #[must_use]
     pub fn contains_uv(self, p: Point2) -> Option<UvSide> {
         Boundary::of(self.rec).side(self.rec, p)
+    }
+}
+
+impl<S: Stage> Face<'_, S> {
+    /// Where the whole of the uv box `cell` lies against the face's region:
+    /// [`UvSide::Outside`] or [`UvSide::Inside`] only when no piece of the boundary can
+    /// reach the cell and the pcurves' enclosures show the side, else [`UvSide::Near`]
+    /// (the cell may meet the boundary); `None` when they cannot tell (see
+    /// [`Face::contains_uv`]). A cell proved `Outside` holds no point of the face.
+    #[must_use]
+    pub fn side_of_cell(self, cell: Extent2d) -> Option<UvSide> {
+        Boundary::of(self.rec).side_cell(self.rec, cell)
     }
 }
 

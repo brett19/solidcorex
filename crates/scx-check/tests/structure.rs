@@ -168,7 +168,7 @@ fn a_repeated_check_leaves_the_body_as_it_was() {
     }
 }
 
-/// The scope changes nothing yet: every scope runs the structure part.
+/// Every scope runs the structure part, and on a clean body every scope gives the same answer.
 #[test]
 fn every_scope_runs_the_structure_part() {
     let b = finish(corner_touch(0, false).unwrap());
@@ -178,30 +178,34 @@ fn every_scope_runs_the_structure_part() {
     assert_eq!(Scope::default(), Scope::Import);
 }
 
-/// Work is charged by use, so a budget under it is `Exhausted`, with the limit; a set stop
-/// is `Cancelled`; neither is a finding.
+/// Work is charged by use. The structure part takes 4 units a use (24 uses here), so a budget
+/// under that is `Exhausted`, with the limit; a budget that covers the structure but not the
+/// gaps leaves gaps undecided, not an error (research 74 §28); a set stop is `Cancelled`;
+/// neither is a finding.
 #[test]
 fn a_budget_or_a_stop_ends_it_typed() {
     let b = kind(Kind::Block, 0, 2);
+    let structure = 24 * 4;
     let work = found(&b).spent.work;
-    assert_eq!(work, 24 * 4);
-    assert!(
+    assert!(work > structure);
+    let full = |budget| {
         run(
             &b,
-            &Settings::new().with_budget(work),
+            &Settings::new().with_budget(budget),
             &Stop::new(),
-            Scope::Full
+            Scope::Full,
         )
-        .is_ok()
+    };
+    assert!(full(work).unwrap().is_clean());
+    let short = full(structure + 1).unwrap();
+    assert!(short.list.is_empty() && !short.undecided.is_empty());
+    let e = full(structure - 1).unwrap_err();
+    assert_eq!(
+        e,
+        CheckError::Exhausted {
+            limit: structure - 1
+        }
     );
-    let e = run(
-        &b,
-        &Settings::new().with_budget(work - 1),
-        &Stop::new(),
-        Scope::Full,
-    )
-    .unwrap_err();
-    assert_eq!(e, CheckError::Exhausted { limit: work - 1 });
     assert_eq!(e.kind(), ErrorKind::Exhausted);
     let stop = Stop::new();
     stop.set();
