@@ -163,6 +163,14 @@ pub enum RestrictCause {
         /// The parameter.
         at: f64,
     },
+    /// A knot of the surface lies strictly inside the box along `axis`, so the box is not
+    /// one polynomial piece ([`NurbsSurface::bernstein_over`](crate::NurbsSurface::bernstein_over)).
+    Interior {
+        /// The direction.
+        axis: ParamAxis,
+        /// The knot.
+        knot: f64,
+    },
 }
 
 impl RestrictCause {
@@ -178,6 +186,7 @@ impl RestrictCause {
         match self {
             Self::Outside { .. } => "restrict_box_outside_domain",
             Self::Empty { .. } => "restrict_box_empty",
+            Self::Interior { .. } => "restrict_box_interior_knot",
         }
     }
 }
@@ -194,6 +203,12 @@ impl fmt::Display for RestrictCause {
                 "the {axis} range [{lo}, {hi}] is not inside the domain [{a}, {b}]"
             ),
             Self::Empty { axis, at } => write!(f, "the {axis} range is the single value {at}"),
+            Self::Interior { axis, knot } => {
+                write!(
+                    f,
+                    "the {axis} knot {knot} is inside the box: not one polynomial piece"
+                )
+            }
         }
     }
 }
@@ -592,6 +607,10 @@ mod tests {
             NurbsSurfaceError::Restrict(RestrictCause::Empty {
                 axis: ParamAxis::V,
                 at: 0.5,
+            }),
+            NurbsSurfaceError::Restrict(RestrictCause::Interior {
+                axis: ParamAxis::U,
+                knot: 0.5,
             }),
             NurbsSurfaceError::NoSurfaces,
             NurbsSurfaceError::Defect { why: "a test" },
