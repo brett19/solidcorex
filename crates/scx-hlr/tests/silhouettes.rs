@@ -21,8 +21,8 @@ use scx_brep::{
 };
 use scx_curve::{Curve, Curve2, Line, Line2};
 use scx_hlr::{
-    BadView, Branch, Exactness, HlrError, OnFace, Silhouette, SilhouetteCurve, Silhouettes,
-    Undecided, View, Why, prepare, silhouettes,
+    BadView, Branch, Exactness, HlrError, OnFace, Silhouette, SilhouetteCurve, Silhouettes, View,
+    Why, prepare, silhouettes,
 };
 use scx_num::budget::{Budget, Stop};
 use scx_num::error::ErrorKind;
@@ -785,33 +785,38 @@ fn trimmed(top: f64, rational: bool) -> (Brep, EdgeId) {
     (finish(b.d), bottom)
 }
 
+/// The rational 270 degree cylinder over `z` in `[0, 0.5]` is recognised, and its NURBS
+/// rims now split the generators: of the two generators across the view (at about 106.7
+/// and 286.7 degrees), the first runs on the face over the whole height and the second
+/// lies in the 90 degree gap and is no silhouette of the face.
 #[test]
-fn a_rational_cylinder_is_recognised_and_its_nurbs_rims_named() {
-    let (body, bottom) = trimmed(0.5, true);
+fn a_rational_cylinder_is_recognised_and_trimmed_by_its_nurbs_rims() {
+    let (body, _) = trimmed(0.5, true);
     let w = view(v(1.0, 0.3, 0.2));
     let got = run(&body, &w);
     assert!(got.unsupported.is_empty());
-    assert_eq!(got.curves.len(), 2);
+    assert_eq!(got.curves.len(), 1, "{:?}", got.curves);
     let axis = frame(Point3::ORIGIN, v(0.0, 0.0, 1.0), v(1.0, 0.0, 0.0));
-    for s in &got.curves {
-        let Exactness::Recognized { deviation } = s.accuracy else {
-            panic!("{:?}", s.accuracy)
-        };
-        assert!(deviation.mm() <= 1e-9, "{deviation:?}");
-        let SilhouetteCurve::Line(line) = &s.curve else {
-            panic!("{:?}", s.curve)
-        };
-        let (rho, _) = axis_distance(line.point(0.25), &axis);
-        assert!((rho - 1.0).abs() < 1e-9);
-        // The generator is across the view from the axis.
-        let rel = line.origin() - Point3::ORIGIN;
-        let radial = rel - v(0.0, 0.0, rel.z);
-        assert!(radial.dot(*w.d()).abs() < 1e-9);
-        let OnFace::Undecided { why, .. } = &s.on_face else {
-            panic!("{:?}", s.on_face)
-        };
-        assert_eq!(*why, Undecided::NurbsEdge { edge: bottom });
-    }
+    let s = &got.curves[0];
+    let Exactness::Recognized { deviation } = s.accuracy else {
+        panic!("{:?}", s.accuracy)
+    };
+    assert!(deviation.mm() <= 1e-9, "{deviation:?}");
+    let SilhouetteCurve::Line(line) = &s.curve else {
+        panic!("{:?}", s.curve)
+    };
+    let (rho, _) = axis_distance(line.point(0.25), &axis);
+    assert!((rho - 1.0).abs() < 1e-9);
+    // The generator is across the view from the axis, inside the arc's 270 degrees.
+    let rel = line.origin() - Point3::ORIGIN;
+    let radial = rel - v(0.0, 0.0, rel.z);
+    assert!(radial.dot(*w.d()).abs() < 1e-9);
+    assert!(radial.x < 0.0 || radial.y > 0.0, "{radial:?}");
+    // The piece runs from the bottom rim to the top one.
+    let p = proved(s);
+    assert_eq!(p.len(), 1, "{p:?}");
+    let (z0, z1) = (line.point(p[0].min()).z, line.point(p[0].max()).z);
+    assert!(z0.abs() < 1e-9 && (z1 - 0.5).abs() < 1e-9, "{z0} {z1}");
 }
 
 #[test]

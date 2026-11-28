@@ -18,6 +18,7 @@
 //! draft made (research 63 §6.14).
 
 mod heal;
+mod reverse;
 mod transform;
 
 use std::collections::BTreeSet;
@@ -45,6 +46,7 @@ use crate::touched::Touched;
 use crate::view::{At, Drafting, Edge, Face, Region, Shell, Vertex};
 
 pub use heal::{EdgeJoin, FaceMerge, Healed, Left, Refusal, Why};
+pub use reverse::ReverseError;
 pub use transform::TransformError;
 
 /// A body being edited.

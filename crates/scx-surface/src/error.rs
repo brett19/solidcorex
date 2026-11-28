@@ -118,13 +118,15 @@ pub enum SurfaceError {
     /// Building a procedural surface failed (its `to_nurbs` past the net or its `transformed`
     /// image): a context frame over the [`ProceduralError`], whose kind it has.
     Procedural(ProceduralError),
-    /// A curve-surface intersection with a NURBS curve: not built yet (an analytic curve on
-    /// a NURBS surface is). Named, never an empty answer.
+    /// A curve-surface intersection of a NURBS curve with a NURBS surface: not built yet (a
+    /// NURBS curve on an analytic surface is, and an analytic curve on a NURBS surface).
+    /// Named, never an empty answer.
     NurbsIntersection,
-    /// A curve-surface intersection on a NURBS surface that the certified search could not
-    /// decide near the curve's parameter `t` (a box down to the resolution that nothing
-    /// proved: a ray through a pole, a contact flatter than the resolution resolves). The
-    /// caller reads it as unclean, never as an empty answer.
+    /// A curve-surface intersection that the certified search could not decide near the
+    /// curve's parameter `t`: on a NURBS surface, a box down to the resolution that nothing
+    /// proved (a ray through a pole, a contact flatter than the resolution resolves); for a
+    /// NURBS curve, a root or a flat span not certified at the resolution. The caller reads
+    /// it as unclean, never as an empty answer.
     Undecided {
         /// The curve parameter near the undecided place.
         t: f64,
@@ -236,7 +238,7 @@ impl fmt::Display for SurfaceError {
             Self::Nurbs(_) => f.write_str("the NURBS surface could not be built or edited"),
             Self::Procedural(_) => f.write_str("the procedural surface could not be built"),
             Self::NurbsIntersection => {
-                f.write_str("intersecting a NURBS curve with a surface is not built yet")
+                f.write_str("intersecting a NURBS curve with a NURBS surface is not built yet")
             }
             Self::Undecided { t } => write!(
                 f,

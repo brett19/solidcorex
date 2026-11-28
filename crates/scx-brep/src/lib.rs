@@ -47,11 +47,13 @@ pub use changes::{
     Split, Touch, Tracked, carry,
 };
 pub use document::Document;
-pub use draft::{Draft, EdgeJoin, FaceMerge, Healed, Left, Refusal, TransformError, Why};
+pub use draft::{
+    Draft, EdgeJoin, FaceMerge, Healed, Left, Refusal, ReverseError, TransformError, Why,
+};
 pub use error::{Absent, TableFull};
 pub use finish::{FinishCause, GeometryCause, StructureCause, Unfinished};
 pub use id::{EdgeId, Entity, EntityKind, FaceId, IdMap, RegionId, ShellId, VertexId};
-pub use pcurve::{ExactLoop, PcurveWriteError};
+pub use pcurve::{ExactLoop, PcurveWriteError, Projected};
 pub use record::{
     EdgeAdj, EdgeGeom, EdgeShape, EdgeUse, FaceRecord, FaceSide, Fin, LoopRecord, RegionRecord,
     ShellRecord, UseGeom, VertexRecord,

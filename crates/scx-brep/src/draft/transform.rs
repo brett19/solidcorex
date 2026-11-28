@@ -276,11 +276,11 @@ impl Bounds {
 }
 
 /// An edge's new geometry part, and how its parameter moved.
-struct EdgeImage {
-    id: EdgeId,
-    shape: EdgeShape,
-    accuracy: Option<Arc<Recorded>>,
-    shift: ParamShift,
+pub(super) struct EdgeImage {
+    pub(super) id: EdgeId,
+    pub(super) shape: EdgeShape,
+    pub(super) accuracy: Option<Arc<Recorded>>,
+    pub(super) shift: ParamShift,
 }
 
 impl Draft {
@@ -451,7 +451,7 @@ impl Draft {
 }
 
 /// A use's image in its moved face's uv (module docs, Parameters).
-fn use_image(
+pub(super) fn use_image(
     face: FaceId,
     u: &EdgeUse,
     edge: &EdgeImage,
