@@ -24,7 +24,13 @@ use scx_check::Class;
 use scx_mass::{RelAccuracy, area, volume};
 use scx_num::budget::{Budget, Stop};
 use scx_num::fmath;
+use scx_nurbs_surface::ParamAxis;
+use scx_num::extent2d::Extent2d;
+use scx_num::frame::{Frame, Sense};
+use scx_num::units::Length;
+use scx_num::vector3d::{Point3, Vec3};
 use scx_p21::{Exchange, parse};
+use scx_surface::{Cylinder, Surface};
 use scx_step::{
     BuildError, Built, GapKind, Note, ReadOptions, SolidOrSheet, Waits, build, import, read,
 };
@@ -1077,4 +1083,138 @@ fn an_edge_of_no_length_is_refused() {
     w.s = text;
     let e = try_built(&w.file(&[solid])).unwrap_err();
     assert!(matches!(e, BuildError::Degenerate { .. }), "{e:?}");
+}
+
+// ---------------------------------------------------------------- SP2b: quadrics written as other kinds
+
+/// A cylinder body (radius 5, axis +z through (1, 2), height 0 to 10) whose side is written as
+/// the exact rational B-spline of the cylinder, `bump` added to one control point's x. Its
+/// edges and end caps are the analytic ones of [`cylinder`].
+fn bspline_cylinder_body(bump: f64) -> (Exchange, u64) {
+    let mut w = W::default();
+    let mut c = cylinder(&mut w, [1.0, 2.0], 5.0, [0.0, 10.0]);
+    let f = Frame::new(
+        Point3::new(1.0, 2.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        Vec3::new(1.0, 0.0, 0.0),
+    )
+    .unwrap();
+    let truth = Surface::Cylinder(Cylinder::new(f, Length::from_mm(5.0), Sense::Forward).unwrap());
+    let n = truth
+        .to_nurbs(&Extent2d::from_bounds(0.0, 0.0, 2.0 * PI, 10.0).unwrap())
+        .unwrap();
+    let (rows, cols) = (n.points().nrows(), n.points().ncols());
+    let mut rows_of_points = Vec::new();
+    let mut rows_of_weights = Vec::new();
+    for i in 0..rows {
+        let mut pts = Vec::new();
+        let mut ws = Vec::new();
+        for j in 0..cols {
+            let mut p = n.points().points()[i * cols + j];
+            if (i, j) == (2, 1) {
+                p[0] += bump;
+            }
+            pts.push(format!("#{}", w.pt(p)));
+            ws.push(real(n.weights().unwrap().points()[i * cols + j]));
+        }
+        rows_of_points.push(format!("({})", pts.join(",")));
+        rows_of_weights.push(format!("({})", ws.join(",")));
+    }
+    let knots = |a: ParamAxis| {
+        let kv = n.knot_vector(a);
+        let (k, m): (Vec<f64>, Vec<usize>) = kv.breakpoints().unzip();
+        let k: Vec<_> = k.into_iter().map(real).collect();
+        let m: Vec<_> = m.iter().map(usize::to_string).collect();
+        (kv.degree(), m.join(","), k.join(","))
+    };
+    let (ud, um, uk) = knots(ParamAxis::U);
+    let (vd, vm, vk) = knots(ParamAxis::V);
+    let surface = w.add(format!(
+        "(BOUNDED_SURFACE()B_SPLINE_SURFACE({ud},{vd},({}),.UNSPECIFIED.,.F.,.F.,.F.)\
+         B_SPLINE_SURFACE_WITH_KNOTS(({um}),({vm}),({uk}),({vk}),.UNSPECIFIED.)\
+         GEOMETRIC_REPRESENTATION_ITEM()RATIONAL_B_SPLINE_SURFACE(({}))REPRESENTATION_ITEM('')SURFACE())",
+        rows_of_points.join(","),
+        rows_of_weights.join(",")
+    ));
+    c.surface = surface;
+    let side_face = side(&mut w, &c, true);
+    let ob = w.oe(c.circles[0], false);
+    let bottom_bound = w.bound(&[ob], true, true);
+    let bottom_plane = w.plane([1.0, 2.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]);
+    let bottom = w.face(&[bottom_bound], bottom_plane, false);
+    let ot = w.oe(c.circles[1], true);
+    let top_bound = w.bound(&[ot], true, true);
+    let top_plane = w.plane([1.0, 2.0, 10.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]);
+    let top = w.face(&[top_bound], top_plane, true);
+    let shell = closed_shell(&mut w, &[bottom, side_face, top]);
+    let solid = w.add(format!("MANIFOLD_SOLID_BREP('',#{shell})"));
+    (w.file(&[solid]), surface)
+}
+
+#[test]
+fn a_cylinder_written_as_a_bspline_is_built_as_the_cylinder() {
+    let (ex, surface) = bspline_cylinder_body(0.0);
+    let b = built(&ex);
+    assert_eq!(counts(&b), [2, 2, 3, 3, 2]);
+    near(vol(&b), PI * 25.0 * 10.0);
+    let [r] = b.recognized.as_slice() else {
+        panic!("{:?}", b.recognized)
+    };
+    assert_eq!(r.surface, surface);
+    match &r.built_on {
+        Surface::Cylinder(c) => assert!((c.radius().mm() - 5.0).abs() < 1e-9),
+        other => panic!("{other:?}"),
+    }
+    assert!((0.0..1e-9).contains(&r.deviation.mm()), "{:?}", r.deviation);
+    assert!(
+        b.notes
+            .iter()
+            .any(|n| matches!(n, Note::Recognized { face, .. } if *face == r.face)),
+        "{:?}",
+        b.notes
+    );
+    assert!(b.raised.is_empty());
+}
+
+#[test]
+fn a_bspline_beyond_coincidence_with_a_cylinder_is_pending_not_approximated() {
+    // The control point moved 1e-3 mm against a stated uncertainty of 1e-7.
+    let (ex, surface) = bspline_cylinder_body(1e-3);
+    let e = try_built(&ex).unwrap_err();
+    assert_eq!(
+        e,
+        BuildError::Pending {
+            entity: surface,
+            waits: Waits::BSplineSurface
+        }
+    );
+    // Moved 1e-9 it is the cylinder, within the stated uncertainty.
+    let (ex, _) = bspline_cylinder_body(1e-9);
+    let b = built(&ex);
+    assert_eq!(b.recognized.len(), 1);
+    assert!(b.recognized[0].deviation.mm() <= 1e-7);
+}
+
+#[test]
+fn a_cone_written_with_angle_zero_is_the_cylinder_it_means() {
+    let mut w = W::default();
+    let mut c = cylinder(&mut w, [1.0, 2.0], 5.0, [0.0, 10.0]);
+    let a = w.axis([1.0, 2.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]);
+    c.surface = w.add(format!("CONICAL_SURFACE('',#{a},{},0.)", real(5.0)));
+    let side_face = side(&mut w, &c, true);
+    let ob = w.oe(c.circles[0], false);
+    let bb = w.bound(&[ob], true, true);
+    let bp = w.plane([1.0, 2.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]);
+    let bottom = w.face(&[bb], bp, false);
+    let ot = w.oe(c.circles[1], true);
+    let tb = w.bound(&[ot], true, true);
+    let tp = w.plane([1.0, 2.0, 10.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]);
+    let top = w.face(&[tb], tp, true);
+    let shell = closed_shell(&mut w, &[bottom, side_face, top]);
+    let solid = w.add(format!("MANIFOLD_SOLID_BREP('',#{shell})"));
+    let b = built(&w.file(&[solid]));
+    near(vol(&b), PI * 25.0 * 10.0);
+    assert_eq!(b.recognized.len(), 1);
+    assert_eq!(b.recognized[0].deviation, Length::ZERO);
+    assert!(matches!(b.recognized[0].built_on, Surface::Cylinder(_)));
 }

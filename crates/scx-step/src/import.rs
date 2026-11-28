@@ -10,7 +10,8 @@ use scx_curve::CurveError;
 use scx_mass::MassError;
 use scx_num::error::ErrorKind;
 use scx_p21::P21Error;
-use scx_surface::{Bracket, GapError, SurfaceError};
+use scx_num::units::Length;
+use scx_surface::{Bracket, GapError, Surface, SurfaceError};
 
 use crate::{GapKind, Imported, Raise, SolidOrSheet};
 
@@ -172,8 +173,11 @@ impl BuildError {
         match self {
             Self::Pending { .. } => ErrorKind::Unsupported,
             Self::Malformed(e) => e.kind(),
-            Self::Geometry { .. }
-            | Self::Degenerate { .. }
+            Self::Geometry { cause, .. } => match cause {
+                GeomCause::Surface(e) => e.kind(),
+                GeomCause::Curve(_) | GeomCause::Placement => ErrorKind::Refused,
+            },
+            Self::Degenerate { .. }
             | Self::NotOrientable { .. }
             | Self::Flat { .. }
             | Self::Unfinished(_) => ErrorKind::Refused,
@@ -278,6 +282,14 @@ pub enum Note {
         /// The shell.
         shell: u64,
     },
+    /// The face's surface was written as another kind and is built as the quadric it is
+    /// within the body's allowance ([`Built::recognized`] holds the surface).
+    Recognized {
+        /// The face.
+        face: u64,
+        /// The proved deviation, mm.
+        deviation: f64,
+    },
     /// A raise past `MAX_ACCURACY_RATIO` of the resolution: made, but the entity is
     /// coarser than the kernel's accuracy policy keeps.
     PastRatio {
@@ -286,6 +298,22 @@ pub enum Note {
         /// The accuracy over the resolution's zone.
         ratio: f64,
     },
+}
+
+/// A face whose surface the build stated as another kind than the file wrote it (74 §38).
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct Recognition {
+    /// The face entity.
+    pub face: u64,
+    /// The surface entity the file wrote.
+    pub surface: u64,
+    /// The surface the face is built on.
+    pub built_on: Surface,
+    /// A proved upper bound of the distance from every point of the file's surface over the
+    /// face's extent (the surface's whole domain for a B-spline) to `built_on`. The edges'
+    /// certified gaps are against `built_on`; this is the face's fidelity to the file.
+    pub deviation: Length,
 }
 
 /// One body built.
@@ -300,6 +328,9 @@ pub struct Built {
     pub kind: SolidOrSheet,
     /// The body.
     pub body: Brep,
+    /// The faces built on a quadric the file wrote as another kind, with the proved
+    /// deviation, in the file's order.
+    pub recognized: Vec<Recognition>,
     /// The accuracies raised to enclosed gaps, in entity order.
     pub raised: Vec<Raise>,
     /// What else the build changed in the file's data.
