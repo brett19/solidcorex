@@ -15,7 +15,7 @@
 //! | `Unfinished` (100,000 steps; a pair budget of 2,000,000; `/64` for B-spline pairs) | [`SsiError::Budget`]: the caller's one [`Budget`](scx_num::budget::Budget), no fixed caps |
 //! | none: subdivision stopped by a fixed resolution and answered from what it had | [`SsiError::Unresolved`] |
 //! | none: the output was tested at samples, never proved | [`SsiError::Uncertified`] |
-//! | none: the marcher (row SM7) is not built yet | [`SsiError::Untraced`], at the first seed that needs it |
+//! | none: a curve of tangential contact (a valley, 73 §22) | [`SsiError::Untraced`], at the least such contact |
 
 use core::fmt;
 
@@ -94,11 +94,12 @@ pub enum SsiError {
         /// A point of the span.
         at: Point3,
     },
-    /// A curve of the intersection is proved to pass here (a seed, a node or a point a loop
-    /// may surround) and this build has no marcher to trace it (73 row SM7). Never answered
-    /// as if the curve were not there.
+    /// A contact of order 2 is proved here (a valley: the surfaces touch with one principal
+    /// direction curved apart), so a curve of tangential contact may pass, and the march
+    /// (73 row SM7) traces only where the normals part. Never answered as if the curve were
+    /// not there.
     Untraced {
-        /// The seed or the point.
+        /// The contact.
         at: Point3,
     },
     /// The caller's work budget ran out.
@@ -194,7 +195,7 @@ impl fmt::Display for SsiError {
                 write!(f, "a span through {} could not be certified", At(at))
             }
             Self::Untraced { at } => {
-                write!(f, "a curve through {} needs the marcher, not built", At(at))
+                write!(f, "a tangential contact at {} is not traced", At(at))
             }
             Self::Budget(e) => e.fmt(f),
             Self::Stopped => Stopped.fmt(f),
