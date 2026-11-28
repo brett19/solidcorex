@@ -5074,7 +5074,7 @@ So recognition itself is below the noise of the import (the check dominates, 74 
 
 ## 39. ST4 as built (11-28)
 
-Truth tests for `scx-stitch`, in `crates/scx-stitch/tests/truth.rs` (11 tests, 1 ignored). The
+Truth tests for `scx-stitch`, in `crates/scx-stitch/tests/truth.rs` (10 tests, 1 ignored). The
 solid helpers ST3 wrote (`explode`, `run`, `vol`, `assert_solid`, `regions`) moved to
 `tests/common/mod.rs`, shared by `orient.rs` and `truth.rs`; no test was removed. New
 dev-dependencies: `scx-boolean` (Boolean results to explode) and `scx-check` (`contract`); both sit
