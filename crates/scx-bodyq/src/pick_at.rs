@@ -10,7 +10,7 @@
 
 use std::collections::BTreeSet;
 
-use scx_brep::{Brep, Edge, EdgeId, Entity, EntityKind, Face, UvSide, VertexId};
+use scx_brep::{Brep, Edge, EdgeId, Entity, EntityKind, Face, UvSide, Vertex, VertexId};
 use scx_num::budget::{Budget, Stop};
 use scx_num::extent3d::Extent3d;
 use scx_num::units::Length;
@@ -124,8 +124,8 @@ fn pick_one(
     }
     if want != EntityKind::Face {
         for shell in body.shells() {
-            edges.extend(shell.wires().map(|e| e.id()));
-            vertices.extend(shell.lone_vertices().map(|v| v.id()));
+            edges.extend(shell.wires().map(Edge::id));
+            vertices.extend(shell.lone_vertices().map(Vertex::id));
         }
         for id in edges {
             stop.check()?;
@@ -193,9 +193,7 @@ pub(crate) fn edge_distance(
             offer(v.point().distance(p), v.point());
         }
     }
-    best.ok_or(BodyqError::Defect(BodyqDefect::NoEdgeBox {
-        edge: edge.id(),
-    }))
+    best.ok_or_else(|| BodyqError::Defect(BodyqDefect::NoEdgeBox { edge: edge.id() }))
 }
 
 /// The distance from `p` to `face` as it is trimmed, and the nearest point. The surface's

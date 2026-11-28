@@ -5269,3 +5269,175 @@ back, `same_solid` against the closed form 4/3 pi and 4 pi (counts, `contract`, 
 ### 41.7 Proposed 04 row
 
 | 11-28 | (For the owner's review) ST4b: the stitch's join stage finds candidates by midpoint, not all same-end pairs: a pair must also have each piece's midpoint within reach of the other's edge box (conservative, so the pairs joined are unchanged; bit-identical results on blocks, cylinder, spheres, torus); a sphere of n lunes does n pairs, not C(2n,2) (sphere 32: 32 vs 2,016, 0.9 s to 0.2 s); blocks unchanged | stitch (none new) | 74 §41 |
+
+## 44. BW8 as built (11-28)
+
+`scx_bodyq::pick_at` (faces, edges or vertices within an aperture of points) and
+`scx_bodyq::still_names` (which entities of a body a stored reference still names), in
+`crates/scx-bodyq/src/pick_at.rs` and `still.rs`. Both are reads: `&Brep`, `&mut Budget`,
+`&Stop` (no memo, so no `&mut Cx`, which 74 §2.3 reserved for memo-keeping queries).
+
+```rust
+pub fn pick_at(body: &Brep, points: &[Point3], want: EntityKind, aperture: Length,
+               budget: &mut Budget, stop: &Stop) -> Result<Vec<Vec<Picked>>, BodyqError>;
+pub struct Picked { pub entity: Entity, pub distance: f64, pub at: Point3 }
+
+pub fn still_names(body: &Brep, stored: &[Stored], history: &[Step<'_>],
+                   budget: &mut Budget, stop: &Stop) -> Result<Vec<Standing>, BodyqError>;
+pub struct Stored { pub entity: Entity, pub at: Point3 }
+pub enum Step<'a> { Edit(&'a Changes), Compact(&'a IdMap) }
+pub enum Standing { Names(Vec<Entity>), Moved(Vec<Entity>), Gone }
+```
+
+New refusals: `BodyqRefusal::NotPickable { kind }` (a region or shell), and defect
+`BodyqDefect::NoUvSide { face }` (a face whose boundary cannot say which side a uv is on; the
+pin's `on_entity` treats that as "not on", which is a silent default).
+
+### 44.1 `pick_at`
+
+- **Every hit within the aperture**, sorted by (distance, entity id), one answer per point. The
+  pin's nearest-or-`Ambiguous` and its first-miss stop are gone: a point that picks nothing is
+  an empty answer and the next point is read. 74 §2.3's "error where two are" is not kept,
+  because two entities within the aperture is the ordinary case (a point on an edge is on two
+  faces), and the caller chooses.
+- **Distance is to the entity as trimmed.** An edge: the curve's foot when it lies in the
+  interval, else the nearer end (a collapsed edge is its vertex). A face: the surface's foot when
+  its uv is `Inside`, else the nearest point of the face's edges (and the foot too when its uv is
+  only `Near` the boundary, which can differ from the trimmed distance by less than the boundary
+  tree's width). The pin did the same through `face_closest_point_in_shape`. Test: a point 1 off
+  the rim of a cube face in its plane picks that face at 1.0, not 0.
+- **Reach** is the aperture plus the entity's coincidence (resolution and recorded accuracy), so
+  an aperture of zero still picks the entities a point is on. No tolerance parameter beyond the
+  aperture; no `MAX_TOLERANCE`.
+- **Candidates** come from one `Brep::faces_meeting` window of each point grown by the aperture
+  (the box tree BW2's `tight_box` and `classify_point` use; boxes are grown by accuracy and the
+  resolution, so nothing within reach is missed). Faces are the hits for `Face`; edges and
+  vertices are those of the faces found, plus the shells' wire edges and lone vertices, which
+  no face names and which are read in a scan over the shells (linear in them; a body of many
+  wires would want a tree, none exists yet).
+- **Deterministic**: ids in `BTreeSet`s, sort by `total_cmp` then `Entity`'s order; the same
+  body and points charge the same work (tested).
+- **Faces of the pin not ported here.** `face_at` is `classify_point` returning `On(Face)`
+  (already built; on an edge it is `On(Edge)`, as the pin's "picks none"). `faces_on_one_surface`
+  (grow picks across edges where the faces continue one surface with the same outward side) is
+  not in this row's two functions; BW4's `continuity` proves the order of contact across an edge
+  and could drive it, but "one surface" is a stronger claim than G-order and needs its own rule
+  (proposed BW8b; open, §44.6).
+
+### 44.2 `still_names`: what the Brep carries, and what it does not
+
+- The Brep carries **ids**: dense, never reused along a body's line of descent, renumbered only
+  by `compact` (which returns an `IdMap`). It carries **no history**: what became of each entity
+  is `Changes`, returned by `Draft::finish` and declared by the operation (`derive`, `merge_*`,
+  `coincident`), and `carry` is the one rule that takes an application's data across it (01 §2.6).
+  `scx-fates` (which will store the chain) is not built.
+- So the caller gives the **steps** from the earlier body to this one (`Step::Edit(&Changes)`,
+  `Step::Compact(&IdMap)`, in order; none for the same body) and `still_names` reads the
+  descendants of each stored id with `carry` itself, over a table of `()` with a rule that keeps
+  every value through split, merge and coincidence and drops an offset (an offset is not the
+  entity). No parallel naming scheme: a kept entity is its own descendant, a split's pieces and a
+  new entity descend from the origins the operation declared, a survivor takes in what it
+  absorbed, a removed entity has none.
+- Then the geometry decides, per live descendant: the stored point must lie on it within the
+  entity's own coincidence (face: trimmed distance as in 44.1; edge; vertex).
+  `Names(entities)` are the descendants carrying the point (ascending; two for a point on the
+  shared edge of two pieces); `Moved(descendants)` are descendants none of which carries it;
+  `Gone` has no live descendant.
+- The pin's allowance (a thousandth of the body diagonal, at least 1e-3 and the record's
+  tolerance) is not ported: it scaled with the body and passed a point 0.01 off a 3 x 4 x 12 box.
+  The only slack is the entity's coincidence, a distance the document sets.
+- `at` is in the coordinates of the body read against. A caller that moved the body (a
+  translation) moves the points by the same map; one that does not gets `Moved`, which is the
+  true answer (the entity is there, the point is not on it).
+
+### 44.3 Cases for and against
+
+- *Lineage by `carry` over geometry by nearest.* For: ids and declared origins are exact and
+  need no tolerance; a point near two entities cannot swap them (the pin's `stored_*` also never
+  substituted a nearest, by design). Against: where an operation did not declare lineage
+  (a face remade `Free`), the reference is `Gone` though geometry sits where it was. `Gone` means
+  "no declared descendant", not "nothing is there"; the geometric fallback (`pick_at` at the
+  point) is one call for a caller who wants it, and is deliberately not folded in.
+- *A `Step` slice on the call, not history in the Brep.* For: no new state in `Brep` (a body is a
+  value), no dependency on the unbuilt `scx-fates`, any chain works (several edits, a compaction).
+  Against: the caller keeps the `Changes`; a missing or misordered step gives wrong answers
+  silently. `scx-fates` will own the chain and call this with it.
+- *Three outcomes, not a bool.* `Moved` tells a stale point from a deleted entity. Against: the
+  pin's `bool` was enough for its caller; the caller here matches three arms.
+- *Same-kind lineage only.* `carry` tracks faces, edges and vertices apart, so an edge reference
+  is not followed through its face's split. For: that is what `Changes` records. Against: an
+  edge cut by a face split with no `Origin::Edge` declared reads `Gone`.
+- *`pick_at` returns the trimmed distance, not the surface's.* For: what a user means by "near
+  a face". Against: the foot is the surface's one nearest point; a surface with a second local
+  minimum inside the face (a torus, for a point inside its hole) can read farther than the face
+  is. Plane, cylinder, cone and sphere have none.
+
+### 44.4 Tests (`tests/pick_at.rs` 9, `tests/still_names.rs` 6)
+
+Truth is closed form on the unit cube and the world cylinder (radius 1.2, height 2.5), and
+constructed lineage on real edits.
+
+- `pick_at`: a point on a cube face picks that face at 0; a point on an edge picks the edge, both
+  faces at 0, no vertex at aperture 0 and both ends at 0.5 at aperture 0.5, and five edges
+  within 0.5 (the one and the four that meet its ends); (0.05, 0.15, 0.1) at aperture 0.2 gives
+  faces x = 0, z = 0, y = 0 at 0.05, 0.1, 0.15 in that order; every kind at several apertures is
+  sorted by (distance, id); a point 1 past a face's rim picks it only at aperture 1; a point
+  0.3 off a cylinder's wall picks the wall at 0.3, a point 0.3 past the rim above the cap picks
+  cap and wall at 0.3 each; a miss is an empty answer and the batch goes on; the same picks give
+  the same hits and work; an exhausted budget is an error; non-finite points, bad apertures and a
+  region or shell refused.
+- `still_names`: against its own body a point names the entity it is on, `Moved` when it is on
+  the plane but past the trim or on another face, `Gone` for an id the body never had; edges
+  and vertices likewise; a translated cube (a real `Draft::transform`, every record replaced)
+  keeps every reference when the point moves with it and reads `Moved` when it does not; two
+  cubes in two shells, one removed whole by an edit (faces, edges, vertices, shells, region):
+  every reference to the removed lump is `Gone`, every one to the kept lump is named, both ways
+  round, then through `compact`, where the kept lump's references follow the `IdMap` (and
+  without the compaction step they do not); a cube rebuilt by an edit that `derive`s two new
+  faces from one old face: the point on one piece names that piece, on the shared edge both, on
+  neither `Moved` (both), twin faces one each, entities not derived `Gone`; a hand-written
+  `Merge` takes a reference to an absorbed face to the survivor.
+- Removed from the pin: nothing ported by name. The pin's `stored_face` tests (0.01 off accepted,
+  0.02 refused by the diagonal allowance) are not ported, since the allowance is not (44.2); its
+  `nearest`-rule unit test (ambiguity within the body's tolerance) is not, since there is no
+  `Ambiguous`.
+- `Builder` in `tests/common` gains `extend`, `new_solid`, `cube` and `Lump`; `face` and
+  `polygon` return the `FaceId`.
+
+### 44.5 Cost (throwaway instrumentation, release, one core; none committed)
+
+Face centres of a testkit block as the points, aperture in fractions of the body's box
+diagonal. "Tree" is `faces_meeting` calls (one per point); "faces" the faces its window returned
+per point; "inv" the inversions charged per point (budget units).
+
+| body | faces | aperture | tree/pick | faces/pick | inv/pick (Face) | us/pick (Face, Edge, Vertex) |
+|---|---|---|---|---|---|---|
+| Block 5 | 150 | 0 | 1 | 1.0 | 1.0 | 0.5, 0.5, 0.4 |
+| Block 10 | 600 | 0 | 1 | 1.02 | 1.08 | 0.4, 0.3, 0.3 |
+| Block 10 | 600 | 0.029 | 1 | 1.20 | 1.8 | 0.4, 0.4, 0.4 |
+| Block 10 | 600 | 0.294 | 1 | 18.6 | 87.6 | 5.1, 4.9, 4.7 |
+| Sphere 16 | 16 | 0.064 | 1 | 9.5 | 26.5 | 4.2, 2.3, 1.6 |
+
+So a pick is one box-tree query and reads the faces whose boxes meet the window (about one of
+600 at a point on a face), not all of them: the pin's `faces` solved the closest point on every
+face, O(F) per point. At an aperture of 0.29 of the diagonal on a 600-face block the window holds
+18.6 faces and a face pick charges 87.6 units (each window face, plus a boundary read for each
+whose foot is outside it); that is the cost of the answer asked for (8,440 hits for 600 points).
+
+### 44.6 Open
+
+1. `faces_on_one_surface` is not built (44.1). Proposed BW8b: grow across an edge when the faces
+   share one analytic surface within coincidence and have the same outward side, using BW4's
+   proved order for the rest; needs a ruling on "one surface".
+2. A face whose surface has two local minima of distance inside it (a torus for points in the
+   hole) may be read too far (44.3).
+3. NURBS edges are `Unsupported(Nurbs)` as in `classify_point`; NURBS faces are not yet reached by
+   `face_foot`'s inversion either (step 5).
+4. Lineage is as complete as the operation's `derive` calls. An operation that remakes entities
+   `Free` makes its references `Gone`. A test per operation (BO, MK) belongs to those crates.
+5. `scx-fates` should wrap the chain of `Step`s so a caller does not keep `Changes`.
+6. Wire edges and lone vertices are scanned, not tree-queried.
+
+### 44.7 Proposed 04 row
+
+| 11-28 | (For the owner's review) BW8: `pick_at` returns every face, edge or vertex within an aperture of each point sorted by (distance, id), one answer per point (the pin's nearest-or-`Ambiguous` and first-miss stop dropped), the distance to the entity as trimmed, candidates from one box-tree window per point (about 1 of 600 faces read at a point on a face); `still_names` finds the descendants of a stored reference by `carry` over the edits' `Changes` and `IdMap`s (no parallel scheme, the caller gives the steps) and checks the point lies on each within the entity's coincidence: `Names`, `Moved` or `Gone`; the pin's allowance of a thousandth of the body diagonal is not ported; `faces_on_one_surface` is left open (BW8b) | bodyq (none new) | 74 §44 |

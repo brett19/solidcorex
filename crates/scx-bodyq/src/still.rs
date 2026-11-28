@@ -89,6 +89,10 @@ impl Carry<()> for Descends {
 }
 
 /// The ids descending from `start` across `history`, one kind at a time.
+#[allow(
+    clippy::zero_sized_map_values,
+    reason = "`carry` takes a table of values; only the keys, the descendants, matter here"
+)]
 fn descendants<I: Tracked>(
     start: I,
     history: &[Step<'_>],
