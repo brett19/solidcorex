@@ -169,7 +169,8 @@ pub fn curve_lies_on_face(
             entity: Entity::Face(face),
         }))?;
     let surface = f.surface();
-    if matches!(surface, Surface::Nurbs(_)) {
+    // A procedural face is refused with the NURBS ones (its gap would be its net's).
+    if matches!(surface, Surface::Nurbs(_) | Surface::Procedural(_)) {
         return Err(BodyqError::Unsupported(BodyqUnsupported::Nurbs {
             at: Entity::Face(face),
         }));

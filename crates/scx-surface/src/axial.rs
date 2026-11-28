@@ -16,7 +16,7 @@
 //!
 //! | solidcore at the pin | here |
 //! |---|---|
-//! | `Revolved` (cylinder, cone, sphere, torus as bare numbers) | a [`Surface`] of those kinds; a plane or a NURBS surface is [`AxialError::NotRevolved`] |
+//! | `Revolved` (cylinder, cone, sphere, torus as bare numbers) | a [`Surface`] of those kinds; a plane, a NURBS surface or a procedural surface is [`AxialError::NotRevolved`] (a procedural revolution's meridian sections are not built yet) |
 //! | `holds_axis -> bool` (false for a number not finite, a normal of no length, a missing section) | [`holds_axis`]: `Result<`[`Holds`]`, `[`AxialError`]`>`, [`Holds::Off`] carrying how far off the axis stands |
 //! | `axial_section -> Result<Option<Vec<_>>, E>`: `None` when the plane does not hold the axis or a number is unusable | `Result<Vec<`[`AxialPiece`]`>, `[`AxialError`]`<E>>`: [`AxialError::AxisOff`], [`AxialError::AxisAcross`], [`AxialError::NotRevolved`]; `Ok(vec![])` still means the plane misses the face |
 //! | a cut is put on its nearest meridian, whatever its distance | a cut farther than the section tolerance from its meridian is [`AxialError::CutOffSection`], the distance certified by [`vertex_curve_gap`] (74 §17); never assigned blindly |
@@ -93,7 +93,8 @@ pub enum Holds {
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum AxialError<E = Infallible> {
-    /// The surface is a plane or a NURBS surface, which have no axis.
+    /// The surface is a plane or a NURBS surface, which have no axis, or a procedural
+    /// surface, whose sections are not built yet.
     NotRevolved,
     /// The plane does not hold the axis ([`Holds::Off`]).
     AxisOff {
@@ -346,7 +347,9 @@ fn revolved(surface: &Surface) -> Result<Revolved, AxialError> {
                 minor: k.minor().mm(),
             }
         }
-        Surface::Plane(_) | Surface::Nurbs(_) => return Err(AxialError::NotRevolved),
+        Surface::Plane(_) | Surface::Nurbs(_) | Surface::Procedural(_) => {
+            return Err(AxialError::NotRevolved);
+        }
     })
 }
 
