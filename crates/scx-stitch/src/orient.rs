@@ -94,21 +94,21 @@ impl Build<'_> {
     pub(crate) fn solid(
         &mut self,
         left: &[Left],
-        doc: &Document,
+        doc: Document,
         budget: &mut Budget,
         stop: &Stop,
     ) -> Result<(Brep, Changes), StitchError> {
         let units = self.units(left)?;
         let mut trial = self.draft.clone();
         let made = label(&mut trial, &units, &Plan::trivial(units.len()))?;
-        let (body, changes) = trial.finish(doc).map_err(finish_defect)?;
+        let (body, changes) = trial.finish(&doc).map_err(finish_defect)?;
         let plan = self.plan(&body, &units, &made, doc, budget, stop)?;
         if plan.is_trivial() {
             return Ok((body, changes));
         }
         let mut draft = std::mem::replace(&mut self.draft, Draft::new());
         label(&mut draft, &units, &plan)?;
-        draft.finish(doc).map_err(finish_defect)
+        draft.finish(&doc).map_err(finish_defect)
     }
 
     /// The units: each sheet shell's connected face sets, checked closed and labelled by
@@ -228,7 +228,7 @@ impl Build<'_> {
         body: &Brep,
         units: &[Unit],
         made: &[(RegionId, ShellId)],
-        doc: &Document,
+        doc: Document,
         budget: &mut Budget,
         stop: &Stop,
     ) -> Result<Plan, StitchError> {
@@ -253,7 +253,7 @@ impl Build<'_> {
             for &(f, _) in &u.faces {
                 let fb = body
                     .face(f)
-                    .and_then(|f| f.bounding_box())
+                    .and_then(scx_brep::Face::bounding_box)
                     .ok_or_else(|| self.face_query(f))?;
                 bx = Some(bx.map_or(fb, |b| b.union(fb)));
             }
@@ -275,7 +275,7 @@ impl Build<'_> {
         let mut within: Vec<Vec<usize>> = vec![Vec::new(); units.len()];
         for (&outer, inner) in &holds {
             stop.check()?;
-            let (alone, region) = self.alone(body, units, outer, &plan, doc)?;
+            let (alone, region) = unit_alone(body, units, outer, &plan, doc)?;
             for &k in inner {
                 if self.held(&alone, region, body, units, k, budget, stop)? {
                     within.get_mut(k).ok_or_else(lost)?.push(outer);
@@ -302,62 +302,6 @@ impl Build<'_> {
             *plan.parent.get_mut(k).ok_or_else(lost)? = parent;
         }
         Ok(plan)
-    }
-
-    /// The trial body's unit `k` alone, its material on its outward side: a body for
-    /// nesting, and its solid region.
-    fn alone(
-        &self,
-        body: &Brep,
-        units: &[Unit],
-        k: usize,
-        plan: &Plan,
-        doc: &Document,
-    ) -> Result<(Brep, RegionId), StitchError> {
-        let u = units.get(k).ok_or_else(lost)?;
-        let flip = plan.flipped.get(k).copied().ok_or_else(lost)?;
-        let mut d = Draft::new();
-        let region = d.add_region(true).map_err(too_large)?;
-        let inner = d.add_shell(ShellRecord::new(region)).map_err(too_large)?;
-        let outer = d
-            .add_shell(ShellRecord::new(RegionId::OUTSIDE))
-            .map_err(too_large)?;
-        let mut vertices: BTreeMap<VertexId, VertexId> = BTreeMap::new();
-        let mut edges: BTreeMap<EdgeId, EdgeId> = BTreeMap::new();
-        for &(f, front) in &u.faces {
-            let mut rec = body.face(f).ok_or_else(lost)?.record().clone();
-            for use_ in rec.loops.iter_mut().flat_map(|l| l.uses.iter_mut()) {
-                let e = use_.edge;
-                if let Some(&x) = edges.get(&e) {
-                    use_.edge = x;
-                    continue;
-                }
-                let mut g = body.edge(e).ok_or_else(lost)?.geometry().clone();
-                for end in &mut g.ends {
-                    let v = *end;
-                    *end = match vertices.get(&v) {
-                        Some(&x) => x,
-                        None => {
-                            let rec = body.vertex(v).ok_or_else(lost)?.record().clone();
-                            let x = d.add_vertex(rec).map_err(too_large)?;
-                            vertices.insert(v, x);
-                            x
-                        }
-                    };
-                }
-                let x = d.add_edge(g).map_err(too_large)?;
-                edges.insert(e, x);
-                use_.edge = x;
-            }
-            rec.sides = if front ^ flip {
-                [inner, outer]
-            } else {
-                [outer, inner]
-            };
-            d.add_face(rec).map_err(too_large)?;
-        }
-        let (alone, _) = d.finish(doc).map_err(finish_defect)?;
-        Ok((alone, region))
     }
 
     /// Whether unit `k` lies inside unit `outer`, by a vertex of `k` classified against
@@ -513,6 +457,60 @@ impl Build<'_> {
             Err(e) => e,
         }
     }
+}
+
+/// The trial body's unit `k` alone, its material on its outward side: a body for
+/// nesting, and its solid region.
+fn unit_alone(
+    body: &Brep,
+    units: &[Unit],
+    k: usize,
+    plan: &Plan,
+    doc: Document,
+) -> Result<(Brep, RegionId), StitchError> {
+    let u = units.get(k).ok_or_else(lost)?;
+    let flip = plan.flipped.get(k).copied().ok_or_else(lost)?;
+    let mut d = Draft::new();
+    let region = d.add_region(true).map_err(too_large)?;
+    let inner = d.add_shell(ShellRecord::new(region)).map_err(too_large)?;
+    let outer = d
+        .add_shell(ShellRecord::new(RegionId::OUTSIDE))
+        .map_err(too_large)?;
+    let mut vertices: BTreeMap<VertexId, VertexId> = BTreeMap::new();
+    let mut edges: BTreeMap<EdgeId, EdgeId> = BTreeMap::new();
+    for &(f, front) in &u.faces {
+        let mut rec = body.face(f).ok_or_else(lost)?.record().clone();
+        for use_ in rec.loops.iter_mut().flat_map(|l| l.uses.iter_mut()) {
+            let e = use_.edge;
+            if let Some(&x) = edges.get(&e) {
+                use_.edge = x;
+                continue;
+            }
+            let mut g = body.edge(e).ok_or_else(lost)?.geometry().clone();
+            for end in &mut g.ends {
+                let v = *end;
+                *end = if let Some(&x) = vertices.get(&v) {
+                    x
+                } else {
+                    let rec = body.vertex(v).ok_or_else(lost)?.record().clone();
+                    let x = d.add_vertex(rec).map_err(too_large)?;
+                    vertices.insert(v, x);
+                    x
+                };
+            }
+            let x = d.add_edge(g).map_err(too_large)?;
+            edges.insert(e, x);
+            use_.edge = x;
+        }
+        rec.sides = if front ^ flip {
+            [inner, outer]
+        } else {
+            [outer, inner]
+        };
+        d.add_face(rec).map_err(too_large)?;
+    }
+    let (alone, _) = d.finish(&doc).map_err(finish_defect)?;
+    Ok((alone, region))
 }
 
 /// `a` within `b` on every axis.

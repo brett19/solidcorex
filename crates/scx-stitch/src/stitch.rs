@@ -156,7 +156,7 @@ pub fn stitch(sheets: &[&Brep], want: Want, cx: &mut Cx<'_>) -> Result<Stitched,
         &mut raised,
     )?;
     let (body, changes) = match want {
-        Want::Solid => b.solid(&edges.left, cx.doc, &mut budget, cx.stop)?,
+        Want::Solid => b.solid(&edges.left, *cx.doc, &mut budget, cx.stop)?,
         _ => std::mem::replace(&mut b.draft, Draft::new())
             .finish(cx.doc)
             .map_err(|u| StitchError::Defect(StitchDefect::Finish(Box::new(u.cause))))?,
