@@ -1,6 +1,6 @@
 // Written for solidcorex. Apache-2.0.
-//! [`RepairError`]: why a repair did not finish, in 01 §5.1's shape, and [`HealCause`]: why
-//! one heal item cannot be done.
+//! [`RepairError`]: why a repair did not finish, in 01 §5.1's shape; [`HealCause`]: why
+//! one heal item cannot be done; [`SewCause`]: why a pair of open edges is not sewn.
 //!
 //! A cause's kind is computed from its variant, never stored. Distances are millimetres; a
 //! [`Bracket`] holds the true value.
@@ -44,6 +44,99 @@ pub enum RepairCause {
     OtherDocument,
     /// A heal item cannot be done.
     Heal(HealCause),
+    /// A sew's gap is not finite, not above zero, or not below `limit` (the ratio limit:
+    /// an accuracy that large is a finding of the check's).
+    Gap {
+        /// The gap given.
+        gap: Length,
+        /// The ratio limit.
+        limit: Length,
+    },
+    /// A sew item: a pair of open edges not sewn.
+    Sew(SewCause),
+    /// The stitch under a sew refused the body or cannot sew it yet (its cause says which).
+    Stitch(scx_stitch::StitchError),
+}
+
+/// Why a pair of open edges is not sewn. Edges are the input body's.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum SewCause {
+    /// Two open edges, each the other's nearest, whose certified symmetric gap is past the
+    /// sew's: sewing them needs the larger gap [`SewCause::resize`] gives (a `Resize`
+    /// remedy, 01 §5.1).
+    TooFar {
+        /// The pair, lower id first.
+        edges: [EdgeId; 2],
+        /// Their symmetric gap.
+        gap: Bracket,
+        /// The sew's gap.
+        allowed: Length,
+    },
+    /// An open edge with more than one partner within the gap: which one is not guessed.
+    Ambiguous {
+        /// The edge.
+        edge: EdgeId,
+        /// Its partners, in id order.
+        partners: Vec<EdgeId>,
+    },
+    /// A pair whose gap the budget share left straddling the sew's.
+    Undecided {
+        /// The edge.
+        edge: EdgeId,
+        /// What it was measured against.
+        with: Entity,
+        /// The bracket reached.
+        gap: Bracket,
+        /// The sew's gap.
+        allowed: Length,
+    },
+}
+
+impl SewCause {
+    /// The kind: refused for a pair proved too far, unsupported for what the sew cannot
+    /// decide.
+    #[must_use]
+    pub const fn kind(&self) -> ErrorKind {
+        match self {
+            Self::TooFar { .. } => ErrorKind::Refused,
+            Self::Ambiguous { .. } | Self::Undecided { .. } => ErrorKind::Unsupported,
+        }
+    }
+
+    /// A stable name.
+    #[must_use]
+    pub const fn name(&self) -> &'static str {
+        match self {
+            Self::TooFar { .. } => "too_far",
+            Self::Ambiguous { .. } => "ambiguous",
+            Self::Undecided { .. } => "undecided",
+        }
+    }
+
+    /// The `Resize` remedy of a [`SewCause::TooFar`]: the gap that sews the pair (its
+    /// bracket's upper bound), when that is above the sew's.
+    #[must_use]
+    pub fn resize(&self) -> Option<Length> {
+        match self {
+            Self::TooFar { gap, allowed, .. } if gap.upper() > allowed.mm() => {
+                Some(Length::from_mm(gap.upper()))
+            }
+            _ => None,
+        }
+    }
+
+    /// The lowest input edge it names: the items' order.
+    pub(crate) fn lowest(&self) -> EdgeId {
+        match self {
+            Self::TooFar { edges, .. } => edges[0],
+            Self::Ambiguous { edge, partners } => partners.iter().copied().fold(*edge, EdgeId::min),
+            Self::Undecided { edge, with, .. } => match with {
+                Entity::Edge(w) => (*edge).min(*w),
+                _ => *edge,
+            },
+        }
+    }
 }
 
 /// Why one heal item cannot be done. Each names the entity it is at; the refused causes say
@@ -165,6 +258,8 @@ pub enum RepairDefect {
     Draft,
     /// The healed draft did not finish, though every edit was certified.
     Finish(Box<FinishCause>),
+    /// The stitch under a sew failed on its own.
+    Stitch(Box<scx_stitch::StitchError>),
 }
 
 impl HealCause {
@@ -216,8 +311,10 @@ impl RepairCause {
     #[must_use]
     pub const fn kind(&self) -> ErrorKind {
         match self {
-            Self::OtherDocument => ErrorKind::Refused,
+            Self::OtherDocument | Self::Gap { .. } => ErrorKind::Refused,
             Self::Heal(c) => c.kind(),
+            Self::Sew(c) => c.kind(),
+            Self::Stitch(e) => e.kind(),
         }
     }
 
@@ -227,6 +324,9 @@ impl RepairCause {
         match self {
             Self::OtherDocument => "other_document",
             Self::Heal(c) => c.name(),
+            Self::Gap { .. } => "gap",
+            Self::Sew(c) => c.name(),
+            Self::Stitch(e) => e.name(),
         }
     }
 }
@@ -254,6 +354,7 @@ impl RepairError {
             Self::Cancelled => "cancelled",
             Self::Defect(RepairDefect::Draft) => "draft",
             Self::Defect(RepairDefect::Finish(_)) => "finish",
+            Self::Defect(RepairDefect::Stitch(_)) => "stitch",
         }
     }
 }
@@ -353,6 +454,41 @@ impl fmt::Display for RepairCause {
                 f.write_str("the body was finished under another document's resolution")
             }
             Self::Heal(c) => c.fmt(f),
+            Self::Gap { gap, limit } => write!(
+                f,
+                "a sew's gap of {:e} mm is not above zero and below {:e} mm",
+                gap.mm(),
+                limit.mm()
+            ),
+            Self::Sew(c) => c.fmt(f),
+            Self::Stitch(e) => e.fmt(f),
+        }
+    }
+}
+
+impl fmt::Display for SewCause {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::TooFar {
+                edges: [a, b],
+                gap,
+                allowed,
+            } => {
+                write!(f, "{a} and {b}: too far apart to sew: ")?;
+                bracket(f, gap, *allowed)
+            }
+            Self::Ambiguous { edge, partners } => {
+                write!(f, "{edge}: {} partners within the gap", partners.len())
+            }
+            Self::Undecided {
+                edge,
+                with,
+                gap,
+                allowed,
+            } => {
+                write!(f, "{edge}: its gap from {with} is undecided: ")?;
+                bracket(f, gap, *allowed)
+            }
         }
     }
 }
@@ -376,6 +512,7 @@ impl fmt::Display for RepairError {
             Self::Defect(RepairDefect::Finish(cause)) => {
                 write!(f, "the healed body did not finish: {cause}")
             }
+            Self::Defect(RepairDefect::Stitch(e)) => write!(f, "the sew's stitch failed: {e}"),
         }
     }
 }

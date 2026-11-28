@@ -13,6 +13,10 @@ pub enum Want {
     Sheets,
     /// A closed, oriented body: refused when an edge is left open.
     Solid,
+    /// As [`Want::Solid`] when the joins close every sheet (no edge left open, no wire or
+    /// lone vertex, no sheet already a solid), otherwise as [`Want::Sheets`]: a repair that
+    /// cannot know beforehand whether its sew closes the body.
+    Closed,
 }
 
 /// A stitch has no items to skip: it finishes whole or fails. An edge it leaves open is

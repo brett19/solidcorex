@@ -39,5 +39,5 @@ pub use error::{
 pub use merge::{MergeLeft, MergeReport, Merged, NotOneLine, NotOneSurface, merge_faces};
 pub use rebase::{PastResolution, RebaseReport, Rebased, rebase};
 pub use report::{Identified, Joined, Left, NoItems, Split, StitchReport, Stitched, Want};
-pub use single::{Sewn, gather, open_edges, sew};
+pub use single::{Sewn, gather, open_edges, sew, sew_within};
 pub use stitch::stitch;

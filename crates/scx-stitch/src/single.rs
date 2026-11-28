@@ -18,10 +18,11 @@ use scx_brep::{
     VertexId,
 };
 use scx_num::budget::{Budget, Stop};
+use scx_num::units::Length;
 
 use crate::error::{StitchDefect, StitchError, StitchUnsupported, too_large};
 use crate::report::{NoItems, StitchReport, Want};
-use crate::stitch::{gathered, same_document, stitch};
+use crate::stitch::{gathered, same_document, stitched};
 
 /// Work charged per entity read or copied.
 const UNIT: u64 = 1;
@@ -73,6 +74,9 @@ pub struct Sewn {
     pub pieces: Vec<Vec<FaceId>>,
     /// The result's open edges, in id order ([`open_edges`] of the result).
     pub open: Vec<EdgeId>,
+    /// Each curve edge of the result the stitch cut or joined, and the input body's edge it
+    /// is (a piece of): a joined edge names the input edge it kept.
+    pub inputs: BTreeMap<EdgeId, EdgeId>,
 }
 
 /// A body's open edges stitched, by [`stitch`](crate::stitch)'s rules (74 §4.3 step 7).
@@ -96,6 +100,42 @@ pub struct Sewn {
 /// - [`StitchUnsupported::Loose`] for a body with a wire edge or a lone vertex: a piece
 ///   holds faces only, and sewing would lose them.
 pub fn sew(body: &Brep, want: Want, cx: &mut Cx<'_>) -> Result<Sewn, StitchError> {
+    sewn(body, want, None, cx)
+}
+
+/// [`sew`] within `gap`: open edges and their vertices reach at least `gap`, so ends and
+/// open edges of different pieces that far apart are one (RP5's sew, 75 §7).
+///
+/// Vertices identified are raised, `Measured`, to the farthest end the merge moves, as in
+/// [`stitch`](crate::stitch). Of a joined pair the curve kept is the stitch's (the smaller
+/// reach, then the lower midpoint); its uses on the faces of the piece dropped are written
+/// as at coincidence, exactly where the curve lies on the face, otherwise as the curve's
+/// projection with the certified gap as the use's bound (`Certified`,
+/// [`Claim::PcurveOnSurface`](scx_num::cert::Claim::PcurveOnSurface), through
+/// [`Draft::write_pcurves_projecting`](scx_brep::Draft::write_pcurves_projecting)). The
+/// kept edge's accuracy is then raised, `Measured`, to the largest such gap where that is
+/// beyond its reach, and is in the report's raises. Nothing else changes: the body's
+/// resolution, its other edges and their accuracies. Whatever is not within `gap` stays
+/// open ([`Sewn::open`]).
+///
+/// # Errors
+///
+/// As [`sew`]; [`EdgePending::Fit`](crate::EdgePending::Fit) for a joined pair whose kept
+/// curve has no projection onto a dropped face the pcurve writer can give. Two vertices of one
+/// piece within `gap` of each other are
+/// [`StitchRefusal::VerticesWithinCoincidence`](crate::StitchRefusal::VerticesWithinCoincidence).
+/// `gap` must be finite and above zero; otherwise the result is [`sew`]'s.
+pub fn sew_within(
+    body: &Brep,
+    gap: Length,
+    want: Want,
+    cx: &mut Cx<'_>,
+) -> Result<Sewn, StitchError> {
+    let g = gap.mm();
+    sewn(body, want, (g.is_finite() && g > 0.0).then_some(g), cx)
+}
+
+fn sewn(body: &Brep, want: Want, gap: Option<f64>, cx: &mut Cx<'_>) -> Result<Sewn, StitchError> {
     same_document(&[body], cx)?;
     for shell in body.shells() {
         let rec = shell.record();
@@ -128,6 +168,7 @@ pub fn sew(body: &Brep, want: Want, cx: &mut Cx<'_>) -> Result<Sewn, StitchError
                 vec![faces]
             },
             open,
+            inputs: BTreeMap::new(),
         });
     }
     let pieces = pieces(body, &mut budget, cx.stop)?;
@@ -137,13 +178,19 @@ pub fn sew(body: &Brep, want: Want, cx: &mut Cx<'_>) -> Result<Sewn, StitchError
         sheets.push(piece(body, faces, cx)?);
     }
     let refs: Vec<&Brep> = sheets.iter().collect();
-    let stitched = stitch(&refs, want, cx)?;
+    let (stitched, names) = stitched(&refs, want, gap, cx)?;
     let open = open_edges(&stitched.done.body);
+    let inputs = names
+        .into_iter()
+        .filter(|(e, _)| stitched.done.body.edge(*e).is_some())
+        .map(|(e, (_, input))| (e, input))
+        .collect();
     Ok(Sewn {
         done: stitched.done,
         report: stitched.report,
         pieces,
         open,
+        inputs,
     })
 }
 

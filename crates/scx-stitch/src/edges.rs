@@ -213,7 +213,11 @@ impl Build<'_> {
                     at: self.edge_of(i, e.id())?,
                     curve,
                     interval: *interval,
-                    reach: reach(e.accuracy()),
+                    // Within a gap (RP5) an open edge reaches as far as the gap.
+                    reach: match self.gap {
+                        Some(g) if e.fins().len() == 1 => reach(e.accuracy()).max(g),
+                        _ => reach(e.accuracy()),
+                    },
                     ends: [a?, b?],
                     fins: e.fins().len(),
                     bx,
