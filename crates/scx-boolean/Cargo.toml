@@ -21,7 +21,6 @@ scx-surface = { path = "../scx-surface" }
 
 [dev-dependencies]
 scx-check = { path = "../scx-check" }
-scx-record = { path = "../scx-record" }
 scx-tess = { path = "../scx-tess" }
 scx-testkit = { path = "../scx-testkit", features = ["bodies"] }
 scx-record = { path = "../scx-record" }
