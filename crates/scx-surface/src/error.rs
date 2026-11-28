@@ -92,6 +92,12 @@ pub enum SurfaceError {
         /// The extent's high end.
         max: f64,
     },
+    /// A certificate's node whose rail parameter `at` lies outside the rail's domain
+    /// ([`crate::certificate::span_bound`]).
+    OffRail {
+        /// The node's rail parameter.
+        at: f64,
+    },
     /// The transform's matrix has a coefficient that is infinite or NaN, or the image of
     /// the frame's origin overflows.
     MapNotFinite,
@@ -140,6 +146,7 @@ impl SurfaceError {
             }
             Self::EmptyExtent { .. }
             | Self::OutsideDomain { .. }
+            | Self::OffRail { .. }
             | Self::MapNotFinite
             | Self::MapFlattens => ErrorKind::Refused,
             Self::Nurbs(e) => e.kind(),
@@ -159,6 +166,7 @@ impl SurfaceError {
             Self::SelfIntersecting { .. } => "torus_self_intersecting",
             Self::EmptyExtent { .. } => "extent_empty",
             Self::OutsideDomain { .. } => "extent_outside_domain",
+            Self::OffRail { .. } => "node_off_rail",
             Self::MapNotFinite => "map_not_finite",
             Self::MapFlattens => "map_flattens",
             Self::NotSimilar => "map_not_similar",
@@ -202,6 +210,7 @@ impl fmt::Display for SurfaceError {
                 f,
                 "the extent [{min}, {max}] along {axis} leaves the surface's domain"
             ),
+            Self::OffRail { at } => write!(f, "the node at {at} lies off the rail's domain"),
             Self::MapNotFinite => f.write_str("the transform or its image is not finite"),
             Self::MapFlattens => f.write_str("the transform flattens the surface"),
             Self::NotSimilar => f.write_str(
