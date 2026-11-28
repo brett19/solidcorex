@@ -15,7 +15,7 @@ use std::f64::consts::TAU;
 
 use scx_brep::op::{Cx, NoTrace, Scratch, Settings};
 use scx_brep::{Brep, Document, EdgeShape};
-use scx_hlr::{Branch, Source, SilhouetteCurve, View, Visibility, prepare, silhouettes};
+use scx_hlr::{Branch, SilhouetteCurve, Source, View, Visibility, prepare, silhouettes};
 use scx_num::budget::{Budget, Stop};
 use scx_num::frame::Frame;
 use scx_num::units::Length;
@@ -58,13 +58,9 @@ fn a_tube_hides_exactly_the_points_within_its_radius_of_the_spine_seen_from_abov
     for (big, small) in [(10.0, 1.0), (1.0e3, 1.0), (1.0e3, 0.01), (1.0e6, 0.01)] {
         let t = torus(&Frame::WORLD, mm(big), mm(small), &doc).unwrap().body;
         let half = big + 5.0;
-        let slab = block(
-            &Frame::WORLD,
-            [mm(2.0 * half), mm(2.0), mm(1.0)],
-            &doc,
-        )
-        .unwrap()
-        .body;
+        let slab = block(&Frame::WORLD, [mm(2.0 * half), mm(2.0), mm(1.0)], &doc)
+            .unwrap()
+            .body;
         let at = Frame::new(p(-half, -1.0, -6.0), v(0.0, 0.0, 1.0), v(1.0, 0.0, 0.0)).unwrap();
         let bodies = [(&t, Frame::WORLD), (&slab, at)];
         let settings = Settings::new();
@@ -72,7 +68,9 @@ fn a_tube_hides_exactly_the_points_within_its_radius_of_the_spine_seen_from_abov
         let stop = Stop::new();
         let mut cx = Cx::new(&doc, &settings, &mut scratch, &stop, &NoTrace);
         let scene = prepare(&bodies, &mut cx).unwrap();
-        let drawing = scene.hidden_lines(&view(v(0.0, 0.0, -1.0)), &mut cx).unwrap();
+        let drawing = scene
+            .hidden_lines(&view(v(0.0, 0.0, -1.0)), &mut cx)
+            .unwrap();
         let (mut hidden, mut checked) = (0usize, 0usize);
         for l in drawing.lines.iter().filter(|l| l.body == 1) {
             let Source::Edge(e) = &l.source else { continue };
@@ -102,7 +100,10 @@ fn a_tube_hides_exactly_the_points_within_its_radius_of_the_spine_seen_from_abov
                 }
             }
         }
-        assert!(checked > 100 && hidden > 0, "R={big} r={small}: {checked} {hidden}");
+        assert!(
+            checked > 100 && hidden > 0,
+            "R={big} r={small}: {checked} {hidden}"
+        );
     }
 }
 
@@ -132,7 +133,12 @@ fn an_obliquely_seen_torus_spans_the_support_function_of_its_spine_circle_plus_t
     let doc = Document::default();
     let (big, small) = (5.0, 1.25);
     let t = torus(&Frame::WORLD, mm(big), mm(small), &doc).unwrap().body;
-    for d in [v(1.0, 2.0, 0.7), v(0.3, -0.4, 1.0), v(1.0, 0.0, 0.05), v(-2.0, 1.0, 3.0)] {
+    for d in [
+        v(1.0, 2.0, 0.7),
+        v(0.3, -0.4, 1.0),
+        v(1.0, 0.0, 0.05),
+        v(-2.0, 1.0, 3.0),
+    ] {
         let w = view(d);
         let pts = contour_points(&t, &w);
         for u in [*w.x(), *w.y()] {
@@ -141,7 +147,10 @@ fn an_obliquely_seen_torus_spans_the_support_function_of_its_spine_circle_plus_t
                 let s = q.x * u.x + q.y * u.y + q.z * u.z;
                 (hi.max(s), lo.min(s))
             });
-            assert!((hi - want).abs() < 1e-5 && (lo + want).abs() < 1e-5, "{d:?}: {hi} {lo} {want}");
+            assert!(
+                (hi - want).abs() < 1e-5 && (lo + want).abs() < 1e-5,
+                "{d:?}: {hi} {lo} {want}"
+            );
         }
     }
 }
@@ -177,9 +186,16 @@ fn a_torus_seen_a_hair_off_its_axis_keeps_two_silhouettes_with_n_dot_d_zero() {
                     .surface()
                     .invert(q, None, None, &mut Budget::unlimited(), &Stop::new())
                     .unwrap();
-                let n = *f.surface().normal(inv.foot().at, [Approach::Above; 2]).unwrap();
+                let n = *f
+                    .surface()
+                    .normal(inv.foot().at, [Approach::Above; 2])
+                    .unwrap();
                 assert!(inv.foot().distance < 1e-12, "{e}: off the surface");
-                assert!(n.dot(*w.d()).abs() < 1e-9 + e, "{e}: n.d = {}", n.dot(*w.d()));
+                assert!(
+                    n.dot(*w.d()).abs() < 1e-9 + e,
+                    "{e}: n.d = {}",
+                    n.dot(*w.d())
+                );
             }
         }
         let _ = face;
@@ -223,7 +239,11 @@ fn cones_far_out_with_nearly_equal_axes_each_keep_their_own_generators() {
                         .surface()
                         .normal(inv.foot().at, [Approach::Above; 2])
                         .unwrap();
-                    assert!(inv.foot().distance < 1e-9, "{tilt}: {}", inv.foot().distance);
+                    assert!(
+                        inv.foot().distance < 1e-9,
+                        "{tilt}: {}",
+                        inv.foot().distance
+                    );
                     assert!(n.dot(*w.d()).abs() < 1e-9, "{tilt}: {}", n.dot(*w.d()));
                 }
             }

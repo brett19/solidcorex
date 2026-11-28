@@ -21,23 +21,23 @@ use scx_brep::{
     Brep, Document, Draft, EdgeGeom, EdgeId, EdgeShape, EdgeUse, Face, FaceRecord, FaceSide,
     LoopRecord, RegionId, ShellId, ShellRecord, UseGeom, VertexId, VertexRecord,
 };
-use scx_curve::{Curve2, Line2};
-use scx_num::frame::Sense;
-use scx_num::vector2d::{Point2, Vec2};
-use scx_nurbs::{KnotVector, NurbsCurve};
-use scx_nurbs_surface::{Net, NurbsSurface};
-use scx_surface::Surface;
 use scx_curve::Curve;
+use scx_curve::{Curve2, Line2};
 use scx_hlr::{
     HlrError, Outline, OutlineUndecided, Stretch, View, drop_coincident, outline, prepare,
 };
 use scx_num::budget::{Budget, Stop};
 use scx_num::error::ErrorKind;
 use scx_num::frame::Frame;
+use scx_num::frame::Sense;
 use scx_num::units::Length;
+use scx_num::vector2d::{Point2, Vec2};
 use scx_num::vector3d::{Point3, Vec3};
 use scx_nurbs::Approach;
+use scx_nurbs::{KnotVector, NurbsCurve};
+use scx_nurbs_surface::{Net, NurbsSurface};
 use scx_planar::Curve2 as Image2;
+use scx_surface::Surface;
 use scx_testkit::bodies::made::{block, cone, cylinder, sphere, torus};
 use scx_testkit::bodies::{Kind, generate};
 
@@ -249,7 +249,11 @@ fn a_cube_along_an_axis_has_the_four_edges_of_its_near_face() {
         );
     }
     let o = run(&b, &view(v(0.0, 0.0, 1.0)));
-    assert!(o.stretches.iter().all(|s| s.ends.iter().all(|q| q.z == 0.0)));
+    assert!(
+        o.stretches
+            .iter()
+            .all(|s| s.ends.iter().all(|q| q.z == 0.0))
+    );
     assert_eq!(o.stretches.len(), 4);
 }
 
@@ -273,10 +277,11 @@ fn a_cylinder_seen_across_its_axis_has_the_near_half_of_each_rim() {
         }
     }
     // The seam ruling is no edge between two faces.
-    assert!(o
-        .stretches
-        .iter()
-        .all(|s| matches!(curve_of(&c, s.edge).0, Curve::Circle(_))));
+    assert!(
+        o.stretches
+            .iter()
+            .all(|s| matches!(curve_of(&c, s.edge).0, Curve::Circle(_)))
+    );
 }
 
 #[test]
@@ -455,7 +460,10 @@ fn every_edge_of_every_generated_body_agrees_with_a_dense_scan_in_8_views() {
             }
         }
     }
-    assert!(compared > 100_000 && outlined > 100, "{compared} {outlined}");
+    assert!(
+        compared > 100_000 && outlined > 100,
+        "{compared} {outlined}"
+    );
 }
 
 #[test]
@@ -520,7 +528,11 @@ fn a_cube_along_an_axis_has_four_exact_lines_and_two_bodies_in_one_place_draw_th
     let o = run(&b, &v0);
     let images = o.images(&b, &v0, p(0.5, 0.5, 0.5)).unwrap();
     assert!(images.pending.is_empty());
-    let lines: Vec<Image2> = images.images.iter().flat_map(|i| i.curves.clone()).collect();
+    let lines: Vec<Image2> = images
+        .images
+        .iter()
+        .flat_map(|i| i.curves.clone())
+        .collect();
     assert_eq!(lines.len(), 4);
     // The unit square about the centre: every end at (+-0.5, +-0.5).
     for c in &lines {
@@ -555,8 +567,12 @@ fn a_cube_along_an_axis_has_four_exact_lines_and_two_bodies_in_one_place_draw_th
 #[test]
 fn coaxial_cylinders_seen_along_their_axis_draw_one_circle() {
     let doc = Document::default();
-    let a = cylinder(&Frame::WORLD, mm(2.0), mm(5.0), &doc).unwrap().body;
-    let b = cylinder(&Frame::WORLD, mm(2.0), mm(3.0), &doc).unwrap().body;
+    let a = cylinder(&Frame::WORLD, mm(2.0), mm(5.0), &doc)
+        .unwrap()
+        .body;
+    let b = cylinder(&Frame::WORLD, mm(2.0), mm(3.0), &doc)
+        .unwrap()
+        .body;
     let v0 = view(v(0.0, 0.0, -1.0));
     let mut curves = Vec::new();
     for body in [&a, &b] {
@@ -583,7 +599,9 @@ fn coaxial_cylinders_seen_along_their_axis_draw_one_circle() {
 #[test]
 fn a_placed_body_has_the_outline_of_the_body_placed_and_far_from_the_origin_the_same_ranges() {
     let doc = Document::default();
-    let c = cylinder(&Frame::WORLD, mm(2.0), mm(5.0), &doc).unwrap().body;
+    let c = cylinder(&Frame::WORLD, mm(2.0), mm(5.0), &doc)
+        .unwrap()
+        .body;
     let d = v(1.0, 0.4, -0.3);
     let home = run(&c, &view(d));
     let place = Frame::new(p(1.0e6, -2.0e6, 3.0e6), v(0.0, 0.0, 1.0), v(1.0, 0.0, 0.0)).unwrap();
@@ -773,7 +791,6 @@ fn trimmed(top: f64, rational: bool) -> (Brep, EdgeId) {
     (finish(b.d), bottom)
 }
 
-
 #[test]
 fn nurbs_rims_and_freeform_faces_are_named_not_sampled() {
     // The rational 270-degree cylinder is recognised, but its rims are NURBS curves:
@@ -782,10 +799,8 @@ fn nurbs_rims_and_freeform_faces_are_named_not_sampled() {
     let o = run(&body, &view(v(1.0, 0.3, 0.2)));
     assert!(o.stretches.is_empty(), "{o:?}");
     assert!(
-        o.undecided
-            .iter()
-            .any(|u| u.edge == bottom
-                && u.why == OutlineUndecided::Cuts(scx_hlr::Undecided::NurbsEdge { edge: bottom })),
+        o.undecided.iter().any(|u| u.edge == bottom
+            && u.why == OutlineUndecided::Cuts(scx_hlr::Undecided::NurbsEdge { edge: bottom })),
         "{o:?}"
     );
     // The same net without weights is no quadric: every edge names the face.
@@ -793,8 +808,11 @@ fn nurbs_rims_and_freeform_faces_are_named_not_sampled() {
     let o = run(&body, &view(v(1.0, 0.3, 0.2)));
     assert!(o.stretches.is_empty());
     assert_eq!(o.undecided.len(), 4);
-    assert!(o
-        .undecided
-        .iter()
-        .all(|u| matches!(u.why, OutlineUndecided::Face { why: scx_hlr::Why::Freeform, .. })));
+    assert!(o.undecided.iter().all(|u| matches!(
+        u.why,
+        OutlineUndecided::Face {
+            why: scx_hlr::Why::Freeform,
+            ..
+        }
+    )));
 }

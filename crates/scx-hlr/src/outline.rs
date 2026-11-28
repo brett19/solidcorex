@@ -41,7 +41,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use scx_brep::op::{Cx, Event, Trace};
 use scx_brep::{Brep, EdgeId, EdgeShape, Face, FaceId, FaceSide, UvSide};
 use scx_curve::Curve;
-use scx_nurbs::Approach;
 use scx_num::budget::{Budget, Stop};
 use scx_num::extent1d::Extent1d;
 use scx_num::frame::Frame;
@@ -49,6 +48,7 @@ use scx_num::invert::Inversion;
 use scx_num::units::Resolution;
 use scx_num::vector3d::UnitVec3;
 use scx_num::vector3d::{Point3, Vec3};
+use scx_nurbs::Approach;
 use scx_planar::Curve2;
 use scx_surface::CurveSurfaceHit;
 
@@ -187,7 +187,8 @@ pub(crate) fn of_body(
         let faces: BTreeSet<FaceId> = fins.iter().copied().collect();
         // A wire has none; a seam (one face on both its sides) is not a change of face.
         let seam = faces.len() == 1 && fins.len() > 1;
-        if let (false, EdgeShape::Curve { curve, interval }) = (faces.is_empty() || seam, edge.shape())
+        if let (false, EdgeShape::Curve { curve, interval }) =
+            (faces.is_empty() || seam, edge.shape())
         {
             let id = edge.id();
             let found = if fins.len() > 2 {
@@ -360,15 +361,7 @@ fn cuts_of(
     };
     let mut out = Vec::new();
     for frame in &frames {
-        let hits = match plane_hits(
-            id,
-            rim,
-            frame,
-            &s.quadric.fbox,
-            s.res,
-            budget,
-            stop,
-        )? {
+        let hits = match plane_hits(id, rim, frame, &s.quadric.fbox, s.res, budget, stop)? {
             Ok(h) => h,
             Err(u) => return Ok(Err(u)),
         };
@@ -491,13 +484,9 @@ impl Outline {
     /// # Errors
     ///
     /// [`HlrError::BadPlacement`] when the view cannot be carried into the body's frame.
-    pub fn images(
-        &self,
-        body: &Brep,
-        view: &View,
-        origin: Point3,
-    ) -> Result<Images, HlrError> {
-        let lens = Lens::new(view, Frame::WORLD, origin).ok_or(HlrError::BadPlacement { body: 0 })?;
+    pub fn images(&self, body: &Brep, view: &View, origin: Point3) -> Result<Images, HlrError> {
+        let lens =
+            Lens::new(view, Frame::WORLD, origin).ok_or(HlrError::BadPlacement { body: 0 })?;
         let mut out = Images {
             images: Vec::new(),
             pending: Vec::new(),

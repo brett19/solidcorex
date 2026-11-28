@@ -1126,7 +1126,10 @@ fn probe(k: u32) -> f64 {
 
 /// An analytic surface's normal at `uv` (a NURBS face never reaches here: its ray is
 /// pending first).
-pub(crate) fn analytic_normal(surface: &Surface, uv: Point2) -> Option<scx_num::vector3d::UnitVec3> {
+pub(crate) fn analytic_normal(
+    surface: &Surface,
+    uv: Point2,
+) -> Option<scx_num::vector3d::UnitVec3> {
     match surface {
         Surface::Plane(k) => Some(k.normal(uv)),
         Surface::Cylinder(k) => Some(k.normal(uv)),
