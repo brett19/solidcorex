@@ -495,9 +495,12 @@ impl Build<'_> {
             self.draft
                 .derive(e, Origin::Face(fa))
                 .map_err(draft_defect)?;
-            self.draft
-                .derive(e, Origin::Operand(one, Entity::Face(fb)))
-                .map_err(draft_defect)?;
+            // A cut with no tool face (BO13b's curves on one face) has no second origin.
+            if self.ops.b.face(fb).is_some() {
+                self.draft
+                    .derive(e, Origin::Operand(one, Entity::Face(fb)))
+                    .map_err(draft_defect)?;
+            }
             self.made.push(e);
             self.cuts.push(e);
             self.sections.push(e);
