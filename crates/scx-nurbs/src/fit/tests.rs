@@ -1,3 +1,4 @@
+// Written for solidcorex. Apache-2.0.
 //! FT2's tests (77 §8): the truth is the closed form (a polynomial, a curve's own control
 //! points and derivatives), never the pin's output.
 
