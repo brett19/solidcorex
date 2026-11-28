@@ -9,15 +9,16 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+scx-algo = { path = "../scx-algo" }
 scx-brep = { path = "../scx-brep" }
 scx-curve = { path = "../scx-curve" }
 scx-num = { path = "../scx-num" }
+scx-nurbs = { path = "../scx-nurbs" }
 scx-planar = { path = "../scx-planar" }
 scx-surface = { path = "../scx-surface" }
 
 [dev-dependencies]
 scx-mass = { path = "../scx-mass" }
-scx-nurbs = { path = "../scx-nurbs" }
 scx-record = { path = "../scx-record" }
 scx-testkit = { path = "../scx-testkit", features = ["bodies"] }
 

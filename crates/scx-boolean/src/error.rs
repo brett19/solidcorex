@@ -126,8 +126,15 @@ pub enum BooleanUnsupported {
         /// The face.
         face: FaceId,
     },
-    /// An edge of the result with more than two faces, or a point classification that
-    /// met one: the non-manifold result is BO7's (D5).
+    /// A place the build or a query does not order (BO25 names them; the result's walls,
+    /// laminas, pinches and touches inside a face are built):
+    /// - two of the result's faces leaving an edge of three or more fins in one direction
+    ///   (tangent along it): their radial order needs their bends, which nothing measures
+    ///   yet; or one with no direction there (no normal at the edge's midpoint);
+    /// - a touch inside a face whose point the face's region test puts on a piece's
+    ///   boundary rather than inside one piece;
+    /// - a point classification of an operand that met an edge or vertex where more than
+    ///   two regions meet (scx-bodyq's own `NonManifold`).
     NonManifold {
         /// The result's edge, or the operand's entity the classification met.
         at: Entity,

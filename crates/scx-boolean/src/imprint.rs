@@ -83,6 +83,8 @@ pub(crate) struct Imprint {
     /// Each stage-4 section's edge, in the sections' order: it runs along the section's
     /// curve over its span, so a use of it in its own sense runs along the curve.
     pub(crate) sections: Vec<EdgeId>,
+    /// Each stage-3 merged point's draft vertex, in the points' order.
+    pub(crate) points: Vec<VertexId>,
 }
 
 /// `b`'s pieces that run along `a`'s, by `b`'s edge and piece index: `a`'s draft edge,
@@ -150,6 +152,7 @@ pub(crate) fn imprint(
         pieces: b.pieces,
         cuts,
         sections: b.sections,
+        points: b.at,
     })
 }
 
