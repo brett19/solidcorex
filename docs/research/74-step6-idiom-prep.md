@@ -3213,11 +3213,13 @@ inside the bounded range, or a leaf) is an `Overlap`. Anything else is halved, t
   exact tangency at a joint are exact zeros of exact multiplicity, never rounding accidents; the pin's
   `disc < 0` touch-at-the-foot fallback has no counterpart. Against: two extra exact predicates per
   control point (`dot_sign`, new in `cert.rs`), a few ns each in the fast path.
-- **Exact point sums and products in `Iv` and `Coef`.** For: zeros that are exact in doubles are found
-  exactly (`a: [0.5, 0.5]`) instead of as a bracket of 1-2 ulps; one two_sum or two_prod per operation
-  on points only. Against: this changes `Iv` for all of scx-planar (narrower, still sound intervals:
-  a point is returned only when the error-free transform's error is 0; products near underflow, below
-  2^-900, keep the outward rounding). The other scx-planar tests are unchanged.
+- **Exact point sums and products in the crossings only.** For: zeros that are exact in doubles are
+  found exactly (`a: [0.5, 0.5]`) instead of as a bracket of 1-2 ulps. `Coef` and the crossings'
+  own differences, cross and dot products (`exact_diff`, `exact_cross`, `exact_dot` in `cross.rs`)
+  return a point only when the error-free transform's error is 0; products near underflow, below
+  2^-900, keep the outward rounding. Against: one two_sum or two_prod per such operation. `Iv` itself
+  keeps its outward rounding, so winding, region and contact keep their arithmetic and bits: putting
+  the exactness in `Iv` was measured (31.6) and slowed some region cases by 5-6%.
 - **The truth of the input, not of its intent.** With exact signs a near-tangency the rounding of
   `cos` put 1e-17 off is certified apart and dropped, as the contract says (a miss is certified, a
   touch is reported). For: deterministic, and truth over pin. Against: a caller that rounded a
@@ -3253,8 +3255,8 @@ circle (only at the joint); line-circle; lines crossing at exactly 1/2, collinea
 parallel 1e-9 apart (nothing), nearly parallel (one crossing); corner and tangent joints (one meet,
 the tangent one exact of multiplicity 2); parabola and hyperbola arcs; a flat conic; Bezier pending;
 the refusals; budget and stop; symmetry and determinism (swapped calls agree bit for bit). In
-`cert.rs`: `dot_sign` is exact at a right angle; exact sums and products stay points and inexact
-ones widen. No test removed.
+`cert.rs`: `dot_sign` is exact at a right angle; `exact_sum` and `exact_product` give points only
+when exact, and `Iv` operations still widen. No test removed.
 
 ### 31.6 Cost
 
@@ -3277,9 +3279,31 @@ The pin's closed forms (`line_circle`, `circle_circle`) are a few tens of ns but
 (31.4). Most of a crossing's cost is the refinement of a simple root to the resolution and 12
 halvings more (about 20 ranges, each a de Casteljau split of `F`, the range polynomials and the
 homogeneous coordinates); a root-polishing step (Newton on `F` inside the certified bracket) would cut
-that, and is left for when HL2 measures it in a drawing. The other users of `Iv` in scx-planar pay one
-two_sum or two_prod per operation whose operands are both points (not timed separately; their tests'
-times are unchanged at this precision).
+that, and is left for when HL2 measures it in a drawing.
+
+**Exactness in `Iv`, measured and not kept.** A first version made `Iv` add, sub and mul return a
+point when exact, for every user in scx-planar. A throwaway timer over `Region::new` and `classify`
+(400 grid points) on six regions, release, one thread, three interleaved runs each, gave (ns; `new`
+per call, `classify` per point; before is plain outward rounding):
+
+| region | new, before | new, exact `Iv` | classify, before | classify, exact `Iv` |
+|---|---|---|---|---|
+| rect | 2,118-2,168 | 2,099-2,183 | 445-450 | 444-464 |
+| rect, odd coordinates | 2,170-2,212 | 2,269-2,363 | 465-469 | 496-501 |
+| rect with 2 holes | 7,494-7,589 | 7,041-7,149 | 1,231-1,244 | 1,134-1,255 |
+| slot | 2,696-2,796 | 2,545-2,553 | about 566 | about 529 |
+| disc with a hole | about 1,168 | about 1,190 | about 241 | about 240 |
+| gear, 24 teeth | 14,364-14,511 | 14,619-14,698 | about 3,220 | about 3,252 |
+
+A counting build gave the share: 35-80% of `Iv` operations there have two point operands, and 48-100%
+of those were exact (gear `new`: 936 operations, 569 point-point, 397 exact). Exact cases got
+faster (fewer widened intervals downstream), inexact ones slower (the extra transform for nothing);
+the odd-coordinate rectangle lost 5-6%, beyond noise. Results were the same bits in all six
+(area bits and classifications). So the exactness lives in the crossings only, and `Iv` is as on
+main. The one change left on those paths is `orient`'s fast filter, now shared with
+`dot_sign`: against main's `orient`, three interleaved runs on a quieter machine gave the same
+times within 1-2% both ways on all six (rect-odd `new` 2,042-2,076 against 2,065-2,071 ns, gear
+`classify` 2,983-3,006 against 2,983-3,079 ns) and the same bits.
 
 ### 31.7 Limits and open questions
 
