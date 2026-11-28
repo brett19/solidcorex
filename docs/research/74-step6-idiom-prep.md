@@ -4571,120 +4571,6 @@ Open questions:
 
 | 11-28 | (For the owner's review) The pcurve-to-edge gap lifts, as trigonometric series in the edge's parameter, every exact analytic pcurve whose difference from a circle or ellipse edge is one: a constant-height or constant-angle `AngleLine2` on a cylinder, cone, sphere or torus, an `AngleWave2` on a cylinder or cone, and a `Circle2`/`Ellipse2` on a plane. The arcs must match the kind's, and the bound is padded by `angle_pad` (derived from the arc formulas' rounded constants). Every other pcurve takes the jets. A line against a cone, with its foot on the nappe, is also bounded by its convexity. Under `Scope::Import` and `Scope::Stitched`, a recorded `Basis::Certified` gap whose claim is the question's and whose bound is within its allowance is taken as decided; `Scope::Full` proves everything. No new edges | Closes 74 §28.9 items 1 and 2 (the apex side stays open, §35.7) and builds 04 SP2's recorded-certificate acceptance | 74 §35 |
 
-## 38. SP2b as built (11-28)
-
-`scx-step` states a face's surface as the quadric it is when the file writes it as something
-else, and records what that cost. Cargo edges added (ruled 11-28 by the coordinator):
-`scx-step -> scx-nurbs` and `scx-step -> scx-nurbs-surface`, both below `scx-step` in
-`layers.txt` (no change there; `scx-mass` already sits on both). They are the only way a file's
-control net, knots and weights become a `Surface::Nurbs` to hand to `scx_surface::recognize`;
-no `scx-surface` constructor was added. Code: `crates/scx-step/src/geom.rs` (`surface`,
-`nurbs`, `Recognize`), `build.rs`, `import.rs`.
-
-### 38.1 API
-
-```rust
-pub struct Recognition { pub face: u64, pub surface: u64, pub built_on: Surface, pub deviation: Length }
-Built { .., pub recognized: Vec<Recognition> }       // in the file's face order
-Note::Recognized { face: u64, deviation: f64 }
-```
-
-`BuildError::kind()` of `Geometry { cause: GeomCause::Surface(e), .. }` is now `e.kind()` (an
-exhausted recognition budget is `Exhausted`, a stop `Cancelled`), not always `Refused`.
-
-### 38.2 What it does
-
-- A `B_SPLINE_SURFACE` (distinct knots and multiplicities expanded, net rows along u, weights as
-  written) becomes a `NurbsSurface<3>` and goes through `recognize` over its whole domain, at an
-  `Accuracy` equal to the body's allowance (the stated uncertainty, never below the document's
-  zone: the same number the edge raises are measured against). A recognised quadric is the
-  face's surface. `None` (not proved) is `Pending { Waits::BSplineSurface }`, as before: nothing
-  is approximated and the body is not built.
-- `CONICAL_SURFACE` and `TOROIDAL_SURFACE` go through `recognize_written` (an angle-0 cone is the
-  cylinder, a major-0 torus or a spindle torus within the allowance the sphere; a spindle torus
-  beyond it is still the torus constructor's refusal).
-- The deviation is `Recognition::deviation` and `Note::Recognized`. A face has no stored accuracy
-  (it is derived from its edges' and vertices'), so the record lives on `Built`. The edges' and
-  vertices' certified gaps stay "edge to the face as built" (`Claim::CurveToIntersection`, the
-  surface being the recognised one), so the check and later ops read the gap of the body as it is.
-  The deviation is the face's fidelity to the file's surface, for a caller that needs it.
-- One budget (`cx.budget()`) is shared by the body's recognitions, separate from the gap budget.
-
-### 38.3 Choices, with cases for and against
-
-- **Recognise over the surface's whole domain, not the face's uv box.** For: the face's extent
-  needs the loops in uv, which the build gets only after the surface is chosen; the whole
-  domain is a sound superset. Against: a B-spline whose face is a quadric piece but whose whole
-  domain is not (a patch bigger than the face) stays pending. Cases from files will tell.
-- **Allowance as accuracy.** For: a surface within the file's own uncertainty of a quadric is
-  that quadric as far as the file can say; one number for edges and surfaces. Against: with an
-  unstated uncertainty it is the zone (1e-5 mm at default), so an exporter's non-rational
-  approximation of a torus (a fillet) is correctly not recognised.
-- **Deviation not added to the edge gaps.** (Ruled.) For: the Cert claims what the check
-  re-proves. Against: a caller reading only edge accuracies sees nothing of the recognition;
-  `Built::recognized` is the place.
-- **The fit's quadric need not be the one the edges lie on.** A recognised cylinder within the
-  allowance of the B-spline is a least-squares fit, so its axis may be off the one the file's
-  circle edges use by up to the deviation. The exact pcurve writer then refuses the edge:
-  `Pending { PcurveFit }`, typed, not a wrong body. Seen with a control point moved 1e-3 mm
-  (about 10x the zone). Open question 2.
-- **Cones of near-zero or near-right angle are not simplified.** `recognize` needs the face's
-  extent, which an analytic surface does not carry (the unbounded domain), and the reader
-  already refuses semi angles at or below 1e-12 of 0 or pi/2 (`ConeShape`). Only the exact
-  written sizes the constructors refuse are routed.
-
-### 38.4 Tests
-
-`geom.rs` (3 added, 3 stay): exact rational B-spline forms (`to_nurbs` of a tilted plane,
-cylinder, cone, sphere and torus over partial extents) are recognised, with kind and sizes to
-1e-9 and deviation under 1e-9; a cylinder form with a control point moved 1e-9 is the cylinder
-and moved 1e-3 against an accuracy of 1e-6 is `Waits::BSplineSurface`; an angle-0 cone is the
-cylinder (deviation 0), a spindle torus within the accuracy is the sphere of its minor radius
-(deviation the major radius), beyond it the torus refusal, and an ordinary cone and torus are
-not recognitions. `tests/analytic.rs` (2 added, 21 stay): a cylinder body whose side is the
-rational B-spline cylinder is built as the cylinder (counts, volume `25 pi 10`, one
-`Recognition` on the file's surface entity, deviation under 1e-9, no raise, no finding); the
-same with a control point moved 0.05 mm (beyond the zone) is `Pending { surface, BSplineSurface }`
-and moved 1e-9 is built. An angle-0 cone file cannot be written: the reader refuses it
-(`ConeShape`), so that route is tested on `geom::surface` alone. None removed. The 34 SP1 and SP8
-tests and the 21 SP2 tests are unchanged.
-
-### 38.5 Corpus and measurements
-
-NIST MBE PMI (34 files from `corpus/manifest.tsv`, fetched with `cargo xtask corpus fetch
-nist-pmi`): no file has a B-spline face that is a quadric. Of the 34, one (`nist_ftc_07_asme1_rd`)
-reaches a B-spline surface before another pending kind; its 20 B-spline surfaces are non-rational
-cubic patches (fillet approximations), correctly not recognised at the zone, and it stays
-`Pending { BSplineSurface }`. Import time, release, main against this branch, over all 34 files,
-is unchanged within noise except that one file (0.2 ms before, 2.8 ms after: the proof that its
-first patch is no quadric). The throwaway timers were not committed.
-
-| Case | before (main) | after |
-|---|---|---|
-| NIST `ftc_07` rd, first B-spline face refused | 0.2 ms (`Pending` at the face) | 2.8 ms (recognition tried, `Pending`) |
-| Other 33 NIST files | per file 0.0-428 ms | same within noise (`ftc_09_rd` 428 / 422, `stc_09` 410 / 442) |
-| Cylinder body, side written as exact rational B-spline | `Pending` at once | 8.9 ms per import |
-| The same body, side a `CYLINDRICAL_SURFACE` | 9.3 ms | 9.3 ms |
-
-So recognition itself is below the noise of the import (the check dominates, 74 §29.7).
-
-### 38.6 Open questions
-
-1. `Recognition` gives the face's whole-domain deviation. Should the check or a later op read it
-   (a face-level `Cert`)? Needs a face record that carries accuracy; not in this row.
-2. Snapping the fit to the file's edges: where the file's edge curves lie on an exact quadric and
-   the B-spline is a slightly off copy, the recognised fit can leave the edges `PcurveFit`. A
-   recogniser variant that prefers the quadric the edges lie on (or a pcurve fit within the
-   deviation) would build these. Not needed for exact forms.
-3. **SP2c**: B-spline edge curves that are lines, circles or ellipses (a control polygon's hull
-   bounds a line; conics need a Bernstein certificate like SU7's). They stay
-   `Pending { BSplineCurve }`; a B-spline face with B-spline edges cannot build until SP2c or
-   step 5. On NIST this is the commoner blocker (20 of 34 files).
-4. Recognition over the face's uv box rather than the whole domain, once the loops' uv extent is
-   known, and the near-zero and near-right cones with it.
-5. The reader's `ConeShape` refuses an angle-0 cone a file writes; `recognize_written` could
-   take it (`scx-p21`'s row, not here).
-
 ## 36. ST3 as built (11-28)
 
 The orientation stage of §4.3 (step 5) in `scx-stitch`, new module `src/orient.rs`. For
@@ -4892,3 +4778,117 @@ Open questions:
 ### 36.8 Proposed 04 row
 
 | 11-28 | (For the owner's review) The stitch's orientation stage: for `Want::Solid` each closed sheet shell's faces are labelled by edge parity from the least face, MA4's certified `volume_sign` of a trial body's region decides outward, and nesting is decided by `classify_point` of the inner unit's vertices against the outer unit alone (even depth solid, odd depth void); orientation is the faces' sides record, no surface is flipped. Every failure names its entity: `Refused(NotSolid { Open, Wire, LoneVertex, NotOrientable })`, `Refused(RegionsMeet)`, `Unsupported` for solid operands, undecided joins, pending signs and pending nesting (NURBS waits on step 5's ray). `Want::Sheets` is not oriented. `BoxTree::overlapping_in` with a caller's `Overlaps` buffer (16% fewer allocations in the cut stage). Edges: stitch → mass, stitch → bodyq | Amends §4.3 steps 5 and 6 (no parity for sheets; `NotSolid` names one edge, not `NotClosed { open }`) | 74 §36 |
+
+## 38. SP2b as built (11-28)
+
+`scx-step` states a face's surface as the quadric it is when the file writes it as something
+else, and records what that cost. Cargo edges added (ruled 11-28 by the coordinator):
+`scx-step -> scx-nurbs` and `scx-step -> scx-nurbs-surface`, both below `scx-step` in
+`layers.txt` (no change there; `scx-mass` already sits on both). They are the only way a file's
+control net, knots and weights become a `Surface::Nurbs` to hand to `scx_surface::recognize`;
+no `scx-surface` constructor was added. Code: `crates/scx-step/src/geom.rs` (`surface`,
+`nurbs`, `Recognize`), `build.rs`, `import.rs`.
+
+### 38.1 API
+
+```rust
+pub struct Recognition { pub face: u64, pub surface: u64, pub built_on: Surface, pub deviation: Length }
+Built { .., pub recognized: Vec<Recognition> }       // in the file's face order
+Note::Recognized { face: u64, deviation: f64 }
+```
+
+`BuildError::kind()` of `Geometry { cause: GeomCause::Surface(e), .. }` is now `e.kind()` (an
+exhausted recognition budget is `Exhausted`, a stop `Cancelled`), not always `Refused`.
+
+### 38.2 What it does
+
+- A `B_SPLINE_SURFACE` (distinct knots and multiplicities expanded, net rows along u, weights as
+  written) becomes a `NurbsSurface<3>` and goes through `recognize` over its whole domain, at an
+  `Accuracy` equal to the body's allowance (the stated uncertainty, never below the document's
+  zone: the same number the edge raises are measured against). A recognised quadric is the
+  face's surface. `None` (not proved) is `Pending { Waits::BSplineSurface }`, as before: nothing
+  is approximated and the body is not built.
+- `CONICAL_SURFACE` and `TOROIDAL_SURFACE` go through `recognize_written` (an angle-0 cone is the
+  cylinder, a major-0 torus or a spindle torus within the allowance the sphere; a spindle torus
+  beyond it is still the torus constructor's refusal).
+- The deviation is `Recognition::deviation` and `Note::Recognized`. A face has no stored accuracy
+  (it is derived from its edges' and vertices'), so the record lives on `Built`. The edges' and
+  vertices' certified gaps stay "edge to the face as built" (`Claim::CurveToIntersection`, the
+  surface being the recognised one), so the check and later ops read the gap of the body as it is.
+  The deviation is the face's fidelity to the file's surface, for a caller that needs it.
+- One budget (`cx.budget()`) is shared by the body's recognitions, separate from the gap budget.
+
+### 38.3 Choices, with cases for and against
+
+- **Recognise over the surface's whole domain, not the face's uv box.** For: the face's extent
+  needs the loops in uv, which the build gets only after the surface is chosen; the whole
+  domain is a sound superset. Against: a B-spline whose face is a quadric piece but whose whole
+  domain is not (a patch bigger than the face) stays pending. Cases from files will tell.
+- **Allowance as accuracy.** For: a surface within the file's own uncertainty of a quadric is
+  that quadric as far as the file can say; one number for edges and surfaces. Against: with an
+  unstated uncertainty it is the zone (1e-5 mm at default), so an exporter's non-rational
+  approximation of a torus (a fillet) is correctly not recognised.
+- **Deviation not added to the edge gaps.** (Ruled.) For: the Cert claims what the check
+  re-proves. Against: a caller reading only edge accuracies sees nothing of the recognition;
+  `Built::recognized` is the place.
+- **The fit's quadric need not be the one the edges lie on.** A recognised cylinder within the
+  allowance of the B-spline is a least-squares fit, so its axis may be off the one the file's
+  circle edges use by up to the deviation. The exact pcurve writer then refuses the edge:
+  `Pending { PcurveFit }`, typed, not a wrong body. Seen with a control point moved 1e-3 mm
+  (about 10x the zone). Open question 2.
+- **Cones of near-zero or near-right angle are not simplified.** `recognize` needs the face's
+  extent, which an analytic surface does not carry (the unbounded domain), and the reader
+  already refuses semi angles at or below 1e-12 of 0 or pi/2 (`ConeShape`). Only the exact
+  written sizes the constructors refuse are routed.
+
+### 38.4 Tests
+
+`geom.rs` (3 added, 3 stay): exact rational B-spline forms (`to_nurbs` of a tilted plane,
+cylinder, cone, sphere and torus over partial extents) are recognised, with kind and sizes to
+1e-9 and deviation under 1e-9; a cylinder form with a control point moved 1e-9 is the cylinder
+and moved 1e-3 against an accuracy of 1e-6 is `Waits::BSplineSurface`; an angle-0 cone is the
+cylinder (deviation 0), a spindle torus within the accuracy is the sphere of its minor radius
+(deviation the major radius), beyond it the torus refusal, and an ordinary cone and torus are
+not recognitions. `tests/analytic.rs` (2 added, 21 stay): a cylinder body whose side is the
+rational B-spline cylinder is built as the cylinder (counts, volume `25 pi 10`, one
+`Recognition` on the file's surface entity, deviation under 1e-9, no raise, no finding); the
+same with a control point moved 0.05 mm (beyond the zone) is `Pending { surface, BSplineSurface }`
+and moved 1e-9 is built. An angle-0 cone file cannot be written: the reader refuses it
+(`ConeShape`), so that route is tested on `geom::surface` alone. None removed. The 34 SP1 and SP8
+tests and the 21 SP2 tests are unchanged.
+
+### 38.5 Corpus and measurements
+
+NIST MBE PMI (34 files from `corpus/manifest.tsv`, fetched with `cargo xtask corpus fetch
+nist-pmi`): no file has a B-spline face that is a quadric. Of the 34, one (`nist_ftc_07_asme1_rd`)
+reaches a B-spline surface before another pending kind; its 20 B-spline surfaces are non-rational
+cubic patches (fillet approximations), correctly not recognised at the zone, and it stays
+`Pending { BSplineSurface }`. Import time, release, main against this branch, over all 34 files,
+is unchanged within noise except that one file (0.2 ms before, 2.8 ms after: the proof that its
+first patch is no quadric). The throwaway timers were not committed.
+
+| Case | before (main) | after |
+|---|---|---|
+| NIST `ftc_07` rd, first B-spline face refused | 0.2 ms (`Pending` at the face) | 2.8 ms (recognition tried, `Pending`) |
+| Other 33 NIST files | per file 0.0-428 ms | same within noise (`ftc_09_rd` 428 / 422, `stc_09` 410 / 442) |
+| Cylinder body, side written as exact rational B-spline | `Pending` at once | 8.9 ms per import |
+| The same body, side a `CYLINDRICAL_SURFACE` | 9.3 ms | 9.3 ms |
+
+So recognition itself is below the noise of the import (the check dominates, 74 §29.7).
+
+### 38.6 Open questions
+
+1. `Recognition` gives the face's whole-domain deviation. Should the check or a later op read it
+   (a face-level `Cert`)? Needs a face record that carries accuracy; not in this row.
+2. Snapping the fit to the file's edges: where the file's edge curves lie on an exact quadric and
+   the B-spline is a slightly off copy, the recognised fit can leave the edges `PcurveFit`. A
+   recogniser variant that prefers the quadric the edges lie on (or a pcurve fit within the
+   deviation) would build these. Not needed for exact forms.
+3. **SP2c**: B-spline edge curves that are lines, circles or ellipses (a control polygon's hull
+   bounds a line; conics need a Bernstein certificate like SU7's). They stay
+   `Pending { BSplineCurve }`; a B-spline face with B-spline edges cannot build until SP2c or
+   step 5. On NIST this is the commoner blocker (20 of 34 files).
+4. Recognition over the face's uv box rather than the whole domain, once the loops' uv extent is
+   known, and the near-zero and near-right cones with it.
+5. The reader's `ConeShape` refuses an angle-0 cone a file writes; `recognize_written` could
+   take it (`scx-p21`'s row, not here).
