@@ -169,4 +169,3 @@ pub fn regions(b: &Brep) -> (usize, usize) {
         .count();
     (solid, void)
 }
-

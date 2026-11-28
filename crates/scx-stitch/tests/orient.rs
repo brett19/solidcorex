@@ -21,9 +21,7 @@ use scx_curve::{Curve, Line};
 use scx_num::budget::Stop;
 use scx_num::extent1d::Extent1d;
 use scx_num::vector3d::{Point3, Vec3};
-use scx_stitch::{
-    SolidFault, StitchError, StitchRefusal, StitchUnsupported, Want, stitch,
-};
+use scx_stitch::{SolidFault, StitchError, StitchRefusal, StitchUnsupported, Want, stitch};
 use scx_testkit::bodies::{Kind, generate};
 
 mod common;

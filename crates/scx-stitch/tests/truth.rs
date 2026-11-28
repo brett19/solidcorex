@@ -79,7 +79,11 @@ fn same_solid(body: &Brep, truth: Truth, what: &str) -> Brep {
     let out = run(&refs(&sheets)).unwrap_or_else(|e| panic!("{what}: {e:?}"));
     let b = out.done.body;
     assert_eq!(counts(&b), counts(body), "{what}: counts");
-    assert_eq!(b.regions().count(), body.regions().count(), "{what}: regions");
+    assert_eq!(
+        b.regions().count(),
+        body.regions().count(),
+        "{what}: regions"
+    );
     assert!(out.report.left.is_empty(), "{what}: {:?}", out.report.left);
     close(vol(&b), vol(body), what);
     close(surface_area(&b), surface_area(body), what);
@@ -124,7 +128,13 @@ fn exploded_recipes_are_the_same_solid() {
 
 #[test]
 fn exploded_random_recipes_are_the_same_solid() {
-    for kind in [Kind::Block, Kind::Prism, Kind::Cylinder, Kind::Cone, Kind::Sphere] {
+    for kind in [
+        Kind::Block,
+        Kind::Prism,
+        Kind::Cylinder,
+        Kind::Cone,
+        Kind::Sphere,
+    ] {
         for seed in 1..4 {
             let body = solid(kind, seed, 3);
             same_solid(&body, None, &format!("{kind:?} seed {seed}"));
@@ -243,7 +253,11 @@ fn a_sheet_just_inside_the_coincidence_stitches_and_just_outside_does_not() {
             let b = &out.done.body;
             assert_eq!(b.faces().count(), want[1], "{what} outside");
             assert_eq!(b.edges().count(), want[2] + joins, "{what} outside edges");
-            assert_eq!(b.vertices().count(), want[3] + verts, "{what} outside verts");
+            assert_eq!(
+                b.vertices().count(),
+                want[3] + verts,
+                "{what} outside verts"
+            );
             assert!(out.report.left.is_empty(), "{what}: {:?}", out.report.left);
             let err = perturbed(&body, i, by, Want::Solid).unwrap_err();
             let StitchError::Refused(StitchRefusal::NotSolid {
@@ -280,9 +294,19 @@ fn the_identified_spread_is_the_perturbation() {
         assert!((0.0..=INSIDE * (1.0 + 1e-9)).contains(&s), "{s}");
     }
     assert_eq!(out.report.joined.len(), 12);
-    let widest = out.report.joined.iter().map(|j| j.gap.mm()).fold(0.0, f64::max);
+    let widest = out
+        .report
+        .joined
+        .iter()
+        .map(|j| j.gap.mm())
+        .fold(0.0, f64::max);
     assert!((INSIDE..=ZONE).contains(&widest), "{widest}");
-    assert!(!out.report.left.iter().any(|l| matches!(l, Left::Undecided { .. })));
+    assert!(
+        !out.report
+            .left
+            .iter()
+            .any(|l| matches!(l, Left::Undecided { .. }))
+    );
 }
 
 /// A closed-form volume and area.
@@ -297,7 +321,13 @@ fn geometry(b: &Brep) -> (Key, Key, Key) {
     let mut vs: Key = b.vertices().map(|v| format!("{:?}", v.record())).collect();
     let edge = |e: scx_brep::EdgeId| {
         let g = b.edge(e).unwrap().geometry().clone();
-        format!("{:?} {:?} {}|{}", g.shape, g.accuracy, pt(g.ends[0]), pt(g.ends[1]))
+        format!(
+            "{:?} {:?} {}|{}",
+            g.shape,
+            g.accuracy,
+            pt(g.ends[0]),
+            pt(g.ends[1])
+        )
     };
     let mut es: Key = b.edges().map(|e| edge(e.id())).collect();
     let mut fs: Key = b
@@ -399,7 +429,12 @@ fn permuted_perturbed_sheets_give_the_same_bits() {
 /// The face of `body` whose plane faces up.
 fn top_face(body: &Brep) -> usize {
     (0..body.faces().count())
-        .filter(|&i| matches!(body.faces().nth(i).unwrap().record().surface, scx_surface::Surface::Plane(_)))
+        .filter(|&i| {
+            matches!(
+                body.faces().nth(i).unwrap().record().surface,
+                scx_surface::Surface::Plane(_)
+            )
+        })
         .max_by(|&a, &b| {
             let h = |i: usize| match &body.faces().nth(i).unwrap().record().surface {
                 scx_surface::Surface::Plane(p) => {
