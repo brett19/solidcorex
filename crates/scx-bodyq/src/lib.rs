@@ -48,25 +48,69 @@
 //! order of contact (G0 to G4) and, apart from it, measures the drops. Both enclose each
 //! face's normal field along the edge curve with Taylor models, splitting the curve as the
 //! proof needs under one budget.
+//!
+//! **Vertex joints and wall geometry** (research 74 §34, BW11). [`leaving`], [`turn_at`],
+//! [`convex_at`] and [`joint_turn`] read a joint of edges at a vertex. [`facing_planes`],
+//! [`facing_cylinders`], [`wall_holds`], [`planes_meeting`], [`move_edge_onto_line`],
+//! [`wall_frame`] and the cap tests are the closed forms of a thin wall's mid-sheet, each
+//! comparing against the [`Near`] it is given (a coincidence held over a reach) instead of a
+//! fixed angle or length. [`face_surface`] views a face's surface, and the round-face family
+//! ([`past_end`], [`stands_over`], [`beside_clear`], [`whole_band`], [`extent_in`],
+//! [`grow_block`]) reads a body about a seat through probes the caller answers.
 
 mod along;
 mod betti;
+mod cap;
 mod classify;
 mod continuity;
+mod cylinder_wall;
 mod error;
+mod face_pair;
+mod face_surface;
 mod geom;
+mod joint;
+mod mid_joint;
+mod mid_sheet;
 mod near;
 mod on;
 mod rays;
+mod reach;
+mod recognize;
+mod round_face;
 mod side;
 mod tangent;
 mod tight;
 
 pub use betti::{Betti, betti};
+pub use cap::{
+    Lies, PlaneAt, PrismCut, PrismPart, Reach, curve_lies_on_face, is_face_on_plane,
+    is_point_on_plane, is_square_plane_at_height, prism_part,
+};
 pub use classify::{PointClass, classify_point};
 pub use continuity::{Continuity, ContinuityTolerances, Limit, Measured, Order, continuity};
+pub use cylinder_wall::{WallFrame, Wrap, wall_frame};
 pub use error::{BodyqDefect, BodyqError, BodyqRefusal, BodyqUnsupported};
+pub use face_pair::{
+    Apart, CylinderFace, Directions, Facing, FacingCylinders, FacingPlanes, OutwardPlane,
+    axial_range_in, cylinder_face, facing_cylinders, facing_planes, material_toward_axis,
+    outward_plane, round_directions,
+};
+pub use face_surface::{Closest, FaceSurface, face_surface};
+pub use joint::{Convexity, Leaving, Missing, Turn, convex_at, joint_turn, leaving, turn_at};
+pub use mid_joint::{Line3, Meeting, Moved, move_edge_onto_line, planes_meeting};
+pub use mid_sheet::{Holds, Wall, from_frame, in_frame, onto_plane, polygon_area, wall_holds};
 pub use rays::RAYS;
+pub use reach::Near;
+pub use recognize::{
+    Bore, Equivalence, Layer, Lone, NotPrism, Options as StackOptions, Piece, PrismSection,
+    Recognition, Slot, Stack, Stacks, Why, bores, hole_stacks, prism_equivalent, prism_section,
+    prism_section_charged, stack_bores,
+};
+pub use round_face::{
+    BESIDE, Band, End, Extent, GrowBlock, Inward, Met, Probe, RIDGE, SAME_SIZE, SLOPE_TIE,
+    SeatFrame, beside_clear, extent, extent_in, far_end, grow_block, into_seat, past_end,
+    stands_over, whole_band,
+};
 pub use side::{Along, Sides, side_at_touch, sides_along};
 pub use tangent::{Tangency, tangent_all_along};
 pub use tight::{tight_body_box, tight_box, tight_box_charged};

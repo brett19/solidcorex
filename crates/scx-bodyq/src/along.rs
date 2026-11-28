@@ -156,7 +156,7 @@ pub(crate) struct Foot<T> {
 impl Field {
     /// `surface`'s field, and the sign of its natural normal against `n0`; `None` for a
     /// NURBS surface (or a kind this does not know yet).
-    fn of(surface: &Surface) -> Option<(Self, f64)> {
+    pub(crate) fn of(surface: &Surface) -> Option<(Self, f64)> {
         let at = |frame: &scx_num::frame::Frame, s: f64, shape| {
             (
                 Self {
