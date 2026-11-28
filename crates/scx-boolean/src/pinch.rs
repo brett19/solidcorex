@@ -10,7 +10,8 @@
 //!   the fins are sorted by the angle of `d`. Two faces leaving in one direction are
 //!   tangent along the edge: the order there needs their bends, and the result meets
 //!   itself inside a face as well, so it is [`BooleanUnsupported::NonManifold`]. An odd
-//!   count is a defect: a closed result's edge has as many fins of each sense.
+//!   count is a defect in a regular result (a closed result's edge has as many fins of
+//!   each sense); a selection that keeps laminas or sheets (BO25) may end one at the edge.
 //! - **Links.** Shells meeting across a sector of such an edge are one shell: the sector is
 //!   one piece of space. A sector between a material and a void shell is a defect.
 //! - **Nesting.** Each shell gets its region from its volume's sign and the shells that
@@ -19,7 +20,8 @@
 //!   it; a positive void shell (inside a cavity) bounds a new void region, a negative one
 //!   (round a lump) goes to the innermost positive void shell's region holding it, else to
 //!   the outside. Which shell holds which is a point-in-shell test per pair, run only
-//!   where the boxes leave a choice.
+//!   where the boxes leave a choice; two shells sharing a face (across a wall) never hold
+//!   each other, and a shell of laminas only (no volume) lies in the void round it.
 
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
@@ -27,8 +29,8 @@ use std::f64::consts::TAU;
 
 use scx_bodyq::{BodyqError, PointClass, classify_point};
 use scx_brep::{
-    Brep, Document, Draft, EdgeId, EdgeShape, Entity, Fin, RegionId, ShellId, ShellRecord, UseGeom,
-    VertexId,
+    Brep, Document, Draft, EdgeId, EdgeShape, Entity, FaceId, Fin, RegionId, ShellId, ShellRecord,
+    UseGeom, VertexId,
 };
 use scx_mass::{MassError, Sign, volume_sign};
 use scx_num::budget::{Budget, Stop};
@@ -52,17 +54,18 @@ const fn non_manifold(at: Entity) -> BooleanError {
     BooleanError::Unsupported(BooleanUnsupported::NonManifold { at })
 }
 
-/// Lists the fins of `edge` (four or more) counter-clockwise about its direction.
-pub(crate) fn order_fins(draft: &mut Draft, edge: EdgeId) -> Result<(), BooleanError> {
-    let order = radial(draft, edge)?;
+/// Lists the fins of `edge` (three or more) counter-clockwise about its direction. An odd
+/// count is a defect unless `free` (a lamina or a sheet may end at the edge).
+pub(crate) fn order_fins(draft: &mut Draft, edge: EdgeId, free: bool) -> Result<(), BooleanError> {
+    let order = radial(draft, edge, free)?;
     draft.adjacency_mut(edge).ok_or_else(defect)?.fins = order;
     Ok(())
 }
 
 /// The fins of `edge` in radial order.
-fn radial(draft: &Draft, edge: EdgeId) -> Result<Vec<Fin>, BooleanError> {
+fn radial(draft: &Draft, edge: EdgeId, free: bool) -> Result<Vec<Fin>, BooleanError> {
     let e = draft.edge(edge).ok_or_else(defect)?;
-    if e.fins().len() % 2 == 1 {
+    if !free && e.fins().len() % 2 == 1 {
         return Err(defect());
     }
     let Some(EdgeShape::Curve { curve, interval }) = e.shape() else {
@@ -210,17 +213,20 @@ pub(crate) fn link(
 }
 
 /// What one shell is, for nesting.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct Placed {
     shell: ShellId,
     material: bool,
     sign: Sign,
     bbox: Extent3d,
+    /// Its faces, in id order.
+    faces: Vec<FaceId>,
 }
 
 impl Placed {
     /// The shells of `all` that may hold `self`: positive, of `material`, their boxes
-    /// holding its box.
+    /// holding its box, and no face of theirs one of its own (a shell across a wall from
+    /// it, which lies outside it there).
     fn holders(&self, all: &[Self], material: bool) -> Vec<Self> {
         all.iter()
             .filter(|q| {
@@ -228,10 +234,44 @@ impl Placed {
                     && q.sign == Sign::Positive
                     && q.shell != self.shell
                     && self.bbox.is_contained_by(&q.bbox, 0.0)
+                    && !shares(&self.faces, &q.faces)
             })
-            .copied()
+            .cloned()
             .collect()
     }
+}
+
+impl Placed {
+    /// The positive material shells whose boxes meet `self`'s, no face shared: the
+    /// candidates when no box holds `self`'s. A face's box is an enclosure, not the
+    /// tightest box (a sphere's reaches past its poles), so a cavity's wall can outgrow the
+    /// box of the shell round it; the point test then decides (the box less its inscribed
+    /// ball, whose wall touches each face at a point).
+    fn holders_loose(&self, all: &[Self]) -> Vec<Self> {
+        all.iter()
+            .filter(|q| {
+                q.material
+                    && q.sign == Sign::Positive
+                    && q.shell != self.shell
+                    && !self.bbox.are_disjoint(&q.bbox, 0.0)
+                    && !shares(&self.faces, &q.faces)
+            })
+            .cloned()
+            .collect()
+    }
+}
+
+/// Whether two id-ordered lists share an id.
+fn shares(p: &[FaceId], q: &[FaceId]) -> bool {
+    let (mut i, mut j) = (0, 0);
+    while let (Some(a), Some(b)) = (p.get(i), q.get(j)) {
+        match a.cmp(b) {
+            core::cmp::Ordering::Less => i += 1,
+            core::cmp::Ordering::Greater => j += 1,
+            core::cmp::Ordering::Equal => return true,
+        }
+    }
+    false
 }
 
 /// Where a shell goes.
@@ -291,14 +331,20 @@ pub(crate) fn nest(
             bbox = Some(bbox.map_or(b, |x| x.union(b)));
         }
         let sign = sign.get(&s).copied().ok_or_else(defect)?;
-        if sign == Sign::Zero {
-            return Err(defect());
-        }
+        let material = sh.region().is_solid();
+        // A shell of laminas or sheets only bounds no volume: a void one lies in the void
+        // round it, as a negative void shell does; a solid one cannot be.
+        let sign = match sign {
+            Sign::Zero if material => return Err(defect()),
+            Sign::Zero => Sign::Negative,
+            s => s,
+        };
         placed.push(Placed {
             shell: s,
-            material: sh.region().is_solid(),
+            material,
             sign,
             bbox: bbox.ok_or_else(defect)?,
+            faces: sh.faces().map(|(f, _)| f.id()).collect(),
         });
     }
     let mut tests = Tests::default();
@@ -309,11 +355,18 @@ pub(crate) fn nest(
             (false, Sign::Positive) => Goes::NewVoid,
             // A cavity's wall: some positive material shell holds it.
             (true, _) => match p.holders(&placed, true).as_slice() {
-                [] => return Err(nesting()),
+                [] => match p.holders_loose(&placed).as_slice() {
+                    [] => return Err(nesting()),
+                    [one] => Goes::With(one.shell),
+                    many => {
+                        let held = tests.holding(draft, &body, p, many, doc, budget, stop)?;
+                        Goes::With(innermost(&held)?.ok_or_else(nesting)?)
+                    }
+                },
                 [one] => Goes::With(one.shell),
                 many => {
                     let held = tests.holding(draft, &body, p, many, doc, budget, stop)?;
-                    Goes::With(innermost(&held)?.ok_or_else(nesting)?.shell)
+                    Goes::With(innermost(&held)?.ok_or_else(nesting)?)
                 }
             },
             // Round a lump: a cavity's void may hold it.
@@ -323,7 +376,7 @@ pub(crate) fn nest(
                     Goes::Outside
                 } else {
                     let held = tests.holding(draft, &body, p, &cands, doc, budget, stop)?;
-                    innermost(&held)?.map_or(Goes::Outside, |h| Goes::With(h.shell))
+                    innermost(&held)?.map_or(Goes::Outside, Goes::With)
                 }
             }
         };
@@ -350,17 +403,17 @@ pub(crate) fn nest(
 /// The innermost of shells that all hold one shell: the one with the smallest box (shells
 /// of a valid body do not cross, so holders of one shell nest, and an inner one's box is
 /// inside an outer one's). Two with one box cannot be told apart: [`nesting`].
-fn innermost(held: &[Placed]) -> Result<Option<Placed>, BooleanError> {
+fn innermost(held: &[Placed]) -> Result<Option<ShellId>, BooleanError> {
     let volume = |p: &Placed| {
         let s = p.bbox.size();
         s.x * s.y * s.z
     };
-    let mut best: Option<Placed> = None;
+    let mut best: Option<&Placed> = None;
     let mut tie = false;
-    for &h in held {
+    for h in held {
         match best {
             None => best = Some(h),
-            Some(b) => match volume(&h).total_cmp(&volume(&b)) {
+            Some(b) => match volume(h).total_cmp(&volume(b)) {
                 std::cmp::Ordering::Less => {
                     best = Some(h);
                     tie = false;
@@ -373,7 +426,7 @@ fn innermost(held: &[Placed]) -> Result<Option<Placed>, BooleanError> {
     if tie {
         return Err(nesting());
     }
-    Ok(best)
+    Ok(best.map(|b| b.shell))
 }
 
 /// The point-in-shell tests run so far: a body per holder shell, its one shell's enclosed
@@ -410,7 +463,7 @@ impl Tests {
             }
             let (b, solid) = self.bodies.get(&c.shell).ok_or_else(defect)?;
             match classify_point(b, q, budget, stop).map_err(bodyq)? {
-                PointClass::In(r) if r == *solid => held.push(*c),
+                PointClass::In(r) if r == *solid => held.push(c.clone()),
                 PointClass::In(_) => {}
                 _ => return Err(nesting()),
             }
@@ -430,7 +483,10 @@ fn shell_body(draft: &Draft, p: ShellId, doc: Document) -> Result<(Brep, RegionI
     let faces: Vec<_> = d.faces().map(|f| (f.id(), f.record().sides)).collect();
     for (f, sides) in faces {
         match sides {
-            [a, b] if a == p && b == p => return Err(defect()),
+            // A lamina inside it: no part of what it encloses.
+            [a, b] if a == p && b == p => {
+                d.remove_face(f);
+            }
             [a, b] if a == p || b == p => {
                 d.face_mut(f).ok_or_else(defect)?.sides =
                     sides.map(|s| if s == p { p } else { out });

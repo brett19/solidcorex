@@ -40,6 +40,7 @@ mod radial;
 mod revolve;
 mod sheet;
 mod sphere;
+mod sweep;
 mod torus;
 
 pub use block::{BlockFaces, block};
@@ -57,6 +58,7 @@ pub use radial::{RadialCone, RadialFaces, radial};
 pub use revolve::{RevolveFaces, RevolveSheetFaces, Turn, Wall, revolve, revolve_sheet};
 pub use sheet::{SheetFaces, sheet};
 pub use sphere::{SphereFaces, sphere};
+pub use sweep::{SweepFaces, sweep};
 pub use torus::{TorusFaces, torus};
 
 use scx_brep::Brep;
