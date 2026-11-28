@@ -666,6 +666,7 @@ dependencies = [
  "scx-mass",
  "scx-num",
  "scx-nurbs",
+ "scx-nurbs-surface",
  "scx-planar",
  "scx-record",
  "scx-surface",

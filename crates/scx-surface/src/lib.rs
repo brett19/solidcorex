@@ -12,9 +12,11 @@
 //!   cone has a normal everywhere and returns it directly; the cone's is `None` at its apex.
 //! - [`Surface`]: every kind as one value (the five, and a NURBS surface and a
 //!   [`Procedural`] behind an `Arc`), dispatched by `match` with the kind's bits (63 §4.7).
-//! - [`Procedural`]: a generator revolved ([`Revolution`]) or extruded ([`Extrusion`]), its
-//!   [`Definition`] evaluated in closed form and its exact rational net built once, within a
-//!   stated rounding bound (research 75 §13.27).
+//! - [`Procedural`]: a generator revolved ([`Revolution`]), extruded ([`Extrusion`]) or
+//!   swept by a screw ([`Sweep`], [`Motion::Screw`], [`Screw`], [`RadialLaw`]), its
+//!   [`Definition`] evaluated in closed form and its rational net built once, within a
+//!   stated bound: the rounding, and for a sweep the certified gap of its net (research 75
+//!   §13.27, §13.29).
 //! - Inversion: each analytic kind's `closest` (a [`Closest`]: one foot or a set) and
 //!   `invert` against a uv domain ([`Inversion`] of a [`Foot`]) are closed forms and the
 //!   global nearest; [`Surface::invert`] adds a NURBS surface's, a certified search over its
@@ -29,6 +31,9 @@
 //!   lying on it ([`CurveSurfaceHit`]); closed forms, a NURBS pair `Unsupported` (63 SU6).
 //!   [`curve_on_surface`] is its answer for a curve stated to lie on the kind, read as
 //!   whether it does ([`OnSurface`]), the roots skipped where a closed-form bound proves it.
+//! - [`plane_bound`]: how far a piece of one plane, over its box, lies from another plane, in
+//!   closed form; planes that cross at an angle or face each other are typed ([`NotNear`])
+//!   (research 74 §42.5, §46).
 //! - [`project_curve`] and [`drop_curve`]: a curve projected onto a kind along a direction,
 //!   or dropped onto it square to it, in closed form, or a typed refusal naming the fitter
 //!   ([`ProjectError::NeedsFitter`]) (research 75 SF1).
@@ -83,6 +88,7 @@ mod invert;
 mod meet;
 mod nurbs_hits;
 mod nurbs_invert;
+mod one_plane;
 mod pcurve;
 mod plane;
 mod procedural;
@@ -111,16 +117,22 @@ pub use hull::{Hull, Hulls};
 pub use intersect::{Contact, CurveSurfaceHit, OnSurface, curve_on_surface, intersect_curve};
 pub use invert::{Closest, Foot, Inversion};
 pub use meet::{Meet, MeetError, points_meet};
+pub use one_plane::{CREASE, NotNear, plane_bound};
 pub use pcurve::{Check, CurveKind, PcurveError, SurfaceKind, pcurve_of, pcurve_of_projection};
 pub use plane::Plane;
-pub use procedural::{Definition, Extrusion, Procedural, ProceduralError, Revolution};
+pub use procedural::{
+    Definition, Extrusion, Motion, Procedural, ProceduralError, RadialLaw, Revolution, Screw, Sweep,
+};
 pub use project::{ProjectError, Projected, drop_curve, project_curve};
 pub use recognize::{Recognized, Written, recognize, recognize_written};
 pub use sphere::Sphere;
 pub use surface::Surface;
 pub use torus::Torus;
 pub use trough::{Half, MARGIN, Trough, TroughError, facing_trough};
-pub use volume_map::{Bend, Image, MapError, NotExact, Polar, Twist, Uv, VolumeMap};
+pub use volume_map::{
+    Bend, CurveImage, CurveNot, CurveParam, Fit, Image, MapError, NotExact, Polar, Twist, Uv,
+    VolumeMap,
+};
 
 use scx_num::vector3d::Point3;
 
@@ -147,6 +159,7 @@ const _: () = {
     ok::<Torus>();
     ok::<Procedural>();
     ok::<ProceduralError>();
+    ok::<Sweep>();
     ok::<Surface>();
     ok::<Recognized>();
     ok::<Written>();

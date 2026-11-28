@@ -3493,3 +3493,218 @@ cylinder's NURBS pcurve costs 15 to 330 times the analytic one, which has an exa
 4. `curve_lies_on_face` on a NURBS face cannot prove the trim until a NURBS surface has pcurves.
 5. The procedural arm: the net's gap widened by its bound, the aim tightened by the bound so
    the widened bracket still meets it (or undecided when it cannot).
+### 13.37 VM2 as built (11-28)
+
+Curve images under a `VolumeMap`, in `scx_surface::volume_map::curve` (a child of `volume_map`, re-exported): 77 §5.2's `image` for curves, after VM1 (13.31) and on FT3's `fit_within` (13.34).
+
+Public API:
+- `VolumeMap::image_curve(&Curve, over: Extent1d, aim: f64, &mut Budget, &Stop) -> Result<CurveImage, CurveNot>`.
+- `CurveImage::{Exact { curve, over, param: CurveParam }, Fitted(Fit)}`; `CurveParam::{Same, Affine { scale, shift }}` (the image at `s = scale t + shift` is the map of the source at `t`); `Fit { curve, over, bound, spans: Vec<SpanBound>, fits }` (the cubic B-spline on the source's span, so the same parameter; `bound` is the largest certified span bound and is within the aim).
+- `CurveNot::{BadSpan, MeetsAxis, OnCut, OutsideDomain, Unproven { bound, ended }, Fit(FitError)}` (non-exhaustive).
+- In scx-num: `Trig::atan2(y, x)` (new method; `f64`, `Ivl` and `Jet2`). `Polar` in scx-surface is now `pub trait Polar: Trig {}` with a blanket impl, so VM1's `map<T: Polar>` and every caller keep working; the `Ivl` angle moved to scx-num unchanged.
+
+Rules (a test on kind and frame within `ALIGNED`, never a sample), in the map's frame:
+- Bend: a line along the axis, or along `u` at `v0` (`|v0| <= pi d`), is a line, same parameter. A line along `v` at `u0 > 0` is the circle of radius `u0` about the axis, `Affine { scale: speed / d, shift: v0 / d }` (the circle's parameter is the angle). A circle in a plane `v = v0` (normal along `y`) is the circle in the plane through the axis at `v0 / d`, same parameter (the map is an isometry of that plane).
+- Twist: a line on the axis is itself. A line, or a circle, in a plane square to the axis is turned by `2 pi w / p`, same parameter. A line parallel to the axis and off it is not on a rule: it is a helix, fitted.
+- Unbend: a line along the axis is the line along the axis at `(r, d theta)`. A line square to the axis and through it, over one side of it, is the line along `u` at `d theta`, `Affine { scale: +-|dir|, .. }` (the radius is the parameter, so the far side runs backwards); a span that meets the axis is `MeetsAxis`. A circle about the axis in a plane square to it is the line along `v` at `u = r`, same parameter, `OnCut` when the span reaches `pi` (a span of a turn always does).
+- A chain is exact only when every step is, the span and parameter carried through; otherwise the whole chain is fitted in one (a helix then bent is one fit of the composite, not a fit of a fit).
+- Everything else, NURBS included, is the fit: source `t -> map(curve(t))` as a `CurveFn<3>` over `f64`, `Ivl` and `Jet2`, with the NURBS curve's knots in the span as breaks. Ends are free (not held along the pushed tangent).
+
+Decisions.
+- **`over` replaces `near`.** A line and a circle have no end of their own and the fit needs a domain, so the span is an argument; the unbend picks its nappe from the span's middle, as `near` did for surfaces.
+  - For: one argument does both jobs, and DF1's edge has its span.
+  - Against: 77 wrote `image_curve(&Curve, near)`; every caller passes a span (an edge has one).
+- **`atan2` joins `Trig` so the unbend can be fitted** (VM1 left a jet ring without `atan2`; the fit evaluates over `Jet2`).
+  - For: an unbend of any curve is then fitted like a bend of one; the other route, refusing the unbend's fit, leaves DF2's unbend of a bent body with no way to carry a curved edge.
+  - Against: a method added to `Trig` (three implementors), so scx-num is touched (wasm test run); `Polar` is now only a name. The `Jet2` angle is the chain rule on `Ivl`s: sound, loose near the origin, whole at it (so a fit near the axis or across the cut never proves).
+- **A curve across the unbend's cut or axis is `Unproven`/`Fit(Exhausted)`, not detected by rule.** Its image jumps, so no span proves; the budget and the cap end the search. For: no sampling to decide a kind. Against: it costs the budget before refusing. A line through the axis and a circle about it are caught by rule (`MeetsAxis`, `OnCut`).
+- **The bend's domain** is refused only by the rules (`OutsideDomain` for a constant `v` beyond `pi d`); a fitted curve is the bend's formula wherever it goes.
+- **Ellipses, parabolas and hyperbolas have no rule**: the fit handles them within the aim. Added only if a caller's count says so (75 §13.31's "new rules only when needed").
+
+Tests (`volume_map/curve/tests.rs`, 10; closed forms, the map applied pointwise, the bound at dense samples):
+- a line under a twist is a helix: the fit against `(u cos a - v sin a, u sin a + v cos a, w)` at 601 samples, within the bound, at 1e-3 and 1e-6;
+- exact lines and circles on the axis and square to it under a twist, skew frame, pointwise to `1e-12` relative;
+- the bend's three line rules (the circle's radius and affine parameter checked) and its circle in a constant-`v` plane (and `OutsideDomain`);
+- an arc off the rules under a bend, fitted, 801 samples within the bound;
+- every unbend rule, both senses and both orientations, `MeetsAxis` and `OnCut`;
+- a general line under an unbend, fitted (the `Jet2` angle);
+- a fit across the cut is refused, never proved;
+- chains: exact bend then twist (a line and a circle, `Same` and `Affine`), a twist then a bend fitted whole, a bend then its unbend of a general line equal to the line within `2e-8`;
+- a NURBS curve under a twist, fitted over its knots.
+
+Counts (release, throwaway timer; spans of the cubic, evaluations charged to the budget, one a point or a piece):
+
+| source, map | aim 1e-3 | aim 1e-6 |
+|---|---|---|
+| line along the axis at (1.5, 0.5), twist of pitch 4, `t` in `[0, 6]` (a helix of radius 1.58) | 16 spans, 4,288 evaluations | 126 spans, 367,779 evaluations |
+| circle of radius 1 at `u = 3`, `w = 1`, bend `d = 4`, a full turn | 13 spans | 64 spans |
+| line `(1, 0.5, 0) + t (1, 1, 0.5)`, unbend `d = 2` | 6 spans at 1e-4 | 64 spans at 1e-8 |
+| cubic NURBS of 6 points under a twist | | 68 spans |
+| a twist then a bend of a line along the axis | | 32 spans |
+
+The helix agrees with 13.34's note: the search is `O(n^2)` in the spans (each round refits and recertifies every span), and a tight aim on a long, curved image is the cost. A fitted edge at DF1's tolerance (1e-3 to 1e-4 of the part) is tens of spans and thousands of evaluations; the rules cost nothing but the frame's arithmetic. The tests run in debug in 13 s.
+
+Deviations from 77: `over` for `near`; `Trig::atan2`; `CurveImage` is `Exact`/`Fitted` (no `Procedural`: PK4's in-volume curve is PK4's step, as for surfaces); ends of a fit are free (held ends along `push` of the tangent left for a caller that needs G1 at a vertex).
+
+Open questions.
+- A fit near the unbend's axis is conditioned by `d / u` and the `Jet2` angle is loose there: the budget decides, not a rule.
+- The `O(n^2)` search (13.34's open question) is what a tight aim on a long curved edge pays.
+- Held ends: DF1's edges meeting at a vertex of a fitted face may want G1 at the ends.
+
+### 13.29 PK3a as built (11-28)
+
+`Definition::Sweep(Sweep)` with `Motion::Screw(Screw)` in `scx_surface::procedural` (77 row
+PK3a), the screw's motion, bounds and law in `crates/scx-surface/src/procedural/screw.rs`.
+Ported from the pin's `surface::procedural_sweep` (`lift_error_bound`, `offset_error_bound`,
+the radial law and its five tests); the pin's make-level `sweep::screw` walls are not ported
+here (MK6).
+
+- `Screw::new(origin, axis: Vec3, pitch, turn: Extent1d, law: Option<RadialLaw>,
+  res: Resolution)`: the screw about the line through `origin` along `axis`, rising `pitch`
+  per whole turn (right handed), over `turn` radians. It chooses its own stations: each
+  stretch of the law (the turn cut at the law's angles inside it) is cut into equal spans of
+  at most `pi / 4`, as many as make the certified gap no more than `res.approx()`. Accessors
+  `origin, axis, pitch, law, stations, turn, approx, turn_at`.
+- `RadialLaw::new(direction: Vec3, angles, offsets)`: the profile moved `delta(theta)` along
+  `direction` (square to the axis) before the turn, `delta` piecewise linear over ascending
+  `angles` and held past the ends; `offset(theta)` evaluates it.
+- `Sweep::new(&Curve, Extent1d, impl Into<Motion>)`: the generator as for a revolution (line,
+  whole quarter arcs of a circle or ellipse, NURBS) carried by the motion. `u` is the net's
+  parameter across the turn, in radians, `Bounded(turn)`; `v` the generator's.
+  `Motion` is `#[non_exhaustive]`, so a path motion can join it.
+- New `ProceduralError` causes: `Law` and `ZeroPitch` (`Refused`), `TooFine { spans }`
+  (`Exhausted`: more than 12,000 spans, or a net of more than 4,000,000 points) and
+  `Inexact { bound }` (`Unsupported`, from `to_nurbs`).
+
+**The definition and the net.** On a span of width `w` and middle `m` the definition's angle
+is `theta(t) = m + 2 atan(a (t - m))`, `a = 2 tan(w / 4) / w`: the angle the net's rational
+quadratic arc turns a point to at the same `t`, so net and definition are compared at the
+same parameter and `theta(t_i) = t_i` at every station. The rotation is then exact in the
+net; only the lift `lambda theta` and the law's offset `sigma theta` are approximated by the
+net's quadratic rows. Their gaps are the same for every profile point, `|lambda| E_l` along
+the axis and `|sigma| (w / 2) E_o` square to it, and `Screw::approx` is the largest
+`sqrt` of their squares over the spans. Both are enclosed in rounded interval arithmetic
+(`atan` by its alternating series with the remainder), never sampled. `Procedural::bound` for a
+sweep is the net's rounding bound (as PK1) plus `approx`.
+
+The jet is in closed form (`theta`'s derivatives from `q = 1 / (1 - i x)`, Leibniz for the
+law term). At a station `theta` is continuous but its first derivative is not unless the
+spans' widths agree, so the side picks the span.
+
+**Per-call rule.** As PK1's for a NURBS generator: point, jet and normal read the definition;
+`box_over`, `range_along` and hulls read the net plus its bound inside its box and the
+definition (by intervals over the spans it meets) past it. `closed_form` is `None`. Inversion
+runs on the net and then polishes the foot on the definition by Newton on `|S - p|^2`
+(accepted only while the distance falls), then classifies it on the definition, so the foot
+is the definition's to rounding and not the net's gap away. `to_nurbs` is refused with
+`Inexact { bound }`. `reversed(U)` negates the axis and the stations; `transformed` keeps
+the stations and needs a similarity (the scale multiplies the pitch and the law's offsets, a
+reflection flips the pitch's sign).
+
+**Truths tested.** The screw of a point is the helix `(3 cos theta, 3 sin theta, v + theta /
+2)` and of a line along the axis the cylinder `x^2 + y^2 = 9`, both to `1e-14`; the law moves
+the radius to `4 + delta(theta)`; the net is within the bound at every sample and a dense
+look at the widest span finds at least half of `approx` (the bound is reached, not loose);
+`approx <= res.approx()`; the jet against differences (first and second order); boxes and
+ranges hold the definition; reversal, rotation, scaling and reflection map every point, a
+shear is refused; inversion lands within `1e-9 * scale`. In `screw.rs`: the pin's five
+(`atan_is_enclosed`, `the_lift_error_bound_is_its_maximum` against a dense sample of `E_l`
+from its definition, `the_offset_error_bound_holds_and_is_tight`,
+`hostile_definitions_are_refused`, `each_span_keeps_its_own_half_angle`) and three more
+(`a_tau_interval_bounds_its_members`, `too_fine_is_exhausted`, `stations_hold_the_goal`).
+No test was removed.
+
+Decisions (analysis and adversarial pass):
+
+1. *Typed refusals for every bad definition* (pin: one `bad(reason)` string). For: callers
+   branch on the cause, and `TooFine` is honest `Exhausted` (a finer resolution, not a wrong
+   input). Against: four more variants on a `#[non_exhaustive]` enum the callers mostly
+   forward.
+2. *`ZeroPitch` only without a law.* For: a zero-pitch screw with a law is a real surface (a
+   spiral face in a plane of rotation), while without one it is exactly a `Revolution`, which
+   has an exact net; refusing by name sends the caller there. Against: a caller building
+   pitch from user input must special-case zero.
+3. *The law's slope per span* (pin: one slope over the whole range). For: the pin's single
+   slope bounds a two-stretch law with the wrong `sigma` on one stretch; the stations land on
+   the law's angles so each span is on one stretch and its own slope is exact. Against: more
+   groups to bound, a little more build time on long laws.
+4. *Stations chosen from `Resolution::approx`* (pin: a tolerance argument and a 1% shrink
+   loop). For: one source of tolerance, the document's; equal spans per stretch, grown by
+   the gap's known order (`n^-3` lift, `n^-2` offset) in at most 64 rounds, then
+   `TooFine`. Against: a caller cannot ask for a tighter screw than its resolution without
+   building another `Resolution`.
+5. *`tau` as an interval over a group of spans.* For: spans of nearly one width (same
+   high bits) and one stretch share one enclosure over the hull of their widths, which is
+   sound for every member and keeps the bound cost per group, not per span. Against: a group
+   bound is a little wider than each span's own.
+6. *`to_nurbs` refuses with `Inexact { bound }`* rather than returning the net. For: every
+   other kind's `to_nurbs` is exact, and a caller that wants the approximation can take
+   `net()` and `bound()` knowingly. Against: callers that only need a NURBS within tolerance
+   (export, tessellation) must handle a refusal.
+7. *A transform keeps the stations, so `approx` scales with the map.* For: the image is the
+   same surface moved, point for point, with its uv kept (`UvMap::IDENTITY`). Against: a
+   scaling up may leave the image's `approx` above the resolution; rebuilding with
+   `Screw::new` restores it but changes the uv.
+8. *Inversion polished on the definition.* For: the net's foot is up to `approx` off; the
+   Newton steps put it on the definition to rounding. Against: a few jets per inversion.
+9. *`ClosedForm` became an enum of the two closed kinds* (was a struct over a
+   `&Definition`). For: no unreachable sweep arm; `closed_form()` is `None` for a sweep by
+   construction. Against: none found.
+10. *`Procedural::eval` takes `T: Trig`* (was `Ranged`): the screw needs sine and cosine of
+    `u`. `f64` and `Ivl` are both `Trig`, so no caller changed.
+
+Measured with a throwaway timer (release) on the existing kinds, before and after:
+rev point 2.380 to 2.268 ms, box 135.2 to 131.1, along 132.2 to 130.8, invert 383.3 to 376.4, build 114.3 to 110.9; ext point 0.564 to 0.587, box 24.8 to 23.2, along 11.9 to 11.1, invert 245.8 to 238.2, build 11.2 to 10.9 (best of five runs alternated with a build of main). No added work on revolutions and extrusions: the only change on their
+path is one match arm.
+
+Open questions:
+
+- A tighter box rule for sweeps: inside the net's box the box is the net's widened by the
+  whole bound, which includes `approx`; the definition's intervals over few spans may be
+  tighter.
+- Whether `to_nurbs` should return the net with its bound (a typed `Approximate` result)
+  instead of refusing.
+- Whether the goal should be `Resolution::approx` or a separate tolerance argument.
+- Whether a scaling transform should rebuild the stations to keep `approx` within the
+  resolution.
+- Evaluating a wide `Ivl` `u` crosses many spans one by one; a bound per range of spans may
+  be needed for long screws.
+
+### 13.38 MK12 as built (11-28)
+
+`scx_make::{section_blend, Blended, SectionFrame, EndOrder, BlendError, BlendRefusal}` (`crates/scx-make/src/blend.rs`; scx-make gains the `scx-nurbs-surface` dependency, which layers.txt allows). CN4's `skin` with `Edge::Held` ends (13.28), CN3's tensor interpolation under it (13.26) and MK10c's `span_bound` (13.18) are reused; nothing in step 5 changed.
+
+API:
+- `section_blend(&[Vec<SectionFrame>], [EndOrder; 2], crown: [f64; 2]) -> Result<Blended, BlendError>`; `SectionFrame { p, leave, bend, bend_change }` (`SectionFrame::at(p)` for stations that hold nothing), `EndOrder::{G0, G1, G2, G3}`.
+- `Blended { surface: NurbsSurface<3>, through }` with `section(i)` (the curve through section `i`'s stations), `count()` and `rail_bound(i, tol, &mut Budget, &Stop)`, which is `span_bound` of the surface against that section on the correspondence `u = i/(n-1), v = t`.
+- `BlendError::{Refused(BlendRefusal), Station(FitError), Curves(NurbsError), Skin(SkinError), Defect}` with `kind()` and `name()`; `BlendRefusal::{Sections, Stations, Uneven, Crown, NotFinite, NoDirection, Meet, Derivative}`.
+
+Construction. Each section is the curve through its stations (degree `min(3, stations - 1)`, parameters `s/(stations - 1)`, averaged knots), so all share one knot vector. The ends are derivatives at the stations (the pin's `leave * speed`, `bend * speed^2`, and `third_derivative` for the part of the third square to the tangent; the last section reads back, its odd derivatives negated). Interpolation is linear, so the control polygon of a derivative column is the same fit through the derivative vectors on the same knots: that is the `End` `Edge::Held` takes for each control point of a row. The skin runs along `u` at `i/(n-1)` and the result is `swapped()` so the sections are `u` rows as the pin has them.
+
+Decisions.
+- **The `u` degree is global: `min(max(c + c' - 1, 3), n + c + c' - 3)`** (`c`, `c'` the end conditions, G0 = 1). For: two G0 sections are degree 1 and give the ruled surface; two sections at G3 are degree 7, the pin's; the rows and conditions always give a determined system (`n + (c - 1) + (c' - 1)` control rows), and the end orders are below the degree. Against: the pin's `u` degree was the span maximum over a piecewise-Bezier net, so a long G0 run was piecewise (a Bezier span per section pair, a `degree`-fold knot at each section) there and is one global cubic here.
+- **Interior sections are interpolated, with no finite-difference conditions.** The pin held a central first, second and third difference at every interior section and joined Bezier spans (C3 with four sections). That was SolidCraft's definition of the surface, not a surface with a truth of its own, and the skin is `C^(q-1)` at its simple knots anyway; for a family that is a polynomial of degree at most `q` in `u` it is exact where the finite differences needed the family to be that low-degree and the stations uniform. For: one constructor, certified `through`, no estimated derivatives. Against: shapes differ from the pin between sections, and a caller who relied on the finite-difference joints gets a global fit; the pin's interior tests (`interior_sections_hold_a_cubic_s_third_derivative`, `interior_joints_are_c3_from_four_sections_and_c2_at_three`) are not ported because they pin the definition. The sections are still passed through exactly.
+- **G3 holds only the third derivative's part square to the tangent** (the pin's `third_derivative`; the rest is a reparametrisation and is zero). So a polynomial family is exact at G3 only when its own third derivative has no tangent part; the helix and circle truths below are stated on the square part. A first version of a cubic-family test assumed exactness and failed at 1e-5: the test was wrong, not the surface, and was removed.
+- **No section or station cap** (the pin's 50 and 257). Work is linear in both, nothing is allocated in proportion to a cap, and a cap is a failing default to a caller one station over. The crown range `-0.9 ..= 3` is kept: it bounds the speed away from zero and from the chord's absurd multiples, and a value outside is `Refused(Crown)`.
+- **Exact floors, as the pin's rewrite already had them:** a `leave` of no length at an end of order G1 or above is `NoDirection`, two neighbouring sections meeting at a station is `Meet`; neither is nudged.
+- **The certificate is `through` plus `rail_bound`.** `through` is CN4's per-control-column bound of the miss at every `u`. `rail_bound` is MK10c's `span_bound` of the surface against a section curve, an independent proof from the surface's own patches (so it still holds after an edit), and the one MK12b will use for a rail on a blend. Not done: a certificate of the end derivatives (the tests check them against closed forms; a bound would need the Bernstein form of `S_u` against the held polygon, and nothing asks for it).
+- **Not ported (MK12b's or later):** `SectionBlendDefinition`/`section_blend_surface` (the kept definition and re-certification under motions), `section_frames`, `section_frames_outward`, `point_frames` and `open_section_turns` (frames from faces and edges, which MK12b needs).
+
+Work (release, throwaway timer in the test module, removed; helix sections of `stations` stations, mean of 50):
+
+| sections x stations | G0 blend | G3 blend | bare `interpolate_rows` (CN3) |
+|---|---|---|---|
+| 4 x 9 | 31 us | 42 us | 4-6 us |
+| 8 x 33 | 118 us | 256 us | 27 us |
+| 16 x 129 | 916 us | 1,625 us | 184-189 us |
+
+- The blend costs 4 to 5 times the bare row fit at G0 and 9 times at G3. The G0 part above the fit is the `n` section fits and `CompatibleCurves`, then CN4's certificate (1.8 to 2.4 times the fit, 13.28). The G3 part above G0 (+138 us at 8 x 33) is the six derivative columns fitted at the stations (three orders at two ends) and the Hermite solve's wider system. Nothing here is on a hot path yet; the shared-basis certificate CN4 names as its follow-up would take the dominant term away from every skin, this one included.
+- Knots added against the pin: along `v` none (the same averaged knots on `s/(stations - 1)`); along `u` none beyond the averaging knots plus end multiplicities of the ends' orders, against the pin's `degree`-fold knot at every interior section (so a long run has far fewer control rows here).
+
+Tests (`blend/tests.rs`, 6; truth is a closed form):
+- Two G0 sections are the ruled surface `(1 - u) A(v) + u B(v)` to `1e-12` at 36 points; the surface is degree 1 in `u` and `through` is below `1e-11` (the pin's `section_blend.rs:47`).
+- Five sections of five stations of the parabolic cylinder `(2v, t, t^2)` with its own G2 end frames (the crown chosen so the speed is the parameter's) give the cylinder to `1e-12` at 81 points, between stations as well as on them, and the end first and second derivatives are the cylinder's (the pin's `:132`).
+- G3 ends on circles and on helices (whose curvature vector turns, so `bend_change` has a part square to the tangent), five stations on growing radii: at both ends the first and second derivatives and the square part of the third equal the helix's at the definition's speed, to `1e-9`.
+- G1 leaves along `leave` at `chord / 3 * (1 + crown)` (two sections) and `* 2` (three sections), and arrives against its `leave`.
+- The refusals by type (each crown bound accepted at its limit, NaN crown, infinite station, meeting sections, no direction at G1, a G0 end ignoring its frame), and the names unique.
+- `rail_bound` of every one of four sections of a free G0 blend is below `1e-9` (`Bounded`), and `None` past the last section.

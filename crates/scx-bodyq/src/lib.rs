@@ -54,6 +54,12 @@
 //! which entities of a body descend, by the edits' [`Changes`](scx_brep::Changes), from stored
 //! references, and which of them carry the stored point.
 //!
+//! **One surface** (research 74 §46). [`faces_on_one_surface`] grows a set of faces across the
+//! edges where the faces are proved to lie on one surface (equal, or planes within the
+//! resolution by `scx_surface::plane_bound`, ST5's proof), with the reason each other edge
+//! stopped it; every face grown is also proved on its seed's surface (research 74 §49), so a
+//! chain of planes that drifts is not grown through.
+//!
 //! **Vertex joints and wall geometry** (research 74 §34, BW11). [`leaving`], [`turn_at`],
 //! [`convex_at`] and [`joint_turn`] read a joint of edges at a vertex. [`facing_planes`],
 //! [`facing_cylinders`], [`wall_holds`], [`planes_meeting`], [`move_edge_onto_line`],
@@ -78,9 +84,11 @@ mod mid_joint;
 mod mid_sheet;
 mod near;
 mod on;
+mod one_surface;
 mod pick_at;
 mod rays;
 mod reach;
+mod reads;
 mod recognize;
 mod round_face;
 mod side;
@@ -106,9 +114,15 @@ pub use face_surface::{Closest, FaceSurface, face_surface};
 pub use joint::{Convexity, Leaving, Missing, Turn, convex_at, joint_turn, leaving, turn_at};
 pub use mid_joint::{Line3, Meeting, Moved, move_edge_onto_line, planes_meeting};
 pub use mid_sheet::{Holds, Wall, from_frame, in_frame, onto_plane, polygon_area, wall_holds};
+pub use one_surface::{NotCrossed, NotOneSurface, OneSurface, Stopped, faces_on_one_surface};
 pub use pick_at::{Picked, pick_at};
 pub use rays::RAYS;
 pub use reach::Near;
+pub use reads::{
+    EdgeClosest, EdgePoint, FaceUv, LineHit, Nearest, ParallelTurnError, closest_to_point, edge_at,
+    edge_closest_point, edge_distance, face_contains, face_line_hits, face_line_nearest, face_uv,
+    faces_against, faces_at, outward_normal, rim_edges, turn_to_parallel,
+};
 pub use recognize::{
     Bore, Equivalence, Layer, Lone, NotPrism, Options as StackOptions, Piece, PrismSection,
     Recognition, Slot, Stack, Stacks, Why, bores, hole_stacks, prism_equivalent, prism_section,

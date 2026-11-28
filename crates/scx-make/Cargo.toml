@@ -14,6 +14,7 @@ scx-brep = { path = "../scx-brep" }
 scx-curve = { path = "../scx-curve" }
 scx-num = { path = "../scx-num" }
 scx-nurbs = { path = "../scx-nurbs" }
+scx-nurbs-surface = { path = "../scx-nurbs-surface" }
 scx-planar = { path = "../scx-planar" }
 scx-surface = { path = "../scx-surface" }
 
