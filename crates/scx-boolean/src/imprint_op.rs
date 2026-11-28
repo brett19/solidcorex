@@ -10,12 +10,13 @@ use std::collections::BTreeSet;
 
 use scx_brep::op::{Cx, Done, Report};
 use scx_brep::{Brep, EdgeId, RegionId, ShellId, VertexId};
+use scx_num::budget::Budget;
 
 use crate::boolean::{NoItems, interfere};
 use crate::error::{BooleanDefect, BooleanError, BooleanRefusal};
 use crate::faceface::face_face;
 use crate::geom::{Operands, Side};
-use crate::imprint::imprint as stage5;
+use crate::imprint::{Imprint as Stage5, imprint as stage5};
 
 /// What an [`imprint`] writes into the target.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -68,7 +69,17 @@ pub fn imprint(
         ff.lying
             .retain(|l| !(l.side == Side::B && l.along.is_none()));
     }
-    let mut m = stage5(ops, &found, &ff, *cx.doc, &mut budget, cx.stop)?;
+    let m = stage5(ops, &found, &ff, *cx.doc, &mut budget, cx.stop)?;
+    finish_target(m, cx, &budget)
+}
+
+/// Leaves the target's part of the stage-5 draft: the tool's faces go, then what only they
+/// held, and the draft is finished.
+pub(crate) fn finish_target(
+    mut m: Stage5,
+    cx: &mut Cx<'_>,
+    budget: &Budget,
+) -> Result<Done<NoItems>, BooleanError> {
     // Leave the target's part: the tool's faces go, then what only they held.
     let tool_faces: BTreeSet<_> = m
         .pieces
