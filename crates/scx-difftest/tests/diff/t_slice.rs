@@ -678,6 +678,8 @@ struct PinCells {
     sheet: Vec<Option<usize>>,
     loops: Vec<usize>,
     edges: Vec<Vec<solidcore::topology::EdgeId>>,
+    /// The vertices of each face's vertex loops (a touch inside the face).
+    lone: Vec<Vec<solidcore::topology::VertexId>>,
     users: BTreeMap<solidcore::topology::EdgeId, Vec<usize>>,
 }
 
@@ -687,6 +689,7 @@ fn pin_cells(k: &Kernel, b: &PinBrep, all: &[Sheet]) -> solidcore::Result<PinCel
         sheet: Vec::new(),
         loops: Vec::new(),
         edges: Vec::new(),
+        lone: Vec::new(),
         users: BTreeMap::new(),
         faces: faces.clone(),
     };
@@ -695,13 +698,23 @@ fn pin_cells(k: &Kernel, b: &PinBrep, all: &[Sheet]) -> solidcore::Result<PinCel
         cells.sheet.push(sheet_of(all, &face_samples(k, b, f)));
         cells.loops.push(face.loops.len());
         let mut es = Vec::new();
+        let mut lone = Vec::new();
         for &l in &face.loops {
-            for le in &b.loop_(l)?.edges {
+            let lp = b.loop_(l)?;
+            for le in &lp.edges {
                 es.push(le.edge);
                 cells.users.entry(le.edge).or_default().push(i);
             }
+            if lp.edges.is_empty()
+                && let Some(lu) = lp.loopuse
+                && let solidcore::topology::LoopuseStart::Vertexuse(Some(vu)) = b.loopuse(lu)?.start
+                && let Some(v) = b.vertexuse(vu)?.vertex
+            {
+                lone.push(v);
+            }
         }
         cells.edges.push(es);
+        cells.lone.push(lone);
     }
     Ok(cells)
 }
@@ -738,6 +751,7 @@ fn pin_topology(b: &PinBrep, cells: &PinCells, all: &[Sheet]) -> solidcore::Resu
                 e.0.insert(v);
             }
         }
+        e.0.extend(cells.lone[i].iter().copied());
     }
     let mut genus = Ok(0u32);
     for (vs, es, f) in chi.values() {
@@ -1467,10 +1481,29 @@ fn scx_topology(b: &scx_brep::Brep, t: &Topology) -> Verdict {
     let mut kept: Vec<Vec<[scx_brep::VertexId; 2]>> = vec![Vec::new(); faces.len()];
     let mut ends: BTreeSet<(usize, scx_brep::VertexId)> = BTreeSet::new();
     let mut edges = 0i64;
+    // A touch inside a face (BO25) is a loop of one collapsed edge, or, where it falls on a
+    // seam or a pole, a vertex of those: truth counts it as a vertex of each sheet it is in
+    // and a point loop of each patch.
+    let touches: BTreeSet<scx_brep::VertexId> = faces
+        .iter()
+        .flat_map(|f| f.loops())
+        .filter_map(|lp| match lp.uses().collect::<Vec<_>>().as_slice() {
+            [u] if matches!(u.edge().shape(), scx_brep::EdgeShape::Collapsed) => {
+                Some(u.edge().start().id())
+            }
+            _ => None,
+        })
+        .collect();
     for e in b.edges() {
         let fins: Vec<_> = e.fins().map(|f| index[&f.face]).collect();
         let seam = matches!(fins.as_slice(), [a, c] if a == c);
         if seam || matches!(e.shape(), scx_brep::EdgeShape::Collapsed) {
+            for v in e.ends().into_iter().filter(|v| touches.contains(v)) {
+                for &f in &fins {
+                    ends.insert((sheet[f], v));
+                    kept[f].push([v, v]);
+                }
+            }
             continue;
         }
         let sheets: BTreeSet<usize> = fins.iter().map(|&f| sheet[f]).collect();

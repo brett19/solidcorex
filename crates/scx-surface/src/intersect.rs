@@ -59,6 +59,12 @@
 //! plane through the axis; one of constant `v` a plane across it, or the plane's own
 //! lines), each piece is kept when its middle's uv is in `se`, and a touch of no length is
 //! dropped.
+//!
+//! **A curve stated to lie on the surface** ([`curve_on_surface`]). The answer is
+//! [`intersect_curve`]'s, read as whether every event was near. On a plane, before the
+//! roots, the curve's height above it is bounded in closed form; when the bound is within
+//! `tol` less an event's rounding, every event would be near and the answer is the clip
+//! alone, the same bits with no polynomial isolated.
 
 use core::f64::consts::{PI, TAU};
 
@@ -154,9 +160,92 @@ pub fn intersect_curve(
     let Some(path) = Path::of(c, ce) else {
         return Err(SurfaceError::NurbsIntersection);
     };
+    Ok(
+        match isolate(c, ce, &path, &target, se, res, budget, stop)? {
+            OnSurface::Proved(t) | OnSurface::Isolated(t) => t
+                .into_iter()
+                .map(|t| CurveSurfaceHit::Overlap { t })
+                .collect(),
+            OnSurface::Leaves(hits) => hits,
+        },
+    )
+}
+
+/// What [`curve_on_surface`] found of a curve stated to lie on a surface.
+#[derive(Clone, Debug, PartialEq)]
+pub enum OnSurface {
+    /// The curve lies on the surface, proved by a closed-form bound on its distance with no
+    /// root isolated: the overlap's pieces in `se`, those of [`intersect_curve`]'s
+    /// [`CurveSurfaceHit::Overlap`] answer to the bit.
+    Proved(Vec<Extent1d>),
+    /// No bound proved it (or none is had for this surface), and every event
+    /// [`intersect_curve`] isolates is near: its overlap's pieces in `se`, as it gives them.
+    Isolated(Vec<Extent1d>),
+    /// The curve leaves the surface: [`intersect_curve`]'s answer, isolated points only.
+    Leaves(Vec<CurveSurfaceHit>),
+}
+
+/// [`intersect_curve`] for a curve stated to lie on the surface: the same answer, read as
+/// whether it lies there, with the roots skipped where a closed-form bound proves it.
+///
+/// On a plane the curve's signed height in the plane's axes is affine in a line's `t`,
+/// `gamma + alpha cos t + beta sin t` on a conic, quadratic in a parabola's `t` and
+/// `gamma + alpha cosh t + beta sinh t` on a hyperbola, so a bound on its size over `ce`
+/// is a few products (`|gamma| + hypot(alpha, beta)` for a conic). When the bound is within
+/// `tol` less the rounding of an event's distance (a few ulps of the coordinates' size),
+/// every event [`intersect_curve`] could isolate is near, so its answer is the overlap's
+/// clip, returned as [`OnSurface::Proved`] for one unit of `budget` and no polynomial
+/// isolated. Otherwise, and on every other surface (whose isolation is itself a closed
+/// form of two units a piece, which no bound tried here undercuts), it is
+/// [`intersect_curve`] itself: [`OnSurface::Isolated`] when every event is near, else
+/// [`OnSurface::Leaves`].
+///
+/// # Errors
+///
+/// As [`intersect_curve`].
+pub fn curve_on_surface(
+    c: &Curve,
+    ce: &Extent1d,
+    s: &Surface,
+    se: &Extent2d,
+    res: Resolution,
+    budget: &mut Budget,
+    stop: &Stop,
+) -> Result<OnSurface, SurfaceError> {
+    let Some(target) = Target::of(s) else {
+        return Err(SurfaceError::NurbsIntersection);
+    };
+    let Some(path) = Path::of(c, ce) else {
+        return Err(SurfaceError::NurbsIntersection);
+    };
+    if let Some(height) = path.plane_height(&target) {
+        stop.check().map_err(|_| SurfaceError::Stopped)?;
+        budget.charge(1).map_err(SurfaceError::Exhausted)?;
+        if height <= res.zone().mm() - path.rounding(&target) {
+            return Ok(OnSurface::Proved(path.clip(c, &target, se)));
+        }
+    }
+    isolate(c, ce, &path, &target, se, res, budget, stop)
+}
+
+/// [`intersect_curve`]'s events and their reading, after the curve and surface are taken.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "intersect_curve's arguments, taken"
+)]
+fn isolate(
+    c: &Curve,
+    ce: &Extent1d,
+    path: &Path,
+    target: &Target,
+    se: &Extent2d,
+    res: Resolution,
+    budget: &mut Budget,
+    stop: &Stop,
+) -> Result<OnSurface, SurfaceError> {
     let tol = res.zone().mm();
     let mut events = Vec::with_capacity(16);
-    for piece in path.pieces(&target) {
+    for piece in path.pieces(target) {
         stop.check().map_err(|_| SurfaceError::Stopped)?;
         let g = target.equation(&piece);
         let dg = piece.turns(&g);
@@ -167,12 +256,12 @@ pub fn intersect_curve(
             for u in places {
                 let t = piece.map.t(u);
                 let t = if kind == Kind::Root {
-                    path.polish(&target, t)
+                    path.polish(target, t)
                 } else {
                     t
                 };
                 if let Some(t) = path.place(t) {
-                    events.push(Event::new(c, &target, t, kind, tol));
+                    events.push(Event::new(c, target, t, kind, tol));
                 }
             }
         }
@@ -184,18 +273,14 @@ pub fn intersect_curve(
         ([ce.min(), ce.max()], Kind::End)
     };
     for t in ends {
-        events.push(Event::new(c, &target, t, kind, tol));
+        events.push(Event::new(c, target, t, kind, tol));
     }
     events.sort_by(|a, b| a.t.total_cmp(&b.t).then(a.kind.cmp(&b.kind)));
     events.dedup_by(|b, a| {
         a.kind == b.kind && (b.t - a.t).abs() <= 8.0 * f64::EPSILON * a.t.abs().max(1.0)
     });
     if events.iter().all(|e| e.near) {
-        return Ok(path
-            .clip(c, &target, se)
-            .into_iter()
-            .map(|t| CurveSurfaceHit::Overlap { t })
-            .collect());
+        return Ok(OnSurface::Isolated(path.clip(c, target, se)));
     }
     // A closed curve's events are a cycle: start after a far one, so no run is cut in two.
     if path.closed
@@ -228,7 +313,7 @@ pub fn intersect_curve(
             .then(ka.0.total_cmp(&kb.0))
             .then(ka.1.total_cmp(&kb.1))
     });
-    Ok(hits)
+    Ok(OnSurface::Leaves(hits))
 }
 
 /// The hit a run of near events stands for: the nearest turning point as a tangent, else
@@ -509,6 +594,60 @@ impl Path {
             }
         }
         out.into_iter().flatten()
+    }
+
+    /// On a plane, a bound on the size of the curve's height above it over the extent, in
+    /// the plane's axes (see [`curve_on_surface`]); `None` on any other surface.
+    fn plane_height(&self, target: &Target) -> Option<f64> {
+        if !matches!(target.shape, Shape::Plane) {
+            return None;
+        }
+        let ax = &target.axes;
+        let z = |p: Point3| ax.local(p).2.abs();
+        let along = |v: Vec3| v.dot(ax.z);
+        let (lo, hi) = (self.extent.min(), self.extent.max());
+        let s = lo.abs().max(hi.abs());
+        Some(match self.kind {
+            PathKind::Line { origin, direction } => {
+                z(origin + direction * lo).max(z(origin + direction * hi))
+            }
+            PathKind::Conic { centre, a, b } => z(centre) + fmath::hypot(along(a), along(b)),
+            PathKind::Parabola { vertex, a, b } => {
+                z(vertex) + along(a).abs() * s * s + along(b).abs() * s
+            }
+            PathKind::Hyperbola { centre, a, b } => {
+                z(centre) + (along(a).abs() + along(b).abs()) * fmath::cosh(s)
+            }
+        })
+    }
+
+    /// A bound on the rounding of an event's distance in [`Event::new`]: the curve's point
+    /// at any `t` of the extent, taken into the target's axes and measured there, each a
+    /// few rounded steps on numbers no larger than `m` (the point's and the axes' origin's
+    /// coordinates and the surface's size), so within `ROUNDING` ulps of `m`, with room
+    /// to spare (the error-model argument is research 75 §13, BO21).
+    fn rounding(&self, target: &Target) -> f64 {
+        /// Ulps of the size: each step rounds once, and no event's distance takes 16.
+        const ROUNDING: f64 = 64.0 * f64::EPSILON;
+        let big = |p: Point3| p.x.abs().max(p.y.abs()).max(p.z.abs());
+        let len = |v: Vec3| v.x.abs() + v.y.abs() + v.z.abs();
+        let s = self.extent.min().abs().max(self.extent.max().abs());
+        let curve = match self.kind {
+            PathKind::Line { origin, direction } => big(origin) + len(direction) * s,
+            PathKind::Conic { centre, a, b } => big(centre) + len(a) + len(b),
+            PathKind::Parabola { vertex, a, b } => big(vertex) + len(a) * s * s + len(b) * s,
+            PathKind::Hyperbola { centre, a, b } => {
+                big(centre) + (len(a) + len(b)) * fmath::cosh(s)
+            }
+        };
+        let o = big(target.axes.o);
+        let size = match target.shape {
+            Shape::Plane => 0.0,
+            Shape::Cylinder { r, .. } | Shape::Sphere { r } => r,
+            Shape::Cone { r, k } => r.abs() + k.abs() * (curve + o),
+            Shape::Torus { big, small } => big + small,
+        };
+        ROUNDING * (curve + o + size)
     }
 
     /// The point and velocity at `t` in the target's axes.

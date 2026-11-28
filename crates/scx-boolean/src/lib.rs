@@ -45,22 +45,30 @@
 
 mod boolean;
 mod build;
+mod cells;
 mod classify;
 mod contact;
 mod error;
 mod faceface;
 mod geom;
+mod given;
 mod imprint;
+mod imprint_curves;
 mod imprint_op;
 mod intersect;
 mod pairs;
 mod pinch;
+mod planar;
 mod points;
 
-pub use boolean::{BooleanOp, NoItems, boolean};
+pub use boolean::{BooleanOp, NoItems, boolean, combine};
+pub use cells::{Faces, Membership, Rule};
 pub use error::{BooleanDefect, BooleanError, BooleanRefusal, BooleanUnsupported};
+pub use given::{Fact, Incidences, boolean_given};
+pub use imprint_curves::{Cut, CutRefusal, CutRegion, CutUnsupported, Imprinted, imprint_curves};
 pub use imprint_op::{Imprint, imprint};
 pub use intersect::intersect;
+pub use planar::planar;
 
 #[cfg(test)]
 mod tests;

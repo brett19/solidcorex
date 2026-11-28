@@ -140,7 +140,7 @@ impl<const D: usize> NurbsSurface<D> {
     }
 
     /// The lines of the net along `axis` (the rows along v, the columns along u) as curves.
-    fn lines(&self, axis: ParamAxis) -> Result<CompatibleCurves<D>> {
+    pub(crate) fn lines(&self, axis: ParamAxis) -> Result<CompatibleCurves<D>> {
         let knots = self.knot_vector(axis).clone();
         let count = match axis {
             ParamAxis::U => self.points().ncols(),
@@ -160,7 +160,7 @@ impl<const D: usize> NurbsSurface<D> {
 
     /// This surface with its lines along `axis` replaced by `lines` (the knots of the other
     /// direction kept).
-    fn with_lines(&self, axis: ParamAxis, lines: CompatibleCurves<D>) -> Result<Self> {
+    pub(crate) fn with_lines(&self, axis: ParamAxis, lines: CompatibleCurves<D>) -> Result<Self> {
         let count = lines.count();
         let (knots, points, rational) = lines.into_parts();
         let n = knots.point_count();
