@@ -431,7 +431,7 @@ impl VolumeMap {
                 let c = to_local(&b.frame, q);
                 let [x, y, w] = c;
                 let size = x.abs().max(y.abs()).max(w.abs());
-                if x.hypot(y) <= ON_AXIS * size {
+                if fmath::hypot(x, y) <= ON_AXIS * size {
                     return Err(MapError::OnAxis);
                 }
                 Ok(to_world(&b.frame, unbend_local(c, b.neutral)))
@@ -543,7 +543,7 @@ fn sign(x: f64) -> f64 {
 
 fn norm(c: [f64; 3]) -> f64 {
     let [a, b, w] = c;
-    a.hypot(b).hypot(w)
+    fmath::hypot(fmath::hypot(a, b), w)
 }
 
 const fn sense_of(outward: bool) -> Sense {
@@ -751,7 +751,9 @@ fn unbend_image(b: &Bend, s: &Surface, near: Point3) -> Image {
                 return Image::NotExact(NotExact::MeetsAxis);
             }
             let nappe = sign(radius);
-            let out = c.sense().sign() * nappe;
+            // A cone's normal is scaled by the radius's sign, so it faces away from the axis
+            // on both nappes when Forward and toward it when Reversed.
+            let out = c.sense().sign();
             // On the nappe, u = nappe (r0 + k axis (w - z_o)).
             let normal = [out, 0.0, -out * nappe * k * axis];
             exact(

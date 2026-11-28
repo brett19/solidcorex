@@ -168,8 +168,9 @@ fn map_then_inverse_is_identity() {
         for pitch in [4.0, -0.7, 100.0] {
             let t = twist(frame, pitch);
             for &x in &domain_points(&frame, 1.0) {
-                assert_close(t.inverse(t.map(x)).unwrap(), x, 1e-13);
-                assert_close(t.inverted().map(t.map(x)), x, 1e-13);
+                // The turn's angle rounds to `eps |w / p|`, moved by the radius.
+                assert_close(t.inverse(t.map(x)).unwrap(), x, 1e-12);
+                assert_close(t.inverted().map(t.map(x)), x, 1e-12);
             }
         }
     }
