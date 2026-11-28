@@ -10,25 +10,20 @@
     clippy::indexing_slicing
 )]
 
-use std::collections::BTreeMap;
 use std::f64::consts::PI;
 
 use scx_brep::op::{Cx, NoTrace, Scratch, Settings};
 use scx_brep::{
-    Brep, Document, Draft, EdgeGeom, EdgeId, EdgeShape, EdgeUse, Entity, FaceId, FaceSide,
-    LoopRecord, Operand, RegionId, ShellRecord, UseGeom, VertexId, VertexRecord,
+    Brep, Document, Draft, EdgeGeom, EdgeShape, Entity, FaceId, FaceSide, Operand, RegionId,
+    ShellRecord, VertexRecord,
 };
 use scx_curve::{Curve, Line};
-use scx_mass::{RelAccuracy, outward, volume};
-use scx_num::budget::{Budget, Stop};
+use scx_num::budget::Stop;
 use scx_num::extent1d::Extent1d;
-use scx_num::frame::Frame;
-use scx_num::vector2d::Point2;
 use scx_num::vector3d::{Point3, Vec3};
 use scx_stitch::{
-    SolidFault, StitchError, StitchRefusal, StitchUnsupported, Stitched, Want, stitch,
+    SolidFault, StitchError, StitchRefusal, StitchUnsupported, Want, stitch,
 };
-use scx_surface::{Plane, Surface};
 use scx_testkit::bodies::{Kind, generate};
 
 mod common;

@@ -74,7 +74,7 @@ fn close(got: f64, want: f64, what: &str) {
 /// `body` taken apart and stitched back is the same solid: the counts, the volume and
 /// the area (`truth`, closed form, and the body's own), the outward certificate and the
 /// check's contract.
-fn same_solid(body: &Brep, truth: Option<(f64, f64)>, what: &str) -> Brep {
+fn same_solid(body: &Brep, truth: Truth, what: &str) -> Brep {
     let sheets = explode(body, |_| false);
     let out = run(&refs(&sheets)).unwrap_or_else(|e| panic!("{what}: {e:?}"));
     let b = out.done.body;
@@ -102,7 +102,7 @@ fn exploded_recipes_are_the_same_solid() {
     // Seed 0 of each: the unit block; radius 1, height 2 (cylinder); radius 1, height 1
     // (cone); radius 1 (sphere); major 2, minor 1 (torus); a 3 x 3 x 3 block with a unit
     // void.
-    let cases: [(Kind, usize, Option<(f64, f64)>); 12] = [
+    let cases: [(Kind, usize, Truth); 12] = [
         (Kind::Block, 1, Some((1.0, 6.0))),
         (Kind::Block, 3, Some((1.0, 6.0))),
         (Kind::Prism, 2, None),
@@ -285,6 +285,9 @@ fn the_identified_spread_is_the_perturbation() {
     assert!(!out.report.left.iter().any(|l| matches!(l, Left::Undecided { .. })));
 }
 
+/// A closed-form volume and area.
+type Truth = Option<(f64, f64)>;
+
 type Key = Vec<String>;
 
 /// The body's geometry as sorted text, which holds every float to its bits (`Debug` prints
@@ -432,7 +435,7 @@ fn a_cap_on_an_open_box_closes_it() {
     let mut cx = Cx::new(&doc, &settings, &mut scratch, &stop, &NoTrace);
     let open = stitch(&rest, Want::Sheets, &mut cx).unwrap().done.body;
     assert_eq!(open.faces().count(), 5);
-    assert_eq!(open.edges().count(), 12 - 0);
+    assert_eq!(open.edges().count(), 12);
     assert_eq!(open.shells().count(), 1);
     // Solid is refused until the cap is on.
     assert!(matches!(
@@ -470,7 +473,7 @@ fn a_join_past_the_pcurve_tolerance_is_typed() {
 }
 
 /// The truth the stitch owes (74 §4.4): a sheet 0.9 of the coincidence off stitches. Pending
-/// the writer placing a curve off its face by up to the zone (follow-up row ST4a).
+/// the writer placing a curve off its face by up to the zone (follow-up row `ST4a`).
 #[test]
 #[ignore = "a join 0.5 to 1.0 zone off the absorbed face's plane is Unsupported(Fit): the pcurve writer's tolerance is half the zone (ST4a)"]
 fn a_sheet_at_nine_tenths_of_the_coincidence_stitches() {
