@@ -229,7 +229,7 @@ fn an_arc_and_a_line_out_of_its_plane() {
         let s = f64::from(i) / 12.0;
         let q = at(&m, s, 0.0);
         assert!(
-            (q.x.hypot(q.y) - 5.0).abs() < 1e-12 && q.z.abs() < 1e-12,
+            (scx_num::fmath::hypot(q.x, q.y) - 5.0).abs() < 1e-12 && q.z.abs() < 1e-12,
             "{q:?}"
         );
         // the t = 1 side is on the line z = 4, x + y = 5
@@ -340,24 +340,14 @@ fn a_reversed_sheet_has_the_other_normal_and_reversing_twice_gives_it_back() {
 
 #[test]
 fn a_solid_is_not_a_sheet() {
-    let (body, _) = {
-        let m = block(
-            &Frame::new(
-                p(0.0, 0.0, 0.0),
-                Vec3::new(0.0, 0.0, 1.0),
-                Vec3::new(1.0, 0.0, 0.0),
-            )
-            .unwrap(),
-            [
-                Length::from_mm(1.0),
-                Length::from_mm(2.0),
-                Length::from_mm(3.0),
-            ],
-            &doc(),
-        )
-        .unwrap();
-        (m.body, ())
-    };
+    let frame = Frame::new(
+        p(0.0, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        Vec3::new(1.0, 0.0, 0.0),
+    )
+    .unwrap();
+    let sizes = [1.0, 2.0, 3.0].map(Length::from_mm);
+    let body = block(&frame, sizes, &doc()).unwrap().body;
     let mut d = body.edit();
     assert!(matches!(
         d.reverse_sheet(&doc()),

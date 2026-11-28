@@ -85,7 +85,7 @@ pub(super) fn ruled(
     a: &RuledSide,
     b: &RuledSide,
     join: Join,
-    doc: &Document,
+    doc: Document,
 ) -> Result<Made<FaceId>, RuledError> {
     let fa = form(a, Which::First)?;
     let mut fb = form(b, Which::Second)?;
@@ -122,7 +122,7 @@ pub(super) fn ruled(
     let kv = KnotVector::new(1, vec![0.0, 0.0, 1.0, 1.0]).map_err(RuledError::Compatible)?;
     let surface =
         NurbsSurface::new(ca.knot_vector().clone(), kv, net, wnet).map_err(RuledError::Surface)?;
-    square_sheet(&surface, *doc)
+    square_sheet(&surface, doc)
 }
 
 /// The sheet of the whole of `surface`: its four boundary curves as edges (the surface's own

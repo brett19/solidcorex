@@ -27,7 +27,7 @@ pub(super) fn ruled(
     a: &RuledSide,
     b: &RuledSide,
     join: Join,
-    doc: &Document,
+    doc: Document,
 ) -> Result<Option<Made<FaceId>>, RuledError> {
     if !lines_or_arcs(a, b) {
         return Ok(None);
@@ -47,7 +47,7 @@ pub(super) fn ruled(
     for (i, p) in ring.iter().enumerate() {
         let q = ring.get((i + 1) % ring.len()).copied().unwrap_or(*p);
         let (p, q) = (p.to_vec(), q.to_vec());
-        sum = sum + p.cross(q);
+        sum += p.cross(q);
     }
     let Some(n) = sum.normalized() else {
         // No net area: both lines on one line, or a bow tie whose two halves cancel.
@@ -72,7 +72,7 @@ pub(super) fn ruled(
     }
     for s in [a, b] {
         if let Curve::Circle(c) = &s.curve {
-            let tilt = Vec3::from(*c.frame().z()).cross(n_vec).length() * c.radius().mm();
+            let tilt = (*c.frame().z()).cross(n_vec).length() * c.radius().mm();
             let off = (c.frame().origin() - a0).dot(n_vec).abs();
             if tilt > zone || off > zone {
                 return Ok(None);
@@ -82,7 +82,7 @@ pub(super) fn ruled(
     let Some(frame) = Frame::new(a0, n_vec, a1 - a0) else {
         return Ok(None);
     };
-    let (fx, fy): (Vec3, Vec3) = ((*frame.x()).into(), (*frame.y()).into());
+    let (fx, fy) = (*frame.x(), *frame.y());
     let flat = |p: Point3| {
         let d = p - a0;
         Point2::new(d.dot(fx), d.dot(fy))
@@ -126,7 +126,7 @@ pub(super) fn ruled(
     let Ok(region) = Region::new(loop_, Vec::new(), doc.resolution()) else {
         return Ok(None);
     };
-    let made = match sheet(core::slice::from_ref(&region), &frame, doc) {
+    let made = match sheet(core::slice::from_ref(&region), &frame, &doc) {
         Ok(m) => m,
         Err(MakeError::Refused(_) | MakeError::Unsupported(_)) => return Ok(None),
         Err(e) => return Err(e.into()),

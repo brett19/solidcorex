@@ -213,8 +213,8 @@ pub fn ruled(
             return Err(RuledError::Refused(RuledRefusal::Closed(which)));
         }
     }
-    if let Some(made) = planar::ruled(a, b, join, doc)? {
+    if let Some(made) = planar::ruled(a, b, join, *doc)? {
         return Ok(made);
     }
-    nurbs::ruled(a, b, join, doc)
+    nurbs::ruled(a, b, join, *doc)
 }
