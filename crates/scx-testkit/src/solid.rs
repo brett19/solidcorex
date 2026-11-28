@@ -386,7 +386,7 @@ pub fn sphere_cap(r: f64, h: f64) -> Result<Solid, SolidError> {
 /// each; the side is `sweep 2 pi r R`.
 pub fn torus_sector(big: f64, small: f64, sweep: f64) -> Result<Solid, SolidError> {
     let (big, small) = (positive(big, "R")?, positive(small, "r")?);
-    if small >= big {
+    if small > big {
         return Err(SolidError::Range("r"));
     }
     if !(sweep.is_finite() && sweep > 0.0 && sweep <= TAU) {
