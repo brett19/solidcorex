@@ -3710,7 +3710,7 @@ Tests (`blend/tests.rs`, 6; truth is a closed form):
 - `rail_bound` of every one of four sections of a free G0 blend is below `1e-9` (`Bounded`), and `None` past the last section.
 
 
-### 13.39 RY1 as built (11-28)
+### 13.41 RY1 as built (11-28)
 
 `intersect_curve` (and `curve_on_surface`) now answer a NURBS curve against a plane, cylinder,
 cone, sphere or torus (77 §6.3 RY1). A NURBS curve against a NURBS surface stays
