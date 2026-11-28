@@ -9,12 +9,14 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
-# Each was already below stitch through scx-bodyq (74 §4.3), which ST2 no longer needs:
 # scx-algo's box tree, scx-curve's curves, scx-nurbs's tangent side, scx-surface's
-# certified gaps.
+# certified gaps; scx-mass's certified volume sign and scx-bodyq's point classification
+# orient a solid (ST3).
 scx-algo = { path = "../scx-algo" }
+scx-bodyq = { path = "../scx-bodyq" }
 scx-brep = { path = "../scx-brep" }
 scx-curve = { path = "../scx-curve" }
+scx-mass = { path = "../scx-mass" }
 scx-num = { path = "../scx-num" }
 scx-nurbs = { path = "../scx-nurbs" }
 scx-surface = { path = "../scx-surface" }

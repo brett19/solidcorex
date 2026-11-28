@@ -4350,3 +4350,211 @@ bound at the resolution) and every overlap of two bounded lines or conic arcs, o
 with the other (degree <= 4), exact signs on coefficients, exact point arithmetic where the rounding
 is exact; no tolerance but the `Resolution`. The pin's touch-at-the-foot, 1e-14 parallel and `atan2`
 slack rules are not ported.
+
+## 36. ST3 as built (11-28)
+
+The orientation stage of §4.3 (step 5) in `scx-stitch`, new module `src/orient.rs`. For
+`Want::Solid` the stitched sheets become the boundary of solids, or the stitch says by a typed
+error, naming the entity, why it cannot. ST2's placeholders `Unsupported(Solid)` and
+`EdgePending::Region` are gone. 15 new tests in `tests/orient.rs`, checked against closed-form
+volumes; one ST2 test removed. Cargo: stitch → mass (§11 row 2, for `volume_sign`) and stitch →
+bodyq (back, for `classify_point`); both are already below stitch in §4.3's layer graph. The
+cut stage's box queries now reuse one buffer (§32.7 open question 4): scx-algo's `BoxTree` gains
+`overlapping_in`.
+
+### 36.1 Public API (changes from §32.1)
+
+```rust
+// scx-algo
+#[derive(Debug, Clone, Default)] pub struct Overlaps { /* stack, found */ }   // + const fn new()
+impl<B: Bounded> BoxTree<B> {
+    pub fn overlapping_in<'s>(&self, q: &B, tol: f64, space: &'s mut Overlaps) -> &'s [usize];
+}   // `overlapping` is now `overlapping_in` with a fresh `Overlaps`, collected
+// scx-stitch
+pub enum StitchRefusal { ..., RegionsMeet { edges: [(Operand, EdgeId); 2] },
+    NotSolid { operand: Operand, at: Entity, why: SolidFault } }
+pub enum SolidFault { Open, Wire, LoneVertex, NotOrientable }              // + name()
+pub enum StitchUnsupported { ..., SolidOperand { operand: Operand },        // - Solid
+    Undecided { operand: Operand, edge: EdgeId },
+    Sign { operand: Operand, face: FaceId, why: SignPending },
+    Nesting { operand: Operand, at: Entity, why: NestingPending } }
+pub enum SignPending { Undecided, NoSeries, Winding, NoBox }                // + name()
+pub enum NestingPending { Nurbs, Unclear, Touching }                        // + name()
+pub enum EdgePending { ... }                                                // - Region
+```
+
+All new enums are `#[non_exhaustive]`, `Copy`, with stable `name()`s. The new `StitchError`
+names: `regions_meet`, `not_solid`, `solid_operand`, `undecided`, `sign_pending`,
+`nesting_pending` (`solid_pending` is gone). `Stitched` and `StitchReport` are unchanged: a
+solid's report is the same report its sheets would have.
+
+### 36.2 Method
+
+In this model a face's orientation is its sides record `[front, back]`, not a flag on the
+surface. A sheet's faces have one shell (in `OUTSIDE`) on both sides. Orienting a closed sheet
+shell is choosing, per face, which side the material is on, and giving that side a new shell of
+a solid region. No surface is flipped and no loop is reversed.
+
+1. **Closed.** An operand that is already a solid (a sheet in a non-outside region, or a face
+   with two different sides) is `Unsupported(SolidOperand)`, until a solid operand's region is
+   defined (§36.6). A wire edge or lone vertex anywhere is `Refused(NotSolid { Wire | LoneVertex })`.
+   Every curve edge of a sheet shell must then have exactly two fins; a collapsed edge (a pole)
+   bounds nothing and is skipped. An open edge is `Refused(NotSolid { at: Edge, why: Open })`,
+   or `Unsupported(Undecided { edge })` when ST2's budget share left its join undecided (the
+   edge is in `report.left` as `Undecided`).
+2. **Parity.** Each connected set of faces of a sheet shell (a *unit*) is labelled breadth-first
+   from its least face. Across an edge with fins a and b, opposite senses put the material on
+   the same side of both faces, one sense on opposite sides. A seam (a and b on one face) must be
+   in opposite senses. A contradiction is `Refused(NotSolid { at: Edge, why: NotOrientable })`.
+3. **Outward.** A trial body (a clone of the draft) gives each unit its own solid region on
+   the side parity chose from the least face's back, and MA4's certified `volume_sign` of that
+   region's shell decides: `Negative` flips the unit. `Undecided`, a face with no series, a
+   winding the sign cannot use, or no box are `Unsupported(Sign { face: the unit's least face })`;
+   `Exhausted` and `Cancelled` pass through.
+4. **Nesting.** Units whose boxes overlap (`BoxTree::self_pairs`) and where one box holds the
+   other are tested: one vertex of the inner unit at a time is classified (`classify_point`)
+   against a body made of the outer unit alone, solid on its outward side. `In` means held, `Out`
+   means not, `On` tries the next vertex; all `On` is `Unsupported(Nesting { Touching })`. A
+   unit's depth is the number of units holding it and its parent the holder at depth − 1 (if
+   the holders do not nest in a chain, `Touching`). Even depth bounds a solid; odd depth a cavity:
+   its inside is a void region, its outside a shell of the parent's solid. A NURBS face in the
+   query is `Nesting { Nurbs }` (step 5's ray, R4).
+5. **Finish.** When no sign is negative and nothing nests (the common case), the trial body is
+   the answer and the stitch finishes once. Otherwise the draft is labelled again by the plan
+   and finished.
+
+Separately, ST2's join of two edges whose faces lie in different regions is now
+`Refused(RegionsMeet { edges })`, naming both operand edges: with sheet-only operands
+(step 1) it cannot happen, so it is a refusal, not pending work.
+
+### 36.3 Choices, with cases for and against
+
+- **Sides, not flipped surfaces.** For: the sides record is the model's orientation; flipping a
+  surface would rewrite geometry and pcurves for no information. Against: a consumer that reads
+  only the surface normal sees an inward normal on some faces; it must read the sides record,
+  as every query in this repository already does.
+- **`Want::Sheets` does no orientation** (deviation from §4.3 step 5, "Sheets are oriented by
+  parity alone"). For: a sheet's faces have one shell on both sides, so parity has nothing to
+  record without inventing a front; the result is the same body either way. Against: a caller
+  wanting a consistently oriented open sheet (for an offset) has no such result. If wanted, it is
+  a separate `Want` that records a chosen side, not a change to `Sheets`.
+- **`NotSolid { at: Edge, why: Open }` names one edge**, not §4.3 step 6's
+  `NotClosed { open }` list. For: one typed refusal shape for every reason a stitch is not a
+  solid, each naming one entity, as other refusals do; the full list is `report.left` of the
+  same call with `Want::Sheets`. Against: a caller fixing a model must call twice to see every
+  open edge (open question 1).
+- **Trial body, then relabel.** For: `volume_sign` and `classify_point` take a finished `Brep`,
+  so the stitch makes one; the common case (one closed shell, outward by parity's first choice
+  or not) costs one finish if no flip. Against: a flip or a nest costs a second finish.
+- **Nesting by one vertex at a time.** For: a vertex of a closed shell that does not meet the
+  other unit is strictly in or out, `classify_point` is certified, and a touching vertex just
+  moves on. Against: two units that touch at every vertex (but not in faces) are `Touching`,
+  though they may nest; a face point would decide them (open question 2).
+- **The outer unit's body is built from scratch** (copied vertices, edges and faces), not by
+  removing faces from the trial body. For: it is a small, valid body of one unit; nothing else
+  in the draft can change the answer. Against: it copies each candidate container's faces once.
+- **Determinism.** Units are seeded from ascending faces, pairs come in `self_pairs` order and
+  holders are sorted; the permuted-input test checks the result bit for bit.
+
+### 36.4 The pin, mapped
+
+The pin (`heal/stitch/p2.rs`) carries an orientation per joined edge pair (`OrientType::Same`
+or `Opposite`) and lets the face uses' mates form regions as it stitches. It then finds the
+infinite region by firing rays (`FindInfiniteRegion`, floating) and sets void flags
+(`NestedSolid` alternates them by nesting, else `InfiniteRegionSwap`). Here parity labels sides
+after the joins, the outward sense is MA4's certified sign (`Undecided` reported, never
+guessed), and nesting is a certified `classify_point` or typed pending; no ray is fired. The pin's
+`stitch_faces_leaves_a_closed_cavity_void` (#21540) is ported as `the_pins_cube_with_a_cavity`
+with its numbers; its `stitched_solid_cavity_is_a_void` is covered by the cavity tests. The
+pin's cap-on-a-cube, lid and two-boxes stitches use solid operands or radial edges and wait on
+`SolidOperand` (§36.6).
+
+### 36.5 Tests
+
+`crates/scx-stitch/tests/orient.rs` (15; bodies from scx-testkit `bodies`, exploded to one sheet
+per face, some with a plane's frame and loops reversed so the face is flipped):
+
+- `a_stitched_block_is_its_volume`: a block in 1, 2 and 3 random steps; outward certificate,
+  volume 1.
+- `a_stitched_random_block_is_the_blocks_volume`: seeds 1-5, volume equals the block's.
+- `a_stitched_cylinder_is_pi_r2_h`: 3, 4, 6 steps; volume 2π.
+- `a_stitched_sphere_is_four_thirds_pi`: collapsed poles skipped by step 1.
+- `flipped_faces_are_oriented_by_parity`: half the faces flipped give the same solid.
+- `an_all_flipped_block_is_flipped_back_by_the_sign`: material in front of every face; the sign
+  flips the unit.
+- `a_stitched_cavity_is_a_void`: 27 − 1 = 26; one solid region, one void, two shells on the
+  solid; reversed order and flipped faces give the same.
+- `the_pins_cube_with_a_cavity`: the pin's #21540 test: 10³ − 4³ = 936, 24 joined, 12 faces,
+  every face between material and void.
+- `two_apart_blocks_are_two_solids_and_nested_ones_are_solid_void_solid`: two blocks give 2
+  solids, volume 2; a cube in the cavity gives 26.125 and solid, void, solid.
+- `permuted_sheets_give_the_same_bits`: three step orders and a rerun give one fingerprint.
+- `an_open_box_is_not_a_solid`, `one_sheet_is_not_a_solid`: `NotSolid { Open }` naming the edge.
+- `a_wire_beside_a_closed_box_is_refused`: `NotSolid { Wire }` naming the operand's edge.
+- `a_solid_operand_is_unsupported`: `SolidOperand`.
+- `sheets_keep_their_sides_without_want_solid`: `Want::Sheets` leaves every face `[S, S]`.
+
+Removed, on purpose: `tests/stitch.rs` `a_solid_is_pending`, which proved `Want::Solid` returned
+`Unsupported(Solid)`; that placeholder is gone and the tests above replace it. `box_tree.rs`
+`queries_match_brute_force` now also checks `overlapping_in` with one shared buffer. Not tested:
+`NotOrientable` and `Undecided`, which need a one-sided closed surface or an undecided join and
+are hard to build from analytic sheets (ST4).
+
+### 36.6 Measurements
+
+Release, server-class machine, median of 7 runs, before (main fb937a8) and after interleaved in
+two rounds; allocations by a counting allocator outside the repository; *work* is the bench's
+budget used, in its deterministic units (`Report::work`; unchanged, as the algorithm is).
+
+| case | work | allocs before → after | ms before (r1 / r2) | ms after (r1 / r2) |
+|---|---|---|---|---|
+| two 60x60, corner (no join) | 62,287 | 179,479 → 149,973 (−16%) | 20.45 / 19.76 | 23.34 / 19.17 |
+| two 60x60, seam | 64,083 | 182,203 → 152,872 | 26.43 / 22.69 | 26.95 / 22.40 |
+| two 60x60, half-offset seam | 65,501 | 190,256 → 160,717 | 27.31 / 23.25 | 27.39 / 23.00 |
+| checker 20x20 of 4x4 (no join) | 41,949 | 142,515 → 124,827 | 15.99 / 14.15 | 15.92 / 14.12 |
+| grid 20x20 of 4x4 (3,040 joins) | 170,138 | 403,749 → 376,029 | 94.05 / 86.15 | 93.73 / 86.37 |
+| `BoxTree` overlapping, 15,000 boxes and queries | 811 hits | 49,202 → 34,202 | 4.12 / 4.12 | 3.68 / 3.68 |
+| `BoxTree` overlapping, 1,000 | 3 hits | 2,679 → 1,679 | 0.108 / 0.105 | 0.100 / 0.087 |
+| `BoxTree` self_pairs, 15,000 (unchanged) | — | — | 0.716 / 0.709 | 0.707 / 0.702 |
+
+The buffer removes one allocation per cut query; time is within the machine's noise (the
+corner's round 1 is +14%, round 2 −3%, on a shared machine). `overlapping` itself, used by
+other crates, is 11% faster. The 10x10 and 30x30 cases move the same way.
+
+Cost of orientation (`Want::Solid` against `Want::Sheets` on the same exploded body, after):
+
+| body | Sheets work / allocs / ms | Solid work / allocs / ms |
+|---|---|---|
+| Block, 2 steps (24 faces) | 1,831 / 3,688 / 1.05 | 6,487 / 10,133 / 1.83 |
+| Block, 5 steps (150 faces) | 11,533 / 21,972 / 6.26 | 40,633 / 61,251 / 10.49 |
+| Block, 10 steps (600 faces) | 46,183 / 86,950 / 24.33 | 162,583 / 243,222 / 41.65 |
+| Cavity, 3 steps (108 faces) | 8,287 / 15,887 / 4.28 | 29,242 / 56,277 / 7.99 |
+| Cylinder, 8 steps (10 faces) | 8,029 / 10,080 / 20.27 | 11,377 / 14,671 / 21.33 |
+
+Orientation is linear in faces and adds about 70% on planar blocks (a trial finish and the
+certified sign) and 5% on the cylinder, where the joins dominate. `Want::Sheets` does
+no new work.
+
+### 36.7 Deviations and open questions
+
+Deviations from §4.3 and the ST3 row: `Want::Sheets` is not oriented (§36.3); `NotClosed { open }`
+is `NotSolid { at, why: Open }` naming one edge; solid operands are `Unsupported(SolidOperand)`;
+ST2's `EdgePending::Region` becomes `Refused(RegionsMeet)`.
+
+Open questions:
+
+1. **All open edges.** Should `NotSolid { Open }` carry every open edge (a `Vec`) so one call
+   shows them, or is `Want::Sheets`' `report.left` enough?
+2. **Touching units.** Two units that meet only at vertices are `Nesting { Touching }`. A point
+   inside a face of the inner unit would decide them; should nesting classify a face point when
+   every vertex is `On`?
+3. **Solid operands.** Stitching a sheet to a solid (a cap on a cube) needs the solid's region
+   to meet the sheet's material; it is `SolidOperand` now. Which ST row owns it?
+4. **Orientation cost.** About 70% over `Want::Sheets` on planar blocks. A sign straight from the
+   draft (no trial finish) or one sign per unit from its least face's neighbourhood would cut
+   it; neither is certified yet.
+5. **Build infrastructure.** Not a repository question; recorded in the hand-back.
+
+### 36.8 Proposed 04 row
+
+| 11-28 | (For the owner's review) The stitch's orientation stage: for `Want::Solid` each closed sheet shell's faces are labelled by edge parity from the least face, MA4's certified `volume_sign` of a trial body's region decides outward, and nesting is decided by `classify_point` of the inner unit's vertices against the outer unit alone (even depth solid, odd depth void); orientation is the faces' sides record, no surface is flipped. Every failure names its entity: `Refused(NotSolid { Open, Wire, LoneVertex, NotOrientable })`, `Refused(RegionsMeet)`, `Unsupported` for solid operands, undecided joins, pending signs and pending nesting (NURBS waits on step 5's ray). `Want::Sheets` is not oriented. `BoxTree::overlapping_in` with a caller's `Overlaps` buffer (16% fewer allocations in the cut stage). Edges: stitch → mass, stitch → bodyq | Amends §4.3 steps 5 and 6 (no parity for sheets; `NotSolid` names one edge, not `NotClosed { open }`) | 74 §36 |
