@@ -11,6 +11,9 @@ use scx_num::units::{Length, Resolution};
 use scx_planar::{PlanarError, SegmentRef};
 use scx_surface::SurfaceError;
 
+use crate::frames::FrameError;
+use crate::sweep::{LawFault, Needed};
+
 /// Which size of a constructor is meant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -122,6 +125,10 @@ pub enum Refusal {
         /// The minor radius (mm).
         minor: f64,
     },
+    /// A sweep's path is not one: the frames' verdict, as they gave it.
+    Path(FrameError),
+    /// A sweep's laws or rails are out of range, or do not place the profile.
+    Law(LawFault),
 }
 
 /// Valid input this build does not make yet, by name.
@@ -150,6 +157,14 @@ pub enum Unsupported {
         /// The minor radius (mm).
         minor: f64,
     },
+    /// The construction needs a surface kind this build does not have yet (step 5's).
+    NeedsKind {
+        /// The kind.
+        kind: Needed,
+    },
+    /// Guide rails along a path with a corner: the stations' planes at a mitre are not
+    /// square to the path, so the rails' crossings there are not defined yet.
+    RailsAtCorner,
 }
 
 /// A fault of the constructor itself, detected: our bug.
@@ -220,6 +235,10 @@ impl MakeError {
             Self::Refused(Refusal::UvBox { .. }) => "uv_box",
             Self::Unsupported(Unsupported::NurbsFace) => "nurbs_face",
             Self::Unsupported(Unsupported::HornTorus { .. }) => "horn_torus",
+            Self::Refused(Refusal::Path(_)) => "path",
+            Self::Refused(Refusal::Law(_)) => "sweep_law",
+            Self::Unsupported(Unsupported::NeedsKind { .. }) => "needs_kind",
+            Self::Unsupported(Unsupported::RailsAtCorner) => "rails_at_corner",
             Self::Defect(Defect::Surface(_)) => "surface",
             Self::Defect(Defect::Curve(_)) => "curve",
             Self::Defect(Defect::Absent(_)) => "absent",
@@ -289,6 +308,21 @@ impl fmt::Display for MakeError {
                 f,
                 "the horn torus (major {major} mm, minor {minor} mm) is not made yet: its tube meets the axis"
             ),
+            Self::Refused(Refusal::Path(e)) => write!(f, "the path: {e}"),
+            Self::Refused(Refusal::Law(e)) => write!(f, "the sweep's laws: {e}"),
+            Self::Unsupported(Unsupported::NeedsKind { kind }) => {
+                write!(
+                    f,
+                    "this needs the {} surface kind, not built yet",
+                    kind.name()
+                )
+            }
+            Self::Unsupported(Unsupported::RailsAtCorner) => {
+                write!(
+                    f,
+                    "guide rails along a path with a corner are not followed yet"
+                )
+            }
             Self::Defect(Defect::Surface(e)) => write!(f, "a surface of the body: {e}"),
             Self::Defect(Defect::Curve(e)) => write!(f, "a curve of the body: {e}"),
             Self::Defect(Defect::Absent(e)) => e.fmt(f),
@@ -314,6 +348,7 @@ impl core::error::Error for MakeError {
                 Some(e)
             }
             Self::Full(e) => Some(e),
+            Self::Refused(Refusal::Path(e)) => Some(e),
             Self::Refused(_)
             | Self::Unsupported(_)
             | Self::Defect(Defect::PlaneFrame | Defect::Interval | Defect::NoSolid) => None,
@@ -353,6 +388,13 @@ impl From<PlanarError> for MakeError {
             ErrorKind::Unsupported => Self::Unsupported(Unsupported::Profile(e)),
             _ => Self::Refused(Refusal::Profile(e)),
         }
+    }
+}
+
+/// A path the frames refuse is the caller's to change.
+impl From<FrameError> for MakeError {
+    fn from(e: FrameError) -> Self {
+        Self::Refused(Refusal::Path(e))
     }
 }
 
