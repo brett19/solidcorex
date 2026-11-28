@@ -159,10 +159,14 @@ fn map_then_inverse_is_identity() {
             let b = bend(frame, d);
             let ub = unbend(frame, d);
             for &x in &pts {
-                assert_close(b.inverse(b.map(x)).unwrap(), x, 1e-13);
+                // The angle of a bent point at radius `u` rounds to `eps |p| / u`, which the
+                // unbend scales by `d`: the inverse's conditioning near the axis.
+                let u = to_local(&frame, x)[0];
+                let tol = 1e-13 * (1.0 + d / u);
+                assert_close(b.inverse(b.map(x)).unwrap(), x, tol);
                 let y = b.map(x);
-                assert_close(ub.map(y), x, 1e-13);
-                assert_close(ub.inverse(ub.map(y)).unwrap(), y, 1e-13);
+                assert_close(ub.map(y), x, tol);
+                assert_close(ub.inverse(ub.map(y)).unwrap(), y, tol);
             }
         }
         for pitch in [4.0, -0.7, 100.0] {
