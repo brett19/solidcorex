@@ -1414,3 +1414,54 @@ Truth tests (`tests/imprint.rs`, closed forms): offset cubes give 9 faces, 21 ed
 areas 3 x 1/4 + 3 x 3/4 + 3 x 1; a thin cylinder through a cube gives 8 faces, 14 edges, 10
 vertices, two disks of pi/16 and two faces of 1 - pi/16; a block on a face, a block apart,
 determinism and operand swap, and a refusal of another document. Volume is 1 throughout.
+
+### 13.4 MK14 as built (11-28)
+
+`scx_make::prism(&[Region], &Frame, Span, &Document) -> Made<PrismFaces>` and
+`scx_make::sheet(&[Region], &Frame, &Document) -> Made<SheetFaces>`. `PrismFaces { solids:
+Vec<ExtrudeFaces> }` is one record per region, in the order given; `SheetFaces { faces: Vec<FaceId> }`
+one face per region. The solids are written by the same code as `extrude` (which now calls
+`extrude_into`), so each is exactly what `extrude` makes of its region.
+
+Decisions, with cases for and against:
+
+- **One solid per region, in one body; not a union.** Each region has its own solid region and
+  shell, and its own shell in the outside region. For: the pin joins separate extrusions by
+  `union_all`, and the regions are apart (below), so the union is the same solids with no
+  Boolean. Against: the pin's body is one `union_all` result whose solids could be re-ordered;
+  ours are in input order, which is what a caller wants to index by. The outside needs a shell
+  per solid because `finish` refuses a disconnected shell (`ShellNotConnected`).
+- **Regions that overlap, touch or cross are refused, `Unsupported::RegionsMeet { first, second }`,
+  not merged.** The pin first unites the regions in the plane (overlap normalised, volume 300
+  for two overlapping 10 x 10 squares) and refuses pieces of the union that touch. No planar
+  Boolean exists until BO17, so the merge cannot be done; a refusal is the honest answer and is
+  `Unsupported`, not `Refused`, since the input is valid. For: nothing is guessed, and BO17 can
+  add the merge as a wider entry later without changing this one. Against: a caller with
+  overlapping profiles must unite them first. A region in another's hole, or beside it, is kept
+  (the pin's islands).
+- **Meeting is decided by `Region::new` on a probe, not by new geometry.** For `a` and `b`, the
+  probe is `a`'s outer loop with every other loop of both as holes; its contact check (every
+  pair of segments within the resolution, crossing before touching, between loops too) names a
+  crossing or touch before nesting, so those two errors mean the boundaries meet. If the
+  boundaries are apart, one start point of each region is classified against the other
+  (`Region::classify`): inside or on the boundary means one lies in the other's material. For:
+  no new predicate in `scx-planar`, exact and certified as `Region::new` is, a hole-in-hole
+  island handled by classification. Against: it builds a throwaway region per pair, so the check
+  is O(k^2) probes for k regions and each probe is linear in the segments of both.
+  Measured (release, throwaway timers, whole circles on a grid, one probe per pair): `prism` of 4, 16, 64
+  and 256 regions takes 0.13, 0.44, 3.6 and 28 ms against 0.09, 0.30, 1.2 and 2.6 ms for the same
+  regions extruded one by one; the sheet's 0.03, 0.20, 1.9 and 27 ms is nearly all the check. So the check
+  added is quadratic, small to about 64 regions and dominant at 256; a bounding-box prune of pairs is the
+  fix if a caller passes hundreds of regions (not done: no such caller yet).
+  A pair's one start point decides nesting only because the boundaries are apart (a region is
+  wholly inside or wholly outside another's material).
+- **A sheet's face has both sides in one shell**, a shell per face (the `scx-brep` sheet form);
+  its front is the frame's +z side and the outer loop runs counter-clockwise about it, so
+  `scx_mass` gives the regions' area and no volume. The sheet is `z = 0` of the frame; there is
+  no height argument (a sheet's place is its frame's).
+- **`Assembly` gained `sheets`, `begin_solid` and `sheet_face`**, and the outside shell and solid
+  shell are `Option`s (a sheet has neither): `face` on a sheet is `Defect::NoSolid`. `error.rs`
+  gained `Refusal::NoRegions`, `Unsupported::RegionsMeet` and `Defect::NoSolid`.
+
+Tests (`crates/scx-make/tests/prism.rs`, 11): see the file's header for the pin tests removed on
+purpose and why.
