@@ -114,8 +114,7 @@ pub use meet::{Meet, MeetError, points_meet};
 pub use pcurve::{Check, CurveKind, PcurveError, SurfaceKind, pcurve_of};
 pub use plane::Plane;
 pub use procedural::{
-    Definition, Extrusion, Motion, Procedural, ProceduralError, RadialLaw, Revolution, Screw,
-    Sweep,
+    Definition, Extrusion, Motion, Procedural, ProceduralError, RadialLaw, Revolution, Screw, Sweep,
 };
 pub use project::{ProjectError, Projected, drop_curve, project_curve};
 pub use recognize::{Recognized, Written, recognize, recognize_written};
