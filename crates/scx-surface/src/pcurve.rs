@@ -60,13 +60,14 @@ use scx_num::error::ErrorKind;
 use scx_num::extent1d::Extent1d;
 use scx_num::fmath;
 use scx_num::frame::{Frame2, Sense};
-use scx_num::units::Resolution;
+use scx_num::units::{Length, Resolution};
 use scx_num::vector2d::{Point2, Vec2};
 use scx_num::vector3d::{Point3, Vec3};
 use scx_nurbs::NurbsCurve;
 
 use crate::chart_check::{Verdict, certify};
 use crate::common::Axes;
+use crate::invert::Closest;
 use crate::{Cone, Plane, Surface};
 
 /// The parameters the lifting check samples, ends included.
@@ -370,6 +371,95 @@ pub fn pcurve_of(
         }
     }
     Ok(pc)
+}
+
+/// The pcurve of `curve`'s closest-point projection onto `surface` over `over`, for a curve
+/// that stands off the surface by at most `within`: the 2-D curve `p` with
+/// `surface.point(p.point(t))` on the surface's nearest point to `curve.point(t)` for every
+/// `t` in `over`, within `res.approx()`. On a curve within `res.approx()` of the surface it
+/// is the curve's own pcurve to that tolerance, as [`pcurve_of`] gives it (which a caller
+/// tries first: that one is exact). The forms are [`pcurve_of`]'s, which for a curve off
+/// the surface are each the projection or miss it: a plane's affine uv is the orthogonal
+/// projection, a cylinder's, sphere's or torus's parallel and chart the radial one, while a
+/// cone's ruling and chart keep the height and so miss its nearest point by `d tan` of the
+/// half-angle at a distance `d` ([`PcurveError::Inexact`] past the tolerance). A closed form
+/// that misses the projection gives way to the chart's.
+///
+/// What it does not bound is the gap `|S(p(t)) - C(t)|` itself, up to `within` plus the
+/// tolerance: the caller certifies and records it (`scx_surface::pcurve_edge_gap`).
+///
+/// # Errors
+///
+/// As [`pcurve_of`], with [`PcurveError::NotOnSurface`] for a sample farther than
+/// `within` (or `res.approx()` where that is larger) from the surface, and
+/// [`PcurveError::NoClosedForm`] for a sample whose nearest point is not one (a query on a
+/// cylinder's axis, a sphere's centre), where the projection has no value.
+pub fn pcurve_of_projection(
+    curve: &Curve,
+    surface: &Surface,
+    over: Extent1d,
+    res: Resolution,
+    within: Length,
+) -> Result<Curve2, PcurveError> {
+    let tol = res.approx().mm();
+    let reach = within.mm().max(tol);
+    if over.min() >= over.max() {
+        return Err(PcurveError::EmptyInterval { at: over.min() });
+    }
+    let no_form = PcurveError::NoClosedForm {
+        curve: CurveKind::of(curve),
+        surface: SurfaceKind::of(surface),
+    };
+    let ts = samples(over);
+    let points = ts.map(|t| curve.point(t));
+    for (i, (&t, &p)) in ts.iter().zip(&points).enumerate() {
+        let miss = distance(surface, p).ok_or(no_form)?;
+        // NaN refuses (07 §6 rule 5); `within` NaN gives `reach` the tolerance.
+        if miss.is_nan() || miss > reach {
+            return Err(worst_miss(surface, &ts, &points, i, t, miss));
+        }
+    }
+    let mut feet = [Point3::ORIGIN; SAMPLES];
+    for (f, &p) in feet.iter_mut().zip(&points) {
+        *f = nearest(surface, p).ok_or(no_form)?;
+    }
+    let onto = |pc: &Curve2| {
+        for (&t, &f) in ts.iter().zip(&feet) {
+            let miss = (surface.point(pc.point(t)) - f).length();
+            if miss.is_nan() || miss > tol {
+                return Err(PcurveError::Inexact { at: t, miss });
+            }
+        }
+        Ok(())
+    };
+    let missed = match closed_form(curve, surface, &points, over)? {
+        Some(pc) => match onto(&pc) {
+            Ok(()) => return Ok(pc),
+            Err(e) => e,
+        },
+        None => no_form,
+    };
+    match on_chart(curve, surface, over, tol)? {
+        Some(pc) => onto(&pc).map(|()| pc),
+        None => Err(missed),
+    }
+}
+
+/// The surface's one nearest point to `p`, in closed form; `None` for a NURBS surface and
+/// where the nearest points are a set (63 §4.2).
+fn nearest(surface: &Surface, p: Point3) -> Option<Point3> {
+    let closest = match surface {
+        Surface::Plane(s) => s.closest(p),
+        Surface::Cylinder(s) => s.closest(p),
+        Surface::Cone(s) => s.closest(p),
+        Surface::Sphere(s) => s.closest(p),
+        Surface::Torus(s) => s.closest(p),
+        Surface::Nurbs(_) | Surface::Procedural(_) => return None,
+    };
+    match closest {
+        Closest::One(f) => Some(f.point),
+        Closest::AlongU { .. } | Closest::AlongV { .. } | Closest::Every { .. } => None,
+    }
 }
 
 /// [`PcurveError::NotOnSurface`] at the largest miss over the samples from `first` on, the
@@ -1762,5 +1852,83 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The image of `pc` lands on the surface's nearest point to the curve over a fine
+    /// sampling, within `tol`.
+    fn projects(curve: &Curve, surface: &Surface, pc: &Curve2, over: Extent1d, tol: f64) {
+        for i in 0..=100 {
+            let t = over.min() + (over.max() - over.min()) * (f64::from(i) / 100.0);
+            let p = curve.point(t);
+            let foot = nearest(surface, p).unwrap();
+            let miss = (surface.point(pc.point(t)) - foot).length();
+            assert!(miss <= tol, "{curve:?} on {surface:?} at {t}: {miss}");
+        }
+    }
+
+    /// A curve off a surface by `d`, within the reach, gets its closest-point projection: a
+    /// line over a plane (the affine uv), a circle round a cylinder's axis (its parallel), a
+    /// circle off a cylinder's axis in a plane across it (the chart), and a great circle of
+    /// a sphere of radius `r + d` (its meridian). Each is the projection to rounding, and on
+    /// the surface the two functions agree.
+    #[test]
+    fn a_curve_off_the_surface_is_given_its_projection() {
+        let d = 9e-6;
+        let r = res(5e-6);
+        let within = mm(1e-5);
+        let plane = Surface::Plane(Plane::new(Frame::WORLD));
+        let line = Curve::Line(Line::new(Point3::new(0.0, 0.0, d), Vec3::new(1.0, 2.0, 0.0)).unwrap());
+        assert_eq!(pcurve_of(&line, &plane, span(0.0, 1.0), r).unwrap_err().name(), "pcurve_not_on_surface");
+        let pc = pcurve_of_projection(&line, &plane, span(0.0, 1.0), r, within).unwrap();
+        projects(&line, &plane, &pc, span(0.0, 1.0), 1e-15);
+        let on = Curve::Line(Line::new(Point3::ORIGIN, Vec3::new(1.0, 2.0, 0.0)).unwrap());
+        assert_eq!(
+            pcurve_of_projection(&on, &plane, span(0.0, 1.0), r, within),
+            pcurve_of(&on, &plane, span(0.0, 1.0), r)
+        );
+        let cyl = Surface::Cylinder(Cylinder::new(Frame::WORLD, mm(1.0), Sense::Forward).unwrap());
+        let round = |o: Point3, rho: f64| {
+            Curve::Circle(Circle::new(Frame::new(o, Vec3::Z, Vec3::X).unwrap(), mm(rho), Sense::Forward).unwrap())
+        };
+        let wide = round(Point3::new(0.0, 0.0, 0.5), 1.0 + d);
+        let pc = pcurve_of_projection(&wide, &cyl, span(0.0, PI), r, within).unwrap();
+        assert!(matches!(pc, Curve2::AngleLine(_)), "{pc:?}");
+        projects(&wide, &cyl, &pc, span(0.0, PI), 1e-14);
+        let shifted = round(Point3::new(d, 0.0, 0.5), 1.0);
+        let pc = pcurve_of_projection(&shifted, &cyl, span(0.0, PI), r, within).unwrap();
+        assert!(matches!(pc, Curve2::OnChart(_)), "{pc:?}");
+        projects(&shifted, &cyl, &pc, span(0.0, PI), 1e-14);
+        let sphere = Surface::Sphere(Sphere::new(Frame::WORLD, mm(1.0), Sense::Forward).unwrap());
+        let meridian = Curve::Circle(
+            Circle::new(Frame::new(Point3::ORIGIN, Vec3::Y, Vec3::Z).unwrap(), mm(1.0 + d), Sense::Forward).unwrap(),
+        );
+        let over = span(0.1, PI - 0.1);
+        let pc = pcurve_of_projection(&meridian, &sphere, over, r, within).unwrap();
+        projects(&meridian, &sphere, &pc, over, 1e-14);
+    }
+
+    /// What it refuses: a sample past the reach, a cone's ruling stood off it (its closed
+    /// form and chart keep the height, missing the nearest point by `d tan` of the
+    /// half-angle), and a circle round a cylinder's axis on the axis (no one nearest point).
+    #[test]
+    fn a_projection_it_cannot_give_is_typed() {
+        let r = res(5e-6);
+        let within = mm(1e-5);
+        let plane = Surface::Plane(Plane::new(Frame::WORLD));
+        let far = Curve::Line(Line::new(Point3::new(0.0, 0.0, 2e-5), Vec3::X).unwrap());
+        let e = pcurve_of_projection(&far, &plane, span(0.0, 1.0), r, within).unwrap_err();
+        assert_eq!(e.name(), "pcurve_not_on_surface");
+        // A half-angle of 45 degrees, so a ruling 9e-6 off misses by 9e-6.
+        let cone = Surface::Cone(
+            Cone::new(Frame::WORLD, mm(1.0), core::f64::consts::FRAC_PI_4, Sense::Forward).unwrap(),
+        );
+        let n = Vec3::new(1.0, 0.0, -1.0) * (1.0 / 2.0_f64.sqrt());
+        let ruling = Curve::Line(Line::new(Point3::new(1.0, 0.0, 0.0) + n * 9e-6, Vec3::new(1.0, 0.0, 1.0)).unwrap());
+        let e = pcurve_of_projection(&ruling, &cone, span(0.0, 1.0), r, within).unwrap_err();
+        assert_eq!(e.name(), "pcurve_inexact", "{e}");
+        let tiny = Surface::Cylinder(Cylinder::new(Frame::WORLD, mm(5e-6), Sense::Forward).unwrap());
+        let axis = Curve::Line(Line::new(Point3::ORIGIN, Vec3::Z).unwrap());
+        let e = pcurve_of_projection(&axis, &tiny, span(0.0, 1.0), r, within).unwrap_err();
+        assert_eq!(e.name(), "pcurve_no_closed_form", "{e}");
     }
 }
