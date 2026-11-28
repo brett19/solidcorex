@@ -233,16 +233,30 @@ impl Draft {
         doc: &Document,
     ) -> Result<Vec<LoopRecord>, PcurveWriteError> {
         let res = doc.resolution();
-        let mut out = loops
+        let out = loops
             .iter()
             .enumerate()
-            .map(|(lp, uses)| self.exact_loop(surface, lp, uses, res))
+            .map(|(lp, uses)| self.loop_uses(surface, lp, uses, res))
             .collect::<Result<Vec<_>, _>>()?;
-        nearest_first(&mut out, &surface.domain())?;
-        Ok(out
-            .into_iter()
-            .map(|(uses, _)| LoopRecord::new(uses))
-            .collect())
+        placed(surface, out)
+    }
+
+    /// One loop of a face on `surface` through `uses`' edges in their senses, written
+    /// alone: as [`Draft::exact_loops`] writes it as a face's only loop, with the centre
+    /// [`placed`] needs to set it among the face's other loops. So `exact_loops` of some
+    /// loops is `placed` of each one's `exact_loop`, and a caller that needs each loop
+    /// alone first (to sort loops into faces) writes each once.
+    ///
+    /// # Errors
+    ///
+    /// As [`Draft::exact_loops`] for one loop.
+    pub fn exact_loop(
+        &self,
+        surface: &Surface,
+        uses: &[(EdgeId, Sense)],
+        doc: &Document,
+    ) -> Result<ExactLoop, PcurveWriteError> {
+        self.loop_uses(surface, 0, uses, doc.resolution())
     }
 
     /// Writes every use of `face` with its exact pcurve from its edge, as
@@ -265,26 +279,30 @@ impl Draft {
             .map(|l| l.uses.iter().map(|u| (u.edge, u.sense)).collect())
             .collect();
         let written = self.exact_loops(&surface, &loops, doc)?;
-        let rec = self.face_mut(face).ok_or_else(|| Absent {
+        // Through `edit_face`, so a loop written as it was keeps its boxes; the fins have
+        // nothing to follow, the edges and senses being the same.
+        self.edit_face(face, |rec| {
+            for (l, w) in rec.loops.iter_mut().zip(written) {
+                for (u, w) in l.uses.iter_mut().zip(w.uses) {
+                    u.geom = w.geom;
+                    u.bound = None;
+                }
+            }
+        })
+        .ok_or_else(|| Absent {
             entity: face.into(),
         })?;
-        for (l, w) in rec.loops.iter_mut().zip(written) {
-            for (u, w) in l.uses.iter_mut().zip(w.uses) {
-                u.geom = w.geom;
-                u.bound = None;
-            }
-        }
         Ok(())
     }
 
-    /// One loop's uses, and the centre of their starts in uv.
-    fn exact_loop(
+    /// Loop `lp`'s uses, and the centre of their starts in uv.
+    fn loop_uses(
         &self,
         surface: &Surface,
         lp: usize,
         uses: &[(EdgeId, Sense)],
         res: Resolution,
-    ) -> Result<(Vec<EdgeUse>, Point2), PcurveWriteError> {
+    ) -> Result<ExactLoop, PcurveWriteError> {
         let zone = res.zone().mm();
         let domain = surface.domain();
         let periods = [domain.u.period(), domain.v.period()];
@@ -383,7 +401,10 @@ impl Draft {
             out.push(EdgeUse::new(item.edge, item.sense, geom));
         }
         let centre = Point2::new(sum.x / n as f64, sum.y / n as f64);
-        Ok((out, centre))
+        Ok(ExactLoop {
+            record: LoopRecord::new(out),
+            centre,
+        })
     }
 
     /// One use's edge, resolved: its raw pcurve or its pole, and its ends' budgets.
@@ -610,16 +631,54 @@ fn pole_segment(
     })
 }
 
+/// One loop's uses with their exact pcurves, written alone by [`Draft::exact_loop`], and
+/// the centre of their starts in uv.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExactLoop {
+    record: LoopRecord,
+    centre: Point2,
+}
+
+impl ExactLoop {
+    /// The loop as written alone: a face's only loop.
+    #[must_use]
+    pub const fn record(&self) -> &LoopRecord {
+        &self.record
+    }
+
+    /// The loop as written alone, owned.
+    #[must_use]
+    pub fn into_record(self) -> LoopRecord {
+        self.record
+    }
+}
+
+/// The loop records of a face on `surface` whose loops, each written alone, are `loops`
+/// (the first the outer one): each loop after the first moved by whole periods so its
+/// centre is nearest the first's, as [`Draft::exact_loops`] places them.
+///
+/// # Errors
+///
+/// [`PcurveWriteError::NeedsFit`] for a use whose pcurve cannot be moved by a period.
+pub fn placed(
+    surface: &Surface,
+    mut loops: Vec<ExactLoop>,
+) -> Result<Vec<LoopRecord>, PcurveWriteError> {
+    nearest_first(&mut loops, &surface.domain())?;
+    Ok(loops.into_iter().map(ExactLoop::into_record).collect())
+}
+
 /// Moves each loop after the first by whole periods so its centre is nearest the first's.
-fn nearest_first(
-    loops: &mut [(Vec<EdgeUse>, Point2)],
-    domain: &UvDomain,
-) -> Result<(), PcurveWriteError> {
+fn nearest_first(loops: &mut [ExactLoop], domain: &UvDomain) -> Result<(), PcurveWriteError> {
     let periods = [domain.u.period(), domain.v.period()];
-    let Some(c0) = loops.first().map(|(_, c)| *c) else {
+    let Some(c0) = loops.first().map(|l| l.centre) else {
         return Ok(());
     };
-    for (uses, c) in loops.iter_mut().skip(1) {
+    for ExactLoop {
+        record: LoopRecord { uses },
+        centre: c,
+    } in loops.iter_mut().skip(1)
+    {
         let m = whole(c0 - *c, periods);
         if m == [0.0, 0.0] {
             continue;

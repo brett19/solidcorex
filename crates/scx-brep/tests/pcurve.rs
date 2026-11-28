@@ -226,6 +226,38 @@ fn writes_every_generated_body() {
     );
 }
 
+/// Writing a face's loops together is writing each alone and placing them: the same
+/// records, so a caller that wrote each loop alone (to sort cycles into faces) need not
+/// write them again.
+#[test]
+fn loops_written_alone_and_placed_are_the_loops_written_together() {
+    let mut faces = 0;
+    for kind in Kind::ALL {
+        for seed in 0..3 {
+            for size in 1..=3 {
+                let g = generate(kind, seed, size).unwrap();
+                for f in g.draft.faces() {
+                    let loops: Vec<Vec<(EdgeId, Sense)>> = f
+                        .record()
+                        .loops
+                        .iter()
+                        .map(|l| l.uses.iter().map(|u| (u.edge, u.sense)).collect())
+                        .collect();
+                    let together = g.draft.exact_loops(f.surface(), &loops, &doc());
+                    let alone: Result<Vec<_>, _> = loops
+                        .iter()
+                        .map(|l| g.draft.exact_loop(f.surface(), l, &doc()))
+                        .collect();
+                    let placed = alone.and_then(|a| scx_brep::pcurve::placed(f.surface(), a));
+                    assert_eq!(together, placed, "{} seed {seed} size {size}", kind.name());
+                    faces += usize::from(loops.len() > 1);
+                }
+            }
+        }
+    }
+    assert!(faces > 10, "{faces} faces of several loops");
+}
+
 /// A draft with the outside's shell and a solid's.
 fn solid() -> (Draft, [ShellId; 2]) {
     let mut d = Draft::new();

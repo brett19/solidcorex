@@ -41,8 +41,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use scx_brep::{
-    Document, Draft, EdgeGeom, EdgeId, EdgeShape, EdgeUse, Entity, FaceId, FaceRecord, LoopRecord,
-    Origin, RegionId, ShellId, ShellRecord, UseGeom, VertexId, VertexRecord,
+    Document, Draft, EdgeGeom, EdgeId, EdgeShape, EdgeUse, Entity, ExactLoop, FaceId, FaceRecord,
+    LoopRecord, Origin, RegionId, ShellId, ShellRecord, UseGeom, VertexId, VertexRecord,
 };
 use scx_num::budget::{Budget, Stop};
 use scx_num::cert::{Basis, Recorded};
@@ -89,9 +89,8 @@ pub(crate) struct Imprint {
 /// and whether it runs against `b`'s.
 type Shared = BTreeMap<(EdgeId, usize), (EdgeId, bool)>;
 
-/// A traced cycle: its uses, its loop as written alone, its uv samples and twice its
-/// signed area.
-type Ring = (Vec<(EdgeId, Sense)>, Vec<LoopRecord>, Vec<Point2>, f64);
+/// A traced cycle: its loop as written alone, its uv samples and twice its signed area.
+type Ring = (ExactLoop, Vec<Point2>, f64);
 
 /// One piece of an operand edge in the draft.
 #[derive(Debug, Clone, Copy)]
@@ -917,18 +916,18 @@ impl Build<'_> {
             }
             let lr = self
                 .draft
-                .exact_loops(surface, core::slice::from_ref(&uses), &self.doc)
+                .exact_loop(surface, &uses, &self.doc)
                 .map_err(|e| loops_error(e.kind(), operand, f))?;
-            let ring = lr.first().map(ring).ok_or_else(trace_err)?;
+            let ring = ring(lr.record());
             let area = shoelace(&ring);
-            rings.push((uses, lr, ring, area));
+            rings.push((lr, ring, area));
         }
         // Pieces: the counter-clockwise cycles; each clockwise one is a hole of the
         // smallest piece around a point just left of it.
         let domain = surface.domain();
         let periods = [domain.u.period(), domain.v.period()];
         let mut holes: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
-        for (i, (_, _, ring, area)) in rings.iter().enumerate() {
+        for (i, (_, ring, area)) in rings.iter().enumerate() {
             if *area > 0.0 {
                 holes.entry(i).or_default();
                 continue;
@@ -937,31 +936,34 @@ impl Build<'_> {
             let around = rings
                 .iter()
                 .enumerate()
-                .filter(|(_, (_, _, r, a))| *a > 0.0 && contains(r, q, periods))
-                .min_by(|x, y| x.1.3.total_cmp(&y.1.3))
+                .filter(|(_, (_, r, a))| *a > 0.0 && contains(r, q, periods))
+                .min_by(|x, y| x.1.2.total_cmp(&y.1.2))
                 .map(|(j, _)| j)
                 .ok_or_else(trace_err)?;
             holes.entry(around).or_default().push(i);
         }
+        // Each cycle is in one piece, as its outer loop or a hole: each loop is taken once.
+        let mut loops: Vec<Option<ExactLoop>> = rings.into_iter().map(|r| Some(r.0)).collect();
+        let mut take = |i: usize| {
+            loops
+                .get_mut(i)
+                .and_then(Option::take)
+                .ok_or_else(trace_err)
+        };
         let mut pieces = Vec::with_capacity(holes.len());
         for (outer, inner) in holes {
             let keeps = outer == 0 || inner.contains(&0);
             // A piece with no hole is its cycle's loop as written.
             if inner.is_empty() {
-                let lr = rings
-                    .get(outer)
-                    .map(|r| r.1.clone())
-                    .ok_or_else(trace_err)?;
-                pieces.push((lr, keeps));
+                pieces.push((vec![take(outer)?.into_record()], keeps));
                 continue;
             }
-            let seq: Vec<Vec<(EdgeId, Sense)>> = core::iter::once(outer)
+            // Each cycle was written alone above; the piece's loops are those, placed.
+            let seq: Vec<ExactLoop> = core::iter::once(outer)
                 .chain(inner)
-                .filter_map(|i| rings.get(i).map(|r| r.0.clone()))
-                .collect();
-            let lr = self
-                .draft
-                .exact_loops(surface, &seq, &self.doc)
+                .map(&mut take)
+                .collect::<Result<_, _>>()?;
+            let lr = scx_brep::pcurve::placed(surface, seq)
                 .map_err(|e| loops_error(e.kind(), operand, f))?;
             pieces.push((lr, keeps));
         }

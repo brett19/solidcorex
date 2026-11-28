@@ -29,6 +29,7 @@ use scx_num::units::Resolution;
 
 use crate::body::BodyCells;
 use crate::brep::Brep;
+use crate::cells::FaceCells;
 use crate::changes::{Changes, LineageError, Log, Operand, Origin, Tracked};
 use crate::check;
 use crate::document::Document;
@@ -305,16 +306,25 @@ impl Draft {
     /// Edits the face's record with `edit`, as [`Draft::face_mut`], and then keeps its
     /// edges' fins in step with its uses: a use removed takes one fin of its sense off its
     /// edge, and a use added appends one. Where an edge has more than two fins, the caller
-    /// puts them in radial order with [`Draft::adjacency_mut`]. `None` when the draft holds
-    /// no such face.
+    /// puts them in radial order with [`Draft::adjacency_mut`]. A face whose cells were
+    /// filled has them filled again for the edited record, each loop the edit kept taking
+    /// its old boxes rather than enclosing its pcurves again. `None` when the draft holds no
+    /// such face.
     pub fn edit_face<R>(
         &mut self,
         id: FaceId,
         edit: impl FnOnce(&mut FaceRecord) -> R,
     ) -> Option<R> {
-        let mut was = fin_keys(self.t.faces.get(id)?);
+        let before = self.t.faces.get(id)?;
+        let mut was = fin_keys(before);
+        // The record as it was, to seed the edited one with what its cells hold of the loops
+        // the edit keeps.
+        let old = before.cells.can_seed().then(|| Arc::clone(before));
         let face = self.face_mut(id)?;
         let out = edit(face);
+        if let Some(old) = old {
+            face.cells = FaceCells::seeded(&old, face);
+        }
         let mut now = fin_keys(face);
         was.sort_unstable();
         now.sort_unstable();
