@@ -23,6 +23,7 @@ use scx_brep::{Brep, Document, EdgeShape, FaceId};
 use scx_check::{Class, Scope};
 use scx_mass::RelAccuracy;
 use scx_num::budget::{Budget, Stop};
+use scx_num::fmath;
 use scx_num::frame::Frame;
 use scx_num::units::Length;
 use scx_num::vector3d::{Point3, Vec3};
@@ -269,10 +270,10 @@ fn a_cylinder_s_sections() {
     near(area(&along), 2.0 * r * 4.0, 1e-9);
 
     let theta = 0.3_f64;
-    let n = [theta.sin(), 0.0, theta.cos()];
+    let n = [fmath::sin(theta), 0.0, fmath::cos(theta)];
     let slant = cut(&b, &plane([0.0, 0.0, 2.0], n), doc);
     is_sheet(&slant, doc);
-    near(area(&slant), PI * r * r / theta.cos(), 1e-9);
+    near(area(&slant), PI * r * r / fmath::cos(theta), 1e-9);
     on_both(&slant, [0.0, 0.0, 2.0], n, on_wall, 1e-9);
 }
 
@@ -359,7 +360,7 @@ fn a_plane_that_touches_gives_points_and_wires() {
         doc,
     );
     assert_eq!((pole.faces().len(), pole.edges().len()), (0, 0));
-    let points: Vec<Point3> = pole.vertices().map(|v| v.point()).collect();
+    let points: Vec<Point3> = pole.vertices().map(scx_brep::Vertex::point).collect();
     assert_eq!(points.len(), 1);
     assert!((points[0] - Point3::new(0.0, 0.0, 2.0)).length() <= 1e-9);
 
@@ -367,11 +368,17 @@ fn a_plane_that_touches_gives_points_and_wires() {
     let edge = cut(&b, &plane([0.0; 3], [1.0, 1.0, 0.0]), doc);
     assert_eq!(edge.faces().len(), 0);
     same(&lengths(&edge), &[10.0]);
-    on_both(&edge, [0.0; 3], [1.0, 1.0, 0.0], |p| p.x.hypot(p.y), 1e-12);
+    on_both(
+        &edge,
+        [0.0; 3],
+        [1.0, 1.0, 0.0],
+        |p| fmath::hypot(p.x, p.y),
+        1e-12,
+    );
 
     let corner = cut(&b, &plane([0.0; 3], [1.0, 1.0, 1.0]), doc);
     assert_eq!((corner.faces().len(), corner.edges().len()), (0, 0));
-    let points: Vec<Point3> = corner.vertices().map(|v| v.point()).collect();
+    let points: Vec<Point3> = corner.vertices().map(scx_brep::Vertex::point).collect();
     assert_eq!(points.len(), 1);
     assert!((points[0] - Point3::new(0.0, 0.0, 0.0)).length() <= 1e-12);
 
