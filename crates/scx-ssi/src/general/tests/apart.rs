@@ -211,10 +211,19 @@ fn touching_and_crossing_pairs_are_never_dropped() {
                     assert!(size.mm() > 0.0 && size.mm() <= within.max_length());
                     vec![at]
                 }
-                // NURBS against NURBS (row SM5): a touch solved and answered, or a curve
-                // (a circle about 1e-6 across at `-2^-40`) refused at a proved point of it.
+                // NURBS against NURBS: a touch solved and answered (row SM5), or a curve
+                // (a circle about 1e-6 across at `-2^-40`) marched (row SM7).
                 Ok(t) if !t.touches.is_empty() => t.touches.iter().map(|t| t.point).collect(),
-                Err(SsiError::Untraced { at }) => vec![at],
+                Ok(t) if !t.branches.is_empty() => t
+                    .branches
+                    .iter()
+                    .flat_map(|b| {
+                        b.curve
+                            .points()
+                            .iter()
+                            .map(|&[x, y, z]| Point3::new(x, y, z))
+                    })
+                    .collect(),
                 out => panic!("{name} at {g} was dropped or not refused: {out:?}"),
             };
             for p in at {

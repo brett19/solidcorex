@@ -1024,7 +1024,9 @@ fn kind_of(s: &Surface) -> Result<(Kind, Axes), GapError> {
             },
             k.axes(),
         ),
-        Surface::Nurbs(_) => return Err(GapError::Pending(Pending::NurbsSurface)),
+        Surface::Nurbs(_) | Surface::Procedural(_) => {
+            return Err(GapError::Pending(Pending::NurbsSurface));
+        }
     })
 }
 
@@ -1070,7 +1072,7 @@ fn arcs_of(s: &Surface) -> (Option<Arcs>, Option<Arcs>) {
         Surface::Cone(_) => (Some(cone::U), None),
         Surface::Sphere(_) => (Some(sphere::U), Some(sphere::V)),
         Surface::Torus(_) => (Some(torus::TURN), Some(torus::TURN)),
-        Surface::Plane(_) | Surface::Nurbs(_) => (None, None),
+        Surface::Plane(_) | Surface::Nurbs(_) | Surface::Procedural(_) => (None, None),
     }
 }
 
@@ -1104,7 +1106,7 @@ fn eval_jet(s: &Surface, u: Jet2, v: Jet2, near: Point2) -> Option<[Jet2; 3]> {
         Surface::Cone(k) => k.eval(u, v, near),
         Surface::Sphere(k) => k.eval(u, v, near),
         Surface::Torus(k) => k.eval(u, v, near),
-        Surface::Nurbs(_) => return None,
+        Surface::Nurbs(_) | Surface::Procedural(_) => return None,
     };
     Some([p.x, p.y, p.z])
 }
@@ -1289,7 +1291,9 @@ impl Lift {
                                 let r = Ivl::from(s.minor().mm());
                                 (s.axes(), Ivl::from(s.major().mm()) + r * cw, r * sw)
                             }
-                            Surface::Plane(_) | Surface::Nurbs(_) => return None,
+                            Surface::Plane(_) | Surface::Nurbs(_) | Surface::Procedural(_) => {
+                                return None;
+                            }
                         };
                         let pad = round_up(2.0 * f.mag() * angle_pad(k));
                         Some(Self::of(&axes, konst(f), konst(g), cs, &c, pad))
@@ -1455,7 +1459,7 @@ pub fn pcurve_edge_gap(
 ) -> Result<Bracket, GapError> {
     let aim = aim.check()?;
     let (lo, hi) = range(over)?;
-    if matches!(surface, Surface::Nurbs(_)) {
+    if matches!(surface, Surface::Nurbs(_) | Surface::Procedural(_)) {
         return Err(GapError::Pending(Pending::NurbsSurface));
     }
     let mut breaks = knots3(curve);

@@ -119,20 +119,36 @@ diff!(poly_roots_type, || {
         format!("{r:?}") == format!("{d:?}"),
     )
 });
-diff!(
-    poly_from_roots,
-    pin_defect = crate::pin_defects::poly_from_roots,
-    |tol: f64| {
-        let mut out: Vec<Vec<f64>> = Vec::new();
-        for c in cases(2) {
-            out.push(m::polynomial::solve_quadratic(&arr::<3>(&c), tol).to_vec());
-        }
-        for c in cases(3) {
-            out.push(m::polynomial::solve_cubic(&arr::<4>(&c), tol).to_vec());
-        }
-        for c in cases(4) {
-            out.push(m::polynomial::solve_quartic(&arr::<5>(&c), tol).to_vec());
-        }
-        out
-    }
-);
+/// `poly_from_roots` takes 100 s on one core, so it is eight tests, each on
+/// every eighth tolerance of the one pool (seeded as the whole test was), so
+/// the shards judge exactly the inputs and checks the whole test did, in parallel.
+macro_rules! poly_from_roots_shard {
+    ($name:ident, $i:expr) => {
+        diff!(
+            $name,
+            pin_defect = crate::pin_defects::poly_from_roots,
+            shard = ($i, 8, "poly_from_roots"),
+            |tol: f64| {
+                let mut out: Vec<Vec<f64>> = Vec::new();
+                for c in cases(2) {
+                    out.push(m::polynomial::solve_quadratic(&arr::<3>(&c), tol).to_vec());
+                }
+                for c in cases(3) {
+                    out.push(m::polynomial::solve_cubic(&arr::<4>(&c), tol).to_vec());
+                }
+                for c in cases(4) {
+                    out.push(m::polynomial::solve_quartic(&arr::<5>(&c), tol).to_vec());
+                }
+                out
+            }
+        );
+    };
+}
+poly_from_roots_shard!(poly_from_roots_0, 0);
+poly_from_roots_shard!(poly_from_roots_1, 1);
+poly_from_roots_shard!(poly_from_roots_2, 2);
+poly_from_roots_shard!(poly_from_roots_3, 3);
+poly_from_roots_shard!(poly_from_roots_4, 4);
+poly_from_roots_shard!(poly_from_roots_5, 5);
+poly_from_roots_shard!(poly_from_roots_6, 6);
+poly_from_roots_shard!(poly_from_roots_7, 7);

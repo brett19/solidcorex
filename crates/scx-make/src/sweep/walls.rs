@@ -54,7 +54,7 @@ use crate::error::{Defect, MakeError, Refusal, Unsupported};
 use crate::extrude::{given, loops_of};
 use crate::frames::{Corner, FrameError, G1_TANGENTS, Path, Piece, Rotation, Station, Stop};
 
-/// The faces of a [`sweep`], by role.
+/// The faces of a [`sweep`](crate::sweep), by role.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SweepFaces {
     /// The cap at the path's start, its front facing back along the path; none for a closed
@@ -68,7 +68,8 @@ pub struct SweepFaces {
     pub walls: Vec<Vec<Vec<FaceId>>>,
 }
 
-/// Sweeps `profile`, placed in `frame`'s `x, y` plane, along `path` with no law: the profile
+/// The plain sweep ([`sweep`](crate::sweep) with [`Shape::PLAIN`](crate::Shape::PLAIN)):
+/// `profile`, placed in `frame`'s `x, y` plane, along `path` with no law: the profile
 /// carried by the path's rotation-minimising frame, mitred at corners. `frame`'s origin is
 /// the path's start and its z axis the start's tangent.
 ///
@@ -84,14 +85,14 @@ pub struct SweepFaces {
 ///   a profile segment that is not a line, arc or circle, and [`Unsupported::SpindleTorus`]
 ///   for a profile arc whose circle crosses an arc piece's axis outside it.
 /// - A [`Defect`] when the body does not finish, or [`MakeError::Full`].
-pub fn sweep(
+pub(crate) fn build(
     profile: &Region,
     frame: &Frame,
     path: &Path,
-    doc: &Document,
+    doc: Document,
 ) -> Result<Made<SweepFaces>, MakeError> {
-    let plan = Plan::new(profile, frame, path, *doc)?;
-    let mut build = Build::new(&plan, Assembly::new(doc)?);
+    let plan = Plan::new(profile, frame, path, doc)?;
+    let mut build = Build::new(&plan, Assembly::new(&doc)?);
     let walls = build.walls()?;
     let (start, end) = if plan.closed {
         (None, None)

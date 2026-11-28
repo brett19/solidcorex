@@ -141,8 +141,11 @@ impl CurveSurfaceHit {
 ///
 /// # Errors
 ///
-/// - [`SurfaceError::NurbsIntersection`] (Unsupported) when the curve or the surface is a
-///   NURBS one: not built yet, never an empty answer.
+/// - [`SurfaceError::NurbsIntersection`] (Unsupported) when the curve is a NURBS one: not
+///   built yet, never an empty answer. An analytic curve on a NURBS surface is searched by
+///   certified boxes over its Bézier patches (`nurbs_hits`, research 77 §6.3).
+/// - [`SurfaceError::Undecided`] (Unsupported) where that search cannot decide a box down to
+///   the resolution (a ray through a pole): unclean, never an empty answer.
 /// - [`SurfaceError::Exhausted`] when `budget` runs out, [`SurfaceError::Stopped`] when
 ///   `stop` is set; neither returns a partial answer.
 pub fn intersect_curve(
@@ -154,6 +157,9 @@ pub fn intersect_curve(
     budget: &mut Budget,
     stop: &Stop,
 ) -> Result<Vec<CurveSurfaceHit>, SurfaceError> {
+    if let (Surface::Nurbs(n), false) = (s, matches!(c, Curve::Nurbs(_))) {
+        return crate::nurbs_hits::intersect(c, ce, s, n, se, res, budget, stop);
+    }
     let Some(target) = Target::of(s) else {
         return Err(SurfaceError::NurbsIntersection);
     };
@@ -212,6 +218,20 @@ pub fn curve_on_surface(
     budget: &mut Budget,
     stop: &Stop,
 ) -> Result<OnSurface, SurfaceError> {
+    if let (Surface::Nurbs(n), false) = (s, matches!(c, Curve::Nurbs(_))) {
+        let hits = crate::nurbs_hits::intersect(c, ce, s, n, se, res, budget, stop)?;
+        let overlaps: Option<Vec<Extent1d>> = hits
+            .iter()
+            .map(|h| match h {
+                CurveSurfaceHit::Overlap { t } => Some(*t),
+                CurveSurfaceHit::Point { .. } => None,
+            })
+            .collect();
+        return Ok(match overlaps {
+            Some(t) if !t.is_empty() => OnSurface::Isolated(t),
+            _ => OnSurface::Leaves(hits),
+        });
+    }
     let Some(target) = Target::of(s) else {
         return Err(SurfaceError::NurbsIntersection);
     };
@@ -901,7 +921,7 @@ impl Target {
                     small: c.minor().mm(),
                 },
             ),
-            Surface::Nurbs(_) => return None,
+            Surface::Nurbs(_) | Surface::Procedural(_) => return None,
         };
         Some(Self { axes, shape })
     }

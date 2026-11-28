@@ -14,7 +14,10 @@ use scx_num::extent3d::Extent3d;
 use scx_num::interval::Ivl;
 use scx_num::vector3d::{Point3, Vec3};
 
+use scx_nurbs_surface::NurbsSurface;
+
 use crate::nurbs_invert::patches;
+
 use crate::surface::Surface;
 
 /// The Euclidean control points of one Bézier patch as boxes, with the rectangle it covers.
@@ -101,60 +104,71 @@ impl Hulls {
 }
 
 impl Surface {
-    /// The certified hulls of a NURBS surface's Bézier patches ([`Hulls`]); `None` for the
-    /// other kinds (their rational images round their data, so their ranges come from their
+    /// The certified hulls of a NURBS surface's Bézier patches ([`Hulls`]), and of a
+    /// procedural surface's net's, each control point widened by the net's bound so they
+    /// hold the definition over the net's box; `None` for the analytic kinds (their rational images round their data, so their ranges come from their
     /// own formulas), or where a weight of the extraction is not provably positive or a value
     /// is not finite.
     #[must_use]
     pub fn hulls(&self) -> Option<Hulls> {
-        let Self::Nurbs(n) = self else {
-            return None;
-        };
-        let patches = patches(n);
-        let mut us: Vec<f64> = patches.iter().map(|p| p.lo.x).collect();
-        let mut vs: Vec<f64> = patches.iter().map(|p| p.lo.y).collect();
-        us.sort_by(f64::total_cmp);
-        us.dedup();
-        vs.sort_by(f64::total_cmp);
-        vs.dedup();
-        if us.len() * vs.len() != patches.len() {
-            return None;
+        match self {
+            Self::Nurbs(n) => net_hulls(n, 0.0),
+            Self::Procedural(p) => net_hulls(p.net(), p.bound()),
+            _ => None,
         }
-        us.push(
-            patches
-                .iter()
-                .map(|p| p.hi.x)
-                .fold(f64::NEG_INFINITY, f64::max),
-        );
-        vs.push(
-            patches
-                .iter()
-                .map(|p| p.hi.y)
-                .fold(f64::NEG_INFINITY, f64::max),
-        );
-        let mut cells = Vec::with_capacity(patches.len());
-        for p in &patches {
-            let mut pts = Vec::with_capacity(p.net.len());
-            for (h, e) in &p.net {
-                let [hx, hy, hz, hw] = *h;
-                let [ex, ey, ez, ew] = *e;
-                let w = Ivl::from(hw) + Ivl::new(-ew, ew);
-                if !(w.lo > 0.0 && w.hi.is_finite()) {
-                    return None;
-                }
-                let q = [(hx, ex), (hy, ey), (hz, ez)]
-                    .map(|(x, ex)| (Ivl::from(x) + Ivl::new(-ex, ex)) / w);
-                if !q.iter().all(|r| r.is_finite()) {
-                    return None;
-                }
-                pts.push(q);
-            }
-            let uv = Extent2d::from_bounds(p.lo.x, p.lo.y, p.hi.x, p.hi.y)?;
-            let axis = mean_normal(&pts, p.degrees);
-            cells.push(Hull { uv, pts, axis });
-        }
-        Some(Hulls { us, vs, cells })
     }
+}
+
+/// The hulls of `n`'s patches, each control point's box widened by `pad` (a procedural
+/// surface's net bound, so the hulls hold its definition; zero for a NURBS surface).
+fn net_hulls(n: &NurbsSurface<3>, pad: f64) -> Option<Hulls> {
+    let patches = patches(n);
+    let mut us: Vec<f64> = patches.iter().map(|p| p.lo.x).collect();
+    let mut vs: Vec<f64> = patches.iter().map(|p| p.lo.y).collect();
+    us.sort_by(f64::total_cmp);
+    us.dedup();
+    vs.sort_by(f64::total_cmp);
+    vs.dedup();
+    if us.len() * vs.len() != patches.len() {
+        return None;
+    }
+    us.push(
+        patches
+            .iter()
+            .map(|p| p.hi.x)
+            .fold(f64::NEG_INFINITY, f64::max),
+    );
+    vs.push(
+        patches
+            .iter()
+            .map(|p| p.hi.y)
+            .fold(f64::NEG_INFINITY, f64::max),
+    );
+    let mut cells = Vec::with_capacity(patches.len());
+    for p in &patches {
+        let mut pts = Vec::with_capacity(p.net.len());
+        for (h, e) in &p.net {
+            let [hx, hy, hz, hw] = *h;
+            let [ex, ey, ez, ew] = *e;
+            let w = Ivl::from(hw) + Ivl::new(-ew, ew);
+            if !(w.lo > 0.0 && w.hi.is_finite()) {
+                return None;
+            }
+            let mut q = [(hx, ex), (hy, ey), (hz, ez)]
+                .map(|(x, ex)| (Ivl::from(x) + Ivl::new(-ex, ex)) / w);
+            if pad > 0.0 {
+                q = q.map(|c| c + Ivl::new(-pad, pad));
+            }
+            if !q.iter().all(|r| r.is_finite()) {
+                return None;
+            }
+            pts.push(q);
+        }
+        let uv = Extent2d::from_bounds(p.lo.x, p.lo.y, p.hi.x, p.hi.y)?;
+        let axis = mean_normal(&pts, p.degrees);
+        cells.push(Hull { uv, pts, axis });
+    }
+    Some(Hulls { us, vs, cells })
 }
 
 /// The mean of the unit normals over the quadrilaterals of the net (index `i (q + 1) + j`),

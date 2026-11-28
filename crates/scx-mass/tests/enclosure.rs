@@ -324,22 +324,43 @@ fn spending_never_widens() {
 /// The pin's `width_below_the_floor`: a sphere of radius 2 asked ever narrower: the widths
 /// fall, each is reached exactly when it is at most the width asked, and the last is
 /// within 1e-9.
-#[test]
-fn widths_fall_to_the_floor() {
+///
+/// One test per width, so the runner checks them in parallel (the narrowest alone takes
+/// about a minute, a call that runs to the cell cap, the others a few seconds). Each
+/// asks the next wider width again for the one it must not exceed, as the loop's
+/// `last` carried it; it returns the width it reached.
+fn width_falls(width: f64, wider: Option<f64>) -> f64 {
     let b = finish(mapped_draft(Kind::Sphere, 2, scaled(2.0), [0.0; 3]));
     let want = 32.0 * PI / 3.0;
-    let mut last = f64::INFINITY;
-    for width in [1e-6, 1e-8, 1e-11] {
+    // The wider width's own call runs beside this one, so it adds no time to the narrowest.
+    let (last, e) = std::thread::scope(|s| {
+        let last = s.spawn(|| wider.map_or(f64::INFINITY, |w| enclose(&b, w).width()));
         let e = enclose(&b, width);
-        assert!(e.holds(want), "{width}: {e:?}");
-        assert!(e.width() <= last, "{width}: {e:?}");
-        assert_eq!(
-            e.settle == Settle::Reached,
-            e.width() <= width,
-            "{width}: {e:?}"
-        );
-        last = e.width();
-    }
+        (last.join().unwrap(), e)
+    });
+    assert!(e.holds(want), "{width}: {e:?}");
+    assert!(e.width() <= last, "{width}: {e:?}");
+    assert_eq!(
+        e.settle == Settle::Reached,
+        e.width() <= width,
+        "{width}: {e:?}"
+    );
+    e.width()
+}
+
+#[test]
+fn width_falls_to_1e_6() {
+    width_falls(1e-6, None);
+}
+
+#[test]
+fn width_falls_to_1e_8() {
+    width_falls(1e-8, Some(1e-6));
+}
+
+#[test]
+fn widths_fall_to_the_floor() {
+    let last = width_falls(1e-11, Some(1e-8));
     assert!(last <= 1e-9, "{last}");
 }
 
