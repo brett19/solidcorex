@@ -13,6 +13,7 @@ use scx_ssi::SsiError;
 use scx_surface::{SurfaceError, SurfaceKind};
 
 use crate::given::Fact;
+use crate::imprint_curves::{CutRefusal, CutUnsupported};
 
 /// Why a Boolean did not finish.
 ///
@@ -76,6 +77,9 @@ pub enum BooleanRefusal {
         /// The fact.
         fact: Fact,
     },
+    /// Curves given to [`imprint_curves`](crate::imprint_curves) that cannot be imprinted on
+    /// the face.
+    Cut(CutRefusal),
 }
 
 /// What this method does not answer yet.
@@ -122,8 +126,15 @@ pub enum BooleanUnsupported {
         /// The face.
         face: FaceId,
     },
-    /// An edge of the result with more than two faces, or a point classification that
-    /// met one: the non-manifold result is BO7's (D5).
+    /// A place the build or a query does not order (BO25 names them; the result's walls,
+    /// laminas, pinches and touches inside a face are built):
+    /// - two of the result's faces leaving an edge of three or more fins in one direction
+    ///   (tangent along it): their radial order needs their bends, which nothing measures
+    ///   yet; or one with no direction there (no normal at the edge's midpoint);
+    /// - a touch inside a face whose point the face's region test puts on a piece's
+    ///   boundary rather than inside one piece;
+    /// - a point classification of an operand that met an edge or vertex where more than
+    ///   two regions meet (scx-bodyq's own `NonManifold`).
     NonManifold {
         /// The result's edge, or the operand's entity the classification met.
         at: Entity,
@@ -149,6 +160,9 @@ pub enum BooleanUnsupported {
     /// resolution, a point on an operand's boundary the other's pieces do not name, or a
     /// result whose loops are no region (a hole touching its outer loop at a point).
     PlanarUndecided,
+    /// Curves given to [`imprint_curves`](crate::imprint_curves) that wait for the fitter or
+    /// for crossings on curved faces.
+    Cut(CutUnsupported),
     /// Two or more of the result's surfaces enclose each other in a way the shell
     /// placement does not decide: more than one outer surface with a cavity among them.
     Nesting,
@@ -300,6 +314,8 @@ impl BooleanError {
             Self::Unsupported(BooleanUnsupported::PlanarEdge { .. }) => "planar_edge",
             Self::Unsupported(BooleanUnsupported::PlanarUndecided) => "planar_undecided",
             Self::Refused(BooleanRefusal::FalseFact { .. }) => "false_fact",
+            Self::Refused(BooleanRefusal::Cut(_)) => "cut_refused",
+            Self::Unsupported(BooleanUnsupported::Cut(_)) => "cut_unsupported",
             Self::Unsupported(BooleanUnsupported::Nurbs { .. }) => "nurbs",
             Self::Unsupported(BooleanUnsupported::Chain { .. }) => "chain",
             Self::Unsupported(BooleanUnsupported::SsiPair { .. }) => "ssi_pair",
@@ -400,6 +416,22 @@ impl fmt::Display for BooleanError {
             Self::Refused(BooleanRefusal::FalseFact { fact }) => {
                 write!(f, "the stated {fact} is not so")
             }
+            Self::Refused(BooleanRefusal::Cut(c)) => match c {
+                CutRefusal::NoCurves => f.write_str("no curve to imprint"),
+                CutRefusal::NoFace(face) => write!(f, "{face} is not a face of the body"),
+                CutRefusal::OffFace(i) => write!(f, "curve {i} does not lie on the face"),
+                CutRefusal::Misses(i) => write!(f, "curve {i} cuts nothing of the face"),
+                CutRefusal::Overlap([i, j]) => write!(f, "curves {i} and {j} share a stretch"),
+                CutRefusal::Dangles(i) => {
+                    write!(f, "curve {i} has an end inside the face that meets nothing")
+                }
+            },
+            Self::Unsupported(BooleanUnsupported::Cut(c)) => match c {
+                CutUnsupported::Surface(face) => write!(f, "{face} is not a plane"),
+                CutUnsupported::Curve(i) => {
+                    write!(f, "curve {i} is neither a line nor a circle")
+                }
+            },
             Self::Unsupported(BooleanUnsupported::Nurbs { operand, at }) => {
                 write!(f, "{operand}: {at}: NURBS geometry is not intersected yet")
             }

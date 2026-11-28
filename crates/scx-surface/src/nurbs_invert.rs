@@ -311,7 +311,7 @@ fn halves(c: &[Hb]) -> (Vec<Hb>, Vec<Hb>) {
 
 /// The Bezier points of each span of the B-spline of degree `p` on knots `t` with points
 /// `c`: `(a, b, points)` for every span `[a, b]` of positive length, in order.
-fn spans(t: &[f64], p: usize, c: &[Hb]) -> Vec<(f64, f64, Vec<Hb>)> {
+pub(crate) fn spans(t: &[f64], p: usize, c: &[Hb]) -> Vec<(f64, f64, Vec<Hb>)> {
     let mut out = Vec::new();
     for s in p..c.len() {
         let (a, b) = (knot(t, s), knot(t, s + 1));

@@ -1176,6 +1176,8 @@ maps or the ray against NURBS. Who writes them?**
   and about 20 more wait only on other step-6 or step-7 rows.
 - Against: a planning note for five large pieces delays them by a review cycle. Mitigation: the
   analytic step-7 rows (§7.1, "can start now") keep builders busy for that cycle.
+- Answered by 77 (11-28): `research/77-step5-widening.md` gives the five pieces their rows (§7)
+  and the step-7 rows each one unblocks.
 
 **Q2. Does `scx-boolean` depend on `scx-stitch`?**
 
@@ -1925,3 +1927,744 @@ Decisions.
 - **`kept`.** An affine image keeps the parameter through a `ParamShift` (the plane's, rulings and generators: `NONE`), so a caller can map vertices; an arc's angle is not an affine function of the line's `t`, so it says `None` rather than a wrong map.
 
 Truths (`crates/scx-surface/tests/project.rs`, 14 tests, plus 2 unit tests): a circle projected along z onto a plane tilted by beta is the ellipse with semi-axes r and r / cos(beta) about the centre's image; a tilted circle projected onto a level plane has semi-axes r and r cos(gamma); for 64 random circles, planes and directions the image keeps the conjugate-diameter invariants a^2 + b^2 = |u|^2 + |v|^2 and ab = |u x v|; a line dropped onto a cylinder in a plane through its axis is the ruling at the radius (and splits at the axis); a chord dropped onto a cylinder is the arc at its height with the closed-form ends. Every piece is sampled: each point on the surface and on the projection line through its source point, or equal to the kind's `closest` foot. Ported from the pin: `a_line_above_a_box_drops_to_its_foot_on_the_top`, `a_line_beside_a_cylinder_drops_onto_its_wall_at_the_radius`, the #20836 seam chord (its geometry; the seam split and the area are the body's), and `a_segment_projects_onto_a_box_s_record_face_at_its_index` (both levels). Not ported: `a_curve_over_nothing_of_the_face_is_refused` (a face concern; the analogue here is a miss being empty) and `rational_quarter_circle` (a record form, not geometry).
+### 13.14 BR11 as built (11-28)
+
+**What was built.** `scx-brep` `draft/heal.rs`: `Draft::merge_faces_across(edge, &protected, &doc)`
+and `merge_faces`, `join_edges_at(vertex, &protected)` and `join_edges`, and `heal`
+(faces, then edges, to a fixpoint). A protected set is a `&BTreeSet<EdgeId>`; an id that is not a
+live edge is `Absent` before any write (the pin's out-of-range `Argument`). Reports are typed:
+`FaceMerge { absorbed, survivor, removed }`, `EdgeJoin { absorbed, survivor, vertex }`, and
+`Left { at, why }` for a candidate (equal surfaces or curves) that was left, `Why` one of
+`Protected, Sides, Orientation, Loops, Pcurves(e), Fins, Interval, Uses`. Each merge is planned
+read-only and then written, so a refusal writes nothing.
+
+**Decisions, each with a case against.**
+
+1. *Equal means `==`* on `Surface` and `Curve` (the test cells and `Changes` already use), not a
+   geometric coincidence test. For: exact, no tolerance, and the pcurves carry over unchanged;
+   pieces of one cut face or edge are equal. Against: two coplanar faces of different operands
+   (different frames) are not merged; the Boolean's own merge, which asks the surface
+   intersection, keeps doing that. A kernel-wide "same surface up to frame" test is open.
+2. *A pair is merged by its twins* (every edge only the two faces bound), walking loops across
+   them (the Boolean's splice). A connected group of mergeable faces (union-find over the
+   removable twins) is merged at once, one loop walk a group, so a long strip is linear. A group
+   goes pair by pair instead when a twin's two uses lie in different uv windows (a seam) or a
+   protected, other-shell or one-sense edge lies inside it; the pair walk keeps seams and
+   refuses what a group cannot. For: handles a disc in a plate (both loops vanish), collinear
+   shared pieces and seams. Against: two code paths, and a dirty group is still quadratic.
+   A first version merged pair by pair only: 17 s on the 4,102-face bar.
+3. *Seams.* Twins are grouped by the uv offset between their two uses; the group in step with
+   the first one in one window goes, the others stay as seams. A pair meeting across a seam only
+   is written with `exact_loop`/`placed`. Against: windows are compared with 1e-7 in uv.
+4. *Protected.* A protected edge is never removed and two faces sharing one never merge; two
+   edges join only when both or neither are protected (the survivor is the lower id, the
+   report names the absorbed one). Against: refusing every protected join would keep the
+   `Id`s stable, but leaves a split line in many pieces and gives 16 edges where the pin gives
+   15 (the pin's #21864 joins them too).
+5. *Edge joins write no pcurve at a guess.* The two uses' pcurves must be equal Curve2 values
+   running on (a turn on for circles and ellipses in uv); otherwise `Why::Uses`. Against: the
+   wall of a cylinder whose seam lune has its window a turn off (`start` -2 pi) leaves its two
+   circle arcs at the seam unjoined; closing that needs a uv shift of the rest of the loop
+   (open, below). Rewriting with `write_pcurves` was rejected: it can fail after the edge is
+   written.
+6. *Joined accuracy* is the larger of the two, downgraded `Certified` to `Unproven` (a proof of
+   each piece is not one of the whole); equal ones are kept.
+7. *Survivor is the lower id*, so the result does not depend on which edge the walk met first.
+
+**Tests (all in `tests/heal.rs`, 14).** Ported from the pin's `merge_tests.rs`: a split cube and
+two unioned boxes (a lattice, 6 faces, 12 edges, 8 vertices, area `2(ab+bc+ca)`, volume `abc`,
+the check passing), a box changes nothing and every planar generated kind changes nothing,
+a picked edge keeps the faces apart (7, 15, 10), an unknown kept edge is refused before any
+write, more than 4,096 kept edges (1,728 and 6,912 edges all protected), the 4,100-edge bar with
+one kept cut. Not ported: `picks_near_nothing` and the point-list `MAX_POINTS` cap (ids are
+typed, so neither failure exists); the stitch tests (`scx-stitch`). New: a disc in a plate, a
+cylinder's wall, sides refused, one merge and one join by name, parts equal the whole.
+
+**Measured** (a 24-core build box, unoptimised, whole test including the build and the check):
+the 4,102-face bar, pair by pair 17.1 s, by group 4.2 s; the 20 x 20 x 20 lattice (2,400
+faces, heal and parts) 0.25 s before, 0.21 s after. What is left of the bar's 4.2 s is the
+edge joins: the bar has four 1,025-piece cube edges, and each of its ~4,100 joins rebuilds the
+loops of its faces (clone and fin diff of a loop of about 1,000 uses). Joining a whole chain
+at once would remove it.
+
+**Open.** (a) join a chain of edges at once, linear in the chain; (b) the seam-window join
+above (a generated cylinder's circles stay split at the seam lune, `Why::Uses`; for BO12 to
+close with a uv shift of the rest of the loop); (c) merging coplanar faces of different frames (needs the intersection test of
+`scx-ssi`, above this crate); (d) the Boolean's `build.rs` still has its own merge and join,
+to be replaced by these calls (BO12).
+
+### 13.15 RP1 as built (11-28)
+
+**Built.** `crates/scx-repair`: `heal(&Brep, OnItemFailure, &mut Cx) -> Result<Done<HealCause>,
+RepairError>` and `items(&Brep) -> Vec<Item>`. The one item kind so far is `Item::Cluster(Cluster
+{ vertices, edges, survivor, reach, target })`. `RepairError` is 01 §5.1's shape: `Cause`, `Items`
+(collect mode only), `Exhausted { item, work }`, `Cancelled`, `Defect`. Its `RepairCause` is
+`OtherDocument` or `Heal(HealCause)`, and RP2-RP8 add their own causes beside `Heal`. There are 12
+`HealCause` variants, each naming its entity: 6 refused (`Spread`, `TooLong`, `OffFace`,
+`EndOffVertex`, `NotClear`, `NeighbourShort`) and 6 unsupported (`NeighbourKind`, `FaceKind`,
+`Sliver`, `LoopVanishes`, `Pinch`, `NotFinite`). `scx-check` gains `Finding::VerticesWithinCoincidence
+{ a, b, distance, allowed }` and its `Undecided` twin (research 74 §3.3's pair test, which `check`
+did not have). These are found by binning the vertices in cubes of twice the widest reach and
+testing neighbouring cubes, after the gaps and on the budget they leave; a pair the budget does not
+reach is `Undecided { why: Exhausted }`, as a gap is (74 R6).
+
+**How a cluster heals.**
+- Vertices joined by a curve edge are clustered by union-find when their distance is certified
+  within the larger reach.
+- The survivor is the vertex of the largest reach (the lowest id on a tie). The target is the
+  centre of the cluster's box, as in the pin.
+- Edges with both ends in the cluster are squeezed: removed with their uses. Every point of the
+  edge's curve must be within the survivor's reach of the target, enclosed over 16 interval pieces.
+- Every other edge at the cluster must be a line on plane faces. It is rebuilt between its new ends
+  over `[0, 1]`, and its pcurves are the line's projection.
+- Each rebuilt edge is certified against the check's own allowances:
+  - it is longer than its reach;
+  - its end is at its vertex within `re + rv`;
+  - the lift of each pcurve is within `min(re, rb)` of the line.
+- The target is clear of every other vertex by more than the larger reach. The test uses the
+  same cube binning, plus the targets of the items already done.
+- No loop is left empty, with two or fewer lines, or passing the survivor twice.
+
+**Choices, with the case for and against.**
+
+1. **The pair finding covers every vertex pair, not only pairs an edge joins.**
+   - For: it is the defect itself, and 74 §3.3 asks it of the whole body. A heal fixes what the
+     check reports, so the finding must exist before the heal can be held to it.
+   - Against: heal merges only pairs an edge joins. A pair with no edge between them stays a
+     finding until a later item kind handles it (open question 1). The check now costs a sweep;
+     see the measurements below.
+8. **Cubes, not a sort along x.**
+   - For: CAD bodies are axis-aligned. A block's faces put whole grids of vertices in one x
+     slice, and the first build (an x-sorted window) tested those pair by pair: 3.33M units and
+     139 ms at 9,602 vertices, 56% of the gaps' time. Cubes test only points within two sides of
+     each other, and a pair within the reach lies in adjacent cubes, whatever the rounding.
+   - Against: a body with one wide vertex makes the side large, and that brings back pair tests
+     near it (still correct). Past 2^52 sides a body falls back to one cube, which tests every
+     pair.
+9. **Clearance after the gaps, out of budget = undecided.**
+   - For: the check's contract is that a budget past the structure part never errors and never
+     gives a false finding (`gaps.rs` and `structure.rs` tests). The first build charged
+     clearance as a hard `Exhausted` before the gaps, and those tests failed.
+   - Against: a pair left undecided for budget carries the bracket `[0, inf)`, which says
+     nothing. A caller who wants the answer gives more budget.
+2. **`heal` takes `OnItemFailure { Stop, Collect, Skip }` and has no rounds.** 75 §6.5 wrote
+   `heal(body, cx)` with no mode.
+   - For: 01 §5.2 makes the mode explicit and the default all-or-nothing. Each item is certified
+     against the items done before it, so dropping a failing item cannot change a later item's
+     answer. One pass is the fixpoint, and every `Skipped` is round 1.
+   - Against: a heal that could only succeed after a later item lands (for example, a sliver that
+     a later collapse removes) is not retried. RP3 may need rounds back, as a cap the mode states.
+3. **No GAP_SHARE. The bound is `min(re, rb)`.**
+   - For: the check's two use questions are "edge on face within `re`" and "use follows edge within
+     `rb`". The pcurve is the exact projection, so one lift gap answers both. A heal certified this
+     way passes the check by construction, with no factor to tune. The pin's 0.5 was a share of one
+     tolerance.
+   - Against: the bound is tighter than the pin's when `rb < re / 2`, so some clusters the pin heals
+     are refused here. That is correct by the check, and no case in the tests needs it.
+4. **Certifying the two ends certifies the whole line.**
+   - For: the lift of a plane's projected line differs from the line by an affine function of the
+     parameter, so its norm is largest at an end. The two ends are enclosed in intervals.
+   - Against: this holds only for lines on planes. Curved neighbours need SU6's gaps (RP2), and are
+     `Unsupported(NeighbourKind)` / `(FaceKind)` until then.
+5. **The survivor keeps its accuracy, and face planes are kept rather than refit.**
+   - For: "no accuracy grew" is the truth, and moving a face would need its other edges
+     re-certified.
+   - Against: a cluster whose re-ended edges leave a face by more than their reach is refused
+     (`OffFace`). It is not healed by widening, which the pin's SMLib healer would do.
+6. **A re-ended edge between two clusters is re-certified by the later one with both new ends.**
+   - For: the plan stays per item, and the later certificate is about the final line.
+   - Against: if the later item fails, the edge keeps the earlier item's line. That is still
+     certified, since it was certified with the earlier ends.
+7. **Edges.** repair → brep, curve, num, surface (normal dependencies); check, mass and testkit are
+   dev-dependencies only.
+   - For: RP1 code reads no finding at run time. The items are found from the body by the same
+     test the check makes, and the tests hold each heal to `scx_check::check`.
+   - Against: 75 §7 drew repair → check. RP8 or a caller that heals from findings would add it
+     back.
+
+**Tests.**
+- `crates/scx-repair/tests/heal.rs`: 8 tests on constructed polyhedra.
+  - The hip roof (ridge δ = 1e-4) heals to the square pyramid: 5/8/5. The check passes after; no
+    accuracy grew; `|V − a²h/3| ≤ area × largest bound`. With the accuracy at δ/10 it has no item
+    and is left unchanged. With the slanted edges at zone accuracy it is refused `OffFace`.
+  - The chamfered prism heals its bottom pair and leaves its top pair, which would be a sliver.
+    Stop, Collect and Skip each return their own answer.
+  - Two chamfers share an edge between clusters.
+  - Budget exhaustion is typed at its item, and so is the stop flag.
+  - A body from another document is refused.
+  - The heal is deterministic.
+- `crates/scx-check/tests/clearance.rs`: 3 tests, at 10d, d and d/10 against the block's own
+  distances, plus exhaustion. No test was removed.
+
+**Measured.** These are throwaway timers (release build, not committed).
+- `check` on testkit blocks, n = 5 / 10 / 20 / 40 (V = 152 / 602 / 2,402 / 9,602):
+  - clearance adds V work units: 152 / 602 / 2,402 / 9,602, against 6,900 / 27,600 / 110,400 /
+    441,600 before;
+  - it takes 63-90 us / 0.30 ms / 1.3 ms / 6.0 ms, against the gaps' 3.9 / 15.4 / 61.3 / 244 ms
+    (+1.5-2.5%).
+  - The x-sorted first build took 2,172 / 22,142 / 256,482 / 3,329,762 units and 0.09 / 0.95 /
+    10.8 / 139 ms.
+- `heal` (Skip mode):
+  - hip roof: 59 units, 11.5 us;
+  - one chamfer: 115 units, 17.2 us;
+  - two chamfers: 215 units, 29.8 us.
+  - The check of the same bodies takes 116 / 207 / 244 us, so a heal costs about a tenth of one
+    check. The pin runs two full checks per heal (75 §6.4).
+
+**Open.**
+1. Vertex pairs within coincidence that no edge joins: merging them changes topology, not edge
+   ends. This is a later item kind, or ST1's identification.
+2. Moving an edge can make it cross another face. No tube-clearance test is made, since 74 §3.3
+   defines none, and the sweep covers only vertex pairs.
+3. The cube grid is built per call, once in `check` and once in `heal`. A memo in `Scratch`
+   could share it when a heal is followed by its check.
+
+### 13.16 CN1 as built (11-28)
+
+`CompatibleCurves::<D>::from_curves(&[NurbsCurve<D>]) -> Result<Self, NurbsError>` in `crates/scx-nurbs/src/compatible.rs` (77 §4.3, R77 row 4). Steps: each curve's knots are mapped affinely onto the first curve's domain (end knots exactly the first's ends, interior knots clamped inside; a curve already on that domain is borrowed, not copied); every curve is elevated to the highest degree with `NurbsCurve::elevate`; the union of interior knots (largest multiplicity over the curves after elevation) is inserted into each curve; if any input is rational the polynomial ones get unit weights. Inputs are `&`, the result is new, nothing is half done on an error. Inputs that already share a knot vector come back bit for bit. One new cause, `NurbsError::NoCurves` (Refused), for an empty slice; everything else refused is an existing cause: `Unclamped` (work needed and an end knot not of full multiplicity), `Unstable` or `Degree` (from elevation), `Multiplicity` (the mapping rounded two knots together).
+
+Decisions.
+- **No snapping.** Knots `0.5` and `0.5 + 1e-12` stay two knots (tested). For: the pin's averaging moves geometry unmeasured. Against: more knots on lofts of nearly aligned sections (77 §9 expects it).
+- **Weights by homogeneous insertion and elevation**, not by a weight solve: exact up to rounding for any positive weights, so no rational case is refused for its weights. Polynomial curves among rational ones get weights of exactly 1.
+- **Unclamped curves are refused when work is needed.** Insertion cannot reach the ends of an unclamped vector, so the knots could never be equal. Against: a surface net with unclamped rows that differ is refused; none exists in the corpus.
+- **Per-knot insertion** (`insert_knot` copies the polygon per knot, O(k n)). For: reuses the checked single-curve edit. Against: a batch insertion would be O(n + k); not measured as a cost until MK10 lofts need it.
+
+Work counts (the test family: 3 curves, degrees 1-5, mixed knot kinds and domains, summed over curves and families): knots in 1630, out 3819; control points in 1049, out 3096. The growth is elevation (each interior knot gains `q - p` copies) plus the union.
+
+Tests (`compatible::tests`, 4): 1,000 parameters per curve of every sampled family evaluate as the source at the relabelled parameter to `1e-9 (1 + |x|)`, with knot vectors and degrees equal; unchanged inputs come back bit for bit; near knots stay two and polynomial curves get unit weights; the empty and unclamped refusals.
+
+### 13.17 FT2 as built (11-28)
+
+`scx_nurbs::fit` (77 §2, row FT2): `Param` and `parameters`; `averaging` and `approximation` knot
+vectors; `interpolate` / `interpolate_on` at given parameters with `End` conditions; `least_squares`
+and `weighted_least_squares`; one banded solver. Typed `FitError` (cause per variant, `kind()`,
+`name()`); no flags, setters, out-params or failing defaults.
+
+- **`End<N>`** is `Point` (G0), `Tangent{d1}` (G1), `Curvature{d1,d2}` (G2), `Hermite{d1,d2,d3}`
+  (G3): parametric derivatives at the end, which the caller derives from a unit direction, a speed
+  and a curvature. Every condition is stated; the pin's estimate of a missing end derivative from
+  the data is not ported. Points are `[f64; N]` for any `N`, so a homogeneous fit is `N = D + 1`
+  and `Spline::into_curve` / `NurbsCurve::from_homogeneous` finish it (replaces `FitPoint`).
+- **Knots by averaging** use one rule for every pair of end orders `(a, b)`: the interior knots are
+  the means of `p` consecutive entries of the parameters with the first repeated `a` more times and
+  the last `b` more. It reproduces eq. 9.8 for `(0,0)` and the book's end-derivative knots for
+  `(1,1)` (tested against hand values); the pin has five routines for these cases. Needs `a, b < p`.
+- **Banded solve**: Givens rotations row by row (`band.rs`, private), `p + 1` entries per row of
+  `R`, any number of right-hand sides at once. A square system (interpolation) and a rectangular one
+  (least squares) use the same code; no pivoting, and no normal equations, so a fit's condition
+  number is not squared (the pin forms `N^T N` and a dense LU). A pivot below
+  `columns * EPSILON * max entry` is `Singular { column }` (a span without data, fewer data than
+  unknowns): the named tolerance replaces the pin's `LU_TOL`.
+- **Least squares** holds the end point and `order` derivatives by pinning the first and last
+  `order + 1` control points (the `k`-th derivative at an end depends on `P[0..=k]` with a nonzero
+  last coefficient), then solves for the rest.
+- **Not ported** (decided): first derivatives at every point and the closed-curve conditions (CN3
+  and MK12's), LU reuse between solves (`cpts_with_matrix`; a surface fit pushes its rows again),
+  `square_to_plane`, and `approx_end_directions` (direction held, reach free). The last is FT3's:
+  it needs the unknown reaches as two extra shared columns of the solve and is only meaningful with
+  the certificate; the band solver takes them as a Schur step.
+
+Tests (truth is the closed form, not the pin): samples of a polynomial of degree `d <= p` (p 1-6)
+interpolate back to 2e-11 (relative to 1 + |value|) at 200 parameters, with and without its own end
+derivatives; random data with every end combination up to G3 meets `C'`, `C''`, `C'''` to 1e-8
+and passes through every point to 1e-10; least squares of exact data from a random spline on its
+own knots gives the control points to 1e-10 (weighted, any positive weights: 1e-9), also with
+Hermite ends held, and with perturbed data the held ends are still exact; the fit is a minimum
+(200 random perturbations never lower the residual); a polynomial lies in the approximation-knot
+space and is recovered; a homogeneous quarter circle; typed refusals; and a 20 000-point
+interpolation (a dense matrix would be 3.2 GB).
+
+**Cost** (throwaway counter and timer, release build, interpolation of `n + 1` points in 3D,
+rotation-entry operations counted as `width + N` per rotation; nothing committed):
+
+| p | n | rotations x (p+1+3) | per point | time |
+|---|---|---|---|---|
+| 3 | 100 / 1 600 / 25 600 | 791 / 13 454 / 212 065 | 7.9 / 8.4 / 8.3 | 32 us / 0.41 ms / 4.0 ms |
+| 5 | 100 / 1 600 / 25 600 | 1 971 / 30 726 / 495 558 | 19.7 / 19.2 / 19.4 | 18 us / 0.27 ms / 5.4 ms |
+
+Linear in the number of points (per-point work constant to 5% over a 256x range, and about
+`p + 1` times its row width); a dense LU of the same system is `n^3/3 = 5.6e12` operations at
+`n = 25 600` and `n^2` storage. Least squares adds the same per data row, plus the `O(p)` pinned
+points. The pin's interpolation is dense (`RealMatrix`); its least squares is banded but through
+normal equations.
+
+For: one solver, no squared conditioning, linear time, every end condition linear and exact.
+Against: the knot rule for `a >= p` is refused (a G3 end needs `p >= 4` by averaging; explicit knots
+via `interpolate_on` accept `order <= p`); rotations cost about twice the flops of a Cholesky on
+the normal equations at equal `n` (not measured against the pin; the factor is in `p`, not `n`).
+
+
+### 13.18 MK10c as built (11-28)
+
+MK10's certificate module on its own, without the loft: `scx_surface::certificate`. The public API:
+- `Proof<P>`, one of:
+  - `Proved { bound }`;
+  - `Refuted { at, by }`, where `by` is a proved lower bound of the witness's distance and lies above the tolerance;
+  - `Undecided { bound: Option<Length> }`, the bound reached.
+- `on_analytic(&NurbsSurface<3>, &Analytic, Accuracy, &mut Budget, &Stop) -> Result<Proof<Point2>, SurfaceError>`, with `Analytic::{Plane, Cylinder, Cone, Sphere, Torus}` built by `Analytic::of(&Surface)`.
+- `on_circle(&NurbsCurve<3>, &Circle, Accuracy, &mut Budget, &Stop) -> Result<Proof<f64>, _>`.
+- `turn_about_axis(&NurbsCurve<3>, Point3, UnitVec3, Extent1d) -> Result<Turn, _>`, where `Turn` is `Positive`, `Negative` or `Undecided`.
+- `span_bound(&NurbsSurface<3>, &NurbsCurve<3>, Node, Node, Accuracy, &mut Budget, &Stop) -> Result<SpanBound, _>`. `Node { t, uv }`; `SpanBound` is `Bounded(Length)` or `Unbounded`.
+
+SU7's recognition certificate moved here from `recognize.rs`, which now calls the shared `prove`. RP7 gets a typed verdict for every kind, with no failing default.
+
+Decisions.
+- **Home crate: `scx-surface`, not `scx-make` as 01 had it.**
+  - For:
+    - The surface certificate is SU7's, already in `scx-surface`. It needs the analytic kinds, their axes and NURBS inversion, all of which live there. Putting it in `scx-make` would either duplicate it or make `scx-surface` call upward.
+    - RP7 (`scx-repair`) and MK11's patch certification both use it. `scx-repair` sits above `scx-make` in the layers anyway, but nothing that only needs the certificate should have to pull in the constructors.
+  - Against:
+    - 01 named `scx-make`.
+    - `scx-surface` gains about 1,900 lines (about 1,500 moved or new beside its tests) and so builds slower.
+    - `span_bound`'s one caller, the loft (MK10), stays in `scx-make`.
+  - The layers decide it: `span_bound` reads only a NURBS surface and curve, inversion and Bernstein forms. 01's `nurbs` row is amended.
+- **R6 limits:**
+  - `on_analytic` stops at 2^16 pieces in all;
+  - `on_circle` at 2^12 pieces and 40 halvings of a span;
+  - `span_bound` at 2^16 segments and 12 halvings.
+
+  Past a limit the result is `Undecided` (or, for `span_bound`, the bound reached), never a refusal. Each piece charges one unit of the budget and polls the stop.
+- **Refutation is rigorous.**
+  - On a surface, a corner whose bound is past the tolerance becomes a witness only when its proved floor distance, less the corner's coordinate slack, is above the tolerance. The cone's floor uses both nappes: `|rho - |s|| cos`.
+  - On a curve, a witness is a point read at a span's ends or middle, its distance less the evaluation's rounding.
+  - The truth tests check that `by` is at most the closed-form distance at `at`.
+- **No early exit for recognition.** `recognize`'s certificate no longer exits early on an unprovable piece. It now halves until each piece is proved, refuted or at a limit. A piece whose sampled distance is already within 1/64 of the tolerance is not halved (the pin's `NEAR`).
+
+Deviations from the pin.
+- `span_bound` returns the finite bound reached past its segment limit; the pin returned infinity. `Unbounded` is kept only for a piece with no bound at all: a weight not proved positive, or a diagonal of degree above 52.
+- The pin's "sliver" term is replaced by a plain norm bound: `sqrt` of the sum of each coordinate's `max |N/D|`.
+- `on_circle` bounds the distance from the circle itself, `hypot(|F/W^2| / (r + foot), |Z/W|)`. The pin ran two separate tests, one for the radius and one for the plane.
+- `turn_about_axis` takes a `UnitVec3` and an `Extent1d`, where the pin refused a reversed interval at run time. It has no budget, since it makes one pass with no halving.
+- New error `SurfaceError::OffRail { at }` (Refused) for a node outside the rail's domain.
+- Not ported: `meridian_collapse` and `axis_foot`, which belong to step 8's blends.
+
+Truths. There are 10 tests in `certificate/tests.rs`, judged against closed forms.
+
+`on_circle`:
+- The pin's `certificate.rs:1658` (an exact arc is proved, and is undecided at tolerance zero).
+- `:1678`:
+  - A 1e-4 bulge is refuted at 1e-7 with `1e-7 < by <=` its true distance.
+  - It is proved at 1e-3 with a bound at least the largest of 1,001 samples.
+  - Another radius, centre or plane is refuted.
+- `:1709` (an arc 1e4 from the origin is proved at 1e-9).
+- The budget is charged and the stop polled.
+
+`turn_about_axis`:
+- `:1575`: a quarter circle turns one way; it turns the other way about the opposite axis or reversed.
+- `:1601`: a curve that turns back, or a radial line, is undecided; the part before the turn is proved.
+
+`on_analytic`:
+- The exact image of every kind is proved within 1e-9. This covers the plane, both senses of the cylinder and cone, the sphere and the torus, all in a tilted frame.
+- A cylinder 0.01 wider is refuted with `by <= 0.01`.
+- A cylinder with an interior control point moved out 1e-3:
+  - At 1e-6 it is refuted, with `by` at most the closed-form distance at the witness.
+  - At 1e-2 it is proved, with a bound at least the largest of 41 x 41 samples.
+
+`span_bound`, on a cylinder of radius 10:
+- A rail circle of radius 10.5 gives a bound in [0.5, 0.5005].
+- A rail on the cylinder gives 2.2e-13.
+- A free cubic rail's bound is at least its largest sampled distance.
+- Nodes off either domain are refused with a typed error.
+
+Costs, release build on the build server, timed with throwaway timers:
+- **`span_bound`:**
+  - The on-surface rail takes 1 segment in 6.7 us.
+  - The free cubic rail takes 7 segments in 0.48 ms, about 70 us a segment.
+  - The off-surface rail at a tolerance 5e-4 above the exact distance 0.5 takes 1,403 segments in 48 ms, about 34 us a segment. Each segment is one inversion of the rail's middle plus a diagonal of degree `du + dv` and its `max_ratio`. The segment count grows as the tolerance nears the true distance. MK10's caller should pass its loft tolerance, not the distance it expects.
+- **`recognize`:** the suite takes 10 to 12 ms on base 7c1b668 and 10 ms on the branch. No change is measurable on its tests: the halving that replaced the early exit is bounded by `NEAR` and the piece limit.
+
+### 13.20 BR11b as built (11-28)
+
+**What was built.** `join_edges` and `heal` (`scx-brep` `draft/heal.rs`) join a whole chain of
+edges on one curve at once: a maximal run through free vertices (each the end of exactly two
+joinable edges, both or neither protected) is planned as one join, so each affected loop is
+rebuilt once per chain, not once per pair. `join_edges_at` is unchanged and is the primitive:
+a vertex that is in no chain, a chain of one pair, a closed ring, and a chain with any
+refusal (`Why::Uses` for pcurves that are not equal and running on, or a use of a chain edge
+outside a whole run of the chain) go pair by pair, in the order of the vertices, exactly as
+before, so the refusals are reported as before.
+
+**Decisions, each with a case against.**
+
+1. *The pair check is one function (`link`) used by the single join and the chain walk*, so a
+   chain is exactly the pairs a single join would accept. For: no second set of rules. Against:
+   the chain walk evaluates each link twice (walk, then plan), which is linear and small next to
+   the loops.
+2. *A loop's run must cover the whole chain* (forward in order, reversed in the other), else
+   the chain falls back to the pair path. For: it cannot accept what the pair path would refuse
+   (a use pair of two edges but not the third). Against: a loop that legitimately holds part of
+   a chain (not possible at a free vertex, where the only two edges are the loop's way through)
+   would be refused the fast path.
+3. *Survivor is the lowest id of the chain*, as the single joins leave it (each takes the
+   lower); accuracy is folded in chain order, the interval by the same `run_on` from the left.
+   Against: the fold order differs from the vertex order the pair path takes, so a tie in
+   accuracy between unequal records could pick another record; no test finds one.
+4. *Reports*: one `EdgeJoin` per vertex of the chain, naming the edge on the far side from the
+   survivor, in chain order; the single joins name the pair's higher id in vertex order, so
+   `absorbed` of a middle pair may differ while the set of absorbed edges is the same.
+
+**Tests** (`tests/heal.rs`, one new, 15 in all): `joining_a_chain_at_once_equals_the_single_joins`
+joins by `join_edges` and by `join_edges_at` at every vertex in order, on four lattices (with
+and without the protected line) and five cylinders, and requires the same number of joins and
+the same dump of every face, edge (geometry and fins) and vertex record. All 14 earlier tests
+pass unchanged.
+
+**Measured** (a 24-core box, unoptimised, whole test including build and check; a throwaway
+counter of loops rebuilt and their uses, not committed): the 4,102-face bar 6.2 s to 0.36 s (4.2 s
+on a quieter run before), loops rebuilt 8,188 to 12, uses copied 7,375,455 to 13,383; the 20 x
+20 x 20 lattice's `heal` 0.30 s to 0.25 s, loops 456 to 24, uses 19,380 to 1,236.
+
+**Open.** The cylinder wall's face merge stays pairwise across the seam (not a natural part of
+the chain; a seam group needs the uv-window shift of 13.14 (b)). A ring of edges (a circle in
+pieces) still joins pair by pair, quadratic in its pieces.
+
+### 13.19 FT1 as built (11-28)
+
+`scx_nurbs::deviation` (77 §2.3, row FT1): `distance` and `distance_by_span` (`SpanDistance`) for the
+same-parameter distance of two curves, `distance_floor`, and `interpolation_bound`; typed
+`DeviationError` (cause per variant, `kind()`, `name()`), generic over the dimension `D`. Not
+ported: `certified_hausdorff` (no row names it). The pin's 20 tests: 12 port as they stand (the
+numbers-not-finite, overflow and underflow ones change their cause types), the 4 `certified_hausdorff`
+tests and the clamped/degree-cap refusals go (a built `NurbsCurve` is finite, degree-checked, and
+needs no clamped knots here; the rational-refusal test is replaced by rational tests below).
+
+- **Bezier pieces by the blossom, not by inserting knots.** Each common span's piece of each curve
+  is read from that span's `p + 1` local control points by de Boor's recurrence with the arguments
+  `s`, `e` (every control point `p` convex combinations deep). The pin refines a copy of the curve
+  at the other's breakpoints and extracts the pieces, charging every span for all the insertions
+  (`gamma_(12 (I+1))`, `I` the whole curve's inserted knots). Here a point depends on its own span
+  only, `gamma_(12 p)` of `2 M`: a span's bound does not grow with the knot count. A refinement of a
+  curve against itself has bound at most `2 x floor` (test), and no clamped end is needed.
+- **Rational curves** (new; the pin refuses them), through homogeneous points `(w P, w)`, the other
+  curve with unit weights if it is polynomial. With numerators `A`, `B` and weights `Wa`, `Wb` of a
+  span's two pieces, `a - b = (A Wb - B Wa) / (Wa Wb)`; the numerator is a Bezier piece of degree
+  `pa + pb` with control points `n_k = sum_{i+j=k} C(pa,i) C(pb,j) / C(pa+pb,k) (A_i wb_j - B_j wa_i)`,
+  so `|a - b| <= max |n_k| / (min wa * min wb)` (a Bezier weight function is a convex combination of its
+  weights). No elevation. Rounding: each homogeneous coordinate carries `e` (blossom plus frame), the
+  exact numerators differ from the computed by `4 s e + 2 s^2 gamma_(terms+10)`, `s` the net size plus
+  `e`; the least weights are lowered by `e`, and a weight within `e` of zero is
+  `WeightsLost`. Against: not the polynomial bound's tightness (below); a rational pair with
+  identical weights could use the cheaper convex-combination bound `max |P_i - Q_i|`, not done since
+  after a refinement or elevation weights agree only to rounding.
+- **Floor** is polynomial only (`RationalFloor` otherwise): a rational bound divides by the second
+  curve's weights, so no number is below every bound. The floor forms `a`'s errors at its own degree
+  and the other's at degree 1 (the least), by the operations the bound uses, so no span's bound is
+  below it to the bit; self-comparison is then above the floor by the degree term, not equal to it
+  (the pin's equality held because its error did not depend on `p`).
+- **Pin bound not certified, fixed or noted.** (1) The pin's `interpolation_bound` added a count
+  `gamma_(12 p + 4)` that belonged to its own evaluation routine; here evaluation is the blossom the
+  bound's own count describes, so count and code agree. (2) The pin's `size` for the evaluation is the
+  largest coordinate in absolute position; kept (no frame move, the data points are in it). (3)
+  the pin's norm factor `2` stands for `sqrt(3)`; here `ceil(sqrt(D))`, so any `D` holds. No case
+  where the pin's polynomial bound was below the truth was found (a sampled search over 6 pairs and
+  hundreds of spans); the changes are in how the rounding is counted.
+- **Tests** (21): self, refinement, elevation (bound at least the floor, at most twice it, below
+  1e-12); a moved control point bounded by the move and above the 2 000-point sampled distance; other
+  degrees and knots on common pieces; a periodic (unclamped) curve's ends by the general basis;
+  interpolation misses (0.5 exactly to 1e-12); non-finite parameters and points; overflow by name;
+  the 1e-200 underflow case, both calls; size not place (1e9); other domains refused; the largest span
+  is the distance bit for bit; spans are the breakpoint union in order; each span holds its sampled
+  gaps (6 pairs); no bound below the floor, and the floor follows size; spans outside a moved point's
+  support at rounding level; the circle (below); a rational curve against its refinement and
+  elevations (< 1e-12); a moved rational point; weights near zero refused; spans count linear; error
+  names and kinds.
+- **Circle** (closed form): quarter circle as quadratic rational against the cubic through it at four
+  parameters. Radial error `max ||C(t)| - 1| = 8.91e-3`; the sampled same-parameter distance is
+  `9.31e-3`; the bound is `4.58e-2`, 5.1 times the radial error and 4.9 times the true distance, and
+  at least both (asserted at most 8 times). The looseness is the degree-5 control polygon and the
+  weights (least 0.707); subdividing the span would tighten it (not done: one call, one bound).
+
+**Work per call** (release build, throwaway timer, cubic against a cubic with one moved point,
+`n + 3` points): 100 / 1 000 / 10 000 / 100 000 spans take 0.13 / 1.24 / 12.7 / 121 ms, 1.2-1.3 us
+per span at every size: linear in the spans. The polynomial per-span work is `(p + 1)` blossoms of
+`p (p + 1) / 2` combinations (`O(p^3)`), plus one elevation per piece when the degrees differ. The pin
+extracts after a refinement of a copy of the curve (`O(spans x points)` for the insertions).
+
+**Tightness** (bound against the 20 000-point sampled distance, polynomial): moved control point
+1.12, quadratic against cubic 1.11, a quartic pair 1.0000, a cubic against its elevation 1.08
+(a moved point). Against itself or a refinement the bound is the rounding floor: 1.6e-13 on a net of
+size 5 (sampled distance 1e-15).
+
+Open: whether the rational bound should subdivide a span while the bound exceeds a caller's aim
+(adaptive, so FT3 gets the tightness it needs on rational sources, at the cost of a variable work per
+call); whether `certified_hausdorff` is wanted (CN4's `through`, PK1's net rounding use the same-parameter
+distance only).
+
+### 13.21 BO13b as built (11-28)
+
+`scx_boolean::imprint_curves(body, face, &[Cut], cx) -> Result<Imprinted, BooleanError>`
+(`imprint_curves.rs`; tests in `tests/imprint_curves.rs`). `Cut::whole(curve)` or
+`Cut::over(curve, interval)`; `Imprinted { done: Done<NoItems>, regions: Vec<CutRegion> }`, a
+`CutRegion` being a face of the result and a point inside it. The curves are read in the
+plane of the face as lines and circles (arcs), each proved on the surface by
+`scx_surface::curve_on_surface` (`Leaves` is `Refused(Cut(OffFace))`), crossed with the face
+boundary and with each other by `scx_planar::crossings` (moved onto both curves by BO17's
+`polish`), and the meets within coincidence are one point. Each curve is kept between its
+consecutive points where its middle is inside the face (`Region::classify`). The kept pieces
+are `Section`s over synthetic merged points (the face's vertex, the edges through the point
+with their parameter, or the face), run through the same stage 5 as `imprint` with an empty
+second operand, then `finish_target` (the cleanup `imprint` already had, now shared). So edge
+cutting in the neighbouring faces, exact pcurves, face tracing, holes and lineage are not
+rewritten; a section with no tool face derives from the face only.
+
+Errors: `Refused(Cut(NoCurves | NoFace | OffFace | Misses | Overlap | Dangles))`,
+`Unsupported(Cut(Surface | Curve))`.
+
+Decisions, with cases for and against:
+
+- **`&[Cut]` where 75 wrote `&[Curve]`.** A line has no ends and a projected curve (SF1) is
+  a bounded piece, so the interval is part of the input. For: BO16b passes projections
+  unchanged and a whole curve is still `Cut::whole`. Against: a second type. `Report<C>`
+  has no item list, so the regions ride in `Imprinted`, not in `Done<Regions>`.
+- **Planar faces only, lines and circles only.** For: every crossing is certified and the
+  pcurves are exact, as BO17; the pin's own cases are planar sheets. Against: a circle on a
+  cylinder wall has an exact pcurve and is common; it needs curve-curve crossing in the
+  wall's uv, which waits for the step 5 intersector. Both are typed `Unsupported`, never a
+  wrong answer; ellipses wait on BO17's arcs being widened.
+- **Stage 5 reused with synthetic points, not a new tracer.** For: no second copy of edge
+  splitting across faces, pcurve writing or hole placement; the face cut is the one
+  `imprint` writes. Against: a fake `Interference` and `Section` (the second face is the same
+  id, unused) tie this to stage 5's field layout; the empty operand is built per call.
+- **A free end inside the face is refused (`Dangles`), as the pin.** Against: stage 5 would
+  drop it silently. For: a dangling curve is almost surely the caller's error, and BO16b wants
+  every projected curve to bound something. A curve that contributes nothing is `Misses`.
+- **A curve that only slits (hole to boundary) is allowed**: one region, the face with the cut
+  twice in its loop. The pin refuses it as `CurveDoesNotCut`. Against: nothing is bounded.
+- **Shared stretch of two cuts is refused (`Overlap`)**; one with the boundary is dropped and
+  its ends are points. Deduplicating two equal curves silently would hide a caller error.
+- **Region point**: the middle of the widest stretch inside the face on a horizontal uv line
+  through the box of its outer loop (first of 7 heights that has one), on the loop samples.
+
+Truth tests: a disc cut from a cube face (pi/16 and 1 - pi/16; 9 vertices, 13 edges, 7
+faces), a line (two halves; 10, 15, 7), two crossing lines (four quarters; 13, 20, 9), a
+circle of radius 0.6 across the four sides (central area `pi r^2 - 4 (r^2 acos(d/r) - d
+sqrt(r^2 - d^2))` and four equal corners; 16, 24, 10), nested circles (pi/100, 0.08 pi,
+1 - 0.09 pi), a chord of a disc cap (segment area), a bounded curve equal to the whole line,
+determinism, and the seven refusals; volume 1 and pi unchanged.
+Added work: none to existing entries (the cleanup was moved, not changed); the new call costs
+one `crossings` per atom pair with meeting boxes, quadratic in atoms (a few for these cases).
+
+### 13.22 BO25 as built (11-28)
+
+`scx_boolean::combine(a, b, &Rule, cx) -> Result<Done<NoItems>, BooleanError>`
+(`crates/scx-boolean/src/boolean.rs`, `cells.rs`); `boolean` is `combine` with `Rule::of(op)`,
+and `boolean_given` passes `Rule::of(op)` too, one pipeline. A `Membership` is the set of operands
+a cell lies in (bits over operand indices). A `Rule { solid, faces }` says which cells are solid
+(`solid: &dyn Fn(Membership) -> bool`) and which faces with the same state on both sides are kept
+(`Faces::Boundary`: none, the regularised result; `Faces::Walls`: solid on both sides, each cell
+its own region; `Faces::Closure`: walls and laminas or sheets, void on both sides;
+`Faces::Where(fn)`: chosen by the two sides' memberships). `Rule::of(op)` is the Boolean;
+`Rule::with(solid, faces)` any other.
+
+What the build now holds (04 row 16):
+
+- *Walls.* A face with solid on both sides, kept by the rule, is one face used by two shells
+  of different regions. Shells come from union-find over the radial sectors about each edge
+  (`cells::shells`), so two boxes sharing a face give two solid regions and one shared face; a
+  cell-by-cell result of overlapping boxes gives three solid regions with the overlap's faces as walls.
+- *Laminas and sheets.* A kept face with void on both sides is used twice by one shell of a void
+  region; its free edges (one fin) are allowed only for these faces (`edges(m, free)`). Coincident
+  faces of two boxes on a patch give a lamina when the rule keeps them; a plane's section of a
+  box is a sheet.
+- *Touches in a face.* Where the operands touch at a point inside a face (a sphere on a box, two
+  tangent spheres, the seam cases), that point is a collapsed edge `[v, v]` with one fin, a
+  `UseGeom::Point(uv)` loop of its own, in each kept piece that holds it inside (`cells::touches`).
+  The six such recipes (tangent and seam spheres on boxes, two spheres, a box minus its inscribed
+  sphere) were `Unsupported(NonManifold)`; they now build as solids with the contract passing.
+  A touch that no kept piece of one of its faces reaches is not in the result (that face's
+  material is gone there, the other face is smooth) and is skipped: a ball inside a cube
+  touching one face and crossing another builds all three Booleans, and only the difference
+  holds the point. This cleared every `non_manifold` answer in the algebra suite (`boxC` against
+  `sphereOnFace`, which touches `boxC`'s y = -2 face from inside: 7 cases over five laws were
+  skipped as Unsupported, now asserted).
+- *Nesting.* Shells that share a face never contain each other; a void shell of zero volume lies
+  in the void round it. A cavity wall whose box reaches past its holder's (a face's box encloses,
+  a sphere's reaches past its poles) falls back to `holders_loose`, which tests containment of the
+  cavity's points rather than boxes, only after the box test found no holder.
+
+`Unsupported(NonManifold)` is left for exactly three things (the `BooleanUnsupported::NonManifold`
+doc): two kept faces leaving an edge of three or more fins in one direction, or one with no
+direction there (no normal at the edge's midpoint), so their radial order is undecided; a touch on
+a piece's boundary (an edge or vertex of a kept face), where no point loop is the right form; and
+scx-bodyq's own `NonManifold` for an operand where more than two regions meet at a place a query
+reads. The last matters to BO12, which feeds wall bodies back in as operands.
+
+Decisions (analysis and adversarial pass):
+
+1. *The rule is closures over a `u64` membership, not an enum of the three Booleans.* For: BO12
+   needs n-ary selections (at least one, exactly k, a chosen cell) and the predicate is the honest
+   signature; `Rule::of` keeps the three. Against: a dyn call per piece (measured below, no cost
+   seen) and a 64-operand cap; BO12 can widen `Membership` if it needs more.
+2. *The regular path keeps the old shell builder; the radial one runs only when walls or laminas
+   are kept.* For: no change to every regular result, no new cost there. Against: two shell
+   builders, which BO12 may unify once its cells are general.
+3. *`Faces::Closure` keeps faces only.* The closed intersection of boxes sharing an edge or a
+   vertex is a wire or a point; `combine` builds no wires or lone points, so that result is empty.
+   For: scx-brep holds lone vertices only in shells of their own and BO18's `intersect` already
+   gives the wire; the regularised and wall results are what callers ask. Against: the closure is
+   then not the topological closure in those cases; BO14 or a later row adds wires and points.
+4. *A touch is a point loop, not a lone vertex of the shell.* For: it is on the face, so a query
+   or a later Boolean finds it on the face's loops, and the difftest recipes (patch complexes) say
+   the same. Against: a degenerate edge is one more form the checks must allow; the contract and
+   recipes pass with it.
+5. *`holders_loose` for cavity walls only.* A void shell (a lump in a cavity) still nests by
+   boxes; with a loose box it could be placed outside. Open: no case seen; BO12 should decide on
+   points for both.
+6. *Recipe truths changed.* `scx-testkit`'s six touch recipes were `Unsupported(NonManifold)`; they
+   are now `Built` with cells and volumes in closed form (truth over pin: the pin builds them too).
+
+Measured (release, best of 7 x 5 runs, before / after, microseconds): plate-4 2970 / 2970, plate-12
+120565 / 121667-122245, gear-60 87856 / 87342, box-box-union 124.2 / 122.2, sphere-and-box 45.2 /
+44.3, coplanar-union 204.1 / 201.2, torus-minus-box 62.9 / 61.3, corner-contact-union 98.1 / 98.0,
+edge-contact-union 207.5 / 207.3, disjoint-union 57.4 / 57.6 (box-cyl-hole noisy both sides, load
+10-18). Added on the regular path: the rule's call per piece and, when nesting runs, each shell's
+face ids and a sorted merge to test sharing; the touch and loose-holder work run only where the
+Boolean used to fail.
+
+Tests: `crates/scx-boolean/src/tests/nonmanifold.rs` (9): the spelt rules are the Booleans, boxes
+sharing a face (closed intersection a lamina of area 1 with four free edges; walls two unit
+regions and one two-sided face), a box on a box sharing a 1 by 1 patch, boxes sharing an edge (two
+regions at a four-fin edge, closure empty) and a vertex (two outer shells at it, closure empty),
+overlapping boxes cell by cell (three regions of 1.75, 0.25 and 1.75, six walls), a box in a box
+cell by cell (the inner box's faces the outer cell's cavity wall), sections by a plane (a 2 by 2
+square, a disc of pi r^2, free edges), the closure of a regular result is it.
+`contacts.rs`: `point_contacts_are_built` (was the Unsupported check) asserts volume, cells and a
+point loop per touch. Changed on purpose: `whole.rs`'s `non_manifold_results_are_unsupported`
+(proved a ball on a cube was refused) is now `a_ball_on_a_cube_touches_it_at_a_point` (volume
+1 + pi/6, two solid regions, contract); new `a_ball_touching_a_face_from_inside_and_crossing_another`
+(the three volumes in closed form, a vertex at the touch only in the difference); `scx-boolean/tests/recipes.rs` and `scx-testkit/tests/recipe.rs`
+judge the six recipes as built. `scx-difftest`'s `t_slice` counts a touch as truth's patch
+complex does (a vertex of each sheet, a point loop of each patch) on both sides: scx's loop of one
+collapsed edge, or a seam or pole vertex that is a touch; the pin's vertex loop, whose vertex its
+Euler count had missed. The six recipes' work joins `slice_work.txt` (9 to 78).
+
+Open: wires and points in `Closure` (BO14); void-shell nesting on points (BO12); scx-brep's sphere
+face box past its poles is loose (a tighter box helps every nesting test).
+
+### 13.23 CN2 as built (11-28)
+
+`crates/scx-nurbs-surface` (77 §4.3, R77 row 4, CN1's `CompatibleCurves::from_curves` reused):
+
+- `NurbsSurface::iso(axis, t) -> Result<NurbsCurve<D>>` (`iso.rs`): the curve where parameter `axis` equals `t`, along the other parameter (`iso(U, t)` is `v -> S(t, v)`; the pin's `Direction` names the free parameter, this names the fixed one, and `Direction::UV` is gone). The lines of the net along `axis` are taken as `CompatibleCurves`, `t` is inserted to multiplicity `p` (nothing when it already is one), and control point `k - p` of each refined line (`k` the last knot equal to `t`) is the curve's point; at an end of a clamped domain it is the boundary row, copied. Rational surfaces give rational curves from the homogeneous points.
+- `NurbsSurface::restrict(&Extent2d) -> Result<Self>`: splits at each end of the box that is inside a domain; parameters are kept, so `S'(u, v) = S(u, v)` on the box and the domain of `S'` is the box. A box equal to the domain returns a copy bit for bit.
+- `CompatibleSurfaces::from_surfaces(axis, &[NurbsSurface<D>])` (`compatible.rs`) with `axis()`, `knot_vector()`, `len()`, `surfaces()`, `get(i)`, `into_surfaces()`: every line of every source along `axis` goes through one `CompatibleCurves::from_curves`, then the lines are split back into surfaces; the other direction of each is untouched. Each result is its source with the `axis` parameter mapped affinely onto the first source's domain; rational if any source is.
+- Typed causes (new): `NurbsSurfaceError::Restrict(RestrictCause::{Outside, Empty})` and `NoSurfaces`, all `Refused`. A `t` outside the domain or not finite, an unclamped end, and the lines' compatibility causes come as the existing `Edit { axis, cause }` over the curve cause. No input is changed (`&`), nothing is snapped.
+
+Decisions.
+- **Insertion, not the pin's local de Boor.** The pin runs the triangle on the one span (`O(lines p^2)`) and extrapolates outside the domain. Insertion on the lines costs `O(lines n)` per call (the polygon is copied) but is the checked edit of CN1/NS3, keeps the rational case in homogeneous form for free, and shares the multiplicity and domain checks. Against: a caller taking thousands of iso-curves of a large net (a Gordon network, MK11) pays `n/p^2` more; a local triangle can replace the body without changing the signature if MK11 measures it.
+- **Outside the domain is refused**, not extrapolated: the pin's end-span continuation is a surface the net does not define.
+- **`restrict` cuts, never snaps.** The pin's `extract_patch` moves cuts within `1e-6` onto knots; a cut a hair from a knot leaves both knots (more knots, exact geometry). A zero-width box is `Empty` (it has no area; the caller wants `iso`). Cost: up to four splits, each computing both pieces and dropping one (about twice the minimum); not measured as a need.
+- **Compatibility over all lines at once**, not one representative line per surface: simple, and the union and the result are the same since the lines of a surface already share knots. Cost `O(sources lines)` curve edits where one line each plus a replay would do; a batch `from_curves` on `CompatibleCurves` inputs is the follow-up if MK15b shows it. A rational source's lines round-trip through `w P / w`, so already-compatible rational sources are not bit for bit (polynomial ones are, tested).
+- **Domain mapping is CN1's:** the first source's `axis` domain; the caller who needs another maps the first.
+
+Work counts (compatibility test family: groups of 3 surfaces over both axes, degrees 1-3, uniform, random and multiple knots, polynomial and rational, `axis` domains `[0,1]`, `[-2,1]`, `[5,5.5]`): knots along the axis in 326, out 588; control points in 1300, out 2848 (elevation to the highest degree plus the union, as in 13.16).
+
+Tests (`construct_tests`, 11; truth is a closed form or the source): the iso-curve of the NURBS cylinder (9-point rational quadratic circle, radius 2.5, height 3) at 25 heights (ends, `1e-9` from each end, random) matches the analytic circle (each quarter's rational Bezier written out, turned by right angles) at 2001 parameters to `1e-14 (1 + |x|)` with radius `r` to `1e-14 r`, on the circle's own knots and degree; across the circle (`iso(U, t)`, at a knot, between knots and at the ends) it is a degree-1 line from the base point to the top; the bilinear patch's iso-curves are lines equal to the lerp of its edges to `1e-15`; random surfaces' iso-curves (every knot kind, polynomial and rational, parameters on and within 4 ulps of knots) evaluate as the source at 40 parameters to `1e-11` with the other direction's knots; `restrict` agrees with the source at 121 points on 100+ boxes (domain, half-domain, knot-adjacent, random) to `1e-10`, with the box as domain, source degrees and clamped ends; the whole domain restricts to the surface bit for bit; compatible surfaces evaluate as their sources (200 parameters each, relabelled), with equal knots, the highest degree, the other direction's knots kept, and inputs unchanged; already-shared polynomial knots come back bit for bit; refusals (empty, outside, not finite, unclamped, no surfaces) with their causes and unchanged inputs.
+
+### 13.24 MK5 as built (11-28)
+
+`scx_make::sweep(&Region, &Frame, &Path, &Document) -> Result<Made<SweepFaces>, MakeError>` sweeps a
+line-and-arc region, placed in the frame's `x, y` plane, along an MK7a `Path` with no law: the
+profile is carried by the path's rotation-minimising frame (`frames`, `Stop::At` at each piece's
+start, `Stop::Corner` at each mitre, `Corner::stretch`; nothing re-derived). The frame's origin is
+the path's start and its z axis the start's tangent. `SweepFaces { start: Option<FaceId>, end:
+Option<FaceId>, walls: Vec<Vec<Vec<FaceId>>> }`, walls `[piece][loop][segment]` with segments in
+the order given to `Region::new`; the caps are `None` for a closed path. The module is
+`crates/scx-make/src/sweep.rs`; `frames.rs` gained the crate-private `Path::joints` (each piece
+with its start fraction and corner).
+
+Decisions, with cases for and against:
+
+- **Walls by kind, chosen in a plan before anything is built** (R4, R5). A line piece is an
+  extrusion: a profile line's wall is a plane, an arc's a cylinder. An arc piece is a partial
+  revolve about the arc's axis (which lies in the profile's plane): a line's wall is a plane
+  across the axis, a cylinder or a cone (MK4's snap rules: within the zone in height a plane at the
+  mean height, in radius a cylinder at the mean radius, else the cone with the revolve's frame and
+  half-angle), an arc's a sphere (centre on the axis), a ring torus or a horn torus; a spindle arc
+  is `Unsupported::SpindleTorus` as in the revolve. For: no B-spline net, no sampling, no
+  orientation pass; the sense of each surface follows from the profile's side. Against: the
+  revolve's code is not shared (its plan is private and about the frame's y axis); the snap rules
+  are restated, about 60 lines. Sharing waits for a second user of a "revolve about any axis" plan.
+- **One draft, sections shared, no stitch.** Each joint's section (vertices and rim edges) is made
+  once and used by the walls either side and by a cap; the edge along a piece is a line on a line
+  piece and a circle about the axis on an arc piece. For: the pin's per-piece bodies plus copy and
+  global stitch (75 §3.4) go, and nothing is matched by distance. Against: none found; the record is
+  `[piece][loop][segment]` rather than the pin's flat face list.
+- **Mitres in closed form.** At a corner between lines the section is the profile turned by the
+  corner's half rotation into the bisecting plane and stretched by `Corner::stretch` along the turn
+  (`to - from`). Its lines stay lines; its arcs are ellipses whose principal axes are the
+  eigenvectors of the placement's Gram matrix (`psi = atan2(2 g12, g11 - g22) / 2`), semi-axes
+  `r |ex'|`, `r |ey'|`, and both cylinders either side carry them (the writer's ellipse-on-cylinder
+  pcurve). For: no Boolean, no SSI, no `scx-ssi` dependency (75 §8 listed one for "mitre conics";
+  not needed). Against: a corner next to an arc piece would cut a cone, sphere or torus by its
+  mitre plane in a curve that is not a conic (a torus's is quartic): `Unsupported::CornerOnArc`
+  until the procedural kinds or a fitted curve can carry it.
+- **Closed paths.** A path that ends where it starts (`Path::is_closed`) has as many sections as
+  pieces, the last piece ending on the first section; no caps; each hole's walls line a hollow of
+  their own (`Assembly::hollow`), as a full revolve's holes do. It may close smoothly or at a
+  corner between two lines (the first section is then that mitre, built from the start's side: half
+  the closing rotation backwards). A whole-turn arc is allowed only as the single piece of a closed
+  path (a torus or, for a square, two cylinders and two annuli). The profile must come back to
+  itself: the end's rotation (after the closing corner) moves the farthest profile point by at most
+  the zone, else `Refused(ClosedTurned { off })`. For: the pin cannot close at a corner; an
+  out-of-plane closed path needs the twist that makes it close, which is MK7b's law. Against: a
+  closed path whose holonomy is a symmetry of the profile (a square turned by 90 degrees) is
+  refused although its body exists; that needs the profile's symmetry, not the frame's, and is left
+  open.
+- **Refusals by closed form.** `TightArc { piece, radius, reach }` when an arc's radius does not
+  exceed the profile's reach towards its axis (its support function in that direction: vertices, and
+  an arc's centre plus radius where its normal lies within it) by more than the zone.
+  `MitresMeet { piece }` when a line piece's length does not exceed the profile's reach along
+  `n_out / (t . n_out) - n_in / (t . n_in)` (the two mitre planes' slants, `t` for an end with no
+  corner) by the zone: a U's middle piece is refused, a zig's (parallel mitres) never is.
+  `ArcTurn { piece, angle }` for an arc of a whole turn or more (within the zone at the widest
+  radius) unless it is that single closed piece. `Placement { offset, tilt }` for a frame off the
+  path's start (zone) or its z off the start tangent (`G1_TANGENTS`). `Path(FrameError)` for a
+  closed path that doubles back where it closes. `Unsupported::HelixPiece { piece }` for a helix
+  (the procedural kind; a zero rise is still a helix). `Defect::Station(FrameError)` if a station
+  the plan asks for is refused (cannot happen for a valid path).
+- **A profile touching an arc's axis is refused as tight**, not built with a pole as the revolve
+  does. For: a pole needs collapsed rails and walls that end at a point on an arc piece, and the
+  line pieces either side would then meet that piece at a section with a collapsed edge; the plan
+  stays one shape per piece, and the case (a profile on the axis of its own bend) is one a revolve
+  builds directly. Against: a deviation from MK4's behaviour
+  for the same profile; recorded, open.
+- **Not checked**: the swept body meeting itself across pieces that are not neighbours (a path
+  that comes back near itself). The pin does not check it either; a later check would be a
+  distance between non-adjacent pieces' tubes.
+
+Pin shapes designed out: per-piece bodies plus copy and global stitch; the planar path's Boolean
+union per piece and SSI per mitre; `cap: bool` (open paths always have caps and closed ones none;
+an uncapped open sweep is a sheet body, left for a sheet entry if one is asked for); a G1-only path (corners are mitres here);
+the try-chain that swallows a failed piece.
+
+Deviations from 75 (§3.5, §7, §7.2): no `scx-ssi` dependency (mitre conics in closed form; 01's
+`scx-make` row may drop it); a corner next to an arc piece is `Unsupported`, not built; closed
+paths may close at a corner; the record is `[piece][loop][segment]`.
+
+Measured (release, throwaway timers, best of 20 runs of 50, single lane): a 3 x 4 rectangle along
+a line 15.7 us against `extrude` 14.3 us (+10%, the frame stations and the plan's maps); a circle
+along a line 10.3 us against 9.8 us (+5%); a rectangle along a quarter arc 25.3 us against
+`revolve`'s quarter turn 25.9 us; a circle 12.5 us against 12.2 us; an L of two lines with a
+mitre 24.6 us (rectangle) and 16.6 us (circle, an ellipse mitre). No existing path changed:
+`Path::joints` is new and the error variants are new arms.
+
+Tests (`crates/scx-make/tests/sweep.rs`, 21), all against closed forms with the structure check
+(two fins of opposite senses per edge, Euler-Poincare) and the BR8 oracle: a straight rod and a
+tilted straight square (prism volume and area); a quarter arc (Pappus: a centred and an off-centre
+circle, an off-centre rectangle with its annular-sector caps); an arc piece's kinds (plane, cone,
+torus, cylinder) and its Pappus volume; line-arc-line rods; a five-segment profile's counts
+(12 F, 25 E, 15 V) and kinds per piece; square Ls at 60, 90 and 120 degrees (`a^2 (L1 + L2)`,
+mitre vertices at `hypot(a/2, a/(2 cos(theta/2)))`); a circle L whose mitre is the ellipse of
+semi-axes `r` and `r sqrt 2`; a four-piece out-of-plane polyline tube (circle and square); a bend
+then a corner; a square with a round hole along a bent path (genus 1); a closed square frame
+(square and circle, four ellipse mitres); a closed frame with a hole (a hollow, four shells); a
+whole-turn torus and square ring; determinism to the bit; and the refusals `TightArc` (and the
+same circle moved off the axis built), `MitresMeet` (a U refused, a wider U and a short zig built),
+`Placement` (offset and tilt), `HelixPiece`, `CornerOnArc`, `ArcTurn` and `ClosedTurned` (a
+tetrahedral closed polyline, turned by 60 degrees). Truths from the pin's `sweep_cornered.rs` (75
+§8.2) are the mitre-joined polyline tubes above; none are ported verbatim (they build through
+the pin's stitch).
+
+Open: the profile-symmetry closing above; the pole case; self-meeting across pieces; corners next
+to arcs (procedural kinds or fitted mitre curves).

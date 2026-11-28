@@ -28,8 +28,8 @@
 //!
 //! **Dependencies on 72's proposals.** The outcomes follow 72 §12.4 as ruled: the analytic
 //! SSI answers plane against all kinds, two spheres and coaxial pairs (`SsiPair` otherwise);
-//! a touch inside a face is `Unsupported(NonManifold)` (D5) while a touch at a vertex or
-//! along an edge is built (BO7, BR10); a horn torus is built (MK4b).
+//! a touch at a vertex or along an edge is built (BO7, BR10), and a touch inside a face
+//! too (BO25; D5 had it `Unsupported(NonManifold)`); a horn torus is built (MK4b).
 
 // Fixed 3-arrays and loop counters only.
 #![allow(clippy::indexing_slicing)]
@@ -276,8 +276,8 @@ pub enum Unsupported {
         /// The two kinds.
         kinds: [Kind; 2],
     },
-    /// A touch inside a face, which needs a point loop (D5). The contact points are listed;
-    /// the cause names one of them.
+    /// A contact the library does not build (no recipe states one since BO25 built the
+    /// touch inside a face). The contact points are listed; the cause names one of them.
     NonManifold {
         /// Every such contact.
         at: Vec<[f64; 3]>,

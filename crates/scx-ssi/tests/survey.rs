@@ -352,3 +352,131 @@ fn contacts_are_classified_and_refused_or_answered_by_kind() {
     .unwrap_err();
     assert_eq!(e.name(), "ssi_untraced");
 }
+
+/// A NURBS patch of degrees `(du, 1)` with the control rows `rows` (each row two points, at
+/// `v = 0` and `v = 1`), on Bezier knots.
+fn bezier_strip(rows: &[[[f64; 3]; 2]]) -> (Surface, Extent2d) {
+    let du = rows.len() - 1;
+    let knots = |d: usize| {
+        let mut k = vec![0.0; d + 1];
+        k.extend(vec![1.0; d + 1]);
+        scx_nurbs::KnotVector::new(d, k).unwrap()
+    };
+    let points: Vec<[f64; 3]> = rows.iter().flatten().copied().collect();
+    let net = scx_nurbs_surface::Net::new(du + 1, 2, points).unwrap();
+    let n = scx_nurbs_surface::NurbsSurface::new(knots(du), knots(1), net, None).unwrap();
+    let e = n.domain();
+    (Surface::Nurbs(Arc::new(n)), e)
+}
+
+/// The refusal of `intersect` on the pair, and on the pair swapped.
+fn refusals(a: &(Surface, Extent2d), b: &(Surface, Extent2d)) -> [SsiError; 2] {
+    let run = |(a, ae): &(Surface, Extent2d), (b, be): &(Surface, Extent2d)| {
+        intersect(
+            a,
+            ae,
+            b,
+            be,
+            acc(),
+            res(),
+            &mut Budget::new(200_000),
+            &Stop::new(),
+        )
+        .unwrap_err()
+    };
+    [run(a, b), run(b, a)]
+}
+
+fn refused_at(e: &SsiError) -> Point3 {
+    match e {
+        SsiError::Untraced { at } | SsiError::Singular { at, .. } => *at,
+        e => panic!("{e:?}"),
+    }
+}
+
+#[test]
+fn a_contact_of_order_two_along_a_line_is_a_valley_refused_as_untraced() {
+    // The cylinder y^2 + z^2 = 1 on the plane z = -1: they touch along the line y = 0,
+    // z = -1, where the cylinder curves away across the line and not along it (73 §22).
+    let cyl = Cylinder::new(
+        // The x axis along +y: the line of contact is at u = 3 pi / 2, off the seam.
+        frame([0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]),
+        mm(1.0),
+        Sense::Forward,
+    )
+    .unwrap();
+    let plane = Plane::new(frame([0.0, 0.0, -1.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]));
+    let nurbs = |s: Surface, e: Extent2d| (Surface::Nurbs(Arc::new(s.to_nurbs(&e).unwrap())), e);
+    let a = nurbs(Surface::Cylinder(cyl), ex(0.0, -0.7, TAU, 1.3));
+    let b = nurbs(Surface::Plane(plane), ex(-2.0, -2.0, 2.0, 2.0));
+    let survey = Survey::new(
+        &a.0,
+        &a.1,
+        &b.0,
+        &b.1,
+        acc(),
+        res(),
+        &mut Budget::unlimited(),
+        &Stop::new(),
+    )
+    .unwrap();
+    // The candidate pairs are too wide for a normal cone, so the valleys are found in their
+    // halves, by the plans.
+    let plans = survey
+        .plans(&mut Budget::unlimited(), &Stop::new())
+        .unwrap();
+    let valleys: Vec<_> = plans
+        .iter()
+        .flat_map(|p| match &p.loops {
+            Loops::Critical { points, .. } => points.clone(),
+            _ => Vec::new(),
+        })
+        .filter(|c| matches!(c.kind, CriticalKind::Valley { .. }))
+        .collect();
+    assert!(!valleys.is_empty(), "{plans:?}");
+    for v in &valleys {
+        assert_eq!(v.kind, CriticalKind::Valley { flat: false });
+        // On the line of contact, within the coincidence's reach.
+        assert!(
+            v.point.y.abs() <= 1e-6 && (v.point.z + 1.0).abs() <= 1e-6,
+            "{v:?}"
+        );
+    }
+    let [e, swapped] = refusals(&a, &b);
+    assert_eq!(e.name(), "ssi_untraced");
+    let (p, q) = (refused_at(&e), refused_at(&swapped));
+    assert_eq!(arr(p).map(f64::to_bits), arr(q).map(f64::to_bits));
+    assert!(p.y.abs() <= 1e-6 && (p.z + 1.0).abs() <= 1e-6, "{p:?}");
+}
+
+#[test]
+fn a_contact_of_order_four_along_a_line_is_a_flat_valley_refused_as_singular() {
+    // z = (x - 1/2)^4 on the plane z = 0: they touch along x = 1/2, z = 0, where the
+    // relative form vanishes (the Bernstein coefficients of (x - 1/2)^4 are +-1/16).
+    let h = 1.0 / 16.0;
+    let quartic = bezier_strip(&[0.0, 1.0, 2.0, 3.0, 4.0].map(|i: f64| {
+        let z = if i % 2.0 == 0.0 { h } else { -h };
+        [[i / 4.0, 0.0, z], [i / 4.0, 1.0, z]]
+    }));
+    let plane = bezier_strip(&[
+        [[-0.5, -0.5, 0.0], [-0.5, 1.5, 0.0]],
+        [[1.5, -0.5, 0.0], [1.5, 1.5, 0.0]],
+    ]);
+    let [e, swapped] = refusals(&quartic, &plane);
+    assert_eq!(e.name(), "ssi_singular");
+    assert!(
+        matches!(
+            e,
+            SsiError::Singular {
+                kind: scx_ssi::SingularKind::DegenerateForm,
+                ..
+            }
+        ),
+        "{e:?}"
+    );
+    let (p, q) = (refused_at(&e), refused_at(&swapped));
+    assert_eq!(arr(p).map(f64::to_bits), arr(q).map(f64::to_bits));
+    // On the line of contact: where the gap is within the coincidence, |x - 1/2| is at most
+    // its fourth root.
+    assert!((p.x - 0.5).abs() <= 1e-2 && p.z.abs() <= 1e-9, "{p:?}");
+}

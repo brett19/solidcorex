@@ -77,6 +77,7 @@
 //! **Reads only.** The body is `&Brep`; the [`Proved`] holds a clone, which shares every
 //! table and cell. The work goes to a fresh budget of `cx`'s settings and polls `cx.stop`.
 
+mod clearance;
 mod error;
 mod findings;
 mod gaps;

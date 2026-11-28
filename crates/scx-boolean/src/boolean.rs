@@ -6,6 +6,7 @@ use scx_brep::{Brep, FaceId};
 use scx_num::budget::{Budget, Stop};
 
 use crate::build::build;
+use crate::cells::Rule;
 use crate::classify::classify;
 use crate::contact::{Span, Touched, interferences};
 use crate::error::{BooleanError, BooleanRefusal};
@@ -51,8 +52,9 @@ pub enum NoItems {}
 ///   no closed form here.
 /// - [`BooleanUnsupported::Pcurve`] where a face's new loops need a pcurve with no exact
 ///   form (a fitted one).
-/// - [`BooleanUnsupported::NonManifold`] where the result, or an operand at a place a
-///   query reads, has an edge more than two faces bound.
+/// - [`BooleanUnsupported::NonManifold`] where two kept faces leave an edge in one
+///   direction (tangent along it), where a touch inside a face falls on a piece's
+///   boundary, or where an operand is non-manifold at a place a query reads.
 /// - [`BooleanUnsupported::Nesting`] where the result's connected sets of faces nest in a
 ///   way other than cavities of one set.
 /// - [`BooleanError::Exhausted`] when `cx`'s budget runs out, [`BooleanError::Cancelled`]
@@ -63,14 +65,32 @@ pub fn boolean(
     op: BooleanOp,
     cx: &mut Cx<'_>,
 ) -> Result<Done<NoItems>, BooleanError> {
-    run(a, b, op, &Incidences::NONE, cx)
+    run(a, b, &Rule::of(op), &Incidences::NONE, cx)
 }
 
-/// [`boolean`] with `facts` stated ([`crate::boolean_given`]): no facts is [`boolean`].
+/// The selection `rule` over the cells of `a` and `b`, built in `a.edit()` as [`boolean`]
+/// builds: the cells `rule` makes solid, bounded by the faces between solid and void cells,
+/// and the walls, laminas and sheets its [`Faces`](crate::Faces) keep (BO25). A result may
+/// so hold faces with solid on both sides (each cell its own region) or void on both (a
+/// lamina, or a sheet with free edges). [`Rule::of`] is the regularised Boolean.
+///
+/// # Errors
+///
+/// As [`boolean`].
+pub fn combine(
+    a: &Brep,
+    b: &Brep,
+    rule: &Rule<'_>,
+    cx: &mut Cx<'_>,
+) -> Result<Done<NoItems>, BooleanError> {
+    run(a, b, rule, &Incidences::NONE, cx)
+}
+
+/// [`combine`] with `facts` stated ([`crate::boolean_given`]): no facts is [`combine`].
 pub(crate) fn run(
     a: &Brep,
     b: &Brep,
-    op: BooleanOp,
+    rule: &Rule<'_>,
     facts: &Incidences,
     cx: &mut Cx<'_>,
 ) -> Result<Done<NoItems>, BooleanError> {
@@ -96,7 +116,7 @@ pub(crate) fn run(
         imprinted,
         &ff.touches,
         &classes,
-        op,
+        rule,
         *cx.doc,
         &mut budget,
         cx.stop,
