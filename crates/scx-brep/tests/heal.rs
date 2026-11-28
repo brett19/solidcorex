@@ -15,6 +15,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::f64::consts::TAU;
+use std::fmt::Write as _;
 
 use scx_brep::{
     Document, Draft, EdgeGeom, EdgeId, EdgeShape, EdgeUse, FaceRecord, LoopRecord, Refusal,
@@ -670,4 +671,68 @@ fn a_disc_in_a_plate_merges_across_its_circle() {
     assert_eq!(counts(&d), (1, 4, 4));
     assert!(d.vertex(rim).is_none() && d.edge(ring).is_none());
     checked(&d);
+}
+
+/// Every record of the draft, in id order, as text: two drafts with equal dumps are equal.
+fn dump(d: &Draft) -> String {
+    let mut s = String::new();
+    for f in d.faces() {
+        writeln!(s, "{:?} {:?}", f.id(), f.record()).unwrap();
+    }
+    for e in d.edges() {
+        writeln!(s, "{:?} {:?} {:?}", e.id(), e.geometry(), e.adjacency()).unwrap();
+    }
+    for v in d.vertices() {
+        writeln!(s, "{:?}", v.id()).unwrap();
+    }
+    s
+}
+
+/// The vertex ids of a draft, in order.
+fn vertex_ids(d: &Draft) -> Vec<VertexId> {
+    d.vertices().map(scx_brep::Vertex::id).collect()
+}
+
+#[test]
+fn joining_a_chain_at_once_equals_the_single_joins() {
+    // `join_edges` takes a chain of edges on one curve through free vertices as one join;
+    // `join_edges_at` is the single join. Every pair joined by hand, in the order of the
+    // vertices, leaves the same body (same records, same ids).
+    let cases = [
+        ([10.0, 10.0, 10.0], [2, 1, 1]),
+        ([6.0, 5.0, 4.0], [3, 4, 2]),
+        ([30.0, 5.0, 4.0], [30, 1, 2]),
+        ([6.0, 5.0, 4.0], [6, 5, 4]),
+    ];
+    for (len, n) in cases {
+        let l = lattice(len, n);
+        let kept = top_line(&l, n);
+        for protected in [none(), kept] {
+            let mut a = l.draft.clone();
+            a.merge_faces(&protected, &doc()).unwrap();
+            let mut b = a.clone();
+            let joined = a.join_edges(&protected).unwrap();
+            let mut count = 0;
+            let mut still = protected.clone();
+            for v in vertex_ids(&b) {
+                if let Ok(j) = b.join_edges_at(v, &still) {
+                    still.remove(&j.absorbed);
+                    count += 1;
+                }
+            }
+            assert_eq!(joined.edges.len(), count, "{n:?}");
+            assert_eq!(dump(&a), dump(&b), "{n:?} {}", protected.len());
+            checked(&a);
+        }
+    }
+    for k in [1, 2, 3, 5, 12] {
+        let mut a = generate(Kind::Cylinder, 3, k).unwrap().draft;
+        a.merge_faces(&none(), &doc()).unwrap();
+        let mut b = a.clone();
+        a.join_edges(&none()).unwrap();
+        for v in vertex_ids(&b) {
+            let _ = b.join_edges_at(v, &none());
+        }
+        assert_eq!(dump(&a), dump(&b), "cylinder {k}");
+    }
 }

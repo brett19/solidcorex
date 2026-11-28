@@ -2272,3 +2272,48 @@ Costs, release build on the build server, timed with throwaway timers:
   - The free cubic rail takes 7 segments in 0.48 ms, about 70 us a segment.
   - The off-surface rail at a tolerance 5e-4 above the exact distance 0.5 takes 1,403 segments in 48 ms, about 34 us a segment. Each segment is one inversion of the rail's middle plus a diagonal of degree `du + dv` and its `max_ratio`. The segment count grows as the tolerance nears the true distance. MK10's caller should pass its loft tolerance, not the distance it expects.
 - **`recognize`:** the suite takes 10 to 12 ms on base 7c1b668 and 10 ms on the branch. No change is measurable on its tests: the halving that replaced the early exit is bounded by `NEAR` and the piece limit.
+
+### 13.20 BR11b as built (11-28)
+
+**What was built.** `join_edges` and `heal` (`scx-brep` `draft/heal.rs`) join a whole chain of
+edges on one curve at once: a maximal run through free vertices (each the end of exactly two
+joinable edges, both or neither protected) is planned as one join, so each affected loop is
+rebuilt once per chain, not once per pair. `join_edges_at` is unchanged and is the primitive:
+a vertex that is in no chain, a chain of one pair, a closed ring, and a chain with any
+refusal (`Why::Uses` for pcurves that are not equal and running on, or a use of a chain edge
+outside a whole run of the chain) go pair by pair, in the order of the vertices, exactly as
+before, so the refusals are reported as before.
+
+**Decisions, each with a case against.**
+
+1. *The pair check is one function (`link`) used by the single join and the chain walk*, so a
+   chain is exactly the pairs a single join would accept. For: no second set of rules. Against:
+   the chain walk evaluates each link twice (walk, then plan), which is linear and small next to
+   the loops.
+2. *A loop's run must cover the whole chain* (forward in order, reversed in the other), else
+   the chain falls back to the pair path. For: it cannot accept what the pair path would refuse
+   (a use pair of two edges but not the third). Against: a loop that legitimately holds part of
+   a chain (not possible at a free vertex, where the only two edges are the loop's way through)
+   would be refused the fast path.
+3. *Survivor is the lowest id of the chain*, as the single joins leave it (each takes the
+   lower); accuracy is folded in chain order, the interval by the same `run_on` from the left.
+   Against: the fold order differs from the vertex order the pair path takes, so a tie in
+   accuracy between unequal records could pick another record; no test finds one.
+4. *Reports*: one `EdgeJoin` per vertex of the chain, naming the edge on the far side from the
+   survivor, in chain order; the single joins name the pair's higher id in vertex order, so
+   `absorbed` of a middle pair may differ while the set of absorbed edges is the same.
+
+**Tests** (`tests/heal.rs`, one new, 15 in all): `joining_a_chain_at_once_equals_the_single_joins`
+joins by `join_edges` and by `join_edges_at` at every vertex in order, on four lattices (with
+and without the protected line) and five cylinders, and requires the same number of joins and
+the same dump of every face, edge (geometry and fins) and vertex record. All 14 earlier tests
+pass unchanged.
+
+**Measured** (a 24-core box, unoptimised, whole test including build and check; a throwaway
+counter of loops rebuilt and their uses, not committed): the 4,102-face bar 6.2 s to 0.36 s (4.2 s
+on a quieter run before), loops rebuilt 8,188 to 12, uses copied 7,375,455 to 13,383; the 20 x
+20 x 20 lattice's `heal` 0.30 s to 0.25 s, loops 456 to 24, uses 19,380 to 1,236.
+
+**Open.** The cylinder wall's face merge stays pairwise across the seam (not a natural part of
+the chain; a seam group needs the uv-window shift of 13.14 (b)). A ring of edges (a circle in
+pieces) still joins pair by pair, quadratic in its pieces.
