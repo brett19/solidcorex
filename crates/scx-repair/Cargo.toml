@@ -10,10 +10,12 @@ publish.workspace = true
 
 [dependencies]
 # scx-brep's records and drafts; scx-curve's lines and scx-surface's planes and brackets,
-# the geometry a heal rebuilds; scx-num's intervals and units.
+# the geometry a heal rebuilds; scx-num's intervals and units; scx-nurbs's curves, whose
+# control points a heal moves and cuts.
 scx-brep = { path = "../scx-brep" }
 scx-curve = { path = "../scx-curve" }
 scx-num = { path = "../scx-num" }
+scx-nurbs = { path = "../scx-nurbs" }
 scx-surface = { path = "../scx-surface" }
 
 [dev-dependencies]

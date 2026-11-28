@@ -108,7 +108,8 @@ pub enum HealCause {
         /// Its reach.
         allowed: Length,
     },
-    /// An edge at the cluster is not a line (nor squeezed whole), or is collapsed.
+    /// An edge at the cluster is not a line or a NURBS curve clamped at its ends (nor
+    /// squeezed whole), or is collapsed.
     NeighbourKind {
         /// The edge.
         edge: EdgeId,
@@ -132,6 +133,22 @@ pub enum HealCause {
     Pinch {
         /// The face.
         face: FaceId,
+    },
+    /// An edge's empty pieces, cut, would move it by more than its reach: their control
+    /// points' spreads, added (RP2).
+    PiecesSpread {
+        /// The edge.
+        edge: EdgeId,
+        /// The spreads added.
+        bound: Bracket,
+        /// The edge's reach.
+        allowed: Length,
+    },
+    /// An edge's empty pieces cut leave knots that do not make a curve (a later span
+    /// rounded to nothing) (RP2).
+    Cut {
+        /// The edge.
+        edge: EdgeId,
     },
     /// A rebuilt curve, or an enclosure of a distance, overflows.
     NotFinite {
@@ -160,12 +177,14 @@ impl HealCause {
             | Self::OffFace { .. }
             | Self::EndOffVertex { .. }
             | Self::NotClear { .. }
-            | Self::NeighbourShort { .. } => ErrorKind::Refused,
+            | Self::NeighbourShort { .. }
+            | Self::PiecesSpread { .. } => ErrorKind::Refused,
             Self::NeighbourKind { .. }
             | Self::FaceKind { .. }
             | Self::Sliver { .. }
             | Self::LoopVanishes { .. }
             | Self::Pinch { .. }
+            | Self::Cut { .. }
             | Self::NotFinite { .. } => ErrorKind::Unsupported,
         }
     }
@@ -185,6 +204,8 @@ impl HealCause {
             Self::Sliver { .. } => "sliver",
             Self::LoopVanishes { .. } => "loop_vanishes",
             Self::Pinch { .. } => "pinch",
+            Self::PiecesSpread { .. } => "pieces_spread",
+            Self::Cut { .. } => "cut",
             Self::NotFinite { .. } => "not_finite",
         }
     }
@@ -299,12 +320,27 @@ impl fmt::Display for HealCause {
                 bracket(f, length, *allowed)
             }
             Self::NeighbourKind { edge } => {
-                write!(f, "{edge}: at the cluster and not a line to re-end")
+                write!(
+                    f,
+                    "{edge}: at the cluster and not a line or clamped NURBS to re-end"
+                )
             }
             Self::FaceKind { face } => write!(f, "{face}: at the cluster and not a plane"),
             Self::Sliver { face } => write!(f, "{face}: a loop would keep fewer than three uses"),
             Self::LoopVanishes { face } => write!(f, "{face}: a loop would be squeezed whole"),
             Self::Pinch { face } => write!(f, "{face}: a loop would pass the survivor twice"),
+            Self::PiecesSpread {
+                edge,
+                bound,
+                allowed,
+            } => {
+                write!(
+                    f,
+                    "{edge}: its empty pieces cut would move it past its reach: "
+                )?;
+                bracket(f, bound, *allowed)
+            }
+            Self::Cut { edge } => write!(f, "{edge}: its empty pieces cut leave no curve"),
             Self::NotFinite { at } => write!(f, "{at}: a rebuilt curve or an enclosure overflows"),
         }
     }

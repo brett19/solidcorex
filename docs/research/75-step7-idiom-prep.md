@@ -4182,3 +4182,87 @@ Open:
 - Open: a seam or pole on a NURBS face (merged and collapsed edges); iso-curves cached per
   `(axis, t)` when a region shares one.
 
+
+### 13.47 RP2 as built (11-28)
+
+RP2 lives in `crates/scx-repair/src/heal/ends.rs`, a submodule of RP1's `heal`, with small hooks in `heal.rs`. It extends RP1's heal to NURBS edges in two ways: re-ending a NURBS edge at a cluster's target, and cutting a NURBS edge's empty interior pieces. scx-repair gains the `scx-nurbs` dependency, which layers.txt allows. Lines take the same path as in RP1.
+
+API:
+- `Item::Pieces(EmptyPieces)` is new. `EmptyPieces { edge, pieces: Vec<Extent1d> }` is `#[non_exhaustive]` and exported from the crate root.
+  - `items()` lists each edge's empty pieces first, then the clusters, in the pin's order: cutting pieces cannot merge vertices, but squeezing can remove the edge.
+  - `heal()` takes both kinds. Each item is certified and accepted in turn, as before.
+- `HealCause` has two new cases:
+  - `PiecesSpread { edge, bound, allowed }` is Refused: the pieces' spreads, added up, exceed the edge's reach.
+  - `Cut { edge }` is Unsupported: the cut knots do not make a curve.
+- `NeighbourKind` now means "neither a line nor a clamped NURBS curve". `FaceKind` also covers a NURBS edge on a face that is not a plane.
+
+How it works.
+- **Interval enclosures.** These come from scx-nurbs's control points and from SU6. RP2 adds no new enclosure.
+  - Squeezing a NURBS edge is decided with the convex-hull bound: every point of the curve is within the farthest control point's distance of the target. RP1 already took the smaller of this and the interval de Boor box (`eval_over`).
+  - The diameter has an upper bound from the control-point box and a lower bound from the check's 9 samples. The upper bound is what lets the bound be a `Bracket`.
+- **Control-point moves.**
+  - A NURBS edge at a cluster is first trimmed to its interval (`split`), so that each end is an end control point.
+  - The control point at the cluster moves to the target, and its weight is kept. Moving one point by `d` moves the curve by at most `d`, because the rational basis is a partition of unity.
+  - The other end comes from the state, so a vertex merged by an earlier item is already in place.
+- **Empty pieces.**
+  - An empty piece is an interior Bezier piece between two C0 joints (knots of multiplicity `p`) whose control points all lie within the edge's reach of the piece's first point.
+  - The cut keeps that first point. It drops the piece's other `p` points, which include the joint after it, removes the `p` copies of the end knot, and moves the later knots down by the piece's length.
+  - On a rational curve, every weight after the piece is scaled by `w[first] / w[joint]`. A rational piece whose weights all scale alike keeps its shape, so curves with unequal weights can be cut too. The pin required equal weights.
+  - Each cut moves the rest of the curve by at most the piece's spread. The spreads, added up, must stay within the edge's reach.
+- **Certified on SU6's gaps, with no GAP_SHARE.** A reshaped edge is accepted only when all of the following hold for the curve as it will be stored:
+  - each end is within `re + rv` of its vertex (`vertex_curve_gap`);
+  - the diameter's lower bound is above `re`;
+  - each use is on a plane;
+  - each new pcurve lifts within `min(re, rb)` of the curve (`pcurve_edge_gap`, `Aim::Decide`).
+
+  The new pcurve is the exact projection of the curve: the control points are projected, and the knots and weights are kept. An undecided gap that ran out of budget or was stopped gives `Exhausted` or `Stopped`. Any other undecided gap is `OffFace` with the bound reached.
+
+Decisions.
+- **No GAP_SHARE, as in RP1 (§13.15, decision 3).**
+  - For: the check gives each gap its own allowance, so a certificate against the check's own question needs no share, and a healed body passes the check by construction.
+  - Against: RP2 refuses some edges that the pin heals, namely those with `rb < re / 2`. That is the correct answer by the check.
+- **An empty piece is judged by the edge's reach, not the pin's `zone / 10`.**
+  - For: the check already treats points within the reach as one point (RP1's coincidence). A tenth of the zone is an arbitrary share, and the summed-spread rule keeps the cut within what the check allows.
+  - Against: the pin cuts fewer pieces on edges with a large accuracy. A piece the size of the accuracy that a user drew on purpose is now cut. However, it is a point at that accuracy, so the check cannot tell it from one.
+- **Unequal weights are cut by scaling the weights of the tail.**
+  - For: the cut is exact: the later pieces keep their shape, which the unit tests check bit for bit before the cut and within the spread after it.
+  - Against: the weights after the cut are no longer normalised to the pin's form, so a byte-for-byte comparison with the pin differs for rational curves (truth over pin).
+- **The pieces come before the clusters, and an edge already reshaped is not reshaped again.** A cluster on an edge whose pieces were cut re-ends the reshaped curve, so one edge can take both kinds of item (`an_empty_piece_and_a_cluster_on_one_hip`).
+- **End pieces are not cut.** Cutting an end piece would move a vertex, which is a cluster's job. Such a piece shrinks the edge's diameter, and if its vertices are within coincidence, RP1's cluster takes it.
+- **Deviation: NURBS edges are re-ended on plane faces only.** A NURBS edge on a curved face is `Unsupported(FaceKind)`. The exact pcurve on a cylinder or a NURBS surface needs a uv step that RP2 does not build. The 75 table row leaves this open, and the §13.15 note that "curved neighbours need SU6's gaps (RP2)" is only half done: the gaps are used, but only on planes.
+
+Open questions.
+- A use bound that holds a certificate (`PcurveOnSurface`) goes stale when a pcurve is rewritten. This is true of RP1's lines as well. The bound is kept, as in RP1, because the new pcurve is certified within it, but its basis record still names the old curve.
+- **scx-mass cannot measure these bodies.** A planar face bounded by NURBS pcurves has no box. The interval jet of a NURBS pcurve is too wide for the boundary's area sign to show: in the cubic case, at 64 parts per use, the derivative is still about 18 wide. So `Face::bounding_box` is `None`, and scx-mass refuses with `NoBox`. The tests therefore measure volume and area on dense polylines of the edge curves, which is exact for the input's straight segments and within `bound / 256^2` once healed. This is a gap in scx-nurbs's `jet_over`, or in scx-brep's area sign, and needs an owner: any body with NURBS edges on planes is affected, not only healed ones.
+- When RP3 lands, the NURBS dispatch in `re_end` needs RP3's `collapsed_edge` check, the same as the line dispatch. I expect merge conflicts in `heal()` and `step()`; RP2 mirrors RP3's `step` shape so that the conflicts stay mechanical.
+
+Work (release, a throwaway timer in the test module, since removed; mean of 200, hip roof with ridge `1e-4`):
+
+| body | `items` | `heal` | `check`, for scale |
+|---|---|---|---|
+| lines (RP1's path) | 4.3 us | 18 us | 125 us |
+| cubic hips | 0.8 us | 8.8 ms | 8.5 ms |
+| rational hips | 0.8 us | 25.8 ms | 25.7 ms |
+| one empty piece, no cluster | 0.8 us | 98 us | 223 us |
+| empty piece and cluster on one hip | 0.9 us | 7.1 ms | 6.8 ms |
+
+- For a NURBS hip, heal's time is SU6's `pcurve_edge_gap` on each reshaped use. That is the same lift gap the check itself runs on those uses, so a heal costs about one check.
+- On a line body, the added work is one walk over the edges in `items()`, which matches each shape and allocates nothing for a line, plus empty maps in `apply`. The lines row's `items` time is the first row run and includes the warm-up.
+
+Tests (none removed):
+- **3 unit tests in `heal/ends.rs`.** An empty piece is cut, with equal and with unequal weights: the domain shortens by the piece's length, the first piece is bit-equal, and the tail is within the spread. A piece past the reach is kept.
+- **7 tests in `tests/ends.rs`.** These are hip roofs whose hips are NURBS segments: cubic on uneven knots, and rational with uneven weights.
+  - Cubic and rational hips heal to the pyramid in every mode. Each heal is checked for:
+    - the check passing;
+    - no accuracy growing;
+    - counts of 5, 8 and 5;
+    - each hip ending at the apex within 1e-12;
+    - the volume within area times bound;
+    - no items remaining;
+    - the same result twice.
+  - A NURBS ridge is squeezed by the hull bound.
+  - A hip that needs more accuracy is refused as `OffFace` (Refused), and Skip mode skips it.
+  - An empty piece is cut: the domain becomes `.8`, 5 points remain, and the check and the volume are unchanged.
+  - An empty piece and a cluster on one hip both heal.
+  - An empty piece with one unit less than the budget it needs is `Exhausted { item: 0 }`.
+- **RP1's 8 tests in `tests/heal.rs` are unchanged and pass.**
