@@ -89,6 +89,8 @@ pub enum Refusal {
     },
     /// A cone whose radii are both zero: a segment, not a solid.
     ZeroRadii,
+    /// A prism or sheet of no regions.
+    NoRegions,
     /// A spindle torus: the minor radius exceeds the major one by more than the resolution,
     /// so the tube crosses its own axis.
     SelfIntersecting {
@@ -107,6 +109,14 @@ pub enum Unsupported {
     Profile(PlanarError),
     /// A profile segment of a kind this constructor does not sweep yet.
     Segment(SegmentRef),
+    /// Two regions of a prism or sheet overlap, touch or cross: they would merge in the
+    /// plane first, which this build does not do.
+    RegionsMeet {
+        /// The index of the first region.
+        first: usize,
+        /// The index of the second.
+        second: usize,
+    },
     /// A horn torus: the radii are equal within the resolution, so the tube meets the axis
     /// at one point, a singular point that the pole rules do not cover (72 D3).
     HornTorus {
@@ -133,6 +143,8 @@ pub enum Defect {
     Surface(SurfaceError),
     /// The writer gave a face no exact pcurves.
     Pcurve(PcurveWriteError),
+    /// A solid face was written to a draft that has no solid region (a sheet's).
+    NoSolid,
     /// `Draft::finish` refused the draft the constructor built.
     Finish(FinishCause),
 }
@@ -176,6 +188,8 @@ impl MakeError {
             Self::Unsupported(Unsupported::Profile(_)) => "profile_undecided",
             Self::Unsupported(Unsupported::Segment(_)) => "segment_kind",
             Self::Refused(Refusal::ZeroRadii) => "zero_radii",
+            Self::Refused(Refusal::NoRegions) => "no_regions",
+            Self::Unsupported(Unsupported::RegionsMeet { .. }) => "regions_meet",
             Self::Refused(Refusal::SelfIntersecting { .. }) => "self_intersecting",
             Self::Unsupported(Unsupported::HornTorus { .. }) => "horn_torus",
             Self::Defect(Defect::Surface(_)) => "surface",
@@ -185,6 +199,7 @@ impl MakeError {
             Self::Defect(Defect::PlaneFrame) => "plane_frame",
             Self::Defect(Defect::Pcurve(_)) => "pcurve",
             Self::Defect(Defect::Finish(_)) => "finish",
+            Self::Defect(Defect::NoSolid) => "no_solid",
             Self::Full(_) => "table_full",
         }
     }
@@ -222,6 +237,11 @@ impl fmt::Display for MakeError {
                 write!(f, "{at} is of a kind not swept yet")
             }
             Self::Refused(Refusal::ZeroRadii) => write!(f, "both radii of the cone are zero"),
+            Self::Refused(Refusal::NoRegions) => write!(f, "no regions were given"),
+            Self::Unsupported(Unsupported::RegionsMeet { first, second }) => write!(
+                f,
+                "regions {first} and {second} overlap, touch or cross: merging them is not done yet"
+            ),
             Self::Refused(Refusal::SelfIntersecting { major, minor }) => write!(
                 f,
                 "the torus's minor radius {minor} mm exceeds its major radius {major} mm: the tube crosses its axis"
@@ -237,6 +257,7 @@ impl fmt::Display for MakeError {
             Self::Defect(Defect::PlaneFrame) => write!(f, "a face's plane has no frame"),
             Self::Defect(Defect::Pcurve(e)) => write!(f, "no exact pcurves: {e}"),
             Self::Defect(Defect::Finish(c)) => write!(f, "the draft is not a body: {c}"),
+            Self::Defect(Defect::NoSolid) => write!(f, "a solid face was written to a sheet"),
             Self::Full(e) => e.fmt(f),
         }
     }
@@ -256,7 +277,7 @@ impl core::error::Error for MakeError {
             Self::Full(e) => Some(e),
             Self::Refused(_)
             | Self::Unsupported(_)
-            | Self::Defect(Defect::PlaneFrame | Defect::Interval) => None,
+            | Self::Defect(Defect::PlaneFrame | Defect::Interval | Defect::NoSolid) => None,
         }
     }
 }

@@ -33,7 +33,7 @@ fn kernel() -> Kernel {
     k
 }
 
-/// The names of the failed reports (pointer and AssertValid), sorted and distinct; `None`
+/// The names of the failed reports (pointer and `AssertValid`), sorted and distinct; `None`
 /// when the check itself errored.
 fn failures(k: &mut Kernel, b: &mut Brep) -> Option<BTreeSet<String>> {
     let c = check_brep(k, b, CheckLevel::Level2).ok()?;
@@ -185,7 +185,7 @@ fn corpus_records() -> Vec<(String, Record)> {
         let Ok(e) = serde_json::from_str::<serde_json::Value>(&text) else {
             continue;
         };
-        let Some(bodies) = e["bodies"].as_object() else {
+        let Some(bodies) = e.get("bodies").and_then(serde_json::Value::as_object) else {
             continue;
         };
         if bodies.is_empty() {
@@ -205,7 +205,10 @@ fn corpus_records() -> Vec<(String, Record)> {
             continue;
         };
         for id in bodies.keys() {
-            if let Ok(r) = serde_json::from_value::<Record>(records[id].clone()) {
+            if let Some(Ok(r)) = records
+                .get(id)
+                .map(|v| serde_json::from_value::<Record>(v.clone()))
+            {
                 let rel = f.strip_prefix(&dir).unwrap_or(&f).display().to_string();
                 out.push((format!("{rel}:{id}"), r));
             }
