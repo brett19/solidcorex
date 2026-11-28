@@ -1860,7 +1860,7 @@ Decisions, with cases for and against:
   the torus's periodic v range (at `v = 1/2`, or `3/2` a period on), so only the pole use's own
   start v says which side of it the loop is on; for the sphere and cone, whose poles are at the
   ends of the v interval, the two rules agree. `scx_make::torus` still refuses a horn torus
-  (`Unsupported::HornTorus`); with the pole now supported that refusal could be lifted (open).
+  (`Unsupported::HornTorus`); the refusal is lifted by MK4b (13.25).
 - **The plane snap rule at the mean height, not the start's.** A line whose ends are within the zone
   in height is a plane at their mean height; within the zone in radius, a cylinder at their mean
   radius. For the mean: each end is off by at most half the difference, not all of it, and the rule
@@ -2668,3 +2668,53 @@ the pin's stitch).
 
 Open: the profile-symmetry closing above; the pole case; self-meeting across pieces; corners next
 to arcs (procedural kinds or fitted mitre curves).
+
+### 13.25 MK4b as built (11-28)
+
+`scx_make::torus` builds a horn torus (radii within the resolution) instead of refusing it;
+`Unsupported::HornTorus` is gone from `scx-make`, the testkit mirrors and the recipe tables;
+`SpindleTorus` and `Refusal::SelfIntersecting` (minor above major by more than the resolution)
+stay. The step-7 audit of what assumed minor < major follows.
+
+- **The build.** As revolve's whole circle that touches the axis: one vertex (the pole at the
+  frame's origin), the meridian circle through it (closed there, from tube angle pi once round,
+  so `v` runs over `[1/2, 3/2]`), and a collapsed edge of the face's own at each end of that
+  `v` range (the inner equator is both `v = 1/2` and `3/2`): 1 vertex, 3 edges, 1 face, exact
+  pcurves. The radius is the mean of the two within the resolution, as revolve's. For: it is the
+  shape revolve already builds and the check, the pcurve writer and the oracle already read.
+  Against: one collapsed edge used in both senses would be a seam, but the check wants one fin
+  per collapsed edge.
+- **What the check says.** The contract passes (`Contacts::Refused` and `Radial`); the structure
+  pass reports exactly one `VertexNotManifold { pieces: 2 }` at the pole and refuses it only
+  under `Contacts::Manifold`. That is the truth: two lobes of the solid meet at the pole, a
+  pinch. Not changed.
+- **Mass.** Needed no change: the breaks put `v = 1/2` on a patch edge, and the volume and area
+  match `2 pi^2 R^3` and `4 pi^2 R^2` to `1e-12` (tilted frames too). The testkit truth
+  `solid::torus` now takes `minor == major` (it refused it).
+- **SSI.** Read for `big - small`, `/ big`, `/ small`: the divisions are by `big` and `small`
+  only; the Villarceau case's `cv = sqrt((big - small)(big + small)) / big` is 0 for a horn
+  torus, which is the right limit (the two circles become the meridians). No change.
+- **Tessellation (broke).** `face_need` refused a horn torus (`major <= minor`) and
+  `Rules::of` took `rho = min(r, R - r) = 0`. Edge segments now bound by the tube's curvature
+  alone; faces get `Kind::Round { pinch }` and `pinched_sag`: no one radius of curvature bounds
+  a horn torus (the parallels' falls to 0 at the pole), so the meridian's bend (the sphere bound
+  at the tube radius over the triangle's enclosing circle) and the parallels' radial deficit
+  (`2 d sin^2(span / 4)`, `d` the largest circumference radius among the corners) are added.
+  A first attempt, the least parallel radius over the corners, never passed the slivers along
+  the meridian near the pole and refined to a duplicate point; the split bound fixes it. The
+  ring torus path is unchanged (one `bool` test per triangle). The mesh oracle reports exactly
+  one `NonManifoldVertex`, the pole, which the test expects for the horn case.
+- **Boolean (broke, refused).** A cut across a horn torus's face is `Defect(Build)` today: the
+  imprint trace keeps one collapsed edge per pole vertex, and a horn pole has two (both lobes).
+  It is now `Unsupported(HornPole { operand, face })` (name `horn_pole`) from the trace. A plane
+  through the pole is the same refusal (it was `Defect(Seeds)`'s cousin). Follow-up: the trace
+  needs the pole vertex's star in two uv sheets (key the poles by the arriving half-edge's `v`
+  and order the star per sheet); not built. A horn torus wholly inside or clear of a block or
+  cylinder works (union, intersection, difference volumes checked); a ring-torus control of
+  the same shape passes.
+- **Tests added.** `scx-make` round: `spindle_tori_are_refused_and_horn_tori_built` (replaces
+  `..._horn_tori_unsupported`: the old test's three horn radii are now built) and
+  `a_horn_torus_has_analytic_properties`; `scx-check` `a_horn_torus_is_a_checked_solid`;
+  `scx-tess` curved gains a horn torus in `primitives` (closed, chord, crack and volume checks
+  at three chords, two frames); `scx-boolean` horn.rs (four tests). The recipe `torus-horn`
+  is `Built` with its closed-form truth; the difftest adapter drops its `HornTorus` arm.
