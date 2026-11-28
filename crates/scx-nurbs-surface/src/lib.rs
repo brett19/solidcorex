@@ -17,19 +17,28 @@
 //! tensor product and nothing parallel (research 63 §2.2). A surface that exists is valid:
 //! every check runs once, in [`NurbsSurface::new`] or [`NurbsSurface::from_homogeneous`].
 //!
+//! - [`NurbsSurface::iso`], [`NurbsSurface::restrict`]: the exact iso-curve and the exact piece
+//!   over a box of parameters;
+//! - [`CompatibleSurfaces`]: surfaces sharing one knot vector and degree along an axis.
+//!
 //! The by-value edits (insertion, elevation, splitting, reversal, swapping, transformation)
 //! and the enclosures build on these types (research 63 §2.5 and §2.6, NS3 and NS4).
 
+mod compatible;
+#[cfg(test)]
+mod construct_tests;
 mod edit;
 mod enclose;
 mod error;
 mod eval;
 pub mod iges;
+mod iso;
 mod net;
 mod surface;
 
+pub use compatible::CompatibleSurfaces;
 pub use enclose::About;
-pub use error::{EnclosureCause, NetCause, NurbsSurfaceError, WeightCause};
+pub use error::{EnclosureCause, NetCause, NurbsSurfaceError, RestrictCause, WeightCause};
 pub use net::Net;
 pub use surface::{NurbsSurface, ParamAxis};
 
@@ -47,4 +56,6 @@ const _: () = {
     ok::<WeightCause>();
     ok::<EnclosureCause>();
     ok::<About<3>>();
+    ok::<CompatibleSurfaces<3>>();
+    ok::<RestrictCause>();
 };
