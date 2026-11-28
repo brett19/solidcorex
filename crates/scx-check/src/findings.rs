@@ -28,11 +28,16 @@
 //!   or past [`MAX_ACCURACY_RATIO`](scx_num::consts::MAX_ACCURACY_RATIO) times the
 //!   resolution.
 //!
-//! A finding is made only on a lower bound past its allowance (74 R2); a bracket that
+//! and, by vertex pairs ([`crate::clearance`], RP1):
+//!
+//! - [`Finding::VerticesWithinCoincidence`]: two vertices within the larger of their reaches.
+//!
+//! A gap finding is made only on a lower bound past its allowance (74 R2); a bracket that
 //! straddles it, a search that ran out of its share of the budget (R6) and a NURBS surface
 //! (pending in SU6) are listed in [`Findings::undecided`], never passed and never failed.
 //!
-//! Clearance, radial order along the whole edge and face crossing are added by later tasks
+//! Tube clearance (74 §3.3's `TubeNotClear`), radial order along the whole edge and face
+//! crossing are added by later tasks
 //! as further [`Finding`] variants.
 
 use scx_brep::op::Cx;
@@ -40,6 +45,7 @@ use scx_brep::{Brep, EdgeId, FaceId, Fin, ShellId, VertexId};
 use scx_num::units::Length;
 use scx_surface::{Bracket, Pending};
 
+use crate::clearance;
 use crate::error::CheckError;
 use crate::gaps;
 use crate::structure::{Class, classify, pinched};
@@ -152,6 +158,19 @@ pub enum Finding {
         /// The limit.
         limit: Length,
     },
+    /// Two vertices lie within coincidence of each other (74 §3.3, 04's merged-points rule):
+    /// their distance is within the larger of their reaches, so they are one point that the
+    /// body holds twice. A stitch refuses the same pair. Every scope asks it.
+    VerticesWithinCoincidence {
+        /// The lower vertex.
+        a: VertexId,
+        /// The higher vertex.
+        b: VertexId,
+        /// Their distance; its upper bound is within `allowed`.
+        distance: Bracket,
+        /// The larger of the two reaches.
+        allowed: Length,
+    },
 }
 
 /// Why a gap is undecided.
@@ -235,6 +254,20 @@ pub enum Undecided {
         /// What is pending.
         what: Pending,
     },
+    /// As [`Finding::VerticesWithinCoincidence`], undecided: the distance's bracket holds
+    /// the allowance.
+    VerticesWithinCoincidence {
+        /// The lower vertex.
+        a: VertexId,
+        /// The higher vertex.
+        b: VertexId,
+        /// The bracket.
+        distance: Bracket,
+        /// The allowance.
+        allowed: Length,
+        /// Why.
+        why: Why,
+    },
     /// The geometry cannot be enclosed over the edge (a value overflows).
     NotFinite {
         /// The edge.
@@ -279,7 +312,7 @@ impl Findings {
 /// they were.
 ///
 /// The work is charged to a fresh budget of `cx`'s settings: one unit per edge use for the
-/// structure, then each edge in id order gets an equal share of what is left for its gaps
+/// structure, one per vertex and one per vertex pair tested for clearance, then each edge in id order gets an equal share of what is left for its gaps
 /// (74 R6), one unit per point evaluated; an edge that spends its share is listed as
 /// undecided with what it reached, and its unspent share passes to the edges after it.
 ///
@@ -307,8 +340,11 @@ pub fn check(body: &Brep, cx: &mut Cx<'_>, scope: Scope) -> Result<Findings, Che
         .collect();
     list.extend(shells.into_iter().map(|shell| Finding::NotSolid { shell }));
     let found = gaps::run(body, scope, &mut budget, cx.stop)?;
+    let clear = clearance::run(body, &mut budget, cx.stop)?;
     list.extend(found.list);
+    list.extend(clear.list);
     let mut undecided = found.undecided;
+    undecided.extend(clear.undecided);
     list.sort_by_key(gaps::finding_key);
     undecided.sort_by_key(gaps::undecided_key);
     Ok(Findings {
