@@ -4779,6 +4779,185 @@ Open questions:
 
 | 11-28 | (For the owner's review) The stitch's orientation stage: for `Want::Solid` each closed sheet shell's faces are labelled by edge parity from the least face, MA4's certified `volume_sign` of a trial body's region decides outward, and nesting is decided by `classify_point` of the inner unit's vertices against the outer unit alone (even depth solid, odd depth void); orientation is the faces' sides record, no surface is flipped. Every failure names its entity: `Refused(NotSolid { Open, Wire, LoneVertex, NotOrientable })`, `Refused(RegionsMeet)`, `Unsupported` for solid operands, undecided joins, pending signs and pending nesting (NURBS waits on step 5's ray). `Want::Sheets` is not oriented. `BoxTree::overlapping_in` with a caller's `Overlaps` buffer (16% fewer allocations in the cut stage). Edges: stitch → mass, stitch → bodyq | Amends §4.3 steps 5 and 6 (no parity for sheets; `NotSolid` names one edge, not `NotClosed { open }`) | 74 §36 |
 
+## 37. HL2 as built (11-28)
+
+`Scene::hidden_lines(&self, &View, &mut Cx) -> Result<Drawing, HlrError>`, in
+`crates/scx-hlr/src/visibility.rs`, with the exact images in `crates/scx-hlr/src/project.rs`. Cargo:
+scx-planar moves from scx-hlr's `[dev-dependencies]` to `[dependencies]` (hlr → planar, as the
+74 §8 row says); no other edge.
+
+### 37.1 Public API
+
+- `Drawing { lines: Vec<DrawnLine>, unsupported: Vec<(usize, Unsupported)>, exhausted:
+  Option<Exhausted> }`: every drawn curve (body by body in scene order, each body's edges in id
+  order, then its silhouettes in face order); the faces whose silhouettes are not found; the budget's
+  exhaustion if it ran out while spans were classified.
+- `DrawnLine { body, source: Source, spans: Vec<Span> }`, spans in increasing parameter order,
+  adjacent spans of one visibility merged.
+- `Source::Edge(EdgeId)` (the edge's own curve and parameter) or `Source::Silhouette { face, curve:
+  SilhouetteCurve }` in the body's coordinates (a silhouette held by several faces of one surface is
+  drawn once, under the first).
+- `Span { t: Extent1d, visibility: Visibility }`.
+- `Visibility` (`#[non_exhaustive]`): `Visible`; `Hidden { body, face }` (the nearest face found
+  between the span and the eye); `Uncertain` (the budget ran out before the span was classified, and
+  only then); `Pending(Pending)`.
+- `Pending` (`#[non_exhaustive]`): `Curve` (no exact image: NURBS, parabola, hyperbola),
+  `TorusContour`, `Silhouette(Undecided)` (HL1's undecided part), `Crossing(CrossError)` (PL6 could
+  not settle a pair), `Piercing { body, face }` (through a NURBS face), `Occluder { body, face }` (a
+  ray against a NURBS face), `Outline { body, face }` (a face whose outline is not known exactly, and
+  whose image box may cross the span's), `Unplaced { body, face }` (no point tried could be placed in
+  or out of the face).
+- Phases `hlr.silhouettes`, `hlr.cuts`, `hlr.visibility`, with `Event::Progress` per round. Budget:
+  the silhouettes as `silhouettes`, each crossing and piercing search, and one unit per ray besides
+  what its intersection charges. Errors: `Stopped`; `Exhausted` only when the budget runs out before
+  the first span is classified (nothing decided yet); a surface or curve refusal; `BadPlacement`.
+
+### 37.2 Method
+
+1. **Every place a visibility can change is a cut.** A curve's visibility changes only where its
+   image crosses the image of an outline (a drawn edge or silhouette) or where it passes through a
+   face of another body. Images are exact: a line is a line, a circle an ellipse cut at its turning
+   points into conic arcs (rational quadratics, `project::pieces`), a circle seen edge on a segment
+   with an `acos` map. Pieces are paired by a sort and sweep over their image boxes (padded by the
+   zone), and each pair goes to `scx_planar::crossings`, which is complete. Through-face cuts are
+   `scx_surface::intersect_curve` of the curve, carried into the other body's frame, against each
+   face its box meets (`faces_meeting`), complete for analytic pairs. An extra cut changes nothing;
+   none is missed.
+2. **One classification per span.** Between cuts the visibility is constant, so one point of a span
+   decides it. Cuts closer than the zone (in space, not parameter) to the last kept cut or to the
+   range end are one place. A round takes each open span's next probe point (the midpoint, then a van
+   der Corput sequence, at most 63), builds a 2-D kd tree over their images, and takes each face in
+   turn against the points its image box holds and that lie behind its nearest depth. The ray is the
+   line from the point along `-d` over `(c, reach]`, where `c` is the coincidence: 2 zones plus the
+   curve's and face's recorded accuracies plus 8 roundings of the scene's size. A hit is a
+   `CurveSurfaceHit` whose uv is `Inside` or `Near` the face (closed faces). A face hides when the
+   ray meets it beyond `c`; the nearest is named. Only a point no face could place (`contains_uv`
+   unable to tell) goes on to a second round.
+3. **What cannot be decided is named.** `Uncertain` only on exhaustion; spans whose cuts or rays wait
+   on step 5 are `Pending` with the reason, decided before any ray is cast.
+
+Everything runs in a frame centred on the scene (`Lens`: the view carried into each body's frame
+once), so a part far from the origin draws as at the origin.
+
+### 37.3 Choices, with cases for and against
+
+- **Exact images and PL6, not sampled chords.** For: complete; no crossing between samples is missed;
+  no tolerance but the resolution. Against: a PL6 call costs 1-3 us against the pin's chord tests at
+  tens of ns, which is most of the time on scenes of many straight edges (37.6).
+- **Through-face cuts by `intersect_curve`.** For: a curve that enters another body (touching or
+  interpenetrating parts) changes visibility where it enters, which no image crossing shows. The pin
+  has no such cut and samples instead (`unexpected_transitions`). Against: one search per curve per
+  face whose box meets it; 54 on the rods scene, 0 where bodies are apart.
+- **One point per span, faces batched over a kd tree.** For: one ray per span and face in its box,
+  no per-span sampling, and one face's set-up serves every span behind it. Against: a point near an
+  occluder's boundary that `contains_uv` cannot place costs another round; capped at 63 points, then
+  `Pending::Unplaced`.
+- **Closed faces.** For: a curve exactly behind an occluder's edge, images coincident, is hidden.
+  This is deterministic and matches the slab oracle with touching counted as hiding. Against: an edge
+  grazed exactly by a ray past another body's edge reads hidden where a drafter might draw it seen;
+  only exact coincidence, never a near miss, is affected.
+- **Uncertain only on Exhausted (R6).** On exhaustion a span already hit is `Hidden`, naming a hiding
+  face that may not be the nearest; one not hit is `Uncertain`. For: a partial result that is never
+  wrong about seen or hidden. Against: the named face is not certified nearest on that path.
+- **Spans shorter than the zone merge with a neighbour.** For: no sub-resolution flicker at vertices
+  where several crossings land within rounding (touching boxes, far-origin parts). Against: a real
+  visibility change shorter than the zone is not drawn; at the model's resolution it is not a
+  distinct place.
+- **Edges seen end on are omitted.** Their image is a point (`NoImage::Point`). For: nothing to
+  draw. Against: a caller wanting a point mark gets nothing.
+- **Dedupe by identity, not image overlap** (04's HL1 row left this to HL2). A silhouette that HL1
+  reports on several faces of one surface is one equal `SilhouetteCurve`, drawn once under the first
+  face; an edge between two faces of one surface is not drawn. Curves of different bodies whose images
+  overlap are not merged: two touching boxes each draw their shared edge. For: identity is exact and
+  cheap, and both edges are the scene's. Against: a drawing has doubled strokes where parts touch; the
+  pin's `cover` merges them (37.7).
+- **Reflecting frames** (left to HL2 by the same row). Placements are `Frame`s, built from a z and an
+  x axis, so always right-handed: a reflection cannot be placed, and a mirrored part arrives as its
+  own mirrored body. Nothing in the visibility depends on handedness beyond the frame's own maps.
+- **NURBS faces as occluders** (the row's "NURBS-as-plane reporting"). A NURBS face that HL1 proves a
+  quadric draws that silhouette, but rays and piercings against it still go through the NURBS surface,
+  so a span its box may hide is `Pending::Occluder` or `Pending::Piercing` naming it. For: no guessed
+  hit. Against: a NURBS plane that hides nothing in fact still makes spans behind its box wait; using
+  SU7's recognized form for rays (with its deviation added to the coincidence) is the step-5 follow-up.
+- **Typed pending for NURBS, torus contours, parabolas and splines.** They wait on step 5's planar
+  widening and general plane-curve intersections; nothing about them is guessed.
+
+### 37.4 The pin, and which side is correct
+
+| solidcore at the pin (`hlr.rs`) | here | correct |
+|---|---|---|
+| `screen_samples`: each curve sampled to chords; `crossings` on chords over a grid, `1e-9 × scale` | exact images; `scx_planar::crossings` on lines and conic arcs | here: a crossing between samples is not missed |
+| `classify_range`/`classify_point`: rays per piece, plus sampling inside a piece for changes the crossings missed (`unexpected_transitions`) | one probe per span (more only when a face cannot place it) | here: a change is a cut by construction |
+| no through-face cut | `intersect_curve` cuts where a curve enters another body | here: the pin samples for it and may miss it |
+| `shadow_boxes`/`shadow_cuts`: freeform faces' screen boxes cut curves; behind a box is `uncertain` | `Pending::Outline` naming the face | here: typed, and `Uncertain` keeps one meaning |
+| `uncertain` pieces from many causes (box in front: 17 of 28) | `Uncertain` only on Exhausted (box in front: 0 of 18) | here |
+| `max_rays` budget; `Budget("ray")` refuses the whole call | `Budget` shared; partial `Drawing` with `exhausted` | here (R6) |
+| `cover`: coincident pieces drawn once | not ported | open (37.7) |
+| `scene_centre` shift | `Lens` centred frame | same intent |
+
+### 37.5 Tests (`crates/scx-hlr/tests/visibility.rs`, 16; `visibility.rs` unit, 2)
+
+Truth is closed form. Every span of every drawn curve is checked at 9 interior points against a slab
+test (box) or the quadratic (cylinder) in the bodies' frames, never against the pin. Ported from the
+pin's `hlr/tests.rs`: `iso_cube_hides_the_three_back_edges`, `a_box_in_front_hides_the_middle_of_an_edge`,
+`far_apart_bodies_keep_every_edge_of_the_near_one`, `a_plate_just_above_a_box_in_a_large_scene_is_not_looked_through`,
+`two_touching_boxes_draw_their_shared_edges_seen`, `a_cylinder_from_the_side_has_seen_rulings_and_half_hidden_rims`,
+`a_part_far_from_the_origin_draws_as_at_the_origin`, `a_stopped_call_and_a_small_budget_say_so`
+(the pin's cancellation and budget cases; a partial `Hidden` is compared by kind), and the cone front
+view in `a_cone_and_a_sphere_hide_a_box_behind_them`. New: stacked and occluding boxes in 6 view
+directions, a tilted placement checked in the box's own frame, a box behind a cylinder, a cylinder
+along its axis, the torus pending case, determinism (two calls, same bits), seams not drawn and a
+sphere drawing only its outline. Unit: the kd tree returns exactly the points in 300 random boxes
+over 2,000 points; probes spread and never repeat. The remaining pin cases are HL3's. No test removed.
+
+### 37.6 Cost
+
+Release, one thread, the build machine under other load (small scenes vary 2x between runs; ranges
+over three runs). Throwaway counters and timers, not committed. Pin: `hidden_lines` with `Serial`
+and `threads: 1`, its own `Stats`. Here: `hidden_lines` only; `prepare` (51-166 us) is timed apart,
+as the pin prepares outside its call. Rays here are ray-face tests, comparable to the pin's surface
+tests, not its rays per piece.
+
+| scene | pin median | here median | pin rays / surface tests | here ray-face tests | pin crossings | here PL6 pairs / meets | pin uncertain | here not decided |
+|---|---|---|---|---|---|---|---|---|
+| iso cube | 21 us | 160-387 us | 60 / 120 | 33 | 36 | 37 / 30 | 0 of 12 | 0 of 12 |
+| box in front | 75 us | 113-518 us | 160 / 250 | 64 | 72 | 48 / 40 | 17 of 28 | 0 of 18 |
+| cylinder side, r 10, h 30 | 4,591 us | 51 us | 40 / 60 | 16 | 10 | 8 / 10 | 0 | 0 |
+| 48 boxes, 4x4x3 | 3,789 us | 16,288-16,531 us | 13,300 / 33,425 | 13,662 | 2,439 | 3,683 / 2,282 | 0 | 0 |
+| 9 rods on a plate | 22,561 us | 2,040-2,174 us | 1,405 / 2,440 | 1,048 (54 piercings) | 168 | 257 / 134 | 0 | 0 |
+
+Curved scenes are 10-90x faster (the pin samples conics finely; here they are exact arcs). Scenes of
+many straight edges are 1.5-4x slower. On the grid, 9.7 ms of 16.5 is PL6 (2.6 us per pair) and 4.4
+ms rays (0.32 us per face test); silhouettes 0.07 ms. About 1,150 of the 3,683 pairs are two edges
+of one box sharing a vertex, whose only meet is that vertex. Two follow-ups would close most of the
+gap, not done here: a line-line fast path in `scx_planar::crossings` (two exact orientations decide
+it without the general isolator; 74 §31.6 already proposes a root polish), and skipping a same-body
+pair of non-collinear lines that share an exact end.
+
+### 37.7 Deviations and open questions
+
+- Coincident drawn lines of different bodies are not merged (the pin's `cover`); open: merge by image
+  overlap within the zone, keeping both sources, or leave it to the drawing's consumer.
+- NURBS faces recognized as quadrics still make rays wait (37.3); open until step 5 or SU7 forms.
+- A span behind several faces of one surface split into faces names one of them; a span hidden on
+  the exhausted path names a hiding face, not certified nearest.
+- Sub-zone spans merge into a neighbour; edges seen end on are not drawn.
+- The closed-face convention decides exact coincidence as hidden; a caller wanting the opposite needs
+  an option, not added.
+- NURBS faces and edges, torus contours, parabolas, hyperbolas and splines are typed `Pending` until
+  step 5.
+- Straight-edge scenes are slower than the pin (37.6); the PL6 line fast path is the first follow-up.
+
+### 37.8 Proposed 04 row
+
+HL2 (74 §37): `Scene::hidden_lines` cuts every edge and silhouette where its exact image meets
+another's (`scx_planar::crossings`) and where it enters another body (`intersect_curve`), then
+classifies each span by one ray per face whose image box holds its probe (faces in turn over a kd
+tree); `Uncertain` only on Exhausted, NURBS, torus contours and curves with no exact image typed
+`Pending`; closed faces; hlr → planar. The pin's chord sampling, in-piece sampling, shadow-box
+uncertainty and `cover` are not ported. Curved scenes 10-90x faster, straight-edge grids 1.5-4x
+slower (PL6 per pair).
+
 ## 38. SP2b as built (11-28)
 
 `scx-step` states a face's surface as the quadric it is when the file writes it as something
