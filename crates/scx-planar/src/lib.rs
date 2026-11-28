@@ -9,7 +9,9 @@
 //!   holes clockwise;
 //! - [`Loop`]: a closed loop of a region, with its signed area;
 //! - [`Region::classify`]: a point inside, outside or on the boundary, by winding number;
-//! - [`PlanarError`]: the one cause a profile is refused for.
+//! - [`PlanarError`]: the one cause a profile is refused for;
+//! - [`crossings`]: every meet of two bounded lines or conic arcs, with multiplicity, and
+//!   their shared stretches, certified (research 74 §31).
 //!
 //! Every decision is exact or certified: lines by the exact orientation sign, arcs by
 //! intervals rounded outward over the band of radii an arc's two ends allow. There is no
@@ -17,11 +19,13 @@
 
 mod cert;
 mod contact;
+mod cross;
 pub mod error;
 mod region;
 mod segment;
 mod winding;
 
+pub use cross::{CrossError, Crossings, Curve2, Meet, Overlap, Pending, Which, crossings};
 pub use error::{Degenerate, LoopId, PlanarError, SegmentRef};
 pub use region::{Loop, Place, Region};
 pub use scx_num::frame::Sense;
