@@ -52,7 +52,6 @@
 
 use core::cmp::Ordering;
 use core::fmt;
-use core::ops::{Add, Div, Mul, Sub};
 use std::collections::BinaryHeap;
 
 use scx_curve::arcs::Arcs;
@@ -62,6 +61,7 @@ use scx_num::error::ErrorKind;
 use scx_num::extent1d::Extent1d;
 use scx_num::extent2d::Extent2d;
 use scx_num::interval::{Ivl, round_down, round_up};
+use scx_num::jet::{Jet2, chord, norm, square as sq, vector_bound};
 use scx_num::ring::Ring;
 use scx_num::trig::Trig;
 use scx_num::vector2d::Point2;
@@ -300,123 +300,8 @@ impl fmt::Display for GapError {
 impl std::error::Error for GapError {}
 
 // ---------------------------------------------------------------------------------------
-// Second-order forward differentiation in intervals.
-
-/// A value and its first two derivatives in one variable, each enclosed over an interval
-/// of it: a [`Ring`], so the kinds' `eval` runs in it (the chain rule for free).
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct Jet2 {
-    pub(crate) f: Ivl,
-    pub(crate) d1: Ivl,
-    pub(crate) d2: Ivl,
-}
-
-impl Jet2 {
-    fn new(f: Ivl, d1: Ivl, d2: Ivl) -> Self {
-        Self { f, d1, d2 }
-    }
-
-    /// Encloses both.
-    fn hull(self, o: Self) -> Self {
-        Self::new(self.f.hull(o.f), self.d1.hull(o.d1), self.d2.hull(o.d2))
-    }
-
-    /// A constant enclosed by `f`.
-    fn lift_ivl(f: Ivl) -> Self {
-        Self::new(f, Ivl::from(0.0), Ivl::from(0.0))
-    }
-
-    fn scale(self, k: f64) -> Self {
-        let k = Ivl::from(k);
-        Self::new(self.f * k, self.d1 * k, self.d2 * k)
-    }
-
-    /// `sqrt(self)`: the derivatives are whole where the value may be zero.
-    fn sqrt(self) -> Self {
-        let s = self.f.sqrt();
-        let two_s = Ivl::from(2.0) * s;
-        let d1 = self.d1 / two_s;
-        let d2 = (self.d2 - Ivl::from(2.0) * d1 * d1) / two_s;
-        Self::new(s, d1, d2)
-    }
-}
-
-impl Add for Jet2 {
-    type Output = Self;
-    fn add(self, b: Self) -> Self {
-        Self::new(self.f + b.f, self.d1 + b.d1, self.d2 + b.d2)
-    }
-}
-
-impl Sub for Jet2 {
-    type Output = Self;
-    fn sub(self, b: Self) -> Self {
-        Self::new(self.f - b.f, self.d1 - b.d1, self.d2 - b.d2)
-    }
-}
-
-impl Mul for Jet2 {
-    type Output = Self;
-    fn mul(self, b: Self) -> Self {
-        let two = Ivl::from(2.0);
-        Self::new(
-            self.f * b.f,
-            self.d1 * b.f + self.f * b.d1,
-            self.d2 * b.f + two * self.d1 * b.d1 + self.f * b.d2,
-        )
-    }
-}
-
-impl Div for Jet2 {
-    type Output = Self;
-    fn div(self, b: Self) -> Self {
-        let q = self.f / b.f;
-        let d1 = (self.d1 - q * b.d1) / b.f;
-        let d2 = (self.d2 - Ivl::from(2.0) * d1 * b.d1 - q * b.d2) / b.f;
-        Self::new(q, d1, d2)
-    }
-}
-
-impl Ring for Jet2 {
-    fn lift(d: f64) -> Self {
-        Self::new(Ivl::from(d), Ivl::from(0.0), Ivl::from(0.0))
-    }
-}
-
-/// `[x^2]`, not below zero.
-fn sq(x: Ivl) -> Ivl {
-    let (m, g) = (x.mig(), x.mag());
-    Ivl::new(round_down(m * m).max(0.0), round_up(g * g))
-}
-
-/// `[|v|]` of an interval vector.
-fn norm(v: [Ivl; 3]) -> Ivl {
-    (sq(v[0]) + sq(v[1]) + sq(v[2])).sqrt()
-}
-
-/// `|g|` over a piece by the chord bound and the direct enclosure, the smaller; infinite
-/// when neither is finite.
-fn chord(ends: (Ivl, Ivl), d2: f64, over: Ivl, h: f64) -> f64 {
-    let ends = ends.0.mag().max(ends.1.mag());
-    let bound = round_up(ends + round_up(round_up(h * h) * d2 / 8.0));
-    let direct = over.mag();
-    let b = bound.min(direct);
-    if b.is_nan() { f64::INFINITY } else { b }
-}
-
-/// `|D|` over a piece from the jets of a vector `D` over it and `|D|` at its ends: the chord
-/// bound on `D` itself, the chord bound on `q = |D|^2` (whose second derivative
-/// `2 (|D'|^2 + D . D'')` stays small where `|D|` is near constant though `D` turns), and
-/// the direct enclosure, the smallest.
-fn vector_bound(d: [Jet2; 3], ends: (Ivl, Ivl), h: f64) -> f64 {
-    let natural = norm([d[0].f, d[1].f, d[2].f]);
-    let by_d = chord(ends, norm([d[0].d2, d[1].d2, d[2].d2]).mag(), natural, h);
-    let q = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
-    let end = ends.0.mag().max(ends.1.mag());
-    let qb = round_up(round_up(end * end) + round_up(round_up(h * h) * q.d2.mag() / 8.0));
-    let by_q = round_up(qb.sqrt());
-    if by_q.is_nan() { by_d } else { by_d.min(by_q) }
-}
+// Second-order forward differentiation in intervals: [`Jet2`] and the bounds from it live in
+// `scx_num::jet` (moved there for FT3's fit certificate, 77 §1.1).
 
 fn jets3(p: Point3<Ivl>, d1: Vec3<Ivl>, d2: Vec3<Ivl>) -> [Jet2; 3] {
     [
