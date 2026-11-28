@@ -5,7 +5,7 @@
 use crate::profile::{Seg, reversed};
 
 use super::{
-    Dimension, Kind, Outcome, Part, Recipe, Refusal, Shape, Unsupported, block_at, built, cells,
+    Dimension, Kind, Outcome, Part, Recipe, Refusal, Shape, Topology, block_at, built, cells,
     cylinder_at, frame_at, frame_turned, recipe, sphere_at, torus_at, truth_part,
 };
 
@@ -263,14 +263,26 @@ pub(super) fn recipes(res: f64) -> Vec<Recipe> {
         built(1, 1, 1, cells(0, 0, false, &[(Kind::Torus, 0, 1, 1)])),
         truth,
     ));
-    v.push(recipe(
-        "torus-horn",
-        "new (72 D3)",
-        torus_at([0.0; 3], 3.0, 3.0),
-        vec![],
-        Outcome::Unsupported(Unsupported::HornTorus),
-        None,
-    ));
+    // The horn torus: the tube meets the axis at one point. Built since MK4b (the pole
+    // is a vertex). The patch complex is not stated: a pinched torus is no patch class here.
+    let part = torus_at([0.0; 3], 3.0, 3.0);
+    let truth = truth_part(&part);
+    v.push(
+        recipe(
+            "torus-horn",
+            "new (72 D3, built by MK4b)",
+            part,
+            vec![],
+            Outcome::Built(Topology {
+                solid_regions: 1,
+                shells: 1,
+                genus: 1,
+                cells: None,
+            }),
+            truth,
+        )
+        .pinched(),
+    );
     v.push(recipe(
         "torus-spindle",
         "new (72 §4.2)",

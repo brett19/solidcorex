@@ -210,10 +210,14 @@ fn face_need(surface: &Surface, spec: &TessSpec) -> Result<f64, SurfaceKind> {
         Surface::Sphere(s) => 1.0 / s.radius().mm(),
         Surface::Torus(t) => {
             let (major, minor) = (t.major().mm(), t.minor().mm());
-            if major <= minor {
-                return Err(SurfaceKind::Torus);
+            // A horn torus's tube meets the axis: its parallels' curvature has no bound, but
+            // its boundary is the meridian and the pole's line, so the tube's is the one that
+            // bounds an edge's segments (the face's own triangles are bounded one by one).
+            if t.pole().is_some() {
+                1.0 / minor
+            } else {
+                (1.0 / minor).max(1.0 / (major - minor))
             }
-            (1.0 / minor).max(1.0 / (major - minor))
         }
         other => return Err(SurfaceKind::of(other)),
     };
