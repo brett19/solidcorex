@@ -2830,3 +2830,73 @@ Decisions.
 Work (release, throwaway timer; degree (3, 3), square grids): interpolation of an `n x n` grid is `2n` banded solves of size `n` (`n` along u, `n` along v; `4n` rational), `n` = 20/40/80/160/320/640: 374/361/350/203/193/183 ns per grid point (150 us to 75 ms total), so linear in the grid. Least squares to a net of `n/4`: `n` solves of `n` rows by `n/4` unknowns then `n/4` of `n` by `n/4`; 332/365/408/347/445/706 ns per point; the rise at 640 is the column gather over a 10 MB grid, not the solves (per-row work is `O(p^2)`).
 
 Tests (`fit_tests`, 12; truth is a closed form or the data): a bilinear patch from 4 corners, degrees (1,1), and from 5x4 and 7x9 uneven grids at degrees 1-4 x 1-3, at the data to `1e-12` and at 100 random parameters between to `1e-11`; random polynomial surfaces of degree `(p, q)`, p, q in 1-4, interpolated and least-squared (net sizes with and without interior knots, 3x oversampled) match at 200 parameters to `1e-9` / `1e-8`; circles (the 9-point rational quadratic) at 2, 4 and 7 uneven heights, v-degree 1-3, interpolated and least-squared, equal the closed-form cylinder at 300 parameters to `1e-12`, radius `r` to `1e-12 r`, rows equal the source circles; Held ends of order 1 and 2 on a bicubic reproduce it and its end derivative; the pin's `interpolation_hits_points` (5x4 chord grid, degrees (3,2)), `approximation_of_plane_is_exact` (9x7, net 5x4), `function_interpolation` (scalar grid) and `params_uniform_and_chord`, with its refusals (wrong knot count, net larger than the data); random spline samples interpolate back; typed refusals with unchanged inputs; the non-positive weight; Bernstein forms equal the surface on every span and an inner box of a polynomial and a rational surface (1e-11), the form of a cross product equals the cross of finite-difference partials, a form's `restrict` equals the form over the smaller box, and the interior, outside and empty refusals. Removed: none. The pin's three `huge_*` and `oversized_degrees` tests are not ported (above).
+
+### 13.27 RY1 as built (11-28)
+
+`intersect_curve` (and `curve_on_surface`) now answer a NURBS curve against a plane, cylinder,
+cone, sphere or torus (77 §6.3 RY1). A NURBS curve against a NURBS surface stays
+`SurfaceError::NurbsIntersection`. The new module is `scx-surface/src/intersect/nurbs_curve.rs`,
+and the parent's `Path::of` dispatch gains one arm.
+
+- **Per span.** Each Bézier span, in homogeneous form and in the kind's own frame, is substituted
+  into the implicit form as a `Bounded` Bernstein polynomial with a rounding bound. The degrees are
+  `p` for a plane's height, `2p` for a cylinder, cone or sphere, and `4p` for a torus. The roots
+  are isolated with `bernstein_roots`, and each one is polished by three Newton steps. The turns
+  are the roots of the derivative (`h g' - d h' g` for a rational span). These two isolations make
+  up the two budget units a span charges.
+- **Contacts.** The span's events (Root, Turn, End, and a Probe at each interior knot) go through
+  the parent's `classify`. A hit is therefore typed exactly as an analytic one is, by the same
+  `Tangent` and `Crossing` rules.
+- **Knots.** A knot is one event, never two: neighbouring spans share the knot's point bit for bit.
+  A sign change in the slope across a knot (a kink) is a Turn, so a polyline's V touching a plane
+  is one tangent. A crossing at a knot is one crossing.
+- **Overlaps.** A span whose polynomial is zero within its bound has its overlap proved by the gap
+  certificate (`curve_surface_gap`). A run of such spans is one `Overlap`, clipped by the
+  surface's uv box. A closed curve merges its end hits.
+- **Undecided.** An uncertified root far from the surface, a flat span the gap cannot prove, or a
+  depth-4 sign check that fails returns `SurfaceError::Undecided { t }`, never an empty answer.
+  This variant was copied verbatim from RY2's branch; the coordinator dedupes it on merge.
+- **`curve_on_surface` against a plane.** It first takes the control net's height bound,
+  `max (|z| + ez)/(h - eh)`, which costs one budget unit. A curve that bound proves in the plane is
+  `Proved` without isolation.
+
+Choices:
+
+1. **Undecided rather than empty.** I chose `Undecided` for an uncertified root. For: an empty
+   answer is a wrong miss. Against: a caller now has one more error arm, which bodyq, boolean and
+   hlr map with `NurbsIntersection`.
+2. **Kinks are read from the slopes' end coefficients.** For: this costs nothing extra and matches
+   the truth of a polyline V. Against: a span with a zero end slope relies on the turn isolation
+   instead. That case is tested with the cubic spline at its knot.
+3. **The surface's own uv box clips an overlap run.** This matches the analytic `Overlap` contract.
+
+The hlr fix: `silhouette.rs` `trim`'s face test now reads a foot farther than the face's `near`
+as off the face. RY1 made this code reachable. Before RY1, a NURBS rim made the trim `Undecided`.
+Now the rim splits the generators, and the NURBS patch's inversion clamps a foot to the patch
+edge, which read every point past the edge as `Near`. The test is renamed
+`a_rational_cylinder_is_recognised_and_trimmed_by_its_nurbs_rims` and now checks the truth: of
+the two generators, the one at about 106.7 degrees runs on the face from `z = 0` to `0.5`, and
+the one at about 286.7 degrees lies in the arc's 90 degree gap and is dropped. The old test
+asserted that both were `Undecided::NurbsEdge`, which was a stand-in for not knowing.
+`rays.rs` is untouched; RY3 owns it.
+
+Measured with throwaway counters, counting isolations per call, where an analytic piece counts
+2:
+
+| Case | Spans | Isolations | Analytic path |
+|---|---|---|---|
+| NURBS circle against each of the 5 kinds | 4 | 8 | 4 for the analytic circle, before and after |
+| NURBS line | 1 | 2 | 2 for the analytic line, before and after |
+| 7-span cubic spline | 7 | 14 | — |
+| Quadratic line against a torus (degree 8) | 2 | 4 | — |
+| Cubic grazing a cylinder | 1 | 2 | — |
+
+The work is linear in the spans, and the budget charged equals the isolations. The analytic path
+is unchanged: the same counts on main and on the branch, for the line and circle against all
+five kinds.
+
+Open questions:
+
+- **A NURBS curve against a NURBS surface.** This is deferred, as 77 §6.3 says.
+- **Degree-4p spans of high-degree curves.** These have not been measured for root-isolation
+  depth. `RootLimits::DEFAULT` is used.
