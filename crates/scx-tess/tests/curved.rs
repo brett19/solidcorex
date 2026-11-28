@@ -124,6 +124,16 @@ fn primitives(frame: &Frame, tag: &str) -> Vec<Case> {
             4.0 * PI * PI * big * small,
         ),
     );
+    // The horn torus (MK4b): the tube meets the axis at a pole.
+    let horn = 6.0;
+    add(
+        "horn torus",
+        torus(frame, mm(horn), mm(horn), &d).unwrap().body,
+        (
+            2.0 * PI * PI * horn * horn * horn,
+            4.0 * PI * PI * horn * horn,
+        ),
+    );
     out
 }
 

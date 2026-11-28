@@ -198,7 +198,6 @@ fn check(name: &str) {
             let want = match u {
                 Unsupported::NonManifold { .. } => "non_manifold",
                 Unsupported::SsiPair { .. } => "ssi_pair",
-                Unsupported::HornTorus => panic!("{name}: not a case here"),
             };
             assert_eq!(e.name(), want, "{name}: {e:?}");
         }

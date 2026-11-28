@@ -157,14 +157,6 @@ pub enum Unsupported {
     },
     /// A face on a NURBS surface: its iso-curves are not extracted exactly yet.
     NurbsFace,
-    /// A horn torus: the radii are equal within the resolution, so the tube meets the axis
-    /// at one point, a singular point that the pole rules do not cover (72 D3).
-    HornTorus {
-        /// The major radius (mm).
-        major: f64,
-        /// The minor radius (mm).
-        minor: f64,
-    },
     /// A revolve's arc whose circle crosses the axis outside the arc: its surface is a
     /// spindle torus, not made yet.
     SpindleTorus {
@@ -240,7 +232,6 @@ impl MakeError {
             Self::Refused(Refusal::SelfIntersecting { .. }) => "self_intersecting",
             Self::Refused(Refusal::UvBox { .. }) => "uv_box",
             Self::Unsupported(Unsupported::NurbsFace) => "nurbs_face",
-            Self::Unsupported(Unsupported::HornTorus { .. }) => "horn_torus",
             Self::Refused(Refusal::CrossesAxis { .. }) => "crosses_axis",
             Self::Refused(Refusal::Turn { .. }) => "turn",
             Self::Unsupported(Unsupported::SpindleTorus { .. }) => "spindle_torus",
@@ -309,10 +300,6 @@ impl fmt::Display for MakeError {
             Self::Unsupported(Unsupported::NurbsFace) => {
                 write!(f, "a face on a NURBS surface is not made yet")
             }
-            Self::Unsupported(Unsupported::HornTorus { major, minor }) => write!(
-                f,
-                "the horn torus (major {major} mm, minor {minor} mm) is not made yet: its tube meets the axis"
-            ),
             Self::Refused(Refusal::CrossesAxis { at }) => {
                 write!(f, "{at} crosses the axis of the revolve")
             }

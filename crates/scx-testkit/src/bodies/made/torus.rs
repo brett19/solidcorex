@@ -2,7 +2,7 @@
 //! The torus: one face about the frame's z axis, its two seams the outer equator and the
 //! meridian through the frame's x axis, meeting at one vertex.
 
-use std::f64::consts::TAU;
+use std::f64::consts::{PI, TAU};
 
 use scx_brep::{Document, FaceId};
 use scx_curve::{Circle, Curve};
@@ -13,7 +13,7 @@ use scx_surface::{Surface, Torus};
 
 use super::Made;
 use super::assembly::Assembly;
-use super::error::{self, Defect, Dimension, MakeError, Refusal, Unsupported};
+use super::error::{self, Defect, Dimension, MakeError, Refusal};
 
 /// The face of a [`torus`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,8 +31,8 @@ pub struct TorusFaces {
 ///
 /// - [`Refusal::Size`] for a radius that is not finite and above the document's
 ///   resolution;
-/// - [`Unsupported::HornTorus`] when the radii are equal within the resolution (72 D3);
-/// - [`Refusal::SelfIntersecting`] when `minor` exceeds `major` by more (a spindle torus);
+/// - [`Refusal::SelfIntersecting`] when `minor` exceeds `major` by more than the
+///   resolution (a spindle torus);
 /// - [`MakeError::Defect`] if the body the constructor builds is refused by `finish`;
 ///   [`MakeError::Full`] if a table runs out of ids.
 pub fn torus(
@@ -44,18 +44,15 @@ pub fn torus(
     let floor = doc.resolution().zone();
     let big = error::size(Dimension::Major, major, floor)?;
     let small = error::size(Dimension::Minor, minor, floor)?;
-    // Within the resolution of each other the radii are one: the tube meets the axis.
-    if (small - big).abs() <= floor.mm() {
-        return Err(MakeError::Unsupported(Unsupported::HornTorus {
-            major: big,
-            minor: small,
-        }));
-    }
-    if small > big {
+    if small > big + floor.mm() {
         return Err(MakeError::Refused(Refusal::SelfIntersecting {
             major: big,
             minor: small,
         }));
+    }
+    // Within the resolution of each other the radii are one: the tube meets the axis.
+    if (small - big).abs() <= floor.mm() {
+        return horn(frame, 0.5 * (big + small), doc);
     }
     let surface = Surface::Torus(Torus::new(
         *frame,
@@ -84,6 +81,46 @@ pub fn torus(
             (equator, Sense::Forward),
             (meridian, Sense::Forward),
             (equator, Sense::Reversed),
+            (meridian, Sense::Reversed),
+        ]],
+    )?;
+    Ok(Made {
+        body: asm.finish()?,
+        faces: TorusFaces { face },
+    })
+}
+
+/// The horn torus of `radius`: its tube meets the axis at the frame's origin. Its one vertex
+/// is that pole, so the face covers `v` over `[1/2, 3/2]` and its loop runs the pole's
+/// collapsed edge, the meridian (a circle through the pole, closed there), the collapsed
+/// edge back and the meridian down: 1 vertex, 2 edges, 1 face.
+fn horn(frame: &Frame, radius: f64, doc: &Document) -> Result<Made<TorusFaces>, MakeError> {
+    let surface = Surface::Torus(Torus::horn(
+        *frame,
+        Length::from_mm(radius),
+        Sense::Forward,
+    )?);
+    let mut asm = Assembly::new(doc)?;
+    let pole = asm.vertex(frame.origin())?;
+    // The meridian about the tube's centre on the x axis, from the pole (angle pi) once
+    // round: as the ring torus's, its x is the frame's and its z is -y.
+    let (x, y) = (*frame.x(), *frame.y());
+    let plane = Frame::new(frame.origin() + x * radius, -y, x)
+        .ok_or(MakeError::Defect(Defect::PlaneFrame))?;
+    let meridian = asm.edge(
+        Curve::Circle(Circle::new(plane, Length::from_mm(radius), Sense::Forward)?),
+        Extent1d::new(PI, PI + TAU).ok_or(MakeError::Defect(Defect::Interval))?,
+        [pole, pole],
+    )?;
+    let collapsed = asm.collapsed(pole)?;
+    // Counter-clockwise over one period each way: along the pole (v = 1/2), up the
+    // meridian a period on in u, back along the pole (v = 3/2), down the meridian.
+    let face = asm.face(
+        surface,
+        &[vec![
+            (collapsed, Sense::Forward),
+            (meridian, Sense::Forward),
+            (collapsed, Sense::Reversed),
             (meridian, Sense::Reversed),
         ]],
     )?;

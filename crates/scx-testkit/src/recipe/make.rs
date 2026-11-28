@@ -5,8 +5,8 @@
 use crate::profile::{Seg, reversed};
 
 use super::{
-    Dimension, Kind, Outcome, Part, Recipe, Refusal, Shape, Unsupported, block_at, built, cells,
-    cylinder_at, frame_at, frame_turned, recipe, sphere_at, torus_at, truth_part,
+    Dimension, Kind, Outcome, Part, Recipe, Refusal, Shape, Topology, Unsupported, block_at, built,
+    cells, cylinder_at, frame_at, frame_turned, recipe, sphere_at, torus_at, truth_part,
 };
 
 fn line(a: [f64; 2], b: [f64; 2]) -> Seg {
@@ -263,13 +263,22 @@ pub(super) fn recipes(res: f64) -> Vec<Recipe> {
         built(1, 1, 1, cells(0, 0, false, &[(Kind::Torus, 0, 1, 1)])),
         truth,
     ));
+    // The horn torus: the tube meets the axis at one point. Built since MK4b (the pole
+    // is a vertex). The patch complex is not stated: a pinched torus is no patch class here.
+    let part = torus_at([0.0; 3], 3.0, 3.0);
+    let truth = truth_part(&part);
     v.push(recipe(
         "torus-horn",
-        "new (72 D3)",
-        torus_at([0.0; 3], 3.0, 3.0),
+        "new (72 D3, built by MK4b)",
+        part,
         vec![],
-        Outcome::Unsupported(Unsupported::HornTorus),
-        None,
+        Outcome::Built(Topology {
+            solid_regions: 1,
+            shells: 1,
+            genus: 0,
+            cells: None,
+        }),
+        truth,
     ));
     v.push(recipe(
         "torus-spindle",
