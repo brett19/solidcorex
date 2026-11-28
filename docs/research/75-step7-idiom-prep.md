@@ -1323,7 +1323,49 @@ MIN_HEIGHT (#17085)?**
 
 ## 13. As built
 
-### 13.1 BO18 as built (11-28)
+### 13.1 RP0 as built (11-28)
+
+**What was run.** `crates/scx-difftest/examples/heal_count.rs` (`cargo run --release -p
+scx-difftest --example heal_count`, deterministic, no counters in any library). Each record is
+built twice through the pin's `solidcore-convert` (`to_kernel_body`): trusted (no healer) and
+untrusted (`heal_made` runs). Both bodies go through the pin's `check_brep` at level 2
+(pointers, then `AssertValid`), failures classed by the failing report's name. A record is
+*altered* when the healed body differs in entity counts, vertex or edge tolerances, or the
+record it converts back to. Records: every distinct body of the rig corpus
+(`kernel_cases`, 1,484 bodies, 1,248 distinct; all of them are marked trusted there, so
+none reaches the healer in the pin: each is healed here as if it were untrusted) and the pin's
+STEP fixtures read by `solidcore-step` (4 solids). The NIST STEP files are not on the build
+machines (the fetch script needs `unzip`); `SCX_HEAL_STEP_DIR` runs any directory of them.
+
+| | rig corpus | STEP fixtures |
+|---|---|---|
+| distinct records | 1,248 | 4 |
+| refused to build, with or without the healer | 0 | 0 |
+| failing the check before the healer | 1 | 0 |
+| of those, passing after the healer | **0** | 0 |
+| altered by the healer | 177 | 3 |
+| of which valid before | 176 | 3 |
+| altered, tolerances only | 131 | 3 |
+| altered, entity counts (topology) | 31 | 0 |
+| altered, geometry or trims | 15 | 0 |
+| passing before, failing after | **15** | 0 |
+
+The one record failing before (three reports: Face has Coincident Edges, Coincident
+Vertices, partially Coincident Edges) is not fixed: two of the three reports remain. The 15
+that go from passing to failing all fail `Tolerance` after healing (the healed
+bodies carry a tolerance the check refuses; e.g. `booleans/5322-cut-with-a-5000-mm-tool.json:b3`,
+`fillets/16019-chamfer-1-on-the-top-rim-of-a-cylinder-r125.json:b1`).
+
+**Recommendation for Q7: do not port the healer.** On this corpus it repairs no failing
+record (0 of 1) and makes 15 valid records fail the check, while widening tolerances on 131
+and changing the topology of 31 valid ones. The class worth a certified item: none shown.
+For (keeping the question open): the corpus holds no record that reaches the healer in the pin
+(all trusted) and only 4 STEP solids, so real untrusted input is not sampled; the NIST files
+should be run once through `SCX_HEAL_STEP_DIR` before the row is closed, and a Q7 reversal
+needs a class of failing records with a count. Against porting, in numbers: 15 regressions,
+0 fixes.
+
+### 13.2 BO18 as built (11-28)
 
 `scx_boolean::intersect(a, b, cx) -> Result<Done<NoItems>, BooleanError>` runs stages 1-4 of `boolean` (`interfere`, `face_face`) and stops; `crates/scx-boolean/src/intersect.rs`. The result is a `Draft::new()` body of no faces:
 
@@ -1339,4 +1381,3 @@ Decisions. Fresh draft against `a.edit()` with everything removed: for, the resu
 Truths (tests/intersect.rs, 12 tests): disjoint cubes, no shells; overlapping cubes, six lines of 0.5 and six vertices; cylinder through a plate, two circles of 2 pi in two shells; cylinder on a block side, arcs pi, pi and rulings 1, 1 in one shell; cylinder with a square plane, a unit circle; a tilted plate, two ellipses of semi-axes 1 and sqrt 2 (perimeter by quadrature); two unit spheres, circle of length sqrt 3 pi (two arcs); plane through a sphere's centre, 2 pi; tangent plane, one lone vertex at the closed-form point; plane through a torus's mid plane, 20 pi (the inner and outer circles of R = 5, r = 1.5); operand swap and repeat agree; shared cube face, four unit edges once each. The solid `contract` does not apply to a wire body; `finish` checks it.
 
 Open: no pin test of `intersect_faces_read_only` (9) was ported (it needs the pin's face-level API); the NURBS and general-SSI pairs stay `Unsupported(SsiPair)` as in `boolean` (BO22/BO23).
-
