@@ -509,6 +509,7 @@ dependencies = [
  "scx-num",
  "scx-nurbs",
  "scx-nurbs-surface",
+ "scx-planar",
  "scx-ssi",
  "scx-surface",
  "scx-testkit",
@@ -549,10 +550,12 @@ name = "scx-check"
 version = "0.1.0"
 dependencies = [
  "scx-brep",
+ "scx-curve",
  "scx-mass",
  "scx-num",
  "scx-nurbs",
  "scx-planar",
+ "scx-surface",
  "scx-testkit",
 ]
 
@@ -590,6 +593,21 @@ dependencies = [
  "scx-testkit",
  "solidcore",
  "solidcore-record",
+]
+
+[[package]]
+name = "scx-hlr"
+version = "0.1.0"
+dependencies = [
+ "scx-bodyq",
+ "scx-brep",
+ "scx-curve",
+ "scx-num",
+ "scx-nurbs",
+ "scx-nurbs-surface",
+ "scx-planar",
+ "scx-surface",
+ "scx-testkit",
 ]
 
 [[package]]
