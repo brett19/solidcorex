@@ -21,7 +21,7 @@ use scx_testkit::bodies::made::torus;
 
 use super::face_face::{X, Z, ball, cyl};
 use super::{cuboid, pt};
-use crate::{BooleanError, BooleanOp, BooleanUnsupported, NoItems, boolean};
+use crate::{BooleanError, BooleanOp, NoItems, boolean};
 
 pub(super) fn op(
     a: &Brep,
@@ -562,20 +562,14 @@ fn a_boolean_is_deterministic() {
 }
 
 #[test]
-fn non_manifold_results_are_unsupported() {
-    // A ball on a cube's top face: the union meets itself at one point inside the face
-    // (D5). Two cubes sharing an edge are built (BO7, `contacts`).
+fn a_ball_on_a_cube_touches_it_at_a_point() {
+    // A ball on a cube's top face: the union meets itself at one point inside the face.
+    // D5 had it `NonManifold`; BO25 builds it, a vertex of a point loop in each face, two
+    // regions and the closed-form volume (`contacts` has the rest).
     let doc = Document::default();
     let a = cuboid([0.0; 3], [1.0; 3], doc);
-    {
-        let b = ball([0.5, 0.5, 1.5], 0.5, doc);
-        let e = op(&a, &b, UNION, doc).unwrap_err();
-        assert!(
-            matches!(
-                e,
-                BooleanError::Unsupported(BooleanUnsupported::NonManifold { .. })
-            ),
-            "{e:?}"
-        );
-    }
+    let b = ball([0.5, 0.5, 1.5], 0.5, doc);
+    let body = checked(&a, &b, UNION, doc).body;
+    near(volume(&body), 1.0 + PI / 6.0, 1e-9);
+    assert_eq!(body.regions().filter(|r| r.is_solid()).count(), 2);
 }

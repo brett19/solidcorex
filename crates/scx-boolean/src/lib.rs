@@ -45,6 +45,7 @@
 
 mod boolean;
 mod build;
+mod cells;
 mod classify;
 mod contact;
 mod error;
@@ -55,7 +56,8 @@ mod pairs;
 mod pinch;
 mod points;
 
-pub use boolean::{BooleanOp, NoItems, boolean};
+pub use boolean::{BooleanOp, NoItems, boolean, combine};
+pub use cells::{Faces, Membership, Rule};
 pub use error::{BooleanDefect, BooleanError, BooleanRefusal, BooleanUnsupported};
 
 #[cfg(test)]
