@@ -45,16 +45,32 @@ const UNIT: u64 = 1;
 /// joined and is named in [`StitchReport::left`]: nothing is guessed. Sheets that are
 /// joined become one shell.
 ///
+/// **Orientation**, for [`Want::Solid`]: every curve edge must then have two fins. Each
+/// connected set of faces is labelled by parity across its edges (opposite uses keep the
+/// material on one side), its material put on the side MA4's certified volume sign says is
+/// inside, and a closed set inside another (by point classification) made a cavity of it:
+/// a void region whose outer side is a shell of the container's solid. No surface is
+/// flipped: a face's sides record says which side the material is on. With
+/// [`Want::Sheets`] the result keeps the sheets' sides.
+///
 /// # Errors
 ///
 /// - [`StitchRefusal::OtherDocument`](crate::StitchRefusal::OtherDocument) for a sheet
 ///   finished under another resolution than `cx.doc`'s.
 /// - [`StitchRefusal::VerticesWithinCoincidence`](crate::StitchRefusal::VerticesWithinCoincidence)
 ///   for two vertices of one sheet within coincidence of each other.
+/// - [`StitchRefusal::RegionsMeet`](crate::StitchRefusal::RegionsMeet) for a join of faces
+///   in different regions; [`StitchRefusal::NotSolid`](crate::StitchRefusal::NotSolid)
+///   for [`Want::Solid`] when an edge is left open, a wire or lone vertex remains, or a
+///   closed set of faces is one-sided.
 /// - [`StitchUnsupported::Chain`] for a chain anchoring does not settle;
 ///   [`StitchUnsupported::Edges`] for a cut or join this method cannot make yet (its
-///   [`EdgePending`](crate::EdgePending) says which); [`StitchUnsupported::Solid`] for
-///   [`Want::Solid`]; [`StitchUnsupported::TooLarge`] past the ids.
+///   [`EdgePending`](crate::EdgePending) says which); for [`Want::Solid`],
+///   [`StitchUnsupported::SolidOperand`] for a sheet that is already a solid,
+///   [`StitchUnsupported::Undecided`] for an open edge the edge stage left undecided,
+///   [`StitchUnsupported::Sign`] and [`StitchUnsupported::Nesting`] where the volume sign or
+///   the point classification cannot answer yet; [`StitchUnsupported::TooLarge`] past the
+///   ids.
 /// - [`StitchError::Exhausted`] when `cx`'s budget runs out, [`StitchError::Cancelled`]
 ///   when `cx.stop` is set, and [`StitchError::Defect`] for the method's own failure.
 pub fn stitch(sheets: &[&Brep], want: Want, cx: &mut Cx<'_>) -> Result<Stitched, StitchError> {
@@ -69,7 +85,18 @@ pub fn stitch(sheets: &[&Brep], want: Want, cx: &mut Cx<'_>) -> Result<Stitched,
         }
     }
     if want == Want::Solid {
-        return Err(StitchError::Unsupported(StitchUnsupported::Solid));
+        for (i, s) in (0..n).zip(sheets) {
+            let solid = s.regions().any(|r| !r.is_outside())
+                || s.faces().any(|f| {
+                    let [front, back] = f.record().sides;
+                    front != back
+                });
+            if solid {
+                return Err(StitchError::Unsupported(StitchUnsupported::SolidOperand {
+                    operand: Operand::from_raw(i),
+                }));
+            }
+        }
     }
     let mut budget = cx.budget();
     let Some(first) = sheets.first() else {
@@ -114,6 +141,8 @@ pub fn stitch(sheets: &[&Brep], want: Want, cx: &mut Cx<'_>) -> Result<Stitched,
         at: vec![None; items.len()],
         group_at: vec![None; groups.len()],
         edge_at: vec![BTreeMap::new(); sheets.len()],
+        edge_name: BTreeMap::new(),
+        face_name: BTreeMap::new(),
     };
     b.vertices()?;
     let (mut warnings, mut raised, identified) = b.accuracy(zone, &mut budget, cx.stop)?;
@@ -126,10 +155,12 @@ pub fn stitch(sheets: &[&Brep], want: Want, cx: &mut Cx<'_>) -> Result<Stitched,
         &mut warnings,
         &mut raised,
     )?;
-    let (body, changes) = b
-        .draft
-        .finish(cx.doc)
-        .map_err(|u| StitchError::Defect(StitchDefect::Finish(Box::new(u.cause))))?;
+    let (body, changes) = match want {
+        Want::Solid => b.solid(&edges.left, *cx.doc, &mut budget, cx.stop)?,
+        _ => std::mem::replace(&mut b.draft, Draft::new())
+            .finish(cx.doc)
+            .map_err(|u| StitchError::Defect(StitchDefect::Finish(Box::new(u.cause))))?,
+    };
     Ok(Stitched {
         done: Done::new(
             body,
@@ -189,6 +220,10 @@ pub(crate) struct Build<'a> {
     group_at: Vec<Option<VertexId>>,
     /// Each sheet's edges' draft edges, once copied (sheet 0's keep their ids).
     edge_at: Vec<BTreeMap<EdgeId, EdgeId>>,
+    /// Each draft curve edge's sheet edge, once cut (a piece names the edge it came from).
+    pub(crate) edge_name: BTreeMap<EdgeId, (Operand, EdgeId)>,
+    /// Each copied face's sheet face; sheet 0's faces keep their ids and are not listed.
+    pub(crate) face_name: BTreeMap<FaceId, (Operand, FaceId)>,
 }
 
 /// What [`Build::accuracy`] gives: the warnings, the raises and the report's entries.
@@ -539,6 +574,7 @@ impl Build<'_> {
                     .derive(x, Origin::Operand(operand, Entity::Face(f.id())))
                     .map_err(draft_defect)?;
                 faces.insert(f.id(), x);
+                self.face_name.insert(x, (operand, f.id()));
             }
             // `add_face` appends fins in face order; an edge of three or more fins takes
             // its sheet's radial order back.

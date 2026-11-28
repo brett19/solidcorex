@@ -53,7 +53,7 @@ use scx_p21::part42::read::Reader;
 use scx_surface::{Aim, Bracket, GapError, Surface, curve_surface_gap, vertex_curve_gap};
 
 use crate::geom::{self, NotMade};
-use crate::import::{BuildError, Built, GeomCause, Import, Note, Unbuilt, Waits};
+use crate::import::{BuildError, Built, GeomCause, Import, Note, Recognition, Unbuilt, Waits};
 use crate::skeleton::{boolean, get, reference, refs, wrong};
 use crate::{
     GapKind, ImportedBody, Raise, ReadOptions, ShellRole, SolidOrSheet, StepError, Uncertainty,
@@ -120,6 +120,7 @@ struct Builder<'a> {
     edges: Vec<EdgeIn>,
     edge_at: BTreeMap<u64, (EdgeId, bool)>,
     faces: Vec<FaceIn>,
+    recognized: Vec<Recognition>,
     notes: Vec<Note>,
     raised: Vec<Raise>,
 }
@@ -144,12 +145,24 @@ pub fn build(ex: &Exchange, body: &ImportedBody, cx: &mut Cx<'_>) -> Result<Buil
         edges: Vec::new(),
         edge_at: BTreeMap::new(),
         faces: Vec::new(),
+        recognized: Vec::new(),
         notes: Vec::new(),
         raised: Vec::new(),
     };
+    // A surface may be stated as a quadric within the body's allowance (SP2b).
+    let accuracy = Accuracy::new(Length::from_mm(b.allowance())).ok_or(BuildError::Pending {
+        entity: body.entity,
+        waits: Waits::OtherSurface,
+    })?;
+    let mut recognition_budget = cx.budget();
     for (k, shell) in body.shells.iter().enumerate() {
         for plan in &shell.faces {
-            let f = b.face(plan.entity, plan.surface, plan.same_sense, k)?;
+            let mut rec = geom::Recognize {
+                accuracy,
+                budget: &mut recognition_budget,
+                stop: cx.stop,
+            };
+            let f = b.face(plan.entity, plan.surface, plan.same_sense, k, &mut rec)?;
             b.faces.push(f);
         }
     }
@@ -166,6 +179,7 @@ pub fn build(ex: &Exchange, body: &ImportedBody, cx: &mut Cx<'_>) -> Result<Buil
         name: body.name.clone(),
         kind: body.kind,
         body: body_out,
+        recognized: b.recognized,
         raised: b.raised,
         notes: b.notes,
         findings,
@@ -307,7 +321,14 @@ impl Builder<'_> {
     }
 
     /// A face's surface and loops, in the file's senses about the face's normal.
-    fn face(&mut self, id: u64, surface: u64, same_sense: bool, shell: usize) -> Result<FaceIn> {
+    fn face(
+        &mut self,
+        id: u64,
+        surface: u64,
+        same_sense: bool,
+        shell: usize,
+        rec: &mut geom::Recognize<'_>,
+    ) -> Result<FaceIn> {
         let e = get(self.ex, id)?;
         let p = e
             .record("ADVANCED_FACE")
@@ -315,7 +336,19 @@ impl Builder<'_> {
             .ok_or_else(|| wrong(e, id, "a face with a surface"))?;
         let bounds = refs(id, p, 1)?;
         let read = self.reader.surface(surface).map_err(|x| x.within(id))?;
-        let surf = geom::surface(&read).map_err(|n| made(surface, n))?;
+        let (surf, deviation) = geom::surface(&read, rec).map_err(|n| made(surface, n))?;
+        if let Some(deviation) = deviation {
+            self.notes.push(Note::Recognized {
+                face: id,
+                deviation: deviation.mm(),
+            });
+            self.recognized.push(Recognition {
+                face: id,
+                surface,
+                built_on: surf.clone(),
+                deviation,
+            });
+        }
         let mut outer = None;
         let mut loops = Vec::with_capacity(bounds.len());
         for bid in bounds {
@@ -375,6 +408,16 @@ impl Builder<'_> {
             loops,
             id: None,
         })
+    }
+
+    /// The accuracy a gap, or a surface written as another kind, is allowed without a raise:
+    /// the file's stated uncertainty, never below the document's zone.
+    fn allowance(&self) -> f64 {
+        let zone = self.doc.resolution().zone().mm();
+        match self.body.context.uncertainty {
+            Uncertainty::Stated(u) => u.max(zone),
+            Uncertainty::Absent => zone,
+        }
     }
 
     /// The gap's upper bound, or `None` within the zone.
@@ -443,10 +486,7 @@ impl Builder<'_> {
     /// Each edge against each face that uses it, each vertex against each edge end.
     fn gaps(&mut self, budget: &mut Budget, stop: &Stop) -> Result<()> {
         let zone = self.doc.resolution().zone().mm();
-        let allowance = match self.body.context.uncertainty {
-            Uncertainty::Stated(u) => u.max(zone),
-            Uncertainty::Absent => zone,
-        };
+        let allowance = self.allowance();
         let mut on: BTreeMap<EdgeId, Vec<usize>> = BTreeMap::new();
         for (fi, f) in self.faces.iter().enumerate() {
             for &(e, _) in f.loops.iter().flatten() {

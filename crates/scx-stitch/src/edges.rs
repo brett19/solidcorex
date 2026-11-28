@@ -16,7 +16,7 @@
 use core::cmp::{Ordering, Reverse};
 use std::collections::{BTreeMap, BinaryHeap};
 
-use scx_algo::box_tree::BoxTree;
+use scx_algo::box_tree::{BoxTree, Overlaps};
 use scx_brep::op::{Raise, Warning, WarningKind};
 use scx_brep::{
     Document, EdgeGeom, EdgeId, EdgeShape, Entity, FaceId, Operand, Origin, PcurveWriteError,
@@ -32,7 +32,9 @@ use scx_num::vector3d::Point3;
 use scx_nurbs::Approach;
 use scx_surface::{Aim, Bracket, GapError, Short, curve_curve_gap, point_curve_gap};
 
-use crate::error::{EdgePending, StitchDefect, StitchError, StitchUnsupported, too_large};
+use crate::error::{
+    EdgePending, StitchDefect, StitchError, StitchRefusal, StitchUnsupported, too_large,
+};
 use crate::report::{Joined, Left, Split};
 use crate::stitch::{Build, measured};
 
@@ -217,6 +219,12 @@ impl Build<'_> {
         let nodes = self.nodes(zone)?;
         let (cuts, mut left) = self.cuts(&edges, &nodes, budget, stop)?;
         let (pieces, split) = self.cut(&edges, &cuts, zone, warnings, raised)?;
+        for p in &pieces {
+            let e = edges
+                .get(p.edge)
+                .ok_or(StitchError::Defect(StitchDefect::Draft))?;
+            self.edge_name.insert(p.at, (e.operand(), e.id));
+        }
         let (joined, more) = self.join(&edges, &pieces, doc, budget, stop, warnings)?;
         left.extend(more);
         left.sort_by(|a, b| {
@@ -282,6 +290,8 @@ impl Build<'_> {
         let tree = BoxTree::new(&boxes);
         let mut near: Vec<Vec<VertexId>> = edges.iter().map(|_| Vec::new()).collect();
         let mut tested = 0usize;
+        // One space for every query: the walk's buffers are allocated once, not per vertex.
+        let mut space = Overlaps::new();
         for (&v, node) in nodes {
             stop.check()?;
             let q = Extent3d::from_point(node.point).ok_or_else(|| {
@@ -292,7 +302,7 @@ impl Build<'_> {
             })?;
             // An edge's box holds every point within its reach; a vertex reaching farther
             // grows the query by its own.
-            for k in tree.overlapping(&q, node.reach) {
+            for &k in tree.overlapping_in(&q, node.reach, &mut space) {
                 budget.charge(UNIT)?;
                 let (Some(e), Some(slot)) = (edges.get(k), near.get_mut(k)) else {
                     continue;
@@ -835,7 +845,11 @@ impl Build<'_> {
         };
         let ((s0, r0), (s1, r1)) = (shell(&self.draft, f0.face)?, shell(&self.draft, f1.face)?);
         if r0 != r1 {
-            return Err(ek.pending(EdgePending::Region));
+            // One shell cannot lie in two regions: the faces bound different spaces, which
+            // only a face inside a solid operand gives.
+            return Err(StitchError::Refused(StitchRefusal::RegionsMeet {
+                edges: [(ek.operand(), ek.id), (eg.operand(), eg.id)],
+            }));
         }
         let reversed = if pk.ends[0] == pk.ends[1] {
             let dir = |e: &SheetEdge<'_>, p: &Piece| {

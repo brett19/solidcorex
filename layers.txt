@@ -18,7 +18,9 @@ scx-check
 scx-boolean
 scx-stitch
 scx-hlr
+scx-deform
 scx-make
+scx-repair
 scx-step
 
 # Crates outside the order. `difftest` may depend on any library (and on the pinned

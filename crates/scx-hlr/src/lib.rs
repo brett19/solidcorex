@@ -12,15 +12,22 @@
 //!
 //! Tolerances are named in one module ([`PARALLEL`], [`ROUNDING`] and a face's crossing
 //! tolerance); none of them decides what is kept, only where a curve may be split. Work is metered by the
-//! context's budget, stopped by its flag and traced by its sink. Visibility (which pieces of
-//! which curves are seen) is research 74's HL2.
+//! context's budget, stopped by its flag and traced by its sink.
+//!
+//! - [`Scene::hidden_lines`] (research 74 HL2): every drawn edge and silhouette cut at all
+//!   its image crossings ([`scx_planar::crossings`]) and its piercings of other bodies'
+//!   faces, each span classified once as [`Visibility::Visible`] or
+//!   [`Visibility::Hidden`] by its occluding face, [`Visibility::Uncertain`] only when the
+//!   budget ran out, and [`Visibility::Pending`] where step 5 is waited on.
 
 mod contour;
 mod error;
+mod project;
 mod scene;
 mod silhouette;
 mod tolerance;
 mod view;
+mod visibility;
 
 pub use contour::{Branch, TorusContour};
 pub use error::{BadView, HlrError};
@@ -31,3 +38,4 @@ pub use silhouette::{
 };
 pub use tolerance::{PARALLEL, ROUNDING};
 pub use view::View;
+pub use visibility::{Drawing, DrawnLine, Pending, Source, Span, Visibility};

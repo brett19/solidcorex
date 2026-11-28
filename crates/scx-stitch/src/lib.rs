@@ -1,5 +1,5 @@
 // Written for solidcorex. Apache-2.0.
-//! Stitching sheets into one body (74 §4.3, ST1 and ST2).
+//! Stitching sheets into one body (74 §4.3, ST1 to ST3).
 //!
 //! [`stitch`] gathers finished sheets into one body: sheet 0 edited in place, every other
 //! sheet copied in, and the vertices of different sheets that lie within coincidence
@@ -12,16 +12,26 @@
 //! `scx_surface`, SU6). A pair no budget share decides, or an edge with two possible
 //! partners, is left open in [`StitchReport::left`] ([`Left`]), never guessed. A join or cut
 //! that is proved but cannot be made yet answers [`StitchUnsupported::Edges`] with its
-//! [`EdgePending`]; closing into a solid answers [`StitchUnsupported::Solid`].
+//! [`EdgePending`].
+//!
+//! For [`Want::Solid`] the stitched sheets are then oriented (ST3): each closed, connected
+//! set of faces is labelled by parity across its edges, its material side read from MA4's
+//! certified volume sign, and closed sheets inside others made cavities by point
+//! classification (analytic faces; NURBS waits on step 5's ray). An open edge is refused
+//! ([`StitchRefusal::NotSolid`]), or unsupported when the edge stage left it undecided.
 //! Everything is deterministic: the same sheets give the same bits, and the merged points
 //! and kept curves do not depend on the sheets' order.
 
 mod edges;
 mod error;
+mod orient;
 mod points;
 mod report;
 mod stitch;
 
-pub use error::{EdgePending, StitchDefect, StitchError, StitchRefusal, StitchUnsupported};
+pub use error::{
+    EdgePending, NestingPending, SignPending, SolidFault, StitchDefect, StitchError, StitchRefusal,
+    StitchUnsupported,
+};
 pub use report::{Identified, Joined, Left, NoItems, Split, StitchReport, Stitched, Want};
 pub use stitch::stitch;

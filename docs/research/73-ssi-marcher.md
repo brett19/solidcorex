@@ -1876,3 +1876,203 @@ Inversion over the 16 test pcurves, 2,000 queries each (one unit = one evaluatio
    A first-order prune is likely to cut that 2 to 3 times: drop pieces whose ends' `g` signs
    and a `g'` enclosure prove a single foot. It waits for a caller that needs it.
 3. **A `Budget` through `pcurve_of`** (§21.2 item 3), if stage 5 gains one.
+
+## 18. SM5 as built (11-27)
+
+Branch `sm5`. The general path now proves, per piece pair that `Candidates` could not prove
+apart, that the pair holds no closed loop, or it finds the points a loop must surround, and it
+seeds every curve on the pieces' edges. `FRONT` is gone from `intersect`: a pair is settled by a
+plan, by halving to proved apartness, or refused with a typed cause. Where a side has an implicit
+form the field path (SM6a, §19) still runs first and answers; the plans answer the rest (NURBS
+against NURBS), and `Survey` gives plans for any pair.
+
+### 18.1 What exists
+
+- `general/patch.rs` (new): a piece's **home** formula (the Bézier cell that holds its lower
+  corner, continued past it) and certified enclosures over any uv box: `Jet` (point and partials
+  to order 2) through `Jet2`, a forward-mode ring over intervals evaluated by each analytic kind's
+  own `eval`, or `partials_over_piece::<2>` for NURBS; `Jet1` (order 1) through `Grad`, or
+  `partials_over_piece::<1>`, for the seed solves.
+- `general/solve.rs` (new): every root of a square interval system in a box, each proved unique
+  by Krawczyk, depth first and lower half first; a box at the resolution neither dropped nor
+  proved is `Unresolved` where it lies. One unit of the caller's budget per box, the stop polled
+  after each.
+- `general/loops.rs` (new): `Survey` (the candidates plus the two surfaces) and `Plan` per pair:
+  - `Loops::Monotone { along }`: Sederberg-Meyers, `P . (N_A x N_B)` of one sign over the
+    boxes, `P` the cross product of the normal boxes' middle directions.
+  - `Loops::NoCritical { across }`: each piece a graph over the plane across `e` (the bisector
+    of the cones' axes); disjoint normal cones (cosines compared with outward bounds, no `acos`),
+    or a solve of the 4 x 4 critical system with no root.
+  - `Loops::Critical { across, points }`: the roots, each a `Critical` with its gap and
+    `CriticalKind` from the relative form `Q = II_A - C^T II_B C`: `Touch`, `Node`,
+    `Singular(kind)`, `Saddle`, `Extremum { crossing }`, `Degenerate`. A point a loop may
+    surround (`may_surround`) gets a ray: the line of constant `v` to the piece's edge.
+  - Seeds (`Seed { point, uv, site }`, `Site::Edge { surface, side }` or `Site::Ray`): the
+    roots of each of the four edges of each piece against the other piece (three unknowns, by
+    the same solver), and the ray's roots. Fixed order: pair, surface, side, parameter. A seed
+    whose enclosure meets an earlier one's on both surfaces, or within the coincidence of it,
+    is kept once, by the lower pair.
+- `intersect`, after the field path declines (no side with an implicit form): answers the
+  touches; a node, a seed, or a point a loop may surround is
+  `SsiError::Untraced { at }` (`ssi_untraced`, until SM7 marches), a singular contact
+  `Singular`. The refusal names the least point (x, then y, then z) of the first kind present,
+  `Singular` before `Untraced`, so it does not depend on the operands' order.
+
+### 18.2 Decisions, for and against
+
+1. **The critical solve is the graph theorem's system, not §4.4's `nA x nB = 0`.** Each piece
+   is shown a graph over the plane across `e` (`π [S_u S_v]` regular over the box); a loop then
+   bounds a disc on which the height difference has an interior extremum, a root of
+   `e1 . (S_A - S_B) = e2 . (S_A - S_B) = N_A . S_B,s = N_A . S_B,t = 0`.
+   - For: four equations in four unknowns with no choice of components and no spurious
+     solutions where a cross product's chosen components vanish; the graph test is what makes
+     "no root" a proof of no loop, and it runs before any halving rather than after two or three.
+   - Against: a pair whose piece is not a graph over `e` (a normal box spread past 90 degrees)
+     is halved first, where §4.4's system would run as is.
+2. **Normal cones by interval jets, not the Bernstein form of `S_u x S_v`.** The same `Patch`
+   enclosures serve the cones, the graph test and the solves. Against: for a NURBS piece the
+   Bernstein form can be tighter than `partials_over_piece`.
+3. **A loop is seeded by a ray, not by marching out along the form's minor axis.** Every loop
+   around the point crosses the line of constant `v` from it to the edge, so the ray's proved
+   roots seed it without a marcher. Against: a loop is seeded far from its point when the ray
+   is long; SM7 may prefer the minor axis.
+4. **`Untraced` is a refusal, not an answer with seeds.** No curve is answered before SM7 traces
+   it; a proven-crossing curve is never dropped. Against: `intersect` answers fewer cases than
+   the plans could support; SM7 removes the refusal.
+5. **The touch rule adds a width test to §4.6's depth rule.** A contact (gap within the
+   coincidence) with a definite form is a `Touch` unless the point is proved to be a maximum
+   above 0 or a minimum below (so a loop surrounds it) and the loop may be wider than the
+   tolerance: `2 |h| |tr(adj(G) Q)| |kn| > tol^2 det Q`, from `r^2 <= 2 |h| / mu` and
+   `mu >= det(G^-1 Q) / tr(G^-1 Q)`. Such a point is `Extremum { crossing: true }`, rayed and
+   `Untraced`.
+   - For: §4.6's rule alone answered `c7_tiny_loop_parab` at 1e-4 to 1e-6 as a touch while a
+     loop of radius about `sqrt(2 delta / k)`, far over the tolerance, surrounds it (the gap is
+     within the coincidence only because the case's tolerance is `0.1 feature`). A loop within
+     the tolerance is still a touch (spheres 1e-7 apart at tolerance 1e-6).
+   - Against: the closed forms keep the depth rule (§17 decision 5), so the two paths can
+     answer one case differently. Proposed: SM2 or SM10 align the closed forms on this rule.
+6. **Split policy.** A pair that no proof settles is halved: the piece whose proof failed (the
+   larger in 3D when both or neither did), across its longer side in 3D; halves proved apart by
+   `Candidates` are dropped. A solve that reaches the resolution (a critical set that is not a
+   point) is refused there unless `apart_or` proves every part of the pair apart by halving to
+   the resolution; the first part that is not ends it, so a contact costs one descent.
+7. **No fixed per-solve cap.** The caller's budget decides (error.rs: one `Budget`, no fixed
+   caps). Against: a near-tangent line costs a lot before it is refused (18.4).
+8. **First-order jets for the seed systems.** The edge and ray systems need only `S`, `S_u`,
+   `S_v`; evaluating them in `Jet2` spent most of their time on second partials they do not use.
+   `Jet1` cut the survey test from 25.9 s to 8.7 s (release). Against: a second ring type
+   (`Grad`) beside `Jet2`, with its own quotient rule.
+
+### 18.3 Tests
+
+`tests/survey.rs` (new, against SM0's `ssi_truth`: sphere-sphere, tiny loops at 0.5 and 1e-3,
+the perpendicular cylinders):
+- `every_seed_is_on_the_truth_and_every_truth_curve_has_one` (within 1e-9);
+- `a_loop_inside_one_pair_is_never_proved_loop_free`;
+- `the_plans_are_the_same_bits_every_run_and_under_any_budget_that_suffices`;
+- `swapping_the_operands_gives_the_same_seeds`;
+- `the_budget_and_the_stop_end_the_survey`;
+- `contacts_are_classified_and_refused_or_answered_by_kind`.
+
+Unit tests: `solve.rs` (`finds_every_simple_root_in_order`,
+`a_double_root_is_unresolved_and_work_is_charged`), `patch.rs`
+(`jets_hold_the_surface_partials`, `Jet2` and `Jet1` against the surface's partials).
+
+Changed, on purpose, because `intersect` now answers touches and refuses curves as `Untraced`
+(each still proves what it proved, against the new answer); `tests.rs`'s refused pairs are NURBS
+against NURBS since SM6a:
+- `tests.rs`: `a_general_pair_is_refused_by_name_where_it_lies` expects `ssi_untraced` at a
+  point on both surfaces by their closed forms (within 1e-9; before: `ssi_unresolved` inside
+  the surfaces' boxes with a size); `the_answer_is_the_same_bits_every_run_and_under_any_budget_that_suffices`
+  compares the point's bits (there is no size); `swapping_the_operands_names_the_same_place`
+  compares within 1e-12 (the least seed is one root solved with the unknowns in the other
+  order); `every_cause_has_a_kind_a_name_and_a_line` gains `Untraced`.
+- `tests/apart.rs`: `touching_and_crossing_pairs_are_never_dropped` takes, for the NURBS
+  spheres (the only pairs there the field path does not take), a touch answered where they
+  touch, or `ssi_untraced` at a point of the circle about 1e-6 across at `-2^-40`, as well as
+  `ssi_unresolved`; each point still inside the pair's boxes, never an empty answer.
+- `tests/survey.rs`'s `intersect` checks run on the cases' NURBS forms, which the plans answer.
+- No test removed.
+
+### 18.4 Measurements
+
+The ssi-corpus (`score_corpus`, release, times from the scorer's table; not deterministic, on a
+loaded machine), main (with SM6a) against `sm5` with main merged. The debug run of the same
+command gives the same verdicts.
+
+| | main | `sm5` |
+|---|---|---|
+| pass | 56 of 113 | 58 of 113 |
+| refused | 51 (`ssi_unresolved` 51) | 49 (`ssi_unresolved` 43, `ssi_untraced` 5, `budget_exhausted` 1) |
+| failed | 6 (incomplete 1, wrong topology 5) | the same 6 (SM2's class 7, §17 decision 5) |
+| total | 1.6 s | 97.7 s |
+
+- New passes: `c3n_parab_parab_apex` and `y23_t6_ex4_tangential_point` (touches answered on
+  NURBS against NURBS). No verdict got worse. The 56 cases both pass take the field path, whose
+  code is unchanged (0.62 s against 0.80 s in all: load noise; `Survey::new` is
+  `Candidates::new`).
+- Five refusals now name a proved point (`ssi_untraced`: `c1n_parab_parab_circle`,
+  `c1n_sphereN_cylN_two_loops`, `c1n_torusN_planeN_nested`, `y23_t2_ex3`, `y23_t2_ex6`): cases
+  SM7 can take from their plans.
+- Before the merge with SM6a (the general path then took every pair), decision 5 turned
+  `c7_tiny_loop_parab` at 1e-4 to 1e-6 from a wrong touch into `ssi_untraced`; those cases are
+  the field path's now (`ssi_unresolved`).
+- **The cost is in the refusals**: the 56 cases neither path answers take 1.1 s on main and
+  96.8 s here. Eleven take over 0.3 s, 95.3 s together: `c2n_cylN_on_planeN` (2.7 ms to 41.0 s,
+  the corpus budget of 2M units spent: `budget_exhausted`), `c2n_quartic_contact_parabola`
+  (15 ms to 28.7 s), `y23_t6_ex1` (8.7 s), `y23_t2_ex3` (8.5 s), `y23_t2_ex4` (5.3 s), and six
+  between 0.3 and 0.8 s. Each holds a tangent or near-tangent line, along which the 4 x 4
+  critical solve finds neither an exclusion nor a Krawczyk proof and sweeps the line box by box
+  to the resolution (175k, 205k and over 2M boxes, against at most about 19k for a solve that
+  succeeds, 4.8k for an edge's). Callgrind on these: 56 percent `Ivl::checked`, 28 percent
+  `Ivl::mul`, the jets' arithmetic. Under `FRONT` these were refused after 24 pairs, cheaply
+  and with no point on the curve; the honest fix is to recognise the valley before the solve
+  (SM6b), not a cap on the solve (decision 7).
+
+Per pair, against the pin's `ssi` crate (its whole intersection, `strip` off and on, a
+throwaway timer; ours the survey alone). With SM6a merged, an analytic pair goes to the field
+path and never reaches the survey, so ours is timed on the same surfaces as NURBS (the survey's
+own case), with the survey on the analytic forms for comparison:
+
+| case (tilted frames) | pin, `strip` off / on | `sm5` survey, NURBS | units | survey, analytic |
+|---|---|---|---|---|
+| sphere and sphere (circle) | 0.71 / 1.05 ms | 1.64 s | 80,493 | 275 ms |
+| tiny loop, `delta` 0.5 | 0.21 / 0.63 ms | 20.2 ms | 1,286 | 16.0 ms |
+| tiny loop, `delta` 1e-3 | 0.12 / 0.46 ms | 13.7 ms | 1,031 | 8.9 ms |
+| perpendicular cylinders 1, 2, offset 0.3 | 0.41 / 0.50 ms | 31.7 ms | 2,416 | 14.8 ms |
+
+The pin's figure includes its march; ours stops at the plans (`intersect` on the NURBS forms is
+`ssi_untraced` on all four, at the same cost). Ours is 30 to 110 times the pin's on the loops
+and cylinders, and about 2,000 times on the two spheres, whose circle crosses many pairs whose
+pieces are not graphs over one plane until halved, each with a critical solve. Closing this gap
+is open (18.5): the pin samples and does not prove, but a factor of 30 is over what the proofs
+need. (For reference, main's field path answers the analytic forms of all four, in 0.6 to 4.0 s
+and 150k to 1.5M units: SM6a's cost, not this row's.)
+
+The diagonal near-touch (two unit spheres `2^-k` apart along a diagonal, `intersect` end to
+end; SM4b's figures from §20.4). The analytic pair is now proved empty by the field path in 15
+units (about 0.4 ms) at every gap; the NURBS pair goes through the survey:
+
+| gap | `FRONT` (SM4b) | `sm5`, NURBS |
+|---|---|---|
+| `2^-4` | proved, 429 units | proved empty, 3,067 units, 69 ms |
+| `2^-6` | proved, 813 units | proved empty, 4,615 units, 113 ms |
+| `2^-10` | refused | proved empty, 6,383 units, 149 ms |
+| `2^-20` | not measured | proved empty, 10,351 units, 232 ms |
+
+The pairs that apartness alone cannot clear are now settled by the plans: monotone or with no
+critical point, and no seed. More units than SM4b's where it proved, since each surviving pair
+now pays for its cones and solves.
+
+### 18.5 Open
+
+- **Near-tangent lines.** A critical set that is a line (the corpus's tangent-line and
+  quartic-contact cases) makes the critical solve sweep along it to the resolution before the
+  refusal: valleys of order 2 are SM6b's, which should take these before the solve.
+- **Poles and edge tangency.** A touch at a pole, and an edge tangent to the other surface (a
+  double root of the seed solve), are refused; SM6b divides poles out.
+- **NURBS jet cost.** `partials_over_piece` dominates the NURBS solves; Bernstein-form jets
+  for a piece (de Casteljau of the interval control net) would cut it.
+- **Per-pair cost against the pin** (18.4): the critical solve per pair and the halving before
+  the graph test dominate; Bernstein-form jets and a cheaper first split are the candidates.
+- **The closed forms' touch rule** (decision 5).
