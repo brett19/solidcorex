@@ -33,8 +33,8 @@
 //! - [`Finding::VerticesWithinCoincidence`]: two vertices within the larger of their reaches.
 //!
 //! A gap finding is made only on a lower bound past its allowance (74 R2); a bracket that
-//! straddles it, a search that ran out of its share of the budget (R6) and a NURBS surface
-//! (pending in SU6) are listed in [`Findings::undecided`], never passed and never failed.
+//! straddles it, a search that ran out of its share of the budget (R6) and a procedural
+//! surface are listed in [`Findings::undecided`], never passed and never failed.
 //!
 //! Tube clearance (74 §3.3's `TubeNotClear`), radial order along the whole edge and face
 //! crossing are added by later tasks
@@ -43,7 +43,7 @@
 use scx_brep::op::Cx;
 use scx_brep::{Brep, EdgeId, FaceId, Fin, ShellId, VertexId};
 use scx_num::units::Length;
-use scx_surface::{Bracket, Pending};
+use scx_surface::Bracket;
 
 use crate::clearance;
 use crate::error::CheckError;
@@ -245,14 +245,13 @@ pub enum Undecided {
         /// Why.
         why: Why,
     },
-    /// A gap whose bound is not built yet (a NURBS surface: SU6 is analytic first).
-    Pending {
+    /// A gap to a procedural surface, whose arm is not built
+    /// ([`GapError::Procedural`](scx_surface::GapError::Procedural)).
+    Procedural {
         /// The edge.
         edge: EdgeId,
         /// The face.
         face: FaceId,
-        /// What is pending.
-        what: Pending,
     },
     /// As [`Finding::VerticesWithinCoincidence`], undecided: the distance's bracket holds
     /// the allowance.

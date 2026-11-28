@@ -3333,3 +3333,115 @@ stay. The step-7 audit of what assumed minor < major follows.
   `scx-tess` curved gains a horn torus in `primitives` (closed, chord, crack and volume checks
   at three chords, two frames); `scx-boolean` horn.rs (four tests). The recipe `torus-horn`
   is `Built` with its closed-form truth; the difftest adapter drops its `HornTorus` arm.
+
+### 13.36 FT4 as built (11-28)
+
+**Built.** `crates/scx-surface/src/gap/nurbs.rs` is the NURBS arm of `curve_surface_gap` and
+`pcurve_edge_gap` (77 FT4). It runs through the same branch and bound (`search`) as the analytic
+kinds, with two `Field`s: `PcurveOnNurbs` and `CurveToNurbs`.
+
+- The surface over a uv box is cut at the knot lines inside the box. Each part is enclosed on its
+  own polynomial piece by `NurbsSurface::partials_over_piece` (NS4) about the piece's middle, and
+  the parts' enclosures are hulled.
+- A pcurve's derivatives come from the chain rule over the box. The piece is then bounded as the
+  analytic pcurves are (`vector_bound`).
+- A curve against the surface takes each point's distance from `nurbs_invert::invert`'s certified
+  nearest point. A piece is bounded through a uv correspondence: the two feet joined linearly, or
+  either foot held. The smallest of the three bounds is kept.
+
+API changes:
+- `GapError::Pending` and `scx_surface::Pending` are removed workspace-wide. With them go
+  `scx_check::Undecided::Pending` (and the `Pending` re-export) and `scx_step::Waits::NurbsGap`.
+- `Short::Defect(&'static str)` is added: the nearest-point search inside the gap failed, which
+  is the kernel's own fault (kind `Defect`, name `gap_defect`).
+- `scx_bodyq::curve_lies_on_face` takes NURBS target faces. Where it had answered
+  `Unsupported(Nurbs)`, it now gives the certified gap, and a gap defect maps to
+  `Defect(Surface { face })`. Inside the trim it is `Undecided` until a NURBS surface has
+  pcurves.
+- `GapError::Procedural` is added (kind `Unsupported`, name `gap_procedural`), with
+  `scx_check::Undecided::Procedural { edge, face }`. Main's PK1 had sent `Surface::Procedural`
+  through `Pending` too. Its gap would be its exact net's, widened by `Procedural::bound`, but
+  that needs the aim adjusted for the widening and the net's box checked against the face's
+  domain, so for now it is refused by name. `curve_lies_on_face` keeps PK1's
+  `Unsupported(Nurbs)` for a procedural face, now through the gap's error.
+
+**Choices, with the case for and against.**
+
+1. **Hull per knot piece, not one enclosure of the whole box.**
+   - For: `partials_over_piece` is exact per polynomial piece, and a box crossing a knot line
+     would otherwise need the rational form's global enclosure, which is far wider. Continuing an
+     end piece past the domain covers pcurves enclosed a few ulps outside it, where
+     `partials_over` refuses (the cylinder's boundary ruling test).
+   - Against: a box crossing `k` lines in each direction costs `(k+1)^2` piece enclosures. After
+     the first cuts, pieces cross at most one line, so the measured cost is small (below).
+2. **Lipschitz bound across C0 knot lines.** `to_nurbs` circles have double knots in degree 2,
+   which are C0 by knot structure. The chord bound needs `D''`, so a piece crossing such a line
+   takes `min((|D(a)| + |D(b)| + h sup|D'|)/2, min(|D(a)|, |D(b)|) + h sup|D'|)` and the direct
+   enclosure.
+   - For: it is certified without any assumption of geometric smoothness.
+   - Against: it converges linearly. Measured, it costs 16 to 124 pieces per call out of
+     thousands, so it is accepted for now (coordinator, 11-28). An exact crossing cut for line
+     pcurves is a possible follow-up.
+3. **The point lower bound is padded by the search's gap.** `invert`'s foot is within
+   `GAP_REL (diagonal + first incumbent)` of the true nearest point. The incumbent is bounded by
+   `|q - centre| + diagonal/2` of the net box, so the pad is
+   `2 (|C(t) - q| + eps) + |S(foot) - foot.point| + 8 EPS distance`.
+   - For: it is the certificate `invert` gives, with no sampled acceptance.
+   - Against: an aim tighter than about `1e-12` of the model's size ends in `Precision` (open
+     question, kept by the coordinator).
+4. **Three correspondences, the smallest bound kept.**
+   - For: the linear one converges quadratically on smooth spans. The held ones keep a piece
+     bounded where the feet jump: across a sphere's seam, or at a pole.
+   - Against: there are three enclosures per piece. The linear correspondence still leaves a
+     quadratic error against the true foot path, so the points needed grow as `w^-1/2` (below).
+5. **`Pending` removed rather than left empty** (coordinator, 11-28): it has no dead variants.
+   `scx-check`'s NURBS gaps are now proved or undecided like any others, and `scx-step` builds
+   NURBS edges' gaps.
+
+**Tests** (`gap/tests.rs`, against closed forms).
+- A bilinear plane patch against a line at heights 2.5, 1e-6 and 0, and a slant line reaching 0.3.
+- The rational sphere against a circle on it gives 0. Moved out radially by 1e-3 and 0.25, it
+  gives `h`. This is tested on a short arc at `1e-9` and on the whole circle at `1e-6`.
+- The NURBS cylinder's pcurve gap equals the analytic cylinder's within `1e-9`, for 0, 0.001 and
+  1e-4. A boundary ruling gives 0 and 1e-5.
+- Determinism: bracket and units are the same each call.
+- `a_procedural_surface_is_refused_by_name`: both gaps give `GapError::Procedural` on a
+  revolution, with nothing spent.
+- Removed: `a_nurbs_surface_is_pending`, which proved a NURBS surface was `Pending`. This is on
+  purpose, since FT4 lifts it.
+- `scx-bodyq` `refusals_and_a_nurbs_target_face`: the NURBS target that was `Unsupported(Nurbs)`
+  is now `OffSurface { by }`, with `1e-6 < by <= sqrt(57)`, the closed-form largest distance of
+  the segment from the patch. A segment in the patch is `Undecided`, never refuted.
+
+**Measured** (release, throwaway counters, aim width `1e-9`; "quarters" is how many of the
+`to_nurbs` rational quarter arcs the range spans, so knot lines crossed are 0, 1 and 3).
+
+| case | quarters | points | piece bounds | crossing C0 | units | time |
+|---|---|---|---|---|---|---|
+| plane patch, line at 2.5 / 0 | - | 5 / 5 | 4 / 4 | 0 | 246 / 80 | 0.59 / 0.03 ms |
+| sphere, circle on it | 1 / 2 / 4 | 11,344 / 24,688 / 54,107 | 22,682 / 49,370 / 108,208 | 0 / 16 / 33 | 0.22M / 0.45M / 1.20M | 0.39 / 0.84 / 2.2 s |
+| sphere, circle out 1e-3 | 1 / 2 / 4 | 7,196 / 14,905 / 34,870 | 14,386 / 29,804 / 69,734 | 0 / 20 / 43 | 0.54M / 1.12M / 2.76M | 1.6 / 3.3 / 7.9 s |
+| cylinder pcurve, on | 1 / 2 / 4 | 1,655 / 4,093 / 8,231 | 3,304 / 8,180 / 16,456 | 0 / 16 / 100 | = points | 15 / 38 / 77 ms |
+| cylinder pcurve, r 2.001 | 1 / 2 / 4 | 2,031 / 4,106 / 8,253 | 4,056 / 8,206 / 16,500 | 0 / 20 / 124 | = points | 19 / 38 / 78 ms |
+| analytic cylinder, same pcurve | 1 / 2 / 4 | - | - | - | 5 (on), 127 / 248 / 513 (off) | 0.01 / 0.3-1.4 ms |
+
+The linear correspondence gives the smallest bound on all but 25 to 36 of the sphere's pieces. The
+cylinder's NURBS pcurve costs 15 to 330 times the analytic one, which has an exact chart shortcut.
+
+- Cost is set by arc length and aim, not by knot count. Pieces that cross a C0 line (c0) are
+  under 1% of the pieces.
+- At width `w` the curve-to-surface points grow as `w^-1/2`; a whole circle at `1e-6` takes
+  about 1/30 of the `1e-9` count.
+- Tightness: at the end, the lower bound is within `3.3e-11` of the truth, from the search's
+  pad. The upper bound is within the aim.
+- Analytic arms: units are identical before and after on every path measured (sphere latitude
+  5, off it 5, cylinder pcurve 513). Time, interleaved runs on a shared machine: sphere 11.3-19.3 us before, 17.1-17.7 us after; cylinder pcurve 1.73-2.29 ms before, 1.91-2.00 ms after. These are equal within the noise, and the arms are untouched apart from one `Option` match on the kind.
+
+**Open.**
+1. The `GAP_REL` pad limits how tight an aim can be (choice 3).
+2. Linear convergence across C0 lines (choice 2).
+3. The curve-to-surface arm costs one nearest-point search per point, 20 to 80 units, with
+   `w^-1/2` points. A quadratic correspondence (a Newton step on the feet) would cut the count.
+4. `curve_lies_on_face` on a NURBS face cannot prove the trim until a NURBS surface has pcurves.
+5. The procedural arm: the net's gap widened by its bound, the aim tightened by the bound so
+   the widened bracket still meets it (or undecided when it cannot).
