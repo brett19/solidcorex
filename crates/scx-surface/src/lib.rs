@@ -31,6 +31,9 @@
 //!   lying on it ([`CurveSurfaceHit`]); closed forms, a NURBS pair `Unsupported` (63 SU6).
 //!   [`curve_on_surface`] is its answer for a curve stated to lie on the kind, read as
 //!   whether it does ([`OnSurface`]), the roots skipped where a closed-form bound proves it.
+//! - [`plane_bound`]: how far a piece of one plane, over its box, lies from another plane, in
+//!   closed form; planes that cross at an angle or face each other are typed ([`NotNear`])
+//!   (research 74 §42.5, §46).
 //! - [`project_curve`] and [`drop_curve`]: a curve projected onto a kind along a direction,
 //!   or dropped onto it square to it, in closed form, or a typed refusal naming the fitter
 //!   ([`ProjectError::NeedsFitter`]) (research 75 SF1).
@@ -83,6 +86,7 @@ mod invert;
 mod meet;
 mod nurbs_hits;
 mod nurbs_invert;
+mod one_plane;
 mod pcurve;
 mod plane;
 mod procedural;
@@ -111,6 +115,7 @@ pub use hull::{Hull, Hulls};
 pub use intersect::{Contact, CurveSurfaceHit, OnSurface, curve_on_surface, intersect_curve};
 pub use invert::{Closest, Foot, Inversion};
 pub use meet::{Meet, MeetError, points_meet};
+pub use one_plane::{CREASE, NotNear, plane_bound};
 pub use pcurve::{Check, CurveKind, PcurveError, SurfaceKind, pcurve_of};
 pub use plane::Plane;
 pub use procedural::{
