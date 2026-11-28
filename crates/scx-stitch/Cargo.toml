@@ -9,9 +9,15 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
-scx-bodyq = { path = "../scx-bodyq" }
+# Each was already below stitch through scx-bodyq (74 §4.3), which ST2 no longer needs:
+# scx-algo's box tree, scx-curve's curves, scx-nurbs's tangent side, scx-surface's
+# certified gaps.
+scx-algo = { path = "../scx-algo" }
 scx-brep = { path = "../scx-brep" }
+scx-curve = { path = "../scx-curve" }
 scx-num = { path = "../scx-num" }
+scx-nurbs = { path = "../scx-nurbs" }
+scx-surface = { path = "../scx-surface" }
 
 [dev-dependencies]
 scx-testkit = { path = "../scx-testkit", features = ["bodies"] }
