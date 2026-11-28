@@ -3172,7 +3172,7 @@ Decisions.
 - **Closed is `C^(q-1)` across the seam, not the pin's C1.** For `r = q - 1`, `a = ceil(r/2)` derivatives are held at the start and `b = floor(r/2)` at the end on averaging knots. Both are the unknown seam derivatives `d_1..d_a`, and they are fixed by the `a` exact conditions `X^(k)(v_m) = X^(k)(v_0)` for `k = b+1..=r`. Superposition gives the solution: one base solve per column, plus `a` one-dimensional unit responses computed once, whose `a x a` residual matrix is inverted once with partial pivoting (`Seam` if it is singular). The last control value is then set to the first, so the seam's rows are equal bit for bit. For: the same smoothness as at every simple knot, no estimated derivatives (the pin's comes from a shifted interpolation), and the cost of an open skin. Against: the knots are the open averaging knots, not periodic ones, so the seam span is clamped (multiplicity `q + 1` at both ends), which is a seam in the knot vector though not in the shape. A periodic knot vector would need a cyclic banded solver that FT2 lacks.
 - **Not ported:** the pin's `knot_tol` snapping (CN1's curves are compatible exactly), its weight clamp to `[1e-3, 100]` (a weight that is not positive is refused), its in-place mutation of the input curves, and its `dir` flag (`NurbsSurface::swapped` turns a skin).
 
-Work (release, throwaway timer, server2; `n` control points per section, `m` sections):
+Work (release, throwaway timer; `n` control points per section, `m` sections):
 
 | sections | `interpolate_rows` | open skin | closed skin |
 |---|---|---|---|
