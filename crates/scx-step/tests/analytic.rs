@@ -675,6 +675,31 @@ fn a_ball_bounded_by_its_seam_alone() {
     }
 }
 
+/// A whole torus is one face whose loop runs round both seams, the equator and a meridian,
+/// from their one shared vertex.
+#[test]
+fn a_torus_is_one_face_bounded_by_its_two_seams() {
+    let mut w = W::default();
+    let v = w.vertex([12.0, 0.0, 0.0]);
+    // The outer equator: u from 0 at v = 0. The meridian at u = 0: v from 0, up first.
+    let equator = w.circle([0.0; 3], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0], 12.0);
+    let meridian = w.circle([10.0, 0.0, 0.0], [0.0, -1.0, 0.0], [1.0, 0.0, 0.0], 2.0);
+    let eu = w.add(format!("EDGE_CURVE('',#{v},#{v},#{equator},.T.)"));
+    let ev = w.add(format!("EDGE_CURVE('',#{v},#{v},#{meridian},.T.)"));
+    // Counter-clockwise in (u, v): about the outward normal.
+    let ring = [w.oe(eu, true), w.oe(ev, true), w.oe(eu, false), w.oe(ev, false)];
+    let bound = w.bound(&ring, true, true);
+    let a = w.axis([0.0; 3], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]);
+    let torus = w.add(format!("TOROIDAL_SURFACE('',#{a},10.,2.)"));
+    let face = w.face(&[bound], torus, true);
+    let shell = closed_shell(&mut w, &[face]);
+    let solid = w.add(format!("MANIFOLD_SOLID_BREP('ring',#{shell})"));
+    let s = built(&w.file(&[solid]));
+    assert_eq!(counts(&s), [2, 2, 1, 2, 1]);
+    assert!(s.notes.is_empty(), "{:?}", s.notes);
+    near(vol(&s), 2.0 * PI * PI * 10.0 * 4.0);
+}
+
 /// The cone from its apex at z = 10 widening to radius 5 at z = 0, and its base disk.
 fn cone_with(w: &mut W, apex_loop: bool) -> u64 {
     let (p, top) = ([5.0, 0.0, 0.0], [0.0, 0.0, 10.0]);

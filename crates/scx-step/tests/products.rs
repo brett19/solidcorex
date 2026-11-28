@@ -487,9 +487,9 @@ fn a_placement_with_no_regular_frame_is_unplaced_and_the_file_is_read() {
     );
 }
 
-/// ISO 10303-42: an absent reference direction is +Z made square to the axis (+X when the axis
-/// is along Z). For the axis +X that is +Z, so the frame is (x, y, z) = (+Z, +Y... z x x),
-/// right-handed: x = (0,0,1), z = (1,0,0), y = z × x = (0,-1,0).
+/// ISO 10303-42's `first_proj_axis`: an absent reference direction is +X made square to the
+/// axis, +Y where the axis is along X. For the axis +X that is +Y, so x = (0,1,0), z = (1,0,0),
+/// y = z × x = (0,0,1).
 #[test]
 fn an_absent_reference_direction_is_the_standards() {
     let t = tree(
@@ -510,8 +510,8 @@ fn an_absent_reference_direction_is_the_standards() {
     );
     assert_map(
         body_world(&t, 101),
+        [0.0, 1.0, 0.0],
         [0.0, 0.0, 1.0],
-        [0.0, -1.0, 0.0],
         [1.0, 0.0, 0.0],
         [0.0; 3],
     );

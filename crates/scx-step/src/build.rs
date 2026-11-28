@@ -491,10 +491,10 @@ impl Builder<'_> {
                 }
             }
         }
-        let mut worst: BTreeMap<VertexId, f64> = BTreeMap::new();
-        let mut ends: Vec<(VertexId, Point3, Curve, f64, EdgeEnd)> = Vec::new();
-        let at: BTreeMap<VertexId, Point3> =
-            self.vertices.iter().map(|&(_, v, p)| (v, p)).collect();
+        // Each vertex's entity and point, and each edge end at it.
+        let at: BTreeMap<VertexId, (u64, Point3)> =
+            self.vertices.iter().map(|&(s, v, p)| (v, (s, p))).collect();
+        let mut ends: Vec<(VertexId, u64, Point3, Curve, f64, EdgeEnd)> = Vec::new();
         for e in &self.edges {
             let [v0, v1] = e.ends;
             let both = [
@@ -502,30 +502,24 @@ impl Builder<'_> {
                 (v1, e.interval.max(), EdgeEnd::End),
             ];
             for (v, t, end) in both {
-                if let Some(&p) = at.get(&v) {
-                    ends.push((v, p, e.curve.clone(), t, end));
+                if let Some(&(entity, p)) = at.get(&v) {
+                    ends.push((v, entity, p, e.curve.clone(), t, end));
                 }
             }
         }
-        let entity_of: BTreeMap<VertexId, u64> =
-            self.vertices.iter().map(|&(s, v, _)| (v, s)).collect();
-        let mut claims: BTreeMap<VertexId, EdgeEnd> = BTreeMap::new();
-        for (v, p, curve, t, end) in ends {
-            let entity = entity_of.get(&v).copied().unwrap_or(0);
+        // The widest gap past the zone at each vertex, with the end that has it.
+        let mut worst: BTreeMap<VertexId, (u64, f64, EdgeEnd)> = BTreeMap::new();
+        for (v, entity, p, curve, t, end) in ends {
             let g = Self::gap(zone, entity, GapKind::VertexToEdge, |_| {
                 vertex_curve_gap(p, &curve, t)
             })?;
-            if let Some(g) = g {
-                let w = worst.entry(v).or_insert(0.0);
-                if g > *w {
-                    *w = g;
-                    claims.insert(v, end);
-                }
+            if let Some(g) = g
+                && worst.get(&v).is_none_or(|&(_, w, _)| g > w)
+            {
+                worst.insert(v, (entity, g, end));
             }
         }
-        for (v, g) in worst {
-            let entity = entity_of.get(&v).copied().unwrap_or(0);
-            let end = claims.get(&v).copied().unwrap_or(EdgeEnd::Start);
+        for (v, (entity, g, end)) in worst {
             let rec = self.record(
                 entity,
                 GapKind::VertexToEdge,
@@ -743,16 +737,19 @@ impl Builder<'_> {
                 uses.entry(e).or_default().push((fi, s == Sense::Forward));
             }
         }
-        let entity: BTreeMap<EdgeId, u64> = self.edges.iter().map(|e| (e.id, e.entity)).collect();
+        if let Some(e) = self
+            .edges
+            .iter()
+            .find(|e| uses.get(&e.id).is_some_and(|u| u.len() > 2))
+        {
+            return Err(BuildError::Pending {
+                entity: e.entity,
+                waits: Waits::NonManifold,
+            });
+        }
         let shell_of: Vec<usize> = self.faces.iter().map(|f| f.shell).collect();
         let mut next: BTreeMap<usize, Vec<(usize, bool)>> = BTreeMap::new();
-        for (e, u) in &uses {
-            if u.len() > 2 {
-                return Err(BuildError::Pending {
-                    entity: entity.get(e).copied().unwrap_or(0),
-                    waits: Waits::NonManifold,
-                });
-            }
+        for u in uses.values() {
             if let [(f, a), (g, b)] = u[..]
                 && f != g
                 && shell_of.get(f) == shell_of.get(g)
@@ -771,7 +768,7 @@ impl Builder<'_> {
             turned.insert(start, false);
             let mut queue = std::collections::VecDeque::from([start]);
             while let Some(f) = queue.pop_front() {
-                let tf = turned.get(&f).copied().unwrap_or(false);
+                let Some(&tf) = turned.get(&f) else { continue };
                 for &(g, turn) in next.get(&f).into_iter().flatten() {
                     let want = tf != turn;
                     match turned.get(&g) {
@@ -794,7 +791,9 @@ impl Builder<'_> {
             else {
                 continue;
             };
-            let flip = turned.get(&fi).copied().unwrap_or(false);
+            let Some(&flip) = turned.get(&fi) else {
+                continue;
+            };
             let out_front = (f.natural != flip) != plan.reversed;
             let sides = if out_front {
                 [pair.out, pair.inside]

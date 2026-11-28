@@ -42,8 +42,10 @@ fn point(p: [f64; 3]) -> Point3 {
 }
 
 /// ISO 10303-42's `first_proj_axis` default for an absent reference direction: +X, or +Y
-/// when `z` lies along X.
-fn default_ref(z: Vec3) -> Vec3 {
+/// when `z` lies along X (its `dummy_gri || direction([1.0, 0.0, 0.0])`, `[0.0, 1.0, 0.0]`
+/// for an axis of ratios `[1, 0, 0]` or `[-1, 0, 0]`). The placements of parts and the axes of
+/// transformation operators take the same default.
+pub(crate) fn default_ref(z: Vec3) -> Vec3 {
     if z.cross(Vec3::X).normalized().is_some() {
         Vec3::X
     } else {
