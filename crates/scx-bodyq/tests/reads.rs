@@ -222,13 +222,13 @@ fn a_cylinder_wall_beyond_its_height_is_bounded_not_proved() {
     let stop = Stop::new();
     let wall = [m.faces.wall];
     // Level with the wall: the foot is inside, 17 away.
-    let n = closest_to_point(&m.body, &wall, &[], pt(20.0, 0.0, 5.0), &mut b(), &stop)
+    let n = closest_to_point(&m.body, &wall, &[], pt(0.0, 20.0, 5.0), &mut b(), &stop)
         .unwrap()
         .unwrap();
     assert!(near(n.distance.mm(), 17.0) && n.exact, "{n:?}");
-    // Above the rim: the true nearest is the rim point (3, 0, 7) at sqrt(17^2 + 3^2); the
+    // Above the rim: the true nearest is the rim point (0, 3, 7) at sqrt(17^2 + 3^2); the
     // method says only that it is a bound.
-    let n = closest_to_point(&m.body, &wall, &[], pt(20.0, 0.0, 10.0), &mut b(), &stop)
+    let n = closest_to_point(&m.body, &wall, &[], pt(0.0, 20.0, 10.0), &mut b(), &stop)
         .unwrap()
         .unwrap();
     assert!(near(n.distance.mm(), (17.0_f64.powi(2) + 9.0).sqrt()), "{n:?}");
@@ -336,18 +336,20 @@ fn the_turn_that_makes_a_square_direction_parallel_is_the_angle_between_them() {
         let t = t.unwrap();
         assert!((t - want).abs() < 1e-12, "{t} vs {want}");
     };
-    at(turn(v(1.0, 0.0, 0.0)), 0.0);
-    at(turn(v(1.0, 1.0, 0.0)), FRAC_PI_4);
-    at(turn(v(1.0, -1.0, 0.0)), -FRAC_PI_4);
-    // A line has no sense: (-1, 0, 0) is (1, 0, 0), and +-y are both a quarter turn, folded
-    // into (-pi/2, pi/2].
-    at(turn(v(-1.0, 0.0, 0.0)), 0.0);
-    at(turn(v(0.0, 1.0, 0.0)), FRAC_PI_2);
-    at(turn(v(0.0, -1.0, 0.0)), FRAC_PI_2);
+    // The direction square to the axis in the face (normal x) is y. It turns to parallel the
+    // line x by a quarter turn either way (folded to pi/2), is already parallel to y, and
+    // turns -pi/4 to (1, 1, 0) and +pi/4 to (1, -1, 0); a line has no sense.
+    at(turn(v(1.0, 0.0, 0.0)), FRAC_PI_2);
+    at(turn(v(-1.0, 0.0, 0.0)), FRAC_PI_2);
+    at(turn(v(0.0, 1.0, 0.0)), 0.0);
+    at(turn(v(0.0, -1.0, 0.0)), 0.0);
+    at(turn(v(1.0, 1.0, 0.0)), -FRAC_PI_4);
+    at(turn(v(1.0, -1.0, 0.0)), FRAC_PI_4);
+    at(turn(v(-1.0, -1.0, 0.0)), -FRAC_PI_4);
     // The line's height off the plane does not matter, only its direction square to the axis.
-    at(turn(v(2.0, 2.0, 5.0)), FRAC_PI_4);
+    at(turn(v(2.0, 2.0, 5.0)), -FRAC_PI_4);
     // Vectors need not be unit.
-    at(turn_to_parallel(v(0.0, 0.0, 7.0), v(3.0, 0.0, 0.0), v(4.0, 4.0, 0.0), &n), FRAC_PI_4);
+    at(turn_to_parallel(v(0.0, 0.0, 7.0), v(3.0, 0.0, 0.0), v(4.0, 4.0, 0.0), &n), -FRAC_PI_4);
     // Each refusal by name.
     assert_eq!(turn(v(0.0, 0.0, 3.0)), Err(ParallelTurnError::AlongAxis));
     assert_eq!(

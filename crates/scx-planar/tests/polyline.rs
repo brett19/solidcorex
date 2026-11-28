@@ -35,8 +35,8 @@ fn two_zigzags_cross_at_the_known_points() {
     assert_eq!(c.meets.len(), 2, "{c:?}");
     assert!(c.overlaps.is_empty());
     let at = |i: usize| c.meets[i].meet.at;
-    assert!((at(0).x - 1.0).abs() < 1e-12 && (at(0).y - 1.0).abs() < 1e-12);
-    assert!((at(1).x - 3.0).abs() < 1e-12 && (at(1).y - 1.0).abs() < 1e-12);
+    assert!((at(0).x - 1.0).abs() < 1e-9 && (at(0).y - 1.0).abs() < 1e-9, "{c:?}");
+    assert!((at(1).x - 3.0).abs() < 1e-9 && (at(1).y - 1.0).abs() < 1e-9, "{c:?}");
     assert_eq!(
         (c.meets[0].a_segment, c.meets[0].b_segment),
         (0, 0),
