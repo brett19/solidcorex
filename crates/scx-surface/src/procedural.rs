@@ -1,7 +1,7 @@
 // Written for solidcorex. Apache-2.0.
 //! [`Procedural`]: a surface held as its definition (a generator curve revolved about an
-//! axis, or extruded along a vector) and the exact rational net of that definition, built
-//! once per value (research 75 §13.27).
+//! axis, extruded along a vector, or swept by a screw motion) and the rational net of that
+//! definition, built once per value (research 75 §13.27, §13.29).
 //!
 //! The definition is the surface: [`Procedural::point`], [`Procedural::jet`] and
 //! [`Procedural::eval`] (any [`Ranged`] scalar: `f64` and intervals) read it in closed form.
@@ -13,10 +13,17 @@
 //! answer must hold the definition ([`Procedural::net_over`]); outside the box they read
 //! the definition.
 //!
+//! A revolution's and an extrusion's net is the definition's exact NURBS image. A sweep's
+//! ([`Sweep`], its [`Motion::Screw`]) is not: its turn is cut into spans at its stations,
+//! each an exact rational arc of the turn but not of the lift or the radial law, and its
+//! bound adds the certified gap of that approximation ([`Screw::approx`]) to the
+//! rounding, so `to_nurbs` refuses it ([`ProceduralError::Inexact`]).
+//!
 //! | solidcore at the pin | here |
 //! |---|---|
 //! | `SurfOfRevolution` / `SurfOfExtrusion`: the generator, the axis or direction, and a NURB rebuilt on demand under a per-call `NetScope` | [`Definition::Revolution`] / [`Definition::Extrusion`]: the generator's data and the net, built once in [`Procedural::new`], read by every query |
 //! | the NURB built from the generator's NURB, its rounding unstated | the net built from exact control data in `f64` and, alongside, in intervals; the gap is [`Procedural::bound`] |
+//! | `ProceduralSweep` beside the B-spline wall `sweep::screw` builds, riding on a `Nurbs` surface | [`Definition::Sweep`]: its own arm, the net built from the definition in [`Procedural::new`] |
 //! | the generator any curve | a line, a circle or ellipse over whole quarter arcs, or a NURBS curve over its domain; a parabola or hyperbola is [`ProceduralError::Generator`] for now |
 //!
 //! # The uv
@@ -28,6 +35,10 @@
 //! own; a circle's or ellipse's is the quarter-arc parameter of its angle (a turn over
 //! `[0, 1]`, as the torus's `v`), not the curve's radians, so the net is exact in the same
 //! uv.
+//!
+//! A sweep's `u` is the net's parameter across the turn in radians, bounded by its first and
+//! last station ([`Screw::turn_at`] is the definition's angle there, equal at the stations);
+//! its `v` is the generator's parameter.
 
 use core::f64::consts::{FRAC_1_SQRT_2, FRAC_PI_2};
 use core::fmt;
@@ -43,7 +54,7 @@ use scx_num::interval::Ivl;
 use scx_num::jet::{CurveJet, SurfaceJet};
 use scx_num::math::Affine;
 use scx_num::ring::Ring;
-use scx_num::trig::Ranged;
+use scx_num::trig::{Ranged, Trig};
 use scx_num::vector2d::Point2;
 use scx_num::vector3d::{Point3, UnitVec3, Vec3};
 use scx_nurbs::{Approach, KnotVector, NurbsCurve};
@@ -51,6 +62,11 @@ use scx_nurbs_surface::{Net, NurbsSurface, NurbsSurfaceError, ParamAxis};
 
 use crate::edit::{UvMap, similar};
 use crate::error::SurfaceError;
+use crate::invert::{self, Closest, Inversion, Periods};
+
+mod screw;
+
+pub use screw::{RadialLaw, Screw};
 
 /// The turn about a revolution's axis, and a conic generator's angle: four quarter arcs over
 /// `[0, 1]`.
@@ -62,6 +78,12 @@ const FLAT: f64 = 16.0 * f64::EPSILON;
 
 /// The most quarter arcs a covering net (`to_nurbs` past the base turn) may span.
 const MAX_QUARTERS: i64 = 8;
+
+/// The most control points of a sweep's net.
+const MAX_NET_POINTS: usize = 4_000_000;
+
+/// The most Newton steps polishing a sweep's foot on its definition.
+const POLISH_STEPS: usize = 8;
 
 // ---------------------------------------------------------------- errors
 
@@ -97,6 +119,24 @@ pub enum ProceduralError {
     /// The net could not be built (overflow, for sizes near the largest double). A context
     /// frame: the cause through [`std::error::Error::source`].
     Net(NurbsSurfaceError),
+    /// A radial law with no points, points of different counts, a value not finite, angles
+    /// not strictly ascending, or a direction that is zero or not square to the axis.
+    /// `Refused`.
+    Law,
+    /// A screw of no pitch and no law: that is a [`Revolution`]. `Refused`.
+    ZeroPitch,
+    /// The resolution needs more spans of a screw's turn, or more control points of its
+    /// net, than are built. `Exhausted`.
+    TooFine {
+        /// The spans the turn needed when it stopped.
+        spans: usize,
+    },
+    /// A sweep's net is not its definition's exact image: `to_nurbs` refuses it.
+    /// `Unsupported`.
+    Inexact {
+        /// The net's bound.
+        bound: f64,
+    },
 }
 
 impl ProceduralError {
@@ -104,12 +144,15 @@ impl ProceduralError {
     #[must_use]
     pub const fn kind(&self) -> ErrorKind {
         match self {
-            Self::Generator { .. } => ErrorKind::Unsupported,
+            Self::Generator { .. } | Self::Inexact { .. } => ErrorKind::Unsupported,
             Self::Range { .. }
             | Self::NotFinite
             | Self::ZeroDirection
             | Self::OnAxis
-            | Self::Flat => ErrorKind::Refused,
+            | Self::Flat
+            | Self::Law
+            | Self::ZeroPitch => ErrorKind::Refused,
+            Self::TooFine { .. } => ErrorKind::Exhausted,
             Self::Net(e) => e.kind(),
         }
     }
@@ -125,6 +168,10 @@ impl ProceduralError {
             Self::OnAxis => "procedural_on_axis",
             Self::Flat => "procedural_flat",
             Self::Net(_) => "procedural_net",
+            Self::Law => "procedural_law",
+            Self::ZeroPitch => "procedural_zero_pitch",
+            Self::TooFine { .. } => "procedural_too_fine",
+            Self::Inexact { .. } => "procedural_not_exact",
         }
     }
 }
@@ -147,6 +194,18 @@ impl fmt::Display for ProceduralError {
             Self::OnAxis => f.write_str("the generator lies on the axis of revolution"),
             Self::Flat => f.write_str("the extrusion runs within the generator's line or plane"),
             Self::Net(_) => f.write_str("the procedural surface's net could not be built"),
+            Self::Law => f.write_str("the radial law is not a usable law for the screw"),
+            Self::ZeroPitch => f.write_str("a screw with no pitch and no law is a revolution"),
+            Self::TooFine { spans } => {
+                write!(
+                    f,
+                    "the resolution needs {spans} or more spans of the screw's turn"
+                )
+            }
+            Self::Inexact { bound } => write!(
+                f,
+                "the sweep's net is within {bound} of its definition, not its exact image"
+            ),
         }
     }
 }
@@ -164,7 +223,7 @@ impl std::error::Error for ProceduralError {
 
 /// A generator in closed form, evaluable over any [`Ring`].
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum Closed {
+pub(crate) enum Closed {
     /// `o + d t`.
     Line { o: Point3, d: Vec3 },
     /// `o + a cos w(t) + b sin w(t)`, `w` the quarter-arc angle of [`TURN`]; `a` and `b` are
@@ -483,8 +542,24 @@ pub struct Extrusion {
     v: Extent1d,
 }
 
-/// What a procedural surface is. Revolution and extrusion now; the other procedural kinds
-/// join as variants.
+/// How a sweep's profile moves. A screw now; a path motion joins as a variant.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum Motion {
+    /// A screw about an axis, with a radial law.
+    Screw(Screw),
+}
+
+/// A generator carried by a motion: `S(u, v)` is the generator's point at `v` moved by the
+/// motion at `u`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Sweep {
+    profile: Profile,
+    motion: Motion,
+}
+
+/// What a procedural surface is. Revolution, extrusion and sweep now; the other procedural
+/// kinds join as variants.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum Definition {
@@ -492,6 +567,8 @@ pub enum Definition {
     Revolution(Revolution),
     /// A surface of linear extrusion.
     Extrusion(Extrusion),
+    /// A swept surface.
+    Sweep(Sweep),
 }
 
 impl Revolution {
@@ -634,6 +711,79 @@ impl Extrusion {
     }
 }
 
+impl Sweep {
+    /// `generator` over `range` (its own parameter; radians for a circle or ellipse, whole
+    /// quarter turns) carried by `motion`: `S(u, v)` the generator's point at `v` moved by
+    /// the motion at `u`.
+    ///
+    /// # Errors
+    ///
+    /// [`ProceduralError::Generator`] (`Unsupported`) for a parabola or hyperbola;
+    /// `Refused`: [`ProceduralError::Range`], and [`ProceduralError::OnAxis`] where every
+    /// control point of the generator is on a screw's axis and no law moves it off;
+    /// [`ProceduralError::TooFine`] (`Exhausted`) for a net of more than 4 000 000 control
+    /// points.
+    pub fn new(
+        generator: &Curve,
+        range: Extent1d,
+        motion: impl Into<Motion>,
+    ) -> Result<Self, ProceduralError> {
+        let profile = Profile::new(generator, range)?;
+        let motion = motion.into();
+        let c = profile.controls(FRAC_1_SQRT_2, None);
+        match &motion {
+            Motion::Screw(s) => {
+                let k = s.axis().as_vec();
+                let (mut off, mut far) = (0.0_f64, 0.0_f64);
+                for &g in &c.pts {
+                    let w = g - s.origin();
+                    off = off.max((w - k * w.dot(k)).length());
+                    far = far.max(w.length());
+                }
+                let moved = s.law().is_some_and(|l| !l.is_nought());
+                if off <= FLAT * far && !moved {
+                    return Err(ProceduralError::OnAxis);
+                }
+                let rows = 2 * s.spans() + 1;
+                if rows.saturating_mul(c.pts.len()) > MAX_NET_POINTS {
+                    return Err(ProceduralError::TooFine { spans: s.spans() });
+                }
+            }
+        }
+        Ok(Self { profile, motion })
+    }
+
+    /// The motion.
+    #[must_use]
+    pub const fn motion(&self) -> &Motion {
+        &self.motion
+    }
+
+    /// The generator's range in the surface's `v`.
+    #[must_use]
+    pub const fn range(&self) -> Extent1d {
+        self.profile.range
+    }
+
+    fn screw(&self) -> &Screw {
+        match &self.motion {
+            Motion::Screw(s) => s,
+        }
+    }
+}
+
+impl From<Screw> for Motion {
+    fn from(s: Screw) -> Self {
+        Self::Screw(s)
+    }
+}
+
+impl From<Sweep> for Definition {
+    fn from(s: Sweep) -> Self {
+        Self::Sweep(s)
+    }
+}
+
 impl From<Revolution> for Definition {
     fn from(r: Revolution) -> Self {
         Self::Revolution(r)
@@ -659,7 +809,7 @@ struct NetData<T> {
 
 /// The definition's control net in `T`, over its range or over the quarter arcs `uq`, `vq`
 /// of its periodic directions.
-fn net_data<T: Ring>(
+fn net_data<T: Trig>(
     def: &Definition,
     root_half: T,
     uq: Option<(i64, i64)>,
@@ -704,6 +854,17 @@ fn net_data<T: Ring>(
                 w,
             }
         }
+        Definition::Sweep(s) => {
+            let g = s.profile.controls(root_half, vq);
+            let (knots, pts, w) = s.screw().rows(&g.pts, &g.w);
+            NetData {
+                ku: (2, knots),
+                kv: (g.degree, g.knots),
+                cols: g.pts.len(),
+                pts,
+                w,
+            }
+        }
     }
 }
 
@@ -715,7 +876,8 @@ fn net_data<T: Ring>(
 /// `|S~ - S| <= delta + eps / (1 - eps) D`, for `delta` the largest `|P~ - P|`, `eps` the
 /// largest `|w~ / W - 1|` and `D` a bound on the exact points' spread (research 75 §13.27).
 /// The effective `P~` is the net's own homogeneous point over its weight, so the rounding of
-/// `w~ P~` is in `delta`. All of it in outward intervals, the upper end taken.
+/// `w~ P~` is in `delta`. All of it in outward intervals, the upper end taken. A sweep's
+/// exact net is within [`Screw::approx`] of its definition, which the bound adds.
 fn build(
     def: &Definition,
     uq: Option<(i64, i64)>,
@@ -759,7 +921,11 @@ fn build(
     );
     let dm = Ivl::from(spread.hi).sqrt() + delta + delta;
     let e = Ivl::from(eps);
-    let bound = (delta + e / (Ivl::from(1.0) - e) * dm).hi;
+    let approx = match def {
+        Definition::Sweep(s) => s.screw().approx(),
+        _ => 0.0,
+    };
+    let bound = (delta + e / (Ivl::from(1.0) - e) * dm + Ivl::from(approx)).hi;
     if !(bound.is_finite() && eps < 1.0) {
         return Err(ProceduralError::NotFinite);
     }
@@ -793,21 +959,21 @@ pub struct Procedural {
     bound: f64,
 }
 
-/// A closed-form view of a procedural surface whose generator is a line or conic: its
+/// A closed-form view of a revolution or extrusion whose generator is a line or conic: its
 /// formula over any [`Ring`] (the enclosure's ring of values with partials among them).
-pub(crate) struct ClosedForm<'a> {
-    def: &'a Definition,
-    shape: Closed,
+pub(crate) enum ClosedForm<'a> {
+    Revolution(&'a Revolution, Closed),
+    Extrusion(&'a Extrusion, Closed),
 }
 
 impl ClosedForm<'_> {
     pub(crate) fn eval<T: Ring>(&self, u: T, v: T, near: Point2) -> Point3<T> {
-        match self.def {
-            Definition::Revolution(r) => {
+        match *self {
+            Self::Revolution(r, shape) => {
                 let (c, s) = TURN.cos_sin(u, TURN.piece(near.x, Approach::Above));
-                r.at(c, s, self.shape.point(v, near.y))
+                r.at(c, s, shape.point(v, near.y))
             }
-            Definition::Extrusion(e) => e.at(v, self.shape.point(u, near.x)),
+            Self::Extrusion(e, shape) => e.at(v, shape.point(u, near.x)),
         }
     }
 }
@@ -859,21 +1025,25 @@ impl Procedural {
         contains(&self.net.domain(), uv).then_some((&self.net, self.bound))
     }
 
+    /// The closed form of a revolution or extrusion of a line or conic; `None` for a NURBS
+    /// generator and for a sweep (its angle is not a ring's: [`Procedural::eval`] reads it).
     pub(crate) fn closed_form(&self) -> Option<ClosedForm<'_>> {
         let shape = match &self.profile().shape {
             Shape::Closed(c) => *c,
             Shape::Nurbs(_) => return None,
         };
-        Some(ClosedForm {
-            def: &self.def,
-            shape,
-        })
+        match &self.def {
+            Definition::Revolution(r) => Some(ClosedForm::Revolution(r, shape)),
+            Definition::Extrusion(e) => Some(ClosedForm::Extrusion(e, shape)),
+            Definition::Sweep(_) => None,
+        }
     }
 
     fn profile(&self) -> &Profile {
         match &self.def {
             Definition::Revolution(r) => &r.profile,
             Definition::Extrusion(e) => &e.profile,
+            Definition::Sweep(s) => &s.profile,
         }
     }
 
@@ -883,6 +1053,7 @@ impl Procedural {
         match &self.def {
             Definition::Revolution(_) => ((Some(TURN), per), (g, per)),
             Definition::Extrusion(_) => ((g, per), (None, 1)),
+            Definition::Sweep(_) => ((None, per), (g, per)),
         }
     }
 
@@ -892,16 +1063,17 @@ impl Procedural {
         self.eval(uv.x, uv.y, uv)
     }
 
-    /// `S(u, v)` from the definition in any [`Ranged`] scalar (`f64`, an enclosure in
+    /// `S(u, v)` from the definition in any [`Trig`] scalar (`f64`, an enclosure in
     /// [`Ivl`]), with the arcs that hold `near`.
     #[must_use]
-    pub fn eval<T: Ranged>(&self, u: T, v: T, near: Point2) -> Point3<T> {
+    pub fn eval<T: Trig>(&self, u: T, v: T, near: Point2) -> Point3<T> {
         match &self.def {
             Definition::Revolution(r) => {
                 let (c, s) = TURN.cos_sin(u, TURN.piece(near.x, Approach::Above));
                 r.at(c, s, r.profile.point(v, near.y))
             }
             Definition::Extrusion(e) => e.at(v, e.profile.point(u, near.x)),
+            Definition::Sweep(s) => s.screw().eval(u, s.profile.point(v, near.y)),
         }
     }
 
@@ -941,6 +1113,17 @@ impl Procedural {
                     _ => zero,
                 })
             }
+            Definition::Sweep(sw) => {
+                let s = sw.screw();
+                let g = sw.profile.jet::<D>(uv.y, side[1]);
+                SurfaceJet::from_fn(|i, j| {
+                    let pj = match j.checked_sub(1) {
+                        None => g.point - s.origin(),
+                        Some(k) => g.d.get(k).copied().unwrap_or(zero),
+                    };
+                    s.partial(uv.x, side[0], i, j, pj)
+                })
+            }
         }
     }
 
@@ -965,6 +1148,9 @@ impl Procedural {
             Definition::Extrusion(e) => {
                 UvDomain::new(e.profile.domain(), ParamDomain::Bounded(e.v))
             }
+            Definition::Sweep(s) => {
+                UvDomain::new(ParamDomain::Bounded(s.screw().turn()), s.profile.domain())
+            }
         }
     }
 
@@ -976,8 +1162,14 @@ impl Procedural {
     ///
     /// `Refused`: [`SurfaceError::EmptyExtent`], and [`SurfaceError::OutsideDomain`] past a
     /// bounded direction or over more than a period; [`SurfaceError::Procedural`] or
-    /// [`SurfaceError::Nurbs`] only on overflow.
+    /// [`SurfaceError::Nurbs`] only on overflow; [`SurfaceError::Procedural`] with
+    /// [`ProceduralError::Inexact`] (`Unsupported`) for a sweep, whose net is not exact.
     pub fn to_nurbs(&self, over: &Extent2d) -> Result<NurbsSurface<3>, SurfaceError> {
+        if matches!(self.def, Definition::Sweep(_)) {
+            return Err(SurfaceError::Procedural(ProceduralError::Inexact {
+                bound: self.bound,
+            }));
+        }
         if let Some((n, _)) = self.net_over(over) {
             return crate::to_nurbs::restrict(n, over);
         }
@@ -1009,9 +1201,71 @@ impl Procedural {
         crate::to_nurbs::restrict(&n, over)
     }
 
+    /// The nearest point of the surface to `p`, placed against `domain` (`None`: the net's
+    /// box): the net's foot, and for a sweep (whose net is not exact) that foot polished on
+    /// the definition by Newton steps within the net's box, each kept only where it comes
+    /// nearer.
+    pub(crate) fn invert(
+        &self,
+        p: Point3,
+        near: Option<Point2>,
+        domain: Option<&Extent2d>,
+        budget: &mut scx_num::budget::Budget,
+        stop: &scx_num::budget::Stop,
+    ) -> Result<Inversion<Point2>, SurfaceError> {
+        let inv = crate::nurbs_invert::invert(&self.net, p, near, domain, budget, stop)?;
+        if !matches!(self.def, Definition::Sweep(_)) {
+            return Ok(inv);
+        }
+        let start = inv.foot().at;
+        if !(start.x.is_finite() && start.y.is_finite()) {
+            return Ok(inv);
+        }
+        let uv = self.polish(p, start);
+        let at = |uv: Point2| invert::foot(p, uv, self.point(uv));
+        Ok(invert::invert(
+            Closest::One(at(uv)),
+            Periods::NONE,
+            domain,
+            at,
+        ))
+    }
+
+    /// Newton on `|S - p|^2` from `uv`, within the net's box.
+    fn polish(&self, p: Point3, mut uv: Point2) -> Point2 {
+        let side = [Approach::Above, Approach::Above];
+        let bx = self.net.domain();
+        let mut best = (self.point(uv) - p).length_squared();
+        for _ in 0..POLISH_STEPS {
+            let j = self.jet::<2>(uv, side);
+            let get = |i, k| j.get(i, k).unwrap_or(Vec3::splat(0.0));
+            let (d, su, sv) = (get(0, 0) - p.to_vec(), get(1, 0), get(0, 1));
+            let (suu, suv, svv) = (get(2, 0), get(1, 1), get(0, 2));
+            let (gu, gv) = (su.dot(d), sv.dot(d));
+            let (a, b, c) = (
+                su.dot(su) + suu.dot(d),
+                su.dot(sv) + suv.dot(d),
+                sv.dot(sv) + svv.dot(d),
+            );
+            let det = a * c - b * b;
+            if !(det.is_finite() && det > 0.0) {
+                break;
+            }
+            let (du, dv) = ((c * gu - b * gv) / det, (a * gv - b * gu) / det);
+            let next = bx.clamp_point(Point2::new(uv.x - du, uv.y - dv));
+            let dist = (self.point(next) - p).length_squared();
+            if dist.is_nan() || dist >= best {
+                break;
+            }
+            (uv, best) = (next, dist);
+        }
+        uv
+    }
+
     /// The same surface run the other way along `axis`, `S'(-u, v) = S(u, v)` (or in `v`),
     /// exactly: a revolution's turn by negating its axis, a generator's direction by the
-    /// generator reversed, an extrusion's `v` by its vector negated. The net is the
+    /// generator reversed, an extrusion's `v` by its vector negated, a screw's turn by its
+    /// axis, stations and law's angles negated ([`Screw`]'s gap kept). The net is the
     /// original's reversed ([`NurbsSurface::reversed`], exact), with the same bound.
     #[must_use]
     pub fn reversed(&self, axis: ParamAxis) -> (Self, UvMap) {
@@ -1033,6 +1287,14 @@ impl Procedural {
                 v: Extent1d::new(-e.v.max(), -e.v.min()).unwrap_or(e.v),
                 ..e.clone()
             }),
+            (Definition::Sweep(s), ParamAxis::U) => Definition::Sweep(Sweep {
+                motion: Motion::Screw(s.screw().reversed()),
+                ..s.clone()
+            }),
+            (Definition::Sweep(s), ParamAxis::V) => Definition::Sweep(Sweep {
+                profile: s.profile.reversed(),
+                ..s.clone()
+            }),
         };
         let s = Self {
             def,
@@ -1043,26 +1305,26 @@ impl Procedural {
     }
 
     /// The image under `a`, on the same uv ([`UvMap::IDENTITY`]): an extrusion under any
-    /// affine map (its generator's control data and vector mapped), a revolution under a
-    /// similarity (its axis the image's, turned for a mirror so `u` keeps its points). The
-    /// net is built again.
+    /// affine map (its generator's control data and vector mapped), a revolution or a sweep
+    /// under a similarity (its axis the image's, turned for a mirror so `u` keeps its points;
+    /// a screw's pitch and law scaled, its stations kept). The net is built again.
     ///
     /// # Errors
     ///
     /// [`SurfaceError::MapNotFinite`]; [`SurfaceError::NotSimilar`] (`Unsupported`) for a
-    /// revolution under a map that is not a similarity; [`SurfaceError::Procedural`] for an
+    /// revolution or sweep under a map that is not a similarity; [`SurfaceError::Procedural`] for an
     /// image the definition refuses (flattened by the map).
     pub fn transformed(&self, a: &Affine) -> Result<(Self, UvMap), SurfaceError> {
         if !a.is_finite() {
             return Err(SurfaceError::MapNotFinite);
         }
+        let axes = [a.x_axis(), a.y_axis(), a.z_axis()];
+        let det = axes[0].cross(axes[1]).dot(axes[2]);
         let def = match &self.def {
             Definition::Revolution(r) => {
-                let axes = [a.x_axis(), a.y_axis(), a.z_axis()];
                 if !similar(&axes) {
                     return Err(SurfaceError::NotSimilar);
                 }
-                let det = axes[0].cross(axes[1]).dot(axes[2]);
                 let z = a.apply_vec(r.axis.as_vec()) * det.signum();
                 Definition::Revolution(Revolution {
                     profile: r.profile.transformed(a)?,
@@ -1081,6 +1343,22 @@ impl Procedural {
                     v: e.v,
                 })
             }
+            Definition::Sweep(sw) => {
+                if !similar(&axes) {
+                    return Err(SurfaceError::NotSimilar);
+                }
+                let s = sw.screw();
+                let scale = axes[0].length();
+                let z = a.apply_vec(s.axis().as_vec()) * det.signum();
+                let screw = s
+                    .transformed(a.apply(s.origin()), z, scale, det < 0.0, |d| a.apply_vec(d))
+                    .map_err(SurfaceError::Procedural)?;
+                let profile = sw.profile.transformed(a)?;
+                Definition::Sweep(Sweep {
+                    profile,
+                    motion: Motion::Screw(screw),
+                })
+            }
         };
         let s = Self::new(def).map_err(SurfaceError::Procedural)?;
         Ok((s, UvMap::IDENTITY))
@@ -1096,7 +1374,7 @@ mod tests {
     use scx_num::fmath;
     use scx_num::frame::{Frame, Sense};
     use scx_num::hash::Rng;
-    use scx_num::units::Length;
+    use scx_num::units::{Length, Resolution};
     use scx_nurbs::KnotVector;
 
     const ABOVE: [Approach; 2] = [Approach::Above, Approach::Above];
@@ -1579,5 +1857,402 @@ mod tests {
         );
         assert!(std::error::Error::source(&e).is_some());
         assert!(!ProceduralError::Flat.to_string().is_empty());
+    }
+
+    // ------------------------------------------------------------ the screw sweep
+
+    fn screw(o: Point3, k: Vec3, pitch: f64, turn: Extent1d, law: Option<RadialLaw>) -> Screw {
+        Screw::new(o, k, pitch, turn, law, Resolution::DEFAULT).unwrap()
+    }
+
+    fn swept(g: &Curve, range: Extent1d, m: Screw) -> Procedural {
+        Procedural::new(Sweep::new(g, range, m).unwrap()).unwrap()
+    }
+
+    fn the_screw(p: &Procedural) -> &Screw {
+        let Definition::Sweep(s) = p.definition() else {
+            unreachable!()
+        };
+        let Motion::Screw(m) = s.motion();
+        m
+    }
+
+    /// A line with a law, a cubic about a skew axis, and a coil: the circle in a plane of
+    /// the axis, two whole turns.
+    fn sweeps() -> Vec<Procedural> {
+        let law = RadialLaw::new(Vec3::X, vec![0.0, 2.0], vec![0.0, 0.5]).unwrap();
+        let a = swept(
+            &line(Point3::new(4.0, 0.0, 0.0), Point3::new(5.0, 0.0, 1.0)),
+            ext(0.0, 1.0),
+            screw(Point3::ORIGIN, Vec3::Z, 1.5, ext(0.0, 3.0), Some(law)),
+        );
+        let b = swept(
+            &bezier(),
+            ext(0.0, 1.0),
+            screw(
+                Point3::new(0.5, 0.25, -1.0),
+                Vec3::new(1.0, 1.0, 1.0),
+                -2.0,
+                ext(-1.0, 2.0),
+                None,
+            ),
+        );
+        let f = Frame::new(Point3::new(6.0, 0.0, 0.0), Vec3::Y, Vec3::X).unwrap();
+        let c = Curve::Circle(Circle::new(f, Length::from_mm(1.5), Sense::Forward).unwrap());
+        let coil = swept(
+            &c,
+            ext(0.0, core::f64::consts::TAU),
+            screw(
+                Point3::ORIGIN,
+                Vec3::Z,
+                3.0,
+                ext(0.0, 2.0 * core::f64::consts::TAU),
+                None,
+            ),
+        );
+        vec![a, b, coil]
+    }
+
+    /// The screw of a point is the helix, and of a line along the axis the cylinder: on the
+    /// line (3, 0, 0) to (3, 0, 1) about z with pitch `pi`, `S(u, v)` is
+    /// `(3 cos theta, 3 sin theta, v + theta / 2)`, `theta` the definition's angle at `u`, the
+    /// stations' angles their own.
+    #[test]
+    fn a_point_screwed_is_the_helix_and_a_line_the_cylinder() {
+        let m = screw(
+            Point3::ORIGIN,
+            Vec3::Z,
+            core::f64::consts::PI,
+            ext(0.0, 5.0),
+            None,
+        );
+        let s = swept(
+            &line(Point3::new(3.0, 0.0, 0.0), Point3::new(3.0, 0.0, 1.0)),
+            ext(0.0, 1.0),
+            m,
+        );
+        let m = the_screw(&s);
+        for &t in m.stations() {
+            assert_eq!(m.turn_at(t), t);
+        }
+        let mut last = f64::NEG_INFINITY;
+        for i in 0..=2000 {
+            let u = 5.0 * f64::from(i) / 2000.0;
+            let th = m.turn_at(u);
+            assert!(th > last && (th - u).abs() <= 0.1, "{u}");
+            last = th;
+            for j in 0..=4 {
+                let v = f64::from(j) / 4.0;
+                let p = s.point(Point2::new(u, v));
+                let (sn, c) = fmath::sin_cos(th);
+                let want = Point3::new(3.0 * c, 3.0 * sn, v + 0.5 * th);
+                assert!(near(p, want, 1e-14), "{u} {v} {p:?}");
+                assert!(((p.x * p.x + p.y * p.y).sqrt() - 3.0).abs() <= 1e-14);
+            }
+        }
+        assert_eq!(s.domain().u, ParamDomain::Bounded(ext(0.0, 5.0)));
+        assert_eq!(s.domain().v, ParamDomain::Bounded(ext(0.0, 1.0)));
+        assert!(s.closed_form().is_none());
+    }
+
+    /// The law moves the radius: the line's foot at (4, 0, 0) is at radius `4 + 0.5 theta / 2`
+    /// on the law's first stretch and `4.5` past it.
+    #[test]
+    fn the_law_moves_the_radius() {
+        let s = sweeps().swap_remove(0);
+        let m = the_screw(&s);
+        for i in 0..=300 {
+            let u = 3.0 * f64::from(i) / 300.0;
+            let th = m.turn_at(u);
+            let p = s.point(Point2::new(u, 0.0));
+            let want = 4.0 + m.law().unwrap().offset(th);
+            assert!(
+                ((p.x * p.x + p.y * p.y).sqrt() - want).abs() <= 1e-14,
+                "{u}"
+            );
+            assert!(
+                (p.z - 1.5 * th / core::f64::consts::TAU).abs() <= 1e-14,
+                "{u}"
+            );
+        }
+        assert_eq!(m.law().unwrap().offset(1.0), 0.25);
+        assert_eq!(m.law().unwrap().offset(2.5), 0.5);
+    }
+
+    /// The net is the definition within the screw's gap plus the net's rounding; the gap is
+    /// inside the resolution's approximation and reached (a dense look at a widest span finds
+    /// at least half of it).
+    #[test]
+    fn the_net_is_the_screw_within_its_gap() {
+        let goal = Resolution::DEFAULT.approx().mm();
+        for s in sweeps() {
+            let m = the_screw(&s);
+            let sc = scale(&s);
+            // The sweep's net rounds its trigonometry at every station.
+            let round = 256.0 * f64::EPSILON * sc;
+            assert!(m.approx() > 0.0 && m.approx() <= goal, "{}", m.approx());
+            assert!(
+                s.bound() >= m.approx() && s.bound() <= m.approx() + round,
+                "{} {} {round}",
+                s.bound(),
+                m.approx()
+            );
+            let st = m.stations();
+            let widest = st.windows(2).enumerate().fold((0, 0.0_f64), |b, (i, w)| {
+                if w[1] - w[0] > b.1 {
+                    (i, w[1] - w[0])
+                } else {
+                    b
+                }
+            });
+            let mut seen = 0.0_f64;
+            let e = s.net().domain();
+            let vr = ext(e.min().y, e.max().y);
+            for i in 0..m.spans() {
+                let dense = if i == widest.0 { 400 } else { 4 };
+                for a in 0..=dense {
+                    let u = st[i] + (st[i + 1] - st[i]) * f64::from(a) / f64::from(dense);
+                    for b in 0..=6 {
+                        let uv = Point2::new(u, vr.min() + vr.length() * f64::from(b) / 6.0);
+                        let n = s.net().point(uv.to_array(), ABOVE).unwrap();
+                        let gap = (Point3::from_array(n) - s.point(uv)).length();
+                        assert!(gap <= s.bound() + round, "{uv:?} {gap} {}", s.bound());
+                        seen = seen.max(gap);
+                    }
+                }
+            }
+            assert!(seen >= 0.5 * m.approx(), "{seen} {}", m.approx());
+        }
+    }
+
+    /// Whether `u` is clear of every station by `h` (the turn's second partials step there).
+    fn clear(m: &Screw, u: f64, h: f64) -> bool {
+        m.stations().iter().all(|&s| (s - u).abs() > h)
+    }
+
+    /// The jet's partials are central differences of the point (first order) and of the
+    /// first-order jet (second), away from the stations; at a station the side picks the span.
+    #[test]
+    fn the_sweep_jet_is_the_derivative_of_the_point() {
+        let h = 1e-6;
+        for s in sweeps() {
+            let sc = scale(&s);
+            let m = the_screw(&s).clone();
+            let diff = |uv: Point2, du: bool, of: (usize, usize)| -> Vec3 {
+                let e = if du {
+                    Point2::new(h, 0.0)
+                } else {
+                    Point2::new(0.0, h)
+                };
+                let at = |q: Point2| s.jet::<1>(q, ABOVE).get(of.0, of.1).unwrap();
+                (at(Point2::new(uv.x + e.x, uv.y + e.y)) - at(Point2::new(uv.x - e.x, uv.y - e.y)))
+                    * (0.5 / h)
+            };
+            for uv in samples(&s).into_iter().step_by(7) {
+                // The generator's knots step its second partials too (a quarter arc's).
+                let vk = s.net().knots(ParamAxis::V);
+                if !clear(&m, uv.x, 4.0 * h) || vk.iter().any(|&k| (k - uv.y).abs() <= 4.0 * h) {
+                    continue;
+                }
+                let j = s.jet::<2>(uv, ABOVE);
+                let p0 = j.get(0, 0).unwrap().to_point();
+                assert!(
+                    p0.distance(s.point(uv)) <= 16.0 * f64::EPSILON * sc,
+                    "{uv:?}"
+                );
+                let checks = [
+                    ((1, 0), true, (0, 0)),
+                    ((0, 1), false, (0, 0)),
+                    ((2, 0), true, (1, 0)),
+                    ((1, 1), false, (1, 0)),
+                    ((0, 2), false, (0, 1)),
+                ];
+                for (want, du, of) in checks {
+                    let fd = diff(uv, du, of);
+                    let got = j.get(want.0, want.1).unwrap();
+                    assert!(
+                        (fd - got).length() <= 1e-5 * sc,
+                        "{uv:?} {want:?} {fd:?} {got:?}"
+                    );
+                }
+            }
+            // At an inner station the two sides are each their span's.
+            if let Some(&t) = m.stations().get(1) {
+                let e = s.net().domain();
+                let vr = ext(e.min().y, e.max().y);
+                let uv = Point2::new(t, vr.min() + 0.3 * vr.length());
+                for side in [Approach::Above, Approach::Below] {
+                    let j = s.jet::<1>(uv, [side, Approach::Above]);
+                    let off = if side == Approach::Above { 1e-7 } else { -1e-7 };
+                    let fd = (s.point(Point2::new(t + off, uv.y)) - s.point(uv)) * (1.0 / off);
+                    assert!(
+                        (fd - j.get(1, 0).unwrap()).length() <= 1e-5 * sc,
+                        "{side:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The certified box and the range along a direction hold the definition's points.
+    #[test]
+    fn sweep_boxes_hold_the_definition() {
+        let mut rng = Rng::new(0x5c3e);
+        let dir = Vec3::new(0.3, -1.0, 0.7);
+        for s in sweeps() {
+            let surf = Surface::from(s.clone());
+            let e = s.net().domain();
+            let (lo, hi) = (e.min(), e.max());
+            for k in 0..20 {
+                let pick = |rng: &mut Rng, a: f64, b: f64| a + (b - a) * rng.next_f64();
+                let (u0, v0) = (pick(&mut rng, lo.x, hi.x), pick(&mut rng, lo.y, hi.y));
+                let (u1, v1) = if k % 4 == 0 {
+                    (u0, v0)
+                } else {
+                    (pick(&mut rng, u0, hi.x), pick(&mut rng, v0, hi.y))
+                };
+                let uv = Extent2d::from_bounds(u0, v0, u1, v1).unwrap();
+                let b = surf.box_over(uv).unwrap();
+                let a = surf.range_along(dir, uv).unwrap();
+                for i in 0..=8 {
+                    for j in 0..=8 {
+                        let t = Point2::new(
+                            u0 + (u1 - u0) * f64::from(i) / 8.0,
+                            v0 + (v1 - v0) * f64::from(j) / 8.0,
+                        );
+                        let p = s.point(t);
+                        let (m, n) = (b.min(), b.max());
+                        assert!(
+                            m.x <= p.x
+                                && p.x <= n.x
+                                && m.y <= p.y
+                                && p.y <= n.y
+                                && m.z <= p.z
+                                && p.z <= n.z,
+                            "{t:?}"
+                        );
+                        let d = dir.dot(p.to_vec());
+                        assert!(a.lo <= d && d <= a.hi, "{t:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// The net is not the definition, so a sweep's exact NURBS is refused by name.
+    #[test]
+    fn a_sweep_has_no_exact_nurbs() {
+        for s in sweeps() {
+            let e = s.net().domain();
+            let err = s.to_nurbs(&e).unwrap_err();
+            assert_eq!(
+                (err.name(), err.kind()),
+                ("procedural_failed", ErrorKind::Unsupported)
+            );
+            let SurfaceError::Procedural(ProceduralError::Inexact { bound }) = err else {
+                unreachable!("{err:?}")
+            };
+            assert_eq!(bound, s.bound());
+        }
+    }
+
+    /// Reversal is exact and its own inverse; a similarity maps every point; a shear is
+    /// refused.
+    #[test]
+    fn sweep_reversal_and_transform_map_every_point() {
+        let maps = [
+            Affine::rotation(Point3::new(1.0, 2.0, 0.5), Vec3::new(0.3, 1.0, -0.2), 0.7).unwrap(),
+            Affine::uniform_scaling(Point3::new(-1.0, 0.0, 2.0), 2.5).unwrap(),
+            Affine::reflection(Point3::new(0.0, 1.0, 0.0), Vec3::new(1.0, 0.5, 0.0)).unwrap(),
+        ];
+        let shear = Affine::from_axes(
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.7, 1.0, 0.0),
+            Vec3::new(0.0, 0.2, 1.5),
+            Point3::new(1.0, 1.0, 1.0),
+        );
+        for s in sweeps() {
+            let sc = scale(&s);
+            for axis in [ParamAxis::U, ParamAxis::V] {
+                let (r, m) = s.reversed(axis);
+                assert_eq!(r.reversed(axis).0, s);
+                for uv in samples(&s) {
+                    assert!(
+                        near(r.point(m.apply(uv)), s.point(uv), 8.0 * f64::EPSILON * sc),
+                        "{axis:?} {uv:?}"
+                    );
+                }
+            }
+            assert_eq!(s.transformed(&shear).unwrap_err().name(), "map_not_similar");
+            for a in &maps {
+                let (t, m) = s.transformed(a).unwrap();
+                assert_eq!(m, UvMap::IDENTITY);
+                for uv in samples(&s).into_iter().step_by(5) {
+                    let want = a.apply(s.point(uv));
+                    assert!(near(t.point(uv), want, 3e-13 * sc), "{uv:?}");
+                }
+            }
+        }
+    }
+
+    /// A point on the sweep inverts to itself, to the definition, not to the net's gap.
+    #[test]
+    fn sweep_inversion_finds_points_on_the_surface() {
+        for s in sweeps() {
+            let surf = Surface::from(s.clone());
+            let sc = scale(&s);
+            for uv in samples(&s).into_iter().step_by(17) {
+                let p = s.point(uv);
+                let inv = surf
+                    .invert(p, None, None, &mut Budget::new(1_000_000), &Stop::new())
+                    .unwrap();
+                let f = inv.foot();
+                assert!(f.distance <= 1e-9 * sc, "{uv:?} {}", f.distance);
+            }
+        }
+    }
+
+    #[test]
+    fn sweep_refusals_are_typed() {
+        let m = screw(Point3::ORIGIN, Vec3::Z, 1.0, ext(0.0, 1.0), None);
+        let on = line(Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 0.0, 1.0));
+        let e = Sweep::new(&on, ext(0.0, 1.0), m.clone()).unwrap_err();
+        assert_eq!(
+            (e.name(), e.kind()),
+            ("procedural_on_axis", ErrorKind::Refused)
+        );
+        // A law that moves the axis line off it is a sweep.
+        let law = RadialLaw::new(Vec3::X, vec![0.0, 1.0], vec![1.0, 2.0]).unwrap();
+        let moved = screw(Point3::ORIGIN, Vec3::Z, 1.0, ext(0.0, 1.0), Some(law));
+        assert!(Sweep::new(&on, ext(0.0, 1.0), moved).is_ok());
+        let zero = Screw::new(
+            Point3::ORIGIN,
+            Vec3::Z,
+            0.0,
+            ext(0.0, 1.0),
+            None,
+            Resolution::DEFAULT,
+        );
+        assert_eq!(zero.unwrap_err().name(), "procedural_zero_pitch");
+        let tilt =
+            RadialLaw::new(Vec3::new(1.0, 0.0, 1.0), vec![0.0, 1.0], vec![0.0, 1.0]).unwrap();
+        let tilted = Screw::new(
+            Point3::ORIGIN,
+            Vec3::Z,
+            1.0,
+            ext(0.0, 1.0),
+            Some(tilt),
+            Resolution::DEFAULT,
+        );
+        assert_eq!(tilted.unwrap_err(), ProceduralError::Law);
+        let fine = Resolution::new(Length::from_mm(1e-12)).unwrap();
+        let many = Screw::new(Point3::ORIGIN, Vec3::Z, 1e3, ext(0.0, 1e3), None, fine).unwrap_err();
+        assert_eq!(
+            (many.name(), many.kind()),
+            ("procedural_too_fine", ErrorKind::Exhausted)
+        );
+        let e = SurfaceError::Procedural(ProceduralError::Inexact { bound: 1e-7 });
+        assert_eq!(e.kind(), ErrorKind::Unsupported);
+        assert!(!ProceduralError::ZeroPitch.to_string().is_empty());
     }
 }

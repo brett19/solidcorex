@@ -27,6 +27,7 @@
 //! of [`FaceId`](scx_brep::FaceId)s by role.
 
 mod assembly;
+mod blend;
 mod block;
 mod cone;
 mod cylinder;
@@ -43,6 +44,7 @@ mod sphere;
 mod sweep;
 mod torus;
 
+pub use blend::{BlendError, BlendRefusal, Blended, EndOrder, SectionFrame, section_blend};
 pub use block::{BlockFaces, block};
 pub use cone::{ConeFaces, cone};
 pub use cylinder::{CylinderFaces, cylinder};

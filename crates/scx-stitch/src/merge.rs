@@ -48,8 +48,8 @@ use scx_num::budget::{Budget, Stop};
 use scx_num::extent1d::Extent1d;
 use scx_num::extent3d::Extent3d;
 use scx_num::units::Length;
-use scx_num::vector3d::{Point3, Vec3};
-use scx_surface::{Plane, Surface};
+use scx_num::vector3d::Point3;
+use scx_surface::{NotNear, Plane, Surface, plane_bound};
 
 use crate::error::{StitchDefect, StitchError, StitchRefusal};
 use crate::report::NoItems;
@@ -57,10 +57,6 @@ use crate::stitch::same_document;
 
 /// Work charged per edge and per surface or curve test.
 const UNIT: u64 = 1;
-
-/// Two planes whose normals differ by more than this (the sine of the angle) are creased
-/// faces, not a near miss of one plane.
-const CREASE: f64 = 1.0e-3;
 
 /// A merge's result: the body, and what was merged and what was left.
 #[derive(Debug, Clone)]
@@ -370,33 +366,15 @@ fn plane_against(
     };
     let bx = face_box(body, f, boxes).ok_or(NotOneSurface::NoBox)?;
     // A crease between faces that are not near parallel is no near miss: not reported.
-    let (za, zb) = (Vec3::from(a.frame().z()), Vec3::from(b.frame().z()));
-    if za.cross(zb).length() > CREASE {
-        return Err(NotOneSurface::Kind);
-    }
-    let dev = plane_deviation(&a, b, &bx)?;
+    let dev = plane_bound(&a, b, &bx).map_err(|e| match e {
+        NotNear::Opposite => NotOneSurface::Opposite,
+        _ => NotOneSurface::Kind,
+    })?;
     if dev <= approx {
         Ok(())
     } else {
         Err(NotOneSurface::Apart(Length::from_mm(dev)))
     }
-}
-
-/// A bound on how far plane `a`'s points inside `bx` lie from plane `b`.
-fn plane_deviation(a: &Plane, b: &Plane, bx: &Extent3d) -> Result<f64, NotOneSurface> {
-    let (fa, fb) = (a.frame(), b.frame());
-    let (za, zb) = (Vec3::from(fa.z()), Vec3::from(fb.z()));
-    if za.dot(zb) <= 0.0 {
-        return Err(NotOneSurface::Opposite);
-    }
-    // `q` is the box's centre moved onto `a`'s plane; any point of `a` in the box is within
-    // `R` of it, where the signed distance to `b` changes by at most `sin(angle) R`.
-    let c = bx.mid();
-    let q = c - za * (c - fa.origin()).dot(za);
-    let at_q = (q - fb.origin()).dot(zb).abs();
-    let sin = za.cross(zb).length();
-    let radius = 0.5 * bx.size().length();
-    Ok(at_q + sin * radius)
 }
 
 /// A key that orders planes by their frame.
@@ -704,68 +682,4 @@ fn one_run(
         return Ok(Err(NotOneLine::Pcurves(e)));
     }
     Ok(Ok(()))
-}
-
-#[cfg(test)]
-mod tests {
-    #![allow(clippy::unwrap_used)]
-    use super::*;
-    use scx_num::frame::Frame;
-
-    fn plane(o: [f64; 3], z: [f64; 3]) -> Plane {
-        Plane::new(
-            Frame::new(
-                Point3::new(o[0], o[1], o[2]),
-                Vec3::new(z[0], z[1], z[2]),
-                Vec3::new(1.0, 0.0, 0.0)
-                    .cross(Vec3::new(z[0], z[1], z[2]))
-                    .cross(Vec3::new(z[0], z[1], z[2])),
-            )
-            .unwrap(),
-        )
-    }
-
-    fn unit_box() -> Extent3d {
-        Extent3d::from_corners(Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 1.0, 0.0)).unwrap()
-    }
-
-    #[test]
-    fn the_same_plane_on_another_frame_deviates_by_nothing() {
-        let a = plane([0.0, 0.0, 0.0], [0.0, 0.0, 1.0]);
-        let b = plane([5.0, -3.0, 0.0], [0.0, 0.0, 1.0]);
-        assert!(plane_deviation(&a, &b, &unit_box()).unwrap() < 1e-15);
-    }
-
-    #[test]
-    fn a_parallel_offset_deviates_by_the_offset() {
-        let a = plane([0.0, 0.0, 0.0], [0.0, 0.0, 1.0]);
-        let b = plane([0.0, 0.0, 3e-6], [0.0, 0.0, 1.0]);
-        let d = plane_deviation(&a, &b, &unit_box()).unwrap();
-        assert!((d - 3e-6).abs() < 1e-12, "{d}");
-    }
-
-    #[test]
-    fn a_tilt_deviates_by_the_angle_over_the_extent() {
-        // A tilt of 1e-5 about the y axis over a face 1 wide: the far edge is 1e-5 off, which
-        // the bound (the centre's offset plus the angle times the half diagonal) covers and
-        // overstates by 21%.
-        let t: f64 = 1e-5;
-        let a = plane([0.0, 0.0, 0.0], [0.0, 0.0, 1.0]);
-        let b = plane(
-            [0.0, 0.0, 0.0],
-            [scx_num::fmath::sin(t), 0.0, scx_num::fmath::cos(t)],
-        );
-        let d = plane_deviation(&a, &b, &unit_box()).unwrap();
-        assert!(d >= t && d <= 1.5 * t, "{d}");
-    }
-
-    #[test]
-    fn opposite_normals_are_not_one_surface() {
-        let a = plane([0.0, 0.0, 0.0], [0.0, 0.0, 1.0]);
-        let b = plane([0.0, 0.0, 0.0], [0.0, 0.0, -1.0]);
-        assert_eq!(
-            plane_deviation(&a, &b, &unit_box()).unwrap_err(),
-            NotOneSurface::Opposite
-        );
-    }
 }
