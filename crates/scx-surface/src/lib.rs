@@ -118,7 +118,10 @@ pub use sphere::Sphere;
 pub use surface::Surface;
 pub use torus::Torus;
 pub use trough::{Half, MARGIN, Trough, TroughError, facing_trough};
-pub use volume_map::{Bend, Image, MapError, NotExact, Polar, Twist, Uv, VolumeMap};
+pub use volume_map::{
+    Bend, CurveImage, CurveNot, CurveParam, Fit, Image, MapError, NotExact, Polar, Twist, Uv,
+    VolumeMap,
+};
 
 use scx_num::vector3d::Point3;
 
