@@ -1408,3 +1408,55 @@ Truth tests (`tests/imprint.rs`, closed forms): offset cubes give 9 faces, 21 ed
 areas 3 x 1/4 + 3 x 3/4 + 3 x 1; a thin cylinder through a cube gives 8 faces, 14 edges, 10
 vertices, two disks of pi/16 and two faces of 1 - pi/16; a block on a face, a block apart,
 determinism and operand swap, and a refusal of another document. Volume is 1 throughout.
+
+### 13.4 MK7a frames as built (11-28)
+
+`scx_make::{Path, Piece, Stop, Station, Rotation, Corner, FrameError, frames}` (`frames.rs`,
+`tests/frames.rs`). `Path::new(&[Piece], &Document)` validates (1 to 1000 pieces; lines longer
+than the resolution; arcs and helices off their axis, angle in (0, 1000 turns]; pieces meeting
+within the resolution; a corner that doubles back refused) and measures once, so `frames(&Path,
+&[Stop]) -> Result<Vec<Station>, FrameError>` cannot fail on the path. A `Station` is the point,
+unit tangent and a `Rotation` (the transport from the path's start, columns, `apply`, `after`,
+`inverse`, `defect`). Closed forms as the pin's: identity on a line, the angle run about the axis
+on an arc, the screw then `psi = -b phi / sqrt(a^2 + b^2)` about the tangent on a helix, the least
+rotation `t0 x t1` by the angle at a corner (none within `G1_TANGENTS` = 1e-8 of each other).
+`Stop::Corner(j)` is the mitre plane (half turn, bisector tangent); `Corner` carries the angle,
+the joint, the fraction and the stretch `1 / cos(angle / 2)`. Rodrigues runs on `fmath`
+(deterministic across platforms; the pin used the platform's libm).
+
+Decisions and cases:
+- **Own `FrameError`, not `MakeError`.** 75 §3.6 writes `Result<Frames, MakeError>`. For: a frame
+  law has no body, three of `MakeError`'s four kinds cannot occur, and a new `Refusal` variant
+  would touch `error.rs` that MK4, MK9, MK13 and MK14 also edit. Against: one error type for the
+  crate. The sweep (MK7b) adds `From<FrameError> for MakeError` when it needs it; no change here.
+- **No `Cx`, no laws.** The signature is pure (`&Path`, `&[Stop]`): the work is closed form and
+  O(pieces) per stop, no budget, scratch or cancellation to meter. Twist, end scale, orientation
+  and rails are MK7b's (the pin's `Laws`, `Orientation`, `RailFit`, `railed`); `fractions` (the
+  skin's one station per degree rule) is a SolidCraft convention for the skin and goes with the
+  sweep. The pin's `Stop::Corner` mitre stretch is `Corner::stretch`, applied by the mitre's user.
+- **Literals into the document.** The pin's `1e-9 (1 + |P|)` for "pieces meet" and for a line
+  with no length is the document's resolution here; `G1_TANGENTS` stays a named constant (the
+  procedural sweep's rule, which step 5 will own; the sweep must use the same one).
+- **Axis by type.** `Piece` takes a `UnitVec3`; the pin's "unit within 1e-12" check and its
+  re-normalising are gone.
+- `Piece` and `Stop` are `#[non_exhaustive]`: MK7b may add pieces when step 5 certifies a
+  spline path's frame (#2572).
+
+Truths (`tests/frames.rs`, 10 tests, closed forms, 1e-12): the line is the identity; a planar
+arc turns the frame by the angle run (point, tangent, frame); a whole helix turn leaves the
+tangent and turns the frame by `-2 pi b / sqrt(a^2 + b^2)` (pin :74); at a quarter and a half
+turn the start normal becomes `cos psi N + sin psi B`, right- and left-handed (pin :505);
+parallel transport turns about no axis along the chord on tilted helices of both hands and a
+tilted arc (skew part along the chord < 1e-9, pin :569); a right-angle corner is a quarter turn
+with the mitre the eighth and stretch sqrt 2, a fraction at the joint is the second piece's
+start (pin :166); the corner is the least rotation at 1, 30, 90, 135 and 179 degrees (new); a
+corner then a helix compose (pin :536); a kink of 1e-10 is no corner and 1e-7 is one (pin :768);
+refusals of a doubling-back path, a gap, no pieces, a degenerate or axis-start piece, a negative
+angle, fractions outside [0, 1] or NaN, and a closed arc's whole-turn identity. Orthonormal
+defect below 1e-13 throughout. Removed on purpose, with the file header listing them: the pin's
+twist/scale, orientation, rail, `fractions` and limit tests (MK7b's laws), and the stretch
+half of the corner test (checked as `Corner::stretch`).
+
+Cost: new code only, no existing path changed. A station walks the pieces before it, one
+`sin_cos` and about 40 flops per rotation composed; 1,001 stations of a helix (the transport
+test) run in a few milliseconds in a debug build.
