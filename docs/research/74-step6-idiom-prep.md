@@ -6160,3 +6160,140 @@ and its recipe tests unchanged).
 ### 46.6 Proposed 04 row
 
 | 11-28 | (For the owner's review) BW8b: `scx_bodyq::faces_on_one_surface(&Brep, seeds, keep, budget, stop) -> OneSurface { faces, stopped }`: the seeds and every face reached across a curve edge of two fins, on two faces of the same shells, run opposite senses, whose surfaces are `==` or two planes proved within `Resolution::approx` (ST5's rule, 74 §42.5); each edge that did not lead on is a `Stopped { edge, from, to, why }` with `NotCrossed::{Fins(n), Shells, Sense, Surface(NotOneSurface::{Kind, Crease, Opposite, Apart(Length), NoBox})}`; `keep` edges are not crossed. The proof moves from `scx-stitch` to `scx_surface::plane_bound` (`NotNear::{Crease, Opposite}`, `CREASE`), which both crates call; `merge_faces` answers are unchanged. Growth is by neighbours as the pin's, so a chain of planes each within `approx` of the next is grown through (open); quadrics on other frames and opposite planes are typed, not merged. Measured 4 work units and 3 to 4 us a face, 2 edge proofs per face, none for faces that share no edge | Amends ST5 (the proof lives in `scx-surface`); no new Cargo edge | 74 §46 |
+
+## 49. BW8c as built (11-28)
+
+BW8b's open question 46.5.1: `faces_on_one_surface` grew by neighbours, so a chain of planes
+each within `Resolution::approx` of the next but drifting overall was grown through, and the
+result could hold faces not on one surface. Ruled (truth over pin): the growth holds its
+promise, every face returned is proved on its seed's surface. In
+`crates/scx-bodyq/src/one_surface.rs`; no new Cargo edge, `scx-surface` unchanged.
+
+```rust
+#[non_exhaustive] pub enum NotCrossed { Fins(usize), Shells, Sense, Surface(NotOneSurface),
+                                        Drift { seed: FaceId, why: NotOneSurface } }
+```
+
+### 49.1 What is proved
+
+Each face carries the seed its growth came from (a seed is its own). When an edge passes the
+neighbour proof (the BW8b rules, unchanged) and the face across is not yet in the set, that face is
+proved against the seed's surface: `==` surfaces pass; two planes by one `plane_bound(face's
+plane, seed's plane, face's box)` (the face's box against the seed's unbounded plane, so the
+seed's box is not read); `Kind`, `Crease`, `Opposite`, `Apart(bound)`, `NoBox` as BW8b. A face
+that fails is not added and the edge is a `Stopped { to: Some(face), why: Drift { seed, why } }`.
+A face refused is remembered per (seed, face), so a second edge into it costs no second proof.
+The edge is decided once as before. Faces of several seeds each keep their own seed: a face is
+checked against the seed of the first growth to reach it.
+
+### 49.2 Decided: a new `NotCrossed::Drift`, not `Surface(Apart(..))`
+
+| Choice | For | Against |
+|---|---|---|
+| **New `Drift { seed, why }`** (taken) | The edge itself is fine (neighbours are within approx); the fault is the accumulated distance from the seed, and a caller cannot tell that from `Surface(Apart)`, which means "these two faces are apart"; `why` can be `Crease` or `Opposite` too (cumulative tilt past `CREASE` is possible: the neighbours' sine is under 1e-3, the seed's is not), so reusing `Surface(Crease)` would claim a crease between the two faces that does not exist; names the seed (several seeds) | One more variant for a caller that matches exhaustively (the enum is `non_exhaustive`, so none can; BW8b is one day old) |
+| Reuse `Surface(Apart(..))` | No new variant | Wrong claim about the edge's two faces: `Apart(l)` with `l > approx` between faces that were just proved within approx; a block wall's rim edges (`Surface(Crease)`, every one of `4n`) and drift stops are indistinguishable to a caller filtering on `why`; no seed named |
+
+Adversarial: a caller who filters "rim edges" on `Surface(Crease)` is not affected by drift stops
+(they are `Drift`), which is the point. A caller who wants every stop that is not a pair fault
+matches `Drift { .. }`. A single-seed growth with `from == seed` repeats the neighbour proof
+(one more `plane_bound`, identical answer: never a `Drift`); it is kept uniform rather than special-cased,
+costing one unit.
+
+### 49.3 Tests (closed forms)
+
+`a_drifting_chain_stops_where_the_cumulative_bound_is_crossed`: a wall of 10 by 10 faces,
+column `i` tilted `i d` about a line at the wall's edge with `d = 0.17 approx` (each pair a column
+apart is under 0.7 approx; the neighbour test passes everywhere, so BW8b would return all 100).
+Column `c` is off the seed's plane (column 0) by `c d (x_c + r)` (`x_c` the centre's distance from the pivot,
+`r` the half diagonal of the face's box). The growth returns exactly the columns under the first `c` whose bound
+exceeds `approx` (`first * 10` faces), and every stopped edge into the next column is `Drift { seed, Apart(l) }`
+with `approx < l < 1.3 * bound(first)`. The other nine tests stay green; the only change in them is the work
+count in `a_subdivided_block_grows_to_its_six_walls`: `4 n (n + 1) + n^2 - 1` a wall (one proof for each
+face reached beyond the seed).
+
+### 49.4 Measured (budget's count, release; timer throwaway, machine loaded)
+
+Growing one wall, work units, before and after:
+
+| steps | wall faces | before | after | per face before / after |
+|---|---|---|---|---|
+| 5 | 25 | 120 | 144 | 4.8 / 5.8 |
+| 10 | 100 | 440 | 539 | 4.4 / 5.4 |
+| 20 | 400 | 1,680 | 2,079 | 4.2 / 5.2 |
+
+One extra proof a face (`n^2 - 1`), as ruled. Time measured on a loaded machine was noisy
+(10 steps: 24 us before, 44 us after; 20 steps: 206 us, 284 us; one run each of 200 loops): treat it as
+at most +40% on a wall of all-distinct frames, where every face costs a box read, a `plane_bound` and a map
+insert more. A body whose faces share a surface (`==`) pays only a comparison. No other path changes.
+
+### 49.5 Open
+
+1. The bound is the same conservative one as ST5's (the offset at the face's centre plus the angle times the half
+   diagonal), so a face is refused up to 1.5x early; the drift stop is at that bound, not at the true largest
+   deviation.
+2. A face already in the set is not re-proved against another seed that also reaches it (two seeds that are not
+   on one surface and a face between them); first growth wins. The caller sees both seeds in `faces` and can
+   call once per seed.
+
+### 49.6 Proposed 04 row
+
+| 11-28 | (For the owner's review) BW8c: `scx_bodyq::faces_on_one_surface` now proves every grown face on its seed's surface (`scx_surface::plane_bound` of the face's box against the seed's plane, `==` passes), closing BW8b's drift: a chain of planes each within `Resolution::approx` of the next stops where the cumulative bound is crossed. A face that fails is a new typed `NotCrossed::Drift { seed, why: NotOneSurface }` (not `Surface(Apart)`: the edge's two faces are within approx, `why` may also be `Crease`/`Opposite` against the seed). Measured one more proof a face (4.4 to 5.4 work units on a 100-face wall). | For: truth over pin, the growth keeps its promise; one proof a face; `merge_faces` already does the same by proving each member against the group's plane. Against: +1 work unit a face; an early stop up to 1.5x by the conservative bound; first seed wins for a face two seeds reach | 74 §49 |
+
+## 50. ST6 as built (11-28)
+
+`scx_stitch::rebase(body, to, cx) -> Result<Rebased, StitchError>` and
+`WarningKind::AccuracyPastResolution` (in `scx-brep`, `#[non_exhaustive]`, so no caller breaks).
+`Rebased { done: Done<NoItems>, report: RebaseReport }`; `RebaseReport { from, to, past, recorded }`.
+
+### 50.1 What it does
+
+1. Two vertices of the body within the coincidence at `to` are `Refused(VerticesWithinCoincidence)`,
+   naming the pair, lower id first. The test is ST1's grid (`points::identify`, one operand), with each
+   vertex's reach `max(accuracy, to.zone)` and the accuracy of an unrecorded vertex read as the old
+   resolution, which is the bound its stamp promised.
+2. Every vertex, edge and face whose accuracy is past `to.zone` is warned. A face's accuracy is
+   derived from its uses' pcurve bounds, so the face is warned for its worst use bound.
+3. An entity with no recorded accuracy that is past `to` gets the old resolution recorded as its
+   accuracy, `Basis::Stated`. For a vertex or edge that is the record; for a face it is each of its
+   uses with no bound. An entity with a recorded accuracy keeps it and its basis.
+4. Nothing else moves. Ids, topology and geometry are kept, so `changes` is empty. The result is
+   finished under `Document::with_resolution(to)`; `cx.doc` is not read, because the stamp is the
+   one thing a rebase changes (09 §3).
+
+### 50.2 Choices, for and against
+
+- **Coarser identifies nothing (74 §4.3 step 8 says "identified by the same rules").** For: in one
+  body the rules say a pair of one operand's vertices within coincidence is `Refused`, so there is
+  nothing left to identify; identification across bodies is `stitch`/`sew`, which the caller runs
+  after. Against: a coarser resolution could close a gap between two edges of one body; but `sew`
+  does that, with its proof, and the rebase would otherwise decide joins under the stitch's
+  refusals.
+- **A stated accuracy for an unrecorded entity.** For: an unrecorded entity says "within the old
+  resolution", a fact that stops being "within" when the stamp moves finer; dropping it would
+  silently claim a tighter body, and keeping it unrecorded would too. Against: `Basis::Stated`
+  reads as "from a file". There is no "inherited" basis; adding one touches `scx-num`, which this
+  task does not. Change if a basis is added.
+- **Coarser keeps recorded accuracies below the new resolution.** For: no information is lost, and
+  a round trip back keeps them. Against: the record is then redundant; harmless.
+- **No `Raise`.** The accuracy is not grown, only recorded; the warning is the signal.
+- **Past, not raised, is never an error** (09 §3: lost accuracy is never a failure).
+
+### 50.3 Tests (`tests/rebase.rs`, 7)
+
+Coarser keeps topology, ids, points, with no warning and empty changes; same resolution is the body
+again; the block's vertices (1 apart) are refused at `to = 1.0` and `5.0`, and fine at `0.999`;
+finer than the stamp warns all 8 vertices, 12 edges and 6 faces and records 1e-5 `Stated` on each
+(26); a recorded 1e-4 vertex is kept with its basis, silent at 1e-3 and warned at 1e-5; the round
+trip 1e-5 to 1e-3 to 1e-5 leaves points, surfaces, edge shapes and ends equal (accuracy 1e-3
+recorded on all 26); determinism of report and work.
+
+### 50.4 Work
+
+Added work is only for rebase; no existing path changed. Per call: one unit per vertex (clearance
+grid, plus the grid's own charges), one per vertex, edge and face in the walk. Block (8 vertices,
+12 edges, 6 faces): 26 units for the walk plus the grid's 8 and its pair tests; the existing
+operations' work is unchanged (the new `WarningKind` variant adds no code to them).
+
+### 50.5 Proposed 04 row
+
+| 11-28 | (For the owner's review) ST6: `scx_stitch::rebase(&Brep, Resolution, &mut Cx) -> Result<Rebased, StitchError>` and `WarningKind::AccuracyPastResolution`. Two vertices within the new coincidence are `Refused(VerticesWithinCoincidence)`; entities whose accuracy is past the new resolution are warned and, where unrecorded, recorded as the old resolution with `Basis::Stated`; ids, topology and geometry are kept (empty changes), and the result is stamped `to`. Coarser identifies nothing in one body (74 §50.2). Against: `Stated` stands in for a missing inherited basis. For: no silent claim of a tighter body. | ST6 |

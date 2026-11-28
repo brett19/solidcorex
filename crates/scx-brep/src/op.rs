@@ -205,6 +205,9 @@ pub enum WarningKind {
     AccuracyRaised,
     /// The entity was identified with one of the other operand within coincidence.
     Coincident,
+    /// The entity's accuracy is past the resolution it now lives under: it stays as it is
+    /// and is not within the resolution (09 §3; `rebase`).
+    AccuracyPastResolution,
 }
 
 /// A result that is right but the caller may want to know of.
