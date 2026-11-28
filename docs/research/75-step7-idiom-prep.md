@@ -3967,3 +3967,47 @@ Open questions:
 - **A NURBS curve against a NURBS surface.** This is deferred, as 77 §6.3 says.
 - **Degree-4p spans of high-degree curves.** These have not been measured for root-isolation
   depth. `RootLimits::DEFAULT` is used.
+### 13.46 RP5 as built (11-28)
+
+The sew within a gap, `scx_repair::sew`, over a widened `scx_stitch` (ST5's `sew`).
+
+Public API:
+- `scx_repair::sew(&Brep, gap: Length, OnItemFailure, &mut Cx) -> Result<Done<SewCause>, RepairError>`.
+- `SewCause::{TooFar { edges: [EdgeId; 2], gap: Bracket, allowed: Length }, Ambiguous { edge, partners }, Undecided { edge, with: Entity, gap: Bracket, allowed }}` (non-exhaustive), with `kind()` (`TooFar` is `Refused`, the others `Unsupported`), `name()` and `resize() -> Option<Length>` (the bracket's upper bound when it is past `allowed`: the gap that would sew the pair).
+- `RepairCause::{Gap { gap, limit }, Sew(SewCause), Stitch(StitchError)}`, `RepairDefect::Stitch(Box<StitchError>)`.
+- In scx-stitch: `sew_within(&Brep, gap: Length, Want, &mut Cx) -> Result<Sewn, StitchError>`; `Sewn::inputs` (each cut or joined result edge and the input edge it is); `Want::Closed` (oriented as a solid when the result closes, sheets otherwise).
+
+How it sews. The stitch runs as at coincidence except that, when a gap is given, an item's reach (vertex identification and the edge join's allowance) is widened to the gap for what lies on an edge with one fin. Two open edges of different pieces with the same ends join when their certified symmetric gap is within the larger reach, keeping one curve (the smallest reach, then the lowest midpoint, as before). The dropped faces are written by ST4a's `Draft::write_pcurves_projecting` (74 §40), with the join's allowance (the larger reach) as `within`: a use whose kept curve lies on the face is exact; otherwise it gets the pcurve of the kept curve's closest-point projection (`pcurve_of_projection`), its bound the certified gap `|S(p(t)) - C(t)|` (`Claim::PcurveOnSurface`, interval, to 1/64 of the zone). The kept edge's accuracy is raised to the largest such gap past its reach, `Measured`, into `report.raised` (once per edge) and an `AccuracyRaised` warning. The sew adds only the widened reach to the stitch; the writer and the raise are main's. Merged vertices are raised `Measured`, as in the plain stitch. The pin's factors (2 x gap, `widest * 1.05`) are not ported (R3): on the box fixture the recorded accuracy is the gap to within the search width (1/64 of the zone).
+
+Items. Every pair the sew leaves, in order of the lowest input edge, one round:
+`Ambiguous` and `Undecided` from the stitch's `Left`, and `TooFar`: two open result edges, each the other's nearest by certified symmetric gap (the larger of the two directed `curve_curve_gap`s), the gap past `gap` and within the ratio limit. An open edge with no partner within the limit is a boundary, not an item.
+
+Decisions.
+1. **ST4a's projecting writer, not a writer of the sew's own.** The branch first wrote each dropped use alone (a `drop_curve` per use, a period shift to start the use nearest its loop); ST4a landed the same idea for the whole face, keeping the bounds of unchanged uses, and the sew now goes through it. For: one writer of inexact pcurves in the stitch, the exact case first, joins in tolerance add no work. Against: none found; the face is all or nothing, so one use the projection cannot give refuses the join (as before).
+2. **The uses carry the certificate (`PcurveOnSurface`); the edge is raised `Measured`.** What is proved is each use's lift against the kept curve, so that is where the certificate sits; the edge's own accuracy is the largest such gap, which it measurably has (ST4a's rule). For: the check reads the use's certificate and passes; no claim is made about the faces' intersection (`CurveToIntersection`, what scx-step records for its face gaps). Against: the edge's record says `Measured` where a certified bound exists one level down; a later rule may lift it, and may unify the two importers' claims.
+3. **`Want::Closed`.** For: the repair cannot know before sewing whether the result closes, and `Changes` has no compose to chain an orient after; `Want::Solid` refuses an open result, `Want::Sheets` never orients. Against: a third `Want` that only the sew uses so far.
+4. **The gap is capped at the ratio limit** (`MAX_ACCURACY_RATIO` x zone, 0.01 mm at the default zone), not the pin's 1 mm. For: an accuracy at the limit is a finding of the check's, so a larger gap would make a body the check refuses. Against: the app's own test sews 0.05 mm at the default; it now needs a document of zone 1e-4 (the port does that) or two steps.
+5. **`TooFar` by mutual nearest.** For: a closed-form, deterministic rule with no sampling; a far pair is named once. Against: O(n²) pairs of open edges (box-pruned to the ratio limit, each a budget charge); a body with many open edges needs a grid, as the vertex identification has.
+6. **`on_failure` as in `heal`** (75 §6.5's sketch has none). For: the repair's other entries take it, and RP8's `Skip` across steps needs it. Against: the sketch's signature differs.
+7. **Resize is data** (`SewCause::resize`): there is no `Remedy` type yet.
+8. **Only the projections `pcurve_of_projection` gives.** Planes, cylinders, spheres and tori (the closed forms); a cone past the tolerance, a NURBS face or a projection with no value refuses through `RepairCause::Stitch` (`Unsupported(Fit)`). For: certified with no fitter; FT3's `fit_within` can widen this later. Against: a NURBS or cone face pair within a gap is not sewn yet.
+9. **Same-piece open edges are not joined** (the stitch's rule): a slit inside one piece stays open and is a `TooFar` or a boundary.
+10. **Exhausted before any item is `{ item: 0, work: 0 }`.** The stitch's budget is the repair's; no item has been reached.
+
+Tests (`scx-repair/tests/sew.rs`, the app's fixture: the 10 x 20 x 30 box's five lower faces stitched into an open box, the lid lifted by `delta`, gathered into one body; zone 1e-4 mm):
+- the fixture has 16 edges, 8 of them open;
+- `delta` 0.05, 0.01 and 0.002 sew (gap 0.08, 0.08, 0.005) to 6 faces, 12 edges, 8 vertices, no open edge, one solid region, `|V - 6000| <= area x delta`, the check clean (`Scope::Import`), the resolution kept; exactly four edges raised, each `Measured` to `[delta, delta + 1e-3 gap + zone]`, its use on the lid certified `PcurveOnSurface` to the same bound, and no other edge past the zone (the app's "only the four sewn edges carry the gap");
+- `delta` 0.05 past gap 0.01: four `TooFar` in `Skip` (brackets holding `delta`, width within the search's, in edge order, `resize` past the gap and sewing at it), the first as `Stop`'s cause, all four as `Collect`'s items (the app's "a gap wider than asked for is not sewn");
+- a closed block is returned as it is; gaps 0, -1, the limit, 2, NaN and infinity are `Gap`; another document's body is `OtherDocument`; the sew is deterministic; a set stop is `Cancelled`.
+
+The app's other `repair.rs` tests are RP6's (holes) and RP8's (the "nothing to repair" refusal and the check-fails case: the steps list decides what an empty repair is).
+
+Measured (`report.work` and throwaway timers, release, server build machine):
+- The plain stitch and sew are unchanged: work of `stitch` and `sew` (`Want::Solid`) on exploded block (1 and 3), cylinder (3), sphere (4) and cavity (1) is 1,609, 14,617, 9,131, 28,027 and 3,226 on main and on this branch, each the same for stitch and sew. The gap path runs only when a gap is given.
+- The box fixture (8 open edges, 0.05 mm gap): the plain sew at coincidence spends 65 and joins nothing; the sew within 0.08 spends 1,361 (0.44 ms), the four dropped-use bounds most of it; past the gap (0.01) it spends 693 with the `TooFar` search (0.73 ms, 28 pairs); a closed block spends 0 (2 us).
+
+Open questions:
+- A grid for `TooFar`'s candidates when a body has many open edges.
+- Whether `fit_within` should write the dropped pcurve where no closed form exists (NURBS faces).
+- Whether two open edges of one piece within the gap (a slit) should be sewn.
+- Whether scx-step and the sew should record a face gap under one claim.

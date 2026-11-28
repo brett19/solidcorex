@@ -14,6 +14,8 @@ publish.workspace = true
 scx-brep = { path = "../scx-brep" }
 scx-curve = { path = "../scx-curve" }
 scx-num = { path = "../scx-num" }
+# The sew within a gap is scx-stitch's, widened (RP5).
+scx-stitch = { path = "../scx-stitch" }
 scx-surface = { path = "../scx-surface" }
 
 [dev-dependencies]

@@ -1,7 +1,7 @@
 // Written for solidcorex. Apache-2.0.
 //! [`stitch`]: the sheets gathered into `sheets[0].edit()`, their vertices identified.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use scx_brep::op::{Cx, Done, Raise, Report, Warning, WarningKind};
@@ -74,20 +74,41 @@ const UNIT: u64 = 1;
 /// - [`StitchError::Exhausted`] when `cx`'s budget runs out, [`StitchError::Cancelled`]
 ///   when `cx.stop` is set, and [`StitchError::Defect`] for the method's own failure.
 pub fn stitch(sheets: &[&Brep], want: Want, cx: &mut Cx<'_>) -> Result<Stitched, StitchError> {
+    stitched(sheets, want, None, cx).map(|(s, _)| s)
+}
+
+/// Each draft curve edge's sheet edge, as [`Build::edge_name`] holds it.
+pub(crate) type EdgeNames = BTreeMap<EdgeId, (Operand, EdgeId)>;
+
+/// [`stitch`], and within `gap` (mm, finite and above zero) when given: every open edge of
+/// a sheet (one fin) and every vertex on one reach at least `gap`, so ends and pairs that
+/// far apart are proved one; a join's pcurves on the faces of the piece it drops are then
+/// the kept curve's projections, each bound certified, as at coincidence
+/// ([`Draft::write_pcurves_projecting`](scx_brep::Draft::write_pcurves_projecting)). With
+/// the names of the stitched edges.
+pub(crate) fn stitched(
+    sheets: &[&Brep],
+    want: Want,
+    gap: Option<f64>,
+    cx: &mut Cx<'_>,
+) -> Result<(Stitched, EdgeNames), StitchError> {
     let res = cx.doc.resolution();
     let n = same_document(sheets, cx)?;
-    if want == Want::Solid {
+    // Whether every sheet is a sheet: only then can the result be oriented.
+    let mut sheets_only = true;
+    if want != Want::Sheets {
         for (i, s) in (0..n).zip(sheets) {
             let solid = s.regions().any(|r| !r.is_outside())
                 || s.faces().any(|f| {
                     let [front, back] = f.record().sides;
                     front != back
                 });
-            if solid {
+            if solid && want == Want::Solid {
                 return Err(StitchError::Unsupported(StitchUnsupported::SolidOperand {
                     operand: Operand::from_raw(i),
                 }));
             }
+            sheets_only &= !solid;
         }
     }
     let mut budget = cx.budget();
@@ -95,15 +116,18 @@ pub fn stitch(sheets: &[&Brep], want: Want, cx: &mut Cx<'_>) -> Result<Stitched,
         let (body, changes) = Draft::new()
             .finish(cx.doc)
             .map_err(|u| StitchError::Defect(StitchDefect::Finish(Box::new(u.cause))))?;
-        return Ok(Stitched {
-            done: Done::new(body, changes, Report::empty(budget.used())),
-            report: StitchReport {
-                identified: Vec::new(),
-                split: Vec::new(),
-                joined: Vec::new(),
-                left: Vec::new(),
+        return Ok((
+            Stitched {
+                done: Done::new(body, changes, Report::empty(budget.used())),
+                report: StitchReport {
+                    identified: Vec::new(),
+                    split: Vec::new(),
+                    joined: Vec::new(),
+                    left: Vec::new(),
+                },
             },
-        });
+            BTreeMap::new(),
+        ));
     };
     let zone = res.zone().mm();
     let reach = |r: Option<&Recorded>| r.map_or(zone, |r| r.acc.length().mm().max(zone));
@@ -111,11 +135,23 @@ pub fn stitch(sheets: &[&Brep], want: Want, cx: &mut Cx<'_>) -> Result<Stitched,
     let mut start = Vec::with_capacity(sheets.len());
     for (i, s) in (0..n).zip(sheets) {
         start.push(items.len());
+        // The vertices of the sheet's open edges, which a gap widens.
+        let open: BTreeSet<VertexId> = match gap {
+            Some(_) => s
+                .edges()
+                .filter(|e| e.fins().len() == 1)
+                .flat_map(scx_brep::Edge::ends)
+                .collect(),
+            None => BTreeSet::new(),
+        };
         items.extend(s.vertices().map(|v| Item {
             operand: Operand::from_raw(i),
             vertex: v.id(),
             point: v.point(),
-            reach: reach(v.accuracy()),
+            reach: match gap {
+                Some(g) if open.contains(&v.id()) => reach(v.accuracy()).max(g),
+                _ => reach(v.accuracy()),
+            },
         }));
     }
     start.push(items.len());
@@ -135,6 +171,7 @@ pub fn stitch(sheets: &[&Brep], want: Want, cx: &mut Cx<'_>) -> Result<Stitched,
         edge_at: vec![BTreeMap::new(); sheets.len()],
         edge_name: BTreeMap::new(),
         face_name: BTreeMap::new(),
+        gap,
     };
     b.vertices()?;
     let (mut warnings, mut raised, identified) = b.accuracy(zone, &mut budget, cx.stop)?;
@@ -147,25 +184,34 @@ pub fn stitch(sheets: &[&Brep], want: Want, cx: &mut Cx<'_>) -> Result<Stitched,
         &mut warnings,
         &mut raised,
     )?;
-    let (body, changes) = match want {
-        Want::Solid => b.solid(&edges.left, *cx.doc, &mut budget, cx.stop)?,
-        _ => std::mem::replace(&mut b.draft, Draft::new())
-            .finish(cx.doc)
-            .map_err(|u| StitchError::Defect(StitchDefect::Finish(Box::new(u.cause))))?,
+    let orient = match want {
+        Want::Solid => true,
+        Want::Closed => sheets_only && edges.left.is_empty() && b.closed(),
+        _ => false,
     };
-    Ok(Stitched {
-        done: Done::new(
-            body,
-            changes,
-            Report::new(warnings, Vec::new(), raised, budget.used()),
-        ),
-        report: StitchReport {
-            identified,
-            split: edges.split,
-            joined: edges.joined,
-            left: edges.left,
+    let (body, changes) = if orient {
+        b.solid(&edges.left, *cx.doc, &mut budget, cx.stop)?
+    } else {
+        std::mem::replace(&mut b.draft, Draft::new())
+            .finish(cx.doc)
+            .map_err(|u| StitchError::Defect(StitchDefect::Finish(Box::new(u.cause))))?
+    };
+    Ok((
+        Stitched {
+            done: Done::new(
+                body,
+                changes,
+                Report::new(warnings, Vec::new(), raised, budget.used()),
+            ),
+            report: StitchReport {
+                identified,
+                split: edges.split,
+                joined: edges.joined,
+                left: edges.left,
+            },
         },
-    })
+        std::mem::take(&mut b.edge_name),
+    ))
 }
 
 /// The number of sheets, when each was finished under `cx`'s document's resolution.
@@ -222,6 +268,7 @@ pub(crate) fn gathered(bodies: &[&Brep], cx: &mut Cx<'_>) -> Result<Done<NoItems
         edge_at: vec![BTreeMap::new(); bodies.len()],
         edge_name: BTreeMap::new(),
         face_name: BTreeMap::new(),
+        gap: None,
     };
     b.vertices()?;
     b.copy(&mut budget, cx.stop)?;
@@ -280,6 +327,8 @@ pub(crate) struct Build<'a> {
     pub(crate) edge_name: BTreeMap<EdgeId, (Operand, EdgeId)>,
     /// Each copied face's sheet face; sheet 0's faces keep their ids and are not listed.
     pub(crate) face_name: BTreeMap<FaceId, (Operand, FaceId)>,
+    /// The gap a sew within a gap widens open edges and their vertices to (mm).
+    pub(crate) gap: Option<f64>,
 }
 
 /// What [`Build::accuracy`] gives: the warnings, the raises and the report's entries.
@@ -296,6 +345,17 @@ pub(crate) fn measured(mm: f64) -> Option<Arc<Recorded>> {
 }
 
 impl Build<'_> {
+    /// Whether the draft is closed: every curve edge of two fins, no wire or lone vertex.
+    fn closed(&self) -> bool {
+        self.draft
+            .edges()
+            .all(|e| !matches!(e.shape(), Some(EdgeShape::Curve { .. })) || e.fins().count() == 2)
+            && self
+                .draft
+                .shells()
+                .all(|s| s.record().wires.is_empty() && s.record().lone_vertices.is_empty())
+    }
+
     fn item(&self, k: usize) -> Result<&Item, StitchError> {
         self.ix
             .items
