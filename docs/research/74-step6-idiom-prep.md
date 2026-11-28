@@ -3508,7 +3508,7 @@ Removed on purpose (each proved a placeholder that ST2 replaces):
 
 ### 32.6 Measurements
 
-Release build, one thread, best of 5, second build machine (load average 8 to 12). Before (main
+Release build, best of 5, second build machine (load average 8 to 12). Before (main
 22c15d8) and after were run back to back by the same throwaway timer, not committed. Work is
 `Report::work`. Before, the seam, cut and grid cases are not a stitch at all: main refuses them
 with `edges_pending`, so the "before" time there is the time to refuse.
