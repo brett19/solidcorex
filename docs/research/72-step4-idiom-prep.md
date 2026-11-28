@@ -4238,7 +4238,7 @@ The expected direction in section 8.2 held: build is 7 times fewer instructions 
 - `tests/pcurve.rs::loops_written_alone_and_placed_are_the_loops_written_together`: over generated bodies, `placed` of each loop's `exact_loop` equals `exact_loops`.
 - scx-boolean: `trace` now moves each ring's loop into its piece rather than cloning it (each cycle is in exactly one piece).
 
-**Correctness.** A throwaway probe (not committed) builds every slice recipe and prints each result's hash, face, edge and vertex counts, work, volume and area. Before and after it is identical on every line (plate-4 work 896 both). Difftest `t_slice`: {DIFF}. scx-boolean and scx-brep tests: {BOOL}.
+**Correctness.** A throwaway probe (not committed) builds every slice recipe and prints each result's hash, face, edge and vertex counts, work, volume and area. Before and after it is identical on every line (plate-4 work 896 both). Difftest `t_slice`: 2 passed, 0 failed. scx-boolean and scx-brep tests: 206 passed, 0 failed.
 
 **Measurements.** `slice_ic` build, instructions, base 1a95f9d against this branch:
 
