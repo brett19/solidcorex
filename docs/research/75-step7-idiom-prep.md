@@ -3774,3 +3774,51 @@ boxed and its sides are decided.
 - build (1): torus against a box's union with it.
 
 The causes and counts in §13.6 and the BO10 row are BO10's, and this section supersedes them.
+
+### 13.42 BO11 as built (11-28)
+
+`scx_boolean::boolean_all(first, rest, op, cx)` in `scx-boolean/src/nary.rs` (about 100 lines
+over `boolean`).
+
+**Shape.**
+- Union and intersection fold all operands as a balanced tree: split at `len.div_ceil(2)` (the
+  left half the larger when odd), fold left, then right, then combine. Five operands run
+  `((0 1) 2) (3 4)`. Order is fixed, so the same operands give the same body and work.
+- Subtraction is `first` less the balanced union of `rest`, in one final step.
+- No `rest` is no Boolean: the body is `first` re-finished (`edit().finish`), empty `Changes`,
+  work 0.
+- Budget is the whole fold's: each step gets the limit less the work so far, and `Exhausted`
+  reports the fold's limit. `Report.work` is the sum of the steps' work, in fold order.
+- Operands of another resolution are refused up front as `OtherDocument` named by place in
+  the call (`first` 0, `rest[i]` i + 1), not as a step's operand 0 or 1.
+
+**Tests (13, `tests/nary.rs`).** Ported from `union_all`: two disjoint blocks (2), two
+overlapping (3), a five-block half-overlap chain (3), a single body (unchanged, work 0). New:
+the three Booleans of two operands equal `boolean` (work and faces); three disjoint cylinders
+(6 pi, 9 faces); a plate less two bores (32 - 2 pi, 8 faces); three overlapping cubes
+subtract (875), intersect (27) and unite (3 x 1000 - 125 - 27 - 512 + 27 = 2363 by inclusion-exclusion); four
+blocks in all 24 orders (volume 2.2, 6 faces each); determinism; work equal to the steps
+summed by hand for union and for subtraction; a budget of the total passes and total - 1
+fails with `Exhausted { limit: total - 1 }` though each step alone fits; the other-document
+refusal by place. Every result also passes `scx_check::contract`.
+
+**Choices, for and against.**
+- Subtract as first less one union of the tools, rather than first less each tool in turn.
+  For: matches 75's "balanced fold", the tools' union is shared by none of the steps that
+  touch `first`, and it is one cut of `first`. Against: unioning tools can fail or cost where
+  a sequence of cuts would not (tools sharing a coincident face), and the union's work is
+  spent before `first` is read. If a case shows this, BO12's selection replaces it anyway.
+- Changes are the final step's only. For: no composition of `Changes` exists yet (RP8 plans
+  one); inventing it here would be a second implementation. Against: the lineage names the
+  final step's left operand, an intermediate body, not the caller's operands; a caller that
+  needs lineage across all operands waits for BO12. Documented on the entry.
+- Pass the whole budget down as a remainder, rather than a fresh budget per step. For: a
+  caller's limit bounds the call. Against: a step's `Exhausted` is the fold's, so a caller
+  cannot tell which step ran out.
+- The pin's pairing carries an odd operand across a level; the half-split gives the same tree
+  on powers of two and a larger left half otherwise. The pin's order is not the contract.
+- No `Skipped` items and no warnings: `boolean` makes none, so the report is `Report::empty`.
+
+**Added work.** None on existing paths: `boolean` is untouched. A fold of n operands runs n - 1
+`boolean` steps; the intermediates' faces are what the later steps read (the cost BB1 will
+measure against BO12's merge). Four blocks: three steps, summed work equal to the hand sum.
