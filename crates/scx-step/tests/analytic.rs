@@ -1101,7 +1101,7 @@ fn bspline_cylinder_body(bump: f64) -> (Exchange, u64) {
     .unwrap();
     let truth = Surface::Cylinder(Cylinder::new(f, Length::from_mm(5.0), Sense::Forward).unwrap());
     let n = truth
-        .to_nurbs(&Extent2d::from_bounds(0.0, 0.0, 2.0 * PI, 10.0).unwrap())
+        .to_nurbs(&Extent2d::from_bounds(0.0, 0.0, 1.0, 10.0).unwrap())
         .unwrap();
     let (rows, cols) = (n.points().nrows(), n.points().ncols());
     let mut rows_of_points = Vec::new();

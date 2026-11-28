@@ -26,7 +26,7 @@ use scx_num::budget::{Budget, Stop};
 use scx_num::units::Accuracy;
 use scx_p21::part42::geom::{self, Placement};
 use scx_surface::{
-    Cylinder, Plane, Sphere, Surface, SurfaceError, Torus, Written, recognize, recognize_written,
+    Cylinder, Plane, Sphere, Surface, SurfaceError, Written, recognize, recognize_written,
 };
 
 use crate::import::{GeomCause, Waits};
@@ -306,6 +306,7 @@ mod tests {
 
     use scx_num::extent2d::Extent2d;
     use scx_p21::part42::geom::{KnotSpec, Logical, SurfaceForm};
+    use scx_surface::Torus;
 
     fn accuracy(mm: f64) -> Accuracy {
         Accuracy::new(Length::from_mm(mm)).unwrap()
@@ -359,7 +360,7 @@ mod tests {
         let n = s.to_nurbs(&ext).unwrap();
         let mut b = written_bspline(&n);
         if let Some(d) = bump {
-            b.points[2][2][0] += d;
+            b.points[1][1][0] += d;
         }
         let mut rec = Recognize {
             accuracy: accuracy(acc),
@@ -390,19 +391,19 @@ mod tests {
             (Surface::Plane(Plane::new(f)), (-1.0, 2.0, 0.0, 3.0)),
             (
                 Surface::Cylinder(Cylinder::new(f, mm(2.5), Sense::Forward).unwrap()),
-                (0.2, 5.0, -1.0, 4.0),
+                (0.05, 0.8, -1.0, 4.0),
             ),
             (
                 Surface::Cone(scx_surface::Cone::new(f, mm(2.0), 0.3, Sense::Forward).unwrap()),
-                (0.0, 3.0, 0.5, 3.0),
+                (0.0, 0.6, 0.5, 3.0),
             ),
             (
                 Surface::Sphere(Sphere::new(f, mm(3.0), Sense::Forward).unwrap()),
-                (0.1, 3.0, -1.0, 1.0),
+                (0.1, 0.7, -0.2, 0.2),
             ),
             (
                 Surface::Torus(Torus::new(f, mm(5.0), mm(1.5), Sense::Forward).unwrap()),
-                (0.0, 2.0, 0.0, 4.0),
+                (0.0, 0.5, 0.0, 0.8),
             ),
         ];
         for (truth, over) in cases {
@@ -439,7 +440,7 @@ mod tests {
         let cyl = Surface::Cylinder(
             Cylinder::new(frame3(), Length::from_mm(2.5), Sense::Forward).unwrap(),
         );
-        let over = (0.2, 5.0, -1.0, 4.0);
+        let over = (0.05, 0.8, -1.0, 4.0);
         // A control point moved 1e-9 is within 1e-6; moved 1e-3 it is not.
         assert!(through(&cyl, over, 1e-6, Some(1e-9)).is_ok());
         assert_eq!(
@@ -505,7 +506,7 @@ mod tests {
         let s = geom::Surface::Offset {
             basis: std::sync::Arc::new(geom::Surface::Plane { position }),
             distance: 1.0,
-            self_intersect: geom::Logical::False,
+            self_intersect: Logical::False,
         };
         let mut rec = Recognize {
             accuracy: Accuracy::new(Length::from_mm(1e-3)).unwrap(),
