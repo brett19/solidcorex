@@ -423,7 +423,7 @@ fn cell(p: Point3, side: f64) -> Option<[i64; 3]> {
             clippy::cast_possible_truncation,
             reason = "within 2^52, checked just before"
         )]
-        (q.is_finite() && q.abs() < EXACT).then(|| q as i64)
+        (q.is_finite() && q.abs() < EXACT).then_some(q as i64)
     };
     Some([k(p.x)?, k(p.y)?, k(p.z)?])
 }
