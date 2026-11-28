@@ -10,8 +10,11 @@
 //!   direction at a break), `normal`, `domain`, and `to_step` / `from_step`. The cone and
 //!   sphere have poles ([`Pole`]). The sphere is smooth at its poles, so every kind but the
 //!   cone has a normal everywhere and returns it directly; the cone's is `None` at its apex.
-//! - [`Surface`]: every kind as one value (the five and a NURBS surface behind an `Arc`),
-//!   dispatched by `match` with the kind's bits (63 §4.7).
+//! - [`Surface`]: every kind as one value (the five, and a NURBS surface and a
+//!   [`Procedural`] behind an `Arc`), dispatched by `match` with the kind's bits (63 §4.7).
+//! - [`Procedural`]: a generator revolved ([`Revolution`]) or extruded ([`Extrusion`]), its
+//!   [`Definition`] evaluated in closed form and its exact rational net built once, within a
+//!   stated rounding bound (research 75 §13.27).
 //! - Inversion: each analytic kind's `closest` (a [`Closest`]: one foot or a set) and
 //!   `invert` against a uv domain ([`Inversion`] of a [`Foot`]) are closed forms and the
 //!   global nearest; [`Surface::invert`] adds a NURBS surface's, a certified search over its
@@ -31,6 +34,9 @@
 //!   ([`ProjectError::NeedsFitter`]) (research 75 SF1).
 //! - [`pcurve_of`]: the exact pcurve of a curve lying on a surface, checked by lifting, or a
 //!   typed [`PcurveError`] (63 D10, §4.11).
+//! - [`certificate`]: proofs that a NURBS curve or surface is within a bound of a circle or
+//!   an analytic kind, a curve's turn about an axis, and the loft's span bound, each a typed
+//!   [`certificate::Proof`] or bound (research 75 §4, MK10).
 //! - [`AnyCurve`]: a free [`Curve`](scx_curve::Curve), or a [`CurveOnSurface`] (a uv curve on
 //!   a shared [`Surface`]) with its point and its jet by the chain rule (63 §4.10).
 //!
@@ -59,6 +65,7 @@
 
 mod any_curve;
 mod axial;
+pub mod certificate;
 mod chart_check;
 mod closed;
 mod common;
@@ -76,6 +83,7 @@ mod nurbs_hits;
 mod nurbs_invert;
 mod pcurve;
 mod plane;
+mod procedural;
 mod project;
 mod recognize;
 mod sphere;
@@ -102,6 +110,7 @@ pub use invert::{Closest, Foot, Inversion};
 pub use meet::{Meet, MeetError, points_meet};
 pub use pcurve::{Check, CurveKind, PcurveError, SurfaceKind, pcurve_of};
 pub use plane::Plane;
+pub use procedural::{Definition, Extrusion, Procedural, ProceduralError, Revolution};
 pub use project::{ProjectError, Projected, drop_curve, project_curve};
 pub use recognize::{Recognized, Written, recognize, recognize_written};
 pub use sphere::Sphere;
@@ -132,6 +141,8 @@ const _: () = {
     ok::<Cone>();
     ok::<Sphere>();
     ok::<Torus>();
+    ok::<Procedural>();
+    ok::<ProceduralError>();
     ok::<Surface>();
     ok::<Recognized>();
     ok::<Written>();

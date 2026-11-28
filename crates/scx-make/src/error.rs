@@ -11,6 +11,9 @@ use scx_num::units::{Length, Resolution};
 use scx_planar::{PlanarError, SegmentRef};
 use scx_surface::SurfaceError;
 
+use crate::frames::FrameError;
+use crate::sweep::{LawFault, Needed};
+
 /// Which size of a constructor is meant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -122,6 +125,8 @@ pub enum Refusal {
         /// The minor radius (mm).
         minor: f64,
     },
+    /// A sweep's laws or rails are out of range, or do not place the profile.
+    Law(LawFault),
     /// A revolve's profile reaches more than the resolution across the axis, so the body
     /// would pass through itself: `at` is the first segment that does.
     CrossesAxis {
@@ -136,6 +141,50 @@ pub enum Refusal {
         from: f64,
         /// The end angle.
         to: f64,
+    },
+    /// A sweep's path is not a path: the frames' verdict, as they gave it.
+    Path(FrameError),
+    /// A sweep's profile frame is not at the path's start along its tangent: its origin is
+    /// `offset` mm from the start (more than the resolution), or its z axis is `tilt` from
+    /// the start's unit tangent (more than [`G1_TANGENTS`](crate::G1_TANGENTS)).
+    Placement {
+        /// The origin's distance from the path's start (mm).
+        offset: f64,
+        /// The length of the z axis's difference from the tangent.
+        tilt: f64,
+    },
+    /// A sweep's arc piece is too tight for the profile: the profile reaches `reach` mm
+    /// towards the arc's axis from the path, not less than the arc's `radius` by more than
+    /// the resolution, so the swept profile would pass through the axis and itself.
+    TightArc {
+        /// The path piece.
+        piece: usize,
+        /// The arc's radius (mm).
+        radius: f64,
+        /// How far the profile reaches towards the axis (mm).
+        reach: f64,
+    },
+    /// A sweep's line piece is too short for the mitres at its ends: some profile point's
+    /// two mitres are not more than the resolution apart along it, so the walls would fold.
+    MitresMeet {
+        /// The path piece.
+        piece: usize,
+    },
+    /// A sweep's arc piece turns `angle` radians: a whole turn or more (or so near one that
+    /// its end sections are within the resolution) on a path that is not that one turn, so
+    /// the swept profile would meet itself.
+    ArcTurn {
+        /// The path piece.
+        piece: usize,
+        /// Its angle (radians).
+        angle: f64,
+    },
+    /// A sweep's closed path carries the profile back turned: the transported profile is
+    /// `off` mm from where it started (more than the resolution), so its ends do not meet
+    /// without a twist law.
+    ClosedTurned {
+        /// The farthest a profile point comes back from itself (mm).
+        off: f64,
     },
 }
 
@@ -165,11 +214,33 @@ pub enum Unsupported {
         /// The minor radius (mm).
         minor: f64,
     },
+    /// The construction needs a surface kind this build does not have yet (step 5's).
+    NeedsKind {
+        /// The kind.
+        kind: Needed,
+    },
+    /// Guide rails along a path with a corner: the stations' planes at a mitre are not
+    /// square to the path, so the rails' crossings there are not defined yet.
+    RailsAtCorner,
     /// A revolve's arc whose circle crosses the axis outside the arc: its surface is a
     /// spindle torus, not made yet.
     SpindleTorus {
         /// The segment.
         at: SegmentRef,
+    },
+    /// A sweep's helix piece: its walls are not of an analytic kind, and the procedural
+    /// kind is not made yet.
+    HelixPiece {
+        /// The path piece.
+        piece: usize,
+    },
+    /// A sweep's corner next to an arc piece: the mitre plane cuts the arc's walls (a cone,
+    /// sphere or torus) in curves that are not conics, which are not made yet. Corner `j`
+    /// is [`Stop::Corner`](crate::Stop::Corner)`(j)`; a closed path's closing corner is the
+    /// one after the path's last.
+    CornerOnArc {
+        /// The corner.
+        corner: usize,
     },
 }
 
@@ -193,6 +264,8 @@ pub enum Defect {
     NoSolid,
     /// `Draft::finish` refused the draft the constructor built.
     Finish(FinishCause),
+    /// A sweep's own stations were refused by the frames of a path already validated.
+    Station(FrameError),
 }
 
 /// Why no body was made.
@@ -241,9 +314,21 @@ impl MakeError {
             Self::Refused(Refusal::UvBox { .. }) => "uv_box",
             Self::Unsupported(Unsupported::NurbsFace) => "nurbs_face",
             Self::Unsupported(Unsupported::HornTorus { .. }) => "horn_torus",
+            Self::Refused(Refusal::Law(_)) => "sweep_law",
+            Self::Unsupported(Unsupported::NeedsKind { .. }) => "needs_kind",
+            Self::Unsupported(Unsupported::RailsAtCorner) => "rails_at_corner",
             Self::Refused(Refusal::CrossesAxis { .. }) => "crosses_axis",
             Self::Refused(Refusal::Turn { .. }) => "turn",
             Self::Unsupported(Unsupported::SpindleTorus { .. }) => "spindle_torus",
+            Self::Refused(Refusal::Path(_)) => "path",
+            Self::Refused(Refusal::Placement { .. }) => "placement",
+            Self::Refused(Refusal::TightArc { .. }) => "tight_arc",
+            Self::Refused(Refusal::MitresMeet { .. }) => "mitres_meet",
+            Self::Refused(Refusal::ArcTurn { .. }) => "arc_turn",
+            Self::Refused(Refusal::ClosedTurned { .. }) => "closed_turned",
+            Self::Unsupported(Unsupported::HelixPiece { .. }) => "helix_piece",
+            Self::Unsupported(Unsupported::CornerOnArc { .. }) => "corner_on_arc",
+            Self::Defect(Defect::Station(_)) => "station",
             Self::Defect(Defect::Surface(_)) => "surface",
             Self::Defect(Defect::Curve(_)) => "curve",
             Self::Defect(Defect::Absent(_)) => "absent",
@@ -313,6 +398,20 @@ impl fmt::Display for MakeError {
                 f,
                 "the horn torus (major {major} mm, minor {minor} mm) is not made yet: its tube meets the axis"
             ),
+            Self::Refused(Refusal::Law(e)) => write!(f, "the sweep's laws: {e}"),
+            Self::Unsupported(Unsupported::NeedsKind { kind }) => {
+                write!(
+                    f,
+                    "this needs the {} surface kind, not built yet",
+                    kind.name()
+                )
+            }
+            Self::Unsupported(Unsupported::RailsAtCorner) => {
+                write!(
+                    f,
+                    "guide rails along a path with a corner are not followed yet"
+                )
+            }
             Self::Refused(Refusal::CrossesAxis { at }) => {
                 write!(f, "{at} crosses the axis of the revolve")
             }
@@ -323,6 +422,40 @@ impl fmt::Display for MakeError {
             Self::Unsupported(Unsupported::SpindleTorus { at }) => {
                 write!(f, "{at} revolves to a spindle torus, which is not made yet")
             }
+            Self::Refused(Refusal::Path(e)) => write!(f, "the path: {e}"),
+            Self::Refused(Refusal::Placement { offset, tilt }) => write!(
+                f,
+                "the profile's frame is {offset} mm from the path's start and its z axis {tilt} from the start's tangent"
+            ),
+            Self::Refused(Refusal::TightArc {
+                piece,
+                radius,
+                reach,
+            }) => write!(
+                f,
+                "path piece {piece}'s arc of radius {radius} mm is too tight: the profile reaches {reach} mm towards its axis"
+            ),
+            Self::Refused(Refusal::MitresMeet { piece }) => write!(
+                f,
+                "path piece {piece} is too short for the mitres at its ends: the walls would fold"
+            ),
+            Self::Refused(Refusal::ArcTurn { piece, angle }) => write!(
+                f,
+                "path piece {piece}'s arc turns {angle} radians: the swept profile would meet itself"
+            ),
+            Self::Refused(Refusal::ClosedTurned { off }) => write!(
+                f,
+                "the closed path brings the profile back {off} mm from itself: its ends need a twist to meet"
+            ),
+            Self::Unsupported(Unsupported::HelixPiece { piece }) => write!(
+                f,
+                "path piece {piece} is a helix, whose swept walls are not made yet"
+            ),
+            Self::Unsupported(Unsupported::CornerOnArc { corner }) => write!(
+                f,
+                "corner {corner} is next to an arc piece, whose mitre is not made yet"
+            ),
+            Self::Defect(Defect::Station(e)) => write!(f, "a sweep's station: {e}"),
             Self::Defect(Defect::Surface(e)) => write!(f, "a surface of the body: {e}"),
             Self::Defect(Defect::Curve(e)) => write!(f, "a curve of the body: {e}"),
             Self::Defect(Defect::Absent(e)) => e.fmt(f),
@@ -347,6 +480,7 @@ impl core::error::Error for MakeError {
             Self::Refused(Refusal::Profile(e)) | Self::Unsupported(Unsupported::Profile(e)) => {
                 Some(e)
             }
+            Self::Refused(Refusal::Path(e)) | Self::Defect(Defect::Station(e)) => Some(e),
             Self::Full(e) => Some(e),
             Self::Refused(_)
             | Self::Unsupported(_)
@@ -376,6 +510,13 @@ impl From<CurveError> for MakeError {
 impl From<SurfaceError> for MakeError {
     fn from(e: SurfaceError) -> Self {
         Self::Defect(Defect::Surface(e))
+    }
+}
+
+/// A path the frames refused is the caller's to change.
+impl From<FrameError> for MakeError {
+    fn from(e: FrameError) -> Self {
+        Self::Refused(Refusal::Path(e))
     }
 }
 

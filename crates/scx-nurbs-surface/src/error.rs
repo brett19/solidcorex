@@ -88,6 +88,11 @@ pub enum NurbsSurfaceError {
     /// An enclosure over a box of parameters cannot be taken
     /// ([`NurbsSurface::partials_over`](crate::NurbsSurface::partials_over)).
     Enclosure(EnclosureCause),
+    /// A box cannot restrict the surface ([`NurbsSurface::restrict`](crate::NurbsSurface::restrict)).
+    Restrict(RestrictCause),
+    /// [`CompatibleSurfaces::from_surfaces`](crate::CompatibleSurfaces::from_surfaces) was
+    /// given no surfaces.
+    NoSurfaces,
     /// A step failed through the crate's own fault: values that the edited surface's
     /// invariants guarantee were refused or missing. A bug.
     Defect {
@@ -134,6 +139,78 @@ pub enum NetCause {
         /// The column (v index).
         col: usize,
     },
+}
+
+/// Why a box cannot restrict a surface.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub enum RestrictCause {
+    /// The `axis` range of the box is not inside the domain of that direction (a surface
+    /// restricted past its domain would need values it does not have).
+    Outside {
+        /// The direction.
+        axis: ParamAxis,
+        /// The range `[lo, hi]` given.
+        range: [f64; 2],
+        /// The domain of that direction.
+        domain: [f64; 2],
+    },
+    /// The `axis` range of the box is a single parameter: the piece would have no area.
+    /// Take an iso-curve ([`NurbsSurface::iso`](crate::NurbsSurface::iso)) instead.
+    Empty {
+        /// The direction.
+        axis: ParamAxis,
+        /// The parameter.
+        at: f64,
+    },
+    /// A knot of the surface lies strictly inside the box along `axis`, so the box is not
+    /// one polynomial piece ([`NurbsSurface::bernstein_over`](crate::NurbsSurface::bernstein_over)).
+    Interior {
+        /// The direction.
+        axis: ParamAxis,
+        /// The knot.
+        knot: f64,
+    },
+}
+
+impl RestrictCause {
+    /// The cause's kind: always [`ErrorKind::Refused`], the box is the caller's.
+    #[must_use]
+    pub const fn kind(&self) -> ErrorKind {
+        ErrorKind::Refused
+    }
+
+    /// The cause's stable name.
+    #[must_use]
+    pub const fn name(&self) -> &'static str {
+        match self {
+            Self::Outside { .. } => "restrict_box_outside_domain",
+            Self::Empty { .. } => "restrict_box_empty",
+            Self::Interior { .. } => "restrict_box_interior_knot",
+        }
+    }
+}
+
+impl fmt::Display for RestrictCause {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            Self::Outside {
+                axis,
+                range: [lo, hi],
+                domain: [a, b],
+            } => write!(
+                f,
+                "the {axis} range [{lo}, {hi}] is not inside the domain [{a}, {b}]"
+            ),
+            Self::Empty { axis, at } => write!(f, "the {axis} range is the single value {at}"),
+            Self::Interior { axis, knot } => {
+                write!(
+                    f,
+                    "the {axis} knot {knot} is inside the box: not one polynomial piece"
+                )
+            }
+        }
+    }
 }
 
 /// Why the weights of a rational surface do not fit.
@@ -293,7 +370,9 @@ impl NurbsSurfaceError {
             Self::BadNet(_)
             | Self::BadWeights(_)
             | Self::Degenerate { .. }
+            | Self::NoSurfaces
             | Self::AffineNotFinite => ErrorKind::Refused,
+            Self::Restrict(c) => c.kind(),
             Self::Overflow(_) => ErrorKind::Unsupported,
             Self::Enclosure(c) => c.kind(),
             Self::Defect { .. } => ErrorKind::Defect,
@@ -313,6 +392,8 @@ impl NurbsSurfaceError {
             Self::AffineNotFinite => "affine_not_finite",
             Self::Overflow(_) => "transform_overflow",
             Self::Enclosure(c) => c.name(),
+            Self::Restrict(c) => c.name(),
+            Self::NoSurfaces => "no_surfaces",
             Self::Defect { .. } => "defect",
         }
     }
@@ -356,6 +437,8 @@ impl fmt::Display for NurbsSurfaceError {
             Self::AffineNotFinite => f.write_str("the transform is not finite"),
             Self::Overflow(c) => write!(f, "the transform overflows: {c}"),
             Self::Enclosure(c) => c.fmt(f),
+            Self::Restrict(c) => c.fmt(f),
+            Self::NoSurfaces => f.write_str("no surfaces to make compatible"),
             Self::Defect { why } => write!(f, "internal defect: {why}"),
         }
     }
@@ -422,6 +505,8 @@ impl std::error::Error for NurbsSurfaceError {
             | Self::AffineNotFinite
             | Self::Overflow(_)
             | Self::Enclosure(_)
+            | Self::Restrict(_)
+            | Self::NoSurfaces
             | Self::Defect { .. } => None,
         }
     }
@@ -514,6 +599,20 @@ mod tests {
             NurbsSurfaceError::Enclosure(EnclosureCause::WeightsNotPositive {
                 weight: Ivl::new(-1.0, 2.0),
             }),
+            NurbsSurfaceError::Restrict(RestrictCause::Outside {
+                axis: ParamAxis::U,
+                range: [-1.0, 0.5],
+                domain: [0.0, 1.0],
+            }),
+            NurbsSurfaceError::Restrict(RestrictCause::Empty {
+                axis: ParamAxis::V,
+                at: 0.5,
+            }),
+            NurbsSurfaceError::Restrict(RestrictCause::Interior {
+                axis: ParamAxis::U,
+                knot: 0.5,
+            }),
+            NurbsSurfaceError::NoSurfaces,
             NurbsSurfaceError::Defect { why: "a test" },
         ]
     }

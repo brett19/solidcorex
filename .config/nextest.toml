@@ -13,5 +13,11 @@ final-status-level = "slow"
 # Start the longest tests first, so no long test begins near the end and sets the wall time
 # alone (each is one long loop on one core).
 [[profile.default.overrides]]
-filter = 'test(=valid_and_loose_bodies_are_clean) | test(=widths_fall_to_the_floor)'
+filter = 'test(=widths_fall_to_the_floor)'
 priority = 100
+
+# The shards of the other long tests (poly_from_roots, nurbs_elevate; gaps by Kind is short) and
+# the middle enclosure width start next.
+[[profile.default.overrides]]
+filter = 'test(~poly_from_roots_) | test(~nurbs_elevate_) | test(=width_falls_to_1e_8)'
+priority = 90

@@ -9,9 +9,9 @@
 //!   the testkit's port of `scx-make` and its volume is the closed form's, so a later failure of a case is the
 //!   Boolean's and not the operands'.
 //! - *The cases themselves,* judged against their truth. Cases whose recipe says
-//!   `Unsupported` (a touch inside a face, D5) expect that answer by name. The vertex and
-//!   edge contacts are built (BO7): a vertex of two regions, and an edge of four faces in
-//!   radial order.
+//!   `Unsupported` expect that answer by name. The vertex and edge contacts are built
+//!   (BO7): a vertex of two regions, and an edge of four faces in radial order; so is a
+//!   touch inside a face (BO25), a vertex of a point loop in each face.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -34,8 +34,8 @@ use scx_testkit::recipe::{self, Op, Outcome, Part, Recipe, Shape, Topology, Unsu
 /// Plate-and-gear benchmark bodies (BO6): many cylinder or block cuts in one result.
 const BENCH: [&str; 4] = ["box-cyl-hole", "plate-4", "plate-12", "gear-60"];
 /// Contacts at a point or along a line (BO7). The first two are built (two regions
-/// pinched at a vertex or an edge); the rest touch inside a face and are
-/// `Unsupported(NonManifold)` by D5.
+/// pinched at a vertex or an edge); the rest touch inside a face, built since BO25 as a
+/// vertex of a point loop in each face (D5 had them `Unsupported(NonManifold)`).
 const CONTACT_BUILT: [&str; 2] = ["corner-contact-union", "edge-contact-union"];
 const CONTACT_IN_FACE: [&str; 6] = [
     "tangent-sphere-box",
@@ -193,8 +193,8 @@ fn check(name: &str) {
         }
         Outcome::Unsupported(u) => {
             let e = got.expect_err(name);
-            // D5: a touch inside a face is named `non_manifold`; a pair with no closed
-            // form is `ssi_pair`.
+            // A contact the build does not hold is named `non_manifold`; a pair with no
+            // closed form is `ssi_pair`.
             let want = match u {
                 Unsupported::NonManifold { .. } => "non_manifold",
                 Unsupported::SsiPair { .. } => "ssi_pair",
@@ -212,7 +212,7 @@ fn check(name: &str) {
 fn genus(body: &Brep, t: &Topology) -> u32 {
     let mut shells = 0u32;
     let mut handles = 0u32;
-    for s in body.shells().filter(|s| !s.region().is_outside()) {
+    for s in body.shells().filter(|s| s.region().is_solid()) {
         shells += 1;
         let b = betti(body, s.id()).unwrap_or_else(|e| panic!("{:?}: {e}", s.id()));
         assert_eq!(b.b1 % 2, 0, "{:?}: b1 {} is odd", s.id(), b.b1);
@@ -361,7 +361,7 @@ fn blocks_touching_at_a_vertex_or_along_an_edge_are_built() {
 }
 
 #[test]
-fn touches_inside_a_face_are_unsupported() {
+fn touches_inside_a_face_are_built() {
     for n in CONTACT_IN_FACE {
         check(n);
     }

@@ -348,36 +348,70 @@ fn gaps(f: &Findings) -> Vec<&Finding> {
         .collect()
 }
 
-#[test]
-fn valid_and_loose_bodies_are_clean() {
-    for k in Kind::ALL {
-        for seed in 0..2 {
-            for size in [1, 3] {
-                let b = kind(k, seed, size);
-                for scope in [Scope::Import, Scope::Stitched, Scope::Full] {
-                    let f = found(&b, scope);
-                    assert!(
-                        gaps(&f).is_empty() && f.undecided.is_empty(),
-                        "{} {seed} {size} {scope:?}: {:?} {:?}",
-                        k.name(),
-                        f.list,
-                        f.undecided
-                    );
-                }
-                for offset in [1e-9, 1e-6] {
-                    let b = finish(loose(k, seed, size, offset).unwrap());
-                    let f = found(&b, Scope::Import);
-                    assert!(
-                        gaps(&f).is_empty() && f.undecided.is_empty(),
-                        "loose {} {seed} {size} {offset}: {:?} {:?}",
-                        k.name(),
-                        f.list,
-                        f.undecided
-                    );
-                }
+/// One generator's bodies at every seed and size: valid under every scope, and loose.
+fn valid_and_loose_are_clean(k: Kind) {
+    for seed in 0..2 {
+        for size in [1, 3] {
+            let b = kind(k, seed, size);
+            for scope in [Scope::Import, Scope::Stitched, Scope::Full] {
+                let f = found(&b, scope);
+                assert!(
+                    gaps(&f).is_empty() && f.undecided.is_empty(),
+                    "{} {seed} {size} {scope:?}: {:?} {:?}",
+                    k.name(),
+                    f.list,
+                    f.undecided
+                );
+            }
+            for offset in [1e-9, 1e-6] {
+                let b = finish(loose(k, seed, size, offset).unwrap());
+                let f = found(&b, Scope::Import);
+                assert!(
+                    gaps(&f).is_empty() && f.undecided.is_empty(),
+                    "loose {} {seed} {size} {offset}: {:?} {:?}",
+                    k.name(),
+                    f.list,
+                    f.undecided
+                );
             }
         }
     }
+}
+
+/// One test per generator, so the runner checks them in parallel (together the 13 checks
+/// of one test that ran 95 s on one core). `TESTED` lists them for the guard below.
+macro_rules! per_kind {
+    ($($name:ident => $kind:ident),* $(,)?) => {
+        $(
+            #[test]
+            fn $name() {
+                valid_and_loose_are_clean(Kind::$kind);
+            }
+        )*
+        const TESTED: &[Kind] = &[$(Kind::$kind),*];
+    };
+}
+
+per_kind! {
+    valid_and_loose_block_is_clean => Block,
+    valid_and_loose_prism_is_clean => Prism,
+    valid_and_loose_quad_sheet_is_clean => QuadSheet,
+    valid_and_loose_tri_sheet_is_clean => TriSheet,
+    valid_and_loose_cylinder_is_clean => Cylinder,
+    valid_and_loose_cone_is_clean => Cone,
+    valid_and_loose_sphere_is_clean => Sphere,
+    valid_and_loose_torus_is_clean => Torus,
+    valid_and_loose_holed_is_clean => Holed,
+    valid_and_loose_cavity_is_clean => Cavity,
+    valid_and_loose_stack_is_clean => Stack,
+    valid_and_loose_checker_is_clean => Checker,
+    valid_and_loose_touching_is_clean => Touching,
+}
+
+/// A generator added to `Kind::ALL` gets a test above.
+#[test]
+fn every_generator_has_a_clean_body_test() {
+    assert_eq!(TESTED, &Kind::ALL[..]);
 }
 
 /// The pin's `issue_1419`: a vertex wide past the ratio limit is a defect of our own

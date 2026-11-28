@@ -1,17 +1,17 @@
 // Written for solidcorex. Apache-2.0.
 //! Where a result meets itself, or one lump nests in another's cavity (BO7, 72 §14.36).
 //! D5: a vertex or edge contact is built (a vertex of two regions, an edge of four fins in
-//! radial order); a touch inside a face needs a point loop scx-brep lacks and is
-//! `NonManifold`. Every built result passes `scx_check::contract`, an empty one excepted,
+//! radial order); BO25 builds a touch inside a face too, as a vertex of a point loop (a
+//! collapsed edge used at one uv point) in each face that holds it. Every built result passes `scx_check::contract`, an empty one excepted,
 //! and one with an edge of four fins passes it only with `Contacts::Radial` (see [`result`]);
 //! every volume is the closed form's.
 //!
 //! Ported (judged by outcome, against closed forms): solidcore's `boolean_api` cases
 //! `tangent-sphere-box`, `seam-sphere-box`, `seam-box-sphere`, `off-seam-sphere-box`,
 //! `seam-sphere-sphere` and `seam-box-minus-sphere`, and `point_contact_unions_check_clean`
-//! over all eleven of its point contacts. The pin builds each with a point loop; here the
-//! operation the pin runs is `NonManifold` (D5), and the operations that keep only one
-//! side of the touch are built.
+//! over all eleven of its point contacts. The pin builds each with a point loop, and so
+//! does this crate (BO25); the operations that keep only one side of the touch are built
+//! as well.
 
 use std::f64::consts::PI;
 
@@ -47,6 +47,35 @@ fn ring(major: f64, minor: f64, doc: Document) -> Brep {
     torus(&frame, Length::from_mm(major), Length::from_mm(minor), &doc)
         .unwrap()
         .body
+}
+
+/// The pin's operation on a touch inside a face, built (BO25): a point loop holds the
+/// touch on each face, the default contract proves the body, and its volume and form are
+/// the closed form's.
+fn touched(c: &Point, doc: Document) {
+    let (want, shape) = &c.touch;
+    let body = result(&c.a, &c.b, c.pin, doc);
+    let v = volume(&body);
+    assert!(
+        (v - want).abs() <= 1e-7 * want,
+        "{} {:?}: {v} against {want}",
+        c.name,
+        c.pin
+    );
+    assert_eq!(&form(&body), shape, "{}", c.name);
+    // A cavity wall's other side is a void of its own.
+    let voids = body
+        .regions()
+        .filter(|r| !r.is_solid() && !r.is_outside())
+        .count();
+    assert_eq!(voids, shape.1.iter().sum::<usize>() - shape.0, "{}", c.name);
+    assert!(body.edges().all(|e| e.fins().len() <= 2), "{}", c.name);
+    // Each touch is a vertex of a point loop (a collapsed edge) in a face of each side.
+    let points = body
+        .edges()
+        .filter(|e| e.start().id() == e.end().id() && e.fins().len() == 1)
+        .count();
+    assert!(points >= 1, "{}: no point loop", c.name);
 }
 
 fn non_manifold(a: &Brep, b: &Brep, which: BooleanOp, doc: Document, name: &str) {
@@ -114,8 +143,10 @@ struct Point {
     b: Brep,
     pin: BooleanOp,
     built: Vec<(BooleanOp, bool, f64)>,
+    /// What the pin's operation builds: its volume, and its form (see [`form`]).
+    touch: (f64, (usize, Vec<usize>, usize)),
     /// A pair with no closed-form intersection: every operation is `SsiPair` until step 5,
-    /// which builds them (and then the touch is `NonManifold` as above).
+    /// which builds them (and then the touch is built as above).
     ssi: bool,
 }
 
@@ -126,6 +157,9 @@ fn point_contacts(doc: Document) -> Vec<Point> {
     let a45 = PI / 4.0;
     let box_a = || cuboid([10.0, 0.0, 0.0], [15.0, 17.5, 15.0], doc);
     // (op, operands swapped, volume): b - a is `SUBTRACT` with the operands swapped.
+    // Two lumps touching at a point: two solid regions, one shell each, and one outside
+    // shell round each (no edge joins them).
+    let two = |va: f64, vb: f64| (va + vb, (2, vec![1, 1], 2));
     let apart = |va: f64, vb: f64| {
         vec![
             (SUBTRACT, false, va),
@@ -140,6 +174,7 @@ fn point_contacts(doc: Document) -> Vec<Point> {
             b: ball([5.0, 5.0, 13.0], 3.0, doc),
             pin: UNION,
             built: apart(1000.0, sphere_v(3.0)),
+            touch: two(1000.0, sphere_v(3.0)),
             ssi: false,
         },
         Point {
@@ -148,6 +183,7 @@ fn point_contacts(doc: Document) -> Vec<Point> {
             b: box_a(),
             pin: UNION,
             built: apart(sphere_v(7.5), box_v),
+            touch: two(sphere_v(7.5), box_v),
             ssi: false,
         },
         Point {
@@ -156,6 +192,7 @@ fn point_contacts(doc: Document) -> Vec<Point> {
             b: ball([2.5, 15.0, 12.5], 7.5, doc),
             pin: UNION,
             built: apart(box_v, sphere_v(7.5)),
+            touch: two(box_v, sphere_v(7.5)),
             ssi: false,
         },
         Point {
@@ -164,6 +201,7 @@ fn point_contacts(doc: Document) -> Vec<Point> {
             b: box_a(),
             pin: UNION,
             built: apart(sphere_v(7.5), box_v),
+            touch: two(sphere_v(7.5), box_v),
             ssi: false,
         },
         Point {
@@ -172,6 +210,7 @@ fn point_contacts(doc: Document) -> Vec<Point> {
             b: ball([5.0 * cos, 0.0, 5.0 * sin], 2.0, doc),
             pin: UNION,
             built: apart(sphere_v(3.0), sphere_v(2.0)),
+            touch: two(sphere_v(3.0), sphere_v(2.0)),
             ssi: false,
         },
         Point {
@@ -180,6 +219,7 @@ fn point_contacts(doc: Document) -> Vec<Point> {
             b: ball([5.0, 0.0, 5.0], 3.0, doc),
             pin: UNION,
             built: apart(40.0 * PI, sphere_v(3.0)),
+            touch: two(40.0 * PI, sphere_v(3.0)),
             ssi: true,
         },
         Point {
@@ -188,6 +228,7 @@ fn point_contacts(doc: Document) -> Vec<Point> {
             b: ball([0.0, 5.0, 5.0], 3.0, doc),
             pin: UNION,
             built: apart(40.0 * PI, sphere_v(3.0)),
+            touch: two(40.0 * PI, sphere_v(3.0)),
             ssi: true,
         },
         Point {
@@ -200,6 +241,7 @@ fn point_contacts(doc: Document) -> Vec<Point> {
             ),
             pin: UNION,
             built: apart(tor, sphere_v(2.0)),
+            touch: two(tor, sphere_v(2.0)),
             ssi: true,
         },
         Point {
@@ -208,6 +250,7 @@ fn point_contacts(doc: Document) -> Vec<Point> {
             b: cuboid([-3.0, 6.5, -3.0], [3.0, 10.5, 3.0], doc),
             pin: UNION,
             built: apart(tor, 144.0),
+            touch: two(tor, 144.0),
             ssi: true,
         },
         Point {
@@ -216,6 +259,7 @@ fn point_contacts(doc: Document) -> Vec<Point> {
             b: cuboid([6.5, -3.0, -3.0], [10.5, 3.0, 3.0], doc),
             pin: UNION,
             built: apart(tor, 144.0),
+            touch: two(tor, 144.0),
             ssi: true,
         },
         Point {
@@ -229,16 +273,20 @@ fn point_contacts(doc: Document) -> Vec<Point> {
                 (INTERSECT, false, sphere_v(5.0)),
                 (SUBTRACT, true, 0.0),
             ],
+            // One region bounded by the box and the ball's wall; the ball's inside is a
+            // void of its own, meeting the outside only at the six points.
+            touch: (1000.0 - sphere_v(5.0), (1, vec![2], 1)),
             ssi: false,
         },
     ]
 }
 
 #[test]
-fn point_contacts_are_non_manifold_and_one_sided_results_are_built() {
-    // `point_contact_unions_check_clean`: the pin builds each with a point loop. D5: the
-    // operation that keeps both sides of the touch is `NonManifold`; each operation that
-    // keeps one side builds, passes the contract and has the closed-form volume.
+fn point_contacts_are_built() {
+    // `point_contact_unions_check_clean`: the pin builds each with a point loop, and so
+    // does BO25: the operation that keeps both sides of the touch builds a vertex of a
+    // point loop in each face (D5 had it `NonManifold`). Each operation, both sides or
+    // one, passes the contract and has the closed-form volume.
     let doc = Document::default();
     for c in point_contacts(doc) {
         if c.ssi {
@@ -254,7 +302,7 @@ fn point_contacts_are_non_manifold_and_one_sided_results_are_built() {
             }
             continue;
         }
-        non_manifold(&c.a, &c.b, c.pin, doc, c.name);
+        touched(&c, doc);
         for (which, swapped, want) in c.built {
             let (a, b) = if swapped { (&c.b, &c.a) } else { (&c.a, &c.b) };
             let body = result(a, b, which, doc);

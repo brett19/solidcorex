@@ -25,6 +25,8 @@ use scx_num::budget::{Exhausted, Stopped};
 use scx_num::error::ErrorKind;
 use scx_nurbs_surface::{NurbsSurfaceError, ParamAxis};
 
+use crate::procedural::ProceduralError;
+
 /// A size of an analytic kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -92,6 +94,12 @@ pub enum SurfaceError {
         /// The extent's high end.
         max: f64,
     },
+    /// A certificate's node whose rail parameter `at` lies outside the rail's domain
+    /// ([`crate::certificate::span_bound`]).
+    OffRail {
+        /// The node's rail parameter.
+        at: f64,
+    },
     /// The transform's matrix has a coefficient that is infinite or NaN, or the image of
     /// the frame's origin overflows.
     MapNotFinite,
@@ -107,6 +115,9 @@ pub enum SurfaceError {
     /// sizes and extents `to_nurbs` reaches it only on overflow (sizes near the largest
     /// double).
     Nurbs(NurbsSurfaceError),
+    /// Building a procedural surface failed (its `to_nurbs` past the net or its `transformed`
+    /// image): a context frame over the [`ProceduralError`], whose kind it has.
+    Procedural(ProceduralError),
     /// A curve-surface intersection with a NURBS curve: not built yet (an analytic curve on
     /// a NURBS surface is). Named, never an empty answer.
     NurbsIntersection,
@@ -149,9 +160,11 @@ impl SurfaceError {
             | Self::Undecided { .. } => ErrorKind::Unsupported,
             Self::EmptyExtent { .. }
             | Self::OutsideDomain { .. }
+            | Self::OffRail { .. }
             | Self::MapNotFinite
             | Self::MapFlattens => ErrorKind::Refused,
             Self::Nurbs(e) => e.kind(),
+            Self::Procedural(e) => e.kind(),
             Self::Exhausted(_) => ErrorKind::Exhausted,
             Self::Stopped => ErrorKind::Cancelled,
             Self::Defect { .. } => ErrorKind::Defect,
@@ -168,10 +181,12 @@ impl SurfaceError {
             Self::SelfIntersecting { .. } => "torus_self_intersecting",
             Self::EmptyExtent { .. } => "extent_empty",
             Self::OutsideDomain { .. } => "extent_outside_domain",
+            Self::OffRail { .. } => "node_off_rail",
             Self::MapNotFinite => "map_not_finite",
             Self::MapFlattens => "map_flattens",
             Self::NotSimilar => "map_not_similar",
             Self::Nurbs(_) => "nurbs_failed",
+            Self::Procedural(_) => "procedural_failed",
             Self::NurbsIntersection => "nurbs_intersection_unbuilt",
             Self::Undecided { .. } => "intersection_undecided",
             Self::Exhausted(e) => e.name(),
@@ -212,12 +227,14 @@ impl fmt::Display for SurfaceError {
                 f,
                 "the extent [{min}, {max}] along {axis} leaves the surface's domain"
             ),
+            Self::OffRail { at } => write!(f, "the node at {at} lies off the rail's domain"),
             Self::MapNotFinite => f.write_str("the transform or its image is not finite"),
             Self::MapFlattens => f.write_str("the transform flattens the surface"),
             Self::NotSimilar => f.write_str(
                 "the transform is not a similarity, so the image is not a surface of the kind",
             ),
             Self::Nurbs(_) => f.write_str("the NURBS surface could not be built or edited"),
+            Self::Procedural(_) => f.write_str("the procedural surface could not be built"),
             Self::NurbsIntersection => {
                 f.write_str("intersecting a NURBS curve with a surface is not built yet")
             }
@@ -236,6 +253,7 @@ impl std::error::Error for SurfaceError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Nurbs(e) => Some(e),
+            Self::Procedural(e) => Some(e),
             _ => None,
         }
     }
