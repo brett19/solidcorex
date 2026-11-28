@@ -30,18 +30,18 @@ use scx_brep::{
     ShellRecord, VertexId, VertexRecord,
 };
 use scx_curve::{Curve, Inversion, Line};
-use scx_ssi::analytic::Contact;
 use scx_num::extent1d::Extent1d;
 use scx_num::frame::{Frame, Sense};
 use scx_num::vector3d::{Point3, Vec3};
+use scx_ssi::analytic::Contact;
 use scx_surface::{Plane, Surface, SurfaceKind};
 
 use crate::boolean::{NoItems, interfere_only, staged};
 use crate::cells::{Faces, Membership, Rule};
 use crate::error::{BooleanDefect, BooleanError, BooleanRefusal, BooleanUnsupported};
 use crate::faceface::{FaceFace, face_face};
-use crate::given::Incidences;
 use crate::geom::{Operands, Side};
+use crate::given::Incidences;
 use crate::intersect::wire;
 
 /// Why a section is not answered yet.
@@ -97,17 +97,13 @@ enum Kind {
 /// - The causes of [`combine`] for a solid and of [`intersect`](crate::intersect) for a
 ///   sheet: NURBS faces ([`BooleanUnsupported::Nurbs`]), pairs with no closed form, the
 ///   budget, the stop flag, defects.
-pub fn section(
-    body: &Brep,
-    by: &Surface,
-    cx: &mut Cx<'_>,
-) -> Result<Done<NoItems>, BooleanError> {
+pub fn section(body: &Brep, by: &Surface, cx: &mut Cx<'_>) -> Result<Done<NoItems>, BooleanError> {
     let plane = plane_of(by)?;
     let kind = kind(body)?;
     let doc = *cx.doc;
-    same_document(body, &doc)?;
-    let Some(tool) = tool(body, &plane, &doc)? else {
-        return nothing(&doc);
+    same_document(body, doc)?;
+    let Some(tool) = tool(body, &plane, doc)? else {
+        return nothing(doc);
     };
     match kind {
         Kind::Solid => solid(body, &tool, cx),
@@ -137,9 +133,9 @@ pub fn face_section(
         )));
     }
     let doc = *cx.doc;
-    same_document(body, &doc)?;
-    let Some(tool) = tool(body, &plane, &doc)? else {
-        return nothing(&doc);
+    same_document(body, doc)?;
+    let Some(tool) = tool(body, &plane, doc)? else {
+        return nothing(doc);
     };
     sheet(body, &tool, Some(face), cx)
 }
@@ -157,7 +153,7 @@ fn plane_of(by: &Surface) -> Result<Plane, BooleanError> {
     }
 }
 
-fn same_document(body: &Brep, doc: &Document) -> Result<(), BooleanError> {
+fn same_document(body: &Brep, doc: Document) -> Result<(), BooleanError> {
     if body.resolution() == doc.resolution() {
         Ok(())
     } else {
@@ -172,9 +168,7 @@ fn kind(body: &Brep) -> Result<Kind, BooleanError> {
     if body.faces().len() == 0 {
         return Err(unsupported(SectionUnsupported::Wire));
     }
-    let solid_side = |f: scx_brep::Face<'_>, side: FaceSide| {
-        f.shell(side).region().is_solid()
-    };
+    let solid_side = |f: scx_brep::Face<'_>, side: FaceSide| f.shell(side).region().is_solid();
     let (mut solids, mut sheets) = (false, false);
     for f in body.faces() {
         if solid_side(f, FaceSide::Front) || solid_side(f, FaceSide::Back) {
@@ -191,9 +185,9 @@ fn kind(body: &Brep) -> Result<Kind, BooleanError> {
 }
 
 /// A body of nothing, of `doc`.
-fn nothing(doc: &Document) -> Result<Done<NoItems>, BooleanError> {
+fn nothing(doc: Document) -> Result<Done<NoItems>, BooleanError> {
     let (body, changes) = Draft::new()
-        .finish(doc)
+        .finish(&doc)
         .map_err(|_| BooleanError::Defect(BooleanDefect::Build))?;
     Ok(Done::new(body, changes, Report::empty(0)))
 }
@@ -229,12 +223,7 @@ fn solid(body: &Brep, tool: &Brep, cx: &mut Cx<'_>) -> Result<Done<NoItems>, Boo
 /// Whether stage 4 found a place the plane only touches the body (a tangent curve, an edge
 /// lying in the plane, a touch point) that `sheet` holds on none of its edges or vertices
 /// within `zone`, judged at the curve's middle or the point.
-fn beside(
-    ops: Operands<'_>,
-    sheet: &Brep,
-    ff: &FaceFace,
-    zone: f64,
-) -> Result<bool, BooleanError> {
+fn beside(ops: Operands<'_>, sheet: &Brep, ff: &FaceFace, zone: f64) -> Result<bool, BooleanError> {
     let mut at = Vec::new();
     for s in &ff.sections {
         if s.contact == Contact::Tangent {
@@ -264,9 +253,9 @@ fn holds(sheet: &Brep, p: Point3, zone: f64) -> bool {
     sheet.vertices().any(|v| (v.point() - p).length() <= zone)
         || sheet.edges().any(|e| match e.shape() {
             EdgeShape::Curve { curve, interval } => curve
-                .invert(p, Some(&interval))
+                .invert(p, Some(interval))
                 .is_ok_and(|i| matches!(i, Inversion::Inside(f) if f.distance <= zone)),
-            _ => false,
+            EdgeShape::Collapsed => false,
         })
 }
 
@@ -290,7 +279,7 @@ fn sheet(
 
 /// The block behind `plane` whose face on it reaches past `body`'s box on every side and
 /// whose other faces lie clear of the box, or `None` where the plane misses the box.
-fn tool(body: &Brep, plane: &Plane, doc: &Document) -> Result<Option<Brep>, BooleanError> {
+fn tool(body: &Brep, plane: &Plane, doc: Document) -> Result<Option<Brep>, BooleanError> {
     let Some(bx) = body.bounding_box() else {
         return Ok(None);
     };
@@ -363,7 +352,7 @@ fn block(
     frame: &Frame,
     reach: f64,
     depth: f64,
-    doc: &Document,
+    doc: Document,
 ) -> Result<Brep, BooleanError> {
     let axes: [Vec3; 3] = [frame.x().as_vec(), frame.y().as_vec(), frame.z().as_vec()];
     let lo = [-reach, -reach, -depth];
@@ -372,7 +361,7 @@ fn block(
         let mut p = o;
         for (k, ((axis, lo), hi)) in axes.iter().zip(lo).zip(hi).enumerate() {
             let t = if bits >> (2 - k) & 1 == 1 { hi } else { lo };
-            p = p + *axis * t;
+            p += *axis * t;
         }
         p
     };
@@ -391,16 +380,16 @@ fn block(
             let cell = verts
                 .get_mut(usize::from(bits))
                 .ok_or(BooleanError::Defect(BooleanDefect::Draft))?;
-            ring.push(match cell {
-                Some(v) => *v,
-                None => {
-                    let v = draft
-                        .add_vertex(VertexRecord::new(point(bits)))
-                        .map_err(defect)?;
-                    *cell = Some(v);
-                    v
-                }
-            });
+            let v = if let Some(v) = *cell {
+                v
+            } else {
+                let v = draft
+                    .add_vertex(VertexRecord::new(point(bits)))
+                    .map_err(defect)?;
+                *cell = Some(v);
+                v
+            };
+            ring.push(v);
         }
         let mut uses = Vec::with_capacity(4);
         for (&a, &b) in ring.iter().zip(ring.iter().cycle().skip(1)) {
@@ -412,8 +401,14 @@ fn block(
             let e = if let Some(&(_, e)) = lines.iter().find(|(k, _)| *k == (lo_v, hi_v)) {
                 e
             } else {
-                let p = draft.vertex(lo_v).map(|v| v.point()).ok_or_else(|| defect(()))?;
-                let q = draft.vertex(hi_v).map(|v| v.point()).ok_or_else(|| defect(()))?;
+                let p = draft
+                    .vertex(lo_v)
+                    .map(scx_brep::Vertex::point)
+                    .ok_or_else(|| defect(()))?;
+                let q = draft
+                    .vertex(hi_v)
+                    .map(scx_brep::Vertex::point)
+                    .ok_or_else(|| defect(()))?;
                 let line = Line::new(p, q - p).map_err(defect)?;
                 let e = draft
                     .add_edge(EdgeGeom::new(
@@ -433,13 +428,13 @@ fn block(
         let normal = *axes.get(role.axis).ok_or_else(|| defect(()))? * role.outward;
         let plane = Frame::new(p0, normal, p1 - p0).ok_or_else(|| defect(()))?;
         let surface = Surface::Plane(Plane::new(plane));
-        let loops = draft.exact_loops(&surface, &[uses], doc).map_err(defect)?;
+        let loops = draft.exact_loops(&surface, &[uses], &doc).map_err(defect)?;
         draft
             .add_face(FaceRecord::new(surface, [outside, inner], loops))
             .map_err(defect)?;
     }
     draft
-        .finish(doc)
+        .finish(&doc)
         .map(|(b, _)| b)
         .map_err(|_| BooleanError::Defect(BooleanDefect::Build))
 }

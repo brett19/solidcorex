@@ -169,7 +169,9 @@ fn is_sheet(body: &Brep, doc: Document) {
     assert!(body.edges().all(|e| e.fins().len() == 1));
     let (mut scratch, stop, settings) = (Scratch::new(), Stop::new(), Settings::new());
     let mut cx = Cx::new(&doc, &settings, &mut scratch, &stop, &NoTrace);
-    let class = scx_check::check(body, &mut cx, Scope::Import).unwrap().class;
+    let class = scx_check::check(body, &mut cx, Scope::Import)
+        .unwrap()
+        .class;
     assert_eq!(class, Class::Sheet);
 }
 
@@ -351,7 +353,11 @@ fn a_plane_on_a_face_gives_the_face() {
 #[test]
 fn a_plane_that_touches_gives_points_and_wires() {
     let doc = Document::default();
-    let pole = cut(&ball([0.0; 3], 2.0, doc), &plane([0.0, 0.0, 2.0], [0.0, 0.0, 1.0]), doc);
+    let pole = cut(
+        &ball([0.0; 3], 2.0, doc),
+        &plane([0.0, 0.0, 2.0], [0.0, 0.0, 1.0]),
+        doc,
+    );
     assert_eq!((pole.faces().len(), pole.edges().len()), (0, 0));
     let points: Vec<Point3> = pole.vertices().map(|v| v.point()).collect();
     assert_eq!(points.len(), 1);
@@ -369,7 +375,11 @@ fn a_plane_that_touches_gives_points_and_wires() {
     assert_eq!(points.len(), 1);
     assert!((points[0] - Point3::new(0.0, 0.0, 0.0)).length() <= 1e-12);
 
-    let wall = cut(&cyl([0.0; 3], 1.5, 4.0, doc), &plane([1.5, 0.0, 0.0], [1.0, 0.0, 0.0]), doc);
+    let wall = cut(
+        &cyl([0.0; 3], 1.5, 4.0, doc),
+        &plane([1.5, 0.0, 0.0], [1.0, 0.0, 0.0]),
+        doc,
+    );
     assert_eq!(wall.faces().len(), 0);
     same(&lengths(&wall), &[4.0]);
     on_both(&wall, [1.5, 0.0, 0.0], [1.0, 0.0, 0.0], |p| p.y.abs(), 1e-9);
@@ -412,9 +422,19 @@ fn a_sheet_s_section_is_a_wire() {
     let line = cut(&square, &plane([0.0, 0.0, 5.0], [0.0, 0.0, 1.0]), doc);
     assert_eq!(line.faces().len(), 0);
     same(&lengths(&line), &[10.0]);
-    on_both(&line, [5.0, 0.0, 5.0], [1.0, 0.0, 0.0], |p| (p.z - 5.0).abs(), 1e-9);
+    on_both(
+        &line,
+        [5.0, 0.0, 5.0],
+        [1.0, 0.0, 0.0],
+        |p| (p.z - 5.0).abs(),
+        1e-9,
+    );
 
-    let disc = cut(&ball([0.0; 3], 2.0, doc), &plane([0.0; 3], [0.0, 0.0, 1.0]), doc);
+    let disc = cut(
+        &ball([0.0; 3], 2.0, doc),
+        &plane([0.0; 3], [0.0, 0.0, 1.0]),
+        doc,
+    );
     let chord = cut(&disc, &plane([0.0, 1.0, 0.0], [0.0, 1.0, 0.0]), doc);
     assert_eq!(chord.faces().len(), 0);
     same(&lengths(&chord), &[2.0 * 3f64.sqrt()]);
