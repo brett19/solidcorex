@@ -756,7 +756,8 @@ pub(crate) fn face_face(
             },
         ];
         for o in &of {
-            if matches!(o.face.surface(), Surface::Nurbs(_)) {
+            // Procedural faces are refused with the NURBS ones.
+            if matches!(o.face.surface(), Surface::Nurbs(_) | Surface::Procedural(_)) {
                 return Err(BooleanError::Unsupported(BooleanUnsupported::Nurbs {
                     operand: o.side.operand(),
                     at: scx_brep::Entity::Face(o.face.id()),

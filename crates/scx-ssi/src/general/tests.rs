@@ -351,6 +351,12 @@ fn every_cause_has_a_kind_a_name_and_a_line() {
             "a tangential contact at (1, 2, 3) is not traced",
         ),
         (
+            SsiError::Procedural { operand: 1 },
+            ErrorKind::Unsupported,
+            "ssi_procedural",
+            "operand 1 is a procedural surface, not yet intersected in general",
+        ),
+        (
             SsiError::Budget(Exhausted { limit: 7 }),
             ErrorKind::Exhausted,
             "budget_exhausted",
@@ -368,7 +374,10 @@ fn every_cause_has_a_kind_a_name_and_a_line() {
             (e.kind(), e.name(), e.to_string().as_str()),
             (kind, name, line)
         );
-        let named = matches!(e, SsiError::Budget(_) | SsiError::Stopped);
+        let named = matches!(
+            e,
+            SsiError::Procedural { .. } | SsiError::Budget(_) | SsiError::Stopped
+        );
         assert_eq!(e.at(), if named { None } else { Some(at) });
     }
     assert_eq!(SingularKind::DegenerateForm.name(), "degenerate_form");
@@ -429,3 +438,37 @@ fn an_empty_trace_is_the_proof_of_no_meeting() {
 
 mod apart;
 mod field;
+
+/// A procedural operand is refused at once by name, either side, with nothing spent.
+#[test]
+fn a_procedural_operand_is_refused_before_any_work() {
+    use scx_curve::{Curve, Line};
+    use scx_num::extent1d::Extent1d;
+    use scx_surface::{Procedural, Revolution};
+    let g =
+        Curve::Line(Line::through(Point3::new(1.0, 0.0, 0.0), Point3::new(2.0, 0.5, 1.0)).unwrap());
+    let r = Revolution::new(
+        &g,
+        Extent1d::new(0.0, 1.0).unwrap(),
+        Point3::new(0.0, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+    )
+    .unwrap();
+    let p = Surface::Procedural(Arc::new(Procedural::new(r).unwrap()));
+    let pe = Extent2d::from_bounds(0.0, 0.0, 1.0, 1.0).unwrap();
+    let plane = Surface::Plane(Plane::new(frame(
+        [0.0, 0.0, 0.5],
+        [0.0, 0.0, 1.0],
+        [1.0, 0.0, 0.0],
+    )));
+    let qe = Extent2d::from_bounds(-5.0, -5.0, 5.0, 5.0).unwrap();
+    for (pair, operand) in [
+        ([(p.clone(), pe), (plane.clone(), qe)], 0),
+        ([(plane, qe), (p, pe)], 1),
+    ] {
+        let mut budget = Budget::new(1_000);
+        let e = run(&pair, &mut budget, &Stop::new());
+        assert_eq!(e, Err(SsiError::Procedural { operand }));
+        assert_eq!(budget.used(), 0);
+    }
+}

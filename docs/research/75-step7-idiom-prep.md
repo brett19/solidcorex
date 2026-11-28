@@ -2830,3 +2830,189 @@ Decisions.
 Work (release, throwaway timer; degree (3, 3), square grids): interpolation of an `n x n` grid is `2n` banded solves of size `n` (`n` along u, `n` along v; `4n` rational), `n` = 20/40/80/160/320/640: 374/361/350/203/193/183 ns per grid point (150 us to 75 ms total), so linear in the grid. Least squares to a net of `n/4`: `n` solves of `n` rows by `n/4` unknowns then `n/4` of `n` by `n/4`; 332/365/408/347/445/706 ns per point; the rise at 640 is the column gather over a 10 MB grid, not the solves (per-row work is `O(p^2)`).
 
 Tests (`fit_tests`, 12; truth is a closed form or the data): a bilinear patch from 4 corners, degrees (1,1), and from 5x4 and 7x9 uneven grids at degrees 1-4 x 1-3, at the data to `1e-12` and at 100 random parameters between to `1e-11`; random polynomial surfaces of degree `(p, q)`, p, q in 1-4, interpolated and least-squared (net sizes with and without interior knots, 3x oversampled) match at 200 parameters to `1e-9` / `1e-8`; circles (the 9-point rational quadratic) at 2, 4 and 7 uneven heights, v-degree 1-3, interpolated and least-squared, equal the closed-form cylinder at 300 parameters to `1e-12`, radius `r` to `1e-12 r`, rows equal the source circles; Held ends of order 1 and 2 on a bicubic reproduce it and its end derivative; the pin's `interpolation_hits_points` (5x4 chord grid, degrees (3,2)), `approximation_of_plane_is_exact` (9x7, net 5x4), `function_interpolation` (scalar grid) and `params_uniform_and_chord`, with its refusals (wrong knot count, net larger than the data); random spline samples interpolate back; typed refusals with unchanged inputs; the non-positive weight; Bernstein forms equal the surface on every span and an inner box of a polynomial and a rational surface (1e-11), the form of a cross product equals the cross of finite-difference partials, a form's `restrict` equals the form over the smaller box, and the interior, outside and empty refusals. Removed: none. The pin's three `huge_*` and `oversized_degrees` tests are not ported (above).
+
+### 13.27 PK1 as built (11-28)
+
+`scx_surface::Procedural` (`crates/scx-surface/src/procedural.rs`) and the new variant
+`Surface::Procedural(Arc<Procedural>)` (77 row PK1, 77 §3.3). A `Procedural` is a
+`Definition` and the exact rational net of that definition, built once in `Procedural::new` and
+kept with the value; it has no `NetScope` and no setters.
+
+- `Definition::Revolution(Revolution)`: `Revolution::new(&Curve, Extent1d, Point3, Vec3)`
+  takes the generator over its range, an axis point and an axis direction. `u` is the turn in
+  the quarter-arc parameter (63 D13), periodic over `[0, 1]`, with `u = 0` at the generator.
+  `v` is the generator's parameter.
+- `Definition::Extrusion(Extrusion)`: `Extrusion::new(&Curve, Extent1d, Vec3, Extent1d)`.
+  `u` is the generator's parameter and `v` multiplies the vector over its range.
+- Generators: a line; a circle or ellipse over whole quarter arcs, in the quarter-arc
+  parameter of its angle so the net is exact in the same uv; or a NURBS curve over its domain.
+  A parabola or hyperbola is `ProceduralError::Generator`.
+- `ProceduralError` (`Copy`, `#[non_exhaustive]`, with `kind()` and `name()`): `Generator`,
+  `Range`, `NotFinite`, `ZeroDirection`, `OnAxis`, `Flat` and `Net`. It is wrapped once as
+  `SurfaceError::Procedural` (`procedural_failed`).
+- `Procedural::{new, definition, net, bound, net_over, point, eval, jet, normal, domain,
+  to_nurbs, reversed, transformed}`. `eval<T: Ranged>` is the definition in `f64` or `Ivl`.
+  `jet<D>` gives the definition's partials in closed form.
+
+**The net and its bound.** The control data are built twice, in `f64` and in outward
+intervals, from the same closed formulas (quarter arcs of weight `1/sqrt 2`, which are exact
+up to the one rounding of `sqrt 2 / 2`). Inside its knots' box, the net's point is a convex
+combination of its rounded points with weights `N w~`. So
+`|S~ - S| <= delta + eps / (1 - eps) * D`, where:
+
+- `delta` is the largest `|P~ - P|`;
+- `eps` is the largest `|w~ / W - 1|`;
+- `D` bounds the spread of the exact points.
+
+Each is taken from the interval build, upper end. `Procedural::bound` is that number. It
+covers the rounding of the control data only; each side's own evaluation rounds on top.
+
+**The per-call rule (77 §3.3).** Point, jet, normal, `eval_many` and `eval_grid` read the
+definition, always. The calls that need control points read the net when the uv they cover
+lies in the net's knots' box (`net_over`), and add the bound wherever the answer must hold the
+definition:
+
+- `box_over`: the NURBS box widened by the bound.
+- `range_along`: the NURBS range ± `sum |d| * bound`.
+- `hulls`: each NURBS hull widened by the bound.
+- `invert`: the net's inversion, whose foot is on the net.
+- `to_nurbs`: the net restricted.
+
+Past the box, `box_over` and `range_along` enclose the definition (`analytic` cut at the
+quarter arcs). `to_nurbs` builds a net over the quarter arcs that cover the extent, up to
+two turns. Inversion past the box is `nurbs_invert` against the net, which is periodic in a
+revolution's `u`.
+
+**The other arms.**
+
+- `chart` is `None`.
+- `reversed` and `transformed` are exact and return the `UvMap`. An affine map keeps a
+  revolution only where it is a similarity (`UvMap::similar`); otherwise it is
+  `SurfaceError::NotSimilar` (the torus's rule).
+- `gap` sends a procedural face to `Pending::NurbsSurface`, as a NURBS one.
+- `intersect`'s closed forms, `pcurve_of` and `axial` refuse it (`SurfaceKind::Procedural`,
+  `NotRevolved`).
+
+**Wildcard audit (external `match` on `Surface` with a `_` arm).** Nothing builds a
+`Procedural` yet; each site below is what such a face meets today.
+
+Refuses with a typed error:
+
+- scx-boolean `faceface.rs` 759: now refuses `Nurbs | Procedural` (`BooleanUnsupported::Nurbs`).
+- scx-bodyq `cap.rs` 172: now refuses `Nurbs | Procedural` (`BodyqUnsupported::Nurbs`).
+- scx-ssi `general::intersect`: refuses a procedural operand before any work, with the new
+  `SsiError::Procedural { operand }` (`ssi_procedural`, `Unsupported`, no point). Without it,
+  `general/patch.rs` 195 and 213 give no jet and the survey would split to the budget. A
+  net-based patch jet with the bound is the follow-up.
+- scx-surface `certificate/kind.rs` `Analytic::of`: `None`, as for NURBS.
+- scx-make `extrude.rs` 374 (`Unsupported::Segment`), `revolve.rs` 435 (`Defect::Interval`)
+  and `face.rs` 154 (`Unsupported::NurbsFace`).
+- scx-bodyq `recognize/prism.rs` 512, 521 and 529 (`Unsupported`).
+- scx-mass `patch.rs` 39 (`PatchFail::Kind`).
+- scx-hlr `silhouette.rs` 372 (`Why::Freeform`).
+- scx-step `geom.rs` 271 (`Waits::OtherSurface`).
+
+Answers "no closed form", "none" or "unknown", so the caller takes its general or refusing path:
+
+- scx-ssi `analytic/mod.rs` 229 (to `coaxial`, then `General`), `section.rs` 104,
+  `coaxial.rs` 115 and 520, `quadric.rs` 57 and 192, `overlap.rs` 225, and `clip.rs` 448
+  and 568 (`Region::new` `None`).
+- scx-ssi `general/implicit.rs` 90 (no implicit form).
+- scx-boolean `faceface.rs` 489, 598 and 638, and `planar.rs` 124.
+- scx-bodyq `along.rs` 212 and `recognize/bores.rs` 114.
+- scx-mass `face.rs` 428 (`Unknown`) and `breaks.rs` 36, 49 and 51. No breaks is moot,
+  because the patch refuses.
+- scx-hlr `visibility.rs` 1130 (`Ray::Unplaced`).
+- scx-brep `cells.rs` 179 (not ruled, so the tighter hull is skipped) and
+  `check/geometry.rs` 94 and 103 (no poles; a revolution's poles on its axis are not found,
+  as a NURBS one's).
+- scx-step `build.rs` 710 and scx-tess `curved.rs` 155 (`None`, the caller's NURBS path).
+- scx-surface `recognize.rs` 227 (returned unchanged, deviation zero, which is correct).
+
+Not on `Surface` (a wildcard on another enum): scx-make `face.rs` 168, scx-hlr
+`visibility.rs` 1148 and scx-brep `check/geometry.rs` 115. No site answers wrongly; the only
+changes outside scx-surface are the three refusals above.
+
+Decisions (analysis and adversarial pass):
+
+1. *Point plus axis, not a `Frame`* (77 §3 wrote `axis: Frame`). For: a revolution needs
+   only the axis line. The generator fixes `u = 0`, so a frame's `x` would be a second,
+   conflicting origin of the turn and one more thing to validate. Against: the analytic kinds
+   all carry a `Frame` and `Sense`, so a procedural revolution does not share `Chart`
+   machinery, and PK3a's screw may want the frame back. A frame is cheap to derive (axis
+   plus generator foot).
+2. *One bound for the whole net, not a bound per span* (77 §3.3's `spans: Vec<SpanBound>`). For: one number, one widening rule,
+   and it is tiny (a few roundings of the size; the tests check under `64 eps * scale`).
+   Against: a long net with one far span widens every box by the worst span's rounding.
+   Per-span bounds are a later refinement if a measured case needs them.
+3. *Quarter-arc turns.* `u` and a conic generator's parameter are the pin's quarter-arc
+   parameter, not radians. For: the net is then exactly the definition in the same uv
+   (rational quadratic quarters), so the net-or-definition rule needs no reparameterisation,
+   and the torus already uses it (63 D13). Against: a caller with an angle must convert
+   (`Arcs`), and the generator's own uv for a circle is not the curve's radians.
+4. *A parabola or hyperbola generator is refused* (`ProceduralError::Generator`). For: each
+   has an exact rational quadratic arc, but over a parameter that is not the curve's; mapping
+   it is the same work as FT's conversions, and no step-6 row needs it yet. Against: a
+   revolved parabola (a paraboloid) is a common surface. Converting the generator to NURBS
+   first (`to_nurbs`) is the workaround until a row takes it.
+5. *Net-or-definition by the net's box (`net_over`), not by bound against the query's zone.*
+   77 §3.3 reads the net when its bound is within the query's zone. A PK1 net's bound is a
+   few roundings, inside every zone, so the zone test would always pass and only the box is
+   left to decide. For: one test, and the bound holds exactly there. PK2 and PK3b, whose
+   bounds are real approximation errors, add the zone test. Against: a query just past the box (a periodic `u` past one turn) falls to
+   the definition's slower enclosure. `to_nurbs` rebuilds over the covering quarters instead.
+6. *`range_along` for a NURBS generator past the net: partials are `Ivl::whole()`.* For: the
+   range itself is sound. Against: callers that read the partials get nothing; none does
+   today.
+7. *A non-similar map refuses a revolution (`NotSimilar`)* instead of 04 row 105's new
+   `Procedural` or certified `Nurbs`. For: the torus does the same today, and the
+   certified-record path is not built. Against: the caller loses the surface, not just
+   the definition. The net transformed (exact for an affine map) is the follow-up.
+8. *`Procedural::new` does not turn itself into an analytic kind.* A line coplanar with the
+   axis is a cone, and a circle centred on it is a sphere. 77 §3.3's "analytic first" is the
+   constructors' job (MK4), not this type's. For: a value is what its caller built, and the
+   tests compare the two. Against: a caller can hold a procedural cone, which the closed-form
+   SSI then refuses.
+9. *`axial` answers `NotRevolved` for a revolution.* For: `axial`'s consumers want an
+   analytic kind's frame. Against: a procedural revolution is revolved; when a consumer
+   needs it, `axial` can read `Revolution::{origin, axis}`.
+
+Tests (`procedural.rs`, 12). The three pin ports, from `surf_of_revolution/p1.rs`:
+
+- :2349, `a_line_revolved_is_a_cone`;
+- :2398, `the_sweep_iso_line_is_a_circle`;
+- :2427, `a_generator_turns_and_a_copy_is_equal`.
+
+Closed-form truths:
+
+- an off-axis circle revolved is the torus, point for point against `Torus`;
+- a skew line revolved is the hyperboloid `x^2 + y^2 - (z tan a)^2 = r^2`;
+- an ellipse extruded is the elliptic cylinder.
+
+The rest:
+
+- the net against the definition within its bound, on a grid;
+- the jet against the point by differences;
+- boxes and hulls holding sampled points;
+- `to_nurbs` inside and past the net;
+- reversal and transform mapping every point;
+- inversion finding points on the surface;
+- typed refusals.
+
+Measured: slice benchmarks, scx side only, as callgrind instruction counts (`slice_ic`), main
+before against this branch. Nothing builds a `Procedural`, so the counts measure only what the
+new arm adds to every existing kind's dispatch. The procedural paths sit in out-of-line
+`#[inline(never)]` helpers. Every change is within code-layout noise (±0.3 percent), in both
+directions:
+
+| case | before | after |
+|---|---:|---:|
+| build/box-cyl-hole | 2,040,766 | 2,039,955 |
+| parts/box-cyl-hole | 363,378 | 362,377 |
+| mass/box-cyl-hole | 6,280,814 | 6,281,239 |
+| mass_full/box-cyl-hole | 15,693,378 | 15,699,890 |
+| classify/box-cyl-hole | 3,486,645 | 3,487,841 |
+| tess/box-cyl-hole | 903,855 | 901,759 |
+| wire/box-cyl-hole | 133,543 | 133,527 |
+| make/torus-5-1.5 | 146,273 | 146,527 |
+| tess/plate-4 | 5,029,301 | 5,014,011 |

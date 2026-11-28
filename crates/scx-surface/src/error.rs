@@ -25,6 +25,8 @@ use scx_num::budget::{Exhausted, Stopped};
 use scx_num::error::ErrorKind;
 use scx_nurbs_surface::{NurbsSurfaceError, ParamAxis};
 
+use crate::procedural::ProceduralError;
+
 /// A size of an analytic kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -113,6 +115,9 @@ pub enum SurfaceError {
     /// sizes and extents `to_nurbs` reaches it only on overflow (sizes near the largest
     /// double).
     Nurbs(NurbsSurfaceError),
+    /// Building a procedural surface failed (its `to_nurbs` past the net or its `transformed`
+    /// image): a context frame over the [`ProceduralError`], whose kind it has.
+    Procedural(ProceduralError),
     /// A curve-surface intersection with a NURBS curve or a NURBS surface: not built yet
     /// (SU6 builds the analytic pairs). Named, never an empty answer.
     NurbsIntersection,
@@ -150,6 +155,7 @@ impl SurfaceError {
             | Self::MapNotFinite
             | Self::MapFlattens => ErrorKind::Refused,
             Self::Nurbs(e) => e.kind(),
+            Self::Procedural(e) => e.kind(),
             Self::Exhausted(_) => ErrorKind::Exhausted,
             Self::Stopped => ErrorKind::Cancelled,
             Self::Defect { .. } => ErrorKind::Defect,
@@ -171,6 +177,7 @@ impl SurfaceError {
             Self::MapFlattens => "map_flattens",
             Self::NotSimilar => "map_not_similar",
             Self::Nurbs(_) => "nurbs_failed",
+            Self::Procedural(_) => "procedural_failed",
             Self::NurbsIntersection => "nurbs_intersection_unbuilt",
             Self::Exhausted(e) => e.name(),
             Self::Stopped => Stopped.name(),
@@ -217,6 +224,7 @@ impl fmt::Display for SurfaceError {
                 "the transform is not a similarity, so the image is not a surface of the kind",
             ),
             Self::Nurbs(_) => f.write_str("the NURBS surface could not be built or edited"),
+            Self::Procedural(_) => f.write_str("the procedural surface could not be built"),
             Self::NurbsIntersection => {
                 f.write_str("intersecting a NURBS curve or surface with a curve is not built yet")
             }
@@ -231,6 +239,7 @@ impl std::error::Error for SurfaceError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Nurbs(e) => Some(e),
+            Self::Procedural(e) => Some(e),
             _ => None,
         }
     }

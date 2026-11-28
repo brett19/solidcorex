@@ -143,6 +143,8 @@ pub enum SurfaceKind {
     Torus,
     /// A NURBS surface.
     Nurbs,
+    /// A procedural surface (a revolution or an extrusion).
+    Procedural,
 }
 
 impl SurfaceKind {
@@ -156,6 +158,7 @@ impl SurfaceKind {
             Surface::Sphere(_) => Self::Sphere,
             Surface::Torus(_) => Self::Torus,
             Surface::Nurbs(_) => Self::Nurbs,
+            Surface::Procedural(_) => Self::Procedural,
         }
     }
 }
@@ -278,6 +281,7 @@ impl fmt::Display for SurfaceKind {
             Self::Sphere => "sphere",
             Self::Torus => "torus",
             Self::Nurbs => "NURBS surface",
+            Self::Procedural => "procedural surface",
         })
     }
 }
@@ -426,7 +430,7 @@ fn distance(surface: &Surface, p: Point3) -> Option<f64> {
             let (rho, h) = local(Axes::new(s.frame(), s.sense()));
             (fmath::hypot(rho - s.major().mm(), h) - s.minor().mm()).abs()
         }
-        Surface::Nurbs(_) => return None,
+        Surface::Nurbs(_) | Surface::Procedural(_) => return None,
     })
 }
 
@@ -511,7 +515,7 @@ fn closed_form(
             parallel(c, &axes, over, ua, u, tube)
                 .or_else(|| tube_circle(c, &axes, major, over, (ua, u), (va, v)))
         }
-        Surface::Nurbs(_) => None,
+        Surface::Nurbs(_) | Surface::Procedural(_) => None,
     })
 }
 
