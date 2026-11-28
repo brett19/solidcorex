@@ -3241,16 +3241,16 @@ part placements and operator axes. The SP8 test for an axis along +X now expects
 (it expected +Z); the -Z case is unchanged. This matches the pin's rule without its 0.9
 threshold.
 
-### 29.5 What CF2a should see
+### 29.5 Against CF2a
 
-- Every edge and vertex accuracy on an imported body is a certified enclosed gap or none; the
-  check under `Scope::Import` should find no gap past a recorded accuracy. A finding there is
-  a bug in the gap or in the record.
-- Tube clearance under `Import` is checked with the recorded accuracies, so a raised edge's
-  tube is as wide as its gap; findings should be none on the analytic tests' bodies and only
-  real faults on corpus files.
-- `raised` lists exactly the entities past the file's uncertainty; `PastRatio` notes are the
-  files CF2a should count as coarse.
+CF2a (§28) merged while this row was built; the build is now checked by its certified gaps under
+`Scope::Import`. Every edge and vertex accuracy on an imported body is a certified enclosed gap
+or none, so its allowances (the ball and the tube, `max(acc, zone)`) hold by construction. All
+21 analytic bodies give no findings and no undecided items. That includes the two raised
+cubes: a vertex 1e-3 mm off and one 0.05 mm off, past the ratio at 5,000 zones, where a wide
+accuracy is a recorded fact under `Import`, not a finding. A finding on an imported analytic
+body is a bug in the gap, the record or the check.
+The figures in §29.7 include CF2a's check.
 
 ### 29.6 Tests
 
@@ -3271,21 +3271,25 @@ licences are unverified (§7); their cases are rebuilt as the synthetic files ab
 
 ### 29.7 Measurements
 
-A throwaway timer (never committed; release, a loaded machine, best of 5) on generated plates
-with n x n through holes, `scx_step::import` against the pin's `read_solids`. The pin's read
-only reads the records; `import` also encloses every gap, writes the pcurves, orients, finishes
-and checks, so this is more work for the same file.
+A throwaway timer (never committed; release, a loaded machine, best of 5, 3 for the largest) on
+generated plates with n x n through holes, `scx_step::import` against the pin's `read_solids`.
+The pin's read only reads the records; `import` also encloses every gap, writes the pcurves,
+orients, finishes and runs the import check, so it does more work on the same file. The two
+`import` columns are before and after main's CF2a (§28) was merged, which replaced the check's
+gap questions with certified ones.
 
-| File | Faces | scx `import` | pin `read_solids` | ratio |
-|---|---|---|---|---|
-| 1 hole | 7 | 2.77 ms | 2.35 ms | 1.18 |
-| 4 holes | 22 | 13.8 ms | 13.3 ms | 1.03 |
-| 25 holes | 106 | 80.4 ms | 80.8 ms | 1.00 |
-| 100 holes | 406 | 273 ms | 337 ms | 0.81 |
+| File | Faces | `import`, SU6-era check | `import`, CF2a check | pin `read_solids` | ratio after |
+|---|---|---|---|---|---|
+| 1 hole | 7 | 2.77 ms | 18.0 ms | 2.29 ms | 7.8 |
+| 4 holes | 22 | 13.8 ms | 331 ms | 16.2 ms | 20.5 |
+| 25 holes | 106 | 80.4 ms | 1,449 ms | 86.6 ms | 16.7 |
+| 100 holes | 406 | 273 ms | 6,307 ms | 386 ms | 16.3 |
 
-Growth is linear, about 0.7 ms per hole (four cylinder faces' worth of gaps and two circular
-loops). A profile was not taken (the machine does not allow `perf` events); the expected
-leaders are the certified gaps and the check.
+Both are linear in the holes. A split with a second throwaway timer on the 4-hole plate:
+the check takes 221 ms of the 250 ms import, and the build's own certified gaps take 4 ms. So
+the added work is the check's, which proves again every gap the build has just enclosed
+(about 15 ms a hole: four circles on their cylinders and planes). A profile was not taken (the
+machine does not allow `perf` events).
 
 ### 29.8 Open questions
 
@@ -3293,7 +3297,11 @@ leaders are the certified gaps and the check.
 - `VERTEX_LOOP` at an apex: the writer would need to take a loop of one collapsed edge.
 - Seamless faces (a loop that winds without a seam): adding a seam changes the file's
   topology; is that SP4's, or the writer's?
-- A profile of `import` once `perf` is available, to see whether the gaps or the check lead.
+- **The import check costs 16-20 times the pin's read** (§29.7), and almost all of it is CF2a's
+  gaps proving again what the build has just certified. Options for the owner: the check could
+  take a gap the build recorded with its `Cert` as decided; `import` could offer the check as a
+  separate call; or CF2a's curved-edge cost (its §28.9, open) could come down. Until one of these
+  is decided, `import` runs the full check as the row asks.
 
 ### 29.9 Proposed 04 row
 

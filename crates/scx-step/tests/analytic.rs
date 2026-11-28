@@ -550,6 +550,12 @@ fn a_vertex_off_its_edges_is_raised_to_its_gap() {
     // No edge moved: the lines meet the faces' planes.
     assert!(s.raised.iter().all(|r| r.gap != GapKind::EdgeToFace));
     assert!(!s.notes.iter().any(|n| matches!(n, Note::PastRatio { .. })));
+    // The import check takes the raised ball as the vertex's: clean.
+    assert!(
+        s.findings.list.is_empty() && s.findings.undecided.is_empty(),
+        "{:?}",
+        s.findings
+    );
 }
 
 /// A gap past `MAX_ACCURACY_RATIO` zones is still raised (R3), with a note.
@@ -570,6 +576,12 @@ fn a_raise_past_the_accuracy_ratio_is_made_and_noted() {
         })
         .unwrap();
     assert!((5000.0..5001.0).contains(&ratio), "{ratio}");
+    // Under `Scope::Import` a wide accuracy is a recorded fact, not a finding.
+    assert!(
+        s.findings.list.is_empty() && s.findings.undecided.is_empty(),
+        "{:?}",
+        s.findings
+    );
 }
 
 /// The cylinder of radius `r` from z0 to z1 about (cx, cy): its vertices on the seam at
@@ -687,7 +699,12 @@ fn a_torus_is_one_face_bounded_by_its_two_seams() {
     let eu = w.add(format!("EDGE_CURVE('',#{v},#{v},#{equator},.T.)"));
     let ev = w.add(format!("EDGE_CURVE('',#{v},#{v},#{meridian},.T.)"));
     // Counter-clockwise in (u, v): about the outward normal.
-    let ring = [w.oe(eu, true), w.oe(ev, true), w.oe(eu, false), w.oe(ev, false)];
+    let ring = [
+        w.oe(eu, true),
+        w.oe(ev, true),
+        w.oe(eu, false),
+        w.oe(ev, false),
+    ];
     let bound = w.bound(&ring, true, true);
     let a = w.axis([0.0; 3], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]);
     let torus = w.add(format!("TOROIDAL_SURFACE('',#{a},10.,2.)"));
