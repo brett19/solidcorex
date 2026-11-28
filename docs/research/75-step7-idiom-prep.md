@@ -1176,6 +1176,8 @@ maps or the ray against NURBS. Who writes them?**
   and about 20 more wait only on other step-6 or step-7 rows.
 - Against: a planning note for five large pieces delays them by a review cycle. Mitigation: the
   analytic step-7 rows (§7.1, "can start now") keep builders busy for that cycle.
+- Answered by 77 (11-28): `research/77-step5-widening.md` gives the five pieces their rows (§7)
+  and the step-7 rows each one unblocks.
 
 **Q2. Does `scx-boolean` depend on `scx-stitch`?**
 
@@ -1909,3 +1911,19 @@ body, not a revolve test; its meridian (a circle of centre `(-16, 33)`, radius `
 `z = 30` and `60`) is the far arc of a circle crossing the axis, an apple (spindle) torus, which this
 revolve refuses as `Unsupported::SpindleTorus`. A real report needs it: the spindle surface is the
 first open question.
+
+### 13.13 SF1 as built (11-28)
+
+`scx_surface::project_curve(&Curve, Extent1d, &Surface, along: UnitVec3, Resolution)` and `scx_surface::drop_curve(&Curve, Extent1d, &Surface, Resolution)` return `Result<Vec<Projected>, ProjectError>`. A `Projected { curve, extent, from, kept: Option<ParamShift> }` is one piece: the image curve over `extent`, the image of the source over `from`, run the same way, with `kept` the source-to-image parameter map where the image is an affine copy (`None` for the cylinder's arc, where only the ends and the order hold). `ProjectError` is `NeedsFitter { curve: CurveKind, surface: SurfaceKind }` (Unsupported, `projection_needs_fitter`: the one variant the step-5 fitter replaces), and the Refused `Along`, `Flattened`, `OnAxis`, plus `Image(CurveError)`. The module is `crates/scx-surface/src/project.rs`, with the closed-form table and the pin-vs-here table in its header.
+
+Closed forms: onto a plane, every curve kind, through the projection affine and `Curve::transformed` (a circle to its exact ellipse on principal axes, a NURBS curve by its control points); onto a cylinder, a line parallel to the axis projected (0, 1 or 2 rulings) and a line dropped in a plane through the axis (a ruling per side) or square to the axis (an arc at its height); onto a cone, a line in a plane through the axis, projected along the axis or dropped (a generator per side). Every other pair is `NeedsFitter`.
+
+Decisions.
+- **The whole projection line, both signs.** For: one answer for a plane (the pin's SMLib projection is also unsigned), no split where the curve passes through the surface, and a caller wanting one side filters by the image's side. Against: a caller casting "down" onto a cylinder gets both rulings; the pieces are ordered by `s`, so the first is the near side.
+- **A miss is `Ok(vec![])`, not an error.** For: a projection line that misses the surface is a final answer, not a failure (no failing default either way: the vector says what happened). Against: the pin's `Error::Empty` lets a caller `?` it; the face caller in `scx-bodyq` decides that, after its trim, where empty can also come from the trim.
+- **No surface extent or uv box.** For: the analytic kinds are unbounded (but the cone's nappe, handled), and the face's trim belongs to `scx-bodyq` (75 SF1 row). Against: the pin's drop clipped to the face's uv box first; that is now the body's step.
+- **A cone's apex part is left out of the drop**, not returned as a point: the feet there are the apex alone, not a curve. A piece whose image has no length is left out; when none is left the answer is `Flattened` (a line dropped square through a cylinder's axis, a circle seen edge-on).
+- **Predicates within the zone over the extent** (parallel, meridian, square): R5, chosen before building, no fallback. Against: a line a hair outside the zone gets `NeedsFitter` though its image is nearly a line; the fitter answers it, which is what it is for.
+- **`kept`.** An affine image keeps the parameter through a `ParamShift` (the plane's, rulings and generators: `NONE`), so a caller can map vertices; an arc's angle is not an affine function of the line's `t`, so it says `None` rather than a wrong map.
+
+Truths (`crates/scx-surface/tests/project.rs`, 14 tests, plus 2 unit tests): a circle projected along z onto a plane tilted by beta is the ellipse with semi-axes r and r / cos(beta) about the centre's image; a tilted circle projected onto a level plane has semi-axes r and r cos(gamma); for 64 random circles, planes and directions the image keeps the conjugate-diameter invariants a^2 + b^2 = |u|^2 + |v|^2 and ab = |u x v|; a line dropped onto a cylinder in a plane through its axis is the ruling at the radius (and splits at the axis); a chord dropped onto a cylinder is the arc at its height with the closed-form ends. Every piece is sampled: each point on the surface and on the projection line through its source point, or equal to the kind's `closest` foot. Ported from the pin: `a_line_above_a_box_drops_to_its_foot_on_the_top`, `a_line_beside_a_cylinder_drops_onto_its_wall_at_the_radius`, the #20836 seam chord (its geometry; the seam split and the area are the body's), and `a_segment_projects_onto_a_box_s_record_face_at_its_index` (both levels). Not ported: `a_curve_over_nothing_of_the_face_is_refused` (a face concern; the analogue here is a miss being empty) and `rational_quarter_circle` (a record form, not geometry).
