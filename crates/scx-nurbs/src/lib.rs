@@ -25,6 +25,7 @@
 
 mod basis;
 pub mod bezier;
+mod compatible;
 mod curve;
 mod curves;
 mod error;

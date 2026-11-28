@@ -1993,6 +1993,20 @@ close with a uv shift of the rest of the loop); (c) merging coplanar faces of di
 `scx-ssi`, above this crate); (d) the Boolean's `build.rs` still has its own merge and join,
 to be replaced by these calls (BO12).
 
+### 13.16 CN1 as built (11-28)
+
+`CompatibleCurves::<D>::from_curves(&[NurbsCurve<D>]) -> Result<Self, NurbsError>` in `crates/scx-nurbs/src/compatible.rs` (77 §4.3, R77 row 4). Steps: each curve's knots are mapped affinely onto the first curve's domain (end knots exactly the first's ends, interior knots clamped inside; a curve already on that domain is borrowed, not copied); every curve is elevated to the highest degree with `NurbsCurve::elevate`; the union of interior knots (largest multiplicity over the curves after elevation) is inserted into each curve; if any input is rational the polynomial ones get unit weights. Inputs are `&`, the result is new, nothing is half done on an error. Inputs that already share a knot vector come back bit for bit. One new cause, `NurbsError::NoCurves` (Refused), for an empty slice; everything else refused is an existing cause: `Unclamped` (work needed and an end knot not of full multiplicity), `Unstable` or `Degree` (from elevation), `Multiplicity` (the mapping rounded two knots together).
+
+Decisions.
+- **No snapping.** Knots `0.5` and `0.5 + 1e-12` stay two knots (tested). For: the pin's averaging moves geometry unmeasured. Against: more knots on lofts of nearly aligned sections (77 §9 expects it).
+- **Weights by homogeneous insertion and elevation**, not by a weight solve: exact up to rounding for any positive weights, so no rational case is refused for its weights. Polynomial curves among rational ones get weights of exactly 1.
+- **Unclamped curves are refused when work is needed.** Insertion cannot reach the ends of an unclamped vector, so the knots could never be equal. Against: a surface net with unclamped rows that differ is refused; none exists in the corpus.
+- **Per-knot insertion** (`insert_knot` copies the polygon per knot, O(k n)). For: reuses the checked single-curve edit. Against: a batch insertion would be O(n + k); not measured as a cost until MK10 lofts need it.
+
+Work counts (the test family: 3 curves, degrees 1-5, mixed knot kinds and domains, summed over curves and families): knots in 1630, out 3819; control points in 1049, out 3096. The growth is elevation (each interior knot gains `q - p` copies) plus the union.
+
+Tests (`compatible::tests`, 4): 1,000 parameters per curve of every sampled family evaluate as the source at the relabelled parameter to `1e-9 (1 + |x|)`, with knot vectors and degrees equal; unchanged inputs come back bit for bit; near knots stay two and polynomial curves get unit weights; the empty and unclamped refusals.
+
 
 ### 13.15 RP1 as built (11-28)
 
