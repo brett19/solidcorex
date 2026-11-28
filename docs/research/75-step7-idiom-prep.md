@@ -984,7 +984,7 @@ names each new Cargo dependency; each must be legal under layers.txt after LY2.
 | MK13 | make | `radial`: the hollow cone built directly (outer, inner, annular caps) with no stitch or subtract | — | — | Sonnet |
 | MK14 | make | `prism` and `sheet` over several planar regions; port `O/prism.rs` and `prism/tests.rs` truths | — | — | Sonnet |
 | MK15 | make | `face` on an analytic surface by a uv box or a planar region in uv; iso-line edges exact (lines and circles) | — | — | Sonnet |
-| MK15b | make, nurbs-surface | `face` on a NURBS surface: iso-curve extraction in `scx-nurbs-surface` (exact, by knot insertion to full multiplicity; not built yet); bounds other than iso lines wait on step 5's curve-on-surface kind | MK15; knot insertion | — | Sonnet |
+| MK15b | make, nurbs-surface | `face` on a NURBS surface: iso-curve extraction in `scx-nurbs-surface` (exact, by knot insertion to full multiplicity; `NurbsSurface::iso`, already built); bounds other than iso lines wait on step 5's curve-on-surface kind | MK15; knot insertion | — | Sonnet |
 | MK16 | make (tests) | The closed-form make table: the ops 26-case table, Pappus, cornered and stations truths, against T9 | MK4, MK5 | — | Sonnet |
 | MK17 | make | `ruled` between two curves (lines and coplanar arcs exact by kind; others a degree-1 NURBS after compatibility) and `reverse` of a sheet as a Draft method (`O/surface.rs:340, :366`) | knot insertion and degree elevation (for NURBS curves) | — | Sonnet |
 | DF1 | deform | Crate; `deform` with the exact image rules of §5.5 on analytic faces; `Refused(MeetsAxis)` | step 5 volume maps (bend, twist and unbend only) | deform → surface, brep | Opus |
