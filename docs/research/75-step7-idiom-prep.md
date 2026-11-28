@@ -1860,7 +1860,7 @@ Decisions, with cases for and against:
   the torus's periodic v range (at `v = 1/2`, or `3/2` a period on), so only the pole use's own
   start v says which side of it the loop is on; for the sphere and cone, whose poles are at the
   ends of the v interval, the two rules agree. `scx_make::torus` still refuses a horn torus
-  (`Unsupported::HornTorus`); with the pole now supported that refusal could be lifted (open).
+  (`Unsupported::HornTorus`); the refusal is lifted by MK4b (13.33).
 - **The plane snap rule at the mean height, not the start's.** A line whose ends are within the zone
   in height is a plane at their mean height; within the zone in radius, a cylinder at their mean
   radius. For the mean: each end is off by at most half the difference, not all of it, and the rule
@@ -3153,6 +3153,186 @@ Added work per ray (release, tol 1e-6, throwaway counters, not committed; before
 Hull tests grow with the patches the line passes near (about the square root of the count), and boxes fall as the patches flatten, so hull tests plus boxes per ray stay between 159 and 266; the hull tree is enough, and no further box tree is built. Grazing cases: the cylinder tangent takes 5 to 7 hull tests, 94 to 114 boxes, 68 to 101 pieces and 498 to 630 foot Krawczyk calls; the ruling 145 boxes, 1407 pieces and 4485 foot calls (47.6k pieces before the per-piece foot box, 897k before the tightening); the pole ends Undecided after 52 boxes.
 
 Truths (`crates/scx-surface/tests/nurbs_hits.rs`, 7 tests): 24 lines through the NURBS sphere meet it at `|p| = r` (48 hits); a line through the seam and the knot lines meets each place once; a line tangent to the NURBS cylinder (on the seam, on a knot line, skew) touches it once as a Tangent; a line along a ruling of the bilinear saddle `z = uv`, clipped, is one Overlap and a crossing elsewhere is a Crossing at `u = 5/6`; a circle crosses the sphere twice; a NURBS curve is `NurbsIntersection`, and the budget and stop end the search typed; a line through a pole is Undecided or right. Changed: `nurbs_budget_and_stop_are_typed` in `tests/intersect.rs` (a circle on the NURBS sphere is now answered, empty; a NURBS line keeps the error). Nothing removed.
+
+### 13.33 BO14 as built (11-28)
+
+`scx_boolean::section(body, by: &Surface, cx) -> Result<Done<NoItems>, BooleanError>` and
+`face_section(body, face, by, cx)` (`crates/scx-boolean/src/section.rs`), with
+`SectionUnsupported::{Surface(SurfaceKind), Wire, Mixed, InPlane(FaceId), TouchBesideSheet}` and
+`SectionRefusal::NoFace(FaceId)` under `BooleanUnsupported::Section` and
+`BooleanRefusal::Section`.
+
+- *The plane is a solid operand.* The half-space behind it, cut to a block: its face on the plane
+  reaches twice the body box's half-diagonal past the box's centre, and its other five faces lie
+  at least that far from the box, so stage 1 pairs only the plane's face with the body's faces. A
+  plane farther than half-diagonal plus zone from the box's centre misses: a body of nothing.
+- *A solid* goes through `combine` with no cell solid and `Faces::Where` keeping a piece whose two
+  sides together lie in both operands and neither side is inside the block alone or with the
+  body on its other side: the plane's pieces inside the body and the body's faces lying in the
+  plane (either sense), never the body's faces behind the plane. The result is a sheet (void on
+  both sides, free edges; scx-check's class `Sheet`). Where it keeps no face (the plane only touches
+  along an edge, a tangent line, or at a vertex or tangent point), the result is the wire of
+  stages 1 to 4 (BO18's writer, `intersect::wire`), so the closure's wires and points that 13.22's
+  decision 3 left out are here. `run` is split into `staged`, which also returns stages 1 to 4,
+  so this costs no second pass.
+- *A sheet*, and *one face* of any body, give that wire directly: `interfere_only` keeps the
+  stage-1 pairs of one face, then stage 4 and the writer.
+- *Lineage.* The body is operand 0; the block is operand 1, and only its face on the plane can be
+  an origin.
+
+Tests (`crates/scx-boolean/tests/section.rs`, 15, every truth a closed form): a 10 mm box by x = 5,
+area 100 and four edges of 10 on both the plane and the box (the pin's
+`box_section_is_four_lines_ten_long`); the cube's diagonal hexagon, area (3 sqrt 3 / 2) s^2 with
+s = 5 sqrt 2; a sphere at three heights, pi (r^2 - d^2) and boundary 2 pi sqrt(r^2 - d^2) on the
+sphere; a cylinder across (pi r^2), through its axis (2rh) and at a slant (pi r^2 / cos theta); a
+frustum across its axis; a torus at d = 0 and 0.5 (4 pi R sqrt(r^2 - d^2)) and through its axis
+(two discs, 2 pi r^2); a miss; a plane on a face (that face, both senses); touches (a sphere's
+pole as one vertex, a box edge as one line of 10, a box corner as one vertex, a cylinder's wall
+line of h); a sheet's section as a wire (a line of 10, a chord of 2 sqrt 3); one face of a box at
+z = 5 (four sides one line of 10, top and bottom empty: the pin's
+`a_box_s_record_faces_section_at_their_index`, whose zero-normal case is the frame's own refusal
+here); a sphere's face, its great circle; refusals (a sphere surface, a missing face, a sheet in
+the plane); the touch beside a sheet; determinism. The pin's wound-NURBS test waits on SM9.
+
+Work on the regular path: `run` returns what `staged` built and `interfere_given` delegates to
+`interfere_pairs` over the same pairs, so no stage does more. A throwaway probe over 15 Booleans
+and 5 intersections (box, cylinder, sphere, torus pairs) gave the same `Report::work` and the same
+answers on main and the branch: box-box 121 per Boolean and 42 for `intersect`, box-cylinder 41
+and 12, box-sphere 41 for `intersect`, total 486 over the Booleans that build. Its box against a
+sphere centred on the box's corner is `Defect(Seeds)` on main and the branch alike (open).
+
+Decisions (analysis and adversarial pass):
+
+1. *The tool is a block, not a new half-space operand kind.* For: R1, the cut is the tested
+   pipeline with nothing of its own; stage 1's boxes drop the five far faces; the BO25 test
+   `sections_by_a_plane` already built a plane's section this way. Against: six faces and twelve
+   edges built per call (microseconds), and a size read from the box: a body whose box
+   understates it would be cut by a face too small. The box holds every face's box, so it does not.
+2. *A touch beside a sheet is `Unsupported(TouchBesideSheet)`.* Where the plane crosses one solid
+   and touches another part of the body (a box's top face and a ball's pole on one plane) the
+   closure is a sheet with a point or wire apart from it. scx-brep holds lone vertices and wires
+   only in shells of their own, and the sheet and the wire would need one builder. For: the answer
+   is never a quiet drop. Against: such bodies (several lumps, a face flush with a tangent
+   feature) are real; the check samples each tangent curve, lying edge and touch at one point
+   and asks whether a sheet vertex or edge holds it, so a tangent curve that meets the sheet only
+   at its middle would pass. Open: build sheet plus wire in one draft when a caller needs it.
+3. *A sheet in the plane is `Unsupported(InPlane)`, not the sheet itself.* For: a sheet's section
+   is a wire by contract; a face lying in the plane is two-dimensional. Against: the closure
+   there is that face; a caller can test coplanarity first.
+4. *Curved cutting surfaces wait.* `SectionUnsupported::Surface(kind)`: a tool body bounded by a
+   cylinder or sphere needs the far faces' clearance argued per kind; NURBS waits on SM9 anyway.
+5. *A wire body's section (points) is `Unsupported(Wire)`.* Stage 1 pairs faces; curve against
+   surface is `scx-ssi`'s and has no Boolean-family entry yet.
+
+### 13.34 FT3 as built (11-28)
+
+`crates/scx-nurbs/src/fit` (77 §2, row FT3; the pin's `refit_within` and `approx_end_directions`), with the one-variable jet moved down to `scx-num`:
+
+- `fit_within(&impl CurveFn<D>, &FitAim<D>, &mut Budget, &Stop) -> Result<Fitted<D>, FitError>` (`within.rs`): the clamped spline of `aim.degree` through the source's end points, leaving each given end along its direction, with the fewest spans the pin's halving search finds whose certified same-parameter distance `sup |F(t) - C(t)|` is within `aim.within`. `FitAim { within, degree, start, end }`; `Fitted { curve, spans: Vec<SpanBound>, bound, fits, start: Option<Held>, end: Option<Held>, ended: Ended }`; `SpanBound { span, bound, method: Method }`; `Held { reach, turn }`; `Ended::{Within, Cap, Floor, NoRoom}`.
+- `CurveFn<const D>`: `domain`, `breaks` (where the source is less smooth; pieces are cut there), `eval<T: Trig>(t: T) -> [T; D]` (one code path for `f64`, `Ivl` and `Jet2`), `as_nurbs` (default `None`). `NurbsCurve<D>` implements it through `point_over` and its knots.
+- `least_squares_along(knots, data, t, start, end) -> Result<Directed<N>, FitError>` (`along.rs`, the pin's `approx_end_directions`): least squares through the end data, each held end's leg along its unit direction, its length (the *reach*) free; `Directed { spline, start_reach, end_reach }`.
+- `scx_num::jet::{Jet2, chord, norm, square, vector_bound}` (`jet/interval.rs`): SU6's interval jet `(f, f', f'')` with `Ring`, `Ranged` and `Trig`, and its chord bound, moved out of `scx-surface/src/gap.rs` (77 line 50). `gap.rs` now imports them; SU6's arithmetic is unchanged (the same fold order), so its bounds are the same bits.
+- Named constants: `MAX_CONTROL_POINTS = 4096` (the cap; the pin's `most`, which its one caller passes as 4096), `MAX_PIECES = 256` (per span in the branch and bound), `CLOSE = 0.125`, `FLOOR_UNITS = 4.0`. No `1e-4` or other tolerance literal.
+- Typed causes (new `FitError` variants, all `Refused` unless noted): `Aim`, `Degree`, `Directions`, `Direction`, `StartAgainst`, `EndAgainst`, `Domain`, `SourceNotFinite`, `Reaches`, and `Deviation`, `Exhausted`, `Stopped` carrying FT1's and the budget's causes with their kinds.
+
+Decisions.
+- **The pin's search, every bound certified.** One knot a round at the middle of the span with the largest bound (the first or last span while a held end's reach is not positive); samples only seed the least-squares fit, never accept it (04 fit rules, R10). The certificate per span: FT1's Bezier-hull `distance_by_span` for a polynomial B-spline source; for a rational one FT1's bound and, where that is past the aim, SU6's branch and bound too (the smaller kept); for any other source the branch and bound (chord bound on `g = F - C` and `|g|^2`, and the direct enclosure, the smallest, from `Jet2`s over each piece; the worst piece halved, a child never above its parent).
+- **Knots nest across aims, by construction.** A span past the aim carries a bound that does not depend on the aim (FT1 and the branch and bound are deterministic, the heap's top is monotone, and the branch and bound stops early only on reaching the aim); a span within it carries one at most the aim. So the span halved is the same for every aim, and a looser aim's fit is one the tighter search passes through. Tested to the bit.
+- **Rational sources: tighten, not subdivide; ranked by FT1.** FT1's rational bound is about 5 times loose on a circle's coarse spans and about 2 times on fine ones, where the weights hardly vary. For tightening: the branch and bound is already here for general sources and comes within `CLOSE` of the true distance. Against subdividing FT1 (splitting the source's spans so the weights vary less): no new code and cheaper per span, but its looseness falls only as the square of the split and never reaches the distance on a span of large weight ratio. The search halves by FT1's bound alone. The branch and bound only tries to end it sooner: it takes the spans FT1 leaves past the aim, closest first, and stops at the first it cannot bring within. It gives up on a span at once when `|g|` at a point is past the aim, or FT1's bound is within `CLOSE` of that `|g|`. So the fits are FT1's own sequence cut short, and the knots still nest. Running the branch and bound on every span past the aim every round (the first build) gave the same spans at 1e-6 and 1e-8 for 4 to 5 times the evaluations. Halving cuts a span's distance about 16 times, so a 2 times tighter bound rarely saves a span. Counts below.
+- **The jets of a B-spline over a piece are in Taylor form**, about the piece's middle (`fit_over`: `C(m + s) = sum C^(k)(m) s^k / k!`, each derivative enclosed at the point, Horner in `Jet2`), not `point_over`'s basis form.
+  - The basis form sums the absolute control points times the basis jets. Over a piece of width `w` in a span of width `h`, its second derivative is about `|P| w / h^3` too wide, so the chord bound's excess is about `|P| (w / h)^3`.
+  - With at most `MAX_PIECES` pieces a span, that left a floor near 1.4e-7 on a circle of radius 10 that halving the spans did not lower. A tight aim ran to the cap, while the fit's true distance was 2e-15.
+  - In Taylor form the excess is about `w^3 |C'''|`, the curve's own. One span of a cubic proves 6.8e-7 at width 3, 8.5e-8 at 1.5, 1.1e-8 at 0.75 and 1.3e-9 at 0.375 (true distance 2e-15).
+  - A rational source is taken as `N / w`, each in Taylor form, divided in `Jet2` (`Homogeneous`). The fit's degree up to `TAYLOR_DEGREE = 18`; above it, the basis form.
+- **A rounding floor for general sources.** No fit's branch and bound comes under half the width of the source's own enclosure at an end of the domain: the ends are breaks of every fit, and `g` is at least as wide as `F`. An aim under that stops after one fit (`Ended::Floor`), as the pin's floor does for a polynomial source; between it and the span-level `FLOOR_UNITS` rule, a tight aim runs on.
+- **Variable projection for the reaches**, not the pin's dense normal equations of the whole system: the free points come from FT2's banded rotation solve, the two reaches from a 2 x 2 system on the residuals, so the condition stays the problem's.
+- **`ends_held` and `EFF_ZERO_RAD` dropped.** Each held end reports its reach and the turn of its stored leg (`Held`); the caller who knows its angle judges them.
+- **`within` is an `f64`**, not a `Length`: `D` is generic (2D pcurves are parameter-space).
+- **`SpanBound` carries `method: Method`, not 77's `basis: Basis`.** The fitter does not know the caller's claim, and every bound it gives is proved; 77's "unproven" becomes a bound past the aim plus `Ended`.
+- **`CurveFn::eval` bounds by `Trig`**, not 77's `Ranged`, so analytic sources use `sin`/`cos`.
+
+Tests (`fit/within_tests.rs`, 12; the pin's within.rs tests ported and judged by closed-form truth, `|F - C|` at 65 points a span against each span's bound):
+- 77's row:
+  - `a_source_of_one_cubic_span_is_given_back_in_one_fit` (pin :554): one fit and one span, free, held at either end or both; also as a closed form proved by the branch and bound.
+  - `closed_forms_are_refitted_within_a_ladder_of_aims`: circle, ellipse, helix, involute and parabola, free and held. Each bound holds and is within its aim, and the looser aim's knots are among the tighter's.
+  - `two_halves_of_an_arc_refitted_with_the_shared_tangent_meet_g1`.
+- The pin's: `pin_sources_are_refitted_within_a_ladder_of_aims` (:595), `the_cap_gives_the_last_fit_past_the_aim` (:674), `a_quadratic_with_both_directions_starts_on_two_spans` (:689), `a_direction_of_any_finite_length_is_read_as_its_unit` (:711) and `an_aim_below_the_floor_stops_after_one_fit` (:639; also a closed form under its rounding floor).
+- New: `a_rational_circle_is_refitted_within_its_aims`, `jets_of_a_bspline_over_an_interval_enclose_its_derivatives`, `least_squares_along_gives_a_cubic_back` and `hostile_input_is_refused_never_a_panic` (every typed cause, the budget and the stop flag).
+- No test removed; SU6's gap tests pass unchanged on the moved `Jet2`.
+
+Counts (release, cubic, aims 1e-2 / 1e-4 / 1e-6 / 1e-8; spans; evaluations per fit, a point or a piece each; free ends; held ends within 1% of these):
+
+| source | spans | evaluations per fit | ms at 1e-8 |
+|---|---|---|---|
+| circle r 10, `[0, 2]` | 4 / 8 / 32 / 128 | 73 / 175 / 766 / 4208 | 981 |
+| ellipse 10 x 4, `[-1, 2.5]` | 5 / 16 / 64 / 128 | 99 / 328 / 1534 / 4585 | 1098 |
+| helix r 5 pitch 2, `[0, 6]` | 8 / 32 / 64 / 256 | 130 / 543 / 1773 / 8627 | 3759 |
+| the circle as a 30-point cubic B-spline (FT1) | 4 / 8 / 32 / 151 | 23 / 41 / 149 / 685 | 116 |
+| rational half circle r 10 (FT1, ranked) | 10 / 22 / 72 / 263 | 55 / 134 / 352 / 1196 | 1139 |
+| same, FT1 alone | 10 / 37 / 72 / 263 | 50 / 172 / 329 / 1189 | 1374 |
+| same, branch and bound on every span past the aim | 10 / 22 / 70 / 263 | 120 / 375 / 1209 / 5787 | 4511 |
+
+One fit per span added (the pin's search); every bound `Within` its aim.
+
+Open questions.
+- `scx-nurbs` `eval_over.rs` `derivs_over` builds the factor `p! / (p - k)!` in a `usize` and lifts it with `as f64`. It overflows from degree 21, and from 19 the factor is no longer an exact `f64` though it is lifted as a point. `MAX_DEGREE` is 31. FT3 keeps its Taylor form to degree 18; the fix belongs to that file (an `Ivl` factor or a checked product).
+- The rational branch and bound's stop (`Enough`) is the only aim-dependent stop. It is sound because a rational search is ranked by FT1's bound, which does not depend on the aim; a pluggable certificate (FT5) has to keep that split.
+- SU6 passes `h = b - a` unrounded to the chord bound (a possible half-ulp unsoundness); FT3's own calls round `h` up. Left in SU6 so its bits do not move.
+- FT5 needs the certificate pluggable (a surface gap in place of `|F - C|`).
+- The search is `O(n^2)` in the spans: each round refits and recertifies every span, one knot a round. The helix at 1e-8 takes 3.8 s for 256 spans. A local update, or several knots a round, would cut it, but the second changes the pin's search and the nesting argument; left for a measured need.
+- Pieces that end on a fit knot include the neighbour's jets (`point_over` joins both sides at a knot): sound, slightly loose.
+
+### 13.35 MK4b as built (11-28)
+
+`scx_make::torus` builds a horn torus (radii within the resolution) instead of refusing it;
+`Unsupported::HornTorus` is gone from `scx-make`, the testkit mirrors and the recipe tables;
+`SpindleTorus` and `Refusal::SelfIntersecting` (minor above major by more than the resolution)
+stay. The step-7 audit of what assumed minor < major follows.
+
+- **The build.** As revolve's whole circle that touches the axis: one vertex (the pole at the
+  frame's origin), the meridian circle through it (closed there, from tube angle pi once round,
+  so `v` runs over `[1/2, 3/2]`), and a collapsed edge of the face's own at each end of that
+  `v` range (the inner equator is both `v = 1/2` and `3/2`): 1 vertex, 3 edges, 1 face, exact
+  pcurves. The radius is the mean of the two within the resolution, as revolve's. For: it is the
+  shape revolve already builds and the check, the pcurve writer and the oracle already read.
+  Against: one collapsed edge used in both senses would be a seam, but the check wants one fin
+  per collapsed edge.
+- **What the check says.** The contract passes (`Contacts::Refused` and `Radial`); the structure
+  pass reports exactly one `VertexNotManifold { pieces: 2 }` at the pole and refuses it only
+  under `Contacts::Manifold`. The body's genus is 1 (scx and the pin agree; the recipe states it and is `pinched`, so the manifold and mesh invariants are off). That is the truth: two lobes of the solid meet at the pole, a
+  pinch. Not changed.
+- **Mass.** Needed no change: the breaks put `v = 1/2` on a patch edge, and the volume and area
+  match `2 pi^2 R^3` and `4 pi^2 R^2` to `1e-12` (tilted frames too). The testkit truth
+  `solid::torus` now takes `minor == major` (it refused it).
+- **SSI.** Read for `big - small`, `/ big`, `/ small`: the divisions are by `big` and `small`
+  only; the Villarceau case's `cv = sqrt((big - small)(big + small)) / big` is 0 for a horn
+  torus, which is the right limit (the two circles become the meridians). No change.
+- **Tessellation (broke).** `face_need` refused a horn torus (`major <= minor`) and
+  `Rules::of` took `rho = min(r, R - r) = 0`. Edge segments now bound by the tube's curvature
+  alone; faces get `Kind::Round { pinch }` and `pinched_sag`: no one radius of curvature bounds
+  a horn torus (the parallels' falls to 0 at the pole), so the meridian's bend (the sphere bound
+  at the tube radius over the triangle's enclosing circle) and the parallels' radial deficit
+  (`2 d sin^2(span / 4)`, `d` the largest circumference radius among the corners) are added.
+  A first attempt, the least parallel radius over the corners, never passed the slivers along
+  the meridian near the pole and refined to a duplicate point; the split bound fixes it. The
+  ring torus path is unchanged (one `bool` test per triangle). The mesh oracle reports exactly
+  one `NonManifoldVertex`, the pole, which the test expects for the horn case, and its fold limit
+  is off for the horn: the fan round the pole is the tip of two needles (`rho = z^2 / 2R`) and
+  turns by under a degree at a chord of 0.001, a property of the surface, not a fold.
+- **Boolean (broke, refused).** A cut across a horn torus's face is `Defect(Build)` today: the
+  imprint trace keeps one collapsed edge per pole vertex, and a horn pole has two (both lobes).
+  It is now `Unsupported(HornPole { operand, face })` (name `horn_pole`) from the trace. A plane
+  through the pole is the same refusal (it was `Defect(Seeds)`'s cousin). Follow-up: the trace
+  needs the pole vertex's star in two uv sheets (key the poles by the arriving half-edge's `v`
+  and order the star per sheet); not built. A horn torus wholly inside or clear of a block or
+  cylinder works (union, intersection, difference volumes checked); a ring-torus control of
+  the same shape passes.
+- **Tests added.** `scx-make` round: `spindle_tori_are_refused_and_horn_tori_built` (replaces
+  `..._horn_tori_unsupported`: the old test's three horn radii are now built) and
+  `a_horn_torus_has_analytic_properties`; `scx-check` `a_horn_torus_is_a_checked_solid`;
+  `scx-tess` curved gains a horn torus in `primitives` (closed, chord, crack and volume checks
+  at three chords, two frames); `scx-boolean` horn.rs (four tests). The recipe `torus-horn`
+  is `Built` with its closed-form truth; the difftest adapter drops its `HornTorus` arm.
 
 ### 13.29 PK3a as built (11-28)
 
