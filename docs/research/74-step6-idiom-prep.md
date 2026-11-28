@@ -5071,3 +5071,386 @@ So recognition itself is below the noise of the import (the check dominates, 74 
    known, and the near-zero and near-right cones with it.
 5. The reader's `ConeShape` refuses an angle-0 cone a file writes; `recognize_written` could
    take it (`scx-p21`'s row, not here).
+
+## 39. ST4 as built (11-28)
+
+Truth tests for `scx-stitch`, in `crates/scx-stitch/tests/truth.rs` (10 tests, 1 ignored). The
+solid helpers ST3 wrote (`explode`, `run`, `vol`, `assert_solid`, `regions`) moved to
+`tests/common/mod.rs`, shared by `orient.rs` and `truth.rs`; no test was removed. New
+dev-dependencies: `scx-boolean` (Boolean results to explode) and `scx-check` (`contract`); both sit
+below `scx-stitch` in `layers.txt`. No library code changed.
+
+### 39.1 Tests
+
+- `exploded_recipes_are_the_same_solid`: block (1, 3 steps), prism, cylinder (3, 7), cone, sphere
+  (4, 6), torus (3, 4), holed slab, cavity, each exploded to one sheet per face and stitched
+  back. Judged on shells, faces, edges, vertices and regions (equal to the source), volume and
+  area through `scx-mass` against the closed form where seed 0 has one (block 1 and 6; cylinder
+  2π and 6π; cone π/3 and π(1+√2); sphere 4π/3 and 4π; torus 4π² and 8π²; cavity 26 and 60) and
+  against the source otherwise, `outward`, and `scx_check::contract(.., Contacts::Refused)`.
+- `exploded_random_recipes_are_the_same_solid`: seeds 1 to 3 of block, prism, cylinder, cone and
+  sphere, same checks against the source.
+- `exploded_boolean_results_are_the_same_solid`: union, difference, intersection and a corner
+  notch of cubes (closed forms 1.875, 0.875, 0.125, 1 − 1/64), from `scx_boolean::boolean`.
+- `a_sheet_just_inside_the_coincidence_stitches_and_just_outside_does_not`: for every planar
+  face of block (1, 2 steps), prism and cylinder, the face's sheet moved along its normal. At
+  `INSIDE` (0.45 of the coincidence), both ways: `Want::Solid` gives the same counts, volume within
+  4e-5 relative, outward, nothing left open. At 1.1 of it: `Want::Sheets` gives the body less the
+  moved face's joins (edges + its shared edges, vertices + its vertices), `left` empty, and
+  `Want::Solid` is `Refused(NotSolid { Edge, Open })`.
+- `the_identified_spread_is_the_perturbation`: of the block's 8 identified vertices exactly the
+  4 of the moved face have spread above 0, all within `INSIDE`; 12 joins, the widest gap in
+  `[INSIDE, zone]`.
+- `a_join_past_the_pcurve_tolerance_is_typed`: at 0.9 of the coincidence the stitch answers
+  `Unsupported(Edges { why: Fit })` (a typed pending, not a wrong body); see 39.3.
+- `a_sheet_at_nine_tenths_of_the_coincidence_stitches` (`#[ignore]`): the truth that case owes.
+- `permuted_sheets_give_the_same_bits_for_every_recipe`: eight bodies (block, cylinder, cone,
+  sphere, torus, holed, cavity, a Boolean union), reversed and five seeded shuffles each; the
+  body's geometry as sorted `Debug` text (every float to its bits; no id) and the report's counts
+  are equal.
+- `permuted_perturbed_sheets_give_the_same_bits`: half the faces of a 2-step block moved 0.4 of
+  the coincidence, five shuffles, same geometry (the merged points and kept curves do not follow
+  the order).
+- `a_cap_on_an_open_box_closes_it`: the pin's cap-on-a-cube (`solidcore-ops` stitch tests),
+  restated for sheets: five faces stitched (`Want::Sheets`) into an open box, which is
+  `NotSolid { Open }` alone; with the sixth face laid on its rim it is a solid, volume 1000
+  (10 mm cube), area 600, same counts.
+
+### 39.2 Pin tests
+
+Ported: the cap on a cube's rim (as above, on sheets); `fork_351c57c`/the cube with a cavity and
+`stitched_solid_cavity_is_a_void` (ST3, `orient.rs`); the gap-bound truths (ST2,
+`the_gaps_hold_the_pins_bound_truths`); the stitch-sews-a-gap-within-tolerance-and-leaves-a-larger
+one (`issue_2975`) is the perturbation test. Not ported: the pin's lid on a pocket, partition that
+survives, edges of three faces and two boxes merged, which glue a sheet to a solid operand
+(`Unsupported(SolidOperand)` here) or merge faces (ST5); `a_material_side_lost_...`, which tests
+the pin's own judge. The counts the pin asserts for the cap ([10, 20, 12]) include faces and edges
+its gluing leaves split; here the closed form (6, 12, 8) is used.
+
+### 39.3 Found
+
+1. **A join 0.5 to 1.0 of the coincidence off the absorbed face's surface is `Unsupported(Fit)`.**
+   `glue` writes the absorbed face's pcurves from the kept edge's curve, and `pcurve_of` accepts a
+   curve within `Resolution::approx()` (half the zone) of the surface. A sheet moved 0.9 of the
+   coincidence along its normal is proved joined (gap bound 0.9 < zone) and then cannot be placed.
+   The answer is typed and the body never wrong, but the stitch's reach is half what 04's
+   coincidence promises. Not a small fix: a projection pcurve for a curve off its surface by up
+   to the zone (exact for a line on a plane, a fit elsewhere), or the face's loop moved onto the
+   kept curve, belongs to `scx-surface`/`scx-brep` (BR9's fitter). Deferred as follow-up row
+   **ST4a** with the ignored test above. Until then the tests' `INSIDE` is 0.45.
+2. **Candidate pairs are quadratic where many edges share both ends.** Counted with a throwaway
+   `eprintln` (not committed) on the join stage, pieces with equal ends compared pairwise before
+   the box test: each shared edge is two pieces, so a block gives 2 pairs per face, linear; a
+   sphere's lunes' meridians all join the two poles, so `n` lunes give `C(2n, 2)` pairs.
+   Follow-up row **ST4b**: order same-end pieces by a box or a midpoint and test the nearest.
+3. No other bug: orientation, counts, volume, area and `contract` held on every exploded recipe;
+   `NotOrientable` and `Undecided` (ST3's untested refusals) remain unbuilt from analytic sheets
+   and are not claimed.
+
+The notch case first asserted a wrong closed form (1 − 1/16; the small cube overlaps in a
+quarter-side cube, 1 − 1/64); the stitch was right. Truth over the pin held.
+
+### 39.4 Cost (pairs against faces, exploded bodies; unoptimised test build on a loaded host, so ms is indicative)
+
+Pairs are the join stage's candidate pairs (same-end piece pairs, then those surviving the box
+test) and the cut stage's vertex-edge box candidates; every pair is then proved by one to four
+`point_curve_gap`/`curve_curve_gap` calls on the lead piece's budget share.
+
+| body | faces | same-end pairs | after box | cut candidates | ms |
+|---|---|---|---|---|---|
+| Block 1 | 6 | 12 | 12 | 0 | 10 |
+| Block 2 | 24 | 48 | 48 | 0 | 34 |
+| Block 5 | 150 | 300 | 300 | 0 | 167 |
+| Block 10 | 600 | 1,200 | 1,200 | 0 | 670 |
+| Cavity 3 | 108 | 216 | 216 | 0 | 124 |
+| Cylinder 8 | 10 | 24 | 24 | 0 | 382 |
+| Cylinder 32 | 34 | 96 | 96 | 0 | 335 |
+| Sphere 8 | 8 | 120 | 112 | 0 | 2,693 |
+| Torus 4 | 16 | 32 | 32 | 16 | 1,740 |
+
+Planar blocks: exactly 2 pairs per face, linear, time linear (about 1.1 ms a face). Curved
+edges: 3 pairs per wall face on the cylinder, but the work is the curve gaps (0.3 to 2.7 s here).
+The sphere is the exception of 39.3.2.
+
+### 39.5 Open questions
+
+1. Should ST4a move the pcurve to the kept curve (the face is edited, 04 row 186's measured
+   raise on the face) or widen the writer's tolerance to the zone? The first changes geometry by
+   up to the zone, the second only the claimed accuracy.
+2. Solid operands (cap on a solid, lid on a pocket) have no ST row yet (ST3's open question 3).
+
+### 39.6 Proposed 04 row
+
+| 11-28 | (For the owner's review) ST4: truth tests for the stitch. Every testkit recipe (block, prism, cylinder, cone, sphere, torus, holed, cavity) and cube Booleans exploded to faces and stitched back is the same solid: counts, closed-form volume and area, `contract`; a sheet moved 0.45 of the coincidence stitches and 1.1 leaves the typed `NotSolid { Open }`; permuted input gives identical geometry. Found: a join 0.5 to 1.0 of the coincidence off the face is `Unsupported(Fit)` (rows ST4a, ST4b follow) | stitch → boolean, → check (dev only) | 74 §39 |
+
+## 41. ST4b as built (11-28)
+
+The join stage of `scx-stitch` finds its candidate pairs near-linearly. Only `crates/scx-stitch`
+changed (`edges.rs`: `candidates`, `SMALL`; `tests/truth.rs`: one test).
+
+### 41.1 What changed
+
+Before: pieces with equal ends were paired all against all (`C(m, 2)` for `m` in a group), each
+pair box-tested (edge boxes grown by the larger reach), the survivors gap-proved. After: per
+same-end group, a pair is a candidate when it passes the old test (other sheets, edge boxes
+within the larger reach) **and** each piece's midpoint (a point of its curve) lies within the
+larger reach of the other's edge box. A group of at most `SMALL` = 8 pieces tests its pairs
+directly; a larger one builds one `BoxTree` over the group's edge boxes and queries each midpoint
+(grown by the group's largest reach), keeping later pieces only, so no pair is found twice. The
+candidates are the same `(lead, partners ascending)` lists in the same order whichever path
+found them.
+
+### 41.2 Why the pairs joined do not change
+
+The midpoint filter is conservative: the midpoint lies on the piece's curve, the other edge's box
+holds its whole curve, and a pair that is within the allowance (the larger reach) has every point
+of one curve within the allowance of the other. A pair the filter drops therefore has a true
+Hausdorff gap above the allowance, which the gap proof answers `Beyond`; `Beyond` pairs enter
+neither `maybe`, the heap, `Left::Undecided` nor `Left::Ambiguous`. So the heap, the joins and the
+report are those of the old code. Checked by hash: the whole report, vertices, edges and faces
+(ids and records, every float through `Debug`) of block 1/5/10, cylinder 32, sphere 8/16/32 and
+torus 4 are bit-identical before and after; all ST4 tests pass (including both permutation tests).
+
+### 41.3 Cases for and against
+
+For: edge boxes alone cannot separate the sphere's meridians (each spans the pole-to-pole box;
+112 of 120 pairs passed the box test at sphere 8), so a sweep or a sort along an axis by box would
+not have cut pairs; a midpoint does, with no new curve query (the piece's midpoint is already
+what `keep_order` reads) and no new tolerance. A box tree reuses `scx-algo`'s and gives ascending
+answers, so the order needs no extra sort.
+
+Against, and what was done: (1) an adversarial family whose boxes and midpoints all overlap (arcs
+bulging by less than the reach) still passes every pair, but those are within reach of each other
+and need the proof; the work there is inherent, not a search cost. (2) Nested boxes are not a
+problem because the test is symmetric (each midpoint in the other's box). (3) Fewer pairs are charged, and fewer far pairs share the budget, so each lead's share
+(`remaining / leads`) grew; where a far pair had been the second lead, the lone lead then took
+the whole remaining budget and its overspend surfaced as `Exhausted`, never `Undecided`
+(`a_join_no_share_decides_is_left_undecided` showed it: the arc against its coaxial arc had
+shared with an arc-to-chord pair the filter now drops). Fixed by dividing by `leads + 1`, so a
+lone lead keeps a part for the joins after it; the test passes with its limits unchanged. Only
+budget-limited runs differ (a pair that decided at a half share may be `Undecided` at a third),
+never which pairs join when the budget suffices. (4) Two code paths (direct and tree) must agree: both apply the
+same `possible` predicate to the same pairs, covered by the blocks (direct) and the spheres (tree)
+hashes. (5) Group-wise tree builds cost `O(m log m)`; groups of 2 to 8 skip it, so blocks do the
+same work as before (2 pairs a face).
+
+### 41.4 Measurements (release test build, throwaway counters not committed)
+
+Pairs the stage enumerates (same-end pairs before; midpoint-tree candidates plus direct pairs
+after), and the pairs left for gap proofs after all box tests:
+
+| body | faces | pairs before | proved before | pairs after | proved after | ms before | ms after |
+|---|---|---|---|---|---|---|---|
+| Block 1 | 6 | 12 | 12 | 12 | 12 | 1 | 1 |
+| Block 5 | 150 | 300 | 300 | 300 | 300 | 14 to 18 | 14 |
+| Block 10 | 600 | 1,200 | 1,200 | 1,200 | 1,200 | 51 | 57 |
+| Cylinder 32 | 34 | 96 | 96 | 96 | 96 | 22 | 24 |
+| Sphere 8 | 8 | 120 | 112 | 8 | 8 | 155 | 58 |
+| Sphere 16 | 16 | 496 | 480 | 16 | 16 | 352 | 109 |
+| Sphere 32 | 32 | 2,016 | 1,984 | 32 | 32 | 897 | 216 |
+| Torus 4 | 16 | 32 | 32 | 32 | 32 | 109 | 111 |
+
+Spheres are now linear (one pair per sheet), time 2.7 to 4x lower (the gap proofs of the 112 to
+1,984 far pairs were most of it). Blocks, the cylinder and the torus enumerate the same pairs, no
+added work (ms differences are noise).
+
+### 41.5 Test added
+
+`spheres_of_many_lunes_are_the_same_solid` (`truth.rs`): sphere 8, 16, 32 exploded and stitched
+back, `same_solid` against the closed form 4/3 pi and 4 pi (counts, `contract`, outward).
+
+### 41.6 Open
+
+1. A group whose boxes and midpoints all overlap (a bundle of near-coincident arcs) stays
+   quadratic in the proofs; a real bundle that dense is a body with many coincident edges, not seen
+   in the corpus or recipes.
+2. `SMALL` = 8 is a choice, not measured to a knee (both paths give the same pairs).
+
+### 41.7 Proposed 04 row
+
+| 11-28 | (For the owner's review) ST4b: the stitch's join stage finds candidates by midpoint, not all same-end pairs: a pair must also have each piece's midpoint within reach of the other's edge box (conservative, so the pairs joined are unchanged; bit-identical results on blocks, cylinder, spheres, torus); a sphere of n lunes does n pairs, not C(2n,2) (sphere 32: 32 vs 2,016, 0.9 s to 0.2 s); blocks unchanged | stitch (none new) | 74 §41 |
+## 42. ST5 as built (11-28)
+
+The single-body operations of §4.3 step 7 in `scx-stitch`, in new modules `src/single.rs`
+(`open_edges`, `gather`, `sew`) and `src/merge.rs` (`merge_faces`). Library edits outside them
+are small: `stitch.rs` gains `same_document` (the document check `stitch` already made, now
+shared) and `gathered` (the unsewn gather), `error.rs` two variants, `report.rs` a `Default`
+on `StitchReport`, `lib.rs` the exports. No new Cargo edge. 15 tests in `tests/sew.rs` and 4
+unit tests in `merge.rs`; nothing removed. The pin's `two_boxes_side_by_side_merge_into_one_box`
+and `edges_of_three_faces_the_body_came_with_...` (§39.2) are ported, the second restated
+(§42.4).
+
+### 42.1 Public API
+
+```rust
+pub fn open_edges(body: &Brep) -> Vec<EdgeId>;                       // curve edges of one fin, id order
+pub fn gather(bodies: &[&Brep], cx: &mut Cx<'_>) -> Result<Done<NoItems>, StitchError>;
+pub fn sew(body: &Brep, want: Want, cx: &mut Cx<'_>) -> Result<Sewn, StitchError>;
+#[non_exhaustive] pub struct Sewn { pub done: Done<NoItems>, pub report: StitchReport,
+                                    pub pieces: Vec<Vec<FaceId>>, pub open: Vec<EdgeId> }
+pub fn merge_faces(body: &Brep, faces: &[FaceId], cx: &mut Cx<'_>) -> Result<Merged, StitchError>;
+pub struct Merged { pub done: Done<NoItems>, pub report: MergeReport }
+#[non_exhaustive] pub struct MergeReport { pub faces: Vec<FaceMerge>, pub edges: Vec<EdgeJoin>,
+                                           pub left: Vec<MergeLeft> }   // FaceMerge, EdgeJoin: scx-brep's
+#[non_exhaustive] pub enum MergeLeft { Surfaces { edge, why: NotOneSurface }, Kept { at: Entity, why: Why },
+                                       Lines { vertex, why: NotOneLine } }
+#[non_exhaustive] pub enum NotOneSurface { Kind, Opposite, Apart(Length), NoBox, Pcurves(PcurveWriteError) }
+#[non_exhaustive] pub enum NotOneLine { Direction, Apart(Length), Pcurves(PcurveWriteError) }
+StitchRefusal::NoSuchFace { face };  StitchUnsupported::Loose { at: Entity }   // new variants
+```
+
+Same shape as `stitch` (§26.1): `&Brep` operands, `Cx` last, typed results, no flags.
+`Done<NoItems>` for the three that produce a body, since none skips an item (§26.5). `sew` takes
+`want` as `stitch` does (§4.3 gave `sew(body, cx)`), so a caller who wants a solid gets the
+orientation and the refusal; the pin's `Sewn::closed` is `open.is_empty()` plus the body having
+a solid region.
+
+### 42.2 `open_edges`, `gather`
+
+- `open_edges`: a curve edge with exactly one fin. A seam (one face twice) has two, an edge of
+  three faces has three, a collapsed edge (a pole) is not an edge to join. Sorted by id.
+  The pin returns record indices (`Order`); ids need no order.
+- `gather`: `stitch`'s copy stage with no identification and no edge stage. Body 0 is edited in
+  place, the others copied with their regions and shells whole (so solids stay solids) and
+  derived from their operand; nothing is joined. A body given twice is gathered twice (the pin
+  takes it once): the reference is the caller's statement, and the result then has two
+  coincident copies, which `check` reports. Nothing checks that gathered solids keep clear of
+  each other (that is `check`'s).
+
+### 42.3 `sew`: a body's own open edges, by `stitch`'s rules
+
+The body is cut into **pieces**, the connected sets of faces that already share an edge (any edge
+of two or more fins joins its faces, so the faces of an edge of three or more fins stay one
+piece); each piece is built with the body's own ids (`Draft::skip` leaves the gaps), the
+body's radial order on its edges, and stitched as a sheet. So `sew(&gather(sheets))` is
+`stitch(sheets)`, and the tests judge it so: same counts, closed-form volume and area, `outward`,
+`contract` and the same bits as the stitch, for block (1, 3 steps), prism, cylinder, cone, sphere,
+torus, holed and cavity, and under four orders of the faces.
+
+Lineage: operand `i` is piece `i`, and `Sewn::pieces[i]` lists its faces, which are the input
+body's own face ids (so `Origin::Operand(i, Entity::Face(f))` names the body's face `f`). A
+body with no open edge is returned as it is: one piece, empty `Changes`; but for `Want::Solid`
+a closed *sheet* (no solid region) is oriented, not returned.
+
+Cases for and against the piece rule:
+
+| Choice | For | Against |
+|---|---|---|
+| Pieces by shared edges, then `stitch` | The edges a body came with are never re-proved: no certified Hausdorff for them (§39.4 puts that at 1 ms per planar edge, 0.3-2.7 s per curved one), and edges of three faces survive (they would be `Left::Ambiguous` if exploded: 3 partners). Reuses `stitch` whole: one set of rules, one place for bugs, same permutation guarantee | A piece whose own open edges meet (a tube with its seam left open, one face wrapped round) breaks vertex clearance, so the answer is `Refused(VerticesWithinCoincidence)` naming the piece; the pin sews it. That is `check`'s verdict on the body too, but a repair tool will want the other answer (open question 1) |
+| Explode every face, stitch | Sews the tube | Re-proves every shared edge; loses the three-face edges; ids all change |
+| Sew in place on the body's draft | Ids kept, no copy | A second implementation of identification and edge joins beside `stitch`, the thing 74 §4 says to avoid |
+| Piece ids kept (skip gaps) | Lineage names the caller's entities | `Operand` index is the piece, not the body (the caller reads `pieces`); composing `Changes` has no API |
+
+Wire edges and lone vertices are `Unsupported(Loose)`: a piece holds faces, and silently dropping
+a wire would lose it. A body given in another document's resolution is `OtherDocument`.
+
+### 42.4 The pin's tests
+
+- *Two boxes merged* (`two_boxes_side_by_side_merge_into_one_box`, pin counts [6, 12, 8],
+  volume 2): the pin gets the split body from its Boolean. `scx_boolean::boolean` of two touching
+  boxes already gives the merged box (BR11 heals at its end), so the split body is built the way
+  a user gets one: the five outer faces of each block stitched (`Want::Solid`), ten faces, two
+  on each of four walls. `merge_faces` gives 6 faces, 12 edges, 8 vertices, volume 2, area 10,
+  `outward`, `contract`, 4 face merges and 4 edge joins; again it changes nothing; asked for all
+  faces but the second box's top it merges the other three walls and leaves the top split (7
+  faces, volume 2); asked for none it changes nothing.
+- *Three-face edges* (`edges_of_three_faces_the_body_came_with_do_not_refuse_the_stitch`): the pin
+  lays a cap on a cube beside a partition. Here the partition is built (the ten-face body, its
+  faces given to two solid regions, the wall between them one face: 11 faces, 4 edges of three
+  faces) and: `sew` returns it as it is, `merge_faces` of every face merges nothing across the
+  three-face edges (the two walls of each side lie on one plane, across edges of three faces
+  bound by different shells), and six loose sheets of a cube gathered beside it sew into a cube
+  (12 joins) while the partition's four three-face edges stay. **Not ported**: the cap on the
+  cube's own edges, the lid on the pocket, and the cap beside the partition. They glue a sheet
+  onto edges that already have two faces, giving three or four fins (`EdgePending::Radial`,
+  unbuilt) and a solid operand (`SolidOperand`, which §39.5.2 left without a row). Candidate row
+  ST5a: Radial order for a join onto a two-fin edge, then closing a space (pin `close_onto_shared_edges`).
+- *Keeping edges* (`merge_faces_keeps_the_record_edges_it_is_given`): the pin keeps record edges;
+  here the caller names the faces, and a face left out keeps every edge it has (the partial
+  two-box test). Same power, no record order.
+- *Thread root across a seam* (`a_thread_s_root_merged_across_its_seam_stays_valid`): not ported.
+  Merging across a seam is `Draft::merge_faces`'s (BR11, equal surfaces), which `merge_faces`
+  calls; the periodic cases are BR11's tests.
+
+### 42.5 `merge_faces`: only faces proved on one surface
+
+`Draft::merge_faces`/`join_edges` (BR11) merge only `==` surfaces and curves. Faces of different
+operands lie on one plane with different frames. `merge_faces` proves them one surface within
+the resolution, makes them `==` and hands them to the draft:
+
+1. **Candidates.** An edge of exactly two fins whose faces are both asked for, are distinct, have
+   the same shells, run opposite senses, and whose surfaces are not `==`. One pair per face pair;
+   protected (any fin on a face not asked for) edges are never candidates.
+2. **Proof.** For planes: normals the same way and `|f(q)| + sin(angle) R <= Resolution::approx`,
+   `q` the face's box centre moved onto its own plane, `f` its signed distance from the other
+   plane, `R` the box's half diagonal. This bounds the distance of every point of the face's box
+   from the other plane (an affine function's maximum), so a face with curved edges is covered
+   without sampling. Both directions are tested per pair. A pair whose normals differ by more
+   than 1e-3 (the sine) is a crease, not a near miss, and is not reported. Other kinds merge only
+   when `==`: `Left::Surfaces { why: Kind }`.
+3. **Groups.** Pairs that pass are joined in a union-find; each group's surface is its *least by
+   geometry* (frame origin, normal, x axis), not by id, so the bits do not depend on the order the
+   body was built in (`merging_is_the_same_whatever_the_order`, 5 shuffles). Each member is proved
+   against that surface alone, so a chain of small steps never adds up; it takes the surface and its
+   pcurves are written afresh (all or nothing; refusal leaves the face as it was and is
+   `Pcurves`).
+4. **Merge.** The draft's own `merge_faces` on every `==` pair no protected edge holds.
+5. **Edges.** Line edges that meet at vertices nothing else ends at, bound by the same two faces
+   and collinear within `approx` (every vertex of the run to the canonical line), become one
+   curve and are joined by the draft: the run is oriented to its lexicographically least end, takes
+   the first edge's line (reversed if it ran the other way), each edge the span that runs on from
+   the one before (exactly, so BR11's run-on test holds), edges that ran against the run turned
+   (ends swapped, uses' senses flipped) and every face's pcurves written afresh; a refused face puts
+   everything back. Then `join_edges_at` at each interior vertex. Non-line curves are joined only
+   where already equal (two arcs of one circle).
+
+The solid is unchanged to within the resolution: a face moves at most `approx` onto its group's
+plane, an edge at most `approx` onto its run's line, and both are zero for planes and lines
+that are the same to the bit (the tests). `approx` is half the zone because the pcurve writer
+places a curve within it of its surface (§39.3.1); the merge stays inside what the writer can
+place, so there is no `Fit` hole here.
+
+Tests (all closed forms or the source's, no pin output): the ten-face two boxes (above); a
+subdivided block (steps 2, 3 and 5, seeds 0 to 3, 24 to 150 faces each on its own frame) back to
+6 faces, 12 edges, 8 vertices, volume 1 and area 6 at seed 0 and the source's otherwise,
+`outward` and `contract`; every other recipe (prism, cylinder 3 and 7, cone, sphere, torus,
+holed, cavity 1 and 3) keeps volume, area, `outward`, `contract`, region count and never gains
+a face; five shuffles of the two boxes' sheets give identical bits; a face not in the body is
+`Refused(NoSuchFace)`; another resolution `OtherDocument`; plane unit tests: the same plane on
+another frame deviates by 0 (<1e-15), a parallel offset by the offset, a tilt by the angle over
+the extent, opposite normals `Opposite`.
+
+### 42.6 Measured (throwaway counters, not committed; unoptimised test build, loaded host)
+
+Subdivided blocks, `merge_faces` of all faces:
+
+| steps | faces | edges | candidate pairs | `join_edges_at` | budget work | ms |
+|---|---|---|---|---|---|---|
+| 2 | 24 | 48 | 48 | 12 | 248 | 5.5 |
+| 5 | 150 | 300 | 300 | 48 | 1,238 | 13.9 |
+| 10 | 600 | 1,200 | 1,200 | 108 | 4,568 | 62.5 |
+
+Exactly 2 candidate pairs per face, `plane_deviation` called 3,444 times over the three runs
+(two per pair and one per member: 2.2 per candidate), work 7.6 a face, time linear (0.09 to 0.1 ms a face). No pair test is quadratic: candidates are the edges
+between two asked-for faces, and the proof never looks at a face pair that shares no edge.
+`Draft::join_edges_at` builds its vertex index on every call (O(E) each), so the chain
+joins are O(joins x E): 108 calls on 1,200 edges is fine, a body of 100,000 edges with 10,000
+collinear splits is not. The batch `Draft::join_edges` has one index but cannot be told to leave
+the faces not asked for alone (it joins protected pairs of edges). Open question 2.
+
+### 42.7 Open questions
+
+1. Should `sew` repair a piece whose own open edges meet (a wrapped tube)? Cutting it by faces
+   fixes it where it has no edge of three faces; with them it is ambiguous. Today it is the typed
+   refusal of the piece.
+2. `Draft::join_edges_at_with(&Stars)` or a batch `join_edges` over a vertex set would make the
+   chain joins linear (a `scx-brep` change; not made here).
+3. Opposite-sense planes (`Opposite`) and the quadrics (a cylinder on two frames) are not
+   merged. The first needs a face turned over (loops reversed, sides swapped); the second the
+   same proof as the planes over the axis. Neither occurs in the recipes or the NIST set read so far.
+4. Lineage of `sew` names pieces, not the body. A `Changes` composition would let `sew` say
+   "operand 0".
+
+### 42.8 Proposed 04 row
+
+| 11-28 | (For the owner's review) ST5: `scx_stitch::{open_edges, gather, sew, merge_faces}`. `open_edges(&Brep) -> Vec<EdgeId>`: curve edges of one fin. `gather(&[&Brep], cx)`: bodies in one, unsewn, body 0 edited, others copied with their regions and shells. `sew(&Brep, Want, cx) -> Sewn`: the body is cut into the connected sets of faces that already share edges (kept ids), which are stitched as sheets by `stitch`'s rules, so edges the body came with, edges of three faces among them, are never re-proved; `Sewn` names the pieces (operand `i`) and the open edges left. `merge_faces(&Brep, &[FaceId], cx) -> Merged`: faces asked for are merged only where proved on one surface within the resolution (planes: box-bounded distance <= `Resolution::approx`, by the group's geometric least frame), then collinear line edges joined; nothing outside the faces asked for is touched; `Left` names each near miss (crease not reported). Solid kept to `approx`. Measured 2 candidate pairs per face, time linear | Amends nothing; adds `NoSuchFace` and `Loose` to the stitch's errors | 74 §42 |
