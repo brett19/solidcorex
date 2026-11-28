@@ -9,6 +9,18 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+# scx-brep's records and drafts; scx-curve's lines and scx-surface's planes and brackets,
+# the geometry a heal rebuilds; scx-num's intervals and units.
+scx-brep = { path = "../scx-brep" }
+scx-curve = { path = "../scx-curve" }
+scx-num = { path = "../scx-num" }
+scx-surface = { path = "../scx-surface" }
+
+[dev-dependencies]
+# The items are defects scx-check reports; the tests hold each heal to the check.
+scx-check = { path = "../scx-check" }
+scx-mass = { path = "../scx-mass" }
+scx-testkit = { path = "../scx-testkit", features = ["bodies"] }
 
 [lints]
 workspace = true
