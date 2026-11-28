@@ -3757,6 +3757,12 @@ edge, which read every point past the edge as `Near`. The test is renamed
 the two generators, the one at about 106.7 degrees runs on the face from `z = 0` to `0.5`, and
 the one at about 286.7 degrees lies in the arc's 90 degree gap and is dropped. The old test
 asserted that both were `Undecided::NurbsEdge`, which was a stand-in for not knowing.
+HL3's outline test `nurbs_rims_and_freeform_faces_are_named_not_sampled` is renamed
+`nurbs_rims_are_cut_exactly_and_freeform_faces_named`. The rational sheet's two NURBS rims
+are now cut by the silhouette planes, not named `NurbsEdge`. The sheet faces the viewer from
+either side, so the cut at about 106.7 degrees merges back. All four edges are whole
+stretches, which is the truth. `plane_hits` maps `Undecided` to `NurbsEdge` as it maps
+`NurbsIntersection`.
 `rays.rs` is untouched; RY3 owns it.
 
 Measured with throwaway counters, counting isolations per call, where an analytic piece counts
