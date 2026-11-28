@@ -22,10 +22,18 @@
 //! weights are whatever the fit gives (a weight that is not positive is a typed refusal,
 //! never a clamp). A grid of points is polynomial.
 //!
-//! Not ported (decided): first derivatives at every grid point (`interp_first_derivs`, the
-//! pin's tangent-prescribed skins), which need the twist at the corners and are CN4's with
-//! its boundary conditions; closed surfaces; weighted least squares (the pin has none for
-//! surfaces); `func_interp`'s own type (a surface function is a `D = 1` surface here).
+//! Derivative conditions at the first and last row ([`Edge`]) hold on rational rows too, in
+//! one of two stated meanings: [`Edge::Held`] gives the boundary derivative as the rational
+//! curve with the given control points on the row's weights (the weights' own derivatives
+//! across the edge are held at zero), and [`Edge::Homogeneous`] gives the derivatives of the
+//! homogeneous columns `w P` and `w` themselves (the pin's meaning; C1 with a rational
+//! neighbour whose homogeneous net is known).
+//!
+//! Not ported (decided): first derivatives at every grid point (`interp_first_derivs`) and
+//! the corner twists they need (no row asks for a grid with prescribed slopes: MK12's ends
+//! are [`Edge`]s); closed surfaces here (the closed skin is [`crate::skin`]'s); weighted
+//! least squares (the pin has none for surfaces); `func_interp`'s own type (a surface
+//! function is a `D = 1` surface here).
 
 use scx_nurbs::fit::{self, End, FitError, Param};
 use scx_nurbs::{CompatibleCurves, KnotVector, NurbsError};
@@ -60,13 +68,9 @@ pub enum SurfaceFitError {
         /// The lines of the net, one condition each.
         lines: usize,
     },
-    /// The conditions of an [`Edge::Held`] are not all of one order, so the lines would have
-    /// different numbers of control points.
+    /// The conditions of an [`Edge::Held`] or [`Edge::Homogeneous`] are not all of one order,
+    /// so the lines would have different numbers of control points.
     EdgeOrders,
-    /// Derivative conditions on rational rows: the conditions are on the polynomial
-    /// homogeneous part and no geometric meaning is guessed. Fit the polynomial rows, or
-    /// use [`Edge::Point`].
-    RationalEnds,
     /// A step failed through the module's own fault. A bug.
     Defect {
         /// The step.
@@ -82,7 +86,7 @@ impl SurfaceFitError {
             Self::Fit { cause, .. } => cause.kind(),
             Self::Curves(e) => e.kind(),
             Self::Surface(e) => e.kind(),
-            Self::EdgeCount { .. } | Self::EdgeOrders | Self::RationalEnds => ErrorKind::Refused,
+            Self::EdgeCount { .. } | Self::EdgeOrders => ErrorKind::Refused,
             Self::Defect { .. } => ErrorKind::Defect,
         }
     }
@@ -96,7 +100,6 @@ impl SurfaceFitError {
             Self::Surface(_) => "surface_fit_surface",
             Self::EdgeCount { .. } => "surface_fit_edge_count",
             Self::EdgeOrders => "surface_fit_edge_orders",
-            Self::RationalEnds => "surface_fit_rational_ends",
             Self::Defect { .. } => "surface_fit_defect",
         }
     }
@@ -112,9 +115,6 @@ impl fmt::Display for SurfaceFitError {
                 write!(f, "{count} end conditions for {lines} lines")
             }
             Self::EdgeOrders => f.write_str("the end conditions are not all of one order"),
-            Self::RationalEnds => {
-                f.write_str("derivative end conditions on rational rows are not supported")
-            }
             Self::Defect { why } => write!(f, "internal defect: {why}"),
         }
     }
@@ -137,44 +137,134 @@ type Result<T> = core::result::Result<T, SurfaceFitError>;
 /// addition to passing through the first (last) row.
 ///
 /// The conditions are on the net's lines: one [`End`] per control point of a row, in the
-/// parametric derivative of that control column with respect to `v` (the derivative
-/// control polygon of the surface's boundary derivative; for a polynomial surface the
-/// derivative `S_v(u, v0) = sum_i N_i(u) D_i`). They must all have one order.
+/// parametric derivative of that control column with respect to `v`. They must all have one
+/// order.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Edge<const D: usize> {
     /// G0: the row only.
     Point,
-    /// One condition for each control point of a row.
+    /// One condition for each control point of a row: the derivative control polygon of the
+    /// surface's boundary derivative. On polynomial rows `S_v(u, v0) = sum_i N_i(u) D_i`; on
+    /// rational rows the boundary derivatives are the rational curves with control points
+    /// `D_i` on the row's weights, `S_v(u, v0) = sum_i N_i(u) w_i D_i / sum_i N_i(u) w_i`
+    /// (and so for the second and third), which the fit makes exact by holding the
+    /// homogeneous derivatives at `w_i D_i` and the weights' derivatives at zero.
     Held(Vec<End<D>>),
+    /// The derivatives of the homogeneous control columns, `(w P)_i` in `points` and `w_i` in
+    /// `weights`, one of each per control point of a row, all of one order: a surface
+    /// matching a rational neighbour's homogeneous net across the edge is C1 (C2, C3) with
+    /// it. Polynomial rows are taken with unit weights, so the surface is rational.
+    Homogeneous {
+        /// `(w P)'` (and higher) of each control column.
+        points: Vec<End<D>>,
+        /// `w'` (and higher) of each control column.
+        weights: Vec<End<1>>,
+    },
 }
 
 impl<const D: usize> Edge<D> {
     /// The order of the conditions, once there is one for each of `lines`.
-    fn order(&self, lines: usize) -> Result<usize> {
+    pub(crate) fn order(&self, lines: usize) -> Result<usize> {
+        let one_order = |orders: &mut dyn Iterator<Item = usize>| -> Result<usize> {
+            let first = orders.next().unwrap_or(0);
+            for o in orders {
+                if o != first {
+                    return Err(SurfaceFitError::EdgeOrders);
+                }
+            }
+            Ok(first)
+        };
+        let count = |n: usize| -> Result<()> {
+            if n == lines {
+                Ok(())
+            } else {
+                Err(SurfaceFitError::EdgeCount { count: n, lines })
+            }
+        };
         match self {
             Self::Point => Ok(0),
             Self::Held(v) => {
-                if v.len() != lines {
-                    return Err(SurfaceFitError::EdgeCount {
-                        count: v.len(),
-                        lines,
-                    });
-                }
-                let order = v.first().map_or(0, End::order);
-                if v.iter().any(|e| e.order() != order) {
-                    return Err(SurfaceFitError::EdgeOrders);
-                }
-                Ok(order)
+                count(v.len())?;
+                one_order(&mut v.iter().map(End::order))
+            }
+            Self::Homogeneous { points, weights } => {
+                count(points.len())?;
+                count(weights.len())?;
+                one_order(
+                    &mut points
+                        .iter()
+                        .map(End::order)
+                        .chain(weights.iter().map(End::order)),
+                )
             }
         }
     }
 
-    /// The condition for line `i`.
+    /// Whether the edge asks for a rational surface.
+    pub(crate) const fn is_homogeneous(&self) -> bool {
+        matches!(self, Self::Homogeneous { .. })
+    }
+
+    /// The condition for line `i` of a polynomial fit.
     fn at(&self, i: usize) -> End<D> {
         match self {
             Self::Point => End::Point,
-            Self::Held(v) => v.get(i).copied().unwrap_or(End::Point),
+            Self::Held(v) | Self::Homogeneous { points: v, .. } => {
+                v.get(i).copied().unwrap_or(End::Point)
+            }
         }
+    }
+
+    /// The condition on the homogeneous column `(w P)_i` of a rational fit, `w` the weight of
+    /// the edge row's control point `i`.
+    fn numerator(&self, i: usize, w: f64) -> End<D> {
+        match self {
+            Self::Point => End::Point,
+            Self::Held(v) => v.get(i).map_or(End::Point, |e| scaled(e, w)),
+            Self::Homogeneous { points, .. } => points.get(i).copied().unwrap_or(End::Point),
+        }
+    }
+
+    /// The condition on the weight column `w_i` of a rational fit.
+    fn weight(&self, i: usize) -> End<1> {
+        match self {
+            Self::Point => End::Point,
+            Self::Held(v) => v.get(i).map_or(End::Point, zeros),
+            Self::Homogeneous { weights, .. } => weights.get(i).copied().unwrap_or(End::Point),
+        }
+    }
+}
+
+/// `e` with every derivative times `s`.
+fn scaled<const N: usize>(e: &End<N>, s: f64) -> End<N> {
+    let m = |d: [f64; N]| d.map(|x| x * s);
+    match *e {
+        End::Point => End::Point,
+        End::Tangent { d1 } => End::Tangent { d1: m(d1) },
+        End::Curvature { d1, d2 } => End::Curvature {
+            d1: m(d1),
+            d2: m(d2),
+        },
+        End::Hermite { d1, d2, d3 } => End::Hermite {
+            d1: m(d1),
+            d2: m(d2),
+            d3: m(d3),
+        },
+    }
+}
+
+/// A one-dimensional condition of `e`'s order, every derivative 0.
+fn zeros<const N: usize>(e: &End<N>) -> End<1> {
+    let z = [0.0];
+    match e {
+        End::Point => End::Point,
+        End::Tangent { .. } => End::Tangent { d1: z },
+        End::Curvature { .. } => End::Curvature { d1: z, d2: z },
+        End::Hermite { .. } => End::Hermite {
+            d1: z,
+            d2: z,
+            d3: z,
+        },
     }
 }
 
@@ -273,16 +363,16 @@ pub fn interpolate_on<const D: usize>(
 
 /// The surface of degree `degree` along `v` through the curves `rows` at the parameters `v`:
 /// `S(., v[k])` is row `k`, and the surface has `rows.knot_vector()` along `u`. `start` and
-/// `end` add derivative conditions at the first and last row ([`Edge`]). Rational rows give
-/// a rational surface (homogeneous fit, see the module).
+/// `end` add derivative conditions at the first and last row ([`Edge`]). Rational rows (or an
+/// [`Edge::Homogeneous`]) give a rational surface (homogeneous fit, see the module).
 ///
 /// This is skinning (CN4) with the parameters given. It does `rows.knot_vector().point_count()`
 /// banded solves of `rows.count()` (+ order) unknowns each, twice for rational rows.
 ///
 /// # Errors
 ///
-/// As [`interpolate`]; [`SurfaceFitError::EdgeCount`], [`SurfaceFitError::EdgeOrders`] and
-/// [`SurfaceFitError::RationalEnds`] for the edge conditions;
+/// As [`interpolate`]; [`SurfaceFitError::EdgeCount`] and [`SurfaceFitError::EdgeOrders`]
+/// for the edge conditions;
 /// [`SurfaceFitError::Surface`] if a fitted weight is not positive.
 pub fn interpolate_rows<const D: usize>(
     rows: &CompatibleCurves<D>,
@@ -312,17 +402,39 @@ pub fn interpolate_rows_on<const D: usize>(
 ) -> Result<NurbsSurface<D>> {
     let lines = rows.knot_vector().point_count();
     let (a, b) = (start.order(lines)?, end.order(lines)?);
-    if rows.is_rational() && (a, b) != (0, 0) {
-        return Err(SurfaceFitError::RationalEnds);
-    }
     let count = rows.count();
-    let solve = |i: usize, data: &[[f64; D]]| -> core::result::Result<Vec<[f64; D]>, FitError> {
-        fit::interpolate_on(kv, data, v, &start.at(i), &end.at(i)).map(|s| s.points().to_vec())
+    let cols = a + b + count;
+    let homogeneous = rows.is_rational() || start.is_homogeneous() || end.is_homogeneous();
+    if !homogeneous {
+        let solve = |i: usize, data: &[[f64; D]]| {
+            fit::interpolate_on(kv, data, v, &start.at(i), &end.at(i)).map(|s| s.points().to_vec())
+        };
+        return assemble(rows, kv, count, cols, solve, None, |_, _| {
+            Err(FitError::Defect {
+                why: "a polynomial fit has no weights",
+            })
+        });
+    }
+    let unit: Vec<f64>;
+    let (wp, w) = if let (Some(wp), Some(w)) = (rows.weighted_points(), rows.weights()) {
+        (wp, w)
+    } else {
+        unit = vec![1.0; rows.points().len()];
+        (rows.points(), unit.as_slice())
     };
-    let solve_w = |data: &[[f64; 1]]| -> core::result::Result<Vec<[f64; 1]>, FitError> {
-        fit::interpolate_on(kv, data, v, &End::Point, &End::Point).map(|s| s.points().to_vec())
+    let first = w.get(..lines).unwrap_or_default();
+    let last = w.get(lines * count.saturating_sub(1)..).unwrap_or_default();
+    let weight_at = |row: &[f64], i: usize| row.get(i).copied().unwrap_or(1.0);
+    let solve = |i: usize, data: &[[f64; D]]| {
+        let s = start.numerator(i, weight_at(first, i));
+        let e = end.numerator(i, weight_at(last, i));
+        fit::interpolate_on(kv, data, v, &s, &e).map(|s| s.points().to_vec())
     };
-    assemble(rows, kv, count, a + b + count, solve, solve_w)
+    let solve_w = |i: usize, data: &[[f64; 1]]| {
+        fit::interpolate_on(kv, data, v, &start.weight(i), &end.weight(i))
+            .map(|s| s.points().to_vec())
+    };
+    assemble(rows, kv, count, cols, solve, Some((wp, w)), solve_w)
 }
 
 /// The surface of degrees `(p, q)` with `points = (nu, nv)` control points closest to `grid`
@@ -395,13 +507,22 @@ pub fn least_squares_rows_on<const D: usize>(
     kv: &KnotVector,
     v: &[f64],
 ) -> Result<NurbsSurface<D>> {
-    let solve = |_: usize, data: &[[f64; D]]| -> core::result::Result<Vec<[f64; D]>, FitError> {
+    let solve = |_: usize, data: &[[f64; D]]| {
         fit::least_squares(kv, data, v, &End::Point, &End::Point).map(|s| s.points().to_vec())
     };
-    let solve_w = |data: &[[f64; 1]]| -> core::result::Result<Vec<[f64; 1]>, FitError> {
+    let solve_w = |_: usize, data: &[[f64; 1]]| {
         fit::least_squares(kv, data, v, &End::Point, &End::Point).map(|s| s.points().to_vec())
     };
-    assemble(rows, kv, rows.count(), kv.point_count(), solve, solve_w)
+    let homogeneous = rows.weighted_points().zip(rows.weights());
+    assemble(
+        rows,
+        kv,
+        rows.count(),
+        kv.point_count(),
+        solve,
+        homogeneous,
+        solve_w,
+    )
 }
 
 fn along(axis: ParamAxis) -> impl Fn(FitError) -> SurfaceFitError {
@@ -438,18 +559,21 @@ fn fit_rows<const D: usize>(
     CompatibleCurves::new(ku.clone(), grid.ncols(), points, None).map_err(SurfaceFitError::Curves)
 }
 
-/// The columns of `rows`' control net fitted by `solve` (`solve_w` for the weights), `cols`
-/// control points each, as a surface on `rows`' knots along `u` and `kv` along `v`.
+/// The columns of `rows`' control net fitted by `solve`, `cols` control points each, as a
+/// surface on `rows`' knots along `u` and `kv` along `v`; with `homogeneous` the columns of
+/// those homogeneous points `w P` and weights `w` (`solve_w`) instead, as a rational surface.
 fn assemble<const D: usize>(
     rows: &CompatibleCurves<D>,
     kv: &KnotVector,
     count: usize,
     cols: usize,
     solve: impl Fn(usize, &[[f64; D]]) -> core::result::Result<Vec<[f64; D]>, FitError>,
-    solve_w: impl Fn(&[[f64; 1]]) -> core::result::Result<Vec<[f64; 1]>, FitError>,
+    homogeneous: Option<(&[[f64; D]], &[f64])>,
+    solve_w: impl Fn(usize, &[[f64; 1]]) -> core::result::Result<Vec<[f64; 1]>, FitError>,
 ) -> Result<NurbsSurface<D>> {
     let ku = rows.knot_vector();
     let n = ku.point_count();
+    let surface = SurfaceFitError::Surface;
     let net = |data: &[[f64; D]]| -> Result<Net<[f64; D]>> {
         let mut out = Vec::with_capacity(n * cols);
         for i in 0..n {
@@ -464,11 +588,10 @@ fn assemble<const D: usize>(
             }
             out.extend(solve(i, &column).map_err(along(ParamAxis::V))?);
         }
-        Net::new(n, cols, out).map_err(SurfaceFitError::Surface)
+        Net::new(n, cols, out).map_err(surface)
     };
-    let surface = SurfaceFitError::Surface;
-    match (rows.weighted_points(), rows.weights()) {
-        (Some(wp), Some(w)) => {
+    match homogeneous {
+        Some((wp, w)) => {
             let weighted = net(wp)?;
             let mut ws = Vec::with_capacity(n * cols);
             for i in 0..n {
@@ -476,12 +599,14 @@ fn assemble<const D: usize>(
                     .chunks_exact(n)
                     .filter_map(|r| r.get(i).map(|&x| [x]))
                     .collect();
-                ws.extend(solve_w(&column).map_err(along(ParamAxis::V))?);
+                ws.extend(solve_w(i, &column).map_err(along(ParamAxis::V))?);
             }
             let weights = Net::new(n, cols, ws.iter().map(|w| w[0]).collect()).map_err(surface)?;
             NurbsSurface::from_homogeneous(ku.clone(), kv.clone(), weighted, weights)
                 .map_err(surface)
         }
-        _ => NurbsSurface::new(ku.clone(), kv.clone(), net(rows.points())?, None).map_err(surface),
+        None => {
+            NurbsSurface::new(ku.clone(), kv.clone(), net(rows.points())?, None).map_err(surface)
+        }
     }
 }

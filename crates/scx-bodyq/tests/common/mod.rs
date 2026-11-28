@@ -11,8 +11,8 @@
 use std::collections::BTreeMap;
 
 use scx_brep::{
-    Brep, Document, Draft, EdgeGeom, EdgeId, EdgeShape, FaceRecord, RegionId, ShellId, ShellRecord,
-    VertexId, VertexRecord,
+    Brep, Document, Draft, EdgeGeom, EdgeId, EdgeShape, FaceId, FaceRecord, RegionId, ShellId,
+    ShellRecord, VertexId, VertexRecord,
 };
 use scx_curve::{Circle, Curve, Line};
 use scx_num::extent1d::Extent1d;
@@ -30,6 +30,7 @@ pub struct Builder {
     doc: Document,
     outside: ShellId,
     solid: ShellId,
+    region: RegionId,
     lines: BTreeMap<(VertexId, VertexId), EdgeId>,
 }
 
@@ -46,6 +47,7 @@ impl Builder {
             doc: Document::default(),
             outside,
             solid,
+            region,
             lines: BTreeMap::new(),
         }
     }
@@ -107,7 +109,7 @@ impl Builder {
             .unwrap()
     }
 
-    pub fn face(&mut self, surface: Surface, loops: &[Vec<(EdgeId, Sense)>]) {
+    pub fn face(&mut self, surface: Surface, loops: &[Vec<(EdgeId, Sense)>]) -> FaceId {
         let records = self.draft.exact_loops(&surface, loops, &self.doc).unwrap();
         self.draft
             .add_face(FaceRecord::new(
@@ -115,11 +117,11 @@ impl Builder {
                 [self.outside, self.solid],
                 records,
             ))
-            .unwrap();
+            .unwrap()
     }
 
     /// A planar face over the ring of vertices, anticlockwise seen from outside.
-    pub fn polygon(&mut self, ring: &[VertexId]) {
+    pub fn polygon(&mut self, ring: &[VertexId]) -> FaceId {
         let pts: Vec<Point3> = ring.iter().map(|&v| self.point(v)).collect();
         // Newell's normal.
         let mut n = Vec3::new(0.0, 0.0, 0.0);
@@ -137,7 +139,7 @@ impl Builder {
             .zip(ring.iter().cycle().skip(1))
             .map(|(&a, &b)| self.line(a, b))
             .collect();
-        self.face(Surface::Plane(Plane::new(frame)), &[uses]);
+        self.face(Surface::Plane(Plane::new(frame)), &[uses])
     }
 
     pub fn finish(self) -> Brep {
@@ -469,4 +471,128 @@ pub fn primitives() -> Vec<(String, Brep, Csg)> {
         ));
     }
     out
+}
+
+/// The entities of one cube of a body built by [`Builder::cube`], and a point on some of them.
+pub struct Lump {
+    pub shell: ShellId,
+    pub outside: ShellId,
+    pub region: RegionId,
+    pub faces: Vec<FaceId>,
+    pub edges: Vec<EdgeId>,
+    pub vertices: Vec<VertexId>,
+    /// A point in the middle of each face, in `faces` order: bottom, top, front, right,
+    /// back, left.
+    pub face_points: Vec<Point3>,
+    /// The middle of `edges[0]`.
+    pub edge_point: Point3,
+    /// The point of `vertices[0]`.
+    pub vertex_point: Point3,
+}
+
+impl Builder {
+    /// A builder that adds to `body`'s solid shell (a body with one solid region).
+    pub fn extend(body: &Brep) -> Self {
+        let outside = body.outside().shells().next().unwrap().id();
+        let region = body.regions().find(|r| r.is_solid()).unwrap();
+        let solid = region.shells().next().unwrap().id();
+        let region = region.id();
+        Self {
+            draft: body.edit(),
+            doc: Document::default(),
+            outside,
+            solid,
+            region,
+            lines: BTreeMap::new(),
+        }
+    }
+
+    /// A new solid region and shell for the cubes that follow: a body's lumps are shells of
+    /// their own.
+    pub fn new_solid(&mut self) {
+        self.outside = self
+            .draft
+            .add_shell(ShellRecord::new(RegionId::OUTSIDE))
+            .unwrap();
+        self.region = self.draft.add_region(true).unwrap();
+        self.solid = self.draft.add_shell(ShellRecord::new(self.region)).unwrap();
+    }
+
+    /// The unit cube with its least corner at `o`, a lump of this body.
+    pub fn cube(&mut self, o: [f64; 3]) -> Lump {
+        let corners = [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 1.0],
+            [1.0, 1.0, 1.0],
+            [0.0, 1.0, 1.0],
+        ];
+        let vertices: Vec<VertexId> = corners
+            .iter()
+            .map(|q| self.vertex([o[0] + q[0], o[1] + q[1], o[2] + q[2]]))
+            .collect();
+        let rings: [[usize; 4]; 6] = [
+            [0, 3, 2, 1],
+            [4, 5, 6, 7],
+            [0, 1, 5, 4],
+            [1, 2, 6, 5],
+            [2, 3, 7, 6],
+            [3, 0, 4, 7],
+        ];
+        let faces: Vec<FaceId> = rings
+            .iter()
+            .map(|r| self.polygon(&r.map(|i| vertices[i])))
+            .collect();
+        let mut edges: Vec<EdgeId> = Vec::new();
+        for ring in &rings {
+            for k in 0..4 {
+                let (e, _) = self.line(vertices[ring[k]], vertices[ring[(k + 1) % 4]]);
+                if !edges.contains(&e) {
+                    edges.push(e);
+                }
+            }
+        }
+        let mid = |a: usize, b: usize| {
+            Point3::new(
+                o[0] + (corners[a][0] + corners[b][0]) / 2.0,
+                o[1] + (corners[a][1] + corners[b][1]) / 2.0,
+                o[2] + (corners[a][2] + corners[b][2]) / 2.0,
+            )
+        };
+        let face_points = vec![
+            mid(0, 2),
+            mid(4, 6),
+            mid(0, 5),
+            mid(1, 6),
+            mid(2, 7),
+            mid(3, 4),
+        ];
+        // The first edge made is the first of the first ring: corners 0 to 3, or 3 to 0 by id.
+        let first = edges[0];
+        let ends = self.draft.edge(first).unwrap().ends();
+        let (p, q) = (self.point(ends[0]), self.point(ends[1]));
+        Lump {
+            shell: self.solid,
+            outside: self.outside,
+            region: self.region,
+            faces,
+            edges,
+            vertices,
+            face_points,
+            edge_point: Point3::new((p.x + q.x) / 2.0, (p.y + q.y) / 2.0, (p.z + q.z) / 2.0),
+            vertex_point: Point3::new(o[0], o[1], o[2]),
+        }
+    }
+}
+
+/// Two unit cubes, at the origin and 3 along x, in one body.
+pub fn two_cubes() -> (Brep, Lump, Lump) {
+    let mut b = Builder::new();
+    let a = b.cube([0.0; 3]);
+    b.new_solid();
+    let c = b.cube([3.0, 0.0, 0.0]);
+    (b.finish(), a, c)
 }

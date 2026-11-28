@@ -49,6 +49,11 @@
 //! face's normal field along the edge curve with Taylor models, splitting the curve as the
 //! proof needs under one budget.
 //!
+//! **Picking and stored references** (research 74 §44). [`pick_at`] returns every face, edge
+//! or vertex within an aperture of each point, sorted by (distance, id); [`still_names`] says
+//! which entities of a body descend, by the edits' [`Changes`](scx_brep::Changes), from stored
+//! references, and which of them carry the stored point.
+//!
 //! **Vertex joints and wall geometry** (research 74 §34, BW11). [`leaving`], [`turn_at`],
 //! [`convex_at`] and [`joint_turn`] read a joint of edges at a vertex. [`facing_planes`],
 //! [`facing_cylinders`], [`wall_holds`], [`planes_meeting`], [`move_edge_onto_line`],
@@ -73,12 +78,14 @@ mod mid_joint;
 mod mid_sheet;
 mod near;
 mod on;
+mod pick_at;
 mod rays;
 mod reach;
 mod reads;
 mod recognize;
 mod round_face;
 mod side;
+mod still;
 mod tangent;
 mod tight;
 
@@ -100,6 +107,7 @@ pub use face_surface::{Closest, FaceSurface, face_surface};
 pub use joint::{Convexity, Leaving, Missing, Turn, convex_at, joint_turn, leaving, turn_at};
 pub use mid_joint::{Line3, Meeting, Moved, move_edge_onto_line, planes_meeting};
 pub use mid_sheet::{Holds, Wall, from_frame, in_frame, onto_plane, polygon_area, wall_holds};
+pub use pick_at::{Picked, pick_at};
 pub use rays::RAYS;
 pub use reach::Near;
 pub use reads::{
@@ -118,6 +126,7 @@ pub use round_face::{
     stands_over, whole_band,
 };
 pub use side::{Along, Sides, side_at_touch, sides_along};
+pub use still::{Standing, Step, Stored, still_names};
 pub use tangent::{Tangency, tangent_all_along};
 pub use tight::{tight_body_box, tight_box, tight_box_charged};
 
