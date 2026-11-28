@@ -5877,3 +5877,125 @@ whose foot is outside it); that is the cost of the answer asked for (8,440 hits 
 ### 44.7 Proposed 04 row
 
 | 11-28 | (For the owner's review) BW8: `pick_at` returns every face, edge or vertex within an aperture of each point sorted by (distance, id), one answer per point (the pin's nearest-or-`Ambiguous` and first-miss stop dropped), the distance to the entity as trimmed, candidates from one box-tree window per point (about 1 of 600 faces read at a point on a face); `still_names` finds the descendants of a stored reference by `carry` over the edits' `Changes` and `IdMap`s (no parallel scheme, the caller gives the steps) and checks the point lies on each within the entity's coincidence: `Names`, `Moved` or `Gone`; the pin's allowance of a thousandth of the body diagonal is not ported; `faces_on_one_surface` is left open (BW8b) | bodyq (none new) | 74 §44 |
+
+
+## 45. BW9 as built (11-28)
+
+The query and measure map (§1.3): one line per pin function of `query.rs` and the non-mass half
+of `measure.rs`, to the scx function that answers it, and the functions that had none, ported.
+Branch `bw9`; new files `crates/scx-bodyq/src/reads.rs`, `crates/scx-planar/src/polyline.rs`,
+tests `crates/scx-bodyq/tests/reads.rs`, `crates/scx-planar/tests/polyline.rs`. No new Cargo edge.
+
+### 45.1 The map
+
+"new" = ported here; "exists" = already in scx; a row name = built by that task or waiting on it.
+
+| Pin function | scx function | Status |
+|---|---|---|
+| `Query::new`, `record` | the `&Brep` itself (cells fill on first read) | exists |
+| `Query::edge_at(e, t)` (`None` for a traced curve) | `scx_bodyq::edge_at`: point and first derivative; every curve has a jet, a collapsed edge is `Refused::Collapsed` | new |
+| `Query::edge_interval` | `Edge::shape()`, `EdgeShape::Curve { interval }` | exists |
+| `Query::edge_faces` | `Edge::uses()`, then `Use::lp().face()` | exists |
+| `Query::edge_points(e, sag)` | `scx_tess::sample_edge(edge, &TessSpec, ..)` (a sagitta bound, not a sample) | exists |
+| `Query::outline_stretches` | hlr `outline` | HL3 (not on this base) |
+| `Query::edge_distance(e, p, sag)` | `edge_distance`: closed-form foot and both ends, no sag | new |
+| `Query::face_uv(f, p, accept)` | `face_uv` (foot, uv, gap, side; the caller compares the gap); `FaceSurface::closest_point` is the same foot | new |
+| `Query::face_normal(f, uv)` | `outward_normal` (out of the material, by the regions); `FaceSurface::normal` for the natural one | new |
+| `Query::face_contains` | `face_contains`: gap within the face's coincidence and `Inside`, or an edge within its coincidence | new |
+| `Query::faces_at` | `faces_at`: box prefilter, nearest first, ties by id | new |
+| `Query::faces_against` | `faces_against`: the same vote, over `faces_at` and `outward_normal` | new |
+| `Query::ray` | `pick` | BW5 (`rays::cast` is its building block) |
+| `locate_points`, `classify_point(s)` | `classify_point` (the caller loops; each call is deterministic) | exists |
+| `classify_points_with_normals`, `face_normal_at_point`, `face_normal_at_edge` | `classify_point`, then `face_uv` and `outward_normal` (the caller composes) | exists + new |
+| `levels_along` | `round_face::extent_in` with a `SeatFrame` (body moved rigidly into the frame, `tight_body_box`) | exists (BW11) |
+| `edge_face_gap_samples`, `edge_face_largest_gap` | `scx_surface::gap` (`curve_surface_gap`, `pcurve_edge_gap`): certified brackets. The pin's own note says the largest sample is not the largest gap, so no sample list is ported | exists (SU6) |
+| `points_meet` | `scx_surface::points_meet` | exists (SU8) |
+| `point_distance`, `box_max_distance_to_point`, `point_along_line`, `unit_direction`, `vertex_distance` | `Point3::distance`, `Extent3d::max_distance_to_point`, `Point3 + Vec3 * t`, `Vec3::length_and_unit`, `Vertex::point().distance(p)` | exists (scx-num, scx-brep) |
+| `nearer_line_meeting` | folded into `face_line_nearest` (the same tie rule: ahead) | new |
+| `distance_across_surface` | not ported: three lines of arithmetic (`along . n` of the foot's normal) with an absolute `1e-24`; no caller in scx | not ported |
+| `turn_to_parallel` | `turn_to_parallel(axis, normal, line, &Near)`: typed `ParallelTurnError`, the pin's `1e-6` and `1e-9` become coincidence over a reach | new |
+| `edge_closest_point` | `edge_closest_point`: point, parameter, distance | new |
+| `edge_closest_to_ray` | `pick` (edges within the aperture of the ray) | BW5 |
+| `face_hit_by_ray`, `face_hits_by_ray`, `fire_ray` | `pick` (every hit within the aperture, by (depth, id)) | BW5 |
+| `face_line_hits`, `face_line_nearest` | `face_line_hits`, `face_line_nearest`: `intersect_curve` of the line over the box's reach, uv `Outside` dropped | new |
+| `edge_curve` | `EdgeShape::Curve { curve, interval }` | exists |
+| `closest_to_point` (`closest_to_members`) | `closest_to_point(faces, edges, p)` with `Nearest::exact` | new |
+| `closest_to_curve` | not ported: a distance from a curve to a trimmed face is a bracket; the route is `contact` (BW3) on a wire body | open (45.5) |
+| `closest_faces` | `contact` (BW3) | BW3 |
+| `face_distances`, `face_surface_gaps`, `face_distances_within` | `closest_to_point` with one face; `face_uv` gap; `Brep::faces_meeting` plus `closest_to_point` | new / exists |
+| `rim_edges` | `rim_edges`: a face of the set on one side, one outside it on another; a seam is not a rim | new |
+| `outline_cuts` | hlr `outline` | HL3 |
+| `adjacency`, `face_loops`, `edge_samples`, `edge_points(count)`, `edge_middle` | `Edge::uses`, `Vertex::edges`, `Face::loops`, `Curve::eval_many` over the interval, `edge_at` at its middle | exists |
+| `face_area`, `edge_length`, `face_centroid`, `mass_properties`, `area` | `scx_mass` | MA rows |
+| `point_on_face` | `face_contains` | new |
+| `face_plane_normal`, `face_square_level`, `face_straying` | `outward_plane`, `is_square_plane_at_height` / `is_face_on_plane`, the stray inside `recognize` | exists (BW11, BW6) |
+| `bounds` | `tight_body_box` (certified, `&Brep`) | exists (BW2) |
+| `is_manifold_solid`, `check_solid`, `solid_count` | `check` (CF1), `Brep::regions` | exists |
+| `rim`/`adjacency` helpers `outer_faceuse` | `outward_normal`'s front/back regions | new |
+| `polyline_2d_bounds` | `Extent2d::hull` | exists |
+| `point_displacement` | `Point2 - Point2` | exists |
+| `centroid_and_mean_radius` | `scx_num::math::centroid_and_mean_radius` | exists |
+| `segment_2d_intersection` | `scx_planar::crossings` of two lines (every meet and overlap, certified) | exists (PL6) |
+| `polyline_2d_crossings` | `scx_planar::polyline_crossings`: every meet and overlap of each segment pair with the segments' indices | new |
+| `polyline_2d_closest_point` | `scx_planar::polyline_closest`: distance, point, segment, parameter | new |
+| `tangent_contact_line_circle_2d` | `scx_planar::tangent_segment_circle` | new |
+| `tangent_contact_circle_circle_2d` | `scx_planar::tangent_circles` | new |
+
+### 45.2 Decisions
+
+- **No `accept` or `tol` argument.** The pin's queries took a caller tolerance; here the length
+  is the face's or edge's coincidence (`coincident` of the resolution and the entity's accuracy),
+  as `classify_point` reads it. For: one rule, no caller choosing a number the body already
+  has. Against: a caller who wants a looser pick loses the knob. It gets it from `pick`'s
+  aperture (BW5), the one place that is about looseness.
+- **`closest_to_point` says when it is only a bound.** A face's nearest point is the surface's
+  foot when it is inside the face. When it is not, the nearest boundary point is the answer for
+  a plane (the distance is convex) and an upper bound for any other kind, since another local
+  minimum of the distance may lie inside the face; `Nearest::exact` says which. The pin gave one
+  number either way. Cases against `exact` for cylinders and spheres: the distance there has one
+  minimum off the axis, so the flag is conservative; proving it needs the axis test, left open.
+- **`face_contains` on an undecided boundary** (`contains_uv` is `None`) counts only by edges,
+  as `classify_point`'s step 1 does.
+- **Planar tangents are closed forms on the resolution**, not `crossings`: a whole circle is not
+  a `Curve2`, and a tangency is a closed form of the foot. A segment's end on the circle is a
+  crossing, not a tangent (the pin returned it); equal circles have no contact point (pin: also
+  `None`).
+- **`levels_along`, `bounds`, `classify_point(s)` are not re-ported.** They exist under other
+  names; porting a second copy would split the truth.
+
+### 45.3 Tests (against closed forms, not pin output)
+
+`tests/reads.rs` (13): a cylinder's rim at four angles (radius 3, derivative length 3, square to
+the radius), edge distance over the middle (5) and past an end (3), `edge_closest_point` and its
+parameter round trip, a block top's foot gap 0.5 / side `Inside` / `Outside`, `face_contains`
+including an edge, `faces_at` on a face, a corner (three faces by id), the air and the inside,
+the outward normal of all six block faces, `faces_against` with and against a run, the closest
+member (foot 5, plane boundary sqrt 50, edge against face), a cylinder wall level (17, exact) and
+above its rim (sqrt 298, `exact` false), a line through the top (t = 4) and along it (none),
+a line through a cylinder's axis (t = -3 and 3, the tie goes ahead, the nearer behind wins), the
+rim of one, two, three faces, all faces and the wall (2 rims, seam not a rim), `turn_to_parallel`
+at 0, pi/4, -pi/4, pi/2 (both senses), unit and non-unit vectors, three refusals, and the reach
+scaling. `tests/polyline.rs` (7): zigzag against a line (meets at (1,1) and (3,1), segment
+indices), misses and short polylines, a shared stretch as an `Overlap`, a zero-length segment
+refused, nearest points (end, interior, single point, empty, NaN), tangent segment and circle
+(tangent at (0,2); crossing, missing, foot off the end, refusals), circles outside (1,0), inside
+both orders (3,0), and none for crossing, apart, nested, equal.
+
+### 45.4 Cost
+
+Nothing existing changed; the new functions are leaf reads that add no work to any existing call.
+`closest_to_point` does one foot per face and one per boundary edge of a face whose foot is
+outside it (a block face: 4 edge feet, each one budget unit).
+
+### 45.5 Open questions
+
+1. `closest_to_curve` and `closest_faces` wait on `contact` (BW3); until then they have no scx
+   function. Is a wire-body probe for `contact` the right shape for a curve probe?
+2. `Nearest::exact` for a cylinder, cone or sphere off the axis: prove it, so the common case is
+   exact.
+3. `faces_against`'s vote is the pin's heuristic (a sum of dot products). With regions known, a
+   caller extruding a sheet might ask the material side directly; kept for the pin's caller.
+
+### 45.6 Proposed 04 row
+
+| 11-28 | (For the owner's review) BW9: the query and measure map (74 §45): every `query.rs` and non-mass `measure.rs` pin function has a line naming its scx function. Ported (`scx_bodyq`): `edge_at`, `edge_distance`, `edge_closest_point`, `face_uv`, `outward_normal`, `face_contains`, `faces_at`, `faces_against`, `closest_to_point` (`Nearest::exact`), `face_line_hits`, `face_line_nearest`, `rim_edges`, `turn_to_parallel` (against a `Near`, typed `ParallelTurnError`); (`scx_planar`) `polyline_crossings`, `polyline_closest`, `tangent_segment_circle`, `tangent_circles`. No `accept`/`tol` parameter: coincidence of the entity. The rest map to existing functions or to BW3, BW5, HL3. Closed-form tests (20). No new Cargo edge. |
