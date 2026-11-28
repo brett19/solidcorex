@@ -68,8 +68,8 @@
 //! **Gaps** (`CF2a`, research 74 §28). After the structure, [`check`] certifies the
 //! geometry against finish's allowances: each edge against its faces, its uses and its
 //! vertices, a degenerate edge, and under [`Scope::Full`] a vertex or edge too wide for the
-//! resolution. Each answer is proved or listed as [`Undecided`]; NURBS faces are
-//! [`Undecided::Pending`].
+//! resolution. Each answer is proved or listed as [`Undecided`]; NURBS faces take
+//! the same certified gaps (77 FT4); procedural faces are [`Undecided::Procedural`].
 //!
 //! **Not tested** here: the self-intersection and coincidence of faces, which [`check`]
 //! owns.
@@ -96,7 +96,7 @@ use scx_nurbs::Approach;
 
 pub use error::{Breach, CheckError, ContractError};
 pub use findings::{Finding, Findings, Scope, Spent, Undecided, Why, check};
-pub use scx_surface::{Bracket, Pending};
+pub use scx_surface::Bracket;
 pub use structure::{Class, Pinch};
 
 /// What [`contract`] does with an edge of more than two fins (a body meeting itself along
