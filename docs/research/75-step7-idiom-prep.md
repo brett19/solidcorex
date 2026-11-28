@@ -3153,3 +3153,122 @@ Added work per ray (release, tol 1e-6, throwaway counters, not committed; before
 Hull tests grow with the patches the line passes near (about the square root of the count), and boxes fall as the patches flatten, so hull tests plus boxes per ray stay between 159 and 266; the hull tree is enough, and no further box tree is built. Grazing cases: the cylinder tangent takes 5 to 7 hull tests, 94 to 114 boxes, 68 to 101 pieces and 498 to 630 foot Krawczyk calls; the ruling 145 boxes, 1407 pieces and 4485 foot calls (47.6k pieces before the per-piece foot box, 897k before the tightening); the pole ends Undecided after 52 boxes.
 
 Truths (`crates/scx-surface/tests/nurbs_hits.rs`, 7 tests): 24 lines through the NURBS sphere meet it at `|p| = r` (48 hits); a line through the seam and the knot lines meets each place once; a line tangent to the NURBS cylinder (on the seam, on a knot line, skew) touches it once as a Tangent; a line along a ruling of the bilinear saddle `z = uv`, clipped, is one Overlap and a crossing elsewhere is a Crossing at `u = 5/6`; a circle crosses the sphere twice; a NURBS curve is `NurbsIntersection`, and the budget and stop end the search typed; a line through a pole is Undecided or right. Changed: `nurbs_budget_and_stop_are_typed` in `tests/intersect.rs` (a circle on the NURBS sphere is now answered, empty; a NURBS line keeps the error). Nothing removed.
+
+### 13.29 PK3a as built (11-28)
+
+`Definition::Sweep(Sweep)` with `Motion::Screw(Screw)` in `scx_surface::procedural` (77 row
+PK3a), the screw's motion, bounds and law in `crates/scx-surface/src/procedural/screw.rs`.
+Ported from the pin's `surface::procedural_sweep` (`lift_error_bound`, `offset_error_bound`,
+the radial law and its five tests); the pin's make-level `sweep::screw` walls are not ported
+here (MK6).
+
+- `Screw::new(origin, axis: Vec3, pitch, turn: Extent1d, law: Option<RadialLaw>,
+  res: Resolution)`: the screw about the line through `origin` along `axis`, rising `pitch`
+  per whole turn (right handed), over `turn` radians. It chooses its own stations: each
+  stretch of the law (the turn cut at the law's angles inside it) is cut into equal spans of
+  at most `pi / 4`, as many as make the certified gap no more than `res.approx()`. Accessors
+  `origin, axis, pitch, law, stations, turn, approx, turn_at`.
+- `RadialLaw::new(direction: Vec3, angles, offsets)`: the profile moved `delta(theta)` along
+  `direction` (square to the axis) before the turn, `delta` piecewise linear over ascending
+  `angles` and held past the ends; `offset(theta)` evaluates it.
+- `Sweep::new(&Curve, Extent1d, impl Into<Motion>)`: the generator as for a revolution (line,
+  whole quarter arcs of a circle or ellipse, NURBS) carried by the motion. `u` is the net's
+  parameter across the turn, in radians, `Bounded(turn)`; `v` the generator's.
+  `Motion` is `#[non_exhaustive]`, so a path motion can join it.
+- New `ProceduralError` causes: `Law` and `ZeroPitch` (`Refused`), `TooFine { spans }`
+  (`Exhausted`: more than 12,000 spans, or a net of more than 4,000,000 points) and
+  `Inexact { bound }` (`Unsupported`, from `to_nurbs`).
+
+**The definition and the net.** On a span of width `w` and middle `m` the definition's angle
+is `theta(t) = m + 2 atan(a (t - m))`, `a = 2 tan(w / 4) / w`: the angle the net's rational
+quadratic arc turns a point to at the same `t`, so net and definition are compared at the
+same parameter and `theta(t_i) = t_i` at every station. The rotation is then exact in the
+net; only the lift `lambda theta` and the law's offset `sigma theta` are approximated by the
+net's quadratic rows. Their gaps are the same for every profile point, `|lambda| E_l` along
+the axis and `|sigma| (w / 2) E_o` square to it, and `Screw::approx` is the largest
+`sqrt` of their squares over the spans. Both are enclosed in rounded interval arithmetic
+(`atan` by its alternating series with the remainder), never sampled. `Procedural::bound` for a
+sweep is the net's rounding bound (as PK1) plus `approx`.
+
+The jet is in closed form (`theta`'s derivatives from `q = 1 / (1 - i x)`, Leibniz for the
+law term). At a station `theta` is continuous but its first derivative is not unless the
+spans' widths agree, so the side picks the span.
+
+**Per-call rule.** As PK1's for a NURBS generator: point, jet and normal read the definition;
+`box_over`, `range_along` and hulls read the net plus its bound inside its box and the
+definition (by intervals over the spans it meets) past it. `closed_form` is `None`. Inversion
+runs on the net and then polishes the foot on the definition by Newton on `|S - p|^2`
+(accepted only while the distance falls), then classifies it on the definition, so the foot
+is the definition's to rounding and not the net's gap away. `to_nurbs` is refused with
+`Inexact { bound }`. `reversed(U)` negates the axis and the stations; `transformed` keeps
+the stations and needs a similarity (the scale multiplies the pitch and the law's offsets, a
+reflection flips the pitch's sign).
+
+**Truths tested.** The screw of a point is the helix `(3 cos theta, 3 sin theta, v + theta /
+2)` and of a line along the axis the cylinder `x^2 + y^2 = 9`, both to `1e-14`; the law moves
+the radius to `4 + delta(theta)`; the net is within the bound at every sample and a dense
+look at the widest span finds at least half of `approx` (the bound is reached, not loose);
+`approx <= res.approx()`; the jet against differences (first and second order); boxes and
+ranges hold the definition; reversal, rotation, scaling and reflection map every point, a
+shear is refused; inversion lands within `1e-9 * scale`. In `screw.rs`: the pin's five
+(`atan_is_enclosed`, `the_lift_error_bound_is_its_maximum` against a dense sample of `E_l`
+from its definition, `the_offset_error_bound_holds_and_is_tight`,
+`hostile_definitions_are_refused`, `each_span_keeps_its_own_half_angle`) and three more
+(`a_tau_interval_bounds_its_members`, `too_fine_is_exhausted`, `stations_hold_the_goal`).
+No test was removed.
+
+Decisions (analysis and adversarial pass):
+
+1. *Typed refusals for every bad definition* (pin: one `bad(reason)` string). For: callers
+   branch on the cause, and `TooFine` is honest `Exhausted` (a finer resolution, not a wrong
+   input). Against: four more variants on a `#[non_exhaustive]` enum the callers mostly
+   forward.
+2. *`ZeroPitch` only without a law.* For: a zero-pitch screw with a law is a real surface (a
+   spiral face in a plane of rotation), while without one it is exactly a `Revolution`, which
+   has an exact net; refusing by name sends the caller there. Against: a caller building
+   pitch from user input must special-case zero.
+3. *The law's slope per span* (pin: one slope over the whole range). For: the pin's single
+   slope bounds a two-stretch law with the wrong `sigma` on one stretch; the stations land on
+   the law's angles so each span is on one stretch and its own slope is exact. Against: more
+   groups to bound, a little more build time on long laws.
+4. *Stations chosen from `Resolution::approx`* (pin: a tolerance argument and a 1% shrink
+   loop). For: one source of tolerance, the document's; equal spans per stretch, grown by
+   the gap's known order (`n^-3` lift, `n^-2` offset) in at most 64 rounds, then
+   `TooFine`. Against: a caller cannot ask for a tighter screw than its resolution without
+   building another `Resolution`.
+5. *`tau` as an interval over a group of spans.* For: spans of nearly one width (same
+   high bits) and one stretch share one enclosure over the hull of their widths, which is
+   sound for every member and keeps the bound cost per group, not per span. Against: a group
+   bound is a little wider than each span's own.
+6. *`to_nurbs` refuses with `Inexact { bound }`* rather than returning the net. For: every
+   other kind's `to_nurbs` is exact, and a caller that wants the approximation can take
+   `net()` and `bound()` knowingly. Against: callers that only need a NURBS within tolerance
+   (export, tessellation) must handle a refusal.
+7. *A transform keeps the stations, so `approx` scales with the map.* For: the image is the
+   same surface moved, point for point, with its uv kept (`UvMap::IDENTITY`). Against: a
+   scaling up may leave the image's `approx` above the resolution; rebuilding with
+   `Screw::new` restores it but changes the uv.
+8. *Inversion polished on the definition.* For: the net's foot is up to `approx` off; the
+   Newton steps put it on the definition to rounding. Against: a few jets per inversion.
+9. *`ClosedForm` became an enum of the two closed kinds* (was a struct over a
+   `&Definition`). For: no unreachable sweep arm; `closed_form()` is `None` for a sweep by
+   construction. Against: none found.
+10. *`Procedural::eval` takes `T: Trig`* (was `Ranged`): the screw needs sine and cosine of
+    `u`. `f64` and `Ivl` are both `Trig`, so no caller changed.
+
+Measured with a throwaway timer (release) on the existing kinds, before and after:
+rev point 2.380 to 2.268 ms, box 135.2 to 131.1, along 132.2 to 130.8, invert 383.3 to 376.4, build 114.3 to 110.9; ext point 0.564 to 0.587, box 24.8 to 23.2, along 11.9 to 11.1, invert 245.8 to 238.2, build 11.2 to 10.9 (best of five runs alternated with a build of main). No added work on revolutions and extrusions: the only change on their
+path is one match arm.
+
+Open questions:
+
+- A tighter box rule for sweeps: inside the net's box the box is the net's widened by the
+  whole bound, which includes `approx`; the definition's intervals over few spans may be
+  tighter.
+- Whether `to_nurbs` should return the net with its bound (a typed `Approximate` result)
+  instead of refusing.
+- Whether the goal should be `Resolution::approx` or a separate tolerance argument.
+- Whether a scaling transform should rebuild the stations to keep `approx` within the
+  resolution.
+- Evaluating a wide `Ivl` `u` crosses many spans one by one; a bound per range of spans may
+  be needed for long screws.
