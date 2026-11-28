@@ -50,6 +50,7 @@ mod contact;
 mod error;
 mod faceface;
 mod geom;
+mod given;
 mod imprint;
 mod pairs;
 mod pinch;
@@ -57,6 +58,7 @@ mod points;
 
 pub use boolean::{BooleanOp, NoItems, boolean};
 pub use error::{BooleanDefect, BooleanError, BooleanRefusal, BooleanUnsupported};
+pub use given::{Fact, Incidences, boolean_given};
 
 #[cfg(test)]
 mod tests;

@@ -12,6 +12,8 @@ use scx_num::error::ErrorKind;
 use scx_ssi::SsiError;
 use scx_surface::{SurfaceError, SurfaceKind};
 
+use crate::given::Fact;
+
 /// Why a Boolean did not finish.
 ///
 /// `PartialEq` only: an [`SsiPair`](BooleanUnsupported::SsiPair) cause names a point.
@@ -51,6 +53,12 @@ pub enum BooleanRefusal {
     OtherDocument {
         /// The operand.
         operand: Operand,
+    },
+    /// A fact stated to [`boolean_given`](crate::boolean_given) is not so: the Boolean's
+    /// own test of it disagrees, or it names an entity its operand does not have.
+    FalseFact {
+        /// The fact.
+        fact: Fact,
     },
 }
 
@@ -250,6 +258,7 @@ impl BooleanError {
                 "vertices_within_coincidence"
             }
             Self::Refused(BooleanRefusal::OtherDocument { .. }) => "other_document",
+            Self::Refused(BooleanRefusal::FalseFact { .. }) => "false_fact",
             Self::Unsupported(BooleanUnsupported::Nurbs { .. }) => "nurbs",
             Self::Unsupported(BooleanUnsupported::Chain { .. }) => "chain",
             Self::Unsupported(BooleanUnsupported::SsiPair { .. }) => "ssi_pair",
@@ -333,6 +342,9 @@ impl fmt::Display for BooleanError {
             }) => write!(f, "{operand}: {v} and {w} lie within coincidence"),
             Self::Refused(BooleanRefusal::OtherDocument { operand }) => {
                 write!(f, "{operand}: finished under another document's resolution")
+            }
+            Self::Refused(BooleanRefusal::FalseFact { fact }) => {
+                write!(f, "the stated {fact} is not so")
             }
             Self::Unsupported(BooleanUnsupported::Nurbs { operand, at }) => {
                 write!(f, "{operand}: {at}: NURBS geometry is not intersected yet")
