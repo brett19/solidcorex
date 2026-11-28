@@ -121,7 +121,7 @@ pub fn revolve(
     doc: &Document,
 ) -> Result<Made<RevolveFaces>, MakeError> {
     let plan = Plan::new(region, frame, turn, *doc)?;
-    let mut build = Build::new(&plan, Assembly::new(doc)?);
+    let mut build = Build::new(&plan, Assembly::new(doc)?, false);
     let walls = build.walls()?;
     let (start, end) = if plan.partial {
         (Some(build.cap(false)?), Some(build.cap(true)?))
@@ -147,7 +147,7 @@ pub fn revolve_sheet(
     doc: &Document,
 ) -> Result<Made<RevolveSheetFaces>, MakeError> {
     let plan = Plan::new(region, frame, turn, *doc)?;
-    let mut build = Build::new(&plan, Assembly::sheet(doc)?);
+    let mut build = Build::new(&plan, Assembly::sheets(doc), true);
     let walls = build.walls()?;
     Ok(Made {
         body: build.asm.finish()?,
@@ -645,10 +645,12 @@ struct Build<'p, 'd> {
     /// By loop: the shells in front of and behind its walls. A hole of a full turn sweeps
     /// a closed hollow of its own, apart from the outer loop's shell.
     sides: Vec<[ShellId; 2]>,
+    /// Whether the walls are a sheet's.
+    sheet: bool,
 }
 
 impl<'p, 'd> Build<'p, 'd> {
-    const fn new(plan: &'p Plan, asm: Assembly<'d>) -> Self {
+    const fn new(plan: &'p Plan, asm: Assembly<'d>, sheet: bool) -> Self {
         Self {
             plan,
             asm,
@@ -656,6 +658,7 @@ impl<'p, 'd> Build<'p, 'd> {
             parallels: BTreeMap::new(),
             meridians: BTreeMap::new(),
             sides: Vec::new(),
+            sheet,
         }
     }
 
@@ -746,8 +749,12 @@ impl<'p, 'd> Build<'p, 'd> {
             .map(|&(n, _)| vec![Wall::OnAxis; n])
             .collect();
         for l in 0..self.plan.loops.len() {
-            let sides = if l == 0 || self.plan.partial {
-                self.asm.sides()
+            // A sheet's loops are pieces apart; a solid's holes are apart from its outer
+            // loop only when the turn is whole (a partial turn's caps join them).
+            let sides = if self.sheet {
+                self.asm.sheet_shell()?
+            } else if l == 0 || self.plan.partial {
+                self.asm.sides()?
             } else {
                 self.asm.hollow()?
             };

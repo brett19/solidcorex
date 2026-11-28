@@ -52,7 +52,10 @@ jobs:
         with:
           shared-key: tests-${{ matrix.name }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: cargo xtask tests ${{ matrix.crates }}
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: cargo-nextest@0.9.150
+      - run: cargo xtask tests ${{ matrix.crates }} # nextest, then the doctests
 
   xplat:
     name: xplat (${{ matrix.name }})
@@ -73,14 +76,17 @@ jobs:
         with:
           key: ${{ matrix.target }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: cargo-nextest@0.9.150
       - name: Golden hash tests
         env:
           CARGO_TARGET_WASM32_WASIP1_RUNNER: wasmtime
-        run: cargo test --target ${{ matrix.target }} -p scx-num --test fmath_pin -p scx-algo --test xplat_pin
+        run: cargo nextest run --target ${{ matrix.target }} -p scx-num --test fmath_pin -p scx-algo --test xplat_pin
       - name: scx-num and scx-algo unit tests # their dev-dependencies are built for the pins already
         env:
           CARGO_TARGET_WASM32_WASIP1_RUNNER: wasmtime
-        run: cargo test --target ${{ matrix.target }} -p scx-num -p scx-algo --lib
+        run: cargo nextest run --target ${{ matrix.target }} -p scx-num -p scx-algo --lib
 
   difftest:
     runs-on: ubuntu-24.04
@@ -91,9 +97,12 @@ jobs:
         with:
           shared-key: difftest
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: cargo test -p scx-difftest
-      - run: cargo test -p scx-testkit --test nurbs -- --ignored # the full sweeps `tests` skips
-      - run: cargo test -p scx-testkit --test ssi_truth -- --ignored # the SSI truths' full sweeps
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: cargo-nextest@0.9.150
+      - run: cargo nextest run -p scx-difftest # no doctests in the crate
+      - run: cargo nextest run -p scx-testkit --test nurbs --run-ignored only # the full sweeps `tests` skips
+      - run: cargo nextest run -p scx-testkit --test ssi_truth --run-ignored only # the SSI truths' full sweeps
       # The SSI corpus score is not run here: the corpus is not in the pin's public mirror (it sits
       # outside solidcore/), and a full score takes about 10 minutes. It runs locally (04, 11-27).
 
