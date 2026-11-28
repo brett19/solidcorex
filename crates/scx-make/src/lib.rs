@@ -1,6 +1,6 @@
 // Written for solidcorex. Apache-2.0.
-//! Constructors of bodies (research 72 §4, tasks MK1 and MK3): each takes a [`Frame`] and
-//! sizes, or a planar region ([`extrude`]), and returns a [`Made`], the finished body with a
+//! Constructors of bodies (research 72 §4, tasks MK1 and MK3; 75 MK4): each takes a
+//! [`Frame`] and sizes, or a planar region ([`extrude`], [`revolve`]), and returns a [`Made`], the finished body with a
 //! typed record of its faces by role.
 //!
 //! - **Built with the topology known.** A constructor writes every vertex, edge and face of
@@ -37,6 +37,7 @@ mod frames;
 pub mod loft;
 mod prism;
 mod radial;
+mod revolve;
 mod sheet;
 mod sphere;
 mod torus;
@@ -53,6 +54,7 @@ pub use frames::{
 };
 pub use prism::{PrismFaces, prism};
 pub use radial::{RadialCone, RadialFaces, radial};
+pub use revolve::{RevolveFaces, RevolveSheetFaces, Turn, Wall, revolve, revolve_sheet};
 pub use sheet::{SheetFaces, sheet};
 pub use sphere::{SphereFaces, sphere};
 pub use torus::{TorusFaces, torus};

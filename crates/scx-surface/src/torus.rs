@@ -15,6 +15,7 @@ use scx_num::vector3d::{Point3, UnitVec3, Vec3};
 use scx_nurbs::Approach;
 use scx_nurbs_surface::{NurbsSurface, ParamAxis};
 
+use crate::Pole;
 use crate::common::{Axes, check_lengths, unit};
 use crate::error::{Size, SurfaceError, positive};
 use crate::invert::{self, Closest, Inversion, Periods};
@@ -25,7 +26,8 @@ use scx_num::jet::SurfaceJet;
 /// Both directions: a turn over `[0, 1]`.
 pub(crate) const TURN: Arcs = Arcs::turn(1.0);
 
-/// A ring torus about the frame's z axis: the tube does not reach the axis.
+/// A torus about the frame's z axis: a ring torus, whose tube does not reach the axis, or a
+/// horn torus ([`Torus::horn`]), whose tube meets the axis at one point, a pole.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Torus {
     frame: Frame,
@@ -59,6 +61,36 @@ impl Torus {
             major,
             minor,
             sense,
+        })
+    }
+
+    /// The horn torus whose tube of `radius` circles `frame`'s z axis at `radius`, so that
+    /// it meets the axis at the frame's origin: the inner equator (`v = 1/2`) collapses to
+    /// that point, the torus's [`pole`](Self::pole). `u = 0` is on the frame's x axis and
+    /// `v = 0` on the outer equator, as [`Torus::new`]'s. Its other formulas are the ring
+    /// torus's at equal radii.
+    ///
+    /// # Errors
+    ///
+    /// [`SurfaceError::NotFinite`], [`SurfaceError::Negative`] or
+    /// [`SurfaceError::Degenerate`] (zero) for the radius, `Refused`.
+    pub fn horn(frame: Frame, radius: Length, sense: Sense) -> Result<Self, SurfaceError> {
+        let radius = positive(Size::Minor, radius.mm())?;
+        Ok(Self {
+            frame,
+            major: radius,
+            minor: radius,
+            sense,
+        })
+    }
+
+    /// The pole of a horn torus: its inner equator (`v = 1/2`), collapsed to the frame's
+    /// origin. `None` for a ring torus, which has none.
+    #[must_use]
+    pub fn pole(&self) -> Option<Pole> {
+        (self.minor == self.major).then(|| Pole {
+            v: 0.5,
+            point: self.frame.origin(),
         })
     }
 
@@ -145,7 +177,8 @@ impl Torus {
     }
 
     /// The unit normal along `S_u x S_v`, outward for [`Sense::Forward`]. A ring torus has
-    /// one everywhere.
+    /// one everywhere; a horn torus's at its pole is the limit along the meridian at `u`,
+    /// `-D(u)` for [`Sense::Forward`].
     #[must_use]
     pub fn normal(&self, uv: Point2) -> UnitVec3 {
         let cs = TURN.cos_sin(uv.x, TURN.piece(uv.x, Approach::Above));
