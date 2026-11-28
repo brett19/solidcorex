@@ -72,6 +72,7 @@ mod hull;
 mod intersect;
 mod invert;
 mod meet;
+mod nurbs_hits;
 mod nurbs_invert;
 mod pcurve;
 mod plane;

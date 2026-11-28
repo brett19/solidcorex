@@ -241,9 +241,11 @@ impl BodyqError {
         match e {
             SurfaceError::Exhausted(x) => Self::of_budget(x),
             SurfaceError::Stopped => Self::Cancelled,
-            SurfaceError::NurbsIntersection => Self::Unsupported(BodyqUnsupported::Nurbs {
-                at: Entity::Face(face),
-            }),
+            SurfaceError::NurbsIntersection | SurfaceError::Undecided { .. } => {
+                Self::Unsupported(BodyqUnsupported::Nurbs {
+                    at: Entity::Face(face),
+                })
+            }
             _ => Self::Defect(BodyqDefect::Surface { face }),
         }
     }

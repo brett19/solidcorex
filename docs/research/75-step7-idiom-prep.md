@@ -1927,3 +1927,32 @@ Decisions.
 - **`kept`.** An affine image keeps the parameter through a `ParamShift` (the plane's, rulings and generators: `NONE`), so a caller can map vertices; an arc's angle is not an affine function of the line's `t`, so it says `None` rather than a wrong map.
 
 Truths (`crates/scx-surface/tests/project.rs`, 14 tests, plus 2 unit tests): a circle projected along z onto a plane tilted by beta is the ellipse with semi-axes r and r / cos(beta) about the centre's image; a tilted circle projected onto a level plane has semi-axes r and r cos(gamma); for 64 random circles, planes and directions the image keeps the conjugate-diameter invariants a^2 + b^2 = |u|^2 + |v|^2 and ab = |u x v|; a line dropped onto a cylinder in a plane through its axis is the ruling at the radius (and splits at the axis); a chord dropped onto a cylinder is the arc at its height with the closed-form ends. Every piece is sampled: each point on the surface and on the projection line through its source point, or equal to the kind's `closest` foot. Ported from the pin: `a_line_above_a_box_drops_to_its_foot_on_the_top`, `a_line_beside_a_cylinder_drops_onto_its_wall_at_the_radius`, the #20836 seam chord (its geometry; the seam split and the area are the body's), and `a_segment_projects_onto_a_box_s_record_face_at_its_index` (both levels). Not ported: `a_curve_over_nothing_of_the_face_is_refused` (a face concern; the analogue here is a miss being empty) and `rational_quarter_circle` (a record form, not geometry).
+
+### 13.14 RY2 as built (11-28)
+
+`scx_surface::intersect_curve` and `curve_on_surface` now answer a line, circle, ellipse, parabola or hyperbola against a `Surface::Nurbs` (77 §6.3, row RY2) in `crates/scx-surface/src/nurbs_hits.rs`; a NURBS curve against one is still `SurfaceError::NurbsIntersection`. The one public addition is `SurfaceError::Undecided { t }` (Unsupported, `intersection_undecided`): a box down to the floor that nothing dropped or proved. `scx-bodyq`, `scx-boolean` and `scx-hlr` read it as they read `NurbsIntersection` (unclean: a ray tries its next direction). `intersect.rs` gains two dispatch lines and nothing else.
+
+How: each Bézier patch's certified hull grown by `tol` is a box in a balanced tree, culled against the curve's slab; on a surviving patch a box in `(u, v, t)` is enclosed by the patch polynomial about the curve's middle point. Where `g = (S_u x S_v) . C'` excludes 0, Krawczyk on `F = S - C` drops the box or proves one crossing. Where `g` holds 0 (grazing), Krawczyk on the foot system `G` proves one foot for every `t` in `T`, and the signed distance `delta(t)` along it is cut into far, monotone (one crossing at most) and turning pieces. Runs of pieces within `tol` read as the analytic arms do: Crossing, Tangent or Overlap.
+
+Decisions.
+- **`Undecided` its own variant, not `NurbsIntersection`.** For: the claims differ ("this pair is not built" against "this box could not be decided near `t`"), and `t` says where. Against: one more arm for callers; three callers map both the same way today.
+- **A ray exactly through a pole is Undecided.** The foot system is singular at a degenerate edge (`S_v = 0`), so no Krawczyk box contains it; answering it would need the pole as a special point. For: unclean is honest and the ray caller already retries. Against: an exact pole hit is answered by retry, not here.
+- **The foot proof before the floor check, about the Newton foot.** A grazing box at the floor is tried for its foot first, over a box about the Newton foot of the middle point (hulled with `U x V`), then over `U x V` grown by an eighth; a proved foot box is re-proved over its own growth while that halves it. For: the plain grown box is loose near a tangent (the cylinder tangent and the ruling were Undecided without it). Against: up to four more Krawczyk calls per grazing box.
+- **Each piece of `T` searches its parent's foot box grown, not the whole `Y`.** The one foot over the parent lies in its proved box, so the child's foot does too. For: the ruling's two wide feet calls cost 13.5k and 32.8k pieces before; the whole ruling line is 1407 pieces now. Against: none found; it is a smaller box with the same claim.
+- **A turning piece is one where `delta` is within `tol` throughout or the piece is at the floor**, not one where the slope is small: the slope enclosure is loose, and "small" spanned whole monotone pieces.
+- **A box inside one already proved is skipped.** For: the patch's grown neighbours re-find the same foot. Against: a list scan per grazing box (short: one entry per proved foot).
+- **No box tree over patches beyond the hull tree.** The counts below grow with the patches the ray meets, not the patch count; a tree would add build cost for no hull tests saved.
+
+Added work per ray (release, tol 1e-6, throwaway counters, not committed; before, every such call was `NurbsIntersection` and did no work). The 24 sphere lines, the sphere refined by knot insertion in both directions:
+
+| patches | hull tests | boxes | foot Krawczyk | `F` Krawczyk |
+|---|---|---|---|---|
+| 8 | 12 | 254 | 116 | 80 |
+| 15 | 21 | 232 | 99 | 79 |
+| 35 | 38 | 145 | 42 | 61 |
+| 99 | 63 | 96 | 14 | 49 |
+| 323 | 114 | 45 | 5 | 23 |
+
+Hull tests grow with the patches the line passes near (about the square root of the count), and boxes fall as the patches flatten, so hull tests plus boxes per ray stay between 159 and 266; the hull tree is enough, and no further box tree is built. Grazing cases: the cylinder tangent takes 5 to 7 hull tests, 94 to 114 boxes, 68 to 101 pieces and 498 to 630 foot Krawczyk calls; the ruling 145 boxes, 1407 pieces and 4485 foot calls (47.6k pieces before the per-piece foot box, 897k before the tightening); the pole ends Undecided after 52 boxes.
+
+Truths (`crates/scx-surface/tests/nurbs_hits.rs`, 7 tests): 24 lines through the NURBS sphere meet it at `|p| = r` (48 hits); a line through the seam and the knot lines meets each place once; a line tangent to the NURBS cylinder (on the seam, on a knot line, skew) touches it once as a Tangent; a line along a ruling of the bilinear saddle `z = uv`, clipped, is one Overlap and a crossing elsewhere is a Crossing at `u = 5/6`; a circle crosses the sphere twice; a NURBS curve is `NurbsIntersection`, and the budget and stop end the search typed; a line through a pole is Undecided or right. Changed: `nurbs_budget_and_stop_are_typed` in `tests/intersect.rs` (a circle on the NURBS sphere is now answered, empty; a NURBS line keeps the error). Nothing removed.
