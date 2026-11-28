@@ -570,6 +570,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "scx-deform"
+version = "0.1.0"
+
+[[package]]
 name = "scx-difftest"
 version = "0.1.0"
 dependencies = [
@@ -691,6 +695,10 @@ dependencies = [
  "scx-surface",
  "scx-testkit",
 ]
+
+[[package]]
+name = "scx-repair"
+version = "0.1.0"
 
 [[package]]
 name = "scx-ssi"

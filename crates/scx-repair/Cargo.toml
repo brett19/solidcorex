@@ -1,0 +1,14 @@
+# Written for solidcorex.
+[package]
+name = "scx-repair"
+description = "Certified repair of bodies: heal, sew within a gap, hole patches, analytic rebuild"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true
