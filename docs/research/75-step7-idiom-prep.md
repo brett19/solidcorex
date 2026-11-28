@@ -1478,7 +1478,22 @@ Decisions.
 
 Truths (`tests/radial.rs`, 5 tests): the pin's `radial_sweeps_close_at_the_hinge_or_on_two_annular_caps` (hinge and both-capped, volume `pi h (300 - b^2 - b t - t^2) / 3`) and `a_cylinder_whose_top_rounds_...` (volume cylinder less frustum) against the difference of the frusta, at an axis-aligned and a tilted far frame; narrowing and widening cones, hinges at either end, a tube, crossing slopes. Each: counts, closed-solid structure with Euler-Poincare of genus 1, the BR8 oracle, volume, area and centroid to 1e-12 with the mass estimate's error within, face kinds, and membership of each face against the CSG difference of two frusta; determinism; size and annulus refusals. The pin's stitch, outward-check and attribute-copy parts have no counterpart (nothing to stitch; attributes belong to the caller of the local operation).
 
-### 13.6 MK7a frames as built (11-28)
+### 13.6 BO10 as built (11-28)
+
+`crates/scx-boolean/tests/algebra.rs` (about 1,100 lines, 15 live tests, 12 ignored; the live ones run in about 10 s wall under nextest).
+
+**Shape.** An expression over a pool of 11 placed parts (8 in general position: three boxes, a cylinder, a sphere, a rotated block, a cone, a torus; then a block sharing A's z planes, a block abutting A's x = 10 face, and a sphere centred on A's x = 10 plane) is built twice: as bodies through `boolean`, and as a testkit `Csg` oracle. Two expressions are equivalent when each result passes `scx_check::contract` (`Contacts::Radial`), volume and area agree to 1e-9 relative plus the Estimates' errors, solid-region and shell counts agree, and 1,000 seeded points classify as the oracle says wherever it is certain at 2C. Laws: commutativity, idempotence (two separately built bodies), self difference, absorption, partition, inclusion-exclusion and partition in volume, De Morgan in a box (both forms), associativity, distributivity, rigid motion (rotation plus a 1e6 translation), determinism (`scx_record::encode` bit-identical over two runs). N-ary order waits on BO11 and BO12. A case where any Boolean answers `Unsupported` is counted and printed per law (`--no-capture`), never asserted.
+
+**Collars.** Coaxial r = 1.3 collars, bare and each on a block, overlapping over 2 or meeting in a ring, in both operand orders: union volume = vA + vB - pi r^2 l, intersection = pi r^2 l, both differences, one solid of one shell. They pass today. The #20408 case is the blocks-overlap-2 variant (its geometry: r = 1.3, l = 2); the pin's two records wait for DT4.
+
+**Known failures.** The failing cases are listed in `KNOWN` as (cause, law, label); the live sweeps skip them and one ignored test per cause runs its cases and asserts they pass, so the suite keeps them. Causes: wrong-points (9, silent wrong geometry), seeds (28), loops (16), build (17), classify (10), loosespan (9), uvundecided (6), piece (1), contract-undecided (16 incl. far), contract-nobox (23 incl. far).
+
+**Choices, for and against.**
+- Case-granular known list with one ignored test per cause, against one `#[ignore]` per law: a whole-law ignore hides the cases that pass, and one per case is 135 tests. Cost: the table is data that BO10b must delete as it fixes.
+- Judging each result against its own oracle as well as against its twin: a law could hold between two equally wrong results (both Booleans missing the same region); the oracle catches that.
+- Sphere centre: the first pool put the sphere's centre on A's x = 10 plane, which fails with `Seeds` in every combination with a box. A sphere off every plane passes those, so the pool holds both: the general one for the laws, `sphereOnFace` as a real contact case.
+
+### 13.7 MK7a frames as built (11-28)
 
 `scx_make::{Path, Piece, Stop, Station, Rotation, Corner, FrameError, frames}` (`frames.rs`,
 `tests/frames.rs`). `Path::new(&[Piece], &Document)` validates (1 to 1000 pieces; lines longer
