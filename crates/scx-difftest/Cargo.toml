@@ -45,5 +45,12 @@ scx-tess = { path = "../scx-tess" }
 # The Boolean, run on the Boolean recipes (`t_slice`).
 scx-boolean = { path = "../scx-boolean" }
 
+# The SMLib healer's count over the corpus records (`examples/heal_count.rs`): the pin's
+# conversion and STEP reader, and the readers of the rig corpus's record files.
+solidcore-convert = { path = "../../../sc-wt/scx-pin/solidcore/crates/solidcore-convert" }
+solidcore-step = { path = "../../../sc-wt/scx-pin/solidcore/crates/solidcore-step" }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+flate2 = "1.1"
+
 [lints]
 workspace = true
