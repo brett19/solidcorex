@@ -3066,3 +3066,61 @@ excludes the level lines, whose plane annulus has none) and are in the rules abo
 
 Runtime (debug, nextest, loaded machine): the four heaviest tests 1 to 5 s each, all 7 in about
 5 s wall; the Pappus tables are 144 bodies, the cornered table 75.
+
+### 13.31 VM1 as built (11-28)
+
+77 §5's volume maps on their own, without DF1's deformation: `scx_surface::volume_map`, a new module (two lines in `lib.rs`). The public API:
+- `Bend::new(Frame, neutral: Length) -> Result<Bend, MapError>` (positive and finite) and `Twist::new(Frame, pitch: Length) -> Result<Twist, MapError>` (signed, nonzero, finite; negative is left-handed). The frame's origin is on the axis, its x on the mid direction, its z along the axis.
+- `VolumeMap::{Bend(Bend), Twist(Twist), Unbend(Bend), Chain(Arc<[VolumeMap]>)}`; a chain applies its maps in order.
+- `map<T: Polar>(&self, Point3<T>) -> Point3<T>`: the closed form in `f64` or `Ivl`. `Polar` is a sealed `Trig` with `atan2`.
+- `bound(&Extent3d) -> Option<Extent3d>`: `map` over `Ivl`.
+- `inverse(&self, Point3) -> Result<Point3, MapError>`: closed form. `MapError::{BadNeutral, BadPitch, NotFinite, OnAxis, OutsideImage}`.
+- `inverted(&self) -> VolumeMap`: bend and unbend swap, the twist's pitch is negated, a chain is reversed.
+- `push(&self, p, t) -> Vec3` and `jacobian(&self, p) -> [Vec3; 3]`: closed-form first derivatives, chained through a chain.
+- `image(&self, &Surface, near: Point3) -> Image`, with `Image::{Exact { surface, uv: Uv }, NotExact(NotExact)}`, `Uv::{Same, Moved}` and `NotExact::{NoRule, MeetsAxis, OnCut, OutsideDomain}` (non-exhaustive).
+
+The image rules, in the map's frame. Each is a test on kind and frame within `ALIGNED` (16 eps, relative to the kind's size), never a sample:
+- Bend:
+  - a plane square to the axis is itself;
+  - the plane `u = u0 > 0` is the cylinder of radius `u0`, Forward when its normal is `+x`;
+  - the plane `v = v0` with `|v0| <= pi d` is the plane through the axis at `v0 / d`, with the same uv;
+  - a plane with normal `(a, 0, c)` is the cone with its apex on the axis, opening along the half where `u` grows;
+  - a cylinder along `y` centred at `u_c > rho` is the torus (major `u_c`, minor `rho`), and one centred on the axis is the sphere of radius `rho`. The sense is kept: the bend keeps orientation (its Jacobian determinant is `u / d > 0`).
+- Unbend: the inverse of each bend rule. The half-plane of a plane holding the axis, and the nappe of a coaxial cone, are the ones `near` lies on. A half-plane at `pi` is `OnCut`.
+- Twist: a plane square to the axis turns, with the same uv. A coaxial cylinder, cone or torus, and a sphere centred on the axis, are themselves (the pin misses the cylinder and cone).
+- A chain carries the surface and `near` through each step. Its uv is `Same` only when every step's is.
+- Everything else, NURBS included, is `NoRule`: PK4's in-volume kind or a certified fit.
+
+Decisions.
+- **`map` is generic over `Polar`, not `Ranged`.**
+  - For: the unbend needs `atan2` and a square root, which `Ranged` lacks; `Trig` has the root but no angle. A sealed subtrait keeps the set to `f64` and `Ivl`.
+  - Against: 77 §5.2 wrote `T: Ranged`; a jet ring cannot run the map until it gets `atan2`.
+  - The interval `atan2` takes the four corners' angles, which bound a box off the origin and the cut. A box meeting the cut, holding the origin or holding a NaN gives `[-pi, pi]`. The twist over intervals clips `x` and `y` to the box's widest radius, which keeps a full turn within `sqrt 2` of the axis for the pin's unit box (dependency in `cos u - sin v` would otherwise double it).
+- **`image` takes `near`, a point of the face.**
+  - For: the unbend of a plane holding the axis is two planes, `v = d theta0` and `v = d (theta0 - pi)`, and a coaxial cone's two nappes unbend to two planes. Without a point there is no single answer. A chain maps `near` with the surface.
+  - Against: 77 §5.2 wrote `image(&self, s)`; every caller must pass a point. DF1 has the face, so it has one.
+- **`Image::Exact` carries `Uv`, and a not-exact image is `NotExact`, not `Procedural` or `Refused`.**
+  - For: VM2 and DF1 must know whether the pcurves carry over. That is true only for the plane rules that are rigid motions of the plane (bend `v = v0`, twist and unbend planes). Building PK4's in-volume surface belongs to PK4, which is not built yet. A volume map refuses nothing about a surface; it only lacks a rule.
+  - Against: the caller matches one more level; PK4 must add the `NotExact -> InVolume` step itself.
+- **The bend's oblique plane is a cone at its apex.** The cone kind is both nappes, so any reference circle gives the same set. Placing it at the apex with the axis toward the image's nappe keeps the radius positive there and so the sense right without a point.
+- **Derivatives are first order and closed form (`push`, `jacobian`), not jets.**
+  - For: DF1's normals need `J^-T n`, which these give exactly. The finite-difference truths are the pin's.
+  - Against: 77 §5.2 wants the map over jets so WR-45 (third order) cannot recur. That needs a jet ring with `Polar`; it is left open.
+- **Tolerances.** `ALIGNED` (16 eps) for the image rules. `ON_AXIS` (4 eps of the point's size) for the bend's inverse. `CUT_MARGIN` (4 eps of `pi d`) past the bend's range for the unbend's inverse. A point on the cut (`y = +0`) inverts to `v = +pi d`, as the pin's first solution.
+
+Tests (17, `volume_map/tests.rs`):
+- The pin's truths: the simple maps, the maps in the frame at (1, 2, 3), the seam at `y = 0`, the finite-difference Jacobians, the bend box at `[1, 2] x [0, pi/2] x [0, 1]`, WR-59's boxes with their corner and pole, full periods, and the twist's full turn within `sqrt 2`.
+- Map then inverse is the identity for every map in three frames, a chain included. The tolerance is `1e-13 (1 + d/u)`: the unbend's angle near the axis is conditioned by `d / u`.
+- Every box holds a 7^3 grid of mapped points, for each map and a chain, across the cut too.
+- Each image rule, both senses where a sense exists: the mapped points lie on the image within `1e-11` relative, by the image's own closed-form inversion. The image's normal there agrees with the source normal pushed forward, `J^-T n`. `Uv::Same` images give the mapped point at the same uv.
+- `NotExact` cases: `MeetsAxis`, `OutsideDomain`, `OnCut` and `NoRule`. Construction refusals.
+
+Costs, release build on the build server, throwaway timer, per point (map, inverse, box, Jacobian):
+- bend: 43 ns, 417 ns, 399 ns, 145 ns;
+- unbend: 388 ns, 42 ns, 420 ns, 50 ns;
+- twist: 33 ns, 34 ns, 413 ns, 107 ns;
+- a chain of a bend and two twists: 128 ns, 319 ns, 1.1 us, 771 ns.
+
+The correctly rounded `fmath::atan2` is about 350 ns of the unbend's map and the bend's inverse. Against the pin's 36 samples per exactness test and a guess and point solve per inversion, every row is less work (77 §9): an image is one predicate and an inverse one closed form.
+
+Deviations from 77 §5.2: `Polar` for `Ranged`; `image` takes `near`; `Image`'s shape (above); first derivatives, not jets. Not built: curve images (VM2) and DF1's `MeetsAxis` refusal of a body.
