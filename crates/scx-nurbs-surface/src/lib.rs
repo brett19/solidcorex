@@ -19,11 +19,15 @@
 //!
 //! - [`NurbsSurface::iso`], [`NurbsSurface::restrict`]: the exact iso-curve and the exact piece
 //!   over a box of parameters;
-//! - [`CompatibleSurfaces`]: surfaces sharing one knot vector and degree along an axis.
+//! - [`CompatibleSurfaces`]: surfaces sharing one knot vector and degree along an axis;
+//! - [`fit`]: tensor interpolation and least squares at given parameters (CN3);
+//! - [`NurbsSurface::bernstein_over`]: the Bernstein form of one polynomial piece, for the
+//!   certificates.
 //!
 //! The by-value edits (insertion, elevation, splitting, reversal, swapping, transformation)
 //! and the enclosures build on these types (research 63 §2.5 and §2.6, NS3 and NS4).
 
+mod bernstein;
 mod compatible;
 #[cfg(test)]
 mod construct_tests;
@@ -31,11 +35,16 @@ mod edit;
 mod enclose;
 mod error;
 mod eval;
+pub mod fit;
+#[cfg(test)]
+mod fit_tests;
+#[cfg(test)]
 pub mod iges;
 mod iso;
 mod net;
 mod surface;
 
+pub use bernstein::BernsteinForm;
 pub use compatible::CompatibleSurfaces;
 pub use enclose::About;
 pub use error::{EnclosureCause, NetCause, NurbsSurfaceError, RestrictCause, WeightCause};
@@ -58,4 +67,7 @@ const _: () = {
     ok::<About<3>>();
     ok::<CompatibleSurfaces<3>>();
     ok::<RestrictCause>();
+    ok::<BernsteinForm<3>>();
+    ok::<fit::SurfaceFitError>();
+    ok::<fit::Edge<3>>();
 };

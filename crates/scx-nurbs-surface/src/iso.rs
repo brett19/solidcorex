@@ -98,22 +98,9 @@ impl<const D: usize> NurbsSurface<D> {
         .map_err(|_| CURVE)
     }
 
-    /// The piece of the surface over the box `uv`, keeping the parameters: `S'(u, v) = S(u, v)`
-    /// on `uv`, and the domain of `S'` is `uv` (the pin's `extract_patch`, without its
-    /// tolerances). Each end of the box that is inside a domain is a split
-    /// ([`NurbsSurface::split`]); an end on the domain's end is no work, so a box that is the
-    /// domain returns a copy.
-    ///
-    /// The result has end knots of multiplicity `degree + 1` at every cut, and the knots of
-    /// the source in between; nothing is snapped, so a cut a hair from a knot leaves both.
-    ///
-    /// # Errors
-    ///
-    /// [`NurbsSurfaceError::Restrict`] over [`RestrictCause::Outside`] when the box is not
-    /// inside the domain, and [`RestrictCause::Empty`] when it has no width in a direction
-    /// (take [`NurbsSurface::iso`]); the splits' own errors ([`NurbsSurfaceError::Edit`]),
-    /// such as an unclamped end, as they come.
-    pub fn restrict(&self, uv: &Extent2d) -> Result<Self> {
+    /// Every refusal of [`NurbsSurface::restrict`] that needs no work: the box inside the
+    /// domain, and with an area.
+    pub(crate) fn check_box(&self, uv: &Extent2d) -> Result<()> {
         let ranges = [
             (ParamAxis::U, uv.x_min(), uv.x_max()),
             (ParamAxis::V, uv.y_min(), uv.y_max()),
@@ -135,6 +122,30 @@ impl<const D: usize> NurbsSurface<D> {
                 }));
             }
         }
+        Ok(())
+    }
+
+    /// The piece of the surface over the box `uv`, keeping the parameters: `S'(u, v) = S(u, v)`
+    /// on `uv`, and the domain of `S'` is `uv` (the pin's `extract_patch`, without its
+    /// tolerances). Each end of the box that is inside a domain is a split
+    /// ([`NurbsSurface::split`]); an end on the domain's end is no work, so a box that is the
+    /// domain returns a copy.
+    ///
+    /// The result has end knots of multiplicity `degree + 1` at every cut, and the knots of
+    /// the source in between; nothing is snapped, so a cut a hair from a knot leaves both.
+    ///
+    /// # Errors
+    ///
+    /// [`NurbsSurfaceError::Restrict`] over [`RestrictCause::Outside`] when the box is not
+    /// inside the domain, and [`RestrictCause::Empty`] when it has no width in a direction
+    /// (take [`NurbsSurface::iso`]); the splits' own errors ([`NurbsSurfaceError::Edit`]),
+    /// such as an unclamped end, as they come.
+    pub fn restrict(&self, uv: &Extent2d) -> Result<Self> {
+        self.check_box(uv)?;
+        let ranges = [
+            (ParamAxis::U, uv.x_min(), uv.x_max()),
+            (ParamAxis::V, uv.y_min(), uv.y_max()),
+        ];
         let mut piece = self.clone();
         for (axis, lo, hi) in ranges {
             let (a, b) = self.knot_vector(axis).ends();
