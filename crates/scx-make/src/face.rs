@@ -67,7 +67,7 @@ pub enum Bound {
 pub fn face(surface: &Surface, bound: &Bound, doc: &Document) -> Result<Made<FaceId>, MakeError> {
     let shape = Shape::of(surface)?;
     match bound {
-        Bound::Box(b) => in_box(surface, &shape, b, doc),
+        Bound::Box(b) => in_box(surface, &shape, b, *doc),
         Bound::Region(r) => {
             if let Surface::Plane(p) = surface {
                 let made = sheet(core::slice::from_ref(r), p.frame(), doc)?;
@@ -82,7 +82,7 @@ pub fn face(surface: &Surface, bound: &Bound, doc: &Document) -> Result<Made<Fac
                     faces: face,
                 });
             }
-            in_region(surface, &shape, r, doc)
+            in_region(surface, &shape, r, *doc)
         }
     }
 }
@@ -376,7 +376,7 @@ fn in_box(
     surface: &Surface,
     shape: &Shape,
     bx: &Extent2d,
-    doc: &Document,
+    doc: Document,
 ) -> Result<Made<FaceId>, MakeError> {
     let (ui, vi) = (bx.x_interval(), bx.y_interval());
     let (u0, v0, v1) = (ui.min(), vi.min(), vi.max());
@@ -408,7 +408,7 @@ fn in_box(
             surface.point(Point2::new(u, v))
         }
     };
-    let mut asm = Assembly::sheets(doc);
+    let mut asm = Assembly::sheets(&doc);
     // The corners, with the ones a period, a seam or a pole makes one made once.
     let c00 = asm.vertex(place(u0, v0, pole0))?;
     let c10 = if full_u || pole0 {
@@ -472,7 +472,7 @@ fn in_region(
     surface: &Surface,
     shape: &Shape,
     region: &Region,
-    doc: &Document,
+    doc: Document,
 ) -> Result<Made<FaceId>, MakeError> {
     check(core::slice::from_ref(region), doc.resolution())?;
     // The ends of every segment, to check the region against the surface before building.
@@ -504,7 +504,7 @@ fn in_region(
     {
         return Err(refused());
     }
-    let mut asm = Assembly::sheets(doc);
+    let mut asm = Assembly::sheets(&doc);
     let mut loops = Vec::with_capacity(1 + region.holes().len());
     for (l, _, _) in loops_of(region) {
         let segments = l.segments();

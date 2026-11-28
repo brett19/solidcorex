@@ -8,7 +8,7 @@
 //!
 //! Removed on purpose, from the pin's tests: those that read a face back through the
 //! pin's surface-kind recogniser or its topological queries (`scx-bodyq`'s, step 6), and
-//! those on NURBS faces (MK15b: iso-curve extraction is not built).
+//! those on NURBS faces (`MK15b`: iso-curve extraction is not built).
 
 #![allow(
     clippy::unwrap_used,
@@ -27,6 +27,7 @@ use scx_make::{Bound, MakeError, Refusal, Unsupported, face};
 use scx_mass::{MassSpec, RelAccuracy, mass};
 use scx_num::budget::{Budget, Stop};
 use scx_num::extent2d::Extent2d;
+use scx_num::fmath;
 use scx_num::frame::{Frame, Sense};
 use scx_num::units::Length;
 use scx_num::vector2d::Point2;
@@ -109,7 +110,7 @@ impl Kind {
         };
         let theta = |u: f64| {
             let p = at(u, v_ref);
-            p.y.atan2(p.x)
+            fmath::atan2(p.y, p.x)
         };
         let dtheta = swept(theta(u0), theta(u1), u1 - u0, self.period());
         let (du, dv) = (u1 - u0, v1 - v0);
@@ -117,14 +118,14 @@ impl Kind {
             Self::Plane => du * dv,
             Self::Cylinder(r) => r * dtheta * dv,
             Self::Cone(r, a) => {
-                let k = a.tan();
+                let k = fmath::tan(a);
                 dtheta * (1.0 + k * k).sqrt() * (r * dv + k * (v1 * v1 - v0 * v0) / 2.0)
             }
             Self::Sphere(r) => r * dtheta * (at(0.0, v1).z - at(0.0, v0).z),
             Self::Torus(r, s) => {
                 let psi = |v: f64| {
                     let p = at(0.0, v);
-                    p.z.atan2(p.x - r)
+                    fmath::atan2(p.z, p.x - r)
                 };
                 let dpsi = swept(psi(v0), psi(v1), dv, 1.0);
                 dtheta * s * (r * dpsi + at(0.0, v1).z - at(0.0, v0).z)
@@ -134,7 +135,7 @@ impl Kind {
 
     fn apex(self) -> f64 {
         match self {
-            Self::Cone(r, a) => -r / a.tan(),
+            Self::Cone(r, a) => -r / fmath::tan(a),
             _ => 0.0,
         }
     }
@@ -211,18 +212,18 @@ fn assert_exact_sheet(b: &Brep, expect_uv_area: Option<f64>) {
                 other => panic!("{other:?}"),
             }
         }
-        if let Some(want) = expect_uv_area {
-            if f.loops().count() == 1 {
-                let n = poly.len();
-                let signed: f64 = (0..n)
-                    .map(|i| {
-                        let (p, q) = (poly[i], poly[(i + 1) % n]);
-                        p.x * q.y - q.x * p.y
-                    })
-                    .sum::<f64>()
-                    / 2.0;
-                assert!(rel(signed, want) < 1e-9, "uv area {signed} vs {want}");
-            }
+        if let Some(want) = expect_uv_area
+            && f.loops().count() == 1
+        {
+            let n = poly.len();
+            let signed: f64 = (0..n)
+                .map(|i| {
+                    let (p, q) = (poly[i], poly[(i + 1) % n]);
+                    p.x * q.y - q.x * p.y
+                })
+                .sum::<f64>()
+                / 2.0;
+            assert!(rel(signed, want) < 1e-9, "uv area {signed} vs {want}");
         }
     }
 }
@@ -503,7 +504,7 @@ fn boxes_and_regions_off_the_surface_are_refused() {
     ));
 }
 
-/// A NURBS surface waits for iso-curve extraction (MK15b).
+/// A NURBS surface waits for iso-curve extraction (`MK15b`).
 #[test]
 fn a_nurbs_surface_is_unsupported_for_now() {
     let over = Extent2d::from_bounds(0.0, 0.0, 1.0, 1.0).unwrap();
