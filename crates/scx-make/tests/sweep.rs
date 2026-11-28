@@ -1,5 +1,5 @@
 // Written for solidcorex. Apache-2.0.
-//! `sweep` (research 75 MK7b): the pin's `sweep_stations.rs` law and rail tests (those MK7a's
+//! `sweep` (research 75 MK7b): the pin's `sweep_stations.rs` law and rail tests (those `MK7a`'s
 //! `frames.rs` left out on purpose) judged against closed forms, and the entry's answer.
 //!
 //! - a straight path with twist `T` and end scale `k` turns the profile by `T u` and scales
@@ -520,7 +520,7 @@ fn a_profile_normal_against_the_path_gives_the_same_placements() {
 
 /// A right-angle corner's mitre: the profile turned the eighth and stretched by `sqrt 2`
 /// along `t_1 - t_0`, the twist and scale at the corner's fraction (the pin's corner test's
-/// stretch half, which MK7a left to the sweep).
+/// stretch half, which `MK7a` left to the sweep).
 #[test]
 fn a_corner_s_mitre_is_stretched() {
     let bent = path(&[

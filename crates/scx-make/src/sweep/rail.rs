@@ -13,8 +13,9 @@
 //!   five roundings of `sum_j (x_ij - p_j w_i) t_j`, inflated by `1 + gamma_6` for the
 //!   bound's own) is 0: the control point lies in the plane to its rounding.
 //! - The rail's own ends lie in the plane when within the document's resolution of it (the
-//!   rule by which a path's pieces meet, MK7a; the pin's `1e-9 (1 + |P|)`): a rail drawn to
-//!   start on the path's first station reaches it however its end rounded.
+//!   rule by which a path's pieces meet in research 75's `MK7a`, in place of the pin's
+//!   relative `1e-9`): a rail drawn to start on the path's first station reaches it however
+//!   its end rounded.
 //! - A root at a knot is one value for both spans that share it (exact duplicates only).
 //! - A plane met other than exactly once, with the distance changing sign over the rail, is
 //!   refused by name ([`RailFault`]).
@@ -260,7 +261,14 @@ fn point_at(hom: &[[f64; 4]], s: f64) -> Option<Point3> {
             let (Some(&a), Some(&b)) = (work.get(i), work.get(i + 1)) else {
                 return None;
             };
-            let mixed = core::array::from_fn(|k| a[k] + (b[k] - a[k]) * s);
+            let [ax, ay, az, aw] = a;
+            let [bx, by, bz, bw] = b;
+            let mixed = [
+                ax + (bx - ax) * s,
+                ay + (by - ay) * s,
+                az + (bz - az) * s,
+                aw + (bw - aw) * s,
+            ];
             *work.get_mut(i)? = mixed;
         }
     }
