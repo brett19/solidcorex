@@ -48,7 +48,7 @@ use scx_num::budget::{Budget, Stop};
 use scx_num::extent1d::Extent1d;
 use scx_num::extent3d::Extent3d;
 use scx_num::units::Length;
-use scx_num::vector3d::{Point3, Vec3};
+use scx_num::vector3d::Point3;
 use scx_surface::{NotNear, Plane, Surface, plane_bound};
 
 use crate::error::{StitchDefect, StitchError, StitchRefusal};
@@ -367,7 +367,6 @@ fn plane_against(
     let bx = face_box(body, f, boxes).ok_or(NotOneSurface::NoBox)?;
     // A crease between faces that are not near parallel is no near miss: not reported.
     let dev = plane_bound(&a, b, &bx).map_err(|e| match e {
-        NotNear::Crease => NotOneSurface::Kind,
         NotNear::Opposite => NotOneSurface::Opposite,
         _ => NotOneSurface::Kind,
     })?;

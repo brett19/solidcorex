@@ -32,7 +32,7 @@ fn solid(kind: Kind, seed: u64, n: usize) -> Brep {
 }
 
 fn ids(b: &Brep) -> Vec<FaceId> {
-    b.faces().map(|f| f.id()).collect()
+    b.faces().map(scx_brep::Face::id).collect()
 }
 
 fn grow(b: &Brep, seeds: &[FaceId], keep: &[EdgeId]) -> (OneSurface, u64) {
@@ -108,7 +108,10 @@ fn seeds_come_first_and_are_not_repeated() {
     );
     assert_eq!(two.faces.len(), 4);
     // The same call twice is the same answer and the same work.
-    assert_eq!(grow(&b, &[other, all[5]], &[]), grow(&b, &[other, all[5]], &[]));
+    assert_eq!(
+        grow(&b, &[other, all[5]], &[]),
+        grow(&b, &[other, all[5]], &[])
+    );
     // No seed, no growth.
     assert_eq!(grow(&b, &[], &[]).0, OneSurface::default());
 }
@@ -143,7 +146,7 @@ fn a_cylinder_split_into_faces_grows_to_its_wall() {
         let walls: Vec<FaceId> = b
             .faces()
             .filter(|f| matches!(f.surface(), Surface::Cylinder(_)))
-            .map(|f| f.id())
+            .map(scx_brep::Face::id)
             .collect();
         assert_eq!(walls.len(), n);
         let (r, _) = grow(&b, &[walls[0]], &[]);
@@ -172,7 +175,7 @@ fn a_cylinder_on_another_frame_is_not_proved() {
     let walls: Vec<FaceId> = b
         .faces()
         .filter(|f| matches!(f.surface(), Surface::Cylinder(_)))
-        .map(|f| f.id())
+        .map(scx_brep::Face::id)
         .collect();
     let Surface::Cylinder(c) = b.face(walls[1]).unwrap().surface().clone() else {
         panic!()
@@ -283,8 +286,8 @@ fn an_edge_of_three_faces_is_not_crossed() {
 fn a_seed_the_body_does_not_hold_is_refused() {
     let b = solid(Kind::Block, 0, 1);
     let gone = FaceId::from_raw(999);
-    let err = faces_on_one_surface(&b, &[gone], &[], &mut Budget::unlimited(), &Stop::new())
-        .unwrap_err();
+    let err =
+        faces_on_one_surface(&b, &[gone], &[], &mut Budget::unlimited(), &Stop::new()).unwrap_err();
     assert_eq!(
         err,
         BodyqError::Refused(BodyqRefusal::NoEntity {
