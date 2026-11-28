@@ -33,7 +33,7 @@ use scx_num::cert::{Basis, Recorded};
 use scx_num::units::{Accuracy, Length};
 use scx_num::vector3d::Point3;
 
-use crate::boolean::{NoItems, interfere};
+use crate::boolean::{Interference, NoItems, interfere};
 use crate::contact::On;
 use crate::error::{BooleanDefect, BooleanError, BooleanRefusal};
 use crate::faceface::{FaceFace, face_face};
@@ -63,9 +63,20 @@ pub fn intersect(a: &Brep, b: &Brep, cx: &mut Cx<'_>) -> Result<Done<NoItems>, B
     let ops = Operands { a, b };
     let found = interfere(ops, &mut budget, cx.stop)?;
     let ff = face_face(ops, &found, &mut budget, cx.stop)?;
+    let (body, changes) = wire(ops, &found, &ff, *cx.doc)?;
+    Ok(Done::new(body, changes, Report::empty(budget.used())))
+}
+
+/// The wire body of stage 4's answer `ff` over `found`, of `doc` ([`intersect`]'s body).
+pub(crate) fn wire(
+    ops: Operands<'_>,
+    found: &Interference,
+    ff: &FaceFace,
+    doc: scx_brep::Document,
+) -> Result<(Brep, scx_brep::Changes), BooleanError> {
     let mut w = Wire {
         ops,
-        zone: res.zone().mm(),
+        zone: doc.resolution().zone().mm(),
         draft: Draft::new(),
         points: &found.points,
         at: BTreeMap::new(),
@@ -73,9 +84,8 @@ pub fn intersect(a: &Brep, b: &Brep, cx: &mut Cx<'_>) -> Result<Done<NoItems>, B
         edges: Vec::new(),
         lone: Vec::new(),
     };
-    w.write(&ff)?;
-    let (body, changes) = w.finish(*cx.doc)?;
-    Ok(Done::new(body, changes, Report::empty(budget.used())))
+    w.write(ff)?;
+    w.finish(doc)
 }
 
 fn draft_defect<E>(_: E) -> BooleanError {
