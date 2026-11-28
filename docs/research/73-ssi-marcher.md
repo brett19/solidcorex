@@ -2272,3 +2272,225 @@ closes it; 18.5's candidates (Bernstein-form jets, a cheaper first split) remain
 - **The pre-pass on unbounded cones** (decision 4): halving the candidate pairs once before
   the pre-pass would catch `y23_t6_ex1`'s valley first; not done, since it changes the plans'
   pairs for every case.
+
+## 23. SM7 as built (11-28)
+
+SM7 builds the march (row SM7, §4.5): `general::intersect` on a NURBS pair that the field path
+does not take now traces the survey's plans into branches, nodes and certificates.
+`SsiError::Untraced` now names only SM6b's order-2 valleys (§22), which the march does not
+trace.
+
+### 23.1 What exists
+
+- **`general/march.rs`, `march(surfaces, extents, seeds, nodes, tol, res, swap, budget,
+  stop) -> Result<Marched, SsiError>`** (`pub(crate)`; module docs hold the method).
+  - **The step.** The predictor moves along `T = n_A x n_B`. The corrector is Newton on the
+    four unknowns, with `S_A - S_B = 0` and a plane across the step at `x + h T`, or with one
+    coordinate fixed on the extent's edge where the prediction leaves it. It is converged at a
+    quarter of the coincidence times `sin(n_A, n_B)` (the conditioning bound) and must contract
+    after its first two iterations. There is no fixed iteration count.
+  - **Step control.** `h` is the least of the turn bound (`h kappa <= 0.06`), the chord
+    deviation (`kappa h^2 / 8 <= tol`), a tenth of the extents' size, and twice the last step.
+    `kappa` comes from both surfaces' normal curvatures, in a form stable as `n_A . n_B < 0`.
+    A step is halved when the corrector fails, when it travels outside `[h/4, 2h]`, or when the
+    tangent turns by more than 0.12. Below the resolution the march is `Stalled` there.
+  - **Linking by identity.** Each chord takes the seeds within `4 tol` of it whose uv lies in
+    the chord's uv box. The box is widened by its own size and by half the chord's uv length,
+    for the case where a coordinate turns between the ends. An arc ends:
+    - at a rim seed (its exit step is solved on the edge);
+    - at a periodic seam (a `Seam` node; the march goes on from the other side);
+    - at a crossing node within two steps ahead;
+    - at its start seed (a loop).
+  - **The order.** First the four null directions of the relative form at each `Node`
+    critical, node by node. Then each unused rim seed, inward. Then each seed left: forward,
+    and if that does not close, backward too, joined. A used seed met again is a curve traced
+    twice, which is `Stalled`, never a duplicate branch.
+  - **`Stalled` sites.**
+    - no state or frame at a seed or node;
+    - the node slot an arc arrives by is already used;
+    - a step below the resolution;
+    - an exit with no rim seed at it;
+    - a used seed met again;
+    - an edge tangent to the curve.
+
+    `at` names the point and `step` the last `h`.
+  - **The answer.** Branches are degree 1 on chord length, with pcurves on the same knots.
+    Each is oriented along `n_A x n_B` at its middle chord, and vertices within the
+    resolution are merged.
+  - **Certificates.**
+    - `on_surface`: residual + `h_L1^2 d2 / 8`, with `d2` the second partials bounded over
+      each 64-vertex run's uv hull.
+    - `to_intersection`: the most of `gap / sin` (or, at a crossing node, `sqrt(2 gap /
+      |lambda|)`, with `lambda` the relative form's least eigenvalue) plus the span's sag:
+      a quarter of the chord times the turn between its end tangents. An arc's vertex at a
+      node takes the node's null direction as its tangent.
+  - **Operand order.** `intersect` puts the pair in a canonical order by the bits of
+    their extents and points (`key`). The march runs on that order and swaps the answer back
+    when needed: points reversed, knots mirrored, pcurves and `Rim` swapped. The same bits come
+    out either way round.
+- **`general/mod.rs`.** After `field::trace` declines a pair, `intersect` gathers the plans'
+    seeds, kept once by `Seed::same_as`, together with the seeds on each critical's ray. It
+    then gathers the `Node` criticals and the touches. A `Singular` contact is still refused
+    at the least point. With no seed and no node, the answer is the touches alone.
+- **`error.rs`.** `Untraced` stays for SM6b's order-2 valleys only, with its doc and message
+  reworded ("a tangential contact at ... is not traced"). Seeds and nodes now go to the march.
+
+### 23.2 Decisions, for and against
+
+1. **One march over all pairs, with seeds consumed by proximity, not linking per pair.**
+   - For: a curve crossing many pieces is one branch, with no stitching across pair edges, and
+     a curve met twice is caught as an error, not emitted twice.
+   - Against: matching runs over the seeds, not the pairs, and it misses a seed that lies off
+     its chord's uv box. That was a bug at a coordinate's turning point, fixed by the widened
+     box (decision 6).
+   - Change if: a seed lies within `4 tol` of a chord on another branch. That is two
+     branches closer than the coincidence, a contact the survey should have named.
+2. **The certificate is an estimate, not a proof.** First-order distance plus sag from the
+   tangents, and the surfaces' second partials over hulls.
+   - For: it is cheap, it is sound on every closed form and corpus case scored, and SM8
+     refits and proves per span (Krawczyk).
+   - Against: it is not a proof. Beside a tangential crossing it was unsound until
+     decision 5.
+   - Change if: SM8 lands, when SM8's bound replaces it.
+3. **`Untraced` is kept, narrowed to order-2 valleys.** An earlier version of this branch
+   removed it, because nothing returned it once seeds and nodes were marched. SM6b (§22) then
+   landed on main and refuses an order-2 valley with it, for SM7.
+   - For keeping the refusal: along a curve of tangential contact the normals agree. The
+     corrector's conditioning `sin(n_A, n_B)` is zero there, so this march cannot trace it.
+     Answering without that curve would be wrong.
+   - Against: a valley stays refused.
+   - Change if: a march along tangential contact is built, stepping on the valley's own
+     equations (the gap's gradient), not on `n_A x n_B`.
+4. **Canonical operand order.** For: the same bits under swap by construction, not by a
+   symmetric algorithm. Against: one comparison of 15 `u64` per call, and an answer flipped
+   back when needed.
+5. **The sag is the tangent triangle's, a quarter of chord times turn, not a circle's
+   eighth. A node's arc vertices take the node's null directions as tangents.**
+   - On `y23_t2_ex3` (four tangential double points), 3 of 10 certificates claimed below the
+     observed distance: 2.1e-6 to 3.0e-6 against 3.0e-6 to 3.7e-6. Each worst sample lay
+     mid-span on the span leaving or reaching a node. Its ends were on the truth to 1e-8.
+     - Two causes. First, the arriving arc's node vertex took the previous vertex's tangent,
+       so that span's turn read as zero. Second, beside a tangential crossing the branch's
+       curvature changes along a span, where the circle's `L turn / 8` is exceeded.
+     - A convex arc lies in the triangle of its chord and end tangents, whose height is at
+       most `L turn / 4`. All 10 certificates now hold.
+   - A first attempt bounded the node vertex by `sqrt(2 gap / |lambda|)` with the survey's
+     enclosure gap (about 3e-11). It passed only by that gap's looseness, because the
+     nodes are exact crossings (point gap about 1e-16). It also failed the Steinmetz
+     closed form's `1e-8`. The term stays, on the state's point gap less its rounding, for
+     crossings with a real gap.
+   - Against: the sag claim doubles everywhere, still within the closed forms' `1e-8` at a
+     coincidence of `1e-9`.
+   - Change if: SM8 proves the spans.
+6. **The chord's uv box is widened by half the chord's uv length.** Where a coordinate turns
+   along the curve (a circle's least `x` on a plane), both ends of a chord lie on one side of
+   the seed between them by the chord's sag. That is more than the box's margin once the
+   coincidence is coarse (`1e-7` and up). The seed was missed, marched again, and met as
+   used: `Stalled` on `c1n_torusN_planeN_nested`.
+   - For: the widening is bounded by the chord's own uv size, so it stays local.
+   - Against: a looser box admits a seed of another sheet only if it is also within `4 tol`
+     in 3-D (decision 1).
+7. **Density is set by the chord deviation at the coincidence.** This is §4.5 as designed: a
+   polyline within `tol` of the curve, refitted by SM8. The cost is the vertex count, which
+   goes as `1/sqrt(tol)` (23.4).
+
+### 23.3 Tests
+
+New, in `tests/march.rs`, against SM0's closed forms on the NURBS images:
+
+- `every_branch_is_on_the_truth_and_covers_it`: Hausdorff within `1e-8` both ways, pcurve
+  points within their claim (at most `1e-6`), and `to_intersection` at most `1e-8`. The
+  cases are tiny loops at `delta` 0.5 and 1e-3, two spheres, and cylinders (1, 2, 0.3),
+  (1, 2, 1.6) and (1.5, 1.5, 0).
+- `each_closed_curve_is_one_branch`
+- `crossing_branches_meet_at_their_nodes`: Steinmetz, with 2 crossings, each the end of
+  4 arcs.
+- `the_answer_is_the_same_bits_every_run_under_any_budget_and_either_way_round`: the exact
+  budget passes, one unit short is `Budget`, and the swap reverses points, mirrors knots and
+  swaps pcurves.
+- Only the accuracy test and the crossing test run at a coincidence of `1e-9`. The other
+  march tests run at `1e-6`, because they march each case up to five times and the vertex
+  count goes as `1/sqrt(tol)`.
+- `the_budget_and_the_stop_end_the_march`
+- `seeds_where_a_coordinate_turns_are_met`: torus and plane at three heights and three
+  coincidences. Each circle is traced once, within the coincidence of its closed form. It
+  fails before decision 6 with `Stalled`.
+
+Changed:
+
+- `general/tests.rs`:
+  - `refused_pairs` became `marched_pairs`.
+  - `a_general_pair_is_refused_by_name_where_it_lies` became
+    `a_general_pair_is_marched_onto_its_curve`. It proved the refusal named a point on the
+    curve; now the points lie within 1e-8 of both closed forms.
+  - `closed_forms_answer_first_and_spend_nothing` now expects `Traced` equal to the direct
+    run.
+  - `the_answer_is_the_same_bits...` compares point bits.
+  - `swapping_the_operands_names_the_same_place` became
+    `swapping_the_operands_gives_the_same_points`, with reversed points equal.
+  - New: `a_march_that_meets_no_seed_at_the_rim_is_stalled_there`, two planes.
+- The `Untraced` row of `every_cause_has_a_kind_a_name_and_a_line` takes the new message.
+- `general/tests/apart.rs`: the `Err(Untraced)` arm became `Ok`, with points inside the
+  shared box.
+- `tests/survey.rs`: `contacts_are_classified_and_refused_or_answered_by_kind` became
+  `..._and_answered_by_kind`. The Steinmetz pair in NURBS form now answers 2 crossing
+  nodes, where it was `ssi_untraced`.
+
+The guard for decision 5 is the corpus case `y23_t2_ex3_loop_two_curves`: no closed form
+has a tangential crossing.
+
+### 23.4 Measured (release, throwaway timer and counters, not committed)
+
+Corpus (SM10, release, against main with SM6b):
+
+| | pass | refused | failed | total time |
+| --- | --- | --- | --- | --- |
+| main | 58 | 49 (`ssi_singular` 5, `ssi_unresolved` 38, `ssi_untraced` 6) | 6 | 12.7 s |
+| `sm7` | 63 | 44 (`ssi_singular` 5, `ssi_unresolved` 38, `ssi_untraced` 1) | 6 | 11.3 s |
+
+All five `ssi_untraced` cases now pass: `c1n_parab_parab_circle`,
+`c1n_sphereN_cylN_two_loops`, `c1n_torusN_planeN_nested`, `y23_t2_ex3_loop_two_curves` and
+`y23_t2_ex6_loop_and_point`. No other verdict changed, and no certificate fails. The one
+`ssi_untraced` left, `c2n_cylN_on_planeN`, is an order-2 valley (SM6b), which the march does
+not trace. The time is not deterministic. `y23_t2_ex3` is the slowest case at 6.4 s, for
+10 branches; main spends 7.6 s refusing it.
+
+Per pair, NURBS against NURBS at a coincidence of `1e-9`, `intersect` end to end. The pin's
+figures are SM5's (18.4: the pin's whole intersection, `strip` off and on). Units are
+budget units (survey: one per box or solve; march: one per step tried):
+
+| case | pin, `strip` off / on | `sm7` | units (survey + march) | vertices |
+| --- | --- | --- | --- | --- |
+| sphere and sphere | 0.71 / 1.05 ms | 3.11 s | 202,637 (80,493 + 122,144) | 85,887 |
+| tiny loop, `delta` 0.5 | 0.21 / 0.63 ms | 194 ms | 91,750 (1,286 + 90,464) | 90,489 |
+| tiny loop, `delta` 1e-3 | 0.12 / 0.46 ms | 53 ms | 20,582 (1,031 + 19,551) | 19,552 |
+| cylinders 1, 2, offset 0.3 | 0.41 / 0.50 ms | 320 ms | 148,220 (2,416 + 145,804) | 145,828 |
+| cylinders 1, 2, offset 1.6 | | 265 ms | 122,488 (2,437 + 120,051) | 120,076 |
+| Steinmetz 1.5, 1.5 | | 462 ms | 193,903 (7,271 + 186,632) | 186,642 |
+
+- **The march takes about one step per vertex.** Rejections are under 1%. A step costs
+  about 2 µs: two jets of order 2 and the Newton solve.
+- **The gap to the pin is the vertex count.** The chord deviation at `tol = 1e-9` sets
+  `h ~ sqrt(8 tol / kappa)`, about 1e-4 on unit curvature, so 1e4 to 1e5 vertices per
+  branch. The pin's march samples coarsely and refits.
+- **This is not fixed here.** Fewer vertices need a fitted output whose error is bounded
+  between the vertices. That is SM8's Hermite refit: its deviation goes as `h^4`, so
+  `h ~ (384 tol / kappa^3)^(1/4)`, about 0.014, about 100 times fewer steps. Until then the
+  answer's claim is a polyline within the coincidence.
+- It is named as the follow-up: step by SM8's span bound once SM8 lands.
+- For comparison, main's field path (SM6a) answers the analytic forms of these pairs in 0.6
+  to 4.0 s and 150k to 1.5M units. The march is within that or below.
+
+### 23.5 Open
+
+- **Vertex density** (23.4): step by the Hermite span bound with SM8.
+- **The certificate** (decision 2): SM8's per-span proof replaces the estimate. The pcurve
+  bound is loose, up to `1e-6` where the points are within `1e-8`, because it takes the L1
+  step and the hull's second partials.
+- **Order-2 valleys** (decision 3) are refused `Untraced`: a march along tangential contact.
+- **A curve along an extent's edge** (a tube circle on a torus's `u = 0` line) is refused by
+  the survey (`Unresolved`), before the march.
+- **Debug-build test time.** The accuracy test and the bits test still take 2.5 and
+  3.7 minutes in debug, the workspace's slowest, from the vertex count above and the survey
+  run five times per case. They are well within `cargo xtask fast`, and SM8's coarser steps
+  cut both.

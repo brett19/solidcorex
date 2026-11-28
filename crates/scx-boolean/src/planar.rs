@@ -127,7 +127,7 @@ fn reference(a: &Brep, b: &Brep) -> Option<Frame> {
 }
 
 /// `p` in the frame's plane: its coordinates and its height above.
-fn local(frame: &Frame, p: Point3) -> (Point2, f64) {
+pub(crate) fn local(frame: &Frame, p: Point3) -> (Point2, f64) {
     let d = p - frame.origin();
     (
         Point2::new(d.dot(*frame.x()), d.dot(*frame.y())),
@@ -141,84 +141,98 @@ fn read(
     frame: &Frame,
     res: Resolution,
 ) -> Result<Vec<Piece>, BooleanError> {
-    let zone = res.zone().mm();
     let mut out = Vec::new();
     for face in body.faces() {
-        let off = |at| {
-            BooleanError::Refused(BooleanRefusal::NotCoplanarSheet {
-                operand: side.operand(),
-                face: at,
-            })
-        };
-        let id = face.id();
-        if !matches!(face.surface(), Surface::Plane(_)) {
-            return Err(off(id));
-        }
-        let mut loops: Vec<Vec<Segment>> = Vec::new();
-        for lp in face.loops() {
-            let mut segs = Vec::with_capacity(lp.len());
-            for u in lp.uses() {
-                let (s, h) = local(frame, u.start().point());
-                let (e, he) = local(frame, u.end().point());
-                if h.abs() > zone || he.abs() > zone {
-                    return Err(off(id));
-                }
-                let unsupported = |edge| {
-                    BooleanError::Unsupported(BooleanUnsupported::PlanarEdge {
-                        operand: side.operand(),
-                        edge,
-                    })
-                };
-                let edge = u.edge();
-                let EdgeShape::Curve { curve, interval } = edge.shape() else {
-                    return Err(unsupported(edge.id()));
-                };
-                match curve {
-                    Curve::Line(_) => segs.push(Segment::line(s, e)),
-                    Curve::Circle(c) => {
-                        let f = c.frame();
-                        let r = c.radius().mm();
-                        let (centre, hc) = local(frame, f.origin());
-                        let (px, hx) = local(frame, f.origin() + *f.x() * r);
-                        let (_, hy) = local(frame, f.origin() + *f.y() * r);
-                        if hc.abs() > zone || hx.abs() > zone || hy.abs() > zone {
-                            return Err(off(id));
-                        }
-                        let _ = px;
-                        // Counter-clockwise about the reference z along the use.
-                        let flips = [
-                            c.sense() == Sense::Reversed,
-                            u.sense() == Sense::Reversed,
-                            f.z().dot(*frame.z()) < 0.0,
-                        ];
-                        let ccw = flips.into_iter().filter(|&b| b).count() % 2 == 0;
-                        let sense = if ccw { Sense::Forward } else { Sense::Reversed };
-                        let [e0, e1] = edge.ends();
-                        let whole = e0 == e1 && interval.max() - interval.min() > TAU - 1e-9;
-                        segs.push(if whole {
-                            Segment::circle(centre, r, sense)
-                        } else {
-                            Segment::arc(centre, s, e, sense)
-                        });
-                    }
-                    _ => return Err(unsupported(edge.id())),
-                }
-            }
-            loops.push(segs);
-        }
-        let mut it = loops.into_iter();
-        let Some(outer) = it.next() else {
-            return Err(off(id));
-        };
-        let region = Region::new(outer, it.collect(), res).map_err(|_| {
-            BooleanError::Refused(BooleanRefusal::BadProfile {
-                operand: side.operand(),
-                face: id,
-            })
-        })?;
-        out.push(Piece { face: id, region });
+        let region = face_region(face, side, frame, res)?;
+        out.push(Piece {
+            face: face.id(),
+            region,
+        });
     }
     Ok(out)
+}
+
+/// `face` of `side` as a region of the plane `frame`: each loop's uses as lines and
+/// circular arcs, each in the plane within the zone.
+pub(crate) fn face_region(
+    face: scx_brep::Face<'_>,
+    side: Side,
+    frame: &Frame,
+    res: Resolution,
+) -> Result<Region, BooleanError> {
+    let zone = res.zone().mm();
+    let id = face.id();
+    let off = |at| {
+        BooleanError::Refused(BooleanRefusal::NotCoplanarSheet {
+            operand: side.operand(),
+            face: at,
+        })
+    };
+    if !matches!(face.surface(), Surface::Plane(_)) {
+        return Err(off(id));
+    }
+    let mut loops: Vec<Vec<Segment>> = Vec::new();
+    for lp in face.loops() {
+        let mut segs = Vec::with_capacity(lp.len());
+        for u in lp.uses() {
+            let (s, h) = local(frame, u.start().point());
+            let (e, he) = local(frame, u.end().point());
+            if h.abs() > zone || he.abs() > zone {
+                return Err(off(id));
+            }
+            let unsupported = |edge| {
+                BooleanError::Unsupported(BooleanUnsupported::PlanarEdge {
+                    operand: side.operand(),
+                    edge,
+                })
+            };
+            let edge = u.edge();
+            let EdgeShape::Curve { curve, interval } = edge.shape() else {
+                return Err(unsupported(edge.id()));
+            };
+            match curve {
+                Curve::Line(_) => segs.push(Segment::line(s, e)),
+                Curve::Circle(c) => {
+                    let f = c.frame();
+                    let r = c.radius().mm();
+                    let (centre, hc) = local(frame, f.origin());
+                    let (px, hx) = local(frame, f.origin() + *f.x() * r);
+                    let (_, hy) = local(frame, f.origin() + *f.y() * r);
+                    if hc.abs() > zone || hx.abs() > zone || hy.abs() > zone {
+                        return Err(off(id));
+                    }
+                    let _ = px;
+                    // Counter-clockwise about the reference z along the use.
+                    let flips = [
+                        c.sense() == Sense::Reversed,
+                        u.sense() == Sense::Reversed,
+                        f.z().dot(*frame.z()) < 0.0,
+                    ];
+                    let ccw = flips.into_iter().filter(|&b| b).count() % 2 == 0;
+                    let sense = if ccw { Sense::Forward } else { Sense::Reversed };
+                    let [e0, e1] = edge.ends();
+                    let whole = e0 == e1 && interval.max() - interval.min() > TAU - 1e-9;
+                    segs.push(if whole {
+                        Segment::circle(centre, r, sense)
+                    } else {
+                        Segment::arc(centre, s, e, sense)
+                    });
+                }
+                _ => return Err(unsupported(edge.id())),
+            }
+        }
+        loops.push(segs);
+    }
+    let mut it = loops.into_iter();
+    let Some(outer) = it.next() else {
+        return Err(off(id));
+    };
+    Region::new(outer, it.collect(), res).map_err(|_| {
+        BooleanError::Refused(BooleanRefusal::BadProfile {
+            operand: side.operand(),
+            face: id,
+        })
+    })
 }
 
 // ---------------------------------------------------------------------------------------
@@ -260,20 +274,20 @@ fn merge_faces(into: &mut Pair<Vec<usize>>, from: &Pair<Vec<usize>>) {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum Geo {
+pub(crate) enum Geo {
     Line,
     Arc { c: Point2, r: f64, ccw: bool },
 }
 
 /// A box by its corners.
 #[derive(Debug, Clone, Copy)]
-struct Bbox {
-    lo: Point2,
-    hi: Point2,
+pub(crate) struct Bbox {
+    pub(crate) lo: Point2,
+    pub(crate) hi: Point2,
 }
 
 impl Bbox {
-    fn of(points: &[Point2]) -> Self {
+    pub(crate) fn of(points: &[Point2]) -> Self {
         let fold = |f: fn(f64, f64) -> f64, get: fn(&Point2) -> f64| {
             points.iter().map(get).reduce(f).unwrap_or(0.0)
         };
@@ -283,7 +297,7 @@ impl Bbox {
         }
     }
 
-    fn apart(&self, o: &Self, pad: f64) -> bool {
+    pub(crate) fn apart(&self, o: &Self, pad: f64) -> bool {
         self.lo.x > o.hi.x + pad
             || o.lo.x > self.hi.x + pad
             || self.lo.y > o.hi.y + pad
@@ -291,22 +305,22 @@ impl Bbox {
     }
 }
 
-struct Atom {
-    side: Side,
-    face: usize,
-    geo: Geo,
-    a: Point2,
-    b: Point2,
-    conic: Conic,
-    bbox: Bbox,
+pub(crate) struct Atom {
+    pub(crate) side: Side,
+    pub(crate) face: usize,
+    pub(crate) geo: Geo,
+    pub(crate) a: Point2,
+    pub(crate) b: Point2,
+    pub(crate) conic: Conic,
+    pub(crate) bbox: Bbox,
 }
 
-fn dist(p: Point2, q: Point2) -> f64 {
+pub(crate) fn dist(p: Point2, q: Point2) -> f64 {
     let (dx, dy) = (p.x - q.x, p.y - q.y);
     (dx * dx + dy * dy).sqrt()
 }
 
-fn angle(c: Point2, p: Point2) -> f64 {
+pub(crate) fn angle(c: Point2, p: Point2) -> f64 {
     fmath::atan2(p.y - c.y, p.x - c.x)
 }
 
@@ -335,7 +349,7 @@ fn atoms(sides: &Pair<Vec<Piece>>) -> Vec<Atom> {
     out
 }
 
-fn split(seg: Segment, side: Side, face: usize, out: &mut Vec<Atom>) {
+pub(crate) fn split(seg: Segment, side: Side, face: usize, out: &mut Vec<Atom>) {
     let piece = |geo: Geo, a: Point2, b: Point2, sweep: f64| {
         let (conic, bbox) = match geo {
             Geo::Line => (Conic::Line { start: a, end: b }, Bbox::of(&[a, b])),
@@ -432,7 +446,7 @@ struct Cuts {
 }
 
 /// A conic's point at `t` (rational Bezier).
-fn eval(c: &Conic, t: f64) -> Point2 {
+pub(crate) fn eval(c: &Conic, t: f64) -> Point2 {
     match *c {
         Conic::Line { start, end } => Point2::new(
             start.x + (end.x - start.x) * t,
@@ -465,7 +479,7 @@ fn start_of(c: &Conic) -> Point2 {
 /// The meet `at` of two atoms moved onto both curves: the crossing nearest it, from the
 /// closed forms of two lines, a line and a circle, or two circles. A touch, which has no
 /// two roots, keeps the point the certified isolation gave.
-fn polish(p: &Atom, q: &Atom, at: Point2) -> Point2 {
+pub(crate) fn polish(p: &Atom, q: &Atom, at: Point2) -> Point2 {
     let roots: Vec<Point2> = match (p.geo, q.geo) {
         (Geo::Line, Geo::Line) => {
             let (d, e) = (
