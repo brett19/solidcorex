@@ -22,10 +22,13 @@ use crate::error::{Defect, MakeError};
 pub(crate) struct Assembly<'d> {
     draft: Draft,
     doc: &'d Document,
-    /// The shell of the outside region: the front of every face.
+    /// The shell of the outside region: the front of a face by default.
     outside: ShellId,
-    /// The shell of the solid region: the back of every face.
+    /// The shell of the solid region: the back of a face by default (the outside's again
+    /// for a sheet).
     solid: ShellId,
+    /// The solid region (the outside for a sheet).
+    region: RegionId,
     /// The straight edges made so far, by their ends in id order.
     lines: BTreeMap<(VertexId, VertexId), EdgeId>,
 }
@@ -42,8 +45,43 @@ impl<'d> Assembly<'d> {
             doc,
             outside,
             solid,
+            region,
             lines: BTreeMap::new(),
         })
+    }
+
+    /// An empty draft of a sheet: the outside's shell is both sides of every face.
+    pub(crate) fn sheet(doc: &'d Document) -> Result<Self, MakeError> {
+        let mut draft = Draft::new();
+        let outside = draft.add_shell(ShellRecord::new(RegionId::OUTSIDE))?;
+        Ok(Self {
+            draft,
+            doc,
+            outside,
+            solid: outside,
+            region: RegionId::OUTSIDE,
+            lines: BTreeMap::new(),
+        })
+    }
+
+    /// The shells either side of a new hollow: for a solid, a void region's shell and a
+    /// new shell of the solid round it; for a sheet, a new shell of the outside on both
+    /// sides (another piece of the sheet).
+    pub(crate) fn hollow(&mut self) -> Result<[ShellId; 2], MakeError> {
+        if self.solid == self.outside {
+            let s = self.draft.add_shell(ShellRecord::new(RegionId::OUTSIDE))?;
+            return Ok([s, s]);
+        }
+        let void = self.draft.add_region(false)?;
+        let front = self.draft.add_shell(ShellRecord::new(void))?;
+        let back = self.draft.add_shell(ShellRecord::new(self.region))?;
+        Ok([front, back])
+    }
+
+    /// The shells either side of a face by default: the outside's in front, the solid's
+    /// behind.
+    pub(crate) const fn sides(&self) -> [ShellId; 2] {
+        [self.outside, self.solid]
     }
 
     pub(crate) fn vertex(&mut self, p: Point3) -> Result<VertexId, MakeError> {
@@ -109,12 +147,20 @@ impl<'d> Assembly<'d> {
         surface: Surface,
         loops: &[Vec<(EdgeId, Sense)>],
     ) -> Result<FaceId, MakeError> {
+        self.face_between(surface, loops, self.sides())
+    }
+
+    /// [`Self::face`] between the shells `sides`, front then back.
+    pub(crate) fn face_between(
+        &mut self,
+        surface: Surface,
+        loops: &[Vec<(EdgeId, Sense)>],
+        sides: [ShellId; 2],
+    ) -> Result<FaceId, MakeError> {
         let records = self.draft.exact_loops(&surface, loops, self.doc)?;
-        Ok(self.draft.add_face(FaceRecord::new(
-            surface,
-            [self.outside, self.solid],
-            records,
-        ))?)
+        Ok(self
+            .draft
+            .add_face(FaceRecord::new(surface, sides, records))?)
     }
 
     /// Checks the draft and finishes it. A refusal is the constructor's own defect.

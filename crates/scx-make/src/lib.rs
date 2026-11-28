@@ -32,6 +32,7 @@ mod cone;
 mod cylinder;
 mod error;
 mod extrude;
+mod revolve;
 mod sphere;
 mod torus;
 
@@ -40,6 +41,7 @@ pub use cone::{ConeFaces, cone};
 pub use cylinder::{CylinderFaces, cylinder};
 pub use error::{Defect, Dimension, MakeError, Refusal, Unsupported};
 pub use extrude::{ExtrudeFaces, Span, extrude};
+pub use revolve::{RevolveFaces, RevolveSheetFaces, Turn, Wall, revolve, revolve_sheet};
 pub use sphere::{SphereFaces, sphere};
 pub use torus::{TorusFaces, torus};
 

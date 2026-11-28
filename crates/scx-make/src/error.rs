@@ -97,6 +97,21 @@ pub enum Refusal {
         /// The minor radius (mm).
         minor: f64,
     },
+    /// A revolve's profile reaches more than the resolution across the axis, so the body
+    /// would pass through itself: `at` is the first segment that does.
+    CrossesAxis {
+        /// The segment.
+        at: SegmentRef,
+    },
+    /// A partial turn's angles (radians) are not finite, not increasing, a whole turn or
+    /// more apart, or do not take the profile's farthest point more than the resolution
+    /// from the other cap either way round.
+    Turn {
+        /// The start angle.
+        from: f64,
+        /// The end angle.
+        to: f64,
+    },
 }
 
 /// Valid input this build does not make yet, by name.
@@ -114,6 +129,12 @@ pub enum Unsupported {
         major: f64,
         /// The minor radius (mm).
         minor: f64,
+    },
+    /// A revolve's arc whose circle crosses the axis outside the arc: its surface is a
+    /// spindle torus, not made yet.
+    SpindleTorus {
+        /// The segment.
+        at: SegmentRef,
     },
 }
 
@@ -178,6 +199,9 @@ impl MakeError {
             Self::Refused(Refusal::ZeroRadii) => "zero_radii",
             Self::Refused(Refusal::SelfIntersecting { .. }) => "self_intersecting",
             Self::Unsupported(Unsupported::HornTorus { .. }) => "horn_torus",
+            Self::Refused(Refusal::CrossesAxis { .. }) => "crosses_axis",
+            Self::Refused(Refusal::Turn { .. }) => "turn",
+            Self::Unsupported(Unsupported::SpindleTorus { .. }) => "spindle_torus",
             Self::Defect(Defect::Surface(_)) => "surface",
             Self::Defect(Defect::Curve(_)) => "curve",
             Self::Defect(Defect::Absent(_)) => "absent",
@@ -230,6 +254,16 @@ impl fmt::Display for MakeError {
                 f,
                 "the horn torus (major {major} mm, minor {minor} mm) is not made yet: its tube meets the axis"
             ),
+            Self::Refused(Refusal::CrossesAxis { at }) => {
+                write!(f, "{at} crosses the axis of the revolve")
+            }
+            Self::Refused(Refusal::Turn { from, to }) => write!(
+                f,
+                "the turn from {from} to {to} radians is not increasing, finite, less than a whole turn and more than the resolution from either cap to the other"
+            ),
+            Self::Unsupported(Unsupported::SpindleTorus { at }) => {
+                write!(f, "{at} revolves to a spindle torus, which is not made yet")
+            }
             Self::Defect(Defect::Surface(e)) => write!(f, "a surface of the body: {e}"),
             Self::Defect(Defect::Curve(e)) => write!(f, "a curve of the body: {e}"),
             Self::Defect(Defect::Absent(e)) => e.fmt(f),
