@@ -15,6 +15,7 @@
 //! | `Unfinished` (100,000 steps; a pair budget of 2,000,000; `/64` for B-spline pairs) | [`SsiError::Budget`]: the caller's one [`Budget`](scx_num::budget::Budget), no fixed caps |
 //! | none: subdivision stopped by a fixed resolution and answered from what it had | [`SsiError::Unresolved`] |
 //! | none: the output was tested at samples, never proved | [`SsiError::Uncertified`] |
+//! | none: a curve of tangential contact (a valley, 73 §22) | [`SsiError::Untraced`], at the least such contact |
 
 use core::fmt;
 
@@ -93,6 +94,14 @@ pub enum SsiError {
         /// A point of the span.
         at: Point3,
     },
+    /// A contact of order 2 is proved here (a valley: the surfaces touch with one principal
+    /// direction curved apart), so a curve of tangential contact may pass, and the march
+    /// (73 row SM7) traces only where the normals part. Never answered as if the curve were
+    /// not there.
+    Untraced {
+        /// The contact.
+        at: Point3,
+    },
     /// The caller's work budget ran out.
     Budget(Exhausted),
     /// The caller stopped the call.
@@ -100,7 +109,7 @@ pub enum SsiError {
 }
 
 impl SsiError {
-    /// The error's kind: [`ErrorKind::Unsupported`] for the four refusals (the pair is
+    /// The error's kind: [`ErrorKind::Unsupported`] for the five refusals (the pair is
     /// valid and this method cannot finish it), [`ErrorKind::Exhausted`] for the budget and
     /// [`ErrorKind::Cancelled`] for the stop.
     #[must_use]
@@ -109,7 +118,8 @@ impl SsiError {
             Self::Unresolved { .. }
             | Self::Stalled { .. }
             | Self::Singular { .. }
-            | Self::Uncertified { .. } => ErrorKind::Unsupported,
+            | Self::Uncertified { .. }
+            | Self::Untraced { .. } => ErrorKind::Unsupported,
             Self::Budget(_) => ErrorKind::Exhausted,
             Self::Stopped => ErrorKind::Cancelled,
         }
@@ -123,6 +133,7 @@ impl SsiError {
             Self::Stalled { .. } => "ssi_stalled",
             Self::Singular { .. } => "ssi_singular",
             Self::Uncertified { .. } => "ssi_uncertified",
+            Self::Untraced { .. } => "ssi_untraced",
             Self::Budget(e) => e.name(),
             Self::Stopped => Stopped.name(),
         }
@@ -135,7 +146,8 @@ impl SsiError {
             Self::Unresolved { at, .. }
             | Self::Stalled { at, .. }
             | Self::Singular { at, .. }
-            | Self::Uncertified { at } => Some(at),
+            | Self::Uncertified { at }
+            | Self::Untraced { at } => Some(at),
             Self::Budget(_) | Self::Stopped => None,
         }
     }
@@ -181,6 +193,9 @@ impl fmt::Display for SsiError {
             Self::Singular { at, kind } => write!(f, "{kind} at {}", At(at)),
             Self::Uncertified { at } => {
                 write!(f, "a span through {} could not be certified", At(at))
+            }
+            Self::Untraced { at } => {
+                write!(f, "a tangential contact at {} is not traced", At(at))
             }
             Self::Budget(e) => e.fmt(f),
             Self::Stopped => Stopped.fmt(f),

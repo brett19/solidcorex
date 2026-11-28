@@ -12,6 +12,8 @@ use scx_num::error::ErrorKind;
 use scx_ssi::SsiError;
 use scx_surface::{SurfaceError, SurfaceKind};
 
+use crate::given::Fact;
+
 /// Why a Boolean did not finish.
 ///
 /// `PartialEq` only: an [`SsiPair`](BooleanUnsupported::SsiPair) cause names a point.
@@ -51,6 +53,28 @@ pub enum BooleanRefusal {
     OtherDocument {
         /// The operand.
         operand: Operand,
+    },
+    /// A face of a planar Boolean's operand that is not a plane within the resolution of
+    /// the operands' common plane.
+    NotCoplanarSheet {
+        /// The operand.
+        operand: Operand,
+        /// The face.
+        face: FaceId,
+    },
+    /// A face of a planar Boolean's operand whose loops are not a region of the plane
+    /// (they cross, touch, or leave a hole outside).
+    BadProfile {
+        /// The operand.
+        operand: Operand,
+        /// The face.
+        face: FaceId,
+    },
+    /// A fact stated to [`boolean_given`](crate::boolean_given) is not so: the Boolean's
+    /// own test of it disagrees, or it names an entity its operand does not have.
+    FalseFact {
+        /// The fact.
+        fact: Fact,
     },
 }
 
@@ -104,6 +128,17 @@ pub enum BooleanUnsupported {
         /// The result's edge, or the operand's entity the classification met.
         at: Entity,
     },
+    /// An edge of a planar Boolean's operand that is neither a line nor a circle.
+    PlanarEdge {
+        /// The operand.
+        operand: Operand,
+        /// The edge.
+        edge: EdgeId,
+    },
+    /// A planar Boolean the certified arithmetic cannot settle: crossings closer than the
+    /// resolution, a point on an operand's boundary the other's pieces do not name, or a
+    /// result whose loops are no region (a hole touching its outer loop at a point).
+    PlanarUndecided,
     /// Two or more of the result's surfaces enclose each other in a way the shell
     /// placement does not decide: more than one outer surface with a cavity among them.
     Nesting,
@@ -250,6 +285,11 @@ impl BooleanError {
                 "vertices_within_coincidence"
             }
             Self::Refused(BooleanRefusal::OtherDocument { .. }) => "other_document",
+            Self::Refused(BooleanRefusal::NotCoplanarSheet { .. }) => "not_coplanar_sheet",
+            Self::Refused(BooleanRefusal::BadProfile { .. }) => "bad_profile",
+            Self::Unsupported(BooleanUnsupported::PlanarEdge { .. }) => "planar_edge",
+            Self::Unsupported(BooleanUnsupported::PlanarUndecided) => "planar_undecided",
+            Self::Refused(BooleanRefusal::FalseFact { .. }) => "false_fact",
             Self::Unsupported(BooleanUnsupported::Nurbs { .. }) => "nurbs",
             Self::Unsupported(BooleanUnsupported::Chain { .. }) => "chain",
             Self::Unsupported(BooleanUnsupported::SsiPair { .. }) => "ssi_pair",
@@ -333,6 +373,21 @@ impl fmt::Display for BooleanError {
             }) => write!(f, "{operand}: {v} and {w} lie within coincidence"),
             Self::Refused(BooleanRefusal::OtherDocument { operand }) => {
                 write!(f, "{operand}: finished under another document's resolution")
+            }
+            Self::Refused(BooleanRefusal::NotCoplanarSheet { operand, face }) => {
+                write!(f, "{operand}: {face}: not a plane in the operands' plane")
+            }
+            Self::Refused(BooleanRefusal::BadProfile { operand, face }) => {
+                write!(f, "{operand}: {face}: its loops are not a planar region")
+            }
+            Self::Unsupported(BooleanUnsupported::PlanarEdge { operand, edge }) => {
+                write!(f, "{operand}: {edge}: neither a line nor a circle")
+            }
+            Self::Unsupported(BooleanUnsupported::PlanarUndecided) => {
+                f.write_str("the planar Boolean's crossings or result cannot be settled")
+            }
+            Self::Refused(BooleanRefusal::FalseFact { fact }) => {
+                write!(f, "the stated {fact} is not so")
             }
             Self::Unsupported(BooleanUnsupported::Nurbs { operand, at }) => {
                 write!(f, "{operand}: {at}: NURBS geometry is not intersected yet")

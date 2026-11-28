@@ -16,6 +16,7 @@ scx-curve = { path = "../scx-curve" }
 scx-mass = { path = "../scx-mass" }
 scx-num = { path = "../scx-num" }
 scx-nurbs = { path = "../scx-nurbs" }
+scx-planar = { path = "../scx-planar" }
 scx-ssi = { path = "../scx-ssi" }
 scx-surface = { path = "../scx-surface" }
 

@@ -2077,13 +2077,210 @@ now pays for its cones and solves.
   the graph test dominate; Bernstein-form jets and a cheaper first split are the candidates.
 - **The closed forms' touch rule** (decision 5).
 
-## 22. SM7 as built (11-28)
+## 22. SM6b as built (11-28)
+
+Branch `sm6b`. The survey (SM5, §18) now recognises a **valley**: a contact that its critical
+solve can neither drop nor isolate, which is what made SM5's near-tangent refusals cost 95 s.
+It looks for one before the solve and refuses by name there: a contact of order 2 (a tangent
+curve, one direction curved apart) as `ssi_untraced`, for SM7 to march; a contact of order
+above 2 as `ssi_singular` (`DegenerateForm`), for SM12. The field path (SM6a) is unchanged:
+its touches, tangencies and crossings inside a piece, curves along the extent's rim, and poles
+stay `ssi_unresolved` (22.5).
+
+### 22.1 What exists
+
+- `CriticalKind::Valley { flat }` (`general/loops.rs`). A point of the pair within the
+  coincidence of the other piece, with a box around it at the resolution that no equation of
+  the critical system excludes and over which the relative form's determinant does not
+  exclude 0. `flat` when no entry of the form excludes 0 there.
+- `Survey::valley` (private), per pair, after the graph test and the cone test and before the
+  4 x 4 critical solve:
+  1. **Box test.** Where an equation excludes 0 over the whole pair there is no valley (the
+     solve drops that box first). One unit.
+  2. **Search** (`descend`): Gauss-Newton on the critical system from the middle of the pair,
+     the normal matrix with a Levenberg term of `1e-12` of its largest diagonal entry, each
+     step clamped into the pair. It stops when a step leaves the point where it is (to a few
+     ulps), after `PATIENCE` (3) steps in a row that fail to halve the residual, or after
+     `DESCENT` (64) steps. One unit per step. It proves nothing.
+  3. **Contact.** The gap at the point found, by interval jets, is within the coincidence.
+  4. **No isolating box.** Around it, each side `floor / (2 |S_u|)` (or `S_v`) met with the
+     pair: no `f` excludes 0 and `det Q` does not either. A touch or node (`Q` regular) is left
+     to the solve and `classify`, as before.
+  The pieces take their roles by their boxes (`before`: least corner, then greatest), so the
+  search, the proof and the point are the same bits under a swap of the operands.
+- `Survey::valleys(budget, stop) -> Result<Vec<Critical>, SsiError>` (public): the same test
+  over every candidate pair whose patch and cones are bounded and not apart.
+- `Survey::plan`: a pair with a valley gets `Loops::Critical { points: [valley] }` and no
+  seeds (an edge the valley crosses is tangent to the other piece, a double root its seed
+  solve would sweep).
+- `general::intersect`, after the field path declines: `Survey::valleys` first, refusing at
+  the least flat valley (`Singular`, `DegenerateForm`), else at the least valley
+  (`Untraced`); then the plans, where a flat valley joins the singular refusals and a valley
+  of order 2 the untraced ones, each at the least point as before.
+- `relative_form` (factored out of `classify`, unchanged arithmetic): `Q` over the jets'
+  boxes, used by both `classify` and the valley test.
+
+API: `CriticalKind` gains `Valley { flat: bool }` (a public enum: a match on it outside the
+crate needs the arm); `Survey::valleys` is new. Nothing else shared changed.
+
+### 22.2 Decisions, for and against
+
+1. **Detect the valley before the solve, by a search and a box proof, not inside the solve.**
+   - For: the solve stays SM5's (`solve.rs` untouched, SM7 shares it); a valley is found in a
+     few dozen units where the solve swept 175k to over 2M boxes; no cap on the solve (SM5
+     decision 7 holds: the budget alone bounds work).
+   - Against: every pair that reaches the solve pays a search first: on pairs with no valley
+     that is wasted work (22.4: 1 to 12 percent more units on SM5's survey pairs). A solve that
+     tested each box at the resolution for a valley would pay only where it sweeps, but would
+     change the solver shared with SM7.
+2. **A valley is a refusal, not an answer.** The test proves a contact and that the solve
+   cannot isolate it, not the shape of the contact set: a curve of contacts and an isolated
+   contact of high order are not told apart.
+   - For: no answer is claimed that is not proved; `Untraced` hands an order-2 valley to SM7,
+     which marches tangent curves; `Singular` names a contact SM12 owns (contact of order 3
+     and 4, §7).
+   - Against: none of the eleven slow cases is answered; they are refused cheaply.
+3. **`flat` (order above 2) is `Singular`, order 2 is `Untraced`.** With one principal
+   direction curved apart the contact set is locally a curve (or a point SM7 can classify by
+   marching); with `Q` zero within its bound nothing local decides it. Against: `flat` is a
+   bound test, so an order-2 valley whose curvature apart is below the bound's width at the
+   resolution is called flat; the refusal is still honest, but the name is the more severe one.
+4. **The pre-pass (`Survey::valleys`) refuses the whole intersection on any valley.**
+   - For: the pairs around a valley are the expensive ones (their solves sweep the near-zero
+     region), and a valley refuses the intersection whatever they hold; the least point of
+     the pre-pass is order independent.
+   - Against: the refusal can name a different point from the plans' (a valley in a
+     candidate pair, where a seed or node elsewhere would also refuse), and the pre-pass
+     misses valleys in pairs whose cones are unbounded (a whole cylinder), which the plans
+     then find after halving (`y23_t6_ex1`, `c2n_cylN_on_planeN`'s halves).
+5. **The search's stop: no movement, or three steps in a row without halving the residual.**
+   Near a root of order up to 4 Gauss-Newton halves the residual at least every step; the
+   first version stopped on the first step that did not, which lost the flat valleys of
+   `y23_t2_ex2` and `y23_t2_ex4` (their first steps overshoot). Three in a row keeps them
+   (27 and 135 steps) and costs about 4 steps per pair where there is no valley.
+   Against: a tuned constant; the proof does not depend on it, only whether a valley is found
+   before the solve (a valley the search misses is swept by the solve as in SM5).
+6. **`DESCENT = 64`.** A bound on a search, not on a proof (see 5). No case in the corpus or
+   tests reached it after the stop rule.
+7. **Canonical roles by boxes.** The search runs on (first, second) by `before`, not by
+   operand, so a swap gives the same bits. Against: one more comparison of boxes per pair.
+
+### 22.3 Tests
+
+`tests/survey.rs`, new, each against a closed form:
+- `a_contact_of_order_two_along_a_line_is_a_valley_refused_as_untraced`: a unit cylinder
+  about the x axis lying on the plane `z = -1` (both as NURBS). Every valley point the plans
+  report is on the line of contact `y = 0, z = -1` (within 1e-6), every valley is of order 2
+  (`flat: false`), and `intersect` is `ssi_untraced` with the same bits under a swap.
+- `a_contact_of_order_four_along_a_line_is_a_flat_valley_refused_as_singular`:
+  `z = (x - 1/2)^4` as a degree (4, 1) Bézier on the plane `z = 0`. `intersect` is
+  `ssi_singular` (`DegenerateForm`) with the same bits under a swap, at a point with
+  `|x - 1/2| <= 1e-2` and `|z| <= 1e-9`.
+
+Touches and nodes keep SM5's tests (`contacts_are_classified_and_refused_or_answered_by_kind`
+and the corpus's `c3n_parab_parab_apex`, `y23_t6_ex4_tangential_point`), unchanged and passing.
+No test changed or removed.
+
+### 22.4 Measurements
+
+The ssi-corpus (`score_corpus`, release, the same loaded build machine for both; times not
+deterministic):
+
+| | `sm5` (main) | `sm6b` |
+|---|---|---|
+| pass | 58 of 113 | 58 of 113 |
+| refused | 49 (`ssi_unresolved` 43, `ssi_untraced` 5, `budget_exhausted` 1) | 49 (`ssi_unresolved` 38, `ssi_singular` 5, `ssi_untraced` 6) |
+| failed | 6 | the same 6 |
+| total | 53.7 s | 14.6 s |
+
+Verdicts that changed (refusals renamed; no pass lost or gained):
+
+| case | `sm5` | ms | `sm6b` | ms |
+|---|---|---|---|---|
+| `c2n_cylN_on_planeN` | `budget_exhausted` | 25,237 | `ssi_untraced` | 2.2 |
+| `c2n_quartic_contact_parabola` | `ssi_unresolved` | 10,870 | `ssi_singular` | 124 |
+| `y23_t6_ex1_tangent_line` | `ssi_unresolved` | 4,897 | `ssi_singular` | 2,213 |
+| `y23_t2_ex4_tangential_curve_saddle` | `ssi_unresolved` | 2,089 | `ssi_singular` | 1.1 |
+| `y23_t2_ex2_tangential_curve` | `ssi_unresolved` | 765 | `ssi_singular` | 12.0 |
+| `y23_fig1f_high_order_contact` | `ssi_unresolved` | 76 | `ssi_singular` | 55 |
+
+The other slow refusals, same verdicts:
+
+| case | `sm5` ms | `sm6b` ms | why |
+|---|---|---|---|
+| `y23_t2_ex3_loop_two_curves` | 5,765 | 8,321 | not a valley: two transversal curves; the time is successful critical and edge solves (~3 s each), noise between runs |
+| `y23_t2_ex1_tangent_line` | 920 | 176 | |
+| `y23_fig1d_two_quads` | 714 | 711 | no valley; halving to the resolution |
+| `y23_fig1c`, `y23_fig1b` | 208, 203 | 207, 201 | |
+
+Four cases looked slower in the full runs (`c1n_sphereN_cylN_two_loops` 230 to 500 ms,
+`c1n_torusN_planeN_nested` 50 to 105, `y23_t2_ex6` 177 to 256, `c9n_elevated_paraboloids` 116
+to 128). Run back to back, main then `sm6b`, twice, on one machine, they are 272/274 against
+282/283 ms, 59/58 against 58/58, 205/198 against 200/203 and 152/144 against 154/155
+(`y23_t2_ex3` 5,616/5,985 against 5,655/5,667): load noise, apart from the search's 3 to 4
+percent on `c1n_sphereN_cylN` and `c9n`.
+
+Added work, from throwaway counters (not committed), on the cases that reach the search:
+
+| case | pairs searched | steps | search time |
+|---|---|---|---|
+| `c1n_sphereN_cylN_two_loops` (no valley) | 264 | 1,104 | 20 ms |
+| `c9n_elevated_paraboloids` (no valley) | 60 | 136 | 21 to 107 ms |
+| `c2n_cylN_on_planeN` | 8 | 48 | 3 ms |
+| `c2n_quartic_contact_parabola` | 8 | 112 | 7 ms |
+| `y23_t2_ex2` | 4 | 135 | 29 ms |
+| `y23_t2_ex4` | 1 | 27 | 3.6 ms |
+| `y23_t6_ex1` | 12 | 102 | 7 ms |
+
+`y23_t6_ex1` stays at 1.3 to 2.2 s: its valley lies in pairs whose cones are unbounded, so the
+pre-pass misses it, and the plans' adjacent pairs run critical solves of about 19k boxes each
+that succeed (no root) before the valley pair is reached.
+
+Per pair against the pin (SM5's table, 18.4; ours the survey alone, NURBS forms, units of the
+budget; main and `sm6b` timed back to back on the same machine):
+
+| case | pin, `strip` off / on | main | `sm6b` |
+|---|---|---|---|
+| sphere and sphere (circle) | 0.71 / 1.05 ms | 1.65 s, 80,493 | 1.86 s, 89,912 |
+| tiny loop, `delta` 0.5 | 0.21 / 0.63 ms | 20.8 ms, 1,286 | 23.6 ms, 1,301 |
+| tiny loop, `delta` 1e-3 | 0.12 / 0.46 ms | 13.8 ms, 1,031 | 14.7 ms, 1,051 |
+| perpendicular cylinders 1, 2, offset 0.3 | 0.41 / 0.50 ms | 31.4 ms, 2,416 | 33.4 ms, 2,432 |
+
+The diagonal near-touch (two unit spheres `2^-k` apart, NURBS, `intersect` end to end, proved
+empty at every gap): main 6,191 / 7,662 / 8,368 / 8,430 units at `k` = 4, 6, 10, 20, `sm6b`
+6,497 / 8,098 / 8,831 / 8,897 (141 to 187 ms against 159 to 201 ms). (§18.4's 3,067 to 10,351
+were measured before main's later changes; these are main as of this branch.)
+
+The gap to the pin is SM5's (30 to 2,000 times); this row adds 1 to 12 percent of units on
+pairs with no valley (the sphere pair: 3,694 pairs searched, about 4 steps each). Nothing here
+closes it; 18.5's candidates (Bernstein-form jets, a cheaper first split) remain.
+
+### 22.5 Open
+
+- **The field path's critical cells.** Touches (isolated contacts), nodes and tangent curves
+  inside a piece on the field path, curves along the extent's rim, and poles divided out are
+  not built: those pairs stay `ssi_unresolved` where SM6a left them. The valley test is the
+  survey's (NURBS against NURBS). Proposed: a row of its own (call it SM6c) on the field path's
+  cells, using the same box proof on `g = f(S(u, v))` and its gradient.
+- **Poles.** A touch at a pole and an edge tangent to the other surface stay refused
+  (`c8_sphere_cyl_through_poles`, 168 ms, `ssi_unresolved`).
+- **`y23_t2_ex3` (8 s) and `y23_t6_ex1` (2 s)** are the remaining cost; neither is swept by a
+  valley. Both are the critical solve's cost on pairs that succeed (18.5's per-pair cost).
+- **The search on pairs without a valley** (decision 1). A solve that tested its boxes at the
+  resolution for a valley would remove it; that is a change to the shared solver, left for
+  after SM7.
+- **The pre-pass on unbounded cones** (decision 4): halving the candidate pairs once before
+  the pre-pass would catch `y23_t6_ex1`'s valley first; not done, since it changes the plans'
+  pairs for every case.
+
+## 23. SM7 as built (11-28)
 
 SM7 builds the march (row SM7, §4.5): `general::intersect` on a NURBS pair that the field path
 does not take now traces the survey's plans into branches, nodes and certificates.
-`SsiError::Untraced` is gone. (Section 21 was taken by SM1b, so this is 22.)
+`SsiError::Untraced` now names only SM6b's order-2 valleys (§22), which the march does not
+trace.
 
-### 22.1 What exists
+### 23.1 What exists
 
 - **`general/march.rs`, `march(surfaces, extents, seeds, nodes, tol, res, swap, budget,
   stop) -> Result<Marched, SsiError>`** (`pub(crate)`; module docs hold the method).
@@ -2135,9 +2332,10 @@ does not take now traces the survey's plans into branches, nodes and certificate
     seeds, kept once by `Seed::same_as`, together with the seeds on each critical's ray. It
     then gathers the `Node` criticals and the touches. A `Singular` contact is still refused
     at the least point. With no seed and no node, the answer is the touches alone.
-- **`error.rs`.** `Untraced` is removed, with its name, kind, `at` and table row.
+- **`error.rs`.** `Untraced` stays for SM6b's order-2 valleys only, with its doc and message
+  reworded ("a tangential contact at ... is not traced"). Seeds and nodes now go to the march.
 
-### 22.2 Decisions, for and against
+### 23.2 Decisions, for and against
 
 1. **One march over all pairs, with seeds consumed by proximity, not linking per pair.**
    - For: a curve crossing many pieces is one branch, with no stitching across pair edges, and
@@ -2154,9 +2352,15 @@ does not take now traces the survey's plans into branches, nodes and certificate
    - Against: it is not a proof. Beside a tangential crossing it was unsound until
      decision 5.
    - Change if: SM8 lands, when SM8's bound replaces it.
-3. **`Untraced` is removed, not kept unused.** Nothing returns it, and a variant kept for no
-   caller is noise in every `match`. Against: a shared-type change in `error.rs`. Its uses
-   were only in `scx-ssi`.
+3. **`Untraced` is kept, narrowed to order-2 valleys.** An earlier version of this branch
+   removed it, because nothing returned it once seeds and nodes were marched. SM6b (§22) then
+   landed on main and refuses an order-2 valley with it, for SM7.
+   - For keeping the refusal: along a curve of tangential contact the normals agree. The
+     corrector's conditioning `sin(n_A, n_B)` is zero there, so this march cannot trace it.
+     Answering without that curve would be wrong.
+   - Against: a valley stays refused.
+   - Change if: a march along tangential contact is built, stepping on the valley's own
+     equations (the gap's gradient), not on `n_A x n_B`.
 4. **Canonical operand order.** For: the same bits under swap by construction, not by a
    symmetric algorithm. Against: one comparison of 15 `u64` per call, and an answer flipped
    back when needed.
@@ -2188,9 +2392,9 @@ does not take now traces the survey's plans into branches, nodes and certificate
      in 3-D (decision 1).
 7. **Density is set by the chord deviation at the coincidence.** This is §4.5 as designed: a
    polyline within `tol` of the curve, refitted by SM8. The cost is the vertex count, which
-   goes as `1/sqrt(tol)` (22.4).
+   goes as `1/sqrt(tol)` (23.4).
 
-### 22.3 Tests
+### 23.3 Tests
 
 New, in `tests/march.rs`, against SM0's closed forms on the NURBS images:
 
@@ -2225,8 +2429,7 @@ Changed:
   - `swapping_the_operands_names_the_same_place` became
     `swapping_the_operands_gives_the_same_points`, with reversed points equal.
   - New: `a_march_that_meets_no_seed_at_the_rim_is_stalled_there`, two planes.
-- Removed on purpose: the `Untraced` row of `every_cause_has_a_kind_a_name_and_a_line`. It
-  proved the variant's name and kind, and the variant is gone.
+- The `Untraced` row of `every_cause_has_a_kind_a_name_and_a_line` takes the new message.
 - `general/tests/apart.rs`: the `Err(Untraced)` arm became `Ok`, with points inside the
   shared box.
 - `tests/survey.rs`: `contacts_are_classified_and_refused_or_answered_by_kind` became
@@ -2236,7 +2439,7 @@ Changed:
 The guard for decision 5 is the corpus case `y23_t2_ex3_loop_two_curves`: no closed form
 has a tangential crossing.
 
-### 22.4 Measured (release, throwaway timer and counters, not committed)
+### 23.4 Measured (release, throwaway timer and counters, not committed)
 
 Corpus (SM10, release, against main at the merge base):
 
@@ -2277,12 +2480,13 @@ budget units (survey: one per box or solve; march: one per step tried):
 - For comparison, main's field path (SM6a) answers the analytic forms of these pairs in 0.6
   to 4.0 s and 150k to 1.5M units. The march is within that or below.
 
-### 22.5 Open
+### 23.5 Open
 
-- **Vertex density** (22.4): step by the Hermite span bound with SM8.
+- **Vertex density** (23.4): step by the Hermite span bound with SM8.
 - **The certificate** (decision 2): SM8's per-span proof replaces the estimate. The pcurve
   bound is loose, up to `1e-6` where the points are within `1e-8`, because it takes the L1
   step and the hull's second partials.
+- **Order-2 valleys** (decision 3) are refused `Untraced`: a march along tangential contact.
 - **A curve along an extent's edge** (a tube circle on a torus's `u = 0` line) is refused by
   the survey (`Unresolved`), before the march.
 - **Debug-build test time.** The accuracy test and the bits test still take 2.5 and

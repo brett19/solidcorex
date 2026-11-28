@@ -345,6 +345,12 @@ fn every_cause_has_a_kind_a_name_and_a_line() {
             "a span through (1, 2, 3) could not be certified",
         ),
         (
+            SsiError::Untraced { at },
+            ErrorKind::Unsupported,
+            "ssi_untraced",
+            "a tangential contact at (1, 2, 3) is not traced",
+        ),
+        (
             SsiError::Budget(Exhausted { limit: 7 }),
             ErrorKind::Exhausted,
             "budget_exhausted",
