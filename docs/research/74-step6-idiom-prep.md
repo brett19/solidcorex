@@ -5182,3 +5182,90 @@ The sphere is the exception of 39.3.2.
 ### 39.6 Proposed 04 row
 
 | 11-28 | (For the owner's review) ST4: truth tests for the stitch. Every testkit recipe (block, prism, cylinder, cone, sphere, torus, holed, cavity) and cube Booleans exploded to faces and stitched back is the same solid: counts, closed-form volume and area, `contract`; a sheet moved 0.45 of the coincidence stitches and 1.1 leaves the typed `NotSolid { Open }`; permuted input gives identical geometry. Found: a join 0.5 to 1.0 of the coincidence off the face is `Unsupported(Fit)` (rows ST4a, ST4b follow) | stitch → boolean, → check (dev only) | 74 §39 |
+
+## 41. ST4b as built (11-28)
+
+The join stage of `scx-stitch` finds its candidate pairs near-linearly. Only `crates/scx-stitch`
+changed (`edges.rs`: `candidates`, `SMALL`; `tests/truth.rs`: one test).
+
+### 41.1 What changed
+
+Before: pieces with equal ends were paired all against all (`C(m, 2)` for `m` in a group), each
+pair box-tested (edge boxes grown by the larger reach), the survivors gap-proved. After: per
+same-end group, a pair is a candidate when it passes the old test (other sheets, edge boxes
+within the larger reach) **and** each piece's midpoint (a point of its curve) lies within the
+larger reach of the other's edge box. A group of at most `SMALL` = 8 pieces tests its pairs
+directly; a larger one builds one `BoxTree` over the group's edge boxes and queries each midpoint
+(grown by the group's largest reach), keeping later pieces only, so no pair is found twice. The
+candidates are the same `(lead, partners ascending)` lists in the same order whichever path
+found them.
+
+### 41.2 Why the pairs joined do not change
+
+The midpoint filter is conservative: the midpoint lies on the piece's curve, the other edge's box
+holds its whole curve, and a pair that is within the allowance (the larger reach) has every point
+of one curve within the allowance of the other. A pair the filter drops therefore has a true
+Hausdorff gap above the allowance, which the gap proof answers `Beyond`; `Beyond` pairs enter
+neither `maybe`, the heap, `Left::Undecided` nor `Left::Ambiguous`. So the heap, the joins and the
+report are those of the old code. Checked by hash: the whole report, vertices, edges and faces
+(ids and records, every float through `Debug`) of block 1/5/10, cylinder 32, sphere 8/16/32 and
+torus 4 are bit-identical before and after; all ST4 tests pass (including both permutation tests).
+
+### 41.3 Cases for and against
+
+For: edge boxes alone cannot separate the sphere's meridians (each spans the pole-to-pole box;
+112 of 120 pairs passed the box test at sphere 8), so a sweep or a sort along an axis by box would
+not have cut pairs; a midpoint does, with no new curve query (the piece's midpoint is already
+what `keep_order` reads) and no new tolerance. A box tree reuses `scx-algo`'s and gives ascending
+answers, so the order needs no extra sort.
+
+Against, and what was done: (1) an adversarial family whose boxes and midpoints all overlap (arcs
+bulging by less than the reach) still passes every pair, but those are within reach of each other
+and need the proof; the work there is inherent, not a search cost. (2) Nested boxes are not a
+problem because the test is symmetric (each midpoint in the other's box). (3) Fewer pairs are charged, and fewer far pairs share the budget, so each lead's share
+(`remaining / leads`) grew; where a far pair had been the second lead, the lone lead then took
+the whole remaining budget and its overspend surfaced as `Exhausted`, never `Undecided`
+(`a_join_no_share_decides_is_left_undecided` showed it: the arc against its coaxial arc had
+shared with an arc-to-chord pair the filter now drops). Fixed by dividing by `leads + 1`, so a
+lone lead keeps a part for the joins after it; the test passes with its limits unchanged. Only
+budget-limited runs differ (a pair that decided at a half share may be `Undecided` at a third),
+never which pairs join when the budget suffices. (4) Two code paths (direct and tree) must agree: both apply the
+same `possible` predicate to the same pairs, covered by the blocks (direct) and the spheres (tree)
+hashes. (5) Group-wise tree builds cost `O(m log m)`; groups of 2 to 8 skip it, so blocks do the
+same work as before (2 pairs a face).
+
+### 41.4 Measurements (release test build, throwaway counters not committed)
+
+Pairs the stage enumerates (same-end pairs before; midpoint-tree candidates plus direct pairs
+after), and the pairs left for gap proofs after all box tests:
+
+| body | faces | pairs before | proved before | pairs after | proved after | ms before | ms after |
+|---|---|---|---|---|---|---|---|
+| Block 1 | 6 | 12 | 12 | 12 | 12 | 1 | 1 |
+| Block 5 | 150 | 300 | 300 | 300 | 300 | 14 to 18 | 14 |
+| Block 10 | 600 | 1,200 | 1,200 | 1,200 | 1,200 | 51 | 57 |
+| Cylinder 32 | 34 | 96 | 96 | 96 | 96 | 22 | 24 |
+| Sphere 8 | 8 | 120 | 112 | 8 | 8 | 155 | 58 |
+| Sphere 16 | 16 | 496 | 480 | 16 | 16 | 352 | 109 |
+| Sphere 32 | 32 | 2,016 | 1,984 | 32 | 32 | 897 | 216 |
+| Torus 4 | 16 | 32 | 32 | 32 | 32 | 109 | 111 |
+
+Spheres are now linear (one pair per sheet), time 2.7 to 4x lower (the gap proofs of the 112 to
+1,984 far pairs were most of it). Blocks, the cylinder and the torus enumerate the same pairs, no
+added work (ms differences are noise).
+
+### 41.5 Test added
+
+`spheres_of_many_lunes_are_the_same_solid` (`truth.rs`): sphere 8, 16, 32 exploded and stitched
+back, `same_solid` against the closed form 4/3 pi and 4 pi (counts, `contract`, outward).
+
+### 41.6 Open
+
+1. A group whose boxes and midpoints all overlap (a bundle of near-coincident arcs) stays
+   quadratic in the proofs; a real bundle that dense is a body with many coincident edges, not seen
+   in the corpus or recipes.
+2. `SMALL` = 8 is a choice, not measured to a knee (both paths give the same pairs).
+
+### 41.7 Proposed 04 row
+
+| 11-28 | (For the owner's review) ST4b: the stitch's join stage finds candidates by midpoint, not all same-end pairs: a pair must also have each piece's midpoint within reach of the other's edge box (conservative, so the pairs joined are unchanged; bit-identical results on blocks, cylinder, spheres, torus); a sphere of n lunes does n pairs, not C(2n,2) (sphere 32: 32 vs 2,016, 0.9 s to 0.2 s); blocks unchanged | stitch (none new) | 74 §41 |
