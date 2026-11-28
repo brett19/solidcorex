@@ -265,15 +265,23 @@ fn the_identified_spread_is_the_perturbation() {
     let body = solid(Kind::Block, 0, 1);
     let top = top_face(&body);
     let out = perturbed(&body, top, Vec3::new(0.0, 0.0, INSIDE), Want::Solid).unwrap();
-    assert_eq!(out.report.identified.len(), 4);
+    // Every vertex of the block stands for three sheets; the four of the moved face are
+    // the ones that moved, by the perturbation, certified (spread is an upper bound).
+    assert_eq!(out.report.identified.len(), 8);
+    let moved = out
+        .report
+        .identified
+        .iter()
+        .filter(|i| i.spread.mm() > 0.0)
+        .count();
+    assert_eq!(moved, 4);
     for i in &out.report.identified {
         let s = i.spread.mm();
         assert!((0.0..=INSIDE * (1.0 + 1e-9)).contains(&s), "{s}");
     }
-    assert_eq!(out.report.joined.len(), 4);
-    for j in &out.report.joined {
-        assert!(j.gap.mm() <= ZONE, "{:?}", j.gap);
-    }
+    assert_eq!(out.report.joined.len(), 12);
+    let widest = out.report.joined.iter().map(|j| j.gap.mm()).fold(0.0, f64::max);
+    assert!((INSIDE..=ZONE).contains(&widest), "{widest}");
     assert!(!out.report.left.iter().any(|l| matches!(l, Left::Undecided { .. })));
 }
 
