@@ -4,8 +4,9 @@
 //! - `layers`: every workspace crate is listed in `layers.txt`, and a library depends
 //!   (normal, build or dev) only on libraries listed above it and on the external crates
 //!   `layers.txt` `[external]` names (none today). The differential-test crates may
-//!   depend on any library and alone on the pinned solidcore (`solidcore` and
-//!   `solidcore-record`); tool crates depend on no
+//!   depend on any library, alone on the pinned solidcore (`solidcore`, `solidcore-record`,
+//!   `solidcore-convert`, `solidcore-step`) and on the `[difftest-external]` crates as
+//!   dev-dependencies only; tool crates depend on no
 //!   workspace crate. The test-kit crates (`[testkit]`) may depend on any library, are
 //!   depended on only as a dev-dependency (by a library, difftest or bench crate), and say
 //!   `publish = false` in their own manifest. The benchmark crates (`[bench]`) may depend on
@@ -154,6 +155,9 @@ struct Layers {
     /// `[bench-external]`: crates outside the workspace a bench crate alone may use, as a
     /// dev-dependency only (the timing harness).
     bench_external: Vec<String>,
+    /// `[difftest-external]`: crates outside the workspace a difftest crate alone may use,
+    /// as a dev-dependency only (the corpus record readers).
+    difftest_external: Vec<String>,
 }
 
 /// `cargo xtask bench`: every benchmark target built in the bench profile, none run.
@@ -163,8 +167,14 @@ fn bench(root: &Path) -> Result<String, String> {
 }
 
 /// The crates the differential and bench crates may (alone) depend on: the pinned
-/// solidcore, and its record crate (the Part 21 reader `scx-p21` is compared with).
-const PINNED: &[&str] = &["solidcore", "solidcore-record"];
+/// solidcore, its record crate (the Part 21 reader `scx-p21` is compared with), and its
+/// conversion and STEP reader (the healer count over STEP files, `examples/heal_count`).
+const PINNED: &[&str] = &[
+    "solidcore",
+    "solidcore-record",
+    "solidcore-convert",
+    "solidcore-step",
+];
 
 fn layer_roles(root: &Path) -> Result<Layers, String> {
     parse_layers(&read(&root.join("layers.txt"))?)
@@ -175,6 +185,7 @@ fn parse_layers(text: &str) -> Result<Layers, String> {
     let mut out: Vec<(String, Role)> = Vec::new();
     let mut external = Vec::new();
     let mut bench_external = Vec::new();
+    let mut difftest_external = Vec::new();
     let mut libs = 0;
     for line in text.lines() {
         let line = strip_comment(line).trim();
@@ -194,17 +205,17 @@ fn parse_layers(text: &str) -> Result<Layers, String> {
             "testkit" => Role::Testkit,
             "bench" => Role::Bench,
             "tool" => Role::Tool,
-            "external" | "bench-external" => {
+            "external" | "bench-external" | "difftest-external" => {
                 if PINNED.contains(&line) {
                     return Err(format!(
                         "layers.txt: [{section}] may not name {line} \
                          (only the difftest and bench crates use it)"
                     ));
                 }
-                if section == "external" {
-                    external.push(line.to_string());
-                } else {
-                    bench_external.push(line.to_string());
+                match section.as_str() {
+                    "external" => external.push(line.to_string()),
+                    "bench-external" => bench_external.push(line.to_string()),
+                    _ => difftest_external.push(line.to_string()),
                 }
                 continue;
             }
@@ -219,6 +230,7 @@ fn parse_layers(text: &str) -> Result<Layers, String> {
         roles: out,
         external,
         bench_external,
+        difftest_external,
     })
 }
 
@@ -346,7 +358,8 @@ fn layers(root: &Path) -> Result<String, String> {
 
 /// Every breach of the order, one per line (empty when there is none). A library depends
 /// only on libraries above it in `layers.txt` and on crates `[external]` names; the
-/// difftest crates also on the libraries and on the pinned solidcore; a bench crate on the
+/// difftest crates also on the libraries, the pinned solidcore and (as dev-dependencies)
+/// `[difftest-external]` crates; a bench crate on the
 /// libraries, the pinned solidcore and (as dev-dependencies) `[bench-external]` crates; a
 /// test kit on the libraries; a tool on no workspace crate and only on `[external]` crates.
 /// A test kit is a dev-dependency only (of a library, difftest or bench crate); nothing
@@ -390,6 +403,8 @@ fn check_layers(layers: &Layers, crates: &[Manifest]) -> String {
                 matches!(role, Role::Difftest | Role::Bench)
             } else if layers.external.iter().any(|e| e == dep) {
                 true
+            } else if role == Role::Difftest {
+                *kind == Kind::Dev && layers.difftest_external.iter().any(|e| e == dep)
             } else {
                 role == Role::Bench
                     && *kind == Kind::Dev
@@ -404,6 +419,8 @@ fn check_layers(layers: &Layers, crates: &[Manifest]) -> String {
                     " (only the difftest and bench crates may use the pinned solidcore)"
                 } else if layers.bench_external.iter().any(|e| e == dep) {
                     " (a [bench-external] crate is a dev-dependency of a bench crate only)"
+                } else if layers.difftest_external.iter().any(|e| e == dep) {
+                    " (a [difftest-external] crate is a dev-dependency of a difftest crate only)"
                 } else {
                     " (an external crate not in layers.txt [external])"
                 };
