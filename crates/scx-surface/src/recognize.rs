@@ -32,7 +32,8 @@
 //!    positive weights, so no larger than their largest. The kind's distance is bounded by
 //!    `|Q / w^m|` over a factor no smaller than its least over the piece (below). A piece
 //!    whose bound is above the accuracy is halved; a corner (a surface point) beyond it
-//!    refutes. Each piece is one unit of the budget.
+//!    refutes. Each piece is one unit of the budget, `2^16` pieces at most. The certificate
+//!    is [`crate::certificate::on_analytic`]'s, shared.
 //!
 //! The bounds, for the distance `d` to the kind and `delta` its radial part:
 //! - plane `z = 0`: `|z| = |Z / w|`, directly from the coefficients;
@@ -63,7 +64,6 @@
 // `!(x <= bound)` is the test that refutes a NaN too.
 #![allow(clippy::neg_cmp_op_on_partial_ord)]
 
-use scx_algo::bernstein::{Bernstein2, Bounded};
 use scx_num::budget::{Budget, Stop};
 use scx_num::extent2d::Extent2d;
 use scx_num::extent3d::Extent3d;
@@ -76,11 +76,12 @@ use scx_num::vector3d::{Point3, Vec3};
 use scx_nurbs::Approach;
 use scx_nurbs_surface::{NurbsSurface, ParamAxis};
 
+use crate::certificate::{Local, Placed, Proof, prove};
 use crate::common::Axes;
 use crate::cone::Cone;
 use crate::cylinder::Cylinder;
 use crate::error::SurfaceError;
-use crate::nurbs_invert::{Hb, halved, patches, up};
+use crate::nurbs_invert::up;
 use crate::plane::Plane;
 use crate::sphere::Sphere;
 use crate::surface::Surface;
@@ -98,10 +99,6 @@ const LOOSE: f64 = 64.0;
 const LOOSE_REL: f64 = 1e-6;
 /// Levenberg-Marquardt iterations at most.
 const LM_STEPS: usize = 30;
-/// A piece with a corner within this fraction of the accuracy is not proved: the bound,
-/// which tends to the piece's largest distance as it is halved, would need too many halvings.
-const NEAR: f64 = 1.0 / 64.0;
-const DEFECT_BERNSTEIN: &str = "a recognition certificate's Bernstein form could not be built";
 
 /// A recognised surface and the bound of its deviation.
 #[derive(Debug, Clone, PartialEq)]
@@ -379,7 +376,7 @@ fn nurbs(
                 && let Some(deviation) = certify(n, &built, acc, budget, stop)?
             {
                 let mid = Point2::new(over.x_interval().mid(), over.y_interval().mid());
-                let surface = oriented(built.surface, &built.local, whole, mid);
+                let surface = oriented(built.surface, &built.placed.local, whole, mid);
                 return Ok(Some(Recognized {
                     surface,
                     deviation: Length::from_mm(deviation),
@@ -774,21 +771,9 @@ fn refine(kind: Kind, theta: &mut Theta, pts: &[Vec3]) {
 
 // ---------------------------------------------------------------- the analytic surface
 
-/// The kind in its frame, as the certificate reads it (world units).
-#[derive(Debug, Clone, Copy)]
-enum Local {
-    Plane,
-    Sphere { r: f64 },
-    Cylinder { r: f64 },
-    Cone { r: f64, k: f64 },
-    Torus { big: f64, small: f64 },
-}
-
 struct Built {
     surface: Surface,
-    local: Local,
-    origin: Point3,
-    axes: [Vec3; 3],
+    placed: Placed,
 }
 
 /// A unit vector square to `z`.
@@ -843,9 +828,11 @@ fn build(kind: Kind, t: &[f64], norm: Norm) -> Option<Built> {
     };
     Some(Built {
         surface,
-        local,
-        origin: frame.origin(),
-        axes: [frame.x().as_vec(), frame.y().as_vec(), frame.z().as_vec()],
+        placed: Placed {
+            local,
+            origin: frame.origin(),
+            axes: [frame.x().as_vec(), frame.y().as_vec(), frame.z().as_vec()],
+        },
     })
 }
 
@@ -897,10 +884,8 @@ fn oriented(built: Surface, local: &Local, given: &Surface, mid: Point2) -> Surf
     }
 }
 
-// ---------------------------------------------------------------- the certificate
-
 /// The bound of the deviation of `n` from `built`, proved, or `None` (refuted or not
-/// proved).
+/// proved): [`crate::certificate`]'s surface certificate.
 fn certify(
     n: &NurbsSurface<3>,
     built: &Built,
@@ -908,381 +893,8 @@ fn certify(
     budget: &mut Budget,
     stop: &Stop,
 ) -> Result<Option<f64>, SurfaceError> {
-    let mut worst = 0.0_f64;
-    let mut reach = 0.0_f64;
-    for patch in patches(n) {
-        let net = local_net(&patch.net, built.origin, built.axes);
-        for (h, _) in &net {
-            reach = reach.max((h[0].abs() + h[1].abs() + h[2].abs()) / h[3]);
-        }
-        let mut stack = vec![(patch.lo, patch.hi, net)];
-        while let Some((lo, hi, net)) = stack.pop() {
-            budget.charge(1).map_err(SurfaceError::Exhausted)?;
-            stop.check().map_err(|_| SurfaceError::Stopped)?;
-            match bound(&built.local, &net, patch.degrees, acc)? {
-                Verdict::Proved(b) => worst = worst.max(b),
-                Verdict::Refuted | Verdict::Unprovable => return Ok(None),
-                Verdict::Open => {
-                    let m = lo.midpoint(hi);
-                    let su = lo.x < m.x && m.x < hi.x;
-                    let sv = lo.y < m.y && m.y < hi.y;
-                    if !(su || sv) {
-                        return Ok(None);
-                    }
-                    let mut parts = vec![(lo, hi, net)];
-                    if su {
-                        parts = parts
-                            .into_iter()
-                            .flat_map(|(lo, hi, net)| {
-                                let (a, b) = halved(&net, patch.degrees, true);
-                                [
-                                    (lo, Point2::new(m.x, hi.y), a),
-                                    (Point2::new(m.x, lo.y), hi, b),
-                                ]
-                            })
-                            .collect();
-                    }
-                    if sv {
-                        parts = parts
-                            .into_iter()
-                            .flat_map(|(lo, hi, net)| {
-                                let (a, b) = halved(&net, patch.degrees, false);
-                                [
-                                    (lo, Point2::new(hi.x, m.y), a),
-                                    (Point2::new(lo.x, m.y), hi, b),
-                                ]
-                            })
-                            .collect();
-                    }
-                    // Last pushed is first taken: the lowest corner first.
-                    stack.extend(parts.into_iter().rev());
-                }
-            }
-        }
-    }
-    let sizes = match built.local {
-        Local::Plane => 0.0,
-        Local::Sphere { r } | Local::Cylinder { r } | Local::Cone { r, .. } => r,
-        Local::Torus { big, small } => big + small,
-    };
-    let total = up(worst + 16.0 * EPS * (reach + sizes));
-    Ok((total <= acc).then_some(total))
-}
-
-/// The net in the frame `(origin, axes)`: `(X, Y, Z, w)` with `X = (w P - w O) . x` and so
-/// on, each with its error bound (the inputs' carried, and the roundings of the shift and
-/// the dot product).
-fn local_net(net: &[Hb], origin: Point3, axes: [Vec3; 3]) -> Vec<Hb> {
-    let o = [origin.x, origin.y, origin.z];
-    net.iter()
-        .map(|(h, e)| {
-            let (w, ew) = (h[3], e[3]);
-            let mut d = [0.0; 3];
-            let mut ed = [0.0; 3];
-            for k in 0..3 {
-                let (hk, ok) = (
-                    h.get(k).copied().unwrap_or(f64::NAN),
-                    o.get(k).copied().unwrap_or(f64::NAN),
-                );
-                let ek = e.get(k).copied().unwrap_or(f64::NAN);
-                if let (Some(dk), Some(edk)) = (d.get_mut(k), ed.get_mut(k)) {
-                    *dk = hk - ok * w;
-                    *edk = up(ek + ok.abs() * ew + 2.0 * EPS * (hk.abs() + (ok * w).abs()));
-                }
-            }
-            let mut out = ([0.0, 0.0, 0.0, w], [0.0, 0.0, 0.0, ew]);
-            for (j, a) in axes.iter().enumerate() {
-                let av = [a.x, a.y, a.z];
-                let mut v = 0.0;
-                let mut size = 0.0;
-                let mut err = 0.0;
-                for ((dk, edk), ak) in d.iter().zip(&ed).zip(&av) {
-                    v += dk * ak;
-                    size += (dk * ak).abs();
-                    err += ak.abs() * edk;
-                }
-                if let (Some(slot), Some(se)) = (out.0.get_mut(j), out.1.get_mut(j)) {
-                    *slot = v;
-                    *se = up(err + 4.0 * EPS * size);
-                }
-            }
-            out
-        })
-        .collect()
-}
-
-enum Verdict {
-    /// The piece is within this bound, at most the accuracy.
-    Proved(f64),
-    /// A corner is beyond the accuracy.
-    Refuted,
-    /// A corner is too far for the bound's factor to hold: not provable here.
-    Unprovable,
-    /// Neither yet: halve.
-    Open,
-}
-
-fn form(net: &[Hb], (du, dv): (usize, usize), k: usize) -> Result<Bounded, SurfaceError> {
-    let c = net
-        .iter()
-        .map(|(h, _)| h.get(k).copied().unwrap_or(f64::NAN))
-        .collect();
-    let err = net.iter().fold(0.0, |m: f64, (_, e)| {
-        m.max(e.get(k).copied().unwrap_or(f64::NAN))
-    });
-    Bernstein2::new(du, dv, c)
-        .map(|f| Bounded { f, err })
-        .map_err(|_| SurfaceError::Defect {
-            reason: DEFECT_BERNSTEIN,
-        })
-}
-
-/// `max_k (|N_k| + err_N) / (D_k - err_D)`, rounded up: a bound of `|N / D|` for forms of
-/// one degree whose `D` coefficients are all positive; `None` where one is not.
-fn max_ratio(num: &Bounded, den: &Bounded) -> Option<f64> {
-    if !(num.is_finite() && den.is_finite()) {
-        return None;
-    }
-    let mut m = 0.0_f64;
-    for (&nk, &dk) in num.f.coefficients().iter().zip(den.f.coefficients()) {
-        let lo = (dk - den.err) * (1.0 - 2.0 * EPS);
-        if !(lo > 0.0) {
-            return None;
-        }
-        m = m.max(up(nk.abs() + num.err) / lo);
-    }
-    m.is_finite().then(|| up(m))
-}
-
-/// The least and largest of `Z / w` over the piece: of its coefficients' quotients, each at
-/// the end of its error that widens it.
-fn ratio_range(net: &[Hb], k: usize) -> Option<(f64, f64)> {
-    let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
-    for (h, e) in net {
-        let (z, ez) = (h.get(k).copied()?, e.get(k).copied()?);
-        let (wl, wh) = (h[3] - e[3], h[3] + e[3]);
-        if !(wl > 0.0) {
-            return None;
-        }
-        let (nl, nh) = (z - ez, z + ez);
-        let l = if nl >= 0.0 { nl / wh } else { nl / wl };
-        let u = if nh >= 0.0 { nh / wl } else { nh / wh };
-        lo = lo.min(l - up(l.abs() * 2.0 * EPS));
-        hi = hi.max(u + up(u.abs() * 2.0 * EPS));
-    }
-    (lo.is_finite() && hi.is_finite()).then_some((lo, hi))
-}
-
-/// A lower bound of `rho = |(x, y)|` over the piece (0 where none is found): the piece is
-/// inside its control points' hull, so `rho >= e . p` for the unit `e` along their mean,
-/// at the least of the points.
-fn radial_floor(net: &[Hb]) -> f64 {
-    let pts: Vec<(f64, f64, f64)> = net
-        .iter()
-        .map(|(h, e)| {
-            let wl = h[3] - e[3];
-            let slack = if wl > 0.0 {
-                (e[0] + e[1]) / wl + 4.0 * EPS * (h[0].abs() + h[1].abs()) / wl
-            } else {
-                f64::INFINITY
-            };
-            (h[0] / h[3], h[1] / h[3], slack)
-        })
-        .collect();
-    let (mx, my) = pts
-        .iter()
-        .fold((0.0, 0.0), |(a, b), &(x, y, _)| (a + x, b + y));
-    let len = (mx * mx + my * my).sqrt();
-    if !(len > 0.0) {
-        return 0.0;
-    }
-    let (ex, ey) = (mx / len, my / len);
-    let lo = pts.iter().fold(f64::INFINITY, |m: f64, &(x, y, sl)| {
-        m.min(ex * x + ey * y - sl - 4.0 * EPS * (x.abs() + y.abs()))
-    });
-    if lo.is_finite() { lo.max(0.0) } else { 0.0 }
-}
-
-/// The piece's homogeneous forms in the kind's frame.
-struct Forms {
-    x: Bounded,
-    y: Bounded,
-    z: Bounded,
-    w: Bounded,
-}
-
-fn sq(f: &Bounded) -> Result<Bounded, SurfaceError> {
-    f.mul(f).map_err(|_| SurfaceError::Defect {
-        reason: DEFECT_BERNSTEIN,
-    })
-}
-
-fn defect<T, E>(r: Result<T, E>) -> Result<T, SurfaceError> {
-    r.map_err(|_| SurfaceError::Defect {
-        reason: DEFECT_BERNSTEIN,
-    })
-}
-
-/// `f` with its error raised by `extra`.
-fn widen(mut f: Bounded, extra: f64) -> Bounded {
-    f.err = up(f.err + extra);
-    f
-}
-
-/// The distance of the local point `(x, y, z)` from the kind, in floating point, and its
-/// radial part `delta` (the quantity whose branch the bound needs).
-fn distance(local: &Local, p: Vec3) -> (f64, f64) {
-    let rho = (p.x * p.x + p.y * p.y).sqrt();
-    match *local {
-        Local::Plane => (p.z.abs(), 0.0),
-        Local::Sphere { r } => {
-            let d = (p.length() - r).abs();
-            (d, d)
-        }
-        Local::Cylinder { r } => {
-            let d = (rho - r).abs();
-            (d, d)
-        }
-        Local::Cone { r, k } => {
-            let s = r + k * p.z;
-            let c = 1.0 / (1.0 + k * k).sqrt();
-            // The foot on the cone's line lies on the nappe where `s + k^2 rho >= 0`.
-            if s + k * k * rho >= 0.0 {
-                ((rho - s).abs() * c, (rho - s).abs())
-            } else {
-                let apex = -r / k;
-                let d = (rho * rho + (p.z - apex) * (p.z - apex)).sqrt();
-                (d, f64::INFINITY)
-            }
-        }
-        Local::Torus { big, small } => {
-            let d = ((rho - big) * (rho - big) + p.z * p.z).sqrt();
-            ((d - small).abs(), (d - small).abs())
-        }
-    }
-}
-
-fn bound(
-    local: &Local,
-    net: &[Hb],
-    degrees: (usize, usize),
-    acc: f64,
-) -> Result<Verdict, SurfaceError> {
-    let (du, dv) = degrees;
-    let at = |i: usize, j: usize| {
-        net.get(i * (dv + 1) + j)
-            .map_or(Vec3::splat(f64::NAN), |(h, _)| {
-                Vec3::new(h[0] / h[3], h[1] / h[3], h[2] / h[3])
-            })
-    };
-    let corners = [at(0, 0), at(du, 0), at(0, dv), at(du, dv)];
-    let scale = corners
-        .iter()
-        .fold(0.0_f64, |m, c| m.max(c.max_dimension()));
-    let margin = 64.0 * EPS * scale;
-    let mut first_delta = f64::INFINITY;
-    let mut seen = 0.0_f64;
-    for (i, c) in corners.iter().enumerate() {
-        let (d, delta) = distance(local, *c);
-        if !(d <= acc + margin) {
-            return Ok(Verdict::Refuted);
-        }
-        seen = seen.max(d);
-        if i == 0 {
-            first_delta = delta;
-        }
-    }
-    let f = Forms {
-        x: form(net, degrees, 0)?,
-        y: form(net, degrees, 1)?,
-        z: form(net, degrees, 2)?,
-        w: form(net, degrees, 3)?,
-    };
-    // The radial part's bound, the distance's share of it, and the factor's reach
-    // `delta_max`: no more than twice the accuracy's radial reach, so the factor loses at
-    // most that much.
-    let (bd, share, delta_max) = match *local {
-        Local::Plane => (max_ratio(&f.z, &f.w), 1.0, f64::INFINITY),
-        Local::Sphere { r } | Local::Cylinder { r } => {
-            let mut q = defect(sq(&f.x)?.add(&sq(&f.y)?))?;
-            if matches!(local, Local::Sphere { .. }) {
-                q = defect(q.add(&sq(&f.z)?))?;
-            }
-            let w2 = sq(&f.w)?;
-            let r2 = r * r;
-            let q = widen(
-                defect(q.add_scaled(&w2, -r2))?,
-                2.0 * EPS * r2 * w2.f.max_abs_coefficient(),
-            );
-            let dm = (r / 8.0).min(2.0 * acc);
-            (
-                max_ratio(&q, &w2).map(|b| up(b / ((2.0 * r - dm) * (1.0 - 2.0 * EPS)))),
-                1.0,
-                dm,
-            )
-        }
-        Local::Cone { r, k } => {
-            let Some((zl, zh)) = ratio_range(net, 2) else {
-                return Ok(Verdict::Open);
-            };
-            let s_min = (r + (k * zl).min(k * zh)) * (1.0 - 4.0 * EPS)
-                - 4.0 * EPS * (k * zl).abs().max((k * zh).abs());
-            if !(s_min > 0.0) {
-                return Ok(Verdict::Open);
-            }
-            let w2 = sq(&f.w)?;
-            let g = defect(f.w.scale(r).add_scaled(&f.z, k))?;
-            let q = defect(defect(sq(&f.x)?.add(&sq(&f.y)?))?.sub(&sq(&g)?))?;
-            let c = 1.0 / (1.0 + k * k).sqrt();
-            let dm = (s_min / 8.0).min(2.0 * acc / c);
-            (
-                max_ratio(&q, &w2).map(|b| up(b / ((2.0 * s_min - dm) * (1.0 - 2.0 * EPS)))),
-                c * (1.0 + 4.0 * EPS),
-                dm,
-            )
-        }
-        Local::Torus { big, small } => {
-            let p = defect(sq(&f.x)?.add(&sq(&f.y)?))?;
-            let w2 = sq(&f.w)?;
-            let shift = big * big - small * small;
-            let s = defect(defect(p.add(&sq(&f.z)?))?.add_scaled(&w2, shift))?;
-            let s = widen(
-                s,
-                4.0 * EPS * (big * big + small * small) * w2.f.max_abs_coefficient(),
-            );
-            let pw = defect(p.mul(&w2))?;
-            let four = 4.0 * big * big;
-            let n = defect(sq(&s)?.add_scaled(&pw, -four))?;
-            let n = widen(n, 4.0 * EPS * four * pw.f.max_abs_coefficient());
-            let w4 = sq(&w2)?;
-            let dm = (small.min(big - small) / 8.0).min(2.0 * acc);
-            // `d_t'^2 >= (rho + R)^2`, with `rho` at least `R - r - delta` and at least the
-            // piece's least reach from the axis along its control points' mean direction.
-            let far = (2.0 * big - small - dm).max(radial_floor(net) + big);
-            let lead = (2.0 * small - dm) * (far * far - small * small);
-            (
-                max_ratio(&n, &w4).map(|b| up(b / (lead * (1.0 - 8.0 * EPS)))),
-                1.0,
-                dm,
-            )
-        }
-    };
-    // The bound holds only where `delta` starts below its reach.
-    if !(first_delta < delta_max) {
-        return Ok(Verdict::Unprovable);
-    }
-    if let Some(bd) = bd
-        && bd < delta_max
-    {
-        let b = up(bd * share);
-        if b <= acc {
-            return Ok(Verdict::Proved(b));
-        }
-    }
-    // A corner this close to the accuracy leaves the bound too little room to close.
-    Ok(if seen >= acc * (1.0 - NEAR) {
-        Verdict::Unprovable
-    } else {
-        Verdict::Open
+    Ok(match prove(n, &built.placed, acc, budget, stop)? {
+        Proof::Proved { bound } => Some(bound.mm()),
+        Proof::Refuted { .. } | Proof::Undecided { .. } => None,
     })
 }
