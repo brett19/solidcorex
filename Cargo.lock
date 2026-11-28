@@ -714,6 +714,8 @@ dependencies = [
  "scx-curve",
  "scx-mass",
  "scx-num",
+ "scx-nurbs",
+ "scx-nurbs-surface",
  "scx-p21",
  "scx-surface",
 ]
