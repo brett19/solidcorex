@@ -4,6 +4,7 @@
 //! derivatives on rational rows, the pin's skin cases, and the typed refusals.
 
 use scx_num::error::ErrorKind;
+use scx_num::fmath;
 use scx_num::hash::Rng;
 use scx_nurbs::fit::End;
 use scx_nurbs::{Approach, CompatibleCurves, KnotVector, NurbsCurve};
@@ -154,7 +155,7 @@ fn torus_sections(big: f64, r: f64, theta: &[f64]) -> CompatibleCurves<3> {
     let mut points = Vec::new();
     let mut weights = Vec::new();
     for &a in theta {
-        let (s, c) = a.sin_cos();
+        let (s, c) = fmath::sin_cos(a);
         points.extend(unit.iter().map(|p| {
             let rho = big + r * p[0];
             [rho * c, rho * s, r * p[1]]
@@ -173,10 +174,11 @@ fn polygon_ring(m: usize, lift: f64) -> (CompatibleCurves<3>, Vec<f64>) {
     for k in 0..=m {
         let t = k as f64 / m as f64;
         // Uneven parameters, so the seam's conditions are not symmetric.
-        v.push(t + 0.05 * (core::f64::consts::TAU * t).sin());
+        v.push(t + 0.05 * fmath::sin(core::f64::consts::TAU * t));
         // The seam's angle is 0 exactly, so only `lift` parts the ends.
-        let (s, c) = (core::f64::consts::TAU * (k % m) as f64 / m as f64).sin_cos();
-        let scale = 1.0 + 0.3 * (2.0 * core::f64::consts::TAU * (k % m) as f64 / m as f64).cos();
+        let (s, c) = fmath::sin_cos(core::f64::consts::TAU * (k % m) as f64 / m as f64);
+        let scale =
+            1.0 + 0.3 * fmath::cos(2.0 * core::f64::consts::TAU * (k % m) as f64 / m as f64);
         let z = if k == m { lift } else { 0.0 };
         points.extend(
             profile
@@ -262,9 +264,9 @@ fn a_closed_ring_is_smooth_and_exact_across_the_seam() {
     // The torus: rational sections, the last one the first rotated by a full turn (its
     // points off by the rounding of sin 2 pi).
     let theta: Vec<f64> = (0..=12)
-        .map(|k| core::f64::consts::TAU * k as f64 / 12.0)
+        .map(|k| core::f64::consts::TAU * f64::from(k) / 12.0)
         .collect();
-    let v: Vec<f64> = (0..=12).map(|k| k as f64 / 12.0).collect();
+    let v: Vec<f64> = (0..=12).map(|k| f64::from(k) / 12.0).collect();
     let rows = torus_sections(3.0, 1.0, &theta);
     for q in 1..=MAX_CLOSED_DEGREE {
         let s = skin(&rows, &v, q, &Skin::Closed { coincidence: 1e-12 }).unwrap();
@@ -281,7 +283,7 @@ fn a_closed_ring_is_smooth_and_exact_across_the_seam() {
         for _ in 0..50 {
             let p = at(&s.surface, rng.next_f64(), rng.next_f64());
             let rho = (p[0] * p[0] + p[1] * p[1]).sqrt();
-            let tube = ((rho - 3.0).powi(2) + p[2] * p[2]).sqrt();
+            let tube = ((rho - 3.0) * (rho - 3.0) + p[2] * p[2]).sqrt();
             assert!((tube - 1.0).abs() < 0.2, "q {q}: tube {tube}");
         }
     }
@@ -396,8 +398,8 @@ fn homogeneous_with_still_weights_is_held_on_polynomial_rows() {
     let (rows, v) = pin_sections();
     let d: Vec<End<3>> = (0..4)
         .map(|j| End::Curvature {
-            d1: [0.1 * j as f64, -0.2, 3.0],
-            d2: [0.0, 0.5, -0.3 * j as f64],
+            d1: [0.1 * f64::from(j), -0.2, 3.0],
+            d2: [0.0, 0.5, -0.3 * f64::from(j)],
         })
         .collect();
     let w = vec![
@@ -474,7 +476,7 @@ fn pin_skins_lines_into_a_bilinear_patch() {
     );
 }
 
-/// srf_adv `interpolates_cross_sections`: four sections at z = 2i of radius 0.5 + 0.1i.
+/// `srf_adv` `interpolates_cross_sections`: four sections at z = 2i of radius 0.5 + 0.1i.
 fn pin_sections() -> (CompatibleCurves<3>, Vec<f64>) {
     let knots = KnotVector::new(2, vec![0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0]).unwrap();
     let points = (0..4)
