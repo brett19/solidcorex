@@ -2104,6 +2104,29 @@ not a mismatch. The Part 42 comparison reads both in the same explicit units. Re
 
 | 11-27 | (For the owner's review) `scx_p21::units::context` returns a `Context` with `length` and `angle` each `Unit::{Missing, Named(f), Conflicting}` and the file's distance measures; nothing defaults. `Context::units(assume)` turns it into `Units` or a typed `UnitsFault`, and `Context::uncertainty(length)` is the largest stated (`several` when more). scx-step uses it and drops its own reader (17 tests unchanged); `product::read` refuses a frame in a context without one length unit (`EntityCause::Units`) and `read_assuming` takes the caller's assumed length. The pin's mm/rad default, last-wins conflict and last-wins uncertainty are counted as defect classes in `t_p21` | A per-unit enum is the only shape that keeps "missing" and "conflicting" apart and lets the product reader go on; `Result` would lose the uncertainty and the structure of files that lack a unit. `unit_factor`'s unknown-SI-base factor 1 is the same guess one level down and stays a follow-up | 74 §23 |
 
+### 23.6 P21Ub (11-28)
+
+The residue §23.1 left: `scx_p21::units::unit_factor` read a length or plane angle `SI_UNIT` whose
+base it does not know (`SI_UNIT(.MILLI.,.FURLONG.)`) as factor 1. It now returns `None`, as it
+does for an unreadable conversion. `context` already treats `None` as "not usable", so such a unit
+is left out and the kind reads `Unit::Missing` (then `UnitsFault::Missing`, or the caller's
+assumption); scx-step, `Context::units` and `uncertainty` needed no change and gained no default.
+A measure whose unit is `None` is read in the context's length unit, as before for unreadable units.
+Units of kind `Other` (steradian, mass) keep factor 1: nothing reads their factor, and refusing
+them would make every real file's solid angle unit "unreadable". A typed cause was not added: the
+module has no per-unit cause today, and `Missing` is what the context already says.
+
+Tests (`scx-p21` units): an unknown-base length and plane angle unit is `None` and the context
+names the kind `Missing` (in `missing_or_broken_units_are_missing_not_mm_and_rad`, replacing the assertion that it was
+`Named(1.0)`); known bases (MILLI METRE, RADIAN) read exactly and STERADIAN stays `Other, 1.0`; an
+uncertainty in an unknown-base unit is read in the context's length unit.
+
+difftest: `t_p21` maps the unit-level difference (scx `None`, pin factor 1 for a non-`Other` SI
+unit) as equal and counts it as a new defect class, `unknown_base`, appended to the
+`corpus_pin_units` line. The context level needed no mapping (it already counts a `Missing` unit
+as the pin's default, which is 1 for both mm and rad). The pin corpus has no such unit, so the
+count is 0 as the others are.
+
 ## 20. SU7 as built (11-27)
 
 `scx_surface::recognize` and `scx_surface::recognize_written`, in `crates/scx-surface/src/recognize.rs`
@@ -3275,3 +3298,214 @@ leaders are the certified gaps and the check.
 ### 29.9 Proposed 04 row
 
 | 11-27 | (For the owner's review) `scx_step::{build, import}` build the analytic subset (planes, cylinders, cones, spheres, tori; lines and conics) from the read's plan: the file's sharing is the topology (no vertex joining), each edge and vertex gap enclosed and, past the file's uncertainty, raised and recorded (R3; `Note::PastRatio` past the ratio), exact pcurves with a collapsed edge at each pole joint, parity then the certified volume sign (R4), and the import check. Disagreeing `same_sense` flags are turned and noted, not refused. NURBS, swept, offset, vertex-loop, seamless and non-manifold cases are typed `BuildError::Pending(Waits)`. Edges: brep, check, curve, mass, surface | Joining by distance and trusting flags over topology are heals and failing defaults; certified gaps make every accuracy a proof | 74 §29 |
+
+## 28. CF2a as built (11-27)
+
+Task CF2a (§8): the certified gaps on analytic geometry, the wide vertex, the degenerate edge,
+`Scope::Import` and `Scope::Stitched`, and the one-defect recipes at δ = 10·acc, acc and acc/10.
+Branch `cf2a`. Crates `scx-check` (new `gaps` module, `findings` extended) and `scx-surface` (two
+additions to SU6's `gap`, one bound fixed). New Cargo edges `scx-check → scx-surface` and
+`scx-check → scx-curve` (§28.6).
+
+### 28.1 What finish already refuses, and what the check adds
+
+`finish` (`GeometryCause`) tests each edge's ends against its vertices, each use's ends against its
+vertex, and each pcurve against its edge at 9 samples. A defect that holds along the edge (a vertex
+moved by 10·acc, a pcurve offset by 10·acc) never reaches the check: finish refuses the body. The
+recipe test `a_moved_vertex_is_clean_within_its_ball_and_refused_by_finish_past_it` pins that, and
+shows the check clean at acc and acc/10. The check's new power is in two places:
+
+- **The face gap.** finish never measures the edge's curve against its face's surface. An edge
+  moved off its face with its pcurve and bounds kept consistent passes finish and is found here.
+- **Between samples.** The check's answers are suprema over the whole parameter range, proved by
+  branch and bound, where finish's are 9 points.
+
+### 28.2 The allowances
+
+These are finish's, from 09 §3: a vertex is a ball, an edge a tube, and distances add. The reach of
+a recorded accuracy is `max(acc, zone)`; `rv`, `re` and `rb` are a vertex's, an edge's and a use's
+reach.
+
+| Question | Measured | Allowed | Finding |
+|---|---|---|---|
+| Edge on its face | the curve's largest distance from the kind's whole surface | `re` | `EdgeOffFace` |
+| Use follows its edge | the pcurve's lift against the curve, at the same parameter | `rb` | `PcurveOffEdge` |
+| Collapsed edge's use | the lift against the vertex | `rb + re + rv` | `PcurveOffEdge` |
+| Edge ends at its vertex | the curve's end point against the vertex | `re + rv` | `VertexOffEdge` |
+| Edge not degenerate | the curve's diameter | above `re` | `DegenerateEdge` |
+| Not too wide (`Full` only) | a vertex or edge accuracy | below 1000 zones | `WideVertex`, `WideEdge` |
+
+`Scope::Stitched` decides gaps exactly as `Import` does. The allowances are already sums of the
+recorded accuracies, so a stitched body's wider tubes carry over with no extra rule; stitching's own
+questions (clearance) are CF2b's. Under `Import` and `Stitched`, a wide accuracy is a recorded fact,
+not a finding (09 §6; CTC-05 imports at ratio 2050). Under `Full` it is a defect of our own result.
+
+Each answer is a `Bracket` against its allowance. Past the allowance it is a finding, within it the
+answer is clean, and a straddle is `Undecided` with a `Why`: `Exhausted`, `Precision`,
+`AtAllowance` or `Enclosure` (R2). A NURBS face is `Undecided::Pending`, and a value that is not
+finite is `Undecided::NotFinite`.
+
+### 28.3 Edge against face: no trim-restricted gap
+
+The face's own gap (the curve against the trimmed face) is bounded below by the whole surface's
+gap (`curve_surface_gap`) and above by the pcurve's (`pcurve_edge_gap`, because the lift lies in
+the face). The edge is clean when either upper bound is within `re`. A finding needs the whole
+surface's lower bound past `re`. Anything else is `Undecided::EdgeOffFace`. Nothing invents a
+trim-restricted gap.
+
+This answers §17's Open 2: CF2a is not the caller that needs one.
+
+- For not building it. Every case where the two bounds disagree is one where the edge is near the
+  surface but off its trim, or the pcurve is loose. In the first case the edge does lie within
+  `re` of the surface, which is what 09 §3 tolerates. In the second case the loose pcurve is
+  already a `PcurveOffEdge` question with its own allowance.
+- For not building it. A literal trimmed gap would put every loose body, where `rb > re`, in a
+  permanent Undecided band: the pcurve upper bound sits above `re`, and only the trimmed gap could
+  close it. The whole-surface bound closes it at once, because a loose pcurve still lies in its
+  surface.
+- Against. A face whose edge runs along the surface but outside its trim, by more than `re`, is
+  not caught. That is a face-region defect (the loop leaves its surface's domain), and it belongs
+  with CF3's face checks or the contract's region tests, not with an edge gap.
+
+The order saves work. When one use's pcurve upper bound is within `re`, the face's surface gap is
+not computed at all; a seam's two uses share their face's answer. A use whose `rb` exceeds `re` is
+searched to `re` first, and to `rb` only if that is undecided.
+
+### 28.4 Degeneracy, collapsed edges and the budget
+
+- **Degenerate.** The lower bound is the largest distance among 9 samples, from points 0 and 4
+  to all the others; it exits early when that lower bound already exceeds `re`. The upper bound is
+  the largest box-to-box far distance over 16, 32 and then 64 pieces. An upper bound within `re`
+  is a finding. Anything else open is `Undecided` (`Enclosure`, or `Exhausted` when no box closes).
+  The pin's horn-torus degenerate case (`issue_1515`) is not portable: our `Torus::new` refuses a
+  horn torus at construction.
+- **Collapsed edges** (poles, apexes): each use's lift is bracketed against the vertex by a local
+  branch and bound, one unit per piece. It ends when the question is decided, when the width is
+  within `NEAR` times the allowance, on `Precision` when a piece cannot split, or on stop.
+- **Budget** (R6). The structure is charged first, one unit per use. Each edge, in id order, then
+  gets `remaining / edges_left` as its own sub-budget and is charged back what it used. An edge
+  whose share runs out lists what it reached with `Why::Exhausted`. A small budget may leave any
+  edge undecided, but never gives a false finding
+  (`a_budget_too_small_leaves_the_edge_off_its_face_undecided`).
+
+### 28.5 SU6 changes
+
+- **`Aim::Decide { allowance, width }`.** The search ends when its bracket is on one side of the
+  allowance, or straddles it within `width`. CF2a asks at width `NEAR · allowance` (1e-3). SU6's
+  `Aim::Against` hangs on a plateau at the allowance; `Decide` bounds that case. The docs now say
+  so.
+- **`Bracket::new(lower, upper) -> Option<Self>`**, for brackets built outside the search (the
+  degenerate diameter and the collapsed lift).
+- **The pcurve bound across a seam (a fix).** `PcurveField::over` fell back to the natural interval
+  bound whenever the uv box met an arc break. The natural bound converges only linearly. A seam's
+  `u` is enclosed a few ulps either side of its break, so every seam piece fell back. On testkit
+  bodies the cylinder and cone seams, the sphere's equator and the torus circles each ran out of
+  200,000 units, with uppers stuck at 1.1e-5 to 1.4e-4 against `re` = 1e-5. The fix cuts the box at
+  the breaks, evaluates the jets on each part and takes their hull. That is valid pointwise: at
+  every `t`, the lift lies on one part. The same seams now close in 5 units. This also lowers
+  SU6's "about 8,350 units on a cylinder across its breaks".
+- **Cached end gaps.** `PcurveField` keeps the point gap as the search mark, so a split no longer
+  recomputes its ends' gaps (four `box_over`s per split). That makes curved bodies 1.6 to 1.9 times
+  faster.
+
+### 28.6 Deviations
+
+- **Cargo edges.** The §8 row lists "—", but `check → surface` and `check → curve` are new. SU6's
+  gaps live in `scx-surface` and take `scx_curve` types; the check cannot call them otherwise.
+  Both crates sit above `scx-check` in `layers.txt`, so no layer moved. The alternative, routing
+  through `scx-bodyq`, would add a crate between them for no logic.
+- **The §3.3 finding shapes.**
+  - `DegenerateEdge { edge, extent: Bracket, allowed }` replaces
+    `Degenerate { entity, what: Degeneracy }`. Only edges are certified here. A degenerate face is
+    CF3's, and an enum of one case would be speculative.
+  - `WideVertex { vertex, accuracy, limit }` replaces `{ vertex, extent }`, and a matching
+    `WideEdge` is added. The ratio limit applies to both (09 §6), and the accuracy against its
+    limit is what the reader needs.
+  - `PcurveOffEdge` names the `Fin`, since there is no `FinId`.
+  - `VertexOffEdge` adds `allowed` and `at`, the end's parameter.
+  - Every gap finding carries its `Bracket` and `allowed`, so a reader sees the margin.
+- **`Findings`** derives `PartialEq` but not `Eq`, because brackets hold floats.
+
+### 28.7 Tests
+
+All test bodies come from scx-testkit, and every truth is a closed form. No test was removed.
+
+- `crates/scx-check/tests/gaps.rs`:
+  - `an_edge_off_its_face_is_found_past_its_reach_only`: the δ recipe, over seeds 0 to 2 and all
+    three scopes.
+    - At 10·acc there is exactly one `EdgeOffFace`, whose bracket holds δ.
+    - At acc there is no finding; any undecided item is that edge and face, at the allowance.
+    - At acc/10 the body is clean.
+  - `an_edge_moved_a_hundredth_off_a_face_is_a_hundredth_off`: the pin's
+    `offset_edge_curve_fails_test_13`. The bracket holds 0.01 and is narrower than 1e-3 zones.
+  - `a_moved_vertex_is_clean_within_its_ball_and_refused_by_finish_past_it` (§28.1).
+  - `valid_and_loose_bodies_are_clean`: every testkit kind, seeds 0 and 1, sizes 1 and 3, all
+    scopes, plus loose variants at offsets 1e-9 and 1e-6. There are no gap findings and nothing
+    undecided. The stack's `NotSolid` is CF1's structural finding.
+  - `a_wide_vertex_is_found_under_full_only`: the pin's `issue_1419`, at ratios 999, 1000
+    and 2050.
+  - `a_budget_too_small_leaves_the_edge_off_its_face_undecided` (R6).
+  - `a_set_stop_cancels`.
+  - `the_same_body_gives_the_same_findings` (determinism, and the same `Spent`).
+- `gaps` unit tests:
+  - `a_circle_within_its_reach_is_degenerate`: radii from 0.2 to 0.45 re are found; 0.6 re and up
+    are clean in 9 units; 0.5 re gives no finding; a 10-unit budget gives `Exhausted`.
+  - `a_pole_lift_is_bracketed_against_its_vertex`: a sphere's pole, with point and line lifts, at
+    d = 0, 1e-4 and 1e-6.
+- `scx-surface` `gap` tests:
+  - `deciding_at_the_allowance_ends_within_the_width`
+  - `a_bracket_is_built_only_in_order`
+  - `a_seams_pcurve_is_decided_at_once`: generators at 0, π/2 and π on a world and a tilted
+    cylinder, each in under 64 units.
+
+### 28.8 Measurements
+
+The timer harness was not committed. Each figure is the release mean of 20 checks under
+`Scope::Full`. Bodies were finished at the default resolution (zone 1e-5). "Before" is the merge
+base, where `check` ran the structure only.
+
+| body | edges | before (us) | after (us) | after per edge (us) | work units |
+|---|---|---|---|---|---|
+| block 1 | 12 | 1.1 | 172 | 14 | 276 |
+| block 4 | 192 | 13.6 | 2,460 | 12.8 | 4,416 |
+| cavity 4 | 384 | 28.2 | 4,608 | 12.0 | 8,832 |
+| checker 4 | 140 | 12.0 | 1,931 | 13.8 | 3,412 |
+| loose block 4 (1e-6) | 192 | 14.7 | 2,294 | 12.0 | 4,416 |
+| cylinder 1 | 3 | 0.3 | 5,343 | 1,781 | 1,109 |
+| cone 1 | 3 | 0.2 | 3,564 | 1,188 | 568 |
+| sphere 1 | 3 | 0.1 | 10,599 | 3,533 | 287 |
+| sphere 4 | 12 | 0.3 | 42,253 | 3,521 | 1,148 |
+| torus 1 | 2 | 0.2 | 64,023 | 32,011 | 1,566 |
+| torus 4 | 32 | 2.2 | 218,376 | 6,824 | 5,856 |
+
+Planar edges cost about 12 us each: two pcurves at 5 units, two ends and the diameter. Curved edges
+cost 0.3 to 32 ms. That cost is mostly full-turn circles, whose pcurve bound shrinks with the
+piece's width cubed, so they need 250 to 500 points to bring the upper bound under `re`. On a
+sphere or torus each point costs about 40 us of interval jets, which is why the cost per unit is
+high there. A cone's generator against its whole surface costs about 158,000 units
+(375 ms) when it is asked. The check skips it whenever a pcurve settles the face, which it does on
+every valid body here.
+
+No existing path is slower. Operations do not call `check`, and the two SU6 changes only make the
+pcurve search cheaper. The pin's Level 2 against the Boolean is CO3's comparison (§10); it was not
+measured here.
+
+### 28.9 Open
+
+1. **Curved cost.** A torus at 64 ms for two edges is far above the planar 12 us per edge. Two
+   remedies, both certified and neither built: a Taylor-model or mean-value jet for the full-turn
+   circle pcurve, which would turn the cubic convergence into a constant on coaxial cases as the
+   curve-surface series already do; and a cheaper sphere and torus jet (one arc formula, not four
+   parts). CO3 should measure against the Boolean before CF2a goes ready; this is the §10 risk.
+2. **The cone generator against its surface** converges slowly at the apex (158,000 units). It
+   matters only for an edge whose pcurves do not settle its face. A closed form for the line
+   against the cone (the generator's own distance) would fix it.
+3. **Face-region defects** (§28.3, "against"): an edge off its face's trim but on its surface is
+   for CF3 or the contract, not this check.
+4. **Degenerate faces** are not certified here (§28.6).
+
+**Proposed 04 row.** `scx_check::check` certifies each edge against finish's allowances: the face
+(whole-surface lower bound, pcurve upper bound, no trimmed gap), the uses, the vertices, the
+diameter, and the ratio limit under `Full`. `Stitched` decides gaps as `Import` does. Each answer is
+a `Bracket` against its allowance, or a typed `Undecided { why }` (R2). The edges share the budget
+in id order (R6). NURBS faces are `Pending`.

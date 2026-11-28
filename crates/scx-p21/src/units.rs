@@ -263,8 +263,9 @@ pub enum UnitKind {
 }
 
 /// A unit's kind and size: millimetres for lengths, radians for plane angles (1 for anything
-/// else, or a unit that cannot be read). `None` when `#id` is not an entity, or is a
-/// `CONVERSION_BASED_UNIT` whose measure cannot be read or is not finite and positive.
+/// else, or a unit that cannot be read). `None` when `#id` is not an entity, is a length or
+/// plane angle `SI_UNIT` whose base is not `METRE` or `RADIAN`, or is a `CONVERSION_BASED_UNIT`
+/// whose measure cannot be read or is not finite and positive.
 pub fn unit_factor(ex: &Exchange, id: u64) -> Option<(UnitKind, f64)> {
     factor(ex, id, 0)
 }
@@ -285,6 +286,9 @@ fn factor(ex: &Exchange, id: u64, depth: usize) -> Option<(UnitKind, f64)> {
         let base = match si.get(1).and_then(Param::as_enum) {
             Some("METRE") => 1000.0,
             Some("RADIAN") => 1.0,
+            // A length or plane angle in a base this reader does not know has no factor to
+            // guess; other kinds (steradian, mass, ...) carry a factor nobody reads.
+            _ if kind != UnitKind::Other => return None,
             _ => return Some((kind, 1.0)),
         };
         return Some((kind, si_prefix(si.first()) * base));
@@ -531,14 +535,36 @@ mod tests {
                 }))
             );
         }
-        // An SI unit with an unknown base is read as factor 1 (`unit_factor`'s own guess, a
-        // residue of the port: research 74 §23 lists it), so the unit is named.
-        let c = ctx(
-            "#1=(LENGTH_UNIT()NAMED_UNIT(*)SI_UNIT(.MILLI.,.FURLONG.));",
-            "#1",
-            "",
+        // An SI unit with an unknown base has no factor: it is refused, not read as 1.
+        for (kind, base) in [("LENGTH_UNIT", "FURLONG"), ("PLANE_ANGLE_UNIT", "TURN")] {
+            let data = format!("#1=({kind}()NAMED_UNIT(*)SI_UNIT(.MILLI.,.{base}.));");
+            let ex = parse(&data);
+            assert_eq!(unit_factor(&ex, 1), None, "{base}");
+            let c = ctx(&data, "#1", "");
+            assert_eq!(
+                (c.length, c.angle),
+                (Unit::Missing, Unit::Missing),
+                "{base}"
+            );
+        }
+        // Known bases still read exactly, and a unit of another kind is not refused.
+        let ex = parse(
+            "#1=(LENGTH_UNIT()NAMED_UNIT(*)SI_UNIT(.MILLI.,.METRE.));\
+             #2=(NAMED_UNIT(*)PLANE_ANGLE_UNIT()SI_UNIT($,.RADIAN.));\
+             #3=(NAMED_UNIT(*)SI_UNIT($,.STERADIAN.)SOLID_ANGLE_UNIT());",
         );
-        assert_eq!(c.length, Unit::Named(1.0));
+        assert_eq!(unit_factor(&ex, 1), Some((UnitKind::Length, 1e-3 * 1000.0)));
+        assert_eq!(unit_factor(&ex, 2), Some((UnitKind::Angle, 1.0)));
+        assert_eq!(unit_factor(&ex, 3), Some((UnitKind::Other, 1.0)));
+        // A measure named in an unknown-base unit is read in the context's length unit.
+        let c = ctx(
+            "#1=(LENGTH_UNIT()NAMED_UNIT(*)SI_UNIT($,.METRE.));\
+             #2=(LENGTH_UNIT()NAMED_UNIT(*)SI_UNIT(.MILLI.,.FURLONG.));\
+             #3=UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE(1.E-03),#2,'d','');",
+            "#1",
+            "#3",
+        );
+        assert_eq!(c.uncertainty(1000.0).largest, Some(1.0));
         // A unit list that is not a list.
         let ex = parse(&format!(
             "{MM}#100=(GEOMETRIC_REPRESENTATION_CONTEXT(3)GLOBAL_UNIT_ASSIGNED_CONTEXT(#1)REPRESENTATION_CONTEXT('',''));"
