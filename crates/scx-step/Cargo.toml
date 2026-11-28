@@ -11,13 +11,16 @@ publish.workspace = true
 # SP1 adds only the edge to scx-p21 (research 74 §8), and scx-num for the five error kinds
 # `scx-p21`'s own errors already use. SP2 adds check, mass and surface (its row), and brep
 # and curve, which the build cannot do without: the draft it fills and the edge curves it
-# makes (74 §29).
+# makes (74 §29). SP2b adds nurbs and nurbs-surface: a file's B-spline surface becomes a
+# `Surface::Nurbs` only through their `KnotVector`, `Net` and `NurbsSurface` (74 §38).
 [dependencies]
 scx-brep = { path = "../scx-brep" }
 scx-check = { path = "../scx-check" }
 scx-curve = { path = "../scx-curve" }
 scx-mass = { path = "../scx-mass" }
 scx-num = { path = "../scx-num" }
+scx-nurbs = { path = "../scx-nurbs" }
+scx-nurbs-surface = { path = "../scx-nurbs-surface" }
 scx-p21 = { path = "../scx-p21" }
 scx-surface = { path = "../scx-surface" }
 
