@@ -1,5 +1,5 @@
 // Written for solidcorex. Apache-2.0.
-//! The writer every constructor goes through: one draft with the outside and one solid
+//! The writer every constructor goes through: one draft with the outside and a solid
 //! region decided at construction, vertices, edges made once and shared, and faces whose
 //! loops get their exact pcurves from `Draft::exact_loops`.
 
@@ -18,14 +18,16 @@ use scx_surface::Surface;
 
 use crate::error::{Defect, MakeError};
 
-/// A one-solid body being written.
+/// A body being written: one solid, or more by `begin_solid`, or a sheet.
 pub(crate) struct Assembly<'d> {
     draft: Draft,
     doc: &'d Document,
-    /// The shell of the outside region: the front of every face.
-    outside: ShellId,
-    /// The shell of the solid region: the back of every face.
-    solid: ShellId,
+    /// The shell of the outside region that faces are being added to: the front of every
+    /// solid face. A sheet has none.
+    outside: Option<ShellId>,
+    /// The shell of the solid region faces are being added to: the back of every face. A
+    /// sheet has none.
+    solid: Option<ShellId>,
     /// The straight edges made so far, by their ends in id order.
     lines: BTreeMap<(VertexId, VertexId), EdgeId>,
 }
@@ -40,10 +42,31 @@ impl<'d> Assembly<'d> {
         Ok(Self {
             draft,
             doc,
-            outside,
-            solid,
+            outside: Some(outside),
+            solid: Some(solid),
             lines: BTreeMap::new(),
         })
+    }
+
+    /// An empty draft for sheets: no solid region, and a shell of its own for each face.
+    pub(crate) fn sheets(doc: &'d Document) -> Self {
+        Self {
+            draft: Draft::new(),
+            doc,
+            outside: None,
+            solid: None,
+            lines: BTreeMap::new(),
+        }
+    }
+
+    /// Starts another solid: a solid region with a shell of its own, and a shell of its own
+    /// in the outside region (a shell must be connected, and two solids apart are not). The
+    /// faces added from now on have them at their front and back.
+    pub(crate) fn begin_solid(&mut self) -> Result<(), MakeError> {
+        self.outside = Some(self.draft.add_shell(ShellRecord::new(RegionId::OUTSIDE))?);
+        let region = self.draft.add_region(true)?;
+        self.solid = Some(self.draft.add_shell(ShellRecord::new(region))?);
+        Ok(())
     }
 
     pub(crate) fn vertex(&mut self, p: Point3) -> Result<VertexId, MakeError> {
@@ -109,12 +132,27 @@ impl<'d> Assembly<'d> {
         surface: Surface,
         loops: &[Vec<(EdgeId, Sense)>],
     ) -> Result<FaceId, MakeError> {
+        let (Some(outside), Some(solid)) = (self.outside, self.solid) else {
+            return Err(MakeError::Defect(Defect::NoSolid));
+        };
         let records = self.draft.exact_loops(&surface, loops, self.doc)?;
-        Ok(self.draft.add_face(FaceRecord::new(
-            surface,
-            [self.outside, self.solid],
-            records,
-        ))?)
+        Ok(self
+            .draft
+            .add_face(FaceRecord::new(surface, [outside, solid], records))?)
+    }
+
+    /// Adds a sheet face on `surface`, with `loops` (the first the outer one) of edges in
+    /// their senses, in a shell of its own in the outside region with both sides in it.
+    pub(crate) fn sheet_face(
+        &mut self,
+        surface: Surface,
+        loops: &[Vec<(EdgeId, Sense)>],
+    ) -> Result<FaceId, MakeError> {
+        let shell = self.draft.add_shell(ShellRecord::new(RegionId::OUTSIDE))?;
+        let records = self.draft.exact_loops(&surface, loops, self.doc)?;
+        Ok(self
+            .draft
+            .add_face(FaceRecord::new(surface, [shell, shell], records))?)
     }
 
     /// Checks the draft and finishes it. A refusal is the constructor's own defect.

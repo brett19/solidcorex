@@ -1320,3 +1320,477 @@ MIN_HEIGHT (#17085)?**
 - It did not plan step 5's fitter, procedural kinds, surface construction, volume maps or ray
   against NURBS (Q1), nor step 8's families beyond naming their early starts.
 - It did not check the testkit recipes' coverage of step-7 cases; DT4 and BO10 will.
+
+## 13. As built
+
+### 13.1 RP0 as built (11-28)
+
+**What was run.** `crates/scx-difftest/examples/heal_count.rs` (`cargo run --release -p
+scx-difftest --example heal_count`, deterministic, no counters in any library). Each record is
+built twice through the pin's `solidcore-convert` (`to_kernel_body`): trusted (no healer) and
+untrusted (`heal_made` runs). Both bodies go through the pin's `check_brep` at level 2
+(pointers, then `AssertValid`), failures classed by the failing report's name. A record is
+*altered* when the healed body differs in entity counts, vertex or edge tolerances, or the
+record it converts back to. Records: every distinct body of the rig corpus
+(`kernel_cases`, 1,484 bodies, 1,248 distinct; all of them are marked trusted there, so
+none reaches the healer in the pin: each is healed here as if it were untrusted) and the pin's
+STEP fixtures read by `solidcore-step` (4 solids). The NIST STEP files are not on the build
+machines (the fetch script needs `unzip`); `SCX_HEAL_STEP_DIR` runs any directory of them.
+
+| | rig corpus | STEP fixtures |
+|---|---|---|
+| distinct records | 1,248 | 4 |
+| refused to build, with or without the healer | 0 | 0 |
+| failing the check before the healer | 1 | 0 |
+| of those, passing after the healer | **0** | 0 |
+| altered by the healer | 177 | 3 |
+| of which valid before | 176 | 3 |
+| altered, tolerances only | 131 | 3 |
+| altered, entity counts (topology) | 31 | 0 |
+| altered, geometry or trims | 15 | 0 |
+| passing before, failing after | **15** | 0 |
+
+The one record failing before (three reports: Face has Coincident Edges, Coincident
+Vertices, partially Coincident Edges) is not fixed: two of the three reports remain. The 15
+that go from passing to failing all fail `Tolerance` after healing (the healed
+bodies carry a tolerance the check refuses; e.g. `booleans/5322-cut-with-a-5000-mm-tool.json:b3`,
+`fillets/16019-chamfer-1-on-the-top-rim-of-a-cylinder-r125.json:b1`).
+
+**Recommendation for Q7: do not port the healer.** On this corpus it repairs no failing
+record (0 of 1) and makes 15 valid records fail the check, while widening tolerances on 131
+and changing the topology of 31 valid ones. The class worth a certified item: none shown.
+For (keeping the question open): the corpus holds no record that reaches the healer in the pin
+(all trusted) and only 4 STEP solids, so real untrusted input is not sampled; the NIST files
+should be run once through `SCX_HEAL_STEP_DIR` before the row is closed, and a Q7 reversal
+needs a class of failing records with a count. Against porting, in numbers: 15 regressions,
+0 fixes.
+
+NIST run (coordinator, 11-28): the 33 NIST MBE PMI STEP files (public domain; fetched by the pin's
+pinned-hash script) through the same harness (`SCX_HEAL_STEP_DIR`). 33 records: none refused; 2 fail
+the check before the healer (Bad Knot Count, Bad Repeated CPts) and both still fail after it; the
+healer alters 32 (31 tolerances only, 1 geometry or trims) and turns no valid record invalid. Over
+all three sets the healer fixes 0 of 3 failing records, so Q7 is ruled: not ported.
+
+### 13.2 BO18 as built (11-28)
+
+`scx_boolean::intersect(a, b, cx) -> Result<Done<NoItems>, BooleanError>` runs stages 1-4 of `boolean` (`interfere`, `face_face`) and stops; `crates/scx-boolean/src/intersect.rs`. The result is a `Draft::new()` body of no faces:
+
+- each stage-4 `Section` is a wire edge on its curve over its span, between the vertices of its merged points; a closed section no merged point lies on gets one vertex at its start;
+- each `Lying` piece (an operand edge on the other body) is a wire edge on the operand edge's curve over the piece, written once when the other operand's edge also runs along it (same end vertices and a midpoint within the zone);
+- each `Touch`, and each merged point no edge ends at, is a lone vertex (touches deduped against written vertices within the zone);
+- a coincident pair is a region, so only its boundary (the lying pieces) appears;
+- one shell of the outside region per connected piece (union-find over vertices, shells in order of lowest vertex), since a shell must be connected: two circles apart are two shells; a lone vertex is a shell of its own; no contact is a body with no shells.
+- lineage is `Origin::Operand(op, entity)` for both operands (the draft is not `a.edit()`, so `Origin::Face` of `a` has no meaning).
+
+Decisions. Fresh draft against `a.edit()` with everything removed: for, the result is a new body and carries no `a` ids; against, ids of `a` are not preserved for callers that want to map back (they use the lineage). Dedupe by geometry against by `along`: `along` is only set for edges lying along an edge, but the same piece can also come from two faces of one operand, so geometry (ends plus midpoint) covers both; against, a quadratic scan over written edges (fine at the sizes here). Lone vertices from unused merged points are included: the other choice (touches only) would lose a point where only edges meet.
+
+Truths (tests/intersect.rs, 12 tests): disjoint cubes, no shells; overlapping cubes, six lines of 0.5 and six vertices; cylinder through a plate, two circles of 2 pi in two shells; cylinder on a block side, arcs pi, pi and rulings 1, 1 in one shell; cylinder with a square plane, a unit circle; a tilted plate, two ellipses of semi-axes 1 and sqrt 2 (perimeter by quadrature); two unit spheres, circle of length sqrt 3 pi (two arcs); plane through a sphere's centre, 2 pi; tangent plane, one lone vertex at the closed-form point; plane through a torus's mid plane, 20 pi (the inner and outer circles of R = 5, r = 1.5); operand swap and repeat agree; shared cube face, four unit edges once each. The solid `contract` does not apply to a wire body; `finish` checks it.
+
+Open: no pin test of `intersect_faces_read_only` (9) was ported (it needs the pin's face-level API); the NURBS and general-SSI pairs stay `Unsupported(SsiPair)` as in `boolean` (BO22/BO23).
+
+### 13.3 BO13 imprint as built (11-28)
+
+`scx_boolean::imprint(target, tool, what, cx)` (`imprint_op.rs`) runs stages 1 to 5 and
+finishes the draft with no selection. Choices 75 left open:
+
+- **The result is the target's part of the stage-5 draft.** Stage 5 writes both operands whole;
+  the entry removes the tool's faces, then the edges, vertices, shells and regions only they
+  held, and finishes. `Done.changes` is then the target's own edit (split faces with their
+  pieces, cut edges, new vertices, section edges whose origins include the tool's faces as
+  operand 1); the pin's `(Body, bool)` is `!changes.is_empty()`. For: the target keeps its
+  material and sense, so volume and area are the target's; nothing needs classifying. Against: a
+  caller wanting the tool's faces cut as well must swap the operands and call again.
+- **`Imprint::Edges` or `Imprint::EdgesAndFaces`.** Both write every transversal section and cut
+  the target's edges at the merged points. `EdgesAndFaces` also writes the tool's edges lying in
+  the target's faces (stage 4's `lying` with no `along`), which is what splits a target face a
+  tool face rests on into the part under it and the rest; `Edges` drops those. For the split: a
+  block standing on a face is then imprinted or not at the caller's choice (tests: 7 faces
+  against 6 with no changes). Against: the pin has one Imprint mode; BO12 may find the choice
+  unnecessary once cells replace pieces, and the variant can then go.
+- **No new counters, no new stage code.** The entry filters stage 4's list and reuses stage 5;
+  the cleanup repeats the draft cleanup the stage-5 tests used.
+
+Truth tests (`tests/imprint.rs`, closed forms): offset cubes give 9 faces, 21 edges, 14 vertices,
+areas 3 x 1/4 + 3 x 3/4 + 3 x 1; a thin cylinder through a cube gives 8 faces, 14 edges, 10
+vertices, two disks of pi/16 and two faces of 1 - pi/16; a block on a face, a block apart,
+determinism and operand swap, and a refusal of another document. Volume is 1 throughout.
+
+### 13.4 MK14 as built (11-28)
+
+`scx_make::prism(&[Region], &Frame, Span, &Document) -> Made<PrismFaces>` and
+`scx_make::sheet(&[Region], &Frame, &Document) -> Made<SheetFaces>`. `PrismFaces { solids:
+Vec<ExtrudeFaces> }` is one record per region, in the order given; `SheetFaces { faces: Vec<FaceId> }`
+one face per region. The solids are written by the same code as `extrude` (which now calls
+`extrude_into`), so each is exactly what `extrude` makes of its region.
+
+Decisions, with cases for and against:
+
+- **One solid per region, in one body; not a union.** Each region has its own solid region and
+  shell, and its own shell in the outside region. For: the pin joins separate extrusions by
+  `union_all`, and the regions are apart (below), so the union is the same solids with no
+  Boolean. Against: the pin's body is one `union_all` result whose solids could be re-ordered;
+  ours are in input order, which is what a caller wants to index by. The outside needs a shell
+  per solid because `finish` refuses a disconnected shell (`ShellNotConnected`).
+- **Regions that overlap, touch or cross are refused, `Unsupported::RegionsMeet { first, second }`,
+  not merged.** The pin first unites the regions in the plane (overlap normalised, volume 300
+  for two overlapping 10 x 10 squares) and refuses pieces of the union that touch. No planar
+  Boolean exists until BO17, so the merge cannot be done; a refusal is the honest answer and is
+  `Unsupported`, not `Refused`, since the input is valid. For: nothing is guessed, and BO17 can
+  add the merge as a wider entry later without changing this one. Against: a caller with
+  overlapping profiles must unite them first. A region in another's hole, or beside it, is kept
+  (the pin's islands).
+- **Meeting is decided by `Region::new` on a probe, not by new geometry.** For `a` and `b`, the
+  probe is `a`'s outer loop with every other loop of both as holes; its contact check (every
+  pair of segments within the resolution, crossing before touching, between loops too) names a
+  crossing or touch before nesting, so those two errors mean the boundaries meet. If the
+  boundaries are apart, one start point of each region is classified against the other
+  (`Region::classify`): inside or on the boundary means one lies in the other's material. For:
+  no new predicate in `scx-planar`, exact and certified as `Region::new` is, a hole-in-hole
+  island handled by classification. Against: it builds a throwaway region per pair, so the check
+  is O(k^2) probes for k regions and each probe is linear in the segments of both.
+  Measured (release, throwaway timers, whole circles on a grid, one probe per pair): `prism` of 4, 16, 64
+  and 256 regions takes 0.13, 0.44, 3.6 and 28 ms against 0.09, 0.30, 1.2 and 2.6 ms for the same
+  regions extruded one by one; the sheet's 0.03, 0.20, 1.9 and 27 ms is nearly all the check. So the check
+  added is quadratic, small to about 64 regions and dominant at 256; a bounding-box prune of pairs is the
+  fix if a caller passes hundreds of regions (not done: no such caller yet).
+  A pair's one start point decides nesting only because the boundaries are apart (a region is
+  wholly inside or wholly outside another's material).
+- **A sheet's face has both sides in one shell**, a shell per face (the `scx-brep` sheet form);
+  its front is the frame's +z side and the outer loop runs counter-clockwise about it, so
+  `scx_mass` gives the regions' area and no volume. The sheet is `z = 0` of the frame; there is
+  no height argument (a sheet's place is its frame's).
+- **`Assembly` gained `sheets`, `begin_solid` and `sheet_face`**, and the outside shell and solid
+  shell are `Option`s (a sheet has neither): `face` on a sheet is `Defect::NoSolid`. `error.rs`
+  gained `Refusal::NoRegions`, `Unsupported::RegionsMeet` and `Defect::NoSolid`.
+
+Tests (`crates/scx-make/tests/prism.rs`, 11): see the file's header for the pin tests removed on
+purpose and why.
+
+### 13.5 MK13 as built (11-28)
+
+`scx_make::radial(&RadialCone, &Document) -> Result<Made<RadialFaces>, MakeError>` builds the hollow cone in one `Draft`: outer wall, inner wall and an annular cap at each end that is not a hinge, with no stitch, no outward check and no subtract. `RadialCone { frame, height, outer: [Length; 2], inner: [Length; 2] }` gives radii at `z = 0` and `z = height`; `RadialFaces { outer, inner, bottom: Option, top: Option }`. Counts: both ends capped 4 faces, 6 edges, 4 vertices; one hinge 3, 5, 3 (the walls share the rim and its vertex). Walls are cylinders when their radii are equal, cones otherwise; the inner wall is the same surface with `Sense::Reversed` and a loop run the other way round, so its front is the hollow.
+
+Decisions.
+- Hinge by exact equality of the radii. For: the pin's hinge case is the draft whose neutral plane is the end plane, equal by construction, and exact equality needs no tolerance (R3). Against: a caller whose radii agree to rounding gets a cap of width zero refused; the refusal is `Refusal::Annulus` and the caller can set them equal.
+- A wall thinner than the resolution without being a hinge, an inner radius above the outer, and two hinges (no volume) are `Refusal::Annulus { outer, inner }`; inner radii must be above the resolution (an inner apex is not made; the pin refuses it too, `RadialRimsNotAnnulus`).
+- A reversed `Cone` runs `v` along `-z`, so the inner wall's half-angle is the negated one; found by the exact-pcurve write refusing the first build.
+- New `Dimension::InnerBaseRadius` and `InnerTopRadius`. Edits to `lib.rs` are the module and its re-export; `error.rs` gains the two dimensions and the `Annulus` refusal.
+
+Truths (`tests/radial.rs`, 5 tests): the pin's `radial_sweeps_close_at_the_hinge_or_on_two_annular_caps` (hinge and both-capped, volume `pi h (300 - b^2 - b t - t^2) / 3`) and `a_cylinder_whose_top_rounds_...` (volume cylinder less frustum) against the difference of the frusta, at an axis-aligned and a tilted far frame; narrowing and widening cones, hinges at either end, a tube, crossing slopes. Each: counts, closed-solid structure with Euler-Poincare of genus 1, the BR8 oracle, volume, area and centroid to 1e-12 with the mass estimate's error within, face kinds, and membership of each face against the CSG difference of two frusta; determinism; size and annulus refusals. The pin's stitch, outward-check and attribute-copy parts have no counterpart (nothing to stitch; attributes belong to the caller of the local operation).
+
+### 13.6 BO10 as built (11-28)
+
+`crates/scx-boolean/tests/algebra.rs` (about 1,100 lines, 15 live tests, 12 ignored; the live ones run in about 10 s wall under nextest).
+
+**Shape.** An expression over a pool of 11 placed parts (8 in general position: three boxes, a cylinder, a sphere, a rotated block, a cone, a torus; then a block sharing A's z planes, a block abutting A's x = 10 face, and a sphere centred on A's x = 10 plane) is built twice: as bodies through `boolean`, and as a testkit `Csg` oracle. Two expressions are equivalent when each result passes `scx_check::contract` (`Contacts::Radial`), volume and area agree to 1e-9 relative plus the Estimates' errors, solid-region and shell counts agree, and 1,000 seeded points classify as the oracle says wherever it is certain at 2C. Laws: commutativity, idempotence (two separately built bodies), self difference, absorption, partition, inclusion-exclusion and partition in volume, De Morgan in a box (both forms), associativity, distributivity, rigid motion (rotation plus a 1e6 translation), determinism (`scx_record::encode` bit-identical over two runs). N-ary order waits on BO11 and BO12. A case where any Boolean answers `Unsupported` is counted and printed per law (`--no-capture`), never asserted.
+
+**Collars.** Coaxial r = 1.3 collars, bare and each on a block, overlapping over 2 or meeting in a ring, in both operand orders: union volume = vA + vB - pi r^2 l, intersection = pi r^2 l, both differences, one solid of one shell. They pass today. The #20408 case is the blocks-overlap-2 variant (its geometry: r = 1.3, l = 2); the pin's two records wait for DT4.
+
+**Known failures.** The failing cases are listed in `KNOWN` as (cause, law, label); the live sweeps skip them and one ignored test per cause runs its cases and asserts they pass, so the suite keeps them. Causes: wrong-points (9, silent wrong geometry), seeds (28), loops (16), build (17), classify (10), loosespan (9), uvundecided (6), piece (1), contract-undecided (16 incl. far), contract-nobox (23 incl. far).
+
+**Choices, for and against.**
+- Case-granular known list with one ignored test per cause, against one `#[ignore]` per law: a whole-law ignore hides the cases that pass, and one per case is 135 tests. Cost: the table is data that BO10b must delete as it fixes.
+- Judging each result against its own oracle as well as against its twin: a law could hold between two equally wrong results (both Booleans missing the same region); the oracle catches that.
+- Sphere centre: the first pool put the sphere's centre on A's x = 10 plane, which fails with `Seeds` in every combination with a box. A sphere off every plane passes those, so the pool holds both: the general one for the laws, `sphereOnFace` as a real contact case.
+
+### 13.7 MK7a frames as built (11-28)
+
+`scx_make::{Path, Piece, Stop, Station, Rotation, Corner, FrameError, frames}` (`frames.rs`,
+`tests/frames.rs`). `Path::new(&[Piece], &Document)` validates (1 to 1000 pieces; lines longer
+than the resolution; arcs and helices off their axis, angle in (0, 1000 turns]; pieces meeting
+within the resolution; a corner that doubles back refused) and measures once, so `frames(&Path,
+&[Stop]) -> Result<Vec<Station>, FrameError>` cannot fail on the path. A `Station` is the point,
+unit tangent and a `Rotation` (the transport from the path's start, columns, `apply`, `after`,
+`inverse`, `defect`). Closed forms as the pin's: identity on a line, the angle run about the axis
+on an arc, the screw then `psi = -b phi / sqrt(a^2 + b^2)` about the tangent on a helix, the least
+rotation `t0 x t1` by the angle at a corner (none within `G1_TANGENTS` = 1e-8 of each other).
+`Stop::Corner(j)` is the mitre plane (half turn, bisector tangent); `Corner` carries the angle,
+the joint, the fraction and the stretch `1 / cos(angle / 2)`. Rodrigues runs on `fmath`
+(deterministic across platforms; the pin used the platform's libm).
+
+Decisions and cases:
+- **Own `FrameError`, not `MakeError`.** 75 §3.6 writes `Result<Frames, MakeError>`. For: a frame
+  law has no body, three of `MakeError`'s four kinds cannot occur, and a new `Refusal` variant
+  would touch `error.rs` that MK4, MK9, MK13 and MK14 also edit. Against: one error type for the
+  crate. The sweep (MK7b) adds `From<FrameError> for MakeError` when it needs it; no change here.
+- **No `Cx`, no laws.** The signature is pure (`&Path`, `&[Stop]`): the work is closed form and
+  O(pieces) per stop, no budget, scratch or cancellation to meter. Twist, end scale, orientation
+  and rails are MK7b's (the pin's `Laws`, `Orientation`, `RailFit`, `railed`); `fractions` (the
+  skin's one station per degree rule) is a SolidCraft convention for the skin and goes with the
+  sweep. The pin's `Stop::Corner` mitre stretch is `Corner::stretch`, applied by the mitre's user.
+- **Literals into the document.** The pin's `1e-9 (1 + |P|)` for "pieces meet" and for a line
+  with no length is the document's resolution here; `G1_TANGENTS` stays a named constant (the
+  procedural sweep's rule, which step 5 will own; the sweep must use the same one).
+- **Axis by type.** `Piece` takes a `UnitVec3`; the pin's "unit within 1e-12" check and its
+  re-normalising are gone.
+- `Piece` and `Stop` are `#[non_exhaustive]`: MK7b may add pieces when step 5 certifies a
+  spline path's frame (#2572).
+
+Truths (`tests/frames.rs`, 10 tests, closed forms, 1e-12): the line is the identity; a planar
+arc turns the frame by the angle run (point, tangent, frame); a whole helix turn leaves the
+tangent and turns the frame by `-2 pi b / sqrt(a^2 + b^2)` (pin :74); at a quarter and a half
+turn the start normal becomes `cos psi N + sin psi B`, right- and left-handed (pin :505);
+parallel transport turns about no axis along the chord on tilted helices of both hands and a
+tilted arc (skew part along the chord < 1e-9, pin :569); a right-angle corner is a quarter turn
+with the mitre the eighth and stretch sqrt 2, a fraction at the joint is the second piece's
+start (pin :166); the corner is the least rotation at 1, 30, 90, 135 and 179 degrees (new); a
+corner then a helix compose (pin :536); a kink of 1e-10 is no corner and 1e-7 is one (pin :768);
+refusals of a doubling-back path, a gap, no pieces, a degenerate or axis-start piece, a negative
+angle, fractions outside [0, 1] or NaN, and a closed arc's whole-turn identity. Orthonormal
+defect below 1e-13 throughout. Removed on purpose, with the file header listing them: the pin's
+twist/scale, orientation, rail, `fractions` and limit tests (MK7b's laws), and the stretch
+half of the corner test (checked as `Corner::stretch`).
+
+Cost: new code only, no existing path changed. A station walks the pieces before it, one
+`sin_cos` and about 40 flops per rotation composed; 1,001 stations of a helix (the transport
+test) run in a few milliseconds in a debug build.
+
+### 13.8 MK9 as built (11-28)
+
+`scx_make::loft::{align, align_banded, pair}`. `align(first, second, &mut Budget, &Stop) ->
+Result<Alignment, PairError>` pairs two closed loops of `scx_planar::Segment` (lines, arcs, whole
+circles) given in one plane's coordinates. `Alignment { start, events: Vec<Event>, cost,
+optimality }`. Its events run round both loops in order, from vertex 0 of the first and vertex
+`start` of the second: `Pair { first, second }`, `FirstAlone { vertex, on }` or
+`SecondAlone { vertex, on }`, where `on` is the other loop's segment the lone vertex lands on.
+`pair(&[&[Segment]], ..) -> Pairing { alignments }` pairs each section with the next. It checks
+every section before pairing any, and refuses a section wound the other way from the one before
+it. `align_banded(first, second, cells, ..)` always runs the band. It is public so that the band
+can be measured against the exact search. `MAX_CELLS = 4_000_000`. The cost, the
+divide-and-conquer search over starts and the band are the pin's (`loft_sections.rs`). The area
+and centroid are in closed form for arcs.
+
+Decisions, with cases for and against:
+
+- **The banded answer is always `Unproven`, against Q5 and the 04 row's "`Proven` if its walk
+  avoids the band's edge".** That rule proves nothing. The band has one start, so a walk that
+  keeps off the band's edge is least only among walks inside the band from that start. A cheaper
+  walk can start elsewhere or run wholly outside the band.
+  - The pin's own case shows this (in-module test
+    `a_banded_walk_off_its_edge_is_not_the_optimum`). It pairs a 10 x 1 rectangle in 498
+    segments with a 1.5 x 1 rectangle in 500, through a band of 40,000 cells. The band's walk
+    keeps off its edge and matches the whole grid's walk from the same start, yet the search
+    over every start finds a walk more than 1% cheaper.
+  - On random star polygons (`the_band_is_an_upper_bound_on_the_exact_search`: 200 pairs of 20
+    to 120 vertices, half-width n/10), the band finds the optimum in 97 of 200. It is up to
+    108% above it in the worst case.
+  - For: the status is never false, and the type already carries both values.
+  - Against: every loft past the limit is `Unproven`, even when the band happens to be optimal
+    (on regular shapes it is: `on_regular_shapes_the_band_finds_the_optimum`).
+  - Considered and not built:
+    - A cheap lower bound, `Σ_i` (the least cost of a step into row `i`): O(mn) time and linear
+      memory. It would turn some `Unproven` answers into `Optimal` when bound and cost meet, but
+      on these shapes it is far from tight.
+    - An exact search confined to a band by a proof of the band's width (Ukkonen-style
+      cut-offs). Its bound needs a least step cost, and UNPAIRED alone (0.1) gives a width near
+      the whole grid.
+  - Either can come later without changing the API. The 04 row should drop "`Proven` if ...".
+- **A moved band is pinned to the walk's ends (truth over pin).** The pin re-centres the band on
+  the middle of each row's run of the walk. When the walk runs along the last row for more than
+  the band's width, the last row's centre falls short of the end. The end then lies outside the
+  band, and the pin's walk fails with "unpaired".
+  - Seen here on a random 27 x 102 pair with half-width 1, now in
+    `the_band_is_an_upper_bound_on_the_exact_search`.
+  - `settle` makes the centres run from the start on row 0 to the end on the last row, never
+    back.
+  - With that, each row's band meets the next and the end is inside. The band's walk is always
+    found when h >= 1.
+- **Exact means exact.** `the_exact_search_is_the_brute_force_optimum` (integration test, 600
+  random star polygons of 3 to 7 vertices) checks against code that shares nothing with the
+  search. That code recomputes each step's cost from the polygon's vertices (shoelace centroid,
+  unit area) and enumerates every monotone walk from every start.
+  - The search's cost equals the brute-force least to 1e-12 relative.
+  - Its events form a walk round both loops, and their recomputed cost is the reported one.
+  - The in-module `the_search_finds_the_brute_force_optimum` does the same over the module's own
+    step costs for 1 to 6 vertices, with arcs and whole circles among them.
+  - Turning either loop's numbering round leaves the cost unchanged to 1e-9.
+- **Its own error type, `PairError`, not `MakeError`.**
+  - Variants:
+    - `Refused(PairRefusal)`: `Empty`, `NotFinite`, `Degenerate`, `NoArea` or `Winding`.
+    - `UnsupportedSegment`.
+    - `TooLarge`: even a band one column wide does not fit.
+    - `Exhausted` and `Stopped`.
+    - `Unreached` (`Defect`).
+  - For: MK4, MK13 and MK14 edit `error.rs` at the same time, and the pairing has no solid to
+    refuse. MK10 maps it into `MakeError` with the section index kept.
+  - Against: one more error type for a caller of `pair` alone.
+- **Work.** Each cell visited charges one unit to the caller's `Budget`, and the `Stop` flag is
+  polled once per grid row. Which search runs depends on the fixed `MAX_CELLS`, not on the
+  remaining budget, so the answer is a function of the input (R6).
+- **Scope left to MK10:**
+  - winding the sections alike;
+  - carrying a shared frame from plane to plane (the caller gives every section in one plane's
+    coordinates);
+  - cutting segments where lone vertices land (the pin's placement by share of length);
+  - splitting whole circles at the neighbouring section's directions;
+  - merging runs of one curve.
+- **75 §8.2's `fork_ea59e9c_section_orders` is a blend cross-section test, not loft pairing.**
+  In its place are the pin's loft-pairing outcomes, as tests on the alignment:
+  - square to diamond;
+  - 5000-gons and a 3000-gon with a 5000-gon, in the band;
+  - split 5000-segment rectangles pairing all four corners;
+  - both comb cases of 1100 teeth, past the limit even for their corner polygons.
+
+Measured (release on a 24-core build machine, throwaway timer; random star polygons):
+
+| m x n | search | cells charged | ms |
+|---|---|---|---|
+| 10 x 10 | exact | 558 | 0.02 |
+| 100 x 100 | exact | 76,835 | 2.0 |
+| 500 x 500 | exact | 2.59 M | 67 |
+| 1000 x 1000 | exact | 11.5 M | 306 |
+| 1999 x 1999 | exact | 49.7 M | 1,476 |
+| 2000 x 3000 | band, 8 passes | 41.6 M | 1,051 |
+| 3000 x 3000 | band | 6.65 M | 161 |
+| 5000 x 5000 | band | 7.49 M | 180 |
+| 10000 x 10000 | band | 7.86 M | 198 |
+
+- The exact search charges about 11 to 12 times the grid at 1000 to 2000 vertices (`m·n·log2 n`
+  / 2 plus overlaps), at about 30 ns a cell.
+- A band charges at most `BAND_PASSES` times `MAX_CELLS` plus the corner polygons' search, so
+  about 1 s at worst.
+- A band of a tenth of the grid on the same random shapes is 1% to 5% above the optimum.
+
+Tests:
+
+- `crates/scx-make/tests/pair.rs`: 14 tests.
+- In-module: 3 tests (brute force over the module's costs, the half disc's closed-form area and
+  centroid, and the band counterexample).
+- None removed.
+### 13.9 BO17 `planar` as built (11-28)
+
+`scx_boolean::planar(a, b, op, cx)` (module `planar.rs`, tests in `planar/tests.rs`). It reads
+each face of each operand as a `scx_planar::Region` in the plane of `a`'s first face, builds the
+arrangement of the two boundaries and builds the result as a sheet of planar faces in a new
+draft, loops given exact pcurves by `Draft::exact_loops`. No stitch (Q2), no 3-D stage.
+
+Decisions where 75 left a choice:
+
+- **Selection by sides, not by cells.** Every piece between cuts is grouped with the pieces on
+  the same curve; each group knows the faces of each operand on its left and right (from the
+  operands' own uses, whose loops keep material on the left, else by `Region::classify` of its
+  midpoint). The result's boundary is the groups whose left and right differ in the operation's
+  answer. For: no angular ordering is needed to decide anything but loop tracing; coincident
+  and shared edges fall out; an operand of several faces sharing edges is its union. Against:
+  a midpoint on an operand's boundary the other's pieces do not name is `PlanarUndecided`.
+- **Arcs in pieces of a quarter turn or less** (a circle is four), each with its exact rational
+  quadratic for `crossings` (which takes no arc past a half turn). The cut points of a meet are
+  moved onto both curves by the closed form (line-line, line-circle, circle-circle, nearest
+  root to the certified point): the certified `at` was 1e-6 off, which showed as 4e-8 relative
+  area error. Joined back by chain at degree-2 vertices on one line or circle, so a union of two
+  rectangles has 4 edges, a lens 2, a whole circle 1.
+- **Tracing**: at a vertex with several kept pieces leaving, the first met turning clockwise
+  from the way back, ties (within 1e-9 rad) by larger signed curvature. This is the one angle
+  tolerance; it only orders pieces already known to leave one vertex.
+- **One shell per result face** (a sheet shell must be connected; `finish` refuses a shell of
+  faces apart or empty). An empty answer is a body with no faces.
+- **Fresh draft, not `a.edit()`**: the result is mostly new faces and edges; lineage is
+  `Origin::Operand(0|1, face)` for every face on the left of a result face's boundary.
+  Edge and vertex lineage are Free.
+- **Result plane** is `a`'s first face's frame (`b`'s when `a` has none); faces of `b` in the
+  opposite frame are the same set.
+- New errors: `Refused(NotCoplanarSheet)`, `Refused(BadProfile)`, `Unsupported(PlanarEdge)`,
+  `Unsupported(PlanarUndecided)`.
+
+Known limit: a result face whose hole touches its outer loop at a point (a disc tangent inside
+a plate, subtracted) is not a `Region` and is `PlanarUndecided`; the answer needs a face with a
+pinched loop, which `scx-planar` does not take. Two rectangles touching at a corner are fine; two discs tangent from outside are `PlanarUndecided` (open: not yet separated into the certified crossings of two tangent quarter arcs or the midpoint test).
+Cost: all pairs of atoms with meeting boxes are crossed (quadratic in the worst case; the
+perforated plate of 16 discs, about 80 atoms a side, runs in 0.3 s in debug).
+### 13.10 BO21 as built (11-28)
+
+`scx_boolean::boolean_given(a, b, op, &Incidences, cx) -> Result<Done<NoItems>, BooleanError>`
+(`crates/scx-boolean/src/given.rs`); `boolean` is `boolean_given` with `Incidences::NONE`, one
+pipeline (R1). `Fact` is `FaceOnFace { a, b }` (operand 0's face, operand 1's face) or
+`EdgeOnFace { operand, edge, face }` (the face on the other operand); `Incidences` collects them
+sorted and each once. A false fact is `Refused(BooleanRefusal::FalseFact { fact })`.
+`scx_surface` gained `curve_on_surface(c, ce, s, se, res, budget, stop) -> Result<OnSurface, _>`,
+`OnSurface::{Proved, Isolated, Leaves}`: `intersect_curve`'s answer, labelled by how it was had.
+
+How a fact is used and checked:
+
+- An edge fact (stated, or implied by a face fact: every edge of either face on the other's
+  surface) sends stage 2's edge-face test through `curve_on_surface` in place of
+  `intersect_curve`. On a plane the curve's height is bounded in closed form (a line's two ends;
+  `|gamma| + hypot(alpha, beta)` on a conic; a few products on the open conics); within
+  `tol - rounding` the answer is the overlap's clip with no root isolated, one budget unit against
+  two a piece. Otherwise it is `intersect_curve`'s own isolation (`isolate`, the old body moved
+  out unchanged).
+- A stated edge fact is false when the roots show the edge leaving (`Leaves`), or when stage 2
+  never pairs that edge and face and the same test, run on its own, says so; a fact on a missing
+  edge or face, an edge with no curve, or a third operand is false too. An implied fact never
+  refuses: one the bound does not prove is answered by the roots as without it.
+- A face fact is false when stage 4 finds no coincidence of exactly those two faces. Stage 4
+  still runs for that pair.
+
+**Same result, the argument.** The only change a fact makes is `intersect_curve` replaced by
+`curve_on_surface` for one edge and face. `intersect_curve` answers `Overlap` pieces
+(`path.clip`) exactly when every event (roots, turns, the ends or the closed curve's probes) is
+within `tol`, `Event::new` computing each distance in floats. A proof bounds the true height by
+the computed bound plus its rounding, and each event's computed distance by the true height
+plus its rounding; both roundings are a few steps on numbers no larger than the coordinates'
+size `m` (curve, axes origin, surface size), and `rounding = 64 eps m` covers both with room. So
+proved implies every event near, and the answer is the same `path.clip(c, target, se)` call,
+the same bits. Not proved, it is the same function. Tested to the bit: `scx-surface`'s
+`a_stated_curve_is_answered_as_intersect_curve_answers_it` (300 on-surface cases of every kind
+at two tolerances, plane cases all proved, curved ones all isolated at equal work, and the
+random pairs of 10 seeds) and `scx-boolean/tests/given.rs` (bodies compared by
+`scx_record::encode`, changes compared, volumes against closed forms).
+
+**A false fact cannot change a result silently.** A stated fact is judged by the very test that
+answers without it, so a false one meets a disagreement and is refused, and no answer is built
+from it. A proved fact is true by the bound. An implied fact is never trusted: unproved, it is
+the plain test. So the result with facts is `boolean`'s result or a refusal.
+
+Decisions (analysis and adversarial pass):
+
+1. *A closed-form bound on planes only, not SU6's certified gap.* The first build used
+   `curve_surface_gap` (any analytic kind). Measured, it took 5 points for a line on a plane
+   against isolation's 2 units: the facts cost more work (387 against 366 on the stacked
+   cubes). For: analytic isolation is itself a closed form (two Bernstein solves a piece), so no
+   bound saves much and only a closed form undercuts it; the plane is where stated facts arise
+   (mates, bosses, pockets). Against: curved coincidences (coaxial walls, BO22's tangent
+   contacts) get no saving and no proof independent of the roots; BO22 can add the gap where
+   isolation is ill-conditioned (a double root), where it is worth more points.
+2. *Face facts are checked by running stage 4, not skipped.* For: the analytic pair is O(1) and
+   decides the coincidence the build needs; trusting the fact would need the overlap's regions
+   anyway. Against: a NURBS face pair would gain from skipping; that waits on BO23.
+3. *Implied edge facts never refuse.* For: the caller stated the faces, not each edge; an edge
+   of a coincident face that the bound misses (rounding near `tol`) is still on it as the roots
+   say. Against: a face fact whose faces' edges leave each other's surface is only caught by
+   stage 4, which does catch it.
+4. *Unpaired stated edge facts are checked alone* (`judge_edges`, with stage 2's reach and
+   resolution). For: else a fact on an edge far from the face is silently ignored. Against: one
+   extra test per such fact (cheap; the NURBS case is `Unsupported` as stage 2 would be).
+5. *Work may be less, never more*, so a budget that exhausts `boolean` may suffice for
+   `boolean_given`; the result when both finish is the same.
+6. *The rounding constant is an error-model argument* (`64 eps m`), not machine-checked; the
+   test at 0.99 `tol` (proved) and 1.5 `tol` (leaves, as `intersect_curve`) brackets it.
+
+Measured (throwaway prints and timers, removed; debug counts, release times):
+
+| case | facts | edge-face isolations | work | time (release, us) |
+|---|---|---|---|---|
+| stacked cubes, union | one face pair | 41 -> 34 (7 proved) | 366 -> 359 | 229 -> 227 |
+| stacked cubes, union | 8 edges | 41 -> 34 (7 proved in stage 2, 1 unpaired fact proved alone) | 366 -> 360 | 232 -> 236 |
+| stacked cubes, subtract | 8 edges | 41 -> 34 (7 proved in stage 2, 1 unpaired fact proved alone) | 363 -> 357 | 175 -> 170 |
+| boss on a plate | rim circle | 2 -> 1 (1 proved) | 38 -> 35 | 57 -> 56 |
+| boss on a plate | disc face pair | 2 -> 1 (1 proved) | 38 -> 35 | 63 -> 63 |
+| hole through the plate | 2 rims | 5 -> 3 (2 proved) | 75 -> 69 | 108 -> 108 |
+| coaxial cylinders | wall pair, 2 rims | 12 -> 12 (curved: none) | 102 -> 102 | 156 -> 168 |
+
+  Per call (release, 200,000 calls, line and circle on a tilted plane): `intersect_curve` 205-223 ns
+  and 842-851 ns, `curve_on_surface` 65 ns and 100 ns. The Boolean's times move within the main
+  box's noise (two runs differed by up to 25 % on one case): stage 2's isolations are a few
+  microseconds of 60-240. So on analytic planes the facts save the roots, not the Boolean's time;
+  they matter where the test is dear (BO22's tangent pairs, NURBS once BO23 lands).
+
+Tests: `crates/scx-boolean/tests/given.rs` (10): a stated face pair, stated edges (union,
+subtract, intersect), a boss on a plate (rim, disc, through hole), coaxial walls, false edge facts
+(unpaired, crossing, beside true ones), false face facts (parallel, perpendicular), facts naming
+what is not there, near the coincidence (0.25 and 0.9 zone judged as the test judges, 50 zones
+refused), no facts is `boolean`, `Incidences` order. `crates/scx-surface/tests/intersect.rs` (+2):
+the bit-for-bit comparison above and the line just off a plane. None removed.
+
+Open: curved bounds (a cylinder's ruling and parallel have closed forms too) if a caller's
+curved facts show up in profiles; BO22 reuses `OnSurface` and `Fact` for tangent pairs.

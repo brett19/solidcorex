@@ -12,6 +12,7 @@ use crate::contact::{Span, Touched, interferences};
 use crate::error::{BooleanError, BooleanRefusal};
 use crate::faceface::face_face;
 use crate::geom::{Operands, Side};
+use crate::given::{Given, Incidences};
 use crate::imprint::imprint;
 use crate::pairs::face_pairs;
 use crate::points::{Point, merge};
@@ -64,7 +65,7 @@ pub fn boolean(
     op: BooleanOp,
     cx: &mut Cx<'_>,
 ) -> Result<Done<NoItems>, BooleanError> {
-    combine(a, b, &Rule::of(op), cx)
+    run(a, b, &Rule::of(op), &Incidences::NONE, cx)
 }
 
 /// The selection `rule` over the cells of `a` and `b`, built in `a.edit()` as [`boolean`]
@@ -82,6 +83,17 @@ pub fn combine(
     rule: &Rule<'_>,
     cx: &mut Cx<'_>,
 ) -> Result<Done<NoItems>, BooleanError> {
+    run(a, b, rule, &Incidences::NONE, cx)
+}
+
+/// [`combine`] with `facts` stated ([`crate::boolean_given`]): no facts is [`combine`].
+pub(crate) fn run(
+    a: &Brep,
+    b: &Brep,
+    rule: &Rule<'_>,
+    facts: &Incidences,
+    cx: &mut Cx<'_>,
+) -> Result<Done<NoItems>, BooleanError> {
     let res = cx.doc.resolution();
     for (side, body) in Side::BOTH.into_iter().zip([a, b]) {
         if body.resolution() != res {
@@ -92,8 +104,11 @@ pub fn combine(
     }
     let mut budget = cx.budget();
     let ops = Operands { a, b };
-    let found = interfere(ops, &mut budget, cx.stop)?;
+    let given = Given::of(ops, facts)?;
+    let found = interfere_given(ops, &given, &mut budget, cx.stop)?;
+    given.judge_edges(ops, &found, &mut budget, cx.stop)?;
     let ff = face_face(ops, &found, &mut budget, cx.stop)?;
+    given.judge_faces(&ff)?;
     let imprinted = imprint(ops, &found, &ff, *cx.doc, &mut budget, cx.stop)?;
     let classes = classify(ops, &ff, &imprinted, &mut budget, cx.stop)?;
     let (body, changes) = build(
@@ -122,14 +137,24 @@ pub(crate) struct Interference {
     pub(crate) touched: Touched,
 }
 
-/// Stages 1 to 3 over `ops`.
+/// Stages 1 to 3 over `ops`, no facts given.
 pub(crate) fn interfere(
     ops: Operands<'_>,
     budget: &mut Budget,
     stop: &Stop,
 ) -> Result<Interference, BooleanError> {
+    interfere_given(ops, &Given::NONE, budget, stop)
+}
+
+/// Stages 1 to 3 over `ops`, the edge-face tests `given` covers read through it.
+pub(crate) fn interfere_given(
+    ops: Operands<'_>,
+    given: &Given,
+    budget: &mut Budget,
+    stop: &Stop,
+) -> Result<Interference, BooleanError> {
     let pairs = face_pairs(ops, stop)?;
-    let found = interferences(ops, &pairs, budget, stop)?;
+    let found = interferences(ops, &pairs, given, budget, stop)?;
     let points = merge(ops, &found.touched, &found.contacts)?;
     let mut spans = found.spans;
     spans.sort_by(|p, q| {
