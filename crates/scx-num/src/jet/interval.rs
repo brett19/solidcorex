@@ -258,7 +258,7 @@ mod tests {
         check(
             |t| (t.scale(3.0)).sin_cos().0,
             |t| {
-                let (s, c) = (3.0 * t).sin_cos();
+                let (s, c) = crate::fmath::sin_cos(3.0 * t);
                 [s, 3.0 * c, -9.0 * s]
             },
             0.2,
@@ -267,7 +267,7 @@ mod tests {
         check(
             |t| (t.scale(3.0)).sin_cos().1,
             |t| {
-                let (s, c) = (3.0 * t).sin_cos();
+                let (s, c) = crate::fmath::sin_cos(3.0 * t);
                 [c, -3.0 * s, -9.0 * c]
             },
             -0.4,
@@ -278,9 +278,9 @@ mod tests {
             |t| {
                 let u = t * t;
                 [
-                    u.sinh(),
-                    2.0 * t * u.cosh(),
-                    2.0 * u.cosh() + 4.0 * t * t * u.sinh(),
+                    crate::fmath::sinh(u),
+                    2.0 * t * crate::fmath::cosh(u),
+                    2.0 * crate::fmath::cosh(u) + 4.0 * t * t * crate::fmath::sinh(u),
                 ]
             },
             -0.5,
@@ -288,7 +288,10 @@ mod tests {
         );
         check(
             |t| t.sinh_cosh().1,
-            |t| [t.cosh(), t.sinh(), t.cosh()],
+            |t| {
+                let (s, c) = crate::fmath::sinh_cosh(t);
+                [c, s, c]
+            },
             -0.5,
             0.7,
         );
@@ -302,7 +305,7 @@ mod tests {
             1.0,
         );
         // The square across zero: f^2 from zero, and its derivatives.
-        check(|t| t.sqr(), |t| [t * t, 2.0 * t, 2.0], -0.5, 0.75);
+        check(Ranged::sqr, |t| [t * t, 2.0 * t, 2.0], -0.5, 0.75);
         check(|t| -t.sqr(), |t| [-t * t, -2.0 * t, -2.0], -0.5, 0.75);
         let s = Jet2::variable(Ivl::new(-0.5, 0.75)).sqr();
         assert!(s.f.lo >= 0.0, "{:?}", s.f);
@@ -333,7 +336,7 @@ mod tests {
             norm([c - Ivl::from(1.0), s])
         };
         let b = vector_bound(d, (at(0.0), at(h)), h);
-        let truth = 2.0 * (h / 2.0).sin();
+        let truth = 2.0 * crate::fmath::sin(h / 2.0);
         assert!(b >= truth && b <= truth * 1.05, "{b} against {truth}");
     }
 }
