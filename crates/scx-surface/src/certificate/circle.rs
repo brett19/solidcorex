@@ -6,6 +6,7 @@ use scx_algo::bernstein::Bounded;
 use scx_curve::Circle;
 use scx_num::budget::{Budget, Stop};
 use scx_num::extent1d::Extent1d;
+use scx_num::fmath;
 use scx_num::units::{Accuracy, Length};
 use scx_num::vector3d::{Point3, UnitVec3, Vec3};
 use scx_nurbs::NurbsCurve;
@@ -86,8 +87,8 @@ pub fn on_circle(
         }
         for s in [0.0, 0.5, 1.0] {
             if let Some((p, slack)) = point_at(&h, s, 0.0) {
-                let rho = p.x.hypot(p.y);
-                let dist = (rho - r).hypot(p.z);
+                let rho = fmath::hypot(p.x, p.y);
+                let dist = fmath::hypot(rho - r, p.z);
                 let size = p.x.abs() + p.y.abs() + p.z.abs() + r;
                 let by = dist - slack - 8.0 * EPS * size;
                 if by > tol {
@@ -144,7 +145,7 @@ fn circle_bound(h: &[Bounded; 4], r: f64) -> Result<Option<f64>, SurfaceError> {
     // denominator.
     let foot = (r2 * (1.0 - 4.0 * EPS) - fm).max(0.0).sqrt() * (1.0 - 2.0 * EPS);
     let radial = up(fm / (r + foot) * (1.0 + 4.0 * EPS));
-    let b = up(radial.hypot(plane) * (1.0 + 4.0 * EPS));
+    let b = up(fmath::hypot(radial, plane) * (1.0 + 4.0 * EPS));
     Ok(b.is_finite().then_some(b))
 }
 

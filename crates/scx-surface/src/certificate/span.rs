@@ -121,22 +121,18 @@ pub fn span_bound(
     for (s0, s1, net) in curve_spans(rail, centre, unit) {
         rails.push((s0, s1, forms(&net, (rail.degree(), 0))?));
     }
-    let lines = |f: &dyn Fn(&(Point2, Point2, [Bounded; 4])) -> [f64; 2]| {
+    let lines = |f: &dyn Fn(&Piece) -> [f64; 2]| {
         let mut v: Vec<f64> = pieces.iter().flat_map(f).collect();
         v.sort_by(f64::total_cmp);
         v.dedup();
         v
     };
-    let knots = [
-        lines(&|p| [p.0.x, p.1.x]),
-        lines(&|p| [p.0.y, p.1.y]),
-        {
-            let mut v: Vec<f64> = rails.iter().flat_map(|r| [r.0, r.1]).collect();
-            v.sort_by(f64::total_cmp);
-            v.dedup();
-            v
-        },
-    ];
+    let knots = [lines(&|p| [p.0.x, p.1.x]), lines(&|p| [p.0.y, p.1.y]), {
+        let mut v: Vec<f64> = rails.iter().flat_map(|r| [r.0, r.1]).collect();
+        v.sort_by(f64::total_cmp);
+        v.dedup();
+        v
+    }];
     let most = pieces
         .iter()
         .map(|p| p.2[3].f.degrees().0 + p.2[3].f.degrees().1)
@@ -167,9 +163,9 @@ pub fn span_bound(
         let t_mid = 0.5 * (seg.t0 + seg.t1);
         let inside = |lo: f64, x: f64, hi: f64| lo <= x && x <= hi;
         let (Some(piece), Some(span)) = (
-            pieces.iter().find(|(lo, hi, _)| {
-                inside(lo.x, uv_mid.x, hi.x) && inside(lo.y, uv_mid.y, hi.y)
-            }),
+            pieces
+                .iter()
+                .find(|(lo, hi, _)| inside(lo.x, uv_mid.x, hi.x) && inside(lo.y, uv_mid.y, hi.y)),
             rails.iter().find(|(s0, s1, _)| inside(*s0, t_mid, *s1)),
         ) else {
             // The nodes are inside both domains, and so is every segment between them.
@@ -197,9 +193,10 @@ pub fn span_bound(
                 }
                 continue;
             }
-            let uv = if pieces.iter().any(|(lo, hi, _)| {
-                inside(lo.x, foot.at.x, hi.x) && inside(lo.y, foot.at.y, hi.y)
-            }) {
+            let uv = if pieces
+                .iter()
+                .any(|(lo, hi, _)| inside(lo.x, foot.at.x, hi.x) && inside(lo.y, foot.at.y, hi.y))
+            {
                 foot.at
             } else {
                 uv_mid
@@ -247,6 +244,9 @@ fn centre(points: &[[f64; 3]]) -> Point3 {
         0.5 * (lo[2] + hi[2]),
     )
 }
+
+/// A patch of the surface: its parameter corners and its four homogeneous forms.
+type Piece = (Point2, Point2, [Bounded; 4]);
 
 /// A piece of the correspondence: its two nodes and how many times it was halved.
 #[derive(Clone, Copy, Debug)]
@@ -394,7 +394,11 @@ fn segment_bound(
     let (sv0, sv1) = (local(seg.uv0.y, lo.y, hi.y), local(seg.uv1.y, lo.y, hi.y));
     let mut s = Vec::with_capacity(4);
     for f in h {
-        let f = restricted(f, (su0.min(su1), su0.max(su1)), (sv0.min(sv1), sv0.max(sv1)));
+        let f = restricted(
+            f,
+            (su0.min(su1), su0.max(su1)),
+            (sv0.min(sv1), sv0.max(sv1)),
+        );
         s.push(diagonal(&reversed(&f, su0 > su1, sv0 > sv1)?, b)?);
     }
     let (s0, s1, rh) = span;

@@ -33,8 +33,8 @@ use scx_num::vector3d::{Point3, Vec3};
 use scx_nurbs::NurbsCurve;
 
 pub use circle::{Turn, on_circle, turn_about_axis};
-pub(crate) use kind::{Local, Placed, prove};
 pub use kind::{Analytic, on_analytic};
+pub(crate) use kind::{Local, Placed, prove};
 pub use span::{Node, SpanBound, span_bound};
 
 use crate::error::SurfaceError;
@@ -211,7 +211,9 @@ fn widen(mut f: Bounded, extra: f64) -> Bounded {
 fn point_at(h: &[Bounded; 4], u: f64, v: f64) -> Option<(Vec3, f64)> {
     let [x, y, z, w] = h;
     let (du, dv) = w.f.degrees();
-    let largest = h.iter().fold(0.0_f64, |m, f| m.max(f.f.max_abs_coefficient()));
+    let largest = h
+        .iter()
+        .fold(0.0_f64, |m, f| m.max(f.f.max_abs_coefficient()));
     let worst = h.iter().fold(0.0_f64, |m, f| m.max(f.err));
     // de Casteljau rounds once per level each way: within gamma_(2(du + dv)) of the
     // largest coefficient.

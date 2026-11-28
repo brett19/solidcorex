@@ -16,6 +16,7 @@ use scx_curve::Circle;
 use scx_num::budget::{Budget, Stop};
 use scx_num::extent1d::Extent1d;
 use scx_num::extent2d::Extent2d;
+use scx_num::fmath;
 use scx_num::frame::{Frame, Sense};
 use scx_num::units::{Accuracy, Length};
 use scx_num::vector2d::Point2;
@@ -52,7 +53,12 @@ fn frame(o: [f64; 3], z: [f64; 3]) -> Frame {
 fn curve(points: &[[f64; 4]], degree: usize, knots: &[f64]) -> NurbsCurve<3> {
     let pts = points.iter().map(|&[x, y, z, _]| [x, y, z]).collect();
     let w = points.iter().map(|p| p[3]).collect();
-    NurbsCurve::new(KnotVector::new(degree, knots.to_vec()).unwrap(), pts, Some(w)).unwrap()
+    NurbsCurve::new(
+        KnotVector::new(degree, knots.to_vec()).unwrap(),
+        pts,
+        Some(w),
+    )
+    .unwrap()
 }
 
 fn point(c: &NurbsCurve<3>, t: f64) -> Point3 {
@@ -64,8 +70,12 @@ fn point(c: &NurbsCurve<3>, t: f64) -> Point3 {
 fn off_circle(circle: &Circle, p: Point3) -> f64 {
     let f = circle.frame();
     let d = p - f.origin();
-    let (x, y, z) = (d.dot(f.x().as_vec()), d.dot(f.y().as_vec()), d.dot(f.z().as_vec()));
-    (x.hypot(y) - circle.radius().mm()).hypot(z)
+    let (x, y, z) = (
+        d.dot(f.x().as_vec()),
+        d.dot(f.y().as_vec()),
+        d.dot(f.z().as_vec()),
+    );
+    fmath::hypot(fmath::hypot(x, y) - circle.radius().mm(), z)
 }
 
 fn largest_off(c: &NurbsCurve<3>, circle: &Circle) -> f64 {
@@ -297,10 +307,7 @@ fn from_kind(kind: &Surface, p: Point3) -> f64 {
 fn every_kind_s_exact_image_is_proved() {
     let f = frame([1.5, -2.0, 0.7], [0.3, -0.4, 0.86]);
     let kinds = [
-        (
-            Surface::Plane(Plane::new(f)),
-            ext((-3.0, 4.0), (-1.0, 2.0)),
-        ),
+        (Surface::Plane(Plane::new(f)), ext((-3.0, 4.0), (-1.0, 2.0))),
         (
             Surface::Cylinder(Cylinder::new(f, mm(2.5), Sense::Forward).unwrap()),
             ext((0.2, 3.5), (-1.0, 4.0)),
@@ -334,17 +341,18 @@ fn every_kind_s_exact_image_is_proved() {
         };
         assert!(bound.mm() <= 1e-9, "{s:?}: {bound:?}");
     }
-    assert!(Analytic::of(&Surface::Nurbs(Arc::new(
-        Surface::Plane(Plane::new(f))
-            .to_nurbs(&ext((0.0, 1.0), (0.0, 1.0)))
-            .unwrap()
-    )))
-    .is_none());
+    assert!(
+        Analytic::of(&Surface::Nurbs(Arc::new(
+            Surface::Plane(Plane::new(f))
+                .to_nurbs(&ext((0.0, 1.0), (0.0, 1.0)))
+                .unwrap()
+        )))
+        .is_none()
+    );
     let c = Surface::Cylinder(Cylinder::new(f, mm(2.5), Sense::Forward).unwrap());
     let n = c.to_nurbs(&ext((0.2, 1.5), (-1.0, 4.0))).unwrap();
     let wider = Surface::Cylinder(Cylinder::new(f, mm(2.51), Sense::Forward).unwrap());
-    let Proof::Refuted { by, .. } = analytic(&n, &Analytic::of(&wider).unwrap(), acc(1e-6))
-    else {
+    let Proof::Refuted { by, .. } = analytic(&n, &Analytic::of(&wider).unwrap(), acc(1e-6)) else {
         panic!("another radius is refuted");
     };
     assert!(1e-6 < by.mm() && by.mm() <= 0.01 * (1.0 + 1e-9), "{by:?}");
@@ -434,7 +442,17 @@ fn node(n: &NurbsSurface<3>, rail: &NurbsCurve<3>, t: f64) -> Node {
 
 fn bound_of(n: &NurbsSurface<3>, rail: &NurbsCurve<3>, tol: f64) -> f64 {
     let (a, b) = (node(n, rail, 0.0), node(n, rail, 1.0));
-    match span_bound(n, rail, a, b, acc(tol), &mut Budget::unlimited(), &Stop::new()).unwrap() {
+    match span_bound(
+        n,
+        rail,
+        a,
+        b,
+        acc(tol),
+        &mut Budget::unlimited(),
+        &Stop::new(),
+    )
+    .unwrap()
+    {
         SpanBound::Bounded(b) => b.mm(),
         SpanBound::Unbounded => panic!("a bound holds"),
     }
@@ -475,14 +493,31 @@ fn span_bound_refuses_nodes_off_the_domains() {
     let a = node(&n, &rail, 0.0);
     let b = node(&n, &rail, 1.0);
     let run = |a: Node, b: Node| {
-        span_bound(&n, &rail, a, b, acc(0.6), &mut Budget::unlimited(), &Stop::new())
+        span_bound(
+            &n,
+            &rail,
+            a,
+            b,
+            acc(0.6),
+            &mut Budget::unlimited(),
+            &Stop::new(),
+        )
     };
     assert!(matches!(
         run(Node { t: 1.5, ..b }, a),
         Err(SurfaceError::OffRail { at }) if at == 1.5
     ));
     assert!(matches!(
-        run(a, Node { uv: Point2::new(a.uv.x, 99.0), ..b }),
-        Err(SurfaceError::OutsideDomain { axis: ParamAxis::V, .. })
+        run(
+            a,
+            Node {
+                uv: Point2::new(a.uv.x, 99.0),
+                ..b
+            }
+        ),
+        Err(SurfaceError::OutsideDomain {
+            axis: ParamAxis::V,
+            ..
+        })
     ));
 }

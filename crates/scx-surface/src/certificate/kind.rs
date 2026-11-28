@@ -259,7 +259,6 @@ enum Verdict {
     Bounded { bound: Option<f64>, halve: bool },
 }
 
-
 /// The least and largest of `Z / w` over the piece: of its coefficients' quotients, each at
 /// the end of its error that widens it.
 fn ratio_range(net: &[Hb], k: usize) -> Option<(f64, f64)> {

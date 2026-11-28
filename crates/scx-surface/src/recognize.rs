@@ -76,11 +76,11 @@ use scx_num::vector3d::{Point3, Vec3};
 use scx_nurbs::Approach;
 use scx_nurbs_surface::{NurbsSurface, ParamAxis};
 
+use crate::certificate::{Local, Placed, Proof, prove};
 use crate::common::Axes;
 use crate::cone::Cone;
 use crate::cylinder::Cylinder;
 use crate::error::SurfaceError;
-use crate::certificate::{Local, Placed, Proof, prove};
 use crate::nurbs_invert::up;
 use crate::plane::Plane;
 use crate::sphere::Sphere;
