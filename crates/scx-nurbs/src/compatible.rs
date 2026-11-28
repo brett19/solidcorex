@@ -43,7 +43,7 @@ impl<const D: usize> CompatibleCurves<D> {
         let (low, high) = (first.domain().min(), first.domain().max());
         let mut work: Vec<Cow<'_, NurbsCurve<D>>> = curves
             .iter()
-            .map(|c| map_domain(c, low, high).map(Cow::from))
+            .map(|c| map_domain(c, low, high))
             .collect::<Result<_>>()?;
         let degree = work.iter().map(|c| c.degree()).max().unwrap_or(1);
         for c in &mut work {
