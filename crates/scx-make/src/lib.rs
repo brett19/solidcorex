@@ -34,6 +34,7 @@ mod cylinder;
 mod error;
 mod extrude;
 mod face;
+mod face_nurbs;
 mod frames;
 pub mod loft;
 mod prism;

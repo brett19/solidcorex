@@ -664,6 +664,7 @@ dependencies = [
  "scx-algo",
  "scx-boolean",
  "scx-brep",
+ "scx-check",
  "scx-curve",
  "scx-mass",
  "scx-num",

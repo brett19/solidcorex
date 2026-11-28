@@ -4141,3 +4141,44 @@ Open:
 - The curved sliver (`tests/sliver.rs`): near-coincident walls over a band need a coincidence
   test bounded over the band, not over the whole circles.
 - Tracing (SM6b) for tangent pairs with no closed form, at the `faceface.rs` hook.
+
+### 13.50 MK15b as built (11-28)
+
+`scx_make::face` takes a NURBS surface. Code in `scx-make/src/face_nurbs.rs` (called from
+`face`); tests in `tests/face_nurbs.rs` (7) and one in `scx-nurbs-surface`'s `construct_tests`.
+
+- **Iso-curve extraction already existed.** `NurbsSurface::iso(ParamAxis, t)` (knot insertion
+  to full multiplicity through `CompatibleCurves`, nothing moved, domain-end rows copied) was
+  built with `restrict`; MK15b adds nothing to `scx-nurbs-surface` but a bit-exactness test
+  of the domain-end curves. The 75 §7 row ("not built yet") was stale.
+- **Bounds.** `Bound::Box` and `Bound::Region` (in uv), as for the analytic kinds. Every
+  segment of the boundary must be a line along `u` or `v` (a rectilinear loop: boxes, an L,
+  a frame with holes); anything else is `Unsupported::Segment`, to wait on step 5's
+  curve-on-surface kind. A box or region past the domain is `Refusal::UvBox`; a coordinate
+  within 1e-12 (relative) of a domain end is moved onto it.
+- **Edges and pcurves.** Each segment is one edge: `iso(axis, t)` as `Curve::Nurbs` over the
+  segment's span of the iso-curve's own parameter (which is `u` or `v`: nothing is
+  reparametrised), and its pcurve `Line2` through `(0, v)` or `(u, 0)` over the same interval.
+  They agree by construction. The edge and pcurve are written directly (the `ruled` pattern),
+  because `Draft::exact_loops` has no closed form on a NURBS surface (`NeedsFit`).
+- **Meeting boundaries.** Two vertices within the document's zone (a closed surface's seam
+  taken whole, a side collapsed to a point) are `Unsupported::NurbsFace`: they would need
+  merged or collapsed edges. A turn less a sliver of a closed NURBS cylinder is made.
+  `Unsupported::NurbsFace`'s meaning narrowed to this; unclamped domain ends (no insertion
+  reaches them) and procedural surfaces give it too.
+- **Measured against truth.** Planar bilinear patch boxes: the quadrilateral of the box's four
+  corners (half the diagonals' cross product) to 1e-10; edge ends are the corners and the
+  vertices bit for bit. NURBS cylinder (nine-point ring): quarter, half and three-quarter
+  at the knots are `pi r h` times the fraction; a half with a rectangular hole (u not on
+  a knot, the angle from the surface's own points) and an L to 1e-10; edge points at radius `r`
+  within 1e-12. Every face passes `scx_check::check` as class `Sheet`. A `to_nurbs` plane over
+  a box is the rectangle.
+- **Work before and after.** The analytic paths are untouched (an early return on the
+  `Nurbs` arm; the 8 analytic tests pass as before). A NURBS face costs one `iso` per edge: a
+  box four knot-insertion passes of the net's lines (two per direction); no counters added.
+- **Removed on purpose.** `a_nurbs_surface_is_unsupported_for_now` (`tests/face.rs`): it
+  proved a NURBS box was refused with `NurbsFace` until MK15b; the surface now makes a face
+  and the refusal is tested on the seam instead.
+- Open: a seam or pole on a NURBS face (merged and collapsed edges); iso-curves cached per
+  `(axis, t)` when a region shares one.
+
