@@ -17,13 +17,13 @@
 
 use scx_curve::{Circle, CurveError};
 use scx_curve::{Curve, Ellipse, Hyperbola, Line, Parabola};
+use scx_num::budget::{Budget, Stop};
 use scx_num::frame::{Frame, Sense};
+use scx_num::units::Accuracy;
 use scx_num::units::Length;
 use scx_num::vector3d::{Point3, Vec3};
 use scx_nurbs::KnotVector;
 use scx_nurbs_surface::{Net, NurbsSurface, NurbsSurfaceError, ParamAxis};
-use scx_num::budget::{Budget, Stop};
-use scx_num::units::Accuracy;
 use scx_p21::part42::geom::{self, Placement};
 use scx_surface::{
     Cylinder, Plane, Sphere, Surface, SurfaceError, Written, recognize, recognize_written,
@@ -151,14 +151,22 @@ pub(crate) fn curve(c: &geom::Curve) -> Result<Curve, NotMade> {
 }
 
 /// A B-spline surface's distinct knots and multiplicities as one knot vector.
-fn knots(axis: ParamAxis, degree: usize, distinct: &[f64], mult: &[usize]) -> Result<KnotVector, NotMade> {
+fn knots(
+    axis: ParamAxis,
+    degree: usize,
+    distinct: &[f64],
+    mult: &[usize],
+) -> Result<KnotVector, NotMade> {
     let all = distinct
         .iter()
         .zip(mult)
         .flat_map(|(&k, &m)| core::iter::repeat_n(k, m))
         .collect();
     KnotVector::new(degree, all).map_err(|cause| {
-        surface_err(SurfaceError::Nurbs(NurbsSurfaceError::BadKnots { axis, cause }))
+        surface_err(SurfaceError::Nurbs(NurbsSurfaceError::BadKnots {
+            axis,
+            cause,
+        }))
     })
 }
 
@@ -221,7 +229,10 @@ pub(crate) fn surface(
             };
             let (surf, dev) = written(w, rec)?;
             // An angle of zero is the cylinder the file means; that is a recognition too.
-            Ok((surf, dev.or_else(|| (*semi_angle == 0.0).then_some(Length::ZERO))))
+            Ok((
+                surf,
+                dev.or_else(|| (*semi_angle == 0.0).then_some(Length::ZERO)),
+            ))
         }
         geom::Surface::Sphere { position, radius } => exact(Surface::Sphere(
             Sphere::new(placed(position)?, mm(*radius), Sense::Forward).map_err(surface_err)?,
@@ -245,7 +256,9 @@ pub(crate) fn surface(
             let n = nurbs(b)?;
             let over = n.domain();
             let given = Surface::Nurbs(std::sync::Arc::new(n));
-            match recognize(&given, &over, rec.accuracy, rec.budget, rec.stop).map_err(surface_err)? {
+            match recognize(&given, &over, rec.accuracy, rec.budget, rec.stop)
+                .map_err(surface_err)?
+            {
                 Some(r) => Ok((r.surface, Some(r.deviation))),
                 None => Err(NotMade::Waits(Waits::BSplineSurface)),
             }
@@ -412,12 +425,18 @@ mod tests {
             assert!((0.0..1e-9).contains(&dev), "{truth:?}: {dev}");
             match (&truth, &got) {
                 (Surface::Plane(a), Surface::Plane(b)) => {
-                    close((b.frame().origin() - a.frame().origin()).dot(a.frame().z().as_vec()), 0.0);
+                    close(
+                        (b.frame().origin() - a.frame().origin()).dot(a.frame().z().as_vec()),
+                        0.0,
+                    );
                     close(a.frame().z().as_vec().dot(b.frame().z().as_vec()), 1.0);
                 }
                 (Surface::Cylinder(a), Surface::Cylinder(b)) => {
                     close(a.radius().mm(), b.radius().mm());
-                    close(a.frame().z().as_vec().dot(b.frame().z().as_vec()).abs(), 1.0);
+                    close(
+                        a.frame().z().as_vec().dot(b.frame().z().as_vec()).abs(),
+                        1.0,
+                    );
                 }
                 (Surface::Cone(a), Surface::Cone(b)) => {
                     close(a.half_angle().abs(), b.half_angle().abs());
@@ -484,7 +503,9 @@ mod tests {
         // Beyond it: the torus's own refusal, never a sphere.
         assert!(matches!(
             surface(&torus(0.5), &mut rec),
-            Err(NotMade::Bad(GeomCause::Surface(SurfaceError::SelfIntersecting { .. })))
+            Err(NotMade::Bad(GeomCause::Surface(
+                SurfaceError::SelfIntersecting { .. }
+            )))
         ));
         // An ordinary cone and torus are not recognitions.
         let cone = geom::Surface::Cone {

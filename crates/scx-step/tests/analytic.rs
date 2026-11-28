@@ -23,17 +23,17 @@ use scx_brep::op::{Cx, NoTrace, Scratch, Settings};
 use scx_check::Class;
 use scx_mass::{RelAccuracy, area, volume};
 use scx_num::budget::{Budget, Stop};
-use scx_num::fmath;
-use scx_nurbs_surface::ParamAxis;
 use scx_num::extent2d::Extent2d;
+use scx_num::fmath;
 use scx_num::frame::{Frame, Sense};
 use scx_num::units::Length;
 use scx_num::vector3d::{Point3, Vec3};
+use scx_nurbs_surface::ParamAxis;
 use scx_p21::{Exchange, parse};
-use scx_surface::{Cylinder, Surface};
 use scx_step::{
     BuildError, Built, GapKind, Note, ReadOptions, SolidOrSheet, Waits, build, import, read,
 };
+use scx_surface::{Cylinder, Surface};
 
 type V = [f64; 3];
 

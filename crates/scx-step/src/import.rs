@@ -9,8 +9,8 @@ use scx_check::{CheckError, Findings};
 use scx_curve::CurveError;
 use scx_mass::MassError;
 use scx_num::error::ErrorKind;
-use scx_p21::P21Error;
 use scx_num::units::Length;
+use scx_p21::P21Error;
 use scx_surface::{Bracket, GapError, Surface, SurfaceError};
 
 use crate::{GapKind, Imported, Raise, SolidOrSheet};

@@ -150,11 +150,10 @@ pub fn build(ex: &Exchange, body: &ImportedBody, cx: &mut Cx<'_>) -> Result<Buil
         raised: Vec::new(),
     };
     // A surface may be stated as a quadric within the body's allowance (SP2b).
-    let accuracy = Accuracy::new(Length::from_mm(b.allowance()))
-        .ok_or(BuildError::Pending {
-            entity: body.entity,
-            waits: Waits::OtherSurface,
-        })?;
+    let accuracy = Accuracy::new(Length::from_mm(b.allowance())).ok_or(BuildError::Pending {
+        entity: body.entity,
+        waits: Waits::OtherSurface,
+    })?;
     let mut recognition_budget = cx.budget();
     for (k, shell) in body.shells.iter().enumerate() {
         for plan in &shell.faces {
