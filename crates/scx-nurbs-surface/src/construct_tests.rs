@@ -386,7 +386,7 @@ fn rescaled(s: &NurbsSurface<3>, axis: ParamAxis, from: f64, by: f64) -> NurbsSu
 fn compatible_surfaces_evaluate_as_their_sources() {
     let all = surfaces(61, &[Knots::Uniform, Knots::Random, Knots::Multiple]);
     let mut rng = Rng::new(71);
-    
+
     let mut groups = 0;
     for axis in AXES {
         for group in all.chunks(3).filter(|g| g.len() == 3) {
