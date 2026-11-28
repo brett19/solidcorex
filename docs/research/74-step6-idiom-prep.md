@@ -5454,6 +5454,258 @@ the faces not asked for alone (it joins protected pairs of edges). Open question
 ### 42.8 Proposed 04 row
 
 | 11-28 | (For the owner's review) ST5: `scx_stitch::{open_edges, gather, sew, merge_faces}`. `open_edges(&Brep) -> Vec<EdgeId>`: curve edges of one fin. `gather(&[&Brep], cx)`: bodies in one, unsewn, body 0 edited, others copied with their regions and shells. `sew(&Brep, Want, cx) -> Sewn`: the body is cut into the connected sets of faces that already share edges (kept ids), which are stitched as sheets by `stitch`'s rules, so edges the body came with, edges of three faces among them, are never re-proved; `Sewn` names the pieces (operand `i`) and the open edges left. `merge_faces(&Brep, &[FaceId], cx) -> Merged`: faces asked for are merged only where proved on one surface within the resolution (planes: box-bounded distance <= `Resolution::approx`, by the group's geometric least frame), then collinear line edges joined; nothing outside the faces asked for is touched; `Left` names each near miss (crease not reported). Solid kept to `approx`. Measured 2 candidate pairs per face, time linear | Amends nothing; adds `NoSuchFace` and `Loose` to the stitch's errors | 74 §42 |
+
+## 43. HL3 as built (11-28)
+
+`scx_hlr::outline(&Brep, &View, &mut Cx) -> Result<Outline, HlrError>` and `Scene::outlines`, in
+`crates/scx-hlr/src/outline.rs`. This is (C) of 74 §5.1, `eval/outline.rs` (`stretches`) and
+`outline/pieces.rs`, rebuilt on exact cuts instead of 32 samples. Cargo: `scx-nurbs` moves from
+dev-dependency to dependency of scx-hlr (for `Approach`; below hlr already, no layer change). HL1's
+`Run::face` is split so `outline` shares its recognition (`Run::quadric`), its splitting planes
+(`ruled_or_round`, `plane_hits`) and `contour::edge_planes` (new, torus meridians and parallels).
+
+### 43.1 Public API
+
+```rust
+pub fn outline(body: &Brep, view: &View, cx: &mut Cx<'_>) -> Result<Outline, HlrError>;
+impl Scene<'_> { pub fn outlines(&self, view: &View, cx: &mut Cx<'_>) -> Result<Vec<Outline>, HlrError>; }
+pub struct Outline { pub stretches: Vec<Stretch>, pub undecided: Vec<EdgeUndecided> }
+pub struct Stretch { pub edge: EdgeId, pub range: Extent1d, pub ends: [Point3; 2], pub whole: bool }
+pub struct EdgeUndecided { pub edge: EdgeId, pub why: OutlineUndecided }
+pub enum OutlineUndecided { MoreThanTwoUses, Face { face, why: Why }, Cuts(Undecided), Unplaced { face } }
+impl Outline { pub fn images(&self, body: &Brep, view: &View, origin: Point3) -> Result<Images, HlrError>; }
+pub struct Images { pub images: Vec<StretchImage>, pub pending: Vec<EdgeId> }   // scx_planar::Curve2 pieces
+pub fn drop_coincident(curves: Vec<Curve2>, tol: f64) -> Vec<Curve2>;
+pub const FACING: f64 = 1e-9;  pub const EDGE_ON: f64 = 1e-6;  pub const STEP: f64 = 1e-5;
+```
+
+Phase `hlr.outline`, `Progress` per edge; budget one unit per edge and one per span classified.
+
+### 43.2 Method
+
+A face faces the viewer where its normal out of the material has `n . v > FACING`, `v = -d`. Along
+an edge a face's `n . v` is zero only where the edge meets the surface's silhouette. For a
+cylinder, cone or sphere that curve lies in a plane HL1 already builds (the candidates' splitting
+planes); for a torus edge (a meridian or parallel) `n . v = 0` is a closed-form angle, cut by a
+plane through it (`contour::edge_planes`). The edge's crossings with those planes
+(`intersect_curve`, complete for analytic curves) are every place a face's state can change; one
+point per span between them decides it, and adjacent outline spans merge. An extra crossing splits a
+stretch in two that are merged again.
+
+- Out of the material: the front side's normal points into the front region, so `-n` when the front
+  region is solid, `n` when the back one is. A sheet (neither side solid) is seen from both sides
+  (`|n . v|`); a face between two solids is never seen.
+- Edge-on at the edge (`|n . v| <= EDGE_ON`): the face is asked a hair inside it (`STEP` of its
+  size), by stepping to each side along `n x tangent`; the side proved `Inside` by `contains_uv`
+  that leans more decides (the pin's rule, with the side tested instead of clamped). `Near` does not
+  count: next to a smooth edge of two faces both sides are `Near` and lean alike.
+- Edges: a wire and a seam (one face on both sides) have none. More than two uses is
+  `MoreThanTwoUses`, a freeform or unbounded face `Face { why }`, an edge whose cuts are not
+  closed-form (NURBS curve; a torus edge that is no meridian or parallel) `Cuts(..)`, a point no
+  face could place `Unplaced`. The pin errors on the first and samples the rest.
+- Images: `Outline::images` is `project::pieces` over each stretch (exact lines and conic arcs; an
+  edge seen end on has none; NURBS curves are `pending`). `drop_coincident` is `pieces.rs`'s: lines on
+  one line become the stretches they cover, equal conics (or run the other way) once.
+- Not ported from `pieces.rs`: `conic_spans`, `flat_conic`, `round_conics`, `meet_at_shared_ends`,
+  `near`, the `Piece` enum. They repair sampled or spline-fitted images (a rational spline that is
+  conics, a conic that is a line, arcs that join to a circle, ends that nearly meet). Here every image
+  is already an exact conic arc or line (edge-on circles are lines, `project::edge_on`) with exact
+  ends, so none has anything to repair.
+
+### 43.3 Cases for and against
+
+- *Exact cuts, not 32 samples.* For: the pin misses a face that turns toward the viewer and away
+  within a 32nd of an edge (its own docs say so); here the cone test (a sliver of 1.4 % of a rim,
+  centred half a sample from the nearest) finds it exactly (`2 acos(1 - 1e-3)` long), where the pin
+  sees none of it on the top rim and all of the bottom rim. Against: only analytic faces and curves;
+  a NURBS edge or face is typed undecided where the pin sampled it (step 5).
+- *Typed per-edge refusals, not one error.* For: one freeform face does not lose the other edges
+  (HL1's rule). Against: callers read two lists.
+- *A sheet is seen from both sides.* For: an open sheet's border is outline whichever side the eye
+  is on; the pin used the face's own normal. Against: nothing found.
+- *`Inside` only for the lean step.* For: a smooth edge between two faces, both edge-on to the view,
+  gets opposite leans from the two sides it truly has. Against: on a face too thin for the step nothing
+  is proved and the face reads "away"; the step is one sized constant (open, 43.7).
+- *The pin's `HAIR` snap to vertices and its point-stretch drop are not ported.* Cuts are exact, so an
+  end on a vertex is that vertex's parameter and stretches shorter than rounding are not made.
+
+### 43.4 Tests (`crates/scx-hlr/tests/outline.rs` 17, `pin_cases.rs` 4; truth is closed form or an independent scan)
+
+- cube: iso view gives exactly the six non-crease edges, whole (ends' coordinate sums 1 and 2); along
+  an axis the four edges of the near face;
+- cylinder: across the axis the near half of each rim (`pi` each, ends at `y = +-r`), none on the seam;
+  along the axis the whole near rim (the wall is edge-on at it); aslant the far half of the top rim and
+  the near half of the bottom (`pi` each, by the midpoint's side);
+- made sphere and torus: one face with seams, no outline edge in 8 views;
+- a wall split on its own silhouette (generated cylinder, each generator seen along its tangent from
+  both sides): outline, whole: the lean rule;
+- the sliver above (cone frustum, `delta = 1e-3`);
+- a dense scan, independent of the closed forms (2048 samples per edge, facing from the surface normal
+  and regions; samples within 2 steps of a stretch end and edge-on samples skipped): every generated
+  block, prism, quad sheet, cylinder, cone, sphere, torus, holed slab and stack in 8 views, and a made
+  cylinder, two cones and two tori in a tilted frame (over 100,000 and 50,000 samples compared);
+- a sheet from either side (8 border edges), edge-on (none); an edge of four uses is
+  `MoreThanTwoUses`; a NURBS rim `Cuts(NurbsEdge)`, an unweighted net `Face { Freeform }`;
+- images: a cube along an axis is four exact lines of the unit square, two bodies drawn once; two
+  coaxial cylinders along the axis give 8 quarter arcs of weight `cos 45` on radius 2, which become 4;
+- placement: a cylinder at (1e6, -2e6, 3e6) has the same ranges and the moved ends; the same Debug
+  text twice; a stop gives `Stopped`, small budgets `Exhausted`.
+- `pin_cases.rs` (4): tubes of (R, r) = (10, 1), (1e3, 1), (1e3, 0.01), (1e6, 0.01) seen from above hide
+  exactly `|hypot(x, y) - R| <= r` (hidden lines, over 100 samples each); a torus tilted 1e-3 to 0 off
+  its axis keeps its contour with `n . d = 0`; the contour's width along each screen axis is
+  `R |u_plane| + r` (support function); cones with axes turned 0 to 1e-3 at 3e5 mm.
+
+### 43.5 The pin's 88 tests (`hlr/tests.rs`), one by one
+
+The 88 belong to (A), the hidden-line pipeline; most test mechanisms scx replaced by design. HL1 and
+HL2 had ported 21 of them (HL1 and HL2 rows). Counts: HL2 9, HL1 12, NEW 11, DESIGN 42, STEP5 9, OPEN 5.
+
+None asserted something wrong about a closed form. Where scx differs it is a stated deviation, not a
+pin error: the pin's `uncertain` (STEP5 rows) is typed `Pending`; touching boxes draw doubled strokes
+(HL2 §37.7; `drop_coincident` now exists for the images). The one place the pin is wrong in fact is
+the stretch missed between two samples (its docs say so): the sliver test.
+
+| # | pin test | disposition | where, or why not |
+|---|---|---|---|
+| 1 | `iso_cube_hides_the_three_back_edges` | HL2 | ported by HL2 (74 §37.5) |
+| 2 | `a_box_in_front_hides_the_middle_of_an_edge` | HL2 | ported by HL2 (74 §37.5) |
+| 3 | `quadratic_roots_with_no_linear_term` | DESIGN | the pin solves its own quadratics; scx uses closed forms in scx-surface and PL6 (their tests) |
+| 4 | `a_torus_seen_along_its_axis_has_both_equator_silhouettes` | HL1 | covered by `tests/silhouettes.rs` (torus along and across the axis, patches, far from the origin) |
+| 5 | `far_apart_bodies_do_not_merge_nearby_visible_edges` | HL2 | ported by HL2 (74 §37.5) |
+| 6 | `a_thin_torus_tube_stops_a_ray` | NEW | `pin_cases.rs` a_tube_hides_exactly_the_points_within_its_radius... (R, r) = (10,1), (1e3,1), (1e3,0.01), (1e6,0.01), closed form `|hypot(x,y) - R| <= r` |
+| 7 | `a_thin_tube_on_a_huge_torus_stops_a_ray` | NEW | `pin_cases.rs` a_tube_hides_exactly_the_points_within_its_radius... (R, r) = (10,1), (1e3,1), (1e3,0.01), (1e6,0.01), closed form `|hypot(x,y) - R| <= r` |
+| 8 | `a_hair_thin_tube_on_a_kilometre_torus_stops_a_ray` | NEW | `pin_cases.rs` a_tube_hides_exactly_the_points_within_its_radius... (R, r) = (10,1), (1e3,1), (1e3,0.01), (1e6,0.01), closed form `|hypot(x,y) - R| <= r` |
+| 9 | `a_ray_from_the_hole_crosses_a_thin_large_torus` | NEW | `pin_cases.rs` a_tube_hides_exactly_the_points_within_its_radius... (R, r) = (10,1), (1e3,1), (1e3,0.01), (1e6,0.01), closed form `|hypot(x,y) - R| <= r` |
+| 10 | `a_torus_seen_nearly_along_its_axis_keeps_its_silhouettes` | NEW | `pin_cases.rs` a_torus_seen_a_hair_off_its_axis_keeps_two_silhouettes_with_n_dot_d_zero (tilts 1e-3 to 0) |
+| 11 | `a_shallow_cut_through_a_torus_tube_is_found` | NEW | `pin_cases.rs` a_tube_hides_exactly_the_points_within_its_radius... (R, r) = (10,1), (1e3,1), (1e3,0.01), (1e6,0.01), closed form `|hypot(x,y) - R| <= r` |
+| 12 | `nearest_points_on_a_traced_silhouette_are_found_as_by_every_chord` | DESIGN | a traced (sampled) silhouette: scx silhouettes are closed forms, freeform waits on HL4 |
+| 13 | `a_cylinder_seen_from_the_side_has_exact_silhouette_lines` | HL1 | covered by `tests/silhouettes.rs` (torus along and across the axis, patches, far from the origin) |
+| 14 | `a_sphere_outline_is_exact_conic_arcs_in_any_view` | HL1 | covered by `tests/silhouettes.rs` (torus along and across the axis, patches, far from the origin) |
+| 15 | `a_torus_seen_face_on_is_drawn_at_both_equators` | HL1 | covered by `tests/silhouettes.rs` (torus along and across the axis, patches, far from the origin) |
+| 16 | `an_edge_under_a_torus_is_hidden_where_the_tube_covers_it` | NEW | `pin_cases.rs` a_tube_hides_exactly_the_points_within_its_radius... (R, r) = (10,1), (1e3,1), (1e3,0.01), (1e6,0.01), closed form `|hypot(x,y) - R| <= r` |
+| 17 | `a_part_far_from_the_origin_draws_the_same_as_at_the_origin` | HL2 | ported by HL2 (74 §37.5) |
+| 18 | `freeform_faces_are_reported_and_never_hide_for_certain` | STEP5 | a freeform ("left-out") face: the pin says `uncertain` from samples, here the span is `Pending::Outline`/`Occluder` by name (HL2 §37.3) and the face `Unsupported(Freeform)`; the typed forms are tested in HL1 (`a_freeform_face_is_named_unsupported`); a hidden-line scene with a freeform occluder is open (needs a NURBS-face scene builder), and real answers wait on HL4/step 5 |
+| 19 | `a_flat_spline_patch_is_a_plane_that_hides_for_certain` | DESIGN | surface recognition (torus or sphere stored as splines, form against label) is SU7 `scx_surface::recognize` and SP2b, tested there; HL1 has the rational cylinder |
+| 20 | `a_circle_racing_through_its_first_turn_is_drawn_whole_edge_on` | DESIGN | recognising a NURBS arc as a circle by sampling and knot spans: scx edges are exact analytic curves or typed `Pending::Curve` (step 5); surfaces go through SU7 `recognize` (its tests) |
+| 21 | `an_arc_racing_through_almost_a_full_turn_is_drawn_whole` | DESIGN | recognising a NURBS arc as a circle by sampling and knot spans: scx edges are exact analytic curves or typed `Pending::Curve` (step 5); surfaces go through SU7 `recognize` (its tests) |
+| 22 | `a_short_piece_of_a_fast_arc_turns_its_own_way` | DESIGN | recognising a NURBS arc as a circle by sampling and knot spans: scx edges are exact analytic curves or typed `Pending::Curve` (step 5); surfaces go through SU7 `recognize` (its tests) |
+| 23 | `an_arc_whose_whole_domain_is_8_roundings_wide_is_not_guessed` | DESIGN | recognising a NURBS arc as a circle by sampling and knot spans: scx edges are exact analytic curves or typed `Pending::Curve` (step 5); surfaces go through SU7 `recognize` (its tests) |
+| 24 | `a_piece_in_a_knot_span_of_1e_11_turns_its_own_way` | DESIGN | recognising a NURBS arc as a circle by sampling and knot spans: scx edges are exact analytic curves or typed `Pending::Curve` (step 5); surfaces go through SU7 `recognize` (its tests) |
+| 25 | `a_curve_that_swerves_where_its_weight_is_near_zero_is_not_taken_for_a_circle` | DESIGN | recognising a NURBS arc as a circle by sampling and knot spans: scx edges are exact analytic curves or typed `Pending::Curve` (step 5); surfaces go through SU7 `recognize` (its tests) |
+| 26 | `an_edge_leaving_a_left_out_faces_box_in_front_stays_visible` | STEP5 | a freeform ("left-out") face: the pin says `uncertain` from samples, here the span is `Pending::Outline`/`Occluder` by name (HL2 §37.3) and the face `Unsupported(Freeform)`; the typed forms are tested in HL1 (`a_freeform_face_is_named_unsupported`); a hidden-line scene with a freeform occluder is open (needs a NURBS-face scene builder), and real answers wait on HL4/step 5 |
+| 27 | `a_nearly_straight_cubic_is_not_taken_for_a_huge_circle` | DESIGN | recognising a NURBS arc as a circle by sampling and knot spans: scx edges are exact analytic curves or typed `Pending::Curve` (step 5); surfaces go through SU7 `recognize` (its tests) |
+| 28 | `an_edge_dipping_behind_a_left_out_face_between_samples_is_uncertain` | STEP5 | a freeform ("left-out") face: the pin says `uncertain` from samples, here the span is `Pending::Outline`/`Occluder` by name (HL2 §37.3) and the face `Unsupported(Freeform)`; the typed forms are tested in HL1 (`a_freeform_face_is_named_unsupported`); a hidden-line scene with a freeform occluder is open (needs a NURBS-face scene builder), and real answers wait on HL4/step 5 |
+| 29 | `an_arc_that_turns_back_is_drawn_as_chords` | DESIGN | recognising a NURBS arc as a circle by sampling and knot spans: scx edges are exact analytic curves or typed `Pending::Curve` (step 5); surfaces go through SU7 `recognize` (its tests) |
+| 30 | `a_closed_edge_that_turns_back_with_no_pieces_is_drawn_as_chords` | DESIGN | recognising a NURBS arc as a circle by sampling and knot spans: scx edges are exact analytic curves or typed `Pending::Curve` (step 5); surfaces go through SU7 `recognize` (its tests) |
+| 31 | `a_cone_tip_trimmed_near_the_apex_is_only_its_tip` | HL1 | covered by `tests/silhouettes.rs` (torus along and across the axis, patches, far from the origin) |
+| 32 | `an_edge_behind_a_left_out_freeform_face_is_uncertain_there` | STEP5 | a freeform ("left-out") face: the pin says `uncertain` from samples, here the span is `Pending::Outline`/`Occluder` by name (HL2 §37.3) and the face `Unsupported(Freeform)`; the typed forms are tested in HL1 (`a_freeform_face_is_named_unsupported`); a hidden-line scene with a freeform occluder is open (needs a NURBS-face scene builder), and real answers wait on HL4/step 5 |
+| 33 | `a_sloping_edge_that_runs_behind_a_left_out_face_is_uncertain` | STEP5 | a freeform ("left-out") face: the pin says `uncertain` from samples, here the span is `Pending::Outline`/`Occluder` by name (HL2 §37.3) and the face `Unsupported(Freeform)`; the typed forms are tested in HL1 (`a_freeform_face_is_named_unsupported`); a hidden-line scene with a freeform occluder is open (needs a NURBS-face scene builder), and real answers wait on HL4/step 5 |
+| 34 | `a_torus_stored_as_a_rational_spline_patch_is_recognised` | DESIGN | surface recognition (torus or sphere stored as splines, form against label) is SU7 `scx_surface::recognize` and SP2b, tested there; HL1 has the rational cylinder |
+| 35 | `a_torus_patch_with_a_bump_in_a_narrow_knot_span_is_not_taken_for_a_torus` | DESIGN | surface recognition (torus or sphere stored as splines, form against label) is SU7 `scx_surface::recognize` and SP2b, tested there; HL1 has the rational cylinder |
+| 36 | `a_big_circle_passing_behind_a_thin_left_out_face_is_uncertain_there` | STEP5 | a freeform ("left-out") face: the pin says `uncertain` from samples, here the span is `Pending::Outline`/`Occluder` by name (HL2 §37.3) and the face `Unsupported(Freeform)`; the typed forms are tested in HL1 (`a_freeform_face_is_named_unsupported`); a hidden-line scene with a freeform occluder is open (needs a NURBS-face scene builder), and real answers wait on HL4/step 5 |
+| 37 | `a_torus_in_two_halves_keeps_whole_outlines_with_fine_trims` | HL1 | covered by `tests/silhouettes.rs` (torus along and across the axis, patches, far from the origin) |
+| 38 | `an_arc_folding_back_under_a_left_out_face_seen_edge_on_is_uncertain_there` | STEP5 | a freeform ("left-out") face: the pin says `uncertain` from samples, here the span is `Pending::Outline`/`Occluder` by name (HL2 §37.3) and the face `Unsupported(Freeform)`; the typed forms are tested in HL1 (`a_freeform_face_is_named_unsupported`); a hidden-line scene with a freeform occluder is open (needs a NURBS-face scene builder), and real answers wait on HL4/step 5 |
+| 39 | `a_left_out_face_curling_over_its_own_edge_makes_it_uncertain` | STEP5 | a freeform ("left-out") face: the pin says `uncertain` from samples, here the span is `Pending::Outline`/`Occluder` by name (HL2 §37.3) and the face `Unsupported(Freeform)`; the typed forms are tested in HL1 (`a_freeform_face_is_named_unsupported`); a hidden-line scene with a freeform occluder is open (needs a NURBS-face scene builder), and real answers wait on HL4/step 5 |
+| 40 | `a_plate_just_above_a_box_in_a_large_scene_is_not_looked_through` | HL2 | ported by HL2 (74 §37.5) |
+| 41 | `a_sphere_with_a_spline_band_between_record_caps_is_one_sphere` | DESIGN | surface recognition (torus or sphere stored as splines, form against label) is SU7 `scx_surface::recognize` and SP2b, tested there; HL1 has the rational cylinder |
+| 42 | `chords_of_a_racing_circle_stay_within_their_stated_deviation` | DESIGN | recognising a NURBS arc as a circle by sampling and knot spans: scx edges are exact analytic curves or typed `Pending::Curve` (step 5); surfaces go through SU7 `recognize` (its tests) |
+| 43 | `a_big_arc_is_cut_where_it_meets_a_left_out_faces_box` | STEP5 | a freeform ("left-out") face: the pin says `uncertain` from samples, here the span is `Pending::Outline`/`Occluder` by name (HL2 §37.3) and the face `Unsupported(Freeform)`; the typed forms are tested in HL1 (`a_freeform_face_is_named_unsupported`); a hidden-line scene with a freeform occluder is open (needs a NURBS-face scene builder), and real answers wait on HL4/step 5 |
+| 44 | `narrow_torus_strips_keep_their_outline` | HL1 | covered by `tests/silhouettes.rs` (torus along and across the axis, patches, far from the origin) |
+| 45 | `mirrored_placements_bad_indices_and_bad_views_are_refused` | HL1 | covered by `tests/silhouettes.rs` (torus along and across the axis, patches, far from the origin) |
+| 46 | `cancellation_and_budgets_return_errors` | HL1 | covered by `tests/silhouettes.rs` (torus along and across the axis, patches, far from the origin) |
+| 47 | `two_touching_boxes_draw_each_shared_edge_once` | HL2 | ported by HL2 (74 §37.5) |
+| 48 | `a_cone_in_a_front_view_has_exact_outline_rulings_and_edge_on_circles` | HL1 | covered by `tests/silhouettes.rs` (torus along and across the axis, patches, far from the origin) |
+| 49 | `a_torus_seen_obliquely_spans_its_outer_diameter` | NEW | `pin_cases.rs` an_obliquely_seen_torus_spans_the_support_function (width `R |u_plane| + r`) |
+| 50 | `a_bent_quarter_in_a_knot_span_narrower_than_rounding_is_drawn` | DESIGN | recognising a NURBS arc as a circle by sampling and knot spans: scx edges are exact analytic curves or typed `Pending::Curve` (step 5); surfaces go through SU7 `recognize` (its tests) |
+| 51 | `an_unevenly_parameterised_circle_is_drawn_whole` | DESIGN | recognising a NURBS arc as a circle by sampling and knot spans: scx edges are exact analytic curves or typed `Pending::Curve` (step 5); surfaces go through SU7 `recognize` (its tests) |
+| 52 | `a_spline_off_its_circle_in_a_narrow_knot_span_is_not_taken_for_one` | DESIGN | recognising a NURBS arc as a circle by sampling and knot spans: scx edges are exact analytic curves or typed `Pending::Curve` (step 5); surfaces go through SU7 `recognize` (its tests) |
+| 53 | `nearly_coaxial_cones_far_out_keep_their_own_silhouettes` | NEW | `pin_cases.rs` cones_far_out_with_nearly_equal_axes (tilts 0 to 1e-3 at 3e5 mm) |
+| 54 | `nearly_coincident_cone_sectors_both_draw_their_outline` | HL1 | covered by `tests/silhouettes.rs` (torus along and across the axis, patches, far from the origin) |
+| 55 | `spherical_caps_through_one_circle_keep_their_own_outlines` | HL1 | covered by `tests/silhouettes.rs` (torus along and across the axis, patches, far from the origin) |
+| 56 | `cones_with_slightly_turned_axes_keep_their_own_outlines` | NEW | `pin_cases.rs` cones_far_out_with_nearly_equal_axes (tilts 0 to 1e-3 at 3e5 mm) |
+| 57 | `a_high_degree_spline_through_points_of_a_circle_is_not_taken_for_one` | DESIGN | recognising a NURBS arc as a circle by sampling and knot spans: scx edges are exact analytic curves or typed `Pending::Curve` (step 5); surfaces go through SU7 `recognize` (its tests) |
+| 58 | `the_shadow_index_finds_each_nearby_box_once` | DESIGN | the pin's chord grid, shadow index, trim samples, surface groups and scene limits do not exist: crossings are PL6's complete ones, spans are cut at them (HL2); HL2 has the kd-tree unit test |
+| 59 | `a_plane_through_three_points_draws_as_a_plane` | HL2 | ported by HL2 (74 §37.5) |
+| 60 | `a_plane_record_off_its_edges_by_rounding_still_hides` | HL2 | ported by HL2 (74 §37.5) |
+| 61 | `trim_samples_and_scene_extents_beyond_their_limits_are_refused` | DESIGN | the pin's chord grid, shadow index, trim samples, surface groups and scene limits do not exist: crossings are PL6's complete ones, spans are cut at them (HL2); HL2 has the kd-tree unit test |
+| 62 | `surface_groups_match_comparing_every_pair_and_preparing_can_be_cancelled` | DESIGN | the pin's chord grid, shadow index, trim samples, surface groups and scene limits do not exist: crossings are PL6's complete ones, spans are cut at them (HL2); HL2 has the kd-tree unit test |
+| 63 | `the_chord_grid_finds_what_a_scan_of_every_chord_finds` | DESIGN | the pin's chord grid, shadow index, trim samples, surface groups and scene limits do not exist: crossings are PL6's complete ones, spans are cut at them (HL2); HL2 has the kd-tree unit test |
+| 64 | `every_hole_of_a_plate_hides_the_same_part_of_its_bottom_circle` | OPEN | needs a body the testkit cannot build yet (a plate with circular holes, a sphere face with an inner loop, a wire edge, many placed bodies); for HL6's part list |
+| 65 | `coaxial_cylinders_seen_along_their_axis_draw_one_circle` | NEW | `outline.rs` coaxial_cylinders_seen_along_their_axis_draw_one_circle (images, `drop_coincident`: 8 arcs to 4) |
+| 66 | `a_few_hundred_placements_draw_as_one` | OPEN | needs a body the testkit cannot build yet (a plate with circular holes, a sphere face with an inner loop, a wire edge, many placed bodies); for HL6's part list |
+| 67 | `chords_only_near_each_other_still_meet_their_crossings` | DESIGN | the pin's chord grid, shadow index, trim samples, surface groups and scene limits do not exist: crossings are PL6's complete ones, spans are cut at them (HL2); HL2 has the kd-tree unit test |
+| 68 | `a_rigidly_placed_revolution_draws_as_the_cylinder_it_is` | DESIGN | surface recognition (torus or sphere stored as splines, form against label) is SU7 `scx_surface::recognize` and SP2b, tested there; HL1 has the rational cylinder |
+| 69 | `a_placement_that_is_not_rigid_is_refused` | DESIGN | worker threads, shared memo and serial/parallel equality: scx-hlr starts no threads and shares nothing; determinism is tested as the same bits twice (all three test files), stop and budget as typed errors |
+| 70 | `a_revolved_circle_is_a_torus_drawn_at_both_equators` | DESIGN | surface recognition (torus or sphere stored as splines, form against label) is SU7 `scx_surface::recognize` and SP2b, tested there; HL1 has the rational cylinder |
+| 71 | `an_edge_is_cut_to_its_interval_on_its_unbounded_curve` | HL2 | ported by HL2 (74 §37.5) |
+| 72 | `a_faces_chart_is_where_its_form_lies_on_its_label` | DESIGN | surface recognition (torus or sphere stored as splines, form against label) is SU7 `scx_surface::recognize` and SP2b, tested there; HL1 has the rational cylinder |
+| 73 | `a_form_turned_against_its_label_keeps_the_face_on_the_loops_side` | DESIGN | surface recognition (torus or sphere stored as splines, form against label) is SU7 `scx_surface::recognize` and SP2b, tested there; HL1 has the rational cylinder |
+| 74 | `a_sphere_with_an_inner_hole_loop_keeps_its_interior_and_outlines` | OPEN | needs a body the testkit cannot build yet (a plate with circular holes, a sphere face with an inner loop, a wire edge, many placed bodies); for HL6's part list |
+| 75 | `an_edge_no_face_uses_is_drawn_like_any_other` | OPEN | needs a body the testkit cannot build yet (a plate with circular holes, a sphere face with an inner loop, a wire edge, many placed bodies); for HL6's part list |
+| 76 | `a_traced_rim_is_drawn_on_the_true_intersection_or_refused` | DESIGN | a traced (sampled) silhouette: scx silhouettes are closed forms, freeform waits on HL4 |
+| 77 | `hlr_timing` | DESIGN | worker threads, shared memo and serial/parallel equality: scx-hlr starts no threads and shares nothing; determinism is tested as the same bits twice (all three test files), stop and budget as typed errors |
+| 78 | `permuting_or_removing_placements_moves_only_their_lines` | OPEN | needs a body the testkit cannot build yet (a plate with circular holes, a sphere face with an inner loop, a wire edge, many placed bodies); for HL6's part list |
+| 79 | `serial_and_parallel_work_draw_the_same_bits` | DESIGN | worker threads, shared memo and serial/parallel equality: scx-hlr starts no threads and shares nothing; determinism is tested as the same bits twice (all three test files), stop and budget as typed errors |
+| 80 | `placements_sharing_a_body_and_turn_draw_as_unshared_ones` | DESIGN | worker threads, shared memo and serial/parallel equality: scx-hlr starts no threads and shares nothing; determinism is tested as the same bits twice (all three test files), stop and budget as typed errors |
+| 81 | `budgets_hold_for_the_whole_call_on_any_number_of_threads` | DESIGN | worker threads, shared memo and serial/parallel equality: scx-hlr starts no threads and shares nothing; determinism is tested as the same bits twice (all three test files), stop and budget as typed errors |
+| 82 | `workers_poll_cancellation` | DESIGN | worker threads, shared memo and serial/parallel equality: scx-hlr starts no threads and shares nothing; determinism is tested as the same bits twice (all three test files), stop and budget as typed errors |
+| 83 | `a_failing_or_panicking_worker_stops_the_work_without_escaping` | DESIGN | worker threads, shared memo and serial/parallel equality: scx-hlr starts no threads and shares nothing; determinism is tested as the same bits twice (all three test files), stop and budget as typed errors |
+| 84 | `a_panicking_worker_stops_the_other_workers` | DESIGN | worker threads, shared memo and serial/parallel equality: scx-hlr starts no threads and shares nothing; determinism is tested as the same bits twice (all three test files), stop and budget as typed errors |
+| 85 | `scenes_and_trims_beyond_the_shared_limits_are_refused` | DESIGN | the pin's chord grid, shadow index, trim samples, surface groups and scene limits do not exist: crossings are PL6's complete ones, spans are cut at them (HL2); HL2 has the kd-tree unit test |
+| 86 | `long_items_poll_cancellation_inside_them` | DESIGN | worker threads, shared memo and serial/parallel equality: scx-hlr starts no threads and shares nothing; determinism is tested as the same bits twice (all three test files), stop and budget as typed errors |
+| 87 | `spline_points_and_hulls_come_from_their_own_knot_spans` | DESIGN | recognising a NURBS arc as a circle by sampling and knot spans: scx edges are exact analytic curves or typed `Pending::Curve` (step 5); surfaces go through SU7 `recognize` (its tests) |
+| 88 | `a_ball_corner_is_its_labels_sphere_and_needs_its_form` | DESIGN | surface recognition (torus or sphere stored as splines, form against label) is SU7 `scx_surface::recognize` and SP2b, tested there; HL1 has the rational cylinder |
+
+OPEN rows (a plate with circular holes, a sphere face with an inner loop, a wire edge, hundreds of
+placements, permuted placements) need testkit builders that do not exist; they go to HL6's part list.
+STEP5 rows need a freeform-occluder scene builder; the typed forms they would show are asserted in
+HL1's `a_freeform_face_is_named_unsupported` and in `nurbs_rims_and_freeform_faces_are_named_not_sampled`.
+
+### 43.6 Cost (release, one thread, loaded build host (load 25-37), throwaway timer over 500 calls, 4 views)
+
+| body | faces | edges | per call | per face | per edge |
+|---|---|---|---|---|---|
+| block | 6 | 12 | 77 us | 12.8 us | 6.4 us |
+| block 4x4 per side (generated) | 96 | 192 | 393 us | 4.1 us | 2.0 us |
+| holed slab, 6 sides | 15 | 39 | 104 us | 6.9 us | 2.7 us |
+| cylinder (made) | 3 | 3 | 134 us | 44.5 us | 44.5 us |
+| cone frustum (made) | 3 | 3 | 203 us | 67.8 us | 67.8 us |
+| cylinder, 8 walls | 10 | 24 | 330 us | 33 us | 13.7 us |
+| sphere, 8 lunes | 8 | 24 | 288 us | 36 us | 12 us |
+| torus, 4x4 patches | 16 | 32 | 1,116 us | 70 us | 35 us |
+| sphere, torus (made: seams only) | 1 | 2-3 | 0.1 us | | |
+
+Planar edges cost 2-6 us (inversions and `contains_uv` per span); a curved edge adds a plane
+intersection per splitting plane (one or two per face), 13-68 us. The pin's walk is 33 samples with
+bisections per edge, each an inversion. Numbers are a loaded host's; the ratios between rows are the
+signal. A new function: it adds nothing to an existing path (HL1's `silhouettes` is the same code
+moved into `Run::quadric` and `ruled_or_round`; its 18 tests pass unchanged).
+
+### 43.7 Deviations and open questions
+
+- 74 §5.3 had `outline(body, plane, cx) -> Vec<Curve2>`. Here the stretches are 3-D edge ranges, and
+  `images` gives the planar curves for a view (a plane is a view: `View::new(normal, up)`).
+- Silhouettes of curved faces are not in `outline`: they are `silhouettes` (HL1), as in the pin's
+  split; a caller wanting the whole outline drawing joins them.
+- NURBS edges, torus edges that are no meridian or parallel, and unrecognised NURBS faces wait on
+  step 5 (`Cuts`, `Face`).
+- Open: the lean step is one constant (`STEP` of the face's size). A proof that needs none is the sign
+  of the derivative of `n . v` into the face (the shape operator); not done.
+
+### 43.8 Proposed 04 row
+
+HL3 (74 §43): `scx_hlr::outline(&Brep, &View, cx)` gives the stretches of each edge between a face that
+faces the viewer and one that does not, with exact cuts: a face's state along an edge changes only
+where the edge meets the face's silhouette plane (cylinder, cone, sphere) or a torus meridian's or
+parallel's closed-form angle (`intersect_curve`), and one point per span decides it (a face edge-on at
+the edge is asked a hair inside, on the side proved inside). The pin's 32 samples miss a sliver of a
+32nd of an edge. Freeform faces, NURBS edges, edges of more than two uses and unplaced points are typed
+per edge. Images are exact `Curve2` pieces and `drop_coincident` draws coincident ones once; the pin's
+tidying of sampled and spline images is not ported (nothing is sampled). Of the pin's 88 hlr tests: 21
+were ported by HL1 and HL2, 11 are ported or covered here against closed forms, 42 test mechanisms scx
+does not have (chords, knot-span racing, workers, labels), 9 wait on freeform faces (typed `Pending`),
+5 need builders.
+
 ## 44. BW8 as built (11-28)
 
 `scx_bodyq::pick_at` (faces, edges or vertices within an aperture of points) and

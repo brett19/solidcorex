@@ -33,7 +33,7 @@
 //! (on one branch only, but both are split: an extra split changes nothing). A boundary edge
 //! of any other shape is named ([`Undecided::TorusEdge`]).
 
-use core::f64::consts::TAU;
+use core::f64::consts::{PI, TAU};
 
 use scx_brep::FaceId;
 use scx_curve::{Circle, Curve};
@@ -303,6 +303,67 @@ pub(crate) fn candidates(
             closed: true,
             splitter: Splitter::Found(splits.clone()),
         });
+    }
+    Ok(out)
+}
+
+/// Planes that cut the boundary edge `rim` of a torus face wherever the face's normal is
+/// square to the view (`n · d = 0`): the edge's crossings with the contour, found as
+/// crossings with planes (the edge lies on the torus, so a plane's crossings with it are
+/// among the planes' own; an extra plane crossing changes nothing).
+///
+/// - A meridian at angle `θ` (the outward `ρ̂ = cos θ x + sin θ y`): the normal at the
+///   minor angle `φ` is `cos φ ρ̂ + sin φ a`, square to `d` at `φ0 = atan2(ρ̂·d, -d_a)` and
+///   `φ0 + π`; the planes are the horizontal ones at the heights `r sin φ`.
+/// - A parallel at height `h`, radius `ρ`: `n · d` is `((ρ - R) m cos(θ - φ_d) + h d_a) / r`
+///   with `m = |d_ρ|` and `φ_d = atan2(d_y, d_x)`, so zero at `θ = φ_d ± acos q`,
+///   `q = -d_a h / (m (ρ - R))` (the torus code's own); the planes are the ones through the
+///   axis holding those meridians. None where the factor is zero (the sign is then constant
+///   along the parallel).
+///
+/// # Errors
+///
+/// [`Undecided`] for a NURBS edge or one that is neither a meridian nor a parallel.
+pub(crate) fn edge_planes(
+    rim: &Rim<'_>,
+    torus: &Torus,
+    view: &View,
+) -> Result<Vec<Frame>, Undecided> {
+    let f = torus.frame();
+    let (major, minor) = (torus.major().mm(), torus.minor().mm());
+    let d = *view.d();
+    let (d1, d2, da) = (d.dot(*f.x()), d.dot(*f.y()), d.dot(*f.z()));
+    let (o, a) = (f.origin(), *f.z());
+    let m = fmath::hypot(d1, d2);
+    let mut out = Vec::new();
+    match kind(rim, f, major, minor)? {
+        Kind::Meridian(theta) => {
+            let rho_d = fmath::cos(theta) * d1 + fmath::sin(theta) * d2;
+            if fmath::hypot(rho_d, da) > PARALLEL {
+                let phi = fmath::atan2(rho_d, -da);
+                for p in [phi, phi + PI] {
+                    if let Some(fr) = Frame::new(o + a * (minor * fmath::sin(p)), a, *f.x()) {
+                        out.push(fr);
+                    }
+                }
+            }
+        }
+        Kind::Parallel { h, rho } => {
+            let k = m * (rho - major);
+            if m > PARALLEL && k.abs() > PARALLEL * major.max(minor) {
+                let q = -da * h / k;
+                if q.abs() <= 1.0 + PARALLEL {
+                    let g = fmath::acos(q.clamp(-1.0, 1.0));
+                    let phi = fmath::atan2(d2, d1);
+                    for t in [phi + g, phi - g] {
+                        let n = *f.x() * -fmath::sin(t) + *f.y() * fmath::cos(t);
+                        if let Some(fr) = Frame::new(o, n, a) {
+                            out.push(fr);
+                        }
+                    }
+                }
+            }
+        }
     }
     Ok(out)
 }
