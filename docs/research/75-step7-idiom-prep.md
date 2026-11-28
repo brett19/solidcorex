@@ -1927,3 +1927,68 @@ Decisions.
 - **`kept`.** An affine image keeps the parameter through a `ParamShift` (the plane's, rulings and generators: `NONE`), so a caller can map vertices; an arc's angle is not an affine function of the line's `t`, so it says `None` rather than a wrong map.
 
 Truths (`crates/scx-surface/tests/project.rs`, 14 tests, plus 2 unit tests): a circle projected along z onto a plane tilted by beta is the ellipse with semi-axes r and r / cos(beta) about the centre's image; a tilted circle projected onto a level plane has semi-axes r and r cos(gamma); for 64 random circles, planes and directions the image keeps the conjugate-diameter invariants a^2 + b^2 = |u|^2 + |v|^2 and ab = |u x v|; a line dropped onto a cylinder in a plane through its axis is the ruling at the radius (and splits at the axis); a chord dropped onto a cylinder is the arc at its height with the closed-form ends. Every piece is sampled: each point on the surface and on the projection line through its source point, or equal to the kind's `closest` foot. Ported from the pin: `a_line_above_a_box_drops_to_its_foot_on_the_top`, `a_line_beside_a_cylinder_drops_onto_its_wall_at_the_radius`, the #20836 seam chord (its geometry; the seam split and the area are the body's), and `a_segment_projects_onto_a_box_s_record_face_at_its_index` (both levels). Not ported: `a_curve_over_nothing_of_the_face_is_refused` (a face concern; the analogue here is a miss being empty) and `rational_quarter_circle` (a record form, not geometry).
+### 13.14 BR11 as built (11-28)
+
+**What was built.** `scx-brep` `draft/heal.rs`: `Draft::merge_faces_across(edge, &protected, &doc)`
+and `merge_faces`, `join_edges_at(vertex, &protected)` and `join_edges`, and `heal`
+(faces, then edges, to a fixpoint). A protected set is a `&BTreeSet<EdgeId>`; an id that is not a
+live edge is `Absent` before any write (the pin's out-of-range `Argument`). Reports are typed:
+`FaceMerge { absorbed, survivor, removed }`, `EdgeJoin { absorbed, survivor, vertex }`, and
+`Left { at, why }` for a candidate (equal surfaces or curves) that was left, `Why` one of
+`Protected, Sides, Orientation, Loops, Pcurves(e), Fins, Interval, Uses`. Each merge is planned
+read-only and then written, so a refusal writes nothing.
+
+**Decisions, each with a case against.**
+
+1. *Equal means `==`* on `Surface` and `Curve` (the test cells and `Changes` already use), not a
+   geometric coincidence test. For: exact, no tolerance, and the pcurves carry over unchanged;
+   pieces of one cut face or edge are equal. Against: two coplanar faces of different operands
+   (different frames) are not merged; the Boolean's own merge, which asks the surface
+   intersection, keeps doing that. A kernel-wide "same surface up to frame" test is open.
+2. *A pair is merged by its twins* (every edge only the two faces bound), walking loops across
+   them (the Boolean's splice). A connected group of mergeable faces (union-find over the
+   removable twins) is merged at once, one loop walk a group, so a long strip is linear. A group
+   goes pair by pair instead when a twin's two uses lie in different uv windows (a seam) or a
+   protected, other-shell or one-sense edge lies inside it; the pair walk keeps seams and
+   refuses what a group cannot. For: handles a disc in a plate (both loops vanish), collinear
+   shared pieces and seams. Against: two code paths, and a dirty group is still quadratic.
+   A first version merged pair by pair only: 17 s on the 4,102-face bar.
+3. *Seams.* Twins are grouped by the uv offset between their two uses; the group in step with
+   the first one in one window goes, the others stay as seams. A pair meeting across a seam only
+   is written with `exact_loop`/`placed`. Against: windows are compared with 1e-7 in uv.
+4. *Protected.* A protected edge is never removed and two faces sharing one never merge; two
+   edges join only when both or neither are protected (the survivor is the lower id, the
+   report names the absorbed one). Against: refusing every protected join would keep the
+   `Id`s stable, but leaves a split line in many pieces and gives 16 edges where the pin gives
+   15 (the pin's #21864 joins them too).
+5. *Edge joins write no pcurve at a guess.* The two uses' pcurves must be equal Curve2 values
+   running on (a turn on for circles and ellipses in uv); otherwise `Why::Uses`. Against: the
+   wall of a cylinder whose seam lune has its window a turn off (`start` -2 pi) leaves its two
+   circle arcs at the seam unjoined; closing that needs a uv shift of the rest of the loop
+   (open, below). Rewriting with `write_pcurves` was rejected: it can fail after the edge is
+   written.
+6. *Joined accuracy* is the larger of the two, downgraded `Certified` to `Unproven` (a proof of
+   each piece is not one of the whole); equal ones are kept.
+7. *Survivor is the lower id*, so the result does not depend on which edge the walk met first.
+
+**Tests (all in `tests/heal.rs`, 14).** Ported from the pin's `merge_tests.rs`: a split cube and
+two unioned boxes (a lattice, 6 faces, 12 edges, 8 vertices, area `2(ab+bc+ca)`, volume `abc`,
+the check passing), a box changes nothing and every planar generated kind changes nothing,
+a picked edge keeps the faces apart (7, 15, 10), an unknown kept edge is refused before any
+write, more than 4,096 kept edges (1,728 and 6,912 edges all protected), the 4,100-edge bar with
+one kept cut. Not ported: `picks_near_nothing` and the point-list `MAX_POINTS` cap (ids are
+typed, so neither failure exists); the stitch tests (`scx-stitch`). New: a disc in a plate, a
+cylinder's wall, sides refused, one merge and one join by name, parts equal the whole.
+
+**Measured** (a 24-core build box, unoptimised, whole test including the build and the check):
+the 4,102-face bar, pair by pair 17.1 s, by group 4.2 s; the 20 x 20 x 20 lattice (2,400
+faces, heal and parts) 0.25 s before, 0.21 s after. What is left of the bar's 4.2 s is the
+edge joins: the bar has four 1,025-piece cube edges, and each of its ~4,100 joins rebuilds the
+loops of its faces (clone and fin diff of a loop of about 1,000 uses). Joining a whole chain
+at once would remove it.
+
+**Open.** (a) join a chain of edges at once, linear in the chain; (b) the seam-window join
+above (a generated cylinder's circles stay split at the seam lune, `Why::Uses`; for BO12 to
+close with a uv shift of the rest of the loop); (c) merging coplanar faces of different frames (needs the intersection test of
+`scx-ssi`, above this crate); (d) the Boolean's `build.rs` still has its own merge and join,
+to be replaced by these calls (BO12).
