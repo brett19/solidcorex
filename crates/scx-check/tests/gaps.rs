@@ -20,7 +20,7 @@ use scx_brep::{Brep, Document, Draft, EdgeId, EdgeShape, FaceId, UseGeom};
 use scx_check::{CheckError, Finding, Findings, Scope, Undecided, Why};
 use scx_curve::{Curve, Line};
 use scx_num::budget::Stop;
-use scx_num::cert::{Basis, Recorded};
+use scx_num::cert::{Basis, Cert, Claim, EdgeEnd, Method, Reads, Recorded};
 use scx_num::units::{Accuracy, Length};
 use scx_num::vector3d::Vec3;
 use scx_nurbs::Approach;
@@ -161,6 +161,121 @@ fn an_edge_off_its_face_is_found_past_its_reach_only() {
             let f = found(&b, scope);
             assert!(f.is_clean(), "seed {seed}: {:?} {:?}", f.list, f.undecided);
         }
+    }
+}
+
+/// A record of `acc` carrying a certificate of `claim` with `bound`.
+fn cert(acc: f64, claim: Claim, bound: f64) -> Option<Arc<Recorded>> {
+    Some(Arc::new(Recorded {
+        acc: Accuracy::new(Length::from_mm(acc)).unwrap(),
+        basis: Basis::Certified(Cert {
+            claim,
+            bound: Length::from_mm(bound),
+            method: Method::Interval,
+            reads: Reads::NONE,
+        }),
+    }))
+}
+
+/// The edge off its face by `10 acc` (as above) with the edge's record replaced by `edge`
+/// and its uses' by `uses`, where given.
+fn off_face_recorded(
+    edge: Option<Arc<Recorded>>,
+    uses: Option<Arc<Recorded>>,
+) -> (Brep, EdgeId, FaceId) {
+    let (b, id, face) = off_face(0, 10.0 * ACC, Some(ACC));
+    let mut d = b.into_draft();
+    if edge.is_some() {
+        d.edge_mut(id).unwrap().accuracy = edge;
+    }
+    if uses.is_some() {
+        let faces: Vec<FaceId> = d.faces().map(|f| f.id()).collect();
+        for f in faces {
+            for lp in &mut d.face_mut(f).unwrap().loops {
+                for u in &mut lp.uses {
+                    if u.edge == id {
+                        u.bound.clone_from(&uses);
+                    }
+                }
+            }
+        }
+    }
+    (finish(d), id, face)
+}
+
+/// Under `Import` and `Stitched` a gap recorded with a certificate of its question's claim,
+/// within the question's allowance, is taken as decided (04 SP2): the check does not prove
+/// it again, so a certificate that lies (here one that says an edge `10 acc` off its face is
+/// within `acc`) is believed, and `Full` still finds the edge. A certificate of another
+/// claim, past the allowance, or a record that is not certified is proved as before.
+#[test]
+fn a_recorded_certificate_decides_its_question_outside_full_only() {
+    let slack = 10.0 * ACC * 1.01 + 1e-12;
+    let off = |b: &Brep, scope| {
+        let f = found(b, scope);
+        matches!(f.list[..], [Finding::EdgeOffFace { .. }]) && f.undecided.is_empty()
+    };
+    // Believed: the edge's own certificate, or its uses' within re.
+    for (edge, uses) in [
+        (cert(ACC, Claim::CurveToIntersection, ACC), None),
+        (None, cert(slack, Claim::PcurveOnSurface, ACC)),
+    ] {
+        let (b, ..) = off_face_recorded(edge, uses);
+        for scope in [Scope::Import, Scope::Stitched] {
+            let f = found(&b, scope);
+            assert!(f.is_clean(), "{scope:?}: {:?} {:?}", f.list, f.undecided);
+        }
+        assert!(off(&b, Scope::Full));
+    }
+    // Proved: a wrong claim, a bound past the allowance, an unproven or measured basis, none.
+    let unproven = Some(Arc::new(Recorded {
+        acc: Accuracy::new(Length::from_mm(ACC)).unwrap(),
+        basis: Basis::Unproven(Cert {
+            claim: Claim::CurveToIntersection,
+            bound: Length::from_mm(ACC),
+            method: Method::Interval,
+            reads: Reads::NONE,
+        }),
+    }));
+    for (edge, uses) in [
+        (cert(ACC, Claim::EndsAtVertex(EdgeEnd::Start), ACC), None),
+        (cert(ACC, Claim::PcurveOnSurface, ACC), None),
+        (cert(ACC, Claim::CurveToIntersection, 2.0 * ACC), None),
+        (unproven, None),
+        (recorded(ACC), None),
+        (None, cert(slack, Claim::CurveToIntersection, ACC)),
+        (None, cert(slack, Claim::PcurveOnSurface, 2.0 * slack)),
+    ] {
+        let (b, ..) = off_face_recorded(edge.clone(), uses.clone());
+        for scope in [Scope::Import, Scope::Stitched, Scope::Full] {
+            assert!(off(&b, scope), "{scope:?} {edge:?} {uses:?}");
+        }
+    }
+}
+
+/// On a valid curved body whose uses carry true certificates, `Import` takes them and
+/// spends less than `Full`, with the same (clean) answer.
+#[test]
+fn true_certificates_save_the_proof_and_change_no_answer() {
+    for k in [Kind::Cylinder, Kind::Sphere, Kind::Torus] {
+        let mut d = kind(k, 0, 1).into_draft();
+        let faces: Vec<FaceId> = d.faces().map(|f| f.id()).collect();
+        for f in faces {
+            for lp in &mut d.face_mut(f).unwrap().loops {
+                for u in &mut lp.uses {
+                    u.bound = cert(1e-9, Claim::PcurveOnSurface, 1e-9);
+                }
+            }
+        }
+        let b = finish(d);
+        let (import, full) = (found(&b, Scope::Import), found(&b, Scope::Full));
+        assert!(import.is_clean() && full.is_clean(), "{k:?}");
+        assert!(
+            import.spent.work < full.spent.work,
+            "{k:?}: {} {}",
+            import.spent.work,
+            full.spent.work
+        );
     }
 }
 
