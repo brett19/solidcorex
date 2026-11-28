@@ -1,5 +1,6 @@
 // Written for solidcorex. Apache-2.0.
-//! `stitch` on sheets of known placement (74 §4.3, ST1 and ST2): vertices identified within
+//! `stitch` on sheets of known placement (74 §4.3, ST1 and ST2; ST3's solids are in
+//! `orient.rs`): vertices identified within
 //! coincidence and not beyond, lineage per operand, the accuracy raise, the refusals, edges
 //! joined within coincidence and not beyond, cut at another sheet's vertex, left open when
 //! ambiguous or undecided, and determinism under re-run and permutation.
@@ -26,7 +27,7 @@ use scx_num::math::Affine;
 use scx_num::units::{Accuracy, Length, Resolution};
 use scx_num::vector2d::Point2;
 use scx_num::vector3d::{Point3, Vec3};
-use scx_stitch::{Left, StitchError, StitchRefusal, StitchUnsupported, Stitched, Want, stitch};
+use scx_stitch::{Left, StitchError, StitchRefusal, Stitched, Want, stitch};
 use scx_surface::{Aim, Plane, Surface, curve_curve_gap, point_curve_gap};
 use scx_testkit::bodies::{Kind, generate};
 
@@ -469,18 +470,6 @@ fn another_documents_sheet_is_refused() {
             operand: Operand::from_raw(0)
         })
     );
-}
-
-#[test]
-fn a_solid_is_pending() {
-    let a = sheet(Vec3::new(0.0, 0.0, 0.0));
-    let mut scratch = Scratch::new();
-    let settings = Settings::new();
-    let stop = Stop::new();
-    let doc = Document::default();
-    let mut cx = Cx::new(&doc, &settings, &mut scratch, &stop, &NoTrace);
-    let e = stitch(&[&a], Want::Solid, &mut cx).unwrap_err();
-    assert_eq!(e, StitchError::Unsupported(StitchUnsupported::Solid));
 }
 
 #[test]
