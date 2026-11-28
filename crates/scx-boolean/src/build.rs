@@ -1,8 +1,10 @@
 // Written for solidcorex. Apache-2.0.
 //! Stage 6, second half: select and build (BO4, 72 §5.4 steps 6 and 7, §14.29).
 //!
-//! - **Select.** Each piece is kept or dropped by its class and the operation; `b`'s pieces
-//!   kept by a subtraction are turned over (their sides swapped).
+//! - **Select.** Each piece is kept or dropped by its class and the [`Rule`] (BO25: the
+//!   cells' membership; [`cells::pick`]); a piece kept with its material on the wrong
+//!   side is turned over (its sides swapped), and a wall or lamina the rule's faces keep
+//!   has one kind on both sides.
 //! - **Merge.** Two kept faces meeting at an edge only they bound are one face where they
 //!   are pieces of one operand face (a cut the selection left with one face each side, or
 //!   a seam the trace crossed), or lie on one surface with their material on one side
@@ -18,13 +20,17 @@
 //!   another lump along a line) has its fins put in radial order, and the shells meeting
 //!   across each of its sectors are one ([`pinch`]). With more than one set, each shell
 //!   then goes to its region by its volume's sign and the shells holding it: a cavity's
-//!   wall to the lump round it, a lump inside a cavity to that cavity's void.
+//!   wall to the lump round it, a lump inside a cavity to that cavity's void. A result
+//!   with walls or laminas has its shells from [`cells::shells`] instead.
+//! - **Touches.** Where the operands touch at a point inside a face of each and both faces
+//!   keep a piece there, each such piece gets a point loop at the touch's vertex
+//!   ([`cells::touches`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use scx_brep::{
-    Brep, Changes, Document, EdgeId, EdgeShape, Entity, FaceId, FaceSide, LoopRecord, RegionId,
-    ShellId, ShellRecord, UseGeom, VertexId,
+    Brep, Changes, Document, EdgeId, EdgeShape, FaceId, FaceSide, LoopRecord, RegionId, ShellId,
+    ShellRecord, UseGeom, VertexId,
 };
 use scx_curve::Curve;
 use scx_mass::Sign;
@@ -37,9 +43,9 @@ use scx_nurbs::Approach;
 use scx_ssi::analytic::{self, Intersection};
 use scx_surface::Closed;
 
-use crate::boolean::BooleanOp;
-use crate::classify::{Class, Classes, Joins, material_back};
-use crate::error::{BooleanDefect, BooleanError, BooleanUnsupported};
+use crate::cells::{self, Rule, pick};
+use crate::classify::{Classes, Joins, material_back};
+use crate::error::{BooleanDefect, BooleanError};
 use crate::faceface::Touch;
 use crate::geom::{Operands, Side, recorded};
 use crate::imprint::{Imprint, loops_error, ring, shoelace};
@@ -52,35 +58,35 @@ const SAME_UV: f64 = 1e-7;
 /// 120) are not on one surface, which the merge then need not test.
 const PARALLEL: f64 = 0.5;
 
-/// A kept face: its operand face, and whether its material is behind it.
+/// A kept face: its operand face, whether its material is behind it, and, for a wall or a
+/// lamina, the one kind both its sides are (solid for a wall, void for a lamina). A wall
+/// or lamina is kept facing as its operand face did: `back` is that face's material side.
 #[derive(Debug, Clone, Copy)]
 struct Kept {
     side: Side,
     of: FaceId,
     back: bool,
+    both: Option<bool>,
 }
 
-/// Whether the operation keeps a piece of `side` of class `c`, and if so whether it turns
-/// it over.
-const fn select(op: BooleanOp, side: Side, c: Class) -> Option<bool> {
-    match (op, side, c) {
-        (BooleanOp::Union, Side::A, Class::Out | Class::On { same: true })
-        | (BooleanOp::Union, Side::B, Class::Out)
-        | (BooleanOp::Intersect, Side::A, Class::In | Class::On { same: true })
-        | (BooleanOp::Intersect, Side::B, Class::In)
-        | (BooleanOp::Subtract, Side::A, Class::Out | Class::On { same: false }) => Some(false),
-        (BooleanOp::Subtract, Side::B, Class::In) => Some(true),
-        _ => None,
+impl Kept {
+    /// Whether its (front, back) sides are solid.
+    const fn solid(self) -> [bool; 2] {
+        match self.both {
+            Some(s) => [s, s],
+            None => [!self.back, self.back],
+        }
     }
 }
 
-/// Selects, merges and finishes `m`'s draft for `op`.
+/// Selects, merges and finishes `m`'s draft for `rule`.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build(
     ops: Operands<'_>,
     mut m: Imprint,
     touches: &[Touch],
     cls: &Classes,
-    op: BooleanOp,
+    rule: &Rule<'_>,
     doc: Document,
     budget: &mut Budget,
     stop: &Stop,
@@ -88,36 +94,54 @@ pub(crate) fn build(
     let mut kept: BTreeMap<FaceId, Kept> = BTreeMap::new();
     for (&f, &(side, of)) in &cls.owner {
         let c = cls.class.get(&f).copied().ok_or_else(defect)?;
-        match select(op, side, c) {
-            Some(flip) => {
-                let back = material_back(ops.of(side), of)? != flip;
-                kept.insert(f, Kept { side, of, back });
+        match pick(rule, side, c) {
+            Some(p) => {
+                let back = material_back(ops.of(side), of)? != p.flip;
+                kept.insert(
+                    f,
+                    Kept {
+                        side,
+                        of,
+                        back,
+                        both: p.both,
+                    },
+                );
             }
             None => {
                 m.draft.remove_face(f);
             }
         }
     }
-    // A touch inside a face (stage 4 records no other) where both faces keep a piece:
-    // the result meets itself at that point.
-    for t in touches {
-        let both = [Side::A, Side::B]
-            .into_iter()
-            .zip(t.faces)
-            .all(|(side, of)| kept.values().any(|k| (k.side, k.of) == (side, of)));
-        if both {
-            return Err(BooleanError::Unsupported(BooleanUnsupported::NonManifold {
-                at: Entity::Face(t.faces[0]),
-            }));
-        }
-    }
     stop.check()?;
+    // A wall or a lamina: the result is not one manifold solid, and its shells are found
+    // over cells.
+    let cellular = kept.values().any(|k| k.both.is_some());
     merge(ops, &mut m, &mut kept, doc, budget, stop)?;
-    edges(&mut m)?;
+    edges(&mut m, cellular)?;
+    // A touch inside a face (stage 4 records no other) where both faces keep a piece: the
+    // result meets itself at that point, a lone vertex in the face. Written before edges
+    // are joined, so a vertex an edge was cut at for the touch stays.
+    if !touches.is_empty() {
+        let live: Vec<(FaceId, Side, FaceId)> = kept
+            .iter()
+            .filter(|(f, _)| m.draft.face(**f).is_some())
+            .map(|(&f, k)| (f, k.side, k.of))
+            .collect();
+        cells::touches(&mut m, touches, &live, budget, stop)?;
+    }
     join_edges(ops, &mut m, doc)?;
     vertices(&mut m);
     stop.check()?;
-    shells(ops, &mut m, &kept, doc, budget, stop)?;
+    if cellular {
+        let solid: BTreeMap<FaceId, [bool; 2]> = kept
+            .iter()
+            .filter(|(f, _)| m.draft.face(**f).is_some())
+            .map(|(&f, k)| (f, k.solid()))
+            .collect();
+        cells::shells(&mut m, &solid, doc, budget, stop)?;
+    } else {
+        shells(ops, &mut m, &kept, doc, budget, stop)?;
+    }
     m.draft.finish(&doc).map_err(|_| defect())
 }
 
@@ -151,6 +175,9 @@ fn merge(
         let (Some(&k0), Some(&k1)) = (kept.get(&f0.face), kept.get(&f1.face)) else {
             continue;
         };
+        if k0.both != k1.both {
+            continue;
+        }
         // Faces turned against each other (one material behind, the other's in front)
         // run their loops opposite ways about one normal, so they use the edge in one
         // sense; faces turned alike use it in opposite senses.
@@ -420,9 +447,10 @@ fn splice(
         .map_err(|e| loops_error(e.kind(), side.operand(), survivor))
 }
 
-/// Removes the edges no face bounds and refuses an edge one face bounds; puts the fins of
-/// an edge more than two bound in radial order ([`pinch::order_fins`]).
-fn edges(m: &mut Imprint) -> Result<(), BooleanError> {
+/// Removes the edges no face bounds and refuses an edge one face bounds, unless `free`
+/// (a lamina's or a sheet's edge); puts the fins of an edge more than two bound in radial
+/// order ([`pinch::order_fins`]).
+fn edges(m: &mut Imprint, free: bool) -> Result<(), BooleanError> {
     let mut gone = Vec::new();
     let mut pinched = Vec::new();
     for e in m.draft.edges() {
@@ -432,6 +460,7 @@ fn edges(m: &mut Imprint) -> Result<(), BooleanError> {
             [] => gone.push(e.id()),
             [_] if collapsed => {}
             [_, _] => {}
+            [_] if free => {}
             [_] => return Err(defect()),
             _ => pinched.push(e.id()),
         }
@@ -440,7 +469,7 @@ fn edges(m: &mut Imprint) -> Result<(), BooleanError> {
         m.draft.remove_edge(e);
     }
     for e in pinched {
-        pinch::order_fins(&mut m.draft, e)?;
+        pinch::order_fins(&mut m.draft, e, free)?;
     }
     Ok(())
 }
@@ -842,7 +871,7 @@ const fn flip(s: Sign) -> Sign {
 }
 
 /// Removes the shells no face bounds, and the regions no shell bounds.
-fn unused(m: &mut Imprint, claimed: &BTreeSet<ShellId>) {
+pub(crate) fn unused(m: &mut Imprint, claimed: &BTreeSet<ShellId>) {
     let gone: Vec<ShellId> = m
         .draft
         .shells()

@@ -29,6 +29,7 @@ mod cleanup;
 mod contacts;
 mod face_face;
 mod imprint;
+mod nonmanifold;
 mod stage6;
 mod unsupported;
 mod whole;

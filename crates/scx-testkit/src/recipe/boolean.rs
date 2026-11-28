@@ -455,82 +455,116 @@ pub(super) fn recipes(res: f64) -> Vec<Recipe> {
         half.as_ref().map(truth_of),
     ));
 
-    // --- boolean_api: a touch inside a face (D5: Unsupported(NonManifold)) ----------------
-    let non_manifold =
-        |at: &[[f64; 3]]| Outcome::Unsupported(Unsupported::NonManifold { at: at.to_vec() });
+    // --- boolean_api: a touch inside a face (BO25: built; D5 had it NonManifold) ----------
+    // Two lumps touching at a point are two regions of one shell each; the box less its
+    // inscribed ball is one region of two shells. A vertex there has two fans: a pinch.
+    // Counted per sheet, the touch is a vertex of each, and a point loop of the patch it
+    // lies in: a block touched in a face's inside has 9 vertices and that face 2 loops.
+    let ball_on_block = || {
+        built(
+            2,
+            2,
+            0,
+            cells(
+                10,
+                12,
+                false,
+                &[
+                    (Kind::Plane, 1, 0, 5),
+                    (Kind::Plane, 2, 0, 1),
+                    (Kind::Sphere, 1, 0, 1),
+                ],
+            ),
+        )
+    };
     let tangent = sphere_at([5.0, 5.0, 13.0], 3.0);
     let t = sum_truth(&cube, &tangent);
-    v.push(recipe(
-        "tangent-sphere-box",
-        "boolean_api::cases",
-        cube.clone(),
-        vec![step(Op::Union, tangent)],
-        non_manifold(&[[5.0, 5.0, 10.0]]),
-        t,
-    ));
+    v.push(
+        recipe(
+            "tangent-sphere-box",
+            "boolean_api::cases",
+            cube.clone(),
+            vec![step(Op::Union, tangent)],
+            ball_on_block(),
+            t,
+        )
+        .pinched(),
+    );
     let flat = || block_at([10.0, 0.0, 0.0], [5.0, 17.5, 15.0]);
     let seam_ball = || sphere_at([2.5, 15.0, 12.5], 7.5);
     let t = sum_truth(&seam_ball(), &flat());
-    v.push(recipe(
-        "seam-sphere-box",
-        "boolean_api::point_contacts",
-        seam_ball(),
-        vec![step(Op::Union, flat())],
-        non_manifold(&[[10.0, 15.0, 12.5]]),
-        t,
-    ));
-    v.push(recipe(
-        "seam-box-sphere",
-        "boolean_api::point_contacts",
-        flat(),
-        vec![step(Op::Union, seam_ball())],
-        non_manifold(&[[10.0, 15.0, 12.5]]),
-        t,
-    ));
+    v.push(
+        recipe(
+            "seam-sphere-box",
+            "boolean_api::point_contacts",
+            seam_ball(),
+            vec![step(Op::Union, flat())],
+            ball_on_block(),
+            t,
+        )
+        .pinched(),
+    );
+    v.push(
+        recipe(
+            "seam-box-sphere",
+            "boolean_api::point_contacts",
+            flat(),
+            vec![step(Op::Union, seam_ball())],
+            ball_on_block(),
+            t,
+        )
+        .pinched(),
+    );
     let off_ball = sphere_at([12.5, -7.5, 7.5], 7.5);
     let t = sum_truth(&off_ball, &flat());
-    v.push(recipe(
-        "off-seam-sphere-box",
-        "boolean_api::point_contacts",
-        off_ball,
-        vec![step(Op::Union, flat())],
-        non_manifold(&[[12.5, 0.0, 7.5]]),
-        t,
-    ));
+    v.push(
+        recipe(
+            "off-seam-sphere-box",
+            "boolean_api::point_contacts",
+            off_ball,
+            vec![step(Op::Union, flat())],
+            ball_on_block(),
+            t,
+        )
+        .pinched(),
+    );
     let (s30, c30) = fmath::sin_cos(PI / 6.0);
     let big = sphere_at([0.0; 3], 3.0);
     let small = sphere_at([5.0 * c30, 0.0, 5.0 * s30], 2.0);
     let t = sum_truth(&big, &small);
-    v.push(recipe(
-        "seam-sphere-sphere",
-        "boolean_api::point_contacts",
-        big,
-        vec![step(Op::Union, small)],
-        non_manifold(&[[3.0 * c30, 0.0, 3.0 * s30]]),
-        t,
-    ));
+    v.push(
+        recipe(
+            "seam-sphere-sphere",
+            "boolean_api::point_contacts",
+            big,
+            vec![step(Op::Union, small)],
+            built(2, 2, 0, cells(2, 0, false, &[(Kind::Sphere, 1, 0, 2)])),
+            t,
+        )
+        .pinched(),
+    );
     // The box less its inscribed r = 5 sphere, which touches every face at its centre.
-    let mut six = Vec::new();
-    for (axis, hi) in [
-        (0, false),
-        (0, true),
-        (1, false),
-        (1, true),
-        (2, false),
-        (2, true),
-    ] {
-        let mut p = [5.0; 3];
-        p[axis] = if hi { 10.0 } else { 0.0 };
-        six.push(p);
-    }
-    v.push(recipe(
-        "seam-box-minus-sphere",
-        "boolean_api::point_contacts",
-        cube.clone(),
-        vec![step(Op::Difference, sphere_at([5.0; 3], 5.0))],
-        non_manifold(&six),
-        truth(cube_v - 500.0 * PI / 3.0, cube_a + 100.0 * PI),
-    ));
+    v.push(
+        recipe(
+            "seam-box-minus-sphere",
+            "boolean_api::point_contacts",
+            cube.clone(),
+            vec![step(Op::Difference, sphere_at([5.0; 3], 5.0))],
+            built(
+                1,
+                2,
+                0,
+                cells(
+                    20,
+                    12,
+                    false,
+                    &[(Kind::Plane, 2, 0, 6), (Kind::Sphere, 6, 0, 1)],
+                ),
+            ),
+            truth(cube_v - 500.0 * PI / 3.0, cube_a + 100.0 * PI),
+        )
+        .pinched(),
+    );
 
     // --- boolean_api: pairs the analytic SSI has no closed form for (SS2, spiric) ---------
     let ssi = |a: Kind, b: Kind| Outcome::Unsupported(Unsupported::SsiPair { kinds: [a, b] });
