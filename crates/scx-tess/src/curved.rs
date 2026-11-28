@@ -219,7 +219,10 @@ impl Rules {
         let ns = surface.normal(g, [Approach::Above; 2])?.as_vec();
         if n.dot(ns) <= 0.0 {
             if std::env::var("TESSDBG2").is_ok() {
-                eprintln!("TESSDBG2 normal n {:?} ns {:?} at {:?} uv {:?}", n, ns, t.at, t.uv);
+                eprintln!(
+                    "TESSDBG2 normal n {:?} ns {:?} at {:?} uv {:?}",
+                    n, ns, t.at, t.uv
+                );
             }
             return None;
         }
@@ -307,14 +310,14 @@ impl Rules {
 
 /// A horn torus triangle's bound on its distance from the surface, or `None` when it has none.
 ///
-/// Off the pole, the parallels' radius of curvature at tube angle `psi` inside the tube is
-/// `(centre + tube cos psi) / -cos psi`, least at the corner nearest the pole (it grows with
-/// the distance from it), so the sphere bound's `rho` is the least of the tube's and each
-/// corner's. A triangle with a corner on the pole has the surface's cusp under it, where that
-/// radius is 0, so it is bounded in its two directions apart: the sphere bound at the tube's
-/// own radius for the meridian (the triangle's side from the pole is a chord of the meridian),
-/// and, for the parallels, what a chord across the angle its other corners span lies inside a
-/// circle of their largest circumference radius `d`: `2 d sin²(span / 4)`.
+/// A horn torus has no least radius of curvature: its parallels' radius, `(centre + tube cos
+/// psi) / -cos psi` inside the tube, falls to 0 at the pole, and a triangle along the
+/// meridian near it is no less flat for that. The two directions are bounded apart and
+/// added: the sphere bound at the tube's own radius over the triangle's enclosing circle
+/// (the meridian's bend), and across the angle the corners span the radial deficit of a
+/// chord inside the largest circumference radius `d` among them, `2 d sin²(span / 4)` (the
+/// cone's bound, by the same argument). A corner on the pole has circumference radius 0
+/// and no angle.
 fn pinched_sag(
     rules: &Rules,
     t: &Corners,
@@ -322,30 +325,19 @@ fn pinched_sag(
     v: Arcs,
     r2: f64,
 ) -> Option<f64> {
-    let mut least = rho;
     let mut ring = 0.0_f64;
-    let mut pole = false;
     let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
     for (uv, on) in t.uv.iter().zip(t.pole) {
         if on {
-            pole = true;
             continue;
         }
-        let c = cos(v.angle(uv.y));
-        let circ = centre + tube * c;
-        ring = ring.max(circ.abs());
-        if c < 0.0 {
-            least = least.min(circ / -c);
-        }
+        ring = ring.max((centre + tube * cos(v.angle(uv.y))).abs());
         let phi = rules.u.angle(uv.x);
         lo = lo.min(phi);
         hi = hi.max(phi);
     }
-    if !pole {
-        return (r2 < least * least).then(|| r2 / (least + sqrt(least * least - r2)));
-    }
-    let span = hi - lo;
-    if span.is_nan() || span >= PI || r2 >= rho * rho {
+    let span = if lo <= hi { hi - lo } else { 0.0 };
+    if span.is_nan() || span >= PI || r2.is_nan() || r2 >= rho * rho {
         return None;
     }
     let s = sin(0.25 * span);
@@ -633,8 +625,19 @@ pub(crate) fn curved_face(
             break;
         }
         if std::env::var("TESSDBG").is_ok() {
-            let bad: Vec<_> = tris.iter().filter_map(|t| corners(s, *t)).filter(|c| rules.bound(surface, c).is_none()).take(2).map(|c| (c.uv, c.pole)).collect();
-            eprintln!("TESSDBG round {round} added {} pts {} first {:?}", added.len(), s.uv.len(), bad);
+            let bad: Vec<_> = tris
+                .iter()
+                .filter_map(|t| corners(s, *t))
+                .filter(|c| rules.bound(surface, c).is_none())
+                .take(2)
+                .map(|c| (c.uv, c.pole))
+                .collect();
+            eprintln!(
+                "TESSDBG round {round} added {} pts {} first {:?}",
+                added.len(),
+                s.uv.len(),
+                bad
+            );
         }
         round += 1;
         if round > ROUNDS {
