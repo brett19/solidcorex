@@ -218,12 +218,6 @@ impl Rules {
         let g = middle(t.uv, t.pole);
         let ns = surface.normal(g, [Approach::Above; 2])?.as_vec();
         if n.dot(ns) <= 0.0 {
-            if std::env::var("TESSDBG2").is_ok() {
-                eprintln!(
-                    "TESSDBG2 normal n {:?} ns {:?} at {:?} uv {:?}",
-                    n, ns, t.at, t.uv
-                );
-            }
             return None;
         }
         let sides = [
@@ -290,11 +284,7 @@ impl Rules {
                 if pinch {
                     // A horn torus: no one radius of curvature bounds it.
                     let r2 = enclosing_squared(sides, n.length_squared());
-                    let sag = pinched_sag(self, t, [centre, tube, rho], v, r2);
-                    if std::env::var("TESSDBG2").is_ok() {
-                        eprintln!("TESSDBG2 sag {:?} r2 {r2} uv {:?} at {:?}", sag, t.uv, t.at);
-                    }
-                    let sag = sag?;
+                    let sag = pinched_sag(self, t, [centre, tube, rho], v, r2)?;
                     return (sag <= self.chord * (1.0 + SLACK)).then_some(sag);
                 }
                 let r2 = enclosing_squared(sides, n.length_squared());
@@ -623,21 +613,6 @@ pub(crate) fn curved_face(
         }
         if added.is_empty() {
             break;
-        }
-        if std::env::var("TESSDBG").is_ok() {
-            let bad: Vec<_> = tris
-                .iter()
-                .filter_map(|t| corners(s, *t))
-                .filter(|c| rules.bound(surface, c).is_none())
-                .take(2)
-                .map(|c| (c.uv, c.pole))
-                .collect();
-            eprintln!(
-                "TESSDBG round {round} added {} pts {} first {:?}",
-                added.len(),
-                s.uv.len(),
-                bad
-            );
         }
         round += 1;
         if round > ROUNDS {

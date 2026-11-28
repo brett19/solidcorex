@@ -248,7 +248,15 @@ fn check(case: &Case, chord: f64) {
     let s = spec(chord);
     let mesh = mesh_of(&case.body, &s);
     let m = adapt(&mesh);
-    let v = oracle::violations(&m, oracle::Limits::default());
+    let mut v = oracle::violations(&m, oracle::Limits::default());
+    // A horn torus's pole is a pinch: two lobes meet at one vertex, the one violation it has.
+    if case.name.ends_with("horn torus") {
+        assert!(
+            matches!(v[..], [oracle::Violation::NonManifoldVertex { .. }]),
+            "{name}: {v:?}"
+        );
+        v.clear();
+    }
     assert!(v.is_empty(), "{name}: {v:?}");
     let gap = oracle::volume_gap(&m, case.volume, oracle::chord_bound(chord, case.area));
     assert!(gap.holds(), "{name}: {gap:?}");
@@ -426,12 +434,4 @@ fn budget_and_stop_end_the_work() {
     stop.set();
     let e = tessellate(&body, &s, &mut Budget::unlimited(), &stop).unwrap_err();
     assert_eq!(e, TessError::Cancelled);
-}
-
-#[test]
-fn horn_debug() {
-    let d = Document::default();
-    let b = torus(&at(), mm(6.0), mm(6.0), &d).unwrap().body;
-    let r = tessellate(&b, &spec(0.1), &mut Budget::unlimited(), &Stop::new());
-    println!("RESULT {:?}", r.as_ref().map(|m| m.triangles.len()));
 }
