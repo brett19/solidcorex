@@ -204,7 +204,8 @@ pub enum Unsupported {
         /// The index of the second.
         second: usize,
     },
-    /// A face on a NURBS surface: its iso-curves are not extracted exactly yet.
+    /// A face on a NURBS surface whose boundary meets itself (a seam of a closed surface, a side
+    /// collapsed to a point), or that has an end of its domain no knot insertion reaches.
     NurbsFace,
     /// The construction needs a surface kind this build does not have yet (step 5's).
     NeedsKind {
@@ -383,7 +384,10 @@ impl fmt::Display for MakeError {
                 "the uv box u {u:?}, v {v:?} is empty, longer than a period or past the surface's domain"
             ),
             Self::Unsupported(Unsupported::NurbsFace) => {
-                write!(f, "a face on a NURBS surface is not made yet")
+                write!(
+                    f,
+                    "a face on a NURBS surface whose boundary meets itself is not made yet"
+                )
             }
             Self::Refused(Refusal::Law(e)) => write!(f, "the sweep's laws: {e}"),
             Self::Unsupported(Unsupported::NeedsKind { kind }) => {

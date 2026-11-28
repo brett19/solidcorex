@@ -3994,3 +3994,44 @@ Decisions.
 Tests (13 in `scx-make`, all passing): `two_parallel_lines_are_a_plane_strip` (area `l w`, both joins), `a_trapezoid_between_unequal_parallel_lines` (area `(10 + 6) 5 / 2`), `coplanar_arcs_are_an_annular_sector` (`theta (R^2 - r^2) / 2`, sweeps 1.2 and 4), `a_line_and_an_arc_in_one_plane_are_a_planar_face` (a quarter disc, `pi r^2 / 4`), `a_ruled_surface_has_its_two_curves_as_sides` (the pin's test: a at `t = 0`, b at `t = 1`, straight between, both joins, to 1e-9), `two_skew_lines_are_a_bilinear_patch` (`S = (s, t, s t)` to 1e-12), `an_arc_and_a_line_out_of_its_plane`, `crossing_rulings_are_a_nurbs_patch`, `refusals_name_the_input`, `an_ellipse_side_is_unsupported`, `a_reversed_sheet_has_the_other_normal_and_reversing_twice_gives_it_back` (plane strip and NURBS: same points, normal dot -1, same edges with reversed order and senses, twice is the original surface and loops), `a_cylinder_face_reverses_and_comes_back`, `a_solid_is_not_a_sheet`. The pin's `ruled` test that asserted outcome is ported; its `Error::Argument` for a circle against a line is not (a circle is now a side; a full circle is `Closed`). The pin's `sheet_reverse.rs` tests on the record (edge map, record round trip, used-backward faces) are of the record layer, not ported.
 
 Open: ruled on sides that meet off a plane (collapsed edge on a NURBS face); a ruled surface by `(s, t)` on the planar case; ellipse sides (an exact rational form).
+
+### 13.50 MK15b as built (11-28)
+
+`scx_make::face` takes a NURBS surface. Code in `scx-make/src/face_nurbs.rs` (called from
+`face`); tests in `tests/face_nurbs.rs` (7) and one in `scx-nurbs-surface`'s `construct_tests`.
+
+- **Iso-curve extraction already existed.** `NurbsSurface::iso(ParamAxis, t)` (knot insertion
+  to full multiplicity through `CompatibleCurves`, nothing moved, domain-end rows copied) was
+  built with `restrict`; MK15b adds nothing to `scx-nurbs-surface` but a bit-exactness test
+  of the domain-end curves. The 75 §7 row ("not built yet") was stale.
+- **Bounds.** `Bound::Box` and `Bound::Region` (in uv), as for the analytic kinds. Every
+  segment of the boundary must be a line along `u` or `v` (a rectilinear loop: boxes, an L,
+  a frame with holes); anything else is `Unsupported::Segment`, to wait on step 5's
+  curve-on-surface kind. A box or region past the domain is `Refusal::UvBox`; a coordinate
+  within 1e-12 (relative) of a domain end is moved onto it.
+- **Edges and pcurves.** Each segment is one edge: `iso(axis, t)` as `Curve::Nurbs` over the
+  segment's span of the iso-curve's own parameter (which is `u` or `v`: nothing is
+  reparametrised), and its pcurve `Line2` through `(0, v)` or `(u, 0)` over the same interval.
+  They agree by construction. The edge and pcurve are written directly (the `ruled` pattern),
+  because `Draft::exact_loops` has no closed form on a NURBS surface (`NeedsFit`).
+- **Meeting boundaries.** Two vertices within the document's zone (a closed surface's seam
+  taken whole, a side collapsed to a point) are `Unsupported::NurbsFace`: they would need
+  merged or collapsed edges. A turn less a sliver of a closed NURBS cylinder is made.
+  `Unsupported::NurbsFace`'s meaning narrowed to this; unclamped domain ends (no insertion
+  reaches them) and procedural surfaces give it too.
+- **Measured against truth.** Planar bilinear patch boxes: the quadrilateral of the box's four
+  corners (half the diagonals' cross product) to 1e-10; edge ends are the corners and the
+  vertices bit for bit. NURBS cylinder (nine-point ring): quarter, half and three-quarter
+  at the knots are `pi r h` times the fraction; a half with a rectangular hole (u not on
+  a knot, the angle from the surface's own points) and an L to 1e-10; edge points at radius `r`
+  within 1e-12. Every face passes `scx_check::check` as class `Sheet`. A `to_nurbs` plane over
+  a box is the rectangle.
+- **Work before and after.** The analytic paths are untouched (an early return on the
+  `Nurbs` arm; the 8 analytic tests pass as before). A NURBS face costs one `iso` per edge: a
+  box four knot-insertion passes of the net's lines (two per direction); no counters added.
+- **Removed on purpose.** `a_nurbs_surface_is_unsupported_for_now` (`tests/face.rs`): it
+  proved a NURBS box was refused with `NurbsFace` until MK15b; the surface now makes a face
+  and the refusal is tested on the seam instead.
+- Open: a seam or pole on a NURBS face (merged and collapsed edges); iso-curves cached per
+  `(axis, t)` when a region shares one.
+

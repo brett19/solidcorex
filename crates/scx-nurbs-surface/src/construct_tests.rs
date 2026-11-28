@@ -475,3 +475,32 @@ fn compatible_surfaces_refuse_with_their_cause() {
         })
     ));
 }
+
+/// At the ends of the domain no knot is inserted: the iso-curve is the net's boundary row, so
+/// its points at the curve's ends are the surface's own, bit for bit (a polynomial surface).
+#[test]
+fn the_boundary_iso_curve_ends_are_the_surface_corners_to_the_bit() {
+    let p = [
+        [[0.0, 0.1, 0.3], [1.0, 0.7, 2.0]],
+        [[3.0, 1.1, 0.5], [4.0, 5.3, -1.0]],
+    ];
+    let k = || KnotVector::new(1, vec![0.0, 0.0, 1.0, 1.0]).unwrap();
+    let net = Net::new(2, 2, vec![p[0][0], p[0][1], p[1][0], p[1][1]]).unwrap();
+    let s = NurbsSurface::new(k(), k(), net, None).unwrap();
+    for t in [0.0, 1.0] {
+        for axis in [ParamAxis::U, ParamAxis::V] {
+            let c = s.iso(axis, t).unwrap();
+            for e in [0.0, 1.0] {
+                let uv = match axis {
+                    ParamAxis::U => [t, e],
+                    ParamAxis::V => [e, t],
+                };
+                assert_eq!(
+                    c.point(e, Approach::Above).unwrap(),
+                    s.point(uv, ABOVE).unwrap(),
+                    "{axis:?} {t} {e}"
+                );
+            }
+        }
+    }
+}

@@ -16,7 +16,8 @@
 //!   (an L, a notched rectangle, a frame with a rectangular hole), lie within one period
 //!   and touch no pole; anything else is [`Unsupported::Segment`].
 //!
-//! A NURBS surface is [`Unsupported::NurbsFace`]: its iso-curves are not extracted yet.
+//! A NURBS surface goes to `face_nurbs`: the same boxes and regions of iso-lines, every edge
+//! an exact iso-curve and every pcurve a line in uv.
 //!
 //! The face's front is the side of the surface's normal: its outer loop runs
 //! counter-clockwise in uv.
@@ -40,6 +41,7 @@ use crate::Made;
 use crate::assembly::Assembly;
 use crate::error::{Defect, MakeError, Refusal, Unsupported};
 use crate::extrude::{given, loops_of};
+use crate::face_nurbs::nurbs_face;
 use crate::prism::check;
 use crate::sheet::sheet;
 
@@ -59,12 +61,16 @@ pub enum Bound {
 /// - [`Refusal::UvBox`] for a box that is empty, longer than a period of the surface or past
 ///   its domain (a sphere's `v` outside `[0, 1]`, a cone's beyond its apex), and likewise a
 ///   region whose extent in `u` or `v` is.
-/// - [`Unsupported::NurbsFace`] for a NURBS surface.
+/// - [`Unsupported::NurbsFace`] for a NURBS surface whose boundary meets itself (a seam, a
+///   side collapsed to a point) or has an end no knot insertion reaches (unclamped).
 /// - [`Unsupported::Segment`] for a region's segment that is not an iso-line of the surface
 ///   (anything but a line along `u` or `v`, off a plane), or that lies on a pole.
 /// - [`Refusal::Resolution`] and the region's other refusals, as for [`sheet`].
 /// - A [`Defect`] when the body does not finish, or [`MakeError::Full`].
 pub fn face(surface: &Surface, bound: &Bound, doc: &Document) -> Result<Made<FaceId>, MakeError> {
+    if let Surface::Nurbs(n) = surface {
+        return nurbs_face(surface, n, bound, *doc);
+    }
     let shape = Shape::of(surface)?;
     match bound {
         Bound::Box(b) => in_box(surface, &shape, b, *doc),
