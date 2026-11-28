@@ -184,14 +184,42 @@ count of cells filled, as reported by the test harness's own `FaceCell` wrappers
     gives it (`scx-testkit`'s `bodies` is on for the topology crates only), so nothing is rebuilt;
     the doctests then run as `cargo test --doc`. Without cargo-nextest it falls back, with a warning,
     to separate `cargo test -p` invocations up to 16 at a time (`XTASK_JOBS`). `.config/nextest.toml`
-    starts the longest tests first; the longest, `scx-check`'s `gaps`
-    (`valid_and_loose_bodies_are_clean`, about 85 s on one core), now sets the time.
+    starts the longest tests first. The longest tests are split into tests of their own so the
+    pool can spread them (XT2, 11-28, section 8.2); the one that now sets the time is
+    `scx-mass`'s `widths_fall_to_the_floor`, a single call that runs to its cell cap (about 60 s).
   - **Tier 2, CI:** every crate's tests, the full difftest, every case at both worker counts, the
     corpora, the work gate of section 7.
   - **Nightly:** property tests with thousands of cases from the same generators, random operation
     sequences, fuzzing, full audit of every certificate, coverage.
 - **Fixtures built in code** by `scx-testkit`, not read from large files, and shared: a finished body is
   immutable, so one can be built once and used by many tests. Corpus data is permissive-licence only.
+
+### 8.2 Long tests split for the pool (XT2, 11-28)
+
+nextest runs one test per process, so one long test sets the wall time however many cores are
+idle. Three long tests were split by their own case axis, with every case and tolerance kept:
+
+- **`scx-check` `gaps`:** `valid_and_loose_bodies_are_clean` is one test per `Kind`
+  (`valid_and_loose_<kind>_is_clean`, 13, from one macro that also lists them), and a guard test
+  fails if `Kind::ALL` gains a generator with no test. On a 24-core build box the 13 together take about
+  9 s of CPU (the cone 4.4 s), so the 85 to 95 s once seen was not this test's own work there.
+- **`scx-mass` `enclosure`:** the loop over the widths 1e-6, 1e-8 and 1e-11 is three tests
+  (`width_falls_to_1e_6`, `width_falls_to_1e_8`, `widths_fall_to_the_floor`). The narrowest is one
+  `enclose_volume` call that runs to the 131,072-cell cap (about 58 s) and cannot be split by case.
+  Each test asks the next wider width again for the width it must not exceed (the loop's `last`),
+  and the narrowest does so on a second thread, so that the call adds no time. The floor of the
+  suite is now that one call; a faster enclosure, not a smaller test, is what lowers it.
+- **`scx-difftest` `poly_from_roots` and `nurbs_elevate`:** the harness has a sharded form,
+  `diff!(name, pin_defect = d, shard = (i, n, "seed"), ...)`: shard `i` of `n` judges every
+  `n`-th input of the pool the whole test drew (seeded by the whole test's name, so the pool, the
+  checks and the tolerance are unchanged; `Applies::Disagreeing` is decided per input, so it
+  too is unchanged). Each is eight shards (`poly_from_roots_0..7`, `nurbs_elevate_0..7`). Each
+  shard still asserts the defect applies to some input of its own. The slow-test skip of
+  `diff --changed-since` matches by substring and so still skips every shard.
+
+Costs: the shards repeat each process's fixed setup (the case lists, the exact oracle's cache,
+which is per process), so the difftest's total CPU rose about 20% (767 s to 900 to 950 s of user
+time on a 24-core build box); its wall fell from 141 s to about 60 s.
 
 ### 8.1 Benchmarks (`scx-bench`)
 
