@@ -26,6 +26,9 @@
 //!   lying on it ([`CurveSurfaceHit`]); closed forms, a NURBS pair `Unsupported` (63 SU6).
 //! - [`pcurve_of`]: the exact pcurve of a curve lying on a surface, checked by lifting, or a
 //!   typed [`PcurveError`] (63 D10, §4.11).
+//! - [`certificate`]: proofs that a NURBS curve or surface is within a bound of a circle or
+//!   an analytic kind, a curve's turn about an axis, and the loft's span bound, each a typed
+//!   [`certificate::Proof`] or bound (research 75 §4, MK10).
 //! - [`AnyCurve`]: a free [`Curve`](scx_curve::Curve), or a [`CurveOnSurface`] (a uv curve on
 //!   a shared [`Surface`]) with its point and its jet by the chain rule (63 §4.10).
 //!
@@ -54,6 +57,7 @@
 
 mod any_curve;
 mod axial;
+pub mod certificate;
 mod chart_check;
 mod closed;
 mod common;
