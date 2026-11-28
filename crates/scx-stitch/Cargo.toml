@@ -22,6 +22,8 @@ scx-nurbs = { path = "../scx-nurbs" }
 scx-surface = { path = "../scx-surface" }
 
 [dev-dependencies]
+scx-boolean = { path = "../scx-boolean" }
+scx-check = { path = "../scx-check" }
 scx-testkit = { path = "../scx-testkit", features = ["bodies"] }
 
 [lints]
