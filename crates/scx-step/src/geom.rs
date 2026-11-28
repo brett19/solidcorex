@@ -399,7 +399,7 @@ mod tests {
             ),
             (
                 Surface::Sphere(Sphere::new(f, mm(3.0), Sense::Forward).unwrap()),
-                (0.1, 0.7, -0.2, 0.2),
+                (0.1, 0.7, 0.3, 0.7),
             ),
             (
                 Surface::Torus(Torus::new(f, mm(5.0), mm(1.5), Sense::Forward).unwrap()),
