@@ -3353,3 +3353,232 @@ measured here.
 diameter, and the ratio limit under `Full`. `Stitched` decides gaps as `Import` does. Each answer is
 a `Bracket` against its allowance, or a typed `Undecided { why }` (R2). The edges share the budget
 in id order (R6). NURBS faces are `Pending`.
+
+## 32. ST2 as built (11-28)
+
+The edge stage of §4.3 (steps 2 and 3) in `scx-stitch`, new module `src/edges.rs`. A vertex
+within coincidence of another sheet's edge, strictly inside it, cuts that edge. Then two edges of
+different sheets with the same ends are one edge where the certified symmetric Hausdorff distance
+of their curves is within coincidence. Every distance is an SU6 `Bracket` (`point_curve_gap`,
+and `curve_curve_gap` called once each way, since it is one-sided). No new distance code. A pair
+is proved within, proved beyond, or left open and named; nothing is sampled or guessed. ST1's
+`Unsupported(Edges)` placeholders and its slab gate are gone. `Want::Solid` stays
+`Unsupported(Solid)` (ST3). 22 tests: 17 in `tests/stitch.rs` (9 kept from ST1, 8 new, 2 of
+ST1's removed) and ST1's 5 unit tests in `points.rs`.
+
+Cargo: stitch → bodyq is dropped (ST2 needs no bodyq query: the certified edge box is replaced
+by the loose box plus the certified gaps). Stitch now names algo, curve, nurbs and surface
+directly. Each was already below stitch through bodyq (§4.3 names stitch → surface), so the
+layer graph gains no edge. ST3 brings bodyq back for `classify_point`.
+
+### 32.1 Public API (changes from §26.1)
+
+```rust
+#[non_exhaustive] pub struct StitchReport { pub identified: Vec<Identified>,
+    pub split: Vec<Split>, pub joined: Vec<Joined>, pub left: Vec<Left> }   // + undecided()
+#[non_exhaustive] pub struct Split { pub edge: EdgeId, pub vertex: VertexId,
+                                     pub from: (Operand, EdgeId), pub gap: Length }
+#[non_exhaustive] pub struct Joined { pub edge: EdgeId, pub gap: Length }  // certified upper
+#[non_exhaustive] pub enum Left {
+    Ambiguous { edge: EdgeId, partners: Vec<EdgeId> },
+    Undecided { edge: EdgeId, with: Entity, lower: Length, upper: Length, allowance: Length },
+}
+pub enum StitchUnsupported { Chain { .. }, Edges { operand, edge, why: EdgePending }, Solid, TooLarge }
+#[non_exhaustive] pub enum EdgePending { NurbsFoot, SameFoot, Radial, Fit, Direction, Wire,
+                                         NearEnd, Region }               // name()
+pub enum StitchDefect { Draft, Query { operand, at }, Pcurve { .. }, Finish(Box<FinishCause>) }
+```
+
+`StitchUnsupported::Query` is removed, with its bodyq cause; it had no caller left.
+`Edges` now carries an `EdgePending`: the part a proved cut or join waits on.
+
+### 32.2 The edge stage
+
+1. **Gather.** Every sheet edge with a curve is taken, with its finished `Edge::bounding_box`
+   (the loose box: the curve's box grown by the edge's accuracy and the resolution). Reach is the
+   edge's accuracy, at least the zone. Each draft vertex is a node: its point, its reach and the
+   sheets it stands for (more than one once identified).
+2. **Cuts.** One `scx_algo::BoxTree` holds the edge boxes. Each node queries it, grown by its
+   own reach. The node's own edges, and edges of a sheet it stands for, are skipped. Each other
+   candidate gets `point_curve_gap(.., Aim::Against(max reach))` on the edge's budget share.
+   - Within: the foot is found by inversion. It must lie strictly inside the interval, or the
+     result is `Edges(NearEnd)`. A NURBS edge's foot waits on step 5's solve (`NurbsFoot`), and
+     two feet at one parameter give `SameFoot`.
+   - Open: `Left::Undecided { with: Vertex }`.
+   - Beyond: nothing.
+
+   One pass is enough. A cut point is an existing vertex, so a cut makes no new point to cut at
+   (the pin loops up to 10 times).
+3. **Cut.** The first piece keeps the edge's id. The others are `add_edge` plus
+   `derive(Origin::Edge)`. Each face use is expanded in loop order, reversed for a `Reversed`
+   use, and its pcurve's interval is set to the piece's span. The cut vertex is raised, `Measured`,
+   to the farthest the cut moves the curve or a use's surface point from it, as ST1's identify
+   does (§26.3). Each cut is a `Split` entry.
+4. **Candidates.** Pieces are grouped by their unordered end pair. Each pair from different
+   sheets whose boxes are not disjoint (grown by the larger reach) is a candidate. One unit is
+   charged per candidate.
+5. **Proof.** Each lead piece gets a budget share. Both directed gaps are taken, and the second
+   is skipped when the first is beyond. The symmetric bracket is the larger of each bound. For
+   two segments, the four end-to-segment `point_curve_gap`s give the whole symmetric gap: a
+   point's distance is convex along a segment, so each directed gap's maximum is at an end. This
+   is the pin's "0 for two lines" without its assumption.
+6. **Acceptance.** A piece's possible partners are those proved within or left open. A piece
+   with two or more possible partners is `Left::Ambiguous`, and none of its pairs is joined. An
+   open pair is `Left::Undecided { with: Edge }`. A within pair whose two pieces are each alone
+   goes on a `BinaryHeap` keyed by (bound bits, ids), and the heap is popped in order.
+7. **Glue.** The kept piece is chosen by geometry (smallest reach, then lowest curve midpoint,
+   then sheet, id and place), as §26.2's kept vertex is, so permuted sheets keep one curve. Each
+   absorbed fin's use is pointed at the kept edge, with its sense flipped when the edges run
+   opposite ways (from the ends, or from the start tangents for a closed edge, else `Direction`).
+   Then `merge_edge` and `write_pcurves` run. A use with no exact pcurve of the kept curve gives
+   `Fit` (BR9's fitter). Other cases waiting on later work:
+   - a wire edge gives `Wire`;
+   - more than two fins gives `Radial`;
+   - faces bounding different regions give `Region` (ST3).
+8. **Shells.** `finish` requires a joined edge's two fins to name the same shell
+   (`SidesDisagree`). So every joined pair unites its two shells (union-find, root the least
+   id), and each face's sides, wires and lone vertices are moved to the root before `finish`.
+
+### 32.3 Choices, with cases for and against
+
+| Choice | For | Against |
+|---|---|---|
+| Keep `Stitched { done: Done<NoItems>, report }`, not `Done<C>` (ST1 open question 1) | An edge left open is not a skipped item. The body is whole and valid, and the open edge is a fact of it (a lamina edge), as an `Undecided` volume sign is a fact. `Skipped<C>` would mean "input not processed", which is false here, and `NoItems` keeps "a stitch skips nothing" true. `Left` sits beside `identified`/`split`/`joined`, where a caller reads the stitch | Two places to look (`done` and `report`). A caller wanting "everything not done" has to read `left`, not a generic skip list. If ST5's `sew` later skips whole edges by request, `C` would come back |
+| Ambiguity is decided per piece, before the heap: two possible partners means none is joined | §4.3 step 2: "two candidates within the allowance stays open". Taking the nearest would be a guess between coincident partners. With this rule, the heap only fixes edit order | A heap that consumed its pairs could join the nearest of two well-separated partners. That is more joins, but it is the guess the row forbids |
+| One cut pass | Cut points are existing vertices, so no cut creates a point to cut at | Two vertices at one foot give `SameFoot` rather than an attempt at a merge |
+| Cuts take half the remaining budget, spread over the edges with candidates; joins share what is left | Each edge gets a fixed share (§4.3), so one hard plateau cannot starve the rest. A pair left at its share is `Undecided`, typed | The halving is a choice, not derived. A join-heavy input with few cuts wastes nothing (the share is what is left), but a cut-heavy input could leave joins less |
+| No edge accuracy raise on a join | The pair is accepted only where the certified gap is within the larger reach, so the kept edge already covers the absorbed curve within its accuracy plus resolution | A gap between the two reaches leaves the kept edge's accuracy as the larger only if the kept is the larger reach. The kept edge is the smaller reach, so the kept accuracy may not cover the absorbed curve. `finish` passed every case here; a measured raise like the vertices' is open question 2 |
+| Loose box, then certified gaps | The gaps decide; the box only finds candidates. bodyq's certified tight box would cost an interval search per edge for no change in result | Loose boxes of long curved edges give more candidates |
+| Two segments via four point gaps | Exact by convexity, and 2.3x faster on the grid (below) | One more path to test: `the_gaps_hold_the_pins_bound_truths` checks it against `curve_curve_gap` on skew segments |
+| Shells merged on a join | `finish` requires it; joined sheets are one shell | Every face of the merged sheets is touched, so `finish` checks them all |
+
+### 32.4 The pin's `bounds.rs` and stitch, mapped
+
+| solidcore at the pin (`heal/stitch`) | here |
+|---|---|
+| `bounds.rs::curves`: both directed gaps under an endpoint correspondence (64 cells of a centred mean-value form) | two `curve_curve_gap` calls, each one-sided with no assumed correspondence, aimed `Against` the coincidence; segments by four point gaps |
+| `bounds.rs::curve_to_point`, `point_at_curve` | `point_curve_gap` for a vertex against an edge's inside |
+| p2 split pass: an edge box tree, vertex boxes grown by the tolerance, up to 10 loops | one `BoxTree`, one pass |
+| p2 `glue_edges_at_vertex`: greedy per vertex, a 5-sample distance (0 for two lines) | candidates by identified ends and box overlap, accepted from a heap in (bound, ids) order; two possible partners left open |
+| `MAX_PIECES`-style caps | a budget share per edge, `Left::Undecided` at it |
+| tolerance doubling from 1/100 (`stitch_into_shell`) | none: one coincidence, the document's |
+
+The pin's bound truths are ported against their closed forms in
+`the_gaps_hold_the_pins_bound_truths`:
+
+- a degree-one hat of height 1 between samples gives a symmetric gap in [1, 1 + 1e-9];
+- a rational arc against the x axis gives 2/3, within 1e-9;
+- a reversed sub-range gives 0;
+- skew segments: the shortcut agrees with `curve_curve_gap`.
+
+The pin bounds a correspondence `t -> t`; the Hausdorff gap needs none, and is never larger.
+
+### 32.5 Tests
+
+`tests/stitch.rs` (17). Kept from ST1 (9): corner touch, coincidence limit, measured raise, the
+two refusals, solid pending, none/one sheet, determinism and permutation, cancel.
+
+New (8):
+
+- **a_shared_edge_is_joined**: two unit sheets on a seam. 6 V, 7 E, 2 faces; one join with a
+  gap of at most 1e-12, kept on sheet 0's edge (equal reach and midpoint, the lower sheet), with
+  two fins, one merge record onto it and a `Coincident` warning.
+- **edges_are_joined_within_coincidence_and_not_beyond**: offset 0.5 zone joins; 2 zone stays 8
+  edges with nothing left.
+- **a_vertex_on_another_sheets_edge_cuts_it_and_the_overlap_is_joined**: a half-offset pair.
+  8 V, 9 E, 2 splits, 1 join over [0.5, 1] with two fins, 5 created edges each with an origin,
+  no raise (the cuts are exact).
+- **an_edge_with_two_possible_partners_is_left_open**: three sheets, two of them on top of each
+  other. 3 `Ambiguous`, each with 2 partners, none joined; the doubled pair's 3 other edges join.
+- **a_join_no_share_decides_is_left_undecided**: an arc against a coaxial arc 0.9 zone out (a
+  plateau). Budget limits from 40 to 200,000 give both `Undecided { with: Edge }` and a join,
+  and `Exhausted` otherwise; never a wrong answer.
+- **arcs_run_opposite_ways_are_joined_within_coincidence**: half disc against an arc of radius
+  1 + 0.5 zone run the other way. One join, gap in [0.5 zone, zone], 5 edges; at 2 zone, none.
+- **joins_and_cuts_do_not_follow_the_order**: three permutations give the same points, edge
+  midpoints, join and split counts.
+- **the_gaps_hold_the_pins_bound_truths**: see §32.4.
+
+Removed on purpose (each proved a placeholder that ST2 replaces):
+
+- `a_shared_edge_waits_for_the_edge_stage`: a shared edge gave `Unsupported(Edges)` named
+  `edges_pending`. Now `a_shared_edge_is_joined`.
+- `a_vertex_on_another_sheets_edge_waits_for_the_edge_stage`: a T-junction gave `Edges`. Now
+  the cut-and-join test.
+
+### 32.6 Measurements
+
+Release build, best of 5, second build machine (load average 8 to 12). Before (main
+22c15d8) and after were run back to back by the same throwaway timer, not committed. Work is
+`Report::work`. Before, the seam, cut and grid cases are not a stitch at all: main refuses them
+with `edges_pending`, so the "before" time there is the time to refuse.
+
+| Case | V | E | Before work | Before time | After work | After time | Joins / splits |
+|---|---|---|---|---|---|---|---|
+| two 1x1, corner | 8 | 8 | 50 | 0.007 ms | 42 | 0.008 ms | 0 / 0 |
+| two 10x10, corner | 242 | 440 | 6,287 | 0.40 ms | 1,887 | 0.51 ms | 0 / 0 |
+| two 30x30, corner | 1,922 | 3,720 | 127,447 | 3.8 ms | 15,847 | 4.9 ms | 0 / 0 |
+| two 60x60, corner | 7,442 | 14,640 | 940,687 | 17.4 ms | 62,287 | 23.2 ms | 0 / 0 |
+| checker 4x4 of 4x4 | 200 | 320 | 5,117 | 0.40 ms | 1,597 | 0.50 ms | 0 / 0 |
+| checker 10x10 | 1,250 | 2,000 | 74,399 | 3.0 ms | 10,399 | 3.5 ms | 0 / 0 |
+| checker 20x20 | 5,000 | 8,000 | 577,949 | 13.2 ms | 41,949 | 16.6 ms | 0 / 0 |
+| two 1x1, seam | 8 | 8 | refused | 0.001 ms | 68 | 0.028 ms | 1 / 0 |
+| two 10x10, seam | 242 | 440 | refused | 0.08 ms | 2,183 | 0.79 ms | 10 / 0 |
+| two 30x30, seam | 1,922 | 3,720 | refused | 1.1 ms | 16,743 | 6.0 ms | 30 / 0 |
+| two 60x60, seam | 7,442 | 14,640 | refused | 5.1 ms | 64,083 | 27.4 ms | 60 / 0 |
+| two 10x10, half-offset seam | 242 | 440 | refused | 0.10 ms | 2,401 | 1.1 ms | 19 / 20 |
+| two 60x60, half-offset seam | 7,442 | 14,640 | refused | 5.5 ms | 65,501 | 27.9 ms | 119 / 120 |
+| grid 4x4 of 4x4 sheets | 400 | 640 | refused | 0.16 ms | 6,010 | 3.0 ms | 96 / 0 |
+| grid 10x10 | 2,500 | 4,000 | refused | 1.4 ms | 41,338 | 22.7 ms | 720 / 0 |
+| grid 20x20 | 10,000 | 16,000 | refused | 6.5 ms | 170,138 | 99.9 ms | 3,040 / 0 |
+
+- **The V^1.5 charged work is gone.** Work per vertex on the corner cases is 5.3, 7.8, 8.2 and
+  8.4 (before: 6.3, 26, 66, 126). The box tree charges one unit per real candidate.
+- **No-join stitches are 17 to 33% slower** (17.4 to 23.2 ms on the 60x60 corner). Under
+  callgrind, the edge stage is 30% of the stitch there:
+  - building the box tree over 14,640 boxes: 29% of the stage;
+  - 7,442 queries: 25%, part of it a `Vec` allocated per query;
+  - the loose boxes: 6%.
+
+  ST1's slab gate found candidates and refused them; the tree finds them and the gaps decide.
+  It is not the same job, so this is a cost of the stage, not a regression of one.
+- **Joins.** Before the segment shortcut, `curve_curve_gap` was about 0.1 ms a call (40% of the
+  seam's edge stage), and the 20x20 grid took 230 ms. With four point gaps per segment pair it
+  takes 99.9 ms, about 33 us per join, mostly the glue edits and `finish` over the touched,
+  merged shells.
+- **The pin.** It has no equivalent timed path. `stitch_into_shell` works on one body's faces,
+  with tolerance doubling from 1/100, through the pin's own construction. A like-for-like run
+  needs the same sheets built in the pin, which was not done here.
+
+### 32.7 Deviations and open questions
+
+Deviations from §4.3 and the ST2 row:
+
+- `Stitched` is kept, not `Done<StitchReport>` (§32.3).
+- The cut is at the existing vertex, the foot only placing it (step 3's "certified foot point" is
+  where the vertex projects; the vertex keeps its own point and is raised to cover the move).
+- One pass, not "loop until no split".
+- Stitch → bodyq is dropped, with four direct edges to crates already below it.
+- `StitchUnsupported::Query` is removed.
+- Two `EdgePending` causes are added: `NearEnd` and `Region`.
+
+Open questions:
+
+1. **NearEnd.** A vertex within coincidence of an edge whose foot is at or past an end it is not
+   identified with means the two sheets' ends are within coincidence where their vertices are
+   not. Should that reopen identification (a chain through an edge), or stay pending? It is
+   `Unsupported(Edges(NearEnd))` now.
+2. **Join raise.** The kept edge's accuracy is not raised to the certified gap. Should a join
+   raise the kept edge, `Measured`, as identification raises vertices (row 186: "every new
+   vertex and edge end records its measured gap")?
+3. **ST1 open question 3 (chains).** Still open. `points.rs` decides chains before the edge
+   stage, so a chain end to end still gives `Unsupported(Chain)`, not `Edges`.
+4. **Cut-stage cost.** Should scx-algo's `BoxTree` get a query that fills a caller's buffer, or a
+   dual-tree `pairs` against a node tree? Either would trim the 17 to 33% the stage adds to
+   no-join stitches. Neither is in this branch (no scx-algo change).
+5. **NURBS.** NURBS joins already go through the gaps. Only the cut foot on a NURBS edge
+   waits on step 5 (`NurbsFoot`), and `Fit` waits on BR9.
+
+### 32.8 Proposed 04 row
+
+| 11-28 | (For the owner's review) The stitch's edge stage: a vertex within coincidence of another sheet's edge, strictly inside it (by SU6's certified `point_curve_gap`), cuts the edge there, in one pass; the vertex is raised, `Measured`, to the farthest the cut moves the edge. Two edges of different sheets with the same ends are one edge where the certified symmetric Hausdorff distance (two one-sided `curve_curve_gap`s; four point gaps for two segments, exact by convexity) is within coincidence. An edge with two or more possible partners is `Left::Ambiguous` and none is joined; a pair or touch its budget share leaves open is `Left::Undecided` with its bracket. Within pairs are accepted from a heap in (bound, ids) order, and the kept curve is chosen by geometry. Joined sheets are one shell. A proved cut or join the stitch cannot make yet is `Unsupported(Edges { why: EdgePending })`. `Stitched { done: Done<NoItems>, report }` is kept: an open edge is a fact of the result, not a skipped item. Edges: stitch → bodyq dropped (ST3 brings it back); stitch → algo, curve, nurbs, surface, each already below it | Amends §4.3 step 3 (one pass, cut at the existing vertex) and closes ST1's open question 1 (`Stitched` kept) | 74 §32 |

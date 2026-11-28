@@ -717,9 +717,12 @@ dependencies = [
 name = "scx-stitch"
 version = "0.1.0"
 dependencies = [
- "scx-bodyq",
+ "scx-algo",
  "scx-brep",
+ "scx-curve",
  "scx-num",
+ "scx-nurbs",
+ "scx-surface",
  "scx-testkit",
 ]
 
