@@ -17,7 +17,7 @@
 
 use core::f64::consts::PI;
 
-use scx_boolean::{BooleanError, BooleanOp, boolean};
+use scx_boolean::{BooleanError, BooleanOp, BooleanUnsupported, boolean};
 use scx_brep::op::{Cx, NoTrace, Scratch, Settings};
 use scx_brep::{Brep, Document};
 use scx_num::budget::{Budget, Stop};
@@ -149,24 +149,91 @@ fn cut_by_cylinder(big: f64, small: f64) -> Result<(), BooleanError> {
 
 #[test]
 fn the_ring_torus_controls() {
-    println!("ring block: {:?}", cut_by_slab(3.0, 1.0, 0.5));
-    println!("ring cylinder: {:?}", cut_by_cylinder(3.0, 1.0));
+    cut_by_slab(3.0, 1.0, 0.5).unwrap();
+    cut_by_cylinder(3.0, 1.0).unwrap();
 }
 
+/// A cut across a horn torus's face is refused by name: the face's pole is one vertex with
+/// a collapsed edge at each end of its `v` range, and the trace keeps one per vertex.
 #[test]
-fn a_block_cuts_a_horn_torus_by_a_plane_square_to_its_axis() {
-    for h in [0.5, -0.75] {
-        println!("horn block {h}: {:?}", cut_by_slab(R, R, h));
+fn a_cut_across_a_horn_torus_is_refused_by_name() {
+    for e in [
+        cut_by_slab(R, R, 0.5).unwrap_err(),
+        cut_by_slab(R, R, -0.75).unwrap_err(),
+        cut_by_cylinder(R, R).unwrap_err(),
+    ] {
+        assert!(
+            matches!(
+                e,
+                BooleanError::Unsupported(BooleanUnsupported::HornPole { .. })
+            ),
+            "{e:?}"
+        );
+        assert_eq!(e.name(), "horn_pole");
     }
 }
 
-/// The plane through the pole: its section is the outer circle and the pole itself, a touch.
+/// A plane through the pole meets the face in a circle and a touch at the pole: a defect
+/// today, as a sphere cut by a plane through its centre is (`BO10b`).
 #[test]
-fn a_block_whose_face_passes_through_the_pole() {
-    println!("through the pole: {:?}", cut_by_slab(R, R, 0.0));
+fn a_block_whose_face_passes_through_the_pole_is_not_built_yet() {
+    let e = cut_by_slab(R, R, 0.0).unwrap_err();
+    println!("through the pole: {e:?}");
 }
 
+/// Bodies that do not cut the horn torus's face: a block or cylinder around it, or clear of
+/// it, give the union, intersection and difference of the closed forms.
 #[test]
-fn a_cylinder_about_the_axis_cuts_a_horn_torus() {
-    println!("horn cylinder: {:?}", cut_by_cylinder(R, R));
+fn a_horn_torus_inside_or_clear_of_a_block_or_cylinder() {
+    let t = tube(R, R);
+    let doc = Document::default();
+    let around = block(&at([-5.0, -5.0, -3.0]), [mm(10.0); 3], &doc)
+        .unwrap()
+        .body;
+    let clear = block(&at([8.0, -1.0, -1.0]), [mm(2.0); 3], &doc)
+        .unwrap()
+        .body;
+    let wrapped = cylinder(&at([0.0, 0.0, -3.0]), mm(5.0), mm(6.0), &doc)
+        .unwrap()
+        .body;
+    let apart = cylinder(&at([9.0, 0.0, -1.0]), mm(1.0), mm(2.0), &doc)
+        .unwrap()
+        .body;
+    for (name, other) in [
+        ("block around", &around),
+        ("block clear", &clear),
+        ("cylinder around", &wrapped),
+        ("cylinder clear", &apart),
+    ] {
+        let v = volume(other);
+        let inside = name.ends_with("around");
+        let (cap, join) = if inside {
+            (whole(R, R), v)
+        } else {
+            (0.0, v + whole(R, R))
+        };
+        near(
+            volume(&op(&t, other, BooleanOp::Union).unwrap()),
+            join,
+            name,
+        );
+        if inside {
+            near(
+                volume(&op(&t, other, BooleanOp::Intersect).unwrap()),
+                cap,
+                name,
+            );
+            near(
+                volume(&op(other, &t, BooleanOp::Subtract).unwrap()),
+                v - whole(R, R),
+                name,
+            );
+        } else {
+            near(
+                volume(&op(&t, other, BooleanOp::Subtract).unwrap()),
+                whole(R, R),
+                name,
+            );
+        }
+    }
 }

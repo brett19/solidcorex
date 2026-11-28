@@ -128,6 +128,16 @@ pub enum BooleanUnsupported {
         /// The result's edge, or the operand's entity the classification met.
         at: Entity,
     },
+    /// A face of a horn torus that the other operand cuts: its pole is one vertex with a
+    /// collapsed edge at each end of the face's `v` range (two lobes meeting), and the cut
+    /// face's trace keeps one collapsed edge per vertex. The trace would need the vertex's
+    /// star in two sheets of the face's uv.
+    HornPole {
+        /// The operand.
+        operand: Operand,
+        /// The face.
+        face: FaceId,
+    },
     /// An edge of a planar Boolean's operand that is neither a line nor a circle.
     PlanarEdge {
         /// The operand.
@@ -296,6 +306,7 @@ impl BooleanError {
             Self::Unsupported(BooleanUnsupported::NonManifold { .. }) => "non_manifold",
             Self::Unsupported(BooleanUnsupported::Nesting) => "nesting",
             Self::Unsupported(BooleanUnsupported::Pcurve { .. }) => "no_exact_pcurve",
+            Self::Unsupported(BooleanUnsupported::HornPole { .. }) => "horn_pole",
             Self::Exhausted { .. } => "exhausted",
             Self::Cancelled => "cancelled",
             Self::Defect(BooleanDefect::NoFaceBox { .. }) => "no_face_box",
@@ -411,6 +422,10 @@ impl fmt::Display for BooleanError {
             Self::Unsupported(BooleanUnsupported::NonManifold { at }) => {
                 write!(f, "{at}: a non-manifold result is not built yet")
             }
+            Self::Unsupported(BooleanUnsupported::HornPole { operand, face }) => write!(
+                f,
+                "{operand}: {face}: a horn torus's face cut across its pole is not built yet"
+            ),
             Self::Unsupported(BooleanUnsupported::Nesting) => {
                 f.write_str("the result's surfaces nest in a way not placed yet")
             }
