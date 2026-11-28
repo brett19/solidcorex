@@ -32,12 +32,16 @@
 //!   `=======` or `>>>>>>>` at the start of a line, then a space or the line's end).
 //! - `fast`: the `conflicts` check, then `cargo fmt --check` of every member, clippy with warnings denied (the default
 //!   members, then the difftest and bench crates, the benchmarks included), `layers`,
-//!   `headers`, the tier-1 tests (`cargo test -p <crate>` for each crate named, default every
-//!   library and test kit), the bench crate's own tests and xtask's.
+//!   `headers`, the tier-1 tests (each crate's test targets as `cargo test -p <crate>` selects
+//!   them, for each crate named, default every library and test kit), the bench crate's own
+//!   tests and xtask's. The tests run under `cargo nextest run`, every test of every crate in one
+//!   pool over all cores, then the doctests under `cargo test --doc`; without nextest, they fall
+//!   back to `cargo test` with a warning.
 //! - `lint` and `tests [crate ... | --except crate ...]`: the two halves of `fast`, which CI runs
 //!   as separate jobs (`tests` shards by crate; `--except` takes the rest, with the bench crate's
 //!   tests and xtask's, so named shards and one `--except` shard together run all of `fast`).
-//! - `diff [--changed-since REV]`: the differential suite (`cargo test -p scx-difftest`). With
+//! - `diff [--changed-since REV]`: the differential suite (`cargo nextest run -p scx-difftest`,
+//!   or `cargo test` with a warning when nextest is missing). With
 //!   `--changed-since`, the three slow tests (`SLOW_DIFF`, minutes each) run only when a file
 //!   changed since `REV` (the working tree against it) is one their subject can change:
 //!   `scx-algo`, `scx-nurbs`, `scx-nurbs-surface`, `scx-num`, `scx-testkit` (their exact
@@ -53,6 +57,7 @@
 //! manifests this repository writes.
 
 mod corpus;
+mod json;
 
 use std::fmt::Write as _;
 use std::fs;
@@ -829,13 +834,38 @@ fn slow_diff_due(changed: &[String]) -> bool {
         .any(|f| SLOW_DIFF_PATHS.iter().any(|p| f.starts_with(p)))
 }
 
+/// The cargo arguments of the differential suite: `cargo nextest run -p scx-difftest` (every test
+/// in its own process, over all cores), or `cargo test -p scx-difftest` without nextest. With
+/// `skip_slow`, the [`SLOW_DIFF`] tests are left out: a filterset of `test(~name)` (contains,
+/// which is what libtest's `--skip` matches), or `--skip`. The crate has no doctests, so nextest
+/// loses none.
+fn diff_command(nextest: bool, skip_slow: bool) -> Vec<String> {
+    let mut v: Vec<String> = if nextest {
+        vec!["nextest".into(), "run".into()]
+    } else {
+        vec!["test".into()]
+    };
+    v.extend(["-p".to_string(), "scx-difftest".to_string()]);
+    if skip_slow {
+        if nextest {
+            let any = SLOW_DIFF
+                .iter()
+                .map(|t| format!("test(~{t})"))
+                .collect::<Vec<_>>()
+                .join(" | ");
+            v.extend(["-E".to_string(), format!("not ({any})")]);
+        } else {
+            v.push("--".to_string());
+            for t in SLOW_DIFF {
+                v.extend(["--skip".to_string(), (*t).to_string()]);
+            }
+        }
+    }
+    v
+}
+
 /// `cargo xtask diff [--changed-since REV]`.
 fn diff(root: &Path, args: &[String]) -> Result<String, String> {
-    let mut test = vec![
-        "test".to_string(),
-        "-p".to_string(),
-        "scx-difftest".to_string(),
-    ];
     let skipped = match args {
         [] => false,
         [flag, rev] if flag == "--changed-since" => {
@@ -859,15 +889,14 @@ fn diff(root: &Path, args: &[String]) -> Result<String, String> {
         _ => return Err("usage: cargo xtask diff [--changed-since <rev>]".to_string()),
     };
     if skipped {
-        test.push("--".to_string());
-        for t in SLOW_DIFF {
-            test.push("--skip".to_string());
-            test.push((*t).to_string());
-        }
         println!(
             "diff: skipping {} (nothing they test changed)",
             SLOW_DIFF.join(", ")
         );
+    }
+    let test = diff_command(nextest_available(root), skipped);
+    if test.first().map(String::as_str) == Some("test") {
+        println!("{NO_NEXTEST}");
     }
     cargo(root, &test.iter().map(String::as_str).collect::<Vec<_>>())?;
     Ok(if skipped {
@@ -975,15 +1004,198 @@ fn tests(root: &Path, crates: &[String], extras: bool) -> Result<String, String>
         }
         Some(_) => (crates.to_vec(), extras),
     };
-    // Each crate keeps its own `-p` selection (its own feature set, so nothing is rebuilt),
-    // but its test targets run as separate cargo invocations, side by side: a few test
-    // binaries are single-thread-bound for tens of seconds, and one after another they left
-    // the machine mostly idle. The targets are cargo's auto-discovered ones (`src/lib.rs`,
-    // `src/main.rs`, `tests/*.rs`, `tests/*/main.rs`) and the doctests; no library crate sets
-    // a custom target.
+    for lib in &libs {
+        if !root.join("crates").join(lib).join("Cargo.toml").exists() {
+            return Err(format!("fast: no crate at crates/{lib}"));
+        }
+    }
+    if nextest_available(root) {
+        tests_nextest(root, &libs, extras)?;
+    } else {
+        println!("{NO_NEXTEST}");
+        tests_cargo(root, &libs, extras)?;
+    }
+    Ok(format!("fast: passed ({})", libs.join(", ")))
+}
+
+/// The warning printed when `cargo nextest` is missing and the tests fall back to `cargo test`.
+const NO_NEXTEST: &str = "xtask: warning: cargo-nextest not found, falling back to cargo test (slower: one pool per binary); install it with `cargo install --locked cargo-nextest`";
+
+/// Whether `cargo nextest` runs here.
+fn nextest_available(root: &Path) -> bool {
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+    Command::new(cargo)
+        .args(["nextest", "--version"])
+        .current_dir(root)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+/// The dependency lines of a manifest that choose features (`features = ...` or
+/// `default-features = ...`, inline or in a `[dependencies.x]` table), as written and sorted.
+/// Crates whose lines are the same build every dependency with the same features alone or in one
+/// cargo invocation together, so grouping them by these lines rebuilds nothing: cargo unifies the
+/// features of everything one invocation selects (`scx-testkit` is built with `bodies` for the
+/// topology crates and without it for the geometry crates and for its own tests).
+fn feature_lines(manifest: &str) -> Vec<String> {
+    let mut section = String::new();
+    let mut out = Vec::new();
+    for raw in manifest.lines() {
+        let line = strip_comment(raw).trim();
+        if line.starts_with('[') {
+            section = line.trim_matches(|c| c == '[' || c == ']').to_string();
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let key = key.trim();
+        let in_table =
+            section.contains("dependencies.") && (key == "features" || key == "default-features");
+        let inline = section.ends_with("dependencies") && value.contains("features");
+        if in_table || inline {
+            out.push(format!("[{section}] {line}"));
+        }
+    }
+    out.sort();
+    out
+}
+
+/// One cargo build of tests: the packages it selects and its target selection.
+struct Build {
+    packages: Vec<String>,
+    targets: Vec<&'static str>,
+}
+
+/// The tests of `libs` (and, with `extras`, the bench crate's lib tests and xtask's) under
+/// `cargo nextest`. The crates are split into builds by [`feature_lines`], so each crate keeps the
+/// features `cargo test -p <crate>` gives it and nothing is rebuilt; each build's test binaries
+/// are listed (which builds them), the lists are merged, and one `cargo nextest run
+/// --binaries-metadata` runs every test of every build in one pool of `NEXTEST_TEST_THREADS`
+/// (default: the cores), so a long single-threaded test never leaves the rest of the machine idle
+/// and no two pools oversubscribe it. The doctests, which nextest does not run, follow as one
+/// `cargo test --doc` per build.
+fn tests_nextest(root: &Path, libs: &[String], extras: bool) -> Result<(), String> {
+    use std::collections::BTreeMap;
+    let mut by_features: BTreeMap<Vec<String>, Vec<String>> = BTreeMap::new();
+    for lib in libs {
+        let manifest = read(&root.join("crates").join(lib).join("Cargo.toml"))?;
+        by_features
+            .entry(feature_lines(&manifest))
+            .or_default()
+            .push(lib.clone());
+    }
+    // `--tests`: the lib, the bins and the integration tests, as `cargo test -p` runs them, without
+    // building the examples (`scx-testkit` has some, which `fast` never built).
+    let mut builds: Vec<Build> = by_features
+        .into_values()
+        .map(|packages| Build {
+            packages,
+            targets: vec!["--tests"],
+        })
+        .collect();
+    if extras {
+        // xtask has no dependencies, so it joins any build without changing a feature.
+        match builds.first_mut() {
+            Some(b) => b.packages.push("xtask".to_string()),
+            None => builds.push(Build {
+                packages: vec!["xtask".to_string()],
+                targets: vec!["--tests"],
+            }),
+        }
+        // The bench crate's own lib tests only, as before; its `tests/` target links the slice
+        // cases and is not part of the fast tier.
+        builds.push(Build {
+            packages: vec!["scx-bench".to_string()],
+            targets: vec!["--lib"],
+        });
+    }
+    let cargo_bin = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+    let mut merged: Option<json::Value> = None;
+    for b in &builds {
+        let mut args = vec![
+            "nextest",
+            "list",
+            "--list-type",
+            "binaries-only",
+            "--message-format",
+            "json",
+        ];
+        args.extend(b.targets.iter().copied());
+        for p in &b.packages {
+            args.push("-p");
+            args.push(p);
+        }
+        println!("xtask: cargo {}", args.join(" "));
+        let out = Command::new(&cargo_bin)
+            .args(&args)
+            .current_dir(root)
+            .stderr(std::process::Stdio::inherit())
+            .output()
+            .map_err(|e| format!("cargo nextest list: {e}"))?;
+        if !out.status.success() {
+            return Err(format!("cargo {} failed", args.join(" ")));
+        }
+        let list = json::parse(&String::from_utf8_lossy(&out.stdout))?;
+        match merged.as_mut() {
+            Some(m) => json::merge(m, list),
+            None => merged = Some(list),
+        }
+    }
+    let Some(merged) = merged else {
+        return Ok(());
+    };
+    let target = match merged
+        .get("rust-build-meta")
+        .and_then(|m| m.get("target-directory"))
+    {
+        Some(json::Value::Str(t)) => PathBuf::from(t),
+        _ => return Err("nextest binary list names no target directory".to_string()),
+    };
+    // One file per xtask run: worktrees may share the target directory.
+    let list = target.join(format!("xtask-binaries-{}.json", std::process::id()));
+    fs::write(&list, merged.write()).map_err(|e| format!("{}: {e}", list.display()))?;
+    let list_arg = list.to_string_lossy().to_string();
+    let run = cargo(root, &["nextest", "run", "--binaries-metadata", &list_arg]);
+    let _ = fs::remove_file(&list);
+    let mut failed: Vec<String> = run.err().into_iter().collect();
+    // The doctests: one `cargo test --doc` per build (the same features), each over all cores.
+    for b in &builds {
+        let docs: Vec<&String> = b
+            .packages
+            .iter()
+            .filter(|p| libs.contains(p) && root.join("crates").join(p).join("src/lib.rs").exists())
+            .collect();
+        if docs.is_empty() {
+            continue;
+        }
+        let mut args = vec!["test", "--doc"];
+        for p in docs {
+            args.push("-p");
+            args.push(p);
+        }
+        if let Err(e) = cargo(root, &args) {
+            failed.push(e);
+        }
+    }
+    if failed.is_empty() {
+        Ok(())
+    } else {
+        Err(failed.join("; "))
+    }
+}
+
+/// The tests of `libs` under `cargo test`, when nextest is missing: each crate keeps its own `-p`
+/// selection (its own feature set, so nothing is rebuilt), but its test targets run as separate
+/// cargo invocations, side by side ([`cargo_parallel`]).
+fn tests_cargo(root: &Path, libs: &[String], extras: bool) -> Result<(), String> {
+    // The targets are cargo's auto-discovered ones (`src/lib.rs`, `src/main.rs`, `tests/*.rs`,
+    // `tests/*/main.rs`) and the doctests; no library crate sets a custom target.
     let mut long = Vec::new();
     let mut short = Vec::new();
-    for lib in &libs {
+    for lib in libs {
         let dir = root.join("crates").join(lib);
         if !dir.join("Cargo.toml").exists() {
             return Err(format!("fast: no crate at {}", dir.display()));
@@ -1039,13 +1251,42 @@ fn tests(root: &Path, crates: &[String], extras: bool) -> Result<String, String>
         );
         jobs.push(["test", "-p", "xtask"].map(String::from).to_vec());
     }
-    cargo_parallel(root, jobs)?;
-    Ok(format!("fast: passed ({})", libs.join(", ")))
+    cargo_parallel(root, jobs)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn diff_skips_the_slow_tests_by_name_under_either_runner() {
+        assert_eq!(
+            diff_command(true, true).join(" "),
+            "nextest run -p scx-difftest -E not (test(~t_algo::poly_from_roots) | test(~t_nurbs::nurbs_elevate) | test(~t_nurbs_surface_edit::nurbs_surface_elevate))"
+        );
+        assert_eq!(
+            diff_command(true, false).join(" "),
+            "nextest run -p scx-difftest"
+        );
+        assert_eq!(
+            diff_command(false, true).join(" "),
+            "test -p scx-difftest -- --skip t_algo::poly_from_roots --skip t_nurbs::nurbs_elevate --skip t_nurbs_surface_edit::nurbs_surface_elevate"
+        );
+    }
+
+    #[test]
+    fn feature_lines_are_the_dependency_lines_that_choose_features() {
+        let m = "[package]\nname = \"a\"\nfeatures = 1\n[dependencies]\nx = { path = \"x\" }\n\
+                 [dev-dependencies]\nt = { path = \"t\", features = [\"bodies\"] } # c\n\
+                 [dependencies.y]\npath = \"y\"\ndefault-features = false\n[features]\nz = []\n";
+        assert_eq!(
+            feature_lines(m),
+            [
+                "[dependencies.y] default-features = false",
+                "[dev-dependencies] t = { path = \"t\", features = [\"bodies\"] }",
+            ]
+        );
+    }
 
     #[test]
     fn the_slow_difftests_run_only_for_their_subjects() {
