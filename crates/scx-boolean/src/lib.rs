@@ -51,12 +51,14 @@ mod error;
 mod faceface;
 mod geom;
 mod imprint;
+mod intersect;
 mod pairs;
 mod pinch;
 mod points;
 
 pub use boolean::{BooleanOp, NoItems, boolean};
 pub use error::{BooleanDefect, BooleanError, BooleanRefusal, BooleanUnsupported};
+pub use intersect::intersect;
 
 #[cfg(test)]
 mod tests;

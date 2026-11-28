@@ -1364,3 +1364,20 @@ For (keeping the question open): the corpus holds no record that reaches the hea
 should be run once through `SCX_HEAL_STEP_DIR` before the row is closed, and a Q7 reversal
 needs a class of failing records with a count. Against porting, in numbers: 15 regressions,
 0 fixes.
+
+### 13.2 BO18 as built (11-28)
+
+`scx_boolean::intersect(a, b, cx) -> Result<Done<NoItems>, BooleanError>` runs stages 1-4 of `boolean` (`interfere`, `face_face`) and stops; `crates/scx-boolean/src/intersect.rs`. The result is a `Draft::new()` body of no faces:
+
+- each stage-4 `Section` is a wire edge on its curve over its span, between the vertices of its merged points; a closed section no merged point lies on gets one vertex at its start;
+- each `Lying` piece (an operand edge on the other body) is a wire edge on the operand edge's curve over the piece, written once when the other operand's edge also runs along it (same end vertices and a midpoint within the zone);
+- each `Touch`, and each merged point no edge ends at, is a lone vertex (touches deduped against written vertices within the zone);
+- a coincident pair is a region, so only its boundary (the lying pieces) appears;
+- one shell of the outside region per connected piece (union-find over vertices, shells in order of lowest vertex), since a shell must be connected: two circles apart are two shells; a lone vertex is a shell of its own; no contact is a body with no shells.
+- lineage is `Origin::Operand(op, entity)` for both operands (the draft is not `a.edit()`, so `Origin::Face` of `a` has no meaning).
+
+Decisions. Fresh draft against `a.edit()` with everything removed: for, the result is a new body and carries no `a` ids; against, ids of `a` are not preserved for callers that want to map back (they use the lineage). Dedupe by geometry against by `along`: `along` is only set for edges lying along an edge, but the same piece can also come from two faces of one operand, so geometry (ends plus midpoint) covers both; against, a quadratic scan over written edges (fine at the sizes here). Lone vertices from unused merged points are included: the other choice (touches only) would lose a point where only edges meet.
+
+Truths (tests/intersect.rs, 12 tests): disjoint cubes, no shells; overlapping cubes, six lines of 0.5 and six vertices; cylinder through a plate, two circles of 2 pi in two shells; cylinder on a block side, arcs pi, pi and rulings 1, 1 in one shell; cylinder with a square plane, a unit circle; a tilted plate, two ellipses of semi-axes 1 and sqrt 2 (perimeter by quadrature); two unit spheres, circle of length sqrt 3 pi (two arcs); plane through a sphere's centre, 2 pi; tangent plane, one lone vertex at the closed-form point; plane through a torus's mid plane, 20 pi (the inner and outer circles of R = 5, r = 1.5); operand swap and repeat agree; shared cube face, four unit edges once each. The solid `contract` does not apply to a wire body; `finish` checks it.
+
+Open: no pin test of `intersect_faces_read_only` (9) was ported (it needs the pin's face-level API); the NURBS and general-SSI pairs stay `Unsupported(SsiPair)` as in `boolean` (BO22/BO23).
