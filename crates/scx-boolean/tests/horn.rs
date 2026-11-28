@@ -41,8 +41,9 @@ fn at(o: [f64; 3]) -> Frame {
     .unwrap()
 }
 
-fn horn() -> Brep {
-    torus(&at([0.0; 3]), mm(R), mm(R), &Document::default())
+/// The torus of major `big` and minor `small` about the z axis: a horn torus when equal.
+fn tube(big: f64, small: f64) -> Brep {
+    torus(&at([0.0; 3]), mm(big), mm(small), &Document::default())
         .unwrap()
         .body
 }
@@ -66,14 +67,15 @@ fn op(a: &Brep, b: &Brep, op: BooleanOp) -> Result<Brep, BooleanError> {
     boolean(a, b, op, &mut cx).map(|d| d.body)
 }
 
-/// The horn solid's volume below `z = h`.
-fn below(h: f64) -> f64 {
-    let s = (R * R - h * h).sqrt();
-    2.0 * PI * R * (h * s + R * R * (h / R).asin() + PI * R * R / 2.0)
+/// The torus solid's volume below `z = h`: the ring at height `z` has area
+/// `4 pi big sqrt(small^2 - z^2)`.
+fn below(big: f64, small: f64, h: f64) -> f64 {
+    let s = (small * small - h * h).sqrt();
+    2.0 * PI * big * (h * s + small * small * (h / small).asin() + PI * small * small / 2.0)
 }
 
-fn whole() -> f64 {
-    2.0 * PI * PI * R * R * R
+fn whole(big: f64, small: f64) -> f64 {
+    2.0 * PI * PI * big * small * small
 }
 
 fn near(got: f64, want: f64, what: &str) {
@@ -84,7 +86,7 @@ fn near(got: f64, want: f64, what: &str) {
 }
 
 /// A block over `z` in `[-3, h]` and `x, y` in `[-5, 5]`: its top is a plane square to the
-/// axis, cutting both rings of the horn at `z = h`; its sides are clear of it.
+/// axis, cutting both rings of the torus at `z = h`; its sides are clear of it.
 fn slab(h: f64) -> Brep {
     block(
         &at([-5.0, -5.0, -3.0]),
@@ -95,49 +97,76 @@ fn slab(h: f64) -> Brep {
     .body
 }
 
+/// The cut by a plane square to the axis: intersection, difference and union volumes.
+fn cut_by_slab(big: f64, small: f64, h: f64) -> Result<(), BooleanError> {
+    let (t, b) = (tube(big, small), slab(h));
+    let kept = below(big, small, h);
+    let what = format!("{big}/{small} h {h}");
+    near(
+        volume(&op(&t, &b, BooleanOp::Intersect)?),
+        kept,
+        &format!("intersect {what}"),
+    );
+    near(
+        volume(&op(&t, &b, BooleanOp::Subtract)?),
+        whole(big, small) - kept,
+        &format!("subtract {what}"),
+    );
+    near(
+        volume(&op(&t, &b, BooleanOp::Union)?),
+        volume(&b) + whole(big, small) - kept,
+        &format!("union {what}"),
+    );
+    Ok(())
+}
+
+/// The cut by the cylinder `rho <= big` about the axis (through the pole of a horn torus):
+/// the ring at `z` lies between `big - s` and `big + s`, `s = sqrt(small^2 - z^2)`, so
+/// `pi (2 big s - s^2)` is inside: `pi (pi big small^2 - 4 small^3 / 3)`.
+fn cut_by_cylinder(big: f64, small: f64) -> Result<(), BooleanError> {
+    let t = tube(big, small);
+    let c = cylinder(
+        &at([0.0, 0.0, -3.0]),
+        mm(big),
+        mm(6.0),
+        &Document::default(),
+    )
+    .unwrap()
+    .body;
+    let inside = PI * (PI * big * small * small - 4.0 * small.powi(3) / 3.0);
+    near(
+        volume(&op(&t, &c, BooleanOp::Intersect)?),
+        inside,
+        "cylinder intersect",
+    );
+    near(
+        volume(&op(&t, &c, BooleanOp::Subtract)?),
+        whole(big, small) - inside,
+        "cylinder subtract",
+    );
+    Ok(())
+}
+
+#[test]
+fn the_ring_torus_controls() {
+    println!("ring block: {:?}", cut_by_slab(3.0, 1.0, 0.5));
+    println!("ring cylinder: {:?}", cut_by_cylinder(3.0, 1.0));
+}
+
 #[test]
 fn a_block_cuts_a_horn_torus_by_a_plane_square_to_its_axis() {
-    let t = horn();
-    near(volume(&t), whole(), "horn");
     for h in [0.5, -0.75] {
-        let b = slab(h);
-        let cut = op(&t, &b, BooleanOp::Intersect).unwrap();
-        near(volume(&cut), below(h), &format!("intersect h {h}"));
-        let rest = op(&t, &b, BooleanOp::Subtract).unwrap();
-        near(
-            volume(&rest),
-            whole() - below(h),
-            &format!("subtract h {h}"),
-        );
-        let all = op(&t, &b, BooleanOp::Union).unwrap();
-        near(
-            volume(&all),
-            volume(&b) + whole() - below(h),
-            &format!("union h {h}"),
-        );
+        println!("horn block {h}: {:?}", cut_by_slab(R, R, h));
     }
 }
 
 /// The plane through the pole: its section is the outer circle and the pole itself, a touch.
 #[test]
 fn a_block_whose_face_passes_through_the_pole() {
-    let t = horn();
-    let b = slab(0.0);
-    match op(&t, &b, BooleanOp::Intersect) {
-        Ok(cut) => near(volume(&cut), below(0.0), "intersect through the pole"),
-        Err(e) => println!("through the pole: {e:?}"),
-    }
+    println!("through the pole: {:?}", cut_by_slab(R, R, 0.0));
 }
 
 #[test]
 fn a_cylinder_about_the_axis_cuts_a_horn_torus() {
-    let t = horn();
-    let c = cylinder(&at([0.0, 0.0, -3.0]), mm(R), mm(6.0), &Document::default())
-        .unwrap()
-        .body;
-    let inside = PI * R * R * R * (PI - 4.0 / 3.0);
-    let cut = op(&t, &c, BooleanOp::Intersect).unwrap();
-    near(volume(&cut), inside, "intersect");
-    let rest = op(&t, &c, BooleanOp::Subtract).unwrap();
-    near(volume(&rest), whole() - inside, "subtract");
+    println!("horn cylinder: {:?}", cut_by_cylinder(R, R));
 }

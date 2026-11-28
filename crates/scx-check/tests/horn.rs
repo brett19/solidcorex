@@ -35,7 +35,10 @@ fn a_horn_torus_is_a_checked_solid() {
     let mut cx = Cx::new(&doc, &settings, &mut scratch, &stop, &NoTrace);
     let found = check(&body, &mut cx, Scope::Import).unwrap();
     assert_eq!(found.class, Class::Solid, "{:?}", found.list);
-    println!("findings: {:?}", found.list);
+    assert!(matches!(
+        found.list[..],
+        [scx_check::Finding::VertexNotManifold { pieces: 2, .. }]
+    ));
     for contacts in [Contacts::Refused, Contacts::Radial, Contacts::Manifold] {
         let r = contract(&body, &cx, contacts);
         println!("{contacts:?}: {:?}", r.as_ref().map(|_| ()));

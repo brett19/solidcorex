@@ -5,8 +5,8 @@
 use crate::profile::{Seg, reversed};
 
 use super::{
-    Dimension, Kind, Outcome, Part, Recipe, Refusal, Shape, Topology, Unsupported, block_at, built,
-    cells, cylinder_at, frame_at, frame_turned, recipe, sphere_at, torus_at, truth_part,
+    Dimension, Kind, Outcome, Part, Recipe, Refusal, Shape, Topology, block_at, built, cells,
+    cylinder_at, frame_at, frame_turned, recipe, sphere_at, torus_at, truth_part,
 };
 
 fn line(a: [f64; 2], b: [f64; 2]) -> Seg {
