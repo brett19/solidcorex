@@ -13,10 +13,10 @@
 //! | stage | row | until it lands |
 //! |---|---|---|
 //! | Bézier pieces, `BoxTree::pairs`, pairs dropped only by proof ([`Candidates`]) | 4 | |
-//! | loop-free pairs (normal cones, Sederberg-Meyers, the critical-point solve), boundary seeds, splitting to `Unresolved` ([`Survey`]) | 5 | where no side has an implicit form, a pair with a seed, a node or a point a loop may surround is [`SsiError::Untraced`] there |
+//! | loop-free pairs (normal cones, Sederberg-Meyers, the critical-point solve), boundary seeds, splitting to `Unresolved` ([`Survey`]) | 5 | |
 //! | the field path when a side has an implicit form; critical cells, valleys, poles | 6a, 6b | 6a landed: a touch, a tangency or a crossing inside a piece is `Unresolved` until 6b |
 //! | the march for NURBS against NURBS, [`SsiError::Stalled`] | 7 | |
-//! | one knot vector, certification per span, [`SsiError::Uncertified`] | 8 | |
+//! | one knot vector, certification per span, [`SsiError::Uncertified`] | 8 | 7 landed: a march branch is degree 1 with an estimated distance to the intersection |
 //!
 //! # The answer
 //!
@@ -43,6 +43,7 @@
 mod field;
 mod implicit;
 mod loops;
+mod march;
 mod net;
 mod patch;
 mod pieces;
@@ -69,19 +70,19 @@ use crate::error::{SingularKind, SsiError};
 /// forms answer `General` for: [`crate::intersect`] tries the closed forms first.
 ///
 /// When a side has an implicit form (an analytic kind) the field path traces the pair
-/// (row SM6a): branches of degree-1 curves, coincident pieces, or a refusal. Otherwise,
-/// until rows SM7 and SM8 land, the answer holds touches only: every pair of pieces is
-/// proved apart ([`Candidates`]) or settled by a [`Plan`] with no seed and no point a loop
-/// may surround (row SM5); anything else is a refusal.
+/// (row SM6a): branches of degree-1 curves, coincident pieces, or a refusal. Otherwise the
+/// survey's seeds and nodes (row SM5) are marched (row SM7): branches of degree-1 curves
+/// through them, the nodes their ends meet at, and the touches; a pair with no seed and no
+/// node holds touches only. The march runs in one order of the operands (by their extents,
+/// then their points), so either order gives the same bits.
 ///
 /// # Errors
 ///
-/// [`SsiError::Unresolved`], [`SsiError::Stalled`], [`SsiError::Singular`],
-/// [`SsiError::Uncertified`] or [`SsiError::Untraced`] where the method cannot finish the
-/// pair, each naming the place; [`SsiError::Budget`] when `budget` runs out;
-/// [`SsiError::Stopped`] when `stop` is set. Until row SM7 lands, a pair with a seed, a node or a
-/// point a loop may surround is `Untraced`, and a singular contact `Singular`, each at the
-/// least such point (by x, then y, then z), whatever the operands' order.
+/// [`SsiError::Unresolved`], [`SsiError::Stalled`], [`SsiError::Singular`]
+/// or [`SsiError::Uncertified`] where the method cannot finish the pair, each naming the
+/// place; [`SsiError::Budget`] when `budget` runs out; [`SsiError::Stopped`] when `stop`
+/// is set. A singular contact is `Singular` at the least such point (by x, then y, then
+/// z), whatever the operands' order.
 pub fn intersect(
     a: &Surface,
     ae: &Extent2d,
@@ -92,17 +93,34 @@ pub fn intersect(
     budget: &mut Budget,
     stop: &Stop,
 ) -> Result<Traced, SsiError> {
+    // NURBS against NURBS is marched in one order of the operands, so that either order
+    // gives the same bits; the field path is symmetric by its own choice of side.
+    let swap = field::field_side([a, b], [ae, be]).is_none() && key(b, be) < key(a, ae);
+    let [acc_a, acc_b] = acc;
+    let (a, ae, b, be, acc) = if swap {
+        (b, be, a, ae, [acc_b, acc_a])
+    } else {
+        (a, ae, b, be, acc)
+    };
     let survey = Survey::new(a, ae, b, be, acc, res, budget, stop)?;
     let found = survey.candidates();
     if let Some(t) = field::trace(found, [a, b], [ae, be], found.floor(), budget, stop)? {
         return Ok(t);
     }
+    let tol = found.tolerance();
     let mut touches = Vec::new();
-    // The refusal names the least point (x, then y, then z) of its kind, so it does not
-    // depend on the order of the operands: a singular contact before a curve to trace.
+    let mut seeds: Vec<Seed> = Vec::new();
+    let mut nodes: Vec<&Critical> = Vec::new();
+    // The refusal names the least point (x, then y, then z), so it does not depend on the
+    // order of the operands.
     let mut singular: Option<(Point3, SingularKind)> = None;
-    let mut untraced: Option<Point3> = None;
-    for plan in survey.plans(budget, stop)? {
+    let plans = survey.plans(budget, stop)?;
+    let mut add = |s: &Seed| {
+        if !seeds.iter().any(|o| o.same_as(s, tol)) {
+            seeds.push(*s);
+        }
+    };
+    for plan in &plans {
         if let Loops::Critical { points, .. } = &plan.loops {
             for c in points {
                 match c.kind {
@@ -113,28 +131,63 @@ pub fn intersect(
                     }
                     CriticalKind::Touch => touches.push(Touch {
                         point: c.point,
-                        uv: c.uv,
+                        uv: if swap { [c.uv[1], c.uv[0]] } else { c.uv },
                     }),
-                    CriticalKind::Node => least(&mut untraced, c.point),
-                    _ if c.may_surround() => least(&mut untraced, c.point),
+                    CriticalKind::Node => nodes.push(c),
                     _ => {}
                 }
+                c.ray.iter().for_each(&mut add);
             }
         }
-        for s in &plan.seeds {
-            least(&mut untraced, s.point);
-        }
+        plan.seeds.iter().for_each(&mut add);
     }
     if let Some((at, kind)) = singular {
         return Err(SsiError::Singular { at, kind });
     }
-    if let Some(at) = untraced {
-        return Err(SsiError::Untraced { at });
+    if seeds.is_empty() && nodes.is_empty() {
+        return Ok(Traced {
+            touches,
+            ..Traced::default()
+        });
     }
+    let m = march::march(
+        [a, b],
+        [ae, be],
+        &seeds,
+        &nodes,
+        tol,
+        found.floor(),
+        swap,
+        budget,
+        stop,
+    )?;
     Ok(Traced {
+        branches: m.branches,
+        nodes: m.nodes,
         touches,
-        ..Traced::default()
+        coincident: Vec::new(),
     })
+}
+
+/// The order key of an operand: its extent's bits, then its points' at a 3 x 3 grid.
+fn key(s: &Surface, e: &Extent2d) -> Vec<u64> {
+    let mut k = vec![
+        e.x_min().to_bits(),
+        e.x_max().to_bits(),
+        e.y_min().to_bits(),
+        e.y_max().to_bits(),
+    ];
+    for i in 0..3 {
+        for j in 0..3 {
+            let (fu, fv) = (f64::from(i) / 2.0, f64::from(j) / 2.0);
+            let uv = scx_num::vector2d::Point2::new(
+                e.x_min() + (e.x_max() - e.x_min()) * fu,
+                e.y_min() + (e.y_max() - e.y_min()) * fv,
+            );
+            k.extend(s.point(uv).to_array().map(f64::to_bits));
+        }
+    }
+    k
 }
 
 /// Whether `a` is before `b`, by x, then y, then z.
@@ -143,12 +196,6 @@ fn less(a: Point3, b: Point3) -> bool {
         .then(a.y.total_cmp(&b.y))
         .then(a.z.total_cmp(&b.z))
         .is_lt()
-}
-
-fn least(slot: &mut Option<Point3>, p: Point3) {
-    if slot.is_none_or(|q| less(p, q)) {
-        *slot = Some(p);
-    }
 }
 
 #[cfg(test)]

@@ -98,8 +98,8 @@ fn as_nurbs(pair: [(Surface, Extent2d); 2]) -> [(Surface, Extent2d); 2] {
     pair.map(|(s, e)| (Surface::Nurbs(Arc::new(s.to_nurbs(&e).unwrap())), e))
 }
 
-/// The pairs the general method refuses until row SM7: NURBS against NURBS.
-fn refused_pairs() -> [[(Surface, Extent2d); 2]; 2] {
+/// The pairs the general method marches (row SM7): NURBS against NURBS.
+fn marched_pairs() -> [[(Surface, Extent2d); 2]; 2] {
     [as_nurbs(tpipe()), as_nurbs(nurbs_sphere_and_plane())]
 }
 
@@ -112,12 +112,17 @@ fn run(
     intersect(a, ae, b, be, acc(), res(), budget, stop)
 }
 
-/// The point an `Untraced` refusal names.
-fn untraced(e: SsiError) -> Point3 {
-    let SsiError::Untraced { at } = e else {
-        panic!("{e:?}");
-    };
-    at
+/// Every point of the answer's branches.
+fn points(t: &Traced) -> Vec<Point3> {
+    t.branches
+        .iter()
+        .flat_map(|b| {
+            b.curve
+                .points()
+                .iter()
+                .map(|&[x, y, z]| Point3::new(x, y, z))
+        })
+        .collect()
 }
 
 /// How far `p` lies from the pair's two surfaces, by their closed forms (`tpipe` first,
@@ -136,22 +141,73 @@ fn off(which: usize, p: Point3) -> f64 {
 }
 
 #[test]
-fn a_general_pair_is_refused_by_name_where_it_lies() {
-    for (which, pair) in refused_pairs().into_iter().enumerate() {
+fn a_general_pair_is_marched_onto_its_curve() {
+    for (which, pair) in marched_pairs().into_iter().enumerate() {
         let mut budget = Budget::unlimited();
-        let e = run(&pair, &mut budget, &Stop::new()).unwrap_err();
-        assert_eq!(
-            (e.kind(), e.name()),
-            (ErrorKind::Unsupported, "ssi_untraced")
-        );
-        // A proved point of the curve (a seed), which no marcher has traced yet.
-        let named = e.at();
-        let at = untraced(e);
-        assert_eq!(named, Some(at));
-        assert!(off(which, at) <= 1e-9, "{at:?}");
-        // The pair of pieces, then each piece pair's proofs, were charged.
+        let t = run(&pair, &mut budget, &Stop::new()).unwrap();
+        // tpipe: two loops, each across the seam of both cylinders' uv; the sphere and the
+        // plane: one circle.
+        assert!(!t.branches.is_empty());
+        for p in points(&t) {
+            assert!(off(which, p) <= 1e-8, "{p:?}");
+        }
+        // The pair of pieces, each piece pair's proofs and the steps were charged.
         assert!(budget.used() > 1);
     }
+}
+
+#[test]
+fn a_march_that_meets_no_seed_at_the_rim_is_stalled_there() {
+    // Two NURBS planes crossing in the line x = 0.3, z = 0, given only the seed at its
+    // y = -1 end: the march crosses the square and reaches the rim at y = 1 with no seed
+    // there, so it has left what the survey proved.
+    let flat = |o: [f64; 3], z: [f64; 3], x: [f64; 3]| {
+        let e = Extent2d::from_bounds(-1.0, -1.0, 1.0, 1.0).unwrap();
+        let n = Plane::new(frame(o, z, x)).to_nurbs(&e).unwrap();
+        (Surface::Nurbs(Arc::new(n)), e)
+    };
+    let (a, ae) = flat([0.0; 3], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]);
+    let (b, be) = flat([0.3, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]);
+    let mut budget = Budget::unlimited();
+    let survey =
+        super::Survey::new(&a, &ae, &b, &be, acc(), res(), &mut budget, &Stop::new()).unwrap();
+    let plans = survey.plans(&mut budget, &Stop::new()).unwrap();
+    let mut seeds: Vec<super::Seed> = plans.iter().flat_map(|p| p.seeds.clone()).collect();
+    seeds.sort_by(|p, q| p.point.y.total_cmp(&q.point.y));
+    assert_eq!(seeds.len(), 2, "{plans:?}");
+    seeds.truncate(1);
+    let tol = survey.candidates().tolerance();
+    let e = super::march::march(
+        [&a, &b],
+        [&ae, &be],
+        &seeds,
+        &[],
+        tol,
+        1e-9,
+        false,
+        &mut budget,
+        &Stop::new(),
+    )
+    .err()
+    .unwrap();
+    let SsiError::Stalled { at, step } = e else {
+        panic!("{e:?}")
+    };
+    assert!((at - Point3::new(0.3, 1.0, 0.0)).length() <= 1e-9, "{at:?}");
+    assert!(step.mm() > 0.0);
+    // With both seeds, one branch from rim to rim.
+    let t = intersect(
+        &a,
+        &ae,
+        &b,
+        &be,
+        acc(),
+        res(),
+        &mut Budget::unlimited(),
+        &Stop::new(),
+    )
+    .unwrap();
+    assert_eq!(t.branches.len(), 1, "{t:?}");
 }
 
 #[test]
@@ -195,47 +251,56 @@ fn closed_forms_answer_first_and_spend_nothing() {
     let answer = crate::intersect(&sa, &se, &sb, &pe, acc(), res(), &mut none, &stop).unwrap();
     assert!(matches!(answer, Answer::Closed(_)), "{answer:?}");
     assert_eq!(none.used(), 0);
-    // A pair with no closed form goes on to the general method, which charges and refuses.
+    // A pair with no closed form goes on to the general method, which charges and marches.
     let [(a, ae), (b, be)] = as_nurbs(tpipe());
     let mut budget = Budget::unlimited();
-    let e =
-        crate::intersect(&a, &ae, &b, &be, acc(), res(), &mut budget, &Stop::new()).unwrap_err();
+    let answer = crate::intersect(&a, &ae, &b, &be, acc(), res(), &mut budget, &Stop::new());
+    let Ok(Answer::Traced(t)) = answer else {
+        panic!("{answer:?}")
+    };
     assert_eq!(
-        e,
-        run(&as_nurbs(tpipe()), &mut Budget::unlimited(), &Stop::new()).unwrap_err()
+        t,
+        run(&as_nurbs(tpipe()), &mut Budget::unlimited(), &Stop::new()).unwrap()
     );
     assert!(budget.used() > 1);
 }
 
 #[test]
 fn the_answer_is_the_same_bits_every_run_and_under_any_budget_that_suffices() {
-    for pair in refused_pairs() {
+    for pair in marched_pairs() {
         let bits = |budget: &mut Budget| {
-            let at = untraced(run(&pair, budget, &Stop::new()).unwrap_err());
-            [at.x.to_bits(), at.y.to_bits(), at.z.to_bits()]
+            let t = run(&pair, budget, &Stop::new()).unwrap();
+            points(&t)
+                .iter()
+                .flat_map(|p| [p.x.to_bits(), p.y.to_bits(), p.z.to_bits()])
+                .collect::<Vec<_>>()
         };
-        let first = bits(&mut Budget::unlimited());
+        let mut used = Budget::unlimited();
+        let first = bits(&mut used);
         assert_eq!(bits(&mut Budget::unlimited()), first);
-        assert_eq!(bits(&mut Budget::new(1_000_000)), first);
+        assert_eq!(bits(&mut Budget::new(used.used())), first);
     }
 }
 
 #[test]
-fn swapping_the_operands_names_the_same_place() {
-    // The least seed either way: the same root, solved with the unknowns in the other order,
-    // so the same point to its enclosure's width.
-    for pair in refused_pairs() {
+fn swapping_the_operands_gives_the_same_points() {
+    // NURBS against NURBS is marched in one order of the operands: the same points either
+    // way, each branch reversed.
+    for pair in marched_pairs() {
         let [p, q] = pair;
-        let fwd = untraced(
-            run(
-                &[p.clone(), q.clone()],
-                &mut Budget::unlimited(),
-                &Stop::new(),
-            )
-            .unwrap_err(),
-        );
-        let rev = untraced(run(&[q, p], &mut Budget::unlimited(), &Stop::new()).unwrap_err());
-        assert!((fwd - rev).length() <= 1e-12, "{fwd:?} {rev:?}");
+        let fwd = run(
+            &[p.clone(), q.clone()],
+            &mut Budget::unlimited(),
+            &Stop::new(),
+        )
+        .unwrap();
+        let rev = run(&[q, p], &mut Budget::unlimited(), &Stop::new()).unwrap();
+        assert_eq!(fwd.branches.len(), rev.branches.len());
+        for (x, y) in fwd.branches.iter().zip(&rev.branches) {
+            let mut back = y.curve.points().to_vec();
+            back.reverse();
+            assert_eq!(x.curve.points(), &back[..]);
+        }
     }
 }
 
@@ -278,12 +343,6 @@ fn every_cause_has_a_kind_a_name_and_a_line() {
             ErrorKind::Unsupported,
             "ssi_uncertified",
             "a span through (1, 2, 3) could not be certified",
-        ),
-        (
-            SsiError::Untraced { at },
-            ErrorKind::Unsupported,
-            "ssi_untraced",
-            "a curve through (1, 2, 3) needs the marcher, not built",
         ),
         (
             SsiError::Budget(Exhausted { limit: 7 }),

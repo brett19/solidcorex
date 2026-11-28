@@ -278,7 +278,7 @@ fn the_budget_and_the_stop_end_the_survey() {
 }
 
 #[test]
-fn contacts_are_classified_and_refused_or_answered_by_kind() {
+fn contacts_are_classified_and_answered_by_kind() {
     // External spheres touching at one point: a touch, answered.
     let (c1, c2) = ([0.0; 3], [1.8, 2.4, 0.0]);
     let c = Case {
@@ -314,7 +314,7 @@ fn contacts_are_classified_and_refused_or_answered_by_kind() {
     let at = arr(traced.touches[0].point);
     let d = truth::dist(at, c.truth.touches[0]);
     assert!(d <= 1e-6, "{d}");
-    // The Steinmetz pair crosses at two nodes: refused where the marcher is needed.
+    // The Steinmetz pair crosses at two nodes.
     let c = cylinders(1.5, 1.5, 0.0);
     let plans = plans_of(&c, &mut Budget::unlimited(), &Stop::new()).unwrap();
     let nodes: Vec<Point3> = plans
@@ -338,8 +338,9 @@ fn contacts_are_classified_and_refused_or_answered_by_kind() {
             .fold(f64::MAX, f64::min);
         assert!(d <= 1e-6, "{n:?} {t:?}");
     }
+    // Marched (row SM7): the arcs meet at the two nodes.
     let [(a, ae), (b, be)] = &as_nurbs(&c);
-    let e = intersect(
+    let traced = intersect(
         a,
         ae,
         b,
@@ -349,6 +350,11 @@ fn contacts_are_classified_and_refused_or_answered_by_kind() {
         &mut Budget::unlimited(),
         &Stop::new(),
     )
-    .unwrap_err();
-    assert_eq!(e.name(), "ssi_untraced");
+    .unwrap();
+    let crossings = traced
+        .nodes
+        .iter()
+        .filter(|n| n.kind == scx_ssi::general::NodeKind::Crossing)
+        .count();
+    assert_eq!(crossings, 2, "{traced:?}");
 }
