@@ -596,7 +596,7 @@ fn a_cone_with_both_radii_zero_is_refused() {
 }
 
 /// `a_torus_whose_tube_crosses_its_axis_is_refused_naming_the_radii`: a spindle torus is
-/// refused; a tube within the resolution of the axis is a horn torus and is built (MK4b).
+/// refused; a tube within the resolution of the axis is a horn torus and is built (`MK4b`).
 #[test]
 fn spindle_tori_are_refused_and_horn_tori_built() {
     let f = at([0.0; 3]);

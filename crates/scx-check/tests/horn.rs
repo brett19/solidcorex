@@ -1,5 +1,5 @@
 // Written for solidcorex. Apache-2.0.
-//! A horn torus (MK4b) against the contract: its tube meets the axis at a pole, a vertex
+//! A horn torus (`MK4b`) against the contract: its tube meets the axis at a pole, a vertex
 //! whose collapsed edge is the inner equator. The body is a closed outward solid; the pole
 //! is a pinch of the surface (two lobes meet there) that the structure pass names or not
 //! as the contract's `Contacts` allow.
