@@ -1492,3 +1492,116 @@ Truths (`tests/radial.rs`, 5 tests): the pin's `radial_sweeps_close_at_the_hinge
 - Case-granular known list with one ignored test per cause, against one `#[ignore]` per law: a whole-law ignore hides the cases that pass, and one per case is 135 tests. Cost: the table is data that BO10b must delete as it fixes.
 - Judging each result against its own oracle as well as against its twin: a law could hold between two equally wrong results (both Booleans missing the same region); the oracle catches that.
 - Sphere centre: the first pool put the sphere's centre on A's x = 10 plane, which fails with `Seeds` in every combination with a box. A sphere off every plane passes those, so the pool holds both: the general one for the laws, `sphereOnFace` as a real contact case.
+
+### 13.7 MK9 as built (11-28)
+
+`scx_make::loft::{align, align_banded, pair}`. `align(first, second, &mut Budget, &Stop) ->
+Result<Alignment, PairError>` pairs two closed loops of `scx_planar::Segment` (lines, arcs, whole
+circles) given in one plane's coordinates. `Alignment { start, events: Vec<Event>, cost,
+optimality }`. Its events run round both loops in order, from vertex 0 of the first and vertex
+`start` of the second: `Pair { first, second }`, `FirstAlone { vertex, on }` or
+`SecondAlone { vertex, on }`, where `on` is the other loop's segment the lone vertex lands on.
+`pair(&[&[Segment]], ..) -> Pairing { alignments }` pairs each section with the next. It checks
+every section before pairing any, and refuses a section wound the other way from the one before
+it. `align_banded(first, second, cells, ..)` always runs the band. It is public so that the band
+can be measured against the exact search. `MAX_CELLS = 4_000_000`. The cost, the
+divide-and-conquer search over starts and the band are the pin's (`loft_sections.rs`). The area
+and centroid are in closed form for arcs.
+
+Decisions, with cases for and against:
+
+- **The banded answer is always `Unproven`, against Q5 and the 04 row's "`Proven` if its walk
+  avoids the band's edge".** That rule proves nothing. The band has one start, so a walk that
+  keeps off the band's edge is least only among walks inside the band from that start. A cheaper
+  walk can start elsewhere or run wholly outside the band.
+  - The pin's own case shows this (in-module test
+    `a_banded_walk_off_its_edge_is_not_the_optimum`). It pairs a 10 x 1 rectangle in 498
+    segments with a 1.5 x 1 rectangle in 500, through a band of 40,000 cells. The band's walk
+    keeps off its edge and matches the whole grid's walk from the same start, yet the search
+    over every start finds a walk more than 1% cheaper.
+  - On random star polygons (`the_band_is_an_upper_bound_on_the_exact_search`: 200 pairs of 20
+    to 120 vertices, half-width n/10), the band finds the optimum in 97 of 200. It is up to
+    108% above it in the worst case.
+  - For: the status is never false, and the type already carries both values.
+  - Against: every loft past the limit is `Unproven`, even when the band happens to be optimal
+    (on regular shapes it is: `on_regular_shapes_the_band_finds_the_optimum`).
+  - Considered and not built:
+    - A cheap lower bound, `Σ_i` (the least cost of a step into row `i`): O(mn) time and linear
+      memory. It would turn some `Unproven` answers into `Optimal` when bound and cost meet, but
+      on these shapes it is far from tight.
+    - An exact search confined to a band by a proof of the band's width (Ukkonen-style
+      cut-offs). Its bound needs a least step cost, and UNPAIRED alone (0.1) gives a width near
+      the whole grid.
+  - Either can come later without changing the API. The 04 row should drop "`Proven` if ...".
+- **A moved band is pinned to the walk's ends (truth over pin).** The pin re-centres the band on
+  the middle of each row's run of the walk. When the walk runs along the last row for more than
+  the band's width, the last row's centre falls short of the end. The end then lies outside the
+  band, and the pin's walk fails with "unpaired".
+  - Seen here on a random 27 x 102 pair with half-width 1, now in
+    `the_band_is_an_upper_bound_on_the_exact_search`.
+  - `settle` makes the centres run from the start on row 0 to the end on the last row, never
+    back.
+  - With that, each row's band meets the next and the end is inside. The band's walk is always
+    found when h >= 1.
+- **Exact means exact.** `the_exact_search_is_the_brute_force_optimum` (integration test, 600
+  random star polygons of 3 to 7 vertices) checks against code that shares nothing with the
+  search. That code recomputes each step's cost from the polygon's vertices (shoelace centroid,
+  unit area) and enumerates every monotone walk from every start.
+  - The search's cost equals the brute-force least to 1e-12 relative.
+  - Its events form a walk round both loops, and their recomputed cost is the reported one.
+  - The in-module `the_search_finds_the_brute_force_optimum` does the same over the module's own
+    step costs for 1 to 6 vertices, with arcs and whole circles among them.
+  - Turning either loop's numbering round leaves the cost unchanged to 1e-9.
+- **Its own error type, `PairError`, not `MakeError`.**
+  - Variants:
+    - `Refused(PairRefusal)`: `Empty`, `NotFinite`, `Degenerate`, `NoArea` or `Winding`.
+    - `UnsupportedSegment`.
+    - `TooLarge`: even a band one column wide does not fit.
+    - `Exhausted` and `Stopped`.
+    - `Unreached` (`Defect`).
+  - For: MK4, MK13 and MK14 edit `error.rs` at the same time, and the pairing has no solid to
+    refuse. MK10 maps it into `MakeError` with the section index kept.
+  - Against: one more error type for a caller of `pair` alone.
+- **Work.** Each cell visited charges one unit to the caller's `Budget`, and the `Stop` flag is
+  polled once per grid row. Which search runs depends on the fixed `MAX_CELLS`, not on the
+  remaining budget, so the answer is a function of the input (R6).
+- **Scope left to MK10:**
+  - winding the sections alike;
+  - carrying a shared frame from plane to plane (the caller gives every section in one plane's
+    coordinates);
+  - cutting segments where lone vertices land (the pin's placement by share of length);
+  - splitting whole circles at the neighbouring section's directions;
+  - merging runs of one curve.
+- **75 §8.2's `fork_ea59e9c_section_orders` is a blend cross-section test, not loft pairing.**
+  In its place are the pin's loft-pairing outcomes, as tests on the alignment:
+  - square to diamond;
+  - 5000-gons and a 3000-gon with a 5000-gon, in the band;
+  - split 5000-segment rectangles pairing all four corners;
+  - both comb cases of 1100 teeth, past the limit even for their corner polygons.
+
+Measured (release on a 24-core build machine, throwaway timer; random star polygons):
+
+| m x n | search | cells charged | ms |
+|---|---|---|---|
+| 10 x 10 | exact | 558 | 0.02 |
+| 100 x 100 | exact | 76,835 | 2.0 |
+| 500 x 500 | exact | 2.59 M | 67 |
+| 1000 x 1000 | exact | 11.5 M | 306 |
+| 1999 x 1999 | exact | 49.7 M | 1,476 |
+| 2000 x 3000 | band, 8 passes | 41.6 M | 1,051 |
+| 3000 x 3000 | band | 6.65 M | 161 |
+| 5000 x 5000 | band | 7.49 M | 180 |
+| 10000 x 10000 | band | 7.86 M | 198 |
+
+- The exact search charges about 11 to 12 times the grid at 1000 to 2000 vertices (`m·n·log2 n`
+  / 2 plus overlaps), at about 30 ns a cell.
+- A band charges at most `BAND_PASSES` times `MAX_CELLS` plus the corner polygons' search, so
+  about 1 s at worst.
+- A band of a tenth of the grid on the same random shapes is 1% to 5% above the optimum.
+
+Tests:
+
+- `crates/scx-make/tests/pair.rs`: 14 tests.
+- In-module: 3 tests (brute force over the module's costs, the half disc's closed-form area and
+  centroid, and the band counterexample).
+- None removed.
