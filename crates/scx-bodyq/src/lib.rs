@@ -49,6 +49,11 @@
 //! face's normal field along the edge curve with Taylor models, splitting the curve as the
 //! proof needs under one budget.
 //!
+//! **Combs, curvature, seams and chains** (research 74 §52). [`edge_comb`] and [`iso_comb`] give
+//! the curvature vectors a comb is drawn from, [`principal_curvatures`] a face's at a point,
+//! [`sheet_seams`] where separate sheets meet and the order of contact proved along each seam,
+//! and [`tangent_face_chain_ordered`] the faces joined across smooth edges.
+//!
 //! **Picking and stored references** (research 74 §44). [`pick_at`] returns every face, edge
 //! or vertex within an aperture of each point, sorted by (distance, id); [`still_names`] says
 //! which entities of a body descend, by the edits' [`Changes`](scx_brep::Changes), from stored
@@ -76,9 +81,12 @@ mod along;
 mod betti;
 mod cap;
 mod classify;
+mod comb;
 mod continuity;
+mod curvature;
 mod cylinder_wall;
 mod error;
+mod face_chain;
 mod face_pair;
 mod face_surface;
 mod geom;
@@ -95,6 +103,7 @@ mod reach;
 mod reads;
 mod recognize;
 mod round_face;
+mod sheet_seam;
 mod side;
 mod still;
 mod tangent;
@@ -106,9 +115,12 @@ pub use cap::{
     is_point_on_plane, is_square_plane_at_height, prism_part,
 };
 pub use classify::{PointClass, classify_point};
+pub use comb::{Running, Tooth, edge_comb, iso_comb};
 pub use continuity::{Continuity, ContinuityTolerances, Limit, Measured, Order, continuity};
+pub use curvature::{Principal, principal_curvatures};
 pub use cylinder_wall::{WallFrame, Wrap, wall_frame};
 pub use error::{BodyqDefect, BodyqError, BodyqRefusal, BodyqUnsupported};
+pub use face_chain::{Doubt, FaceChain, Undecided, tangent_face_chain_ordered};
 pub use face_pair::{
     Apart, CylinderFace, Directions, Facing, FacingCylinders, FacingPlanes, OutwardPlane,
     axial_range_in, cylinder_face, facing_cylinders, facing_planes, material_toward_axis,
@@ -138,6 +150,7 @@ pub use round_face::{
     SeatFrame, beside_clear, extent, extent_in, far_end, grow_block, into_seat, past_end,
     stands_over, whole_band,
 };
+pub use sheet_seam::{SheetMeet, SheetSeam, SheetSeams, sheet_seams};
 pub use side::{Along, Sides, side_at_touch, sides_along};
 pub use still::{Standing, Step, Stored, still_names};
 pub use tangent::{Tangency, tangent_all_along};

@@ -410,7 +410,45 @@ pub(crate) struct Edge<'a> {
     pub(crate) faces: Faces,
 }
 
+impl Faces {
+    /// The faces on surfaces `a` and `b`, face b's natural normal turned where `turn` is
+    /// `-1` (its use runs the same way along the edge as face a's).
+    ///
+    /// One analytic surface oriented alike on both sides is [`Faces::Same`]: its normal is
+    /// a function of the point, so the two sides agree to every order. A NURBS surface's two
+    /// sides of a seam are at different parameters, where its normals need not agree (the
+    /// seam angle, SU6b): that waits with every NURBS face.
+    pub(crate) fn between(
+        [(sa, fa), (sb, fb)]: [(&Surface, FaceId); 2],
+        turn: f64,
+    ) -> Result<Self, BodyqError> {
+        if sa == sb && turn > 0.0 && Field::of(sa).is_some() {
+            return Ok(Self::Same);
+        }
+        let field = |s: &Surface, f: FaceId| {
+            Field::of(s).ok_or(BodyqError::Unsupported(BodyqUnsupported::Nurbs {
+                at: Entity::Face(f),
+            }))
+        };
+        let (mut a, ka) = field(sa, fa)?;
+        let (mut b, kb) = field(sb, fb)?;
+        a.sign = ka;
+        b.sign = kb * turn;
+        Ok(Self::Two(Box::new([a, b])))
+    }
+}
+
 impl<'a> Edge<'a> {
+    /// The part `[lo, hi]` of `curve`, with `faces` across it.
+    pub(crate) const fn across(curve: &'a Curve, lo: f64, hi: f64, faces: Faces) -> Self {
+        Self {
+            curve,
+            lo,
+            hi,
+            faces,
+        }
+    }
+
     /// `edge` of `body`.
     ///
     /// The faces' normals are oriented coherently across the edge: face a's natural normal
@@ -443,24 +481,7 @@ impl<'a> Edge<'a> {
         };
         let (sa, sb) = (surface(fa.face)?, surface(fb.face)?);
         let turn = if fa.sense == fb.sense { -1.0 } else { 1.0 };
-        // One analytic surface oriented alike on both sides: its normal is a function of the
-        // point, so the two sides agree to every order. A NURBS surface's two sides of a seam
-        // are at different parameters, where its normals need not agree (the seam angle,
-        // SU6b): that waits with every NURBS face.
-        let faces = if sa == sb && turn > 0.0 && Field::of(sa).is_some() {
-            Faces::Same
-        } else {
-            let field = |s: &Surface, f: FaceId| {
-                Field::of(s).ok_or(BodyqError::Unsupported(BodyqUnsupported::Nurbs {
-                    at: Entity::Face(f),
-                }))
-            };
-            let (mut a, ka) = field(sa, fa.face)?;
-            let (mut b, kb) = field(sb, fb.face)?;
-            a.sign = ka;
-            b.sign = kb * turn;
-            Faces::Two(Box::new([a, b]))
-        };
+        let faces = Faces::between([(sa, fa.face), (sb, fb.face)], turn)?;
         Ok(Self {
             curve,
             lo: interval.min(),
