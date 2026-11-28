@@ -4800,7 +4800,6 @@ once), so a part far from the origin draws as at the origin.
 | `max_rays` budget; `Budget("ray")` refuses the whole call | `Budget` shared; partial `Drawing` with `exhausted` | here (R6) |
 | `cover`: coincident pieces drawn once | not ported | open (37.7) |
 | `scene_centre` shift | `Lens` centred frame | same intent |
-| threads through `Workers` | serial | later task |
 
 ### 37.5 Tests (`crates/scx-hlr/tests/visibility.rs`, 16; `visibility.rs` unit, 2)
 
@@ -4854,7 +4853,6 @@ pair of non-collinear lines that share an exact end.
 - NURBS faces and edges, torus contours, parabolas, hyperbolas and splines are typed `Pending` until
   step 5.
 - Straight-edge scenes are slower than the pin (37.6); the PL6 line fast path is the first follow-up.
-- Serial only; the pin's `Workers` threading is not ported here.
 
 ### 37.8 Proposed 04 row
 
