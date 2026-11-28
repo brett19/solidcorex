@@ -180,6 +180,18 @@ impl Trig for Jet2 {
     fn sqrt(self) -> Self {
         Self::sqrt(self)
     }
+
+    /// `theta' = (x y' - y x') / (x^2 + y^2)` and its derivative; whole where the box may
+    /// hold the origin, and the value `[-pi, pi]` where it may meet the cut.
+    fn atan2(y: Self, x: Self) -> Self {
+        let f = <Ivl as Trig>::atan2(y.f, x.f);
+        let r2 = x.f.sqr() + y.f.sqr();
+        let cross = x.f * y.d1 - y.f * x.d1;
+        let d1 = cross / r2;
+        let cross1 = x.f * y.d2 - y.f * x.d2;
+        let d2 = (cross1 - d1 * Ivl::from(2.0) * (x.f * x.d1 + y.f * y.d1)) / r2;
+        Self::new(f, d1, d2)
+    }
 }
 
 /// `[x^2]`, not below zero.

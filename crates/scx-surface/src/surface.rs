@@ -290,7 +290,7 @@ impl Surface {
             self,
             k => Ok(k.invert(p, domain)),
             n => nurbs_invert::invert(n, p, near, domain, budget, stop),
-            q => nurbs_invert::invert(q.net(), p, near, domain, budget, stop)
+            q => q.invert(p, near, domain, budget, stop)
         )
     }
 }

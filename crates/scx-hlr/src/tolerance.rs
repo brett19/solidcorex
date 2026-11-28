@@ -52,6 +52,12 @@ impl Tolerances {
         Self { deviation, ..self }
     }
 
+    /// The face's size: the largest coordinate of its box, in mm.
+    #[must_use]
+    pub(crate) const fn size(&self) -> f64 {
+        self.size
+    }
+
     /// The accuracy a NURBS face is recognised as an analytic surface within.
     #[must_use]
     pub(crate) const fn recognition(&self) -> Accuracy {

@@ -16,8 +16,8 @@ mod along_common;
 
 use along_common::{between, doc};
 use scx_bodyq::{
-    BodyqError, BodyqRefusal, BodyqUnsupported, Lies, Near, PlaneAt, PrismCut, PrismPart, Reach,
-    curve_lies_on_face, prism_part,
+    BodyqError, BodyqRefusal, Lies, Near, PlaneAt, PrismCut, PrismPart, Reach, curve_lies_on_face,
+    prism_part,
 };
 use scx_brep::{Brep, EdgeId, EdgeShape, Entity, FaceId};
 use scx_curve::{Curve, Line};
@@ -223,21 +223,31 @@ fn refusals_and_a_nurbs_target_face() {
             entity: Entity::Face(nothing)
         }))
     );
+    // A NURBS target face (77 FT4): the gap is certified as on any face. The segment's far
+    // end (8, 5, 4) is sqrt(57) from the patch (4 along x past its edge, sqrt(41) from its
+    // corner line across), the largest distance of a point of it, as distance to a convex
+    // patch is convex.
     let (sheet, _, patch) = along_common::nurbs_meets_plane();
-    assert_eq!(
+    let on_patch = |c: &Curve, i: Extent1d| {
         curve_lies_on_face(
             &sheet,
             patch,
-            &c,
+            c,
             i,
             mm(1e-6),
             &mut Budget::unlimited(),
-            &Stop::new()
-        ),
-        Err(BodyqError::Unsupported(BodyqUnsupported::Nurbs {
-            at: Entity::Face(patch)
-        }))
+            &Stop::new(),
+        )
+    };
+    let off = on_patch(&c, i);
+    assert!(
+        matches!(off, Ok(Lies::OffSurface { by }) if by.mm() > 1e-6 && by.mm() <= 57.0_f64.sqrt() * (1.0 + 1e-12)),
+        "{off:?}"
     );
+    // A segment in the patch: on its surface, never refuted; inside the trim is undecided
+    // until a NURBS surface has pcurves.
+    let (inside, j) = segment([1.0, -0.5, 0.5], [3.0, -1.5, 1.5]);
+    assert_eq!(on_patch(&inside, j), Ok(Lies::Undecided));
 }
 
 #[test]

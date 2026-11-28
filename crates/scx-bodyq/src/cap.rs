@@ -10,7 +10,8 @@
 //! | the same way "dot above `1 - 1e-9`" | one line over the reach, and the dot positive |
 //! | `edges_lie_on_face`: the surface at sampled points, the trim by classifying each part | [`curve_lies_on_face`]: the surface by the certified gap (`curve_surface_gap`), the trim by the face's own boundary test over enclosing cells of the curve's uv image, or by lying within the tolerance of one of the face's own edges. A curve neither proved on nor off is [`Lies::Undecided`], never taken as on |
 //! | `section_tolerance`, `cap_tolerance` per call, "never over a quarter of the distance" | the [`Near`]'s coincidence |
-//! | a NURBS target face | [`Unsupported`](BodyqUnsupported::Nurbs) (the gap over a NURBS surface is pending in `scx-surface`) |
+//! | a NURBS target face | the same certified gap (77 FT4); the trim by the face's own edges, else [`Lies::Undecided`] until a NURBS surface has pcurves |
+//! | a procedural target face | [`Unsupported`](BodyqUnsupported::Nurbs), as on main before (its gap is not built) |
 
 use scx_brep::{Brep, EdgeId, EdgeShape, Entity, FaceId, UvSide};
 use scx_curve::Curve;
@@ -20,10 +21,10 @@ use scx_num::extent2d::Extent2d;
 use scx_num::interval::Ivl;
 use scx_num::units::Length;
 use scx_num::vector3d::{Point3, Vec3};
+use scx_surface::pcurve_of;
 use scx_surface::{Aim, Bracket, GapError, Short, curve_curve_gap, curve_surface_gap};
-use scx_surface::{Surface, pcurve_of};
 
-use crate::error::{BodyqError, BodyqRefusal, BodyqUnsupported};
+use crate::error::{BodyqDefect, BodyqError, BodyqRefusal, BodyqUnsupported};
 use crate::reach::{Near, finite, finite_point, unit3};
 
 /// A plane: a point on it and its normal (any nonzero length).
@@ -126,12 +127,15 @@ fn of_gap(r: Result<Bracket, GapError>, face: FaceId) -> Result<Option<Bracket>,
         Err(GapError::Undecided { why, .. }) => match why {
             Short::Exhausted(x) => Err(BodyqError::of_budget(x)),
             Short::Stopped => Err(BodyqError::Cancelled),
+            // The nearest point search inside a NURBS surface's gap failed.
+            Short::Defect(_) => Err(BodyqError::Defect(BodyqDefect::Surface { face })),
             _ => Ok(None),
         },
-        Err(GapError::Pending(_)) => Err(BodyqError::Unsupported(BodyqUnsupported::Nurbs {
+        Err(GapError::NotFinite) => Err(BodyqError::Refused(BodyqRefusal::NotFinite)),
+        // A procedural face is refused by name until its gap (its net's, widened) is built.
+        Err(GapError::Procedural) => Err(BodyqError::Unsupported(BodyqUnsupported::Nurbs {
             at: Entity::Face(face),
         })),
-        Err(GapError::NotFinite) => Err(BodyqError::Refused(BodyqRefusal::NotFinite)),
         Err(_) => Err(BodyqError::Refused(BodyqRefusal::Tolerance)),
     }
 }
@@ -149,7 +153,7 @@ fn of_gap(r: Result<Bracket, GapError>, face: FaceId) -> Result<Option<Bracket>,
 /// # Errors
 ///
 /// Refused for a face the target does not have or a `tol` that is negative or not finite.
-/// Unsupported for a NURBS target face. Exhausted or cancelled by `budget` and `stop`.
+/// Exhausted or cancelled by `budget` and `stop`.
 pub fn curve_lies_on_face(
     target: &Brep,
     face: FaceId,
@@ -169,12 +173,6 @@ pub fn curve_lies_on_face(
             entity: Entity::Face(face),
         }))?;
     let surface = f.surface();
-    // A procedural face is refused with the NURBS ones (its gap would be its net's).
-    if matches!(surface, Surface::Nurbs(_) | Surface::Procedural(_)) {
-        return Err(BodyqError::Unsupported(BodyqUnsupported::Nurbs {
-            at: Entity::Face(face),
-        }));
-    }
     let Some(gap) = of_gap(
         curve_surface_gap(curve, &over, surface, Aim::Against(tol), budget, stop),
         face,
