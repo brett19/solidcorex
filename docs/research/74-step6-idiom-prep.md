@@ -5625,3 +5625,165 @@ whose foot is outside it); that is the cost of the answer asked for (8,440 hits 
 ### 44.7 Proposed 04 row
 
 | 11-28 | (For the owner's review) BW8: `pick_at` returns every face, edge or vertex within an aperture of each point sorted by (distance, id), one answer per point (the pin's nearest-or-`Ambiguous` and first-miss stop dropped), the distance to the entity as trimmed, candidates from one box-tree window per point (about 1 of 600 faces read at a point on a face); `still_names` finds the descendants of a stored reference by `carry` over the edits' `Changes` and `IdMap`s (no parallel scheme, the caller gives the steps) and checks the point lies on each within the entity's coincidence: `Names`, `Moved` or `Gone`; the pin's allowance of a thousandth of the body diagonal is not ported; `faces_on_one_surface` is left open (BW8b) | bodyq (none new) | 74 §44 |
+
+## 46. BW8b as built (11-28)
+
+`scx_bodyq::faces_on_one_surface`, the one entry of the 74 §1.3 ledger that §44 left open, in
+`crates/scx-bodyq/src/one_surface.rs`. ST5's one-plane proof (§42.5) moves down to
+`scx_surface::plane_bound` (`crates/scx-surface/src/one_plane.rs`) and both crates call it. 9
+tests in `crates/scx-bodyq/tests/one_surface.rs`, 5 unit tests moved with the proof; nothing
+removed.
+
+```rust
+pub fn faces_on_one_surface(body: &Brep, seeds: &[FaceId], keep: &[EdgeId],
+                            budget: &mut Budget, stop: &Stop) -> Result<OneSurface, BodyqError>;
+#[non_exhaustive] pub struct OneSurface { pub faces: Vec<FaceId>, pub stopped: Vec<Stopped> }
+#[non_exhaustive] pub struct Stopped { pub edge: EdgeId, pub from: FaceId,
+                                       pub to: Option<FaceId>, pub why: NotCrossed }
+#[non_exhaustive] pub enum NotCrossed { Fins(usize), Shells, Sense, Surface(NotOneSurface) }
+#[non_exhaustive] pub enum NotOneSurface { Kind, Crease, Opposite, Apart(Length), NoBox }
+
+// scx-surface
+pub const CREASE: f64 = 1.0e-3;
+pub fn plane_bound(a: &Plane, b: &Plane, bx: &Extent3d) -> Result<f64, NotNear>;
+#[non_exhaustive] pub enum NotNear { Crease, Opposite }
+```
+
+### 46.1 The layer question
+
+`scx-stitch` depends on `scx-bodyq` (ST3), so `scx-bodyq` cannot call `merge.rs`. The proof is a
+function of two `Plane`s and a box, so it moves to `scx-surface`, the lowest crate both reach
+(`Plane` and `Extent3d` are already there; `scx-brep` is not needed, the face's box is the
+caller's). No new Cargo edge anywhere. In `merge.rs` `plane_deviation`, `CREASE` and the unit
+tests are gone; `plane_against` calls `plane_bound` and maps `NotNear::Crease` to
+`NotOneSurface::Kind` (a crease is still not reported by `merge_faces`) and `Opposite` to
+`Opposite`, so ST5's answers and bits are unchanged: its 15 `sew` tests and the unit tests pass,
+the four moved unit tests (same plane on another frame 0, offset, tilt, opposite) and one new
+one (a right angle is a `Crease`) now sit with the function. The order is as ST5's: crease
+first (sine above 1e-3, whichever way the normals point), then opposite.
+
+### 46.2 Decided: the API
+
+"One surface" is ST5's, as the coordinator ruled (04, BW8): surfaces `==` are one surface (a
+cylinder split into faces); two planes are one when each face's box is within
+`Resolution::approx` of the other's plane (`plane_bound` both ways, the larger reported);
+anything else is `Kind`. The shape of the answer was the choice.
+
+| Choice | For | Against |
+|---|---|---|
+| **Grow from seeds across edges** (taken; the pin's `faces_on_one_surface(order, faces, keep_edges)`) | The pin's own use: a click names a face, the application wants the face it belongs to; faces on one surface that do not touch are two places, not one; reads only edges, never a pair of faces that share none (2 pairs a face, as ST5); `keep` is the pin's split line to leave alone; the stopping edges are free to report | A caller who wants every group calls once per unassigned face (each call re-proves its own wall; total work stays 4 units a face) |
+| Group all faces (`-> Vec<Vec<FaceId>>`) | One call for a whole body | Answers a question nobody has asked yet; no `keep`; a caller wanting one face's wall pays for all; the same work as growing from every face with the cache shared, so it can be added over this function later with no change to it |
+| Face against face (`one_surface(a, b) -> Result<(), NotOneSurface>`) | Smallest | Does not say that the faces touch or that the outward side continues; the caller rebuilds the growth |
+| Same surface anywhere in the body (all faces with `==` or near surface) | Finds a hole's wall across a gap | Not what the pin did; two distinct pockets on one plane are two surfaces to a user |
+
+An edge leads from a face to the one across it only if every one of these holds, each a typed
+reason when it does not (`Stopped`, once per edge, the first reached face named):
+
+- a curve edge of exactly **two fins** on two different faces (`Fins(n)` for one fin, a wire
+  edge, or three or more: a partition between solids is not crossed). A seam (one face twice) and
+  a collapsed pole edge are not edges between faces and are not listed;
+- the two faces bound the **same shells** (`Shells`: the record's `sides`, as ST5);
+- the fins run **opposite senses**, so the outward side continues (`Sense`);
+- the faces are **on one surface** (`Surface(why)`).
+
+This is the pin's rule (an edge of the face, the face across, `Continues::Proved`) with ST5's
+proof in place of the pin's G-continuity test: a rounded block's tangent faces are not one
+surface and are not grown here; the caller who wants a smooth face chain uses
+`tangent_all_along`/`continuity` (BW4) over the same edges.
+
+Adversarial pass on the result:
+
+- *Order.* Seeds first, deduplicated, in the order given; then faces as reached (breadth first,
+  each face's edges in its use order). Deterministic, and the pin's order. A caller who wants id
+  order sorts. A test checks the same call gives the same answer and work.
+- *A face reached across one edge and refused across another.* Fine: each edge is decided once
+  and the proof is symmetric (both directions), so whichever face reaches it first gives the
+  answer. The face is in if any path of proved edges leads to it.
+- *Chains.* A row of planes each within `approx` of the next but drifting would add up if the
+  proof were pair against pair. It is: growth follows edges, each proved against the neighbour
+  only. ST5 avoids this by proving every member against the group's one plane. Here no plane is
+  made, so the risk is real, and the cost of fixing it is a second pass (prove each face
+  against the seed's surface). Left as the pin has it and listed as an open question (46.5.1);
+  the walls of a body that came from a real part are `==` or exact.
+- *Crossing at a crease with no reported reason.* `merge_faces` hides creases (it reports
+  near misses); here every edge that stops the growth is listed, a crease as `Crease`, so a
+  block wall lists its `4n` rim edges. They cost one proof each.
+  A caller filters on `why`.
+- *Planes facing each other.* `Opposite` is reachable only where `Sense` already passed: two
+  planes of opposite normals whose fins run opposite senses are a face whose surface was turned
+  over without turning its loops, which `check` reports as a body fault. Not built as a body
+  test (no valid body has it); the function is tested on the planes (`opposite_normals_are_opposite`).
+- *Non-plane kinds.* A quadric on another frame is `Kind`, as ST5 says (46.5.2). `==` is the
+  only proof for them. Procedural and NURBS surfaces are `==` or `Kind`: no `Unsupported`, as
+  nothing is read from them.
+- *A face with no box* (`NoBox`): a face reaching infinity cannot be boxed; typed.
+
+### 46.3 Tests (closed forms; no pin output)
+
+1. `a_subdivided_block_grows_to_its_six_walls`: blocks of 2, 3, 5 steps (seeds 0 to 3, each face
+   on its own frame, 24 to 150 faces), growing from every unassigned face gives six walls of
+   `n^2` faces, every member on one plane (normals and offsets to 1e-9), no face twice, the `4n`
+   rim edges each `Surface(Crease)`, and the work exactly `4 n (n + 1)` units a wall.
+2. `a_cylinder_split_into_faces_grows_to_its_wall`: cylinders of 2, 3 and 7 wall faces grow from
+   one to all `n`, and the `2n` cap arcs stop it as `Surface(Kind)` (a cylinder is not a plane).
+3. `a_cylinder_on_another_frame_is_not_proved`: the wall moved 0.25 along its axis is the same
+   surface in space and not `==`: typed `Kind` (the two edges into it, and the cap arcs), and
+   its neighbours, which are `==`, still join.
+4. `near_misses_are_measured_against_the_resolution`: a face moved 0.4 approx along its normal
+   stays in its wall; one tilted 0.3 approx stays; one moved 1.6 approx (past `approx`, under
+   the zone that `finish` accepts; the pcurve writer refuses beyond `approx`, §39.3.1, so the
+   body keeps its pcurves) is alone and its two inner edges are `Apart` with the bound, 1.6 approx
+   to 1% (a pure offset is its own bound).
+5. `an_edge_kept_is_not_crossed`: the two split lines of a quadrant, kept, leave the seed alone
+   and are not reported.
+6. `an_edge_of_three_faces_is_not_crossed`: stacked blocks, edges of three fins are `Fins(3)`
+   with `to: None`.
+7. `seeds_come_first_and_are_not_repeated` (order, duplicates, the same call twice the same
+   answer and work, no seeds no growth), `a_seed_the_body_does_not_hold_is_refused`
+   (`NoEntity`), `a_small_budget_is_exhausted_and_leaves_nothing`.
+8. In `scx-surface`: the plane bound on another frame (<1e-15), a parallel offset (the offset to
+   1e-12), a tilt (1x to 1.5x the angle over the extent), opposite normals, a right angle.
+
+The pin's test (`a_pick_grows_across_a_split_line_but_not_a_kept_one`: a cube whose top is
+split in halves, a half grows to the other and to nothing across the box's edges, and with the
+split line kept it stays alone) is the first and fifth tests on the testkit's block, whose
+walls of 2 steps are four quadrants (the box's edges stop as `Crease`, the kept lines as
+nothing).
+
+### 46.4 Measured (throwaway timer and the budget's own count; not committed; release build)
+
+Growing one wall of a subdivided block, and growing from every face:
+
+| steps | faces | wall faces | work, one wall | per wall face | one wall | all faces as seeds: work | time |
+|---|---|---|---|---|---|---|---|
+| 2 | 24 | 4 | 24 | 6.0 | 82 us | 96 | 85 us |
+| 5 | 150 | 25 | 120 | 4.8 | 162 us | 600 | 418 us |
+| 10 | 600 | 100 | 440 | 4.4 | 480 us | 2,400 | 1.8 ms |
+| 20 | 2,400 | 400 | 1,680 | 4.2 | 1.7 ms | 9,600 | 7.7 ms |
+
+Four units a face: each edge is read once (2 edges a face, one unit) and proved once (one unit);
+that is ST5's 2 candidate pairs per face, and the proof calls are `plane_bound` twice per pair. No
+face pair that shares no edge is read. Time is linear, 3 to 4 us a face at 10 steps and up (boxes and proofs; the
+smaller bodies carry the fixed cost of the first box read). Nothing is added to any
+existing path: `merge_faces` makes the same calls to the same arithmetic (its 15 `sew` tests
+and its recipe tests unchanged).
+
+### 46.5 Open
+
+1. A chain of planes each within `approx` of its neighbour but drifting is grown through (46.2).
+   `merge_faces` prevents it by proving each member against the group's one plane. A second
+   pass here, proving every face of the grown set against the seed's surface, would cost one
+   more proof a face and refuse the drift; not built because a body whose own faces drift is
+   already `check`'s to flag and the growth of the pin was by neighbours.
+2. Quadrics on different frames (cylinder, cone, sphere, torus) and opposite-sense planes are
+   `Kind` and `Opposite`: ST5's open question 3. The same proof as the planes over the axis
+   (`facing_cylinders`/`wall_frame` already have the closed forms) would admit them; no
+   recipe or NIST body asks.
+3. `faces_on_one_surface` takes `&Brep` and not `&mut Cx`: no memo is kept (the face boxes are
+   a local map; `Face::bounding_box` is the body's own cache).
+4. A grouping of every face (`surface_groups`) can be added over this function with a shared edge
+   cache; not asked for.
+
+### 46.6 Proposed 04 row
+
+| 11-28 | (For the owner's review) BW8b: `scx_bodyq::faces_on_one_surface(&Brep, seeds, keep, budget, stop) -> OneSurface { faces, stopped }`: the seeds and every face reached across a curve edge of two fins, on two faces of the same shells, run opposite senses, whose surfaces are `==` or two planes proved within `Resolution::approx` (ST5's rule, 74 §42.5); each edge that did not lead on is a `Stopped { edge, from, to, why }` with `NotCrossed::{Fins(n), Shells, Sense, Surface(NotOneSurface::{Kind, Crease, Opposite, Apart(Length), NoBox})}`; `keep` edges are not crossed. The proof moves from `scx-stitch` to `scx_surface::plane_bound` (`NotNear::{Crease, Opposite}`, `CREASE`), which both crates call; `merge_faces` answers are unchanged. Growth is by neighbours as the pin's, so a chain of planes each within `approx` of the next is grown through (open); quadrics on other frames and opposite planes are typed, not merged. Measured 4 work units and 3 to 4 us a face, 2 edge proofs per face, none for faces that share no edge | Amends ST5 (the proof lives in `scx-surface`); no new Cargo edge | 74 §46 |
