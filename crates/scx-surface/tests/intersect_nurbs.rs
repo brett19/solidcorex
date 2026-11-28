@@ -26,6 +26,7 @@ use scx_num::budget::{Budget, Stop};
 use scx_num::domain::ParamDomain;
 use scx_num::extent1d::Extent1d;
 use scx_num::extent2d::Extent2d;
+use scx_num::fmath;
 use scx_num::frame::{Frame, Sense};
 use scx_num::units::{Length, Resolution};
 use scx_num::vector3d::{Point3, Vec3};
@@ -389,7 +390,7 @@ fn a_rational_quadratic_arc_crosses_a_cone() {
     // The cone of radius 1 at z = 0, slope k = tan(0.5); the arc a quarter of the circle
     // about (2, 0, 0) of radius 1.5 in the xz plane, from (3.5, 0, 0) to (2, 0, 1.5). On the
     // cone where 2 + 1.5 cos(th) = 1 + 1.5 k sin(th): cos(th + phi) = -1 / (1.5 hypot(1, k)).
-    let (r0, rho, k) = (2.0, 1.5, 0.5_f64.tan());
+    let (r0, rho, k) = (2.0, 1.5, fmath::tan(0.5));
     let h = FRAC_1_SQRT_2;
     let arc = nurbs(
         2,
@@ -419,10 +420,10 @@ fn a_rational_quadratic_arc_crosses_a_cone() {
         ],
         Some(vec![1.0, h, 1.0, h, 1.0]),
     );
-    let phi = k.atan();
-    let th = (-1.0 / (rho * k.hypot(1.0))).acos() - phi;
+    let phi = fmath::atan(k);
+    let th = fmath::acos(-1.0 / (rho * fmath::hypot(k, 1.0))) - phi;
     assert!(th > 0.0 && th < PI);
-    let want = [r0 + rho * th.cos(), 0.0, rho * th.sin()];
+    let want = [r0 + rho * fmath::cos(th), 0.0, rho * fmath::sin(th)];
     points_are(
         &half,
         &s,
@@ -493,7 +494,10 @@ fn a_cubic_grazing_a_cylinder_is_one_tangent() {
             panic!()
         };
         assert_eq!(*contact, Contact::Crossing);
-        assert!((point.x.hypot(point.y) - 2.0).abs() <= ROOT, "{h:?}");
+        assert!(
+            (fmath::hypot(point.x, point.y) - 2.0).abs() <= ROOT,
+            "{h:?}"
+        );
     }
 }
 
