@@ -2318,7 +2318,61 @@ on a quieter run before), loops rebuilt 8,188 to 12, uses copied 7,375,455 to 13
 the chain; a seam group needs the uv-window shift of 13.14 (b)). A ring of edges (a circle in
 pieces) still joins pair by pair, quadratic in its pieces.
 
-### 13.21 MK7b laws as built (11-28)
+### 13.21 BO13b as built (11-28)
+
+`scx_boolean::imprint_curves(body, face, &[Cut], cx) -> Result<Imprinted, BooleanError>`
+(`imprint_curves.rs`; tests in `tests/imprint_curves.rs`). `Cut::whole(curve)` or
+`Cut::over(curve, interval)`; `Imprinted { done: Done<NoItems>, regions: Vec<CutRegion> }`, a
+`CutRegion` being a face of the result and a point inside it. The curves are read in the
+plane of the face as lines and circles (arcs), each proved on the surface by
+`scx_surface::curve_on_surface` (`Leaves` is `Refused(Cut(OffFace))`), crossed with the face
+boundary and with each other by `scx_planar::crossings` (moved onto both curves by BO17's
+`polish`), and the meets within coincidence are one point. Each curve is kept between its
+consecutive points where its middle is inside the face (`Region::classify`). The kept pieces
+are `Section`s over synthetic merged points (the face's vertex, the edges through the point
+with their parameter, or the face), run through the same stage 5 as `imprint` with an empty
+second operand, then `finish_target` (the cleanup `imprint` already had, now shared). So edge
+cutting in the neighbouring faces, exact pcurves, face tracing, holes and lineage are not
+rewritten; a section with no tool face derives from the face only.
+
+Errors: `Refused(Cut(NoCurves | NoFace | OffFace | Misses | Overlap | Dangles))`,
+`Unsupported(Cut(Surface | Curve))`.
+
+Decisions, with cases for and against:
+
+- **`&[Cut]` where 75 wrote `&[Curve]`.** A line has no ends and a projected curve (SF1) is
+  a bounded piece, so the interval is part of the input. For: BO16b passes projections
+  unchanged and a whole curve is still `Cut::whole`. Against: a second type. `Report<C>`
+  has no item list, so the regions ride in `Imprinted`, not in `Done<Regions>`.
+- **Planar faces only, lines and circles only.** For: every crossing is certified and the
+  pcurves are exact, as BO17; the pin's own cases are planar sheets. Against: a circle on a
+  cylinder wall has an exact pcurve and is common; it needs curve-curve crossing in the
+  wall's uv, which waits for the step 5 intersector. Both are typed `Unsupported`, never a
+  wrong answer; ellipses wait on BO17's arcs being widened.
+- **Stage 5 reused with synthetic points, not a new tracer.** For: no second copy of edge
+  splitting across faces, pcurve writing or hole placement; the face cut is the one
+  `imprint` writes. Against: a fake `Interference` and `Section` (the second face is the same
+  id, unused) tie this to stage 5's field layout; the empty operand is built per call.
+- **A free end inside the face is refused (`Dangles`), as the pin.** Against: stage 5 would
+  drop it silently. For: a dangling curve is almost surely the caller's error, and BO16b wants
+  every projected curve to bound something. A curve that contributes nothing is `Misses`.
+- **A curve that only slits (hole to boundary) is allowed**: one region, the face with the cut
+  twice in its loop. The pin refuses it as `CurveDoesNotCut`. Against: nothing is bounded.
+- **Shared stretch of two cuts is refused (`Overlap`)**; one with the boundary is dropped and
+  its ends are points. Deduplicating two equal curves silently would hide a caller error.
+- **Region point**: the middle of the widest stretch inside the face on a horizontal uv line
+  through the box of its outer loop (first of 7 heights that has one), on the loop samples.
+
+Truth tests: a disc cut from a cube face (pi/16 and 1 - pi/16; 9 vertices, 13 edges, 7
+faces), a line (two halves; 10, 15, 7), two crossing lines (four quarters; 13, 20, 9), a
+circle of radius 0.6 across the four sides (central area `pi r^2 - 4 (r^2 acos(d/r) - d
+sqrt(r^2 - d^2))` and four equal corners; 16, 24, 10), nested circles (pi/100, 0.08 pi,
+1 - 0.09 pi), a chord of a disc cap (segment area), a bounded curve equal to the whole line,
+determinism, and the seven refusals; volume 1 and pi unchanged.
+Added work: none to existing entries (the cleanup was moved, not changed); the new call costs
+one `crossings` per atom pair with meeting boxes, quadratic in atoms (a few for these cases).
+
+### 13.22 MK7b laws as built (11-28)
 
 The first part of MK7b: the sweep's laws over MK7a's frames, everything that places the
 profile at a station, and a typed entry for the walls. The walls wait on step 5's procedural
