@@ -193,7 +193,8 @@ fn touching_and_crossing_pairs_are_never_dropped() {
     // surfaces are within the coincidence of meeting for 0 < g <= 1e-9. No proof (the field
     // signs of row SM6a included) drops every pair of such surfaces; a touch within the
     // coincidence is refused where it lies, or answered as a touch (NURBS against NURBS, row
-    // SM5), never answered empty. (A crossing is traced: `field`.)
+    // SM5), or refused where its curve is unproved (row SM8), never answered empty. (A
+    // crossing is traced: `field`.)
     for g in [0.0, p2(40), -p2(40), -p2(20), -1e-2, -0.5] {
         for (name, a, b) in apart_pairs(g) {
             if g <= 0.0 {
@@ -211,6 +212,9 @@ fn touching_and_crossing_pairs_are_never_dropped() {
                     assert!(size.mm() > 0.0 && size.mm() <= within.max_length());
                     vec![at]
                 }
+                // A curve marched whose distance no proof bounds (row SM8): the surfaces
+                // within the coincidence of tangent along it.
+                Err(SsiError::Uncertified { at }) => vec![at],
                 // NURBS against NURBS: a touch solved and answered (row SM5), or a curve
                 // (a circle about 1e-6 across at `-2^-40`) marched (row SM7).
                 Ok(t) if !t.touches.is_empty() => t.touches.iter().map(|t| t.point).collect(),

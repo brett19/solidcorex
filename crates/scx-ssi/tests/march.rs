@@ -1,8 +1,12 @@
 // Written for solidcorex. Apache-2.0.
-//! Row SM7 against the SM0 truths: the march for NURBS against NURBS. Every branch lies on
-//! the truth curves and covers them, crossings meet at their nodes, and the answer is the
-//! same bits every run, under any budget that suffices and with the operands swapped; the
-//! budget and the stop end it.
+//! Rows SM7 and SM8 against the SM0 truths: the march for NURBS against NURBS. Every branch
+//! lies on the truth curves and covers them, its certificate holds at samples, crossings
+//! meet at their nodes, and the answer is the same bits every run, under any budget that
+//! suffices and with the operands swapped; the budget and the stop end it.
+//!
+//! In a debug build the tests take the cases whose survey is quick (not the spheres', about a
+//! minute unoptimised): the accuracy test a tiny loop and two cylinders at the fine
+//! coincidence, the bits test the first three cases. Release builds take them all.
 
 #![allow(
     missing_docs,
@@ -27,14 +31,22 @@ use scx_ssi::general::{End, Ends, NodeKind, OnSurface, Traced, intersect};
 use scx_surface::{Cylinder, Plane, Sphere, Surface, Torus};
 use scx_testkit::ssi_truth::{self as truth, Truth};
 
-/// How far a branch may lie from the truth, and the truth from a branch's chords: the
+/// How far a branch may lie from the truth, and the truth from a branch's samples: the
 /// coincidence (`2e-9` here) with room for the rounding of the NURBS images.
 const ON: f64 = 1e-8;
 
-/// The most a pcurve's certificate may claim: its chord bound `h^2 d2 / 8` takes the surface's
-/// second partials over each run's uv hull and the step in the L1 norm, so it is looser than
-/// the points (row `SM8` certifies per span).
-const BOUND: f64 = 1e-6;
+/// The most a pcurve's certificate may claim: the span bounds' sum of the ends' and the
+/// interpolation's terms, a few coincidences.
+const BOUND: f64 = 1e-8;
+
+/// The most a branch ending at a crossing node may claim to the intersection: beside the
+/// node the Krawczyk test fails (the normals agree there), and the spans are bounded by
+/// their distance to the node plus its own (row `SM8`, "beside a node").
+const NODE_BOUND: f64 = 1e-6;
+
+/// Samples per span of the answer's curves: enough that their chords' sag is within [`ON`]
+/// at the fine coincidence's spans.
+const PER_SPAN: usize = 128;
 
 fn frame(o: [f64; 3], z: [f64; 3], x: [f64; 3]) -> Frame {
     let v = |a: [f64; 3]| Vec3::new(a[0], a[1], a[2]);
@@ -143,10 +155,31 @@ fn run(
     intersect(a, ae, b, be, acc(tol), res(), budget, stop)
 }
 
+/// `per` parameters in each span of `knots`, and the last.
+fn params(knots: &[f64], per: usize) -> Vec<f64> {
+    let mut ks = knots.to_vec();
+    ks.dedup();
+    let mut out = Vec::new();
+    for w in ks.windows(2) {
+        for i in 0..per {
+            out.push(w[0] + (w[1] - w[0]) * (i as f64) / (per as f64));
+        }
+    }
+    out.extend(ks.last());
+    out
+}
+
+fn samples(c: &scx_nurbs::NurbsCurve<3>, per: usize) -> Vec<[f64; 3]> {
+    params(c.knots(), per)
+        .into_iter()
+        .map(|t| c.point(t, scx_nurbs::Approach::Above).unwrap())
+        .collect()
+}
+
 fn polylines(t: &Traced) -> Vec<Vec<[f64; 3]>> {
     t.branches
         .iter()
-        .map(|b| b.curve.points().to_vec())
+        .map(|b| samples(&b.curve, PER_SPAN))
         .collect()
 }
 
@@ -191,7 +224,13 @@ fn bits(t: &Traced) -> Vec<u64> {
 
 #[test]
 fn every_branch_is_on_the_truth_and_covers_it() {
-    for c in cases() {
+    // Debug builds take the cases whose survey is quick; the spheres' takes about a minute.
+    let cs = if cfg!(debug_assertions) {
+        vec![tiny_loop(1e-3), cylinders(1.0, 2.0, 0.3)]
+    } else {
+        cases()
+    };
+    for c in cs {
         let t = run(&as_nurbs(&c), FINE, &mut Budget::unlimited(), &Stop::new())
             .unwrap_or_else(|e| panic!("{}: {e:?}", c.name));
         assert!(!t.branches.is_empty(), "{}", c.name);
@@ -202,21 +241,27 @@ fn every_branch_is_on_the_truth_and_covers_it() {
             let [(a, _), (s, _)] = &as_nurbs(&c);
             for (k, (surf, p)) in [a, s].into_iter().zip(&b.pcurves).enumerate() {
                 let Curve2::Nurbs(n) = p else { panic!() };
-                for (uv, q) in n.points().iter().zip(b.curve.points()) {
+                assert_eq!(n.knots(), b.curve.knots(), "{}", c.name);
+                let OnSurface::Within(bound) = b.certificate.on_surface[k] else {
+                    panic!()
+                };
+                assert!(bound.mm() <= BOUND, "{}: {bound:?}", c.name);
+                for t in params(n.knots(), 16) {
+                    let uv = n.point(t, scx_nurbs::Approach::Above).unwrap();
+                    let q = b.curve.point(t, scx_nurbs::Approach::Above).unwrap();
                     let x = surf.point(scx_num::vector2d::Point2::new(uv[0], uv[1]));
                     let d = (x - Point3::new(q[0], q[1], q[2])).length();
-                    let OnSurface::Within(bound) = b.certificate.on_surface[k] else {
-                        panic!()
-                    };
-                    assert!(
-                        d <= bound.mm() && bound.mm() <= BOUND,
-                        "{}: {d} {bound:?}",
-                        c.name
-                    );
+                    assert!(d <= bound.mm(), "{}: {d} {bound:?}", c.name);
                 }
             }
             let claim = b.certificate.to_intersection.mm();
-            assert!(claim <= ON, "{}: {claim}", c.name);
+            let at_node = matches!(
+                b.ends,
+                Ends::Open { start: End::Node(i), .. } | Ends::Open { end: End::Node(i), .. }
+                    if t.nodes[i].kind == NodeKind::Crossing
+            );
+            let most = if at_node { NODE_BOUND } else { ON };
+            assert!(claim <= most, "{}: {claim}", c.name);
         }
     }
 }
@@ -226,12 +271,13 @@ fn each_closed_curve_is_one_branch() {
     // The tiny loops and the cylinders' two loops lie inside the extents with no seam on
     // them: closed branches, one per truth loop. The spheres' circle crosses the seam of
     // the first sphere's uv once: one branch from the seam node back to it.
-    for c in [
-        tiny_loop(0.5),
-        tiny_loop(1e-3),
-        cylinders(1.0, 2.0, 0.3),
-        spheres(),
-    ] {
+    let mut cs = vec![tiny_loop(0.5), tiny_loop(1e-3), cylinders(1.0, 2.0, 0.3)];
+    // The spheres' survey takes about a minute in a debug build; seam nodes are met there
+    // by `seeds_where_a_coordinate_turns_are_met` too.
+    if !cfg!(debug_assertions) {
+        cs.push(spheres());
+    }
+    for c in cs {
         let t = run(
             &as_nurbs(&c),
             COARSE,
@@ -264,7 +310,13 @@ fn seeds_where_a_coordinate_turns_are_met() {
     // the seed's coordinate by the chord's sag, which at these coincidences passes the uv
     // box's own margin. Each such seed must be met by the march that passes it, so each
     // circle is traced once (a seed missed there is marched again, met as used: `Stalled`).
-    for z in [0.5, 0.7, -0.4] {
+    // Debug builds take two of the heights.
+    let zs: &[f64] = if cfg!(debug_assertions) {
+        &[0.5, -0.4]
+    } else {
+        &[0.5, 0.7, -0.4]
+    };
+    for &z in zs {
         let t = Torus::new(
             frame([0.0; 3], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]),
             mm(3.0),
@@ -300,7 +352,7 @@ fn seeds_where_a_coordinate_turns_are_met() {
                     Ends::Open { start, end } => start == end,
                 };
                 assert!(closed, "{z} {tol}: {:?}", br.ends);
-                let q = br.curve.points();
+                let q = samples(&br.curve, 8);
                 let r0 = hypot(q[0][0], q[0][1]);
                 let big = if r0 > 3.0 { 3.0 + off } else { 3.0 - off };
                 for q in q {
@@ -356,7 +408,13 @@ fn crossing_branches_meet_at_their_nodes() {
 
 #[test]
 fn the_answer_is_the_same_bits_every_run_under_any_budget_and_either_way_round() {
-    for c in cases() {
+    // Debug builds take the cases whose survey is quick (not the spheres').
+    let cs = if cfg!(debug_assertions) {
+        vec![tiny_loop(0.5), tiny_loop(1e-3), cylinders(1.0, 2.0, 0.3)]
+    } else {
+        cases()
+    };
+    for c in cs {
         let pair = as_nurbs(&c);
         let first = run(&pair, COARSE, &mut Budget::unlimited(), &Stop::new()).unwrap();
         let mut used = Budget::unlimited();
@@ -420,10 +478,16 @@ fn the_answer_is_the_same_bits_every_run_under_any_budget_and_either_way_round()
 
 #[test]
 fn the_budget_and_the_stop_end_the_march() {
-    let pair = as_nurbs(&spheres());
+    // The spheres; in debug builds, where their survey takes about a minute, two cylinders.
+    let c = if cfg!(debug_assertions) {
+        cylinders(1.0, 2.0, 0.3)
+    } else {
+        spheres()
+    };
+    let pair = as_nurbs(&c);
     let mut survey = Budget::unlimited();
     run(&pair, COARSE, &mut survey, &Stop::new()).unwrap();
-    // Most of the work is the march's steps; half the budget ends inside it.
+    // Half the budget ends inside the work (the survey's and the march's).
     let mut half = Budget::new(survey.used() / 2);
     assert!(matches!(
         run(&pair, COARSE, &mut half, &Stop::new()),

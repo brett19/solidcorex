@@ -1,6 +1,6 @@
 // Written for solidcorex. Apache-2.0.
-//! The march (research 73 §4.5, row SM7): NURBS against NURBS, from the survey's seeds and
-//! nodes to [`Branch`]es.
+//! The march (research 73 §4.5, rows SM7 and SM8): NURBS against NURBS, from the survey's
+//! seeds and nodes to certified [`Branch`]es.
 //!
 //! # The step
 //!
@@ -20,17 +20,22 @@
 //! last after the first two, with no fixed count: a correction that stops contracting fails
 //! the step.
 //!
-//! `h` is the least of three analytic bounds at `x` (73 §4.5), from the curve's curvature
-//! `kappa`: the normal curvatures `k_A`, `k_B` of the two surfaces along `T` give the
-//! curvature vector `k = a n_A + b n_B` with `k . n_A = k_A`, `k . n_B = k_B`:
+//! `h` is the least of three analytic bounds at `x` (73 §4.5, §24), from the curve's
+//! curvature `kappa`: the normal curvatures `k_A`, `k_B` of the two surfaces along `T` give
+//! the curvature vector `k = a n_A + b n_B` with `k . n_A = k_A`, `k . n_B = k_B`:
 //!
 //! 1. turn: `h kappa <= THETA_MAX`;
-//! 2. chord deviation: `kappa h^2 / 8 <= tol`, the coincidence;
+//! 2. the Hermite span's deviation: `kappa^3 h^4 / 384 <= FIT tol`, an eighth of the
+//!    coincidence (a cubic Hermite span through two points of a circle with their tangents
+//!    leaves it by about that; the step is the span, and the room left is the residual
+//!    enclosure's overestimate, so fewer spans are split);
 //! 3. a tenth of the extents' size (a plane against a plane has no curvature to bound it);
 //!
 //! and at most twice the last step taken. A step is rejected and halved when the corrector
-//! fails, when it travels less than a quarter or more than twice `h`, or when the tangent
-//! turns by more than `2 THETA_MAX`; below the resolution the march is
+//! fails, when it travels less than a quarter or more than twice `h`, when the tangent
+//! turns by more than `2 THETA_MAX`, or when a seed lies beside its span, nearer than a 64th
+//! of the chord but not on it (below): the span is off the curve by more than its bound
+//! allowed, and would pass the seed; below the resolution the march is
 //! [`SsiError::Stalled`] there. One unit of the budget is charged per step tried, and the
 //! stop polled after it.
 //!
@@ -38,9 +43,10 @@
 //!
 //! Every curve of the intersection within the extents meets a seed (73 §4.4): it ends on the
 //! extents' rim at a seed, or crosses a piece edge or a ray at one. The seeds are the
-//! survey's, in its order, kept once (`Seed::same_as`). Each step's chord is matched against
-//! them: a seed within four times the coincidence of the chord, with its uv between the
-//! chord's ends on both surfaces, is on it and is used. An arc ends
+//! survey's, in its order, kept once (`Seed::same_as`). Each step's span (the cubic Hermite
+//! of its ends' points and tangents, the output's span) is matched against them: a seed
+//! within four times the coincidence of the span, with its uv between the step's ends on
+//! both surfaces, is on it and is used (a seed is never a vertex). An arc ends
 //!
 //! - at the extents' rim: the step whose prediction leaves an extent is solved on that edge
 //!   (the fourth equation fixing the coordinate) and must meet a seed there, or the march is
@@ -48,7 +54,8 @@
 //! - at a periodic seam (an extent edge whose two sides are one curve of points): the arc is
 //!   cut at a [`NodeKind::Seam`] node and continues from the other side;
 //! - at a node ([`CriticalKind::Node`](super::CriticalKind::Node)): when the node is within
-//!   two steps ahead;
+//!   two steps ahead, a step halfway to it if it is farther than one, then one span to it,
+//!   the seeds on that span used as a step's are;
 //! - at its start seed: a closed loop.
 //!
 //! A used seed met again (other than the one just passed and the start) is a curve traced
@@ -64,11 +71,46 @@
 //!
 //! # The answer
 //!
-//! A branch is degree 1 on chord length, as the field path's (row `SM6a`); row `SM8` refits and
-//! certifies per span. Its [`Certificate`] holds, per surface, the points' residual plus the
-//! chord bound `h^2 d2 / 8` with `d2` the surface's second partials bounded over each run of
-//! spans, and, to the intersection, the points' first-order distance `gap / sin` plus each
-//! span's sag estimate from its turn: an estimate, not row SM8's Krawczyk proof.
+//! A branch is a C1 cubic B-spline, and each pcurve is one on the same knot vector: per span
+//! the cubic Hermite of its ends' points with their tangents (the 3D curve's the unit `T`,
+//! each pcurve's the uv velocity of `T`), on a parameter of the span's length estimated
+//! from its chord and turn (`span_length`), every inner knot twice. Where a pcurve's span
+//! would leave its extent, or cross a knot line its ends do not straddle where the surface
+//! is less than three times differentiable, its ends' velocity components on that axis are
+//! cut by Fritsch-Carlson's rule, so it is monotone between them there. A closed branch
+//! ends at its first vertex again; where that vertex is on a periodic seam, on the seam's
+//! side nearer the last one, so no pcurve span crosses the whole period.
+//!
+//! Every span is then proved (`certify`, 73 §24):
+//!
+//! - its residual on each surface, `e(t) = S(p(t)) - c(t)`: the Hermite interpolant of the
+//!   ends' `e` and `e'` (enclosed at the points) is at most `max |e_i| + 4 delta (|e_0'| +
+//!   |e_1'|) / 27`, and the rest at most `delta^4 / 384 sup |e''''|`, `e''''` the
+//!   composition's fourth derivative enclosed from the surface's partials to order four
+//!   over the span's uv box and the pcurve's Bézier derivatives (where a knot line inside
+//!   the box leaves the surface less than three times differentiable, the order-two form
+//!   `delta^2 / 8 (sup |e''| + sup |H''|)`); a knot line the ends straddle is first cut by a
+//!   vertex solved on it;
+//! - its distance to the intersection: a parametric Krawczyk test on the four offsets of
+//!   the pcurves' points, `S_A - S_B = 0` and `n . ((S_A + S_B) / 2 - c(t)) = 0` (`n` the
+//!   chord's direction, or the ends' tangents' where the chord is too short to have one),
+//!   from the residuals and the Jacobian enclosed over the uv boxes widened by the test's
+//!   radius: when it closes, each `c(t)` has a unique intersection point on its plane
+//!   within the residual plus the Jacobian times the radius.
+//!
+//! A span whose residual exceeds the coincidence, or whose distance exceeds four of them,
+//! is split at a vertex solved on the plane across its middle; below the resolution, one
+//! with no bound at all is [`SsiError::Uncertified`]. Beside a crossing node the normals
+//! agree, so the bound loosens there: the vertices' own coincidence over the angle between
+//! the surfaces, which no split shrinks, and at the node the test fails. A span split six
+//! times keeps the looser bound the test still proves, or else the node's own bound plus
+//! the span's reach from it (always so for a span ending at a node): once within a quarter
+//! of a thousand coincidences (or the rounding's square root at the points' size), or
+//! within the reach of a touch, the square root of the coincidence times the points' size,
+//! once the span is no longer than its distance to the node (no split halves the bound) or
+//! the resolution stops splitting it.
+//! One unit of the budget is charged per span tested and per vertex solved. The
+//! [`Certificate`] holds the greatest bounds, plus the rounding of the points' size.
 
 use std::sync::Arc;
 
@@ -81,7 +123,7 @@ use scx_num::units::Length;
 use scx_num::vector2d::{Point2, Vec2};
 use scx_num::vector3d::{Point3, Vec3};
 use scx_nurbs::{Approach, KnotVector, NurbsCurve};
-use scx_nurbs_surface::About;
+use scx_nurbs_surface::NurbsSurface;
 use scx_surface::Surface;
 
 use super::loops::{Critical, Seed};
@@ -89,6 +131,8 @@ use super::net::up;
 use super::traced::{Branch, Certificate, End, Ends, Node, NodeKind, OnSurface, Rim};
 use crate::analytic::Contact;
 use crate::error::SsiError;
+
+mod certify;
 
 /// The largest turn of the tangent over one step (radians), as the pin's (`max_turn`).
 const THETA_MAX: f64 = 0.06;
@@ -99,11 +143,12 @@ const COS_TURN: f64 = 0.992_808_635_853_866_3;
 /// The extents' size over this is the longest step.
 const LONGEST: f64 = 10.0;
 
-/// A seed within this many coincidences of a step's chord is on it.
-const NEAR: f64 = 4.0;
+/// The fraction of the coincidence a step's Hermite span is sized for: its deviation is
+/// about `kappa^3 h^4 / 384` (module docs).
+const FIT: f64 = 0.125;
 
-/// Spans per bound of the surfaces' second partials in the certificate.
-const CHUNK: usize = 64;
+/// A seed within this many coincidences of a step's span is on it.
+const NEAR: f64 = 4.0;
 
 /// The march's answer: branches and the nodes their ends name.
 pub(crate) struct Marched {
@@ -114,6 +159,8 @@ pub(crate) struct Marched {
 /// One surface as the march reads it.
 struct Side<'a> {
     s: &'a Surface,
+    /// The surface's NURBS form, for the certificate's enclosures.
+    n: Option<Arc<NurbsSurface<3>>>,
     e: Extent2d,
     /// Whether the extent's `u` (then `v`) edges are one curve of points: a periodic seam.
     seam: [bool; 2],
@@ -123,6 +170,7 @@ impl<'a> Side<'a> {
     fn new(s: &'a Surface, e: &Extent2d, tol: f64) -> Self {
         Self {
             s,
+            n: certify::nurbs(s, e),
             e: *e,
             seam: [seam(s, e, 0, tol), seam(s, e, 1, tol)],
         }
@@ -252,8 +300,6 @@ impl State {
 struct Frame {
     /// `n_A x n_B`, unit.
     t: Vec3,
-    /// `|n_A x n_B|`.
-    sin: f64,
     /// The curvature.
     kappa: f64,
     /// The uv velocities of `t`.
@@ -284,7 +330,6 @@ fn frame(st: &State) -> Option<Frame> {
     let kappa = k2.max(0.0).sqrt();
     kappa.is_finite().then_some(Frame {
         t,
-        sin,
         kappa,
         vel: [va, vb],
     })
@@ -365,16 +410,104 @@ fn set_coord(uv: &mut [Point2; 2], k: usize, axis: usize, x: f64) {
     }
 }
 
-/// A vertex of an arc.
+/// A vertex of an arc: a point of the intersection with its tangent, the Hermite data of
+/// the output's spans either side.
 #[derive(Clone, Copy, Debug)]
 struct Vert {
     p: Point3,
     uv: [Point2; 2],
-    /// The distance to the intersection (an estimate: `gap / sin`, or the coincidence at a
-    /// proved point).
-    err: f64,
-    /// The unit tangent (oriented along the march), or zero at a node.
+    /// The unit tangent, oriented along the march.
     t: Vec3,
+    /// The uv velocities of `t` on each surface.
+    vel: [Vec2; 2],
+    /// At a crossing node: the node's distance to the intersection (`NodeRec::err`).
+    node: Option<f64>,
+}
+
+impl Vert {
+    /// The vertex for the march the other way.
+    fn reversed(self) -> Self {
+        let [a, b] = self.vel;
+        Self {
+            t: -self.t,
+            vel: [-a, -b],
+            ..self
+        }
+    }
+}
+
+/// The cubic Hermite span between two points with unit tangents, on a parameter of the arc
+/// length's estimate [`span_length`], as Bézier control points over `[0, 1]`.
+#[derive(Clone, Copy, Debug)]
+struct Hermite {
+    b: [Point3; 4],
+}
+
+/// The parameter length of the span from `p0` to `p1` with unit tangents `t0`, `t1`: the
+/// chord times `1 + |t1 - t0|^2 / 24`, a circular arc's length over its chord to the fourth
+/// order in the turn, so unit tangents are the curve's derivatives to that order.
+fn span_length(p0: Point3, t0: Vec3, p1: Point3, t1: Vec3) -> f64 {
+    let d = t1 - t0;
+    (p1 - p0).length() * (1.0 + d.dot(d) / 24.0)
+}
+
+impl Hermite {
+    fn new(p0: Point3, t0: Vec3, p1: Point3, t1: Vec3) -> Self {
+        let h = span_length(p0, t0, p1, t1) / 3.0;
+        Self {
+            b: [p0, p0 + t0 * h, p1 - t1 * h, p1],
+        }
+    }
+
+    fn point(&self, s: f64) -> Point3 {
+        let [b0, b1, b2, b3] = self.b;
+        let r = 1.0 - s;
+        let w = [r * r * r, 3.0 * r * r * s, 3.0 * r * s * s, s * s * s];
+        let o = Point3::new(0.0, 0.0, 0.0);
+        o + (b0 - o) * w[0] + (b1 - o) * w[1] + (b2 - o) * w[2] + (b3 - o) * w[3]
+    }
+
+    /// The first and second derivatives in `s`.
+    fn derivs(&self, s: f64) -> (Vec3, Vec3) {
+        let [b0, b1, b2, b3] = self.b;
+        let (d0, d1, d2) = (b1 - b0, b2 - b1, b3 - b2);
+        let r = 1.0 - s;
+        let first = (d0 * (r * r) + d1 * (2.0 * r * s) + d2 * (s * s)) * 3.0;
+        let second = ((d1 - d0) * r + (d2 - d1) * s) * 6.0;
+        (first, second)
+    }
+
+    /// The least and greatest `x` of the control points, which bound the span's.
+    fn x_range(&self) -> (f64, f64) {
+        self.b
+            .iter()
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(l, h), p| {
+                (l.min(p.x), h.max(p.x))
+            })
+    }
+
+    /// The parameter in `[0, 1]` of the span's point nearest `q`: from the chord's, four
+    /// Newton steps on `(c - q) . c' = 0`.
+    fn nearest(&self, q: Point3) -> f64 {
+        let [b0, .., b3] = self.b;
+        let d = b3 - b0;
+        let dd = d.dot(d);
+        let mut s = if dd > 0.0 {
+            ((q - b0).dot(d) / dd).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        for _ in 0..4 {
+            let (c1, c2) = self.derivs(s);
+            let e = self.point(s) - q;
+            let g = e.dot(c1);
+            let dg = c1.dot(c1) + e.dot(c2);
+            if dg > 0.0 && dg.is_finite() {
+                s = (s - g / dg).clamp(0.0, 1.0);
+            }
+        }
+        s
+    }
 }
 
 /// How an arc ends.
@@ -658,11 +791,7 @@ fn join(bwd: Vec<Run>, fwd: Vec<Run>) -> Vec<Run> {
         .into_iter()
         .rev()
         .map(|r| {
-            let mut verts = r.verts;
-            verts.reverse();
-            for v in &mut verts {
-                v.t = -v.t;
-            }
+            let verts = r.verts.into_iter().rev().map(Vert::reversed).collect();
             Run {
                 verts,
                 start: r.end,
@@ -782,7 +911,7 @@ impl March<'_, '_> {
         if k > 0.0 {
             self.hmax
                 .min(THETA_MAX / k)
-                .min((8.0 * self.tol / k).sqrt())
+                .min((384.0 * FIT * self.tol / (k * k * k)).sqrt().sqrt())
         } else {
             self.hmax
         }
@@ -918,13 +1047,31 @@ impl March<'_, '_> {
         [c(a, self.side(0)), c(b, self.side(1))]
     }
 
-    fn vert(&self, st: &State, fr: Option<&Frame>, sign: f64) -> Vert {
+    /// The vertex at `st`, along `sign` times its frame's tangent.
+    fn vert(st: &State, fr: &Frame, sign: f64) -> Vert {
+        let [va, vb] = fr.vel;
         Vert {
             p: st.p,
             uv: st.uv,
-            err: fr.map_or(self.tol, |f| st.gap / f.sin + 0.5 * st.gap),
-            t: fr.map_or(Vec3::new(0.0, 0.0, 0.0), |f| f.t * sign),
+            t: fr.t * sign,
+            vel: [va * sign, vb * sign],
+            node: None,
         }
+    }
+
+    /// The vertex at node `n` along the unit direction `d` (one of its null directions, or
+    /// the reverse of one): the surfaces' normals agree there, so the tangent is `d`.
+    fn node_vert(&self, n: usize, d: Vec3) -> Option<Vert> {
+        let node = self.nodes.get(n)?;
+        let st = self.state(node.uv)?;
+        let [ja, jb] = st.j;
+        Some(Vert {
+            p: node.point,
+            uv: node.uv,
+            t: d,
+            vel: [ja.velocity(d)?, jb.velocity(d)?],
+            node: Some(node.err),
+        })
     }
 
     /// Whether `uv` is within the chord's uv box from `a` to `b` on both surfaces (on a seam
@@ -952,32 +1099,71 @@ impl March<'_, '_> {
         ok(0) && ok(1)
     }
 
-    /// The unused or used seeds on the chord from `a` to `b`, by their place along it.
-    fn seeds_on(&self, a: &State, b: &State) -> Vec<(f64, usize)> {
+    /// The unused or used seeds on the step's span from `a` to `b` (the Hermite cubic of
+    /// their points and tangents along `sign`), by their place along it.
+    fn seeds_on(
+        &self,
+        a: &State,
+        fa: &Frame,
+        b: &State,
+        fb: &Frame,
+        sign: f64,
+    ) -> Vec<(f64, usize)> {
+        let c = Hermite::new(a.p, fa.t * sign, b.p, fb.t * sign);
+        self.seeds_near(&c, &a.uv, &b.uv)
+    }
+
+    /// The seeds within `NEAR` coincidences of the span `c`, with uv between `a` and `b`
+    /// (`uv_between`), by their place along it.
+    fn seeds_near(&self, c: &Hermite, a: &[Point2; 2], b: &[Point2; 2]) -> Vec<(f64, usize)> {
+        self.seeds_within(c, a, b, NEAR * self.tol)
+            .into_iter()
+            .map(|(lam, _, i)| (lam, i))
+            .collect()
+    }
+
+    /// Whether a seed beside the step's span from `a` to `b` is nearer it than a 64th of the
+    /// chord but not on it (`seeds_near`): the span is off the curve there by more than its
+    /// bound allowed, and a shorter step meets the seed rather than passing it.
+    fn seed_beside(&self, a: &State, fa: &Frame, b: &State, sign: f64) -> bool {
+        let Some(fb) = frame(b) else { return false };
+        let c = Hermite::new(a.p, fa.t * sign, b.p, fb.t * sign);
         let r = NEAR * self.tol;
-        let (x0, x1) = (a.p.x.min(b.p.x) - r, a.p.x.max(b.p.x) + r);
+        let wide = (b.p - a.p).length() / 64.0;
+        wide > r
+            && self
+                .seeds_within(&c, &a.uv, &b.uv, wide)
+                .iter()
+                .any(|&(_, d, _)| d > r)
+    }
+
+    /// The seeds within `r` of the span `c`, with uv between `a` and `b`, with their place
+    /// along it and distance from it, by place.
+    fn seeds_within(
+        &self,
+        c: &Hermite,
+        a: &[Point2; 2],
+        b: &[Point2; 2],
+        r: f64,
+    ) -> Vec<(f64, f64, usize)> {
+        let (lo, hi) = c.x_range();
+        let (x0, x1) = (lo - r, hi + r);
         let from = self
             .by_x
             .partition_point(|&i| self.seeds.get(i).is_some_and(|s| s.point.x < x0));
-        let d = b.p - a.p;
-        let dd = d.dot(d);
         let mut out = Vec::new();
         for &i in self.by_x.iter().skip(from) {
             let Some(s) = self.seeds.get(i) else { continue };
             if s.point.x > x1 {
                 break;
             }
-            let lam = if dd > 0.0 {
-                ((s.point - a.p).dot(d) / dd).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
-            let q = a.p + d * lam;
-            if (s.point - q).length() <= r && self.uv_between(s.uv, a.uv, b.uv, true) {
-                out.push((lam, i));
+            let lam = c.nearest(s.point);
+            let d = (s.point - c.point(lam)).length();
+            if d <= r && self.uv_between(s.uv, *a, *b, true) {
+                out.push((lam, d, i));
             }
         }
-        out.sort_by(|x, y| x.0.total_cmp(&y.0).then(x.1.cmp(&y.1)));
+        out.sort_by(|x, y| x.0.total_cmp(&y.0).then(x.2.cmp(&y.2)));
         out
     }
 
@@ -1006,7 +1192,12 @@ impl March<'_, '_> {
         };
         let (np, nuv) = (node.point, node.uv);
         let st = self.state(nuv).ok_or_else(|| stalled(np, 0.0))?;
-        let mut h = self.hmax;
+        // The first step stops short of every other node, so the next one ahead is met
+        // (`node_ahead`, within two steps), never stepped past.
+        let mut h = self.nodes.iter().fold(self.hmax, |h, o| {
+            let d = (o.point - np).length();
+            if d > 0.0 { h.min(0.5 * d) } else { h }
+        });
         let (q, sign) = loop {
             self.budget.charge(1)?;
             self.stop.check()?;
@@ -1039,20 +1230,18 @@ impl March<'_, '_> {
             h *= 0.5;
         };
         // The seeds the first step passes.
-        for (_, i) in self.seeds_on(&st, &q) {
+        let qfr = frame(&q).ok_or_else(|| stalled(np, h))?;
+        let first = Hermite::new(np, d, q.p, qfr.t * sign);
+        for (_, i) in self.seeds_near(&first, &st.uv, &q.uv) {
             self.use_seed(i);
         }
-        let start = Vert {
-            p: np,
-            uv: nuv,
-            err: self.nodes.get(n).map_or(self.tol, |r| r.err),
-            t: d,
-        };
+        let start = self.node_vert(n, d).ok_or_else(|| stalled(np, h))?;
         self.walk(q, sign, Cut::Node(n), None, Some((start, h)))
     }
 
-    /// The node ahead of `st` within two steps `h` along `dir`, and the slot it arrives by.
-    fn node_ahead(&self, st: &State, dir: Vec3, h: f64) -> Option<(usize, usize)> {
+    /// The node ahead of `st` within two steps `h` along `dir`, the slot it arrives by and
+    /// its distance.
+    fn node_ahead(&self, st: &State, dir: Vec3, h: f64) -> Option<(usize, usize, f64)> {
         for (n, node) in self.nodes.iter().enumerate() {
             let d = node.point - st.p;
             let dist = d.length();
@@ -1067,7 +1256,7 @@ impl March<'_, '_> {
                         if c > b.1 { (i, c) } else { b }
                     })
                     .0;
-                return Some((n, slot));
+                return Some((n, slot, dist));
             }
         }
         None
@@ -1091,8 +1280,8 @@ impl March<'_, '_> {
             verts.push(v);
             last_h = Some(h);
         }
-        let fr0 = frame(&st);
-        verts.push(self.vert(&st, fr0.as_ref(), sign));
+        let fr0 = frame(&st).ok_or_else(|| stalled(st.p, last_h.unwrap_or(0.0)))?;
+        verts.push(Self::vert(&st, &fr0, sign));
         let mut run_start = start;
         let mut steps = 0_usize;
         loop {
@@ -1100,7 +1289,13 @@ impl March<'_, '_> {
             let dir = fr.t * sign;
             let bound = self.bound(&fr);
             let mut h = last_h.map_or(bound, |l: f64| bound.min(2.0 * l));
-            if let Some((n, slot)) = self.node_ahead(&st, dir, h) {
+            let ahead = self.node_ahead(&st, dir, h);
+            if let Some((_, _, dist)) = ahead
+                && dist > h
+            {
+                // Halfway first, so the span to the node is within a step's bound.
+                h = 0.5 * dist;
+            } else if let Some((n, slot, _)) = ahead {
                 if self
                     .nodes
                     .get(n)
@@ -1110,16 +1305,20 @@ impl March<'_, '_> {
                     return Err(stalled(st.p, h));
                 }
                 self.use_slot(n, slot);
-                if let Some(node) = self.nodes.get(n) {
-                    // The slot points out of the node: the arc arrives along its reverse.
-                    let t = node.slots.get(slot).map_or(dir, |s| -s.0);
-                    verts.push(Vert {
-                        p: node.point,
-                        uv: node.uv,
-                        err: node.err,
-                        t,
-                    });
+                // The slot points out of the node: the arc arrives along its reverse.
+                let t = self
+                    .nodes
+                    .get(n)
+                    .and_then(|r| r.slots.get(slot))
+                    .map_or(dir, |s| -s.0);
+                let nv = self.node_vert(n, t).ok_or_else(|| stalled(st.p, h))?;
+                // The seeds the last span passes (a piece edge between the vertex and the
+                // node), used as a step's are.
+                let last = Hermite::new(st.p, dir, nv.p, nv.t);
+                for (_, i) in self.seeds_near(&last, &st.uv, &nv.uv) {
+                    self.use_seed(i);
                 }
+                verts.push(nv);
                 runs.push(Run {
                     verts,
                     start: run_start,
@@ -1137,12 +1336,13 @@ impl March<'_, '_> {
                     return Err(stalled(st.p, h));
                 }
                 match self.step(&st, &fr, sign, h) {
-                    Some(r) => break r,
-                    None => h *= 0.5,
+                    Some(r) if !self.seed_beside(&st, &fr, &r.0, sign) => break r,
+                    _ => h *= 0.5,
                 }
             };
-            // The seeds on the chord, in order.
-            for (_, i) in self.seeds_on(&st, &next) {
+            let nfr = frame(&next).ok_or_else(|| stalled(next.p, h))?;
+            // The seeds on the span, in order.
+            for (_, i) in self.seeds_on(&st, &fr, &next, &nfr, sign) {
                 let Some(s) = self.seeds.get(i) else { continue };
                 if s.used {
                     // The seed this chord starts at (met by the last chord, or the start).
@@ -1165,29 +1365,19 @@ impl March<'_, '_> {
                     }
                     return Err(stalled(s.point, h));
                 }
-                let (p, uv, rim) = (s.point, s.uv, s.rim);
-                if exit.is_some() && rim.is_some() {
+                if exit.is_some() && s.rim.is_some() {
                     continue;
                 }
                 self.use_seed(i);
-                if self.uv_between(uv, st.uv, next.uv, false) {
-                    verts.push(Vert {
-                        p,
-                        uv,
-                        err: self.tol,
-                        t: dir,
-                    });
-                }
             }
-            let nfr = frame(&next);
             match exit {
                 None => {
-                    verts.push(self.vert(&next, nfr.as_ref(), sign));
+                    verts.push(Self::vert(&next, &nfr, sign));
                 }
                 Some((k, axis)) => {
                     let seam = self.side(k).seam.get(axis).copied().unwrap_or(false);
                     if seam {
-                        verts.push(self.vert(&next, nfr.as_ref(), sign));
+                        verts.push(Self::vert(&next, &nfr, sign));
                         let n = self.seam_node(&next);
                         runs.push(Run {
                             verts: std::mem::take(&mut verts),
@@ -1205,7 +1395,8 @@ impl March<'_, '_> {
                         let mut uv = next.uv;
                         set_coord(&mut uv, k, axis, other);
                         let moved = self.state(uv).ok_or_else(|| stalled(next.p, h))?;
-                        verts.push(self.vert(&moved, frame(&moved).as_ref(), sign));
+                        let mfr = frame(&moved).ok_or_else(|| stalled(next.p, h))?;
+                        verts.push(Self::vert(&moved, &mfr, sign));
                         st = moved;
                         last_h = Some(h);
                         steps += 1;
@@ -1221,17 +1412,11 @@ impl March<'_, '_> {
                     if s.used {
                         return Err(stalled(s.point, h));
                     }
-                    let p = s.point;
                     self.use_seed(i);
                     let rim = self
                         .rim_of(&next)
                         .unwrap_or(if k == 0 { Rim::A } else { Rim::B });
-                    verts.push(Vert {
-                        p,
-                        uv: next.uv,
-                        err: self.tol,
-                        t: dir,
-                    });
+                    verts.push(Self::vert(&next, &nfr, sign));
                     runs.push(Run {
                         verts,
                         start: run_start,
@@ -1359,8 +1544,41 @@ impl March<'_, '_> {
         best
     }
 
+    /// The first vertex `f` of a closed run again as its last, after `last`: where `f` lies
+    /// on a periodic seam, on the seam's side nearer `last`, so the closing span does not
+    /// cross the whole period in uv.
+    fn closing(&self, last: Option<&Vert>, mut f: Vert) -> Vert {
+        let Some(l) = last else { return f };
+        for k in 0..2 {
+            let sd = self.side(k);
+            for axis in 0..2 {
+                if !sd.seam.get(axis).copied().unwrap_or(false) {
+                    continue;
+                }
+                let (lo, hi) = (sd.lo(axis), sd.hi(axis));
+                let (x, from) = (coord(&f.uv, k, axis), coord(&l.uv, k, axis));
+                let other = if x == lo {
+                    hi
+                } else if x == hi {
+                    lo
+                } else {
+                    continue;
+                };
+                if (other - from).abs() < (x - from).abs() {
+                    set_coord(&mut f.uv, k, axis, other);
+                }
+            }
+        }
+        f
+    }
+
     /// One output branch of a run (module docs), `None` when it has no length.
-    fn branch(&self, run: Run, crossing: usize, swap: bool) -> Result<Option<Branch>, SsiError> {
+    fn branch(
+        &mut self,
+        run: Run,
+        crossing: usize,
+        swap: bool,
+    ) -> Result<Option<Branch>, SsiError> {
         let _ = crossing;
         let closed = run.start == Cut::Start && run.end == Cut::Start;
         let mut vs: Vec<Vert> = Vec::with_capacity(run.verts.len());
@@ -1375,9 +1593,13 @@ impl March<'_, '_> {
         }
         if closed && let (Some(&f), true) = (vs.first(), vs.len() > 2) {
             if vs.last().is_some_and(|l| (l.p - f.p).length() > self.res) {
+                let f = self.closing(vs.last(), f);
                 vs.push(f);
-            } else if let Some(l) = vs.last_mut() {
-                *l = f;
+            } else {
+                let f = self.closing(vs.get(vs.len() - 2), f);
+                if let Some(l) = vs.last_mut() {
+                    *l = f;
+                }
             }
         }
         if vs.len() < 2 {
@@ -1396,27 +1618,54 @@ impl March<'_, '_> {
             && let Some(fr) = frame(&st)
             && (b.p - a.p).dot(fr.t) < 0.0
         {
-            vs.reverse();
+            vs = vs.into_iter().rev().map(Vert::reversed).collect();
             ends.reverse();
         }
         let at = vs.first().map_or(Point3::new(0.0, 0.0, 0.0), |v| v.p);
-        let mut knots = vec![0.0, 0.0];
+        let (vs, certificate) = self.certify(vs, closed)?;
+        // One knot vector for the three curves: each span's parameter length, every inner
+        // knot twice (C1), the ends four times.
+        let mut knots = vec![0.0; 4];
         let mut t = 0.0_f64;
-        for w in vs.windows(2) {
-            if let [a, b] = w {
-                t += (b.p - a.p).length();
-                knots.push(t);
+        let mut p3: Vec<[f64; 3]> = Vec::with_capacity(2 * vs.len());
+        let mut pc: [Vec<[f64; 2]>; 2] = [Vec::new(), Vec::new()];
+        if let Some(f) = vs.first() {
+            p3.push(f.p.to_array());
+            for (k, c) in pc.iter_mut().enumerate() {
+                if let Some(uv) = f.uv.get(k) {
+                    c.push(uv.to_array());
+                }
             }
         }
-        knots.push(t);
-        let certificate = self.certificate(&vs, at)?;
-        if swap {
-            vs.reverse();
-            ends.reverse();
-            for v in &mut vs {
-                v.uv.swap(0, 1);
+        for w in vs.windows(2) {
+            let [a, b] = w else { continue };
+            let d = span_length(a.p, a.t, b.p, b.t);
+            t += d;
+            knots.extend([t, t]);
+            let h = d / 3.0;
+            p3.extend([(a.p + a.t * h).to_array(), (b.p - b.t * h).to_array()]);
+            p3.push(b.p.to_array());
+            for (k, c) in pc.iter_mut().enumerate() {
+                if let (Some(&ua), Some(&va), Some(&ub), Some(&vb)) =
+                    (a.uv.get(k), a.vel.get(k), b.uv.get(k), b.vel.get(k))
+                {
+                    c.extend([(ua + va * h).to_array(), (ub - vb * h).to_array()]);
+                    c.push(ub.to_array());
+                }
             }
+        }
+        // The inner vertices are implied by their neighbours (C1): drop them.
+        let mut p3 = inner(p3);
+        let [pa, pb] = pc;
+        let (mut pa, mut pb) = (inner(pa), inner(pb));
+        knots.extend([t, t]);
+        if swap {
+            p3.reverse();
+            pa.reverse();
+            pb.reverse();
+            core::mem::swap(&mut pa, &mut pb);
             knots = knots.iter().rev().map(|k| t - k).collect();
+            ends.reverse();
             for e in &mut ends {
                 if let End::Rim(r) = e {
                     *r = match r {
@@ -1428,10 +1677,7 @@ impl March<'_, '_> {
             }
         }
         let bad = |_| stalled(at, 0.0);
-        let kv = KnotVector::new(1, knots).map_err(bad)?;
-        let p3: Vec<[f64; 3]> = vs.iter().map(|v| v.p.to_array()).collect();
-        let pa: Vec<[f64; 2]> = vs.iter().map(|v| v.uv[0].to_array()).collect();
-        let pb: Vec<[f64; 2]> = vs.iter().map(|v| v.uv[1].to_array()).collect();
+        let kv = KnotVector::new(3, knots).map_err(bad)?;
         let curve = NurbsCurve::new(kv.clone(), p3, None).map_err(bad)?;
         let ca = NurbsCurve::new(kv.clone(), pa, None).map_err(bad)?;
         let cb = NurbsCurve::new(kv, pb, None).map_err(bad)?;
@@ -1456,70 +1702,14 @@ impl March<'_, '_> {
             certificate,
         }))
     }
+}
 
-    /// The branch's certificate (module docs), in the march's operand order.
-    fn certificate(&self, vs: &[Vert], at: Point3) -> Result<Certificate, SsiError> {
-        let reach = vs.iter().fold(0.0_f64, |r, v| r.max(v.p.max_dimension()));
-        let round = up(gamma(64) * reach);
-        let mut on = [0.0_f64; 2];
-        for (k, o) in on.iter_mut().enumerate() {
-            let sd = self.side(k);
-            let n = sd.s.to_nurbs(&sd.e).map_err(|_| stalled(at, 0.0))?;
-            let mut worst = 0.0_f64;
-            let mut start = 0;
-            while start + 1 < vs.len() {
-                let end = (start + CHUNK).min(vs.len() - 1);
-                let chunk = vs.get(start..=end).unwrap_or(&[]);
-                let uv = |v: &Vert| if k == 0 { v.uv[0] } else { v.uv[1] };
-                let hull = Extent2d::hull(chunk.iter().map(uv)).ok_or_else(|| stalled(at, 0.0))?;
-                let jet = n
-                    .partials_over::<2>(
-                        [
-                            Ivl::new(hull.x_min(), hull.x_max()),
-                            Ivl::new(hull.y_min(), hull.y_max()),
-                        ],
-                        0,
-                        About::Middle,
-                    )
-                    .map_err(|_| stalled(at, 0.0))?;
-                let norm = |v: Option<[Ivl; 3]>| v.map(|[x, y, z]| Vec3::new(x, y, z).norm().hi);
-                let d2 = norm(jet.get(2, 0))
-                    .zip(norm(jet.get(1, 1)))
-                    .zip(norm(jet.get(0, 2)))
-                    .map(|((a, b), c)| a.max(b).max(c))
-                    .filter(|d| d.is_finite())
-                    .ok_or_else(|| stalled(at, 0.0))?;
-                for w in chunk.windows(2) {
-                    if let [a, b] = w {
-                        let d = uv(b) - uv(a);
-                        let h = d.x.abs() + d.y.abs();
-                        worst = worst.max(0.125 * h * h * up(d2));
-                    }
-                }
-                start = end;
-            }
-            let residual = vs.iter().fold(0.0_f64, |r, v| {
-                let p = sd.s.point(if k == 0 { v.uv[0] } else { v.uv[1] });
-                r.max((p - v.p).length())
-            });
-            *o = up(residual + worst + round);
-        }
-        let err = vs.iter().fold(0.0_f64, |e, v| e.max(v.err));
-        let sag = vs.windows(2).fold(0.0_f64, |s, w| match w {
-            // The arc's sag over its chord, from the turn between the end tangents: a convex
-            // arc lies in the triangle of its chord and end tangents, of height at most a
-            // quarter of the chord times the turn (an eighth only for a circle; beside a
-            // tangential crossing the curvature changes along the span).
-            [a, b] => s.max(0.25 * (b.p - a.p).length() * 1.01 * (b.t - a.t).length()),
-            _ => s,
-        });
-        let [oa, ob] = on;
-        Ok(Certificate {
-            to_intersection: Length::from_mm(up(err + sag + round)),
-            on_surface: [
-                OnSurface::Within(Length::from_mm(oa)),
-                OnSurface::Within(Length::from_mm(ob)),
-            ],
-        })
-    }
+/// `v` without its inner vertices, every third point but the ends.
+fn inner<T>(v: Vec<T>) -> Vec<T> {
+    let n = v.len();
+    v.into_iter()
+        .enumerate()
+        .filter(|&(i, _)| i == 0 || i + 1 == n || i % 3 != 0)
+        .map(|(_, x)| x)
+        .collect()
 }
