@@ -176,7 +176,7 @@ fn polygon_ring(m: usize, lift: f64) -> (CompatibleCurves<3>, Vec<f64>) {
         v.push(t + 0.05 * (core::f64::consts::TAU * t).sin());
         // The seam's angle is 0 exactly, so only `lift` parts the ends.
         let (s, c) = (core::f64::consts::TAU * (k % m) as f64 / m as f64).sin_cos();
-        let scale = 1.0 + 0.3 * (2.0 * core::f64::consts::TAU * t).cos();
+        let scale = 1.0 + 0.3 * (2.0 * core::f64::consts::TAU * (k % m) as f64 / m as f64).cos();
         let z = if k == m { lift } else { 0.0 };
         points.extend(
             profile
@@ -312,7 +312,7 @@ fn a_closed_skin_whose_ends_are_apart_is_refused_with_the_gap() {
             panic!("{e:?}");
         };
         assert_eq!(coincidence, 1e-7);
-        assert!(gap >= h && gap <= h * (1.0 + 1e-9), "h {h}: gap {gap}");
+        assert!(gap >= h && gap <= h + 1e-13, "h {h}: gap {gap}");
         assert_eq!(e.kind(), ErrorKind::Refused);
     }
 }

@@ -276,7 +276,12 @@ fn closed<const D: usize>(
     let last = sections
         .curve(count - 1)
         .ok_or(defect("the last section"))?;
-    let gap = deviation::distance(&first, &last).map_err(SkinError::Gap)?;
+    // Equal sections are 0 apart; the certified distance of others carries its rounding.
+    let gap = if first == last {
+        0.0
+    } else {
+        deviation::distance(&first, &last).map_err(SkinError::Gap)?
+    };
     if gap > coincidence {
         return Err(SkinError::NotClosed { gap, coincidence });
     }
