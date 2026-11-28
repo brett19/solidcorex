@@ -118,7 +118,13 @@ pub(crate) fn build(
     vertices(&mut m);
     stop.check()?;
     shells(ops, &mut m, &kept, doc, budget, stop)?;
-    m.draft.finish(&doc).map_err(|_| defect())
+    let (body, changes) = m.draft.finish(&doc).map_err(|_| defect())?;
+    // A result that cannot be enclosed (a face or an edge with no box) is one its own
+    // queries (classification, mass, the contract) cannot answer for: not a result.
+    if body.bounding_box().is_none() && body.faces().next().is_some() {
+        return Err(defect());
+    }
+    Ok((body, changes))
 }
 
 const fn defect() -> BooleanError {
@@ -309,6 +315,8 @@ fn splice(
     // A twin a period apart: the pieces meet across the face's seam, so the
     // records cannot be kept and the loops are made again from the edges.
     let mut shifted = false;
+    // The uses of collapsed edges among the twins.
+    let mut poles: BTreeSet<At> = BTreeSet::new();
     for (&e, at) in &by_edge {
         let (Some(&p), Some(&q), 2) = (at.first(), at.get(1), at.len()) else {
             continue;
@@ -323,7 +331,17 @@ fn splice(
         if !fins_inside {
             continue;
         }
-        if one_face {
+        // A collapsed edge (a sphere's pole) inside: the two pieces' uses are parts of
+        // the pole's line in uv, which the merged face keeps as one use, so its loops are
+        // made again with the edge once where the walk crosses it.
+        if m.draft
+            .edge(e)
+            .is_some_and(|v| matches!(v.shape(), Some(EdgeShape::Collapsed)))
+        {
+            poles.insert(p);
+            poles.insert(q);
+            shifted = true;
+        } else if one_face {
             let (Some(rp), Some(rq)) = (record(p), record(q)) else {
                 return Err(defect());
             };
@@ -369,6 +387,9 @@ fn splice(
                 let mut nx = next(cur);
                 let mut steps = 0;
                 while let Some(&t) = twin.get(&nx) {
+                    if poles.contains(&nx) {
+                        cycle.push(nx);
+                    }
                     nx = next(t);
                     steps += 1;
                     if steps > total {
