@@ -132,7 +132,7 @@ fn the_iso_curve_of_a_cylinder_at_constant_height_is_its_circle() {
             let got = c.point(u, Approach::Above).unwrap();
             let want = circle(r, h * t, u);
             assert!(close(&got, &want, 1e-14), "t {t} u {u}: {got:?} {want:?}");
-            let radius = got[0].hypot(got[1]);
+            let radius = scx_num::fmath::hypot(got[0], got[1]);
             assert!((radius - r).abs() <= 1e-14 * r, "radius {radius} at {u}");
         }
     }
