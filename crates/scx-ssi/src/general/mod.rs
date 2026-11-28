@@ -16,7 +16,7 @@
 //! | loop-free pairs (normal cones, Sederberg-Meyers, the critical-point solve), boundary seeds, splitting to `Unresolved` ([`Survey`]) | 5 | |
 //! | the field path when a side has an implicit form; critical cells, valleys, poles | 6a, 6b | 6a landed; 6b: valleys of the survey refused by name before its solve (a contact of order 2 [`SsiError::Untraced`], above 2 `Singular`); the field path's touches, tangencies and crossings inside a piece stay `Unresolved` |
 //! | the march for NURBS against NURBS, [`SsiError::Stalled`] | 7 | |
-//! | one knot vector, certification per span, [`SsiError::Uncertified`] | 8 | 7 landed: a march branch is degree 1 with an estimated distance to the intersection |
+//! | one knot vector, certification per span, [`SsiError::Uncertified`] | 8 | |
 //!
 //! # The answer
 //!

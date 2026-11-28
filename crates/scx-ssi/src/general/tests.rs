@@ -112,15 +112,23 @@ fn run(
     intersect(a, ae, b, be, acc(), res(), budget, stop)
 }
 
-/// Every point of the answer's branches.
+/// Points of the answer's branches: eight per span of each curve, and its ends.
 fn points(t: &Traced) -> Vec<Point3> {
     t.branches
         .iter()
         .flat_map(|b| {
-            b.curve
-                .points()
+            let mut ks = b.curve.knots().to_vec();
+            ks.dedup();
+            let mut ts: Vec<f64> = ks
                 .iter()
-                .map(|&[x, y, z]| Point3::new(x, y, z))
+                .zip(ks.iter().skip(1))
+                .flat_map(|(&a, &b)| (0..8).map(move |i| a + (b - a) * f64::from(i) / 8.0))
+                .collect();
+            ts.extend(ks.last());
+            ts.into_iter().map(move |u| {
+                let [x, y, z] = b.curve.point(u, scx_nurbs::Approach::Above).unwrap();
+                Point3::new(x, y, z)
+            })
         })
         .collect()
 }
