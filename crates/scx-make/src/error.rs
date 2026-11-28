@@ -106,6 +106,14 @@ pub enum Refusal {
     ZeroRadii,
     /// A prism or sheet of no regions.
     NoRegions,
+    /// A face's uv box that is empty, not finite, longer than a period of the surface, or
+    /// past its domain (a sphere's `v` outside `[0, 1]`, a cone's beyond its apex).
+    UvBox {
+        /// The box's `u` ends.
+        u: [f64; 2],
+        /// The box's `v` ends.
+        v: [f64; 2],
+    },
     /// A spindle torus: the minor radius exceeds the major one by more than the resolution,
     /// so the tube crosses its own axis.
     SelfIntersecting {
@@ -113,6 +121,21 @@ pub enum Refusal {
         major: f64,
         /// The minor radius (mm).
         minor: f64,
+    },
+    /// A revolve's profile reaches more than the resolution across the axis, so the body
+    /// would pass through itself: `at` is the first segment that does.
+    CrossesAxis {
+        /// The segment.
+        at: SegmentRef,
+    },
+    /// A partial turn's angles (radians) are not finite, not increasing, a whole turn or
+    /// more apart, or do not take the profile's farthest point more than the resolution
+    /// from the other cap either way round.
+    Turn {
+        /// The start angle.
+        from: f64,
+        /// The end angle.
+        to: f64,
     },
 }
 
@@ -132,6 +155,8 @@ pub enum Unsupported {
         /// The index of the second.
         second: usize,
     },
+    /// A face on a NURBS surface: its iso-curves are not extracted exactly yet.
+    NurbsFace,
     /// A horn torus: the radii are equal within the resolution, so the tube meets the axis
     /// at one point, a singular point that the pole rules do not cover (72 D3).
     HornTorus {
@@ -139,6 +164,12 @@ pub enum Unsupported {
         major: f64,
         /// The minor radius (mm).
         minor: f64,
+    },
+    /// A revolve's arc whose circle crosses the axis outside the arc: its surface is a
+    /// spindle torus, not made yet.
+    SpindleTorus {
+        /// The segment.
+        at: SegmentRef,
     },
 }
 
@@ -207,7 +238,12 @@ impl MakeError {
             Self::Refused(Refusal::NoRegions) => "no_regions",
             Self::Unsupported(Unsupported::RegionsMeet { .. }) => "regions_meet",
             Self::Refused(Refusal::SelfIntersecting { .. }) => "self_intersecting",
+            Self::Refused(Refusal::UvBox { .. }) => "uv_box",
+            Self::Unsupported(Unsupported::NurbsFace) => "nurbs_face",
             Self::Unsupported(Unsupported::HornTorus { .. }) => "horn_torus",
+            Self::Refused(Refusal::CrossesAxis { .. }) => "crosses_axis",
+            Self::Refused(Refusal::Turn { .. }) => "turn",
+            Self::Unsupported(Unsupported::SpindleTorus { .. }) => "spindle_torus",
             Self::Defect(Defect::Surface(_)) => "surface",
             Self::Defect(Defect::Curve(_)) => "curve",
             Self::Defect(Defect::Absent(_)) => "absent",
@@ -266,10 +302,27 @@ impl fmt::Display for MakeError {
                 f,
                 "the torus's minor radius {minor} mm exceeds its major radius {major} mm: the tube crosses its axis"
             ),
+            Self::Refused(Refusal::UvBox { u, v }) => write!(
+                f,
+                "the uv box u {u:?}, v {v:?} is empty, longer than a period or past the surface's domain"
+            ),
+            Self::Unsupported(Unsupported::NurbsFace) => {
+                write!(f, "a face on a NURBS surface is not made yet")
+            }
             Self::Unsupported(Unsupported::HornTorus { major, minor }) => write!(
                 f,
                 "the horn torus (major {major} mm, minor {minor} mm) is not made yet: its tube meets the axis"
             ),
+            Self::Refused(Refusal::CrossesAxis { at }) => {
+                write!(f, "{at} crosses the axis of the revolve")
+            }
+            Self::Refused(Refusal::Turn { from, to }) => write!(
+                f,
+                "the turn from {from} to {to} radians is not increasing, finite, less than a whole turn and more than the resolution from either cap to the other"
+            ),
+            Self::Unsupported(Unsupported::SpindleTorus { at }) => {
+                write!(f, "{at} revolves to a spindle torus, which is not made yet")
+            }
             Self::Defect(Defect::Surface(e)) => write!(f, "a surface of the body: {e}"),
             Self::Defect(Defect::Curve(e)) => write!(f, "a curve of the body: {e}"),
             Self::Defect(Defect::Absent(e)) => e.fmt(f),
