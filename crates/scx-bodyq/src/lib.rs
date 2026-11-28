@@ -57,7 +57,8 @@
 //! **One surface** (research 74 §46). [`faces_on_one_surface`] grows a set of faces across the
 //! edges where the faces are proved to lie on one surface (equal, or planes within the
 //! resolution by `scx_surface::plane_bound`, ST5's proof), with the reason each other edge
-//! stopped it.
+//! stopped it; every face grown is also proved on its seed's surface (research 74 §49), so a
+//! chain of planes that drifts is not grown through.
 //!
 //! **Vertex joints and wall geometry** (research 74 §34, BW11). [`leaving`], [`turn_at`],
 //! [`convex_at`] and [`joint_turn`] read a joint of edges at a vertex. [`facing_planes`],

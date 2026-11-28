@@ -6160,3 +6160,81 @@ and its recipe tests unchanged).
 ### 46.6 Proposed 04 row
 
 | 11-28 | (For the owner's review) BW8b: `scx_bodyq::faces_on_one_surface(&Brep, seeds, keep, budget, stop) -> OneSurface { faces, stopped }`: the seeds and every face reached across a curve edge of two fins, on two faces of the same shells, run opposite senses, whose surfaces are `==` or two planes proved within `Resolution::approx` (ST5's rule, 74 §42.5); each edge that did not lead on is a `Stopped { edge, from, to, why }` with `NotCrossed::{Fins(n), Shells, Sense, Surface(NotOneSurface::{Kind, Crease, Opposite, Apart(Length), NoBox})}`; `keep` edges are not crossed. The proof moves from `scx-stitch` to `scx_surface::plane_bound` (`NotNear::{Crease, Opposite}`, `CREASE`), which both crates call; `merge_faces` answers are unchanged. Growth is by neighbours as the pin's, so a chain of planes each within `approx` of the next is grown through (open); quadrics on other frames and opposite planes are typed, not merged. Measured 4 work units and 3 to 4 us a face, 2 edge proofs per face, none for faces that share no edge | Amends ST5 (the proof lives in `scx-surface`); no new Cargo edge | 74 §46 |
+
+## 49. BW8c as built (11-28)
+
+BW8b's open question 46.5.1: `faces_on_one_surface` grew by neighbours, so a chain of planes
+each within `Resolution::approx` of the next but drifting overall was grown through, and the
+result could hold faces not on one surface. Ruled (truth over pin): the growth holds its
+promise, every face returned is proved on its seed's surface. In
+`crates/scx-bodyq/src/one_surface.rs`; no new Cargo edge, `scx-surface` unchanged.
+
+```rust
+#[non_exhaustive] pub enum NotCrossed { Fins(usize), Shells, Sense, Surface(NotOneSurface),
+                                        Drift { seed: FaceId, why: NotOneSurface } }
+```
+
+### 49.1 What is proved
+
+Each face carries the seed its growth came from (a seed is its own). When an edge passes the
+neighbour proof (the BW8b rules, unchanged) and the face across is not yet in the set, that face is
+proved against the seed's surface: `==` surfaces pass; two planes by one `plane_bound(face's
+plane, seed's plane, face's box)` (the face's box against the seed's unbounded plane, so the
+seed's box is not read); `Kind`, `Crease`, `Opposite`, `Apart(bound)`, `NoBox` as BW8b. A face
+that fails is not added and the edge is a `Stopped { to: Some(face), why: Drift { seed, why } }`.
+A face refused is remembered per (seed, face), so a second edge into it costs no second proof.
+The edge is decided once as before. Faces of several seeds each keep their own seed: a face is
+checked against the seed of the first growth to reach it.
+
+### 49.2 Decided: a new `NotCrossed::Drift`, not `Surface(Apart(..))`
+
+| Choice | For | Against |
+|---|---|---|
+| **New `Drift { seed, why }`** (taken) | The edge itself is fine (neighbours are within approx); the fault is the accumulated distance from the seed, and a caller cannot tell that from `Surface(Apart)`, which means "these two faces are apart"; `why` can be `Crease` or `Opposite` too (cumulative tilt past `CREASE` is possible: the neighbours' sine is under 1e-3, the seed's is not), so reusing `Surface(Crease)` would claim a crease between the two faces that does not exist; names the seed (several seeds) | One more variant for a caller that matches exhaustively (the enum is `non_exhaustive`, so none can; BW8b is one day old) |
+| Reuse `Surface(Apart(..))` | No new variant | Wrong claim about the edge's two faces: `Apart(l)` with `l > approx` between faces that were just proved within approx; a block wall's rim edges (`Surface(Crease)`, every one of `4n`) and drift stops are indistinguishable to a caller filtering on `why`; no seed named |
+
+Adversarial: a caller who filters "rim edges" on `Surface(Crease)` is not affected by drift stops
+(they are `Drift`), which is the point. A caller who wants every stop that is not a pair fault
+matches `Drift { .. }`. A single-seed growth with `from == seed` repeats the neighbour proof
+(one more `plane_bound`, identical answer: never a `Drift`); it is kept uniform rather than special-cased,
+costing one unit.
+
+### 49.3 Tests (closed forms)
+
+`a_drifting_chain_stops_where_the_cumulative_bound_is_crossed`: a wall of 10 by 10 faces,
+column `i` tilted `i d` about a line at the wall's edge with `d = 0.17 approx` (each pair a column
+apart is under 0.7 approx; the neighbour test passes everywhere, so BW8b would return all 100).
+Column `c` is off the seed's plane (column 0) by `c d (x_c + r)` (`x_c` the centre's distance from the pivot,
+`r` the half diagonal of the face's box). The growth returns exactly the columns under the first `c` whose bound
+exceeds `approx` (`first * 10` faces), and every stopped edge into the next column is `Drift { seed, Apart(l) }`
+with `approx < l < 1.3 * bound(first)`. The other nine tests stay green; the only change in them is the work
+count in `a_subdivided_block_grows_to_its_six_walls`: `4 n (n + 1) + n^2 - 1` a wall (one proof for each
+face reached beyond the seed).
+
+### 49.4 Measured (budget's count, release; timer throwaway, machine loaded)
+
+Growing one wall, work units, before and after:
+
+| steps | wall faces | before | after | per face before / after |
+|---|---|---|---|---|
+| 5 | 25 | 120 | 144 | 4.8 / 5.8 |
+| 10 | 100 | 440 | 539 | 4.4 / 5.4 |
+| 20 | 400 | 1,680 | 2,079 | 4.2 / 5.2 |
+
+One extra proof a face (`n^2 - 1`), as ruled. Time measured on a loaded machine was noisy
+(10 steps: 24 us before, 44 us after; 20 steps: 206 us, 284 us; one run each of 200 loops): treat it as
+at most +40% on a wall of all-distinct frames, where every face costs a box read, a `plane_bound` and a map
+insert more. A body whose faces share a surface (`==`) pays only a comparison. No other path changes.
+
+### 49.5 Open
+
+1. The bound is the same conservative one as ST5's (the offset at the face's centre plus the angle times the half
+   diagonal), so a face is refused up to 1.5x early; the drift stop is at that bound, not at the true largest
+   deviation.
+2. A face already in the set is not re-proved against another seed that also reaches it (two seeds that are not
+   on one surface and a face between them); first growth wins. The caller sees both seeds in `faces` and can
+   call once per seed.
+
+### 49.6 Proposed 04 row
+
+| 11-28 | (For the owner's review) BW8c: `scx_bodyq::faces_on_one_surface` now proves every grown face on its seed's surface (`scx_surface::plane_bound` of the face's box against the seed's plane, `==` passes), closing BW8b's drift: a chain of planes each within `Resolution::approx` of the next stops where the cumulative bound is crossed. A face that fails is a new typed `NotCrossed::Drift { seed, why: NotOneSurface }` (not `Surface(Apart)`: the edge's two faces are within approx, `why` may also be `Crease`/`Opposite` against the seed). Measured one more proof a face (4.4 to 5.4 work units on a 100-face wall). | For: truth over pin, the growth keeps its promise; one proof a face; `merge_faces` already does the same by proving each member against the group's plane. Against: +1 work unit a face; an early stop up to 1.5x by the conservative bound; first seed wins for a face two seeds reach | 74 §49 |
