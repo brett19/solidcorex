@@ -355,6 +355,27 @@ impl Draft {
             .iter()
             .map(|l| l.uses.iter().map(|u| (u.edge, u.sense)).collect())
             .collect();
+        // A use written again to the same bits, of an edge whose curve is the same bits,
+        // keeps its certified bound: the gap is of the same curves.
+        let before: Vec<Vec<Option<(EdgeId, scx_curve::Curve, UseGeom, Arc<Recorded>)>>> = view
+            .record()
+            .loops
+            .iter()
+            .map(|l| {
+                l.uses
+                    .iter()
+                    .map(|u| {
+                        let b = u.bound.clone()?;
+                        let Some(EdgeShape::Curve { curve, .. }) =
+                            self.edge(u.edge).and_then(|e| e.shape())
+                        else {
+                            return None;
+                        };
+                        Some((u.edge, curve.clone(), u.geom.clone(), b))
+                    })
+                    .collect()
+            })
+            .collect();
         let res = doc.resolution();
         let mut flags = Vec::with_capacity(loops.len());
         let mut alone = Vec::with_capacity(loops.len());
@@ -367,9 +388,9 @@ impl Draft {
         let width = res.zone().mm() / 64.0;
         let mut out = Vec::new();
         let mut bounds: Vec<Vec<Option<Arc<Recorded>>>> = Vec::with_capacity(written.len());
-        for (l, flags) in written.iter().zip(&flags) {
+        for ((l, flags), was) in written.iter().zip(&flags).zip(&before) {
             let mut lb = Vec::with_capacity(l.uses.len());
-            for (u, &projected) in l.uses.iter().zip(flags) {
+            for (i, (u, &projected)) in l.uses.iter().zip(flags).enumerate() {
                 let (true, UseGeom::Pcurve { curve: pc, interval }) = (projected, &u.geom) else {
                     lb.push(None);
                     continue;
@@ -379,6 +400,14 @@ impl Draft {
                     Some(EdgeShape::Curve { curve, .. }) => curve,
                     _ => return Err(PcurveWriteError::Pending { edge }),
                 };
+                if let Some(Some((e, c, g, b))) = was.get(i)
+                    && *e == edge
+                    && c == curve
+                    && *g == u.geom
+                {
+                    lb.push(Some(Arc::clone(b)));
+                    continue;
+                }
                 let gap = certified_gap(&surface, pc, curve, interval, width, budget, stop)
                     .map_err(|cause| PcurveWriteError::Gap { edge, cause })?;
                 let bound = Length::from_mm(gap.upper());

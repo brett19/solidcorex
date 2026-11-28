@@ -446,7 +446,8 @@ pub fn pcurve_of_projection(
 }
 
 /// The surface's one nearest point to `p`, in closed form; `None` for a NURBS surface and
-/// where the nearest points are a set (63 §4.2).
+/// where the nearest points are a set (63 §4.2); a pole, where the feet are every `u` at
+/// one point, is that point.
 fn nearest(surface: &Surface, p: Point3) -> Option<Point3> {
     let closest = match surface {
         Surface::Plane(s) => s.closest(p),
@@ -458,7 +459,15 @@ fn nearest(surface: &Surface, p: Point3) -> Option<Point3> {
     };
     match closest {
         Closest::One(f) => Some(f.point),
-        Closest::AlongU { .. } | Closest::AlongV { .. } | Closest::Every { .. } => None,
+        // A pole (a sphere's, a cone's apex) is one point at every `u`; a circle of feet
+        // (a cylinder's or a torus's axis) is not.
+        Closest::AlongU { v, .. } => {
+            let a = surface.point(Point2::new(0.0, v));
+            let b = surface.point(Point2::new(PI, v));
+            let scale = 1.0 + a.x.abs().max(a.y.abs()).max(a.z.abs());
+            ((a - b).length() <= 16.0 * f64::EPSILON * scale).then_some(a)
+        }
+        Closest::AlongV { .. } | Closest::Every { .. } => None,
     }
 }
 
@@ -1903,6 +1912,10 @@ mod tests {
             Circle::new(Frame::new(Point3::ORIGIN, Vec3::Y, Vec3::Z).unwrap(), mm(1.0 + d), Sense::Forward).unwrap(),
         );
         let over = span(0.1, PI - 0.1);
+        let pc = pcurve_of_projection(&meridian, &sphere, over, r, within).unwrap();
+        projects(&meridian, &sphere, &pc, over, 1e-14);
+        // Pole to pole: at each pole every `u` is the one nearest point.
+        let over = span(0.0, PI);
         let pc = pcurve_of_projection(&meridian, &sphere, over, r, within).unwrap();
         projects(&meridian, &sphere, &pc, over, 1e-14);
     }
