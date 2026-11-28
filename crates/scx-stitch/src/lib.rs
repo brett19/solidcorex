@@ -24,9 +24,11 @@
 
 mod edges;
 mod error;
+mod merge;
 mod orient;
 mod points;
 mod report;
+mod single;
 mod stitch;
 
 pub use error::{
@@ -35,3 +37,5 @@ pub use error::{
 };
 pub use report::{Identified, Joined, Left, NoItems, Split, StitchReport, Stitched, Want};
 pub use stitch::stitch;
+pub use merge::{MergeLeft, MergeReport, Merged, NotOneLine, NotOneSurface, merge_faces};
+pub use single::{Sewn, gather, open_edges, sew};

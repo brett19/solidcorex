@@ -16,7 +16,7 @@ use scx_num::vector3d::Point3;
 
 use crate::error::{StitchDefect, StitchError, StitchUnsupported, draft_defect, too_large};
 use crate::points::{Group, Item, identify};
-use crate::report::{Identified, StitchReport, Stitched, Want};
+use crate::report::{Identified, NoItems, StitchReport, Stitched, Want};
 
 /// Work charged per entity copied or end measured.
 const UNIT: u64 = 1;
@@ -75,15 +75,7 @@ const UNIT: u64 = 1;
 ///   when `cx.stop` is set, and [`StitchError::Defect`] for the method's own failure.
 pub fn stitch(sheets: &[&Brep], want: Want, cx: &mut Cx<'_>) -> Result<Stitched, StitchError> {
     let res = cx.doc.resolution();
-    let n = u32::try_from(sheets.len())
-        .map_err(|_| StitchError::Unsupported(StitchUnsupported::TooLarge))?;
-    for (i, s) in (0..n).zip(sheets) {
-        if s.resolution() != res {
-            return Err(StitchError::Refused(crate::StitchRefusal::OtherDocument {
-                operand: Operand::from_raw(i),
-            }));
-        }
-    }
+    let n = same_document(sheets, cx)?;
     if want == Want::Solid {
         for (i, s) in (0..n).zip(sheets) {
             let solid = s.regions().any(|r| !r.is_outside())
@@ -174,6 +166,70 @@ pub fn stitch(sheets: &[&Brep], want: Want, cx: &mut Cx<'_>) -> Result<Stitched,
             left: edges.left,
         },
     })
+}
+
+/// The number of sheets, when each was finished under `cx`'s document's resolution.
+pub(crate) fn same_document(sheets: &[&Brep], cx: &Cx<'_>) -> Result<u32, StitchError> {
+    let res = cx.doc.resolution();
+    let n = u32::try_from(sheets.len())
+        .map_err(|_| StitchError::Unsupported(StitchUnsupported::TooLarge))?;
+    for (i, s) in (0..n).zip(sheets) {
+        if s.resolution() != res {
+            return Err(StitchError::Refused(crate::StitchRefusal::OtherDocument {
+                operand: Operand::from_raw(i),
+            }));
+        }
+    }
+    Ok(n)
+}
+
+/// The bodies gathered into one, nothing identified (ST5's [`gather`](crate::gather)):
+/// body 0 edited in place, every other body copied in beside it with its own vertices.
+pub(crate) fn gathered(bodies: &[&Brep], cx: &mut Cx<'_>) -> Result<Done<NoItems>, StitchError> {
+    let n = same_document(bodies, cx)?;
+    let mut budget = cx.budget();
+    let Some(first) = bodies.first() else {
+        let (body, changes) = Draft::new()
+            .finish(cx.doc)
+            .map_err(|u| StitchError::Defect(StitchDefect::Finish(Box::new(u.cause))))?;
+        return Ok(Done::new(body, changes, Report::empty(budget.used())));
+    };
+    let zone = cx.doc.resolution().zone().mm();
+    let mut items = Vec::new();
+    let mut start = Vec::with_capacity(bodies.len() + 1);
+    for (i, s) in (0..n).zip(bodies) {
+        start.push(items.len());
+        items.extend(s.vertices().map(|v| Item {
+            operand: Operand::from_raw(i),
+            vertex: v.id(),
+            point: v.point(),
+            reach: zone,
+        }));
+    }
+    start.push(items.len());
+    let ix = Index {
+        items: &items,
+        start: &start,
+        group_of: vec![None; items.len()],
+    };
+    let mut b = Build {
+        sheets: bodies,
+        ix: &ix,
+        groups: &[],
+        draft: first.edit(),
+        at: vec![None; items.len()],
+        group_at: Vec::new(),
+        edge_at: vec![BTreeMap::new(); bodies.len()],
+        edge_name: BTreeMap::new(),
+        face_name: BTreeMap::new(),
+    };
+    b.vertices()?;
+    b.copy(&mut budget, cx.stop)?;
+    let (body, changes) = b
+        .draft
+        .finish(cx.doc)
+        .map_err(|u| StitchError::Defect(StitchDefect::Finish(Box::new(u.cause))))?;
+    Ok(Done::new(body, changes, Report::empty(budget.used())))
 }
 
 /// The items, where each sheet's start, and each item's group.

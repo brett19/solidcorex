@@ -34,7 +34,7 @@ pub struct Stitched {
 }
 
 /// What a stitch joined.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 #[non_exhaustive]
 pub struct StitchReport {
     /// Each vertex of the result that stands for vertices of two or more sheets, in the
