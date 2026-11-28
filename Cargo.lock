@@ -660,6 +660,7 @@ dependencies = [
 name = "scx-make"
 version = "0.1.0"
 dependencies = [
+ "scx-algo",
  "scx-brep",
  "scx-curve",
  "scx-mass",
