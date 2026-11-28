@@ -65,21 +65,21 @@ impl Iv {
 impl Add for Iv {
     type Output = Self;
     fn add(self, b: Self) -> Self {
-        Self(exact_sum(self.0, b.0).unwrap_or_else(|| self.0.add_ulp(b.0)))
+        Self(self.0.add_ulp(b.0))
     }
 }
 
 impl Sub for Iv {
     type Output = Self;
     fn sub(self, b: Self) -> Self {
-        Self(exact_sum(self.0, Ivl::new(-b.0.hi, -b.0.lo)).unwrap_or_else(|| self.0.sub_ulp(b.0)))
+        Self(self.0.sub_ulp(b.0))
     }
 }
 
 impl Mul for Iv {
     type Output = Self;
     fn mul(self, b: Self) -> Self {
-        Self(exact_product(self.0, b.0).unwrap_or_else(|| self.0.mul_ulp(b.0)))
+        Self(self.0.mul_ulp(b.0))
     }
 }
 
@@ -96,7 +96,8 @@ fn point(a: Ivl) -> Option<f64> {
 }
 
 /// The sum of two point intervals as a point when it is exact (no rounding error), so
-/// exact values and zeros stay exact; `None` otherwise.
+/// exact values and zeros stay exact; `None` otherwise. Only the crossings use it: the
+/// `Iv` operations keep their outward rounding.
 pub(crate) fn exact_sum(a: Ivl, b: Ivl) -> Option<Ivl> {
     let (s, e) = two_sum(point(a)?, point(b)?);
     (s.is_finite() && e == 0.0).then(|| Ivl::from(s))
@@ -336,16 +337,21 @@ mod tests {
     }
 
     #[test]
-    fn exact_operations_stay_points() {
-        let (a, b) = (Iv::exact(3.0), Iv::exact(0.25));
-        assert_eq!((a * b).0, Ivl::from(0.75));
-        assert_eq!((a - a).0, Ivl::from(0.0));
-        assert_eq!((a + b).0, Ivl::from(3.25));
-        // Inexact: widened to a bracket around the true value.
-        let s = Iv::exact(1.0) + Iv::exact(f64::EPSILON / 4.0);
-        assert!(s.0.lo <= 1.0 && s.0.hi > 1.0, "{s:?}");
-        let p = Iv::exact(0.1) * Iv::exact(0.1);
-        assert!(p.0.lo < p.0.hi, "{p:?}");
+    fn exact_sums_and_products_are_points_only_when_exact() {
+        let (a, b) = (Ivl::from(3.0), Ivl::from(0.25));
+        assert_eq!(exact_product(a, b), Some(Ivl::from(0.75)));
+        assert_eq!(exact_sum(a, Ivl::from(-3.0)), Some(Ivl::from(0.0)));
+        assert_eq!(exact_sum(a, b), Some(Ivl::from(3.25)));
+        // Inexact, or not points: no exact value.
+        assert_eq!(
+            exact_sum(Ivl::from(1.0), Ivl::from(f64::EPSILON / 4.0)),
+            None
+        );
+        assert_eq!(exact_product(Ivl::from(0.1), Ivl::from(0.1)), None);
+        assert_eq!(exact_sum(Ivl::new(1.0, 2.0), b), None);
+        // The outward operations are unchanged: a point minus itself is still widened.
+        let d = Iv::exact(0.1) * Iv::exact(3.0) - Iv::exact(0.1) * Iv::exact(3.0);
+        assert!(d.0.lo < 0.0 && d.0.hi > 0.0, "{d:?}");
     }
 
     #[test]

@@ -634,6 +634,28 @@ impl Coef {
     }
 }
 
+/// `a - b`, both coordinates, when the subtraction is exact.
+fn exact_diff(a: Point2, b: Point2) -> Option<[Ivl; 2]> {
+    Some([
+        exact_sum(Ivl::from(a.x), Ivl::from(-b.x))?,
+        exact_sum(Ivl::from(a.y), Ivl::from(-b.y))?,
+    ])
+}
+
+/// `(a - a0) x (b - b0)` as a point when every step is exact; `None` sends the caller to
+/// the outward-rounded value.
+fn exact_cross(a: Point2, a0: Point2, b: Point2, b0: Point2) -> Option<Ivl> {
+    let ([dx, dy], [ex, ey]) = (exact_diff(a, a0)?, exact_diff(b, b0)?);
+    let (l, r) = (exact_product(dx, ey)?, exact_product(dy, ex)?);
+    exact_sum(l, Ivl::new(-r.hi, -r.lo))
+}
+
+/// `(a - a0) . (b - b0)` as a point when every step is exact.
+fn exact_dot(a: Point2, a0: Point2, b: Point2, b0: Point2) -> Option<Ivl> {
+    let ([dx, dy], [ex, ey]) = (exact_diff(a, a0)?, exact_diff(b, b0)?);
+    exact_sum(exact_product(dx, ex)?, exact_product(dy, ey)?)
+}
+
 /// `r` is exactly `x / (x + y)`: the sum is exact and `r` times it gives `x` back exactly.
 fn exact_quotient(x: f64, y: f64, r: f64) -> bool {
     exact_sum(Ivl::from(x), Ivl::from(y))
@@ -925,12 +947,24 @@ impl Job<'_> {
         let hx = pts
             .iter()
             .zip(ws)
-            .map(|(p, w)| Coef::new((Iv::exact(p.x) * Iv::exact(*w)).0, None))
+            .map(|(p, w)| {
+                Coef::new(
+                    exact_product(Ivl::from(p.x), Ivl::from(*w))
+                        .unwrap_or_else(|| Ivl::from(p.x).mul_ulp(Ivl::from(*w))),
+                    None,
+                )
+            })
             .collect();
         let hy = pts
             .iter()
             .zip(ws)
-            .map(|(p, w)| Coef::new((Iv::exact(p.y) * Iv::exact(*w)).0, None))
+            .map(|(p, w)| {
+                Coef::new(
+                    exact_product(Ivl::from(p.y), Ivl::from(*w))
+                        .unwrap_or_else(|| Ivl::from(p.y).mul_ulp(Ivl::from(*w))),
+                    None,
+                )
+            })
             .collect();
         let d = ws.iter().map(|w| Coef::positive(*w)).collect();
         let (f, mem) = match self.implicit {
@@ -938,15 +972,18 @@ impl Job<'_> {
                 let dir = IP::exact(b1).sub(IP::exact(b0));
                 let side = |p: &Point2, w: &f64| {
                     let e = IP::exact(*p).sub(IP::exact(b0));
-                    exact_coef(dir.cross(e), orient(b0, b1, *p), *w)
+                    let v = exact_cross(b1, b0, *p, b0).map_or_else(|| dir.cross(e), Iv);
+                    exact_coef(v, orient(b0, b1, *p), *w)
                 };
                 let ahead = |p: &Point2, w: &f64| {
                     let e = IP::exact(*p).sub(IP::exact(b0));
-                    exact_coef(e.dot(dir), dot_sign(b0, b1, *p), *w)
+                    let v = exact_dot(*p, b0, b1, b0).map_or_else(|| e.dot(dir), Iv);
+                    exact_coef(v, dot_sign(b0, b1, *p), *w)
                 };
                 let behind = |p: &Point2, w: &f64| {
                     let e = IP::exact(b1).sub(IP::exact(*p));
-                    exact_coef(e.dot(dir), dot_sign(b1, b0, *p), *w)
+                    let v = exact_dot(b1, *p, b1, b0).map_or_else(|| e.dot(dir), Iv);
+                    exact_coef(v, dot_sign(b1, b0, *p), *w)
                 };
                 let f = pts.iter().zip(ws).map(|(p, w)| side(p, w)).collect();
                 let m0 = pts.iter().zip(ws).map(|(p, w)| ahead(p, w)).collect();
@@ -968,7 +1005,9 @@ impl Job<'_> {
                             .zip(ws)
                             .map(|(p, wt)| {
                                 let e = IP::exact(*p).sub(IP::exact(*u));
-                                exact_coef(dir.cross(e), orient(*u, *v, *p), *wt)
+                                let val =
+                                    exact_cross(*v, *u, *p, *u).map_or_else(|| dir.cross(e), Iv);
+                                exact_coef(val, orient(*u, *v, *p), *wt)
                             })
                             .collect()
                     })
