@@ -667,3 +667,160 @@ fn curves_against_curves() {
         r * (1.0 - fmath::cos(half)),
     );
 }
+
+// Pcurves lifted as series (74 §35).
+
+/// A circle about `axis` (a unit of `f`'s local frame) through local `centre`, `x` its
+/// local zero direction.
+fn circle_about(f: &Frame, centre: (f64, f64, f64), axis: Vec3, x: Vec3, r: f64) -> Curve {
+    let to = |v: Vec3| *f.x() * v.x + *f.y() * v.y + *f.z() * v.z;
+    let fr = frame_at(at(f, centre.0, centre.1, centre.2), to(axis), to(x));
+    Curve::Circle(Circle::new(fr, mm(r), Sense::Forward).unwrap())
+}
+
+fn torus(f: Frame, big: f64, small: f64) -> Surface {
+    Surface::Torus(Torus::new(f, mm(big), mm(small), Sense::Forward).unwrap())
+}
+
+/// The pcurve of `c` on `s` decided against `1e-5` within a few units, holding `truth`, and
+/// the pcurve against `moved` (the edge shifted by `by`, same parameter) holding `by`.
+fn lifted_at_once(s: &Surface, c: &Curve, moved: &Curve, by: f64, o: Extent1d) {
+    let p = pcurve_of(c, s, o, res()).unwrap();
+    assert!(
+        Lift::new(s, &p, c, (o.min(), o.max())).is_some(),
+        "{p:?} not lifted"
+    );
+    let aim = Aim::Decide {
+        allowance: 1e-5,
+        width: 1e-8,
+    };
+    let mut budget = Budget::new(1_000);
+    let b = pcurve_edge_gap(s, &p, c, &o, aim, &mut budget, &Stop::new()).unwrap();
+    holds(b, 0.0);
+    assert!(b.upper() <= 1e-10, "{b:?}");
+    assert!(budget.used() <= 8, "{} units for {p:?}", budget.used());
+    holds(pgap(s, &p, moved, o), by);
+}
+
+#[test]
+fn a_coaxial_full_circles_pcurve_on_a_cylinder_closes_at_once() {
+    let f = tilted();
+    let s = cylinder(f, 2.0);
+    let z = Vec3::new(0.0, 0.0, 1.0);
+    let x = Vec3::new(1.0, 0.0, 0.0);
+    let c = circle_about(&f, (0.0, 0.0, 0.5), z, x, 2.0);
+    let moved = circle_about(&f, (0.0, 0.0, 0.5 + 1e-3), z, x, 2.0);
+    lifted_at_once(&s, &c, &moved, 1e-3, over(0.0, TAU));
+    // A part circle, starting off a break.
+    lifted_at_once(&s, &c, &moved, 1e-3, over(0.3, 4.0));
+}
+
+#[test]
+fn a_cones_circle_and_a_spheres_latitude_and_meridian_close_at_once() {
+    let f = tilted();
+    let (z, x, y) = (
+        Vec3::new(0.0, 0.0, 1.0),
+        Vec3::new(1.0, 0.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+    );
+    let half = PI / 6.0;
+    let cone = Surface::Cone(Cone::new(f, mm(1.0), half, Sense::Forward).unwrap());
+    let rho = 1.0 + fmath::tan(half) * 2.0;
+    let c = circle_about(&f, (0.0, 0.0, 2.0), z, x, rho);
+    let moved = circle_about(&f, (0.0, 0.0, 2.0), z, x, rho + 1e-3);
+    // The radial shift, seen from the cone, is `1e-3 cos(half)` off its surface; the gap to
+    // the pcurve's point is the shift itself.
+    lifted_at_once(&cone, &c, &moved, 1e-3, over(0.0, TAU));
+
+    let s = sphere(f, 2.0);
+    let lat = circle_about(&f, (0.0, 0.0, 1.0), z, x, 3.0_f64.sqrt());
+    let moved = circle_about(&f, (0.0, 0.0, 1.0 + 1e-3), z, x, 3.0_f64.sqrt());
+    lifted_at_once(&s, &lat, &moved, 1e-3, over(0.0, TAU));
+    // A meridian half: the circle through the poles in the `xz` plane, `t` from the south.
+    let mer = circle_about(&f, (0.0, 0.0, 0.0), -y, x, 2.0);
+    let moved = circle_about(&f, (0.0, 1e-3, 0.0), -y, x, 2.0);
+    lifted_at_once(
+        &s,
+        &mer,
+        &moved,
+        1e-3,
+        over(-FRAC_PI_2 + 0.1, FRAC_PI_2 - 0.1),
+    );
+}
+
+#[test]
+fn a_toruss_circles_close_at_once() {
+    let f = tilted();
+    let (big, small) = (3.0, 1.0);
+    let s = torus(f, big, small);
+    let (z, x, y) = (
+        Vec3::new(0.0, 0.0, 1.0),
+        Vec3::new(1.0, 0.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+    );
+    // An equator and a parallel above it.
+    let eq = circle_about(&f, (0.0, 0.0, 0.0), z, x, big + small);
+    let moved = circle_about(&f, (0.0, 0.0, 1e-3), z, x, big + small);
+    lifted_at_once(&s, &eq, &moved, 1e-3, over(0.0, TAU));
+    let top = circle_about(&f, (0.0, 0.0, 0.6), z, x, big + 0.8);
+    let moved = circle_about(&f, (0.0, 0.0, 0.6 + 1e-3), z, x, big + 0.8);
+    lifted_at_once(&s, &top, &moved, 1e-3, over(0.0, TAU));
+    // The tube circle at `u = 0`.
+    let tube = circle_about(&f, (big, 0.0, 0.0), -y, x, small);
+    let moved = circle_about(&f, (big, 1e-3, 0.0), -y, x, small);
+    lifted_at_once(&s, &tube, &moved, 1e-3, over(0.0, TAU));
+}
+
+#[test]
+fn a_circles_pcurve_in_its_plane_closes_at_once() {
+    let f = tilted();
+    let s = plane(f);
+    let (z, x) = (Vec3::new(0.0, 0.0, 1.0), Vec3::new(0.6, 0.8, 0.0));
+    let c = circle_about(&f, (0.4, -0.3, 0.0), z, x, 1.5);
+    let moved = circle_about(&f, (0.4, -0.3, 1e-6), z, x, 1.5);
+    lifted_at_once(&s, &c, &moved, 1e-6, over(0.0, TAU));
+}
+
+#[test]
+fn a_pcurve_not_of_its_kinds_arcs_takes_the_general_path() {
+    // The same circle's pcurve built on a cylinder of another radius: its angle parameter is
+    // not the surface's, so no lift; the general path still holds the true gap.
+    let f = tilted();
+    let (a, b) = (cylinder(f, 2.0), cylinder(f, 2.5));
+    let c = circle(&f, (0.0, 0.0, 0.5), 2.0);
+    let o = over(0.0, TAU);
+    let p = pcurve_of(&c, &a, o, res()).unwrap();
+    assert!(Lift::new(&b, &p, &c, (0.0, TAU)).is_none());
+    assert!(Lift::new(&a, &p, &line(at(&f, 2.0, 0.0, 0.0), *f.z()), (0.0, TAU)).is_none());
+}
+
+#[test]
+fn a_cones_generator_closes_in_few_pieces() {
+    // A generator, and the line parallel to it `1e-3` off the cone along its normal: the
+    // signed distance is convex along a line, so its ends and tangents bound it.
+    let f = tilted();
+    let (r, half) = (1.0, PI / 6.0);
+    let s = Surface::Cone(Cone::new(f, mm(r), half, Sense::Forward).unwrap());
+    let k = fmath::tan(half);
+    let dir = *f.x() * k + *f.z();
+    let n = (*f.x() - *f.z() * k) * (1.0 / (1.0 + k * k).sqrt());
+    let o = over(0.0, 2.0);
+    for (by, start) in [
+        (0.0, at(&f, r, 0.0, 0.0)),
+        (1e-3, at(&f, r, 0.0, 0.0) + n * 1e-3),
+    ] {
+        let c = line(start, dir);
+        let aim = Aim::Decide {
+            allowance: 1e-5,
+            width: 1e-8,
+        };
+        let mut budget = Budget::new(400_000);
+        let b = curve_surface_gap(&c, &o, &s, aim, &mut budget, &Stop::new()).unwrap();
+        assert!(
+            b.lower() <= by + 1e-12 && by <= b.upper() + 1e-12,
+            "{b:?} for {by}"
+        );
+        assert!(budget.used() <= 64, "{} units off by {by}", budget.used());
+        holds(gap(&c, o, &s), by);
+    }
+}
