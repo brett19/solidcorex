@@ -496,7 +496,7 @@ impl Run<'_, '_> {
 }
 
 /// The face's boundary edges with curves: those it uses once, in id order.
-fn rims<'a>(face: Face<'a>, tol: &Tolerances) -> Vec<Rim<'a>> {
+pub(crate) fn rims<'a>(face: Face<'a>, tol: &Tolerances) -> Vec<Rim<'a>> {
     let mut count: BTreeMap<EdgeId, (usize, scx_brep::Edge<'a>)> = BTreeMap::new();
     for u in face.uses() {
         let e = u.edge();
