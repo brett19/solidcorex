@@ -470,7 +470,7 @@ impl Run<'_, '_> {
                 self.stop,
             ) {
                 Ok(h) => h,
-                Err(SurfaceError::NurbsIntersection) => {
+                Err(SurfaceError::NurbsIntersection | SurfaceError::Undecided { .. }) => {
                     return Ok(Err(Undecided::NurbsEdge { edge: rim.edge }));
                 }
                 Err(e) => return Err(HlrError::surface(id, e)),

@@ -113,9 +113,17 @@ pub enum SurfaceError {
     /// sizes and extents `to_nurbs` reaches it only on overflow (sizes near the largest
     /// double).
     Nurbs(NurbsSurfaceError),
-    /// A curve-surface intersection with a NURBS curve or a NURBS surface: not built yet
-    /// (SU6 builds the analytic pairs). Named, never an empty answer.
+    /// A curve-surface intersection with a NURBS curve: not built yet (an analytic curve on
+    /// a NURBS surface is). Named, never an empty answer.
     NurbsIntersection,
+    /// A curve-surface intersection on a NURBS surface that the certified search could not
+    /// decide near the curve's parameter `t` (a box down to the resolution that nothing
+    /// proved: a ray through a pole, a contact flatter than the resolution resolves). The
+    /// caller reads it as unclean, never as an empty answer.
+    Undecided {
+        /// The curve parameter near the undecided place.
+        t: f64,
+    },
     /// The work budget of an iterating call (a NURBS surface's inversion, a curve-surface
     /// intersection) ran out.
     Exhausted(Exhausted),
@@ -141,9 +149,10 @@ impl SurfaceError {
             Self::NotFinite { .. } | Self::Degenerate { .. } | Self::Negative { .. } => {
                 ErrorKind::Refused
             }
-            Self::SelfIntersecting { .. } | Self::NotSimilar | Self::NurbsIntersection => {
-                ErrorKind::Unsupported
-            }
+            Self::SelfIntersecting { .. }
+            | Self::NotSimilar
+            | Self::NurbsIntersection
+            | Self::Undecided { .. } => ErrorKind::Unsupported,
             Self::EmptyExtent { .. }
             | Self::OutsideDomain { .. }
             | Self::OffRail { .. }
@@ -172,6 +181,7 @@ impl SurfaceError {
             Self::NotSimilar => "map_not_similar",
             Self::Nurbs(_) => "nurbs_failed",
             Self::NurbsIntersection => "nurbs_intersection_unbuilt",
+            Self::Undecided { .. } => "intersection_undecided",
             Self::Exhausted(e) => e.name(),
             Self::Stopped => Stopped.name(),
             Self::Defect { .. } => "inversion_defect",
@@ -218,8 +228,12 @@ impl fmt::Display for SurfaceError {
             ),
             Self::Nurbs(_) => f.write_str("the NURBS surface could not be built or edited"),
             Self::NurbsIntersection => {
-                f.write_str("intersecting a NURBS curve or surface with a curve is not built yet")
+                f.write_str("intersecting a NURBS curve with a surface is not built yet")
             }
+            Self::Undecided { t } => write!(
+                f,
+                "the curve-surface intersection could not be decided near t = {t}"
+            ),
             Self::Exhausted(e) => write!(f, "{e}"),
             Self::Stopped => write!(f, "{Stopped}"),
             Self::Defect { reason } => write!(f, "the inversion failed inside: {reason}"),
