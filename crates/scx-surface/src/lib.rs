@@ -124,7 +124,7 @@ pub use procedural::{
 pub use project::{ProjectError, Projected, drop_curve, project_curve};
 pub use recognize::{Recognized, Written, recognize, recognize_written};
 pub use sphere::Sphere;
-pub use surface::Surface;
+pub use surface::{NormalBend, Surface};
 pub use torus::Torus;
 pub use trough::{Half, MARGIN, Trough, TroughError, facing_trough};
 pub use volume_map::{

@@ -249,6 +249,33 @@ fn coaxial_walls_give_the_same_answer() {
 }
 
 #[test]
+fn an_edge_on_a_tangent_wall_gives_the_same_answer() {
+    // BO22: two level r=2 cylinders 4 apart touch along a whole ruling, which is the left
+    // one's seam edge. Stated on the right one's wall, the fact is judged where the line
+    // meets that wall in a double root (tangent, not crossing); true, it gives the plain
+    // union, true to the closed form. Moved off by 1e-3 the line misses the wall and the
+    // same fact is refused.
+    let (a, fa) = cylinder([0.0; 3], 2.0, 10.0);
+    let (b, fb) = cylinder([4.0, 0.0, 0.0], 2.0, 10.0);
+    let rims: Vec<EdgeId> = [fa.top, fa.bottom]
+        .into_iter()
+        .flat_map(|f| edges(&a, f))
+        .collect();
+    let seam = edges(&a, fa.wall)
+        .into_iter()
+        .find(|e| !rims.contains(e))
+        .unwrap();
+    let fact = on(A, seam, fb.wall);
+    let facts: Incidences = [fact].into_iter().collect();
+    let truth = 2.0 * core::f64::consts::PI * 4.0 * 10.0;
+    same(&a, &b, BooleanOp::Union, &facts, truth);
+    let (off, fo) = cylinder([4.001, 0.0, 0.0], 2.0, 10.0);
+    let lie = on(A, seam, fo.wall);
+    let facts: Incidences = [lie].into_iter().collect();
+    assert_eq!(refused(&given(&a, &off, BooleanOp::Union, &facts)), lie);
+}
+
+#[test]
 fn a_false_edge_fact_is_refused() {
     let (a, fa, b, fb) = stacked();
     // The upper block's top edges are 4 mm above the cube's top: their boxes are apart, so

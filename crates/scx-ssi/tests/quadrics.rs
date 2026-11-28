@@ -916,3 +916,114 @@ fn the_depth_rule_resolves_at_a_finer_tolerance() {
     let (curves, points) = pieces("cap fine", solve_at(&ball, &cap, 1e-10));
     assert!(points.is_empty() && curves.len() == 1);
 }
+
+// ---------------------------------------------------------------- a sphere touching off axis
+
+/// A sphere touching a cylinder or ring torus off its axis (BO22): the one touch point
+/// where the centre stands the radii's sum from the spine (or their difference, the sphere
+/// inside), within the tolerance either way; nothing past it; a crossing is `General`. The
+/// same in either order, and under a rigid motion.
+#[test]
+fn a_sphere_touches_a_cylinder_or_torus_off_its_axis() {
+    let cyl = cylinder(world(), 2.0, Sense::Forward, TURN, [-10.0, 10.0]);
+    let ball = |c: [f64; 3], r: f64| {
+        sphere(
+            frame(pa(c), v(0.0, 0.0, 1.0), v(1.0, 0.0, 0.0)),
+            r,
+            Sense::Forward,
+            TURN,
+            [-FRAC_PI_2, FRAC_PI_2],
+        )
+    };
+    let touch = |name: &str, a: &Side, b: &Side, at: [f64; 3]| {
+        for (x, y) in [(a, b), (b, a)] {
+            let (curves, points) = pieces(name, solve(x, y));
+            assert!(curves.is_empty(), "{name}: {curves:?}");
+            assert_eq!(points.len(), 1, "{name}");
+            assert_eq!(points[0].contact, Contact::Tangent, "{name}");
+            assert!(
+                points[0].point.distance(pa(at)) < 1e-12,
+                "{name}: {points:?}"
+            );
+        }
+    };
+    let empty = |name: &str, a: &Side, b: &Side| {
+        for (x, y) in [(a, b), (b, a)] {
+            assert_eq!(solve(x, y), Closed::Solved(Intersection::Empty), "{name}");
+        }
+    };
+    // Outside, on the seam ruling's side and a quarter turn from it.
+    touch(
+        "outside",
+        &cyl,
+        &ball([5.0, 0.0, 3.0], 3.0),
+        [2.0, 0.0, 3.0],
+    );
+    touch(
+        "quarter",
+        &cyl,
+        &ball([0.0, 5.0, 3.0], 3.0),
+        [0.0, 2.0, 3.0],
+    );
+    // Missed or pressed in by half the tolerance: the same touch.
+    touch(
+        "miss",
+        &cyl,
+        &ball([5.0 + 0.5 * TOL, 0.0, 3.0], 3.0),
+        [2.0, 0.0, 3.0],
+    );
+    touch(
+        "press",
+        &cyl,
+        &ball([5.0 - 0.5 * TOL, 0.0, 3.0], 3.0),
+        [2.0, 0.0, 3.0],
+    );
+    // Inside, against the wall.
+    touch("inside", &cyl, &ball([1.0, 0.0, 3.0], 1.0), [2.0, 0.0, 3.0]);
+    // Apart by more than the tolerance, outside and inside.
+    empty("apart", &cyl, &ball([5.0 + 4.0 * TOL, 0.0, 3.0], 3.0));
+    empty("within", &cyl, &ball([0.5, 0.0, 3.0], 1.0));
+    // Pressed in by more: a quartic, not a closed form here.
+    assert!(solve(&cyl, &ball([4.5, 0.0, 3.0], 3.0)).is_general());
+    // The touch outside the cylinder's extent: nothing within the extents.
+    let short = cylinder(world(), 2.0, Sense::Forward, TURN, [-1.0, 1.0]);
+    empty("past the rim", &short, &ball([5.0, 0.0, 3.0], 3.0));
+
+    // A ring torus, R = 5, r = 1.5: outside the tube at 45 degrees round its outer
+    // equator's meridian, and inside the tube.
+    let ring = torus(world(), 5.0, 1.5, Sense::Forward, TURN, TURN);
+    let a = FRAC_PI_4;
+    let (c, s) = (fmath::cos(a), fmath::sin(a));
+    touch(
+        "tube outside",
+        &ring,
+        &ball([5.0 + 3.5 * c, 0.0, 3.5 * s], 2.0),
+        [5.0 + 1.5 * c, 0.0, 1.5 * s],
+    );
+    touch(
+        "tube inside",
+        &ring,
+        &ball([5.0 + 0.5 * c, 0.0, 0.5 * s], 1.0),
+        [5.0 + 1.5 * c, 0.0, 1.5 * s],
+    );
+    // In the hole, touching the inner equator.
+    touch("hole", &ring, &ball([0.0, 1.0, 0.0], 2.5), [0.0, 3.5, 0.0]);
+    empty("tube apart", &ring, &ball([5.0, 0.0, 4.0], 2.0));
+    assert!(solve(&ring, &ball([5.0, 0.0, 3.0], 2.0)).is_general());
+
+    // A rigid motion carries the touch with it.
+    let o = p(1.0, -2.0, 0.5);
+    let (z, x) = (va([0.3, -0.4, 0.866]), va([0.8, 0.6, 0.0]));
+    let tf = frame(o, z, x);
+    let y = *tf.z().cross(*tf.x()).normalized().unwrap();
+    let to = |l: [f64; 3]| o + *tf.x() * l[0] + y * l[1] + *tf.z() * l[2];
+    let moved = cylinder(tf, 2.0, Sense::Forward, TURN, [-10.0, 10.0]);
+    let mb = sphere(
+        frame(to([0.0, 5.0, 3.0]), z, x),
+        3.0,
+        Sense::Forward,
+        TURN,
+        [-FRAC_PI_2, FRAC_PI_2],
+    );
+    touch("moved", &moved, &mb, arr(to([0.0, 2.0, 3.0])));
+}

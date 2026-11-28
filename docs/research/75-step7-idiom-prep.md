@@ -3919,3 +3919,150 @@ Open questions:
 - **A NURBS curve against a NURBS surface.** This is deferred, as 77 §6.3 says.
 - **Degree-4p spans of high-degree curves.** These have not been measured for root-isolation
   depth. `RootLimits::DEFAULT` is used.
+
+### 13.39 BO22 as built (11-28)
+
+Tangent contact through the Boolean (75 §7 row BO22): the stated-fact tier and the closed-form
+tier, with the tracing tier (SM6b) left as a typed `Unsupported` at one hook. This lifts the BO7
+limits on tangent pairs. A tangent line or circle that runs from edge to edge on both faces is
+now built as an edge of four fins. Every other tangent contact is either built, because the
+operation keeps one side or BO25 builds it as a point loop, or refused as `NonManifold`. Before
+this, some of them came back with no error and the wrong body.
+
+- **Bend order for tangent fins** (`pinch.rs`, `scx-check` `radial`). Two fins whose directions
+  `d` lie within `TIED = 1e-9` rad leave the edge in one direction. They are ordered by bend
+  `σ k_n(d)`: the face's normal curvature along `d`, signed by the sense of the use. The fin
+  bending further counter-clockwise comes after. Two bends must differ by more than the sum of
+  their slacks, each `4 k_max² ρ + 1e-9 max(k_max, |k_n|)`, where `ρ` is the edge's accuracy (or
+  the body's resolution where it has none). The first term is the shift a lift within `ρ` of the
+  edge makes, doubled for the change of curvature the jet does not bound. Bends that tie agree
+  to second order, and those fins are refused as before. Only the wrap-round pair adds `TAU`.
+  The check accepts any order whose gaps add up to one turn, so a tie across the wrap passes.
+  `scx-check`'s radial test reads the same rule, so a pinched result passes the contract.
+- **`Surface::normal_curvature(uv, approach, d) -> Option<NormalBend { along, largest }>`**
+  (scx-surface, new; `NormalBend` exported, named apart from VM1's `VolumeMap` `Bend`). It
+  works from the shape operator `S = I⁻¹ II`, with the largest principal curvature
+  `|tr S / 2| + sqrt(((a − d)/2)² + b c)`, which is stable at umbilics. The textbook `sqrt(H² − K)` lost half its digits on the sphere. Test:
+  `normal_curvature_is_the_closed_forms` (a cylinder of r 2, a sphere of r 3 and a torus (5, 1.5)
+  at its outer equator, in both senses, to 1e-12).
+- **Seam-keeping merge** (`build.rs`). When a merged periodic face's loops would wind round it
+  (`exact_loops` gives `Winds`), the merge is retried with its seams kept, so a wall cut along a
+  tangent ruling and joined again closes.
+- **Closed-form touch** (`scx_ssi::analytic::touch`, dispatched from `quadric.rs`). A sphere of
+  radius `rs` with centre `c`, against a cylinder or ring torus whose spine misses `c`: `q` is
+  the spine's nearest point to `c` and `d = |c − q|`. The gap is `e = d − (rs + r)` outside and
+  `e = r − rs − d` inside. Within the tolerance plus rounding the contact is one point,
+  `q + (c − q) r / d`, given as a `Touch`; past it the faces are apart, which is an empty
+  answer; anything else stays `General`. The pin calls these pairs `SsiPair`.
+- **A tangent contact that ends inside a face** (`build.rs`, new rule). There are two shapes:
+  - a `Contact::Tangent` section where the operation keeps both faces and one face's pieces do
+    not use the section's edge;
+  - a stage-4 lying piece inside the other face (`along` none) whose own edge is kept, with the
+    other face kept too, where that face's pieces do not use it. Imprint now records these as
+    `Imprint::lying`.
+
+  In both, imprint dropped the edge as a dangling cut, and the result is
+  `NonManifold { at: Face(of) }`. Before, this was a **silent lost contact**. A cylinder lying
+  on a box's top along a ruling inside the face came back as two lumps that share no edge. So
+  did two parallel cylinders offset along their axes, whose ruling is one wall's seam and so
+  reaches the other wall as a lying edge, not as a section. The rule sits beside the touch
+  handling, and `build` takes `&FaceFace`.
+- **Merged pieces stay whole** (`build.rs` `merge`, `whole_shell`). `merge` returns each face
+  it absorbed, with the survivor and the operand face it was a piece of. `whole_shell` counts a
+  piece by its survivor, so an operand shell cut along a contact and merged back gets its sign
+  without measuring. It refuses where a survivor took a face of another operand face.
+- **The SM6b hook.** In `faceface.rs`, at `undecided`, a tangent pair with no stated fact and no
+  closed form stays `Unsupported(SsiPair)`. The comment there names SM6b (tracing a tangent
+  curve) as the tier that answers it.
+- **Stated facts: no new `Fact` kind, and no SU6 gap.** I decided this by analysis and then
+  tried to break it. BO21's facts state an edge on a face, and isolation judges them through
+  `curve_on_surface` (`OnSurface`). A tangent edge stated on a tangent wall is just such a fact,
+  and needs no tangency flag: isolation reads where the edge lies, not how the faces meet.
+  `given.rs` `an_edge_on_a_tangent_wall_gives_the_same_answer` states l's seam edge on r's wall
+  and gets the same union, of volume 80π. With r at 4.001, the same fact is `FalseFact`.
+  - Against adopting SU6's gap bound (13.22's note, decision 1: "BO22 can add the gap where
+    isolation is ill-conditioned (a double root)"): `curve_on_surface` isolates the roots and
+    turns of the surface's implicit equation along the curve in closed form (Bernstein), and
+    does not sample it. A curve lying on the surface makes that equation vanish identically, so
+    every event is near and the fact is accepted without isolating any root. A double root is a
+    curve touching a surface at one point, which a true lies-on fact never is. A false fact
+    near a double root is refused, because isolation finds the turn's value above the
+    tolerance. A second gate would judge the same fact twice.
+  - The adversarial pass looked for a tangent fact that isolation would wrongly accept, one
+    within tolerance at some points but not along the edge. It found none.
+
+Tests. All volumes are closed forms, checked to 1e-9 relative. `src/tests/tangent.rs` (new)
+runs each case in ∪, −, ∩ and the swapped −:
+
+- a cylinder lying on a box's top: NonManifold, 1000, empty, 24π;
+- the same cylinder under the top: 1000, NonManifold, 24π, empty;
+- a sphere in a cylinder of its radius: 40π, 40π − 32π/3 with one pinched edge, 32π/3, empty;
+- level parallel cylinders: 80π with one pinched edge, 40π, empty, 40π;
+- parallel cylinders offset along the axis: NonManifold, 40π, empty, 40π;
+- a cylinder of r 2 inside one of r 3: 90π, 66π with one pinched edge, 24π, empty;
+- a ball inside a box touching its top: 1000, 1000 − 36π (a cavity meeting the top at a point,
+  BO25's point loop), 36π, empty.
+
+Other tests:
+
+- `quadrics.rs` `a_sphere_touches_a_cylinder_or_torus_off_its_axis` checks the touch point and
+  the gaps either side.
+- `scx-check` `tangent_fins_bending_apart_pass_in_bend_order` covers bends apart, a swap, a tie
+  within slack and a tie across the wrap.
+- `tests/sliver.rs` ports the pin's `curved_sliver_coincidence` (two pie slices whose arc
+  cylinders' axes lie 8.4e-5 apart and coincide over the sliver between the corners). Both
+  tests are `#[ignore]`d: this is near-coincidence over a band, which neither tier answers. The
+  first case's ∩ gives `Unsupported(Pcurve)`, the second's `Defect(Piece)`. Open below.
+
+Tests removed or changed, on purpose:
+
+- **Removed** from `unsupported.rs`: `cylinder_sphere_off_axis_meets_in_a_quartic_on_the_seam_and_off_it`
+  and `torus_sphere_off_axis_meets_in_a_curve_with_no_closed_form`. They proved that the pin's
+  pairs were refused as `SsiPair`. The closed form now answers those pairs, and `contacts.rs`'s
+  point contacts judge them against the truth.
+- **Changed** in `apart.rs`: the two sphere–cylinder tests now state the closed form's answer.
+  Gaps of 0.8, 0.3, 1e-3 and 2e-5 give an empty `FaceFace`; gaps of 0 and ±5e-6 give one touch
+  at (√2, √2, 5).
+- **Changed** in `contacts.rs`: the three sphere point contacts are judged against the truth
+  (`ssi: false`).
+- **Changed** in `algebra.rs` `KNOWN`: four `loops` cases now pass and are swept:
+  absorption-intersection cyl/boxB, cyl/flush and torus/flush, and absorption-union cyl/flush.
+  All four failed at the merge base.
+- **Changed** in `scx-testkit` `recipe/boolean.rs`: the truth of `seam-cylinder-sphere`,
+  `off-seam-cylinder-sphere` and `seam-torus-sphere` goes from `Unsupported(SsiPair)` to built
+  and pinched: two lumps touching at one point, 2 regions and 2 shells (genus 1 with the torus).
+  The cells are not stated, because the touch lies on a seam. Their volumes stay the closed-form
+  sums.
+- **Changed** in `scx-testkit` `tests/recipe.rs`: the `boolean_api` count goes from 11 built and
+  6 `SsiPair` to 14 and 3, and the three touches move to the built list.
+- **Changed** in `t_slice`'s `scx_topology`: a torus face is genus 1 unless a kept edge cuts it.
+  It used to need no bounds at all, so the touch's point loop made it genus 0 (chi 4, truth 1).
+  A point loop does not cut a torus. `slice_work.txt` gains the three touches' baselines (7, 4
+  and 9), written by hand; no other baseline moved.
+
+Measurements (release, throwaway timers, not committed, main box under load):
+
+- `analytic::intersect` for a cylinder of r 2 against a sphere of r 3, over 200k calls. Without
+  the touch dispatch every case is `General`: touch 430 ns, crossing 379 ns, apart 369 ns. With
+  it: touch 491 ns, now a `Touch`; crossing 410 ns, still `General`; apart 418 ns, now empty.
+  That is 30-60 ns more per sphere pair, and it settles the touch and apart pairs that went on
+  to `Unsupported(SsiPair)` before.
+- Boolean, two parallel cylinders of r 2 and length 10, level and tangent, over 300 runs: ∪
+  249 µs, − 153 µs, ∩ 146 µs (the same pair 9 apart: 40, 5, 6 µs). Before BO22 the ∪ was
+  `NonManifold` and the others were refused or wrong, so there is no like-for-like before.
+  - Merge plus fin ordering take under 1 µs: four `normal_curvature` calls per pinched edge,
+    and the ordering runs only on tied directions.
+  - The ∪ first took 2.45 ms, 2.3 ms of it in `shells`. The pinched edge leaves two face sets,
+    and `whole_shell` could not see that a wall cut along the ruling and merged back was still
+    a whole operand shell (the merged pieces were gone), so `pinch::nest` measured both signed
+    volumes. `merge` now returns what it absorbed, and `whole_shell` counts a merged piece by
+    its survivor, provided that survivor took nothing from another operand face. The sign is
+    then the operand's, and the ∪ is 0.25 ms.
+
+Open:
+
+- A tangent line or circle that ends inside a face, with both sides kept, is refused rather than
+  built (it would be a dangling edge, a wire, which closure does not keep yet).
+- The curved sliver (`tests/sliver.rs`): near-coincident walls over a band need a coincidence
+  test bounded over the band, not over the whole circles.
+- Tracing (SM6b) for tangent pairs with no closed form, at the `faceface.rs` hook.
