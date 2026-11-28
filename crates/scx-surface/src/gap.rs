@@ -26,6 +26,16 @@
 //! `sup_t |S(p(t)) - C(t)|` at the same `t`, and it is an upper bound on the edge's gap from
 //! the face too (the pcurve lies in it).
 //!
+//! **A lift with a series** (74 §35, `CF2b`). Where the pcurve is a constant-height or
+//! constant-angle line in an analytic kind's angle uv, or a cylinder's or cone's wave, or a
+//! circle or ellipse in a plane, and the edge's curve is a circle or ellipse, `S(p(t)) - C(t)`
+//! is a trigonometric series in `t` of degree at most 2 and is built on its coefficients, as
+//! the curve-to-surface gap is: a coaxial circle is then zero to rounding and closes at once.
+//! The kinds' quarter-arc uv composed with the pcurve's angle map is the angle itself up to
+//! the formulas' rounded constants (a fixed turn and scale of a few ulps per arc), which the
+//! series' bound is padded by ([`angle_pad`]). Every other pcurve goes through
+//! [`Surface::box_over`] and the jets as before.
+//!
 //! | solidcore at the pin | here |
 //! |---|---|
 //! | `distance_bound::surface_distance_lower_bound`, `face_distance_lower_bound`: a lower bound on a point's distance to a surface piece by Bezier hulls | [`point_curve_gap`] for curves (a bracket); a point to an analytic surface is its closed form ([`Surface::invert`]); to a NURBS surface, [`Surface::invert`]'s certified nearest |
@@ -46,7 +56,7 @@ use core::ops::{Add, Div, Mul, Sub};
 use std::collections::BinaryHeap;
 
 use scx_curve::arcs::Arcs;
-use scx_curve::{Curve, Curve2};
+use scx_curve::{AngleAxis, Curve, Curve2};
 use scx_num::budget::{Budget, Exhausted, Stop};
 use scx_num::error::ErrorKind;
 use scx_num::extent1d::Extent1d;
@@ -659,6 +669,29 @@ impl Series {
         }
     }
 
+    /// `k0 + k1 cos t + k2 sin t`.
+    fn trig(k0: Ivl, k1: Ivl, k2: Ivl) -> Self {
+        let z = Ivl::from(0.0);
+        Self::Trig([k0, k1, k2, z, z])
+    }
+
+    /// `k` times the series.
+    fn scaled(&self, k: Ivl) -> Self {
+        match *self {
+            Self::Poly(p) => Self::Poly(p.map(|x| x * k)),
+            Self::Trig(p) => Self::Trig(p.map(|x| x * k)),
+        }
+    }
+
+    /// A bound on `|series|` over every `t`: the sum of the coefficients' magnitudes (a
+    /// trigonometric series only; a polynomial's is infinite).
+    fn sup(&self) -> f64 {
+        match self {
+            Self::Poly(_) => f64::INFINITY,
+            Self::Trig(k) => k.iter().fold(0.0, |a, x| round_up(a + x.mag())),
+        }
+    }
+
     fn plus(&self, b: &Self) -> Self {
         match (*self, *b) {
             (Self::Poly(p), Self::Poly(q)) => Self::Poly([p[0] + q[0], p[1] + q[1], p[2] + q[2]]),
@@ -672,6 +705,41 @@ impl Series {
             _ => unreachable!("one curve's series share their basis"),
         }
     }
+}
+
+/// `[c, a, b]` with `p(t) = c + a cos t + b sin t`, each enclosed from `p` at `0`, `pi`
+/// and `pi/2` (for a circle or ellipse, whose formula is that).
+fn trig_parts<const N: usize>(p: impl Fn(Ivl) -> [Ivl; N]) -> [[Ivl; N]; 3] {
+    use core::f64::consts::{FRAC_PI_2, PI};
+    let pi = Ivl::new(PI, round_up(PI));
+    let half = Ivl::new(FRAC_PI_2, round_up(FRAC_PI_2));
+    let (p0, pp, ph) = (p(Ivl::from(0.0)), p(pi), p(half));
+    let h = Ivl::from(0.5);
+    let c = each(p0, pp, |a, b| h * (a + b));
+    [c, each(p0, c, |a, b| a - b), each(ph, c, |a, b| a - b)]
+}
+
+/// `f` of `a` and `b` coordinate by coordinate.
+fn each<const N: usize>(a: [Ivl; N], b: [Ivl; N], f: impl Fn(Ivl, Ivl) -> Ivl) -> [Ivl; N] {
+    let mut out = a;
+    for (o, y) in out.iter_mut().zip(b) {
+        *o = f(*o, y);
+    }
+    out
+}
+
+/// The edge's curve as series in its parameter, one per world coordinate: a circle or
+/// ellipse only.
+fn conic_series(curve: &Curve) -> Option<[Series; 3]> {
+    if !matches!(curve, Curve::Circle(_) | Curve::Ellipse(_)) {
+        return None;
+    }
+    let [c, a, b] = trig_parts(|t| ivl3(curve.point_over(t)));
+    Some([
+        Series::trig(c[0], a[0], b[0]),
+        Series::trig(c[1], a[1], b[1]),
+        Series::trig(c[2], a[2], b[2]),
+    ])
 }
 
 /// The local coordinates of a curve point and the squares the closed forms take.
@@ -709,19 +777,8 @@ impl<'a> Source<'a> {
                 Some((false, [sub3(p0, o), sub3(p1, p0), [Ivl::from(0.0); 3]]))
             }
             Curve::Circle(_) | Curve::Ellipse(_) => {
-                let pi = Ivl::new(core::f64::consts::PI, round_up(core::f64::consts::PI));
-                let half = Ivl::new(
-                    core::f64::consts::FRAC_PI_2,
-                    round_up(core::f64::consts::FRAC_PI_2),
-                );
-                let (p0, pp, ph) = (at(Ivl::from(0.0)), at(pi), at(half));
-                let h = Ivl::from(0.5);
-                let c = [
-                    h * (p0[0] + pp[0]),
-                    h * (p0[1] + pp[1]),
-                    h * (p0[2] + pp[2]),
-                ];
-                Some((true, [sub3(c, o), sub3(p0, c), sub3(ph, c)]))
+                let [c, a, b] = trig_parts(at);
+                Some((true, [sub3(c, o), a, b]))
             }
             _ => None,
         };
@@ -741,6 +798,17 @@ impl<'a> Source<'a> {
         let qxy = x.times(&x).plus(&y.times(&y));
         let q = qxy.plus(&z.times(&z));
         Self::Series { z, qxy, q }
+    }
+
+    /// Whether the curve is a line (its series polynomial).
+    fn is_line(&self) -> bool {
+        matches!(
+            self,
+            Self::Series {
+                z: Series::Poly(_),
+                ..
+            }
+        )
     }
 
     fn loc(&self, t: Ivl) -> Loc {
@@ -852,6 +920,38 @@ fn bracket_of(d: &Dist) -> Bracket {
     }
 }
 
+/// `max |g|` over `[a, a + h]` for a convex `g` with the jets `ga`, `gb` at the ends: the
+/// ends bound it above, and the tangents at the ends below (where they cross).
+///
+/// A line's signed distance across a cone's generator, `(rho - r - k z) / sqrt(1 + k^2)`, is
+/// convex in the line's parameter: `rho` is the norm of an affine map of it and `z` is
+/// affine. Its closed bound converges at the second order with no second derivative, where
+/// the chord bound's enclosure of `rho''` (zero in truth along a generator, wide in
+/// intervals) needs a piece per few microns (`CF2a` §28.8: 158k units for a generator).
+fn convex_bound(ga: &Jet2, gb: &Jet2, h: f64) -> f64 {
+    let (fa, fb, sa, sb) = (ga.f, gb.f, ga.d1, gb.d1);
+    if ![fa, fb, sa, sb]
+        .iter()
+        .all(|x| x.lo.is_finite() && x.hi.is_finite())
+    {
+        // `max` passes a NaN over: an end the jets do not hold (on the axis) decides nothing.
+        return f64::INFINITY;
+    }
+    let hi = fa.hi.max(fb.hi);
+    let h_up = Ivl::from(h);
+    // Each tangent's lowest point over the piece bounds `g` below.
+    let along_a = fa + Ivl::from(sa.lo.min(0.0)) * h_up;
+    let along_b = fb - Ivl::from(sb.hi.max(0.0)) * h_up;
+    let mut lo = along_a.lo.max(along_b.lo);
+    if sa.hi <= 0.0 && sb.lo >= 0.0 && sb.lo > sa.hi {
+        // The tangents cross where `(fa sb - fb sa + sa sb h) / (sb - sa)`.
+        let cross = (fa * sb - fb * sa + sa * sb * h_up) / (sb - sa);
+        lo = lo.max(cross.lo);
+    }
+    let lo = if lo.is_nan() { f64::NEG_INFINITY } else { lo };
+    round_up(hi.max(-lo))
+}
+
 struct ToSurface<'a> {
     src: Source<'a>,
     kind: Kind,
@@ -887,7 +987,11 @@ impl Field for ToSurface<'_> {
             ) => {
                 let apex = chord((aa.f, ab.f), ai.d2.mag(), ai.f, h);
                 if w.lo > 0.0 {
-                    apex.min(chord((pa.f, pb.f), pi.d2.mag(), pi.f, h))
+                    let mut perp = chord((pa.f, pb.f), pi.d2.mag(), pi.f, h);
+                    if self.src.is_line() {
+                        perp = perp.min(convex_bound(&pa, &pb, h));
+                    }
+                    apex.min(perp)
                 } else {
                     apex
                 }
@@ -1030,6 +1134,220 @@ struct PcurveField<'a> {
     pcurve: &'a Curve2,
     curve: &'a Curve,
     arcs: (Option<Arcs>, Option<Arcs>),
+    lift: Option<Lift>,
+}
+
+/// Arcs past this many turn-quarters from the start of their angle are left to the
+/// general path (the pad grows with the arc's index).
+const MAX_ARC_INDEX: f64 = 64.0;
+
+/// The pad on a lift through quarter arcs whose index is at most `k` in size, per unit of
+/// the radius it turns: at least the composed map's departure from the angle.
+///
+/// The pcurve's angle coordinate on arc `k` is `(k + 1/2) L + tan(psi / 2) / a` with
+/// `psi = phi - s0 - c_k`, where `s0` is the rounded start of the arcs (`0` or `-pi/2`) and
+/// `c_k` the rounded `k pi/2 + pi/4`; the kind's formula takes the same `(k + 1/2) L` and
+/// `a` back to `tau = tan(psi / 2)`, so (in exact arithmetic on those constants) its
+/// `(cos, sin)` is `(cos psi, sin psi)` turned by the arc's middle angle, whose rounded
+/// `(+-1/sqrt 2, +-1/sqrt 2)` is the true turn scaled by `1 + d`, `|d| <= 2^-53`. The point is
+/// then at angle `phi + e_k` with `|e_k| <= |s0 - true| + |c_k - true|
+/// <= (|k| + 2) 2^-52 pi/2`, radius scaled by `1 + d`. Where the pcurve's arc and the kind's
+/// differ (a parameter a few ulps past a break) both formulas meet at the break to the same
+/// order. `(|k| + 4) 2^-48` covers the sum more than five times over.
+fn angle_pad(k: f64) -> f64 {
+    round_up((k + 4.0) * f64::EPSILON * 16.0)
+}
+
+/// The largest arc index `phi` meets over `t` in `[lo, hi]` with `phi = start + sign t` on
+/// `arcs`, or `None` past [`MAX_ARC_INDEX`] or (on the half turn) where the angle leaves
+/// `[-pi/2 - 1/2, pi/2 + 1/2]`, the end arcs' formulas continuing past the poles.
+fn arc_index(arcs: Arcs, start: f64, sign: f64, (lo, hi): (f64, f64)) -> Option<f64> {
+    use core::f64::consts::FRAC_PI_2;
+    let ends = [start + sign * lo, start + sign * hi];
+    if !ends.iter().all(|e| e.is_finite()) {
+        return None;
+    }
+    let from = if arcs.is_turn() { 0.0 } else { -FRAC_PI_2 };
+    if !arcs.is_turn() && ends.iter().any(|e| e.abs() > FRAC_PI_2 + 0.5) {
+        return None;
+    }
+    let k = ends
+        .iter()
+        .map(|e| ((e - from).abs() / FRAC_PI_2).ceil() + 1.0)
+        .fold(0.0, f64::max);
+    (k <= MAX_ARC_INDEX).then_some(k)
+}
+
+/// `(cos phi, sin phi)` with `phi = start + sign t`, as series in `t`.
+fn angle_series(start: f64, sign: f64) -> (Series, Series) {
+    let (sn, cs) = Ivl::from(start).sin_cos();
+    let s = Ivl::from(sign);
+    let z = Ivl::from(0.0);
+    (Series::trig(z, cs, z - s * sn), Series::trig(z, sn, s * cs))
+}
+
+/// `(cos, sin)` of `arcs` at the parameter `x`, the kind's own formula on either arc at a
+/// break, hulled.
+fn arc_cos_sin(arcs: Arcs, x: f64) -> (Ivl, Ivl) {
+    let t = Ivl::from(x);
+    let a = arcs.cos_sin(t, arcs.piece(x, Approach::Above));
+    let b = arcs.cos_sin(t, arcs.piece(x, Approach::Below));
+    (a.0.hull(b.0), a.1.hull(b.1))
+}
+
+/// `S(p(t)) - C(t)` as series in `t`, each world coordinate, and the pad its bound takes.
+struct Lift {
+    d: [Series; 3],
+    pad: f64,
+}
+
+impl Lift {
+    /// `O + f (cos X + sin Y) + g Z - C` with `f` and `g` and `(cos, sin)` series of the
+    /// first degree, `C` the curve's.
+    fn of(
+        axes: &Axes,
+        f: Series,
+        g: Series,
+        cs: (Series, Series),
+        c: &[Series; 3],
+        pad: f64,
+    ) -> Self {
+        let o = [axes.o.x, axes.o.y, axes.o.z];
+        let (x, y, z) = (vec3(axes.x), vec3(axes.y), vec3(axes.z));
+        let minus = Ivl::from(-1.0);
+        let zero = Ivl::from(0.0);
+        let at = |o: f64, x: Ivl, y: Ivl, z: Ivl, c: &Series| {
+            let dir = cs.0.scaled(x).plus(&cs.1.scaled(y));
+            Series::trig(Ivl::from(o), zero, zero)
+                .plus(&f.times(&dir))
+                .plus(&g.scaled(z))
+                .plus(&c.scaled(minus))
+        };
+        let d = [
+            at(o[0], x[0], y[0], z[0], &c[0]),
+            at(o[1], x[1], y[1], z[1], &c[1]),
+            at(o[2], x[2], y[2], z[2], &c[2]),
+        ];
+        Self { d, pad }
+    }
+
+    /// The lift of `pcurve` on `surface` against `curve` over `range`, where it has one.
+    fn new(surface: &Surface, pcurve: &Curve2, curve: &Curve, range: (f64, f64)) -> Option<Self> {
+        let c = conic_series(curve)?;
+        let zero = Ivl::from(0.0);
+        let konst = |k: Ivl| Series::trig(k, zero, zero);
+        if let (Surface::Plane(p), Curve2::Circle(_) | Curve2::Ellipse(_)) = (surface, pcurve) {
+            // `S = O + u X + v Y`, exact: no pad.
+            let [k, a, b] = trig_parts(|t| {
+                let q = pcurve.point_over(t);
+                [q.x, q.y]
+            });
+            let (u, v) = (
+                Series::trig(k[0], a[0], b[0]),
+                Series::trig(k[1], a[1], b[1]),
+            );
+            let f = p.frame();
+            let (o, x, y) = (f.origin(), vec3(*f.x()), vec3(*f.y()));
+            let o = [o.x, o.y, o.z];
+            let at = |o: f64, x: Ivl, y: Ivl, c: &Series| {
+                konst(Ivl::from(o))
+                    .plus(&u.scaled(x))
+                    .plus(&v.scaled(y))
+                    .plus(&c.scaled(Ivl::from(-1.0)))
+            };
+            let d = [
+                at(o[0], x[0], y[0], &c[0]),
+                at(o[1], x[1], y[1], &c[1]),
+                at(o[2], x[2], y[2], &c[2]),
+            ];
+            return Some(Self { d, pad: 0.0 });
+        }
+        let (u_arcs, v_arcs) = arcs_of(surface);
+        match pcurve {
+            Curve2::AngleLine(l) if l.rate() == 0.0 => {
+                let sign = l.sense().sign();
+                let k = arc_index(l.arcs(), l.start(), sign, range)?;
+                let cs = angle_series(l.start(), sign);
+                let at = Ivl::from(l.other());
+                match l.axis() {
+                    AngleAxis::U if u_arcs == Some(l.arcs()) => {
+                        // The angle runs round the axis at the fixed height `other`.
+                        let (axes, f, g) = match surface {
+                            Surface::Cylinder(s) => (s.axes(), Ivl::from(s.radius().mm()), at),
+                            Surface::Cone(s) => (
+                                s.axes(),
+                                Ivl::from(s.radius().mm()) + Ivl::from(s.slope()) * at,
+                                at,
+                            ),
+                            Surface::Sphere(s) => {
+                                let (cl, sl) = arc_cos_sin(sphere::V, l.other());
+                                let r = Ivl::from(s.radius().mm());
+                                (s.axes(), r * cl, r * sl)
+                            }
+                            Surface::Torus(s) => {
+                                let (cw, sw) = arc_cos_sin(torus::TURN, l.other());
+                                let r = Ivl::from(s.minor().mm());
+                                (s.axes(), Ivl::from(s.major().mm()) + r * cw, r * sw)
+                            }
+                            Surface::Plane(_) | Surface::Nurbs(_) => return None,
+                        };
+                        let pad = round_up(2.0 * f.mag() * angle_pad(k));
+                        Some(Self::of(&axes, konst(f), konst(g), cs, &c, pad))
+                    }
+                    AngleAxis::V if v_arcs == Some(l.arcs()) => {
+                        // The angle runs round the meridian at the fixed `u = other`.
+                        let u_arcs = u_arcs?;
+                        let (c0, s0) = arc_cos_sin(u_arcs, l.other());
+                        let (axes, big, r) = match surface {
+                            Surface::Sphere(s) => (s.axes(), 0.0, s.radius().mm()),
+                            Surface::Torus(s) => (s.axes(), s.major().mm(), s.minor().mm()),
+                            _ => return None,
+                        };
+                        let ri = Ivl::from(r);
+                        let f = konst(Ivl::from(big)).plus(&cs.0.scaled(ri));
+                        let g = cs.1.scaled(ri);
+                        let turn = (konst(c0), konst(s0));
+                        let pad = round_up(4.0 * r.abs() * angle_pad(k));
+                        Some(Self::of(&axes, f, g, turn, &c, pad))
+                    }
+                    _ => None,
+                }
+            }
+            Curve2::AngleWave(w) if u_arcs == Some(w.arcs()) => {
+                let sign = w.sense().sign();
+                let k = arc_index(w.arcs(), w.start(), sign, range)?;
+                let (ac, as_) = w.amplitudes();
+                let v = Series::trig(Ivl::from(w.mean()), Ivl::from(ac), Ivl::from(as_));
+                let (axes, f) = match surface {
+                    Surface::Cylinder(s) => (s.axes(), konst(Ivl::from(s.radius().mm()))),
+                    Surface::Cone(s) => (
+                        s.axes(),
+                        konst(Ivl::from(s.radius().mm())).plus(&v.scaled(Ivl::from(s.slope()))),
+                    ),
+                    _ => return None,
+                };
+                let pad = round_up(2.0 * f.sup() * angle_pad(k));
+                Some(Self::of(
+                    &axes,
+                    f,
+                    v,
+                    angle_series(w.start(), sign),
+                    &c,
+                    pad,
+                ))
+            }
+            _ => None,
+        }
+    }
+
+    /// `D` and its derivatives over `t`.
+    fn jets(&self, t: Ivl) -> [Jet2; 3] {
+        [self.d[0].jet(t), self.d[1].jet(t), self.d[2].jet(t)]
+    }
+}
+
+fn vec3(v: Vec3) -> [Ivl; 3] {
+    [Ivl::from(v.x), Ivl::from(v.y), Ivl::from(v.z)]
 }
 
 impl PcurveField<'_> {
@@ -1049,6 +1367,19 @@ impl Field for PcurveField<'_> {
 
     fn at(&self, t: f64, budget: &mut Budget, _: &Stop) -> Result<(Bracket, Ivl), Short> {
         budget.charge(1).map_err(Short::Exhausted)?;
+        if let Some(lift) = &self.lift {
+            // The mark is the series' own `|D|`; the pad goes on the bracket.
+            let d = lift.jets(Ivl::from(t));
+            let g = norm([d[0].f, d[1].f, d[2].f]);
+            let upper = round_up(g.hi + lift.pad);
+            return Ok((
+                Bracket {
+                    lower: round_down(g.lo - lift.pad).max(0.0),
+                    upper: if upper.is_nan() { f64::INFINITY } else { upper },
+                },
+                g,
+            ));
+        }
         let g = self.gap_at(t);
         let upper = if g.hi.is_nan() { f64::INFINITY } else { g.hi };
         Ok((
@@ -1062,6 +1393,10 @@ impl Field for PcurveField<'_> {
 
     fn over(&self, (a, ga): (f64, Ivl), (b, gb): (f64, Ivl)) -> f64 {
         let i = Ivl::new(a, b);
+        if let Some(lift) = &self.lift {
+            let bound = round_up(vector_bound(lift.jets(i), (ga, gb), b - a) + lift.pad);
+            return if bound.is_nan() { f64::INFINITY } else { bound };
+        }
         let p = self.pcurve.jet_over::<Ivl, 2>(i, Approach::Above);
         let c = self.curve.jet_over::<Ivl, 2>(i, Approach::Above);
         let natural = direct(self.surface, p.point, ivl3(c.point)).mag();
@@ -1130,6 +1465,7 @@ pub fn pcurve_edge_gap(
         pcurve,
         curve,
         arcs: arcs_of(surface),
+        lift: Lift::new(surface, pcurve, curve, (lo, hi)),
     };
     distance(search(&field, &cuts_of(lo, hi, &breaks), aim, budget, stop))
 }

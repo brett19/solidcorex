@@ -12,8 +12,8 @@
 //!
 //! | stage | row | until it lands |
 //! |---|---|---|
-//! | Bézier pieces, `BoxTree::pairs`, pairs dropped only by proof ([`Candidates`]), halving to `Unresolved` | 4 | a pair not proved apart is [`SsiError::Unresolved`] at its first undecided piece pair |
-//! | loop-free pairs (normal cones, Sederberg-Meyers, the critical-point solve), boundary seeds | 5 | |
+//! | Bézier pieces, `BoxTree::pairs`, pairs dropped only by proof ([`Candidates`]) | 4 | |
+//! | loop-free pairs (normal cones, Sederberg-Meyers, the critical-point solve), boundary seeds, splitting to `Unresolved` ([`Survey`]) | 5 | where no side has an implicit form, a pair with a seed, a node or a point a loop may surround is [`SsiError::Untraced`] there |
 //! | the field path when a side has an implicit form; critical cells, valleys, poles | 6a, 6b | 6a landed: a touch, a tangency or a crossing inside a piece is `Unresolved` until 6b |
 //! | the march for NURBS against NURBS, [`SsiError::Stalled`] | 7 | |
 //! | one knot vector, certification per span, [`SsiError::Uncertified`] | 8 | |
@@ -42,19 +42,24 @@
 
 mod field;
 mod implicit;
+mod loops;
 mod net;
+mod patch;
 mod pieces;
+mod solve;
 mod traced;
 
+pub use loops::{Critical, CriticalKind, Loops, Plan, Seed, Side, Site, Survey};
 pub use pieces::{Candidates, Piece, PiecePair};
 pub use traced::{Branch, Certificate, End, Ends, Node, NodeKind, OnSurface, Rim, Touch, Traced};
 
 use scx_num::budget::{Budget, Stop};
 use scx_num::extent2d::Extent2d;
 use scx_num::units::{Accuracy, Resolution};
+use scx_num::vector3d::Point3;
 use scx_surface::Surface;
 
-use crate::error::SsiError;
+use crate::error::{SingularKind, SsiError};
 
 /// Where `a` over `ae` meets `b` over `be`, by the general method (module docs). The
 /// extents are in each surface's uv (research 63 D13); the tolerance is
@@ -65,16 +70,18 @@ use crate::error::SsiError;
 ///
 /// When a side has an implicit form (an analytic kind) the field path traces the pair
 /// (row SM6a): branches of degree-1 curves, coincident pieces, or a refusal. Otherwise,
-/// until rows SM5, SM7 and SM8 land, the answer is [`Traced::default`], proved (every pair
-/// of pieces is proved apart: [`Candidates`]), or a refusal.
+/// until rows SM7 and SM8 land, the answer holds touches only: every pair of pieces is
+/// proved apart ([`Candidates`]) or settled by a [`Plan`] with no seed and no point a loop
+/// may surround (row SM5); anything else is a refusal.
 ///
 /// # Errors
 ///
-/// [`SsiError::Unresolved`], [`SsiError::Stalled`], [`SsiError::Singular`] or
-/// [`SsiError::Uncertified`] where the method cannot finish the pair, each naming the
-/// place; [`SsiError::Budget`] when `budget` runs out; [`SsiError::Stopped`] when `stop` is
-/// set. Until row SM5 lands, a pair of surfaces whose pieces are not all proved apart is
-/// `Unresolved` where the first piece pair that [`Candidates::settle`] could not clear lies.
+/// [`SsiError::Unresolved`], [`SsiError::Stalled`], [`SsiError::Singular`],
+/// [`SsiError::Uncertified`] or [`SsiError::Untraced`] where the method cannot finish the
+/// pair, each naming the place; [`SsiError::Budget`] when `budget` runs out;
+/// [`SsiError::Stopped`] when `stop` is set. Until row SM7 lands, a pair with a seed, a node or a
+/// point a loop may surround is `Untraced`, and a singular contact `Singular`, each at the
+/// least such point (by x, then y, then z), whatever the operands' order.
 pub fn intersect(
     a: &Surface,
     ae: &Extent2d,
@@ -85,23 +92,64 @@ pub fn intersect(
     budget: &mut Budget,
     stop: &Stop,
 ) -> Result<Traced, SsiError> {
-    let found = Candidates::new(a, ae, b, be, acc, res, budget, stop)?;
-    if let Some(t) = field::trace(&found, [a, b], [ae, be], found.floor(), budget, stop)? {
+    let survey = Survey::new(a, ae, b, be, acc, res, budget, stop)?;
+    let found = survey.candidates();
+    if let Some(t) = field::trace(found, [a, b], [ae, be], found.floor(), budget, stop)? {
         return Ok(t);
     }
-    for &pair in found.pairs() {
-        if let Some(open) = found.settle(pair, FRONT, budget, stop)? {
-            return Err(open.unresolved());
+    let mut touches = Vec::new();
+    // The refusal names the least point (x, then y, then z) of its kind, so it does not
+    // depend on the order of the operands: a singular contact before a curve to trace.
+    let mut singular: Option<(Point3, SingularKind)> = None;
+    let mut untraced: Option<Point3> = None;
+    for plan in survey.plans(budget, stop)? {
+        if let Loops::Critical { points, .. } = &plan.loops {
+            for c in points {
+                match c.kind {
+                    CriticalKind::Singular(kind) => {
+                        if singular.is_none_or(|(p, _)| less(c.point, p)) {
+                            singular = Some((c.point, kind));
+                        }
+                    }
+                    CriticalKind::Touch => touches.push(Touch {
+                        point: c.point,
+                        uv: c.uv,
+                    }),
+                    CriticalKind::Node => least(&mut untraced, c.point),
+                    _ if c.may_surround() => least(&mut untraced, c.point),
+                    _ => {}
+                }
+            }
+        }
+        for s in &plan.seeds {
+            least(&mut untraced, s.point);
         }
     }
-    Ok(Traced::default())
+    if let Some((at, kind)) = singular {
+        return Err(SsiError::Singular { at, kind });
+    }
+    if let Some(at) = untraced {
+        return Err(SsiError::Untraced { at });
+    }
+    Ok(Traced {
+        touches,
+        ..Traced::default()
+    })
 }
 
-/// The widest front of surviving pairs [`intersect`] lets one piece pair's halving keep
-/// before it gives the pair up as undecided: a policy of effort, not a proof (it never
-/// drops a pair). A pair apart by a small margin keeps a front of a few pairs at the nearest
-/// points, and a pair the surfaces cross widens it with every halving.
-const FRONT: usize = 24;
+/// Whether `a` is before `b`, by x, then y, then z.
+fn less(a: Point3, b: Point3) -> bool {
+    a.x.total_cmp(&b.x)
+        .then(a.y.total_cmp(&b.y))
+        .then(a.z.total_cmp(&b.z))
+        .is_lt()
+}
+
+fn least(slot: &mut Option<Point3>, p: Point3) {
+    if slot.is_none_or(|q| less(p, q)) {
+        *slot = Some(p);
+    }
+}
 
 #[cfg(test)]
 mod tests;
