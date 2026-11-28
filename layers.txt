@@ -51,3 +51,9 @@ xtask
 [bench-external]
 criterion
 gungraun
+
+# Crates outside the workspace that a [difftest] crate alone may use, as dev-dependencies
+# only: the readers of the corpus record files (`examples/heal_count`).
+[difftest-external]
+serde_json
+flate2

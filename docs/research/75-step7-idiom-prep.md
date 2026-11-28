@@ -1466,7 +1466,19 @@ Decisions, with cases for and against:
 Tests (`crates/scx-make/tests/prism.rs`, 11): see the file's header for the pin tests removed on
 purpose and why.
 
-### 13.5 MK7a frames as built (11-28)
+### 13.5 MK13 as built (11-28)
+
+`scx_make::radial(&RadialCone, &Document) -> Result<Made<RadialFaces>, MakeError>` builds the hollow cone in one `Draft`: outer wall, inner wall and an annular cap at each end that is not a hinge, with no stitch, no outward check and no subtract. `RadialCone { frame, height, outer: [Length; 2], inner: [Length; 2] }` gives radii at `z = 0` and `z = height`; `RadialFaces { outer, inner, bottom: Option, top: Option }`. Counts: both ends capped 4 faces, 6 edges, 4 vertices; one hinge 3, 5, 3 (the walls share the rim and its vertex). Walls are cylinders when their radii are equal, cones otherwise; the inner wall is the same surface with `Sense::Reversed` and a loop run the other way round, so its front is the hollow.
+
+Decisions.
+- Hinge by exact equality of the radii. For: the pin's hinge case is the draft whose neutral plane is the end plane, equal by construction, and exact equality needs no tolerance (R3). Against: a caller whose radii agree to rounding gets a cap of width zero refused; the refusal is `Refusal::Annulus` and the caller can set them equal.
+- A wall thinner than the resolution without being a hinge, an inner radius above the outer, and two hinges (no volume) are `Refusal::Annulus { outer, inner }`; inner radii must be above the resolution (an inner apex is not made; the pin refuses it too, `RadialRimsNotAnnulus`).
+- A reversed `Cone` runs `v` along `-z`, so the inner wall's half-angle is the negated one; found by the exact-pcurve write refusing the first build.
+- New `Dimension::InnerBaseRadius` and `InnerTopRadius`. Edits to `lib.rs` are the module and its re-export; `error.rs` gains the two dimensions and the `Annulus` refusal.
+
+Truths (`tests/radial.rs`, 5 tests): the pin's `radial_sweeps_close_at_the_hinge_or_on_two_annular_caps` (hinge and both-capped, volume `pi h (300 - b^2 - b t - t^2) / 3`) and `a_cylinder_whose_top_rounds_...` (volume cylinder less frustum) against the difference of the frusta, at an axis-aligned and a tilted far frame; narrowing and widening cones, hinges at either end, a tube, crossing slopes. Each: counts, closed-solid structure with Euler-Poincare of genus 1, the BR8 oracle, volume, area and centroid to 1e-12 with the mass estimate's error within, face kinds, and membership of each face against the CSG difference of two frusta; determinism; size and annulus refusals. The pin's stitch, outward-check and attribute-copy parts have no counterpart (nothing to stitch; attributes belong to the caller of the local operation).
+
+### 13.6 MK7a frames as built (11-28)
 
 `scx_make::{Path, Piece, Stop, Station, Rotation, Corner, FrameError, frames}` (`frames.rs`,
 `tests/frames.rs`). `Path::new(&[Piece], &Document)` validates (1 to 1000 pieces; lines longer

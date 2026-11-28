@@ -34,6 +34,7 @@ mod error;
 mod extrude;
 mod frames;
 mod prism;
+mod radial;
 mod sheet;
 mod sphere;
 mod torus;
@@ -48,6 +49,7 @@ pub use frames::{
     Station, Stop, frames,
 };
 pub use prism::{PrismFaces, prism};
+pub use radial::{RadialCone, RadialFaces, radial};
 pub use sheet::{SheetFaces, sheet};
 pub use sphere::{SphereFaces, sphere};
 pub use torus::{TorusFaces, torus};
