@@ -942,22 +942,26 @@ impl Build<'_> {
                 .ok_or_else(trace_err)?;
             holes.entry(around).or_default().push(i);
         }
+        // Each cycle is in one piece, as its outer loop or a hole: each loop is taken once.
+        let mut loops: Vec<Option<ExactLoop>> = rings.into_iter().map(|r| Some(r.0)).collect();
+        let mut take = |i: usize| {
+            loops
+                .get_mut(i)
+                .and_then(Option::take)
+                .ok_or_else(trace_err)
+        };
         let mut pieces = Vec::with_capacity(holes.len());
         for (outer, inner) in holes {
             let keeps = outer == 0 || inner.contains(&0);
             // A piece with no hole is its cycle's loop as written.
             if inner.is_empty() {
-                let lr = rings
-                    .get(outer)
-                    .map(|r| r.0.record().clone())
-                    .ok_or_else(trace_err)?;
-                pieces.push((vec![lr], keeps));
+                pieces.push((vec![take(outer)?.into_record()], keeps));
                 continue;
             }
             // Each cycle was written alone above; the piece's loops are those, placed.
             let seq: Vec<ExactLoop> = core::iter::once(outer)
                 .chain(inner)
-                .map(|i| rings.get(i).map(|r| r.0.clone()).ok_or_else(trace_err))
+                .map(&mut take)
                 .collect::<Result<_, _>>()?;
             let lr = scx_brep::pcurve::placed(surface, seq)
                 .map_err(|e| loops_error(e.kind(), operand, f))?;

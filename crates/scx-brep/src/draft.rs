@@ -317,12 +317,13 @@ impl Draft {
     ) -> Option<R> {
         let before = self.t.faces.get(id)?;
         let mut was = fin_keys(before);
-        // The record as it was, to carry its filled cells to the loops the edit keeps.
-        let old = before.cells.is_filled().then(|| Arc::clone(before));
+        // The record as it was, to seed the edited one with what its cells hold of the loops
+        // the edit keeps.
+        let old = before.cells.can_seed().then(|| Arc::clone(before));
         let face = self.face_mut(id)?;
         let out = edit(face);
         if let Some(old) = old {
-            face.cells = FaceCells::carried(&old, face);
+            face.cells = FaceCells::seeded(&old, face);
         }
         let mut now = fin_keys(face);
         was.sort_unstable();

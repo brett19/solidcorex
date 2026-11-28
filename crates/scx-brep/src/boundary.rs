@@ -29,18 +29,17 @@
 //! interval, so a lift by a period is certified too.
 
 use core::cmp::Ordering;
-use std::collections::BTreeMap;
 
 use scx_curve::{Circle2, Curve2};
 use scx_num::domain::ParamDomain;
 use scx_num::extent2d::Extent2d;
+use scx_num::extent3d::Extent3d;
 use scx_num::frame::Sense;
 use scx_num::interval::Ivl;
 use scx_num::vector2d::Point2;
 use scx_nurbs::Approach;
 
 use crate::cells::parts;
-use crate::id::EdgeId;
 use crate::record::{FaceRecord, UseGeom};
 
 /// Where a uv point lies against a face's region, as far as the enclosures prove.
@@ -86,20 +85,22 @@ struct Tree {
     pieces: Vec<Piece>,
     nodes: Vec<Node>,
     runs: Vec<Run>,
+    /// Each run's part of the signed area about the hull's centre, refinement by
+    /// refinement as they were tried (in order): part `at * runs.len() + r` is run `r`'s at
+    /// refinement `at`.
+    areas: Vec<Ivl>,
     /// The hull of every piece; `None` with no piece.
     hull: Option<Extent2d>,
     w_in: i32,
 }
 
-/// One loop's pieces, `first..end`, its tree's root, the loop's index, and its part of the
-/// signed area at each refinement tried (`None` where not tried), about `c`.
+/// One loop's pieces, `first..end`, its tree's root, and the loop's index.
 #[derive(Debug, Clone, Copy)]
 struct Run {
     first: u32,
     end: u32,
     root: u32,
     lp: u32,
-    area: [Option<Ivl>; AREA_REFINE.len()],
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -133,35 +134,128 @@ struct Node {
     right: u32,
 }
 
-impl Boundary {
-    /// The boundary of `rec`.
-    pub(crate) fn build(rec: &FaceRecord) -> Self {
-        Self::carried(rec, None).0
+/// What an edit kept of a face's boundary, for the edited face's first read: for each loop
+/// equal to one of the face before the edit, that loop's pieces, its part of the signed
+/// area about the centre `c`, and its part of the surface box where the surface is the
+/// same. Making one copies and evaluates nothing it would not have kept; a read fills the
+/// face's cells from it and finds only the new loops.
+#[derive(Debug, Clone)]
+pub(crate) struct Seed {
+    /// The bits of the centre the area parts are about.
+    c: Option<u64>,
+    /// By loop of the edited face.
+    loops: Vec<Option<Kept>>,
+}
+
+/// One loop's part of a [`Seed`].
+#[derive(Debug, Clone)]
+struct Kept {
+    pieces: Box<[Piece]>,
+    area: Vec<Ivl>,
+    /// The loop's part of a ruled face's surface box, where it was found on this surface.
+    bx: Option<RunBox>,
+}
+
+/// One run's part of a ruled face's surface box as it was found: `None` where a piece's box
+/// cannot be enclosed.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RunBox(pub(crate) Option<Extent3d>);
+
+impl Seed {
+    /// The seed of `rec`, a write of `was` whose boundary is `b`; `bx` the run parts of
+    /// `was`'s surface box, where `rec` has the same surface. `None` when no loop is kept.
+    pub(crate) fn of_boundary(
+        was: &FaceRecord,
+        b: &Boundary,
+        bx: Option<&[Option<Extent3d>]>,
+        rec: &FaceRecord,
+    ) -> Option<Self> {
+        let t = b.tree.as_ref()?;
+        Self::matched(was, rec, centre(t.hull), |j| {
+            let i = t.runs.binary_search_by_key(&j, |r| r.lp as usize).ok()?;
+            let run = t.runs.get(i)?;
+            Some(Kept {
+                pieces: t.pieces.get(run.first as usize..run.end as usize)?.into(),
+                area: t
+                    .areas
+                    .iter()
+                    .skip(i)
+                    .step_by(t.runs.len())
+                    .copied()
+                    .collect(),
+                bx: bx.and_then(|b| b.get(i).copied()).map(RunBox),
+            })
+        })
     }
 
-    /// The boundary of `rec`, the same bits as [`Boundary::build`], taking each loop's
-    /// pieces (and its part of the area, where the centre is the same) from `old`'s run
-    /// of an equal loop, and for each of `rec`'s runs the index of the run of `old` it took.
-    pub(crate) fn carried(
+    /// The seed of `rec`, a write of `was` whose cells are empty but seeded by `s`;
+    /// `same_surface` when the two have the same surface. `None` when no loop is kept.
+    pub(crate) fn of_seed(
+        was: &FaceRecord,
+        s: &Self,
+        same_surface: bool,
         rec: &FaceRecord,
-        old: Option<(&FaceRecord, &Self)>,
-    ) -> (Self, Vec<Option<usize>>) {
+    ) -> Option<Self> {
+        Self::matched(was, rec, s.c, |j| {
+            let k = s.loops.get(j)?.as_ref()?;
+            Some(Kept {
+                bx: k.bx.filter(|_| same_surface),
+                ..k.clone()
+            })
+        })
+    }
+
+    /// For each loop of `rec`, `take` of the index of the equal loop of `was`.
+    fn matched(
+        was: &FaceRecord,
+        rec: &FaceRecord,
+        c: Option<u64>,
+        take: impl Fn(usize) -> Option<Kept>,
+    ) -> Option<Self> {
+        let loops: Vec<_> = rec
+            .loops
+            .iter()
+            .map(|lp| take(was.loops.iter().position(|l| l == lp)?))
+            .collect();
+        loops
+            .iter()
+            .any(Option::is_some)
+            .then_some(Self { c, loops })
+    }
+
+    /// Loop `lp`'s part of the surface box, where it was kept.
+    pub(crate) fn bx(&self, lp: usize) -> Option<RunBox> {
+        self.loops.get(lp)?.as_ref()?.bx
+    }
+}
+
+/// The bits of the centre of `hull` that the area parts are about.
+fn centre(hull: Option<Extent2d>) -> Option<u64> {
+    hull.map(|h| h.mid().x.to_bits())
+}
+
+impl Boundary {
+    /// The boundary of `rec`, from nothing.
+    #[cfg(test)]
+    pub(crate) fn build(rec: &FaceRecord) -> Self {
+        Self::made(rec, None)
+    }
+
+    /// The boundary of `rec`, the same bits as [`Boundary::build`], each loop `seed` kept
+    /// taking its pieces (and its part of the area, where the centre is the same) from it.
+    pub(crate) fn made(rec: &FaceRecord, seed: Option<&Seed>) -> Self {
         let window = window(&rec.surface);
-        let old = old.and_then(|(r, b)| Some((r, b.tree.as_ref()?)));
-        let Some((mut tree, from)) = Tree::build(rec, old) else {
-            return (
-                Self {
-                    uv_box: None,
-                    tree: None,
-                    decided: false,
-                },
-                Vec::new(),
-            );
+        let Some(mut tree) = Tree::build(rec, seed) else {
+            return Self {
+                uv_box: None,
+                tree: None,
+                decided: false,
+            };
         };
         let sign = if tree.runs.is_empty() {
             Some(Ordering::Less)
         } else {
-            tree.area_sign(rec)
+            tree.area_sign(rec, seed.filter(|s| s.c == centre(tree.hull)))
         };
         let (uv_box, decided) = match sign {
             Some(Ordering::Greater) => {
@@ -171,28 +265,28 @@ impl Boundary {
             Some(_) => (window, true),
             None => (tree.hull.zip(window).map(|(h, w)| h.union(w)), false),
         };
-        (
-            Self {
-                uv_box,
-                tree: Some(tree),
-                decided,
-            },
-            from,
-        )
+        Self {
+            uv_box,
+            tree: Some(tree),
+            decided,
+        }
     }
 
-    /// Each run's pieces' boxes, the runs in loop order.
+    /// Each run's loop index and its pieces' boxes, the runs in loop order.
     pub(crate) fn run_boxes(
         &self,
-    ) -> impl Iterator<Item = impl Iterator<Item = Extent2d> + '_> + '_ {
-        self.tree.iter().flat_map(|t| {
-            t.runs.iter().map(|r| {
-                t.pieces
-                    .get(r.first as usize..r.end as usize)
-                    .unwrap_or_default()
-                    .iter()
-                    .map(|p| p.bx)
-            })
+    ) -> impl ExactSizeIterator<Item = (usize, impl Iterator<Item = Extent2d> + '_)> + '_ {
+        let (pieces, runs) = self
+            .tree
+            .as_ref()
+            .map_or((&[][..], &[][..]), |t| (&t.pieces[..], &t.runs[..]));
+        runs.iter().map(move |r| {
+            let boxes = pieces
+                .get(r.first as usize..r.end as usize)
+                .unwrap_or_default()
+                .iter()
+                .map(|p| p.bx);
+            (r.lp as usize, boxes)
         })
     }
 
@@ -221,7 +315,8 @@ impl Boundary {
                 t.pieces.len(),
                 t.pieces.capacity() * size_of::<Piece>()
                     + t.nodes.capacity() * size_of::<Node>()
-                    + t.runs.capacity() * size_of::<Run>(),
+                    + t.runs.capacity() * size_of::<Run>()
+                    + t.areas.capacity() * size_of::<Ivl>(),
             )
         })
     }
@@ -284,77 +379,40 @@ impl Boundary {
 
 impl Tree {
     /// The pieces and tree of `rec`'s loops; `None` when a piece cannot be enclosed. A
-    /// loop equal to one of `old`'s that has a run takes that run's pieces (their boxes and
-    /// starts are a function of the loop alone); the second part is, for each run, the run
-    /// of `old` it took.
-    fn build(
-        rec: &FaceRecord,
-        old: Option<(&FaceRecord, &Self)>,
-    ) -> Option<(Self, Vec<Option<usize>>)> {
-        // `old`'s runs by their loop's first use.
-        let by_first: BTreeMap<(EdgeId, bool), Vec<usize>> = old.map_or_default(|(r, t)| {
-            let mut m: BTreeMap<_, Vec<usize>> = BTreeMap::new();
-            for (i, run) in t.runs.iter().enumerate() {
-                if let Some(u) = r.loops.get(run.lp as usize).and_then(|l| l.uses.first()) {
-                    m.entry((u.edge, u.sense == Sense::Forward))
-                        .or_default()
-                        .push(i);
-                }
-            }
-            m
-        });
+    /// loop `seed` kept takes its pieces (their boxes and starts are a function of the loop
+    /// alone).
+    fn build(rec: &FaceRecord, seed: Option<&Seed>) -> Option<Self> {
         let mut pieces = Vec::new();
         let mut runs = Vec::new();
-        let mut from = Vec::new();
         for (li, lp) in rec.loops.iter().enumerate() {
             if lp.uses.iter().all(|u| matches!(u.geom, UseGeom::Point(_))) {
                 // A loop of points (or none) bounds no area.
                 continue;
             }
             let first = pieces.len();
-            let same = old.zip(lp.uses.first()).and_then(|((r, t), u)| {
-                let i = by_first
-                    .get(&(u.edge, u.sense == Sense::Forward))?
-                    .iter()
-                    .copied()
-                    .find(|&i| {
-                        t.runs
-                            .get(i)
-                            .and_then(|run| r.loops.get(run.lp as usize))
-                            .is_some_and(|l| l == lp)
-                    })?;
-                Some((i, t.runs.get(i)?, t))
-            });
-            if let Some((i, run, t)) = same {
+            if let Some(kept) = seed.and_then(|s| s.loops.get(li)?.as_ref()) {
                 let li = li as u32;
-                pieces.extend(
-                    t.pieces
-                        .get(run.first as usize..run.end as usize)?
-                        .iter()
-                        .map(|p| Piece {
-                            src: match p.src {
-                                Src::Part {
-                                    us, lo, hi, rev, ..
-                                } => Src::Part {
-                                    lp: li,
-                                    us,
-                                    lo,
-                                    hi,
-                                    rev,
-                                },
-                                Src::Gap => Src::Gap,
-                            },
-                            ..*p
-                        }),
-                );
+                pieces.extend(kept.pieces.iter().map(|p| Piece {
+                    src: match p.src {
+                        Src::Part {
+                            us, lo, hi, rev, ..
+                        } => Src::Part {
+                            lp: li,
+                            us,
+                            lo,
+                            hi,
+                            rev,
+                        },
+                        Src::Gap => Src::Gap,
+                    },
+                    ..*p
+                }));
                 runs.push(Run {
                     first: first as u32,
                     end: pieces.len() as u32,
                     root: 0,
                     lp: li,
-                    area: run.area,
                 });
-                from.push(Some(i));
                 continue;
             }
             let ends: Vec<(P, P)> = lp.uses.iter().map(use_ends).collect::<Option<_>>()?;
@@ -400,9 +458,7 @@ impl Tree {
                     end: pieces.len() as u32,
                     root: 0,
                     lp: li as u32,
-                    area: [None; AREA_REFINE.len()],
                 });
-                from.push(None);
             }
         }
         let mut nodes = Vec::new();
@@ -410,32 +466,29 @@ impl Tree {
             run.root = node(&pieces, run.first, run.end, &mut nodes)?;
         }
         let hull = pieces.iter().map(|p| p.bx).reduce(Extent2d::union);
-        // An area part is about the hull's centre: kept only where that is the same.
-        let c = |h: Option<Extent2d>| h.map(|h| h.mid().x.to_bits());
-        if old.is_none_or(|(_, t)| c(t.hull) != c(hull)) {
-            for run in &mut runs {
-                run.area = [None; AREA_REFINE.len()];
-            }
-        }
         pieces.shrink_to_fit();
         nodes.shrink_to_fit();
         runs.shrink_to_fit();
-        Some((
-            Self {
-                pieces,
-                nodes,
-                runs,
-                hull,
-                w_in: 0,
-            },
-            from,
-        ))
+        Some(Self {
+            pieces,
+            nodes,
+            runs,
+            areas: Vec::new(),
+            hull,
+            w_in: 0,
+        })
     }
 
-    /// The sign of the chains' signed area, refined until it shows.
-    fn area_sign(&mut self, rec: &FaceRecord) -> Option<Ordering> {
+    /// The sign of the chains' signed area, refined until it shows; each loop `seed` kept
+    /// taking its parts from it (`seed` about this tree's centre).
+    fn area_sign(&mut self, rec: &FaceRecord, seed: Option<&Seed>) -> Option<Ordering> {
         for (at, k) in AREA_REFINE.into_iter().enumerate() {
-            let a = self.area(rec, at, k)?;
+            let a = self.area(rec, at, k, seed);
+            let Some(a) = a else {
+                // Only whole refinements are kept.
+                self.areas.truncate(at * self.runs.len());
+                return None;
+            };
             if a.lo > 0.0 {
                 return Some(Ordering::Greater);
             }
@@ -447,20 +500,26 @@ impl Tree {
     }
 
     /// An enclosure of `sum ∮ (u - c) dv` over every chain, each curved part cut `k` more
-    /// times (refinement `at`): the sum of the runs' parts in loop order, each kept in its
-    /// run.
-    fn area(&mut self, rec: &FaceRecord, at: usize, k: usize) -> Option<Ivl> {
+    /// times (refinement `at`, the next not tried): the sum of the runs' parts in loop
+    /// order, each kept in `areas`.
+    fn area(&mut self, rec: &FaceRecord, at: usize, k: usize, seed: Option<&Seed>) -> Option<Ivl> {
         let c = Ivl::from(self.hull?.mid().x);
+        self.areas.reserve_exact(self.runs.len());
         let mut total = Ivl::from(0.0);
-        for r in 0..self.runs.len() {
-            let run = *self.runs.get(r)?;
-            let part = if let Some(a) = run.area.get(at).copied().flatten() {
-                a
-            } else {
-                let a = self.run_area(rec, &run, c, k)?;
-                *self.runs.get_mut(r)?.area.get_mut(at)? = Some(a);
-                a
+        for run in &self.runs {
+            let kept = seed.and_then(|s| {
+                s.loops
+                    .get(run.lp as usize)?
+                    .as_ref()?
+                    .area
+                    .get(at)
+                    .copied()
+            });
+            let part = match kept {
+                Some(a) => a,
+                None => self.run_area(rec, run, c, k)?,
             };
+            self.areas.push(part);
             total = total + part;
         }
         total.is_finite().then_some(total)
@@ -993,26 +1052,35 @@ mod tests {
             vec![outer.clone(), hole(1.0, 1.0), disc.clone(), hole(-2.0, 1.0)],
         );
         let was = Boundary::build(&old);
+        let kept = |s: &Seed| s.loops.iter().map(Option::is_some).collect::<Vec<_>>();
         // Loops kept in another order, one dropped, one new: the same centre, so the kept
         // runs' areas carry too.
         let new = face(
             plane(),
             vec![outer, hole(-2.0, 1.0), hole(2.0, -2.0), disc.clone()],
         );
-        let (got, from) = Boundary::carried(&new, Some((&old, &was)));
-        assert_eq!(from, [Some(0), Some(3), None, Some(2)]);
+        let seed = Seed::of_boundary(&old, &was, None, &new).unwrap();
+        assert_eq!(kept(&seed), [true, true, false, true]);
+        let got = Boundary::made(&new, Some(&seed));
         assert_eq!(format!("{got:?}"), format!("{:?}", Boundary::build(&new)));
         // A new outer loop moves the centre: the kept hole's pieces carry, its area is
-        // found again, and the bits are still the built ones.
+        // found again, and the bits are still the built ones; a seed seeds the same.
         let wider = polygon(&[(-3.0, -3.0), (4.0, -3.0), (4.0, 3.0), (-3.0, 3.0)]);
-        let moved = face(plane(), vec![wider, disc]);
-        let (got, from) = Boundary::carried(&moved, Some((&new, &got)));
-        assert_eq!(from, [None, Some(3)]);
-        assert_eq!(format!("{got:?}"), format!("{:?}", Boundary::build(&moved)));
+        let moved = face(plane(), vec![wider.clone(), disc]);
+        let seed = Seed::of_boundary(&new, &got, None, &moved).unwrap();
+        assert_eq!(kept(&seed), [false, true]);
+        let again = Seed::of_seed(&moved, &seed, true, &moved).unwrap();
+        for s in [&seed, &again] {
+            let got = Boundary::made(&moved, Some(s));
+            assert_eq!(format!("{got:?}"), format!("{:?}", Boundary::build(&moved)));
+        }
+        // No loop kept: no seed.
+        let other = face(plane(), vec![wider, hole(0.0, 0.0)]);
+        assert!(Seed::of_boundary(&new, &got, None, &other).is_none());
     }
 
     #[test]
-    fn carried_cells_are_the_ones_filled() {
+    fn seeded_cells_fill_as_from_nothing() {
         use crate::cells::{FaceCell, FaceCells, SurfaceBox};
         let outer = polygon(&[(-3.0, -3.0), (3.0, -3.0), (3.0, 3.0), (-3.0, 3.0)]);
         let tilted = Surface::Plane(Plane::new(
@@ -1023,21 +1091,25 @@ mod tests {
             )
             .unwrap(),
         ));
+        let read = |f: &FaceRecord| format!("{:?} {:?}", SurfaceBox::of(f), Boundary::of(f));
+        let cold = |f: &FaceRecord| {
+            let mut f = f.clone();
+            f.cells.reset();
+            read(&f)
+        };
         let old = face(tilted.clone(), vec![outer.clone(), hole(1.0, 1.0)]);
         let _ = SurfaceBox::of(&old);
-        let new = face(tilted, vec![outer, hole(1.0, 1.0), hole(-2.0, -2.0)]);
-        let carried = FaceCells::carried(&old, &new);
-        let _ = SurfaceBox::of(&new);
-        assert!(carried.is_filled());
-        assert_eq!(format!("{carried:?}"), format!("{:?}", new.cells));
-        // Another surface: the boundary carries, the surface box waits for a read.
-        let flat = face(plane(), new.loops.clone());
-        let carried = FaceCells::carried(&old, &flat);
-        let _ = Boundary::of(&flat);
-        assert_eq!(format!("{carried:?}"), format!("{:?}", flat.cells));
-        // Nothing filled, nothing carried.
+        let mut new = face(tilted, vec![outer, hole(1.0, 1.0), hole(-2.0, -2.0)]);
+        new.cells = FaceCells::seeded(&old, &new);
+        assert!(new.cells.is_seeded());
+        assert_eq!(read(&new), cold(&new));
+        // Another surface: the boundary's parts carry, the surface box's do not.
+        let mut flat = face(plane(), new.loops.clone());
+        flat.cells = FaceCells::seeded(&old, &flat);
+        assert_eq!(read(&flat), cold(&flat));
+        // Nothing filled, nothing seeded.
         let unread = face(plane(), flat.loops.clone());
-        assert!(!FaceCells::carried(&unread, &new).is_filled());
+        assert!(FaceCells::seeded(&unread, &new).is_empty());
     }
 
     #[test]

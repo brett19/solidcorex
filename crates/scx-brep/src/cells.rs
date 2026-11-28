@@ -14,11 +14,13 @@
 //!   [`Draft::edge_mut`](crate::Draft::edge_mut) reset the cells of the record they hand
 //!   out, and a record added to a draft is reset as it goes in.
 //! - [`Draft::edit_face`](crate::Draft::edit_face) knows the record before and after, so
-//!   where the face's boundary was filled it fills the edited record's cells at once from
-//!   the old ones ([`FaceCells::carried`]): a loop the edit kept keeps its pieces, its
-//!   part of the area and its part of the surface box, and only new loops are enclosed.
-//!   The bits are those a read would fill; a boolean that adds one hole to a face of
-//!   many so pays for the one.
+//!   where the face's boundary was filled (or seeded) it leaves the edited record a seed
+//!   ([`FaceCells::seeded`]): a copy of what the old cells hold of each loop the edit
+//!   kept, its pieces, its part of the area and its part of the surface box. Nothing is
+//!   evaluated then; the first read fills the cells from the seed, enclosing only the new
+//!   loops, and the bits are those a read from nothing would fill. A boolean that adds one
+//!   hole to a face of many so pays for the one, and a face no read reaches pays nothing.
+//!   The seed is a copy in the record, so the cells still read that record alone.
 //! - A write to an edge, a vertex or the adjacency resets no face's cells: nothing in them
 //!   came from there. (Resetting them could not be made sound without copying: a face
 //!   record shared by `Arc` with the body a draft came from can be filled by that body
@@ -44,7 +46,7 @@ use scx_num::interval::{Ivl, round_down, round_up};
 use scx_num::vector3d::Point3;
 use scx_surface::Surface;
 
-use crate::boundary::Boundary;
+use crate::boundary::{Boundary, Seed};
 use crate::record::{EdgeGeom, EdgeShape, FaceRecord};
 
 /// A cell of one face: a value derived from its record alone, kept in
@@ -67,13 +69,15 @@ pub(crate) trait FaceCell: Send + Sync + Sized + 'static {
 pub(crate) struct FaceCells {
     boundary: OnceLock<Box<Boundary>>,
     surface_box: OnceLock<Box<SurfaceBox>>,
+    /// What an edit kept of the face before it, for the first reads to fill from.
+    seed: Option<Box<Seed>>,
 }
 
 impl FaceCells {
-    /// Whether no cell is filled: a reset would change nothing.
+    /// Whether no cell is filled or seeded: a reset would change nothing.
     #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
-        self.boundary.get().is_none() && self.surface_box.get().is_none()
+        self.boundary.get().is_none() && self.surface_box.get().is_none() && self.seed.is_none()
     }
 
     /// Empties every cell.
@@ -81,31 +85,43 @@ impl FaceCells {
         *self = Self::default();
     }
 
-    /// Whether the boundary cell is filled: [`FaceCells::carried`] has something to carry.
-    pub(crate) fn is_filled(&self) -> bool {
-        self.boundary.get().is_some()
+    /// Whether the boundary cell is filled or seeded: [`FaceCells::seeded`] has something
+    /// to carry.
+    pub(crate) fn can_seed(&self) -> bool {
+        self.boundary.get().is_some() || self.seed.is_some()
     }
 
-    /// The cells of `rec`, a write of `old`'s record, filled now from what `old`'s hold:
-    /// the same bits as reads of `rec` would fill, but each loop equal to one of `old`'s
-    /// takes that loop's boxes rather than evaluating its pcurves again. A cell `old` has
-    /// not filled stays empty (a face no read has boxed may never be read), and the surface
-    /// box carries only on the same surface.
-    pub(crate) fn carried(old: &FaceRecord, rec: &FaceRecord) -> Self {
-        let out = Self::default();
-        let Some(was) = old.cells.boundary.get() else {
-            return out;
+    /// Whether an edit left a seed.
+    #[cfg(test)]
+    pub(crate) const fn is_seeded(&self) -> bool {
+        self.seed.is_some()
+    }
+
+    /// The cells of `rec`, a write of `old`'s record: empty, but seeded with what `old`'s
+    /// hold of each loop equal to one of `old`'s, so the first reads of `rec` fill the
+    /// same bits as from nothing while enclosing only the new loops. Nothing is evaluated
+    /// now: a face the edit leaves may never be read. The surface box's parts carry only
+    /// on the same surface.
+    pub(crate) fn seeded(old: &FaceRecord, rec: &FaceRecord) -> Self {
+        let same = old.surface == rec.surface;
+        let seed = if let Some(b) = old.cells.boundary.get() {
+            let bx = old
+                .cells
+                .surface_box
+                .get()
+                .filter(|_| same)
+                .map(|sb| &*sb.runs);
+            Seed::of_boundary(old, b, bx, rec)
+        } else {
+            old.cells
+                .seed
+                .as_deref()
+                .and_then(|s| Seed::of_seed(old, s, same, rec))
         };
-        let (b, from) = Boundary::carried(rec, Some((old, was)));
-        if let Some(sb) = old.cells.surface_box.get()
-            && old.surface == rec.surface
-        {
-            let _ =
-                out.surface_box
-                    .set(Box::new(SurfaceBox::fill_from(rec, &b, Some((sb, &from)))));
+        Self {
+            seed: seed.map(Box::new),
+            ..Self::default()
         }
-        let _ = out.boundary.set(Box::new(b));
-        out
     }
 }
 
@@ -121,7 +137,7 @@ impl FaceCell for Boundary {
     }
 
     fn fill(rec: &FaceRecord) -> Self {
-        Self::build(rec)
+        Self::made(rec, rec.cells.seed.as_deref())
     }
 }
 
@@ -142,9 +158,8 @@ impl SurfaceBox {
         self.bx
     }
 
-    /// The box of `rec`, whose boundary is `b`, taking each run's part from `old`'s run it
-    /// came from (`old` a box of the same surface, with the runs `from` names).
-    fn fill_from(rec: &FaceRecord, b: &Boundary, old: Option<(&Self, &[Option<usize>])>) -> Self {
+    /// The box of `rec`, whose boundary is `b`, taking each loop's part that `seed` kept.
+    fn fill_from(rec: &FaceRecord, b: &Boundary, seed: Option<&Seed>) -> Self {
         let Some(whole) = b.uv_box().and_then(|uv| rec.surface.box_over(uv)) else {
             return Self {
                 bx: None,
@@ -166,19 +181,19 @@ impl SurfaceBox {
         if ruled && b.is_bounded_region() {
             let runs: Box<[Option<Extent3d>]> = b
                 .run_boxes()
-                .enumerate()
-                .map(|(i, boxes)| {
-                    let kept = old
-                        .and_then(|(o, from)| o.runs.get(from.get(i).copied().flatten()?).copied());
-                    kept.unwrap_or_else(|| {
-                        boxes
-                            .map(|uv| rec.surface.box_over(uv))
-                            .try_fold(None, |acc: Option<Extent3d>, bx| {
-                                let bx = bx?;
-                                Some(Some(acc.map_or(bx, |a| a.union(bx))))
-                            })
-                            .flatten()
-                    })
+                .map(|(lp, boxes)| {
+                    seed.and_then(|s| s.bx(lp)).map_or_else(
+                        || {
+                            boxes
+                                .map(|uv| rec.surface.box_over(uv))
+                                .try_fold(None, |acc: Option<Extent3d>, bx| {
+                                    let bx = bx?;
+                                    Some(Some(acc.map_or(bx, |a| a.union(bx))))
+                                })
+                                .flatten()
+                        },
+                        |k| k.0,
+                    )
                 })
                 .collect();
             let hull = runs
@@ -204,7 +219,7 @@ impl FaceCell for SurfaceBox {
     }
 
     fn fill(rec: &FaceRecord) -> Self {
-        Self::fill_from(rec, Boundary::of(rec), None)
+        Self::fill_from(rec, Boundary::of(rec), rec.cells.seed.as_deref())
     }
 }
 

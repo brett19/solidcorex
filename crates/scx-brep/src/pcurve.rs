@@ -279,15 +279,19 @@ impl Draft {
             .map(|l| l.uses.iter().map(|u| (u.edge, u.sense)).collect())
             .collect();
         let written = self.exact_loops(&surface, &loops, doc)?;
-        let rec = self.face_mut(face).ok_or_else(|| Absent {
+        // Through `edit_face`, so a loop written as it was keeps its boxes; the fins have
+        // nothing to follow, the edges and senses being the same.
+        self.edit_face(face, |rec| {
+            for (l, w) in rec.loops.iter_mut().zip(written) {
+                for (u, w) in l.uses.iter_mut().zip(w.uses) {
+                    u.geom = w.geom;
+                    u.bound = None;
+                }
+            }
+        })
+        .ok_or_else(|| Absent {
             entity: face.into(),
         })?;
-        for (l, w) in rec.loops.iter_mut().zip(written) {
-            for (u, w) in l.uses.iter_mut().zip(w.uses) {
-                u.geom = w.geom;
-                u.bound = None;
-            }
-        }
         Ok(())
     }
 
