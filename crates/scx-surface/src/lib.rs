@@ -38,7 +38,9 @@
 //!   or dropped onto it square to it, in closed form, or a typed refusal naming the fitter
 //!   ([`ProjectError::NeedsFitter`]) (research 75 SF1).
 //! - [`pcurve_of`]: the exact pcurve of a curve lying on a surface, checked by lifting, or a
-//!   typed [`PcurveError`] (63 D10, §4.11).
+//!   typed [`PcurveError`] (63 D10, §4.11); [`pcurve_of_projection`]: the pcurve of a curve's
+//!   closest-point projection onto a surface it stands near, for a writer that certifies
+//!   the gap it leaves (research 74 §40).
 //! - [`certificate`]: proofs that a NURBS curve or surface is within a bound of a circle or
 //!   an analytic kind, a curve's turn about an axis, and the loft's span bound, each a typed
 //!   [`certificate::Proof`] or bound (research 75 §4, MK10).
@@ -116,7 +118,7 @@ pub use intersect::{Contact, CurveSurfaceHit, OnSurface, curve_on_surface, inter
 pub use invert::{Closest, Foot, Inversion};
 pub use meet::{Meet, MeetError, points_meet};
 pub use one_plane::{CREASE, NotNear, plane_bound};
-pub use pcurve::{Check, CurveKind, PcurveError, SurfaceKind, pcurve_of};
+pub use pcurve::{Check, CurveKind, PcurveError, SurfaceKind, pcurve_of, pcurve_of_projection};
 pub use plane::Plane;
 pub use procedural::{
     Definition, Extrusion, Motion, Procedural, ProceduralError, RadialLaw, Revolution, Screw, Sweep,
