@@ -47,8 +47,10 @@
 //! | `seam_bound::seam_angle_*`: a seam's largest normal angle | not here yet (74 §17) |
 //! | `MAX_PIECES = 1 << 15`, `MAX_PATCHES = 4096` | the caller's [`Budget`]: one unit per point evaluated |
 //!
-//! NURBS surfaces are [`GapError::Pending`]: their point distance is [`Surface::invert`]'s, but
-//! the bound over a piece (the chain rule through `partials_over_piece`) is not built.
+//! **A NURBS surface** (77 FT4, [`nurbs`]): the same search, a piece's bound through the
+//! surface's partials over the piece's uv box (`partials_over_piece` on each knot piece the
+//! box meets, hulled) by the chain rule; a point's distance from the surface through
+//! [`Surface::invert`]'s certified nearest, and a piece's through the feet of its ends.
 
 use core::cmp::Ordering;
 use core::fmt;
@@ -192,14 +194,9 @@ pub enum Short {
     Stopped,
     /// The pieces that keep the bracket open cannot be cut finer in floating point.
     Precision,
-}
-
-/// A geometry whose gap bound is not built yet.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum Pending {
-    /// A NURBS surface: the bound over a piece through its partials.
-    NurbsSurface,
+    /// A search inside the gap's (the nearest point of a NURBS surface) failed: the
+    /// kernel's own fault.
+    Defect(&'static str),
 }
 
 /// Why a gap has no bracket that meets its aim.
@@ -213,8 +210,6 @@ pub enum GapError {
         /// Why it ended.
         why: Short,
     },
-    /// The geometry's bound is not built (74 analytic first).
-    Pending(Pending),
     /// The range is not finite, or the geometry over it cannot be enclosed (a value
     /// overflows).
     NotFinite,
@@ -224,6 +219,9 @@ pub enum GapError {
         /// The value given.
         value: f64,
     },
+    /// The surface is procedural: its gap would be its exact net's, widened by the net's
+    /// bound, and that arm is not built.
+    Procedural,
 }
 
 impl GapError {
@@ -243,7 +241,11 @@ impl GapError {
                 why: Short::Precision,
                 ..
             }
-            | Self::Pending(_) => ErrorKind::Unsupported,
+            | Self::Procedural => ErrorKind::Unsupported,
+            Self::Undecided {
+                why: Short::Defect(_),
+                ..
+            } => ErrorKind::Defect,
             Self::NotFinite | Self::BadAim { .. } => ErrorKind::Refused,
         }
     }
@@ -264,9 +266,13 @@ impl GapError {
                 why: Short::Precision,
                 ..
             } => "gap_precision",
-            Self::Pending(Pending::NurbsSurface) => "gap_pending_nurbs_surface",
+            Self::Undecided {
+                why: Short::Defect(_),
+                ..
+            } => "gap_defect",
             Self::NotFinite => "gap_not_finite",
             Self::BadAim { .. } => "gap_bad_aim",
+            Self::Procedural => "gap_procedural",
         }
     }
 }
@@ -279,6 +285,7 @@ impl fmt::Display for GapError {
                     Short::Exhausted(_) => "the budget ran out",
                     Short::Stopped => "it was stopped",
                     Short::Precision => "floating point cannot cut finer",
+                    Short::Defect(reason) => reason,
                 };
                 write!(
                     f,
@@ -286,13 +293,11 @@ impl fmt::Display for GapError {
                     reached.lower, reached.upper
                 )
             }
-            Self::Pending(Pending::NurbsSurface) => {
-                f.write_str("a gap to a NURBS surface is not bounded yet")
-            }
             Self::NotFinite => f.write_str("the range or the geometry over it is not finite"),
             Self::BadAim { value } => {
                 write!(f, "the aim {value} is not a valid width or allowance")
             }
+            Self::Procedural => f.write_str("the gap to a procedural surface is not built"),
         }
     }
 }
@@ -886,9 +891,10 @@ impl Field for ToSurface<'_> {
     }
 }
 
-/// The kind of an analytic surface and its frame's axes, or pending.
-fn kind_of(s: &Surface) -> Result<(Kind, Axes), GapError> {
-    Ok(match s {
+/// The kind of an analytic surface and its frame's axes; `None` for a NURBS surface (its
+/// own arm, [`nurbs`]).
+fn kind_of(s: &Surface) -> Option<(Kind, Axes)> {
+    Some(match s {
         Surface::Plane(p) => (
             Kind::Plane,
             Axes::new(p.frame(), scx_num::frame::Sense::Forward),
@@ -909,9 +915,7 @@ fn kind_of(s: &Surface) -> Result<(Kind, Axes), GapError> {
             },
             k.axes(),
         ),
-        Surface::Nurbs(_) | Surface::Procedural(_) => {
-            return Err(GapError::Pending(Pending::NurbsSurface));
-        }
+        Surface::Nurbs(_) | Surface::Procedural(_) => return None,
     })
 }
 
@@ -921,8 +925,9 @@ fn kind_of(s: &Surface) -> Result<(Kind, Axes), GapError> {
 /// # Errors
 ///
 /// [`GapError::Undecided`] with the bracket reached when the budget runs out, `stop` is
-/// set or floating point cannot cut finer; [`GapError::Pending`] for a NURBS surface;
-/// [`GapError::NotFinite`] for an infinite range; [`GapError::BadAim`].
+/// set or floating point cannot cut finer (on a NURBS surface, also when the nearest
+/// point search runs out or fails); [`GapError::NotFinite`] for an infinite range;
+/// [`GapError::BadAim`]; [`GapError::Procedural`] for a procedural surface.
 pub fn curve_surface_gap(
     curve: &Curve,
     over: &Extent1d,
@@ -933,18 +938,28 @@ pub fn curve_surface_gap(
 ) -> Result<Bracket, GapError> {
     let aim = aim.check()?;
     let (lo, hi) = range(over)?;
-    let (kind, axes) = kind_of(surface)?;
+    let cuts = cuts_of(lo, hi, &knots3(curve));
+    let Some((kind, axes)) = kind_of(surface) else {
+        if matches!(surface, Surface::Procedural(_)) {
+            return Err(GapError::Procedural);
+        }
+        let Surface::Nurbs(n) = surface else {
+            return Err(GapError::Undecided {
+                reached: Bracket {
+                    lower: 0.0,
+                    upper: f64::INFINITY,
+                },
+                why: Short::Defect("a surface kind with no gap arm"),
+            });
+        };
+        let field = nurbs::CurveToNurbs::new(curve, n);
+        return distance(search(&field, &cuts, aim, budget, stop));
+    };
     let field = ToSurface {
         src: Source::new(curve, axes),
         kind,
     };
-    distance(search(
-        &field,
-        &cuts_of(lo, hi, &knots3(curve)),
-        aim,
-        budget,
-        stop,
-    ))
+    distance(search(&field, &cuts, aim, budget, stop))
 }
 
 // ---------------------------------------------------------------------------------------
@@ -1344,11 +1359,15 @@ pub fn pcurve_edge_gap(
 ) -> Result<Bracket, GapError> {
     let aim = aim.check()?;
     let (lo, hi) = range(over)?;
-    if matches!(surface, Surface::Nurbs(_) | Surface::Procedural(_)) {
-        return Err(GapError::Pending(Pending::NurbsSurface));
+    if matches!(surface, Surface::Procedural(_)) {
+        return Err(GapError::Procedural);
     }
     let mut breaks = knots3(curve);
     breaks.extend(knots2(pcurve));
+    if let Surface::Nurbs(n) = surface {
+        let field = nurbs::PcurveOnNurbs { n, pcurve, curve };
+        return distance(search(&field, &cuts_of(lo, hi, &breaks), aim, budget, stop));
+    }
     let field = PcurveField {
         surface,
         pcurve,
@@ -1630,6 +1649,8 @@ pub fn curve_curve_gap(
         stop,
     ))
 }
+
+mod nurbs;
 
 #[cfg(test)]
 mod tests;

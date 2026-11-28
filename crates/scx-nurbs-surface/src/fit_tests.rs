@@ -30,7 +30,7 @@ fn near<const D: usize>(got: &[f64; D], want: &[f64; D], tol: f64) -> bool {
 }
 
 /// Parameters 0 = t0 < ... < tn = 1, unevenly spaced.
-fn params(rng: &mut Rng, n: usize) -> Vec<f64> {
+pub(crate) fn params(rng: &mut Rng, n: usize) -> Vec<f64> {
     let mut t = vec![0.0];
     let mut run = 0.0;
     let steps: Vec<f64> = (0..n).map(|_| 0.3 + rng.next_f64()).collect();
@@ -153,7 +153,7 @@ fn a_polynomial_surface_of_the_fitted_degrees_is_reproduced() {
 }
 
 /// The ring of the cylinder's circle: nine rational points.
-fn ring(r: f64) -> ([[f64; 3]; 9], [f64; 9]) {
+pub(crate) fn ring(r: f64) -> ([[f64; 3]; 9], [f64; 9]) {
     let s = core::f64::consts::FRAC_1_SQRT_2;
     let xyw = [
         (r, 0.0, 1.0),
@@ -192,7 +192,7 @@ fn circles(r: f64, z: &[f64]) -> CompatibleCurves<3> {
 }
 
 /// The point at `t` of the circle, each quarter's rational quadratic written out.
-fn circle(r: f64, z: f64, t: f64) -> [f64; 3] {
+pub(crate) fn circle(r: f64, z: f64, t: f64) -> [f64; 3] {
     let k = ((t * 4.0).floor() as usize).min(3);
     let s = t * 4.0 - k as f64;
     let w = core::f64::consts::FRAC_1_SQRT_2;
@@ -466,10 +466,12 @@ fn refusals_are_typed_and_leave_the_inputs() {
                 .collect(),
         )
     };
-    assert!(matches!(
-        interpolate_rows(&rows, &v, 3, &held(9, 1), &Edge::Point),
-        Err(SurfaceFitError::RationalEnds)
-    ));
+    // Rational rows take derivative ends since CN4 (`skin_tests` checks their meaning).
+    assert!(
+        interpolate_rows(&rows, &v, 3, &held(9, 1), &Edge::Point)
+            .unwrap()
+            .is_rational()
+    );
     // Polynomial rows with the wrong number of conditions or mixed orders.
     let poly_rows = CompatibleCurves::new(
         KnotVector::new(1, vec![0.0, 0.0, 1.0, 1.0]).unwrap(),
@@ -526,7 +528,6 @@ fn refusals_are_typed_and_leave_the_inputs() {
         SurfaceFitError::Surface(NurbsSurfaceError::NoSurfaces).name(),
         SurfaceFitError::EdgeCount { count: 1, lines: 2 }.name(),
         e.name(),
-        SurfaceFitError::RationalEnds.name(),
         SurfaceFitError::Defect { why: "x" }.name(),
     ];
     let mut sorted = names.to_vec();

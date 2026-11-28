@@ -104,7 +104,7 @@ pub use edit::UvMap;
 pub use enclose::Along;
 pub use error::{Size, SurfaceError};
 pub use gap::{
-    Aim, Bracket, GapError, Pending, Short, curve_curve_gap, curve_surface_gap, pcurve_edge_gap,
+    Aim, Bracket, GapError, Short, curve_curve_gap, curve_surface_gap, pcurve_edge_gap,
     point_curve_gap, vertex_curve_gap,
 };
 pub use hull::{Hull, Hulls};
