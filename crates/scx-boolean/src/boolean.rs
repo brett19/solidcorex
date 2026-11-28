@@ -53,8 +53,9 @@ pub enum NoItems {}
 /// - [`BooleanUnsupported::Pcurve`] where a face's new loops need a pcurve with no exact
 ///   form (a fitted one).
 /// - [`BooleanUnsupported::NonManifold`] where two kept faces leave an edge in one
-///   direction (tangent along it), where a touch inside a face falls on a piece's
-///   boundary, or where an operand is non-manifold at a place a query reads.
+///   direction with tied bends, where a tangent line or circle ends inside a kept face,
+///   where a touch inside a face falls on a piece's boundary, or where an operand is
+///   non-manifold at a place a query reads.
 /// - [`BooleanUnsupported::Nesting`] where the result's connected sets of faces nest in a
 ///   way other than cavities of one set.
 /// - [`BooleanError::Exhausted`] when `cx`'s budget runs out, [`BooleanError::Cancelled`]
@@ -126,7 +127,7 @@ pub(crate) fn staged(
     let (body, changes) = build(
         ops,
         imprinted,
-        &ff.touches,
+        &ff,
         &classes,
         rule,
         *cx.doc,

@@ -133,8 +133,10 @@ pub enum BooleanUnsupported {
     /// A place the build or a query does not order (BO25 names them; the result's walls,
     /// laminas, pinches and touches inside a face are built):
     /// - two of the result's faces leaving an edge of three or more fins in one direction
-    ///   (tangent along it): their radial order needs their bends, which nothing measures
-    ///   yet; or one with no direction there (no normal at the edge's midpoint);
+    ///   (tangent along it) whose bends tie within their slack (BO22 orders the rest by
+    ///   bend); or one with no direction there (no normal at the edge's midpoint);
+    /// - a tangent line or circle that ends inside a kept face where the other side is kept
+    ///   too (BO22: it would be lost, the face's trace drops it as a dangling cut);
     /// - a touch inside a face whose point the face's region test puts on a piece's
     ///   boundary rather than inside one piece;
     /// - a point classification of an operand that met an edge or vertex where more than

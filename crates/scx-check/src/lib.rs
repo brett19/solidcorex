@@ -45,10 +45,12 @@
 //! `d = sense (N x T)` (`N` the face's normal at the use's pcurve), and
 //!
 //! - the count is even,
-//! - the fins in the edge's order have strictly increasing counter-clockwise angles of `d`
-//!   about `T` from the first, each gap and the wrap-round gap above `1e-9` rad (faces
-//!   leaving in one direction are tangent, and the edge's order cannot be read from one
-//!   sample; they are refused), and
+//! - the fins in the edge's order turn once counter-clockwise about `T`: each gap from a
+//!   fin's `d` to the next's, the wrap-round one included, is above `1e-9` rad, or within
+//!   it (faces leaving in one direction, tangent along the edge) with the next face
+//!   bending further counter-clockwise (its normal curvature along `d`, with the use's
+//!   sense) by more than both bends' slack, as scx-brep's radial check orders them
+//!   (BO22); faces whose bends tie agree to second order and are refused, and
 //! - the region after each fin is solid and void by turns.
 //!
 //! Anything else is [`Breach::NonManifoldEdge`] (an odd count, or a count under two) or
@@ -85,6 +87,7 @@ mod structure;
 
 use std::collections::BTreeMap;
 
+use core::f64::consts::TAU;
 use scx_brep::op::Cx;
 use scx_brep::{Brep, Edge, EdgeShape, FaceId, FaceSide, ShellId, UseGeom};
 use scx_mass::{MassError, MassRefusal, Sign};
@@ -290,7 +293,7 @@ fn structure(body: &Brep, contacts: Contacts) -> Result<(), Breach> {
             continue;
         }
         if contacts == Contacts::Radial && fins > 2 && fins % 2 == 0 {
-            if !radial(e) {
+            if !radial(e, body.resolution().zone().mm()) {
                 return Err(Breach::EdgeNotRadial { edge: e.id() });
             }
         } else {
@@ -316,9 +319,27 @@ fn structure(body: &Brep, contacts: Contacts) -> Result<(), Breach> {
 /// Two directions closer than this, in radians, are one: the faces are tangent.
 const TIED: f64 = 1e-9;
 
+/// The relative rounding of a curvature from an analytic surface's second partials.
+const CURVATURE_SLACK: f64 = 1e-9;
+
+/// How a fin's face leaves its edge at the edge's middle.
+#[derive(Debug, Clone, Copy)]
+struct Leaving {
+    /// The unit direction `sense (N x T)`.
+    d: Vec3,
+    /// The face's normal curvature along `d` with the use's sense: its bend toward the
+    /// counter-clockwise side past `d`.
+    bend: f64,
+    /// How far `bend` may be from the true bend.
+    slack: f64,
+    /// Whether the sector after the fin is solid.
+    solid: bool,
+}
+
 /// Whether the fins of `edge` (an even number, over two) leave it in strict radial order
-/// with solid and void sectors by turns (see the crate doc).
-fn radial(edge: Edge<'_>) -> bool {
+/// with solid and void sectors by turns (see the crate doc); `zone` is the body's
+/// resolution, how far a lift may stand from the edge where no accuracy is recorded.
+fn radial(edge: Edge<'_>, zone: f64) -> bool {
     let EdgeShape::Curve { curve, interval } = edge.shape() else {
         return false;
     };
@@ -327,15 +348,24 @@ fn radial(edge: Edge<'_>) -> bool {
         return false;
     };
     let tan = tan.as_vec();
+    let rho = edge
+        .accuracy()
+        .map_or(zone, |r| r.acc.length().mm().max(zone));
     let mut fins = Vec::with_capacity(edge.fins().len());
     for u in edge.uses() {
         let UseGeom::Pcurve { curve: pc, .. } = u.geom() else {
             return false;
         };
-        let Some(n) = u.face().surface().normal(pc.point(s), [Approach::Above; 2]) else {
+        let surface = u.face().surface();
+        let uv = pc.point(s);
+        let Some(n) = surface.normal(uv, [Approach::Above; 2]) else {
             return false;
         };
         let Some(d) = (n.as_vec().cross(tan) * u.sense().sign()).normalized() else {
+            return false;
+        };
+        let d = d.as_vec();
+        let Some(bend) = surface.normal_curvature(uv, [Approach::Above; 2], d) else {
             return false;
         };
         // The sector after the fin: the front of a forward use, the back of a reversed one.
@@ -343,36 +373,43 @@ fn radial(edge: Edge<'_>) -> bool {
             Sense::Forward => FaceSide::Front,
             Sense::Reversed => FaceSide::Back,
         };
-        fins.push((d.as_vec(), u.face().shell(side).region().is_solid()));
+        let k = bend.largest;
+        fins.push(Leaving {
+            d,
+            bend: bend.along * u.sense().sign(),
+            // The lift within `rho` of the edge moves the bend by about twice `k^2 rho`,
+            // doubled for the change of curvature the jet does not bound.
+            slack: 4.0 * k * k * rho + CURVATURE_SLACK * k.max(bend.along.abs()),
+            solid: u.face().shell(side).region().is_solid(),
+        });
     }
     is_radial(tan, &fins)
 }
 
-/// The test of the crate doc on each fin's direction `d` and whether the sector after it is
-/// solid, in the edge's order, about the unit tangent `tan`.
-fn is_radial(tan: Vec3, fins: &[(Vec3, bool)]) -> bool {
-    let Some(&(e1, _)) = fins.first() else {
-        return false;
-    };
-    let e2 = tan.cross(e1);
-    let mut last = 0.0;
-    for &(d, _) in fins.iter().skip(1) {
-        let a = fmath::atan2(d.dot(e2), d.dot(e1));
-        let a = if a < 0.0 {
-            a + core::f64::consts::TAU
-        } else {
-            a
+/// The test of the crate doc on each fin's leaving, in the edge's order, about the unit
+/// tangent `tan`: the counter-clockwise gaps from each fin to the next make one turn, each
+/// over `TIED`, or within it with the next bending further counter-clockwise by more
+/// than both bends' slack (faces tangent along the edge, ordered past it by their bends).
+fn is_radial(tan: Vec3, fins: &[Leaving]) -> bool {
+    let n = fins.len();
+    let mut turn = 0.0;
+    for (i, a) in fins.iter().enumerate() {
+        let Some(b) = fins.get((i + 1) % n) else {
+            return false;
         };
-        // A direction behind the first is a second turn; one at or before the last is out
-        // of order; one within `TIED` of its neighbour is tangent to it.
-        if !(a - last > TIED && core::f64::consts::TAU - a > TIED) {
+        let theta = fmath::atan2(a.d.cross(b.d).dot(tan), a.d.dot(b.d));
+        if theta.abs() > TIED {
+            turn += if theta > 0.0 { theta } else { theta + TAU };
+        } else if b.bend - a.bend <= a.slack + b.slack {
             return false;
         }
-        last = a;
     }
-    fins.windows(2)
-        .all(|w| matches!(w, [(_, x), (_, y)] if x != y))
-        && matches!((fins.first(), fins.last()), (Some((_, x)), Some((_, y))) if x != y)
+    // The gaps add up to a whole number of turns; anything but one is out of order.
+    (0.5 * TAU..1.5 * TAU).contains(&turn)
+        && fins
+            .windows(2)
+            .all(|w| matches!(w, [x, y] if x.solid != y.solid))
+        && matches!((fins.first(), fins.last()), (Some(x), Some(y)) if x.solid != y.solid)
 }
 
 #[cfg(test)]
@@ -385,11 +422,16 @@ mod tests {
         Vec3::new(fmath::cos(angle), fmath::sin(angle), 0.0)
     }
 
-    fn fins(angles: &[f64]) -> Vec<(Vec3, bool)> {
+    fn fins(angles: &[f64]) -> Vec<Leaving> {
         angles
             .iter()
             .enumerate()
-            .map(|(i, &a)| (dir(a), i % 2 == 0))
+            .map(|(i, &a)| Leaving {
+                d: dir(a),
+                bend: 0.0,
+                slack: 0.0,
+                solid: i % 2 == 0,
+            })
             .collect()
     }
 
@@ -419,17 +461,38 @@ mod tests {
     #[test]
     fn tangent_fins_are_refused() {
         assert!(!is_radial(T, &fins(&[0.0, Q, Q + 1e-11, 3.0 * Q])));
-        assert!(!is_radial(
-            T,
-            &fins(&[0.0, Q, 2.0 * Q, core::f64::consts::TAU - 1e-11])
-        ));
+        assert!(!is_radial(T, &fins(&[0.0, Q, 2.0 * Q, TAU - 1e-11])));
         assert!(!is_radial(T, &fins(&[0.0, 0.0, 2.0 * Q, 3.0 * Q])));
+    }
+
+    #[test]
+    fn tangent_fins_bending_apart_pass_in_bend_order() {
+        // Two fins leaving along Q: the one bending further counter-clockwise comes after.
+        let mut f = fins(&[0.0, Q, Q, 2.0 * Q]);
+        f[1].bend = -0.5;
+        f[2].bend = 0.5;
+        f[1].slack = 1e-9;
+        f[2].slack = 1e-9;
+        assert!(is_radial(T, &f));
+        f.swap(1, 2);
+        f[1].solid = false;
+        f[2].solid = true;
+        assert!(!is_radial(T, &f));
+        // Bends within their slack are refused.
+        let mut g = fins(&[0.0, Q, Q, 2.0 * Q]);
+        g[1].slack = 1.0;
+        g[2].bend = 0.5;
+        assert!(!is_radial(T, &g));
+        // A tie across the wrap: the last fin leaves with the first, bending less.
+        let mut w = fins(&[0.0, Q, 2.0 * Q, 0.0]);
+        w[0].bend = 1.0;
+        assert!(is_radial(T, &w));
     }
 
     #[test]
     fn sectors_that_do_not_alternate_are_refused() {
         let mut f = fins(&[0.0, Q, 2.0 * Q, 3.0 * Q]);
-        f[1].1 = true;
+        f[1].solid = true;
         assert!(!is_radial(T, &f));
         // Alternating over the list but not across the wrap: an odd count.
         assert!(!is_radial(T, &fins(&[0.0, Q, 2.0 * Q])));

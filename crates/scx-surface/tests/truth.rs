@@ -1144,3 +1144,51 @@ fn oblique_cylinder_sections_have_the_rational_uv() {
     }
     assert_eq!(n, 24 * 4 * 8);
 }
+
+#[test]
+fn normal_curvature_is_the_closed_forms() {
+    // About the surface's own normal: a forward cylinder of radius 2 bends away from its
+    // normal by 1/2 round the axis and not along it; a sphere of 3 by 1/3 every way; a
+    // torus (5, 1.5) on its outer equator by 1/1.5 along the meridian and 1/6.5 along the
+    // equator. Reversed, each sign flips; `largest` is the largest magnitude either way.
+    let mm = Length::from_mm;
+    let side = [Approach::Above, Approach::Above];
+    let check = |s: AnySurface, uv: Point2, cases: &[(Vec3, f64)], largest: f64| {
+        let n = *s.normal(uv, side).unwrap();
+        for &(t, k) in cases {
+            // A tangent direction from the axis-aligned hint, of any length.
+            let d = n.cross(t).cross(n) * 2.5;
+            let b = s.normal_curvature(uv, side, d).unwrap();
+            assert!(
+                (b.along - k).abs() < 1e-12,
+                "{t:?}: {} against {k}",
+                b.along
+            );
+            assert!((b.largest - largest).abs() < 1e-12, "{}", b.largest);
+        }
+    };
+    let z = Vec3::new(0.0, 0.0, 1.0);
+    let x = Vec3::new(1.0, 0.0, 0.0);
+    let y = Vec3::new(0.0, 1.0, 0.0);
+    let uv = Point2::new(0.0, 0.7);
+    for (sense, sign) in [(Sense::Forward, 1.0), (Sense::Reversed, -1.0)] {
+        let c = Cylinder::new(Frame::WORLD, mm(2.0), sense).unwrap();
+        check(c.into(), uv, &[(z, 0.0), (y, -sign / 2.0)], 0.5);
+        let s = Sphere::new(Frame::WORLD, mm(3.0), sense).unwrap();
+        let p = Point2::new(0.4, 0.2);
+        check(
+            s.into(),
+            p,
+            &[(z, -sign / 3.0), (x + y, -sign / 3.0)],
+            1.0 / 3.0,
+        );
+        let t = Torus::new(Frame::WORLD, mm(5.0), mm(1.5), sense).unwrap();
+        let eq = Point2::new(0.0, 0.0);
+        check(
+            t.into(),
+            eq,
+            &[(z, -sign / 1.5), (y, -sign / 6.5)],
+            1.0 / 1.5,
+        );
+    }
+}

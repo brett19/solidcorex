@@ -136,6 +136,15 @@ fn nurbs_normal(n: &NurbsSurface<3>, uv: Point2, side: [Approach; 2]) -> Option<
     su.cross(sv).normalized()
 }
 
+/// A surface's normal curvature along a direction ([`Surface::normal_curvature`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NormalBend {
+    /// The normal curvature along the direction, about the surface's normal.
+    pub along: f64,
+    /// The magnitude of the largest principal curvature there.
+    pub largest: f64,
+}
+
 impl Surface {
     /// The closed-form inverse of the kind's uv (63 D13), as a [`Chart`]: `None` for a
     /// NURBS surface, which has none.
@@ -218,6 +227,44 @@ impl Surface {
             Self::Nurbs(n) => nurbs_normal(n, uv, side),
             Self::Procedural(p) => procedural_normal(p, uv, side),
         }
+    }
+
+    /// The normal curvature at `uv` along the tangent direction `d` (a vector in the
+    /// tangent plane, any length), about the normal [`Surface::normal`] gives: positive
+    /// where the surface bends toward that normal. With it, the largest principal
+    /// curvature's magnitude, which bounds how far the first moves as `uv` or `d` does.
+    /// From the first and second fundamental forms of the jet, so exact for the analytic
+    /// kinds up to rounding.
+    ///
+    /// `None` where there is no normal, the partials are degenerate, or `d` has no part in
+    /// the tangent plane.
+    #[must_use]
+    pub fn normal_curvature(&self, uv: Point2, side: [Approach; 2], d: Vec3) -> Option<NormalBend> {
+        let n = self.normal(uv, side)?.as_vec();
+        let jet = self.jet::<2>(uv, side);
+        let (su, sv) = (jet.get(1, 0)?, jet.get(0, 1)?);
+        let (suu, suv, svv) = (jet.get(2, 0)?, jet.get(1, 1)?, jet.get(0, 2)?);
+        let (e, f, g) = (su.dot(su), su.dot(sv), sv.dot(sv));
+        let (l, m, nn) = (suu.dot(n), suv.dot(n), svv.dot(n));
+        let det = e * g - f * f;
+        if !(det.is_finite() && det > 0.0) {
+            return None;
+        }
+        // The shape operator `I^-1 II`, whose eigenvalues are the principal curvatures;
+        // their half gap read off its entries, not as `sqrt(H^2 - K)`, which cancels to
+        // `sqrt(eps)` at an umbilic.
+        let (sa, sb) = ((g * l - f * m) / det, (g * m - f * nn) / det);
+        let (sc, sd) = ((e * m - f * l) / det, (e * nn - f * m) / det);
+        let half = 0.5 * (sa - sd);
+        let largest = (0.5 * (sa + sd)).abs() + (half * half + sb * sc).max(0.0).sqrt();
+        // `d` in uv: the least-squares solution of `J w = d`.
+        let (a, b) = (su.dot(d), sv.dot(d));
+        let (w1, w2) = ((g * a - f * b) / det, (e * b - f * a) / det);
+        let first = e * w1 * w1 + 2.0 * f * w1 * w2 + g * w2 * w2;
+        let second = l * w1 * w1 + 2.0 * m * w1 * w2 + nn * w2 * w2;
+        let along = second / first;
+        (first > 0.0 && along.is_finite() && largest.is_finite())
+            .then_some(NormalBend { along, largest })
     }
 
     /// The point at each of `uv`, into `out`: `out[i]` is [`Surface::point`]`(uv[i])`, bit

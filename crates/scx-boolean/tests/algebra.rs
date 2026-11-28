@@ -440,12 +440,8 @@ fn doubled(pool: &[(&'static str, Part)]) -> Vec<Part> {
 const KNOWN: &[(&str, &str, &str)] = &[
     ("build", "absorption-intersection", "torus/boxB"),
     ("loops", "absorption-intersection", "cone/boxC"),
-    ("loops", "absorption-intersection", "cyl/boxB"),
-    ("loops", "absorption-intersection", "cyl/flush"),
     ("loops", "absorption-intersection", "sphereOnFace/sphere"),
-    ("loops", "absorption-intersection", "torus/flush"),
     ("loops", "absorption-union", "cone/boxC"),
-    ("loops", "absorption-union", "cyl/flush"),
     ("loops", "absorption-union", "sphere/abut"),
     ("loops", "absorption-union", "sphereOnFace/sphere"),
     ("loops", "distributivity", "cone/boxA/boxC"),
