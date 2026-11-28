@@ -3775,6 +3775,54 @@ boxed and its sides are decided.
 
 The causes and counts in §13.6 and the BO10 row are BO10's, and this section supersedes them.
 
+### 13.42 BO11 as built (11-28)
+
+`scx_boolean::boolean_all(first, rest, op, cx)` in `scx-boolean/src/nary.rs` (about 100 lines
+over `boolean`).
+
+**Shape.**
+- Union and intersection fold all operands as a balanced tree: split at `len.div_ceil(2)` (the
+  left half the larger when odd), fold left, then right, then combine. Five operands run
+  `((0 1) 2) (3 4)`. Order is fixed, so the same operands give the same body and work.
+- Subtraction is `first` less the balanced union of `rest`, in one final step.
+- No `rest` is no Boolean: the body is `first` re-finished (`edit().finish`), empty `Changes`,
+  work 0.
+- Budget is the whole fold's: each step gets the limit less the work so far, and `Exhausted`
+  reports the fold's limit. `Report.work` is the sum of the steps' work, in fold order.
+- Operands of another resolution are refused up front as `OtherDocument` named by place in
+  the call (`first` 0, `rest[i]` i + 1), not as a step's operand 0 or 1.
+
+**Tests (13, `tests/nary.rs`).** Ported from `union_all`: two disjoint blocks (2), two
+overlapping (3), a five-block half-overlap chain (3), a single body (unchanged, work 0). New:
+the three Booleans of two operands equal `boolean` (work and faces); three disjoint cylinders
+(6 pi, 9 faces); a plate less two bores (32 - 2 pi, 8 faces); three overlapping cubes
+subtract (875), intersect (27) and unite (3 x 1000 - 125 - 27 - 512 + 27 = 2363 by inclusion-exclusion); four
+blocks in all 24 orders (volume 2.2, 6 faces each); determinism; work equal to the steps
+summed by hand for union and for subtraction; a budget of the total passes and total - 1
+fails with `Exhausted { limit: total - 1 }` though each step alone fits; the other-document
+refusal by place. Every result also passes `scx_check::contract`.
+
+**Choices, for and against.**
+- Subtract as first less one union of the tools, rather than first less each tool in turn.
+  For: matches 75's "balanced fold", the tools' union is shared by none of the steps that
+  touch `first`, and it is one cut of `first`. Against: unioning tools can fail or cost where
+  a sequence of cuts would not (tools sharing a coincident face), and the union's work is
+  spent before `first` is read. If a case shows this, BO12's selection replaces it anyway.
+- Changes are the final step's only. For: no composition of `Changes` exists yet (RP8 plans
+  one); inventing it here would be a second implementation. Against: the lineage names the
+  final step's left operand, an intermediate body, not the caller's operands; a caller that
+  needs lineage across all operands waits for BO12. Documented on the entry.
+- Pass the whole budget down as a remainder, rather than a fresh budget per step. For: a
+  caller's limit bounds the call. Against: a step's `Exhausted` is the fold's, so a caller
+  cannot tell which step ran out.
+- The pin's pairing carries an odd operand across a level; the half-split gives the same tree
+  on powers of two and a larger left half otherwise. The pin's order is not the contract.
+- No `Skipped` items and no warnings: `boolean` makes none, so the report is `Report::empty`.
+
+**Added work.** None on existing paths: `boolean` is untouched. A fold of n operands runs n - 1
+`boolean` steps; the intermediates' faces are what the later steps read (the cost BB1 will
+measure against BO12's merge). Four blocks: three steps, summed work equal to the hand sum.
+
 ### 13.45 MK12b as built (11-28)
 
 `scx_make::{blend_edges, fillet_sheets, fillet_crossing, Fillet, SectionBlendDefinition, point_frames, open_section_turns, section_frames, section_frames_outward}` and their types live in `crates/scx-make/src/sheet_blend/` (one module tree; `blend.rs` from MK12 is unchanged). scx-make gains the `scx-boolean` dependency, which layers.txt allows. It reuses MK12's `section_blend`, MK10c's `span_bound`, BO13b's `imprint_curves` and MK15's `face`. Nothing on an existing path changed.
@@ -3843,3 +3891,79 @@ Tests (`crates/scx-make/src/sheet_blend/tests.rs`, 15, all closed forms; none re
 - Too few stations and an edge with no face are refused.
 - The definition rebuilds bit for bit, recertifies in a turned orientation, and follows a motion.
 - Even `point_frames`, `open_section_turns` end to nearer end, and `section_frames_outward` square to the edge.
+
+### 13.41 RY1 as built (11-28)
+
+`intersect_curve` (and `curve_on_surface`) now answer a NURBS curve against a plane, cylinder,
+cone, sphere or torus (77 §6.3 RY1). A NURBS curve against a NURBS surface stays
+`SurfaceError::NurbsIntersection`. The new module is `scx-surface/src/intersect/nurbs_curve.rs`,
+and the parent's `Path::of` dispatch gains one arm.
+
+- **Per span.** Each Bézier span, in homogeneous form and in the kind's own frame, is substituted
+  into the implicit form as a `Bounded` Bernstein polynomial with a rounding bound. The degrees are
+  `p` for a plane's height, `2p` for a cylinder, cone or sphere, and `4p` for a torus. The roots
+  are isolated with `bernstein_roots`, and each one is polished by three Newton steps. The turns
+  are the roots of the derivative (`h g' - d h' g` for a rational span). These two isolations make
+  up the two budget units a span charges.
+- **Contacts.** The span's events (Root, Turn, End, and a Probe at each interior knot) go through
+  the parent's `classify`. A hit is therefore typed exactly as an analytic one is, by the same
+  `Tangent` and `Crossing` rules.
+- **Knots.** A knot is one event, never two: neighbouring spans share the knot's point bit for bit.
+  A sign change in the slope across a knot (a kink) is a Turn, so a polyline's V touching a plane
+  is one tangent. A crossing at a knot is one crossing.
+- **Overlaps.** A span whose polynomial is zero within its bound has its overlap proved by the gap
+  certificate (`curve_surface_gap`). A run of such spans is one `Overlap`, clipped by the
+  surface's uv box. A closed curve merges its end hits.
+- **Undecided.** An uncertified root far from the surface, a flat span the gap cannot prove, or a
+  depth-4 sign check that fails returns `SurfaceError::Undecided { t }`, never an empty answer.
+  The variant is RY2's (13.32); RY1 widens its doc to NURBS-curve roots.
+- **`curve_on_surface` against a plane.** It first takes the control net's height bound,
+  `max (|z| + ez)/(h - eh)`, which costs one budget unit. A curve that bound proves in the plane is
+  `Proved` without isolation.
+
+Choices:
+
+1. **Undecided rather than empty.** I chose `Undecided` for an uncertified root. For: an empty
+   answer is a wrong miss. Against: a caller now has one more error arm, which bodyq, boolean and
+   hlr map with `NurbsIntersection`.
+2. **Kinks are read from the slopes' end coefficients.** For: this costs nothing extra and matches
+   the truth of a polyline V. Against: a span with a zero end slope relies on the turn isolation
+   instead. That case is tested with the cubic spline at its knot.
+3. **The surface's own uv box clips an overlap run.** This matches the analytic `Overlap` contract.
+
+The hlr fix: `silhouette.rs` `trim`'s face test now reads a foot farther than the face's `near`
+as off the face. RY1 made this code reachable. Before RY1, a NURBS rim made the trim `Undecided`.
+Now the rim splits the generators, and the NURBS patch's inversion clamps a foot to the patch
+edge, which read every point past the edge as `Near`. The test is renamed
+`a_rational_cylinder_is_recognised_and_trimmed_by_its_nurbs_rims` and now checks the truth: of
+the two generators, the one at about 106.7 degrees runs on the face from `z = 0` to `0.5`, and
+the one at about 286.7 degrees lies in the arc's 90 degree gap and is dropped. The old test
+asserted that both were `Undecided::NurbsEdge`, which was a stand-in for not knowing.
+HL3's outline test `nurbs_rims_and_freeform_faces_are_named_not_sampled` is renamed
+`nurbs_rims_are_cut_exactly_and_freeform_faces_named`. The rational sheet's two NURBS rims
+are now cut by the silhouette planes, not named `NurbsEdge`. The sheet faces the viewer from
+either side, so the cut at about 106.7 degrees merges back. All four edges are whole
+stretches, which is the truth. `plane_hits` maps `Undecided` to `NurbsEdge` as it maps
+`NurbsIntersection`.
+`rays.rs` is untouched; RY3 owns it.
+
+Measured with throwaway counters, counting isolations per call, where an analytic piece counts
+2:
+
+| Case | Spans | Isolations | Analytic path |
+|---|---|---|---|
+| NURBS circle against each of the 5 kinds | 4 | 8 | 4 for the analytic circle, before and after |
+| NURBS line | 1 | 2 | 2 for the analytic line, before and after |
+| 7-span cubic spline | 7 | 14 | — |
+| Quadratic line against a torus (degree 8) | 2 | 4 | — |
+| Cubic grazing a cylinder | 1 | 2 | — |
+
+The work is linear in the spans, and the budget charged equals the isolations. The analytic path
+is unchanged: the same counts on main and on the branch, for the line and circle against all
+five kinds.
+
+Open questions:
+
+- **A NURBS curve against a NURBS surface.** This is deferred, as 77 §6.3 says.
+- **Degree-4p spans of high-degree curves.** These have not been measured for root-isolation
+  depth. `RootLimits::DEFAULT` is used.

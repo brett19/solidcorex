@@ -274,7 +274,7 @@ pub(crate) fn of_edge_face(
 ) -> BooleanError {
     match (x, curve) {
         // The NURBS one named: the edge when its curve is, else the face.
-        (SurfaceError::NurbsIntersection, Curve::Nurbs(_)) => {
+        (SurfaceError::NurbsIntersection | SurfaceError::Undecided { .. }, Curve::Nurbs(_)) => {
             BooleanError::Unsupported(BooleanUnsupported::Nurbs {
                 operand: side.operand(),
                 at: scx_brep::Entity::Edge(e),

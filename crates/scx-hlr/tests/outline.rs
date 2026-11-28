@@ -798,20 +798,18 @@ fn trimmed(top: f64, rational: bool) -> (Brep, EdgeId) {
 }
 
 #[test]
-fn nurbs_rims_and_freeform_faces_are_named_not_sampled() {
-    // The rational 270-degree cylinder is recognised, but its rims are NURBS curves:
-    // where the wall's facing changes along them is not found in closed form yet.
+fn nurbs_rims_are_cut_exactly_and_freeform_faces_named() {
+    // The rational 270-degree cylinder is recognised, and its NURBS rims cut against the
+    // silhouette planes exactly (`intersect_curve` on a NURBS curve). The face is an open
+    // sheet, seen from either side: its facing changes nowhere but edge-on, so the bottom
+    // and top arcs, cut where they meet the generator at about 106.7 degrees, merge back,
+    // and every edge is one whole stretch.
     let (body, bottom) = trimmed(0.5, true);
     let o = run(&body, &view(v(1.0, 0.3, 0.2)));
-    // Only its two straight edges are decided; the NURBS rims are named.
-    let undecided: Vec<_> = o.undecided.iter().map(|u| u.why).collect();
-    assert_eq!(o.undecided.len(), 2, "{o:?}");
-    assert!(undecided.iter().all(|w| matches!(
-        w,
-        OutlineUndecided::Cuts(scx_hlr::Undecided::NurbsEdge { .. })
-    )));
-    assert!(o.undecided.iter().any(|u| u.edge == bottom));
-    assert!(o.stretches.iter().all(|s| s.edge != bottom));
+    assert!(o.undecided.is_empty(), "{o:?}");
+    assert_eq!(o.stretches.len(), 4, "{o:?}");
+    assert!(o.stretches.iter().all(|s| s.whole));
+    assert!(o.stretches.iter().any(|s| s.edge == bottom));
     // The same net without weights is no quadric: every edge names the face.
     let (body, _) = trimmed(0.5, false);
     let o = run(&body, &view(v(1.0, 0.3, 0.2)));

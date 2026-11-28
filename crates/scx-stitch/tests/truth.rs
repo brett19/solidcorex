@@ -36,11 +36,11 @@ use common::*;
 
 /// The coincidence of the default document, in mm.
 const ZONE: f64 = 1.0e-5;
-/// Just inside what the stitch can make today: a join moves an edge off the absorbed
-/// face's plane by this much, and the pcurve writer places a curve within `Resolution::approx`
-/// (half the zone) of its surface. Between this and the zone a join is proved but is
-/// `Unsupported(Edges { why: Fit })` (`a_join_past_the_pcurve_tolerance_is_typed`).
-const INSIDE: f64 = 0.45 * ZONE;
+/// Just inside the coincidence: a join leaves the kept edge this far off the absorbed face,
+/// past the exact pcurve writer's `Resolution::approx` (half the zone), so the absorbed
+/// face's use gets the kept curve's projection with its certified gap recorded (74 §40,
+/// `a_join_past_the_pcurve_tolerance_records_its_certified_gap`).
+const INSIDE: f64 = 0.9 * ZONE;
 
 /// Shells, faces, edges and vertices.
 fn counts(b: &Brep) -> [usize; 4] {
@@ -413,30 +413,33 @@ fn permuted_sheets_give_the_same_bits_for_every_recipe() {
 }
 
 /// With every sheet within coincidence of its neighbours (just-inside perturbation of every
-/// other face), the order still does not change the geometry.
+/// other face), the order still does not change the geometry; nor with one face moved past
+/// the exact pcurve tolerance (`INSIDE`), whose joins write projected pcurves.
 #[test]
 fn permuted_perturbed_sheets_give_the_same_bits() {
     let body = solid(Kind::Block, 0, 2);
     let doc = Document::default();
-    let mut sheets = explode(&body, |_| false);
-    for (i, s) in sheets.iter_mut().enumerate() {
-        if i % 2 == 0 {
-            let by = normal(&body, i) * (0.4 * ZONE);
-            let mut d = s.edit();
-            d.transform(&Affine::translation(by), &doc).unwrap();
-            *s = finish(d);
+    for (by_much, every) in [(0.4 * ZONE, 2), (INSIDE, usize::MAX)] {
+        let mut sheets = explode(&body, |_| false);
+        for (i, s) in sheets.iter_mut().enumerate() {
+            if i % every == 0 {
+                let by = normal(&body, i) * by_much;
+                let mut d = s.edit();
+                d.transform(&Affine::translation(by), &doc).unwrap();
+                *s = finish(d);
+            }
         }
-    }
-    let first = run(&refs(&sheets)).unwrap();
-    let want = geometry(&first.done.body);
-    assert_eq!(first.done.body.faces().count(), 24);
-    for seed in 1..6 {
-        let ordered: Vec<&Brep> = shuffled(sheets.len(), seed)
-            .into_iter()
-            .map(|i| &sheets[i])
-            .collect();
-        let out = run(&ordered).unwrap();
-        assert_eq!(geometry(&out.done.body), want, "seed {seed}");
+        let first = run(&refs(&sheets)).unwrap();
+        let want = geometry(&first.done.body);
+        assert_eq!(first.done.body.faces().count(), 24);
+        for seed in 1..6 {
+            let ordered: Vec<&Brep> = shuffled(sheets.len(), seed)
+                .into_iter()
+                .map(|i| &sheets[i])
+                .collect();
+            let out = run(&ordered).unwrap();
+            assert_eq!(geometry(&out.done.body), want, "{by_much} seed {seed}");
+        }
     }
 }
 
@@ -501,35 +504,161 @@ fn a_cap_on_an_open_box_closes_it() {
     outward(&closed, &mut Budget::unlimited(), &Stop::new()).unwrap();
 }
 
-/// A join proved within coincidence but past the pcurve writer's tolerance (the curve stands
-/// between `approx` and the zone from the absorbed face) is typed, never guessed: the
-/// pending part is named and the edge is the sheet's.
-#[test]
-fn a_join_past_the_pcurve_tolerance_is_typed() {
-    let body = solid(Kind::Block, 0, 1);
-    let top = top_face(&body);
-    let err = perturbed(&body, top, Vec3::new(0.0, 0.0, 0.9 * ZONE), Want::Solid).unwrap_err();
-    assert!(
-        matches!(
-            err,
-            StitchError::Unsupported(scx_stitch::StitchUnsupported::Edges {
-                why: scx_stitch::EdgePending::Fit,
-                ..
-            })
-        ),
-        "{err:?}"
-    );
+/// Every use with a certified bound: its claim and bound, which the bound's accuracy is.
+/// A measured bound is the input's own (a lune's use at a pole) and is skipped.
+fn use_bounds(b: &Brep) -> Vec<f64> {
+    let mut out = Vec::new();
+    for f in b.faces() {
+        for u in f.uses() {
+            let Some(r) = u.bound() else { continue };
+            let scx_num::cert::Basis::Certified(c) = r.basis else {
+                continue;
+            };
+            assert_eq!(c.claim, scx_num::cert::Claim::PcurveOnSurface);
+            assert_eq!(c.bound, r.acc.length());
+            out.push(r.acc.length().mm());
+        }
+    }
+    out
 }
 
-/// The truth the stitch owes (74 §4.4): a sheet 0.9 of the coincidence off stitches. Pending
-/// the writer placing a curve off its face by up to the zone (follow-up row `ST4a`).
+/// A join proved within coincidence but past the exact pcurve writer's tolerance (the kept
+/// curve stands between `approx` and the zone from the absorbed face) stitches: the
+/// absorbed face keeps its plane and its use of the kept edge gets the curve's projection,
+/// its bound the certified gap, which is the perturbation to the search's width (a 64th of
+/// the zone) and within the zone, so no edge is raised. Before 74 §40 it was
+/// `Unsupported(Edges { why: Fit })`.
 #[test]
-#[ignore = "a join 0.5 to 1.0 zone off the absorbed face's plane is Unsupported(Fit): the pcurve writer's tolerance is half the zone (ST4a)"]
+fn a_join_past_the_pcurve_tolerance_records_its_certified_gap() {
+    let body = solid(Kind::Block, 0, 1);
+    let top = top_face(&body);
+    let out = perturbed(&body, top, Vec3::new(0.0, 0.0, 0.9 * ZONE), Want::Solid).unwrap();
+    let b = &out.done.body;
+    assert_eq!(counts(b), counts(&body));
+    let bounds = use_bounds(b);
+    // The top's four edges, each kept from one sheet and projected onto the other.
+    assert_eq!(bounds.len(), 4, "{bounds:?}");
+    for g in bounds {
+        assert!((0.9 * ZONE..=0.9 * ZONE + ZONE / 64.0).contains(&g), "{g}");
+    }
+    assert!(b.edges().all(|e| e.accuracy().is_none()));
+    assert!(
+        out.done
+            .report
+            .raised
+            .iter()
+            .all(|r| !matches!(r.entity, Entity::Edge(_)))
+    );
+    let doc = Document::default();
+    let mut scratch = Scratch::new();
+    let settings = Settings::new();
+    let stop = Stop::new();
+    let cx = Cx::new(&doc, &settings, &mut scratch, &stop, &NoTrace);
+    contract(b, &cx, Contacts::Refused).unwrap();
+}
+
+/// The truth the stitch owes (74 §4.4): a sheet 0.9 of the coincidence off stitches, for
+/// each face of the block, out and in, to the same solid.
+#[test]
 fn a_sheet_at_nine_tenths_of_the_coincidence_stitches() {
     let body = solid(Kind::Block, 0, 1);
     for i in 0..6 {
-        let by = normal(&body, i) * (0.9 * ZONE);
-        let out = perturbed(&body, i, by, Want::Solid).unwrap();
-        assert_eq!(counts(&out.done.body), counts(&body));
+        for sign in [1.0, -1.0] {
+            let by = normal(&body, i) * (sign * 0.9 * ZONE);
+            let out = perturbed(&body, i, by, Want::Solid).unwrap();
+            let b = &out.done.body;
+            assert_eq!(counts(b), counts(&body), "face {i} by {sign}");
+            close_within(vol(b), 1.0, 0.9 * ZONE, "volume");
+            close_within(surface_area(b), 6.0, 4.0 * 0.9 * ZONE, "area");
+            let doc = Document::default();
+            let mut scratch = Scratch::new();
+            let settings = Settings::new();
+            let stop = Stop::new();
+            let cx = Cx::new(&doc, &settings, &mut scratch, &stop, &NoTrace);
+            contract(b, &cx, Contacts::Refused).unwrap_or_else(|e| panic!("face {i}: {e:?}"));
+        }
     }
+}
+
+/// `got` against `want` to within `slack` and a part in 1e-9.
+fn close_within(got: f64, want: f64, slack: f64, what: &str) {
+    assert!(
+        (got - want).abs() <= slack + 1e-9 * want.abs().max(1.0),
+        "{what}: {got}, want {want} within {slack}"
+    );
+}
+
+/// The stitch of `sheets` and the check's contract on it.
+fn checked(sheets: &[Brep], what: &str) -> scx_stitch::Stitched {
+    let out = run(&refs(sheets)).unwrap_or_else(|e| panic!("{what}: {e:?}"));
+    let doc = Document::default();
+    let mut scratch = Scratch::new();
+    let settings = Settings::new();
+    let stop = Stop::new();
+    let cx = Cx::new(&doc, &settings, &mut scratch, &stop, &NoTrace);
+    contract(&out.done.body, &cx, Contacts::Refused).unwrap_or_else(|e| panic!("{what}: {e:?}"));
+    outward(&out.done.body, &mut Budget::unlimited(), &Stop::new()).unwrap();
+    out
+}
+
+/// Curved faces moved 0.9 of the coincidence stitch to the same solid: a quarter of a
+/// cylinder's wall moved off the axis (its arcs leave the caps' circles, so a cap's use of
+/// the wall's arc, or the wall's of the cap's circle, is the projection through the chart,
+/// and its rulings leave the next quarters' cylinder), and a quarter of a sphere grown
+/// about the centre (its meridians a great circle of the larger sphere, projected onto the
+/// next quarters' by the meridian's closed form). Each records certified gaps within the
+/// zone, and the volume and area are the closed form's to within the move.
+#[test]
+fn curved_sheets_at_nine_tenths_of_the_coincidence_stitch() {
+    let d = 0.9 * ZONE;
+    let doc = Document::default();
+    // Radius 1, height 2, four wall faces and two caps.
+    let cyl = solid(Kind::Cylinder, 0, 4);
+    let wall = (0..cyl.faces().count())
+        .find(|&i| {
+            matches!(
+                cyl.faces().nth(i).unwrap().record().surface,
+                scx_surface::Surface::Cylinder(_)
+            )
+        })
+        .unwrap();
+    let mid = {
+        let f = cyl.faces().nth(wall).unwrap();
+        let mut c = Vec3::ZERO;
+        let mut n = 0.0;
+        for u in f.uses() {
+            let p = u.start().point();
+            c += Vec3::new(p.x, p.y, 0.0);
+            n += 1.0;
+        }
+        c * (1.0 / n)
+    };
+    let by = mid * (d / mid.length());
+    let mut sheets = explode(&cyl, |_| false);
+    let mut e = sheets[wall].edit();
+    e.transform(&Affine::translation(by), &doc).unwrap();
+    sheets[wall] = finish(e);
+    let out = checked(&sheets, "cylinder");
+    let b = &out.done.body;
+    assert_eq!(counts(b), counts(&cyl), "cylinder");
+    close_within(vol(b), 2.0 * PI, 2.0 * 2.0 * d, "cylinder volume");
+    close_within(surface_area(b), 6.0 * PI, 4.0 * 2.0 * d, "cylinder area");
+    let bounds = use_bounds(b);
+    assert!(!bounds.is_empty());
+    assert!(bounds.iter().all(|&g| g <= ZONE), "{bounds:?}");
+    // Radius 1, four wall faces (lunes), each meeting the others at the poles.
+    let sphere = solid(Kind::Sphere, 0, 4);
+    let mut sheets = explode(&sphere, |_| false);
+    let grown = Affine::uniform_scaling(scx_num::vector3d::Point3::ORIGIN, 1.0 + d).unwrap();
+    let mut e = sheets[0].edit();
+    e.transform(&grown, &doc).unwrap();
+    sheets[0] = finish(e);
+    let out = checked(&sheets, "sphere");
+    let b = &out.done.body;
+    assert_eq!(counts(b), counts(&sphere), "sphere");
+    close_within(vol(b), 4.0 / 3.0 * PI, 4.0 * PI * d, "sphere volume");
+    close_within(surface_area(b), 4.0 * PI, 8.0 * PI * d, "sphere area");
+    let bounds = use_bounds(b);
+    assert!(!bounds.is_empty());
+    assert!(bounds.iter().all(|&g| g <= ZONE), "{bounds:?}");
 }
