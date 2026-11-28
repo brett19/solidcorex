@@ -283,14 +283,8 @@ impl Rules {
                 }
                 if pinch {
                     // A horn torus: no one radius of curvature bounds it.
-                    let sag = pinched_sag(
-                        t,
-                        centre,
-                        tube,
-                        v,
-                        rho,
-                        enclosing_squared(sides, n.length_squared()),
-                    )?;
+                    let r2 = enclosing_squared(sides, n.length_squared());
+                    let sag = pinched_sag(self, t, [centre, tube, rho], v, r2)?;
                     return (sag <= self.chord * (1.0 + SLACK)).then_some(sag);
                 }
                 let r2 = enclosing_squared(sides, n.length_squared());
@@ -309,16 +303,22 @@ impl Rules {
 /// Off the pole, the parallels' radius of curvature at tube angle `psi` inside the tube is
 /// `(centre + tube cos psi) / -cos psi`, least at the corner nearest the pole (it grows with
 /// the distance from it), so the sphere bound's `rho` is the least of the tube's and each
-/// corner's. A triangle with a corner on the pole is within twice its other corners' largest
-/// circumference radius `d` of the surface: a point of it is within `d` of the axis point at
-/// its height, which is within the inner equator's radius there, at most `d` since that radius
-/// grows with the height's distance from the pole and the triangle is no higher than its
-/// corners (both lobes' corners alike). That is the only bound a pole's corner has: the
-/// surface there is a cusp of unbounded curvature.
-fn pinched_sag(t: &Corners, centre: f64, tube: f64, v: Arcs, rho: f64, r2: f64) -> Option<f64> {
+/// corner's. A triangle with a corner on the pole has the surface's cusp under it, where that
+/// radius is 0, so it is bounded in its two directions apart: the sphere bound at the tube's
+/// own radius for the meridian (the triangle's side from the pole is a chord of the meridian),
+/// and, for the parallels, what a chord across the angle its other corners span lies inside a
+/// circle of their largest circumference radius `d`: `2 d sin²(span / 4)`.
+fn pinched_sag(
+    rules: &Rules,
+    t: &Corners,
+    [centre, tube, rho]: [f64; 3],
+    v: Arcs,
+    r2: f64,
+) -> Option<f64> {
     let mut least = rho;
     let mut ring = 0.0_f64;
     let mut pole = false;
+    let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
     for (uv, on) in t.uv.iter().zip(t.pole) {
         if on {
             pole = true;
@@ -330,11 +330,19 @@ fn pinched_sag(t: &Corners, centre: f64, tube: f64, v: Arcs, rho: f64, r2: f64) 
         if c < 0.0 {
             least = least.min(circ / -c);
         }
+        let phi = rules.u.angle(uv.x);
+        lo = lo.min(phi);
+        hi = hi.max(phi);
     }
-    if pole {
-        return Some(2.0 * ring);
+    if !pole {
+        return (r2 < least * least).then(|| r2 / (least + sqrt(least * least - r2)));
     }
-    (r2 < least * least).then(|| r2 / (least + sqrt(least * least - r2)))
+    let span = hi - lo;
+    if span.is_nan() || span >= PI || r2 >= rho * rho {
+        return None;
+    }
+    let s = sin(0.25 * span);
+    Some(r2 / (rho + sqrt(rho * rho - r2)) + 2.0 * ring * s * s)
 }
 
 /// The squared radius of the smallest circle enclosing a triangle of squared sides `sides`

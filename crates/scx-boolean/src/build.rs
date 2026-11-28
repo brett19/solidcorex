@@ -118,7 +118,7 @@ pub(crate) fn build(
     vertices(&mut m);
     stop.check()?;
     shells(ops, &mut m, &kept, doc, budget, stop)?;
-    m.draft.finish(&doc).map_err(|_| defect())
+    m.draft.finish(&doc).map_err(|e| { eprintln!("DEBUGFINISH {:?}", e.cause); defect() })
 }
 
 const fn defect() -> BooleanError {
