@@ -33,8 +33,8 @@ mod cylinder;
 mod error;
 mod extrude;
 mod prism;
-mod sheet;
 mod radial;
+mod sheet;
 mod sphere;
 mod torus;
 
