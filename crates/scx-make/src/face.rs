@@ -64,11 +64,7 @@ pub enum Bound {
 ///   (anything but a line along `u` or `v`, off a plane), or that lies on a pole.
 /// - [`Refusal::Resolution`] and the region's other refusals, as for [`sheet`].
 /// - A [`Defect`] when the body does not finish, or [`MakeError::Full`].
-pub fn face(
-    surface: &Surface,
-    bound: &Bound,
-    doc: &Document,
-) -> Result<Made<FaceId>, MakeError> {
+pub fn face(surface: &Surface, bound: &Bound, doc: &Document) -> Result<Made<FaceId>, MakeError> {
     let shape = Shape::of(surface)?;
     match bound {
         Bound::Box(b) => in_box(surface, &shape, b, doc),
@@ -289,7 +285,12 @@ impl Shape {
         ends: [VertexId; 2],
     ) -> Result<EdgeId, MakeError> {
         let Some((height, radius)) = self.ring(v) else {
-            return straight(surface, asm, [Point2::new(u[0], v), Point2::new(u[1], v)], ends);
+            return straight(
+                surface,
+                asm,
+                [Point2::new(u[0], v), Point2::new(u[1], v)],
+                ends,
+            );
         };
         let centre = self.frame.origin() + self.z * height;
         let frame = Frame::new(centre, *self.frame.z(), self.dir(u[0]))
@@ -323,7 +324,12 @@ impl Shape {
                 [self.angle_v(v[0]), self.angle_v(v[1])],
             ),
             _ => {
-                return straight(surface, asm, [Point2::new(u, v[0]), Point2::new(u, v[1])], ends);
+                return straight(
+                    surface,
+                    asm,
+                    [Point2::new(u, v[0]), Point2::new(u, v[1])],
+                    ends,
+                );
             }
         };
         let d = self.dir(u);
@@ -333,8 +339,8 @@ impl Shape {
         let frame = Frame::new(centre, d.cross(self.z), d * c + self.z * s)
             .ok_or(MakeError::Defect(Defect::PlaneFrame))?;
         let circle = Circle::new(frame, Length::from_mm(radius), Sense::Forward)?;
-        let interval = Extent1d::new(0.0, angle[1] - angle[0])
-            .ok_or(MakeError::Defect(Defect::Interval))?;
+        let interval =
+            Extent1d::new(0.0, angle[1] - angle[0]).ok_or(MakeError::Defect(Defect::Interval))?;
         asm.edge(Curve::Circle(circle), interval, ends)
     }
 }

@@ -245,7 +245,11 @@ fn cases() -> Vec<Case> {
     vec![
         c(Kind::Plane, [-1.0, 3.5, 0.5, 2.0], (1, 4, 4)),
         c(Kind::Cylinder(r), [0.3, 4.1, -1.0, 2.5], (1, 4, 4)),
-        c(Kind::Cylinder(r), [0.7, 0.7 + cylinder_turn, -1.0, 2.5], (1, 3, 2)),
+        c(
+            Kind::Cylinder(r),
+            [0.7, 0.7 + cylinder_turn, -1.0, 2.5],
+            (1, 3, 2),
+        ),
         c(cone, [0.1, 0.8, 0.5, 2.0], (1, 4, 4)),
         c(cone, [0.0, 1.0, 0.5, 2.0], (1, 3, 2)),
         // From the apex: its edge is collapsed.
@@ -340,7 +344,10 @@ fn making_a_face_twice_gives_one_body() {
         face(&s, &b, &doc()).unwrap().body,
         face(&s, &b, &doc()).unwrap().body,
     );
-    assert_eq!(scx_record::encode(&a).unwrap(), scx_record::encode(&c).unwrap());
+    assert_eq!(
+        scx_record::encode(&a).unwrap(),
+        scx_record::encode(&c).unwrap()
+    );
 }
 
 fn line(a: [f64; 2], b: [f64; 2]) -> Segment {
@@ -362,10 +369,26 @@ fn region(outer: Vec<Segment>, holes: Vec<Vec<Segment>>) -> Region {
 fn a_region_of_iso_lines_has_the_closed_form_area() {
     let kinds = [
         (Kind::Plane, [0.0, 6.0, 0.0, 4.0], [1.0, 2.0, 1.0, 3.0]),
-        (Kind::Cylinder(2.0), [0.0, 6.0, 0.0, 4.0], [1.0, 2.0, 1.0, 3.0]),
-        (Kind::Cone(3.0, 0.4), [0.1, 0.8, 0.5, 2.5], [0.3, 0.5, 1.0, 2.0]),
-        (Kind::Sphere(4.0), [0.1, 0.8, 0.2, 0.9], [0.3, 0.5, 0.4, 0.6]),
-        (Kind::Torus(7.0, 2.0), [0.1, 0.8, 0.2, 0.9], [0.3, 0.5, 0.4, 0.6]),
+        (
+            Kind::Cylinder(2.0),
+            [0.0, 6.0, 0.0, 4.0],
+            [1.0, 2.0, 1.0, 3.0],
+        ),
+        (
+            Kind::Cone(3.0, 0.4),
+            [0.1, 0.8, 0.5, 2.5],
+            [0.3, 0.5, 1.0, 2.0],
+        ),
+        (
+            Kind::Sphere(4.0),
+            [0.1, 0.8, 0.2, 0.9],
+            [0.3, 0.5, 0.4, 0.6],
+        ),
+        (
+            Kind::Torus(7.0, 2.0),
+            [0.1, 0.8, 0.2, 0.9],
+            [0.3, 0.5, 0.4, 0.6],
+        ),
     ];
     for (kind, o, h) in kinds {
         for frame in [plain(), tilted()] {
@@ -440,7 +463,11 @@ fn boxes_and_regions_off_the_surface_are_refused() {
     assert!(uvbox(refused(face(&sphere, &bx(0.0, 1.5, 0.2, 0.5), &d))));
     assert!(uvbox(refused(face(&cyl, &bx(0.0, 14.0, 0.0, 1.0), &d))));
     assert!(uvbox(refused(face(&torus, &bx(0.0, 0.5, 0.0, 1.2), &d))));
-    assert!(uvbox(refused(face(&cone_s, &bx(0.0, 0.5, cone.apex() - 1.0, 1.0), &d))));
+    assert!(uvbox(refused(face(
+        &cone_s,
+        &bx(0.0, 0.5, cone.apex() - 1.0, 1.0),
+        &d
+    ))));
     assert!(uvbox(refused(face(&cyl, &bx(1.0, 1.0, 0.0, 1.0), &d))));
     // A region longer than a period.
     let wide = region(rect([0.0, 0.2], [1.5, 0.6]), vec![]);
@@ -481,7 +508,11 @@ fn boxes_and_regions_off_the_surface_are_refused() {
 fn a_nurbs_surface_is_unsupported_for_now() {
     let over = Extent2d::from_bounds(0.0, 0.0, 1.0, 1.0).unwrap();
     let n = Surface::Plane(Plane::new(plain())).to_nurbs(&over).unwrap();
-    let e = refused(face(&Surface::Nurbs(Arc::new(n)), &bx(0.0, 1.0, 0.0, 1.0), &doc()));
+    let e = refused(face(
+        &Surface::Nurbs(Arc::new(n)),
+        &bx(0.0, 1.0, 0.0, 1.0),
+        &doc(),
+    ));
     assert_eq!(e, MakeError::Unsupported(Unsupported::NurbsFace));
     assert_eq!(e.name(), "nurbs_face");
 }
