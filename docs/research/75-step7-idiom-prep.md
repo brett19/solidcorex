@@ -2013,7 +2013,7 @@ reach is `Undecided { why: Exhausted }`, as a gap is (74 R6).
 - `crates/scx-check/tests/clearance.rs`: 3 tests, at 10d, d and d/10 against the block's own
   distances, plus exhaustion. No test was removed.
 
-**Measured.** These are throwaway timers on server2 (release build, not committed).
+**Measured.** These are throwaway timers (release build, not committed).
 - `check` on testkit blocks, n = 5 / 10 / 20 / 40 (V = 152 / 602 / 2,402 / 9,602):
   - clearance adds V work units: 152 / 602 / 2,402 / 9,602, against 6,900 / 27,600 / 110,400 /
     441,600 before;
