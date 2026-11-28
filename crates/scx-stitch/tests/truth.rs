@@ -536,10 +536,7 @@ fn a_join_past_the_pcurve_tolerance_records_its_certified_gap() {
     // The top's four edges, each kept from one sheet and projected onto the other.
     assert_eq!(bounds.len(), 4, "{bounds:?}");
     for g in bounds {
-        assert!(
-            (0.9 * ZONE..=0.9 * ZONE + ZONE / 64.0).contains(&g),
-            "{g}"
-        );
+        assert!((0.9 * ZONE..=0.9 * ZONE + ZONE / 64.0).contains(&g), "{g}");
     }
     assert!(b.edges().all(|e| e.accuracy().is_none()));
     assert!(
@@ -649,8 +646,8 @@ fn curved_sheets_at_nine_tenths_of_the_coincidence_stitch() {
     // Radius 1, four wall faces (lunes), each meeting the others at the poles.
     let sphere = solid(Kind::Sphere, 0, 4);
     let mut sheets = explode(&sphere, |_| false);
-    let grown = scx_num::math::Affine::uniform_scaling(scx_num::vector3d::Point3::ORIGIN, 1.0 + d)
-        .unwrap();
+    let grown =
+        scx_num::math::Affine::uniform_scaling(scx_num::vector3d::Point3::ORIGIN, 1.0 + d).unwrap();
     let mut e = sheets[0].edit();
     e.transform(&grown, &doc).unwrap();
     sheets[0] = finish(e);

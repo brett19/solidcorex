@@ -37,12 +37,12 @@ use core::fmt;
 use std::sync::Arc;
 
 use scx_curve::{AngleAxis, AngleLine2, AngleWave2, Curve2, Line2};
+use scx_num::budget::{Budget, Stop};
+use scx_num::cert::{Basis, Cert, Claim, Method, Reads, Recorded};
 use scx_num::domain::UvDomain;
 use scx_num::error::ErrorKind;
 use scx_num::extent1d::Extent1d;
 use scx_num::frame::Sense;
-use scx_num::budget::{Budget, Stop};
-use scx_num::cert::{Basis, Cert, Claim, Method, Reads, Recorded};
 use scx_num::units::{Accuracy, Length, Resolution};
 use scx_num::vector2d::{Point2, Vec2};
 use scx_num::vector3d::Point3;
@@ -393,7 +393,14 @@ impl Draft {
         for ((l, flags), was) in written.iter().zip(&flags).zip(&before) {
             let mut lb = Vec::with_capacity(l.uses.len());
             for (i, (u, &projected)) in l.uses.iter().zip(flags).enumerate() {
-                let (true, UseGeom::Pcurve { curve: pc, interval }) = (projected, &u.geom) else {
+                let (
+                    true,
+                    UseGeom::Pcurve {
+                        curve: pc,
+                        interval,
+                    },
+                ) = (projected, &u.geom)
+                else {
                     lb.push(None);
                     continue;
                 };
@@ -555,7 +562,13 @@ impl Draft {
             let Some((geom, [s, _])) = p else { continue };
             sum += Vec2::new(s.x, s.y);
             out.push(EdgeUse::new(item.edge, item.sense, geom));
-            projected.push(matches!(item.kind, Kind::Curve { projected: true, .. }));
+            projected.push(matches!(
+                item.kind,
+                Kind::Curve {
+                    projected: true,
+                    ..
+                }
+            ));
         }
         let centre = Point2::new(sum.x / n as f64, sum.y / n as f64);
         Ok(ExactLoop {

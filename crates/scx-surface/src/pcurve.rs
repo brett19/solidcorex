@@ -1886,8 +1886,14 @@ mod tests {
         let r = res(5e-6);
         let within = mm(1e-5);
         let plane = Surface::Plane(Plane::new(Frame::WORLD));
-        let line = Curve::Line(Line::new(Point3::new(0.0, 0.0, d), Vec3::new(1.0, 2.0, 0.0)).unwrap());
-        assert_eq!(pcurve_of(&line, &plane, span(0.0, 1.0), r).unwrap_err().name(), "pcurve_not_on_surface");
+        let line =
+            Curve::Line(Line::new(Point3::new(0.0, 0.0, d), Vec3::new(1.0, 2.0, 0.0)).unwrap());
+        assert_eq!(
+            pcurve_of(&line, &plane, span(0.0, 1.0), r)
+                .unwrap_err()
+                .name(),
+            "pcurve_not_on_surface"
+        );
         let pc = pcurve_of_projection(&line, &plane, span(0.0, 1.0), r, within).unwrap();
         projects(&line, &plane, &pc, span(0.0, 1.0), 1e-15);
         let on = Curve::Line(Line::new(Point3::ORIGIN, Vec3::new(1.0, 2.0, 0.0)).unwrap());
@@ -1897,7 +1903,14 @@ mod tests {
         );
         let cyl = Surface::Cylinder(Cylinder::new(Frame::WORLD, mm(1.0), Sense::Forward).unwrap());
         let round = |o: Point3, rho: f64| {
-            Curve::Circle(Circle::new(Frame::new(o, Vec3::Z, Vec3::X).unwrap(), mm(rho), Sense::Forward).unwrap())
+            Curve::Circle(
+                Circle::new(
+                    Frame::new(o, Vec3::Z, Vec3::X).unwrap(),
+                    mm(rho),
+                    Sense::Forward,
+                )
+                .unwrap(),
+            )
         };
         let wide = round(Point3::new(0.0, 0.0, 0.5), 1.0 + d);
         let pc = pcurve_of_projection(&wide, &cyl, span(0.0, PI), r, within).unwrap();
@@ -1909,7 +1922,12 @@ mod tests {
         projects(&shifted, &cyl, &pc, span(0.0, PI), 1e-14);
         let sphere = Surface::Sphere(Sphere::new(Frame::WORLD, mm(1.0), Sense::Forward).unwrap());
         let meridian = Curve::Circle(
-            Circle::new(Frame::new(Point3::ORIGIN, Vec3::Y, Vec3::Z).unwrap(), mm(1.0 + d), Sense::Forward).unwrap(),
+            Circle::new(
+                Frame::new(Point3::ORIGIN, Vec3::Y, Vec3::Z).unwrap(),
+                mm(1.0 + d),
+                Sense::Forward,
+            )
+            .unwrap(),
         );
         let over = span(0.1, PI - 0.1);
         let pc = pcurve_of_projection(&meridian, &sphere, over, r, within).unwrap();
@@ -1933,13 +1951,28 @@ mod tests {
         assert_eq!(e.name(), "pcurve_not_on_surface");
         // A half-angle of 45 degrees, so a ruling 9e-6 off misses by 9e-6.
         let cone = Surface::Cone(
-            Cone::new(Frame::WORLD, mm(1.0), core::f64::consts::FRAC_PI_4, Sense::Forward).unwrap(),
+            Cone::new(
+                Frame::WORLD,
+                mm(1.0),
+                core::f64::consts::FRAC_PI_4,
+                Sense::Forward,
+            )
+            .unwrap(),
         );
         let n = Vec3::new(1.0, 0.0, -1.0) * (1.0 / 2.0_f64.sqrt());
-        let ruling = Curve::Line(Line::new(Point3::new(1.0, 0.0, 0.0) + n * 9e-6, Vec3::new(1.0, 0.0, 1.0)).unwrap());
+        let ruling = Curve::Line(
+            Line::new(
+                Point3::new(1.0, 0.0, 0.0) + n * 9e-6,
+                Vec3::new(1.0, 0.0, 1.0),
+            )
+            .unwrap(),
+        );
         let e = pcurve_of_projection(&ruling, &cone, span(0.0, 1.0), r, within).unwrap_err();
         assert_eq!(e.name(), "pcurve_inexact", "{e}");
-        let tiny = Surface::Cylinder(Cylinder::new(Frame::WORLD, mm(5e-6), Sense::Forward).unwrap());
+        // Past the tolerance (a radius of 5e-6 is within it, and its seam is exact) but
+        // within reach: every point of the axis has a circle of feet.
+        let tiny =
+            Surface::Cylinder(Cylinder::new(Frame::WORLD, mm(8e-6), Sense::Forward).unwrap());
         let axis = Curve::Line(Line::new(Point3::ORIGIN, Vec3::Z).unwrap());
         let e = pcurve_of_projection(&axis, &tiny, span(0.0, 1.0), r, within).unwrap_err();
         assert_eq!(e.name(), "pcurve_no_closed_form", "{e}");
