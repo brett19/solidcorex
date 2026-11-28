@@ -33,6 +33,8 @@ mod cylinder;
 mod error;
 mod extrude;
 mod face;
+mod frames;
+pub mod loft;
 mod prism;
 mod radial;
 mod sheet;
@@ -45,6 +47,10 @@ pub use cylinder::{CylinderFaces, cylinder};
 pub use error::{Defect, Dimension, MakeError, Refusal, Unsupported};
 pub use extrude::{ExtrudeFaces, Span, extrude};
 pub use face::{Bound, face};
+pub use frames::{
+    Corner, FrameError, G1_TANGENTS, MAX_PIECES, MAX_TURNS, Path, Piece, PieceFault, Rotation,
+    Station, Stop, frames,
+};
 pub use prism::{PrismFaces, prism};
 pub use radial::{RadialCone, RadialFaces, radial};
 pub use sheet::{SheetFaces, sheet};

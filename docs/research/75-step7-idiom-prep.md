@@ -1493,7 +1493,172 @@ Truths (`tests/radial.rs`, 5 tests): the pin's `radial_sweeps_close_at_the_hinge
 - Judging each result against its own oracle as well as against its twin: a law could hold between two equally wrong results (both Booleans missing the same region); the oracle catches that.
 - Sphere centre: the first pool put the sphere's centre on A's x = 10 plane, which fails with `Seeds` in every combination with a box. A sphere off every plane passes those, so the pool holds both: the general one for the laws, `sphereOnFace` as a real contact case.
 
-### 13.7 MK15 as built (11-28)
+### 13.7 MK7a frames as built (11-28)
+
+`scx_make::{Path, Piece, Stop, Station, Rotation, Corner, FrameError, frames}` (`frames.rs`,
+`tests/frames.rs`). `Path::new(&[Piece], &Document)` validates (1 to 1000 pieces; lines longer
+than the resolution; arcs and helices off their axis, angle in (0, 1000 turns]; pieces meeting
+within the resolution; a corner that doubles back refused) and measures once, so `frames(&Path,
+&[Stop]) -> Result<Vec<Station>, FrameError>` cannot fail on the path. A `Station` is the point,
+unit tangent and a `Rotation` (the transport from the path's start, columns, `apply`, `after`,
+`inverse`, `defect`). Closed forms as the pin's: identity on a line, the angle run about the axis
+on an arc, the screw then `psi = -b phi / sqrt(a^2 + b^2)` about the tangent on a helix, the least
+rotation `t0 x t1` by the angle at a corner (none within `G1_TANGENTS` = 1e-8 of each other).
+`Stop::Corner(j)` is the mitre plane (half turn, bisector tangent); `Corner` carries the angle,
+the joint, the fraction and the stretch `1 / cos(angle / 2)`. Rodrigues runs on `fmath`
+(deterministic across platforms; the pin used the platform's libm).
+
+Decisions and cases:
+- **Own `FrameError`, not `MakeError`.** 75 §3.6 writes `Result<Frames, MakeError>`. For: a frame
+  law has no body, three of `MakeError`'s four kinds cannot occur, and a new `Refusal` variant
+  would touch `error.rs` that MK4, MK9, MK13 and MK14 also edit. Against: one error type for the
+  crate. The sweep (MK7b) adds `From<FrameError> for MakeError` when it needs it; no change here.
+- **No `Cx`, no laws.** The signature is pure (`&Path`, `&[Stop]`): the work is closed form and
+  O(pieces) per stop, no budget, scratch or cancellation to meter. Twist, end scale, orientation
+  and rails are MK7b's (the pin's `Laws`, `Orientation`, `RailFit`, `railed`); `fractions` (the
+  skin's one station per degree rule) is a SolidCraft convention for the skin and goes with the
+  sweep. The pin's `Stop::Corner` mitre stretch is `Corner::stretch`, applied by the mitre's user.
+- **Literals into the document.** The pin's `1e-9 (1 + |P|)` for "pieces meet" and for a line
+  with no length is the document's resolution here; `G1_TANGENTS` stays a named constant (the
+  procedural sweep's rule, which step 5 will own; the sweep must use the same one).
+- **Axis by type.** `Piece` takes a `UnitVec3`; the pin's "unit within 1e-12" check and its
+  re-normalising are gone.
+- `Piece` and `Stop` are `#[non_exhaustive]`: MK7b may add pieces when step 5 certifies a
+  spline path's frame (#2572).
+
+Truths (`tests/frames.rs`, 10 tests, closed forms, 1e-12): the line is the identity; a planar
+arc turns the frame by the angle run (point, tangent, frame); a whole helix turn leaves the
+tangent and turns the frame by `-2 pi b / sqrt(a^2 + b^2)` (pin :74); at a quarter and a half
+turn the start normal becomes `cos psi N + sin psi B`, right- and left-handed (pin :505);
+parallel transport turns about no axis along the chord on tilted helices of both hands and a
+tilted arc (skew part along the chord < 1e-9, pin :569); a right-angle corner is a quarter turn
+with the mitre the eighth and stretch sqrt 2, a fraction at the joint is the second piece's
+start (pin :166); the corner is the least rotation at 1, 30, 90, 135 and 179 degrees (new); a
+corner then a helix compose (pin :536); a kink of 1e-10 is no corner and 1e-7 is one (pin :768);
+refusals of a doubling-back path, a gap, no pieces, a degenerate or axis-start piece, a negative
+angle, fractions outside [0, 1] or NaN, and a closed arc's whole-turn identity. Orthonormal
+defect below 1e-13 throughout. Removed on purpose, with the file header listing them: the pin's
+twist/scale, orientation, rail, `fractions` and limit tests (MK7b's laws), and the stretch
+half of the corner test (checked as `Corner::stretch`).
+
+Cost: new code only, no existing path changed. A station walks the pieces before it, one
+`sin_cos` and about 40 flops per rotation composed; 1,001 stations of a helix (the transport
+test) run in a few milliseconds in a debug build.
+
+### 13.8 MK9 as built (11-28)
+
+`scx_make::loft::{align, align_banded, pair}`. `align(first, second, &mut Budget, &Stop) ->
+Result<Alignment, PairError>` pairs two closed loops of `scx_planar::Segment` (lines, arcs, whole
+circles) given in one plane's coordinates. `Alignment { start, events: Vec<Event>, cost,
+optimality }`. Its events run round both loops in order, from vertex 0 of the first and vertex
+`start` of the second: `Pair { first, second }`, `FirstAlone { vertex, on }` or
+`SecondAlone { vertex, on }`, where `on` is the other loop's segment the lone vertex lands on.
+`pair(&[&[Segment]], ..) -> Pairing { alignments }` pairs each section with the next. It checks
+every section before pairing any, and refuses a section wound the other way from the one before
+it. `align_banded(first, second, cells, ..)` always runs the band. It is public so that the band
+can be measured against the exact search. `MAX_CELLS = 4_000_000`. The cost, the
+divide-and-conquer search over starts and the band are the pin's (`loft_sections.rs`). The area
+and centroid are in closed form for arcs.
+
+Decisions, with cases for and against:
+
+- **The banded answer is always `Unproven`, against Q5 and the 04 row's "`Proven` if its walk
+  avoids the band's edge".** That rule proves nothing. The band has one start, so a walk that
+  keeps off the band's edge is least only among walks inside the band from that start. A cheaper
+  walk can start elsewhere or run wholly outside the band.
+  - The pin's own case shows this (in-module test
+    `a_banded_walk_off_its_edge_is_not_the_optimum`). It pairs a 10 x 1 rectangle in 498
+    segments with a 1.5 x 1 rectangle in 500, through a band of 40,000 cells. The band's walk
+    keeps off its edge and matches the whole grid's walk from the same start, yet the search
+    over every start finds a walk more than 1% cheaper.
+  - On random star polygons (`the_band_is_an_upper_bound_on_the_exact_search`: 200 pairs of 20
+    to 120 vertices, half-width n/10), the band finds the optimum in 97 of 200. It is up to
+    108% above it in the worst case.
+  - For: the status is never false, and the type already carries both values.
+  - Against: every loft past the limit is `Unproven`, even when the band happens to be optimal
+    (on regular shapes it is: `on_regular_shapes_the_band_finds_the_optimum`).
+  - Considered and not built:
+    - A cheap lower bound, `Σ_i` (the least cost of a step into row `i`): O(mn) time and linear
+      memory. It would turn some `Unproven` answers into `Optimal` when bound and cost meet, but
+      on these shapes it is far from tight.
+    - An exact search confined to a band by a proof of the band's width (Ukkonen-style
+      cut-offs). Its bound needs a least step cost, and UNPAIRED alone (0.1) gives a width near
+      the whole grid.
+  - Either can come later without changing the API. The 04 row should drop "`Proven` if ...".
+- **A moved band is pinned to the walk's ends (truth over pin).** The pin re-centres the band on
+  the middle of each row's run of the walk. When the walk runs along the last row for more than
+  the band's width, the last row's centre falls short of the end. The end then lies outside the
+  band, and the pin's walk fails with "unpaired".
+  - Seen here on a random 27 x 102 pair with half-width 1, now in
+    `the_band_is_an_upper_bound_on_the_exact_search`.
+  - `settle` makes the centres run from the start on row 0 to the end on the last row, never
+    back.
+  - With that, each row's band meets the next and the end is inside. The band's walk is always
+    found when h >= 1.
+- **Exact means exact.** `the_exact_search_is_the_brute_force_optimum` (integration test, 600
+  random star polygons of 3 to 7 vertices) checks against code that shares nothing with the
+  search. That code recomputes each step's cost from the polygon's vertices (shoelace centroid,
+  unit area) and enumerates every monotone walk from every start.
+  - The search's cost equals the brute-force least to 1e-12 relative.
+  - Its events form a walk round both loops, and their recomputed cost is the reported one.
+  - The in-module `the_search_finds_the_brute_force_optimum` does the same over the module's own
+    step costs for 1 to 6 vertices, with arcs and whole circles among them.
+  - Turning either loop's numbering round leaves the cost unchanged to 1e-9.
+- **Its own error type, `PairError`, not `MakeError`.**
+  - Variants:
+    - `Refused(PairRefusal)`: `Empty`, `NotFinite`, `Degenerate`, `NoArea` or `Winding`.
+    - `UnsupportedSegment`.
+    - `TooLarge`: even a band one column wide does not fit.
+    - `Exhausted` and `Stopped`.
+    - `Unreached` (`Defect`).
+  - For: MK4, MK13 and MK14 edit `error.rs` at the same time, and the pairing has no solid to
+    refuse. MK10 maps it into `MakeError` with the section index kept.
+  - Against: one more error type for a caller of `pair` alone.
+- **Work.** Each cell visited charges one unit to the caller's `Budget`, and the `Stop` flag is
+  polled once per grid row. Which search runs depends on the fixed `MAX_CELLS`, not on the
+  remaining budget, so the answer is a function of the input (R6).
+- **Scope left to MK10:**
+  - winding the sections alike;
+  - carrying a shared frame from plane to plane (the caller gives every section in one plane's
+    coordinates);
+  - cutting segments where lone vertices land (the pin's placement by share of length);
+  - splitting whole circles at the neighbouring section's directions;
+  - merging runs of one curve.
+- **75 §8.2's `fork_ea59e9c_section_orders` is a blend cross-section test, not loft pairing.**
+  In its place are the pin's loft-pairing outcomes, as tests on the alignment:
+  - square to diamond;
+  - 5000-gons and a 3000-gon with a 5000-gon, in the band;
+  - split 5000-segment rectangles pairing all four corners;
+  - both comb cases of 1100 teeth, past the limit even for their corner polygons.
+
+Measured (release on a 24-core build machine, throwaway timer; random star polygons):
+
+| m x n | search | cells charged | ms |
+|---|---|---|---|
+| 10 x 10 | exact | 558 | 0.02 |
+| 100 x 100 | exact | 76,835 | 2.0 |
+| 500 x 500 | exact | 2.59 M | 67 |
+| 1000 x 1000 | exact | 11.5 M | 306 |
+| 1999 x 1999 | exact | 49.7 M | 1,476 |
+| 2000 x 3000 | band, 8 passes | 41.6 M | 1,051 |
+| 3000 x 3000 | band | 6.65 M | 161 |
+| 5000 x 5000 | band | 7.49 M | 180 |
+| 10000 x 10000 | band | 7.86 M | 198 |
+
+- The exact search charges about 11 to 12 times the grid at 1000 to 2000 vertices (`m·n·log2 n`
+  / 2 plus overlaps), at about 30 ns a cell.
+- A band charges at most `BAND_PASSES` times `MAX_CELLS` plus the corner polygons' search, so
+  about 1 s at worst.
+- A band of a tenth of the grid on the same random shapes is 1% to 5% above the optimum.
+
+Tests:
+
+- `crates/scx-make/tests/pair.rs`: 14 tests.
+- In-module: 3 tests (brute force over the module's costs, the half disc's closed-form area and
+  centroid, and the band counterexample).
+- None removed.
+
+### 13.9 MK15 as built (11-28)
 
 `scx_make::face(&Surface, &Bound, &Document) -> Result<Made<FaceId>, MakeError>` makes a
 sheet of one face on a plane, cylinder, cone, sphere or torus; `Bound` is `Box(Extent2d)` or
