@@ -416,12 +416,11 @@ pub fn interpolate_rows_on<const D: usize>(
         });
     }
     let unit: Vec<f64>;
-    let (wp, w) = match (rows.weighted_points(), rows.weights()) {
-        (Some(wp), Some(w)) => (wp, w),
-        _ => {
-            unit = vec![1.0; rows.points().len()];
-            (rows.points(), unit.as_slice())
-        }
+    let (wp, w) = if let (Some(wp), Some(w)) = (rows.weighted_points(), rows.weights()) {
+        (wp, w)
+    } else {
+        unit = vec![1.0; rows.points().len()];
+        (rows.points(), unit.as_slice())
     };
     let first = w.get(..lines).unwrap_or_default();
     let last = w.get(lines * count.saturating_sub(1)..).unwrap_or_default();

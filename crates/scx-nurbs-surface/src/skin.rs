@@ -313,25 +313,22 @@ fn closed<const D: usize>(
     };
     let net_err = |e| SkinError::Fit(SurfaceFitError::Surface(e));
     let ku = rows.knot_vector().clone();
-    let surface = match (rows.weighted_points(), rows.weights()) {
-        (Some(wp), Some(w)) => {
-            let weighted = Net::new(n, cols, columns(wp)?).map_err(net_err)?;
-            let w1: Vec<[f64; 1]> = w.iter().map(|&x| [x]).collect();
-            let mut ws = Vec::with_capacity(n * cols);
-            for i in 0..n {
-                let col = seam.column(&column(&w1, n, i)).map_err(|e| match e {
-                    Closure::Fit(cause) => fit_err(cause),
-                    Closure::Skin(e) => e,
-                })?;
-                ws.extend(col.iter().map(|x| x[0]));
-            }
-            let weights = Net::new(n, cols, ws).map_err(net_err)?;
-            NurbsSurface::from_homogeneous(ku, kv, weighted, weights).map_err(net_err)?
+    let surface = if let (Some(wp), Some(w)) = (rows.weighted_points(), rows.weights()) {
+        let weighted = Net::new(n, cols, columns(wp)?).map_err(net_err)?;
+        let w1: Vec<[f64; 1]> = w.iter().map(|&x| [x]).collect();
+        let mut ws = Vec::with_capacity(n * cols);
+        for i in 0..n {
+            let col = seam.column(&column(&w1, n, i)).map_err(|e| match e {
+                Closure::Fit(cause) => fit_err(cause),
+                Closure::Skin(e) => e,
+            })?;
+            ws.extend(col.iter().map(|x| x[0]));
         }
-        _ => {
-            let points = Net::new(n, cols, columns(rows.points())?).map_err(net_err)?;
-            NurbsSurface::new(ku, kv, points, None).map_err(net_err)?
-        }
+        let weights = Net::new(n, cols, ws).map_err(net_err)?;
+        NurbsSurface::from_homogeneous(ku, kv, weighted, weights).map_err(net_err)?
+    } else {
+        let points = Net::new(n, cols, columns(rows.points())?).map_err(net_err)?;
+        NurbsSurface::new(ku, kv, points, None).map_err(net_err)?
     };
     let bound = through(&surface, &rows, v)?;
     let through = (bound + gap) * (1.0 + gamma(1));
@@ -405,14 +402,11 @@ impl<'a> Seam<'a> {
         a: usize,
         b: usize,
     ) -> core::result::Result<Self, Closure> {
-        let (v0, vm) = match (v.first(), v.last()) {
-            (Some(&s), Some(&e)) => (s, e),
-            _ => {
-                return Err(Closure::Fit(FitError::TooFewPoints {
-                    count: 0,
-                    needed: 2,
-                }));
-            }
+        let (Some(&v0), Some(&vm)) = (v.first(), v.last()) else {
+            return Err(Closure::Fit(FitError::TooFewPoints {
+                count: 0,
+                needed: 2,
+            }));
         };
         let start = kv
             .basis_derivs::<SEAM_ROWS>(v0, Approach::Above)
@@ -473,8 +467,11 @@ impl<'a> Seam<'a> {
             }
             Ok(out)
         };
-        let (s, e) = (at(&self.start)?, at(&self.end)?);
-        Ok(core::array::from_fn(|c| e[c] - s[c]))
+        let (s, mut e) = (at(&self.start)?, at(&self.end)?);
+        for (x, y) in e.iter_mut().zip(s) {
+            *x -= y;
+        }
+        Ok(e)
     }
 
     /// The control values of the closed fit of the column `data` (`data[m] == data[0]`):
@@ -501,13 +498,12 @@ impl<'a> Seam<'a> {
                 .inverse
                 .get(j)
                 .ok_or(Closure::Skin(defect("seam row")))?;
-            let d: [f64; N] = core::array::from_fn(|c| {
-                -row.iter()
-                    .zip(&residuals)
-                    .take(self.a)
-                    .map(|(m, r)| m * r[c])
-                    .sum::<f64>()
-            });
+            let mut d = [0.0; N];
+            for (m, r) in row.iter().zip(&residuals).take(self.a) {
+                for (x, y) in d.iter_mut().zip(r) {
+                    *x -= m * y;
+                }
+            }
             for (p, gl) in x.iter_mut().zip(g) {
                 for (y, dc) in p.iter_mut().zip(d) {
                     *y += gl * dc;
@@ -552,29 +548,31 @@ fn invert(
         .fold(0.0_f64, |s, x| s.max(x.abs()));
     #[allow(clippy::cast_precision_loss)]
     let floor = a as f64 * f64::EPSILON * largest;
+    let size = |l: &[[f64; MAX_END_ORDER]; MAX_END_ORDER], r: usize, c: usize| {
+        l.get(r).and_then(|row| row.get(c)).map_or(0.0, |x| x.abs())
+    };
     for c in 0..a {
-        let p = (c..a).max_by(|&x, &y| {
-            let (fx, fy) = (l[x][c].abs(), l[y][c].abs());
-            fx.total_cmp(&fy)
-        })?;
-        if !(l.get(p)?.get(c)?.abs() > floor) {
+        let p = (c..a).max_by(|&x, &y| size(&l, x, c).total_cmp(&size(&l, y, c)))?;
+        let pivot = *l.get(p)?.get(c)?;
+        if pivot.is_nan() || pivot.abs() <= floor {
             return None;
         }
         l.swap(c, p);
         inv.swap(c, p);
-        let pivot = l[c][c];
-        for k in 0..a {
-            l[c][k] /= pivot;
-            inv[c][k] /= pivot;
-        }
-        for r in 0..a {
+        let lc = l.get(c)?.map(|x| x / pivot);
+        let ic = inv.get(c)?.map(|x| x / pivot);
+        for (r, (lr, ir)) in l.iter_mut().zip(inv.iter_mut()).enumerate().take(a) {
             if r == c {
+                *lr = lc;
+                *ir = ic;
                 continue;
             }
-            let f = l[r][c];
-            for k in 0..a {
-                l[r][k] -= f * l[c][k];
-                inv[r][k] -= f * inv[c][k];
+            let f = *lr.get(c)?;
+            for (x, y) in lr.iter_mut().zip(lc) {
+                *x -= f * y;
+            }
+            for (x, y) in ir.iter_mut().zip(ic) {
+                *x -= f * y;
             }
         }
     }
@@ -607,12 +605,11 @@ fn through<const D: usize>(
         return columns(s.points(), rows.points());
     };
     let unit: Vec<f64>;
-    let (wp, w) = match (rows.weighted_points(), rows.weights()) {
-        (Some(wp), Some(w)) => (wp, w),
-        _ => {
-            unit = vec![1.0; rows.points().len()];
-            (rows.points(), unit.as_slice())
-        }
+    let (wp, w) = if let (Some(wp), Some(w)) = (rows.weighted_points(), rows.weights()) {
+        (wp, w)
+    } else {
+        unit = vec![1.0; rows.points().len()];
+        (rows.points(), unit.as_slice())
     };
     // |A' / W' - A / W| = |(A' - A) - X (W' - W)| / W' <= (dA + R dW) / (W_min - dW), with
     // X = A / W in the hull of the section's points (|X| <= R) and W at least the least
@@ -634,7 +631,7 @@ fn through<const D: usize>(
         * (1.0 + gamma(D + 2));
     let least = w.iter().copied().fold(f64::INFINITY, f64::min);
     let lo = least * (1.0 - gamma(1)) - d_w;
-    if !(lo > 0.0) {
+    if lo.is_nan() || lo <= 0.0 {
         return Err(SkinError::WeightsLost);
     }
     let out = (d_a + reach * d_w) / lo * (1.0 + gamma(4));
