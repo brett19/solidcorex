@@ -45,14 +45,24 @@ fn a_stadium_s_walls_chain_and_its_caps_do_not() {
 fn a_box_and_a_can_chain_nowhere() {
     let b = block(
         &Frame::WORLD,
-        [Length::from_mm(1.0), Length::from_mm(2.0), Length::from_mm(3.0)],
+        [
+            Length::from_mm(1.0),
+            Length::from_mm(2.0),
+            Length::from_mm(3.0),
+        ],
         &doc(),
     )
     .unwrap();
     for f in b.body.faces().map(scx_brep::Face::id) {
         assert_eq!(chain(&b.body, &[f], SMOOTH).faces, vec![f]);
     }
-    let c = cylinder(&Frame::WORLD, Length::from_mm(3.0), Length::from_mm(7.0), &doc()).unwrap();
+    let c = cylinder(
+        &Frame::WORLD,
+        Length::from_mm(3.0),
+        Length::from_mm(7.0),
+        &doc(),
+    )
+    .unwrap();
     // the wall's seam is smooth and joins it to itself
     let got = chain(&c.body, &[c.faces.wall], SMOOTH);
     assert_eq!(got.faces, vec![c.faces.wall]);
@@ -149,11 +159,20 @@ fn refusals_work_and_determinism() {
     assert_eq!(used(&mut two), (first.clone(), work));
     assert!(work > 0);
     let mut tight = Budget::new(work - 1);
-    assert!(matches!(used(&mut tight).0, Err(BodyqError::Exhausted { .. })));
+    assert!(matches!(
+        used(&mut tight).0,
+        Err(BodyqError::Exhausted { .. })
+    ));
     let stop = Stop::new();
     stop.set();
     assert_eq!(
-        tangent_face_chain_ordered(&body, &f.walls[0][..1], SMOOTH, &mut Budget::unlimited(), &stop),
+        tangent_face_chain_ordered(
+            &body,
+            &f.walls[0][..1],
+            SMOOTH,
+            &mut Budget::unlimited(),
+            &stop
+        ),
         Err(BodyqError::Cancelled)
     );
 }

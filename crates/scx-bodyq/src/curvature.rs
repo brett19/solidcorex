@@ -51,6 +51,16 @@ pub struct Principal {
     pub d2: Vec3,
 }
 
+/// Whether the partials `su` and `sv` fail to span a tangent plane to a rounding of the
+/// surface's own: one is not finite, or one is shorter than the other by more than `1e-12`
+/// (a sphere's pole, whose `cos(pi / 2)` is not 0, a cone's apex) or they are parallel.
+pub(crate) fn pole(su: Vec3, sv: Vec3) -> bool {
+    let (e, g, f) = (su.dot(su), sv.dot(sv), su.dot(sv));
+    !(e.is_finite() && g.is_finite() && f.is_finite())
+        || e.min(g) <= 1e-24 * e.max(g)
+        || e * g - f * f <= 1e-24 * (e * g)
+}
+
 /// The principal curvatures of `face` where `p` drops on its surface (the surface's natural
 /// domain, untrimmed: the foot need not lie in the face, and its `uv` is reported).
 ///
@@ -94,7 +104,7 @@ pub fn principal_curvatures(
     let (suu, suv, svv) = (at(2, 0)?, at(1, 1)?, at(0, 2)?);
     let (e, g, ff) = (su.dot(su), sv.dot(sv), su.dot(sv));
     let det = e * g - ff * ff;
-    if !(det > 1e-24 * (e * g)) {
+    if pole(su, sv) || det <= 1e-24 * (e * g) {
         return Err(singular);
     }
     let n = su.cross(sv).normalized().ok_or(singular)?.as_vec() * sign;

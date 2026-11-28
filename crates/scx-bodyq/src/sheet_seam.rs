@@ -124,30 +124,45 @@ fn nearest(b: &Boundary<'_>, p: Point3) -> Result<(f64, f64), BodyqError> {
     Ok(if dl <= dh { (lo, dl) } else { (hi, dh) })
 }
 
-/// The run of `a` and `b`: `[a_lo, a_hi]` and `[b_lo, b_hi]`, or `None` for no run.
-fn run(
-    a: &Boundary<'_>,
-    b: &Boundary<'_>,
+/// The ends of `from`'s interval that lie within `zone` of `to`: each end's parameter and the
+/// parameter of its foot on `to`.
+fn landing(
+    from: &Boundary<'_>,
+    to: &Boundary<'_>,
     zone: f64,
-) -> Result<Option<[[f64; 2]; 2]>, BodyqError> {
-    let mut on_a: Vec<f64> = Vec::new();
-    let mut on_b: Vec<f64> = Vec::new();
-    for (from, to, own, other) in [(a, b, &mut on_a, &mut on_b), (b, a, &mut on_b, &mut on_a)] {
-        for t in [from.interval.min(), from.interval.max()] {
-            let (at, d) = nearest(to, from.curve.point(t))?;
-            if d <= zone {
-                own.push(t);
-                other.push(at);
-            }
+) -> Result<Vec<(f64, f64)>, BodyqError> {
+    let mut out = Vec::with_capacity(2);
+    for t in [from.interval.min(), from.interval.max()] {
+        let (at, d) = nearest(to, from.curve.point(t))?;
+        if d <= zone {
+            out.push((t, at));
         }
     }
+    Ok(out)
+}
+
+/// The run of `a` and `b`: `[a_lo, a_hi]` and `[b_lo, b_hi]`, or `None` for no run.
+fn run(a: &Boundary<'_>, b: &Boundary<'_>, zone: f64) -> Result<Option<[[f64; 2]; 2]>, BodyqError> {
+    let (ab, ba) = (landing(a, b, zone)?, landing(b, a, zone)?);
+    let on_a: Vec<f64> = ab
+        .iter()
+        .map(|l| l.0)
+        .chain(ba.iter().map(|l| l.1))
+        .collect();
+    let on_b: Vec<f64> = ba
+        .iter()
+        .map(|l| l.0)
+        .chain(ab.iter().map(|l| l.1))
+        .collect();
     let span = |ts: &[f64], i: &Extent1d| {
         let lo = ts.iter().copied().fold(f64::INFINITY, f64::min);
         let hi = ts.iter().copied().fold(f64::NEG_INFINITY, f64::max);
         let least = 1e-9 * (i.max() - i.min());
         (hi - lo > least).then_some([lo, hi])
     };
-    Ok(span(&on_a, &a.interval).zip(span(&on_b, &b.interval)).map(|(x, y)| [x, y]))
+    Ok(span(&on_a, &a.interval)
+        .zip(span(&on_b, &b.interval))
+        .map(|(x, y)| [x, y]))
 }
 
 /// Whether each curve over its run stays within `zone` of the other: `Some(true)` proved,
@@ -160,10 +175,7 @@ fn proved(
     budget: &mut Budget,
     stop: &Stop,
 ) -> Result<bool, BodyqError> {
-    let (Some(ia), Some(ib)) = (
-        Extent1d::new(ra[0], ra[1]),
-        Extent1d::new(rb[0], rb[1]),
-    ) else {
+    let (Some(ia), Some(ib)) = (Extent1d::new(ra[0], ra[1]), Extent1d::new(rb[0], rb[1])) else {
         return Ok(false);
     };
     for (x, ix, y, iy) in [(a, &ia, b, &ib), (b, &ib, a, &ia)] {
@@ -228,15 +240,11 @@ pub fn sheet_seams(
                     // face is read from its other side.
                     let agree = (a.forward == b.forward) != same_sense;
                     let turn = if agree { 1.0 } else { -1.0 };
-                    let surface = |s: &Brep, f| {
-                        s.face(f).map(scx_brep::Face::surface).ok_or(BodyqError::Refused(
-                            BodyqRefusal::NoEntity {
-                                entity: Entity::Face(f),
-                            },
-                        ))
-                    };
                     let faces = Faces::between(
-                        [(surface(sa, a.face)?, a.face), (surface(sb, b.face)?, b.face)],
+                        [
+                            (surface(sa, a.face)?, a.face),
+                            (surface(sb, b.face)?, b.face),
+                        ],
                         turn,
                     )?;
                     let [lo, hi] = runs[0];
@@ -253,6 +261,14 @@ pub fn sheet_seams(
         }
     }
     Ok(out)
+}
+
+fn surface(body: &Brep, f: scx_brep::FaceId) -> Result<&scx_surface::Surface, BodyqError> {
+    body.face(f)
+        .map(scx_brep::Face::surface)
+        .ok_or(BodyqError::Refused(BodyqRefusal::NoEntity {
+            entity: Entity::Face(f),
+        }))
 }
 
 /// Whether `b`'s curve runs the way `a`'s does along the run: the tangents at the middle of

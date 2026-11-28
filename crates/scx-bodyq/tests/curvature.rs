@@ -7,9 +7,7 @@
 mod along_common;
 
 use along_common::doc;
-use scx_bodyq::{
-    BodyqError, BodyqRefusal, Running, edge_comb, iso_comb, principal_curvatures,
-};
+use scx_bodyq::{BodyqError, BodyqRefusal, Running, edge_comb, iso_comb, principal_curvatures};
 use scx_brep::{Brep, EdgeId, EdgeShape, FaceId};
 use scx_curve::Curve;
 use scx_num::budget::{Budget, Stop};
@@ -130,17 +128,46 @@ fn a_cylinder_s_parameter_lines_bend_by_their_closed_forms() {
 fn a_sphere_s_poles_have_no_tooth_and_the_rest_bend_by_one_over_r() {
     let m = sphere(&Frame::WORLD, mm(2.0), &doc()).unwrap();
     let (mut b, s) = unlimited();
-    let half = std::f64::consts::FRAC_PI_2;
-    // u runs round a parallel; the ends of v's range are the poles: along u there is no
-    // tangent there
-    let comb = iso_comb(&m.body, m.faces.face, Running::V, 0.5, [-half, half], 5, &mut b, &s)
-        .unwrap();
-    assert_eq!(comb.len(), 5);
-    let comb = iso_comb(&m.body, m.faces.face, Running::U, half, [0.0, 1.0], 3, &mut b, &s)
-        .unwrap();
+    // the sphere's v runs over [0, 1] from the south pole to the north: both are poles.
+    // v runs along a meridian over the whole range: its ends are the poles
+    let comb = iso_comb(
+        &m.body,
+        m.faces.face,
+        Running::V,
+        0.5,
+        [0.0, 1.0],
+        5,
+        &mut b,
+        &s,
+    )
+    .unwrap();
+    assert_eq!(comb.len(), 3, "{comb:?}");
+    for t in &comb {
+        near(t.curvature.length(), 0.5, 1e-12);
+    }
+    let comb = iso_comb(
+        &m.body,
+        m.faces.face,
+        Running::U,
+        0.0,
+        [0.0, 1.0],
+        3,
+        &mut b,
+        &s,
+    )
+    .unwrap();
     assert!(comb.is_empty(), "{comb:?}");
-    let comb = iso_comb(&m.body, m.faces.face, Running::U, 0.3, [0.0, 6.0], 7, &mut b, &s)
-        .unwrap();
+    let comb = iso_comb(
+        &m.body,
+        m.faces.face,
+        Running::U,
+        0.3,
+        [0.0, 1.0],
+        7,
+        &mut b,
+        &s,
+    )
+    .unwrap();
     assert_eq!(comb.len(), 7);
     // a parallel of latitude 0.3 has radius 2 cos 0.3; its normal curvature is 1 / r_sphere
     for t in comb {
@@ -162,7 +189,16 @@ fn comb_refusals_and_work() {
         Err(BodyqError::Refused(BodyqRefusal::Count))
     );
     assert_eq!(
-        iso_comb(&body, f.wall, Running::U, f64::NAN, [0.0, 1.0], 3, &mut b, &s),
+        iso_comb(
+            &body,
+            f.wall,
+            Running::U,
+            f64::NAN,
+            [0.0, 1.0],
+            3,
+            &mut b,
+            &s
+        ),
         Err(BodyqError::Refused(BodyqRefusal::NotFinite))
     );
     let sphere = sphere(&Frame::WORLD, mm(1.0), &doc()).unwrap();
@@ -204,14 +240,13 @@ fn a_cylinder_bends_round_and_not_along() {
     let (body, f) = can();
     // a point off the wall: the foot is the radial projection
     let p = principal(&body, f.wall, [4.0 * 0.6, 4.0 * 0.8, 2.0]);
-    near(p.k1, 0.0, 1e-12);
-    near(p.k2, 1.0 / R, 1e-12);
+    // convex positive against the outward normal: round the axis +1 / r, along it 0
+    near(p.k1, 1.0 / R, 1e-12);
+    near(p.k2, 0.0, 1e-12);
     near(p.gaussian, 0.0, 1e-12);
     near(p.mean, 0.5 / R, 1e-12);
-    // convex positive against the outward normal: the larger is the one along the axis
-    near(p.k1, 0.0, 1e-12);
-    near(p.d1.z.abs(), 1.0, 1e-12);
-    near(p.d2.z, 0.0, 1e-12);
+    near(p.d1.z, 0.0, 1e-12);
+    near(p.d2.z.abs(), 1.0, 1e-12);
     near(p.normal.x, 0.6, 1e-12);
     near(p.normal.y, 0.8, 1e-12);
     near(p.point.x, 0.6 * R, 1e-12);
@@ -233,7 +268,13 @@ fn a_sphere_seen_from_outside_bends_by_plus_one_over_r_twice() {
 fn a_poles_curvature_is_refused() {
     let m = sphere(&Frame::WORLD, mm(2.0), &doc()).unwrap();
     let (mut b, s) = unlimited();
-    let got = principal_curvatures(&m.body, m.faces.face, Point3::new(0.0, 0.0, 5.0), &mut b, &s);
+    let got = principal_curvatures(
+        &m.body,
+        m.faces.face,
+        Point3::new(0.0, 0.0, 5.0),
+        &mut b,
+        &s,
+    );
     assert_eq!(
         got,
         Err(BodyqError::Refused(BodyqRefusal::Singular {

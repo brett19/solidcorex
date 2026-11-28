@@ -243,6 +243,9 @@ impl BodyqError {
             Self::Refused(BodyqRefusal::WrongSurface { .. }) => "wrong_surface",
             Self::Refused(BodyqRefusal::NoMaterialSide { .. }) => "no_material_side",
             Self::Refused(BodyqRefusal::NotPickable { .. }) => "not_pickable",
+            Self::Refused(BodyqRefusal::Count) => "count",
+            Self::Refused(BodyqRefusal::Singular { .. }) => "singular",
+            Self::Defect(BodyqDefect::Gap { .. }) => "gap",
             Self::Unsupported(BodyqUnsupported::Nurbs { .. }) => "nurbs",
             Self::Unsupported(BodyqUnsupported::NonManifold { .. }) => "non_manifold",
             Self::Unsupported(BodyqUnsupported::NoClearSide { .. }) => "no_clear_side",
@@ -349,7 +352,10 @@ impl fmt::Display for BodyqError {
                 f.write_str("fewer than two teeth or stations: the ends are two")
             }
             Self::Refused(BodyqRefusal::Singular { face }) => {
-                write!(f, "{face}: no normal or curvature there (a pole or an apex)")
+                write!(
+                    f,
+                    "{face}: no normal or curvature there (a pole or an apex)"
+                )
             }
             Self::Refused(BodyqRefusal::NotPickable { kind }) => {
                 write!(f, "a {} has no place to pick by", kind.name())
@@ -380,7 +386,10 @@ impl fmt::Display for BodyqError {
                 write!(f, "{face}: the surface refused a query")
             }
             Self::Defect(BodyqDefect::Gap { edge }) => {
-                write!(f, "{edge}: the gap to the other curve could not be bracketed")
+                write!(
+                    f,
+                    "{edge}: the gap to the other curve could not be bracketed"
+                )
             }
             Self::Defect(BodyqDefect::NoNormal { at }) => {
                 write!(f, "{at}: no normal at the nearest point")

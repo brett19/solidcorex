@@ -101,13 +101,12 @@ pub fn tangent_face_chain_ordered(
         let edges: BTreeSet<EdgeId> = face.uses().map(|u| u.edge().id()).collect();
         for id in edges {
             stop.check()?;
-            let smooth = match known.get(&id) {
-                Some(&s) => s,
-                None => {
-                    let s = settle(body, id, angle, budget, stop, &mut out.undecided)?;
-                    known.insert(id, s);
-                    s
-                }
+            let smooth = if let Some(&s) = known.get(&id) {
+                s
+            } else {
+                let s = settle(body, id, angle, budget, stop, &mut out.undecided)?;
+                known.insert(id, s);
+                s
             };
             if !smooth {
                 continue;
@@ -138,11 +137,12 @@ fn settle(
     };
     match tangent_all_along(body, id, angle, budget, stop) {
         Ok(Tangency::Tangent { .. }) => Ok(true),
-        Ok(Tangency::NotTangent { .. }) => Ok(false),
+        // proved not smooth, or no edge between faces to cross
+        Ok(Tangency::NotTangent { .. })
+        | Err(BodyqError::Refused(
+            BodyqRefusal::OneSided { .. } | BodyqRefusal::Collapsed { .. },
+        )) => Ok(false),
         Ok(Tangency::Undecided { at, angle }) => doubt(Doubt::Straddles { at, angle }),
-        Err(BodyqError::Refused(BodyqRefusal::OneSided { .. } | BodyqRefusal::Collapsed { .. })) => {
-            Ok(false)
-        }
         Err(BodyqError::Unsupported(u)) => doubt(Doubt::Unsupported(u)),
         Err(e) => Err(e),
     }

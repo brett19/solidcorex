@@ -11,7 +11,8 @@
 //! sign of `n`.
 //!
 //! **No tooth is made up.** A station where the curve has no tangent (a cusp) or the surface no
-//! normal or tangent along the line (a pole) has no tooth: it is left out, and each tooth names
+//! normal or tangent along the line (a pole, where the partials do not span a plane to the
+//! surface's own rounding) has no tooth: it is left out, and each tooth names
 //! its parameter, so a caller sees where the comb has a gap. The stations are `teeth` even
 //! steps of the parameter, the ends included; a closed edge's end is its start, so it takes
 //! `teeth` steps and the start once.
@@ -24,6 +25,7 @@ use scx_num::vector2d::Point2;
 use scx_num::vector3d::{Point3, Vec3};
 use scx_nurbs::Approach;
 
+use crate::curvature::pole;
 use crate::error::{BodyqError, BodyqRefusal};
 use crate::geom::ABOVE;
 use crate::reach::finite;
@@ -87,11 +89,7 @@ pub fn edge_comb(
         return Err(BodyqError::Refused(BodyqRefusal::Collapsed { edge }));
     };
     let [v0, v1] = e.ends();
-    let steps = if v0 == v1 {
-        teeth
-    } else {
-        teeth - 1
-    };
+    let steps = if v0 == v1 { teeth } else { teeth - 1 };
     let mut out = Vec::with_capacity(teeth);
     for i in 0..teeth {
         stop.check()?;
@@ -100,7 +98,7 @@ pub fn edge_comb(
         let j = curve.jet::<2>(t, Approach::Above);
         let [d1, d2] = j.d;
         let s2 = d1.dot(d1);
-        if !(s2 > 0.0) {
+        if !s2.is_finite() || s2 <= 0.0 {
             continue;
         }
         let curvature = d1.cross(d2).cross(d1) * (1.0 / (s2 * s2));
@@ -166,7 +164,8 @@ pub fn iso_comb(
             continue;
         };
         let n = n.as_vec();
-        if !(speed2 > 0.0) {
+        // a pole: the partials do not span a tangent plane (to the surface's rounding)
+        if pole(su, sv) {
             continue;
         }
         let curvature = n * (n.dot(bend) / speed2);

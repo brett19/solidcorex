@@ -30,6 +30,7 @@ use scx_surface::{Cylinder, Plane, Surface};
 struct Sheet {
     draft: Draft,
     outside: ShellId,
+    points: std::collections::BTreeMap<VertexId, Point3>,
 }
 
 fn p(a: [f64; 3]) -> Point3 {
@@ -42,11 +43,17 @@ impl Sheet {
         let outside = draft
             .add_shell(ShellRecord::new(RegionId::OUTSIDE))
             .unwrap();
-        Self { draft, outside }
+        Self {
+            draft,
+            outside,
+            points: std::collections::BTreeMap::new(),
+        }
     }
 
     fn vertex(&mut self, a: [f64; 3]) -> VertexId {
-        self.draft.add_vertex(VertexRecord::new(p(a))).unwrap()
+        let v = self.draft.add_vertex(VertexRecord::new(p(a))).unwrap();
+        self.points.insert(v, p(a));
+        v
     }
 
     fn edge(&mut self, curve: Curve, lo: f64, hi: f64, ends: [VertexId; 2]) -> EdgeId {
@@ -61,19 +68,16 @@ impl Sheet {
             .unwrap()
     }
 
-    /// The straight edge from `a` to `b`.
-    fn line(&mut self, a: [f64; 3], b: [f64; 3]) -> (EdgeId, [VertexId; 2]) {
-        let (va, vb) = (self.vertex(a), self.vertex(b));
-        let line = Line::new(p(a), p(b) - p(a)).unwrap();
-        (self.edge(Curve::Line(line), 0.0, 1.0, [va, vb]), [va, vb])
+    /// The straight edge from vertex `a` to vertex `b`.
+    fn line(&mut self, a: VertexId, b: VertexId) -> EdgeId {
+        let (pa, pb) = (self.points[&a], self.points[&b]);
+        let line = Line::new(pa, pb - pa).unwrap();
+        self.edge(Curve::Line(line), 0.0, 1.0, [a, b])
     }
 
     fn face(mut self, surface: Surface, loop_: Vec<(EdgeId, Sense)>) -> Brep {
         let doc = Document::default();
-        let loops = self
-            .draft
-            .exact_loops(&surface, &[loop_], &doc)
-            .unwrap();
+        let loops = self.draft.exact_loops(&surface, &[loop_], &doc).unwrap();
         self.draft
             .add_face(FaceRecord::new(
                 surface,
@@ -86,7 +90,12 @@ impl Sheet {
 }
 
 fn frame(o: [f64; 3], z: [f64; 3], x: [f64; 3]) -> Frame {
-    Frame::new(p(o), Vec3::new(z[0], z[1], z[2]), Vec3::new(x[0], x[1], x[2])).unwrap()
+    Frame::new(
+        p(o),
+        Vec3::new(z[0], z[1], z[2]),
+        Vec3::new(x[0], x[1], x[2]),
+    )
+    .unwrap()
 }
 
 const FWD: Sense = Sense::Forward;
@@ -100,10 +109,18 @@ fn rectangle(f: &Frame, x: [f64; 2], y: [f64; 2]) -> Brep {
         [q.x, q.y, q.z]
     };
     let mut s = Sheet::new();
-    let (e0, _) = s.line(at(x[0], y[0]), at(x[1], y[0]));
-    let (e1, _) = s.line(at(x[1], y[0]), at(x[1], y[1]));
-    let (e2, _) = s.line(at(x[1], y[1]), at(x[0], y[1]));
-    let (e3, _) = s.line(at(x[0], y[1]), at(x[0], y[0]));
+    let v = [
+        s.vertex(at(x[0], y[0])),
+        s.vertex(at(x[1], y[0])),
+        s.vertex(at(x[1], y[1])),
+        s.vertex(at(x[0], y[1])),
+    ];
+    let (e0, e1, e2, e3) = (
+        s.line(v[0], v[1]),
+        s.line(v[1], v[2]),
+        s.line(v[2], v[3]),
+        s.line(v[3], v[0]),
+    );
     s.face(
         Surface::Plane(Plane::new(*f)),
         vec![(e0, FWD), (e1, FWD), (e2, FWD), (e3, FWD)],
@@ -187,7 +204,7 @@ fn sheets_that_only_touch_or_stand_apart_have_no_seam() {
     // a corner to corner
     let corner = rectangle(&world, [2.0, 3.0], [1.0, 2.0]);
     // a clear gap
-    let far = rectangle(&world, [2.5, 4.0], [0.0, 1.0]);
+    let far = rectangle(&world, [2.5, 4.0], [0.0, 0.5]);
     let got = seams(&[&a, &corner, &far], 1e-3);
     assert!(got.seams.is_empty(), "{got:?}");
     assert!(got.unproved.is_empty(), "{got:?}");
@@ -211,9 +228,8 @@ fn bulged(sag: f64) -> Brep {
     )
     .unwrap();
     let arc = s.edge(Curve::Circle(circle), -theta, theta, [v0, v1]);
-    let (e1, _) = s.line([2.0, 0.0, 0.0], [4.0, 0.0, 0.0]);
-    let (e2, _) = s.line([4.0, 0.0, 0.0], [4.0, 1.0, 0.0]);
-    let (e3, _) = s.line([4.0, 1.0, 0.0], [2.0, 1.0, 0.0]);
+    let (v2, v3) = (s.vertex([4.0, 0.0, 0.0]), s.vertex([4.0, 1.0, 0.0]));
+    let (e1, e2, e3) = (s.line(v0, v2), s.line(v2, v3), s.line(v3, v1));
     s.face(
         Surface::Plane(Plane::new(Frame::WORLD)),
         vec![(e1, FWD), (e2, FWD), (e3, FWD), (arc, REV)],
@@ -248,7 +264,8 @@ fn quarter_pipe() -> Brep {
         s.vertex([0.0, 1.0, 2.0]),
         s.vertex([1.0, 0.0, 2.0]),
     );
-    let circle = |f: Frame| Curve::Circle(Circle::new(f, Length::from_mm(1.0), Sense::Forward).unwrap());
+    let circle =
+        |f: Frame| Curve::Circle(Circle::new(f, Length::from_mm(1.0), Sense::Forward).unwrap());
     let low = s.edge(circle(bottom_frame), 0.0, FRAC_PI_2, [a, b]);
     let high = s.edge(circle(top_frame), 0.0, FRAC_PI_2, [d, c]);
     let line = |s: &mut Sheet, p0: [f64; 3], p1: [f64; 3], ends: [VertexId; 2]| {
@@ -275,10 +292,18 @@ fn tangent_plane(normal_x: f64) -> Brep {
         frame([1.0, 0.0, 0.0], [-1.0, 0.0, 0.0], [0.0, -1.0, 0.0])
     };
     let mut s = Sheet::new();
-    let (e0, _) = s.line([1.0, -1.0, 0.0], [1.0, 0.0, 0.0]);
-    let (e1, _) = s.line([1.0, 0.0, 0.0], [1.0, 0.0, 2.0]);
-    let (e2, _) = s.line([1.0, 0.0, 2.0], [1.0, -1.0, 2.0]);
-    let (e3, _) = s.line([1.0, -1.0, 2.0], [1.0, -1.0, 0.0]);
+    let v = [
+        s.vertex([1.0, -1.0, 0.0]),
+        s.vertex([1.0, 0.0, 0.0]),
+        s.vertex([1.0, 0.0, 2.0]),
+        s.vertex([1.0, -1.0, 2.0]),
+    ];
+    let (e0, e1, e2, e3) = (
+        s.line(v[0], v[1]),
+        s.line(v[1], v[2]),
+        s.line(v[2], v[3]),
+        s.line(v[3], v[0]),
+    );
     let loop_ = if normal_x > 0.0 {
         vec![(e0, FWD), (e1, FWD), (e2, FWD), (e3, FWD)]
     } else {
@@ -302,11 +327,9 @@ fn a_plane_tangent_to_a_cylinder_is_g1_and_its_curvature_jumps_by_one_over_r() {
                 panic!("{c:?}")
             };
             assert_eq!(o, Order::G2);
-            // the pipe bends by 1 / r = 1 across the seam, the plane by 0; which sheet is first
-            // sets the sign
-            let sign = if std::ptr::eq(order[0], &pipe) { -1.0 } else { 1.0 };
+            // the pipe bends by 1 / r = 1 across the seam, the plane by 0: the jump's size
             assert!(
-                drop.lo <= sign + 1e-9 && drop.hi >= sign - 1e-9,
+                drop.lo <= 1.0 + 1e-9 && drop.hi >= 1.0 - 1e-9,
                 "{normal_x}: {drop:?}"
             );
             assert!(drop.hi - drop.lo < 1e-6);
@@ -354,7 +377,11 @@ fn disc(z: f64) -> Brep {
     .unwrap();
     let rim = s.edge(Curve::Circle(c), 0.0, 2.0 * PI, [v, v]);
     s.face(
-        Surface::Plane(Plane::new(frame([0.0, 0.0, z], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]))),
+        Surface::Plane(Plane::new(frame(
+            [0.0, 0.0, z],
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 0.0],
+        ))),
         vec![(rim, FWD)],
     )
 }
@@ -376,7 +403,10 @@ fn a_disc_capping_a_tube_meets_it_along_the_whole_circle_at_a_right_angle() {
         };
         assert_eq!(order, Order::G1);
         let angle = s.continuity.measured[1].bracket;
-        assert!(angle.lo <= FRAC_PI_2 + 1e-9 && angle.hi >= FRAC_PI_2 - 1e-9, "{angle:?}");
+        assert!(
+            angle.lo <= FRAC_PI_2 + 1e-9 && angle.hi >= FRAC_PI_2 - 1e-9,
+            "{angle:?}"
+        );
     }
     // the discs are two sheets that do not meet each other
     let apart = seams(&[&bottom, &top], 1e-6);
@@ -415,7 +445,13 @@ fn refusals_budget_stop_and_determinism() {
     let halt = Stop::new();
     halt.set();
     assert_eq!(
-        sheet_seams(&[&a, &b], Length::from_mm(1e-3), &tol(), &mut Budget::unlimited(), &halt),
+        sheet_seams(
+            &[&a, &b],
+            Length::from_mm(1e-3),
+            &tol(),
+            &mut Budget::unlimited(),
+            &halt
+        ),
         Err(BodyqError::Cancelled)
     );
 }
