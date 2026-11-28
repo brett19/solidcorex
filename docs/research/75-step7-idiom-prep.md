@@ -3016,3 +3016,140 @@ directions:
 | wire/box-cyl-hole | 133,543 | 133,527 |
 | make/torus-5-1.5 | 146,273 | 146,527 |
 | tess/plate-4 | 5,029,301 | 5,014,011 |
+
+### 13.30 MK16 as built (11-28)
+
+Tests only: `crates/scx-make/tests/closed_form.rs` (7 tests), the closed-form make table over
+`extrude`, `revolve`, `sweep` and `sheet`. Every case asserts volume and area (relative 1e-9, the
+estimate's error within it), the first moment where the truth has one, face, curve-edge and vertex
+counts, the Euler-Poincare count, regions and shells, the fin structure and the check contract
+(`violations` empty). `sweep` is called through one helper (`sweep_along`), so MK7b's `&PathFrame`
+changes one line. Nothing in `scx-make` changed.
+
+Truths come from sources that share no code with the constructors: T9 (`scx_testkit::solid`:
+extrusions, cylinder, cone, sphere, torus and torus sectors, carried to the case's frame, which is
+also how a revolve's axis `y` and turn direction are matched), Pappus (T9's extrusion of the
+profile gives `A` and `A x`; `int x ds` is chord length times mean `x` and the arc's
+`r (cx t + r (sin a1 - sin a0))`, in the file), and the mitre argument (a profile whose area and
+rim are centred on the path keeps area and perimeter times length through any corner of lines).
+
+Tables:
+
+- **Ops table** (the pin's 26 cases; 12 built here, one test): rectangle and circle extrudes, the
+  circle in two halves and in a quarter and the rest, the half disc with a split arc, the ring
+  section revolved whole and by a quarter, a circle along two lines end to end, along a quarter arc
+  (T9's torus sector) and along a line then a tangent quarter arc (T9's cylinder plus a placed
+  sector), a 4 x 3 rectangle round the closed rounded rectangle (9 pieces, no caps), and the planar
+  face with a hole. Not ported, each waiting on a task: the drafted extrudes (5; a draft is
+  `scx-taper`'s, step 8), the lofts (5; MK10 to MK12), the scaled stations (2; MK7b's laws) and the
+  screw sweeps (2; MK6).
+- **Revolve against T9** (plain and tilted frame): cylinder, cone, frustum, sphere, ring torus and
+  its sectors at pi/2, pi and 3 pi/2, with first moments.
+- **Pappus** (plain and tilted frame): nine profiles (rectangle, trapezoid, L, triangle, half disc
+  off the axis, rounded rectangle, circle, rectangle with a round and with a square hole) by four
+  turns (whole, a quarter, from -1 to 2.5, almost whole). Counts follow the rule stated on the test:
+  a face per segment (and two caps), a whole turn a circle edge and vertex per profile vertex and a
+  seam per segment but level lines, a partial turn three edges and two vertices per profile vertex.
+- **Cornered**: five profiles (square, rectangle, circle, rounded rectangle, hexagon) along an L
+  of 30, 60, 90, 120 and 150 degrees in three bending planes (two axis planes and an oblique one):
+  T9's straight extrusion of the same length, counts `2n + 2, 5n, 3n` faces, edges, vertices (a
+  circle 4, 5, 3), the vertices of each section on its plane (start, bisecting mitre, end) and the
+  caps square to the end tangents through the end points.
+- **Stations**: a line, a quarter bend and a line, for a circle and a square: the wall kinds per
+  piece (cylinder, torus, cylinder; planes and cylinders), Pappus's volume, and each cap at the
+  closed-form station. The pin's helix-frame truths (`sweep_stations.rs`) are MK7a's
+  `tests/frames.rs`; a helix sweep is `Unsupported::HelixPiece` here.
+
+Result: every case holds; no finding, nothing `#[ignore]`d. The two mistakes made on the way were
+the test's own (a hole drawn counter-clockwise gives T9 a positive area; a full turn's seam count
+excludes the level lines, whose plane annulus has none) and are in the rules above.
+
+Runtime (debug, nextest, loaded machine): the four heaviest tests 1 to 5 s each, all 7 in about
+5 s wall; the Pappus tables are 144 bodies, the cornered table 75.
+
+### 13.31 VM1 as built (11-28)
+
+77 §5's volume maps on their own, without DF1's deformation: `scx_surface::volume_map`, a new module (two lines in `lib.rs`). The public API:
+- `Bend::new(Frame, neutral: Length) -> Result<Bend, MapError>` (positive and finite) and `Twist::new(Frame, pitch: Length) -> Result<Twist, MapError>` (signed, nonzero, finite; negative is left-handed). The frame's origin is on the axis, its x on the mid direction, its z along the axis.
+- `VolumeMap::{Bend(Bend), Twist(Twist), Unbend(Bend), Chain(Arc<[VolumeMap]>)}`; a chain applies its maps in order.
+- `map<T: Polar>(&self, Point3<T>) -> Point3<T>`: the closed form in `f64` or `Ivl`. `Polar` is a sealed `Trig` with `atan2`.
+- `bound(&Extent3d) -> Option<Extent3d>`: `map` over `Ivl`.
+- `inverse(&self, Point3) -> Result<Point3, MapError>`: closed form. `MapError::{BadNeutral, BadPitch, NotFinite, OnAxis, OutsideImage}`.
+- `inverted(&self) -> VolumeMap`: bend and unbend swap, the twist's pitch is negated, a chain is reversed.
+- `push(&self, p, t) -> Vec3` and `jacobian(&self, p) -> [Vec3; 3]`: closed-form first derivatives, chained through a chain.
+- `image(&self, &Surface, near: Point3) -> Image`, with `Image::{Exact { surface, uv: Uv }, NotExact(NotExact)}`, `Uv::{Same, Moved}` and `NotExact::{NoRule, MeetsAxis, OnCut, OutsideDomain}` (non-exhaustive).
+
+The image rules, in the map's frame. Each is a test on kind and frame within `ALIGNED` (16 eps, relative to the kind's size), never a sample:
+- Bend:
+  - a plane square to the axis is itself;
+  - the plane `u = u0 > 0` is the cylinder of radius `u0`, Forward when its normal is `+x`;
+  - the plane `v = v0` with `|v0| <= pi d` is the plane through the axis at `v0 / d`, with the same uv;
+  - a plane with normal `(a, 0, c)` is the cone with its apex on the axis, opening along the half where `u` grows;
+  - a cylinder along `y` centred at `u_c > rho` is the torus (major `u_c`, minor `rho`), and one centred on the axis is the sphere of radius `rho`. The sense is kept: the bend keeps orientation (its Jacobian determinant is `u / d > 0`).
+- Unbend: the inverse of each bend rule. The half-plane of a plane holding the axis, and the nappe of a coaxial cone, are the ones `near` lies on. A half-plane at `pi` is `OnCut`.
+- Twist: a plane square to the axis turns, with the same uv. A coaxial cylinder, cone or torus, and a sphere centred on the axis, are themselves (the pin misses the cylinder and cone).
+- A chain carries the surface and `near` through each step. Its uv is `Same` only when every step's is.
+- Everything else, NURBS included, is `NoRule`: PK4's in-volume kind or a certified fit.
+
+Decisions.
+- **`map` is generic over `Polar`, not `Ranged`.**
+  - For: the unbend needs `atan2` and a square root, which `Ranged` lacks; `Trig` has the root but no angle. A sealed subtrait keeps the set to `f64` and `Ivl`.
+  - Against: 77 §5.2 wrote `T: Ranged`; a jet ring cannot run the map until it gets `atan2`.
+  - The interval `atan2` takes the four corners' angles, which bound a box off the origin and the cut. A box meeting the cut, holding the origin or holding a NaN gives `[-pi, pi]`. The twist over intervals clips `x` and `y` to the box's widest radius, which keeps a full turn within `sqrt 2` of the axis for the pin's unit box (dependency in `cos u - sin v` would otherwise double it).
+- **`image` takes `near`, a point of the face.**
+  - For: the unbend of a plane holding the axis is two planes, `v = d theta0` and `v = d (theta0 - pi)`, and a coaxial cone's two nappes unbend to two planes. Without a point there is no single answer. A chain maps `near` with the surface.
+  - Against: 77 §5.2 wrote `image(&self, s)`; every caller must pass a point. DF1 has the face, so it has one.
+- **`Image::Exact` carries `Uv`, and a not-exact image is `NotExact`, not `Procedural` or `Refused`.**
+  - For: VM2 and DF1 must know whether the pcurves carry over. That is true only for the plane rules that are rigid motions of the plane (bend `v = v0`, twist and unbend planes). Building PK4's in-volume surface belongs to PK4, which is not built yet. A volume map refuses nothing about a surface; it only lacks a rule.
+  - Against: the caller matches one more level; PK4 must add the `NotExact -> InVolume` step itself.
+- **The bend's oblique plane is a cone at its apex.** The cone kind is both nappes, so any reference circle gives the same set. Placing it at the apex with the axis toward the image's nappe keeps the radius positive there and so the sense right without a point.
+- **Derivatives are first order and closed form (`push`, `jacobian`), not jets.**
+  - For: DF1's normals need `J^-T n`, which these give exactly. The finite-difference truths are the pin's.
+  - Against: 77 §5.2 wants the map over jets so WR-45 (third order) cannot recur. That needs a jet ring with `Polar`; it is left open.
+- **Tolerances.** `ALIGNED` (16 eps) for the image rules. `ON_AXIS` (4 eps of the point's size) for the bend's inverse. `CUT_MARGIN` (4 eps of `pi d`) past the bend's range for the unbend's inverse. A point on the cut (`y = +0`) inverts to `v = +pi d`, as the pin's first solution.
+
+Tests (17, `volume_map/tests.rs`):
+- The pin's truths: the simple maps, the maps in the frame at (1, 2, 3), the seam at `y = 0`, the finite-difference Jacobians, the bend box at `[1, 2] x [0, pi/2] x [0, 1]`, WR-59's boxes with their corner and pole, full periods, and the twist's full turn within `sqrt 2`.
+- Map then inverse is the identity for every map in three frames, a chain included. The tolerance is `1e-13 (1 + d/u)`: the unbend's angle near the axis is conditioned by `d / u`.
+- Every box holds a 7^3 grid of mapped points, for each map and a chain, across the cut too.
+- Each image rule, both senses where a sense exists: the mapped points lie on the image within `1e-11` relative, by the image's own closed-form inversion. The image's normal there agrees with the source normal pushed forward, `J^-T n`. `Uv::Same` images give the mapped point at the same uv.
+- `NotExact` cases: `MeetsAxis`, `OutsideDomain`, `OnCut` and `NoRule`. Construction refusals.
+
+Costs, release build on the build server, throwaway timer, per point (map, inverse, box, Jacobian):
+- bend: 43 ns, 417 ns, 399 ns, 145 ns;
+- unbend: 388 ns, 42 ns, 420 ns, 50 ns;
+- twist: 33 ns, 34 ns, 413 ns, 107 ns;
+- a chain of a bend and two twists: 128 ns, 319 ns, 1.1 us, 771 ns.
+
+The correctly rounded `fmath::atan2` is about 350 ns of the unbend's map and the bend's inverse. Against the pin's 36 samples per exactness test and a guess and point solve per inversion, every row is less work (77 §9): an image is one predicate and an inverse one closed form.
+
+Deviations from 77 §5.2: `Polar` for `Ranged`; `image` takes `near`; `Image`'s shape (above); first derivatives, not jets. Not built: curve images (VM2) and DF1's `MeetsAxis` refusal of a body.
+
+### 13.32 RY2 as built (11-28)
+
+`scx_surface::intersect_curve` and `curve_on_surface` now answer a line, circle, ellipse, parabola or hyperbola against a `Surface::Nurbs` (77 §6.3, row RY2) in `crates/scx-surface/src/nurbs_hits.rs`; a NURBS curve against one is still `SurfaceError::NurbsIntersection`. The one public addition is `SurfaceError::Undecided { t }` (Unsupported, `intersection_undecided`): a box down to the floor that nothing dropped or proved. `scx-bodyq`, `scx-boolean` and `scx-hlr` read it as they read `NurbsIntersection` (unclean: a ray tries its next direction). `intersect.rs` gains two dispatch lines and nothing else.
+
+How: each Bézier patch's certified hull grown by `tol` is a box in a balanced tree, culled against the curve's slab; on a surviving patch a box in `(u, v, t)` is enclosed by the patch polynomial about the curve's middle point. Where `g = (S_u x S_v) . C'` excludes 0, Krawczyk on `F = S - C` drops the box or proves one crossing. Where `g` holds 0 (grazing), Krawczyk on the foot system `G` proves one foot for every `t` in `T`, and the signed distance `delta(t)` along it is cut into far, monotone (one crossing at most) and turning pieces. Runs of pieces within `tol` read as the analytic arms do: Crossing, Tangent or Overlap.
+
+Decisions.
+- **`Undecided` its own variant, not `NurbsIntersection`.** For: the claims differ ("this pair is not built" against "this box could not be decided near `t`"), and `t` says where. Against: one more arm for callers; three callers map both the same way today.
+- **A ray exactly through a pole is Undecided.** The foot system is singular at a degenerate edge (`S_v = 0`), so no Krawczyk box contains it; answering it would need the pole as a special point. For: unclean is honest and the ray caller already retries. Against: an exact pole hit is answered by retry, not here.
+- **The foot proof before the floor check, about the Newton foot.** A grazing box at the floor is tried for its foot first, over a box about the Newton foot of the middle point (hulled with `U x V`), then over `U x V` grown by an eighth; a proved foot box is re-proved over its own growth while that halves it. For: the plain grown box is loose near a tangent (the cylinder tangent and the ruling were Undecided without it). Against: up to four more Krawczyk calls per grazing box.
+- **Each piece of `T` searches its parent's foot box grown, not the whole `Y`.** The one foot over the parent lies in its proved box, so the child's foot does too. For: the ruling's two wide feet calls cost 13.5k and 32.8k pieces before; the whole ruling line is 1407 pieces now. Against: none found; it is a smaller box with the same claim.
+- **A turning piece is one where `delta` is within `tol` throughout or the piece is at the floor**, not one where the slope is small: the slope enclosure is loose, and "small" spanned whole monotone pieces.
+- **A box inside one already proved is skipped.** For: the patch's grown neighbours re-find the same foot. Against: a list scan per grazing box (short: one entry per proved foot).
+- **No box tree over patches beyond the hull tree.** The counts below grow with the patches the ray meets, not the patch count; a tree would add build cost for no hull tests saved.
+
+Added work per ray (release, tol 1e-6, throwaway counters, not committed; before, every such call was `NurbsIntersection` and did no work). The 24 sphere lines, the sphere refined by knot insertion in both directions:
+
+| patches | hull tests | boxes | foot Krawczyk | `F` Krawczyk |
+|---|---|---|---|---|
+| 8 | 12 | 254 | 116 | 80 |
+| 15 | 21 | 232 | 99 | 79 |
+| 35 | 38 | 145 | 42 | 61 |
+| 99 | 63 | 96 | 14 | 49 |
+| 323 | 114 | 45 | 5 | 23 |
+
+Hull tests grow with the patches the line passes near (about the square root of the count), and boxes fall as the patches flatten, so hull tests plus boxes per ray stay between 159 and 266; the hull tree is enough, and no further box tree is built. Grazing cases: the cylinder tangent takes 5 to 7 hull tests, 94 to 114 boxes, 68 to 101 pieces and 498 to 630 foot Krawczyk calls; the ruling 145 boxes, 1407 pieces and 4485 foot calls (47.6k pieces before the per-piece foot box, 897k before the tightening); the pole ends Undecided after 52 boxes.
+
+Truths (`crates/scx-surface/tests/nurbs_hits.rs`, 7 tests): 24 lines through the NURBS sphere meet it at `|p| = r` (48 hits); a line through the seam and the knot lines meets each place once; a line tangent to the NURBS cylinder (on the seam, on a knot line, skew) touches it once as a Tangent; a line along a ruling of the bilinear saddle `z = uv`, clipped, is one Overlap and a crossing elsewhere is a Crossing at `u = 5/6`; a circle crosses the sphere twice; a NURBS curve is `NurbsIntersection`, and the budget and stop end the search typed; a line through a pole is Undecided or right. Changed: `nurbs_budget_and_stop_are_typed` in `tests/intersect.rs` (a circle on the NURBS sphere is now answered, empty; a NURBS line keeps the error). Nothing removed.

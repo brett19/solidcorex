@@ -587,7 +587,9 @@ impl<'a> Work<'a, '_> {
                                     }
                                 }
                             }
-                            Err(SurfaceError::NurbsIntersection) => {
+                            Err(
+                                SurfaceError::NurbsIntersection | SurfaceError::Undecided { .. },
+                            ) => {
                                 waits.push((
                                     t,
                                     Pending::Piercing {
@@ -763,7 +765,9 @@ impl<'a> Work<'a, '_> {
             self.stop,
         ) {
             Ok(h) => h,
-            Err(SurfaceError::NurbsIntersection) => return Ok(Ray::Pending),
+            Err(SurfaceError::NurbsIntersection | SurfaceError::Undecided { .. }) => {
+                return Ok(Ray::Pending);
+            }
             Err(e) => return Err(HlrError::surface(face.id(), e)),
         };
         let mut answer = Ray::Miss;
@@ -866,7 +870,9 @@ impl<'a> Work<'a, '_> {
                 self.stop,
             ) {
                 Ok(h) => h,
-                Err(SurfaceError::NurbsIntersection) => return Ok(Ray::Pending),
+                Err(SurfaceError::NurbsIntersection | SurfaceError::Undecided { .. }) => {
+                    return Ok(Ray::Pending);
+                }
                 Err(e) => return Err(HlrError::surface(id, e)),
             };
             let mut at = |p: Point3| {
