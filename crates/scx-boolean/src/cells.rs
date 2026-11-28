@@ -364,7 +364,8 @@ pub(crate) fn shells(
 /// # Errors
 ///
 /// [`BooleanUnsupported::NonManifold`] at a face holding the touch whose region test
-/// cannot place it inside one piece (on a piece's boundary, so no lone point).
+/// cannot place it inside one piece (on a piece's boundary, so no lone point). A touch
+/// that no kept piece of one of its faces reaches is not in the result and is skipped.
 pub(crate) fn touches(
     m: &mut Imprint,
     touches: &[Touch],
@@ -392,13 +393,15 @@ pub(crate) fn touches(
             None => None,
         };
         let mut lone: Vec<(FaceId, scx_num::vector2d::Point2)> = Vec::new();
+        let mut unsure = None;
+        let mut absent = false;
         for (side, of) in sides.into_iter().zip(t.faces) {
             let on_boundary =
                 merged.is_some_and(|v| pieces(side, of).any(|f| uses_vertex(m, f, v)));
             if on_boundary {
                 continue;
             }
-            let mut inside = None;
+            let (mut inside, mut near) = (None, false);
             for f in pieces(side, of) {
                 let view = m.draft.face(f).ok_or_else(defect)?;
                 let domain = view.uv_box();
@@ -408,37 +411,51 @@ pub(crate) fn touches(
                     .map_err(|_| defect())?
                     .foot()
                     .at;
-                if view.contains_uv(uv) == Some(UvSide::Inside) {
-                    inside = Some((f, uv));
-                    break;
+                match view.contains_uv(uv) {
+                    Some(UvSide::Inside) => {
+                        inside = Some((f, uv));
+                        break;
+                    }
+                    Some(UvSide::Outside) => {}
+                    Some(UvSide::Near) | None => near = true,
                 }
             }
-            let at = inside.ok_or(BooleanError::Unsupported(BooleanUnsupported::NonManifold {
+            match (inside, near) {
+                (Some(at), _) => lone.push(at),
+                (None, true) => unsure = Some(of),
+                // No kept piece of this face reaches the touch: the result is the other
+                // face alone there, smooth, and holds no touch.
+                (None, false) => absent = true,
+            }
+        }
+        if absent {
+            continue;
+        }
+        if let Some(of) = unsure {
+            return Err(BooleanError::Unsupported(BooleanUnsupported::NonManifold {
                 at: Entity::Face(of),
-            }))?;
-            lone.push(at);
+            }));
         }
         if lone.is_empty() {
             continue;
         }
-        let v = match merged {
-            Some(v) => v,
-            None => {
-                let v = m
-                    .draft
-                    .add_vertex(VertexRecord::new(t.at))
-                    .map_err(draft_defect)?;
-                m.draft
-                    .derive(v, Origin::Face(t.faces[0]))
-                    .map_err(draft_defect)?;
-                m.draft
-                    .derive(
-                        v,
-                        Origin::Operand(Side::B.operand(), Entity::Face(t.faces[1])),
-                    )
-                    .map_err(draft_defect)?;
-                v
-            }
+        let v = if let Some(v) = merged {
+            v
+        } else {
+            let v = m
+                .draft
+                .add_vertex(VertexRecord::new(t.at))
+                .map_err(draft_defect)?;
+            m.draft
+                .derive(v, Origin::Face(t.faces[0]))
+                .map_err(draft_defect)?;
+            m.draft
+                .derive(
+                    v,
+                    Origin::Operand(Side::B.operand(), Entity::Face(t.faces[1])),
+                )
+                .map_err(draft_defect)?;
+            v
         };
         for (f, uv) in lone {
             let e = m

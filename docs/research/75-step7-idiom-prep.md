@@ -1822,6 +1822,12 @@ What the build now holds (04 row 16):
   `UseGeom::Point(uv)` loop of its own, in each kept piece that holds it inside (`cells::touches`).
   The six such recipes (tangent and seam spheres on boxes, two spheres, a box minus its inscribed
   sphere) were `Unsupported(NonManifold)`; they now build as solids with the contract passing.
+  A touch that no kept piece of one of its faces reaches is not in the result (that face's
+  material is gone there, the other face is smooth) and is skipped: a ball inside a cube
+  touching one face and crossing another builds all three Booleans, and only the difference
+  holds the point. This cleared every `non_manifold` answer in the algebra suite (`boxC` against
+  `sphereOnFace`, which touches `boxC`'s y = -2 face from inside: 7 cases over five laws were
+  skipped as Unsupported, now asserted).
 - *Nesting.* Shells that share a face never contain each other; a void shell of zero volume lies
   in the void round it. A cavity wall whose box reaches past its holder's (a face's box encloses,
   a sphere's reaches past its poles) falls back to `holders_loose`, which tests containment of the
@@ -1876,8 +1882,12 @@ square, a disc of pi r^2, free edges), the closure of a regular result is it.
 `contacts.rs`: `point_contacts_are_built` (was the Unsupported check) asserts volume, cells and a
 point loop per touch. Changed on purpose: `whole.rs`'s `non_manifold_results_are_unsupported`
 (proved a ball on a cube was refused) is now `a_ball_on_a_cube_touches_it_at_a_point` (volume
-1 + pi/6, two solid regions, contract); `scx-boolean/tests/recipes.rs` and `scx-testkit/tests/recipe.rs`
-judge the six recipes as built.
+1 + pi/6, two solid regions, contract); new `a_ball_touching_a_face_from_inside_and_crossing_another`
+(the three volumes in closed form, a vertex at the touch only in the difference); `scx-boolean/tests/recipes.rs` and `scx-testkit/tests/recipe.rs`
+judge the six recipes as built. `scx-difftest`'s `t_slice` counts a touch as truth's patch
+complex does (a vertex of each sheet, a point loop of each patch) on both sides: scx's loop of one
+collapsed edge, or a seam or pole vertex that is a touch; the pin's vertex loop, whose vertex its
+Euler count had missed. The six recipes' work joins `slice_work.txt` (9 to 78).
 
 Open: wires and points in `Closure` (BO14); void-shell nesting on points (BO12); scx-brep's sphere
 face box past its poles is loose (a tighter box helps every nesting test).
