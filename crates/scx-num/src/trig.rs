@@ -142,6 +142,13 @@ pub trait Trig: Ranged {
     /// ([`Ivl::sqrt`]).
     #[must_use]
     fn sqrt(self) -> Self;
+
+    /// The angle of `(x, y)` in `[-pi, pi]` ([`fmath::atan2`](crate::fmath::atan2)); for an
+    /// interval box an enclosure of the angles of its points, `[-pi, pi]` when the box meets
+    /// the cut (the negative x axis), holds the origin or holds a NaN; for a jet the chain
+    /// rule on those, whole where the box holds the origin.
+    #[must_use]
+    fn atan2(y: Self, x: Self) -> Self;
 }
 
 impl Trig for f64 {
@@ -156,6 +163,10 @@ impl Trig for f64 {
     #[inline]
     fn sqrt(self) -> Self {
         f64::sqrt(self)
+    }
+    #[inline]
+    fn atan2(y: Self, x: Self) -> Self {
+        crate::fmath::atan2(y, x)
     }
 }
 
@@ -225,6 +236,27 @@ impl Trig for Ivl {
 
     fn sqrt(self) -> Self {
         Ivl::sqrt(self)
+    }
+
+    fn atan2(y: Self, x: Self) -> Self {
+        let whole = wide(-core::f64::consts::PI, core::f64::consts::PI);
+        let ends = [y.lo, y.hi, x.lo, x.hi];
+        if ends.iter().any(|e| e.is_nan()) {
+            return whole;
+        }
+        // The cut (or the origin, when `x` holds zero too) is in the box.
+        if y.lo <= 0.0 && 0.0 <= y.hi && x.lo <= 0.0 {
+            return whole;
+        }
+        // A box off the origin and the cut: its angles run between those of two corners.
+        let mut lo = f64::INFINITY;
+        let mut hi = f64::NEG_INFINITY;
+        for (cy, cx) in [(y.lo, x.lo), (y.lo, x.hi), (y.hi, x.lo), (y.hi, x.hi)] {
+            let a = crate::fmath::atan2(cy, cx);
+            lo = lo.min(a);
+            hi = hi.max(a);
+        }
+        wide(lo, hi)
     }
 }
 

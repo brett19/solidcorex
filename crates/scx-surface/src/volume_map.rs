@@ -44,7 +44,7 @@ use scx_num::extent3d::Extent3d;
 use scx_num::fmath;
 use scx_num::frame::{Frame, Sense};
 use scx_num::interval::Ivl;
-use scx_num::ring::{Ring, wide};
+use scx_num::ring::Ring;
 use scx_num::trig::Trig;
 use scx_num::units::Length;
 use scx_num::vector3d::{Point3, Vec3};
@@ -64,51 +64,11 @@ const ON_AXIS: f64 = 4.0 * f64::EPSILON;
 /// inverse refuses a point as outside the image.
 const CUT_MARGIN: f64 = 4.0 * f64::EPSILON;
 
-mod sealed {
-    pub trait Sealed {}
-    impl Sealed for f64 {}
-    impl Sealed for scx_num::interval::Ivl {}
-}
+/// A ring with the angle of a point of the plane ([`Trig::atan2`]): `f64`, [`Ivl`] and the
+/// curve fit's [`Jet2`](scx_num::jet::Jet2). Every [`Trig`] ring is one.
+pub trait Polar: Trig {}
 
-/// A ring with the angle of a point of the plane: `f64` and [`Ivl`].
-pub trait Polar: Trig + sealed::Sealed {
-    /// The angle of `(x, y)` in `[-pi, pi]`: [`fmath::atan2`] for an `f64`; for an interval
-    /// box an enclosure of the angles of its points, `[-pi, pi]` when the box meets the cut
-    /// (the negative x axis), holds the origin or holds a NaN.
-    #[must_use]
-    fn atan2(y: Self, x: Self) -> Self;
-}
-
-impl Polar for f64 {
-    #[inline]
-    fn atan2(y: Self, x: Self) -> Self {
-        fmath::atan2(y, x)
-    }
-}
-
-impl Polar for Ivl {
-    fn atan2(y: Self, x: Self) -> Self {
-        let whole = wide(-PI, PI);
-        let ends = [y.lo, y.hi, x.lo, x.hi];
-        if ends.iter().any(|e| e.is_nan()) {
-            return whole;
-        }
-        let holds_zero_y = y.lo <= 0.0 && 0.0 <= y.hi;
-        // The cut (or the origin, when `x` holds zero too) is in the box.
-        if holds_zero_y && x.lo <= 0.0 {
-            return whole;
-        }
-        // A box off the origin and the cut: its angles run between those of two corners.
-        let mut lo = f64::INFINITY;
-        let mut hi = f64::NEG_INFINITY;
-        for (cy, cx) in [(y.lo, x.lo), (y.lo, x.hi), (y.hi, x.lo), (y.hi, x.hi)] {
-            let a = fmath::atan2(cy, cx);
-            lo = lo.min(a);
-            hi = hi.max(a);
-        }
-        wide(lo, hi)
-    }
-}
+impl<T: Trig> Polar for T {}
 
 /// Why a volume map cannot be built, or a point has no preimage.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -812,6 +772,9 @@ fn twist_image(t: &Twist, s: &Surface) -> Image {
         _ => Image::NotExact(NotExact::NoRule),
     }
 }
+
+mod curve;
+pub use curve::{CurveImage, CurveNot, CurveParam, Fit};
 
 #[cfg(test)]
 mod tests;

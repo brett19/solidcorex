@@ -102,7 +102,7 @@ pub use edit::UvMap;
 pub use enclose::Along;
 pub use error::{Size, SurfaceError};
 pub use gap::{
-    Aim, Bracket, GapError, Pending, Short, curve_curve_gap, curve_surface_gap, pcurve_edge_gap,
+    Aim, Bracket, GapError, Short, curve_curve_gap, curve_surface_gap, pcurve_edge_gap,
     point_curve_gap, vertex_curve_gap,
 };
 pub use hull::{Hull, Hulls};
@@ -118,7 +118,10 @@ pub use sphere::Sphere;
 pub use surface::Surface;
 pub use torus::Torus;
 pub use trough::{Half, MARGIN, Trough, TroughError, facing_trough};
-pub use volume_map::{Bend, Image, MapError, NotExact, Polar, Twist, Uv, VolumeMap};
+pub use volume_map::{
+    Bend, CurveImage, CurveNot, CurveParam, Fit, Image, MapError, NotExact, Polar, Twist, Uv,
+    VolumeMap,
+};
 
 use scx_num::vector3d::Point3;
 
