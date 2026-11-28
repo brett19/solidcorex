@@ -17,6 +17,12 @@
 //! edges name: the proof never looks at a pair that shares no edge, and each edge is decided
 //! once whichever face reaches it first.
 //!
+//! **Every face is on the seed's surface.** A face is also proved against the surface of the
+//! seed its growth came from (one more proof a face, [`NotCrossed::Drift`] when it fails), so
+//! a chain of planes each within the resolution of the next but drifting overall stops where
+//! the accumulated bound is crossed, as `merge_faces` does by proving each member against the
+//! group's plane.
+//!
 //! The answer is every face reached, the seeds first in the order given and then each face as
 //! it is reached, and every edge that did not lead on, with the reason ([`Stopped`]). An edge
 //! the caller names in `keep` is not crossed and not reported (a split line the caller wants
@@ -66,6 +72,16 @@ pub enum NotCrossed {
     Sense,
     /// The faces are not proved to lie on one surface.
     Surface(NotOneSurface),
+    /// The faces are on one surface within the resolution (the edge itself would lead on),
+    /// but the face across is not on the surface of `seed`, the seed the growth came from:
+    /// a chain of planes each within the resolution of the last has drifted. `why` is the
+    /// proof against the seed's surface (the same reasons as [`Surface`](Self::Surface)).
+    Drift {
+        /// The seed whose surface the face across was proved against.
+        seed: FaceId,
+        /// How the face across is off the seed's surface.
+        why: NotOneSurface,
+    },
 }
 
 /// An edge of a reached face that did not lead on.
@@ -127,6 +143,10 @@ pub fn faces_on_one_surface(
     let approx = body.resolution().approx().mm();
     let mut boxes: BTreeMap<FaceId, Option<Extent3d>> = BTreeMap::new();
     let mut decided: BTreeSet<EdgeId> = BTreeSet::new();
+    // The seed each reached face's growth came from (a seed is its own), and the faces already
+    // proved off a seed's surface (so a face two edges lead to is proved once).
+    let mut root: BTreeMap<FaceId, FaceId> = out.faces.iter().map(|&f| (f, f)).collect();
+    let mut drifted: BTreeMap<(FaceId, FaceId), NotOneSurface> = BTreeMap::new();
     let mut next = 0;
     while let Some(&f) = out.faces.get(next) {
         next += 1;
@@ -171,6 +191,23 @@ pub fn faces_on_one_surface(
                     .err()
                     .map(NotCrossed::Surface)
             };
+            let why = match why {
+                None if !seen.contains(&to) => {
+                    let seed = root.get(&f).copied().unwrap_or(f);
+                    let off = if let Some(&e) = drifted.get(&(seed, to)) {
+                        Some(e)
+                    } else {
+                        budget.charge(UNIT)?;
+                        let e = on_seed(body, seed, to, approx, &mut boxes).err();
+                        if let Some(e) = e {
+                            drifted.insert((seed, to), e);
+                        }
+                        e
+                    };
+                    off.map(|why| NotCrossed::Drift { seed, why })
+                }
+                other => other,
+            };
             match why {
                 Some(why) => out.stopped.push(Stopped {
                     edge: id,
@@ -181,6 +218,8 @@ pub fn faces_on_one_surface(
                 None => {
                     if seen.insert(to) {
                         out.faces.push(to);
+                        let seed = root.get(&f).copied().unwrap_or(f);
+                        root.insert(to, seed);
                     }
                 }
             }
@@ -216,6 +255,37 @@ fn one_surface(
     let dev = plane_bound(pa, pb, &ba)
         .map_err(near)?
         .max(plane_bound(pb, pa, &bb).map_err(near)?);
+    if dev <= approx {
+        Ok(())
+    } else {
+        Err(NotOneSurface::Apart(Length::from_mm(dev)))
+    }
+}
+
+/// Whether face `to` lies on the surface of `seed` within `approx`: one proof, `to`'s box
+/// against the seed's plane (the seed's own box is not needed, a surface is unbounded).
+fn on_seed(
+    body: &Brep,
+    seed: FaceId,
+    to: FaceId,
+    approx: f64,
+    boxes: &mut BTreeMap<FaceId, Option<Extent3d>>,
+) -> Result<(), NotOneSurface> {
+    let (Some(fs), Some(ft)) = (body.face(seed), body.face(to)) else {
+        return Err(NotOneSurface::NoBox);
+    };
+    let (ss, st) = (fs.surface(), ft.surface());
+    if ss == st {
+        return Ok(());
+    }
+    let (Surface::Plane(ps), Surface::Plane(pt)) = (ss, st) else {
+        return Err(NotOneSurface::Kind);
+    };
+    let bt = face_box(body, to, boxes).ok_or(NotOneSurface::NoBox)?;
+    let dev = plane_bound(pt, ps, &bt).map_err(|e| match e {
+        NotNear::Opposite => NotOneSurface::Opposite,
+        _ => NotOneSurface::Crease,
+    })?;
     if dev <= approx {
         Ok(())
     } else {
