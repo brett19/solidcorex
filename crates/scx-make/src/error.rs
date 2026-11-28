@@ -29,6 +29,10 @@ pub enum Dimension {
     BaseRadius,
     /// A cone's radius on `z = height`.
     TopRadius,
+    /// A hollow cone's inner radius on `z = 0`.
+    InnerBaseRadius,
+    /// A hollow cone's inner radius on `z = height`.
+    InnerTopRadius,
     /// A torus's major radius: the frame's origin to the tube's centre.
     Major,
     /// A torus's minor radius: the tube's.
@@ -47,6 +51,8 @@ impl Dimension {
             Self::Height => "height",
             Self::BaseRadius => "base_radius",
             Self::TopRadius => "top_radius",
+            Self::InnerBaseRadius => "inner_base_radius",
+            Self::InnerTopRadius => "inner_top_radius",
             Self::Major => "major",
             Self::Minor => "minor",
         }
@@ -86,6 +92,15 @@ pub enum Refusal {
         region: Resolution,
         /// The document's.
         document: Resolution,
+    },
+    /// A hollow cone whose inner cone is not inside its outer one with a wall between: at
+    /// some end the inner radius is above the outer, or is below it by no more than the
+    /// resolution without being equal, or both ends are hinges (no volume).
+    Annulus {
+        /// The outer radii at the base and the top (mm).
+        outer: [f64; 2],
+        /// The inner radii (mm).
+        inner: [f64; 2],
     },
     /// A cone whose radii are both zero: a segment, not a solid.
     ZeroRadii,
@@ -175,6 +190,7 @@ impl MakeError {
             Self::Refused(Refusal::Resolution { .. }) => "resolution",
             Self::Unsupported(Unsupported::Profile(_)) => "profile_undecided",
             Self::Unsupported(Unsupported::Segment(_)) => "segment_kind",
+            Self::Refused(Refusal::Annulus { .. }) => "annulus",
             Self::Refused(Refusal::ZeroRadii) => "zero_radii",
             Self::Refused(Refusal::SelfIntersecting { .. }) => "self_intersecting",
             Self::Unsupported(Unsupported::HornTorus { .. }) => "horn_torus",
@@ -221,6 +237,10 @@ impl fmt::Display for MakeError {
             Self::Unsupported(Unsupported::Segment(at)) => {
                 write!(f, "{at} is of a kind not swept yet")
             }
+            Self::Refused(Refusal::Annulus { outer, inner }) => write!(
+                f,
+                "the inner radii {inner:?} mm are not inside the outer radii {outer:?} mm with a wall between"
+            ),
             Self::Refused(Refusal::ZeroRadii) => write!(f, "both radii of the cone are zero"),
             Self::Refused(Refusal::SelfIntersecting { major, minor }) => write!(
                 f,
