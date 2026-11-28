@@ -784,8 +784,10 @@ pub(crate) fn face_face(
         let kinds = [SurfaceKind::of(sa), SurfaceKind::of(sb)];
         // No closed form here (`General`, or an answer of a kind this stage does not read):
         // the pair is dropped when its faces provably cannot touch, else refused, naming
-        // the first region `apart` could not clear. The general intersector (73 row SM9)
-        // replaces this.
+        // the first region `apart` could not clear. This is the tangent contact's third
+        // tier (BO22: stated facts, then the closed forms, then tracing): SM6b's tracer
+        // answers here, before `apart`, and the general intersector (73 row SM9) after it.
+        // Until then the refusal is `Unsupported(SsiPair)` with the region as its cause.
         let undecided =
             |budget: &mut Budget| -> Result<Option<BooleanError>, BooleanError> {
                 let xa = face_a.bounding_box().ok_or(BooleanError::Defect(

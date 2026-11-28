@@ -24,6 +24,8 @@
 //! - two cylinders with parallel axes, and two cylinders or cones sharing an inscribed
 //!   sphere (Miller-Goldman, two cylinders of one radius whose axes meet among them): the
 //!   off-axis pairs below (research 73 §4.2);
+//! - a sphere and a cylinder or ring torus off its axis, where they touch or stand apart:
+//!   the touch point or nothing (the off-axis pairs below, BO22);
 //! - every other pair: [`Closed::General`] for now (63 SS2).
 //!
 //! # The plane sections
@@ -88,6 +90,8 @@
 //! | two cylinders, axes parallel | two lines, one tangent line, or empty | a tilt moving a point more than the tolerance, or a gap between the tolerance and its slack |
 //! | two cylinders or cones about one inscribed sphere | `a`'s sections by the two planes `L_a = +- L_b` (conics), cut at the branch points where the circles of contact cross, each a `Tangent` point | the axes' distance plus the spheres' radii apart past the tolerance; a section holding a tangent piece or a touch; the circles of contact touching |
 //!
+//! | a sphere and a cylinder or ring torus | the touch point where the centre stands the radii's sum from the spine (or, the sphere inside, their difference), or empty past it | every crossing (a quartic) |
+//!
 //! A curve that runs through a branch point is cut there: the surfaces are tangent at it,
 //! and `n_a x n_b` turns over across it, so each piece runs along its own.
 //!
@@ -101,6 +105,7 @@ mod coaxial;
 mod overlap;
 mod quadric;
 mod section;
+mod touch;
 
 use section::Order;
 
