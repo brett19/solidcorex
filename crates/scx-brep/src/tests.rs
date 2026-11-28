@@ -247,6 +247,57 @@ fn every_write_path_resets_what_it_hands_out() {
 }
 
 #[test]
+fn edit_face_carries_the_cells_it_can() {
+    use crate::boundary::Boundary;
+    use crate::cells::{FaceCell, SurfaceBox};
+    use scx_curve::{Circle2, Curve2};
+    use scx_num::frame::Frame2;
+    use scx_num::units::Length;
+    let sh = sheet();
+    let s = ids(&sh);
+    let (body, _) = sh.draft.finish(&Document::default()).unwrap();
+    // A face no read has boxed: nothing to carry.
+    let mut d = body.edit();
+    d.edit_face(s.face, |_| ()).unwrap();
+    assert!(face_cells_empty(d.tables(), s.face));
+    // A boxed face whose only loop is a point: no loop bounds an area, nothing carries.
+    fill(&body, &s);
+    let mut d = body.edit();
+    d.edit_face(s.face, |_| ()).unwrap();
+    assert!(face_cells_empty(d.tables(), s.face));
+    // A boxed face with a loop the edit keeps: its cells are seeded, nothing filled, and a
+    // read fills them as from nothing.
+    let disc = |r: f64, sense: Sense| {
+        let c = Circle2::new(Frame2::WORLD, Length::from_mm(r), Sense::Forward).unwrap();
+        LoopRecord::new(vec![EdgeUse::new(
+            s.edge,
+            sense,
+            UseGeom::Pcurve {
+                curve: Curve2::Circle(c),
+                interval: Extent1d::new(0.0, std::f64::consts::TAU).unwrap(),
+            },
+        )])
+    };
+    d.edit_face(s.face, |r| r.loops = vec![disc(2.0, Sense::Forward)])
+        .unwrap();
+    let _ = SurfaceBox::of(d.tables().faces.get(s.face).unwrap());
+    d.edit_face(s.face, |r| r.loops.push(disc(1.0, Sense::Reversed)))
+        .unwrap();
+    assert!(d.tables().faces.get(s.face).unwrap().cells.is_seeded());
+    // An edit of a seeded face no read reached seeds it again, from the seed.
+    d.edit_face(s.face, |_| ()).unwrap();
+    let now = d.tables().faces.get(s.face).unwrap();
+    assert!(now.cells.is_seeded());
+    let mut cold = FaceRecord::clone(now);
+    cold.cells.reset();
+    let read = |f: &FaceRecord| format!("{:?} {:?}", SurfaceBox::of(f), Boundary::of(f));
+    assert_eq!(read(now), read(&cold));
+    // `face_mut` still hands out a reset record.
+    d.face_mut(s.face).unwrap();
+    assert!(face_cells_empty(d.tables(), s.face));
+}
+
+#[test]
 fn body_cells_stay_small() {
     let sh = sheet();
     let s = ids(&sh);
@@ -428,8 +479,9 @@ fn record_sizes_stay_small() {
     use core::mem::size_of;
     // A face record is its surface by value plus sides and loops; a use its pcurve plus
     // 16 bytes; a vertex its point plus 8.
-    // The cells add a once-flag and a pointer per cell: 16 bytes each (research 63 §6.9).
-    assert!(size_of::<FaceRecord>() <= size_of::<Surface>() + 32 + 32);
+    // The cells add a once-flag and a pointer per cell: 16 bytes each (research 63 §6.9),
+    // and a pointer to an edit's seed: 8.
+    assert!(size_of::<FaceRecord>() <= size_of::<Surface>() + 32 + 32 + 8);
     assert!(size_of::<EdgeUse>() <= size_of::<UseGeom>() + 24);
     assert!(size_of::<VertexRecord>() <= 32);
     assert!(size_of::<EdgeGeom>() <= size_of::<EdgeShape>() + 24 + 16);

@@ -51,7 +51,7 @@ pub use draft::{Draft, TransformError};
 pub use error::{Absent, TableFull};
 pub use finish::{FinishCause, GeometryCause, StructureCause, Unfinished};
 pub use id::{EdgeId, Entity, EntityKind, FaceId, IdMap, RegionId, ShellId, VertexId};
-pub use pcurve::PcurveWriteError;
+pub use pcurve::{ExactLoop, PcurveWriteError};
 pub use record::{
     EdgeAdj, EdgeGeom, EdgeShape, EdgeUse, FaceRecord, FaceSide, Fin, LoopRecord, RegionRecord,
     ShellRecord, UseGeom, VertexRecord,
