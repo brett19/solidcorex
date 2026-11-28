@@ -28,7 +28,10 @@
 //!   bounded by lines and conics: draft, then each enclosed gap past the file's uncertainty
 //!   raised and recorded ([`Raise`]), exact pcurves, parity and the certified volume sign,
 //!   and the import check. Every other kind is a typed [`BuildError::Pending`] ([`Waits`]).
-//!   Each body is built once; the product tree places it.
+//!   Each body is built once; the product tree places it. A B-spline surface (or a cone or
+//!   torus written with sizes the kinds refuse) that is a plane, cylinder, cone, sphere or
+//!   torus within the body's allowance is built as that quadric, and the proved deviation is
+//!   recorded ([`Recognition`], [`Note::Recognized`]); one that is not stays pending.
 //!
 //! `scx-step` never heals. The raises the build makes to enclosed gaps are recorded
 //! ([`ImportReport::raised`]); gap closing is `scx-stitch`'s and is requested with
@@ -46,7 +49,7 @@ pub mod units;
 
 pub use build::{build, import};
 pub use error::{Pending, StepError};
-pub use import::{BuildError, Built, GeomCause, Import, Note, Unbuilt, Waits};
+pub use import::{BuildError, Built, GeomCause, Import, Note, Recognition, Unbuilt, Waits};
 pub use products::{Instance, Part, PlacedBody, ProductTree, Unplaced, Use, World};
 pub use read::{Imported, ImportedBody, ReadOptions, SolidOrSheet, read};
 pub use report::{AssumedUnits, GapKind, ImportReport, ImportWarning, Raise, SkipReason, Skipped};
