@@ -38,7 +38,6 @@ mod eval;
 pub mod fit;
 #[cfg(test)]
 mod fit_tests;
-#[cfg(test)]
 pub mod iges;
 mod iso;
 mod net;

@@ -2,8 +2,10 @@
 //! Tests of the tensor fits against truth: a bilinear patch, a polynomial surface of the fitted
 //! degrees, a rational cylinder, the data itself, and the Bernstein forms against the surface.
 
+use scx_algo::bernstein::Bernstein2;
 use scx_num::error::ErrorKind;
 use scx_num::extent2d::Extent2d;
+use scx_num::fmath;
 use scx_num::hash::Rng;
 use scx_nurbs::fit::{self, End, FitError, Param};
 use scx_nurbs::{Approach, CompatibleCurves, KnotVector, NurbsError};
@@ -45,7 +47,7 @@ fn poly(a: &[Vec<[f64; 3]>], u: f64, v: f64) -> [f64; 3] {
     let mut out = [0.0; 3];
     for (i, row) in a.iter().enumerate() {
         for (j, c) in row.iter().enumerate() {
-            let f = u.powi(i as i32) * v.powi(j as i32);
+            let f = fmath::powi(u, i as i32) * fmath::powi(v, j as i32);
             for (o, x) in out.iter_mut().zip(c) {
                 *o += x * f;
             }
@@ -228,7 +230,7 @@ fn circles_at_heights_fit_to_the_exact_rational_cylinder() {
                     let got = at(&s, u, w);
                     let want = circle(r, w * h, u);
                     assert!(near(&got, &want, 1e-12), "n {n} q {q}: {got:?} {want:?}");
-                    let radius = got[0].hypot(got[1]);
+                    let radius = fmath::hypot(got[0], got[1]);
                     assert!((radius - r).abs() < 1e-12 * r);
                 }
                 // At each row: the source curve.
@@ -259,7 +261,7 @@ fn ends_hold_the_boundary_derivatives_of_a_polynomial_surface() {
             }
             let falling: f64 = (0..d).map(|m| (b - m) as f64).product();
             for (o, x) in out.iter_mut().zip(c) {
-                *o += x * falling * v.powi((b - d) as i32);
+                *o += x * falling * fmath::powi(v, (b - d) as i32);
             }
         }
         out
@@ -288,7 +290,7 @@ fn ends_hold_the_boundary_derivatives_of_a_polynomial_surface() {
         for r in 0..=p {
             let x = hv(r, v, 0);
             for (o, y) in out.iter_mut().zip(x) {
-                *o += u.powi(r as i32) * y;
+                *o += fmath::powi(u, r as i32) * y;
             }
         }
         out
@@ -332,7 +334,7 @@ fn ends_hold_the_boundary_derivatives_of_a_polynomial_surface() {
             for r in 0..=p {
                 let x = hv(r, 0.0, 1);
                 for (a, y) in o.iter_mut().zip(x) {
-                    *a += 0.4_f64.powi(r as i32) * y;
+                    *a += fmath::powi(0.4_f64, r as i32) * y;
                 }
             }
             o
@@ -346,7 +348,7 @@ fn the_pins_geometry_tests_judged_against_the_data() {
     // `interpolation_hits_points`: a 5 x 4 grid at chord parameters, degrees (3, 2).
     let pts: Vec<[f64; 3]> = (0..5)
         .flat_map(|i| (0..4).map(move |j| (f64::from(i), f64::from(j))))
-        .map(|(i, j)| [i, j, (i * 0.7).sin() + j * j * 0.1])
+        .map(|(i, j)| [i, j, fmath::sin(i * 0.7) + j * j * 0.1])
         .collect();
     let grid = Net::new(5, 4, pts).unwrap();
     let (u, v) = grid_parameters(&grid, Param::ChordLength).unwrap();
@@ -651,8 +653,8 @@ fn bernstein_products_are_the_products_of_the_values() {
     let c = form.coordinates();
     let (du, dv) = (u1 - u0, v1 - v0);
     // Partials of the form, in the unit square, scaled back by the box's widths.
-    let pu: Vec<_> = c.iter().map(|x| x.deriv_u()).collect();
-    let pv: Vec<_> = c.iter().map(|x| x.deriv_v()).collect();
+    let pu: Vec<_> = c.iter().map(Bernstein2::deriv_u).collect();
+    let pv: Vec<_> = c.iter().map(Bernstein2::deriv_v).collect();
     let cross_x = pu[1]
         .mul(&pv[2])
         .unwrap()
