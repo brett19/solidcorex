@@ -21,8 +21,8 @@ use scx_brep::{
 };
 use scx_curve::{Curve, Curve2, Line, Line2};
 use scx_hlr::{
-    BadView, Branch, Exactness, HlrError, OnFace, Silhouette, SilhouetteCurve, Silhouettes,
-    View, Why, prepare, silhouettes,
+    BadView, Branch, Exactness, HlrError, OnFace, Silhouette, SilhouetteCurve, Silhouettes, View,
+    Why, prepare, silhouettes,
 };
 use scx_num::budget::{Budget, Stop};
 use scx_num::error::ErrorKind;
