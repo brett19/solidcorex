@@ -6238,3 +6238,62 @@ insert more. A body whose faces share a surface (`==`) pays only a comparison. N
 ### 49.6 Proposed 04 row
 
 | 11-28 | (For the owner's review) BW8c: `scx_bodyq::faces_on_one_surface` now proves every grown face on its seed's surface (`scx_surface::plane_bound` of the face's box against the seed's plane, `==` passes), closing BW8b's drift: a chain of planes each within `Resolution::approx` of the next stops where the cumulative bound is crossed. A face that fails is a new typed `NotCrossed::Drift { seed, why: NotOneSurface }` (not `Surface(Apart)`: the edge's two faces are within approx, `why` may also be `Crease`/`Opposite` against the seed). Measured one more proof a face (4.4 to 5.4 work units on a 100-face wall). | For: truth over pin, the growth keeps its promise; one proof a face; `merge_faces` already does the same by proving each member against the group's plane. Against: +1 work unit a face; an early stop up to 1.5x by the conservative bound; first seed wins for a face two seeds reach | 74 §49 |
+
+## 50. ST6 as built (11-28)
+
+`scx_stitch::rebase(body, to, cx) -> Result<Rebased, StitchError>` and
+`WarningKind::AccuracyPastResolution` (in `scx-brep`, `#[non_exhaustive]`, so no caller breaks).
+`Rebased { done: Done<NoItems>, report: RebaseReport }`; `RebaseReport { from, to, past, recorded }`.
+
+### 50.1 What it does
+
+1. Two vertices of the body within the coincidence at `to` are `Refused(VerticesWithinCoincidence)`,
+   naming the pair, lower id first. The test is ST1's grid (`points::identify`, one operand), with each
+   vertex's reach `max(accuracy, to.zone)` and the accuracy of an unrecorded vertex read as the old
+   resolution, which is the bound its stamp promised.
+2. Every vertex, edge and face whose accuracy is past `to.zone` is warned. A face's accuracy is
+   derived from its uses' pcurve bounds, so the face is warned for its worst use bound.
+3. An entity with no recorded accuracy that is past `to` gets the old resolution recorded as its
+   accuracy, `Basis::Stated`. For a vertex or edge that is the record; for a face it is each of its
+   uses with no bound. An entity with a recorded accuracy keeps it and its basis.
+4. Nothing else moves. Ids, topology and geometry are kept, so `changes` is empty. The result is
+   finished under `Document::with_resolution(to)`; `cx.doc` is not read, because the stamp is the
+   one thing a rebase changes (09 §3).
+
+### 50.2 Choices, for and against
+
+- **Coarser identifies nothing (74 §4.3 step 8 says "identified by the same rules").** For: in one
+  body the rules say a pair of one operand's vertices within coincidence is `Refused`, so there is
+  nothing left to identify; identification across bodies is `stitch`/`sew`, which the caller runs
+  after. Against: a coarser resolution could close a gap between two edges of one body; but `sew`
+  does that, with its proof, and the rebase would otherwise decide joins under the stitch's
+  refusals.
+- **A stated accuracy for an unrecorded entity.** For: an unrecorded entity says "within the old
+  resolution", a fact that stops being "within" when the stamp moves finer; dropping it would
+  silently claim a tighter body, and keeping it unrecorded would too. Against: `Basis::Stated`
+  reads as "from a file". There is no "inherited" basis; adding one touches `scx-num`, which this
+  task does not. Change if a basis is added.
+- **Coarser keeps recorded accuracies below the new resolution.** For: no information is lost, and
+  a round trip back keeps them. Against: the record is then redundant; harmless.
+- **No `Raise`.** The accuracy is not grown, only recorded; the warning is the signal.
+- **Past, not raised, is never an error** (09 §3: lost accuracy is never a failure).
+
+### 50.3 Tests (`tests/rebase.rs`, 7)
+
+Coarser keeps topology, ids, points, with no warning and empty changes; same resolution is the body
+again; the block's vertices (1 apart) are refused at `to = 1.0` and `5.0`, and fine at `0.999`;
+finer than the stamp warns all 8 vertices, 12 edges and 6 faces and records 1e-5 `Stated` on each
+(26); a recorded 1e-4 vertex is kept with its basis, silent at 1e-3 and warned at 1e-5; the round
+trip 1e-5 to 1e-3 to 1e-5 leaves points, surfaces, edge shapes and ends equal (accuracy 1e-3
+recorded on all 26); determinism of report and work.
+
+### 50.4 Work
+
+Added work is only for rebase; no existing path changed. Per call: one unit per vertex (clearance
+grid, plus the grid's own charges), one per vertex, edge and face in the walk. Block (8 vertices,
+12 edges, 6 faces): 26 units for the walk plus the grid's 8 and its pair tests; the existing
+operations' work is unchanged (the new `WarningKind` variant adds no code to them).
+
+### 50.5 Proposed 04 row
+
+| 11-28 | (For the owner's review) ST6: `scx_stitch::rebase(&Brep, Resolution, &mut Cx) -> Result<Rebased, StitchError>` and `WarningKind::AccuracyPastResolution`. Two vertices within the new coincidence are `Refused(VerticesWithinCoincidence)`; entities whose accuracy is past the new resolution are warned and, where unrecorded, recorded as the old resolution with `Basis::Stated`; ids, topology and geometry are kept (empty changes), and the result is stamped `to`. Coarser identifies nothing in one body (74 §50.2). Against: `Stated` stands in for a missing inherited basis. For: no silent claim of a tighter body. | ST6 |
