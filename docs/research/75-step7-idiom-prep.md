@@ -3551,7 +3551,7 @@ Open questions.
 - The `O(n^2)` search (13.34's open question) is what a tight aim on a long curved edge pays.
 - Held ends: DF1's edges meeting at a vertex of a fitted face may want G1 at the ends.
 
-### 13.38 BO10b as built (11-28)
+### 13.40 BO10b as built (11-28)
 
 Fixes three of BO10's causes at the root (§13.6): wrong-points, seeds, and the contract and
 far-contract NoBox / Undecided cases; most classify and build cases went with them.
