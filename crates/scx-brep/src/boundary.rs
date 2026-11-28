@@ -4,7 +4,8 @@
 //! answers only what the enclosures prove.
 //!
 //! **The pieces.** Each use's pcurve is cut into parts (one for a line, [`PARTS`] for any
-//! other kind), each boxed by one interval evaluation over its parameter range, in the
+//! other kind; a part whose enclosure is not finite halved up to [`SPLITS`] times), each
+//! boxed by one interval evaluation over its parameter range, in the
 //! loop's direction: a pcurve runs over the edge's interval min to max, so a reversed use
 //! walks its parts backwards. Where a use ends and the next starts, a straight gap piece
 //! joins the two endpoints unless both are the same exact point. A point use (a pole, a
@@ -56,6 +57,8 @@ pub enum UvSide {
 
 /// The parts a curved pcurve is cut into for its boxes.
 const PARTS: usize = 4;
+/// The most halvings of a part whose box is not finite: up to 64 pieces per part.
+const SPLITS: u32 = 6;
 /// The further cuts of each part, in turn, until the signed area's sign shows: up to 64
 /// parts per use.
 const AREA_REFINE: [usize; 5] = [1, 2, 4, 8, 16];
@@ -476,14 +479,17 @@ impl Tree {
                     } else {
                         PARTS
                     };
-                    let mut cut: Vec<_> = parts(interval.min(), interval.max(), n).collect();
+                    let mut cut = Vec::new();
+                    for (a, b) in parts(interval.min(), interval.max(), n) {
+                        enclosed(curve, a, b, SPLITS, &mut cut)?;
+                    }
                     if rev {
                         cut.reverse();
                     }
-                    for (a, b) in cut {
+                    for (a, b, bx) in cut {
                         pieces.push(Piece {
                             start: at(curve, if rev { b } else { a })?,
-                            bx: uv_box(curve.point_over(Ivl::new(a, b)))?,
+                            bx,
                             src: Src::Part {
                                 lp: li as u32,
                                 us: ui as u32,
@@ -941,6 +947,30 @@ fn use_ends(u: &crate::record::EdgeUse) -> Option<(P, P)> {
 }
 
 /// The enclosure of `curve` at `t`, `None` unless finite.
+/// `[a, b]` of `curve` as parts with finite boxes, in order, into `out`: a part whose
+/// enclosure is not finite is halved, at most `depth` more times; `None` past that. An
+/// enclosure through a chart's inverse is infinite over a part whose 3-D box meets the
+/// surface's axis (a quarter of a curve round a cone or cylinder can), and a half of it
+/// seldom does.
+fn enclosed(
+    curve: &Curve2,
+    a: f64,
+    b: f64,
+    depth: u32,
+    out: &mut Vec<(f64, f64, Extent2d)>,
+) -> Option<()> {
+    if let Some(bx) = uv_box(curve.point_over(Ivl::new(a, b))) {
+        out.push((a, b, bx));
+        return Some(());
+    }
+    let m = 0.5 * (a + b);
+    if depth == 0 || !(a < m && m < b) {
+        return None;
+    }
+    enclosed(curve, a, m, depth - 1, out)?;
+    enclosed(curve, m, b, depth - 1, out)
+}
+
 fn at(curve: &Curve2, t: f64) -> Option<P> {
     let p = curve.point_over(Ivl::from(t));
     (p.x.is_finite() && p.y.is_finite()).then_some(p)
@@ -1278,6 +1308,70 @@ mod tests {
         assert_eq!(side(&f, 1.0, 2.0), Some(UvSide::Near));
         // The seam is inside the band: one lift is on the boundary, another within.
         assert_eq!(side(&f, 0.0, 1.0), Some(UvSide::Near));
+    }
+
+    #[test]
+    fn a_pcurve_that_encloses_only_in_pieces_is_boxed() {
+        // A band round a cylinder between two rings, each ring's pcurve through the chart's
+        // inverse: a quarter of a ring has a 3-D box reaching the axis, so its uv
+        // enclosure is not finite, and the tree halves it until it is.
+        use std::sync::Arc;
+
+        use scx_curve::{Chart, ChartKind, Circle, Curve, OnChart};
+        use scx_num::vector3d::{Point3, Vec3};
+        let r = Length::from_mm(1.0);
+        let cyl = Cylinder::new(Frame::WORLD, r, Sense::Forward).unwrap();
+        let s = Surface::Cylinder(cyl);
+        let ParamDomain::Periodic { period, .. } = s.domain().u else {
+            panic!("a cylinder is closed round");
+        };
+        let chart = Chart::new(
+            Frame::WORLD,
+            Sense::Forward,
+            ChartKind::Cylinder { radius: r },
+        )
+        .unwrap();
+        let over = Extent1d::new(0.0, TAU).unwrap();
+        let ring = |z: f64| {
+            let at = Frame::new(Point3::new(0.0, 0.0, z), Vec3::Z, Vec3::X).unwrap();
+            let c = Curve::Circle(Circle::new(at, r, Sense::Forward).unwrap());
+            Curve2::OnChart(Arc::new(
+                OnChart::new(
+                    c,
+                    chart,
+                    over,
+                    [Point2::new(0.0, z), Point2::new(period, z)],
+                )
+                .unwrap(),
+            ))
+        };
+        let quarter = ring(0.0).point_over(Ivl::new(0.0, 0.5 * core::f64::consts::PI));
+        assert!(
+            uv_box(quarter).is_none(),
+            "the case needs a quarter that does not enclose"
+        );
+        let pc = |curve: Curve2, sense: Sense| {
+            EdgeUse::new(
+                EdgeId::from_raw(0),
+                sense,
+                UseGeom::Pcurve {
+                    curve,
+                    interval: over,
+                },
+            )
+        };
+        let lp = LoopRecord::new(vec![
+            pc(ring(0.0), Sense::Forward),
+            seg((period, 0.0), (period, 2.0)),
+            pc(ring(2.0), Sense::Reversed),
+            seg((0.0, 2.0), (0.0, 0.0)),
+        ]);
+        let f = face(s, vec![lp]);
+        let b = Boundary::build(&f);
+        let uv = b.uv_box().expect("the band is boxed");
+        assert!(uv.min().y > -0.1 && uv.max().y < 2.1, "{uv:?}");
+        assert_eq!(side(&f, 1.0, 1.0), Some(UvSide::Inside));
+        assert_eq!(side(&f, 1.0, 3.0), Some(UvSide::Outside));
     }
 
     #[test]

@@ -578,6 +578,7 @@ dependencies = [
  "scx-curve",
  "scx-num",
  "scx-nurbs",
+ "scx-nurbs-surface",
  "scx-ssi",
  "scx-surface",
  "scx-testkit",
@@ -661,6 +662,7 @@ name = "scx-make"
 version = "0.1.0"
 dependencies = [
  "scx-algo",
+ "scx-boolean",
  "scx-brep",
  "scx-curve",
  "scx-mass",

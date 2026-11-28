@@ -56,6 +56,7 @@ mod imprint;
 mod imprint_curves;
 mod imprint_op;
 mod intersect;
+mod nary;
 mod pairs;
 mod pinch;
 mod planar;
@@ -69,6 +70,7 @@ pub use given::{Fact, Incidences, boolean_given};
 pub use imprint_curves::{Cut, CutRefusal, CutRegion, CutUnsupported, Imprinted, imprint_curves};
 pub use imprint_op::{Imprint, imprint};
 pub use intersect::intersect;
+pub use nary::boolean_all;
 pub use planar::planar;
 pub use section::{SectionRefusal, SectionUnsupported, face_section, section};
 

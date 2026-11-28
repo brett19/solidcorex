@@ -6,7 +6,9 @@
 //! [`PcurveWriteError::NeedsFit`]: fitting is the fitted writer's (BR9), not this one's.
 //!
 //! What it writes is exact, so every use's `bound` is `None` (63 §6.2: exact kinds carry
-//! no record and no proof). Exact here means within the body's resolution: `pcurve_of`'s
+//! no record and no proof). The one exception is [`Draft::write_pcurves_projecting`]'s
+//! (research 74 §40): a use whose curve stands near the surface but not on it gets its
+//! projection's pcurve, and its bound records the certified gap that leaves. Exact here means within the body's resolution: `pcurve_of`'s
 //! lifting check runs at the approximation tolerance, half the zone, so the check's
 //! sampling (9 parameters; a sinusoidal miss between two of them is at most
 //! `1 / cos(pi / 8)` of the larger sampled one) still leaves the pcurve within the zone
@@ -32,17 +34,23 @@
 //!   nearest the first loop's.
 
 use core::fmt;
+use std::sync::Arc;
 
 use scx_curve::{AngleAxis, AngleLine2, AngleWave2, Curve2, Line2};
+use scx_num::budget::{Budget, Stop};
+use scx_num::cert::{Basis, Cert, Claim, Method, Reads, Recorded};
 use scx_num::domain::UvDomain;
 use scx_num::error::ErrorKind;
 use scx_num::extent1d::Extent1d;
 use scx_num::frame::Sense;
-use scx_num::units::Resolution;
+use scx_num::units::{Accuracy, Length, Resolution};
 use scx_num::vector2d::{Point2, Vec2};
 use scx_num::vector3d::Point3;
 use scx_nurbs::Approach;
-use scx_surface::{PcurveError, Pole, Surface, pcurve_of};
+use scx_surface::{
+    Aim, Bracket, GapError, PcurveError, Pole, Short, Surface, pcurve_edge_gap, pcurve_of,
+    pcurve_of_projection,
+};
 
 use crate::document::Document;
 use crate::draft::Draft;
@@ -130,6 +138,15 @@ pub enum PcurveWriteError {
         /// The use.
         at: usize,
     },
+    /// The gap a projected pcurve leaves from its edge's curve has no finite certified
+    /// bound ([`Draft::write_pcurves_projecting`]): the search was stopped, or ended with
+    /// nothing proved, or the geometry cannot be enclosed.
+    Gap {
+        /// The edge.
+        edge: EdgeId,
+        /// Its cause.
+        cause: GapError,
+    },
 }
 
 impl PcurveWriteError {
@@ -144,6 +161,7 @@ impl PcurveWriteError {
                 ErrorKind::Unsupported
             }
             Self::Pcurve { cause, .. } => cause.kind(),
+            Self::Gap { cause, .. } => cause.kind(),
             Self::Absent(_)
             | Self::Pending { .. }
             | Self::OffSurface { .. }
@@ -169,6 +187,7 @@ impl PcurveWriteError {
             Self::Winds { .. } => "pcurve_loop_winds",
             Self::NoCurveUse { .. } => "pcurve_no_curve_use",
             Self::CollapsedRun { .. } => "pcurve_collapsed_run",
+            Self::Gap { .. } => "pcurve_gap_unbounded",
         }
     }
 }
@@ -204,6 +223,10 @@ impl fmt::Display for PcurveWriteError {
             Self::CollapsedRun { lp, at } => {
                 write!(f, "loop {lp}: use {at} is a second collapsed edge in a row")
             }
+            Self::Gap { edge, cause } => write!(
+                f,
+                "edge {edge}: the gap of its projected pcurve has no certified bound: {cause}"
+            ),
         }
     }
 }
@@ -236,7 +259,7 @@ impl Draft {
         let out = loops
             .iter()
             .enumerate()
-            .map(|(lp, uses)| self.loop_uses(surface, lp, uses, res))
+            .map(|(lp, uses)| self.loop_uses(surface, lp, uses, res, None))
             .collect::<Result<Vec<_>, _>>()?;
         placed(surface, out)
     }
@@ -256,7 +279,7 @@ impl Draft {
         uses: &[(EdgeId, Sense)],
         doc: &Document,
     ) -> Result<ExactLoop, PcurveWriteError> {
-        self.loop_uses(surface, 0, uses, doc.resolution())
+        self.loop_uses(surface, 0, uses, doc.resolution(), None)
     }
 
     /// Writes every use of `face` with its exact pcurve from its edge, as
@@ -295,20 +318,157 @@ impl Draft {
         Ok(())
     }
 
-    /// Loop `lp`'s uses, and the centre of their starts in uv.
+    /// Writes every use of `face` as [`Draft::write_pcurves`] does, except a use whose
+    /// edge's curve has no exact pcurve on the face's surface but stands within `within`
+    /// of it: that one gets the pcurve of the curve's closest-point projection onto the
+    /// surface ([`pcurve_of_projection`]), and its bound records the certified gap the
+    /// pcurve's image leaves from the curve, `|S(p(t)) - C(t)|` (the claim
+    /// [`Claim::PcurveOnSurface`], by interval search, to a width of `1/64` of the zone).
+    /// The face's geometry is not moved. Each such use is returned with its gap, in loop
+    /// order; every other use is exact, its bound `None`, except one written again to the
+    /// same bits, of an edge whose curve is the same bits, which keeps its certified bound
+    /// and is not searched or returned again. A caller that proved the curve
+    /// within `within` of the face (a stitch's coincidence) names that distance; whether a
+    /// gap past the edge's reach is a raise is the caller's to say. All or nothing.
+    ///
+    /// The search runs on `budget`: one that runs out, or meets the precision floor, still
+    /// leaves a certified bracket, and its upper end is what is recorded.
+    ///
+    /// # Errors
+    ///
+    /// As [`Draft::write_pcurves`], and [`PcurveWriteError::Gap`] where a projected use's
+    /// gap has no finite certified bound (`stop` set, nothing proved, or a geometry the
+    /// search cannot enclose). The face is unchanged on error.
+    pub fn write_pcurves_projecting(
+        &mut self,
+        face: FaceId,
+        doc: &Document,
+        within: Length,
+        budget: &mut Budget,
+        stop: &Stop,
+    ) -> Result<Vec<Projected>, PcurveWriteError> {
+        let view = self.face(face).ok_or_else(|| Absent {
+            entity: face.into(),
+        })?;
+        let surface = view.surface().clone();
+        let loops: Vec<Vec<(EdgeId, Sense)>> = view
+            .record()
+            .loops
+            .iter()
+            .map(|l| l.uses.iter().map(|u| (u.edge, u.sense)).collect())
+            .collect();
+        // A use written again to the same bits, of an edge whose curve is the same bits,
+        // keeps its certified bound: the gap is of the same curves.
+        let before: Vec<Vec<Option<Bounded>>> = view
+            .record()
+            .loops
+            .iter()
+            .map(|l| {
+                l.uses
+                    .iter()
+                    .map(|u| {
+                        let b = u.bound.clone()?;
+                        let Some(EdgeShape::Curve { curve, .. }) =
+                            self.edge(u.edge).and_then(super::view::Edge::shape)
+                        else {
+                            return None;
+                        };
+                        Some((u.edge, curve.clone(), u.geom.clone(), b))
+                    })
+                    .collect()
+            })
+            .collect();
+        let res = doc.resolution();
+        let mut flags = Vec::with_capacity(loops.len());
+        let mut alone = Vec::with_capacity(loops.len());
+        for (lp, uses) in loops.iter().enumerate() {
+            let mut l = self.loop_uses(&surface, lp, uses, res, Some(within.mm()))?;
+            flags.push(core::mem::take(&mut l.projected));
+            alone.push(l);
+        }
+        let written = placed(&surface, alone)?;
+        let width = res.zone().mm() / 64.0;
+        let mut out = Vec::new();
+        let mut bounds: Vec<Vec<Option<Arc<Recorded>>>> = Vec::with_capacity(written.len());
+        for ((l, flags), was) in written.iter().zip(&flags).zip(&before) {
+            let mut lb = Vec::with_capacity(l.uses.len());
+            for (i, (u, &projected)) in l.uses.iter().zip(flags).enumerate() {
+                let (
+                    true,
+                    UseGeom::Pcurve {
+                        curve: pc,
+                        interval,
+                    },
+                ) = (projected, &u.geom)
+                else {
+                    lb.push(None);
+                    continue;
+                };
+                let edge = u.edge;
+                let Some(EdgeShape::Curve { curve, .. }) =
+                    self.edge(edge).and_then(super::view::Edge::shape)
+                else {
+                    return Err(PcurveWriteError::Pending { edge });
+                };
+                if let Some(Some((e, c, g, b))) = was.get(i)
+                    && *e == edge
+                    && c == curve
+                    && *g == u.geom
+                {
+                    lb.push(Some(Arc::clone(b)));
+                    continue;
+                }
+                let gap = certified_gap(&surface, pc, curve, interval, width, budget, stop)
+                    .map_err(|cause| PcurveWriteError::Gap { edge, cause })?;
+                let bound = Length::from_mm(gap.upper());
+                let acc = Accuracy::new(bound).ok_or(PcurveWriteError::Gap {
+                    edge,
+                    cause: GapError::NotFinite,
+                })?;
+                lb.push(Some(Arc::new(Recorded {
+                    acc,
+                    basis: Basis::Certified(Cert {
+                        claim: Claim::PcurveOnSurface,
+                        bound,
+                        method: Method::Interval,
+                        reads: Reads::NONE,
+                    }),
+                })));
+                out.push(Projected { edge, gap });
+            }
+            bounds.push(lb);
+        }
+        self.edit_face(face, |rec| {
+            for ((l, w), b) in rec.loops.iter_mut().zip(written).zip(bounds) {
+                for ((u, w), b) in l.uses.iter_mut().zip(w.uses).zip(b) {
+                    u.geom = w.geom;
+                    u.bound = b;
+                }
+            }
+        })
+        .ok_or_else(|| Absent {
+            entity: face.into(),
+        })?;
+        Ok(out)
+    }
+
+    /// Loop `lp`'s uses, and the centre of their starts in uv; with `project`, a use with
+    /// no exact pcurve whose curve stands within that distance (mm) of the surface is
+    /// given its projection's, and marked.
     fn loop_uses(
         &self,
         surface: &Surface,
         lp: usize,
         uses: &[(EdgeId, Sense)],
         res: Resolution,
+        project: Option<f64>,
     ) -> Result<ExactLoop, PcurveWriteError> {
         let zone = res.zone().mm();
         let domain = surface.domain();
         let periods = [domain.u.period(), domain.v.period()];
         let items = uses
             .iter()
-            .map(|&(edge, sense)| self.item(surface, edge, sense, res))
+            .map(|&(edge, sense)| self.item(surface, edge, sense, res, project))
             .collect::<Result<Vec<_>, _>>()?;
         let n = items.len();
         let first = items
@@ -324,7 +484,7 @@ impl Draft {
             let k = (first + j) % n;
             let Some(item) = items.get(k) else { continue };
             let geom = match &item.kind {
-                Kind::Curve { pc, interval } => {
+                Kind::Curve { pc, interval, .. } => {
                     let mut pc = pc.clone();
                     let [start, _] = use_ends(&pc, *interval, item.sense);
                     if let Some((end, budget)) = at {
@@ -354,7 +514,7 @@ impl Draft {
                     let next = (k + 1) % n;
                     let target = match (items.get(next).map(|i| &i.kind), placed.get(next)) {
                         (_, Some(Some((_, [s, _])))) => *s,
-                        (Some(Kind::Curve { pc, interval }), _) => {
+                        (Some(Kind::Curve { pc, interval, .. }), _) => {
                             let nx = items.get(next).map_or(Sense::Forward, |i| i.sense);
                             use_ends(pc, *interval, nx)[0]
                         }
@@ -398,15 +558,24 @@ impl Draft {
         }
         let mut sum = Vec2::ZERO;
         let mut out = Vec::with_capacity(n);
+        let mut projected = Vec::with_capacity(n);
         for (item, p) in items.iter().zip(placed) {
             let Some((geom, [s, _])) = p else { continue };
             sum += Vec2::new(s.x, s.y);
             out.push(EdgeUse::new(item.edge, item.sense, geom));
+            projected.push(matches!(
+                item.kind,
+                Kind::Curve {
+                    projected: true,
+                    ..
+                }
+            ));
         }
         let centre = Point2::new(sum.x / n as f64, sum.y / n as f64);
         Ok(ExactLoop {
             record: LoopRecord::new(out),
             centre,
+            projected,
         })
     }
 
@@ -417,10 +586,10 @@ impl Draft {
         edge: EdgeId,
         sense: Sense,
         res: Resolution,
+        project: Option<f64>,
     ) -> Result<Item, PcurveWriteError> {
         let zone = res.zone().mm();
-        let reach =
-            |r: Option<&scx_num::cert::Recorded>| r.map_or(zone, |r| r.acc.length().mm().max(zone));
+        let reach = |r: Option<&Recorded>| r.map_or(zone, |r| r.acc.length().mm().max(zone));
         let view = self.edge(edge).ok_or_else(|| Absent {
             entity: edge.into(),
         })?;
@@ -438,24 +607,29 @@ impl Draft {
         let (start_budget, end_budget) = (budget(&ends[0]), budget(&ends[1]));
         let kind = match shape {
             EdgeShape::Curve { curve, interval } => {
-                match pcurve_of(curve, surface, *interval, res) {
-                    Ok(pc) => Kind::Curve {
-                        pc,
-                        interval: *interval,
-                    },
-                    Err(PcurveError::NoClosedForm { .. } | PcurveError::Inexact { .. }) => {
-                        return Err(PcurveWriteError::NeedsFit { edge });
+                let interval = *interval;
+                let exact = pcurve_of(curve, surface, interval, res);
+                let (pc, projected) = match (exact, project) {
+                    (Ok(pc), _) => (pc, false),
+                    (
+                        Err(
+                            PcurveError::NoClosedForm { .. }
+                            | PcurveError::Inexact { .. }
+                            | PcurveError::NotOnSurface { .. },
+                        ),
+                        Some(within),
+                    ) => {
+                        let within = Length::from_mm(within);
+                        let pc = pcurve_of_projection(curve, surface, interval, res, within)
+                            .map_err(|cause| refusal(edge, cause, re))?;
+                        (pc, true)
                     }
-                    Err(PcurveError::NotOnSurface { miss, .. }) if miss <= re => {
-                        return Err(PcurveWriteError::NeedsFit { edge });
-                    }
-                    Err(PcurveError::NotOnSurface { at, miss }) => {
-                        return Err(PcurveWriteError::OffSurface { edge, at, miss });
-                    }
-                    Err(PcurveError::CrossesPole { at }) => {
-                        return Err(PcurveWriteError::CrossesPole { edge, at });
-                    }
-                    Err(cause) => return Err(PcurveWriteError::Pcurve { edge, cause }),
+                    (Err(cause), _) => return Err(refusal(edge, cause, re)),
+                };
+                Kind::Curve {
+                    pc,
+                    interval,
+                    projected,
                 }
             }
             EdgeShape::Collapsed => {
@@ -490,10 +664,65 @@ struct Item {
 }
 
 enum Kind {
-    /// An edge with a curve: its pcurve as `pcurve_of` gives it, in the base window.
-    Curve { pc: Curve2, interval: Extent1d },
+    /// An edge with a curve: its pcurve as `pcurve_of` gives it, in the base window, or
+    /// (`projected`) as `pcurve_of_projection` does.
+    Curve {
+        pc: Curve2,
+        interval: Extent1d,
+        projected: bool,
+    },
     /// A collapsed edge, at `pole` when its vertex is one of the surface's.
     Collapsed { pole: Option<Pole> },
+}
+
+/// The writer's refusal for a pcurve cause on `edge`, whose reach is `re`: a curve near
+/// the surface (within `re`) with no exact pcurve needs a fitted one; one farther leaves it.
+fn refusal(edge: EdgeId, cause: PcurveError, re: f64) -> PcurveWriteError {
+    match cause {
+        PcurveError::NoClosedForm { .. } | PcurveError::Inexact { .. } => {
+            PcurveWriteError::NeedsFit { edge }
+        }
+        PcurveError::NotOnSurface { miss, .. } if miss <= re => PcurveWriteError::NeedsFit { edge },
+        PcurveError::NotOnSurface { at, miss } => PcurveWriteError::OffSurface { edge, at, miss },
+        PcurveError::CrossesPole { at } => PcurveWriteError::CrossesPole { edge, at },
+        cause => PcurveWriteError::Pcurve { edge, cause },
+    }
+}
+
+/// The certified gap of a projected pcurve from its edge's curve, to `width`; a search
+/// ended by the budget or the precision floor gives the bracket it reached, which is still
+/// certified, while a stop or a bracket with no finite upper end is the error.
+fn certified_gap(
+    surface: &Surface,
+    pc: &Curve2,
+    curve: &scx_curve::Curve,
+    over: &Extent1d,
+    width: f64,
+    budget: &mut Budget,
+    stop: &Stop,
+) -> Result<Bracket, GapError> {
+    match pcurve_edge_gap(surface, pc, curve, over, Aim::Width(width), budget, stop) {
+        Err(GapError::Undecided {
+            reached,
+            why: Short::Exhausted(_) | Short::Precision,
+        }) if reached.upper().is_finite() => Ok(reached),
+        r => r,
+    }
+}
+
+/// A use's edge, the edge's curve, the use's geometry and its certified bound, as a face
+/// was last written: a rewrite to the same bits keeps the bound.
+type Bounded = (EdgeId, scx_curve::Curve, UseGeom, Arc<Recorded>);
+
+/// A use [`Draft::write_pcurves_projecting`] gave its curve's projection, with the
+/// certified gap its pcurve's image leaves from the curve (mm); its upper end is the use's
+/// recorded bound.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Projected {
+    /// The use's edge.
+    pub edge: EdgeId,
+    /// The gap's certified bracket.
+    pub gap: Bracket,
 }
 
 /// The surface's poles: a sphere's two, a cone's apex, a horn torus's touch on its axis.
@@ -641,6 +870,8 @@ fn pole_segment(
 pub struct ExactLoop {
     record: LoopRecord,
     centre: Point2,
+    /// Which uses (in the record's order) carry a projection's pcurve.
+    projected: Vec<bool>,
 }
 
 impl ExactLoop {
@@ -681,6 +912,7 @@ fn nearest_first(loops: &mut [ExactLoop], domain: &UvDomain) -> Result<(), Pcurv
     for ExactLoop {
         record: LoopRecord { uses },
         centre: c,
+        ..
     } in loops.iter_mut().skip(1)
     {
         let m = whole(c0 - *c, periods);

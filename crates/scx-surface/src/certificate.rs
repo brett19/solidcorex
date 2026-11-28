@@ -137,7 +137,11 @@ fn local_net(net: &[Hb], origin: Point3, axes: [Vec3; 3]) -> Vec<Hb> {
 
 /// The curve's Bezier spans: each its parameter range and its homogeneous control points
 /// (with their errors) in the frame `(origin, axes)`.
-fn curve_spans(c: &NurbsCurve<3>, origin: Point3, axes: [Vec3; 3]) -> Vec<(f64, f64, Vec<Hb>)> {
+pub(crate) fn curve_spans(
+    c: &NurbsCurve<3>,
+    origin: Point3,
+    axes: [Vec3; 3],
+) -> Vec<(f64, f64, Vec<Hb>)> {
     // The weighted points are the curve's own (exact) data: no error yet.
     let hom: Vec<Hb> = match (c.weighted_points(), c.weights()) {
         (Some(wp), Some(w)) => wp

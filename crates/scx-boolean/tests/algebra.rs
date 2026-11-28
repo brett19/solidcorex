@@ -439,175 +439,17 @@ fn doubled(pool: &[(&'static str, Part)]) -> Vec<Part> {
 /// an ignored test (`known_*`) that runs its cases and asserts they pass.
 const KNOWN: &[(&str, &str, &str)] = &[
     ("build", "absorption-intersection", "torus/boxB"),
-    ("build", "associativity-union", "cyl/turned/cone"),
-    ("build", "associativity-union", "sphere/turned/cone"),
-    ("build", "associativity-union", "turned/cone/torus"),
-    ("build", "de-morgan", "sphere/sphereOnFace"),
-    ("build", "de-morgan", "turned/cone"),
-    ("build", "determinism", "difference turned/cone"),
-    ("build", "distributivity", "turned/cyl/cone"),
-    ("build", "distributivity", "turned/sphere/cone"),
-    ("build", "partition", "cone/turned"),
-    ("build", "partition", "sphere/sphereOnFace"),
-    ("build", "partition", "sphereOnFace/sphere"),
-    ("build", "partition", "turned/cone"),
-    ("build", "rigid-motion", "difference cone/turned"),
-    ("build", "rigid-motion", "difference turned/cone"),
-    ("build", "volume-relations", "cone/turned"),
-    ("build", "volume-relations", "turned/cone"),
-    ("classify", "absorption-intersection", "cone/turned"),
-    ("classify", "absorption-intersection", "sphere/sphereOnFace"),
-    ("classify", "absorption-intersection", "sphereOnFace/sphere"),
-    ("classify", "absorption-intersection", "turned/cone"),
-    ("classify", "absorption-union", "cone/turned"),
-    ("classify", "absorption-union", "sphere/sphereOnFace"),
-    ("classify", "absorption-union", "sphereOnFace/sphere"),
-    ("classify", "absorption-union", "turned/cone"),
-    ("classify", "distributivity", "cone/boxA/turned"),
-    ("classify", "distributivity", "turned/boxA/cone"),
-    (
-        "contract-nobox",
-        "associativity-intersection",
-        "boxB/turned/cone",
-    ),
-    (
-        "contract-nobox",
-        "associativity-intersection",
-        "boxC/turned/cone",
-    ),
-    ("contract-nobox", "associativity-union", "boxB/turned/cone"),
-    ("contract-nobox", "associativity-union", "boxC/turned/cone"),
-    (
-        "contract-nobox",
-        "commutativity-intersection",
-        "turned/sphereOnFace",
-    ),
-    (
-        "contract-nobox",
-        "commutativity-union",
-        "turned/sphereOnFace",
-    ),
-    ("contract-nobox", "de-morgan", "turned/sphereOnFace"),
-    ("contract-nobox", "distributivity", "cone/boxB/turned"),
-    ("contract-nobox", "distributivity", "cone/boxC/turned"),
-    ("contract-nobox", "distributivity", "turned/boxB/cone"),
-    ("contract-nobox", "distributivity", "turned/boxC/cone"),
-    (
-        "far-contract-nobox",
-        "rigid-motion",
-        "difference boxB/sphere",
-    ),
-    ("far-contract-nobox", "rigid-motion", "difference cone/boxB"),
-    (
-        "far-contract-nobox",
-        "rigid-motion",
-        "difference sphere/boxB",
-    ),
-    (
-        "far-contract-nobox",
-        "rigid-motion",
-        "difference sphere/turned",
-    ),
-    (
-        "far-contract-nobox",
-        "rigid-motion",
-        "difference turned/sphere",
-    ),
-    (
-        "far-contract-nobox",
-        "rigid-motion",
-        "intersection boxB/sphere",
-    ),
-    (
-        "far-contract-nobox",
-        "rigid-motion",
-        "intersection sphere/turned",
-    ),
-    ("far-contract-nobox", "rigid-motion", "union boxB/cone"),
-    ("far-contract-nobox", "rigid-motion", "union boxB/sphere"),
-    ("far-contract-nobox", "rigid-motion", "union sphere/turned"),
-    ("contract-nobox", "volume-relations", "sphereOnFace/turned"),
-    ("contract-nobox", "volume-relations", "turned/sphereOnFace"),
-    (
-        "contract-undecided",
-        "associativity-intersection",
-        "boxA/turned/cone",
-    ),
-    (
-        "contract-undecided",
-        "commutativity-intersection",
-        "sphere/sphereOnFace",
-    ),
-    (
-        "contract-undecided",
-        "commutativity-intersection",
-        "turned/cone",
-    ),
-    (
-        "contract-undecided",
-        "commutativity-union",
-        "sphere/sphereOnFace",
-    ),
-    ("contract-undecided", "commutativity-union", "turned/cone"),
-    ("contract-undecided", "distributivity", "boxA/turned/cone"),
-    (
-        "far-contract-undecided",
-        "rigid-motion",
-        "difference boxA/sphere",
-    ),
-    (
-        "far-contract-undecided",
-        "rigid-motion",
-        "difference boxB/cone",
-    ),
-    (
-        "far-contract-undecided",
-        "rigid-motion",
-        "difference sphere/boxA",
-    ),
-    (
-        "far-contract-undecided",
-        "rigid-motion",
-        "intersection boxA/sphere",
-    ),
-    (
-        "far-contract-undecided",
-        "rigid-motion",
-        "intersection boxB/cone",
-    ),
-    (
-        "far-contract-undecided",
-        "rigid-motion",
-        "intersection turned/cone",
-    ),
-    (
-        "far-contract-undecided",
-        "rigid-motion",
-        "union boxA/sphere",
-    ),
-    (
-        "far-contract-undecided",
-        "rigid-motion",
-        "union turned/cone",
-    ),
-    (
-        "contract-undecided",
-        "volume-relations",
-        "sphere/sphereOnFace",
-    ),
-    (
-        "contract-undecided",
-        "volume-relations",
-        "sphereOnFace/sphere",
-    ),
     ("loops", "absorption-intersection", "cone/boxC"),
     ("loops", "absorption-intersection", "cyl/boxB"),
     ("loops", "absorption-intersection", "cyl/flush"),
+    ("loops", "absorption-intersection", "sphereOnFace/sphere"),
     ("loops", "absorption-intersection", "torus/flush"),
     ("loops", "absorption-union", "cone/boxC"),
     ("loops", "absorption-union", "cyl/flush"),
     ("loops", "absorption-union", "sphere/abut"),
+    ("loops", "absorption-union", "sphereOnFace/sphere"),
     ("loops", "distributivity", "cone/boxA/boxC"),
+    ("loops", "distributivity", "cone/boxC/turned"),
     ("loops", "distributivity", "cyl/boxA/turned"),
     ("loops", "distributivity", "cyl/boxB/turned"),
     ("loops", "distributivity", "cyl/boxC/turned"),
@@ -615,6 +457,7 @@ const KNOWN: &[(&str, &str, &str)] = &[
     ("loops", "partition", "cyl/boxB"),
     ("loops", "partition", "cyl/flush"),
     ("loops", "partition", "sphere/abut"),
+    ("loops", "partition", "sphereOnFace/sphere"),
     ("loops", "partition", "torus/flush"),
     ("loosespan", "absorption-union", "cyl/boxB"),
     ("loosespan", "absorption-union", "torus/boxB"),
@@ -626,61 +469,12 @@ const KNOWN: &[(&str, &str, &str)] = &[
     ("loosespan", "rigid-motion", "intersection boxB/torus"),
     ("loosespan", "rigid-motion", "union boxB/torus"),
     ("piece", "partition", "boxA/cone"),
-    ("seeds", "absorption-intersection", "abut/sphereOnFace"),
-    ("seeds", "absorption-intersection", "boxA/sphereOnFace"),
-    ("seeds", "absorption-intersection", "sphereOnFace/abut"),
-    ("seeds", "absorption-intersection", "sphereOnFace/boxA"),
-    ("seeds", "absorption-union", "abut/sphereOnFace"),
-    ("seeds", "absorption-union", "boxA/sphereOnFace"),
-    ("seeds", "absorption-union", "sphereOnFace/abut"),
-    ("seeds", "absorption-union", "sphereOnFace/boxA"),
-    ("seeds", "commutativity-intersection", "abut/sphereOnFace"),
-    ("seeds", "commutativity-intersection", "boxA/sphereOnFace"),
-    ("seeds", "commutativity-union", "abut/sphereOnFace"),
-    ("seeds", "commutativity-union", "boxA/sphereOnFace"),
-    ("seeds", "de-morgan", "abut/sphereOnFace"),
-    ("seeds", "de-morgan", "boxA/sphereOnFace"),
-    ("seeds", "determinism", "difference abut/sphereOnFace"),
-    ("seeds", "determinism", "difference boxA/sphereOnFace"),
-    ("seeds", "determinism", "intersection abut/sphereOnFace"),
-    ("seeds", "determinism", "intersection boxA/sphereOnFace"),
-    ("seeds", "determinism", "union abut/sphereOnFace"),
-    ("seeds", "determinism", "union boxA/sphereOnFace"),
-    ("seeds", "partition", "abut/sphereOnFace"),
-    ("seeds", "partition", "boxA/sphereOnFace"),
-    ("seeds", "partition", "sphereOnFace/abut"),
-    ("seeds", "partition", "sphereOnFace/boxA"),
-    ("seeds", "volume-relations", "abut/sphereOnFace"),
-    ("seeds", "volume-relations", "boxA/sphereOnFace"),
-    ("seeds", "volume-relations", "sphereOnFace/abut"),
-    ("seeds", "volume-relations", "sphereOnFace/boxA"),
     ("uvundecided", "absorption-intersection", "boxB/torus"),
     ("uvundecided", "absorption-intersection", "sphere/abut"),
     ("uvundecided", "distributivity", "boxA/boxB/cyl"),
     ("uvundecided", "distributivity", "boxB/boxA/cyl"),
     ("uvundecided", "distributivity", "cyl/boxA/boxB"),
     ("uvundecided", "partition", "torus/boxB"),
-    (
-        "wrong-points",
-        "associativity-intersection",
-        "cyl/turned/cone",
-    ),
-    (
-        "wrong-points",
-        "associativity-intersection",
-        "sphere/turned/cone",
-    ),
-    (
-        "wrong-points",
-        "associativity-intersection",
-        "turned/cone/torus",
-    ),
-    ("wrong-points", "associativity-union", "boxA/turned/cone"),
-    ("wrong-points", "distributivity", "boxB/turned/cone"),
-    ("wrong-points", "distributivity", "boxC/turned/cone"),
-    ("wrong-points", "distributivity", "cyl/turned/cone"),
-    ("wrong-points", "distributivity", "sphere/turned/cone"),
-    ("wrong-points", "distributivity", "torus/turned/cone"),
 ];
 
 fn known_cause(c: &Case) -> Option<&'static str> {
@@ -1399,39 +1193,9 @@ const ALL_LAWS: &[fn() -> Vec<Case>] = &[
 ];
 
 #[test]
-#[ignore = "BO10b: Defect(Build) on rotated block minus cone, either order"]
+#[ignore = "BO10b: Defect(Build) on a torus against a box's union with it"]
 fn known_build() {
     run_cause("build");
-}
-
-#[test]
-#[ignore = "BO10b: Defect(Classify) on cone against rotated block, and sphere against sphere"]
-fn known_classify() {
-    run_cause("classify");
-}
-
-#[test]
-#[ignore = "BO10b: contract Mass(Unsupported(NoBox)): a face of the result has no box (sphere or cone against rotated block)"]
-fn known_contract_nobox() {
-    run_cause("contract-nobox");
-}
-
-#[test]
-#[ignore = "BO10b: contract Undecided (region proof) on a result with sphere, cone or rotated block"]
-fn known_contract_undecided() {
-    run_cause("contract-undecided");
-}
-
-#[test]
-#[ignore = "BO10b: at a 1e6 origin: contract Mass(Unsupported(NoBox)) on box against sphere or cone (passes near the origin)"]
-fn known_far_contract_nobox() {
-    run_cause("far-contract-nobox");
-}
-
-#[test]
-#[ignore = "BO10b: at a 1e6 origin: contract Undecided on boxA/boxB against sphere, cone (passes near the origin)"]
-fn known_far_contract_undecided() {
-    run_cause("far-contract-undecided");
 }
 
 #[test]
@@ -1453,19 +1217,7 @@ fn known_piece() {
 }
 
 #[test]
-#[ignore = "BO10b: Defect(Seeds) on a sphere whose centre is on a box face plane (great circle in a face)"]
-fn known_seeds() {
-    run_cause("seeds");
-}
-
-#[test]
 #[ignore = "BO10b: Defect(UvUndecided) on a box meeting a cylinder, sphere or torus"]
 fn known_uvundecided() {
     run_cause("uvundecided");
-}
-
-#[test]
-#[ignore = "BO10b: result classifies points the oracle says are inside as outside (wrong geometry, no error): I(x, U(turned, cone)) and I(I(turned, cone), torus)"]
-fn known_wrong_points() {
-    run_cause("wrong-points");
 }

@@ -100,6 +100,11 @@ pub(crate) fn classify(
             met.insert(e.id());
             continue;
         }
+        // A collapsed edge (a sphere's pole) is a point: the pieces round it meet there
+        // alone, and a cut through the pole leaves pieces of either class round it.
+        if matches!(e.shape(), Some(EdgeShape::Collapsed)) {
+            continue;
+        }
         let mut fins = e.fins();
         if let Some(f0) = fins.next() {
             for f in fins {

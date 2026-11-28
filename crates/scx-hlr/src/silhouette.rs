@@ -386,7 +386,7 @@ impl Run<'_, '_> {
         };
         let mut out = Vec::with_capacity(candidates.len());
         for cand in candidates {
-            let on_face = self.trim(&cand, &rims, &uv, &fbox)?;
+            let on_face = self.trim(&cand, &rims, &uv, &fbox, tol.near(None))?;
             // A candidate wholly off the face is not one of its silhouettes.
             if matches!(&on_face, OnFace::Proved(p) if p.is_empty()) {
                 continue;
@@ -401,13 +401,16 @@ impl Run<'_, '_> {
         Ok(Ok(out))
     }
 
-    /// The part of `cand` on the face.
+    /// The part of `cand` on the face. A point of `cand` on the face lies within `near` of
+    /// the face's surface; one farther off is off the face, even where the surface's foot
+    /// lies in its domain (a NURBS patch's foot is clamped to its edge).
     fn trim(
         &mut self,
         cand: &Candidate,
         rims: &[Rim<'_>],
         uv: &Extent2d,
         fbox: &Extent3d,
+        near: f64,
     ) -> Result<OnFace, HlrError> {
         let splits = match &cand.splitter {
             Splitter::Found(found) => found.clone(),
@@ -433,6 +436,8 @@ impl Run<'_, '_> {
                 .map_err(|e| HlrError::surface(id, e))?;
             Ok(match inv {
                 Inversion::Outside(_) => Some(false),
+                Inversion::Inside(foot) if foot.distance.is_nan() => None,
+                Inversion::Inside(foot) if foot.distance > near => Some(false),
                 Inversion::Inside(foot) => match face.contains_uv(foot.at) {
                     Some(UvSide::Inside | UvSide::Near) => Some(true),
                     Some(UvSide::Outside) => Some(false),
@@ -535,7 +540,7 @@ pub(crate) fn ruled_or_round(
 
 /// Every place where `rim` meets the plane of `frame`: the crossings of a boundary edge
 /// with a plane that cuts the face's surface in the curve of interest. `Undecided` for an
-/// edge `intersect_curve` cannot take (a NURBS curve).
+/// edge `intersect_curve` cannot take or decide (a NURBS root it cannot certify).
 pub(crate) fn plane_hits(
     id: FaceId,
     rim: &Rim<'_>,
@@ -554,7 +559,9 @@ pub(crate) fn plane_hits(
     })?;
     match intersect_curve(rim.curve, &rim.interval, &plane, &se, res, budget, stop) {
         Ok(h) => Ok(Ok(h)),
-        Err(SurfaceError::NurbsIntersection) => Ok(Err(Undecided::NurbsEdge { edge: rim.edge })),
+        Err(SurfaceError::NurbsIntersection | SurfaceError::Undecided { .. }) => {
+            Ok(Err(Undecided::NurbsEdge { edge: rim.edge }))
+        }
         Err(e) => Err(HlrError::surface(id, e)),
     }
 }
