@@ -2813,7 +2813,7 @@ with a throwaway timer that was not committed.
 API (all `Result<_, SurfaceFitError>`):
 - `interpolate(&Net<[f64; D]>, u, v, (p, q))` and `interpolate_on(grid, &ku, &kv, u, v)`: the surface through a grid at given parameters (row `i` of the net at `u[i]`, column `j` at `v[j]`), knots by averaging or given. Rows (along u) are fitted by FT2 into `CompatibleCurves`, then their control columns along v.
 - `interpolate_rows(&CompatibleCurves<D>, v, degree, &Edge, &Edge)` and `interpolate_rows_on(.., &kv, ..)`: skinning with given parameters, the curves being CN1's. Rational rows are fitted in homogeneous space (`w P` and `w`, two solves per column); the surface passes through the rows and is rational.
-- `Edge<D>` is `Point` or `Held(Vec<End<D>>)`: one FT2 `End` per control point of a row, a derivative of that control column in v, all of one order (G1/G2/G3 boundary). Refused for rational rows.
+- `Edge<D>` is `Point` or `Held(Vec<End<D>>)`: one FT2 `End` per control point of a row, a derivative of that control column in v, all of one order (G1/G2/G3 boundary). Refused for rational rows (lifted by CN4, §13.28, which adds `Edge::Homogeneous` and drops `RationalEnds`).
 - `least_squares(grid, u, v, (p, q), (nu, nv))`, `least_squares_on`, `least_squares_rows`, `least_squares_rows_on`: knots by `approximation`, corners held (the end points of every line are fixed).
 - `grid_parameters(grid, Param) -> (u, v)`: FT2's `parameters` per line, averaged over the lines (lines with all points equal left out).
 - `Edge`, `SurfaceFitError::{Fit { axis, cause }, Curves, Surface, EdgeCount, EdgeOrders, RationalEnds, Defect}` with `kind()` and `name()`; the frames inherit their cause's kind. Nothing is snapped, clamped or retried.
@@ -2822,7 +2822,7 @@ API (all `Result<_, SurfaceFitError>`):
 Decisions.
 - **Separable two-pass fit, not a tensor system.** For: linear in the grid, one code path with FT2, the same numbers as fitting each curve. Against: the least-squares result is the separable one with the four boundary curves fitted to the boundary data (the pin's), not the global minimum with corners only held; for exact data on the knot space they agree.
 - **Ends only on the row fit (`Edge`), not on a grid.** The pin's first-derivatives-at-every-point surface and the twist they need are CN4's with the boundary conditions. For: no guessed twist. Against: a grid with prescribed boundary slopes needs the caller to fit the derivative curve itself.
-- **Derivative ends on rational rows are refused** (`RationalEnds`) rather than interpreted in homogeneous space. For: no meaning invented. Against: rational skins with tangent ends wait for CN4.
+- **Derivative ends on rational rows are refused** (`RationalEnds`) rather than interpreted in homogeneous space. For: no meaning invented. Against: rational skins with tangent ends wait for CN4. (Lifted by CN4, §13.28.)
 - **A fitted weight that is not positive is `Surface(BadWeights)`**, not clamped (the pin clamps weights to `[1e-3, 100]`). Test: weights 1, .01, 1, .01, 1 at five rows.
 - **Bernstein through `restrict`.** For: exact, one code path, rational for free. Against: `restrict` copies the whole surface per call, so all spans of a large surface cost `O(spans * net)`; a Bezier decomposition in one pass is the follow-up if MK10 loops over every span (scx-surface's own patch builder already does one).
 - **Not ported:** `func_interp`'s own type (a `D = 1` grid does it), weighted surface fits, closed surfaces, per-point first derivatives, the pin's `i64` count arithmetic and its three overflow tests (they assert typed refusals of impossible counts; counts here are `usize` lengths of the data and cannot overflow a signed index).
@@ -2830,3 +2830,51 @@ Decisions.
 Work (release, throwaway timer; degree (3, 3), square grids): interpolation of an `n x n` grid is `2n` banded solves of size `n` (`n` along u, `n` along v; `4n` rational), `n` = 20/40/80/160/320/640: 374/361/350/203/193/183 ns per grid point (150 us to 75 ms total), so linear in the grid. Least squares to a net of `n/4`: `n` solves of `n` rows by `n/4` unknowns then `n/4` of `n` by `n/4`; 332/365/408/347/445/706 ns per point; the rise at 640 is the column gather over a 10 MB grid, not the solves (per-row work is `O(p^2)`).
 
 Tests (`fit_tests`, 12; truth is a closed form or the data): a bilinear patch from 4 corners, degrees (1,1), and from 5x4 and 7x9 uneven grids at degrees 1-4 x 1-3, at the data to `1e-12` and at 100 random parameters between to `1e-11`; random polynomial surfaces of degree `(p, q)`, p, q in 1-4, interpolated and least-squared (net sizes with and without interior knots, 3x oversampled) match at 200 parameters to `1e-9` / `1e-8`; circles (the 9-point rational quadratic) at 2, 4 and 7 uneven heights, v-degree 1-3, interpolated and least-squared, equal the closed-form cylinder at 300 parameters to `1e-12`, radius `r` to `1e-12 r`, rows equal the source circles; Held ends of order 1 and 2 on a bicubic reproduce it and its end derivative; the pin's `interpolation_hits_points` (5x4 chord grid, degrees (3,2)), `approximation_of_plane_is_exact` (9x7, net 5x4), `function_interpolation` (scalar grid) and `params_uniform_and_chord`, with its refusals (wrong knot count, net larger than the data); random spline samples interpolate back; typed refusals with unchanged inputs; the non-positive weight; Bernstein forms equal the surface on every span and an inner box of a polynomial and a rational surface (1e-11), the form of a cross product equals the cross of finite-difference partials, a form's `restrict` equals the form over the smaller box, and the interior, outside and empty refusals. Removed: none. The pin's three `huge_*` and `oversized_degrees` tests are not ported (above).
+
+### 13.28 CN4 as built (11-28)
+
+`scx_nurbs_surface::skin` (77 §4.3, row CN4; CN3's `fit::interpolate_rows`, FT2's `interpolate_on` and `averaging`, FT1's `deviation::{distance, interpolation_bound}` reused).
+
+API:
+- `skin(&CompatibleCurves<D>, params, degree, &Skin<D>) -> Result<Skinned<D>, SkinError>`; `Skinned { surface, through }`, the sections being the surface's `u` rows at `params` along `v`.
+- `Skin::Open { start: Edge<D>, end: Edge<D> }` (CN3's ends) and `Skin::Closed { coincidence: f64 }`; `MAX_CLOSED_DEGREE` = 7.
+- `SkinError::{Fit(SurfaceFitError), NotClosed { gap, coincidence }, Coincidence { value }, TooFewSections { count, needed }, ClosedDegree { degree, most }, Seam, Gap(DeviationError), Through(DeviationError), WeightsLost, Defect { why }}` with `kind()` and `name()`; the frames inherit their cause's kind.
+- `fit::Edge` gains `Homogeneous { points: Vec<End<D>>, weights: Vec<End<1>> }`; `SurfaceFitError::RationalEnds` is gone.
+
+Decisions.
+- **`through` is certified per control column.** `S(u, v_k) - C_k(u) = sum_i N_i(u) (X_i(v_k) - P_ki)` with `X_i` the curve of control column `i`; the basis is a partition of unity, so the largest FT1 `interpolation_bound` over the columns bounds the miss for every `u`. Rational skins bound the homogeneous columns (`dA`) and the weight columns (`dW`) and divide: `(dA + R dW) / (W_min - dW)`, with `R` the sections' reach and `W_min` their least weight, `WeightsLost` if the denominator is not positive. For: exact reasoning, FT1's rounding model, and no sampling. Against: it bounds the control columns, not the surface, so it can be larger than the true miss (rounding is all it measures for exact interpolation, 1e-14 to 1e-12 in the tests). Its cost is below.
+- **Rational derivative ends lifted (CN3's `RationalEnds` refusal dropped).** On rational rows `Edge::Held(D_i)` means the boundary derivative is the rational curve of control points `D_i` on the row's own weights: the numerator's end is held at `w_i D_i` and the weights' ends at zero, so `S_v = sum N_i w_i D_i / sum N_i w_i` exactly (and the same for the second and third orders, since `W_v = W_vv = 0`). `Edge::Homogeneous` holds the homogeneous derivatives themselves (the pin's `create_skin_srf_boundary_derivs` meaning): it is what a rational neighbour's net gives across an edge. Polynomial rows under `Homogeneous` get unit weights, so the result is rational. For: both meanings are exact and documented. Held keeps CN3's polynomial meaning unchanged, and only the rational meaning is new. Against: Held cannot express a moving weight. Adversarial check: a caller who passes affine tangents on rational rows and expects the pin's homogeneous meaning gets a different surface, so the two are separate variants with different names, not one variant read two ways.
+- **Per-point first derivatives and twist not lifted.** No 77 row needs them (MK12's ends are `Edge`s), and a guessed twist is the failing default 75 §1 forbids. Against: a grid with prescribed slopes still needs the caller to fit the derivative curves.
+- **`Skin::Closed { coincidence }` carries the coincidence.** This deviates from 77's bare `Closed`. Layer 2 has no document tolerance to read, and R5 says the caller decides. The gap is FT1's certified `distance` of the first and last section. Bitwise-equal sections are 0 apart without it, since the certified bound carries about 3e-14 of rounding on unit data. A gap above the coincidence is `NotClosed { gap, coincidence }`, never a silent open skin. Within it, the last section is replaced by the first bit for bit, and `through` adds the gap. `f64`, not `Length`: the nurbs crates are unitless.
+- **Closed is `C^(q-1)` across the seam, not the pin's C1.** For `r = q - 1`, `a = ceil(r/2)` derivatives are held at the start and `b = floor(r/2)` at the end on averaging knots. Both are the unknown seam derivatives `d_1..d_a`, and they are fixed by the `a` exact conditions `X^(k)(v_m) = X^(k)(v_0)` for `k = b+1..=r`. Superposition gives the solution: one base solve per column, plus `a` one-dimensional unit responses computed once, whose `a x a` residual matrix is inverted once with partial pivoting (`Seam` if it is singular). The last control value is then set to the first, so the seam's rows are equal bit for bit. For: the same smoothness as at every simple knot, no estimated derivatives (the pin's comes from a shifted interpolation), and the cost of an open skin. Against: the knots are the open averaging knots, not periodic ones, so the seam span is clamped (multiplicity `q + 1` at both ends), which is a seam in the knot vector though not in the shape. A periodic knot vector would need a cyclic banded solver that FT2 lacks.
+- **Not ported:** the pin's `knot_tol` snapping (CN1's curves are compatible exactly), its weight clamp to `[1e-3, 100]` (a weight that is not positive is refused), its in-place mutation of the input curves, and its `dir` flag (`NurbsSurface::swapped` turns a skin).
+
+Work (release, throwaway timer, server2; `n` control points per section, `m` sections):
+
+| sections | `interpolate_rows` | open skin | closed skin |
+|---|---|---|---|
+| poly n 8 m 16 q 3 | 13.2 us | 38.8 us (+193%) | 43.9 us |
+| poly n 32 m 64 q 3 | 181 us | 592 us (+227%) | 611 us |
+| poly n 128 m 64 q 5 | 1.17 ms | 3.93 ms (+235%) | 4.04 ms |
+| rational circles m 128 q 3 | 199 us | 665 us (+235%) | - |
+
+- The added work is the certificate: one `interpolation_bound` per control column (two for rational). It costs 1.8 to 2.4 times the fit, because each of those calls builds a curve and FT1's net and evaluates every parameter by de Boor.
+- The closed seam adds 1 to 20% over the open skin. That is the gap's `distance`, `a` one-dimensional solves and an `a x a` back substitution per column.
+- A shared-basis bound over many columns on one knot vector (one basis evaluation per parameter, the rounding model unchanged) would take most of the certificate's cost away. It is the follow-up if MK10's lofts make skins hot.
+- Knots added against the pin: none. The `v` knots are averaging knots on the given parameters (the pin's), and `u` is CN1's exact union.
+
+Tests (`skin_tests`, 13; truth is a closed form):
+- Equal circles at 2, 4 and 7 heights on degree 1 give the cylinder.
+- A radius linear in height gives the cone at degrees 1 to 3.
+- Radii `1 + z/2 - z^2/5` at `z = 0, 1, 3` on degree 2 give the surface of revolution of that law. So do five sections at degrees 2 and 3.
+- These tests hold to `1e-12` at 400 random points, with `through` at least the sampled miss and at most `1e-11`.
+- A polynomial ring of 9 sections at degrees 1 to 5 and a torus of 13 rational sections at degrees 1 to 7 are closed: the seam rows are bitwise equal, and every column's derivatives up to `q - 1` agree across the seam to `1e-9` relative.
+- A ring whose last section is lifted by `1e-10` is accepted within `1e-9`, and `through` covers the miss.
+- Lifted by `1e-6` or `0.5` against a coincidence of `1e-7`, it is refused `NotClosed` with a gap in `[h, h + 1e-13]`.
+- Rational `Held` tangents `(c x_i, c y_i, h)` on two circles at degree 3 give the cone, and `c = 0` gives the cylinder.
+- A `Homogeneous` quarter-circle derivative on two polynomial segments gives the rational quarter cylinder (`|xy| = 1` to `1e-14`).
+- `Homogeneous` with zero weight derivatives equals `Held` on polynomial rows.
+- Ports of the pin's `srf_adv` cases, judged against the closed form: `skins` (the lines give the bilinear patch, and `S(1, 1) = (1, 0.3, 3)`), `interpolates_cross_sections`, `derivative_strips_add_rows` (6 columns, with the tangent held), and `rejects_bad_input` (degree 5 on 4 sections, and a wrong parameter count).
+- One test checks the typed refusals and that the names are unique.
+
+Removed, on purpose: the `RationalEnds` assertion in `fit_tests::refusals_are_typed_and_leave_the_inputs`. It proved that derivative ends on rational rows were refused. It is now a success assertion (the result is a rational surface), and `skin_tests` checks the meaning.
