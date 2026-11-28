@@ -33,6 +33,7 @@ mod cylinder;
 mod error;
 mod extrude;
 mod frames;
+pub mod loft;
 mod prism;
 mod radial;
 mod sheet;
