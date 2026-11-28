@@ -14,6 +14,7 @@ use scx_surface::{SurfaceError, SurfaceKind};
 
 use crate::given::Fact;
 use crate::imprint_curves::{CutRefusal, CutUnsupported};
+use crate::section::{SectionRefusal, SectionUnsupported};
 
 /// Why a Boolean did not finish.
 ///
@@ -80,6 +81,9 @@ pub enum BooleanRefusal {
     /// Curves given to [`imprint_curves`](crate::imprint_curves) that cannot be imprinted on
     /// the face.
     Cut(CutRefusal),
+    /// A section ([`section`](crate::section), [`face_section`](crate::face_section)) asked
+    /// of a face the body does not have.
+    Section(SectionRefusal),
 }
 
 /// What this method does not answer yet.
@@ -139,6 +143,16 @@ pub enum BooleanUnsupported {
         /// The result's edge, or the operand's entity the classification met.
         at: Entity,
     },
+    /// A face of a horn torus that the other operand cuts: its pole is one vertex with a
+    /// collapsed edge at each end of the face's `v` range (two lobes meeting), and the cut
+    /// face's trace keeps one collapsed edge per vertex. The trace would need the vertex's
+    /// star in two sheets of the face's uv.
+    HornPole {
+        /// The operand.
+        operand: Operand,
+        /// The face.
+        face: FaceId,
+    },
     /// An edge of a planar Boolean's operand that is neither a line nor a circle.
     PlanarEdge {
         /// The operand.
@@ -153,6 +167,9 @@ pub enum BooleanUnsupported {
     /// Curves given to [`imprint_curves`](crate::imprint_curves) that wait for the fitter or
     /// for crossings on curved faces.
     Cut(CutUnsupported),
+    /// A section ([`section`](crate::section), [`face_section`](crate::face_section)) this
+    /// method does not answer yet.
+    Section(SectionUnsupported),
     /// Two or more of the result's surfaces enclose each other in a way the shell
     /// placement does not decide: more than one outer surface with a cavity among them.
     Nesting,
@@ -306,12 +323,15 @@ impl BooleanError {
             Self::Refused(BooleanRefusal::FalseFact { .. }) => "false_fact",
             Self::Refused(BooleanRefusal::Cut(_)) => "cut_refused",
             Self::Unsupported(BooleanUnsupported::Cut(_)) => "cut_unsupported",
+            Self::Refused(BooleanRefusal::Section(_)) => "section_refused",
+            Self::Unsupported(BooleanUnsupported::Section(_)) => "section_unsupported",
             Self::Unsupported(BooleanUnsupported::Nurbs { .. }) => "nurbs",
             Self::Unsupported(BooleanUnsupported::Chain { .. }) => "chain",
             Self::Unsupported(BooleanUnsupported::SsiPair { .. }) => "ssi_pair",
             Self::Unsupported(BooleanUnsupported::NonManifold { .. }) => "non_manifold",
             Self::Unsupported(BooleanUnsupported::Nesting) => "nesting",
             Self::Unsupported(BooleanUnsupported::Pcurve { .. }) => "no_exact_pcurve",
+            Self::Unsupported(BooleanUnsupported::HornPole { .. }) => "horn_pole",
             Self::Exhausted { .. } => "exhausted",
             Self::Cancelled => "cancelled",
             Self::Defect(BooleanDefect::NoFaceBox { .. }) => "no_face_box",
@@ -338,10 +358,12 @@ impl BooleanError {
         match e {
             SurfaceError::Exhausted(x) => Self::of_budget(x),
             SurfaceError::Stopped => Self::Cancelled,
-            SurfaceError::NurbsIntersection => Self::Unsupported(BooleanUnsupported::Nurbs {
-                operand,
-                at: Entity::Face(face),
-            }),
+            SurfaceError::NurbsIntersection | SurfaceError::Undecided { .. } => {
+                Self::Unsupported(BooleanUnsupported::Nurbs {
+                    operand,
+                    at: Entity::Face(face),
+                })
+            }
             _ => Self::Defect(BooleanDefect::Surface { operand, face }),
         }
     }
@@ -421,6 +443,24 @@ impl fmt::Display for BooleanError {
                     write!(f, "curve {i} is neither a line nor a circle")
                 }
             },
+            Self::Refused(BooleanRefusal::Section(SectionRefusal::NoFace(face))) => {
+                write!(f, "{face} is not a face of the body")
+            }
+            Self::Unsupported(BooleanUnsupported::Section(c)) => match c {
+                SectionUnsupported::Surface(kind) => {
+                    write!(f, "a section by a {kind} is not answered yet")
+                }
+                SectionUnsupported::Wire => f.write_str("a wire body's section is not answered"),
+                SectionUnsupported::Mixed => {
+                    f.write_str("a body of solids and sheets both is not sectioned yet")
+                }
+                SectionUnsupported::InPlane(face) => {
+                    write!(f, "{face} lies in the plane: its section is the face")
+                }
+                SectionUnsupported::TouchBesideSheet => f.write_str(
+                    "the plane crosses the solid and touches it apart from the sheet: a sheet with wires beside it is not built yet",
+                ),
+            },
             Self::Unsupported(BooleanUnsupported::Nurbs { operand, at }) => {
                 write!(f, "{operand}: {at}: NURBS geometry is not intersected yet")
             }
@@ -443,6 +483,10 @@ impl fmt::Display for BooleanError {
             Self::Unsupported(BooleanUnsupported::NonManifold { at }) => {
                 write!(f, "{at}: a non-manifold result is not built yet")
             }
+            Self::Unsupported(BooleanUnsupported::HornPole { operand, face }) => write!(
+                f,
+                "{operand}: {face}: a horn torus's face cut across its pole is not built yet"
+            ),
             Self::Unsupported(BooleanUnsupported::Nesting) => {
                 f.write_str("the result's surfaces nest in a way not placed yet")
             }

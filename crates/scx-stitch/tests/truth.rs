@@ -127,6 +127,20 @@ fn exploded_recipes_are_the_same_solid() {
 }
 
 #[test]
+fn spheres_of_many_lunes_are_the_same_solid() {
+    // Every meridian joins the two poles: 16 to 64 pieces with the same ends, searched by
+    // midpoint rather than all pairs; the result is the sphere.
+    for n in [8, 16, 32] {
+        let body = solid(Kind::Sphere, 0, n);
+        same_solid(
+            &body,
+            Some((4.0 / 3.0 * PI, 4.0 * PI)),
+            &format!("sphere {n}"),
+        );
+    }
+}
+
+#[test]
 fn exploded_random_recipes_are_the_same_solid() {
     for kind in [
         Kind::Block,

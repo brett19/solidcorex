@@ -50,6 +50,11 @@ pub enum StitchRefusal {
         /// The sheet.
         operand: Operand,
     },
+    /// A face named to merge that the body does not hold ([`merge_faces`](crate::merge_faces)).
+    NoSuchFace {
+        /// The face.
+        face: FaceId,
+    },
     /// A join of two edges whose faces lie in different regions: one shell cannot bound
     /// both, which only a face inside a solid operand gives. Each sheet with its edge.
     RegionsMeet {
@@ -156,6 +161,12 @@ pub enum StitchUnsupported {
         at: Entity,
         /// What waits.
         why: NestingPending,
+    },
+    /// A body with a wire or a lone vertex given to [`sew`](crate::sew): the sheets the
+    /// body is cut into hold faces only, and a wire or a lone vertex would be lost.
+    Loose {
+        /// The wire edge or the lone vertex.
+        at: Entity,
     },
     /// More sheets than an [`Operand`] numbers, or more entities than a body's ids hold.
     TooLarge,
@@ -306,6 +317,7 @@ impl StitchError {
                 "vertices_within_coincidence"
             }
             Self::Refused(StitchRefusal::OtherDocument { .. }) => "other_document",
+            Self::Refused(StitchRefusal::NoSuchFace { .. }) => "no_such_face",
             Self::Refused(StitchRefusal::RegionsMeet { .. }) => "regions_meet",
             Self::Refused(StitchRefusal::NotSolid { .. }) => "not_solid",
             Self::Unsupported(StitchUnsupported::Chain { .. }) => "chain",
@@ -314,6 +326,7 @@ impl StitchError {
             Self::Unsupported(StitchUnsupported::Undecided { .. }) => "undecided",
             Self::Unsupported(StitchUnsupported::Sign { .. }) => "sign_pending",
             Self::Unsupported(StitchUnsupported::Nesting { .. }) => "nesting_pending",
+            Self::Unsupported(StitchUnsupported::Loose { .. }) => "loose",
             Self::Unsupported(StitchUnsupported::TooLarge) => "too_large",
             Self::Exhausted { .. } => "exhausted",
             Self::Cancelled => "cancelled",
@@ -357,6 +370,9 @@ impl fmt::Display for StitchError {
             Self::Refused(StitchRefusal::OtherDocument { operand }) => {
                 write!(f, "{operand}: finished under another document's resolution")
             }
+            Self::Refused(StitchRefusal::NoSuchFace { face }) => {
+                write!(f, "{face}: the body holds no such face")
+            }
             Self::Refused(StitchRefusal::RegionsMeet {
                 edges: [(o0, e0), (o1, e1)],
             }) => write!(
@@ -398,6 +414,9 @@ impl fmt::Display for StitchError {
                 "{operand}: {at}: the closed sheet's nesting waits on {}",
                 why.name()
             ),
+            Self::Unsupported(StitchUnsupported::Loose { at }) => {
+                write!(f, "{at}: a wire or lone vertex, which sewing would lose")
+            }
             Self::Unsupported(StitchUnsupported::TooLarge) => {
                 f.write_str("more sheets or entities than ids hold")
             }

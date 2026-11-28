@@ -223,7 +223,9 @@ fn typed_errors() {
     assert_eq!(cylinder(1.0, f64::NAN), Err(SolidError::Dimension("h")));
     assert_eq!(cone(0.0, 0.0, 1.0), Err(SolidError::Dimension("r0 + r1")));
     assert_eq!(sphere_cap(1.0, 2.5), Err(SolidError::Range("h")));
-    assert_eq!(torus(1.0, 1.0), Err(SolidError::Range("r")));
+    assert_eq!(torus(1.0, 1.5), Err(SolidError::Range("r")));
+    // A horn torus (r = R) is a solid: `2 pi^2 R^3`.
+    assert!(torus(1.0, 1.0).is_ok());
     assert_eq!(torus_sector(2.0, 1.0, 7.0), Err(SolidError::Range("sweep")));
     let holes = [Hole {
         x: 5.0,

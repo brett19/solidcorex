@@ -206,14 +206,6 @@ pub enum Unsupported {
     },
     /// A face on a NURBS surface: its iso-curves are not extracted exactly yet.
     NurbsFace,
-    /// A horn torus: the radii are equal within the resolution, so the tube meets the axis
-    /// at one point, a singular point that the pole rules do not cover (72 D3).
-    HornTorus {
-        /// The major radius (mm).
-        major: f64,
-        /// The minor radius (mm).
-        minor: f64,
-    },
     /// The construction needs a surface kind this build does not have yet (step 5's).
     NeedsKind {
         /// The kind.
@@ -313,7 +305,6 @@ impl MakeError {
             Self::Refused(Refusal::SelfIntersecting { .. }) => "self_intersecting",
             Self::Refused(Refusal::UvBox { .. }) => "uv_box",
             Self::Unsupported(Unsupported::NurbsFace) => "nurbs_face",
-            Self::Unsupported(Unsupported::HornTorus { .. }) => "horn_torus",
             Self::Refused(Refusal::Law(_)) => "sweep_law",
             Self::Unsupported(Unsupported::NeedsKind { .. }) => "needs_kind",
             Self::Unsupported(Unsupported::RailsAtCorner) => "rails_at_corner",
@@ -394,10 +385,6 @@ impl fmt::Display for MakeError {
             Self::Unsupported(Unsupported::NurbsFace) => {
                 write!(f, "a face on a NURBS surface is not made yet")
             }
-            Self::Unsupported(Unsupported::HornTorus { major, minor }) => write!(
-                f,
-                "the horn torus (major {major} mm, minor {minor} mm) is not made yet: its tube meets the axis"
-            ),
             Self::Refused(Refusal::Law(e)) => write!(f, "the sweep's laws: {e}"),
             Self::Unsupported(Unsupported::NeedsKind { kind }) => {
                 write!(

@@ -770,8 +770,13 @@ impl Build<'_> {
             let mut poles = BTreeMap::new();
             for l in &loops {
                 for (p, s, _) in l {
-                    if p.t.is_none() {
-                        poles.insert(p.ends[0], (p.edge, *s));
+                    // Two collapsed edges at one vertex (a horn torus's pole): the loop's
+                    // use of the vertex is not named by the vertex alone.
+                    if p.t.is_none() && poles.insert(p.ends[0], (p.edge, *s)).is_some() {
+                        return Err(BooleanError::Unsupported(BooleanUnsupported::HornPole {
+                            operand,
+                            face: f,
+                        }));
                     }
                 }
             }

@@ -107,14 +107,6 @@ pub enum Unsupported {
     Profile(PlanarError),
     /// A profile segment of a kind this constructor does not sweep yet.
     Segment(SegmentRef),
-    /// A horn torus: the radii are equal within the resolution, so the tube meets the axis
-    /// at one point, a singular point that the pole rules do not cover (72 D3).
-    HornTorus {
-        /// The major radius (mm).
-        major: f64,
-        /// The minor radius (mm).
-        minor: f64,
-    },
 }
 
 /// A fault of the constructor itself, detected: our bug.
@@ -177,7 +169,6 @@ impl MakeError {
             Self::Unsupported(Unsupported::Segment(_)) => "segment_kind",
             Self::Refused(Refusal::ZeroRadii) => "zero_radii",
             Self::Refused(Refusal::SelfIntersecting { .. }) => "self_intersecting",
-            Self::Unsupported(Unsupported::HornTorus { .. }) => "horn_torus",
             Self::Defect(Defect::Surface(_)) => "surface",
             Self::Defect(Defect::Curve(_)) => "curve",
             Self::Defect(Defect::Absent(_)) => "absent",
@@ -225,10 +216,6 @@ impl fmt::Display for MakeError {
             Self::Refused(Refusal::SelfIntersecting { major, minor }) => write!(
                 f,
                 "the torus's minor radius {minor} mm exceeds its major radius {major} mm: the tube crosses its axis"
-            ),
-            Self::Unsupported(Unsupported::HornTorus { major, minor }) => write!(
-                f,
-                "the horn torus (major {major} mm, minor {minor} mm) is not made yet: its tube meets the axis"
             ),
             Self::Defect(Defect::Surface(e)) => write!(f, "a surface of the body: {e}"),
             Self::Defect(Defect::Curve(e)) => write!(f, "a curve of the body: {e}"),
