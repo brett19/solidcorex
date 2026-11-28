@@ -31,6 +31,7 @@ pub mod bezier;
 mod compatible;
 mod curve;
 mod curves;
+pub mod deviation;
 mod error;
 mod eval_over;
 pub mod fit;

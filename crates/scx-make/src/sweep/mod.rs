@@ -37,19 +37,23 @@
 //! between them; the walls on step 5's procedural sweep kind replace the count with one the
 //! kind's own bound sets.
 //!
-//! **The walls.** [`sweep`] checks its input and places every station the skin would use,
-//! then answers [`Unsupported::NeedsKind`] with [`Needed::ProceduralSweep`]: the walls are
-//! faces on step 5's procedural sweep surface, which `Surface` does not have yet. That kind
-//! plugs in at the end of [`sweep`], taking the profile's segments and the [`Placement`]s.
+//! **The walls.** [`sweep`] builds the plain sweep ([`Shape::PLAIN`]) along lines and arcs
+//! by kind, mitred at corners ([`walls`]). Any other frame it checks and places at every
+//! station the skin would use, then answers [`Unsupported::NeedsKind`] with
+//! [`Needed::ProceduralSweep`]: those walls are faces on step 5's procedural sweep surface,
+//! which `Surface` does not have yet. That kind plugs in at the end of [`sweep`], taking the
+//! profile's segments and the [`Placement`]s.
 
 mod rail;
+mod walls;
 
 pub use rail::{Rail, RailFault};
+pub use walls::SweepFaces;
 
 use core::f64::consts::{FRAC_PI_2, PI, TAU};
 use core::fmt;
 
-use scx_brep::{Document, FaceId};
+use scx_brep::Document;
 use scx_num::fmath;
 use scx_num::frame::Frame;
 use scx_num::vector3d::{Point3, UnitVec3, Vec3};
@@ -281,17 +285,6 @@ impl fmt::Display for LawFault {
             ),
         }
     }
-}
-
-/// The faces of a sweep, by role: the record the walls on step 5's kind will fill.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SweepFaces {
-    /// The cap at the path's start.
-    pub start: FaceId,
-    /// The cap at the path's end.
-    pub end: FaceId,
-    /// The wall of each segment, `[loop][segment]`, as [`ExtrudeFaces`](crate::ExtrudeFaces)'s.
-    pub walls: Vec<Vec<FaceId>>,
 }
 
 fn refused(fault: LawFault) -> MakeError {
@@ -573,33 +566,47 @@ pub fn fractions(path: &Path, frame: &PathFrame, doc: &Document) -> Result<Vec<f
         .max(rail_points.saturating_sub(1))
         .clamp(MIN_SKIN_STATIONS, MAX_SKIN_STATIONS);
     let mut out: Vec<f64> = (0..=n).map(|j| j as f64 / n as f64).collect();
-    out.extend(path.joints());
+    out.extend(path.joints().skip(1).map(|(_, at, _)| at));
     out.sort_by(f64::total_cmp);
     out.dedup();
     Ok(out)
 }
 
-/// Sweeps `region`, placed in `plane`'s `x, y` plane, along `path` by `frame`.
+/// Sweeps `profile`, placed in `plane`'s `x, y` plane, along `path` by `frame`.
 ///
-/// The input is checked in full and every station [`fractions`] gives is placed, so a
-/// refusal comes before the answer that the walls are not built yet.
+/// The plain sweep ([`Shape::PLAIN`]: perpendicular, no twist, scale 1) builds its walls by
+/// kind (module [`walls`]): `plane`'s origin is the path's start and its z axis the start's
+/// tangent. Any other frame (a twist, an end scale, another orientation, rails) is checked in
+/// full and every station [`fractions`] gives is placed, so a refusal comes before the answer
+/// that its walls are not built yet: they are faces on step 5's procedural sweep kind.
 ///
 /// # Errors
 ///
-/// - [`Refusal::Resolution`] when the region was built at a resolution other than `doc`'s.
-/// - Those of [`placements`] at every station of [`fractions`].
-/// - Otherwise [`Unsupported::NeedsKind`] with [`Needed::ProceduralSweep`]: the walls are
-///   faces on step 5's procedural sweep surface, not built yet.
+/// - [`Refusal::Resolution`] when the profile was built at a resolution other than `doc`'s.
+/// - The plain sweep's: [`Refusal::Placement`] when `plane` is not at the path's start along
+///   its tangent; [`Refusal::TightArc`], [`Refusal::MitresMeet`], [`Refusal::ArcTurn`] and
+///   [`Refusal::ClosedTurned`] when the swept profile would meet itself or its ends not
+///   meet, at the first piece that does; [`Refusal::Path`] for a closed path that doubles
+///   back where it closes; [`Unsupported::HelixPiece`], [`Unsupported::CornerOnArc`],
+///   [`Unsupported::Segment`] for a profile segment that is not a line, arc or circle, and
+///   [`Unsupported::SpindleTorus`] for a profile arc whose circle crosses an arc piece's
+///   axis outside it; a [`Defect`](crate::Defect) when the body does not finish, or
+///   [`MakeError::Full`].
+/// - Any other frame's: those of [`placements`] at every station of [`fractions`], then
+///   [`Unsupported::NeedsKind`] with [`Needed::ProceduralSweep`].
 pub fn sweep(
-    region: &Region,
+    profile: &Region,
     plane: &Frame,
     path: &Path,
     frame: &PathFrame,
     doc: &Document,
 ) -> Result<Made<SweepFaces>, MakeError> {
-    if region.resolution() != doc.resolution() {
+    if *frame == PathFrame::Shaped(Shape::PLAIN) {
+        return walls::build(profile, plane, path, doc);
+    }
+    if profile.resolution() != doc.resolution() {
         return Err(MakeError::Refused(Refusal::Resolution {
-            region: region.resolution(),
+            region: profile.resolution(),
             document: doc.resolution(),
         }));
     }
@@ -611,7 +618,8 @@ pub fn sweep(
     // Step 5 plugs in here: one wall per profile segment on the procedural sweep surface of
     // that segment carried by `_placed` (its own bound, not `fractions`, setting the
     // stations), joined along the profile's vertices' curves, and the two planar caps (the
-    // end cap the region placed by the last placement), into `SweepFaces`.
+    // end cap the profile placed by the last placement), into `SweepFaces` as the plain
+    // sweep's walls fill it (`[piece][loop][segment]`).
     Err(MakeError::Unsupported(Unsupported::NeedsKind {
         kind: Needed::ProceduralSweep,
     }))

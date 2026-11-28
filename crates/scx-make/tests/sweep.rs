@@ -1,739 +1,775 @@
 // Written for solidcorex. Apache-2.0.
-//! `sweep` (research 75 MK7b): the pin's `sweep_stations.rs` law and rail tests (those `MK7a`'s
-//! `frames.rs` left out on purpose) judged against closed forms, and the entry's answer.
+//! `sweep` with no law (research 75 MK5): line-and-arc profiles along line-and-arc paths,
+//! judged against closed forms. A line piece is an extrusion (a prism's volume), an arc
+//! piece a partial revolve (Pappus's volume and area), and a corner between lines a mitre:
+//! a profile whose centroid is on the path sweeps its area times the path's length either
+//! side, and the mitre plane is where the arms meet, so a mitred tube's volume and area are
+//! the straight tube's. The mitre's own section is checked by its curves: a circle's is the
+//! ellipse of semi-axes `r` and `r / cos(angle / 2)`.
 //!
-//! - a straight path with twist `T` and end scale `k` turns the profile by `T u` and scales
-//!   it by `1 + (k - 1) u` (pin :138), so a square's corners turn by `T u` at a fixed
-//!   distance and a circle's radius is `r k(u)` (the app's `sweep_path.rs` twisted and
-//!   scaled sweeps, their placements);
-//! - a straight rail diverging at slope `s` scales the profile by `(d_0 + s x) / d_0`, both
-//!   ways or only across (pin :238); an arc rail of radius `R` about the start by
-//!   `sqrt(R^2 - x^2) / R` (pin :268); two rails span the profile (pin :420);
-//! - a rail is followed exactly: the profile's point on a rail lands on the rail, at the
-//!   station's plane, at every station (new; along an arc and along a line);
-//! - a rail stopping short, touching a plane, crossing it twice or lying in it is refused
-//!   by name; a polyline's vertex on a plane is one crossing (pin :291, :364, :387, :407);
-//!   rails along a path with a corner are unsupported (pin :455);
-//! - the parallel and direction orientations (pin :627, :665), a profile normal against the
-//!   path (pin :692), the laws' refusals (pin :706) and the skin's fractions (pin :309);
-//! - `sweep` checks its input and then answers that it needs the procedural sweep kind.
-//!
-//! Removed on purpose, from the pin's tests: the "more than two rails" and "rails with a
-//! twist" refusals of `out_of_range_paths_laws_and_fractions_are_refused` (a `PathFrame`
-//! cannot hold either: `Rails` is one or two, and rails and a `Shape` are separate
-//! variants) and `the_caller_s_twist_and_scale_limits_refuse_past_them` (the caller's own
-//! limits on twist and scale, SolidCraft's four turns and 0.01 to 100, are the caller's to
-//! check before calling; only the geometric limits are refused here). The volume truths
-//! (the twisted prism, the frustum) need the walls: step 5.
+//! Each body is also checked for structure (two fins of opposite senses on every edge, the
+//! Euler-Poincare count) and by the BR8 oracle, and each refusal by its typed error.
 
-// The closed forms are written with the platform's libm; tolerances (1e-12) absorb its
-// differences from `fmath`.
 #![allow(
-    clippy::disallowed_methods,
     clippy::unwrap_used,
     clippy::panic,
     clippy::indexing_slicing,
     clippy::float_cmp
 )]
 
-use core::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI, TAU};
-use std::sync::Arc;
+use core::f64::consts::{FRAC_PI_2, PI, TAU};
 
-use scx_brep::Document;
-use scx_make::{
-    LawFault, MIN_SKIN_STATIONS, MakeError, Needed, Orientation, Path, PathFrame, Piece, Placement,
-    Rail, RailFault, RailFit, Rails, Refusal, Shape, Stop, Unsupported, fractions, placements,
-    sweep,
-};
-use scx_num::frame::Frame;
+use scx_brep::op::Scratch;
+use scx_brep::{Brep, Document, EdgeShape, FaceSide};
+use scx_curve::Curve;
+use scx_make::{MakeError, Path, PathFrame, Piece, Refusal, Shape, SweepFaces, Unsupported, sweep};
+
+/// The plain sweep: no law.
+const PLAIN: PathFrame = PathFrame::Shaped(Shape::PLAIN);
+use scx_mass::{Mass, MassSpec, RelAccuracy, mass};
+use scx_num::budget::{Budget, Stop};
+use scx_num::fmath;
+use scx_num::frame::{Frame, Sense};
 use scx_num::vector2d::Point2;
 use scx_num::vector3d::{Point3, UnitVec3, Vec3};
-use scx_nurbs::{KnotVector, NurbsCurve};
 use scx_planar::{Region, Segment};
+use scx_surface::Surface;
+use scx_testkit::bodies::check::{Tolerance, violations};
+use scx_testkit::profile::Seg;
 
 fn doc() -> Document {
     Document::default()
 }
 
-fn p(x: f64, y: f64, z: f64) -> Point3 {
+fn p3(x: f64, y: f64, z: f64) -> Point3 {
     Point3::new(x, y, z)
 }
 
-fn unit(v: Vec3) -> UnitVec3 {
-    v.normalized().unwrap()
+fn unit(x: f64, y: f64, z: f64) -> UnitVec3 {
+    Vec3::new(x, y, z).normalized().unwrap()
 }
 
-fn near(a: Vec3, b: Vec3, tol: f64) -> bool {
-    (a - b).length() <= tol
+/// The frame at the origin along `+z`, its x axis `+x`.
+fn plain() -> Frame {
+    Frame::new(
+        Point3::ORIGIN,
+        Vec3::new(0.0, 0.0, 1.0),
+        Vec3::new(1.0, 0.0, 0.0),
+    )
+    .unwrap()
 }
 
-fn near_p(a: Point3, b: Point3, tol: f64) -> bool {
-    a.distance(b) <= tol
+fn segment(s: &Seg) -> Segment {
+    match *s {
+        Seg::Line { start, end } => Segment::line(Point2::from(start), Point2::from(end)),
+        Seg::Arc {
+            centre,
+            start,
+            end,
+            ccw,
+        } => {
+            let sense = if ccw { Sense::Forward } else { Sense::Reversed };
+            if start == end {
+                let r = fmath::hypot(start[0] - centre[0], start[1] - centre[1]);
+                Segment::circle(Point2::from(centre), r, sense)
+            } else {
+                Segment::arc(
+                    Point2::from(centre),
+                    Point2::from(start),
+                    Point2::from(end),
+                    sense,
+                )
+            }
+        }
+    }
 }
 
-fn stops(us: &[f64]) -> Vec<Stop> {
-    us.iter().map(|&u| Stop::At(u)).collect()
+fn region(loops: &[Vec<Seg>]) -> Region {
+    Region::new(
+        loops[0].iter().map(segment).collect(),
+        loops[1..]
+            .iter()
+            .map(|h| h.iter().map(segment).collect())
+            .collect(),
+        doc().resolution(),
+    )
+    .unwrap()
+}
+
+fn ln(a: [f64; 2], b: [f64; 2]) -> Seg {
+    Seg::Line { start: a, end: b }
+}
+
+fn arc(centre: [f64; 2], start: [f64; 2], end: [f64; 2], ccw: bool) -> Seg {
+    Seg::Arc {
+        centre,
+        start,
+        end,
+        ccw,
+    }
+}
+
+fn circle(c: [f64; 2], r: f64, ccw: bool) -> Seg {
+    let p = [c[0] + r, c[1]];
+    arc(c, p, p, ccw)
+}
+
+fn polygon(p: &[[f64; 2]]) -> Vec<Seg> {
+    p.iter()
+        .zip(p.iter().cycle().skip(1))
+        .map(|(&a, &b)| ln(a, b))
+        .collect()
+}
+
+/// The square of side `a` about the origin.
+fn square(a: f64) -> Vec<Seg> {
+    let h = 0.5 * a;
+    polygon(&[[-h, -h], [h, -h], [h, h], [-h, h]])
+}
+
+fn line(a: Point3, b: Point3) -> Piece {
+    Piece::Line { from: a, to: b }
+}
+
+/// The polyline through `points`.
+fn polyline(points: &[Point3]) -> Vec<Piece> {
+    points.windows(2).map(|w| line(w[0], w[1])).collect()
 }
 
 fn path(pieces: &[Piece]) -> Path {
     Path::new(pieces, &doc()).unwrap()
 }
 
-fn along_x(len: f64) -> Path {
-    path(&[Piece::Line {
-        from: p(0.0, 0.0, 0.0),
-        to: p(len, 0.0, 0.0),
-    }])
-}
-
-fn shaped(shape: Shape) -> PathFrame {
-    PathFrame::Shaped(shape)
-}
-
-fn one(rail: Rail) -> PathFrame {
-    PathFrame::Railed {
-        rails: Rails::One(rail),
-        fit: RailFit::Scale,
-    }
-}
-
-fn line(a: Point3, b: Point3) -> Rail {
-    Rail::Line { from: a, to: b }
-}
-
-fn place(path: &Path, normal: Vec3, frame: &PathFrame, at: &[Stop]) -> Vec<Placement> {
-    placements(path, unit(normal), frame, at, &doc()).unwrap()
-}
-
-fn refusal(path: &Path, normal: Vec3, frame: &PathFrame, at: &[Stop]) -> MakeError {
-    placements(path, unit(normal), frame, at, &doc()).unwrap_err()
-}
-
-fn rail_fault(e: &MakeError) -> RailFault {
-    match e {
-        MakeError::Refused(Refusal::Law(LawFault::Rail { fault, .. })) => *fault,
-        other => panic!("not a rail fault: {other:?}"),
-    }
-}
-
-/// A non-rational clamped B-spline rail of `degree` through `points`, `inner` its interior
-/// knots in `(0, 1)`.
-fn bspline(points: &[[f64; 3]], degree: usize, inner: &[f64]) -> Rail {
-    let mut knots = vec![0.0; degree + 1];
-    knots.extend_from_slice(inner);
-    knots.extend(std::iter::repeat_n(1.0, degree + 1));
-    let kv = KnotVector::new(degree, knots).unwrap();
-    Rail::Nurbs(Arc::new(
-        NurbsCurve::new(kv, points.to_vec(), None).unwrap(),
-    ))
-}
-
-#[test]
-fn a_straight_path_twists_and_scales_linearly() {
-    let len = 12.0;
-    let up = path(&[Piece::Line {
-        from: p(0.0, 0.0, 0.0),
-        to: p(0.0, 0.0, len),
-    }]);
-    let (twist, scale) = (1.5 * PI, 3.0);
-    let frame = shaped(Shape {
-        twist,
-        end_scale: scale,
-        ..Shape::PLAIN
-    });
-    let at = [0.0, 0.3, 0.5, 1.0];
-    for (s, u) in place(&up, Vec3::Z, &frame, &stops(&at)).iter().zip(at) {
-        let k = 1.0 + (scale - 1.0) * u;
-        let turn = twist * u;
-        let want = Vec3::new(turn.cos(), turn.sin(), 0.0) * k;
-        assert!(near(s.apply(Vec3::X), want, 1e-12), "{u}");
-        assert!(near(s.apply(Vec3::Z), Vec3::Z, 1e-12), "{u}");
-        assert!(near_p(s.at, p(0.0, 0.0, len * u), 1e-12));
-        // the square of half-width 5 (the app's twisted prism): each corner turned by the
-        // twist run at its distance, so the section is the square turned, its area kept
-        // (the scale 1 below); and a circle of radius 10 has radius 10 k (the frustum)
-        let corner = p(5.0, 5.0, 0.0);
-        let placed = s.place(corner) - s.at;
-        let (c, sn) = (turn.cos(), turn.sin());
-        let want = Vec3::new(5.0 * c - 5.0 * sn, 5.0 * sn + 5.0 * c, 0.0) * k;
-        assert!(near(placed, want, 1e-11), "{u}");
-        assert!((s.apply(Vec3::new(10.0, 0.0, 0.0)).length() - 10.0 * k).abs() < 1e-11);
-    }
-}
-
-#[test]
-fn a_twist_alone_keeps_the_section_s_size() {
-    // the app's `twisted_sweep_turns_in_proportion`: h 40, a quarter turn; the map is a
-    // rotation at every station (columns orthonormal), so the area is kept
-    let up = path(&[Piece::Line {
-        from: p(0.0, 0.0, 0.0),
-        to: p(0.0, 0.0, 40.0),
-    }]);
-    let frame = shaped(Shape {
-        twist: FRAC_PI_2,
-        ..Shape::PLAIN
-    });
-    let at: Vec<f64> = (0..=8).map(|i| f64::from(i) / 8.0).collect();
-    for (s, u) in place(&up, Vec3::Z, &frame, &stops(&at)).iter().zip(&at) {
-        let [a, b, c] = s.m;
-        for (x, y) in [(a, a), (b, b), (c, c)] {
-            assert!((x.dot(y) - 1.0).abs() < 1e-14);
-        }
-        assert!(a.dot(b).abs() < 1e-14 && b.dot(c).abs() < 1e-14 && a.dot(c).abs() < 1e-14);
-        let corner = s.place(p(5.0, -5.0, 0.0));
-        let angle = (corner.y).atan2(corner.x) - (-5.0_f64).atan2(5.0);
-        assert!((angle - FRAC_PI_2 * u).abs() < 1e-12, "{u}");
-    }
-}
-
-#[test]
-fn a_diverging_straight_rail_scales_the_profile() {
-    let (len, d0, slope) = (20.0, 4.0, 0.25);
-    let rail = line(p(0.0, d0, 0.0), p(len, d0 + slope * len, 0.0));
-    let at = [0.0, 0.5, 1.0];
-    for fit in [RailFit::Scale, RailFit::Stretch] {
-        let frame = PathFrame::Railed {
-            rails: Rails::One(rail.clone()),
-            fit,
-        };
-        for (s, u) in place(&along_x(len), Vec3::X, &frame, &stops(&at))
-            .iter()
-            .zip(at)
-        {
-            let x = len * u;
-            let k = (d0 + slope * x) / d0;
-            assert!(near(s.apply(Vec3::Y), Vec3::Y * k, 1e-12), "{fit:?} {u}");
-            let z = if fit == RailFit::Scale { k } else { 1.0 };
-            assert!(near(s.apply(Vec3::Z), Vec3::Z * z, 1e-12), "{fit:?} {u}");
-            assert!(near_p(s.at, p(x, 0.0, 0.0), 1e-12));
-        }
-    }
-}
-
-#[test]
-fn an_arc_rail_scales_by_its_distance_across() {
-    let (len, r): (f64, f64) = (6.0, 10.0);
-    let start = (len / r).acos();
-    let rail = Rail::Arc {
-        centre: p(0.0, 0.0, 0.0),
-        axis: UnitVec3::Z,
-        start: p(r * start.cos(), r * start.sin(), 0.0),
-        angle: FRAC_PI_2 - start,
-    };
-    // the rail runs from x = 6 back to x = 0: it reaches both ends' planes
-    let at = [0.0, 0.25, 0.5, 1.0];
-    for (s, u) in place(&along_x(len), Vec3::X, &one(rail), &stops(&at))
-        .iter()
-        .zip(at)
-    {
-        let x = len * u;
-        let k = (r * r - x * x).sqrt() / r;
-        assert!(near(s.apply(Vec3::Y), Vec3::Y * k, 1e-12), "{u}");
-    }
-}
-
-/// A rail is followed exactly: the profile's point drawn on the rail lands on the rail, in
-/// the station's plane, at every station. Along a quarter arc of radius 10 a concentric
-/// rail of radius 13 is crossed on the radius, 3 out: the map is the frame's turn, and the
-/// rail's start lands at `13 (cos phi, sin phi)`. Two rails at radii 13 and 8 span 5 across:
-/// both starts land on their rails.
-#[test]
-fn a_rail_is_followed_exactly() {
-    let arc = path(&[Piece::Arc {
-        centre: p(0.0, 0.0, 0.0),
-        axis: UnitVec3::Z,
-        start: p(10.0, 0.0, 0.0),
+/// Line `[0, 0, 0] -> [0, 0, l1]`, then a quarter turn of radius `rho` about `+y` to
+/// `[rho, 0, l1 + rho]` heading `+x`, then `l2` along `+x`.
+fn bent(l1: f64, rho: f64, l2: f64) -> Vec<Piece> {
+    let mut pieces = vec![line(Point3::ORIGIN, p3(0.0, 0.0, l1))];
+    pieces.push(Piece::Arc {
+        centre: p3(rho, 0.0, l1),
+        axis: unit(0.0, 1.0, 0.0),
+        start: p3(0.0, 0.0, l1),
         angle: FRAC_PI_2,
-    }]);
-    let ring = |r: f64| Rail::Arc {
-        centre: p(0.0, 0.0, 0.0),
-        axis: UnitVec3::Z,
-        start: p(r, 0.0, 0.0),
-        angle: FRAC_PI_2,
-    };
-    let at = [0.0, 0.2, 0.5, 0.9, 1.0];
-    for (s, u) in place(&arc, Vec3::Y, &one(ring(13.0)), &stops(&at))
-        .iter()
-        .zip(at)
-    {
-        let phi = FRAC_PI_2 * u;
-        let on = p(13.0 * phi.cos(), 13.0 * phi.sin(), 0.0);
-        assert!(near_p(s.place(p(13.0, 0.0, 0.0)), on, 1e-12), "{u}");
-        // the third way, square to the path's plane, is kept (k = 1)
-        assert!(near(s.apply(Vec3::Z), Vec3::Z, 1e-12), "{u}");
+    });
+    if l2 > 0.0 {
+        pieces.push(line(p3(rho, 0.0, l1 + rho), p3(rho + l2, 0.0, l1 + rho)));
     }
-    let two = PathFrame::Railed {
-        rails: Rails::Two(ring(13.0), ring(8.0)),
-        fit: RailFit::Scale,
-    };
-    for (s, u) in place(&arc, Vec3::Y, &two, &stops(&at)).iter().zip(at) {
-        let (c, sn) = ((FRAC_PI_2 * u).cos(), (FRAC_PI_2 * u).sin());
-        assert!(near_p(
-            s.place(p(13.0, 0.0, 0.0)),
-            p(13.0 * c, 13.0 * sn, 0.0),
-            1e-12
-        ));
-        assert!(near_p(
-            s.place(p(8.0, 0.0, 0.0)),
-            p(8.0 * c, 8.0 * sn, 0.0),
-            1e-12
-        ));
+    pieces
+}
+
+fn make(loops: &[Vec<Seg>], pieces: &[Piece]) -> (Brep, SweepFaces) {
+    let m = sweep(&region(loops), &plain(), &path(pieces), &PLAIN, &doc()).unwrap();
+    (m.body, m.faces)
+}
+
+fn refusal(loops: &[Vec<Seg>], frame: &Frame, pieces: &[Piece]) -> MakeError {
+    sweep(&region(loops), frame, &path(pieces), &PLAIN, &doc()).unwrap_err()
+}
+
+/// Two regions and `shells` shells, every edge with two fins of opposite senses, every
+/// face's front outside and back in the solid, the Euler-Poincare count `chi` and the BR8
+/// oracle silent.
+fn assert_closed(b: &Brep, chi: i64, shells: usize) {
+    assert_eq!(b.shells().len(), shells);
+    for e in b.edges() {
+        let f: Vec<_> = e.fins().collect();
+        assert_eq!(f.len(), 2, "{:?}", e.id());
+        assert_ne!(f[0].sense, f[1].sense, "{:?}", e.id());
     }
-    // a line rail rising out of the path's plane: the rail's start lands on the rail at the
-    // station's plane, x = 10 u
-    let rail = line(p(0.0, 2.0, 1.0), p(10.0, 5.0, 7.0));
-    for fit in [RailFit::Scale, RailFit::Stretch] {
-        let frame = PathFrame::Railed {
-            rails: Rails::One(rail.clone()),
-            fit,
-        };
-        for (s, u) in place(&along_x(10.0), Vec3::X, &frame, &stops(&at))
-            .iter()
-            .zip(at)
-        {
-            let want = p(10.0 * u, 2.0 + 3.0 * u, 1.0 + 6.0 * u);
-            assert!(
-                near_p(s.place(p(0.0, 2.0, 1.0)), want, 1e-12),
-                "{fit:?} {u}"
-            );
+    let mut loops = 0;
+    for face in b.faces() {
+        assert!(!face.shell(FaceSide::Front).region().is_solid());
+        assert!(face.shell(FaceSide::Back).region().is_solid());
+        loops += face.loops().len();
+        for u in face.uses() {
+            assert!(u.bound().is_none(), "{:?}", face.id());
         }
     }
+    let (f, e, v) = (b.faces().len(), b.edges().len(), b.vertices().len());
+    let euler = v as i64 - e as i64 + f as i64 - (loops as i64 - f as i64);
+    assert_eq!(euler, chi, "V - E + F - (L - F)");
+    let bad = violations(&b.edit(), Tolerance::default());
+    assert!(bad.is_empty(), "{bad:?}");
 }
 
-#[test]
-fn a_rail_that_stops_short_is_refused() {
-    let rail = one(line(p(0.0, 3.0, 0.0), p(5.0, 3.0, 0.0)));
-    let e = refusal(&along_x(20.0), Vec3::X, &rail, &stops(&[0.0, 1.0]));
-    assert_eq!(rail_fault(&e), RailFault::Short);
-    assert_eq!(e.name(), "sweep_law");
-    assert!(e.to_string().contains("does not reach"), "{e}");
+fn measure(b: &Brep) -> Mass {
+    let spec = MassSpec::new(RelAccuracy::new(1e-12).unwrap()).with_about(Point3::ORIGIN);
+    mass(
+        b,
+        &spec,
+        &mut Scratch::new(),
+        &mut Budget::unlimited(),
+        &Stop::new(),
+    )
+    .unwrap()
 }
 
-/// A polyline rail with its vertex exactly on a station's plane crosses once there: the root
-/// at the knot both spans share is one root, and the profile scales by 5 / 3 there.
-#[test]
-fn a_polyline_rail_s_vertex_on_a_plane_is_one_crossing() {
-    let rail = bspline(
-        &[[0.0, 3.0, 0.0], [5.0, 5.0, 0.0], [10.0, 3.0, 0.0]],
-        1,
-        &[0.5],
-    );
-    let s = place(&along_x(10.0), Vec3::X, &one(rail), &stops(&[0.5]));
-    assert!(near(s[0].apply(Vec3::Y), Vec3::Y * (5.0 / 3.0), 1e-12));
-}
-
-/// A cubic rail `x(s) = 18 s - 24 s^2 + 8 s^3` (control x 0, 6, 4, 2): `x - 4 = -4 (1 - 2 s)^2
-/// (1 - s / 2)`, so it touches the plane `x = 4` at `s = 1/2` without crossing (a double
-/// root; the distance is negative at both ends), and crosses `x = 3` twice (it rises to 4 and
-/// falls to 2). It meets `x = 0` once, at its start, and `x = 1` once.
-#[test]
-fn a_rail_touching_or_crossing_twice_is_refused() {
-    let pts = [
-        [0.0, 3.0, 0.0],
-        [6.0, 3.0, 0.0],
-        [4.0, 3.0, 0.0],
-        [2.0, 3.0, 0.0],
-    ];
-    let rail = one(bspline(&pts, 3, &[]));
-    let to4 = along_x(4.0);
-    assert_eq!(place(&to4, Vec3::X, &rail, &stops(&[0.0, 0.25])).len(), 2);
-    let e = refusal(&to4, Vec3::X, &rail, &stops(&[1.0]));
-    assert_eq!(rail_fault(&e), RailFault::Touches);
-    let e = refusal(&to4, Vec3::X, &rail, &stops(&[0.75]));
-    assert_eq!(rail_fault(&e), RailFault::Twice);
-}
-
-#[test]
-fn a_rail_in_a_station_s_plane_is_refused() {
-    let rail = one(line(p(0.0, 1.0, 0.0), p(0.0, 3.0, 0.0)));
-    let e = refusal(&along_x(5.0), Vec3::X, &rail, &stops(&[0.0]));
-    assert_eq!(rail_fault(&e), RailFault::InPlane);
-}
-
-/// Two rails `y = 2` and `y = -2 - s x`: the profile spans them, so `y` scales by
-/// `k = (4 + s x) / 4` (and `z` by `k` too when scaled evenly), and the map's origin goes to
-/// the first rail less the map of its start, `(x, 2 - 2 k, 0)`.
-#[test]
-fn two_rails_span_the_profile() {
-    let (len, slope) = (8.0, 0.5);
-    let a = line(p(0.0, 2.0, 0.0), p(len, 2.0, 0.0));
-    let b = line(p(0.0, -2.0, 0.0), p(len, -2.0 - slope * len, 0.0));
-    let at = [0.0, 0.5, 1.0];
-    for fit in [RailFit::Scale, RailFit::Stretch] {
-        let frame = PathFrame::Railed {
-            rails: Rails::Two(a.clone(), b.clone()),
-            fit,
-        };
-        for (s, u) in place(&along_x(len), Vec3::X, &frame, &stops(&at))
-            .iter()
-            .zip(at)
-        {
-            let x = len * u;
-            let k = (4.0 + slope * x) / 4.0;
-            assert!(near(s.apply(Vec3::Y), Vec3::Y * k, 1e-12), "{fit:?} {u}");
-            let z = if fit == RailFit::Scale { k } else { 1.0 };
-            assert!(near(s.apply(Vec3::Z), Vec3::Z * z, 1e-12), "{fit:?} {u}");
-            assert!(near(s.apply(Vec3::X), Vec3::X, 1e-12), "{fit:?} {u}");
-            let origin = p(x, 2.0 - 2.0 * k, 0.0);
-            assert!(
-                near_p(s.place(p(0.0, 0.0, 0.0)), origin, 1e-12),
-                "{fit:?} {u}"
-            );
-        }
-    }
-}
-
-#[test]
-fn rails_meeting_the_path_are_refused() {
-    let rail = one(line(p(0.0, 2.0, 0.0), p(4.0, 0.0, 0.0)));
-    let e = refusal(&along_x(4.0), Vec3::X, &rail, &stops(&[1.0]));
+fn assert_within(got: f64, error: f64, want: f64, what: &str) {
+    let allowed = 1e-9 * want.abs();
     assert!(
-        matches!(
-            e,
-            MakeError::Refused(Refusal::Law(LawFault::RailsMeet { .. }))
-        ),
-        "{e:?}"
+        (got - want).abs() <= allowed && error <= allowed,
+        "{what}: {got:e} (estimated error {error:e}) vs {want:e}, allowed {allowed:e}"
     );
 }
 
-#[test]
-fn rails_along_a_path_with_a_corner_are_unsupported() {
-    let bent = path(&[
-        Piece::Line {
-            from: p(0.0, 0.0, 0.0),
-            to: p(5.0, 0.0, 0.0),
-        },
-        Piece::Line {
-            from: p(5.0, 0.0, 0.0),
-            to: p(5.0, 0.0, 5.0),
-        },
-    ]);
-    let rail = one(line(p(0.0, 3.0, 0.0), p(5.0, 3.0, 5.0)));
-    let e = refusal(&bent, Vec3::X, &rail, &stops(&[0.0]));
-    assert_eq!(e, MakeError::Unsupported(Unsupported::RailsAtCorner));
+/// Volume and area of `b` against `[volume, area]`.
+fn assert_mass(b: &Brep, want: [f64; 2], what: &str) {
+    let m = measure(b);
+    assert_within(
+        m.volume,
+        m.error.volume,
+        want[0],
+        &format!("{what}: volume"),
+    );
+    assert_within(m.area, m.error.area, want[1], &format!("{what}: area"));
 }
 
-/// The parallel orientation keeps the profile as it is, and refuses a station the path crosses
-/// at no more than the least angle asked (here SolidCraft's 5 degrees) to its plane: a quarter
-/// arc from `y` reaches `-x`, square to it.
-#[test]
-fn the_parallel_orientation_keeps_the_profile() {
-    let arc = path(&[Piece::Arc {
-        centre: p(0.0, 0.0, 0.0),
-        axis: UnitVec3::Z,
-        start: p(5.0, 0.0, 0.0),
-        angle: FRAC_PI_2,
-    }]);
-    let parallel = |deg: f64| {
-        shaped(Shape {
-            orientation: Orientation::Parallel {
-                least_crossing: deg.to_radians(),
-            },
-            ..Shape::PLAIN
+/// A tube of a profile of area `a` and perimeter `p`, both centroids on the path, along
+/// `length` of path: the walls and, when open, two caps.
+fn tube(a: f64, p: f64, length: f64, open: bool) -> [f64; 2] {
+    [a * length, p * length + if open { 2.0 * a } else { 0.0 }]
+}
+
+fn kind(s: &Surface) -> &'static str {
+    match s {
+        Surface::Plane(_) => "plane",
+        Surface::Cylinder(_) => "cylinder",
+        Surface::Cone(_) => "cone",
+        Surface::Sphere(_) => "sphere",
+        Surface::Torus(_) => "torus",
+        _ => "other",
+    }
+}
+
+fn kinds(b: &Brep, faces: &[scx_brep::FaceId]) -> Vec<&'static str> {
+    faces
+        .iter()
+        .map(|&f| kind(b.face(f).unwrap().surface()))
+        .collect()
+}
+
+/// The ellipses among the edges, by semi-axes (larger first).
+fn ellipses(b: &Brep) -> Vec<[f64; 2]> {
+    let mut out: Vec<[f64; 2]> = b
+        .edges()
+        .filter_map(|e| match e.shape() {
+            EdgeShape::Curve {
+                curve: Curve::Ellipse(c),
+                ..
+            } => {
+                let (x, y) = (c.semi_x().mm(), c.semi_y().mm());
+                Some([x.max(y), x.min(y)])
+            }
+            _ => None,
         })
-    };
-    let st = place(&arc, Vec3::Y, &parallel(5.0), &stops(&[0.0, 0.5]));
-    for s in &st {
-        for e in [Vec3::X, Vec3::Y, Vec3::Z] {
-            assert!(near(s.apply(e), e, 1e-15));
-        }
-    }
-    let q = 5.0 * FRAC_PI_4.cos();
-    assert!(near_p(st[1].at, p(q, q, 0.0), 1e-12));
-    let e = refusal(&arc, Vec3::Y, &parallel(5.0), &stops(&[1.0]));
-    assert!(
-        matches!(e, MakeError::Refused(Refusal::Law(LawFault::Crossing { stop: Stop::At(u) })) if u == 1.0),
-        "{e:?}"
-    );
-    // 84 degrees round, the tangent is 6 degrees off the plane: crossed at 5, not at 7
-    let u = 84.0 / 90.0;
-    place(&arc, Vec3::Y, &parallel(5.0), &stops(&[u]));
-    let e = refusal(&arc, Vec3::Y, &parallel(7.0), &stops(&[u]));
-    assert_eq!(e.name(), "sweep_law");
-}
-
-fn helix_frame(a: f64, b: f64, phi: f64) -> Vec3 {
-    let c = a.hypot(b);
-    let (s, co) = phi.sin_cos();
-    Vec3::new(-a * s, a * co, b) * (1.0 / c)
-}
-
-/// The direction orientation along a helix about `z` with the direction `z`: the frame is
-/// `[t, r, t x r]`, `r` the unit part of `z` square to the tangent, carried from the start's.
-#[test]
-fn the_direction_orientation_along_a_helix_keeps_the_direction_across() {
-    let (a, b) = (2.0_f64, 0.5);
-    let coil = path(&[Piece::Helix {
-        centre: p(0.0, 0.0, 0.0),
-        axis: UnitVec3::Z,
-        start: p(a, 0.0, 0.0),
-        angle: TAU,
-        rise: b,
-    }]);
-    let frame = shaped(Shape {
-        orientation: Orientation::Direction {
-            along: UnitVec3::Z,
-            least_sine: 0.0,
-        },
-        ..Shape::PLAIN
-    });
-    let across = |t: Vec3| {
-        let r = Vec3::Z - t * t.dot(Vec3::Z);
-        r * (1.0 / r.length())
-    };
-    let t0 = helix_frame(a, b, 0.0);
-    let at = [0.25, 0.6];
-    for (s, u) in place(&coil, t0, &frame, &stops(&at)).iter().zip(at) {
-        let t = helix_frame(a, b, TAU * u);
-        assert!(near(s.apply(t0), t, 1e-12), "{u}");
-        assert!(near(s.apply(across(t0)), across(t), 1e-12), "{u}");
-    }
-    // a path along the direction is refused
-    let up = path(&[Piece::Line {
-        from: p(0.0, 0.0, 0.0),
-        to: p(0.0, 0.0, 3.0),
-    }]);
-    let e = refusal(&up, Vec3::Z, &frame, &stops(&[0.5]));
-    assert!(
-        matches!(
-            e,
-            MakeError::Refused(Refusal::Law(LawFault::AlongDirection { .. }))
-        ),
-        "{e:?}"
-    );
-}
-
-/// A profile normal against the path is the same profile plane: the placements agree, twist
-/// included (it turns about the path's own direction either way).
-#[test]
-fn a_profile_normal_against_the_path_gives_the_same_placements() {
-    let frame = shaped(Shape {
-        twist: 1.0,
-        end_scale: 2.0,
-        ..Shape::PLAIN
-    });
-    let at = stops(&[0.0, 0.3, 1.0]);
-    let with = place(&along_x(4.0), Vec3::X, &frame, &at);
-    let against = place(&along_x(4.0), -Vec3::X, &frame, &at);
-    assert_eq!(with, against);
-}
-
-/// A right-angle corner's mitre: the profile turned the eighth and stretched by `sqrt 2`
-/// along `t_1 - t_0`, the twist and scale at the corner's fraction (the pin's corner test's
-/// stretch half, which `MK7a` left to the sweep).
-#[test]
-fn a_corner_s_mitre_is_stretched() {
-    let bent = path(&[
-        Piece::Line {
-            from: p(0.0, 0.0, 0.0),
-            to: p(5.0, 0.0, 0.0),
-        },
-        Piece::Line {
-            from: p(5.0, 0.0, 0.0),
-            to: p(5.0, 5.0, 0.0),
-        },
-    ]);
-    let s = place(&bent, Vec3::X, &shaped(Shape::PLAIN), &[Stop::Corner(0)]);
-    let b = unit(Vec3::new(-1.0, 1.0, 0.0)).as_vec();
-    let bisector = unit(Vec3::new(1.0, 1.0, 0.0)).as_vec();
-    // the profile's normal x goes to the bisector; its y, square to it in the plane, to the
-    // mitre's direction b stretched by sqrt 2; z is kept
-    assert!(near(s[0].apply(Vec3::X), bisector, 1e-12));
-    assert!(near(s[0].apply(Vec3::Y), b * 2.0_f64.sqrt(), 1e-12));
-    assert!(near(s[0].apply(Vec3::Z), Vec3::Z, 1e-12));
-    let scaled = shaped(Shape {
-        end_scale: 3.0,
-        ..Shape::PLAIN
-    });
-    let s = place(&bent, Vec3::X, &scaled, &[Stop::Corner(0)]);
-    // at the corner's fraction 1/2 the scale is 2
-    assert!(near(s[0].apply(Vec3::Z), Vec3::Z * 2.0, 1e-12));
-}
-
-#[test]
-fn out_of_range_laws_are_refused() {
-    let line5 = along_x(5.0);
-    let ends = stops(&[0.0, 1.0]);
-    let law = |e: &MakeError| match e {
-        MakeError::Refused(Refusal::Law(f)) => *f,
-        other => panic!("{other:?}"),
-    };
-    for twist in [f64::INFINITY, f64::NAN, 1001.0 * TAU] {
-        let e = refusal(
-            &line5,
-            Vec3::X,
-            &shaped(Shape {
-                twist,
-                ..Shape::PLAIN
-            }),
-            &ends,
-        );
-        assert_eq!(law(&e).name(), "twist");
-    }
-    // any finite twist up to the turns, either way, and any positive scale
-    place(
-        &line5,
-        Vec3::X,
-        &shaped(Shape {
-            twist: -1000.0 * TAU,
-            end_scale: 200.0,
-            ..Shape::PLAIN
-        }),
-        &ends,
-    );
-    for end_scale in [0.0, -1.0, f64::NAN, f64::INFINITY] {
-        let e = refusal(
-            &line5,
-            Vec3::X,
-            &shaped(Shape {
-                end_scale,
-                ..Shape::PLAIN
-            }),
-            &ends,
-        );
-        assert_eq!(law(&e).name(), "end_scale");
-    }
-    for least_crossing in [-0.1, FRAC_PI_2, f64::NAN] {
-        let frame = shaped(Shape {
-            orientation: Orientation::Parallel { least_crossing },
-            ..Shape::PLAIN
-        });
-        assert_eq!(
-            law(&refusal(&line5, Vec3::X, &frame, &ends)).name(),
-            "least_crossing"
-        );
-    }
-    for least_sine in [-0.1, 1.0, f64::NAN] {
-        let frame = shaped(Shape {
-            orientation: Orientation::Direction {
-                along: UnitVec3::Y,
-                least_sine,
-            },
-            ..Shape::PLAIN
-        });
-        assert_eq!(
-            law(&refusal(&line5, Vec3::X, &frame, &ends)).name(),
-            "least_sine"
-        );
-    }
-    let bad_rails = [
-        line(p(0.0, 3.0, 0.0), p(0.0, 3.0, 0.0)),
-        line(p(0.0, 3.0, 0.0), p(f64::NAN, 3.0, 0.0)),
-        Rail::Arc {
-            centre: p(0.0, 0.0, 0.0),
-            axis: UnitVec3::Z,
-            start: p(0.0, 0.0, 1.0),
-            angle: 1.0,
-        },
-        Rail::Arc {
-            centre: p(0.0, 0.0, 0.0),
-            axis: UnitVec3::Z,
-            start: p(1.0, 0.0, 0.0),
-            angle: 7.0,
-        },
-    ];
-    for rail in bad_rails {
-        let e = refusal(&line5, Vec3::X, &one(rail), &ends);
-        assert_eq!(rail_fault(&e), RailFault::Shape);
-    }
-    // the frames' refusals come through as the path's
-    let e = refusal(&line5, Vec3::X, &shaped(Shape::PLAIN), &stops(&[1.5]));
-    assert_eq!(e.name(), "path");
-    let e = refusal(&line5, Vec3::X, &shaped(Shape::PLAIN), &[Stop::Corner(0)]);
-    assert_eq!(e.name(), "path");
-}
-
-/// SolidCraft's station count: a station per degree of turn. A quarter arc twisted a quarter
-/// turn turns 180 degrees in all: 180 steps (as the rule's ceiling rounds pi over a degree),
-/// 0 and 1 among the fractions; a straight path with no twist takes the least, 16 steps; a
-/// joint's fraction is among them exactly.
-#[test]
-fn station_fractions_are_a_degree_of_turn_each() {
-    let arc = path(&[Piece::Arc {
-        centre: p(0.0, 0.0, 0.0),
-        axis: UnitVec3::Z,
-        start: p(5.0, 0.0, 0.0),
-        angle: FRAC_PI_2,
-    }]);
-    let twisted = shaped(Shape {
-        twist: FRAC_PI_2,
-        ..Shape::PLAIN
-    });
-    let f = fractions(&arc, &twisted, &doc()).unwrap();
-    let n = (PI / (PI / 180.0)).ceil() as usize;
-    assert!(n == 180 || n == 181, "{n}");
-    assert_eq!(f.len(), n + 1);
-    assert_eq!((f[0], f[n]), (0.0, 1.0));
-    let up = path(&[Piece::Line {
-        from: p(0.0, 0.0, 0.0),
-        to: p(0.0, 0.0, 3.0),
-    }]);
-    let f = fractions(&up, &shaped(Shape::PLAIN), &doc()).unwrap();
-    assert_eq!(f.len(), MIN_SKIN_STATIONS + 1);
-    // a helix of radius 3 and rise 4 / turn... its tangent turns angle a / sqrt(a^2 + b^2)
-    let coil = path(&[Piece::Helix {
-        centre: p(0.0, 0.0, 0.0),
-        axis: UnitVec3::Z,
-        start: p(3.0, 0.0, 0.0),
-        angle: TAU,
-        rise: 4.0,
-    }]);
-    let f = fractions(&coil, &shaped(Shape::PLAIN), &doc()).unwrap();
-    assert_eq!(f.len(), 216 + 1, "360 * 3 / 5 degrees");
-    // two lines of 3 and 4 meeting G1: the joint at 3/7 is a station
-    let joined = path(&[
-        Piece::Line {
-            from: p(0.0, 0.0, 0.0),
-            to: p(3.0, 0.0, 0.0),
-        },
-        Piece::Line {
-            from: p(3.0, 0.0, 0.0),
-            to: p(7.0, 0.0, 0.0),
-        },
-    ]);
-    let f = fractions(&joined, &shaped(Shape::PLAIN), &doc()).unwrap();
-    assert!(f.contains(&(3.0 / 7.0)));
-    assert_eq!(f.len(), MIN_SKIN_STATIONS + 2);
-    // a NURBS rail of 40 control points asks for 39 steps at least
-    let pts: Vec<[f64; 3]> = (0..40)
-        .map(|i| [f64::from(i) / 39.0 * 7.0, 3.0, 0.0])
         .collect();
-    let inner: Vec<f64> = (1..37).map(|i| f64::from(i) / 37.0).collect();
-    let f = fractions(&joined, &one(bspline(&pts, 3, &inner)), &doc()).unwrap();
-    assert_eq!(f.len(), 39 + 2);
-}
-
-fn square() -> Region {
-    let d = doc();
-    let q = |x: f64, y: f64| Point2::new(x, y);
-    let corners = [q(-5.0, -5.0), q(5.0, -5.0), q(5.0, 5.0), q(-5.0, 5.0)];
-    let segs: Vec<Segment> = (0..4)
-        .map(|i| Segment::line(corners[i], corners[(i + 1) % 4]))
-        .collect();
-    Region::new(segs, Vec::new(), d.resolution()).unwrap()
+    out.sort_by(|a, b| a[0].total_cmp(&b[0]));
+    out
 }
 
 #[test]
-fn sweep_checks_its_input_then_needs_the_procedural_kind() {
-    let plane = Frame::new(p(0.0, 0.0, 0.0), Vec3::Z, Vec3::X).unwrap();
-    let up = path(&[Piece::Line {
-        from: p(0.0, 0.0, 0.0),
-        to: p(0.0, 0.0, 40.0),
-    }]);
-    let twisted = shaped(Shape {
-        twist: FRAC_PI_2,
-        ..Shape::PLAIN
-    });
-    let e = sweep(&square(), &plane, &up, &twisted, &doc()).unwrap_err();
+fn straight_circle_is_a_cylinder() {
+    let (b, f) = make(
+        &[vec![circle([0.0, 0.0], 2.0, true)]],
+        &polyline(&[Point3::ORIGIN, p3(0.0, 0.0, 10.0)]),
+    );
+    assert_closed(&b, 2, 2);
+    assert_eq!(kinds(&b, &f.walls[0][0]), ["cylinder"]);
+    assert_mass(&b, tube(4.0 * PI, 4.0 * PI, 10.0, true), "rod");
+    assert!(f.start.is_some() && f.end.is_some());
+}
+
+#[test]
+fn straight_matches_a_tilted_line() {
+    // Off the origin and along no axis: the frame is the path's start and tangent.
+    let o = p3(125.0, -212.5, 60.0);
+    let d = Vec3::new(1.0, 2.0, 3.0).normalized().unwrap();
+    let frame = Frame::new(o, *d, Vec3::new(-3.0, 0.5, 1.0)).unwrap();
+    let m = sweep(
+        &region(&[square(3.0)]),
+        &frame,
+        &path(&[line(o, o + *d * 7.0)]),
+        &PLAIN,
+        &doc(),
+    )
+    .unwrap();
+    assert_closed(&m.body, 2, 2);
+    assert_eq!(kinds(&m.body, &m.faces.walls[0][0]), ["plane"; 4]);
+    let mm = mass(
+        &m.body,
+        &MassSpec::new(RelAccuracy::new(1e-12).unwrap()).with_about(o),
+        &mut Scratch::new(),
+        &mut Budget::unlimited(),
+        &Stop::new(),
+    )
+    .unwrap();
+    let [v, a] = tube(9.0, 12.0, 7.0, true);
+    assert_within(mm.volume, mm.error.volume, v, "volume");
+    assert_within(mm.area, mm.error.area, a, "area");
+}
+
+#[test]
+fn quarter_arc_is_pappus() {
+    let pieces = bent(0.0, 10.0, 0.0);
+    let pieces = &pieces[1..];
+    let length = 10.0 * FRAC_PI_2;
+    let (b, f) = make(&[vec![circle([0.0, 0.0], 2.0, true)]], pieces);
+    assert_closed(&b, 2, 2);
+    assert_eq!(kinds(&b, &f.walls[0][0]), ["torus"]);
+    assert_mass(&b, tube(4.0 * PI, 4.0 * PI, length, true), "quarter torus");
+
+    // Off the path: the centroid at radius 8.5 (the profile's x axis points at the axis).
+    let (b, f) = make(&[vec![circle([1.5, 0.0], 1.0, true)]], pieces);
+    assert_closed(&b, 2, 2);
+    assert_mass(
+        &b,
+        [PI * 8.5 * FRAC_PI_2, TAU * 8.5 * FRAC_PI_2 + 2.0 * PI],
+        "off-centre torus",
+    );
+    assert_eq!(kinds(&b, &f.walls[0][0]), ["torus"]);
+
+    // A rectangle off the path: cylinders either side, planes across the axis.
+    let (b, f) = make(
+        &[polygon(&[[0.5, -1.0], [2.5, -1.0], [2.5, 1.0], [0.5, 1.0]])],
+        pieces,
+    );
+    assert_closed(&b, 2, 2);
     assert_eq!(
-        e,
-        MakeError::Unsupported(Unsupported::NeedsKind {
-            kind: Needed::ProceduralSweep
-        })
+        kinds(&b, &f.walls[0][0]),
+        ["plane", "cylinder", "plane", "cylinder"]
     );
-    assert_eq!(e.name(), "needs_kind");
-    // a refusal comes first: a rail stopping short of the path's end
-    let short = one(line(p(0.0, 7.0, 0.0), p(0.0, 7.0, 20.0)));
-    let e = sweep(&square(), &plane, &up, &short, &doc()).unwrap_err();
-    assert_eq!(rail_fault(&e), RailFault::Short);
+    // Area 4 at centroid radius 8.5; the walls at radii 9.5 and 7.5 (2 wide) and the two
+    // annular sectors from 7.5 to 9.5.
+    let sector = 0.5 * (9.5 * 9.5 - 7.5 * 7.5) * FRAC_PI_2;
+    assert_mass(
+        &b,
+        [
+            4.0 * 8.5 * FRAC_PI_2,
+            2.0 * (9.5 + 7.5) * FRAC_PI_2 + 2.0 * sector + 8.0,
+        ],
+        "box bend",
+    );
+}
+
+#[test]
+fn arc_walls_by_kind() {
+    // Across the axis a plane, a slanted line a cone, an arc a ring torus, a line at one
+    // radius a cylinder. (A sphere needs a profile arc centred on the axis, which the
+    // profile then reaches: refused as a tight arc.)
+    let profile = vec![
+        ln([-1.0, -1.0], [1.0, -1.0]),
+        ln([1.0, -1.0], [2.0, 1.0]),
+        arc([0.5, 1.0], [2.0, 1.0], [-1.0, 1.0], true),
+        ln([-1.0, 1.0], [-1.0, -1.0]),
+    ];
+    let pieces = bent(0.0, 10.0, 0.0);
+    let (b, f) = make(&[profile], &pieces[1..]);
+    assert_closed(&b, 2, 2);
+    assert_eq!(
+        kinds(&b, &f.walls[0][0]),
+        ["plane", "cone", "torus", "cylinder"]
+    );
+    // Pappus about the axis: the profile's area and its centroid's distance from the axis
+    // (the profile's x axis points at it, so distance 10 - x).
+    let tri = [(-1.0, -1.0), (1.0, -1.0), (2.0, 1.0), (-1.0, 1.0)];
+    let mut a = 0.0;
+    let mut mx = 0.0;
+    for i in 0..4 {
+        let (x0, y0) = tri[i];
+        let (x1, y1) = tri[(i + 1) % 4];
+        let c = x0 * y1 - x1 * y0;
+        a += 0.5 * c;
+        mx += (x0 + x1) * c / 6.0;
+    }
+    // The half disc of radius 1.5 above y = 1 centred at x = 0.5.
+    let half = 0.5 * PI * 1.5 * 1.5;
+    a += half;
+    mx += half * 0.5;
+    let xbar = mx / a;
+    let m = measure(&b);
+    assert_within(
+        m.volume,
+        m.error.volume,
+        a * (10.0 - xbar) * FRAC_PI_2,
+        "volume",
+    );
+}
+
+#[test]
+fn bent_rod_is_line_arc_line() {
+    let length = 10.0 + 10.0 * FRAC_PI_2 + 5.0;
+    let (b, f) = make(
+        &[vec![circle([0.0, 0.0], 2.0, true)]],
+        &bent(10.0, 10.0, 5.0),
+    );
+    assert_closed(&b, 2, 2);
+    assert_eq!(f.walls.len(), 3);
+    assert_eq!(b.faces().len(), 5);
+    assert_eq!(kinds(&b, &f.walls[1][0]), ["torus"]);
+    assert_mass(&b, tube(4.0 * PI, 4.0 * PI, length, true), "bent rod");
+    // Smooth joints: no ellipse anywhere.
+    assert!(ellipses(&b).is_empty());
+}
+
+#[test]
+fn five_segment_profile_counts() {
+    let profile = vec![
+        ln([-2.0, -1.0], [2.0, -1.0]),
+        ln([2.0, -1.0], [2.0, 1.0]),
+        arc([1.0, 1.0], [2.0, 1.0], [0.0, 1.0], true),
+        ln([0.0, 1.0], [-2.0, 1.0]),
+        ln([-2.0, 1.0], [-2.0, -1.0]),
+    ];
+    let (b, f) = make(&[profile], &bent(10.0, 10.0, 0.0));
+    // 5 walls a piece and two caps; 3 sections of 5 rims and 2 x 5 rails; 3 x 5 vertices.
+    assert_eq!(
+        (b.faces().len(), b.edges().len(), b.vertices().len()),
+        (12, 25, 15)
+    );
+    assert_eq!(
+        kinds(&b, &f.walls[0][0]),
+        ["plane", "plane", "cylinder", "plane", "plane"]
+    );
+    assert_eq!(
+        kinds(&b, &f.walls[1][0]),
+        ["plane", "cylinder", "torus", "plane", "cylinder"]
+    );
+    assert_closed(&b, 2, 2);
+    let a = 8.0 + 0.5 * PI;
+    let m = measure(&b);
+    // The half disc's centroid is at x = 1, so the profile's x-moment is pi/2 (the box's is
+    // zero) and the arc piece's volume Pappus's about radius 10 - xbar.
+    let xbar = 0.5 * PI / a;
+    let want = a * 10.0 + a * (10.0 - xbar) * FRAC_PI_2;
+    assert_within(m.volume, m.error.volume, want, "volume");
+}
+
+#[test]
+fn square_l_mitre() {
+    for turn in [FRAC_PI_2, PI / 3.0, 2.0 * PI / 3.0] {
+        let (s, c) = fmath::sin_cos(turn);
+        let corner = p3(0.0, 0.0, 10.0);
+        let pieces = polyline(&[Point3::ORIGIN, corner, corner + Vec3::new(s, 0.0, c) * 8.0]);
+        let (b, f) = make(&[square(2.0)], &pieces);
+        assert_closed(&b, 2, 2);
+        assert_eq!(b.faces().len(), 10);
+        assert_eq!(f.walls.len(), 2);
+        assert_mass(&b, tube(4.0, 8.0, 18.0, true), &format!("L at {turn}"));
+        // The mitre section is 2 by 2 / cos(turn / 2) about the corner.
+        let far = fmath::hypot(1.0, 1.0 / fmath::cos(0.5 * turn));
+        let mitre: Vec<f64> = b
+            .vertices()
+            .map(|v| (v.point() - corner).length())
+            .filter(|&d| d < 3.0)
+            .collect();
+        assert_eq!(mitre.len(), 4);
+        for d in mitre {
+            assert!((d - far).abs() < 1e-12, "{d} {far}");
+        }
+    }
+}
+
+#[test]
+fn circle_l_mitre_is_an_ellipse() {
+    let corner = p3(0.0, 0.0, 10.0);
+    let pieces = polyline(&[Point3::ORIGIN, corner, p3(10.0, 0.0, 10.0)]);
+    let (b, f) = make(&[vec![circle([0.0, 0.0], 1.5, true)]], &pieces);
+    assert_closed(&b, 2, 2);
+    assert_eq!(kinds(&b, &f.walls[0][0]), ["cylinder"]);
+    assert_eq!(kinds(&b, &f.walls[1][0]), ["cylinder"]);
+    let e = ellipses(&b);
+    assert_eq!(e.len(), 1);
+    assert!((e[0][0] - 1.5 * 2.0_f64.sqrt()).abs() < 1e-12, "{e:?}");
+    assert!((e[0][1] - 1.5).abs() < 1e-12, "{e:?}");
+    assert_mass(&b, tube(2.25 * PI, 3.0 * PI, 20.0, true), "circle L");
+}
+
+#[test]
+fn polyline_tube_out_of_plane() {
+    let pieces = polyline(&[
+        Point3::ORIGIN,
+        p3(0.0, 0.0, 10.0),
+        p3(10.0, 0.0, 10.0),
+        p3(10.0, 10.0, 10.0),
+        p3(10.0, 10.0, 25.0),
+    ]);
+    let (b, f) = make(&[vec![circle([0.0, 0.0], 1.0, true)]], &pieces);
+    assert_closed(&b, 2, 2);
+    assert_eq!(f.walls.len(), 4);
+    assert_eq!(ellipses(&b).len(), 3);
+    assert_mass(&b, tube(PI, TAU, 45.0, true), "tube");
+
+    // A square, so that the frame's turn shows in the plane walls.
+    let (b, _) = make(&[square(1.0)], &pieces);
+    assert_closed(&b, 2, 2);
+    assert_mass(&b, tube(1.0, 4.0, 45.0, true), "square tube");
+}
+
+#[test]
+fn bend_then_corner() {
+    let mut pieces = bent(10.0, 10.0, 6.0);
+    pieces.push(line(p3(16.0, 0.0, 20.0), p3(16.0, 7.0, 20.0)));
+    let (b, f) = make(&[vec![circle([0.0, 0.0], 1.0, true)]], &pieces);
+    assert_closed(&b, 2, 2);
+    assert_eq!(f.walls.len(), 4);
+    assert_eq!(ellipses(&b).len(), 1);
+    let length = 10.0 + 10.0 * FRAC_PI_2 + 6.0 + 7.0;
+    assert_mass(&b, tube(PI, TAU, length, true), "bend then corner");
+}
+
+#[test]
+fn hole_lines_the_tube() {
+    let loops = [square(4.0), vec![circle([0.0, 0.0], 1.0, true)]];
+    let pieces = bent(10.0, 10.0, 5.0);
+    let (b, f) = make(&loops, &pieces);
+    // A thick pipe: genus one.
+    assert_closed(&b, 0, 2);
+    assert_eq!(f.walls[0].len(), 2);
+    assert_eq!(kinds(&b, &f.walls[0][1]), ["cylinder"]);
+    assert_eq!(kinds(&b, &f.walls[1][1]), ["torus"]);
+    let length = 10.0 + 10.0 * FRAC_PI_2 + 5.0;
+    assert_mass(
+        &b,
+        tube(16.0 - PI, 16.0 + TAU, length, true),
+        "square with a hole",
+    );
+}
+
+#[test]
+fn closed_square_frame() {
+    let pieces = polyline(&[
+        Point3::ORIGIN,
+        p3(0.0, 0.0, 10.0),
+        p3(10.0, 0.0, 10.0),
+        p3(10.0, 0.0, 0.0),
+        Point3::ORIGIN,
+    ]);
+    let (b, f) = make(&[square(2.0)], &pieces);
+    assert!(f.start.is_none() && f.end.is_none());
+    assert_eq!(b.faces().len(), 16);
+    assert_closed(&b, 0, 2);
+    assert_mass(&b, tube(4.0, 8.0, 40.0, false), "picture frame");
+
+    // A circle in it: four ellipses, one at each corner.
+    let (b, _) = make(&[vec![circle([0.0, 0.0], 1.0, true)]], &pieces);
+    assert_closed(&b, 0, 2);
+    assert_eq!(ellipses(&b).len(), 4);
+    assert_mass(&b, tube(PI, TAU, 40.0, false), "round frame");
+}
+
+#[test]
+fn closed_with_a_hole_has_a_hollow() {
+    let pieces = polyline(&[
+        Point3::ORIGIN,
+        p3(0.0, 0.0, 10.0),
+        p3(10.0, 0.0, 10.0),
+        p3(10.0, 0.0, 0.0),
+        Point3::ORIGIN,
+    ]);
+    let loops = [
+        square(3.0),
+        square(1.0)
+            .into_iter()
+            .rev()
+            .map(|s| match s {
+                Seg::Line { start, end } => ln(end, start),
+                s @ Seg::Arc { .. } => s,
+            })
+            .collect(),
+    ];
+    let (b, _) = make(&loops, &pieces);
+    // Two tori: the outer surface and the hole's, each a shell.
+    assert_closed(&b, 0, 4);
+    assert_mass(&b, tube(8.0, 16.0, 40.0, false), "hollow frame");
+}
+
+#[test]
+fn whole_turn_is_a_torus() {
+    let pieces = [Piece::Arc {
+        centre: p3(10.0, 0.0, 0.0),
+        axis: unit(0.0, 1.0, 0.0),
+        start: Point3::ORIGIN,
+        angle: TAU,
+    }];
+    let (b, f) = make(&[vec![circle([0.0, 0.0], 2.0, true)]], &pieces);
+    assert!(f.start.is_none());
+    assert_eq!(kinds(&b, &f.walls[0][0]), ["torus"]);
+    assert_closed(&b, 0, 2);
+    assert_mass(&b, tube(4.0 * PI, 4.0 * PI, 10.0 * TAU, false), "torus");
+
+    // A square: two cylinders and two annuli.
+    let (b, f) = make(&[square(2.0)], &pieces);
+    assert_eq!(
+        kinds(&b, &f.walls[0][0]),
+        ["plane", "cylinder", "plane", "cylinder"]
+    );
+    assert_closed(&b, 0, 2);
+    assert_mass(&b, tube(4.0, 8.0, 10.0 * TAU, false), "square ring");
+}
+
+#[test]
+fn deterministic() {
+    let pieces = bent(10.0, 10.0, 5.0);
+    let loops = [square(4.0), vec![circle([0.5, 0.0], 1.0, true)]];
+    let (a, fa) = make(&loops, &pieces);
+    let (b, fb) = make(&loops, &pieces);
+    assert_eq!(fa, fb);
+    let points = |b: &Brep| -> Vec<[u64; 3]> {
+        b.vertices()
+            .map(|v| v.point().to_array().map(f64::to_bits))
+            .collect()
+    };
+    assert_eq!(points(&a), points(&b));
+}
+
+#[test]
+fn refuses_a_tight_arc() {
+    let pieces = bent(0.0, 2.0, 0.0);
+    let e = refusal(
+        &[vec![circle([0.0, 0.0], 2.0, true)]],
+        &plain(),
+        &pieces[1..],
+    );
+    assert!(
+        matches!(e, MakeError::Refused(Refusal::TightArc { piece: 0, .. })),
+        "{e:?}"
+    );
+    // The reach is towards the axis: the same circle moved away from it fits.
+    let ok = sweep(
+        &region(&[vec![circle([-1.0, 0.0], 2.0, true)]]),
+        &plain(),
+        &path(&pieces[1..]),
+        &PLAIN,
+        &doc(),
+    );
+    assert!(ok.is_ok(), "{ok:?}");
+}
+
+#[test]
+fn refuses_mitres_that_meet() {
+    // A U: the middle piece's mitres lean towards each other, 1 each for a 2-wide square.
+    let u = |w: f64| {
+        polyline(&[
+            Point3::ORIGIN,
+            p3(0.0, 0.0, 10.0),
+            p3(w, 0.0, 10.0),
+            p3(w, 0.0, 0.0),
+        ])
+    };
+    let e = refusal(&[square(2.0)], &plain(), &u(1.5));
+    assert!(
+        matches!(e, MakeError::Refused(Refusal::MitresMeet { piece: 1 })),
+        "{e:?}"
+    );
+    let (b, _) = make(&[square(2.0)], &u(2.5));
+    assert_closed(&b, 2, 2);
+    assert_mass(&b, tube(4.0, 8.0, 22.5, true), "U");
+
+    // A zig: the same piece between parallel mitres is a parallelogram, however short.
+    let zig = polyline(&[
+        Point3::ORIGIN,
+        p3(0.0, 0.0, 10.0),
+        p3(1.5, 0.0, 10.0),
+        p3(1.5, 0.0, 20.0),
+    ]);
+    let (b, _) = make(&[square(2.0)], &zig);
+    assert_closed(&b, 2, 2);
+    assert_mass(&b, tube(4.0, 8.0, 21.5, true), "zig");
+}
+
+#[test]
+fn refuses_a_misplaced_profile() {
+    let pieces = polyline(&[Point3::ORIGIN, p3(0.0, 0.0, 10.0)]);
+    let off = Frame::new(
+        p3(0.5, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        Vec3::new(1.0, 0.0, 0.0),
+    )
+    .unwrap();
+    let e = refusal(&[square(1.0)], &off, &pieces);
+    assert!(
+        matches!(e, MakeError::Refused(Refusal::Placement { .. })),
+        "{e:?}"
+    );
+    let tilted = Frame::new(
+        Point3::ORIGIN,
+        Vec3::new(0.1, 0.0, 1.0),
+        Vec3::new(1.0, 0.0, 0.0),
+    )
+    .unwrap();
+    let e = refusal(&[square(1.0)], &tilted, &pieces);
+    assert!(
+        matches!(e, MakeError::Refused(Refusal::Placement { .. })),
+        "{e:?}"
+    );
+}
+
+#[test]
+fn refuses_helix_and_corner_on_arc() {
+    let helix = [Piece::Helix {
+        centre: p3(10.0, 0.0, 0.0),
+        axis: unit(0.0, 1.0, 0.0),
+        start: Point3::ORIGIN,
+        angle: PI,
+        rise: 0.0,
+    }];
+    // A zero rise is still the helix kind.
+    let e = refusal(&[square(1.0)], &plain(), &helix);
+    assert!(
+        matches!(
+            e,
+            MakeError::Unsupported(Unsupported::HelixPiece { piece: 0 })
+        ),
+        "{e:?}"
+    );
+    // An arc leaving a line at a corner.
+    let pieces = [
+        line(Point3::ORIGIN, p3(0.0, 0.0, 10.0)),
+        Piece::Arc {
+            centre: p3(0.0, 0.0, 20.0),
+            axis: unit(0.0, 1.0, 0.0),
+            start: p3(0.0, 0.0, 10.0),
+            angle: FRAC_PI_2,
+        },
+    ];
+    let e = refusal(&[square(1.0)], &plain(), &pieces);
+    assert!(
+        matches!(
+            e,
+            MakeError::Unsupported(Unsupported::CornerOnArc { corner: 0 })
+        ),
+        "{e:?}"
+    );
+}
+
+#[test]
+fn refuses_an_arc_past_a_turn() {
+    let pieces = [Piece::Arc {
+        centre: p3(10.0, 0.0, 0.0),
+        axis: unit(0.0, 1.0, 0.0),
+        start: Point3::ORIGIN,
+        angle: 1.5 * TAU,
+    }];
+    let e = refusal(&[square(1.0)], &plain(), &pieces);
+    assert!(
+        matches!(e, MakeError::Refused(Refusal::ArcTurn { piece: 0, .. })),
+        "{e:?}"
+    );
+}
+
+#[test]
+fn refuses_a_closed_path_that_turns_the_profile() {
+    // Out of its plane, a closed polyline brings the frame back turned (here by 60
+    // degrees: a square's corners would match again only at 90).
+    let pieces = polyline(&[
+        Point3::ORIGIN,
+        p3(0.0, 0.0, 10.0),
+        p3(10.0, 0.0, 10.0),
+        p3(0.0, 10.0, 0.0),
+        Point3::ORIGIN,
+    ]);
+    let e = refusal(&[square(1.0)], &plain(), &pieces);
+    assert!(
+        matches!(e, MakeError::Refused(Refusal::ClosedTurned { .. })),
+        "{e:?}"
+    );
 }

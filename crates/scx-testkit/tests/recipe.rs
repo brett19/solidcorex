@@ -91,7 +91,7 @@ fn the_list_is_unique_stable_and_complete() {
             )
         })
         .count();
-    assert_eq!((built, manifold, ssi), (5, 6, 6));
+    assert_eq!((built, manifold, ssi), (11, 0, 6));
     // BO4's five and BO5's six are the ones the plan names.
     for n in [
         "box-cyl-hole",
@@ -521,12 +521,29 @@ fn every_recipes_volume_agrees_with_the_membership_oracle() {
 
 #[test]
 fn contact_points_lie_on_both_operands_boundaries() {
+    // The touches inside a face (BO25 builds them): where each pair meets.
+    let (s30, c30) = fmath::sin_cos(PI / 6.0);
+    let mut six = Vec::new();
+    for axis in 0..3 {
+        for hi in [0.0, 10.0] {
+            let mut p = [5.0; 3];
+            p[axis] = hi;
+            six.push(p);
+        }
+    }
+    let touches: [(&str, Vec<[f64; 3]>); 6] = [
+        ("tangent-sphere-box", vec![[5.0, 5.0, 10.0]]),
+        ("seam-sphere-box", vec![[10.0, 15.0, 12.5]]),
+        ("seam-box-sphere", vec![[10.0, 15.0, 12.5]]),
+        ("off-seam-sphere-box", vec![[12.5, 0.0, 7.5]]),
+        ("seam-sphere-sphere", vec![[3.0 * c30, 0.0, 3.0 * s30]]),
+        ("seam-box-minus-sphere", six),
+    ];
     let rs = all(1e-5);
     let mut points = 0;
-    for r in &rs {
-        let Outcome::Unsupported(Unsupported::NonManifold { at }) = &r.outcome else {
-            continue;
-        };
+    for (name, at) in &touches {
+        let r = by_name(&rs, name);
+        assert!(matches!(r.outcome, Outcome::Built(_)), "{name}");
         let a = r.base.csg().expect("a");
         for s in &r.steps {
             let b = s.tool.csg().expect("b");

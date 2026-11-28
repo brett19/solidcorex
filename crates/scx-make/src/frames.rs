@@ -370,12 +370,6 @@ impl Path {
         ends.is_some_and(|(a, b)| a.distance(b) <= doc.resolution().zone().mm())
     }
 
-    /// The fractions at which the pieces after the first start (the sweep's skin takes a
-    /// station at each).
-    pub(crate) fn joints(&self) -> impl Iterator<Item = f64> + '_ {
-        (1..self.pieces.len()).filter_map(|i| self.fraction_of_start(i))
-    }
-
     /// The angle the unit tangent turns through along the pieces, corners not included
     /// (radians): an arc's angle, a helix's `angle a / sqrt(a^2 + b^2)`, a line's 0.
     pub(crate) fn tangent_turn(&self) -> f64 {
@@ -391,6 +385,14 @@ impl Path {
 
     fn fraction_of_start(&self, i: usize) -> Option<f64> {
         self.pieces.get(i).map(|m| m.start / self.total)
+    }
+
+    /// Each piece with the fraction of the path's length at which it starts and the corner
+    /// before it (none for the first): what a sweep builds its walls from.
+    pub(crate) fn joints(&self) -> impl Iterator<Item = (&Piece, f64, Option<&Corner>)> + '_ {
+        self.pieces
+            .iter()
+            .map(|m| (&m.piece, m.start / self.total, m.corner.as_ref()))
     }
 }
 
