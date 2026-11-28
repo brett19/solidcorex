@@ -151,6 +151,8 @@ pub enum NurbsError {
     /// elevation that answers is within that bound: see
     /// [`NurbsCurve::elevate`](crate::NurbsCurve::elevate).
     Unstable,
+    /// Compatible curves were asked for from no curves.
+    NoCurves,
     /// A step failed through the crate's own fault: an index the built values' invariants
     /// rule out was missing. A bug.
     Defect {
@@ -185,6 +187,7 @@ impl NurbsError {
             | Self::InsertionMultiplicity { .. }
             | Self::RemovalMultiplicity { .. }
             | Self::Unclamped
+            | Self::NoCurves
             | Self::Degenerate { .. } => ErrorKind::Refused,
         }
     }
@@ -209,6 +212,7 @@ impl NurbsError {
             Self::RemovalMultiplicity { .. } => "removal_multiplicity",
             Self::DerivativeOrder { .. } => "derivative_order",
             Self::Unclamped => "unclamped",
+            Self::NoCurves => "no_curves",
             Self::Degenerate { .. } => "degenerate",
             Self::Unstable => "unstable",
             Self::Defect { .. } => "defect",
@@ -279,6 +283,7 @@ impl fmt::Display for NurbsError {
                 write!(f, "derivative order {order} is above {max}")
             }
             Self::Unclamped => f.write_str("the end knots are not of multiplicity degree + 1"),
+            Self::NoCurves => f.write_str("no curves to make compatible"),
             Self::Degenerate { parameter } => write!(
                 f,
                 "a knot difference rounded to zero or the result overflowed evaluating at {parameter}"
@@ -365,6 +370,7 @@ mod tests {
             },
             NurbsError::DerivativeOrder { order: 0, max: 0 },
             NurbsError::Unclamped,
+            NurbsError::NoCurves,
             NurbsError::Degenerate { parameter: 0.0 },
             NurbsError::Unstable,
             NurbsError::Defect { why: "" },
