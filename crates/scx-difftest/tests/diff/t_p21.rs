@@ -481,6 +481,9 @@ struct PinUnits {
     last_wins: usize,
     /// A product read scx refuses for want of a length unit, which the pin reads in mm.
     refused: usize,
+    /// A length or plane angle `SI_UNIT` whose base is neither METRE nor RADIAN (scx `None`):
+    /// the pin reads it as factor 1.
+    unknown_base: usize,
 }
 
 /// The unit the pin reads where scx reads `u`: the file's, or the pin's default (millimetres,
@@ -706,7 +709,15 @@ fn compare_file(name: &str, text: &str, c: &mut Corpus) {
             let b = solidcore_record::step::units::unit_factor(&p, *id);
             let ka = a.map(|(k, f)| (format!("{k:?}"), f));
             let kb = b.map(|(k, f)| (format!("{k:?}"), f));
+            // scx refuses an SI length/angle unit of an unknown base; the pin reads factor 1.
+            let unknown_base = ka.is_none()
+                && kb.as_ref().is_some_and(|(k, f)| k != "Other" && *f == 1.0)
+                && e.record("SI_UNIT").is_some();
             let (same, near) = match (&ka, &kb) {
+                _ if unknown_base => {
+                    c.pin_units.unknown_base += 1;
+                    (true, true)
+                }
                 (Some((k1, f1)), Some((k2, f2))) => {
                     (k1 == k2 && same_f(*f1, *f2), k1 == k2 && close(*f1, *f2))
                 }
@@ -843,8 +854,12 @@ fn p21_corpus() {
         t.report(name);
     }
     println!(
-        "difftest t_p21::corpus_pin_units: pin defects: {} missing units read as mm/rad, {} conflicting units read as the last, {} several uncertainties read as the last, {} products read where scx refuses for want of a length unit",
-        c.pin_units.defaulted, c.pin_units.conflicting, c.pin_units.last_wins, c.pin_units.refused
+        "difftest t_p21::corpus_pin_units: pin defects: {} missing units read as mm/rad, {} conflicting units read as the last, {} several uncertainties read as the last, {} products read where scx refuses for want of a length unit, {} SI units of an unknown base read as factor 1",
+        c.pin_units.defaulted,
+        c.pin_units.conflicting,
+        c.pin_units.last_wins,
+        c.pin_units.refused,
+        c.pin_units.unknown_base
     );
     println!(
         "difftest t_p21::corpus_part42: {} reads refused by both readers",

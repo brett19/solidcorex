@@ -2104,6 +2104,29 @@ not a mismatch. The Part 42 comparison reads both in the same explicit units. Re
 
 | 11-27 | (For the owner's review) `scx_p21::units::context` returns a `Context` with `length` and `angle` each `Unit::{Missing, Named(f), Conflicting}` and the file's distance measures; nothing defaults. `Context::units(assume)` turns it into `Units` or a typed `UnitsFault`, and `Context::uncertainty(length)` is the largest stated (`several` when more). scx-step uses it and drops its own reader (17 tests unchanged); `product::read` refuses a frame in a context without one length unit (`EntityCause::Units`) and `read_assuming` takes the caller's assumed length. The pin's mm/rad default, last-wins conflict and last-wins uncertainty are counted as defect classes in `t_p21` | A per-unit enum is the only shape that keeps "missing" and "conflicting" apart and lets the product reader go on; `Result` would lose the uncertainty and the structure of files that lack a unit. `unit_factor`'s unknown-SI-base factor 1 is the same guess one level down and stays a follow-up | 74 §23 |
 
+### 23.6 P21Ub (11-28)
+
+The residue §23.1 left: `scx_p21::units::unit_factor` read a length or plane angle `SI_UNIT` whose
+base it does not know (`SI_UNIT(.MILLI.,.FURLONG.)`) as factor 1. It now returns `None`, as it
+does for an unreadable conversion. `context` already treats `None` as "not usable", so such a unit
+is left out and the kind reads `Unit::Missing` (then `UnitsFault::Missing`, or the caller's
+assumption); scx-step, `Context::units` and `uncertainty` needed no change and gained no default.
+A measure whose unit is `None` is read in the context's length unit, as before for unreadable units.
+Units of kind `Other` (steradian, mass) keep factor 1: nothing reads their factor, and refusing
+them would make every real file's solid angle unit "unreadable". A typed cause was not added: the
+module has no per-unit cause today, and `Missing` is what the context already says.
+
+Tests (`scx-p21` units): an unknown-base length and plane angle unit is `None` and the context
+names the kind `Missing` (in `missing_or_broken_units_are_missing_not_mm_and_rad`, replacing the assertion that it was
+`Named(1.0)`); known bases (MILLI METRE, RADIAN) read exactly and STERADIAN stays `Other, 1.0`; an
+uncertainty in an unknown-base unit is read in the context's length unit.
+
+difftest: `t_p21` maps the unit-level difference (scx `None`, pin factor 1 for a non-`Other` SI
+unit) as equal and counts it as a new defect class, `unknown_base`, appended to the
+`corpus_pin_units` line. The context level needed no mapping (it already counts a `Missing` unit
+as the pin's default, which is 1 for both mm and rad). The pin corpus has no such unit, so the
+count is 0 as the others are.
+
 ## 20. SU7 as built (11-27)
 
 `scx_surface::recognize` and `scx_surface::recognize_written`, in `crates/scx-surface/src/recognize.rs`
