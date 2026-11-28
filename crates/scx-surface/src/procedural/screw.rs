@@ -271,9 +271,8 @@ impl RadialLaw {
     /// The stretch that holds `at`: past the ends, held; inside, the segment it lies on (at
     /// a law point, the segment that starts there; at the last, the one that ends there).
     pub(crate) fn segment(&self, at: f64) -> Segment {
-        let (first, last) = match (self.offsets.first(), self.offsets.last()) {
-            (Some(&f), Some(&l)) => (f, l),
-            _ => return Segment::Held(0.0),
+        let (Some(&first), Some(&last)) = (self.offsets.first(), self.offsets.last()) else {
+            return Segment::Held(0.0);
         };
         let k = self.angles.partition_point(|&a| a <= at);
         if k == 0 {
@@ -314,12 +313,13 @@ impl RadialLaw {
     pub(crate) fn slope(&self, seg: Segment) -> (f64, Ivl) {
         match seg {
             Segment::Held(_) => (0.0, Ivl::from(0.0)),
-            Segment::Linear(i) => self
-                .ends(i)
-                .map_or((0.0, Ivl::from(0.0)), |(a0, o0, a1, o1)| {
+            Segment::Linear(i) => self.ends(i).map_or_else(
+                || (0.0, Ivl::from(0.0)),
+                |(a0, o0, a1, o1)| {
                     let x = (Ivl::from(o1) - Ivl::from(o0)) / (Ivl::from(a1) - Ivl::from(a0));
                     ((o1 - o0) / (a1 - a0), x)
-                }),
+                },
+            ),
         }
     }
 
@@ -438,14 +438,11 @@ impl Unstationed {
 
     /// The screw over `stations` after checking them, its gap bounded over them.
     fn stationed(self, stations: Vec<f64>) -> Result<Screw, ProceduralError> {
-        let (lo, hi) = match (stations.first(), stations.last()) {
-            (Some(&a), Some(&b)) => (a, b),
-            _ => {
-                return Err(ProceduralError::Range {
-                    min: f64::NAN,
-                    max: f64::NAN,
-                });
-            }
+        let (Some(&lo), Some(&hi)) = (stations.first(), stations.last()) else {
+            return Err(ProceduralError::Range {
+                min: f64::NAN,
+                max: f64::NAN,
+            });
         };
         let bad = ProceduralError::Range { min: lo, max: hi };
         let ok = stations.len() >= 2
@@ -862,24 +859,24 @@ impl Screw {
         let (e, _, _) = self.turn_jet(t, side, i);
         let mut out = r * e.0 + kr * e.1;
         if i == 0 {
-            out = out + k * pj.dot(k);
+            out += k * pj.dot(k);
         }
         if j == 0 {
             let lambda = self.pitch / TAU;
             let (_, th, _) = self.turn_jet(t, side, i);
-            out = out + k * (lambda * th);
+            out += k * (lambda * th);
             if self.law.is_some() {
                 let ke = k.cross(self.radial);
                 let mut binom = 1.0;
                 for l in 0..=i {
                     let (_, _, dl) = self.turn_jet(t, side, l);
                     let (el, _, _) = self.turn_jet(t, side, i - l);
-                    out = out + (self.radial * el.0 + ke * el.1) * (binom * dl);
+                    out += (self.radial * el.0 + ke * el.1) * (binom * dl);
                     binom = binom * (i - l) as f64 / (l + 1) as f64;
                 }
             }
             if i == 0 {
-                out = out + self.origin.to_vec();
+                out += self.origin.to_vec();
             }
         }
         out
