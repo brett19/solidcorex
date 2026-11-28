@@ -802,6 +802,28 @@ pub fn run_defect_tol<A: Args, RX: Bits, RS: Bits>(
     );
 }
 
+/// [`run_defect`] on shard `index` of `of` of the pool that `seed` names (see
+/// [`run_with_shard`]); [`PinDefect`]'s `check` and `applies` are the whole test's.
+pub fn run_defect_shard<A: Args, RX: Bits, RS: Bits>(
+    name: &str,
+    seed: &str,
+    shard: (usize, usize),
+    defect: &PinDefect<A, RX>,
+    xf: impl Fn(A) -> RX,
+    sf: impl Fn(A) -> RS,
+) {
+    let check = |c: &A, r: &RX, _: &Out| (defect.check)(c, r);
+    run_with_shard(
+        name,
+        seed,
+        shard,
+        Tol::DEFAULT,
+        Some((defect.reason, &defect.applies, &check)),
+        xf,
+        sf,
+    );
+}
+
 /// [`run`], with a known defect of the pin judged by an oracle.
 pub fn run_truth<A: Args, RX: Bits, RS: Bits>(
     name: &str,
@@ -851,9 +873,28 @@ fn run_with<A: Args, RX: Bits, RS: Bits>(
     xf: impl Fn(A) -> RX,
     sf: impl Fn(A) -> RS,
 ) {
+    run_with_shard(name, name, (0, 1), tol, defect, xf, sf);
+}
+
+/// [`run_with`] on every `of`-th input from `index` of the pool `seed` draws, so the shards
+/// of one test (each its own `#[test]`, which nextest runs in parallel) together judge
+/// exactly the inputs the whole test would, with the same pool and the same checks.
+fn run_with_shard<A: Args, RX: Bits, RS: Bits>(
+    name: &str,
+    seed: &str,
+    (index, of): (usize, usize),
+    tol: Tol,
+    defect: Option<Defect<'_, A, RX>>,
+    xf: impl Fn(A) -> RX,
+    sf: impl Fn(A) -> RS,
+) {
     QUIET.call_once(|| std::panic::set_hook(Box::new(|_| {})));
-    let mut rng = SplitMix64(seed_of(name));
-    let cases = A::cases(&mut rng);
+    let mut rng = SplitMix64(seed_of(seed));
+    let cases: Vec<A> = A::cases(&mut rng)
+        .into_iter()
+        .skip(index)
+        .step_by(of)
+        .collect();
     let (mut exact, mut unstable, mut bad) = (0usize, Vec::new(), Vec::new());
     let (mut defects, mut applied) = (0usize, 0usize);
     let mut drift: Option<String> = None;
@@ -934,6 +975,9 @@ fn run_with<A: Args, RX: Bits, RS: Bits>(
 /// `diff!(name, |a: T, ...| body)` runs `body` with `m` naming scx-num's modules and again
 /// with `m` naming solidcore's, on the same inputs; `diff!(name, |...| xbody, sbody)`
 /// takes the two bodies separately (for the signatures that changed);
+/// `diff!(name, pin_defect = f, shard = (i, n, "seed"), |...| body)` judges every `n`-th
+/// input from `i` of the pool the test named `seed` (in this module) draws, so `n` such tests
+/// together judge what one whole test would;
 /// `diff!(name, pin_defect = f, |...| body)` (or `xbody, sbody`) excuses the inputs of the
 /// [`PinDefect`] `f()`; `truth_defect = f` likewise for a [`TruthDefect`].
 #[macro_export]
@@ -983,6 +1027,35 @@ macro_rules! diff {
         fn $name() {
             $crate::harness::run_defect::<($($t,)*), _, _>(
                 concat!(module_path!(), "::", stringify!($name)),
+                &$d(),
+                |($($a,)*): ($($t,)*)| {
+                    #[allow(unused_imports)]
+                    use $crate::facade::x as m;
+                    #[allow(unused_imports)]
+                    use m::ext::*;
+                    $xb
+                },
+                |($($a,)*): ($($t,)*)| {
+                    #[allow(unused_imports)]
+                    use $crate::facade::s as m;
+                    #[allow(unused_imports)]
+                    use m::ext::*;
+                    $sb
+                },
+            );
+        }
+    };
+    ($name:ident, pin_defect = $d:path, shard = ($i:expr, $n:expr, $seed:literal), |$($a:ident : $t:ty),*| $body:expr) => {
+        $crate::diff!($name, pin_defect = $d, shard = ($i, $n, $seed), |$($a: $t),*| $body, $body);
+    };
+    ($name:ident, pin_defect = $d:path, shard = ($i:expr, $n:expr, $seed:literal), |$($a:ident : $t:ty),*| $xb:expr, $sb:expr) => {
+        #[test]
+        #[allow(unused_variables, unused_mut, clippy::redundant_closure_call)]
+        fn $name() {
+            $crate::harness::run_defect_shard::<($($t,)*), _, _>(
+                concat!(module_path!(), "::", stringify!($name)),
+                concat!(module_path!(), "::", $seed),
+                ($i, $n),
                 &$d(),
                 |($($a,)*): ($($t,)*)| {
                     #[allow(unused_imports)]
