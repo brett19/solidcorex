@@ -3,7 +3,7 @@
 //! cylinders, cones, spheres and tori; lines, circles, ellipses, parabolas and hyperbolas.
 //!
 //! A B-spline surface goes through `scx_surface::recognize` over its whole domain and is a
-//! quadric only where that proves it within the body's allowance (SP2b, 74 §38); a cone or
+//! quadric only where that proves it within the body's allowance (`SP2b`, 74 §38); a cone or
 //! torus whose written sizes the kinds refuse goes through `recognize_written`. Every other
 //! kind is a typed [`Waits`](crate::Waits): the B-splines no quadric fits are task SP5's, the
 //! swept and offset kinds task SP6's. Nothing is approximated without a record. A `SURFACE_CURVE` or `SEAM_CURVE` is its 3-D
