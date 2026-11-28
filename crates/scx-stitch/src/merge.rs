@@ -40,12 +40,12 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use scx_brep::op::{Cx, Done, Report};
 use scx_brep::{
-    Brep, Document, Draft, EdgeId, EdgeJoin, EdgeShape, Entity, FaceId, FaceMerge, PcurveWriteError, Refusal,
-    VertexId, Why,
+    Brep, Document, Draft, EdgeId, EdgeJoin, EdgeShape, Entity, FaceId, FaceMerge,
+    PcurveWriteError, Refusal, VertexId, Why,
 };
 use scx_curve::Curve;
-use scx_num::extent1d::Extent1d;
 use scx_num::budget::{Budget, Stop};
+use scx_num::extent1d::Extent1d;
 use scx_num::extent3d::Extent3d;
 use scx_num::units::Length;
 use scx_num::vector3d::{Point3, Vec3};
@@ -163,15 +163,12 @@ fn defect() -> StitchError {
 /// `cx.doc`'s; [`StitchRefusal::NoSuchFace`] for a face the body does not hold;
 /// [`StitchError::Exhausted`] and [`StitchError::Cancelled`] from `cx`; and
 /// [`StitchError::Defect`] for the method's own failure (the merged draft did not finish).
-pub fn merge_faces(
-    body: &Brep,
-    faces: &[FaceId],
-    cx: &mut Cx<'_>,
-) -> Result<Merged, StitchError> {
+pub fn merge_faces(body: &Brep, faces: &[FaceId], cx: &mut Cx<'_>) -> Result<Merged, StitchError> {
     same_document(&[body], cx)?;
     let mut set: BTreeSet<FaceId> = BTreeSet::new();
     for &f in faces {
-        body.face(f).ok_or(StitchError::Refused(StitchRefusal::NoSuchFace { face: f }))?;
+        body.face(f)
+            .ok_or(StitchError::Refused(StitchRefusal::NoSuchFace { face: f }))?;
         set.insert(f);
     }
     let mut budget = cx.budget();
@@ -208,7 +205,8 @@ pub fn merge_faces(
         if fa.record().sides != fb.record().sides || fa.surface() == fb.surface() {
             continue;
         }
-        pairs.entry((a, b)).or_insert(e.id());
+        let id = e.id();
+        pairs.entry((a, b)).or_insert(id);
     }
     // 2. Proof, pair by pair, then 3. groups by union-find on the proved pairs.
     let mut boxes: BTreeMap<FaceId, Option<Extent3d>> = BTreeMap::new();
@@ -244,7 +242,14 @@ pub fn merge_faces(
         }
         let Some((rep_id, rep)) = planes
             .iter()
-            .min_by(|(_, p), (_, q)| plane_key(p).iter().zip(plane_key(q)).map(|(a, b)| a.total_cmp(&b)).find(|o| o.is_ne()).unwrap_or(core::cmp::Ordering::Equal))
+            .min_by(|(_, p), (_, q)| {
+                plane_key(p)
+                    .iter()
+                    .zip(plane_key(q))
+                    .map(|(a, b)| a.total_cmp(&b))
+                    .find(|o| o.is_ne())
+                    .unwrap_or(core::cmp::Ordering::Equal)
+            })
             .copied()
         else {
             continue;
@@ -289,7 +294,15 @@ pub fn merge_faces(
     }
     // 5. Edges: runs of lines made one, then equal curves joined.
     protected.retain(|&e| draft.edge(e).is_some());
-    join_edges(&mut draft, &protected, approx, &doc, &mut budget, cx.stop, &mut report)?;
+    join_edges(
+        &mut draft,
+        &protected,
+        approx,
+        doc,
+        &mut budget,
+        cx.stop,
+        &mut report,
+    )?;
     let (body, changes) = draft
         .finish(cx.doc)
         .map_err(|u| StitchError::Defect(StitchDefect::Finish(Box::new(u.cause))))?;
@@ -319,7 +332,7 @@ fn face_box(
 ) -> Option<Extent3d> {
     *boxes
         .entry(f)
-        .or_insert_with(|| body.face(f).and_then(|x| x.bounding_box()))
+        .or_insert_with(|| body.face(f).and_then(scx_brep::Face::bounding_box))
 }
 
 /// Whether faces `a` and `b` lie on one plane, each against the other's.
@@ -414,7 +427,9 @@ fn seg(draft: &Draft, e: EdgeId, protected: &BTreeSet<EdgeId>) -> Option<Seg> {
         return None;
     };
     let fins: Vec<_> = edge.fins().collect();
-    let [f0, f1] = fins.as_slice() else { return None };
+    let [f0, f1] = fins.as_slice() else {
+        return None;
+    };
     if f0.face == f1.face || g.ends[0] == g.ends[1] {
         return None;
     }
@@ -434,13 +449,13 @@ fn join_edges(
     draft: &mut Draft,
     protected: &BTreeSet<EdgeId>,
     approx: f64,
-    doc: &Document,
+    doc: Document,
     budget: &mut Budget,
     stop: &Stop,
     report: &mut MergeReport,
 ) -> Result<(), StitchError> {
     let mut star: BTreeMap<VertexId, Vec<EdgeId>> = BTreeMap::new();
-    let ids: Vec<EdgeId> = draft.edges().map(|e| e.id()).collect();
+    let ids: Vec<EdgeId> = draft.edges().map(scx_brep::Edge::id).collect();
     for &e in &ids {
         budget.charge(UNIT)?;
         let ends = draft.edge(e).ok_or_else(defect)?.geometry().ends;
@@ -449,13 +464,14 @@ fn join_edges(
             star.entry(ends[1]).or_default().push(e);
         }
     }
-    let other = |star: &BTreeMap<VertexId, Vec<EdgeId>>, v: VertexId, e: EdgeId| -> Option<EdgeId> {
-        match star.get(&v)?.as_slice() {
-            [a, b] if *a == e => Some(*b),
-            [a, b] if *b == e => Some(*a),
-            _ => None,
-        }
-    };
+    let other =
+        |star: &BTreeMap<VertexId, Vec<EdgeId>>, v: VertexId, e: EdgeId| -> Option<EdgeId> {
+            match star.get(&v)?.as_slice() {
+                [a, b] if *a == e => Some(*b),
+                [a, b] if *b == e => Some(*a),
+                _ => None,
+            }
+        };
     let mut seen: BTreeSet<EdgeId> = BTreeSet::new();
     let mut interior: BTreeSet<VertexId> = BTreeSet::new();
     for &e in &ids {
@@ -479,8 +495,12 @@ fn join_edges(
                 ) else {
                     break;
                 };
-                let Some(next) = other(&star, v, last) else { break };
-                let Some(s) = seg(draft, next, protected) else { break };
+                let Some(next) = other(&star, v, last) else {
+                    break;
+                };
+                let Some(s) = seg(draft, next, protected) else {
+                    break;
+                };
                 if seen.contains(&next) || s.faces != first.faces {
                     break;
                 }
@@ -557,9 +577,10 @@ fn one_run(
     edges: &[EdgeId],
     verts: &[VertexId],
     approx: f64,
-    doc: &Document,
+    doc: Document,
 ) -> Result<Result<(), NotOneLine>, StitchError> {
-    let point = |d: &Draft, v: VertexId| d.vertex(v).map(|x| x.point()).ok_or_else(defect);
+    let point =
+        |d: &Draft, v: VertexId| d.vertex(v).map(scx_brep::Vertex::point).ok_or_else(defect);
     let mut edges = edges.to_vec();
     let mut verts = verts.to_vec();
     let (p0, pk) = (
@@ -580,7 +601,12 @@ fn one_run(
         return Err(defect());
     };
     // The canonical line: the first edge's, run the way the run runs.
-    let line = if s0.ends[0] == verts[0] { s0.line } else { s0.line.reversed() };
+    let start = verts.first().copied().ok_or_else(defect)?;
+    let line = if s0.ends[0] == start {
+        s0.line
+    } else {
+        s0.line.reversed()
+    };
     let d = line.direction();
     let t_of = |p: Point3| (p - line.origin()).dot(d) / d.length_squared();
     let mut ts = Vec::with_capacity(verts.len());
@@ -588,7 +614,9 @@ fn one_run(
     for &v in &verts {
         let p = point(draft, v)?;
         if p.distance(line.point(t_of(p))) > approx {
-            return Ok(Err(NotOneLine::Apart(Length::from_mm(p.distance(line.point(t_of(p)))))));
+            return Ok(Err(NotOneLine::Apart(Length::from_mm(
+                p.distance(line.point(t_of(p))),
+            ))));
         }
         let t = t_of(p);
         if t <= prev {
@@ -606,7 +634,11 @@ fn one_run(
         else {
             return Err(defect());
         };
-        let lo = if j == 0 { lo } else { ts.get(j).copied().unwrap_or(lo) };
+        let lo = if j == 0 {
+            lo
+        } else {
+            ts.get(j).copied().unwrap_or(lo)
+        };
         let (old_geom, fins) = {
             let edge = draft.edge(e).ok_or_else(defect)?;
             (edge.geometry().clone(), edge.fins().collect::<Vec<_>>())
@@ -639,7 +671,7 @@ fn one_run(
     }
     let mut failed = None;
     for &f in &touched {
-        if let Err(e) = draft.write_pcurves(f, doc) {
+        if let Err(e) = draft.write_pcurves(f, &doc) {
             failed = Some(e);
             break;
         }
@@ -647,7 +679,9 @@ fn one_run(
     if let Some(e) = failed {
         for (edge, shape, ends) in before {
             let flipped = draft.edge(edge).is_some_and(|x| x.geometry().ends != ends);
-            let fins: Vec<_> = draft.edge(edge).map(|x| x.fins().collect()).unwrap_or_default();
+            let fins: Vec<_> = draft
+                .edge(edge)
+                .map_or_else(Vec::new, |x| x.fins().collect());
             if let Some(g) = draft.edge_mut(edge) {
                 g.shape = shape;
                 g.ends = ends;
@@ -665,7 +699,7 @@ fn one_run(
             }
         }
         for &f in &touched {
-            draft.write_pcurves(f, doc).map_err(|_| defect())?;
+            draft.write_pcurves(f, &doc).map_err(|_| defect())?;
         }
         return Ok(Err(NotOneLine::Pcurves(e)));
     }
@@ -683,18 +717,16 @@ mod tests {
             Frame::new(
                 Point3::new(o[0], o[1], o[2]),
                 Vec3::new(z[0], z[1], z[2]),
-                Vec3::new(1.0, 0.0, 0.0).cross(Vec3::new(z[0], z[1], z[2])).cross(Vec3::new(z[0], z[1], z[2])),
+                Vec3::new(1.0, 0.0, 0.0)
+                    .cross(Vec3::new(z[0], z[1], z[2]))
+                    .cross(Vec3::new(z[0], z[1], z[2])),
             )
             .unwrap(),
         )
     }
 
     fn unit_box() -> Extent3d {
-        Extent3d::from_corners(
-            Point3::new(0.0, 0.0, 0.0),
-            Point3::new(1.0, 1.0, 0.0),
-        )
-        .unwrap()
+        Extent3d::from_corners(Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 1.0, 0.0)).unwrap()
     }
 
     #[test]
@@ -714,13 +746,17 @@ mod tests {
 
     #[test]
     fn a_tilt_deviates_by_the_angle_over_the_extent() {
-        // A tilt of 1e-5 about the y axis over a face 1 wide: the far corner is 1e-5 off,
-        // which the bound (angle times the half diagonal from the centre) covers.
+        // A tilt of 1e-5 about the y axis over a face 1 wide: the far edge is 1e-5 off, which
+        // the bound (the centre's offset plus the angle times the half diagonal) covers and
+        // overstates by 21%.
         let t: f64 = 1e-5;
         let a = plane([0.0, 0.0, 0.0], [0.0, 0.0, 1.0]);
-        let b = plane([0.0, 0.0, 0.0], [t.sin(), 0.0, t.cos()]);
+        let b = plane(
+            [0.0, 0.0, 0.0],
+            [scx_num::fmath::sin(t), 0.0, scx_num::fmath::cos(t)],
+        );
         let d = plane_deviation(&a, &b, &unit_box()).unwrap();
-        assert!(d >= 0.5 * t && d <= 1.0 * t, "{d}");
+        assert!(d >= t && d <= 1.5 * t, "{d}");
     }
 
     #[test]

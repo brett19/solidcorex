@@ -35,7 +35,7 @@ const UNIT: u64 = 1;
 pub fn open_edges(body: &Brep) -> Vec<EdgeId> {
     body.edges()
         .filter(|e| e.fins().len() == 1 && matches!(e.shape(), EdgeShape::Curve { .. }))
-        .map(|e| e.id())
+        .map(scx_brep::Edge::id)
         .collect()
 }
 
@@ -112,17 +112,21 @@ pub fn sew(body: &Brep, want: Want, cx: &mut Cx<'_>) -> Result<Sewn, StitchError
     }
     let mut budget = cx.budget();
     let open = open_edges(body);
-    let solid = body.regions().any(|r| r.is_solid());
+    let solid = body.regions().any(scx_brep::Region::is_solid);
     if open.is_empty() && (want == Want::Sheets || solid) {
         let (sewn, changes) = body
             .edit()
             .finish(cx.doc)
             .map_err(|u| StitchError::Defect(StitchDefect::Finish(Box::new(u.cause))))?;
-        let faces: Vec<FaceId> = sewn.faces().map(|f| f.id()).collect();
+        let faces: Vec<FaceId> = sewn.faces().map(scx_brep::Face::id).collect();
         return Ok(Sewn {
             done: Done::new(sewn, changes, Report::empty(budget.used())),
             report: StitchReport::default(),
-            pieces: if faces.is_empty() { Vec::new() } else { vec![faces] },
+            pieces: if faces.is_empty() {
+                Vec::new()
+            } else {
+                vec![faces]
+            },
             open,
         });
     }
@@ -143,27 +147,24 @@ pub fn sew(body: &Brep, want: Want, cx: &mut Cx<'_>) -> Result<Sewn, StitchError
     })
 }
 
+fn find(parent: &mut [usize], mut i: usize) -> usize {
+    while let Some(&p) = parent.get(i) {
+        if p == i {
+            break;
+        }
+        let up = parent.get(p).copied().unwrap_or(p);
+        if let Some(slot) = parent.get_mut(i) {
+            *slot = up;
+        }
+        i = up;
+    }
+    i
+}
+
 /// The body's faces in connected sets: two faces are connected when an edge with two or
 /// more fins has both. Each set in id order, the sets by their lowest face.
-fn pieces(
-    body: &Brep,
-    budget: &mut Budget,
-    stop: &Stop,
-) -> Result<Vec<Vec<FaceId>>, StitchError> {
+fn pieces(body: &Brep, budget: &mut Budget, stop: &Stop) -> Result<Vec<Vec<FaceId>>, StitchError> {
     let mut parent: Vec<usize> = (0..body.face_slots()).collect();
-    fn find(parent: &mut [usize], mut i: usize) -> usize {
-        while let Some(&p) = parent.get(i) {
-            if p == i {
-                break;
-            }
-            let up = parent.get(p).copied().unwrap_or(p);
-            if let Some(slot) = parent.get_mut(i) {
-                *slot = up;
-            }
-            i = up;
-        }
-        i
-    }
     for e in body.edges() {
         budget.charge(UNIT)?;
         let mut fins = e.fins();

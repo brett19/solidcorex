@@ -18,23 +18,23 @@ use std::f64::consts::PI;
 
 use scx_brep::op::{Cx, NoTrace, Scratch, Settings};
 use scx_brep::{
-    Brep, Document, EdgeGeom, EdgeShape, EdgeId, Entity, FaceId, FaceRecord, FaceSide,
-    Operand, Origin, ShellRecord, VertexRecord,
+    Brep, Document, EdgeGeom, EdgeId, EdgeShape, Entity, FaceId, FaceRecord, FaceSide, Operand,
+    Origin, ShellRecord, VertexRecord,
 };
-use scx_curve::{Curve, Line};
-use scx_num::extent1d::Extent1d;
-use scx_num::frame::Frame;
-use scx_num::units::{Length, Resolution};
 use scx_check::{Contacts, contract};
+use scx_curve::{Curve, Line};
 use scx_mass::{RelAccuracy, area, outward};
 use scx_num::budget::{Budget, Stop};
+use scx_num::extent1d::Extent1d;
+use scx_num::frame::Frame;
 use scx_num::frame::Sense;
-use scx_surface::Plane;
+use scx_num::units::{Length, Resolution};
 use scx_num::vector3d::{Point3, Vec3};
 use scx_stitch::{
-    StitchError, StitchRefusal, StitchUnsupported, Want, gather,
-    merge_faces, open_edges, sew, stitch,
+    StitchError, StitchRefusal, StitchUnsupported, Want, gather, merge_faces, open_edges, sew,
+    stitch,
 };
+use scx_surface::Plane;
 use scx_surface::Surface;
 use scx_testkit::bodies::Kind;
 
@@ -87,7 +87,9 @@ fn assert_contract(b: &Brep, what: &str) {
 
 /// The unit block moved `x` along x.
 fn block_at(x: f64) -> Brep {
-    let mut d = scx_testkit::bodies::generate(Kind::Block, 0, 1).unwrap().draft;
+    let mut d = scx_testkit::bodies::generate(Kind::Block, 0, 1)
+        .unwrap()
+        .draft;
     d.transform(
         &scx_num::math::Affine::translation(Vec3::new(x, 0.0, 0.0)),
         &Document::default(),
@@ -141,15 +143,16 @@ fn two_boxes() -> Brep {
 }
 
 fn all_faces(b: &Brep) -> Vec<FaceId> {
-    b.faces().map(|f| f.id()).collect()
+    b.faces().map(scx_brep::Face::id).collect()
 }
 
 fn merged(b: &Brep, faces: &[FaceId]) -> scx_stitch::Merged {
     with_cx(|cx| merge_faces(b, faces, cx)).unwrap()
 }
 
-
 type Key = Vec<String>;
+/// A closed-form volume and area, where one is known.
+type Truth = Option<(f64, f64)>;
 
 /// The body's geometry as sorted text (every float to its bits; no id).
 fn geometry(b: &Brep) -> (Key, Key, Key) {
@@ -157,7 +160,13 @@ fn geometry(b: &Brep) -> (Key, Key, Key) {
     let mut vs: Key = b.vertices().map(|v| format!("{:?}", v.record())).collect();
     let edge = |e: EdgeId| {
         let g = b.edge(e).unwrap().geometry().clone();
-        format!("{:?} {:?} {}|{}", g.shape, g.accuracy, pt(g.ends[0]), pt(g.ends[1]))
+        format!(
+            "{:?} {:?} {}|{}",
+            g.shape,
+            g.accuracy,
+            pt(g.ends[0]),
+            pt(g.ends[1])
+        )
     };
     let mut es: Key = b.edges().map(|e| edge(e.id())).collect();
     let mut fs: Key = b
@@ -222,7 +231,10 @@ fn open_edges_are_the_edges_of_one_face_use() {
         .filter(|&(i, _)| i != top)
         .map(|(_, s)| s)
         .collect();
-    let open = with_cx(|cx| stitch(&rest, Want::Sheets, cx)).unwrap().done.body;
+    let open = with_cx(|cx| stitch(&rest, Want::Sheets, cx))
+        .unwrap()
+        .done
+        .body;
     let rim = open_edges(&open);
     assert_eq!(rim.len(), 4);
     assert!(rim.windows(2).all(|w| w[0] < w[1]), "id order");
@@ -295,7 +307,7 @@ fn gather_refuses_another_documents_body() {
 /// gathered in.
 #[test]
 fn sewn_loose_sheets_are_the_stitched_solid() {
-    let cases: [(Kind, usize, Option<(f64, f64)>); 9] = [
+    let cases: [(Kind, usize, Truth); 9] = [
         (Kind::Block, 1, Some((1.0, 6.0))),
         (Kind::Block, 3, Some((1.0, 6.0))),
         (Kind::Prism, 2, None),
@@ -313,10 +325,15 @@ fn sewn_loose_sheets_are_the_stitched_solid() {
         let order: Vec<usize> = (0..faces).collect();
         let g = loose(&body, &order);
         assert!(!open_edges(&g).is_empty(), "{what}");
-        let sewn = with_cx(|cx| sew(&g, Want::Solid, cx)).unwrap_or_else(|e| panic!("{what}: {e:?}"));
+        let sewn =
+            with_cx(|cx| sew(&g, Want::Solid, cx)).unwrap_or_else(|e| panic!("{what}: {e:?}"));
         let b = &sewn.done.body;
         assert_eq!(counts(b), counts(&body), "{what}: counts");
-        assert_eq!(b.regions().count(), body.regions().count(), "{what}: regions");
+        assert_eq!(
+            b.regions().count(),
+            body.regions().count(),
+            "{what}: regions"
+        );
         assert!(sewn.open.is_empty(), "{what}: {:?}", sewn.open);
         assert!(sewn.report.left.is_empty(), "{what}");
         assert_eq!(sewn.pieces.len(), faces, "{what}: one piece a face");
@@ -335,7 +352,11 @@ fn sewn_loose_sheets_are_the_stitched_solid() {
         for seed in 1..4 {
             let g = loose(&body, &shuffled(faces, seed));
             let again = with_cx(|cx| sew(&g, Want::Solid, cx)).unwrap();
-            assert_eq!(geometry(&again.done.body), geometry(b), "{what}: seed {seed}");
+            assert_eq!(
+                geometry(&again.done.body),
+                geometry(b),
+                "{what}: seed {seed}"
+            );
         }
     }
 }
@@ -352,7 +373,10 @@ fn a_body_with_no_open_edge_is_returned_as_it_is() {
     }
     // A closed sheet with no material is oriented by `Want::Solid`, not left.
     let sheets = explode(&block, |_| false);
-    let closed = with_cx(|cx| stitch(&refs(&sheets), Want::Sheets, cx)).unwrap().done.body;
+    let closed = with_cx(|cx| stitch(&refs(&sheets), Want::Sheets, cx))
+        .unwrap()
+        .done
+        .body;
     assert!(closed.regions().all(|r| !r.is_solid()));
     let s = with_cx(|cx| sew(&closed, Want::Solid, cx)).unwrap();
     close(vol(&s.done.body), vol(&block), "oriented");
@@ -385,8 +409,12 @@ fn a_wire_or_a_lone_vertex_is_not_lost() {
     let sheets = explode(&block, |_| false);
     let g = with_cx(|cx| gather(&refs(&sheets), cx)).unwrap().body;
     let mut d = g.edit();
-    let a = d.add_vertex(VertexRecord::new(Point3::new(5.0, 0.0, 0.0))).unwrap();
-    let b = d.add_vertex(VertexRecord::new(Point3::new(6.0, 0.0, 0.0))).unwrap();
+    let a = d
+        .add_vertex(VertexRecord::new(Point3::new(5.0, 0.0, 0.0)))
+        .unwrap();
+    let b = d
+        .add_vertex(VertexRecord::new(Point3::new(6.0, 0.0, 0.0)))
+        .unwrap();
     let line = Line::through(Point3::new(5.0, 0.0, 0.0), Point3::new(6.0, 0.0, 0.0)).unwrap();
     let wire = d
         .add_edge(EdgeGeom::new(
@@ -420,12 +448,12 @@ fn partitioned() -> Brep {
     let inner = two
         .regions()
         .find(|r| r.is_solid())
-        .map(|r| r.id())
+        .map(scx_brep::Region::id)
         .unwrap();
     let a_shell = two
         .shells()
         .find(|s| s.region().id() == inner)
-        .map(|s| s.id())
+        .map(scx_brep::Shell::id)
         .unwrap();
     let r_b = d.add_region(true).unwrap();
     let b_shell = d.add_shell(ShellRecord::new(r_b)).unwrap();
@@ -454,17 +482,26 @@ fn partitioned() -> Brep {
     let rim: Vec<EdgeId> = two
         .edges()
         .filter(|e| e.geometry().ends.iter().all(|&v| at_wall(v)))
-        .map(|e| e.id())
+        .map(scx_brep::Edge::id)
         .collect();
     assert_eq!(rim.len(), 4);
     // Walk (y, z) = (0,0) (1,0) (1,1) (0,1): counter-clockwise about +x.
     let corner = |y: f64, z: f64| {
         two.vertices()
-            .find(|v| at_wall(v.id()) && (v.point().y - y).abs() < 1e-12 && (v.point().z - z).abs() < 1e-12)
+            .find(|v| {
+                at_wall(v.id())
+                    && (v.point().y - y).abs() < 1e-12
+                    && (v.point().z - z).abs() < 1e-12
+            })
             .unwrap()
             .id()
     };
-    let ring = [corner(0.0, 0.0), corner(1.0, 0.0), corner(1.0, 1.0), corner(0.0, 1.0)];
+    let ring = [
+        corner(0.0, 0.0),
+        corner(1.0, 0.0),
+        corner(1.0, 1.0),
+        corner(0.0, 1.0),
+    ];
     let uses: Vec<(EdgeId, Sense)> = (0..4)
         .map(|i| {
             let (p, q) = (ring[i], ring[(i + 1) % 4]);
@@ -485,7 +522,8 @@ fn partitioned() -> Brep {
         })
         .collect();
     let loops = d.exact_loops(&surface, &[uses], &doc).unwrap();
-    d.add_face(FaceRecord::new(surface, [b_shell, a_shell], loops)).unwrap();
+    d.add_face(FaceRecord::new(surface, [b_shell, a_shell], loops))
+        .unwrap();
     // The partition is the only face between two material regions; its edges have three
     // fins. About each, the wall goes between the faces of the two blocks, in the order
     // that is counter-clockwise about the edge: found by trying the two on each edge.
@@ -495,7 +533,8 @@ fn partitioned() -> Brep {
         for (i, &e) in rim.iter().enumerate() {
             let fins = d.edge(e).unwrap().fins().collect::<Vec<_>>();
             assert_eq!(fins.len(), 3);
-            let (mid, others): (Vec<_>, Vec<_>) = fins.into_iter().partition(|f| f.face == wall_face);
+            let (mid, others): (Vec<_>, Vec<_>) =
+                fins.into_iter().partition(|f| f.face == wall_face);
             let ordered = if mask >> i & 1 == 0 {
                 vec![others[0], mid[0], others[1]]
             } else {
@@ -520,7 +559,11 @@ fn a_partition_gives_edges_of_three_faces() {
 fn a_partitions_three_face_edges_are_not_merged_across() {
     let p = partitioned();
     for e in p.edges() {
-        let wall = e.geometry().ends.iter().all(|&v| (p.vertex(v).unwrap().point().x - 1.0).abs() < 1e-12);
+        let wall = e
+            .geometry()
+            .ends
+            .iter()
+            .all(|&v| (p.vertex(v).unwrap().point().x - 1.0).abs() < 1e-12);
         if wall {
             assert_eq!(e.fins().len(), 3, "{:?}", e.id());
         }
@@ -551,7 +594,11 @@ fn a_body_with_a_partition_sews_with_loose_sheets_and_keeps_it() {
     let g = with_cx(|cx| gather(&bodies, cx)).unwrap().body;
     let s = with_cx(|cx| sew(&g, Want::Sheets, cx)).unwrap();
     let b = &s.done.body;
-    assert_eq!(s.pieces.len(), 1 + 6, "the partitioned body is one piece, each sheet its own");
+    assert_eq!(
+        s.pieces.len(),
+        1 + 6,
+        "the partitioned body is one piece, each sheet its own"
+    );
     assert_eq!(s.pieces[0].len(), 11);
     assert_eq!(s.report.joined.len(), 12);
     assert!(s.open.is_empty());
@@ -564,7 +611,9 @@ fn a_body_with_a_partition_sews_with_loose_sheets_and_keeps_it() {
     // A solid is asked of a sheet to orient: the partitioned body is not one.
     assert!(matches!(
         with_cx(|cx| sew(&g, Want::Solid, cx)),
-        Err(StitchError::Unsupported(StitchUnsupported::SolidOperand { .. }))
+        Err(StitchError::Unsupported(
+            StitchUnsupported::SolidOperand { .. }
+        ))
     ));
 }
 
@@ -593,11 +642,15 @@ fn two_boxes_merge_into_one_box() {
     let top_b = two
         .faces()
         .find(|f| {
-            f.bounding_box().unwrap().mid().x > 1.0 && (plane(&two, f.id().index()).0.z - 1.0).abs() < 1e-12
+            f.bounding_box().unwrap().mid().x > 1.0
+                && (plane(&two, f.id().index()).0.z - 1.0).abs() < 1e-12
         })
-        .map(|f| f.id())
+        .map(scx_brep::Face::id)
         .unwrap();
-    let rest: Vec<FaceId> = all_faces(&two).into_iter().filter(|&f| f != top_b).collect();
+    let rest: Vec<FaceId> = all_faces(&two)
+        .into_iter()
+        .filter(|&f| f != top_b)
+        .collect();
     let part = merged(&two, &rest);
     assert_eq!(counts(&part.done.body), [2, 7, 15, 10]);
     close(vol(&part.done.body), 2.0, "partial");
