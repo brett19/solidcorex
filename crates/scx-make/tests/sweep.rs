@@ -22,7 +22,10 @@ use core::f64::consts::{FRAC_PI_2, PI, TAU};
 use scx_brep::op::Scratch;
 use scx_brep::{Brep, Document, EdgeShape, FaceSide};
 use scx_curve::Curve;
-use scx_make::{MakeError, Path, Piece, Refusal, SweepFaces, Unsupported, sweep};
+use scx_make::{MakeError, Path, PathFrame, Piece, Refusal, Shape, SweepFaces, Unsupported, sweep};
+
+/// The plain sweep: no law.
+const PLAIN: PathFrame = PathFrame::Shaped(Shape::PLAIN);
 use scx_mass::{Mass, MassSpec, RelAccuracy, mass};
 use scx_num::budget::{Budget, Stop};
 use scx_num::fmath;
@@ -154,12 +157,12 @@ fn bent(l1: f64, rho: f64, l2: f64) -> Vec<Piece> {
 }
 
 fn make(loops: &[Vec<Seg>], pieces: &[Piece]) -> (Brep, SweepFaces) {
-    let m = sweep(&region(loops), &plain(), &path(pieces), &doc()).unwrap();
+    let m = sweep(&region(loops), &plain(), &path(pieces), &PLAIN, &doc()).unwrap();
     (m.body, m.faces)
 }
 
 fn refusal(loops: &[Vec<Seg>], frame: &Frame, pieces: &[Piece]) -> MakeError {
-    sweep(&region(loops), frame, &path(pieces), &doc()).unwrap_err()
+    sweep(&region(loops), frame, &path(pieces), &PLAIN, &doc()).unwrap_err()
 }
 
 /// Two regions and `shells` shells, every edge with two fins of opposite senses, every
@@ -285,6 +288,7 @@ fn straight_matches_a_tilted_line() {
         &region(&[square(3.0)]),
         &frame,
         &path(&[line(o, o + *d * 7.0)]),
+        &PLAIN,
         &doc(),
     )
     .unwrap();
@@ -634,6 +638,7 @@ fn refuses_a_tight_arc() {
         &region(&[vec![circle([-1.0, 0.0], 2.0, true)]]),
         &plain(),
         &path(&pieces[1..]),
+        &PLAIN,
         &doc(),
     );
     assert!(ok.is_ok(), "{ok:?}");

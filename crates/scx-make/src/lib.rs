@@ -58,7 +58,10 @@ pub use radial::{RadialCone, RadialFaces, radial};
 pub use revolve::{RevolveFaces, RevolveSheetFaces, Turn, Wall, revolve, revolve_sheet};
 pub use sheet::{SheetFaces, sheet};
 pub use sphere::{SphereFaces, sphere};
-pub use sweep::{SweepFaces, sweep};
+pub use sweep::{
+    LawFault, MAX_SKIN_STATIONS, MIN_SKIN_STATIONS, Needed, Orientation, PathFrame, Placement,
+    Rail, RailFault, RailFit, Rails, Shape, SweepFaces, fractions, placements, sweep,
+};
 pub use torus::{TorusFaces, torus};
 
 use scx_brep::Brep;
