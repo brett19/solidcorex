@@ -1176,6 +1176,8 @@ maps or the ray against NURBS. Who writes them?**
   and about 20 more wait only on other step-6 or step-7 rows.
 - Against: a planning note for five large pieces delays them by a review cycle. Mitigation: the
   analytic step-7 rows (§7.1, "can start now") keep builders busy for that cycle.
+- Answered by 77 (11-28): `research/77-step5-widening.md` gives the five pieces their rows (§7)
+  and the step-7 rows each one unblocks.
 
 **Q2. Does `scx-boolean` depend on `scx-stitch`?**
 
