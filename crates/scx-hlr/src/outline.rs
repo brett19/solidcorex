@@ -36,6 +36,7 @@
 //! pieces once: the pin's rational-spline and circle tidying (`conic_spans`, `flat_conic`,
 //! `round_conics`) has nothing left to repair because no image is sampled.
 
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 
 use scx_brep::op::{Cx, Event, Trace};
@@ -46,6 +47,7 @@ use scx_num::extent1d::Extent1d;
 use scx_num::frame::Frame;
 use scx_num::invert::Inversion;
 use scx_num::units::Resolution;
+use scx_num::vector2d::Point2;
 use scx_num::vector3d::UnitVec3;
 use scx_num::vector3d::{Point3, Vec3};
 use scx_nurbs::Approach;
@@ -195,7 +197,7 @@ pub(crate) fn of_body(
                 Err(OutlineUndecided::MoreThanTwoUses)
             } else {
                 for &f in &faces {
-                    if !cache.contains_key(&f) {
+                    if let Entry::Vacant(slot) = cache.entry(f) {
                         let Some(face) = body.face(f) else { continue };
                         let mut run = Run {
                             face,
@@ -213,7 +215,7 @@ pub(crate) fn of_body(
                             }),
                             Err(why) => Err(why),
                         };
-                        cache.insert(f, made);
+                        slot.insert(made);
                     }
                 }
                 let mut states = Vec::with_capacity(2);
@@ -296,8 +298,7 @@ fn edge_stretches(
         *l = hi;
     }
     let mut ranges: Vec<Extent1d> = Vec::new();
-    for w in bounds.windows(2) {
-        let (a, b) = (w[0], w[1]);
+    for (&a, &b) in bounds.iter().zip(bounds.iter().skip(1)) {
         budget.charge(1)?;
         let mid = 0.5 * (a + b);
         let mut facing = Vec::with_capacity(2);
@@ -492,7 +493,8 @@ impl Outline {
             pending: Vec::new(),
         };
         for s in &self.stretches {
-            let Some(EdgeShape::Curve { curve, .. }) = body.edge(s.edge).map(|e| e.shape()) else {
+            let Some(EdgeShape::Curve { curve, .. }) = body.edge(s.edge).map(scx_brep::Edge::shape)
+            else {
                 continue;
             };
             match pieces(curve, s.range.min(), s.range.max(), &lens) {
@@ -528,7 +530,7 @@ impl Outline {
 /// seen edge-on along a plate's edge, a boss's rim on its foot.
 #[must_use]
 pub fn drop_coincident(curves: Vec<Curve2>, tol: f64) -> Vec<Curve2> {
-    let near = |a: scx_num::vector2d::Point2, b: scx_num::vector2d::Point2| (a - b).length() <= tol;
+    let near = |a: Point2, b: Point2| (a - b).length() <= tol;
     let duplicate = |a: &Curve2, b: &Curve2| match (a, b) {
         (
             Curve2::Conic {
@@ -551,7 +553,7 @@ pub fn drop_coincident(curves: Vec<Curve2>, tol: f64) -> Vec<Curve2> {
         }
         _ => false,
     };
-    let mut lines: Vec<(scx_num::vector2d::Point2, scx_num::vector2d::Point2)> = Vec::new();
+    let mut lines: Vec<(Point2, Point2)> = Vec::new();
     let mut others: Vec<Curve2> = Vec::new();
     for c in curves {
         match c {
@@ -562,23 +564,23 @@ pub fn drop_coincident(curves: Vec<Curve2>, tol: f64) -> Vec<Curve2> {
     }
     let mut used = vec![false; lines.len()];
     let mut out = Vec::new();
-    for i in 0..lines.len() {
-        if used[i] {
+    for (i, &(a, b)) in lines.iter().enumerate() {
+        if used.get(i).copied().unwrap_or(true) {
             continue;
         }
-        let (a, b) = lines[i];
         let Some(u) = (b - a).normalized() else {
-            used[i] = true;
             continue;
         };
-        let on = |p: scx_num::vector2d::Point2| {
+        let on = |p: Point2| {
             let r = p - a;
             (r.x * u.y - r.y * u.x).abs() <= tol
         };
         let mut spans: Vec<(f64, f64)> = Vec::new();
         for (j, (p, q)) in lines.iter().enumerate().skip(i) {
-            if !used[j] && on(*p) && on(*q) {
-                used[j] = true;
+            if !used.get(j).copied().unwrap_or(true) && on(*p) && on(*q) {
+                if let Some(slot) = used.get_mut(j) {
+                    *slot = true;
+                }
                 let (s, t) = ((*p - a).dot(*u), (*q - a).dot(*u));
                 spans.push((s.min(t), s.max(t)));
             }

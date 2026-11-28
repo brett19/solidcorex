@@ -17,6 +17,7 @@ use scx_brep::op::{Cx, NoTrace, Scratch, Settings};
 use scx_brep::{Brep, Document, EdgeShape};
 use scx_hlr::{Branch, SilhouetteCurve, Source, View, Visibility, prepare, silhouettes};
 use scx_num::budget::{Budget, Stop};
+use scx_num::fmath;
 use scx_num::frame::Frame;
 use scx_num::units::Length;
 use scx_num::vector3d::{Point3, Vec3};
@@ -87,7 +88,7 @@ fn a_tube_hides_exactly_the_points_within_its_radius_of_the_spine_seen_from_abov
                         continue;
                     }
                     let (x, y) = (q.x + at.origin().x, q.y + at.origin().y);
-                    let off = x.hypot(y) - big;
+                    let off = fmath::hypot(x, y) - big;
                     // A point on the tube's very boundary is the closed convention's.
                     if (off.abs() - small).abs() < 1e-7 * (1.0 + small) {
                         continue;
@@ -142,7 +143,7 @@ fn an_obliquely_seen_torus_spans_the_support_function_of_its_spine_circle_plus_t
         let w = view(d);
         let pts = contour_points(&t, &w);
         for u in [*w.x(), *w.y()] {
-            let want = big * u.x.hypot(u.y) + small;
+            let want = big * fmath::hypot(u.x, u.y) + small;
             let (hi, lo) = pts.iter().fold((f64::MIN, f64::MAX), |(hi, lo), q| {
                 let s = q.x * u.x + q.y * u.y + q.z * u.z;
                 (hi.max(s), lo.min(s))

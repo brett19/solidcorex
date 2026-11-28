@@ -22,12 +22,14 @@ use scx_brep::{
     LoopRecord, RegionId, ShellId, ShellRecord, UseGeom, VertexId, VertexRecord,
 };
 use scx_curve::Curve;
-use scx_curve::{Curve2, Line2};
+use scx_curve::{Curve2, Line, Line2};
 use scx_hlr::{
     HlrError, Outline, OutlineUndecided, Stretch, View, drop_coincident, outline, prepare,
 };
 use scx_num::budget::{Budget, Stop};
 use scx_num::error::ErrorKind;
+use scx_num::extent1d::Extent1d;
+use scx_num::extent1d::Extent1d;
 use scx_num::frame::Frame;
 use scx_num::frame::Sense;
 use scx_num::units::Length;
@@ -548,12 +550,12 @@ fn a_cube_along_an_axis_has_four_exact_lines_and_two_bodies_in_one_place_draw_th
     // Lines on one line are drawn as the stretch they cover together.
     let overlap = vec![
         Image2::Line {
-            start: scx_num::vector2d::Point2::new(0.0, 0.0),
-            end: scx_num::vector2d::Point2::new(2.0, 0.0),
+            start: Point2::new(0.0, 0.0),
+            end: Point2::new(2.0, 0.0),
         },
         Image2::Line {
-            start: scx_num::vector2d::Point2::new(3.0, 0.0),
-            end: scx_num::vector2d::Point2::new(1.0, 0.0),
+            start: Point2::new(3.0, 0.0),
+            end: Point2::new(1.0, 0.0),
         },
     ];
     let merged = drop_coincident(overlap, 1e-9);
@@ -588,7 +590,7 @@ fn coaxial_cylinders_seen_along_their_axis_draw_one_circle() {
             panic!("{c:?}")
         };
         assert!((start.x.hypot(start.y) - 2.0).abs() < 1e-12);
-        assert!((weight - std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-12);
+        assert!((weight - FRAC_1_SQRT_2).abs() < 1e-12);
     }
     let once = drop_coincident(curves.clone(), 1e-9);
     assert_eq!(once.len(), curves.len() / 2, "{once:?}");
