@@ -73,6 +73,14 @@ pub struct Bracket {
 }
 
 impl Bracket {
+    /// The bracket `[lower, upper]` of a distance a caller enclosed by its own means (an
+    /// interval box): `None` unless `0 <= lower <= upper`, `lower` finite (`upper` may be
+    /// infinite). It is only as certified as the caller's enclosure.
+    #[must_use]
+    pub fn new(lower: f64, upper: f64) -> Option<Self> {
+        (lower.is_finite() && lower >= 0.0 && upper >= lower).then_some(Self { lower, upper })
+    }
+
     /// The gap is at least this.
     #[must_use]
     pub const fn lower(&self) -> f64 {
@@ -111,8 +119,20 @@ pub enum Aim {
     /// When `upper - lower` is at most this (finite, above zero).
     Width(f64),
     /// When the bracket decides [`Bracket::exceeds`] for this allowance (finite, not
-    /// negative): the check's question.
+    /// negative): the check's question. A gap equal to the allowance is never decided, so
+    /// the search then ends only on the budget or on [`Short::Precision`]; a caller with
+    /// an unlimited budget asks [`Aim::Decide`].
     Against(f64),
+    /// As [`Aim::Against`], or when the bracket still straddles the allowance but is at
+    /// most `width` wide: the gap is then the allowance to within `width`, and the caller
+    /// reads [`Bracket::exceeds`] as `None` (74 §28). `allowance` finite and not negative,
+    /// `width` finite and above zero.
+    Decide {
+        /// The allowance.
+        allowance: f64,
+        /// The width at which a straddling bracket ends the search.
+        width: f64,
+    },
 }
 
 impl Aim {
@@ -120,6 +140,13 @@ impl Aim {
         match self {
             Self::Width(w) if w.is_finite() && w > 0.0 => Ok(self),
             Self::Against(a) if a.is_finite() && a >= 0.0 => Ok(self),
+            Self::Decide { allowance, .. } if !(allowance.is_finite() && allowance >= 0.0) => {
+                Err(GapError::BadAim { value: allowance })
+            }
+            Self::Decide { width, .. } if !(width.is_finite() && width > 0.0) => {
+                Err(GapError::BadAim { value: width })
+            }
+            Self::Decide { .. } => Ok(self),
             Self::Width(value) | Self::Against(value) => Err(GapError::BadAim { value }),
         }
     }
@@ -128,6 +155,9 @@ impl Aim {
         match self {
             Self::Width(w) => b.width() <= w,
             Self::Against(a) => b.exceeds(a).is_some(),
+            Self::Decide { allowance, width } => {
+                b.exceeds(allowance).is_some() || b.width() <= width
+            }
         }
     }
 
@@ -137,6 +167,7 @@ impl Aim {
         match self {
             Self::Width(w) => (w / 4.0).max(floor),
             Self::Against(a) => (a * 1e-3).max(floor),
+            Self::Decide { allowance, width } => (allowance * 1e-3).min(width / 4.0).max(floor),
         }
     }
 }
@@ -273,6 +304,11 @@ pub(crate) struct Jet2 {
 impl Jet2 {
     fn new(f: Ivl, d1: Ivl, d2: Ivl) -> Self {
         Self { f, d1, d2 }
+    }
+
+    /// Encloses both.
+    fn hull(self, o: Self) -> Self {
+        Self::new(self.f.hull(o.f), self.d1.hull(o.d1), self.d2.hull(o.d2))
     }
 
     /// A constant enclosed by `f`.
@@ -934,9 +970,27 @@ fn arcs_of(s: &Surface) -> (Option<Arcs>, Option<Arcs>) {
     }
 }
 
-/// Whether `i` lies on one arc of `a` (no break strictly inside).
-fn one_arc(a: Option<Arcs>, i: Ivl) -> bool {
-    a.is_none_or(|a| a.breaks(i.lo, i.hi).is_some_and(|b| b.is_empty()))
+/// `i` cut at the breaks of `a` strictly inside it, each part on one arc; `None` past a few
+/// (a piece that long gains nothing from the jets). A part may come from rounding alone, as
+/// a seam's `u` enclosed a few ulps either side of its break.
+fn on_arcs(a: Option<Arcs>, i: Ivl) -> Option<Vec<Ivl>> {
+    let Some(a) = a else {
+        return Some(vec![i]);
+    };
+    let breaks = a.breaks(i.lo, i.hi)?;
+    if breaks.len() > 4 {
+        return None;
+    }
+    let mut cuts = Vec::with_capacity(breaks.len() + 2);
+    cuts.push(i.lo);
+    cuts.extend(breaks);
+    cuts.push(i.hi);
+    Some(
+        cuts.iter()
+            .zip(cuts.iter().skip(1))
+            .map(|(&a, &b)| Ivl::new(a, b))
+            .collect(),
+    )
 }
 
 fn eval_jet(s: &Surface, u: Jet2, v: Jet2, near: Point2) -> Option<[Jet2; 3]> {
@@ -990,9 +1044,10 @@ impl PcurveField<'_> {
 }
 
 impl Field for PcurveField<'_> {
-    type Mark = ();
+    /// The gap at the point, kept for the chord bound of the pieces it ends.
+    type Mark = Ivl;
 
-    fn at(&self, t: f64, budget: &mut Budget, _: &Stop) -> Result<(Bracket, ()), Short> {
+    fn at(&self, t: f64, budget: &mut Budget, _: &Stop) -> Result<(Bracket, Ivl), Short> {
         budget.charge(1).map_err(Short::Exhausted)?;
         let g = self.gap_at(t);
         let upper = if g.hi.is_nan() { f64::INFINITY } else { g.hi };
@@ -1001,11 +1056,11 @@ impl Field for PcurveField<'_> {
                 lower: g.lo.max(0.0),
                 upper,
             },
-            (),
+            g,
         ))
     }
 
-    fn over(&self, (a, ()): (f64, ()), (b, ()): (f64, ())) -> f64 {
+    fn over(&self, (a, ga): (f64, Ivl), (b, gb): (f64, Ivl)) -> f64 {
         let i = Ivl::new(a, b);
         let p = self.pcurve.jet_over::<Ivl, 2>(i, Approach::Above);
         let c = self.curve.jet_over::<Ivl, 2>(i, Approach::Above);
@@ -1015,19 +1070,34 @@ impl Field for PcurveField<'_> {
         } else {
             natural
         };
-        if !(one_arc(self.arcs.0, p.point.x) && one_arc(self.arcs.1, p.point.y)) {
+        // The jets on each arc the uv box meets, hulled: at every `t` the point lies on one
+        // of them, so the hull encloses `S(p(t))` and its derivatives there.
+        let (Some(us), Some(vs)) = (
+            on_arcs(self.arcs.0, p.point.x),
+            on_arcs(self.arcs.1, p.point.y),
+        ) else {
             return natural;
+        };
+        let mut s: Option<[Jet2; 3]> = None;
+        for &ui in &us {
+            for &vi in &vs {
+                let u = Jet2::new(ui, p.d[0].x, p.d[1].x);
+                let v = Jet2::new(vi, p.d[0].y, p.d[1].y);
+                let Some(part) = eval_jet(self.surface, u, v, Point2::new(ui.lo, vi.lo)) else {
+                    return natural;
+                };
+                s = Some(match s {
+                    None => part,
+                    Some(h) => [h[0].hull(part[0]), h[1].hull(part[1]), h[2].hull(part[2])],
+                });
+            }
         }
-        let u = Jet2::new(p.point.x, p.d[0].x, p.d[1].x);
-        let v = Jet2::new(p.point.y, p.d[0].y, p.d[1].y);
-        let near = Point2::new(p.point.x.lo, p.point.y.lo);
-        let Some(s) = eval_jet(self.surface, u, v, near) else {
+        let Some(s) = s else {
             return natural;
         };
         let cj = jets3(c.point, c.d[0], c.d[1]);
         let d = [s[0] - cj[0], s[1] - cj[1], s[2] - cj[2]];
-        let ends = (self.gap_at(a), self.gap_at(b));
-        vector_bound(d, ends, b - a).min(natural)
+        vector_bound(d, (ga, gb), b - a).min(natural)
     }
 }
 
@@ -1219,7 +1289,9 @@ pub fn point_curve_gap(
     let p = [Ivl::from(point.x), Ivl::from(point.y), Ivl::from(point.z)];
     let width = match aim {
         Aim::Width(w) => w,
-        Aim::Against(_) => aim.inner(point.x.abs().max(point.y.abs()).max(point.z.abs())),
+        Aim::Against(_) | Aim::Decide { .. } => {
+            aim.inner(point.x.abs().max(point.y.abs()).max(point.z.abs()))
+        }
     };
     let undecided = |reached, why| GapError::Undecided { reached, why };
     let (b, _) = nearest(p, curve, r, width, budget, stop).map_err(|why| {

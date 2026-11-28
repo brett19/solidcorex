@@ -17,7 +17,7 @@ scx-bodyq
 scx-check
 scx-boolean
 scx-stitch
-# scx-hlr goes here, when added (after scx-check); scx-step after it.
+scx-hlr
 scx-make
 scx-step
 
