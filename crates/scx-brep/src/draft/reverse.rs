@@ -164,7 +164,7 @@ impl Draft {
                     let geom = use_image(id, u, &image, &surface, &uv, res)
                         .map_err(ReverseError::Pcurve)?;
                     let mut out = EdgeUse::new(u.edge, flip(u.sense), geom);
-                    out.bound = u.bound.clone();
+                    out.bound.clone_from(&u.bound);
                     uses.push(out);
                 }
                 loops.push(LoopRecord::new(uses));
