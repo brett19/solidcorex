@@ -221,7 +221,7 @@ fn a_stitched_sphere_is_four_thirds_pi() {
 fn flipped_faces_are_oriented_by_parity() {
     let block = solid(Kind::Block, 0, 2);
     // Every other face flipped, then all of them: the material is still inside.
-    let ids: Vec<FaceId> = block.faces().map(|f| f.id()).collect();
+    let ids: Vec<FaceId> = block.faces().map(scx_brep::Face::id).collect();
     for pick in [
         Box::new(|f: FaceId| ids.iter().position(|&x| x == f).unwrap() % 2 == 1)
             as Box<dyn Fn(FaceId) -> bool>,
@@ -339,7 +339,10 @@ fn two_apart_blocks_are_two_solids_and_nested_ones_are_solid_void_solid() {
 
 /// Each face by its vertices' points' bits, with whether the material is behind it, and the
 /// volume's bits.
-fn fingerprint(b: &Brep) -> (Vec<(Vec<[u64; 3]>, bool, bool)>, u64) {
+type Fingerprint = (Vec<(Vec<[u64; 3]>, bool, bool)>, u64);
+
+/// The [`Fingerprint`] of `b`.
+fn fingerprint(b: &Brep) -> Fingerprint {
     let mut faces: Vec<_> = b
         .faces()
         .map(|f| {
