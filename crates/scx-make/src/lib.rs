@@ -40,6 +40,7 @@ mod prism;
 mod radial;
 mod revolve;
 mod sheet;
+mod sheet_blend;
 mod sphere;
 mod sweep;
 mod torus;
@@ -59,6 +60,12 @@ pub use prism::{PrismFaces, prism};
 pub use radial::{RadialCone, RadialFaces, radial};
 pub use revolve::{RevolveFaces, RevolveSheetFaces, Turn, Wall, revolve, revolve_sheet};
 pub use sheet::{SheetFaces, sheet};
+pub use sheet_blend::{
+    BlendSide, Contact, EdgeBlend, Fillet, FilletCrossing, FilletSection, FilletSheets, Round,
+    Seam, SeamGap, SectionBlendDefinition, SheetBlendError, SheetBlendRefusal,
+    SheetBlendUnsupported, SheetSide, blend_edges, fillet_crossing, fillet_sheets,
+    open_section_turns, point_frames, section_frames, section_frames_outward,
+};
 pub use sphere::{SphereFaces, sphere};
 pub use sweep::{
     LawFault, MAX_SKIN_STATIONS, MIN_SKIN_STATIONS, Needed, Orientation, PathFrame, Placement,
