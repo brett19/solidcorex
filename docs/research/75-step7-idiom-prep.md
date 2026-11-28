@@ -1794,3 +1794,90 @@ the bit-for-bit comparison above and the line just off a plane. None removed.
 
 Open: curved bounds (a cylinder's ruling and parallel have closed forms too) if a caller's
 curved facts show up in profiles; BO22 reuses `OnSurface` and `Fact` for tangent pairs.
+
+### 13.11 BO25 as built (11-28)
+
+`scx_boolean::combine(a, b, &Rule, cx) -> Result<Done<NoItems>, BooleanError>`
+(`crates/scx-boolean/src/boolean.rs`, `cells.rs`); `boolean` is `combine` with `Rule::of(op)`,
+and `boolean_given` passes `Rule::of(op)` too, one pipeline. A `Membership` is the set of operands
+a cell lies in (bits over operand indices). A `Rule { solid, faces }` says which cells are solid
+(`solid: &dyn Fn(Membership) -> bool`) and which faces with the same state on both sides are kept
+(`Faces::Boundary`: none, the regularised result; `Faces::Walls`: solid on both sides, each cell
+its own region; `Faces::Closure`: walls and laminas or sheets, void on both sides;
+`Faces::Where(fn)`: chosen by the two sides' memberships). `Rule::of(op)` is the Boolean;
+`Rule::with(solid, faces)` any other.
+
+What the build now holds (04 row 16):
+
+- *Walls.* A face with solid on both sides, kept by the rule, is one face used by two shells
+  of different regions. Shells come from union-find over the radial sectors about each edge
+  (`cells::shells`), so two boxes sharing a face give two solid regions and one shared face; a
+  cell-by-cell result of overlapping boxes gives three solid regions with the overlap's faces as walls.
+- *Laminas and sheets.* A kept face with void on both sides is used twice by one shell of a void
+  region; its free edges (one fin) are allowed only for these faces (`edges(m, free)`). Coincident
+  faces of two boxes on a patch give a lamina when the rule keeps them; a plane's section of a
+  box is a sheet.
+- *Touches in a face.* Where the operands touch at a point inside a face (a sphere on a box, two
+  tangent spheres, the seam cases), that point is a collapsed edge `[v, v]` with one fin, a
+  `UseGeom::Point(uv)` loop of its own, in each kept piece that holds it inside (`cells::touches`).
+  The six such recipes (tangent and seam spheres on boxes, two spheres, a box minus its inscribed
+  sphere) were `Unsupported(NonManifold)`; they now build as solids with the contract passing.
+- *Nesting.* Shells that share a face never contain each other; a void shell of zero volume lies
+  in the void round it. A cavity wall whose box reaches past its holder's (a face's box encloses,
+  a sphere's reaches past its poles) falls back to `holders_loose`, which tests containment of the
+  cavity's points rather than boxes, only after the box test found no holder.
+
+`Unsupported(NonManifold)` is left for exactly three things (the `BooleanUnsupported::NonManifold`
+doc): two kept faces leaving an edge of three or more fins in one direction, or one with no
+direction there (no normal at the edge's midpoint), so their radial order is undecided; a touch on
+a piece's boundary (an edge or vertex of a kept face), where no point loop is the right form; and
+scx-bodyq's own `NonManifold` for an operand where more than two regions meet at a place a query
+reads. The last matters to BO12, which feeds wall bodies back in as operands.
+
+Decisions (analysis and adversarial pass):
+
+1. *The rule is closures over a `u64` membership, not an enum of the three Booleans.* For: BO12
+   needs n-ary selections (at least one, exactly k, a chosen cell) and the predicate is the honest
+   signature; `Rule::of` keeps the three. Against: a dyn call per piece (measured below, no cost
+   seen) and a 64-operand cap; BO12 can widen `Membership` if it needs more.
+2. *The regular path keeps the old shell builder; the radial one runs only when walls or laminas
+   are kept.* For: no change to every regular result, no new cost there. Against: two shell
+   builders, which BO12 may unify once its cells are general.
+3. *`Faces::Closure` keeps faces only.* The closed intersection of boxes sharing an edge or a
+   vertex is a wire or a point; `combine` builds no wires or lone points, so that result is empty.
+   For: scx-brep holds lone vertices only in shells of their own and BO18's `intersect` already
+   gives the wire; the regularised and wall results are what callers ask. Against: the closure is
+   then not the topological closure in those cases; BO14 or a later row adds wires and points.
+4. *A touch is a point loop, not a lone vertex of the shell.* For: it is on the face, so a query
+   or a later Boolean finds it on the face's loops, and the difftest recipes (patch complexes) say
+   the same. Against: a degenerate edge is one more form the checks must allow; the contract and
+   recipes pass with it.
+5. *`holders_loose` for cavity walls only.* A void shell (a lump in a cavity) still nests by
+   boxes; with a loose box it could be placed outside. Open: no case seen; BO12 should decide on
+   points for both.
+6. *Recipe truths changed.* `scx-testkit`'s six touch recipes were `Unsupported(NonManifold)`; they
+   are now `Built` with cells and volumes in closed form (truth over pin: the pin builds them too).
+
+Measured (release, best of 7 x 5 runs, before / after, microseconds): plate-4 2970 / 2970, plate-12
+120565 / 121667-122245, gear-60 87856 / 87342, box-box-union 124.2 / 122.2, sphere-and-box 45.2 /
+44.3, coplanar-union 204.1 / 201.2, torus-minus-box 62.9 / 61.3, corner-contact-union 98.1 / 98.0,
+edge-contact-union 207.5 / 207.3, disjoint-union 57.4 / 57.6 (box-cyl-hole noisy both sides, load
+10-18). Added on the regular path: the rule's call per piece and, when nesting runs, each shell's
+face ids and a sorted merge to test sharing; the touch and loose-holder work run only where the
+Boolean used to fail.
+
+Tests: `crates/scx-boolean/src/tests/nonmanifold.rs` (9): the spelt rules are the Booleans, boxes
+sharing a face (closed intersection a lamina of area 1 with four free edges; walls two unit
+regions and one two-sided face), a box on a box sharing a 1 by 1 patch, boxes sharing an edge (two
+regions at a four-fin edge, closure empty) and a vertex (two outer shells at it, closure empty),
+overlapping boxes cell by cell (three regions of 1.75, 0.25 and 1.75, six walls), a box in a box
+cell by cell (the inner box's faces the outer cell's cavity wall), sections by a plane (a 2 by 2
+square, a disc of pi r^2, free edges), the closure of a regular result is it.
+`contacts.rs`: `point_contacts_are_built` (was the Unsupported check) asserts volume, cells and a
+point loop per touch. Changed on purpose: `whole.rs`'s `non_manifold_results_are_unsupported`
+(proved a ball on a cube was refused) is now `a_ball_on_a_cube_touches_it_at_a_point` (volume
+1 + pi/6, two solid regions, contract); `scx-boolean/tests/recipes.rs` and `scx-testkit/tests/recipe.rs`
+judge the six recipes as built.
+
+Open: wires and points in `Closure` (BO14); void-shell nesting on points (BO12); scx-brep's sphere
+face box past its poles is loose (a tighter box helps every nesting test).
