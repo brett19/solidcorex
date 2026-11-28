@@ -44,7 +44,7 @@ pub enum Analytic {
 }
 
 impl Analytic {
-    /// The analytic kind `s` is, or `None` for a NURBS surface.
+    /// The analytic kind `s` is, or `None` for a NURBS or procedural surface.
     #[must_use]
     pub fn of(s: &Surface) -> Option<Self> {
         Some(match s {
@@ -53,7 +53,7 @@ impl Analytic {
             Surface::Cone(k) => Self::Cone(*k),
             Surface::Sphere(k) => Self::Sphere(*k),
             Surface::Torus(k) => Self::Torus(*k),
-            Surface::Nurbs(_) => return None,
+            Surface::Nurbs(_) | Surface::Procedural(_) => return None,
         })
     }
 

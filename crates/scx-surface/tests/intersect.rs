@@ -1023,11 +1023,26 @@ fn nurbs_budget_and_stop_are_typed() {
     let s = sphere(Frame::WORLD, 1.0, Sense::Forward);
     let p = circle(Frame::WORLD, 0.5, Sense::Forward, turn());
     let se = full(&s.s);
-    let nurbs = s.s.to_nurbs(&se).unwrap();
-    let e = intersect_curve(
+    let nurbs = Surface::from(s.s.to_nurbs(&se).unwrap());
+    // An analytic curve on a NURBS surface is searched: the circle is inside the sphere.
+    let hits = intersect_curve(
         &p.c,
         &p.ce,
-        &Surface::from(nurbs),
+        &nurbs,
+        &se,
+        zone(1e-6),
+        &mut Budget::unlimited(),
+        &Stop::new(),
+    )
+    .unwrap();
+    assert!(hits.is_empty(), "{hits:?}");
+    // A NURBS curve is named, never an empty answer.
+    let k = scx_nurbs::KnotVector::new(1, vec![0.0, 0.0, 1.0, 1.0]).unwrap();
+    let n = scx_nurbs::NurbsCurve::new(k, vec![[-2.0, 0.0, 0.0], [2.0, 0.0, 0.0]], None).unwrap();
+    let e = intersect_curve(
+        &Curve::Nurbs(std::sync::Arc::new(n)),
+        &Extent1d::new(0.0, 1.0).unwrap(),
+        &nurbs,
         &se,
         zone(1e-6),
         &mut Budget::unlimited(),

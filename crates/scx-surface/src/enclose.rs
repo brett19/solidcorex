@@ -22,7 +22,7 @@ use scx_nurbs::{Approach, KnotVector};
 use scx_nurbs_surface::{About, EnclosureCause, NurbsSurface, NurbsSurfaceError, ParamAxis};
 
 use crate::surface::Surface;
-use crate::{cone, sphere, torus};
+use crate::{Procedural, cone, sphere, torus};
 
 /// The parts each arc is cut into. An interval form's excess shrinks with the part's width
 /// (first order); on a full turn of a tilted unit cylinder a quarter arc whole gives sides
@@ -79,6 +79,7 @@ impl Surface {
                 |a, b, n| s.eval(a, b, n),
             ),
             Self::Nurbs(n) => nurbs(n, uv),
+            Self::Procedural(p) => procedural(p, uv),
         }
     }
 
@@ -135,6 +136,7 @@ impl Surface {
             Self::Sphere(s) => along!(s, (Some(sphere::U), 1), (Some(sphere::V), 1)),
             Self::Torus(s) => along!(s, (Some(torus::TURN), 1), (Some(torus::TURN), 1)),
             Self::Nurbs(n) => nurbs_along(n, d, uv),
+            Self::Procedural(p) => procedural_along(p, d, uv),
         }
     }
 }
@@ -452,6 +454,75 @@ fn parts((lo, hi): (f64, f64), (arcs, per): (Option<Arcs>, usize)) -> Option<Vec
 /// The box of an interval point, `None` when a bound is not finite.
 fn ivl_box(p: Point3<Ivl>) -> Option<Extent3d> {
     Extent3d::from_bounds(p.x.lo, p.y.lo, p.z.lo, p.x.hi, p.y.hi, p.z.hi)
+}
+
+/// A procedural surface's box: inside its net's box, the net's box (its control points
+/// read, as a NURBS surface's are) widened outward by the net's bound; past it, interval
+/// arithmetic on the definition, cut at the arc breaks of each turn as a torus is.
+#[inline(never)]
+fn procedural(p: &Procedural, uv: Extent2d) -> Option<Extent3d> {
+    if let Some((n, bound)) = p.net_over(&uv) {
+        let b = nurbs(n, uv)?;
+        let (lo, hi) = (b.min(), b.max());
+        let r = Ivl::new(-bound, bound);
+        let w = |x: f64| Ivl::from(x) + r;
+        let (l, h) = (
+            Point3::new(w(lo.x), w(lo.y), w(lo.z)),
+            Point3::new(w(hi.x), w(hi.y), w(hi.z)),
+        );
+        return Extent3d::from_bounds(l.x.lo, l.y.lo, l.z.lo, h.x.hi, h.y.hi, h.z.hi);
+    }
+    let (cu, cv) = p.cuts(PER_ARC);
+    let u = (uv.min().x, uv.max().x);
+    let v = (uv.min().y, uv.max().y);
+    analytic(u, v, cu, cv, |a, b, n| p.eval(a, b, n))
+}
+
+/// A procedural surface's range along `d`: for a line or conic generator, the mean-value
+/// form on the definition's closed form (as an analytic kind's); for a NURBS generator, the
+/// net's range widened by its bound (inside its box) or the definition's interval range
+/// (past it), with the partials left unbounded (the net's partials are not within the
+/// bound of the definition's).
+#[inline(never)]
+fn procedural_along(p: &Procedural, d: [Ivl; 3], uv: Extent2d) -> Option<Along> {
+    let u = (uv.min().x, uv.max().x);
+    let v = (uv.min().y, uv.max().y);
+    let (cu, cv) = p.cuts(1);
+    if let Some(c) = p.closed_form() {
+        return along_parts(
+            u,
+            v,
+            cu,
+            cv,
+            d,
+            |a, b, n| c.eval(a, b, n),
+            |a, b, n| c.eval(a, b, n),
+        );
+    }
+    let range = if let Some((n, bound)) = p.net_over(&uv) {
+        let r = nurbs_along(n, d, uv)?.range;
+        let m = |x: Ivl| Ivl::from(x.mag());
+        let pad = (m(d[0]) + m(d[1]) + m(d[2])) * Ivl::from(bound);
+        r + Ivl::new(-pad.hi, pad.hi)
+    } else {
+        analytic_with(
+            u,
+            v,
+            cu,
+            cv,
+            |a, b, n| p.eval(a, b, n),
+            |q| {
+                let r = d[0] * q.x + d[1] * q.y + d[2] * q.z;
+                r.is_finite().then_some(r)
+            },
+            Ivl::hull,
+        )?
+    };
+    Some(Along {
+        range,
+        du: Ivl::whole(),
+        dv: Ivl::whole(),
+    })
 }
 
 /// A NURBS surface's box: each knot-span patch of the box enclosed on its piece, met with

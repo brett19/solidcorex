@@ -102,6 +102,12 @@ pub enum SsiError {
         /// The contact.
         at: Point3,
     },
+    /// Operand `operand` (0 or 1) is a procedural surface, which this method has no patch
+    /// enclosure for yet: refused before any work, not subdivided to the budget.
+    Procedural {
+        /// Which operand.
+        operand: usize,
+    },
     /// The caller's work budget ran out.
     Budget(Exhausted),
     /// The caller stopped the call.
@@ -109,7 +115,7 @@ pub enum SsiError {
 }
 
 impl SsiError {
-    /// The error's kind: [`ErrorKind::Unsupported`] for the five refusals (the pair is
+    /// The error's kind: [`ErrorKind::Unsupported`] for the six refusals (the pair is
     /// valid and this method cannot finish it), [`ErrorKind::Exhausted`] for the budget and
     /// [`ErrorKind::Cancelled`] for the stop.
     #[must_use]
@@ -119,7 +125,8 @@ impl SsiError {
             | Self::Stalled { .. }
             | Self::Singular { .. }
             | Self::Uncertified { .. }
-            | Self::Untraced { .. } => ErrorKind::Unsupported,
+            | Self::Untraced { .. }
+            | Self::Procedural { .. } => ErrorKind::Unsupported,
             Self::Budget(_) => ErrorKind::Exhausted,
             Self::Stopped => ErrorKind::Cancelled,
         }
@@ -134,12 +141,14 @@ impl SsiError {
             Self::Singular { .. } => "ssi_singular",
             Self::Uncertified { .. } => "ssi_uncertified",
             Self::Untraced { .. } => "ssi_untraced",
+            Self::Procedural { .. } => "ssi_procedural",
             Self::Budget(e) => e.name(),
             Self::Stopped => Stopped.name(),
         }
     }
 
-    /// The point the refusal names; `None` for the budget and the stop, which name none.
+    /// The point the refusal names; `None` for a procedural operand, the budget and the
+    /// stop, which name none.
     #[must_use]
     pub const fn at(&self) -> Option<Point3> {
         match *self {
@@ -148,7 +157,7 @@ impl SsiError {
             | Self::Singular { at, .. }
             | Self::Uncertified { at }
             | Self::Untraced { at } => Some(at),
-            Self::Budget(_) | Self::Stopped => None,
+            Self::Procedural { .. } | Self::Budget(_) | Self::Stopped => None,
         }
     }
 }
@@ -197,6 +206,10 @@ impl fmt::Display for SsiError {
             Self::Untraced { at } => {
                 write!(f, "a tangential contact at {} is not traced", At(at))
             }
+            Self::Procedural { operand } => write!(
+                f,
+                "operand {operand} is a procedural surface, not yet intersected in general"
+            ),
             Self::Budget(e) => e.fmt(f),
             Self::Stopped => Stopped.fmt(f),
         }

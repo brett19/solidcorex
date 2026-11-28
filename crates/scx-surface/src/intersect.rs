@@ -143,11 +143,13 @@ impl CurveSurfaceHit {
 ///
 /// # Errors
 ///
-/// - [`SurfaceError::NurbsIntersection`] (Unsupported) when the surface is a NURBS one:
-///   not built yet, never an empty answer. A NURBS curve against an analytic surface is
-///   answered span by span (`nurbs_curve`, research 77 RY1).
-/// - [`SurfaceError::Undecided`] (Unsupported) when a NURBS curve's root near `t` cannot
-///   be certified at the resolution: never a lost hit or an empty answer.
+/// - [`SurfaceError::NurbsIntersection`] (Unsupported) when both are NURBS: not built
+///   yet, never an empty answer. A NURBS curve against an analytic surface is answered span
+///   by span (`nurbs_curve`, research 77 RY1); an analytic curve on a NURBS surface is
+///   searched by certified boxes over its Bézier patches (`nurbs_hits`, research 77 §6.3).
+/// - [`SurfaceError::Undecided`] (Unsupported) where a NURBS curve's root near `t` cannot be
+///   certified at the resolution, or the patch search cannot decide a box down to it (a ray
+///   through a pole): never a lost hit or an empty answer.
 /// - [`SurfaceError::Exhausted`] when `budget` runs out, [`SurfaceError::Stopped`] when
 ///   `stop` is set; neither returns a partial answer.
 pub fn intersect_curve(
@@ -159,6 +161,9 @@ pub fn intersect_curve(
     budget: &mut Budget,
     stop: &Stop,
 ) -> Result<Vec<CurveSurfaceHit>, SurfaceError> {
+    if let (Surface::Nurbs(n), false) = (s, matches!(c, Curve::Nurbs(_))) {
+        return crate::nurbs_hits::intersect(c, ce, s, n, se, res, budget, stop);
+    }
     let Some(target) = Target::of(s) else {
         return Err(SurfaceError::NurbsIntersection);
     };
@@ -219,6 +224,20 @@ pub fn curve_on_surface(
     budget: &mut Budget,
     stop: &Stop,
 ) -> Result<OnSurface, SurfaceError> {
+    if let (Surface::Nurbs(n), false) = (s, matches!(c, Curve::Nurbs(_))) {
+        let hits = crate::nurbs_hits::intersect(c, ce, s, n, se, res, budget, stop)?;
+        let overlaps: Option<Vec<Extent1d>> = hits
+            .iter()
+            .map(|h| match h {
+                CurveSurfaceHit::Overlap { t } => Some(*t),
+                CurveSurfaceHit::Point { .. } => None,
+            })
+            .collect();
+        return Ok(match overlaps {
+            Some(t) if !t.is_empty() => OnSurface::Isolated(t),
+            _ => OnSurface::Leaves(hits),
+        });
+    }
     let Some(target) = Target::of(s) else {
         return Err(SurfaceError::NurbsIntersection);
     };
@@ -920,7 +939,7 @@ impl Target {
                     small: c.minor().mm(),
                 },
             ),
-            Surface::Nurbs(_) => return None,
+            Surface::Nurbs(_) | Surface::Procedural(_) => return None,
         };
         Some(Self { axes, shape })
     }
