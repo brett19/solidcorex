@@ -77,7 +77,7 @@ fn an_edge_of_a_circle_has_its_radius_and_a_tangent_square_to_it() {
         .id();
     for t in [0.0, 0.7, 2.0, 5.5] {
         let e = edge_at(&m.body, rim, t).unwrap();
-        let r = (e.point.x.powi(2) + e.point.y.powi(2)).sqrt();
+        let r = (e.point.x * e.point.x + e.point.y * e.point.y).sqrt();
         assert!(near(r, 3.0), "{e:?}");
         // The derivative of a circle in its angle is radius long and square to the radius.
         assert!(near(e.tangent.length(), 3.0), "{e:?}");
@@ -233,7 +233,7 @@ fn a_cylinder_wall_beyond_its_height_is_bounded_not_proved() {
         .unwrap()
         .unwrap();
     assert!(
-        near(n.distance.mm(), (17.0_f64.powi(2) + 9.0).sqrt()),
+        near(n.distance.mm(), (17.0_f64 * 17.0 + 9.0).sqrt()),
         "{n:?}"
     );
     assert!(!n.exact);
@@ -362,7 +362,7 @@ fn the_rim_of_a_set_of_faces_is_the_edges_between_it_and_the_rest() {
     // One wall and the top: 4 + 4 - 2 (the shared edge counted twice) = 6.
     assert_eq!(rim(&[faces.top, faces.sides[0]]).len(), 6);
     // Every face: none. No face: none.
-    let all: Vec<FaceId> = body.faces().map(|f| f.id()).collect();
+    let all: Vec<FaceId> = body.faces().map(scx_brep::Face::id).collect();
     assert!(rim(&all).is_empty() && rim(&[]).is_empty());
     assert!(rim_edges(&body, &[FaceId::from_raw(99)]).is_err());
     // A cylinder's wall has its two rims; its seam is used by the wall alone, twice.
