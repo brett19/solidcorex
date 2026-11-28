@@ -3016,3 +3016,53 @@ directions:
 | wire/box-cyl-hole | 133,543 | 133,527 |
 | make/torus-5-1.5 | 146,273 | 146,527 |
 | tess/plate-4 | 5,029,301 | 5,014,011 |
+
+### 13.30 MK16 as built (11-28)
+
+Tests only: `crates/scx-make/tests/closed_form.rs` (7 tests), the closed-form make table over
+`extrude`, `revolve`, `sweep` and `sheet`. Every case asserts volume and area (relative 1e-9, the
+estimate's error within it), the first moment where the truth has one, face, curve-edge and vertex
+counts, the Euler-Poincare count, regions and shells, the fin structure and the check contract
+(`violations` empty). `sweep` is called through one helper (`sweep_along`), so MK7b's `&PathFrame`
+changes one line. Nothing in `scx-make` changed.
+
+Truths come from sources that share no code with the constructors: T9 (`scx_testkit::solid`:
+extrusions, cylinder, cone, sphere, torus and torus sectors, carried to the case's frame, which is
+also how a revolve's axis `y` and turn direction are matched), Pappus (T9's extrusion of the
+profile gives `A` and `A x`; `int x ds` is chord length times mean `x` and the arc's
+`r (cx t + r (sin a1 - sin a0))`, in the file), and the mitre argument (a profile whose area and
+rim are centred on the path keeps area and perimeter times length through any corner of lines).
+
+Tables:
+
+- **Ops table** (the pin's 26 cases; 12 built here, one test): rectangle and circle extrudes, the
+  circle in two halves and in a quarter and the rest, the half disc with a split arc, the ring
+  section revolved whole and by a quarter, a circle along two lines end to end, along a quarter arc
+  (T9's torus sector) and along a line then a tangent quarter arc (T9's cylinder plus a placed
+  sector), a 4 x 3 rectangle round the closed rounded rectangle (9 pieces, no caps), and the planar
+  face with a hole. Not ported, each waiting on a task: the drafted extrudes (5; a draft is
+  `scx-taper`'s, step 8), the lofts (5; MK10 to MK12), the scaled stations (2; MK7b's laws) and the
+  screw sweeps (2; MK6).
+- **Revolve against T9** (plain and tilted frame): cylinder, cone, frustum, sphere, ring torus and
+  its sectors at pi/2, pi and 3 pi/2, with first moments.
+- **Pappus** (plain and tilted frame): nine profiles (rectangle, trapezoid, L, triangle, half disc
+  off the axis, rounded rectangle, circle, rectangle with a round and with a square hole) by four
+  turns (whole, a quarter, from -1 to 2.5, almost whole). Counts follow the rule stated on the test:
+  a face per segment (and two caps), a whole turn a circle edge and vertex per profile vertex and a
+  seam per segment but level lines, a partial turn three edges and two vertices per profile vertex.
+- **Cornered**: five profiles (square, rectangle, circle, rounded rectangle, hexagon) along an L
+  of 30, 60, 90, 120 and 150 degrees in three bending planes (two axis planes and an oblique one):
+  T9's straight extrusion of the same length, counts `2n + 2, 5n, 3n` faces, edges, vertices (a
+  circle 4, 5, 3), the vertices of each section on its plane (start, bisecting mitre, end) and the
+  caps square to the end tangents through the end points.
+- **Stations**: a line, a quarter bend and a line, for a circle and a square: the wall kinds per
+  piece (cylinder, torus, cylinder; planes and cylinders), Pappus's volume, and each cap at the
+  closed-form station. The pin's helix-frame truths (`sweep_stations.rs`) are MK7a's
+  `tests/frames.rs`; a helix sweep is `Unsupported::HelixPiece` here.
+
+Result: every case holds; no finding, nothing `#[ignore]`d. The two mistakes made on the way were
+the test's own (a hole drawn counter-clockwise gives T9 a positive area; a full turn's seam count
+excludes the level lines, whose plane annulus has none) and are in the rules above.
+
+Runtime (debug, nextest, loaded machine): the four heaviest tests 1 to 5 s each, all 7 in about
+5 s wall; the Pappus tables are 144 bodies, the cornered table 75.
