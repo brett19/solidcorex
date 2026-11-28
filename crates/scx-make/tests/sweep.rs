@@ -290,7 +290,7 @@ fn straight_matches_a_tilted_line() {
     .unwrap();
     assert_closed(&m.body, 2, 2);
     assert_eq!(kinds(&m.body, &m.faces.walls[0][0]), ["plane"; 4]);
-    let mm = scx_mass::mass(
+    let mm = mass(
         &m.body,
         &MassSpec::new(RelAccuracy::new(1e-12).unwrap()).with_about(o),
         &mut Scratch::new(),
@@ -451,7 +451,7 @@ fn square_l_mitre() {
         assert_eq!(f.walls.len(), 2);
         assert_mass(&b, tube(4.0, 8.0, 18.0, true), &format!("L at {turn}"));
         // The mitre section is 2 by 2 / cos(turn / 2) about the corner.
-        let far = 1.0_f64.hypot(1.0 / fmath::cos(0.5 * turn));
+        let far = fmath::hypot(1.0, 1.0 / fmath::cos(0.5 * turn));
         let mitre: Vec<f64> = b
             .vertices()
             .map(|v| (v.point() - corner).length())
