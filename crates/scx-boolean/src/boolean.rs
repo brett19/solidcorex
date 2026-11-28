@@ -118,7 +118,6 @@ pub(crate) struct Interference {
 }
 
 /// Stages 1 to 3 over `ops`, no facts given.
-#[cfg(test)]
 pub(crate) fn interfere(
     ops: Operands<'_>,
     budget: &mut Budget,
