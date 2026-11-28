@@ -1320,3 +1320,32 @@ MIN_HEIGHT (#17085)?**
 - It did not plan step 5's fitter, procedural kinds, surface construction, volume maps or ray
   against NURBS (Q1), nor step 8's families beyond naming their early starts.
 - It did not check the testkit recipes' coverage of step-7 cases; DT4 and BO10 will.
+
+## 13. As built
+
+### 13.1 BO13 imprint as built (11-28)
+
+`scx_boolean::imprint(target, tool, what, cx)` (`imprint_op.rs`) runs stages 1 to 5 and
+finishes the draft with no selection. Choices 75 left open:
+
+- **The result is the target's part of the stage-5 draft.** Stage 5 writes both operands whole;
+  the entry removes the tool's faces, then the edges, vertices, shells and regions only they
+  held, and finishes. `Done.changes` is then the target's own edit (split faces with their
+  pieces, cut edges, new vertices, section edges whose origins include the tool's faces as
+  operand 1); the pin's `(Body, bool)` is `!changes.is_empty()`. For: the target keeps its
+  material and sense, so volume and area are the target's; nothing needs classifying. Against: a
+  caller wanting the tool's faces cut as well must swap the operands and call again.
+- **`Imprint::Edges` or `Imprint::EdgesAndFaces`.** Both write every transversal section and cut
+  the target's edges at the merged points. `EdgesAndFaces` also writes the tool's edges lying in
+  the target's faces (stage 4's `lying` with no `along`), which is what splits a target face a
+  tool face rests on into the part under it and the rest; `Edges` drops those. For the split: a
+  block standing on a face is then imprinted or not at the caller's choice (tests: 7 faces
+  against 6 with no changes). Against: the pin has one Imprint mode; BO12 may find the choice
+  unnecessary once cells replace pieces, and the variant can then go.
+- **No new counters, no new stage code.** The entry filters stage 4's list and reuses stage 5;
+  the cleanup repeats the draft cleanup the stage-5 tests used.
+
+Truth tests (`tests/imprint.rs`, closed forms): offset cubes give 9 faces, 21 edges, 14 vertices,
+areas 3 x 1/4 + 3 x 3/4 + 3 x 1; a thin cylinder through a cube gives 8 faces, 14 edges, 10
+vertices, two disks of pi/16 and two faces of 1 - pi/16; a block on a face, a block apart,
+determinism and operand swap, and a refusal of another document. Volume is 1 throughout.

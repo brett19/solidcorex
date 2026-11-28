@@ -51,12 +51,14 @@ mod error;
 mod faceface;
 mod geom;
 mod imprint;
+mod imprint_op;
 mod pairs;
 mod pinch;
 mod points;
 
 pub use boolean::{BooleanOp, NoItems, boolean};
 pub use error::{BooleanDefect, BooleanError, BooleanRefusal, BooleanUnsupported};
+pub use imprint_op::{Imprint, imprint};
 
 #[cfg(test)]
 mod tests;
