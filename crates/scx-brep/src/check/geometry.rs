@@ -84,12 +84,13 @@ fn speeds(surface: &Surface, uv: Point2) -> (f64, f64) {
     (len(jet.get(1, 0)), len(jet.get(0, 1)))
 }
 
-/// The surface's poles: a sphere's two, a cone's apex. A NURBS surface's collapsed
+/// The surface's poles: a sphere's two, a cone's apex, a horn torus's one. A NURBS surface's collapsed
 /// boundary rows are not found here (an open question in 63 §6.7).
 fn poles(surface: &Surface) -> &'static [usize] {
     match surface {
         Surface::Sphere(_) => &[0, 1],
         Surface::Cone(_) => &[0],
+        Surface::Torus(t) if t.pole().is_some() => &[0],
         _ => &[],
     }
 }
@@ -98,6 +99,7 @@ fn pole(surface: &Surface, i: usize) -> Option<Pole> {
     match surface {
         Surface::Sphere(s) => s.poles().get(i).copied(),
         Surface::Cone(c) => (i == 0).then(|| c.pole()),
+        Surface::Torus(t) => t.pole().filter(|_| i == 0),
         _ => None,
     }
 }
