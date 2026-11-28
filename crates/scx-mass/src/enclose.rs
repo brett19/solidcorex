@@ -385,6 +385,32 @@ fn set_box(faces: &[(Face<'_>, f64)]) -> Result<Option<Extent3d>, MassError> {
     Ok(b)
 }
 
+/// The parts [`trim_box`] cuts a trim into when the whole trim's box cannot be enclosed.
+const TRIM_PARTS: usize = 8;
+
+/// A box holding the surface over the pcurve's trim `[lo, hi]`: the surface's box over the
+/// pcurve's enclosure on the whole trim, or, where that cannot be enclosed, the union of
+/// the boxes over [`TRIM_PARTS`] equal parts. A pcurve through the chart over a wide trim
+/// is the case: the box of a quarter arc's points holds the axis of a cylinder whose axis
+/// is off the arc's centre, where the chart's angle is undefined, while each part's box
+/// does not (research 74 §40).
+fn trim_box(surface: &Surface, curve: &Curve2, lo: f64, hi: f64) -> Option<Extent3d> {
+    let over = |a: f64, b: f64| {
+        let t = curve.point_over(Ivl::new(a, b));
+        Extent2d::from_bounds(t.x.lo, t.y.lo, t.x.hi, t.y.hi).and_then(|uv| surface.box_over(uv))
+    };
+    if let Some(b) = over(lo, hi) {
+        return Some(b);
+    }
+    let step = (hi - lo) / TRIM_PARTS as f64;
+    (0..TRIM_PARTS).try_fold(None, |acc: Option<Extent3d>, i| {
+        let a = lo + step * i as f64;
+        let b = if i + 1 == TRIM_PARTS { hi } else { a + step };
+        let bx = over(a, b)?;
+        Some(Some(acc.map_or(bx, |x| x.union(bx))))
+    })?
+}
+
 /// `max |z - z0|` over a box.
 fn reach(b: &Extent3d, z0: f64) -> f64 {
     up((b.max().z - z0).abs().max((b.min().z - z0).abs()))
@@ -492,10 +518,7 @@ fn walk(face: Face<'_>, z0: f64) -> Result<(Vec<Piece<'_>>, Vec<Strip<'_>>, Ivl)
                 Sense::Reversed => -1.0,
             };
             let (lo, hi) = (interval.min(), interval.max());
-            let trim = curve.point_over(Ivl::new(lo, hi));
-            let sbox = Extent2d::from_bounds(trim.x.lo, trim.y.lo, trim.x.hi, trim.y.hi)
-                .and_then(|uv| surface.box_over(uv))
-                .ok_or_else(|| no_box(Entity::from(id)))?;
+            let sbox = trim_box(surface, curve, lo, hi).ok_or_else(|| no_box(Entity::from(id)))?;
             strips.push(Strip {
                 pcurve: curve,
                 edge: target,
