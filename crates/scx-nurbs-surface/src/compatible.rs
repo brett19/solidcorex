@@ -131,14 +131,14 @@ fn piece<const D: usize>(
     rational: Option<&scx_nurbs::Homogeneous<D>>,
     range: core::ops::Range<usize>,
 ) -> core::result::Result<CompatibleCurves<D>, NurbsError> {
-    let slice = |v: &[[f64; D]]| v.get(range.clone()).map(<[_]>::to_vec).unwrap_or_default();
+    let slice = |v: &[[f64; D]]| v.get(range.clone()).unwrap_or_default().to_vec();
     match rational {
         None => CompatibleCurves::new(knots.clone(), count, slice(points), None),
         Some(h) => CompatibleCurves::from_homogeneous(
             knots.clone(),
             count,
             slice(&h.weighted),
-            h.weights.get(range).map(<[_]>::to_vec).unwrap_or_default(),
+            h.weights.get(range).unwrap_or_default().to_vec(),
         ),
     }
 }
