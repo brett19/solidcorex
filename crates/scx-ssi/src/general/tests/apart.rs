@@ -192,8 +192,8 @@ fn touching_and_crossing_pairs_are_never_dropped() {
     // Gaps at, inside and past the coincidence (1e-9): the truth meets for g <= 0 and the
     // surfaces are within the coincidence of meeting for 0 < g <= 1e-9. No proof (the field
     // signs of row SM6a included) drops every pair of such surfaces; a touch within the
-    // coincidence is refused where it lies, never answered empty. (A crossing is traced:
-    // `field`.)
+    // coincidence is refused where it lies, or answered as a touch (NURBS against NURBS, row
+    // SM5), never answered empty. (A crossing is traced: `field`.)
     for g in [0.0, p2(40), -p2(40), -p2(20), -1e-2, -0.5] {
         for (name, a, b) in apart_pairs(g) {
             if g <= 0.0 {
@@ -203,16 +203,23 @@ fn touching_and_crossing_pairs_are_never_dropped() {
             if g < -p2(40) {
                 continue;
             }
-            let Err(SsiError::Unresolved { at, size }) = run(&a, &b) else {
-                panic!("{name} at {g} was dropped or not refused");
-            };
             let (xa, xb) = (a.0.box_over(a.1).unwrap(), b.0.box_over(b.1).unwrap());
             let shared = xa.intersect(xb).unwrap_or_else(|| xa.union(xb));
-            assert!(
-                shared.union(xa).union(xb).contains_point(at, 0.0),
-                "{name} at {g}: {at:?}"
-            );
-            assert!(size.mm() > 0.0 && size.mm() <= shared.union(xa).union(xb).max_length());
+            let within = shared.union(xa).union(xb);
+            let at = match run(&a, &b) {
+                Err(SsiError::Unresolved { at, size }) => {
+                    assert!(size.mm() > 0.0 && size.mm() <= within.max_length());
+                    vec![at]
+                }
+                // NURBS against NURBS (row SM5): a touch solved and answered, or a curve
+                // (a circle about 1e-6 across at `-2^-40`) refused at a proved point of it.
+                Ok(t) if !t.touches.is_empty() => t.touches.iter().map(|t| t.point).collect(),
+                Err(SsiError::Untraced { at }) => vec![at],
+                out => panic!("{name} at {g} was dropped or not refused: {out:?}"),
+            };
+            for p in at {
+                assert!(within.contains_point(p, 0.0), "{name} at {g}: {p:?}");
+            }
         }
     }
 }
