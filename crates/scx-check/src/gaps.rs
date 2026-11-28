@@ -66,7 +66,7 @@ pub(crate) struct Found {
 }
 
 /// The reach of a recorded accuracy: finish's rule.
-fn reach(recorded: Option<&Recorded>, res: Resolution) -> f64 {
+pub(crate) fn reach(recorded: Option<&Recorded>, res: Resolution) -> f64 {
     let zone = res.zone().mm();
     recorded.map_or(zone, |r| r.acc.length().mm().max(zone))
 }
@@ -652,6 +652,9 @@ pub(crate) fn finding_key(f: &Finding) -> (u8, Entity, Option<Entity>, u8, u64) 
         Finding::DegenerateEdge { edge, .. } => (5, Entity::Edge(*edge), None, 0, 0),
         Finding::WideVertex { vertex, .. } => (6, Entity::Vertex(*vertex), None, 0, 0),
         Finding::WideEdge { edge, .. } => (7, Entity::Edge(*edge), None, 0, 0),
+        Finding::VerticesWithinCoincidence { a, b, .. } => {
+            (10, Entity::Vertex(*a), Some(Entity::Vertex(*b)), 0, 0)
+        }
     }
 }
 
@@ -683,6 +686,9 @@ pub(crate) fn undecided_key(u: &Undecided) -> (u8, Entity, Option<Entity>, u8, u
         }
         Undecided::NotFinite { edge, face } => {
             (9, Entity::Edge(*edge), face.map(Entity::Face), 0, 0)
+        }
+        Undecided::VerticesWithinCoincidence { a, b, .. } => {
+            (10, Entity::Vertex(*a), Some(Entity::Vertex(*b)), 0, 0)
         }
     }
 }

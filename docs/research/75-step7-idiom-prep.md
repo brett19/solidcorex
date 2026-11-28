@@ -1320,3 +1320,131 @@ MIN_HEIGHT (#17085)?**
 - It did not plan step 5's fitter, procedural kinds, surface construction, volume maps or ray
   against NURBS (Q1), nor step 8's families beyond naming their early starts.
 - It did not check the testkit recipes' coverage of step-7 cases; DT4 and BO10 will.
+
+## 13. As built
+
+### 13.1 RP1 as built (11-28)
+
+**Built.** `crates/scx-repair`: `heal(&Brep, OnItemFailure, &mut Cx) -> Result<Done<HealCause>,
+RepairError>` and `items(&Brep) -> Vec<Item>`. The one item kind so far is `Item::Cluster(Cluster
+{ vertices, edges, survivor, reach, target })`. `RepairError` is 01 §5.1's shape: `Cause`, `Items`
+(collect mode only), `Exhausted { item, work }`, `Cancelled`, `Defect`. Its `RepairCause` is
+`OtherDocument` or `Heal(HealCause)`, and RP2-RP8 add their own causes beside `Heal`. There are 12
+`HealCause` variants, each naming its entity: 6 refused (`Spread`, `TooLong`, `OffFace`,
+`EndOffVertex`, `NotClear`, `NeighbourShort`) and 6 unsupported (`NeighbourKind`, `FaceKind`,
+`Sliver`, `LoopVanishes`, `Pinch`, `NotFinite`). `scx-check` gains `Finding::VerticesWithinCoincidence
+{ a, b, distance, allowed }` and its `Undecided` twin (research 74 §3.3's pair test, which `check`
+did not have). These are found by binning the vertices in cubes of twice the widest reach and
+testing neighbouring cubes, after the gaps and on the budget they leave; a pair the budget does not
+reach is `Undecided { why: Exhausted }`, as a gap is (74 R6).
+
+**How a cluster heals.**
+- Vertices joined by a curve edge are clustered by union-find when their distance is certified
+  within the larger reach.
+- The survivor is the vertex of the largest reach (the lowest id on a tie). The target is the
+  centre of the cluster's box, as in the pin.
+- Edges with both ends in the cluster are squeezed: removed with their uses. Every point of the
+  edge's curve must be within the survivor's reach of the target, enclosed over 16 interval pieces.
+- Every other edge at the cluster must be a line on plane faces. It is rebuilt between its new ends
+  over `[0, 1]`, and its pcurves are the line's projection.
+- Each rebuilt edge is certified against the check's own allowances:
+  - it is longer than its reach;
+  - its end is at its vertex within `re + rv`;
+  - the lift of each pcurve is within `min(re, rb)` of the line.
+- The target is clear of every other vertex by more than the larger reach. The test uses the
+  same cube binning, plus the targets of the items already done.
+- No loop is left empty, with two or fewer lines, or passing the survivor twice.
+
+**Choices, with the case for and against.**
+
+1. **The pair finding covers every vertex pair, not only pairs an edge joins.**
+   - For: it is the defect itself, and 74 §3.3 asks it of the whole body. A heal fixes what the
+     check reports, so the finding must exist before the heal can be held to it.
+   - Against: heal merges only pairs an edge joins. A pair with no edge between them stays a
+     finding until a later item kind handles it (open question 1). The check now costs a sweep;
+     see the measurements below.
+8. **Cubes, not a sort along x.**
+   - For: CAD bodies are axis-aligned. A block's faces put whole grids of vertices in one x
+     slice, and the first build (an x-sorted window) tested those pair by pair: 3.33M units and
+     139 ms at 9,602 vertices, 56% of the gaps' time. Cubes test only points within two sides of
+     each other, and a pair within the reach lies in adjacent cubes, whatever the rounding.
+   - Against: a body with one wide vertex makes the side large, and that brings back pair tests
+     near it (still correct). Past 2^52 sides a body falls back to one cube, which tests every
+     pair.
+9. **Clearance after the gaps, out of budget = undecided.**
+   - For: the check's contract is that a budget past the structure part never errors and never
+     gives a false finding (`gaps.rs` and `structure.rs` tests). The first build charged
+     clearance as a hard `Exhausted` before the gaps, and those tests failed.
+   - Against: a pair left undecided for budget carries the bracket `[0, inf)`, which says
+     nothing. A caller who wants the answer gives more budget.
+2. **`heal` takes `OnItemFailure { Stop, Collect, Skip }` and has no rounds.** 75 §6.5 wrote
+   `heal(body, cx)` with no mode.
+   - For: 01 §5.2 makes the mode explicit and the default all-or-nothing. Each item is certified
+     against the items done before it, so dropping a failing item cannot change a later item's
+     answer. One pass is the fixpoint, and every `Skipped` is round 1.
+   - Against: a heal that could only succeed after a later item lands (for example, a sliver that
+     a later collapse removes) is not retried. RP3 may need rounds back, as a cap the mode states.
+3. **No GAP_SHARE. The bound is `min(re, rb)`.**
+   - For: the check's two use questions are "edge on face within `re`" and "use follows edge within
+     `rb`". The pcurve is the exact projection, so one lift gap answers both. A heal certified this
+     way passes the check by construction, with no factor to tune. The pin's 0.5 was a share of one
+     tolerance.
+   - Against: the bound is tighter than the pin's when `rb < re / 2`, so some clusters the pin heals
+     are refused here. That is correct by the check, and no case in the tests needs it.
+4. **Certifying the two ends certifies the whole line.**
+   - For: the lift of a plane's projected line differs from the line by an affine function of the
+     parameter, so its norm is largest at an end. The two ends are enclosed in intervals.
+   - Against: this holds only for lines on planes. Curved neighbours need SU6's gaps (RP2), and are
+     `Unsupported(NeighbourKind)` / `(FaceKind)` until then.
+5. **The survivor keeps its accuracy, and face planes are kept rather than refit.**
+   - For: "no accuracy grew" is the truth, and moving a face would need its other edges
+     re-certified.
+   - Against: a cluster whose re-ended edges leave a face by more than their reach is refused
+     (`OffFace`). It is not healed by widening, which the pin's SMLib healer would do.
+6. **A re-ended edge between two clusters is re-certified by the later one with both new ends.**
+   - For: the plan stays per item, and the later certificate is about the final line.
+   - Against: if the later item fails, the edge keeps the earlier item's line. That is still
+     certified, since it was certified with the earlier ends.
+7. **Edges.** repair → brep, curve, num, surface (normal dependencies); check, mass and testkit are
+   dev-dependencies only.
+   - For: RP1 code reads no finding at run time. The items are found from the body by the same
+     test the check makes, and the tests hold each heal to `scx_check::check`.
+   - Against: 75 §7 drew repair → check. RP8 or a caller that heals from findings would add it
+     back.
+
+**Tests.**
+- `crates/scx-repair/tests/heal.rs`: 8 tests on constructed polyhedra.
+  - The hip roof (ridge δ = 1e-4) heals to the square pyramid: 5/8/5. The check passes after; no
+    accuracy grew; `|V − a²h/3| ≤ area × largest bound`. With the accuracy at δ/10 it has no item
+    and is left unchanged. With the slanted edges at zone accuracy it is refused `OffFace`.
+  - The chamfered prism heals its bottom pair and leaves its top pair, which would be a sliver.
+    Stop, Collect and Skip each return their own answer.
+  - Two chamfers share an edge between clusters.
+  - Budget exhaustion is typed at its item, and so is the stop flag.
+  - A body from another document is refused.
+  - The heal is deterministic.
+- `crates/scx-check/tests/clearance.rs`: 3 tests, at 10d, d and d/10 against the block's own
+  distances, plus exhaustion. No test was removed.
+
+**Measured.** These are throwaway timers on server2 (release build, not committed).
+- `check` on testkit blocks, n = 5 / 10 / 20 / 40 (V = 152 / 602 / 2,402 / 9,602):
+  - clearance adds V work units: 152 / 602 / 2,402 / 9,602, against 6,900 / 27,600 / 110,400 /
+    441,600 before;
+  - it takes 63-90 us / 0.30 ms / 1.3 ms / 6.0 ms, against the gaps' 3.9 / 15.4 / 61.3 / 244 ms
+    (+1.5-2.5%).
+  - The x-sorted first build took 2,172 / 22,142 / 256,482 / 3,329,762 units and 0.09 / 0.95 /
+    10.8 / 139 ms.
+- `heal` (Skip mode):
+  - hip roof: 59 units, 11.5 us;
+  - one chamfer: 115 units, 17.2 us;
+  - two chamfers: 215 units, 29.8 us.
+  - The check of the same bodies takes 116 / 207 / 244 us, so a heal costs about a tenth of one
+    check. The pin runs two full checks per heal (75 §6.4).
+
+**Open.**
+1. Vertex pairs within coincidence that no edge joins: merging them changes topology, not edge
+   ends. This is a later item kind, or ST1's identification.
+2. Moving an edge can make it cross another face. No tube-clearance test is made, since 74 §3.3
+   defines none, and the sweep covers only vertex pairs.
+3. The cube grid is built per call, once in `check` and once in `heal`. A memo in `Scratch`
+   could share it when a heal is followed by its check.
