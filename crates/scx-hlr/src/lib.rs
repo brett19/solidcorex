@@ -19,9 +19,14 @@
 //!   faces, each span classified once as [`Visibility::Visible`] or
 //!   [`Visibility::Hidden`] by its occluding face, [`Visibility::Uncertain`] only when the
 //!   budget ran out, and [`Visibility::Pending`] where step 5 is waited on.
+//!
+//! - [`outline`] and [`Scene::outlines`] (research 74 HL3): the stretches of each edge between
+//!   a face that faces the viewer and one that does not, found exactly (an edge's facing
+//!   changes only where it meets a silhouette plane), with their exact screen images.
 
 mod contour;
 mod error;
+mod outline;
 mod project;
 mod scene;
 mod silhouette;
@@ -31,6 +36,10 @@ mod visibility;
 
 pub use contour::{Branch, TorusContour};
 pub use error::{BadView, HlrError};
+pub use outline::{
+    EDGE_ON, EdgeUndecided, FACING, Images, Outline, OutlineUndecided, STEP, Stretch, StretchImage,
+    drop_coincident, outline,
+};
 pub use scene::{Scene, prepare};
 pub use silhouette::{
     Exactness, OnFace, Silhouette, SilhouetteCurve, Silhouettes, Undecided, Unsupported, Why,
